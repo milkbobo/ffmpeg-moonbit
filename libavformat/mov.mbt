@@ -511,7 +511,7 @@ priv struct MovState {
 /// Dispatch one box to its parser, mirroring the `mov_default_parse_table`
 /// lookup in `mov_read_default`. Unknown boxes are skipped, like the C
 /// fall-through that skips unregistered leaf atoms.
-fn parse_box(st : MovState, r : Mp4Reader, kind : String, size : Int64) -> Unit raise MovError {
+fn parse_box(st : MovState, r : AvioContext, kind : String, size : Int64) -> Unit raise MovError {
   if kind == "trak" {
     parse_trak(st, r, size)
   } else if kind == "moof" {
@@ -579,7 +579,7 @@ fn parse_box(st : MovState, r : Mp4Reader, kind : String, size : Int64) -> Unit 
     // mov_read_glbl: the whole payload becomes the codec extradata.
     parse_glbl(st, r, kind, size)
   } else {
-    r.skip(size)
+    let _ = r.avio_skip(size)
   }
 }
 
@@ -591,20 +591,20 @@ fn parse_box(st : MovState, r : Mp4Reader, kind : String, size : Int64) -> Unit 
 /// intent of the C `while (total_size <= atom.size - 8)` guard while also
 /// terminating on the actual byte budget. The `trak`/`mdat`-outside-`moov`
 /// diagnostic and the non-seekable early return are omitted.
-fn parse_default(st : MovState, r : Mp4Reader, parent_size : Int64) -> Unit raise MovError {
+fn parse_default(st : MovState, r : AvioContext, parent_size : Int64) -> Unit raise MovError {
   let mut consumed : Int64 = 0
   while consumed <= parent_size - 8 {
-    let box_start = r.position().to_int64()
-    let size32 = r.read_u32().to_int64()
-    let kind = r.read_fourcc()
-    if r.eof_reached() {
+    let box_start = r.avio_tell()
+    let size32 = r.avio_rb32().to_int64()
+    let kind = r.avio_rl32_tag()
+    if r.avio_feof() {
       break
     }
     let mut header : Int64 = 8
     let mut size = size32
     if size32 == 1 {
       // 64-bit extended size: `avio_rb64(pb) - 8` on top of the 8 bytes read.
-      size = r.read_u64().reinterpret_as_int64()
+      size = r.avio_rb64().reinterpret_as_int64()
       header = 16
     } else if size32 == 0 {
       // The box extends to the end of its parent.
@@ -625,11 +625,10 @@ fn parse_default(st : MovState, r : Mp4Reader, parent_size : Int64) -> Unit rais
     }
     parse_box(st, r, kind, payload)
     // Consume whatever the parser left behind, or rewind if it overread.
-    let left = payload - (r.position().to_int64() - box_start - header)
-    if left > 0 {
-      r.skip(left)
-    } else if left < 0 {
-      r.skip(left)
+    let left = payload - (r.avio_tell() - box_start - header)
+    if left != 0 {
+      // mov_read_default ignores the skip result unless AV_EF_EXPLODE is set
+      let _ = r.avio_skip(left)
     }
     consumed = consumed + header + payload
   }
@@ -683,19 +682,19 @@ fn mov_pow2(k : Int) -> Double {
 /// `mov_read_ftyp`: the major brand decides whether the file is treated as ISO
 /// BMFF, and the compatible brands are collected for the QuickTime audio
 /// sample-entry check in `mov_parse_stsd_audio`.
-fn parse_ftyp(st : MovState, r : Mp4Reader, size : Int64) -> Unit {
-  let major = r.read_fourcc()
-  let _ = r.read_u32() // minor version
+fn parse_ftyp(st : MovState, r : AvioContext, size : Int64) -> Unit {
+  let major = r.avio_rl32_tag()
+  let _ = r.avio_rb32() // minor version
   st.movie.major_brand = major
   if major != tag('q', 't', ' ', ' ') {
     st.movie.isom = true
   }
   let brands : Array[Char] = []
   // The compatible-brand list fills the rest of the atom, 4 bytes per brand.
-  let end = r.position() + (size - 8).to_int()
-  while r.position() + 4 <= end {
+  let end = r.avio_tell() + (size - 8L)
+  while r.avio_tell() + 4L <= end {
     for i = 0; i < 4; i = i + 1 {
-      brands.push(r.read_u8().to_byte().to_char())
+      brands.push(r.avio_r8().to_byte().to_char())
     }
   }
   st.movie.compatible_brands = st.movie.compatible_brands + String::from_array(
@@ -704,60 +703,60 @@ fn parse_ftyp(st : MovState, r : Mp4Reader, size : Int64) -> Unit {
 }
 
 ///| `mov_read_mvhd`. */
-fn parse_mvhd(st : MovState, r : Mp4Reader) -> Unit {
-  let version = r.read_u8()
-  let _ = r.read_u24() // flags
+fn parse_mvhd(st : MovState, r : AvioContext) -> Unit {
+  let version = r.avio_r8()
+  let _ = r.avio_rb24() // flags
   // creation and modification times (mov_metadata_creation_time)
   if version == 1 {
-    r.skip(16)
+    let _ = r.avio_skip(16L)
   } else {
-    r.skip(8)
+    let _ = r.avio_skip(8L)
   }
-  let raw_ts = r.read_u32()
+  let raw_ts = r.avio_rb32()
   st.movie.timescale = if raw_ts.reinterpret_as_int() <= 0 { 1 } else { raw_ts }
   st.movie.duration = if version == 1 {
-    r.read_u64()
+    r.avio_rb64()
   } else {
-    r.read_u32().to_uint64()
+    r.avio_rb32().to_uint64()
   }
 }
 
 ///| `mov_read_mdhd`. */
-fn parse_mdhd(st : MovState, r : Mp4Reader) -> Unit raise MovError {
+fn parse_mdhd(st : MovState, r : AvioContext) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
   if st.cur.timescale != 0 {
     raise InvalidData("multiple mdhd")
   }
-  let version = r.read_u8()
+  let version = r.avio_r8()
   if version > 1 {
     raise InvalidData("unsupported mdhd version")
   }
-  let _ = r.read_u24() // flags
+  let _ = r.avio_rb24() // flags
   if version == 1 {
-    r.skip(16)
+    let _ = r.avio_skip(16L)
   } else {
-    r.skip(8)
+    let _ = r.avio_skip(8L)
   }
-  let raw_ts = r.read_u32()
+  let raw_ts = r.avio_rb32()
   if raw_ts.reinterpret_as_int() <= 0 {
     raise InvalidData("invalid mdhd time scale")
   }
   st.cur.timescale = raw_ts
   let dur = if version == 1 {
-    r.read_u64()
+    r.avio_rb64()
   } else {
-    r.read_u32().to_uint64()
+    r.avio_rb32().to_uint64()
   }
   let unknown = if version == 1 { u64_max } else { u32_max_u64 }
   st.cur.duration = if dur == unknown { 0 } else { dur }
-  let _ = r.read_u16() // language
-  let _ = r.read_u16() // quality
+  let _ = r.avio_rb16() // language
+  let _ = r.avio_rb16() // quality
 }
 
 ///| `mov_read_tkhd`. */
-fn parse_tkhd(st : MovState, r : Mp4Reader) -> Unit raise MovError {
+fn parse_tkhd(st : MovState, r : AvioContext) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
@@ -765,35 +764,35 @@ fn parse_tkhd(st : MovState, r : Mp4Reader) -> Unit raise MovError {
   if st.cur.track_id != 0 {
     raise InvalidData("duplicate tkhd")
   }
-  let version = r.read_u8()
-  let _ = r.read_u24() // flags
+  let version = r.avio_r8()
+  let _ = r.avio_rb24() // flags
   if version == 1 {
-    r.skip(16)
+    let _ = r.avio_skip(16L)
   } else {
-    r.skip(8)
+    let _ = r.avio_skip(8L)
   }
-  st.cur.track_id = r.read_u32()
-  let _ = r.read_u32() // reserved
+  st.cur.track_id = r.avio_rb32()
+  let _ = r.avio_rb32() // reserved
   if version == 1 {
-    r.skip(8)
+    let _ = r.avio_skip(8L)
   } else {
-    r.skip(4)
+    let _ = r.avio_skip(4L)
   }
-  r.skip(8) // two reserved dwords
-  r.skip(8) // layer, alternate group, volume, reserved
-  r.skip(36) // 3x3 display matrix (16.16 / 2.30 fixed point)
-  let width = r.read_u32()
-  let height = r.read_u32()
+  let _ = r.avio_skip(8L) // two reserved dwords
+  let _ = r.avio_skip(8L) // layer, alternate group, volume, reserved
+  let _ = r.avio_skip(36L) // 3x3 display matrix (16.16 / 2.30 fixed point)
+  let width = r.avio_rb32()
+  let height = r.avio_rb32()
   st.cur.width = width.reinterpret_as_int() >> 16
   st.cur.height = height.reinterpret_as_int() >> 16
 }
 
 ///| `mov_read_hdlr`. */
-fn parse_hdlr(st : MovState, r : Mp4Reader) -> Unit {
-  let _ = r.read_u8() // version
-  let _ = r.read_u24() // flags
-  let _ = r.read_fourcc() // component type ('mhlr'/'dhlr')
-  let kind = r.read_fourcc() // component subtype
+fn parse_hdlr(st : MovState, r : AvioContext) -> Unit {
+  let _ = r.avio_r8() // version
+  let _ = r.avio_rb24() // flags
+  let _ = r.avio_rl32_tag() // component type ('mhlr'/'dhlr')
+  let kind = r.avio_rl32_tag() // component subtype
   if !st.in_trak {
     return
   }
@@ -813,36 +812,36 @@ fn parse_hdlr(st : MovState, r : Mp4Reader) -> Unit {
 }
 
 ///| `mov_read_elst`. */
-fn parse_elst(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_elst(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
-  let version = r.read_u8()
-  let _ = r.read_u24() // flags
+  let version = r.avio_r8()
+  let _ = r.avio_rb24() // flags
   let entry_size : Int64 = if version == 1 { 20 } else { 12 }
   let mut remaining = size - 8
-  let declared = r.read_u32().reinterpret_as_int()
+  let declared = r.avio_rb32().reinterpret_as_int()
   let mut edit_count = declared
   if remaining != declared.to_int64() * entry_size {
     // Non-strict compliance: derive the entry count from the atom size.
     edit_count = (remaining / entry_size).to_int()
   }
   for i = 0; i < edit_count; i = i + 1 {
-    if remaining <= 0 || r.eof_reached() {
+    if remaining <= 0 || r.avio_feof() {
       break
     }
     let duration : Int64 = if version == 1 {
-      r.read_i64()
+      r.avio_rb64().reinterpret_as_int64()
     } else {
-      r.read_u32().to_int64()
+      r.avio_rb32().to_int64()
     }
     let time : Int64 = if version == 1 {
-      r.read_i64()
+      r.avio_rb64().reinterpret_as_int64()
     } else {
-      r.read_u32().reinterpret_as_int().to_int64()
+      r.avio_rb32().reinterpret_as_int().to_int64()
     }
     remaining = remaining - (if version == 1 { 16 } else { 8 })
-    let rate = r.read_u32().to_double() / 65536.0
+    let rate = r.avio_rb32().to_double() / 65536.0
     remaining = remaining - 4
     if duration < 0 {
       raise InvalidData("invalid edit list duration")
@@ -854,26 +853,26 @@ fn parse_elst(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 ///|
 /// `mov_read_stsd`, embedding the sample-entry layouts of
 /// `mov_parse_stsd_video` and `mov_parse_stsd_audio`.
-fn parse_stsd(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_stsd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
-  let version = r.read_u8()
-  let _ = r.read_u24() // flags
-  let entries = r.read_u32().reinterpret_as_int()
+  let version = r.avio_r8()
+  let _ = r.avio_rb24() // flags
+  let entries = r.avio_rb32().reinterpret_as_int()
   if entries <= 0 || entries.to_int64() > size / 8 || entries > 1024 {
     raise InvalidData("invalid STSD entries")
   }
   st.cur.stsd_version = version
   // Only the primary sample description is modelled; the rest are skipped the
   // way `mov_skip_multiple_stsd` skips non-primary entries.
-  let entry_start = r.position().to_int64()
-  let entry_size = r.read_u32().to_int64()
-  let format = r.read_fourcc()
+  let entry_start = r.avio_tell()
+  let entry_size = r.avio_rb32().to_int64()
+  let format = r.avio_rl32_tag()
   if entry_size >= 16 {
-    let _ = r.read_u32() // reserved
-    let _ = r.read_u16() // reserved
-    let _ = r.read_u16() // dref_id
+    let _ = r.avio_rb32() // reserved
+    let _ = r.avio_rb16() // reserved
+    let _ = r.avio_rb16() // dref_id
   } else if entry_size <= 7 {
     raise InvalidData("invalid size in stsd")
   }
@@ -886,59 +885,59 @@ fn parse_stsd(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
   // Parse the child boxes of the sample entry (`sinf`/`avcC`/`esds`/`wave`/...);
   // unknown boxes are skipped by parse_box. This is what lets `sinf`/`schm`/
   // `tenc` inside an encrypted sample entry be seen.
-  let used = r.position().to_int64() - entry_start
+  let used = r.avio_tell() - entry_start
   if entry_size > used {
     let child_size = entry_size - used
-    let child_start = r.position()
+    let child_start = r.avio_tell()
     parse_default(st, r, child_size)
-    let consumed = r.position() - child_start
-    if consumed < child_size.to_int() {
-      r.skip((child_size - consumed.to_int64()))
+    let consumed = r.avio_tell() - child_start
+    if consumed < child_size {
+      let _ = r.avio_skip(child_size - consumed)
     }
   }
   for i = 1; i < entries; i = i + 1 {
-    let s = r.read_u32().to_int64()
+    let s = r.avio_rb32().to_int64()
     if s < 8 {
       break
     }
-    r.skip(s - 4)
+    let _ = r.avio_skip(s - 4L)
   }
 }
 
 ///| `mov_parse_stsd_video`: VisualSampleEntry fields (the 16 header bytes are already read). */
-fn parse_stsd_video(st : MovState, r : Mp4Reader) -> Unit {
+fn parse_stsd_video(st : MovState, r : AvioContext) -> Unit {
   if st.movie.isom {
-    r.skip(4) // pre_defined
-    r.skip(12) // pre_defined
+    let _ = r.avio_skip(4L) // pre_defined
+    let _ = r.avio_skip(12L) // pre_defined
   } else {
-    let _ = r.read_u16() // version
-    let _ = r.read_u16() // revision level
-    let _ = r.read_le32() // vendor
-    let _ = r.read_u32() // temporal quality
-    let _ = r.read_u32() // spatial quality
+    let _ = r.avio_rb16() // version
+    let _ = r.avio_rb16() // revision level
+    let _ = r.avio_rl32() // vendor
+    let _ = r.avio_rb32() // temporal quality
+    let _ = r.avio_rb32() // spatial quality
   }
-  st.cur.width = r.read_u16().reinterpret_as_int()
-  st.cur.height = r.read_u16().reinterpret_as_int()
-  let _ = r.read_u32() // horiz resolution
-  let _ = r.read_u32() // vert resolution
-  let _ = r.read_u32() // data size, always 0
-  let _ = r.read_u16() // frames per sample
-  let mut len = r.read_u8().reinterpret_as_int()
+  st.cur.width = r.avio_rb16().reinterpret_as_int()
+  st.cur.height = r.avio_rb16().reinterpret_as_int()
+  let _ = r.avio_rb32() // horiz resolution
+  let _ = r.avio_rb32() // vert resolution
+  let _ = r.avio_rb32() // data size, always 0
+  let _ = r.avio_rb16() // frames per sample
+  let mut len = r.avio_r8().reinterpret_as_int()
   if len > 31 {
     len = 31
   }
   let chars : Array[Char] = []
   for i = 0; i < len; i = i + 1 {
-    chars.push(r.read_u8().to_byte().to_char())
+    chars.push(r.avio_r8().to_byte().to_char())
   }
   st.cur.encoder = String::from_array(chars[:])
   if len < 31 {
-    r.skip((31 - len).to_int64())
+    let _ = r.avio_skip((31 - len).to_int64())
   }
-  st.cur.bits_per_sample = r.read_u16() // depth
+  st.cur.bits_per_sample = r.avio_rb16() // depth
   // ISO VisualSampleEntry ends with `pre_defined = -1` (QuickTime writes
   // `color_table_id` here); the child boxes (avcC/esds/sinf/...) follow it.
-  r.skip(2)
+  let _ = r.avio_skip(2L)
 }
 
 ///|
@@ -947,37 +946,37 @@ fn parse_stsd_video(st : MovState, r : Mp4Reader) -> Unit {
 /// the PCM packing (`samples_per_frame`/`bytes_per_frame`) needed by the
 /// chunked audio index path, and the codec-specific packing defaults
 /// (`av_get_bits_per_sample` for the PCM fourccs).
-fn parse_stsd_audio(st : MovState, r : Mp4Reader) -> Unit {
-  let version = r.read_u16()
+fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
+  let version = r.avio_rb16()
   if st.movie.isom {
-    r.skip(6) // reserved
+    let _ = r.avio_skip(6L) // reserved
   } else {
-    let _ = r.read_u16() // revision level
-    let _ = r.read_le32() // vendor
+    let _ = r.avio_rb16() // revision level
+    let _ = r.avio_rl32() // vendor
   }
-  st.cur.channels = r.read_u16()
-  st.cur.bits_per_sample = r.read_u16()
-  st.cur.audio_cid = r.read_u16().reinterpret_as_int()
-  let _ = r.read_u16() // packet size
-  st.cur.sample_rate = r.read_u32() >> 16
+  st.cur.channels = r.avio_rb16()
+  st.cur.bits_per_sample = r.avio_rb16()
+  st.cur.audio_cid = r.avio_rb16().reinterpret_as_int()
+  let _ = r.avio_rb16() // packet size
+  st.cur.sample_rate = r.avio_rb32() >> 16
   // Read the QT version 1/2 fields; in version 0 these do not exist. The C
   // also honours a "qt  " compatible brand inside an ISO file.
   let qt = st.movie.compatible_brands.contains("qt  ")
   if !st.movie.isom || qt || (st.cur.stsd_version == 0 && version > 0) {
     if version == 1 {
-      st.cur.samples_per_frame = r.read_u32()
-      let _ = r.read_u32() // bytes per packet
-      st.cur.bytes_per_frame = r.read_u32()
-      let _ = r.read_u32() // bytes per sample
+      st.cur.samples_per_frame = r.avio_rb32()
+      let _ = r.avio_rb32() // bytes per packet
+      st.cur.bytes_per_frame = r.avio_rb32()
+      let _ = r.avio_rb32() // bytes per sample
     } else if version == 2 {
-      let _ = r.read_u32() // sizeof struct only
-      st.cur.sample_rate = mov_int2double(r.read_u64()).to_int().reinterpret_as_uint()
-      st.cur.channels = r.read_u32()
-      let _ = r.read_u32() // always 0x7F000000
-      st.cur.bits_per_sample = r.read_u32()
-      let _ = r.read_u32() // lpcm format specific flag
-      st.cur.bytes_per_frame = r.read_u32()
-      st.cur.samples_per_frame = r.read_u32()
+      let _ = r.avio_rb32() // sizeof struct only
+      st.cur.sample_rate = mov_int2double(r.avio_rb64()).to_int().reinterpret_as_uint()
+      st.cur.channels = r.avio_rb32()
+      let _ = r.avio_rb32() // always 0x7F000000
+      st.cur.bits_per_sample = r.avio_rb32()
+      let _ = r.avio_rb32() // lpcm format specific flag
+      st.cur.bytes_per_frame = r.avio_rb32()
+      st.cur.samples_per_frame = r.avio_rb32()
     }
   }
   // Codec-specific packing defaults for the QuickTime codecs whose frame
@@ -1031,13 +1030,13 @@ fn parse_stsd_audio(st : MovState, r : Mp4Reader) -> Unit {
 }
 
 ///| `mov_read_stts`, including the `max_stts_delta` clipping and DTS drift correction. */
-fn parse_stts(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_stts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u8() // version
-  let _ = r.read_u24() // flags
-  let entries = r.read_u32().reinterpret_as_int()
+  let _ = r.avio_r8() // version
+  let _ = r.avio_rb24() // flags
+  let entries = r.avio_rb32().reinterpret_as_int()
   // Corrupt counts are rejected up front; the C code relies on allocation
   // failure instead.
   if entries < 0 || entries.to_int64() * 8 > size - 8 {
@@ -1046,11 +1045,11 @@ fn parse_stts(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
   let mut corrected_dts : Int64 = 0
   let mut current_dts : Int64 = 0
   for i = 0; i < entries; i = i + 1 {
-    if r.eof_reached() {
+    if r.avio_feof() {
       break
     }
-    let sample_count = r.read_u32()
-    let sample_duration = r.read_u32()
+    let sample_count = r.avio_rb32()
+    let sample_duration = r.avio_rb32()
     let mut duration = sample_duration
     if sample_duration > max_stts_delta {
       // A huge delta is assumed to be a negative correction cast to uint32.
@@ -1101,22 +1100,22 @@ fn parse_stts(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 }
 
 ///| `mov_read_ctts`: per-entry presentation offsets, plus the `dts_shift` they imply. */
-fn parse_ctts(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_ctts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u8() // version
-  let _ = r.read_u24() // flags
-  let entries = r.read_u32().reinterpret_as_int()
+  let _ = r.avio_r8() // version
+  let _ = r.avio_rb24() // flags
+  let entries = r.avio_rb32().reinterpret_as_int()
   if entries < 0 || entries.to_int64() * 8 > size - 8 {
     raise InvalidData("invalid CTTS entries")
   }
   for i = 0; i < entries; i = i + 1 {
-    if r.eof_reached() {
+    if r.avio_feof() {
       break
     }
-    let count = r.read_u32().reinterpret_as_int()
-    let offset = r.read_u32().reinterpret_as_int()
+    let count = r.avio_rb32().reinterpret_as_int()
+    let offset = r.avio_rb32().reinterpret_as_int()
     if count <= 0 {
       continue
     }
@@ -1133,13 +1132,13 @@ fn parse_ctts(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 }
 
 ///| `mov_read_stsc`, including the validation pass that repairs corrupt tables. */
-fn parse_stsc(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_stsc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u8() // version
-  let _ = r.read_u24() // flags
-  let entries = r.read_u32().reinterpret_as_int()
+  let _ = r.avio_r8() // version
+  let _ = r.avio_rb24() // flags
+  let entries = r.avio_rb32().reinterpret_as_int()
   if entries.to_int64() * 12 + 4 > size {
     raise InvalidData("invalid STSC size")
   }
@@ -1147,12 +1146,12 @@ fn parse_stsc(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
     return
   }
   for i = 0; i < entries; i = i + 1 {
-    if r.eof_reached() {
+    if r.avio_feof() {
       break
     }
-    let first = r.read_u32().reinterpret_as_int()
-    let count = r.read_u32().reinterpret_as_int()
-    let id = r.read_u32().reinterpret_as_int()
+    let first = r.avio_rb32().reinterpret_as_int()
+    let count = r.avio_rb32().reinterpret_as_int()
+    let id = r.avio_rb32().reinterpret_as_int()
     st.cur.stsc.push({ first, count, id })
   }
   // Validity pass, walking backwards exactly like the C loop.
@@ -1197,28 +1196,28 @@ fn parse_stsc(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 ///| `mov_read_stsz` / `mov_read_stz2`. */
 fn parse_stsz(
   st : MovState,
-  r : Mp4Reader,
+  r : AvioContext,
   size : Int64,
   stz2 : Bool
 ) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u8() // version
-  let _ = r.read_u24() // flags
+  let _ = r.avio_r8() // version
+  let _ = r.avio_rb24() // flags
   let mut sample_size : UInt = 0
   let mut field_size = 32
   if !stz2 {
-    sample_size = r.read_u32()
+    sample_size = r.avio_rb32()
     if st.cur.sample_size == 0 {
       st.cur.sample_size = sample_size
     }
     st.cur.stsz_sample_size = sample_size
   } else {
-    let _ = r.read_u24() // reserved
-    field_size = r.read_u8().reinterpret_as_int()
+    let _ = r.avio_rb24() // reserved
+    field_size = r.avio_r8().reinterpret_as_int()
   }
-  let entries = r.read_u32().reinterpret_as_int()
+  let entries = r.avio_rb32().reinterpret_as_int()
   if entries < 0 {
     raise InvalidData("invalid STSZ entries")
   }
@@ -1233,39 +1232,48 @@ fn parse_stsz(
   if entries == 0 {
     return
   }
-  if entries.to_int64() * field_size.to_int64() > (size - 12) * 8 {
+  if entries.to_int64() * field_size.to_int64() > (size - 12L) * 8L {
     raise InvalidData("STSZ atom truncated")
   }
-  // `get_bits_long(&gb, field_size)` is an MSB-first bit reader; reproduce it so
-  // that 4-bit (stz2) fields pack two samples per byte.
-  let base = r.position()
+  // `get_bits_long(&gb, field_size)` is an MSB-first bit reader over the
+  // atom payload; read the packed bytes sequentially, then unpack, so that
+  // 4-bit (stz2) fields pack two samples per byte and the stream cursor
+  // advances exactly like the C bit reader's backing buffer.
+  let nbytes = (entries.to_int64() * field_size.to_int64() + 7) / 8
+  let packed : Bytes = match r.avio_read(nbytes.to_int()) {
+    Ok(p) => p
+    Err(_) => b""
+  }
   let mut bitpos = 0
   for i = 0; i < entries; i = i + 1 {
     let mut v : UInt = 0
     for b = 0; b < field_size; b = b + 1 {
+      let byte = if bitpos / 8 < packed.length() {
+        packed[bitpos / 8].to_uint()
+      } else {
+        0
+      }
       let shift = 7 - bitpos % 8
-      let bit = (r.peek_u8_at(base + bitpos / 8) >> shift) & 1
-      v = (v << 1) | bit
+      v = (v << 1) | ((byte >> shift) & 1)
       bitpos = bitpos + 1
     }
     st.cur.sample_sizes.push(v)
   }
-  r.skip((bitpos / 8).to_int64())
 }
 
 ///| `mov_read_stco` / `mov_read_co64`. */
 fn parse_stco(
   st : MovState,
-  r : Mp4Reader,
+  r : AvioContext,
   size : Int64,
   co64 : Bool
 ) -> Unit {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u8() // version
-  let _ = r.read_u24() // flags
-  let raw_entries = r.read_u32()
+  let _ = r.avio_r8() // version
+  let _ = r.avio_rb24() // flags
+  let raw_entries = r.avio_rb32()
   let entry_size : Int64 = if co64 { 8 } else { 4 }
   // Clamp the declared count to what the atom can hold, as mov_read_stco does.
   let cap0 : Int64 = (size - 8) / entry_size
@@ -1273,60 +1281,60 @@ fn parse_stco(
   let raw : Int64 = raw_entries.reinterpret_as_int().to_int64()
   let entries : Int = if raw < cap { raw.to_int() } else { cap.to_int() }
   for i = 0; i < entries; i = i + 1 {
-    if r.eof_reached() {
+    if r.avio_feof() {
       break
     }
     if co64 {
-      let off = r.read_i64()
+      let off = r.avio_rb64().reinterpret_as_int64()
       // An impossible (negative) chunk offset is clamped to 0, as in the C code.
       st.cur.chunk_offsets.push(if off < 0 { 0 } else { off })
     } else {
-      st.cur.chunk_offsets.push(r.read_u32().to_int64())
+      st.cur.chunk_offsets.push(r.avio_rb32().to_int64())
     }
   }
 }
 
 ///| `mov_read_stss`: sync-sample (keyframe) table. */
-fn parse_stss(st : MovState, r : Mp4Reader) -> Unit {
+fn parse_stss(st : MovState, r : AvioContext) -> Unit {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u8() // version
-  let _ = r.read_u24() // flags
-  let entries = r.read_u32().reinterpret_as_int()
+  let _ = r.avio_r8() // version
+  let _ = r.avio_rb24() // flags
+  let entries = r.avio_rb32().reinterpret_as_int()
   if entries <= 0 {
     // An empty stss means every sample is a sync sample.
     st.cur.keyframe_absent = true
     return
   }
   for i = 0; i < entries; i = i + 1 {
-    if r.eof_reached() {
+    if r.avio_feof() {
       break
     }
-    st.cur.keyframes.push(r.read_u32())
+    st.cur.keyframes.push(r.avio_rb32())
   }
 }
 
 ///| `mov_read_stps`: partial-sync (open-GOP) sample table. */
-fn parse_stps(st : MovState, r : Mp4Reader) -> Unit {
+fn parse_stps(st : MovState, r : AvioContext) -> Unit {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u32() // version + flags
-  let entries = r.read_u32().reinterpret_as_int()
+  let _ = r.avio_rb32() // version + flags
+  let entries = r.avio_rb32().reinterpret_as_int()
   if entries <= 0 {
     return
   }
   for i = 0; i < entries; i = i + 1 {
-    if r.eof_reached() {
+    if r.avio_feof() {
       break
     }
-    st.cur.stps.push(r.read_u32())
+    st.cur.stps.push(r.avio_rb32())
   }
 }
 
 ///| `mov_read_trak`: parse one track's boxes, then build its sample index. */
-fn parse_trak(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_trak(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   st.in_trak = true
   st.cur = new_track()
   parse_default(st, r, size)
@@ -1363,22 +1371,22 @@ fn mov_update_dts_shift(track : Mp4Track, duration : Int) -> Unit {
 }
 
 ///| `mov_read_trex`: one track's fragment defaults. */
-fn parse_trex(st : MovState, r : Mp4Reader) -> Unit {
-  let _ = r.read_u8() // version
-  let _ = r.read_u24() // flags
-  let track_id = r.read_u32()
-  let _ = r.read_u32() // stsd_id (primary description only in this slice)
-  let duration = r.read_u32()
-  let size = r.read_u32()
-  let flags = r.read_u32()
+fn parse_trex(st : MovState, r : AvioContext) -> Unit {
+  let _ = r.avio_r8() // version
+  let _ = r.avio_rb24() // flags
+  let track_id = r.avio_rb32()
+  let _ = r.avio_rb32() // stsd_id (primary description only in this slice)
+  let duration = r.avio_rb32()
+  let size = r.avio_rb32()
+  let flags = r.avio_rb32()
   st.trex.push({ track_id, duration, size, flags })
 }
 
 ///| `mov_read_moof`: reset fragment state and recurse into `traf`. */
-fn parse_moof(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_moof(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   st.frag.found_tfhd = false
   st.frag.has_tfdt = false
-  let off = r.position().to_int64() - 8
+  let off = r.avio_tell() - 8
   st.frag.moof_offset = off
   st.frag.implicit_offset = off
   // While inside a moof, encryption boxes target the fragment's track
@@ -1389,10 +1397,10 @@ fn parse_moof(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 }
 
 ///| `mov_read_tfhd`: track fragment header; merges `trex` defaults. */
-fn parse_tfhd(st : MovState, r : Mp4Reader) -> Unit {
-  let _ = r.read_u8() // version
-  let flags = r.read_u24()
-  let track_id = r.read_u32()
+fn parse_tfhd(st : MovState, r : AvioContext) -> Unit {
+  let _ = r.avio_r8() // version
+  let flags = r.avio_rb24()
+  let track_id = r.avio_rb32()
   if track_id == 0 {
     return
   }
@@ -1408,27 +1416,27 @@ fn parse_tfhd(st : MovState, r : Mp4Reader) -> Unit {
       st.frag.found_tfhd = true
       st.frag.track_id = track_id
       st.frag.base_data_offset = if (flags & tfhd_base_data_offset) != 0 {
-        r.read_u64().reinterpret_as_int64()
+        r.avio_rb64().reinterpret_as_int64()
       } else if (flags & tfhd_default_base_is_moof) != 0 {
         st.frag.moof_offset
       } else {
         st.frag.implicit_offset
       }
       if (flags & tfhd_stsd_id) != 0 {
-        let _ = r.read_u32() // stsd_id (primary description only in this slice)
+        let _ = r.avio_rb32() // stsd_id (primary description only in this slice)
       }
       st.frag.duration = if (flags & tfhd_default_duration) != 0 {
-        r.read_u32()
+        r.avio_rb32()
       } else {
         trex.duration
       }
       st.frag.size = if (flags & tfhd_default_size) != 0 {
-        r.read_u32()
+        r.avio_rb32()
       } else {
         trex.size
       }
       st.frag.flags = if (flags & tfhd_default_flags) != 0 {
-        r.read_u32()
+        r.avio_rb32()
       } else {
         trex.flags
       }
@@ -1437,13 +1445,13 @@ fn parse_tfhd(st : MovState, r : Mp4Reader) -> Unit {
 }
 
 ///| `mov_read_tfdt`: base media decode time for the current track fragment. */
-fn parse_tfdt(st : MovState, r : Mp4Reader) -> Unit {
-  let version = r.read_u8()
-  let _ = r.read_u24() // flags
+fn parse_tfdt(st : MovState, r : AvioContext) -> Unit {
+  let version = r.avio_r8()
+  let _ = r.avio_rb24() // flags
   let bmdt : Int64 = if version != 0 {
-    r.read_u64().reinterpret_as_int64()
+    r.avio_rb64().reinterpret_as_int64()
   } else {
-    r.read_u32().to_int64()
+    r.avio_rb32().to_int64()
   }
   st.frag.tfdt = bmdt
   st.frag.has_tfdt = true
@@ -1457,23 +1465,23 @@ fn parse_tfdt(st : MovState, r : Mp4Reader) -> Unit {
 /// `mov_read_trun`: append one track fragment's samples to the matching track,
 /// mirroring the sample-index construction of the C code (DTS from tfdt/track
 /// end, per-sample duration/size/flags/CTS, keyframe from the fragment flags).
-fn parse_trun(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_trun(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   if !st.frag.found_tfhd {
     raise InvalidData("trun without tfhd")
   }
   match mov_find_track(st, st.frag.track_id) {
     None => ()
     Some(track) => {
-      let _ = r.read_u8() // version
-      let flags = r.read_u24()
-      let mut entries = r.read_u32().reinterpret_as_int()
+      let _ = r.avio_r8() // version
+      let flags = r.avio_rb24()
+      let mut entries = r.avio_rb32().reinterpret_as_int()
       let mut data_offset : Int = 0
       if (flags & trun_data_offset) != 0 {
-        data_offset = r.read_u32().reinterpret_as_int()
+        data_offset = r.avio_rb32().reinterpret_as_int()
       }
       let mut first_sample_flags = st.frag.flags
       if (flags & trun_first_sample_flags) != 0 {
-        first_sample_flags = r.read_u32()
+        first_sample_flags = r.avio_rb32()
       }
       // Bound the entry count to what the atom can still hold.
       let opt_bytes = (if (flags & trun_data_offset) != 0 { 4 } else { 0 }) +
@@ -1519,7 +1527,7 @@ fn parse_trun(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
       let mut offset = st.frag.base_data_offset + data_offset.to_int64()
       let mut distance : UInt = 0
       for i = 0; i < entries; i = i + 1 {
-        if r.eof_reached() {
+        if r.avio_feof() {
           break
         }
         let mut sample_size = st.frag.size
@@ -1527,16 +1535,16 @@ fn parse_trun(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
         let mut sample_duration = st.frag.duration
         let mut ctts : Int = 0
         if (flags & trun_sample_duration) != 0 {
-          sample_duration = r.read_u32()
+          sample_duration = r.avio_rb32()
         }
         if (flags & trun_sample_size) != 0 {
-          sample_size = r.read_u32()
+          sample_size = r.avio_rb32()
         }
         if (flags & trun_sample_flags) != 0 {
-          sample_flags = r.read_u32()
+          sample_flags = r.avio_rb32()
         }
         if (flags & trun_sample_cts) != 0 {
-          ctts = r.read_u32().reinterpret_as_int()
+          ctts = r.avio_rb32().reinterpret_as_int()
         }
         mov_update_dts_shift(track, ctts)
         let keyframe = (sample_flags &
@@ -1585,43 +1593,43 @@ fn parse_trun(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 // ---------------------------------------------------------------------------
 
 ///| `mov_read_schm`: the protection scheme fourcc. */
-fn parse_schm(st : MovState, r : Mp4Reader) -> Unit {
+fn parse_schm(st : MovState, r : AvioContext) -> Unit {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u32() // version and flags
-  st.cur.cenc_scheme = r.read_u32()
+  let _ = r.avio_rb32() // version and flags
+  st.cur.cenc_scheme = r.avio_rb32()
 }
 
 ///| `mov_read_tenc`: pattern, per-sample IV size, default KID and constant IV. */
-fn parse_tenc(st : MovState, r : Mp4Reader, size : Int64) -> Unit {
+fn parse_tenc(st : MovState, r : AvioContext, size : Int64) -> Unit {
   if !st.in_trak {
     return
   }
   if size < 20 {
     return
   }
-  let version = r.read_u8()
-  let _ = r.read_u24() // flags
-  let _ = r.read_u8() // reserved
-  let pattern = r.read_u8()
+  let version = r.avio_r8()
+  let _ = r.avio_rb24() // flags
+  let _ = r.avio_r8() // reserved
+  let pattern = r.avio_r8()
   if version > 0 {
     st.cur.cenc_crypt_byte_block = pattern >> 4
     st.cur.cenc_skip_byte_block = pattern & 0xF
   }
-  let is_protected = r.read_u8()
-  let iv_size = r.read_u8().reinterpret_as_int()
+  let is_protected = r.avio_r8()
+  let iv_size = r.avio_r8().reinterpret_as_int()
   st.cur.cenc_per_sample_iv_size = iv_size
   for i = 0; i < 16; i = i + 1 {
     // Default key ID; not needed when the key is supplied directly.
-    let _ = r.read_u8()
+    let _ = r.avio_r8()
   }
   if is_protected != 0 && iv_size == 0 {
-    let constant_size = r.read_u8().reinterpret_as_int()
+    let constant_size = r.avio_r8().reinterpret_as_int()
     let iv = FixedArray::make(16, b'\x00')
     let n = if constant_size < 16 { constant_size } else { 16 }
     for i = 0; i < n; i = i + 1 {
-      iv[i] = r.read_u8().to_byte()
+      iv[i] = r.avio_r8().to_byte()
     }
     st.cur.cenc_default_iv = iv
   }
@@ -1658,36 +1666,36 @@ fn current_enc_track(st : MovState) -> Mp4Track? {
 /// is stored positionally so it lines up with the track's sample index; for a
 /// fragmented file the entries of every fragment append after the previous
 /// ones, matching how `trun` appends the samples themselves.
-fn parse_senc(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_senc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   match current_enc_track(st) {
     None => ()
     Some(track) => {
       let _ = size
-      let _ = r.read_u8() // version
-      let flags = r.read_u24()
+      let _ = r.avio_r8() // version
+      let flags = r.avio_rb24()
       let use_subsamples = (flags & 0x02) != 0
-      let sample_count = r.read_u32().reinterpret_as_int()
+      let sample_count = r.avio_rb32().reinterpret_as_int()
       let per_iv = track.cenc_per_sample_iv_size
       for i = 0; i < sample_count; i = i + 1 {
-        if r.eof_reached() {
+        if r.avio_feof() {
           raise InvalidData("EOF in senc")
         }
         if per_iv != 0 || use_subsamples {
           let iv = FixedArray::make(16, b'\x00')
           if per_iv != 0 {
             for k = 0; k < per_iv; k = k + 1 {
-              iv[k] = r.read_u8().to_byte()
+              iv[k] = r.avio_r8().to_byte()
             }
           }
           let subs : Array[MovSubSample] = []
           if use_subsamples {
-            let n = r.read_u16().reinterpret_as_int()
+            let n = r.avio_rb16().reinterpret_as_int()
             for k = 0; k < n; k = k + 1 {
-              if r.eof_reached() {
+              if r.avio_feof() {
                 raise InvalidData("EOF in senc subsamples")
               }
-              let clear = r.read_u16().reinterpret_as_int()
-              let prot = r.read_u32().reinterpret_as_int()
+              let clear = r.avio_rb16().reinterpret_as_int()
+              let prot = r.avio_rb32().reinterpret_as_int()
               subs.push({ bytes_of_clear: clear, bytes_of_protected: prot })
             }
           }
@@ -1705,22 +1713,22 @@ fn parse_senc(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 /// one auxiliary-info entry (IV plus optional subsamples; `use_subsamples`
 /// is decided by the caller from the entry size).
 fn read_sample_encryption_info(
-  r : Mp4Reader,
+  r : AvioContext,
   per_iv : Int,
   use_subsamples : Bool
 ) -> MovEncSample {
   let iv = FixedArray::make(16, b'\x00')
   if per_iv != 0 {
     for k = 0; k < per_iv; k = k + 1 {
-      iv[k] = r.read_u8().to_byte()
+      iv[k] = r.avio_r8().to_byte()
     }
   }
   let subs : Array[MovSubSample] = []
   if use_subsamples {
-    let n = r.read_u16().reinterpret_as_int()
+    let n = r.avio_rb16().reinterpret_as_int()
     for k = 0; k < n; k = k + 1 {
-      let clear = r.read_u16().reinterpret_as_int()
-      let prot = r.read_u32().reinterpret_as_int()
+      let clear = r.avio_rb16().reinterpret_as_int()
+      let prot = r.avio_rb32().reinterpret_as_int()
       subs.push({ bytes_of_clear: clear, bytes_of_protected: prot })
     }
   }
@@ -1733,7 +1741,7 @@ fn read_sample_encryption_info(
 /// is restored afterwards, as the C does with `prev_pos`.
 fn mov_parse_auxiliary_info(
   track : Mp4Track,
-  r : Mp4Reader
+  r : AvioContext
 ) -> Unit raise MovError {
   if track.cenc_samples.length() > 0 {
     return
@@ -1742,9 +1750,9 @@ fn mov_parse_auxiliary_info(
   if track.aux_info_offsets.length() != 1 {
     raise InvalidData("multiple auxiliary info chunks unsupported")
   }
-  let prev_pos = r.position()
-  r.seek(track.aux_info_offsets[0].to_int())
-  for i = 0; i < sample_count && !r.eof_reached(); i = i + 1 {
+  let prev_pos = r.avio_tell()
+  let _ = r.avio_seek(track.aux_info_offsets[0], SEEK_SET)
+  for i = 0; i < sample_count && !r.avio_feof(); i = i + 1 {
     let info_size = if track.aux_info_default_size != 0 {
       track.aux_info_default_size
     } else {
@@ -1758,17 +1766,17 @@ fn mov_parse_auxiliary_info(
     )
     track.cenc_samples.push(Some(e))
   }
-  if r.eof_reached() {
+  if r.avio_feof() {
     raise InvalidData("EOF in auxiliary info")
   }
-  r.seek(prev_pos)
+  let _ = r.avio_seek(prev_pos, SEEK_SET)
 }
 
 ///|
 /// `mov_read_saiz`: per-sample sizes of the auxiliary info chunk. The
 /// `aux_info_type` filtering of the C reduces here to accepting the box only
 /// when the track already carries encryption metadata.
-fn parse_saiz(st : MovState, r : Mp4Reader) -> Unit raise MovError {
+fn parse_saiz(st : MovState, r : AvioContext) -> Unit raise MovError {
   match current_enc_track(st) {
     None => ()
     Some(track) => {
@@ -1779,20 +1787,20 @@ fn parse_saiz(st : MovState, r : Mp4Reader) -> Unit raise MovError {
       if track.aux_info_sample_count != 0 {
         raise InvalidData("duplicate saiz")
       }
-      let _ = r.read_u8() // version
-      let flags = r.read_u24()
+      let _ = r.avio_r8() // version
+      let flags = r.avio_rb24()
       if (flags & 0x01) != 0 {
-        let _ = r.read_u32() // aux_info_type
-        let _ = r.read_u32() // aux_info_type_parameter
+        let _ = r.avio_rb32() // aux_info_type
+        let _ = r.avio_rb32() // aux_info_type_parameter
       }
-      track.aux_info_default_size = r.read_u8().reinterpret_as_int()
-      let sample_count = r.read_u32().reinterpret_as_int()
+      track.aux_info_default_size = r.avio_r8().reinterpret_as_int()
+      let sample_count = r.avio_rb32().reinterpret_as_int()
       if track.aux_info_default_size == 0 {
         if sample_count == 0 {
           raise InvalidData("saiz without sizes")
         }
         for i = 0; i < sample_count; i = i + 1 {
-          track.aux_info_sizes.push(r.read_u8())
+          track.aux_info_sizes.push(r.avio_r8())
         }
       }
       track.aux_info_sample_count = sample_count
@@ -1806,7 +1814,7 @@ fn parse_saiz(st : MovState, r : Mp4Reader) -> Unit raise MovError {
 ///|
 /// `mov_read_saio`: absolute offsets of the auxiliary info chunks. Inside a
 /// moof they are relative to the fragment's base data offset.
-fn parse_saio(st : MovState, r : Mp4Reader) -> Unit raise MovError {
+fn parse_saio(st : MovState, r : AvioContext) -> Unit raise MovError {
   match current_enc_track(st) {
     None => ()
     Some(track) => {
@@ -1816,23 +1824,23 @@ fn parse_saio(st : MovState, r : Mp4Reader) -> Unit raise MovError {
       if track.aux_info_offsets.length() > 0 {
         raise InvalidData("duplicate saio")
       }
-      let version = r.read_u8().reinterpret_as_int()
-      let flags = r.read_u24()
+      let version = r.avio_r8().reinterpret_as_int()
+      let flags = r.avio_rb24()
       if (flags & 0x01) != 0 {
-        let _ = r.read_u32() // aux_info_type
-        let _ = r.read_u32() // aux_info_type_parameter
+        let _ = r.avio_rb32() // aux_info_type
+        let _ = r.avio_rb32() // aux_info_type_parameter
       }
-      let entry_count = r.read_u32().reinterpret_as_int()
-      for i = 0; i < entry_count && !r.eof_reached(); i = i + 1 {
+      let entry_count = r.avio_rb32().reinterpret_as_int()
+      for i = 0; i < entry_count && !r.avio_feof(); i = i + 1 {
         let off = if version == 0 {
-          r.read_u32().to_int64()
+          r.avio_rb32().to_int64()
         } else {
-          r.read_i64()
+          r.avio_rb64().reinterpret_as_int64()
         }
         let abs = if st.in_moof { off + st.frag.base_data_offset } else { off }
         track.aux_info_offsets.push(abs)
       }
-      if r.eof_reached() {
+      if r.avio_feof() {
         raise InvalidData("EOF in saio")
       }
       if track.aux_info_sample_count > 0 {
@@ -2451,6 +2459,18 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
 /// `mov_read_header` with `atom.type == 'root'`. Malformed input is reported as
 /// `Err`, mirroring the negative return codes in libavformat/mov.c.
 pub fn av_mov_open(buf : Bytes) -> Result[Mp4Movie, String] {
+  mov_open(AvioContext::init_read_context(buf))
+}
+
+///|
+/// Streaming entry point: the same walk over a caller-supplied `AVIOContext`
+/// (file/network source). The whole-file wrapper above is now just
+/// `init_read_context` plus this.
+pub fn av_mov_open_avio(pb : AvioContext) -> Result[Mp4Movie, String] {
+  mov_open(pb)
+}
+
+fn mov_open(r : AvioContext) -> Result[Mp4Movie, String] {
   let movie = new_movie()
   let st : MovState = {
     movie,
@@ -2460,21 +2480,21 @@ pub fn av_mov_open(buf : Bytes) -> Result[Mp4Movie, String] {
     trex: [],
     frag: new_frag(),
   }
-  let r = Mp4Reader::new(buf)
-  let total = r.total_size().to_int64()
+  // Unknown size (non-seekable source): treat as unbounded, stop on eof.
+  let total = r.avio_size().unwrap_or(9223372036854775807L)
   try {
     let mut consumed : Int64 = 0
     while consumed <= total - 8 {
-      let box_start = r.position().to_int64()
-      let size32 = r.read_u32().to_int64()
-      let kind = r.read_fourcc()
-      if r.eof_reached() {
+      let box_start = r.avio_tell()
+      let size32 = r.avio_rb32().to_int64()
+      let kind = r.avio_rl32_tag()
+      if r.avio_feof() {
         break
       }
       let mut header : Int64 = 8
       let mut size = size32
       if size32 == 1 {
-        size = r.read_u64().reinterpret_as_int64()
+        size = r.avio_rb64().reinterpret_as_int64()
         header = 16
       } else if size32 == 0 {
         size = total - consumed
@@ -2491,9 +2511,9 @@ pub fn av_mov_open(buf : Bytes) -> Result[Mp4Movie, String] {
         break
       }
       parse_box(st, r, kind, payload)
-      let left = payload - (r.position().to_int64() - box_start - header)
+      let left = payload - (r.avio_tell() - box_start - header)
       if left != 0 {
-        r.skip(left)
+        let _ = r.avio_skip(left)
       }
       consumed = consumed + header + payload
     }

@@ -86,7 +86,7 @@ let mpa_freq_tab : FixedArray[Int] = [44100, 48000, 32000]
 /// payload as child boxes).
 fn parse_glbl(
   st : MovState,
-  r : Mp4Reader,
+  r : AvioContext,
   kind : String,
   size : Int64
 ) -> Unit raise MovError {
@@ -98,22 +98,22 @@ fn parse_glbl(
   }
   let mut size = size
   if kind == "vvcC" {
-    r.skip(4)
-    size = size - 4
+    let _ = r.avio_skip(4L)
+    size = size - 4L
   }
   if size >= 10 {
     // Broken files created by legacy versions of libavformat wrap a whole
     // `fiel` atom inside a `glbl` atom.
-    let start = r.position()
-    let inner_size = r.read_u32()
-    let b0 = r.read_u8()
-    let b1 = r.read_u8()
-    let b2 = r.read_u8()
-    let b3 = r.read_u8()
-    if r.eof_reached() {
+    let start = r.avio_tell()
+    let inner_size = r.avio_rb32()
+    let b0 = r.avio_r8()
+    let b1 = r.avio_r8()
+    let b2 = r.avio_r8()
+    let b3 = r.avio_r8()
+    if r.avio_feof() {
       raise InvalidData("EOF in glbl")
     }
-    r.seek(start)
+    let _ = r.avio_seek(start, SEEK_SET)
     if b0 == 0x66 && b1 == 0x69 && b2 == 0x65 && b3 == 0x6C &&
       inner_size.to_int64() == size {
       // 'fiel' with a matching size: recurse into the wrapped boxes.
@@ -130,18 +130,18 @@ fn parse_glbl(
   if overwrite {
     let bytes : Array[Byte] = []
     for i = 0; i < size.to_int(); i = i + 1 {
-      bytes.push(r.read_u8().to_byte())
+      bytes.push(r.avio_r8().to_byte())
     }
     st.cur.extradata = Some(Bytes::from_array(bytes[:]))
   }
 }
 
 ///| `ff_mp4_read_descr_len`: up to four 7-bit length bytes. */
-fn mp4_read_descr_len(r : Mp4Reader) -> Int {
+fn mp4_read_descr_len(r : AvioContext) -> Int {
   let mut len = 0
   let mut count = 4
   while count > 0 {
-    let c = r.read_u8().reinterpret_as_int()
+    let c = r.avio_r8().reinterpret_as_int()
     len = (len << 7) | (c & 0x7F)
     if (c & 0x80) == 0 {
       break
@@ -152,27 +152,27 @@ fn mp4_read_descr_len(r : Mp4Reader) -> Int {
 }
 
 ///| `ff_mp4_read_descr`: tag byte plus length. */
-fn mp4_read_descr(r : Mp4Reader) -> (Int, Int) {
-  let tag = r.read_u8().reinterpret_as_int()
+fn mp4_read_descr(r : AvioContext) -> (Int, Int) {
+  let tag = r.avio_r8().reinterpret_as_int()
   (tag, mp4_read_descr_len(r))
 }
 
 ///| `ff_mp4_parse_es_descr`: ES_ID, flags and the optional URL/OCR fields. */
-fn mp4_parse_es_descr(r : Mp4Reader) -> Unit {
-  let _ = r.read_u16() // ES_ID
-  let flags = r.read_u8()
+fn mp4_parse_es_descr(r : AvioContext) -> Unit {
+  let _ = r.avio_rb16() // ES_ID
+  let flags = r.avio_r8()
   if (flags & 0x80) != 0 {
     // streamDependenceFlag
-    let _ = r.read_u16()
+    let _ = r.avio_rb16()
   }
   if (flags & 0x40) != 0 {
     // URL_Flag
-    let len = r.read_u8().reinterpret_as_int()
-    r.skip(len.to_int64())
+    let len = r.avio_r8().reinterpret_as_int()
+    let _ = r.avio_skip(len.to_int64())
   }
   if (flags & 0x20) != 0 {
     // OCRstreamFlag
-    let _ = r.read_u16()
+    let _ = r.avio_rb16()
   }
 }
 
@@ -182,13 +182,13 @@ fn mp4_parse_es_descr(r : Mp4Reader) -> Unit {
 /// to refine channels / sample rate / frame length / codec id.
 fn mp4_read_dec_config_descr(
   st : MovState,
-  r : Mp4Reader
+  r : AvioContext
 ) -> Unit raise MovError {
-  let object_type_id = r.read_u8().reinterpret_as_int()
-  let _ = r.read_u8() // stream type
-  let _ = r.read_u24() // buffer size db
-  let _ = r.read_u32() // max bitrate
-  st.cur.bit_rate = r.read_u32() // avg bitrate
+  let object_type_id = r.avio_r8().reinterpret_as_int()
+  let _ = r.avio_r8() // stream type
+  let _ = r.avio_rb24() // buffer size db
+  let _ = r.avio_rb32() // max bitrate
+  st.cur.bit_rate = r.avio_rb32() // avg bitrate
   match mp4_obj_type_codec(object_type_id) {
     Some(id) => st.cur.codec_id = id
     None => ()
@@ -204,7 +204,7 @@ fn mp4_read_dec_config_descr(
     }
     let bytes : Array[Byte] = []
     for i = 0; i < len; i = i + 1 {
-      bytes.push(r.read_u8().to_byte())
+      bytes.push(r.avio_r8().to_byte())
     }
     st.cur.extradata = Some(Bytes::from_array(bytes[:]))
     if st.cur.codec_id == "aac" {
@@ -243,16 +243,16 @@ fn mp4_read_dec_config_descr(
 ///|
 /// `ff_mov_read_esds` (mov_esds.c): version/flags, ES descriptor, then the
 /// DecoderConfigDescriptor.
-fn parse_esds(st : MovState, r : Mp4Reader) -> Unit raise MovError {
+fn parse_esds(st : MovState, r : AvioContext) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
-  let _ = r.read_u32() // version + flags
+  let _ = r.avio_rb32() // version + flags
   let (tag, _len) = mp4_read_descr(r)
   if tag == mp4_es_descr_tag {
     mp4_parse_es_descr(r)
   } else {
-    let _ = r.read_u16() // ID
+    let _ = r.avio_rb16() // ID
   }
   let (tag2, _len2) = mp4_read_descr(r)
   if tag2 == mp4_dec_config_descr_tag {

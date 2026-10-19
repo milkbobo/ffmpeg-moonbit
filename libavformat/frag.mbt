@@ -31,17 +31,17 @@ fn mov_sidx_lookup(st : MovState, moof_offset : Int64, track_id : UInt) -> Int64
 /// `mov_read_sidx`: segment index. Each reference marks the byte offset of a
 /// subsegment (its `moof`) and its earliest presentation time; the
 /// accumulated presentation times also become the track duration.
-fn parse_sidx(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+fn parse_sidx(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   // `avio_tell(pb)` at entry: the anchor is computed before any field is
   // read, exactly as in the C.
-  let payload_start = r.position().to_int64()
-  let version = r.read_u8()
+  let payload_start = r.avio_tell()
+  let version = r.avio_r8()
   if version > 1 {
     // avpriv_request_sample: sidx version %u
     return
   }
-  let _ = r.read_u24() // flags
-  let track_id = r.read_u32()
+  let _ = r.avio_rb24() // flags
+  let track_id = r.avio_rb32()
   let track_opt = mov_find_track(st, track_id)
   let track = match track_opt {
     Some(t) => t
@@ -49,35 +49,35 @@ fn parse_sidx(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
       // could not find corresponding track id
       return
   }
-  let timescale = r.read_u32()
+  let timescale = r.avio_rb32()
   if timescale == 0 {
     raise InvalidData("invalid sidx timescale")
   }
   let (base_pts, offadd) = if version == 0 {
-    (r.read_u32().to_int64(), r.read_u32().to_int64())
+    (r.avio_rb32().to_int64(), r.avio_rb32().to_int64())
   } else {
-    (r.read_i64(), r.read_i64())
+    (r.avio_rb64().reinterpret_as_int64(), r.avio_rb64().reinterpret_as_int64())
   }
   let mut pts = base_pts
   // `offset = av_sat_add64(avio_tell(pb), atom.size) + offadd`: the anchor is
   // the end of the sidx box plus the declared first offset.
   let box_end = payload_start + size
   let mut offset = sat_add64(box_end, offadd)
-  let _ = r.read_u16() // reserved
-  let item_count = r.read_u16().reinterpret_as_int()
+  let _ = r.avio_rb16() // reserved
+  let item_count = r.avio_rb16().reinterpret_as_int()
   if item_count == 0 {
     raise InvalidData("empty sidx")
   }
   for i = 0; i < item_count; i = i + 1 {
-    if r.eof_reached() {
+    if r.avio_feof() {
       raise InvalidData("EOF in sidx")
     }
-    let ref_size = r.read_u32()
-    let duration = r.read_u32()
+    let ref_size = r.avio_rb32()
+    let duration = r.avio_rb32()
     if (ref_size & 0x80000000) != 0 {
       raise InvalidData("sidx reference_type 1")
     }
-    let _ = r.read_u32() // sap flags
+    let _ = r.avio_rb32() // sap flags
     // `av_rescale_q(pts, sidx timescale, track timescale)`.
     let timestamp = mov_rescale(pts, track.timescale, timescale)
     st.movie.sidx_refs.push({
@@ -100,69 +100,73 @@ fn parse_sidx(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 /// `mov_read_mfra`: look for a trailing `mfra` box and parse its `tfra`
 /// tables. Scans from the end of the buffer; any mismatch leaves the movie
 /// untouched, matching the C's "doesn't look like mfra" bail-outs.
-fn mov_read_mfra(movie : Mp4Movie, r : Mp4Reader) -> Unit {
-  let stream_size = r.total_size().to_int64()
+fn mov_read_mfra(movie : Mp4Movie, r : AvioContext) -> Unit {
+  // C gates the scan on a usable avio_size; an unsizeable stream skips it.
+  let stream_size = match r.avio_size() {
+    Ok(v) => v
+    Err(_) => return
+  }
   if stream_size < 8 {
     return
   }
-  let original_pos = r.position()
-  r.seek((stream_size - 4).to_int())
-  let mfra_size = r.read_u32().to_int64()
+  let original_pos = r.avio_tell()
+  let _ = r.avio_seek(stream_size - 4L, SEEK_SET)
+  let mfra_size = r.avio_rb32().to_int64()
   if mfra_size <= 0 || mfra_size > stream_size {
-    r.seek(original_pos)
+    let _ = r.avio_seek(original_pos, SEEK_SET)
     return
   }
-  r.seek((stream_size - mfra_size).to_int())
-  if r.read_u32().to_int64() != mfra_size {
-    r.seek(original_pos)
+  let _ = r.avio_seek(stream_size - mfra_size, SEEK_SET)
+  if r.avio_rb32().to_int64() != mfra_size {
+    let _ = r.avio_seek(original_pos, SEEK_SET)
     return
   }
-  if r.read_fourcc() != tag('m', 'f', 'r', 'a') {
-    r.seek(original_pos)
+  if r.avio_rl32_tag() != tag('m', 'f', 'r', 'a') {
+    let _ = r.avio_seek(original_pos, SEEK_SET)
     return
   }
   // Read tfra boxes until a non-tfra box (or the buffer) ends the table.
-  while r.position() + 8 <= stream_size.to_int() {
-    let pos = r.position().to_int64()
-    let size = r.read_u32().to_int64()
-    if r.read_fourcc() != tag('t', 'f', 'r', 'a') {
+  while r.avio_tell() + 8L <= stream_size {
+    let pos = r.avio_tell()
+    let size = r.avio_rb32().to_int64()
+    if r.avio_rl32_tag() != tag('t', 'f', 'r', 'a') {
       break
     }
-    let version = r.read_u8().reinterpret_as_int()
-    let _ = r.read_u24() // flags
-    let track_id = r.read_u32()
-    let field_length = r.read_u32()
-    let item_count = r.read_u32().reinterpret_as_int()
+    let version = r.avio_r8().reinterpret_as_int()
+    let _ = r.avio_rb24() // flags
+    let track_id = r.avio_rb32()
+    let field_length = r.avio_rb32()
+    let item_count = r.avio_rb32().reinterpret_as_int()
     let entries : Array[MovTfraEntry] = []
     for i = 0; i < item_count; i = i + 1 {
-      if r.eof_reached() {
+      if r.avio_feof() {
         break
       }
       let (time, offset) = if version == 1 {
-        (r.read_i64(), r.read_i64())
+        (r.avio_rb64().reinterpret_as_int64(), r.avio_rb64().reinterpret_as_int64())
       } else {
-        (r.read_u32().to_int64(), r.read_u32().to_int64())
+        (r.avio_rb32().to_int64(), r.avio_rb32().to_int64())
       }
       entries.push({ time, offset })
       // traf_size / trun_size / sample_size fields, sized by field_length.
       let mut j = 0
       while j < ((field_length >> 4) & 3).reinterpret_as_int() + 1 {
-        let _ = r.read_u8()
+        let _ = r.avio_r8()
         j = j + 1
       }
       j = 0
       while j < ((field_length >> 2) & 3).reinterpret_as_int() + 1 {
-        let _ = r.read_u8()
+        let _ = r.avio_r8()
         j = j + 1
       }
       j = 0
       while j < (field_length & 3).reinterpret_as_int() + 1 {
-        let _ = r.read_u8()
+        let _ = r.avio_r8()
         j = j + 1
       }
     }
     movie.mfra.push({ track_id, entries })
-    r.seek((pos + size).to_int())
+    let _ = r.avio_seek(pos + size, SEEK_SET)
   }
-  r.seek(original_pos)
+  let _ = r.avio_seek(original_pos, SEEK_SET)
 }

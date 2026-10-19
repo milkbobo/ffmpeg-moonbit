@@ -13,7 +13,9 @@
   RC4、AES(ECB/CBC)、XTEA、TEA、Blowfish、CAST-128、AES-CTR；另有 `@v128` SIMD 版：
   Adler-32、base64 编码、`av_strnstr`、MD5 多缓冲（`adler32_v128.mbt`/`base64_v128.mbt`/
   `avstring_v128.mbt`/`md5_v128.mbt`）
-- **libavformat**：内存字节读取器 + MP4/MOV 解复用切片（box 遍历 + 采样表索引、碎片化
+- **libavformat**：`aviobuf.c` 流式 AVIO 层（`AvioContext`：回调驱动缓冲读写、四路径
+  seek、dyn buf、CRC 校验和）+ MP4/MOV 解复用切片（box 遍历 + 采样表索引，**跑在
+  AvioContext 上**，`av_mov_open_avio` 支持流式源；碎片化
   MP4 含 `sidx`/`mfra` 与重叠片段 discard、extradata `avcC`/`esds`+AAC 配置、
   `mov_seek_stream` seek、未压缩音频分块路径、cenc 全家含碎片内 `senc` 与 `saiz`/`saio`）
 - **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
@@ -148,6 +150,11 @@ $msg | git commit -F -
 - **core 包**：`Double::sqrt`（方法）可用；`floor`/`round`/`ceil` 可用方法或 `@math.*`；
   `@math.cos` 等数学函数需在 `moon.pkg` 里 `import { "moonbitlang/core/math" }`（别名为 `@math`）。
 - **行数统计口径**：`Get-Content $f | Measure-Object -Line` 会少计，统一用 `(Get-Content $f).Count`。
+- **顶层常量与类型别名（0.1.20261012 工具链）**：大写标识符的顶层常量必须 `pub const`
+  （`pub let` 报 E3002）；类型别名用 `pub type X = …`（不是 `typealias`）；`Option::is_some()`
+  弃用 → `x is Some(_)` / `x is None`；局部 `var x =` 弃用 → `let mut x =`；`Char::from_int`
+  弃用 → `Int::unsafe_to_char`（码点已知合法时）；`Bytes::from_fixedarray` 弃用 →
+  `Bytes::from_array(arr[:])`（Bytes 不可变，无 `op_set`）。
 - **`@v128` 的 experimental 告警**：调用 `@v128.*` 会触发 `alert_experimental`（E0014）；
   在 `moon.pkg` 写 `warnings = "-alert_experimental"` 即可消警（core 自身亦如此，见
   `core/debug/moon.pkg`）。完整范本：`libavutil/adler32_v128.mbt`（构造用 `i16x8_const`、
@@ -230,7 +237,8 @@ moonbit/                      # git 仓库根
 │   └── *_wbtest.mbt          # 白盒测试（含 cipher_wbtest.mbt 汇总各密码）
 ├── libavformat/              # 包 ffmpeg/moonbit/libavformat（依赖 libavutil + libavcodec）
 │   ├── moon.pkg
-│   ├── reader.mbt            # 内存字节读取器
+│   ├── aviobuf.mbt           # 流式 AVIO 层（aviobuf.c 忠实移植）
+│   ├── aviobuf_wbtest.mbt    # AVIO 白盒测试（分块源/seek 路径/dyn buf/流式 MP4 回归）
 │   ├── mov.mbt               # MP4/MOV 解复用（box 遍历 + 采样表 + 碎片化 + cenc）
 │   ├── extradata.mbt         # glbl（avcC 等原样）+ esds 描述符链 + AAC 配置
 │   ├── frag.mbt              # sidx + mfra/tfra（mfro 探测）
