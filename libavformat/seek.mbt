@@ -8,11 +8,12 @@
 /// Deviations, all documented:
 ///   * `sc->min_corrected_pts` is always 0 here (only the not-ported
 ///     `advanced_editlist` pass produces a non-zero value).
-///   * `can_seek_to_key_sample`'s open-GOP logic needs `sgpd`/`rap ` groups
-///     (and raw NAL inspection) to know a sample's open-GOP status; without
-///     them every key sample counts as closed, which is what FFmpeg itself
-///     falls back to when `open_key_samples` is empty. The HEVC-only gate is
-///     keyed on the `hvc1`/`hev1` sample-entry fourcc.
+///   * `can_seek_to_key_sample`'s open-GOP status comes from the
+///     `sgpd`('sync') + `sbgp` pass (`build_open_gop_key_points` in
+///     mov.mbt); without sync groups every key sample counts as closed,
+///     which is what FFmpeg itself falls back to when `open_key_samples`
+///     is empty. The HEVC-only gate is keyed on the `hvc1`/`hev1`
+///     sample-entry fourcc.
 ///   * `mov_seek_fragment` and the frag-index walk are unnecessary: this port
 ///     materialises every sample up front, so the index search below already
 ///     covers fragmented files.
@@ -76,8 +77,9 @@ pub fn index_search_timestamp(
 
 ///|
 /// `can_seek_to_key_sample`: HEVC open-GOP samples that would be presented
-/// before the request point are not safe to seek to. Without the sgpd/NAL
-/// pass every sample is treated as a closed key sample.
+/// before the request point are not safe to seek to, even though they come
+/// after in decoding order. `key_sample_pts = dts + sample_offset + dts_shift`
+/// with the per-sample ctts offset from `build_open_gop_key_points`.
 fn can_seek_to_key_sample(
   track : Mp4Track,
   sample : Int,
@@ -87,14 +89,16 @@ fn can_seek_to_key_sample(
   if !hevc {
     return true
   }
-  if sample >= track.samples.length() {
+  if sample >= track.sample_offsets.length() {
     return true
   }
-  // `key_sample_pts = dts + ctts_offset + dts_shift` would be compared
-  // against `requested_pts` for open-GOP samples, but open-GOP status comes
-  // from the sgpd/rap-NAL pass that is out of this slice's scope; with no
-  // `open_key_samples` the check never rejects, in C as here.
-  ignore(requested_pts)
+  let key_sample_dts = track.samples[sample].dts
+  let key_sample_pts = key_sample_dts +
+    track.sample_offsets[sample].to_int64() +
+    track.dts_shift.to_int64()
+  if is_open_key_sample(track, sample) && key_sample_pts > requested_pts {
+    return false
+  }
   true
 }
 

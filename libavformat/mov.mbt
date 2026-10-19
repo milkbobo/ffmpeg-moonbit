@@ -40,11 +40,16 @@
 ///     stream level and inside `moof`), and `saiz`/`saio` auxiliary info are
 ///     parsed, and `mov_decrypt_sample` unwraps a sample for the
 ///     `cenc`/`cbc1`/`cens`/`cbcs` schemes with a caller-supplied key.
-///   * not ported: AVIO/AVPacket/AVFormatContext plumbing (this parser works on
-///     an in-memory buffer the caller has already read), `rap_group`
-///     (sgpd/sbgp) keypoint marking, multi sample-description tracks,
-///     `advanced_editlist`, and the `dvcC`/`dvvC` whole-atom extradata
-///     variants.
+///   * sample groups: `sgpd`('sync') NAL-type entries, `sbgp`('rap '/'sync')
+///     runs, `build_open_gop_key_points` (per-sample ctts offsets + the CRA
+///     open-key list + min stts duration) feeding `can_seek_to_key_sample`
+///     in seek.mbt; multi sample descriptions (`ff_mov_read_stsd_entries`
+///     walk, `mov_skip_multiple_stsd`, per-entry extradata slots,
+///     `pseudo_stream_id` index filter, the tfdt/trun `stsd_id` gates and
+///     the first-chunk `last_stsd` extradata switch).
+///   * not ported: AVIO/AVPacket/AVFormatContext plumbing (this parser works
+///     on an `AvioContext` the caller supplies), `advanced_editlist`, and
+///     the `dvcC`/`dvvC` whole-atom extradata variants.
 ///   * simplified: per-sample timestamps are materialised up front instead
 ///     of being consulted lazily, the `free`/`hoov`-hiding-`moov` recovery is
 ///     omitted, and corrupt-count guards are tightened relative to the C code.
@@ -75,6 +80,12 @@ pub struct MovStsc {
   first : Int
   count : Int
   id : Int
+}
+
+///| `MOVSbgp` from libavformat/isom.h: one sample-to-group run. */
+pub struct MovSbgp {
+  count : UInt
+  index : UInt
 }
 
 ///| `MOVElst` from libavformat/isom.h. */
@@ -150,6 +161,15 @@ pub struct Mp4Track {
   mut codec_id : String
   ///| Raw codec private data (`avcC`/`hvcC`/`av1C`/`glbl` payload or the `esds` DecoderSpecificInfo). */
   mut extradata : Bytes?
+  ///| `sc->extradata[]`: one extradata slot per sample-description entry. */
+  stsd_extradata : Array[Bytes?]
+  ///| `sc->stsd_count`: entries seen in the `stsd` box (parsed or skipped). */
+  mut stsd_count : Int
+  ///| `sc->pseudo_stream_id`: -1 keeps every chunk in the index, else only
+  /// chunks whose `stsc` id - 1 equals it are indexed. */
+  mut pseudo_stream_id : Int
+  ///| `sc->last_stsd_index`: sample description the first chunk references. */
+  mut last_stsd_index : Int
   mut timescale : UInt
   mut duration : UInt64
   mut width : Int
@@ -179,6 +199,16 @@ pub struct Mp4Track {
   keyframes : Array[UInt]
   stps : Array[UInt]
   mut keyframe_absent : Bool
+  ///| `sc->sgpd_sync`: NAL unit types of the 'sync' sample-group descriptions. */
+  sgpd_sync : Array[UInt]
+  ///| `sc->sync_group`: 'sync' sample-to-group runs (`sbgp`). */
+  sync_group : Array[MovSbgp]
+  ///| `sc->rap_group`: 'rap ' sample-to-group runs (`sbgp`). */
+  rap_group : Array[MovSbgp]
+  ///| `sc->sample_offsets`: per-sample ctts offsets, unrolled (open-GOP path). */
+  sample_offsets : Array[Int]
+  ///| `sc->open_key_samples`: sample numbers of open-GOP (CRA) key samples. */
+  open_key_samples : Array[Int]
   elst : Array[MovElst]
   mut stsd_version : UInt
   mut dts_shift : Int
@@ -255,6 +285,10 @@ fn new_track() -> Mp4Track {
     codec: "",
     codec_id: "",
     extradata: None,
+    stsd_extradata: [],
+    stsd_count: 0,
+    pseudo_stream_id: 0,
+    last_stsd_index: 0,
     timescale: 0,
     duration: 0,
     width: 0,
@@ -279,6 +313,11 @@ fn new_track() -> Mp4Track {
     keyframes: [],
     stps: [],
     keyframe_absent: false,
+    sgpd_sync: [],
+    sync_group: [],
+    rap_group: [],
+    sample_offsets: [],
+    open_key_samples: [],
     elst: [],
     stsd_version: 0,
     dts_shift: 0,
@@ -390,6 +429,7 @@ let schm_cbcs : UInt = 0x63626373
 ///| `MOVTrackExt` from libavformat/isom.h, parsed from a `trex` box. */
 priv struct MovTrex {
   track_id : UInt
+  stsd_id : UInt
   duration : UInt
   size : UInt
   flags : UInt
@@ -398,11 +438,11 @@ priv struct MovTrex {
 ///|
 /// `MOVFragment` from libavformat/isom.h: the current `moof`/`traf` header
 /// state shared across the `tfhd`/`tfdt`/`trun` boxes of one track fragment.
-/// `stsd_id` is dropped because this slice models only the primary sample
-/// description (no `pseudo_stream_id` filtering).
 priv struct MovFrag {
   mut found_tfhd : Bool
   mut track_id : UInt
+  ///| `frag->stsd_id`: the fragment's sample description (tfhd flag or trex). */
+  mut stsd_id : UInt
   mut base_data_offset : Int64
   mut moof_offset : Int64
   mut implicit_offset : Int64
@@ -418,6 +458,7 @@ fn new_frag() -> MovFrag {
   {
     found_tfhd: false,
     track_id: 0,
+    stsd_id: 0,
     base_data_offset: 0,
     moof_offset: 0,
     implicit_offset: 0,
@@ -572,6 +613,10 @@ fn parse_box(st : MovState, r : AvioContext, kind : String, size : Int64) -> Uni
     parse_stss(st, r)
   } else if kind == "stps" {
     parse_stps(st, r)
+  } else if kind == "sgpd" {
+    parse_sgpd(st, r, size)
+  } else if kind == "sbgp" {
+    parse_sbgp(st, r)
   } else if kind == "esds" {
     parse_esds(st, r)
   } else if kind == "avcC" || kind == "hvcC" || kind == "av1C" || kind == "glbl" ||
@@ -864,43 +909,85 @@ fn parse_stsd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
     raise InvalidData("invalid STSD entries")
   }
   st.cur.stsd_version = version
-  // Only the primary sample description is modelled; the rest are skipped the
-  // way `mov_skip_multiple_stsd` skips non-primary entries.
-  let entry_start = r.avio_tell()
-  let entry_size = r.avio_rb32().to_int64()
-  let format = r.avio_rl32_tag()
-  if entry_size >= 16 {
-    let _ = r.avio_rb32() // reserved
-    let _ = r.avio_rb16() // reserved
-    let _ = r.avio_rb16() // dref_id
-  } else if entry_size <= 7 {
-    raise InvalidData("invalid size in stsd")
-  }
-  st.cur.codec = format
-  if media_is_video(st.cur.media_type) {
-    parse_stsd_video(st, r)
-  } else if media_is_audio(st.cur.media_type) {
-    parse_stsd_audio(st, r)
-  }
-  // Parse the child boxes of the sample entry (`sinf`/`avcC`/`esds`/`wave`/...);
-  // unknown boxes are skipped by parse_box. This is what lets `sinf`/`schm`/
-  // `tenc` inside an encrypted sample entry be seen.
-  let used = r.avio_tell() - entry_start
-  if entry_size > used {
-    let child_size = entry_size - used
-    let child_start = r.avio_tell()
-    parse_default(st, r, child_size)
-    let consumed = r.avio_tell() - child_start
-    if consumed < child_size {
-      let _ = r.avio_skip(child_size - consumed)
+  // `ff_mov_read_stsd_entries`: every entry is walked. Same-fourcc entries
+  // are parsed in place (fields overwritten, extradata slotted per entry);
+  // differing fourccs are skipped but still counted in stsd_count.
+  for pseudo_stream_id = 0; pseudo_stream_id < entries &&
+    r.avio_feof() == false; pseudo_stream_id = pseudo_stream_id + 1 {
+    let entry_start = r.avio_tell()
+    let entry_size = r.avio_rb32().to_int64()
+    let format = r.avio_rl32_tag()
+    if entry_size >= 16 {
+      let _ = r.avio_rb32() // reserved
+      let _ = r.avio_rb16() // reserved
+      let _ = r.avio_rb16() // dref_id
+    } else if entry_size <= 7 {
+      raise InvalidData("invalid size in stsd")
     }
-  }
-  for i = 1; i < entries; i = i + 1 {
-    let s = r.avio_rb32().to_int64()
-    if s < 8 {
-      break
+    let left = entry_size - (r.avio_tell() - entry_start)
+    if mov_skip_multiple_stsd(st.cur.codec, format) {
+      let _ = r.avio_skip(left)
+      st.cur.stsd_count = st.cur.stsd_count + 1
+      continue
     }
-    let _ = r.avio_skip(s - 4L)
+    // `sc->pseudo_stream_id = st->codecpar->codec_tag ? -1 : pseudo_stream_id`
+    st.cur.pseudo_stream_id = if st.cur.codec != "" { -1 } else { pseudo_stream_id }
+    st.cur.codec = format // mov_codec_id sets codec_tag = format
+    if media_is_video(st.cur.media_type) {
+      parse_stsd_video(st, r)
+    } else if media_is_audio(st.cur.media_type) {
+      parse_stsd_audio(st, r)
+    }
+    // Parse the child boxes of the sample entry (`sinf`/`avcC`/`esds`/`wave`/...);
+    // unknown boxes are skipped by parse_box. This is what lets `sinf`/`schm`/
+    // `tenc` inside an encrypted sample entry be seen.
+    let used = r.avio_tell() - entry_start
+    if entry_size > used {
+      let child_size = entry_size - used
+      let child_start = r.avio_tell()
+      parse_default(st, r, child_size)
+      let consumed = r.avio_tell() - child_start
+      if consumed < child_size {
+        let _ = r.avio_skip(child_size - consumed)
+      }
+    }
+    // Move the entry's extradata into its slot (`sc->extradata[pseudo_stream_id]`).
+    let slot = st.cur.pseudo_stream_id
+    if slot >= 0 {
+      while st.cur.stsd_extradata.length() <= slot {
+        st.cur.stsd_extradata.push(None)
+      }
+      if st.cur.extradata != None {
+        st.cur.stsd_extradata[slot] = st.cur.extradata
+      }
+    }
+    st.cur.extradata = None
+    st.cur.stsd_count = st.cur.stsd_count + 1
+  }
+  if r.avio_feof() {
+    raise InvalidData("EOF in STSD atom")
+  }
+  // Restore back the primary extradata (`sc->extradata_size[0]`).
+  if st.cur.stsd_extradata.length() > 0 {
+    st.cur.extradata = st.cur.stsd_extradata[0]
+  }
+}
+
+///|
+/// `mov_skip_multiple_stsd`: a later entry with a different fourcc is
+/// skipped; same-fourcc entries, and the AVID/prores/dv pairs, are parsed
+/// into the next extradata slot. `c->fc->video_codec_id` is a user override
+/// that is always unset here, so the C default arm (`codec_tag != 'jpeg'`)
+/// applies.
+fn mov_skip_multiple_stsd(codec_tag : String, format : String) -> Bool {
+  if codec_tag != "" && codec_tag != format &&
+    !(codec_tag == "AV1x" && format == "AVup") &&
+    codec_tag != "apcn" && codec_tag != "apch" &&
+    codec_tag != "dvpp" && codec_tag != "dvcp" &&
+    codec_tag != "jpeg" {
+    true
+  } else {
+    false
   }
 }
 
@@ -1333,6 +1420,86 @@ fn parse_stps(st : MovState, r : AvioContext) -> Unit {
   }
 }
 
+///|
+/// `mov_read_sgpd`: 'sync' sample-group descriptions. Only the 'sync'
+/// grouping type is consumed (one NAL unit type byte per entry); other types
+/// ('tscl', 'tsas', 'stsa', …) are parsed past, as in the C.
+fn parse_sgpd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+  if !st.in_trak {
+    return
+  }
+  let version = r.avio_r8().reinterpret_as_int()
+  let _ = r.avio_rb24() // flags
+  let grouping_type = r.avio_rl32_tag()
+  if grouping_type != "sync" {
+    return
+  }
+  let default_length : Int64 = if version >= 1 {
+    r.avio_rb32().to_int64()
+  } else {
+    0L
+  }
+  if version >= 2 {
+    let _ = r.avio_rb32() // default_group_description_index
+  }
+  let entry_count = r.avio_rb32()
+  if entry_count.to_int64() > size {
+    raise InvalidData("SGPD entry count exceeds atom size")
+  }
+  st.cur.sgpd_sync.clear()
+  for i = 0; i < entry_count.reinterpret_as_int() &&
+    r.avio_feof() == false; i = i + 1 {
+    let mut description_length = default_length
+    if version >= 1 && default_length == 0 {
+      description_length = r.avio_rb32().to_int64()
+    }
+    // 'sync': one byte of NAL unit type, remaining description bytes skipped.
+    st.cur.sgpd_sync.push(r.avio_r8() & 0x3F)
+    let _ = r.avio_skip(description_length - 1L)
+  }
+  if r.avio_feof() {
+    raise InvalidData("EOF in SGPD atom")
+  }
+}
+
+///|
+/// `mov_read_sbgp`: 'rap ' and 'sync' sample-to-group runs. Other grouping
+/// types are ignored. The entry loop is capped by eof exactly as in C, so a
+/// truncated atom yields the runs read so far.
+fn parse_sbgp(st : MovState, r : AvioContext) -> Unit raise MovError {
+  if !st.in_trak {
+    return
+  }
+  let version = r.avio_r8().reinterpret_as_int()
+  let _ = r.avio_rb24() // flags
+  let grouping_type = r.avio_rl32_tag()
+  if grouping_type != "rap " && grouping_type != "sync" {
+    return
+  }
+  if version == 1 {
+    let _ = r.avio_rb32() // grouping_type_parameter
+  }
+  let entries = r.avio_rb32()
+  if entries == 0 {
+    return
+  }
+  let dst = if grouping_type == "rap " {
+    st.cur.rap_group
+  } else {
+    st.cur.sync_group
+  }
+  dst.clear()
+  for i = 0; i < entries.reinterpret_as_int() &&
+    r.avio_feof() == false; i = i + 1 {
+    let count = r.avio_rb32()
+    let index = r.avio_rb32()
+    dst.push({ count, index })
+  }
+  if r.avio_feof() {
+    raise InvalidData("EOF in SBGP atom")
+  }
+}
+
 ///| `mov_read_trak`: parse one track's boxes, then build its sample index. */
 fn parse_trak(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
   st.in_trak = true
@@ -1375,11 +1542,11 @@ fn parse_trex(st : MovState, r : AvioContext) -> Unit {
   let _ = r.avio_r8() // version
   let _ = r.avio_rb24() // flags
   let track_id = r.avio_rb32()
-  let _ = r.avio_rb32() // stsd_id (primary description only in this slice)
+  let stsd_id = r.avio_rb32()
   let duration = r.avio_rb32()
   let size = r.avio_rb32()
   let flags = r.avio_rb32()
-  st.trex.push({ track_id, duration, size, flags })
+  st.trex.push({ track_id, stsd_id, duration, size, flags })
 }
 
 ///| `mov_read_moof`: reset fragment state and recurse into `traf`. */
@@ -1422,8 +1589,10 @@ fn parse_tfhd(st : MovState, r : AvioContext) -> Unit {
       } else {
         st.frag.implicit_offset
       }
-      if (flags & tfhd_stsd_id) != 0 {
-        let _ = r.avio_rb32() // stsd_id (primary description only in this slice)
+      st.frag.stsd_id = if (flags & tfhd_stsd_id) != 0 {
+        r.avio_rb32()
+      } else {
+        trex.stsd_id
       }
       st.frag.duration = if (flags & tfhd_default_duration) != 0 {
         r.avio_rb32()
@@ -1446,6 +1615,16 @@ fn parse_tfhd(st : MovState, r : AvioContext) -> Unit {
 
 ///| `mov_read_tfdt`: base media decode time for the current track fragment. */
 fn parse_tfdt(st : MovState, r : AvioContext) -> Unit {
+  // Fragments targeting a different sample description are skipped for this
+  // track (the C returns before consuming the payload; the caller realigns).
+  match mov_find_track(st, st.frag.track_id) {
+    Some(track) =>
+      if track.pseudo_stream_id != -1 &&
+        (track.pseudo_stream_id + 1).reinterpret_as_uint() != st.frag.stsd_id {
+        return
+      }
+    None => ()
+  }
   let version = r.avio_r8()
   let _ = r.avio_rb24() // flags
   let bmdt : Int64 = if version != 0 {
@@ -1472,6 +1651,10 @@ fn parse_trun(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
   match mov_find_track(st, st.frag.track_id) {
     None => ()
     Some(track) => {
+      if track.pseudo_stream_id != -1 &&
+        (track.pseudo_stream_id + 1).reinterpret_as_uint() != st.frag.stsd_id {
+        return
+      }
       let _ = r.avio_r8() // version
       let flags = r.avio_rb24()
       let mut entries = r.avio_rb32().reinterpret_as_int()
@@ -2282,6 +2465,78 @@ fn mov_merge_tts_data(track : Mp4Track) -> Unit raise MovError {
 /// The chunked "old uncompressed audio" path is not ported: when it would apply
 /// (`stts` reduces to a single entry of duration 1 on an audio track), the track
 /// is flagged with `unsupported_audio_chunk_demux` and produces no samples.
+///|
+/// `HEVC_NAL_CRA_NUT` (libavcodec/hevc.h): Clean Random Access NAL type. */
+let hevc_nal_cra_nut : UInt = 21
+
+///|
+/// `get_sgpd_sync_index`: the 1-based index of the first 'sync' entry whose
+/// NAL unit type matches, 0 when absent.
+fn get_sgpd_sync_index(track : Mp4Track, nal_unit_type : UInt) -> UInt {
+  for i = 0; i < track.sgpd_sync.length(); i = i + 1 {
+    if track.sgpd_sync[i] == nal_unit_type {
+      return (i + 1).reinterpret_as_uint()
+    }
+  }
+  0
+}
+
+///| `is_open_key_sample`: linear scan with the C's monotonic early break. */
+fn is_open_key_sample(track : Mp4Track, sample : Int) -> Bool {
+  for i = 0; i < track.open_key_samples.length(); i = i + 1 {
+    let oks = track.open_key_samples[i]
+    if oks == sample {
+      return true
+    }
+    if oks > sample {
+      break // list is monotonically increasing so we can stop early
+    }
+  }
+  false
+}
+
+///|
+/// `build_open_gop_key_points`: open-GOP bookkeeping for HEVC tracks with
+/// 'sync' sample groups — unrolled per-sample ctts offsets, the CRA sample
+/// list and the minimal stts duration used by the seek back-off.
+fn build_open_gop_key_points(track : Mp4Track) -> Unit {
+  let hevc = track.codec == "hvc1" || track.codec == "hev1"
+  if !hevc || track.sync_group.length() == 0 {
+    return
+  }
+  // Build an unrolled index of the samples (per-sample ctts offsets).
+  track.sample_offsets.clear()
+  for i = 0; i < track.ctts.length(); i = i + 1 {
+    for j = 0; j < track.ctts[i].count; j = j + 1 {
+      track.sample_offsets.push(track.ctts[i].offset)
+    }
+  }
+  let cra_index = get_sgpd_sync_index(track, hevc_nal_cra_nut)
+  if cra_index == 0 {
+    return
+  }
+  // Build a list of open-GOP key samples.
+  track.open_key_samples.clear()
+  let mut sample_id = 0
+  for i = 0; i < track.sync_group.length(); i = i + 1 {
+    let sg = track.sync_group[i]
+    if sg.index == cra_index {
+      for j = 0; j < sg.count.reinterpret_as_int(); j = j + 1 {
+        track.open_key_samples.push(sample_id)
+      }
+    }
+    sample_id = sample_id + sg.count.reinterpret_as_int()
+  }
+  // Identify the minimal time step between samples.
+  let mut min_dur : UInt = 4294967295
+  for i = 0; i < track.stts.length(); i = i + 1 {
+    if track.stts[i].duration < min_dur {
+      min_dur = track.stts[i].duration
+    }
+  }
+  track.min_sample_duration = min_dur
+}
+
 fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
   let mut current_dts : Int64 = 0
   let mut stsc_index = 0
@@ -2312,15 +2567,27 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
     }
   }
 
-  // `build_open_gop_key_points` computes the minimal stts duration for the
-  // seek back-off; ported here since the sgpd/NAL part is not in this slice.
-  let mut min_dur : UInt = 4294967295
-  for i = 0; i < track.stts.length(); i = i + 1 {
-    if track.stts[i].duration < min_dur {
-      min_dur = track.stts[i].duration
+  // Set the primary extradata based on the first Sample if it doesn't
+  // reference the first stsd entry (mov_read_header's last_stsd pass).
+  if track.stsc.length() > 0 && track.stsd_extradata.length() > 0 &&
+    track.stsc[0].id > 1 &&
+    track.stsc[0].id.reinterpret_as_uint() <= track.stsd_count.reinterpret_as_uint() {
+    let idx = track.stsc[0].id - 1
+    track.last_stsd_index = idx
+    // The C frees the old extradata before re-assigning from the slot, so an
+    // unwritten slot clears it instead of keeping slot 0's bytes.
+    track.extradata = if idx < track.stsd_extradata.length() {
+      track.stsd_extradata[idx]
+    } else {
+      None
     }
   }
-  track.min_sample_duration = min_dur
+  // `build_open_gop_key_points` unrolls the ctts offsets, collects the
+  // open-GOP (CRA) key samples and the minimal stts duration for the seek
+  // back-off; it early-returns untouched unless the track is HEVC with
+  // 'sync' groups, so min_sample_duration stays 0 in the common case (the
+  // FFMAX(min_sample_duration, 1) in the seek back-off covers it, as in C).
+  build_open_gop_key_points(track)
 
   // Only use old uncompressed audio chunk demuxing when stts specifies it.
   let audio_special = media_is_audio(track.media_type) &&
@@ -2416,9 +2683,12 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
         raise InvalidData("missing sample size")
       }
       let duration = track.tts[stts_index].duration
-      // Only the primary sample description (stsc id 1) is indexed, matching
-      // FFmpeg's pseudo_stream_id filtering for the primary stream.
-      if track.stsc[stsc_index].id == 1 {
+      // `sc->pseudo_stream_id == -1 || stsc.id - 1 == pseudo_stream_id`:
+      // -1 (a same-fourcc multi entry was parsed) indexes everything, else
+      // only the entry's own chunks join the index. The `id - 1` wraps in
+      // unsigned arithmetic exactly as in C (id 0 never matches).
+      if track.pseudo_stream_id == -1 ||
+        track.stsc[stsc_index].id - 1 == track.pseudo_stream_id {
         let pts = if track.has_ctts {
           current_dts + track.dts_shift.to_int64() + track.tts[stts_index].offset.to_int64()
         } else {

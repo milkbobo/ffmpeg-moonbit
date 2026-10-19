@@ -15,7 +15,10 @@
   `avstring_v128.mbt`/`md5_v128.mbt`）
 - **libavformat**：`aviobuf.c` 流式 AVIO 层（`AvioContext`：回调驱动缓冲读写、四路径
   seek、dyn buf、CRC 校验和）+ MP4/MOV 解复用切片（box 遍历 + 采样表索引，**跑在
-  AvioContext 上**，`av_mov_open_avio` 支持流式源；碎片化
+  AvioContext 上**，`av_mov_open_avio` 支持流式源；**sgpd/sbgp sample group** 与
+  open-GOP seek（`build_open_gop_key_points` → `can_seek_to_key_sample`）、**多 sample
+  description**（`pseudo_stream_id` 过滤 + extradata 槽位 + tfdt/trun `stsd_id` 门）；
+  碎片化
   MP4 含 `sidx`/`mfra` 与重叠片段 discard、extradata `avcC`/`esds`+AAC 配置、
   `mov_seek_stream` seek、未压缩音频分块路径、cenc 全家含碎片内 `senc` 与 `saiz`/`saio`）
 - **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
@@ -244,6 +247,7 @@ moonbit/                      # git 仓库根
 │   ├── frag.mbt              # sidx + mfra/tfra（mfro 探测）
 │   ├── seek.mbt              # ff_index_search_timestamp + mov_seek_stream
 │   ├── mp4_wbtest.mbt        # 第一批合成 box 测试
+│   ├── mp4_group_wbtest.mbt  # sgpd/sbgp、open-GOP seek 差分、多 stsd 三态、frag stsd_id 门
 │   ├── mp4_extra_wbtest.mbt  # 第二批合成 box 测试（extradata/sidx/seek/音频分块…）
 │   └── mp4_real_wbtest.mbt   # 真实文件交叉验证（两批，docker ffmpeg/ffprobe）
 └── libavcodec/               # 包 ffmpeg/moonbit/libavcodec（@math/@v128 + libavutil 仅白盒测试用）
