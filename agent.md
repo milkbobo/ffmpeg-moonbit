@@ -15,8 +15,8 @@
 - **libavformat**：内存字节读取器 + MP4/MOV 解复用切片（box 遍历 + 采样表索引）
 - **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
   `huffman.c` 的树/码长构建（`ff_huff_build_tree`/`ff_huff_gen_len_table`）+ 规范化
-  Huffman 码的编/解码；8 位 IDCT 另有 `@v128` SIMD 版（`idct_v128.mbt`，块/像素改用
-  **字节缓冲**，v128 才能载入）
+  Huffman 码的编/解码；IDCT 的 8/10/12 位另有 `@v128` SIMD 版（`idct_v128.mbt`，块/像素
+  改用 **字节缓冲**，v128 才能载入）
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的

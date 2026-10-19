@@ -7,8 +7,9 @@
 /// The random coefficient blocks reuse `init_block` / `Lfg` from
 /// `idct_wbtest.mbt` (same package). The transpose is checked as an involution.
 
-///| Error statistics of the SIMD 8-bit transform against `dctref`. */
-fn idctv128_stats(mode : Int, its : Int) -> (Int, Double, Double) {
+///| Error statistics of a SIMD variant (0 = 8-bit, 1 = 10-bit, 2 = 12-bit)
+/// against `dctref`. */
+fn idctv128_stats(variant : Int, mode : Int, its : Int) -> (Int, Double, Double) {
   let lfg = lfg_init(1)
   let mut err_inf = 0
   let mut err2 : Int64 = 0
@@ -17,7 +18,11 @@ fn idctv128_stats(mode : Int, its : Int) -> (Int, Double, Double) {
     let orig : Array[Int] = Array::make(64, 0)
     init_block(orig, mode, true, lfg, 256)
     let buf = idct_block_to_bytes(orig)
-    ff_simple_idct_v128(buf)
+    match variant {
+      0 => ff_simple_idct_v128(buf)
+      1 => ff_simple_idct_v128_10bit(buf)
+      _ => ff_simple_idct_v128_12bit(buf)
+    }
     let got = idct_bytes_to_block(buf)
     let refb = dup(orig)
     ff_ref_idct(refb)
@@ -73,10 +78,51 @@ test "idct simd: matches the dctref reference within FFmpeg dct.c tolerances" {
   ff_ref_dct_init()
   let its = 2000
   for mode = 0; mode < 3; mode = mode + 1 {
-    let (e, m, a) = idctv128_stats(mode, its)
+    let (e, m, a) = idctv128_stats(0, mode, its)
     assert_true(e <= 1)
     assert_true(m <= 0.02)
     assert_true(dabs(a) <= 0.0015)
+  }
+}
+
+test "idct simd: 10/12-bit variants within FFmpeg dct.c tolerances" {
+  ff_ref_dct_init()
+  let its = 2000
+  for mode = 0; mode < 3; mode = mode + 1 {
+    // SIMPLE-C10 is `nonspec = 0` in dct.c, so the full criteria apply.
+    let (e10, m10, a10) = idctv128_stats(1, mode, its)
+    assert_true(e10 <= 1)
+    assert_true(m10 <= 0.02)
+    assert_true(dabs(a10) <= 0.0015)
+    // SIMPLE-C12 is `nonspec = 1` in dct.c: FFmpeg does not enforce err_inf /
+    // omse / bias for it. Measured profiles are identical to the scalar port
+    // (e.g. mode 0: both err_inf=1, omse=0.1351, bias=-0.00259), so only
+    // err_inf is asserted.
+    let (e12, _m12, _a12) = idctv128_stats(2, mode, its)
+    assert_true(e12 <= 1)
+  }
+}
+
+test "idct simd: 10-bit put matches the scalar put within one" {
+  ff_ref_dct_init()
+  for t = 0; t < 40; t = t + 1 {
+    let block : Array[Int] = Array::make(64, 0)
+    if t % 2 == 0 {
+      block[0] = (t - 20) * 100
+    } else {
+      for i = 0; i < 64; i = i + 1 {
+        block[i] = ((i * 37 + t * 11) % 2048) - 1024
+      }
+    }
+    let dest_i : Array[Int] = Array::make(64, 0)
+    ff_simple_idct_put_int16_10bit(dest_i, 8, dup(block))
+    let dest_b : FixedArray[Byte] = FixedArray::make(8 * 16, b'\x00')
+    ff_simple_idct_put_v128_10bit(dest_b, 16, idct_block_to_bytes(block))
+    for i = 0; i < 64; i = i + 1 {
+      let v = (dest_b[2 * i].to_uint() | (dest_b[2 * i + 1].to_uint() << 8)).reinterpret_as_int()
+      let d = if v > dest_i[i] { v - dest_i[i] } else { dest_i[i] - v }
+      assert_true(d <= 1)
+    }
   }
 }
 

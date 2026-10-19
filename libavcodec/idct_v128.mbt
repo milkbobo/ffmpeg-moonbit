@@ -281,3 +281,102 @@ pub fn ff_simple_idct_add_v128(
     idct_store8(dest, r * stride, sum)
   }
 }
+
+// ---------------------------------------------------------------------------
+// 10-bit / 12-bit (`pixel = uint16_t`) variants
+// ---------------------------------------------------------------------------
+
+///|
+/// Clamp an `i16x8` row to `[0, max_val]` (`av_clip_uintp2`) and store it as
+/// 16 little-endian bytes (8 `uint16` pixels).
+#cfg(any(target="native", target="wasm"))
+fn idct_store16_clamped(
+  dest : FixedArray[Byte],
+  off : Int,
+  v : V128,
+  max_val : Int,
+) -> Unit {
+  let hi = @v128.i16x8_splat(max_val.to_uint16())
+  let zero = @v128.i16x8_splat(0)
+  @v128.v128_store(
+    dest,
+    off,
+    @v128.i16x8_max_s(@v128.i16x8_min_s(v, hi), zero),
+  )
+}
+
+///| `ff_simple_idct_int16_10bit` (in place) on the compact byte buffer. */
+#cfg(any(target="native", target="wasm"))
+pub fn ff_simple_idct_v128_10bit(buf : FixedArray[Byte]) -> Unit {
+  let out = idct_rows_v128(buf, idct_int16_10bit)
+  for r = 0; r < 8; r = r + 1 {
+    @v128.v128_store(buf, r * 16, out[r])
+  }
+}
+
+///| `ff_simple_idct_int16_12bit` (in place) on the compact byte buffer. */
+#cfg(any(target="native", target="wasm"))
+pub fn ff_simple_idct_v128_12bit(buf : FixedArray[Byte]) -> Unit {
+  let out = idct_rows_v128(buf, idct_int16_12bit)
+  for r = 0; r < 8; r = r + 1 {
+    @v128.v128_store(buf, r * 16, out[r])
+  }
+}
+
+///|
+/// `ff_simple_idct_put_int16_10bit` writing 16-bit pixels; `stride_bytes` is
+/// the row stride in bytes (8 pixels = 16 bytes per row).
+#cfg(any(target="native", target="wasm"))
+pub fn ff_simple_idct_put_v128_10bit(
+  dest : FixedArray[Byte],
+  stride_bytes : Int,
+  buf : FixedArray[Byte],
+) -> Unit {
+  let out = idct_rows_v128(buf, idct_int16_10bit)
+  for r = 0; r < 8; r = r + 1 {
+    idct_store16_clamped(dest, r * stride_bytes, out[r], 1023)
+  }
+}
+
+///| `ff_simple_idct_put_int16_12bit` writing 16-bit pixels. */
+#cfg(any(target="native", target="wasm"))
+pub fn ff_simple_idct_put_v128_12bit(
+  dest : FixedArray[Byte],
+  stride_bytes : Int,
+  buf : FixedArray[Byte],
+) -> Unit {
+  let out = idct_rows_v128(buf, idct_int16_12bit)
+  for r = 0; r < 8; r = r + 1 {
+    idct_store16_clamped(dest, r * stride_bytes, out[r], 4095)
+  }
+}
+
+///| `ff_simple_idct_add_int16_10bit` writing 16-bit pixels. */
+#cfg(any(target="native", target="wasm"))
+pub fn ff_simple_idct_add_v128_10bit(
+  dest : FixedArray[Byte],
+  stride_bytes : Int,
+  buf : FixedArray[Byte],
+) -> Unit {
+  let out = idct_rows_v128(buf, idct_int16_10bit)
+  for r = 0; r < 8; r = r + 1 {
+    let off = r * stride_bytes
+    let cur = @v128.v128_load(dest, off)
+    idct_store16_clamped(dest, off, @v128.i16x8_add(cur, out[r]), 1023)
+  }
+}
+
+///| `ff_simple_idct_add_int16_12bit` writing 16-bit pixels. */
+#cfg(any(target="native", target="wasm"))
+pub fn ff_simple_idct_add_v128_12bit(
+  dest : FixedArray[Byte],
+  stride_bytes : Int,
+  buf : FixedArray[Byte],
+) -> Unit {
+  let out = idct_rows_v128(buf, idct_int16_12bit)
+  for r = 0; r < 8; r = r + 1 {
+    let off = r * stride_bytes
+    let cur = @v128.v128_load(dest, off)
+    idct_store16_clamped(dest, off, @v128.i16x8_add(cur, out[r]), 4095)
+  }
+}
