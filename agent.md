@@ -10,11 +10,13 @@
 用 MoonBit 逐模块重写 FFmpeg 9.0.2 的**纯算法**部分。当前覆盖：
 
 - **libavutil**：数学/有理数、CRC/Adler-32、Base64、MD5、SHA-1/224/256、avstring、
-  RC4、AES(ECB/CBC)、XTEA、TEA、Blowfish、CAST-128、AES-CTR
+  RC4、AES(ECB/CBC)、XTEA、TEA、Blowfish、CAST-128、AES-CTR；另有 `@v128` SIMD 版：
+  Adler-32、base64 编码、`av_strnstr`（`adler32_v128.mbt`/`base64_v128.mbt`/`avstring_v128.mbt`）
 - **libavformat**：内存字节读取器 + MP4/MOV 解复用切片（box 遍历 + 采样表索引）
 - **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
   `huffman.c` 的树/码长构建（`ff_huff_build_tree`/`ff_huff_gen_len_table`）+ 规范化
-  Huffman 码的编/解码
+  Huffman 码的编/解码；8 位 IDCT 另有 `@v128` SIMD 版（`idct_v128.mbt`，块/像素改用
+  **字节缓冲**，v128 才能载入）
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的
@@ -141,10 +143,10 @@ $msg | git commit -F -
 - **core 包**：`Double::sqrt`（方法）可用；`floor`/`round`/`ceil` 可用方法或 `@math.*`；
   `@math.cos` 等数学函数需在 `moon.pkg` 里 `import { "moonbitlang/core/math" }`（别名为 `@math`）。
 - **行数统计口径**：`Get-Content $f | Measure-Object -Line` 会少计，统一用 `(Get-Content $f).Count`。
-- **SIMD（`@v128`）**：`moon.pkg` 里 `import { "moonbitlang/core/v128" }`；SIMD 代码须用
-  `#cfg(any(target="native", target="wasm"))` 门控（`js`/`wasm-gc` 不可用）并保留标量回退；
-  16 字节加载用 `[v128le(data), .. tail]` 模式。范本：core 的 `encoding/hex/encode_v128.mbt`、
-  `encoding/base64/encode_v128.mbt`。
+- **`@v128` 的 experimental 告警**：调用 `@v128.*` 会触发 `alert_experimental`（E0014）；
+  在 `moon.pkg` 写 `warnings = "-alert_experimental"` 即可消警（core 自身亦如此，见
+  `core/debug/moon.pkg`）。完整范本：`libavutil/adler32_v128.mbt`（构造用 `i16x8_const`、
+  块载入用 `[v128le(v), .. _]` 模式、横向归约用 `i32x4_extract_lane`、`UInt64` 字面量用 `16UL`）。
 
 ---
 
@@ -212,20 +214,23 @@ moonbit/                      # git 仓库根
 ├── README.md                 # 进度 / 模块表 / 验证来源 / 约定 / 踩坑（动态信息看这里）
 ├── agent.md                  # 本文件（稳定约定、命令、流程）
 ├── libavutil/                # 包 ffmpeg/moonbit/libavutil
-│   ├── moon.pkg
+│   ├── moon.pkg              # 含 moonbitlang/core/v128 + warnings = "-alert_experimental"
 │   ├── *.mbt                 # 各纯算法模块
+│   ├── *_v128.mbt            # `@v128` SIMD 版（adler32/base64/avstring）+ 同主题 wbtest
 │   └── *_wbtest.mbt          # 白盒测试（含 cipher_wbtest.mbt 汇总各密码）
 ├── libavformat/              # 包 ffmpeg/moonbit/libavformat（依赖 libavutil）
 │   ├── moon.pkg
 │   ├── reader.mbt            # 内存字节读取器
 │   ├── mov.mbt               # MP4/MOV 解复用切片
 │   └── mp4_wbtest.mbt
-└── libavcodec/               # 包 ffmpeg/moonbit/libavcodec（@math + libavutil 仅白盒测试用）
+└── libavcodec/               # 包 ffmpeg/moonbit/libavcodec（@math/@v128 + libavutil 仅白盒测试用）
     ├── moon.pkg
-    ├── idct.mbt              # SIMPLE-C IDCT + idctdsp 辅助
+    ├── idct.mbt              # SIMPLE-C IDCT + idctdsp 辅助（标量，Array[Int]）
+    ├── idct_v128.mbt         # 8 位 IDCT 的 `@v128` 版（块/像素用字节缓冲）
     ├── dctref.mbt            # 双精度参考 DCT/IDCT（IDCT 测试的期望值来源）
     ├── huffman.mbt           # Huffman 树/码长 + 规范化码编解码
     ├── idct_wbtest.mbt
+    ├── idct_v128_wbtest.mbt
     └── huffman_wbtest.mbt
 ```
 

@@ -1,6 +1,9 @@
 import {
   "moonbitlang/core/math",
+  "moonbitlang/core/v128",
 }
+
+warnings = "-alert_experimental"
 
 import {
   "ffmpeg/moonbit/libavutil",
