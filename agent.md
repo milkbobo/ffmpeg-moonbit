@@ -13,11 +13,15 @@
   RC4、AES(ECB/CBC)、XTEA、TEA、Blowfish、CAST-128、AES-CTR；另有 `@v128` SIMD 版：
   Adler-32、base64 编码、`av_strnstr`、MD5 多缓冲（`adler32_v128.mbt`/`base64_v128.mbt`/
   `avstring_v128.mbt`/`md5_v128.mbt`）
-- **libavformat**：内存字节读取器 + MP4/MOV 解复用切片（box 遍历 + 采样表索引）
+- **libavformat**：内存字节读取器 + MP4/MOV 解复用切片（box 遍历 + 采样表索引、碎片化
+  MP4 含 `sidx`/`mfra` 与重叠片段 discard、extradata `avcC`/`esds`+AAC 配置、
+  `mov_seek_stream` seek、未压缩音频分块路径、cenc 全家含碎片内 `senc` 与 `saiz`/`saio`）
 - **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
   `huffman.c` 的树/码长构建（`ff_huff_build_tree`/`ff_huff_gen_len_table`）+ 规范化
-  Huffman 码的编/解码；IDCT 的 8/10/12 位另有 `@v128` SIMD 版（`idct_v128.mbt`，块/像素
-  改用 **字节缓冲**，v128 才能载入）
+  Huffman 码的编/解码；`mpeg4audio.c` 的 AudioSpecificConfig 解析（`mpeg4audio.mbt`，
+  供 libavformat 的 `esds` 用 —— **libavformat 依赖 libavcodec**，与 FFmpeg 方向一致）；
+  IDCT 的 8/10/12 位另有 `@v128` SIMD 版（`idct_v128.mbt`，块/像素改用 **字节缓冲**，
+  v128 才能载入）
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的
@@ -224,20 +228,27 @@ moonbit/                      # git 仓库根
 │   ├── *.mbt                 # 各纯算法模块
 │   ├── *_v128.mbt            # `@v128` SIMD 版（adler32/base64/avstring/md5）+ 同主题 wbtest
 │   └── *_wbtest.mbt          # 白盒测试（含 cipher_wbtest.mbt 汇总各密码）
-├── libavformat/              # 包 ffmpeg/moonbit/libavformat（依赖 libavutil）
+├── libavformat/              # 包 ffmpeg/moonbit/libavformat（依赖 libavutil + libavcodec）
 │   ├── moon.pkg
 │   ├── reader.mbt            # 内存字节读取器
-│   ├── mov.mbt               # MP4/MOV 解复用切片
-│   └── mp4_wbtest.mbt
+│   ├── mov.mbt               # MP4/MOV 解复用（box 遍历 + 采样表 + 碎片化 + cenc）
+│   ├── extradata.mbt         # glbl（avcC 等原样）+ esds 描述符链 + AAC 配置
+│   ├── frag.mbt              # sidx + mfra/tfra（mfro 探测）
+│   ├── seek.mbt              # ff_index_search_timestamp + mov_seek_stream
+│   ├── mp4_wbtest.mbt        # 第一批合成 box 测试
+│   ├── mp4_extra_wbtest.mbt  # 第二批合成 box 测试（extradata/sidx/seek/音频分块…）
+│   └── mp4_real_wbtest.mbt   # 真实文件交叉验证（两批，docker ffmpeg/ffprobe）
 └── libavcodec/               # 包 ffmpeg/moonbit/libavcodec（@math/@v128 + libavutil 仅白盒测试用）
     ├── moon.pkg
     ├── idct.mbt              # SIMPLE-C IDCT + idctdsp 辅助（标量，Array[Int]）
     ├── idct_v128.mbt         # 8 位 IDCT 的 `@v128` 版（块/像素用字节缓冲）
     ├── dctref.mbt            # 双精度参考 DCT/IDCT（IDCT 测试的期望值来源）
     ├── huffman.mbt           # Huffman 树/码长 + 规范化码编解码
+    ├── mpeg4audio.mbt        # AudioSpecificConfig 解析（esds/AAC 用）
     ├── idct_wbtest.mbt
     ├── idct_v128_wbtest.mbt
-    └── huffman_wbtest.mbt
+    ├── huffman_wbtest.mbt
+    └── mpeg4audio_wbtest.mbt
 ```
 
 ---

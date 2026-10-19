@@ -57,26 +57,33 @@ moonbit/
 │   ├── cast5.mbt             # CAST-128（RFC 2144，40/80/128 位密钥，ECB/CBC）
 │   ├── aes_ctr.mbt           # AES-CTR（keystream、分部块状态、64 位计数器）
 │   └── *_wbtest.mbt          # 与模块同名的白盒测试
-├── libavformat/              # 包：ffmpeg/moonbit/libavformat（依赖 libavutil）
-│   ├── moon.pkg              # 声明对 ffmpeg/moonbit/libavutil 的依赖
+├── libavformat/              # 包：ffmpeg/moonbit/libavformat（依赖 libavutil + libavcodec）
+│   ├── moon.pkg              # 声明上述依赖（libavformat→libavcodec 与 FFmpeg 方向一致）
 │   ├── reader.mbt            # 内存字节读取器（对应 avio_rb/rl/skip/tell/feof）
 │   ├── mov.mbt               # MP4/MOV 解复用器：box 遍历 + 采样表 → 每样本索引
+│   ├── extradata.mbt         # mov_read_glbl（avcC/hvcC/av1C 原样）+ esds 描述符链 + AAC 配置
+│   ├── frag.mbt              # sidx 参考 + mfra/tfra 随机访问表（含 mfro 探测）
+│   ├── seek.mbt              # ff_index_search_timestamp + mov_seek_stream
 │   ├── mp4_wbtest.mbt        # 合成 MP4 构造器与白盒测试
+│   ├── mp4_extra_wbtest.mbt  # 第二切片白盒测试（extradata/sidx/mfra/senc/saiz/seek/音频分块）
 │   └── mp4_real_wbtest.mbt   # 真实文件交叉验证（docker ffmpeg/ffprobe，base64 内嵌）
 └── libavcodec/               # 包：ffmpeg/moonbit/libavcodec（依赖 libavutil，仅白盒测试用）
     ├── moon.pkg              # moonbitlang/core/math + libavutil（`for "wbtest"`）
     ├── idct.mbt              # SIMPLE-C IDCT（int16 8/10/12 bit）+ idctdsp 像素/扫描表辅助
     ├── dctref.mbt            # 双精度参考 DCT/IDCT（dctref.c），供 IDCT 测试作期望值
     ├── huffman.mbt           # Huffman 树/码长构建（huffman.c）+ 规范化码编解码
+    ├── mpeg4audio.mbt        # AudioSpecificConfig 解析（mpeg4audio.c，esds/AAC 用）
     ├── idct_wbtest.mbt       # 对照 dctref 参考 + FFmpeg dct.c 判据
-    └── huffman_wbtest.mbt    # Kraft/最优性/两实现互证/往返
+    ├── huffman_wbtest.mbt    # Kraft/最优性/两实现互证/往返
+    └── mpeg4audio_wbtest.mbt # 位串手推的 AAC-LC/SBR/PS/USAC/ALS 头部用例
 ```
 
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行，本次完成 MoonBit 源文件（`moonbit/**/*.mbt`，不含
-`_build` 生成文件）共 **11357 行**（libavutil 5995 行 + libavformat 的 MP4 解复用切片
-3332 行 + libavcodec 的 IDCT/Huffman 切片 2030 行，三者均含白盒测试）—— 约占整体 **0.71%**。
+`_build` 生成文件）共 **14227 行**（libavutil 5995 行 + libavformat 的 MP4 解复用切片
+5652 行 + libavcodec 的 IDCT/Huffman/MPEG-4 音频切片 2580 行，均含白盒测试）——
+约占整体 **0.89%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 开端）
 
@@ -102,12 +109,16 @@ moonbit/
 | [cast5.mbt](libavutil/cast5.mbt) | `libavutil/cast5.c` | `AVCAST5`、`av_cast5_alloc`、`av_cast5_init`(40/80/128 位密钥 → `Km`/`Kr` 轮密钥，`Kr` 掩到 5 位)、`av_cast5_crypt`(ECB)、`av_cast5_crypt2`(CBC)。`F1/F2/F3` 轮函数与 `COMPUTE_Z/COMPUTE_X` 密钥调度；`S1`..`S8` 表由 C 源码逐值提取 | ✅ |
 | [aes_ctr.mbt](libavutil/aes_ctr.mbt) | `libavutil/aes_ctr.c` | `AVAESCTR`、`av_aes_ctr_alloc/init`、`av_aes_ctr_set_iv`(8 字节 IV+零计数器)、`av_aes_ctr_set_full_iv`/`get_iv`(16 字节)、`av_aes_ctr_increment_iv`(BE64 高位加一)、`av_aes_ctr_crypt`(keystream 缓存 + `block_offset` 跨调用状态，支持任意切分)。`set_random_iv` 依赖平台随机源，留待 FFI | ✅ |
 | [reader.mbt](libavformat/reader.mbt) | `avio_*` 子集 | `Mp4Reader`：`avio_r8/rb16/rb24/rb32/rb64/rl32`、`skip`/`seek`/`tell`/`feof` 语义（越界读返回 0 并置 eof，与 AVIO 一致） | ✅ |
-| [mov.mbt](libavformat/mov.mbt) | `libavformat/mov.c` | box 遍历 + `ftyp`/`mvhd`/`tkhd`/`mdhd`/`hdlr`/`elst`/`stsd`(视频/音频 sample entry)/`stts`/`ctts`/`stsc`/`stsz`/`stz2`/`stco`/`co64`/`stss`/`stps` 解析；`mov_merge_tts_data` 合并 + `mov_build_index` 采样索引 → 每样本 offset/size/DTS/PTS/duration/关键帧/`min_distance`。**碎片化 MP4**：`moof`/`traf`/`tfhd`/`tfdt`/`trun`/`trex` 按 `default-base-is-moof` + `tfdt`/`track_end` 追加每样本索引，按 `trun` 采样标志判定关键帧。**cenc 加密**：`sinf`/`schm`/`tenc`/`senc` 解析 + `mov_decrypt_sample`（`cenc`/`cbc1`/`cens`/`cbcs`，基于 `aes_ctr`） | ✅ |
+| [mov.mbt](libavformat/mov.mbt) | `libavformat/mov.c` | box 遍历 + `ftyp`（含 compatible brands）/`mvhd`/`tkhd`/`mdhd`/`hdlr`（仅认识 vide/soun/subp/clcp，数据 hdlr 如 `url ` 不覆盖）/`elst`/`stsd`(视频/音频 sample entry，音频含 QT v1/v2 打包字段 + `mov_int2double`)/`stts`（含 `FFMIN` 时长上限与 `track_end` 播种）/`ctts`/`stsc`/`stsz`/`stz2`/`stco`/`co64`/`stss`/`stps` 解析；`mov_merge_tts_data` 合并 + `mov_build_index` 采样索引 → 每样本 offset/size/DTS/PTS/duration/关键帧/`min_distance`/`discard`，含**未压缩音频分块路径**（1024 样本/包，MACE/ADPCM/GSM/PCM 打包默认）。**碎片化 MP4**：`moof`/`traf`/`tfhd`/`tfdt`/`trun`/`trex` 按 `default-base-is-moof` + `tfdt`/`sidx`/`track_end` 追加每样本索引，按 `trun` 采样标志判定关键帧，重叠片段置 `AVINDEX_DISCARD_FRAME`。**cenc 加密**：`sinf`/`schm`/`tenc`/`senc`（流级 + 碎片内）/`saiz`/`saio`（辅助信息块）解析 + `mov_decrypt_sample`（`cenc`/`cbc1`/`cens`/`cbcs`，基于 `aes_ctr`） | ✅ |
+| [extradata.mbt](libavformat/extradata.mbt) | `mov.c`(`mov_read_glbl`)、`mov_esds.c`/`isom.c`(`ff_mov_read_esds`、`ff_mp4_read_descr*`、`ff_mp4_read_dec_config_descr`、`ff_mp4_obj_type`) | `avcC`/`hvcC`/`av1C`/`glbl`/`vvcC`(跳 4 字节)/`evcC`/`lvcC`/`apvC` 载荷原样入 extradata（含 `fiel` 包裹的破损文件回退）；`esds` 走 ES→DecoderConfig→DecoderSpecificInfo 描述符链（`ff_mp4_read_descr_len` 7 位长度、ES flags 的 URL/OCR 字段），对象类型表 → codec-id 字符串，MPEG 音频无 DSI 特例；AAC 时解析 AudioSpecificConfig 回填声道/采样率/帧长，`mp3on4`/`mp4als` 覆盖 | ✅ |
+| [frag.mbt](libavformat/frag.mbt) | `mov.c`(`mov_read_sidx`、`mov_read_mfra`、`read_tfra`) | `sidx` v0/v1：参考 ID/时间戳/earliest_presentation_time/first_offset（锚点为入口 position+payload，`av_rescale_q` 换算到轨道时间戳）+ 每参考 offset/pts/size/duration，累计 pts 即 `track_end` 与时长；`mfra`：从文件尾 4 字节（`mfro`）探测大小、校验后读 `tfra`（v0/v1 时间+offset，field_length 定长的三个尺寸字段） | ✅ |
+| [seek.mbt](libavformat/seek.mbt) | `mov.c`(`mov_seek_stream`、`can_seek_to_key_sample`)、`seek.c`(`ff_index_search_timestamp`) | 二分查找（丢弃帧跳过、BACKWARD/ANY 语义、关键帧回退）+ 时间戳 seek：`dts_shift` 折算、越界钳到首样本、`min_sample_duration` 回退步进、HEVC open-GOP 门（无 sgpd 时的无操作形式）；`mov_seek_track` 返回样本序号与 DTS | ✅ |
+| [mpeg4audio.mbt](libavcodec/mpeg4audio.mbt) | `libavcodec/mpeg4audio.c`、`mpeg4audio_sample_rates.h` | `ff_mpeg4audio_get_config`：对象类型（32+ escape）、采样率表/24 位显式、声道配置表、头部隐式 SBR/PS、ALS 头嗅探与重载、USAC/LD 帧长、`0x2b7`/`0x548` 隐式 SBR/PS 同步扩展扫描、PS 修正（含 `channels & ~1`）。返回 GASpecificConfig 位偏移与 C 一致 | ✅ |
 | [idct.mbt](libavcodec/idct.mbt) | `libavcodec/simple_idct.c`、`simple_idct_template.c`（`BIT_DEPTH` 8/10/12 + `IN_IDCT_DEPTH` 16）、`idctdsp.c` | `ff_simple_idct{,_put,_add}_int16_{8,10,12}bit`（行 DC 快速路径 + 列蝶形，`SUINT`→`UInt` 32 位回绕算术）；`ff_put_pixels_clamped_c`/`ff_add_pixels_clamped_c`/`put_signed_pixels_clamped_c`、`ff_init_scantable_permutation`、`ff_permute_scantable` | ✅ |
 | [idct_v128.mbt](libavcodec/idct_v128.mbt) | 同上（表示改造 + `libavcodec/x86/simple_idct.asm`、`simple_idct10.asm`） | `ff_simple_idct{,_put,_add}_v128`（8 位）与 `..._v128_10bit`/`..._v128_12bit`：块改用 **128 字节 LE-int16 缓冲**；`i8x16_shuffle` 三级 unpack 做 8x8 转置，`i32x4` 逐 lane 蝶形 + `i16x8_narrow_i32x4_s` 收窄（含 int16 截断语义）；`put`/`add` 用饱和窄化（8 位）或 `i16x8_min/max_s`（10/12 位）实现 `av_clip_uintp2` | ✅ |
 | [huffman.mbt](libavcodec/huffman.mbt) | `libavcodec/huffman.c`、`huffman.h`（+ `vlc.c`/`get_bits.h` 的位读取） | `ff_huff_build_tree`（两列表树构建 + `get_tree_codes` DFS → `lens`/`xlat`）、`ff_huff_gen_len_table`（堆法码长生成，含 `offset <<= 1` 重试）；另附规范化 Huffman 码的建立与 MSB-first 编/解码（对应 `ff_vlc_init_from_lengths` + `put_bits`/`get_bits`） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **104/104 通过**（libavutil 69 + MP4 18 + libavcodec 17）。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **128/128 通过**（libavutil 69 + libavformat 32 + libavcodec 27）。
 
 ### AES 的实现偏差（已记录）
 
@@ -195,14 +206,27 @@ Huffman 规范化码另有等效性说明，见下文）：
   `time_offset`、`stsc` 校验修复、`stz2` 的 MSB-first 4/8/16/32 位打包、64 位 box 长度与 `co64`）。
 - **已做（碎片化 MP4）**：`moof`/`traf`/`tfhd`/`tfdt`/`trun`/`trex`；按
   `default-base-is-moof`（或显式 `base-data-offset`/`implicit_offset`）+ `tfdt` 驱动 DTS，
-  跨片段由 `track_end` 续接；按 `trun` 采样标志判定关键帧、按 `dts_shift` 计算 PTS。
-- **已做（cenc，部分）**：`sinf`/`schm`/`tenc`（方案、pattern、每样本 IV 大小与常量 IV）与
-  `senc`（每样本 IV + 子样本表）解析；`mov_decrypt_sample` 对 `cenc`/`cbc1`/`cens`/`cbcs`
+  无 `tfdt` 时回退 `sidx` 最早呈现时间（按 C 原样不减 `time_offset`）再回退 `track_end`；
+  按 `trun` 采样标志判定关键帧、按 `dts_shift` 计算 PTS；时间重叠的片段按
+  `prev_dts >= dts` 置 `discard`（`AVINDEX_DISCARD_FRAME`）。
+- **已做（片段索引）**：`sidx` v0/v1 参考表（offset/pts/size/duration，锚点与 `av_rescale_q`
+  换算照 C）与 `st->duration = track_end = pts` 赋值；`mfra`/`tfra` 从文件尾 `mfro` 字探测。
+- **已做（extradata）**：`avcC`/`hvcC`/`av1C`/`glbl` 等载荷原样；`esds` 描述符链 +
+  AAC AudioSpecificConfig（libavcodec 的 `mpeg4audio.mbt`）回填声道/采样率/帧长/codec-id。
+- **已做（seek）**：`ff_index_search_timestamp` + `mov_seek_stream`（BACKWARD/ANY、关键帧
+  回退、`min_sample_duration` 步进；HEVC open-GOP 门取无 sgpd 的空集形式）。
+- **已做（未压缩音频分块路径）**：`stts` 单条目 duration==1 的音频轨道走 C 的 chunk 索引
+  （≤1024 样本/包或按 samples_per_frame 打包；`MAC3`/`MAC6`/`ima4`/`agsm` 与
+  `sowt`/`twos`/`raw`/`in24`/`in32`/`fl32`/`fl64` 的 `av_get_bits_per_sample` 映射），
+  原先置 `unsupported_audio_chunk_demux` 标志后产出空表的行为已替换为真实现（标志保留作路径指示）。
+- **已做（cenc）**：`sinf`/`schm`/`tenc`（方案、pattern、每样本 IV 大小与常量 IV）、
+  `senc`（流级 + 碎片内，每样本 IV + 子样本表，位置对齐追加）与 `saiz`/`saio`
+  （默认/逐样本尺寸 + 绝对偏移，碎片内加 `base_data_offset`，`mov_parse_auxiliary_info`
+  读辅助块后恢复读位置）；`mov_decrypt_sample` 对 `cenc`/`cbc1`/`cens`/`cbcs`
   四种方案解密单个样本（密钥由调用方提供）。
-- **未做**：`sidx`/`mfra` 的 seek 与片段重叠 `discard` 逻辑、`saiz`/`saio` 辅助信息与
-  碎片内 `senc`、seek、多 sample description 轨道、音频特例（`stts` 单条目 duration==1 的旧式
-  未压缩音频分块路径，遇到时置 `unsupported_audio_chunk_demux` 标志并产出空样本表）、
-  `rap_group`(sgpd/sbgp)、codec 私有 extradata（`avcC`/`esds`/`wave`）、`advanced_editlist`、muxer。
+- **未做**：多 sample description 轨道（`pseudo_stream_id` 过滤只建模主描述）、
+  `rap_group`(sgpd/sbgp) 与 HEVC open-GOP NAL 判定、`advanced_editlist`、`dvcC`/`dvvC`
+  整 atom extradata 变体、强制 `use_mfra` 模式（AUTO 下 mfra 仅作数据源）、muxer。
 
 ### 未完成（本次切片外）
 
@@ -210,8 +234,9 @@ Huffman 规范化码另有等效性说明，见下文）：
 - `libavutil/sha512.c`（SHA-384/512）
 - libavutil 其余部分：`dict`、`opt`、`pixdesc`、`samplefmt`、`intreadwrite`、
   `des/twofish/sm4`、`lzo`、`eval`、`timecode`、`parseutils` 等
-- libavformat 其余部分：`aviobuf.c`/`avio.c`（流式与文件 AVIO）、其余 demuxer/muxer、
-  aac/AC-3 等音频解析、字幕（`tx3g`/TTML）、AVIF/HEIF 图像
+- libavformat 其余部分：`aviobuf.c`/`avio.c`（流式与文件 AVIO）、其余 demuxer/muxer
+  （Matroska/WebM、AVI、MPEG-TS 优先）、AAC/AC-3 等音频流解析、字幕（`tx3g`/TTML）、
+  AVIF/HEIF 图像、MP4 muxer
 - libavcodec 已**开始**（IDCT SIMPLE-C 与 Huffman 树/码长，见上方范围边界），其余
   （VLC 表构建、LZO、无损/有损编解码器）未做
 - libswscale / libswresample / libavdevice / fftools：**未开始**
@@ -241,17 +266,27 @@ Huffman 规范化码另有等效性说明，见下文）：
 | cast5 | `libavutil/tests/cast5.c` 内嵌的 **RFC 2144** 向量（128/80/40 位密钥，明文 `0123456789abcdef`）；CBC 分支复刻该测试的 `av_cast5_crypt2` 往返。该测试另含 100 万次迭代向量 `rct2`，因耗时未纳入 |
 | aes_ctr | `libavutil/tests/aes_ctr.c` 的固定密钥/IV 40 字节向量（`fixed_key`=`"0123456789abcdef"`、`fixed_iv`=`deadbeefdeadbeef`）；另按 CTR 性质校验「任意切分 == 一次性」以覆盖分部块状态；`increment_iv`/`set_iv` 的计数器语义按 `aes_ctr.c` 手推 |
 | MP4 demuxer | 测试内**逐字节合成**的 MP4/MOV（`ftyp`+`moov`+`trak`+`stbl`+`mdat`），期望值由 box 布局与 `mov.c` 语义手算：chunk→样本 offset 累积、`stts` DTS 序列、`ctts` 重排后的 PTS、负 `ctts` 的 `dts_shift`、`stss` 关键帧、`stz2` 位打包、`co64` 与 64 位 box、`elst` 的 `time_offset`、`stsc` 校验修复；碎片化：空 `stbl` 初始化段 + 两个 `moof` 片段（`tfdt` 驱动首段、无 `tfdt` 由 `track_end` 续接），校验 offset/DTS/PTS/size/duration/关键帧；cenc：合成的加密 MP4（`sinf`+`senc`），以同密钥/IV 的 AES-CTR 生成密文，验证 `mov_decrypt_sample` 还原明文（全样本与子样本各一）；**真实文件交叉验证**：由 `linuxserver/ffmpeg:9.0.2` 生成普通/碎片化/cenc 三种真实 MP4，以 `ffprobe` 的 `packet` 输出（`pos/size/dts/pts/duration/flags`）为期望值逐 packet 比对（普通与碎片化完全一致），cenc 用已知密钥解密后与明文样本逐字节一致 |
+| mpeg4audio | 位串按 ISO/IEC 14496-3 手推：AAC-LC 44100 单/多声道、显式 24 位采样率、escape 对象类型、头部隐式 SBR、`0x2b7` 同步扩展的 SBR/PS、AAC-LD 帧长；`12 08 56 e5 00` 五字节直接取自 docker 生成的 `aac.mp4`（与真实文件互证） |
+| extradata/esds | 合成 ES→DCD→DSI 描述符链（AAC 0x40 带 `12 10` 配置、MPEG-1 0x6b 无 DSI 特例）手推期望；**真实文件**：docker `ffmpeg:9.0.2` 生成的 `aac.mp4`，codec-id/声道/采样率/帧长/码率/5 字节 extradata 与 ffprobe 及 python 直读 esds 的结果逐项一致，14 个 packet 的 pos/size/pts/dts/duration 逐值比对（首包 pts -1024 的 edit-list 偏移在内） |
+| sidx/mfra/碎片化 | 合成 box 手推（参考偏移、`FFMIN` 无关的 track_end/duration、无 tfdt 时的 sidx 回退、重叠片段 discard、mfro 探测）；**真实文件**：`-movflags +frag_keyframe+dash` 生成的 `sidx.mp4`，两条 sidx 参考（offset 891/2315、size 1372/1272）与 tfra 表（(0,891)/(10240,2315)）和 python box 直读一致，10 个 packet 与 ffprobe 逐值比对 |
+| saiz/saio/senc | 合成 box：流级 saiz+saio 指向 free box 内的辅助块、`moof` 内 senc 的逐样本 IV，手推期望 |
+| seek | 合成 10 样本索引（关键帧 1/7）：BACKWARD 回退到关键帧、ANY 精确命中、越界钳制、碎片化索引跨片段 seek；真实 `sidx.mp4` 上 seek 12000→样本 5、5000→样本 0 |
+| 未压缩音频分块 | 合成 QT `sowt` 文件（2500 样本两 chunk → 1024+476+1000 样本三包）手推；**真实文件**：docker 生成的 `pcm_short.mov`，7 个 packet（6×1024 样本 + 471）的 pos/size/dts/duration 与 ffprobe 逐值比对 |
 | idct | 期望值来自 FFmpeg **自带的双精度参考 IDCT** `libavcodec/dctref.c`（`libavcodec/tests/dct.c` 亦以此为准）；随机系数由 FFmpeg 自己的 `av_lfg`（`libavutil/lfg.c`，seed 1）与 `init_block()` 生成，**复刻 FATE `fate-idct8x8-0/1/2` 的方法**；判据逐字取自 `dct.c`（`err_inf ≤ 1`、`omse ≤ 0.02`、`|ome| ≤ 0.0015`），SIMPLE-C 8/10 两档完全满足；**12 位**在 `dct.c` 中标记 `nonspec = 1`（其 omse/bias 判据本就不适用），实测 SIMD 与标量 profile 完全一致（如 mode 0 两者均为 `err_inf=1, omse=0.1351, bias=-0.00259`）。SIMD 版（`idct_v128.mbt`，8/10/12 位）另在全 64 个单系数块上与标量版**逐值一致**，转置额外做「转置两次 == 原块」校验 |
 | huffman | `tests/ref/fate/` 无 `huffman.c` 的数值向量（`fate-libavcodec-huffman` 实测的是另一套 `mjpegenc_huffman.c`）。采用：① Kraft 等和 `Σ2^-len == 1`；② 与**独立教科书两队列 Huffman** 的加权路径长相等（最优性）；③ FFmpeg 自带两套独立实现 `ff_huff_build_tree` 与 `ff_huff_gen_len_table` 互证；④ 编→解往返；⑤ 手推教科书样例（频次 1,1,2,4 → 码长 {1,2,3,3}）；⑥ `sum >> 31` 的过高频次拒绝 |
 
 补充交叉校验：分块更新与一次性计算等价（CRC / Adler-32 / MD5 / SHA）、增量 MD5、
 Base64 截断输出行为与非法输入检测。
 
-**真实文件交叉验证（已完成）**：由 Docker 镜像 `linuxserver/ffmpeg:9.0.2` 生成真实 MP4，
-用其 `ffprobe` 的 `packet` 输出作为期望值，与本文档解析结果逐 packet 比对（`pos`/`size`/
-`dts`/`pts`/`duration`/关键帧）；覆盖普通、碎片化（`frag_keyframe`）与 cenc 加密三种文件，
-其中 cenc 以已知密钥解密后与明文样本逐字节一致。文件以 base64 内嵌于
-`libavformat/mp4_real_wbtest.mbt`（附生成命令便于复现）。
+**真实文件交叉验证（已完成，两批）**：由 Docker 镜像 `linuxserver/ffmpeg:9.0.2` 生成真实
+MP4/MOV，用其 `ffprobe` 的 `packet` 输出作为期望值，与本文档解析结果逐 packet 比对
+（`pos`/`size`/`dts`/`pts`/`duration`/关键帧）。第一批覆盖普通、碎片化（`frag_keyframe`）
+与 cenc 加密三种文件（cenc 以已知密钥解密后与明文样本逐字节一致）；第二批新增
+AAC `esds`（extradata/声道/采样率/帧长/码率 + 首包 edit-list 偏移 -1024）、PCM `sowt`
+（未压缩音频分块路径）与 `+dash` 碎片（`sidx`/`mfra` + 跨片段 seek）。文件以 base64
+内嵌于 `libavformat/mp4_real_wbtest.mbt`（附生成命令便于复现）。第二批还暴露并修复了
+一个保真 bug：QuickTime 在 `minf` 里放置的数据 `hdlr`（subtype `url `）不应覆盖
+`mdia`/`hdlr` 已识别的媒体类型（C 只对 vide/soun/subp/clcp 赋值）。
 
 复现命令：
 
@@ -289,17 +324,16 @@ moon test      # 104/104 passed
 重采样与缩放中的纯算法部分（有理数重采样比、滤波器系数计算）；
 向量化内核（`libswscale/x86` 13 个、`libswresample/x86` 3 个）按新边界原则用 `@v128` 重写。
 
-### 阶段 4 —— libavformat（**已开始**：MP4/MOV 解复用切片）
-已完成 MP4/MOV 容器解析、采样表索引与**碎片化 MP4**（见第 3 节的范围边界与第 4 节的验证方式）。
-后续在该包内继续：
+### 阶段 4 —— libavformat（**MP4/MOV 切片基本完备**）
+已完成 MP4/MOV 容器解析、采样表索引、**碎片化 MP4**（含 `sidx`/`mfra` 与重叠片段
+`discard`）、**extradata**（`avcC`/`hvcC`/`av1C` 原样 + `esds`/AAC 配置）、**seek**
+（`mov_seek_stream`）、**未压缩音频分块路径**与 **cenc 全家**（流级 + 碎片内 `senc`、
+`saiz`/`saio`；见第 3 节范围边界与第 4 节验证方式）。余下：
 
-1. ~~碎片化 MP4（`moof`/`trun`/`tfhd`）~~ **已完成**；余下 `sidx`/`mfra` 的片段 seek 与
-   片段重叠 `discard` 逻辑
-2. `aviobuf.c`/`avio.c` 的流式读取（文件/网络），替代当前"整文件入内存"的做法
-3. codec 私有 extradata（`avcC`/`hvcC`/`esds`）与 `mov_read_stsd_entries` 的多描述支持
-4. ~~`cenc` 加密（`sinf`/`schm`/`tenc`/`senc` + 基于 `aes_ctr` 的样本解密）~~ **已部分完成**
-   （余 `saiz`/`saio` 辅助信息与碎片内 `senc`）；余下 seek（`mov_seek_stream`）、`rap_group`
-5. 其他容器：Matroska/WebM、AVI、MPEG-TS（字节级解析优先）
+1. `aviobuf.c`/`avio.c` 的流式读取（文件/网络），替代当前"整文件入内存"的做法
+2. 多 sample description 轨道（`pseudo_stream_id`）、`rap_group`(sgpd/sbgp)、
+   `advanced_editlist`
+3. 其他容器：Matroska/WebM（EBML）、AVI、MPEG-TS（字节级解析优先）
 
 ### 阶段 5 —— libavcodec（**已开始**：IDCT + Huffman）
 只做纯 C 的编解码器（Huffman/VLC 表、LZO、部分无损编解码）；其向量化内核
@@ -380,6 +414,19 @@ moon test      # 104/104 passed
    `*_wbtest.mbt` 生效，避免非测试文件不使用依赖而触发 `unused_package` 告警。
 14. **行数统计口径**：`Get-Content $f | Measure-Object -Line` 会比 `(Get-Content $f).Count`
    少计（末行无换行符时不计入）。本 README 统一用后者。
+15. **合成 MP4 的 SampleEntry 头是 8 字节**（6 保留 + 2 字节 `data_reference_index`），
+   视频入口后还有 16 字节 pre_defined、`compressorname` 是 1 长度字节 + 31 字节；音频入口
+   后是 QT 的 version/revision/vendor 8 字节。第一版合成器各少写/漏写导致 entry 内整体
+   错位、extradata 与声道全错 —— 对照 `mp4_wbtest.mbt` 的既有构造器修正。
+16. **`minf` 里的数据 `hdlr`（subtype `url `）**：QuickTime/ffmpeg 的 PCM MOV 会在 `minf`
+   下放一个 `hdlr`（数据引用），C 的 `mov_read_hdlr` 只对 vide/soun/subp/clcp 赋值、
+   其余类型不覆盖已识别的媒体类型；第一版把它也当媒体 hdlr 处理，把 `soun` 覆盖成
+   Unknown，`stsd` 采样入口不再解析（声道为 0）。真实文件交叉验证暴露。
+17. **`mov_read_sidx` 的锚点在函数入口取**：`offset = avio_tell(pb) + atom.size` 是进入
+   函数时的 position；若在读完 28 字节头部字段后再取 position，参考偏移会整体后移
+   28 字节，`trun` 的 sidx 回退随之失配（表现为 DTS 落到 `track_end`）。
+18. **`mfra` 必须带 `mfro` 尾**：demuxer 从文件最后 4 字节读 mfra 大小 —— 那是 `mfro`
+   box 的最后一个字段；合成不带 `mfro` 的 `mfra` 永远探测不到。
 
 ---
 

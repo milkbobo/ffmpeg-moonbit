@@ -617,7 +617,9 @@ test "mp4: video sample table from stsc/stsz/stco/stts/stss" {
   assert_eq(t.handler, "vide")
   assert_eq(t.codec, "avc1")
   assert_eq(t.timescale, 1000)
-  assert_eq(t.duration, 5000)
+  // mov_read_stts caps the mdhd duration with the stts total:
+  // FFMIN(5000, 10 samples * 100) == 1000.
+  assert_eq(t.duration, 1000)
   assert_eq(t.width, 640)
   assert_eq(t.height, 360)
   assert_eq(t.samples.length(), 10)

@@ -15,18 +15,36 @@
 ///     `AVIndexEntry` and later reports in `AVPacket`.
 ///   * fragmented MP4: `moof`/`traf`/`tfhd`/`tfdt`/`trun`/`trex` are parsed to
 ///     append per-sample entries to the matching track (base-data-offset /
-///     default-base-is-moof, tfdt-driven DTS, per-sample duration/size/flags/
-///     CTS). `sidx`/`mfra` seeking and the fragment overlap-discard pass are
-///     not ported.
+///     default-base-is-moof, tfdt-driven DTS with the `sidx` fallback,
+///     per-sample duration/size/flags/CTS); samples of overlapping fragments
+///     are flagged `discard` as `AVINDEX_DISCARD_FRAME` would.
+///   * fragment index: `sidx` references (offset / earliest presentation time
+///     rescaled to the track timescale, subsegment size and duration) and the
+///     trailing `mfra`/`tfra` random-access table (`mov_read_mfra` probing the
+///     `mfro` size word at the end of the file).
+///   * codec extradata: `avcC`/`hvcC`/`av1C`/`glbl`/... payloads become the
+///     track extradata verbatim (`mov_read_glbl`); `esds` walks the MPEG-4
+///     descriptor chain to the DecoderSpecificInfo and parses the AAC
+///     AudioSpecificConfig (see `extradata.mbt` and the libavcodec
+///     `mpeg4audio.mbt` port).
+///   * seeking: `mov_seek_stream` / `ff_index_search_timestamp` over the
+///     materialised samples (see `seek.mbt`), including the HEVC
+///     open-GOP gate in its no-sgpd fallback form.
+///   * the chunked "old uncompressed audio" index path (stts of a single
+///     duration-1 entry) is ported, driven by the audio sample-entry v1/v2
+///     packing fields (`samples_per_frame`/`bytes_per_frame`, plus the
+///     MACE/ADPCM/GSM defaults and `av_get_bits_per_sample` for the PCM
+///     fourccs).
 ///   * encryption (`cenc`): `sinf`/`schm`/`tenc` (scheme, pattern, per-sample
-///     IV size, constant IV) and `senc` (per-sample IV + subsample map) are
+///     IV size, constant IV), `senc` (per-sample IV + subsample map, both at
+///     stream level and inside `moof`), and `saiz`/`saio` auxiliary info are
 ///     parsed, and `mov_decrypt_sample` unwraps a sample for the
 ///     `cenc`/`cbc1`/`cens`/`cbcs` schemes with a caller-supplied key.
-///     `saiz`/`saio` auxiliary info and per-fragment `senc` are not ported.
 ///   * not ported: AVIO/AVPacket/AVFormatContext plumbing (this parser works on
-///     an in-memory buffer the caller has already read), seeking, the chunked
-///     "old uncompressed audio" index path, `rap_group` (sgpd/sbgp),
-///     codec-specific extradata (`avcC`, `esds`, ...) and `advanced_editlist`.
+///     an in-memory buffer the caller has already read), `rap_group`
+///     (sgpd/sbgp) keypoint marking, multi sample-description tracks,
+///     `advanced_editlist`, and the `dvcC`/`dvvC` whole-atom extradata
+///     variants.
 ///   * simplified: per-sample timestamps are materialised up front instead
 ///     of being consulted lazily, the `free`/`hoov`-hiding-`moov` recovery is
 ///     omitted, and corrupt-count guards are tightened relative to the C code.
@@ -79,7 +97,9 @@ pub struct MovTts {
 ///|
 /// One entry of the sample index, corresponding to FFmpeg's `AVIndexEntry`
 /// (`pos`, `timestamp`, `size`, `min_distance`, `flags`) plus the presentation
-/// timestamp that `mov_finalize_packet` derives from it.
+/// timestamp that `mov_finalize_packet` derives from it. `discard` mirrors
+/// `AVINDEX_DISCARD_FRAME`: fragments overlapping in decode order are flagged
+/// and skipped at demux time.
 pub struct Mp4Sample {
   offset : Int64
   size : UInt
@@ -88,6 +108,7 @@ pub struct Mp4Sample {
   duration : UInt
   keyframe : Bool
   min_distance : UInt
+  discard : Bool
 }
 
 ///| Media type derived from the `hdlr` handler type (AVMediaType subset). */
@@ -125,6 +146,10 @@ pub struct Mp4Track {
   mut handler : String
   mut media_type : Mp4MediaType
   mut codec : String
+  ///| FFmpeg codec-id name resolved from `esds` (`""` when not set). */
+  mut codec_id : String
+  ///| Raw codec private data (`avcC`/`hvcC`/`av1C`/`glbl` payload or the `esds` DecoderSpecificInfo). */
+  mut extradata : Bytes?
   mut timescale : UInt
   mut duration : UInt64
   mut width : Int
@@ -132,7 +157,17 @@ pub struct Mp4Track {
   mut sample_rate : UInt
   mut channels : UInt
   mut bits_per_sample : UInt
+  ///| `st->codecpar->frame_size` from the AAC AudioSpecificConfig. */
+  mut frame_length : Int
+  ///| `st->codecpar->bit_rate` from the `esds` DecoderConfigDescriptor. */
+  mut bit_rate : UInt
   mut encoder : String
+  ///| Audio sample entry v1/v2 packing (`sc->samples_per_frame`). */
+  mut samples_per_frame : UInt
+  ///| Audio sample entry v1/v2 packing (`sc->bytes_per_frame`). */
+  mut bytes_per_frame : UInt
+  ///| Audio sample entry `compression_id` (`sc->audio_cid`). */
+  mut audio_cid : Int
   stts : Array[MovStts]
   ctts : Array[MovCtts]
   stsc : Array[MovStsc]
@@ -149,17 +184,52 @@ pub struct Mp4Track {
   mut dts_shift : Int
   mut time_offset : Int64
   mut track_end : Int64
+  mut min_sample_duration : UInt
+  mut has_sidx : Bool
   mut cenc_scheme : UInt
   mut cenc_per_sample_iv_size : Int
   mut cenc_crypt_byte_block : UInt
   mut cenc_skip_byte_block : UInt
   mut cenc_default_iv : FixedArray[Byte]
   cenc_samples : Array[MovEncSample?]
+  ///| `saiz`: default per-sample size of the auxiliary info chunk. */
+  mut aux_info_default_size : Int
+  ///| `saiz`: per-sample sizes when the default is 0. */
+  aux_info_sizes : Array[UInt]
+  ///| `saiz`: declared sample count. */
+  mut aux_info_sample_count : Int
+  ///| `saio`: absolute offsets of the auxiliary info chunks. */
+  aux_info_offsets : Array[Int64]
   mut tts : Array[MovTts]
   mut has_stts : Bool
   mut has_ctts : Bool
   mut unsupported_audio_chunk_demux : Bool
   samples : Array[Mp4Sample]
+}
+
+///| `MOVStreamContext` fragment-reference state from `mov_read_sidx`, kept per reference. */
+pub struct MovSidxRef {
+  track_id : UInt
+  ///| Byte offset of the referenced fragment (its `moof`). */
+  offset : Int64
+  ///| Earliest presentation time rescaled to the track timescale. */
+  pts : Int64
+  ///| Subsegment byte size. */
+  size : UInt
+  ///| Subsegment duration in sidx timescale units. */
+  duration : UInt
+}
+
+///| One `tfra` entry (fragment random-access point). */
+pub struct MovTfraEntry {
+  time : Int64
+  offset : Int64
+}
+
+///| A `tfra` box: random-access points of one track. */
+pub struct MovTfra {
+  track_id : UInt
+  entries : Array[MovTfraEntry]
 }
 
 ///| Movie-level state, corresponding to the `MOVContext`/`AVFormatContext` fields used here. */
@@ -168,6 +238,12 @@ pub struct Mp4Movie {
   mut duration : UInt64
   mut isom : Bool
   mut major_brand : String
+  ///| All compatible brands of `ftyp`, concatenated (used by the QuickTime audio-entry check). */
+  mut compatible_brands : String
+  ///| `sidx` references, in file order. */
+  sidx_refs : Array[MovSidxRef]
+  ///| `mfra`/`tfra` random-access tables when the file ends with an `mfra`. */
+  mfra : Array[MovTfra]
   tracks : Array[Mp4Track]
 }
 
@@ -177,6 +253,8 @@ fn new_track() -> Mp4Track {
     handler: "",
     media_type: Mp4MediaType::Unknown,
     codec: "",
+    codec_id: "",
+    extradata: None,
     timescale: 0,
     duration: 0,
     width: 0,
@@ -184,7 +262,12 @@ fn new_track() -> Mp4Track {
     sample_rate: 0,
     channels: 0,
     bits_per_sample: 0,
+    frame_length: 0,
+    bit_rate: 0,
     encoder: "",
+    samples_per_frame: 0,
+    bytes_per_frame: 0,
+    audio_cid: 0,
     stts: [],
     ctts: [],
     stsc: [],
@@ -201,12 +284,18 @@ fn new_track() -> Mp4Track {
     dts_shift: 0,
     time_offset: 0,
     track_end: 0,
+    min_sample_duration: 0,
+    has_sidx: false,
     cenc_scheme: 0,
     cenc_per_sample_iv_size: 0,
     cenc_crypt_byte_block: 0,
     cenc_skip_byte_block: 0,
     cenc_default_iv: FixedArray::make(16, b'\x00'),
     cenc_samples: [],
+    aux_info_default_size: 0,
+    aux_info_sizes: [],
+    aux_info_sample_count: 0,
+    aux_info_offsets: [],
     tts: [],
     has_stts: false,
     has_ctts: false,
@@ -216,7 +305,16 @@ fn new_track() -> Mp4Track {
 }
 
 fn new_movie() -> Mp4Movie {
-  { timescale: 0, duration: 0, isom: false, major_brand: "", tracks: [] }
+  {
+    timescale: 0,
+    duration: 0,
+    isom: false,
+    major_brand: "",
+    compatible_brands: "",
+    sidx_refs: [],
+    mfra: [],
+    tracks: [],
+  }
 }
 
 ///| `max_stts_delta` default from the mov demuxer options: `UINT_MAX - 48000*10`. */
@@ -404,6 +502,7 @@ priv struct MovState {
   movie : Mp4Movie
   mut cur : Mp4Track
   mut in_trak : Bool
+  mut in_moof : Bool
   trex : Array[MovTrex]
   frag : MovFrag
 }
@@ -434,9 +533,15 @@ fn parse_box(st : MovState, r : Mp4Reader, kind : String, size : Int64) -> Unit 
   } else if kind == "tenc" {
     parse_tenc(st, r, size)
   } else if kind == "senc" {
-    parse_senc(st, r)
+    parse_senc(st, r, size)
+  } else if kind == "saiz" {
+    parse_saiz(st, r)
+  } else if kind == "saio" {
+    parse_saio(st, r)
+  } else if kind == "sidx" {
+    parse_sidx(st, r, size)
   } else if kind == "ftyp" {
-    parse_ftyp(st, r)
+    parse_ftyp(st, r, size)
   } else if kind == "mvhd" {
     parse_mvhd(st, r)
   } else if kind == "tkhd" {
@@ -467,6 +572,12 @@ fn parse_box(st : MovState, r : Mp4Reader, kind : String, size : Int64) -> Unit 
     parse_stss(st, r)
   } else if kind == "stps" {
     parse_stps(st, r)
+  } else if kind == "esds" {
+    parse_esds(st, r)
+  } else if kind == "avcC" || kind == "hvcC" || kind == "av1C" || kind == "glbl" ||
+    kind == "vvcC" || kind == "evcC" || kind == "lvcC" || kind == "apvC" {
+    // mov_read_glbl: the whole payload becomes the codec extradata.
+    parse_glbl(st, r, kind, size)
   } else {
     r.skip(size)
   }
@@ -528,14 +639,68 @@ fn parse_default(st : MovState, r : Mp4Reader, parent_size : Int64) -> Unit rais
 // Individual box parsers
 // ---------------------------------------------------------------------------
 
-///| `mov_read_ftyp`: the major brand decides whether the file is treated as ISO BMFF. */
-fn parse_ftyp(st : MovState, r : Mp4Reader) -> Unit {
+///|
+/// `av_int2double` (libavutil/intfloat.h): reinterpret a big-endian-read
+/// 64-bit pattern as an IEEE-754 double. Exact: every intermediate is a
+/// power-of-two product that stays representable, and the mantissa (with the
+/// implicit bit) is below 2^53.
+fn mov_int2double(v : UInt64) -> Double {
+  let neg = (v >> 63) == 1
+  let exp = ((v >> 52) & 0x7FF).to_int()
+  let mant = v & 0xFFFFFFFFFFFFF
+  let mag : Double = if exp == 0 {
+    // Subnormal (or zero): mant * 2^-1074.
+    mant.to_double() * mov_pow2(-1074)
+  } else if exp == 0x7FF {
+    // Infinity / NaN: 2^1024 overflows to +inf, and inf/inf is NaN.
+    if mant == 0 {
+      mov_pow2(1024)
+    } else {
+      mov_pow2(1024) / mov_pow2(1024)
+    }
+  } else {
+    (4503599627370496.0 + mant.to_double()) * mov_pow2(exp - 1075)
+  }
+  if neg { -mag } else { mag }
+}
+
+///| Exact `2^k` for -1074 <= k <= 1023, by squaring the base power. */
+fn mov_pow2(k : Int) -> Double {
+  let mut result = 1.0
+  let mut base = if k < 0 { 0.5 } else { 2.0 }
+  let mut e = if k < 0 { -k } else { k }
+  while e > 0 {
+    if (e & 1) == 1 {
+      result = result * base
+    }
+    base = base * base
+    e = e >> 1
+  }
+  result
+}
+
+///|
+/// `mov_read_ftyp`: the major brand decides whether the file is treated as ISO
+/// BMFF, and the compatible brands are collected for the QuickTime audio
+/// sample-entry check in `mov_parse_stsd_audio`.
+fn parse_ftyp(st : MovState, r : Mp4Reader, size : Int64) -> Unit {
   let major = r.read_fourcc()
   let _ = r.read_u32() // minor version
   st.movie.major_brand = major
   if major != tag('q', 't', ' ', ' ') {
     st.movie.isom = true
   }
+  let brands : Array[Char] = []
+  // The compatible-brand list fills the rest of the atom, 4 bytes per brand.
+  let end = r.position() + (size - 8).to_int()
+  while r.position() + 4 <= end {
+    for i = 0; i < 4; i = i + 1 {
+      brands.push(r.read_u8().to_byte().to_char())
+    }
+  }
+  st.movie.compatible_brands = st.movie.compatible_brands + String::from_array(
+      brands[:],
+    )
 }
 
 ///| `mov_read_mvhd`. */
@@ -632,15 +797,18 @@ fn parse_hdlr(st : MovState, r : Mp4Reader) -> Unit {
   if !st.in_trak {
     return
   }
-  st.cur.handler = kind
-  st.cur.media_type = if kind == tag('v', 'i', 'd', 'e') {
-    Mp4MediaType::Video
+  // Only the media handlers are recognised; an unrecognised one (e.g. the
+  // 'url ' data handler QuickTime puts in minf) leaves the stream untouched,
+  // exactly as in the C.
+  if kind == tag('v', 'i', 'd', 'e') {
+    st.cur.handler = kind
+    st.cur.media_type = Mp4MediaType::Video
   } else if kind == tag('s', 'o', 'u', 'n') {
-    Mp4MediaType::Audio
+    st.cur.handler = kind
+    st.cur.media_type = Mp4MediaType::Audio
   } else if kind == tag('s', 'u', 'b', 'p') || kind == tag('c', 'l', 'c', 'p') {
-    Mp4MediaType::Subtitle
-  } else {
-    Mp4MediaType::Unknown
+    st.cur.handler = kind
+    st.cur.media_type = Mp4MediaType::Subtitle
   }
 }
 
@@ -773,9 +941,14 @@ fn parse_stsd_video(st : MovState, r : Mp4Reader) -> Unit {
   r.skip(2)
 }
 
-///| `mov_parse_stsd_audio`: AudioSampleEntry fields (the 16 header bytes are already read). */
+///|
+/// `mov_parse_stsd_audio`: AudioSampleEntry fields (the 16 header bytes are
+/// already read), including the QuickTime version 1/2 extension that carries
+/// the PCM packing (`samples_per_frame`/`bytes_per_frame`) needed by the
+/// chunked audio index path, and the codec-specific packing defaults
+/// (`av_get_bits_per_sample` for the PCM fourccs).
 fn parse_stsd_audio(st : MovState, r : Mp4Reader) -> Unit {
-  let _ = r.read_u16() // version
+  let version = r.read_u16()
   if st.movie.isom {
     r.skip(6) // reserved
   } else {
@@ -784,9 +957,77 @@ fn parse_stsd_audio(st : MovState, r : Mp4Reader) -> Unit {
   }
   st.cur.channels = r.read_u16()
   st.cur.bits_per_sample = r.read_u16()
-  let _ = r.read_u16() // compression id
+  st.cur.audio_cid = r.read_u16().reinterpret_as_int()
   let _ = r.read_u16() // packet size
   st.cur.sample_rate = r.read_u32() >> 16
+  // Read the QT version 1/2 fields; in version 0 these do not exist. The C
+  // also honours a "qt  " compatible brand inside an ISO file.
+  let qt = st.movie.compatible_brands.contains("qt  ")
+  if !st.movie.isom || qt || (st.cur.stsd_version == 0 && version > 0) {
+    if version == 1 {
+      st.cur.samples_per_frame = r.read_u32()
+      let _ = r.read_u32() // bytes per packet
+      st.cur.bytes_per_frame = r.read_u32()
+      let _ = r.read_u32() // bytes per sample
+    } else if version == 2 {
+      let _ = r.read_u32() // sizeof struct only
+      st.cur.sample_rate = mov_int2double(r.read_u64()).to_int().reinterpret_as_uint()
+      st.cur.channels = r.read_u32()
+      let _ = r.read_u32() // always 0x7F000000
+      st.cur.bits_per_sample = r.read_u32()
+      let _ = r.read_u32() // lpcm format specific flag
+      st.cur.bytes_per_frame = r.read_u32()
+      st.cur.samples_per_frame = r.read_u32()
+    }
+  }
+  // Codec-specific packing defaults for the QuickTime codecs whose frame
+  // packing is not in the sample entry (mov_parse_stsd_audio's switch).
+  match st.cur.codec {
+    "MAC3" => {
+      st.cur.samples_per_frame = 6
+      st.cur.bytes_per_frame = 2 * st.cur.channels
+    }
+    "MAC6" => {
+      st.cur.samples_per_frame = 6
+      st.cur.bytes_per_frame = 1 * st.cur.channels
+    }
+    "ima4" => {
+      st.cur.samples_per_frame = 64
+      st.cur.bytes_per_frame = 34 * st.cur.channels
+    }
+    "agsm" => {
+      st.cur.samples_per_frame = 160
+      st.cur.bytes_per_frame = 33
+    }
+    _ => ()
+  }
+  // `av_get_bits_per_sample` for the PCM fourccs: the canonical sample size
+  // overrides the entry's declared depth, and yields sc->sample_size (bytes
+  // per sample times channel count). For the 16-bit entries an 8/24/32-bit
+  // depth promotes the codec (S8/S24/S32), keeping the declared size.
+  let bps = match st.cur.codec {
+    "sowt" | "twos" =>
+      if st.cur.bits_per_sample == 8 ||
+        st.cur.bits_per_sample == 24 ||
+        st.cur.bits_per_sample == 32 {
+        st.cur.bits_per_sample
+      } else {
+        16
+      }
+    "raw " => 8
+    "in24" => 24
+    "in32" => 32
+    "fl32" => 32
+    "fl64" => 64
+    _ => 0
+  }
+  if bps != 0 && (bps / 8) * st.cur.channels <= 4294967295 {
+    st.cur.bits_per_sample = bps
+    if st.cur.sample_size == 0 {
+      // `sc->sample_size`: do not overwrite a value computed above.
+      st.cur.sample_size = (bps / 8) * st.cur.channels
+    }
+  }
 }
 
 ///| `mov_read_stts`, including the `max_stts_delta` clipping and DTS drift correction. */
@@ -845,6 +1086,18 @@ fn parse_stts(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
     }
     st.cur.stts.push({ count: sample_count.reinterpret_as_int(), duration })
   }
+  // `st->duration = FFMIN(st->duration, duration)` and `sc->track_end =
+  // duration`: the stts total caps the mdhd duration and seeds the track end
+  // used by later fragments without tfdt.
+  let mut total : Int64 = 0
+  for i = 0; i < st.cur.stts.length(); i = i + 1 {
+    let e = st.cur.stts[i]
+    total = total + e.duration.to_int64() * e.count.to_int64()
+  }
+  if total != 0 && total.reinterpret_as_uint64() < st.cur.duration {
+    st.cur.duration = total.reinterpret_as_uint64()
+  }
+  st.cur.track_end = total
 }
 
 ///| `mov_read_ctts`: per-entry presentation offsets, plus the `dts_shift` they imply. */
@@ -1128,7 +1381,11 @@ fn parse_moof(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
   let off = r.position().to_int64() - 8
   st.frag.moof_offset = off
   st.frag.implicit_offset = off
+  // While inside a moof, encryption boxes target the fragment's track
+  // (get_current_encryption_info's frag_index.current path).
+  st.in_moof = true
   parse_default(st, r, size)
+  st.in_moof = false
 }
 
 ///| `mov_read_tfhd`: track fragment header; merges `trex` defaults. */
@@ -1232,12 +1489,33 @@ fn parse_trun(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
           entries = max_entries.to_int()
         }
       }
+      if entries == 0 {
+        // `if (entries == 0) return 0;` before any state is touched.
+        return
+      }
       if (flags & trun_sample_cts) != 0 {
         track.has_ctts = true
       }
       let has_ctts = track.has_ctts
-      let base_dts = if st.frag.has_tfdt { st.frag.tfdt } else { track.track_end }
-      let mut dts = base_dts - track.time_offset
+      // DTS base: tfdt when present, else the fragment's sidx earliest
+      // presentation time (used raw, without the time_offset shift, exactly
+      // as the C FIXME documents), else the accumulated track end.
+      let base_dts = if st.frag.has_tfdt {
+        st.frag.tfdt - track.time_offset
+      } else {
+        match mov_sidx_lookup(st, st.frag.moof_offset, st.frag.track_id) {
+          Some(sidx_pts) => sidx_pts
+          None => track.track_end - track.time_offset
+        }
+      }
+      let mut dts = base_dts
+      // `prev_dts`: the DTS of the last sample before this trun; samples at
+      // or before it overlap earlier fragments and are flagged for discard.
+      let prev_dts : Int64? = if track.samples.length() > 0 {
+        Some(track.samples[track.samples.length() - 1].dts)
+      } else {
+        None
+      }
       let mut offset = st.frag.base_data_offset + data_offset.to_int64()
       let mut distance : UInt = 0
       for i = 0; i < entries; i = i + 1 {
@@ -1271,6 +1549,10 @@ fn parse_trun(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
         } else {
           dts
         }
+        let discard = match prev_dts {
+          Some(v) => v >= dts
+          None => false
+        }
         track.samples.push({
           offset,
           size: sample_size,
@@ -1279,13 +1561,21 @@ fn parse_trun(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
           duration: sample_duration,
           keyframe,
           min_distance: distance,
+          discard,
         })
         distance = distance + 1
         dts = dts + sample_duration.to_int64()
         offset = offset + sample_size.to_int64()
+        if sample_size == 0 {
+          raise InvalidData("zero sample size in trun")
+        }
       }
       st.frag.implicit_offset = offset
       track.track_end = dts + track.time_offset
+      if track.track_end >= 0 &&
+        track.track_end.reinterpret_as_uint64() > track.duration {
+        track.duration = track.track_end.reinterpret_as_uint64()
+      }
     }
   }
 }
@@ -1338,43 +1628,216 @@ fn parse_tenc(st : MovState, r : Mp4Reader, size : Int64) -> Unit {
 }
 
 ///|
-/// `mov_read_senc`: per-sample IVs (and optional subsample maps). Each entry is
-/// stored positionally so it lines up with the track's sample index.
-fn parse_senc(st : MovState, r : Mp4Reader) -> Unit {
-  if !st.in_trak {
+/// `get_current_encryption_info`'s track selection: inside a moof the boxes
+/// apply to the fragment's track; inside a trak to that track; otherwise (the
+/// stream-level `saiz`/`saio`/`senc` placed directly under `moov`) to the
+/// most recently created track. A track is a valid target only if encryption
+/// metadata was seen (`schm`/`tenc`, proxying the C's
+/// `default_encrypted_sample` check).
+fn current_enc_track(st : MovState) -> Mp4Track? {
+  let track = if st.in_moof {
+    if !st.frag.found_tfhd {
+      return None
+    }
+    mov_find_track(st, st.frag.track_id)
+  } else if st.in_trak {
+    Some(st.cur)
+  } else if st.movie.tracks.length() > 0 {
+    Some(st.movie.tracks[st.movie.tracks.length() - 1])
+  } else {
+    None
+  }
+  match track {
+    Some(t) => if t.cenc_scheme != 0 { Some(t) } else { None }
+    None => None
+  }
+}
+
+///|
+/// `mov_read_senc`: per-sample IVs (and optional subsample maps). Each entry
+/// is stored positionally so it lines up with the track's sample index; for a
+/// fragmented file the entries of every fragment append after the previous
+/// ones, matching how `trun` appends the samples themselves.
+fn parse_senc(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+  match current_enc_track(st) {
+    None => ()
+    Some(track) => {
+      let _ = size
+      let _ = r.read_u8() // version
+      let flags = r.read_u24()
+      let use_subsamples = (flags & 0x02) != 0
+      let sample_count = r.read_u32().reinterpret_as_int()
+      let per_iv = track.cenc_per_sample_iv_size
+      for i = 0; i < sample_count; i = i + 1 {
+        if r.eof_reached() {
+          raise InvalidData("EOF in senc")
+        }
+        if per_iv != 0 || use_subsamples {
+          let iv = FixedArray::make(16, b'\x00')
+          if per_iv != 0 {
+            for k = 0; k < per_iv; k = k + 1 {
+              iv[k] = r.read_u8().to_byte()
+            }
+          }
+          let subs : Array[MovSubSample] = []
+          if use_subsamples {
+            let n = r.read_u16().reinterpret_as_int()
+            for k = 0; k < n; k = k + 1 {
+              if r.eof_reached() {
+                raise InvalidData("EOF in senc subsamples")
+              }
+              let clear = r.read_u16().reinterpret_as_int()
+              let prot = r.read_u32().reinterpret_as_int()
+              subs.push({ bytes_of_clear: clear, bytes_of_protected: prot })
+            }
+          }
+          track.cenc_samples.push(Some({ iv, subsamples: subs }))
+        } else {
+          track.cenc_samples.push(None)
+        }
+      }
+    }
+  }
+}
+
+///|
+/// `mov_read_sample_encryption_info` as used by `mov_parse_auxiliary_info`:
+/// one auxiliary-info entry (IV plus optional subsamples; `use_subsamples`
+/// is decided by the caller from the entry size).
+fn read_sample_encryption_info(
+  r : Mp4Reader,
+  per_iv : Int,
+  use_subsamples : Bool
+) -> MovEncSample {
+  let iv = FixedArray::make(16, b'\x00')
+  if per_iv != 0 {
+    for k = 0; k < per_iv; k = k + 1 {
+      iv[k] = r.read_u8().to_byte()
+    }
+  }
+  let subs : Array[MovSubSample] = []
+  if use_subsamples {
+    let n = r.read_u16().reinterpret_as_int()
+    for k = 0; k < n; k = k + 1 {
+      let clear = r.read_u16().reinterpret_as_int()
+      let prot = r.read_u32().reinterpret_as_int()
+      subs.push({ bytes_of_clear: clear, bytes_of_protected: prot })
+    }
+  }
+  { iv, subsamples: subs }
+}
+
+///|
+/// `mov_parse_auxiliary_info`: with both `saiz` and `saio` present, read the
+/// per-sample encryption info from the auxiliary chunk. The reader position
+/// is restored afterwards, as the C does with `prev_pos`.
+fn mov_parse_auxiliary_info(
+  track : Mp4Track,
+  r : Mp4Reader
+) -> Unit raise MovError {
+  if track.cenc_samples.length() > 0 {
     return
   }
-  let _ = r.read_u8() // version
-  let flags = r.read_u24()
-  let use_subsamples = (flags & 0x02) != 0
-  let sample_count = r.read_u32().reinterpret_as_int()
-  let per_iv = st.cur.cenc_per_sample_iv_size
-  for i = 0; i < sample_count; i = i + 1 {
-    if r.eof_reached() {
-      break
-    }
-    if per_iv != 0 || use_subsamples {
-      let iv = FixedArray::make(16, b'\x00')
-      if per_iv != 0 {
-        for k = 0; k < per_iv; k = k + 1 {
-          iv[k] = r.read_u8().to_byte()
-        }
-      }
-      let subs : Array[MovSubSample] = []
-      if use_subsamples {
-        let n = r.read_u16().reinterpret_as_int()
-        for k = 0; k < n; k = k + 1 {
-          if r.eof_reached() {
-            break
-          }
-          let clear = r.read_u16().reinterpret_as_int()
-          let prot = r.read_u32().reinterpret_as_int()
-          subs.push({ bytes_of_clear: clear, bytes_of_protected: prot })
-        }
-      }
-      st.cur.cenc_samples.push(Some({ iv, subsamples: subs }))
+  let sample_count = track.aux_info_sample_count
+  if track.aux_info_offsets.length() != 1 {
+    raise InvalidData("multiple auxiliary info chunks unsupported")
+  }
+  let prev_pos = r.position()
+  r.seek(track.aux_info_offsets[0].to_int())
+  for i = 0; i < sample_count && !r.eof_reached(); i = i + 1 {
+    let info_size = if track.aux_info_default_size != 0 {
+      track.aux_info_default_size
     } else {
-      st.cur.cenc_samples.push(None)
+      track.aux_info_sizes[i].reinterpret_as_int()
+    }
+    let use_subsamples = info_size > track.cenc_per_sample_iv_size
+    let e = read_sample_encryption_info(
+      r,
+      track.cenc_per_sample_iv_size,
+      use_subsamples,
+    )
+    track.cenc_samples.push(Some(e))
+  }
+  if r.eof_reached() {
+    raise InvalidData("EOF in auxiliary info")
+  }
+  r.seek(prev_pos)
+}
+
+///|
+/// `mov_read_saiz`: per-sample sizes of the auxiliary info chunk. The
+/// `aux_info_type` filtering of the C reduces here to accepting the box only
+/// when the track already carries encryption metadata.
+fn parse_saiz(st : MovState, r : Mp4Reader) -> Unit raise MovError {
+  match current_enc_track(st) {
+    None => ()
+    Some(track) => {
+      if track.cenc_samples.length() > 0 {
+        // Both saio/saiz and senc present: the senc data wins.
+        return
+      }
+      if track.aux_info_sample_count != 0 {
+        raise InvalidData("duplicate saiz")
+      }
+      let _ = r.read_u8() // version
+      let flags = r.read_u24()
+      if (flags & 0x01) != 0 {
+        let _ = r.read_u32() // aux_info_type
+        let _ = r.read_u32() // aux_info_type_parameter
+      }
+      track.aux_info_default_size = r.read_u8().reinterpret_as_int()
+      let sample_count = r.read_u32().reinterpret_as_int()
+      if track.aux_info_default_size == 0 {
+        if sample_count == 0 {
+          raise InvalidData("saiz without sizes")
+        }
+        for i = 0; i < sample_count; i = i + 1 {
+          track.aux_info_sizes.push(r.read_u8())
+        }
+      }
+      track.aux_info_sample_count = sample_count
+      if track.aux_info_offsets.length() > 0 {
+        mov_parse_auxiliary_info(track, r)
+      }
+    }
+  }
+}
+
+///|
+/// `mov_read_saio`: absolute offsets of the auxiliary info chunks. Inside a
+/// moof they are relative to the fragment's base data offset.
+fn parse_saio(st : MovState, r : Mp4Reader) -> Unit raise MovError {
+  match current_enc_track(st) {
+    None => ()
+    Some(track) => {
+      if track.cenc_samples.length() > 0 {
+        return
+      }
+      if track.aux_info_offsets.length() > 0 {
+        raise InvalidData("duplicate saio")
+      }
+      let version = r.read_u8().reinterpret_as_int()
+      let flags = r.read_u24()
+      if (flags & 0x01) != 0 {
+        let _ = r.read_u32() // aux_info_type
+        let _ = r.read_u32() // aux_info_type_parameter
+      }
+      let entry_count = r.read_u32().reinterpret_as_int()
+      for i = 0; i < entry_count && !r.eof_reached(); i = i + 1 {
+        let off = if version == 0 {
+          r.read_u32().to_int64()
+        } else {
+          r.read_i64()
+        }
+        let abs = if st.in_moof { off + st.frag.base_data_offset } else { off }
+        track.aux_info_offsets.push(abs)
+      }
+      if r.eof_reached() {
+        raise InvalidData("EOF in saio")
+      }
+      if track.aux_info_sample_count > 0 {
+        mov_parse_auxiliary_info(track, r)
+      }
     }
   }
 }
@@ -1667,6 +2130,96 @@ pub fn mov_decrypt_sample(
 // ---------------------------------------------------------------------------
 
 ///|
+/// The "old uncompressed audio chunk demuxing" branch of `mov_build_index`:
+/// chunks of `stsc`-declared samples are cut into packets of at most 1024
+/// samples (or exactly one frame of the codec's packing, e.g. 6 for MACE or
+/// 160 for GSM). Every entry is a keyframe with `min_distance` 0. The
+/// subsequent CTTS-only merge is not ported: a PCM track carrying `ctts` is
+/// not a combination FFmpeg produces or consumes meaningfully.
+fn mov_build_audio_chunk_index(track : Mp4Track, current_dts : Int64) -> Unit {
+  if track.chunk_offsets.length() == 0 || track.samples.length() > 0 {
+    // `!sc->chunk_count || sc->tts_count`
+    return
+  }
+  let spf = track.samples_per_frame
+  let bpf = track.bytes_per_frame
+  // Typed constants keep the packing arithmetic unsigned (the C works in
+  // `unsigned int` throughout this branch).
+  let q1024 : UInt = 1024
+  let q1023 : UInt = 1023
+  // Compute the total packet count, exactly like the C first pass.
+  let mut total : UInt = 0
+  for i = 0; i < track.stsc.length(); i = i + 1 {
+    let chunk_samples = track.stsc[i].count.reinterpret_as_uint()
+    if i != track.stsc.length() - 1 && spf != 0 &&
+      chunk_samples % spf != 0 {
+      // error unaligned chunk
+      return
+    }
+    let count : UInt = if spf >= 160 {
+      // gsm
+      chunk_samples / spf
+    } else if spf > 1 {
+      let samples = q1024 / spf * spf
+      (chunk_samples + samples - 1) / samples
+    } else {
+      (chunk_samples + q1023) / q1024
+    }
+    let chunk_count : UInt = if mov_stsc_index_valid(i, track.stsc.length()) {
+      (track.stsc[i + 1].first - track.stsc[i].first).reinterpret_as_uint()
+    } else {
+      (track.chunk_offsets.length() - (track.stsc[i].first - 1)).reinterpret_as_uint()
+    }
+    total = total + chunk_count * count
+  }
+  // Populate the index.
+  let mut stsc_index = 0
+  let mut dts = current_dts
+  for i = 0; i < track.chunk_offsets.length(); i = i + 1 {
+    let mut offset = track.chunk_offsets[i]
+    while mov_stsc_index_valid(stsc_index, track.stsc.length()) &&
+      i + 1 == track.stsc[stsc_index + 1].first {
+      stsc_index = stsc_index + 1
+    }
+    let mut chunk_samples = track.stsc[stsc_index].count.reinterpret_as_uint()
+    while chunk_samples > 0 {
+      if spf > 1 && bpf == 0 {
+        // "Zero bytes per frame, but N samples per frame"
+        return
+      }
+      let (samples, size) : (UInt, UInt) = if spf >= 160 {
+        // gsm: exactly one frame per packet.
+        (spf, bpf)
+      } else if spf > 1 {
+        let frame = q1024 / spf * spf
+        let m = if frame < chunk_samples { frame } else { chunk_samples }
+        (m, m / spf * bpf)
+      } else {
+        let m = if q1024 < chunk_samples { q1024 } else { chunk_samples }
+        (m, m * track.sample_size)
+      }
+      if track.samples.length() >= total.reinterpret_as_int() {
+        // wrong chunk count
+        return
+      }
+      track.samples.push({
+        offset,
+        size,
+        dts,
+        pts: dts,
+        duration: samples,
+        keyframe: true,
+        min_distance: 0,
+        discard: false,
+      })
+      offset = offset + size.to_int64()
+      dts = dts + samples.to_int64()
+      chunk_samples = chunk_samples - samples
+    }
+  }
+}
+
+///|
 /// `mov_merge_tts_data`: expand `stts` and `ctts` into a per-sample table where
 /// each entry carries one sample's duration and one sample's CTTS offset, with
 /// `count` set to 1 (the C code sets the same after the expansion).
@@ -1751,11 +2304,25 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
     }
   }
 
+  // `build_open_gop_key_points` computes the minimal stts duration for the
+  // seek back-off; ported here since the sgpd/NAL part is not in this slice.
+  let mut min_dur : UInt = 4294967295
+  for i = 0; i < track.stts.length(); i = i + 1 {
+    if track.stts[i].duration < min_dur {
+      min_dur = track.stts[i].duration
+    }
+  }
+  track.min_sample_duration = min_dur
+
+  // Only use old uncompressed audio chunk demuxing when stts specifies it.
   let audio_special = media_is_audio(track.media_type) &&
     track.stts.length() == 1 &&
     track.stts[0].duration == 1
   if audio_special {
+    // The "old uncompressed audio chunk demuxing": one index entry per 1024
+    // samples (or per frame of the codec's packing), each entry a keyframe.
     track.unsupported_audio_chunk_demux = true
+    mov_build_audio_chunk_index(track, current_dts)
     return
   }
 
@@ -1763,7 +2330,10 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
 
   mov_merge_tts_data(track)
   if track.sample_count <= 0 || track.tts.length() == 0 || track.stsc.length() == 0 ||
-    track.chunk_offsets.length() == 0 {
+    track.chunk_offsets.length() == 0 ||
+    track.samples.length() > 0 {
+    // `!sc->sample_count || sti->nb_index_entries || sc->tts_count`: nothing
+    // to index, or the track was already indexed by fragments.
     return
   }
 
@@ -1854,6 +2424,7 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
           duration,
           keyframe,
           min_distance: distance,
+          discard: false,
         })
       }
       current_offset = current_offset + sample_size.to_int64()
@@ -1885,6 +2456,7 @@ pub fn av_mov_open(buf : Bytes) -> Result[Mp4Movie, String] {
     movie,
     cur: new_track(),
     in_trak: false,
+    in_moof: false,
     trex: [],
     frag: new_frag(),
   }
@@ -1925,6 +2497,9 @@ pub fn av_mov_open(buf : Bytes) -> Result[Mp4Movie, String] {
       }
       consumed = consumed + header + payload
     }
+    // mov_read_header looks for an `mfra` when it met moof boxes; with the
+    // whole file in hand, scan for it once at the end.
+    mov_read_mfra(movie, r)
     Ok(movie)
   } catch {
     InvalidData(msg) => Err(msg)

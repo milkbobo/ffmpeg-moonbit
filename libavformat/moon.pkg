@@ -1,3 +1,4 @@
 import {
   "ffmpeg/moonbit/libavutil",
+  "ffmpeg/moonbit/libavcodec",
 }

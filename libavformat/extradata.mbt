@@ -1,0 +1,261 @@
+///|
+/// Codec extradata extraction for the MP4/MOV demuxer, ported from FFmpeg
+/// 9.0.2 `libavformat/mov.c` (`mov_read_glbl`) and `libavformat/isom.c` +
+/// `libavformat/mov_esds.c` (`ff_mov_read_esds`, `ff_mp4_read_descr*`,
+/// `ff_mp4_read_dec_config_descr`).
+///
+/// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
+///
+/// Scope notes:
+///   * `avcC`/`hvcC`/`av1C`/`glbl`/`vvcC`/`evcC`/`lvcC`/`apvC` all funnel
+///     through `mov_read_glbl`: the payload becomes the extradata verbatim
+///     (the codec-specific records are decoded by libavcodec, not here).
+///   * `esds` walks the MPEG-4 descriptor chain down to the
+///     DecoderSpecificInfo, which becomes the extradata; for AAC tracks the
+///     AudioSpecificConfig is parsed (the libavcodec `mpeg4audio.mbt` port)
+///     to fill channels / sample rate / frame length, and the codec-id may
+///     be refined to `mp3on4` / `mp4als`.
+///   * the `dvc1`/`dvvC`/`dvh1`-style mov_read_extradata boxes (which store
+///     the whole atom and gate on a codec id) are not ported.
+///
+/// `st->codecpar->codec_id` is modelled as the FFmpeg codec-id *name*
+/// (`"aac"`, `"mp3"`, ...) via a string subset of `ff_mp4_obj_type`.
+
+///| `MP4ESDescrTag`. */
+let mp4_es_descr_tag : Int = 0x03
+
+///| `MP4DecConfigDescrTag`. */
+let mp4_dec_config_descr_tag : Int = 0x04
+
+///| `MP4DecSpecificDescrTag`. */
+let mp4_dec_specific_descr_tag : Int = 0x05
+
+///|
+/// `ff_mp4_obj_type` from isom.c: object type id to FFmpeg codec-id name.
+/// First match wins, as with `ff_codec_get_id` (so 0x40 is AAC, not ALS).
+fn mp4_obj_type_codec(object_type_id : Int) -> String? {
+  match object_type_id {
+    0x08 => Some("mov_text")
+    0x20 => Some("mpeg4")
+    0x21 => Some("h264")
+    0x23 => Some("hevc")
+    0x33 => Some("vvc")
+    0x40 => Some("aac")
+    0x60 | 0x61 | 0x62 | 0x63 | 0x64 | 0x65 => Some("mpeg2video")
+    0x66 | 0x67 | 0x68 => Some("aac")
+    0x69 => Some("mp3")
+    0x6A => Some("mpeg1video")
+    0x6B => Some("mp3")
+    0x6C => Some("mjpeg")
+    0x6D => Some("png")
+    0x6E => Some("jpeg2000")
+    0xA3 => Some("vc1")
+    0xA4 => Some("dirac")
+    0xA5 => Some("ac3")
+    0xA6 => Some("eac3")
+    0xA9 => Some("dts")
+    0xAD => Some("opus")
+    0xB1 => Some("vp9")
+    0xD0 => Some("tscc2")
+    0xD1 => Some("evrc")
+    0xDD => Some("vorbis")
+    0xE0 => Some("dvd_subtitle")
+    0xE1 => Some("qcelp")
+    0x01 | 0x02 => Some("mpeg4systems")
+    _ => None
+  }
+}
+
+///|
+/// `mp4_audio_types` from isom.c: AudioSpecificConfig object types that
+/// override the AAC codec id.
+fn mp4_audio_type_codec(object_type : Int) -> String? {
+  match object_type {
+    29 | 32 | 33 | 34 => Some("mp3on4") // AOT_PS (old mp3on4 draft) / Layer 1-3
+    36 => Some("mp4als") // AOT_ALS
+    _ => None
+  }
+}
+
+///| `ff_mpa_freq_tab` from libavcodec/mpegaudiotabs.h. */
+let mpa_freq_tab : FixedArray[Int] = [44100, 48000, 32000]
+
+///|
+/// `mov_read_glbl`: store the payload as the track's extradata. The
+/// legacy-broken `fiel`-wrapped variant is ported too (recursing into the
+/// payload as child boxes).
+fn parse_glbl(
+  st : MovState,
+  r : Mp4Reader,
+  kind : String,
+  size : Int64
+) -> Unit raise MovError {
+  if !st.in_trak {
+    return
+  }
+  if size > 1073741824 {
+    raise InvalidData("glbl too large")
+  }
+  let mut size = size
+  if kind == "vvcC" {
+    r.skip(4)
+    size = size - 4
+  }
+  if size >= 10 {
+    // Broken files created by legacy versions of libavformat wrap a whole
+    // `fiel` atom inside a `glbl` atom.
+    let start = r.position()
+    let inner_size = r.read_u32()
+    let b0 = r.read_u8()
+    let b1 = r.read_u8()
+    let b2 = r.read_u8()
+    let b3 = r.read_u8()
+    if r.eof_reached() {
+      raise InvalidData("EOF in glbl")
+    }
+    r.seek(start)
+    if b0 == 0x66 && b1 == 0x69 && b2 == 0x65 && b3 == 0x6C &&
+      inner_size.to_int64() == size {
+      // 'fiel' with a matching size: recurse into the wrapped boxes.
+      parse_default(st, r, size)
+      return
+    }
+  }
+  // `extradata_size > 1`: ignore a second box unless the first one was a
+  // degenerate 0/1-byte extradata.
+  let overwrite = match st.cur.extradata {
+    Some(d) => d.length() <= 1
+    None => true
+  }
+  if overwrite {
+    let bytes : Array[Byte] = []
+    for i = 0; i < size.to_int(); i = i + 1 {
+      bytes.push(r.read_u8().to_byte())
+    }
+    st.cur.extradata = Some(Bytes::from_array(bytes[:]))
+  }
+}
+
+///| `ff_mp4_read_descr_len`: up to four 7-bit length bytes. */
+fn mp4_read_descr_len(r : Mp4Reader) -> Int {
+  let mut len = 0
+  let mut count = 4
+  while count > 0 {
+    let c = r.read_u8().reinterpret_as_int()
+    len = (len << 7) | (c & 0x7F)
+    if (c & 0x80) == 0 {
+      break
+    }
+    count = count - 1
+  }
+  len
+}
+
+///| `ff_mp4_read_descr`: tag byte plus length. */
+fn mp4_read_descr(r : Mp4Reader) -> (Int, Int) {
+  let tag = r.read_u8().reinterpret_as_int()
+  (tag, mp4_read_descr_len(r))
+}
+
+///| `ff_mp4_parse_es_descr`: ES_ID, flags and the optional URL/OCR fields. */
+fn mp4_parse_es_descr(r : Mp4Reader) -> Unit {
+  let _ = r.read_u16() // ES_ID
+  let flags = r.read_u8()
+  if (flags & 0x80) != 0 {
+    // streamDependenceFlag
+    let _ = r.read_u16()
+  }
+  if (flags & 0x40) != 0 {
+    // URL_Flag
+    let len = r.read_u8().reinterpret_as_int()
+    r.skip(len.to_int64())
+  }
+  if (flags & 0x20) != 0 {
+    // OCRstreamFlag
+    let _ = r.read_u16()
+  }
+}
+
+///|
+/// `ff_mp4_read_dec_config_descr`: object type, bit rate and the
+/// DecoderSpecificInfo extradata; for AAC the AudioSpecificConfig is parsed
+/// to refine channels / sample rate / frame length / codec id.
+fn mp4_read_dec_config_descr(
+  st : MovState,
+  r : Mp4Reader
+) -> Unit raise MovError {
+  let object_type_id = r.read_u8().reinterpret_as_int()
+  let _ = r.read_u8() // stream type
+  let _ = r.read_u24() // buffer size db
+  let _ = r.read_u32() // max bitrate
+  st.cur.bit_rate = r.read_u32() // avg bitrate
+  match mp4_obj_type_codec(object_type_id) {
+    Some(id) => st.cur.codec_id = id
+    None => ()
+  }
+  let (tag, len) = mp4_read_descr(r)
+  if tag == mp4_dec_specific_descr_tag {
+    // No decSpecificInfo is defined for MPEG-1/2 Audio.
+    if object_type_id == 0x69 || object_type_id == 0x6B {
+      return
+    }
+    if len <= 0 || len > 1073741824 {
+      raise InvalidData("invalid dec specific info length")
+    }
+    let bytes : Array[Byte] = []
+    for i = 0; i < len; i = i + 1 {
+      bytes.push(r.read_u8().to_byte())
+    }
+    st.cur.extradata = Some(Bytes::from_array(bytes[:]))
+    if st.cur.codec_id == "aac" {
+      let cfg = @libavcodec.new_mpeg4_audio_config()
+      match @libavcodec.ff_mpeg4audio_get_config(cfg, st.cur.extradata.unwrap(), true) {
+        Err(_) => raise InvalidData("invalid audio specific config")
+        Ok(_) => ()
+      }
+      if cfg.channels != st.cur.channels.reinterpret_as_int() {
+        st.cur.channels = cfg.channels.reinterpret_as_uint()
+      }
+      // Old mp3on4 carries an MPEG layer sampling index; otherwise the
+      // extension (SBR) rate wins when present.
+      if cfg.object_type == 29 && cfg.sampling_index < 3 {
+        // AOT_PS with a low sampling index
+        st.cur.sample_rate = mpa_freq_tab[cfg.sampling_index].reinterpret_as_uint()
+      } else if cfg.ext_sample_rate != 0 {
+        st.cur.sample_rate = cfg.ext_sample_rate.reinterpret_as_uint()
+      } else {
+        st.cur.sample_rate = cfg.sample_rate.reinterpret_as_uint()
+      }
+      match cfg.object_type {
+        1 | 2 | 3 | 4 | 17 | 23 | 39 | 42 =>
+          // AAC object types with a defined frame length
+          st.cur.frame_length = cfg.frame_length
+        _ => ()
+      }
+      match mp4_audio_type_codec(cfg.object_type) {
+        Some(id) => st.cur.codec_id = id
+        None => st.cur.codec_id = "aac"
+      }
+    }
+  }
+}
+
+///|
+/// `ff_mov_read_esds` (mov_esds.c): version/flags, ES descriptor, then the
+/// DecoderConfigDescriptor.
+fn parse_esds(st : MovState, r : Mp4Reader) -> Unit raise MovError {
+  if !st.in_trak {
+    return
+  }
+  let _ = r.read_u32() // version + flags
+  let (tag, _len) = mp4_read_descr(r)
+  if tag == mp4_es_descr_tag {
+    mp4_parse_es_descr(r)
+  } else {
+    let _ = r.read_u16() // ID
+  }
+  let (tag2, _len2) = mp4_read_descr(r)
+  if tag2 == mp4_dec_config_descr_tag {
+    mp4_read_dec_config_descr(st, r)
+  }
+}
