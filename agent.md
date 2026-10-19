@@ -23,6 +23,10 @@
   `av_mov_open_with(buf, false)` 非 advanced 路径）；碎片化
   MP4 含 `sidx`/`mfra` 与重叠片段 discard、extradata `avcC`/`esds`+AAC 配置、
   `mov_seek_stream` seek、未压缩音频分块路径、cenc 全家含碎片内 `senc` 与 `saiz`/`saio`）
+- **libavformat（Matroska/WebM，已开始）**：`ebml.mbt`（EBML 变长整数原语 +
+  通用元素游走器：level 栈/LEVEL_ENDED/未知长度终止/VOID 跳过/非 seekable 启发式；
+  C 的 `EbmlSyntax` offset 写 → sink 闭包 + 子表 thunk）与 `matroska.mbt`
+  （EBML 头解析 + 校验链）；后续 Segment/SeekHead/Info/Tracks/Cluster 逐片推进
 - **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
   `huffman.c` 的树/码长构建（`ff_huff_build_tree`/`ff_huff_gen_len_table`）+ 规范化
   Huffman 码的编/解码；`mpeg4audio.c` 的 AudioSpecificConfig 解析（`mpeg4audio.mbt`，
@@ -251,6 +255,10 @@ moonbit/                      # git 仓库根
 │   ├── mp4_wbtest.mbt        # 第一批合成 box 测试
 │   ├── mp4_group_wbtest.mbt  # sgpd/sbgp、open-GOP seek 差分、多 stsd 三态、frag stsd_id 门
 │   ├── mp4_editlist_wbtest.mbt # advanced_editlist：mov_fix_index 各分支 + video_delay + 碎片禁用时序
+│   ├── ebml.mbt              # Matroska EBML 层（原语 + 通用游走器）
+│   ├── matroska.mbt          # Matroska 切片 1：EBML 头
+│   ├── ebml_wbtest.mbt       # EBML 白盒测试（VINT 规范向量 + 游走器路径）
+│   └── ebml_real_wbtest.mbt  # 真实 webm/mkv 头（docker，base64 内嵌）
 │   ├── mp4_extra_wbtest.mbt  # 第二批合成 box 测试（extradata/sidx/seek/音频分块…）
 │   └── mp4_real_wbtest.mbt   # 真实文件交叉验证（两批，docker ffmpeg/ffprobe）
 └── libavcodec/               # 包 ffmpeg/moonbit/libavcodec（@math/@v128 + libavutil 仅白盒测试用）

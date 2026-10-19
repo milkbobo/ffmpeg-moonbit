@@ -69,7 +69,11 @@ moonbit/
 │   ├── mp4_editlist_wbtest.mbt # 第四切片白盒测试（advanced_editlist：mov_fix_index 全量）
 │   ├── mp4_wbtest.mbt        # 合成 MP4 构造器与白盒测试
 │   ├── mp4_extra_wbtest.mbt  # 第二切片白盒测试（extradata/sidx/mfra/senc/saiz/seek/音频分块）
-│   └── mp4_real_wbtest.mbt   # 真实文件交叉验证（docker ffmpeg/ffprobe，base64 内嵌）
+│   ├── mp4_real_wbtest.mbt   # 真实文件交叉验证（docker ffmpeg/ffprobe，base64 内嵌）
+│   ├── ebml.mbt              # Matroska/WebM EBML 层（变长整数原语 + 通用元素游走器）
+│   ├── matroska.mbt          # Matroska 切片 1：EBML 头（ebml_header 表 + 校验链）
+│   ├── ebml_wbtest.mbt       # EBML 白盒测试（VINT 规范向量/游走器/合成与损坏头部）
+│   └── ebml_real_wbtest.mbt  # 真实 webm/mkv 头交叉验证（docker ffmpeg，base64 内嵌）
 └── libavcodec/               # 包：ffmpeg/moonbit/libavcodec（依赖 libavutil，仅白盒测试用）
     ├── moon.pkg              # moonbitlang/core/math + libavutil（`for "wbtest"`）
     ├── idct.mbt              # SIMPLE-C IDCT（int16 8/10/12 bit）+ idctdsp 像素/扫描表辅助
@@ -84,10 +88,10 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行，本次完成 MoonBit 源文件（`moonbit/**/*.mbt`，不含
-`_build` 生成文件）共 **17809 行**（libavutil 5995 行 + libavformat 的 aviobuf 流式
-AVIO 层与 MP4 解复用切片（含 sample group/多 stsd/advanced_editlist）9234 行 +
+`_build` 生成文件）共 **19262 行**（libavutil 5995 行 + libavformat 的 aviobuf 流式
+AVIO 层、MP4 解复用切片与 Matroska EBML 层 10687 行 +
 libavcodec 的 IDCT/Huffman/MPEG-4 音频切片 2580 行，
-均含白盒测试）——约占整体 **1.12%**。
+均含白盒测试）——约占整体 **1.21%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 开端）
 
@@ -117,6 +121,8 @@ libavcodec 的 IDCT/Huffman/MPEG-4 音频切片 2580 行，
 | [extradata.mbt](libavformat/extradata.mbt) | `mov.c`(`mov_read_glbl`)、`mov_esds.c`/`isom.c`(`ff_mov_read_esds`、`ff_mp4_read_descr*`、`ff_mp4_read_dec_config_descr`、`ff_mp4_obj_type`) | `avcC`/`hvcC`/`av1C`/`glbl`/`vvcC`(跳 4 字节)/`evcC`/`lvcC`/`apvC` 载荷原样入 extradata（含 `fiel` 包裹的破损文件回退）；`esds` 走 ES→DecoderConfig→DecoderSpecificInfo 描述符链（`ff_mp4_read_descr_len` 7 位长度、ES flags 的 URL/OCR 字段），对象类型表 → codec-id 字符串，MPEG 音频无 DSI 特例；AAC 时解析 AudioSpecificConfig 回填声道/采样率/帧长，`mp3on4`/`mp4als` 覆盖 | ✅ |
 | [frag.mbt](libavformat/frag.mbt) | `mov.c`(`mov_read_sidx`、`mov_read_mfra`、`read_tfra`) | `sidx` v0/v1：参考 ID/时间戳/earliest_presentation_time/first_offset（锚点为入口 position+payload，`av_rescale_q` 换算到轨道时间戳）+ 每参考 offset/pts/size/duration，累计 pts 即 `track_end` 与时长；`mfra`：从文件尾 4 字节（`mfro`）探测大小、校验后读 `tfra`（v0/v1 时间+offset，field_length 定长的三个尺寸字段） | ✅ |
 | [seek.mbt](libavformat/seek.mbt) | `mov.c`(`mov_seek_stream`、`can_seek_to_key_sample`)、`seek.c`(`ff_index_search_timestamp`) | 二分查找（丢弃帧跳过、BACKWARD/ANY 语义、关键帧回退）+ 时间戳 seek：`dts_shift` 折算、越界钳到首样本、`min_sample_duration` 回退步进、HEVC open-GOP 门（无 sgpd 时的无操作形式）；`mov_seek_track` 返回样本序号与 DTS；seek 入口按 C 减去 `min_corrected_pts + dts_shift`（advanced_editlist 产出） | ✅ |
+| [ebml.mbt](libavformat/ebml.mbt) | `libavformat/matroskadec.c`（EBML 读取层；9.0 无独立 ebml.c） | 变长整数原语：`ebml_read_num`（首字节前导零定宽 + 标志位清除）、`ebml_read_length`（全一宽度 → 未知长度）、`ebml_read_uint/sint`（首字节符号扩展）/`float`（binary32/64 重构含 inf/NaN）、`ascii`（lenient UTF-8）、`binary`、`ebml_read_master`（16 层深度栈）、`matroska_ebmlnum_sint`（lace 尺寸再偏置）、`is_ebml_id_valid`（标志位与字节长度一致）；**通用元素游走器** `ebml_parse`/`ebml_parse_nest`：`current_id` 预读状态、level_check（元素越界即错 / 末端相等 → LEVEL_ENDED 多层连弹）、`max_lengths[]` 每类型上限、VOID/CRC32/未知元素跳过（非 seekable 的 unknown_count × UNKNOWN_EQUIV > SKIP_THRESHOLD 启发式）、NEEDS_CHECKING → EOF→EIO 转换、未知长度 master 遇上层元素终止（C 的 CHILD_OF 哨兵链 → 祖先栈）、live 模式 EOF 即止。**表驱动模型**：C 的 `EbmlSyntax{type,def,data_offset}` → `EbmlKind` + sink 闭包 + 子表 thunk（无环引用） | ✅ |
+| [matroska.mbt](libavformat/matroska.mbt) | `matroskadec.c`（`ebml_header[]`/`ebml_syntax[]` 表 + `matroska_read_header` 头部校验链） | `EbmlHeader`（ReadVersion/MaxIDLength/MaxSizeLength/DocType/DocTypeReadVersion，默认值 = C 的 zero-init + nest 预置遍历）；`matroska_read_ebml_header`：解析头元素（缺 Segment 在此阶段不算失败，与 C 一致）、版本越界 → `PATCHWELCOME`、DocTypeReadVersion 3 → 警示、未知 doctype → 警示标志 | ✅ |
 | [mpeg4audio.mbt](libavcodec/mpeg4audio.mbt) | `libavcodec/mpeg4audio.c`、`mpeg4audio_sample_rates.h` | `ff_mpeg4audio_get_config`：对象类型（32+ escape）、采样率表/24 位显式、声道配置表、头部隐式 SBR/PS、ALS 头嗅探与重载、USAC/LD 帧长、`0x2b7`/`0x548` 隐式 SBR/PS 同步扩展扫描、PS 修正（含 `channels & ~1`）。返回 GASpecificConfig 位偏移与 C 一致 | ✅ |
 | [idct.mbt](libavcodec/idct.mbt) | `libavcodec/simple_idct.c`、`simple_idct_template.c`（`BIT_DEPTH` 8/10/12 + `IN_IDCT_DEPTH` 16）、`idctdsp.c` | `ff_simple_idct{,_put,_add}_int16_{8,10,12}bit`（行 DC 快速路径 + 列蝶形，`SUINT`→`UInt` 32 位回绕算术）；`ff_put_pixels_clamped_c`/`ff_add_pixels_clamped_c`/`put_signed_pixels_clamped_c`、`ff_init_scantable_permutation`、`ff_permute_scantable` | ✅ |
 | [idct_v128.mbt](libavcodec/idct_v128.mbt) | 同上（表示改造 + `libavcodec/x86/simple_idct.asm`、`simple_idct10.asm`） | `ff_simple_idct{,_put,_add}_v128`（8 位）与 `..._v128_10bit`/`..._v128_12bit`：块改用 **128 字节 LE-int16 缓冲**；`i8x16_shuffle` 三级 unpack 做 8x8 转置，`i32x4` 逐 lane 蝶形 + `i16x8_narrow_i32x4_s` 收窄（含 int16 截断语义）；`put`/`add` 用饱和窄化（8 位）或 `i16x8_min/max_s`（10/12 位）实现 `av_clip_uintp2` | ✅ |
@@ -271,6 +277,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | aes_ctr | `libavutil/tests/aes_ctr.c` 的固定密钥/IV 40 字节向量（`fixed_key`=`"0123456789abcdef"`、`fixed_iv`=`deadbeefdeadbeef`）；另按 CTR 性质校验「任意切分 == 一次性」以覆盖分部块状态；`increment_iv`/`set_iv` 的计数器语义按 `aes_ctr.c` 手推 |
 | MP4 demuxer | 测试内**逐字节合成**的 MP4/MOV（`ftyp`+`moov`+`trak`+`stbl`+`mdat`），期望值由 box 布局与 `mov.c` 语义手算：chunk→样本 offset 累积、`stts` DTS 序列、`ctts` 重排后的 PTS、负 `ctts` 的 `dts_shift`、`stss` 关键帧、`stz2` 位打包、`co64` 与 64 位 box、`elst` 的 `time_offset`、`stsc` 校验修复；碎片化：空 `stbl` 初始化段 + 两个 `moof` 片段（`tfdt` 驱动首段、无 `tfdt` 由 `track_end` 续接），校验 offset/DTS/PTS/size/duration/关键帧；cenc：合成的加密 MP4（`sinf`+`senc`），以同密钥/IV 的 AES-CTR 生成密文，验证 `mov_decrypt_sample` 还原明文（全样本与子样本各一）；**真实文件交叉验证**：由 `linuxserver/ffmpeg:9.0.2` 生成普通/碎片化/cenc 三种真实 MP4，以 `ffprobe` 的 `packet` 输出（`pos/size/dts/pts/duration/flags`）为期望值逐 packet 比对（普通与碎片化完全一致），cenc 用已知密钥解密后与明文样本逐字节一致 |
 | aviobuf | 期望值全部由 `aviobuf.c` 的缓冲/seek 路径语义手推（跨 1 字节分块的 BE/LE 读写、EOF 语义与 seek 恢复、`avio_read` 直通/短读、四条 seek 路径各自不经/必经回调、`avio_size` 双回退、写侧 flush 时机与 seekback 恢复、dyn buf 增长/packet 前缀/padding、`get_str`/`get_str16` 代理对的消费计数、leb/varlen）；CRC 三助手与已验证的 libavutil `av_crc` 同表互证，流式 checksum 与一次性计算逐位相等；**集成回归**：既有 MP4 全部测试改经 `init_read_context` 跑在 AVIO 上，另以 3 字节分块 + 7 字节缓冲的 seekable / 不可 seek 源对同一合成 MP4 复算采样表，与整文件解析逐值一致 |
+| EBML 层 + EBML 头 | VINT 取 EBML 规范（RFC 8796 §4）宽度示例（含全一宽度的未知长度映射与 2/3/8 字节最大值；两处易错点由测试反推确认：0x3F 是 3 字节前缀而非 2 字节全一，最大已知 1 字节长度是 0xFE）；`is_ebml_id_valid` 用 matroska.h 的真实 ID（Header/Segment/Info/Void/CRC32）+ 标志位错位反例；游走器各路径（VOID 跳过、未知长度 master 遇 Segment 终止 = CHILD_OF 语义、零长 master、live 模式、元素越界、空流/截断）合成字节手推；**真实文件**：docker `linuxserver/ffmpeg:9.0.2` 生成的 webm（libvpx+libopus）与 mkv（libx264+aac），头部 64 字节 base64 内嵌，doctype/版本/长度上限与 ffprobe 的 EBML 头输出一致，头后紧跟的 Segment（未知长度）触发 EBML_STOP |
 | advanced_editlist | 全部由 mov_fix_index 的步进语义手推：中部 media_time 编辑（前导弃帧保留但时间戳经 duration 缓冲重写为 -20/-10，保留帧从 0 起，含关键帧回退）；空首 edit（时间轴 +500、`start_time=500`、`min_corrected_pts` 净 0）；音频部分帧（`skip_samples=512`、首帧行至 -512）；正 `min_corrected_pts`（视频 DTS 整体 -50 使首 PTS 归零，seek 落在修正后时间轴）；`mov_estimate_video_delay`（ctts +20/0/+10 → 1，非 avc1 不估）；碎片化 trak 按 mov_read_trak 顺序禁用（先建 trak 仍被 fix、后建 trak 直通、movie 旗标翻转）；**真实文件回归**：docker AAC 文件 14 个包仍与 ffprobe 逐值一致，并新增 `discard`（首帧 AVINDEX_DISCARD_FRAME）与 `skip_samples=1024`（编码器延迟）断言 |
 | sgpd/sbgp/open-GOP/多 stsd | 期望值由 mov.c 语义手推：sgpd NAL 类型（6 位掩码）与 sbgp run 表（含零计数 run 保留）；HEVC 无 CRA entry 时 offsets 仍展开但 key 表/min 时长不建（`cra_index==0` 早退）；open-GOP seek 为**差分测试**——同一文件 `hvc1`（CRA 样本 pts `dts+offset+dts_shift` 超过请求点即拒、按 `FFMAX(min_sample_duration,1)` 回退到闭合关键帧）与 `avc1`（无门直达 CRA）各求一次；`dts_shift` 为 0 的成因（`mov_update_dts_shift` 只跑非最后两条 entry）一并断言；多 stsd 三态（同 fourcc → `pseudo_stream_id=-1` 全索引且仅 slot 0 有 extradata；异 fourcc → 跳过且 `stsc.id=2` 的 chunk 剔除；首 chunk 引用 entry 2 → `last_stsd` 切到空槽清空主 extradata）；碎片 `stsd_id` 门走 trex 默认与 tfhd 旗标两条路径（匹配 1 收样、2 全拒） |
 | mpeg4audio | 位串按 ISO/IEC 14496-3 手推：AAC-LC 44100 单/多声道、显式 24 位采样率、escape 对象类型、头部隐式 SBR、`0x2b7` 同步扩展的 SBR/PS、AAC-LD 帧长；`12 08 56 e5 00` 五字节直接取自 docker 生成的 `aac.mp4`（与真实文件互证） |
@@ -300,7 +307,7 @@ AAC `esds`（extradata/声道/采样率/帧长/码率 + 首包 edit-list 偏移 
 ```bash
 cd moonbit
 moon check     # 0 error / 0 warning
-moon test      # 170/170 passed
+moon test      # 187/187 passed
 ```
 
 ---
@@ -346,7 +353,8 @@ edit 时间轴索引重建/discard 时间戳重写/`skip_samples`/`min_corrected
 `start_time`/tts 重建/`mov_estimate_video_delay`/碎片化自动禁用）。MP4/MOV 解复用
 至此覆盖 mov.c 的全部索引与时间戳路径。余下：
 
-1. 其他容器：Matroska/WebM（EBML）、AVI、MPEG-TS（字节级解析优先）
+1. 其他容器：**Matroska/WebM 已开始**（EBML 层 + EBML 头切片完成；余下
+   Segment/SeekHead/Info/Tracks/Cluster 逐片推进）；AVI、MPEG-TS（字节级解析优先）
 2. `avio.c` 的 URL/协议层与 `avio_open`（文件/网络 IO，属平台边界，或留 FFI）
 
 ### 阶段 5 —— libavcodec（**已开始**：IDCT + Huffman）
