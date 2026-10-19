@@ -75,8 +75,8 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行，本次完成 MoonBit 源文件（`moonbit/**/*.mbt`，不含
-`_build` 生成文件）共 **11111 行**（libavutil 5749 行 + libavformat 的 MP4 解复用切片
-3332 行 + libavcodec 的 IDCT/Huffman 切片 2030 行，三者均含白盒测试）—— 约占整体 **0.70%**。
+`_build` 生成文件）共 **11357 行**（libavutil 5995 行 + libavformat 的 MP4 解复用切片
+3332 行 + libavcodec 的 IDCT/Huffman 切片 2030 行，三者均含白盒测试）—— 约占整体 **0.71%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 开端）
 
@@ -90,6 +90,7 @@ moonbit/
 | [base64.mbt](libavutil/base64.mbt) | `libavutil/base64.c` | `av_base64_encode`、`av_base64_decode`、`av_base64_decode_syntax`、`av_base64_size` | ✅ |
 | [base64_v128.mbt](libavutil/base64_v128.mbt) | 同上 + FFmpeg `base64.asm` | `av_base64_encode_v128`：12 字节 → 16 字符/轮；`i8x16_swizzle` 展开成 `[b0,b1,b2,0,…]`，四个 6-bit 字段由 `i32x4` 移位/掩码取得，`i32x4→i16x8→i8x16` 窄化 + `i8x16_shuffle` 重排，字母表无分支比较映射；尾部回退标量 | ✅ |
 | [md5.mbt](libavutil/md5.mbt) | `libavutil/md5.c` | `AVMD5`、`av_md5_init/update/final/sum` | ✅ |
+| [md5_v128.mbt](libavutil/md5_v128.mbt) | 同上（多缓冲 4 路并行） | `av_md5_sum_x4`：`i32x4` 的 4 个 lane 各承载一条**等长**消息，`T[i]` 常量、`F`/`G`/`H`/`I` 混合与 `rotl(S[i])` 全部逐 lane 施加，一轮同时推进 4 条摘要（单流 MD5 无 SIMD 收益，故新增多缓冲 API）；每路按各自长度填充到 `nblocks*64` 平面缓冲，块调度跨 lane 一致。`#cfg(any(target="native", target="wasm"))`；测试与标量 `av_md5_sum` 逐 lane 逐值一致 | ✅ |
 | [sha.mbt](libavutil/sha.mbt) | `libavutil/sha.c` | `AVSHA`、`av_sha_init/update/final/sum`（SHA-1/224/256） | ✅ |
 | [avstring.mbt](libavutil/avstring.mbt) | `libavutil/avstring.c`、`bprint.c`(`av_bprint_escape`) | `av_strstart`/`av_stristart`/`av_stristr`/`av_strnstr`、`av_strlcpy`/`av_strlcat`、`av_strcasecmp`/`av_strncasecmp`、`av_get_token`、`av_strireplace`、`av_basename`/`av_dirname`/`av_append_path_component`、`av_match_name`/`av_match_list`、`av_escape`(QUOTE/XML/BACKSLASH 三模式 + flag)、`av_utf8_decode` | ✅ |
 | [avstring_v128.mbt](libavutil/avstring_v128.mbt) | 同上（扫描加速） | `av_strnstr_v128`：以 8 个 UTF-16 码元为步长用 `v128_load_i16x8` + `i16x8_eq` + `i16x8_bitmask` 先扫首字符，命中再标量核对；语义与 `av_strnstr` 完全一致，仅 BMP（码元==码点）走 SIMD | ✅ |
@@ -106,7 +107,7 @@ moonbit/
 | [idct_v128.mbt](libavcodec/idct_v128.mbt) | 同上（表示改造 + `libavcodec/x86/simple_idct.asm`、`simple_idct10.asm`） | `ff_simple_idct{,_put,_add}_v128`（8 位）与 `..._v128_10bit`/`..._v128_12bit`：块改用 **128 字节 LE-int16 缓冲**；`i8x16_shuffle` 三级 unpack 做 8x8 转置，`i32x4` 逐 lane 蝶形 + `i16x8_narrow_i32x4_s` 收窄（含 int16 截断语义）；`put`/`add` 用饱和窄化（8 位）或 `i16x8_min/max_s`（10/12 位）实现 `av_clip_uintp2` | ✅ |
 | [huffman.mbt](libavcodec/huffman.mbt) | `libavcodec/huffman.c`、`huffman.h`（+ `vlc.c`/`get_bits.h` 的位读取） | `ff_huff_build_tree`（两列表树构建 + `get_tree_codes` DFS → `lens`/`xlat`）、`ff_huff_gen_len_table`（堆法码长生成，含 `offset <<= 1` 重试）；另附规范化 Huffman 码的建立与 MSB-first 编/解码（对应 `ff_vlc_init_from_lengths` + `put_bits`/`get_bits`） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **101/101 通过**（libavutil 66 + MP4 18 + libavcodec 17）。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **104/104 通过**（libavutil 69 + MP4 18 + libavcodec 17）。
 
 ### AES 的实现偏差（已记录）
 
@@ -160,7 +161,8 @@ Huffman 规范化码另有等效性说明，见下文）：
 | [idct.mbt](libavcodec/idct.mbt) | ✅ **已完成（8/10/12 位）**：`idct_v128.mbt` 的 `ff_simple_idct{,_put,_add}_v128{,_10bit,_12bit}`（块改 128 字节 LE-int16 缓冲） | `simple_idct.asm`、`simple_idct10.asm`、`idctdsp.asm` | 高；8 位与标量逐值一致；10 位满足 dct.c 判据；12 位在 dct.c 中标 `nonspec=1`（其 omse 判据不适用），实测 profile 与标量一致 |
 | 同上：`ff_put/add_pixels_clamped_c` | 已由 `put`/`add` 的 SIMD 路径覆盖（`i8x16_narrow_i16x8_u` 饱和钳位） | `pixblockdsp.asm`、`blockdsp.asm` | 高；独立的 8/16 路版本待做 |
 | [aes.mbt](libavutil/aes.mbt) / [aes_ctr.mbt](libavutil/aes_ctr.mbt) | —（FFmpeg 的 `aes.asm` 用 **AES-NI**，Wasm SIMD128 无法表达） | `aes.asm` | **例外 → FFI**；纯 SIMD 只能位切片重写（成本高、收益低），列低 |
-| [md5.mbt](libavutil/md5.mbt) / [sha.mbt](libavutil/sha.mbt) | 多块并行 + 消息扩展 | —（SHA-NI 属 x86 专有） | 中；**需新增多缓冲 API**（单流无收益），FFmpeg 亦为标量 |
+| [md5.mbt](libavutil/md5.mbt) | 多缓冲 4 路并行 | —（FFmpeg 亦为标量 C） | ✅ **已完成**：`av_md5_sum_x4`（`i32x4` 承载 4 条等长消息，逐 lane 施加轮函数）；与标量逐 lane 逐值一致 |
+| [sha.mbt](libavutil/sha.mbt) | 多缓冲 4 路并行（SHA-1/256 轮函数 + 消息扩展） | —（SHA-NI 属 x86 专有） | 中；**需新增多缓冲 API**（单流无收益），FFmpeg 亦为标量 |
 | [rc4.mbt](libavutil/rc4.mbt) | 4/8 路并行密钥流 | — | 低 |
 | [blowfish](libavutil/blowfish.mbt) / [cast5](libavutil/cast5.mbt) / [tea](libavutil/tea.mbt) / [xtea](libavutil/xtea.mbt) | 4/8 块并行 ECB/CBC | —（FFmpeg 亦为标量 C） | 低 |
 | [avstring.mbt](libavutil/avstring.mbt) | ✅ **已完成**：`av_strnstr_v128`（`v128_load_i16x8` + `i16x8_eq` + `i16x8_bitmask` 扫首字符，命中再标量核对；仅 BMP 走 SIMD） | —（FFmpeg 为标量 `strstr`） | 低；已与标量逐值一致 |
@@ -168,8 +170,8 @@ Huffman 规范化码另有等效性说明，见下文）：
 | [mathematics.mbt](libavutil/mathematics.mbt) / [rational.mbt](libavutil/rational.mbt) | —（标量整数运算） | — | 排除 |
 | [reader.mbt](libavformat/reader.mbt) / [mov.mbt](libavformat/mov.mbt) | —（box 解析、采样表展开，非数据并行） | — | 排除 |
 
-**SIMD 进度**：已完成 4 个（`adler32`、`base64` 编码、`avstring` 的 `av_strnstr`、IDCT
-8/10/12 位 + 其 `put`/`add`）。表达性受限的说明：
+**SIMD 进度**：已完成 5 个（`adler32`、`base64` 编码、`avstring` 的 `av_strnstr`、IDCT
+8/10/12 位 + 其 `put`/`add`、MD5 多缓冲 4 路）。表达性受限的说明：
 
 - **`crc` / `aes`**：FFmpeg 对应 asm 依赖 x86 专有指令（`PCLMULQDQ` / `AES-NI`），
   Wasm SIMD128 **无法表达** → 按边界原则属 **FFI 例外**，不进 `@v128` 清单。
@@ -178,6 +180,8 @@ Huffman 规范化码另有等效性说明，见下文）：
   `i8x16_narrow_i16x8_u`（8 位）或 `i16x8_min/max_s`（10/12 位）完成。
   `int32` 输入变体（MPEG-4 studio）仍走标量。
 - **`md5` / `sha`**：可用 `i32x4` 做 4 路并行（不依赖专有指令），但要把状态机重写为多路。
+  MD5 已完成（`av_md5_sum_x4`，4 条等长消息共享同一块调度）；SHA 的多缓冲版待做。
+  注意这类内核**只对多路输入有收益**，单流仍需标量路径。
 
 **未移植库**中同样存在向量化内核，待对应模块移植时一并按 `@v128` 重写：
 `libavfilter/x86`（42 个，如 `vf_*` 滤镜内核）、`libswscale/x86`（13 个，缩放/像素转换）、
@@ -224,7 +228,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | adler32 | `libavutil/tests/adler32.c` 内断言 `0x50E6E508` + Adler-32 规范示例；SIMD 版（`adler32_v128.mbt`）另用公开向量 Adler-32("Wikipedia")=`0x11E60398`，并对生成缓冲区与标量版**逐值相等**（含 `NMAX=5552` 边界） |
 | base64 | `libavutil/tests/base64.c` 的参考编码表；SIMD 版（`base64_v128.mbt`）另用 **RFC 4648 §10** 向量，并与标量版在长度 0..129、长缓冲、12 字节边界及全 256 字节值上**逐值相等** |
 | avstring | `tests/ref/fate/avstring`（`av_get_token` 的 26 组 input→token→rest）+ 该测试中的 `av_append_path_component`(7 组) / `av_strireplace`(3 组) / `av_strnstr` 偏移期望；其余用例由 `avstring.c`、`bprint.c` 的算法手推。SIMD 版 `av_strnstr_v128` 与标量版在生成输入（含每个 `hay_length`、非 ASCII BMP 串）上**逐值相等** |
-| md5 | `tests/ref/fate/md5`（5 组摘要：1000 / 63 / 64 / 65 / 999 字节） |
+| md5 | `tests/ref/fate/md5`（5 组摘要：1000 / 63 / 64 / 65 / 999 字节）+ RFC 1321 向量；SIMD 多缓冲版（`md5_v128.mbt`）的 `av_md5_sum_x4` 以四路相同消息复现全部上述摘要，并与标量 `av_md5_sum` 在**每 lane、跨 0/55/56/63/64/65/119/120/128/999/1000/4096 长度的四路不同缓冲**上**逐值相等** |
 | sha | `libavutil/tests/sha.c` 引用的 FIPS 180 向量（含百万个 `'a'`） |
 | mathematics | `libavutil/mathematics.h` 语义 + 边界用例 |
 | rational | `libavutil/tests/rational.c` 的 `unit_mul_q` / `unit_add_q` 饱和表；`av_cmp_q` 与 `double` 比较的全枚举对拍 |
@@ -254,7 +258,7 @@ Base64 截断输出行为与非法输入检测。
 ```bash
 cd moonbit
 moon check     # 0 error / 0 warning
-moon test      # 101/101 passed
+moon test      # 104/104 passed
 ```
 
 ---

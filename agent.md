@@ -11,7 +11,8 @@
 
 - **libavutil**：数学/有理数、CRC/Adler-32、Base64、MD5、SHA-1/224/256、avstring、
   RC4、AES(ECB/CBC)、XTEA、TEA、Blowfish、CAST-128、AES-CTR；另有 `@v128` SIMD 版：
-  Adler-32、base64 编码、`av_strnstr`（`adler32_v128.mbt`/`base64_v128.mbt`/`avstring_v128.mbt`）
+  Adler-32、base64 编码、`av_strnstr`、MD5 多缓冲（`adler32_v128.mbt`/`base64_v128.mbt`/
+  `avstring_v128.mbt`/`md5_v128.mbt`）
 - **libavformat**：内存字节读取器 + MP4/MOV 解复用切片（box 遍历 + 采样表索引）
 - **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
   `huffman.c` 的树/码长构建（`ff_huff_build_tree`/`ff_huff_gen_len_table`）+ 规范化
@@ -161,6 +162,11 @@ $msg | git commit -F -
   用到的长度并加注释。
 - **平台相关**：`av_get_random_seed` 之类不移植，留待 FFI（例：`aes_ctr.mbt` 未做
   `set_random_iv`）。
+- **串行哈希的 SIMD 方向**：MD5/SHA 一类的轮函数前后强依赖，**单流无法向量化**（FFmpeg
+  自身也为标量 C）；可并行的是**多路独立输入**。做法是在 `i32x4` 的 4 个 lane 里各放一条
+  **等长**消息，逐 lane 施加同一轮常量/混合/`rotl`（`i32x4_shl` + `i32x4_shr_u`），循环外围
+  仍是标量块调度（`av_md5_sum_x4`，见 `md5_v128.mbt`）。这类内核需**新增多缓冲 API**，
+  且必须与标量单流版逐 lane 逐值一致。
 
 ---
 
@@ -216,7 +222,7 @@ moonbit/                      # git 仓库根
 ├── libavutil/                # 包 ffmpeg/moonbit/libavutil
 │   ├── moon.pkg              # 含 moonbitlang/core/v128 + warnings = "-alert_experimental"
 │   ├── *.mbt                 # 各纯算法模块
-│   ├── *_v128.mbt            # `@v128` SIMD 版（adler32/base64/avstring）+ 同主题 wbtest
+│   ├── *_v128.mbt            # `@v128` SIMD 版（adler32/base64/avstring/md5）+ 同主题 wbtest
 │   └── *_wbtest.mbt          # 白盒测试（含 cipher_wbtest.mbt 汇总各密码）
 ├── libavformat/              # 包 ffmpeg/moonbit/libavformat（依赖 libavutil）
 │   ├── moon.pkg
