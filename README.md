@@ -47,21 +47,28 @@ moonbit/
 │   ├── cast5.mbt             # CAST-128（RFC 2144，40/80/128 位密钥，ECB/CBC）
 │   ├── aes_ctr.mbt           # AES-CTR（keystream、分部块状态、64 位计数器）
 │   └── *_wbtest.mbt          # 与模块同名的白盒测试
-└── libavformat/              # 包：ffmpeg/moonbit/libavformat（依赖 libavutil）
-    ├── moon.pkg              # 声明对 ffmpeg/moonbit/libavutil 的依赖
-    ├── reader.mbt            # 内存字节读取器（对应 avio_rb/rl/skip/tell/feof）
-    ├── mov.mbt               # MP4/MOV 解复用器：box 遍历 + 采样表 → 每样本索引
-    ├── mp4_wbtest.mbt        # 合成 MP4 构造器与白盒测试
-    └── mp4_real_wbtest.mbt    # 真实文件交叉验证（docker ffmpeg/ffprobe，base64 内嵌）
+├── libavformat/              # 包：ffmpeg/moonbit/libavformat（依赖 libavutil）
+│   ├── moon.pkg              # 声明对 ffmpeg/moonbit/libavutil 的依赖
+│   ├── reader.mbt            # 内存字节读取器（对应 avio_rb/rl/skip/tell/feof）
+│   ├── mov.mbt               # MP4/MOV 解复用器：box 遍历 + 采样表 → 每样本索引
+│   ├── mp4_wbtest.mbt        # 合成 MP4 构造器与白盒测试
+│   └── mp4_real_wbtest.mbt   # 真实文件交叉验证（docker ffmpeg/ffprobe，base64 内嵌）
+└── libavcodec/               # 包：ffmpeg/moonbit/libavcodec（依赖 libavutil，仅白盒测试用）
+    ├── moon.pkg              # moonbitlang/core/math + libavutil（`for "wbtest"`）
+    ├── idct.mbt              # SIMPLE-C IDCT（int16 8/10/12 bit）+ idctdsp 像素/扫描表辅助
+    ├── dctref.mbt            # 双精度参考 DCT/IDCT（dctref.c），供 IDCT 测试作期望值
+    ├── huffman.mbt           # Huffman 树/码长构建（huffman.c）+ 规范化码编解码
+    ├── idct_wbtest.mbt       # 对照 dctref 参考 + FFmpeg dct.c 判据
+    └── huffman_wbtest.mbt    # Kraft/最优性/两实现互证/往返
 ```
 
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行，本次完成 MoonBit 源文件（`moonbit/**/*.mbt`，不含
-`_build` 生成文件）共 **8599 行**（libavutil 5267 行 + libavformat 的 MP4 解复用切片
-3332 行，两者均含白盒测试）—— 约占整体 **0.54%**。
+`_build` 生成文件）共 **10081 行**（libavutil 5267 行 + libavformat 的 MP4 解复用切片
+3332 行 + libavcodec 的 IDCT/Huffman 切片 1482 行，三者均含白盒测试）—— 约占整体 **0.63%**。
 
-### 已完成模块（阶段 0 + 阶段 1 开端）
+### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 开端）
 
 | 模块 | 对应 C 源码 | 移植内容 | 测试 |
 |---|---|---|---|
@@ -82,12 +89,16 @@ moonbit/
 | [aes_ctr.mbt](libavutil/aes_ctr.mbt) | `libavutil/aes_ctr.c` | `AVAESCTR`、`av_aes_ctr_alloc/init`、`av_aes_ctr_set_iv`(8 字节 IV+零计数器)、`av_aes_ctr_set_full_iv`/`get_iv`(16 字节)、`av_aes_ctr_increment_iv`(BE64 高位加一)、`av_aes_ctr_crypt`(keystream 缓存 + `block_offset` 跨调用状态，支持任意切分)。`set_random_iv` 依赖平台随机源，留待 FFI | ✅ |
 | [reader.mbt](libavformat/reader.mbt) | `avio_*` 子集 | `Mp4Reader`：`avio_r8/rb16/rb24/rb32/rb64/rl32`、`skip`/`seek`/`tell`/`feof` 语义（越界读返回 0 并置 eof，与 AVIO 一致） | ✅ |
 | [mov.mbt](libavformat/mov.mbt) | `libavformat/mov.c` | box 遍历 + `ftyp`/`mvhd`/`tkhd`/`mdhd`/`hdlr`/`elst`/`stsd`(视频/音频 sample entry)/`stts`/`ctts`/`stsc`/`stsz`/`stz2`/`stco`/`co64`/`stss`/`stps` 解析；`mov_merge_tts_data` 合并 + `mov_build_index` 采样索引 → 每样本 offset/size/DTS/PTS/duration/关键帧/`min_distance`。**碎片化 MP4**：`moof`/`traf`/`tfhd`/`tfdt`/`trun`/`trex` 按 `default-base-is-moof` + `tfdt`/`track_end` 追加每样本索引，按 `trun` 采样标志判定关键帧。**cenc 加密**：`sinf`/`schm`/`tenc`/`senc` 解析 + `mov_decrypt_sample`（`cenc`/`cbc1`/`cens`/`cbcs`，基于 `aes_ctr`） | ✅ |
+| [idct.mbt](libavcodec/idct.mbt) | `libavcodec/simple_idct.c`、`simple_idct_template.c`（`BIT_DEPTH` 8/10/12 + `IN_IDCT_DEPTH` 16）、`idctdsp.c` | `ff_simple_idct{,_put,_add}_int16_{8,10,12}bit`（行 DC 快速路径 + 列蝶形，`SUINT`→`UInt` 32 位回绕算术）；`ff_put_pixels_clamped_c`/`ff_add_pixels_clamped_c`/`put_signed_pixels_clamped_c`、`ff_init_scantable_permutation`、`ff_permute_scantable` | ✅ |
+| [dctref.mbt](libavcodec/dctref.mbt) | `libavcodec/dctref.c` | `ff_ref_dct_init`/`ff_ref_fdct`/`ff_ref_idct` 双精度参考变换（`@math.cos`，`sqrt`/`floor`），作为 IDCT 的期望值来源 | ✅ |
+| [huffman.mbt](libavcodec/huffman.mbt) | `libavcodec/huffman.c`、`huffman.h`（+ `vlc.c`/`get_bits.h` 的位读取） | `ff_huff_build_tree`（两列表树构建 + `get_tree_codes` DFS → `lens`/`xlat`）、`ff_huff_gen_len_table`（堆法码长生成，含 `offset <<= 1` 重试）；另附规范化 Huffman 码的建立与 MSB-first 编/解码（对应 `ff_vlc_init_from_lengths` + `put_bits`/`get_bits`） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **77/77 通过**（libavutil 59 + MP4 18）。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **87/87 通过**（libavutil 59 + MP4 18 + IDCT/Huffman 10）。
 
-### AES 的唯一实现偏差（已记录）
+### AES 的实现偏差（已记录）
 
-`aes.mbt` 是本项目**唯一一处按规范而非按 C 源码逐行实现**的地方：
+`aes.mbt` 是 **libavutil 内唯一一处**按规范而非按 C 源码逐行实现的地方（libavcodec 的
+Huffman 规范化码另有等效性说明，见下文）：
 
 - **逐行移植**的部分：S-box / 逆 S-box 的生成（`aes_init_static` 的 log8/alog8 + 仿射变换）、
   `rcon` 表、密钥扩展的 Rcon/SubWord 结构（含 AES-256 的 `KC == 8 && j == KC >> 1` 特例）。
@@ -97,6 +108,27 @@ moonbit/
   零行为收益，而 FIPS-197 形式可用官方标准向量直接验证。
 - **后果**：轮密钥按 FIPS-197 顺序存放，而非 FFmpeg 内部对解密预变换的形式；
   `av_aes_init` / `av_aes_crypt` 的签名与 ECB/CBC 行为保持一致。
+
+### libavcodec 切片（IDCT + Huffman）的范围边界与说明
+
+- **已做（IDCT）**：`simple_idct_template.c` 的 `int16` 输入三档（`BIT_DEPTH` 8/10/12，
+  均 `IN_IDCT_DEPTH == 16`）的 `put`/`add`/原地变换，以及 `idctdsp.c` 的钳位像素与扫描表
+  辅助。C 宏（`W1..W7`、`ROW_SHIFT`/`COL_SHIFT`/`DC_SHIFT`、`MUL16`/`MAC16`）化为
+  MoonBit 常量与内联算术；`SUINT` 用 `UInt`（32 位回绕）复刻生产构建的溢出语义，写回
+  块时按 `int16` 截断（`i16`）。
+- **未做（IDCT）**：`int32` 输入变体 `ff_simple_idct_*_int32_10bit`（MPEG-4 Simple Studio
+  Profile）、2x4x8/8x4/4x8 的部分变换（DV/WMV2 的 `idct248`/`84`/`48`/`44`）、整数
+  `FF_IDCT_INT`（`jrevdct.c`）、FAAN、Xvid 及全部 SIMD/汇编变体（按边界原则留在 C）。
+- **已做（Huffman）**：`ff_huff_build_tree`（排序 + 两列表原地合并 + `get_tree_codes` DFS）
+  与 `ff_huff_gen_len_table`（堆 + `offset <<= 1` 长度上限重试）。二者返回 `(lens, xlat)`，
+  即 `ff_vlc_init_from_lengths` 需要的输入。
+- **说明 / 偏差（Huffman）**：不移植整个 VLC 子系统（`vlc.c` 的多级查表）；为使结果可
+  解码验证，另按规范化 Huffman 规则由 `(lens, xlat)` 直接生成码字并做 MSB-first 编/解码
+  （与 `ff_vlc_init_from_lengths` 的「按发射序累加码字」在码长非递减时等价）。FFmpeg 的
+  `AV_QSORT` 非稳定排序，等频次叶子的次序可能与 FFmpeg 不同，但仍是同一最优码（测试以
+  Kraft 等和 + 独立教科书法的最优代价互证）。
+- **未做（libavcodec）**：LZO、`vlc.c` 表构建、aac/AC-3 等音频解析、其余编解码器
+  （见阶段 5）。
 
 ### MP4 demuxer 切片的范围边界
 
@@ -123,7 +155,9 @@ moonbit/
   `des/twofish/sm4`、`lzo`、`eval`、`timecode`、`parseutils` 等
 - libavformat 其余部分：`aviobuf.c`/`avio.c`（流式与文件 AVIO）、其余 demuxer/muxer、
   aac/AC-3 等音频解析、字幕（`tx3g`/TTML）、AVIF/HEIF 图像
-- libswscale / libswresample / libavcodec / libavdevice / fftools：**未开始**
+- libavcodec 已**开始**（IDCT SIMPLE-C 与 Huffman 树/码长，见上方范围边界），其余
+  （VLC 表构建、LZO、无损/有损编解码器）未做
+- libswscale / libswresample / libavdevice / fftools：**未开始**
 
 ---
 
@@ -149,6 +183,8 @@ moonbit/
 | cast5 | `libavutil/tests/cast5.c` 内嵌的 **RFC 2144** 向量（128/80/40 位密钥，明文 `0123456789abcdef`）；CBC 分支复刻该测试的 `av_cast5_crypt2` 往返。该测试另含 100 万次迭代向量 `rct2`，因耗时未纳入 |
 | aes_ctr | `libavutil/tests/aes_ctr.c` 的固定密钥/IV 40 字节向量（`fixed_key`=`"0123456789abcdef"`、`fixed_iv`=`deadbeefdeadbeef`）；另按 CTR 性质校验「任意切分 == 一次性」以覆盖分部块状态；`increment_iv`/`set_iv` 的计数器语义按 `aes_ctr.c` 手推 |
 | MP4 demuxer | 测试内**逐字节合成**的 MP4/MOV（`ftyp`+`moov`+`trak`+`stbl`+`mdat`），期望值由 box 布局与 `mov.c` 语义手算：chunk→样本 offset 累积、`stts` DTS 序列、`ctts` 重排后的 PTS、负 `ctts` 的 `dts_shift`、`stss` 关键帧、`stz2` 位打包、`co64` 与 64 位 box、`elst` 的 `time_offset`、`stsc` 校验修复；碎片化：空 `stbl` 初始化段 + 两个 `moof` 片段（`tfdt` 驱动首段、无 `tfdt` 由 `track_end` 续接），校验 offset/DTS/PTS/size/duration/关键帧；cenc：合成的加密 MP4（`sinf`+`senc`），以同密钥/IV 的 AES-CTR 生成密文，验证 `mov_decrypt_sample` 还原明文（全样本与子样本各一）；**真实文件交叉验证**：由 `linuxserver/ffmpeg:9.0.2` 生成普通/碎片化/cenc 三种真实 MP4，以 `ffprobe` 的 `packet` 输出（`pos/size/dts/pts/duration/flags`）为期望值逐 packet 比对（普通与碎片化完全一致），cenc 用已知密钥解密后与明文样本逐字节一致 |
+| idct | 期望值来自 FFmpeg **自带的双精度参考 IDCT** `libavcodec/dctref.c`（`libavcodec/tests/dct.c` 亦以此为准）；随机系数由 FFmpeg 自己的 `av_lfg`（`libavutil/lfg.c`，seed 1）与 `init_block()` 生成，**复刻 FATE `fate-idct8x8-0/1/2` 的方法**；判据逐字取自 `dct.c`（`err_inf ≤ 1`、`omse ≤ 0.02`、`|ome| ≤ 0.0015`），SIMPLE-C 8/10/12 三档均满足；另有 DC-only 块对照参考、以及 `av_clip_uint8`/扫描表置换的手推值 |
+| huffman | `tests/ref/fate/` 无 `huffman.c` 的数值向量（`fate-libavcodec-huffman` 实测的是另一套 `mjpegenc_huffman.c`）。采用：① Kraft 等和 `Σ2^-len == 1`；② 与**独立教科书两队列 Huffman** 的加权路径长相等（最优性）；③ FFmpeg 自带两套独立实现 `ff_huff_build_tree` 与 `ff_huff_gen_len_table` 互证；④ 编→解往返；⑤ 手推教科书样例（频次 1,1,2,4 → 码长 {1,2,3,3}）；⑥ `sum >> 31` 的过高频次拒绝 |
 
 补充交叉校验：分块更新与一次性计算等价（CRC / Adler-32 / MD5 / SHA）、增量 MD5、
 Base64 截断输出行为与非法输入检测。
@@ -164,7 +200,7 @@ Base64 截断输出行为与非法输入检测。
 ```bash
 cd moonbit
 moon check     # 0 error / 0 warning
-moon test      # 77/77 passed
+moon test      # 87/87 passed
 ```
 
 ---
@@ -207,9 +243,15 @@ SIMD 内核保留在 C 侧。
    （余 `saiz`/`saio` 辅助信息与碎片内 `senc`）；余下 seek（`mov_seek_stream`）、`rap_group`
 5. 其他容器：Matroska/WebM、AVI、MPEG-TS（字节级解析优先）
 
-### 阶段 5 —— libavcodec
+### 阶段 5 —— libavcodec（**已开始**：IDCT + Huffman）
 只做纯 C 的编解码器（Huffman/VLC 表、LZO、部分无损编解码），
 SIMD 与汇编保持 C 实现并通过 FFI 调用。
+
+已完成 SIMPLE-C IDCT（`int16` 8/10/12 bit）与 `huffman.c` 的树/码长构建（见第 3 节）。后续：
+
+1. `vlc.c` 的 `ff_vlc_init_from_lengths` 表构建（当前只产出它需要的 `lens`/`xlat`）
+2. `jrevdct.c`（`FF_IDCT_INT`）、`faanidct.c`、`xvididct.c` 与 `idct248/84/48/44` 部分变换
+3. `lzo.c`、`golomb`/`cabac` 等熵编解码基础，再到具体编解码器（无损优先）
 
 ### 阶段 6 —— 公共 API 层与 fftools
 为已移植部分提供稳定的 MoonBit 公共 API，并提供 `extern "C"` 绑定层，
@@ -272,6 +314,12 @@ SIMD 与汇编保持 C 实现并通过 FFI 调用。
    起初漏读这 2 字节，使其后子 box（`esds`/`sinf`）整体错位；普通非加密文件因
    「跳过 entry 其余部分」而无感，但 cenc 的 `sinf` 永远读不到（`cenc_scheme` 为 0）。
    该问题由**真实文件交叉验证**（docker `ffmpeg:9.0.2` + `ffprobe`）暴露并修复。
+12. **`test` 是 MoonBit 保留字**：与其同名的参数/变量（如 `dct.c` 的 `init_block(..., int test, ...)`）
+   会触发大面积 `E3002` 解析错误并连带出无关告警；移植时改名为 `mode` 即可。
+13. **白盒测试专用依赖**：`moon.pkg` 里 `import { "…/libavutil", } for "wbtest"` 只对
+   `*_wbtest.mbt` 生效，避免非测试文件不使用依赖而触发 `unused_package` 告警。
+14. **行数统计口径**：`Get-Content $f | Measure-Object -Line` 会比 `(Get-Content $f).Count`
+   少计（末行无换行符时不计入）。本 README 统一用后者。
 
 ---
 

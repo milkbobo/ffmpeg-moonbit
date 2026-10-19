@@ -12,6 +12,9 @@
 - **libavutil**：数学/有理数、CRC/Adler-32、Base64、MD5、SHA-1/224/256、avstring、
   RC4、AES(ECB/CBC)、XTEA、TEA、Blowfish、CAST-128、AES-CTR
 - **libavformat**：内存字节读取器 + MP4/MOV 解复用切片（box 遍历 + 采样表索引）
+- **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
+  `huffman.c` 的树/码长构建（`ff_huff_build_tree`/`ff_huff_gen_len_table`）+ 规范化
+  Huffman 码的编/解码
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手；SIMD/汇编/线程/平台代码不翻译，
 留待 `extern "C"` FFI 复用（见 §8）。
@@ -26,7 +29,7 @@
 | git 仓库 | `d:\project\FFmpeg-n9.0.2\moonbit`（分支 `master`，**未配置远端**） |
 | 忽略项 | `_build/`（`.gitignore` 已含；勿提交） |
 | 模块名 | `ffmpeg/moonbit`，`preferred_target = "wasm"` |
-| 包 | `ffmpeg/moonbit/libavutil`、`ffmpeg/moonbit/libavformat`（后者依赖前者） |
+| 包 | `ffmpeg/moonbit/libavutil`、`ffmpeg/moonbit/libavformat`、`ffmpeg/moonbit/libavcodec`（后两者依赖 libavutil；libavcodec 的 libavutil 依赖仅白盒测试用） |
 
 > ⚠️ 提交前 `git status` 应在 `moonbit/` 下执行；FFmpeg 根目录不是仓库。
 
@@ -94,6 +97,10 @@ $msg | git commit -F -
   逐 packet 比对。范本见 `libavformat/mp4_real_wbtest.mbt`（文件 base64 内嵌 + 生成命令）。
   cenc 文件可用 `-encryption_scheme cenc-aes-ctr -encryption_key … -encryption_kid …`
   生成，再以已知密钥解密核对明文样本。
+- **无 FATE 数值向量时（如 `libavcodec/huffman.c`）**：用「期望值由 FFmpeg 自己的另一实现产生」
+  或「能被数学性质唯一确定的量」作判据 —— 例如 Huffman 用 Kraft 等和 `Σ2^-len == 1` +
+  与独立教科书两队列法的最优代价相等 + FFmpeg 两套实现互证 + 编解码往返；IDCT 则对照
+  FFmpeg 自带的双精度参考 `libavcodec/dctref.c`，判据照抄 `libavcodec/tests/dct.c`。
 - **测试失败先怀疑自己的期望值**：本项目已多次出现「实现正确、期望写错」的情况
   （如 `av_strcasecmp` 返回值、`av_strlcat` 预算不足返回所需长度、`av_match_name` 的
   首命中短路语义）。先回到 C 源码重推。
@@ -122,6 +129,13 @@ $msg | git commit -F -
 - `UInt` 是 **32 位回绕算术**（SHA、各分组密码的 `+ - * <<` 均依赖此语义）。
 - **十六进制字面量前缀必须小写 `0x`**（`0X` 不被识别）。
 - 未使用的循环计数变量**不会**告警，C 风格 `for i = 0; i < n; i = i + 1` 可安全照搬。
+- **`test` 是保留字**，不能作参数/变量名（否则报大片 `E3002` 解析错误并连带无关告警），
+  移植 `dct.c` 之类含 `int test` 的函数时改名（如 `mode`）。
+- **白盒测试专用依赖**用 `moon.pkg` 的 `import { "…" } for "wbtest"`；写成普通 `import`
+  会因非测试文件不使用该包而触发 `unused_package` 告警。
+- **core 包**：`Double::sqrt`（方法）可用；`floor`/`round`/`ceil` 可用方法或 `@math.*`；
+  `@math.cos` 等数学函数需在 `moon.pkg` 里 `import { "moonbitlang/core/math" }`（别名为 `@math`）。
+- **行数统计口径**：`Get-Content $f | Measure-Object -Line` 会少计，统一用 `(Get-Content $f).Count`。
 
 ---
 
@@ -185,11 +199,18 @@ moonbit/                      # git 仓库根
 │   ├── moon.pkg
 │   ├── *.mbt                 # 各纯算法模块
 │   └── *_wbtest.mbt          # 白盒测试（含 cipher_wbtest.mbt 汇总各密码）
-└── libavformat/              # 包 ffmpeg/moonbit/libavformat（依赖 libavutil）
+├── libavformat/              # 包 ffmpeg/moonbit/libavformat（依赖 libavutil）
+│   ├── moon.pkg
+│   ├── reader.mbt            # 内存字节读取器
+│   ├── mov.mbt               # MP4/MOV 解复用切片
+│   └── mp4_wbtest.mbt
+└── libavcodec/               # 包 ffmpeg/moonbit/libavcodec（@math + libavutil 仅白盒测试用）
     ├── moon.pkg
-    ├── reader.mbt            # 内存字节读取器
-    ├── mov.mbt               # MP4/MOV 解复用切片
-    └── mp4_wbtest.mbt
+    ├── idct.mbt              # SIMPLE-C IDCT + idctdsp 辅助
+    ├── dctref.mbt            # 双精度参考 DCT/IDCT（IDCT 测试的期望值来源）
+    ├── huffman.mbt           # Huffman 树/码长 + 规范化码编解码
+    ├── idct_wbtest.mbt
+    └── huffman_wbtest.mbt
 ```
 
 ---
