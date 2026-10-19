@@ -13,12 +13,21 @@
 ///   * per sample: file offset, size, DTS, duration, presentation timestamp,
 ///     keyframe and `min_distance` flags -- mirroring what FFmpeg stores in
 ///     `AVIndexEntry` and later reports in `AVPacket`.
+///   * fragmented MP4: `moof`/`traf`/`tfhd`/`tfdt`/`trun`/`trex` are parsed to
+///     append per-sample entries to the matching track (base-data-offset /
+///     default-base-is-moof, tfdt-driven DTS, per-sample duration/size/flags/
+///     CTS). `sidx`/`mfra` seeking and the fragment overlap-discard pass are
+///     not ported.
+///   * encryption (`cenc`): `sinf`/`schm`/`tenc` (scheme, pattern, per-sample
+///     IV size, constant IV) and `senc` (per-sample IV + subsample map) are
+///     parsed, and `mov_decrypt_sample` unwraps a sample for the
+///     `cenc`/`cbc1`/`cens`/`cbcs` schemes with a caller-supplied key.
+///     `saiz`/`saio` auxiliary info and per-fragment `senc` are not ported.
 ///   * not ported: AVIO/AVPacket/AVFormatContext plumbing (this parser works on
-///     an in-memory buffer the caller has already read), fragmented MP4
-///     (`moof`/`trun`), encryption (`cenc`), seeking, the chunked
+///     an in-memory buffer the caller has already read), seeking, the chunked
 ///     "old uncompressed audio" index path, `rap_group` (sgpd/sbgp),
 ///     codec-specific extradata (`avcC`, `esds`, ...) and `advanced_editlist`.
-///   * simplifications: per-sample timestamps are materialised up front instead
+///   * simplified: per-sample timestamps are materialised up front instead
 ///     of being consulted lazily, the `free`/`hoov`-hiding-`moov` recovery is
 ///     omitted, and corrupt-count guards are tightened relative to the C code.
 
@@ -139,6 +148,13 @@ pub struct Mp4Track {
   mut stsd_version : UInt
   mut dts_shift : Int
   mut time_offset : Int64
+  mut track_end : Int64
+  mut cenc_scheme : UInt
+  mut cenc_per_sample_iv_size : Int
+  mut cenc_crypt_byte_block : UInt
+  mut cenc_skip_byte_block : UInt
+  mut cenc_default_iv : FixedArray[Byte]
+  cenc_samples : Array[MovEncSample?]
   mut tts : Array[MovTts]
   mut has_stts : Bool
   mut has_ctts : Bool
@@ -184,6 +200,13 @@ fn new_track() -> Mp4Track {
     stsd_version: 0,
     dts_shift: 0,
     time_offset: 0,
+    track_end: 0,
+    cenc_scheme: 0,
+    cenc_per_sample_iv_size: 0,
+    cenc_crypt_byte_block: 0,
+    cenc_skip_byte_block: 0,
+    cenc_default_iv: FixedArray::make(16, b'\x00'),
+    cenc_samples: [],
     tts: [],
     has_stts: false,
     has_ctts: false,
@@ -207,6 +230,120 @@ let u64_max : UInt64 = 0xFFFFFFFFFFFFFFFF
 
 ///| `INT64_MAX`, used as the "no next chunk" sentinel in `mov_build_index`. */
 let i64_max : Int64 = 0x7FFFFFFFFFFFFFFF
+
+// Fragment flags, from libavformat/isom.h.
+
+///| `MOV_TFHD_BASE_DATA_OFFSET`. */
+let tfhd_base_data_offset : UInt = 0x000001
+
+///| `MOV_TFHD_STSD_ID`. */
+let tfhd_stsd_id : UInt = 0x000002
+
+///| `MOV_TFHD_DEFAULT_DURATION`. */
+let tfhd_default_duration : UInt = 0x000008
+
+///| `MOV_TFHD_DEFAULT_SIZE`. */
+let tfhd_default_size : UInt = 0x000010
+
+///| `MOV_TFHD_DEFAULT_FLAGS`. */
+let tfhd_default_flags : UInt = 0x000020
+
+///| `MOV_TFHD_DEFAULT_BASE_IS_MOOF`. */
+let tfhd_default_base_is_moof : UInt = 0x020000
+
+///| `MOV_TRUN_DATA_OFFSET`. */
+let trun_data_offset : UInt = 0x0001
+
+///| `MOV_TRUN_FIRST_SAMPLE_FLAGS`. */
+let trun_first_sample_flags : UInt = 0x0004
+
+///| `MOV_TRUN_SAMPLE_DURATION`. */
+let trun_sample_duration : UInt = 0x0100
+
+///| `MOV_TRUN_SAMPLE_SIZE`. */
+let trun_sample_size : UInt = 0x0200
+
+///| `MOV_TRUN_SAMPLE_FLAGS`. */
+let trun_sample_flags : UInt = 0x0400
+
+///| `MOV_TRUN_SAMPLE_CTS`. */
+let trun_sample_cts : UInt = 0x0800
+
+///| `MOV_FRAG_SAMPLE_FLAG_IS_NON_SYNC`. */
+let frag_sample_flag_is_non_sync : UInt = 0x00010000
+
+///| `MOV_FRAG_SAMPLE_FLAG_DEPENDS_YES`. */
+let frag_sample_flag_depends_yes : UInt = 0x01000000
+
+// Encryption scheme fourccs, `MKBETAG('c','e','n','c')` etc.
+
+///| `cenc` (AES-CTR, full sample). */
+let schm_cenc : UInt = 0x63656E63
+
+///| `cens` (AES-CTR with pattern). */
+let schm_cens : UInt = 0x63656E73
+
+///| `cbc1` (AES-CBC, full sample). */
+let schm_cbc1 : UInt = 0x63626331
+
+///| `cbcs` (AES-CBC with pattern). */
+let schm_cbcs : UInt = 0x63626373
+
+///| `MOVTrackExt` from libavformat/isom.h, parsed from a `trex` box. */
+priv struct MovTrex {
+  track_id : UInt
+  duration : UInt
+  size : UInt
+  flags : UInt
+}
+
+///|
+/// `MOVFragment` from libavformat/isom.h: the current `moof`/`traf` header
+/// state shared across the `tfhd`/`tfdt`/`trun` boxes of one track fragment.
+/// `stsd_id` is dropped because this slice models only the primary sample
+/// description (no `pseudo_stream_id` filtering).
+priv struct MovFrag {
+  mut found_tfhd : Bool
+  mut track_id : UInt
+  mut base_data_offset : Int64
+  mut moof_offset : Int64
+  mut implicit_offset : Int64
+  mut duration : UInt
+  mut size : UInt
+  mut flags : UInt
+  mut tfdt : Int64
+  mut has_tfdt : Bool
+}
+
+///| Zero-valued initial fragment state. */
+fn new_frag() -> MovFrag {
+  {
+    found_tfhd: false,
+    track_id: 0,
+    base_data_offset: 0,
+    moof_offset: 0,
+    implicit_offset: 0,
+    duration: 0,
+    size: 0,
+    flags: 0,
+    tfdt: 0,
+    has_tfdt: false,
+  }
+}
+
+///| `AVSubsampleEncryptionInfo` from libavutil/encryption_info.h. */
+pub struct MovSubSample {
+  bytes_of_clear : Int
+  bytes_of_protected : Int
+}
+
+///|
+/// Per-sample (or default) `AVEncryptionInfo` subset used by the cenc path:
+/// a zero-padded 16-byte IV plus the optional subsample map.
+pub struct MovEncSample {
+  iv : FixedArray[Byte]
+  subsamples : Array[MovSubSample]
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -267,6 +404,8 @@ priv struct MovState {
   movie : Mp4Movie
   mut cur : Mp4Track
   mut in_trak : Bool
+  trex : Array[MovTrex]
+  frag : MovFrag
 }
 
 ///|
@@ -276,9 +415,26 @@ priv struct MovState {
 fn parse_box(st : MovState, r : Mp4Reader, kind : String, size : Int64) -> Unit raise MovError {
   if kind == "trak" {
     parse_trak(st, r, size)
-  } else if kind == "moov" || kind == "mdia" || kind == "minf" || kind == "stbl" || kind == "edts" {
-    // Container boxes: recurse, as mov_read_moov/mdia/minf/stbl/edts do.
+  } else if kind == "moof" {
+    parse_moof(st, r, size)
+  } else if kind == "moov" || kind == "mdia" || kind == "minf" || kind == "stbl" || kind == "edts" ||
+    kind == "mvex" || kind == "traf" || kind == "sinf" || kind == "schi" {
+    // Container boxes: recurse, as mov_read_moov/mdia/minf/stbl/edts/mvex/traf/sinf/schi do.
     parse_default(st, r, size)
+  } else if kind == "tfhd" {
+    parse_tfhd(st, r)
+  } else if kind == "tfdt" {
+    parse_tfdt(st, r)
+  } else if kind == "trun" {
+    parse_trun(st, r, size)
+  } else if kind == "trex" {
+    parse_trex(st, r)
+  } else if kind == "schm" {
+    parse_schm(st, r)
+  } else if kind == "tenc" {
+    parse_tenc(st, r, size)
+  } else if kind == "senc" {
+    parse_senc(st, r)
   } else if kind == "ftyp" {
     parse_ftyp(st, r)
   } else if kind == "mvhd" {
@@ -559,10 +715,18 @@ fn parse_stsd(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
   } else if media_is_audio(st.cur.media_type) {
     parse_stsd_audio(st, r)
   }
-  // Skip the remainder of this entry (avcC/esds/wave/... extradata).
+  // Parse the child boxes of the sample entry (`sinf`/`avcC`/`esds`/`wave`/...);
+  // unknown boxes are skipped by parse_box. This is what lets `sinf`/`schm`/
+  // `tenc` inside an encrypted sample entry be seen.
   let used = r.position().to_int64() - entry_start
   if entry_size > used {
-    r.skip(entry_size - used)
+    let child_size = entry_size - used
+    let child_start = r.position()
+    parse_default(st, r, child_size)
+    let consumed = r.position() - child_start
+    if consumed < child_size.to_int() {
+      r.skip((child_size - consumed.to_int64()))
+    }
   }
   for i = 1; i < entries; i = i + 1 {
     let s = r.read_u32().to_int64()
@@ -603,7 +767,10 @@ fn parse_stsd_video(st : MovState, r : Mp4Reader) -> Unit {
   if len < 31 {
     r.skip((31 - len).to_int64())
   }
-  st.cur.bits_per_sample = r.read_u16()
+  st.cur.bits_per_sample = r.read_u16() // depth
+  // ISO VisualSampleEntry ends with `pre_defined = -1` (QuickTime writes
+  // `color_table_id` here); the child boxes (avcC/esds/sinf/...) follow it.
+  r.skip(2)
 }
 
 ///| `mov_parse_stsd_audio`: AudioSampleEntry fields (the 16 header bytes are already read). */
@@ -916,6 +1083,586 @@ fn parse_trak(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError
 }
 
 // ---------------------------------------------------------------------------
+// Fragmented MP4 (moof / traf / tfhd / tfdt / trun / trex)
+// ---------------------------------------------------------------------------
+
+///| Look up a track by `track_id`, as mov_read_tfdt/trun do. */
+fn mov_find_track(st : MovState, id : UInt) -> Mp4Track? {
+  for i = 0; i < st.movie.tracks.length(); i = i + 1 {
+    if st.movie.tracks[i].track_id == id {
+      return Some(st.movie.tracks[i])
+    }
+  }
+  None
+}
+
+///|
+/// `mov_update_dts_shift`: a negative CTS offset raises the stream-wide
+/// `dts_shift` so that presentation timestamps stay non-negative.
+fn mov_update_dts_shift(track : Mp4Track, duration : Int) -> Unit {
+  if duration < 0 {
+    let d : Int64 = duration.to_int64()
+    let mag : Int64 = if d == -2147483648 { 2147483647 } else { -d }
+    if mag.to_int() > track.dts_shift {
+      track.dts_shift = mag.to_int()
+    }
+  }
+}
+
+///| `mov_read_trex`: one track's fragment defaults. */
+fn parse_trex(st : MovState, r : Mp4Reader) -> Unit {
+  let _ = r.read_u8() // version
+  let _ = r.read_u24() // flags
+  let track_id = r.read_u32()
+  let _ = r.read_u32() // stsd_id (primary description only in this slice)
+  let duration = r.read_u32()
+  let size = r.read_u32()
+  let flags = r.read_u32()
+  st.trex.push({ track_id, duration, size, flags })
+}
+
+///| `mov_read_moof`: reset fragment state and recurse into `traf`. */
+fn parse_moof(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+  st.frag.found_tfhd = false
+  st.frag.has_tfdt = false
+  let off = r.position().to_int64() - 8
+  st.frag.moof_offset = off
+  st.frag.implicit_offset = off
+  parse_default(st, r, size)
+}
+
+///| `mov_read_tfhd`: track fragment header; merges `trex` defaults. */
+fn parse_tfhd(st : MovState, r : Mp4Reader) -> Unit {
+  let _ = r.read_u8() // version
+  let flags = r.read_u24()
+  let track_id = r.read_u32()
+  if track_id == 0 {
+    return
+  }
+  let mut trex_opt : MovTrex? = None
+  for i = 0; i < st.trex.length(); i = i + 1 {
+    if st.trex[i].track_id == track_id {
+      trex_opt = Some(st.trex[i])
+    }
+  }
+  match trex_opt {
+    None => ()
+    Some(trex) => {
+      st.frag.found_tfhd = true
+      st.frag.track_id = track_id
+      st.frag.base_data_offset = if (flags & tfhd_base_data_offset) != 0 {
+        r.read_u64().reinterpret_as_int64()
+      } else if (flags & tfhd_default_base_is_moof) != 0 {
+        st.frag.moof_offset
+      } else {
+        st.frag.implicit_offset
+      }
+      if (flags & tfhd_stsd_id) != 0 {
+        let _ = r.read_u32() // stsd_id (primary description only in this slice)
+      }
+      st.frag.duration = if (flags & tfhd_default_duration) != 0 {
+        r.read_u32()
+      } else {
+        trex.duration
+      }
+      st.frag.size = if (flags & tfhd_default_size) != 0 {
+        r.read_u32()
+      } else {
+        trex.size
+      }
+      st.frag.flags = if (flags & tfhd_default_flags) != 0 {
+        r.read_u32()
+      } else {
+        trex.flags
+      }
+    }
+  }
+}
+
+///| `mov_read_tfdt`: base media decode time for the current track fragment. */
+fn parse_tfdt(st : MovState, r : Mp4Reader) -> Unit {
+  let version = r.read_u8()
+  let _ = r.read_u24() // flags
+  let bmdt : Int64 = if version != 0 {
+    r.read_u64().reinterpret_as_int64()
+  } else {
+    r.read_u32().to_int64()
+  }
+  st.frag.tfdt = bmdt
+  st.frag.has_tfdt = true
+  match mov_find_track(st, st.frag.track_id) {
+    Some(track) => track.track_end = bmdt
+    None => ()
+  }
+}
+
+///|
+/// `mov_read_trun`: append one track fragment's samples to the matching track,
+/// mirroring the sample-index construction of the C code (DTS from tfdt/track
+/// end, per-sample duration/size/flags/CTS, keyframe from the fragment flags).
+fn parse_trun(st : MovState, r : Mp4Reader, size : Int64) -> Unit raise MovError {
+  if !st.frag.found_tfhd {
+    raise InvalidData("trun without tfhd")
+  }
+  match mov_find_track(st, st.frag.track_id) {
+    None => ()
+    Some(track) => {
+      let _ = r.read_u8() // version
+      let flags = r.read_u24()
+      let mut entries = r.read_u32().reinterpret_as_int()
+      let mut data_offset : Int = 0
+      if (flags & trun_data_offset) != 0 {
+        data_offset = r.read_u32().reinterpret_as_int()
+      }
+      let mut first_sample_flags = st.frag.flags
+      if (flags & trun_first_sample_flags) != 0 {
+        first_sample_flags = r.read_u32()
+      }
+      // Bound the entry count to what the atom can still hold.
+      let opt_bytes = (if (flags & trun_data_offset) != 0 { 4 } else { 0 }) +
+        (if (flags & trun_first_sample_flags) != 0 { 4 } else { 0 })
+      let entry_size = (if (flags & trun_sample_duration) != 0 { 4 } else { 0 }) +
+        (if (flags & trun_sample_size) != 0 { 4 } else { 0 }) +
+        (if (flags & trun_sample_flags) != 0 { 4 } else { 0 }) +
+        (if (flags & trun_sample_cts) != 0 { 4 } else { 0 })
+      if entry_size > 0 {
+        let left = size - 8 - opt_bytes.to_int64()
+        let max_entries = if left < 0 { 0L } else { left / entry_size.to_int64() }
+        if entries.to_int64() > max_entries {
+          entries = max_entries.to_int()
+        }
+      }
+      if (flags & trun_sample_cts) != 0 {
+        track.has_ctts = true
+      }
+      let has_ctts = track.has_ctts
+      let base_dts = if st.frag.has_tfdt { st.frag.tfdt } else { track.track_end }
+      let mut dts = base_dts - track.time_offset
+      let mut offset = st.frag.base_data_offset + data_offset.to_int64()
+      let mut distance : UInt = 0
+      for i = 0; i < entries; i = i + 1 {
+        if r.eof_reached() {
+          break
+        }
+        let mut sample_size = st.frag.size
+        let mut sample_flags = if i != 0 { st.frag.flags } else { first_sample_flags }
+        let mut sample_duration = st.frag.duration
+        let mut ctts : Int = 0
+        if (flags & trun_sample_duration) != 0 {
+          sample_duration = r.read_u32()
+        }
+        if (flags & trun_sample_size) != 0 {
+          sample_size = r.read_u32()
+        }
+        if (flags & trun_sample_flags) != 0 {
+          sample_flags = r.read_u32()
+        }
+        if (flags & trun_sample_cts) != 0 {
+          ctts = r.read_u32().reinterpret_as_int()
+        }
+        mov_update_dts_shift(track, ctts)
+        let keyframe = (sample_flags &
+          (frag_sample_flag_is_non_sync | frag_sample_flag_depends_yes)) == 0
+        if keyframe {
+          distance = 0
+        }
+        let pts = if has_ctts {
+          dts + track.dts_shift.to_int64() + ctts.to_int64()
+        } else {
+          dts
+        }
+        track.samples.push({
+          offset,
+          size: sample_size,
+          dts,
+          pts,
+          duration: sample_duration,
+          keyframe,
+          min_distance: distance,
+        })
+        distance = distance + 1
+        dts = dts + sample_duration.to_int64()
+        offset = offset + sample_size.to_int64()
+      }
+      st.frag.implicit_offset = offset
+      track.track_end = dts + track.time_offset
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Encryption (cenc / sinf / schm / tenc / senc)
+// ---------------------------------------------------------------------------
+
+///| `mov_read_schm`: the protection scheme fourcc. */
+fn parse_schm(st : MovState, r : Mp4Reader) -> Unit {
+  if !st.in_trak {
+    return
+  }
+  let _ = r.read_u32() // version and flags
+  st.cur.cenc_scheme = r.read_u32()
+}
+
+///| `mov_read_tenc`: pattern, per-sample IV size, default KID and constant IV. */
+fn parse_tenc(st : MovState, r : Mp4Reader, size : Int64) -> Unit {
+  if !st.in_trak {
+    return
+  }
+  if size < 20 {
+    return
+  }
+  let version = r.read_u8()
+  let _ = r.read_u24() // flags
+  let _ = r.read_u8() // reserved
+  let pattern = r.read_u8()
+  if version > 0 {
+    st.cur.cenc_crypt_byte_block = pattern >> 4
+    st.cur.cenc_skip_byte_block = pattern & 0xF
+  }
+  let is_protected = r.read_u8()
+  let iv_size = r.read_u8().reinterpret_as_int()
+  st.cur.cenc_per_sample_iv_size = iv_size
+  for i = 0; i < 16; i = i + 1 {
+    // Default key ID; not needed when the key is supplied directly.
+    let _ = r.read_u8()
+  }
+  if is_protected != 0 && iv_size == 0 {
+    let constant_size = r.read_u8().reinterpret_as_int()
+    let iv = FixedArray::make(16, b'\x00')
+    let n = if constant_size < 16 { constant_size } else { 16 }
+    for i = 0; i < n; i = i + 1 {
+      iv[i] = r.read_u8().to_byte()
+    }
+    st.cur.cenc_default_iv = iv
+  }
+}
+
+///|
+/// `mov_read_senc`: per-sample IVs (and optional subsample maps). Each entry is
+/// stored positionally so it lines up with the track's sample index.
+fn parse_senc(st : MovState, r : Mp4Reader) -> Unit {
+  if !st.in_trak {
+    return
+  }
+  let _ = r.read_u8() // version
+  let flags = r.read_u24()
+  let use_subsamples = (flags & 0x02) != 0
+  let sample_count = r.read_u32().reinterpret_as_int()
+  let per_iv = st.cur.cenc_per_sample_iv_size
+  for i = 0; i < sample_count; i = i + 1 {
+    if r.eof_reached() {
+      break
+    }
+    if per_iv != 0 || use_subsamples {
+      let iv = FixedArray::make(16, b'\x00')
+      if per_iv != 0 {
+        for k = 0; k < per_iv; k = k + 1 {
+          iv[k] = r.read_u8().to_byte()
+        }
+      }
+      let subs : Array[MovSubSample] = []
+      if use_subsamples {
+        let n = r.read_u16().reinterpret_as_int()
+        for k = 0; k < n; k = k + 1 {
+          if r.eof_reached() {
+            break
+          }
+          let clear = r.read_u16().reinterpret_as_int()
+          let prot = r.read_u32().reinterpret_as_int()
+          subs.push({ bytes_of_clear: clear, bytes_of_protected: prot })
+        }
+      }
+      st.cur.cenc_samples.push(Some({ iv, subsamples: subs }))
+    } else {
+      st.cur.cenc_samples.push(None)
+    }
+  }
+}
+
+///|
+/// `cenc_scheme_decrypt`: AES-CTR over the whole sample or over each protected
+/// subrange (the keystream keeps advancing across subranges).
+fn cenc_ctr_decrypt(
+  key : Bytes,
+  iv : FixedArray[Byte],
+  subs : Array[MovSubSample],
+  out : Array[Byte],
+  size : Int
+) -> Result[Unit, String] {
+  let ctx = @libavutil.av_aes_ctr_alloc()
+  match @libavutil.av_aes_ctr_init(ctx, key) {
+    Err(e) => return Err(e)
+    Ok(_) => ()
+  }
+  @libavutil.av_aes_ctr_set_full_iv(ctx, Bytes::from_array(iv[:]))
+  if subs.length() == 0 {
+    let enc = @libavutil.av_aes_ctr_crypt(ctx, Bytes::from_array(out[:]), size)
+    for i = 0; i < size; i = i + 1 {
+      out[i] = enc[i]
+    }
+    return Ok(())
+  }
+  let mut pos = 0
+  for i = 0; i < subs.length(); i = i + 1 {
+    let clear = subs[i].bytes_of_clear
+    let prot = subs[i].bytes_of_protected
+    if clear + prot > size - pos {
+      return Err("subsample exceeds packet")
+    }
+    pos = pos + clear
+    let enc = @libavutil.av_aes_ctr_crypt(
+      ctx,
+      Bytes::from_array(out[pos:pos + prot]),
+      prot,
+    )
+    for j = 0; j < prot; j = j + 1 {
+      out[pos + j] = enc[j]
+    }
+    pos = pos + prot
+  }
+  if pos != size {
+    return Err("leftover packet bytes")
+  }
+  Ok(())
+}
+
+///|
+/// `cbc1_scheme_decrypt`: AES-CBC over whole 16-byte blocks, IV chained across
+/// subranges via a single running `iv` buffer.
+fn cenc_cbc_decrypt(
+  key : Bytes,
+  iv : FixedArray[Byte],
+  subs : Array[MovSubSample],
+  out : Array[Byte],
+  size : Int
+) -> Result[Unit, String] {
+  let aes = @libavutil.av_aes_alloc()
+  match @libavutil.av_aes_init(aes, key, 128, true) {
+    Err(e) => return Err(e)
+    Ok(_) => ()
+  }
+  let ivbuf : FixedArray[Byte] = iv.copy()
+  if subs.length() == 0 {
+    let blocks = size / 16
+    let dec = @libavutil.av_aes_crypt(aes, Bytes::from_array(out[:]), blocks, Some(ivbuf))
+    for i = 0; i < blocks * 16; i = i + 1 {
+      out[i] = dec[i]
+    }
+    return Ok(())
+  }
+  let mut pos = 0
+  for i = 0; i < subs.length(); i = i + 1 {
+    let clear = subs[i].bytes_of_clear
+    let prot = subs[i].bytes_of_protected
+    if clear + prot > size - pos {
+      return Err("subsample exceeds packet")
+    }
+    if prot % 16 != 0 {
+      return Err("subsample not a multiple of 16")
+    }
+    pos = pos + clear
+    let blocks = prot / 16
+    if blocks > 0 {
+      let dec = @libavutil.av_aes_crypt(
+        aes,
+        Bytes::from_array(out[pos:pos + prot]),
+        blocks,
+        Some(ivbuf),
+      )
+      for j = 0; j < blocks * 16; j = j + 1 {
+        out[pos + j] = dec[j]
+      }
+    }
+    pos = pos + prot
+  }
+  if pos != size {
+    return Err("leftover packet bytes")
+  }
+  Ok(())
+}
+
+///| `cens_scheme_decrypt`: AES-CTR with a crypt/skip block pattern. */
+fn cens_decrypt(
+  key : Bytes,
+  iv : FixedArray[Byte],
+  subs : Array[MovSubSample],
+  cb : UInt,
+  sb : UInt,
+  out : Array[Byte],
+  size : Int
+) -> Result[Unit, String] {
+  let ctx = @libavutil.av_aes_ctr_alloc()
+  match @libavutil.av_aes_ctr_init(ctx, key) {
+    Err(e) => return Err(e)
+    Ok(_) => ()
+  }
+  @libavutil.av_aes_ctr_set_full_iv(ctx, Bytes::from_array(iv[:]))
+  if subs.length() == 0 {
+    let enc = @libavutil.av_aes_ctr_crypt(ctx, Bytes::from_array(out[:]), size)
+    for i = 0; i < size; i = i + 1 {
+      out[i] = enc[i]
+    }
+    return Ok(())
+  }
+  if cb == 0 && sb == 0 {
+    return Err("pattern missing in cens")
+  }
+  let cbb = cb.reinterpret_as_int() * 16
+  let sbb = sb.reinterpret_as_int() * 16
+  let mut pos = 0
+  for i = 0; i < subs.length(); i = i + 1 {
+    let clear = subs[i].bytes_of_clear
+    let prot = subs[i].bytes_of_protected
+    if clear + prot > size - pos {
+      return Err("subsample exceeds packet")
+    }
+    pos = pos + clear
+    let mut rem = prot
+    let mut d = pos
+    while rem > 0 {
+      if rem < cbb {
+        break
+      }
+      let enc = @libavutil.av_aes_ctr_crypt(
+        ctx,
+        Bytes::from_array(out[d:d + cbb]),
+        cbb,
+      )
+      for j = 0; j < cbb; j = j + 1 {
+        out[d + j] = enc[j]
+      }
+      d = d + cbb
+      rem = rem - cbb
+      let sk = if sbb < rem { sbb } else { rem }
+      d = d + sk
+      rem = rem - sk
+    }
+    pos = pos + prot
+  }
+  if pos != size {
+    return Err("leftover packet bytes")
+  }
+  Ok(())
+}
+
+///| `cbcs_scheme_decrypt`: AES-CBC with a crypt/skip block pattern; the IV resets per subsample. */
+fn cbcs_decrypt(
+  key : Bytes,
+  iv : FixedArray[Byte],
+  subs : Array[MovSubSample],
+  cb : UInt,
+  sb : UInt,
+  out : Array[Byte],
+  size : Int
+) -> Result[Unit, String] {
+  let aes = @libavutil.av_aes_alloc()
+  match @libavutil.av_aes_init(aes, key, 128, true) {
+    Err(e) => return Err(e)
+    Ok(_) => ()
+  }
+  if subs.length() == 0 {
+    let ivbuf : FixedArray[Byte] = iv.copy()
+    let blocks = size / 16
+    let dec = @libavutil.av_aes_crypt(aes, Bytes::from_array(out[:]), blocks, Some(ivbuf))
+    for i = 0; i < blocks * 16; i = i + 1 {
+      out[i] = dec[i]
+    }
+    return Ok(())
+  }
+  if cb == 0 && sb == 0 {
+    return Err("pattern missing in cbcs")
+  }
+  let cbb = cb.reinterpret_as_int() * 16
+  let sbb = sb.reinterpret_as_int() * 16
+  let cblocks = cb.reinterpret_as_int()
+  let mut pos = 0
+  for i = 0; i < subs.length(); i = i + 1 {
+    let clear = subs[i].bytes_of_clear
+    let prot = subs[i].bytes_of_protected
+    if clear + prot > size - pos {
+      return Err("subsample exceeds packet")
+    }
+    pos = pos + clear
+    let ivbuf : FixedArray[Byte] = iv.copy()
+    let mut rem = prot
+    let mut d = pos
+    while rem > 0 {
+      if rem < cbb {
+        break
+      }
+      let dec = @libavutil.av_aes_crypt(
+        aes,
+        Bytes::from_array(out[d:d + cbb]),
+        cblocks,
+        Some(ivbuf),
+      )
+      for j = 0; j < cbb; j = j + 1 {
+        out[d + j] = dec[j]
+      }
+      d = d + cbb
+      rem = rem - cbb
+      let sk = if sbb < rem { sbb } else { rem }
+      d = d + sk
+      rem = rem - sk
+    }
+    pos = pos + prot
+  }
+  if pos != size {
+    return Err("leftover packet bytes")
+  }
+  Ok(())
+}
+
+///|
+/// `cenc_decrypt`: decrypt one sample's payload. The scheme, pattern, IV and
+/// subsample map come from the track's cenc metadata (`sinf`/`schm`/`tenc`/
+/// `senc`); `key` is the 16-byte AES-128 content key.
+///
+/// This slice wires the non-fragmented `senc` path; the per-sample info is
+/// looked up positionally, falling back to the `tenc` default (constant IV).
+pub fn mov_decrypt_sample(
+  track : Mp4Track,
+  index : Int,
+  key : Bytes,
+  payload : Bytes
+) -> Result[Bytes, String] {
+  if key.length() != 16 {
+    return Err("EINVAL")
+  }
+  let sel : MovEncSample? = if index >= 0 && index < track.cenc_samples.length() {
+    track.cenc_samples[index]
+  } else {
+    None
+  }
+  let enc : MovEncSample = match sel {
+    Some(e) => e
+    None => { iv: track.cenc_default_iv.copy(), subsamples: [] }
+  }
+  let iv = enc.iv
+  let subs = enc.subsamples
+  let scheme = track.cenc_scheme
+  let cb = track.cenc_crypt_byte_block
+  let sb = track.cenc_skip_byte_block
+  let out = payload.to_array()
+  let size = out.length()
+  let res = if scheme == schm_cenc && cb == 0 && sb == 0 {
+    cenc_ctr_decrypt(key, iv, subs, out, size)
+  } else if scheme == schm_cbc1 && cb == 0 && sb == 0 {
+    cenc_cbc_decrypt(key, iv, subs, out, size)
+  } else if scheme == schm_cens {
+    cens_decrypt(key, iv, subs, cb, sb, out, size)
+  } else if scheme == schm_cbcs {
+    cbcs_decrypt(key, iv, subs, cb, sb, out, size)
+  } else {
+    Err("invalid encryption scheme")
+  }
+  match res {
+    Err(e) => Err(e)
+    Ok(_) => Ok(Bytes::from_array(out))
+  }
+}
+
+// ---------------------------------------------------------------------------
 // mov_merge_tts_data and mov_build_index
 // ---------------------------------------------------------------------------
 
@@ -1134,7 +1881,13 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
 /// `Err`, mirroring the negative return codes in libavformat/mov.c.
 pub fn av_mov_open(buf : Bytes) -> Result[Mp4Movie, String] {
   let movie = new_movie()
-  let st : MovState = { movie, cur: new_track(), in_trak: false }
+  let st : MovState = {
+    movie,
+    cur: new_track(),
+    in_trak: false,
+    trex: [],
+    frag: new_frag(),
+  }
   let r = Mp4Reader::new(buf)
   let total = r.total_size().to_int64()
   try {

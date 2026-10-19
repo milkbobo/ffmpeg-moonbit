@@ -51,14 +51,15 @@ moonbit/
     ├── moon.pkg              # 声明对 ffmpeg/moonbit/libavutil 的依赖
     ├── reader.mbt            # 内存字节读取器（对应 avio_rb/rl/skip/tell/feof）
     ├── mov.mbt               # MP4/MOV 解复用器：box 遍历 + 采样表 → 每样本索引
-    └── mp4_wbtest.mbt        # 合成 MP4 构造器与白盒测试
+    ├── mp4_wbtest.mbt        # 合成 MP4 构造器与白盒测试
+    └── mp4_real_wbtest.mbt    # 真实文件交叉验证（docker ffmpeg/ffprobe，base64 内嵌）
 ```
 
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行，本次完成 MoonBit 源文件（`moonbit/**/*.mbt`，不含
-`_build` 生成文件）共 **7357 行**（libavutil 5267 行 + libavformat 的 MP4 解复用切片
-2090 行，两者均含白盒测试）—— 约占整体 **0.46%**。
+`_build` 生成文件）共 **8599 行**（libavutil 5267 行 + libavformat 的 MP4 解复用切片
+3332 行，两者均含白盒测试）—— 约占整体 **0.54%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端）
 
@@ -80,9 +81,9 @@ moonbit/
 | [cast5.mbt](libavutil/cast5.mbt) | `libavutil/cast5.c` | `AVCAST5`、`av_cast5_alloc`、`av_cast5_init`(40/80/128 位密钥 → `Km`/`Kr` 轮密钥，`Kr` 掩到 5 位)、`av_cast5_crypt`(ECB)、`av_cast5_crypt2`(CBC)。`F1/F2/F3` 轮函数与 `COMPUTE_Z/COMPUTE_X` 密钥调度；`S1`..`S8` 表由 C 源码逐值提取 | ✅ |
 | [aes_ctr.mbt](libavutil/aes_ctr.mbt) | `libavutil/aes_ctr.c` | `AVAESCTR`、`av_aes_ctr_alloc/init`、`av_aes_ctr_set_iv`(8 字节 IV+零计数器)、`av_aes_ctr_set_full_iv`/`get_iv`(16 字节)、`av_aes_ctr_increment_iv`(BE64 高位加一)、`av_aes_ctr_crypt`(keystream 缓存 + `block_offset` 跨调用状态，支持任意切分)。`set_random_iv` 依赖平台随机源，留待 FFI | ✅ |
 | [reader.mbt](libavformat/reader.mbt) | `avio_*` 子集 | `Mp4Reader`：`avio_r8/rb16/rb24/rb32/rb64/rl32`、`skip`/`seek`/`tell`/`feof` 语义（越界读返回 0 并置 eof，与 AVIO 一致） | ✅ |
-| [mov.mbt](libavformat/mov.mbt) | `libavformat/mov.c` | box 遍历 + `ftyp`/`mvhd`/`tkhd`/`mdhd`/`hdlr`/`elst`/`stsd`(视频/音频 sample entry)/`stts`/`ctts`/`stsc`/`stsz`/`stz2`/`stco`/`co64`/`stss`/`stps` 解析；`mov_merge_tts_data` 合并 + `mov_build_index` 采样索引 → 每样本 offset/size/DTS/PTS/duration/关键帧/`min_distance` | ✅ |
+| [mov.mbt](libavformat/mov.mbt) | `libavformat/mov.c` | box 遍历 + `ftyp`/`mvhd`/`tkhd`/`mdhd`/`hdlr`/`elst`/`stsd`(视频/音频 sample entry)/`stts`/`ctts`/`stsc`/`stsz`/`stz2`/`stco`/`co64`/`stss`/`stps` 解析；`mov_merge_tts_data` 合并 + `mov_build_index` 采样索引 → 每样本 offset/size/DTS/PTS/duration/关键帧/`min_distance`。**碎片化 MP4**：`moof`/`traf`/`tfhd`/`tfdt`/`trun`/`trex` 按 `default-base-is-moof` + `tfdt`/`track_end` 追加每样本索引，按 `trun` 采样标志判定关键帧。**cenc 加密**：`sinf`/`schm`/`tenc`/`senc` 解析 + `mov_decrypt_sample`（`cenc`/`cbc1`/`cens`/`cbcs`，基于 `aes_ctr`） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **71/71 通过**（libavutil 59 + MP4 12）。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **77/77 通过**（libavutil 59 + MP4 18）。
 
 ### AES 的唯一实现偏差（已记录）
 
@@ -103,10 +104,16 @@ moonbit/
   采样表全部展开为每样本索引，DTS/CTS 与 FFmpeg 的 `pkt->dts`/`pkt->pts`/`pkt->duration` 计算一致
   （含 `max_stts_delta` 裁剪、DTS 漂移修正、负 `ctts` 触发的 `dts_shift`、edit list 的
   `time_offset`、`stsc` 校验修复、`stz2` 的 MSB-first 4/8/16/32 位打包、64 位 box 长度与 `co64`）。
-- **未做**：fragmented MP4（`moof`/`trun`）、加密 `cenc`、seek、多 sample description 轨道、
-  音频特例（`stts` 单条目 duration==1 的旧式未压缩音频分块路径，遇到时置
-  `unsupported_audio_chunk_demux` 标志并产出空样本表）、`rap_group`(sgpd/sbgp)、
-  codec 私有 extradata（`avcC`/`esds`/`wave`）、`advanced_editlist`、muxer。
+- **已做（碎片化 MP4）**：`moof`/`traf`/`tfhd`/`tfdt`/`trun`/`trex`；按
+  `default-base-is-moof`（或显式 `base-data-offset`/`implicit_offset`）+ `tfdt` 驱动 DTS，
+  跨片段由 `track_end` 续接；按 `trun` 采样标志判定关键帧、按 `dts_shift` 计算 PTS。
+- **已做（cenc，部分）**：`sinf`/`schm`/`tenc`（方案、pattern、每样本 IV 大小与常量 IV）与
+  `senc`（每样本 IV + 子样本表）解析；`mov_decrypt_sample` 对 `cenc`/`cbc1`/`cens`/`cbcs`
+  四种方案解密单个样本（密钥由调用方提供）。
+- **未做**：`sidx`/`mfra` 的 seek 与片段重叠 `discard` 逻辑、`saiz`/`saio` 辅助信息与
+  碎片内 `senc`、seek、多 sample description 轨道、音频特例（`stts` 单条目 duration==1 的旧式
+  未压缩音频分块路径，遇到时置 `unsupported_audio_chunk_demux` 标志并产出空样本表）、
+  `rap_group`(sgpd/sbgp)、codec 私有 extradata（`avcC`/`esds`/`wave`）、`advanced_editlist`、muxer。
 
 ### 未完成（本次切片外）
 
@@ -141,21 +148,23 @@ moonbit/
 | blowfish | `libavutil/tests/blowfish.c` 内嵌的 **34 组可变密钥 ECB 三元组** + 字符串 ECB(`"BLOWFISH"→324ed0fe…`) / CBC(`"BLOWFISHBLOWFISH"`，IV `"blowfish"`) 向量；均为该测试自带、可直接校验大 S-box 表的权威数据 |
 | cast5 | `libavutil/tests/cast5.c` 内嵌的 **RFC 2144** 向量（128/80/40 位密钥，明文 `0123456789abcdef`）；CBC 分支复刻该测试的 `av_cast5_crypt2` 往返。该测试另含 100 万次迭代向量 `rct2`，因耗时未纳入 |
 | aes_ctr | `libavutil/tests/aes_ctr.c` 的固定密钥/IV 40 字节向量（`fixed_key`=`"0123456789abcdef"`、`fixed_iv`=`deadbeefdeadbeef`）；另按 CTR 性质校验「任意切分 == 一次性」以覆盖分部块状态；`increment_iv`/`set_iv` 的计数器语义按 `aes_ctr.c` 手推 |
-| MP4 demuxer | 测试内**逐字节合成**的 MP4/MOV（`ftyp`+`moov`+`trak`+`stbl`+`mdat`），期望值由 box 布局与 `mov.c` 语义手算：chunk→样本 offset 累积、`stts` DTS 序列、`ctts` 重排后的 PTS、负 `ctts` 的 `dts_shift`、`stss` 关键帧、`stz2` 位打包、`co64` 与 64 位 box、`elst` 的 `time_offset`、`stsc` 校验修复 |
+| MP4 demuxer | 测试内**逐字节合成**的 MP4/MOV（`ftyp`+`moov`+`trak`+`stbl`+`mdat`），期望值由 box 布局与 `mov.c` 语义手算：chunk→样本 offset 累积、`stts` DTS 序列、`ctts` 重排后的 PTS、负 `ctts` 的 `dts_shift`、`stss` 关键帧、`stz2` 位打包、`co64` 与 64 位 box、`elst` 的 `time_offset`、`stsc` 校验修复；碎片化：空 `stbl` 初始化段 + 两个 `moof` 片段（`tfdt` 驱动首段、无 `tfdt` 由 `track_end` 续接），校验 offset/DTS/PTS/size/duration/关键帧；cenc：合成的加密 MP4（`sinf`+`senc`），以同密钥/IV 的 AES-CTR 生成密文，验证 `mov_decrypt_sample` 还原明文（全样本与子样本各一）；**真实文件交叉验证**：由 `linuxserver/ffmpeg:9.0.2` 生成普通/碎片化/cenc 三种真实 MP4，以 `ffprobe` 的 `packet` 输出（`pos/size/dts/pts/duration/flags`）为期望值逐 packet 比对（普通与碎片化完全一致），cenc 用已知密钥解密后与明文样本逐字节一致 |
 
 补充交叉校验：分块更新与一次性计算等价（CRC / Adler-32 / MD5 / SHA）、增量 MD5、
 Base64 截断输出行为与非法输入检测。
 
-**待补**：MP4 的合成用例覆盖的是 box 语义与算法分支，尚未覆盖真实编码器产出的文件。
-若提供一个真实 MP4/MOV 路径，可用于端到端核对（例如比对 `ffprobe` 的
-`nb_frames`/`time_base`/`start_time` 与本文档解析出的样本数/时基/DTS 起点）。
+**真实文件交叉验证（已完成）**：由 Docker 镜像 `linuxserver/ffmpeg:9.0.2` 生成真实 MP4，
+用其 `ffprobe` 的 `packet` 输出作为期望值，与本文档解析结果逐 packet 比对（`pos`/`size`/
+`dts`/`pts`/`duration`/关键帧）；覆盖普通、碎片化（`frag_keyframe`）与 cenc 加密三种文件，
+其中 cenc 以已知密钥解密后与明文样本逐字节一致。文件以 base64 内嵌于
+`libavformat/mp4_real_wbtest.mbt`（附生成命令便于复现）。
 
 复现命令：
 
 ```bash
 cd moonbit
 moon check     # 0 error / 0 warning
-moon test      # 71/71 passed
+moon test      # 77/77 passed
 ```
 
 ---
@@ -187,13 +196,15 @@ moon test      # 71/71 passed
 SIMD 内核保留在 C 侧。
 
 ### 阶段 4 —— libavformat（**已开始**：MP4/MOV 解复用切片）
-已完成 MP4/MOV 容器解析与采样表索引（见第 3 节的范围边界与第 4 节的验证方式）。
+已完成 MP4/MOV 容器解析、采样表索引与**碎片化 MP4**（见第 3 节的范围边界与第 4 节的验证方式）。
 后续在该包内继续：
 
-1. 碎片化 MP4（`moof`/`trun`/`tfhd`/`sidx`），复用已有的 `MovTts` 合并机制
+1. ~~碎片化 MP4（`moof`/`trun`/`tfhd`）~~ **已完成**；余下 `sidx`/`mfra` 的片段 seek 与
+   片段重叠 `discard` 逻辑
 2. `aviobuf.c`/`avio.c` 的流式读取（文件/网络），替代当前"整文件入内存"的做法
 3. codec 私有 extradata（`avcC`/`hvcC`/`esds`）与 `mov_read_stsd_entries` 的多描述支持
-4. `cenc` 加密、seek（`mov_seek_stream`）、`rap_group`
+4. ~~`cenc` 加密（`sinf`/`schm`/`tenc`/`senc` + 基于 `aes_ctr` 的样本解密）~~ **已部分完成**
+   （余 `saiz`/`saio` 辅助信息与碎片内 `senc`）；余下 seek（`mov_seek_stream`）、`rap_group`
 5. 其他容器：Matroska/WebM、AVI、MPEG-TS（字节级解析优先）
 
 ### 阶段 5 —— libavcodec
@@ -257,6 +268,10 @@ SIMD 与汇编保持 C 实现并通过 FFI 调用。
    一并变成 `0X`（MoonBit 不识别，须只大写十六进制数位）；此外不要对提取结果做
    「行重排」式的二次处理 —— 曾因此把 8 张 S-box 表错位，靠「与 C 源码逐值 diff == 0」
    才定位。生成后务必用模块自带向量 + 与 C 源的逐值比对双重校验。
+11. **ISO VisualSampleEntry 末尾的 `pre_defined = -1`（2 字节）**：`parse_stsd_video`
+   起初漏读这 2 字节，使其后子 box（`esds`/`sinf`）整体错位；普通非加密文件因
+   「跳过 entry 其余部分」而无感，但 cenc 的 `sinf` 永远读不到（`cenc_scheme` 为 0）。
+   该问题由**真实文件交叉验证**（docker `ffmpeg:9.0.2` + `ffprobe`）暴露并修复。
 
 ---
 

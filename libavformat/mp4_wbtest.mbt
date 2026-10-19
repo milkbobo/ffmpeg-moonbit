@@ -158,10 +158,11 @@ fn video_entry_isom(format : Bytes, width : UInt, height : UInt) -> Array[Byte] 
     be32(0),
     be32(0),
     be32(0),
-    be16(1),
-    be16(0),
-    zbytes(31),
-    be16(24),
+    be16(1), // frame count
+    [b'\x00'], // codec name length 0
+    zbytes(31), // name padding to 32 bytes
+    be16(24), // depth
+    [b'\xff', b'\xff'], // pre_defined = -1
   ])
   cat([
     be32((entry_body.length() + 16).reinterpret_as_uint()),
@@ -185,10 +186,11 @@ fn video_entry_qt(format : Bytes, width : UInt, height : UInt) -> Array[Byte] {
     be32(0),
     be32(0),
     be32(0),
-    be16(1),
-    be16(0),
-    zbytes(31),
-    be16(24),
+    be16(1), // frame count
+    [b'\x00'], // codec name length 0
+    zbytes(31), // name padding to 32 bytes
+    be16(24), // depth
+    [b'\xff', b'\xff'], // color_table_id = -1
   ])
   cat([
     be32((entry_body.length() + 16).reinterpret_as_uint()),
@@ -358,6 +360,222 @@ fn build_stbl(
     parts.push(stss)
   }
   box(b"stbl", cat(parts))
+}
+
+// ---------------------------------------------------------------------------
+// Fragmented MP4 (moof / traf / trun) builders
+// ---------------------------------------------------------------------------
+
+///| `tfhd` with `default-base-is-moof` and no per-fragment defaults. */
+fn tfhd_box_dbm(track_id : UInt) -> Array[Byte] {
+  fbox(b"tfhd", 0, 0x020000, be32(track_id))
+}
+
+///| `tfdt` (version 0). */
+fn tfdt_box_v0(bmdt : UInt) -> Array[Byte] {
+  fbox(b"tfdt", 0, 0, be32(bmdt))
+}
+
+///| A `mvex` box with one `trex` (no default duration/size/flags). */
+fn mvex_box(track_id : UInt) -> Array[Byte] {
+  let trex = fbox(
+    b"trex",
+    0,
+    0,
+    cat([be32(track_id), be32(1), be32(0), be32(0), be32(0)]),
+  )
+  box(b"mvex", trex)
+}
+
+///|
+/// One `moof` with a single `traf` (`tfhd` + optional `tfdt` + one `trun`).
+/// Each sample tuple is `(duration, size, flags)`; the `trun` carries
+/// `data-offset | sample-duration | sample-size | sample-flags`.
+fn frag_moof(
+  track_id : UInt,
+  tfdt : UInt?,
+  data_offset : UInt,
+  samples : Array[(UInt, UInt, UInt)]
+) -> Array[Byte] {
+  let trun_flags : UInt = 0x1 | 0x100 | 0x200 | 0x400
+  let trun_body : Array[Byte] = []
+  push_all(trun_body, be32(samples.length().reinterpret_as_uint()))
+  push_all(trun_body, be32(data_offset))
+  for i = 0; i < samples.length(); i = i + 1 {
+    push_all(trun_body, be32(samples[i].0))
+    push_all(trun_body, be32(samples[i].1))
+    push_all(trun_body, be32(samples[i].2))
+  }
+  let trun = fbox(b"trun", 0, trun_flags, trun_body)
+  let tfdt_part = match tfdt {
+    None => zbytes(0)
+    Some(v) => tfdt_box_v0(v)
+  }
+  let traf = box(b"traf", cat([tfhd_box_dbm(track_id), tfdt_part, trun]))
+  box(b"moof", traf)
+}
+
+// ---------------------------------------------------------------------------
+// cenc (encrypted MP4) builders
+// ---------------------------------------------------------------------------
+
+fn hexfind(digits : Bytes, c : Char) -> Int {
+  let mut i = 0
+  while i < digits.length() {
+    if digits[i].to_char() == c {
+      return i
+    }
+    i = i + 1
+  }
+  0
+}
+
+///| Decode a hex string into bytes (test-local; libavformat has no hex helper). */
+fn hexbytes(s : String) -> Bytes {
+  let digits : Bytes = b"0123456789abcdef"
+  let a = s.to_array()
+  let out : Array[Byte] = []
+  let mut i = 0
+  while i + 1 < a.length() {
+    let hi = hexfind(digits, a[i])
+    let lo = hexfind(digits, a[i + 1])
+    out.push(((hi << 4) | lo).to_byte())
+    i = i + 2
+  }
+  Bytes::from_array(out[:])
+}
+
+///| `sinf` with `schm` (scheme) and `schi`/`tenc` (pattern, IV size, KID, constant IV). */
+fn sinf_box(
+  scheme : Bytes,
+  iv_size : UInt,
+  key_id : Bytes,
+  tenc_version : UInt,
+  crypt : UInt,
+  skip : UInt,
+  constant_iv : Bytes
+) -> Array[Byte] {
+  let tenc_head = cat([
+    [b'\x00'], // reserved
+    [((crypt << 4) | skip).to_byte()], // pattern
+    [b'\x01'], // is_protected
+    [iv_size.to_byte()],
+    key_id.to_array(),
+  ])
+  let tenc_body = if iv_size == 0 {
+    cat([tenc_head, [constant_iv.length().to_byte()], constant_iv.to_array()])
+  } else {
+    tenc_head
+  }
+  let tenc = fbox(b"tenc", tenc_version, 0, tenc_body)
+  let schi = box(b"schi", tenc)
+  let schm = fbox(b"schm", 0, 0, cat([scheme.to_array(), be32(0)]))
+  box(b"sinf", cat([schm, schi]))
+}
+
+///| A video sample entry whose payload carries a trailing `sinf` box. */
+fn enc_video_entry(
+  scheme : Bytes,
+  iv_size : UInt,
+  key_id : Bytes,
+  tenc_version : UInt,
+  crypt : UInt,
+  skip : UInt,
+  constant_iv : Bytes
+) -> Array[Byte] {
+  let fixed = cat([
+    zbytes(16),
+    be16(320),
+    be16(240),
+    be32(0),
+    be32(0),
+    be32(0),
+    be16(1), // frame count
+    [b'\x00'], // codec name length 0
+    zbytes(31), // name padding to 32 bytes
+    be16(24), // depth
+    [b'\xff', b'\xff'], // pre_defined = -1
+  ])
+  let sinf = sinf_box(scheme, iv_size, key_id, tenc_version, crypt, skip, constant_iv)
+  let entry_body = cat([fixed, sinf])
+  cat([
+    be32((entry_body.length() + 16).reinterpret_as_uint()),
+    b"avc1".to_array(),
+    zbytes(6),
+    be16(1),
+    entry_body,
+  ])
+}
+
+///| `senc`: per-sample IV (and optional subsample map), matching `mov_read_senc`. */
+fn senc_box(
+  entries : Array[(Bytes, Array[(UInt, UInt)])],
+  use_subsamples : Bool
+) -> Array[Byte] {
+  let body : Array[Byte] = []
+  push_all(body, be32(entries.length().reinterpret_as_uint()))
+  for i = 0; i < entries.length(); i = i + 1 {
+    push_all(body, entries[i].0.to_array())
+    if use_subsamples {
+      let subs = entries[i].1
+      push_all(body, be16(subs.length().reinterpret_as_uint()))
+      for k = 0; k < subs.length(); k = k + 1 {
+        push_all(body, be16(subs[k].0))
+        push_all(body, be32(subs[k].1))
+      }
+    }
+  }
+  let flags : UInt = if use_subsamples { 0x02 } else { 0x00 }
+  fbox(b"senc", 0, flags, body)
+}
+
+///|
+/// Assemble a one-sample encrypted MP4: `ftyp` + `moov`(empty-`stbl` track with
+/// `sinf` + `senc`) + `mdat`(ciphertext). `stco` is recomputed so the sample
+/// offset points at the `mdat` payload; returns `(data, sample_offset)`.
+fn assemble_cenc(
+  entry : Array[Byte],
+  senc : Array[Byte],
+  sample_size : UInt,
+  ciphertext : Bytes
+) -> (Array[Byte], Int) {
+  let ftyp = ftyp_box(b"isom")
+  let make_stbl = fn(off : UInt) -> Array[Byte] {
+    box(
+      b"stbl",
+      cat([
+        stsd_box(entry),
+        stts_box([(1, 100)]),
+        stsc_box([(1, 1, 1)]),
+        stsz_box(sample_size, 1),
+        stco_box([off]),
+        senc,
+      ]),
+    )
+  }
+  let placeholder = box(
+    b"moov",
+    cat([
+      mvhd_box(1000, 100),
+      build_trak(tkhd_box(1, 100, 320, 240), mdhd_box(1000, 100), hdlr_box(b"vide"), make_stbl(0), []),
+    ]),
+  )
+  let off = ftyp.length() + placeholder.length() + 8
+  let moov = box(
+    b"moov",
+    cat([
+      mvhd_box(1000, 100),
+      build_trak(
+        tkhd_box(1, 100, 320, 240),
+        mdhd_box(1000, 100),
+        hdlr_box(b"vide"),
+        make_stbl(off.reinterpret_as_uint()),
+        [],
+      ),
+    ]),
+  )
+  let mdat = box(b"mdat", ciphertext.to_array())
+  (cat([ftyp, moov, mdat]), off)
 }
 
 // ---------------------------------------------------------------------------
@@ -756,4 +974,157 @@ test "mp4: stsc validation repairs a trailing bad entry" {
   assert_eq(t.stsc[0].first, 1)
   assert_eq(t.samples.length(), 1)
   assert_eq(t.samples[0].offset, 100)
+}
+
+///|
+/// Fragmented MP4: an empty-`stbl` init segment plus two `moof` fragments.
+/// Fragment 1 carries `tfdt=0` and three samples (DTS 0/100/200); fragment 2
+/// has no `tfdt` and continues from `track_end = 300` (DTS 300/350). Sample
+/// offsets come from `default-base-is-moof` + the `trun` data offset.
+test "mp4: fragmented mp4 (moof/trun) sample index" {
+  let stbl = build_stbl(
+    stsd_box(video_entry_isom(b"avc1", 320, 240)),
+    stts_box([]),
+    [],
+    stsc_box([]),
+    stsz_box(0, 0),
+    stco_box([]),
+    [],
+  )
+  let trak = build_trak(
+    tkhd_box(1, 0, 320, 240),
+    mdhd_box(1000, 0),
+    hdlr_box(b"vide"),
+    stbl,
+    [],
+  )
+  let ftyp = ftyp_box(b"isom")
+  let moov = box(b"moov", cat([mvhd_box(1000, 0), trak, mvex_box(1)]))
+
+  let s1 : Array[(UInt, UInt, UInt)] = [(100, 10, 0), (100, 20, 0x10000), (100, 30, 0)]
+  let s2 : Array[(UInt, UInt, UInt)] = [(50, 15, 0), (50, 25, 0x10000)]
+
+  // The data offset points from the moof start to the mdat payload that
+  // immediately follows it, so it is `moof_length + 8`.
+  let moof1_ph = frag_moof(1, Some(0), 0, s1)
+  let moof1 = frag_moof(1, Some(0), moof1_ph.length().reinterpret_as_uint() + 8, s1)
+  let mdat1 = box(b"mdat", zbytes(60))
+  let moof2_ph = frag_moof(1, None, 0, s2)
+  let moof2 = frag_moof(1, None, moof2_ph.length().reinterpret_as_uint() + 8, s2)
+  let mdat2 = box(b"mdat", zbytes(40))
+
+  let prefix = ftyp.length() + moov.length()
+  let off_frag1 = prefix + moof1.length() + 8
+  let off_frag2 = prefix + moof1.length() + mdat1.length() + moof2.length() + 8
+
+  let data = cat([ftyp, moov, moof1, mdat1, moof2, mdat2])
+  let t = av_mov_open(Bytes::from_array(data)).unwrap().tracks[0]
+
+  assert_eq(t.samples.length(), 5)
+  assert_eq(t.samples[0].offset, off_frag1.to_int64())
+  assert_eq(t.samples[1].offset, (off_frag1 + 10).to_int64())
+  assert_eq(t.samples[2].offset, (off_frag1 + 30).to_int64())
+  assert_eq(t.samples[3].offset, off_frag2.to_int64())
+  assert_eq(t.samples[4].offset, (off_frag2 + 15).to_int64())
+
+  assert_eq(t.samples[0].dts, 0)
+  assert_eq(t.samples[1].dts, 100)
+  assert_eq(t.samples[2].dts, 200)
+  assert_eq(t.samples[3].dts, 300)
+  assert_eq(t.samples[4].dts, 350)
+  assert_eq(t.samples[0].pts, 0)
+  assert_eq(t.samples[4].pts, 350)
+
+  let sz : Array[UInt] = [10, 20, 30, 15, 25]
+  let du : Array[UInt] = [100, 100, 100, 50, 50]
+  for i = 0; i < 5; i = i + 1 {
+    assert_eq(t.samples[i].size, sz[i])
+    assert_eq(t.samples[i].duration, du[i])
+    assert_eq(t.samples[i].pts, t.samples[i].dts)
+  }
+
+  // Sample flags: 0 means keyframe, IS_NON_SYNC marks the others.
+  assert_eq(t.samples[0].keyframe, true)
+  assert_eq(t.samples[1].keyframe, false)
+  assert_eq(t.samples[2].keyframe, true)
+  assert_eq(t.samples[3].keyframe, true)
+  assert_eq(t.samples[4].keyframe, false)
+  assert_eq(t.samples[1].min_distance, 1)
+  assert_eq(t.samples[4].min_distance, 1)
+}
+
+///|
+/// cenc (AES-CTR) full-sample decryption. The `mdat` holds ciphertext produced
+/// by AES-CTR with the same key/IV; the demuxer must recover the plaintext
+/// through the `sinf`(schm/tenc) + `senc` metadata.
+test "mp4: cenc (AES-CTR) full-sample decryption" {
+  let plain = hexbytes("00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100")
+  let key = hexbytes("000102030405060708090a0b0c0d0e0f")
+  let iv = hexbytes("101112131415161718191a1b1c1d1e1f")
+  let ctr = @libavutil.av_aes_ctr_alloc()
+  let _ = @libavutil.av_aes_ctr_init(ctr, key).unwrap()
+  @libavutil.av_aes_ctr_set_full_iv(ctr, iv)
+  let ct = @libavutil.av_aes_ctr_crypt(ctr, plain, plain.length())
+
+  let entry = enc_video_entry(
+    b"cenc",
+    16,
+    hexbytes("00000000000000000000000000000000"),
+    0,
+    0,
+    0,
+    b"",
+  )
+  let senc = senc_box([(iv, [])], false)
+  let (data, off) = assemble_cenc(entry, senc, plain.length().reinterpret_as_uint(), ct)
+  let t = av_mov_open(Bytes::from_array(data)).unwrap().tracks[0]
+
+  assert_eq(t.cenc_scheme, 0x63656E63)
+  assert_eq(t.cenc_per_sample_iv_size, 16)
+  assert_eq(t.samples.length(), 1)
+  assert_eq(t.samples[0].offset, off.to_int64())
+  assert_eq(t.samples[0].size, plain.length().reinterpret_as_uint())
+
+  let payload = Bytes::from_array(data[off:off + plain.length()])
+  assert_eq(mov_decrypt_sample(t, 0, key, payload).unwrap(), plain)
+}
+
+///|
+/// cenc with subsample encryption: bytes 0..16 are clear and 16..32 protected.
+/// Decryption must leave the clear range untouched and only unwrap the
+/// protected range (whose keystream starts at the IV).
+test "mp4: cenc (AES-CTR) subsample decryption" {
+  let plain = hexbytes("00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100")
+  let key = hexbytes("000102030405060708090a0b0c0d0e0f")
+  let iv = hexbytes("101112131415161718191a1b1c1d1e1f")
+  let plain_arr = plain.to_array()
+  let ctr = @libavutil.av_aes_ctr_alloc()
+  let _ = @libavutil.av_aes_ctr_init(ctr, key).unwrap()
+  @libavutil.av_aes_ctr_set_full_iv(ctr, iv)
+  let enc_part = @libavutil.av_aes_ctr_crypt(ctr, Bytes::from_array(plain_arr[16:32]), 16)
+  let ct_arr : Array[Byte] = []
+  for i = 0; i < 16; i = i + 1 {
+    ct_arr.push(plain_arr[i])
+  }
+  for i = 0; i < enc_part.length(); i = i + 1 {
+    ct_arr.push(enc_part[i])
+  }
+  let ct = Bytes::from_array(ct_arr)
+
+  let entry = enc_video_entry(
+    b"cenc",
+    16,
+    hexbytes("00000000000000000000000000000000"),
+    0,
+    0,
+    0,
+    b"",
+  )
+  let senc = senc_box([(iv, [(16, 16)])], true)
+  let (data, off) = assemble_cenc(entry, senc, plain.length().reinterpret_as_uint(), ct)
+  let t = av_mov_open(Bytes::from_array(data)).unwrap().tracks[0]
+
+  assert_eq(t.samples.length(), 1)
+  let payload = Bytes::from_array(data[off:off + plain.length()])
+  assert_eq(mov_decrypt_sample(t, 0, key, payload).unwrap(), plain)
 }
