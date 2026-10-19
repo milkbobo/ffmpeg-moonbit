@@ -62,6 +62,27 @@ pub let matroska_id_segment : UInt = 0x18538067
 ///| `MATROSKA_ID_CLUSTER` (unknown-length element policy). */
 pub let matroska_id_cluster : UInt = 0x1F43B675
 
+///| `MATROSKA_ID_INFO`. */
+pub let matroska_id_info : UInt = 0x1549A966
+
+///| `MATROSKA_ID_TRACKS`. */
+pub let matroska_id_tracks : UInt = 0x1654AE6B
+
+///| `MATROSKA_ID_CUES`. */
+pub let matroska_id_cues : UInt = 0x1C53BB6B
+
+///| `MATROSKA_ID_TAGS`. */
+pub let matroska_id_tags : UInt = 0x1254C367
+
+///| `MATROSKA_ID_SEEKHEAD`. */
+pub let matroska_id_seekhead : UInt = 0x114D9B74
+
+///| `MATROSKA_ID_ATTACHMENTS`. */
+pub let matroska_id_attachments : UInt = 0x1941A469
+
+///| `MATROSKA_ID_CHAPTERS`. */
+pub let matroska_id_chapters : UInt = 0x1043A770
+
 // ---------------------------------------------------------------------------
 // Syntax rows (the EbmlType union of matroska.h + per-row sinks)
 // ---------------------------------------------------------------------------
@@ -90,9 +111,12 @@ pub enum EbmlKind {
   ///| `EBML_STR`/`EBML_UTF8`; `None` default means "no default string".
   Str(String?)
   Bin
-  ///| `EBML_NEST`/`EBML_LEVEL1`: a master element with the given child
-  /// table thunk (C: a static array; a thunk breaks reference cycles).
+  ///| `EBML_NEST`: a master element with the given child table thunk
+  /// (C: a static array; a thunk breaks reference cycles).
   Nest(() -> Array[EbmlSyntax])
+  ///| `EBML_LEVEL1`: like `Nest`, but the element is also registered in
+  /// the level-1 element table (dedup + seekhead bookkeeping).
+  Level1(() -> Array[EbmlSyntax])
   ///| `EBML_STOP`: parsing stops when this id is seen (the id stays in
   /// `current_id`, unread, exactly as in the C).
   Stop
@@ -108,6 +132,14 @@ pub struct EbmlSyntax {
   sink : ((EbmlValue, Int64) -> Result[Unit, String])?
 }
 
+///| `MatroskaLevel1Element`: one level-1 element seen (or seekhead-placed). */
+pub struct MkvLevel1Elem {
+  id : UInt
+  ///| Absolute position (0 = not yet placed; the C's sentinel).
+  mut pos : Int64
+  mut parsed : Bool
+}
+
 ///| The parse-time state (the walker's slice of `MatroskaDemuxContext`). */
 pub struct EbmlState {
   pb : AvioContext
@@ -121,11 +153,28 @@ pub struct EbmlState {
   mut unknown_count : Int
   ///| `matroska->is_live`: in live mode, EOF finishes parsing.
   mut is_live : Bool
+  ///| `matroska->level1_elems[]` (capacity 64 in the C).
+  level1_elems : Array[MkvLevel1Elem]
+  ///| `matroska->segment_start`.
+  mut segment_start : Int64
+  ///| `matroska->cues_parsing_deferred`: 1 deferred (default), 0 parsed,
+  /// -1 broken.
+  mut cues_parsing_deferred : Int
 }
 
 ///| Fresh parse state over `pb`. */
 pub fn EbmlState::new(pb : AvioContext) -> EbmlState {
-  { pb, levels: [], current_id: 0, resync_pos: 0, unknown_count: 0, is_live: false }
+  {
+    pb,
+    levels: [],
+    current_id: 0,
+    resync_pos: 0,
+    unknown_count: 0,
+    is_live: false,
+    level1_elems: [],
+    segment_start: 0,
+    cues_parsing_deferred: 1,
+  }
 }
 
 ///| Parse state in live mode: reaching EOF finishes parsing instead of
@@ -480,6 +529,33 @@ fn i64_of_len(length : UInt64) -> Int64 {
   (length & 0x7FFFFFFFFFFFFFFFUL).reinterpret_as_int64()
 }
 
+///|
+/// `matroska_find_level1_elem`: the registry entry for a level-1 element —
+/// reused when the id matches (SeekHead/Tags also match on position),
+/// newly allocated otherwise. Cluster and malformed ids never register.
+fn matroska_find_level1_elem(st : EbmlState, id : UInt, pos : Int64) -> MkvLevel1Elem? {
+  if is_ebml_id_valid(id) == false {
+    return None
+  }
+  if id == matroska_id_cluster {
+    return None
+  }
+  for i = 0; i < st.level1_elems.length(); i = i + 1 {
+    if st.level1_elems[i].id == id {
+      if st.level1_elems[i].pos == pos ||
+        (id != matroska_id_seekhead && id != matroska_id_tags) {
+        return Some(st.level1_elems[i])
+      }
+    }
+  }
+  if st.level1_elems.length() >= 64 {
+    return None // "Too many level1 elements"
+  }
+  let elem : MkvLevel1Elem = { id, pos: 0, parsed: false }
+  st.level1_elems.push(elem)
+  Some(elem)
+}
+
 ///| The per-type length maximums of `ebml_parse` (`max_lengths[]`). */
 fn ebml_max_length(kind : EbmlKind) -> UInt64 {
   match kind {
@@ -494,6 +570,61 @@ fn ebml_max_length(kind : EbmlKind) -> UInt64 {
 }
 
 ///|
+///|
+/// The EBML_NEST/EBML_LEVEL1 arm of `ebml_parse`: push the level, run the
+/// segment/cues bookkeeping, register level-1 elements and walk children.
+fn walk_master(
+    st : EbmlState,
+    r : EbmlSyntax,
+    id : UInt,
+    pos : Int64,
+    pos_alt : Int64,
+    length : UInt64,
+    children : () -> Array[EbmlSyntax],
+    ancestors : Array[Array[EbmlSyntax]],
+    syntax : Array[EbmlSyntax],
+    level1 : Bool) -> Result[Int, String] {
+  match ebml_read_master(st, length, pos_alt) {
+    Err(e) => return Err(e)
+    Ok(_) => ()
+  }
+  if id == matroska_id_segment {
+    st.segment_start = pos_alt
+  }
+  if id == matroska_id_cues {
+    st.cues_parsing_deferred = 0
+  }
+  if level1 {
+    match matroska_find_level1_elem(st, id, pos) {
+      Some(elem) => {
+        if elem.pos == 0 {
+          // Zero is not a valid position for a level 1 element.
+          elem.pos = pos
+        }
+        elem.parsed = true
+      }
+      None => ()
+    }
+  }
+  if length == 0UL {
+    // an empty master completes immediately (ebml_parse_nest's
+    // zero-length shortcut pops the level and returns)
+    let _ = st.levels.pop()
+    let _ = deliver(r, Some(EbmlValue::Master), pos_alt)
+    return Ok(0)
+  }
+  ancestors.push(syntax)
+  let nested = ebml_parse_nest(st, children(), ancestors)
+  let _ = ancestors.pop()
+  match nested {
+    Err(e) => Err(e)
+    Ok(v) => {
+      let _ = deliver(r, Some(EbmlValue::Master), pos_alt)
+      Ok(v)
+    }
+  }
+}
+
 /// `ebml_parse`: read one element, dispatch it against `syntax` and return
 /// the C result code — 0 ok, 1 stop, `LEVEL_ENDED` when the current master
 /// completed. `ancestors` carries the enclosing syntax tables, outermost
@@ -692,29 +823,10 @@ pub fn ebml_parse(
         }
       }
     }
-    Nest(children) => {
-      match ebml_read_master(st, length, pos_alt) {
-        Err(e) => return Err(e)
-        Ok(_) => ()
-      }
-      if length == 0UL {
-        // an empty master completes immediately (ebml_parse_nest's
-        // zero-length shortcut pops the level and returns)
-        let _ = st.levels.pop()
-        let _ = deliver(r, Some(EbmlValue::Master), pos_alt)
-        return Ok(0)
-      }
-      ancestors.push(syntax)
-      let nested = ebml_parse_nest(st, children(), ancestors)
-      let _ = ancestors.pop()
-      match nested {
-        Err(e) => return Err(e)
-        Ok(v) => {
-          let _ = deliver(r, Some(EbmlValue::Master), pos_alt)
-          return Ok(v)
-        }
-      }
-    }
+    Nest(children) =>
+      return walk_master(st, r, id, pos, pos_alt, length, children, ancestors, syntax, false)
+    Level1(children) =>
+      return walk_master(st, r, id, pos, pos_alt, length, children, ancestors, syntax, true)
     Stop => return Ok(1)
   }
   // The common tail: NEEDS_CHECKING defers to the EOF check, then the

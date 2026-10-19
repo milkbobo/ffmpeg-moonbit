@@ -3,3 +3,4 @@ import {
   "ffmpeg/moonbit/libavcodec",
   "moonbitlang/core/double",
 }
+warnings = "-unused_constructor"
