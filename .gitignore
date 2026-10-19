@@ -1,0 +1,7 @@
+# MoonBit build output and caches (convention from `moon new`)
+.DS_Store
+_build/
+target/
+target
+.mooncakes/
+.moonagent/
