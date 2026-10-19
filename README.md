@@ -13,14 +13,24 @@ MoonBit 模块位于本目录（`moonbit/`），与 FFmpeg 的 C 源码并存，
 
 - libavcodec 单个库就有 38 MB 源码（占总量的 57%）；
 - 大量代码依赖 x86/ARM 内联汇编、SIMD intrinsics、指针运算、宏元编程与平台特定实现；
-- 这些部分**不适合也无法直接"翻译"**成 MoonBit。
+- 这些部分**大多无法逐行"翻译"**成 MoonBit（其中**向量化内核改用 MoonBit `@v128` 重写**，
+  见下方边界原则）。
 
 因此采用**垂直切片（vertical slice）**策略：从自包含、可独立验证的纯算法模块入手，
 每个模块都对照 C 源码逐行移植，并用 FFmpeg **自己的测试与 FATE 参考输出**做向量校验。
 编译目标为 `wasm`/`wasm-gc`（纯算法无需 C 工具链，`moon test` 可直接验证）。
 
-**边界原则**：纯算法 → MoonBit 重写；SIMD/汇编/线程/平台代码 → 保留 C 实现，后续通过
-MoonBit 的 `extern "C"` FFI 复用，而不是硬翻译。
+**边界原则（2026-10 修订）**：纯算法 → MoonBit 逐行重写；**向量化（SIMD）内核 → 用
+MoonBit 的 `@v128`（`moonbitlang/core/v128`，对应 Wasm SIMD128 / native SIMD）重写**。
+FFmpeg 的 `*.asm` 是 x86 汇编（NASM），**无法编译进本项目当前的 `wasm` 目标**，因此它们
+不是"留作 FFI 的黑盒"，而是 SIMD 化的**目标对象**：实现时用
+`#cfg(any(target="native", target="wasm"))` 门控并配标量回退。仅当指令在 MoonBit 中
+无法表达（AES-NI / SHA-NI / PCLMULQDQ 等 x86 专有指令）或属线程/平台范畴（`pthread`、
+随机源、文件/网络 IO）时，才保留 C 实现并通过 `extern "C"` FFI 复用。
+
+参考：全树共 **186 个 NASM 文件**（`libavcodec/x86` 113、`libavfilter/x86` 42、
+`libswscale/x86` 13、`libavutil/x86` 12、`libswresample/x86` 3）；MoonBit core 自身的
+`encoding/hex/encode_v128.mbt`、`encoding/base64/*_v128.mbt` 是 `@v128` 用法范本。
 
 ---
 
@@ -118,7 +128,9 @@ Huffman 规范化码另有等效性说明，见下文）：
   块时按 `int16` 截断（`i16`）。
 - **未做（IDCT）**：`int32` 输入变体 `ff_simple_idct_*_int32_10bit`（MPEG-4 Simple Studio
   Profile）、2x4x8/8x4/4x8 的部分变换（DV/WMV2 的 `idct248`/`84`/`48`/`44`）、整数
-  `FF_IDCT_INT`（`jrevdct.c`）、FAAN、Xvid 及全部 SIMD/汇编变体（按边界原则留在 C）。
+  `FF_IDCT_INT`（`jrevdct.c`）、FAAN、Xvid 的**标量 C** 实现；其 x86 SIMD 变体
+  （`libavcodec/x86/simple_idct.asm`、`simple_idct10.asm`、`idctdsp.asm`）按新边界原则
+  列入下方「`@v128` 重写」清单，而非"留在 C"。
 - **已做（Huffman）**：`ff_huff_build_tree`（排序 + 两列表原地合并 + `get_tree_codes` DFS）
   与 `ff_huff_gen_len_table`（堆 + `offset <<= 1` 长度上限重试）。二者返回 `(lens, xlat)`，
   即 `ff_vlc_init_from_lengths` 需要的输入。
@@ -129,6 +141,33 @@ Huffman 规范化码另有等效性说明，见下文）：
   Kraft 等和 + 独立教科书法的最优代价互证）。
 - **未做（libavcodec）**：LZO、`vlc.c` 表构建、aac/AC-3 等音频解析、其余编解码器
   （见阶段 5）。
+
+### SIMD（`@v128`）化候选（已移植代码）
+
+按新边界原则，FFmpeg 原用 NASM 写的向量化内核改用 MoonBit `@v128` 重写。下表为**已移植
+代码**中可 SIMD 化的位置。「FFmpeg x86 对应」列是 FFmpeg 侧同功能的 `*.asm`（仅作参照与
+可行性依据，**不是**要保留的黑盒）；「—」表示该功能在 FFmpeg 中本就是标量 C（仍可选做
+并行化，但无现成参照）。
+
+| 已移植模块 | 可 SIMD 化的内核 | FFmpeg x86 对应 | 说明 / 优先级 |
+|---|---|---|---|
+| [crc.mbt](libavutil/crc.mbt) | `av_crc` 逐字节查表 → `i8x16` 分段查表 + 多路并行累加 | `crc.asm` | 高；多路并行是标准做法 |
+| [adler32.mbt](libavutil/adler32.mbt) | `s1/s2` 累加 → 分段求和（SSE2/AVX2 式） | — | 高；算法天然可向量化 |
+| [base64.mbt](libavutil/base64.mbt) | 编码：nibble 拆分 + `i8x16_swizzle` 查表 + 交错 | `base64.asm`（libavcodec） | 高；core 的 `encoding/{hex,base64}/encode_v128.mbt` 可照抄思路 |
+| [idct.mbt](libavcodec/idct.mbt) | 行/列蝶形用 `i16x8` 一次算 8 点；`put`/`add` 像素钳位 | `simple_idct.asm`、`simple_idct10.asm`、`idctdsp.asm` | 高 |
+| [idct.mbt](libavcodec/idct.mbt) 的 `ff_put/add_pixels_clamped_c` | 8/16 路钳位与饱和加 | `pixblockdsp.asm`、`blockdsp.asm` | 高 |
+| [aes.mbt](libavutil/aes.mbt) / [aes_ctr.mbt](libavutil/aes_ctr.mbt) | 多分组 ECB/CTR 并行（位切片） | `aes.asm` | 中；AES-NI 是 x86 专有指令（不可表达）→ 该路径走 FFI，纯 SIMD 收益有限 |
+| [md5.mbt](libavutil/md5.mbt) / [sha.mbt](libavutil/sha.mbt) | 多块并行 + 消息扩展 | —（SHA-NI 属 x86 专有） | 中；优先「4 路并行」 |
+| [rc4.mbt](libavutil/rc4.mbt) | 4/8 路并行密钥流 | — | 低 |
+| [blowfish](libavutil/blowfish.mbt) / [cast5](libavutil/cast5.mbt) / [tea](libavutil/tea.mbt) / [xtea](libavutil/xtea.mbt) | 4/8 块并行 ECB/CBC | —（FFmpeg 亦为标量 C） | 低 |
+| [avstring.mbt](libavutil/avstring.mbt) | `av_strnstr` 等子串/字符搜索（`i8x16` 比较 + 掩码） | — | 低 |
+| [huffman.mbt](libavcodec/huffman.mbt) | 位串 MSB-first 解码难以向量化；表驱动多符号解码可局部并行 | —（`huffyuvdsp.asm` 属另一回事） | 低；收益有限 |
+| [mathematics.mbt](libavutil/mathematics.mbt) / [rational.mbt](libavutil/rational.mbt) | —（标量整数运算） | — | 排除 |
+| [reader.mbt](libavformat/reader.mbt) / [mov.mbt](libavformat/mov.mbt) | —（box 解析、采样表展开，非数据并行） | — | 排除 |
+
+**未移植库**中同样存在向量化内核，待对应模块移植时一并按 `@v128` 重写：
+`libavfilter/x86`（42 个，如 `vf_*` 滤镜内核）、`libswscale/x86`（13 个，缩放/像素转换）、
+`libswresample/x86`（3 个，重采样/混音）。
 
 ### MP4 demuxer 切片的范围边界
 
@@ -229,7 +268,7 @@ moon test      # 87/87 passed
 
 ### 阶段 3 —— libswresample / libswscale
 重采样与缩放中的纯算法部分（有理数重采样比、滤波器系数计算）；
-SIMD 内核保留在 C 侧。
+向量化内核（`libswscale/x86` 13 个、`libswresample/x86` 3 个）按新边界原则用 `@v128` 重写。
 
 ### 阶段 4 —— libavformat（**已开始**：MP4/MOV 解复用切片）
 已完成 MP4/MOV 容器解析、采样表索引与**碎片化 MP4**（见第 3 节的范围边界与第 4 节的验证方式）。
@@ -244,8 +283,8 @@ SIMD 内核保留在 C 侧。
 5. 其他容器：Matroska/WebM、AVI、MPEG-TS（字节级解析优先）
 
 ### 阶段 5 —— libavcodec（**已开始**：IDCT + Huffman）
-只做纯 C 的编解码器（Huffman/VLC 表、LZO、部分无损编解码），
-SIMD 与汇编保持 C 实现并通过 FFI 调用。
+只做纯 C 的编解码器（Huffman/VLC 表、LZO、部分无损编解码）；其向量化内核
+（`libavcodec/x86`，共 113 个 `*.asm`）按新边界原则用 `@v128` 重写，而非保留 C/FFI。
 
 已完成 SIMPLE-C IDCT（`int16` 8/10/12 bit）与 `huffman.c` 的树/码长构建（见第 3 节）。后续：
 
@@ -275,6 +314,8 @@ SIMD 与汇编保持 C 实现并通过 FFI 调用。
 | `CONFIG_SMALL` 分支 | 统一实现 small 分支（等价结果，可读性优先） |
 | `av_mallocz` 零初始化上下文 | 构造器 `*_alloc()` 显式置零 |
 | 大常量表（Blowfish `orig_s`、CAST5 `S1..S8`） | 从对应 C 源文件批量提取十六进制常量后生成表字面量，避免手工转录出错；再用模块自带的权威向量校验 |
+| FFmpeg x86 SIMD 内核（NASM `*.asm`） | 用 `@v128`（`moonbitlang/core/v128`）重写，`#cfg(any(target="native", target="wasm"))` 门控 + 标量回退；不可表达的 x86 专有指令（AES-NI / SHA-NI / PCLMULQDQ）才留 C/FFI |
+| SIMD 实现的可验证性 | SIMD 路径必须与标量路径、以及既有权威向量**逐值一致**（同一测试同时跑两条路径，或断言 SIMD == 标量） |
 
 **注意**：MoonBit 的 `String` 是 UTF-16。`Bytes::to_string()` 返回的是 `b"..."`
 字面量形式、`to_unchecked_string()` 按 UTF-16 解释字节 —— 二者都不能把 ASCII 字节

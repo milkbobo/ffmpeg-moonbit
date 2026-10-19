@@ -16,8 +16,10 @@
   `huffman.c` 的树/码长构建（`ff_huff_build_tree`/`ff_huff_gen_len_table`）+ 规范化
   Huffman 码的编/解码
 
-策略：**垂直切片**，从自包含、可独立验证的纯算法入手；SIMD/汇编/线程/平台代码不翻译，
-留待 `extern "C"` FFI 复用（见 §8）。
+策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
+`@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的
+NASM（`*.asm`）是 x86 汇编，**无法**编译进本模块的 `wasm` 目标；仅 x86 专有指令
+（AES-NI / SHA-NI / PCLMULQDQ）与线程/平台代码留待 `extern "C"` FFI 复用（见 §8）。
 
 ---
 
@@ -101,6 +103,9 @@ $msg | git commit -F -
   或「能被数学性质唯一确定的量」作判据 —— 例如 Huffman 用 Kraft 等和 `Σ2^-len == 1` +
   与独立教科书两队列法的最优代价相等 + FFmpeg 两套实现互证 + 编解码往返；IDCT 则对照
   FFmpeg 自带的双精度参考 `libavcodec/dctref.c`，判据照抄 `libavcodec/tests/dct.c`。
+- **SIMD 路径同样要吃向量**：SIMD 实现必须与标量路径、以及该模块既有权威向量**逐值一致**
+  （同一测试里同时跑 SIMD 与标量并断言相等，或先证标量再切 SIMD）；不得因为"是优化路径"
+  就放宽断言。
 - **测试失败先怀疑自己的期望值**：本项目已多次出现「实现正确、期望写错」的情况
   （如 `av_strcasecmp` 返回值、`av_strlcat` 预算不足返回所需长度、`av_match_name` 的
   首命中短路语义）。先回到 C 源码重推。
@@ -136,6 +141,10 @@ $msg | git commit -F -
 - **core 包**：`Double::sqrt`（方法）可用；`floor`/`round`/`ceil` 可用方法或 `@math.*`；
   `@math.cos` 等数学函数需在 `moon.pkg` 里 `import { "moonbitlang/core/math" }`（别名为 `@math`）。
 - **行数统计口径**：`Get-Content $f | Measure-Object -Line` 会少计，统一用 `(Get-Content $f).Count`。
+- **SIMD（`@v128`）**：`moon.pkg` 里 `import { "moonbitlang/core/v128" }`；SIMD 代码须用
+  `#cfg(any(target="native", target="wasm"))` 门控（`js`/`wasm-gc` 不可用）并保留标量回退；
+  16 字节加载用 `[v128le(data), .. tail]` 模式。范本：core 的 `encoding/hex/encode_v128.mbt`、
+  `encoding/base64/encode_v128.mbt`。
 
 ---
 
@@ -155,10 +164,17 @@ $msg | git commit -F -
 
 ## 8. 边界与偏差原则
 
-- **纯算法 → MoonBit**；**SIMD/汇编/线程/平台 → 保留 C，通过 `extern "C"` FFI 复用**
-  （不要硬翻译）。
-- 目前**唯一**一处「按规范而非按 C 源码逐行」实现的是 `aes.mbt` 的轮函数（FIPS-197），
-  已在 README 记录理由；改动实现方式时必须在源码头与 README 同步记录。
+- **纯算法 → MoonBit 逐行重写**。
+- **向量化（SIMD）内核 → 用 MoonBit `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 /
+  native SIMD）重写**。FFmpeg 的 NASM（`*.asm`）**不能**编译进本模块的 `wasm` 目标，
+  故它们不是"留作 FFI 的黑盒"，而是 SIMD 化的**目标对象**：实现时用
+  `#cfg(any(target="native", target="wasm"))` 门控并配标量回退，参考 core 的
+  `encoding/base64/encode_v128.mbt`；已移植代码的候选清单见 README §3。
+- **例外（才留 C / FFI）**：MoonBit 无法表达的 x86 专有指令（AES-NI / SHA-NI /
+  PCLMULQDQ 等）与线程/平台代码（`pthread`、随机源、文件/网络 IO）。
+- 目前 **libavutil 内唯一**一处「按规范而非按 C 源码逐行」实现的是 `aes.mbt` 的轮函数
+  （FIPS-197）；libavcodec 的 Huffman 规范化码另有等效性说明。均在 README 记录理由；
+  改动实现方式时必须在源码头与 README 同步记录。
 
 ---
 
