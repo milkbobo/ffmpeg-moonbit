@@ -47,9 +47,21 @@
 ///     walk, `mov_skip_multiple_stsd`, per-entry extradata slots,
 ///     `pseudo_stream_id` index filter, the tfdt/trun `stsd_id` gates and
 ///     the first-chunk `last_stsd` extradata switch).
+///   * advanced edit lists (`mov_fix_index`): the index is rebuilt against
+///     the edit-list timeline — discarded leading frames keep strictly
+///     increasing timestamps via the frame-duration buffer rewrite, empty
+///     edits offset the timeline and become `start_time`, partial first
+///     audio frames trim `skip_samples`, a positive `min_corrected_pts`
+///     re-zeros the first video PTS (and feeds `mov_seek_stream`), the tts
+///     runs are rebuilt and presentation timestamps re-derived from them.
+///     `mov_estimate_video_delay` (H264 reorder) and the mov_read_trak
+///     quirks (stsc clearing, fragmented auto-disable of the option) ride
+///     along. `av_mov_open_with(buf, false)` selects the non-advanced path.
 ///   * not ported: AVIO/AVPacket/AVFormatContext plumbing (this parser works
-///     on an `AvioContext` the caller supplies), `advanced_editlist`, and
-///     the `dvcC`/`dvvC` whole-atom extradata variants.
+///     on an `AvioContext` the caller supplies) and the `dvcC`/`dvvC`
+///     whole-atom extradata variants. The C's `index_ranges` (old→new sample
+///     mapping for the demux cursor) are unnecessary here: the filtered
+///     index is materialised directly.
 ///   * simplified: per-sample timestamps are materialised up front instead
 ///     of being consulted lazily, the `free`/`hoov`-hiding-`moov` recovery is
 ///     omitted, and corrupt-count guards are tightened relative to the C code.
@@ -114,8 +126,11 @@ pub struct MovTts {
 pub struct Mp4Sample {
   offset : Int64
   size : UInt
-  dts : Int64
-  pts : Int64
+  ///| `AVIndexEntry.timestamp`; rewritten by `mov_fix_index`. */
+  mut dts : Int64
+  ///| Presentation timestamp derived from the tts table at demux; recomputed
+  /// after `mov_fix_index` rebuilds the tts runs. */
+  mut pts : Int64
   duration : UInt
   keyframe : Bool
   min_distance : UInt
@@ -215,6 +230,15 @@ pub struct Mp4Track {
   mut time_offset : Int64
   mut track_end : Int64
   mut min_sample_duration : UInt
+  ///| `msc->min_corrected_pts`: PTS floor from the elst pre-pass, recomputed
+  /// by `mov_fix_index`; `mov_seek_stream` subtracts it like the C does. */
+  mut min_corrected_pts : Int64
+  ///| `sti->skip_samples` (== `codecpar->initial_padding` after the fix). */
+  mut skip_samples : Int
+  ///| `st->start_time` in track timescale; `av_nopts_value` until set. */
+  mut start_time : Int64
+  ///| `codecpar->video_delay` from `mov_estimate_video_delay` (H264 only). */
+  mut video_delay : Int
   mut has_sidx : Bool
   mut cenc_scheme : UInt
   mut cenc_per_sample_iv_size : Int
@@ -264,6 +288,9 @@ pub struct MovTfra {
 
 ///| Movie-level state, corresponding to the `MOVContext`/`AVFormatContext` fields used here. */
 pub struct Mp4Movie {
+  ///| `mov->advanced_editlist` (default on); auto-disabled by the first
+  /// fragmented track, exactly at that trak's build point as in the C. */
+  mut advanced_editlist : Bool
   mut timescale : UInt
   mut duration : UInt64
   mut isom : Bool
@@ -324,6 +351,10 @@ fn new_track() -> Mp4Track {
     time_offset: 0,
     track_end: 0,
     min_sample_duration: 0,
+    min_corrected_pts: 0,
+    skip_samples: 0,
+    start_time: av_nopts_value,
+    video_delay: 0,
     has_sidx: false,
     cenc_scheme: 0,
     cenc_per_sample_iv_size: 0,
@@ -345,6 +376,7 @@ fn new_track() -> Mp4Track {
 
 fn new_movie() -> Mp4Movie {
   {
+    advanced_editlist: true,
     timescale: 0,
     duration: 0,
     isom: false,
@@ -361,6 +393,9 @@ let max_stts_delta : UInt = 4294487295
 
 ///| `UINT32_MAX`, used as mdhd's "unknown duration" marker in version 0. */
 let u32_max_u64 : UInt64 = 0xFFFFFFFF
+
+///| `AV_NOPTS_VALUE`: sentinel for "no presentation timestamp". */
+let av_nopts_value : Int64 = -9223372036854775807L - 1L
 
 ///| `UINT64_MAX`, the version 1 "unknown duration" marker. */
 let u64_max : UInt64 = 0xFFFFFFFFFFFFFFFF
@@ -1506,6 +1541,18 @@ fn parse_trak(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
   st.cur = new_track()
   parse_default(st, r, size)
   st.in_trak = false
+  // mov_read_trak: stsc referring to chunks stco never describes is
+  // overlooked (cleared) when the track has no samples at all.
+  if st.cur.chunk_offsets.length() == 0 && st.cur.stts.length() == 0 &&
+    st.cur.stsc.length() > 0 {
+    st.cur.stsc.clear()
+  }
+  // Advanced edit lists do not work with fragmented MP4 (empty stts ⇒ the
+  // samples stream in via trun): disable before this track's build, so only
+  // traks parsed earlier keep the advanced treatment — same order as the C.
+  if st.cur.stts.length() == 0 && st.movie.advanced_editlist {
+    st.movie.advanced_editlist = false
+  }
   mov_build_index(st, st.cur)
   st.movie.tracks.push(st.cur)
 }
@@ -2496,6 +2543,431 @@ fn is_open_key_sample(track : Mp4Track, sample : Int) -> Bool {
 }
 
 ///|
+/// `get_edit_list_entry`: fetch edit `edit_list_index` (media time, duration
+/// rescaled from the movie to the track timescale). `None` ends the walk.
+fn get_edit_list_entry(
+  movie : Mp4Movie,
+  track : Mp4Track,
+  edit_list_index : Int) -> (Int64, Int64)? {
+  if edit_list_index == track.elst.length() {
+    return None
+  }
+  let media_time = track.elst[edit_list_index].time
+  let mut duration = track.elst[edit_list_index].duration
+  if movie.timescale == 0 {
+    return None
+  }
+  duration = mov_rescale(duration, track.timescale, movie.timescale)
+  // `duration + (uint64_t)media_time > INT64_MAX` with wrapping u64 math:
+  // media_time -1 (empty edit) wraps around and keeps the duration.
+  let sum = duration.reinterpret_as_uint64() + media_time.reinterpret_as_uint64()
+  if sum > 9223372036854775807UL {
+    duration = 0L
+  }
+  Some((media_time, duration))
+}
+
+///|
+/// `find_prev_closest_index`: the closest previous frame to a PTS in the old
+/// index — keyframes only when ctts is present (B-frame reordering), with
+/// the C's backward refinement over `timestamp + ctts offset`. Returns
+/// `(index, tts_index, tts_sample)` or `None` when nothing is before it.
+fn find_prev_closest_index(
+  track : Mp4Track,
+  e_old : Array[Mp4Sample],
+  tts_old : Array[MovTts],
+  timestamp_pts_in : Int64,
+  flag : Int) -> (Int, Int, Int)? {
+  let mut timestamp_pts = timestamp_pts_in
+  // With dts_shift > 0 every index timestamp needs it added to become a PTS,
+  // so compensate the searched timestamp instead.
+  if track.dts_shift > 0 {
+    timestamp_pts = timestamp_pts - track.dts_shift.to_int64()
+  }
+  let mut index = index_search_timestamp(e_old, timestamp_pts, flag | avseek_flag_backward)
+  // Keep going backwards while the timestamp repeats.
+  if index >= 0 {
+    let mut i = index
+    while i > 0 && e_old[i].dts == e_old[i - 1].dts {
+      if (flag & avseek_flag_any) != 0 || e_old[i - 1].keyframe {
+        index = i - 1
+      }
+      i = i - 1
+    }
+  }
+  let mut tts_index = 0
+  let mut tts_sample = 0
+  if track.has_ctts && index >= 0 {
+    // tts position of the found frame
+    let mut counted = 0
+    while counted < index {
+      if tts_index < tts_old.length() {
+        tts_sample = tts_sample + 1
+        if tts_old[tts_index].count == tts_sample {
+          tts_index = tts_index + 1
+          tts_sample = 0
+        }
+      }
+      counted = counted + 1
+    }
+    // Walk back to a keyframe whose PTS (timestamp + ctts offset) fits.
+    while index >= 0 && tts_index >= 0 && tts_index < tts_old.length() {
+      if e_old[index].dts + tts_old[tts_index].offset.to_int64() <= timestamp_pts &&
+        e_old[index].keyframe {
+        break
+      }
+      index = index - 1
+      if tts_sample == 0 {
+        tts_index = tts_index - 1
+        if tts_index >= 0 {
+          tts_sample = tts_old[tts_index].count - 1
+        }
+      } else {
+        tts_sample = tts_sample - 1
+      }
+    }
+  }
+  if index < 0 {
+    None
+  } else {
+    Some((index, tts_index, tts_sample))
+  }
+}
+
+///|
+/// `fix_index_entry_timestamps`: rewrite the timestamps of the last
+/// `frame_duration_buffer.length()` entries by stepping `end_ts` backwards
+/// through the buffered durations, so discarded leading frames get strictly
+/// increasing timestamps before the edit starts.
+fn fix_index_entry_timestamps(
+  entries : Array[Mp4Sample],
+  end_ts_in : Int64,
+  frame_duration_buffer : Array[Int64]) -> Unit {
+  let mut end_ts = end_ts_in
+  for i = 0; i < frame_duration_buffer.length(); i = i + 1 {
+    end_ts = end_ts - frame_duration_buffer[frame_duration_buffer.length() - 1 - i]
+    entries[entries.length() - 1 - i].dts = end_ts
+  }
+}
+
+///|
+/// `mov_fix_index`: rebuild the sample index so it contains only the frames
+/// (plus what is needed to decode them) inside the edit-list time ranges,
+/// with timestamps rewritten to the edit-list timeline. The rebuilt
+/// `tts` runs replace the merged ones; `min_corrected_pts`, `skip_samples`,
+/// `start_time` and the duration clamp are set as in the C. The C's
+/// `index_ranges` (old→new sample mapping for the demux cursor) are not
+/// modelled: this port materialises the filtered index directly.
+fn mov_fix_index(st : MovState, track : Mp4Track) -> Unit {
+  let e_old = track.samples
+  let nb_old = e_old.length()
+  if track.elst.length() <= 0 || nb_old <= 0 {
+    return
+  }
+  let tts_old = track.tts
+  let tts_count_old = tts_old.length()
+  let mut tts_index_old : Int = 0
+  let mut tts_sample_old : Int = 0
+  let mut edit_list_dts_entry_end : Int64 = 0
+  let mut empty_edits_sum_duration : Int64 = 0
+  let mut num_discarded_begin = 0
+  let mut first_non_zero_audio_edit = -1
+  let mut frame_duration_buffer : Array[Int64] = []
+  let new_samples : Array[Mp4Sample] = []
+  let new_tts : Array[MovTts] = []
+  let mut min_corrected_pts : Int64 = -1
+  let mut found_non_empty_edit = false
+  // Reinitialise min_corrected_pts so it can be computed again.
+  // If dts_shift is positive (negative ctts), negate the DTS by it.
+  if track.dts_shift > 0 {
+    edit_list_dts_entry_end = edit_list_dts_entry_end - track.dts_shift.to_int64()
+  }
+  let start_dts = edit_list_dts_entry_end
+  let mut edit_list_index = 0
+  let mut stop_outer = false
+  while stop_outer == false {
+    let (edit_list_media_time, edit_list_duration) = match get_edit_list_entry(
+        st.movie,
+        track,
+        edit_list_index,
+      ) {
+      None => break
+      Some(v) => v
+    }
+    edit_list_index = edit_list_index + 1
+    let mut edit_list_dts_counter = edit_list_dts_entry_end
+    edit_list_dts_entry_end = sat_add64(edit_list_dts_entry_end, edit_list_duration)
+    if edit_list_dts_entry_end == 9223372036854775807L {
+      stop_outer = true
+      break
+    }
+    num_discarded_begin = 0
+    if found_non_empty_edit == false && edit_list_media_time == -1 {
+      empty_edits_sum_duration = empty_edits_sum_duration + edit_list_duration
+      continue
+    }
+    found_non_empty_edit = true
+    // A non-negative edit resets the skip_samples bookkeeping for audio.
+    if media_is_audio(track.media_type) {
+      if first_non_zero_audio_edit < 0 {
+        first_non_zero_audio_edit = 1
+      } else {
+        first_non_zero_audio_edit = 0
+      }
+      if first_non_zero_audio_edit > 0 {
+        track.skip_samples = 0
+      }
+    }
+    // Start from the closest previous key frame; audio searches a second
+    // earlier to cover decoder delay.
+    let mut search_timestamp = edit_list_media_time
+    if media_is_audio(track.media_type) {
+      let back = search_timestamp - track.timescale.to_int64()
+      search_timestamp = if back > e_old[0].dts { back } else { e_old[0].dts }
+    }
+    let found = match find_prev_closest_index(
+        track,
+        e_old,
+        tts_old,
+        search_timestamp,
+        0,
+      ) {
+      Some(v) => Some(v)
+      None =>
+        // fall back to any frame, then to the first frame of the track
+        match find_prev_closest_index(track, e_old, tts_old, search_timestamp, avseek_flag_any) {
+          Some(v) => Some(v)
+          None => {
+            tts_index_old = 0
+            tts_sample_old = 0
+            Some((0, 0, 0))
+          }
+        }
+    }
+    match found {
+      None => {
+        tts_index_old = 0
+        tts_sample_old = 0
+      }
+      Some((i0, ti0, ts0)) => {
+        tts_index_old = ti0
+        tts_sample_old = ts0
+        let mut index = i0
+        let mut edit_list_start_tts_sample = tts_sample_old
+        let mut edit_list_start_encountered = false
+        let mut found_keyframe_after_edit = false
+        // Iterate over the old index and arrange it according to the edit.
+        let mut stop_inner = false
+        while index < nb_old && stop_inner == false {
+          let current = index
+          let frame_duration : Int64 = if current + 1 < nb_old {
+            e_old[current + 1].dts - e_old[current].dts
+          } else {
+            edit_list_duration
+          }
+          let keyframe = e_old[current].keyframe
+          let mut discard = false
+          let mut curr_cts = e_old[current].dts + track.dts_shift.to_int64()
+          let mut curr_ctts : Int64 = 0
+          if tts_count_old > 0 && tts_index_old < tts_count_old {
+            curr_ctts = tts_old[tts_index_old].offset.to_int64()
+            curr_cts = curr_cts + curr_ctts
+            tts_sample_old = tts_sample_old + 1
+            if tts_sample_old == tts_old[tts_index_old].count {
+              new_tts.push({
+                count: tts_old[tts_index_old].count - edit_list_start_tts_sample,
+                offset: tts_old[tts_index_old].offset,
+                duration: tts_old[tts_index_old].duration,
+              })
+              tts_index_old = tts_index_old + 1
+              tts_sample_old = 0
+              edit_list_start_tts_sample = 0
+            }
+          }
+          if curr_cts < edit_list_media_time ||
+            curr_cts >= edit_list_duration + edit_list_media_time {
+            if media_is_audio(track.media_type) &&
+              track.codec_id != "vorbis" &&
+              curr_cts < edit_list_media_time &&
+              curr_cts + frame_duration > edit_list_media_time &&
+              first_non_zero_audio_edit > 0 {
+              // A partial frame at the edit start: keep it, trim
+              // `skip_samples` leading samples and shift its timestamp.
+              let packet_skip_samples = edit_list_media_time - curr_cts
+              track.skip_samples = track.skip_samples + packet_skip_samples.to_int()
+              edit_list_dts_counter = edit_list_dts_counter - packet_skip_samples
+              if edit_list_start_encountered == false {
+                edit_list_start_encountered = true
+                if frame_duration_buffer.length() > 0 {
+                  fix_index_entry_timestamps(
+                    new_samples,
+                    edit_list_dts_counter,
+                    frame_duration_buffer,
+                  )
+                  frame_duration_buffer = []
+                }
+              }
+            } else {
+              discard = true
+              if edit_list_start_encountered == false {
+                num_discarded_begin = num_discarded_begin + 1
+                frame_duration_buffer.push(frame_duration)
+                if media_is_audio(track.media_type) &&
+                  first_non_zero_audio_edit > 0 &&
+                  track.codec_id != "vorbis" {
+                  track.skip_samples = track.skip_samples + frame_duration.to_int()
+                }
+              }
+            }
+          } else {
+            // inside the edit: track the minimum corrected PTS
+            let cand = edit_list_dts_counter + curr_ctts + track.dts_shift.to_int64()
+            if min_corrected_pts < 0 {
+              min_corrected_pts = cand
+            } else if cand < min_corrected_pts {
+              min_corrected_pts = cand
+            }
+            if edit_list_start_encountered == false {
+              edit_list_start_encountered = true
+              if frame_duration_buffer.length() > 0 {
+                fix_index_entry_timestamps(
+                  new_samples,
+                  edit_list_dts_counter,
+                  frame_duration_buffer,
+                )
+                frame_duration_buffer = []
+              }
+            }
+          }
+          new_samples.push({
+            offset: e_old[current].offset,
+            size: e_old[current].size,
+            dts: edit_list_dts_counter,
+            pts: e_old[current].pts,
+            duration: e_old[current].duration,
+            keyframe,
+            min_distance: e_old[current].min_distance,
+            discard,
+          })
+          // Only advance the timeline once the edit window started.
+          if edit_list_start_encountered {
+            edit_list_dts_counter = edit_list_dts_counter + frame_duration
+          }
+          // Break on the first key frame completing the edit entry.
+          if curr_cts + frame_duration >= edit_list_duration + edit_list_media_time &&
+            (keyframe || media_is_audio(track.media_type)) {
+            if track.has_ctts {
+              // With CTTS, wait one extra keyframe for trailing B-frames.
+              if media_is_video(track.media_type) && found_keyframe_after_edit == false {
+                found_keyframe_after_edit = true
+                index = index + 1
+                continue
+              }
+              if tts_sample_old != 0 {
+                new_tts.push({
+                  count: tts_sample_old - edit_list_start_tts_sample,
+                  offset: tts_old[tts_index_old].offset,
+                  duration: tts_old[tts_index_old].duration,
+                })
+              }
+            }
+            stop_inner = true
+          }
+          index = index + 1
+        }
+      }
+    }
+  }
+  // Empty edits intentionally raise min_corrected_pts; subtract them back.
+  min_corrected_pts = min_corrected_pts - empty_edits_sum_duration
+  track.min_corrected_pts = min_corrected_pts
+  // Video: offset the DTS so the first PTS becomes zero.
+  if media_is_video(track.media_type) && min_corrected_pts > 0 {
+    for i = 0; i < new_samples.length(); i = i + 1 {
+      new_samples[i].dts = new_samples[i].dts - min_corrected_pts
+    }
+  }
+  // Start time equals the duration of any empty edits.
+  track.start_time = empty_edits_sum_duration
+  // The stream cannot be longer than the edit list timeline.
+  let span = edit_list_dts_entry_end - start_dts
+  if span >= 0 && track.duration > span.reinterpret_as_uint64() {
+    track.duration = span.reinterpret_as_uint64()
+  }
+  // Install the rebuilt index and tts (in place for the non-mut samples
+  // array; the tts field is reassignable).
+  track.samples.clear()
+  for i = 0; i < new_samples.length(); i = i + 1 {
+    track.samples.push(new_samples[i])
+  }
+  track.tts = new_tts
+  // The C derives presentation timestamps at demux from the rebuilt tts
+  // (`dts + dts_shift + tts.offset`); materialise them the same way.
+  let mut si = 0
+  for ti = 0; ti < track.tts.length(); ti = ti + 1 {
+    for j = 0; j < track.tts[ti].count; j = j + 1 {
+      if si >= track.samples.length() {
+        break
+      }
+      track.samples[si].pts = track.samples[si].dts +
+        track.dts_shift.to_int64() +
+        track.tts[ti].offset.to_int64()
+      si = si + 1
+    }
+  }
+}
+
+///|
+/// `mov_estimate_video_delay`: H264 reorder estimate — insertion-sorts the
+/// PTS stream through a 17-slot circular buffer and records the maximum
+/// number of swaps any frame needed (the C keys on AV_CODEC_ID_H264; this
+/// port keys on the `avc1` sample-entry fourcc).
+fn mov_estimate_video_delay(track : Mp4Track) -> Unit {
+  if track.video_delay > 0 || track.has_ctts == false || track.codec != "avc1" {
+    return
+  }
+  let pts_buf : FixedArray[Int64] = FixedArray::make(17, av_nopts_value)
+  let mut buf_start = 0
+  let mut ctts_ind = 0
+  let mut ctts_sample = 0
+  track.video_delay = 0
+  let mut ind = 0
+  while ind < track.samples.length() && ctts_ind < track.tts.length() {
+    let mut j = buf_start
+    buf_start = buf_start + 1
+    if buf_start == 17 {
+      buf_start = 0
+    }
+    pts_buf[j] = track.samples[ind].dts + track.tts[ctts_ind].offset.to_int64()
+    let mut num_swaps = 0
+    while j != buf_start {
+      let mut r = j - 1
+      if r < 0 {
+        r = 16
+      }
+      if pts_buf[j] < pts_buf[r] {
+        let tmp = pts_buf[j]
+        pts_buf[j] = pts_buf[r]
+        pts_buf[r] = tmp
+        num_swaps = num_swaps + 1
+      } else {
+        break
+      }
+      j = r
+    }
+    if num_swaps > track.video_delay {
+      track.video_delay = num_swaps
+    }
+    ctts_sample = ctts_sample + 1
+    if ctts_sample == track.tts[ctts_ind].count {
+      ctts_ind = ctts_ind + 1
+      ctts_sample = 0
+    }
+    ind = ind + 1
+  }
+}
+
+///|
 /// `build_open_gop_key_points`: open-GOP bookkeeping for HEVC tracks with
 /// 'sync' sample groups — unrolled per-sample ctts offsets, the CRA sample
 /// list and the minimal stts duration used by the seek back-off.
@@ -2543,11 +3015,14 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
   let mut stss_index = 0
   let mut stps_index = 0
 
-  // Edit list: adjust the first DTS (non-advanced-editlist behaviour).
+  // Edit list pre-pass (mov_build_index head): collect the empty-edit
+  // duration and media start time; with advanced_editlist the DTS shift is
+  // deferred to mov_fix_index at the end of the build instead.
   if track.elst.length() > 0 {
     let mut empty_duration : Int64 = 0
     let mut start_time : Int64 = 0
     let mut edit_start_index = 0
+    let mut multiple_edits = false
     for i = 0; i < track.elst.length(); i = i + 1 {
       let e = track.elst[i]
       if i == 0 && e.time == -1 {
@@ -2556,6 +3031,8 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
         edit_start_index = 1
       } else if i == edit_start_index && e.time >= 0 {
         start_time = e.time
+      } else {
+        multiple_edits = true
       }
     }
     if (empty_duration != 0 || start_time != 0) && st.movie.timescale > 0 {
@@ -2563,7 +3040,15 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
         empty_duration = mov_rescale(empty_duration, track.timescale, st.movie.timescale)
       }
       track.time_offset = start_time - empty_duration
-      current_dts = -mov_clip64(track.time_offset)
+      track.min_corrected_pts = start_time
+      if st.movie.advanced_editlist == false {
+        current_dts = -mov_clip64(track.time_offset)
+      }
+    }
+    // Non-advanced AAC with a positive start: encoder delay as padding.
+    if multiple_edits == false && st.movie.advanced_editlist == false &&
+      track.codec_id == "aac" && start_time > 0 && track.sample_rate > 0 {
+      track.skip_samples = mov_rescale(start_time, track.sample_rate, track.timescale).to_int()
     }
   }
 
@@ -2716,6 +3201,20 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
       }
     }
   }
+
+  // Fix index according to edit lists (advanced path).
+  if st.movie.advanced_editlist {
+    mov_fix_index(st, track)
+  }
+  // Update start time of the stream.
+  if track.start_time == av_nopts_value && media_is_video(track.media_type) &&
+    track.samples.length() > 0 {
+    track.start_time = track.samples[0].dts + track.dts_shift.to_int64()
+    if track.tts.length() > 0 {
+      track.start_time = track.start_time + track.tts[0].offset.to_int64()
+    }
+  }
+  mov_estimate_video_delay(track)
 }
 
 // ---------------------------------------------------------------------------
@@ -2733,6 +3232,13 @@ pub fn av_mov_open(buf : Bytes) -> Result[Mp4Movie, String] {
 }
 
 ///|
+/// `av_mov_open` with the `advanced_editlist` demuxer option (FFmpeg default
+/// on). Turning it off selects the plain first-DTS-shift edit-list handling.
+pub fn av_mov_open_with(buf : Bytes, advanced_editlist : Bool) -> Result[Mp4Movie, String] {
+  mov_open(AvioContext::init_read_context(buf), advanced=advanced_editlist)
+}
+
+///|
 /// Streaming entry point: the same walk over a caller-supplied `AVIOContext`
 /// (file/network source). The whole-file wrapper above is now just
 /// `init_read_context` plus this.
@@ -2740,8 +3246,9 @@ pub fn av_mov_open_avio(pb : AvioContext) -> Result[Mp4Movie, String] {
   mov_open(pb)
 }
 
-fn mov_open(r : AvioContext) -> Result[Mp4Movie, String] {
+fn mov_open(r : AvioContext, advanced~ : Bool = true) -> Result[Mp4Movie, String] {
   let movie = new_movie()
+  movie.advanced_editlist = advanced
   let st : MovState = {
     movie,
     cur: new_track(),

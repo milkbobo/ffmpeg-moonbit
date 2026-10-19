@@ -6,8 +6,6 @@
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
 /// Deviations, all documented:
-///   * `sc->min_corrected_pts` is always 0 here (only the not-ported
-///     `advanced_editlist` pass produces a non-zero value).
 ///   * `can_seek_to_key_sample`'s open-GOP status comes from the
 ///     `sgpd`('sync') + `sbgp` pass (`build_open_gop_key_points` in
 ///     mov.mbt); without sync groups every key sample counts as closed,
@@ -113,7 +111,7 @@ pub fn mov_seek_stream(
 ) -> Result[Int, String] {
   // Here we consider timestamp to be PTS, hence try to offset it so that we
   // can search over the DTS timeline.
-  let mut ts = timestamp - track.dts_shift.to_int64()
+  let mut ts = timestamp - (track.min_corrected_pts + track.dts_shift.to_int64())
   let backward = (flags & avseek_flag_backward) != 0
   let any = (flags & avseek_flag_any) != 0
   let search_flags = (if backward { avseek_flag_backward } else { 0 }) +

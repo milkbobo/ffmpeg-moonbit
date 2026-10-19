@@ -168,6 +168,10 @@ test "mp4: real AAC file, esds extradata and edit-list shift (ffprobe packets)" 
     (12288, 12288, 942, 2663, 184),
   ]
   assert_eq(t.samples.length(), expected.length())
+  // The advanced edit-list path marks the pre-media_time frame
+  // AVINDEX_DISCARD_FRAME (kept for the decoder delay, dropped after
+  // decode) and reports its 1024-sample encoder delay as skip_samples.
+  assert_eq(t.skip_samples, 1024)
   for i = 0; i < expected.length(); i = i + 1 {
     let (pts, dts, dur, pos, size) = expected[i]
     assert_eq(t.samples[i].offset, pos)
@@ -176,7 +180,7 @@ test "mp4: real AAC file, esds extradata and edit-list shift (ffprobe packets)" 
     assert_eq(t.samples[i].pts, pts)
     assert_eq(t.samples[i].duration, dur)
     assert_eq(t.samples[i].keyframe, true)
-    assert_eq(t.samples[i].discard, false)
+    assert_eq(t.samples[i].discard, i == 0)
   }
 }
 

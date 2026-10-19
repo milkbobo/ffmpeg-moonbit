@@ -849,12 +849,23 @@ test "mp4: edit list shifts the first dts" {
     edts,
   )
   let data = build_movie(mvhd_box(1000, 5000), trak, false)
-  let t = av_mov_open(Bytes::from_array(data)).unwrap().tracks[0]
-
+  // Non-advanced: the whole track keeps its 4 samples with the first DTS
+  // shifted by -time_offset (200 - 1000 = -800 → dts starts at 800).
+  let t = av_mov_open_with(Bytes::from_array(data), false).unwrap().tracks[0]
   assert_eq(t.elst.length(), 2)
   assert_eq(t.time_offset, -800)
+  assert_eq(t.samples.length(), 4)
   assert_eq(t.samples[0].dts, 800)
   assert_eq(t.samples[1].dts, 900)
+  // Advanced (FFmpeg default): the walk starts at the closest key frame at
+  // or before media_time 200 — sample 2 (no stss ⇒ every sample is a key
+  // frame) — and the timeline starts after the 1000-unit empty edit.
+  let a = av_mov_open(Bytes::from_array(data)).unwrap().tracks[0]
+  assert_eq(a.samples.length(), 2)
+  assert_eq(a.samples[0].dts, 1000)
+  assert_eq(a.samples[1].dts, 1100)
+  assert_eq(a.start_time, 1000)
+  assert_eq(a.min_corrected_pts, 0)
 }
 
 ///| QuickTime branding turns `isom` off, which selects the non-isom sample-entry layout. */
