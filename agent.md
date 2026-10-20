@@ -382,6 +382,8 @@ $msg | git commit -F -
 moonbit/                      # git 仓库根
 ├── .gitignore                # 忽略 _build/ 等
 ├── moon.mod                  # name = "ffmpeg/moonbit", preferred_target = wasm
+├── COPYING.LGPLv2.1          # GNU LGPL 2.1 正文（与 FFmpeg 根同名文件逐字节一致）
+├── COPYING.LGPLv3            # GNU LGPL 3.0 正文（同上）
 ├── README.md                 # 进度 / 模块表 / 验证来源 / 约定 / 踩坑（动态信息看这里）
 ├── agent.md                  # 本文件（稳定约定、命令、流程）
 ├── libavutil/                # 包 ffmpeg/moonbit/libavutil
@@ -461,3 +463,7 @@ moonbit/                      # git 仓库根
 
 本仓库是 FFmpeg 的衍生移植，遵循 **LGPL-2.1-or-later**（见 `moon.mod` 与各源文件头部）。
 新增文件须保留原始 C 文件的版权与作者信息。
+
+许可证正文在仓库根：`COPYING.LGPLv2.1`（v2.1 全文）与 `COPYING.LGPLv3`（v3 全文），
+均从 FFmpeg 仓库根同名文件**逐字节复制**（不要改写正文、不要重新折行）。改许可证相关
+文件时用 `md5sum` 与 FFmpeg 源树对照确认未被编辑器改动。

@@ -39,6 +39,8 @@ FFmpeg 的 `*.asm` 是 x86 汇编（NASM），**无法编译进本项目当前�
 ```
 moonbit/
 ├── moon.mod                  # 模块声明：name = "ffmpeg/moonbit"，preferred_target = "wasm"
+├── COPYING.LGPLv2.1          # GNU LGPL 2.1 正文（与 FFmpeg 根同名文件逐字节一致）
+├── COPYING.LGPLv3            # GNU LGPL 3.0 正文（同上）
 ├── libavutil/                # 包：ffmpeg/moonbit/libavutil
 │   ├── moon.pkg              # 包配置（空 = 默认）
 │   ├── mathematics.mbt       # av_gcd / av_rescale_rnd / av_log2 / ...
@@ -685,3 +687,16 @@ I 帧重建 + 环路去块滤波**（slice header + CAVLC + 4x4 IDCT + 帧内预
 
 本目录是对 FFmpeg 的衍生移植，遵循 FFmpeg 的 **LGPL-2.1-or-later**（`moon.mod` 中已声明）。
 各源文件头部保留了原始 C 文件的版权与作者信息（如 Michael Niedermayer、Ryan Martell 等）。
+
+许可证正文随仓库提供两份，均为 GNU 官方文本（与 FFmpeg 仓库根的同名文件逐字节一致）：
+
+| 文件 | 内容 | MD5 |
+|---|---|---|
+| [COPYING.LGPLv2.1](COPYING.LGPLv2.1) | GNU Lesser General Public License, Version 2.1, February 1999（502 行） | `eed22b3456132611e3d4aa7a7ec64dac` |
+| [COPYING.LGPLv3](COPYING.LGPLv3) | GNU Lesser General Public License, Version 3, 29 June 2007（165 行） | `e6a600fd5e1d9cbde2d983680233ad02` |
+
+之所以两份都放：FFmpeg 是 **LGPL-2.1-or-later**，被许可人可以按 v2.1 或**任一更晚版本**
+（含 v3）使用。注意 LGPLv3 **不是完整条款**——它是在 GNU GPLv3 之上追加许可的短文本，
+引用前须一并提供 GPLv3 正文（FFmpeg 发行包根目录的 `COPYING.GPLv3`，本项目未内置）。
+本项目自身的选则是 **v2.1**（见 `moon.mod` 的 `license` 字段），保留 v3 文本只为让下游
+可以按 v3 条款再分发。
