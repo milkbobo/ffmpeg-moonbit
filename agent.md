@@ -47,8 +47,11 @@
     `h264_deblock.mbt`（`h264dsp` 四个滤波核 + `h264_loopfilter` 边界强度推导）+
     `h264_decode.mbt`（宏块路径编排 + Annex B 入口）。默认入口**带滤波**，视觉对齐
     FFmpeg 默认解码；`..._ex(data, true)` 跳过滤波，对齐 `-skip_loop_filter all`
-  - MP3 **Layer III 定点解码**：`mp3_tables.mbt`（码表/Huffman）+ `mp3_dsp.mbt`
-    （IMDCT/DCT32/合成窗）+ `mp3_decode.mbt`（side info/反量化/立体声/PCM）
+  - MPEG 音频**三层**定点解码：`mp3_tables.mbt`（Layer III 码表/Huffman）+
+    `mp3_dsp.mbt`（IMDCT/DCT32/合成窗）+ `mp3_decode.mbt`（Layer III：side info/
+    反量化/立体声/PCM，另含三层共用的合成滤波 `mpa_synthesize`）+
+    `mpa_layer12.mbt`/`mpa_layer12_tables.mbt`（Layer I/II：bit allocation/
+    scalefactor/组量化）；`decode_frame` 按帧头 `layer` 分派
 - **libavformat（码流层接入）**：`rawaudio.mbt`（裸 ADTS/MP3 分帧，ID3v2/v1 +
   Xing/Info/VBRI）、`codec_tags.mbt`（MKV CodecID / MP4 fourcc 映射）、
   `codec_parameters.mbt`（容器 + extradata → 统一 `CodecParameters`）
@@ -160,6 +163,9 @@ $msg | git commit -F -
     另一套掩盖（本项目的去块滤波就是靠两套对照才定位到时序问题）。
   - MP3：期望 PCM MD5 必须取自**定点**解码器 `-c:a mp3 -f s16le`；浮点（默认
     `mp3float`）给出不同 MD5，用错就永远对不上。
+  - Layer II：编码用 FFmpeg 原生 `-c:a mp2`，解码期望值取 `-c:a mp2`（定点，非
+    `mp2float`）。同一份 `decode_mp3_stream` 能吃三层，因为帧头解析已给出 `layer` 与
+    `frame_size`。Layer I 没有编码器 → 手工拼帧 + 让 FFmpeg 解码取期望值（见 §7）。
   - **扫描式验证**：按宏块/每行算 luma MD5 与参考 YUV 同区域比对，比整帧 MD5 更快
     定位到具体宏块或单条预测路径。
   - **负例也要吃向量**：多 slice / CABAC / P slice / 4:2:2 / 10-bit 等未支持输入，断言
@@ -261,6 +267,10 @@ $msg | git commit -F -
   信息，预测模式互相污染）。
 - **未使用的 `mut` 与未使用的私有顶层符号在 `moon check` 下按错误/告警严格处理**：
   移植时先写后弃的辅助函数、只在调试期用到的变量，提交前清掉或接上消费者。
+- **`fn name(self : T, ...)` 会被解析成方法定义**：MoonBit 把首参名为 `self` 的 `fn`
+  当作 `T::name`（并给 `deprecated_syntax` 警告），于是同包其它文件、甚至同文件后面的
+  调用点都报 `unbound identifier`。**自由函数第一参数不要叫 `self`**——本项目改叫
+  `dec`/`ctx`/`gb`（`mpa_synthesize`、`mpa_decode_layer1/2` 都踩过）。
 - **测试文件间可复用同包私有常量/函数**：如 `real_mkv_1024_b64`（`ebml_real_wbtest.mbt`）、
   `bcat`（`ebml_wbtest.mbt`）可被同包其它 `_wbtest.mbt` 直接使用，不必重复内嵌。
   H.264 的三个码流常量放在 `h264_decode_realdata_wbtest.mbt`，测试在
@@ -329,6 +339,22 @@ $msg | git commit -F -
   C 在 `h264_slice.c:1909` 乘 2 后才存；漏乘会让 `alpha`/`beta` 偏小。
 - **PPS 的 `chroma_qp_index_offset` 不一定是 0**：本项目向量里是 **-2**（`pic_init_qp_minus26`
   是 -3）。自己写参考模型时直接解析 PPS，别假设默认值；差 2 会让表下标错位、个别样本差 1~2。
+- **Layer II 的分配表遍历**：`alloc_table` 每行的第 0 个字节是该子带的**位宽**，其后
+  `1 << bits` 项是该分配值对应的**量化索引**，所以推进是 `j += 1 << bit_alloc_bits`、
+  取索引是 `alloc_table[j + b]`。把 `j` 当子带序号、或漏掉 `1 << bits`，会从第二个
+  子带起整体错位（症状：只有最低几个子带对）。
+- **`scale_code` 的四种共享模式不是「都读三个」**：`0` 读 3 个 6 位；`1` 读第 1、3 个
+  （中间继承第 1 个）；`2` 只读第 1 个（三个相同）；`3` 读第 1、3 个（中间继承第 3 个）。
+- **Layer I/II 与 Layer III 的共性只有合成滤波**：不要复用 Layer III 的
+  `compute_band_indexes`/`reorder_block`/`compute_antialias`/`compute_imdct`——L1/L2 的
+  `sb_samples` 已经是量化后可直接用的子带样本，任何一层 IMDCT 叠上去都会毁掉输出。
+- **`ff_division_tabs` 该派生不该抄 2368 个常量**：
+  `tab[v] = (v%steps) + (((v/steps)%steps)<<4) + ((v/steps/steps)<<8)`，只有 qindex 0/1/3
+  （3/5/9 步）需要；`ff_scale_factor_modshift = (i%3) | ((i/3)<<2)`；L1 乘子是
+  `MULLx(norm, FIXR(k*2), FRAC_BITS)`。派生时**整数运算顺序必须与 C 一致**（先 FIXR 再 MULL）。
+- **Layer I 没有参考编码器**：FFmpeg 只有 mp2/mp3 编码器。覆盖 Layer I 的办法是按规范
+  手工拼帧（header + 4 位分配 + 6 位 scalefactor + `n+1` 位尾数），再让 FFmpeg 解码取
+  期望值；mp2 demuxer 需要至少两个连续帧才能探测，所以一条向量至少 3 帧。
 - **验证脚本的盲区**：拿「未滤波 YUV + 逐宏块滤波」当参考模型时，它与 FFmpeg 默认解码
   **逐字节一致**（因为 FFmpeg 预测也读滤波前像素），能验出核/强度错误但**验不出时序错误**。
   时序问题要用整帧 MD5 + 「逐 MB 区域哈希」这类粗粒度对照来定位。
@@ -435,7 +461,9 @@ moonbit/                      # git 仓库根
     ├── audio_headers.mbt     # ADTS + MPEG 音频帧头
     ├── mp3_tables.mbt        # Layer III 码表/Huffman 表
     ├── mp3_dsp.mbt           # 定点 IMDCT/DCT32/合成窗
-    ├── mp3_decode.mbt        # Layer III 定点解码器
+    ├── mpa_layer12.mbt       # Layer I/II 定点解码器（分配/scalefactor/组量化）
+    ├── mpa_layer12_tables.mbt# Layer I/II 分配表 + 派生定点缩放/除法表
+    ├── mp3_decode.mbt        # Layer III 定点解码器 + 三层共用合成滤波
     ├── idct.mbt              # SIMPLE-C IDCT + idctdsp 辅助（标量，Array[Int]）
     ├── idct_v128.mbt         # IDCT 的 `@v128` 版（块/像素用字节缓冲）
     ├── dctref.mbt            # 双精度参考 DCT/IDCT（IDCT 测试的期望值来源）

@@ -17,6 +17,9 @@
 ///| `FRAC_BITS`. */
 let frac_bits : Int = 23
 
+///| `FRAC_ONE = 1 << FRAC_BITS`. */
+let frac_one : Int = 8388608
+
 ///| `WFRAC_BITS`. */
 let wfrac_bits : Int = 16
 

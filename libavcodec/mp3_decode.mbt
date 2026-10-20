@@ -1,13 +1,16 @@
 ///|
-/// MPEG Audio Layer III decoder (FFmpeg 9.0.2 `mpegaudiodec_template.c`,
-/// fixed-point path) built on the tables in `mp3_tables.mbt` and the DSP in
-/// `mp3_dsp.mbt`.
+/// MPEG Audio decoder: Layer III lives here, Layer I/II in `mpa_layer12.mbt`.
+/// Built on the tables in `mp3_tables.mbt`/`mpa_layer12_tables.mbt` and the DSP
+/// in `mp3_dsp.mbt`, following FFmpeg 9.0.2 `mpegaudiodec_template.c` along the
+/// fixed-point path (`USE_FLOATS=0`).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: MPEG-1/2/2.5 Layer III, mono/stereo, joint stereo (MS/intensity),
-/// short blocks, bit reservoir, output S16 interleaved. Layer I/II are not
-/// part of this slice (the frame header parser already recognizes them).
+/// Scope: MPEG-1/2/2.5 Layers I, II and III; mono/stereo; joint stereo
+/// (MS/intensity for Layer III, the shared-region `bound` for Layers I/II);
+/// short blocks and the bit reservoir for Layer III; output S16 interleaved.
+/// `decode_frame` dispatches on the header's `layer` field, and the synthesis
+/// filter (`mpa_synthesize`) is shared by all three layers.
 ///
 /// Implementation deviation: the C bit-reservoir state machine copies a
 /// rolling 1048-byte `last_buf` and switches between `gb` and `in_gb`. This
@@ -173,7 +176,7 @@ fn new_mp3_granule() -> Mp3Granule {
   }
 }
 
-///| One decoded MP3 frame, interleaved signed 16-bit PCM. */
+///| One decoded MPEG-audio frame, interleaved signed 16-bit PCM. */
 pub struct Mp3Pcm {
   sample_rate : Int
   channels : Int
@@ -181,8 +184,9 @@ pub struct Mp3Pcm {
 }
 
 ///|
-/// Persistent MP3 decoder state: synthesis windows, MDCT overlap and the
-/// bit-reservoir main-data stream.
+/// Persistent MPEG-audio decoder state: synthesis windows, Layer III MDCT
+/// overlap and the bit-reservoir main-data stream. Layer I/II only use the
+/// synthesis half plus `sb_samples`.
 pub struct Mp3Decoder {
   mut sample_rate : Int
   mut sample_rate_index : Int
@@ -835,7 +839,7 @@ pub fn Mp3Decoder::decode_frame(
     Err(e) => return Err(e)
     Ok(v) => v
   }
-  if h.layer != 3 {
+  if h.layer != 1 && h.layer != 2 && h.layer != 3 {
     return Err("unsupported layer")
   }
   if h.free_format || h.frame_size <= 0 {
@@ -868,6 +872,22 @@ pub fn Mp3Decoder::decode_frame(
   let mut nb_granules = 0
   if h.error_protection != 0 {
     let _ = gb.read(16) // CRC
+  }
+  // Layer I / II: no side info, no bit reservoir, no IMDCT — the requantised
+  // subband samples go straight to the shared synthesis filter.
+  if h.layer != 3 {
+    let nb_blocks = if h.layer == 1 {
+      match mpa_decode_layer1(self, gb, h) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+    } else {
+      match mpa_decode_layer2(self, gb, h) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+    }
+    return Ok(mpa_synthesize(self, h, nb_blocks))
   }
   if h.lsf != 0 {
     main_data_begin = gb.read(8).reinterpret_as_int()
@@ -1089,29 +1109,34 @@ pub fn Mp3Decoder::decode_frame(
   }
 
   // Synthesis filter (channels are processed in order, sharing dither_state).
-  let nb_blocks = nb_granules * 18
+  Ok(mpa_synthesize(self, h, nb_granules * 18))
+}
+
+///|
+/// `ff_mpa_synth_filter` applied to `nb_blocks` blocks of 32 subband samples per
+/// channel, then interleaved into one `Mp3Pcm`. Shared by all three layers.
+fn mpa_synthesize(
+  dec : Mp3Decoder,
+  h : MpaDecodeHeader,
+  nb_blocks : Int
+) -> Mp3Pcm {
   let planar : Array[Array[Int]] = [
     Array::make(nb_blocks * 32, 0),
     Array::make(nb_blocks * 32, 0),
   ]
   for ch = 0; ch < h.nb_channels; ch = ch + 1 {
     for i = 0; i < nb_blocks; i = i + 1 {
-      dct32(
-        self.synth_buf[ch],
-        self.synth_offset[ch],
-        self.sb_samples[ch],
-        i * 32,
-      )
-      self.dither_state = apply_window(
-        self.synth_buf[ch],
-        self.synth_offset[ch],
+      dct32(dec.synth_buf[ch], dec.synth_offset[ch], dec.sb_samples[ch], i * 32)
+      dec.dither_state = apply_window(
+        dec.synth_buf[ch],
+        dec.synth_offset[ch],
         synth_window,
-        self.dither_state,
+        dec.dither_state,
         planar[ch],
         i * 32,
         1,
       )
-      self.synth_offset[ch] = (self.synth_offset[ch] - 32) & 511
+      dec.synth_offset[ch] = (dec.synth_offset[ch] - 32) & 511
     }
   }
   let samples = Array::make(nb_blocks * 32 * h.nb_channels, 0)
@@ -1120,17 +1145,14 @@ pub fn Mp3Decoder::decode_frame(
       samples[i * h.nb_channels + ch] = planar[ch][i]
     }
   }
-  Ok({
-    sample_rate: h.sample_rate,
-    channels: h.nb_channels,
-    samples,
-  })
+  { sample_rate: h.sample_rate, channels: h.nb_channels, samples }
 }
 
 ///|
-/// Decode a complete raw MP3 stream (all frames concatenated, optionally with
-/// an ID3v2 tag already removed). This is a convenience wrapper around
-/// `Mp3Decoder::decode_frame` for tests and CLI use.
+/// Decode a complete raw MPEG-audio stream (Layer I, II or III; all frames
+/// concatenated, optionally with an ID3v2 tag already removed). This is a
+/// convenience wrapper around `Mp3Decoder::decode_frame` for tests and CLI use;
+/// it walks frames by `frame_size`, so it handles all three layers.
 pub fn decode_mp3_stream(data : Bytes) -> Result[Mp3Pcm, String] {
   let mut start = 0
   if data.length() >= 10 && data[0] == b'I' && data[1] == b'D' &&
