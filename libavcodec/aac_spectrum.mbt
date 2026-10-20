@@ -533,6 +533,61 @@ fn aac_read_sign_bits(gb : BitReader, n : Int32) -> Int32 {
 }
 
 ///|
+/// `decode_pulses` position checks, deferred from syntax parsing until
+/// the actual sampling-rate SWB table is available. The full long-window
+/// band count, not max_sfb, bounds the encoded start and positions.
+fn aac_resolve_pulses(pulse : AacPulse, swb : AacSwb) -> Result[Array[Int32], String] {
+  if pulse.offsets.length() == 0 { return Ok([]) }
+  if pulse.start_sfb >= swb.num_long {
+    return Err("pulse start band out of range")
+  }
+  let positions : Array[Int32] = []
+  let mut pos = swb.offsets_long[pulse.start_sfb].reinterpret_as_int()
+  for i = 0; i < pulse.offsets.length(); i = i + 1 {
+    pos = pos + pulse.offsets[i]
+    if pos >= swb.offsets_long[swb.num_long].reinterpret_as_int() {
+      return Err("pulse position out of range")
+    }
+    positions.push(pos)
+  }
+  Ok(positions)
+}
+
+///|
+/// Float `decode_spectrum_and_dequant` pulse reconstruction. Undo the
+/// 4/3 power, add the pulse in the quantized domain, then dequantize
+/// again. Noise and zero-scale bands are unchanged; repeated positions
+/// deliberately see the coefficient changed by the previous pulse.
+fn aac_apply_pulses(
+  coeffs : Array[Double],
+  pulse : AacPulse,
+  positions : Array[Int32],
+  swb : AacSwb,
+  sect_cb : Array[Array[Int32]],
+  sf : Array[Array[Double]],
+) -> Unit {
+  let mut band = 0
+  for i = 0; i < positions.length(); i = i + 1 {
+    let pos = positions[i]
+    while swb.offsets_long[band + 1].reinterpret_as_int() <= pos {
+      band = band + 1
+    }
+    // FFmpeg initializes band_type and sf beyond max_sfb to zero.
+    if band >= sf[0].length() || sect_cb[0][band] == 13 || sf[0][band] == 0.0 {
+      continue
+    }
+    let scale = sf[0][band]
+    let mut co = coeffs[pos]
+    let mut ico = -pulse.amp[i].to_double()
+    if co != 0.0 {
+      co = co / scale
+      ico = co / co.abs().sqrt().sqrt() + (if co > 0.0 { -ico } else { ico })
+    }
+    coeffs[pos] = @math.cbrt(ico.abs()) * ico * scale
+  }
+}
+
+///|
 /// `tns_decode_coef`'s `compute_lpc_coefs(..., lpc_stride = 0,
 /// normalize = 0)`: the Levinson recursion expanding the quantized TNS
 /// coefficients into predictor coefficients, in place (the float path's

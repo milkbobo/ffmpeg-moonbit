@@ -7,15 +7,13 @@
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: the ICS syntax layer plus TNS. Spectral Huffman codebooks 1..11
-/// (`aacdec.c: decode_spectrum_and_dequant`) are not ported yet: sections
-/// using them are rejected explicitly. Scalefactor bands with codebook 0
-/// carry no data, so an all-codebook-0 SCE frame decodes end to end.
+/// Scope: AAC-LC ICS syntax, pulse, TNS and gain control. Spectral
+/// Huffman decoding and pulse reconstruction live in aac_spectrum.mbt.
 
 ///| Window sequences (spec 4.6.2.2): 0 ONLY_LONG, 1 LONG_START,
 
 ///|
-/// 2 EIGHT_SHORT, 3 LONG_STOP. Long-start/stop windowing is pending. */
+/// 2 EIGHT_SHORT, 3 LONG_STOP. */
 let aac_only_long : Int32 = 0
 
 ///|
@@ -28,7 +26,7 @@ pub struct AacIcsInfo {
   max_sfb : Int32
   /// `window_sequence` (0..3, see the `aac_*` constants).
   window_sequence : Int32
-  /// `window_shape`: 0 sine, 1 KBD (KBD windows not ported yet).
+  /// `window_shape`: 0 sine, 1 KBD.
   window_shape : Int32
   /// `scale_factor_grouping` (only for EIGHT_SHORT).
   scale_factor_grouping : Int32
@@ -61,6 +59,16 @@ pub struct AacTns {
 }
 
 ///|
+/// Pulse syntax (FFmpeg `Pulse`). Keep the encoded band and offset deltas
+/// until the decoder supplies the sampling-rate-specific SWB
+/// table; this lets the ICS syntax parser stay independent of that table.
+pub struct AacPulse {
+  start_sfb : Int32
+  offsets : Array[Int32]
+  amp : Array[Int32]
+}
+
+///|
 /// A parsed `individual_channel_stream` (common window not covered). */
 pub struct AacIcs {
   info : AacIcsInfo
@@ -70,6 +78,7 @@ pub struct AacIcs {
   /// `scale_factors[g][sfb]` (raw, before `pow(4/3)`).
   scale_factors : Array[Array[Int32]]
   pulse_present : Int32
+  pulse : AacPulse
   tns_present : Int32
   tns : AacTns
   gain_control_present : Int32
@@ -281,8 +290,9 @@ fn aac_tns_none(num_windows : Int32) -> AacTns {
 ///|
 /// `decode_ics` for an SCE (single channel element): global gain, ICS info,
 /// section/scalefactor data, pulse data, TNS data and gain control, in the
-/// order of spec 4.6.2.1. Spectral data itself (codebooks 1..11) follows
-/// and is not parsed yet.
+/// order of spec 4.6.2.1. Spectral data (codebooks 1..11) follows and is
+/// decoded separately. Pulse positions are validated against the SWB
+/// table by the frame decoder before it reads spectral data.
 pub fn aac_decode_ics(gb : BitReader) -> Result[AacIcs, String] {
   let global_gain = gb.read(8).reinterpret_as_int()
   let info = match aac_decode_ics_info(gb) {
@@ -299,8 +309,27 @@ pub fn aac_decode_ics(gb : BitReader) -> Result[AacIcs, String] {
     Err(e) => return Err(e)
   }
   let pulse_present = gb.read1().reinterpret_as_int()
-  if pulse_present != 0 {
-    return Err("pulse data is not supported")
+  let pulse = if pulse_present != 0 {
+    if info.window_sequence == aac_eight_short {
+      return Err("pulse data is not allowed in short windows")
+    }
+    if gb.bits_left() < 8 {
+      return Err("truncated pulse data")
+    }
+    let n = gb.read(2).reinterpret_as_int() + 1
+    let start_sfb = gb.read(6).reinterpret_as_int()
+    if gb.bits_left() < 9 * n {
+      return Err("truncated pulse data")
+    }
+    let offsets : Array[Int32] = []
+    let amp : Array[Int32] = []
+    for _i = 0; _i < n; _i = _i + 1 {
+      offsets.push(gb.read(5).reinterpret_as_int())
+      amp.push(gb.read(4).reinterpret_as_int())
+    }
+    { start_sfb, offsets, amp, }
+  } else {
+    { start_sfb: 0, offsets: [], amp: [], }
   }
   let tns_present = gb.read1().reinterpret_as_int()
   let tns = if tns_present != 0 {
@@ -339,6 +368,7 @@ pub fn aac_decode_ics(gb : BitReader) -> Result[AacIcs, String] {
     sect_cb,
     scale_factors,
     pulse_present,
+    pulse,
     tns_present,
     tns,
     gain_control_present,

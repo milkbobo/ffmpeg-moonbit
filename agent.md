@@ -57,10 +57,11 @@
 - **libavcodec（AAC 频谱解码，2026-10 新增）**：`aac_tables.mbt`（aactab.c 全部
   解码表 + pow2sf/cbrt 运行时表的 float32 复刻，`scripts/extract_aac_tables.py`
   批量提取并与 C 源逐值 diff）+ `aac_spectrum.mbt`（scalefactor 差分/noise 前导、
-  码书 1..11 Huffman + VMUL 打包索引解包、book 11 escape、PNS、TNS Levinson+AR、
+  码书 1..11 Huffman + VMUL 打包索引解包、book 11 escape、pulse 重建、PNS、TNS Levinson+AR、
   gain-control 语法）+ `aac_mdct.mbt`（四窗口序列 + KBD/正弦窗、综合 2/N、
   `vector_fmul_window` 2×len、FIL/PCE 跳过）。真实 libfdk_aac 码流逐帧解码出 PCM；
-  **既有 46 帧单声道长窗向量与 FFmpeg 参考的最大差分为 1 LSB**（见 README §3）。
+  **单声道长窗、真实短窗/窗口切换/TNS/PNS 及合成 pulse 向量与 FFmpeg 参考的
+  最大差分为 1 LSB**（见 README §3）。
 - **libavutil（bessel）**：`av_bessel_i0`（Blair/Edwards 极小有理逼近，KBD 窗用）。
 - **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
   - H.264 Baseline **I 帧重建 + 环路去块滤波**：`h264_slice.mbt`（I/SI slice header）+
@@ -424,6 +425,11 @@ $msg | git commit -F -
   移植同样只消费语法。
 - **AAC PCM 差分不能重复补编码器延迟**：参考 `ffmpeg -i tone_fade.aac -f s16le`
   的 PCM 与本解码器都保留 priming，按同一帧比较；额外偏移 1024 样本会制造失配。
+- **AAC pulse 的位置依赖实际采样率的 SWB 表**：语法层保留起始带和每个 5 位
+  offset，帧层在频谱解码前转为累计位置；起始带按完整 num_swb 校验，不按 max_sfb。
+  重建放在反量化后、TNS 前，先撤销 4/3 幂再加 pulse 再反量化；重复位置必须顺序
+  应用，NOISE_BT 与零缩放带跳过。短窗中的 pulse 必须拒绝。参考向量生成脚本为
+  `scripts/generate_aac_transient_vectors.py`（包括 native/FDK 真实窗口切换和合成 pulse）。
 - **差分向量生成走 stdin/stdout 管道**：Git Bash 会把 `-v "$(pwd):/w"` 的卷挂载
   改写成无效路径，docker 报 `destination can't be '/'`；用
   `docker run --rm -i ... pipe:1 > out` 绕开。
@@ -535,9 +541,9 @@ moonbit/                      # git 仓库根
     ├── h264_mvpred.mbt       # MV 预测（A/B/C、mid_pred、P_SKIP）
     ├── h264_inter.mbt        # P 宏块层（skip/type/ref/mvd + inter 残差）
     ├── h264_dpb.mbt          # 滑窗 DPB + H264Decoder（Annex B/avcC 入口）
-    ├── aac_ics.mbt           # AAC ICS 语法（ics_info/section/TNS/gain-control）
+    ├── aac_ics.mbt           # AAC ICS 语法（ics_info/section/pulse/TNS/gain-control）
     ├── aac_mdct.mbt          # AAC IMDCT/加窗（四窗口序列 + KBD/正弦窗）
-    ├── aac_spectrum.mbt      # AAC 频谱解码（码书 1..11/scalefactor/PNS/TNS）
+    ├── aac_spectrum.mbt      # AAC 频谱解码（码书 1..11/scalefactor/pulse/PNS/TNS）
     ├── aac_tables.mbt        # AAC 解码表（脚本批量提取）
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS + hvcC
     ├── audio_headers.mbt     # ADTS + MPEG 音频帧头

@@ -487,6 +487,10 @@ pub fn AacDecoder::decode_frame(
   if ics.info.window_sequence == aac_eight_short && max_sfb > self.swb.num_short {
     return Err("max_sfb exceeds the scalefactor band count")
   }
+  let pulse_positions = match aac_resolve_pulses(ics.pulse, self.swb) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
   let sf = aac_sf_dequant(ics.info, ics.sect_cb, ics.scale_factors)
   let coeffs : Array[Double] = Array::make(1024, 0.0)
   match
@@ -502,6 +506,7 @@ pub fn AacDecoder::decode_frame(
     Ok(_) => ()
     Err(e) => return Err(e)
   }
+  aac_apply_pulses(coeffs, ics.pulse, pulse_positions, self.swb, ics.sect_cb, sf)
   if ics.tns_present != 0 {
     aac_apply_tns(coeffs, ics.tns, ics.info, self.swb)
   }
