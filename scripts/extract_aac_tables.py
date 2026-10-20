@@ -10,9 +10,14 @@ libavcodec/aactab.c (ff_aac_pow2sf_tab) and libavcodec/cbrt_tablegen*.c
 import re
 import struct
 import math
+import argparse
+from pathlib import Path
 
-ROOT = r"D:/project/FFmpeg-n9.0.2"
+ROOT = str(Path(__file__).resolve().parents[2])
 AACTAB = ROOT + "/libavcodec/aactab.c"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--check", action="store_true", help="verify existing tables without rewriting formatting")
+args = parser.parse_args()
 
 src = open(AACTAB, encoding="utf-8").read()
 
@@ -103,27 +108,15 @@ for moon, cname in idx_names.items():
     emit_ints(lines, moon, vals, "UInt")
 
 # --- per-book value/index mapping (ff_aac_codebook_vector_{vals,idx}) ------
-# vals: books 1..4 use codebook_vector0_vals, 5,6 use _4_vals, 7..11 _10_vals
-# (mirroring the pointer tables in aactab.c).
-# ff_aac_codebook_vector_vals[] = { 0_vals, 0_vals, 10_vals, 10_vals,
-#                                   4_vals, 4_vals, 10_vals, 10_vals, 10_vals,
-#                                   10_vals, 10_vals }
-vals_ptr = [
-    "codebook_vector0_vals", "codebook_vector0_vals",
-    "codebook_vector10_vals", "codebook_vector10_vals",
-    "codebook_vector4_vals", "codebook_vector4_vals",
-    "codebook_vector10_vals", "codebook_vector10_vals",
-    "codebook_vector10_vals", "codebook_vector10_vals",
-    "codebook_vector10_vals",
-]
-idx_ptr = [
-    "codebook_vector02_idx", "codebook_vector02_idx",
-    "codebook_vector02_idx", "codebook_vector02_idx",
-    "codebook_vector4_idx", "codebook_vector4_idx",
-    "codebook_vector6_idx", "codebook_vector8_idx",
-    "codebook_vector8_idx", "codebook_vector10_idx",
-    "codebook_vector10_idx",
-]
+vals_ptr = parse_array("ff_aac_codebook_vector_vals")
+assert len(vals_ptr) == 11
+# Read the pointer table too: copying each individual array correctly does
+# not guarantee that a spectral book selects the right one (7/8 share _6,
+# 9/10 share _8, and only 11 uses _10).
+idx_ptr = parse_array("ff_aac_codebook_vector_idx")
+assert len(idx_ptr) == 11
+for book, cname in enumerate(idx_ptr):
+    assert len(parse_array(cname)) == sizes[book], (book + 1, cname)
 
 vals_tables = {}
 for cname in ["codebook_vector0_vals", "codebook_vector4_vals", "codebook_vector10_vals"]:
@@ -238,6 +231,24 @@ lines.append("  " + ", ".join("aac_swb_128_%d" % s for s in swb128_ptr) + ",")
 lines.append("]")
 lines.append("")
 
-with open(ROOT + "/moonbit/libavcodec/aac_tables.mbt", "w", encoding="utf-8", newline="\n") as f:
-    f.write("\n".join(lines))
-print("written:", len(lines), "lines")
+output = Path(ROOT) / "moonbit/libavcodec/aac_tables.mbt"
+generated = "\n".join(lines)
+if args.check:
+    # Ignore MoonBit formatter whitespace and Int/Int32 type aliases, but
+    # compare every value and pointer, including array lengths and order.
+    def arrays(text):
+        text = re.sub(r"//[^\n]*", "", text)
+        return {
+            name: [token.strip() for token in body.split(",") if token.strip()]
+            for name, body in re.findall(r"\blet\s+(\w+)[^=]*=\s*\[([^]]*)\]", text)
+        }
+    expected, actual = arrays(generated), arrays(output.read_text(encoding="utf-8"))
+    mismatches = [name for name in expected.keys() | actual.keys()
+                  if expected.get(name) != actual.get(name)]
+    if mismatches:
+        raise SystemExit("AAC tables differ: " + ", ".join(sorted(mismatches)))
+    print("verified:", len(expected), "AAC arrays against FFmpeg sources and generators")
+else:
+    with output.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(generated)
+    print("written:", len(lines), "lines")

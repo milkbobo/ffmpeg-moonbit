@@ -76,10 +76,13 @@ test "aac: TDAC of three long blocks reconstructs the stream" {
   // are the self-consistency checks available without it.
   let n = 64
   let n_half = n / 2
-  // Window complementarity at the hop distance, for the decoder's window.
-  let w = aac_full_window(n_half)
-  for i = 0; i < n_half; i = i + 1 {
-    let sum = w[i] * w[i] + w[n_half + i] * w[n_half + i]
+  // Window complementarity at the hop distance: the half window
+  // `w[i] = sin((i+0.5)pi/(2n))` satisfies `w[n/2-1-m]^2 + w[n/2+m]^2 = 1`
+  // — the two weights the `vector_fmul_window` pairing gives one saved
+  // sample in consecutive frames.
+  let w = aac_sine_half_window(n)
+  for m = 0; m < n_half; m = m + 1 {
+    let sum = w[n_half - 1 - m] * w[n_half - 1 - m] + w[n_half + m] * w[n_half + m]
     assert_true(sum > 0.999999 && sum < 1.000001)
   }
   // The IMDCT is linear and reproduces kernel rows for basis spectra.

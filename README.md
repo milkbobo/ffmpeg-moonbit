@@ -139,7 +139,8 @@ moonbit/
     ├── h264_inter_wbtest.mbt # MC 整数/半像素/四分像素 + mvpred 中值/回退单元测试
     ├── h264_psynth_wbtest.mbt # 合成 CABAC P 帧端到端（I_PCM 参考 + MV 平移断言）
     ├── aac_wbtest.mbt        # ICS/TNS 逐字段 + MDCT/TDAC/窗口性质 + 静音帧 PCM
-    ├── aac_spectrum_wbtest.mbt # 真实 libfdk_aac 码流逐帧解码（结构性断言）
+    ├── aac_spectrum_wbtest.mbt # 真实 libfdk_aac 码流 46 帧 PCM 差分（≤1 LSB）
+    ├── aac_codebook_wbtest.mbt # 全码书元组/符号/位消费 + 长短窗逆变换缩放回归
     ├── aac_spectrum_realdata_wbtest.mbt # 真实 AAC 码流 + 参考 PCM base64 素材
     └── mpeg4audio_wbtest.mbt # 位串手推的 AAC-LC/SBR/PS/USAC/ALS 头部用例
 ```
@@ -147,15 +148,15 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行（实测 1,595,275 行），本次完成 MoonBit 源文件
-（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **52652 行**（libavutil 6127 行 +
+（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **52790 行**（libavutil 6483 行 +
 libavformat 的 aviobuf 流式 AVIO 层、MP4 解复用、Matroska EBML/Segment/Tracks/Cluster、
-裸 AAC/MP3 分帧与容器码流参数桥 14350 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
+裸 AAC/MP3 分帧与容器码流参数桥 15758 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
 IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CAVLC 全通 / CABAC 部分
 向量 / MP4 `avcC` 长度前缀入口）**、**H.264 P 帧解码与滑窗 DPB（运动补偿/MV 预测/inter
 宏块层，含 CABAC P 路径的合成码流端到端向量）**、**H.264 SEI 解析**、**AAC 频谱解码
 （Huffman 码书 1..11 + scalefactor + PNS/TNS + IMDCT/加窗全管线，真实 libfdk_aac
-码流逐帧解码）** 与 **MPEG 音频 Layer I/II/III 定点解码** 32317 行，
-均含白盒测试）——约占整体 **3.30%**。
+码流逐帧解码）** 与 **MPEG 音频 Layer I/II/III 定点解码** 30549 行，
+均含白盒测试）——约占整体 **3.31%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 码流层）
 
@@ -230,7 +231,7 @@ IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CA
 | [aac_spectrum.mbt](libavcodec/aac_spectrum.mbt) | `aacdec_proc_template.c`(`decode_spectrum_and_dequant` 浮点路径)、`aacdec.c`(`decode_scalefactors`)、`aacdec_dsp_template.c`(`dequant_scalefactors`/`apply_tns`、`lpc_functions.h` 的 Levinson 展开) | **AAC 频谱解码**：scalefactor 差分解码（intensity/noise 裁剪、9 位 noise 前导）、码书 1..11 的 Huffman（二叉 trie）+ `VMUL4/4S/2/2S` 打包索引解包（逐值符号位）、book 11 的 escape 序列（`ff_cbrt_tab` = float32(n^4/3) 表）、PNS 噪声（`lcg_random` + 单位能量缩放）、intensity 零填充、TNS（Levinson 展开 + 就地 AR 滤波，`tns_max_bands` 界） | ✅ |
 | [aac_tables.mbt](libavcodec/aac_tables.mbt) | `aactab.c` 全部解码表 + `ff_aac_pow2sf_tab`/`ff_cbrt_tab` 生成算法 | 2756 行批量提取表：scalefactor VLC（121 项）、码书 1..11 的 codes/bits、5 张 `codebook_vector_*_idx` 打包索引表、3 张 vals 表、`pow2sf` 428 项 float32、`pow43` 8192 项、swb 偏移表（1024/128 全采样率）与 `tns_max_bands`；提取脚本 `scripts/extract_aac_tables.py`（与 C 源逐值 diff 校验） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **316/316 全绿**（libavutil 69 + libavformat 133 + libavcodec 114）。CABAC 多行复杂码流的失步仍是已知偏差（见下）。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **319/319 全绿**。CABAC 多行复杂码流的失步仍是已知偏差（见下）。
 
 ### CABAC 的已知偏差（重要）
 
@@ -255,23 +256,29 @@ bug：**chroma 运动补偿漏掉块在帧内的基准位置**（此前只有基
 以外的宏块全部取样错位）与 **DPB 参考图的 `height` 字段误取 `cstride*2`**（真实
 P 码流的子像素插值一旦触底即越界 panic）。
 
-### AAC 的已知偏差（重要）
+### AAC 的差分验证与剩余范围
 
-频谱层的每个构件都有单元向量（码表与 C 源逐值 diff、TNS 一阶滤波、
-scalefactor 语法、MDCT/TDAC 性质、`I_PCM`-式的静音帧端到端），但**真实码流的
-逐样本 PCM 差分尚未收敛**：
+**既有真实向量的逐样本差分已收敛**：libfdk_aac 生成的 44100 Hz 单声道正弦淡入流
+（46 帧、全 ONLY_LONG、KBD 窗），全部 **47,104 样本最大误差 1 LSB**，其中
+**47,091 样本完全一致**。参考 PCM 已由本机 Docker 的 FFmpeg 9.0.2 重新解码核对，
+与内嵌素材逐字节相同。回归测试强制完整解码、最大误差 ≤1 LSB、精确匹配率 ≥99.9%。
 
-* 现象：libfdk_aac 生成的 44100 Hz 单声道正弦流（46 帧、全 ONLY_LONG、KBD 窗）
-  逐帧解码成功，淡入起始的小幅度样本与 FFmpeg 参考输出相差 ±1..2 LSB，但
-  大幅度帧发散（症状为输出饱和）。
-* 已用「位级锚点扫描」（在 ADTS 帧内穷举 SCE 结束位，要求其后恰为 END）对
-  独立 Python 解码模型做了 20/46 帧的逐帧仲裁：books 7..10 的符号位数量
-  「非零值个数」规则在个别帧命中锚点、「`(idxv>>8)&15` 字段」规则在其余帧
-  命中——两者与 FFmpeg `aacdec_proc_template.c` 的 `VMUL2S` 字面语义均不完全
-  一致，疑似 FDK 码流与 FFmpeg 表在 `codebook_vector6/8_idx` 的 8:11 位语义上
-  存在另一层映射，或锚点扫描本身有歧义。
-* 下一步：用 FFmpeg `aacdec_fixed`（定点解码器）的中间状态做参照，或对
-  单码书合成码流逐 bin 对拍，把 books 7..10 的符号位语义钉死。
+此前的大幅度饱和与符号位疑点已定位并修复：
+
+* 索引表的逐项值虽正确，**码书到表的指针映射抄错**：books 7/8 均应使用
+  `codebook_vector6_idx`，9/10 均使用 `codebook_vector8_idx`，仅 11 使用
+  `codebook_vector10_idx`。提取脚本现直接读取 C 的指针表并校验各表长度；
+  `python scripts/extract_aac_tables.py --check` 可核对全部 55 个数组而不改格式。
+* FFmpeg 半逆变换是本移植教科书 IMDCT **中间一半的负值**；AAC 浮点路径的
+  `init_dsp` 缩放为 `1/(N*32768)`，相对于本移植的 `2/N` 还需乘 **-1/65536**。
+  长短窗均已修正，窗表长度分别为 1024/128。
+* 参考 PCM 已包含编码器延迟，差分时应对齐同一帧；原探针额外偏移 1024 样本。
+* 新增全 11 本码书的**所有元组与非零值符号组合**回归，独立按笛卡尔积顺序构造
+  期望系数，并断言位消费数量及尾随哨兵；长短窗综合另对照
+  `ff_tx_mdct_naive_inv` 的余弦公式、符号与 PCM 缩放。
+
+验证范围仍有限：上述真实 PCM 向量只覆盖单声道长窗，长短窗转换的真实码流对拍、
+更多 TNS/PNS 输入仍需扩充；CPE/独立 PCE 布局、SBR/PS、USAC 未做。
 
 ### AES 的实现偏差（已记录）
 
@@ -327,8 +334,8 @@ Huffman 规范化码另有等效性说明，见下文）：
   （含 ID3v2 跳过与重同步）。**频谱解码已完成**（`aac_spectrum.mbt` + `aac_tables.mbt`：
   Huffman 码书 1..11 含 escape、scalefactor 差分/noise 前导、PNS、TNS 应用、gain
   control 语法解析；`aac_mdct.mbt`：全四窗口序列 + KBD/正弦窗的 IMDCT→TDAC 叠接），
-  libfdk_aac 生成的真实码流可逐帧解码出 PCM。**与 FFmpeg 参考解码的逐样本差分
-  尚未收敛**（见 §3「AAC 的已知偏差」）；CPE/独立 PCE 布局、SBR/PS、USAC 未做。
+  libfdk_aac 生成的真实码流可逐帧解码出 PCM，**既有 46 帧单声道向量的逐样本差分
+  最大为 1 LSB**（见 §3「AAC 的差分验证与剩余范围」）；CPE/独立 PCE 布局、SBR/PS、USAC 未做。
 - **MP3/MP2/MP1**：`audio_headers.mbt` 完成 MPEG 音频头（版本/层/码率/采样率/帧长/
   自由格式）；`rawaudio.mbt` 完成裸流分帧、ID3v2/ID3v1 跳过与首帧 Xing/Info/VBRI
   识别剔除。**三层定点解码均已完成**（见下一小节）。
@@ -558,7 +565,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | H.264 CABAC 核心 | FFmpeg 自带 `libavcodec/tests/cabac.c`：测试内的参考编码器（`put_cabac`/`put_cabac_bypass`/`put_cabac_terminate`）与 `av_lfg_get`（`libavutil/lfg.c`，MD5 播种、种子 1）一并移植，10240 bypass + 10240 上下文比特逐比特还原；`get_cabac_terminate` 必须非零。注意 `init_cabac_encoder` 的 `pb.bit_left++` 会吞掉首个比特，打包时要丢掉流的第一位 |
 | H.264 CABAC 宏块层 | linuxserver/ffmpeg:9.0.2 + libx264 生成 5 条 CABAC IDR 码流（`testsrc2` 16x16 / 32x16 / 48x16、平坦 32x32 / 16x48，`8x8dct=0`），期望值为同文件 `-f framemd5` 的逐帧 MD5；多行复杂内容仍失步，见 §3「CABAC 的已知偏差」 |
 | H.264 P 帧 / DPB | 真实码流：`keyint=10` 的 Baseline I+P+P 流经 `h264_decode_annexb_frames` 解出 3 帧（滑窗 DPB 出参考）；单元测试覆盖 MC 的整数/半像素/四分像素与 chroma 1/8 双线性（含负位移的边界复制）、`mid_pred` 与 A/B/C 邻块回退、P_SKIP 零捷径。**合成码流**：全 `I_PCM` IDR（非平坦图案 = `I_PCM` 路径首个向量）+ CABAC P 帧（`P_L0_16x16`、整数 MV、零残差），P 帧逐像素等于参考帧平移（左/上边界按 `ff_emulated_edge_mc` 复制）；编码器镜像复刻解码端每个 CABAC 上下文推导 |
-| AAC ICS/TNS/IMDCT | 合成位串手推：`ics_info` 各窗口序列与 `max_sfb`、section 数据（含 escape 长度）、TNS 逐字段（阶数/系数量化解码）、EIGHT_SHORT 分组展开、codebook 0 的静音帧端到端（出 2048 样本 PCM）、TNS 一阶 AR 滤波的平滑性断言（Levinson 展开 + 就地滤波）、predictor 数据拒绝；MDCT/加窗侧另有 Princen-Bradley 互补性、匹配余弦的单系数集中（spec 核无镜像扩散）、IMDCT 核行逐点（含 2/N 综合）、`vector_fmul_window` 2×len 语义、KBD 窗生成（`av_bessel_i0`）与四窗口序列的过渡结构；**真实码流**：libfdk_aac 生成的 46 帧正弦淡入流逐帧解码（帧数/非平坦/有界性断言，逐样本差分见 §3 已知偏差） |
+| AAC ICS/TNS/IMDCT | 合成位串手推：`ics_info` 各窗口序列与 `max_sfb`、section 数据（含 escape 长度）、TNS 逐字段、EIGHT_SHORT 分组展开、codebook 0 静音帧、TNS 一阶 AR 滤波、predictor 数据拒绝；全部 11 本码书的元组/符号组合与位消费；MDCT/加窗的 Princen-Bradley 互补性、核行逐点、`vector_fmul_window` 2×len、KBD 窗和窗口转换结构；长短窗综合对照 `ff_tx_mdct_naive_inv` 的符号与 PCM 缩放；**真实码流**：libfdk_aac 46 帧正弦淡入流的 47,104 样本对照 FFmpeg PCM，最大误差 1 LSB、精确匹配率 ≥99.9%（见 §3） |
 | H.264 `avcC` 入口 | 真实 `avcc_baseline.mp4`（5042 字节，baseline/CAVLC）：`av_mov_open` → `track.extradata`（`avcC`）+ 按 `stco`/`stsz` 切样本 → `h264_decode_avc_frames`，逐帧 YUV MD5 对齐 FFmpeg 默认解码 |
 | H.264 SEI | **真实码流 + `trace_headers` 逐字段**：docker `linuxserver/ffmpeg:9.0.2` 生成三条码流——① x264 `nal-hrd=cbr:vbv-maxrate=200:vbv-bufsize=200`（buffering period ×2 + picture timing ×2 + x264 user-data，VUI HRD 全字段，BP/PT 的值延迟对 SPS 解析）；② 同一流经 `h264_metadata` bsf 注入 display orientation（旋转 16384 + 双翻转）；③ 手工构造的 11 类合成消息流（恢复点、green metadata、film grain、frame packing、alternative transfer、ambient viewing、mastering display、content light、双 unregistered、cancel 的 display orientation、带时钟时间戳的 picture timing——后者靠 SPS VUI 的 `pic_struct_present_flag` 原位翻转启用，不移动任何后续字段）。期望值逐字段转录自 `ffmpeg -c copy -bsf:v trace_headers` 输出（green metadata 无 CBS dumper，期望值取 trace 的 payload 字节）；负例按 C 的错误路径断言具体错误串（<16 字节 unregistered、size 越界、`recovery_frame_cnt ≥ 1<<16`、film grain `num_model_values>6`、缺失 SPS 的 buffering period 返回 `AVERROR_PS_NOT_FOUND` 非致命）。码流以 base64 内嵌于 `h264_sei_realdata_wbtest.mbt` |
 | MPEG 音频 Layer I/II 解码 | **真实码流 + PCM MD5（Layer II）**：docker 生成 4 条 `mp2`（stereo 44.1k/192k、mono 44.1k/64k、joint stereo 32k/64k、MPEG-2 LSF stereo 24k/64k），期望值为 FFmpeg 定点解码器 `-c:a mp2 -f s16le` 的 MD5（`818bac4a…` / `5c6c8e47…` / `941cb133…` / `f9bf9037…`），覆盖分配表 1/0/3/4 与 3/5/9 步组量化。**Layer I 无编码器**，改用按规范手工拼帧、由 FFmpeg 解码同一段码流取得期望值（`cb2824e3…` mono 32k、`a0ed4a92…` joint stereo 44.1k bound=4），输入是手工的、期望值仍是参考实现的 |
@@ -677,8 +684,8 @@ I 帧重建 + 环路去块滤波**（slice header + CAVLC + 4x4 IDCT + 帧内预
 4. HEVC slice segment header + CABAC + 帧内预测/变换，先 I 帧
 5. AAC 原始帧解析：ICS/TNS/MDCT/**频谱 Huffman**/scalefactor/PNS/gain-control
    语法与**全四窗口序列 + KBD 窗**已完成（`aac_spectrum.mbt`/`aac_tables.mbt`，
-   真实 libfdk_aac 码流逐帧解码）；余下**与 FFmpeg 参考解码的逐样本差分收敛**
-   与 CPE/独立 PCE、SBR/PS
+   真实 libfdk_aac 码流 46 帧 PCM 对照 FFmpeg 最大误差 1 LSB）；余下真实短窗/
+   窗口转换、更多 TNS/PNS 向量与 CPE/独立 PCE、SBR/PS
 6. `jrevdct.c`（`FF_IDCT_INT`）、`faanidct.c`、`xvididct.c` 与 `idct248/84/48/44` 部分变换；
    `lzo.c` 与其余编解码器（无损优先）
 

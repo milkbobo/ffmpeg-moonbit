@@ -359,7 +359,7 @@ let aac_book_vals : Array[Array[Double]] = [
 ///|
 let aac_book_idx : Array[Array[UInt32]] = [
   aac_idx_quads02, aac_idx_quads02, aac_idx_quads02, aac_idx_quads02, aac_idx_quads4,
-  aac_idx_quads4, aac_idx_pairs6, aac_idx_pairs8, aac_idx_pairs8, aac_idx_pairs10,
+  aac_idx_quads4, aac_idx_pairs6, aac_idx_pairs6, aac_idx_pairs8, aac_idx_pairs8,
   aac_idx_pairs10,
 ]
 

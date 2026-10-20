@@ -60,7 +60,7 @@
   码书 1..11 Huffman + VMUL 打包索引解包、book 11 escape、PNS、TNS Levinson+AR、
   gain-control 语法）+ `aac_mdct.mbt`（四窗口序列 + KBD/正弦窗、综合 2/N、
   `vector_fmul_window` 2×len、FIL/PCE 跳过）。真实 libfdk_aac 码流逐帧解码出 PCM；
-  **与 FFmpeg 参考的逐样本差分未收敛**（books 7..10 符号位语义，见 README §3）。
+  **既有 46 帧单声道长窗向量与 FFmpeg 参考的最大差分为 1 LSB**（见 README §3）。
 - **libavutil（bessel）**：`av_bessel_i0`（Blair/Edwards 极小有理逼近，KBD 窗用）。
 - **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
   - H.264 Baseline **I 帧重建 + 环路去块滤波**：`h264_slice.mbt`（I/SI slice header）+
@@ -413,13 +413,17 @@ $msg | git commit -F -
 - **AAC 频谱层的四个坑**（真实码流调试沉淀）：① `cbt_m1` 在 C 里是 **unsigned**
   （`ZERO_BT-1` 回绕进 intensity 分支做零填充），移植成 signed 必须显式 `cbt_m1<0`
   走零填充；② VLC 解码行号不是码书索引——符号要过 `codebook_vector_*_idx`
-  打包表（且 11 本的映射是 6,8,8,10,10，抄错一位第 7/8 本全错、症状是特定帧
-  逐带位号从中间开始漂移）；③ FFmpeg 的 `vector_fmul_window` 一次写 **2×len**
-  （含符号翻转与倒序索引），`imdct_half` 的输出等价于全 IMDCT 的**中间一半**；
-  综合侧归一是 **2/N**（分析不归一），错成 1/N 输出减半、不归一输出翻倍；
+  打包表（books 7..11 对应 **6,6,8,8,10**，不能抄成 6,8,8,10,10；提取脚本
+  直接读 C 指针表，`python scripts/extract_aac_tables.py --check` 核对全部数组）；
+  ③ FFmpeg 的 `vector_fmul_window` 一次写 **2×len**（含符号翻转与倒序索引），
+  窗表长为 1024/128；`ff_tx_mdct_naive_inv` 等价于教科书全 IMDCT **中间一半的负值**。
+  教科书逆变换归一为 **2/N**，AAC `init_dsp` 的浮点缩放为 **1/(N*32768)**，
+  所以综合包装层须对教科书结果乘 **-1/65536**（长短窗相同）；
   ④ FIL 元素的 count 是**字节数**且 count=0 合法（无载荷），FDK 会在帧尾连写
   两个 FIL；`decode_gain_control` 在 FFmpeg 里解析后**丢弃**（FIXME 注释），
   移植同样只消费语法。
+- **AAC PCM 差分不能重复补编码器延迟**：参考 `ffmpeg -i tone_fade.aac -f s16le`
+  的 PCM 与本解码器都保留 priming，按同一帧比较；额外偏移 1024 样本会制造失配。
 - **差分向量生成走 stdin/stdout 管道**：Git Bash 会把 `-v "$(pwd):/w"` 的卷挂载
   改写成无效路径，docker 报 `destination can't be '/'`；用
   `docker run --rm -i ... pipe:1 > out` 绕开。

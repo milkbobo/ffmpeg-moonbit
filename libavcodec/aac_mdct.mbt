@@ -7,9 +7,9 @@
 ///
 /// The C runs a split-radix FFT based MDCT; this port uses the direct
 /// (textbook) MDCT/IMDCT pair, exact but O(N^2) — fine for tests and small
-/// inputs, a target for later optimisation. Window shapes: sine only (KBD
-/// tables pending); windowing: ONLY_LONG (EIGHT_SHORT / the 448/512
-/// LONG_START / LONG_STOP transition structure pending).
+/// inputs, a target for later optimisation. Both sine and KBD windows and
+/// all four window sequences are implemented. The synthesis wrapper maps
+/// the textbook inverse to FFmpeg's half-inverse sign and float PCM scale.
 
 ///|
 /// Sine half-window of `n` points: `sin(pi/(2n) * (i + 0.5))`. */
@@ -19,18 +19,6 @@ fn aac_sine_half_window(n : Int32) -> Array[Double] {
     w[i] = @math.sin(
       3.14159265358979323846 / (2 * n).to_double() * (i.to_double() + 0.5),
     )
-  }
-  w
-}
-
-///|
-/// Mirrored full window of `2 * n` points from the `n`-point half. */
-fn aac_full_window(n : Int32) -> Array[Double] {
-  let half = aac_sine_half_window(n)
-  let w : Array[Double] = Array::make(2 * n, 0.0)
-  for i = 0; i < n; i = i + 1 {
-    w[i] = half[i]
-    w[n + i] = half[n - 1 - i]
   }
   w
 }
@@ -65,12 +53,21 @@ pub fn aac_kbd_window(alpha : Double, n : Int32) -> Array[Double] {
 }
 
 ///|
-/// The two KBD windows AAC uses (`ff_aac_kbd_long_1024`, alpha 4.0, and
-/// `ff_aac_kbd_short_128`, alpha 6.0).
-let aac_kbd_long : Array[Double] = aac_kbd_window(4.0, 2048)
+/// The four window tables AAC uses: `sine_1024` / `aac_kbd_long_1024`
+/// (alpha 4.0) for long sequences and `sine_128` / `aac_kbd_short_128`
+/// (alpha 6.0) for short ones — all `2*hop`-point HALF windows
+/// (`ff_sine_window_init`: `w[i] = sin((i+0.5)·pi/(2n))`, `kbdwin.c`:
+/// n = 1024 / 128), the length the C passes to `vector_fmul_window`.
+let aac_sine_long : Array[Double] = aac_sine_half_window(1024)
 
 ///|
-let aac_kbd_short : Array[Double] = aac_kbd_window(6.0, 256)
+let aac_sine_short : Array[Double] = aac_sine_half_window(128)
+
+///|
+let aac_kbd_long : Array[Double] = aac_kbd_window(4.0, 1024)
+
+///|
+let aac_kbd_short : Array[Double] = aac_kbd_window(6.0, 128)
 
 ///|
 /// Direct inverse MDCT (textbook pair, `N = n/2`):
@@ -177,8 +174,8 @@ fn aac_fmul_window(
 
 ///|
 /// One channel of `imdct_and_windowing` (`aacdec_dsp_template.c`): IMDCT
-/// (one 2048 for long sequences, eight 256s for EIGHT_SHORT, each keeping
-/// the second half like the C's `imdct_half`) then the overlap structure
+/// (one 2048 for long sequences, eight 256s for EIGHT_SHORT, each mapping
+/// the middle half to the C's half-inverse) then the overlap structure
 /// the C describes — long-to-long transitions take the plain 512 overlap,
 /// everything else goes through the 448/64 split, and `saved` carries the
 /// next frame's tail.
@@ -188,9 +185,9 @@ pub fn aac_imdct_and_window(
   window_sequence : Int32,
   window_shape : Int32,
 ) -> Result[Array[Double], String] {
-  // imdct: FFmpeg's `imdct_half` output equals the middle half of the full
-  // IMDCT (verified against the direct TDAC synthesis: the aliasing
-  // antisymmetry makes the quarters interchangeable).
+  // `ff_tx_mdct_naive_inv` returns the NEGATED middle half of the
+  // textbook inverse. `init_dsp` also sets scale = 1/(N*32768), while
+  // aac_imdct uses 2/N, so convert by -1/65536 for float PCM.
   let buf : Array[Double] = if window_sequence == aac_eight_short {
     let v : Array[Double] = Array::make(1024, 0.0)
     for i = 0; i < 8; i = i + 1 {
@@ -200,7 +197,7 @@ pub fn aac_imdct_and_window(
       }
       let part = aac_imdct(slot, 256)
       for k = 0; k < 128; k = k + 1 {
-        v[i * 128 + k] = part[64 + k]
+        v[i * 128 + k] = -part[64 + k] / 65536.0
       }
     }
     v
@@ -208,7 +205,7 @@ pub fn aac_imdct_and_window(
     let part = aac_imdct(coeffs, 2048)
     let v : Array[Double] = Array::make(1024, 0.0)
     for k = 0; k < 1024; k = k + 1 {
-      v[k] = part[512 + k]
+      v[k] = -part[512 + k] / 65536.0
     }
     v
   }
@@ -217,17 +214,17 @@ pub fn aac_imdct_and_window(
   let lwin_prev = if st.prev_window_shape != 0 {
     aac_kbd_long
   } else {
-    aac_full_window(1024)
+    aac_sine_long
   }
   let swin_prev = if st.prev_window_shape != 0 {
     aac_kbd_short
   } else {
-    aac_full_window(128)
+    aac_sine_short
   }
   let swin = if window_shape != 0 {
     aac_kbd_short
   } else {
-    aac_full_window(128)
+    aac_sine_short
   }
   let saved = st.saved
   let out : Array[Double] = Array::make(1024, 0.0)
