@@ -1,0 +1,5 @@
+# 许可证正文必须逐字节保持 GNU 原文（LF 行尾）。
+# 本机 core.autocrlf=true 会在检出时把 LF 换成 CRLF，从而改变文件 MD5；
+# `-text` 关闭该文件的 EOL 规范化，保证任何平台检出后 md5 都与 GNU/FFmpeg 原文一致。
+COPYING.LGPLv2.1 -text
+COPYING.LGPLv3 -text
