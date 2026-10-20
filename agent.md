@@ -27,7 +27,8 @@
   通用元素游走器：level 栈/LEVEL_ENDED/未知长度终止/VOID 跳过/非 seekable 启发式
   /level-1 注册表；C 的 `EbmlSyntax` offset 写 → sink 闭包 + 子表 thunk）与
   `matroska.mbt`（EBML 头校验链 + Segment/Info/SeekHead/resync/execute_seekhead，
-  入口 `av_matroska_open`）；后续 Tracks/Cluster/Block lace 逐片推进
+  入口 `av_matroska_open`）与 `matroska_track.mbt`（TrackEntry 全表：字段默认值、
+  video/audio/encodings 层级）；后续 Cluster/Block lace 逐片推进
 - **libavcodec**：SIMPLE-C IDCT（`int16` 8/10/12 bit）+ `idctdsp` 像素/扫描表辅助；
   `huffman.c` 的树/码长构建（`ff_huff_build_tree`/`ff_huff_gen_len_table`）+ 规范化
   Huffman 码的编/解码；`mpeg4audio.c` 的 AudioSpecificConfig 解析（`mpeg4audio.mbt`，
@@ -168,6 +169,13 @@ $msg | git commit -F -
 - **libavformat 的 `-unused_constructor`**（moon.pkg）：`EbmlKind::Sint` 目前只有白盒
   测试构造，真实消费者（Block 的 DiscardPadding 等）在后续 cluster 切片；该切片落地后
   移除此消警。
+- **MoonBit struct 字段是引用、但 `let v = t.video` 取的是值拷贝**：表工厂里 sink 闭包
+  若捕获局部拷贝（`let v = t.video; sink(u => v.x = u)`）写入会全部丢失——必须写
+  `sink(u => t.video.x = u)` 穿透字段。Tracks 切片因此踩过一次（嵌套 master 全部
+  字段静默为默认值）。
+- **合成 EBML 测试的元素层级要与规范一致**：ContentEncodings(0x6D80) 下必须先有
+  ContentEncoding(0x6240) 再有 ContentCompression(0x5034)——漏掉中间层时外层照常
+  匹配、内层静默 skip（期望值写 0 != 1 才暴露）。
 - **`@v128` 的 experimental 告警**：调用 `@v128.*` 会触发 `alert_experimental`（E0014）；
   在 `moon.pkg` 写 `warnings = "-alert_experimental"` 即可消警（core 自身亦如此，见
   `core/debug/moon.pkg`）。完整范本：`libavutil/adler32_v128.mbt`（构造用 `i16x8_const`、
@@ -261,9 +269,11 @@ moonbit/                      # git 仓库根
 │   ├── mp4_editlist_wbtest.mbt # advanced_editlist：mov_fix_index 各分支 + video_delay + 碎片禁用时序
 │   ├── ebml.mbt              # Matroska EBML 层（原语 + 通用游走器 + level-1 注册表）
 │   ├── matroska.mbt          # Matroska 切片 1+2：EBML 头 + Segment/Info/SeekHead
+│   ├── matroska_track.mbt    # Matroska 切片 3：TrackEntry 全表
 │   ├── ebml_wbtest.mbt       # EBML 白盒测试（VINT 规范向量 + 游走器路径）
 │   ├── ebml_real_wbtest.mbt  # 真实 webm/mkv 头（docker，base64 内嵌）
-│   └── mkv_segment_wbtest.mbt # Segment 切片测试（合成布局 + 真实 1024 字节前缀）
+│   ├── mkv_segment_wbtest.mbt # Segment 切片测试（合成布局 + 真实 1024 字节前缀）
+│   └── mkv_track_wbtest.mbt  # Tracks 切片测试（合成轨道 + 真实 webm/mkv 轨道）
 │   ├── mp4_extra_wbtest.mbt  # 第二批合成 box 测试（extradata/sidx/seek/音频分块…）
 │   └── mp4_real_wbtest.mbt   # 真实文件交叉验证（两批，docker ffmpeg/ffprobe）
 └── libavcodec/               # 包 ffmpeg/moonbit/libavcodec（@math/@v128 + libavutil 仅白盒测试用）

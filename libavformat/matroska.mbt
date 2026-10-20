@@ -250,6 +250,8 @@ pub struct MatroskaHeader {
   mut first_cluster_pos : Int64
   ///| `matroska->is_webm` (from the EBML header doctype).
   mut is_webm : Bool
+  ///| `matroska->tracks[]` (the Tracks slice).
+  tracks : Array[MkvTrack]
 }
 
 ///| Info defaults per `ebml_parse_nest`'s pre-pass. */
@@ -264,6 +266,7 @@ fn new_matroska_header() -> MatroskaHeader {
     segment_start: 0,
     first_cluster_pos: -1L,
     is_webm: false,
+    tracks: [],
   }
 }
 
@@ -402,7 +405,7 @@ fn matroska_segment_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
     { id: matroska_id_cluster, kind: Stop, sink: None },
     { id: matroska_id_info, kind: Level1(() => matroska_info_table(mh)), sink: None },
     { id: matroska_id_seekhead, kind: Level1(() => matroska_seekhead_table(mh)), sink: None },
-    { id: matroska_id_tracks, kind: Skip, sink: None },
+    { id: matroska_id_tracks, kind: Level1(() => matroska_tracks_table(mh)), sink: None },
     { id: matroska_id_attachments, kind: Skip, sink: None },
     { id: matroska_id_chapters, kind: Skip, sink: None },
     { id: matroska_id_cues, kind: Skip, sink: None },

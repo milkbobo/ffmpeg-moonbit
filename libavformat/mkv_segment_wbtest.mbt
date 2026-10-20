@@ -87,9 +87,11 @@ fn seg_open_unknown() -> Bytes {
   bcat([b"\x18\x53\x80\x67", b"\x01\xFF\xFF\xFF\xFF\xFF\xFF\xFF"])
 }
 
-///| The Cluster id (the walk stops on the id alone). */
+///| A well-formed empty Cluster: id + 1-byte length 0. The walk stops on
+/// the id (EBML_STOP); without the length byte, an unknown element or a
+/// second parse at this position would read past EOF. */
 fn cluster_id() -> Bytes {
-  b"\x1F\x43\xB6\x75"
+  b"\x1F\x43\xB6\x75\x80"
 }
 
 ///| An Info element with the given TimecodeScale payload. */
@@ -171,14 +173,16 @@ test "matroska: SeekHead back-jump parses an Info after the first cluster" {
   let info = info_with_timescale(250UL)
   // SeekHead right after the segment open: [SeekHead][Cluster][VOID][Info].
   // Positions are relative to segment_start (= header + 4 + 8).
-  let info_pos = 2 + 1 + 16 + 4 + 4 // seekhead size fixed at 23 by construction
+  // [SeekHead 19][Cluster 5 (id + 1-byte length 0)][VOID 4] — the sizes are
+  // fixed by construction; the Info must land exactly at info_pos
+  let info_pos = 19 + 5 + 4
   let entry_children = bcat([
     el(b"\x53\xAB", be_u64(0x1549A966UL, 4)), // SeekID = Info
     el(b"\x53\xAC", be_u64(info_pos.to_uint64(), 1)), // SeekPosition
   ])
   let seek_entry = bcat([b"\x4D\xBB", vint1(entry_children.length()), entry_children])
   let seekhead = bcat([b"\x11\x4D\x9B\x74", vint1(seek_entry.length()), seek_entry])
-  // seekhead.length() must equal info_pos - 8 (cluster id + VOID padding)
+  // seekhead.length() + cluster + VOID must equal info_pos
   let seg = bcat([
     seg_open_unknown(),
     seekhead,
@@ -188,7 +192,7 @@ test "matroska: SeekHead back-jump parses an Info after the first cluster" {
     b"\x00\x00", // VOID padding so the Info lands at info_pos
     info,
   ])
-  assert_eq(seekhead.length(), info_pos - 8)
+  assert_eq(seekhead.length() + cluster_id().length() + 4, info_pos)
   let mh = av_matroska_open(bcat([header, seg])).unwrap()
   // The walk never reached the Info (it sits after the stop);
   // execute_seekhead jumped there and parsed TimecodeScale 250.
