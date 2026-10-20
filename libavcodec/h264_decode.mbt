@@ -46,6 +46,9 @@ priv struct H264MbInfo {
   ///| Intra4x4 prediction modes in raster grid order.
   modes : Array[Int]
   mut intra4x4 : Bool
+  ///| Per-macroblock luma QP (`h->cur_pic.qscale_table[mb_xy]`), used by the
+  ///| deblocking filter. I_PCM macroblocks store 0, matching `h264_cavlc.c`.
+  mut qp : Int
 }
 
 ///| A decoded H.264 frame: full MB-aligned planes plus cropping offsets. */
@@ -264,6 +267,8 @@ fn h264_decode_mb(
       nz[i] = 16
     }
     info.intra4x4 = false
+    // "In deblocking, the quantizer is 0" (h264_cavlc.c).
+    info.qp = 0
     return Ok(())
   }
   if is_i4x4 {
@@ -562,6 +567,7 @@ fn h264_decode_mb(
     info.modes[g] = modes[g]
   }
   info.intra4x4 = is_i4x4
+  info.qp = ctx.qscale
   Ok(())
 }
 
@@ -584,11 +590,23 @@ fn h264_block0_nc(
 }
 
 ///|
-/// Decode one CAVLC I-slice NAL into a frame. The NAL is expected to be a
+/// Decode one CAVLC I-slice NAL into a frame, including the in-loop deblocking
+/// filter, i.e. what FFmpeg emits by default. The NAL is expected to be a
 /// complete, single-slice picture starting at macroblock 0.
 pub fn h264_decode_i_slice(
   nal : H2645Nal,
   ps : H264ParamSets,
+) -> Result[H264Frame, String] {
+  h264_decode_i_slice_ex(nal, ps, false)
+}
+
+///|
+/// As `h264_decode_i_slice`, but `skip_loop_filter = true` leaves the
+/// deblocking filter out, reproducing FFmpeg's `-skip_loop_filter all` output.
+pub fn h264_decode_i_slice_ex(
+  nal : H2645Nal,
+  ps : H264ParamSets,
+  skip_loop_filter : Bool,
 ) -> Result[H264Frame, String] {
   if nal.nal_type != h264_nal_idr_slice && nal.nal_type != 1 {
     return Err("not a coded slice NAL")
@@ -655,6 +673,7 @@ pub fn h264_decode_i_slice(
       nz: Array::make(48, 0),
       modes: Array::make(16, 0),
       intra4x4: false,
+      qp: 0,
     })
   }
   let ctx : H264DecCtx = {
@@ -668,10 +687,35 @@ pub fn h264_decode_i_slice(
     infos,
     qscale: sh.qscale,
   }
+  // Deblocking parameters (`h264_loopfilter.c`, 8-bit so `qp_bd_offset` is 0).
+  // `disable_deblocking_filter_idc == 1` disables the filter and `== 2` asks for
+  // slice boundaries only, which for a single-slice picture filters nothing.
+  let deblock = !skip_loop_filter && sh.disable_deblocking_filter_idc == 0
+  let alpha_off = 52 + sh.slice_alpha_c0_offset
+  let beta_off = 52 + sh.slice_beta_offset
   for i = 0; i < mb_count; i = i + 1 {
     match h264_decode_mb(gb, ctx, i, i % mb_width, i / mb_width) {
       Ok(_) => ()
       Err(e) => return Err(e)
+    }
+  }
+  // Deblocking runs *after* the whole picture is reconstructed, in macroblock
+  // raster order, exactly reproducing FFmpeg's observable behaviour:
+  //
+  //   * `decode_slice()` (`h264_slice.c`) reconstructs one macroblock row and
+  //     then calls `loop_filter()` for that row, so the filter of row N sees
+  //     row N-1 already filtered. Filtering never reads rows below the edge,
+  //     so filtering a fully reconstructed picture row by row is equivalent.
+  //   * Intra prediction never sees filtered samples: FFmpeg copies the row
+  //     above into `sl->top_borders` *before* filtering and predicts from that
+  //     copy. Predicting from the unfiltered reconstruction is equivalent.
+  //
+  // Filtering each macroblock immediately after decoding it (a tempting
+  // simplification) breaks the second point and changes the reconstruction of
+  // every macroblock that has a left or top neighbour.
+  if deblock {
+    for i = 0; i < mb_count; i = i + 1 {
+      h264_filter_mb(ctx, i, i % mb_width, i / mb_width, alpha_off, beta_off)
     }
   }
   // `sps.crop_*` is already scaled to luma pixels by step_x/step_y in
@@ -699,9 +743,20 @@ pub fn h264_decode_i_slice(
 
 ///|
 /// Minimal Annex B I-frame decoder: parses SPS/PPS in-band and decodes every
-/// coded-slice NAL as a standalone I picture. Multi-slice pictures, P/B
-/// slices and non-Baseline features return an error.
+/// coded-slice NAL as a standalone I picture, deblocking included (FFmpeg's
+/// default output). Multi-slice pictures, P/B slices and non-Baseline features
+/// return an error.
 pub fn h264_decode_annexb_i_frames(data : Bytes) -> Result[Array[H264Frame], String] {
+  h264_decode_annexb_i_frames_ex(data, false)
+}
+
+///|
+/// As `h264_decode_annexb_i_frames`, with `skip_loop_filter = true` leaving the
+/// in-loop deblocking filter out (FFmpeg's `-skip_loop_filter all`).
+pub fn h264_decode_annexb_i_frames_ex(
+  data : Bytes,
+  skip_loop_filter : Bool,
+) -> Result[Array[H264Frame], String] {
   let pkt = match ff_h2645_packet_split(data, 4, H264, false) {
     Ok(v) => v
     Err(e) => return Err(e)
@@ -741,7 +796,7 @@ pub fn h264_decode_annexb_i_frames(data : Bytes) -> Result[Array[H264Frame], Str
         Err(e) => return Err(e)
       }
     } else if nal.nal_type == h264_nal_idr_slice || nal.nal_type == 1 {
-      frames.push(match h264_decode_i_slice(nal, ps) {
+      frames.push(match h264_decode_i_slice_ex(nal, ps, skip_loop_filter) {
         Ok(v) => v
         Err(e) => return Err(e)
       })

@@ -29,7 +29,7 @@ fn h264_yuv_md5(frame : H264Frame) -> String {
 test "h264: baseline 64x48 IDR frames match FFmpeg skip_loop_filter YUV" {
   let data = @libavutil.av_base64_decode(h264_baseline_b64, 4096).unwrap()
   assert_eq(data.length(), 3111)
-  let frames = h264_decode_annexb_i_frames(data).unwrap()
+  let frames = h264_decode_annexb_i_frames_ex(data, true).unwrap()
   assert_eq(frames.length(), 2)
   let f0 = frames[0]
   let f1 = frames[1]
@@ -64,7 +64,7 @@ test "h264: reconstructed frame is not a flat prediction" {
 test "h264: smooth gradient stream matches FFmpeg (I16x16 luma DC)" {
   let data = @libavutil.av_base64_decode(h264_smooth_b64, 8192).unwrap()
   assert_eq(data.length(), 1852)
-  let frames = h264_decode_annexb_i_frames(data).unwrap()
+  let frames = h264_decode_annexb_i_frames_ex(data, true).unwrap()
   assert_eq(frames.length(), 2)
   assert_eq(h264_yuv_md5(frames[0]), "2a669a38852259d19cb8e6a47c636f58")
   assert_eq(h264_yuv_md5(frames[1]), "4134a7443a5aea6d556991b76f927c73")
@@ -73,7 +73,7 @@ test "h264: smooth gradient stream matches FFmpeg (I16x16 luma DC)" {
 test "h264: flat color stream matches FFmpeg (I16x16 DC/VERT, no residual)" {
   let data = @libavutil.av_base64_decode(h264_flat_b64, 4096).unwrap()
   assert_eq(data.length(), 728)
-  let frames = h264_decode_annexb_i_frames(data).unwrap()
+  let frames = h264_decode_annexb_i_frames_ex(data, true).unwrap()
   assert_eq(frames.length(), 2)
   assert_eq(h264_yuv_md5(frames[0]), "6b020c288feee0476f843bc661767cce")
   assert_eq(h264_yuv_md5(frames[1]), "6b020c288feee0476f843bc661767cce")
@@ -86,7 +86,7 @@ test "h264: cropped 88x56 stream matches FFmpeg (SPS frame cropping)" {
   // 64x48 vectors never exercise.
   let data = @libavutil.av_base64_decode(h264_crop_b64, 8192).unwrap()
   assert_eq(data.length(), 3639)
-  let frames = h264_decode_annexb_i_frames(data).unwrap()
+  let frames = h264_decode_annexb_i_frames_ex(data, true).unwrap()
   assert_eq(frames.length(), 2)
   assert_eq(frames[0].width, 88)
   assert_eq(frames[0].height, 56)
@@ -100,7 +100,7 @@ test "h264: qp=40 stream matches FFmpeg (coarse quantisation)" {
   // total_zeros / run_before paths with long zero runs.
   let data = @libavutil.av_base64_decode(h264_qp40_b64, 4096).unwrap()
   assert_eq(data.length(), 2283)
-  let frames = h264_decode_annexb_i_frames(data).unwrap()
+  let frames = h264_decode_annexb_i_frames_ex(data, true).unwrap()
   assert_eq(frames.length(), 2)
   assert_eq(frames[0].width, 80)
   assert_eq(frames[0].height, 64)
@@ -111,10 +111,54 @@ test "h264: qp=40 stream matches FFmpeg (coarse quantisation)" {
 test "h264: qp=10 stream matches FFmpeg (dense residual)" {
   let data = @libavutil.av_base64_decode(h264_qp10_b64, 8192).unwrap()
   assert_eq(data.length(), 4906)
-  let frames = h264_decode_annexb_i_frames(data).unwrap()
+  let frames = h264_decode_annexb_i_frames_ex(data, true).unwrap()
   assert_eq(frames.length(), 2)
   assert_eq(h264_yuv_md5(frames[0]), "5fd796cc06fe08e308df49234a7f8150")
   assert_eq(h264_yuv_md5(frames[1]), "2aa0cd872e25d5e9ea8854f42bfc1ae5")
+}
+
+// ---------------------------------------------------------------------------
+// Deblocking: the default entry point filters in-loop, so its output must match
+// FFmpeg's *default* decode (no -skip_loop_filter).
+// ---------------------------------------------------------------------------
+
+///| Decode a stream with the in-loop deblocking filter enabled.
+fn h264_md5_deblocked(b64 : Bytes, hint : Int) -> Array[String] {
+  let data = @libavutil.av_base64_decode(b64, hint).unwrap()
+  let frames = h264_decode_annexb_i_frames(data).unwrap()
+  let out : Array[String] = []
+  for i = 0; i < frames.length(); i = i + 1 {
+    out.push(h264_yuv_md5(frames[i]))
+  }
+  out
+}
+
+test "h264: deblocking matches FFmpeg default output (3 original streams)" {
+  // Frame 1 of `smooth` and both frames of `flat` are unchanged by the filter
+  // (their edges stay below alpha/beta), so only some MD5s differ from the
+  // -skip_loop_filter vectors above.
+  assert_eq(h264_md5_deblocked(h264_baseline_b64, 4096), [
+    "095a7084754121e94abd275275268b05", "744e00a9075b4f5a3907525031b533d4",
+  ])
+  assert_eq(h264_md5_deblocked(h264_smooth_b64, 8192), [
+    "6aa85cc9db0f631abc1404782c2fb242", "4134a7443a5aea6d556991b76f927c73",
+  ])
+  assert_eq(h264_md5_deblocked(h264_flat_b64, 4096), [
+    "6b020c288feee0476f843bc661767cce", "6b020c288feee0476f843bc661767cce",
+  ])
+}
+
+test "h264: deblocking matches FFmpeg default output (crop / qp variants)" {
+  assert_eq(h264_md5_deblocked(h264_crop_b64, 8192), [
+    "853f979d9d0708f592428250e04a1371", "f1d044be682d70f5a230567158bbcc8f",
+  ])
+  assert_eq(h264_md5_deblocked(h264_qp40_b64, 4096), [
+    "92dc4b6e77f344e713e61695446fbfa5", "8382629af59f4af56b5106c8d783b1bb",
+  ])
+  // qp=10: alpha/beta are too small for the filter to trigger on this content.
+  assert_eq(h264_md5_deblocked(h264_qp10_b64, 8192), [
+    "5fd796cc06fe08e308df49234a7f8150", "2aa0cd872e25d5e9ea8854f42bfc1ae5",
+  ])
 }
 
 // ---------------------------------------------------------------------------

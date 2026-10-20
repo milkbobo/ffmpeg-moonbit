@@ -41,11 +41,12 @@
   `hevc_ps.mbt`（HEVC VPS/SPS/PPS/PTL/RPS/hvcC）、`audio_headers.mbt`（ADTS、MP1/2/3
   帧头）。这一层**只解析码流**；多层 HEVC 扩展与部分解码端派生表未建模
 - **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
-  - H.264 Baseline **I 帧重建**：`h264_slice.mbt`（I/SI slice header）+
+  - H.264 Baseline **I 帧重建 + 环路去块滤波**：`h264_slice.mbt`（I/SI slice header）+
     `h264_cavlc.mbt`（CAVLC + dequant/chroma-QP 表）+ `h264_idct.mbt`（4x4 IDCT +
     luma/chroma DC Hadamard）+ `h264_pred.mbt`（4x4/16x16/chroma 8x8 帧内预测）+
-    `h264_decode.mbt`（宏块路径编排 + Annex B 入口，视觉对齐
-    `-skip_loop_filter all`）。**没有去块滤波**，故不能与默认解码输出比
+    `h264_deblock.mbt`（`h264dsp` 四个滤波核 + `h264_loopfilter` 边界强度推导）+
+    `h264_decode.mbt`（宏块路径编排 + Annex B 入口）。默认入口**带滤波**，视觉对齐
+    FFmpeg 默认解码；`..._ex(data, true)` 跳过滤波，对齐 `-skip_loop_filter all`
   - MP3 **Layer III 定点解码**：`mp3_tables.mbt`（码表/Huffman）+ `mp3_dsp.mbt`
     （IMDCT/DCT32/合成窗）+ `mp3_decode.mbt`（side info/反量化/立体声/PCM）
 - **libavformat（码流层接入）**：`rawaudio.mbt`（裸 ADTS/MP3 分帧，ID3v2/v1 +
@@ -153,8 +154,10 @@ $msg | git commit -F -
 - **解码器（出像素/PCM）的向量做法**：参考输出由 docker `linuxserver/ffmpeg:9.0.2`
   现场生成，期望值是 **MD5**：
   - H.264：`-x264-params "keyint=1:bframes=0:cabac=0:8x8dct=0:slices=1:scenecut=0"`
-    产出「全 IDR + 单 slice」码流，参考 YUV 必须用 **`-skip_loop_filter all`**（放在
-    `-i` 之前，因为本项目没有去块滤波），再按 `w*h*3/2` 切帧算 MD5。
+    产出「全 IDR + 单 slice」码流，再按 `w*h*3/2` 切帧算 MD5。**两套参考值都要取**：
+    默认解码（带环路滤波）对 `h264_decode_annexb_i_frames`；`-skip_loop_filter all`
+    （放在 `-i` 之前）对 `..._ex(data, true)`。只取一套时，滤波时序/强度的错误会被
+    另一套掩盖（本项目的去块滤波就是靠两套对照才定位到时序问题）。
   - MP3：期望 PCM MD5 必须取自**定点**解码器 `-c:a mp3 -f s16le`；浮点（默认
     `mp3float`）给出不同 MD5，用错就永远对不上。
   - **扫描式验证**：按宏块/每行算 luma MD5 与参考 YUV 同区域比对，比整帧 MD5 更快
@@ -314,6 +317,21 @@ $msg | git commit -F -
 - **多 slice 必须解码前预扫**：宏块循环按 `mb_count` 读，第二个 slice 之前越界读零会静默
   产出垃圾像素；先扫每个 slice NAL 的 `first_mb_in_slice`，非 0 直接拒绝。
 - **MP3 定点 vs 浮点**：期望 MD5 只能用 `-c:a mp3`（定点）生成；默认 `mp3float` 不同。
+- **滤波时序 ≠ 滤波算法**：FFmpeg 是「解完一行 → `loop_filter()` 滤这一行」，而帧内预测
+  读的是**滤波前**备份的 `sl->top_borders`。等价写法是「**先整帧重建，再按光栅序整帧
+  滤波**」。「每解一个宏块就立刻滤波」会让同行的后续宏块拿**已滤波**左邻做预测，重建值
+  整体偏移——症状是整帧只差一两百个样本、集中在 MB 边界附近，逐核对照 kernel 永远查不出。
+- **内部边 bS 是 3（弱核）**：`filter_mb_dir` 只把**宏块边**抬到 bS=4，内部边保持 3 且
+  `intra=0`；误用强核会让 `|p0-q0| < (alpha>>2)+2` 的平坦边多改一排像素。
+  `filter_mb_edgev(..., bs, qp, a, b, h, intra)` 的 `intra` 参数决定「bS>=4 时是否走强核」，
+  内部边这个参数恒为 0。
+- **slice 级 deblock 偏移是 `div2 * 2`**：语法元素 `slice_alpha_c0_offset_div2` 是 se(v)，
+  C 在 `h264_slice.c:1909` 乘 2 后才存；漏乘会让 `alpha`/`beta` 偏小。
+- **PPS 的 `chroma_qp_index_offset` 不一定是 0**：本项目向量里是 **-2**（`pic_init_qp_minus26`
+  是 -3）。自己写参考模型时直接解析 PPS，别假设默认值；差 2 会让表下标错位、个别样本差 1~2。
+- **验证脚本的盲区**：拿「未滤波 YUV + 逐宏块滤波」当参考模型时，它与 FFmpeg 默认解码
+  **逐字节一致**（因为 FFmpeg 预测也读滤波前像素），能验出核/强度错误但**验不出时序错误**。
+  时序问题要用整帧 MD5 + 「逐 MB 区域哈希」这类粗粒度对照来定位。
 
 ---
 
@@ -409,7 +427,8 @@ moonbit/                      # git 仓库根
     ├── h264_cavlc.mbt        # CAVLC 残差 + dequant/chroma-QP 表
     ├── h264_idct.mbt         # H.264 4x4 IDCT + DC Hadamard（8-bit）
     ├── h264_pred.mbt         # 帧内预测 4x4/16x16/chroma 8x8
-    ├── h264_decode.mbt       # Baseline I 帧重建 + Annex B 入口（无去块滤波）
+    ├── h264_decode.mbt       # Baseline I 帧重建 + 环路滤波编排 + Annex B 入口
+    ├── h264_deblock.mbt      # 去块滤波核（h264dsp）+ 边界强度推导（h264_loopfilter）
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS + hvcC
     ├── audio_headers.mbt     # ADTS + MPEG 音频帧头
     ├── mp3_tables.mbt        # Layer III 码表/Huffman 表

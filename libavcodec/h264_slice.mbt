@@ -167,8 +167,16 @@ pub fn ff_h264_decode_slice_header(
       return Err("EINVAL")
     }
     if disable_idc != 1 {
-      alpha = gb.read_se()
-      beta = gb.read_se()
+      // `slice_alpha_c0_offset_div2` / `slice_beta_offset_div2`, then
+      // `sl->slice_alpha_c0_offset = slice_alpha_c0_offset_div2 * 2`
+      // (`h264_slice.c:1898-1910`).
+      let alpha_div2 = gb.read_se()
+      let beta_div2 = gb.read_se()
+      if alpha_div2 > 6 || alpha_div2 < -6 || beta_div2 > 6 || beta_div2 < -6 {
+        return Err("EINVAL")
+      }
+      alpha = alpha_div2 * 2
+      beta = beta_div2 * 2
     }
   }
   Ok({
