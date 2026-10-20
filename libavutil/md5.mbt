@@ -10,8 +10,9 @@
 /// caller-provided digest buffer; here the digest is a `FixedArray[Byte]` of
 /// length >= 16.
 
-///| `T[i] = floor(fabs(sin(i + 1)) * 2^32)`, the `T` table in libavutil/md5.c. */
-let md5_t : FixedArray[UInt] = [
+///|
+/// `T[i] = floor(fabs(sin(i + 1)) * 2^32)`, the `T` table in libavutil/md5.c. */
+let md5_t : FixedArray[UInt32] = [
   0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
   0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
   0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
@@ -24,29 +25,33 @@ let md5_t : FixedArray[UInt] = [
   0xeb86d391,
 ]
 
-///| Per-round rotation amounts, flattened from `S[4][4]` in libavutil/md5.c. */
-let md5_s : FixedArray[Int] = [
+///|
+/// Per-round rotation amounts, flattened from `S[4][4]` in libavutil/md5.c. */
+let md5_s : FixedArray[Int32] = [
   7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21,
 ]
 
-///| Read a little-endian 32-bit word (`AV_RL32`). */
-fn md5_rl32(src : Bytes, off : Int) -> UInt {
+///|
+/// Read a little-endian 32-bit word (`AV_RL32`). */
+fn md5_rl32(src : Bytes, off : Int32) -> UInt32 {
   src[off].to_uint() |
   (src[off + 1].to_uint() << 8) |
   (src[off + 2].to_uint() << 16) |
   (src[off + 3].to_uint() << 24)
 }
 
-///| Write a little-endian 32-bit word (`AV_WL32`). */
-fn md5_wl32(dst : FixedArray[Byte], off : Int, v : UInt) -> Unit {
+///|
+/// Write a little-endian 32-bit word (`AV_WL32`). */
+fn md5_wl32(dst : FixedArray[Byte], off : Int32, v : UInt32) -> Unit {
   dst[off] = (v & 0xFF).to_byte()
   dst[off + 1] = ((v >> 8) & 0xFF).to_byte()
   dst[off + 2] = ((v >> 16) & 0xFF).to_byte()
   dst[off + 3] = ((v >> 24) & 0xFF).to_byte()
 }
 
-///| Message word index `X[...]` used by the `CORE` macro at step `i`. */
-fn md5_x_index(i : Int) -> Int {
+///|
+/// Message word index `X[...]` used by the `CORE` macro at step `i`. */
+fn md5_x_index(i : Int32) -> Int32 {
   if i < 16 {
     i & 15
   } else if i < 32 {
@@ -58,19 +63,26 @@ fn md5_x_index(i : Int) -> Int {
   }
 }
 
-///| MD5 context, mirroring `struct AVMD5` in libavutil/md5.c. */
+///|
+/// MD5 context, mirroring `struct AVMD5` in libavutil/md5.c. */
 pub struct AVMD5 {
   mut len : UInt64
   block : FixedArray[Byte]
-  abcd : FixedArray[UInt]
+  abcd : FixedArray[UInt32]
 }
 
-///| `av_md5_alloc`: create a zeroed MD5 context. */
+///|
+/// `av_md5_alloc`: create a zeroed MD5 context. */
 pub fn av_md5_alloc() -> AVMD5 {
-  { len: 0, block: FixedArray::make(64, b'\x00'), abcd: FixedArray::make(4, 0) }
+  {
+    len: 0,
+    block: FixedArray::make(64, b'\x00'),
+    abcd: FixedArray::make(4, 0),
+  }
 }
 
-///| `av_md5_init`: reset a context to the MD5 initial state. */
+///|
+/// `av_md5_init`: reset a context to the MD5 initial state. */
 pub fn av_md5_init(ctx : AVMD5) -> Unit {
   ctx.len = 0
   ctx.abcd[0] = 0x10325476
@@ -79,8 +91,14 @@ pub fn av_md5_init(ctx : AVMD5) -> Unit {
   ctx.abcd[3] = 0x67452301
 }
 
-///| `body`: hash `nblocks` 512-bit blocks, port of the static `body()` helper. */
-fn md5_body(abcd : FixedArray[UInt], src : Bytes, off : Int, nblocks : Int) -> Unit {
+///|
+/// `body`: hash `nblocks` 512-bit blocks, port of the static `body()` helper. */
+fn md5_body(
+  abcd : FixedArray[UInt32],
+  src : Bytes,
+  off : Int32,
+  nblocks : Int32,
+) -> Unit {
   for nb = 0; nb < nblocks; nb = nb + 1 {
     let mut a = abcd[3]
     let mut b = abcd[2]
@@ -114,8 +132,9 @@ fn md5_body(abcd : FixedArray[UInt], src : Bytes, off : Int, nblocks : Int) -> U
   }
 }
 
-///| `av_md5_update`: feed `len` bytes of `src` into the context. */
-pub fn av_md5_update(ctx : AVMD5, src : Bytes, len : Int) -> Unit {
+///|
+/// `av_md5_update`: feed `len` bytes of `src` into the context. */
+pub fn av_md5_update(ctx : AVMD5, src : Bytes, len : Int32) -> Unit {
   let j = (ctx.len & 63).to_int()
   ctx.len = ctx.len + len.to_uint64()
   let mut p = 0
@@ -161,8 +180,9 @@ pub fn av_md5_final(ctx : AVMD5, dst : FixedArray[Byte]) -> Unit {
   }
 }
 
-///| `av_md5_sum`: one-shot digest of `src[0..len)` into `dst`. */
-pub fn av_md5_sum(dst : FixedArray[Byte], src : Bytes, len : Int) -> Unit {
+///|
+/// `av_md5_sum`: one-shot digest of `src[0..len)` into `dst`. */
+pub fn av_md5_sum(dst : FixedArray[Byte], src : Bytes, len : Int32) -> Unit {
   let ctx = av_md5_alloc()
   av_md5_init(ctx)
   av_md5_update(ctx, src, len)

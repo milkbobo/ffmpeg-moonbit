@@ -6,14 +6,15 @@
 /// `buf[i] = i + i*i`. The table prefixes are taken from the hardcoded tables in
 /// `libavutil/crc.c` and validate the table generator directly.
 
-///| `tests/ref/fate/crc`: `av_crc(table, 0, buf, 1999)`. */
+///|
+/// `tests/ref/fate/crc`: `av_crc(table, 0, buf, 1999)`. */
 test "av_crc matches fate/crc reference" {
   let buf : FixedArray[Byte] = FixedArray::make(1999, b'\x00')
   for i = 0; i < 1999; i = i + 1 {
     buf[i] = (i + i * i).reinterpret_as_uint().to_byte()
   }
   let data = Bytes::from_array(buf[:])
-  let cases : Array[(AVCRCId, UInt)] = [
+  let cases : Array[(AVCRCId, UInt32)] = [
     (AVCRCId::Crc32IeeeLe, 0x3D5CDD04),
     (AVCRCId::Crc32Ieee, 0xE0BAF5C0),
     (AVCRCId::Crc24Ieee, 0x326039),
@@ -29,22 +30,33 @@ test "av_crc matches fate/crc reference" {
   }
 }
 
-///| Compare generated tables against the hardcoded tables in libavutil/crc.c. */
+///|
+/// Compare generated tables against the hardcoded tables in libavutil/crc.c. */
 test "generated tables match the hardcoded crc.c tables" {
-  let crc8_atm : Array[UInt] = [0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15]
-  let crc16_ansi_le : Array[UInt] = [0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241]
-  let crc16_ccitt : Array[UInt] = [0x0000, 0x2110, 0x4220, 0x6330, 0x8440, 0xA550, 0xC660, 0xE770]
-  let crc24_ieee : Array[UInt] = [0x000000, 0xFB4C86, 0x0DD58A, 0xF6990C, 0xE1E693, 0x1AAA15, 0xEC3319, 0x177F9F]
-  let crc8_ebu : Array[UInt] = [0x00, 0x1D, 0x3A, 0x27, 0x74, 0x69, 0x4E, 0x53]
-  let crc32_ieee : Array[UInt] = [
+  let crc8_atm : Array[UInt32] = [
+    0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15,
+  ]
+  let crc16_ansi_le : Array[UInt32] = [
+    0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241,
+  ]
+  let crc16_ccitt : Array[UInt32] = [
+    0x0000, 0x2110, 0x4220, 0x6330, 0x8440, 0xA550, 0xC660, 0xE770,
+  ]
+  let crc24_ieee : Array[UInt32] = [
+    0x000000, 0xFB4C86, 0x0DD58A, 0xF6990C, 0xE1E693, 0x1AAA15, 0xEC3319, 0x177F9F,
+  ]
+  let crc8_ebu : Array[UInt32] = [
+    0x00, 0x1D, 0x3A, 0x27, 0x74, 0x69, 0x4E, 0x53,
+  ]
+  let crc32_ieee : Array[UInt32] = [
     0x00000000, 0xB71DC104, 0x6E3B8209, 0xD926430D, 0xDC760413, 0x6B6BC517, 0xB24D861A,
     0x0550471E,
   ]
-  let crc32_ieee_le : Array[UInt] = [
+  let crc32_ieee_le : Array[UInt32] = [
     0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535,
     0x9E6495A3,
   ]
-  let checks : Array[(AVCRCId, Array[UInt])] = [
+  let checks : Array[(AVCRCId, Array[UInt32])] = [
     (AVCRCId::Crc8Atm, crc8_atm),
     (AVCRCId::Crc8Ebu, crc8_ebu),
     (AVCRCId::Crc16AnsiLe, crc16_ansi_le),
@@ -64,7 +76,8 @@ test "generated tables match the hardcoded crc.c tables" {
   }
 }
 
-///| `av_crc_init` rejects parameters outside `bits in [8, 32]`. */
+///|
+/// `av_crc_init` rejects parameters outside `bits in [8, 32]`. */
 test "av_crc_init rejects invalid parameters" {
   assert_true(av_crc_init(false, 7, 0x07) is Err(_))
   assert_true(av_crc_init(false, 33, 0x07) is Err(_))
@@ -72,7 +85,8 @@ test "av_crc_init rejects invalid parameters" {
   assert_true(av_crc_init(true, 16, 0xA001) is Ok(_))
 }
 
-///| Incremental CRC over two chunks equals the one-shot CRC over the join. */
+///|
+/// Incremental CRC over two chunks equals the one-shot CRC over the join. */
 test "av_crc is incremental" {
   let table = av_crc_get_table(AVCRCId::Crc32IeeeLe).unwrap()
   let whole = b"123456789"

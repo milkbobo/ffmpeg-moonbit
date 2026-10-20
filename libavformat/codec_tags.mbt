@@ -10,7 +10,8 @@
 /// The identifiers are FFmpeg's `AVCodecID` names (lower case: "h264",
 /// "hevc", "aac", "mp3", ...). An unknown tag returns "".
 
-///| `ff_mkv_codec_tags`: Matroska CodecID → codec name.
+///|
+/// `ff_mkv_codec_tags`: Matroska CodecID → codec name.
 pub fn ff_mkv_codec_id(codec_id : String) -> String {
   match codec_id {
     "A_AAC" => "aac"
@@ -32,8 +33,10 @@ pub fn ff_mkv_codec_id(codec_id : String) -> String {
     "A_PCM/INT/LIT" => "pcm_s16le"
     "A_PCM/INT/BIG" => "pcm_s16be"
     "A_PCM/FLOAT/IEEE" => "pcm_f32le"
-    "D_WEBVTT/SUBTITLES" | "D_WEBVTT/CAPTIONS" | "D_WEBVTT/DESCRIPTIONS" |
-    "D_WEBVTT/METADATA" => "webvtt"
+    "D_WEBVTT/SUBTITLES"
+    | "D_WEBVTT/CAPTIONS"
+    | "D_WEBVTT/DESCRIPTIONS"
+    | "D_WEBVTT/METADATA" => "webvtt"
     "S_TEXT/UTF8" | "S_TEXT/ASCII" => "subrip"
     "S_TEXT/ASS" | "S_ASS" => "ass"
     "S_TEXT/SSA" | "S_SSA" => "ass"
@@ -80,12 +83,7 @@ pub fn mov_codec_name(codec : String, codec_id : String) -> String {
     "vp08" => "vp8"
     "vp09" => "vp9"
     "mp4v" => "mpeg4"
-    "mp4a" =>
-      if codec_id != "" {
-        codec_id
-      } else {
-        "aac"
-      }
+    "mp4a" => if codec_id != "" { codec_id } else { "aac" }
     ".mp3" | "mp3 " | "0x6D730055" => "mp3"
     "ac-3" => "ac3"
     "ec-3" => "eac3"

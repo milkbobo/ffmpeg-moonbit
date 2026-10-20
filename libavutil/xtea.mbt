@@ -16,54 +16,61 @@
 /// The C header declares `uint32_t key[16]`, but the implementation only ever
 /// uses the first four words, so only those are stored here.
 pub struct AVXTEA {
-  key : FixedArray[UInt]
+  key : FixedArray[UInt32]
 }
 
-///| `av_xtea_alloc`: create a zeroed XTEA context. */
+///|
+/// `av_xtea_alloc`: create a zeroed XTEA context. */
 pub fn av_xtea_alloc() -> AVXTEA {
-  { key: FixedArray::make(4, 0) }
+  { key: FixedArray::make(4, 0), }
 }
 
-///| Big-endian 32-bit read (`AV_RB32`). */
-fn xtea_rb32(b : Bytes, off : Int) -> UInt {
+///|
+/// Big-endian 32-bit read (`AV_RB32`). */
+fn xtea_rb32(b : Bytes, off : Int32) -> UInt32 {
   (b[off].to_uint() << 24) |
   (b[off + 1].to_uint() << 16) |
   (b[off + 2].to_uint() << 8) |
   b[off + 3].to_uint()
 }
 
-///| Little-endian 32-bit read (`AV_RL32`). */
-fn xtea_rl32(b : Bytes, off : Int) -> UInt {
+///|
+/// Little-endian 32-bit read (`AV_RL32`). */
+fn xtea_rl32(b : Bytes, off : Int32) -> UInt32 {
   b[off].to_uint() |
   (b[off + 1].to_uint() << 8) |
   (b[off + 2].to_uint() << 16) |
   (b[off + 3].to_uint() << 24)
 }
 
-///| Big-endian 32-bit write (`AV_WB32`). */
-fn xtea_wb32(dst : FixedArray[Byte], off : Int, v : UInt) -> Unit {
+///|
+/// Big-endian 32-bit write (`AV_WB32`). */
+fn xtea_wb32(dst : FixedArray[Byte], off : Int32, v : UInt32) -> Unit {
   dst[off] = ((v >> 24) & 0xFF).to_byte()
   dst[off + 1] = ((v >> 16) & 0xFF).to_byte()
   dst[off + 2] = ((v >> 8) & 0xFF).to_byte()
   dst[off + 3] = (v & 0xFF).to_byte()
 }
 
-///| Little-endian 32-bit write (`AV_WL32`). */
-fn xtea_wl32(dst : FixedArray[Byte], off : Int, v : UInt) -> Unit {
+///|
+/// Little-endian 32-bit write (`AV_WL32`). */
+fn xtea_wl32(dst : FixedArray[Byte], off : Int32, v : UInt32) -> Unit {
   dst[off] = (v & 0xFF).to_byte()
   dst[off + 1] = ((v >> 8) & 0xFF).to_byte()
   dst[off + 2] = ((v >> 16) & 0xFF).to_byte()
   dst[off + 3] = ((v >> 24) & 0xFF).to_byte()
 }
 
-///| `av_xtea_init`: load the 16-byte key as big-endian 32-bit words. */
+///|
+/// `av_xtea_init`: load the 16-byte key as big-endian 32-bit words. */
 pub fn av_xtea_init(ctx : AVXTEA, key : Bytes) -> Unit {
   for i = 0; i < 4; i = i + 1 {
     ctx.key[i] = xtea_rb32(key, i << 2)
   }
 }
 
-///| `av_xtea_le_init`: load the 16-byte key as little-endian 32-bit words. */
+///|
+/// `av_xtea_le_init`: load the 16-byte key as little-endian 32-bit words. */
 pub fn av_xtea_le_init(ctx : AVXTEA, key : Bytes) -> Unit {
   for i = 0; i < 4; i = i + 1 {
     ctx.key[i] = xtea_rl32(key, i << 2)
@@ -77,42 +84,46 @@ pub fn av_xtea_le_init(ctx : AVXTEA, key : Bytes) -> Unit {
 fn xtea_ecb_block(
   ctx : AVXTEA,
   src : Bytes,
-  off : Int,
+  off : Int32,
   decrypt : Bool,
-  little : Bool
+  little : Bool,
 ) -> Bytes {
-  let mut v0 = if little {
-    xtea_rl32(src, off)
-  } else {
-    xtea_rb32(src, off)
-  }
+  let mut v0 = if little { xtea_rl32(src, off) } else { xtea_rb32(src, off) }
   let mut v1 = if little {
     xtea_rl32(src, off + 4)
   } else {
     xtea_rb32(src, off + 4)
   }
-  let delta : UInt = 0x9E3779B9
+  let delta : UInt32 = 0x9E3779B9
   if decrypt {
-    let mut sum : UInt = delta * 32
+    let mut sum : UInt32 = delta * 32
     for i = 0; i < 32; i = i + 1 {
       v1 = v1 -
-        ((((v0 << 4) ^ (v0 >> 5)) + v0) ^
-          (sum + ctx.key[((sum >> 11) & 3).reinterpret_as_int()]))
+        (
+          (((v0 << 4) ^ (v0 >> 5)) + v0) ^
+          (sum + ctx.key[((sum >> 11) & 3).reinterpret_as_int()])
+        )
       sum = sum - delta
       v0 = v0 -
-        ((((v1 << 4) ^ (v1 >> 5)) + v1) ^
-          (sum + ctx.key[(sum & 3).reinterpret_as_int()]))
+        (
+          (((v1 << 4) ^ (v1 >> 5)) + v1) ^
+          (sum + ctx.key[(sum & 3).reinterpret_as_int()])
+        )
     }
   } else {
-    let mut sum : UInt = 0
+    let mut sum : UInt32 = 0
     for i = 0; i < 32; i = i + 1 {
       v0 = v0 +
-        ((((v1 << 4) ^ (v1 >> 5)) + v1) ^
-          (sum + ctx.key[(sum & 3).reinterpret_as_int()]))
+        (
+          (((v1 << 4) ^ (v1 >> 5)) + v1) ^
+          (sum + ctx.key[(sum & 3).reinterpret_as_int()])
+        )
       sum = sum + delta
       v1 = v1 +
-        ((((v0 << 4) ^ (v0 >> 5)) + v0) ^
-          (sum + ctx.key[((sum >> 11) & 3).reinterpret_as_int()]))
+        (
+          (((v0 << 4) ^ (v0 >> 5)) + v0) ^
+          (sum + ctx.key[((sum >> 11) & 3).reinterpret_as_int()])
+        )
     }
   }
   let out : FixedArray[Byte] = FixedArray::make(8, b'\x00')
@@ -133,10 +144,10 @@ fn xtea_ecb_block(
 fn xtea_crypt(
   ctx : AVXTEA,
   src : Bytes,
-  count : Int,
+  count : Int32,
   iv : FixedArray[Byte]?,
   decrypt : Bool,
-  little : Bool
+  little : Bool,
 ) -> Bytes {
   let out : FixedArray[Byte] = FixedArray::make(count * 8, b'\x00')
   let mut chain : Bytes? = match iv {
@@ -179,7 +190,13 @@ fn xtea_crypt(
           for i = 0; i < 8; i = i + 1 {
             tmp[i] = (src[off + i].to_uint() ^ c[i].to_uint()).to_byte()
           }
-          let enc = xtea_ecb_block(ctx, Bytes::from_array(tmp[:]), 0, false, little)
+          let enc = xtea_ecb_block(
+            ctx,
+            Bytes::from_array(tmp[:]),
+            0,
+            false,
+            little,
+          )
           for i = 0; i < 8; i = i + 1 {
             out[off + i] = enc[i]
           }
@@ -204,9 +221,9 @@ fn xtea_crypt(
 pub fn av_xtea_crypt(
   ctx : AVXTEA,
   src : Bytes,
-  count : Int,
+  count : Int32,
   iv : FixedArray[Byte]?,
-  decrypt : Bool
+  decrypt : Bool,
 ) -> Bytes {
   xtea_crypt(ctx, src, count, iv, decrypt, false)
 }
@@ -217,9 +234,9 @@ pub fn av_xtea_crypt(
 pub fn av_xtea_le_crypt(
   ctx : AVXTEA,
   src : Bytes,
-  count : Int,
+  count : Int32,
   iv : FixedArray[Byte]?,
-  decrypt : Bool
+  decrypt : Bool,
 ) -> Bytes {
   xtea_crypt(ctx, src, count, iv, decrypt, true)
 }

@@ -9,8 +9,9 @@
 /// fates (against the published digests) or four distinct generated buffers
 /// (against the scalar port, lane by lane).
 
-///| Render the 16-byte digest of lane `l` (at `dst[16*l ..]`) as hex. */
-fn md5x4_lane_hex(dst : FixedArray[Byte], l : Int) -> String {
+///|
+/// Render the 16-byte digest of lane `l` (at `dst[16*l ..]`) as hex. */
+fn md5x4_lane_hex(dst : FixedArray[Byte], l : Int32) -> String {
   let digits : Bytes = b"0123456789abcdef"
   let chars : Array[Char] = []
   for i = 0; i < 16; i = i + 1 {
@@ -21,7 +22,8 @@ fn md5x4_lane_hex(dst : FixedArray[Byte], l : Int) -> String {
   String::from_array(chars[:])
 }
 
-///| Four copies of `msg`, so a case can be checked against a known digest. */
+///|
+/// Four copies of `msg`, so a case can be checked against a known digest. */
 fn md5x4_four(msg : Bytes) -> FixedArray[Bytes] {
   let srcs : FixedArray[Bytes] = FixedArray::make(4, b"")
   for l = 0; l < 4; l = l + 1 {
@@ -39,10 +41,10 @@ test "md5 x4 simd: fate/md5 reference digests in every lane" {
   for i = 0; i < 1000; i = i + 1 {
     buf1[i] = (i * i).reinterpret_as_uint().to_byte()
   }
-  let ns1 : Array[Int] = [1000, 63, 64, 65]
+  let ns1 : Array[Int32] = [1000, 63, 64, 65]
   let refs1 : Array[String] = [
-    "0bf1bcc8a1d72e2cf58d42182b637e56", "993a3eb298e52aca83ecfbb6a766b4d0",
-    "07c01ca7c733475fad38c84c56f305c1", "9fc8404827cac26385f48f4f58fd32ce",
+    "0bf1bcc8a1d72e2cf58d42182b637e56", "993a3eb298e52aca83ecfbb6a766b4d0", "07c01ca7c733475fad38c84c56f305c1",
+    "9fc8404827cac26385f48f4f58fd32ce",
   ]
   for k = 0; k < ns1.length(); k = k + 1 {
     let n = ns1[k]
@@ -61,7 +63,8 @@ test "md5 x4 simd: fate/md5 reference digests in every lane" {
   }
 }
 
-///| RFC 1321 / well-known vectors, in all four lanes. */
+///|
+/// RFC 1321 / well-known vectors, in all four lanes. */
 test "md5 x4 simd: RFC 1321 vectors in every lane" {
   let dst : FixedArray[Byte] = FixedArray::make(64, b'\x00')
   av_md5_sum_x4(dst, md5x4_four(b""), 0)
@@ -83,14 +86,16 @@ test "md5 x4 simd: RFC 1321 vectors in every lane" {
 /// messages per length, spanning 0, the 55/56/63/64/65 padding boundaries, and
 /// multi-block inputs.
 test "md5 x4 simd: equals scalar for four distinct messages" {
-  let lens : Array[Int] = [0, 1, 55, 56, 63, 64, 65, 119, 120, 128, 999, 1000, 4096]
+  let lens : Array[Int32] = [
+    0, 1, 55, 56, 63, 64, 65, 119, 120, 128, 999, 1000, 4096,
+  ]
   let dst : FixedArray[Byte] = FixedArray::make(64, b'\x00')
   for k = 0; k < lens.length(); k = k + 1 {
     let n = lens[k]
     let srcs : FixedArray[Bytes] = FixedArray::make(4, b"")
     for l = 0; l < 4; l = l + 1 {
       srcs[l] = simd_gen_bytes(
-        0x9E3779B9U + (17U * l.reinterpret_as_uint()) + n.reinterpret_as_uint(),
+        0x9E3779B9U + 17U * l.reinterpret_as_uint() + n.reinterpret_as_uint(),
         n,
       )
     }

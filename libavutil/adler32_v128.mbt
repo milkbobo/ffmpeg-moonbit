@@ -15,9 +15,10 @@
 /// `av_adler32_update` (see `adler32.mbt`). The two implementations are
 /// asserted equal in `adler32_v128_wbtest.mbt`.
 
-///| Horizontal sum of the four `i32x4` lanes. */
+///|
+/// Horizontal sum of the four `i32x4` lanes. */
 #cfg(any(target="native", target="wasm"))
-fn adler_red4(v : V128) -> UInt {
+fn adler_red4(v : V128) -> UInt32 {
   @v128.i32x4_extract_lane(v, 0) +
   @v128.i32x4_extract_lane(v, 1) +
   @v128.i32x4_extract_lane(v, 2) +
@@ -28,7 +29,11 @@ fn adler_red4(v : V128) -> UInt {
 /// `av_adler32_update` computed with 16-byte SIMD blocks.
 /// `NMAX = 5552` mirrors zlib/FFmpeg's modulus discipline.
 #cfg(any(target="native", target="wasm"))
-pub fn av_adler32_update_v128(adler : UInt, buf : Bytes, len : Int) -> UInt {
+pub fn av_adler32_update_v128(
+  adler : UInt32,
+  buf : Bytes,
+  len : Int32,
+) -> UInt32 {
   let ones = @v128.i16x8_const(1, 1, 1, 1, 1, 1, 1, 1)
   let w_lo = @v128.i16x8_const(16, 15, 14, 13, 12, 11, 10, 9)
   let w_hi = @v128.i16x8_const(8, 7, 6, 5, 4, 3, 2, 1)
@@ -37,8 +42,8 @@ pub fn av_adler32_update_v128(adler : UInt, buf : Bytes, len : Int) -> UInt {
   let mut p = 0
   let mut nmax = 5552
   while p + 16 <= len {
-    match buf[p : p + 16] {
-      [v128le(v), .. _] => {
+    match buf[p:p + 16] {
+      [v128le(v), ..] => {
         let lo = @v128.i16x8_extend_low_i8x16_u(v)
         let hi = @v128.i16x8_extend_high_i8x16_u(v)
         let bsum = adler_red4(

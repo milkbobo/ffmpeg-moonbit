@@ -8,7 +8,8 @@
 /// by hand from the algorithms in `libavutil/avstring.c` and
 /// `libavutil/bprint.c`.
 
-///| Read a NUL-terminated byte buffer back into a String (ASCII). */
+///|
+/// Read a NUL-terminated byte buffer back into a String (ASCII). */
 fn buf_str(b : FixedArray[Byte]) -> String {
   let chars : Array[Char] = []
   let mut i = 0
@@ -51,6 +52,7 @@ let get_token_cases : Array[(String, String, String)] = [
   ("\\'fo\\o\\:':  foo  '  :blahblah", "'foo::  foo  ", ":blahblah"),
 ]
 
+///|
 test "avstring: av_get_token matches fate/avstring" {
   for i = 0; i < get_token_cases.length(); i = i + 1 {
     let (input, token, rest) = get_token_cases[i]
@@ -65,22 +67,36 @@ test "avstring: av_get_token matches fate/avstring" {
   }
 }
 
-///| The 7 cases listed by `TEST_APPEND_PATH_COMPONENT` in the C test. */
+///|
+/// The 7 cases listed by `TEST_APPEND_PATH_COMPONENT` in the C test. */
 test "avstring: av_append_path_component matches the C test" {
   assert_eq(av_append_path_component(None, None), None)
   assert_eq(av_append_path_component(Some("path"), None), Some("path"))
   assert_eq(av_append_path_component(None, Some("comp")), Some("comp"))
-  assert_eq(av_append_path_component(Some("path"), Some("comp")), Some("path/comp"))
-  assert_eq(av_append_path_component(Some("path/"), Some("comp")), Some("path/comp"))
-  assert_eq(av_append_path_component(Some("path"), Some("/comp")), Some("path/comp"))
-  assert_eq(av_append_path_component(Some("path/"), Some("/comp")), Some("path/comp"))
+  assert_eq(
+    av_append_path_component(Some("path"), Some("comp")),
+    Some("path/comp"),
+  )
+  assert_eq(
+    av_append_path_component(Some("path/"), Some("comp")),
+    Some("path/comp"),
+  )
+  assert_eq(
+    av_append_path_component(Some("path"), Some("/comp")),
+    Some("path/comp"),
+  )
+  assert_eq(
+    av_append_path_component(Some("path/"), Some("/comp")),
+    Some("path/comp"),
+  )
   assert_eq(
     av_append_path_component(Some("path/path2/"), Some("/comp/comp2")),
     Some("path/path2/comp/comp2"),
   )
 }
 
-///| The `TEST_STRIREPLACE` expectations from the C test. */
+///|
+/// The `TEST_STRIREPLACE` expectations from the C test. */
 test "avstring: av_strireplace matches the C test" {
   let haystack = "Education consists mainly in what we have unlearned."
   assert_eq(
@@ -98,7 +114,8 @@ test "avstring: av_strireplace matches the C test" {
   )
 }
 
-///| `av_strnstr` offsets reported by the C test (pointer minus haystack). */
+///|
+/// `av_strnstr` offsets reported by the C test (pointer minus haystack). */
 test "avstring: av_strnstr matches the C test offsets" {
   let haystack = "Education consists mainly in what we have unlearned."
   assert_eq(av_strnstr(haystack, "learned.", haystack.length()), Some(44))
@@ -109,6 +126,7 @@ test "avstring: av_strnstr matches the C test offsets" {
   assert_eq(av_strnstr(haystack, "", haystack.length()), Some(0))
 }
 
+///|
 test "avstring: prefix helpers" {
   assert_eq(av_strstart("foobar", "foo"), Some(3))
   assert_eq(av_strstart("foobar", "FOO"), None)
@@ -122,6 +140,7 @@ test "avstring: prefix helpers" {
   assert_eq(av_stristr("foo", "z"), None)
 }
 
+///|
 test "avstring: bounded copy and concatenate" {
   let big : FixedArray[Byte] = FixedArray::make(16, b'\x7F')
   // A long enough buffer gets the whole string, and the return value is its length.
@@ -148,6 +167,7 @@ test "avstring: bounded copy and concatenate" {
   assert_eq(buf_str(cat), "foobar")
 }
 
+///|
 test "avstring: case-insensitive comparison" {
   // The C code returns the raw difference of the first differing characters,
   // not a normalised -1/0/1.
@@ -161,6 +181,7 @@ test "avstring: case-insensitive comparison" {
   assert_eq(av_strncasecmp("abc", "xyz", 0), 0)
 }
 
+///|
 test "avstring: paths" {
   assert_eq(av_basename("/foo/bar/baz"), "baz")
   assert_eq(av_basename("baz"), "baz")
@@ -172,6 +193,7 @@ test "avstring: paths" {
   assert_eq(av_dirname("/foo"), "")
 }
 
+///|
 test "avstring: name and list matching" {
   assert_true(av_match_name("foo", "foo,bar"))
   assert_true(av_match_name("bar", "foo,bar"))
@@ -199,6 +221,7 @@ test "avstring: name and list matching" {
   assert_true(av_match_list("x:y", "y:z", ':'))
 }
 
+///|
 test "avstring: av_escape modes" {
   // QUOTE wraps the value and escapes embedded single quotes.
   assert_eq(av_escape("a'b", None, av_escape_mode_quote, 0), "'a'\\''b'")
@@ -208,7 +231,12 @@ test "avstring: av_escape modes" {
   assert_eq(av_escape("foo bar", None, av_escape_mode_backslash, 0), "foo bar")
   // With AV_ESCAPE_FLAG_WHITESPACE it is backslash-escaped.
   assert_eq(
-    av_escape("foo bar", None, av_escape_mode_backslash, av_escape_flag_whitespace),
+    av_escape(
+      "foo bar",
+      None,
+      av_escape_mode_backslash,
+      av_escape_flag_whitespace,
+    ),
     "foo\\ bar",
   )
   // Leading/trailing whitespace is escaped even without the whitespace flag.
@@ -226,7 +254,10 @@ test "avstring: av_escape modes" {
     " foo",
   )
   // XML escaping of the markup characters, with optional quote handling.
-  assert_eq(av_escape("a<b&c>d", None, av_escape_mode_xml, 0), "a&lt;b&amp;c&gt;d")
+  assert_eq(
+    av_escape("a<b&c>d", None, av_escape_mode_xml, 0),
+    "a&lt;b&amp;c&gt;d",
+  )
   assert_eq(av_escape("'\"", None, av_escape_mode_xml, 0), "'\"")
   assert_eq(
     av_escape("\"", None, av_escape_mode_xml, av_escape_flag_xml_double_quotes),
@@ -238,6 +269,7 @@ test "avstring: av_escape modes" {
   )
 }
 
+///|
 test "avstring: av_utf8_decode" {
   let (r1, p1) = av_utf8_decode(b"A", 0, 1, 0)
   assert_eq(r1, Ok(0x41))
@@ -269,10 +301,7 @@ test "avstring: av_utf8_decode" {
   let (r7, _) = av_utf8_decode(b"\xed\xa0\x80", 0, 3, 0)
   assert_true(r7 is Err(_))
   let (r8, _) = av_utf8_decode(
-    b"\xed\xa0\x80",
-    0,
-    3,
-    av_utf8_flag_accept_surrogates,
+    b"\xed\xa0\x80", 0, 3, av_utf8_flag_accept_surrogates,
   )
   assert_eq(r8, Ok(0xD800))
 
@@ -280,10 +309,7 @@ test "avstring: av_utf8_decode" {
   let (r9, _) = av_utf8_decode(b"\xef\xbf\xbe", 0, 3, 0)
   assert_true(r9 is Err(_))
   let (r10, _) = av_utf8_decode(
-    b"\xef\xbf\xbe",
-    0,
-    3,
-    av_utf8_flag_accept_non_characters,
+    b"\xef\xbf\xbe", 0, 3, av_utf8_flag_accept_non_characters,
   )
   assert_eq(r10, Ok(0xFFFE))
 

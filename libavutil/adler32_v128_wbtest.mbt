@@ -8,8 +8,9 @@
 /// against the published Adler-32("Wikipedia") = 0x11E60398 vector and by
 /// exhaustive equality with the scalar path over generated buffers.
 
-///| Deterministic byte-buffer generator (LCG). */
-fn simd_gen_bytes(seed : UInt, n : Int) -> Bytes {
+///|
+/// Deterministic byte-buffer generator (LCG). */
+fn simd_gen_bytes(seed : UInt32, n : Int32) -> Bytes {
   let a : Array[Byte] = Array::make(n, b'\x00')
   let mut s = seed
   for i = 0; i < n; i = i + 1 {
@@ -19,6 +20,7 @@ fn simd_gen_bytes(seed : UInt, n : Int) -> Bytes {
   Bytes::from_array(a)
 }
 
+///|
 test "adler32 simd: published vector and equality with the scalar port" {
   // Published Adler-32 test vector.
   assert_eq(av_adler32_update_v128(1, b"Wikipedia", 9), 0x11E60398)
@@ -39,9 +41,10 @@ test "adler32 simd: published vector and equality with the scalar port" {
   }
 }
 
+///|
 test "adler32 simd: equality with the scalar port on long buffers" {
   for k = 0; k < 60; k = k + 1 {
-    let n = 1 + (k * k * 37) % 20000
+    let n = 1 + k * k * 37 % 20000
     let b = simd_gen_bytes(0xDEADBEEFU + k.reinterpret_as_uint(), n)
     assert_eq(av_adler32_update_v128(1, b, n), av_adler32_update(1, b, n))
   }

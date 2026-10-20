@@ -11,24 +11,27 @@
 /// sentinel that ends an unknown-length EBML header when a Segment id
 /// appears — is carried as the ancestor stack of the walker.
 
-///| `EBML_VERSION` (matroska.h): the highest EBML version supported. */
+///|
+/// `EBML_VERSION` (matroska.h): the highest EBML version supported. */
 pub let ebml_version_max : UInt64 = 2
 
-///| `Ebml` from matroska.h: the parsed EBML header fields. */
+///|
+/// `Ebml` from matroska.h: the parsed EBML header fields. */
 pub struct EbmlHeader {
-  ///| `EBMLVersion`/`EBMLReadVersion` (both default 1 via the table).
+  /// `EBMLVersion`/`EBMLReadVersion` (both default 1 via the table).
   mut version : UInt64
-  ///| `EBMLMaxSizeLength` (default 8).
+  /// `EBMLMaxSizeLength` (default 8).
   mut max_size : UInt64
-  ///| `EBMLMaxIDLength` (default 4).
+  /// `EBMLMaxIDLength` (default 4).
   mut id_length : UInt64
-  ///| `DocType` (default "(none)").
+  /// `DocType` (default "(none)").
   mut doctype : String
-  ///| `DocTypeReadVersion` (default 1).
+  /// `DocTypeReadVersion` (default 1).
   mut doctype_version : UInt64
 }
 
-///| `Ebml` with the syntax-table defaults applied (the C's zero-init plus
+///|
+/// `Ebml` with the syntax-table defaults applied (the C's zero-init plus
 /// `ebml_parse_nest`'s default pass in one step). */
 fn new_ebml_header() -> EbmlHeader {
   {
@@ -40,7 +43,8 @@ fn new_ebml_header() -> EbmlHeader {
   }
 }
 
-///| `matroska_doctypes[]`: the doctypes FFmpeg recognises. */
+///|
+/// `matroska_doctypes[]`: the doctypes FFmpeg recognises. */
 let matroska_doctypes : Array[String] = ["matroska", "webm"]
 
 ///|
@@ -120,9 +124,9 @@ fn ebml_header_table(ebml : EbmlHeader) -> Array[EbmlSyntax] {
       }),
     },
     // EBML_ID_EBMLVERSION: EBML_NONE in the C
-    { id: 0x4286, kind: Skip, sink: None },
+    { id: 0x4286, kind: Skip, sink: None, },
     // EBML_ID_DOCTYPEVERSION: EBML_NONE in the C
-    { id: 0x4287, kind: Skip, sink: None },
+    { id: 0x4287, kind: Skip, sink: None, },
   ]
 }
 
@@ -130,8 +134,12 @@ fn ebml_header_table(ebml : EbmlHeader) -> Array[EbmlSyntax] {
 /// The `ebml_syntax[]` table: an EBML header nest, stopping at a Segment.
 fn ebml_syntax_table(ebml : EbmlHeader) -> Array[EbmlSyntax] {
   [
-    { id: ebml_id_header, kind: Nest(() => ebml_header_table(ebml)), sink: None },
-    { id: matroska_id_segment, kind: Stop, sink: None },
+    {
+      id: ebml_id_header,
+      kind: Nest(() => ebml_header_table(ebml)),
+      sink: None,
+    },
+    { id: matroska_id_segment, kind: Stop, sink: None, },
   ]
 }
 
@@ -143,7 +151,8 @@ fn ebml_syntax_table(ebml : EbmlHeader) -> Array[EbmlSyntax] {
 /// On success the parse state is left at the Segment element (its id still
 /// in `current_id`), ready for the next slice.
 pub fn matroska_read_ebml_header(
-    pb : AvioContext) -> Result[(EbmlHeader, EbmlState, EbmlHeaderNotes), String] {
+  pb : AvioContext,
+) -> Result[(EbmlHeader, EbmlState, EbmlHeaderNotes), String] {
   let ebml = new_ebml_header()
   let st = EbmlState::new(pb)
   let res = ebml_parse(st, ebml_syntax_table(ebml), [])
@@ -154,7 +163,10 @@ pub fn matroska_read_ebml_header(
     Err(e) => return Err(e)
     Ok(_) => return Err("EINVAL")
   }
-  let notes : EbmlHeaderNotes = { supported_doctype: true, uses_unsupported_features: false }
+  let notes : EbmlHeaderNotes = {
+    supported_doctype: true,
+    uses_unsupported_features: false,
+  }
   if ebml.version > ebml_version_max ||
     ebml.max_size > 8 ||
     ebml.id_length > 4 ||
@@ -179,11 +191,12 @@ pub fn matroska_read_ebml_header(
   Ok((ebml, st, notes))
 }
 
-///| Warning-level outcomes of the header validation (the C logs these). */
+///|
+/// Warning-level outcomes of the header validation (the C logs these). */
 pub struct EbmlHeaderNotes {
-  ///| The doctype is not matroska/webm ("Unknown EBML doctype").
+  /// The doctype is not matroska/webm ("Unknown EBML doctype").
   mut supported_doctype : Bool
-  ///| DocTypeReadVersion 3 ("using unsupported features").
+  /// DocTypeReadVersion 3 ("using unsupported features").
   mut uses_unsupported_features : Bool
 }
 
@@ -191,39 +204,50 @@ pub struct EbmlHeaderNotes {
 // Segment / Info / SeekHead (matroska_read_header's main walk)
 // ---------------------------------------------------------------------------
 
-///| `MATROSKA_ID_TIMECODESCALE`. */
-pub let matroska_id_timecodescale : UInt = 0x2AD7B1
+///|
+/// `MATROSKA_ID_TIMECODESCALE`. */
+pub let matroska_id_timecodescale : UInt32 = 0x2AD7B1
 
-///| `MATROSKA_ID_DURATION`. */
-pub let matroska_id_duration : UInt = 0x4489
+///|
+/// `MATROSKA_ID_DURATION`. */
+pub let matroska_id_duration : UInt32 = 0x4489
 
-///| `MATROSKA_ID_TITLE`. */
-pub let matroska_id_title : UInt = 0x7BA9
+///|
+/// `MATROSKA_ID_TITLE`. */
+pub let matroska_id_title : UInt32 = 0x7BA9
 
-///| `MATROSKA_ID_WRITINGAPP`. */
-pub let matroska_id_writingapp : UInt = 0x5741
+///|
+/// `MATROSKA_ID_WRITINGAPP`. */
+pub let matroska_id_writingapp : UInt32 = 0x5741
 
-///| `MATROSKA_ID_MUXINGAPP`. */
-pub let matroska_id_muxingapp : UInt = 0x4D80
+///|
+/// `MATROSKA_ID_MUXINGAPP`. */
+pub let matroska_id_muxingapp : UInt32 = 0x4D80
 
-///| `MATROSKA_ID_DATEUTC`. */
-pub let matroska_id_dateutc : UInt = 0x4461
+///|
+/// `MATROSKA_ID_DATEUTC`. */
+pub let matroska_id_dateutc : UInt32 = 0x4461
 
-///| `MATROSKA_ID_SEGMENTUID`. */
-pub let matroska_id_segmentuid : UInt = 0x73A4
+///|
+/// `MATROSKA_ID_SEGMENTUID`. */
+pub let matroska_id_segmentuid : UInt32 = 0x73A4
 
-///| `MATROSKA_ID_SEEKENTRY`. */
-pub let matroska_id_seekentry : UInt = 0x4DBB
+///|
+/// `MATROSKA_ID_SEEKENTRY`. */
+pub let matroska_id_seekentry : UInt32 = 0x4DBB
 
-///| `MATROSKA_ID_SEEKID`. */
-pub let matroska_id_seekid : UInt = 0x53AB
+///|
+/// `MATROSKA_ID_SEEKID`. */
+pub let matroska_id_seekid : UInt32 = 0x53AB
 
-///| `MATROSKA_ID_SEEKPOSITION`. */
-pub let matroska_id_seekposition : UInt = 0x53AC
+///|
+/// `MATROSKA_ID_SEEKPOSITION`. */
+pub let matroska_id_seekposition : UInt32 = 0x53AC
 
-///| `MatroskaSeekhead`: one SeekHead entry (id + position in the segment). */
+///|
+/// `MatroskaSeekhead`: one SeekHead entry (id + position in the segment). */
 pub struct MkvSeekhead {
-  mut id : UInt
+  mut id : UInt32
   mut pos : UInt64
 }
 
@@ -232,31 +256,32 @@ pub struct MkvSeekhead {
 /// `MatroskaDemuxContext`): Info fields, the SeekHead list, and where the
 /// first Cluster starts.
 pub struct MatroskaHeader {
-  ///| `matroska->time_scale` (Info TimecodeScale, default 1000000).
+  /// `matroska->time_scale` (Info TimecodeScale, default 1000000).
   mut time_scale : UInt64
-  ///| `matroska->duration` (Info Duration, a float in time_scale units).
+  /// `matroska->duration` (Info Duration, a float in time_scale units).
   mut duration : Double
-  ///| `matroska->title`.
+  /// `matroska->title`.
   mut title : String?
-  ///| `matroska->muxingapp` (Info MuxingApp).
+  /// `matroska->muxingapp` (Info MuxingApp).
   mut muxingapp : String?
-  ///| `matroska->date_utc` (raw 8-byte payload).
+  /// `matroska->date_utc` (raw 8-byte payload).
   mut date_utc : Bytes?
-  ///| `matroska->seekhead[]`.
+  /// `matroska->seekhead[]`.
   seekhead : Array[MkvSeekhead]
-  ///| `matroska->segment_start`.
+  /// `matroska->segment_start`.
   mut segment_start : Int64
-  ///| `si->data_offset`: the first Cluster's start (-1 when none was seen).
+  /// `si->data_offset`: the first Cluster's start (-1 when none was seen).
   mut first_cluster_pos : Int64
-  ///| `matroska->is_webm` (from the EBML header doctype).
+  /// `matroska->is_webm` (from the EBML header doctype).
   mut is_webm : Bool
-  ///| `matroska->tracks[]` (the Tracks slice).
+  /// `matroska->tracks[]` (the Tracks slice).
   tracks : Array[MkvTrack]
-  ///| Demuxed packets in stream order (the C's packet queue).
+  /// Demuxed packets in stream order (the C's packet queue).
   packets : Array[MkvPacket]
 }
 
-///| Info defaults per `ebml_parse_nest`'s pre-pass. */
+///|
+/// Info defaults per `ebml_parse_nest`'s pre-pass. */
 fn new_matroska_header() -> MatroskaHeader {
   {
     time_scale: 1000000UL,
@@ -317,7 +342,7 @@ fn matroska_info_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
         }
       }),
     },
-    { id: matroska_id_writingapp, kind: Skip, sink: None },
+    { id: matroska_id_writingapp, kind: Skip, sink: None, },
     {
       id: matroska_id_muxingapp,
       kind: Str(None),
@@ -344,7 +369,7 @@ fn matroska_info_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
         }
       }),
     },
-    { id: matroska_id_segmentuid, kind: Skip, sink: None },
+    { id: matroska_id_segmentuid, kind: Skip, sink: None, },
   ]
 }
 
@@ -352,7 +377,10 @@ fn matroska_info_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
 /// The `matroska_seekhead_entry[]` table for the entry at `idx`; the
 /// SeekEntry master's children thunk creates the entry (with the C's
 /// default pos -1) right before this table is built.
-fn matroska_seekhead_entry_table(mh : MatroskaHeader, idx : Int) -> Array[EbmlSyntax] {
+fn matroska_seekhead_entry_table(
+  mh : MatroskaHeader,
+  idx : Int32,
+) -> Array[EbmlSyntax] {
   [
     {
       id: matroska_id_seekid,
@@ -360,7 +388,9 @@ fn matroska_seekhead_entry_table(mh : MatroskaHeader, idx : Int) -> Array[EbmlSy
       sink: Some((v, _) => {
         match v {
           U(u) => {
-            mh.seekhead[idx].id = (u & 0xFFFFFFFFUL).to_int().reinterpret_as_uint()
+            mh.seekhead[idx].id = (u & 0xFFFFFFFFUL)
+              .to_int()
+              .reinterpret_as_uint()
             Ok(())
           }
           _ => Err("EINVAL")
@@ -383,14 +413,15 @@ fn matroska_seekhead_entry_table(mh : MatroskaHeader, idx : Int) -> Array[EbmlSy
   ]
 }
 
-///| The `matroska_seekhead[]` table; each SeekEntry appends one element to
+///|
+/// The `matroska_seekhead[]` table; each SeekEntry appends one element to
 /// the list (the C's EbmlList grow at master-start with defaults applied).
 fn matroska_seekhead_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
   [
     {
       id: matroska_id_seekentry,
       kind: Nest(() => {
-        mh.seekhead.push({ id: 0, pos: 0xFFFFFFFFFFFFFFFFUL })
+        mh.seekhead.push({ id: 0, pos: 0xFFFFFFFFFFFFFFFFUL, })
         let idx = mh.seekhead.length() - 1
         matroska_seekhead_entry_table(mh, idx)
       }),
@@ -405,21 +436,38 @@ fn matroska_seekhead_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
 /// until their slices land; Info and SeekHead parse.
 fn matroska_segment_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
   [
-    { id: matroska_id_cluster, kind: Stop, sink: None },
-    { id: matroska_id_info, kind: Level1(() => matroska_info_table(mh)), sink: None },
-    { id: matroska_id_seekhead, kind: Level1(() => matroska_seekhead_table(mh)), sink: None },
-    { id: matroska_id_tracks, kind: Level1(() => matroska_tracks_table(mh)), sink: None },
-    { id: matroska_id_attachments, kind: Skip, sink: None },
-    { id: matroska_id_chapters, kind: Skip, sink: None },
-    { id: matroska_id_cues, kind: Skip, sink: None },
-    { id: matroska_id_tags, kind: Skip, sink: None },
+    { id: matroska_id_cluster, kind: Stop, sink: None, },
+    {
+      id: matroska_id_info,
+      kind: Level1(() => matroska_info_table(mh)),
+      sink: None,
+    },
+    {
+      id: matroska_id_seekhead,
+      kind: Level1(() => matroska_seekhead_table(mh)),
+      sink: None,
+    },
+    {
+      id: matroska_id_tracks,
+      kind: Level1(() => matroska_tracks_table(mh)),
+      sink: None,
+    },
+    { id: matroska_id_attachments, kind: Skip, sink: None, },
+    { id: matroska_id_chapters, kind: Skip, sink: None, },
+    { id: matroska_id_cues, kind: Skip, sink: None, },
+    { id: matroska_id_tags, kind: Skip, sink: None, },
   ]
 }
 
-///| The `matroska_segments[]` table (the top-level Segment nest). */
+///|
+/// The `matroska_segments[]` table (the top-level Segment nest). */
 fn matroska_segments_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
   [
-    { id: matroska_id_segment, kind: Nest(() => matroska_segment_table(mh)), sink: None },
+    {
+      id: matroska_id_segment,
+      kind: Nest(() => matroska_segment_table(mh)),
+      sink: None,
+    },
   ]
 }
 
@@ -432,9 +480,10 @@ fn matroska_segments_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
 /// `current_id`, reset the level stack to one unknown-length level and
 /// clear the unknown-element bookkeeping.
 fn matroska_reset_status(
-    st : EbmlState,
-    id : UInt,
-    position : Int64) -> Result[Unit, String] {
+  st : EbmlState,
+  id : UInt32,
+  position : Int64,
+) -> Result[Unit, String] {
   if position >= 0L {
     match st.pb.avio_seek(position, SEEK_SET) {
       Err(e) => return Err(e)
@@ -445,13 +494,10 @@ fn matroska_reset_status(
   st.levels.clear()
   st.levels.push((0L, ebml_unknown_length))
   st.unknown_count = 0
-  st.resync_pos = if position >= 0L {
-    position
-  } else {
-    st.pb.avio_tell()
-  }
+  st.resync_pos = if position >= 0L { position } else { st.pb.avio_tell() }
   if id != 0 {
-    st.resync_pos = st.resync_pos - ((@libavutil.av_log2(id) + 7) / 8).to_int64()
+    st.resync_pos = st.resync_pos -
+      ((@libavutil.av_log2(id) + 7) / 8).to_int64()
   }
   Ok(())
 }
@@ -502,32 +548,34 @@ fn matroska_resync(st : EbmlState, last_pos : Int64) -> Result[Unit, String] {
 /// element there with a dummy unknown-length level, then restore the
 /// cursor and parse state.
 fn matroska_parse_seekhead_entry(
-    st : EbmlState,
-    mh : MatroskaHeader,
-    pos : Int64) -> Result[Unit, String] {
+  st : EbmlState,
+  mh : MatroskaHeader,
+  pos : Int64,
+) -> Result[Unit, String] {
   let saved_id = st.current_id
   let before_pos = st.pb.avio_tell()
   let mut ret : Result[Unit, String] = Ok(())
   match st.pb.avio_seek(pos, SEEK_SET) {
     Err(e) => ret = Err(e)
-    Ok(_) => {
+    Ok(_) =>
       if st.levels.length() >= ebml_max_depth {
         ret = Err("EINVAL")
       } else {
         // a dummy level so the seekhead level is not lost ("a crude hack")
         st.levels.push((0L, ebml_unknown_length))
         st.current_id = 0
-        match ebml_parse(st, matroska_segment_table(mh), [matroska_segments_table(mh)]) {
+        match
+          ebml_parse(st, matroska_segment_table(mh), [
+            matroska_segments_table(mh),
+          ]) {
           Err(e) => ret = Err(e)
-          Ok(level_ended_code) => {
+          Ok(level_ended_code) =>
             if level_ended_code == level_ended {
               // this can only happen beyond EOF
               ret = Err("EOF")
             }
-          }
         }
       }
-    }
   }
   // Seek back; in all instances where this is used it is safe to reset the
   // level stack to one unknown-length level.
@@ -569,9 +617,7 @@ fn matroska_execute_seekhead(st : EbmlState, mh : MatroskaHeader) -> Unit {
         st.cues_parsing_deferred = -1
         break
       }
-      Ok(_) => {
-        elem.parsed = true
-      }
+      Ok(_) => elem.parsed = true
     }
   }
 }
@@ -585,8 +631,9 @@ fn matroska_execute_seekhead(st : EbmlState, mh : MatroskaHeader) -> Unit {
 /// the Segment, resyncing on damage until a Cluster stop is reached, then
 /// execute the SeekHead. `current_id` holds the Cluster id on success.
 fn matroska_read_segment(
-    st : EbmlState,
-    mh : MatroskaHeader) -> Result[Unit, String] {
+  st : EbmlState,
+  mh : MatroskaHeader,
+) -> Result[Unit, String] {
   let mut pos = st.pb.avio_tell()
   let mut res = ebml_parse(st, matroska_segments_table(mh), [])
   let mut rounds = 0
@@ -597,12 +644,11 @@ fn matroska_read_segment(
       return Err("EINVAL")
     }
     match res {
-      Err(e) => {
+      Err(e) =>
         if e == "EIO" {
           // EOF is translated to EIO: exit the loop
           return Err(e)
         }
-      }
       Ok(_) => ()
     }
     match matroska_resync(st, pos) {

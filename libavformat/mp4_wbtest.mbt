@@ -10,14 +10,15 @@
 // Big-endian byte writers and box builders
 // ---------------------------------------------------------------------------
 
-fn be16(v : UInt) -> Array[Byte] {
+fn be16(v : UInt32) -> Array[Byte] {
   let a : Array[Byte] = []
   a.push(((v >> 8) & 0xFF).to_byte())
   a.push((v & 0xFF).to_byte())
   a
 }
 
-fn be24(v : UInt) -> Array[Byte] {
+///|
+fn be24(v : UInt32) -> Array[Byte] {
   let a : Array[Byte] = []
   a.push(((v >> 16) & 0xFF).to_byte())
   a.push(((v >> 8) & 0xFF).to_byte())
@@ -25,7 +26,8 @@ fn be24(v : UInt) -> Array[Byte] {
   a
 }
 
-fn be32(v : UInt) -> Array[Byte] {
+///|
+fn be32(v : UInt32) -> Array[Byte] {
   let a : Array[Byte] = []
   a.push(((v >> 24) & 0xFF).to_byte())
   a.push(((v >> 16) & 0xFF).to_byte())
@@ -34,6 +36,7 @@ fn be32(v : UInt) -> Array[Byte] {
   a
 }
 
+///|
 fn be64(v : UInt64) -> Array[Byte] {
   let a : Array[Byte] = []
   let mut i = 7
@@ -44,17 +47,20 @@ fn be64(v : UInt64) -> Array[Byte] {
   a
 }
 
-///| `n` zero bytes. */
-fn zbytes(n : Int) -> Array[Byte] {
+///|
+/// `n` zero bytes. */
+fn zbytes(n : Int32) -> Array[Byte] {
   Bytes::make(n, b'\x00').to_array()
 }
 
+///|
 fn push_all(dst : Array[Byte], src : Array[Byte]) -> Unit {
   for i = 0; i < src.length(); i = i + 1 {
     dst.push(src[i])
   }
 }
 
+///|
 fn cat(parts : Array[Array[Byte]]) -> Array[Byte] {
   let out : Array[Byte] = []
   for i = 0; i < parts.length(); i = i + 1 {
@@ -63,31 +69,31 @@ fn cat(parts : Array[Array[Byte]]) -> Array[Byte] {
   out
 }
 
+///|
 fn cat2(a : Array[Byte], b : Array[Byte]) -> Array[Byte] {
   cat([a, b])
 }
 
-///| A 32-bit-sized box: `size(4) + type(4) + payload`. */
+///|
+/// A 32-bit-sized box: `size(4) + type(4) + payload`. */
 fn box(kind : Bytes, body : Array[Byte]) -> Array[Byte] {
-  cat([
-    be32((body.length() + 8).reinterpret_as_uint()),
-    kind.to_array(),
-    body,
-  ])
+  cat([be32((body.length() + 8).reinterpret_as_uint()), kind.to_array(), body])
 }
 
-///| A box using the 64-bit `largesize` form: `size(4)=1 + type(4) + largesize(8) + payload`. */
+///|
+/// A box using the 64-bit `largesize` form: `size(4)=1 + type(4) + largesize(8) + payload`. */
 fn box64(kind : Bytes, body : Array[Byte]) -> Array[Byte] {
-  cat([
-    be32(1),
-    kind.to_array(),
-    be64((body.length() + 16).to_uint64()),
-    body,
-  ])
+  cat([be32(1), kind.to_array(), be64((body.length() + 16).to_uint64()), body])
 }
 
-///| A full box: version and flags occupy the first 4 payload bytes. */
-fn fbox(kind : Bytes, version : UInt, flags : UInt, body : Array[Byte]) -> Array[Byte] {
+///|
+/// A full box: version and flags occupy the first 4 payload bytes. */
+fn fbox(
+  kind : Bytes,
+  version : UInt32,
+  flags : UInt32,
+  body : Array[Byte],
+) -> Array[Byte] {
   box(kind, cat2(be32((version << 24) | flags), body))
 }
 
@@ -95,16 +101,18 @@ fn fbox(kind : Bytes, version : UInt, flags : UInt, body : Array[Byte]) -> Array
 // Sample-table box builders
 // ---------------------------------------------------------------------------
 
-fn mvhd_box(timescale : UInt, duration : UInt) -> Array[Byte] {
-  fbox(
-    b"mvhd",
-    0,
-    0,
-    cat([be32(0), be32(0), be32(timescale), be32(duration)]),
-  )
+///|
+fn mvhd_box(timescale : UInt32, duration : UInt32) -> Array[Byte] {
+  fbox(b"mvhd", 0, 0, cat([be32(0), be32(0), be32(timescale), be32(duration)]))
 }
 
-fn tkhd_box(track_id : UInt, duration : UInt, width : UInt, height : UInt) -> Array[Byte] {
+///|
+fn tkhd_box(
+  track_id : UInt32,
+  duration : UInt32,
+  width : UInt32,
+  height : UInt32,
+) -> Array[Byte] {
   fbox(
     b"tkhd",
     0,
@@ -128,7 +136,8 @@ fn tkhd_box(track_id : UInt, duration : UInt, width : UInt, height : UInt) -> Ar
   )
 }
 
-fn mdhd_box(timescale : UInt, duration : UInt) -> Array[Byte] {
+///|
+fn mdhd_box(timescale : UInt32, duration : UInt32) -> Array[Byte] {
   fbox(
     b"mdhd",
     0,
@@ -137,6 +146,7 @@ fn mdhd_box(timescale : UInt, duration : UInt) -> Array[Byte] {
   )
 }
 
+///|
 fn hdlr_box(handler : Bytes) -> Array[Byte] {
   fbox(
     b"hdlr",
@@ -150,7 +160,11 @@ fn hdlr_box(handler : Bytes) -> Array[Byte] {
 /// A video sample entry (isom layout), enough for `mov_parse_stsd_video`:
 /// 16 pre-defined bytes, width/height, resolutions, frame count, a zero-length
 /// codec name padded to 32 bytes, and the depth.
-fn video_entry_isom(format : Bytes, width : UInt, height : UInt) -> Array[Byte] {
+fn video_entry_isom(
+  format : Bytes,
+  width : UInt32,
+  height : UInt32,
+) -> Array[Byte] {
   let entry_body = cat([
     zbytes(16),
     be16(width),
@@ -173,8 +187,13 @@ fn video_entry_isom(format : Bytes, width : UInt, height : UInt) -> Array[Byte] 
   ])
 }
 
-///| A video sample entry using the QuickTime (non-isom) layout. */
-fn video_entry_qt(format : Bytes, width : UInt, height : UInt) -> Array[Byte] {
+///|
+/// A video sample entry using the QuickTime (non-isom) layout. */
+fn video_entry_qt(
+  format : Bytes,
+  width : UInt32,
+  height : UInt32,
+) -> Array[Byte] {
   let entry_body = cat([
     be16(0),
     be16(0),
@@ -201,12 +220,13 @@ fn video_entry_qt(format : Bytes, width : UInt, height : UInt) -> Array[Byte] {
   ])
 }
 
-///| An audio sample entry (isom layout): version, 6 reserved bytes, channels, sample size, ids, sample rate. */
+///|
+/// An audio sample entry (isom layout): version, 6 reserved bytes, channels, sample size, ids, sample rate. */
 fn audio_entry_isom(
   format : Bytes,
-  channels : UInt,
-  sample_bits : UInt,
-  sample_rate : UInt
+  channels : UInt32,
+  sample_bits : UInt32,
+  sample_rate : UInt32,
 ) -> Array[Byte] {
   let entry_body = cat([
     be16(0),
@@ -226,11 +246,13 @@ fn audio_entry_isom(
   ])
 }
 
+///|
 fn stsd_box(entry : Array[Byte]) -> Array[Byte] {
   fbox(b"stsd", 0, 0, cat([be32(1), entry]))
 }
 
-fn stts_box(counts : Array[(UInt, UInt)]) -> Array[Byte] {
+///|
+fn stts_box(counts : Array[(UInt32, UInt32)]) -> Array[Byte] {
   let body : Array[Byte] = []
   for i = 0; i < counts.length(); i = i + 1 {
     push_all(body, be32(counts[i].0))
@@ -239,7 +261,8 @@ fn stts_box(counts : Array[(UInt, UInt)]) -> Array[Byte] {
   fbox(b"stts", 0, 0, cat([be32(counts.length().reinterpret_as_uint()), body]))
 }
 
-fn ctts_box(entries : Array[(UInt, Int)]) -> Array[Byte] {
+///|
+fn ctts_box(entries : Array[(UInt32, Int32)]) -> Array[Byte] {
   let body : Array[Byte] = []
   for i = 0; i < entries.length(); i = i + 1 {
     push_all(body, be32(entries[i].0))
@@ -248,7 +271,8 @@ fn ctts_box(entries : Array[(UInt, Int)]) -> Array[Byte] {
   fbox(b"ctts", 0, 0, cat([be32(entries.length().reinterpret_as_uint()), body]))
 }
 
-fn stsc_box(entries : Array[(UInt, UInt, UInt)]) -> Array[Byte] {
+///|
+fn stsc_box(entries : Array[(UInt32, UInt32, UInt32)]) -> Array[Byte] {
   let body : Array[Byte] = []
   for i = 0; i < entries.length(); i = i + 1 {
     push_all(body, be32(entries[i].0))
@@ -258,11 +282,13 @@ fn stsc_box(entries : Array[(UInt, UInt, UInt)]) -> Array[Byte] {
   fbox(b"stsc", 0, 0, cat([be32(entries.length().reinterpret_as_uint()), body]))
 }
 
-fn stsz_box(sample_size : UInt, entries : UInt) -> Array[Byte] {
+///|
+fn stsz_box(sample_size : UInt32, entries : UInt32) -> Array[Byte] {
   fbox(b"stsz", 0, 0, cat([be32(sample_size), be32(entries)]))
 }
 
-fn stsz_variable_box(sizes : Array[UInt]) -> Array[Byte] {
+///|
+fn stsz_variable_box(sizes : Array[UInt32]) -> Array[Byte] {
   let body : Array[Byte] = []
   for i = 0; i < sizes.length(); i = i + 1 {
     push_all(body, be32(sizes[i]))
@@ -275,8 +301,13 @@ fn stsz_variable_box(sizes : Array[UInt]) -> Array[Byte] {
   )
 }
 
-///| `stz2` with `field_size` bits per sample; `packed` holds the raw packed sizes. */
-fn stz2_box(field_size : UInt, entries : UInt, packed : Array[Byte]) -> Array[Byte] {
+///|
+/// `stz2` with `field_size` bits per sample; `packed` holds the raw packed sizes. */
+fn stz2_box(
+  field_size : UInt32,
+  entries : UInt32,
+  packed : Array[Byte],
+) -> Array[Byte] {
   fbox(
     b"stz2",
     0,
@@ -285,7 +316,8 @@ fn stz2_box(field_size : UInt, entries : UInt, packed : Array[Byte]) -> Array[By
   )
 }
 
-fn stco_box(offsets : Array[UInt]) -> Array[Byte] {
+///|
+fn stco_box(offsets : Array[UInt32]) -> Array[Byte] {
   let body : Array[Byte] = []
   for i = 0; i < offsets.length(); i = i + 1 {
     push_all(body, be32(offsets[i]))
@@ -293,6 +325,7 @@ fn stco_box(offsets : Array[UInt]) -> Array[Byte] {
   fbox(b"stco", 0, 0, cat([be32(offsets.length().reinterpret_as_uint()), body]))
 }
 
+///|
 fn co64_box(offsets : Array[UInt64]) -> Array[Byte] {
   let body : Array[Byte] = []
   for i = 0; i < offsets.length(); i = i + 1 {
@@ -301,15 +334,22 @@ fn co64_box(offsets : Array[UInt64]) -> Array[Byte] {
   fbox(b"co64", 0, 0, cat([be32(offsets.length().reinterpret_as_uint()), body]))
 }
 
-fn stss_box(keyframes : Array[UInt]) -> Array[Byte] {
+///|
+fn stss_box(keyframes : Array[UInt32]) -> Array[Byte] {
   let body : Array[Byte] = []
   for i = 0; i < keyframes.length(); i = i + 1 {
     push_all(body, be32(keyframes[i]))
   }
-  fbox(b"stss", 0, 0, cat([be32(keyframes.length().reinterpret_as_uint()), body]))
+  fbox(
+    b"stss",
+    0,
+    0,
+    cat([be32(keyframes.length().reinterpret_as_uint()), body]),
+  )
 }
 
-fn elst_box(entries : Array[(UInt, Int)]) -> Array[Byte] {
+///|
+fn elst_box(entries : Array[(UInt32, Int32)]) -> Array[Byte] {
   let body : Array[Byte] = []
   for i = 0; i < entries.length(); i = i + 1 {
     push_all(body, be32(entries[i].0))
@@ -319,27 +359,49 @@ fn elst_box(entries : Array[(UInt, Int)]) -> Array[Byte] {
   fbox(b"elst", 0, 0, cat([be32(entries.length().reinterpret_as_uint()), body]))
 }
 
-///| `ftyp`: the major brand is the first 4 payload bytes. */
+///|
+/// `ftyp`: the major brand is the first 4 payload bytes. */
 fn ftyp_box(major : Bytes) -> Array[Byte] {
   box(b"ftyp", cat([major.to_array(), be32(512), be32(0)]))
 }
 
-///| Assemble `moov` from a track body plus the movie header. */
-fn build_movie(mvhd : Array[Byte], trak : Array[Byte], use_64bit_moov : Bool) -> Array[Byte] {
+///|
+/// Assemble `moov` from a track body plus the movie header. */
+fn build_movie(
+  mvhd : Array[Byte],
+  trak : Array[Byte],
+  use_64bit_moov : Bool,
+) -> Array[Byte] {
   let moov_body = cat([mvhd, trak])
-  let moov = if use_64bit_moov { box64(b"moov", moov_body) } else { box(b"moov", moov_body) }
+  let moov = if use_64bit_moov {
+    box64(b"moov", moov_body)
+  } else {
+    box(b"moov", moov_body)
+  }
   let mdat = box(b"mdat", zbytes(32))
   cat([ftyp_box(b"isom"), moov, mdat])
 }
 
-///| Assemble one `trak` from its boxes. */
-fn build_trak(tkhd : Array[Byte], mdhd : Array[Byte], hdlr : Array[Byte], stbl : Array[Byte], edts : Array[Byte]) -> Array[Byte] {
+///|
+/// Assemble one `trak` from its boxes. */
+fn build_trak(
+  tkhd : Array[Byte],
+  mdhd : Array[Byte],
+  hdlr : Array[Byte],
+  stbl : Array[Byte],
+  edts : Array[Byte],
+) -> Array[Byte] {
   let minf = box(b"minf", stbl)
   let mdia = box(b"mdia", cat([mdhd, hdlr, minf]))
-  let parts = if edts.length() > 0 { cat([tkhd, edts, mdia]) } else { cat([tkhd, mdia]) }
+  let parts = if edts.length() > 0 {
+    cat([tkhd, edts, mdia])
+  } else {
+    cat([tkhd, mdia])
+  }
   box(b"trak", parts)
 }
 
+///|
 fn build_stbl(
   stsd : Array[Byte],
   stts : Array[Byte],
@@ -347,7 +409,7 @@ fn build_stbl(
   stsc : Array[Byte],
   stsz : Array[Byte],
   stco : Array[Byte],
-  stss : Array[Byte]
+  stss : Array[Byte],
 ) -> Array[Byte] {
   let parts : Array[Array[Byte]] = [stsd, stts]
   if ctts.length() > 0 {
@@ -366,18 +428,21 @@ fn build_stbl(
 // Fragmented MP4 (moof / traf / trun) builders
 // ---------------------------------------------------------------------------
 
-///| `tfhd` with `default-base-is-moof` and no per-fragment defaults. */
-fn tfhd_box_dbm(track_id : UInt) -> Array[Byte] {
+///|
+/// `tfhd` with `default-base-is-moof` and no per-fragment defaults. */
+fn tfhd_box_dbm(track_id : UInt32) -> Array[Byte] {
   fbox(b"tfhd", 0, 0x020000, be32(track_id))
 }
 
-///| `tfdt` (version 0). */
-fn tfdt_box_v0(bmdt : UInt) -> Array[Byte] {
+///|
+/// `tfdt` (version 0). */
+fn tfdt_box_v0(bmdt : UInt32) -> Array[Byte] {
   fbox(b"tfdt", 0, 0, be32(bmdt))
 }
 
-///| A `mvex` box with one `trex` (no default duration/size/flags). */
-fn mvex_box(track_id : UInt) -> Array[Byte] {
+///|
+/// A `mvex` box with one `trex` (no default duration/size/flags). */
+fn mvex_box(track_id : UInt32) -> Array[Byte] {
   let trex = fbox(
     b"trex",
     0,
@@ -392,12 +457,12 @@ fn mvex_box(track_id : UInt) -> Array[Byte] {
 /// Each sample tuple is `(duration, size, flags)`; the `trun` carries
 /// `data-offset | sample-duration | sample-size | sample-flags`.
 fn frag_moof(
-  track_id : UInt,
-  tfdt : UInt?,
-  data_offset : UInt,
-  samples : Array[(UInt, UInt, UInt)]
+  track_id : UInt32,
+  tfdt : UInt32?,
+  data_offset : UInt32,
+  samples : Array[(UInt32, UInt32, UInt32)],
 ) -> Array[Byte] {
-  let trun_flags : UInt = 0x1 | 0x100 | 0x200 | 0x400
+  let trun_flags : UInt32 = 0x1 | 0x100 | 0x200 | 0x400
   let trun_body : Array[Byte] = []
   push_all(trun_body, be32(samples.length().reinterpret_as_uint()))
   push_all(trun_body, be32(data_offset))
@@ -419,7 +484,8 @@ fn frag_moof(
 // cenc (encrypted MP4) builders
 // ---------------------------------------------------------------------------
 
-fn hexfind(digits : Bytes, c : Char) -> Int {
+///|
+fn hexfind(digits : Bytes, c : Char) -> Int32 {
   let mut i = 0
   while i < digits.length() {
     if digits[i].to_char() == c {
@@ -430,7 +496,8 @@ fn hexfind(digits : Bytes, c : Char) -> Int {
   0
 }
 
-///| Decode a hex string into bytes (test-local; libavformat has no hex helper). */
+///|
+/// Decode a hex string into bytes (test-local; libavformat has no hex helper). */
 fn hexbytes(s : String) -> Bytes {
   let digits : Bytes = b"0123456789abcdef"
   let a = s.to_array()
@@ -445,15 +512,16 @@ fn hexbytes(s : String) -> Bytes {
   Bytes::from_array(out[:])
 }
 
-///| `sinf` with `schm` (scheme) and `schi`/`tenc` (pattern, IV size, KID, constant IV). */
+///|
+/// `sinf` with `schm` (scheme) and `schi`/`tenc` (pattern, IV size, KID, constant IV). */
 fn sinf_box(
   scheme : Bytes,
-  iv_size : UInt,
+  iv_size : UInt32,
   key_id : Bytes,
-  tenc_version : UInt,
-  crypt : UInt,
-  skip : UInt,
-  constant_iv : Bytes
+  tenc_version : UInt32,
+  crypt : UInt32,
+  skip : UInt32,
+  constant_iv : Bytes,
 ) -> Array[Byte] {
   let tenc_head = cat([
     [b'\x00'], // reserved
@@ -473,15 +541,16 @@ fn sinf_box(
   box(b"sinf", cat([schm, schi]))
 }
 
-///| A video sample entry whose payload carries a trailing `sinf` box. */
+///|
+/// A video sample entry whose payload carries a trailing `sinf` box. */
 fn enc_video_entry(
   scheme : Bytes,
-  iv_size : UInt,
+  iv_size : UInt32,
   key_id : Bytes,
-  tenc_version : UInt,
-  crypt : UInt,
-  skip : UInt,
-  constant_iv : Bytes
+  tenc_version : UInt32,
+  crypt : UInt32,
+  skip : UInt32,
+  constant_iv : Bytes,
 ) -> Array[Byte] {
   let fixed = cat([
     zbytes(16),
@@ -496,7 +565,9 @@ fn enc_video_entry(
     be16(24), // depth
     [b'\xff', b'\xff'], // pre_defined = -1
   ])
-  let sinf = sinf_box(scheme, iv_size, key_id, tenc_version, crypt, skip, constant_iv)
+  let sinf = sinf_box(
+    scheme, iv_size, key_id, tenc_version, crypt, skip, constant_iv,
+  )
   let entry_body = cat([fixed, sinf])
   cat([
     be32((entry_body.length() + 16).reinterpret_as_uint()),
@@ -507,10 +578,11 @@ fn enc_video_entry(
   ])
 }
 
-///| `senc`: per-sample IV (and optional subsample map), matching `mov_read_senc`. */
+///|
+/// `senc`: per-sample IV (and optional subsample map), matching `mov_read_senc`. */
 fn senc_box(
-  entries : Array[(Bytes, Array[(UInt, UInt)])],
-  use_subsamples : Bool
+  entries : Array[(Bytes, Array[(UInt32, UInt32)])],
+  use_subsamples : Bool,
 ) -> Array[Byte] {
   let body : Array[Byte] = []
   push_all(body, be32(entries.length().reinterpret_as_uint()))
@@ -525,7 +597,7 @@ fn senc_box(
       }
     }
   }
-  let flags : UInt = if use_subsamples { 0x02 } else { 0x00 }
+  let flags : UInt32 = if use_subsamples { 0x02 } else { 0x00 }
   fbox(b"senc", 0, flags, body)
 }
 
@@ -536,11 +608,11 @@ fn senc_box(
 fn assemble_cenc(
   entry : Array[Byte],
   senc : Array[Byte],
-  sample_size : UInt,
-  ciphertext : Bytes
-) -> (Array[Byte], Int) {
+  sample_size : UInt32,
+  ciphertext : Bytes,
+) -> (Array[Byte], Int32) {
   let ftyp = ftyp_box(b"isom")
-  let make_stbl = fn(off : UInt) -> Array[Byte] {
+  let make_stbl = fn(off : UInt32) -> Array[Byte] {
     box(
       b"stbl",
       cat([
@@ -557,7 +629,13 @@ fn assemble_cenc(
     b"moov",
     cat([
       mvhd_box(1000, 100),
-      build_trak(tkhd_box(1, 100, 320, 240), mdhd_box(1000, 100), hdlr_box(b"vide"), make_stbl(0), []),
+      build_trak(
+        tkhd_box(1, 100, 320, 240),
+        mdhd_box(1000, 100),
+        hdlr_box(b"vide"),
+        make_stbl(0),
+        [],
+      ),
     ]),
   )
   let off = ftyp.length() + placeholder.length() + 8
@@ -868,7 +946,8 @@ test "mp4: edit list shifts the first dts" {
   assert_eq(a.min_corrected_pts, 0)
 }
 
-///| QuickTime branding turns `isom` off, which selects the non-isom sample-entry layout. */
+///|
+/// QuickTime branding turns `isom` off, which selects the non-isom sample-entry layout. */
 test "mp4: qt brand uses the QuickTime video sample entry" {
   let moov = box(
     b"moov",
@@ -900,7 +979,8 @@ test "mp4: qt brand uses the QuickTime video sample entry" {
   assert_eq(movie.tracks[0].height, 1080)
 }
 
-///| Unknown boxes must be skipped without derailing the walk. */
+///|
+/// Unknown boxes must be skipped without derailing the walk. */
 test "mp4: unknown boxes are skipped" {
   let stbl = box(
     b"stbl",
@@ -929,7 +1009,8 @@ test "mp4: unknown boxes are skipped" {
   assert_eq(movie.tracks[0].samples[0].offset, 64)
 }
 
-///| An empty or truncated buffer parses to an empty movie rather than failing. */
+///|
+/// An empty or truncated buffer parses to an empty movie rather than failing. */
 test "mp4: empty and truncated input" {
   let empty = av_mov_open(b"").unwrap()
   assert_eq(empty.tracks.length(), 0)
@@ -939,11 +1020,14 @@ test "mp4: empty and truncated input" {
   assert_eq(bad.tracks.length(), 0)
 
   // Truncated in the middle of a box: the walk stops at the buffer end.
-  let truncated = av_mov_open(Bytes::from_array(cat([be32(1024), b"moov".to_array()]))).unwrap()
+  let truncated = av_mov_open(
+    Bytes::from_array(cat([be32(1024), b"moov".to_array()])),
+  ).unwrap()
   assert_eq(truncated.tracks.length(), 0)
 }
 
-///| An invalid `stsd` entry count is rejected, mirroring AVERROR_INVALIDDATA. */
+///|
+/// An invalid `stsd` entry count is rejected, mirroring AVERROR_INVALIDDATA. */
 test "mp4: invalid stsd entry count is an error" {
   let stbl = box(
     b"stbl",
@@ -960,7 +1044,8 @@ test "mp4: invalid stsd entry count is an error" {
   assert_true(av_mov_open(Bytes::from_array(data)) is Err(_))
 }
 
-///| The `stsc` validation pass repairs non-monotonic entries, as `mov_read_stsc` does. */
+///|
+/// The `stsc` validation pass repairs non-monotonic entries, as `mov_read_stsc` does. */
 test "mp4: stsc validation repairs a trailing bad entry" {
   // Entry 0 is valid; entry 1 repeats first=1 (not increasing) and count=0.
   let stbl = build_stbl(
@@ -1014,16 +1099,30 @@ test "mp4: fragmented mp4 (moof/trun) sample index" {
   let ftyp = ftyp_box(b"isom")
   let moov = box(b"moov", cat([mvhd_box(1000, 0), trak, mvex_box(1)]))
 
-  let s1 : Array[(UInt, UInt, UInt)] = [(100, 10, 0), (100, 20, 0x10000), (100, 30, 0)]
-  let s2 : Array[(UInt, UInt, UInt)] = [(50, 15, 0), (50, 25, 0x10000)]
+  let s1 : Array[(UInt32, UInt32, UInt32)] = [
+    (100, 10, 0),
+    (100, 20, 0x10000),
+    (100, 30, 0),
+  ]
+  let s2 : Array[(UInt32, UInt32, UInt32)] = [(50, 15, 0), (50, 25, 0x10000)]
 
   // The data offset points from the moof start to the mdat payload that
   // immediately follows it, so it is `moof_length + 8`.
   let moof1_ph = frag_moof(1, Some(0), 0, s1)
-  let moof1 = frag_moof(1, Some(0), moof1_ph.length().reinterpret_as_uint() + 8, s1)
+  let moof1 = frag_moof(
+    1,
+    Some(0),
+    moof1_ph.length().reinterpret_as_uint() + 8,
+    s1,
+  )
   let mdat1 = box(b"mdat", zbytes(60))
   let moof2_ph = frag_moof(1, None, 0, s2)
-  let moof2 = frag_moof(1, None, moof2_ph.length().reinterpret_as_uint() + 8, s2)
+  let moof2 = frag_moof(
+    1,
+    None,
+    moof2_ph.length().reinterpret_as_uint() + 8,
+    s2,
+  )
   let mdat2 = box(b"mdat", zbytes(40))
 
   let prefix = ftyp.length() + moov.length()
@@ -1048,8 +1147,8 @@ test "mp4: fragmented mp4 (moof/trun) sample index" {
   assert_eq(t.samples[0].pts, 0)
   assert_eq(t.samples[4].pts, 350)
 
-  let sz : Array[UInt] = [10, 20, 30, 15, 25]
-  let du : Array[UInt] = [100, 100, 100, 50, 50]
+  let sz : Array[UInt32] = [10, 20, 30, 15, 25]
+  let du : Array[UInt32] = [100, 100, 100, 50, 50]
   for i = 0; i < 5; i = i + 1 {
     assert_eq(t.samples[i].size, sz[i])
     assert_eq(t.samples[i].duration, du[i])
@@ -1071,7 +1170,9 @@ test "mp4: fragmented mp4 (moof/trun) sample index" {
 /// by AES-CTR with the same key/IV; the demuxer must recover the plaintext
 /// through the `sinf`(schm/tenc) + `senc` metadata.
 test "mp4: cenc (AES-CTR) full-sample decryption" {
-  let plain = hexbytes("00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100")
+  let plain = hexbytes(
+    "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+  )
   let key = hexbytes("000102030405060708090a0b0c0d0e0f")
   let iv = hexbytes("101112131415161718191a1b1c1d1e1f")
   let ctr = @libavutil.av_aes_ctr_alloc()
@@ -1089,7 +1190,12 @@ test "mp4: cenc (AES-CTR) full-sample decryption" {
     b"",
   )
   let senc = senc_box([(iv, [])], false)
-  let (data, off) = assemble_cenc(entry, senc, plain.length().reinterpret_as_uint(), ct)
+  let (data, off) = assemble_cenc(
+    entry,
+    senc,
+    plain.length().reinterpret_as_uint(),
+    ct,
+  )
   let t = av_mov_open(Bytes::from_array(data)).unwrap().tracks[0]
 
   assert_eq(t.cenc_scheme, 0x63656E63)
@@ -1107,14 +1213,20 @@ test "mp4: cenc (AES-CTR) full-sample decryption" {
 /// Decryption must leave the clear range untouched and only unwrap the
 /// protected range (whose keystream starts at the IV).
 test "mp4: cenc (AES-CTR) subsample decryption" {
-  let plain = hexbytes("00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100")
+  let plain = hexbytes(
+    "00112233445566778899aabbccddeeffffeeddccbbaa99887766554433221100",
+  )
   let key = hexbytes("000102030405060708090a0b0c0d0e0f")
   let iv = hexbytes("101112131415161718191a1b1c1d1e1f")
   let plain_arr = plain.to_array()
   let ctr = @libavutil.av_aes_ctr_alloc()
   let _ = @libavutil.av_aes_ctr_init(ctr, key).unwrap()
   @libavutil.av_aes_ctr_set_full_iv(ctr, iv)
-  let enc_part = @libavutil.av_aes_ctr_crypt(ctr, Bytes::from_array(plain_arr[16:32]), 16)
+  let enc_part = @libavutil.av_aes_ctr_crypt(
+    ctr,
+    Bytes::from_array(plain_arr[16:32]),
+    16,
+  )
   let ct_arr : Array[Byte] = []
   for i = 0; i < 16; i = i + 1 {
     ct_arr.push(plain_arr[i])
@@ -1134,7 +1246,12 @@ test "mp4: cenc (AES-CTR) subsample decryption" {
     b"",
   )
   let senc = senc_box([(iv, [(16, 16)])], true)
-  let (data, off) = assemble_cenc(entry, senc, plain.length().reinterpret_as_uint(), ct)
+  let (data, off) = assemble_cenc(
+    entry,
+    senc,
+    plain.length().reinterpret_as_uint(),
+    ct,
+  )
   let t = av_mov_open(Bytes::from_array(data)).unwrap().tracks[0]
 
   assert_eq(t.samples.length(), 1)

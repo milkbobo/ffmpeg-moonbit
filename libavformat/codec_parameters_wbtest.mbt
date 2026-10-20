@@ -10,18 +10,19 @@
 /// (`real_mkv_1024_b64`): CodecPrivate `avcC` (profile Baseline, level 1.0)
 /// and 128x96 SPS geometry are cross-checked against ffprobe.
 
-///| 44-byte avcC from h264.mp4 (High, level 3.0, 64x48).
-let cp_avcc_b64 : Bytes =
-  b"AWQAHv/hABdnZAAerLII9gIgAAADACAAAAMBQeLFyQEABmjrw8siwP34+AA="
+///|
+/// 44-byte avcC from h264.mp4 (High, level 3.0, 64x48).
+let cp_avcc_b64 : Bytes = b"AWQAHv/hABdnZAAerLII9gIgAAADACAAAAMBQeLFyQEABmjrw8siwP34+AA="
 
-///| 108-byte hvcC with the real Main VPS/SPS/PPS arrays.
-let cp_hvcc8_b64 : Bytes =
-  b"AQFgAAAAkAAAAAAAHvAA/P34+AAADwOgAAEAGEABDAH//wFgAAADAJAAAAMAAAMAHpKAkKEAAQAoQgEBAWAAAAMAkAAAAwAAAwAeoCCDFlkq5MrwFoCAAAADAIAAAAMChKIAAQAGRAHBc9CJ"
+///|
+/// 108-byte hvcC with the real Main VPS/SPS/PPS arrays.
+let cp_hvcc8_b64 : Bytes = b"AQFgAAAAkAAAAAAAHvAA/P34+AAADwOgAAEAGEABDAH//wFgAAADAJAAAAMAAAMAHpKAkKEAAQAoQgEBAWAAAAMAkAAAAwAAAwAeoCCDFlkq5MrwFoCAAAADAIAAAAMChKIAAQAGRAHBc9CJ"
 
-///| 109-byte hvcC with the real Main10 arrays.
-let cp_hvcc10_b64 : Bytes =
-  b"AQIgAAAAkAAAAAAAHvAA/P36+gAADwOgAAEAGEABDAH//wIgAAADAJAAAAMAAAMAHpKAkKEAAQApQgEBAiAAAAMAkAAAAwAAAwAeoCCDE2WSrkyvAWgIAAADAAgAAAMAKECiAAEABkQBwXPQiQ=="
+///|
+/// 109-byte hvcC with the real Main10 arrays.
+let cp_hvcc10_b64 : Bytes = b"AQIgAAAAkAAAAAAAHvAA/P36+gAADwOgAAEAGEABDAH//wIgAAADAJAAAAMAAAMAHpKAkKEAAQApQgEBAiAAAAMAkAAAAwAAAwAeoCCDE2WSrkyvAWgIAAADAAgAAAMAKECiAAEABkQBwXPQiQ=="
 
+///|
 test "codec_parameters: Matroska codec tag table" {
   assert_eq(ff_mkv_codec_id("V_MPEG4/ISO/AVC"), "h264")
   assert_eq(ff_mkv_codec_id("V_MPEGH/ISO/HEVC"), "hevc")
@@ -34,6 +35,7 @@ test "codec_parameters: Matroska codec tag table" {
   assert_eq(ff_mkv_codec_id("V_TOTALLY_UNKNOWN"), "")
 }
 
+///|
 test "codec_parameters: MP4 sample-entry mapping" {
   assert_eq(mov_codec_name("avc1", ""), "h264")
   assert_eq(mov_codec_name("avc3", ""), "h264")
@@ -47,6 +49,7 @@ test "codec_parameters: MP4 sample-entry mapping" {
   assert_eq(mov_codec_name("vp09", ""), "vp9")
 }
 
+///|
 test "codec_parameters: H.264 avcC -> geometry/profile/VUI" {
   let avcc = @libavutil.av_base64_decode(cp_avcc_b64, 1024).unwrap()
   let p = codec_parameters_from_extradata("h264", Some(avcc), 0, 0, 0, 0)
@@ -65,6 +68,7 @@ test "codec_parameters: H.264 avcC -> geometry/profile/VUI" {
   assert_eq(p.sar_den, 1)
 }
 
+///|
 test "codec_parameters: HEVC hvcC 8-bit and Main10" {
   let hvcc = @libavutil.av_base64_decode(cp_hvcc8_b64, 1024).unwrap()
   let p = codec_parameters_from_extradata("hevc", Some(hvcc), 0, 0, 0, 0)
@@ -89,9 +93,15 @@ test "codec_parameters: HEVC hvcC 8-bit and Main10" {
   assert_eq(p10.fps_num, 5)
 }
 
+///|
 test "codec_parameters: AAC AudioSpecificConfig" {
   let p = codec_parameters_from_extradata(
-    "aac", Some(b"\x12\x08\x56\xE5\x00"), 0, 0, 0, 0,
+    "aac",
+    Some(b"\x12\x08\x56\xE5\x00"),
+    0,
+    0,
+    0,
+    0,
   )
   assert_true(p.extradata_parsed)
   assert_eq(p.profile, 2) // AAC-LC
@@ -100,6 +110,7 @@ test "codec_parameters: AAC AudioSpecificConfig" {
   assert_eq(p.frame_size, 1024)
 }
 
+///|
 test "codec_parameters: missing/unknown extradata falls back to the container" {
   let p = codec_parameters_from_extradata("mp3", None, 0, 0, 48000, 2)
   assert_true(!p.extradata_parsed)
@@ -107,13 +118,19 @@ test "codec_parameters: missing/unknown extradata falls back to the container" {
   assert_eq(p.sample_rate, 48000)
   assert_eq(p.channels, 2)
   let q = codec_parameters_from_extradata(
-    "h264", Some(b"\xFF\xFF\xFF"), 320, 240, 0, 0,
+    "h264",
+    Some(b"\xFF\xFF\xFF"),
+    320,
+    240,
+    0,
+    0,
   )
   assert_true(!q.extradata_parsed)
   assert_eq(q.width, 320)
   assert_eq(q.height, 240)
 }
 
+///|
 test "codec_parameters: real MP4 AAC track (esds extradata)" {
   let bytes = @libavutil.av_base64_decode(real_aac_b64, 100000).unwrap()
   let movie = av_mov_open(bytes).unwrap()
@@ -130,6 +147,7 @@ test "codec_parameters: real MP4 AAC track (esds extradata)" {
   assert_eq(p.frame_size, 1024)
 }
 
+///|
 test "codec_parameters: real Matroska H.264 track" {
   let bytes = @libavutil.av_base64_decode(real_mkv_1024_b64, 1200).unwrap()
   let mh = av_matroska_open(bytes).unwrap()

@@ -17,7 +17,11 @@
 /// `moof_offset` for `track_id`, if any. This is what
 /// `get_frag_stream_info(&c->frag_index, index, track_id)->sidx_pts` yields
 /// in the `trun` DTS selection.
-fn mov_sidx_lookup(st : MovState, moof_offset : Int64, track_id : UInt) -> Int64? {
+fn mov_sidx_lookup(
+  st : MovState,
+  moof_offset : Int64,
+  track_id : UInt32,
+) -> Int64? {
   for i = 0; i < st.movie.sidx_refs.length(); i = i + 1 {
     let e = st.movie.sidx_refs[i]
     if e.offset == moof_offset && e.track_id == track_id {
@@ -31,7 +35,11 @@ fn mov_sidx_lookup(st : MovState, moof_offset : Int64, track_id : UInt) -> Int64
 /// `mov_read_sidx`: segment index. Each reference marks the byte offset of a
 /// subsegment (its `moof`) and its earliest presentation time; the
 /// accumulated presentation times also become the track duration.
-fn parse_sidx(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+fn parse_sidx(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   // `avio_tell(pb)` at entry: the anchor is computed before any field is
   // read, exactly as in the C.
   let payload_start = r.avio_tell()
@@ -143,11 +151,14 @@ fn mov_read_mfra(movie : Mp4Movie, r : AvioContext) -> Unit {
         break
       }
       let (time, offset) = if version == 1 {
-        (r.avio_rb64().reinterpret_as_int64(), r.avio_rb64().reinterpret_as_int64())
+        (
+          r.avio_rb64().reinterpret_as_int64(),
+          r.avio_rb64().reinterpret_as_int64(),
+        )
       } else {
         (r.avio_rb32().to_int64(), r.avio_rb32().to_int64())
       }
-      entries.push({ time, offset })
+      entries.push({ time, offset, })
       // traf_size / trun_size / sample_size fields, sized by field_length.
       let mut j = 0
       while j < ((field_length >> 4) & 3).reinterpret_as_int() + 1 {
@@ -165,7 +176,7 @@ fn mov_read_mfra(movie : Mp4Movie, r : AvioContext) -> Unit {
         j = j + 1
       }
     }
-    movie.mfra.push({ track_id, entries })
+    movie.mfra.push({ track_id, entries, })
     let _ = r.avio_seek(pos + size, SEEK_SET)
   }
   let _ = r.avio_seek(original_pos, SEEK_SET)

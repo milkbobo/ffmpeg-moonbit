@@ -21,23 +21,29 @@ fn bcat(parts : Array[Bytes]) -> Bytes {
   Bytes::from_array(out[:])
 }
 
-///| A minimal VINT for lengths/values < 128 (0x80 | v). */
-fn vint1(v : Int) -> Bytes {
+///|
+/// A minimal VINT for lengths/values < 128 (0x80 | v). */
+fn vint1(v : Int32) -> Bytes {
   Bytes::make(1, (0x80 | v).to_byte())
 }
 
-///| `el`: an element `id + vint(len) + payload`. */
+///|
+/// `el`: an element `id + vint(len) + payload`. */
 fn el(id : Bytes, data : Bytes) -> Bytes {
   if data.length() < 128 {
     bcat([id, vint1(data.length()), data])
   } else {
     // 2-byte vint: 0x4000 | len
     let n = data.length()
-    let len_bytes : Array[Byte] = [(0x40 | (n >> 8)).to_byte(), (0x80 | (n & 0xFF)).to_byte()]
+    let len_bytes : Array[Byte] = [
+      (0x40 | (n >> 8)).to_byte(),
+      (0x80 | (n & 0xFF)).to_byte(),
+    ]
     bcat([id, Bytes::from_array(len_bytes[:]), data])
   }
 }
 
+///|
 fn pb_of(data : Bytes) -> AvioContext {
   AvioContext::init_read_context(data)
 }
@@ -46,6 +52,7 @@ fn pb_of(data : Bytes) -> AvioContext {
 // ebml_read_num / ebml_read_length (spec VINT examples)
 // ---------------------------------------------------------------------------
 
+///|
 test "ebml: read_num across the spec VINT examples" {
   // one-byte: 0x80→0, 0x81→1, 0xFF→127
   assert_eq(ebml_read_num(pb_of(b"\x80"), 8, true).unwrap(), (0UL, 1))
@@ -57,7 +64,10 @@ test "ebml: read_num across the spec VINT examples" {
   assert_eq(ebml_read_num(pb_of(b"\x7F\xFF"), 8, true).unwrap(), (16383UL, 2))
   // three-byte: 0x200000→0, 0x1FFFFF→2097151
   assert_eq(ebml_read_num(pb_of(b"\x20\x00\x00"), 8, true).unwrap(), (0UL, 3))
-  assert_eq(ebml_read_num(pb_of(b"\x3F\xFF\xFF"), 8, true).unwrap(), (2097151UL, 3))
+  assert_eq(
+    ebml_read_num(pb_of(b"\x3F\xFF\xFF"), 8, true).unwrap(),
+    (2097151UL, 3),
+  )
   // eight-byte: 0x01FFFFFFFFFFFFFF → 2^56-1
   assert_eq(
     ebml_read_num(pb_of(b"\x01\xFF\xFF\xFF\xFF\xFF\xFF\xFF"), 8, true).unwrap(),
@@ -74,6 +84,7 @@ test "ebml: read_num across the spec VINT examples" {
   assert_eq(ebml_read_num(pb_of(b"\x40"), 8, false), Err("EIO"))
 }
 
+///|
 test "ebml: read_length maps all-ones widths to the unknown marker" {
   assert_eq(ebml_read_length(pb_of(b"\xFF")).unwrap(), (ebml_unknown_length, 1))
   assert_eq(
@@ -89,6 +100,7 @@ test "ebml: read_length maps all-ones widths to the unknown marker" {
 // scalar readers
 // ---------------------------------------------------------------------------
 
+///|
 test "ebml: read_uint / read_sint" {
   let mut got : UInt64 = 0
   let _ = ebml_read_uint(pb_of(b"\x01\x02\x03\x04"), 4, 99, v => got = v)
@@ -110,37 +122,36 @@ test "ebml: read_uint / read_sint" {
   assert_eq(si, -7L)
 }
 
+///|
 test "ebml: read_float (binary32/64, inf/nan, defaults, bad size)" {
   let mut f = 0.0
   // binary32 1.5 = 0x3FC00000; 2.5(binary64) = 0x4004000000000000
   let _ = ebml_read_float(pb_of(b"\x3F\xC0\x00\x00"), 4, 9.0, v => f = v)
   assert_eq(f, 1.5)
-  let _ = ebml_read_float(
-    pb_of(b"\x40\x04\x00\x00\x00\x00\x00\x00"),
-    8,
-    9.0,
-    v => f = v,
-  )
+  let _ = ebml_read_float(pb_of(b"\x40\x04\x00\x00\x00\x00\x00\x00"), 8, 9.0, v => {
+    f = v
+  })
   assert_eq(f, 2.5)
   // ±inf and NaN from both widths
   let _ = ebml_read_float(pb_of(b"\x7F\x80\x00\x00"), 4, 0.0, v => f = v)
   assert_eq(f > 0.0 && f == f * 2.0, true) // +inf
   let _ = ebml_read_float(pb_of(b"\xFF\x80\x00\x00"), 4, 0.0, v => f = v)
   assert_eq(f < 0.0 && f == f * 2.0, true) // -inf
-  let _ = ebml_read_float(
-    pb_of(b"\x7F\xF0\x00\x00\x00\x00\x00\x01"),
-    8,
-    0.0,
-    v => f = v,
-  )
+  let _ = ebml_read_float(pb_of(b"\x7F\xF0\x00\x00\x00\x00\x00\x01"), 8, 0.0, v => {
+    f = v
+  })
   assert_eq(f != f, true) // NaN
   // default on size 0; invalid size
   let _ = ebml_read_float(pb_of(b""), 0, 6.5, v => f = v)
   assert_eq(f, 6.5)
-  assert_eq(ebml_read_float(pb_of(b"\x00"), 5, 0.0, _ => ()).unwrap_err_(), "EINVAL")
+  assert_eq(
+    ebml_read_float(pb_of(b"\x00"), 5, 0.0, _ => ()).unwrap_err_(),
+    "EINVAL",
+  )
 }
 
-///| Tiny helper: the error string of a Result (test-only). */
+///|
+/// Tiny helper: the error string of a Result (test-only). */
 fn Result::unwrap_err_(r : Result[Bool, String]) -> String {
   match r {
     Err(e) => e
@@ -148,12 +159,22 @@ fn Result::unwrap_err_(r : Result[Bool, String]) -> String {
   }
 }
 
+///|
 test "ebml: read_ascii and read_binary" {
-  assert_eq(ebml_read_ascii(pb_of(b"abc"), 3, None).unwrap(), (Some("abc"), false))
+  assert_eq(
+    ebml_read_ascii(pb_of(b"abc"), 3, None).unwrap(),
+    (Some("abc"), false),
+  )
   // not NUL-terminated in the stream; NULs are ordinary bytes
-  assert_eq(ebml_read_ascii(pb_of(b"a\x00c"), 3, None).unwrap(), (Some("a\u{0}c"), false))
+  assert_eq(
+    ebml_read_ascii(pb_of(b"a\x00c"), 3, None).unwrap(),
+    (Some("a\u{0}c"), false),
+  )
   // size 0 with a default
-  assert_eq(ebml_read_ascii(pb_of(b""), 0, Some("dflt")).unwrap(), (Some("dflt"), false))
+  assert_eq(
+    ebml_read_ascii(pb_of(b""), 0, Some("dflt")).unwrap(),
+    (Some("dflt"), false),
+  )
   // short read: no string, needs checking
   assert_eq(ebml_read_ascii(pb_of(b"ab"), 3, None).unwrap(), (None, true))
   // binary keeps the payload and the position after the header
@@ -164,12 +185,14 @@ test "ebml: read_ascii and read_binary" {
   assert_eq(b2, None)
 }
 
+///|
 test "ebml: matroska_ebmlnum_sint rebias" {
   assert_eq(matroska_ebmlnum_sint(pb_of(b"\x81")).unwrap(), (-62L, 1))
   assert_eq(matroska_ebmlnum_sint(pb_of(b"\xFF")).unwrap(), (64L, 1))
   assert_eq(matroska_ebmlnum_sint(pb_of(b"\x40\x00")).unwrap(), (-8191L, 2))
 }
 
+///|
 test "ebml: is_ebml_id_valid marker/width agreement" {
   assert_eq(is_ebml_id_valid(0x1A45DFA3), true) // EBML header, 4 bytes
   assert_eq(is_ebml_id_valid(0x18538067), true) // Segment, 4 bytes
@@ -188,6 +211,7 @@ test "ebml: is_ebml_id_valid marker/width agreement" {
 // the generic walker: sint/float/bin/str rows (also used by later slices)
 // ---------------------------------------------------------------------------
 
+///|
 test "ebml: walker delivers sint, float, bin and str payloads" {
   // A custom master (id 0x2E0000) framing a VOID plus one sint/float/bin/str
   // element each; the top table nests into it and the walk ends with the
@@ -197,7 +221,7 @@ test "ebml: walker delivers sint, float, bin and str payloads" {
   let mut bin_got = b""
   let mut str_got = ""
   let child_table : Array[EbmlSyntax] = [
-    { id: 0xEC, kind: Skip, sink: None },
+    { id: 0xEC, kind: Skip, sink: None, },
     {
       id: 0x4488,
       kind: Sint(0),
@@ -262,7 +286,7 @@ test "ebml: walker delivers sint, float, bin and str payloads" {
   ])
   let data = bcat([b"\x2E\x00\x00", vint1(children.length()), children])
   let top : Array[EbmlSyntax] = [
-    { id: 0x2E0000, kind: Nest(() => child_table), sink: None },
+    { id: 0x2E0000, kind: Nest(() => child_table), sink: None, },
   ]
   let st = EbmlState::new(pb_of(data))
   assert_eq(ebml_parse(st, top, []), Ok(0))
@@ -276,11 +300,13 @@ test "ebml: walker delivers sint, float, bin and str payloads" {
 // the EBML header (matroska.mbt)
 // ---------------------------------------------------------------------------
 
-///| A full synthetic EBML stream: header children + optional trailing ids. */
+///|
+/// A full synthetic EBML stream: header children + optional trailing ids. */
 fn ebml_stream(
-    doctype : Bytes,
-    unknown_header_len : Bool,
-    trailing : Bytes) -> Bytes {
+  doctype : Bytes,
+  unknown_header_len : Bool,
+  trailing : Bytes,
+) -> Bytes {
   let children : Array[Bytes] = [
     el(b"\x42\x86", b"\x01"), // EBMLVersion (skipped)
     el(b"\x42\xF7", b"\x01"), // EBMLReadVersion = 1
@@ -299,6 +325,7 @@ fn ebml_stream(
   bcat([b"\x1A\x45\xDF\xA3", header_len, body, trailing])
 }
 
+///|
 test "matroska: EBML header parse with a Segment stop" {
   let stream = ebml_stream(b"matroska", false, b"\x18\x53\x80\x67")
   let (ebml, st, notes) = matroska_read_ebml_header(pb_of(stream)).unwrap()
@@ -321,6 +348,7 @@ test "matroska: EBML header parse with a Segment stop" {
   assert_eq(n2.supported_doctype, true)
 }
 
+///|
 test "matroska: unknown-length header ends at the Segment (CHILD_OF)" {
   // Header size 0xFF (unknown): the level ends when the Segment id — an
   // element of the enclosing ebml_syntax table — appears.
@@ -330,6 +358,7 @@ test "matroska: unknown-length header ends at the Segment (CHILD_OF)" {
   assert_eq(ebml.doctype_version, 2UL)
 }
 
+///|
 test "matroska: header defaults apply for absent elements" {
   // Only the DocType: everything else keeps the table defaults.
   let children = el(b"\x42\x82", b"webm")
@@ -347,6 +376,7 @@ test "matroska: header defaults apply for absent elements" {
   assert_eq(notes.supported_doctype, true)
 }
 
+///|
 test "matroska: doctype and version notes/rejections" {
   // Unknown doctype: warning-level (flagged, still Ok)
   let (e1, _, n1) = matroska_read_ebml_header(
@@ -379,14 +409,18 @@ test "matroska: doctype and version notes/rejections" {
   )
 }
 
-///| Test-only: the error of a header read. */
-fn Result::unwrap_err_hdr(r : Result[(EbmlHeader, EbmlState, EbmlHeaderNotes), String]) -> String {
+///|
+/// Test-only: the error of a header read. */
+fn Result::unwrap_err_hdr(
+  r : Result[(EbmlHeader, EbmlState, EbmlHeaderNotes), String],
+) -> String {
   match r {
     Err(e) => e
     Ok(_) => ""
   }
 }
 
+///|
 test "matroska: broken headers" {
   // empty stream: EOF
   assert_eq(matroska_read_ebml_header(pb_of(b"")).unwrap_err_hdr(), "EOF")
@@ -418,13 +452,17 @@ test "matroska: broken headers" {
   assert_eq(ebml.doctype, "webm")
 }
 
+///|
 test "ebml: live mode treats EOF as the end of parsing" {
   let st = EbmlState::new_live(pb_of(b""))
   // ebml_parse on an empty live stream returns the stop code (1)
-  let table : Array[EbmlSyntax] = [{ id: ebml_id_header, kind: Skip, sink: None }]
+  let table : Array[EbmlSyntax] = [
+    { id: ebml_id_header, kind: Skip, sink: None, },
+  ]
   assert_eq(ebml_parse(st, table, []), Ok(1))
 }
 
+///|
 test "ebml: zero-length master completes without children" {
   // A master of length 0: the level pops immediately, no payload read.
   let data = bcat([b"\x1A\x45\xDF\xA3", vint1(0), b"\x18\x53\x80\x67"])

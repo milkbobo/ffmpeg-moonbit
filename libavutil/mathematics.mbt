@@ -10,42 +10,52 @@
 
 ///|
 /// Rounding modes, mirroring `enum AVRounding` in libavutil/mathematics.h.
-pub let av_round_zero : Int = 0
+pub let av_round_zero : Int32 = 0
 
-pub let av_round_inf : Int = 1
+///|
+pub let av_round_inf : Int32 = 1
 
-pub let av_round_down : Int = 2
+///|
+pub let av_round_down : Int32 = 2
 
-pub let av_round_up : Int = 3
+///|
+pub let av_round_up : Int32 = 3
 
-pub let av_round_near_inf : Int = 5
+///|
+pub let av_round_near_inf : Int32 = 5
 
-pub let av_round_pass_minmax : Int = 8192
+///|
+pub let av_round_pass_minmax : Int32 = 8192
 
-///| INT64_MAX / INT64_MIN, and the 32-bit bounds used as saturation limits. */
+///|
+/// INT64_MAX / INT64_MIN, and the 32-bit bounds used as saturation limits. */
 pub let int64_max : Int64 = 0x7FFFFFFFFFFFFFFF
 
+///|
 pub let int64_min : Int64 = -9223372036854775808
 
+///|
 pub let int_max_i64 : Int64 = 2147483647
 
-///| AV_NOPTS_VALUE == INT64_MIN */
+///|
+/// AV_NOPTS_VALUE == INT64_MIN */
 pub let av_nopts_value : Int64 = -9223372036854775808
 
 ///|
 /// `av_log2`: floor(log2(v)) for v >= 1, port of `ff_log2`/`av_log2`.
-pub fn av_log2(v : UInt) -> Int {
+pub fn av_log2(v : UInt32) -> Int32 {
   31 - (v | 1).clz()
 }
 
 ///|
 /// `ff_ctzll`: number of trailing zero bits of a 64-bit value.
 /// The result is undefined when `v` is 0, exactly as in C.
-pub fn ff_ctzll(v : Int64) -> Int {
+pub fn ff_ctzll(v : Int64) -> Int32 {
   v.ctz()
 }
 
-///| Absolute value helper mirroring `FFABS` for 64-bit values. */
+///|
+/// Absolute value helper mirroring `FFABS` for 64-bit values. */
 fn abs64(x : Int64) -> Int64 {
   if x < 0 {
     -x
@@ -84,7 +94,7 @@ pub fn av_gcd(a : Int64, b : Int64) -> Int64 {
 /// `av_rescale_rnd`: rescale `a` by `b / c` with the requested rounding mode.
 /// Port of libavutil/mathematics.c; the 128-bit intermediate is emulated with
 /// a 64x64 -> 128 split multiply followed by a bitwise long division.
-pub fn av_rescale_rnd(a : Int64, b : Int64, c : Int64, rnd : Int) -> Int64 {
+pub fn av_rescale_rnd(a : Int64, b : Int64, c : Int64, rnd : Int32) -> Int64 {
   let mode = rnd & av_round_pass_minmax.lnot()
   if c <= 0 || b < 0 || !(mode >= 0 && mode <= 5 && mode != 4) {
     return int64_min
@@ -100,7 +110,7 @@ pub fn av_rescale_rnd(a : Int64, b : Int64, c : Int64, rnd : Int) -> Int64 {
     // C: return -(uint64_t)av_rescale_rnd(-FFMAX(a, -INT64_MAX), ...).
     // Note the inner negation of the clamped value, in addition to the outer one.
     let clamped = if a > -int64_max { a } else { -int64_max }
-    return -(av_rescale_rnd(-clamped, b, c, rnd ^ ((rnd >> 1) & 1)))
+    return -av_rescale_rnd(-clamped, b, c, rnd ^ ((rnd >> 1) & 1))
   }
   let mut r : Int64 = 0
   if rnd == av_round_near_inf {
@@ -156,25 +166,33 @@ pub fn av_rescale_rnd(a : Int64, b : Int64, c : Int64, rnd : Int) -> Int64 {
   }
 }
 
-///| `av_rescale`: `av_rescale_rnd` with `AV_ROUND_NEAR_INF`. */
+///|
+/// `av_rescale`: `av_rescale_rnd` with `AV_ROUND_NEAR_INF`. */
 pub fn av_rescale(a : Int64, b : Int64, c : Int64) -> Int64 {
   av_rescale_rnd(a, b, c, av_round_near_inf)
 }
 
 ///|
 /// `av_rescale_q_rnd`: rescale `a` from time base `bq` to time base `cq`.
-pub fn av_rescale_q_rnd(a : Int64, bq : AVRational, cq : AVRational, rnd : Int) -> Int64 {
+pub fn av_rescale_q_rnd(
+  a : Int64,
+  bq : AVRational,
+  cq : AVRational,
+  rnd : Int32,
+) -> Int64 {
   let b = bq.num.to_int64() * cq.den.to_int64()
   let c = cq.num.to_int64() * bq.den.to_int64()
   av_rescale_rnd(a, b, c, rnd)
 }
 
-///| `av_rescale_q`: `av_rescale_q_rnd` with `AV_ROUND_NEAR_INF`. */
+///|
+/// `av_rescale_q`: `av_rescale_q_rnd` with `AV_ROUND_NEAR_INF`. */
 pub fn av_rescale_q(a : Int64, bq : AVRational, cq : AVRational) -> Int64 {
   av_rescale_q_rnd(a, bq, cq, av_round_near_inf)
 }
 
-///| `FFABS64U`: absolute value of a signed 64-bit value as an unsigned value. */
+///|
+/// `FFABS64U`: absolute value of a signed 64-bit value as an unsigned value. */
 fn abs64u(x : Int64) -> UInt64 {
   if x < 0 {
     (-x).reinterpret_as_uint64()
@@ -185,7 +203,12 @@ fn abs64u(x : Int64) -> UInt64 {
 
 ///|
 /// `av_compare_ts`: compare two timestamps expressed in different time bases.
-pub fn av_compare_ts(ts_a : Int64, tb_a : AVRational, ts_b : Int64, tb_b : AVRational) -> Int {
+pub fn av_compare_ts(
+  ts_a : Int64,
+  tb_a : AVRational,
+  ts_b : Int64,
+  tb_b : AVRational,
+) -> Int32 {
   let a = tb_a.num.to_int64() * tb_b.den.to_int64()
   let b = tb_b.num.to_int64() * tb_a.den.to_int64()
   let mag = abs64u(ts_a) |
@@ -207,10 +230,11 @@ pub fn av_compare_ts(ts_a : Int64, tb_a : AVRational, ts_b : Int64, tb_b : AVRat
   }
 }
 
-///| `av_compare_mod`: compare two values modulo `mod`, result in [-mod/2, mod/2]. */
+///|
+/// `av_compare_mod`: compare two values modulo `mod`, result in [-mod/2, mod/2]. */
 pub fn av_compare_mod(a : UInt64, b : UInt64, mod : UInt64) -> Int64 {
   let mut c : UInt64 = (a - b) & (mod - 1)
-  if c > (mod >> 1) {
+  if c > mod >> 1 {
     c = c - mod
   }
   c.reinterpret_as_int64()

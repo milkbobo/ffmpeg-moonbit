@@ -27,10 +27,7 @@ test "matroska: real webm segment walk (docker ffmpeg)" {
   // Two SeekHeads of four entries each (Info/Tracks/Tags/Cues), identical.
   assert_eq(mh.seekhead.length(), 8)
   let ids = [
-    matroska_id_info,
-    matroska_id_tracks,
-    matroska_id_tags,
-    matroska_id_cues,
+    matroska_id_info, matroska_id_tracks, matroska_id_tags, matroska_id_cues,
   ]
   let poss = [161UL, 214UL, 420UL, 22692UL]
   for i = 0; i < 8; i = i + 1 {
@@ -39,6 +36,7 @@ test "matroska: real webm segment walk (docker ffmpeg)" {
   }
 }
 
+///|
 test "matroska: real mkv segment walk (docker ffmpeg)" {
   let bytes = @libavutil.av_base64_decode(real_mkv_1024_b64, 1200).unwrap()
   let mh = av_matroska_open(bytes).unwrap()
@@ -59,7 +57,8 @@ test "matroska: real mkv segment walk (docker ffmpeg)" {
 // synthetic segments
 // ---------------------------------------------------------------------------
 
-///| The EBML header of ebml_wbtest's builder shape (doctype bytes in). */
+///|
+/// The EBML header of ebml_wbtest's builder shape (doctype bytes in). */
 fn synth_ebml_header(doctype : Bytes) -> Bytes {
   let children = bcat([
     el(b"\x42\xF7", b"\x01"),
@@ -71,8 +70,9 @@ fn synth_ebml_header(doctype : Bytes) -> Bytes {
   bcat([b"\x1A\x45\xDF\xA3", vint1(children.length()), children])
 }
 
-///| A u64 as `n` big-endian bytes (uint element payloads). */
-fn be_u64(v : UInt64, n : Int) -> Bytes {
+///|
+/// A u64 as `n` big-endian bytes (uint element payloads). */
+fn be_u64(v : UInt64, n : Int32) -> Bytes {
   let a : Array[Byte] = []
   let mut i = n - 1
   while i >= 0 {
@@ -82,24 +82,28 @@ fn be_u64(v : UInt64, n : Int) -> Bytes {
   Bytes::from_array(a[:])
 }
 
-///| The Segment id + an 8-byte unknown-length marker. */
+///|
+/// The Segment id + an 8-byte unknown-length marker. */
 fn seg_open_unknown() -> Bytes {
   bcat([b"\x18\x53\x80\x67", b"\x01\xFF\xFF\xFF\xFF\xFF\xFF\xFF"])
 }
 
-///| A well-formed empty Cluster: id + 1-byte length 0. The walk stops on
+///|
+/// A well-formed empty Cluster: id + 1-byte length 0. The walk stops on
 /// the id (EBML_STOP); without the length byte, an unknown element or a
 /// second parse at this position would read past EOF. */
 fn cluster_id() -> Bytes {
   b"\x1F\x43\xB6\x75\x80"
 }
 
-///| An Info element with the given TimecodeScale payload. */
+///|
+/// An Info element with the given TimecodeScale payload. */
 fn info_with_timescale(ts : UInt64) -> Bytes {
   let body = el(b"\x2A\xD7\xB1", be_u64(ts, 2))
   bcat([b"\x15\x49\xA9\x66", vint1(body.length()), body])
 }
 
+///|
 test "matroska: synthetic segment with Info and cluster stop" {
   let info_children = bcat([
     el(b"\x2A\xD7\xB1", be_u64(500UL, 2)), // TimecodeScale 500
@@ -111,7 +115,11 @@ test "matroska: synthetic segment with Info and cluster stop" {
     vint1(1),
     b"\x00", // VOID, skipped
   ])
-  let info = bcat([b"\x15\x49\xA9\x66", vint1(info_children.length()), info_children])
+  let info = bcat([
+    b"\x15\x49\xA9\x66",
+    vint1(info_children.length()),
+    info_children,
+  ])
   let header = synth_ebml_header(b"matroska")
   // 2-byte segment length covering Info + the cluster id
   let payload_len = (info.length() + 4).to_uint64()
@@ -139,6 +147,7 @@ test "matroska: synthetic segment with Info and cluster stop" {
   )
 }
 
+///|
 test "matroska: unknown-length segment ends at the cluster stop" {
   let header = synth_ebml_header(b"webm")
   let info = info_with_timescale(1000UL)
@@ -152,6 +161,7 @@ test "matroska: unknown-length segment ends at the cluster stop" {
   )
 }
 
+///|
 test "matroska: empty Info leaves the defaults" {
   let header = synth_ebml_header(b"webm")
   let seg = bcat([
@@ -166,6 +176,7 @@ test "matroska: empty Info leaves the defaults" {
   assert_eq(mh.title, None)
 }
 
+///|
 test "matroska: SeekHead back-jump parses an Info after the first cluster" {
   // Cluster-first layout: the walk stops at the Cluster id; the SeekHead
   // entry points at an Info behind it, which execute_seekhead parses.
@@ -180,8 +191,16 @@ test "matroska: SeekHead back-jump parses an Info after the first cluster" {
     el(b"\x53\xAB", be_u64(0x1549A966UL, 4)), // SeekID = Info
     el(b"\x53\xAC", be_u64(info_pos.to_uint64(), 1)), // SeekPosition
   ])
-  let seek_entry = bcat([b"\x4D\xBB", vint1(entry_children.length()), entry_children])
-  let seekhead = bcat([b"\x11\x4D\x9B\x74", vint1(seek_entry.length()), seek_entry])
+  let seek_entry = bcat([
+    b"\x4D\xBB",
+    vint1(entry_children.length()),
+    entry_children,
+  ])
+  let seekhead = bcat([
+    b"\x11\x4D\x9B\x74",
+    vint1(seek_entry.length()),
+    seek_entry,
+  ])
   // seekhead.length() + cluster + VOID must equal info_pos
   let seg = bcat([
     seg_open_unknown(),
@@ -206,6 +225,7 @@ test "matroska: SeekHead back-jump parses an Info after the first cluster" {
   )
 }
 
+///|
 test "matroska: resync skips garbage before the Info" {
   let header = synth_ebml_header(b"webm")
   let info = info_with_timescale(750UL)

@@ -14,33 +14,37 @@
 /// The C struct declares `uint32_t key[16]` but only the first four words are
 /// used; `rounds` is the round count (64 for standard TEA).
 pub struct AVTEA {
-  key : FixedArray[UInt]
-  mut rounds : Int
+  key : FixedArray[UInt32]
+  mut rounds : Int32
 }
 
-///| `av_tea_alloc`: create a zeroed TEA context. */
+///|
+/// `av_tea_alloc`: create a zeroed TEA context. */
 pub fn av_tea_alloc() -> AVTEA {
-  { key: FixedArray::make(4, 0), rounds: 0 }
+  { key: FixedArray::make(4, 0), rounds: 0, }
 }
 
-///| Big-endian 32-bit read (`AV_RB32`). */
-fn tea_rb32(b : Bytes, off : Int) -> UInt {
+///|
+/// Big-endian 32-bit read (`AV_RB32`). */
+fn tea_rb32(b : Bytes, off : Int32) -> UInt32 {
   (b[off].to_uint() << 24) |
   (b[off + 1].to_uint() << 16) |
   (b[off + 2].to_uint() << 8) |
   b[off + 3].to_uint()
 }
 
-///| Big-endian 32-bit write (`AV_WB32`). */
-fn tea_wb32(dst : FixedArray[Byte], off : Int, v : UInt) -> Unit {
+///|
+/// Big-endian 32-bit write (`AV_WB32`). */
+fn tea_wb32(dst : FixedArray[Byte], off : Int32, v : UInt32) -> Unit {
   dst[off] = ((v >> 24) & 0xFF).to_byte()
   dst[off + 1] = ((v >> 16) & 0xFF).to_byte()
   dst[off + 2] = ((v >> 8) & 0xFF).to_byte()
   dst[off + 3] = (v & 0xFF).to_byte()
 }
 
-///| `av_tea_init`: load the 16-byte key as big-endian 32-bit words and set `rounds`. */
-pub fn av_tea_init(ctx : AVTEA, key : Bytes, rounds : Int) -> Unit {
+///|
+/// `av_tea_init`: load the 16-byte key as big-endian 32-bit words and set `rounds`. */
+pub fn av_tea_init(ctx : AVTEA, key : Bytes, rounds : Int32) -> Unit {
   for i = 0; i < 4; i = i + 1 {
     ctx.key[i] = tea_rb32(key, i << 2)
   }
@@ -50,24 +54,29 @@ pub fn av_tea_init(ctx : AVTEA, key : Bytes, rounds : Int) -> Unit {
 ///|
 /// `tea_crypt_ecb`: transform one 8-byte block using the TEA Feistel network
 /// (`rounds / 2` double-rounds, standard delta 0x9E3779B9).
-fn tea_ecb_block(ctx : AVTEA, src : Bytes, off : Int, decrypt : Bool) -> Bytes {
+fn tea_ecb_block(
+  ctx : AVTEA,
+  src : Bytes,
+  off : Int32,
+  decrypt : Bool,
+) -> Bytes {
   let mut v0 = tea_rb32(src, off)
   let mut v1 = tea_rb32(src, off + 4)
   let k0 = ctx.key[0]
   let k1 = ctx.key[1]
   let k2 = ctx.key[2]
   let k3 = ctx.key[3]
-  let delta : UInt = 0x9E3779B9
+  let delta : UInt32 = 0x9E3779B9
   let n = ctx.rounds / 2
   if decrypt {
-    let mut sum : UInt = delta * n.reinterpret_as_uint()
+    let mut sum : UInt32 = delta * n.reinterpret_as_uint()
     for i = 0; i < n; i = i + 1 {
       v1 = v1 - (((v0 << 4) + k2) ^ (v0 + sum) ^ ((v0 >> 5) + k3))
       v0 = v0 - (((v1 << 4) + k0) ^ (v1 + sum) ^ ((v1 >> 5) + k1))
       sum = sum - delta
     }
   } else {
-    let mut sum : UInt = 0
+    let mut sum : UInt32 = 0
     for i = 0; i < n; i = i + 1 {
       sum = sum + delta
       v0 = v0 + (((v1 << 4) + k0) ^ (v1 + sum) ^ ((v1 >> 5) + k1))
@@ -87,9 +96,9 @@ fn tea_ecb_block(ctx : AVTEA, src : Bytes, off : Int, decrypt : Bool) -> Bytes {
 pub fn av_tea_crypt(
   ctx : AVTEA,
   src : Bytes,
-  count : Int,
+  count : Int32,
   iv : FixedArray[Byte]?,
-  decrypt : Bool
+  decrypt : Bool,
 ) -> Bytes {
   let out : FixedArray[Byte] = FixedArray::make(count * 8, b'\x00')
   let mut chain : Bytes? = match iv {

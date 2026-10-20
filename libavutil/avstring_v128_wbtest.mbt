@@ -6,8 +6,9 @@
 /// `av_get_token` semantics). Checked exhaustively over generated ASCII
 /// haystacks/needles and every `hay_length`, plus a few fixed cases.
 
-///| Deterministic ASCII string generator (LCG, alphabet `abc`). */
-fn strv128_gen(seed : UInt, n : Int) -> String {
+///|
+/// Deterministic ASCII string generator (LCG, alphabet `abc`). */
+fn strv128_gen(seed : UInt32, n : Int32) -> String {
   let alphabet : Array[Char] = ['a', 'b', 'c']
   let chars : Array[Char] = []
   let mut s = seed
@@ -18,6 +19,7 @@ fn strv128_gen(seed : UInt, n : Int) -> String {
   String::from_array(chars[:])
 }
 
+///|
 test "strnstr simd: fixed cases" {
   assert_eq(av_strnstr_v128("", "a", 0), av_strnstr("", "a", 0))
   assert_eq(av_strnstr_v128("abcabc", "", 6), Some(0))
@@ -28,17 +30,15 @@ test "strnstr simd: fixed cases" {
   assert_eq(av_strnstr_v128("ab", "abc", 2), None)
 }
 
+///|
 test "strnstr simd: equals the scalar path on generated inputs" {
   for t = 0; t < 120; t = t + 1 {
-    let hl = (t * 17) % 60
-    let nl = 1 + (t * 7) % 5
+    let hl = t * 17 % 60
+    let nl = 1 + t * 7 % 5
     let hay = strv128_gen(0xA5A5U + t.reinterpret_as_uint(), hl)
     let needle = strv128_gen(0x5A5AU + t.reinterpret_as_uint(), nl)
     for cut = 0; cut < hl + 3; cut = cut + 1 {
-      assert_eq(
-        av_strnstr_v128(hay, needle, cut),
-        av_strnstr(hay, needle, cut),
-      )
+      assert_eq(av_strnstr_v128(hay, needle, cut), av_strnstr(hay, needle, cut))
     }
   }
   // long haystack crosses many SIMD blocks, needle hit and miss
@@ -47,6 +47,9 @@ test "strnstr simd: equals the scalar path on generated inputs" {
   assert_eq(av_strnstr_v128(big, "zzz", 500), av_strnstr(big, "zzz", 500))
   // non-ASCII (but still BMP) must also agree
   let uni = "héllo wörld héllo"
-  assert_eq(av_strnstr_v128(uni, "wörld", uni.length()), av_strnstr(uni, "wörld", uni.length()))
+  assert_eq(
+    av_strnstr_v128(uni, "wörld", uni.length()),
+    av_strnstr(uni, "wörld", uni.length()),
+  )
   assert_eq(av_strnstr_v128(uni, "héllo", 6), av_strnstr(uni, "héllo", 6))
 }

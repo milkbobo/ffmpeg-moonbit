@@ -21,19 +21,22 @@
 /// `st->codecpar->codec_id` is modelled as the FFmpeg codec-id *name*
 /// (`"aac"`, `"mp3"`, ...) via a string subset of `ff_mp4_obj_type`.
 
-///| `MP4ESDescrTag`. */
-let mp4_es_descr_tag : Int = 0x03
+///|
+/// `MP4ESDescrTag`. */
+let mp4_es_descr_tag : Int32 = 0x03
 
-///| `MP4DecConfigDescrTag`. */
-let mp4_dec_config_descr_tag : Int = 0x04
+///|
+/// `MP4DecConfigDescrTag`. */
+let mp4_dec_config_descr_tag : Int32 = 0x04
 
-///| `MP4DecSpecificDescrTag`. */
-let mp4_dec_specific_descr_tag : Int = 0x05
+///|
+/// `MP4DecSpecificDescrTag`. */
+let mp4_dec_specific_descr_tag : Int32 = 0x05
 
 ///|
 /// `ff_mp4_obj_type` from isom.c: object type id to FFmpeg codec-id name.
 /// First match wins, as with `ff_codec_get_id` (so 0x40 is AAC, not ALS).
-fn mp4_obj_type_codec(object_type_id : Int) -> String? {
+fn mp4_obj_type_codec(object_type_id : Int32) -> String? {
   match object_type_id {
     0x08 => Some("mov_text")
     0x20 => Some("mpeg4")
@@ -69,7 +72,7 @@ fn mp4_obj_type_codec(object_type_id : Int) -> String? {
 ///|
 /// `mp4_audio_types` from isom.c: AudioSpecificConfig object types that
 /// override the AAC codec id.
-fn mp4_audio_type_codec(object_type : Int) -> String? {
+fn mp4_audio_type_codec(object_type : Int32) -> String? {
   match object_type {
     29 | 32 | 33 | 34 => Some("mp3on4") // AOT_PS (old mp3on4 draft) / Layer 1-3
     36 => Some("mp4als") // AOT_ALS
@@ -77,8 +80,9 @@ fn mp4_audio_type_codec(object_type : Int) -> String? {
   }
 }
 
-///| `ff_mpa_freq_tab` from libavcodec/mpegaudiotabs.h. */
-let mpa_freq_tab : FixedArray[Int] = [44100, 48000, 32000]
+///|
+/// `ff_mpa_freq_tab` from libavcodec/mpegaudiotabs.h. */
+let mpa_freq_tab : FixedArray[Int32] = [44100, 48000, 32000]
 
 ///|
 /// `mov_read_glbl`: store the payload as the track's extradata. The
@@ -88,7 +92,7 @@ fn parse_glbl(
   st : MovState,
   r : AvioContext,
   kind : String,
-  size : Int64
+  size : Int64,
 ) -> Unit raise MovError {
   if !st.in_trak {
     return
@@ -114,7 +118,10 @@ fn parse_glbl(
       raise InvalidData("EOF in glbl")
     }
     let _ = r.avio_seek(start, SEEK_SET)
-    if b0 == 0x66 && b1 == 0x69 && b2 == 0x65 && b3 == 0x6C &&
+    if b0 == 0x66 &&
+      b1 == 0x69 &&
+      b2 == 0x65 &&
+      b3 == 0x6C &&
       inner_size.to_int64() == size {
       // 'fiel' with a matching size: recurse into the wrapped boxes.
       parse_default(st, r, size)
@@ -136,8 +143,9 @@ fn parse_glbl(
   }
 }
 
-///| `ff_mp4_read_descr_len`: up to four 7-bit length bytes. */
-fn mp4_read_descr_len(r : AvioContext) -> Int {
+///|
+/// `ff_mp4_read_descr_len`: up to four 7-bit length bytes. */
+fn mp4_read_descr_len(r : AvioContext) -> Int32 {
   let mut len = 0
   let mut count = 4
   while count > 0 {
@@ -151,13 +159,15 @@ fn mp4_read_descr_len(r : AvioContext) -> Int {
   len
 }
 
-///| `ff_mp4_read_descr`: tag byte plus length. */
-fn mp4_read_descr(r : AvioContext) -> (Int, Int) {
+///|
+/// `ff_mp4_read_descr`: tag byte plus length. */
+fn mp4_read_descr(r : AvioContext) -> (Int32, Int32) {
   let tag = r.avio_r8().reinterpret_as_int()
   (tag, mp4_read_descr_len(r))
 }
 
-///| `ff_mp4_parse_es_descr`: ES_ID, flags and the optional URL/OCR fields. */
+///|
+/// `ff_mp4_parse_es_descr`: ES_ID, flags and the optional URL/OCR fields. */
 fn mp4_parse_es_descr(r : AvioContext) -> Unit {
   let _ = r.avio_rb16() // ES_ID
   let flags = r.avio_r8()
@@ -182,7 +192,7 @@ fn mp4_parse_es_descr(r : AvioContext) -> Unit {
 /// to refine channels / sample rate / frame length / codec id.
 fn mp4_read_dec_config_descr(
   st : MovState,
-  r : AvioContext
+  r : AvioContext,
 ) -> Unit raise MovError {
   let object_type_id = r.avio_r8().reinterpret_as_int()
   let _ = r.avio_r8() // stream type
@@ -209,7 +219,12 @@ fn mp4_read_dec_config_descr(
     st.cur.extradata = Some(Bytes::from_array(bytes[:]))
     if st.cur.codec_id == "aac" {
       let cfg = @libavcodec.new_mpeg4_audio_config()
-      match @libavcodec.ff_mpeg4audio_get_config(cfg, st.cur.extradata.unwrap(), true) {
+      match
+        @libavcodec.ff_mpeg4audio_get_config(
+          cfg,
+          st.cur.extradata.unwrap(),
+          true,
+        ) {
         Err(_) => raise InvalidData("invalid audio specific config")
         Ok(_) => ()
       }

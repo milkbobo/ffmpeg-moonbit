@@ -25,7 +25,8 @@
 // Small helpers mirroring libavutil/common.h / C string.h
 // ---------------------------------------------------------------------------
 
-///| ASCII-only lowercasing, `av_tolower` from libavutil/avstring.h. */
+///|
+/// ASCII-only lowercasing, `av_tolower` from libavutil/avstring.h. */
 fn ch_tolower(c : Char) -> Char {
   let u = c.to_uint()
   if u >= 65 && u <= 90 {
@@ -35,13 +36,15 @@ fn ch_tolower(c : Char) -> Char {
   }
 }
 
-///| One of the `WHITESPACES` characters (space, newline, tab, carriage return). */
+///|
+/// One of the `WHITESPACES` characters (space, newline, tab, carriage return). */
 fn is_ws(c : Char) -> Bool {
   c == ' ' || c == '\n' || c == '\t' || c == '\r'
 }
 
-///| `strchr`: index of the first `needle` at or after `start`, or `len` if absent. */
-fn find_from(a : Array[Char], start : Int, needle : Char) -> Int {
+///|
+/// `strchr`: index of the first `needle` at or after `start`, or `len` if absent. */
+fn find_from(a : Array[Char], start : Int32, needle : Char) -> Int32 {
   let mut i = start
   while i < a.length() {
     if a[i] == needle {
@@ -52,13 +55,15 @@ fn find_from(a : Array[Char], start : Int, needle : Char) -> Int {
   a.length()
 }
 
-///| `strspn(p, set) != 0`: true when `c` occurs in `set`. */
+///|
+/// `strspn(p, set) != 0`: true when `c` occurs in `set`. */
 fn char_in(c : Char, set : Array[Char]) -> Bool {
   find_from(set, 0, c) < set.length()
 }
 
-///| Build a `String` from `a[start..end)`. */
-fn str_of(a : Array[Char], start : Int, end : Int) -> String {
+///|
+/// Build a `String` from `a[start..end)`. */
+fn str_of(a : Array[Char], start : Int32, end : Int32) -> String {
   if end <= start {
     ""
   } else {
@@ -66,8 +71,9 @@ fn str_of(a : Array[Char], start : Int, end : Int) -> String {
   }
 }
 
-///| `strncmp(a, b, n)`, treating out-of-range indices as NUL. */
-fn strncmp_n(a : Array[Char], b : Array[Char], n : Int) -> Int {
+///|
+/// `strncmp(a, b, n)`, treating out-of-range indices as NUL. */
+fn strncmp_n(a : Array[Char], b : Array[Char], n : Int32) -> Int32 {
   let mut i = 0
   while i < n {
     let ca = if i < a.length() { a[i] } else { '\u{0}' }
@@ -90,7 +96,7 @@ fn strncmp_n(a : Array[Char], b : Array[Char], n : Int) -> Int {
 ///|
 /// `av_strstart`: `Some(pfx.length())` when `pfx` is a prefix of `str`
 /// (the C `*ptr` out-parameter), `None` otherwise.
-pub fn av_strstart(str : String, pfx : String) -> Int? {
+pub fn av_strstart(str : String, pfx : String) -> Int32? {
   let s = str.to_array()
   let p = pfx.to_array()
   let mut i = 0
@@ -104,8 +110,9 @@ pub fn av_strstart(str : String, pfx : String) -> Int? {
   }
 }
 
-///| `av_stristart`: case-insensitive `av_strstart`. */
-pub fn av_stristart(str : String, pfx : String) -> Int? {
+///|
+/// `av_stristart`: case-insensitive `av_strstart`. */
+pub fn av_stristart(str : String, pfx : String) -> Int32? {
   let s = str.to_array()
   let p = pfx.to_array()
   let mut i = 0
@@ -119,13 +126,15 @@ pub fn av_stristart(str : String, pfx : String) -> Int? {
   }
 }
 
-///| `av_stristr`: index of the first case-insensitive occurrence of `s2` in `s1`. */
-pub fn av_stristr(s1 : String, s2 : String) -> Int? {
+///|
+/// `av_stristr`: index of the first case-insensitive occurrence of `s2` in `s1`. */
+pub fn av_stristr(s1 : String, s2 : String) -> Int32? {
   stristr_from(s1.to_array(), s2.to_array(), 0)
 }
 
-///| `av_stristr` starting at `start` (used by `av_strireplace`). */
-fn stristr_from(a : Array[Char], n : Array[Char], start : Int) -> Int? {
+///|
+/// `av_stristr` starting at `start` (used by `av_strireplace`). */
+fn stristr_from(a : Array[Char], n : Array[Char], start : Int32) -> Int32? {
   if n.length() == 0 {
     return Some(start)
   }
@@ -152,7 +161,11 @@ fn stristr_from(a : Array[Char], n : Array[Char], start : Int) -> Int? {
 ///|
 /// `av_strnstr`: index of the first occurrence of `needle` in `haystack`,
 /// searching only the first `hay_length` characters.
-pub fn av_strnstr(haystack : String, needle : String, hay_length : Int) -> Int? {
+pub fn av_strnstr(
+  haystack : String,
+  needle : String,
+  hay_length : Int32,
+) -> Int32? {
   let h = haystack.to_array()
   let n = needle.to_array()
   let nl = n.length()
@@ -188,12 +201,18 @@ pub fn av_strnstr(haystack : String, needle : String, hay_length : Int) -> Int? 
 ///|
 /// `av_strlcpy`: copy `src` into `dst` with a `size` byte budget, always
 /// NUL-terminating when `len <= size`, and return the length `src` would need.
-pub fn av_strlcpy(dst : FixedArray[Byte], src : String, size : Int) -> Int {
+pub fn av_strlcpy(dst : FixedArray[Byte], src : String, size : Int32) -> Int32 {
   strlcpy_at(dst, 0, src, size)
 }
 
-///| `av_strlcpy` writing to `dst` starting at byte `off` (used by `av_strlcat`). */
-fn strlcpy_at(dst : FixedArray[Byte], off : Int, src : String, size : Int) -> Int {
+///|
+/// `av_strlcpy` writing to `dst` starting at byte `off` (used by `av_strlcat`). */
+fn strlcpy_at(
+  dst : FixedArray[Byte],
+  off : Int32,
+  src : String,
+  size : Int32,
+) -> Int32 {
   let sb = src.to_array()
   let mut len = 0
   let mut si = 0
@@ -218,8 +237,9 @@ fn strlcpy_at(dst : FixedArray[Byte], off : Int, src : String, size : Int) -> In
   len + (sb.length() - si) - 1
 }
 
-///| `av_strlcat`: append `src` to the NUL-terminated `dst`, returning the needed length. */
-pub fn av_strlcat(dst : FixedArray[Byte], src : String, size : Int) -> Int {
+///|
+/// `av_strlcat`: append `src` to the NUL-terminated `dst`, returning the needed length. */
+pub fn av_strlcat(dst : FixedArray[Byte], src : String, size : Int32) -> Int32 {
   let mut len = 0
   while len < dst.length() && dst[len] != b'\x00' {
     len = len + 1
@@ -234,12 +254,13 @@ pub fn av_strlcat(dst : FixedArray[Byte], src : String, size : Int) -> Int {
 // Comparisons
 // ---------------------------------------------------------------------------
 
-///| `av_strcasecmp`: case-insensitive comparison, 0 when equal. */
-pub fn av_strcasecmp(a : String, b : String) -> Int {
+///|
+/// `av_strcasecmp`: case-insensitive comparison, 0 when equal. */
+pub fn av_strcasecmp(a : String, b : String) -> Int32 {
   let ca = a.to_array()
   let cb = b.to_array()
-  let mut c1 : UInt = 0
-  let mut c2 : UInt = 0
+  let mut c1 : UInt32 = 0
+  let mut c2 : UInt32 = 0
   let mut i = 0
   let mut cont = true
   while cont {
@@ -253,15 +274,16 @@ pub fn av_strcasecmp(a : String, b : String) -> Int {
   c1.reinterpret_as_int() - c2.reinterpret_as_int()
 }
 
-///| `av_strncasecmp`: case-insensitive comparison of at most `n` characters. */
-pub fn av_strncasecmp(a : String, b : String, n : Int) -> Int {
+///|
+/// `av_strncasecmp`: case-insensitive comparison of at most `n` characters. */
+pub fn av_strncasecmp(a : String, b : String, n : Int32) -> Int32 {
   if n <= 0 {
     return 0
   }
   let ca = a.to_array()
   let cb = b.to_array()
-  let mut c1 : UInt = 0
-  let mut c2 : UInt = 0
+  let mut c1 : UInt32 = 0
+  let mut c2 : UInt32 = 0
   let mut i = 0
   let mut rem = n
   let mut cont = true
@@ -288,7 +310,11 @@ pub fn av_strncasecmp(a : String, b : String, n : Int) -> Int {
 /// `\` escapes the next character and a `'...'` run is taken verbatim; trailing
 /// whitespace is then trimmed back to the last escaped or quoted character, as
 /// in the C implementation.
-pub fn av_get_token(buf : String, pos : Int, term : String) -> (String, Int) {
+pub fn av_get_token(
+  buf : String,
+  pos : Int32,
+  term : String,
+) -> (String, Int32) {
   let b = buf.to_array()
   let t = term.to_array()
   let out : Array[Char] = []
@@ -365,7 +391,8 @@ pub fn av_strireplace(str : String, from : String, to : String) -> String {
 // Paths
 // ---------------------------------------------------------------------------
 
-///| `av_basename`: the part of `path` after the last `/`, or `path` itself. */
+///|
+/// `av_basename`: the part of `path` after the last `/`, or `path` itself. */
 pub fn av_basename(path : String) -> String {
   if path.length() == 0 {
     return "."
@@ -384,7 +411,8 @@ pub fn av_basename(path : String) -> String {
   }
 }
 
-///| `av_dirname`: the part of `path` before the last `/`, or `.` when there is none. */
+///|
+/// `av_dirname`: the part of `path` before the last `/`, or `.` when there is none. */
 pub fn av_dirname(path : String) -> String {
   if path.length() == 0 {
     return "."
@@ -455,7 +483,16 @@ pub fn av_match_name(name : String, names : String) -> Bool {
     let entry = str_of(ra, start, p)
     let len = if p - start > namelen { p - start } else { namelen }
     let hit = av_strncasecmp(name, entry, len) == 0 ||
-      strncmp_n("ALL".to_array(), entry.to_array(), if 3 > p - start { 3 } else { p - start }) == 0
+      strncmp_n(
+        "ALL".to_array(),
+        entry.to_array(),
+        if 3 > p - start {
+          3
+        } else {
+          p - start
+        },
+      ) ==
+      0
     if hit {
       return !negate
     }
@@ -483,7 +520,8 @@ pub fn av_match_list(name : String, list : String, separator : Char) -> Bool {
         let pc = if pi + k < pa.length() { pa[pi + k] } else { '\u{0}' }
         let qc = if qstart + k < qa.length() { qa[qstart + k] } else { '\u{0}' }
         let nuls = pc == '\u{0}' || qc == '\u{0}'
-        let cont = pc == qc || (nuls && (if pc == '\u{0}' { qc } else { pc }) == separator)
+        let cont = pc == qc ||
+          (nuls && (if pc == '\u{0}' { qc } else { pc }) == separator)
         if cont {
           if k > 0 && (pc == '\u{0}' || pc == separator) {
             matched = true
@@ -511,44 +549,61 @@ pub fn av_match_list(name : String, list : String, separator : Char) -> Bool {
 // Escaping
 // ---------------------------------------------------------------------------
 
-///| `AV_ESCAPE_MODE_*` from libavutil/avstring.h. */
-pub let av_escape_mode_auto : Int = 0
+///|
+/// `AV_ESCAPE_MODE_*` from libavutil/avstring.h. */
+pub let av_escape_mode_auto : Int32 = 0
 
-pub let av_escape_mode_backslash : Int = 1
+///|
+pub let av_escape_mode_backslash : Int32 = 1
 
-pub let av_escape_mode_quote : Int = 2
+///|
+pub let av_escape_mode_quote : Int32 = 2
 
-pub let av_escape_mode_xml : Int = 3
+///|
+pub let av_escape_mode_xml : Int32 = 3
 
-///| `AV_ESCAPE_FLAG_WHITESPACE`. */
-pub let av_escape_flag_whitespace : Int = 1
+///|
+/// `AV_ESCAPE_FLAG_WHITESPACE`. */
+pub let av_escape_flag_whitespace : Int32 = 1
 
-///| `AV_ESCAPE_FLAG_STRICT`. */
-pub let av_escape_flag_strict : Int = 2
+///|
+/// `AV_ESCAPE_FLAG_STRICT`. */
+pub let av_escape_flag_strict : Int32 = 2
 
-///| `AV_ESCAPE_FLAG_XML_SINGLE_QUOTES`. */
-pub let av_escape_flag_xml_single_quotes : Int = 4
+///|
+/// `AV_ESCAPE_FLAG_XML_SINGLE_QUOTES`. */
+pub let av_escape_flag_xml_single_quotes : Int32 = 4
 
-///| `AV_ESCAPE_FLAG_XML_DOUBLE_QUOTES`. */
-pub let av_escape_flag_xml_double_quotes : Int = 8
+///|
+/// `AV_ESCAPE_FLAG_XML_DOUBLE_QUOTES`. */
+pub let av_escape_flag_xml_double_quotes : Int32 = 8
 
-///| `AV_UTF8_FLAG_ACCEPT_INVALID_BIG_CODES`. */
-pub let av_utf8_flag_accept_invalid_big_codes : Int = 1
+///|
+/// `AV_UTF8_FLAG_ACCEPT_INVALID_BIG_CODES`. */
+pub let av_utf8_flag_accept_invalid_big_codes : Int32 = 1
 
-///| `AV_UTF8_FLAG_ACCEPT_NON_CHARACTERS`. */
-pub let av_utf8_flag_accept_non_characters : Int = 2
+///|
+/// `AV_UTF8_FLAG_ACCEPT_NON_CHARACTERS`. */
+pub let av_utf8_flag_accept_non_characters : Int32 = 2
 
-///| `AV_UTF8_FLAG_ACCEPT_SURROGATES`. */
-pub let av_utf8_flag_accept_surrogates : Int = 4
+///|
+/// `AV_UTF8_FLAG_ACCEPT_SURROGATES`. */
+pub let av_utf8_flag_accept_surrogates : Int32 = 4
 
-///| `AV_UTF8_FLAG_EXCLUDE_XML_INVALID_CONTROL_CODES`. */
-pub let av_utf8_flag_exclude_xml_invalid_control_codes : Int = 8
+///|
+/// `AV_UTF8_FLAG_EXCLUDE_XML_INVALID_CONTROL_CODES`. */
+pub let av_utf8_flag_exclude_xml_invalid_control_codes : Int32 = 8
 
 ///|
 /// `av_escape`: escape `src` for command-line/option round-tripping.
 /// Corresponds to `av_escape` (avstring.c) plus the `av_bprint_escape` body it
 /// calls (bprint.c).
-pub fn av_escape(src : String, special_chars : String?, mode : Int, flags : Int) -> String {
+pub fn av_escape(
+  src : String,
+  special_chars : String?,
+  mode : Int32,
+  flags : Int32,
+) -> String {
   let mode = if mode == av_escape_mode_auto {
     av_escape_mode_backslash
   } else {
@@ -602,8 +657,10 @@ pub fn av_escape(src : String, special_chars : String?, mode : Int, flags : Int)
         char_in(c, quotes) ||
         (is_ws && (flags & av_escape_flag_whitespace) != 0)
       if is_strictly_special ||
-        ((flags & av_escape_flag_strict) == 0 &&
-          (is_special || (is_ws && is_first_last))) {
+        (
+          (flags & av_escape_flag_strict) == 0 &&
+          (is_special || (is_ws && is_first_last))
+        ) {
         out.push('\\')
       }
       out.push(c)
@@ -612,7 +669,8 @@ pub fn av_escape(src : String, special_chars : String?, mode : Int, flags : Int)
   String::from_array(out[:])
 }
 
-///| Append an ASCII literal to a character buffer. */
+///|
+/// Append an ASCII literal to a character buffer. */
 fn push_str(out : Array[Char], s : String) -> Unit {
   let a = s.to_array()
   for i = 0; i < a.length(); i = i + 1 {
@@ -633,18 +691,18 @@ fn push_str(out : Array[Char], s : String) -> Unit {
 /// that case is surfaced here as `Err("EOF")` with the cursor unchanged.
 pub fn av_utf8_decode(
   buf : Bytes,
-  pos : Int,
-  end : Int,
-  flags : Int
-) -> (Result[UInt, String], Int) {
+  pos : Int32,
+  end : Int32,
+  flags : Int32,
+) -> (Result[UInt32, String], Int32) {
   if pos >= end {
     return (Err("EOF"), pos)
   }
-  let overlong_mins : Array[UInt] = [
+  let overlong_mins : Array[UInt32] = [
     0x00000000, 0x00000080, 0x00000800, 0x00010000, 0x00200000, 0x04000000,
   ]
   let mut p = pos
-  let mut code : UInt = buf[p].to_uint()
+  let mut code : UInt32 = buf[p].to_uint()
   p = p + 1
 
   // A continuation byte (10xxxxxx) or 0xFE/0xFF cannot start a sequence.
@@ -671,15 +729,24 @@ pub fn av_utf8_decode(
 
   // Overlong encodings, out-of-range values and the optional rejections.
   let bad = code < overlong_mins[tail_len] ||
-    code >= (1 : UInt) << 31 ||
+    code >= (1 : UInt32) << 31 ||
     (code > 0x10FFFF && (flags & av_utf8_flag_accept_invalid_big_codes) == 0) ||
-    (code < 0x20 &&
+    (
+      code < 0x20 &&
       code != 0x9 &&
       code != 0xA &&
       code != 0xD &&
-      (flags & av_utf8_flag_exclude_xml_invalid_control_codes) != 0) ||
-    (code >= 0xD800 && code <= 0xDFFF && (flags & av_utf8_flag_accept_surrogates) == 0) ||
-    ((code == 0xFFFE || code == 0xFFFF) && (flags & av_utf8_flag_accept_non_characters) == 0)
+      (flags & av_utf8_flag_exclude_xml_invalid_control_codes) != 0
+    ) ||
+    (
+      code >= 0xD800 &&
+      code <= 0xDFFF &&
+      (flags & av_utf8_flag_accept_surrogates) == 0
+    ) ||
+    (
+      (code == 0xFFFE || code == 0xFFFF) &&
+      (flags & av_utf8_flag_accept_non_characters) == 0
+    )
   if bad {
     return (Err("EILSEQ"), p)
   }

@@ -13,11 +13,12 @@
 // mp4_wbtest.mbt should the two test files share a package scope)
 // ---------------------------------------------------------------------------
 
-fn xb16(v : UInt) -> Array[Byte] {
+fn xb16(v : UInt32) -> Array[Byte] {
   [((v >> 8) & 0xFF).to_byte(), (v & 0xFF).to_byte()]
 }
 
-fn xb24(v : UInt) -> Array[Byte] {
+///|
+fn xb24(v : UInt32) -> Array[Byte] {
   [
     ((v >> 16) & 0xFF).to_byte(),
     ((v >> 8) & 0xFF).to_byte(),
@@ -25,7 +26,8 @@ fn xb24(v : UInt) -> Array[Byte] {
   ]
 }
 
-fn xb32(v : UInt) -> Array[Byte] {
+///|
+fn xb32(v : UInt32) -> Array[Byte] {
   [
     ((v >> 24) & 0xFF).to_byte(),
     ((v >> 16) & 0xFF).to_byte(),
@@ -34,6 +36,7 @@ fn xb32(v : UInt) -> Array[Byte] {
   ]
 }
 
+///|
 fn xb64(v : UInt64) -> Array[Byte] {
   let a : Array[Byte] = []
   let mut i = 7
@@ -44,7 +47,8 @@ fn xb64(v : UInt64) -> Array[Byte] {
   a
 }
 
-fn xbytes(list : Array[Int]) -> Array[Byte] {
+///|
+fn xbytes(list : Array[Int32]) -> Array[Byte] {
   let a : Array[Byte] = []
   for i = 0; i < list.length(); i = i + 1 {
     a.push(list[i].to_byte())
@@ -52,16 +56,24 @@ fn xbytes(list : Array[Int]) -> Array[Byte] {
   a
 }
 
+///|
 fn xfourcc(kind : String) -> Array[Byte] {
-  xbytes([kind[0].to_int(), kind[1].to_int(), kind[2].to_int(), kind[3].to_int()])
+  xbytes([
+    kind[0].to_int(),
+    kind[1].to_int(),
+    kind[2].to_int(),
+    kind[3].to_int(),
+  ])
 }
 
+///|
 fn xpush(dst : Array[Byte], src : Array[Byte]) -> Unit {
   for i = 0; i < src.length(); i = i + 1 {
     dst.push(src[i])
   }
 }
 
+///|
 fn xbox(kind : String, payload : Array[Byte]) -> Array[Byte] {
   let out = xb32((payload.length() + 8).reinterpret_as_uint())
   xpush(out, xfourcc(kind))
@@ -69,6 +81,7 @@ fn xbox(kind : String, payload : Array[Byte]) -> Array[Byte] {
   out
 }
 
+///|
 fn xconcat(parts : Array[Array[Byte]]) -> Array[Byte] {
   let out : Array[Byte] = []
   for i = 0; i < parts.length(); i = i + 1 {
@@ -77,11 +90,13 @@ fn xconcat(parts : Array[Array[Byte]]) -> Array[Byte] {
   out
 }
 
+///|
 fn xftyp(major : String) -> Array[Byte] {
   xbox("ftyp", xconcat([xfourcc(major), xb32(0), xfourcc("isom")]))
 }
 
-fn xmvhd(timescale : UInt, duration : UInt) -> Array[Byte] {
+///|
+fn xmvhd(timescale : UInt32, duration : UInt32) -> Array[Byte] {
   xbox(
     "mvhd",
     xconcat([
@@ -96,7 +111,8 @@ fn xmvhd(timescale : UInt, duration : UInt) -> Array[Byte] {
   )
 }
 
-fn xtkhd(track_id : UInt) -> Array[Byte] {
+///|
+fn xtkhd(track_id : UInt32) -> Array[Byte] {
   xbox(
     "tkhd",
     xconcat([
@@ -125,7 +141,8 @@ fn xtkhd(track_id : UInt) -> Array[Byte] {
   )
 }
 
-fn xmdhd(timescale : UInt, duration : UInt) -> Array[Byte] {
+///|
+fn xmdhd(timescale : UInt32, duration : UInt32) -> Array[Byte] {
   xbox(
     "mdhd",
     xconcat([
@@ -141,11 +158,13 @@ fn xmdhd(timescale : UInt, duration : UInt) -> Array[Byte] {
   )
 }
 
+///|
 fn xhdlr(kind : String) -> Array[Byte] {
   xbox("hdlr", xconcat([xbytes([0]), xb24(0), xb32(0), xfourcc(kind), xb32(0)]))
 }
 
-///| VisualSampleEntry: `extra` boxes are appended after the fixed fields. */
+///|
+/// VisualSampleEntry: `extra` boxes are appended after the fixed fields. */
 fn xvideo_entry(codec : String, extra : Array[Array[Byte]]) -> Array[Byte] {
   let e : Array[Byte] = []
   // SampleEntry base: 6 reserved bytes + data reference index.
@@ -172,58 +191,69 @@ fn xvideo_entry(codec : String, extra : Array[Array[Byte]]) -> Array[Byte] {
   out
 }
 
-///| AudioSampleEntry version 0 (ISO layout), `extra` boxes appended. */
+///|
+/// AudioSampleEntry version 0 (ISO layout), `extra` boxes appended. */
 fn xaudio_entry(
   codec : String,
-  channels : UInt,
-  bits : UInt,
-  rate : UInt,
-  extra : Array[Array[Byte]]
+  channels : UInt32,
+  bits : UInt32,
+  rate : UInt32,
+  extra : Array[Array[Byte]],
 ) -> Array[Byte] {
-  xaudio_entry_common(codec, xconcat([
-    xbytes(Array::make(6, 0)),
-    xb16(1),
-    xb16(0), // entry version
-    xbytes(Array::make(6, 0)), // revision + vendor (or reserved)
-    xb16(channels),
-    xb16(bits),
-    xb16(0),
-    xb16(0),
-    xb32(rate << 16),
-  ]), extra)
+  xaudio_entry_common(
+    codec,
+    xconcat([
+      xbytes(Array::make(6, 0)),
+      xb16(1),
+      xb16(0), // entry version
+      xbytes(Array::make(6, 0)), // revision + vendor (or reserved)
+      xb16(channels),
+      xb16(bits),
+      xb16(0),
+      xb16(0),
+      xb32(rate << 16),
+    ]),
+    extra,
+  )
 }
 
-///| QuickTime AudioSampleEntry version 1 with explicit packing fields. */
+///|
+/// QuickTime AudioSampleEntry version 1 with explicit packing fields. */
 fn xaudio_entry_v1(
   codec : String,
-  channels : UInt,
-  bits : UInt,
-  rate : UInt,
-  samples_per_frame : UInt,
-  bytes_per_frame : UInt
+  channels : UInt32,
+  bits : UInt32,
+  rate : UInt32,
+  samples_per_frame : UInt32,
+  bytes_per_frame : UInt32,
 ) -> Array[Byte] {
-  xaudio_entry_common(codec, xconcat([
-    xbytes(Array::make(6, 0)),
-    xb16(1),
-    xb16(1), // entry version
-    xb16(0), // revision
-    xb32(0), // vendor
-    xb16(channels),
-    xb16(bits),
-    xb16(0),
-    xb16(0),
-    xb32(rate << 16),
-    xb32(samples_per_frame),
-    xb32(1), // bytes per packet
-    xb32(bytes_per_frame),
-    xb32(2), // bytes per sample
-  ]), [])
+  xaudio_entry_common(
+    codec,
+    xconcat([
+      xbytes(Array::make(6, 0)),
+      xb16(1),
+      xb16(1), // entry version
+      xb16(0), // revision
+      xb32(0), // vendor
+      xb16(channels),
+      xb16(bits),
+      xb16(0),
+      xb16(0),
+      xb32(rate << 16),
+      xb32(samples_per_frame),
+      xb32(1), // bytes per packet
+      xb32(bytes_per_frame),
+      xb32(2), // bytes per sample
+    ]),
+    [],
+  )
 }
 
+///|
 fn xaudio_entry_common(
   codec : String,
   fixed : Array[Byte],
-  extra : Array[Array[Byte]]
+  extra : Array[Array[Byte]],
 ) -> Array[Byte] {
   let e : Array[Byte] = []
   xpush(e, fixed)
@@ -236,6 +266,7 @@ fn xaudio_entry_common(
   out
 }
 
+///|
 fn xstsd(entries : Array[Array[Byte]]) -> Array[Byte] {
   let p : Array[Byte] = []
   xpush(p, xbytes([0]))
@@ -247,7 +278,8 @@ fn xstsd(entries : Array[Array[Byte]]) -> Array[Byte] {
   xbox("stsd", p)
 }
 
-fn xstts(entries : Array[(UInt, UInt)]) -> Array[Byte] {
+///|
+fn xstts(entries : Array[(UInt32, UInt32)]) -> Array[Byte] {
   let p : Array[Byte] = []
   xpush(p, xbytes([0]))
   xpush(p, xb24(0))
@@ -260,7 +292,8 @@ fn xstts(entries : Array[(UInt, UInt)]) -> Array[Byte] {
   xbox("stts", p)
 }
 
-fn xstsc(entries : Array[(UInt, UInt, UInt)]) -> Array[Byte] {
+///|
+fn xstsc(entries : Array[(UInt32, UInt32, UInt32)]) -> Array[Byte] {
   let p : Array[Byte] = []
   xpush(p, xbytes([0]))
   xpush(p, xb24(0))
@@ -274,10 +307,12 @@ fn xstsc(entries : Array[(UInt, UInt, UInt)]) -> Array[Byte] {
   xbox("stsc", p)
 }
 
-fn xstsz_const(size : UInt, count : UInt) -> Array[Byte] {
+///|
+fn xstsz_const(size : UInt32, count : UInt32) -> Array[Byte] {
   xbox("stsz", xconcat([xbytes([0]), xb24(0), xb32(size), xb32(count)]))
 }
 
+///|
 fn xstco(offsets : Array[Int64]) -> Array[Byte] {
   let p : Array[Byte] = []
   xpush(p, xbytes([0]))
@@ -289,7 +324,8 @@ fn xstco(offsets : Array[Int64]) -> Array[Byte] {
   xbox("stco", p)
 }
 
-fn xstss(samples : Array[UInt]) -> Array[Byte] {
+///|
+fn xstss(samples : Array[UInt32]) -> Array[Byte] {
   let p : Array[Byte] = []
   xpush(p, xbytes([0]))
   xpush(p, xb24(0))
@@ -300,27 +336,33 @@ fn xstss(samples : Array[UInt]) -> Array[Byte] {
   xbox("stss", p)
 }
 
+///|
 fn xstbl(children : Array[Array[Byte]]) -> Array[Byte] {
   xbox("stbl", xconcat(children))
 }
 
+///|
 fn xmdia(children : Array[Array[Byte]]) -> Array[Byte] {
   xbox("mdia", xconcat(children))
 }
 
+///|
 fn xtrak(children : Array[Array[Byte]]) -> Array[Byte] {
   xbox("trak", xconcat(children))
 }
 
+///|
 fn xmoov(children : Array[Array[Byte]]) -> Array[Byte] {
   xbox("moov", xconcat(children))
 }
 
+///|
 fn xmdat(data : Array[Byte]) -> Array[Byte] {
   xbox("mdat", data)
 }
 
-///| Build `ftyp` + `moov` (+ more parts) and return the bytes. */
+///|
+/// Build `ftyp` + `moov` (+ more parts) and return the bytes. */
 fn xbuild(parts : Array[Array[Byte]]) -> Bytes {
   let all : Array[Byte] = []
   xpush(all, xftyp("isom"))
@@ -334,6 +376,7 @@ fn xbuild(parts : Array[Array[Byte]]) -> Bytes {
 // glbl / avcC / esds
 // ---------------------------------------------------------------------------
 
+///|
 test "mov: avcC payload becomes extradata verbatim (mov_read_glbl)" {
   let avcc = xbox("avcC", xbytes([1, 0x64, 0, 28, 0xFF, 0xE1, 0, 3, 1, 2, 3]))
   let stbl = xstbl([
@@ -356,8 +399,13 @@ test "mov: avcC payload becomes extradata verbatim (mov_read_glbl)" {
   assert_eq(ed[10], 3)
 }
 
-///| Wrap an ES descriptor chain into an `esds` box. */
-fn xesds(obj_type : Int, avg_rate : UInt, dsi : Array[Byte]?) -> Array[Byte] {
+///|
+/// Wrap an ES descriptor chain into an `esds` box. */
+fn xesds(
+  obj_type : Int32,
+  avg_rate : UInt32,
+  dsi : Array[Byte]?,
+) -> Array[Byte] {
   let dcd : Array[Byte] = []
   xpush(dcd, xbytes([obj_type, 0x15]))
   xpush(dcd, xb24(0)) // buffer size
@@ -383,6 +431,7 @@ fn xesds(obj_type : Int, avg_rate : UInt, dsi : Array[Byte]?) -> Array[Byte] {
   xbox("esds", p)
 }
 
+///|
 test "mov: esds with AAC DecoderSpecificInfo fills codec config" {
   // AudioSpecificConfig 0x12 0x10: AAC-LC, index 4 (44100), stereo.
   let esds = xesds(0x40, 64000, Some(xbytes([0x12, 0x10])))
@@ -409,6 +458,7 @@ test "mov: esds with AAC DecoderSpecificInfo fills codec config" {
   assert_eq(t.frame_length, 1024)
 }
 
+///|
 test "mov: esds for MPEG-1 audio (0x6b) sets codec but no extradata" {
   // As per 14496-3 9.D.2.2, no DecoderSpecificInfo is honoured for MPEG audio.
   let esds = xesds(0x6B, 128000, Some(xbytes([1, 2, 3])))
@@ -432,7 +482,8 @@ test "mov: esds for MPEG-1 audio (0x6b) sets codec but no extradata" {
 // Fragmented MP4 helpers
 // ---------------------------------------------------------------------------
 
-fn xtrex(track_id : UInt) -> Array[Byte] {
+///|
+fn xtrex(track_id : UInt32) -> Array[Byte] {
   xbox(
     "trex",
     xconcat([
@@ -447,7 +498,8 @@ fn xtrex(track_id : UInt) -> Array[Byte] {
   )
 }
 
-///| An empty-video-track init segment for fragmented files. */
+///|
+/// An empty-video-track init segment for fragmented files. */
 fn xfrag_init() -> Array[Byte] {
   let stbl = xstbl([
     xstsd([xvideo_entry("avc1", [])]),
@@ -460,9 +512,10 @@ fn xfrag_init() -> Array[Byte] {
   xmoov([xmvhd(1000, 0), trak, xbox("mvex", xtrex(1))])
 }
 
-///| One trun row: (size, duration, flags); data-offset and per-sample
+///|
+/// One trun row: (size, duration, flags); data-offset and per-sample
 /// duration/size/flags are declared.
-fn xtrun(samples : Array[(UInt, UInt, UInt)]) -> Array[Byte] {
+fn xtrun(samples : Array[(UInt32, UInt32, UInt32)]) -> Array[Byte] {
   let p : Array[Byte] = []
   xpush(p, xbytes([0]))
   xpush(p, xb24(0x701)) // data-offset | duration | size | flags
@@ -477,24 +530,27 @@ fn xtrun(samples : Array[(UInt, UInt, UInt)]) -> Array[Byte] {
   xbox("trun", p)
 }
 
-fn xtfhd(track_id : UInt) -> Array[Byte] {
+///|
+fn xtfhd(track_id : UInt32) -> Array[Byte] {
   // default-base-is-moof, no explicit fields.
   xbox("tfhd", xconcat([xbytes([0]), xb24(0x020000), xb32(track_id)]))
 }
 
+///|
 fn xtfdt(t : Int64) -> Array[Byte] {
   xbox("tfdt", xconcat([xbytes([1]), xb24(0), xb64(t.reinterpret_as_uint64())]))
 }
 
-///| One `moof`/`mdat` pair with a single `traf`. The trun data offset is
+///|
+/// One `moof`/`mdat` pair with a single `traf`. The trun data offset is
 /// patched to `moof size + 8 + offset_in_mdat` after assembly so the
 /// materialised sample offsets are real.
 fn xmoof(
   tfdt : Int64?,
-  offset_in_mdat : Int,
+  offset_in_mdat : Int32,
   traf_extra : Array[Array[Byte]],
-  samples : Array[(UInt, UInt, UInt)],
-  data : Array[Byte]
+  samples : Array[(UInt32, UInt32, UInt32)],
+  data : Array[Byte],
 ) -> (Array[Byte], Array[Byte]) {
   let base : Array[Array[Byte]] = match tfdt {
     Some(t) => [xtfhd(1), xtfdt(t)]
@@ -523,8 +579,9 @@ fn xmoof(
   (moof, xmdat(data))
 }
 
-///| N filler bytes. */
-fn xfill(n : Int) -> Array[Byte] {
+///|
+/// N filler bytes. */
+fn xfill(n : Int32) -> Array[Byte] {
   Array::make(n, b'\x00')
 }
 
@@ -532,8 +589,13 @@ fn xfill(n : Int) -> Array[Byte] {
 // sidx / mfra
 // ---------------------------------------------------------------------------
 
-///| `sidx` version 1 with one reference per (size, duration). */
-fn xsidx(timescale : UInt, earliest : Int64, refs : Array[(UInt, UInt)]) -> Array[Byte] {
+///|
+/// `sidx` version 1 with one reference per (size, duration). */
+fn xsidx(
+  timescale : UInt32,
+  earliest : Int64,
+  refs : Array[(UInt32, UInt32)],
+) -> Array[Byte] {
   let p : Array[Byte] = []
   xpush(p, xbytes([1]))
   xpush(p, xb24(0))
@@ -552,7 +614,8 @@ fn xsidx(timescale : UInt, earliest : Int64, refs : Array[(UInt, UInt)]) -> Arra
   xbox("sidx", p)
 }
 
-///| mfra trailer with a v1 tfra of the given (time, offset) entries, plus
+///|
+/// mfra trailer with a v1 tfra of the given (time, offset) entries, plus
 /// the trailing `mfro` box whose last word carries the mfra size (this is
 /// what `mov_read_mfra` probes from the end of the file).
 fn xmfra(entries : Array[(Int64, Int64)]) -> Array[Byte] {
@@ -578,6 +641,7 @@ fn xmfra(entries : Array[(Int64, Int64)]) -> Array[Byte] {
   xbox("mfra", xconcat([tfra_box, mfro]))
 }
 
+///|
 test "mov: sidx references are recorded and set the track duration" {
   // Layout: ftyp + moov + sidx + moof+mdat + sidx + moof+mdat + mfra.
   let all : Array[Byte] = []
@@ -636,6 +700,7 @@ test "mov: sidx references are recorded and set the track duration" {
   assert_eq(t.samples[2].dts, 1000)
 }
 
+///|
 test "mov: trun without tfdt falls back to the sidx time" {
   let all : Array[Byte] = []
   xpush(all, xftyp("isom"))
@@ -647,7 +712,9 @@ test "mov: trun without tfdt falls back to the sidx time" {
     [(10, 100, 0x02000000), (10, 100, 0x01010000)],
     xfill(20),
   )
-  let sidx = xsidx(1000, 7000, [((moof.length() + mdat.length()).reinterpret_as_uint(), 200U)])
+  let sidx = xsidx(1000, 7000, [
+    ((moof.length() + mdat.length()).reinterpret_as_uint(), 200U),
+  ])
   xpush(all, sidx)
   xpush(all, moof)
   xpush(all, mdat)
@@ -660,6 +727,7 @@ test "mov: trun without tfdt falls back to the sidx time" {
   assert_eq(t.samples[1].dts, 7100)
 }
 
+///|
 test "mov: overlapping fragments flag their samples as discard" {
   let all : Array[Byte] = []
   xpush(all, xftyp("isom"))
@@ -717,7 +785,8 @@ test "mov: overlapping fragments flag their samples as discard" {
 // seek
 // ---------------------------------------------------------------------------
 
-///| The classic 10-sample video table: dts 0..900 step 100, keyframes 1 and 7
+///|
+/// The classic 10-sample video table: dts 0..900 step 100, keyframes 1 and 7
 /// (1-based stss), two chunks of 5 samples.
 fn xseek_movie() -> Mp4Movie {
   let stbl = xstbl([
@@ -733,6 +802,7 @@ fn xseek_movie() -> Mp4Movie {
   av_mov_open(bytes).unwrap()
 }
 
+///|
 test "seek: backward seek snaps to keyframes" {
   let movie = xseek_movie()
   let t = movie.tracks[0]
@@ -756,6 +826,7 @@ test "seek: backward seek snaps to keyframes" {
   assert_eq(s5.0, 3)
 }
 
+///|
 test "seek: forward (non-backward) seek finds the next entry" {
   let movie = xseek_movie()
   let t = movie.tracks[0]
@@ -769,6 +840,7 @@ test "seek: forward (non-backward) seek finds the next entry" {
   assert_eq(s3.0, 0)
 }
 
+///|
 test "seek: fragmented track seeks over materialised samples" {
   let all : Array[Byte] = []
   xpush(all, xftyp("isom"))
@@ -807,6 +879,7 @@ test "seek: fragmented track seeks over materialised samples" {
 // Uncompressed audio chunk demuxing
 // ---------------------------------------------------------------------------
 
+///|
 test "mov: old uncompressed audio chunk demuxing (sowt)" {
   // QuickTime file: 2500 samples of 16-bit mono PCM in two chunks
   // (1500 + 1000), stts a single entry of duration 1.
@@ -849,6 +922,7 @@ test "mov: old uncompressed audio chunk demuxing (sowt)" {
   }
 }
 
+///|
 test "mov: audio entry version 1 packing (samples_per_frame from stsd)" {
   // A QT version-1 entry's samples_per_frame/bytes_per_frame are picked up;
   // with spf == 1 packets are still 1024 samples of sc->sample_size bytes.
@@ -879,8 +953,9 @@ test "mov: audio entry version 1 packing (samples_per_frame from stsd)" {
 // cenc: senc inside moof, saiz/saio auxiliary info
 // ---------------------------------------------------------------------------
 
-///| sinf/schm(cenc)/schi/tenc boxes for an encrypted video sample entry. */
-fn xenc_sinf(per_sample_iv : Int) -> Array[Array[Byte]] {
+///|
+/// sinf/schm(cenc)/schi/tenc boxes for an encrypted video sample entry. */
+fn xenc_sinf(per_sample_iv : Int32) -> Array[Array[Byte]] {
   let tenc : Array[Byte] = []
   xpush(tenc, xbytes([0]))
   xpush(tenc, xb24(0))
@@ -888,14 +963,19 @@ fn xenc_sinf(per_sample_iv : Int) -> Array[Array[Byte]] {
   xpush(tenc, xbytes([0]))
   xpush(tenc, xbytes([1])) // is_protected
   xpush(tenc, xbytes([per_sample_iv]))
-  xpush(tenc, xbytes([
-    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xF0, 0x01,
-  ])) // default key ID
+  xpush(
+    tenc,
+    xbytes([
+      0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
+      0xEE, 0xF0, 0x01,
+    ]),
+  ) // default key ID
   let schi = xbox("schi", xbox("tenc", tenc))
   let schm = xbox("schm", xconcat([xb32(0), xb32(0x63656E63)]))
   [xbox("sinf", xconcat([schm, schi]))]
 }
 
+///|
 test "mov: senc inside moof appends per-fragment sample IVs" {
   let all : Array[Byte] = []
   xpush(all, xftyp("isom"))
@@ -937,6 +1017,7 @@ test "mov: senc inside moof appends per-fragment sample IVs" {
   assert_eq(e1.iv[15], 2)
 }
 
+///|
 test "mov: saiz/saio stream-level auxiliary info builds the encryption samples" {
   let all : Array[Byte] = []
   xpush(all, xftyp("isom"))
@@ -946,10 +1027,7 @@ test "mov: saiz/saio stream-level auxiliary info builds the encryption samples" 
     "saiz",
     xconcat([xbytes([0]), xb24(0), xbytes([16]), xb32(2)]),
   )
-  let saio = xbox(
-    "saio",
-    xconcat([xbytes([0]), xb24(0), xb32(1), xb32(0)]),
-  )
+  let saio = xbox("saio", xconcat([xbytes([0]), xb24(0), xb32(1), xb32(0)]))
   let stbl = xstbl([
     xstsd([xvideo_entry("avc1", xenc_sinf(16))]),
     xstts([]),
@@ -958,13 +1036,7 @@ test "mov: saiz/saio stream-level auxiliary info builds the encryption samples" 
     xstco([]),
   ])
   let trak = xtrak([xtkhd(1), xmdia([xmdhd(1000, 0), xhdlr("vide"), stbl])])
-  xpush(all, xmoov([
-    xmvhd(1000, 0),
-    trak,
-    xbox("mvex", xtrex(1)),
-    saiz,
-    saio,
-  ]))
+  xpush(all, xmoov([xmvhd(1000, 0), trak, xbox("mvex", xtrex(1)), saiz, saio]))
   let aux = xconcat([Array::make(16, b'\xA1'), Array::make(16, b'\xB2')])
   let aux_off = all.length() + 8 // payload of the free box below
   let saio_entry_pos = all.length() - saio.length() + 8 + 4 + 4

@@ -24,7 +24,8 @@
 /// Gated to `native`/`wasm`; other targets keep the scalar `av_base64_encode`.
 /// Equal outputs are asserted in `base64_v128_wbtest.mbt`.
 
-///| Map 6-bit indices (0..63) to the standard base64 alphabet, branchless. */
+///|
+/// Map 6-bit indices (0..63) to the standard base64 alphabet, branchless. */
 #cfg(any(target="native", target="wasm"))
 fn b64_ascii(idx : V128) -> V128 {
   // idx + 'A'
@@ -81,8 +82,8 @@ pub fn av_base64_encode_v128(input : Bytes) -> String {
   let mut i = 0
   let mut o = 0
   while i + 16 <= n {
-    match input[i : i + 16] {
-      [v128le(v), .. _] => {
+    match input[i:i + 16] {
+      [v128le(v), ..] => {
         let w = @v128.i8x16_swizzle(v, gather)
         let c0 = @v128.v128_and_(@v128.i32x4_shr_u(w, 2), m3f)
         let c1 = @v128.v128_or_(
@@ -99,24 +100,7 @@ pub fn av_base64_encode_v128(input : Bytes) -> String {
           @v128.i16x8_narrow_i32x4_u(c2, c3),
         )
         let ord = @v128.i8x16_shuffle(
-          packed,
-          packed,
-          0,
-          4,
-          8,
-          12,
-          1,
-          5,
-          9,
-          13,
-          2,
-          6,
-          10,
-          14,
-          3,
-          7,
-          11,
-          15,
+          packed, packed, 0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15,
         )
         @v128.v128_store(out, o, b64_ascii(ord))
         i = i + 12

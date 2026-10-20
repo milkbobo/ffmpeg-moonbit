@@ -10,7 +10,8 @@
 /// 257-entry table whose element 256 carries the same `1` sentinel that the C
 /// hardcoded tables contain.
 
-///| CRC ids, same numeric order as `AVCRCId` in libavutil/crc.h. */
+///|
+/// CRC ids, same numeric order as `AVCRCId` in libavutil/crc.h. */
 pub enum AVCRCId {
   Crc8Atm
   Crc16Ansi
@@ -22,40 +23,60 @@ pub enum AVCRCId {
   Crc8Ebu
 }
 
-///| Number of standard CRC ids (the `AV_CRC_MAX` equivalent). */
-pub let av_crc_max : Int = 8
+///|
+/// Number of standard CRC ids (the `AV_CRC_MAX` equivalent). */
+pub let av_crc_max : Int32 = 8
 
-///| All standard CRC ids, in the `AVCRCId` order used by libavutil/crc.h. */
+///|
+/// All standard CRC ids, in the `AVCRCId` order used by libavutil/crc.h. */
 pub fn av_crc_ids() -> Array[AVCRCId] {
-  [Crc8Atm, Crc16Ansi, Crc16Ccitt, Crc32Ieee, Crc32IeeeLe, Crc16AnsiLe, Crc24Ieee, Crc8Ebu]
+  [
+    Crc8Atm,
+    Crc16Ansi,
+    Crc16Ccitt,
+    Crc32Ieee,
+    Crc32IeeeLe,
+    Crc16AnsiLe,
+    Crc24Ieee,
+    Crc8Ebu,
+  ]
 }
 
-///| `av_bswap32`: byte-swap a 32-bit value. */
-fn crc_bswap32(x : UInt) -> UInt {
+///|
+/// `av_bswap32`: byte-swap a 32-bit value. */
+fn crc_bswap32(x : UInt32) -> UInt32 {
   (x >> 24) | ((x >> 8) & 0xFF00) | ((x << 8) & 0xFF0000) | (x << 24)
 }
 
 ///|
 /// `av_crc_init`: build a 257-entry CRC lookup table.
 /// Returns `Err` for out-of-range parameters, mirroring `AVERROR(EINVAL)`.
-pub fn av_crc_init(le : Bool, bits : Int, poly : UInt) -> Result[FixedArray[UInt], String] {
+pub fn av_crc_init(
+  le : Bool,
+  bits : Int32,
+  poly : UInt32,
+) -> Result[FixedArray[UInt32], String] {
   let one : UInt64 = 1
-  if bits < 8 || bits > 32 || poly.to_uint64() >= (one << bits) {
+  if bits < 8 || bits > 32 || poly.to_uint64() >= one << bits {
     return Err("EINVAL")
   }
-  let ctx : FixedArray[UInt] = FixedArray::make(257, 0)
+  let ctx : FixedArray[UInt32] = FixedArray::make(257, 0)
   for i = 0; i < 256; i = i + 1 {
     if le {
-      let mut c : UInt = i.reinterpret_as_uint()
+      let mut c : UInt32 = i.reinterpret_as_uint()
       for j = 0; j < 8; j = j + 1 {
-        let mask : UInt = if (c & 1) != 0 { 0xFFFFFFFF } else { 0 }
+        let mask : UInt32 = if (c & 1) != 0 { 0xFFFFFFFF } else { 0 }
         c = (c >> 1) ^ (poly & mask)
       }
       ctx[i] = c
     } else {
-      let mut c : UInt = i.reinterpret_as_uint() << 24
+      let mut c : UInt32 = i.reinterpret_as_uint() << 24
       for j = 0; j < 8; j = j + 1 {
-        let mask : UInt = if c.reinterpret_as_int() < 0 { 0xFFFFFFFF } else { 0 }
+        let mask : UInt32 = if c.reinterpret_as_int() < 0 {
+          0xFFFFFFFF
+        } else {
+          0
+        }
         c = (c << 1) ^ ((poly << (32 - bits)) & mask)
       }
       ctx[i] = crc_bswap32(c)
@@ -69,8 +90,8 @@ pub fn av_crc_init(le : Bool, bits : Int, poly : UInt) -> Result[FixedArray[UInt
 /// `av_crc_get_table`: return the standard table for a CRC id.
 /// Equivalent to `av_crc_get_table` in libavutil/crc.c, which lazily
 /// initialises the table described by the `DECLARE_CRC_INIT_TABLE_ONCE` rows.
-pub fn av_crc_get_table(crc_id : AVCRCId) -> Result[FixedArray[UInt], String] {
-  let spec : (Bool, Int, UInt) = match crc_id {
+pub fn av_crc_get_table(crc_id : AVCRCId) -> Result[FixedArray[UInt32], String] {
+  let spec : (Bool, Int32, UInt32) = match crc_id {
     Crc8Atm => (false, 8, 0x07)
     Crc8Ebu => (false, 8, 0x1D)
     Crc16Ansi => (false, 16, 0x8005)
@@ -86,7 +107,7 @@ pub fn av_crc_get_table(crc_id : AVCRCId) -> Result[FixedArray[UInt], String] {
 
 ///|
 /// `av_crc`: update `crc` with `buffer`, byte at a time.
-pub fn av_crc(ctx : FixedArray[UInt], crc : UInt, buffer : Bytes) -> UInt {
+pub fn av_crc(ctx : FixedArray[UInt32], crc : UInt32, buffer : Bytes) -> UInt32 {
   let mut crc = crc
   for i = 0; i < buffer.length(); i = i + 1 {
     let idx = (crc ^ buffer[i].to_uint()) & 0xFF

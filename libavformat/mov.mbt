@@ -66,7 +66,8 @@
 ///     of being consulted lazily, the `free`/`hoov`-hiding-`moov` recovery is
 ///     omitted, and corrupt-count guards are tightened relative to the C code.
 
-///| Parse failure, corresponding to the negative returns in libavformat/mov.c. */
+///|
+/// Parse failure, corresponding to the negative returns in libavformat/mov.c. */
 pub suberror MovError {
   InvalidData(String)
 }
@@ -75,32 +76,37 @@ pub suberror MovError {
 // Data model (mirrors the MOV structs in libavformat/isom.h)
 // ---------------------------------------------------------------------------
 
-///| `MOVStts` from libavformat/isom.h. */
+///|
+/// `MOVStts` from libavformat/isom.h. */
 pub struct MovStts {
-  count : Int
-  duration : UInt
+  count : Int32
+  duration : UInt32
 }
 
-///| `MOVCtts` from libavformat/isom.h. */
+///|
+/// `MOVCtts` from libavformat/isom.h. */
 pub struct MovCtts {
-  count : Int
-  offset : Int
+  count : Int32
+  offset : Int32
 }
 
-///| `MOVStsc` from libavformat/isom.h. */
+///|
+/// `MOVStsc` from libavformat/isom.h. */
 pub struct MovStsc {
-  first : Int
-  count : Int
-  id : Int
+  first : Int32
+  count : Int32
+  id : Int32
 }
 
-///| `MOVSbgp` from libavformat/isom.h: one sample-to-group run. */
+///|
+/// `MOVSbgp` from libavformat/isom.h: one sample-to-group run. */
 pub struct MovSbgp {
-  count : UInt
-  index : UInt
+  count : UInt32
+  index : UInt32
 }
 
-///| `MOVElst` from libavformat/isom.h. */
+///|
+/// `MOVElst` from libavformat/isom.h. */
 pub struct MovElst {
   duration : Int64
   time : Int64
@@ -112,9 +118,9 @@ pub struct MovElst {
 /// merging `stts` and `ctts`, where `offset` is the CTTS presentation offset and
 /// `duration` the STTS sample duration.
 pub struct MovTts {
-  count : Int
-  offset : Int
-  duration : UInt
+  count : Int32
+  offset : Int32
+  duration : UInt32
 }
 
 ///|
@@ -125,19 +131,20 @@ pub struct MovTts {
 /// and skipped at demux time.
 pub struct Mp4Sample {
   offset : Int64
-  size : UInt
-  ///| `AVIndexEntry.timestamp`; rewritten by `mov_fix_index`. */
+  size : UInt32
+  /// `AVIndexEntry.timestamp`; rewritten by `mov_fix_index`. */
   mut dts : Int64
-  ///| Presentation timestamp derived from the tts table at demux; recomputed
+  /// Presentation timestamp derived from the tts table at demux; recomputed
   /// after `mov_fix_index` rebuilds the tts runs. */
   mut pts : Int64
-  duration : UInt
+  duration : UInt32
   keyframe : Bool
-  min_distance : UInt
+  min_distance : UInt32
   discard : Bool
 }
 
-///| Media type derived from the `hdlr` handler type (AVMediaType subset). */
+///|
+/// Media type derived from the `hdlr` handler type (AVMediaType subset). */
 pub enum Mp4MediaType {
   Video
   Audio
@@ -145,7 +152,8 @@ pub enum Mp4MediaType {
   Unknown
 }
 
-///| True for video tracks, avoiding a structural `Eq` on `Mp4MediaType`. */
+///|
+/// True for video tracks, avoiding a structural `Eq` on `Mp4MediaType`. */
 fn media_is_video(t : Mp4MediaType) -> Bool {
   match t {
     Video => true
@@ -153,7 +161,8 @@ fn media_is_video(t : Mp4MediaType) -> Bool {
   }
 }
 
-///| True for audio tracks. */
+///|
+/// True for audio tracks. */
 fn media_is_audio(t : Mp4MediaType) -> Bool {
   match t {
     Audio => true
@@ -168,91 +177,91 @@ fn media_is_audio(t : Mp4MediaType) -> Bool {
 /// The array-valued fields are only ever mutated in place (`push`/element
 /// assignment), so they carry no `mut` marker.
 pub struct Mp4Track {
-  mut track_id : UInt
+  mut track_id : UInt32
   mut handler : String
   mut media_type : Mp4MediaType
   mut codec : String
-  ///| FFmpeg codec-id name resolved from `esds` (`""` when not set). */
+  /// FFmpeg codec-id name resolved from `esds` (`""` when not set). */
   mut codec_id : String
-  ///| Raw codec private data (`avcC`/`hvcC`/`av1C`/`glbl` payload or the `esds` DecoderSpecificInfo). */
+  /// Raw codec private data (`avcC`/`hvcC`/`av1C`/`glbl` payload or the `esds` DecoderSpecificInfo). */
   mut extradata : Bytes?
-  ///| `sc->extradata[]`: one extradata slot per sample-description entry. */
+  /// `sc->extradata[]`: one extradata slot per sample-description entry. */
   stsd_extradata : Array[Bytes?]
-  ///| `sc->stsd_count`: entries seen in the `stsd` box (parsed or skipped). */
-  mut stsd_count : Int
-  ///| `sc->pseudo_stream_id`: -1 keeps every chunk in the index, else only
+  /// `sc->stsd_count`: entries seen in the `stsd` box (parsed or skipped). */
+  mut stsd_count : Int32
+  /// `sc->pseudo_stream_id`: -1 keeps every chunk in the index, else only
   /// chunks whose `stsc` id - 1 equals it are indexed. */
-  mut pseudo_stream_id : Int
-  ///| `sc->last_stsd_index`: sample description the first chunk references. */
-  mut last_stsd_index : Int
-  mut timescale : UInt
+  mut pseudo_stream_id : Int32
+  /// `sc->last_stsd_index`: sample description the first chunk references. */
+  mut last_stsd_index : Int32
+  mut timescale : UInt32
   mut duration : UInt64
-  mut width : Int
-  mut height : Int
-  mut sample_rate : UInt
-  mut channels : UInt
-  mut bits_per_sample : UInt
-  ///| `st->codecpar->frame_size` from the AAC AudioSpecificConfig. */
-  mut frame_length : Int
-  ///| `st->codecpar->bit_rate` from the `esds` DecoderConfigDescriptor. */
-  mut bit_rate : UInt
+  mut width : Int32
+  mut height : Int32
+  mut sample_rate : UInt32
+  mut channels : UInt32
+  mut bits_per_sample : UInt32
+  /// `st->codecpar->frame_size` from the AAC AudioSpecificConfig. */
+  mut frame_length : Int32
+  /// `st->codecpar->bit_rate` from the `esds` DecoderConfigDescriptor. */
+  mut bit_rate : UInt32
   mut encoder : String
-  ///| Audio sample entry v1/v2 packing (`sc->samples_per_frame`). */
-  mut samples_per_frame : UInt
-  ///| Audio sample entry v1/v2 packing (`sc->bytes_per_frame`). */
-  mut bytes_per_frame : UInt
-  ///| Audio sample entry `compression_id` (`sc->audio_cid`). */
-  mut audio_cid : Int
+  /// Audio sample entry v1/v2 packing (`sc->samples_per_frame`). */
+  mut samples_per_frame : UInt32
+  /// Audio sample entry v1/v2 packing (`sc->bytes_per_frame`). */
+  mut bytes_per_frame : UInt32
+  /// Audio sample entry `compression_id` (`sc->audio_cid`). */
+  mut audio_cid : Int32
   stts : Array[MovStts]
   ctts : Array[MovCtts]
   stsc : Array[MovStsc]
-  mut stsz_sample_size : UInt
-  mut sample_size : UInt
-  sample_sizes : Array[UInt]
-  mut sample_count : Int
+  mut stsz_sample_size : UInt32
+  mut sample_size : UInt32
+  sample_sizes : Array[UInt32]
+  mut sample_count : Int32
   chunk_offsets : Array[Int64]
-  keyframes : Array[UInt]
-  stps : Array[UInt]
+  keyframes : Array[UInt32]
+  stps : Array[UInt32]
   mut keyframe_absent : Bool
-  ///| `sc->sgpd_sync`: NAL unit types of the 'sync' sample-group descriptions. */
-  sgpd_sync : Array[UInt]
-  ///| `sc->sync_group`: 'sync' sample-to-group runs (`sbgp`). */
+  /// `sc->sgpd_sync`: NAL unit types of the 'sync' sample-group descriptions. */
+  sgpd_sync : Array[UInt32]
+  /// `sc->sync_group`: 'sync' sample-to-group runs (`sbgp`). */
   sync_group : Array[MovSbgp]
-  ///| `sc->rap_group`: 'rap ' sample-to-group runs (`sbgp`). */
+  /// `sc->rap_group`: 'rap ' sample-to-group runs (`sbgp`). */
   rap_group : Array[MovSbgp]
-  ///| `sc->sample_offsets`: per-sample ctts offsets, unrolled (open-GOP path). */
-  sample_offsets : Array[Int]
-  ///| `sc->open_key_samples`: sample numbers of open-GOP (CRA) key samples. */
-  open_key_samples : Array[Int]
+  /// `sc->sample_offsets`: per-sample ctts offsets, unrolled (open-GOP path). */
+  sample_offsets : Array[Int32]
+  /// `sc->open_key_samples`: sample numbers of open-GOP (CRA) key samples. */
+  open_key_samples : Array[Int32]
   elst : Array[MovElst]
-  mut stsd_version : UInt
-  mut dts_shift : Int
+  mut stsd_version : UInt32
+  mut dts_shift : Int32
   mut time_offset : Int64
   mut track_end : Int64
-  mut min_sample_duration : UInt
-  ///| `msc->min_corrected_pts`: PTS floor from the elst pre-pass, recomputed
+  mut min_sample_duration : UInt32
+  /// `msc->min_corrected_pts`: PTS floor from the elst pre-pass, recomputed
   /// by `mov_fix_index`; `mov_seek_stream` subtracts it like the C does. */
   mut min_corrected_pts : Int64
-  ///| `sti->skip_samples` (== `codecpar->initial_padding` after the fix). */
-  mut skip_samples : Int
-  ///| `st->start_time` in track timescale; `av_nopts_value` until set. */
+  /// `sti->skip_samples` (== `codecpar->initial_padding` after the fix). */
+  mut skip_samples : Int32
+  /// `st->start_time` in track timescale; `av_nopts_value` until set. */
   mut start_time : Int64
-  ///| `codecpar->video_delay` from `mov_estimate_video_delay` (H264 only). */
-  mut video_delay : Int
+  /// `codecpar->video_delay` from `mov_estimate_video_delay` (H264 only). */
+  mut video_delay : Int32
   mut has_sidx : Bool
-  mut cenc_scheme : UInt
-  mut cenc_per_sample_iv_size : Int
-  mut cenc_crypt_byte_block : UInt
-  mut cenc_skip_byte_block : UInt
+  mut cenc_scheme : UInt32
+  mut cenc_per_sample_iv_size : Int32
+  mut cenc_crypt_byte_block : UInt32
+  mut cenc_skip_byte_block : UInt32
   mut cenc_default_iv : FixedArray[Byte]
   cenc_samples : Array[MovEncSample?]
-  ///| `saiz`: default per-sample size of the auxiliary info chunk. */
-  mut aux_info_default_size : Int
-  ///| `saiz`: per-sample sizes when the default is 0. */
-  aux_info_sizes : Array[UInt]
-  ///| `saiz`: declared sample count. */
-  mut aux_info_sample_count : Int
-  ///| `saio`: absolute offsets of the auxiliary info chunks. */
+  /// `saiz`: default per-sample size of the auxiliary info chunk. */
+  mut aux_info_default_size : Int32
+  /// `saiz`: per-sample sizes when the default is 0. */
+  aux_info_sizes : Array[UInt32]
+  /// `saiz`: declared sample count. */
+  mut aux_info_sample_count : Int32
+  /// `saio`: absolute offsets of the auxiliary info chunks. */
   aux_info_offsets : Array[Int64]
   mut tts : Array[MovTts]
   mut has_stts : Bool
@@ -261,49 +270,54 @@ pub struct Mp4Track {
   samples : Array[Mp4Sample]
 }
 
-///| `MOVStreamContext` fragment-reference state from `mov_read_sidx`, kept per reference. */
+///|
+/// `MOVStreamContext` fragment-reference state from `mov_read_sidx`, kept per reference. */
 pub struct MovSidxRef {
-  track_id : UInt
-  ///| Byte offset of the referenced fragment (its `moof`). */
+  track_id : UInt32
+  /// Byte offset of the referenced fragment (its `moof`). */
   offset : Int64
-  ///| Earliest presentation time rescaled to the track timescale. */
+  /// Earliest presentation time rescaled to the track timescale. */
   pts : Int64
-  ///| Subsegment byte size. */
-  size : UInt
-  ///| Subsegment duration in sidx timescale units. */
-  duration : UInt
+  /// Subsegment byte size. */
+  size : UInt32
+  /// Subsegment duration in sidx timescale units. */
+  duration : UInt32
 }
 
-///| One `tfra` entry (fragment random-access point). */
+///|
+/// One `tfra` entry (fragment random-access point). */
 pub struct MovTfraEntry {
   time : Int64
   offset : Int64
 }
 
-///| A `tfra` box: random-access points of one track. */
+///|
+/// A `tfra` box: random-access points of one track. */
 pub struct MovTfra {
-  track_id : UInt
+  track_id : UInt32
   entries : Array[MovTfraEntry]
 }
 
-///| Movie-level state, corresponding to the `MOVContext`/`AVFormatContext` fields used here. */
+///|
+/// Movie-level state, corresponding to the `MOVContext`/`AVFormatContext` fields used here. */
 pub struct Mp4Movie {
-  ///| `mov->advanced_editlist` (default on); auto-disabled by the first
+  /// `mov->advanced_editlist` (default on); auto-disabled by the first
   /// fragmented track, exactly at that trak's build point as in the C. */
   mut advanced_editlist : Bool
-  mut timescale : UInt
+  mut timescale : UInt32
   mut duration : UInt64
   mut isom : Bool
   mut major_brand : String
-  ///| All compatible brands of `ftyp`, concatenated (used by the QuickTime audio-entry check). */
+  /// All compatible brands of `ftyp`, concatenated (used by the QuickTime audio-entry check). */
   mut compatible_brands : String
-  ///| `sidx` references, in file order. */
+  /// `sidx` references, in file order. */
   sidx_refs : Array[MovSidxRef]
-  ///| `mfra`/`tfra` random-access tables when the file ends with an `mfra`. */
+  /// `mfra`/`tfra` random-access tables when the file ends with an `mfra`. */
   mfra : Array[MovTfra]
   tracks : Array[Mp4Track]
 }
 
+///|
 fn new_track() -> Mp4Track {
   {
     track_id: 0,
@@ -374,6 +388,7 @@ fn new_track() -> Mp4Track {
   }
 }
 
+///|
 fn new_movie() -> Mp4Movie {
   {
     advanced_editlist: true,
@@ -388,86 +403,110 @@ fn new_movie() -> Mp4Movie {
   }
 }
 
-///| `max_stts_delta` default from the mov demuxer options: `UINT_MAX - 48000*10`. */
-let max_stts_delta : UInt = 4294487295
+///|
+/// `max_stts_delta` default from the mov demuxer options: `UINT_MAX - 48000*10`. */
+let max_stts_delta : UInt32 = 4294487295
 
-///| `UINT32_MAX`, used as mdhd's "unknown duration" marker in version 0. */
+///|
+/// `UINT32_MAX`, used as mdhd's "unknown duration" marker in version 0. */
 let u32_max_u64 : UInt64 = 0xFFFFFFFF
 
-///| `AV_NOPTS_VALUE`: sentinel for "no presentation timestamp". */
+///|
+/// `AV_NOPTS_VALUE`: sentinel for "no presentation timestamp". */
 let av_nopts_value : Int64 = -9223372036854775807L - 1L
 
-///| `UINT64_MAX`, the version 1 "unknown duration" marker. */
+///|
+/// `UINT64_MAX`, the version 1 "unknown duration" marker. */
 let u64_max : UInt64 = 0xFFFFFFFFFFFFFFFF
 
-///| `INT64_MAX`, used as the "no next chunk" sentinel in `mov_build_index`. */
+///|
+/// `INT64_MAX`, used as the "no next chunk" sentinel in `mov_build_index`. */
 let i64_max : Int64 = 0x7FFFFFFFFFFFFFFF
 
 // Fragment flags, from libavformat/isom.h.
 
-///| `MOV_TFHD_BASE_DATA_OFFSET`. */
-let tfhd_base_data_offset : UInt = 0x000001
+///|
+/// `MOV_TFHD_BASE_DATA_OFFSET`. */
+let tfhd_base_data_offset : UInt32 = 0x000001
 
-///| `MOV_TFHD_STSD_ID`. */
-let tfhd_stsd_id : UInt = 0x000002
+///|
+/// `MOV_TFHD_STSD_ID`. */
+let tfhd_stsd_id : UInt32 = 0x000002
 
-///| `MOV_TFHD_DEFAULT_DURATION`. */
-let tfhd_default_duration : UInt = 0x000008
+///|
+/// `MOV_TFHD_DEFAULT_DURATION`. */
+let tfhd_default_duration : UInt32 = 0x000008
 
-///| `MOV_TFHD_DEFAULT_SIZE`. */
-let tfhd_default_size : UInt = 0x000010
+///|
+/// `MOV_TFHD_DEFAULT_SIZE`. */
+let tfhd_default_size : UInt32 = 0x000010
 
-///| `MOV_TFHD_DEFAULT_FLAGS`. */
-let tfhd_default_flags : UInt = 0x000020
+///|
+/// `MOV_TFHD_DEFAULT_FLAGS`. */
+let tfhd_default_flags : UInt32 = 0x000020
 
-///| `MOV_TFHD_DEFAULT_BASE_IS_MOOF`. */
-let tfhd_default_base_is_moof : UInt = 0x020000
+///|
+/// `MOV_TFHD_DEFAULT_BASE_IS_MOOF`. */
+let tfhd_default_base_is_moof : UInt32 = 0x020000
 
-///| `MOV_TRUN_DATA_OFFSET`. */
-let trun_data_offset : UInt = 0x0001
+///|
+/// `MOV_TRUN_DATA_OFFSET`. */
+let trun_data_offset : UInt32 = 0x0001
 
-///| `MOV_TRUN_FIRST_SAMPLE_FLAGS`. */
-let trun_first_sample_flags : UInt = 0x0004
+///|
+/// `MOV_TRUN_FIRST_SAMPLE_FLAGS`. */
+let trun_first_sample_flags : UInt32 = 0x0004
 
-///| `MOV_TRUN_SAMPLE_DURATION`. */
-let trun_sample_duration : UInt = 0x0100
+///|
+/// `MOV_TRUN_SAMPLE_DURATION`. */
+let trun_sample_duration : UInt32 = 0x0100
 
-///| `MOV_TRUN_SAMPLE_SIZE`. */
-let trun_sample_size : UInt = 0x0200
+///|
+/// `MOV_TRUN_SAMPLE_SIZE`. */
+let trun_sample_size : UInt32 = 0x0200
 
-///| `MOV_TRUN_SAMPLE_FLAGS`. */
-let trun_sample_flags : UInt = 0x0400
+///|
+/// `MOV_TRUN_SAMPLE_FLAGS`. */
+let trun_sample_flags : UInt32 = 0x0400
 
-///| `MOV_TRUN_SAMPLE_CTS`. */
-let trun_sample_cts : UInt = 0x0800
+///|
+/// `MOV_TRUN_SAMPLE_CTS`. */
+let trun_sample_cts : UInt32 = 0x0800
 
-///| `MOV_FRAG_SAMPLE_FLAG_IS_NON_SYNC`. */
-let frag_sample_flag_is_non_sync : UInt = 0x00010000
+///|
+/// `MOV_FRAG_SAMPLE_FLAG_IS_NON_SYNC`. */
+let frag_sample_flag_is_non_sync : UInt32 = 0x00010000
 
-///| `MOV_FRAG_SAMPLE_FLAG_DEPENDS_YES`. */
-let frag_sample_flag_depends_yes : UInt = 0x01000000
+///|
+/// `MOV_FRAG_SAMPLE_FLAG_DEPENDS_YES`. */
+let frag_sample_flag_depends_yes : UInt32 = 0x01000000
 
 // Encryption scheme fourccs, `MKBETAG('c','e','n','c')` etc.
 
-///| `cenc` (AES-CTR, full sample). */
-let schm_cenc : UInt = 0x63656E63
+///|
+/// `cenc` (AES-CTR, full sample). */
+let schm_cenc : UInt32 = 0x63656E63
 
-///| `cens` (AES-CTR with pattern). */
-let schm_cens : UInt = 0x63656E73
+///|
+/// `cens` (AES-CTR with pattern). */
+let schm_cens : UInt32 = 0x63656E73
 
-///| `cbc1` (AES-CBC, full sample). */
-let schm_cbc1 : UInt = 0x63626331
+///|
+/// `cbc1` (AES-CBC, full sample). */
+let schm_cbc1 : UInt32 = 0x63626331
 
-///| `cbcs` (AES-CBC with pattern). */
-let schm_cbcs : UInt = 0x63626373
+///|
+/// `cbcs` (AES-CBC with pattern). */
+let schm_cbcs : UInt32 = 0x63626373
 
-///| `MOVTrackExt` from libavformat/isom.h, parsed from a `trex` box. */
+///|
+/// `MOVTrackExt` from libavformat/isom.h, parsed from a `trex` box. */
 priv struct MovTrex {
-  track_id : UInt
-  stsd_id : UInt
-  duration : UInt
-  size : UInt
-  flags : UInt
+  track_id : UInt32
+  stsd_id : UInt32
+  duration : UInt32
+  size : UInt32
+  flags : UInt32
 }
 
 ///|
@@ -475,20 +514,21 @@ priv struct MovTrex {
 /// state shared across the `tfhd`/`tfdt`/`trun` boxes of one track fragment.
 priv struct MovFrag {
   mut found_tfhd : Bool
-  mut track_id : UInt
-  ///| `frag->stsd_id`: the fragment's sample description (tfhd flag or trex). */
-  mut stsd_id : UInt
+  mut track_id : UInt32
+  /// `frag->stsd_id`: the fragment's sample description (tfhd flag or trex). */
+  mut stsd_id : UInt32
   mut base_data_offset : Int64
   mut moof_offset : Int64
   mut implicit_offset : Int64
-  mut duration : UInt
-  mut size : UInt
-  mut flags : UInt
+  mut duration : UInt32
+  mut size : UInt32
+  mut flags : UInt32
   mut tfdt : Int64
   mut has_tfdt : Bool
 }
 
-///| Zero-valued initial fragment state. */
+///|
+/// Zero-valued initial fragment state. */
 fn new_frag() -> MovFrag {
   {
     found_tfhd: false,
@@ -505,10 +545,11 @@ fn new_frag() -> MovFrag {
   }
 }
 
-///| `AVSubsampleEncryptionInfo` from libavutil/encryption_info.h. */
+///|
+/// `AVSubsampleEncryptionInfo` from libavutil/encryption_info.h. */
 pub struct MovSubSample {
-  bytes_of_clear : Int
-  bytes_of_protected : Int
+  bytes_of_clear : Int32
+  bytes_of_protected : Int32
 }
 
 ///|
@@ -536,18 +577,21 @@ fn mov_clip64(x : Int64) -> Int64 {
   }
 }
 
-///| `mov_stsc_index_valid`: `index < count - 1` (with the C unsigned wraparound). */
-fn mov_stsc_index_valid(index : Int, count : Int) -> Bool {
+///|
+/// `mov_stsc_index_valid`: `index < count - 1` (with the C unsigned wraparound). */
+fn mov_stsc_index_valid(index : Int32, count : Int32) -> Bool {
   index < count - 1
 }
 
-///| 4CC equal to four characters, mirroring `MKTAG('a','b','c','d')`. */
+///|
+/// 4CC equal to four characters, mirroring `MKTAG('a','b','c','d')`. */
 fn tag(a : Char, b : Char, c : Char, d : Char) -> String {
   let chars : Array[Char] = [a, b, c, d]
   String::from_array(chars[:])
 }
 
-///| Saturating 64-bit addition (`av_sat_add64`). */
+///|
+/// Saturating 64-bit addition (`av_sat_add64`). */
 fn sat_add64(a : Int64, b : Int64) -> Int64 {
   if (a >= 0) == (b >= 0) {
     let r = a + b
@@ -565,8 +609,9 @@ fn sat_add64(a : Int64, b : Int64) -> Int64 {
   }
 }
 
-///| `av_rescale` for the edit-list conversion, delegating to the libavutil port. */
-fn mov_rescale(a : Int64, b : UInt, c : UInt) -> Int64 {
+///|
+/// `av_rescale` for the edit-list conversion, delegating to the libavutil port. */
+fn mov_rescale(a : Int64, b : UInt32, c : UInt32) -> Int64 {
   @libavutil.av_rescale(a, b.to_int64(), c.to_int64())
 }
 
@@ -574,6 +619,7 @@ fn mov_rescale(a : Int64, b : UInt, c : UInt) -> Int64 {
 // Parser state and box traversal
 // ---------------------------------------------------------------------------
 
+///|
 priv struct MovState {
   movie : Mp4Movie
   mut cur : Mp4Track
@@ -587,13 +633,25 @@ priv struct MovState {
 /// Dispatch one box to its parser, mirroring the `mov_default_parse_table`
 /// lookup in `mov_read_default`. Unknown boxes are skipped, like the C
 /// fall-through that skips unregistered leaf atoms.
-fn parse_box(st : MovState, r : AvioContext, kind : String, size : Int64) -> Unit raise MovError {
+fn parse_box(
+  st : MovState,
+  r : AvioContext,
+  kind : String,
+  size : Int64,
+) -> Unit raise MovError {
   if kind == "trak" {
     parse_trak(st, r, size)
   } else if kind == "moof" {
     parse_moof(st, r, size)
-  } else if kind == "moov" || kind == "mdia" || kind == "minf" || kind == "stbl" || kind == "edts" ||
-    kind == "mvex" || kind == "traf" || kind == "sinf" || kind == "schi" {
+  } else if kind == "moov" ||
+    kind == "mdia" ||
+    kind == "minf" ||
+    kind == "stbl" ||
+    kind == "edts" ||
+    kind == "mvex" ||
+    kind == "traf" ||
+    kind == "sinf" ||
+    kind == "schi" {
     // Container boxes: recurse, as mov_read_moov/mdia/minf/stbl/edts/mvex/traf/sinf/schi do.
     parse_default(st, r, size)
   } else if kind == "tfhd" {
@@ -654,8 +712,14 @@ fn parse_box(st : MovState, r : AvioContext, kind : String, size : Int64) -> Uni
     parse_sbgp(st, r)
   } else if kind == "esds" {
     parse_esds(st, r)
-  } else if kind == "avcC" || kind == "hvcC" || kind == "av1C" || kind == "glbl" ||
-    kind == "vvcC" || kind == "evcC" || kind == "lvcC" || kind == "apvC" {
+  } else if kind == "avcC" ||
+    kind == "hvcC" ||
+    kind == "av1C" ||
+    kind == "glbl" ||
+    kind == "vvcC" ||
+    kind == "evcC" ||
+    kind == "lvcC" ||
+    kind == "apvC" {
     // mov_read_glbl: the whole payload becomes the codec extradata.
     parse_glbl(st, r, kind, size)
   } else {
@@ -671,7 +735,11 @@ fn parse_box(st : MovState, r : AvioContext, kind : String, size : Int64) -> Uni
 /// intent of the C `while (total_size <= atom.size - 8)` guard while also
 /// terminating on the actual byte budget. The `trak`/`mdat`-outside-`moov`
 /// diagnostic and the non-seekable early return are omitted.
-fn parse_default(st : MovState, r : AvioContext, parent_size : Int64) -> Unit raise MovError {
+fn parse_default(
+  st : MovState,
+  r : AvioContext,
+  parent_size : Int64,
+) -> Unit raise MovError {
   let mut consumed : Int64 = 0
   while consumed <= parent_size - 8 {
     let box_start = r.avio_tell()
@@ -724,7 +792,7 @@ fn parse_default(st : MovState, r : AvioContext, parent_size : Int64) -> Unit ra
 /// power-of-two product that stays representable, and the mantissa (with the
 /// implicit bit) is below 2^53.
 fn mov_int2double(v : UInt64) -> Double {
-  let neg = (v >> 63) == 1
+  let neg = v >> 63 == 1
   let exp = ((v >> 52) & 0x7FF).to_int()
   let mant = v & 0xFFFFFFFFFFFFF
   let mag : Double = if exp == 0 {
@@ -740,11 +808,16 @@ fn mov_int2double(v : UInt64) -> Double {
   } else {
     (4503599627370496.0 + mant.to_double()) * mov_pow2(exp - 1075)
   }
-  if neg { -mag } else { mag }
+  if neg {
+    -mag
+  } else {
+    mag
+  }
 }
 
-///| Exact `2^k` for -1074 <= k <= 1023, by squaring the base power. */
-fn mov_pow2(k : Int) -> Double {
+///|
+/// Exact `2^k` for -1074 <= k <= 1023, by squaring the base power. */
+fn mov_pow2(k : Int32) -> Double {
   let mut result = 1.0
   let mut base = if k < 0 { 0.5 } else { 2.0 }
   let mut e = if k < 0 { -k } else { k }
@@ -777,12 +850,12 @@ fn parse_ftyp(st : MovState, r : AvioContext, size : Int64) -> Unit {
       brands.push(r.avio_r8().to_byte().to_char())
     }
   }
-  st.movie.compatible_brands = st.movie.compatible_brands + String::from_array(
-      brands[:],
-    )
+  st.movie.compatible_brands = st.movie.compatible_brands +
+    String::from_array(brands[:])
 }
 
-///| `mov_read_mvhd`. */
+///|
+/// `mov_read_mvhd`. */
 fn parse_mvhd(st : MovState, r : AvioContext) -> Unit {
   let version = r.avio_r8()
   let _ = r.avio_rb24() // flags
@@ -801,7 +874,8 @@ fn parse_mvhd(st : MovState, r : AvioContext) -> Unit {
   }
 }
 
-///| `mov_read_mdhd`. */
+///|
+/// `mov_read_mdhd`. */
 fn parse_mdhd(st : MovState, r : AvioContext) -> Unit raise MovError {
   if !st.in_trak {
     return
@@ -824,18 +898,15 @@ fn parse_mdhd(st : MovState, r : AvioContext) -> Unit raise MovError {
     raise InvalidData("invalid mdhd time scale")
   }
   st.cur.timescale = raw_ts
-  let dur = if version == 1 {
-    r.avio_rb64()
-  } else {
-    r.avio_rb32().to_uint64()
-  }
+  let dur = if version == 1 { r.avio_rb64() } else { r.avio_rb32().to_uint64() }
   let unknown = if version == 1 { u64_max } else { u32_max_u64 }
   st.cur.duration = if dur == unknown { 0 } else { dur }
   let _ = r.avio_rb16() // language
   let _ = r.avio_rb16() // quality
 }
 
-///| `mov_read_tkhd`. */
+///|
+/// `mov_read_tkhd`. */
 fn parse_tkhd(st : MovState, r : AvioContext) -> Unit raise MovError {
   if !st.in_trak {
     return
@@ -867,7 +938,8 @@ fn parse_tkhd(st : MovState, r : AvioContext) -> Unit raise MovError {
   st.cur.height = height.reinterpret_as_int() >> 16
 }
 
-///| `mov_read_hdlr`. */
+///|
+/// `mov_read_hdlr`. */
 fn parse_hdlr(st : MovState, r : AvioContext) -> Unit {
   let _ = r.avio_r8() // version
   let _ = r.avio_rb24() // flags
@@ -891,8 +963,13 @@ fn parse_hdlr(st : MovState, r : AvioContext) -> Unit {
   }
 }
 
-///| `mov_read_elst`. */
-fn parse_elst(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+///|
+/// `mov_read_elst`. */
+fn parse_elst(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
@@ -926,14 +1003,18 @@ fn parse_elst(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
     if duration < 0 {
       raise InvalidData("invalid edit list duration")
     }
-    st.cur.elst.push({ duration, time, rate })
+    st.cur.elst.push({ duration, time, rate, })
   }
 }
 
 ///|
 /// `mov_read_stsd`, embedding the sample-entry layouts of
 /// `mov_parse_stsd_video` and `mov_parse_stsd_audio`.
-fn parse_stsd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+fn parse_stsd(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
@@ -947,8 +1028,9 @@ fn parse_stsd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
   // `ff_mov_read_stsd_entries`: every entry is walked. Same-fourcc entries
   // are parsed in place (fields overwritten, extradata slotted per entry);
   // differing fourccs are skipped but still counted in stsd_count.
-  for pseudo_stream_id = 0; pseudo_stream_id < entries &&
-    r.avio_feof() == false; pseudo_stream_id = pseudo_stream_id + 1 {
+  for pseudo_stream_id = 0
+      pseudo_stream_id < entries && r.avio_feof() == false
+      pseudo_stream_id = pseudo_stream_id + 1 {
     let entry_start = r.avio_tell()
     let entry_size = r.avio_rb32().to_int64()
     let format = r.avio_rl32_tag()
@@ -966,7 +1048,11 @@ fn parse_stsd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
       continue
     }
     // `sc->pseudo_stream_id = st->codecpar->codec_tag ? -1 : pseudo_stream_id`
-    st.cur.pseudo_stream_id = if st.cur.codec != "" { -1 } else { pseudo_stream_id }
+    st.cur.pseudo_stream_id = if st.cur.codec != "" {
+      -1
+    } else {
+      pseudo_stream_id
+    }
     st.cur.codec = format // mov_codec_id sets codec_tag = format
     if media_is_video(st.cur.media_type) {
       parse_stsd_video(st, r)
@@ -1015,10 +1101,13 @@ fn parse_stsd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
 /// that is always unset here, so the C default arm (`codec_tag != 'jpeg'`)
 /// applies.
 fn mov_skip_multiple_stsd(codec_tag : String, format : String) -> Bool {
-  if codec_tag != "" && codec_tag != format &&
+  if codec_tag != "" &&
+    codec_tag != format &&
     !(codec_tag == "AV1x" && format == "AVup") &&
-    codec_tag != "apcn" && codec_tag != "apch" &&
-    codec_tag != "dvpp" && codec_tag != "dvcp" &&
+    codec_tag != "apcn" &&
+    codec_tag != "apch" &&
+    codec_tag != "dvpp" &&
+    codec_tag != "dvcp" &&
     codec_tag != "jpeg" {
     true
   } else {
@@ -1026,7 +1115,8 @@ fn mov_skip_multiple_stsd(codec_tag : String, format : String) -> Bool {
   }
 }
 
-///| `mov_parse_stsd_video`: VisualSampleEntry fields (the 16 header bytes are already read). */
+///|
+/// `mov_parse_stsd_video`: VisualSampleEntry fields (the 16 header bytes are already read). */
 fn parse_stsd_video(st : MovState, r : AvioContext) -> Unit {
   if st.movie.isom {
     let _ = r.avio_skip(4L) // pre_defined
@@ -1092,7 +1182,9 @@ fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
       let _ = r.avio_rb32() // bytes per sample
     } else if version == 2 {
       let _ = r.avio_rb32() // sizeof struct only
-      st.cur.sample_rate = mov_int2double(r.avio_rb64()).to_int().reinterpret_as_uint()
+      st.cur.sample_rate = mov_int2double(r.avio_rb64())
+        .to_int()
+        .reinterpret_as_uint()
       st.cur.channels = r.avio_rb32()
       let _ = r.avio_rb32() // always 0x7F000000
       st.cur.bits_per_sample = r.avio_rb32()
@@ -1142,17 +1234,22 @@ fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
     "fl64" => 64
     _ => 0
   }
-  if bps != 0 && (bps / 8) * st.cur.channels <= 4294967295 {
+  if bps != 0 && bps / 8 * st.cur.channels <= 4294967295 {
     st.cur.bits_per_sample = bps
     if st.cur.sample_size == 0 {
       // `sc->sample_size`: do not overwrite a value computed above.
-      st.cur.sample_size = (bps / 8) * st.cur.channels
+      st.cur.sample_size = bps / 8 * st.cur.channels
     }
   }
 }
 
-///| `mov_read_stts`, including the `max_stts_delta` clipping and DTS drift correction. */
-fn parse_stts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+///|
+/// `mov_read_stts`, including the `max_stts_delta` clipping and DTS drift correction. */
+fn parse_stts(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
@@ -1178,10 +1275,11 @@ fn parse_stts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
       let delta_magnitude = sample_duration.reinterpret_as_int()
       duration = 1
       let inc = (if delta_magnitude < 0 {
-        delta_magnitude.to_int64()
-      } else {
-        1
-      }) * sample_count.to_int64()
+          delta_magnitude.to_int64()
+        } else {
+          1
+        }) *
+        sample_count.to_int64()
       corrected_dts = sat_add64(corrected_dts, inc)
     } else {
       corrected_dts = sat_add64(
@@ -1203,9 +1301,11 @@ fn parse_stts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
         duration.to_int64() - 1
       }
       current_dts = current_dts - correction * sample_count.to_int64()
-      duration = (duration.to_int64() - correction).reinterpret_as_uint64().to_uint()
+      duration = (duration.to_int64() - correction)
+        .reinterpret_as_uint64()
+        .to_uint()
     }
-    st.cur.stts.push({ count: sample_count.reinterpret_as_int(), duration })
+    st.cur.stts.push({ count: sample_count.reinterpret_as_int(), duration, })
   }
   // `st->duration = FFMIN(st->duration, duration)` and `sc->track_end =
   // duration`: the stts total caps the mdhd duration and seeds the track end
@@ -1221,8 +1321,13 @@ fn parse_stts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
   st.cur.track_end = total
 }
 
-///| `mov_read_ctts`: per-entry presentation offsets, plus the `dts_shift` they imply. */
-fn parse_ctts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+///|
+/// `mov_read_ctts`: per-entry presentation offsets, plus the `dts_shift` they imply. */
+fn parse_ctts(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
@@ -1241,7 +1346,7 @@ fn parse_ctts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
     if count <= 0 {
       continue
     }
-    st.cur.ctts.push({ count, offset })
+    st.cur.ctts.push({ count, offset, })
     // Any entry but the last: a negative offset forces an index-wide DTS shift
     // (mov_update_dts_shift).
     if i + 2 < entries && offset < 0 {
@@ -1253,8 +1358,13 @@ fn parse_ctts(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
   }
 }
 
-///| `mov_read_stsc`, including the validation pass that repairs corrupt tables. */
-fn parse_stsc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+///|
+/// `mov_read_stsc`, including the validation pass that repairs corrupt tables. */
+fn parse_stsc(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
@@ -1274,16 +1384,21 @@ fn parse_stsc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
     let first = r.avio_rb32().reinterpret_as_int()
     let count = r.avio_rb32().reinterpret_as_int()
     let id = r.avio_rb32().reinterpret_as_int()
-    st.cur.stsc.push({ first, count, id })
+    st.cur.stsc.push({ first, count, id, })
   }
   // Validity pass, walking backwards exactly like the C loop.
   let mut i = st.cur.stsc.length() - 1
   while i >= 0 {
     let first_min = i.to_int64() + 1
     let e = st.cur.stsc[i]
-    let forward_bad = i + 1 < st.cur.stsc.length() && e.first >= st.cur.stsc[i + 1].first
+    let forward_bad = i + 1 < st.cur.stsc.length() &&
+      e.first >= st.cur.stsc[i + 1].first
     let backward_bad = i > 0 && e.first <= st.cur.stsc[i - 1].first
-    if forward_bad || backward_bad || e.first.to_int64() < first_min || e.count < 1 || e.id < 1 {
+    if forward_bad ||
+      backward_bad ||
+      e.first.to_int64() < first_min ||
+      e.count < 1 ||
+      e.id < 1 {
       if i + 1 >= st.cur.stsc.length() {
         if e.count == 0 && i > 0 {
           // Drop a trailing zero-count entry.
@@ -1301,7 +1416,7 @@ fn parse_stsc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
         }
         let count = if e.count > 1 { e.count } else { 1 }
         let id = if e.id > 1 { e.id } else { 1 }
-        st.cur.stsc[i] = { first, count, id }
+        st.cur.stsc[i] = { first, count, id, }
       } else {
         // Replace this entry by the next valid one.
         st.cur.stsc[i] = {
@@ -1315,19 +1430,20 @@ fn parse_stsc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
   }
 }
 
-///| `mov_read_stsz` / `mov_read_stz2`. */
+///|
+/// `mov_read_stsz` / `mov_read_stz2`. */
 fn parse_stsz(
   st : MovState,
   r : AvioContext,
   size : Int64,
-  stz2 : Bool
+  stz2 : Bool,
 ) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
   let _ = r.avio_r8() // version
   let _ = r.avio_rb24() // flags
-  let mut sample_size : UInt = 0
+  let mut sample_size : UInt32 = 0
   let mut field_size = 32
   if !stz2 {
     sample_size = r.avio_rb32()
@@ -1368,7 +1484,7 @@ fn parse_stsz(
   }
   let mut bitpos = 0
   for i = 0; i < entries; i = i + 1 {
-    let mut v : UInt = 0
+    let mut v : UInt32 = 0
     for b = 0; b < field_size; b = b + 1 {
       let byte = if bitpos / 8 < packed.length() {
         packed[bitpos / 8].to_uint()
@@ -1383,12 +1499,13 @@ fn parse_stsz(
   }
 }
 
-///| `mov_read_stco` / `mov_read_co64`. */
+///|
+/// `mov_read_stco` / `mov_read_co64`. */
 fn parse_stco(
   st : MovState,
   r : AvioContext,
   size : Int64,
-  co64 : Bool
+  co64 : Bool,
 ) -> Unit {
   if !st.in_trak {
     return
@@ -1401,7 +1518,7 @@ fn parse_stco(
   let cap0 : Int64 = (size - 8) / entry_size
   let cap : Int64 = if cap0 < 0 { 0L } else { cap0 }
   let raw : Int64 = raw_entries.reinterpret_as_int().to_int64()
-  let entries : Int = if raw < cap { raw.to_int() } else { cap.to_int() }
+  let entries : Int32 = if raw < cap { raw.to_int() } else { cap.to_int() }
   for i = 0; i < entries; i = i + 1 {
     if r.avio_feof() {
       break
@@ -1416,7 +1533,8 @@ fn parse_stco(
   }
 }
 
-///| `mov_read_stss`: sync-sample (keyframe) table. */
+///|
+/// `mov_read_stss`: sync-sample (keyframe) table. */
 fn parse_stss(st : MovState, r : AvioContext) -> Unit {
   if !st.in_trak {
     return
@@ -1437,7 +1555,8 @@ fn parse_stss(st : MovState, r : AvioContext) -> Unit {
   }
 }
 
-///| `mov_read_stps`: partial-sync (open-GOP) sample table. */
+///|
+/// `mov_read_stps`: partial-sync (open-GOP) sample table. */
 fn parse_stps(st : MovState, r : AvioContext) -> Unit {
   if !st.in_trak {
     return
@@ -1459,7 +1578,11 @@ fn parse_stps(st : MovState, r : AvioContext) -> Unit {
 /// `mov_read_sgpd`: 'sync' sample-group descriptions. Only the 'sync'
 /// grouping type is consumed (one NAL unit type byte per entry); other types
 /// ('tscl', 'tsas', 'stsa', …) are parsed past, as in the C.
-fn parse_sgpd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+fn parse_sgpd(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   if !st.in_trak {
     return
   }
@@ -1482,8 +1605,9 @@ fn parse_sgpd(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
     raise InvalidData("SGPD entry count exceeds atom size")
   }
   st.cur.sgpd_sync.clear()
-  for i = 0; i < entry_count.reinterpret_as_int() &&
-    r.avio_feof() == false; i = i + 1 {
+  for i = 0
+      i < entry_count.reinterpret_as_int() && r.avio_feof() == false
+      i = i + 1 {
     let mut description_length = default_length
     if version >= 1 && default_length == 0 {
       description_length = r.avio_rb32().to_int64()
@@ -1524,26 +1648,33 @@ fn parse_sbgp(st : MovState, r : AvioContext) -> Unit raise MovError {
     st.cur.sync_group
   }
   dst.clear()
-  for i = 0; i < entries.reinterpret_as_int() &&
-    r.avio_feof() == false; i = i + 1 {
+  for i = 0
+      i < entries.reinterpret_as_int() && r.avio_feof() == false
+      i = i + 1 {
     let count = r.avio_rb32()
     let index = r.avio_rb32()
-    dst.push({ count, index })
+    dst.push({ count, index, })
   }
   if r.avio_feof() {
     raise InvalidData("EOF in SBGP atom")
   }
 }
 
-///| `mov_read_trak`: parse one track's boxes, then build its sample index. */
-fn parse_trak(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+///|
+/// `mov_read_trak`: parse one track's boxes, then build its sample index. */
+fn parse_trak(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   st.in_trak = true
   st.cur = new_track()
   parse_default(st, r, size)
   st.in_trak = false
   // mov_read_trak: stsc referring to chunks stco never describes is
   // overlooked (cleared) when the track has no samples at all.
-  if st.cur.chunk_offsets.length() == 0 && st.cur.stts.length() == 0 &&
+  if st.cur.chunk_offsets.length() == 0 &&
+    st.cur.stts.length() == 0 &&
     st.cur.stsc.length() > 0 {
     st.cur.stsc.clear()
   }
@@ -1561,8 +1692,9 @@ fn parse_trak(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
 // Fragmented MP4 (moof / traf / tfhd / tfdt / trun / trex)
 // ---------------------------------------------------------------------------
 
-///| Look up a track by `track_id`, as mov_read_tfdt/trun do. */
-fn mov_find_track(st : MovState, id : UInt) -> Mp4Track? {
+///|
+/// Look up a track by `track_id`, as mov_read_tfdt/trun do. */
+fn mov_find_track(st : MovState, id : UInt32) -> Mp4Track? {
   for i = 0; i < st.movie.tracks.length(); i = i + 1 {
     if st.movie.tracks[i].track_id == id {
       return Some(st.movie.tracks[i])
@@ -1574,7 +1706,7 @@ fn mov_find_track(st : MovState, id : UInt) -> Mp4Track? {
 ///|
 /// `mov_update_dts_shift`: a negative CTS offset raises the stream-wide
 /// `dts_shift` so that presentation timestamps stay non-negative.
-fn mov_update_dts_shift(track : Mp4Track, duration : Int) -> Unit {
+fn mov_update_dts_shift(track : Mp4Track, duration : Int32) -> Unit {
   if duration < 0 {
     let d : Int64 = duration.to_int64()
     let mag : Int64 = if d == -2147483648 { 2147483647 } else { -d }
@@ -1584,7 +1716,8 @@ fn mov_update_dts_shift(track : Mp4Track, duration : Int) -> Unit {
   }
 }
 
-///| `mov_read_trex`: one track's fragment defaults. */
+///|
+/// `mov_read_trex`: one track's fragment defaults. */
 fn parse_trex(st : MovState, r : AvioContext) -> Unit {
   let _ = r.avio_r8() // version
   let _ = r.avio_rb24() // flags
@@ -1593,11 +1726,16 @@ fn parse_trex(st : MovState, r : AvioContext) -> Unit {
   let duration = r.avio_rb32()
   let size = r.avio_rb32()
   let flags = r.avio_rb32()
-  st.trex.push({ track_id, stsd_id, duration, size, flags })
+  st.trex.push({ track_id, stsd_id, duration, size, flags, })
 }
 
-///| `mov_read_moof`: reset fragment state and recurse into `traf`. */
-fn parse_moof(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+///|
+/// `mov_read_moof`: reset fragment state and recurse into `traf`. */
+fn parse_moof(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   st.frag.found_tfhd = false
   st.frag.has_tfdt = false
   let off = r.avio_tell() - 8
@@ -1610,7 +1748,8 @@ fn parse_moof(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
   st.in_moof = false
 }
 
-///| `mov_read_tfhd`: track fragment header; merges `trex` defaults. */
+///|
+/// `mov_read_tfhd`: track fragment header; merges `trex` defaults. */
 fn parse_tfhd(st : MovState, r : AvioContext) -> Unit {
   let _ = r.avio_r8() // version
   let flags = r.avio_rb24()
@@ -1660,7 +1799,8 @@ fn parse_tfhd(st : MovState, r : AvioContext) -> Unit {
   }
 }
 
-///| `mov_read_tfdt`: base media decode time for the current track fragment. */
+///|
+/// `mov_read_tfdt`: base media decode time for the current track fragment. */
 fn parse_tfdt(st : MovState, r : AvioContext) -> Unit {
   // Fragments targeting a different sample description are skipped for this
   // track (the C returns before consuming the payload; the caller realigns).
@@ -1691,7 +1831,11 @@ fn parse_tfdt(st : MovState, r : AvioContext) -> Unit {
 /// `mov_read_trun`: append one track fragment's samples to the matching track,
 /// mirroring the sample-index construction of the C code (DTS from tfdt/track
 /// end, per-sample duration/size/flags/CTS, keyframe from the fragment flags).
-fn parse_trun(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+fn parse_trun(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   if !st.frag.found_tfhd {
     raise InvalidData("trun without tfhd")
   }
@@ -1705,7 +1849,7 @@ fn parse_trun(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
       let _ = r.avio_r8() // version
       let flags = r.avio_rb24()
       let mut entries = r.avio_rb32().reinterpret_as_int()
-      let mut data_offset : Int = 0
+      let mut data_offset : Int32 = 0
       if (flags & trun_data_offset) != 0 {
         data_offset = r.avio_rb32().reinterpret_as_int()
       }
@@ -1722,7 +1866,11 @@ fn parse_trun(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
         (if (flags & trun_sample_cts) != 0 { 4 } else { 0 })
       if entry_size > 0 {
         let left = size - 8 - opt_bytes.to_int64()
-        let max_entries = if left < 0 { 0L } else { left / entry_size.to_int64() }
+        let max_entries = if left < 0 {
+          0L
+        } else {
+          left / entry_size.to_int64()
+        }
         if entries.to_int64() > max_entries {
           entries = max_entries.to_int()
         }
@@ -1755,15 +1903,19 @@ fn parse_trun(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
         None
       }
       let mut offset = st.frag.base_data_offset + data_offset.to_int64()
-      let mut distance : UInt = 0
+      let mut distance : UInt32 = 0
       for i = 0; i < entries; i = i + 1 {
         if r.avio_feof() {
           break
         }
         let mut sample_size = st.frag.size
-        let mut sample_flags = if i != 0 { st.frag.flags } else { first_sample_flags }
+        let mut sample_flags = if i != 0 {
+          st.frag.flags
+        } else {
+          first_sample_flags
+        }
         let mut sample_duration = st.frag.duration
-        let mut ctts : Int = 0
+        let mut ctts : Int32 = 0
         if (flags & trun_sample_duration) != 0 {
           sample_duration = r.avio_rb32()
         }
@@ -1777,8 +1929,11 @@ fn parse_trun(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
           ctts = r.avio_rb32().reinterpret_as_int()
         }
         mov_update_dts_shift(track, ctts)
-        let keyframe = (sample_flags &
-          (frag_sample_flag_is_non_sync | frag_sample_flag_depends_yes)) == 0
+        let keyframe = (
+            sample_flags &
+            (frag_sample_flag_is_non_sync | frag_sample_flag_depends_yes)
+          ) ==
+          0
         if keyframe {
           distance = 0
         }
@@ -1822,7 +1977,8 @@ fn parse_trun(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
 // Encryption (cenc / sinf / schm / tenc / senc)
 // ---------------------------------------------------------------------------
 
-///| `mov_read_schm`: the protection scheme fourcc. */
+///|
+/// `mov_read_schm`: the protection scheme fourcc. */
 fn parse_schm(st : MovState, r : AvioContext) -> Unit {
   if !st.in_trak {
     return
@@ -1831,7 +1987,8 @@ fn parse_schm(st : MovState, r : AvioContext) -> Unit {
   st.cur.cenc_scheme = r.avio_rb32()
 }
 
-///| `mov_read_tenc`: pattern, per-sample IV size, default KID and constant IV. */
+///|
+/// `mov_read_tenc`: pattern, per-sample IV size, default KID and constant IV. */
 fn parse_tenc(st : MovState, r : AvioContext, size : Int64) -> Unit {
   if !st.in_trak {
     return
@@ -1896,7 +2053,11 @@ fn current_enc_track(st : MovState) -> Mp4Track? {
 /// is stored positionally so it lines up with the track's sample index; for a
 /// fragmented file the entries of every fragment append after the previous
 /// ones, matching how `trun` appends the samples themselves.
-fn parse_senc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovError {
+fn parse_senc(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
   match current_enc_track(st) {
     None => ()
     Some(track) => {
@@ -1926,10 +2087,10 @@ fn parse_senc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
               }
               let clear = r.avio_rb16().reinterpret_as_int()
               let prot = r.avio_rb32().reinterpret_as_int()
-              subs.push({ bytes_of_clear: clear, bytes_of_protected: prot })
+              subs.push({ bytes_of_clear: clear, bytes_of_protected: prot, })
             }
           }
-          track.cenc_samples.push(Some({ iv, subsamples: subs }))
+          track.cenc_samples.push(Some({ iv, subsamples: subs, }))
         } else {
           track.cenc_samples.push(None)
         }
@@ -1944,8 +2105,8 @@ fn parse_senc(st : MovState, r : AvioContext, size : Int64) -> Unit raise MovErr
 /// is decided by the caller from the entry size).
 fn read_sample_encryption_info(
   r : AvioContext,
-  per_iv : Int,
-  use_subsamples : Bool
+  per_iv : Int32,
+  use_subsamples : Bool,
 ) -> MovEncSample {
   let iv = FixedArray::make(16, b'\x00')
   if per_iv != 0 {
@@ -1959,10 +2120,10 @@ fn read_sample_encryption_info(
     for k = 0; k < n; k = k + 1 {
       let clear = r.avio_rb16().reinterpret_as_int()
       let prot = r.avio_rb32().reinterpret_as_int()
-      subs.push({ bytes_of_clear: clear, bytes_of_protected: prot })
+      subs.push({ bytes_of_clear: clear, bytes_of_protected: prot, })
     }
   }
-  { iv, subsamples: subs }
+  { iv, subsamples: subs, }
 }
 
 ///|
@@ -1971,7 +2132,7 @@ fn read_sample_encryption_info(
 /// is restored afterwards, as the C does with `prev_pos`.
 fn mov_parse_auxiliary_info(
   track : Mp4Track,
-  r : AvioContext
+  r : AvioContext,
 ) -> Unit raise MovError {
   if track.cenc_samples.length() > 0 {
     return
@@ -2088,7 +2249,7 @@ fn cenc_ctr_decrypt(
   iv : FixedArray[Byte],
   subs : Array[MovSubSample],
   out : Array[Byte],
-  size : Int
+  size : Int32,
 ) -> Result[Unit, String] {
   let ctx = @libavutil.av_aes_ctr_alloc()
   match @libavutil.av_aes_ctr_init(ctx, key) {
@@ -2135,7 +2296,7 @@ fn cenc_cbc_decrypt(
   iv : FixedArray[Byte],
   subs : Array[MovSubSample],
   out : Array[Byte],
-  size : Int
+  size : Int32,
 ) -> Result[Unit, String] {
   let aes = @libavutil.av_aes_alloc()
   match @libavutil.av_aes_init(aes, key, 128, true) {
@@ -2145,7 +2306,12 @@ fn cenc_cbc_decrypt(
   let ivbuf : FixedArray[Byte] = iv.copy()
   if subs.length() == 0 {
     let blocks = size / 16
-    let dec = @libavutil.av_aes_crypt(aes, Bytes::from_array(out[:]), blocks, Some(ivbuf))
+    let dec = @libavutil.av_aes_crypt(
+      aes,
+      Bytes::from_array(out[:]),
+      blocks,
+      Some(ivbuf),
+    )
     for i = 0; i < blocks * 16; i = i + 1 {
       out[i] = dec[i]
     }
@@ -2182,15 +2348,16 @@ fn cenc_cbc_decrypt(
   Ok(())
 }
 
-///| `cens_scheme_decrypt`: AES-CTR with a crypt/skip block pattern. */
+///|
+/// `cens_scheme_decrypt`: AES-CTR with a crypt/skip block pattern. */
 fn cens_decrypt(
   key : Bytes,
   iv : FixedArray[Byte],
   subs : Array[MovSubSample],
-  cb : UInt,
-  sb : UInt,
+  cb : UInt32,
+  sb : UInt32,
   out : Array[Byte],
-  size : Int
+  size : Int32,
 ) -> Result[Unit, String] {
   let ctx = @libavutil.av_aes_ctr_alloc()
   match @libavutil.av_aes_ctr_init(ctx, key) {
@@ -2246,15 +2413,16 @@ fn cens_decrypt(
   Ok(())
 }
 
-///| `cbcs_scheme_decrypt`: AES-CBC with a crypt/skip block pattern; the IV resets per subsample. */
+///|
+/// `cbcs_scheme_decrypt`: AES-CBC with a crypt/skip block pattern; the IV resets per subsample. */
 fn cbcs_decrypt(
   key : Bytes,
   iv : FixedArray[Byte],
   subs : Array[MovSubSample],
-  cb : UInt,
-  sb : UInt,
+  cb : UInt32,
+  sb : UInt32,
   out : Array[Byte],
-  size : Int
+  size : Int32,
 ) -> Result[Unit, String] {
   let aes = @libavutil.av_aes_alloc()
   match @libavutil.av_aes_init(aes, key, 128, true) {
@@ -2264,7 +2432,12 @@ fn cbcs_decrypt(
   if subs.length() == 0 {
     let ivbuf : FixedArray[Byte] = iv.copy()
     let blocks = size / 16
-    let dec = @libavutil.av_aes_crypt(aes, Bytes::from_array(out[:]), blocks, Some(ivbuf))
+    let dec = @libavutil.av_aes_crypt(
+      aes,
+      Bytes::from_array(out[:]),
+      blocks,
+      Some(ivbuf),
+    )
     for i = 0; i < blocks * 16; i = i + 1 {
       out[i] = dec[i]
     }
@@ -2323,9 +2496,9 @@ fn cbcs_decrypt(
 /// looked up positionally, falling back to the `tenc` default (constant IV).
 pub fn mov_decrypt_sample(
   track : Mp4Track,
-  index : Int,
+  index : Int32,
   key : Bytes,
-  payload : Bytes
+  payload : Bytes,
 ) -> Result[Bytes, String] {
   if key.length() != 16 {
     return Err("EINVAL")
@@ -2337,7 +2510,7 @@ pub fn mov_decrypt_sample(
   }
   let enc : MovEncSample = match sel {
     Some(e) => e
-    None => { iv: track.cenc_default_iv.copy(), subsamples: [] }
+    None => { iv: track.cenc_default_iv.copy(), subsamples: [], }
   }
   let iv = enc.iv
   let subs = enc.subsamples
@@ -2383,18 +2556,17 @@ fn mov_build_audio_chunk_index(track : Mp4Track, current_dts : Int64) -> Unit {
   let bpf = track.bytes_per_frame
   // Typed constants keep the packing arithmetic unsigned (the C works in
   // `unsigned int` throughout this branch).
-  let q1024 : UInt = 1024
-  let q1023 : UInt = 1023
+  let q1024 : UInt32 = 1024
+  let q1023 : UInt32 = 1023
   // Compute the total packet count, exactly like the C first pass.
-  let mut total : UInt = 0
+  let mut total : UInt32 = 0
   for i = 0; i < track.stsc.length(); i = i + 1 {
     let chunk_samples = track.stsc[i].count.reinterpret_as_uint()
-    if i != track.stsc.length() - 1 && spf != 0 &&
-      chunk_samples % spf != 0 {
+    if i != track.stsc.length() - 1 && spf != 0 && chunk_samples % spf != 0 {
       // error unaligned chunk
       return
     }
-    let count : UInt = if spf >= 160 {
+    let count : UInt32 = if spf >= 160 {
       // gsm
       chunk_samples / spf
     } else if spf > 1 {
@@ -2403,7 +2575,7 @@ fn mov_build_audio_chunk_index(track : Mp4Track, current_dts : Int64) -> Unit {
     } else {
       (chunk_samples + q1023) / q1024
     }
-    let chunk_count : UInt = if mov_stsc_index_valid(i, track.stsc.length()) {
+    let chunk_count : UInt32 = if mov_stsc_index_valid(i, track.stsc.length()) {
       (track.stsc[i + 1].first - track.stsc[i].first).reinterpret_as_uint()
     } else {
       (track.chunk_offsets.length() - (track.stsc[i].first - 1)).reinterpret_as_uint()
@@ -2416,7 +2588,7 @@ fn mov_build_audio_chunk_index(track : Mp4Track, current_dts : Int64) -> Unit {
   for i = 0; i < track.chunk_offsets.length(); i = i + 1 {
     let mut offset = track.chunk_offsets[i]
     while mov_stsc_index_valid(stsc_index, track.stsc.length()) &&
-      i + 1 == track.stsc[stsc_index + 1].first {
+          i + 1 == track.stsc[stsc_index + 1].first {
       stsc_index = stsc_index + 1
     }
     let mut chunk_samples = track.stsc[stsc_index].count.reinterpret_as_uint()
@@ -2425,7 +2597,7 @@ fn mov_build_audio_chunk_index(track : Mp4Track, current_dts : Int64) -> Unit {
         // "Zero bytes per frame, but N samples per frame"
         return
       }
-      let (samples, size) : (UInt, UInt) = if spf >= 160 {
+      let (samples, size) : (UInt32, UInt32) = if spf >= 160 {
         // gsm: exactly one frame per packet.
         (spf, bpf)
       } else if spf > 1 {
@@ -2473,14 +2645,14 @@ fn mov_merge_tts_data(track : Mp4Track) -> Unit raise MovError {
     raise InvalidData("no sample count for tts merge")
   }
   let n = track.sample_count
-  let tts : Array[MovTts] = Array::make(n, { count: 0, offset: 0, duration: 0 })
+  let tts : Array[MovTts] = Array::make(n, { count: 0, offset: 0, duration: 0, })
   let mut idx = 0
   if has_ctts {
     for i = 0; i < track.ctts.length(); i = i + 1 {
       let e = track.ctts[i]
       let mut j = 0
       while j < e.count && idx < n {
-        tts[idx] = { count: 1, offset: e.offset, duration: 0 }
+        tts[idx] = { count: 1, offset: e.offset, duration: 0, }
         idx = idx + 1
         j = j + 1
       }
@@ -2496,7 +2668,7 @@ fn mov_merge_tts_data(track : Mp4Track) -> Unit raise MovError {
       let mut j = 0
       while j < e.count && idx < n {
         let prev = tts[idx]
-        tts[idx] = { count: 1, offset: prev.offset, duration: e.duration }
+        tts[idx] = { count: 1, offset: prev.offset, duration: e.duration, }
         idx = idx + 1
         j = j + 1
       }
@@ -2512,14 +2684,15 @@ fn mov_merge_tts_data(track : Mp4Track) -> Unit raise MovError {
 /// The chunked "old uncompressed audio" path is not ported: when it would apply
 /// (`stts` reduces to a single entry of duration 1 on an audio track), the track
 /// is flagged with `unsupported_audio_chunk_demux` and produces no samples.
+
 ///|
 /// `HEVC_NAL_CRA_NUT` (libavcodec/hevc.h): Clean Random Access NAL type. */
-let hevc_nal_cra_nut : UInt = 21
+let hevc_nal_cra_nut : UInt32 = 21
 
 ///|
 /// `get_sgpd_sync_index`: the 1-based index of the first 'sync' entry whose
 /// NAL unit type matches, 0 when absent.
-fn get_sgpd_sync_index(track : Mp4Track, nal_unit_type : UInt) -> UInt {
+fn get_sgpd_sync_index(track : Mp4Track, nal_unit_type : UInt32) -> UInt32 {
   for i = 0; i < track.sgpd_sync.length(); i = i + 1 {
     if track.sgpd_sync[i] == nal_unit_type {
       return (i + 1).reinterpret_as_uint()
@@ -2528,8 +2701,9 @@ fn get_sgpd_sync_index(track : Mp4Track, nal_unit_type : UInt) -> UInt {
   0
 }
 
-///| `is_open_key_sample`: linear scan with the C's monotonic early break. */
-fn is_open_key_sample(track : Mp4Track, sample : Int) -> Bool {
+///|
+/// `is_open_key_sample`: linear scan with the C's monotonic early break. */
+fn is_open_key_sample(track : Mp4Track, sample : Int32) -> Bool {
   for i = 0; i < track.open_key_samples.length(); i = i + 1 {
     let oks = track.open_key_samples[i]
     if oks == sample {
@@ -2548,7 +2722,8 @@ fn is_open_key_sample(track : Mp4Track, sample : Int) -> Bool {
 fn get_edit_list_entry(
   movie : Mp4Movie,
   track : Mp4Track,
-  edit_list_index : Int) -> (Int64, Int64)? {
+  edit_list_index : Int32,
+) -> (Int64, Int64)? {
   if edit_list_index == track.elst.length() {
     return None
   }
@@ -2560,7 +2735,8 @@ fn get_edit_list_entry(
   duration = mov_rescale(duration, track.timescale, movie.timescale)
   // `duration + (uint64_t)media_time > INT64_MAX` with wrapping u64 math:
   // media_time -1 (empty edit) wraps around and keeps the duration.
-  let sum = duration.reinterpret_as_uint64() + media_time.reinterpret_as_uint64()
+  let sum = duration.reinterpret_as_uint64() +
+    media_time.reinterpret_as_uint64()
   if sum > 9223372036854775807UL {
     duration = 0L
   }
@@ -2577,14 +2753,19 @@ fn find_prev_closest_index(
   e_old : Array[Mp4Sample],
   tts_old : Array[MovTts],
   timestamp_pts_in : Int64,
-  flag : Int) -> (Int, Int, Int)? {
+  flag : Int32,
+) -> (Int32, Int32, Int32)? {
   let mut timestamp_pts = timestamp_pts_in
   // With dts_shift > 0 every index timestamp needs it added to become a PTS,
   // so compensate the searched timestamp instead.
   if track.dts_shift > 0 {
     timestamp_pts = timestamp_pts - track.dts_shift.to_int64()
   }
-  let mut index = index_search_timestamp(e_old, timestamp_pts, flag | avseek_flag_backward)
+  let mut index = index_search_timestamp(
+    e_old,
+    timestamp_pts,
+    flag | avseek_flag_backward,
+  )
   // Keep going backwards while the timestamp repeats.
   if index >= 0 {
     let mut i = index
@@ -2612,7 +2793,8 @@ fn find_prev_closest_index(
     }
     // Walk back to a keyframe whose PTS (timestamp + ctts offset) fits.
     while index >= 0 && tts_index >= 0 && tts_index < tts_old.length() {
-      if e_old[index].dts + tts_old[tts_index].offset.to_int64() <= timestamp_pts &&
+      if e_old[index].dts + tts_old[tts_index].offset.to_int64() <=
+        timestamp_pts &&
         e_old[index].keyframe {
         break
       }
@@ -2642,10 +2824,12 @@ fn find_prev_closest_index(
 fn fix_index_entry_timestamps(
   entries : Array[Mp4Sample],
   end_ts_in : Int64,
-  frame_duration_buffer : Array[Int64]) -> Unit {
+  frame_duration_buffer : Array[Int64],
+) -> Unit {
   let mut end_ts = end_ts_in
   for i = 0; i < frame_duration_buffer.length(); i = i + 1 {
-    end_ts = end_ts - frame_duration_buffer[frame_duration_buffer.length() - 1 - i]
+    end_ts = end_ts -
+      frame_duration_buffer[frame_duration_buffer.length() - 1 - i]
     entries[entries.length() - 1 - i].dts = end_ts
   }
 }
@@ -2666,8 +2850,8 @@ fn mov_fix_index(st : MovState, track : Mp4Track) -> Unit {
   }
   let tts_old = track.tts
   let tts_count_old = tts_old.length()
-  let mut tts_index_old : Int = 0
-  let mut tts_sample_old : Int = 0
+  let mut tts_index_old : Int32 = 0
+  let mut tts_sample_old : Int32 = 0
   let mut edit_list_dts_entry_end : Int64 = 0
   let mut empty_edits_sum_duration : Int64 = 0
   let mut num_discarded_begin = 0
@@ -2680,23 +2864,23 @@ fn mov_fix_index(st : MovState, track : Mp4Track) -> Unit {
   // Reinitialise min_corrected_pts so it can be computed again.
   // If dts_shift is positive (negative ctts), negate the DTS by it.
   if track.dts_shift > 0 {
-    edit_list_dts_entry_end = edit_list_dts_entry_end - track.dts_shift.to_int64()
+    edit_list_dts_entry_end = edit_list_dts_entry_end -
+      track.dts_shift.to_int64()
   }
   let start_dts = edit_list_dts_entry_end
   let mut edit_list_index = 0
   let mut stop_outer = false
   while stop_outer == false {
-    let (edit_list_media_time, edit_list_duration) = match get_edit_list_entry(
-        st.movie,
-        track,
-        edit_list_index,
-      ) {
+    let (edit_list_media_time, edit_list_duration) = match
+      get_edit_list_entry(st.movie, track, edit_list_index) {
       None => break
       Some(v) => v
     }
     edit_list_index = edit_list_index + 1
     let mut edit_list_dts_counter = edit_list_dts_entry_end
-    edit_list_dts_entry_end = sat_add64(edit_list_dts_entry_end, edit_list_duration)
+    edit_list_dts_entry_end = sat_add64(
+      edit_list_dts_entry_end, edit_list_duration,
+    )
     if edit_list_dts_entry_end == 9223372036854775807L {
       stop_outer = true
       break
@@ -2725,17 +2909,15 @@ fn mov_fix_index(st : MovState, track : Mp4Track) -> Unit {
       let back = search_timestamp - track.timescale.to_int64()
       search_timestamp = if back > e_old[0].dts { back } else { e_old[0].dts }
     }
-    let found = match find_prev_closest_index(
-        track,
-        e_old,
-        tts_old,
-        search_timestamp,
-        0,
-      ) {
+    let found = match
+      find_prev_closest_index(track, e_old, tts_old, search_timestamp, 0) {
       Some(v) => Some(v)
       None =>
         // fall back to any frame, then to the first frame of the track
-        match find_prev_closest_index(track, e_old, tts_old, search_timestamp, avseek_flag_any) {
+        match
+          find_prev_closest_index(
+            track, e_old, tts_old, search_timestamp, avseek_flag_any,
+          ) {
           Some(v) => Some(v)
           None => {
             tts_index_old = 0
@@ -2794,15 +2976,15 @@ fn mov_fix_index(st : MovState, track : Mp4Track) -> Unit {
               // A partial frame at the edit start: keep it, trim
               // `skip_samples` leading samples and shift its timestamp.
               let packet_skip_samples = edit_list_media_time - curr_cts
-              track.skip_samples = track.skip_samples + packet_skip_samples.to_int()
-              edit_list_dts_counter = edit_list_dts_counter - packet_skip_samples
+              track.skip_samples = track.skip_samples +
+                packet_skip_samples.to_int()
+              edit_list_dts_counter = edit_list_dts_counter -
+                packet_skip_samples
               if edit_list_start_encountered == false {
                 edit_list_start_encountered = true
                 if frame_duration_buffer.length() > 0 {
                   fix_index_entry_timestamps(
-                    new_samples,
-                    edit_list_dts_counter,
-                    frame_duration_buffer,
+                    new_samples, edit_list_dts_counter, frame_duration_buffer,
                   )
                   frame_duration_buffer = []
                 }
@@ -2815,13 +2997,16 @@ fn mov_fix_index(st : MovState, track : Mp4Track) -> Unit {
                 if media_is_audio(track.media_type) &&
                   first_non_zero_audio_edit > 0 &&
                   track.codec_id != "vorbis" {
-                  track.skip_samples = track.skip_samples + frame_duration.to_int()
+                  track.skip_samples = track.skip_samples +
+                    frame_duration.to_int()
                 }
               }
             }
           } else {
             // inside the edit: track the minimum corrected PTS
-            let cand = edit_list_dts_counter + curr_ctts + track.dts_shift.to_int64()
+            let cand = edit_list_dts_counter +
+              curr_ctts +
+              track.dts_shift.to_int64()
             if min_corrected_pts < 0 {
               min_corrected_pts = cand
             } else if cand < min_corrected_pts {
@@ -2831,9 +3016,7 @@ fn mov_fix_index(st : MovState, track : Mp4Track) -> Unit {
               edit_list_start_encountered = true
               if frame_duration_buffer.length() > 0 {
                 fix_index_entry_timestamps(
-                  new_samples,
-                  edit_list_dts_counter,
-                  frame_duration_buffer,
+                  new_samples, edit_list_dts_counter, frame_duration_buffer,
                 )
                 frame_duration_buffer = []
               }
@@ -2854,11 +3037,13 @@ fn mov_fix_index(st : MovState, track : Mp4Track) -> Unit {
             edit_list_dts_counter = edit_list_dts_counter + frame_duration
           }
           // Break on the first key frame completing the edit entry.
-          if curr_cts + frame_duration >= edit_list_duration + edit_list_media_time &&
+          if curr_cts + frame_duration >=
+            edit_list_duration + edit_list_media_time &&
             (keyframe || media_is_audio(track.media_type)) {
             if track.has_ctts {
               // With CTTS, wait one extra keyframe for trailing B-frames.
-              if media_is_video(track.media_type) && found_keyframe_after_edit == false {
+              if media_is_video(track.media_type) &&
+                found_keyframe_after_edit == false {
                 found_keyframe_after_edit = true
                 index = index + 1
                 continue
@@ -3000,7 +3185,7 @@ fn build_open_gop_key_points(track : Mp4Track) -> Unit {
     sample_id = sample_id + sg.count.reinterpret_as_int()
   }
   // Identify the minimal time step between samples.
-  let mut min_dur : UInt = 4294967295
+  let mut min_dur : UInt32 = 4294967295
   for i = 0; i < track.stts.length(); i = i + 1 {
     if track.stts[i].duration < min_dur {
       min_dur = track.stts[i].duration
@@ -3009,6 +3194,7 @@ fn build_open_gop_key_points(track : Mp4Track) -> Unit {
   track.min_sample_duration = min_dur
 }
 
+///|
 fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
   let mut current_dts : Int64 = 0
   let mut stsc_index = 0
@@ -3037,7 +3223,11 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
     }
     if (empty_duration != 0 || start_time != 0) && st.movie.timescale > 0 {
       if empty_duration != 0 {
-        empty_duration = mov_rescale(empty_duration, track.timescale, st.movie.timescale)
+        empty_duration = mov_rescale(
+          empty_duration,
+          track.timescale,
+          st.movie.timescale,
+        )
       }
       track.time_offset = start_time - empty_duration
       track.min_corrected_pts = start_time
@@ -3046,17 +3236,26 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
       }
     }
     // Non-advanced AAC with a positive start: encoder delay as padding.
-    if multiple_edits == false && st.movie.advanced_editlist == false &&
-      track.codec_id == "aac" && start_time > 0 && track.sample_rate > 0 {
-      track.skip_samples = mov_rescale(start_time, track.sample_rate, track.timescale).to_int()
+    if multiple_edits == false &&
+      st.movie.advanced_editlist == false &&
+      track.codec_id == "aac" &&
+      start_time > 0 &&
+      track.sample_rate > 0 {
+      track.skip_samples = mov_rescale(
+        start_time,
+        track.sample_rate,
+        track.timescale,
+      ).to_int()
     }
   }
 
   // Set the primary extradata based on the first Sample if it doesn't
   // reference the first stsd entry (mov_read_header's last_stsd pass).
-  if track.stsc.length() > 0 && track.stsd_extradata.length() > 0 &&
+  if track.stsc.length() > 0 &&
+    track.stsd_extradata.length() > 0 &&
     track.stsc[0].id > 1 &&
-    track.stsc[0].id.reinterpret_as_uint() <= track.stsd_count.reinterpret_as_uint() {
+    track.stsc[0].id.reinterpret_as_uint() <=
+    track.stsd_count.reinterpret_as_uint() {
     let idx = track.stsc[0].id - 1
     track.last_stsd_index = idx
     // The C frees the old extradata before re-assigning from the slot, so an
@@ -3089,7 +3288,9 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
   current_dts = current_dts - track.dts_shift.to_int64()
 
   mov_merge_tts_data(track)
-  if track.sample_count <= 0 || track.tts.length() == 0 || track.stsc.length() == 0 ||
+  if track.sample_count <= 0 ||
+    track.tts.length() == 0 ||
+    track.stsc.length() == 0 ||
     track.chunk_offsets.length() == 0 ||
     track.samples.length() > 0 {
     // `!sc->sample_count || sti->nb_index_entries || sc->tts_count`: nothing
@@ -3106,7 +3307,7 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
 
   let mut current_sample = 0
   let mut stts_sample = 0
-  let mut distance : UInt = 0
+  let mut distance : UInt32 = 0
   let mut stts_index = 0
 
   for i = 0; i < track.chunk_offsets.length(); i = i + 1 {
@@ -3117,7 +3318,7 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
     }
     let mut current_offset = track.chunk_offsets[i]
     while mov_stsc_index_valid(stsc_index, track.stsc.length()) &&
-      i + 1 == track.stsc[stsc_index + 1].first {
+          i + 1 == track.stsc[stsc_index + 1].first {
       stsc_index = stsc_index + 1
     }
 
@@ -3125,7 +3326,8 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
     if next_offset > current_offset &&
       track.sample_size > 0 &&
       track.sample_size < track.stsz_sample_size &&
-      track.stsc[stsc_index].count.to_int64() * track.stsz_sample_size.to_int64() >
+      track.stsc[stsc_index].count.to_int64() *
+      track.stsz_sample_size.to_int64() >
       next_offset - current_offset {
       track.stsz_sample_size = track.sample_size
     }
@@ -3139,14 +3341,18 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
       }
       let mut keyframe = false
       if !track.keyframe_absent &&
-        (track.keyframes.length() == 0 ||
-          (current_sample + key_off).reinterpret_as_uint() == track.keyframes[stss_index]) {
+        (
+          track.keyframes.length() == 0 ||
+          (current_sample + key_off).reinterpret_as_uint() ==
+          track.keyframes[stss_index]
+        ) {
         keyframe = true
         if stss_index + 1 < track.keyframes.length() {
           stss_index = stss_index + 1
         }
       } else if track.stps.length() > 0 &&
-        (current_sample + key_off).reinterpret_as_uint() == track.stps[stps_index] {
+        (current_sample + key_off).reinterpret_as_uint() ==
+        track.stps[stps_index] {
         keyframe = true
         if stps_index + 1 < track.stps.length() {
           stps_index = stps_index + 1
@@ -3175,7 +3381,9 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
       if track.pseudo_stream_id == -1 ||
         track.stsc[stsc_index].id - 1 == track.pseudo_stream_id {
         let pts = if track.has_ctts {
-          current_dts + track.dts_shift.to_int64() + track.tts[stts_index].offset.to_int64()
+          current_dts +
+          track.dts_shift.to_int64() +
+          track.tts[stts_index].offset.to_int64()
         } else {
           current_dts
         }
@@ -3195,7 +3403,8 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
       distance = distance + 1
       stts_sample = stts_sample + 1
       current_sample = current_sample + 1
-      if stts_index + 1 < track.tts.length() && stts_sample == track.tts[stts_index].count {
+      if stts_index + 1 < track.tts.length() &&
+        stts_sample == track.tts[stts_index].count {
         stts_sample = 0
         stts_index = stts_index + 1
       }
@@ -3207,7 +3416,8 @@ fn mov_build_index(st : MovState, track : Mp4Track) -> Unit raise MovError {
     mov_fix_index(st, track)
   }
   // Update start time of the stream.
-  if track.start_time == av_nopts_value && media_is_video(track.media_type) &&
+  if track.start_time == av_nopts_value &&
+    media_is_video(track.media_type) &&
     track.samples.length() > 0 {
     track.start_time = track.samples[0].dts + track.dts_shift.to_int64()
     if track.tts.length() > 0 {
@@ -3234,7 +3444,10 @@ pub fn av_mov_open(buf : Bytes) -> Result[Mp4Movie, String] {
 ///|
 /// `av_mov_open` with the `advanced_editlist` demuxer option (FFmpeg default
 /// on). Turning it off selects the plain first-DTS-shift edit-list handling.
-pub fn av_mov_open_with(buf : Bytes, advanced_editlist : Bool) -> Result[Mp4Movie, String] {
+pub fn av_mov_open_with(
+  buf : Bytes,
+  advanced_editlist : Bool,
+) -> Result[Mp4Movie, String] {
   mov_open(AvioContext::init_read_context(buf), advanced=advanced_editlist)
 }
 
@@ -3246,7 +3459,11 @@ pub fn av_mov_open_avio(pb : AvioContext) -> Result[Mp4Movie, String] {
   mov_open(pb)
 }
 
-fn mov_open(r : AvioContext, advanced~ : Bool = true) -> Result[Mp4Movie, String] {
+///|
+fn mov_open(
+  r : AvioContext,
+  advanced~ : Bool = true,
+) -> Result[Mp4Movie, String] {
   let movie = new_movie()
   movie.advanced_editlist = advanced
   let st : MovState = {

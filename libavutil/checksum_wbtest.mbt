@@ -3,7 +3,8 @@
 /// Expected values come from libavutil/tests/adler32.c and the reference table
 /// in libavutil/tests/base64.c.
 
-///| libavutil/tests/adler32.c expects 0x50E6E508 for this input. */
+///|
+/// libavutil/tests/adler32.c expects 0x50E6E508 for this input. */
 test "av_adler32_update matches the ffmpeg unit test" {
   let len = 7001
   let buf : FixedArray[Byte] = FixedArray::make(len, b'\x00')
@@ -14,6 +15,7 @@ test "av_adler32_update matches the ffmpeg unit test" {
   assert_eq(av_adler32_update(1, Bytes::from_array(buf[:]), len), 0x50E6E508)
 }
 
+///|
 test "av_adler32_update small inputs" {
   // "Wikipedia" from the Adler-32 specification.
   assert_eq(av_adler32_update(1, b"Wikipedia", 9), 0x11E60398)
@@ -51,6 +53,7 @@ test "av_base64 encode and round-trip" {
   }
 }
 
+///|
 test "av_base64 rejects malformed input" {
   assert_true(av_base64_decode_syntax(b""))
   assert_true(av_base64_decode_syntax(b"MQ=="))
@@ -62,6 +65,7 @@ test "av_base64 rejects malformed input" {
   assert_true(!av_base64_decode_syntax(b"MQ==A"))
 }
 
+///|
 test "av_base64_size" {
   assert_eq(av_base64_size(0), 0)
   assert_eq(av_base64_size(1), 4)

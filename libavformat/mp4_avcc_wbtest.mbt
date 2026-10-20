@@ -13,9 +13,9 @@
 /// `nal_length_size`, sample slicing by `stco`/`stsz` and the decoder entry
 /// that consumes access units instead of an Annex B byte stream.
 
-///| `avcc_baseline.mp4` (base64).
-let h264_avcc_mp4_b64 : Bytes =
-  b"AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMabW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAABdwAAQAAAQAA" +
+///|
+/// `avcc_baseline.mp4` (base64).
+let h264_avcc_mp4_b64 : Bytes = b"AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAMabW9vdgAAAGxtdmhkAAAAAAAAAAAAAAAAAAAD6AAABdwAAQAAAQAA" +
   b"AAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAA" +
   b"AkV0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAABdwAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAA" +
   b"AAAAAAAAAAAAAABAAAAAAEAAAAAwAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAXcAAAAAAABAAAAAAG9bWRpYQAAACBtZGhk" +
@@ -84,7 +84,8 @@ let h264_avcc_mp4_b64 : Bytes =
   b"ADlBBcrvMtATBRKWAVjEp8Ny17tZYABAACscAwD/Ya+AIXEEcOVWr3yEAgHcAoIAAQFQYAEFwKLhyS8YuAgRHlkEZLmAuJinKozu" +
   b"WWhbiAAIFCJZAAB4AHAZc4A="
 
-///| Hex digest of one decoded frame's YUV420P planes.
+///|
+/// Hex digest of one decoded frame's YUV420P planes.
 fn h264_frame_md5(frame : @libavcodec.H264Frame) -> String {
   let yuv = frame.yuv420p()
   let digest = FixedArray::make(16, b'\x00')
@@ -99,6 +100,7 @@ fn h264_frame_md5(frame : @libavcodec.H264Frame) -> String {
   String::from_array(chars[:])
 }
 
+///|
 test "mp4: avcC + length-prefixed samples decode to FFmpeg YUV" {
   let mp4 = @libavutil.av_base64_decode(h264_avcc_mp4_b64, 8192).unwrap()
   let movie = av_mov_open(mp4).unwrap()
@@ -116,7 +118,7 @@ test "mp4: avcC + length-prefixed samples decode to FFmpeg YUV" {
     let s = t.samples[i]
     let off = s.offset.to_int()
     let end = off + s.size.reinterpret_as_int()
-    samples.push(mp4.clamped_view(start=off, end=end).to_owned())
+    samples.push(mp4.clamped_view(start=off, end~).to_owned())
   }
   assert_eq(samples.length(), 3)
   let frames = @libavcodec.h264_decode_avc_frames(extradata, samples, false).unwrap()

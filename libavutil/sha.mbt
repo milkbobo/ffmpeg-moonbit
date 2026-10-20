@@ -10,8 +10,9 @@
 /// uses the equivalent `CONFIG_SMALL` loop. The C struct stores a `transform`
 /// function pointer, replaced here by a boolean selector.
 
-///| Round constants for SHA-256, `K256` in libavutil/sha.c. */
-let sha_k256 : FixedArray[UInt] = [
+///|
+/// Round constants for SHA-256, `K256` in libavutil/sha.c. */
+let sha_k256 : FixedArray[UInt32] = [
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
   0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
   0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
@@ -26,77 +27,91 @@ let sha_k256 : FixedArray[UInt] = [
 
 ///|
 /// SHA-1 initial state; entries 5..7 are the zeroed tail of the C `state[8]`.
-let sha1_init_state : FixedArray[UInt] = [
+let sha1_init_state : FixedArray[UInt32] = [
   0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0, 0, 0, 0,
 ]
 
-///| SHA-224 initial state, `av_sha_init(ctx, 224)` in libavutil/sha.c. */
-let sha224_init_state : FixedArray[UInt] = [
+///|
+/// SHA-224 initial state, `av_sha_init(ctx, 224)` in libavutil/sha.c. */
+let sha224_init_state : FixedArray[UInt32] = [
   0xC1059ED8, 0x367CD507, 0x3070DD17, 0xF70E5939, 0xFFC00B31, 0x68581511, 0x64F98FA7,
   0xBEFA4FA4,
 ]
 
-///| SHA-256 initial state, `av_sha_init(ctx, 256)` in libavutil/sha.c. */
-let sha256_init_state : FixedArray[UInt] = [
+///|
+/// SHA-256 initial state, `av_sha_init(ctx, 256)` in libavutil/sha.c. */
+let sha256_init_state : FixedArray[UInt32] = [
   0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB,
   0x5BE0CD19,
 ]
 
-///| `rol(value, bits)`, the rotation helper from libavutil/sha.c. */
-fn sha_rol(value : UInt, bits : Int) -> UInt {
+///|
+/// `rol(value, bits)`, the rotation helper from libavutil/sha.c. */
+fn sha_rol(value : UInt32, bits : Int32) -> UInt32 {
   (value << bits) | (value >> (32 - bits))
 }
 
-///| Big-endian 32-bit read (`AV_RB32`) from a 64-byte block buffer. */
-fn sha_rb32(buffer : FixedArray[Byte], off : Int) -> UInt {
+///|
+/// Big-endian 32-bit read (`AV_RB32`) from a 64-byte block buffer. */
+fn sha_rb32(buffer : FixedArray[Byte], off : Int32) -> UInt32 {
   (buffer[off].to_uint() << 24) |
   (buffer[off + 1].to_uint() << 16) |
   (buffer[off + 2].to_uint() << 8) |
   buffer[off + 3].to_uint()
 }
 
-///| Big-endian 32-bit write (`AV_WB32`). */
-fn sha_wb32(digest : FixedArray[Byte], off : Int, v : UInt) -> Unit {
+///|
+/// Big-endian 32-bit write (`AV_WB32`). */
+fn sha_wb32(digest : FixedArray[Byte], off : Int32, v : UInt32) -> Unit {
   digest[off] = ((v >> 24) & 0xFF).to_byte()
   digest[off + 1] = ((v >> 16) & 0xFF).to_byte()
   digest[off + 2] = ((v >> 8) & 0xFF).to_byte()
   digest[off + 3] = (v & 0xFF).to_byte()
 }
 
-///| `Ch(x, y, z)` from libavutil/sha.c. */
-fn sha_ch(x : UInt, y : UInt, z : UInt) -> UInt {
+///|
+/// `Ch(x, y, z)` from libavutil/sha.c. */
+fn sha_ch(x : UInt32, y : UInt32, z : UInt32) -> UInt32 {
   (x & (y ^ z)) ^ z
 }
 
-///| `Maj(z, y, x)` from libavutil/sha.c, written as the usual `Maj(a, b, c)`. */
-fn sha_maj(x : UInt, y : UInt, z : UInt) -> UInt {
+///|
+/// `Maj(z, y, x)` from libavutil/sha.c, written as the usual `Maj(a, b, c)`. */
+fn sha_maj(x : UInt32, y : UInt32, z : UInt32) -> UInt32 {
   (x & y) | (x & z) | (y & z)
 }
 
-///| `Sigma0_256(x)`. */
-fn sha_b_sig0(x : UInt) -> UInt {
+///|
+/// `Sigma0_256(x)`. */
+fn sha_b_sig0(x : UInt32) -> UInt32 {
   sha_rol(x, 30) ^ sha_rol(x, 19) ^ sha_rol(x, 10)
 }
 
-///| `Sigma1_256(x)`. */
-fn sha_b_sig1(x : UInt) -> UInt {
+///|
+/// `Sigma1_256(x)`. */
+fn sha_b_sig1(x : UInt32) -> UInt32 {
   sha_rol(x, 26) ^ sha_rol(x, 21) ^ sha_rol(x, 7)
 }
 
-///| `sigma0_256(x)`. */
-fn sha_s_sig0(x : UInt) -> UInt {
+///|
+/// `sigma0_256(x)`. */
+fn sha_s_sig0(x : UInt32) -> UInt32 {
   sha_rol(x, 25) ^ sha_rol(x, 14) ^ (x >> 3)
 }
 
-///| `sigma1_256(x)`. */
-fn sha_s_sig1(x : UInt) -> UInt {
+///|
+/// `sigma1_256(x)`. */
+fn sha_s_sig1(x : UInt32) -> UInt32 {
   sha_rol(x, 15) ^ sha_rol(x, 13) ^ (x >> 10)
 }
 
 ///|
 /// `sha1_transform`: hash one 512-bit block into `state[0..5]`.
-fn sha1_transform(state : FixedArray[UInt], buffer : FixedArray[Byte]) -> Unit {
-  let block : FixedArray[UInt] = FixedArray::make(80, 0)
+fn sha1_transform(
+  state : FixedArray[UInt32],
+  buffer : FixedArray[Byte],
+) -> Unit {
+  let block : FixedArray[UInt32] = FixedArray::make(80, 0)
   let mut a = state[0]
   let mut b = state[1]
   let mut c = state[2]
@@ -116,12 +131,10 @@ fn sha1_transform(state : FixedArray[UInt], buffer : FixedArray[Byte]) -> Unit {
       } else {
         t = t + (b ^ c ^ d) + 0x6ED9EBA1
       }
+    } else if i < 60 {
+      t = t + (((b | c) & d) | (b & c)) + 0x8F1BBCDC
     } else {
-      if i < 60 {
-        t = t + (((b | c) & d) | (b & c)) + 0x8F1BBCDC
-      } else {
-        t = t + (b ^ c ^ d) + 0xCA62C1D6
-      }
+      t = t + (b ^ c ^ d) + 0xCA62C1D6
     }
     e = d
     d = c
@@ -138,8 +151,11 @@ fn sha1_transform(state : FixedArray[UInt], buffer : FixedArray[Byte]) -> Unit {
 
 ///|
 /// `sha256_transform`: hash one 512-bit block into `state[0..8]`.
-fn sha256_transform(state : FixedArray[UInt], buffer : FixedArray[Byte]) -> Unit {
-  let block : FixedArray[UInt] = FixedArray::make(64, 0)
+fn sha256_transform(
+  state : FixedArray[UInt32],
+  buffer : FixedArray[Byte],
+) -> Unit {
+  let block : FixedArray[UInt32] = FixedArray::make(64, 0)
   let mut a = state[0]
   let mut b = state[1]
   let mut c = state[2]
@@ -179,16 +195,18 @@ fn sha256_transform(state : FixedArray[UInt], buffer : FixedArray[Byte]) -> Unit
   state[7] = state[7] + h
 }
 
-///| SHA context, mirroring `struct AVSHA` in libavutil/sha.c. */
+///|
+/// SHA context, mirroring `struct AVSHA` in libavutil/sha.c. */
 pub struct AVSHA {
-  mut digest_len : Int
+  mut digest_len : Int32
   mut count : UInt64
   buffer : FixedArray[Byte]
-  mut state : FixedArray[UInt]
+  mut state : FixedArray[UInt32]
   mut is_sha1 : Bool
 }
 
-///| `av_sha_alloc`: create a zeroed SHA context. */
+///|
+/// `av_sha_alloc`: create a zeroed SHA context. */
 pub fn av_sha_alloc() -> AVSHA {
   {
     digest_len: 0,
@@ -202,7 +220,7 @@ pub fn av_sha_alloc() -> AVSHA {
 ///|
 /// `av_sha_init`: initialise a context for `bits` in {160, 224, 256}.
 /// Returns `Err` for other digest sizes, mirroring `AVERROR(EINVAL)`.
-pub fn av_sha_init(ctx : AVSHA, bits : Int) -> Result[Unit, String] {
+pub fn av_sha_init(ctx : AVSHA, bits : Int32) -> Result[Unit, String] {
   ctx.digest_len = bits >> 5
   ctx.count = 0
   if bits == 160 {
@@ -222,7 +240,8 @@ pub fn av_sha_init(ctx : AVSHA, bits : Int) -> Result[Unit, String] {
   }
 }
 
-///| Dispatch to the transform selected by `av_sha_init`. */
+///|
+/// Dispatch to the transform selected by `av_sha_init`. */
 fn sha_transform(ctx : AVSHA) -> Unit {
   if ctx.is_sha1 {
     sha1_transform(ctx.state, ctx.buffer)
@@ -231,8 +250,9 @@ fn sha_transform(ctx : AVSHA) -> Unit {
   }
 }
 
-///| `av_sha_update`: feed `len` bytes of `data` into the context. */
-pub fn av_sha_update(ctx : AVSHA, data : Bytes, len : Int) -> Unit {
+///|
+/// `av_sha_update`: feed `len` bytes of `data` into the context. */
+pub fn av_sha_update(ctx : AVSHA, data : Bytes, len : Int32) -> Unit {
   let mut j = (ctx.count & 63).to_int()
   ctx.count = ctx.count + len.to_uint64()
   for i = 0; i < len; i = i + 1 {
@@ -263,12 +283,13 @@ pub fn av_sha_final(ctx : AVSHA, digest : FixedArray[Byte]) -> Unit {
   }
 }
 
-///| One-shot digest of `src[0..len)` into `digest` for the given `bits`. */
+///|
+/// One-shot digest of `src[0..len)` into `digest` for the given `bits`. */
 pub fn av_sha_sum(
   digest : FixedArray[Byte],
   src : Bytes,
-  len : Int,
-  bits : Int
+  len : Int32,
+  bits : Int32,
 ) -> Result[Unit, String] {
   let ctx = av_sha_alloc()
   match av_sha_init(ctx, bits) {

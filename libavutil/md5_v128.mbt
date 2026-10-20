@@ -20,18 +20,20 @@
 /// Gated to `native`/`wasm`; other targets keep the scalar `av_md5_sum`.
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
-///| Little-endian 32-bit read (`AV_RL32`) from a mutable byte buffer. */
+///|
+/// Little-endian 32-bit read (`AV_RL32`) from a mutable byte buffer. */
 #cfg(any(target="native", target="wasm"))
-fn md5v_rl32(src : FixedArray[Byte], off : Int) -> UInt {
+fn md5v_rl32(src : FixedArray[Byte], off : Int32) -> UInt32 {
   src[off].to_uint() |
   (src[off + 1].to_uint() << 8) |
   (src[off + 2].to_uint() << 16) |
   (src[off + 3].to_uint() << 24)
 }
 
-///| Little-endian 32-bit write (`AV_WL32`) into a digest buffer. */
+///|
+/// Little-endian 32-bit write (`AV_WL32`) into a digest buffer. */
 #cfg(any(target="native", target="wasm"))
-fn md5v_wl32(dst : FixedArray[Byte], off : Int, v : UInt) -> Unit {
+fn md5v_wl32(dst : FixedArray[Byte], off : Int32, v : UInt32) -> Unit {
   dst[off] = (v & 0xFF).to_byte()
   dst[off + 1] = ((v >> 8) & 0xFF).to_byte()
   dst[off + 2] = ((v >> 16) & 0xFF).to_byte()
@@ -42,7 +44,7 @@ fn md5v_wl32(dst : FixedArray[Byte], off : Int, v : UInt) -> Unit {
 /// Lane-wise `F`/`G`/`H`/`I` nonlinear functions of the MD5 round, the vector
 /// forms of the `if (i < 32) { ... } else { ... }` branches of the `CORE` macro.
 #cfg(any(target="native", target="wasm"))
-fn md5v_f(i : Int, b : V128, c : V128, d : V128) -> V128 {
+fn md5v_f(i : Int32, b : V128, c : V128, d : V128) -> V128 {
   if i < 16 {
     @v128.v128_xor(d, @v128.v128_and_(b, @v128.v128_xor(c, d)))
   } else if i < 32 {
@@ -54,9 +56,10 @@ fn md5v_f(i : Int, b : V128, c : V128, d : V128) -> V128 {
   }
 }
 
-///| `rotl32(a, t)` applied to all four lanes (`a << t | a >> (32 - t)`). */
+///|
+/// `rotl32(a, t)` applied to all four lanes (`a << t | a >> (32 - t)`). */
 #cfg(any(target="native", target="wasm"))
-fn md5v_rotl(a : V128, t : Int) -> V128 {
+fn md5v_rotl(a : V128, t : Int32) -> V128 {
   @v128.v128_or_(@v128.i32x4_shl(a, t), @v128.i32x4_shr_u(a, 32 - t))
 }
 
@@ -70,7 +73,7 @@ fn md5v_rotl(a : V128, t : Int) -> V128 {
 pub fn av_md5_sum_x4(
   dst : FixedArray[Byte],
   srcs : FixedArray[Bytes],
-  len : Int,
+  len : Int32,
 ) -> Unit {
   // Per-lane padded message: `len` bytes, one 0x80, then the LE 64-bit bit
   // length in the final 8 bytes — the same schedule as `av_md5_final`.

@@ -10,36 +10,38 @@
 /// `H264Sps`/`HevcSps` are parsed copies: the parameter-set store lives in
 /// libavcodec and is not retained in `CodecParameters`.
 
-///| Codec parameters as far as the demuxing slices need them. */
+///|
+/// Codec parameters as far as the demuxing slices need them. */
 pub struct CodecParameters {
-  ///| FFmpeg codec name ("h264", "hevc", "aac", "mp3", ...).
+  /// FFmpeg codec name ("h264", "hevc", "aac", "mp3", ...).
   codec : String
-  ///| Numeric profile (H.264/HEVC profile_idc, AAC object type); 0 unknown.
-  mut profile : Int
-  ///| Level (H.264 level_idc or HEVC general_level_idc); 0 unknown.
-  mut level : Int
-  mut width : Int
-  mut height : Int
-  ///| Chroma format (0 mono, 1 4:2:0, 2 4:2:2, 3 4:4:4).
-  mut chroma_format : Int
-  mut bit_depth : Int
-  ///| FFmpeg pixel-format name ("yuv420p", "yuv420p10le", ...).
+  /// Numeric profile (H.264/HEVC profile_idc, AAC object type); 0 unknown.
+  mut profile : Int32
+  /// Level (H.264 level_idc or HEVC general_level_idc); 0 unknown.
+  mut level : Int32
+  mut width : Int32
+  mut height : Int32
+  /// Chroma format (0 mono, 1 4:2:0, 2 4:2:2, 3 4:4:4).
+  mut chroma_format : Int32
+  mut bit_depth : Int32
+  /// FFmpeg pixel-format name ("yuv420p", "yuv420p10le", ...).
   mut pix_fmt : String
-  mut sample_rate : Int
-  mut channels : Int
-  ///| PCM samples per frame (AAC 1024, MP3 1152/576); 0 for video.
-  mut frame_size : Int
-  ///| Frame rate from the H.264/HEVC VUI, as a rational; 0/0 when absent.
-  mut fps_num : Int
-  mut fps_den : Int
-  ///| Sample aspect ratio from the VUI; 0/1 when unspecified.
-  mut sar_num : Int
-  mut sar_den : Int
-  ///| True when the codec-specific extradata was successfully parsed.
+  mut sample_rate : Int32
+  mut channels : Int32
+  /// PCM samples per frame (AAC 1024, MP3 1152/576); 0 for video.
+  mut frame_size : Int32
+  /// Frame rate from the H.264/HEVC VUI, as a rational; 0/0 when absent.
+  mut fps_num : Int32
+  mut fps_den : Int32
+  /// Sample aspect ratio from the VUI; 0/1 when unspecified.
+  mut sar_num : Int32
+  mut sar_den : Int32
+  /// True when the codec-specific extradata was successfully parsed.
   mut extradata_parsed : Bool
 }
 
-///| Empty parameters with a codec name. */
+///|
+/// Empty parameters with a codec name. */
 fn new_codec_parameters(codec : String) -> CodecParameters {
   {
     codec,
@@ -61,8 +63,9 @@ fn new_codec_parameters(codec : String) -> CodecParameters {
   }
 }
 
-///| FFmpeg's native-endian pixel-format names for 4:2:0/4:2:2/4:4:4/gray. */
-fn pix_fmt_name(chroma : Int, depth : Int) -> String {
+///|
+/// FFmpeg's native-endian pixel-format names for 4:2:0/4:2:2/4:4:4/gray. */
+fn pix_fmt_name(chroma : Int32, depth : Int32) -> String {
   let base = match chroma {
     0 => "gray"
     1 => "yuv420p"
@@ -81,10 +84,9 @@ fn pix_fmt_name(chroma : Int, depth : Int) -> String {
   }
 }
 
-///| Find the first SPS in the id-indexed store (C's `ps->sps_list` walk). */
-fn first_h264_sps(
-  ps : @libavcodec.H264ParamSets
-) -> @libavcodec.H264Sps? {
+///|
+/// Find the first SPS in the id-indexed store (C's `ps->sps_list` walk). */
+fn first_h264_sps(ps : @libavcodec.H264ParamSets) -> @libavcodec.H264Sps? {
   for i = 0; i < @libavcodec.max_sps_count; i = i + 1 {
     match ps.sps_list[i] {
       Some(sps) => return Some(sps)
@@ -94,10 +96,9 @@ fn first_h264_sps(
   None
 }
 
-///| Find the first HEVC SPS. */
-fn first_hevc_sps(
-  ps : @libavcodec.HevcParamSets
-) -> @libavcodec.HevcSps? {
+///|
+/// Find the first HEVC SPS. */
+fn first_hevc_sps(ps : @libavcodec.HevcParamSets) -> @libavcodec.HevcSps? {
   for i = 0; i < @libavcodec.hevc_max_sps_count; i = i + 1 {
     match ps.sps_list[i] {
       Some(sps) => return Some(sps)
@@ -114,10 +115,10 @@ fn first_hevc_sps(
 pub fn codec_parameters_from_extradata(
   codec : String,
   extradata : Bytes?,
-  width : Int,
-  height : Int,
-  sample_rate : Int,
-  channels : Int
+  width : Int32,
+  height : Int32,
+  sample_rate : Int32,
+  channels : Int32,
 ) -> CodecParameters {
   let p = new_codec_parameters(codec)
   p.width = width
@@ -176,9 +177,11 @@ pub fn codec_parameters_from_extradata(
         p.chroma_format = sps.chroma_format_idc
         p.bit_depth = sps.bit_depth
         p.pix_fmt = sps.pix_fmt
-        let w = sps.width - sps.output_window.left_offset -
+        let w = sps.width -
+          sps.output_window.left_offset -
           sps.output_window.right_offset
-        let h = sps.height - sps.output_window.top_offset -
+        let h = sps.height -
+          sps.output_window.top_offset -
           sps.output_window.bottom_offset
         if w > 0 {
           p.width = w
@@ -215,8 +218,9 @@ pub fn codec_parameters_from_extradata(
   p
 }
 
-///| UInt64 → Int for container fields, clamping out-of-range values to 0. */
-fn u64_to_int(v : UInt64) -> Int {
+///|
+/// UInt64 → Int for container fields, clamping out-of-range values to 0. */
+fn u64_to_int(v : UInt64) -> Int32 {
   if v <= 2147483647UL {
     v.to_int()
   } else {
@@ -258,11 +262,17 @@ pub fn mkv_track_codec_parameters(track : MkvTrack) -> CodecParameters {
     0
   }
   codec_parameters_from_extradata(
-    codec, track.codec_priv, width, height, sample_rate, channels,
+    codec,
+    track.codec_priv,
+    width,
+    height,
+    sample_rate,
+    channels,
   )
 }
 
-///| MP4/MOV track → codec parameters. */
+///|
+/// MP4/MOV track → codec parameters. */
 pub fn mp4_track_codec_parameters(track : Mp4Track) -> CodecParameters {
   let codec = mov_codec_name(track.codec, track.codec_id)
   let sample_rate = if track.sample_rate <= 2147483647U {
@@ -276,6 +286,11 @@ pub fn mp4_track_codec_parameters(track : Mp4Track) -> CodecParameters {
     0
   }
   codec_parameters_from_extradata(
-    codec, track.extradata, track.width, track.height, sample_rate, channels,
+    codec,
+    track.extradata,
+    track.width,
+    track.height,
+    sample_rate,
+    channels,
   )
 }

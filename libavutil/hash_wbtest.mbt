@@ -3,8 +3,9 @@
 /// Reference digests come from `tests/ref/fate/md5`, `tests/ref/fate/sha` and
 /// the FIPS 180 test vectors quoted in libavutil/tests/sha.c.
 
-///| Render the first `n` bytes of `bytes` as a lowercase hex string. */
-fn hash_hex(bytes : FixedArray[Byte], n : Int) -> String {
+///|
+/// Render the first `n` bytes of `bytes` as a lowercase hex string. */
+fn hash_hex(bytes : FixedArray[Byte], n : Int32) -> String {
   let digits : Bytes = b"0123456789abcdef"
   let chars : Array[Char] = []
   for i = 0; i < n; i = i + 1 {
@@ -15,7 +16,8 @@ fn hash_hex(bytes : FixedArray[Byte], n : Int) -> String {
   String::from_array(chars[:])
 }
 
-///| tests/ref/fate/md5, produced by libavutil/tests/md5.c. */
+///|
+/// tests/ref/fate/md5, produced by libavutil/tests/md5.c. */
 test "av_md5 matches fate/md5 reference" {
   let buf : FixedArray[Byte] = FixedArray::make(1000, b'\x00')
   for i = 0; i < 1000; i = i + 1 {
@@ -39,7 +41,8 @@ test "av_md5 matches fate/md5 reference" {
   assert_eq(hash_hex(dst, 16), "a22bfef14302c5ca46e0ae91092bc0e0")
 }
 
-///| RFC 1321 / well-known MD5 vectors, plus an incremental-vs-one-shot check. */
+///|
+/// RFC 1321 / well-known MD5 vectors, plus an incremental-vs-one-shot check. */
 test "av_md5 known vectors" {
   let dst : FixedArray[Byte] = FixedArray::make(16, b'\x00')
   av_md5_sum(dst, b"", 0)
@@ -59,7 +62,8 @@ test "av_md5 known vectors" {
   assert_eq(hash_hex(dst, 16), "900150983cd24fb0d6963f7d28e17f72")
 }
 
-///| tests/ref/fate/sha and FIPS 180 vectors (160/224/256 bits). */
+///|
+/// tests/ref/fate/sha and FIPS 180 vectors (160/224/256 bits). */
 test "av_sha matches FIPS 180 vectors" {
   let abc = b"abc"
   let two_block = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
@@ -77,22 +81,41 @@ test "av_sha matches FIPS 180 vectors" {
 
   // SHA-224
   let _ = av_sha_sum(dst, abc, 3, 224).unwrap()
-  assert_eq(hash_hex(dst, 28), "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7")
+  assert_eq(
+    hash_hex(dst, 28),
+    "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7",
+  )
   let _ = av_sha_sum(dst, two_block, 56, 224).unwrap()
-  assert_eq(hash_hex(dst, 28), "75388b16512776cc5dba5da1fd890150b0c6455cb4f58b1952522525")
+  assert_eq(
+    hash_hex(dst, 28),
+    "75388b16512776cc5dba5da1fd890150b0c6455cb4f58b1952522525",
+  )
   let _ = av_sha_sum(dst, million, 1000000, 224).unwrap()
-  assert_eq(hash_hex(dst, 28), "20794655980c91d8bbb4c1ea97618a4bf03f42581948b2ee4ee7ad67")
+  assert_eq(
+    hash_hex(dst, 28),
+    "20794655980c91d8bbb4c1ea97618a4bf03f42581948b2ee4ee7ad67",
+  )
 
   // SHA-256
   let _ = av_sha_sum(dst, abc, 3, 256).unwrap()
-  assert_eq(hash_hex(dst, 32), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+  assert_eq(
+    hash_hex(dst, 32),
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+  )
   let _ = av_sha_sum(dst, two_block, 56, 256).unwrap()
-  assert_eq(hash_hex(dst, 32), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+  assert_eq(
+    hash_hex(dst, 32),
+    "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+  )
   let _ = av_sha_sum(dst, million, 1000000, 256).unwrap()
-  assert_eq(hash_hex(dst, 32), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+  assert_eq(
+    hash_hex(dst, 32),
+    "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+  )
 }
 
-///| `av_sha_init` must reject digest sizes other than 160/224/256. */
+///|
+/// `av_sha_init` must reject digest sizes other than 160/224/256. */
 test "av_sha_init rejects unsupported sizes" {
   let ctx = av_sha_alloc()
   assert_true(av_sha_init(ctx, 128) is Err(_))

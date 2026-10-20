@@ -29,72 +29,91 @@
 // Constants (matroskadec.c / matroska.h / EBML spec)
 // ---------------------------------------------------------------------------
 
-///| `EBML_UNKNOWN_LENGTH` (`UINT64_MAX`): the unknown-length marker. */
+///|
+/// `EBML_UNKNOWN_LENGTH` (`UINT64_MAX`): the unknown-length marker. */
 pub let ebml_unknown_length : UInt64 = 0xFFFFFFFFFFFFFFFFUL
 
-///| `NEEDS_CHECKING`: some error checks still need to be performed. */
-pub let needs_checking : Int = 2
+///|
+/// `NEEDS_CHECKING`: some error checks still need to be performed. */
+pub let needs_checking : Int32 = 2
 
-///| `LEVEL_ENDED`: the syntax level used for parsing ended. */
-pub let level_ended : Int = 3
+///|
+/// `LEVEL_ENDED`: the syntax level used for parsing ended. */
+pub let level_ended : Int32 = 3
 
-///| `EBML_MAX_DEPTH`: maximum EBML nesting depth. */
-pub let ebml_max_depth : Int = 16
+///|
+/// `EBML_MAX_DEPTH`: maximum EBML nesting depth. */
+pub let ebml_max_depth : Int32 = 16
 
-///| `SKIP_THRESHOLD`: non-seekable mode error threshold for unknown data. */
+///|
+/// `SKIP_THRESHOLD`: non-seekable mode error threshold for unknown data. */
 pub let skip_threshold : Int64 = 1048576
 
-///| `UNKNOWN_EQUIV`: bytes an unknown element counts as in that check. */
+///|
+/// `UNKNOWN_EQUIV`: bytes an unknown element counts as in that check. */
 pub let unknown_equiv : Int64 = 51200
 
-///| `EBML_ID_HEADER`. */
-pub let ebml_id_header : UInt = 0x1A45DFA3
+///|
+/// `EBML_ID_HEADER`. */
+pub let ebml_id_header : UInt32 = 0x1A45DFA3
 
-///| `EBML_ID_VOID`. */
-pub let ebml_id_void : UInt = 0xEC
+///|
+/// `EBML_ID_VOID`. */
+pub let ebml_id_void : UInt32 = 0xEC
 
-///| `EBML_ID_CRC32`. */
-pub let ebml_id_crc32 : UInt = 0xBF
+///|
+/// `EBML_ID_CRC32`. */
+pub let ebml_id_crc32 : UInt32 = 0xBF
 
-///| `MATROSKA_ID_SEGMENT`. */
-pub let matroska_id_segment : UInt = 0x18538067
+///|
+/// `MATROSKA_ID_SEGMENT`. */
+pub let matroska_id_segment : UInt32 = 0x18538067
 
-///| `MATROSKA_ID_CLUSTER` (unknown-length element policy). */
-pub let matroska_id_cluster : UInt = 0x1F43B675
+///|
+/// `MATROSKA_ID_CLUSTER` (unknown-length element policy). */
+pub let matroska_id_cluster : UInt32 = 0x1F43B675
 
-///| `MATROSKA_ID_INFO`. */
-pub let matroska_id_info : UInt = 0x1549A966
+///|
+/// `MATROSKA_ID_INFO`. */
+pub let matroska_id_info : UInt32 = 0x1549A966
 
-///| `MATROSKA_ID_TRACKS`. */
-pub let matroska_id_tracks : UInt = 0x1654AE6B
+///|
+/// `MATROSKA_ID_TRACKS`. */
+pub let matroska_id_tracks : UInt32 = 0x1654AE6B
 
-///| `MATROSKA_ID_CUES`. */
-pub let matroska_id_cues : UInt = 0x1C53BB6B
+///|
+/// `MATROSKA_ID_CUES`. */
+pub let matroska_id_cues : UInt32 = 0x1C53BB6B
 
-///| `MATROSKA_ID_TAGS`. */
-pub let matroska_id_tags : UInt = 0x1254C367
+///|
+/// `MATROSKA_ID_TAGS`. */
+pub let matroska_id_tags : UInt32 = 0x1254C367
 
-///| `MATROSKA_ID_SEEKHEAD`. */
-pub let matroska_id_seekhead : UInt = 0x114D9B74
+///|
+/// `MATROSKA_ID_SEEKHEAD`. */
+pub let matroska_id_seekhead : UInt32 = 0x114D9B74
 
-///| `MATROSKA_ID_ATTACHMENTS`. */
-pub let matroska_id_attachments : UInt = 0x1941A469
+///|
+/// `MATROSKA_ID_ATTACHMENTS`. */
+pub let matroska_id_attachments : UInt32 = 0x1941A469
 
-///| `MATROSKA_ID_CHAPTERS`. */
-pub let matroska_id_chapters : UInt = 0x1043A770
+///|
+/// `MATROSKA_ID_CHAPTERS`. */
+pub let matroska_id_chapters : UInt32 = 0x1043A770
 
 // ---------------------------------------------------------------------------
 // Syntax rows (the EbmlType union of matroska.h + per-row sinks)
 // ---------------------------------------------------------------------------
 
-///| One parsed scalar; the payload handed to a row's sink. */
+///|
+/// One parsed scalar; the payload handed to a row's sink. */
 pub enum EbmlValue {
   U(UInt64)
   I(Int64)
   F(Double)
   S(String)
   B(Bytes)
-  ///| A master element was walked; the payload is its start position.
+  /// A master element was walked; the payload is its start position.
   Master
 }
 
@@ -103,21 +122,21 @@ pub enum EbmlValue {
 /// payload is the C `def` default applied when the element is empty
 /// (size 0).
 pub enum EbmlKind {
-  ///| `EBML_NONE`: recognised but skipped.
+  /// `EBML_NONE`: recognised but skipped.
   Skip
   Uint(UInt64)
   Sint(Int64)
   Float(Double)
-  ///| `EBML_STR`/`EBML_UTF8`; `None` default means "no default string".
+  /// `EBML_STR`/`EBML_UTF8`; `None` default means "no default string".
   Str(String?)
   Bin
-  ///| `EBML_NEST`: a master element with the given child table thunk
+  /// `EBML_NEST`: a master element with the given child table thunk
   /// (C: a static array; a thunk breaks reference cycles).
   Nest(() -> Array[EbmlSyntax])
-  ///| `EBML_LEVEL1`: like `Nest`, but the element is also registered in
+  /// `EBML_LEVEL1`: like `Nest`, but the element is also registered in
   /// the level-1 element table (dedup + seekhead bookkeeping).
   Level1(() -> Array[EbmlSyntax])
-  ///| `EBML_STOP`: parsing stops when this id is seen (the id stays in
+  /// `EBML_STOP`: parsing stops when this id is seen (the id stays in
   /// `current_id`, unread, exactly as in the C).
   Stop
 }
@@ -127,42 +146,45 @@ pub enum EbmlKind {
 /// the offset write replaced by a `sink` closure over the parsed value
 /// (and the element's own start position, what `EbmlBin.pos` carries).
 pub struct EbmlSyntax {
-  id : UInt
+  id : UInt32
   kind : EbmlKind
   sink : ((EbmlValue, Int64) -> Result[Unit, String])?
 }
 
-///| `MatroskaLevel1Element`: one level-1 element seen (or seekhead-placed). */
+///|
+/// `MatroskaLevel1Element`: one level-1 element seen (or seekhead-placed). */
 pub struct MkvLevel1Elem {
-  id : UInt
-  ///| Absolute position (0 = not yet placed; the C's sentinel).
+  id : UInt32
+  /// Absolute position (0 = not yet placed; the C's sentinel).
   mut pos : Int64
   mut parsed : Bool
 }
 
-///| The parse-time state (the walker's slice of `MatroskaDemuxContext`). */
+///|
+/// The parse-time state (the walker's slice of `MatroskaDemuxContext`). */
 pub struct EbmlState {
   pb : AvioContext
-  ///| `matroska->levels[]`: (start, length) of each open master element.
+  /// `matroska->levels[]`: (start, length) of each open master element.
   levels : Array[(Int64, UInt64)]
-  ///| `matroska->current_id`: an element id read but not yet consumed.
-  mut current_id : UInt
-  ///| `matroska->resync_pos`: last known good position.
+  /// `matroska->current_id`: an element id read but not yet consumed.
+  mut current_id : UInt32
+  /// `matroska->resync_pos`: last known good position.
   mut resync_pos : Int64
-  ///| `matroska->unknown_count`: consecutive unknown elements (non-seekable).
-  mut unknown_count : Int
-  ///| `matroska->is_live`: in live mode, EOF finishes parsing.
+  /// `matroska->unknown_count`: consecutive unknown elements (non-seekable).
+  mut unknown_count : Int32
+  /// `matroska->is_live`: in live mode, EOF finishes parsing.
   mut is_live : Bool
-  ///| `matroska->level1_elems[]` (capacity 64 in the C).
+  /// `matroska->level1_elems[]` (capacity 64 in the C).
   level1_elems : Array[MkvLevel1Elem]
-  ///| `matroska->segment_start`.
+  /// `matroska->segment_start`.
   mut segment_start : Int64
-  ///| `matroska->cues_parsing_deferred`: 1 deferred (default), 0 parsed,
+  /// `matroska->cues_parsing_deferred`: 1 deferred (default), 0 parsed,
   /// -1 broken.
-  mut cues_parsing_deferred : Int
+  mut cues_parsing_deferred : Int32
 }
 
-///| Fresh parse state over `pb`. */
+///|
+/// Fresh parse state over `pb`. */
 pub fn EbmlState::new(pb : AvioContext) -> EbmlState {
   {
     pb,
@@ -177,7 +199,8 @@ pub fn EbmlState::new(pb : AvioContext) -> EbmlState {
   }
 }
 
-///| Parse state in live mode: reaching EOF finishes parsing instead of
+///|
+/// Parse state in live mode: reaching EOF finishes parsing instead of
 /// erroring (the `is_live` demuxer flag). */
 pub fn EbmlState::new_live(pb : AvioContext) -> EbmlState {
   let st = EbmlState::new(pb)
@@ -194,9 +217,10 @@ pub fn EbmlState::new_live(pb : AvioContext) -> EbmlState {
 /// leading zero count gives the width; the marker bit is cleared and the
 /// remaining bytes appended big-endian. Returns `(number, bytes_read)`.
 pub fn ebml_read_num(
-    pb : AvioContext,
-    max_size : Int,
-    eof_forbidden : Bool) -> Result[(UInt64, Int), String] {
+  pb : AvioContext,
+  max_size : Int32,
+  eof_forbidden : Bool,
+) -> Result[(UInt64, Int32), String] {
   let total0 = pb.avio_r8()
   if pb.eof_reached {
     // the C err label: read error when present, else EOF vs EIO by flag
@@ -234,7 +258,7 @@ pub fn ebml_read_num(
 ///|
 /// `ebml_read_length`: an element length; every all-ones encoding of its
 /// width maps to the unknown-length marker.
-pub fn ebml_read_length(pb : AvioContext) -> Result[(UInt64, Int), String] {
+pub fn ebml_read_length(pb : AvioContext) -> Result[(UInt64, Int32), String] {
   match ebml_read_num(pb, 8, true) {
     Err(e) => Err(e)
     Ok((number, res)) => {
@@ -253,10 +277,11 @@ pub fn ebml_read_length(pb : AvioContext) -> Result[(UInt64, Int), String] {
 /// the default. Returns `true` for the C's NEEDS_CHECKING, `false` for the
 /// plain success.
 pub fn ebml_read_uint(
-    pb : AvioContext,
-    size : Int,
-    default_value : UInt64,
-    num : (UInt64) -> Unit) -> Result[Bool, String] {
+  pb : AvioContext,
+  size : Int32,
+  default_value : UInt64,
+  num : (UInt64) -> Unit,
+) -> Result[Bool, String] {
   if size == 0 {
     num(default_value)
     return Ok(false)
@@ -276,10 +301,11 @@ pub fn ebml_read_uint(
 /// 64 bits and the rest appended in wrapping u64 arithmetic, exactly as the
 /// C builds it.
 pub fn ebml_read_sint(
-    pb : AvioContext,
-    size : Int,
-    default_value : Int64,
-    num : (Int64) -> Unit) -> Result[Bool, String] {
+  pb : AvioContext,
+  size : Int32,
+  default_value : Int64,
+  num : (Int64) -> Unit,
+) -> Result[Bool, String] {
   if size == 0 {
     num(default_value)
     return Ok(false)
@@ -305,10 +331,11 @@ pub fn ebml_read_sint(
 /// `ebml_read_float`: 4-byte (binary32) or 8-byte (binary64) big-endian
 /// float; any other non-zero size is invalid.
 pub fn ebml_read_float(
-    pb : AvioContext,
-    size : Int,
-    default_value : Double,
-    num : (Double) -> Unit) -> Result[Bool, String] {
+  pb : AvioContext,
+  size : Int32,
+  default_value : Double,
+  num : (Double) -> Unit,
+) -> Result[Bool, String] {
   if size == 0 {
     num(default_value)
     return Ok(false)
@@ -324,8 +351,9 @@ pub fn ebml_read_float(
   Err("EINVAL")
 }
 
-///| `av_int2float` + widen: u32 bits read as binary32, widened to Double. */
-fn f32_bits_to_double(bits : UInt) -> Double {
+///|
+/// `av_int2float` + widen: u32 bits read as binary32, widened to Double. */
+fn f32_bits_to_double(bits : UInt32) -> Double {
   let sign : Double = if (bits & 0x80000000) != 0 { -1.0 } else { 1.0 }
   let exp = ((bits >> 23) & 0xFF).reinterpret_as_int()
   let mant = (bits & 0x7FFFFF).to_double()
@@ -342,9 +370,10 @@ fn f32_bits_to_double(bits : UInt) -> Double {
   sign * (1.0 + mant / 8388608.0) * pow2_i(exp - 127)
 }
 
-///| `av_int2double`: u64 bits read as binary64. */
+///|
+/// `av_int2double`: u64 bits read as binary64. */
 fn f64_bits_to_double(bits : UInt64) -> Double {
-  let sign : Double = if (bits >> 63) != 0UL { -1.0 } else { 1.0 }
+  let sign : Double = if bits >> 63 != 0UL { -1.0 } else { 1.0 }
   let exp = ((bits >> 52) & 0x7FFUL).reinterpret_as_int64().to_int()
   let mant = (bits & 0xFFFFFFFFFFFFFUL).to_double()
   if exp == 0x7FF {
@@ -359,8 +388,9 @@ fn f64_bits_to_double(bits : UInt64) -> Double {
   sign * (1.0 + mant / 4503599627370496.0) * pow2_i(exp - 1023)
 }
 
-///| 2^n by squaring for the float reconstructions (n in [-1074, 1023]). */
-fn pow2_i(n : Int) -> Double {
+///|
+/// 2^n by squaring for the float reconstructions (n in [-1074, 1023]). */
+fn pow2_i(n : Int32) -> Double {
   if n >= 0 {
     let mut r = 1.0
     let mut b = 2.0
@@ -384,9 +414,10 @@ fn pow2_i(n : Int) -> Double {
 /// `(string, needs_checking)`; `None` string marks a short read, where the
 /// C leaves the destination untouched and defers to the EOF check.
 pub fn ebml_read_ascii(
-    pb : AvioContext,
-    size : Int,
-    default_value : String?) -> Result[(String?, Bool), String] {
+  pb : AvioContext,
+  size : Int32,
+  default_value : String?,
+) -> Result[(String?, Bool), String] {
   if size == 0 && default_value is Some(_) {
     return Ok((default_value, false))
   }
@@ -401,13 +432,14 @@ pub fn ebml_read_ascii(
   }
 }
 
-///| Bytes → MoonBit string, lenient UTF-8 (U+FFFD on malformed input). */
+///|
+/// Bytes → MoonBit string, lenient UTF-8 (U+FFFD on malformed input). */
 fn mkv_utf8_to_string_bytes(data : Bytes) -> String {
   let chars : Array[Char] = []
   let mut i = 0
   while i < data.length() {
     let b0 = data[i].to_int()
-    let mut cp : Int = 0xFFFD
+    let mut cp : Int32 = 0xFFFD
     let mut extra = 0
     if b0 < 0x80 {
       cp = b0
@@ -455,9 +487,10 @@ fn mkv_utf8_to_string_bytes(data : Bytes) -> String {
 /// (the C stores `EbmlBin { data, size, pos }`; the position is `pos_alt`,
 /// right after the element header).
 pub fn ebml_read_binary(
-    pb : AvioContext,
-    length : Int,
-    pos : Int64) -> Result[(Bytes?, Int64), String] {
+  pb : AvioContext,
+  length : Int32,
+  pos : Int64,
+) -> Result[(Bytes?, Int64), String] {
   match pb.avio_read(length) {
     Err(e) => Err(e)
     Ok(bytes) => {
@@ -474,9 +507,10 @@ pub fn ebml_read_binary(
 /// `ebml_read_master`: push a level for a master of `length` starting at
 /// `pos`; beyond `EBML_MAX_DEPTH` it is `ENOSYS`.
 pub fn ebml_read_master(
-    st : EbmlState,
-    length : UInt64,
-    pos : Int64) -> Result[Unit, String] {
+  st : EbmlState,
+  length : UInt64,
+  pos : Int64,
+) -> Result[Unit, String] {
   if st.levels.length() >= ebml_max_depth {
     return Err("ENOSYS")
   }
@@ -487,7 +521,9 @@ pub fn ebml_read_master(
 ///|
 /// `matroska_ebmlnum_sint`: a signed EBML number as used by laced block
 /// sizes — read unsigned, then rebias by the width's marker value.
-pub fn matroska_ebmlnum_sint(pb : AvioContext) -> Result[(Int64, Int), String] {
+pub fn matroska_ebmlnum_sint(
+  pb : AvioContext,
+) -> Result[(Int64, Int32), String] {
   match ebml_read_num(pb, 8, true) {
     Err(e) => Err(e)
     Ok((unum, res)) => {
@@ -501,7 +537,7 @@ pub fn matroska_ebmlnum_sint(pb : AvioContext) -> Result[(Int64, Int), String] {
 /// `is_ebml_id_valid`: the marker-bit position must agree with the id's
 /// byte length — `av_log2(id)` bits imply `(bits + 7) / 8` bytes and the
 /// leading length bit must sit exactly at `8 - bits % 8`.
-pub fn is_ebml_id_valid(id : UInt) -> Bool {
+pub fn is_ebml_id_valid(id : UInt32) -> Bool {
   if id == 0 {
     return false
   }
@@ -513,8 +549,9 @@ pub fn is_ebml_id_valid(id : UInt) -> Bool {
 // The generic walker (matroskadec.c ebml_parse / ebml_parse_nest)
 // ---------------------------------------------------------------------------
 
-///| `ebml_parse_id`: the row for `id`, or `None` (the C's sentinel row). */
-fn ebml_find_syntax(syntax : Array[EbmlSyntax], id : UInt) -> EbmlSyntax? {
+///|
+/// `ebml_parse_id`: the row for `id`, or `None` (the C's sentinel row). */
+fn ebml_find_syntax(syntax : Array[EbmlSyntax], id : UInt32) -> EbmlSyntax? {
   for i = 0; i < syntax.length(); i = i + 1 {
     if syntax[i].id == id {
       return Some(syntax[i])
@@ -523,7 +560,8 @@ fn ebml_find_syntax(syntax : Array[EbmlSyntax], id : UInt) -> EbmlSyntax? {
   None
 }
 
-///| length (u64) as Int64 payload size (values are < 2^63 in any sane file;
+///|
+/// length (u64) as Int64 payload size (values are < 2^63 in any sane file;
 /// the C's implicit uint64->int64 conversion).
 fn i64_of_len(length : UInt64) -> Int64 {
   (length & 0x7FFFFFFFFFFFFFFFUL).reinterpret_as_int64()
@@ -533,7 +571,11 @@ fn i64_of_len(length : UInt64) -> Int64 {
 /// `matroska_find_level1_elem`: the registry entry for a level-1 element —
 /// reused when the id matches (SeekHead/Tags also match on position),
 /// newly allocated otherwise. Cluster and malformed ids never register.
-fn matroska_find_level1_elem(st : EbmlState, id : UInt, pos : Int64) -> MkvLevel1Elem? {
+fn matroska_find_level1_elem(
+  st : EbmlState,
+  id : UInt32,
+  pos : Int64,
+) -> MkvLevel1Elem? {
   if is_ebml_id_valid(id) == false {
     return None
   }
@@ -551,12 +593,13 @@ fn matroska_find_level1_elem(st : EbmlState, id : UInt, pos : Int64) -> MkvLevel
   if st.level1_elems.length() >= 64 {
     return None // "Too many level1 elements"
   }
-  let elem : MkvLevel1Elem = { id, pos: 0, parsed: false }
+  let elem : MkvLevel1Elem = { id, pos: 0, parsed: false, }
   st.level1_elems.push(elem)
   Some(elem)
 }
 
-///| The per-type length maximums of `ebml_parse` (`max_lengths[]`). */
+///|
+/// The per-type length maximums of `ebml_parse` (`max_lengths[]`). */
 fn ebml_max_length(kind : EbmlKind) -> UInt64 {
   match kind {
     Skip => ebml_unknown_length - 1UL // forbid unknown-length EBML_NONE
@@ -570,20 +613,22 @@ fn ebml_max_length(kind : EbmlKind) -> UInt64 {
 }
 
 ///|
+
 ///|
 /// The EBML_NEST/EBML_LEVEL1 arm of `ebml_parse`: push the level, run the
 /// segment/cues bookkeeping, register level-1 elements and walk children.
 fn walk_master(
-    st : EbmlState,
-    r : EbmlSyntax,
-    id : UInt,
-    pos : Int64,
-    pos_alt : Int64,
-    length : UInt64,
-    children : () -> Array[EbmlSyntax],
-    ancestors : Array[Array[EbmlSyntax]],
-    syntax : Array[EbmlSyntax],
-    level1 : Bool) -> Result[Int, String] {
+  st : EbmlState,
+  r : EbmlSyntax,
+  id : UInt32,
+  pos : Int64,
+  pos_alt : Int64,
+  length : UInt64,
+  children : () -> Array[EbmlSyntax],
+  ancestors : Array[Array[EbmlSyntax]],
+  syntax : Array[EbmlSyntax],
+  level1 : Bool,
+) -> Result[Int32, String] {
   match ebml_read_master(st, length, pos_alt) {
     Err(e) => return Err(e)
     Ok(_) => ()
@@ -631,15 +676,17 @@ fn walk_master(
   }
 }
 
+///|
 /// `ebml_parse`: read one element, dispatch it against `syntax` and return
 /// the C result code — 0 ok, 1 stop, `LEVEL_ENDED` when the current master
 /// completed. `ancestors` carries the enclosing syntax tables, outermost
 /// first (the C's `CHILD_OF` sentinel chain), for the unknown-length master
 /// termination check.
 pub fn ebml_parse(
-    st : EbmlState,
-    syntax : Array[EbmlSyntax],
-    ancestors : Array[Array[EbmlSyntax]]) -> Result[Int, String] {
+  st : EbmlState,
+  syntax : Array[EbmlSyntax],
+  ancestors : Array[Array[EbmlSyntax]],
+) -> Result[Int32, String] {
   let pb = st.pb
   let mut pos = pb.avio_tell()
   let mut update_pos = true
@@ -663,7 +710,9 @@ pub fn ebml_parse(
         return Err(e)
       }
       Ok((id64, res)) => {
-        st.current_id = ((id64 | (1UL << (7 * res))) & 0xFFFFFFFFUL).to_int().reinterpret_as_uint()
+        st.current_id = ((id64 | (1UL << (7 * res))) & 0xFFFFFFFFUL)
+          .to_int()
+          .reinterpret_as_uint()
         pos_alt = pos + res.to_int64()
       }
     }
@@ -693,7 +742,7 @@ pub fn ebml_parse(
     update_pos = false
   }
   if row is None {
-    row = Some({ id, kind: Skip, sink: None })
+    row = Some({ id, kind: Skip, sink: None, })
   }
   let r = row.unwrap()
   if r.kind is Stop {
@@ -739,7 +788,8 @@ pub fn ebml_parse(
     if update_pos {
       st.unknown_count = 0
     } else {
-      let mut dist = i64_of_len(length) + unknown_equiv * st.unknown_count.to_int64()
+      let mut dist = i64_of_len(length) +
+        unknown_equiv * st.unknown_count.to_int64()
       st.unknown_count = st.unknown_count + 1
       if st.unknown_count > 3 {
         dist = dist + pos_alt - st.resync_pos
@@ -759,7 +809,7 @@ pub fn ebml_parse(
   let mut value : EbmlValue? = None
   let mut nc = false
   match r.kind {
-    Skip => {
+    Skip =>
       if length != 0UL {
         match pb.avio_skip(i64_of_len(length) - 1L) {
           Err(e) => return Err(e)
@@ -771,7 +821,6 @@ pub fn ebml_parse(
           }
         }
       }
-    }
     Uint(def) => {
       let mut got : UInt64 = 0
       let rc = ebml_read_uint(pb, i64_of_len(length).to_int(), def, v => got = v)
@@ -796,7 +845,9 @@ pub fn ebml_parse(
     }
     Float(def) => {
       let mut got = 0.0
-      let rc = ebml_read_float(pb, i64_of_len(length).to_int(), def, v => got = v)
+      let rc = ebml_read_float(pb, i64_of_len(length).to_int(), def, v => {
+        got = v
+      })
       match rc {
         Err(e) => return Err(e)
         Ok(v) => {
@@ -805,7 +856,7 @@ pub fn ebml_parse(
         }
       }
     }
-    Str(def) => {
+    Str(def) =>
       match ebml_read_ascii(pb, i64_of_len(length).to_int(), def) {
         Err(e) => return Err(e)
         Ok((s, v)) => {
@@ -815,8 +866,7 @@ pub fn ebml_parse(
           nc = v
         }
       }
-    }
-    Bin => {
+    Bin =>
       match ebml_read_binary(pb, i64_of_len(length).to_int(), pos_alt) {
         Err(e) => return Err(e)
         Ok((b, p)) => {
@@ -828,11 +878,14 @@ pub fn ebml_parse(
           nc = true
         }
       }
-    }
     Nest(children) =>
-      return walk_master(st, r, id, pos, pos_alt, length, children, ancestors, syntax, false)
+      return walk_master(
+        st, r, id, pos, pos_alt, length, children, ancestors, syntax, false,
+      )
     Level1(children) =>
-      return walk_master(st, r, id, pos, pos_alt, length, children, ancestors, syntax, true)
+      return walk_master(
+        st, r, id, pos, pos_alt, length, children, ancestors, syntax, true,
+      )
     Stop => return Ok(1)
   }
   // The common tail: NEEDS_CHECKING defers to the EOF check, then the
@@ -870,11 +923,13 @@ pub fn ebml_parse(
   Ok(level_check)
 }
 
-///| Run a row's sink (the C's in-place write through `data + offset`). */
+///|
+/// Run a row's sink (the C's in-place write through `data + offset`). */
 fn deliver(
-    r : EbmlSyntax,
-    value : EbmlValue?,
-    pos : Int64) -> Result[Unit, String] {
+  r : EbmlSyntax,
+  value : EbmlValue?,
+  pos : Int64,
+) -> Result[Unit, String] {
   match (r.sink, value) {
     (Some(f), Some(v)) => f(v, pos)
     _ => Ok(())
@@ -887,9 +942,10 @@ fn deliver(
 /// C's default-value pre-pass lives in the table factories: defaults are
 /// applied by the caller that builds the destination struct.
 pub fn ebml_parse_nest(
-    st : EbmlState,
-    syntax : Array[EbmlSyntax],
-    ancestors : Array[Array[EbmlSyntax]]) -> Result[Int, String] {
+  st : EbmlState,
+  syntax : Array[EbmlSyntax],
+  ancestors : Array[Array[EbmlSyntax]],
+) -> Result[Int32, String] {
   let mut res = 0
   let mut go = true
   while go {

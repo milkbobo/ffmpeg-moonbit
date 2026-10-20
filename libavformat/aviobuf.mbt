@@ -34,44 +34,62 @@
 /// `ffio_rewind_with_probe_data` (input probing), `ffio_limit` and
 /// `ffio_copy_url_options` (AVFormatContext/AVDictionary plumbing).
 
-///| `IO_BUFFER_SIZE`: default AVIO buffer size (aviobuf.c). */
-pub const IO_BUFFER_SIZE : Int = 32768
+///|
+/// `IO_BUFFER_SIZE`: default AVIO buffer size (aviobuf.c). */
+pub const IO_BUFFER_SIZE : Int32 = 32768
 
-///| `SHORT_SEEK_THRESHOLD`: seeks up to this far ahead of the buffer are
+///|
+/// `SHORT_SEEK_THRESHOLD`: seeks up to this far ahead of the buffer are
 /// served by skipping data instead of calling the protocol seek (aviobuf.c). */
-pub const SHORT_SEEK_THRESHOLD : Int = 32768
+pub const SHORT_SEEK_THRESHOLD : Int32 = 32768
 
-///| `AV_INPUT_BUFFER_PADDING_SIZE`: input buffers end with this much zero
+///|
+/// `AV_INPUT_BUFFER_PADDING_SIZE`: input buffers end with this much zero
 /// padding so bitreaders can overread (libavcodec). */
-pub const AV_INPUT_BUFFER_PADDING_SIZE : Int = 64
+pub const AV_INPUT_BUFFER_PADDING_SIZE : Int32 = 64
 
-///| Whence values for `avio_seek` and the seek callback. */
-pub const SEEK_SET : Int = 0
+///|
+/// Whence values for `avio_seek` and the seek callback. */
+pub const SEEK_SET : Int32 = 0
 
-///| See `SEEK_SET`. */
-pub const SEEK_CUR : Int = 1
+///|
+/// See `SEEK_SET`. */
+pub const SEEK_CUR : Int32 = 1
 
-///| See `SEEK_SET`. `avio_seek` itself rejects it (callers resolve the size
+///|
+/// See `SEEK_SET`. `avio_seek` itself rejects it (callers resolve the size
 /// first); seek callbacks must still accept it. */
-pub const SEEK_END : Int = 2
+pub const SEEK_END : Int32 = 2
 
-///| `AVSEEK_SIZE`: passed to the seek callback to query the stream size. */
-pub const AVSEEK_SIZE : Int = 0x10000
+///|
+/// `AVSEEK_SIZE`: passed to the seek callback to query the stream size. */
+pub const AVSEEK_SIZE : Int32 = 0x10000
 
-///| `AVSEEK_FORCE`: flag ignored by `avio_seek`. */
-pub const AVSEEK_FORCE : Int = 0x20000
+///|
+/// `AVSEEK_FORCE`: flag ignored by `avio_seek`. */
+pub const AVSEEK_FORCE : Int32 = 0x20000
 
-///| Read-callback type: fill `buf[start..start+len]`, return the byte count. */
-pub type AvioReadPacket = (FixedArray[Byte], Int, Int) -> Result[Int, String]
+///|
+/// Read-callback type: fill `buf[start..start+len]`, return the byte count. */
+pub type AvioReadPacket = (FixedArray[Byte], Int32, Int32) -> Result[
+  Int32,
+  String,
+]
 
-///| Write-callback type: consume `buf[start..start+len]`. */
-pub type AvioWritePacket = (FixedArray[Byte], Int, Int) -> Result[Int, String]
+///|
+/// Write-callback type: consume `buf[start..start+len]`. */
+pub type AvioWritePacket = (FixedArray[Byte], Int32, Int32) -> Result[
+  Int32,
+  String,
+]
 
-///| Seek-callback type: `(offset, whence) -> new position` (C semantics). */
-pub type AvioSeekFn = (Int64, Int) -> Result[Int64, String]
+///|
+/// Seek-callback type: `(offset, whence) -> new position` (C semantics). */
+pub type AvioSeekFn = (Int64, Int32) -> Result[Int64, String]
 
-///| Checksum-update callback: `(crc, data) -> new crc`. */
-pub type AvioChecksumFn = (UInt, Bytes) -> UInt
+///|
+/// Checksum-update callback: `(crc, data) -> new crc`. */
+pub type AvioChecksumFn = (UInt32, Bytes) -> UInt32
 
 ///|
 /// The buffered I/O context: `AVIOContext` (avio.h) plus the `FFIOContext`
@@ -79,13 +97,13 @@ pub type AvioChecksumFn = (UInt, Bytes) -> UInt
 pub struct AvioContext {
   /// `buffer`/`buffer_size`: the sliding window (replaced on resize).
   mut buffer : FixedArray[Byte]
-  mut buffer_size : Int
+  mut buffer_size : Int32
   /// `buf_ptr`: read/write cursor index into `buffer`.
-  mut buf_ptr : Int
+  mut buf_ptr : Int32
   /// `buf_end`: end of valid data (read mode); `buffer_size` (write mode).
-  mut buf_end : Int
+  mut buf_end : Int32
   /// `buf_ptr_max`: highest `buf_ptr` seen (write-mode seek-back guard).
-  mut buf_ptr_max : Int
+  mut buf_ptr_max : Int32
   /// `pos`: absolute position of `buf_end` (read) / of `buffer[0]` (write).
   mut pos : Int64
   mut eof_reached : Bool
@@ -95,20 +113,20 @@ pub struct AvioContext {
   /// `seekable & AVIO_SEEKABLE_NORMAL`.
   seekable : Bool
   mut direct : Bool
-  mut max_packet_size : Int
+  mut max_packet_size : Int32
   // --- FFIOContext privates ---
   /// `orig_buffer_size`: size to shrink back to after probing grew the buffer.
-  mut orig_buffer_size : Int
-  short_seek_threshold : Int
+  mut orig_buffer_size : Int32
+  short_seek_threshold : Int32
   mut bytes_read : Int64
   mut bytes_written : Int64
   mut written_output_size : Int64
-  mut seek_count : Int
-  mut writeout_count : Int
+  mut seek_count : Int32
+  mut writeout_count : Int32
   // --- checksum state ---
-  mut checksum : UInt
+  mut checksum : UInt32
   /// `checksum_ptr` as an index into `buffer`.
-  mut checksum_ptr : Int
+  mut checksum_ptr : Int32
   mut update_checksum : AvioChecksumFn?
   // --- callbacks ---
   read_packet : AvioReadPacket?
@@ -118,16 +136,18 @@ pub struct AvioContext {
   mut dynbuf : DynBuf?
 }
 
-///| `ffio_init_context`: build a context over `buffer` with the given
+///|
+/// `ffio_init_context`: build a context over `buffer` with the given
 /// callbacks. Read mode without `read_packet` treats `buffer` as the whole
 /// stream (`ffio_init_read_context`); write mode sets `buf_end` to the end of
 /// the buffer (`url_resetbuf`). */
 pub fn AvioContext::init_context(
-    buffer : FixedArray[Byte],
-    write_flag : Bool,
-    read_packet : AvioReadPacket?,
-    write_packet : AvioWritePacket?,
-    seek_fn : AvioSeekFn?) -> AvioContext {
+  buffer : FixedArray[Byte],
+  write_flag : Bool,
+  read_packet : AvioReadPacket?,
+  write_packet : AvioWritePacket?,
+  seek_fn : AvioSeekFn?,
+) -> AvioContext {
   let buffer_size = buffer.length()
   let s : AvioContext = {
     buffer,
@@ -183,8 +203,12 @@ pub fn AvioContext::init_read_context(buf : Bytes) -> AvioContext {
   for i = 0; i < buf.length(); i = i + 1 {
     data[i] = buf[i]
   }
-  let src_pos : Array[Int] = [0]
-  fn read(dst : FixedArray[Byte], start : Int, len : Int) -> Result[Int, String] {
+  let src_pos : Array[Int32] = [0]
+  fn read(
+    dst : FixedArray[Byte],
+    start : Int32,
+    len : Int32,
+  ) -> Result[Int32, String] {
     let remaining = data.length() - src_pos[0]
     if remaining <= 0 {
       return Err("EOF")
@@ -196,7 +220,7 @@ pub fn AvioContext::init_read_context(buf : Bytes) -> AvioContext {
     src_pos[0] = src_pos[0] + n
     Ok(n)
   }
-  fn seek(offset : Int64, whence : Int) -> Result[Int64, String] {
+  fn seek(offset : Int64, whence : Int32) -> Result[Int64, String] {
     if whence == AVSEEK_SIZE {
       return Ok(data.length().to_int64())
     }
@@ -216,13 +240,15 @@ pub fn AvioContext::init_read_context(buf : Bytes) -> AvioContext {
   AvioContext::init_context(data, false, Some(read), None, Some(seek))
 }
 
-///| `avio_alloc_context`: like `init_context` but allocates the buffer. */
+///|
+/// `avio_alloc_context`: like `init_context` but allocates the buffer. */
 pub fn AvioContext::alloc_context(
-    buffer_size : Int,
-    write_flag : Bool,
-    read_packet : AvioReadPacket?,
-    write_packet : AvioWritePacket?,
-    seek_fn : AvioSeekFn?) -> AvioContext {
+  buffer_size : Int32,
+  write_flag : Bool,
+  read_packet : AvioReadPacket?,
+  write_packet : AvioWritePacket?,
+  seek_fn : AvioSeekFn?,
+) -> AvioContext {
   AvioContext::init_context(
     FixedArray::make(buffer_size, b'\x00'),
     write_flag,
@@ -236,20 +262,36 @@ pub fn AvioContext::alloc_context(
 // Small helpers (FFMIN/FFMAX)
 // ---------------------------------------------------------------------------
 
-fn imin(a : Int, b : Int) -> Int {
-  if a < b { a } else { b }
+///|
+fn imin(a : Int32, b : Int32) -> Int32 {
+  if a < b {
+    a
+  } else {
+    b
+  }
 }
 
-fn imax(a : Int, b : Int) -> Int {
-  if a > b { a } else { b }
+///|
+fn imax(a : Int32, b : Int32) -> Int32 {
+  if a > b {
+    a
+  } else {
+    b
+  }
 }
 
+///|
 fn i64min(a : Int64, b : Int64) -> Int64 {
-  if a < b { a } else { b }
+  if a < b {
+    a
+  } else {
+    b
+  }
 }
 
-///| Copy `buffer[from..from+len]` into fresh `Bytes` (C passes pointers). */
-fn buffer_slice(buffer : FixedArray[Byte], from : Int, len : Int) -> Bytes {
+///|
+/// Copy `buffer[from..from+len]` into fresh `Bytes` (C passes pointers). */
+fn buffer_slice(buffer : FixedArray[Byte], from : Int32, len : Int32) -> Bytes {
   let out : Array[Byte] = []
   for i = 0; i < imax(len, 0); i = i + 1 {
     out.push(buffer[from + i])
@@ -257,13 +299,15 @@ fn buffer_slice(buffer : FixedArray[Byte], from : Int, len : Int) -> Bytes {
   Bytes::from_array(out[:])
 }
 
-///| Invoke the checksum updater over a byte range (None-safe). */
+///|
+/// Invoke the checksum updater over a byte range (None-safe). */
 fn checksum_update(
-    update : AvioChecksumFn,
-    crc : UInt,
-    buffer : FixedArray[Byte],
-    from : Int,
-    len : Int) -> UInt {
+  update : AvioChecksumFn,
+  crc : UInt32,
+  buffer : FixedArray[Byte],
+  from : Int32,
+  len : Int32,
+) -> UInt32 {
   update(crc, buffer_slice(buffer, from, len))
 }
 
@@ -271,8 +315,14 @@ fn checksum_update(
 // Write path (aviobuf.c writeout .. avio_wb24)
 // ---------------------------------------------------------------------------
 
-///| `writeout`: hand `data[start..start+len]` to the write callback. */
-fn writeout(s : AvioContext, data : FixedArray[Byte], start : Int, len : Int) -> Unit {
+///|
+/// `writeout`: hand `data[start..start+len]` to the write callback. */
+fn writeout(
+  s : AvioContext,
+  data : FixedArray[Byte],
+  start : Int32,
+  len : Int32,
+) -> Unit {
   if s.err == None {
     let ret = match s.write_packet {
       Some(f) => f(data, start, len)
@@ -292,7 +342,8 @@ fn writeout(s : AvioContext, data : FixedArray[Byte], start : Int, len : Int) ->
   s.pos = s.pos + len.to_int64()
 }
 
-///| `flush_buffer`: write out buffered data and reset the cursors. */
+///|
+/// `flush_buffer`: write out buffered data and reset the cursors. */
 fn flush_buffer(s : AvioContext) -> Unit {
   s.buf_ptr_max = imax(s.buf_ptr, s.buf_ptr_max)
   if s.write_flag && s.buf_ptr_max > 0 {
@@ -300,7 +351,13 @@ fn flush_buffer(s : AvioContext) -> Unit {
     match s.update_checksum {
       Some(update) => {
         if s.buf_ptr_max > s.checksum_ptr {
-          s.checksum = checksum_update(update, s.checksum, s.buffer, s.checksum_ptr, s.buf_ptr_max - s.checksum_ptr)
+          s.checksum = checksum_update(
+            update,
+            s.checksum,
+            s.buffer,
+            s.checksum_ptr,
+            s.buf_ptr_max - s.checksum_ptr,
+          )
         }
         s.checksum_ptr = 0
       }
@@ -314,8 +371,9 @@ fn flush_buffer(s : AvioContext) -> Unit {
   }
 }
 
-///| `avio_w8`: append one byte, flushing when the buffer fills. */
-pub fn AvioContext::avio_w8(s : AvioContext, b : Int) -> Unit {
+///|
+/// `avio_w8`: append one byte, flushing when the buffer fills. */
+pub fn AvioContext::avio_w8(s : AvioContext, b : Int32) -> Unit {
   s.buffer[s.buf_ptr] = b.to_byte()
   s.buf_ptr = s.buf_ptr + 1
   if s.buf_ptr >= s.buf_end {
@@ -323,8 +381,13 @@ pub fn AvioContext::avio_w8(s : AvioContext, b : Int) -> Unit {
   }
 }
 
-///| `ffio_fill`: append `count` copies of byte `b`. */
-pub fn AvioContext::ffio_fill(s : AvioContext, b : Int, count : Int64) -> Unit {
+///|
+/// `ffio_fill`: append `count` copies of byte `b`. */
+pub fn AvioContext::ffio_fill(
+  s : AvioContext,
+  b : Int32,
+  count : Int64,
+) -> Unit {
   let mut count = count
   while count > 0 {
     let len = imin(s.buf_end - s.buf_ptr, count.to_int())
@@ -339,7 +402,8 @@ pub fn AvioContext::ffio_fill(s : AvioContext, b : Int, count : Int64) -> Unit {
   }
 }
 
-///| `avio_write`: append `data`. A direct context bypasses the buffer. */
+///|
+/// `avio_write`: append `data`. A direct context bypasses the buffer. */
 pub fn AvioContext::avio_write(s : AvioContext, data : Bytes) -> Unit {
   let size = data.length()
   if size <= 0 {
@@ -373,78 +437,93 @@ pub fn AvioContext::avio_write(s : AvioContext, data : Bytes) -> Unit {
   ignore(off)
 }
 
-///| `avio_flush`: write out buffered bytes; if the cursor had been seeked
+///|
+/// `avio_flush`: write out buffered bytes; if the cursor had been seeked
 /// back below `buf_ptr_max`, restore that position afterwards. */
 pub fn AvioContext::avio_flush(s : AvioContext) -> Unit {
-  let seekback = if s.write_flag { imin(0, s.buf_ptr - s.buf_ptr_max) } else { 0 }
+  let seekback = if s.write_flag {
+    imin(0, s.buf_ptr - s.buf_ptr_max)
+  } else {
+    0
+  }
   flush_buffer(s)
   if seekback != 0 {
     let _ = s.avio_skip(seekback.to_int64())
   }
 }
 
-///| `avio_wl16`. */
-pub fn AvioContext::avio_wl16(s : AvioContext, val : UInt) -> Unit {
+///|
+/// `avio_wl16`. */
+pub fn AvioContext::avio_wl16(s : AvioContext, val : UInt32) -> Unit {
   s.avio_w8((val & 0xFF).reinterpret_as_int())
   s.avio_w8((val >> 8).reinterpret_as_int())
 }
 
-///| `avio_wb16`. */
-pub fn AvioContext::avio_wb16(s : AvioContext, val : UInt) -> Unit {
+///|
+/// `avio_wb16`. */
+pub fn AvioContext::avio_wb16(s : AvioContext, val : UInt32) -> Unit {
   s.avio_w8((val >> 8).reinterpret_as_int())
   s.avio_w8((val & 0xFF).reinterpret_as_int())
 }
 
-///| `avio_wl24`. */
-pub fn AvioContext::avio_wl24(s : AvioContext, val : UInt) -> Unit {
+///|
+/// `avio_wl24`. */
+pub fn AvioContext::avio_wl24(s : AvioContext, val : UInt32) -> Unit {
   s.avio_wl16(val & 0xFFFF)
   s.avio_w8((val >> 16).reinterpret_as_int())
 }
 
-///| `avio_wb24`. */
-pub fn AvioContext::avio_wb24(s : AvioContext, val : UInt) -> Unit {
+///|
+/// `avio_wb24`. */
+pub fn AvioContext::avio_wb24(s : AvioContext, val : UInt32) -> Unit {
   s.avio_wb16(val >> 8)
   s.avio_w8((val & 0xFF).reinterpret_as_int())
 }
 
-///| `avio_wl32`. */
-pub fn AvioContext::avio_wl32(s : AvioContext, val : UInt) -> Unit {
+///|
+/// `avio_wl32`. */
+pub fn AvioContext::avio_wl32(s : AvioContext, val : UInt32) -> Unit {
   s.avio_w8((val & 0xFF).reinterpret_as_int())
   s.avio_w8(((val >> 8) & 0xFF).reinterpret_as_int())
   s.avio_w8(((val >> 16) & 0xFF).reinterpret_as_int())
   s.avio_w8((val >> 24).reinterpret_as_int())
 }
 
-///| `avio_wb32`. */
-pub fn AvioContext::avio_wb32(s : AvioContext, val : UInt) -> Unit {
+///|
+/// `avio_wb32`. */
+pub fn AvioContext::avio_wb32(s : AvioContext, val : UInt32) -> Unit {
   s.avio_w8((val >> 24).reinterpret_as_int())
   s.avio_w8(((val >> 16) & 0xFF).reinterpret_as_int())
   s.avio_w8(((val >> 8) & 0xFF).reinterpret_as_int())
   s.avio_w8((val & 0xFF).reinterpret_as_int())
 }
 
-///| `avio_wl64`. */
+///|
+/// `avio_wl64`. */
 pub fn AvioContext::avio_wl64(s : AvioContext, val : UInt64) -> Unit {
   s.avio_wl32((val & 0xFFFFFFFFUL).to_uint())
   s.avio_wl32((val >> 32).to_uint())
 }
 
-///| `avio_wb64`. */
+///|
+/// `avio_wb64`. */
 pub fn AvioContext::avio_wb64(s : AvioContext, val : UInt64) -> Unit {
   s.avio_wb32((val >> 32).to_uint())
   s.avio_wb32((val & 0xFFFFFFFFUL).to_uint())
 }
 
-///| `ffio_wfourcc` (avio_internal.h inline): write a four-character tag. */
+///|
+/// `ffio_wfourcc` (avio_internal.h inline): write a four-character tag. */
 pub fn AvioContext::ffio_wfourcc(s : AvioContext, str : String) -> Unit {
   for i = 0; i < 4; i = i + 1 {
     s.avio_w8(str.at(i).to_int())
   }
 }
 
-///| `avio_put_str`: write the UTF-8 bytes of `str` plus the terminating NUL
+///|
+/// `avio_put_str`: write the UTF-8 bytes of `str` plus the terminating NUL
 /// (C writes `strlen(str) + 1` bytes); returns that byte count. */
-pub fn AvioContext::avio_put_str(s : AvioContext, str : String) -> Int {
+pub fn AvioContext::avio_put_str(s : AvioContext, str : String) -> Int32 {
   let data = utf8_from_string(str)
   s.avio_write(data)
   s.avio_w8(0)
@@ -457,7 +536,11 @@ pub fn AvioContext::avio_put_str(s : AvioContext, str : String) -> Int {
 /// `ret += 2` per unit, terminator included). A C-invalid UTF-8 sequence is
 /// impossible here (MoonBit strings are always valid), so the C `EINVAL`
 /// path has no equivalent.
-pub fn AvioContext::avio_put_str16(s : AvioContext, str : String, be : Bool) -> Int {
+pub fn AvioContext::avio_put_str16(
+  s : AvioContext,
+  str : String,
+  be : Bool,
+) -> Int32 {
   let mut ret = 0
   let n = str.length()
   let mut i = 0
@@ -499,8 +582,12 @@ pub fn AvioContext::avio_put_str16(s : AvioContext, str : String, be : Bool) -> 
   ret + 2
 }
 
-///| `avio_print_string_array`: one `str` + `\n` per entry. */
-pub fn AvioContext::avio_print_string_array(s : AvioContext, strs : Array[String]) -> Unit {
+///|
+/// `avio_print_string_array`: one `str` + `\n` per entry. */
+pub fn AvioContext::avio_print_string_array(
+  s : AvioContext,
+  strs : Array[String],
+) -> Unit {
   for i = 0; i < strs.length(); i = i + 1 {
     s.avio_write(utf8_from_string(strs[i]))
     s.avio_w8(10)
@@ -511,25 +598,36 @@ pub fn AvioContext::avio_print_string_array(s : AvioContext, strs : Array[String
 // Read path (aviobuf.c read_packet_wrapper .. avio_rb64)
 // ---------------------------------------------------------------------------
 
-///| `read_packet_wrapper` for a destination that may be the context buffer
+///|
+/// `read_packet_wrapper` for a destination that may be the context buffer
 /// (`fill_buffer`) or the caller's buffer (direct `avio_read`). */
 fn call_read_packet(
-    s : AvioContext,
-    dst : FixedArray[Byte],
-    start : Int,
-    len : Int) -> Result[Int, String] {
+  s : AvioContext,
+  dst : FixedArray[Byte],
+  start : Int32,
+  len : Int32,
+) -> Result[Int32, String] {
   match s.read_packet {
     Some(f) => f(dst, start, len)
     None => Err("EINVAL")
   }
 }
 
-///| `fill_buffer`: refill from the read callback, appending after `buf_end`
+///|
+/// `fill_buffer`: refill from the read callback, appending after `buf_end`
 /// when there is room for a whole max packet, else rewinding to the start. */
 fn fill_buffer(s : AvioContext) -> Unit {
-  let max_buffer_size = if s.max_packet_size != 0 { s.max_packet_size } else { IO_BUFFER_SIZE }
-  let dst : Int = if s.buf_end + max_buffer_size <= s.buffer_size { s.buf_end } else { 0 }
-  let mut len : Int = s.buffer_size - dst
+  let max_buffer_size = if s.max_packet_size != 0 {
+    s.max_packet_size
+  } else {
+    IO_BUFFER_SIZE
+  }
+  let dst : Int32 = if s.buf_end + max_buffer_size <= s.buffer_size {
+    s.buf_end
+  } else {
+    0
+  }
+  let mut len : Int32 = s.buffer_size - dst
   if s.read_packet is None && s.buf_ptr >= s.buf_end {
     s.eof_reached = true
   }
@@ -541,14 +639,23 @@ fn fill_buffer(s : AvioContext) -> Unit {
     Some(update) =>
       if dst == 0 {
         if s.buf_end > s.checksum_ptr {
-          s.checksum = checksum_update(update, s.checksum, s.buffer, s.checksum_ptr, s.buf_end - s.checksum_ptr)
+          s.checksum = checksum_update(
+            update,
+            s.checksum,
+            s.buffer,
+            s.checksum_ptr,
+            s.buf_end - s.checksum_ptr,
+          )
         }
         s.checksum_ptr = 0
       }
     None => ()
   }
   // make buffer smaller in case it ended up large after probing
-  if s.read_packet is Some(_) && s.orig_buffer_size != 0 && s.buffer_size > s.orig_buffer_size && len >= s.orig_buffer_size {
+  if s.read_packet is Some(_) &&
+    s.orig_buffer_size != 0 &&
+    s.buffer_size > s.orig_buffer_size &&
+    len >= s.orig_buffer_size {
     if dst == 0 && s.buf_ptr != 0 {
       let _ = set_buf_size(s, s.orig_buffer_size)
       s.checksum_ptr = 0 // s->checksum_ptr = dst = s->buffer
@@ -572,8 +679,9 @@ fn fill_buffer(s : AvioContext) -> Unit {
   }
 }
 
-///| `avio_r8`: one byte, 0 at EOF (the failed read raises `eof_reached`). */
-pub fn AvioContext::avio_r8(s : AvioContext) -> UInt {
+///|
+/// `avio_r8`: one byte, 0 at EOF (the failed read raises `eof_reached`). */
+pub fn AvioContext::avio_r8(s : AvioContext) -> UInt32 {
   if s.buf_ptr >= s.buf_end {
     fill_buffer(s)
   }
@@ -586,14 +694,16 @@ pub fn AvioContext::avio_r8(s : AvioContext) -> UInt {
   }
 }
 
-///| `avio_read`: read up to `size` bytes into `buf[offset..]`; returns the
+///|
+/// `avio_read`: read up to `size` bytes into `buf[offset..]`; returns the
 /// byte count, `Err("EOF")` when nothing could be read at EOF, or the stored
 /// error. Requests larger than the buffer (or direct contexts) bypass it. */
 pub fn AvioContext::avio_read_into(
-    s : AvioContext,
-    buf : FixedArray[Byte],
-    offset : Int,
-    size : Int) -> Result[Int, String] {
+  s : AvioContext,
+  buf : FixedArray[Byte],
+  offset : Int32,
+  size : Int32,
+) -> Result[Int32, String] {
   let size1 = size
   let mut size = size
   let mut dst = offset
@@ -601,7 +711,9 @@ pub fn AvioContext::avio_read_into(
   while size > 0 && done == false {
     let mut len = imin(s.buf_end - s.buf_ptr, size)
     if len == 0 || s.write_flag {
-      if (s.direct || size > s.buffer_size) && s.update_checksum is None && s.read_packet is Some(_) {
+      if (s.direct || size > s.buffer_size) &&
+        s.update_checksum is None &&
+        s.read_packet is Some(_) {
         // bypass the buffer and read data directly into buf
         match call_read_packet(s, buf, dst, size) {
           Err("EOF") => {
@@ -642,16 +754,18 @@ pub fn AvioContext::avio_read_into(
   if size1 == size {
     match s.err {
       Some(e) => return Err(e)
-      None => if s.avio_feof() {
-        return Err("EOF")
-      }
+      None => if s.avio_feof() { return Err("EOF") }
     }
   }
   Ok(size1 - size)
 }
 
-///| `avio_read` returning `Bytes` (the common MoonBit-facing shape). */
-pub fn AvioContext::avio_read(s : AvioContext, size : Int) -> Result[Bytes, String] {
+///|
+/// `avio_read` returning `Bytes` (the common MoonBit-facing shape). */
+pub fn AvioContext::avio_read(
+  s : AvioContext,
+  size : Int32,
+) -> Result[Bytes, String] {
   let buf : FixedArray[Byte] = FixedArray::make(imax(size, 0), b'\x00')
   match s.avio_read_into(buf, 0, size) {
     Err(e) => Err(e)
@@ -659,19 +773,29 @@ pub fn AvioContext::avio_read(s : AvioContext, size : Int) -> Result[Bytes, Stri
   }
 }
 
-///| `ffio_read_size`: exactly `size` bytes or `Err("INVALIDDATA")`. */
-pub fn AvioContext::ffio_read_size(s : AvioContext, size : Int) -> Result[Bytes, String] {
+///|
+/// `ffio_read_size`: exactly `size` bytes or `Err("INVALIDDATA")`. */
+pub fn AvioContext::ffio_read_size(
+  s : AvioContext,
+  size : Int32,
+) -> Result[Bytes, String] {
   match s.avio_read(size) {
-    Ok(data) => if data.length() == size { Ok(data) } else { Err("INVALIDDATA") }
+    Ok(data) =>
+      if data.length() == size {
+        Ok(data)
+      } else {
+        Err("INVALIDDATA")
+      }
     Err("EOF") => Err("INVALIDDATA")
     Err(e) => Err(e)
   }
 }
 
-///| `ffio_read_indirect`: C returns a pointer into the context buffer when
+///|
+/// `ffio_read_indirect`: C returns a pointer into the context buffer when
 /// the request is already buffered; MoonBit has no borrowed slices, so this
 /// always copies but keeps the fast path that avoids the `avio_read` loop. */
-pub fn AvioContext::ffio_read_indirect(s : AvioContext, size : Int) -> Bytes {
+pub fn AvioContext::ffio_read_indirect(s : AvioContext, size : Int32) -> Bytes {
   if s.buf_end - s.buf_ptr >= size && s.write_flag == false {
     let out = buffer_slice(s.buffer, s.buf_ptr, size)
     s.buf_ptr = s.buf_ptr + size
@@ -683,8 +807,12 @@ pub fn AvioContext::ffio_read_indirect(s : AvioContext, size : Int) -> Bytes {
   }
 }
 
-///| `avio_read_partial`: return what is buffered, filling at most once. */
-pub fn AvioContext::avio_read_partial(s : AvioContext, size : Int) -> Result[Bytes, String] {
+///|
+/// `avio_read_partial`: return what is buffered, filling at most once. */
+pub fn AvioContext::avio_read_partial(
+  s : AvioContext,
+  size : Int32,
+) -> Result[Bytes, String] {
   if size < 0 {
     return Err("EINVAL")
   }
@@ -701,64 +829,70 @@ pub fn AvioContext::avio_read_partial(s : AvioContext, size : Int) -> Result[Byt
   if len == 0 {
     match s.err {
       Some(e) => return Err(e)
-      None => if s.avio_feof() {
-        return Err("EOF")
-      }
+      None => if s.avio_feof() { return Err("EOF") }
     }
   }
   Ok(out)
 }
 
-///| `avio_rl16`. */
-pub fn AvioContext::avio_rl16(s : AvioContext) -> UInt {
+///|
+/// `avio_rl16`. */
+pub fn AvioContext::avio_rl16(s : AvioContext) -> UInt32 {
   let mut val = s.avio_r8()
   val = val | (s.avio_r8() << 8)
   val
 }
 
-///| `avio_rl24`. */
-pub fn AvioContext::avio_rl24(s : AvioContext) -> UInt {
+///|
+/// `avio_rl24`. */
+pub fn AvioContext::avio_rl24(s : AvioContext) -> UInt32 {
   let mut val = s.avio_rl16()
   val = val | (s.avio_r8() << 16)
   val
 }
 
-///| `avio_rl32`. */
-pub fn AvioContext::avio_rl32(s : AvioContext) -> UInt {
+///|
+/// `avio_rl32`. */
+pub fn AvioContext::avio_rl32(s : AvioContext) -> UInt32 {
   let mut val = s.avio_rl16()
   val = val | (s.avio_rl16() << 16)
   val
 }
 
-///| `avio_rl64`. */
+///|
+/// `avio_rl64`. */
 pub fn AvioContext::avio_rl64(s : AvioContext) -> UInt64 {
   let mut val = s.avio_rl32().to_uint64()
   val = val | (s.avio_rl32().to_uint64() << 32)
   val
 }
 
-///| `avio_rb16`. */
-pub fn AvioContext::avio_rb16(s : AvioContext) -> UInt {
+///|
+/// `avio_rb16`. */
+pub fn AvioContext::avio_rb16(s : AvioContext) -> UInt32 {
   let mut val = s.avio_r8() << 8
   val = val | s.avio_r8()
   val
 }
 
-///| `avio_rb24`. */
-pub fn AvioContext::avio_rb24(s : AvioContext) -> UInt {
+///|
+/// `avio_rb24`. */
+pub fn AvioContext::avio_rb24(s : AvioContext) -> UInt32 {
   let mut val = s.avio_rb16() << 8
   val = val | s.avio_r8()
   val
 }
 
-///| `avio_rb32`. */
-pub fn AvioContext::avio_rb32(s : AvioContext) -> UInt {
+///|
+/// `avio_rb32`. */
+pub fn AvioContext::avio_rb32(s : AvioContext) -> UInt32 {
   let mut val = s.avio_rb16() << 16
   val = val | s.avio_rb16()
   val
 }
 
-///| `avio_rb64`. */
+///|
+/// `avio_rb64`. */
 pub fn AvioContext::avio_rb64(s : AvioContext) -> UInt64 {
   let mut val = s.avio_rb32().to_uint64() << 32
   val = val | s.avio_rb32().to_uint64()
@@ -790,9 +924,10 @@ pub fn AvioContext::avio_rl32_tag(s : AvioContext) -> String {
 /// protocol seek callback. `avio_seek(s, 0, SEEK_CUR)` is `avio_tell` without
 /// side effects.
 pub fn AvioContext::avio_seek(
-    s : AvioContext,
-    offset : Int64,
-    whence : Int) -> Result[Int64, String] {
+  s : AvioContext,
+  offset : Int64,
+  whence : Int32,
+) -> Result[Int64, String] {
   let whence = whence & AVSEEK_FORCE.lnot()
   if (whence & AVSEEK_SIZE) != 0 {
     return match s.seek_fn {
@@ -823,10 +958,19 @@ pub fn AvioContext::avio_seek(
   let short_seek = s.short_seek_threshold
   let offset1 = offset - pos
   s.buf_ptr_max = imax(s.buf_ptr_max, s.buf_ptr)
-  if (s.direct == false || s.seek_fn is None) && offset1 >= 0 && offset1 <= (if s.write_flag { s.buf_ptr_max } else { buffer_size }).to_int64() {
+  if (s.direct == false || s.seek_fn is None) &&
+    offset1 >= 0 &&
+    offset1 <=
+    (if s.write_flag { s.buf_ptr_max } else { buffer_size }).to_int64() {
     // can do the seek inside the buffer
     s.buf_ptr = offset1.to_int()
-  } else if (s.seekable == false || offset1 <= buffer_size.to_int64() + short_seek.to_int64()) && s.write_flag == false && offset1 >= 0 && (s.direct == false || s.seek_fn is None) {
+  } else if (
+      s.seekable == false ||
+      offset1 <= buffer_size.to_int64() + short_seek.to_int64()
+    ) &&
+    s.write_flag == false &&
+    offset1 >= 0 &&
+    (s.direct == false || s.seek_fn is None) {
     // serve the forward seek by reading
     while s.pos < offset && s.eof_reached == false {
       fill_buffer(s)
@@ -835,11 +979,15 @@ pub fn AvioContext::avio_seek(
       return Err("EOF")
     }
     s.buf_ptr = s.buf_end - (s.pos - offset).to_int()
-  } else if s.write_flag == false && offset1 < 0 && (-offset1) < (buffer_size >> 1).to_int64() && s.seek_fn is Some(_) && offset > 0 {
+  } else if s.write_flag == false &&
+    offset1 < 0 &&
+    -offset1 < (buffer_size >> 1).to_int64() &&
+    s.seek_fn is Some(_) &&
+    offset > 0 {
     // half-buffer backward refill: rewind the source behind the target and
     // refill, then retry (the retry hits the in-buffer path)
     pos = pos - i64min((buffer_size >> 1).to_int64(), pos)
-    match (s.seek_fn.unwrap())(pos, SEEK_SET) {
+    match s.seek_fn.unwrap()(pos, SEEK_SET) {
       Err(e) => return Err(e)
       Ok(_) => ()
     }
@@ -874,17 +1022,25 @@ pub fn AvioContext::avio_seek(
   Ok(offset)
 }
 
-///| `avio_skip`. */
-pub fn AvioContext::avio_skip(s : AvioContext, offset : Int64) -> Result[Int64, String] {
+///|
+/// `avio_skip`. */
+pub fn AvioContext::avio_skip(
+  s : AvioContext,
+  offset : Int64,
+) -> Result[Int64, String] {
   s.avio_seek(offset, SEEK_CUR)
 }
 
-///| `avio_tell` (avio.h inline: `avio_seek(s, 0, SEEK_CUR)`). */
+///|
+/// `avio_tell` (avio.h inline: `avio_seek(s, 0, SEEK_CUR)`). */
 pub fn AvioContext::avio_tell(s : AvioContext) -> Int64 {
-  s.pos - (if s.write_flag { 0L } else { s.buf_end.to_int64() }) + s.buf_ptr.to_int64()
+  s.pos -
+  (if s.write_flag { 0L } else { s.buf_end.to_int64() }) +
+  s.buf_ptr.to_int64()
 }
 
-///| `avio_size`: ask the callback with `AVSEEK_SIZE`, fall back to
+///|
+/// `avio_size`: ask the callback with `AVSEEK_SIZE`, fall back to
 /// `SEEK_END`-minus-one plus a restore (the restore targets `s->pos`, i.e.
 /// the buffer end, exactly like the C code). */
 pub fn AvioContext::avio_size(s : AvioContext) -> Result[Int64, String] {
@@ -908,7 +1064,8 @@ pub fn AvioContext::avio_size(s : AvioContext) -> Result[Int64, String] {
   }
 }
 
-///| `avio_feof`: clears and retests the flag, so a reader that appended more
+///|
+/// `avio_feof`: clears and retests the flag, so a reader that appended more
 /// data after a previous EOF can continue. */
 pub fn AvioContext::avio_feof(s : AvioContext) -> Bool {
   if s.eof_reached {
@@ -922,13 +1079,17 @@ pub fn AvioContext::avio_feof(s : AvioContext) -> Bool {
 // String reading (aviobuf.c ff_get_line / avio_get_str / GET_STR16)
 // ---------------------------------------------------------------------------
 
-///| `ff_get_line`: read until `\n`, `\r` or EOF. As in C, a `\n`/`\r`
+///|
+/// `ff_get_line`: read until `\n`, `\r` or EOF. As in C, a `\n`/`\r`
 /// terminator is consumed AND stored (the loop's store happens before the
 /// stop test); `\r\n` is collapsed to the stored `\r` only when a `\n`
 /// follows. Returns the line and the stored length. */
-pub fn AvioContext::ff_get_line(s : AvioContext, maxlen : Int) -> (String, Int) {
+pub fn AvioContext::ff_get_line(
+  s : AvioContext,
+  maxlen : Int32,
+) -> (String, Int32) {
   let out : Array[Char] = []
-  let mut c : UInt = 0
+  let mut c : UInt32 = 0
   let mut run = true
   while run {
     c = s.avio_r8()
@@ -947,8 +1108,12 @@ pub fn AvioContext::ff_get_line(s : AvioContext, maxlen : Int) -> (String, Int) 
   (String::from_array(out[:]), out.length())
 }
 
-///| `ff_get_chomp_line`: `ff_get_line` plus trailing whitespace removal. */
-pub fn AvioContext::ff_get_chomp_line(s : AvioContext, maxlen : Int) -> (String, Int) {
+///|
+/// `ff_get_chomp_line`: `ff_get_line` plus trailing whitespace removal. */
+pub fn AvioContext::ff_get_chomp_line(
+  s : AvioContext,
+  maxlen : Int32,
+) -> (String, Int32) {
   let (line, len) = s.ff_get_line(maxlen)
   let mut len = len
   let chars = line.to_array()
@@ -958,8 +1123,14 @@ pub fn AvioContext::ff_get_chomp_line(s : AvioContext, maxlen : Int) -> (String,
   (String::from_array(chars[0:len]), len)
 }
 
+///|
 fn av_isspace(c : Char) -> Bool {
-  c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\u{0B}' || c == '\u{0C}'
+  c == ' ' ||
+  c == '\t' ||
+  c == '\n' ||
+  c == '\r' ||
+  c == '\u{0B}' ||
+  c == '\u{0C}'
 }
 
 ///|
@@ -971,7 +1142,7 @@ fn utf8_to_string(data : Array[Byte]) -> String {
   let mut i = 0
   while i < data.length() {
     let b0 = data[i].to_int()
-    let mut cp : Int = 0xFFFD
+    let mut cp : Int32 = 0xFFFD
     let mut extra = 0
     if b0 < 0x80 {
       cp = b0
@@ -1015,7 +1186,8 @@ fn utf8_to_string(data : Array[Byte]) -> String {
   String::from_array(chars[:])
 }
 
-///| Encode a MoonBit string as UTF-8 bytes (for the `avio_put_str*` family). */
+///|
+/// Encode a MoonBit string as UTF-8 bytes (for the `avio_put_str*` family). */
 fn utf8_from_string(str : String) -> Bytes {
   let out : Array[Byte] = []
   let n = str.length()
@@ -1056,9 +1228,10 @@ fn utf8_from_string(str : String) -> Bytes {
 /// terminator). Returns the string (terminator excluded) and the input bytes
 /// consumed — the C return value counts the terminator when present.
 pub fn AvioContext::avio_get_str(
-    s : AvioContext,
-    maxlen : Int,
-    buflen : Int) -> Result[(String, Int), String] {
+  s : AvioContext,
+  maxlen : Int32,
+  buflen : Int32,
+) -> Result[(String, Int32), String] {
   if buflen <= 0 {
     return Err("EINVAL")
   }
@@ -1088,16 +1261,22 @@ pub fn AvioContext::avio_get_str(
 /// excluded). Returns the string and the input **byte** count, which counts
 /// the terminating unit — exactly the C `ret`.
 pub fn AvioContext::avio_get_str16(
-    s : AvioContext,
-    be : Bool,
-    maxlen : Int,
-    buflen : Int) -> Result[(String, Int), String] {
+  s : AvioContext,
+  be : Bool,
+  maxlen : Int32,
+  buflen : Int32,
+) -> Result[(String, Int32), String] {
   if buflen <= 0 {
     return Err("EINVAL")
   }
   let out : Array[Byte] = []
   let mut ret = 0
-  fn read_unit(s : AvioContext, be : Bool, ret : Int, maxlen : Int) -> (Int, Int) {
+  fn read_unit(
+    s : AvioContext,
+    be : Bool,
+    ret : Int32,
+    maxlen : Int32,
+  ) -> (Int32, Int32) {
     let r = ret + 2
     if r <= maxlen {
       let u = if be { s.avio_rb16() } else { s.avio_rl16() }
@@ -1160,10 +1339,11 @@ pub fn AvioContext::avio_get_str16(
 // Variable-length integers (aviobuf.c ffio_read_varlen / leb)
 // ---------------------------------------------------------------------------
 
-///| `ffio_read_varlen`: 7 bits per byte, high bit = continue. */
+///|
+/// `ffio_read_varlen`: 7 bits per byte, high bit = continue. */
 pub fn AvioContext::ffio_read_varlen(s : AvioContext) -> UInt64 {
   let mut val : UInt64 = 0
-  let mut tmp : UInt = 0
+  let mut tmp : UInt32 = 0
   let mut run = true
   while run {
     tmp = s.avio_r8()
@@ -1173,9 +1353,10 @@ pub fn AvioContext::ffio_read_varlen(s : AvioContext) -> UInt64 {
   val
 }
 
-///| `ffio_read_leb`: little-endian base-128, at most 8 bytes. */
-pub fn AvioContext::ffio_read_leb(s : AvioContext) -> UInt {
-  let mut leb : UInt = 0
+///|
+/// `ffio_read_leb`: little-endian base-128, at most 8 bytes. */
+pub fn AvioContext::ffio_read_leb(s : AvioContext) -> UInt32 {
+  let mut leb : UInt32 = 0
   let mut i = 0
   let mut more = true
   while more {
@@ -1193,8 +1374,9 @@ pub fn AvioContext::ffio_read_leb(s : AvioContext) -> UInt {
   leb
 }
 
-///| `ffio_write_leb`. */
-pub fn AvioContext::ffio_write_leb(s : AvioContext, val : UInt) -> Unit {
+///|
+/// `ffio_write_leb`. */
+pub fn AvioContext::ffio_write_leb(s : AvioContext, val : UInt32) -> Unit {
   let log2 = if val == 0 {
     0
   } else {
@@ -1216,9 +1398,14 @@ pub fn AvioContext::ffio_write_leb(s : AvioContext, val : UInt) -> Unit {
   }
 }
 
-///| `ffio_write_lines`: rewrite line endings — `\r`, `\n` and `\r\n` in the
+///|
+/// `ffio_write_lines`: rewrite line endings — `\r`, `\n` and `\r\n` in the
 /// input each become `ending` (default `\n`). */
-pub fn AvioContext::ffio_write_lines(s : AvioContext, buf : Bytes, ending : String?) -> Unit {
+pub fn AvioContext::ffio_write_lines(
+  s : AvioContext,
+  buf : Bytes,
+  ending : String?,
+) -> Unit {
   let ending = match ending {
     Some(e) => e
     None => "\n"
@@ -1245,7 +1432,8 @@ pub fn AvioContext::ffio_write_lines(s : AvioContext, buf : Bytes, ending : Stri
   }
 }
 
-fn buffer_slice_of(buf : Bytes, from : Int, len : Int) -> Bytes {
+///|
+fn buffer_slice_of(buf : Bytes, from : Int32, len : Int32) -> Bytes {
   let out : Array[Byte] = []
   for i = 0; i < imax(len, 0); i = i + 1 {
     out.push(buf[from + i])
@@ -1257,47 +1445,59 @@ fn buffer_slice_of(buf : Bytes, from : Int, len : Int) -> Bytes {
 // Checksum (aviobuf.c ff_crc* / ffio_init_checksum)
 // ---------------------------------------------------------------------------
 
-///| `ff_crc04C11DB7_update`: CRC-32 (`AV_CRC_32_IEEE`). */
-pub fn ff_crc04C11DB7_update(checksum : UInt, buf : Bytes) -> UInt {
+///|
+/// `ff_crc04C11DB7_update`: CRC-32 (`AV_CRC_32_IEEE`). */
+pub fn ff_crc04C11DB7_update(checksum : UInt32, buf : Bytes) -> UInt32 {
   match @libavutil.av_crc_init(false, 32, 0x04C11DB7) {
     Ok(ctx) => @libavutil.av_crc(ctx, checksum, buf)
     Err(_) => checksum
   }
 }
 
-///| `ff_crcEDB88320_update`: CRC-32 reflected (`AV_CRC_32_IEEE_LE`). */
-pub fn ff_crcEDB88320_update(checksum : UInt, buf : Bytes) -> UInt {
+///|
+/// `ff_crcEDB88320_update`: CRC-32 reflected (`AV_CRC_32_IEEE_LE`). */
+pub fn ff_crcEDB88320_update(checksum : UInt32, buf : Bytes) -> UInt32 {
   match @libavutil.av_crc_init(true, 32, 0xEDB88320) {
     Ok(ctx) => @libavutil.av_crc(ctx, checksum, buf)
     Err(_) => checksum
   }
 }
 
-///| `ff_crcA001_update`: CRC-16 ANSI reflected (`AV_CRC_16_ANSI_LE`). */
-pub fn ff_crcA001_update(checksum : UInt, buf : Bytes) -> UInt {
+///|
+/// `ff_crcA001_update`: CRC-16 ANSI reflected (`AV_CRC_16_ANSI_LE`). */
+pub fn ff_crcA001_update(checksum : UInt32, buf : Bytes) -> UInt32 {
   match @libavutil.av_crc_init(true, 16, 0xA001) {
     Ok(ctx) => @libavutil.av_crc(ctx, checksum, buf)
     Err(_) => checksum
   }
 }
 
-///| `update_checksum` helper: fold in everything up to `buf_ptr` (used
+///|
+/// `update_checksum` helper: fold in everything up to `buf_ptr` (used
 /// before the seekback machinery moves data inside the buffer). */
 fn update_checksum_to_ptr(s : AvioContext) -> Unit {
   match s.update_checksum {
     Some(update) =>
       if s.buf_ptr > s.checksum_ptr {
-        s.checksum = checksum_update(update, s.checksum, s.buffer, s.checksum_ptr, s.buf_ptr - s.checksum_ptr)
+        s.checksum = checksum_update(
+          update,
+          s.checksum,
+          s.buffer,
+          s.checksum_ptr,
+          s.buf_ptr - s.checksum_ptr,
+        )
       }
     None => ()
   }
 }
 
-///| `ffio_init_checksum`. */
+///|
+/// `ffio_init_checksum`. */
 pub fn AvioContext::ffio_init_checksum(
-    s : AvioContext,
-    update : AvioChecksumFn?,
-    checksum : UInt) -> Unit {
+  s : AvioContext,
+  update : AvioChecksumFn?,
+  checksum : UInt32,
+) -> Unit {
   s.update_checksum = update
   if s.update_checksum is Some(_) {
     s.checksum = checksum
@@ -1305,8 +1505,9 @@ pub fn AvioContext::ffio_init_checksum(
   }
 }
 
-///| `ffio_get_checksum`: fold in the pending range and stop updating. */
-pub fn AvioContext::ffio_get_checksum(s : AvioContext) -> UInt {
+///|
+/// `ffio_get_checksum`: fold in the pending range and stop updating. */
+pub fn AvioContext::ffio_get_checksum(s : AvioContext) -> UInt32 {
   if s.update_checksum is Some(_) {
     update_checksum_to_ptr(s)
     s.update_checksum = None
@@ -1318,8 +1519,9 @@ pub fn AvioContext::ffio_get_checksum(s : AvioContext) -> UInt {
 // Buffer sizing (aviobuf.c set_buf_size / ffio_realloc_buf / ffio_ensure_seekback)
 // ---------------------------------------------------------------------------
 
-///| `set_buf_size`: replace the buffer with a fresh one of `buf_size`. */
-fn set_buf_size(s : AvioContext, buf_size : Int) -> Result[Unit, String] {
+///|
+/// `set_buf_size`: replace the buffer with a fresh one of `buf_size`. */
+fn set_buf_size(s : AvioContext, buf_size : Int32) -> Result[Unit, String] {
   s.buffer = FixedArray::make(buf_size, b'\x00')
   s.orig_buffer_size = buf_size
   s.buffer_size = buf_size
@@ -1334,8 +1536,12 @@ fn set_buf_size(s : AvioContext, buf_size : Int) -> Result[Unit, String] {
   Ok(())
 }
 
-///| `ffio_realloc_buf`: grow to `buf_size`, preserving buffered data. */
-pub fn AvioContext::ffio_realloc_buf(s : AvioContext, buf_size : Int) -> Result[Unit, String] {
+///|
+/// `ffio_realloc_buf`: grow to `buf_size`, preserving buffered data. */
+pub fn AvioContext::ffio_realloc_buf(
+  s : AvioContext,
+  buf_size : Int32,
+) -> Result[Unit, String] {
   if s.buffer_size == 0 {
     return set_buf_size(s, buf_size)
   }
@@ -1364,13 +1570,19 @@ pub fn AvioContext::ffio_realloc_buf(s : AvioContext, buf_size : Int) -> Result[
   Ok(())
 }
 
-///| `ffio_ensure_seekback`: guarantee `buf_size` bytes of seek-back behind
+///|
+/// `ffio_ensure_seekback`: guarantee `buf_size` bytes of seek-back behind
 /// the cursor by moving (and growing) the buffer; a no-op when the source is
 /// seekable, since a real seek can always go back. */
 pub fn AvioContext::ffio_ensure_seekback(
-    s : AvioContext,
-    buf_size : Int64) -> Result[Unit, String] {
-  let max_buffer_size = if s.max_packet_size != 0 { s.max_packet_size } else { IO_BUFFER_SIZE }
+  s : AvioContext,
+  buf_size : Int64,
+) -> Result[Unit, String] {
+  let max_buffer_size = if s.max_packet_size != 0 {
+    s.max_packet_size
+  } else {
+    IO_BUFFER_SIZE
+  }
   let filled = s.buf_end - s.buf_ptr
   if buf_size <= filled.to_int64() {
     return Ok(())
@@ -1379,7 +1591,9 @@ pub fn AvioContext::ffio_ensure_seekback(
     return Err("EINVAL")
   }
   let buf_size = buf_size + max_buffer_size.to_int64() - 1
-  if buf_size + s.buf_ptr.to_int64() <= s.buffer_size.to_int64() || s.seekable || s.read_packet is None {
+  if buf_size + s.buf_ptr.to_int64() <= s.buffer_size.to_int64() ||
+    s.seekable ||
+    s.read_packet is None {
     return Ok(())
   }
   if buf_size <= s.buffer_size.to_int64() {
@@ -1407,22 +1621,28 @@ pub fn AvioContext::ffio_ensure_seekback(
 // Dyn buffers (aviobuf.c DynBuffer .. ffio_close_null_buf)
 // ---------------------------------------------------------------------------
 
-///| `DynBuffer`: the growing backing store behind a write-only context. */
+///|
+/// `DynBuffer`: the growing backing store behind a write-only context. */
 struct DynBuf {
   mut data : FixedArray[Byte]
-  mut allocated : Int
-  mut pos : Int
-  mut size : Int
+  mut allocated : Int32
+  mut pos : Int32
+  mut size : Int32
   io_buffer : FixedArray[Byte] // the context's own small write buffer
-  io_buffer_size : Int
+  io_buffer_size : Int32
 }
 
-///| `dyn_buf_write` as a closure over `d` (growth ×1.5 + 1, like C). */
+///|
+/// `dyn_buf_write` as a closure over `d` (growth ×1.5 + 1, like C). */
 fn dyn_buf_write_fn(d : DynBuf) -> AvioWritePacket {
-  (buf : FixedArray[Byte], start : Int, len : Int) => {
+  (buf : FixedArray[Byte], start : Int32, len : Int32) => {
     let new_size = d.pos + len
     if new_size > d.allocated {
-      let mut new_allocated = if d.allocated != 0 { d.allocated } else { new_size }
+      let mut new_allocated = if d.allocated != 0 {
+        d.allocated
+      } else {
+        new_size
+      }
       while new_size > new_allocated {
         new_allocated = new_allocated + new_allocated / 2 + 1
       }
@@ -1445,10 +1665,11 @@ fn dyn_buf_write_fn(d : DynBuf) -> AvioWritePacket {
   }
 }
 
-///| `dyn_packet_buf_write`: a WB32 length header before each write. */
+///|
+/// `dyn_packet_buf_write`: a WB32 length header before each write. */
 fn dyn_packet_buf_write_fn(d : DynBuf) -> AvioWritePacket {
   let plain = dyn_buf_write_fn(d)
-  (buf : FixedArray[Byte], start : Int, len : Int) => {
+  (buf : FixedArray[Byte], start : Int32, len : Int32) => {
     let header : FixedArray[Byte] = FixedArray::make(4, b'\x00')
     let u = len.reinterpret_as_uint()
     header[0] = ((u >> 24) & 0xFF).to_byte()
@@ -1462,9 +1683,10 @@ fn dyn_packet_buf_write_fn(d : DynBuf) -> AvioWritePacket {
   }
 }
 
-///| `dyn_buf_seek`: seek within the written data (`SEEK_SET`/`CUR`/`END`). */
+///|
+/// `dyn_buf_seek`: seek within the written data (`SEEK_SET`/`CUR`/`END`). */
 fn dyn_buf_seek_fn(d : DynBuf) -> AvioSeekFn {
-  (offset : Int64, whence : Int) => {
+  (offset : Int64, whence : Int32) => {
     let mut offset = offset
     if whence == SEEK_CUR {
       offset = offset + d.pos.to_int64()
@@ -1479,7 +1701,8 @@ fn dyn_buf_seek_fn(d : DynBuf) -> AvioSeekFn {
   }
 }
 
-fn url_open_dyn_buf_internal(max_packet_size : Int) -> AvioContext {
+///|
+fn url_open_dyn_buf_internal(max_packet_size : Int32) -> AvioContext {
   let io_buffer_size = if max_packet_size != 0 { max_packet_size } else { 1024 }
   let io_buffer : FixedArray[Byte] = FixedArray::make(io_buffer_size, b'\x00')
   let d : DynBuf = {
@@ -1495,20 +1718,28 @@ fn url_open_dyn_buf_internal(max_packet_size : Int) -> AvioContext {
   } else {
     dyn_buf_write_fn(d)
   }
-  let seek : AvioSeekFn? = if max_packet_size != 0 { None } else { Some(dyn_buf_seek_fn(d)) }
+  let seek : AvioSeekFn? = if max_packet_size != 0 {
+    None
+  } else {
+    Some(dyn_buf_seek_fn(d))
+  }
   let s = AvioContext::init_context(io_buffer, true, None, Some(write), seek)
   s.max_packet_size = max_packet_size
   s.dynbuf = Some(d)
   s
 }
 
-///| `avio_open_dyn_buf`: a write context collecting into a growing buffer. */
+///|
+/// `avio_open_dyn_buf`: a write context collecting into a growing buffer. */
 pub fn avio_open_dyn_buf() -> AvioContext {
   url_open_dyn_buf_internal(0)
 }
 
-///| `ffio_open_dyn_packet_buf`: every flush is prefixed with a WB32 size. */
-pub fn ffio_open_dyn_packet_buf(max_packet_size : Int) -> Result[AvioContext, String] {
+///|
+/// `ffio_open_dyn_packet_buf`: every flush is prefixed with a WB32 size. */
+pub fn ffio_open_dyn_packet_buf(
+  max_packet_size : Int32,
+) -> Result[AvioContext, String] {
   if max_packet_size <= 0 {
     return Err("EINVAL")
   }
@@ -1532,12 +1763,19 @@ pub fn AvioContext::avio_get_dyn_buf(s : AvioContext) -> Bytes {
   }
 }
 
-///| `ffio_reset_dyn_buf`: drop the contents, keep the context usable. */
+///|
+/// `ffio_reset_dyn_buf`: drop the contents, keep the context usable. */
 pub fn AvioContext::ffio_reset_dyn_buf(s : AvioContext) -> Unit {
   match s.dynbuf {
     Some(d) => {
       let max_packet_size = s.max_packet_size
-      let _ = AvioContext::init_context(d.io_buffer, true, None, s.write_packet, s.seek_fn)
+      let _ = AvioContext::init_context(
+        d.io_buffer,
+        true,
+        None,
+        s.write_packet,
+        s.seek_fn,
+      )
       // re-arm the fresh context fields onto `s` (C reinitializes in place)
       s.buffer = d.io_buffer
       s.buffer_size = d.io_buffer_size
@@ -1578,15 +1816,17 @@ pub fn AvioContext::avio_close_dyn_buf(s : AvioContext) -> Bytes {
   }
 }
 
-///| `ffio_open_null_buf`: a write context that only counts bytes. */
+///|
+/// `ffio_open_null_buf`: a write context that only counts bytes. */
 pub fn ffio_open_null_buf() -> AvioContext {
   let s = avio_open_dyn_buf()
   s.write_packet = Some((_, _, len) => Ok(len))
   s
 }
 
-///| `ffio_close_null_buf`: the total byte count (or the stored error). */
-pub fn AvioContext::ffio_close_null_buf(s : AvioContext) -> Int {
+///|
+/// `ffio_close_null_buf`: the total byte count (or the stored error). */
+pub fn AvioContext::ffio_close_null_buf(s : AvioContext) -> Int32 {
   s.avio_flush()
   match s.err {
     Some(_) => -1

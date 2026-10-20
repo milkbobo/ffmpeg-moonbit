@@ -22,7 +22,8 @@
 /// decrypt pre-transformed form FFmpeg keeps internally. `av_aes_init` /
 /// `av_aes_crypt` keep FFmpeg's signatures and ECB/CBC behaviour.
 
-///| `rcon` from libavutil/aes.c. */
+///|
+/// `rcon` from libavutil/aes.c. */
 let aes_rcon : FixedArray[Byte] = [
   0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36,
 ]
@@ -35,11 +36,12 @@ pub struct AVAES {
   round_keys : FixedArray[Byte]
   mut sbox : FixedArray[Byte]
   mut inv_sbox : FixedArray[Byte]
-  mut rounds : Int
+  mut rounds : Int32
   mut decrypt : Bool
 }
 
-///| `av_aes_alloc`: create a context with room for the largest key schedule (AES-256). */
+///|
+/// `av_aes_alloc`: create a context with room for the largest key schedule (AES-256). */
 pub fn av_aes_alloc() -> AVAES {
   {
     round_keys: FixedArray::make(16 * 15, b'\x00'),
@@ -79,24 +81,27 @@ fn aes_sbox_pair() -> (FixedArray[Byte], FixedArray[Byte]) {
   (sbox, inv_sbox)
 }
 
-///| `rot_word`: rotate a key-schedule word left by one byte. */
-fn aes_rot_word(w : UInt) -> UInt {
+///|
+/// `rot_word`: rotate a key-schedule word left by one byte. */
+fn aes_rot_word(w : UInt32) -> UInt32 {
   (w << 8) | (w >> 24)
 }
 
-///| `sub_word`: apply the S-box to each byte of a key-schedule word. */
-fn aes_sub_word(w : UInt, sbox : FixedArray[Byte]) -> UInt {
+///|
+/// `sub_word`: apply the S-box to each byte of a key-schedule word. */
+fn aes_sub_word(w : UInt32, sbox : FixedArray[Byte]) -> UInt32 {
   (sbox[((w >> 24) & 0xFF).reinterpret_as_int()].to_uint() << 24) |
   (sbox[((w >> 16) & 0xFF).reinterpret_as_int()].to_uint() << 16) |
   (sbox[((w >> 8) & 0xFF).reinterpret_as_int()].to_uint() << 8) |
   sbox[(w & 0xFF).reinterpret_as_int()].to_uint()
 }
 
-///| Multiplication in GF(2^8) modulo the AES polynomial x^8+x^4+x^3+x+1. */
-fn gf_mul(a : UInt, b : UInt) -> UInt {
+///|
+/// Multiplication in GF(2^8) modulo the AES polynomial x^8+x^4+x^3+x+1. */
+fn gf_mul(a : UInt32, b : UInt32) -> UInt32 {
   let mut x = a
   let mut y = b
-  let mut r : UInt = 0
+  let mut r : UInt32 = 0
   while y != 0 {
     if (y & 1) != 0 {
       r = r ^ x
@@ -117,12 +122,12 @@ fn gf_mul(a : UInt, b : UInt) -> UInt {
 fn aes_expand_key(
   round_keys : FixedArray[Byte],
   key : Bytes,
-  nk : Int,
-  rounds : Int,
-  sbox : FixedArray[Byte]
+  nk : Int32,
+  rounds : Int32,
+  sbox : FixedArray[Byte],
 ) -> Unit {
   let words = 4 * (rounds + 1)
-  let w : FixedArray[UInt] = FixedArray::make(words, 0)
+  let w : FixedArray[UInt32] = FixedArray::make(words, 0)
   for i = 0; i < nk; i = i + 1 {
     w[i] = (key[4 * i].to_uint() << 24) |
       (key[4 * i + 1].to_uint() << 16) |
@@ -157,8 +162,8 @@ fn aes_expand_key(
 pub fn av_aes_init(
   a : AVAES,
   key : Bytes,
-  key_bits : Int,
-  decrypt : Bool
+  key_bits : Int32,
+  decrypt : Bool,
 ) -> Result[Unit, String] {
   if key_bits != 128 && key_bits != 192 && key_bits != 256 {
     return Err("EINVAL")
@@ -174,47 +179,66 @@ pub fn av_aes_init(
   Ok(())
 }
 
-///| One FIPS-197 encryption of a 16-byte block held in `st` (index `4*column + row`). */
-fn aes_state_add_round_key(st : FixedArray[UInt], rk : FixedArray[Byte], round : Int) -> Unit {
+///|
+/// One FIPS-197 encryption of a 16-byte block held in `st` (index `4*column + row`). */
+fn aes_state_add_round_key(
+  st : FixedArray[UInt32],
+  rk : FixedArray[Byte],
+  round : Int32,
+) -> Unit {
   for i = 0; i < 16; i = i + 1 {
     st[i] = st[i] ^ rk[16 * round + i].to_uint()
   }
 }
 
-///| SubBytes over the whole state. */
-fn aes_state_sub_bytes(st : FixedArray[UInt], sbox : FixedArray[Byte]) -> Unit {
+///|
+/// SubBytes over the whole state. */
+fn aes_state_sub_bytes(
+  st : FixedArray[UInt32],
+  sbox : FixedArray[Byte],
+) -> Unit {
   for i = 0; i < 16; i = i + 1 {
     st[i] = sbox[st[i].reinterpret_as_int()].to_uint()
   }
 }
 
-///| ShiftRows (or its inverse), operating on `st` in place. */
-fn aes_state_shift_rows(st : FixedArray[UInt], inverse : Bool) -> Unit {
+///|
+/// ShiftRows (or its inverse), operating on `st` in place. */
+fn aes_state_shift_rows(st : FixedArray[UInt32], inverse : Bool) -> Unit {
   let tmp = st.copy()
   for r = 0; r < 4; r = r + 1 {
     for c = 0; c < 4; c = c + 1 {
-      let src_c = if inverse {
-        (c - r + 4) % 4
-      } else {
-        (c + r) % 4
-      }
+      let src_c = if inverse { (c - r + 4) % 4 } else { (c + r) % 4 }
       st[4 * c + r] = tmp[4 * src_c + r]
     }
   }
 }
 
-///| MixColumns (or its inverse), operating on `st` in place. */
-fn aes_state_mix_columns(st : FixedArray[UInt], inverse : Bool) -> Unit {
+///|
+/// MixColumns (or its inverse), operating on `st` in place. */
+fn aes_state_mix_columns(st : FixedArray[UInt32], inverse : Bool) -> Unit {
   for c = 0; c < 4; c = c + 1 {
     let a0 = st[4 * c]
     let a1 = st[4 * c + 1]
     let a2 = st[4 * c + 2]
     let a3 = st[4 * c + 3]
     if inverse {
-      st[4 * c] = gf_mul(a0, 14) ^ gf_mul(a1, 11) ^ gf_mul(a2, 13) ^ gf_mul(a3, 9)
-      st[4 * c + 1] = gf_mul(a0, 9) ^ gf_mul(a1, 14) ^ gf_mul(a2, 11) ^ gf_mul(a3, 13)
-      st[4 * c + 2] = gf_mul(a0, 13) ^ gf_mul(a1, 9) ^ gf_mul(a2, 14) ^ gf_mul(a3, 11)
-      st[4 * c + 3] = gf_mul(a0, 11) ^ gf_mul(a1, 13) ^ gf_mul(a2, 9) ^ gf_mul(a3, 14)
+      st[4 * c] = gf_mul(a0, 14) ^
+        gf_mul(a1, 11) ^
+        gf_mul(a2, 13) ^
+        gf_mul(a3, 9)
+      st[4 * c + 1] = gf_mul(a0, 9) ^
+        gf_mul(a1, 14) ^
+        gf_mul(a2, 11) ^
+        gf_mul(a3, 13)
+      st[4 * c + 2] = gf_mul(a0, 13) ^
+        gf_mul(a1, 9) ^
+        gf_mul(a2, 14) ^
+        gf_mul(a3, 11)
+      st[4 * c + 3] = gf_mul(a0, 11) ^
+        gf_mul(a1, 13) ^
+        gf_mul(a2, 9) ^
+        gf_mul(a3, 14)
     } else {
       st[4 * c] = gf_mul(a0, 2) ^ gf_mul(a1, 3) ^ a2 ^ a3
       st[4 * c + 1] = a0 ^ gf_mul(a1, 2) ^ gf_mul(a2, 3) ^ a3
@@ -224,9 +248,16 @@ fn aes_state_mix_columns(st : FixedArray[UInt], inverse : Bool) -> Unit {
   }
 }
 
-///| Encrypt one 16-byte block into `out` at `out_off`. */
-fn aes_encrypt_block(a : AVAES, input : Bytes, in_off : Int, out : FixedArray[Byte], out_off : Int) -> Unit {
-  let st : FixedArray[UInt] = FixedArray::make(16, 0)
+///|
+/// Encrypt one 16-byte block into `out` at `out_off`. */
+fn aes_encrypt_block(
+  a : AVAES,
+  input : Bytes,
+  in_off : Int32,
+  out : FixedArray[Byte],
+  out_off : Int32,
+) -> Unit {
+  let st : FixedArray[UInt32] = FixedArray::make(16, 0)
   for i = 0; i < 16; i = i + 1 {
     st[i] = input[in_off + i].to_uint()
   }
@@ -245,9 +276,16 @@ fn aes_encrypt_block(a : AVAES, input : Bytes, in_off : Int, out : FixedArray[By
   }
 }
 
-///| Decrypt one 16-byte block into `out` at `out_off`. */
-fn aes_decrypt_block(a : AVAES, input : Bytes, in_off : Int, out : FixedArray[Byte], out_off : Int) -> Unit {
-  let st : FixedArray[UInt] = FixedArray::make(16, 0)
+///|
+/// Decrypt one 16-byte block into `out` at `out_off`. */
+fn aes_decrypt_block(
+  a : AVAES,
+  input : Bytes,
+  in_off : Int32,
+  out : FixedArray[Byte],
+  out_off : Int32,
+) -> Unit {
+  let st : FixedArray[UInt32] = FixedArray::make(16, 0)
   for i = 0; i < 16; i = i + 1 {
     st[i] = input[in_off + i].to_uint()
   }
@@ -273,7 +311,12 @@ fn aes_decrypt_block(a : AVAES, input : Bytes, in_off : Int, out : FixedArray[By
 /// A non-`None` `iv` selects CBC mode and is updated in place with the final
 /// chaining value, exactly like the C 16-byte `iv` buffer; `None` selects ECB.
 /// The C `decrypt` parameter is unused: the context's direction decides.
-pub fn av_aes_crypt(a : AVAES, src : Bytes, count : Int, iv : FixedArray[Byte]?) -> Bytes {
+pub fn av_aes_crypt(
+  a : AVAES,
+  src : Bytes,
+  count : Int32,
+  iv : FixedArray[Byte]?,
+) -> Bytes {
   let out : FixedArray[Byte] = FixedArray::make(count * 16, b'\x00')
   let chain = match iv {
     None => None
@@ -282,14 +325,13 @@ pub fn av_aes_crypt(a : AVAES, src : Bytes, count : Int, iv : FixedArray[Byte]?)
   for b = 0; b < count; b = b + 1 {
     let in_off = b * 16
     match chain {
-      None => {
+      None =>
         if a.decrypt {
           aes_decrypt_block(a, src, in_off, out, in_off)
         } else {
           aes_encrypt_block(a, src, in_off, out, in_off)
         }
-      }
-      Some(c) => {
+      Some(c) =>
         if a.decrypt {
           // Decrypt, then XOR with the previous ciphertext block.
           let tmp : FixedArray[Byte] = FixedArray::make(16, b'\x00')
@@ -310,15 +352,13 @@ pub fn av_aes_crypt(a : AVAES, src : Bytes, count : Int, iv : FixedArray[Byte]?)
             c[i] = out[in_off + i]
           }
         }
-      }
     }
   }
   match (iv, chain) {
-    (Some(v), Some(c)) => {
+    (Some(v), Some(c)) =>
       for i = 0; i < 16; i = i + 1 {
         v[i] = c[i]
       }
-    }
     _ => ()
   }
   Bytes::from_array(out[:])

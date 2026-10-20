@@ -8,10 +8,12 @@
 /// optimisation; the portable `DO4` loop that FFmpeg uses otherwise produces
 /// the same checksum and is what this port implements.
 
-///| Largest prime smaller than 65536, `BASE` in libavutil/adler32.c. */
+///|
+/// Largest prime smaller than 65536, `BASE` in libavutil/adler32.c. */
 let adler_base : UInt64 = 65521
 
-///| `DO1`: consume one byte, updating s1 and s2. */
+///|
+/// `DO1`: consume one byte, updating s1 and s2. */
 fn adler_do1(s1 : UInt64, s2 : UInt64, b : Byte) -> (UInt64, UInt64) {
   let s1 = s1 + b.to_uint64()
   (s1, s2 + s1)
@@ -20,7 +22,7 @@ fn adler_do1(s1 : UInt64, s2 : UInt64, b : Byte) -> (UInt64, UInt64) {
 ///|
 /// `av_adler32_update`: Adler-32 checksum of `buf[0..len)`, continuing from
 /// `adler`. Pass `1` as the initial value for a fresh checksum.
-pub fn av_adler32_update(adler : UInt, buf : Bytes, len : Int) -> UInt {
+pub fn av_adler32_update(adler : UInt32, buf : Bytes, len : Int32) -> UInt32 {
   let mut s1 : UInt64 = (adler & 0xFFFF).to_uint64()
   let mut s2 : UInt64 = (adler >> 16).to_uint64()
   let mut remaining = len

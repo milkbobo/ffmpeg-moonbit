@@ -16,19 +16,22 @@
 ///| `el` from ebml_wbtest is reused (same package); this file adds track
 /// helpers only. */
 
-///| A minimal EBML header + segment open, as in mkv_segment_wbtest. */
+///|
+/// A minimal EBML header + segment open, as in mkv_segment_wbtest. */
 fn track_movie(tracks_payload : Bytes) -> Bytes {
   let header = synth_ebml_header(b"matroska")
   let seg = bcat([seg_open_unknown(), tracks_payload, cluster_id()])
   bcat([header, seg])
 }
 
-///| A complete Tracks level-1 element wrapping `entries`. */
+///|
+/// A complete Tracks level-1 element wrapping `entries`. */
 fn tracks_box(entries : Bytes) -> Bytes {
   bcat([b"\x16\x54\xAE\x6B", vint1(entries.length()), entries])
 }
 
-///| One TrackEntry element. */
+///|
+/// One TrackEntry element. */
 fn track_entry(children : Bytes) -> Bytes {
   el(b"\xAE", children)
 }
@@ -37,11 +40,14 @@ fn track_entry(children : Bytes) -> Bytes {
 // tests
 // ---------------------------------------------------------------------------
 
+///|
 test "matroska: defaults of an empty TrackEntry" {
-  let entry = track_entry(bcat([
-    el(b"\xD7", b"\x01"), // TrackNumber 1
-    el(b"\x83", b"\x02"), // TrackType audio
-  ]))
+  let entry = track_entry(
+    bcat([
+      el(b"\xD7", b"\x01"), // TrackNumber 1
+      el(b"\x83", b"\x02"), // TrackType audio
+    ]),
+  )
   let mh = av_matroska_open(track_movie(tracks_box(entry))).unwrap()
   assert_eq(mh.tracks.length(), 1)
   let t = mh.tracks[0]
@@ -60,6 +66,7 @@ test "matroska: defaults of an empty TrackEntry" {
   assert_eq(t.encodings.length(), 0)
 }
 
+///|
 test "matroska: video track full field set" {
   let video = bcat([
     el(b"\xB0", be_u64(128UL, 1)), // PixelWidth
@@ -99,6 +106,7 @@ test "matroska: video track full field set" {
   assert_eq(t.video.color_space, Some(b"\x01\x02\x03\x04"))
 }
 
+///|
 test "matroska: audio track and track-level extras" {
   let audio = bcat([
     el(b"\xB5", b"\x40\xE7\x70\x00\x00\x00\x00\x00"), // 48000.0
@@ -130,6 +138,7 @@ test "matroska: audio track and track-level extras" {
   assert_eq(t.audio.bitdepth, 16UL)
 }
 
+///|
 test "matroska: content encodings (header-strip compression)" {
   let compression = bcat([
     el(b"\x42\x54", be_u64(mkv_comp_header_strip, 1)), // CompAlgo 3
@@ -166,28 +175,31 @@ test "matroska: content encodings (header-strip compression)" {
   assert_eq(e.comp_settings, Some(b"\x1A\x45\xDF\xA3"))
 }
 
+///|
 test "matroska: two tracks keep separate field sets" {
-  let v_entry = track_entry(bcat([
-    el(b"\xD7", b"\x01"),
-    el(b"\x83", b"\x01"),
-    el(b"\x86", b"V_VP8"),
-    el(b"\xE0", el(b"\xB0", be_u64(64UL, 1))),
-    b"\xEC",
-    vint1(2),
-    b"\x00\x00",
-  ]))
-  let a_entry = track_entry(bcat([
-    el(b"\xD7", b"\x02"),
-    el(b"\x83", b"\x02"),
-    el(b"\x86", b"A_OPUS"),
-    el(b"\xE1", el(b"\x9F", be_u64(1UL, 1))),
-    b"\xEC",
-    vint1(2),
-    b"\x00\x00",
-  ]))
-  let mh = av_matroska_open(
-    track_movie(tracks_box(bcat([v_entry, a_entry]))),
-  ).unwrap()
+  let v_entry = track_entry(
+    bcat([
+      el(b"\xD7", b"\x01"),
+      el(b"\x83", b"\x01"),
+      el(b"\x86", b"V_VP8"),
+      el(b"\xE0", el(b"\xB0", be_u64(64UL, 1))),
+      b"\xEC",
+      vint1(2),
+      b"\x00\x00",
+    ]),
+  )
+  let a_entry = track_entry(
+    bcat([
+      el(b"\xD7", b"\x02"),
+      el(b"\x83", b"\x02"),
+      el(b"\x86", b"A_OPUS"),
+      el(b"\xE1", el(b"\x9F", be_u64(1UL, 1))),
+      b"\xEC",
+      vint1(2),
+      b"\x00\x00",
+    ]),
+  )
+  let mh = av_matroska_open(track_movie(tracks_box(bcat([v_entry, a_entry])))).unwrap()
   assert_eq(mh.tracks.length(), 2)
   assert_eq(mh.tracks[0].codec_id, Some("V_VP8"))
   assert_eq(mh.tracks[0].video.pixel_width, 64UL)
@@ -201,6 +213,7 @@ test "matroska: two tracks keep separate field sets" {
 // real files (1024-byte prefixes; same base64 as mkv_segment_wbtest)
 // ---------------------------------------------------------------------------
 
+///|
 test "matroska: real webm tracks (VP8 + Opus, docker ffmpeg)" {
   let bytes = @libavutil.av_base64_decode(real_webm_1024_b64, 1200).unwrap()
   let mh = av_matroska_open(bytes).unwrap()
@@ -230,6 +243,7 @@ test "matroska: real webm tracks (VP8 + Opus, docker ffmpeg)" {
   assert_eq(a.seek_preroll, 80000000UL)
 }
 
+///|
 test "matroska: real mkv tracks (H.264 only, docker ffmpeg)" {
   let bytes = @libavutil.av_base64_decode(real_mkv_1024_b64, 1200).unwrap()
   let mh = av_matroska_open(bytes).unwrap()

@@ -7,8 +7,9 @@
 ///     (`libavutil/tests/base64.c` reference table), on every length from 0 up
 ///     to well past several SIMD blocks, including the 12-byte boundaries.
 
-///| Deterministic byte-buffer generator (LCG). */
-fn b64v128_gen(seed : UInt, n : Int) -> Bytes {
+///|
+/// Deterministic byte-buffer generator (LCG). */
+fn b64v128_gen(seed : UInt32, n : Int32) -> Bytes {
   let a : Array[Byte] = Array::make(n, b'\x00')
   let mut s = seed
   for i = 0; i < n; i = i + 1 {
@@ -18,6 +19,7 @@ fn b64v128_gen(seed : UInt, n : Int) -> Bytes {
   Bytes::from_array(a)
 }
 
+///|
 test "base64 simd: RFC 4648 test vectors" {
   assert_eq(av_base64_encode_v128(b""), "")
   assert_eq(av_base64_encode_v128(b"f"), "Zg==")
@@ -28,6 +30,7 @@ test "base64 simd: RFC 4648 test vectors" {
   assert_eq(av_base64_encode_v128(b"foobar"), "Zm9vYmFy")
 }
 
+///|
 test "base64 simd: equals the scalar encoder for all short lengths" {
   for n = 0; n < 130; n = n + 1 {
     let b = b64v128_gen(0x1234ABCDU + n.reinterpret_as_uint(), n)
@@ -35,9 +38,10 @@ test "base64 simd: equals the scalar encoder for all short lengths" {
   }
 }
 
+///|
 test "base64 simd: equals the scalar encoder on long buffers" {
   for k = 0; k < 40; k = k + 1 {
-    let n = 1 + (k * k * 53) % 5000
+    let n = 1 + k * k * 53 % 5000
     let b = b64v128_gen(0x0BADF00DU + k.reinterpret_as_uint(), n)
     assert_eq(av_base64_encode_v128(b), av_base64_encode(b))
   }

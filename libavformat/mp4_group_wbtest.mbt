@@ -14,8 +14,9 @@
 // Local box builders (sgpd/sbgp/multi-entry stsd/stbl-with-groups)
 // ---------------------------------------------------------------------------
 
-///| `sgpd` v1, grouping 'sync', default_length 1: one NAL-type byte/entry. */
-fn sgpd_sync_box(nal_types : Array[UInt]) -> Array[Byte] {
+///|
+/// `sgpd` v1, grouping 'sync', default_length 1: one NAL-type byte/entry. */
+fn sgpd_sync_box(nal_types : Array[UInt32]) -> Array[Byte] {
   let body : Array[Byte] = []
   push_all(body, b"sync".to_array()) // grouping_type, file order
   push_all(body, be32(1)) // default_length (version >= 1)
@@ -26,8 +27,12 @@ fn sgpd_sync_box(nal_types : Array[UInt]) -> Array[Byte] {
   fbox(b"sgpd", 1, 0, body)
 }
 
-///| `sbgp` v0 for one grouping type: runs of (sample_count, group index). */
-fn sbgp_runs_box(grouping : Bytes, runs : Array[(UInt, UInt)]) -> Array[Byte] {
+///|
+/// `sbgp` v0 for one grouping type: runs of (sample_count, group index). */
+fn sbgp_runs_box(
+  grouping : Bytes,
+  runs : Array[(UInt32, UInt32)],
+) -> Array[Byte] {
   let body : Array[Byte] = []
   push_all(body, grouping.to_array())
   push_all(body, be32(runs.length().reinterpret_as_uint()))
@@ -38,7 +43,8 @@ fn sbgp_runs_box(grouping : Bytes, runs : Array[(UInt, UInt)]) -> Array[Byte] {
   fbox(b"sbgp", 0, 0, body)
 }
 
-///| `stbl` with the standard tables plus trailing sgpd/sbgp boxes. */
+///|
+/// `stbl` with the standard tables plus trailing sgpd/sbgp boxes. */
 fn stbl_with_groups(
   stsd : Array[Byte],
   stts : Array[Byte],
@@ -47,7 +53,7 @@ fn stbl_with_groups(
   stsz : Array[Byte],
   stco : Array[Byte],
   stss : Array[Byte],
-  groups : Array[Byte]
+  groups : Array[Byte],
 ) -> Array[Byte] {
   let parts : Array[Array[Byte]] = [stsd, stts]
   if ctts.length() > 0 {
@@ -65,7 +71,8 @@ fn stbl_with_groups(
   box(b"stbl", cat(parts))
 }
 
-///| Append a child box to a sample entry, fixing the entry's size field. */
+///|
+/// Append a child box to a sample entry, fixing the entry's size field. */
 fn entry_with_child(entry : Array[Byte], child : Array[Byte]) -> Array[Byte] {
   let out = cat([entry, child])
   let sz = be32(out.length().reinterpret_as_uint())
@@ -76,12 +83,14 @@ fn entry_with_child(entry : Array[Byte], child : Array[Byte]) -> Array[Byte] {
   out
 }
 
-///| A `glbl` sample-entry child whose payload becomes the extradata. */
+///|
+/// A `glbl` sample-entry child whose payload becomes the extradata. */
 fn glbl_box(payload : Bytes) -> Array[Byte] {
   box(b"glbl", payload.to_array())
 }
 
-///| `stsd` with an arbitrary number of entries. */
+///|
+/// `stsd` with an arbitrary number of entries. */
 fn stsd_box_n(entries : Array[Array[Byte]]) -> Array[Byte] {
   let body : Array[Byte] = be32(entries.length().reinterpret_as_uint())
   for i = 0; i < entries.length(); i = i + 1 {
@@ -90,8 +99,9 @@ fn stsd_box_n(entries : Array[Array[Byte]]) -> Array[Byte] {
   fbox(b"stsd", 0, 0, body)
 }
 
-///| `mvex` whose `trex` carries an explicit `stsd_id`. */
-fn mvex_box_sid(track_id : UInt, stsd_id : UInt) -> Array[Byte] {
+///|
+/// `mvex` whose `trex` carries an explicit `stsd_id`. */
+fn mvex_box_sid(track_id : UInt32, stsd_id : UInt32) -> Array[Byte] {
   let trex = fbox(
     b"trex",
     0,
@@ -101,8 +111,9 @@ fn mvex_box_sid(track_id : UInt, stsd_id : UInt) -> Array[Byte] {
   box(b"mvex", trex)
 }
 
-///| `tfhd` with `default-base-is-moof` and an explicit `stsd_id`. */
-fn tfhd_box_dbm_sid(track_id : UInt, stsd_id : UInt) -> Array[Byte] {
+///|
+/// `tfhd` with `default-base-is-moof` and an explicit `stsd_id`. */
+fn tfhd_box_dbm_sid(track_id : UInt32, stsd_id : UInt32) -> Array[Byte] {
   fbox(b"tfhd", 0, 0x020002, cat([be32(track_id), be32(stsd_id)]))
 }
 
@@ -110,6 +121,7 @@ fn tfhd_box_dbm_sid(track_id : UInt, stsd_id : UInt) -> Array[Byte] {
 // sgpd / sbgp tables
 // ---------------------------------------------------------------------------
 
+///|
 test "groups: sgpd sync entries and sbgp runs land in the track tables" {
   let stbl = stbl_with_groups(
     stsd_box(video_entry_isom(b"avc1", 16, 16)),
@@ -132,7 +144,9 @@ test "groups: sgpd sync entries and sbgp runs land in the track tables" {
     stbl,
     [],
   )
-  let movie = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 100), trak, false))).unwrap()
+  let movie = av_mov_open(
+    Bytes::from_array(build_movie(mvhd_box(1000, 100), trak, false)),
+  ).unwrap()
   let t = movie.tracks[0]
   // sgpd 'sync': NAL unit types masked to 6 bits.
   assert_eq(t.sgpd_sync.length(), 2)
@@ -154,6 +168,7 @@ test "groups: sgpd sync entries and sbgp runs land in the track tables" {
   assert_eq(t.min_sample_duration, 0)
 }
 
+///|
 test "groups: HEVC without a CRA entry unrolls offsets but no key samples" {
   // sgpd has only IDR_W_RADL (19), no CRA (21): the C unrolls sample_offsets
   // and returns before building open_key_samples / min_sample_duration.
@@ -174,7 +189,9 @@ test "groups: HEVC without a CRA entry unrolls offsets but no key samples" {
     stbl,
     [],
   )
-  let movie = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 100), trak, false))).unwrap()
+  let movie = av_mov_open(
+    Bytes::from_array(build_movie(mvhd_box(1000, 100), trak, false)),
+  ).unwrap()
   let t = movie.tracks[0]
   assert_eq(t.sample_offsets, [-5, 7])
   assert_eq(t.open_key_samples.length(), 0)
@@ -185,7 +202,8 @@ test "groups: HEVC without a CRA entry unrolls offsets but no key samples" {
 // Open-GOP seek (build_open_gop_key_points + can_seek_to_key_sample)
 // ---------------------------------------------------------------------------
 
-///| The open-GOP test file: HEVC, ctts (-10,-10,+10), CRA at sample 2. */
+///|
+/// The open-GOP test file: HEVC, ctts (-10,-10,+10), CRA at sample 2. */
 fn open_gop_movie(codec : Bytes) -> Mp4Movie {
   let groups = if codec == b"hvc1" {
     cat([sgpd_sync_box([21]), sbgp_runs_box(b"sync", [(2, 0), (1, 1)])])
@@ -212,6 +230,7 @@ fn open_gop_movie(codec : Bytes) -> Mp4Movie {
   av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 30), trak, false))).unwrap()
 }
 
+///|
 test "seek: open-GOP CRA sample is rejected until its presentation point" {
   let t = open_gop_movie(b"hvc1").tracks[0]
   // dts 0/10/20; the negative ctts offset sits in entries the C's
@@ -241,11 +260,18 @@ test "seek: open-GOP CRA sample is rejected until its presentation point" {
 // Multi sample description (pseudo_stream_id)
 // ---------------------------------------------------------------------------
 
+///|
 test "stsd: same-fourcc second entry indexes every chunk (pseudo -1)" {
   // Entry 0 carries a glbl child; entry 1 repeats the fourcc so it is parsed
   // too and flips pseudo_stream_id to -1 (codec_tag already set).
-  let e0 = entry_with_child(video_entry_isom(b"hvc1", 16, 16), glbl_box(b"\xC0\x01"))
-  let e1 = entry_with_child(video_entry_isom(b"hvc1", 32, 32), glbl_box(b"\xC0\x02"))
+  let e0 = entry_with_child(
+    video_entry_isom(b"hvc1", 16, 16),
+    glbl_box(b"\xC0\x01"),
+  )
+  let e1 = entry_with_child(
+    video_entry_isom(b"hvc1", 32, 32),
+    glbl_box(b"\xC0\x02"),
+  )
   let stbl = build_stbl(
     stsd_box_n([e0, e1]),
     stts_box([(1, 10), (1, 10)]),
@@ -262,7 +288,9 @@ test "stsd: same-fourcc second entry indexes every chunk (pseudo -1)" {
     stbl,
     [],
   )
-  let movie = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 20), trak, false))).unwrap()
+  let movie = av_mov_open(
+    Bytes::from_array(build_movie(mvhd_box(1000, 20), trak, false)),
+  ).unwrap()
   let t = movie.tracks[0]
   assert_eq(t.stsd_count, 2)
   assert_eq(t.pseudo_stream_id, -1)
@@ -283,9 +311,16 @@ test "stsd: same-fourcc second entry indexes every chunk (pseudo -1)" {
   assert_eq(t.last_stsd_index, 0)
 }
 
+///|
 test "stsd: differing-fourcc second entry is skipped, id-2 chunks drop out" {
-  let e0 = entry_with_child(video_entry_isom(b"hvc1", 16, 16), glbl_box(b"\xC0\x01"))
-  let e1 = entry_with_child(video_entry_isom(b"avc1", 32, 32), glbl_box(b"\xC0\x02"))
+  let e0 = entry_with_child(
+    video_entry_isom(b"hvc1", 16, 16),
+    glbl_box(b"\xC0\x01"),
+  )
+  let e1 = entry_with_child(
+    video_entry_isom(b"avc1", 32, 32),
+    glbl_box(b"\xC0\x02"),
+  )
   let stbl = build_stbl(
     stsd_box_n([e0, e1]),
     stts_box([(1, 10), (1, 10)]),
@@ -302,7 +337,9 @@ test "stsd: differing-fourcc second entry is skipped, id-2 chunks drop out" {
     stbl,
     [],
   )
-  let movie = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 20), trak, false))).unwrap()
+  let movie = av_mov_open(
+    Bytes::from_array(build_movie(mvhd_box(1000, 20), trak, false)),
+  ).unwrap()
   let t = movie.tracks[0]
   assert_eq(t.stsd_count, 2)
   assert_eq(t.pseudo_stream_id, 0)
@@ -313,12 +350,19 @@ test "stsd: differing-fourcc second entry is skipped, id-2 chunks drop out" {
   assert_eq(t.extradata, Some(b"\xC0\x01"))
 }
 
+///|
 test "stsd: first chunk referencing entry 2 switches the primary extradata" {
   // Same-fourcc entries + a first chunk with stsc id 2: mov_read_header's
   // last_stsd pass selects slot 1 — which no entry ever filled (see the
   // slot discussion above), so the primary extradata becomes empty.
-  let e0 = entry_with_child(video_entry_isom(b"hvc1", 16, 16), glbl_box(b"\xC0\x01"))
-  let e1 = entry_with_child(video_entry_isom(b"hvc1", 32, 32), glbl_box(b"\xC0\x02"))
+  let e0 = entry_with_child(
+    video_entry_isom(b"hvc1", 16, 16),
+    glbl_box(b"\xC0\x01"),
+  )
+  let e1 = entry_with_child(
+    video_entry_isom(b"hvc1", 32, 32),
+    glbl_box(b"\xC0\x02"),
+  )
   let stbl = build_stbl(
     stsd_box_n([e0, e1]),
     stts_box([(1, 10)]),
@@ -335,7 +379,9 @@ test "stsd: first chunk referencing entry 2 switches the primary extradata" {
     stbl,
     [],
   )
-  let movie = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 10), trak, false))).unwrap()
+  let movie = av_mov_open(
+    Bytes::from_array(build_movie(mvhd_box(1000, 10), trak, false)),
+  ).unwrap()
   let t = movie.tracks[0]
   assert_eq(t.last_stsd_index, 1)
   assert_eq(t.extradata, None)
@@ -347,8 +393,9 @@ test "stsd: first chunk referencing entry 2 switches the primary extradata" {
 // Fragment stsd_id gates (tfdt + trun)
 // ---------------------------------------------------------------------------
 
-///| An init segment + one moof, with a configurable trex stsd_id. */
-fn frag_movie_sid(stsd_id : UInt) -> Mp4Movie {
+///|
+/// An init segment + one moof, with a configurable trex stsd_id. */
+fn frag_movie_sid(stsd_id : UInt32) -> Mp4Movie {
   let stbl = build_stbl(
     stsd_box(video_entry_isom(b"hvc1", 16, 16)),
     [],
@@ -378,6 +425,7 @@ fn frag_movie_sid(stsd_id : UInt) -> Mp4Movie {
   av_mov_open(Bytes::from_array(data)).unwrap()
 }
 
+///|
 test "frag: fragments of a different stsd_id are skipped (trex path)" {
   // trex stsd_id 1 matches pseudo_stream_id 0 + 1: the fragment lands.
   let ok = frag_movie_sid(1).tracks[0]
@@ -388,10 +436,11 @@ test "frag: fragments of a different stsd_id are skipped (trex path)" {
   assert_eq(skip.samples.length(), 0)
 }
 
+///|
 test "frag: an explicit tfhd stsd_id overrides the trex default" {
   // Same file shape but the stsd_id comes from the tfhd flag (0x000002):
   // 2 mismatches the track, 1 matches.
-  fn frag_movie_tfhd(stsd_id : UInt) -> Mp4Movie {
+  fn frag_movie_tfhd(stsd_id : UInt32) -> Mp4Movie {
     let stbl = build_stbl(
       stsd_box(video_entry_isom(b"hvc1", 16, 16)),
       [],
@@ -408,7 +457,7 @@ test "frag: an explicit tfhd stsd_id overrides the trex default" {
       stbl,
       [],
     )
-    let trun_flags : UInt = 0x1 | 0x100 | 0x200 | 0x400
+    let trun_flags : UInt32 = 0x1 | 0x100 | 0x200 | 0x400
     let trun_body : Array[Byte] = []
     push_all(trun_body, be32(1))
     push_all(trun_body, be32(600))
@@ -429,7 +478,9 @@ test "frag: an explicit tfhd stsd_id overrides the trex default" {
       mvex_box(1),
     ])
     av_mov_open(
-      Bytes::from_array(cat([ftyp_box(b"isom"), box(b"moov", moov), box(b"moof", traf)])),
+      Bytes::from_array(
+        cat([ftyp_box(b"isom"), box(b"moov", moov), box(b"moof", traf)]),
+      ),
     ).unwrap()
   }
   assert_eq(frag_movie_tfhd(1).tracks[0].samples.length(), 1)

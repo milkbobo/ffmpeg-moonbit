@@ -18,8 +18,8 @@
 /// A SimpleBlock element: id A3 + vint length + payload. */
 fn simple_block(
   track_num_vint : Bytes,
-  time : Int,
-  flags : Int,
+  time : Int32,
+  flags : Int32,
   frames : Bytes,
 ) -> Bytes {
   let payload : Array[Byte] = []
@@ -38,7 +38,7 @@ fn simple_block(
 
 ///|
 /// VINT track number for values < 128 (0x80 | n). */
-fn track_vint(n : Int) -> Bytes {
+fn track_vint(n : Int32) -> Bytes {
   vint1(0x80 | n)
 }
 
@@ -95,7 +95,7 @@ test "block: Xiph lacing splits by 0xFF-chained byte lengths" {
 
 ///|
 /// `n` bytes of value `v`. */
-fn fixed_bytes(n : Int, v : Int) -> Bytes {
+fn fixed_bytes(n : Int32, v : Int32) -> Bytes {
   Bytes::make(n, v.to_byte())
 }
 

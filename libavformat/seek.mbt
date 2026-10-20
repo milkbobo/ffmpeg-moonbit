@@ -16,11 +16,13 @@
 ///     materialises every sample up front, so the index search below already
 ///     covers fragmented files.
 
-///| `AVSEEK_FLAG_BACKWARD` semantics for `index_search_timestamp`. */
-pub let avseek_flag_backward : Int = 1
+///|
+/// `AVSEEK_FLAG_BACKWARD` semantics for `index_search_timestamp`. */
+pub let avseek_flag_backward : Int32 = 1
 
-///| `AVSEEK_FLAG_ANY` semantics for `index_search_timestamp`. */
-pub let avseek_flag_any : Int = 4
+///|
+/// `AVSEEK_FLAG_ANY` semantics for `index_search_timestamp`. */
+pub let avseek_flag_any : Int32 = 4
 
 ///|
 /// `ff_index_search_timestamp` over the materialised sample index (the entry
@@ -29,8 +31,8 @@ pub let avseek_flag_any : Int = 4
 pub fn index_search_timestamp(
   samples : Array[Mp4Sample],
   wanted_timestamp : Int64,
-  flags : Int
-) -> Int {
+  flags : Int32,
+) -> Int32 {
   let nb_entries = samples.length()
   if nb_entries <= 0 {
     return -1
@@ -80,8 +82,8 @@ pub fn index_search_timestamp(
 /// with the per-sample ctts offset from `build_open_gop_key_points`.
 fn can_seek_to_key_sample(
   track : Mp4Track,
-  sample : Int,
-  requested_pts : Int64
+  sample : Int32,
+  requested_pts : Int64,
 ) -> Bool {
   let hevc = track.codec == "hvc1" || track.codec == "hev1"
   if !hevc {
@@ -107,11 +109,12 @@ fn can_seek_to_key_sample(
 pub fn mov_seek_stream(
   track : Mp4Track,
   timestamp : Int64,
-  flags : Int
-) -> Result[Int, String] {
+  flags : Int32,
+) -> Result[Int32, String] {
   // Here we consider timestamp to be PTS, hence try to offset it so that we
   // can search over the DTS timeline.
-  let mut ts = timestamp - (track.min_corrected_pts + track.dts_shift.to_int64())
+  let mut ts = timestamp -
+    (track.min_corrected_pts + track.dts_shift.to_int64())
   let backward = (flags & avseek_flag_backward) != 0
   let any = (flags & avseek_flag_any) != 0
   let search_flags = (if backward { avseek_flag_backward } else { 0 }) +
@@ -120,9 +123,7 @@ pub fn mov_seek_stream(
   let mut settled = false
   while !settled {
     sample = index_search_timestamp(track.samples, ts, search_flags)
-    if sample < 0 &&
-      track.samples.length() > 0 &&
-      ts < track.samples[0].dts {
+    if sample < 0 && track.samples.length() > 0 && ts < track.samples[0].dts {
       sample = 0
     }
     if sample < 0 {
@@ -166,8 +167,8 @@ pub fn mov_seek_stream(
 pub fn mov_seek_track(
   track : Mp4Track,
   timestamp : Int64,
-  flags : Int
-) -> Result[(Int, Int64), String] {
+  flags : Int32,
+) -> Result[(Int32, Int64), String] {
   match mov_seek_stream(track, timestamp, flags) {
     Err(e) => Err(e)
     Ok(sample) => Ok((sample, track.samples[sample].dts))

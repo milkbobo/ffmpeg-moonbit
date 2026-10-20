@@ -21,9 +21,10 @@
 /// Gated to `native`/`wasm`; equality with the scalar path is asserted in
 /// `avstring_v128_wbtest.mbt`.
 
-///| Full-needle check at `pos`. */
+///|
+/// Full-needle check at `pos`. */
 #cfg(any(target="native", target="wasm"))
-fn strnstr_match(h : Array[Char], n : Array[Char], pos : Int) -> Bool {
+fn strnstr_match(h : Array[Char], n : Array[Char], pos : Int32) -> Bool {
   for k = 0; k < n.length(); k = k + 1 {
     if h[pos + k] != n[k] {
       return false
@@ -39,8 +40,8 @@ fn strnstr_match(h : Array[Char], n : Array[Char], pos : Int) -> Bool {
 pub fn av_strnstr_v128(
   haystack : String,
   needle : String,
-  hay_length : Int,
-) -> Int? {
+  hay_length : Int32,
+) -> Int32? {
   let n = needle.to_array()
   let nl = n.length()
   if nl == 0 {

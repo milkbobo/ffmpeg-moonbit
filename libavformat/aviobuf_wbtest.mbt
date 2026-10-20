@@ -18,15 +18,21 @@
 
 struct ChunkSrc {
   data : Bytes
-  chunk : Int
-  mut pos : Int
-  mut nreads : Int
-  mut nseeks : Int
+  chunk : Int32
+  mut pos : Int32
+  mut nreads : Int32
+  mut nseeks : Int32
   /// make AVSEEK_SIZE fail so avio_size exercises the SEEK_END fallback
   size_fails : Bool
 }
 
-fn ChunkSrc::read(self : ChunkSrc, dst : FixedArray[Byte], start : Int, len : Int) -> Result[Int, String] {
+///|
+fn ChunkSrc::read(
+  self : ChunkSrc,
+  dst : FixedArray[Byte],
+  start : Int32,
+  len : Int32,
+) -> Result[Int32, String] {
   self.nreads = self.nreads + 1
   let remaining = self.data.length() - self.pos
   if remaining <= 0 {
@@ -41,7 +47,12 @@ fn ChunkSrc::read(self : ChunkSrc, dst : FixedArray[Byte], start : Int, len : In
   Ok(n)
 }
 
-fn ChunkSrc::seek(self : ChunkSrc, offset : Int64, whence : Int) -> Result[Int64, String] {
+///|
+fn ChunkSrc::seek(
+  self : ChunkSrc,
+  offset : Int64,
+  whence : Int32,
+) -> Result[Int64, String] {
   if whence == AVSEEK_SIZE {
     if self.size_fails {
       return Err("ENOSYS")
@@ -64,9 +75,21 @@ fn ChunkSrc::seek(self : ChunkSrc, offset : Int64, whence : Int) -> Result[Int64
   Ok(base)
 }
 
-///| Seekable chunked source: `(context, source)`. */
-fn open_chunked(data : Bytes, chunk : Int, buffer_size : Int) -> (AvioContext, ChunkSrc) {
-  let src : ChunkSrc = { data, chunk, pos: 0, nreads: 0, nseeks: 0, size_fails: false }
+///|
+/// Seekable chunked source: `(context, source)`. */
+fn open_chunked(
+  data : Bytes,
+  chunk : Int32,
+  buffer_size : Int32,
+) -> (AvioContext, ChunkSrc) {
+  let src : ChunkSrc = {
+    data,
+    chunk,
+    pos: 0,
+    nreads: 0,
+    nseeks: 0,
+    size_fails: false,
+  }
   let s = AvioContext::alloc_context(
     buffer_size,
     false,
@@ -77,9 +100,21 @@ fn open_chunked(data : Bytes, chunk : Int, buffer_size : Int) -> (AvioContext, C
   (s, src)
 }
 
-///| Unseekable chunked source (no seek callback at all). */
-fn open_chunked_unseekable(data : Bytes, chunk : Int, buffer_size : Int) -> (AvioContext, ChunkSrc) {
-  let src : ChunkSrc = { data, chunk, pos: 0, nreads: 0, nseeks: 0, size_fails: false }
+///|
+/// Unseekable chunked source (no seek callback at all). */
+fn open_chunked_unseekable(
+  data : Bytes,
+  chunk : Int32,
+  buffer_size : Int32,
+) -> (AvioContext, ChunkSrc) {
+  let src : ChunkSrc = {
+    data,
+    chunk,
+    pos: 0,
+    nreads: 0,
+    nseeks: 0,
+    size_fails: false,
+  }
   let s = AvioContext::alloc_context(
     buffer_size,
     false,
@@ -90,7 +125,8 @@ fn open_chunked_unseekable(data : Bytes, chunk : Int, buffer_size : Int) -> (Avi
   (s, src)
 }
 
-fn seq_bytes(n : Int) -> Bytes {
+///|
+fn seq_bytes(n : Int32) -> Bytes {
   let a : Array[Byte] = []
   for i = 0; i < n; i = i + 1 {
     a.push(i.to_byte())
@@ -102,6 +138,7 @@ fn seq_bytes(n : Int) -> Bytes {
 // Reads: fixed-width accessors, EOF, avio_read
 // ---------------------------------------------------------------------------
 
+///|
 test "avio: BE/LE accessors across 1-byte chunks" {
   // bytes 00 01 02 ... 10, one byte per read callback call
   let (s, src) = open_chunked(seq_bytes(17), 1, 8)
@@ -119,6 +156,7 @@ test "avio: BE/LE accessors across 1-byte chunks" {
   assert_eq(s2.avio_rl64(), 0x100F0E0D0C0B0A09)
 }
 
+///|
 test "avio: EOF semantics of r8/feof and recovery by seek" {
   let (s, _) = open_chunked(b"\x01\x02\x03", 8, 8)
   // rb32 past the end: 3 real bytes then a 0 (C: avio_r8 returns 0 at EOF)
@@ -133,6 +171,7 @@ test "avio: EOF semantics of r8/feof and recovery by seek" {
   assert_eq(s.avio_r8(), 1)
 }
 
+///|
 test "avio: avio_read exact / short at EOF / error at EOF / big bypass" {
   let (s, _) = open_chunked(seq_bytes(10), 4, 4)
   let a = s.avio_read(7).unwrap()
@@ -153,6 +192,7 @@ test "avio: avio_read exact / short at EOF / error at EOF / big bypass" {
   assert_eq(s2.avio_tell(), 20L)
 }
 
+///|
 test "avio: ffio_read_size and avio_read_partial" {
   let (s, _) = open_chunked(seq_bytes(5), 4, 4)
   // 5 available, 8 requested → INVALIDDATA (ffio_read_size)
@@ -170,6 +210,7 @@ test "avio: ffio_read_size and avio_read_partial" {
 // Seek paths (aviobuf.c avio_seek branch selection)
 // ---------------------------------------------------------------------------
 
+///|
 test "avio: in-buffer seek hits no callbacks" {
   let (s, src) = open_chunked(seq_bytes(30), 8, 8)
   assert_eq(s.avio_read(4).unwrap().length(), 4)
@@ -181,6 +222,7 @@ test "avio: in-buffer seek hits no callbacks" {
   assert_eq(src.nreads, 1)
 }
 
+///|
 test "avio: short forward seek is served by reading, not the callback" {
   let (s, src) = open_chunked(seq_bytes(30), 8, 8)
   let _ = s.avio_read(4).unwrap()
@@ -192,6 +234,7 @@ test "avio: short forward seek is served by reading, not the callback" {
   assert_eq(s.avio_r8(), 9)
 }
 
+///|
 test "avio: far forward/backward seeks go through the callback" {
   let (s, src) = open_chunked(seq_bytes(30), 8, 8)
   let _ = s.avio_read(4).unwrap()
@@ -205,6 +248,7 @@ test "avio: far forward/backward seeks go through the callback" {
   assert_eq(s.seek_count, 2)
 }
 
+///|
 test "avio: backward seek within half a buffer refills instead" {
   // 16-byte buffer, read to fill [0,16), step to 14, seek back to 1:
   // offset1 = 1 - 0 = 1 ... use a case where the buffer start moved:
@@ -218,6 +262,7 @@ test "avio: backward seek within half a buffer refills instead" {
   assert_eq(s.avio_r8(), 14)
 }
 
+///|
 test "avio: seek past EOF returns AVERROR_EOF and keeps the cursor" {
   let (s, _) = open_chunked(seq_bytes(30), 8, 8)
   let _ = s.avio_read(4).unwrap()
@@ -227,6 +272,7 @@ test "avio: seek past EOF returns AVERROR_EOF and keeps the cursor" {
   assert_eq(s.avio_tell(), 24L)
 }
 
+///|
 test "avio: unseekable source skips forward but cannot go back" {
   let (s, _) = open_chunked_unseekable(seq_bytes(40), 8, 8)
   assert_eq(s.avio_read(4).unwrap().length(), 4)
@@ -242,11 +288,19 @@ test "avio: unseekable source skips forward but cannot go back" {
   assert_eq(s.avio_size(), Err("ENOSYS"))
 }
 
+///|
 test "avio: avio_size via AVSEEK_SIZE and the SEEK_END fallback" {
   let (s, _) = open_chunked(seq_bytes(30), 8, 8)
   assert_eq(s.avio_size().unwrap(), 30L)
   // source whose AVSEEK_SIZE fails: seek(-1, SEEK_END)+1
-  let src : ChunkSrc = { data: seq_bytes(30), chunk: 8, pos: 0, nreads: 0, nseeks: 0, size_fails: true }
+  let src : ChunkSrc = {
+    data: seq_bytes(30),
+    chunk: 8,
+    pos: 0,
+    nreads: 0,
+    nseeks: 0,
+    size_fails: true,
+  }
   let s2 = AvioContext::alloc_context(
     8,
     false,
@@ -261,9 +315,10 @@ test "avio: avio_size via AVSEEK_SIZE and the SEEK_END fallback" {
 // Write path
 // ---------------------------------------------------------------------------
 
-///| A write callback collecting every flushed slice into one byte array. */
+///|
+/// A write callback collecting every flushed slice into one byte array. */
 fn sink_collector(out : Array[Byte]) -> AvioWritePacket {
-  (buf : FixedArray[Byte], start : Int, len : Int) => {
+  (buf : FixedArray[Byte], start : Int32, len : Int32) => {
     for i = 0; i < len; i = i + 1 {
       out.push(buf[start + i])
     }
@@ -271,13 +326,21 @@ fn sink_collector(out : Array[Byte]) -> AvioWritePacket {
   }
 }
 
+///|
 fn bytes_of(a : Array[Byte]) -> Bytes {
   Bytes::from_array(a[:])
 }
 
+///|
 test "avio: write accessors buffer then flush" {
   let out : Array[Byte] = []
-  let s = AvioContext::alloc_context(64, true, None, Some(sink_collector(out)), None)
+  let s = AvioContext::alloc_context(
+    64,
+    true,
+    None,
+    Some(sink_collector(out)),
+    None,
+  )
   s.avio_wb32(0xDEADBEEF)
   s.avio_wb16(0x0102)
   s.avio_wl16(0x0304)
@@ -285,13 +348,23 @@ test "avio: write accessors buffer then flush" {
   s.avio_wl24(0x08090A)
   s.avio_wl32(0x0B0C0D0E)
   s.avio_flush()
-  assert_eq(bytes_of(out), b"\xDE\xAD\xBE\xEF\x01\x02\x04\x03\x05\x06\x07\x0A\x09\x08\x0E\x0D\x0C\x0B")
+  assert_eq(
+    bytes_of(out),
+    b"\xDE\xAD\xBE\xEF\x01\x02\x04\x03\x05\x06\x07\x0A\x09\x08\x0E\x0D\x0C\x0B",
+  )
   assert_eq(s.bytes_written, 18L)
 }
 
+///|
 test "avio: wb64/wl64/put_str/print_string_array" {
   let out : Array[Byte] = []
-  let s = AvioContext::alloc_context(64, true, None, Some(sink_collector(out)), None)
+  let s = AvioContext::alloc_context(
+    64,
+    true,
+    None,
+    Some(sink_collector(out)),
+    None,
+  )
   s.avio_wb64(0x1122334455667788UL)
   s.avio_wl64(0x1122334455667788UL)
   assert_eq(s.avio_put_str("hi"), 3)
@@ -303,9 +376,16 @@ test "avio: wb64/wl64/put_str/print_string_array" {
   )
 }
 
+///|
 test "avio: write seek-back keeps the unflushed tail (avio_flush)" {
   let out : Array[Byte] = []
-  let s = AvioContext::alloc_context(16, true, None, Some(sink_collector(out)), None)
+  let s = AvioContext::alloc_context(
+    16,
+    true,
+    None,
+    Some(sink_collector(out)),
+    None,
+  )
   s.avio_write(b"ABCDE")
   // SEEK_CUR back by 2; avio_seek's in-buffer fast path
   assert_eq(s.avio_skip(-2L).unwrap(), 3L)
@@ -317,23 +397,42 @@ test "avio: write seek-back keeps the unflushed tail (avio_flush)" {
   assert_eq(s.avio_tell(), 5L)
 }
 
+///|
 test "avio: put_str16 le/be with BMP and astral characters" {
   let out : Array[Byte] = []
-  let s = AvioContext::alloc_context(64, true, None, Some(sink_collector(out)), None)
+  let s = AvioContext::alloc_context(
+    64,
+    true,
+    None,
+    Some(sink_collector(out)),
+    None,
+  )
   // 'h' U+0068, 'ï' U+00EF, '€' U+20AC — all BMP, one UTF-16 unit each
   let ret = s.avio_put_str16("hï€", false)
   s.avio_flush()
   assert_eq(ret, 8) // 2 + 2 + 2 data + 2 terminator
   assert_eq(bytes_of(out), b"h\x00\xEF\x00\xAC\x20\x00\x00")
   let out2 : Array[Byte] = []
-  let s2 = AvioContext::alloc_context(64, true, None, Some(sink_collector(out2)), None)
+  let s2 = AvioContext::alloc_context(
+    64,
+    true,
+    None,
+    Some(sink_collector(out2)),
+    None,
+  )
   let ret2 = s2.avio_put_str16("hï€", true)
   s2.avio_flush()
   assert_eq(ret2, 8)
   assert_eq(bytes_of(out2), b"\x00h\x00\xEF\x20\xAC\x00\x00")
   // U+1F600 needs a surrogate pair: D83D DE00 + terminator = 6 bytes
   let out3 : Array[Byte] = []
-  let s3 = AvioContext::alloc_context(64, true, None, Some(sink_collector(out3)), None)
+  let s3 = AvioContext::alloc_context(
+    64,
+    true,
+    None,
+    Some(sink_collector(out3)),
+    None,
+  )
   let ret3 = s3.avio_put_str16("\u{1F600}", false)
   s3.avio_flush()
   assert_eq(ret3, 6)
@@ -344,6 +443,7 @@ test "avio: put_str16 le/be with BMP and astral characters" {
 // Dyn buffers
 // ---------------------------------------------------------------------------
 
+///|
 test "avio: dyn buf accumulate/get/close without padding" {
   let s = avio_open_dyn_buf()
   s.avio_wb32(1)
@@ -357,6 +457,7 @@ test "avio: dyn buf accumulate/get/close without padding" {
   assert_eq(data, b"\x00\x00\x00\x01xyzA\x00B")
 }
 
+///|
 test "avio: dyn buf reset drops contents" {
   let s = avio_open_dyn_buf()
   s.avio_write(b"aa")
@@ -365,6 +466,7 @@ test "avio: dyn buf reset drops contents" {
   assert_eq(s.avio_close_dyn_buf(), b"bb")
 }
 
+///|
 test "avio: dyn packet buf prefixes WB32 lengths" {
   let s = ffio_open_dyn_packet_buf(8).unwrap()
   s.avio_write(b"12345")
@@ -372,6 +474,7 @@ test "avio: dyn packet buf prefixes WB32 lengths" {
   assert_eq(s.avio_close_dyn_buf(), b"\x00\x00\x00\x05\x31\x32\x33\x34\x35")
 }
 
+///|
 test "avio: null buf counts bytes" {
   let s = ffio_open_null_buf()
   s.avio_wb32(0)
@@ -383,6 +486,7 @@ test "avio: null buf counts bytes" {
 // String reading
 // ---------------------------------------------------------------------------
 
+///|
 test "avio: avio_get_str stops at NUL, counts the terminator" {
   let (s, _) = open_chunked(b"AB\x00CD", 8, 8)
   let (str, used) = s.avio_get_str(5, 10).unwrap()
@@ -402,6 +506,7 @@ test "avio: avio_get_str stops at NUL, counts the terminator" {
   assert_eq(s3.avio_tell(), 3L)
 }
 
+///|
 test "avio: avio_get_str16le reads UTF-16, NUL unit terminates" {
   // units: 'A', 0 → bytes 41 00 00 00
   let (s, _) = open_chunked(b"\x41\x00\x00\x00", 8, 8)
@@ -420,6 +525,7 @@ test "avio: avio_get_str16le reads UTF-16, NUL unit terminates" {
   assert_eq(used3, 4)
 }
 
+///|
 test "avio: ff_get_line keeps the terminator, chomp trims it" {
   let (s, _) = open_chunked(b"hello\nworld\r\nend", 8, 8)
   let (l1, n1) = s.ff_get_line(1024)
@@ -439,6 +545,7 @@ test "avio: ff_get_line keeps the terminator, chomp trims it" {
 // Variable-length integers
 // ---------------------------------------------------------------------------
 
+///|
 test "avio: leb and varlen round trips" {
   let s = avio_open_dyn_buf()
   s.ffio_write_leb(0)
@@ -459,6 +566,7 @@ test "avio: leb and varlen round trips" {
 // Checksum (cross-checked against the libavutil crc port)
 // ---------------------------------------------------------------------------
 
+///|
 test "avio: crc helpers match libavutil tables over the same bytes" {
   let data = b"123456789"
   // ff_crcEDB88320_update == av_crc(AV_CRC_32_IEEE_LE table, 0, data)
@@ -482,6 +590,7 @@ test "avio: crc helpers match libavutil tables over the same bytes" {
   assert_eq(ff_crcA001_update(0, data), expect16)
 }
 
+///|
 test "avio: streaming checksum equals one-shot over the same range" {
   // read 6 bytes in 3+3 through a 4-byte buffer: the fill_buffer checksum
   // bookkeeping must fold in exactly the bytes that crossed buf_ptr
@@ -509,6 +618,7 @@ test "avio: streaming checksum equals one-shot over the same range" {
 // Seekback guarantee
 // ---------------------------------------------------------------------------
 
+///|
 test "avio: ffio_ensure_seekback grows the window for unseekable sources" {
   // C pattern: ensure the look-back before reading (input probing), so the
   // probed bytes stay inside the window without a seek callback
@@ -533,6 +643,7 @@ test "avio: ffio_ensure_seekback grows the window for unseekable sources" {
 // MP4 demuxer over a genuinely streaming source
 // ---------------------------------------------------------------------------
 
+///|
 test "avio: mov demux over chunked seekable source matches whole-file parse" {
   // the same construction as the "video sample table" test in mp4_wbtest.mbt
   let stbl = build_stbl(
@@ -575,6 +686,7 @@ test "avio: mov demux over chunked seekable source matches whole-file parse" {
   assert_eq(t.samples[7].keyframe, false)
 }
 
+///|
 test "avio: mov demux over an unseekable source still builds the tables" {
   // the same construction as "mp4: variable sample sizes from stsz" in
   // mp4_wbtest.mbt; avio_size fails (no seek callback) so the top-level

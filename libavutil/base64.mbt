@@ -8,14 +8,15 @@
 /// `NULL` / a negative return code. Here encoding returns a `String` and
 /// decoding returns `Result[Bytes, String]`, reporting invalid input as `Err`.
 
-///| Base64 alphabet, the `b64` table in libavutil/base64.c. */
+///|
+/// Base64 alphabet, the `b64` table in libavutil/base64.c. */
 let b64_alphabet : Bytes = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 ///|
 /// Decode table equivalent to `map2` in libavutil/base64.c: `0..63` for
 /// alphabet characters, `0xFE` for `'='`, `0xFF` for everything else.
-fn b64_map() -> FixedArray[Int] {
-  let map : FixedArray[Int] = FixedArray::make(256, 0xFF)
+fn b64_map() -> FixedArray[Int32] {
+  let map : FixedArray[Int32] = FixedArray::make(256, 0xFF)
   for k = 0; k < 64; k = k + 1 {
     map[b64_alphabet[k].to_uint().reinterpret_as_int()] = k
   }
@@ -23,8 +24,9 @@ fn b64_map() -> FixedArray[Int] {
   map
 }
 
-///| Encoded size for `n` input bytes (the `AV_BASE64_SIZE` macro). */
-pub fn av_base64_size(n : Int) -> Int {
+///|
+/// Encoded size for `n` input bytes (the `AV_BASE64_SIZE` macro). */
+pub fn av_base64_size(n : Int32) -> Int32 {
   (n + 2) / 3 * 4
 }
 
@@ -33,7 +35,7 @@ pub fn av_base64_size(n : Int) -> Int {
 /// MoonBit strings are UTF-16, so the bytes are mapped one code point at a
 /// time; `Bytes::to_string()` cannot be used because it renders the `b"..."`
 /// literal form rather than decoding the bytes.
-fn ascii_to_string(buf : FixedArray[Byte], len : Int) -> String {
+fn ascii_to_string(buf : FixedArray[Byte], len : Int32) -> String {
   let chars : Array[Char] = []
   for i = 0; i < len; i = i + 1 {
     chars.push(buf[i].to_char())
@@ -41,7 +43,8 @@ fn ascii_to_string(buf : FixedArray[Byte], len : Int) -> String {
   String::from_array(chars[:])
 }
 
-///| `av_base64_encode`: encode binary data as a base64 string. */
+///|
+/// `av_base64_encode`: encode binary data as a base64 string. */
 pub fn av_base64_encode(input : Bytes) -> String {
   let n = input.length()
   let out : FixedArray[Byte] = FixedArray::make(av_base64_size(n), b'=')
@@ -75,7 +78,10 @@ pub fn av_base64_encode(input : Bytes) -> String {
 ///|
 /// `av_base64_decode`: decode a base64 string into at most `out_size` bytes,
 /// mirroring the C `out_size` truncation. Invalid input yields `Err`.
-pub fn av_base64_decode(in_str : Bytes, out_size : Int) -> Result[Bytes, String] {
+pub fn av_base64_decode(
+  in_str : Bytes,
+  out_size : Int32,
+) -> Result[Bytes, String] {
   let map = b64_map()
   let n = in_str.length()
   let decoded : Array[Byte] = []
@@ -132,7 +138,8 @@ pub fn av_base64_decode(in_str : Bytes, out_size : Int) -> Result[Bytes, String]
   Ok(Bytes::from_array(out[:]))
 }
 
-///| Validity check for a base64 string, corresponding to decoding to `NULL`. */
+///|
+/// Validity check for a base64 string, corresponding to decoding to `NULL`. */
 pub fn av_base64_decode_syntax(in_str : Bytes) -> Bool {
   match av_base64_decode(in_str, 0) {
     Ok(_) => true

@@ -16,43 +16,43 @@
 // element ids (matroska.h)
 // ---------------------------------------------------------------------------
 
-pub let matroska_id_clustertimecode : UInt = 0xE7
+pub let matroska_id_clustertimecode : UInt32 = 0xE7
 
 ///|
-pub let matroska_id_blockgroup : UInt = 0xA0
+pub let matroska_id_blockgroup : UInt32 = 0xA0
 
 ///|
-pub let matroska_id_block : UInt = 0xA1
+pub let matroska_id_block : UInt32 = 0xA1
 
 ///|
-pub let matroska_id_blockduration : UInt = 0x9B
+pub let matroska_id_blockduration : UInt32 = 0x9B
 
 ///|
-pub let matroska_id_referenceblock : UInt = 0xFB
+pub let matroska_id_referenceblock : UInt32 = 0xFB
 
 ///|
-pub let matroska_id_discardpadding : UInt = 0x75A2
+pub let matroska_id_discardpadding : UInt32 = 0x75A2
 
 ///|
-pub let matroska_id_simpleblock : UInt = 0xA3
+pub let matroska_id_simpleblock : UInt32 = 0xA3
 
 ///|
-pub let matroska_id_clusterposition : UInt = 0xA7
+pub let matroska_id_clusterposition : UInt32 = 0xA7
 
 ///|
-pub let matroska_id_clusterprevsize : UInt = 0xAB
+pub let matroska_id_clusterprevsize : UInt32 = 0xAB
 
 ///|
-pub let matroska_id_blockaddid : UInt = 0xEE
+pub let matroska_id_blockaddid : UInt32 = 0xEE
 
 ///|
-pub let matroska_id_blockadditional : UInt = 0xA5
+pub let matroska_id_blockadditional : UInt32 = 0xA5
 
 ///|
-pub let matroska_id_blockmore : UInt = 0xA6
+pub let matroska_id_blockmore : UInt32 = 0xA6
 
 ///|
-pub let matroska_id_blockadditions : UInt = 0x75A1
+pub let matroska_id_blockadditions : UInt32 = 0x75A1
 
 // ---------------------------------------------------------------------------
 // data model
@@ -62,7 +62,7 @@ pub let matroska_id_blockadditions : UInt = 0x75A1
 /// One demuxed packet (the fields of AVPacket this slice produces). */
 pub struct MkvPacket {
   /// Index into `MatroskaHeader.tracks` (AVPacket.stream_index).
-  stream_index : Int
+  stream_index : Int32
   /// Payload bytes (already lace-split).
   data : Bytes
   /// Presentation timestamp in track time_scale units (the C's timecode;
@@ -84,7 +84,7 @@ pub struct MkvPacket {
 ///|
 /// Copy `data[from..to)`. `BytesView::data()` hands back the *underlying*
 /// buffer, not the view's window, so materialise with `to_owned()`. */
-fn bytes_sub(data : Bytes, from : Int, to : Int) -> Bytes {
+fn bytes_sub(data : Bytes, from : Int32, to : Int32) -> Bytes {
   data.clamped_view(start=from, end=to).to_owned()
 }
 
@@ -96,8 +96,8 @@ fn bytes_sub(data : Bytes, from : Int, to : Int) -> Bytes {
 /// Returns the per-frame sizes and the header byte count consumed.
 pub fn matroska_parse_laces(
   data : Bytes,
-  lace_type : Int,
-) -> Result[(Array[UInt], Int), String] {
+  lace_type : Int32,
+) -> Result[(Array[UInt32], Int32), String] {
   if lace_type == 0 {
     return Ok(([data.length().reinterpret_as_uint()], 0))
   }
@@ -106,14 +106,14 @@ pub fn matroska_parse_laces(
   }
   let laces = data[0].to_int() + 1
   let body = bytes_sub(data, 1, data.length())
-  let sizes : Array[UInt] = []
+  let sizes : Array[UInt32] = []
   match lace_type {
     1 => {
       // Xiph: (laces-1) lengths as 0xFF-terminated byte chains
-      let mut total : UInt = 0
+      let mut total : UInt32 = 0
       let mut off = 0
       for n = 0; n < laces - 1; n = n + 1 {
-        let mut sz : UInt = 0
+        let mut sz : UInt32 = 0
         let mut temp = 0
         let mut looping = true
         while looping {
@@ -289,7 +289,7 @@ pub fn matroska_parse_block(
   pos : Int64,
   cluster_time : UInt64,
   block_duration : UInt64,
-  is_keyframe_in : Int, // -1: derive from flags
+  is_keyframe_in : Int32, // -1: derive from flags
   discard_padding : Int64,
   time_scale : UInt64,
   packets : Array[MkvPacket],
@@ -399,7 +399,7 @@ pub fn matroska_parse_block(
 
 ///|
 /// Index of `tr` in `tracks` (AVPacket.stream_index). */
-fn track_index(tracks : Array[MkvTrack], tr : MkvTrack) -> Int {
+fn track_index(tracks : Array[MkvTrack], tr : MkvTrack) -> Int32 {
   for i = 0; i < tracks.length(); i = i + 1 {
     if tracks[i].num == tr.num {
       return i
@@ -472,7 +472,7 @@ priv struct MkvBlockGroup {
   mut data : Bytes?
   mut pos : Int64
   mut duration : UInt64
-  mut reference_count : Int
+  mut reference_count : Int32
   mut discard_padding : Int64
 }
 

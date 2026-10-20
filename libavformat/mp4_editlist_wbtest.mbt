@@ -16,11 +16,12 @@
 // helpers
 // ---------------------------------------------------------------------------
 
-fn edts_of(entries : Array[(UInt, Int)]) -> Array[Byte] {
+fn edts_of(entries : Array[(UInt32, Int32)]) -> Array[Byte] {
   box(b"edts", elst_box(entries))
 }
 
-///| A 6-sample video track (10/frame) with keyframes at samples 0 and 3. */
+///|
+/// A 6-sample video track (10/frame) with keyframes at samples 0 and 3. */
 fn keyed_video_movie(edts : Array[Byte]) -> Mp4Movie {
   let stbl = build_stbl(
     stsd_box(video_entry_isom(b"avc1", 64, 64)),
@@ -45,6 +46,7 @@ fn keyed_video_movie(edts : Array[Byte]) -> Mp4Movie {
 // mov_fix_index
 // ---------------------------------------------------------------------------
 
+///|
 test "elst: mid-media edit drops leading frames but rewrites their dts" {
   // Single edit (duration 4000, media_time 20): frames 0-1 fall before the
   // media time. The walk starts at the previous key frame (sample 0), so
@@ -65,6 +67,7 @@ test "elst: mid-media edit drops leading frames but rewrites their dts" {
   assert_eq(t.skip_samples, 0)
 }
 
+///|
 test "elst: empty first edit offsets the timeline and sets start_time" {
   // elst [(500, -1), (1000, 0)]: the 500-unit empty edit shifts every kept
   // timestamp and becomes the stream start_time; min_corrected_pts nets to
@@ -79,6 +82,7 @@ test "elst: empty first edit offsets the timeline and sets start_time" {
   assert_eq(t.min_corrected_pts, 0)
 }
 
+///|
 test "elst: audio partial first frame trims skip_samples" {
   // AAC-style: 4 frames of 1024 samples, media_time 512 cuts into frame 0.
   // The frame is kept with its timestamp pulled back by 512 and the 512
@@ -99,7 +103,9 @@ test "elst: audio partial first frame trims skip_samples" {
     stbl,
     edts_of([(100, 512)]), // duration 100 movie units → 4410 track units
   )
-  let t = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 100), trak, false))).unwrap().tracks[0]
+  let t = av_mov_open(
+      Bytes::from_array(build_movie(mvhd_box(1000, 100), trak, false)),
+    ).unwrap().tracks[0]
   assert_eq(t.skip_samples, 512)
   assert_eq(t.samples.length(), 4)
   for i = 0; i < 4; i = i + 1 {
@@ -111,6 +117,7 @@ test "elst: audio partial first frame trims skip_samples" {
   assert_eq(t.samples[3].dts, 2560)
 }
 
+///|
 test "elst: positive min_corrected_pts re-zeros the first video pts" {
   // ctts +50 lifts every PTS by 50; after the fix the video DTS is offset by
   // -min_corrected_pts so the first presentation timestamp becomes 0.
@@ -130,7 +137,9 @@ test "elst: positive min_corrected_pts re-zeros the first video pts" {
     stbl,
     edts_of([(1000, 0)]),
   )
-  let t = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 20), trak, false))).unwrap().tracks[0]
+  let t = av_mov_open(
+      Bytes::from_array(build_movie(mvhd_box(1000, 20), trak, false)),
+    ).unwrap().tracks[0]
   assert_eq(t.min_corrected_pts, 50)
   assert_eq(t.samples[0].dts, -50)
   assert_eq(t.samples[1].dts, -40)
@@ -144,6 +153,7 @@ test "elst: positive min_corrected_pts re-zeros the first video pts" {
 // mov_estimate_video_delay
 // ---------------------------------------------------------------------------
 
+///|
 test "elst: h264 reorder estimate from ctts" {
   // dts 0/10/20 with ctts +20/0/+10 → PTS 20/10/30: the second frame needs
   // one swap to sort, the third none → video_delay 1.
@@ -163,7 +173,9 @@ test "elst: h264 reorder estimate from ctts" {
     stbl,
     [],
   )
-  let t = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 30), trak, false))).unwrap().tracks[0]
+  let t = av_mov_open(
+      Bytes::from_array(build_movie(mvhd_box(1000, 30), trak, false)),
+    ).unwrap().tracks[0]
   assert_eq(t.video_delay, 1)
   // HEVC (or anything non-avc1) is not estimated.
   let stbl2 = build_stbl(
@@ -182,7 +194,9 @@ test "elst: h264 reorder estimate from ctts" {
     stbl2,
     [],
   )
-  let t2 = av_mov_open(Bytes::from_array(build_movie(mvhd_box(1000, 30), trak2, false))).unwrap().tracks[0]
+  let t2 = av_mov_open(
+      Bytes::from_array(build_movie(mvhd_box(1000, 30), trak2, false)),
+    ).unwrap().tracks[0]
   assert_eq(t2.video_delay, 0)
 }
 
@@ -190,6 +204,7 @@ test "elst: h264 reorder estimate from ctts" {
 // fragmented auto-disable (order-sensitive, as in mov_read_trak)
 // ---------------------------------------------------------------------------
 
+///|
 test "elst: a fragmented track disables advanced edit lists from its build on" {
   // moov = [mvhd, trak(elst, normal tables), trak(empty stbl), mvex], then
   // one moof for the second track. The first trak builds while the flag is
@@ -227,12 +242,7 @@ test "elst: a fragmented track disables advanced edit lists from its build on" {
     frag_stbl,
     [],
   )
-  let moov = cat([
-    fbox(b"mvhd", 0, 0, zbytes(100)),
-    trak1,
-    trak2,
-    mvex_box(2),
-  ])
+  let moov = cat([fbox(b"mvhd", 0, 0, zbytes(100)), trak1, trak2, mvex_box(2)])
   let data = cat([
     ftyp_box(b"isom"),
     box(b"moov", moov),
