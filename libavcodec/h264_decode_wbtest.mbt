@@ -189,10 +189,6 @@ test "h264: multiple slices per picture are rejected" {
   )
 }
 
-test "h264: CABAC entropy coding is rejected" {
-  assert_eq(h264_err(h264_cabac_b64, 4096), "CABAC is not supported")
-}
-
 test "h264: 4:2:2 chroma format is rejected" {
   assert_eq(h264_err(h264_422_b64, 4096), "only 4:2:0 is supported")
 }

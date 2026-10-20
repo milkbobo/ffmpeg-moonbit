@@ -40,6 +40,13 @@
   `h2645_vui.mbt`（公共 VUI）、`h264_ps.mbt`（H.264 SPS/PPS/avcC）、
   `hevc_ps.mbt`（HEVC VPS/SPS/PPS/PTL/RPS/hvcC）、`audio_headers.mbt`（ADTS、MP1/2/3
   帧头）。这一层**只解析码流**；多层 HEVC 扩展与部分解码端派生表未建模
+- **libavcodec（CABAC + avcC 入口，2026-10 新增）**：`cabac.mbt`（算术解码核心 +
+  `ff_h264_init_cabac_states`）、`h264_cabac_tables.mbt`（1343 项算术表 + 上下文初值，
+  由脚本批量提取，规范见 §9）、`h264_cabac_mb.mbt`（I 宏块的 CABAC
+  解析：mb_type/chroma 预模式/CBP/dqp/残差）、`h264_mb.mbt`（CAVLC 与 CABAC 共用的宏块
+  重建）、`h264_decode_avc_frames`（MP4 `avcC` + 长度前缀样本入口）。
+  **算术核心已用 FFmpeg 自己的 `tests/cabac.c` 逐比特验证；宏块层只在「单行」与「平坦
+  多行」向量上 byte-exact，多行 + 稠密残差会失步**（见 README §3「CABAC 的已知偏差」）。
 - **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
   - H.264 Baseline **I 帧重建 + 环路去块滤波**：`h264_slice.mbt`（I/SI slice header）+
     `h264_cavlc.mbt`（CAVLC + dequant/chroma-QP 表）+ `h264_idct.mbt`（4x4 IDCT +
@@ -355,6 +362,20 @@ $msg | git commit -F -
 - **Layer I 没有参考编码器**：FFmpeg 只有 mp2/mp3 编码器。覆盖 Layer I 的办法是按规范
   手工拼帧（header + 4 位分配 + 6 位 scalefactor + `n+1` 位尾数），再让 FFmpeg 解码取
   期望值；mp2 demuxer 需要至少两个连续帧才能探测，所以一条向量至少 3 帧。
+- **CABAC 的 `cbp_all` 在残差解码后不能再重置**：C 里 `h->cbp_table[mb_xy] = sl->cbp = cbp`
+  发生在残差**之前**，之后 `decode_cabac_residual_internal` 只是把 DC 非零标志
+  `|= 0x40<<…` / `|= 0x100<<…` 进去。移植时若在宏块末尾再赋一次 `cbp_all = cbp`，DC 标志
+  被抹掉，下一宏块的 `get_cabac_cbf_ctx` 全部偏 1~2 个上下文——症状是前两个宏块完美、第三个
+  起整行像素错。
+- **CABAC 上方邻居的 `nz` 取的是上宏块的「最后一行」**：`non_zero_count_cache[scan8[n]-8]`
+  对首行块等价于上宏块的 `nz[3*4+x]`（luma）/ `nz[1*2+x]`（chroma），不是 `nz[x]`。写成
+  `nz[x]` 会让含上邻的宏块 cbp/残差上下文全错。
+- **`write_back_intra_pred_mode()` 在 `check_intra4x4_pred_mode()` 之前**：邻居的
+  Intra4x4 模式用的是**原始码值**，不是被改判成 `TOP_DC`/`LEFT_DC`/`DC_128` 后的值。所以
+  `info.modes` 存原始模式、重建才用改判后的副本，两个数组都要留。
+- **FFmpeg `tests/cabac.c` 的参考编码器会吞掉流的第一位**：`init_cabac_encoder` 里
+  `pb.bit_left++` 让 `PutBitContext` 多出一个「幽灵空位」，算术编码器必发的前导 0 因此不
+  入流；`ff_init_cabac_decoder` 用合成 guard 位补回来。移植该测试时要丢掉 `bits[0]`。
 - **验证脚本的盲区**：拿「未滤波 YUV + 逐宏块滤波」当参考模型时，它与 FFmpeg 默认解码
   **逐字节一致**（因为 FFmpeg 预测也读滤波前像素），能验出核/强度错误但**验不出时序错误**。
   时序问题要用整帧 MD5 + 「逐 MB 区域哈希」这类粗粒度对照来定位。

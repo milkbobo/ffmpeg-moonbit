@@ -49,6 +49,17 @@ priv struct H264MbInfo {
   ///| Per-macroblock luma QP (`h->cur_pic.qscale_table[mb_xy]`), used by the
   ///| deblocking filter. I_PCM macroblocks store 0, matching `h264_cavlc.c`.
   mut qp : Int
+  ///| FFmpeg `mb_type` bits (`MB_TYPE_INTRA4x4` / `_INTRA16x16` / `_INTRA_PCM`),
+  ///| 0 when the macroblock has not been decoded yet. The CABAC neighbour
+  ///| contexts read this (`sl->left_type` / `sl->top_type`).
+  mut mb_type_bits : Int
+  ///| `h->cbp_table[mb_xy]`: luma CBP in bits 0..3, chroma CBP in bits 4..5,
+  ///| chroma DC non-zero flags in bits 6..7 and the luma DC flag in bit 8.
+  ///| CABAC's `get_cabac_cbf_ctx` / `decode_cabac_mb_cbp_*` read the packed
+  ///| form, so it is kept next to `nz`.
+  mut cbp_all : Int
+  ///| Raw `chroma_pred_mode` (0..3) as coded, for the CABAC chroma context.
+  mut chroma_mode : Int
 }
 
 ///| A decoded H.264 frame: full MB-aligned planes plus cropping offsets. */
@@ -102,6 +113,8 @@ priv struct H264DecCtx {
   cstride : Int
   infos : Array[H264MbInfo]
   mut qscale : Int
+  ///| `sl->last_qscale_diff`: selects the `mb_qp_delta` CABAC context.
+  mut last_qscale_diff : Int
 }
 
 ///| Predicted Intra4x4 mode (`pred_intra_mode`). */
@@ -292,8 +305,10 @@ fn h264_decode_mb(
     }
   }
   // Chroma prediction mode follows the luma intra modes / mb_type.
+  let mut raw_cm = 0
   {
     let cm = gb.read_ue31()
+    raw_cm = cm
     if cm < 0 || cm > 3 {
       return Err("chroma prediction mode out of range")
     }
@@ -446,119 +461,10 @@ fn h264_decode_mb(
         }
       }
     }
-    // Reconstruction, following hl_decode_mb_predict_luma /
-    // hl_decode_mb_idct_luma and the chroma path of h264_mb_template.c.
-    let ybase = (mb_y * 16) * ctx.ystride + mb_x * 16
-    let cbase = (mb_y * 8) * ctx.cstride + mb_x * 8
-    if is_i4x4 {
-      for i = 0; i < 16; i = i + 1 {
-        let bx = h264_luma_block_x[i]
-        let by = h264_luma_block_y[i]
-        let g = by * 4 + bx
-        let off = ybase + by * 4 * ctx.ystride + bx * 4
-        let top = by > 0 || mb_y > 0
-        let left = bx > 0 || mb_x > 0
-        let topright = if by == 0 {
-          // Top-row blocks read the top MB's row; only bx == 3 needs the
-          // top-right macroblock. Blocks are reconstructed in 8x8 z-order,
-          // so a same-MB top-right block is causal for bx 0/2 and (1, even y).
-          mb_y > 0 && (bx < 3 || mb_x < ctx.mb_width - 1)
-        } else {
-          bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
-        }
-        match h264_pred4x4(ctx.y, off, ctx.ystride, modes[g], top, left, topright) {
-          Ok(_) => ()
-          Err(e) => return Err(e)
-        }
-        if nz[g] != 0 {
-          if nz[g] == 1 && mb[16 * i] != 0 {
-            h264_idct_dc_add(ctx.y, off, ctx.ystride, mb, 16 * i)
-          } else {
-            h264_idct_add(ctx.y, off, ctx.ystride, mb, 16 * i)
-          }
-        }
-      }
-    } else {
-      match h264_pred16x16(ctx.y, ybase, ctx.ystride, pred16, mb_y > 0, mb_x > 0) {
-        Ok(_) => ()
-        Err(e) => return Err(e)
-      }
-      if luma_dc_nz != 0 {
-        h264_luma_dc_dequant_idct(mb, 0, luma_dc, 0, qmul_luma[0])
-      }
-      for i = 0; i < 16; i = i + 1 {
-        let bx = h264_luma_block_x[i]
-        let by = h264_luma_block_y[i]
-        let off = ybase + by * 4 * ctx.ystride + bx * 4
-        let g = h264_luma_block_grid[i]
-        if nz[g] != 0 {
-          h264_idct_add(ctx.y, off, ctx.ystride, mb, 16 * i)
-        } else if mb[16 * i] != 0 {
-          h264_idct_dc_add(ctx.y, off, ctx.ystride, mb, 16 * i)
-        }
-      }
-    }
-    match h264_pred8x8(ctx.u, cbase, ctx.cstride, chroma_mode, mb_y > 0, mb_x > 0) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
-    }
-    match h264_pred8x8(ctx.v, cbase, ctx.cstride, chroma_mode, mb_y > 0, mb_x > 0) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
-    }
-    let chroma_qps : Array[Int] = [chroma_qp0, chroma_qp1]
-    for c = 0; c < 2; c = c + 1 {
-      if chroma_dc_nz[c] != 0 {
-        let qmul_dc = h264_build_dequant4(pps, 1 + c, chroma_qps[c])[0]
-        h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_dc)
-      }
-      let plane = if c == 0 { ctx.u } else { ctx.v }
-      for i = 0; i < 4; i = i + 1 {
-        let off = cbase + (i / 2) * 4 * ctx.cstride + (i % 2) * 4
-        let g = 16 + 16 * c + i
-        if nz[g] != 0 {
-          h264_idct_add(plane, off, ctx.cstride, mb, 256 + 256 * c + 16 * i)
-        } else if mb[256 + 256 * c + 16 * i] != 0 {
-          h264_idct_dc_add(plane, off, ctx.cstride, mb, 256 + 256 * c + 16 * i)
-        }
-      }
-    }
-  } else {
-    // No residual: predict only.
-    let ybase = (mb_y * 16) * ctx.ystride + mb_x * 16
-    let cbase = (mb_y * 8) * ctx.cstride + mb_x * 8
-    if is_i4x4 {
-      for i = 0; i < 16; i = i + 1 {
-        let bx = h264_luma_block_x[i]
-        let by = h264_luma_block_y[i]
-        let g = by * 4 + bx
-        let off = ybase + by * 4 * ctx.ystride + bx * 4
-        let top = by > 0 || mb_y > 0
-        let left = bx > 0 || mb_x > 0
-        let topright = if by == 0 {
-          // Top-row blocks read the top MB's row; only bx == 3 needs the
-          // top-right macroblock. Blocks are reconstructed in 8x8 z-order,
-          // so a same-MB top-right block is causal for bx 0/2 and (1, even y).
-          mb_y > 0 && (bx < 3 || mb_x < ctx.mb_width - 1)
-        } else {
-          bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
-        }
-        match h264_pred4x4(ctx.y, off, ctx.ystride, modes[g], top, left, topright) {
-          Ok(_) => ()
-          Err(e) => return Err(e)
-        }
-      }
-    } else {
-      match h264_pred16x16(ctx.y, ybase, ctx.ystride, pred16, mb_y > 0, mb_x > 0) {
-        Ok(_) => ()
-        Err(e) => return Err(e)
-      }
-    }
-    match h264_pred8x8(ctx.u, cbase, ctx.cstride, chroma_mode, mb_y > 0, mb_x > 0) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
-    }
-    match h264_pred8x8(ctx.v, cbase, ctx.cstride, chroma_mode, mb_y > 0, mb_x > 0) {
+    match h264_recon_mb(
+      ctx, mb_x, mb_y, is_i4x4, is_i16x16, pred16, chroma_mode, modes, cbp,
+      luma_dc_nz, chroma_dc_nz, chroma_qp0, chroma_qp1, qmul_luma, mb, luma_dc, nz,
+    ) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
@@ -567,6 +473,13 @@ fn h264_decode_mb(
     info.modes[g] = modes[g]
   }
   info.intra4x4 = is_i4x4
+  info.mb_type_bits = if is_i16x16 {
+    h264_mb_type_intra16x16
+  } else {
+    h264_mb_type_intra4x4
+  }
+  info.cbp_all = cbp
+  info.chroma_mode = raw_cm
   info.qp = ctx.qscale
   Ok(())
 }
@@ -639,9 +552,6 @@ pub fn h264_decode_i_slice_ex(
     Some(s) => s
     None => return Err("missing SPS")
   }
-  if pps.cabac != 0 {
-    return Err("CABAC is not supported")
-  }
   if pps.transform_8x8_mode != 0 {
     return Err("8x8 transform is not supported")
   }
@@ -674,6 +584,9 @@ pub fn h264_decode_i_slice_ex(
       modes: Array::make(16, 0),
       intra4x4: false,
       qp: 0,
+      mb_type_bits: 0,
+      cbp_all: 0,
+      chroma_mode: 0,
     })
   }
   let ctx : H264DecCtx = {
@@ -686,6 +599,7 @@ pub fn h264_decode_i_slice_ex(
     cstride,
     infos,
     qscale: sh.qscale,
+    last_qscale_diff: 0,
   }
   // Deblocking parameters (`h264_loopfilter.c`, 8-bit so `qp_bd_offset` is 0).
   // `disable_deblocking_filter_idc == 1` disables the filter and `== 2` asks for
@@ -693,10 +607,32 @@ pub fn h264_decode_i_slice_ex(
   let deblock = !skip_loop_filter && sh.disable_deblocking_filter_idc == 0
   let alpha_off = 52 + sh.slice_alpha_c0_offset
   let beta_off = 52 + sh.slice_beta_offset
-  for i = 0; i < mb_count; i = i + 1 {
-    match h264_decode_mb(gb, ctx, i, i % mb_width, i / mb_width) {
-      Ok(_) => ()
+  if pps.cabac != 0 {
+    // `decode_slice()` with CABAC: realign the bit reader, hand the rest of
+    // the NAL to the arithmetic decoder, then read `end_of_slice_flag`
+    // (`get_cabac_terminate`) after every macroblock.
+    gb.align()
+    let cabac = match ff_init_cabac_decoder(nal.data, gb.count() / 8) {
+      Ok(v) => v
       Err(e) => return Err(e)
+    }
+    let states = ff_h264_init_cabac_states(sh.qscale, 8, 2, 0)
+    for i = 0; i < mb_count; i = i + 1 {
+      match h264_decode_mb_cabac(cabac, states, ctx, i, i % mb_width, i / mb_width) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+      // `end_of_slice_flag`
+      if cabac.get_cabac_terminate() != 0 {
+        break
+      }
+    }
+  } else {
+    for i = 0; i < mb_count; i = i + 1 {
+      match h264_decode_mb(gb, ctx, i, i % mb_width, i / mb_width) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
     }
   }
   // Deblocking runs *after* the whole picture is reconstructed, in macroblock
@@ -800,6 +736,78 @@ pub fn h264_decode_annexb_i_frames_ex(
         Ok(v) => v
         Err(e) => return Err(e)
       })
+    }
+  }
+  Ok(frames)
+}
+
+///|
+/// Decode H.264 pictures from MP4-style access units: `extradata` is the
+/// `avcC` record (or an Annex B parameter-set blob) and every entry of
+/// `samples` is one length-prefixed access unit. `nal_length_size` comes from
+/// the `avcC` header (`ff_h264_decode_extradata`), which is what the C gets
+/// from `AVCodecParameters.nal_length_size`.
+///
+/// Samples may carry parameter sets, SEI (skipped) and one coded-slice NAL per
+/// picture; the scope limits of `h264_decode_i_slice_ex` still apply (single
+/// slice, I or P pictures, 8-bit 4:2:0 progressive).
+pub fn h264_decode_avc_frames(
+  extradata : Bytes,
+  samples : Array[Bytes],
+  skip_loop_filter : Bool,
+) -> Result[Array[H264Frame], String] {
+  let ps = new_h264_param_sets()
+  let info = match ff_h264_decode_extradata(extradata, ps) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let frames : Array[H264Frame] = []
+  for s = 0; s < samples.length(); s = s + 1 {
+    let pkt = match ff_h2645_packet_split(
+      samples[s],
+      info.nal_length_size,
+      H264,
+      info.is_avc,
+    ) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    // Same guard as the Annex B entry: reject multi-slice pictures before any
+    // pixel is reconstructed.
+    for k = 0; k < pkt.nals.length(); k = k + 1 {
+      let nal = pkt.nals[k]
+      if nal.nal_type == h264_nal_idr_slice || nal.nal_type == 1 {
+        let gb = BitReader::with_size(nal.data, nal.size_bits)
+        gb.skip(8)
+        if gb.read_ue() != 0 {
+          return Err("multi-slice pictures are not supported")
+        }
+      }
+    }
+    for k = 0; k < pkt.nals.length(); k = k + 1 {
+      let nal = pkt.nals[k]
+      if nal.nal_type == h264_nal_sps {
+        let gb = BitReader::with_size(nal.data, nal.size_bits)
+        gb.skip(8)
+        match ff_h264_decode_seq_parameter_set(gb, ps, false) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      } else if nal.nal_type == h264_nal_pps {
+        let gb = BitReader::with_size(nal.data, nal.size_bits)
+        gb.skip(8)
+        match ff_h264_decode_picture_parameter_set(gb, ps, gb.size_bits()) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      } else if nal.nal_type == h264_nal_idr_slice || nal.nal_type == 1 {
+        frames.push(
+          match h264_decode_i_slice_ex(nal, ps, skip_loop_filter) {
+            Ok(v) => v
+            Err(e) => return Err(e)
+          },
+        )
+      }
     }
   }
   Ok(frames)
