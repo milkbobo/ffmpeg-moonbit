@@ -18,28 +18,33 @@
 ///   * Pixels are kept as `Int` in this port's frame buffers; adds and clips
 ///     produce the same 8-bit result as `av_clip_pixel`.
 
-///| Reinterpret a signed 32-bit value as the C `unsigned`/`SUINT`. */
-fn h264_u(x : Int) -> UInt {
+///|
+/// Reinterpret a signed 32-bit value as the C `unsigned`/`SUINT`. */
+fn h264_u(x : Int32) -> UInt32 {
   x.reinterpret_as_uint()
 }
 
-///| Reinterpret a C `unsigned` accumulator as `int`. */
-fn h264_s(x : UInt) -> Int {
+///|
+/// Reinterpret a C `unsigned` accumulator as `int`. */
+fn h264_s(x : UInt32) -> Int32 {
   x.reinterpret_as_int()
 }
 
-///| Truncate to `int16_t` (sign-extend the low 16 bits). */
-fn h264_i16(x : Int) -> Int {
-  (x << 16) >> 16
+///|
+/// Truncate to `int16_t` (sign-extend the low 16 bits). */
+fn h264_i16(x : Int32) -> Int32 {
+  x << 16 >> 16
 }
 
-///| Truncate an unsigned accumulator to `int16_t`. */
-fn h264_i16u(x : UInt) -> Int {
+///|
+/// Truncate an unsigned accumulator to `int16_t`. */
+fn h264_i16u(x : UInt32) -> Int32 {
   (x << 16).reinterpret_as_int() >> 16
 }
 
-///| `av_clip_pixel` for 8-bit pixels. */
-fn h264_clip8(x : Int) -> Int {
+///|
+/// `av_clip_pixel` for 8-bit pixels. */
+fn h264_clip8(x : Int32) -> Int32 {
   if x < 0 {
     0
   } else if x > 255 {
@@ -53,11 +58,11 @@ fn h264_clip8(x : Int) -> Int {
 /// `ff_h264_idct_add`: 4x4 inverse transform, add to `dst` and clear the
 /// coefficient block. `block[bo..bo+16]` is in FFmpeg's transposed layout.
 fn h264_idct_add(
-  dst : Array[Int],
-  dst_off : Int,
-  stride : Int,
-  block : Array[Int],
-  bo : Int,
+  dst : Array[Int32],
+  dst_off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
 ) -> Unit {
   block[bo] = h264_i16(block[bo] + (1 << 5))
   for i = 0; i < 4; i = i + 1 {
@@ -92,13 +97,14 @@ fn h264_idct_add(
   }
 }
 
-///| `ff_h264_idct_dc_add`: only the DC coefficient is nonzero. */
+///|
+/// `ff_h264_idct_dc_add`: only the DC coefficient is nonzero. */
 fn h264_idct_dc_add(
-  dst : Array[Int],
-  dst_off : Int,
-  stride : Int,
-  block : Array[Int],
-  bo : Int,
+  dst : Array[Int32],
+  dst_off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
 ) -> Unit {
   let dc = (block[bo] + 32) >> 6
   block[bo] = 0
@@ -115,13 +121,13 @@ fn h264_idct_dc_add(
 /// coefficients, dequantise and scatter into the DC positions of the 16 luma
 /// blocks of `out` (FFmpeg's `sl->mb` layout).
 fn h264_luma_dc_dequant_idct(
-  out : Array[Int],
-  out_off : Int,
-  input : Array[Int],
-  in_off : Int,
-  qmul : Int,
+  out : Array[Int32],
+  out_off : Int32,
+  input : Array[Int32],
+  in_off : Int32,
+  qmul : Int32,
 ) -> Unit {
-  let temp : Array[Int] = Array::make(16, 0)
+  let temp : Array[Int32] = Array::make(16, 0)
   for i = 0; i < 4; i = i + 1 {
     let b = in_off + 4 * i
     let z0 = input[b] + input[b + 1]
@@ -134,7 +140,7 @@ fn h264_luma_dc_dequant_idct(
     temp[4 * i + 3] = z1 + z2
   }
   let uq = h264_u(qmul)
-  let x_offset : Array[Int] = [0, 32, 128, 160]
+  let x_offset : Array[Int32] = [0, 32, 128, 160]
   for i = 0; i < 4; i = i + 1 {
     let off = x_offset[i]
     let z0 = h264_u(temp[i]) + h264_u(temp[8 + i])
@@ -152,7 +158,11 @@ fn h264_luma_dc_dequant_idct(
 /// `ff_h264_chroma_dc_dequant_idct`: inverse 2x2 Hadamard over the four
 /// chroma DC coefficients stored at offsets 0/16/32/48 of the chroma block
 /// region, dequantise and write them back in place.
-fn h264_chroma_dc_dequant_idct(block : Array[Int], base : Int, qmul : Int) -> Unit {
+fn h264_chroma_dc_dequant_idct(
+  block : Array[Int32],
+  base : Int32,
+  qmul : Int32,
+) -> Unit {
   let a0 = block[base]
   let b0 = block[base + 16]
   let c0 = block[base + 32]

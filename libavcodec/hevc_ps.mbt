@@ -24,121 +24,143 @@
 // limits
 // ---------------------------------------------------------------------------
 
-///| `HEVC_MAX_SUB_LAYERS`. */
-let hevc_max_sub_layers : Int = 7
+///|
+/// `HEVC_MAX_SUB_LAYERS`. */
+let hevc_max_sub_layers : Int32 = 7
 
-///| `HEVC_MAX_VPS_COUNT`. */
-pub let hevc_max_vps_count : Int = 16
+///|
+/// `HEVC_MAX_VPS_COUNT`. */
+pub let hevc_max_vps_count : Int32 = 16
 
-///| `HEVC_MAX_SPS_COUNT`. */
-pub let hevc_max_sps_count : Int = 16
+///|
+/// `HEVC_MAX_SPS_COUNT`. */
+pub let hevc_max_sps_count : Int32 = 16
 
-///| `HEVC_MAX_PPS_COUNT`. */
-pub let hevc_max_pps_count : Int = 64
+///|
+/// `HEVC_MAX_PPS_COUNT`. */
+pub let hevc_max_pps_count : Int32 = 64
 
-///| `HEVC_MAX_DPB_SIZE`. */
-let hevc_max_dpb_size : Int = 16
+///|
+/// `HEVC_MAX_DPB_SIZE`. */
+let hevc_max_dpb_size : Int32 = 16
 
-///| `HEVC_MAX_REFS`. */
-let hevc_max_refs : Int = 16
+///|
+/// `HEVC_MAX_REFS`. */
+let hevc_max_refs : Int32 = 16
 
-///| `HEVC_MAX_SHORT_TERM_REF_PIC_SETS`. */
-let hevc_max_short_term_rps : Int = 64
+///|
+/// `HEVC_MAX_SHORT_TERM_REF_PIC_SETS`. */
+let hevc_max_short_term_rps : Int32 = 64
 
-///| `HEVC_MAX_LONG_TERM_REF_PICS`. */
-let hevc_max_long_term_ref_pics : Int = 32
+///|
+/// `HEVC_MAX_LONG_TERM_REF_PICS`. */
+let hevc_max_long_term_ref_pics : Int32 = 32
 
-///| `HEVC_MAX_LOG2_CTB_SIZE`. */
-let hevc_max_log2_ctb_size : Int = 6
+///|
+/// `HEVC_MAX_LOG2_CTB_SIZE`. */
+let hevc_max_log2_ctb_size : Int32 = 6
 
-///| `HEVC_MAX_CPB_CNT`. */
-let hevc_max_cpb_cnt : Int = 32
+///|
+/// `HEVC_MAX_CPB_CNT`. */
+let hevc_max_cpb_cnt : Int32 = 32
 
-///| `AV_PROFILE_HEVC_REXT`. */
-let av_profile_hevc_rext : Int = 4
+///|
+/// `AV_PROFILE_HEVC_REXT`. */
+let av_profile_hevc_rext : Int32 = 4
 
-///| `HEVC_MAX_PALETTE_PREDICTOR_SIZE`. */
-let hevc_max_palette_predictor_size : Int = 128
+///|
+/// `HEVC_MAX_PALETTE_PREDICTOR_SIZE`. */
+let hevc_max_palette_predictor_size : Int32 = 128
 
 // ---------------------------------------------------------------------------
 // tables
 // ---------------------------------------------------------------------------
 
-///| `default_scaling_list_intra[64]`. */
-let default_scaling_list_intra : Array[Int] = [
-  16, 16, 16, 16, 17, 18, 21, 24, 16, 16, 16, 16, 17, 19, 22, 25, 16, 16, 17,
-  18, 20, 22, 25, 29, 16, 16, 18, 21, 24, 27, 31, 36, 17, 17, 20, 24, 30, 35,
-  41, 47, 18, 19, 22, 27, 35, 44, 54, 65, 21, 22, 25, 31, 41, 54, 70, 88, 24,
-  25, 29, 36, 47, 65, 88, 115,
+///|
+/// `default_scaling_list_intra[64]`. */
+let default_scaling_list_intra : Array[Int32] = [
+  16, 16, 16, 16, 17, 18, 21, 24, 16, 16, 16, 16, 17, 19, 22, 25, 16, 16, 17, 18,
+  20, 22, 25, 29, 16, 16, 18, 21, 24, 27, 31, 36, 17, 17, 20, 24, 30, 35, 41, 47,
+  18, 19, 22, 27, 35, 44, 54, 65, 21, 22, 25, 31, 41, 54, 70, 88, 24, 25, 29, 36,
+  47, 65, 88, 115,
 ]
 
-///| `default_scaling_list_inter[64]`. */
-let default_scaling_list_inter : Array[Int] = [
-  16, 16, 16, 16, 17, 18, 20, 24, 16, 16, 16, 17, 18, 20, 24, 25, 16, 16, 17,
-  18, 20, 24, 25, 28, 16, 17, 18, 20, 24, 25, 28, 33, 17, 18, 20, 24, 25, 28,
-  33, 41, 18, 20, 24, 25, 28, 33, 41, 54, 20, 24, 25, 28, 33, 41, 54, 71, 24,
-  25, 28, 33, 41, 54, 71, 91,
+///|
+/// `default_scaling_list_inter[64]`. */
+let default_scaling_list_inter : Array[Int32] = [
+  16, 16, 16, 16, 17, 18, 20, 24, 16, 16, 16, 17, 18, 20, 24, 25, 16, 16, 17, 18,
+  20, 24, 25, 28, 16, 17, 18, 20, 24, 25, 28, 33, 17, 18, 20, 24, 25, 28, 33, 41,
+  18, 20, 24, 25, 28, 33, 41, 54, 20, 24, 25, 28, 33, 41, 54, 71, 24, 25, 28, 33,
+  41, 54, 71, 91,
 ]
 
-///| `hevc_sub_width_c[4]`. */
-let hevc_sub_width_c : Array[Int] = [1, 2, 2, 1]
+///|
+/// `hevc_sub_width_c[4]`. */
+let hevc_sub_width_c : Array[Int32] = [1, 2, 2, 1]
 
-///| `hevc_sub_height_c[4]`. */
-let hevc_sub_height_c : Array[Int] = [1, 2, 1, 1]
+///|
+/// `hevc_sub_height_c[4]`. */
+let hevc_sub_height_c : Array[Int32] = [1, 2, 1, 1]
 
-///| `ff_hevc_diag_scan4x4_x`. */
-let hevc_diag_scan4x4_x : Array[Int] = [
+///|
+/// `ff_hevc_diag_scan4x4_x`. */
+let hevc_diag_scan4x4_x : Array[Int32] = [
   0, 0, 1, 0, 1, 2, 0, 1, 2, 3, 1, 2, 3, 2, 3, 3,
 ]
 
-///| `ff_hevc_diag_scan4x4_y`. */
-let hevc_diag_scan4x4_y : Array[Int] = [
+///|
+/// `ff_hevc_diag_scan4x4_y`. */
+let hevc_diag_scan4x4_y : Array[Int32] = [
   0, 1, 0, 2, 1, 0, 3, 2, 1, 0, 3, 2, 1, 3, 2, 3,
 ]
 
-///| `ff_hevc_diag_scan8x8_x`. */
-let hevc_diag_scan8x8_x : Array[Int] = [
-  0, 0, 1, 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4,
-  5, 6, 0, 1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7, 2, 3, 4, 5, 6, 7, 3, 4, 5,
-  6, 7, 4, 5, 6, 7, 5, 6, 7, 6, 7, 7,
+///|
+/// `ff_hevc_diag_scan8x8_x`. */
+let hevc_diag_scan8x8_x : Array[Int32] = [
+  0, 0, 1, 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5,
+  6, 0, 1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7, 2, 3, 4, 5, 6, 7, 3, 4, 5, 6, 7,
+  4, 5, 6, 7, 5, 6, 7, 6, 7, 7,
 ]
 
-///| `ff_hevc_diag_scan8x8_y`. */
-let hevc_diag_scan8x8_y : Array[Int] = [
-  0, 1, 0, 2, 1, 0, 3, 2, 1, 0, 4, 3, 2, 1, 0, 5, 4, 3, 2, 1, 0, 6, 5, 4, 3, 2,
-  1, 0, 7, 6, 5, 4, 3, 2, 1, 0, 7, 6, 5, 4, 3, 2, 1, 7, 6, 5, 4, 3, 2, 7, 6, 5,
-  4, 3, 7, 6, 5, 4, 7, 6, 5, 7, 6, 7,
+///|
+/// `ff_hevc_diag_scan8x8_y`. */
+let hevc_diag_scan8x8_y : Array[Int32] = [
+  0, 1, 0, 2, 1, 0, 3, 2, 1, 0, 4, 3, 2, 1, 0, 5, 4, 3, 2, 1, 0, 6, 5, 4, 3, 2, 1,
+  0, 7, 6, 5, 4, 3, 2, 1, 0, 7, 6, 5, 4, 3, 2, 1, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3,
+  7, 6, 5, 4, 7, 6, 5, 7, 6, 7,
 ]
 
 // ---------------------------------------------------------------------------
 // structures
 // ---------------------------------------------------------------------------
 
-///| `PTLCommon`. */
+///|
+/// `PTLCommon`. */
 pub struct HevcPtlCommon {
-  mut profile_space : Int
-  mut tier_flag : Int
-  mut profile_idc : Int
-  profile_compatibility_flag : Array[Int]
-  mut progressive_source_flag : Int
-  mut interlaced_source_flag : Int
-  mut non_packed_constraint_flag : Int
-  mut frame_only_constraint_flag : Int
-  mut max_12bit_constraint_flag : Int
-  mut max_10bit_constraint_flag : Int
-  mut max_8bit_constraint_flag : Int
-  mut max_422chroma_constraint_flag : Int
-  mut max_420chroma_constraint_flag : Int
-  mut max_monochrome_constraint_flag : Int
-  mut intra_constraint_flag : Int
-  mut one_picture_only_constraint_flag : Int
-  mut lower_bit_rate_constraint_flag : Int
-  mut max_14bit_constraint_flag : Int
-  mut inbld_flag : Int
-  mut level_idc : Int
+  mut profile_space : Int32
+  mut tier_flag : Int32
+  mut profile_idc : Int32
+  profile_compatibility_flag : Array[Int32]
+  mut progressive_source_flag : Int32
+  mut interlaced_source_flag : Int32
+  mut non_packed_constraint_flag : Int32
+  mut frame_only_constraint_flag : Int32
+  mut max_12bit_constraint_flag : Int32
+  mut max_10bit_constraint_flag : Int32
+  mut max_8bit_constraint_flag : Int32
+  mut max_422chroma_constraint_flag : Int32
+  mut max_420chroma_constraint_flag : Int32
+  mut max_monochrome_constraint_flag : Int32
+  mut intra_constraint_flag : Int32
+  mut one_picture_only_constraint_flag : Int32
+  mut lower_bit_rate_constraint_flag : Int32
+  mut max_14bit_constraint_flag : Int32
+  mut inbld_flag : Int32
+  mut level_idc : Int32
 }
 
-///| Zero-initialised `PTLCommon`. */
+///|
+/// Zero-initialised `PTLCommon`. */
 fn new_hevc_ptl_common() -> HevcPtlCommon {
   {
     profile_space: 0,
@@ -164,15 +186,17 @@ fn new_hevc_ptl_common() -> HevcPtlCommon {
   }
 }
 
-///| `PTL`. */
+///|
+/// `PTL`. */
 pub struct HevcPtl {
   general_ptl : HevcPtlCommon
   sub_layer_ptl : Array[HevcPtlCommon]
-  sub_layer_profile_present_flag : Array[Int]
-  sub_layer_level_present_flag : Array[Int]
+  sub_layer_profile_present_flag : Array[Int32]
+  sub_layer_level_present_flag : Array[Int32]
 }
 
-///| Zero-initialised `PTL`. */
+///|
+/// Zero-initialised `PTL`. */
 fn new_hevc_ptl() -> HevcPtl {
   {
     general_ptl: new_hevc_ptl_common(),
@@ -190,34 +214,38 @@ fn new_hevc_ptl() -> HevcPtl {
   }
 }
 
-///| `HEVCWindow`. */
+///|
+/// `HEVCWindow`. */
 pub struct HevcWindow {
-  mut left_offset : Int
-  mut right_offset : Int
-  mut top_offset : Int
-  mut bottom_offset : Int
+  mut left_offset : Int32
+  mut right_offset : Int32
+  mut top_offset : Int32
+  mut bottom_offset : Int32
 }
 
-///| Zero window. */
+///|
+/// Zero window. */
 fn new_hevc_window() -> HevcWindow {
-  { left_offset: 0, right_offset: 0, top_offset: 0, bottom_offset: 0 }
+  { left_offset: 0, right_offset: 0, top_offset: 0, bottom_offset: 0, }
 }
 
-///| `ShortTermRPS`. */
+///|
+/// `ShortTermRPS`. */
 pub struct HevcStRps {
-  delta_poc : Array[Int]
-  mut used : UInt
-  mut delta_idx : Int
-  mut num_negative_pics : Int
-  mut num_delta_pocs : Int
-  mut rps_idx_num_delta_pocs : Int
-  mut abs_delta_rps : Int
-  mut delta_rps_sign : Int
-  mut rps_predict : Int
-  mut use_delta : Int
+  delta_poc : Array[Int32]
+  mut used : UInt32
+  mut delta_idx : Int32
+  mut num_negative_pics : Int32
+  mut num_delta_pocs : Int32
+  mut rps_idx_num_delta_pocs : Int32
+  mut abs_delta_rps : Int32
+  mut delta_rps_sign : Int32
+  mut rps_predict : Int32
+  mut use_delta : Int32
 }
 
-///| Zero `ShortTermRPS`. */
+///|
+/// Zero `ShortTermRPS`. */
 fn new_hevc_st_rps() -> HevcStRps {
   {
     delta_poc: Array::make(32, 0),
@@ -233,32 +261,34 @@ fn new_hevc_st_rps() -> HevcStRps {
   }
 }
 
-///| `VUI` (HEVC-specific fields on top of the H.264/HEVC common part). */
+///|
+/// `VUI` (HEVC-specific fields on top of the H.264/HEVC common part). */
 pub struct HevcVui {
   common : H2645Vui
-  mut neutra_chroma_indication_flag : Int
-  mut field_seq_flag : Int
-  mut frame_field_info_present_flag : Int
-  mut default_display_window_flag : Int
+  mut neutra_chroma_indication_flag : Int32
+  mut field_seq_flag : Int32
+  mut frame_field_info_present_flag : Int32
+  mut default_display_window_flag : Int32
   def_disp_win : HevcWindow
-  mut vui_timing_info_present_flag : Int
-  mut vui_num_units_in_tick : Int
-  mut vui_time_scale : Int
-  mut vui_poc_proportional_to_timing_flag : Int
-  mut vui_num_ticks_poc_diff_one_minus1 : Int
-  mut vui_hrd_parameters_present_flag : Int
-  mut bitstream_restriction_flag : Int
-  mut tiles_fixed_structure_flag : Int
-  mut motion_vectors_over_pic_boundaries_flag : Int
-  mut restricted_ref_pic_lists_flag : Int
-  mut min_spatial_segmentation_idc : Int
-  mut max_bytes_per_pic_denom : Int
-  mut max_bits_per_min_cu_denom : Int
-  mut log2_max_mv_length_horizontal : Int
-  mut log2_max_mv_length_vertical : Int
+  mut vui_timing_info_present_flag : Int32
+  mut vui_num_units_in_tick : Int32
+  mut vui_time_scale : Int32
+  mut vui_poc_proportional_to_timing_flag : Int32
+  mut vui_num_ticks_poc_diff_one_minus1 : Int32
+  mut vui_hrd_parameters_present_flag : Int32
+  mut bitstream_restriction_flag : Int32
+  mut tiles_fixed_structure_flag : Int32
+  mut motion_vectors_over_pic_boundaries_flag : Int32
+  mut restricted_ref_pic_lists_flag : Int32
+  mut min_spatial_segmentation_idc : Int32
+  mut max_bytes_per_pic_denom : Int32
+  mut max_bits_per_min_cu_denom : Int32
+  mut log2_max_mv_length_horizontal : Int32
+  mut log2_max_mv_length_vertical : Int32
 }
 
-///| Zero `VUI`. */
+///|
+/// Zero `VUI`. */
 fn new_hevc_vui() -> HevcVui {
   {
     common: new_h2645_vui(),
@@ -285,24 +315,25 @@ fn new_hevc_vui() -> HevcVui {
   }
 }
 
-///| `ScalingList`. */
+///|
+/// `ScalingList`. */
 pub struct HevcScalingList {
-  sl : Array[Array[Array[Int]]]
-  sl_dc : Array[Array[Int]]
+  sl : Array[Array[Array[Int32]]]
+  sl_dc : Array[Array[Int32]]
 }
 
-///| Zero `ScalingList`. */
+///|
+/// Zero `ScalingList`. */
 fn new_hevc_scaling_list() -> HevcScalingList {
   {
-    sl: [
-      make_matrix6(64), make_matrix6(64), make_matrix6(64), make_matrix6(64),
-    ],
+    sl: [make_matrix6(64), make_matrix6(64), make_matrix6(64), make_matrix6(64)],
     sl_dc: [Array::make(6, 0), Array::make(6, 0)],
   }
 }
 
-///| Six independent `n`-entry rows. */
-fn make_matrix6(n : Int) -> Array[Array[Int]] {
+///|
+/// Six independent `n`-entry rows. */
+fn make_matrix6(n : Int32) -> Array[Array[Int32]] {
   [
     Array::make(n, 0),
     Array::make(n, 0),
@@ -313,30 +344,32 @@ fn make_matrix6(n : Int) -> Array[Array[Int]] {
   ]
 }
 
-///| `HEVCVPS` (base-layer fields; HRD arrays and multilayer data omitted). */
+///|
+/// `HEVCVPS` (base-layer fields; HRD arrays and multilayer data omitted). */
 pub struct HevcVps {
-  mut vps_id : Int
-  mut vps_temporal_id_nesting_flag : Int
-  mut vps_max_layers : Int
-  mut vps_max_sub_layers : Int
+  mut vps_id : Int32
+  mut vps_temporal_id_nesting_flag : Int32
+  mut vps_max_layers : Int32
+  mut vps_max_sub_layers : Int32
   ptl : HevcPtl
-  mut vps_sub_layer_ordering_info_present_flag : Int
-  vps_max_dec_pic_buffering : Array[Int]
-  vps_num_reorder_pics : Array[Int]
-  vps_max_latency_increase : Array[Int]
-  mut vps_max_layer_id : Int
-  mut vps_num_layer_sets : Int
-  mut vps_timing_info_present_flag : Int
-  mut vps_num_units_in_tick : Int
-  mut vps_time_scale : Int
-  mut vps_poc_proportional_to_timing_flag : Int
-  mut vps_num_ticks_poc_diff_one : Int
-  mut vps_num_hrd_parameters : Int
+  mut vps_sub_layer_ordering_info_present_flag : Int32
+  vps_max_dec_pic_buffering : Array[Int32]
+  vps_num_reorder_pics : Array[Int32]
+  vps_max_latency_increase : Array[Int32]
+  mut vps_max_layer_id : Int32
+  mut vps_num_layer_sets : Int32
+  mut vps_timing_info_present_flag : Int32
+  mut vps_num_units_in_tick : Int32
+  mut vps_time_scale : Int32
+  mut vps_poc_proportional_to_timing_flag : Int32
+  mut vps_num_ticks_poc_diff_one : Int32
+  mut vps_num_hrd_parameters : Int32
   mut data : Bytes
-  mut data_size : Int
+  mut data_size : Int32
 }
 
-///| Zero `HEVCVPS`. */
+///|
+/// Zero `HEVCVPS`. */
 fn new_hevc_vps() -> HevcVps {
   {
     vps_id: 0,
@@ -361,98 +394,100 @@ fn new_hevc_vps() -> HevcVps {
   }
 }
 
-///| `HEVCSPS` (decoder layout tables are derived from these fields). */
+///|
+/// `HEVCSPS` (decoder layout tables are derived from these fields). */
 pub struct HevcSps {
-  mut vps_id : Int
-  mut chroma_format_idc : Int
+  mut vps_id : Int32
+  mut chroma_format_idc : Int32
   output_window : HevcWindow
   pic_conf_win : HevcWindow
-  mut bit_depth : Int
-  mut bit_depth_chroma : Int
+  mut bit_depth : Int32
+  mut bit_depth_chroma : Int32
   mut pixel_shift : Bool
   mut pix_fmt : String
-  mut log2_max_poc_lsb : Int
-  mut max_sub_layers : Int
-  max_dec_pic_buffering : Array[Int]
-  num_reorder_pics : Array[Int]
-  max_latency_increase : Array[Int]
-  mut vui_present : Int
+  mut log2_max_poc_lsb : Int32
+  mut max_sub_layers : Int32
+  max_dec_pic_buffering : Array[Int32]
+  num_reorder_pics : Array[Int32]
+  max_latency_increase : Array[Int32]
+  mut vui_present : Int32
   vui : HevcVui
   ptl : HevcPtl
   scaling_list : HevcScalingList
-  mut nb_st_rps : Int
+  mut nb_st_rps : Int32
   st_rps : Array[HevcStRps]
-  lt_ref_pic_poc_lsb_sps : Array[Int]
-  mut used_by_curr_pic_lt : UInt
-  mut num_long_term_ref_pics_sps : Int
-  mut pcm_bit_depth : Int
-  mut pcm_bit_depth_chroma : Int
-  mut pcm_log2_min_cb_size : Int
-  mut pcm_log2_max_cb_size : Int
-  mut log2_min_cb_size : Int
-  mut log2_diff_max_min_coding_block_size : Int
-  mut log2_min_tb_size : Int
-  mut log2_max_trafo_size : Int
-  mut log2_ctb_size : Int
-  mut log2_min_pu_size : Int
-  mut log2_diff_max_min_transform_block_size : Int
-  mut max_transform_hierarchy_depth_inter : Int
-  mut max_transform_hierarchy_depth_intra : Int
-  mut separate_colour_plane : Int
-  mut conformance_window : Int
-  mut pcm_enabled : Int
-  mut pcm_loop_filter_disabled : Int
-  mut sublayer_ordering_info : Int
-  mut temporal_id_nesting : Int
-  mut extension_present : Int
-  mut scaling_list_enabled : Int
-  mut amp_enabled : Int
-  mut sao_enabled : Int
-  mut long_term_ref_pics_present : Int
-  mut temporal_mvp_enabled : Int
-  mut strong_intra_smoothing_enabled : Int
-  mut range_extension : Int
-  mut transform_skip_rotation_enabled : Int
-  mut transform_skip_context_enabled : Int
-  mut implicit_rdpcm_enabled : Int
-  mut explicit_rdpcm_enabled : Int
-  mut extended_precision_processing : Int
-  mut intra_smoothing_disabled : Int
-  mut high_precision_offsets_enabled : Int
-  mut persistent_rice_adaptation_enabled : Int
-  mut cabac_bypass_alignment_enabled : Int
-  mut multilayer_extension : Int
-  mut sps_3d_extension : Int
-  mut scc_extension : Int
-  mut curr_pic_ref_enabled : Int
-  mut palette_mode_enabled : Int
-  mut palette_predictor_initializers_present : Int
-  mut intra_boundary_filtering_disabled : Int
-  mut palette_max_size : Int
-  mut delta_palette_max_predictor_size : Int
-  mut sps_num_palette_predictor_initializers : Int
-  sps_palette_predictor_initializer : Array[Array[Int]]
-  mut motion_vector_resolution_control_idc : Int
-  mut width : Int
-  mut height : Int
-  mut ctb_width : Int
-  mut ctb_height : Int
-  mut ctb_size : Int
-  mut min_cb_width : Int
-  mut min_cb_height : Int
-  mut min_tb_width : Int
-  mut min_tb_height : Int
-  mut min_pu_width : Int
-  mut min_pu_height : Int
-  mut tb_mask : Int
-  hshift : Array[Int]
-  vshift : Array[Int]
-  mut qp_bd_offset : Int
+  lt_ref_pic_poc_lsb_sps : Array[Int32]
+  mut used_by_curr_pic_lt : UInt32
+  mut num_long_term_ref_pics_sps : Int32
+  mut pcm_bit_depth : Int32
+  mut pcm_bit_depth_chroma : Int32
+  mut pcm_log2_min_cb_size : Int32
+  mut pcm_log2_max_cb_size : Int32
+  mut log2_min_cb_size : Int32
+  mut log2_diff_max_min_coding_block_size : Int32
+  mut log2_min_tb_size : Int32
+  mut log2_max_trafo_size : Int32
+  mut log2_ctb_size : Int32
+  mut log2_min_pu_size : Int32
+  mut log2_diff_max_min_transform_block_size : Int32
+  mut max_transform_hierarchy_depth_inter : Int32
+  mut max_transform_hierarchy_depth_intra : Int32
+  mut separate_colour_plane : Int32
+  mut conformance_window : Int32
+  mut pcm_enabled : Int32
+  mut pcm_loop_filter_disabled : Int32
+  mut sublayer_ordering_info : Int32
+  mut temporal_id_nesting : Int32
+  mut extension_present : Int32
+  mut scaling_list_enabled : Int32
+  mut amp_enabled : Int32
+  mut sao_enabled : Int32
+  mut long_term_ref_pics_present : Int32
+  mut temporal_mvp_enabled : Int32
+  mut strong_intra_smoothing_enabled : Int32
+  mut range_extension : Int32
+  mut transform_skip_rotation_enabled : Int32
+  mut transform_skip_context_enabled : Int32
+  mut implicit_rdpcm_enabled : Int32
+  mut explicit_rdpcm_enabled : Int32
+  mut extended_precision_processing : Int32
+  mut intra_smoothing_disabled : Int32
+  mut high_precision_offsets_enabled : Int32
+  mut persistent_rice_adaptation_enabled : Int32
+  mut cabac_bypass_alignment_enabled : Int32
+  mut multilayer_extension : Int32
+  mut sps_3d_extension : Int32
+  mut scc_extension : Int32
+  mut curr_pic_ref_enabled : Int32
+  mut palette_mode_enabled : Int32
+  mut palette_predictor_initializers_present : Int32
+  mut intra_boundary_filtering_disabled : Int32
+  mut palette_max_size : Int32
+  mut delta_palette_max_predictor_size : Int32
+  mut sps_num_palette_predictor_initializers : Int32
+  sps_palette_predictor_initializer : Array[Array[Int32]]
+  mut motion_vector_resolution_control_idc : Int32
+  mut width : Int32
+  mut height : Int32
+  mut ctb_width : Int32
+  mut ctb_height : Int32
+  mut ctb_size : Int32
+  mut min_cb_width : Int32
+  mut min_cb_height : Int32
+  mut min_tb_width : Int32
+  mut min_tb_height : Int32
+  mut min_pu_width : Int32
+  mut min_pu_height : Int32
+  mut tb_mask : Int32
+  hshift : Array[Int32]
+  vshift : Array[Int32]
+  mut qp_bd_offset : Int32
   mut data : Bytes
-  mut data_size : Int
+  mut data_size : Int32
 }
 
-///| Zero `HEVCSPS`. */
+///|
+/// Zero `HEVCSPS`. */
 fn new_hevc_sps() -> HevcSps {
   {
     vps_id: 0,
@@ -549,7 +584,8 @@ fn new_hevc_sps() -> HevcSps {
   }
 }
 
-///| 64 independent short-term RPS entries. */
+///|
+/// 64 independent short-term RPS entries. */
 fn make_st_rps_array() -> Array[HevcStRps] {
   let a : Array[HevcStRps] = []
   for _ in 0..<hevc_max_short_term_rps {
@@ -558,78 +594,80 @@ fn make_st_rps_array() -> Array[HevcStRps] {
   a
 }
 
-///| `HEVCPPS` (tile scan-order maps and derived dequant data omitted). */
+///|
+/// `HEVCPPS` (tile scan-order maps and derived dequant data omitted). */
 pub struct HevcPps {
-  mut pps_id : Int
-  mut sps_id : Int
-  mut sign_data_hiding_flag : Int
-  mut cabac_init_present_flag : Int
-  mut num_ref_idx_l0_default_active : Int
-  mut num_ref_idx_l1_default_active : Int
-  mut pic_init_qp_minus26 : Int
-  mut constrained_intra_pred_flag : Int
-  mut transform_skip_enabled_flag : Int
-  mut cu_qp_delta_enabled_flag : Int
-  mut diff_cu_qp_delta_depth : Int
-  mut cb_qp_offset : Int
-  mut cr_qp_offset : Int
-  mut pic_slice_level_chroma_qp_offsets_present_flag : Int
-  mut weighted_pred_flag : Int
-  mut weighted_bipred_flag : Int
-  mut output_flag_present_flag : Int
-  mut transquant_bypass_enable_flag : Int
-  mut dependent_slice_segments_enabled_flag : Int
-  mut tiles_enabled_flag : Int
-  mut entropy_coding_sync_enabled_flag : Int
-  mut num_tile_columns : Int
-  mut num_tile_rows : Int
-  mut uniform_spacing_flag : Int
-  mut loop_filter_across_tiles_enabled_flag : Int
-  column_width : Array[Int]
-  row_height : Array[Int]
-  mut seq_loop_filter_across_slices_enabled_flag : Int
-  mut deblocking_filter_control_present_flag : Int
-  mut deblocking_filter_override_enabled_flag : Int
-  mut disable_dbf : Int
-  mut beta_offset : Int
-  mut tc_offset : Int
-  mut scaling_list_data_present_flag : Int
+  mut pps_id : Int32
+  mut sps_id : Int32
+  mut sign_data_hiding_flag : Int32
+  mut cabac_init_present_flag : Int32
+  mut num_ref_idx_l0_default_active : Int32
+  mut num_ref_idx_l1_default_active : Int32
+  mut pic_init_qp_minus26 : Int32
+  mut constrained_intra_pred_flag : Int32
+  mut transform_skip_enabled_flag : Int32
+  mut cu_qp_delta_enabled_flag : Int32
+  mut diff_cu_qp_delta_depth : Int32
+  mut cb_qp_offset : Int32
+  mut cr_qp_offset : Int32
+  mut pic_slice_level_chroma_qp_offsets_present_flag : Int32
+  mut weighted_pred_flag : Int32
+  mut weighted_bipred_flag : Int32
+  mut output_flag_present_flag : Int32
+  mut transquant_bypass_enable_flag : Int32
+  mut dependent_slice_segments_enabled_flag : Int32
+  mut tiles_enabled_flag : Int32
+  mut entropy_coding_sync_enabled_flag : Int32
+  mut num_tile_columns : Int32
+  mut num_tile_rows : Int32
+  mut uniform_spacing_flag : Int32
+  mut loop_filter_across_tiles_enabled_flag : Int32
+  column_width : Array[Int32]
+  row_height : Array[Int32]
+  mut seq_loop_filter_across_slices_enabled_flag : Int32
+  mut deblocking_filter_control_present_flag : Int32
+  mut deblocking_filter_override_enabled_flag : Int32
+  mut disable_dbf : Int32
+  mut beta_offset : Int32
+  mut tc_offset : Int32
+  mut scaling_list_data_present_flag : Int32
   scaling_list : HevcScalingList
-  mut lists_modification_present_flag : Int
-  mut log2_parallel_merge_level : Int
-  mut num_extra_slice_header_bits : Int
-  mut slice_header_extension_present_flag : Int
-  mut log2_max_transform_skip_block_size : Int
-  mut pps_extension_present_flag : Int
-  mut pps_range_extensions_flag : Int
-  mut pps_multilayer_extension_flag : Int
-  mut pps_3d_extension_flag : Int
-  mut pps_scc_extension_flag : Int
-  mut cross_component_prediction_enabled_flag : Int
-  mut chroma_qp_offset_list_enabled_flag : Int
-  mut diff_cu_chroma_qp_offset_depth : Int
-  mut chroma_qp_offset_list_len_minus1 : Int
-  cb_qp_offset_list : Array[Int]
-  cr_qp_offset_list : Array[Int]
-  mut log2_sao_offset_scale_luma : Int
-  mut log2_sao_offset_scale_chroma : Int
-  mut pps_curr_pic_ref_enabled_flag : Int
-  mut residual_adaptive_colour_transform_enabled_flag : Int
-  mut pps_slice_act_qp_offsets_present_flag : Int
-  mut pps_act_y_qp_offset : Int
-  mut pps_act_cb_qp_offset : Int
-  mut pps_act_cr_qp_offset : Int
-  mut pps_palette_predictor_initializers_present_flag : Int
-  mut pps_num_palette_predictor_initializers : Int
-  mut monochrome_palette_flag : Int
-  mut luma_bit_depth_entry : Int
-  mut chroma_bit_depth_entry : Int
-  pps_palette_predictor_initializer : Array[Array[Int]]
+  mut lists_modification_present_flag : Int32
+  mut log2_parallel_merge_level : Int32
+  mut num_extra_slice_header_bits : Int32
+  mut slice_header_extension_present_flag : Int32
+  mut log2_max_transform_skip_block_size : Int32
+  mut pps_extension_present_flag : Int32
+  mut pps_range_extensions_flag : Int32
+  mut pps_multilayer_extension_flag : Int32
+  mut pps_3d_extension_flag : Int32
+  mut pps_scc_extension_flag : Int32
+  mut cross_component_prediction_enabled_flag : Int32
+  mut chroma_qp_offset_list_enabled_flag : Int32
+  mut diff_cu_chroma_qp_offset_depth : Int32
+  mut chroma_qp_offset_list_len_minus1 : Int32
+  cb_qp_offset_list : Array[Int32]
+  cr_qp_offset_list : Array[Int32]
+  mut log2_sao_offset_scale_luma : Int32
+  mut log2_sao_offset_scale_chroma : Int32
+  mut pps_curr_pic_ref_enabled_flag : Int32
+  mut residual_adaptive_colour_transform_enabled_flag : Int32
+  mut pps_slice_act_qp_offsets_present_flag : Int32
+  mut pps_act_y_qp_offset : Int32
+  mut pps_act_cb_qp_offset : Int32
+  mut pps_act_cr_qp_offset : Int32
+  mut pps_palette_predictor_initializers_present_flag : Int32
+  mut pps_num_palette_predictor_initializers : Int32
+  mut monochrome_palette_flag : Int32
+  mut luma_bit_depth_entry : Int32
+  mut chroma_bit_depth_entry : Int32
+  pps_palette_predictor_initializer : Array[Array[Int32]]
   mut data : Bytes
-  mut data_size : Int
+  mut data_size : Int32
 }
 
-///| Zero `HEVCPPS`. */
+///|
+/// Zero `HEVCPPS`. */
 fn new_hevc_pps() -> HevcPps {
   {
     pps_id: 0,
@@ -706,27 +744,30 @@ fn new_hevc_pps() -> HevcPps {
   }
 }
 
-///| `HEVCParamSets`. */
+///|
+/// `HEVCParamSets`. */
 pub struct HevcParamSets {
   vps_list : Array[HevcVps?]
   sps_list : Array[HevcSps?]
   pps_list : Array[HevcPps?]
 }
 
-///| Empty HEVC parameter set store. */
+///|
+/// Empty HEVC parameter set store. */
 pub fn new_hevc_param_sets() -> HevcParamSets {
   let vps : Array[HevcVps?] = Array::make(hevc_max_vps_count, None)
   let sps : Array[HevcSps?] = Array::make(hevc_max_sps_count, None)
   let pps : Array[HevcPps?] = Array::make(hevc_max_pps_count, None)
-  { vps_list: vps, sps_list: sps, pps_list: pps }
+  { vps_list: vps, sps_list: sps, pps_list: pps, }
 }
 
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 
-///| `av_image_check_size(w, h, ...)` for the default `AV_PIX_FMT_NONE`. */
-fn hevc_image_check_size(w : Int, h : Int) -> Bool {
+///|
+/// `av_image_check_size(w, h, ...)` for the default `AV_PIX_FMT_NONE`. */
+fn hevc_image_check_size(w : Int32, h : Int32) -> Bool {
   if w <= 0 || h <= 0 {
     return false
   }
@@ -734,12 +775,13 @@ fn hevc_image_check_size(w : Int, h : Int) -> Bool {
   stride < 2147483647L && stride * (h.to_int64() + 128L) < 2147483647L
 }
 
-///| `read_window`: conformance/default-display window. */
+///|
+/// `read_window`: conformance/default-display window. */
 fn read_window(
   gb : BitReader,
-  chroma_format_idc : Int,
-  w : Int,
-  h : Int
+  chroma_format_idc : Int32,
+  w : Int32,
+  h : Int32,
 ) -> Result[HevcWindow, String] {
   let horiz_mult = hevc_sub_width_c[chroma_format_idc].to_int64()
   let vert_mult = hevc_sub_height_c[chroma_format_idc].to_int64()
@@ -747,9 +789,15 @@ fn read_window(
   let right = gb.read_ue_long().reinterpret_as_int64() * horiz_mult
   let top = gb.read_ue_long().reinterpret_as_int64() * vert_mult
   let bottom = gb.read_ue_long().reinterpret_as_int64() * vert_mult
-  if left < 0 || right < 0 || top < 0 || bottom < 0 ||
-    w.to_int64() <= left + right || h.to_int64() <= top + bottom ||
-    left > 2147483647L || right > 2147483647L || top > 2147483647L ||
+  if left < 0 ||
+    right < 0 ||
+    top < 0 ||
+    bottom < 0 ||
+    w.to_int64() <= left + right ||
+    h.to_int64() <= top + bottom ||
+    left > 2147483647L ||
+    right > 2147483647L ||
+    top > 2147483647L ||
     bottom > 2147483647L {
     return Err("EINVAL")
   }
@@ -761,8 +809,9 @@ fn read_window(
   })
 }
 
-///| `get_bits64`. */
-fn read_bits64(gb : BitReader, n : Int) -> UInt64 {
+///|
+/// `get_bits64`. */
+fn read_bits64(gb : BitReader, n : Int32) -> UInt64 {
   let mut v = 0UL
   for i = 0; i < n; i = i + 1 {
     v = (v << 1) | gb.read1().to_uint64()
@@ -770,8 +819,9 @@ fn read_bits64(gb : BitReader, n : Int) -> UInt64 {
   v
 }
 
-///| `check_profile_idc`: profile_idc or one of the compatibility flags. */
-fn ptl_check_profile_idc(ptl : HevcPtlCommon, idc : Int) -> Bool {
+///|
+/// `check_profile_idc`: profile_idc or one of the compatibility flags. */
+fn ptl_check_profile_idc(ptl : HevcPtlCommon, idc : Int32) -> Bool {
   ptl.profile_idc == idc || ptl.profile_compatibility_flag[idc] != 0
 }
 
@@ -797,9 +847,12 @@ fn decode_profile_tier_level(gb : BitReader) -> Result[HevcPtlCommon, String] {
   ptl.non_packed_constraint_flag = gb.read1().reinterpret_as_int()
   ptl.frame_only_constraint_flag = gb.read1().reinterpret_as_int()
   let is4to10 = ptl_check_profile_idc(ptl, 4) ||
-    ptl_check_profile_idc(ptl, 5) || ptl_check_profile_idc(ptl, 6) ||
-    ptl_check_profile_idc(ptl, 7) || ptl_check_profile_idc(ptl, 8) ||
-    ptl_check_profile_idc(ptl, 9) || ptl_check_profile_idc(ptl, 10)
+    ptl_check_profile_idc(ptl, 5) ||
+    ptl_check_profile_idc(ptl, 6) ||
+    ptl_check_profile_idc(ptl, 7) ||
+    ptl_check_profile_idc(ptl, 8) ||
+    ptl_check_profile_idc(ptl, 9) ||
+    ptl_check_profile_idc(ptl, 10)
   if is4to10 {
     ptl.max_12bit_constraint_flag = gb.read1().reinterpret_as_int()
     ptl.max_10bit_constraint_flag = gb.read1().reinterpret_as_int()
@@ -810,7 +863,8 @@ fn decode_profile_tier_level(gb : BitReader) -> Result[HevcPtlCommon, String] {
     ptl.intra_constraint_flag = gb.read1().reinterpret_as_int()
     ptl.one_picture_only_constraint_flag = gb.read1().reinterpret_as_int()
     ptl.lower_bit_rate_constraint_flag = gb.read1().reinterpret_as_int()
-    if ptl_check_profile_idc(ptl, 5) || ptl_check_profile_idc(ptl, 9) ||
+    if ptl_check_profile_idc(ptl, 5) ||
+      ptl_check_profile_idc(ptl, 9) ||
       ptl_check_profile_idc(ptl, 10) {
       ptl.max_14bit_constraint_flag = gb.read1().reinterpret_as_int()
       gb.skip(33) // XXX_reserved_zero_33bits
@@ -824,9 +878,12 @@ fn decode_profile_tier_level(gb : BitReader) -> Result[HevcPtlCommon, String] {
   } else {
     gb.skip(43) // XXX_reserved_zero_43bits
   }
-  if ptl_check_profile_idc(ptl, 1) || ptl_check_profile_idc(ptl, 2) ||
-    ptl_check_profile_idc(ptl, 3) || ptl_check_profile_idc(ptl, 4) ||
-    ptl_check_profile_idc(ptl, 5) || ptl_check_profile_idc(ptl, 9) {
+  if ptl_check_profile_idc(ptl, 1) ||
+    ptl_check_profile_idc(ptl, 2) ||
+    ptl_check_profile_idc(ptl, 3) ||
+    ptl_check_profile_idc(ptl, 4) ||
+    ptl_check_profile_idc(ptl, 5) ||
+    ptl_check_profile_idc(ptl, 9) {
     ptl.inbld_flag = gb.read1().reinterpret_as_int()
   } else {
     let _ = gb.read1()
@@ -834,11 +891,12 @@ fn decode_profile_tier_level(gb : BitReader) -> Result[HevcPtlCommon, String] {
   Ok(ptl)
 }
 
-///| `parse_ptl`: general PTL plus the sub-layer flags. */
+///|
+/// `parse_ptl`: general PTL plus the sub-layer flags. */
 fn parse_ptl(
   gb : BitReader,
   profile_present : Bool,
-  max_num_sub_layers : Int
+  max_num_sub_layers : Int32,
 ) -> Result[HevcPtl, String] {
   let ptl = new_hevc_ptl()
   if profile_present {
@@ -879,7 +937,8 @@ fn parse_ptl(
   Ok(ptl)
 }
 
-///| Field-by-field copy (`*dst = *src` for a PTLCommon). */
+///|
+/// Field-by-field copy (`*dst = *src` for a PTLCommon). */
 fn copy_ptl_common(dst : HevcPtlCommon, src : HevcPtlCommon) -> Unit {
   dst.profile_space = src.profile_space
   dst.tier_flag = src.tier_flag
@@ -911,7 +970,7 @@ fn copy_ptl_common(dst : HevcPtlCommon, src : HevcPtlCommon) -> Unit {
 fn skip_hrd(
   gb : BitReader,
   common_inf_present : Bool,
-  max_sublayers : Int
+  max_sublayers : Int32,
 ) -> Result[Unit, String] {
   let mut nal_present = 0
   let mut vcl_present = 0
@@ -994,9 +1053,9 @@ pub fn ff_hevc_decode_short_term_rps(
   gb : BitReader,
   rps : HevcStRps,
   st_rps : Array[HevcStRps],
-  nb_st_rps : Int,
-  rps_index : Int,
-  is_slice_header : Bool
+  nb_st_rps : Int32,
+  rps_index : Int32,
+  is_slice_header : Bool,
 ) -> Result[Unit, String] {
   rps.used = 0U
   rps.rps_predict = 0
@@ -1067,7 +1126,7 @@ pub fn ff_hevc_decode_short_term_rps(
         }
       }
     }
-    if (rps.num_negative_pics >> 1) != 0 {
+    if rps.num_negative_pics >> 1 != 0 {
       let mut kk = rps.num_negative_pics - 1
       for i = 0; i < rps.num_negative_pics >> 1; i = i + 1 {
         let delta_poc = rps.delta_poc[i]
@@ -1079,7 +1138,7 @@ pub fn ff_hevc_decode_short_term_rps(
         kk = kk - 1
       }
     }
-    let mut mask : UInt = 0
+    let mut mask : UInt32 = 0
     for i = 0; i < 32; i = i + 1 {
       mask = mask | (used[i].reinterpret_as_uint() << i)
     }
@@ -1087,8 +1146,10 @@ pub fn ff_hevc_decode_short_term_rps(
   } else {
     let num_negative = gb.read_ue_long().to_int()
     let num_positive = gb.read_ue_long().to_int()
-    if num_negative < 0 || num_positive < 0 ||
-      num_negative >= hevc_max_refs || num_positive >= hevc_max_refs {
+    if num_negative < 0 ||
+      num_positive < 0 ||
+      num_negative >= hevc_max_refs ||
+      num_positive >= hevc_max_refs {
       return Err("EINVAL")
     }
     rps.num_negative_pics = num_negative
@@ -1102,12 +1163,7 @@ pub fn ff_hevc_decode_short_term_rps(
         }
         prev = prev - delta_poc
         rps.delta_poc[i] = prev
-        rps.used = rps.used |
-          (if gb.read1() != 0 {
-            (1U << i)
-          } else {
-            0U
-          })
+        rps.used = rps.used | (if gb.read1() != 0 { 1U << i } else { 0U })
       }
       prev = 0
       for i = 0; i < num_positive; i = i + 1 {
@@ -1118,11 +1174,7 @@ pub fn ff_hevc_decode_short_term_rps(
         prev = prev + delta_poc
         rps.delta_poc[num_negative + i] = prev
         rps.used = rps.used |
-          (if gb.read1() != 0 {
-            (1U << (num_negative + i))
-          } else {
-            0U
-          })
+          (if gb.read1() != 0 { 1U << (num_negative + i) } else { 0U })
       }
     }
   }
@@ -1133,7 +1185,8 @@ pub fn ff_hevc_decode_short_term_rps(
 // VUI and scaling lists
 // ---------------------------------------------------------------------------
 
-///| `set_default_scaling_list_data`. */
+///|
+/// `set_default_scaling_list_data`. */
 fn set_default_scaling_list_data(sl : HevcScalingList) -> Unit {
   for matrix_id = 0; matrix_id < 6; matrix_id = matrix_id + 1 {
     for i = 0; i < 16; i = i + 1 {
@@ -1155,8 +1208,13 @@ fn set_default_scaling_list_data(sl : HevcScalingList) -> Unit {
   }
 }
 
-///| `scaling_list_data`. */
-fn scaling_list_data(gb : BitReader, sl : HevcScalingList, sps : HevcSps) -> Result[Unit, String] {
+///|
+/// `scaling_list_data`. */
+fn scaling_list_data(
+  gb : BitReader,
+  sl : HevcScalingList,
+  sps : HevcSps,
+) -> Result[Unit, String] {
   for size_id = 0; size_id < 4; size_id = size_id + 1 {
     let step = if size_id == 3 { 3 } else { 1 }
     let mut matrix_id = 0
@@ -1222,7 +1280,8 @@ fn scaling_list_data(gb : BitReader, sl : HevcScalingList, sps : HevcSps) -> Res
   Ok(())
 }
 
-///| `map_pixel_format`: FFmpeg pixel format name plus the derived shifts. */
+///|
+/// `map_pixel_format`: FFmpeg pixel format name plus the derived shifts. */
 fn map_pixel_format(sps : HevcSps) -> Result[Unit, String] {
   let chroma = sps.chroma_format_idc
   let depth = sps.bit_depth
@@ -1277,7 +1336,8 @@ fn map_pixel_format(sps : HevcSps) -> Result[Unit, String] {
   Ok(())
 }
 
-///| `decode_vui` (timing/HRD and bitstream restriction; no alternate retry). */
+///|
+/// `decode_vui` (timing/HRD and bitstream restriction; no alternate retry). */
 fn decode_vui(gb : BitReader, sps : HevcSps) -> Unit {
   ff_h2645_decode_common_vui_params(gb, sps.vui.common)
   if sps.vui.common.video_signal_type_present_flag != 0 {
@@ -1320,7 +1380,9 @@ fn decode_vui(gb : BitReader, sps : HevcSps) -> Unit {
   if sps.vui.vui_timing_info_present_flag != 0 {
     sps.vui.vui_num_units_in_tick = gb.read(32).reinterpret_as_int()
     sps.vui.vui_time_scale = gb.read(32).reinterpret_as_int()
-    sps.vui.vui_poc_proportional_to_timing_flag = gb.read1().reinterpret_as_int()
+    sps.vui.vui_poc_proportional_to_timing_flag = gb
+      .read1()
+      .reinterpret_as_int()
     if sps.vui.vui_poc_proportional_to_timing_flag != 0 {
       sps.vui.vui_num_ticks_poc_diff_one_minus1 = gb.read_ue_long().to_int()
     }
@@ -1332,7 +1394,8 @@ fn decode_vui(gb : BitReader, sps : HevcSps) -> Unit {
   sps.vui.bitstream_restriction_flag = gb.read1().reinterpret_as_int()
   if sps.vui.bitstream_restriction_flag != 0 {
     sps.vui.tiles_fixed_structure_flag = gb.read1().reinterpret_as_int()
-    sps.vui.motion_vectors_over_pic_boundaries_flag = gb.read1()
+    sps.vui.motion_vectors_over_pic_boundaries_flag = gb
+      .read1()
       .reinterpret_as_int()
     sps.vui.restricted_ref_pic_lists_flag = gb.read1().reinterpret_as_int()
     sps.vui.min_spatial_segmentation_idc = gb.read_ue_long().to_int()
@@ -1347,10 +1410,11 @@ fn decode_vui(gb : BitReader, sps : HevcSps) -> Unit {
 // VPS / SPS / PPS
 // ---------------------------------------------------------------------------
 
-///| `ff_hevc_decode_nal_vps`. */
+///|
+/// `ff_hevc_decode_nal_vps`. */
 pub fn ff_hevc_decode_nal_vps(
   gb : BitReader,
-  ps : HevcParamSets
+  ps : HevcParamSets,
 ) -> Result[Unit, String] {
   let vps_id = gb.read(4).reinterpret_as_int()
   let (data, data_size) = parameter_set_data_hevc(gb)
@@ -1378,8 +1442,7 @@ pub fn ff_hevc_decode_nal_vps(
     Ok(v) => v
   }
   copy_ptl(vps.ptl, ptl)
-  vps.vps_sub_layer_ordering_info_present_flag = gb.read1()
-    .reinterpret_as_int()
+  vps.vps_sub_layer_ordering_info_present_flag = gb.read1().reinterpret_as_int()
   let start = if vps.vps_sub_layer_ordering_info_present_flag != 0 {
     0
   } else {
@@ -1397,7 +1460,8 @@ pub fn ff_hevc_decode_nal_vps(
   }
   vps.vps_max_layer_id = gb.read(6).reinterpret_as_int()
   vps.vps_num_layer_sets = gb.read_ue_long().to_int() + 1
-  if vps.vps_num_layer_sets < 1 || vps.vps_num_layer_sets > 1024 ||
+  if vps.vps_num_layer_sets < 1 ||
+    vps.vps_num_layer_sets > 1024 ||
     (vps.vps_num_layer_sets - 1) * (vps.vps_max_layer_id + 1) > gb.bits_left() {
     return Err("EINVAL")
   }
@@ -1412,8 +1476,7 @@ pub fn ff_hevc_decode_nal_vps(
   if vps.vps_timing_info_present_flag != 0 {
     vps.vps_num_units_in_tick = gb.read(32).reinterpret_as_int()
     vps.vps_time_scale = gb.read(32).reinterpret_as_int()
-    vps.vps_poc_proportional_to_timing_flag = gb.read1()
-      .reinterpret_as_int()
+    vps.vps_poc_proportional_to_timing_flag = gb.read1().reinterpret_as_int()
     if vps.vps_poc_proportional_to_timing_flag != 0 {
       vps.vps_num_ticks_poc_diff_one = gb.read_ue_long().to_int() + 1
     }
@@ -1446,7 +1509,8 @@ pub fn ff_hevc_decode_nal_vps(
   Ok(())
 }
 
-///| `copy_ptl` (`*dst = *src` for a PTL). */
+///|
+/// `copy_ptl` (`*dst = *src` for a PTL). */
 fn copy_ptl(dst : HevcPtl, src : HevcPtl) -> Unit {
   copy_ptl_common(dst.general_ptl, src.general_ptl)
   for i = 0; i < hevc_max_sub_layers; i = i + 1 {
@@ -1456,19 +1520,21 @@ fn copy_ptl(dst : HevcPtl, src : HevcPtl) -> Unit {
   }
 }
 
-///| Copy an SPS's `data` bytes (`get_bits_bytesize(gb, 1)` at the NAL start). */
-fn parameter_set_data_hevc(gb : BitReader) -> (Bytes, Int) {
+///|
+/// Copy an SPS's `data` bytes (`get_bits_bytesize(gb, 1)` at the NAL start). */
+fn parameter_set_data_hevc(gb : BitReader) -> (Bytes, Int32) {
   let n = gb.bytesize(true)
   let limit = if n > 4096 { 4096 } else { n }
   (gb.bytes.clamped_view(start=0, end=limit).to_owned(), limit)
 }
 
-///| `ff_hevc_parse_sps` + `ff_hevc_decode_nal_sps`. */
+///|
+/// `ff_hevc_parse_sps` + `ff_hevc_decode_nal_sps`. */
 pub fn ff_hevc_decode_nal_sps(
   gb : BitReader,
   ps : HevcParamSets,
-  nuh_layer_id : Int,
-  apply_defdispwin : Bool
+  nuh_layer_id : Int32,
+  apply_defdispwin : Bool,
 ) -> Result[Unit, String] {
   let sps = new_hevc_sps()
   let (data, data_size) = parameter_set_data_hevc(gb)
@@ -1476,8 +1542,8 @@ pub fn ff_hevc_decode_nal_sps(
   sps.data_size = data_size
   sps.vps_id = gb.read(4).reinterpret_as_int()
   sps.max_sub_layers = gb.read(3).reinterpret_as_int() + 1
-  let multi_layer_ext = nuh_layer_id > 0 && sps.max_sub_layers == hevc_max_sub_layers +
-    1
+  let multi_layer_ext = nuh_layer_id > 0 &&
+    sps.max_sub_layers == hevc_max_sub_layers + 1
   if multi_layer_ext {
     return Err("PATCHWELCOME")
   }
@@ -1526,7 +1592,8 @@ pub fn ff_hevc_decode_nal_sps(
   }
   sps.conformance_window = gb.read1().reinterpret_as_int()
   if sps.conformance_window != 0 {
-    let w = match read_window(gb, sps.chroma_format_idc, sps.width, sps.height) {
+    let w = match
+      read_window(gb, sps.chroma_format_idc, sps.width, sps.height) {
       Err(e) => return Err(e)
       Ok(v) => v
     }
@@ -1637,9 +1704,15 @@ pub fn ff_hevc_decode_nal_sps(
     return Err("EINVAL")
   }
   for i = 0; i < sps.nb_st_rps; i = i + 1 {
-    match ff_hevc_decode_short_term_rps(
-      gb, sps.st_rps[i], sps.st_rps, sps.nb_st_rps, i, false,
-    ) {
+    match
+      ff_hevc_decode_short_term_rps(
+        gb,
+        sps.st_rps[i],
+        sps.st_rps,
+        sps.nb_st_rps,
+        i,
+        false,
+      ) {
       Err(e) => return Err(e)
       Ok(_) => ()
     }
@@ -1653,14 +1726,11 @@ pub fn ff_hevc_decode_nal_sps(
     }
     sps.used_by_curr_pic_lt = 0U
     for i = 0; i < sps.num_long_term_ref_pics_sps; i = i + 1 {
-      sps.lt_ref_pic_poc_lsb_sps[i] = gb.read(sps.log2_max_poc_lsb)
+      sps.lt_ref_pic_poc_lsb_sps[i] = gb
+        .read(sps.log2_max_poc_lsb)
         .reinterpret_as_int()
       sps.used_by_curr_pic_lt = sps.used_by_curr_pic_lt |
-        (if gb.read1() != 0 {
-          (1U << i)
-        } else {
-          0U
-        })
+        (if gb.read1() != 0 { 1U << i } else { 0U })
     }
   }
   sps.temporal_mvp_enabled = gb.read1().reinterpret_as_int()
@@ -1719,7 +1789,8 @@ pub fn ff_hevc_decode_nal_sps(
       if sps.palette_mode_enabled != 0 {
         sps.palette_max_size = gb.read_ue()
         sps.delta_palette_max_predictor_size = gb.read_ue()
-        sps.palette_predictor_initializers_present = gb.read1()
+        sps.palette_predictor_initializers_present = gb
+          .read1()
           .reinterpret_as_int()
         if sps.palette_predictor_initializers_present != 0 {
           sps.sps_num_palette_predictor_initializers = gb.read_ue() + 1
@@ -1735,9 +1806,9 @@ pub fn ff_hevc_decode_nal_sps(
             } else {
               sps.bit_depth_chroma
             }
-            for i = 0; i < sps.sps_num_palette_predictor_initializers; i = i +
-              1 {
-              sps.sps_palette_predictor_initializer[comp][i] = gb.read(depth)
+            for i = 0; i < sps.sps_num_palette_predictor_initializers; i = i + 1 {
+              sps.sps_palette_predictor_initializer[comp][i] = gb
+                .read(depth)
                 .reinterpret_as_int()
             }
           }
@@ -1758,8 +1829,11 @@ pub fn ff_hevc_decode_nal_sps(
       sps.vui.def_disp_win.bottom_offset
   }
   let ow = sps.output_window
-  if ow.left_offset < 0 || ow.right_offset < 0 || ow.top_offset < 0 ||
-    ow.bottom_offset < 0 || ow.left_offset + ow.right_offset >= sps.width ||
+  if ow.left_offset < 0 ||
+    ow.right_offset < 0 ||
+    ow.top_offset < 0 ||
+    ow.bottom_offset < 0 ||
+    ow.left_offset + ow.right_offset >= sps.width ||
     ow.top_offset + ow.bottom_offset >= sps.height {
     sps.output_window.left_offset = 0
     sps.output_window.right_offset = 0
@@ -1799,8 +1873,7 @@ pub fn ff_hevc_decode_nal_sps(
     sps.log2_ctb_size - sps.log2_min_tb_size {
     return Err("EINVAL")
   }
-  if sps.log2_max_trafo_size > sps.log2_ctb_size ||
-    sps.log2_max_trafo_size > 5 {
+  if sps.log2_max_trafo_size > sps.log2_ctb_size || sps.log2_max_trafo_size > 5 {
     return Err("EINVAL")
   }
   if gb.bits_left() < 0 {
@@ -1810,8 +1883,13 @@ pub fn ff_hevc_decode_nal_sps(
   Ok(())
 }
 
-///| `pps_range_extensions`. */
-fn pps_range_extensions(gb : BitReader, pps : HevcPps, sps : HevcSps) -> Result[Unit, String] {
+///|
+/// `pps_range_extensions`. */
+fn pps_range_extensions(
+  gb : BitReader,
+  pps : HevcPps,
+  sps : HevcSps,
+) -> Result[Unit, String] {
   if pps.transform_skip_enabled_flag != 0 {
     pps.log2_max_transform_skip_block_size = gb.read_ue31() + 2
   }
@@ -1846,23 +1924,33 @@ fn pps_range_extensions(gb : BitReader, pps : HevcPps, sps : HevcSps) -> Result[
   Ok(())
 }
 
-///| `pps_scc_extension`. */
-fn pps_scc_extension(gb : BitReader, pps : HevcPps, sps : HevcSps) -> Result[Unit, String] {
+///|
+/// `pps_scc_extension`. */
+fn pps_scc_extension(
+  gb : BitReader,
+  pps : HevcPps,
+  sps : HevcSps,
+) -> Result[Unit, String] {
   pps.pps_curr_pic_ref_enabled_flag = gb.read1().reinterpret_as_int()
-  pps.residual_adaptive_colour_transform_enabled_flag = gb.read1()
+  pps.residual_adaptive_colour_transform_enabled_flag = gb
+    .read1()
     .reinterpret_as_int()
   if pps.residual_adaptive_colour_transform_enabled_flag != 0 {
     pps.pps_slice_act_qp_offsets_present_flag = gb.read1().reinterpret_as_int()
     pps.pps_act_y_qp_offset = gb.read_se() - 5
     pps.pps_act_cb_qp_offset = gb.read_se() - 5
     pps.pps_act_cr_qp_offset = gb.read_se() - 3
-    if pps.pps_act_y_qp_offset <= -12 || pps.pps_act_y_qp_offset >= 12 ||
-      pps.pps_act_cb_qp_offset <= -12 || pps.pps_act_cb_qp_offset >= 12 ||
-      pps.pps_act_cr_qp_offset <= -12 || pps.pps_act_cr_qp_offset >= 12 {
+    if pps.pps_act_y_qp_offset <= -12 ||
+      pps.pps_act_y_qp_offset >= 12 ||
+      pps.pps_act_cb_qp_offset <= -12 ||
+      pps.pps_act_cb_qp_offset >= 12 ||
+      pps.pps_act_cr_qp_offset <= -12 ||
+      pps.pps_act_cr_qp_offset >= 12 {
       return Err("EINVAL")
     }
   }
-  pps.pps_palette_predictor_initializers_present_flag = gb.read1()
+  pps.pps_palette_predictor_initializers_present_flag = gb
+    .read1()
     .reinterpret_as_int()
   if pps.pps_palette_predictor_initializers_present_flag != 0 {
     pps.pps_num_palette_predictor_initializers = gb.read_ue()
@@ -1891,7 +1979,8 @@ fn pps_scc_extension(gb : BitReader, pps : HevcPps, sps : HevcSps) -> Result[Uni
           pps.chroma_bit_depth_entry
         }
         for i = 0; i < pps.pps_num_palette_predictor_initializers; i = i + 1 {
-          pps.pps_palette_predictor_initializer[comp][i] = gb.read(depth)
+          pps.pps_palette_predictor_initializer[comp][i] = gb
+            .read(depth)
             .reinterpret_as_int()
         }
       }
@@ -1900,10 +1989,11 @@ fn pps_scc_extension(gb : BitReader, pps : HevcPps, sps : HevcSps) -> Result[Uni
   Ok(())
 }
 
-///| `ff_hevc_decode_nal_pps`. */
+///|
+/// `ff_hevc_decode_nal_pps`. */
 pub fn ff_hevc_decode_nal_pps(
   gb : BitReader,
-  ps : HevcParamSets
+  ps : HevcParamSets,
 ) -> Result[Unit, String] {
   let pps_id = gb.read_ue_long().to_int()
   if pps_id < 0 || pps_id >= hevc_max_pps_count {
@@ -1954,7 +2044,8 @@ pub fn ff_hevc_decode_nal_pps(
   if pps.cr_qp_offset < -12 || pps.cr_qp_offset > 12 {
     return Err("EINVAL")
   }
-  pps.pic_slice_level_chroma_qp_offsets_present_flag = gb.read1()
+  pps.pic_slice_level_chroma_qp_offsets_present_flag = gb
+    .read1()
     .reinterpret_as_int()
   pps.weighted_pred_flag = gb.read1().reinterpret_as_int()
   pps.weighted_bipred_flag = gb.read1().reinterpret_as_int()
@@ -1994,11 +2085,13 @@ pub fn ff_hevc_decode_nal_pps(
     }
     pps.loop_filter_across_tiles_enabled_flag = gb.read1().reinterpret_as_int()
   }
-  pps.seq_loop_filter_across_slices_enabled_flag = gb.read1()
+  pps.seq_loop_filter_across_slices_enabled_flag = gb
+    .read1()
     .reinterpret_as_int()
   pps.deblocking_filter_control_present_flag = gb.read1().reinterpret_as_int()
   if pps.deblocking_filter_control_present_flag != 0 {
-    pps.deblocking_filter_override_enabled_flag = gb.read1()
+    pps.deblocking_filter_override_enabled_flag = gb
+      .read1()
       .reinterpret_as_int()
     pps.disable_dbf = gb.read1().reinterpret_as_int()
     if pps.disable_dbf == 0 {
@@ -2033,8 +2126,7 @@ pub fn ff_hevc_decode_nal_pps(
     pps.pps_3d_extension_flag = gb.read1().reinterpret_as_int()
     pps.pps_scc_extension_flag = gb.read1().reinterpret_as_int()
     gb.skip(4) // pps_extension_4bits
-    if pps.pps_multilayer_extension_flag != 0 ||
-      pps.pps_3d_extension_flag != 0 {
+    if pps.pps_multilayer_extension_flag != 0 || pps.pps_3d_extension_flag != 0 {
       return Err("PATCHWELCOME")
     }
     if sps.ptl.general_ptl.profile_idc >= av_profile_hevc_rext &&
@@ -2058,13 +2150,14 @@ pub fn ff_hevc_decode_nal_pps(
   Ok(())
 }
 
-///| `ff_hevc_compute_poc2`. */
+///|
+/// `ff_hevc_compute_poc2`. */
 pub fn ff_hevc_compute_poc2(
-  log2_max_poc_lsb : Int,
-  poc_tid0 : Int,
-  poc_lsb : Int,
-  nal_unit_type : Int
-) -> Int {
+  log2_max_poc_lsb : Int32,
+  poc_tid0 : Int32,
+  poc_lsb : Int32,
+  nal_unit_type : Int32,
+) -> Int32 {
   let max_poc_lsb = 1 << log2_max_poc_lsb
   let prev_poc_lsb = poc_tid0 % max_poc_lsb
   let prev_poc_msb = poc_tid0 - prev_poc_lsb
@@ -2085,17 +2178,19 @@ pub fn ff_hevc_compute_poc2(
 // extradata
 // ---------------------------------------------------------------------------
 
-///| `ff_hevc_decode_extradata` results. */
+///|
+/// `ff_hevc_decode_extradata` results. */
 pub struct HevcExtradataInfo {
   is_nalff : Bool
-  nal_length_size : Int
+  nal_length_size : Int32
 }
 
-///| Decode VPS/SPS/PPS NALs from an extradata packet (SEI is skipped). */
+///|
+/// Decode VPS/SPS/PPS NALs from an extradata packet (SEI is skipped). */
 fn hevc_decode_extradata_nals(
   pkt : H2645Packet,
   ps : HevcParamSets,
-  apply_defdispwin : Bool
+  apply_defdispwin : Bool,
 ) -> Result[Unit, String] {
   for i = 0; i < pkt.nals.length(); i = i + 1 {
     let nal = pkt.nals[i]
@@ -2130,10 +2225,13 @@ fn hevc_decode_extradata_nals(
 pub fn ff_hevc_decode_extradata(
   data : Bytes,
   ps : HevcParamSets,
-  apply_defdispwin : Bool
+  apply_defdispwin : Bool,
 ) -> Result[HevcExtradataInfo, String] {
-  if data.length() >= 23 && (data[0] == b'\x01' ||
-    (data[0] == b'\x00' && (data[1] != b'\x00' || data[2] > b'\x01'))) {
+  if data.length() >= 23 &&
+    (
+      data[0] == b'\x01' ||
+      (data[0] == b'\x00' && (data[1] != b'\x00' || data[2] > b'\x01'))
+    ) {
     let mut p = 21
     let nal_len_size = (data[p].to_int() & 3) + 1
     p = p + 1
@@ -2166,7 +2264,7 @@ pub fn ff_hevc_decode_extradata(
         p = p + nalsize
       }
     }
-    Ok({ is_nalff: true, nal_length_size: nal_len_size })
+    Ok({ is_nalff: true, nal_length_size: nal_len_size, })
   } else {
     let pkt = match ff_h2645_packet_split(data, 0, Hevc, false) {
       Err(e) => return Err(e)
@@ -2176,6 +2274,6 @@ pub fn ff_hevc_decode_extradata(
       Err(e) => return Err(e)
       Ok(_) => ()
     }
-    Ok({ is_nalff: false, nal_length_size: 0 })
+    Ok({ is_nalff: false, nal_length_size: 0, })
   }
 }

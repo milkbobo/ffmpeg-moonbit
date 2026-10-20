@@ -31,22 +31,24 @@
 ///     here, so every value written back into the block is truncated to 16 bits
 ///     (`i16`) exactly like the C store into `int16_t`.
 
-///| Bit-depth-specific constants and shifts for the SIMPLE-C IDCT. */
+///|
+/// Bit-depth-specific constants and shifts for the SIMPLE-C IDCT. */
 pub struct SimpleIdct {
-  w1 : Int
-  w2 : Int
-  w3 : Int
-  w4 : Int
-  w5 : Int
-  w6 : Int
-  w7 : Int
-  row_shift : Int
-  col_shift : Int
-  dc_shift : Int
-  max_val : Int
+  w1 : Int32
+  w2 : Int32
+  w3 : Int32
+  w4 : Int32
+  w5 : Int32
+  w6 : Int32
+  w7 : Int32
+  row_shift : Int32
+  col_shift : Int32
+  dc_shift : Int32
+  max_val : Int32
 }
 
-///| `simple_idct_template.c`, `BIT_DEPTH == 8` / `IN_IDCT_DEPTH == 16`. */
+///|
+/// `simple_idct_template.c`, `BIT_DEPTH == 8` / `IN_IDCT_DEPTH == 16`. */
 pub let idct_int16_8bit : SimpleIdct = {
   w1: 22725,
   w2: 21407,
@@ -61,7 +63,8 @@ pub let idct_int16_8bit : SimpleIdct = {
   max_val: 255,
 }
 
-///| `simple_idct_template.c`, `BIT_DEPTH == 10` / `IN_IDCT_DEPTH == 16`. */
+///|
+/// `simple_idct_template.c`, `BIT_DEPTH == 10` / `IN_IDCT_DEPTH == 16`. */
 pub let idct_int16_10bit : SimpleIdct = {
   w1: 22725,
   w2: 21407,
@@ -76,7 +79,8 @@ pub let idct_int16_10bit : SimpleIdct = {
   max_val: 1023,
 }
 
-///| `simple_idct_template.c`, `BIT_DEPTH == 12` / `IN_IDCT_DEPTH == 16`. */
+///|
+/// `simple_idct_template.c`, `BIT_DEPTH == 12` / `IN_IDCT_DEPTH == 16`. */
 pub let idct_int16_12bit : SimpleIdct = {
   w1: 45451,
   w2: 42813,
@@ -91,23 +95,27 @@ pub let idct_int16_12bit : SimpleIdct = {
   max_val: 4095,
 }
 
-///| Reinterpret an `Int` as a 32-bit unsigned value (the C `SUINT` cast). */
-fn u(x : Int) -> UInt {
+///|
+/// Reinterpret an `Int` as a 32-bit unsigned value (the C `SUINT` cast). */
+fn u(x : Int32) -> UInt32 {
   x.reinterpret_as_uint()
 }
 
-///| Reinterpret a 32-bit unsigned accumulator back as a signed `Int`. */
-fn s(x : UInt) -> Int {
+///|
+/// Reinterpret a 32-bit unsigned accumulator back as a signed `Int`. */
+fn s(x : UInt32) -> Int32 {
   x.reinterpret_as_int()
 }
 
-///| Truncate to `int16_t` (sign-extend the low 16 bits), like a C store. */
-fn i16(x : Int) -> Int {
-  (x << 16) >> 16
+///|
+/// Truncate to `int16_t` (sign-extend the low 16 bits), like a C store. */
+fn i16(x : Int32) -> Int32 {
+  x << 16 >> 16
 }
 
-///| `av_clip_uint8`: clip a signed value into [0, 255]. */
-pub fn clip_uint8(a : Int) -> Int {
+///|
+/// `av_clip_uint8`: clip a signed value into [0, 255]. */
+pub fn clip_uint8(a : Int32) -> Int32 {
   if a < 0 {
     0
   } else if a > 255 {
@@ -117,8 +125,9 @@ pub fn clip_uint8(a : Int) -> Int {
   }
 }
 
-///| `av_clip_uintp2`: clip into [0, 2^p - 1] (`av_clip_pixel` for depth > 8). */
-pub fn clip_uintp2(a : Int, p : Int) -> Int {
+///|
+/// `av_clip_uintp2`: clip into [0, 2^p - 1] (`av_clip_pixel` for depth > 8). */
+pub fn clip_uintp2(a : Int32, p : Int32) -> Int32 {
   let hi = (1 << p) - 1
   if a < 0 {
     0
@@ -132,7 +141,7 @@ pub fn clip_uintp2(a : Int, p : Int) -> Int {
 ///|
 /// `idctRowCondDC`: one row of the row-wise IDCT, `extra_shift == 0`.
 /// `block` holds the 64 coefficients, `base` is the row start.
-fn idct_row(block : Array[Int], base : Int, cfg : SimpleIdct) -> Unit {
+fn idct_row(block : Array[Int32], base : Int32, cfg : SimpleIdct) -> Unit {
   // DC-only fast path (IN_IDCT_DEPTH == 16): row[1..7] all zero.
   let mut dc_only = true
   for k = 1; k < 8; k = k + 1 {
@@ -220,7 +229,11 @@ fn idct_row(block : Array[Int], base : Int, cfg : SimpleIdct) -> Unit {
 ///|
 /// `IDCT_COLS`: compute the eight output values of one column-wise pass.
 /// `ci` is the column index (0..7); the column is read with stride 8.
-fn idct_col_values(block : Array[Int], ci : Int, cfg : SimpleIdct) -> Array[Int] {
+fn idct_col_values(
+  block : Array[Int32],
+  ci : Int32,
+  cfg : SimpleIdct,
+) -> Array[Int32] {
   let c0 = i16(block[ci])
   let c1 = i16(block[ci + 8])
   let c2 = i16(block[ci + 16])
@@ -245,7 +258,7 @@ fn idct_col_values(block : Array[Int], ci : Int, cfg : SimpleIdct) -> Array[Int]
   let mw7 = u(0 - cfg.w7)
 
   // (1 << (COL_SHIFT - 1)) / W4, evaluated at compile time in C.
-  let mut a0 = w4 * u(c0 + ((1 << (cfg.col_shift - 1)) / cfg.w4))
+  let mut a0 = w4 * u(c0 + (1 << (cfg.col_shift - 1)) / cfg.w4)
   let mut a1 = a0
   let mut a2 = a0
   let mut a3 = a0
@@ -301,8 +314,9 @@ fn idct_col_values(block : Array[Int], ci : Int, cfg : SimpleIdct) -> Array[Int]
   ]
 }
 
-///| Row pass over all 8 rows, shared by every variant. */
-fn idct_rows(block : Array[Int], cfg : SimpleIdct) -> Unit {
+///|
+/// Row pass over all 8 rows, shared by every variant. */
+fn idct_rows(block : Array[Int32], cfg : SimpleIdct) -> Unit {
   for i = 0; i < 8; i = i + 1 {
     idct_row(block, i * 8, cfg)
   }
@@ -312,9 +326,9 @@ fn idct_rows(block : Array[Int], cfg : SimpleIdct) -> Unit {
 /// `ff_simple_idct_*_put`: transform `block` in place, then write the clipped
 /// 8x8 result into `dest` (row stride `stride`, no `dest += line_size` cast).
 pub fn simple_idct_put(
-  dest : Array[Int],
-  stride : Int,
-  block : Array[Int],
+  dest : Array[Int32],
+  stride : Int32,
+  block : Array[Int32],
   cfg : SimpleIdct,
 ) -> Unit {
   idct_rows(block, cfg)
@@ -328,11 +342,12 @@ pub fn simple_idct_put(
   }
 }
 
-///| `ff_simple_idct_*_add`: same as put but adds onto the existing pixels. */
+///|
+/// `ff_simple_idct_*_add`: same as put but adds onto the existing pixels. */
 pub fn simple_idct_add(
-  dest : Array[Int],
-  stride : Int,
-  block : Array[Int],
+  dest : Array[Int32],
+  stride : Int32,
+  block : Array[Int32],
   cfg : SimpleIdct,
 ) -> Unit {
   idct_rows(block, cfg)
@@ -346,8 +361,9 @@ pub fn simple_idct_add(
   }
 }
 
-///| `ff_simple_idct*`: in-place 8x8 transform, results stored back as int16. */
-pub fn simple_idct(block : Array[Int], cfg : SimpleIdct) -> Unit {
+///|
+/// `ff_simple_idct*`: in-place 8x8 transform, results stored back as int16. */
+pub fn simple_idct(block : Array[Int32], cfg : SimpleIdct) -> Unit {
   idct_rows(block, cfg)
   for i = 0; i < 8; i = i + 1 {
     let v = idct_col_values(block, i, cfg)
@@ -357,71 +373,80 @@ pub fn simple_idct(block : Array[Int], cfg : SimpleIdct) -> Unit {
   }
 }
 
-///| `ff_simple_idct_int16_8bit`. */
-pub fn ff_simple_idct_int16_8bit(block : Array[Int]) -> Unit {
+///|
+/// `ff_simple_idct_int16_8bit`. */
+pub fn ff_simple_idct_int16_8bit(block : Array[Int32]) -> Unit {
   simple_idct(block, idct_int16_8bit)
 }
 
-///| `ff_simple_idct_int16_10bit`. */
-pub fn ff_simple_idct_int16_10bit(block : Array[Int]) -> Unit {
+///|
+/// `ff_simple_idct_int16_10bit`. */
+pub fn ff_simple_idct_int16_10bit(block : Array[Int32]) -> Unit {
   simple_idct(block, idct_int16_10bit)
 }
 
-///| `ff_simple_idct_int16_12bit`. */
-pub fn ff_simple_idct_int16_12bit(block : Array[Int]) -> Unit {
+///|
+/// `ff_simple_idct_int16_12bit`. */
+pub fn ff_simple_idct_int16_12bit(block : Array[Int32]) -> Unit {
   simple_idct(block, idct_int16_12bit)
 }
 
-///| `ff_simple_idct_put_int16_8bit`. */
+///|
+/// `ff_simple_idct_put_int16_8bit`. */
 pub fn ff_simple_idct_put_int16_8bit(
-  dest : Array[Int],
-  stride : Int,
-  block : Array[Int],
+  dest : Array[Int32],
+  stride : Int32,
+  block : Array[Int32],
 ) -> Unit {
   simple_idct_put(dest, stride, block, idct_int16_8bit)
 }
 
-///| `ff_simple_idct_add_int16_8bit`. */
+///|
+/// `ff_simple_idct_add_int16_8bit`. */
 pub fn ff_simple_idct_add_int16_8bit(
-  dest : Array[Int],
-  stride : Int,
-  block : Array[Int],
+  dest : Array[Int32],
+  stride : Int32,
+  block : Array[Int32],
 ) -> Unit {
   simple_idct_add(dest, stride, block, idct_int16_8bit)
 }
 
-///| `ff_simple_idct_put_int16_10bit`. */
+///|
+/// `ff_simple_idct_put_int16_10bit`. */
 pub fn ff_simple_idct_put_int16_10bit(
-  dest : Array[Int],
-  stride : Int,
-  block : Array[Int],
+  dest : Array[Int32],
+  stride : Int32,
+  block : Array[Int32],
 ) -> Unit {
   simple_idct_put(dest, stride, block, idct_int16_10bit)
 }
 
-///| `ff_simple_idct_add_int16_10bit`. */
+///|
+/// `ff_simple_idct_add_int16_10bit`. */
 pub fn ff_simple_idct_add_int16_10bit(
-  dest : Array[Int],
-  stride : Int,
-  block : Array[Int],
+  dest : Array[Int32],
+  stride : Int32,
+  block : Array[Int32],
 ) -> Unit {
   simple_idct_add(dest, stride, block, idct_int16_10bit)
 }
 
-///| `ff_simple_idct_put_int16_12bit`. */
+///|
+/// `ff_simple_idct_put_int16_12bit`. */
 pub fn ff_simple_idct_put_int16_12bit(
-  dest : Array[Int],
-  stride : Int,
-  block : Array[Int],
+  dest : Array[Int32],
+  stride : Int32,
+  block : Array[Int32],
 ) -> Unit {
   simple_idct_put(dest, stride, block, idct_int16_12bit)
 }
 
-///| `ff_simple_idct_add_int16_12bit`. */
+///|
+/// `ff_simple_idct_add_int16_12bit`. */
 pub fn ff_simple_idct_add_int16_12bit(
-  dest : Array[Int],
-  stride : Int,
-  block : Array[Int],
+  dest : Array[Int32],
+  stride : Int32,
+  block : Array[Int32],
 ) -> Unit {
   simple_idct_add(dest, stride, block, idct_int16_12bit)
 }
@@ -430,11 +455,12 @@ pub fn ff_simple_idct_add_int16_12bit(
 // idctdsp.c pixel helpers
 // ---------------------------------------------------------------------------
 
-///| `ff_put_pixels_clamped_c`: clip and store an 8x8 block (no add). */
+///|
+/// `ff_put_pixels_clamped_c`: clip and store an 8x8 block (no add). */
 pub fn ff_put_pixels_clamped_c(
-  block : Array[Int],
-  pixels : Array[Int],
-  line_size : Int,
+  block : Array[Int32],
+  pixels : Array[Int32],
+  line_size : Int32,
 ) -> Unit {
   for i = 0; i < 8; i = i + 1 {
     for j = 0; j < 8; j = j + 1 {
@@ -443,24 +469,28 @@ pub fn ff_put_pixels_clamped_c(
   }
 }
 
-///| `ff_add_pixels_clamped_c`: clip and add an 8x8 block onto the pixels. */
+///|
+/// `ff_add_pixels_clamped_c`: clip and add an 8x8 block onto the pixels. */
 pub fn ff_add_pixels_clamped_c(
-  block : Array[Int],
-  pixels : Array[Int],
-  line_size : Int,
+  block : Array[Int32],
+  pixels : Array[Int32],
+  line_size : Int32,
 ) -> Unit {
   for i = 0; i < 8; i = i + 1 {
     for j = 0; j < 8; j = j + 1 {
-      pixels[i * line_size + j] = clip_uint8(pixels[i * line_size + j] + block[i * 8 + j])
+      pixels[i * line_size + j] = clip_uint8(
+        pixels[i * line_size + j] + block[i * 8 + j],
+      )
     }
   }
 }
 
-///| `put_signed_pixels_clamped_c`: store a signed block with +128 bias. */
+///|
+/// `put_signed_pixels_clamped_c`: store a signed block with +128 bias. */
 pub fn put_signed_pixels_clamped_c(
-  block : Array[Int],
-  pixels : Array[Int],
-  line_size : Int,
+  block : Array[Int32],
+  pixels : Array[Int32],
+  line_size : Int32,
 ) -> Unit {
   for i = 0; i < 8; i = i + 1 {
     for j = 0; j < 8; j = j + 1 {
@@ -481,43 +511,39 @@ pub fn put_signed_pixels_clamped_c(
 /// `perm_type` uses the `enum idct_permutation_type` values
 /// (NONE = 0, LIBMPEG2 = 1, TRANSPOSE = 2, PARTTRANS = 3).
 /// The x86 special case is omitted (see README "边界原则").
-pub fn ff_init_scantable_permutation(perm_type : Int) -> Array[Int] {
-  let p : Array[Int] = Array::make(64, 0)
+pub fn ff_init_scantable_permutation(perm_type : Int32) -> Array[Int32] {
+  let p : Array[Int32] = Array::make(64, 0)
   match perm_type {
-    0 => {
+    0 =>
       for i = 0; i < 64; i = i + 1 {
         p[i] = i
       }
-    }
-    1 => {
+    1 =>
       for i = 0; i < 64; i = i + 1 {
         p[i] = (i & 0x38) | ((i & 6) >> 1) | ((i & 1) << 2)
       }
-    }
-    2 => {
+    2 =>
       for i = 0; i < 64; i = i + 1 {
         p[i] = ((i & 7) << 3) | (i >> 3)
       }
-    }
-    3 => {
+    3 =>
       for i = 0; i < 64; i = i + 1 {
         p[i] = (i & 0x24) | ((i & 3) << 3) | ((i >> 3) & 3)
       }
-    }
-    _ => {
+    _ =>
       for i = 0; i < 64; i = i + 1 {
         p[i] = i
       }
-    }
   }
   p
 }
 
-///| `ff_permute_scantable`: `dst[i] = permutation[src[i]]`. */
+///|
+/// `ff_permute_scantable`: `dst[i] = permutation[src[i]]`. */
 pub fn ff_permute_scantable(
-  dst : Array[Int],
-  src : Array[Int],
-  permutation : Array[Int],
+  dst : Array[Int32],
+  src : Array[Int32],
+  permutation : Array[Int32],
 ) -> Unit {
   for i = 0; i < 64; i = i + 1 {
     dst[i] = permutation[src[i]]

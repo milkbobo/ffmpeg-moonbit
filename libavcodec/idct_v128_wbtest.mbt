@@ -7,15 +7,20 @@
 /// The random coefficient blocks reuse `init_block` / `Lfg` from
 /// `idct_wbtest.mbt` (same package). The transpose is checked as an involution.
 
-///| Error statistics of a SIMD variant (0 = 8-bit, 1 = 10-bit, 2 = 12-bit)
+///|
+/// Error statistics of a SIMD variant (0 = 8-bit, 1 = 10-bit, 2 = 12-bit)
 /// against `dctref`. */
-fn idctv128_stats(variant : Int, mode : Int, its : Int) -> (Int, Double, Double) {
+fn idctv128_stats(
+  variant : Int32,
+  mode : Int32,
+  its : Int32,
+) -> (Int32, Double, Double) {
   let lfg = lfg_init(1)
   let mut err_inf = 0
   let mut err2 : Int64 = 0
   let mut err_sum : Int64 = 0
   for _it = 0; _it < its; _it = _it + 1 {
-    let orig : Array[Int] = Array::make(64, 0)
+    let orig : Array[Int32] = Array::make(64, 0)
     init_block(orig, mode, true, lfg, 256)
     let buf = idct_block_to_bytes(orig)
     match variant {
@@ -40,12 +45,13 @@ fn idctv128_stats(variant : Int, mode : Int, its : Int) -> (Int, Double, Double)
   (err_inf, err2.to_double() / d / 64.0, err_sum.to_double() / d / 64.0)
 }
 
+///|
 test "idct simd: bit-exact with the scalar port for single-coefficient blocks" {
   ff_ref_dct_init()
   // one nonzero coefficient at each of the 64 positions (fully in range, so the
   // scalar DC-only shortcut never applies): the SIMD result is identical.
   for pos = 0; pos < 64; pos = pos + 1 {
-    let b : Array[Int] = Array::make(64, 0)
+    let b : Array[Int32] = Array::make(64, 0)
     b[pos] = 100
     let buf = idct_block_to_bytes(b)
     ff_simple_idct_v128(buf)
@@ -56,8 +62,9 @@ test "idct simd: bit-exact with the scalar port for single-coefficient blocks" {
   }
 }
 
+///|
 test "idct simd: 8x8 transpose is an involution" {
-  let block : Array[Int] = Array::make(64, 0)
+  let block : Array[Int32] = Array::make(64, 0)
   for i = 0; i < 64; i = i + 1 {
     block[i] = i * 7 - 100
   }
@@ -74,6 +81,7 @@ test "idct simd: 8x8 transpose is an involution" {
   assert_eq(idct_bytes_to_block(out), block)
 }
 
+///|
 test "idct simd: matches the dctref reference within FFmpeg dct.c tolerances" {
   ff_ref_dct_init()
   let its = 2000
@@ -85,6 +93,7 @@ test "idct simd: matches the dctref reference within FFmpeg dct.c tolerances" {
   }
 }
 
+///|
 test "idct simd: 10/12-bit variants within FFmpeg dct.c tolerances" {
   ff_ref_dct_init()
   let its = 2000
@@ -103,18 +112,19 @@ test "idct simd: 10/12-bit variants within FFmpeg dct.c tolerances" {
   }
 }
 
+///|
 test "idct simd: 10-bit put matches the scalar put within one" {
   ff_ref_dct_init()
   for t = 0; t < 40; t = t + 1 {
-    let block : Array[Int] = Array::make(64, 0)
+    let block : Array[Int32] = Array::make(64, 0)
     if t % 2 == 0 {
       block[0] = (t - 20) * 100
     } else {
       for i = 0; i < 64; i = i + 1 {
-        block[i] = ((i * 37 + t * 11) % 2048) - 1024
+        block[i] = (i * 37 + t * 11) % 2048 - 1024
       }
     }
-    let dest_i : Array[Int] = Array::make(64, 0)
+    let dest_i : Array[Int32] = Array::make(64, 0)
     ff_simple_idct_put_int16_10bit(dest_i, 8, dup(block))
     let dest_b : FixedArray[Byte] = FixedArray::make(8 * 16, b'\x00')
     ff_simple_idct_put_v128_10bit(dest_b, 16, idct_block_to_bytes(block))
@@ -126,12 +136,13 @@ test "idct simd: 10-bit put matches the scalar put within one" {
   }
 }
 
+///|
 test "idct simd: put variant matches the clipped reference" {
   ff_ref_dct_init()
   // DC-only blocks at several amplitudes
   let mut x = -2048
   while x <= 2048 {
-    let block : Array[Int] = Array::make(64, 0)
+    let block : Array[Int32] = Array::make(64, 0)
     block[0] = x
     let dest : FixedArray[Byte] = FixedArray::make(64, b'\x00')
     ff_simple_idct_put_v128(dest, 8, idct_block_to_bytes(block))
@@ -150,9 +161,10 @@ test "idct simd: put variant matches the clipped reference" {
   }
 }
 
+///|
 test "idct simd: add variant equals clip of put + destination" {
   // A DC-only block produces a flat clipped value, so add == clip(dest + put).
-  let block : Array[Int] = Array::make(64, 0)
+  let block : Array[Int32] = Array::make(64, 0)
   block[0] = 1024
   let put : FixedArray[Byte] = FixedArray::make(64, b'\x00')
   ff_simple_idct_put_v128(put, 8, idct_block_to_bytes(block))

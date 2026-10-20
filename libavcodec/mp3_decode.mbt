@@ -24,26 +24,29 @@
 // Huffman tables (canonical trees built from mpa_huff_lens/symbols)
 // ---------------------------------------------------------------------------
 
-///| A canonical Huffman decode tree for one layer-3 table. */
+///|
+/// A canonical Huffman decode tree for one layer-3 table. */
 priv struct Mp3HuffTree {
-  sym : Array[Int]
-  c0 : Array[Int]
-  c1 : Array[Int]
+  sym : Array[Int32]
+  c0 : Array[Int32]
+  c1 : Array[Int32]
 }
 
-///| Transform a raw C symbol exactly as `mpegaudiodec_common.c` does. */
-fn transform_huff_symbol(s : Int) -> Int {
+///|
+/// Transform a raw C symbol exactly as `mpegaudiodec_common.c` does. */
+fn transform_huff_symbol(s : Int32) -> Int32 {
   let high = s & 0xF0
   let low = s & 0x0F
   (high << 1) | (if high != 0 && low != 0 { 0x10 } else { 0 }) | low
 }
 
-///| Build one VLC tree exactly like `ff_vlc_init_from_lengths`: codes are
+///|
+/// Build one VLC tree exactly like `ff_vlc_init_from_lengths`: codes are
 /// accumulated in the array order of `lens`, top-aligned in 32 bits. MP3's
 /// length tables are not sorted, so sorting by length would change the code
 /// assignment.
-fn make_huff_tree(lens : Array[Int], raw_syms : Array[Int]) -> Mp3HuffTree {
-  let tree : Mp3HuffTree = { sym: [-1], c0: [-1], c1: [-1] }
+fn make_huff_tree(lens : Array[Int32], raw_syms : Array[Int32]) -> Mp3HuffTree {
+  let tree : Mp3HuffTree = { sym: [-1], c0: [-1], c1: [-1], }
   let mut code = 0UL
   for i = 0; i < lens.length(); i = i + 1 {
     let len = lens[i]
@@ -78,20 +81,23 @@ fn make_huff_tree(lens : Array[Int], raw_syms : Array[Int]) -> Mp3HuffTree {
   tree
 }
 
-///| Tables 1..15; entry 0 is unused (`huff_data[l] == 0` means zero table). */
+///|
+/// Tables 1..15; entry 0 is unused (`huff_data[l] == 0` means zero table). */
 let mp3_huff_trees : Array[Mp3HuffTree] = make_mp3_huff_trees()
 
-///| Build the 16-entry tree array once. */
+///|
+/// Build the 16-entry tree array once. */
 fn make_mp3_huff_trees() -> Array[Mp3HuffTree] {
-  let trees : Array[Mp3HuffTree] = [{ sym: [], c0: [], c1: [] }]
+  let trees : Array[Mp3HuffTree] = [{ sym: [], c0: [], c1: [], }]
   for i = 0; i < 15; i = i + 1 {
     trees.push(make_huff_tree(mpa_huff_lens[i], mpa_huff_symbols[i]))
   }
   trees
 }
 
-///| Decode one symbol from a layer-3 Huffman tree. */
-fn huff_decode(gb : BitReader, tree : Mp3HuffTree) -> Int {
+///|
+/// Decode one symbol from a layer-3 Huffman tree. */
+fn huff_decode(gb : BitReader, tree : Mp3HuffTree) -> Int32 {
   let mut node = 0
   while tree.sym[node] < 0 {
     let bit = gb.read1().reinterpret_as_int()
@@ -104,8 +110,9 @@ fn huff_decode(gb : BitReader, tree : Mp3HuffTree) -> Int {
   tree.sym[node]
 }
 
-///| Decode a count1 quadruple using `mpa_quad_codes/bits`. */
-fn quad_decode(gb : BitReader, sel : Int) -> Int {
+///|
+/// Decode a count1 quadruple using `mpa_quad_codes/bits`. */
+fn quad_decode(gb : BitReader, sel : Int32) -> Int32 {
   let codes = if sel == 0 {
     [1, 5, 4, 5, 6, 5, 4, 4, 7, 3, 6, 0, 7, 2, 3, 1]
   } else {
@@ -132,28 +139,30 @@ fn quad_decode(gb : BitReader, sel : Int) -> Int {
 // Granule and decoder state
 // ---------------------------------------------------------------------------
 
-///| `GranuleDef`. */
+///|
+/// `GranuleDef`. */
 struct Mp3Granule {
-  mut scfsi : Int
-  mut part2_3_length : Int
-  mut big_values : Int
-  mut global_gain : Int
-  mut scalefac_compress : Int
-  mut block_type : Int
-  mut switch_point : Int
-  table_select : Array[Int]
-  subblock_gain : Array[Int]
-  mut scalefac_scale : Int
-  mut count1table_select : Int
-  region_size : Array[Int]
-  mut preflag : Int
-  mut short_start : Int
-  mut long_end : Int
-  scale_factors : Array[Int]
-  sb_hybrid : Array[Int]
+  mut scfsi : Int32
+  mut part2_3_length : Int32
+  mut big_values : Int32
+  mut global_gain : Int32
+  mut scalefac_compress : Int32
+  mut block_type : Int32
+  mut switch_point : Int32
+  table_select : Array[Int32]
+  subblock_gain : Array[Int32]
+  mut scalefac_scale : Int32
+  mut count1table_select : Int32
+  region_size : Array[Int32]
+  mut preflag : Int32
+  mut short_start : Int32
+  mut long_end : Int32
+  scale_factors : Array[Int32]
+  sb_hybrid : Array[Int32]
 }
 
-///| Fresh granule. */
+///|
+/// Fresh granule. */
 fn new_mp3_granule() -> Mp3Granule {
   {
     scfsi: 0,
@@ -176,11 +185,12 @@ fn new_mp3_granule() -> Mp3Granule {
   }
 }
 
-///| One decoded MPEG-audio frame, interleaved signed 16-bit PCM. */
+///|
+/// One decoded MPEG-audio frame, interleaved signed 16-bit PCM. */
 pub struct Mp3Pcm {
-  sample_rate : Int
-  channels : Int
-  samples : Array[Int]
+  sample_rate : Int32
+  channels : Int32
+  samples : Array[Int32]
 }
 
 ///|
@@ -188,40 +198,35 @@ pub struct Mp3Pcm {
 /// overlap and the bit-reservoir main-data stream. Layer I/II only use the
 /// synthesis half plus `sb_samples`.
 pub struct Mp3Decoder {
-  mut sample_rate : Int
-  mut sample_rate_index : Int
-  mut lsf : Int
-  mut error_protection : Int
-  mut nb_channels : Int
-  mut mode : Int
-  mut mode_ext : Int
-  mut bit_rate : Int
-  mut frame_size : Int
-  synth_buf : Array[Array[Int]]
-  synth_offset : Array[Int]
-  sb_samples : Array[Array[Int]]
-  mdct_buf : Array[Array[Int]]
+  mut sample_rate : Int32
+  mut sample_rate_index : Int32
+  mut lsf : Int32
+  mut error_protection : Int32
+  mut nb_channels : Int32
+  mut mode : Int32
+  mut mode_ext : Int32
+  mut bit_rate : Int32
+  mut frame_size : Int32
+  synth_buf : Array[Array[Int32]]
+  synth_offset : Array[Int32]
+  sb_samples : Array[Array[Int32]]
+  mdct_buf : Array[Array[Int32]]
   granules : Array[Array[Mp3Granule]]
-  mut dither_state : Int
+  mut dither_state : Int32
   mut reservoir : Array[Byte]
-  mut reservoir_base_bit : Int
+  mut reservoir_base_bit : Int32
 }
 
-///| Create a decoder with zeroed synthesis/overlap state and a 1 KiB zero
+///|
+/// Create a decoder with zeroed synthesis/overlap state and a 1 KiB zero
 /// prefix in the reservoir (so early `main_data_begin` references read zero). */
 pub fn new_mp3_decoder() -> Mp3Decoder {
-  let synth : Array[Array[Int]] = [
-    Array::make(1024, 0),
-    Array::make(1024, 0),
-  ]
-  let sb : Array[Array[Int]] = [
+  let synth : Array[Array[Int32]] = [Array::make(1024, 0), Array::make(1024, 0)]
+  let sb : Array[Array[Int32]] = [
     Array::make(36 * 32, 0),
     Array::make(36 * 32, 0),
   ]
-  let mdct : Array[Array[Int]] = [
-    Array::make(576, 0),
-    Array::make(576, 0),
-  ]
+  let mdct : Array[Array[Int32]] = [Array::make(576, 0), Array::make(576, 0)]
   let gr : Array[Array[Mp3Granule]] = [
     [new_mp3_granule(), new_mp3_granule()],
     [new_mp3_granule(), new_mp3_granule()],
@@ -248,7 +253,8 @@ pub fn new_mp3_decoder() -> Mp3Decoder {
   }
 }
 
-///| Clear overlap/synthesis/reservoir state (the C `flush`). */
+///|
+/// Clear overlap/synthesis/reservoir state (the C `flush`). */
 pub fn Mp3Decoder::flush(self : Mp3Decoder) -> Unit {
   for ch = 0; ch < 2; ch = ch + 1 {
     for i = 0; i < 1024; i = i + 1 {
@@ -268,7 +274,8 @@ pub fn Mp3Decoder::flush(self : Mp3Decoder) -> Unit {
 // Side info / scale factors / exponents
 // ---------------------------------------------------------------------------
 
-///| `region_offset2size`. */
+///|
+/// `region_offset2size`. */
 fn region_offset2size(g : Mp3Granule) -> Unit {
   g.region_size[2] = 576 / 2
   let mut j = 0
@@ -283,8 +290,9 @@ fn region_offset2size(g : Mp3Granule) -> Unit {
   }
 }
 
-///| `init_short_region`. */
-fn init_short_region(sr_index : Int, g : Mp3Granule) -> Unit {
+///|
+/// `init_short_region`. */
+fn init_short_region(sr_index : Int32, g : Mp3Granule) -> Unit {
   if g.block_type == 2 {
     g.region_size[0] = if sr_index != 8 { 36 / 2 } else { 72 / 2 }
   } else if sr_index <= 2 {
@@ -297,11 +305,13 @@ fn init_short_region(sr_index : Int, g : Mp3Granule) -> Unit {
   g.region_size[1] = 576 / 2
 }
 
-///| `band_index_long[9][23]`, built from `band_size_long`. */
-let band_index_long : Array[Int] = make_band_index_long()
+///|
+/// `band_index_long[9][23]`, built from `band_size_long`. */
+let band_index_long : Array[Int32] = make_band_index_long()
 
-///| Build the 9×23 band index table. */
-fn make_band_index_long() -> Array[Int] {
+///|
+/// Build the 9×23 band index table. */
+fn make_band_index_long() -> Array[Int32] {
   let out = Array::make(9 * 23, 0)
   for i = 0; i < 9; i = i + 1 {
     let mut k = 0
@@ -314,15 +324,22 @@ fn make_band_index_long() -> Array[Int] {
   out
 }
 
-///| `init_long_region`. */
-fn init_long_region(sr_index : Int, g : Mp3Granule, ra1 : Int, ra2 : Int) -> Unit {
+///|
+/// `init_long_region`. */
+fn init_long_region(
+  sr_index : Int32,
+  g : Mp3Granule,
+  ra1 : Int32,
+  ra2 : Int32,
+) -> Unit {
   g.region_size[0] = band_index_long[sr_index * 23 + ra1 + 1]
   let l = if ra1 + ra2 + 2 < 22 { ra1 + ra2 + 2 } else { 22 }
   g.region_size[1] = band_index_long[sr_index * 23 + l]
 }
 
-///| `compute_band_indexes`. */
-fn compute_band_indexes(sr_index : Int, g : Mp3Granule) -> Unit {
+///|
+/// `compute_band_indexes`. */
+fn compute_band_indexes(sr_index : Int32, g : Mp3Granule) -> Unit {
   if g.block_type == 2 {
     if g.switch_point != 0 {
       g.long_end = if sr_index <= 2 { 8 } else { 6 }
@@ -337,8 +354,9 @@ fn compute_band_indexes(sr_index : Int, g : Mp3Granule) -> Unit {
   }
 }
 
-///| `SPLIT` from mpegaudiodec_template.c. */
-fn split_sf(sf : Int, n : Int) -> (Int, Int) {
+///|
+/// `SPLIT` from mpegaudiodec_template.c. */
+fn split_sf(sf : Int32, n : Int32) -> (Int32, Int32) {
   if n == 3 {
     let m = (sf * 171) >> 9
     (sf - 3 * m, m)
@@ -355,8 +373,14 @@ fn split_sf(sf : Int, n : Int) -> (Int, Int) {
   }
 }
 
-///| `lsf_sf_expand`: fill `slen[0..4]` from the four-way split. */
-fn lsf_sf_expand(sf : Int, n1 : Int, n2 : Int, n3 : Int) -> Array[Int] {
+///|
+/// `lsf_sf_expand`: fill `slen[0..4]` from the four-way split. */
+fn lsf_sf_expand(
+  sf : Int32,
+  n1 : Int32,
+  n2 : Int32,
+  n3 : Int32,
+) -> Array[Int32] {
   let mut v = sf
   let (s3, v3) = split_sf(v, n3)
   v = v3
@@ -367,19 +391,21 @@ fn lsf_sf_expand(sf : Int, n1 : Int, n2 : Int, n3 : Int) -> Array[Int] {
   [v, s1, s2, s3]
 }
 
-///| `exponents_from_scale_factors`. */
+///|
+/// `exponents_from_scale_factors`. */
 fn exponents_from_scale_factors(
-  sr_index : Int,
+  sr_index : Int32,
   g : Mp3Granule,
-  exponents : Array[Int]
+  exponents : Array[Int32],
 ) -> Unit {
   let gain = g.global_gain - 210
   let shift = g.scalefac_scale + 1
   let mut pos = 0
   let pretab_base = g.preflag * 22
   for i = 0; i < g.long_end; i = i + 1 {
-    let v0 = gain - ((g.scale_factors[i] + mpa_pretab[pretab_base + i]) <<
-      shift) + 400
+    let v0 = gain -
+      ((g.scale_factors[i] + mpa_pretab[pretab_base + i]) << shift) +
+      400
     let len = band_size_long[sr_index * 22 + i]
     for li = 0; li < len; li = li + 1 {
       if pos < 576 {
@@ -415,8 +441,9 @@ fn exponents_from_scale_factors(
 // Huffman spectrum decode
 // ---------------------------------------------------------------------------
 
-///| Read `n` bits, treating n == 0 as zero (`get_bitsz`). */
-fn get_bitsz(gb : BitReader, n : Int) -> Int {
+///|
+/// Read `n` bits, treating n == 0 as zero (`get_bitsz`). */
+fn get_bitsz(gb : BitReader, n : Int32) -> Int32 {
   if n == 0 {
     0
   } else {
@@ -424,8 +451,9 @@ fn get_bitsz(gb : BitReader, n : Int) -> Int {
   }
 }
 
-///| `READ_FLIP_SIGN`: read a sign bit and optionally negate. */
-fn read_flip_sign(gb : BitReader, value : Int) -> Int {
+///|
+/// `READ_FLIP_SIGN`: read a sign bit and optionally negate. */
+fn read_flip_sign(gb : BitReader, value : Int32) -> Int32 {
   if gb.read1() != 0U {
     -value
   } else {
@@ -433,12 +461,13 @@ fn read_flip_sign(gb : BitReader, value : Int) -> Int {
   }
 }
 
-///| `huffman_decode`: decode one granule's 576 spectral values. */
+///|
+/// `huffman_decode`: decode one granule's 576 spectral values. */
 fn huffman_decode(
   gb : BitReader,
   g : Mp3Granule,
-  exponents : Array[Int],
-  end_pos2 : Int
+  exponents : Array[Int32],
+  end_pos2 : Int32,
 ) -> Unit {
   let end_pos = end_pos2
   let mut s_index = 0
@@ -480,10 +509,7 @@ fn huffman_decode(
           let mut x = y >> 5
           let mut yy = y & 0x0F
           if x < 15 {
-            g.sb_hybrid[s_index] = read_flip_sign(
-              gb,
-              expval_table(exponent, x),
-            )
+            g.sb_hybrid[s_index] = read_flip_sign(gb, expval_table(exponent, x))
           } else {
             x = x + get_bitsz(gb, linbits)
             let v = l3_unscale(x, exponent)
@@ -503,13 +529,16 @@ fn huffman_decode(
           let mut x = (y >> 5) + (y & 0x0F)
           let yy = y & 0x0F
           if x < 15 {
-            g.sb_hybrid[s_index + (if yy != 0 { 1 } else { 0 })] =
-              read_flip_sign(gb, expval_table(exponent, x))
+            g.sb_hybrid[s_index + (if yy != 0 { 1 } else { 0 })] = read_flip_sign(
+              gb,
+              expval_table(exponent, x),
+            )
           } else {
             x = x + get_bitsz(gb, linbits)
             let v = l3_unscale(x, exponent)
-            g.sb_hybrid[s_index + (if yy != 0 { 1 } else { 0 })] =
-              read_flip_sign(gb, v)
+            g.sb_hybrid[s_index + (if yy != 0 { 1 } else { 0 })] = read_flip_sign(
+              gb, v,
+            )
           }
           g.sb_hybrid[s_index + (if yy != 0 { 0 } else { 1 })] = 0
         }
@@ -551,8 +580,9 @@ fn huffman_decode(
 // Layer III post-processing
 // ---------------------------------------------------------------------------
 
-///| `reorder_block`. */
-fn reorder_block(sr_index : Int, g : Mp3Granule) -> Unit {
+///|
+/// `reorder_block`. */
+fn reorder_block(sr_index : Int32, g : Mp3Granule) -> Unit {
   if g.block_type != 2 {
     return
   }
@@ -581,8 +611,9 @@ fn reorder_block(sr_index : Int, g : Mp3Granule) -> Unit {
   }
 }
 
-///| Apply the 8 fixed antialias butterflies at one band boundary. */
-fn antialias_band(g : Mp3Granule, ptr : Int) -> Unit {
+///|
+/// Apply the 8 fixed antialias butterflies at one band boundary. */
+fn antialias_band(g : Mp3Granule, ptr : Int32) -> Unit {
   for j = 0; j < 8; j = j + 1 {
     let t0 = g.sb_hybrid[ptr - 1 - j]
     let t1 = g.sb_hybrid[ptr + j]
@@ -592,7 +623,8 @@ fn antialias_band(g : Mp3Granule, ptr : Int) -> Unit {
   }
 }
 
-///| `compute_antialias`. */
+///|
+/// `compute_antialias`. */
 fn compute_antialias(g : Mp3Granule) -> Unit {
   let n = if g.block_type == 2 {
     if g.switch_point == 0 {
@@ -609,16 +641,18 @@ fn compute_antialias(g : Mp3Granule) -> Unit {
   }
 }
 
-///| `ISQRT2`. */
-let isqrt2 : Int = fixr(0.70710678118654752440)
+///|
+/// `ISQRT2`. */
+let isqrt2 : Int32 = fixr(0.70710678118654752440)
 
-///| `compute_stereo`. */
+///|
+/// `compute_stereo`. */
 fn compute_stereo(
-  sr_index : Int,
-  lsf : Int,
-  mode_ext : Int,
+  sr_index : Int32,
+  lsf : Int32,
+  mode_ext : Int32,
   g0 : Mp3Granule,
-  g1 : Mp3Granule
+  g1 : Mp3Granule,
 ) -> Unit {
   let intensity = (mode_ext & 1) != 0
   let ms = (mode_ext & 2) != 0
@@ -739,12 +773,13 @@ fn compute_stereo(
 // IMDCT wiring
 // ---------------------------------------------------------------------------
 
-///| `compute_imdct` for one granule/channel. */
+///|
+/// `compute_imdct` for one granule/channel. */
 fn compute_imdct(
   g : Mp3Granule,
-  out : Array[Int],
-  out_base : Int,
-  buf : Array[Int]
+  out : Array[Int32],
+  out_base : Int32,
+  buf : Array[Int32],
 ) -> Unit {
   let mut ptr = 576
   let tmp_ptr = 36
@@ -761,9 +796,13 @@ fn compute_imdct(
       break
     }
   }
-  let sblimit_used = (ptr / 18) + 1
+  let sblimit_used = ptr / 18 + 1
   let mdct_long_end = if g.block_type == 2 {
-    if g.switch_point != 0 { 2 } else { 0 }
+    if g.switch_point != 0 {
+      2
+    } else {
+      0
+    }
   } else {
     sblimit_used
   }
@@ -820,10 +859,11 @@ fn compute_imdct(
 // Frame decode
 // ---------------------------------------------------------------------------
 
-///| Decode one MP3 frame (header + payload) and return interleaved S16 PCM. */
+///|
+/// Decode one MP3 frame (header + payload) and return interleaved S16 PCM. */
 pub fn Mp3Decoder::decode_frame(
   self : Mp3Decoder,
-  frame : Bytes
+  frame : Bytes,
 ) -> Result[Mp3Pcm, String] {
   let mut start = 0
   while start < frame.length() && frame[start] == b'\x00' {
@@ -833,7 +873,8 @@ pub fn Mp3Decoder::decode_frame(
     return Err("EINVAL")
   }
   let header = (frame[start].to_uint() << 24) |
-    (frame[start + 1].to_uint() << 16) | (frame[start + 2].to_uint() << 8) |
+    (frame[start + 1].to_uint() << 16) |
+    (frame[start + 2].to_uint() << 8) |
     frame[start + 3].to_uint()
   let h = match avpriv_mpegaudio_decode_header(header) {
     Err(e) => return Err(e)
@@ -852,7 +893,7 @@ pub fn Mp3Decoder::decode_frame(
   if size < 4 {
     return Err("EINVAL")
   }
-  let fbytes = frame.clamped_view(start=start, end=start + size).to_owned()
+  let fbytes = frame.clamped_view(start~, end=start + size).to_owned()
   // The sample rate/channel layout is fixed for a stream.
   if self.sample_rate != 0 && self.sample_rate != h.sample_rate {
     self.flush()
@@ -867,7 +908,10 @@ pub fn Mp3Decoder::decode_frame(
   self.bit_rate = h.bit_rate
   self.frame_size = size
 
-  let gb = BitReader::with_size(fbytes.clamped_view(start=4, end=size).to_owned(), (size - 4) * 8)
+  let gb = BitReader::with_size(
+    fbytes.clamped_view(start=4, end=size).to_owned(),
+    (size - 4) * 8,
+  )
   let mut main_data_begin = 0
   let mut nb_granules = 0
   if h.error_protection != 0 {
@@ -1029,12 +1073,16 @@ pub fn Mp3Decoder::decode_frame(
         }
       } else {
         let tindex = if g.block_type == 2 {
-          if g.switch_point != 0 { 2 } else { 1 }
+          if g.switch_point != 0 {
+            2
+          } else {
+            1
+          }
         } else {
           0
         }
         let mut sf = g.scalefac_compress
-        let mut slen : Array[Int] = [0, 0, 0, 0]
+        let mut slen : Array[Int32] = [0, 0, 0, 0]
         let mut tindex2 = 0
         if (h.mode_ext & 1) != 0 && ch == 1 {
           sf = sf >> 1
@@ -1048,18 +1096,16 @@ pub fn Mp3Decoder::decode_frame(
             slen = lsf_sf_expand(sf - 244, 3, 0, 0)
             tindex2 = 5
           }
+        } else if sf < 400 {
+          slen = lsf_sf_expand(sf, 5, 4, 4)
+          tindex2 = 0
+        } else if sf < 500 {
+          slen = lsf_sf_expand(sf - 400, 5, 4, 0)
+          tindex2 = 1
         } else {
-          if sf < 400 {
-            slen = lsf_sf_expand(sf, 5, 4, 4)
-            tindex2 = 0
-          } else if sf < 500 {
-            slen = lsf_sf_expand(sf - 400, 5, 4, 0)
-            tindex2 = 1
-          } else {
-            slen = lsf_sf_expand(sf - 500, 3, 0, 0)
-            tindex2 = 2
-            g.preflag = 1
-          }
+          slen = lsf_sf_expand(sf - 500, 3, 0, 0)
+          tindex2 = 2
+          g.preflag = 1
         }
         let mut j = 0
         for k = 0; k < 4; k = k + 1 {
@@ -1084,7 +1130,10 @@ pub fn Mp3Decoder::decode_frame(
     }
     if h.mode == 1 && h.nb_channels == 2 {
       compute_stereo(
-        h.sample_rate_index, h.lsf, h.mode_ext, self.granules[0][gr],
+        h.sample_rate_index,
+        h.lsf,
+        h.mode_ext,
+        self.granules[0][gr],
         self.granules[1][gr],
       )
     }
@@ -1118,9 +1167,9 @@ pub fn Mp3Decoder::decode_frame(
 fn mpa_synthesize(
   dec : Mp3Decoder,
   h : MpaDecodeHeader,
-  nb_blocks : Int
+  nb_blocks : Int32,
 ) -> Mp3Pcm {
-  let planar : Array[Array[Int]] = [
+  let planar : Array[Array[Int32]] = [
     Array::make(nb_blocks * 32, 0),
     Array::make(nb_blocks * 32, 0),
   ]
@@ -1145,7 +1194,7 @@ fn mpa_synthesize(
       samples[i * h.nb_channels + ch] = planar[ch][i]
     }
   }
-  { sample_rate: h.sample_rate, channels: h.nb_channels, samples }
+  { sample_rate: h.sample_rate, channels: h.nb_channels, samples, }
 }
 
 ///|
@@ -1155,21 +1204,26 @@ fn mpa_synthesize(
 /// it walks frames by `frame_size`, so it handles all three layers.
 pub fn decode_mp3_stream(data : Bytes) -> Result[Mp3Pcm, String] {
   let mut start = 0
-  if data.length() >= 10 && data[0] == b'I' && data[1] == b'D' &&
+  if data.length() >= 10 &&
+    data[0] == b'I' &&
+    data[1] == b'D' &&
     data[2] == b'3' {
     let len = ((data[6].to_int() & 0x7F) << 21) +
-      ((data[7].to_int() & 0x7F) << 14) + ((data[8].to_int() & 0x7F) << 7) +
-      (data[9].to_int() & 0x7F) + 10
+      ((data[7].to_int() & 0x7F) << 14) +
+      ((data[8].to_int() & 0x7F) << 7) +
+      (data[9].to_int() & 0x7F) +
+      10
     start = if len < data.length() { len } else { data.length() }
   }
   let dec = new_mp3_decoder()
-  let all : Array[Int] = []
+  let all : Array[Int32] = []
   let mut pos = start
   let mut sample_rate = 0
   let mut channels = 0
   while pos + 4 <= data.length() {
     let header = (data[pos].to_uint() << 24) |
-      (data[pos + 1].to_uint() << 16) | (data[pos + 2].to_uint() << 8) |
+      (data[pos + 1].to_uint() << 16) |
+      (data[pos + 2].to_uint() << 8) |
       data[pos + 3].to_uint()
     let h = match avpriv_mpegaudio_decode_header(header) {
       Err(_) => {
@@ -1199,5 +1253,5 @@ pub fn decode_mp3_stream(data : Bytes) -> Result[Mp3Pcm, String] {
   if all.length() == 0 {
     return Err("EINVAL")
   }
-  Ok({ sample_rate, channels, samples: all })
+  Ok({ sample_rate, channels, samples: all, })
 }

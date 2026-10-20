@@ -8,8 +8,11 @@
 /// alpha/beta offsets 0. PPS pic_init_qp_minus26=-3 → init_qp 23, so the
 /// slice QP is 26.
 
-///| Parse one Annex B NAL (start code included) into its RBSP reader. */
-fn h264_slice_reader(nal_bytes : Bytes) -> Result[(BitReader, Int, Int), String] {
+///|
+/// Parse one Annex B NAL (start code included) into its RBSP reader. */
+fn h264_slice_reader(
+  nal_bytes : Bytes,
+) -> Result[(BitReader, Int32, Int32), String] {
   let pkt = match ff_h2645_packet_split(nal_bytes, 4, H264, false) {
     Err(e) => return Err(e)
     Ok(v) => v
@@ -22,6 +25,7 @@ fn h264_slice_reader(nal_bytes : Bytes) -> Result[(BitReader, Int, Int), String]
   Ok((gb, nal.nal_type, nal.ref_idc))
 }
 
+///|
 test "h264: real baseline I-slice header matches FFmpeg trace" {
   let sps_bytes = @libavutil.av_base64_decode(h264_slice_sps_b64, 256).unwrap()
   let pps_bytes = @libavutil.av_base64_decode(h264_slice_pps_b64, 256).unwrap()

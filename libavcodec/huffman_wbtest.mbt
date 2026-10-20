@@ -19,9 +19,10 @@
 // Independent reference: textbook two-queue Huffman (not from FFmpeg)
 // ---------------------------------------------------------------------------
 
-///| Stable sort of a copy of `a` (insertion sort, avoids core API surface). */
-fn sorted_copy(a : Array[Int]) -> Array[Int] {
-  let r : Array[Int] = Array::make(a.length(), 0)
+///|
+/// Stable sort of a copy of `a` (insertion sort, avoids core API surface). */
+fn sorted_copy(a : Array[Int32]) -> Array[Int32] {
+  let r : Array[Int32] = Array::make(a.length(), 0)
   for i = 0; i < a.length(); i = i + 1 {
     r[i] = a[i]
   }
@@ -37,12 +38,13 @@ fn sorted_copy(a : Array[Int]) -> Array[Int] {
   r
 }
 
-///| Take the smallest remaining node from the leaf / internal queues. */
+///|
+/// Take the smallest remaining node from the leaf / internal queues. */
 fn pick_min(
   leaves : Array[Int64],
   internal : Array[Int64],
-  i1 : Array[Int],
-  i2 : Array[Int],
+  i1 : Array[Int32],
+  i2 : Array[Int32],
 ) -> Int64 {
   let l = if i1[0] < leaves.length() {
     leaves[i1[0]]
@@ -63,8 +65,9 @@ fn pick_min(
   }
 }
 
-///| Optimal Huffman cost of the strictly positive frequencies in `counts`. */
-fn optimal_cost(counts : Array[Int]) -> Int64 {
+///|
+/// Optimal Huffman cost of the strictly positive frequencies in `counts`. */
+fn optimal_cost(counts : Array[Int32]) -> Int64 {
   let leaves : Array[Int64] = []
   for i = 0; i < counts.length(); i = i + 1 {
     if counts[i] > 0 {
@@ -85,8 +88,8 @@ fn optimal_cost(counts : Array[Int]) -> Int64 {
     return 0
   }
   let internal : Array[Int64] = []
-  let i1 : Array[Int] = [0]
-  let i2 : Array[Int] = [0]
+  let i1 : Array[Int32] = [0]
+  let i2 : Array[Int32] = [0]
   let mut total : Int64 = 0
   let mut nodes = nl
   while nodes > 1 {
@@ -100,8 +103,13 @@ fn optimal_cost(counts : Array[Int]) -> Int64 {
   total
 }
 
-///| Weighted path length of a `(lens, xlat)` code over `counts`. */
-fn code_cost(lens : Array[Int], xlat : Array[Int], counts : Array[Int]) -> Int64 {
+///|
+/// Weighted path length of a `(lens, xlat)` code over `counts`. */
+fn code_cost(
+  lens : Array[Int32],
+  xlat : Array[Int32],
+  counts : Array[Int32],
+) -> Int64 {
   let mut total : Int64 = 0
   for i = 0; i < lens.length(); i = i + 1 {
     total = total + counts[xlat[i]].to_int64() * lens[i].to_int64()
@@ -109,8 +117,9 @@ fn code_cost(lens : Array[Int], xlat : Array[Int], counts : Array[Int]) -> Int64
   total
 }
 
-///| Kraft equality: the code lengths form a complete prefix-free set. */
-fn kraft_ok(lens : Array[Int]) -> Bool {
+///|
+/// Kraft equality: the code lengths form a complete prefix-free set. */
+fn kraft_ok(lens : Array[Int32]) -> Bool {
   let mut lmax = 0
   for i = 0; i < lens.length(); i = i + 1 {
     if lens[i] > lmax {
@@ -124,11 +133,12 @@ fn kraft_ok(lens : Array[Int]) -> Bool {
   for i = 0; i < lens.length(); i = i + 1 {
     sum = sum + (1 << (lmax - lens[i]))
   }
-  sum == (1 << lmax)
+  sum == 1 << lmax
 }
 
-///| `Array[Int]` -> `Array[UInt64]` for the `ff_huff_gen_len_table` signature. */
-fn to_u64(counts : Array[Int]) -> Array[UInt64] {
+///|
+/// `Array[Int]` -> `Array[UInt64]` for the `ff_huff_gen_len_table` signature. */
+fn to_u64(counts : Array[Int32]) -> Array[UInt64] {
   let r : Array[UInt64] = []
   for i = 0; i < counts.length(); i = i + 1 {
     r.push(counts[i].to_int64().reinterpret_as_uint64())
@@ -140,10 +150,9 @@ fn to_u64(counts : Array[Int]) -> Array[UInt64] {
 // Tests
 // ---------------------------------------------------------------------------
 
+///|
 test "huffman: ff_huff_build_tree gives an optimal, prefix-free, round-trippable code" {
-  let counts : Array[Int] = [
-    3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3,
-  ]
+  let counts : Array[Int32] = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3]
   match ff_huff_build_tree(counts, 0) {
     Ok(pair) => {
       let (lens, xlat) = pair
@@ -151,7 +160,7 @@ test "huffman: ff_huff_build_tree gives an optimal, prefix-free, round-trippable
       assert_true(kraft_ok(lens))
       assert_eq(code_cost(lens, xlat, counts), optimal_cost(counts))
       let hc = huffman_build_codes(lens, xlat)
-      let syms : Array[Int] = []
+      let syms : Array[Int32] = []
       for _r = 0; _r < 5; _r = _r + 1 {
         for i = 0; i < xlat.length(); i = i + 1 {
           syms.push(xlat[i])
@@ -165,15 +174,16 @@ test "huffman: ff_huff_build_tree gives an optimal, prefix-free, round-trippable
   }
 }
 
+///|
 test "huffman: hand-derived textbook example (counts 1,1,2,4)" {
-  let counts : Array[Int] = [1, 1, 2, 4]
+  let counts : Array[Int32] = [1, 1, 2, 4]
   match ff_huff_build_tree(counts, 0) {
     Ok(pair) => {
       let (lens, xlat) = pair
       // The only optimal Huffman code has lengths {1, 2, 3, 3}.
       assert_eq(sorted_copy(lens), [1, 2, 3, 3])
       let hc = huffman_build_codes(lens, xlat)
-      let syms : Array[Int] = [0, 1, 2, 3, 3, 2, 1, 0]
+      let syms : Array[Int32] = [0, 1, 2, 3, 3, 2, 1, 0]
       let enc = hc.encode(syms)
       let dec = hc.decode(enc, 8)
       assert_eq(dec, syms)
@@ -182,8 +192,9 @@ test "huffman: hand-derived textbook example (counts 1,1,2,4)" {
   }
 }
 
+///|
 test "huffman: ff_huff_gen_len_table is optimal and agrees with build_tree" {
-  let counts : Array[Int] = [
+  let counts : Array[Int32] = [
     12, 5, 40, 3, 3, 7, 2, 1, 21, 13, 8, 4, 1, 1, 2, 9,
   ]
   let stats = to_u64(counts)
@@ -203,17 +214,19 @@ test "huffman: ff_huff_gen_len_table is optimal and agrees with build_tree" {
   }
 }
 
+///|
 test "huffman: ff_huff_gen_len_table skips zero frequencies (skip0)" {
-  let counts : Array[Int] = [7, 0, 0, 3, 3, 0, 1, 1]
+  let counts : Array[Int32] = [7, 0, 0, 3, 3, 0, 1, 1]
   let lens = ff_huff_gen_len_table(to_u64(counts), true)
   assert_eq(lens[1], 255)
   assert_eq(lens[2], 255)
   assert_eq(lens[5], 255)
-  let part : Array[Int] = [lens[0], lens[3], lens[4], lens[6], lens[7]]
+  let part : Array[Int32] = [lens[0], lens[3], lens[4], lens[6], lens[7]]
   assert_true(kraft_ok(part))
 }
 
+///|
 test "huffman: ff_huff_build_tree rejects too high frequencies" {
-  let counts : Array[Int] = [0x40000000, 0x40000000]
+  let counts : Array[Int32] = [0x40000000, 0x40000000]
   assert_true(ff_huff_build_tree(counts, 0) is Err(_))
 }

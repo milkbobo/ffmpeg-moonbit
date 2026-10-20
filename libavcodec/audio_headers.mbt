@@ -14,23 +14,29 @@
 ///   * Error values are strings: "AAC_SYNC", "AAC_SAMPLE_RATE",
 ///     "AAC_FRAME_SIZE", "EINVAL".
 
-///| `AV_AAC_ADTS_HEADER_SIZE`. */
-pub let av_aac_adts_header_size : Int = 7
+///|
+/// `AV_AAC_ADTS_HEADER_SIZE`. */
+pub let av_aac_adts_header_size : Int32 = 7
 
-///| `MODE_EXT_MS_STEREO`. */
-pub let mode_ext_ms_stereo : Int = 2
+///|
+/// `MODE_EXT_MS_STEREO`. */
+pub let mode_ext_ms_stereo : Int32 = 2
 
-///| `MODE_EXT_I_STEREO`. */
-pub let mode_ext_i_stereo : Int = 1
+///|
+/// `MODE_EXT_I_STEREO`. */
+pub let mode_ext_i_stereo : Int32 = 1
 
-///| `MPA_MONO` (the mode field's mono value). */
-let mpa_mono : Int = 3
+///|
+/// `MPA_MONO` (the mode field's mono value). */
+let mpa_mono : Int32 = 3
 
-///| `ff_mpa_freq_tab[3]`. */
-let ff_mpa_freq_tab : Array[Int] = [44100, 48000, 32000]
+///|
+/// `ff_mpa_freq_tab[3]`. */
+let ff_mpa_freq_tab : Array[Int32] = [44100, 48000, 32000]
 
-///| `ff_mpa_bitrate_tab[2][3][15]`. */
-let ff_mpa_bitrate_tab : Array[Array[Array[Int]]] = [
+///|
+/// `ff_mpa_bitrate_tab[2][3][15]`. */
+let ff_mpa_bitrate_tab : Array[Array[Array[Int32]]] = [
   [
     [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
     [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
@@ -47,23 +53,26 @@ let ff_mpa_bitrate_tab : Array[Array[Array[Int]]] = [
 // AAC ADTS
 // ---------------------------------------------------------------------------
 
-///| `AACADTSHeaderInfo`. */
+///|
+/// `AACADTSHeaderInfo`. */
 pub struct AacAdtsHeaderInfo {
-  sample_rate : Int
-  samples : Int
-  bit_rate : Int
-  crc_absent : Int
-  object_type : Int
-  sampling_index : Int
-  chan_config : Int
-  num_aac_frames : Int
-  frame_length : Int
+  sample_rate : Int32
+  samples : Int32
+  bit_rate : Int32
+  crc_absent : Int32
+  object_type : Int32
+  sampling_index : Int32
+  chan_config : Int32
+  num_aac_frames : Int32
+  frame_length : Int32
 }
 
 ///|
 /// `ff_adts_header_parse`: parse the 54-bit ADTS fixed + variable header.
 /// The reader must be positioned at the start of the frame.
-pub fn ff_adts_header_parse(gb : BitReader) -> Result[AacAdtsHeaderInfo, String] {
+pub fn ff_adts_header_parse(
+  gb : BitReader,
+) -> Result[AacAdtsHeaderInfo, String] {
   if gb.read(12) != 0xFFFU {
     return Err("AAC_SYNC")
   }
@@ -72,7 +81,8 @@ pub fn ff_adts_header_parse(gb : BitReader) -> Result[AacAdtsHeaderInfo, String]
   let crc_absent = gb.read1().reinterpret_as_int()
   let aot = gb.read(2).reinterpret_as_int()
   let sr = gb.read(4).reinterpret_as_int()
-  if sr < 0 || sr >= mpeg4audio_sample_rates.length() ||
+  if sr < 0 ||
+    sr >= mpeg4audio_sample_rates.length() ||
     mpeg4audio_sample_rates[sr] == 0 {
     return Err("AAC_SAMPLE_RATE")
   }
@@ -93,7 +103,7 @@ pub fn ff_adts_header_parse(gb : BitReader) -> Result[AacAdtsHeaderInfo, String]
   Ok({
     sample_rate,
     samples,
-    bit_rate: (size * 8 * sample_rate) / samples,
+    bit_rate: size * 8 * sample_rate / samples,
     crc_absent,
     object_type: aot + 1,
     sampling_index: sr,
@@ -103,8 +113,11 @@ pub fn ff_adts_header_parse(gb : BitReader) -> Result[AacAdtsHeaderInfo, String]
   })
 }
 
-///| `ff_adts_header_parse_buf`: parse a 7-byte ADTS header. */
-pub fn ff_adts_header_parse_buf(buf : Bytes) -> Result[AacAdtsHeaderInfo, String] {
+///|
+/// `ff_adts_header_parse_buf`: parse a 7-byte ADTS header. */
+pub fn ff_adts_header_parse_buf(
+  buf : Bytes,
+) -> Result[AacAdtsHeaderInfo, String] {
   if buf.length() < av_aac_adts_header_size {
     return Err("EINVAL")
   }
@@ -116,37 +129,39 @@ pub fn ff_adts_header_parse_buf(buf : Bytes) -> Result[AacAdtsHeaderInfo, String
 // MPEG audio
 // ---------------------------------------------------------------------------
 
-///| `MPADecodeHeader`. */
+///|
+/// `MPADecodeHeader`. */
 pub struct MpaDecodeHeader {
-  frame_size : Int
-  error_protection : Int
-  layer : Int
-  sample_rate : Int
-  sample_rate_index : Int
-  bit_rate : Int
-  nb_channels : Int
-  mode : Int
-  mode_ext : Int
-  lsf : Int
-  ///| `avpriv_mpegaudio_decode_header` returned 1 (free format).
+  frame_size : Int32
+  error_protection : Int32
+  layer : Int32
+  sample_rate : Int32
+  sample_rate_index : Int32
+  bit_rate : Int32
+  nb_channels : Int32
+  mode : Int32
+  mode_ext : Int32
+  lsf : Int32
+  /// `avpriv_mpegaudio_decode_header` returned 1 (free format).
   free_format : Bool
 }
 
-///| `ff_mpa_check_header`: quick resync validation. */
-pub fn ff_mpa_check_header(header : UInt) -> Bool {
+///|
+/// `ff_mpa_check_header`: quick resync validation. */
+pub fn ff_mpa_check_header(header : UInt32) -> Bool {
   if (header & 0xFFE00000U) != 0xFFE00000U {
     return false
   }
-  if (header & (3U << 19)) == (1U << 19) {
+  if (header & (3U << 19)) == 1U << 19 {
     return false
   }
   if (header & (3U << 17)) == 0U {
     return false
   }
-  if (header & (0xFU << 12)) == (0xFU << 12) {
+  if (header & (0xFU << 12)) == 0xFU << 12 {
     return false
   }
-  if (header & (3U << 10)) == (3U << 10) {
+  if (header & (3U << 10)) == 3U << 10 {
     return false
   }
   true
@@ -156,7 +171,7 @@ pub fn ff_mpa_check_header(header : UInt) -> Bool {
 /// `avpriv_mpegaudio_decode_header`: decode a 32-bit MPEG audio frame header
 /// (`0xFFExxxxx`). The caller must have validated it (or rely on "EINVAL").
 pub fn avpriv_mpegaudio_decode_header(
-  header : UInt
+  header : UInt32,
 ) -> Result[MpaDecodeHeader, String] {
   if !ff_mpa_check_header(header) {
     return Err("EINVAL")
@@ -176,7 +191,7 @@ pub fn avpriv_mpegaudio_decode_header(
   }
   let sample_rate = ff_mpa_freq_tab[sample_rate_index] >> (lsf + mpeg25)
   sample_rate_index = sample_rate_index + 3 * (lsf + mpeg25)
-  let error_protection = (((header >> 16) & 1).reinterpret_as_int()) ^ 1
+  let error_protection = ((header >> 16) & 1).reinterpret_as_int() ^ 1
   let bitrate_index = ((header >> 12) & 0xF).reinterpret_as_int()
   let padding = ((header >> 9) & 1).reinterpret_as_int()
   let mode = ((header >> 6) & 3).reinterpret_as_int()
@@ -187,12 +202,12 @@ pub fn avpriv_mpegaudio_decode_header(
     let bit_rate = table * 1000
     let mut frame_size = 0
     if layer == 1 {
-      frame_size = (table * 12000) / sample_rate
+      frame_size = table * 12000 / sample_rate
       frame_size = (frame_size + padding) * 4
     } else if layer == 2 {
-      frame_size = (table * 144000) / sample_rate + padding
+      frame_size = table * 144000 / sample_rate + padding
     } else {
-      frame_size = (table * 144000) / (sample_rate << lsf) + padding
+      frame_size = table * 144000 / (sample_rate << lsf) + padding
     }
     Ok({
       frame_size,
@@ -224,19 +239,21 @@ pub fn avpriv_mpegaudio_decode_header(
   }
 }
 
-///| `MPAStreamInfo`: the information `ff_mpa_decode_header` returns through
+///|
+/// `MPAStreamInfo`: the information `ff_mpa_decode_header` returns through
 /// its pointer arguments. `samples_per_frame` is the C's `*frame_size` (which
 /// is the number of PCM samples, not bytes). */
 pub struct MpaStreamInfo {
   codec : String
-  sample_rate : Int
-  channels : Int
-  samples_per_frame : Int
-  bit_rate : Int
+  sample_rate : Int32
+  channels : Int32
+  samples_per_frame : Int32
+  bit_rate : Int32
 }
 
-///| `ff_mpa_decode_header`. */
-pub fn ff_mpa_decode_header(header : UInt) -> Result[MpaStreamInfo, String] {
+///|
+/// `ff_mpa_decode_header`. */
+pub fn ff_mpa_decode_header(header : UInt32) -> Result[MpaStreamInfo, String] {
   let h = match avpriv_mpegaudio_decode_header(header) {
     Err(e) => return Err(e)
     Ok(v) => v

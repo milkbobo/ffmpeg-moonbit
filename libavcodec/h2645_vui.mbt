@@ -9,54 +9,77 @@
 /// FFmpeg maps the reserved enum values and every unknown value to
 /// "unspecified" (2), which is all the VUI parser needs.
 
-///| `EXTENDED_SAR`. */
-let extended_sar : Int = 255
+///|
+/// `EXTENDED_SAR`. */
+let extended_sar : Int32 = 255
 
-///| `AVCOL_PRI_UNSPECIFIED`. */
-let avcol_pri_unspecified : Int = 2
+///|
+/// `AVCOL_PRI_UNSPECIFIED`. */
+let avcol_pri_unspecified : Int32 = 2
 
-///| `AVCOL_TRC_UNSPECIFIED`. */
-let avcol_trc_unspecified : Int = 2
+///|
+/// `AVCOL_TRC_UNSPECIFIED`. */
+let avcol_trc_unspecified : Int32 = 2
 
-///| `AVCOL_SPC_UNSPECIFIED`. */
-let avcol_spc_unspecified : Int = 2
+///|
+/// `AVCOL_SPC_UNSPECIFIED`. */
+let avcol_spc_unspecified : Int32 = 2
 
-///| `AVCHROMA_LOC_UNSPECIFIED`. */
-let avchroma_loc_unspecified : Int = 0
+///|
+/// `AVCHROMA_LOC_UNSPECIFIED`. */
+let avchroma_loc_unspecified : Int32 = 0
 
-///| `AVCHROMA_LOC_LEFT`. */
-let avchroma_loc_left : Int = 1
+///|
+/// `AVCHROMA_LOC_LEFT`. */
+let avchroma_loc_left : Int32 = 1
 
-///| `ff_h2645_pixel_aspect[16]` from h2645data.c (index 0 is 0/1). */
-let h2645_pixel_aspect : Array[(Int, Int)] = [
-  (0, 1), (1, 1), (12, 11), (10, 11), (16, 11), (40, 33), (24, 11), (20, 11),
-  (32, 11), (80, 33), (18, 11), (15, 11), (64, 33), (160, 99), (4, 3), (3, 2),
+///|
+/// `ff_h2645_pixel_aspect[16]` from h2645data.c (index 0 is 0/1). */
+let h2645_pixel_aspect : Array[(Int32, Int32)] = [
+  (0, 1),
+  (1, 1),
+  (12, 11),
+  (10, 11),
+  (16, 11),
+  (40, 33),
+  (24, 11),
+  (20, 11),
+  (32, 11),
+  (80, 33),
+  (18, 11),
+  (15, 11),
+  (64, 33),
+  (160, 99),
+  (4, 3),
+  (3, 2),
   (2, 1),
 ]
 
-///| `H2645VUI` from h2645_vui.h. `sar` is kept as a numerator/denominator
+///|
+/// `H2645VUI` from h2645_vui.h. `sar` is kept as a numerator/denominator
 /// pair; color values are the `AVColor*` enum integers. */
 pub struct H2645Vui {
-  mut sar_num : Int
-  mut sar_den : Int
-  mut aspect_ratio_idc : Int
-  mut aspect_ratio_info_present_flag : Int
-  mut overscan_info_present_flag : Int
-  mut overscan_appropriate_flag : Int
-  mut video_signal_type_present_flag : Int
-  mut video_format : Int
-  mut video_full_range_flag : Int
-  mut colour_description_present_flag : Int
-  mut colour_primaries : Int
-  mut transfer_characteristics : Int
-  mut matrix_coeffs : Int
-  mut chroma_loc_info_present_flag : Int
-  mut chroma_sample_loc_type_top_field : Int
-  mut chroma_sample_loc_type_bottom_field : Int
-  mut chroma_location : Int
+  mut sar_num : Int32
+  mut sar_den : Int32
+  mut aspect_ratio_idc : Int32
+  mut aspect_ratio_info_present_flag : Int32
+  mut overscan_info_present_flag : Int32
+  mut overscan_appropriate_flag : Int32
+  mut video_signal_type_present_flag : Int32
+  mut video_format : Int32
+  mut video_full_range_flag : Int32
+  mut colour_description_present_flag : Int32
+  mut colour_primaries : Int32
+  mut transfer_characteristics : Int32
+  mut matrix_coeffs : Int32
+  mut chroma_loc_info_present_flag : Int32
+  mut chroma_sample_loc_type_top_field : Int32
+  mut chroma_sample_loc_type_bottom_field : Int32
+  mut chroma_location : Int32
 }
 
-///| Zero-initialised VUI, as `{0}` in the C. */
+///|
+/// Zero-initialised VUI, as `{0}` in the C. */
 pub fn new_h2645_vui() -> H2645Vui {
   {
     sar_num: 0,
@@ -79,25 +102,31 @@ pub fn new_h2645_vui() -> H2645Vui {
   }
 }
 
-///| `av_color_primaries_name(x) != NULL`. */
-fn colour_primaries_valid(v : Int) -> Bool {
+///|
+/// `av_color_primaries_name(x) != NULL`. */
+fn colour_primaries_valid(v : Int32) -> Bool {
   (v >= 1 && v <= 12) || v == 22
 }
 
-///| `av_color_transfer_name(x) != NULL`. */
-fn transfer_characteristics_valid(v : Int) -> Bool {
+///|
+/// `av_color_transfer_name(x) != NULL`. */
+fn transfer_characteristics_valid(v : Int32) -> Bool {
   v >= 1 && v <= 18 && v != 3
 }
 
-///| `av_color_space_name(x) != NULL`. */
-fn matrix_coeffs_valid(v : Int) -> Bool {
+///|
+/// `av_color_space_name(x) != NULL`. */
+fn matrix_coeffs_valid(v : Int32) -> Bool {
   v >= 0 && v <= 15 && v != 3
 }
 
 ///|
 /// `ff_h2645_decode_common_vui_params`: aspect ratio, overscan, video signal
 /// type + colour description, and chroma location.
-pub fn ff_h2645_decode_common_vui_params(gb : BitReader, vui : H2645Vui) -> Unit {
+pub fn ff_h2645_decode_common_vui_params(
+  gb : BitReader,
+  vui : H2645Vui,
+) -> Unit {
   vui.aspect_ratio_info_present_flag = gb.read1().reinterpret_as_int()
   if vui.aspect_ratio_info_present_flag != 0 {
     vui.aspect_ratio_idc = gb.read(8).reinterpret_as_int()

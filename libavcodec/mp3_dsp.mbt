@@ -14,69 +14,85 @@
 ///   * The window/table generators use the same `Double` formulas as the C
 ///     (`FIXHR`/`FIXR`), with a local `frexp` and round-to-nearest-even.
 
-///| `FRAC_BITS`. */
-let frac_bits : Int = 23
+///|
+/// `FRAC_BITS`. */
+let frac_bits : Int32 = 23
 
-///| `FRAC_ONE = 1 << FRAC_BITS`. */
-let frac_one : Int = 8388608
+///|
+/// `FRAC_ONE = 1 << FRAC_BITS`. */
+let frac_one : Int32 = 8388608
 
-///| `WFRAC_BITS`. */
-let wfrac_bits : Int = 16
+///|
+/// `WFRAC_BITS`. */
+let wfrac_bits : Int32 = 16
 
-///| `OUT_SHIFT = WFRAC_BITS + FRAC_BITS - 15`. */
-let out_shift : Int = wfrac_bits + frac_bits - 15
+///|
+/// `OUT_SHIFT = WFRAC_BITS + FRAC_BITS - 15`. */
+let out_shift : Int32 = wfrac_bits + frac_bits - 15
 
-///| `SBLIMIT`. */
-let sblimit : Int = 32
+///|
+/// `SBLIMIT`. */
+let sblimit : Int32 = 32
 
-///| `MDCT_BUF_SIZE`. */
-let mdct_buf_size : Int = 36
+///|
+/// `MDCT_BUF_SIZE`. */
+let mdct_buf_size : Int32 = 36
 
-///| `IMDCT_SCALAR`. */
+///|
+/// `IMDCT_SCALAR`. */
 let imdct_scalar : Double = 1.759
 
-///| `FIXHR` for the fixed decoder. */
-fn fixhr(x : Double) -> Int {
+///|
+/// `FIXHR` for the fixed decoder. */
+fn fixhr(x : Double) -> Int32 {
   (x * 4294967296.0 + 0.5).to_int64().to_int()
 }
 
-///| `FIXR`. */
-fn fixr(x : Double) -> Int {
+///|
+/// `FIXR`. */
+fn fixr(x : Double) -> Int32 {
   (x * 8388608.0 + 0.5).to_int64().to_int()
 }
 
-///| `MUL64`. */
-fn mul64(a : Int, b : Int) -> Int64 {
+///|
+/// `MUL64`. */
+fn mul64(a : Int32, b : Int32) -> Int64 {
   a.to_int64() * b.to_int64()
 }
 
-///| `MULH`: high 32 bits of the signed 64-bit product. */
-fn mulh(a : Int, b : Int) -> Int {
+///|
+/// `MULH`: high 32 bits of the signed 64-bit product. */
+fn mulh(a : Int32, b : Int32) -> Int32 {
   (mul64(a, b) >> 32).to_int()
 }
 
-///| `MULL(a, b, s) = (MUL64(a,b) >> s)`. */
-fn mull(a : Int, b : Int, s : Int) -> Int {
+///|
+/// `MULL(a, b, s) = (MUL64(a,b) >> s)`. */
+fn mull(a : Int32, b : Int32, s : Int32) -> Int32 {
   (mul64(a, b) >> s).to_int()
 }
 
-///| `MULH3(x, y, s) = MULH(s*x, y)`. */
-fn mulh3(x : Int, y : Int, s : Int) -> Int {
+///|
+/// `MULH3(x, y, s) = MULH(s*x, y)`. */
+fn mulh3(x : Int32, y : Int32, s : Int32) -> Int32 {
   mulh(s * x, y)
 }
 
-///| `MULLx(x, y, s) = MULL((int)x, y, s)`. */
-fn mullx(x : Int, y : Int, s : Int) -> Int {
+///|
+/// `MULLx(x, y, s) = MULL((int)x, y, s)`. */
+fn mullx(x : Int32, y : Int32, s : Int32) -> Int32 {
   mull(x, y, s)
 }
 
-///| `SHR(a, b)` in the fixed path (`((int)a) >> b`). */
-fn shr(a : Int, b : Int) -> Int {
+///|
+/// `SHR(a, b)` in the fixed path (`((int)a) >> b`). */
+fn shr(a : Int32, b : Int32) -> Int32 {
   a >> b
 }
 
-///| `av_clip_int16`. */
-fn clip_int16(v : Int) -> Int {
+///|
+/// `av_clip_int16`. */
+fn clip_int16(v : Int32) -> Int32 {
   if v < -32768 {
     -32768
   } else if v > 32767 {
@@ -86,19 +102,22 @@ fn clip_int16(v : Int) -> Int {
   }
 }
 
-///| `round_sample` from the fixed synthesis filter: returns (sample, remainder). */
-fn round_sample(sum : Int64) -> (Int, Int64) {
+///|
+/// `round_sample` from the fixed synthesis filter: returns (sample, remainder). */
+fn round_sample(sum : Int64) -> (Int32, Int64) {
   let v = (sum >> out_shift).to_int()
   (clip_int16(v), sum & ((1L << out_shift) - 1L))
 }
 
-///| `exp2_lut[4]` from `mpegaudio_tablegen.h`. */
+///|
+/// `exp2_lut[4]` from `mpegaudio_tablegen.h`. */
 let exp2_lut : Array[Double] = [
   1.0, 1.18920711500272106672, 1.4142135623730950488, 1.68179283050742908606,
 ]
 
-///| `2^(e/4)` without relying on a libm `exp2`. */
-fn exp2_quarter(e : Int) -> Double {
+///|
+/// `2^(e/4)` without relying on a libm `exp2`. */
+fn exp2_quarter(e : Int32) -> Double {
   let mut q = e / 4
   let mut r = e % 4
   if r < 0 {
@@ -108,7 +127,8 @@ fn exp2_quarter(e : Int) -> Double {
   @math.pow(2.0, q.to_double()) * exp2_lut[r]
 }
 
-///| Round to nearest, ties to even (C `llrint` under the default mode). */
+///|
+/// Round to nearest, ties to even (C `llrint` under the default mode). */
 fn llrint(x : Double) -> Int64 {
   let f = @math.floor(x)
   let frac = x - f
@@ -120,8 +140,9 @@ fn llrint(x : Double) -> Int64 {
   }
 }
 
-///| `frexp`: returns (mantissa in [0.5,1), exponent) for x > 0. */
-fn frexp_pos(x : Double) -> (Double, Int) {
+///|
+/// `frexp`: returns (mantissa in [0.5,1), exponent) for x > 0. */
+fn frexp_pos(x : Double) -> (Double, Int32) {
   if x == 0.0 {
     return (0.0, 0)
   }
@@ -142,11 +163,12 @@ fn frexp_pos(x : Double) -> (Double, Int) {
 /// `ff_table_4_3_exp` / `ff_table_4_3_value` from
 /// `mpegaudiodec_common_tablegen.h` (`TABLE_4_3_SIZE = (8191+16)*4`).
 pub struct Table43 {
-  exp : Array[Int]
-  value : Array[UInt]
+  exp : Array[Int32]
+  value : Array[UInt32]
 }
 
-///| Build the `4/3` power table exactly as the C runtime generator. */
+///|
+/// Build the `4/3` power table exactly as the C runtime generator. */
 fn make_table_4_3() -> Table43 {
   let n = (8191 + 16) * 4
   let exp = Array::make(n, 0)
@@ -164,32 +186,37 @@ fn make_table_4_3() -> Table43 {
     value[i] = (m & 0xFFFFFFFFL).to_int().reinterpret_as_uint()
     exp[i] = -e
   }
-  { exp, value }
+  { exp, value, }
 }
 
-///| The single global table pair (the C initializes it once). */
+///|
+/// The single global table pair (the C initializes it once). */
 let table_4_3 : Table43 = make_table_4_3()
 
-///| `ff_table_4_3_exp` / `ff_table_4_3_value` accessors for the decoder. */
-pub fn table_4_3_exp(i : Int) -> Int {
+///|
+/// `ff_table_4_3_exp` / `ff_table_4_3_value` accessors for the decoder. */
+pub fn table_4_3_exp(i : Int32) -> Int32 {
   table_4_3.exp[i]
 }
 
-///| Raw `uint32_t` value of the `4/3` table. */
-pub fn table_4_3_value(i : Int) -> UInt {
+///|
+/// Raw `uint32_t` value of the `4/3` table. */
+pub fn table_4_3_value(i : Int32) -> UInt32 {
   table_4_3.value[i]
 }
 
-///| `expval_table[512][16]` and `exp_table[512]` from `mpegaudio_tablegen.h`. */
+///|
+/// `expval_table[512][16]` and `exp_table[512]` from `mpegaudio_tablegen.h`. */
 pub struct ExpTables {
-  exp : Array[Int]
-  expval : Array[Array[Int]]
+  exp : Array[Int32]
+  expval : Array[Array[Int32]]
 }
 
-///| Build the `value^(4/3)` / exponent tables. */
+///|
+/// Build the `value^(4/3)` / exponent tables. */
 fn make_exp_tables() -> ExpTables {
   let exp = Array::make(512, 0)
-  let expval : Array[Array[Int]] = []
+  let expval : Array[Array[Int32]] = []
   let pow43_lut = Array::make(16, 0.0)
   for i = 0; i < 16; i = i + 1 {
     pow43_lut[i] = i.to_double() * @math.cbrt(i.to_double())
@@ -200,7 +227,7 @@ fn make_exp_tables() -> ExpTables {
       exp2_base = exp2_base * 2.0
     }
     let exp2_val = exp2_base * exp2_lut[exponent & 3] / imdct_scalar
-    let row : Array[Int] = Array::make(16, 0)
+    let row : Array[Int32] = Array::make(16, 0)
     for value = 0; value < 16; value = value + 1 {
       let f = pow43_lut[value] * exp2_val
       row[value] = if f < 4294967295.0 {
@@ -212,25 +239,28 @@ fn make_exp_tables() -> ExpTables {
     expval.push(row)
     exp[exponent] = row[1]
   }
-  { exp, expval }
+  { exp, expval, }
 }
 
-///| Global `expval_table` / `exp_table`. */
+///|
+/// Global `expval_table` / `exp_table`. */
 let exp_tables : ExpTables = make_exp_tables()
 
-///| `expval_table[exp][value]`. */
-pub fn expval_table(exp : Int, value : Int) -> Int {
+///|
+/// `expval_table[exp][value]`. */
+pub fn expval_table(exp : Int32, value : Int32) -> Int32 {
   exp_tables.expval[exp][value]
 }
 
-///| `exp_table[exp]`. */
-pub fn exp_table(exp : Int) -> Int {
+///|
+/// `exp_table[exp]`. */
+pub fn exp_table(exp : Int32) -> Int32 {
   exp_tables.exp[exp]
 }
 
 ///|
 /// `l3_unscale`: value^(4/3) * 2^(exponent/4), normalized to `FRAC_BITS`.
-pub fn l3_unscale(value : Int, exponent : Int) -> Int {
+pub fn l3_unscale(value : Int32, exponent : Int32) -> Int32 {
   let idx = 4 * value + (exponent & 3)
   let mut e = table_4_3_exp(idx)
   let mut m = table_4_3_value(idx)
@@ -251,24 +281,45 @@ pub fn l3_unscale(value : Int, exponent : Int) -> Int {
 // IMDCT / synthesis windows
 // ---------------------------------------------------------------------------
 
-///| `sum(cos(pi*i/18))` constants from mpegaudiodsp_template.c. */
-let cos_c1 : Int = fixhr(0.98480775301220805936 / 2.0)
-let cos_c2 : Int = fixhr(0.93969262078590838405 / 2.0)
-let cos_c3 : Int = fixhr(0.86602540378443864676 / 2.0)
-let cos_c4 : Int = fixhr(0.76604444311897803520 / 2.0)
-let cos_c5 : Int = fixhr(0.64278760968653932632 / 2.0)
-let cos_c7 : Int = fixhr(0.34202014332566873304 / 2.0)
-let cos_c8 : Int = fixhr(0.17364817766693034885 / 2.0)
+///|
+/// `sum(cos(pi*i/18))` constants from mpegaudiodsp_template.c. */
+let cos_c1 : Int32 = fixhr(0.98480775301220805936 / 2.0)
 
-///| The `C3..C6` constants used by the 12-point IMDCT (they differ from the
+///|
+let cos_c2 : Int32 = fixhr(0.93969262078590838405 / 2.0)
+
+///|
+let cos_c3 : Int32 = fixhr(0.86602540378443864676 / 2.0)
+
+///|
+let cos_c4 : Int32 = fixhr(0.76604444311897803520 / 2.0)
+
+///|
+let cos_c5 : Int32 = fixhr(0.64278760968653932632 / 2.0)
+
+///|
+let cos_c7 : Int32 = fixhr(0.34202014332566873304 / 2.0)
+
+///|
+let cos_c8 : Int32 = fixhr(0.17364817766693034885 / 2.0)
+
+///|
+/// The `C3..C6` constants used by the 12-point IMDCT (they differ from the
 /// 36-point IMDCT's C4/C5/C6 in mpegaudiodsp_template.c).
-let imdct12_c3 : Int = fixhr(0.86602540378443864676 / 2.0)
-let imdct12_c4 : Int = fixhr(0.70710678118654752439 / 2.0)
-let imdct12_c5 : Int = fixhr(0.51763809020504152469 / 2.0)
-let imdct12_c6 : Int = fixhr(1.93185165257813657349 / 4.0)
+let imdct12_c3 : Int32 = fixhr(0.86602540378443864676 / 2.0)
 
-///| `icos36[9]` (FIXR). */
-let icos36 : Array[Int] = [
+///|
+let imdct12_c4 : Int32 = fixhr(0.70710678118654752439 / 2.0)
+
+///|
+let imdct12_c5 : Int32 = fixhr(0.51763809020504152469 / 2.0)
+
+///|
+let imdct12_c6 : Int32 = fixhr(1.93185165257813657349 / 4.0)
+
+///|
+/// `icos36[9]` (FIXR). */
+let icos36 : Array[Int32] = [
   fixr(0.50190991877167369479),
   fixr(0.51763809020504152469),
   fixr(0.55168895948124587824),
@@ -280,8 +331,9 @@ let icos36 : Array[Int] = [
   fixr(5.73685662283492756461),
 ]
 
-///| `icos36h[9]` (FIXHR; the C leaves the last entry commented out). */
-let icos36h : Array[Int] = [
+///|
+/// `icos36h[9]` (FIXHR; the C leaves the last entry commented out). */
+let icos36h : Array[Int32] = [
   fixhr(0.50190991877167369479 / 2.0),
   fixhr(0.51763809020504152469 / 2.0),
   fixhr(0.55168895948124587824 / 2.0),
@@ -293,12 +345,14 @@ let icos36h : Array[Int] = [
   0,
 ]
 
-///| `ff_mdct_win_fixed[8][36]`. */
-let mdct_win : Array[Array[Int]] = make_mdct_win()
+///|
+/// `ff_mdct_win_fixed[8][36]`. */
+let mdct_win : Array[Array[Int32]] = make_mdct_win()
 
-///| Build `ff_mdct_win_fixed`. */
-fn make_mdct_win() -> Array[Array[Int]] {
-  let win : Array[Array[Int]] = [
+///|
+/// Build `ff_mdct_win_fixed`. */
+fn make_mdct_win() -> Array[Array[Int32]] {
+  let win : Array[Array[Int32]] = [
     Array::make(36, 0),
     Array::make(36, 0),
     Array::make(36, 0),
@@ -331,7 +385,9 @@ fn make_mdct_win() -> Array[Array[Int]] {
           d = 1.0
         }
       }
-      d = d * 0.5 * imdct_scalar /
+      d = d *
+        0.5 *
+        imdct_scalar /
         @math.cos(@math.PI * (2.0 * i.to_double() + 19.0) / 72.0)
       let v = fixhr(d / 32.0)
       if j == 2 {
@@ -352,11 +408,13 @@ fn make_mdct_win() -> Array[Array[Int]] {
   win
 }
 
-///| `ff_mpa_synth_window_fixed[768]`. */
-let synth_window : Array[Int] = make_synth_window()
+///|
+/// `ff_mpa_synth_window_fixed[768]`. */
+let synth_window : Array[Int32] = make_synth_window()
 
-///| Build the 768-entry synthesis window from `ff_mpa_enwindow`. */
-fn make_synth_window() -> Array[Int] {
+///|
+/// Build the 768-entry synthesis window from `ff_mpa_enwindow`. */
+fn make_synth_window() -> Array[Int32] {
   let w = Array::make(768, 0)
   for i = 0; i < 257; i = i + 1 {
     let v = mpa_enwindow[i]
@@ -378,18 +436,21 @@ fn make_synth_window() -> Array[Int] {
   w
 }
 
-///| `is_table[2][7]` from mpegaudiodec_fixed.c. */
-let is_table : Array[Array[Int]] = [
+///|
+/// `is_table[2][7]` from mpegaudiodec_fixed.c. */
+let is_table : Array[Array[Int32]] = [
   [0x000000, 0x1B0CB1, 0x2ED9EC, 0x400000, 0x512614, 0x64F34F, 0x800000],
   [0x800000, 0x64F34F, 0x512614, 0x400000, 0x2ED9EC, 0x1B0CB1, 0x000000],
 ]
 
-///| `is_table_lsf[2][2][16]`. */
-let is_table_lsf : Array[Array[Array[Int]]] = make_is_table_lsf()
+///|
+/// `is_table_lsf[2][2][16]`. */
+let is_table_lsf : Array[Array[Array[Int32]]] = make_is_table_lsf()
 
-///| Build `is_table_lsf` exactly as decode_init_static. */
-fn make_is_table_lsf() -> Array[Array[Array[Int]]] {
-  let t : Array[Array[Array[Int]]] = [
+///|
+/// Build `is_table_lsf` exactly as decode_init_static. */
+fn make_is_table_lsf() -> Array[Array[Array[Int32]]] {
+  let t : Array[Array[Array[Int32]]] = [
     [Array::make(16, 0), Array::make(16, 0)],
     [Array::make(16, 0), Array::make(16, 0)],
   ]
@@ -405,8 +466,9 @@ fn make_is_table_lsf() -> Array[Array[Array[Int]]] {
   t
 }
 
-///| `csa_table[8][4]` (fixed). */
-let csa_table : Array[Array[Int]] = [
+///|
+/// `csa_table[8][4]` (fixed). */
+let csa_table : Array[Array[Int32]] = [
   [0x36E129F8, 0xDF128056, 0x15F3AA4E, 0xA831565E],
   [0x386E75F2, 0xE1CF24A5, 0x1A3D9A97, 0xA960AEB3],
   [0x3CC6B73A, 0xEBF19FA6, 0x28B856E0, 0xAF2AE86C],
@@ -421,8 +483,9 @@ let csa_table : Array[Array[Int]] = [
 // IMDCT36 / IMDCT12
 // ---------------------------------------------------------------------------
 
-///| `imdct12` from mpegaudiodec_template.c. */
-fn imdct12(out : Array[Int], src : Array[Int], in_off : Int) -> Unit {
+///|
+/// `imdct12` from mpegaudiodec_template.c. */
+fn imdct12(out : Array[Int32], src : Array[Int32], in_off : Int32) -> Unit {
   let mut in0 = src[in_off + 0 * 3]
   let mut in1 = src[in_off + 1 * 3] + src[in_off + 0 * 3]
   let mut in2 = src[in_off + 2 * 3] + src[in_off + 1 * 3]
@@ -455,15 +518,16 @@ fn imdct12(out : Array[Int], src : Array[Int], in_off : Int) -> Unit {
   out[11] = in0 + in5
 }
 
-///| `imdct36` from mpegaudiodsp_template.c. */
+///|
+/// `imdct36` from mpegaudiodsp_template.c. */
 fn imdct36(
-  out : Array[Int],
-  out_off : Int,
-  buf : Array[Int],
-  buf_off : Int,
-  src : Array[Int],
-  in_off : Int,
-  win : Array[Int]
+  out : Array[Int32],
+  out_off : Int32,
+  buf : Array[Int32],
+  buf_off : Int32,
+  src : Array[Int32],
+  in_off : Int32,
+  win : Array[Int32],
 ) -> Unit {
   // The C modifies `in` in place (the accumulation is part of the transform).
   let mut i = 17
@@ -478,7 +542,8 @@ fn imdct36(
   }
   let tmp = Array::make(18, 0)
   for j = 0; j < 2; j = j + 1 {
-    let t2 = src[in_off + 2 * 4 + j] + src[in_off + 2 * 8 + j] -
+    let t2 = src[in_off + 2 * 4 + j] +
+      src[in_off + 2 * 8 + j] -
       src[in_off + 2 * 2 + j]
     let t3 = src[in_off + 2 * 0 + j] + shr(src[in_off + 2 * 6 + j], 1)
     let t1 = src[in_off + 2 * 0 + j] - src[in_off + 2 * 6 + j]
@@ -499,12 +564,17 @@ fn imdct36(
     tmp[2 + j] = t3 + t0 + t1b
     tmp[14 + j] = t3 + t2b - t1b
     tmp[4 + j] = mulh3(
-      src[in_off + 2 * 5 + j] + src[in_off + 2 * 7 + j] -
+      src[in_off + 2 * 5 + j] +
+      src[in_off + 2 * 7 + j] -
       src[in_off + 2 * 1 + j],
       -cos_c3,
       2,
     )
-    let t2c = mulh3(src[in_off + 2 * 1 + j] + src[in_off + 2 * 5 + j], cos_c1, 2)
+    let t2c = mulh3(
+      src[in_off + 2 * 1 + j] + src[in_off + 2 * 5 + j],
+      cos_c1,
+      2,
+    )
     let t3c = mulh3(
       src[in_off + 2 * 5 + j] - src[in_off + 2 * 7 + j],
       -2 * cos_c7,
@@ -543,7 +613,11 @@ fn imdct36(
     out[out_off + (9 + 8 - j) * sblimit] = mulh3(t1b, win[9 + 8 - j], 1) +
       buf[buf_off + 4 * (9 + 8 - j)]
     out[out_off + j * sblimit] = mulh3(t1b, win[j], 1) + buf[buf_off + 4 * j]
-    buf[buf_off + 4 * (9 + 8 - j)] = mulh3(t0b, win[mdct_buf_size / 2 + 9 + 8 - j], 1)
+    buf[buf_off + 4 * (9 + 8 - j)] = mulh3(
+      t0b,
+      win[mdct_buf_size / 2 + 9 + 8 - j],
+      1,
+    )
     buf[buf_off + 4 * j] = mulh3(t0b, win[mdct_buf_size / 2 + j], 1)
     idx = idx + 4
   }
@@ -563,31 +637,42 @@ fn imdct36(
 // 32-point DCT and synthesis filter
 // ---------------------------------------------------------------------------
 
-///| BF helper (`BF(a,b,c,s)`). */
-fn bf(v : Array[Int], a : Int, b : Int, c : Int, s : Int) -> Unit {
+///|
+/// BF helper (`BF(a,b,c,s)`). */
+fn bf(v : Array[Int32], a : Int32, b : Int32, c : Int32, s : Int32) -> Unit {
   let t0 = v[a] + v[b]
   let t1 = v[a] - v[b]
   v[a] = t0
   v[b] = mulh3(t1, c, 1 << s)
 }
 
-///| BF0 helper (`BF0(a,b,c,s)`). */
-fn bf0(v : Array[Int], tab : Array[Int], a : Int, b : Int, c : Int, s : Int) -> Unit {
+///|
+/// BF0 helper (`BF0(a,b,c,s)`). */
+fn bf0(
+  v : Array[Int32],
+  tab : Array[Int32],
+  a : Int32,
+  b : Int32,
+  c : Int32,
+  s : Int32,
+) -> Unit {
   let t0 = tab[a] + tab[b]
   let t1 = tab[a] - tab[b]
   v[a] = t0
   v[b] = mulh3(t1, c, 1 << s)
 }
 
-///| BF1 helper. */
-fn bf1(v : Array[Int], a : Int, b : Int, c : Int, d : Int) -> Unit {
+///|
+/// BF1 helper. */
+fn bf1(v : Array[Int32], a : Int32, b : Int32, c : Int32, d : Int32) -> Unit {
   bf(v, a, b, 0x5A82799A, 1) // COS4_0 = FIXHR(sqrt(1/2)/2)
   bf(v, c, d, -0x5A82799A, 1)
   v[c] = v[c] + v[d]
 }
 
-///| BF2 helper. */
-fn bf2(v : Array[Int], a : Int, b : Int, c : Int, d : Int) -> Unit {
+///|
+/// BF2 helper. */
+fn bf2(v : Array[Int32], a : Int32, b : Int32, c : Int32, d : Int32) -> Unit {
   bf(v, a, b, 0x5A82799A, 1)
   bf(v, c, d, -0x5A82799A, 1)
   v[c] = v[c] + v[d]
@@ -596,8 +681,14 @@ fn bf2(v : Array[Int], a : Int, b : Int, c : Int, d : Int) -> Unit {
   v[b] = v[b] + v[d]
 }
 
-///| `ff_dct32_fixed`: DCT of 32 subband samples. */
-pub fn dct32(out : Array[Int], out_off : Int, tab : Array[Int], tab_off : Int) -> Unit {
+///|
+/// `ff_dct32_fixed`: DCT of 32 subband samples. */
+pub fn dct32(
+  out : Array[Int32],
+  out_off : Int32,
+  tab : Array[Int32],
+  tab_off : Int32,
+) -> Unit {
   let v = Array::make(32, 0)
   let t = Array::make(32, 0)
   for i = 0; i < 32; i = i + 1 {
@@ -725,8 +816,9 @@ pub fn dct32(out : Array[Int], out_off : Int, tab : Array[Int], tab_off : Int) -
   out[out_off + 31] = v[31]
 }
 
-///| DCT32 constants indexed by the `COSx_y` names above. */
-let dct32_consts : Array[Int] = [
+///|
+/// DCT32 constants indexed by the `COSx_y` names above. */
+let dct32_consts : Array[Int32] = [
   fixhr(0.50060299823519630134 / 2.0),
   fixhr(0.50547095989754365998 / 2.0),
   fixhr(0.51544730992262454697 / 2.0),
@@ -760,16 +852,17 @@ let dct32_consts : Array[Int] = [
   fixhr(0.70710678118654752439 / 2.0),
 ]
 
-///| `ff_mpadsp_apply_window_fixed` (32 output samples at `incr` stride). */
+///|
+/// `ff_mpadsp_apply_window_fixed` (32 output samples at `incr` stride). */
 pub fn apply_window(
-  synth_buf : Array[Int],
-  offset : Int,
-  window : Array[Int],
-  dither : Int,
-  samples : Array[Int],
-  sample_base : Int,
-  incr : Int
-) -> Int {
+  synth_buf : Array[Int32],
+  offset : Int32,
+  window : Array[Int32],
+  dither : Int32,
+  samples : Array[Int32],
+  sample_base : Int32,
+  incr : Int32,
+) -> Int32 {
   // memcpy(synth_buf + 512, synth_buf, 32 * sizeof)
   for i = 0; i < 32; i = i + 1 {
     synth_buf[offset + 512 + i] = synth_buf[offset + i]

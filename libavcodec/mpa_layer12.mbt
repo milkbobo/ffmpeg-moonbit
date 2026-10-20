@@ -21,19 +21,20 @@
 /// when `err_recognition & AV_EF_CRCCHECK`; the 16 CRC bits are skipped, as in
 /// the Layer III port), and free-format streams (rejected by the header parser).
 
-///| `SBLIMIT` as used by the Layer I allocation loops (always 32 subbands). */
-let mpa_layer1_subbands : Int = 32
+///|
+/// `SBLIMIT` as used by the Layer I allocation loops (always 32 subbands). */
+let mpa_layer1_subbands : Int32 = 32
 
 ///|
 /// `ff_mpa_l2_select_table(bitrate, nb_channels, freq, lsf)` — picks one of the
 /// five Layer II bit-allocation tables. `bitrate` is in kbit/s (the C passes
 /// `s->bit_rate / 1000`).
 fn mpa_l2_select_table(
-  bitrate : Int,
-  nb_channels : Int,
-  freq : Int,
-  lsf : Int,
-) -> Int {
+  bitrate : Int32,
+  nb_channels : Int32,
+  freq : Int32,
+  lsf : Int32,
+) -> Int32 {
   let ch_bitrate = bitrate / nb_channels
   if lsf == 0 {
     if (freq == 48000 && ch_bitrate >= 56) ||
@@ -55,7 +56,7 @@ fn mpa_l2_select_table(
 /// `l1_unscale(n, mant, scale_factor)`: undo the Layer I/II quantisation.
 /// `n` is the number of mantissa bits minus one; the mantissa is centred around
 /// `2^n - 1` before being multiplied by the scalefactor-derived multiplier.
-fn mpa_l1_unscale(n : Int, mant : Int, scale_factor : Int) -> Int {
+fn mpa_l1_unscale(n : Int32, mant : Int32, scale_factor : Int32) -> Int32 {
   let ms = mpa_scale_factor_modshift[scale_factor]
   let mod = ms & 3
   let mut shift = ms >> 2
@@ -69,7 +70,11 @@ fn mpa_l1_unscale(n : Int, mant : Int, scale_factor : Int) -> Int {
 ///|
 /// `l2_unscale_group(steps, mant, scale_factor)`: the Layer II grouped
 /// quantiser (3, 5 or 9 steps) shares one multiplier per step count.
-fn mpa_l2_unscale_group(steps : Int, mant : Int, scale_factor : Int) -> Int {
+fn mpa_l2_unscale_group(
+  steps : Int32,
+  mant : Int32,
+  scale_factor : Int32,
+) -> Int32 {
   let ms = mpa_scale_factor_modshift[scale_factor]
   let mod = ms & 3
   let shift = ms >> 2
@@ -80,9 +85,10 @@ fn mpa_l2_unscale_group(steps : Int, mant : Int, scale_factor : Int) -> Int {
   val
 }
 
-///| Fresh `[2][n]` byte-per-sample scratch matrix (no shared inner arrays). */
-fn mpa_matrix2(n : Int) -> Array[Array[Int]] {
-  let rows : Array[Array[Int]] = []
+///|
+/// Fresh `[2][n]` byte-per-sample scratch matrix (no shared inner arrays). */
+fn mpa_matrix2(n : Int32) -> Array[Array[Int32]] {
+  let rows : Array[Array[Int32]] = []
   for _ch = 0; _ch < 2; _ch = _ch + 1 {
     rows.push(Array::make(n, 0))
   }
@@ -98,7 +104,7 @@ fn mpa_decode_layer1(
   dec : Mp3Decoder,
   gb : BitReader,
   h : MpaDecodeHeader,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let nch = h.nb_channels
   let mut bound = mpa_layer1_subbands
   if h.mode == 1 {
@@ -152,8 +158,16 @@ fn mpa_decode_layer1(
       let n = allocation[0][i]
       if n != 0 {
         let mant = gb.read(n + 1).reinterpret_as_int()
-        dec.sb_samples[0][j * 32 + i] = mpa_l1_unscale(n, mant, scale_factors[0][i])
-        dec.sb_samples[1][j * 32 + i] = mpa_l1_unscale(n, mant, scale_factors[1][i])
+        dec.sb_samples[0][j * 32 + i] = mpa_l1_unscale(
+          n,
+          mant,
+          scale_factors[0][i],
+        )
+        dec.sb_samples[1][j * 32 + i] = mpa_l1_unscale(
+          n,
+          mant,
+          scale_factors[1][i],
+        )
       } else {
         dec.sb_samples[0][j * 32 + i] = 0
         dec.sb_samples[1][j * 32 + i] = 0
@@ -172,7 +186,7 @@ fn mpa_decode_layer2(
   dec : Mp3Decoder,
   gb : BitReader,
   h : MpaDecodeHeader,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let nch = h.nb_channels
   let table = mpa_l2_select_table(h.bit_rate / 1000, nch, h.sample_rate, h.lsf)
   let sblimit_tab = mpa_sblimit_table[table]
@@ -309,36 +323,24 @@ fn mpa_decode_layer2(
             let mant = v % steps
             let v1 = v / steps
             dec.sb_samples[0][(k * 12 + l) * 32 + i] = mpa_l2_unscale_group(
-              steps,
-              mant,
-              scale0,
+              steps, mant, scale0,
             )
             dec.sb_samples[1][(k * 12 + l) * 32 + i] = mpa_l2_unscale_group(
-              steps,
-              mant,
-              scale1,
+              steps, mant, scale1,
             )
             let mant2 = v1 % steps
             let v2 = v1 / steps
             dec.sb_samples[0][(k * 12 + l + 1) * 32 + i] = mpa_l2_unscale_group(
-              steps,
-              mant2,
-              scale0,
+              steps, mant2, scale0,
             )
             dec.sb_samples[1][(k * 12 + l + 1) * 32 + i] = mpa_l2_unscale_group(
-              steps,
-              mant2,
-              scale1,
+              steps, mant2, scale1,
             )
             dec.sb_samples[0][(k * 12 + l + 2) * 32 + i] = mpa_l2_unscale_group(
-              steps,
-              v2,
-              scale0,
+              steps, v2, scale0,
             )
             dec.sb_samples[1][(k * 12 + l + 2) * 32 + i] = mpa_l2_unscale_group(
-              steps,
-              v2,
-              scale1,
+              steps, v2, scale1,
             )
           } else {
             for m = 0; m < 3; m = m + 1 {

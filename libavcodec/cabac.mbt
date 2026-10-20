@@ -21,24 +21,30 @@
 ///   * `ff_ctz(low)` is computed by a loop (`h264_cabac_ctz`); the C's
 ///     `HAVE_FAST_CLZ` path is an optimisation only.
 
-///| `H264_NORM_SHIFT_OFFSET`. */
-let h264_cabac_norm_shift_offset : Int = 0
+///|
+/// `H264_NORM_SHIFT_OFFSET`. */
+let h264_cabac_norm_shift_offset : Int32 = 0
 
-///| `H264_LPS_RANGE_OFFSET`. */
-let h264_cabac_lps_range_offset : Int = 512
+///|
+/// `H264_LPS_RANGE_OFFSET`. */
+let h264_cabac_lps_range_offset : Int32 = 512
 
-///| `H264_MLPS_STATE_OFFSET`. */
-let h264_cabac_mlps_state_offset : Int = 1024
+///|
+/// `H264_MLPS_STATE_OFFSET`. */
+let h264_cabac_mlps_state_offset : Int32 = 1024
 
-///| `CABAC_BITS`. */
-let cabac_bits : Int = 16
+///|
+/// `CABAC_BITS`. */
+let cabac_bits : Int32 = 16
 
-///| `CABAC_MASK`. */
-let cabac_mask : Int = 0xFFFF
+///|
+/// `CABAC_MASK`. */
+let cabac_mask : Int32 = 0xFFFF
 
-///| `ff_ctz` for a value with at least one set bit (the C only calls it on
+///|
+/// `ff_ctz` for a value with at least one set bit (the C only calls it on
 /// `low`, which always has a guard bit set when `refill2` runs). */
-fn h264_cabac_ctz(v : Int) -> Int {
+fn h264_cabac_ctz(v : Int32) -> Int32 {
   let mut n = 0
   while n < 32 && ((v >> n) & 1) == 0 {
     n = n + 1
@@ -46,18 +52,21 @@ fn h264_cabac_ctz(v : Int) -> Int {
   n
 }
 
-///| `ff_h264_norm_shift[range]`. */
-fn h264_cabac_norm_shift(range : Int) -> Int {
+///|
+/// `ff_h264_norm_shift[range]`. */
+fn h264_cabac_norm_shift(range : Int32) -> Int32 {
   h264_cabac_tables[h264_cabac_norm_shift_offset + range]
 }
 
-///| `ff_h264_lps_range[2*(range&0xC0) + state]`. */
-fn h264_cabac_lps_range(range : Int, state : Int) -> Int {
+///|
+/// `ff_h264_lps_range[2*(range&0xC0) + state]`. */
+fn h264_cabac_lps_range(range : Int32, state : Int32) -> Int32 {
   h264_cabac_tables[h264_cabac_lps_range_offset + 2 * (range & 0xC0) + state]
 }
 
-///| `(ff_h264_mlps_state+128)[s]`: the next context state after coding `s`. */
-fn h264_cabac_mlps_state(s : Int) -> Int {
+///|
+/// `(ff_h264_mlps_state+128)[s]`: the next context state after coding `s`. */
+fn h264_cabac_mlps_state(s : Int32) -> Int32 {
   h264_cabac_tables[h264_cabac_mlps_state_offset + 128 + s]
 }
 
@@ -65,15 +74,16 @@ fn h264_cabac_mlps_state(s : Int) -> Int {
 /// `CABACContext`. `start` is `bytestream_start`, `pos` the current
 /// `bytestream` (in bytes, relative to the buffer).
 pub struct CabacContext {
-  mut low : Int
-  mut range : Int
+  mut low : Int32
+  mut range : Int32
   bytes : Bytes
-  start : Int
-  mut pos : Int
+  start : Int32
+  mut pos : Int32
 }
 
-///| Byte at `off` bytes from the cursor, zero past the end (C padding). */
-fn CabacContext::byte_at(self : CabacContext, off : Int) -> Int {
+///|
+/// Byte at `off` bytes from the cursor, zero past the end (C padding). */
+fn CabacContext::byte_at(self : CabacContext, off : Int32) -> Int32 {
   let i = self.pos + off
   if i < 0 || i >= self.bytes.length() {
     0
@@ -89,18 +99,19 @@ fn CabacContext::byte_at(self : CabacContext, off : Int) -> Int {
 /// `AVERROR_INVALIDDATA`.
 pub fn ff_init_cabac_decoder(
   bytes : Bytes,
-  off : Int,
+  off : Int32,
 ) -> Result[CabacContext, String] {
-  let c : CabacContext = { low: 0, range: 0x1FE, bytes, start: off, pos: off }
+  let c : CabacContext = { low: 0, range: 0x1FE, bytes, start: off, pos: off, }
   c.low = (c.byte_at(0) << 18) + (c.byte_at(1) << 10) + (1 << 9)
   c.pos = off + 2
-  if (c.range << (cabac_bits + 1)) < c.low {
+  if c.range << (cabac_bits + 1) < c.low {
     return Err("EINVAL")
   }
   Ok(c)
 }
 
-///| `refill`. */
+///|
+/// `refill`. */
 fn CabacContext::refill(self : CabacContext) -> Unit {
   self.low = self.low + ((self.byte_at(0) << 9) + (self.byte_at(1) << 1))
   self.low = self.low - cabac_mask
@@ -120,14 +131,15 @@ fn CabacContext::refill2(self : CabacContext) -> Unit {
   if i >= 0 {
     self.low = self.low + (x << i)
   } else {
-    self.low = self.low + (x >> (-i))
+    self.low = self.low + (x >> -i)
   }
   if self.pos < self.bytes.length() {
     self.pos = self.pos + cabac_bits / 8
   }
 }
 
-///| `renorm_cabac_decoder_once`. */
+///|
+/// `renorm_cabac_decoder_once`. */
 fn CabacContext::renorm_once(self : CabacContext) -> Unit {
   // `shift = (uint32_t)(range - 0x100) >> 31`, i.e. 1 when range <= 0xFF.
   let shift = (self.range - 0x100).reinterpret_as_uint() >> 31
@@ -144,9 +156,9 @@ fn CabacContext::renorm_once(self : CabacContext) -> Unit {
 /// the context `ctx` (`state` in the C), updating `states[ctx]`.
 pub fn CabacContext::get_cabac(
   self : CabacContext,
-  states : Array[Int],
-  ctx : Int,
-) -> Int {
+  states : Array[Int32],
+  ctx : Int32,
+) -> Int32 {
   let mut s = states[ctx]
   let range_lps = h264_cabac_lps_range(self.range, s)
   self.range = self.range - range_lps
@@ -165,8 +177,9 @@ pub fn CabacContext::get_cabac(
   bit
 }
 
-///| `get_cabac_bypass`. */
-pub fn CabacContext::get_cabac_bypass(self : CabacContext) -> Int {
+///|
+/// `get_cabac_bypass`. */
+pub fn CabacContext::get_cabac_bypass(self : CabacContext) -> Int32 {
   self.low = self.low + self.low
   if (self.low & cabac_mask) == 0 {
     self.refill()
@@ -180,8 +193,12 @@ pub fn CabacContext::get_cabac_bypass(self : CabacContext) -> Int {
   }
 }
 
-///| `get_cabac_bypass_sign`: bypass bit that also flips the sign of `val`. */
-pub fn CabacContext::get_cabac_bypass_sign(self : CabacContext, val : Int) -> Int {
+///|
+/// `get_cabac_bypass_sign`: bypass bit that also flips the sign of `val`. */
+pub fn CabacContext::get_cabac_bypass_sign(
+  self : CabacContext,
+  val : Int32,
+) -> Int32 {
   self.low = self.low + self.low
   if (self.low & cabac_mask) == 0 {
     self.refill()
@@ -198,9 +215,9 @@ pub fn CabacContext::get_cabac_bypass_sign(self : CabacContext, val : Int) -> In
 /// `get_cabac_terminate`: returns 0 when the terminating bit is 0, otherwise
 /// the number of bytes consumed (always > 0), which callers treat as "end of
 /// slice".
-pub fn CabacContext::get_cabac_terminate(self : CabacContext) -> Int {
+pub fn CabacContext::get_cabac_terminate(self : CabacContext) -> Int32 {
   self.range = self.range - 2
-  if self.low < (self.range << (cabac_bits + 1)) {
+  if self.low < self.range << (cabac_bits + 1) {
     self.renorm_once()
     0
   } else {
@@ -213,11 +230,11 @@ pub fn CabacContext::get_cabac_terminate(self : CabacContext) -> Int {
 /// the `(m, n)` table and the slice QP. `slice_type_nos` is 2 for I slices and
 /// 0 for P slices; `cabac_init_idc` only matters for the latter.
 pub fn ff_h264_init_cabac_states(
-  slice_qp : Int,
-  bit_depth_luma : Int,
-  slice_type_nos : Int,
-  cabac_init_idc : Int,
-) -> Array[Int] {
+  slice_qp : Int32,
+  bit_depth_luma : Int32,
+  slice_type_nos : Int32,
+  cabac_init_idc : Int32,
+) -> Array[Int32] {
   let qp = if slice_qp - 6 * (bit_depth_luma - 8) < 0 {
     0
   } else if slice_qp - 6 * (bit_depth_luma - 8) > 51 {
@@ -237,7 +254,7 @@ pub fn ff_h264_init_cabac_states(
     }
     h264_cabac_context_init_pb[idc]
   }
-  let out : Array[Int] = Array::make(1024, 0)
+  let out : Array[Int32] = Array::make(1024, 0)
   for i = 0; i < 1024; i = i + 1 {
     let mut pre = 2 * (((tab[i][0] * qp) >> 4) + tab[i][1]) - 127
     pre = pre ^ (pre >> 31)

@@ -8,9 +8,9 @@
 /// Expected YUV is FFmpeg's `-skip_loop_filter all` output: this port does
 /// not implement the in-loop deblocking filter yet.
 
-///| `h264_baseline_nodeblock.h264` (3111 bytes).
-let h264_baseline_b64 : Bytes =
-  b"AAAAAWdCwB7cR7ARAAADAAEAAAMAAg8WL4AAAAABaM4PLIAAAAEGBf//S9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
+///|
+/// `h264_baseline_nodeblock.h264` (3111 bytes).
+let h264_baseline_b64 : Bytes = b"AAAAAWdCwB7cR7ARAAADAAEAAAMAAg8WL4AAAAABaM4PLIAAAAEGBf//S9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
   b"LSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2" +
   b"NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJt" +
   b"ZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4" +
@@ -53,10 +53,9 @@ let h264_baseline_b64 : Bytes =
   b"OAATAICZYBsgGlUDBNPtZYIZgPMpYBGRhOPhSmv3aywACQAAgAscAwD/Y/2AIWhCPPEVqXvd8IAQAUoAYEAAIEoDAAFCYFFwe0vD" +
   b"HwEAmFlkEM1zAVhEOOvyikPPU8ogAAkAUESyAABAEAAOAKuc"
 
-
-///| Smooth `gradients` baseline vector (I16x16-heavy), 64x48, two IDR frames.
-let h264_smooth_b64 : Bytes =
-  b"AAAAAWdCwArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaM4PLIAAAAEGBf//S9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
+///|
+/// Smooth `gradients` baseline vector (I16x16-heavy), 64x48, two IDR frames.
+let h264_smooth_b64 : Bytes = b"AAAAAWdCwArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaM4PLIAAAAEGBf//S9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
   b"LSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2" +
   b"NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJt" +
   b"ZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4" +
@@ -82,9 +81,9 @@ let h264_smooth_b64 : Bytes =
   b"jLr5DhebBbzkSn1IGtCtFal+LwxIHGzViwIkB0tI6KSrB43jbg9wP8ASvKeLpETkWX+NKCexWqEK8R4pIOS3CajMBNJ9iAyMI3oC" +
   b"HLn25+R6AwAOMAALoIAA+ABYAAEDEFihYEw3PzNFUAAMBB77AhVSAJgxATwKQSEIng1L8A=="
 
-///| Flat-color baseline vector (I16x16 DC, no residual), 64x48, two IDR frames.
-let h264_flat_b64 : Bytes =
-  b"AAAAAWdCwArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaM4PLIAAAAEGBf//S9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
+///|
+/// Flat-color baseline vector (I16x16 DC, no residual), 64x48, two IDR frames.
+let h264_flat_b64 : Bytes = b"AAAAAWdCwArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaM4PLIAAAAEGBf//S9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
   b"LSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2" +
   b"NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJt" +
   b"ZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4" +
@@ -95,9 +94,9 @@ let h264_flat_b64 : Bytes =
   b"cD00IGlwX3JhdGlvPTEuNDAgYXE9MToxLjAwAIAAAAFliIQEvEYoAAgoRwABHWjgACJDJycnXXXXXXXXgAAAAAFnQsAK3EewEQAA" +
   b"AwABAAADAAIPEieAAAAAAWjODyyAAAABZYiCAX8RigACFVHAAEp6OAAI0MnJyddddddddeA="
 
-///| Cropped 88x56 baseline vector: 6x4 macroblocks coded, SPS frame cropping to 88x56, deblocking enabled in the bitstream (3639 bytes).
-let h264_crop_b64 : Bytes =
-  b"AAAAAWdCwArcYnllwEQAAAMABAAAAwAIPEieAAAAAWjOMsgAAAEGBf//J9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
+///|
+/// Cropped 88x56 baseline vector: 6x4 macroblocks coded, SPS frame cropping to 88x56, deblocking enabled in the bitstream (3639 bytes).
+let h264_crop_b64 : Bytes = b"AAAAAWdCwArcYnllwEQAAAMABAAAAwAIPEieAAAAAWjOMsgAAAEGBf//J9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
   b"LSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2" +
   b"NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJt" +
   b"ZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4" +
@@ -146,9 +145,10 @@ let h264_crop_b64 : Bytes =
   b"kJ36EFI2yAAEGG3OAYf9hr6Z4MBZkEAAIAQBgFjYQmExAAQcZLD0RRDeFKnYqMsAA4AAIDrBO5aW08EY6AmOAYB/oFngcIcKZBCQ" +
   b"CFCAAIBwac8AiO2hdqWIAmMAHZic7CMaJ3algAEgADscAwD/gs4CYIRRyK1eBg8gQAAgGgAMAYNkAIxcsARedywjoZBCNcIAEMJl" +
   b"gBOZDM7CNcIR357IAAEAIAAgAi4LVJMv8GmubtThqmJ3M/pnTqnw"
-///| 80x64 baseline vector at qp=40 (coarse quantisation, long zero runs) (2283 bytes).
-let h264_qp40_b64 : Bytes =
-  b"AAAAAWdCwArcUmwEQAAAAwBAAAADAIPEieAAAAABaM4DksgAAAEGBf//J9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
+
+///|
+/// 80x64 baseline vector at qp=40 (coarse quantisation, long zero runs) (2283 bytes).
+let h264_qp40_b64 : Bytes = b"AAAAAWdCwArcUmwEQAAAAwBAAAADAIPEieAAAAABaM4DksgAAAEGBf//J9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
   b"LSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2" +
   b"NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJt" +
   b"ZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4" +
@@ -179,9 +179,10 @@ let h264_qp40_b64 : Bytes =
   b"W3RWpBLQtPQlOZLFQRMUsCdLf48bHI/cq0TXthh5/CPw2CzxAqQKLvYVUSZyUDc8aiRDsPy5IACLVzgGH/QLPFDAqwgu7dCBH1ZW" +
   b"fY84tAQpu048DY4p8MsI/iqD9Jv4NXjmEAASOKRgAC6i3yGRQGHGca2Qz957+FiS+x2P7HLT8kX/gS60E3OP/Ag2HfA1YXDeahl3" +
   b"hENyBAAgRh/0hDoQ2x9P14YAHzcqmD5jfsBH5mnSQQaI"
-///| 64x48 baseline vector at qp=10 (fine quantisation, dense residual) (4906 bytes).
-let h264_qp10_b64 : Bytes =
-  b"AAAAAWdCwArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaM4BDLIAAAEGBf//J9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
+
+///|
+/// 64x48 baseline vector at qp=10 (fine quantisation, dense residual) (4906 bytes).
+let h264_qp10_b64 : Bytes = b"AAAAAWdCwArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaM4BDLIAAAEGBf//J9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
   b"LSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2" +
   b"NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJt" +
   b"ZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4" +
@@ -248,9 +249,9 @@ let h264_qp10_b64 : Bytes =
   b"hzAocIRa5BtqCAAEBUAAQkwAQAAINQQAAiKgACCYAAIxQABUBcTFOUABWM5ZYAcB2wgAA+ABgHyyAADgAOAq5gKABgBgUKkbVGaG" +
   b"iojFvhHVCAABA8AAEFkAAQQJZAAAhFAACGuAAIcFzg=="
 
-///| Baseline stream with keyint=10: frame 0 is IDR, frames 1+ are P slices (must be rejected, not decoded) (2061 bytes).
-let h264_pslice_b64 : Bytes =
-  b"AAAAAWdCwArZBHsBEAAAAwAQAAADACDxImSAAAAAAWjLjLIAAAEGBf//KNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
+///|
+/// Baseline stream with keyint=10: frame 0 is IDR, frames 1+ are P slices (must be rejected, not decoded) (2061 bytes).
+let h264_pslice_b64 : Bytes = b"AAAAAWdCwArZBHsBEAAAAwAQAAADACDxImSAAAAAAWjLjLIAAAEGBf//KNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUg" +
   b"LSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2" +
   b"NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MyBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJt" +
   b"ZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4" +
@@ -278,9 +279,10 @@ let h264_pslice_b64 : Bytes =
   b"/7hm/KALZEP+dA5GT/9y/gh+GvgwUyCU0ETTmIzaH2vwCK20F2v+GZYDlBNlhEiIKiUcFpoF2v+ZFpoLtf88AAAAAUGaVH3f3SfC" +
   b"/gAJjiEuyvi+k3mLXeoTm4fk/YAHCk02R3HXIWARlTaf8XwF1hbxVKy5rAE16Xv+/YCzh/VGIVFeb7DnAQrSdaiEIrIK2ngAYfPv" +
   b"Qi/yeGpCEVAWAAThMpp1qIhlZBACY5t73lbH3IU//wQyfNqg"
-///| Baseline stream with slices=2: two slices per picture (second slice has first_mb_in_slice != 0, must be rejected) (1801 bytes).
-let h264_multislice_b64 : Bytes =
-  b"AAAAAWdCwArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaM4yyAAAAQYF//8n3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAt" +
+
+///|
+/// Baseline stream with slices=2: two slices per picture (second slice has first_mb_in_slice != 0, must be rejected) (1801 bytes).
+let h264_multislice_b64 : Bytes = b"AAAAAWdCwArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaM4yyAAAAQYF//8n3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAt" +
   b"IEguMjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjUgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0" +
   b"Lmh0bWwgLSBvcHRpb25zOiBjYWJhYz0wIHJlZj0xIGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDE6MHgxMTEgbWU9aGV4IHN1Ym1l" +
   b"PTcgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4" +
@@ -305,9 +307,10 @@ let h264_multislice_b64 : Bytes =
   b"IAAQYbLIAAJgMH3PgH/8NRQABAFwYCRlxQA4HCHCmQQgACDSMAAIdAQABBAAVYcAEGGywEoA78Mf3ayxAEwUVLAKzFzsJyRO7WWA" +
   b"ASAAOx//+OwYIkGEwQijurV+UDfhAmBA8IAAQEQABAUAAEAQABPcuOSeiE4EIiyyCGa58ZEM7qIxwlHG3iAAg4yWQAAIAQABQBFz" +
   b"gA=="
-///| High 4:2:2 profile stream, yuv422p (must be rejected) (2080 bytes).
-let h264_422_b64 : Bytes =
-  b"AAAAAWd6EAq8uI9gIgAAAwACAAADAAQIAAAAAWjOMsgAAAEGBf//J9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBI" +
+
+///|
+/// High 4:2:2 profile stream, yuv422p (must be rejected) (2080 bytes).
+let h264_422_b64 : Bytes = b"AAAAAWd6EAq8uI9gIgAAAwACAAADAAQIAAAAAWjOMsgAAAEGBf//J9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBI" +
   b"LjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5o" +
   b"dG1sIC0gb3B0aW9uczogY2FiYWM9MCByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJtZT03" +
   b"IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRj" +
@@ -335,9 +338,10 @@ let h264_422_b64 : Bytes =
   b"sf8BMEIo5Fave74AdYMBBigLBiAHAIgZaw7ol4G5sAAQANnjwABAKZEZLmHjJc+A8huYQR3PHiyAAEGG3MOAAgw25+GAf7DXBgLM" +
   b"vgcIcKZACYICj+A6HAAcLASbBd/YoAAgFsCogACAKjSjoExB0CYxSwDiIM09pRwAIAKxBwAIAKxwDAP9gr+AmCEUcitQAdYMd5gP" +
   b"DgAcAAuDgG4wAp8x4G5sAD2ePABZEbXMPG1z4DwBDMNE/azx4AAgFMgAA0ACgdcw4ABoAOB1zg=="
-///| High 10 profile stream, yuv420p10le (must be rejected) (2446 bytes).
-let h264_10bit_b64 : Bytes =
-  b"AAAAAWduEAqmy4j2AiAAAAMAIAAAAwBAgAAAAAFozgMyyAAAAQYF//8n3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAt" +
+
+///|
+/// High 10 profile stream, yuv420p10le (must be rejected) (2446 bytes).
+let h264_10bit_b64 : Bytes = b"AAAAAWduEAqmy4j2AiAAAAMAIAAAAwBAgAAAAAFozgMyyAAAAQYF//8n3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAt" +
   b"IEguMjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjUgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0" +
   b"Lmh0bWwgLSBvcHRpb25zOiBjYWJhYz0wIHJlZj0xIGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDE6MHgxMTEgbWU9aGV4IHN1Ym1l" +
   b"PTcgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4" +

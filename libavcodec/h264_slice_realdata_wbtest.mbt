@@ -6,17 +6,17 @@
 ///   no-deblock:slices=1:scenecut=0" h264_baseline_nodeblock.h264
 /// Expected slice fields are FFmpeg trace_headers output.
 
-///| 26-byte NAL including its Annex B start code.
-let h264_slice_sps_b64 : Bytes =
-  b"AAAAAWdCwB7cR7ARAAADAAEAAAMAAg8WL4A="
+///|
+/// 26-byte NAL including its Annex B start code.
+let h264_slice_sps_b64 : Bytes = b"AAAAAWdCwB7cR7ARAAADAAEAAAMAAg8WL4A="
 
-///| 9-byte NAL including its Annex B start code.
-let h264_slice_pps_b64 : Bytes =
-  b"AAAAAWjODyyA"
+///|
+/// 9-byte NAL including its Annex B start code.
+let h264_slice_pps_b64 : Bytes = b"AAAAAWjODyyA"
 
-///| 1075-byte NAL including its Annex B start code.
-let h264_slice_idr_b64 : Bytes =
-  b"AAABZYiEN8QiKgDAhD8BCmRAACATWoMMAB4vGdGNHQL7v/xMDiBAzL3UYkcne9cnK8ZcxI+F9n/4n2SyzIfI5Gf/YIGnxUsG0qf7" +
+///|
+/// 1075-byte NAL including its Annex B start code.
+let h264_slice_idr_b64 : Bytes = b"AAABZYiEN8QiKgDAhD8BCmRAACATWoMMAB4vGdGNHQL7v/xMDiBAzL3UYkcne9cnK8ZcxI+F9n/4n2SyzIfI5Gf/YIGnxUsG0qf7" +
   b"64ahhOT5vHq9dThi8jytPV6QAaRmSOB/f3/tA47Pq4N2/3wIAAwAMFMhIAMQDAAT5mFWY6BCL69MtoDqJRkjbiA5v/9pwCuIbWI0" +
   b"gA3XFFVjrZoLm58Cdoyd6wEIx/9+YQdyTlh/Cf3RFQEfa7U+AhI2OJWr+TImLvf9hvh4AFLzHkaLjqJ/+uNQxOT5fHq8DvZMho6a" +
   b"vUH5mSC2+f7ZyYuiuyDqBPbJFGdvNSU6BsQpt96cTHkVkQdUArQ8biP51gQTCBgUypj5kAzwfMwZw5MTyiWmpAr//3lnTb0OVP/3" +
@@ -31,4 +31,3 @@ let h264_slice_idr_b64 : Bytes =
   b"uFgAFQABACY4BgHj4a+AN6E4rq1fcIAAiEFHQgAgCvBATlJPRSKAgAhTpZBGS5gMykRmYTHEaVMsgABBh9z8MMf2N4MEmXwOEHOZ" +
   b"TwkAAQFWAAEBgIAPB+DgCEPlgNQGcYuO8y0EwS5YBNkx4yO+7WWAQDscAwD/f4CYicV1avv73fCEADMAGCAAEAUIA5sJ3V4QsAQk" +
   b"OWRMVzAXIjGvIRHF70EAEKdLIAAKAFBFzg=="
-

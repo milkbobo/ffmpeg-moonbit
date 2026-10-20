@@ -8,7 +8,6 @@
 /// the `ffprobe -show_packets` sizes 216 (AAC) and 417/418 (MP3).
 /// The MPEG-2 LSF and free-format cases are constructed from the header
 /// layout in ISO/IEC 11172-3 / 13818-3 and decoded by arithmetic.
-
 test "audio_headers: real ADTS AAC-LC 44.1 kHz mono header" {
   let hdr = ff_adts_header_parse_buf(b"\xFF\xF1\x50\x40\x1B\x1F\xFC").unwrap()
   assert_eq(hdr.object_type, 2) // AAC-LC
@@ -22,6 +21,7 @@ test "audio_headers: real ADTS AAC-LC 44.1 kHz mono header" {
   assert_eq(hdr.bit_rate, 74418) // 216*8*44100/1024
 }
 
+///|
 test "audio_headers: ADTS rejections" {
   match ff_adts_header_parse_buf(b"\x00\x00\x00\x00\x00\x00\x00") {
     Err(e) => assert_eq(e, "AAC_SYNC")
@@ -40,6 +40,7 @@ test "audio_headers: ADTS rejections" {
   assert_true(ff_adts_header_parse_buf(b"\xFF\xF1\x50") is Err(_))
 }
 
+///|
 test "audio_headers: real MPEG-1 Layer III 128 kbps 44.1 kHz mono" {
   let header = 0xFFFB90C0U
   assert_true(ff_mpa_check_header(header))
@@ -60,6 +61,7 @@ test "audio_headers: real MPEG-1 Layer III 128 kbps 44.1 kHz mono" {
   assert_eq(info.channels, 1)
 }
 
+///|
 test "audio_headers: MPEG-2 LSF Layer III and free format" {
   // MPEG-2, Layer III, 64 kbps, 22050 Hz: 144000*64/(22050<<1) = 208.
   let h = avpriv_mpegaudio_decode_header(0xFFF38000U).unwrap()
@@ -78,6 +80,7 @@ test "audio_headers: MPEG-2 LSF Layer III and free format" {
   assert_eq(f.bit_rate, 0)
 }
 
+///|
 test "audio_headers: header check rejects invalid layers/rates" {
   assert_true(!ff_mpa_check_header(0xFFE00000U)) // layer 0
   assert_true(!ff_mpa_check_header(0xFFFFF000U)) // bitrate index 15

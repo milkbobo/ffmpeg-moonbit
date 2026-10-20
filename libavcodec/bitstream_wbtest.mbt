@@ -6,7 +6,6 @@
 /// `011`, `00100`, ... enumerate 0, 1, 2, 3, ...; the signed form maps
 /// 1, 2, 3, 4... to 0, 1, -1, 2... . Bit-position and overread checks follow
 /// `get_bits.h`'s documented `get_bits_left` semantics.
-
 test "bitstream: get_bits MSB-first and position accounting" {
   let b = b"\xB5\x00\xA0" // 1011 0101 0000 0000 1010 0000
   let gb = BitReader::new(b)
@@ -20,6 +19,7 @@ test "bitstream: get_bits MSB-first and position accounting" {
   assert_eq(gb.bytesize(true), 3)
 }
 
+///|
 test "bitstream: show/peek does not consume, skip and align do" {
   let gb = BitReader::new(b"\x12\x34\x56")
   assert_eq(gb.show(4), 0x1U)
@@ -31,6 +31,7 @@ test "bitstream: show/peek does not consume, skip and align do" {
   assert_eq(gb.read(8), 0x34U)
 }
 
+///|
 test "bitstream: reads past the end return zero and go negative" {
   let gb = BitReader::with_size(b"\x80", 8)
   assert_eq(gb.read(8), 0x80U)
@@ -40,6 +41,7 @@ test "bitstream: reads past the end return zero and go negative" {
   assert_eq(gb.bits_left(), -4)
 }
 
+///|
 test "bitstream: unsigned Exp-Golomb H.264 Table 9-1" {
   // 1 010 011 00100 00101 00110 00111 0001000
   // = 1010 0110 0100 0010 1001 1000 1110 0010 00
@@ -54,6 +56,7 @@ test "bitstream: unsigned Exp-Golomb H.264 Table 9-1" {
   assert_eq(gb.read_ue(), 7) // 0001000
 }
 
+///|
 test "bitstream: signed Exp-Golomb H.264 Table 9-1" {
   // se mapping: ue 0→0, 1→1, 2→-1, 3→2, 4→-2, 5→3
   // 1 010 011 00100 00101 00110 = 1010 0110 0100 0010 1001 10
@@ -66,6 +69,7 @@ test "bitstream: signed Exp-Golomb H.264 Table 9-1" {
   assert_eq(gb.read_se(), 3)
 }
 
+///|
 test "bitstream: ue long handles values beyond 31 and the zero window" {
   // ue(32) = 00000100001 (5 leading zeros, 6-bit suffix 100001=33)
   // followed by ue(0) = 1: 000001000011
@@ -79,6 +83,7 @@ test "bitstream: ue long handles values beyond 31 and the zero window" {
   assert_eq(z.read_ue_long(), 0x3FFFFFFFUL)
 }
 
+///|
 test "bitstream: ue overread is invalid" {
   let gb = BitReader::new(b"\x00\x00\x00\x00")
   // AVERROR_INVALIDDATA's role: outside 0..8190 and propagated by read_se.
@@ -87,6 +92,7 @@ test "bitstream: ue overread is invalid" {
   assert_eq(gb2.read_se(), -2147483648)
 }
 
+///|
 test "bitstream: ctz8" {
   assert_eq(ctz8(1), 0)
   assert_eq(ctz8(2), 1)

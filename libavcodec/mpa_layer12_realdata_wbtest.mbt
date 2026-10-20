@@ -31,9 +31,9 @@
 /// `-c:a mp2` selects the fixed decoder on both sides; `mp2float` would produce
 /// different samples, so these vectors pin the integer path.
 
-///| Layer II stereo 44.1 kHz 192 kbit/s: 3761 bytes, 6 frames of 1152 samples, 44100 Hz, 2 ch.
-let mp2_stereo_44_192_b64 : Bytes =
-  b"//2gBGZEQ0QzVUQzMzNDjbbkbJAAAAAAAAAACvDMw///////GJPaPKXq2Wp2YsXt" +
+///|
+/// Layer II stereo 44.1 kHz 192 kbit/s: 3761 bytes, 6 frames of 1152 samples, 44100 Hz, 2 ch.
+let mp2_stereo_44_192_b64 : Bytes = b"//2gBGZEQ0QzVUQzMzNDjbbkbJAAAAAAAAAACvDMw///////GJPaPKXq2Wp2YsXt" +
   b"wcvctxbzbz2gz2fyerdthshtg1f1kyj0ixhzlylyj1j2lzl1lsktltlufv379+/e" +
   b"973ve97u62LY2227u7uti2NttttttttrY21sbbbbbbba2LY2221r9++fv3z3Se+D" +
   b"3Qd3RtG2223eHeFjWxtttttttttY22tjbbbbbbbWxbG222tfNuDqDvN1abbR3qdy" +
@@ -113,9 +113,9 @@ let mp2_stereo_44_192_b64 : Bytes =
   b"ttttttrG222222222211XVtttrT655KNwuURtUAFmBSpSlQKBAdgdHScCzWa0Wmq" +
   b"1T3gyBwOBQIGgw4DgOazhAA="
 
-///| Layer II mono 44.1 kHz 64 kbit/s: 1253 bytes, 6 frames of 1152 samples, 44100 Hz, 1 ch.
-let mp2_mono_44_64_b64 : Bytes =
-  b"//1AxEMiExEREkogAAAAs//8/zFH3L+HcYc4NZdo758Jdadp9s6s6NK86bnve7u2" +
+///|
+/// Layer II mono 44.1 kHz 64 kbit/s: 1253 bytes, 6 frames of 1152 samples, 44100 Hz, 1 ch.
+let mp2_mono_44_64_b64 : Bytes = b"//1AxEMiExEREkogAAAAs//8/zFH3L+HcYc4NZdo758Jdadp9s6s6NK86bnve7u2" +
   b"3zW21rWta1r5r3vdobb5rba1rWta1817PHynZqJZ1UWElIhkTAO5Z42+a22ta1rW" +
   b"tfNmDGsWbnGti1HZG42vVXBTXFttTx0ioMvALXIdAjkg22sLYRcGxmpzcPBMqxbb" +
   b"p8kYJ5NXS1mTxUzgpNC/WJW9t7EyMT5BX0kohe7SCwTLhtoh8wS6YgEPjYy1DpyY" +
@@ -143,9 +143,9 @@ let mp2_mono_44_64_b64 : Bytes =
   b"DbfNWxrWta1rXzQT27Q23zVsa1rWta18wL+wztJ81Y2ta1rWtfNKp20gMaqfhD4I" +
   b"kpUljwA="
 
-///| Layer II joint stereo 32 kHz 64 kbit/s: 1728 bytes, 6 frames of 1152 samples, 32000 Hz, 2 ch.
-let mp2_jstereo_32_64_b64 : Bytes =
-  b"//1IBFUzbSIaJAJJJJugwz///HOXLIVozTo2WuVu0btwazZx1ezdygsg2f2ezizi" +
+///|
+/// Layer II joint stereo 32 kHz 64 kbit/s: 1728 bytes, 6 frames of 1152 samples, 32000 Hz, 2 ch.
+let mp2_jstereo_32_64_b64 : Bytes = b"//1IBFUzbSIaJAJJJJugwz///HOXLIVozTo2WuVu0btwazZx1ezdygsg2f2ezizi" +
   b"zgzg1e973vWxbFsWx8+atj5rWta1rWte973RWxbFsWx8+atj5rWta1rWtc7hvSX2" +
   b"p7StNq1Ex8itSlhCUlKFws3Qk6nF2XZ8+atj5rWta1rWto9WSREinFwXA62ZGWE9" +
   b"GDed13XyL2BzV2pFsWzO+PEL5UjEeWFrwDpFx0papFsWxQ+c576cqCYS7YajM9hV" +
@@ -182,9 +182,9 @@ let mp2_jstereo_32_64_b64 : Bytes =
   b"Hg68kUngTg/rtYYMMYyiEzq9luu9t6YOuDm9StI+fWsQjW2s1pYOE1qQLUeZ5wHR" +
   b"ePFKhBjFrc573vc9bFsWta3zWvnzWta1rWta973veti2LYtj5rXz5rWta1rWtAAA"
 
-///| Layer II MPEG-2 LSF stereo 24 kHz 64 kbit/s: 1920 bytes, 5 frames of 1152 samples, 24000 Hz, 2 ch.
-let mp2_lsf_24_64_b64 : Bytes =
-  b"//WEBGZDMyIlokAkklVWlAAAAAAAAAIowAPzz///zEKcRyE5+TklbtE6+GbdWa92" +
+///|
+/// Layer II MPEG-2 LSF stereo 24 kHz 64 kbit/s: 1920 bytes, 5 frames of 1152 samples, 24000 Hz, 2 ch.
+let mp2_lsf_24_64_b64 : Bytes = b"//WEBGZDMyIlokAkklVWlAAAAAAAAAIowAPzz///zEKcRyE5+TklbtE6+GbdWa92" +
   b"cNmMM3cXL38n89ncnc4cdIMn9ns48os4dYNY8Ys4r4r3ve971sbbbbb581q2Pmta" +
   b"1rWta1rWtfPmte6L3RWxtttuPnzWrY+a1rWta1rWta18+a0/Jm9ap2Wtns1aiEx8" +
   b"itSlhCUlKQg8MkyUqn1CEEy2sbjT581q2Pmta1rWta1rWtfPmtJdt/PEJkZsFtmz" +
@@ -225,9 +225,9 @@ let mp2_lsf_24_64_b64 : Bytes =
   b"ve9bG2222+fNfPmta1rWta1rWtfPmte973vWxttttvnzXz5rWta1rWta1rXz5rXv" +
   b"e971sbbbbb5818+a1rWta1rWta18+a173ve9bG2222+fNfPmta1rWta1rWtfPmtA"
 
-///| Layer I mono 32 kHz 192 kbit/s (hand-built): 864 bytes, 3 frames of 384 samples, 32000 Hz, 1 ch.
-let mp1_mono_32_192_b64 : Bytes =
-  b"//9oxEMhAAAAAAAAAAAAAAAAAAAAc1ULMJOz4ZXxaXIKucWtYc8zg7+hhPEAAAAA" +
+///|
+/// Layer I mono 32 kHz 192 kbit/s (hand-built): 864 bytes, 3 frames of 384 samples, 32000 Hz, 1 ch.
+let mp1_mono_32_192_b64 : Bytes = b"//9oxEMhAAAAAAAAAAAAAAAAAAAAc1ULMJOz4ZXxaXIKucWtYc8zg7+hhPEAAAAA" +
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
@@ -246,9 +246,9 @@ let mp1_mono_32_192_b64 : Bytes =
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
-///| Layer I joint stereo 44.1 kHz 256 kbit/s (hand-built): 828 bytes, 3 frames of 384 samples, 44100 Hz, 2 ch.
-let mp1_jstereo_44_256_b64 : Bytes =
-  b"//+ARDI0IRIAAAAAAAAAAAAAAAAAABSyQ0U2WxCL9FrMJ+tdUgw56yhZH3Vo6Qev" +
+///|
+/// Layer I joint stereo 44.1 kHz 256 kbit/s (hand-built): 828 bytes, 3 frames of 384 samples, 44100 Hz, 2 ch.
+let mp1_jstereo_44_256_b64 : Bytes = b"//+ARDI0IRIAAAAAAAAAAAAAAAAAABSyQ0U2WxCL9FrMJ+tdUgw56yhZH3Vo6Qev" +
   b"xJodG7kskZP0eo4n403SDj2LKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
@@ -266,4 +266,3 @@ let mp1_jstereo_44_256_b64 : Bytes =
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
   b"AAAAAAAAAAAAAAAA"
-

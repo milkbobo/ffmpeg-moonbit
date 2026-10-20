@@ -12,28 +12,33 @@
 /// deblocking filter controls. P/B reference-list and prediction-weight
 /// syntax is rejected explicitly rather than parsed partially.
 
-///| Decoded fields of an H.264 slice header. */
+///|
+/// Decoded fields of an H.264 slice header. */
 pub struct H264SliceHeader {
-  first_mb_in_slice : Int
-  ///| Raw `slice_type` (I = 2 or 7, SI = 4 or 9).
-  slice_type : Int
-  ///| `slice_type % 5` (0 P, 1 B, 2 I, 3 SP, 4 SI).
-  slice_type_nos : Int
-  pps_id : Int
-  sps_id : Int
-  frame_num : Int
-  field_pic_flag : Int
-  bottom_field_flag : Int
-  idr_pic_id : Int
-  ///| `pic_order_cnt_lsb` (POC type 0 only; -1 otherwise).
-  pic_order_cnt_lsb : Int
-  delta_pic_order_cnt_bottom : Int
-  slice_qp_delta : Int
-  ///| Slice QP (`pps->init_qp + slice_qp_delta`).
-  qscale : Int
-  disable_deblocking_filter_idc : Int
-  slice_alpha_c0_offset : Int
-  slice_beta_offset : Int
+  first_mb_in_slice : Int32
+  /// Raw `slice_type` (I = 2 or 7, SI = 4 or 9).
+  slice_type : Int32
+  /// `slice_type % 5` (0 P, 1 B, 2 I, 3 SP, 4 SI).
+  slice_type_nos : Int32
+  pps_id : Int32
+  sps_id : Int32
+  frame_num : Int32
+  field_pic_flag : Int32
+  bottom_field_flag : Int32
+  idr_pic_id : Int32
+  /// `pic_order_cnt_lsb` (POC type 0 only; -1 otherwise).
+  pic_order_cnt_lsb : Int32
+  delta_pic_order_cnt_bottom : Int32
+  slice_qp_delta : Int32
+  /// Slice QP (`pps->init_qp + slice_qp_delta`).
+  qscale : Int32
+  disable_deblocking_filter_idc : Int32
+  slice_alpha_c0_offset : Int32
+  slice_beta_offset : Int32
+  /// `num_ref_idx_l0_active` (P slices; 1 for I slices).
+  num_ref_idx_l0_active : Int32
+  /// `cabac_init_idc` (0 when absent or CAVLC).
+  cabac_init_flag : Int32
 }
 
 ///|
@@ -41,9 +46,9 @@ pub struct H264SliceHeader {
 /// come from the NAL header; `gb` must be positioned after that header.
 pub fn ff_h264_decode_slice_header(
   gb : BitReader,
-  nal_type : Int,
-  nal_ref_idc : Int,
-  ps : H264ParamSets
+  nal_type : Int32,
+  nal_ref_idc : Int32,
+  ps : H264ParamSets,
 ) -> Result[H264SliceHeader, String] {
   let first_mb = gb.read_ue()
   if first_mb < 0 {
@@ -54,10 +59,11 @@ pub fn ff_h264_decode_slice_header(
     return Err("EINVAL")
   }
   let slice_type_nos = slice_type % 5
-  if slice_type_nos != 2 && slice_type_nos != 4 {
-    // P/B/SP reference-list and weight-table syntax is outside this slice.
+  if slice_type_nos != 2 && slice_type_nos != 4 && slice_type_nos != 0 {
+    // B/SP reference-list and weight-table syntax is outside this slice.
     return Err("PATCHWELCOME")
   }
+  let is_p = slice_type_nos == 0
   let pps_id = gb.read_ue()
   if pps_id < 0 || pps_id >= max_pps_count {
     return Err("EINVAL")
@@ -106,7 +112,42 @@ pub fn ff_h264_decode_slice_header(
   if pps.redundant_pic_cnt_present != 0 {
     let _ = gb.read_ue() // redundant_pic_cnt
   }
-  // I/SI slices have no reference-list modification or weight table.
+  // P slices: reference picture list number override, list modification and
+  // the (unsupported) explicit prediction-weight table.
+  let mut num_ref_idx_l0_active = 1
+  if is_p {
+    num_ref_idx_l0_active = pps.ref_count_l0
+    let ovr = gb.read1().reinterpret_as_int()
+    if ovr != 0 {
+      let n = gb.read_ue()
+      if n < 0 {
+        return Err("EINVAL")
+      }
+      num_ref_idx_l0_active = n + 1
+    }
+    if num_ref_idx_l0_active > 16 {
+      return Err("EINVAL")
+    }
+    let mod_flag = gb.read1().reinterpret_as_int()
+    if mod_flag != 0 {
+      while true {
+        let idc = gb.read_ue()
+        if idc < 0 {
+          return Err("EINVAL")
+        }
+        if idc == 0 {
+          break
+        }
+        // Reordering commands 0..5 (0/1: short-term reorder, 2: long-term
+        // reorder, 4/5: trailing gaps): the operand is consumed; this port
+        // keeps a plain most-recent-first list and ignores the reorder.
+        let _ = gb.read_ue() // abs_diff_pic_num_minus1 / long_term_pic_num
+      }
+    }
+    if pps.weighted_pred != 0 {
+      return Err("explicit weighted prediction is not supported")
+    }
+  }
   // dec_ref_pic_marking
   if nal_ref_idc != 0 {
     if is_idr {
@@ -139,8 +180,12 @@ pub fn ff_h264_decode_slice_header(
       }
     }
   }
+  let mut cabac_init_flag = 0
   if pps.cabac != 0 && slice_type_nos != 2 && slice_type_nos != 4 {
-    let _ = gb.read_ue() // cabac_init_idc
+    cabac_init_flag = gb.read_ue()
+    if cabac_init_flag < 0 || cabac_init_flag > 2 {
+      return Err("EINVAL")
+    }
   }
   let slice_qp_delta = gb.read_se()
   if slice_qp_delta == -2147483648 {
@@ -196,5 +241,7 @@ pub fn ff_h264_decode_slice_header(
     disable_deblocking_filter_idc: disable_idc,
     slice_alpha_c0_offset: alpha,
     slice_beta_offset: beta,
+    num_ref_idx_l0_active,
+    cabac_init_flag,
   })
 }

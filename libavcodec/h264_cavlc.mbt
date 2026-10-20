@@ -16,21 +16,24 @@
 /// `qmul` arrays are both transposed by `(x >> 2) | ((x << 2) & 0xF)`, so the
 /// stored position can be fed to `h264_idct_add` unchanged.
 
-///| One node of a binary VLC trie (`c0`/`c1` are child indices, `-1` = none). */
+///|
+/// One node of a binary VLC trie (`c0`/`c1` are child indices, `-1` = none). */
 priv struct H264VlcNode {
-  c0 : Int
-  c1 : Int
-  sym : Int
+  c0 : Int32
+  c1 : Int32
+  sym : Int32
 }
 
-///| A binary VLC trie indexed by consecutive bits starting at the MSB. */
+///|
+/// A binary VLC trie indexed by consecutive bits starting at the MSB. */
 priv struct H264Vlc {
   nodes : Array[H264VlcNode]
 }
 
-///| Build a decode trie from explicit `(length, code)` VLC tables. */
-fn h264_vlc_build(lens : Array[Int], bits : Array[Int]) -> H264Vlc {
-  let nodes : Array[H264VlcNode] = [{ c0: -1, c1: -1, sym: -1 }]
+///|
+/// Build a decode trie from explicit `(length, code)` VLC tables. */
+fn h264_vlc_build(lens : Array[Int32], bits : Array[Int32]) -> H264Vlc {
+  let nodes : Array[H264VlcNode] = [{ c0: -1, c1: -1, sym: -1, }]
   for sym = 0; sym < lens.length(); sym = sym + 1 {
     let len = lens[sym]
     if len > 0 {
@@ -40,26 +43,27 @@ fn h264_vlc_build(lens : Array[Int], bits : Array[Int]) -> H264Vlc {
         let bit = (bits[sym] >> k) & 1
         let next = if bit == 0 { cur.c0 } else { cur.c1 }
         if next < 0 {
-          nodes.push({ c0: -1, c1: -1, sym: -1 })
+          nodes.push({ c0: -1, c1: -1, sym: -1, })
           let idx = nodes.length() - 1
           if bit == 0 {
-            nodes[node] = { c0: idx, c1: cur.c1, sym: cur.sym }
+            nodes[node] = { c0: idx, c1: cur.c1, sym: cur.sym, }
           } else {
-            nodes[node] = { c0: cur.c0, c1: idx, sym: cur.sym }
+            nodes[node] = { c0: cur.c0, c1: idx, sym: cur.sym, }
           }
           node = idx
         } else {
           node = next
         }
       }
-      nodes[node] = { c0: nodes[node].c0, c1: nodes[node].c1, sym: sym }
+      nodes[node] = { c0: nodes[node].c0, c1: nodes[node].c1, sym, }
     }
   }
   { nodes, }
 }
 
-///| Decode one symbol; returns -1 on an invalid or truncated code. */
-fn H264Vlc::decode(self : H264Vlc, gb : BitReader) -> Int {
+///|
+/// Decode one symbol; returns -1 on an invalid or truncated code. */
+fn H264Vlc::decode(self : H264Vlc, gb : BitReader) -> Int32 {
   let mut node = 0
   while self.nodes[node].sym < 0 {
     let bit = gb.read1().reinterpret_as_int()
@@ -71,7 +75,8 @@ fn H264Vlc::decode(self : H264Vlc, gb : BitReader) -> Int {
   self.nodes[node].sym
 }
 
-///| `coeff_token_vlc[0..3]`: one table per nC class. */
+///|
+/// `coeff_token_vlc[0..3]`: one table per nC class. */
 let h264_coeff_token_vlcs : Array[H264Vlc] = [
   h264_vlc_build(h264_coeff_token_len[0], h264_coeff_token_bits[0]),
   h264_vlc_build(h264_coeff_token_len[1], h264_coeff_token_bits[1]),
@@ -79,13 +84,14 @@ let h264_coeff_token_vlcs : Array[H264Vlc] = [
   h264_vlc_build(h264_coeff_token_len[3], h264_coeff_token_bits[3]),
 ]
 
-///| `chroma_dc_coeff_token_vlc_table`. */
+///|
+/// `chroma_dc_coeff_token_vlc_table`. */
 let h264_chroma_dc_coeff_token_vlc : H264Vlc = h264_vlc_build(
-  h264_chroma_dc_coeff_token_len,
-  h264_chroma_dc_coeff_token_bits,
+  h264_chroma_dc_coeff_token_len, h264_chroma_dc_coeff_token_bits,
 )
 
-///| `total_zeros_vlc[1..15]` (row i is total_coeff = i + 1). */
+///|
+/// `total_zeros_vlc[1..15]` (row i is total_coeff = i + 1). */
 let h264_total_zeros_vlcs : Array[H264Vlc] = {
   let v : Array[H264Vlc] = []
   for i = 0; i < 15; i = i + 1 {
@@ -94,7 +100,8 @@ let h264_total_zeros_vlcs : Array[H264Vlc] = {
   v
 }
 
-///| `chroma_dc_total_zeros_vlc[1..3]`. */
+///|
+/// `chroma_dc_total_zeros_vlc[1..3]`. */
 let h264_chroma_dc_total_zeros_vlcs : Array[H264Vlc] = {
   let v : Array[H264Vlc] = []
   for i = 0; i < 3; i = i + 1 {
@@ -108,7 +115,8 @@ let h264_chroma_dc_total_zeros_vlcs : Array[H264Vlc] = {
   v
 }
 
-///| `run_vlc[1..6]` then `run7_vlc_table` at index 6. */
+///|
+/// `run_vlc[1..6]` then `run7_vlc_table` at index 6. */
 let h264_run_vlcs : Array[H264Vlc] = {
   let v : Array[H264Vlc] = []
   for i = 0; i < 7; i = i + 1 {
@@ -117,12 +125,13 @@ let h264_run_vlcs : Array[H264Vlc] = {
   v
 }
 
-///| `suffix_limit[7]` from `decode_residual`. */
-let h264_suffix_limit : Array[Int] = [0, 3, 6, 12, 24, 48, 2147483647]
+///|
+/// `suffix_limit[7]` from `decode_residual`. */
+let h264_suffix_limit : Array[Int32] = [0, 3, 6, 12, 24, 48, 2147483647]
 
 ///|
 /// `coeff_token_table_index[nC]`: nC 0..1, 2..3, 4..7 and 8..16 share tables.
-fn h264_coeff_token_table_for_nc(nc : Int) -> Int {
+fn h264_coeff_token_table_for_nc(nc : Int32) -> Int32 {
   if nc <= 1 {
     0
   } else if nc <= 3 {
@@ -137,7 +146,7 @@ fn h264_coeff_token_table_for_nc(nc : Int) -> Int {
 ///|
 /// `pred_non_zero_count`: average of the left/top non-zero counts, where 64
 /// marks an unavailable neighbour (the C cache convention).
-fn h264_pred_non_zero_count(left : Int, top : Int) -> Int {
+fn h264_pred_non_zero_count(left : Int32, top : Int32) -> Int32 {
   let sum = left + top
   if sum < 64 {
     (sum + 1) >> 1
@@ -149,7 +158,7 @@ fn h264_pred_non_zero_count(left : Int, top : Int) -> Int {
 ///|
 /// `get_level_prefix`: number of leading zero bits (consuming the terminating
 /// one). The C's 32-bit cache gives 31 for an all-zero window.
-fn h264_get_level_prefix(gb : BitReader) -> Int {
+fn h264_get_level_prefix(gb : BitReader) -> Int32 {
   let mut n = 0
   while n < 32 {
     if gb.read1() != 0U {
@@ -160,8 +169,9 @@ fn h264_get_level_prefix(gb : BitReader) -> Int {
   31
 }
 
-///| `((int)(level * qmul + 32)) >> 6`, with the C's 32-bit unsigned product. */
-fn h264_dequant_level(level : Int, qmul : Int) -> Int {
+///|
+/// `((int)(level * qmul + 32)) >> 6`, with the C's 32-bit unsigned product. */
+fn h264_dequant_level(level : Int32, qmul : Int32) -> Int32 {
   let prod = level.reinterpret_as_uint() * qmul.reinterpret_as_uint() + 32U
   h264_i16(prod.reinterpret_as_int() >> 6)
 }
@@ -178,14 +188,14 @@ fn h264_dequant_level(level : Int, qmul : Int) -> Int {
 /// Returns the decoded `total_coeff` (the C's non-zero count).
 fn h264_decode_residual(
   gb : BitReader,
-  block : Array[Int],
-  base : Int,
-  scan : Array[Int],
-  scan_start : Int,
-  qmul : Array[Int]?,
-  max_coeff : Int,
-  nc : Int,
-) -> Result[Int, String] {
+  block : Array[Int32],
+  base : Int32,
+  scan : Array[Int32],
+  scan_start : Int32,
+  qmul : Array[Int32]?,
+  max_coeff : Int32,
+  nc : Int32,
+) -> Result[Int32, String] {
   let coeff_token = if max_coeff <= 8 {
     h264_chroma_dc_coeff_token_vlc.decode(gb)
   } else {
@@ -202,14 +212,18 @@ fn h264_decode_residual(
     return Err("total_coeff exceeds block size")
   }
   let trailing_ones = coeff_token & 3
-  let level : Array[Int] = Array::make(16, 0)
+  let level : Array[Int32] = Array::make(16, 0)
   let bits3 = gb.show(3).reinterpret_as_int()
   gb.skip(trailing_ones)
   level[0] = 1 - ((bits3 & 4) >> 1)
   level[1] = 1 - (bits3 & 2)
   level[2] = 1 - ((bits3 & 1) << 1)
   if trailing_ones < total_coeff {
-    let mut suffix_length = if total_coeff > 10 && trailing_ones < 3 { 1 } else { 0 }
+    let mut suffix_length = if total_coeff > 10 && trailing_ones < 3 {
+      1
+    } else {
+      0
+    }
     let initial_suffix = suffix_length
     let prefix = h264_get_level_prefix(gb)
     let mut code = 0
@@ -323,8 +337,12 @@ fn h264_decode_residual(
 /// Build the PPS `dequant4_coeff[matrix][qp]` table used by CAVLC. The
 /// storage order is transposed exactly like FFmpeg's
 /// `[(x >> 2) | ((x << 2) & 0xF)]`.
-fn h264_build_dequant4(pps : H264Pps, matrix : Int, qp : Int) -> Array[Int] {
-  let out : Array[Int] = Array::make(16, 0)
+fn h264_build_dequant4(
+  pps : H264Pps,
+  matrix : Int32,
+  qp : Int32,
+) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(16, 0)
   let scaling = pps.scaling_matrix4[matrix]
   let rem = qp % 6
   let div = qp / 6
@@ -336,27 +354,23 @@ fn h264_build_dequant4(pps : H264Pps, matrix : Int, qp : Int) -> Array[Int] {
   out
 }
 
-///| `get_chroma_qp(pps, t, qscale)` for 8-bit streams. */
-fn h264_get_chroma_qp(pps : H264Pps, t : Int, qscale : Int) -> Int {
+///|
+/// `get_chroma_qp(pps, t, qscale)` for 8-bit streams. */
+fn h264_get_chroma_qp(pps : H264Pps, t : Int32, qscale : Int32) -> Int32 {
   let offset = if t == 0 {
     pps.chroma_qp_index_offset0
   } else {
     pps.chroma_qp_index_offset1
   }
   let idx = qscale + offset
-  let clipped = if idx < 0 {
-    0
-  } else if idx > 51 {
-    51
-  } else {
-    idx
-  }
+  let clipped = if idx < 0 { 0 } else if idx > 51 { 51 } else { idx }
   h264_chroma_qp_8bit[clipped]
 }
 
-///| `h->zigzag_scan[i] = TRANSPOSE(ff_zigzag_scan[i])`. */
-let h264_zigzag_scan_t : Array[Int] = {
-  let t : Array[Int] = []
+///|
+/// `h->zigzag_scan[i] = TRANSPOSE(ff_zigzag_scan[i])`. */
+let h264_zigzag_scan_t : Array[Int32] = {
+  let t : Array[Int32] = []
   for i = 0; i < 16; i = i + 1 {
     let x = h264_zigzag_scan[i]
     t.push((x >> 2) | ((x << 2) & 0xF))

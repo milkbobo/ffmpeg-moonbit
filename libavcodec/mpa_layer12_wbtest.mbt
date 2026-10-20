@@ -3,8 +3,9 @@
 /// expected PCM MD5 comes from FFmpeg 9.0.2's fixed decoder (see
 /// `mpa_layer12_realdata_wbtest.mbt` for the generator commands).
 
-///| Lowercase hex of a byte buffer.
-fn mpa_hex(bytes : FixedArray[Byte], n : Int) -> String {
+///|
+/// Lowercase hex of a byte buffer.
+fn mpa_hex(bytes : FixedArray[Byte], n : Int32) -> String {
   let digits : Bytes = b"0123456789abcdef"
   let chars : Array[Char] = []
   for i = 0; i < n; i = i + 1 {
@@ -15,8 +16,9 @@ fn mpa_hex(bytes : FixedArray[Byte], n : Int) -> String {
   String::from_array(chars[:])
 }
 
-///| S16 little-endian MD5 of an interleaved sample buffer.
-fn mpa_pcm_md5(samples : Array[Int]) -> String {
+///|
+/// S16 little-endian MD5 of an interleaved sample buffer.
+fn mpa_pcm_md5(samples : Array[Int32]) -> String {
   let bytes = FixedArray::make(samples.length() * 2, b'\x00')
   for i = 0; i < samples.length(); i = i + 1 {
     let v = samples[i]
@@ -28,7 +30,7 @@ fn mpa_pcm_md5(samples : Array[Int]) -> String {
   mpa_hex(digest, 16)
 }
 
-
+///|
 test "mp2: Layer II stereo 44.1 kHz 192 kbit/s matches FFmpeg fixed decoder" {
   let data = @libavutil.av_base64_decode(mp2_stereo_44_192_b64, 8192).unwrap()
   assert_eq(data.length(), 3761)
@@ -39,6 +41,7 @@ test "mp2: Layer II stereo 44.1 kHz 192 kbit/s matches FFmpeg fixed decoder" {
   assert_eq(mpa_pcm_md5(pcm.samples), "818bac4aa56cc891a5561ec134c28bbb")
 }
 
+///|
 test "mp2: Layer II mono 44.1 kHz 64 kbit/s matches FFmpeg fixed decoder" {
   let data = @libavutil.av_base64_decode(mp2_mono_44_64_b64, 8192).unwrap()
   assert_eq(data.length(), 1253)
@@ -49,6 +52,7 @@ test "mp2: Layer II mono 44.1 kHz 64 kbit/s matches FFmpeg fixed decoder" {
   assert_eq(mpa_pcm_md5(pcm.samples), "5c6c8e4798028f8588b75bfca5a9e749")
 }
 
+///|
 test "mp2: Layer II joint stereo 32 kHz 64 kbit/s matches FFmpeg fixed decoder" {
   let data = @libavutil.av_base64_decode(mp2_jstereo_32_64_b64, 8192).unwrap()
   assert_eq(data.length(), 1728)
@@ -59,6 +63,7 @@ test "mp2: Layer II joint stereo 32 kHz 64 kbit/s matches FFmpeg fixed decoder" 
   assert_eq(mpa_pcm_md5(pcm.samples), "941cb1331dd0cadd6f31d248e9ed0fe1")
 }
 
+///|
 test "mp2: Layer II MPEG-2 LSF stereo 24 kHz 64 kbit/s matches FFmpeg fixed decoder" {
   let data = @libavutil.av_base64_decode(mp2_lsf_24_64_b64, 8192).unwrap()
   assert_eq(data.length(), 1920)
@@ -69,6 +74,7 @@ test "mp2: Layer II MPEG-2 LSF stereo 24 kHz 64 kbit/s matches FFmpeg fixed deco
   assert_eq(mpa_pcm_md5(pcm.samples), "f9bf90373e6ac4beadf057212f42a27f")
 }
 
+///|
 test "mp1: Layer I mono 32 kHz 192 kbit/s (hand-built frames) matches FFmpeg fixed decoder" {
   let data = @libavutil.av_base64_decode(mp1_mono_32_192_b64, 4096).unwrap()
   assert_eq(data.length(), 864)
@@ -79,6 +85,7 @@ test "mp1: Layer I mono 32 kHz 192 kbit/s (hand-built frames) matches FFmpeg fix
   assert_eq(mpa_pcm_md5(pcm.samples), "cb2824e3d226eedf3a5f767d6aeeda0e")
 }
 
+///|
 test "mp1: Layer I joint stereo 44.1 kHz 256 kbit/s (hand-built frames) matches FFmpeg fixed decoder" {
   let data = @libavutil.av_base64_decode(mp1_jstereo_44_256_b64, 4096).unwrap()
   assert_eq(data.length(), 828)
@@ -89,6 +96,7 @@ test "mp1: Layer I joint stereo 44.1 kHz 256 kbit/s (hand-built frames) matches 
   assert_eq(mpa_pcm_md5(pcm.samples), "a0ed4a9298f947149e977b1bbccde3b6")
 }
 
+///|
 test "mpa: reserved layer field is rejected instead of misparsed" {
   // `layer(2) == 0` maps to `4 - 0 == 4` in the header parser, which no layer
   // decoder claims; the entry point must report it rather than decode silence.

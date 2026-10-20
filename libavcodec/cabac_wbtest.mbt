@@ -14,15 +14,17 @@
 /// implementation check of the decoder rather than a self-round-trip of one
 /// routine.
 
-///| `AVLFG` (`libavutil/lfg.h`). */
+///|
+/// `AVLFG` (`libavutil/lfg.h`). */
 struct CabacTestLfg {
-  state : Array[Int]
-  mut index : Int
+  state : Array[Int32]
+  mut index : Int32
 }
 
-///| `av_lfg_init(c, seed)` — the first 8 words stay zero, then 14 MD5 digests. */
-fn cabac_test_lfg_init(seed : Int) -> CabacTestLfg {
-  let state : Array[Int] = Array::make(64, 0)
+///|
+/// `av_lfg_init(c, seed)` — the first 8 words stay zero, then 14 MD5 digests. */
+fn cabac_test_lfg_init(seed : Int32) -> CabacTestLfg {
+  let state : Array[Int32] = Array::make(64, 0)
   let tmp : Array[Byte] = Array::make(16, b'\x00')
   for i = 8; i < 64; i = i + 4 {
     tmp[0] = (seed & 0xFF).to_byte()
@@ -43,29 +45,33 @@ fn cabac_test_lfg_init(seed : Int) -> CabacTestLfg {
         (tmp[o + 3].to_int() << 24)
     }
   }
-  { state, index: 0 }
+  { state, index: 0, }
 }
 
-///| `av_lfg_get`: 32-bit wrapping lagged Fibonacci. */
-fn cabac_test_lfg_get(c : CabacTestLfg) -> Int {
+///|
+/// `av_lfg_get`: 32-bit wrapping lagged Fibonacci. */
+fn cabac_test_lfg_get(c : CabacTestLfg) -> Int32 {
   let a = c.state[(c.index - 24) & 63] + c.state[(c.index - 55) & 63]
   c.state[c.index & 63] = a
   c.index = c.index + 1
   a
 }
 
-///| Bit sink standing in for `PutBitContext` (MSB-first). */
+///|
+/// Bit sink standing in for `PutBitContext` (MSB-first). */
 struct CabacTestBits {
-  bits : Array[Int]
+  bits : Array[Int32]
 }
 
-///| `put_cabac_bit`. */
-fn CabacTestBits::put_cabac_bit(self : CabacTestBits, b : Int) -> Unit {
+///|
+/// `put_cabac_bit`. */
+fn CabacTestBits::put_cabac_bit(self : CabacTestBits, b : Int32) -> Unit {
   self.bits.push(b)
 }
 
-///| `put_bits(pb, n, v)` MSB-first. */
-fn CabacTestBits::put_bits(self : CabacTestBits, n : Int, v : Int) -> Unit {
+///|
+/// `put_bits(pb, n, v)` MSB-first. */
+fn CabacTestBits::put_bits(self : CabacTestBits, n : Int32, v : Int32) -> Unit {
   for i = n - 1; i >= 0; i = i - 1 {
     self.bits.push((v >> i) & 1)
   }
@@ -89,21 +95,24 @@ fn CabacTestBits::to_bytes(self : CabacTestBits) -> Bytes {
   Bytes::from_array(out[:])
 }
 
-///| Reference encoder state (`CABACTestContext` minus the bit writer). */
+///|
+/// Reference encoder state (`CABACTestContext` minus the bit writer). */
 struct CabacTestEnc {
-  mut low : Int
-  mut range : Int
-  mut outstanding : Int
+  mut low : Int32
+  mut range : Int32
+  mut outstanding : Int32
   pb : CabacTestBits
 }
 
-///| `init_cabac_encoder`. */
+///|
+/// `init_cabac_encoder`. */
 fn cabac_test_enc_new() -> CabacTestEnc {
-  { low: 0, range: 0x1FE, outstanding: 0, pb: { bits: [] } }
+  { low: 0, range: 0x1FE, outstanding: 0, pb: { bits: [], }, }
 }
 
-///| `put_cabac_bit` with the outstanding run: emit `b` then `1-b` per pending. */
-fn cabac_test_emit(c : CabacTestEnc, b : Int) -> Unit {
+///|
+/// `put_cabac_bit` with the outstanding run: emit `b` then `1-b` per pending. */
+fn cabac_test_emit(c : CabacTestEnc, b : Int32) -> Unit {
   c.pb.put_cabac_bit(b)
   while c.outstanding > 0 {
     c.pb.put_cabac_bit(1 - b)
@@ -111,7 +120,8 @@ fn cabac_test_emit(c : CabacTestEnc, b : Int) -> Unit {
   }
 }
 
-///| `renorm_cabac_encoder` written against `put_cabac_bit` verbatim. */
+///|
+/// `renorm_cabac_encoder` written against `put_cabac_bit` verbatim. */
 fn cabac_test_renorm(c : CabacTestEnc) -> Unit {
   while c.range < 0x100 {
     if c.low < 0x100 {
@@ -128,8 +138,13 @@ fn cabac_test_renorm(c : CabacTestEnc) -> Unit {
   }
 }
 
-///| `put_cabac(&c, state, bit)`. */
-fn cabac_test_put_cabac(c : CabacTestEnc, state : Array[Int], bit : Int) -> Unit {
+///|
+/// `put_cabac(&c, state, bit)`. */
+fn cabac_test_put_cabac(
+  c : CabacTestEnc,
+  state : Array[Int32],
+  bit : Int32,
+) -> Unit {
   let range_lps = h264_cabac_lps_range(c.range, state[0])
   if bit == (state[0] & 1) {
     c.range = c.range - range_lps
@@ -142,8 +157,9 @@ fn cabac_test_put_cabac(c : CabacTestEnc, state : Array[Int], bit : Int) -> Unit
   cabac_test_renorm(c)
 }
 
-///| `put_cabac_bypass`. */
-fn cabac_test_put_cabac_bypass(c : CabacTestEnc, bit : Int) -> Unit {
+///|
+/// `put_cabac_bypass`. */
+fn cabac_test_put_cabac_bypass(c : CabacTestEnc, bit : Int32) -> Unit {
   c.low = c.low + c.low
   if bit != 0 {
     c.low = c.low + c.range
@@ -159,8 +175,9 @@ fn cabac_test_put_cabac_bypass(c : CabacTestEnc, bit : Int) -> Unit {
   }
 }
 
-///| `put_cabac_terminate`; returns the byte count of the written stream. */
-fn cabac_test_put_cabac_terminate(c : CabacTestEnc, bit : Int) -> Int {
+///|
+/// `put_cabac_terminate`; returns the byte count of the written stream. */
+fn cabac_test_put_cabac_terminate(c : CabacTestEnc, bit : Int32) -> Int32 {
   c.range = c.range - 2
   if bit == 0 {
     cabac_test_renorm(c)
@@ -183,7 +200,7 @@ test "cabac: FFmpeg tests/cabac.c vector round-trips through the decoder" {
   let prng = cabac_test_lfg_init(1)
   let enc = cabac_test_enc_new()
   // `r[i] = av_lfg_get(&prng) % 7` for the first half, then `(i>>8)&1`.
-  let r : Array[Int] = Array::make(size, 0)
+  let r : Array[Int32] = Array::make(size, 0)
   for i = 0; i < size; i = i + 1 {
     r[i] = if 2 * i < size {
       let v = cabac_test_lfg_get(prng)
@@ -193,7 +210,7 @@ test "cabac: FFmpeg tests/cabac.c vector round-trips through the decoder" {
       (i >> 8) & 1
     }
   }
-  let state : Array[Int] = Array::make(10, 0)
+  let state : Array[Int32] = Array::make(10, 0)
   for i = 0; i < size; i = i + 1 {
     cabac_test_put_cabac_bypass(enc, r[i] & 1)
   }
@@ -206,10 +223,14 @@ test "cabac: FFmpeg tests/cabac.c vector round-trips through the decoder" {
   let extra0 = cabac_test_lfg_get(prng)
   let extra1 = cabac_test_lfg_get(prng)
   let tail : Array[Byte] = [
-    (extra0 & 0xFF).to_byte(), ((extra0 >> 8) & 0xFF).to_byte(),
-    ((extra0 >> 16) & 0xFF).to_byte(), ((extra0 >> 24) & 0xFF).to_byte(),
-    (extra1 & 0xFF).to_byte(), ((extra1 >> 8) & 0xFF).to_byte(),
-    ((extra1 >> 16) & 0xFF).to_byte(), ((extra1 >> 24) & 0xFF).to_byte(),
+    (extra0 & 0xFF).to_byte(),
+    ((extra0 >> 8) & 0xFF).to_byte(),
+    ((extra0 >> 16) & 0xFF).to_byte(),
+    ((extra0 >> 24) & 0xFF).to_byte(),
+    (extra1 & 0xFF).to_byte(),
+    ((extra1 >> 8) & 0xFF).to_byte(),
+    ((extra1 >> 16) & 0xFF).to_byte(),
+    ((extra1 >> 24) & 0xFF).to_byte(),
   ]
   for k = 0; k < tail.length(); k = k + 1 {
     if n + k < bytes.length() {
@@ -218,7 +239,7 @@ test "cabac: FFmpeg tests/cabac.c vector round-trips through the decoder" {
   }
   let buf = Bytes::from_array(bytes[:])
   let dec = ff_init_cabac_decoder(buf, 0).unwrap()
-  let dstate : Array[Int] = Array::make(10, 0)
+  let dstate : Array[Int32] = Array::make(10, 0)
   for i = 0; i < size; i = i + 1 {
     let bit = dec.get_cabac_bypass()
     assert_eq(bit, r[i] & 1, msg="bypass mismatch at \{i}")
@@ -255,4 +276,3 @@ test "cabac: slice state derivation matches the C formula" {
     assert_true(st[i] >= 0 && st[i] <= 125, msg="state out of range at \{i}")
   }
 }
-

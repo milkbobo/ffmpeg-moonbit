@@ -14,10 +14,11 @@
 /// offsets -2/-2, weighted pred, 8x8 transform). The same parameter sets are
 /// also parsed through an Annex B extradata blob to cover that entry path.
 
-///| avcC box payload extracted from the MP4 above (44 bytes).
-let h264_real_avcc_b64 : Bytes =
-  b"AWQAHv/hABdnZAAerLII9gIgAAADACAAAAMBQeLFyQEABmjrw8siwP34+AA="
+///|
+/// avcC box payload extracted from the MP4 above (44 bytes).
+let h264_real_avcc_b64 : Bytes = b"AWQAHv/hABdnZAAerLII9gIgAAADACAAAAMBQeLFyQEABmjrw8siwP34+AA="
 
+///|
 test "h264_ps: avcC extradata decodes real High-profile parameter sets" {
   let avcc = @libavutil.av_base64_decode(h264_real_avcc_b64, 1024).unwrap()
   assert_eq(avcc.length(), 44)
@@ -84,6 +85,7 @@ test "h264_ps: avcC extradata decodes real High-profile parameter sets" {
   assert_eq(pps.scaling_matrix4[0][0], 16) // inherited all-16 SPS matrix
 }
 
+///|
 test "h264_ps: Annex B extradata decodes the same parameter sets" {
   // Start-code separated SPS/PPS carried in the avcC record above.
   let blob = b"\x00\x00\x00\x01\x67\x64\x00\x1e\xAC\xB2\x08\xF6\x02\x20\x00" +
@@ -103,6 +105,7 @@ test "h264_ps: Annex B extradata decodes the same parameter sets" {
   assert_eq(pps.chroma_qp_index_offset1, -2)
 }
 
+///|
 test "h264_ps: direct SPS parse after the NAL header" {
   let nal = b"\x67\x64\x00\x1e\xAC\xB2\x08\xF6\x02\x20\x00\x00\x03\x00\x20\x00" +
     b"\x00\x03\x01\x41\xE2\xC5\xC9"
@@ -118,6 +121,7 @@ test "h264_ps: direct SPS parse after the NAL header" {
   assert_eq(sps.vui.sar_num, 1)
 }
 
+///|
 test "h264_ps: truncated SPS is rejected" {
   let gb = BitReader::with_size(b"\x67\x64\x00", 24)
   gb.skip(8)
@@ -128,6 +132,7 @@ test "h264_ps: truncated SPS is rejected" {
   }
 }
 
+///|
 test "h264_ps: PPS referring to a missing SPS is rejected" {
   let gb = BitReader::with_size(b"\x68\xEB\xC3\xCB\x22\xC0", 40)
   gb.skip(8)

@@ -18,63 +18,74 @@
 ///   * Zero-padding reads are handled by `BitReader` itself, so the
 ///     `AV_INPUT_BUFFER_PADDING_SIZE` memset is not needed.
 
-///| Which codec's NAL header layout to use. */
+///|
+/// Which codec's NAL header layout to use. */
 pub enum H2645Codec {
   H264
   Hevc
 }
 
-///| `H264_NAL_SPS`. */
-pub let h264_nal_sps : Int = 7
+///|
+/// `H264_NAL_SPS`. */
+pub let h264_nal_sps : Int32 = 7
 
-///| `H264_NAL_PPS`. */
-pub let h264_nal_pps : Int = 8
+///|
+/// `H264_NAL_PPS`. */
+pub let h264_nal_pps : Int32 = 8
 
-///| `H264_NAL_IDR_SLICE`. */
-pub let h264_nal_idr_slice : Int = 5
+///|
+/// `H264_NAL_IDR_SLICE`. */
+pub let h264_nal_idr_slice : Int32 = 5
 
-///| `HEVC_NAL_VPS`. */
-pub let hevc_nal_vps : Int = 32
+///|
+/// `HEVC_NAL_VPS`. */
+pub let hevc_nal_vps : Int32 = 32
 
-///| `HEVC_NAL_SPS`. */
-pub let hevc_nal_sps : Int = 33
+///|
+/// `HEVC_NAL_SPS`. */
+pub let hevc_nal_sps : Int32 = 33
 
-///| `HEVC_NAL_PPS`. */
-pub let hevc_nal_pps : Int = 34
+///|
+/// `HEVC_NAL_PPS`. */
+pub let hevc_nal_pps : Int32 = 34
 
-///| `HEVC_NAL_SEI_PREFIX`. */
-pub let hevc_nal_sei_prefix : Int = 39
+///|
+/// `HEVC_NAL_SEI_PREFIX`. */
+pub let hevc_nal_sei_prefix : Int32 = 39
 
-///| One parsed NAL unit (`H2645NAL`). */
+///|
+/// One parsed NAL unit (`H2645NAL`). */
 pub struct H2645Nal {
-  ///| Unescaped RBSP, including the NAL header.
+  /// Unescaped RBSP, including the NAL header.
   data : Bytes
-  ///| SODB size: excludes the stop bit and trailing zero bytes.
-  size_bits : Int
-  ///| Bytes of the escaped source consumed by this NAL.
-  raw_size : Int
-  ///| `nal_unit_type` / H.264's 5-bit type.
-  nal_type : Int
-  ///| H.264 `nal_ref_idc` (0 for HEVC).
-  ref_idc : Int
-  ///| HEVC `nuh_temporal_id_plus1 - 1` (0 for H.264).
-  temporal_id : Int
-  ///| HEVC `nuh_layer_id` (0 for H.264).
-  nuh_layer_id : Int
+  /// SODB size: excludes the stop bit and trailing zero bytes.
+  size_bits : Int32
+  /// Bytes of the escaped source consumed by this NAL.
+  raw_size : Int32
+  /// `nal_unit_type` / H.264's 5-bit type.
+  nal_type : Int32
+  /// H.264 `nal_ref_idc` (0 for HEVC).
+  ref_idc : Int32
+  /// HEVC `nuh_temporal_id_plus1 - 1` (0 for H.264).
+  temporal_id : Int32
+  /// HEVC `nuh_layer_id` (0 for H.264).
+  nuh_layer_id : Int32
 }
 
-///| `H2645Packet`: the NALs of one input packet, in order. */
+///|
+/// `H2645Packet`: the NALs of one input packet, in order. */
 pub struct H2645Packet {
   nals : Array[H2645Nal]
 }
 
-///| Result of `ff_h2645_extract_rbsp`. */
+///|
+/// Result of `ff_h2645_extract_rbsp`. */
 pub struct RbspExtract {
   data : Bytes
-  ///| `si` from the C: bytes of the input belonging to this NAL.
-  consumed : Int
-  ///| Number of removed `emulation_prevention_three_byte`s.
-  skipped : Int
+  /// `si` from the C: bytes of the input belonging to this NAL.
+  consumed : Int32
+  /// Number of removed `emulation_prevention_three_byte`s.
+  skipped : Int32
 }
 
 ///|
@@ -87,7 +98,8 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
   let mut first_is_start_code = false
   let mut i = 0
   while i + 2 < length {
-    if src[i] == b'\x00' && src[i + 1] == b'\x00' &&
+    if src[i] == b'\x00' &&
+      src[i + 1] == b'\x00' &&
       (src[i + 2] == b'\x03' || src[i + 2] == b'\x01') {
       first = i
       first_is_start_code = src[i + 2] == b'\x01'
@@ -96,7 +108,7 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
     i = i + 1
   }
   if first < 0 {
-    return { data: src, consumed: length, skipped: 0 }
+    return { data: src, consumed: length, skipped: 0, }
   }
   if first_is_start_code {
     return {
@@ -122,7 +134,8 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
       out[di + 1] = src[si + 1]
       di = di + 2
       si = si + 2
-    } else if src[si] == b'\x00' && src[si + 1] == b'\x00' &&
+    } else if src[si] == b'\x00' &&
+      src[si + 1] == b'\x00' &&
       src[si + 2] != b'\x00' {
       if src[si + 2] == b'\x03' {
         out[di] = b'\x00'
@@ -133,11 +146,7 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
         continue
       } else {
         // next start code
-        return {
-          data: Bytes::from_array(out[:di]),
-          consumed: si,
-          skipped,
-        }
+        return { data: Bytes::from_array(out[:di]), consumed: si, skipped, }
       }
     }
     out[di] = src[si]
@@ -149,7 +158,7 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
     di = di + 1
     si = si + 1
   }
-  { data: Bytes::from_array(out[:di]), consumed: si, skipped }
+  { data: Bytes::from_array(out[:di]), consumed: si, skipped, }
 }
 
 ///|
@@ -157,9 +166,9 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
 /// zeros. `min_size` is 1 for H.264 (1-byte NAL header) and 2 for HEVC.
 pub fn get_bit_length(
   data : Bytes,
-  min_size : Int,
-  skip_trailing_zeros : Bool
-) -> Int {
+  min_size : Int32,
+  skip_trailing_zeros : Bool,
+) -> Int32 {
   let mut size = data.length()
   while skip_trailing_zeros && size > 0 && data[size - 1] == b'\x00' {
     size = size - 1
@@ -185,7 +194,10 @@ pub fn get_bit_length(
 ///|
 /// `hevc_parse_nal_header` / `h264_parse_nal_header`. The reader must be
 /// positioned at the start of the NAL.
-fn parse_nal_header(gb : BitReader, codec : H2645Codec) -> Result[H2645Nal, String] {
+fn parse_nal_header(
+  gb : BitReader,
+  codec : H2645Codec,
+) -> Result[H2645Nal, String] {
   match codec {
     H264 => {
       if gb.read1() != 0 {
@@ -226,7 +238,8 @@ fn parse_nal_header(gb : BitReader, codec : H2645Codec) -> Result[H2645Nal, Stri
   }
 }
 
-///| Enum equality helper (`H2645Codec` has no derived `Eq`). */
+///|
+/// Enum equality helper (`H2645Codec` has no derived `Eq`). */
 fn h2645_is_hevc(codec : H2645Codec) -> Bool {
   match codec {
     Hevc => true
@@ -237,11 +250,7 @@ fn h2645_is_hevc(codec : H2645Codec) -> Bool {
 ///|
 /// Turn one extracted RBSP into an `H2645Nal`, or `None` for an empty /
 /// unparsable NAL (the C skips such NALs without failing the packet).
-fn build_nal(
-  data : Bytes,
-  consumed : Int,
-  codec : H2645Codec
-) -> H2645Nal? {
+fn build_nal(data : Bytes, consumed : Int32, codec : H2645Codec) -> H2645Nal? {
   let min_size = if h2645_is_hevc(codec) { 2 } else { 1 }
   let size_bits = get_bit_length(data, min_size, true)
   if data.length() <= 0 || size_bits <= 0 {
@@ -266,14 +275,15 @@ fn build_nal(
 ///|
 /// `find_next_start_code`, returning the index just past the `00 00 01`.
 /// `-1` means no start code before the end.
-fn find_next_start_code(buf : Bytes, from : Int) -> Int {
+fn find_next_start_code(buf : Bytes, from : Int32) -> Int32 {
   let end = buf.length()
   if from + 3 >= end {
     return -1
   }
   let mut i = 0
   while from + i + 3 < end {
-    if buf[from + i] == b'\x00' && buf[from + i + 1] == b'\x00' &&
+    if buf[from + i] == b'\x00' &&
+      buf[from + i + 1] == b'\x00' &&
       buf[from + i + 2] == b'\x01' {
       return from + i + 3
     }
@@ -285,7 +295,10 @@ fn find_next_start_code(buf : Bytes, from : Int) -> Int {
 ///|
 /// Annex B splitter: scan for start codes and skip bytes before the first one,
 /// matching `ff_h2645_packet_split` with `next_avc = length`.
-fn packet_split_annexb(buf : Bytes, codec : H2645Codec) -> Result[H2645Packet, String] {
+fn packet_split_annexb(
+  buf : Bytes,
+  codec : H2645Codec,
+) -> Result[H2645Packet, String] {
   let nals : Array[H2645Nal] = []
   let mut pos = 0
   while buf.length() - pos >= 4 {
@@ -317,7 +330,7 @@ fn packet_split_annexb(buf : Bytes, codec : H2645Codec) -> Result[H2645Packet, S
       None => ()
     }
   }
-  Ok({ nals: nals })
+  Ok({ nals, })
 }
 
 ///|
@@ -325,8 +338,8 @@ fn packet_split_annexb(buf : Bytes, codec : H2645Codec) -> Result[H2645Packet, S
 /// `nal_length_size` is 1, 2 or 4 in practice; the C does not validate it.
 fn packet_split_nalff(
   buf : Bytes,
-  nal_length_size : Int,
-  codec : H2645Codec
+  nal_length_size : Int32,
+  codec : H2645Codec,
 ) -> Result[H2645Packet, String] {
   if nal_length_size <= 0 || nal_length_size > 4 {
     return Err("EINVAL")
@@ -364,7 +377,7 @@ fn packet_split_nalff(
       pos = pos + rest
     }
   }
-  Ok({ nals: nals })
+  Ok({ nals, })
 }
 
 ///|
@@ -373,9 +386,9 @@ fn packet_split_nalff(
 /// over Annex B.
 pub fn ff_h2645_packet_split(
   buf : Bytes,
-  nal_length_size : Int,
+  nal_length_size : Int32,
   codec : H2645Codec,
-  is_nalff : Bool
+  is_nalff : Bool,
 ) -> Result[H2645Packet, String] {
   if is_nalff {
     packet_split_nalff(buf, nal_length_size, codec)
@@ -389,15 +402,17 @@ pub fn ff_h2645_packet_split(
 /// the given NAL type needs an extra zero byte when written as Annex B.
 pub fn ff_h2645_unit_requires_zero_byte(
   codec : H2645Codec,
-  nal_type : Int,
-  nal_unit_index : Int
+  nal_type : Int32,
+  nal_unit_index : Int32,
 ) -> Bool {
   if nal_unit_index == 0 {
     return true
   }
   match codec {
     H264 => nal_type == h264_nal_sps || nal_type == h264_nal_pps
-    Hevc => nal_type == hevc_nal_vps || nal_type == hevc_nal_sps ||
+    Hevc =>
+      nal_type == hevc_nal_vps ||
+      nal_type == hevc_nal_sps ||
       nal_type == hevc_nal_pps
   }
 }

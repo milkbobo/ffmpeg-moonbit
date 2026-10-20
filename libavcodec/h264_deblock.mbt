@@ -25,8 +25,9 @@
 /// vertical edge (the C `h264_*_loop_filter_luma`) and `xstep = stride,
 /// ystep = 1` for a horizontal one (the C `h264_v_loop_filter_luma`).
 
-///| `av_clip(v, min, max)`. */
-fn h264_deblock_clip(v : Int, lo : Int, hi : Int) -> Int {
+///|
+/// `av_clip(v, min, max)`. */
+fn h264_deblock_clip(v : Int32, lo : Int32, hi : Int32) -> Int32 {
   if v < lo {
     lo
   } else if v > hi {
@@ -36,8 +37,9 @@ fn h264_deblock_clip(v : Int, lo : Int, hi : Int) -> Int {
   }
 }
 
-///| `av_clip_pixel` for 8-bit samples. */
-fn h264_deblock_clip_pixel(v : Int) -> Int {
+///|
+/// `av_clip_pixel` for 8-bit samples. */
+fn h264_deblock_clip_pixel(v : Int32) -> Int32 {
   if v < 0 {
     0
   } else if v > 255 {
@@ -47,8 +49,9 @@ fn h264_deblock_clip_pixel(v : Int) -> Int {
   }
 }
 
-///| `FFABS`. */
-fn h264_deblock_abs(v : Int) -> Int {
+///|
+/// `FFABS`. */
+fn h264_deblock_abs(v : Int32) -> Int32 {
   if v < 0 {
     -v
   } else {
@@ -61,14 +64,14 @@ fn h264_deblock_abs(v : Int) -> Int {
 /// `along` is the C `inner_iters` (4 for the 16-sample luma edge, 2 for the
 /// 8-sample chroma edge).
 fn h264_lf_luma(
-  data : Array[Int],
-  start : Int,
-  xstep : Int,
-  ystep : Int,
-  along : Int,
-  alpha : Int,
-  beta : Int,
-  tc0 : Int,
+  data : Array[Int32],
+  start : Int32,
+  xstep : Int32,
+  ystep : Int32,
+  along : Int32,
+  alpha : Int32,
+  beta : Int32,
+  tc0 : Int32,
 ) -> Unit {
   let mut p = start
   for _i = 0; _i < 4; _i = _i + 1 {
@@ -83,7 +86,8 @@ fn h264_lf_luma(
         let q1 = data[p + xstep]
         let q2 = data[p + 2 * xstep]
         if h264_deblock_abs(p0 - q0) < alpha &&
-          h264_deblock_abs(p1 - p0) < beta && h264_deblock_abs(q1 - q0) < beta {
+          h264_deblock_abs(p1 - p0) < beta &&
+          h264_deblock_abs(q1 - q0) < beta {
           let mut tc = tc0
           if h264_deblock_abs(p2 - p0) < beta {
             if tc0 != 0 {
@@ -112,7 +116,7 @@ fn h264_lf_luma(
             tc = tc + 1
           }
           let i_delta = h264_deblock_clip(
-            (((q0 - p0) * 4) + (p1 - q1) + 4) >> 3,
+            ((q0 - p0) * 4 + (p1 - q1) + 4) >> 3,
             -tc,
             tc,
           )
@@ -125,15 +129,16 @@ fn h264_lf_luma(
   }
 }
 
-///| `h264_loop_filter_luma_intra`: the bS == 4 (strong) intra edge filter. */
+///|
+/// `h264_loop_filter_luma_intra`: the bS == 4 (strong) intra edge filter. */
 fn h264_lf_luma_intra(
-  data : Array[Int],
-  start : Int,
-  xstep : Int,
-  ystep : Int,
-  along : Int,
-  alpha : Int,
-  beta : Int,
+  data : Array[Int32],
+  start : Int32,
+  xstep : Int32,
+  ystep : Int32,
+  along : Int32,
+  alpha : Int32,
+  beta : Int32,
 ) -> Unit {
   let mut p = start
   for _d = 0; _d < 4 * along; _d = _d + 1 {
@@ -142,10 +147,11 @@ fn h264_lf_luma_intra(
     let q0 = data[p]
     let q1 = data[p + xstep]
     if h264_deblock_abs(p0 - q0) < alpha &&
-      h264_deblock_abs(p1 - p0) < beta && h264_deblock_abs(q1 - q0) < beta {
+      h264_deblock_abs(p1 - p0) < beta &&
+      h264_deblock_abs(q1 - q0) < beta {
       let p2 = data[p - 3 * xstep]
       let q2 = data[p + 2 * xstep]
-      if h264_deblock_abs(p0 - q0) < ((alpha >> 2) + 2) {
+      if h264_deblock_abs(p0 - q0) < (alpha >> 2) + 2 {
         if h264_deblock_abs(p2 - p0) < beta {
           let p3 = data[p - 4 * xstep]
           data[p - xstep] = (p2 + 2 * p1 + 2 * p0 + 2 * q0 + q1 + 4) >> 3
@@ -175,14 +181,14 @@ fn h264_lf_luma_intra(
 /// `h264_loop_filter_chroma`: `tc` is already `tc0_table[index][bS] + 1`, and a
 /// non-positive value skips the group (`tc0_table` uses -1 for bS == 0).
 fn h264_lf_chroma(
-  data : Array[Int],
-  start : Int,
-  xstep : Int,
-  ystep : Int,
-  along : Int,
-  alpha : Int,
-  beta : Int,
-  tc : Int,
+  data : Array[Int32],
+  start : Int32,
+  xstep : Int32,
+  ystep : Int32,
+  along : Int32,
+  alpha : Int32,
+  beta : Int32,
+  tc : Int32,
 ) -> Unit {
   let mut p = start
   for _i = 0; _i < 4; _i = _i + 1 {
@@ -195,7 +201,8 @@ fn h264_lf_chroma(
         let q0 = data[p]
         let q1 = data[p + xstep]
         if h264_deblock_abs(p0 - q0) < alpha &&
-          h264_deblock_abs(p1 - p0) < beta && h264_deblock_abs(q1 - q0) < beta {
+          h264_deblock_abs(p1 - p0) < beta &&
+          h264_deblock_abs(q1 - q0) < beta {
           let delta = h264_deblock_clip(
             ((q0 - p0) * 4 + (p1 - q1) + 4) >> 3,
             -tc,
@@ -210,15 +217,16 @@ fn h264_lf_chroma(
   }
 }
 
-///| `h264_loop_filter_chroma_intra`: the bS == 4 chroma edge filter. */
+///|
+/// `h264_loop_filter_chroma_intra`: the bS == 4 chroma edge filter. */
 fn h264_lf_chroma_intra(
-  data : Array[Int],
-  start : Int,
-  xstep : Int,
-  ystep : Int,
-  along : Int,
-  alpha : Int,
-  beta : Int,
+  data : Array[Int32],
+  start : Int32,
+  xstep : Int32,
+  ystep : Int32,
+  along : Int32,
+  alpha : Int32,
+  beta : Int32,
 ) -> Unit {
   let mut p = start
   for _d = 0; _d < 4 * along; _d = _d + 1 {
@@ -227,7 +235,8 @@ fn h264_lf_chroma_intra(
     let q0 = data[p]
     let q1 = data[p + xstep]
     if h264_deblock_abs(p0 - q0) < alpha &&
-      h264_deblock_abs(p1 - p0) < beta && h264_deblock_abs(q1 - q0) < beta {
+      h264_deblock_abs(p1 - p0) < beta &&
+      h264_deblock_abs(q1 - q0) < beta {
       data[p - xstep] = (2 * p1 + p0 + q1 + 2) >> 2
       data[p] = (2 * q1 + q0 + p1 + 2) >> 2
     }
@@ -239,21 +248,23 @@ fn h264_lf_chroma_intra(
 /// One filtered edge: the C `filter_mb_edge{v,h}` / `filter_mb_edgec{v,h}`
 /// with `intra` telling whether the strong (bS == 4) kernel may be used.
 fn h264_filter_edge(
-  data : Array[Int],
-  start : Int,
-  stride : Int,
-  along : Int,
-  qp : Int,
-  a : Int,
-  b : Int,
-  bs : Int,
+  data : Array[Int32],
+  start : Int32,
+  stride : Int32,
+  along : Int32,
+  qp : Int32,
+  a : Int32,
+  b : Int32,
+  bs : Int32,
   intra : Bool,
   chroma : Bool,
   vertical : Bool,
 ) -> Unit {
   let index_a = qp + a
   let index_b = qp + b
-  if index_a < 0 || index_a >= h264_alpha_table.length() || index_b < 0 ||
+  if index_a < 0 ||
+    index_a >= h264_alpha_table.length() ||
+    index_b < 0 ||
     index_b >= h264_beta_table.length() {
     return
   }
@@ -286,13 +297,113 @@ fn h264_filter_edge(
 /// the left macroblock edge and the internal vertical edges (`dir == 0`), then
 /// the top edge and the internal horizontal edges (`dir == 1`), in exactly the
 /// order the C code calls `filter_mb_dir`.
+
+///| Deblock-side neighbour block info: intra flag, luma nz, ref and mv of
+
+///| the 4x4 block at macroblock-relative coordinates (may cross into the
+
+///|
+/// left/top macroblocks). Intra blocks keep the constructor ref/mv (-2, 0).
+fn h264_deblock_block(
+  ctx : H264DecCtx,
+  mb_x : Int32,
+  mb_y : Int32,
+  bx : Int32,
+  by : Int32,
+) -> (Bool, Int32, Int32, Int32, Int32) {
+  let ax = mb_x * 4 + bx
+  let ay = mb_y * 4 + by
+  let nmb = ay / 4 * ctx.mb_width + ax / 4
+  let info = ctx.infos[nmb]
+  let idx = ay % 4 * 4 + ax % 4
+  (
+    h264_is_intra_type(info.mb_type_bits),
+    info.nz[idx],
+    info.ref_idx[idx],
+    info.mv[2 * idx],
+    info.mv[2 * idx + 1],
+  )
+}
+
+///|
+/// bS for one 4x4 block pair across an edge (spec 8.7.2.3, frame pictures):
+/// 4/3 when either side is intra (macroblock edge / inner edge), 3 when any
+/// coefficient is present, 1 for different references, 2/1 by the motion
+/// vector difference (quarter-pel thresholds 4 and 1), 0 otherwise.
+fn h264_bs_pair(
+  ctx : H264DecCtx,
+  mb_x : Int32,
+  mb_y : Int32,
+  pxy : (Int32, Int32),
+  qxy : (Int32, Int32),
+  mb_edge : Bool,
+) -> Int32 {
+  let (pintra, pnz, pref, pmvx, pmvy) = h264_deblock_block(
+    ctx,
+    mb_x,
+    mb_y,
+    pxy.0,
+    pxy.1,
+  )
+  let (qintra, qnz, qref, qmvx, qmvy) = h264_deblock_block(
+    ctx,
+    mb_x,
+    mb_y,
+    qxy.0,
+    qxy.1,
+  )
+  if pintra || qintra {
+    return if mb_edge { 4 } else { 3 }
+  }
+  if pnz > 0 || qnz > 0 {
+    return 3
+  }
+  if pref != qref {
+    return 1
+  }
+  let dx = if pmvx > qmvx { pmvx - qmvx } else { qmvx - pmvx }
+  let dy = if pmvy > qmvy { pmvy - qmvy } else { qmvy - pmvy }
+  if dx >= 4 || dy >= 4 {
+    2
+  } else if dx >= 1 || dy >= 1 {
+    1
+  } else {
+    0
+  }
+}
+
+///|
+/// The four bS values of one luma edge: `vertical` selects the vertical
+/// edges (blocks left/right of the edge), `edge` is 0 (macroblock edge) to 3.
+fn h264_bs_edge(
+  ctx : H264DecCtx,
+  mb_x : Int32,
+  mb_y : Int32,
+  vertical : Bool,
+  edge : Int32,
+) -> Array[Int32] {
+  let bs : Array[Int32] = [0, 0, 0, 0]
+  for s = 0; s < 4; s = s + 1 {
+    bs[s] = if vertical {
+      h264_bs_pair(ctx, mb_x, mb_y, (edge - 1, s), (edge, s), edge == 0)
+    } else {
+      h264_bs_pair(ctx, mb_x, mb_y, (s, edge - 1), (s, edge), edge == 0)
+    }
+  }
+  bs
+}
+
+///|
+/// Filter one luma/chroma edge segment-by-segment when the picture has
+/// inter macroblocks: each 4-sample segment takes its own bS. Intra edges
+/// keep the whole-edge strong/bs=3 paths of `h264_filter_edge`.
 fn h264_filter_mb(
   ctx : H264DecCtx,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  a : Int,
-  b : Int,
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  a : Int32,
+  b : Int32,
 ) -> Unit {
   let pps = ctx.pps
   let qp = ctx.infos[mb_idx].qp
@@ -300,156 +411,236 @@ fn h264_filter_mb(
   let cqp1 = h264_get_chroma_qp(pps, 1, qp)
   let ybase = mb_y * 16 * ctx.ystride + mb_x * 16
   let cbase = mb_y * 8 * ctx.cstride + mb_x * 8
-  // --- dir == 0: vertical edges (left macroblock edge, then 4/8/12)
-  if mb_x > 0 {
-    let nqp = ctx.infos[mb_idx - 1].qp
-    let qp_avg = (qp + nqp + 1) >> 1
-    let c0_avg = (cqp0 + h264_get_chroma_qp(pps, 0, nqp) + 1) >> 1
-    let c1_avg = (cqp1 + h264_get_chroma_qp(pps, 1, nqp) + 1) >> 1
-    h264_filter_edge(ctx.y, ybase, ctx.ystride, 4, qp_avg, a, b, 4, true, false, true)
-    h264_filter_edge(ctx.u, cbase, ctx.cstride, 2, c0_avg, a, b, 4, true, true, true)
-    h264_filter_edge(ctx.v, cbase, ctx.cstride, 2, c1_avg, a, b, 4, true, true, true)
-  }
-  for edge = 1; edge < 4; edge = edge + 1 {
-    h264_filter_edge(
-      ctx.y, ybase + 4 * edge, ctx.ystride, 4, qp, a, b, 3, false, false, true,
-    )
-    if edge % 2 == 0 {
-      h264_filter_edge(
-        ctx.u, cbase + 2 * edge, ctx.cstride, 2, cqp0, a, b, 3, false, true, true,
-      )
-      h264_filter_edge(
-        ctx.v, cbase + 2 * edge, ctx.cstride, 2, cqp1, a, b, 3, false, true, true,
-      )
-    }
-  }
-  // --- dir == 1: horizontal edges (top macroblock edge, then 4/8/12 rows)
-  if mb_y > 0 {
-    let nqp = ctx.infos[mb_idx - ctx.mb_width].qp
-    let qp_avg = (qp + nqp + 1) >> 1
-    let c0_avg = (cqp0 + h264_get_chroma_qp(pps, 0, nqp) + 1) >> 1
-    let c1_avg = (cqp1 + h264_get_chroma_qp(pps, 1, nqp) + 1) >> 1
-    h264_filter_edge(ctx.y, ybase, ctx.ystride, 4, qp_avg, a, b, 4, true, false, false)
-    h264_filter_edge(ctx.u, cbase, ctx.cstride, 2, c0_avg, a, b, 4, true, true, false)
-    h264_filter_edge(ctx.v, cbase, ctx.cstride, 2, c1_avg, a, b, 4, true, true, false)
-  }
-  for edge = 1; edge < 4; edge = edge + 1 {
-    h264_filter_edge(
-      ctx.y,
-      ybase + 4 * edge * ctx.ystride,
-      ctx.ystride,
-      4,
-      qp,
-      a,
-      b,
-      3,
-      false,
-      false,
-      false,
-    )
-    if edge % 2 == 0 {
-      h264_filter_edge(
-        ctx.u,
-        cbase + 2 * edge * ctx.cstride,
-        ctx.cstride,
-        2,
-        cqp0,
-        a,
-        b,
-        3,
-        false,
-        true,
-        false,
-      )
-      h264_filter_edge(
-        ctx.v,
-        cbase + 2 * edge * ctx.cstride,
-        ctx.cstride,
-        2,
-        cqp1,
-        a,
-        b,
-        3,
-        false,
-        true,
-        false,
-      )
+  let cur_intra = h264_is_intra_type(ctx.infos[mb_idx].mb_type_bits)
+  // Vertical edges (dir == 0), then horizontal (dir == 1).
+  for dir = 0; dir < 2; dir = dir + 1 {
+    let vertical = dir == 0
+    let ystep = if vertical { ctx.ystride } else { 1 }
+    let cstep = if vertical { ctx.cstride } else { 1 }
+    for edge = 0; edge < 4; edge = edge + 1 {
+      let neigh_intra = if edge == 0 {
+        if vertical {
+          mb_x > 0 && h264_is_intra_type(ctx.infos[mb_idx - 1].mb_type_bits)
+        } else {
+          mb_y > 0 &&
+          h264_is_intra_type(ctx.infos[mb_idx - ctx.mb_width].mb_type_bits)
+        }
+      } else {
+        false
+      }
+      let at_border = if vertical {
+        edge == 0 && mb_x == 0
+      } else {
+        edge == 0 && mb_y == 0
+      }
+      if at_border {
+        continue
+      }
+      // Neighbour QP for the macroblock edge, own QP for inner edges.
+      let neigh_qp = if edge == 0 {
+        if vertical {
+          ctx.infos[mb_idx - 1].qp
+        } else {
+          ctx.infos[mb_idx - ctx.mb_width].qp
+        }
+      } else {
+        qp
+      }
+      let yqp = (qp + neigh_qp + 1) >> 1
+      let cq0 = (cqp0 + h264_get_chroma_qp(pps, 0, neigh_qp) + 1) >> 1
+      let cq1 = (cqp1 + h264_get_chroma_qp(pps, 1, neigh_qp) + 1) >> 1
+      let yoff = ybase +
+        (if vertical { 4 * edge } else { 4 * edge * ctx.ystride })
+      let coff = cbase +
+        (if vertical { 2 * edge } else { 2 * edge * ctx.cstride })
+      let bs = h264_bs_edge(ctx, mb_x, mb_y, vertical, edge)
+      let strong = cur_intra || neigh_intra
+      let mut any_bs = false
+      for s = 0; s < 4; s = s + 1 {
+        if bs[s] > 0 {
+          any_bs = true
+        }
+      }
+      if strong {
+        if edge == 0 {
+          h264_filter_edge(
+            ctx.y,
+            yoff,
+            ctx.ystride,
+            4,
+            yqp,
+            a,
+            b,
+            4,
+            true,
+            false,
+            vertical,
+          )
+          h264_filter_edge(
+            ctx.u,
+            coff,
+            ctx.cstride,
+            2,
+            cq0,
+            a,
+            b,
+            4,
+            true,
+            true,
+            vertical,
+          )
+          h264_filter_edge(
+            ctx.v,
+            coff,
+            ctx.cstride,
+            2,
+            cq1,
+            a,
+            b,
+            4,
+            true,
+            true,
+            vertical,
+          )
+        } else {
+          h264_filter_edge(
+            ctx.y,
+            yoff,
+            ctx.ystride,
+            4,
+            qp,
+            a,
+            b,
+            3,
+            false,
+            false,
+            vertical,
+          )
+        }
+      } else {
+        if !any_bs {
+          continue
+        }
+        for s = 0; s < 4; s = s + 1 {
+          if bs[s] > 0 {
+            h264_filter_edge(
+              ctx.y,
+              yoff + 4 * s * ystep,
+              ctx.ystride,
+              1,
+              qp,
+              a,
+              b,
+              bs[s],
+              false,
+              false,
+              vertical,
+            )
+          }
+        }
+      }
+      // Chroma: filtered on the macroblock edge and every second inner edge
+      // (luma edges 4 and 8). For inter edges each 4-sample chroma chunk
+      // takes the max bS of its two luma segments.
+      if edge == 0 || edge == 2 {
+        if strong && edge == 0 {
+          // handled by the strong branch above
+          continue
+        }
+        for j = 0; j < 2; j = j + 1 {
+          let cb = if bs[2 * j] > bs[2 * j + 1] {
+            bs[2 * j]
+          } else {
+            bs[2 * j + 1]
+          }
+          if cb > 0 {
+            h264_filter_edge(
+              ctx.u,
+              coff + 4 * j * cstep,
+              ctx.cstride,
+              1,
+              cq0,
+              a,
+              b,
+              cb,
+              false,
+              true,
+              vertical,
+            )
+            h264_filter_edge(
+              ctx.v,
+              coff + 4 * j * cstep,
+              ctx.cstride,
+              1,
+              cq1,
+              a,
+              b,
+              cb,
+              false,
+              true,
+              vertical,
+            )
+          }
+        }
+      }
     }
   }
 }
 
-///| `alpha_table[52*3]` (`h264_loopfilter.c`). Index is `qp + a`.
-let h264_alpha_table : Array[Int] = [
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13,
-  15, 17, 20, 22, 25, 28, 32, 36, 40, 45, 50, 56, 63,
-  71, 80, 90, 101, 113, 127, 144, 162, 182, 203, 226, 255, 255,
-  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+///|
+/// `alpha_table[52*3]` (`h264_loopfilter.c`). Index is `qp + a`.
+let h264_alpha_table : Array[Int32] = [
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13, 15,
+  17, 20, 22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113, 127, 144,
+  162, 182, 203, 226, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+  255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 ]
 
-///| `beta_table[52*3]`. Index is `qp + b`.
-let h264_beta_table : Array[Int] = [
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
-  6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12,
-  12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18,
-  18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-  18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-  18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
-  18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+///|
+/// `beta_table[52*3]`. Index is `qp + b`.
+let h264_beta_table : Array[Int32] = [
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 6, 6, 7,
+  7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17,
+  18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+  18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
+  18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18,
 ]
 
-///| `tc0_table[52*3][4]`, flattened row-major (index `4 * (qp + a) + bS`).
-let h264_tc0_table : Array[Int] = [
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
-  -1, 0, 0, 0, -1, 0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1,
-  -1, 0, 0, 1, -1, 0, 1, 1, -1, 0, 1, 1, -1, 1, 1, 1,
-  -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 2,
-  -1, 1, 1, 2, -1, 1, 1, 2, -1, 1, 1, 2, -1, 1, 2, 3,
-  -1, 1, 2, 3, -1, 2, 2, 3, -1, 2, 2, 4, -1, 2, 3, 4,
-  -1, 2, 3, 4, -1, 3, 3, 5, -1, 3, 4, 6, -1, 3, 4, 6,
-  -1, 4, 5, 7, -1, 4, 5, 8, -1, 4, 6, 9, -1, 5, 7, 10,
-  -1, 6, 8, 11, -1, 6, 8, 13, -1, 7, 10, 14, -1, 8, 11, 16,
-  -1, 9, 12, 18, -1, 10, 13, 20, -1, 11, 15, 23, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
-  -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25,
+///|
+/// `tc0_table[52*3][4]`, flattened row-major (index `4 * (qp + a) + bS`).
+let h264_tc0_table : Array[Int32] = [
+  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1,
+  0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0,
+  0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0,
+  0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
+  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1,
+  0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0,
+  0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0,
+  0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0,
+  -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1,
+  0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0,
+  0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0,
+  0, -1, 0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1, -1, 0, 0, 1, -1, 0, 1, 1, -1, 0, 1, 1,
+  -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 2, -1, 1, 1, 2, -1,
+  1, 1, 2, -1, 1, 1, 2, -1, 1, 2, 3, -1, 1, 2, 3, -1, 2, 2, 3, -1, 2, 2, 4, -1, 2,
+  3, 4, -1, 2, 3, 4, -1, 3, 3, 5, -1, 3, 4, 6, -1, 3, 4, 6, -1, 4, 5, 7, -1, 4, 5,
+  8, -1, 4, 6, 9, -1, 5, 7, 10, -1, 6, 8, 11, -1, 6, 8, 13, -1, 7, 10, 14, -1, 8,
+  11, 16, -1, 9, 12, 18, -1, 10, 13, 20, -1, 11, 15, 23, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13, 17, 25, -1, 13,
+  17, 25, -1, 13, 17, 25,
 ]
-

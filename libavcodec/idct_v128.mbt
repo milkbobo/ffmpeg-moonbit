@@ -31,7 +31,7 @@
 ///|
 /// Convert a row-major `int16` block (`Array[Int]`) into the 128-byte
 /// little-endian buffer used by the SIMD paths.
-pub fn idct_block_to_bytes(block : Array[Int]) -> FixedArray[Byte] {
+pub fn idct_block_to_bytes(block : Array[Int32]) -> FixedArray[Byte] {
   let buf : FixedArray[Byte] = FixedArray::make(128, b'\x00')
   for i = 0; i < 64; i = i + 1 {
     buf[2 * i] = (block[i] & 0xFF).to_byte()
@@ -40,19 +40,21 @@ pub fn idct_block_to_bytes(block : Array[Int]) -> FixedArray[Byte] {
   buf
 }
 
-///| Convert the 128-byte little-endian buffer back into a row-major block. */
-pub fn idct_bytes_to_block(buf : FixedArray[Byte]) -> Array[Int] {
-  let out : Array[Int] = Array::make(64, 0)
+///|
+/// Convert the 128-byte little-endian buffer back into a row-major block. */
+pub fn idct_bytes_to_block(buf : FixedArray[Byte]) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(64, 0)
   for i = 0; i < 64; i = i + 1 {
     let u = buf[2 * i].to_uint() | (buf[2 * i + 1].to_uint() << 8)
-    out[i] = (u.reinterpret_as_int() << 16) >> 16
+    out[i] = u.reinterpret_as_int() << 16 >> 16
   }
   out
 }
 
-///| Apply one `i8x16_shuffle` from a 16-entry index vector. */
+///|
+/// Apply one `i8x16_shuffle` from a 16-entry index vector. */
 #cfg(any(target="native", target="wasm"))
-fn idct_sh(a : V128, b : V128, idx : Array[Int]) -> V128 {
+fn idct_sh(a : V128, b : V128, idx : Array[Int32]) -> V128 {
   @v128.i8x16_shuffle(
     a,
     b,
@@ -123,13 +125,15 @@ fn idct_i16(x : V128) -> V128 {
   @v128.i32x4_shr_s(@v128.i32x4_shl(x, 16), 16)
 }
 
-///| Multiply an `i32x4` vector by the constant `c` (32-bit wrapping). */
+///|
+/// Multiply an `i32x4` vector by the constant `c` (32-bit wrapping). */
 #cfg(any(target="native", target="wasm"))
-fn idct_mul(c : Int, v : V128) -> V128 {
+fn idct_mul(c : Int32, v : V128) -> V128 {
   @v128.i32x4_mul(@v128.i32x4_splat(c.reinterpret_as_uint()), v)
 }
 
-///| Horizontal lane-wise 1-D butterfly over 8 `i16x8` element vectors. */
+///|
+/// Horizontal lane-wise 1-D butterfly over 8 `i16x8` element vectors. */
 #cfg(any(target="native", target="wasm"))
 fn idct_1d(v : Array[V128], cfg : SimpleIdct, is_col : Bool) -> Array[V128] {
   let shift = if is_col { cfg.col_shift } else { cfg.row_shift }
@@ -146,9 +150,18 @@ fn idct_1d(v : Array[V128], cfg : SimpleIdct, is_col : Bool) -> Array[V128] {
     // a0 initial: row pass adds the rounding constant after *W4, the column
     // pass adds (1<<(COL_SHIFT-1))/W4 to the input before *W4 (see simple_idct.c).
     let mut a0 = if is_col {
-      idct_mul(cfg.w4, @v128.i32x4_add(x[0], @v128.i32x4_splat(((1 << (shift - 1)) / cfg.w4).reinterpret_as_uint())))
+      idct_mul(
+        cfg.w4,
+        @v128.i32x4_add(
+          x[0],
+          @v128.i32x4_splat(((1 << (shift - 1)) / cfg.w4).reinterpret_as_uint()),
+        ),
+      )
     } else {
-      @v128.i32x4_add(idct_mul(cfg.w4, x[0]), @v128.i32x4_splat((1 << (shift - 1)).reinterpret_as_uint()))
+      @v128.i32x4_add(
+        idct_mul(cfg.w4, x[0]),
+        @v128.i32x4_splat((1 << (shift - 1)).reinterpret_as_uint()),
+      )
     }
     let mut a1 = a0
     let mut a2 = a0
@@ -158,9 +171,18 @@ fn idct_1d(v : Array[V128], cfg : SimpleIdct, is_col : Bool) -> Array[V128] {
     a2 = @v128.i32x4_add(a2, idct_mul(0 - cfg.w6, x[2]))
     a3 = @v128.i32x4_add(a3, idct_mul(0 - cfg.w2, x[2]))
     let mut b0 = @v128.i32x4_add(idct_mul(cfg.w1, x[1]), idct_mul(cfg.w3, x[3]))
-    let mut b1 = @v128.i32x4_add(idct_mul(cfg.w3, x[1]), idct_mul(0 - cfg.w7, x[3]))
-    let mut b2 = @v128.i32x4_add(idct_mul(cfg.w5, x[1]), idct_mul(0 - cfg.w1, x[3]))
-    let mut b3 = @v128.i32x4_add(idct_mul(cfg.w7, x[1]), idct_mul(0 - cfg.w5, x[3]))
+    let mut b1 = @v128.i32x4_add(
+      idct_mul(cfg.w3, x[1]),
+      idct_mul(0 - cfg.w7, x[3]),
+    )
+    let mut b2 = @v128.i32x4_add(
+      idct_mul(cfg.w5, x[1]),
+      idct_mul(0 - cfg.w1, x[3]),
+    )
+    let mut b3 = @v128.i32x4_add(
+      idct_mul(cfg.w7, x[1]),
+      idct_mul(0 - cfg.w5, x[3]),
+    )
     a0 = @v128.i32x4_add(
       a0,
       @v128.i32x4_add(idct_mul(cfg.w4, x[4]), idct_mul(cfg.w6, x[6])),
@@ -210,7 +232,8 @@ fn idct_1d(v : Array[V128], cfg : SimpleIdct, is_col : Bool) -> Array[V128] {
   out
 }
 
-///| Run the full 8x8 SIMD transform and return the 8 result rows (`i16x8`). */
+///|
+/// Run the full 8x8 SIMD transform and return the 8 result rows (`i16x8`). */
 #cfg(any(target="native", target="wasm"))
 fn idct_rows_v128(buf : FixedArray[Byte], cfg : SimpleIdct) -> Array[V128] {
   let rows : Array[V128] = []
@@ -223,7 +246,8 @@ fn idct_rows_v128(buf : FixedArray[Byte], cfg : SimpleIdct) -> Array[V128] {
   idct_1d(after_row, cfg, true)
 }
 
-///| `simple_idct` (in place) on the compact byte buffer. */
+///|
+/// `simple_idct` (in place) on the compact byte buffer. */
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_v128(buf : FixedArray[Byte]) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_8bit)
@@ -232,9 +256,10 @@ pub fn ff_simple_idct_v128(buf : FixedArray[Byte]) -> Unit {
   }
 }
 
-///| Store the low 8 bytes of `v` (a saturated row) at `dest[off..off+8)`. */
+///|
+/// Store the low 8 bytes of `v` (a saturated row) at `dest[off..off+8)`. */
 #cfg(any(target="native", target="wasm"))
-fn idct_store8(dest : FixedArray[Byte], off : Int, v : V128) -> Unit {
+fn idct_store8(dest : FixedArray[Byte], off : Int32, v : V128) -> Unit {
   let scratch : FixedArray[Byte] = FixedArray::make(16, b'\x00')
   @v128.v128_store(scratch, 0, v)
   for j = 0; j < 8; j = j + 1 {
@@ -242,28 +267,26 @@ fn idct_store8(dest : FixedArray[Byte], off : Int, v : V128) -> Unit {
   }
 }
 
-///| `ff_simple_idct_put_int16_8bit` on a byte pixel plane of the given stride. */
+///|
+/// `ff_simple_idct_put_int16_8bit` on a byte pixel plane of the given stride. */
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_put_v128(
   dest : FixedArray[Byte],
-  stride : Int,
+  stride : Int32,
   buf : FixedArray[Byte],
 ) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_8bit)
   for r = 0; r < 8; r = r + 1 {
-    idct_store8(
-      dest,
-      r * stride,
-      @v128.i8x16_narrow_i16x8_u(out[r], out[r]),
-    )
+    idct_store8(dest, r * stride, @v128.i8x16_narrow_i16x8_u(out[r], out[r]))
   }
 }
 
-///| `ff_simple_idct_add_int16_8bit` on a byte pixel plane of the given stride. */
+///|
+/// `ff_simple_idct_add_int16_8bit` on a byte pixel plane of the given stride. */
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_add_v128(
   dest : FixedArray[Byte],
-  stride : Int,
+  stride : Int32,
   buf : FixedArray[Byte],
 ) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_8bit)
@@ -292,20 +315,17 @@ pub fn ff_simple_idct_add_v128(
 #cfg(any(target="native", target="wasm"))
 fn idct_store16_clamped(
   dest : FixedArray[Byte],
-  off : Int,
+  off : Int32,
   v : V128,
-  max_val : Int,
+  max_val : Int32,
 ) -> Unit {
   let hi = @v128.i16x8_splat(max_val.to_uint16())
   let zero = @v128.i16x8_splat(0)
-  @v128.v128_store(
-    dest,
-    off,
-    @v128.i16x8_max_s(@v128.i16x8_min_s(v, hi), zero),
-  )
+  @v128.v128_store(dest, off, @v128.i16x8_max_s(@v128.i16x8_min_s(v, hi), zero))
 }
 
-///| `ff_simple_idct_int16_10bit` (in place) on the compact byte buffer. */
+///|
+/// `ff_simple_idct_int16_10bit` (in place) on the compact byte buffer. */
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_v128_10bit(buf : FixedArray[Byte]) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_10bit)
@@ -314,7 +334,8 @@ pub fn ff_simple_idct_v128_10bit(buf : FixedArray[Byte]) -> Unit {
   }
 }
 
-///| `ff_simple_idct_int16_12bit` (in place) on the compact byte buffer. */
+///|
+/// `ff_simple_idct_int16_12bit` (in place) on the compact byte buffer. */
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_v128_12bit(buf : FixedArray[Byte]) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_12bit)
@@ -329,7 +350,7 @@ pub fn ff_simple_idct_v128_12bit(buf : FixedArray[Byte]) -> Unit {
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_put_v128_10bit(
   dest : FixedArray[Byte],
-  stride_bytes : Int,
+  stride_bytes : Int32,
   buf : FixedArray[Byte],
 ) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_10bit)
@@ -338,11 +359,12 @@ pub fn ff_simple_idct_put_v128_10bit(
   }
 }
 
-///| `ff_simple_idct_put_int16_12bit` writing 16-bit pixels. */
+///|
+/// `ff_simple_idct_put_int16_12bit` writing 16-bit pixels. */
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_put_v128_12bit(
   dest : FixedArray[Byte],
-  stride_bytes : Int,
+  stride_bytes : Int32,
   buf : FixedArray[Byte],
 ) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_12bit)
@@ -351,11 +373,12 @@ pub fn ff_simple_idct_put_v128_12bit(
   }
 }
 
-///| `ff_simple_idct_add_int16_10bit` writing 16-bit pixels. */
+///|
+/// `ff_simple_idct_add_int16_10bit` writing 16-bit pixels. */
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_add_v128_10bit(
   dest : FixedArray[Byte],
-  stride_bytes : Int,
+  stride_bytes : Int32,
   buf : FixedArray[Byte],
 ) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_10bit)
@@ -366,11 +389,12 @@ pub fn ff_simple_idct_add_v128_10bit(
   }
 }
 
-///| `ff_simple_idct_add_int16_12bit` writing 16-bit pixels. */
+///|
+/// `ff_simple_idct_add_int16_12bit` writing 16-bit pixels. */
 #cfg(any(target="native", target="wasm"))
 pub fn ff_simple_idct_add_v128_12bit(
   dest : FixedArray[Byte],
-  stride_bytes : Int,
+  stride_bytes : Int32,
   buf : FixedArray[Byte],
 ) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_12bit)

@@ -6,7 +6,6 @@
 /// emulation-prevention rule is H.264 §7.4.1 / H.265 §7.4.2. SODB sizes are
 /// hand-derived from `get_bit_length` (remove trailing zero bytes, then the
 /// stop bit and its trailing zeros).
-
 test "h2645: rbsp removes emulation prevention bytes" {
   let r = ff_h2645_extract_rbsp(b"\x67\x42\x00\x00\x03\x1E\x80")
   assert_eq(r.consumed, 7)
@@ -14,6 +13,7 @@ test "h2645: rbsp removes emulation prevention bytes" {
   assert_eq(r.data, b"\x67\x42\x00\x00\x1E\x80")
 }
 
+///|
 test "h2645: rbsp without escapes is unchanged" {
   let r = ff_h2645_extract_rbsp(b"\x67\x42\x00\x1E")
   assert_eq(r.consumed, 4)
@@ -21,6 +21,7 @@ test "h2645: rbsp without escapes is unchanged" {
   assert_eq(r.data, b"\x67\x42\x00\x1E")
 }
 
+///|
 test "h2645: rbsp stops in front of a later start code" {
   // 67 42 [00 00 03] 1E | 00 00 01 68 CE 80
   let r = ff_h2645_extract_rbsp(b"\x67\x42\x00\x00\x03\x1E\x00\x00\x01\x68\xCE")
@@ -29,6 +30,7 @@ test "h2645: rbsp stops in front of a later start code" {
   assert_eq(r.data, b"\x67\x42\x00\x00\x1E")
 }
 
+///|
 test "h2645: get_bit_length removes stop bit and trailing zeros" {
   // 1-byte NAL header, last byte 0x1E = ...1 1110: stop bit at bit 3 (LSB
   // numbering from the end) → 1 zero + the stop bit removed.
@@ -43,6 +45,7 @@ test "h2645: get_bit_length removes stop bit and trailing zeros" {
   assert_eq(get_bit_length(b"\x67", 2, true), -1)
 }
 
+///|
 test "h2645: Annex B splits two NAL units" {
   let buf = b"\x00\x00\x00\x01\x67\x42\x00\x1E\x00\x00\x01\x68\xCE\x80"
   let pkt = ff_h2645_packet_split(buf, 4, H264, false).unwrap()
@@ -56,6 +59,7 @@ test "h2645: Annex B splits two NAL units" {
   assert_eq(pkt.nals[1].size_bits, 16)
 }
 
+///|
 test "h2645: Annex B skips leading garbage" {
   let buf = b"\x12\x34\x00\x00\x01\x67\x42\x00\x1E\x00\x00\x01\x68\xCE\x80"
   let pkt = ff_h2645_packet_split(buf, 4, H264, false).unwrap()
@@ -63,6 +67,7 @@ test "h2645: Annex B skips leading garbage" {
   assert_eq(pkt.nals[0].nal_type, 7)
 }
 
+///|
 test "h2645: Annex B without a start code is invalid" {
   let pkt = ff_h2645_packet_split(b"\x12\x34\x56\x78\x9A", 4, H264, false)
   match pkt {
@@ -71,6 +76,7 @@ test "h2645: Annex B without a start code is invalid" {
   }
 }
 
+///|
 test "h2645: length-prefixed H.264 NALs" {
   // 2-byte lengths: 4 and 3
   let buf = b"\x00\x04\x67\x42\x00\x1E\x00\x03\x68\xCE\x80"
@@ -81,6 +87,7 @@ test "h2645: length-prefixed H.264 NALs" {
   assert_eq(pkt.nals[1].data, b"\x68\xCE\x80")
 }
 
+///|
 test "h2645: length-prefixed NAL size overruns are rejected" {
   let buf = b"\x00\x09\x67\x42\x00\x1E"
   match ff_h2645_packet_split(buf, 2, H264, true) {
@@ -89,6 +96,7 @@ test "h2645: length-prefixed NAL size overruns are rejected" {
   }
 }
 
+///|
 test "h2645: HEVC NAL header (type/layer/temporal id)" {
   // 40 01 = forbidden 0, type 32 (VPS), layer 0, temporal_id_plus1 1.
   // 42 01 = type 33 (SPS), 44 01 = type 34 (PPS).
@@ -103,6 +111,7 @@ test "h2645: HEVC NAL header (type/layer/temporal id)" {
   assert_eq(pkt.nals[2].nal_type, 34)
 }
 
+///|
 test "h2645: HEVC temporal_id 0 is invalid (plus1 == 0)" {
   // 40 00: temporal_id_plus1 = 0
   let buf = b"\x00\x00\x01\x40\x00\x00\x00\x01\x40\x01\x0C\x01\xFF"
@@ -112,6 +121,7 @@ test "h2645: HEVC temporal_id 0 is invalid (plus1 == 0)" {
   assert_eq(pkt.nals[0].nal_type, 32)
 }
 
+///|
 test "h2645: unit requires zero byte" {
   assert_true(ff_h2645_unit_requires_zero_byte(H264, 1, 0))
   assert_true(!ff_h2645_unit_requires_zero_byte(H264, 1, 1))

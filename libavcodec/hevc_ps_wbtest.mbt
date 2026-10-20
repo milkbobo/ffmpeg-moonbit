@@ -21,18 +21,19 @@
 /// CU-QP-delta, weighted prediction. The 10-bit file additionally asserts
 /// profile_idc 2 / bit depth 10 / yuv420p10.
 
-///| hvcC with the real 8-bit VPS/SPS/PPS arrays (108 bytes).
-let hevc8_hvcc_b64 : Bytes =
-  b"AQFgAAAAkAAAAAAAHvAA/P34+AAADwOgAAEAGEABDAH//wFgAAADAJAAAAMAAAMAHpKAkKEAAQAoQgEBAWAAAAMAkAAAAwAAAwAeoCCDFlkq5MrwFoCAAAADAIAAAAMChKIAAQAGRAHBc9CJ"
+///|
+/// hvcC with the real 8-bit VPS/SPS/PPS arrays (108 bytes).
+let hevc8_hvcc_b64 : Bytes = b"AQFgAAAAkAAAAAAAHvAA/P34+AAADwOgAAEAGEABDAH//wFgAAADAJAAAAMAAAMAHpKAkKEAAQAoQgEBAWAAAAMAkAAAAwAAAwAeoCCDFlkq5MrwFoCAAAADAIAAAAMChKIAAQAGRAHBc9CJ"
 
-///| hvcC with the real Main10 VPS/SPS/PPS arrays (109 bytes).
-let hevc10_hvcc_b64 : Bytes =
-  b"AQIgAAAAkAAAAAAAHvAA/P36+gAADwOgAAEAGEABDAH//wIgAAADAJAAAAMAAAMAHpKAkKEAAQApQgEBAiAAAAMAkAAAAwAAAwAeoCCDE2WSrkyvAWgIAAADAAgAAAMAKECiAAEABkQBwXPQiQ=="
+///|
+/// hvcC with the real Main10 VPS/SPS/PPS arrays (109 bytes).
+let hevc10_hvcc_b64 : Bytes = b"AQIgAAAAkAAAAAAAHvAA/P36+gAADwOgAAEAGEABDAH//wIgAAADAJAAAAMAAAMAHpKAkKEAAQApQgEBAiAAAAMAkAAAAwAAAwAeoCCDE2WSrkyvAWgIAAADAAgAAAMAKECiAAEABkQBwXPQiQ=="
 
-///| Annex B VPS+SPS+PPS from the same x265 stream (82 bytes).
-let hevc8_annexb_b64 : Bytes =
-  b"AAAAAUABDAH//wFgAAADAJAAAAMAAAMAHpKAkAAAAAFCAQEBYAAAAwCQAAADAAADAB6gIIMWWSrkyvAWgIAAAAMAgAAAAwKEAAAAAUQBwXPQiQ=="
+///|
+/// Annex B VPS+SPS+PPS from the same x265 stream (82 bytes).
+let hevc8_annexb_b64 : Bytes = b"AAAAAUABDAH//wFgAAADAJAAAAMAAAMAHpKAkAAAAAFCAQEBYAAAAwCQAAADAAADAB6gIIMWWSrkyvAWgIAAAAMAgAAAAwKEAAAAAUQBwXPQiQ=="
 
+///|
 test "hevc_ps: hvcC extradata decodes real Main profile sets" {
   let hvcc = @libavutil.av_base64_decode(hevc8_hvcc_b64, 1024).unwrap()
   assert_eq(hvcc.length(), 108)
@@ -144,6 +145,7 @@ test "hevc_ps: hvcC extradata decodes real Main profile sets" {
   assert_eq(pps.pps_extension_present_flag, 0)
 }
 
+///|
 test "hevc_ps: Annex B extradata decodes the same Main profile sets" {
   let blob = @libavutil.av_base64_decode(hevc8_annexb_b64, 1024).unwrap()
   let ps = new_hevc_param_sets()
@@ -159,6 +161,7 @@ test "hevc_ps: Annex B extradata decodes the same Main profile sets" {
   assert_eq(pps.sign_data_hiding_flag, 1)
 }
 
+///|
 test "hevc_ps: Main10 hvcC parses 10-bit format" {
   let hvcc = @libavutil.av_base64_decode(hevc10_hvcc_b64, 1024).unwrap()
   let ps = new_hevc_param_sets()
@@ -178,6 +181,7 @@ test "hevc_ps: Main10 hvcC parses 10-bit format" {
   assert_eq(vps.ptl.general_ptl.profile_idc, 2)
 }
 
+///|
 test "hevc_ps: non-predictive short-term RPS" {
   // 010 (num_negative 1) 010 (num_positive 1) 1 1 (delta -1, used)
   // 1 1 (ue 0 -> delta +1, used) = 0100101111
@@ -192,6 +196,7 @@ test "hevc_ps: non-predictive short-term RPS" {
   assert_eq(rps.used, 3U)
 }
 
+///|
 test "hevc_ps: compute_poc2 wrap and BLA reset" {
   assert_eq(ff_hevc_compute_poc2(8, 250, 10, 1), 266)
   assert_eq(ff_hevc_compute_poc2(8, 250, 200, 1), 200)

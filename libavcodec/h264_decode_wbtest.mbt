@@ -7,8 +7,7 @@
 /// Expected per-frame YUV420P MD5s:
 ///   frame 0: da26f3c6711e214ec4372d361256714c
 ///   frame 1: 1586ccec95606bf17189273f2b58399d
-
-fn h264_hex(bytes : FixedArray[Byte], n : Int) -> String {
+fn h264_hex(bytes : FixedArray[Byte], n : Int32) -> String {
   let digits : Bytes = b"0123456789abcdef"
   let chars : Array[Char] = []
   for i = 0; i < n; i = i + 1 {
@@ -19,6 +18,7 @@ fn h264_hex(bytes : FixedArray[Byte], n : Int) -> String {
   String::from_array(chars[:])
 }
 
+///|
 fn h264_yuv_md5(frame : H264Frame) -> String {
   let yuv = frame.yuv420p()
   let digest = FixedArray::make(16, b'\x00')
@@ -26,6 +26,7 @@ fn h264_yuv_md5(frame : H264Frame) -> String {
   h264_hex(digest, 16)
 }
 
+///|
 test "h264: baseline 64x48 IDR frames match FFmpeg skip_loop_filter YUV" {
   let data = @libavutil.av_base64_decode(h264_baseline_b64, 4096).unwrap()
   assert_eq(data.length(), 3111)
@@ -40,6 +41,7 @@ test "h264: baseline 64x48 IDR frames match FFmpeg skip_loop_filter YUV" {
   assert_eq(h264_yuv_md5(f1), "1586ccec95606bf17189273f2b58399d")
 }
 
+///|
 test "h264: reconstructed frame is not a flat prediction" {
   // Guard against a decoder that silently emits only prediction (no
   // residual): the testsrc2 frames contain strong edges, so at least the
@@ -60,7 +62,7 @@ test "h264: reconstructed frame is not a flat prediction" {
   assert_true(hi - lo > 32)
 }
 
-
+///|
 test "h264: smooth gradient stream matches FFmpeg (I16x16 luma DC)" {
   let data = @libavutil.av_base64_decode(h264_smooth_b64, 8192).unwrap()
   assert_eq(data.length(), 1852)
@@ -70,6 +72,7 @@ test "h264: smooth gradient stream matches FFmpeg (I16x16 luma DC)" {
   assert_eq(h264_yuv_md5(frames[1]), "4134a7443a5aea6d556991b76f927c73")
 }
 
+///|
 test "h264: flat color stream matches FFmpeg (I16x16 DC/VERT, no residual)" {
   let data = @libavutil.av_base64_decode(h264_flat_b64, 4096).unwrap()
   assert_eq(data.length(), 728)
@@ -79,6 +82,7 @@ test "h264: flat color stream matches FFmpeg (I16x16 DC/VERT, no residual)" {
   assert_eq(h264_yuv_md5(frames[1]), "6b020c288feee0476f843bc661767cce")
 }
 
+///|
 test "h264: cropped 88x56 stream matches FFmpeg (SPS frame cropping)" {
   // 88x56 is not macroblock aligned: the SPS codes 6x4 MB and crops the
   // right/bottom edges. This pins the cropping path (`crop_left`/`crop_top`
@@ -95,6 +99,7 @@ test "h264: cropped 88x56 stream matches FFmpeg (SPS frame cropping)" {
   assert_eq(h264_yuv_md5(frames[1]), "3457eb7fad46d633d0064c1c56bf88c3")
 }
 
+///|
 test "h264: qp=40 stream matches FFmpeg (coarse quantisation)" {
   // At qp=40 most AC coefficients are zero: this drives the CAVLC
   // total_zeros / run_before paths with long zero runs.
@@ -108,6 +113,7 @@ test "h264: qp=40 stream matches FFmpeg (coarse quantisation)" {
   assert_eq(h264_yuv_md5(frames[1]), "74e5d157112a08a8b3ea0296562bf06a")
 }
 
+///|
 test "h264: qp=10 stream matches FFmpeg (dense residual)" {
   let data = @libavutil.av_base64_decode(h264_qp10_b64, 8192).unwrap()
   assert_eq(data.length(), 4906)
@@ -122,8 +128,9 @@ test "h264: qp=10 stream matches FFmpeg (dense residual)" {
 // FFmpeg's *default* decode (no -skip_loop_filter).
 // ---------------------------------------------------------------------------
 
-///| Decode a stream with the in-loop deblocking filter enabled.
-fn h264_md5_deblocked(b64 : Bytes, hint : Int) -> Array[String] {
+///|
+/// Decode a stream with the in-loop deblocking filter enabled.
+fn h264_md5_deblocked(b64 : Bytes, hint : Int32) -> Array[String] {
   let data = @libavutil.av_base64_decode(b64, hint).unwrap()
   let frames = h264_decode_annexb_i_frames(data).unwrap()
   let out : Array[String] = []
@@ -133,6 +140,7 @@ fn h264_md5_deblocked(b64 : Bytes, hint : Int) -> Array[String] {
   out
 }
 
+///|
 test "h264: deblocking matches FFmpeg default output (3 original streams)" {
   // Frame 1 of `smooth` and both frames of `flat` are unchanged by the filter
   // (their edges stay below alpha/beta), so only some MD5s differ from the
@@ -148,6 +156,7 @@ test "h264: deblocking matches FFmpeg default output (3 original streams)" {
   ])
 }
 
+///|
 test "h264: deblocking matches FFmpeg default output (crop / qp variants)" {
   assert_eq(h264_md5_deblocked(h264_crop_b64, 8192), [
     "853f979d9d0708f592428250e04a1371", "f1d044be682d70f5a230567158bbcc8f",
@@ -166,8 +175,9 @@ test "h264: deblocking matches FFmpeg default output (crop / qp variants)" {
 // panic and never as silently wrong pixels.
 // ---------------------------------------------------------------------------
 
-///| Error string of a stream that must be rejected (`"no error"` if decoded).
-fn h264_err(b64 : Bytes, hint : Int) -> String {
+///|
+/// Error string of a stream that must be rejected (`"no error"` if decoded).
+fn h264_err(b64 : Bytes, hint : Int32) -> String {
   let data = @libavutil.av_base64_decode(b64, hint).unwrap()
   match h264_decode_annexb_i_frames(data) {
     Ok(_) => "no error"
@@ -175,13 +185,17 @@ fn h264_err(b64 : Bytes, hint : Int) -> String {
   }
 }
 
-test "h264: P slices are rejected" {
-  // keyint=10: frame 0 decodes as I, then the P slice must abort the decode.
-  // `h264_slice.mbt` reports unsupported slice types as `PATCHWELCOME`, the
-  // same token FFmpeg's `AVERROR_PATCHWELCOME` uses for this case.
-  assert_eq(h264_err(h264_pslice_b64, 4096), "PATCHWELCOME")
+///|
+test "h264: P slices decode through the DPB entry" {
+  // keyint=10: frame 0 decodes as I, the following P slices reference it
+  // through the sliding-window DPB (`h264_dpb.mbt`).
+  let data = @libavutil.av_base64_decode(h264_pslice_b64, 4096).unwrap()
+  let frames = h264_decode_annexb_frames(data, false).unwrap()
+  // One I picture plus the following P pictures (keyint=10).
+  assert_eq(frames.length(), 3)
 }
 
+///|
 test "h264: multiple slices per picture are rejected" {
   assert_eq(
     h264_err(h264_multislice_b64, 4096),
@@ -189,10 +203,12 @@ test "h264: multiple slices per picture are rejected" {
   )
 }
 
+///|
 test "h264: 4:2:2 chroma format is rejected" {
   assert_eq(h264_err(h264_422_b64, 4096), "only 4:2:0 is supported")
 }
 
+///|
 test "h264: 10-bit sample depth is rejected" {
   assert_eq(h264_err(h264_10bit_b64, 4096), "only 8-bit decoding is supported")
 }

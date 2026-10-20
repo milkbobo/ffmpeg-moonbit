@@ -11,13 +11,15 @@
 /// port: `floor(tmp + 0.499999999999)` / `floor(tmp + 0.5)` values are stored
 /// back through `i16` on purpose, because the C code stores into `short`.
 
-///| `static double coefficients[8 * 8]`, filled by `ff_ref_dct_init`. */
+///|
+/// `static double coefficients[8 * 8]`, filled by `ff_ref_dct_init`. */
 let coefficients : Array[Double] = Array::make(64, 0.0)
 
-///| `ff_ref_dct_init`: build the DCT basis matrix. */
+///|
+/// `ff_ref_dct_init`: build the DCT basis matrix. */
 pub fn ff_ref_dct_init() -> Unit {
   for j = 0; j < 8; j = j + 1 {
-    coefficients[j] = (0.125).sqrt()
+    coefficients[j] = 0.125.sqrt()
     let mut i = 8
     while i < 64 {
       coefficients[i + j] = 0.5 *
@@ -30,7 +32,7 @@ pub fn ff_ref_dct_init() -> Unit {
 ///|
 /// `ff_ref_fdct`: double-precision forward DCT,
 /// `block = coefficients * block * coefficients'`.
-pub fn ff_ref_fdct(block : Array[Int]) -> Unit {
+pub fn ff_ref_fdct(block : Array[Int32]) -> Unit {
   let out : Array[Double] = Array::make(64, 0.0)
   for i = 0; i < 64; i = i + 8 {
     for j = 0; j < 8; j = j + 1 {
@@ -55,7 +57,7 @@ pub fn ff_ref_fdct(block : Array[Int]) -> Unit {
 ///|
 /// `ff_ref_idct`: double-precision inverse DCT,
 /// `block = (coefficients') * block * coefficients`.
-pub fn ff_ref_idct(block : Array[Int]) -> Unit {
+pub fn ff_ref_idct(block : Array[Int32]) -> Unit {
   let out : Array[Double] = Array::make(64, 0.0)
   for i = 0; i < 64; i = i + 8 {
     for j = 0; j < 8; j = j + 1 {

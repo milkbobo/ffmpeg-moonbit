@@ -20,62 +20,70 @@
 // name below. The frame-length switch keeps the numeric AOT values in its
 // patterns (MoonBit patterns cannot use `let` constants).
 
-///| `AOT_NULL`. */
-let aot_null : Int = 0
+///|
+/// `AOT_NULL`. */
+let aot_null : Int32 = 0
 
-///| `AOT_AAC_LC`. */
-let aot_aac_lc : Int = 2
+///|
+/// `AOT_AAC_LC`. */
+let aot_aac_lc : Int32 = 2
 
-///| `AOT_SBR`. */
-let aot_sbr : Int = 5
+///|
+/// `AOT_SBR`. */
+let aot_sbr : Int32 = 5
 
-///| `AOT_ER_BSAC`. */
-let aot_er_bsac : Int = 22
+///|
+/// `AOT_ER_BSAC`. */
+let aot_er_bsac : Int32 = 22
 
-///| `AOT_PS`. */
-let aot_ps : Int = 29
+///|
+/// `AOT_PS`. */
+let aot_ps : Int32 = 29
 
-///| `AOT_ESCAPE`. */
-let aot_escape : Int = 31
+///|
+/// `AOT_ESCAPE`. */
+let aot_escape : Int32 = 31
 
-///| `AOT_ALS`. */
-let aot_als : Int = 36
+///|
+/// `AOT_ALS`. */
+let aot_als : Int32 = 36
 
 ///|
 /// `ff_mpeg4audio_channels`: channel count for each channel-configuration
 /// index (0 means "see the GASpecificConfig / PCE").
-let mpeg4audio_channels : FixedArray[Int] = [
+let mpeg4audio_channels : FixedArray[Int32] = [
   0, 1, 2, 3, 4, 5, 6, 8, 0, 0, 0, 7, 8, 24, 8,
 ]
 
 ///|
 /// `ff_mpeg4audio_sample_rates` from `mpeg4audio_sample_rates.h`: 13 real
 /// entries, zero-padded to 16 so an out-of-range index reads 0 like the C.
-let mpeg4audio_sample_rates : FixedArray[Int] = [
-  96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025,
-  8000, 7350, 0, 0, 0,
+let mpeg4audio_sample_rates : FixedArray[Int32] = [
+  96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000,
+  7350, 0, 0, 0,
 ]
 
 ///|
 /// `MPEG4AudioConfig` from libavcodec/mpeg4audio.h. `sbr`/`ps` use the C
 /// convention: 1 present, 0 not present, -1 unknown.
 pub struct Mpeg4AudioConfig {
-  mut object_type : Int
-  mut sampling_index : Int
-  mut sample_rate : Int
-  mut chan_config : Int
-  mut channels : Int
-  mut ext_object_type : Int
-  mut ext_sampling_index : Int
-  mut ext_sample_rate : Int
-  mut ext_chan_config : Int
-  mut frame_length : Int
+  mut object_type : Int32
+  mut sampling_index : Int32
+  mut sample_rate : Int32
+  mut chan_config : Int32
+  mut channels : Int32
+  mut ext_object_type : Int32
+  mut ext_sampling_index : Int32
+  mut ext_sample_rate : Int32
+  mut ext_chan_config : Int32
+  mut frame_length : Int32
   mut frame_length_short : Bool
-  mut sbr : Int
-  mut ps : Int
+  mut sbr : Int32
+  mut ps : Int32
 }
 
-///| Zero-initialised config, mirroring `MPEG4AudioConfig cfg = {0}`. */
+///|
+/// Zero-initialised config, mirroring `MPEG4AudioConfig cfg = {0}`. */
 pub fn new_mpeg4_audio_config() -> Mpeg4AudioConfig {
   {
     object_type: 0,
@@ -100,33 +108,38 @@ pub fn new_mpeg4_audio_config() -> Mpeg4AudioConfig {
 /// Reads past the end return 0 bits, like `get_bits` on an exhausted context.
 priv struct GetBits {
   buf : Bytes
-  mut pos : Int // bit position
+  mut pos : Int32 // bit position
 }
 
+///|
 fn GetBits::new(buf : Bytes) -> GetBits {
-  { buf, pos: 0 }
+  { buf, pos: 0, }
 }
 
-///| `get_bits_left`: bits remaining before the end of the buffer. */
-fn GetBits::bits_left(self : GetBits) -> Int {
+///|
+/// `get_bits_left`: bits remaining before the end of the buffer. */
+fn GetBits::bits_left(self : GetBits) -> Int32 {
   self.buf.length() * 8 - self.pos
 }
 
-///| `get_bits_count`. */
-fn GetBits::count(self : GetBits) -> Int {
+///|
+/// `get_bits_count`. */
+fn GetBits::count(self : GetBits) -> Int32 {
   self.pos
 }
 
-fn GetBits::bit_at(self : GetBits, bitpos : Int) -> UInt {
+///|
+fn GetBits::bit_at(self : GetBits, bitpos : Int32) -> UInt32 {
   if bitpos < 0 || bitpos >= self.buf.length() * 8 {
     return 0
   }
   (self.buf[bitpos / 8].to_uint() >> (7 - bitpos % 8)) & 1
 }
 
-///| `get_bits`: `n` bits MSB-first (`n <= 32`). */
-fn GetBits::read(self : GetBits, n : Int) -> UInt {
-  let mut v : UInt = 0
+///|
+/// `get_bits`: `n` bits MSB-first (`n <= 32`). */
+fn GetBits::read(self : GetBits, n : Int32) -> UInt32 {
+  let mut v : UInt32 = 0
   for i = 0; i < n; i = i + 1 {
     v = (v << 1) | self.bit_at(self.pos + i)
   }
@@ -134,27 +147,31 @@ fn GetBits::read(self : GetBits, n : Int) -> UInt {
   v
 }
 
-///| `get_bits1`. */
-fn GetBits::read1(self : GetBits) -> UInt {
+///|
+/// `get_bits1`. */
+fn GetBits::read1(self : GetBits) -> UInt32 {
   self.read(1)
 }
 
-///| `show_bits`: peek `n` bits without consuming them. */
-fn GetBits::show(self : GetBits, n : Int) -> UInt {
-  let mut v : UInt = 0
+///|
+/// `show_bits`: peek `n` bits without consuming them. */
+fn GetBits::show(self : GetBits, n : Int32) -> UInt32 {
+  let mut v : UInt32 = 0
   for i = 0; i < n; i = i + 1 {
     v = (v << 1) | self.bit_at(self.pos + i)
   }
   v
 }
 
-///| `skip_bits`. */
-fn GetBits::skip(self : GetBits, n : Int) -> Unit {
+///|
+/// `skip_bits`. */
+fn GetBits::skip(self : GetBits, n : Int32) -> Unit {
   self.pos = self.pos + n
 }
 
-///| `get_object_type`: 5 bits, with the 32+ escape form. */
-fn get_object_type(gb : GetBits) -> Int {
+///|
+/// `get_object_type`: 5 bits, with the 32+ escape form. */
+fn get_object_type(gb : GetBits) -> Int32 {
   let object_type = gb.read(5).reinterpret_as_int()
   if object_type == aot_escape {
     return 32 + gb.read(6).reinterpret_as_int()
@@ -165,7 +182,7 @@ fn get_object_type(gb : GetBits) -> Int {
 ///|
 /// `get_sample_rate`: 4-bit index (0x0f selects an explicit 24-bit rate).
 /// The index is reported back through `index` even for the explicit form.
-fn get_sample_rate(gb : GetBits, index : (Int) -> Unit) -> Int {
+fn get_sample_rate(gb : GetBits, index : (Int32) -> Unit) -> Int32 {
   let idx = gb.read(4).reinterpret_as_int()
   index(idx)
   if idx == 0x0F {
@@ -203,8 +220,8 @@ fn parse_config_als(gb : GetBits, c : Mpeg4AudioConfig) -> Result[Unit, String] 
 pub fn ff_mpeg4audio_get_config(
   c : Mpeg4AudioConfig,
   buf : Bytes,
-  sync_extension : Bool
-) -> Result[Int, String] {
+  sync_extension : Bool,
+) -> Result[Int32, String] {
   if buf.length() <= 0 {
     return Err("EINVAL")
   }
@@ -253,46 +270,54 @@ pub fn ff_mpeg4audio_get_config(
     // ALS is not in the frame-length switch; fall through to the shared tail
     // (implicit SBR/PS scan and fixups) with the ALS-specific bit index.
     return mpeg4audio_finalise(
-        c,
-        gb,
-        sync_extension,
-        als_config_bitindex - start_bit_index,
-      )
+      c,
+      gb,
+      sync_extension,
+      als_config_bitindex - start_bit_index,
+    )
   }
   match c.object_type {
-    1 | 2 | 3 | 4 | 17 =>
-      // AOT_AAC_MAIN / AAC_LC / AAC_SSR / AAC_LTP / ER_AAC_LC
-      {
-        c.frame_length_short = gb.read1() == 1
-        c.frame_length = if c.frame_length_short { 960 } else { 1024 }
+    1
+    | 2
+    | 3
+    | 4
+    // AOT_AAC_MAIN / AAC_LC / AAC_SSR / AAC_LTP / ER_AAC_LC
+    | 17 => {
+      c.frame_length_short = gb.read1() == 1
+      c.frame_length = if c.frame_length_short { 960 } else { 1024 }
+    }
+    23
+    // AOT_ER_AAC_LD / AOT_ER_AAC_ELD
+    | 39 => {
+      c.frame_length_short = gb.read1() == 1
+      c.frame_length = if c.frame_length_short { 480 } else { 512 }
+    }
+    // AOT_USAC
+    42 => {
+      if gb.read(5) == 0x1F {
+        gb.skip(24) // usacSamplingFrequency
       }
-    23 | 39 =>
-      // AOT_ER_AAC_LD / AOT_ER_AAC_ELD
-      {
-        c.frame_length_short = gb.read1() == 1
-        c.frame_length = if c.frame_length_short { 480 } else { 512 }
+      let core_sbr_frame_len_idx = gb.read(3).reinterpret_as_int()
+      c.frame_length_short = core_sbr_frame_len_idx == 0 ||
+        core_sbr_frame_len_idx == 2
+      let sbr_ratio = if core_sbr_frame_len_idx == 2 {
+        2
+      } else if core_sbr_frame_len_idx == 3 {
+        3
+      } else {
+        0
       }
-    42 =>
-      // AOT_USAC
-      {
-        if gb.read(5) == 0x1F {
-          gb.skip(24) // usacSamplingFrequency
-        }
-        let core_sbr_frame_len_idx = gb.read(3).reinterpret_as_int()
-        c.frame_length_short = core_sbr_frame_len_idx == 0 ||
-          core_sbr_frame_len_idx == 2
-        let sbr_ratio = if core_sbr_frame_len_idx == 2 {
-          2
-        } else if core_sbr_frame_len_idx == 3 {
-          3
-        } else {
-          0
-        }
-        let ratio_mult = if sbr_ratio == 2 { 8 } else if sbr_ratio == 3 { 2 } else { 1 }
-        let ratio_dec = if sbr_ratio == 2 { 3 } else { 1 }
-        let fl = if c.frame_length_short { 768 } else { 1024 }
-        c.frame_length = fl * ratio_mult / ratio_dec
+      let ratio_mult = if sbr_ratio == 2 {
+        8
+      } else if sbr_ratio == 3 {
+        2
+      } else {
+        1
       }
+      let ratio_dec = if sbr_ratio == 2 { 3 } else { 1 }
+      let fl = if c.frame_length_short { 768 } else { 1024 }
+      c.frame_length = fl * ratio_mult / ratio_dec
+    }
     _ => ()
   }
   mpeg4audio_finalise(
@@ -312,8 +337,8 @@ fn mpeg4audio_finalise(
   c : Mpeg4AudioConfig,
   gb : GetBits,
   sync_extension : Bool,
-  ret : Int
-) -> Result[Int, String] {
+  ret : Int32,
+) -> Result[Int32, String] {
   if c.ext_object_type != aot_sbr && sync_extension {
     while gb.bits_left() > 15 {
       if gb.show(11) == 0x2B7 {
@@ -323,10 +348,9 @@ fn mpeg4audio_finalise(
         if c.ext_object_type == aot_sbr {
           c.sbr = gb.read1().reinterpret_as_int()
           if c.sbr == 1 {
-            c.ext_sample_rate = get_sample_rate(
-              gb,
-              idx => c.ext_sampling_index = idx,
-            )
+            c.ext_sample_rate = get_sample_rate(gb, idx => {
+              c.ext_sampling_index = idx
+            })
             if c.ext_sample_rate == c.sample_rate {
               c.sbr = -1
             }
@@ -347,7 +371,8 @@ fn mpeg4audio_finalise(
   }
   // Limit implicit PS to the HE-AACv2 profile, and drop PS for any channel
   // count with the low bit cleared (`channels & ~0x01`).
-  if (c.ps == -1 && c.object_type != aot_aac_lc) || (c.channels & 0xFFFFFFFE) != 0 {
+  if (c.ps == -1 && c.object_type != aot_aac_lc) ||
+    (c.channels & 0xFFFFFFFE) != 0 {
     c.ps = 0
   }
   Ok(ret)

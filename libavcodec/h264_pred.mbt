@@ -15,71 +15,90 @@
 /// and 8x8 chroma (four modes) for 4:2:0 8-bit. 8x8 luma prediction
 /// (High-profile transform_8x8) and 4:2:2/4:4:4 are not ported.
 
-///| 4x4 prediction modes. */
-let h264_pred_vert : Int = 0
+///|
+/// 4x4 prediction modes. */
+let h264_pred_vert : Int32 = 0
 
-///| `HOR_PRED`. */
-let h264_pred_hor : Int = 1
+///|
+/// `HOR_PRED`. */
+let h264_pred_hor : Int32 = 1
 
-///| `DC_PRED`. */
-let h264_pred_dc : Int = 2
+///|
+/// `DC_PRED`. */
+let h264_pred_dc : Int32 = 2
 
-///| `DIAG_DOWN_LEFT_PRED`. */
-let h264_pred_ddl : Int = 3
+///|
+/// `DIAG_DOWN_LEFT_PRED`. */
+let h264_pred_ddl : Int32 = 3
 
-///| `DIAG_DOWN_RIGHT_PRED`. */
-let h264_pred_ddr : Int = 4
+///|
+/// `DIAG_DOWN_RIGHT_PRED`. */
+let h264_pred_ddr : Int32 = 4
 
-///| `VERT_RIGHT_PRED`. */
-let h264_pred_vr : Int = 5
+///|
+/// `VERT_RIGHT_PRED`. */
+let h264_pred_vr : Int32 = 5
 
-///| `HOR_DOWN_PRED`. */
-let h264_pred_hd : Int = 6
+///|
+/// `HOR_DOWN_PRED`. */
+let h264_pred_hd : Int32 = 6
 
-///| `VERT_LEFT_PRED`. */
-let h264_pred_vl : Int = 7
+///|
+/// `VERT_LEFT_PRED`. */
+let h264_pred_vl : Int32 = 7
 
-///| `HOR_UP_PRED`. */
-let h264_pred_hu : Int = 8
+///|
+/// `HOR_UP_PRED`. */
+let h264_pred_hu : Int32 = 8
 
-///| `LEFT_DC_PRED`. */
-let h264_pred_left_dc : Int = 9
+///|
+/// `LEFT_DC_PRED`. */
+let h264_pred_left_dc : Int32 = 9
 
-///| `TOP_DC_PRED`. */
-let h264_pred_top_dc : Int = 10
+///|
+/// `TOP_DC_PRED`. */
+let h264_pred_top_dc : Int32 = 10
 
-///| `DC_128_PRED`. */
-let h264_pred_128_dc : Int = 11
+///|
+/// `DC_128_PRED`. */
+let h264_pred_128_dc : Int32 = 11
 
-///| 8x8/16x16 prediction modes (`DC_PRED8x8` and friends). */
-let h264_pred8_dc : Int = 0
+///|
+/// 8x8/16x16 prediction modes (`DC_PRED8x8` and friends). */
+let h264_pred8_dc : Int32 = 0
 
-///| `HOR_PRED8x8`. */
-let h264_pred8_hor : Int = 1
+///|
+/// `HOR_PRED8x8`. */
+let h264_pred8_hor : Int32 = 1
 
-///| `VERT_PRED8x8`. */
-let h264_pred8_vert : Int = 2
+///|
+/// `VERT_PRED8x8`. */
+let h264_pred8_vert : Int32 = 2
 
-///| `PLANE_PRED8x8`. */
-let h264_pred8_plane : Int = 3
+///|
+/// `PLANE_PRED8x8`. */
+let h264_pred8_plane : Int32 = 3
 
-///| `LEFT_DC_PRED8x8`. */
-let h264_pred8_left_dc : Int = 4
+///|
+/// `LEFT_DC_PRED8x8`. */
+let h264_pred8_left_dc : Int32 = 4
 
-///| `TOP_DC_PRED8x8`. */
-let h264_pred8_top_dc : Int = 5
+///|
+/// `TOP_DC_PRED8x8`. */
+let h264_pred8_top_dc : Int32 = 5
 
-///| `DC_128_PRED8x8`. */
-let h264_pred8_128_dc : Int = 6
+///|
+/// `DC_128_PRED8x8`. */
+let h264_pred8_128_dc : Int32 = 6
 
 ///|
 /// `ff_h264_check_intra4x4_pred_mode` for one block: unavailable edges remap
 /// DC to the one-sided variants and reject modes that need missing samples.
 fn h264_check_intra4x4_mode(
-  mode : Int,
+  mode : Int32,
   top : Bool,
   left : Bool,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let mut m = mode
   if !top {
     m = match m {
@@ -107,10 +126,10 @@ fn h264_check_intra4x4_mode(
 /// "mad cow" variants only apply with constrained intra prediction and are
 /// not reachable in this decoder).
 fn h264_check_intra_pred_mode(
-  mode : Int,
+  mode : Int32,
   top : Bool,
   left : Bool,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let mut m = mode
   if !top {
     m = match m {
@@ -130,12 +149,13 @@ fn h264_check_intra_pred_mode(
   Ok(m)
 }
 
-///| `pred4x4`: nine modes plus the DC edge variants, 8-bit. */
+///|
+/// `pred4x4`: nine modes plus the DC edge variants, 8-bit. */
 fn h264_pred4x4(
-  dst : Array[Int],
-  off : Int,
-  stride : Int,
-  mode : Int,
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  mode : Int32,
   top : Bool,
   left : Bool,
   topright : Bool,
@@ -218,11 +238,14 @@ fn h264_pred4x4(
       }
     }
   } else {
-    let t : Array[Int] = Array::make(8, 0)
-    let l : Array[Int] = Array::make(4, 0)
-    let o : Array[Int] = Array::make(16, 0)
-    if mode == h264_pred_ddl || mode == h264_pred_vl || mode == h264_pred_ddr ||
-      mode == h264_pred_vr || mode == h264_pred_hd {
+    let t : Array[Int32] = Array::make(8, 0)
+    let l : Array[Int32] = Array::make(4, 0)
+    let o : Array[Int32] = Array::make(16, 0)
+    if mode == h264_pred_ddl ||
+      mode == h264_pred_vl ||
+      mode == h264_pred_ddr ||
+      mode == h264_pred_vr ||
+      mode == h264_pred_hd {
       if !top {
         return Err("prediction mode needs top samples")
       }
@@ -239,7 +262,9 @@ fn h264_pred4x4(
         }
       }
     }
-    if mode == h264_pred_ddr || mode == h264_pred_vr || mode == h264_pred_hd ||
+    if mode == h264_pred_ddr ||
+      mode == h264_pred_vr ||
+      mode == h264_pred_hd ||
       mode == h264_pred_hu {
       if !left {
         return Err("prediction mode needs left samples")
@@ -255,7 +280,7 @@ fn h264_pred4x4(
       }
       lt = dst[off - stride - 1]
     }
-    let put = fn(x : Int, y : Int, v : Int) -> Unit {
+    let put = fn(x : Int32, y : Int32, v : Int32) -> Unit {
       o[y * 4 + x] = h264_clip8(v)
     }
     if mode == h264_pred_ddl {
@@ -372,12 +397,13 @@ fn h264_pred4x4(
   Ok(())
 }
 
-///| `pred16x16_*`: 16x16 luma prediction (modes 0..3 plus DC edge variants). */
+///|
+/// `pred16x16_*`: 16x16 luma prediction (modes 0..3 plus DC edge variants). */
 fn h264_pred16x16(
-  dst : Array[Int],
-  off : Int,
-  stride : Int,
-  mode : Int,
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  mode : Int32,
   top : Bool,
   left : Bool,
 ) -> Result[Unit, String] {
@@ -400,8 +426,10 @@ fn h264_pred16x16(
         dst[off + j * stride + i] = v
       }
     }
-  } else if mode == h264_pred8_dc || mode == h264_pred8_left_dc ||
-    mode == h264_pred8_top_dc || mode == h264_pred8_128_dc {
+  } else if mode == h264_pred8_dc ||
+    mode == h264_pred8_left_dc ||
+    mode == h264_pred8_top_dc ||
+    mode == h264_pred8_128_dc {
     let mut dc = 128
     if mode == h264_pred8_dc {
       let mut sum = 0
@@ -454,9 +482,8 @@ fn h264_pred16x16(
     let mut v = dst[off + 8 * stride - 1] - dst[off + 6 * stride - 1]
     for k = 2; k <= 8; k = k + 1 {
       h = h + k * (dst[off - stride + 7 + k] - dst[off - stride + 7 - k])
-      v = v + k * (
-        dst[off + (7 + k) * stride - 1] - dst[off + (7 - k) * stride - 1]
-      )
+      v = v +
+        k * (dst[off + (7 + k) * stride - 1] - dst[off + (7 - k) * stride - 1])
     }
     h = (5 * h + 32) >> 6
     v = (5 * v + 32) >> 6
@@ -480,12 +507,13 @@ fn h264_pred16x16(
   Ok(())
 }
 
-///| `pred8x8_*`: 8x8 chroma prediction for 4:2:0. */
+///|
+/// `pred8x8_*`: 8x8 chroma prediction for 4:2:0. */
 fn h264_pred8x8(
-  dst : Array[Int],
-  off : Int,
-  stride : Int,
-  mode : Int,
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  mode : Int32,
   top : Bool,
   left : Bool,
 ) -> Result[Unit, String] {
@@ -582,9 +610,8 @@ fn h264_pred8x8(
     let mut v = dst[off + 4 * stride - 1] - dst[off + 2 * stride - 1]
     for k = 2; k <= 4; k = k + 1 {
       h = h + k * (dst[off - stride + 3 + k] - dst[off - stride + 3 - k])
-      v = v + k * (
-        dst[off + (3 + k) * stride - 1] - dst[off + (3 - k) * stride - 1]
-      )
+      v = v +
+        k * (dst[off + (3 + k) * stride - 1] - dst[off + (3 - k) * stride - 1])
     }
     h = (17 * h + 16) >> 5
     v = (17 * v + 16) >> 5

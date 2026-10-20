@@ -6,9 +6,9 @@
 ///   mp3_lsf.mp3: 440 Hz mono, 22050 Hz (MPEG-2 LSF), 64 kbps.
 /// Expected PCM MD5s are from FFmpeg's fixed decoder (`-c:a mp3 -f s16le`).
 
-///| `mp3_stereo.mp3` (2089 bytes).
-let mp3_stereo_b64 : Bytes =
-  b"//uQRAAAAqoN0p1kwABVQhpirSQAC+yrhfmWkBF3kCxrNNACAUbbkNVU00TNFTPCwxqPHNQczxpCF61h0h0i1TsTa+/8vCCAAAAA" +
+///|
+/// `mp3_stereo.mp3` (2089 bytes).
+let mp3_stereo_b64 : Bytes = b"//uQRAAAAqoN0p1kwABVQhpirSQAC+yrhfmWkBF3kCxrNNACAUbbkNVU00TNFTPCwxqPHNQczxpCF61h0h0i1TsTa+/8vCCAAAAA" +
   b"IEEIB8HwfB+UBAMYnB/gg6c6fOcv5zl/d0+7lwfPlw+CAIRAAwffJggcy4f7ukH6/LJlkwCBMGFMKHMOFCAZICM0iOLDOC5NafMi" +
   b"HLtrHZ2zt3wwKAoCAYFBIgYnNGjRtg+8QAgCGJw/wQznLvy7un3dPudKAmH8mCDqgGH9IIcu/u6QAgEWeFAFAFAMBgMBgOBwIkQn" +
   b"e9XGlJ85Mc9WjzzWNNZoXX62E1BXfBWRPhMvxLiRHqOH/HcMMJcSI9f/HCZD2HsYl3/8umReLyJdLv8GgqCoiPf5UFREFQVEX/wq" +
@@ -37,9 +37,9 @@ let mp3_stereo_b64 : Bytes =
   b"ZoShCDVHXAKS3RMZdU+4KmKKqYKvDhAyhgoS3Icrp4TErma39n1fi1vV69tl69r7Pn2rPn1vWC9AoKnREeBoO934i5U6VdBqHUxB" +
   b"TUU0LjBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVQ=="
 
-///| `mp3_lsf.mp3` (1253 bytes).
-let mp3_lsf_b64 : Bytes =
-  b"//OAxAAZeGKEP08YAAvW27foeaZpmmaaHubAhhBxCwHcAjAOwVY4zrZ3jx48ePAQBMHwfB/nOD/hiU9/Kef5Tz/Ke/o4IA+D7wfB" +
+///|
+/// `mp3_lsf.mp3` (1253 bytes).
+let mp3_lsf_b64 : Bytes = b"//OAxAAZeGKEP08YAAvW27foeaZpmmaaHubAhhBxCwHcAjAOwVY4zrZ3jx48ePAQBMHwfB/nOD/hiU9/Kef5Tz/Ke/o4IA+D7wfB" +
   b"wEAwoMA+D8uBAQ4Pv0eD4Pg+D4OAgCAIBgHwfB8HwICAIBiPB8/RODA1wZIwdEGKGQAIAArqAIwDQCNMSDEljCSkJ0wIYCkMZuEb" +
   b"jCTAA4xCpQ+MsRCYDCTQmgzHkC4MFAANjF9QqowHwCHA0E8wNxMUDXjRGOImRXgYzNQGazEBmM5Eyf/zgsRdPwtyKAGfqAChluBh" +
   b"QdgY8HYGOiOBgcRGTor8DEoiAxKLAAAmBhYLgYWDrJKo9cA0EAYNBgGDQgAsAwMCAUDAwJBukv/7KAwCAAMAgINlBsGg2DQ6ILIg" +
@@ -57,6 +57,9 @@ let mp3_lsf_b64 : Bytes =
   b"qHA0eg0WDtR4RPiJQdljwifBoYelg4IsGnPlj3Bp2WDnEXUDMrBoNFcVBU7iUFeJdCztZ0S4K0xBTUU0LjBVVVVVVVVVVVVVVVVV" +
   b"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU="
 
-///| FFmpeg fixed-decoder PCM MD5s.
+///|
+/// FFmpeg fixed-decoder PCM MD5s.
 let mp3_stereo_md5 : String = "c6f9d146d71560aedcdae4c06c9b8d2a"
+
+///|
 let mp3_lsf_md5 : String = "97d37691c8bfaf70fa348bd74e076083"

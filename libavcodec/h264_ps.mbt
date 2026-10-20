@@ -26,61 +26,84 @@
 // limits and data tables
 // ---------------------------------------------------------------------------
 
-///| `MAX_SPS_COUNT`. */
-pub let max_sps_count : Int = 32
+///|
+/// `MAX_SPS_COUNT`. */
+pub let max_sps_count : Int32 = 32
 
-///| `MAX_PPS_COUNT`. */
-pub let max_pps_count : Int = 256
+///|
+/// `MAX_PPS_COUNT`. */
+pub let max_pps_count : Int32 = 256
 
-///| `H264_MAX_DPB_FRAMES`. */
-let h264_max_dpb_frames : Int = 16
+///|
+/// `H264_MAX_DPB_FRAMES`. */
+let h264_max_dpb_frames : Int32 = 16
 
-///| `MAX_LOG2_MAX_FRAME_NUM`. */
-let max_log2_max_frame_num : Int = 16
+///|
+/// `MAX_LOG2_MAX_FRAME_NUM`. */
+let max_log2_max_frame_num : Int32 = 16
 
-///| `MIN_LOG2_MAX_FRAME_NUM`. */
-let min_log2_max_frame_num : Int = 4
+///|
+/// `MIN_LOG2_MAX_FRAME_NUM`. */
+let min_log2_max_frame_num : Int32 = 4
 
-///| `default_scaling4[2][16]`. */
-let default_scaling4 : Array[Array[Int]] = [
+///|
+/// `default_scaling4[2][16]`. */
+let default_scaling4 : Array[Array[Int32]] = [
   [6, 13, 20, 28, 13, 20, 28, 32, 20, 28, 32, 37, 28, 32, 37, 42],
   [10, 14, 20, 24, 14, 20, 24, 27, 20, 24, 27, 30, 24, 27, 30, 34],
 ]
 
-///| `default_scaling8[2][64]`. */
-let default_scaling8 : Array[Array[Int]] = [
+///|
+/// `default_scaling8[2][64]`. */
+let default_scaling8 : Array[Array[Int32]] = [
   [
-    6, 10, 13, 16, 18, 23, 25, 27, 10, 11, 16, 18, 23, 25, 27, 29, 13, 16, 18,
-    23, 25, 27, 29, 31, 16, 18, 23, 25, 27, 29, 31, 33, 18, 23, 25, 27, 29, 31,
-    33, 36, 23, 25, 27, 29, 31, 33, 36, 38, 25, 27, 29, 31, 33, 36, 38, 40, 27,
-    29, 31, 33, 36, 38, 40, 42,
+    6, 10, 13, 16, 18, 23, 25, 27, 10, 11, 16, 18, 23, 25, 27, 29, 13, 16, 18, 23,
+    25, 27, 29, 31, 16, 18, 23, 25, 27, 29, 31, 33, 18, 23, 25, 27, 29, 31, 33, 36,
+    23, 25, 27, 29, 31, 33, 36, 38, 25, 27, 29, 31, 33, 36, 38, 40, 27, 29, 31, 33,
+    36, 38, 40, 42,
   ],
   [
-    9, 13, 15, 17, 19, 21, 22, 24, 13, 13, 17, 19, 21, 22, 24, 25, 15, 17, 19,
-    21, 22, 24, 25, 27, 17, 19, 21, 22, 24, 25, 27, 28, 19, 21, 22, 24, 25, 27,
-    28, 30, 21, 22, 24, 25, 27, 28, 30, 32, 22, 24, 25, 27, 28, 30, 32, 33, 24,
-    25, 27, 28, 30, 32, 33, 35,
+    9, 13, 15, 17, 19, 21, 22, 24, 13, 13, 17, 19, 21, 22, 24, 25, 15, 17, 19, 21,
+    22, 24, 25, 27, 17, 19, 21, 22, 24, 25, 27, 28, 19, 21, 22, 24, 25, 27, 28, 30,
+    21, 22, 24, 25, 27, 28, 30, 32, 22, 24, 25, 27, 28, 30, 32, 33, 24, 25, 27, 28,
+    30, 32, 33, 35,
   ],
 ]
 
-///| `ff_zigzag_scan[16]` (mathtables.c). */
-let ff_zigzag_scan : Array[Int] = [
+///|
+/// `ff_zigzag_scan[16]` (mathtables.c). */
+let ff_zigzag_scan : Array[Int32] = [
   0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15,
 ]
 
-///| `ff_zigzag_direct[64]` (mathtables.c). */
-let ff_zigzag_direct : Array[Int] = [
-  0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40,
-  48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36,
-  29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61,
-  54, 47, 55, 62, 63,
+///|
+/// `ff_zigzag_direct[64]` (mathtables.c). */
+let ff_zigzag_direct : Array[Int32] = [
+  0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48,
+  41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15,
+  23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62,
+  63,
 ]
 
-///| `level_max_dpb_mbs[][2]`. */
-let level_max_dpb_mbs : Array[(Int, Int)] = [
-  (10, 396), (11, 900), (12, 2376), (13, 2376), (20, 2376), (21, 4752),
-  (22, 8100), (30, 8100), (31, 18000), (32, 20480), (40, 32768), (41, 32768),
-  (42, 34816), (50, 110400), (51, 184320), (52, 184320),
+///|
+/// `level_max_dpb_mbs[][2]`. */
+let level_max_dpb_mbs : Array[(Int32, Int32)] = [
+  (10, 396),
+  (11, 900),
+  (12, 2376),
+  (13, 2376),
+  (20, 2376),
+  (21, 4752),
+  (22, 8100),
+  (30, 8100),
+  (31, 18000),
+  (32, 20480),
+  (40, 32768),
+  (41, 32768),
+  (42, 34816),
+  (50, 110400),
+  (51, 184320),
+  (52, 184320),
 ]
 
 // ---------------------------------------------------------------------------
@@ -91,107 +114,111 @@ let level_max_dpb_mbs : Array[(Int, Int)] = [
 /// `SPS` from h264_ps.h. All decoder-visible syntax fields are present; the
 /// derived dequant tables live on `PPS` in the C and are omitted here.
 pub struct H264Sps {
-  mut sps_id : Int
-  mut profile_idc : Int
-  mut level_idc : Int
-  mut chroma_format_idc : Int
-  mut transform_bypass : Int
-  mut log2_max_frame_num : Int
-  mut poc_type : Int
-  mut log2_max_poc_lsb : Int
-  mut delta_pic_order_always_zero_flag : Int
-  mut offset_for_non_ref_pic : Int
-  mut offset_for_top_to_bottom_field : Int
-  mut poc_cycle_length : Int
-  mut ref_frame_count : Int
-  mut gaps_in_frame_num_allowed_flag : Int
-  mut mb_width : Int
-  mut mb_height : Int
-  mut frame_mbs_only_flag : Int
-  mut mb_aff : Int
-  mut direct_8x8_inference_flag : Int
-  mut crop : Int
-  mut crop_left : Int
-  mut crop_right : Int
-  mut crop_top : Int
-  mut crop_bottom : Int
-  mut vui_parameters_present_flag : Int
+  mut sps_id : Int32
+  mut profile_idc : Int32
+  mut level_idc : Int32
+  mut chroma_format_idc : Int32
+  mut transform_bypass : Int32
+  mut log2_max_frame_num : Int32
+  mut poc_type : Int32
+  mut log2_max_poc_lsb : Int32
+  mut delta_pic_order_always_zero_flag : Int32
+  mut offset_for_non_ref_pic : Int32
+  mut offset_for_top_to_bottom_field : Int32
+  mut poc_cycle_length : Int32
+  mut ref_frame_count : Int32
+  mut gaps_in_frame_num_allowed_flag : Int32
+  mut mb_width : Int32
+  mut mb_height : Int32
+  mut frame_mbs_only_flag : Int32
+  mut mb_aff : Int32
+  mut direct_8x8_inference_flag : Int32
+  mut crop : Int32
+  mut crop_left : Int32
+  mut crop_right : Int32
+  mut crop_top : Int32
+  mut crop_bottom : Int32
+  mut vui_parameters_present_flag : Int32
   vui : H2645Vui
-  mut timing_info_present_flag : Int
-  mut num_units_in_tick : Int
-  mut time_scale : Int
-  mut fixed_frame_rate_flag : Int
-  offset_for_ref_frame : Array[Int]
-  mut bitstream_restriction_flag : Int
-  mut num_reorder_frames : Int
-  mut max_dec_frame_buffering : Int
-  mut scaling_matrix_present : Int
-  mut scaling_matrix_present_mask : Int
-  scaling_matrix4 : Array[Array[Int]]
-  scaling_matrix8 : Array[Array[Int]]
-  mut nal_hrd_parameters_present_flag : Int
-  mut vcl_hrd_parameters_present_flag : Int
-  mut pic_struct_present_flag : Int
-  mut time_offset_length : Int
-  mut cpb_cnt : Int
-  mut bit_rate_scale : Int
-  bit_rate_value : Array[Int]
-  cpb_size_value : Array[Int]
-  mut cpr_flag : UInt
-  mut initial_cpb_removal_delay_length : Int
-  mut cpb_removal_delay_length : Int
-  mut dpb_output_delay_length : Int
-  mut bit_depth_luma : Int
-  mut bit_depth_chroma : Int
-  mut residual_color_transform_flag : Int
-  mut constraint_set_flags : Int
+  mut timing_info_present_flag : Int32
+  mut num_units_in_tick : Int32
+  mut time_scale : Int32
+  mut fixed_frame_rate_flag : Int32
+  offset_for_ref_frame : Array[Int32]
+  mut bitstream_restriction_flag : Int32
+  mut num_reorder_frames : Int32
+  mut max_dec_frame_buffering : Int32
+  mut scaling_matrix_present : Int32
+  mut scaling_matrix_present_mask : Int32
+  scaling_matrix4 : Array[Array[Int32]]
+  scaling_matrix8 : Array[Array[Int32]]
+  mut nal_hrd_parameters_present_flag : Int32
+  mut vcl_hrd_parameters_present_flag : Int32
+  mut pic_struct_present_flag : Int32
+  mut time_offset_length : Int32
+  mut cpb_cnt : Int32
+  mut bit_rate_scale : Int32
+  bit_rate_value : Array[Int32]
+  cpb_size_value : Array[Int32]
+  mut cpr_flag : UInt32
+  mut initial_cpb_removal_delay_length : Int32
+  mut cpb_removal_delay_length : Int32
+  mut dpb_output_delay_length : Int32
+  mut bit_depth_luma : Int32
+  mut bit_depth_chroma : Int32
+  mut residual_color_transform_flag : Int32
+  mut constraint_set_flags : Int32
   mut data : Bytes
-  mut data_size : Int
+  mut data_size : Int32
 }
 
-///| `PPS` from h264_ps.h (decoder-derived tables omitted, see file header). */
+///|
+/// `PPS` from h264_ps.h (decoder-derived tables omitted, see file header). */
 pub struct H264Pps {
-  mut pps_id : Int
-  mut sps_id : Int
-  mut cabac : Int
-  mut pic_order_present : Int
-  mut slice_group_count : Int
-  mut mb_slice_group_map_type : Int
-  mut ref_count_l0 : Int
-  mut ref_count_l1 : Int
-  mut weighted_pred : Int
-  mut weighted_bipred_idc : Int
-  mut init_qp : Int
-  mut init_qs : Int
-  mut chroma_qp_index_offset0 : Int
-  mut chroma_qp_index_offset1 : Int
-  mut deblocking_filter_parameters_present : Int
-  mut constrained_intra_pred : Int
-  mut redundant_pic_cnt_present : Int
-  mut transform_8x8_mode : Int
-  mut pic_scaling_matrix_present_flag : Int
-  mut pic_scaling_matrix_present_mask : Int
-  scaling_matrix4 : Array[Array[Int]]
-  scaling_matrix8 : Array[Array[Int]]
-  mut chroma_qp_diff : Int
+  mut pps_id : Int32
+  mut sps_id : Int32
+  mut cabac : Int32
+  mut pic_order_present : Int32
+  mut slice_group_count : Int32
+  mut mb_slice_group_map_type : Int32
+  mut ref_count_l0 : Int32
+  mut ref_count_l1 : Int32
+  mut weighted_pred : Int32
+  mut weighted_bipred_idc : Int32
+  mut init_qp : Int32
+  mut init_qs : Int32
+  mut chroma_qp_index_offset0 : Int32
+  mut chroma_qp_index_offset1 : Int32
+  mut deblocking_filter_parameters_present : Int32
+  mut constrained_intra_pred : Int32
+  mut redundant_pic_cnt_present : Int32
+  mut transform_8x8_mode : Int32
+  mut pic_scaling_matrix_present_flag : Int32
+  mut pic_scaling_matrix_present_mask : Int32
+  scaling_matrix4 : Array[Array[Int32]]
+  scaling_matrix8 : Array[Array[Int32]]
+  mut chroma_qp_diff : Int32
   mut data : Bytes
-  mut data_size : Int
+  mut data_size : Int32
 }
 
-///| `H264ParamSets`: the per-id parameter set lists. */
+///|
+/// `H264ParamSets`: the per-id parameter set lists. */
 pub struct H264ParamSets {
   sps_list : Array[H264Sps?]
   pps_list : Array[H264Pps?]
 }
 
-///| Empty parameter set store (`H264ParamSets ps = {0}`). */
+///|
+/// Empty parameter set store (`H264ParamSets ps = {0}`). */
 pub fn new_h264_param_sets() -> H264ParamSets {
   let sps : Array[H264Sps?] = Array::make(max_sps_count, None)
   let pps : Array[H264Pps?] = Array::make(max_pps_count, None)
-  { sps_list: sps, pps_list: pps }
+  { sps_list: sps, pps_list: pps, }
 }
 
-///| One SPS with the C's zero/default initialisers. */
+///|
+/// One SPS with the C's zero/default initialisers. */
 fn new_h264_sps() -> H264Sps {
   {
     sps_id: 0,
@@ -253,7 +280,8 @@ fn new_h264_sps() -> H264Sps {
   }
 }
 
-///| One PPS with the C's zero initialisers. */
+///|
+/// One PPS with the C's zero initialisers. */
 fn new_h264_pps() -> H264Pps {
   {
     pps_id: 0,
@@ -284,8 +312,9 @@ fn new_h264_pps() -> H264Pps {
   }
 }
 
-///| Six independent 16-entry matrices (an `Array::make` fill would alias). */
-fn make_scaling4() -> Array[Array[Int]] {
+///|
+/// Six independent 16-entry matrices (an `Array::make` fill would alias). */
+fn make_scaling4() -> Array[Array[Int32]] {
   [
     Array::make(16, 16),
     Array::make(16, 16),
@@ -296,8 +325,9 @@ fn make_scaling4() -> Array[Array[Int]] {
   ]
 }
 
-///| Six independent 64-entry matrices. */
-fn make_scaling8() -> Array[Array[Int]] {
+///|
+/// Six independent 64-entry matrices. */
+fn make_scaling8() -> Array[Array[Int32]] {
   [
     Array::make(64, 16),
     Array::make(64, 16),
@@ -312,9 +342,10 @@ fn make_scaling8() -> Array[Array[Int]] {
 // helpers
 // ---------------------------------------------------------------------------
 
-///| `av_image_check_size(w, h, ...)` for `AV_PIX_FMT_NONE`: the C derives
+///|
+/// `av_image_check_size(w, h, ...)` for `AV_PIX_FMT_NONE`: the C derives
 /// `stride = 8*w + 1024` and requires `stride*(h+128) < INT_MAX`. */
-fn h264_image_check_size(w : Int, h : Int) -> Bool {
+fn h264_image_check_size(w : Int32, h : Int32) -> Bool {
   if w <= 0 || h <= 0 {
     return false
   }
@@ -322,10 +353,11 @@ fn h264_image_check_size(w : Int, h : Int) -> Bool {
   stride < 2147483647L && stride * (h.to_int64() + 128L) < 2147483647L
 }
 
-///| Copy `sps->data`/`pps->data` semantics: `get_bits_bytesize(gb, 1)` bytes
+///|
+/// Copy `sps->data`/`pps->data` semantics: `get_bits_bytesize(gb, 1)` bytes
 /// from the start of the NAL, truncated to 4096, with the stop bit re-added
 /// when the SODB ends on a byte boundary.
-fn parameter_set_data(gb : BitReader, bit_length : Int) -> (Bytes, Int) {
+fn parameter_set_data(gb : BitReader, bit_length : Int32) -> (Bytes, Int32) {
   let n = gb.bytesize(true)
   let limit = if n > 4096 { 4096 } else { n }
   let raw = gb.bytes.clamped_view(start=0, end=limit).to_owned()
@@ -341,14 +373,15 @@ fn parameter_set_data(gb : BitReader, bit_length : Int) -> (Bytes, Int) {
   }
 }
 
-///| `decode_scaling_list`: `jvt_list` is the preset fallback, `fallback_list`
+///|
+/// `decode_scaling_list`: `jvt_list` is the preset fallback, `fallback_list`
 /// the predicted matrix. Returns whether the list was present. */
 fn decode_scaling_list(
   gb : BitReader,
-  factors : Array[Int],
-  size : Int,
-  jvt_list : Array[Int],
-  fallback_list : Array[Int]
+  factors : Array[Int32],
+  size : Int32,
+  jvt_list : Array[Int32],
+  fallback_list : Array[Int32],
 ) -> Result[Bool, String] {
   let present = gb.read1() != 0
   if !present {
@@ -387,88 +420,141 @@ fn decode_scaling_matrices(
   gb : BitReader,
   sps : H264Sps,
   is_sps : Bool,
-  present_flag : Int,
+  present_flag : Int32,
   transform_8x8_mode : Bool,
-  m4 : Array[Array[Int]],
-  m8 : Array[Array[Int]]
-) -> Result[(Int, Int), String] {
+  m4 : Array[Array[Int32]],
+  m8 : Array[Array[Int32]],
+) -> Result[(Int32, Int32), String] {
   let fallback_sps = !is_sps && sps.scaling_matrix_present != 0
-  let fallback0 = if fallback_sps { sps.scaling_matrix4[0] } else { default_scaling4[0] }
-  let fallback1 = if fallback_sps { sps.scaling_matrix4[3] } else { default_scaling4[1] }
-  let fallback2 = if fallback_sps { sps.scaling_matrix8[0] } else { default_scaling8[0] }
-  let fallback3 = if fallback_sps { sps.scaling_matrix8[3] } else { default_scaling8[1] }
+  let fallback0 = if fallback_sps {
+    sps.scaling_matrix4[0]
+  } else {
+    default_scaling4[0]
+  }
+  let fallback1 = if fallback_sps {
+    sps.scaling_matrix4[3]
+  } else {
+    default_scaling4[1]
+  }
+  let fallback2 = if fallback_sps {
+    sps.scaling_matrix8[0]
+  } else {
+    default_scaling8[0]
+  }
+  let fallback3 = if fallback_sps {
+    sps.scaling_matrix8[3]
+  } else {
+    default_scaling8[1]
+  }
   let mut mask = 0
   if present_flag == 0 {
     return Ok((0, 0))
   }
-  let p0 = match decode_scaling_list(gb, m4[0], 16, default_scaling4[0], fallback0) {
+  let p0 = match
+    decode_scaling_list(gb, m4[0], 16, default_scaling4[0], fallback0) {
     Err(e) => return Err(e)
     Ok(v) => v
   }
-  if p0 { mask = mask | (1 << 0) }
-  let p1 = match decode_scaling_list(gb, m4[1], 16, default_scaling4[0], m4[0]) {
+  if p0 {
+    mask = mask | (1 << 0)
+  }
+  let p1 = match
+    decode_scaling_list(gb, m4[1], 16, default_scaling4[0], m4[0]) {
     Err(e) => return Err(e)
     Ok(v) => v
   }
-  if p1 { mask = mask | (1 << 1) }
-  let p2 = match decode_scaling_list(gb, m4[2], 16, default_scaling4[0], m4[1]) {
+  if p1 {
+    mask = mask | (1 << 1)
+  }
+  let p2 = match
+    decode_scaling_list(gb, m4[2], 16, default_scaling4[0], m4[1]) {
     Err(e) => return Err(e)
     Ok(v) => v
   }
-  if p2 { mask = mask | (1 << 2) }
-  let p3 = match decode_scaling_list(gb, m4[3], 16, default_scaling4[1], fallback1) {
+  if p2 {
+    mask = mask | (1 << 2)
+  }
+  let p3 = match
+    decode_scaling_list(gb, m4[3], 16, default_scaling4[1], fallback1) {
     Err(e) => return Err(e)
     Ok(v) => v
   }
-  if p3 { mask = mask | (1 << 3) }
-  let p4 = match decode_scaling_list(gb, m4[4], 16, default_scaling4[1], m4[3]) {
+  if p3 {
+    mask = mask | (1 << 3)
+  }
+  let p4 = match
+    decode_scaling_list(gb, m4[4], 16, default_scaling4[1], m4[3]) {
     Err(e) => return Err(e)
     Ok(v) => v
   }
-  if p4 { mask = mask | (1 << 4) }
-  let p5 = match decode_scaling_list(gb, m4[5], 16, default_scaling4[1], m4[4]) {
+  if p4 {
+    mask = mask | (1 << 4)
+  }
+  let p5 = match
+    decode_scaling_list(gb, m4[5], 16, default_scaling4[1], m4[4]) {
     Err(e) => return Err(e)
     Ok(v) => v
   }
-  if p5 { mask = mask | (1 << 5) }
+  if p5 {
+    mask = mask | (1 << 5)
+  }
   if is_sps || transform_8x8_mode {
-    let p6 = match decode_scaling_list(gb, m8[0], 64, default_scaling8[0], fallback2) {
+    let p6 = match
+      decode_scaling_list(gb, m8[0], 64, default_scaling8[0], fallback2) {
       Err(e) => return Err(e)
       Ok(v) => v
     }
-    if p6 { mask = mask | (1 << 6) }
-    let p7 = match decode_scaling_list(gb, m8[3], 64, default_scaling8[1], fallback3) {
+    if p6 {
+      mask = mask | (1 << 6)
+    }
+    let p7 = match
+      decode_scaling_list(gb, m8[3], 64, default_scaling8[1], fallback3) {
       Err(e) => return Err(e)
       Ok(v) => v
     }
-    if p7 { mask = mask | (1 << 7) }
+    if p7 {
+      mask = mask | (1 << 7)
+    }
     if sps.chroma_format_idc == 3 {
-      let p8 = match decode_scaling_list(gb, m8[1], 64, default_scaling8[0], m8[0]) {
+      let p8 = match
+        decode_scaling_list(gb, m8[1], 64, default_scaling8[0], m8[0]) {
         Err(e) => return Err(e)
         Ok(v) => v
       }
-      if p8 { mask = mask | (1 << 8) }
-      let p9 = match decode_scaling_list(gb, m8[4], 64, default_scaling8[1], m8[3]) {
+      if p8 {
+        mask = mask | (1 << 8)
+      }
+      let p9 = match
+        decode_scaling_list(gb, m8[4], 64, default_scaling8[1], m8[3]) {
         Err(e) => return Err(e)
         Ok(v) => v
       }
-      if p9 { mask = mask | (1 << 9) }
-      let p10 = match decode_scaling_list(gb, m8[2], 64, default_scaling8[0], m8[1]) {
+      if p9 {
+        mask = mask | (1 << 9)
+      }
+      let p10 = match
+        decode_scaling_list(gb, m8[2], 64, default_scaling8[0], m8[1]) {
         Err(e) => return Err(e)
         Ok(v) => v
       }
-      if p10 { mask = mask | (1 << 10) }
-      let p11 = match decode_scaling_list(gb, m8[5], 64, default_scaling8[1], m8[4]) {
+      if p10 {
+        mask = mask | (1 << 10)
+      }
+      let p11 = match
+        decode_scaling_list(gb, m8[5], 64, default_scaling8[1], m8[4]) {
         Err(e) => return Err(e)
         Ok(v) => v
       }
-      if p11 { mask = mask | (1 << 11) }
+      if p11 {
+        mask = mask | (1 << 11)
+      }
     }
   }
   Ok((mask, if is_sps { 1 } else { 0 }))
 }
 
-///| `decode_hrd_parameters`. */
+///|
+/// `decode_hrd_parameters`. */
 fn decode_hrd_parameters(gb : BitReader, sps : H264Sps) -> Result[Unit, String] {
   let cpb = gb.read_ue31()
   if cpb < 0 {
@@ -494,7 +580,8 @@ fn decode_hrd_parameters(gb : BitReader, sps : H264Sps) -> Result[Unit, String] 
   Ok(())
 }
 
-///| `decode_vui_parameters`. */
+///|
+/// `decode_vui_parameters`. */
 fn decode_vui_parameters(gb : BitReader, sps : H264Sps) -> Result[Unit, String] {
   ff_h2645_decode_common_vui_params(gb, sps.vui)
   // `show_bits1(gb) && get_bits_left(gb) < 10`: truncated VUI, accept as-is.
@@ -566,7 +653,7 @@ fn decode_vui_parameters(gb : BitReader, sps : H264Sps) -> Result[Unit, String] 
 pub fn ff_h264_decode_seq_parameter_set(
   gb : BitReader,
   ps : H264ParamSets,
-  ignore_truncation : Bool
+  ignore_truncation : Bool,
 ) -> Result[Unit, String] {
   let sps = new_h264_sps()
   // `get_bits_bytesize(gb, 1)` uses `size_in_bits`, not the bits left.
@@ -576,12 +663,18 @@ pub fn ff_h264_decode_seq_parameter_set(
 
   sps.profile_idc = gb.read(8).reinterpret_as_int()
   let mut constraint_set_flags = 0
-  constraint_set_flags = constraint_set_flags | (gb.read1() << 0).reinterpret_as_int()
-  constraint_set_flags = constraint_set_flags | (gb.read1() << 1).reinterpret_as_int()
-  constraint_set_flags = constraint_set_flags | (gb.read1() << 2).reinterpret_as_int()
-  constraint_set_flags = constraint_set_flags | (gb.read1() << 3).reinterpret_as_int()
-  constraint_set_flags = constraint_set_flags | (gb.read1() << 4).reinterpret_as_int()
-  constraint_set_flags = constraint_set_flags | (gb.read1() << 5).reinterpret_as_int()
+  constraint_set_flags = constraint_set_flags |
+    (gb.read1() << 0).reinterpret_as_int()
+  constraint_set_flags = constraint_set_flags |
+    (gb.read1() << 1).reinterpret_as_int()
+  constraint_set_flags = constraint_set_flags |
+    (gb.read1() << 2).reinterpret_as_int()
+  constraint_set_flags = constraint_set_flags |
+    (gb.read1() << 3).reinterpret_as_int()
+  constraint_set_flags = constraint_set_flags |
+    (gb.read1() << 4).reinterpret_as_int()
+  constraint_set_flags = constraint_set_flags |
+    (gb.read1() << 5).reinterpret_as_int()
   gb.skip(2) // reserved_zero_2bits
   sps.level_idc = gb.read(8).reinterpret_as_int()
   let sps_id = gb.read_ue31()
@@ -596,9 +689,17 @@ pub fn ff_h264_decode_seq_parameter_set(
   sps.scaling_matrix_present = 0
 
   let profile = sps.profile_idc
-  if profile == 100 || profile == 110 || profile == 122 || profile == 244 ||
-    profile == 44 || profile == 83 || profile == 86 || profile == 118 ||
-    profile == 128 || profile == 138 || profile == 144 {
+  if profile == 100 ||
+    profile == 110 ||
+    profile == 122 ||
+    profile == 244 ||
+    profile == 44 ||
+    profile == 83 ||
+    profile == 86 ||
+    profile == 118 ||
+    profile == 128 ||
+    profile == 138 ||
+    profile == 144 {
     let chroma = gb.read_ue31()
     if chroma < 0 || chroma > 3 {
       return Err("EINVAL")
@@ -615,15 +716,24 @@ pub fn ff_h264_decode_seq_parameter_set(
     if sps.bit_depth_chroma != sps.bit_depth_luma {
       return Err("EINVAL")
     }
-    if sps.bit_depth_luma < 8 || sps.bit_depth_luma > 14 ||
-      sps.bit_depth_chroma < 8 || sps.bit_depth_chroma > 14 {
+    if sps.bit_depth_luma < 8 ||
+      sps.bit_depth_luma > 14 ||
+      sps.bit_depth_chroma < 8 ||
+      sps.bit_depth_chroma > 14 {
       return Err("EINVAL")
     }
     sps.transform_bypass = gb.read1().reinterpret_as_int()
     let present = gb.read1().reinterpret_as_int()
-    let (mask, ret) = match decode_scaling_matrices(
-      gb, sps, true, present, false, sps.scaling_matrix4, sps.scaling_matrix8,
-    ) {
+    let (mask, ret) = match
+      decode_scaling_matrices(
+        gb,
+        sps,
+        true,
+        present,
+        false,
+        sps.scaling_matrix4,
+        sps.scaling_matrix8,
+      ) {
       Err(e) => return Err(e)
       Ok(v) => v
     }
@@ -693,7 +803,8 @@ pub fn ff_h264_decode_seq_parameter_set(
   } else {
     sps.mb_aff = 0
   }
-  if sps.mb_width >= 2147483647 / 16 || sps.mb_height >= 2147483647 / 16 ||
+  if sps.mb_width >= 2147483647 / 16 ||
+    sps.mb_height >= 2147483647 / 16 ||
     !h264_image_check_size(16 * sps.mb_width, 16 * sps.mb_height) {
     return Err("EINVAL")
   }
@@ -724,8 +835,11 @@ pub fn ff_h264_decode_seq_parameter_set(
     let sx = step_x.to_int64()
     let sy = step_y.to_int64()
     let int_max4 = 2147483647L / 4L
-    if cl > int_max4 / sx || cr > int_max4 / sx || ct > int_max4 / sy ||
-      cb > int_max4 / sy || (cl + cr) * sx >= width.to_int64() ||
+    if cl > int_max4 / sx ||
+      cr > int_max4 / sx ||
+      ct > int_max4 / sy ||
+      cb > int_max4 / sy ||
+      (cl + cr) * sx >= width.to_int64() ||
       (ct + cb) * sy >= height.to_int64() {
       return Err("EINVAL")
     }
@@ -792,7 +906,7 @@ fn more_rbsp_data_in_pps(sps : H264Sps) -> Bool {
 pub fn ff_h264_decode_picture_parameter_set(
   gb : BitReader,
   ps : H264ParamSets,
-  bit_length : Int
+  bit_length : Int32,
 ) -> Result[Unit, String] {
   let pps_id = gb.read_ue()
   if pps_id < 0 || pps_id >= max_pps_count {
@@ -862,22 +976,22 @@ pub fn ff_h264_decode_picture_parameter_set(
   if bits_left > 0 && more_rbsp_data_in_pps(sps) {
     pps.transform_8x8_mode = gb.read1().reinterpret_as_int()
     pps.pic_scaling_matrix_present_flag = gb.read1().reinterpret_as_int()
-    let (mask, _) = match decode_scaling_matrices(
-      gb,
-      sps,
-      false,
-      pps.pic_scaling_matrix_present_flag,
-      pps.transform_8x8_mode != 0,
-      pps.scaling_matrix4,
-      pps.scaling_matrix8,
-    ) {
+    let (mask, _) = match
+      decode_scaling_matrices(
+        gb,
+        sps,
+        false,
+        pps.pic_scaling_matrix_present_flag,
+        pps.transform_8x8_mode != 0,
+        pps.scaling_matrix4,
+        pps.scaling_matrix8,
+      ) {
       Err(e) => return Err(e)
       Ok(v) => v
     }
     pps.pic_scaling_matrix_present_mask = mask
     pps.chroma_qp_index_offset1 = gb.read_se()
-    if pps.chroma_qp_index_offset1 < -12 ||
-      pps.chroma_qp_index_offset1 > 12 {
+    if pps.chroma_qp_index_offset1 < -12 || pps.chroma_qp_index_offset1 > 12 {
       return Err("EINVAL")
     }
   } else {
@@ -895,17 +1009,19 @@ pub fn ff_h264_decode_picture_parameter_set(
 // extradata
 // ---------------------------------------------------------------------------
 
-///| `ff_h264_decode_extradata` results: which sample-entry form was found and
+///|
+/// `ff_h264_decode_extradata` results: which sample-entry form was found and
 /// the NAL length field width for length-prefixed samples. */
 pub struct H264ExtradataInfo {
   is_avc : Bool
-  nal_length_size : Int
+  nal_length_size : Int32
 }
 
-///| Decode SPS/PPS NALs from a split packet (the C's `decode_extradata_ps`). */
+///|
+/// Decode SPS/PPS NALs from a split packet (the C's `decode_extradata_ps`). */
 fn h264_decode_extradata_nals(
   pkt : H2645Packet,
-  ps : H264ParamSets
+  ps : H264ParamSets,
 ) -> Result[Unit, String] {
   for i = 0; i < pkt.nals.length(); i = i + 1 {
     let nal = pkt.nals[i]
@@ -933,7 +1049,7 @@ fn h264_decode_extradata_nals(
 /// version 1) and an Annex B parameter set blob, decoding every SPS/PPS.
 pub fn ff_h264_decode_extradata(
   data : Bytes,
-  ps : H264ParamSets
+  ps : H264ParamSets,
 ) -> Result[H264ExtradataInfo, String] {
   if data.length() <= 0 {
     return Err("EINVAL")
@@ -943,7 +1059,7 @@ pub fn ff_h264_decode_extradata(
       return Err("EINVAL")
     }
     let mut p = 6
-    let sps_count = (data[5].to_int() & 0x1F)
+    let sps_count = data[5].to_int() & 0x1F
     for _ in 0..<sps_count {
       if p + 2 > data.length() {
         return Err("EINVAL")
@@ -987,7 +1103,7 @@ pub fn ff_h264_decode_extradata(
       }
       p = p + nalsize
     }
-    Ok({ is_avc: true, nal_length_size: (data[4].to_int() & 0x03) + 1 })
+    Ok({ is_avc: true, nal_length_size: (data[4].to_int() & 0x03) + 1, })
   } else {
     let pkt = match ff_h2645_packet_split(data, 0, H264, false) {
       Err(e) => return Err(e)
@@ -997,6 +1113,6 @@ pub fn ff_h264_decode_extradata(
       Err(e) => return Err(e)
       Ok(_) => ()
     }
-    Ok({ is_avc: false, nal_length_size: 0 })
+    Ok({ is_avc: false, nal_length_size: 0, })
   }
 }
