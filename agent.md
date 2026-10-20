@@ -35,6 +35,14 @@
   供 libavformat 的 `esds` 用 —— **libavformat 依赖 libavcodec**，与 FFmpeg 方向一致）；
   IDCT 的 8/10/12 位另有 `@v128` SIMD 版（`idct_v128.mbt`，块/像素改用 **字节缓冲**，
   v128 才能载入）
+- **libavcodec（码流层，2026-10 新增）**：`bitstream.mbt`（get_bits + Exp-Golomb）、
+  `h2645_parse.mbt`（RBSP 去防竞争字节 + Annex B/长度前缀 NAL 拆分）、
+  `h2645_vui.mbt`（公共 VUI）、`h264_ps.mbt`（H.264 SPS/PPS/avcC）、
+  `hevc_ps.mbt`（HEVC VPS/SPS/PPS/PTL/RPS/hvcC）、`audio_headers.mbt`（ADTS、MP1/2/3
+  帧头）。**只解析码流、不产出像素/PCM**；多层 HEVC 扩展与解码端派生表未建模
+- **libavformat（码流层接入）**：`rawaudio.mbt`（裸 ADTS/MP3 分帧，ID3v2/v1 +
+  Xing/Info/VBRI）、`codec_tags.mbt`（MKV CodecID / MP4 fourcc 映射）、
+  `codec_parameters.mbt`（容器 + extradata → 统一 `CodecParameters`）
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的
@@ -117,6 +125,11 @@ $msg | git commit -F -
   时，用它生成真实 MP4（普通/碎片化/cenc），并以同镜像 `ffprobe` 的
   `-show_entries packet=pts,dts,duration,pos,size,flags` 输出作为期望值，与解析结果
   逐 packet 比对。范本见 `libavformat/mp4_real_wbtest.mbt`（文件 base64 内嵌 + 生成命令）。
+  **码流参数集**的权威期望值用 FFmpeg 自己的
+  `ffmpeg -i x -c copy -bsf:v trace_headers -f null -`（SPS/PPS/VPS 每个字段的
+  位偏移与值）；`ffprobe -show_streams` 只给 profile/level/尺寸，粒度不够。
+  裸音频范本见 `libavformat/rawaudio_wbtest.mbt`（ADTS/MP3 逐帧 `pos`/`size` 对齐
+  `ffprobe -show_packets`）。
   cenc 文件可用 `-encryption_scheme cenc-aes-ctr -encryption_key … -encryption_kid …`
   生成，再以已知密钥解密核对明文样本。
 - **无 FATE 数值向量时（如 `libavcodec/huffman.c`）**：用「期望值由 FFmpeg 自己的另一实现产生」
@@ -201,6 +214,22 @@ $msg | git commit -F -
   在 `moon.pkg` 写 `warnings = "-alert_experimental"` 即可消警（core 自身亦如此，见
   `core/debug/moon.pkg`）。完整范本：`libavutil/adler32_v128.mbt`（构造用 `i16x8_const`、
   块载入用 `[v128le(v), .. _]` 模式、横向归约用 `i32x4_extract_lane`、`UInt64` 字面量用 `16UL`）。
+- **不存在的 `?` 后缀运算符**：MoonBit 这里没有 Rust 式 `expr?`。已有代码用
+  `try { ... } catch { InvalidData(msg) => ... }`（如 `mov.mbt` 的 `mov_open`）或显式
+  `match ... { Err(e) => return Err(e), Ok(v) => v }`。在 `let x = match ...` 里
+  `return` 是合法的，可放心用。
+- **`Result[T, String]` 少写一个 `]` 的报错极具误导性**：写成 `Result[Foo, String> {`
+  时解析器会在 `>` 处报 `unexpected token infix ... expected , or ]`，随后整段函数被
+  当成顶层表达式，堆出一大片“return 必须在函数内”的假错误。本项目已在
+  `hevc_ps.mbt`/`audio_headers.mbt` 各踩一次；看到该类错误先数类型括号。
+- **跨包不能构造外部 struct**：`@libavcodec.MpaDecodeHeader` 在 libavformat 里是只读类型，
+  `let h : @libavcodec.MpaDecodeHeader = { ... }` 报 E4036/E4033。不要给外部 struct
+  写默认值，重构为“先找候选、再调用返回处”的写法。
+- **像素格式名是 native-endian**：FFmpeg 的 `AV_PIX_FMT_YUV420P10` 是
+  `AV_PIX_FMT_NE(BE, LE)`；本机/目标为小端时名字是 `yuv420p10le`（不是 `yuv420p10`）。
+  `hevc_ps.mbt` 的 `map_pixel_format` 与 `codec_parameters.mbt` 均按 `*le` 命名。
+- **测试文件间可复用同包私有常量/函数**：如 `real_mkv_1024_b64`（`ebml_real_wbtest.mbt`）、
+  `bcat`（`ebml_wbtest.mbt`）可被同包其它 `_wbtest.mbt` 直接使用，不必重复内嵌。
 
 ---
 
@@ -220,6 +249,26 @@ $msg | git commit -F -
   **等长**消息，逐 lane 施加同一轮常量/混合/`rotl`（`i32x4_shl` + `i32x4_shr_u`），循环外围
   仍是标量块调度（`av_md5_sum_x4`，见 `md5_v128.mbt`）。这类内核需**新增多缓冲 API**，
   且必须与标量单流版逐 lane 逐值一致。
+- **Exp-Golomb**：`get_se_golomb` 的 C 实现作用于 **`code_num = ue + 1`**，不是 ue 本身
+  （ue 1→se 1，ue 2→se -1）；直接对 ue 套 `((v>>1)^sign)-sign` 会整体错位。
+  `get_ue_golomb_long` 在 32 位窗口全零时 `av_log2(0)=0` → 跳 31 位再读 32 位，
+  与“读到 32 个前导零”并不是一回事；照 C 的 `log = 31 - av_log2(buf)` 实现即可。
+- **NAL 拆分**：H.264/HEVC 的 SPS/PPS 解析入口在 C 里是 **NAL header 之后**的
+  `GetBitContext`（`nal->gb` 已被 NAL 头解析消费 8/16 位），自行 `BitReader::new(nal.data)`
+  后必须 `skip(8)`/`skip(16)`。`get_bits_bytesize(gb, 1)` 用的是 `size_in_bits`（整个
+  NAL），不是 `bits_left`。
+- **RBSP 与起始码**：`ff_h2645_extract_rbsp` 的 `consumed` 可能小于输入长度（遇到下一个
+  `00 00 01`）；Annex B 循环在“剩余 <4 字节”时仍应完成当前 NAL 的提取（C 的循环条件只
+  在迭代开始时检查），否则会吞掉最后一个 3 字节 NAL。
+- **HEVC 参数集**：`vps_max_layers > 1` 且 `vps_extension_flag` 置位、PPS 的
+  multilayer/3D 扩展均按本项目边界返回 `PATCHWELCOME`；普通 x265 Main/Main10 流不会
+  触发。HRD 必须**逐位消费**（即使不存值），否则后续字段全部错位。
+- **MP3 分帧**：包不能从文件头开始算——LAME 会在第一个音频帧里写 Xing/Info 标签，FFmpeg
+  的包流会跳过这一帧（本项目 `info_frame_size` 记录其大小）；Xing 标签偏移是
+  `4 + xing_offtbl[lsf==1][channels==1]`（MPEG1 mono 为 17），VBRI 固定在 header+32。
+  `.mp3` 尾部还可能有 `TAG` 开头的 128 字节 ID3v1。
+- **AAC ADTS**：`adts_frame_length` 含 7 字节头（有 CRC 时含 CRC），ffprobe 的 packet
+  size 就是这个值；`samples = (num_raw_data_blocks+1)*1024`，不是恒为 1024。
 
 ---
 
@@ -291,19 +340,38 @@ moonbit/                      # git 仓库根
 │   ├── ebml.mbt              # Matroska EBML 层（原语 + 通用游走器 + level-1 注册表）
 │   ├── matroska.mbt          # Matroska 切片 1+2：EBML 头 + Segment/Info/SeekHead
 │   ├── matroska_track.mbt    # Matroska 切片 3：TrackEntry 全表
+│   ├── matroska_block.mbt    # Matroska 切片 4：Cluster/Block 与三种 lacing
+│   ├── rawaudio.mbt          # 裸 ADTS AAC / MPEG 音频分帧（ID3/Xing/Info/VBRI）
+│   ├── codec_tags.mbt        # Matroska CodecID / MP4 fourcc 映射
+│   ├── codec_parameters.mbt  # 容器 + extradata → CodecParameters
 │   ├── ebml_wbtest.mbt       # EBML 白盒测试（VINT 规范向量 + 游走器路径）
 │   ├── ebml_real_wbtest.mbt  # 真实 webm/mkv 头（docker，base64 内嵌）
 │   ├── mkv_segment_wbtest.mbt # Segment 切片测试（合成布局 + 真实 1024 字节前缀）
-│   └── mkv_track_wbtest.mbt  # Tracks 切片测试（合成轨道 + 真实 webm/mkv 轨道）
+│   ├── mkv_track_wbtest.mbt  # Tracks 切片测试（合成轨道 + 真实 webm/mkv 轨道）
+│   ├── mkv_cluster_wbtest.mbt # Cluster 切片测试（lacing + 真实 packet 表）
+│   ├── mkv_cluster_realdata_wbtest.mbt # Cluster 真实文件 base64 素材
+│   ├── rawaudio_wbtest.mbt   # 真实 AAC/MP3 逐帧比对 ffprobe
+│   ├── codec_parameters_wbtest.mbt # avcC/hvcC/ASC + 真实 MP4/MKV 轨道
 │   ├── mp4_extra_wbtest.mbt  # 第二批合成 box 测试（extradata/sidx/seek/音频分块…）
 │   └── mp4_real_wbtest.mbt   # 真实文件交叉验证（两批，docker ffmpeg/ffprobe）
 └── libavcodec/               # 包 ffmpeg/moonbit/libavcodec（@math/@v128 + libavutil 仅白盒测试用）
     ├── moon.pkg
+    ├── bitstream.mbt         # get_bits + Exp-Golomb
+    ├── h2645_parse.mbt       # RBSP/NAL 拆分（Annex B + 长度前缀）
+    ├── h2645_vui.mbt         # 公共 VUI
+    ├── h264_ps.mbt           # H.264 SPS/PPS/VUI + avcC
+    ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS + hvcC
+    ├── audio_headers.mbt     # ADTS + MPEG 音频帧头
     ├── idct.mbt              # SIMPLE-C IDCT + idctdsp 辅助（标量，Array[Int]）
-    ├── idct_v128.mbt         # 8 位 IDCT 的 `@v128` 版（块/像素用字节缓冲）
+    ├── idct_v128.mbt         # IDCT 的 `@v128` 版（块/像素用字节缓冲）
     ├── dctref.mbt            # 双精度参考 DCT/IDCT（IDCT 测试的期望值来源）
     ├── huffman.mbt           # Huffman 树/码长 + 规范化码编解码
     ├── mpeg4audio.mbt        # AudioSpecificConfig 解析（esds/AAC 用）
+    ├── bitstream_wbtest.mbt
+    ├── h2645_parse_wbtest.mbt
+    ├── h264_ps_wbtest.mbt
+    ├── hevc_ps_wbtest.mbt
+    ├── audio_headers_wbtest.mbt
     ├── idct_wbtest.mbt
     ├── idct_v128_wbtest.mbt
     ├── huffman_wbtest.mbt
