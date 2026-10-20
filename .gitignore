@@ -5,3 +5,10 @@ target/
 target
 .mooncakes/
 .moonagent/
+
+# `moon info` public-interface snapshots (regenerate with `moon info`)
+*.generated.mbti
+
+# Local tooling / scratch directories
+.trash/
+.workbuddy/

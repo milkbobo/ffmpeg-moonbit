@@ -39,7 +39,15 @@
   `h2645_parse.mbt`（RBSP 去防竞争字节 + Annex B/长度前缀 NAL 拆分）、
   `h2645_vui.mbt`（公共 VUI）、`h264_ps.mbt`（H.264 SPS/PPS/avcC）、
   `hevc_ps.mbt`（HEVC VPS/SPS/PPS/PTL/RPS/hvcC）、`audio_headers.mbt`（ADTS、MP1/2/3
-  帧头）。**只解析码流、不产出像素/PCM**；多层 HEVC 扩展与解码端派生表未建模
+  帧头）。这一层**只解析码流**；多层 HEVC 扩展与部分解码端派生表未建模
+- **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
+  - H.264 Baseline **I 帧重建**：`h264_slice.mbt`（I/SI slice header）+
+    `h264_cavlc.mbt`（CAVLC + dequant/chroma-QP 表）+ `h264_idct.mbt`（4x4 IDCT +
+    luma/chroma DC Hadamard）+ `h264_pred.mbt`（4x4/16x16/chroma 8x8 帧内预测）+
+    `h264_decode.mbt`（宏块路径编排 + Annex B 入口，视觉对齐
+    `-skip_loop_filter all`）。**没有去块滤波**，故不能与默认解码输出比
+  - MP3 **Layer III 定点解码**：`mp3_tables.mbt`（码表/Huffman）+ `mp3_dsp.mbt`
+    （IMDCT/DCT32/合成窗）+ `mp3_decode.mbt`（side info/反量化/立体声/PCM）
 - **libavformat（码流层接入）**：`rawaudio.mbt`（裸 ADTS/MP3 分帧，ID3v2/v1 +
   Xing/Info/VBRI）、`codec_tags.mbt`（MKV CodecID / MP4 fourcc 映射）、
   `codec_parameters.mbt`（容器 + extradata → 统一 `CodecParameters`）
@@ -142,6 +150,21 @@ $msg | git commit -F -
 - **测试失败先怀疑自己的期望值**：本项目已多次出现「实现正确、期望写错」的情况
   （如 `av_strcasecmp` 返回值、`av_strlcat` 预算不足返回所需长度、`av_match_name` 的
   首命中短路语义）。先回到 C 源码重推。
+- **解码器（出像素/PCM）的向量做法**：参考输出由 docker `linuxserver/ffmpeg:9.0.2`
+  现场生成，期望值是 **MD5**：
+  - H.264：`-x264-params "keyint=1:bframes=0:cabac=0:8x8dct=0:slices=1:scenecut=0"`
+    产出「全 IDR + 单 slice」码流，参考 YUV 必须用 **`-skip_loop_filter all`**（放在
+    `-i` 之前，因为本项目没有去块滤波），再按 `w*h*3/2` 切帧算 MD5。
+  - MP3：期望 PCM MD5 必须取自**定点**解码器 `-c:a mp3 -f s16le`；浮点（默认
+    `mp3float`）给出不同 MD5，用错就永远对不上。
+  - **扫描式验证**：按宏块/每行算 luma MD5 与参考 YUV 同区域比对，比整帧 MD5 更快
+    定位到具体宏块或单条预测路径。
+  - **负例也要吃向量**：多 slice / CABAC / P slice / 4:2:2 / 10-bit 等未支持输入，断言
+    **具体错误串**（而不只是"是 Err"），否则错误路径掩盖真实原因时测试仍然通过。
+  - 生成命令写进 `*_realdata_wbtest.mbt` 文件头，码流 base64 内嵌（范本：
+    `libavcodec/h264_decode_realdata_wbtest.mbt`、`mp3_decode_realdata_wbtest.mbt`）。
+  - docker 挂载在 Git Bash 下要用 **Windows 路径** + `MSYS_NO_PATHCONV=1`
+    （`-v "C:/Users/…/dir:/s"`）；`/c/…` 形式会被 MSYS 改写挂载串。
 
 ---
 
@@ -228,8 +251,17 @@ $msg | git commit -F -
 - **像素格式名是 native-endian**：FFmpeg 的 `AV_PIX_FMT_YUV420P10` 是
   `AV_PIX_FMT_NE(BE, LE)`；本机/目标为小端时名字是 `yuv420p10le`（不是 `yuv420p10`）。
   `hevc_ps.mbt` 的 `map_pixel_format` 与 `codec_parameters.mbt` 均按 `*le` 命名。
+- **`cbp & 15 != 0` 会被解析成 `cbp & (15 != 0)`**：混合 `&`/`|` 与比较运算时**必须加
+  括号**，否则 CBP 判定全错、整帧像素错位（H.264 解码切片踩过）。
+- **`Array::make(n, inner)` 让 n 个元素别名同一个内部数组**：需要「每项独立的数组字段」
+  时必须用循环逐个新建（H.264 的逐宏块 `nz`/`modes` 就因此踩过：所有宏块共享一份邻居
+  信息，预测模式互相污染）。
+- **未使用的 `mut` 与未使用的私有顶层符号在 `moon check` 下按错误/告警严格处理**：
+  移植时先写后弃的辅助函数、只在调试期用到的变量，提交前清掉或接上消费者。
 - **测试文件间可复用同包私有常量/函数**：如 `real_mkv_1024_b64`（`ebml_real_wbtest.mbt`）、
   `bcat`（`ebml_wbtest.mbt`）可被同包其它 `_wbtest.mbt` 直接使用，不必重复内嵌。
+  H.264 的三个码流常量放在 `h264_decode_realdata_wbtest.mbt`，测试在
+  `h264_decode_wbtest.mbt`，同包直接引用。
 
 ---
 
@@ -269,6 +301,19 @@ $msg | git commit -F -
   `.mp3` 尾部还可能有 `TAG` 开头的 128 字节 ID3v1。
 - **AAC ADTS**：`adts_frame_length` 含 7 字节头（有 CRC 时含 CRC），ffprobe 的 packet
   size 就是这个值；`samples = (num_raw_data_blocks+1)*1024`，不是恒为 1024。
+- **H.264 4x4 IDCT 两遍的索引不同**：行变换用 `b`/`b+4`/`b+8`/`b+12` 系列，列变换的正确
+  邻居是 `b+2`/`b+1`/`b+3`；照抄第一遍会整帧像素均匀偏移（症状：MD5 全错但图像"像"）。
+- **4x4 top-right 可用性按 z-order 判**：块按 8x8 组重建，`bx`/`by` 与视觉位置不对应，
+  必须用 FFmpeg 的 `topright_samples_available` 规则（`by == 0` 时
+  `bx < 3 || 右方 MB 存在`；`by > 0` 时 `bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)`）。
+- **16x16 / chroma 8x8 平面预测的梯度索引**：C 的 `8+k`/`8-k`、`4+k`/`4-k` 是**以块宽为
+  基**的写法，移植成 `7+k`/`7-k`、`3+k`/`3-k`；写错会底边越界 panic。
+- **SPS 裁剪偏移已折算成亮度像素**：`h264_ps.c:510-513` 乘过 `step_x`/`step_y`，
+  `init_dimensions` 直接 `width - (cr + cl)`，解码端**不能再乘 2**。这类 bug 只有非宏块
+  对齐分辨率（如 88x56）能暴露，整数倍分辨率的向量一定漏掉。
+- **多 slice 必须解码前预扫**：宏块循环按 `mb_count` 读，第二个 slice 之前越界读零会静默
+  产出垃圾像素；先扫每个 slice NAL 的 `first_mb_in_slice`，非 0 直接拒绝。
+- **MP3 定点 vs 浮点**：期望 MD5 只能用 `-c:a mp3`（定点）生成；默认 `mp3float` 不同。
 
 ---
 
@@ -360,8 +405,16 @@ moonbit/                      # git 仓库根
     ├── h2645_parse.mbt       # RBSP/NAL 拆分（Annex B + 长度前缀）
     ├── h2645_vui.mbt         # 公共 VUI
     ├── h264_ps.mbt           # H.264 SPS/PPS/VUI + avcC
+    ├── h264_slice.mbt        # H.264 I/SI slice header（P/B 拒绝）
+    ├── h264_cavlc.mbt        # CAVLC 残差 + dequant/chroma-QP 表
+    ├── h264_idct.mbt         # H.264 4x4 IDCT + DC Hadamard（8-bit）
+    ├── h264_pred.mbt         # 帧内预测 4x4/16x16/chroma 8x8
+    ├── h264_decode.mbt       # Baseline I 帧重建 + Annex B 入口（无去块滤波）
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS + hvcC
     ├── audio_headers.mbt     # ADTS + MPEG 音频帧头
+    ├── mp3_tables.mbt        # Layer III 码表/Huffman 表
+    ├── mp3_dsp.mbt           # 定点 IMDCT/DCT32/合成窗
+    ├── mp3_decode.mbt        # Layer III 定点解码器
     ├── idct.mbt              # SIMPLE-C IDCT + idctdsp 辅助（标量，Array[Int]）
     ├── idct_v128.mbt         # IDCT 的 `@v128` 版（块/像素用字节缓冲）
     ├── dctref.mbt            # 双精度参考 DCT/IDCT（IDCT 测试的期望值来源）
@@ -370,6 +423,11 @@ moonbit/                      # git 仓库根
     ├── bitstream_wbtest.mbt
     ├── h2645_parse_wbtest.mbt
     ├── h264_ps_wbtest.mbt
+    ├── h264_slice_wbtest.mbt
+    ├── h264_decode_wbtest.mbt      # 逐帧 YUV MD5 + 未支持输入负例
+    ├── h264_decode_realdata_wbtest.mbt  # 码流 base64 + 期望 MD5（含生成命令）
+    ├── mp3_decode_wbtest.mbt
+    ├── mp3_decode_realdata_wbtest.mbt
     ├── hevc_ps_wbtest.mbt
     ├── audio_headers_wbtest.mbt
     ├── idct_wbtest.mbt

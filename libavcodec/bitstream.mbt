@@ -95,6 +95,11 @@ pub fn BitReader::skip(self : BitReader, n : Int) -> Unit {
   self.pos = self.pos + n
 }
 
+///| Absolute bit position (MP3's bit-reservoir reader needs this). */
+pub fn BitReader::set_pos(self : BitReader, pos : Int) -> Unit {
+  self.pos = pos
+}
+
 ///| `align_get_bits`: round the cursor up to the next byte boundary. */
 pub fn BitReader::align(self : BitReader) -> Unit {
   self.pos = ((self.pos + 7) >> 3) << 3

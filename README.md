@@ -91,12 +91,26 @@ moonbit/
     ├── h2645_parse.mbt       # H.264/HEVC NAL 拆分：去防竞争字节、Annex B/长度前缀
     ├── h2645_vui.mbt         # H.264/HEVC 公共 VUI（SAR/色彩/chroma location）
     ├── h264_ps.mbt           # H.264 SPS/PPS/VUI/缩放矩阵 + avcC extradata
+    ├── h264_slice.mbt        # H.264 I/SI slice header（P/B 显式拒绝）
+    ├── h264_cavlc.mbt        # CAVLC 残差解码 + 去量化/chroma QP 派生表
+    ├── h264_idct.mbt         # H.264 4x4 IDCT + luma/chroma DC Hadamard（8-bit）
+    ├── h264_pred.mbt         # 帧内预测 4x4/16x16/chroma 8x8 + 可用性改判
+    ├── h264_decode.mbt       # Baseline I 帧重建（CAVLC→dequant→IDCT→预测→写回）+ Annex B 入口
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS/VUI + hvcC extradata
     ├── audio_headers.mbt     # AAC ADTS 头 + MPEG 音频帧头（MP1/MP2/MP3）
+    ├── mp3_tables.mbt        # Layer III 码表/Huffman 表（C 源批量提取）
+    ├── mp3_dsp.mbt           # 定点 IMDCT/DCT32/合成窗（mpegaudiodsp fixed 路径）
+    ├── mp3_decode.mbt        # Layer III 定点解码器（side info/反量化/立体声/PCM 输出）
     ├── idct.mbt              # SIMPLE-C IDCT（int16 8/10/12 bit）+ idctdsp 像素/扫描表辅助
     ├── dctref.mbt            # 双精度参考 DCT/IDCT（dctref.c），供 IDCT 测试作期望值
     ├── huffman.mbt           # Huffman 树/码长构建（huffman.c）+ 规范化码编解码
     ├── mpeg4audio.mbt        # AudioSpecificConfig 解析（mpeg4audio.c，esds/AAC 用）
+    ├── h264_slice_wbtest.mbt # slice header 逐字段对照 trace_headers
+    ├── h264_slice_realdata_wbtest.mbt # slice header 真实码流 base64 素材
+    ├── h264_decode_wbtest.mbt# H.264 真实码流逐帧 YUV MD5 + 未支持输入负例
+    ├── h264_decode_realdata_wbtest.mbt # H.264 码流 base64 素材与期望 MD5
+    ├── mp3_decode_wbtest.mbt # MP3 定点解码 PCM MD5（mono/stereo/LSF）
+    ├── mp3_decode_realdata_wbtest.mbt # MP3 码流 base64 素材与期望 MD5
     ├── bitstream_wbtest.mbt  # H.264/H.265 表 9-1 Exp-Golomb + 位读取边界
     ├── h2645_parse_wbtest.mbt# RBSP/NAL 拆分合成与真实参数集用例
     ├── h264_ps_wbtest.mbt    # 真实 avcC + trace_headers 字段逐项断言
@@ -110,10 +124,11 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行，本次完成 MoonBit 源文件（`moonbit/**/*.mbt`，不含
-`_build` 生成文件）共 **27628 行**（libavutil 5995 行 + libavformat 的 aviobuf 流式
+`_build` 生成文件）共 **33200 行**（libavutil 5995 行 + libavformat 的 aviobuf 流式
 AVIO 层、MP4 解复用、Matroska EBML/Segment/Tracks/Cluster、裸 AAC/MP3 分帧与
 容器码流参数桥 14223 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、IDCT/Huffman/
-MPEG-4 音频切片 7410 行，均含白盒测试）——约占整体 **1.73%**。
+MPEG-4 音频切片、**H.264 Baseline I 帧重建**与 **MP3 定点解码** 12982 行，均含白盒
+测试）——约占整体 **2.08%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 码流层）
 
@@ -157,12 +172,20 @@ MPEG-4 音频切片 7410 行，均含白盒测试）——约占整体 **1.73%**
 | [h2645_vui.mbt](libavcodec/h2645_vui.mbt) | `libavcodec/h2645_vui.c`、`h2645data.c` | 公共 VUI：SAR 表/扩展 SAR、overscan、video signal + 颜色描述（保留值映射 unspecified）、chroma location；`ff_h2645_pixel_aspect` 全表 | ✅ |
 | [h264_ps.mbt](libavcodec/h264_ps.mbt) | `libavcodec/h264_ps.c`、`h264_ps.h`、`h264_parse.c`(`ff_h264_decode_extradata`) | SPS 全字段（高 profile 的 chroma/位深/缩放矩阵、POC、裁剪、VUI/HRD/bitstream restriction、帧率与 `num_reorder_frames` 推导）、PPS（CABAC/ref/SliceGroup 拒绝/加权/QP/缩放列表）、`avcC` 与 Annex B extradata 解析。未建解码端 dequant/chroma-QP 派生表 | ✅ |
 | [hevc_ps.mbt](libavcodec/hevc_ps.mbt) | `libavcodec/hevc/ps.c`、`ps.h`、`hevc/parse.c`(`ff_hevc_decode_extradata`) | PTL（profile tier level + 兼容标志）、VPS、SPS（chroma/位深/裁剪/CTB 派生/RPS/PCM/VUI/RExt/SCC）、PPS（tiles/deblocking/缩放/RExt/SCC）、`hvcC`/Annex B extradata、`ff_hevc_compute_poc2`。多层/3D 扩展返回 `PATCHWELCOME`；HRD 按位消费但未存储 | ✅ |
+| [h264_slice.mbt](libavcodec/h264_slice.mbt) | `libavcodec/h264_slice.c`(`ff_h264_decode_slice_header`) | I/SI 单帧 slice header：`first_mb_in_slice`、slice_type、PPS/SPS 查找、`frame_num`、场旗标、IDR POC 与参考标记字段、`slice_qp_delta`、去块滤波控制；P/B 的参考列表与权重表语法显式拒绝 | ✅ |
+| [h264_cavlc.mbt](libavcodec/h264_cavlc.mbt) | `libavcodec/h264_cavlc.c`(`decode_residual`)、`h264_ps.c`(`ff_h264_dequant4_coeff_init`/`ff_h264_chroma_qp`) | CAVLC 残差：coeff_token/total_zeros/run_before/level_prefix-suffix 三级码表（C 的 VLC 子系统改为同表构建的二叉 trie，逐位等价）、PPS 派生的去量化表与 chroma QP 表；系数按 C 的转置布局存放 | ✅ |
+| [h264_idct.mbt](libavcodec/h264_idct.mbt) | `libavcodec/h264idct_template.c` | `ff_h264_idct_add`、`ff_h264_idct_dc_add`、`ff_h264_luma_dc_dequant_idct`、`ff_h264_chroma_dc_dequant_idct`（8-bit）；`SUINT` 用 32 位 `UInt` 复刻回绕语义，`dctcoef` 写回按 `int16` 截断。8x8DCT 变体未移植（CAVLC 端直接拒绝 8x8 宏块） | ✅ |
+| [h264_pred.mbt](libavcodec/h264_pred.mbt) | `libavcodec/h264pred_template.c`、`h264_parse.c`(`ff_h264_check_intra4x4_pred_mode`/`ff_h264_check_intra_pred_mode`) | 4x4 九模式（含 DC 边缘变体）、16x16 四模式、chroma 8x8 四模式的 8-bit 帧内预测，以及「参考样本可用性 → 模式改判」逻辑；邻居直接读重建平面（FFmpeg 读每 MB 的边界缓冲，样本值相同） | ✅ |
+| [h264_decode.mbt](libavcodec/h264_decode.mbt) | `h264_cavlc.c`(`ff_h264_decode_mb_cavlc`)、`h264_mb_template.c`(`hl_decode_mb`)、`h264_slice.c`(`init_dimensions`) | **H.264 Baseline I 帧重建**：CAVLC 宏块解析 → dequant → 4x4 IDCT / luma & chroma DC Hadamard → 帧内预测 → 写回平面；`I_4x4`/`I_16x16`/`I_PCM` 三条宏块路径、8x8 z-order 块序与 top-right 可用性掩码、SPS 裁剪与 `H264Frame::yuv420p` 输出；入口 `h264_decode_annexb_i_frames`（Annex B，就地解析 SPS/PPS） | ✅ |
 | [audio_headers.mbt](libavcodec/audio_headers.mbt) | `libavcodec/adts_header.c`、`adts_parser.c`、`mpegaudiodecheader.c`、`mpegaudiotabs.h` | `ff_adts_header_parse{,_buf}`（AAC-LC/Main/SSR/LTP、采样率/声道/帧长/码率）、`ff_mpa_check_header`、`avpriv_mpegaudio_decode_header`（MPEG1/2/2.5、Layer I/II/III、LSF、自由格式）、`ff_mpa_decode_header`；码率/采样率全表 | ✅ |
+| [mp3_tables.mbt](libavcodec/mp3_tables.mbt) | `libavcodec/mpegaudiodec_common.c`、`mpegaudiodsp_data.c` | `ff_band_size_long/short`、`ff_slen_table`、`ff_lsf_nsf_table`、`ff_mpa_pretab`、`ff_mpa_huff_data` 与 Layer III 的 15 张 Huffman 码长/符号表，全部由 C 源批量提取（不手工转录） | ✅ |
+| [mp3_dsp.mbt](libavcodec/mp3_dsp.mbt) | `mpegaudiodsp_template.c`(fixed, `USE_FLOATS=0`)、`mpegaudiodsp.c`、`dct32_template.c` | 定点 IMDCT/多相合成滤波：`ff_imdct36` 与 36 点/12 点窗表生成、`ff_dct32`、合成窗与频率反转；`INTFLOAT`=`int` → MoonBit 32 位回绕 `Int`，`mulh`/`mull` 走 64 位中间积 | ✅ |
+| [mp3_decode.mbt](libavcodec/mp3_decode.mbt) | `mpegaudiodec_template.c`(fixed) | **MPEG-1/2/2.5 Layer III 定点解码**：side info、scalefactor（slen 表）、Huffman 解码、反量化（`ff_mpa_pretab` 预增益）、立体声处理（MS/intensity）、短块重排、bit reservoir、输出 S16 交织 PCM；入口 `decode_mp3_stream` / `Mp3Decoder` | ✅ |
 | [rawaudio.mbt](libavformat/rawaudio.mbt) | `libavformat/aacdec.c`、`mp3dec.c`、`id3v2.c`（分帧部分） | 裸 ADTS AAC 与 MPEG 音频分帧：ID3v2 跳过、ADTS 逐帧、MP3 帧扫描、首帧 Xing/Info/VBRI 识别并剔除、ID3v1 尾部跳过；输出与 `ffprobe` 一致的每帧 `pos`/`size`/`pts`/`duration` | ✅ |
 | [codec_tags.mbt](libavformat/codec_tags.mbt) | `libavformat/matroska.c`(`ff_mkv_codec_tags`)、`isom_tags.c` | Matroska CodecID 与 MP4 sample-entry fourcc → FFmpeg 编解码器名（H.264/HEVC/AAC/MP3 及常用邻居） | ✅ |
 | [codec_parameters.mbt](libavformat/codec_parameters.mbt) | `mov.c`/`matroskadec.c` 的 `codecpar` 汇聚 | 容器 → `CodecParameters` 桥：H.264/HEVC `avcC`/`hvcC` 解出分辨率/裁剪/位深/profile/level/VUI 帧率/SAR；AAC AudioSpecificConfig 解出采样率/声道/帧长；MP4/MKV 两套入口（`mp4_track_codec_parameters`/`mkv_track_codec_parameters`） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **261/261 通过**（libavutil 69 + libavformat 132 + libavcodec 60）。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **277/277 通过**（libavutil 69 + libavformat 132 + libavcodec 76）。
 
 ### AES 的实现偏差（已记录）
 
@@ -206,8 +229,8 @@ Huffman 规范化码另有等效性说明，见下文）：
 - **H.264**：`h2645_parse.mbt` 完成 RBSP 去防竞争字节、Annex B 与长度前缀两种 NAL 拆分、
   H.264/HEVC NAL 头；`h264_ps.mbt` 完成 SPS/PPS 全语法（含高 profile 缩放矩阵、VUI、
   HRD、bitstream restriction、裁剪尺寸、`num_reorder_frames` 的水平表推导）与
-  `avcC`/Annex B extradata。**未做**的是实际解码：slice header、CAVLC/CABAC、宏块重建、
-  去块滤波、DPB、SEI 解析；`dequant*_coeff`/`chroma_qp_table` 属解码端派生表，未建。
+  `avcC`/Annex B extradata。**像素解码已开始**：Baseline I 帧重建通路（slice header、
+  CAVLC、宏块重建）见下一小节；CABAC、P/B 帧、去块滤波、DPB、SEI 仍未做。
 - **H.265**：`hevc_ps.mbt` 完成 VPS/SPS/PPS 与 PTL、short-term RPS、VUI、缩放列表、
   Range Extension 与 SCC 语法、`hvcC`/Annex B extradata、POC 计算。**未做**：slice
   segment header、CABAC、预测/变换/滤波、SEI；多层扩展（VPS multilayer、PPS
@@ -217,8 +240,8 @@ Huffman 规范化码另有等效性说明，见下文）：
   PCE；即没有 PCM 输出。
 - **MP3/MP2/MP1**：`audio_headers.mbt` 完成 MPEG 音频头（版本/层/码率/采样率/帧长/
   自由格式）；`rawaudio.mbt` 完成裸流分帧、ID3v2/ID3v1 跳过与首帧 Xing/Info/VBRI
-  识别剔除。**未做**：Huffman 码表解码、反量化、IMDCT 合成、合成滤波器组；即没有
-  PCM 输出。
+  识别剔除。**Layer III 的定点解码已完成**（见下一小节）；Layer I/II 只有帧头与分帧，
+  没有 PCM 输出。
 - **容器接入**：`codec_tags.mbt` 负责 Matroska CodecID / MP4 fourcc 到统一编解码器名的
   映射，`codec_parameters.mbt` 把容器的尺寸/采样率与 `avcC`/`hvcC`/AudioSpecificConfig
   解析结果合并成 `CodecParameters`（profile/level/位深/色度格式/像素格式/帧率/SAR/
@@ -226,6 +249,43 @@ Huffman 规范化码另有等效性说明，见下文）：
 - **偏差**：H.264 的 `AV_CODEC_FLAG2_IGNORE_CROP`、`SMV2` codec tag、严格合规级别选项
   未建模；HEVC 的 `setup_pps` 瓦片扫描表未建；像素格式名采用本机小端名
   （如 `yuv420p10le`），与 FFmpeg 的 `AV_PIX_FMT_YUV420P10` 在 x86 上的取值一致。
+
+### libavcodec 解码切片（H.264 Baseline I 帧 / MP3 Layer III）的范围边界与说明
+
+这是本项目第一次产出**像素与 PCM**，不再是纯解析层。
+
+**H.264 I 帧重建**（`h264_slice.mbt` + `h264_cavlc.mbt` + `h264_idct.mbt` +
+`h264_pred.mbt` + `h264_decode.mbt`）：
+
+- **已做**：I/SI slice header；CAVLC 残差（`coeff_token`/`total_zeros`/`run_before`/
+  `level_prefix`+`suffix`，含 chroma DC 的 4 项特殊码表）；PPS 派生的 `dequant4_coeff`
+  （`dequant8_coeff` 未建，因为 8x8DCT 直接拒绝）与 `chroma_qp` 表；4x4 IDCT（行/列两遍）
+  与 luma/chroma DC Hadamard；4x4 九模式、16x16 四模式、chroma 8x8 四模式的帧内预测与
+  可用性改判；`I_4x4`/`I_16x16`（含 `cbp` 六类）/`I_PCM` 三条宏块路径；8x8 z-order 的
+  块重建次序与 top-right 可用性掩码；SPS 帧裁剪与 `yuv420p` 打包。
+- **验证约束（重要）**：**没有去块滤波**，因此参考输出必须是
+  `ffmpeg -skip_loop_filter all`（该选项必须在 `-i` 之前），不能与默认解码输出比对。
+- **只支持**：Progressive、8-bit 4:2:0、单 slice、`first_mb_in_slice == 0`、每帧一个
+  slice。**显式拒绝**（返回 `Err`，不 panic）：CABAC、P/B/SP/SI slice、多 slice、
+  场/MBAFF、8x8DCT、非 4:2:0、非 8-bit。
+- **代码已写但无真实向量**：`I_PCM` 宏块路径（x264 的 baseline profile 不接受
+  `-qp 0` lossless，且 lossless 走变换旁路而非 I_PCM，需手工构造码流才能覆盖）。
+- **未接**：MP4 的 `avcC` extradata + 长度前缀样本入口（`ff_h264_decode_extradata` 已能
+  从 avcC 建参数集，但解码入口目前只吃 Annex B）；SEI；DPB/参考帧管理；去块滤波。
+
+**MP3 Layer III 定点解码**（`mp3_tables.mbt` + `mp3_dsp.mbt` + `mp3_decode.mbt`）：
+
+- **已做**：MPEG-1/2/2.5 Layer III、mono/stereo/joint stereo（MS 与 intensity）、短块
+  重排、scalefactor（slen 表 + `ff_lsf_nsf_table`）、15 张 Huffman 表（符号按 C 的
+  `transform_huff_symbol` 变换）、反量化与 `ff_mpa_pretab` 预增益、定点 IMDCT/DCT32/
+  合成窗、bit reservoir、输出 S16 交织 PCM。数值路径完全走 C 的 `USE_FLOATS=0`。
+- **偏差（bit reservoir）**：C 用 `last_buf` 滚动缓冲 + `gb`/`in_gb` 双读取器切换；本
+  移植改为「保留每帧 main-data 区拼接 + 从 `8*main_data_begin` 位前起读」，字节流与 C
+  重建的一致，良性码流下逐位相同；reservoir 超过 8 KiB 时截断到最近 4 KiB。
+- **未做**：Layer I/II 的 PCM 解码（帧头已能识别）、浮点路径、自由格式码流的解码、
+  合成后处理（如 LAME 的 `iTunSMPB` 相关裁剪）。
+- **验证**：与 FFmpeg **定点**解码器（`-c:a mp3`，非 `mp3float`）的 PCM MD5 逐字节
+  一致——这正是区分定点/浮点两条实现的关键点（浮点解码器给出不同 MD5）。
 
 ### SIMD（`@v128`）化候选（已移植代码）
 
@@ -241,6 +301,9 @@ Huffman 规范化码另有等效性说明，见下文）：
 | [base64.mbt](libavutil/base64.mbt) | ✅ **已完成**：`av_base64_encode_v128`（`i8x16_swizzle` 展开 + `i32x4` 取字段 + `i8x16_shuffle` 重排，字母表无分支映射） | `base64.asm`（libavcodec） | 高；与标量/RFC 4648 逐值一致 |
 | [idct.mbt](libavcodec/idct.mbt) | ✅ **已完成（8/10/12 位）**：`idct_v128.mbt` 的 `ff_simple_idct{,_put,_add}_v128{,_10bit,_12bit}`（块改 128 字节 LE-int16 缓冲） | `simple_idct.asm`、`simple_idct10.asm`、`idctdsp.asm` | 高；8 位与标量逐值一致；10 位满足 dct.c 判据；12 位在 dct.c 中标 `nonspec=1`（其 omse 判据不适用），实测 profile 与标量一致 |
 | 同上：`ff_put/add_pixels_clamped_c` | 已由 `put`/`add` 的 SIMD 路径覆盖（`i8x16_narrow_i16x8_u` 饱和钳位） | `pixblockdsp.asm`、`blockdsp.asm` | 高；独立的 8/16 路版本待做 |
+| [h264_idct.mbt](libavcodec/h264_idct.mbt) | 4x4 IDCT 与 DC Hadamard（块级，天然 8/16 位并行） | `h264_idct.asm`、`h264_idct_10bit.asm` | 中；需先把系数的转置布局与 `v128` 载入对齐 |
+| [h264_pred.mbt](libavcodec/h264_pred.mbt) | 帧内预测（16x16/chroma 的整块填充与 4x4 的多次 4 行搬移） | `h264_intrapred.asm`、`h264_intrapred_10bit.asm` | 中；DC/plane 的横向/纵向求和可用 `i16x8` 归约 |
+| [mp3_dsp.mbt](libavcodec/mp3_dsp.mbt) | IMDCT36 / DCT32 / 合成窗（多相滤波的乘加链） | `x86/mpegaudiodsp.c`（SSE 内联） | 中；32 位定点乘加需 `i32x4` 双倍宽技巧，先保证与标量逐样本一致 |
 | [aes.mbt](libavutil/aes.mbt) / [aes_ctr.mbt](libavutil/aes_ctr.mbt) | —（FFmpeg 的 `aes.asm` 用 **AES-NI**，Wasm SIMD128 无法表达） | `aes.asm` | **例外 → FFI**；纯 SIMD 只能位切片重写（成本高、收益低），列低 |
 | [md5.mbt](libavutil/md5.mbt) | 多缓冲 4 路并行 | —（FFmpeg 亦为标量 C） | ✅ **已完成**：`av_md5_sum_x4`（`i32x4` 承载 4 条等长消息，逐 lane 施加轮函数）；与标量逐 lane 逐值一致 |
 | [sha.mbt](libavutil/sha.mbt) | 多缓冲 4 路并行（SHA-1/256 轮函数 + 消息扩展） | —（SHA-NI 属 x86 专有） | 中；**需新增多缓冲 API**（单流无收益），FFmpeg 亦为标量 |
@@ -311,9 +374,10 @@ Huffman 规范化码另有等效性说明，见下文）：
   （AVI、MPEG-TS 优先）、AC-3/DTS 等其余音频流解析、字幕（`tx3g`/TTML）、
   AVIF/HEIF 图像、MP4 muxer；裸 AAC/MP3 分帧与 Matroska 已完成
 - libavcodec 已**开始**：IDCT SIMPLE-C、Huffman 树/码长、位流读取、H.264/HEVC 参数集与
-  NAL 拆分、AAC ADTS 与 MPEG 音频帧头；其余 **实际像素/PCM 解码**（H.264/HEVC 的
-  slice/CABAC/CAVLC/重建/滤波、AAC 的 MDCT/SBR/PS、MP3 的 Huffman/IMDCT/合成滤波）、
-  SEI、VLC 表构建、LZO 与其余编解码器未做
+  NAL 拆分、AAC ADTS 与 MPEG 音频帧头，以及**两条真正出数据的解码通路**——H.264
+  Baseline I 帧重建（CAVLC/IDCT/帧内预测/裁剪输出）与 MP3 Layer III 定点解码（IMDCT/
+  合成滤波/PCM）；其余未做：H.264 的去块滤波、CABAC、P/B 帧、DPB，HEVC 的全部解码层，
+  AAC 的 MDCT/SBR/PS，MP3 的 Layer I/II，SEI、VLC 表构建、LZO 与其余编解码器
 - libswscale / libswresample / libavdevice / fftools：**未开始**
 
 ---
@@ -363,6 +427,9 @@ Huffman 规范化码另有等效性说明，见下文）：
 | AAC/MP3 帧头与裸流 | `audio_headers`：真实 ADTS 首帧 `FF F1 50 40 1B 1F FC`（LC/44100/mono/216 字节，与 ffprobe packet size 一致）与 LAME 首帧 `FF FB 90 C0`（MPEG-1 L3/128k/44100/mono/417 字节）；MPEG-2 LSF（22050/64k/208 字节）与自由格式（bitrate_index 0）手推；ADTS 同步/采样率/帧长错误与头部检查负例。`rawaudio`：内嵌 docker 生成的完整 1517 字节 ADTS AAC 与 2506 字节 MP3（LAME 128k CBR + Xing/Info），逐帧 `pos`/`size` 与 `ffprobe -show_packets` 全部一致（AAC 10 帧 216/210/127/…；MP3 剔除 417 字节 Info 帧后 417,418×4，首包 pos 417）；另加 44 字节合成 ID3v2 前缀验证整体偏移 +44，以及截断输入拒绝 |
 | 码流参数桥 | H.264/HEVC 用上述真实 avcC/hvcC 断言 `CodecParameters`（64x48、profile/level、chroma/位深、pix_fmt、VUI 帧率 5/1 或 10/2、SAR 1:1）；AAC 用 `12 08 56 e5 00`（LC/44100/mono/1024）；**真实容器**：MP4 `aac.mp4`（`esds` → AudioSpecificConfig）与 Matroska x264 文件（avcC → Baseline@1.0、128x96）分别经 `mp4_track_codec_parameters` / `mkv_track_codec_parameters` 解出同一结构 |
 
+| H.264 I 帧解码 | **真实码流 + 逐帧 YUV MD5**：docker `linuxserver/ffmpeg:9.0.2` 生成 6 组 Baseline 两帧 IDR 码流（`testsrc2`，`keyint=1:bframes=0:cabac=0:8x8dct=0:slices=1`），参考输出取 **`-skip_loop_filter all`** 的 rawvideo yuv420p，逐帧 MD5 即期望值：64x48 qp26（I_4x4 为主）、64x48 `gradients`（I_16x16 luma DC）、64x48 纯色（I_16x16 DC/VERT、无残差）、**88x56 裁剪流**（6x4 宏块裁到 88x56）、80x64 qp40（长零游程）、64x48 qp10（稠密残差）。另有「重建结果不是平坦预测」护栏（luma 动态范围 > 32），以及 5 条**负例**断言具体错误串：P slice→`PATCHWELCOME`、多 slice→`multi-slice pictures are not supported`、CABAC→`CABAC is not supported`、4:2:2→`only 4:2:0 is supported`、10-bit→`only 8-bit decoding is supported` |
+| MP3 Layer III 解码 | **真实码流 + PCM MD5**：docker 生成 stereo（440Hz L / 660Hz R，44100Hz，128kbps，无 Xing 帧）、mono（5 帧共 5760 样本）与 MPEG-2 LSF（22050Hz，64kbps）三条码流，期望值为 FFmpeg **定点**解码器 `-c:a mp3 -f s16le` 的 MD5（`c6f9d146…` / `7c931d35…` / `97d37691…`）；浮点解码器给出不同 MD5，故这组向量专门钉住定点路径 |
+
 补充交叉校验：分块更新与一次性计算等价（CRC / Adler-32 / MD5 / SHA）、增量 MD5、
 Base64 截断输出行为与非法输入检测。
 
@@ -376,12 +443,19 @@ AAC `esds`（extradata/声道/采样率/帧长/码率 + 首包 edit-list 偏移 
 一个保真 bug：QuickTime 在 `minf` 里放置的数据 `hdlr`（subtype `url `）不应覆盖
 `mdia`/`hdlr` 已识别的媒体类型（C 只对 vide/soun/subp/clcp 赋值）。
 
+**解码器向量（第三批）**：H.264 的 6 条 Baseline 码流与 MP3 的 3 条码流同样由该镜像生成，
+期望值分别是 `-skip_loop_filter all` 的**逐帧 YUV MD5** 与定点解码器的 **PCM MD5**；
+码流与期望值以 base64 内嵌于 `libavcodec/h264_decode_realdata_wbtest.mbt` 和
+`libavcodec/mp3_decode_realdata_wbtest.mbt`（文件头附完整生成命令）。这一批暴露并修复了
+两个 bug：SPS 裁剪被**缩放两次**（88x56 解出 80 宽），以及多 slice 码流被「当整帧解」
+后才报错（现改为解码前预扫 `first_mb_in_slice`）。
+
 复现命令：
 
 ```bash
 cd moonbit
 moon check     # 0 error / 0 warning
-moon test      # 261/261 passed
+moon test      # 277/277 passed
 ```
 
 ---
@@ -438,19 +512,22 @@ edit 时间轴索引重建/discard 时间戳重写/`skip_samples`/`min_corrected
    `CodecParameters`（H.264/H.265/AAC/MP3 的 profile/level/位深/帧率/SAR/帧长）
 4. `avio.c` 的 URL/协议层与 `avio_open`（文件/网络 IO，属平台边界，或留 FFI）
 
-### 阶段 5 —— libavcodec（**已开始**：IDCT + Huffman + H.264/H.265/AAC/MP3 码流层）
+### 阶段 5 —— libavcodec（**已开始**：IDCT + Huffman + 码流层 + H.264 I 帧 / MP3 解码）
 只做纯 C 的编解码器（Huffman/VLC 表、LZO、部分无损编解码）；其向量化内核
 （`libavcodec/x86`，共 113 个 `*.asm`）按新边界原则用 `@v128` 重写，而非保留 C/FFI。
 
 已完成 SIMPLE-C IDCT（`int16` 8/10/12 bit）、`huffman.c` 的树/码长构建、`get_bits`/Golomb
-位流层、H.264/HEVC NAL 拆分与参数集、AAC ADTS 与 MPEG 音频帧头（见第 3 节）。
-**当前的能力边界是"解析/出包"，不是"解码出像素/PCM"。** 后续：
+位流层、H.264/HEVC NAL 拆分与参数集、AAC ADTS 与 MPEG 音频帧头，以及 **H.264 Baseline
+I 帧重建**（slice header + CAVLC + 4x4 IDCT + 帧内预测，逐帧 YUV MD5 对齐 FFmpeg
+`-skip_loop_filter all`）与 **MP3 Layer III 定点解码**（逐样本 PCM MD5 对齐 FFmpeg 定点
+解码器）——见第 3 节。仍是「部分解码器 + 完整解析层」的能力边界。后续：
 
 1. H.264/HEVC SEI 解析（`h2645_sei.c`、`hevc/sei.c`），补齐色彩/HDR/恢复点信息
 2. `vlc.c` 的 `ff_vlc_init_from_lengths` 表构建（当前只产出它需要的 `lens`/`xlat`）
-3. H.264 slice header + CAVLC/CABAC + 宏块重建/去块（配合现有 IDCT），先 I 帧
+3. H.264 **去块滤波**（`h264_loopfilter.c`，对齐默认解码输出）→ 接 MP4 的 avcC +
+   长度前缀入口 → CABAC（`h264_cabac.c`）→ P 帧与 DPB/参考帧管理
 4. HEVC slice segment header + CABAC + 帧内预测/变换，先 I 帧
-5. AAC 原始帧解析（ICS/TNS）与 MDCT；MP3 Huffman/反量化/IMDCT/多相合成
+5. AAC 原始帧解析（ICS/TNS）与 MDCT；MP3 的 Layer I/II 解码
 6. `jrevdct.c`（`FF_IDCT_INT`）、`faanidct.c`、`xvididct.c` 与 `idct248/84/48/44` 部分变换；
    `lzo.c` 与其余编解码器（无损优先）
 
@@ -540,6 +617,28 @@ edit 时间轴索引重建/discard 时间戳重写/`skip_samples`/`min_corrected
    28 字节，`trun` 的 sidx 回退随之失配（表现为 DTS 落到 `track_end`）。
 18. **`mfra` 必须带 `mfro` 尾**：demuxer 从文件最后 4 字节读 mfra 大小 —— 那是 `mfro`
    box 的最后一个字段；合成不带 `mfro` 的 `mfra` 永远探测不到。
+19. **H.264 4x4 IDCT 的第二遍索引**：行变换读 `b/k*4` 系列，列变换若沿用第一遍的
+   `b+8`/`b+4`/`b+12` 就会拿到错位的系数（正确是 `b+2`/`b+1`/`b+3`）。这是最初
+   「整帧像素全错、但 MD5 差距均匀」的主因。
+20. **4x4 top-right 可用性不能按几何位置判断**：块是**按 8x8 z-order** 重建的，同一行
+   的 `bx`/`by` 与视觉位置并不对应。最终规则（`h264_decode.mbt`）：
+   `by == 0` → 上方 MB 存在且（`bx < 3` 或右方 MB 存在）；`by > 0` →
+   `bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)`，与 FFmpeg 的
+   `topright_samples_available` 掩码 `0xEEEA`/`0x26EA` 一致。
+21. **16x16 / chroma 8x8 平面预测的梯度 off-by-one**：C 的 `8+k`/`8-k` 应为 `7+k`/`7-k`、
+   `4+k`/`4-k` 应为 `3+k`/`3-k`；写错不只是梯度偏移，底边会直接越界 panic。
+22. **SPS 裁剪被缩放两次**：`h264_ps.mbt` 已按 `step_x`/`step_y` 把裁剪偏移折成**亮度
+   像素**（`h264_ps.c:510-513`），`h264_slice.c` 的 `init_dimensions` 直接
+   `width - (cr+cl)`；解码端再乘一次 2 就把 88x56 解成 80 宽。**只有非宏块对齐的分辨率
+   能暴露**——64x48 之类整数倍分辨率的向量永远测不出来。
+23. **多 slice 码流会「当整帧解」**：宏块循环按 `mb_count` 读完第一个 slice 后越界读零，
+   于是静默产出垃圾像素（常在 `chroma prediction mode out of range` 之类的下游错误上
+   才炸）。正确做法是解码前**预扫每个 slice NAL 的 `first_mb_in_slice`**，非 0 即拒绝。
+24. **MoonBit 表达式优先级的两个坑（解码切片踩到）**：`cbp & 15 != 0` 会按
+   `cbp & (15 != 0)` 解析，必须写 `(cbp & 15) != 0`；`Array::make(n, inner)` 会让 n 个
+   元素**别名同一个内部数组**，逐宏块信息必须用循环逐个新建。
+25. **调试解码器最省时的办法**：按宏块（或每行）分别算 luma MD5，与参考 YUV 的同区域
+   比对，能一次把问题定位到单个宏块/单条预测路径，而不是对着整帧 MD5 猜。
 
 ---
 
