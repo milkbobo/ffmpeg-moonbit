@@ -99,6 +99,7 @@ moonbit/
     ├── h264_pred.mbt         # 帧内预测 4x4/16x16/chroma 8x8 + 可用性改判
     ├── h264_decode.mbt       # Baseline I 帧重建（CAVLC→dequant→IDCT→预测→写回）+ Annex B 入口
     ├── h264_deblock.mbt      # 环路去块滤波（h264dsp 核 + h264_loopfilter 边界强度推导）
+    ├── h264_sei.mbt          # H.264 SEI：消息框架 + BP/PT/恢复点/green + 公共消息集
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS/VUI + hvcC extradata
     ├── audio_headers.mbt     # AAC ADTS 头 + MPEG 音频帧头（MP1/MP2/MP3）
     ├── mp3_tables.mbt        # Layer III 码表/Huffman 表（C 源批量提取）
@@ -125,18 +126,21 @@ moonbit/
     ├── audio_headers_wbtest.mbt # 真实 ADTS/MP3 帧头 + LSF/自由格式
     ├── idct_wbtest.mbt       # 对照 dctref 参考 + FFmpeg dct.c 判据
     ├── huffman_wbtest.mbt    # Kraft/最优性/两实现互证/往返
+    ├── h264_sei_wbtest.mbt   # SEI 真实码流逐字段对照 trace_headers + 负例
+    ├── h264_sei_realdata_wbtest.mbt # SEI 码流 base64 素材（x264 CBR/bsf 注入/合成）
     └── mpeg4audio_wbtest.mbt # 位串手推的 AAC-LC/SBR/PS/USAC/ALS 头部用例
 ```
 
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行（实测 1,595,275 行），本次完成 MoonBit 源文件
-（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **40515 行**（libavutil 5995 行 +
+（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **41973 行**（libavutil 5995 行 +
 libavformat 的 aviobuf 流式 AVIO 层、MP4 解复用、Matroska EBML/Segment/Tracks/Cluster、
 裸 AAC/MP3 分帧与容器码流参数桥 14350 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
 IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CAVLC 全通 / CABAC 部分
-向量 / MP4 `avcC` 长度前缀入口）** 与 **MPEG 音频 Layer I/II/III 定点解码** 20170 行，
-均含白盒测试）——约占整体 **2.54%**。
+向量 / MP4 `avcC` 长度前缀入口）**、**H.264 SEI 解析** 与 **MPEG 音频 Layer I/II/III
+定点解码** 21628 行，
+均含白盒测试）——约占整体 **2.63%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 码流层）
 
@@ -186,6 +190,7 @@ IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CA
 | [h264_pred.mbt](libavcodec/h264_pred.mbt) | `libavcodec/h264pred_template.c`、`h264_parse.c`(`ff_h264_check_intra4x4_pred_mode`/`ff_h264_check_intra_pred_mode`) | 4x4 九模式（含 DC 边缘变体）、16x16 四模式、chroma 8x8 四模式的 8-bit 帧内预测，以及「参考样本可用性 → 模式改判」逻辑；邻居直接读重建平面（FFmpeg 读每 MB 的边界缓冲，样本值相同） | ✅ |
 | [h264_decode.mbt](libavcodec/h264_decode.mbt) | `h264_cavlc.c`(`ff_h264_decode_mb_cavlc`)、`h264_mb_template.c`(`hl_decode_mb`)、`h264_slice.c`(`init_dimensions`) | **H.264 Baseline I 帧重建**：CAVLC 宏块解析 → dequant → 4x4 IDCT / luma & chroma DC Hadamard → 帧内预测 → 写回平面；`I_4x4`/`I_16x16`/`I_PCM` 三条宏块路径、8x8 z-order 块序与 top-right 可用性掩码、SPS 裁剪与 `H264Frame::yuv420p` 输出；入口 `h264_decode_annexb_i_frames`（Annex B，就地解析 SPS/PPS），默认出厂即走环路滤波，`..._ex(data, true)` 跳过 | ✅ |
 | [h264_deblock.mbt](libavcodec/h264_deblock.mbt) | `h264dsp_template.c`(`h264_loop_filter_luma{,_intra}`、`h264_loop_filter_chroma{,_intra}`)、`h264_loopfilter.c`(`filter_mb_dir`/`ff_h264_filter_mb_fast`) | **环路去块滤波**：弱/强（intra）luma 与 chroma 四个内核（`xstep`/`ystep` 参数化后一套代码同时覆盖横向/纵向边）；宏块边 bS=4、内部边 bS=3（progressive intra 的真实取值，走弱核）；`alpha_table`/`beta_table`/`tc0_table` 由 C 源批量提取；左/上宏块 QP 取均值、chroma QP 按 `pps->chroma_qp_index_offset` 派生；`slice_alpha_c0_offset`/`slice_beta_offset` 按 C 的 `div2 * 2` 缩放 | ✅ |
+| [h264_sei.mbt](libavcodec/h264_sei.mbt) | `libavcodec/h264_sei.c`、`h2645_sei.c`、`sei.h` | **H.264 SEI 解析**：消息框架（type/size 的 0xFF 扩展、双零字节截尾）；buffering period（缺失 SPS 返回 `AVERROR_PS_NOT_FOUND` 非致命）、picture timing（payload 暂存 + `ff_h264_sei_process_picture_timing` 对 SPS 延迟解析，含时钟时间戳全语法）、recovery point、green metadata；公共消息集（h2645_sei.c）：user data unregistered（含 `x264 - core N` 版本嗅探）、display orientation、frame packing arrangement（H.264 分支）、film grain characteristics、alternative transfer、ambient viewing environment、mastering display（`present=2` 语义）、content light。未接：ITU-T T.35（type 4）与 AVFrame side-data 层、HEVC 侧入口 | ✅ |
 | [audio_headers.mbt](libavcodec/audio_headers.mbt) | `libavcodec/adts_header.c`、`adts_parser.c`、`mpegaudiodecheader.c`、`mpegaudiotabs.h` | `ff_adts_header_parse{,_buf}`（AAC-LC/Main/SSR/LTP、采样率/声道/帧长/码率）、`ff_mpa_check_header`、`avpriv_mpegaudio_decode_header`（MPEG1/2/2.5、Layer I/II/III、LSF、自由格式）、`ff_mpa_decode_header`；码率/采样率全表 | ✅ |
 | [mp3_tables.mbt](libavcodec/mp3_tables.mbt) | `libavcodec/mpegaudiodec_common.c`、`mpegaudiodsp_data.c` | `ff_band_size_long/short`、`ff_slen_table`、`ff_lsf_nsf_table`、`ff_mpa_pretab`、`ff_mpa_huff_data` 与 Layer III 的 15 张 Huffman 码长/符号表，全部由 C 源批量提取（不手工转录） | ✅ |
 | [mp3_dsp.mbt](libavcodec/mp3_dsp.mbt) | `mpegaudiodsp_template.c`(fixed, `USE_FLOATS=0`)、`mpegaudiodsp.c`、`dct32_template.c` | 定点 IMDCT/多相合成滤波：`ff_imdct36` 与 36 点/12 点窗表生成、`ff_dct32`、合成窗与频率反转；`INTFLOAT`=`int` → MoonBit 32 位回绕 `Int`，`mulh`/`mull` 走 64 位中间积 | ✅ |
@@ -202,7 +207,7 @@ IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CA
 | [h264_cabac_mb.mbt](libavcodec/h264_cabac_mb.mbt) | `h264_cabac.c`(`decode_cabac_intra_mb_type`/`_mb_intra4x4_pred_mode`/`_mb_chroma_pre_mode`/`_mb_cbp_luma`/`_mb_cbp_chroma`、`get_cabac_cbf_ctx`、`decode_cabac_residual_internal`、`ff_h264_decode_mb_cabac` 的 intra 分支) | **CABAC 宏块层（I 宏块）**：mb_type/I16x16 预测模式/chroma 预模式/两级 CBP/`mb_qp_delta`/残差（significance map + 逆序 level，含 `>15` 逃逸与 `bypass_sign`）；邻居上下文由每宏块的 `nz`/`cbp_all`/`mb_type_bits` 直接推导（复刻 `fill_decode_caches` 的 `left_cbp`/`top_cbp` 打包与 `0x7CF` 不可用默认值） | ✅（部分向量，见下） |
 | [h264_decode.mbt](libavcodec/h264_decode.mbt)（`h264_decode_avc_frames`） | `h264dec.c`(`decode_nal_units` 的 extradata 路径) | **MP4 `avcC` + 长度前缀样本入口**：`ff_h264_decode_extradata` 解参数集并给出 `nal_length_size`，逐样本按长度前缀拆 NAL（`is_nalff=true`），SEI 跳过，切片 NAL 走同一解码路径 | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **293/293 通过**（libavutil 69 + libavformat 133 + libavcodec 91）。
+**当前状态**：`moon check` 0 error / 0 warning（仅 CABAC 调试区一个已知弃用告警），`moon test` **315/316 通过**（libavutil 69 + libavformat 133 + libavcodec 114；唯一失败是 CABAC P 帧调试区的已知用例）。
 
 ### CABAC 的已知偏差（重要）
 
@@ -260,7 +265,8 @@ Huffman 规范化码另有等效性说明，见下文）：
   H.264/HEVC NAL 头；`h264_ps.mbt` 完成 SPS/PPS 全语法（含高 profile 缩放矩阵、VUI、
   HRD、bitstream restriction、裁剪尺寸、`num_reorder_frames` 的水平表推导）与
   `avcC`/Annex B extradata。**像素解码已开始**：Baseline I 帧重建通路（slice header、
-  CAVLC、宏块重建、环路去块滤波）见下一小节；CABAC、P/B 帧、DPB、SEI 仍未做。
+  CAVLC、宏块重建、环路去块滤波）见下一小节；**SEI 已完成**（`h264_sei.mbt`，T.35 与
+  side-data 层未接）；CABAC（多行复杂码流收敛中）、P/B 帧与 DPB 仍未完成。
 - **H.265**：`hevc_ps.mbt` 完成 VPS/SPS/PPS 与 PTL、short-term RPS、VUI、缩放列表、
   Range Extension 与 SCC 语法、`hvcC`/Annex B extradata、POC 计算。**未做**：slice
   segment header、CABAC、预测/变换/滤波、SEI；多层扩展（VPS multilayer、PPS
@@ -309,9 +315,8 @@ Huffman 规范化码另有等效性说明，见下文）：
 - **代码已写但无真实向量**：`I_PCM` 宏块路径（x264 的 baseline profile 不接受
   `-qp 0` lossless，且 lossless 走变换旁路而非 I_PCM，需手工构造码流才能覆盖；该路径在
   滤波里按 C 的 `qscale_table = 0` 处理）。
-- **未接**：MP4 的 `avcC` extradata + 长度前缀样本入口（`ff_h264_decode_extradata` 已能
-  从 avcC 建参数集，但解码入口目前只吃 Annex B）；SEI；DPB/参考帧管理；
-  `chroma_qp_diff`（`second_chroma_qp_index_offset` 与第一个不等）时的非 fast 路径
+- **未接**：SEI 已在后续切片完成（`h264_sei.mbt`）；`chroma_qp_diff`
+  （`second_chroma_qp_index_offset` 与第一个不等）时的非 fast 路径
   ——当前按 fast 路径用 plane 0 的偏移派生出 Cb/Cr 各自的 QP。
 
 **MP3 Layer III 定点解码**（`mp3_tables.mbt` + `mp3_dsp.mbt` + `mp3_decode.mbt`）：
@@ -439,8 +444,9 @@ Huffman 规范化码另有等效性说明，见下文）：
   NAL 拆分、AAC ADTS 与 MPEG 音频帧头，以及**两条真正出数据的解码通路**——H.264
   I 帧重建 + 环路去块滤波（CAVLC 全通、CABAC 部分向量、MP4 `avcC` 长度前缀入口）与
   MP3 Layer III 定点解码（IMDCT/合成滤波/PCM）+ MPEG 音频 Layer I/II（分配/scalefactor/
-  组量化）；其余未做：**CABAC 多行复杂码流的收敛**、P 帧与 DPB（帧间预测/MC/参考帧标记）、
-  HEVC 的全部解码层，**AAC 的 ICS/TNS/MDCT** 与 SBR/PS，SEI、VLC 表构建、LZO 与其余编解码器
+  组量化）+ **H.264 SEI**（`h264_sei.mbt`，含公共消息集）；其余未做：**CABAC 多行复杂码流的收敛**、
+  P 帧与 DPB（帧间预测/MC/参考帧标记）、HEVC 的全部解码层，**AAC 的 ICS/TNS/MDCT** 与 SBR/PS，
+  **SEI 的 ITU-T T.35 与 AVFrame side-data 层**、VLC 表构建、LZO 与其余编解码器
 - libswscale / libswresample / libavdevice / fftools：**未开始**
 
 ---
@@ -495,6 +501,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | H.264 CABAC 核心 | FFmpeg 自带 `libavcodec/tests/cabac.c`：测试内的参考编码器（`put_cabac`/`put_cabac_bypass`/`put_cabac_terminate`）与 `av_lfg_get`（`libavutil/lfg.c`，MD5 播种、种子 1）一并移植，10240 bypass + 10240 上下文比特逐比特还原；`get_cabac_terminate` 必须非零。注意 `init_cabac_encoder` 的 `pb.bit_left++` 会吞掉首个比特，打包时要丢掉流的第一位 |
 | H.264 CABAC 宏块层 | linuxserver/ffmpeg:9.0.2 + libx264 生成 5 条 CABAC IDR 码流（`testsrc2` 16x16 / 32x16 / 48x16、平坦 32x32 / 16x48，`8x8dct=0`），期望值为同文件 `-f framemd5` 的逐帧 MD5；多行复杂内容仍失步，见 §3「CABAC 的已知偏差」 |
 | H.264 `avcC` 入口 | 真实 `avcc_baseline.mp4`（5042 字节，baseline/CAVLC）：`av_mov_open` → `track.extradata`（`avcC`）+ 按 `stco`/`stsz` 切样本 → `h264_decode_avc_frames`，逐帧 YUV MD5 对齐 FFmpeg 默认解码 |
+| H.264 SEI | **真实码流 + `trace_headers` 逐字段**：docker `linuxserver/ffmpeg:9.0.2` 生成三条码流——① x264 `nal-hrd=cbr:vbv-maxrate=200:vbv-bufsize=200`（buffering period ×2 + picture timing ×2 + x264 user-data，VUI HRD 全字段，BP/PT 的值延迟对 SPS 解析）；② 同一流经 `h264_metadata` bsf 注入 display orientation（旋转 16384 + 双翻转）；③ 手工构造的 11 类合成消息流（恢复点、green metadata、film grain、frame packing、alternative transfer、ambient viewing、mastering display、content light、双 unregistered、cancel 的 display orientation、带时钟时间戳的 picture timing——后者靠 SPS VUI 的 `pic_struct_present_flag` 原位翻转启用，不移动任何后续字段）。期望值逐字段转录自 `ffmpeg -c copy -bsf:v trace_headers` 输出（green metadata 无 CBS dumper，期望值取 trace 的 payload 字节）；负例按 C 的错误路径断言具体错误串（<16 字节 unregistered、size 越界、`recovery_frame_cnt ≥ 1<<16`、film grain `num_model_values>6`、缺失 SPS 的 buffering period 返回 `AVERROR_PS_NOT_FOUND` 非致命）。码流以 base64 内嵌于 `h264_sei_realdata_wbtest.mbt` |
 | MPEG 音频 Layer I/II 解码 | **真实码流 + PCM MD5（Layer II）**：docker 生成 4 条 `mp2`（stereo 44.1k/192k、mono 44.1k/64k、joint stereo 32k/64k、MPEG-2 LSF stereo 24k/64k），期望值为 FFmpeg 定点解码器 `-c:a mp2 -f s16le` 的 MD5（`818bac4a…` / `5c6c8e47…` / `941cb133…` / `f9bf9037…`），覆盖分配表 1/0/3/4 与 3/5/9 步组量化。**Layer I 无编码器**，改用按规范手工拼帧、由 FFmpeg 解码同一段码流取得期望值（`cb2824e3…` mono 32k、`a0ed4a92…` joint stereo 44.1k bound=4），输入是手工的、期望值仍是参考实现的 |
 | MP3 Layer III 解码 | **真实码流 + PCM MD5**：docker 生成 stereo（440Hz L / 660Hz R，44100Hz，128kbps，无 Xing 帧）、mono（5 帧共 5760 样本）与 MPEG-2 LSF（22050Hz，64kbps）三条码流，期望值为 FFmpeg **定点**解码器 `-c:a mp3 -f s16le` 的 MD5（`c6f9d146…` / `7c931d35…` / `97d37691…`）；浮点解码器给出不同 MD5，故这组向量专门钉住定点路径 |
 
@@ -533,8 +540,8 @@ mp2 demuxer 探测），期望值取 FFmpeg 解码同一段码流的定点 PCM M
 
 ```bash
 cd moonbit
-moon check     # 0 error / 0 warning
-moon test      # 286/286 passed
+moon check     # 0 error / 0 warning（仅 CABAC 调试区一个已知弃用告警）
+moon test      # 315/316 passed（唯一失败为 CABAC P 帧调试区已知用例）
 ```
 
 ---
@@ -596,12 +603,15 @@ edit 时间轴索引重建/discard 时间戳重写/`skip_samples`/`min_corrected
 （`libavcodec/x86`，共 113 个 `*.asm`）按新边界原则用 `@v128` 重写，而非保留 C/FFI。
 
 已完成 SIMPLE-C IDCT（`int16` 8/10/12 bit）、`huffman.c` 的树/码长构建、`get_bits`/Golomb
-位流层、H.264/HEVC NAL 拆分与参数集、AAC ADTS 与 MPEG 音频帧头，以及 **H.264 Baseline
+位流层、H.264/HEVC NAL 拆分与参数集、AAC ADTS 与 MPEG 音频帧头、**H.264 SEI**
+（消息框架 + buffering period/picture timing/恢复点/green metadata + h2645 公共消息集），
+以及 **H.264 Baseline
 I 帧重建 + 环路去块滤波**（slice header + CAVLC + 4x4 IDCT + 帧内预测 + `h264_loopfilter`，
 逐帧 YUV MD5 同时对齐 FFmpeg 默认解码与 `-skip_loop_filter all` 两套输出）与
 **MPEG 音频 Layer I/II/III 定点解码**（逐样本 PCM MD5 对齐 FFmpeg 定点解码器）——见第 3 节。仍是「部分解码器 + 完整解析层」的能力边界。后续：
 
-1. H.264/HEVC SEI 解析（`h2645_sei.c`、`hevc/sei.c`），补齐色彩/HDR/恢复点信息
+1. H.264 SEI 的 ITU-T T.35（`itut35.c`/`atsc_a53.c`）与 AVFrame side-data 层；
+   HEVC SEI 入口（`hevc/sei.c`）
 2. `vlc.c` 的 `ff_vlc_init_from_lengths` 表构建（当前只产出它需要的 `lens`/`xlat`）
 3. 接 MP4 的 avcC + 长度前缀入口 → CABAC（`h264_cabac.c`）→ P 帧与 DPB/参考帧管理
    （去块滤波已随本切片完成，见第 3 节）
