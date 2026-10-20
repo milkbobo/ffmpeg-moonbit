@@ -252,6 +252,8 @@ pub struct MatroskaHeader {
   mut is_webm : Bool
   ///| `matroska->tracks[]` (the Tracks slice).
   tracks : Array[MkvTrack]
+  ///| Demuxed packets in stream order (the C's packet queue).
+  packets : Array[MkvPacket]
 }
 
 ///| Info defaults per `ebml_parse_nest`'s pre-pass. */
@@ -267,6 +269,7 @@ fn new_matroska_header() -> MatroskaHeader {
     first_cluster_pos: -1L,
     is_webm: false,
     tracks: [],
+    packets: [],
   }
 }
 
@@ -615,9 +618,13 @@ fn matroska_read_segment(
   }
   mh.segment_start = st.segment_start
   // If the walk stopped on a Cluster, its start (id already read, length
-  // not) is the packet data offset.
+  // not) is the packet data offset; walk every cluster and queue packets.
   if st.current_id == matroska_id_cluster {
     mh.first_cluster_pos = st.pb.avio_tell() - 4L
+    match matroska_walk_clusters(st, mh) {
+      Err(e) => return Err(e)
+      Ok(_) => ()
+    }
   }
   matroska_execute_seekhead(st, mh)
   Ok(())

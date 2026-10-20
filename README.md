@@ -73,10 +73,13 @@ moonbit/
 │   ├── ebml.mbt              # Matroska/WebM EBML 层（变长整数原语 + 通用元素游走器）
 │   ├── matroska.mbt          # Matroska 切片 1+2：EBML 头 + Segment/Info/SeekHead/resync
 │   ├── matroska_track.mbt    # Matroska 切片 3：TrackEntry 全表（video/audio/encodings）
+│   ├── matroska_block.mbt    # Matroska 切片 4：Cluster/Block 与三种 lacing
 │   ├── ebml_wbtest.mbt       # EBML 白盒测试（VINT 规范向量/游走器/合成与损坏头部）
 │   ├── ebml_real_wbtest.mbt  # 真实 webm/mkv 头交叉验证（docker ffmpeg，base64 内嵌）
 │   ├── mkv_segment_wbtest.mbt # Segment 切片测试（合成布局 + 真实 1024 字节前缀）
-│   └── mkv_track_wbtest.mbt  # Tracks 切片测试（合成轨道 + 真实 webm/mkv 轨道）
+│   ├── mkv_track_wbtest.mbt  # Tracks 切片测试（合成轨道 + 真实 webm/mkv 轨道）
+│   ├── mkv_cluster_wbtest.mbt # Cluster 切片测试（lacing 三模式 + 真实 packet 表）
+│   └── mkv_cluster_realdata_wbtest.mbt # Cluster 真实文件 base64 素材
 └── libavcodec/               # 包：ffmpeg/moonbit/libavcodec（依赖 libavutil，仅白盒测试用）
     ├── moon.pkg              # moonbitlang/core/math + libavutil（`for "wbtest"`）
     ├── idct.mbt              # SIMPLE-C IDCT（int16 8/10/12 bit）+ idctdsp 像素/扫描表辅助
@@ -91,10 +94,10 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行，本次完成 MoonBit 源文件（`moonbit/**/*.mbt`，不含
-`_build` 生成文件）共 **20817 行**（libavutil 5995 行 + libavformat 的 aviobuf 流式
-AVIO 层、MP4 解复用切片与 Matroska EBML/Segment/Tracks 层 12242 行 +
+`_build` 生成文件）共 **21752 行**（libavutil 5995 行 + libavformat 的 aviobuf 流式
+AVIO 层、MP4 解复用切片与 Matroska EBML/Segment/Tracks/Cluster 层 13177 行 +
 libavcodec 的 IDCT/Huffman/MPEG-4 音频切片 2580 行，
-均含白盒测试）——约占整体 **1.30%**。
+均含白盒测试）——约占整体 **1.36%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 开端）
 
@@ -128,6 +131,7 @@ libavcodec 的 IDCT/Huffman/MPEG-4 音频切片 2580 行，
 | [matroska.mbt](libavformat/matroska.mbt) | `matroskadec.c`（`ebml_header[]`/`ebml_syntax[]` 表 + `matroska_read_header` 头部校验链） | `EbmlHeader`（ReadVersion/MaxIDLength/MaxSizeLength/DocType/DocTypeReadVersion，默认值 = C 的 zero-init + nest 预置遍历）；`matroska_read_ebml_header`：解析头元素（缺 Segment 在此阶段不算失败，与 C 一致）、版本越界 → `PATCHWELCOME`、DocTypeReadVersion 3 → 警示、未知 doctype → 警示标志 | ✅ |
 | [ebml.mbt](libavformat/ebml.mbt) + [matroska.mbt](libavformat/matroska.mbt)（切片 2） | `matroskadec.c`（`matroska_segment[]`/`matroska_segments[]`/`matroska_info[]`/`matroska_seekhead[]` 表、`matroska_read_header` 段走查、`matroska_execute_seekhead`/`matroska_parse_seekhead_entry`、`matroska_resync`/`matroska_reset_status`、`matroska_find_level1_elem`） | Segment 走查：首个 Cluster 即 `EBML_STOP`（data_offset = 其 id 起点），损坏输入经 `matroska_resync`（32 位滑窗找 level-1 id + 状态重置 + 未知长度级别）恢复；**Info**（TimecodeScale 默认 1e6/Duration 浮点/Title/MuxingApp/DateUTC，WritingApp/SegmentUID 按 C 跳过）；**SeekHead**（SeekID/SeekPosition，条目在 master 开始时按 C 的 EbmlList 语义追加）；**execute_seekhead**（仅 seekable：按条目回跳解析未过的 level-1 元素——CUES 恒延迟、失败标记 cues broken——dummy level + 位置恢复的 crude hack 照抄）；**level-1 注册表**（容量 64、SeekHead/Tags 按 id+pos 去重、Cluster/非法 id 排除、segment_start/cues_parsing_deferred 簿记并入游走器）；入口 `av_matroska_open`（Attachments/Chapters/Cues/Tags 识别为跳过，待后续切片） | ✅ |
 | [matroska_track.mbt](libavformat/matroska_track.mbt) | `matroskadec.c`（`matroska_tracks[]`/`matroska_track[]`/`matroska_track_video[]`/`matroska_track_audio[]`/`matroska_track_encodings[]`/`matroska_block_addition_mapping[]`） | `MkvTrack` 全字段（TrackNumber/UID/Type/CodecID/CodecPrivate/CodecDelay/语言默认 eng/DefaultDuration/TimecodeScale 默认 1.0/五组旗标默认值/SeekPreRoll/MaxBlockAdditionID）+ `MkvTrackVideo`（Pixel/Display 尺寸默认 -1 未设、四向 crop、DisplayUnit、Interlaced/FieldOrder/StereoMode/AlphaMode、ColourSpace 二进制）+ `MkvTrackAudio`（采样率默认 8000、输出采样率、位深、声道默认 1）+ ContentEncodings（Scope 默认 1、Type、CompAlgo 默认 zlib、CompSettings；加密行识别跳过）+ BlockAdditionMapping。TrackOperation（3D）与 colour/projection masters 识别跳过待后续。轨道经 TRACKS Level1 行按 Entry 追加 | ✅ |
+| [matroska_block.mbt](libavformat/matroska_block.mbt) | `matroskadec.c`（`matroska_parse_laces`/`matroska_parse_block`/`matroska_cluster_parsing[]`/`matroska_blockgroup[]`/`matroska_blockmore[]`） | `MkvPacket`（stream_index/data/pts/duration/pos/keyframe/discard_padding）；**三种 lacing**：Xiph（0xFF 链，越界即错）、fixed-size（整除校验）、EBML（首帧**无符号** vint + `laces-2` 个 sint 增量，按 `2^(7w-1)-1` 再偏置，负尺寸/溢出拒绝，末帧取余量）；`matroska_parse_block`：VINT 轨道号（`matroska_find_track_by_num`）、BE16 有符号时间偏移、flags（keyframe bit7 + lacing bits1-2）、`timecode = cluster_time/track.time_scale + block_time - codec_delay_in_track_tb`（`av_rescale_q` 四舍五入到 track timebase）、lace duration 由 BlockDuration 或 DefaultDuration×laces/time_scale 分摊、`pkt->pos` 恒为 **Block payload 起点**（9.0.2 的 `pkt->pos = pos`，各 lace 相同）；Cluster 表（Timecode/SimpleBlock/BlockGroup/BlockAdditions/Position/PrevSize）→ **多 Cluster 循环走查** + 尾部截断容忍（EOF 保留已入队 packet）；BlockGroup 在 master 结束时才解码，保证 BlockDuration/ReferenceBlock 已到齐（`!reference_count` 定关键帧） | ✅ |
 | [mpeg4audio.mbt](libavcodec/mpeg4audio.mbt) | `libavcodec/mpeg4audio.c`、`mpeg4audio_sample_rates.h` | `ff_mpeg4audio_get_config`：对象类型（32+ escape）、采样率表/24 位显式、声道配置表、头部隐式 SBR/PS、ALS 头嗅探与重载、USAC/LD 帧长、`0x2b7`/`0x548` 隐式 SBR/PS 同步扩展扫描、PS 修正（含 `channels & ~1`）。返回 GASpecificConfig 位偏移与 C 一致 | ✅ |
 | [idct.mbt](libavcodec/idct.mbt) | `libavcodec/simple_idct.c`、`simple_idct_template.c`（`BIT_DEPTH` 8/10/12 + `IN_IDCT_DEPTH` 16）、`idctdsp.c` | `ff_simple_idct{,_put,_add}_int16_{8,10,12}bit`（行 DC 快速路径 + 列蝶形，`SUINT`→`UInt` 32 位回绕算术）；`ff_put_pixels_clamped_c`/`ff_add_pixels_clamped_c`/`put_signed_pixels_clamped_c`、`ff_init_scantable_permutation`、`ff_permute_scantable` | ✅ |
 | [idct_v128.mbt](libavcodec/idct_v128.mbt) | 同上（表示改造 + `libavcodec/x86/simple_idct.asm`、`simple_idct10.asm`） | `ff_simple_idct{,_put,_add}_v128`（8 位）与 `..._v128_10bit`/`..._v128_12bit`：块改用 **128 字节 LE-int16 缓冲**；`i8x16_shuffle` 三级 unpack 做 8x8 转置，`i32x4` 逐 lane 蝶形 + `i16x8_narrow_i32x4_s` 收窄（含 int16 截断语义）；`put`/`add` 用饱和窄化（8 位）或 `i16x8_min/max_s`（10/12 位）实现 `av_clip_uintp2` | ✅ |
@@ -284,6 +288,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | aviobuf | 期望值全部由 `aviobuf.c` 的缓冲/seek 路径语义手推（跨 1 字节分块的 BE/LE 读写、EOF 语义与 seek 恢复、`avio_read` 直通/短读、四条 seek 路径各自不经/必经回调、`avio_size` 双回退、写侧 flush 时机与 seekback 恢复、dyn buf 增长/packet 前缀/padding、`get_str`/`get_str16` 代理对的消费计数、leb/varlen）；CRC 三助手与已验证的 libavutil `av_crc` 同表互证，流式 checksum 与一次性计算逐位相等；**集成回归**：既有 MP4 全部测试改经 `init_read_context` 跑在 AVIO 上，另以 3 字节分块 + 7 字节缓冲的 seekable / 不可 seek 源对同一合成 MP4 复算采样表，与整文件解析逐值一致 |
 | Matroska Tracks | 合成轨道手推（空 Entry 的全表默认值——语言 eng/flag_default 1/采样率 8000/声道 1/Display 尺寸 -1；视频全字段（含 crop/AlphaMode/ColourSpace）；音频（48000 双声道 16 位、CodecDelay/SeekPreRoll/TimecodeScale）；header-strip 压缩的三层 ContentEncodings→ContentEncoding→ContentCompression 结构（Scope 默认 1）；双轨字段互不串扰）；**真实文件**：webm 双轨（V_VP8 128x96 无 Display 字段 → 默认 -1、Interlaced=2、DefaultDuration 1e8=10fps、A_OPUS 48000 单声道 + OpusHead CodecPrivate、CodecDelay 6.5e6/SeekPreRoll 8e7）与 mkv 单视频轨（V_MPEG4/ISO/AVC + avcC，首字节 1）逐值断言 |
 | Matroska Segment/Info/SeekHead | 合成布局手推（已知/未知长度 Segment、空 Info 默认值、SeekHead 回跳——cluster-first 布局验证 execute_seekhead 真跳回解析未过的 Info、resync 跨 0x00 垃圾恢复）；**真实文件**：docker 生成的 webm/mkv 各取 1024 字节前缀（头 + 双 SeekHead×4 条目 + Info + Tracks + 首 Cluster），TimecodeScale/Duration（1008/1000 = ffprobe 的 1.01s/1.00s）/MuxingApp=Lavf63.1.102/segment_start/first_cluster_pos/8 条 SeekHead 的 id 与位置逐值断言 |
+| Matroska Cluster/Block | 合成手推：lacing 四模式（无/Xiph/fixed/EBML）各有正例，三个反例（Xiph 长度链越界、fixed 不整除、EBML 负尺寸与尺寸超量）；SimpleBlock 单包（stream_index/data/keyframe/pts）、cluster timecode + 负 block 偏移（tc 1000、offset -250 → pts 750）、Xiph 双帧逐帧数据与 lace duration 分摊、BlockGroup（ReferenceBlock → 非关键帧、BlockDuration 覆盖默认）、双 Cluster 按 pos 排序、未知轨道号 → `EINVAL`；**真实文件**：docker `linuxserver/ffmpeg:9.0.2` 生成 32x32/5fps 的 webm（VP8+Opus）与 mkv（H.264+AAC），按 `pos + size + 4` 精确截到第二个包（正好落在第三个 Block 头前，顺带验证尾部截断容忍），前两个包的 stream_index/pos/size/pts/keyframe 与 ffprobe 逐值一致——负 pts 来自 `av_rescale_q(codec_delay, …)` 的舍入（Opus 6.5ms → 7 tick = -7、AAC 23.22ms → -23） |
 | EBML 层 + EBML 头 | VINT 取 EBML 规范（RFC 8796 §4）宽度示例（含全一宽度的未知长度映射与 2/3/8 字节最大值；两处易错点由测试反推确认：0x3F 是 3 字节前缀而非 2 字节全一，最大已知 1 字节长度是 0xFE）；`is_ebml_id_valid` 用 matroska.h 的真实 ID（Header/Segment/Info/Void/CRC32）+ 标志位错位反例；游走器各路径（VOID 跳过、未知长度 master 遇 Segment 终止 = CHILD_OF 语义、零长 master、live 模式、元素越界、空流/截断）合成字节手推；**真实文件**：docker `linuxserver/ffmpeg:9.0.2` 生成的 webm（libvpx+libopus）与 mkv（libx264+aac），头部 64 字节 base64 内嵌，doctype/版本/长度上限与 ffprobe 的 EBML 头输出一致，头后紧跟的 Segment（未知长度）触发 EBML_STOP |
 | advanced_editlist | 全部由 mov_fix_index 的步进语义手推：中部 media_time 编辑（前导弃帧保留但时间戳经 duration 缓冲重写为 -20/-10，保留帧从 0 起，含关键帧回退）；空首 edit（时间轴 +500、`start_time=500`、`min_corrected_pts` 净 0）；音频部分帧（`skip_samples=512`、首帧行至 -512）；正 `min_corrected_pts`（视频 DTS 整体 -50 使首 PTS 归零，seek 落在修正后时间轴）；`mov_estimate_video_delay`（ctts +20/0/+10 → 1，非 avc1 不估）；碎片化 trak 按 mov_read_trak 顺序禁用（先建 trak 仍被 fix、后建 trak 直通、movie 旗标翻转）；**真实文件回归**：docker AAC 文件 14 个包仍与 ffprobe 逐值一致，并新增 `discard`（首帧 AVINDEX_DISCARD_FRAME）与 `skip_samples=1024`（编码器延迟）断言 |
 | sgpd/sbgp/open-GOP/多 stsd | 期望值由 mov.c 语义手推：sgpd NAL 类型（6 位掩码）与 sbgp run 表（含零计数 run 保留）；HEVC 无 CRA entry 时 offsets 仍展开但 key 表/min 时长不建（`cra_index==0` 早退）；open-GOP seek 为**差分测试**——同一文件 `hvc1`（CRA 样本 pts `dts+offset+dts_shift` 超过请求点即拒、按 `FFMAX(min_sample_duration,1)` 回退到闭合关键帧）与 `avc1`（无门直达 CRA）各求一次；`dts_shift` 为 0 的成因（`mov_update_dts_shift` 只跑非最后两条 entry）一并断言；多 stsd 三态（同 fourcc → `pseudo_stream_id=-1` 全索引且仅 slot 0 有 extradata；异 fourcc → 跳过且 `stsc.id=2` 的 chunk 剔除；首 chunk 引用 entry 2 → `last_stsd` 切到空槽清空主 extradata）；碎片 `stsd_id` 门走 trex 默认与 tfhd 旗标两条路径（匹配 1 收样、2 全拒） |
@@ -360,8 +365,11 @@ edit 时间轴索引重建/discard 时间戳重写/`skip_samples`/`min_corrected
 `start_time`/tts 重建/`mov_estimate_video_delay`/碎片化自动禁用）。MP4/MOV 解复用
 至此覆盖 mov.c 的全部索引与时间戳路径。余下：
 
-1. 其他容器：**Matroska/WebM 已开始**（EBML 层 + EBML 头 + Segment/Info/SeekHead/resync +
-   Tracks 切片完成；余下 Cluster/Block lace 逐片推进）；AVI、MPEG-TS（字节级解析优先）
+1. 其他容器：**Matroska/WebM 已到可出包阶段**（EBML 层 + EBML 头 + Segment/Info/SeekHead/
+   resync + Tracks + **Cluster/Block 与三种 lacing** 完成，`av_matroska_open` 已产出带
+   pos/size/pts/keyframe 的 `MkvPacket` 队列，多 Cluster 走查并对尾部截断容忍；余下 Cues
+   索引与 `skip_to_keyframe` 懒解复用、BlockAdditions 侧数据、header-strip 解压、RM 音频 /
+   WebVTT 特化）；AVI、MPEG-TS（字节级解析优先）
 2. `avio.c` 的 URL/协议层与 `avio_open`（文件/网络 IO，属平台边界，或留 FFI）
 
 ### 阶段 5 —— libavcodec（**已开始**：IDCT + Huffman）

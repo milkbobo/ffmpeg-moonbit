@@ -166,9 +166,30 @@ $msg | git commit -F -
   弃用 → `x is Some(_)` / `x is None`；局部 `var x =` 弃用 → `let mut x =`；`Char::from_int`
   弃用 → `Int::unsafe_to_char`（码点已知合法时）；`Bytes::from_fixedarray` 弃用 →
   `Bytes::from_array(arr[:])`（Bytes 不可变，无 `op_set`）。
-- **libavformat 的 `-unused_constructor`**（moon.pkg）：`EbmlKind::Sint` 目前只有白盒
-  测试构造，真实消费者（Block 的 DiscardPadding 等）在后续 cluster 切片；该切片落地后
-  移除此消警。
+- **`-unused_constructor` 消警已移除**：`EbmlKind::Sint` 在 Cluster 切片拿到了真实消费者
+  （BlockGroup 的 DiscardPadding），`libavformat/moon.pkg` 里的全局消警已删且 `moon check`
+  仍 0 告警。今后新增枚举变体不要靠全局消警，先在代码里接上消费者。
+- **`b"…"` 字节字面量走 UTF-8，非 ASCII 字符会展开成多字节**：写 EBML id 时 `b"£"`
+  实际是 `0xC2 0xA3`，于是 SimpleBlock 的 `0xA3` 变成两字节 id，解析器读到 `0xC2` 后整条
+  元素链错位（症状：cluster 内 `id=194` 而不是 `163`，packet 队列全空）。二进制 id 一律
+  写 `b"\xA3"`，非 ASCII 字符只出现在真正要文本的地方。
+- **`BytesView::data()` 返回底层 `Bytes`，不是视图窗口**：`b[a:b].data()` 得到整个 `b`。
+  取子区间必须 `.to_owned()`，切片辅助函数写成
+  `b.clamped_view(start=from, end=to).to_owned()`。Tracks/Cluster 切片各踩过一次
+  （症状：lace sizes 全错、EBML lacing 直接 `unwrap` 失败）。
+- **`moon fmt` 会全局改写类型名 `UInt`→`UInt32`、`Int`→`Int32`**：一次格式化就动 59 个
+  文件、把公共签名全部换名，**绝不能直接提交**。本项目统一短名，**不要跑 `moon fmt`**；
+  万一跑了，`git checkout -- .` 还原再重放自己的改动（新文件用整词替换
+  `\bUInt32\b`→`UInt`、`\bInt32\b`→`Int` 回滚）。交接验收里的"跑 fmt"按这条理解。
+- **脚本改 `.mbt` 会把 `\xDE` 之类转义二次编码成 mojibake**：文本模式读写的 python
+  会写坏 `b"\xDE\xAD"` 里的反斜杠。改 `.mbt` 一律用编辑工具；必须用脚本时读写都走
+  二进制（`'rb'`/`'wb'`），且只做整词替换。
+- **sink 里抛的错误必须显式传播**：`let _ = deliver(...)` 会把
+  `matroska_parse_block` 的 `EINVAL`（未知轨道号、损坏 lacing）静默吞掉，上层只看到
+  "0 个 packet"。游走器的三处 `deliver` 已改为 `match … { Err(e) => return Err(e) }`。
+- **`MatroskaHeader` 的 master 内元素顺序不可假设**：BlockGroup 里 `BlockDuration`/
+  `ReferenceBlock` 可能排在 `Block` 之后，边读 `Block` 边解码会拿到 0/默认值。做法是
+  Bin 只暂存字节与位置，在 master 结束的 sink（收到 `EbmlValue::Master`）里再解码。
 - **MoonBit struct 字段是引用、但 `let v = t.video` 取的是值拷贝**：表工厂里 sink 闭包
   若捕获局部拷贝（`let v = t.video; sink(u => v.x = u)`）写入会全部丢失——必须写
   `sink(u => t.video.x = u)` 穿透字段。Tracks 切片因此踩过一次（嵌套 master 全部

@@ -610,7 +610,10 @@ fn walk_master(
     // an empty master completes immediately (ebml_parse_nest's
     // zero-length shortcut pops the level and returns)
     let _ = st.levels.pop()
-    let _ = deliver(r, Some(EbmlValue::Master), pos_alt)
+    match deliver(r, Some(EbmlValue::Master), pos_alt) {
+      Err(e) => return Err(e)
+      Ok(_) => ()
+    }
     return Ok(0)
   }
   ancestors.push(syntax)
@@ -619,7 +622,10 @@ fn walk_master(
   match nested {
     Err(e) => Err(e)
     Ok(v) => {
-      let _ = deliver(r, Some(EbmlValue::Master), pos_alt)
+      match deliver(r, Some(EbmlValue::Master), pos_alt) {
+        Err(e) => return Err(e)
+        Ok(_) => ()
+      }
       Ok(v)
     }
   }
@@ -831,7 +837,10 @@ pub fn ebml_parse(
   }
   // The common tail: NEEDS_CHECKING defers to the EOF check, then the
   // level check; the value is already delivered (the C wrote it in place).
-  let _ = deliver(r, value, pos_alt)
+  match deliver(r, value, pos_alt) {
+    Err(e) => return Err(e)
+    Ok(_) => ()
+  }
   if nc {
     if pb.eof_reached {
       if pb.err != None {

@@ -33,16 +33,6 @@ fn track_entry(children : Bytes) -> Bytes {
   el(b"\xAE", children)
 }
 
-///| ASCII codec-id strings are written as plain byte literals; this helper
-/// keeps call sites readable when the payload is prose (e.g. languages). */
-fn ascii_str(s : String) -> Bytes {
-  let a : Array[Byte] = []
-  for i = 0; i < s.length(); i = i + 1 {
-    a.push(s.at(i).to_int().to_byte())
-  }
-  Bytes::from_array(a[:])
-}
-
 // ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
