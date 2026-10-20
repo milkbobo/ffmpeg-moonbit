@@ -47,6 +47,17 @@
   重建）、`h264_decode_avc_frames`（MP4 `avcC` + 长度前缀样本入口）。
   **算术核心已用 FFmpeg 自己的 `tests/cabac.c` 逐比特验证；宏块层只在「单行」与「平坦
   多行」向量上 byte-exact，多行 + 稠密残差会失步**（见 README §3「CABAC 的已知偏差」）。
+- **libavcodec（P 帧 + DPB，2026-10 新增）**：`h264_mc.mbt`（luma 6 抽头 qpel +
+  chroma 1/8 双线性 MC，边界复制；**块基准位置必须显式传**，见 §7）、`h264_mvpred.mbt`
+  （A/B/C 邻块、`mid_pred`、P_SKIP 捷径）、`h264_inter.mbt`（P 宏块层：skip/type 四种
+  划分/ref/mvd + inter 残差，CAVLC 与 CABAC 共用重建）、`h264_dpb.mbt`（滑窗 DPB、
+  POC type 0/2 跟踪、默认 L0 序；`H264Decoder` 的 Annex B/avcC 入口跨样本保状态）。
+  向量：真实 I+P+P 流 + 合成 CABAC P 帧（`h264_psynth_wbtest.mbt`：全 I_PCM 非平坦
+  参考 + P_L0_16x16 整数 MV，编码器逐 bin 镜像解码端上下文）。
+- **libavcodec（AAC ICS/TNS + IMDCT，2026-10 新增）**：`aac_ics.mbt`（`ics_info`/
+  section 数据/TNS/pulse；频谱码书 1..11 显式拒绝）+ `aac_mdct.mbt`（直接法
+  MDCT/IMDCT、正弦窗 ONLY_LONG 的 TDAC 叠接、raw_data_block/SCE 框架）。真实 PCM
+  输出还差频谱 Huffman + scalefactor + 反量化。
 - **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
   - H.264 Baseline **I 帧重建 + 环路去块滤波**：`h264_slice.mbt`（I/SI slice header）+
     `h264_cavlc.mbt`（CAVLC + dequant/chroma-QP 表）+ `h264_idct.mbt`（4x4 IDCT +
@@ -379,6 +390,22 @@ $msg | git commit -F -
 - **验证脚本的盲区**：拿「未滤波 YUV + 逐宏块滤波」当参考模型时，它与 FFmpeg 默认解码
   **逐字节一致**（因为 FFmpeg 预测也读滤波前像素），能验出核/强度错误但**验不出时序错误**。
   时序问题要用整帧 MD5 + 「逐 MB 区域哈希」这类粗粒度对照来定位。
+- **运动补偿的取样位置必须带「块基准」**：luma 与 chroma 一样，源位置 =
+  `块在帧内的基准 + 分区内偏移 + MV>>shift`。只传 `MV>>shift + 分区内偏移`（漏基准）时
+  第 0 行/列宏块**恰好正确**，其余全部错位——单元测试若只在基准 0 处调用永远测不出
+  （`h264_mc_chroma` 的首版就这么漏掉，由合成 CABAC P 帧向量抓出）。端到端断言
+  「P 帧 == 参考帧平移」必须用**非平坦**参考（I_PCM 图案），平坦参考对任何 MV 都通过。
+- **DPB 参考图的平面尺寸字段**：`H264RefPic.height` 是 MC 边界复制的钳制上限，必须取
+  宏块对齐平面高（`mb_height*16`）。首版误写 `cstride*2`（=平面宽），潜伏到真实 P 码流
+  的子像素插值触底才越界 panic——真实向量（带 sub-pel MV）对此是必测项。
+- **合成码流的编码器必须逐 bin 镜像解码端上下文**：CABAC 上下文是自适应的，编码器用
+  错上下文（如 `decode_cabac_mb_cbp_luma` bit1 的 `(cbp&1)==0 → +1`）时流会**延迟**
+  失步——前几个宏块照样解对，后面整片错。定位法：打印首个失配像素坐标，看它落在
+  哪个宏块、该宏块与之前正确宏块在**上下文推导上**首个不同点（如「首个 A/B/C 全可用」
+  或「首个上邻可用」）。
+- **CAVLC PCM（及一切非 CABAC 结尾）码流要补 rbsp trailing bits**：`get_bit_length`
+  把最后一个置位比特当 `rbsp_stop_one_bit` 剥掉，PCM 数据以 `...10101` 之类结尾时
+  末样本少 1 位、被 `bits_left` 检查拒绝。合成器在 PCM 数据后显式写 `1` + 零填充即可。
 
 ---
 
@@ -472,12 +499,23 @@ moonbit/                      # git 仓库根
     ├── h2645_parse.mbt       # RBSP/NAL 拆分（Annex B + 长度前缀）
     ├── h2645_vui.mbt         # 公共 VUI
     ├── h264_ps.mbt           # H.264 SPS/PPS/VUI + avcC
-    ├── h264_slice.mbt        # H.264 I/SI slice header（P/B 拒绝）
+    ├── h264_slice.mbt        # H.264 I/P slice header（B/SP/SI 拒绝）
     ├── h264_cavlc.mbt        # CAVLC 残差 + dequant/chroma-QP 表
     ├── h264_idct.mbt         # H.264 4x4 IDCT + DC Hadamard（8-bit）
     ├── h264_pred.mbt         # 帧内预测 4x4/16x16/chroma 8x8
     ├── h264_decode.mbt       # Baseline I 帧重建 + 环路滤波编排 + Annex B 入口
     ├── h264_deblock.mbt      # 去块滤波核（h264dsp）+ 边界强度推导（h264_loopfilter）
+    ├── h264_sei.mbt          # H.264 SEI 消息框架 + 公共消息集
+    ├── cabac.mbt             # CABAC 算术解码核心 + 上下文初值派生
+    ├── h264_cabac_tables.mbt # CABAC 算术表 + 上下文初值表（脚本批量提取）
+    ├── h264_cabac_mb.mbt     # CABAC I 宏块解析（mb_type/CBP/残差）
+    ├── h264_mb.mbt           # CAVLC/CABAC 共用的宏块重建
+    ├── h264_mc.mbt           # 运动补偿（luma qpel + chroma 1/8 + 边界复制）
+    ├── h264_mvpred.mbt       # MV 预测（A/B/C、mid_pred、P_SKIP）
+    ├── h264_inter.mbt        # P 宏块层（skip/type/ref/mvd + inter 残差）
+    ├── h264_dpb.mbt          # 滑窗 DPB + H264Decoder（Annex B/avcC 入口）
+    ├── aac_ics.mbt           # AAC ICS 语法（ics_info/section/TNS）
+    ├── aac_mdct.mbt          # AAC IMDCT/加窗 + raw_data_block/SCE 框架
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS + hvcC
     ├── audio_headers.mbt     # ADTS + MPEG 音频帧头
     ├── mp3_tables.mbt        # Layer III 码表/Huffman 表
@@ -496,6 +534,10 @@ moonbit/                      # git 仓库根
     ├── h264_slice_wbtest.mbt
     ├── h264_decode_wbtest.mbt      # 逐帧 YUV MD5 + 未支持输入负例
     ├── h264_decode_realdata_wbtest.mbt  # 码流 base64 + 期望 MD5（含生成命令）
+    ├── h264_cabac_wbtest.mbt       # tests/cabac.c 参考编码器 + 逐比特向量
+    ├── h264_inter_wbtest.mbt       # MC/mvpred 单元测试
+    ├── h264_psynth_wbtest.mbt      # 合成 CABAC P 帧端到端（I_PCM 参考 + MV 平移）
+    ├── aac_wbtest.mbt              # ICS/TNS 逐字段 + MDCT/TDAC + 静音帧 PCM
     ├── mp3_decode_wbtest.mbt
     ├── mp3_decode_realdata_wbtest.mbt
     ├── hevc_ps_wbtest.mbt

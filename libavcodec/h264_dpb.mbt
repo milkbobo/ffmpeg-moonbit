@@ -173,8 +173,10 @@ fn H264Decoder::decode_slice(
       v: frame.v,
       ystride: frame.ystride,
       cstride: frame.cstride,
+      // Plane dimensions (macroblock-aligned), the border-replication
+      // bounds of motion compensation.
       width: frame.ystride,
-      height: frame.cstride * 2,
+      height: frame.pheight,
     }
     self.refs.insert(0, { poc, pic, })
     while self.refs.length() > sps.ref_frame_count {

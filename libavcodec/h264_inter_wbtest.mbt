@@ -100,16 +100,17 @@ test "h264 mc: chroma eighth-pel bilinear" {
     src[i] = (i * 11 + 5) % 250
   }
   let dst : Array[Int32] = Array::make(16, 0)
-  // luma mv (5, 3) quarter-pel → chroma full (0, 0), fractions (5, 3).
-  h264_mc_chroma(dst, 0, 4, src, 5, 3, w, 4, 4, w, h)
+  // luma mv (5, 3) quarter-pel → chroma full (0, 0), fractions (5, 3);
+  // the block's chroma base is (2, 1) so the taps come from src (2, 1).
+  h264_mc_chroma(dst, 0, 4, src, 2, 1, 5, 3, w, 4, 4, w, h)
   let dx = 5
   let dy = 3
   for y = 0; y < 4; y = y + 1 {
     for x = 0; x < 4; x = x + 1 {
-      let a = src[y * w + x]
-      let b = src[y * w + x + 1]
-      let c = src[(y + 1) * w + x]
-      let d = src[(y + 1) * w + x + 1]
+      let a = src[(y + 1) * w + x + 2]
+      let b = src[(y + 1) * w + x + 3]
+      let c = src[(y + 2) * w + x + 2]
+      let d = src[(y + 2) * w + x + 3]
       let v = a * (8 - dx) * (8 - dy) +
         b * dx * (8 - dy) +
         c * (8 - dx) * dy +

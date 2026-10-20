@@ -127,14 +127,17 @@ fn h264_mc_luma(
 }
 
 ///|
-/// Put a chroma block of `w` x `h` from `src` at the position derived from
-/// the luma quarter-pel MV (`mx`, `my`): `mc_dir_part` uses `(mx >> 3)` full
-/// pels and `mx & 7` eighths for 4:2:0 chroma.
+/// Put a chroma block of `w` x `h` from `src`: (`src_x`, `src_y`) is the
+/// block's full-pel chroma position in the reference picture, and the luma
+/// quarter-pel MV (`mx`, `my`) displaces it by `(mx >> 3)` full pels plus
+/// `mx & 7` eighths (`mc_dir_part`'s chroma half).
 fn h264_mc_chroma(
   dst : Array[Int32],
   dstoff : Int32,
   dstride : Int32,
   src : Array[Int32],
+  src_x : Int32,
+  src_y : Int32,
   mx : Int32,
   my : Int32,
   sstride : Int32,
@@ -143,7 +146,7 @@ fn h264_mc_chroma(
   pic_w : Int32,
   pic_h : Int32,
 ) -> Unit {
-  let fy = my >> 3
+  let fy = src_y + (my >> 3)
   let dx = mx & 7
   let dy = my & 7
   // `put_h264_chroma_mc8`: (A*(8-dx)(8-dy) + B*dx(8-dy) + C*(8-dx)dy +
@@ -156,7 +159,7 @@ fn h264_mc_chroma(
     for col = 0; col < w; col = col + 1 {
       // Chroma blocks are `w` wide, so the B/C taps of the last column may
       // come from `fx + w`; the clamp reproduces edge replication.
-      let fx = mx >> 3
+      let fx = src_x + (mx >> 3)
       let xa = h264_mc_clamp(fx + col, pic_w)
       let xb = h264_mc_clamp(fx + col + 1, pic_w)
       let a = src[y0 * sstride + xa]

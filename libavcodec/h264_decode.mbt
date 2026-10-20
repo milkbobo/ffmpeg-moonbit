@@ -97,6 +97,9 @@ pub struct H264Frame {
   width : Int32
   /// Visible (cropped) height.
   height : Int32
+  /// Full macroblock-aligned plane height (`mb_height * 16`); the planes are
+  /// `ystride` x `pheight`. Motion compensation clamps against it.
+  pheight : Int32
   y : Array[Int32]
   u : Array[Int32]
   v : Array[Int32]
@@ -771,6 +774,7 @@ fn h264_decode_slice_ex(
   Ok({
     width,
     height,
+    pheight: yheight,
     y,
     u,
     v,
