@@ -1,10 +1,7 @@
 import {
   "moonbitlang/core/math",
   "moonbitlang/core/v128",
+  "ffmpeg/moonbit/libavutil",
 }
 
 warnings = "-alert_experimental"
-
-import {
-  "ffmpeg/moonbit/libavutil",
-} for "wbtest"

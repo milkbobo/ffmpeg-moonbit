@@ -104,8 +104,10 @@ moonbit/
     ├── h264_mvpred.mbt       # MV 预测：A/B/C 邻块、mid_pred、P_SKIP 捷径
     ├── h264_inter.mbt        # P 宏块层（CABAC+CAVLC）：skip/type/ref/mvd + inter 残差
     ├── h264_dpb.mbt          # 滑窗 DPB：POC 跟踪、默认 L0、参考标记（H264Decoder）
-    ├── aac_ics.mbt           # AAC ICS 语法：ics_info/section 数据/TNS/pulse
-    ├── aac_mdct.mbt          # AAC IMDCT/加窗（正弦窗 ONLY_LONG）+ raw_data_block/SCE 框架
+    ├── aac_ics.mbt           # AAC ICS 语法：ics_info/section 数据/TNS/pulse/gain-control
+    ├── aac_mdct.mbt          # AAC IMDCT/加窗（四窗口序列 + KBD/正弦窗）+ raw_data_block/SCE
+    ├── aac_spectrum.mbt      # AAC 频谱解码（码书 1..11/scalefactor/PNS/TNS）
+    ├── aac_tables.mbt        # AAC 解码表（脚本批量提取，与 C 源逐值 diff）
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS/VUI + hvcC extradata
     ├── audio_headers.mbt     # AAC ADTS 头 + MPEG 音频帧头（MP1/MP2/MP3）
     ├── mp3_tables.mbt        # Layer III 码表/Huffman 表（C 源批量提取）
@@ -137,20 +139,23 @@ moonbit/
     ├── h264_inter_wbtest.mbt # MC 整数/半像素/四分像素 + mvpred 中值/回退单元测试
     ├── h264_psynth_wbtest.mbt # 合成 CABAC P 帧端到端（I_PCM 参考 + MV 平移断言）
     ├── aac_wbtest.mbt        # ICS/TNS 逐字段 + MDCT/TDAC/窗口性质 + 静音帧 PCM
+    ├── aac_spectrum_wbtest.mbt # 真实 libfdk_aac 码流逐帧解码（结构性断言）
+    ├── aac_spectrum_realdata_wbtest.mbt # 真实 AAC 码流 + 参考 PCM base64 素材
     └── mpeg4audio_wbtest.mbt # 位串手推的 AAC-LC/SBR/PS/USAC/ALS 头部用例
 ```
 
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行（实测 1,595,275 行），本次完成 MoonBit 源文件
-（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **48266 行**（libavutil 5995 行 +
+（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **52652 行**（libavutil 6127 行 +
 libavformat 的 aviobuf 流式 AVIO 层、MP4 解复用、Matroska EBML/Segment/Tracks/Cluster、
 裸 AAC/MP3 分帧与容器码流参数桥 14350 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
 IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CAVLC 全通 / CABAC 部分
 向量 / MP4 `avcC` 长度前缀入口）**、**H.264 P 帧解码与滑窗 DPB（运动补偿/MV 预测/inter
-宏块层，含 CABAC P 路径的合成码流端到端向量）**、**H.264 SEI 解析**、**AAC ICS/TNS
-解析与 IMDCT/加窗管线** 与 **MPEG 音频 Layer I/II/III 定点解码** 27921 行，
-均含白盒测试）——约占整体 **3.03%**。
+宏块层，含 CABAC P 路径的合成码流端到端向量）**、**H.264 SEI 解析**、**AAC 频谱解码
+（Huffman 码书 1..11 + scalefactor + PNS/TNS + IMDCT/加窗全管线，真实 libfdk_aac
+码流逐帧解码）** 与 **MPEG 音频 Layer I/II/III 定点解码** 32317 行，
+均含白盒测试）——约占整体 **3.30%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 码流层）
 
@@ -221,7 +226,9 @@ IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CA
 | [h264_inter.mbt](libavcodec/h264_inter.mbt) | `h264_cabac.c` 的 P 分支(`decode_cabac_mb_skip`/`decode_cabac_mb_type`/`decode_cabac_p_mb_sub_type`/`decode_cabac_mb_ref`/`decode_cabac_mb_mvd`)、`h264_cavlc.c` 的 P 分支、`h264_mb.c`(`mc_part_std`) | **P 宏块层**：skip flag、P_L0_16x16/16x8/8x16/8x8 四种划分与子划分、ref_idx（`ref_count>1` 才解码）、mvd 读取与写回、inter CBP 与残差路径、`mc_part_std` 等价的分块运动补偿编排（CAVLC 与 CABAC 两套解析共用一个重建） | ✅ |
 | [h264_dpb.mbt](libavcodec/h264_dpb.mbt) | `h264dec.c`/`h264_slice.c`(`ff_h264_execute_ref_pic_marking` 滑窗、`ff_h264_build_ref_list0` 默认序、`ff_h264_init_poc` 的 type 0/2) | **滑窗 DPB**：POC type 0 的 MSB 回绕跟踪与 type 2、IDR 清空缓冲、参考图按 POC 降序构建默认 L0（无重排语法）、`ref_frame_count` 滑窗裁剪；`H264Decoder` 的 Annex B/avcC 两入口跨样本保状态 | ✅ |
 | [aac_ics.mbt](libavcodec/aac_ics.mbt) | `libavcodec/aac/aacdec.c`(`decode_ics_info`/`decode_band_types`/`ff_aac_decode_tns`、pulse/gain-control) | **AAC ICS 语法层**：`ics_info`（窗口序列/`max_sfb`/分组）、section 数据（`sect_cb`/`sect_start`/`sect_len` 的 escape 形式）、TNS（滤波顺序/系数 `lpc_coeff` 的压缩量化解码）、pulse/gain-control；频谱码书 1..11 尚未移植（显式拒绝） | ✅ |
-| [aac_mdct.mbt](libavcodec/aac_mdct.mbt) | `aacdec_dsp_template.c`(`imdct_and_windowing`)、`aacdec.c` 的 raw_data_block/SCE 框架 | **AAC IMDCT/加窗 + 帧框架**：直接法 MDCT/IMDCT（O(N²)，正弦窗）、Princen-Bradley TDAC 叠接、ONLY_LONG 序列；raw_data_block 的元素 id 遍历与 SCE 帧编排。EIGHT_SHORT/LONG_START/LONG_STOP 加窗与 KBD 窗待做 | ✅ |
+| [aac_mdct.mbt](libavcodec/aac_mdct.mbt) | `aacdec_dsp_template.c`(`imdct_and_windowing`)、`aacdec.c` 的 raw_data_block/SCE 框架、`kbdwin.c` | **AAC IMDCT/加窗 + 帧框架**：直接法 MDCT/IMDCT（O(N²)，综合侧 2/N 归一）、`vector_fmul_window` 的 2×len 语义、**全部四种窗口序列**的 512 重叠与 448/64 过渡结构、正弦窗与 **KBD 窗**（经 `av_bessel_i0`，α=4/6）、FIL/PCE 元素跳过、current/prev window shape 选窗；raw_data_block 的元素 id 遍历与 SCE 帧编排 | ✅ |
+| [aac_spectrum.mbt](libavcodec/aac_spectrum.mbt) | `aacdec_proc_template.c`(`decode_spectrum_and_dequant` 浮点路径)、`aacdec.c`(`decode_scalefactors`)、`aacdec_dsp_template.c`(`dequant_scalefactors`/`apply_tns`、`lpc_functions.h` 的 Levinson 展开) | **AAC 频谱解码**：scalefactor 差分解码（intensity/noise 裁剪、9 位 noise 前导）、码书 1..11 的 Huffman（二叉 trie）+ `VMUL4/4S/2/2S` 打包索引解包（逐值符号位）、book 11 的 escape 序列（`ff_cbrt_tab` = float32(n^4/3) 表）、PNS 噪声（`lcg_random` + 单位能量缩放）、intensity 零填充、TNS（Levinson 展开 + 就地 AR 滤波，`tns_max_bands` 界） | ✅ |
+| [aac_tables.mbt](libavcodec/aac_tables.mbt) | `aactab.c` 全部解码表 + `ff_aac_pow2sf_tab`/`ff_cbrt_tab` 生成算法 | 2756 行批量提取表：scalefactor VLC（121 项）、码书 1..11 的 codes/bits、5 张 `codebook_vector_*_idx` 打包索引表、3 张 vals 表、`pow2sf` 428 项 float32、`pow43` 8192 项、swb 偏移表（1024/128 全采样率）与 `tns_max_bands`；提取脚本 `scripts/extract_aac_tables.py`（与 C 源逐值 diff 校验） | ✅ |
 
 **当前状态**：`moon check` 0 error / 0 warning，`moon test` **316/316 全绿**（libavutil 69 + libavformat 133 + libavcodec 114）。CABAC 多行复杂码流的失步仍是已知偏差（见下）。
 
@@ -247,6 +254,24 @@ PPS（CAVLC+CABAC）、全 `I_PCM` 的 IDR 帧（非平坦图案，也是 `I_PCM
 bug：**chroma 运动补偿漏掉块在帧内的基准位置**（此前只有基准 0 的单元测试，列 0
 以外的宏块全部取样错位）与 **DPB 参考图的 `height` 字段误取 `cstride*2`**（真实
 P 码流的子像素插值一旦触底即越界 panic）。
+
+### AAC 的已知偏差（重要）
+
+频谱层的每个构件都有单元向量（码表与 C 源逐值 diff、TNS 一阶滤波、
+scalefactor 语法、MDCT/TDAC 性质、`I_PCM`-式的静音帧端到端），但**真实码流的
+逐样本 PCM 差分尚未收敛**：
+
+* 现象：libfdk_aac 生成的 44100 Hz 单声道正弦流（46 帧、全 ONLY_LONG、KBD 窗）
+  逐帧解码成功，淡入起始的小幅度样本与 FFmpeg 参考输出相差 ±1..2 LSB，但
+  大幅度帧发散（症状为输出饱和）。
+* 已用「位级锚点扫描」（在 ADTS 帧内穷举 SCE 结束位，要求其后恰为 END）对
+  独立 Python 解码模型做了 20/46 帧的逐帧仲裁：books 7..10 的符号位数量
+  「非零值个数」规则在个别帧命中锚点、「`(idxv>>8)&15` 字段」规则在其余帧
+  命中——两者与 FFmpeg `aacdec_proc_template.c` 的 `VMUL2S` 字面语义均不完全
+  一致，疑似 FDK 码流与 FFmpeg 表在 `codebook_vector6/8_idx` 的 8:11 位语义上
+  存在另一层映射，或锚点扫描本身有歧义。
+* 下一步：用 FFmpeg `aacdec_fixed`（定点解码器）的中间状态做参照，或对
+  单码书合成码流逐 bin 对拍，把 books 7..10 的符号位语义钉死。
 
 ### AES 的实现偏差（已记录）
 
@@ -299,11 +324,11 @@ Huffman 规范化码另有等效性说明，见下文）：
   segment header、CABAC、预测/变换/滤波、SEI；多层扩展（VPS multilayer、PPS
   multilayer/3D）不建模，遇到即返回 `PATCHWELCOME`；HRD 字段按位消费但不存储。
 - **AAC**：`audio_headers.mbt` 完成 ADTS 头；`rawaudio.mbt` 完成裸 ADTS 流逐帧分帧
-  （含 ID3v2 跳过与重同步）。**ICS/TNS 解析与 IMDCT/加窗管线已完成**（`aac_ics.mbt` +
-  `aac_mdct.mbt`：section 数据、TNS 滤波器、SCE 帧框架、正弦窗 ONLY_LONG 的
-  MDCT→IMDCT→TDAC 叠接）。**未做**：频谱 Huffman 码书 1..11 与 scalefactor 解码、
-  反量化（即真实码流还出不了 PCM）、CPE/PCE、EIGHT_SHORT/LONG_START/LONG_STOP 加窗、
-  KBD 窗、SBR/PS。
+  （含 ID3v2 跳过与重同步）。**频谱解码已完成**（`aac_spectrum.mbt` + `aac_tables.mbt`：
+  Huffman 码书 1..11 含 escape、scalefactor 差分/noise 前导、PNS、TNS 应用、gain
+  control 语法解析；`aac_mdct.mbt`：全四窗口序列 + KBD/正弦窗的 IMDCT→TDAC 叠接），
+  libfdk_aac 生成的真实码流可逐帧解码出 PCM。**与 FFmpeg 参考解码的逐样本差分
+  尚未收敛**（见 §3「AAC 的已知偏差」）；CPE/独立 PCE 布局、SBR/PS、USAC 未做。
 - **MP3/MP2/MP1**：`audio_headers.mbt` 完成 MPEG 音频头（版本/层/码率/采样率/帧长/
   自由格式）；`rawaudio.mbt` 完成裸流分帧、ID3v2/ID3v1 跳过与首帧 Xing/Info/VBRI
   识别剔除。**三层定点解码均已完成**（见下一小节）。
@@ -474,10 +499,11 @@ Huffman 规范化码另有等效性说明，见下文）：
   I 帧重建 + 环路去块滤波（CAVLC 全通、CABAC 部分向量、MP4 `avcC` 长度前缀入口）与
   **H.264 P 帧解码 + 滑窗 DPB**（MC/MV 预测/inter 宏块层，Annex B 与 avcC 两入口）、
   MP3 Layer III 定点解码（IMDCT/合成滤波/PCM）+ MPEG 音频 Layer I/II（分配/scalefactor/
-  组量化）、+ **H.264 SEI**（`h264_sei.mbt`，含公共消息集）与 **AAC ICS/TNS/IMDCT
-  管线**（尚无频谱 Huffman/scalefactor，真实码流出不了 PCM）；其余未做：**CABAC 多行
-  复杂码流的收敛**、B/SP/SI slice、HEVC 的全部解码层，AAC 的频谱解码与 SBR/PS、
-  **SEI 的 ITU-T T.35 与 AVFrame side-data 层**、VLC 表构建、LZO 与其余编解码器
+  组量化）、+ **H.264 SEI**（`h264_sei.mbt`，含公共消息集）与 **AAC 频谱解码**
+  （码书 1..11/scalefactor/PNS/TNS + 四窗口序列 IMDCT/KBD 窗，真实码流逐帧出 PCM）；
+  其余未做：**CABAC 多行复杂码流的收敛**、B/SP/SI slice、HEVC 的全部解码层，
+  AAC 差分对齐的收敛与 SBR/PS、**SEI 的 ITU-T T.35 与 AVFrame side-data 层**、
+  VLC 表构建、LZO 与其余编解码器
 - libswscale / libswresample / libavdevice / fftools：**未开始**
 
 ---
@@ -532,7 +558,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | H.264 CABAC 核心 | FFmpeg 自带 `libavcodec/tests/cabac.c`：测试内的参考编码器（`put_cabac`/`put_cabac_bypass`/`put_cabac_terminate`）与 `av_lfg_get`（`libavutil/lfg.c`，MD5 播种、种子 1）一并移植，10240 bypass + 10240 上下文比特逐比特还原；`get_cabac_terminate` 必须非零。注意 `init_cabac_encoder` 的 `pb.bit_left++` 会吞掉首个比特，打包时要丢掉流的第一位 |
 | H.264 CABAC 宏块层 | linuxserver/ffmpeg:9.0.2 + libx264 生成 5 条 CABAC IDR 码流（`testsrc2` 16x16 / 32x16 / 48x16、平坦 32x32 / 16x48，`8x8dct=0`），期望值为同文件 `-f framemd5` 的逐帧 MD5；多行复杂内容仍失步，见 §3「CABAC 的已知偏差」 |
 | H.264 P 帧 / DPB | 真实码流：`keyint=10` 的 Baseline I+P+P 流经 `h264_decode_annexb_frames` 解出 3 帧（滑窗 DPB 出参考）；单元测试覆盖 MC 的整数/半像素/四分像素与 chroma 1/8 双线性（含负位移的边界复制）、`mid_pred` 与 A/B/C 邻块回退、P_SKIP 零捷径。**合成码流**：全 `I_PCM` IDR（非平坦图案 = `I_PCM` 路径首个向量）+ CABAC P 帧（`P_L0_16x16`、整数 MV、零残差），P 帧逐像素等于参考帧平移（左/上边界按 `ff_emulated_edge_mc` 复制）；编码器镜像复刻解码端每个 CABAC 上下文推导 |
-| AAC ICS/TNS/IMDCT | 合成位串手推：`ics_info` 各窗口序列与 `max_sfb`、section 数据（含 escape 长度）、TNS 逐字段（阶数/系数量化解码）、EIGHT_SHORT 分组展开、codebook 0 的静音帧端到端（出 2048 样本 PCM）、TNS 一阶格型滤波的平滑性断言、predictor 数据拒绝；MDCT/加窗侧另有 Princen-Bradley 互补性、匹配余弦的单系数对集中、TDAC 三长块重建（时域混叠消除后逐样本还原）与正弦窗性质 |
+| AAC ICS/TNS/IMDCT | 合成位串手推：`ics_info` 各窗口序列与 `max_sfb`、section 数据（含 escape 长度）、TNS 逐字段（阶数/系数量化解码）、EIGHT_SHORT 分组展开、codebook 0 的静音帧端到端（出 2048 样本 PCM）、TNS 一阶 AR 滤波的平滑性断言（Levinson 展开 + 就地滤波）、predictor 数据拒绝；MDCT/加窗侧另有 Princen-Bradley 互补性、匹配余弦的单系数集中（spec 核无镜像扩散）、IMDCT 核行逐点（含 2/N 综合）、`vector_fmul_window` 2×len 语义、KBD 窗生成（`av_bessel_i0`）与四窗口序列的过渡结构；**真实码流**：libfdk_aac 生成的 46 帧正弦淡入流逐帧解码（帧数/非平坦/有界性断言，逐样本差分见 §3 已知偏差） |
 | H.264 `avcC` 入口 | 真实 `avcc_baseline.mp4`（5042 字节，baseline/CAVLC）：`av_mov_open` → `track.extradata`（`avcC`）+ 按 `stco`/`stsz` 切样本 → `h264_decode_avc_frames`，逐帧 YUV MD5 对齐 FFmpeg 默认解码 |
 | H.264 SEI | **真实码流 + `trace_headers` 逐字段**：docker `linuxserver/ffmpeg:9.0.2` 生成三条码流——① x264 `nal-hrd=cbr:vbv-maxrate=200:vbv-bufsize=200`（buffering period ×2 + picture timing ×2 + x264 user-data，VUI HRD 全字段，BP/PT 的值延迟对 SPS 解析）；② 同一流经 `h264_metadata` bsf 注入 display orientation（旋转 16384 + 双翻转）；③ 手工构造的 11 类合成消息流（恢复点、green metadata、film grain、frame packing、alternative transfer、ambient viewing、mastering display、content light、双 unregistered、cancel 的 display orientation、带时钟时间戳的 picture timing——后者靠 SPS VUI 的 `pic_struct_present_flag` 原位翻转启用，不移动任何后续字段）。期望值逐字段转录自 `ffmpeg -c copy -bsf:v trace_headers` 输出（green metadata 无 CBS dumper，期望值取 trace 的 payload 字节）；负例按 C 的错误路径断言具体错误串（<16 字节 unregistered、size 越界、`recovery_frame_cnt ≥ 1<<16`、film grain `num_model_values>6`、缺失 SPS 的 buffering period 返回 `AVERROR_PS_NOT_FOUND` 非致命）。码流以 base64 内嵌于 `h264_sei_realdata_wbtest.mbt` |
 | MPEG 音频 Layer I/II 解码 | **真实码流 + PCM MD5（Layer II）**：docker 生成 4 条 `mp2`（stereo 44.1k/192k、mono 44.1k/64k、joint stereo 32k/64k、MPEG-2 LSF stereo 24k/64k），期望值为 FFmpeg 定点解码器 `-c:a mp2 -f s16le` 的 MD5（`818bac4a…` / `5c6c8e47…` / `941cb133…` / `f9bf9037…`），覆盖分配表 1/0/3/4 与 3/5/9 步组量化。**Layer I 无编码器**，改用按规范手工拼帧、由 FFmpeg 解码同一段码流取得期望值（`cb2824e3…` mono 32k、`a0ed4a92…` joint stereo 44.1k bound=4），输入是手工的、期望值仍是参考实现的 |
@@ -649,9 +675,10 @@ I 帧重建 + 环路去块滤波**（slice header + CAVLC + 4x4 IDCT + 帧内预
 3. ~~接 MP4 的 avcC + 长度前缀入口 → CABAC（`h264_cabac.c`）→ P 帧与 DPB/参考帧管理~~
    **已完成**（`h264_inter/mvpred/mc/dpb`；B/SP/SI slice 与 CABAC 多行收敛仍开放）
 4. HEVC slice segment header + CABAC + 帧内预测/变换，先 I 帧
-5. AAC 原始帧解析：~~ICS/TNS 与 MDCT~~ 已完成，余下**频谱 Huffman 码书 1..11 +
-   scalefactor 解码 + 反量化**（真实码流出 PCM 的最后一环）、CPE/PCE、
-   EIGHT_SHORT/LONG_START/LONG_STOP 加窗与 KBD 窗
+5. AAC 原始帧解析：ICS/TNS/MDCT/**频谱 Huffman**/scalefactor/PNS/gain-control
+   语法与**全四窗口序列 + KBD 窗**已完成（`aac_spectrum.mbt`/`aac_tables.mbt`，
+   真实 libfdk_aac 码流逐帧解码）；余下**与 FFmpeg 参考解码的逐样本差分收敛**
+   与 CPE/独立 PCE、SBR/PS
 6. `jrevdct.c`（`FF_IDCT_INT`）、`faanidct.c`、`xvididct.c` 与 `idct248/84/48/44` 部分变换；
    `lzo.c` 与其余编解码器（无损优先）
 

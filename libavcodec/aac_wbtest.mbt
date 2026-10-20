@@ -39,32 +39,29 @@ test "aac: MDCT concentrates a matched cosine in one coefficient pair" {
   let n = 64
   let n_half = n / 2
   let m = 5
-  let mirror = n_half - 1 - m
   let phase = (n_half + 1).to_double() / 2.0
-  let base = 3.14159265358979323846 / n_half.to_double()
+  let base = 3.14159265358979323846 / (2.0 * n_half.to_double())
   let seg : Array[Double] = Array::make(n, 0.0)
   for t = 0; t < n; t = t + 1 {
     seg[t] = @math.cos((t.to_double() + phase) * base * (2 * m + 1).to_double())
   }
   let x = aac_mdct_forward(seg, n)
+  // The spec kernel concentrates the matched cosine in coefficient m
+  // alone (its time-alias mirror folds into the same bin).
   for j = 0; j < n_half; j = j + 1 {
-    if j != m && j != mirror {
+    if j != m {
       let a = if x[j] < 0.0 { -x[j] } else { x[j] }
-      let b = if x[m] < 0.0 { -x[m] } else { x[m] }
-      assert_true(a < 1.0e-9 || a < b)
+      assert_true(a < 1.0e-9)
     }
   }
-  let dm = if x[m] < 0.0 { -x[m] } else { x[m] }
-  let dir = if x[mirror] < 0.0 { -x[mirror] } else { x[mirror] }
-  let dd = if dm - dir < 0.0 { dir - dm } else { dm - dir }
-  assert_true(dd < 1.0e-9)
   let delta : Array[Double] = Array::make(n_half, 0.0)
   delta[m] = 1.0
   let y = aac_imdct(delta, n)
+  // The synthesis carries the 2/N normalisation.
   for t = 0; t < n; t = t + 1 {
-    let want = @math.cos(
-      (t.to_double() + phase) * base * (2 * m + 1).to_double(),
-    )
+    let want = 2.0 /
+      n_half.to_double() *
+      @math.cos((t.to_double() + phase) * base * (2 * m + 1).to_double())
     let d = if y[t] - want < 0.0 { want - y[t] } else { y[t] - want }
     assert_true(d < 1.0e-12)
   }
@@ -90,9 +87,12 @@ test "aac: TDAC of three long blocks reconstructs the stream" {
   coeffs[2] = 0.5
   let y = aac_imdct(coeffs, n)
   let phase = (n_half + 1).to_double() / 2.0
-  let base = 3.14159265358979323846 / n_half.to_double()
+  let base = 3.14159265358979323846 / (2.0 * n_half.to_double())
   for t = 0; t < n; t = t + 1 {
-    let want = 0.5 * @math.cos((t.to_double() + phase) * base * 5.0)
+    let want = 0.5 *
+      2.0 /
+      n_half.to_double() *
+      @math.cos((t.to_double() + phase) * base * 5.0)
     let d = if y[t] - want < 0.0 { want - y[t] } else { y[t] - want }
     assert_true(d < 1.0e-12)
   }
@@ -103,6 +103,7 @@ test "aac: TDAC of three long blocks reconstructs the stream" {
 fn build_sce_frame(tns : Bool) -> Bytes {
   let bw = BitWriter::new()
   bw.put(0, 3) // id_syn_ele = SCE
+  bw.put(0, 4) // element_instance_tag
   bw.put(0x54, 8) // global_gain
   // ics_info
   bw.put_bit(0) // ics_reserved
@@ -112,7 +113,7 @@ fn build_sce_frame(tns : Bool) -> Bytes {
   bw.put_bit(0) // predictor_data_present
   // section_data: one section, codebook 0, length 4
   bw.put(0, 4) // sect_cb = 0
-  bw.put(4, 4) // sect_len_incr = 4 (max_sfb reached)
+  bw.put(4, 5) // sect_len_incr = 4 (5-bit long-window field)
   // scale_factor_data: none for codebook 0
   bw.put_bit(0) // pulse_data_present
   bw.put_bit(if tns { 1 } else { 0 }) // tns_data_present
@@ -136,6 +137,7 @@ fn build_sce_frame(tns : Bool) -> Bytes {
 test "aac: SCE frame parses (ICS info, sections, no TNS)" {
   let gb = BitReader::new(build_sce_frame(false))
   assert_eq(gb.read(3).reinterpret_as_int(), 0)
+  gb.skip(4) // element_instance_tag
   let ics = aac_decode_ics(gb).unwrap()
   assert_eq(ics.global_gain, 0x54)
   assert_eq(ics.info.max_sfb, 4)
@@ -155,6 +157,7 @@ test "aac: SCE frame parses (ICS info, sections, no TNS)" {
 test "aac: SCE frame with TNS parses field by field" {
   let gb = BitReader::new(build_sce_frame(true))
   ignore(gb.read(3))
+  gb.skip(4) // element_instance_tag
   let ics = aac_decode_ics(gb).unwrap()
   assert_eq(ics.tns_present, 1)
   assert_eq(ics.tns.n_filt[0], 1)
@@ -201,25 +204,46 @@ test "aac: decoder produces a silent frame for codebook-0 sections" {
 }
 
 ///|
-test "aac: TNS lattice filter order 1 is a first-order smoother" {
-  // direction 0, order 1, coef = -0.43388373: top-down application over
-  // [0, 4), with the running state of already-filtered inputs.
-  let coef : Array[Double] = [1.0, 2.0, 3.0, 4.0]
-  let filter : AacTnsFilter = {
-    length: 4,
-    order: 1,
-    direction: 0,
-    coef: [-0.43388373],
+/// Minimal long-window `AacIcsInfo` for unit tests. */
+fn aac_test_ics_info(max_sfb : Int32) -> AacIcsInfo {
+  {
+    max_sfb,
+    window_sequence: aac_only_long,
+    window_shape: 0,
+    scale_factor_grouping: 0,
+    predictor_data_present: 0,
+    num_windows: 1,
+    num_window_groups: 1,
+    window_group_length: [1],
   }
-  aac_apply_tns_filter(coef, 0, 4, filter)
-  assert_true(coef[3] == 4.0)
-  assert_true(coef[2] == 3.0)
-  let want1 = 2.0 - 0.43388373 * 3.0
-  let d1 = if coef[1] - want1 < 0.0 { want1 - coef[1] } else { coef[1] - want1 }
-  assert_true(d1 < 1.0e-12)
-  let want0 = 1.0 - 0.43388373 * 2.0
-  let d0 = if coef[0] - want0 < 0.0 { want0 - coef[0] } else { coef[0] - want0 }
-  assert_true(d0 < 1.0e-12)
+}
+
+///|
+test "aac: TNS AR filter (order 1) is a first-order smoother" {
+  // Faithful `apply_tns`: quantized coef -0.43388373 expands (Levinson) to
+  // lpc[0] = +0.43388373; direction 0 walks the band bottom-up subtracting
+  // lpc[0] * coef[m-1], so each sample is smoothed against its updated
+  // lower neighbour. 44.1 kHz long table: band 4 is [16, 20); one filter of
+  // length 45 over the 49 bands reaches bottom = 4.
+  let info = aac_test_ics_info(5)
+  let swb = aac_swb_tables(4).unwrap()
+  let coef : Array[Double] = Array::make(1024, 0.0)
+  coef[16] = 1.0
+  coef[17] = 2.0
+  coef[18] = 3.0
+  coef[19] = 4.0
+  let tns : AacTns = {
+    n_filt: [1],
+    filters: [[{ length: 45, order: 1, direction: 0, coef: [-0.43388373], }]],
+  }
+  aac_apply_tns(coef, tns, info, swb)
+  assert_true(coef[16] == 1.0)
+  let want1 = 2.0 - 0.43388373 * 1.0
+  assert_true((coef[17] - want1).abs() < 1.0e-12)
+  let want2 = 3.0 - 0.43388373 * want1
+  assert_true((coef[18] - want2).abs() < 1.0e-12)
+  let want3 = 4.0 - 0.43388373 * want2
+  assert_true((coef[19] - want3).abs() < 1.0e-12)
 }
 
 ///|
@@ -236,7 +260,7 @@ test "aac: predictor data is rejected" {
 }
 
 ///|
-test "aac: spectral codebooks are rejected explicitly" {
+test "aac: reserved band type 12 is rejected" {
   let bw = BitWriter::new()
   bw.put(0x54, 8)
   bw.put_bit(0)
@@ -244,10 +268,9 @@ test "aac: spectral codebooks are rejected explicitly" {
   bw.put_bit(0)
   bw.put(2, 6) // max_sfb = 2
   bw.put_bit(0)
-  bw.put(1, 4) // sect_cb = 1
-  bw.put(1, 4)
-  bw.put(1, 4) // sect_cb = 0 for the second band
-  bw.put(1, 4)
+  bw.put(12, 4) // sect_cb = 12 (RESERVED_BT)
+  bw.put(1, 5)
+  bw.put(1, 5)
   let r = aac_decode_ics(BitReader::new(bw.finish()))
-  assert_eq(r.unwrap_err(), "spectral codebooks 1..11 are not supported yet")
+  assert_eq(r.unwrap_err(), "invalid band type")
 }

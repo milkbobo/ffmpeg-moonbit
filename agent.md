@@ -54,10 +54,14 @@
   POC type 0/2 跟踪、默认 L0 序；`H264Decoder` 的 Annex B/avcC 入口跨样本保状态）。
   向量：真实 I+P+P 流 + 合成 CABAC P 帧（`h264_psynth_wbtest.mbt`：全 I_PCM 非平坦
   参考 + P_L0_16x16 整数 MV，编码器逐 bin 镜像解码端上下文）。
-- **libavcodec（AAC ICS/TNS + IMDCT，2026-10 新增）**：`aac_ics.mbt`（`ics_info`/
-  section 数据/TNS/pulse；频谱码书 1..11 显式拒绝）+ `aac_mdct.mbt`（直接法
-  MDCT/IMDCT、正弦窗 ONLY_LONG 的 TDAC 叠接、raw_data_block/SCE 框架）。真实 PCM
-  输出还差频谱 Huffman + scalefactor + 反量化。
+- **libavcodec（AAC 频谱解码，2026-10 新增）**：`aac_tables.mbt`（aactab.c 全部
+  解码表 + pow2sf/cbrt 运行时表的 float32 复刻，`scripts/extract_aac_tables.py`
+  批量提取并与 C 源逐值 diff）+ `aac_spectrum.mbt`（scalefactor 差分/noise 前导、
+  码书 1..11 Huffman + VMUL 打包索引解包、book 11 escape、PNS、TNS Levinson+AR、
+  gain-control 语法）+ `aac_mdct.mbt`（四窗口序列 + KBD/正弦窗、综合 2/N、
+  `vector_fmul_window` 2×len、FIL/PCE 跳过）。真实 libfdk_aac 码流逐帧解码出 PCM；
+  **与 FFmpeg 参考的逐样本差分未收敛**（books 7..10 符号位语义，见 README §3）。
+- **libavutil（bessel）**：`av_bessel_i0`（Blair/Edwards 极小有理逼近，KBD 窗用）。
 - **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
   - H.264 Baseline **I 帧重建 + 环路去块滤波**：`h264_slice.mbt`（I/SI slice header）+
     `h264_cavlc.mbt`（CAVLC + dequant/chroma-QP 表）+ `h264_idct.mbt`（4x4 IDCT +
@@ -406,6 +410,19 @@ $msg | git commit -F -
 - **CAVLC PCM（及一切非 CABAC 结尾）码流要补 rbsp trailing bits**：`get_bit_length`
   把最后一个置位比特当 `rbsp_stop_one_bit` 剥掉，PCM 数据以 `...10101` 之类结尾时
   末样本少 1 位、被 `bits_left` 检查拒绝。合成器在 PCM 数据后显式写 `1` + 零填充即可。
+- **AAC 频谱层的四个坑**（真实码流调试沉淀）：① `cbt_m1` 在 C 里是 **unsigned**
+  （`ZERO_BT-1` 回绕进 intensity 分支做零填充），移植成 signed 必须显式 `cbt_m1<0`
+  走零填充；② VLC 解码行号不是码书索引——符号要过 `codebook_vector_*_idx`
+  打包表（且 11 本的映射是 6,8,8,10,10，抄错一位第 7/8 本全错、症状是特定帧
+  逐带位号从中间开始漂移）；③ FFmpeg 的 `vector_fmul_window` 一次写 **2×len**
+  （含符号翻转与倒序索引），`imdct_half` 的输出等价于全 IMDCT 的**中间一半**；
+  综合侧归一是 **2/N**（分析不归一），错成 1/N 输出减半、不归一输出翻倍；
+  ④ FIL 元素的 count 是**字节数**且 count=0 合法（无载荷），FDK 会在帧尾连写
+  两个 FIL；`decode_gain_control` 在 FFmpeg 里解析后**丢弃**（FIXME 注释），
+  移植同样只消费语法。
+- **差分向量生成走 stdin/stdout 管道**：Git Bash 会把 `-v "$(pwd):/w"` 的卷挂载
+  改写成无效路径，docker 报 `destination can't be '/'`；用
+  `docker run --rm -i ... pipe:1 > out` 绕开。
 
 ---
 
@@ -514,8 +531,10 @@ moonbit/                      # git 仓库根
     ├── h264_mvpred.mbt       # MV 预测（A/B/C、mid_pred、P_SKIP）
     ├── h264_inter.mbt        # P 宏块层（skip/type/ref/mvd + inter 残差）
     ├── h264_dpb.mbt          # 滑窗 DPB + H264Decoder（Annex B/avcC 入口）
-    ├── aac_ics.mbt           # AAC ICS 语法（ics_info/section/TNS）
-    ├── aac_mdct.mbt          # AAC IMDCT/加窗 + raw_data_block/SCE 框架
+    ├── aac_ics.mbt           # AAC ICS 语法（ics_info/section/TNS/gain-control）
+    ├── aac_mdct.mbt          # AAC IMDCT/加窗（四窗口序列 + KBD/正弦窗）
+    ├── aac_spectrum.mbt      # AAC 频谱解码（码书 1..11/scalefactor/PNS/TNS）
+    ├── aac_tables.mbt        # AAC 解码表（脚本批量提取）
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS + hvcC
     ├── audio_headers.mbt     # ADTS + MPEG 音频帧头
     ├── mp3_tables.mbt        # Layer III 码表/Huffman 表

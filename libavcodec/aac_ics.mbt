@@ -166,25 +166,27 @@ pub fn aac_decode_ics_info(gb : BitReader) -> Result[AacIcsInfo, String] {
 ///|
 /// `decode_band_types` / section data (spec 4.6.2.3.1): per window group a
 /// run-length coded list of (sect_cb, length) pairs covering `max_sfb`
-/// bands. Codebooks 1..11 (spectral data) and 12..15 (intensity) are
-/// rejected until the spectral Huffman layer is ported.
+/// bands. `sect_cb` 12 is reserved (`RESERVED_BT`) and rejected like the C.
 fn aac_decode_section_data(
   gb : BitReader,
   info : AacIcsInfo,
 ) -> Result[Array[Array[Int32]], String] {
   let sect_cb : Array[Array[Int32]] = []
+  // The section-length escape width depends on the window sequence.
+  let bits = if info.window_sequence == aac_eight_short { 3 } else { 5 }
+  let escape = (1 << bits) - 1
   for g = 0; g < info.num_window_groups; g = g + 1 {
     let cbs : Array[Int32] = Array::make(info.max_sfb, -1)
     let mut end = 0
     while end < info.max_sfb {
       let cb = gb.read(4).reinterpret_as_int()
-      if cb == 12 || cb == 13 {
-        return Err("escaped section codebook")
+      if cb == 12 {
+        return Err("invalid band type")
       }
       let mut sect_len = 0
-      let mut incr = 15
-      while incr == 15 {
-        incr = gb.read(4).reinterpret_as_int()
+      let mut incr = escape
+      while incr == escape {
+        incr = gb.read(bits).reinterpret_as_int()
         sect_len = sect_len + incr
       }
       end = end + sect_len
@@ -201,24 +203,8 @@ fn aac_decode_section_data(
 }
 
 ///|
-/// `decode_scalefactors` (spec 4.6.2.3.2). Only codebook-0 (silent) bands
-/// are supported, which transmit no scalefactor data at all; anything else
-/// needs the spectral layer.
-fn aac_decode_scale_factors(
-  gb : BitReader,
-  info : AacIcsInfo,
-  sect_cb : Array[Array[Int32]],
-) -> Result[Array[Array[Int32]], String] {
-  for g = 0; g < info.num_window_groups; g = g + 1 {
-    for sfb = 0; sfb < info.max_sfb; sfb = sfb + 1 {
-      if sect_cb[g][sfb] != 0 {
-        return Err("spectral codebooks 1..11 are not supported yet")
-      }
-    }
-  }
-  ignore(gb)
-  Ok(Array::make(info.num_window_groups, Array::make(info.max_sfb, 0)))
-}
+/// Scalefactors are decoded by `aac_decode_scalefactors`
+/// (`aac_spectrum.mbt`); this keeps `decode_ics` self-contained.
 
 ///|
 /// `ff_aac_decode_tns` (spec 4.6.2.5): filters per window, coefficients
@@ -307,7 +293,8 @@ pub fn aac_decode_ics(gb : BitReader) -> Result[AacIcs, String] {
     Ok(v) => v
     Err(e) => return Err(e)
   }
-  let scale_factors = match aac_decode_scale_factors(gb, info, sect_cb) {
+  let scale_factors = match
+    aac_decode_scalefactors(gb, info, sect_cb, global_gain) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -326,7 +313,25 @@ pub fn aac_decode_ics(gb : BitReader) -> Result[AacIcs, String] {
   }
   let gain_control_present = gb.read1().reinterpret_as_int()
   if gain_control_present != 0 {
-    return Err("gain control is not supported")
+    // `decode_gain_control` parses and discards the tool (the C carries
+    // the same FIXME); only the syntax must be consumed.
+    let gain_mode_wd = [[1, 0, 5], [2, 1, 2], [8, 0, 2], [2, 1, 5]]
+    let mode = info.window_sequence
+    let max_band = gb.read(2).reinterpret_as_int()
+    for _bd = 0; _bd < max_band; _bd = _bd + 1 {
+      for wd = 0; wd < gain_mode_wd[mode][0]; wd = wd + 1 {
+        let adjust_num = gb.read(3).reinterpret_as_int()
+        for _ad = 0; _ad < adjust_num; _ad = _ad + 1 {
+          let bits = 4 +
+            (if wd == 0 && gain_mode_wd[mode][1] != 0 {
+              4
+            } else {
+              gain_mode_wd[mode][2]
+            })
+          gb.skip(bits)
+        }
+      }
+    }
   }
   Ok({
     info,
@@ -338,57 +343,4 @@ pub fn aac_decode_ics(gb : BitReader) -> Result[AacIcs, String] {
     tns,
     gain_control_present,
   })
-}
-
-///|
-/// The TNS lattice filter application on spectral coefficients
-/// (`apply_tns_filt`, spec 4.6.6): an order-`order` all-zero filter over
-/// `coef[start:stop]`, applied top-down or bottom-up depending on
-/// `direction`. The coefficients are updated in place.
-pub fn aac_apply_tns_filter(
-  coef : Array[Double],
-  start : Int32,
-  stop : Int32,
-  filter : AacTnsFilter,
-) -> Unit {
-  if filter.order == 0 || stop - start <= 1 {
-    return
-  }
-  let m = filter.order
-  let lpc : Array[Double] = Array::make(m, 0.0)
-  for i = 0; i < m; i = i + 1 {
-    lpc[i] = if filter.direction != 0 {
-      -filter.coef[i]
-    } else {
-      filter.coef[i]
-    }
-  }
-  let state : Array[Double] = Array::make(m, 0.0)
-  if filter.direction == 0 {
-    // top-down: j from stop-2 down to start
-    for j = stop - 2; j >= start; j = j - 1 {
-      let mut acc = coef[j]
-      for b = 0; b < m; b = b + 1 {
-        acc = acc + lpc[b] * state[b]
-      }
-      for b = m - 1; b > 0; b = b - 1 {
-        state[b] = state[b - 1]
-      }
-      state[0] = coef[j]
-      coef[j] = acc
-    }
-  } else {
-    // bottom-up: j from start+1 up to stop-1
-    for j = start + 1; j < stop; j = j + 1 {
-      let mut acc = coef[j]
-      for b = 0; b < m; b = b + 1 {
-        acc = acc + lpc[b] * state[b]
-      }
-      for b = m - 1; b > 0; b = b - 1 {
-        state[b] = state[b - 1]
-      }
-      state[0] = coef[j]
-      coef[j] = acc
-    }
-  }
 }
