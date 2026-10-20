@@ -273,10 +273,7 @@ test "h264: SEI negative vectors" {
   )
   // declared size larger than the remaining payload
   assert_eq(
-    sei.h264_sei_decode(
-      b"\x05\x28\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA",
-      ps,
-    ),
+    sei.h264_sei_decode(b"\x05\x28\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA", ps),
     Err("EINVAL"),
   )
   // recovery_frame_cnt >= 1 << MAX_LOG2_MAX_FRAME_NUM (ue(65536))
@@ -285,10 +282,7 @@ test "h264: SEI negative vectors" {
     Err("EINVAL"),
   )
   // film grain with num_model_values_minus1 = 6 (7 values > 6)
-  assert_eq(
-    sei.h264_sei_decode(b"\x13\x04\x00\x10\x06\x80", ps),
-    Err("EINVAL"),
-  )
+  assert_eq(sei.h264_sei_decode(b"\x13\x04\x00\x10\x06\x80", ps), Err("EINVAL"))
   // unknown SEI types are skipped without error; two zero bytes end the NAL
   assert_eq(sei.h264_sei_decode(b"\x0A\x01\x55\x00\x00", ps), Ok(0))
   // SPS id beyond 31 in buffering period is EINVAL even with SPS present

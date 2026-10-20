@@ -30,28 +30,40 @@
 ///|
 /// `sei.h` SEI type constants used by the dispatch below. */
 pub let sei_type_buffering_period : Int32 = 0
+
 ///|
 pub let sei_type_pic_timing : Int32 = 1
+
 ///|
 pub let sei_type_user_data_registered_itu_t_t35 : Int32 = 4
+
 ///|
 pub let sei_type_user_data_unregistered : Int32 = 5
+
 ///|
 pub let sei_type_recovery_point : Int32 = 6
+
 ///|
 pub let sei_type_film_grain_characteristics : Int32 = 19
+
 ///|
 pub let sei_type_frame_packing_arrangement : Int32 = 45
+
 ///|
 pub let sei_type_display_orientation : Int32 = 47
+
 ///|
 pub let sei_type_green_metadata : Int32 = 56
+
 ///|
 pub let sei_type_mastering_display_colour_volume : Int32 = 137
+
 ///|
 pub let sei_type_content_light_level_info : Int32 = 144
+
 ///|
 pub let sei_type_alternative_transfer_characteristics : Int32 = 147
+
 ///|
 pub let sei_type_ambient_viewing_environment : Int32 = 148
 
@@ -72,14 +84,16 @@ pub struct SeiTimeCode {
 
 ///|
 fn new_sei_time_code() -> SeiTimeCode {
-  { full: 0, frame: 0, seconds: 0, minutes: 0, hours: 0, dropframe: 0 }
+  { full: 0, frame: 0, seconds: 0, minutes: 0, hours: 0, dropframe: 0, }
 }
 
 ///|
 /// `H264_SEI_PicStructType` from `h264_sei.h`. */
 pub let h264_sei_pic_struct_frame : Int32 = 0
+
 ///|
 pub let h264_sei_pic_struct_frame_doubling : Int32 = 7
+
 ///|
 pub let h264_sei_pic_struct_frame_tripling : Int32 = 8
 
@@ -281,7 +295,7 @@ pub struct H264SeiContext {
 /// (recovery_frame_cnt = -1, cpb_removal_delay = -1). */
 pub fn new_h264_sei_context() -> H264SeiContext {
   let ctx = {
-    unregistered: { buf_ref: [], nb_buf_ref: 0, x264_build: 0 },
+    unregistered: { buf_ref: [], nb_buf_ref: 0, x264_build: 0, },
     frame_packing: {
       present: 0,
       arrangement_id: 0,
@@ -292,8 +306,13 @@ pub fn new_h264_sei_context() -> H264SeiContext {
       quincunx_sampling_flag: 0,
       current_frame_is_frame0_flag: 0,
     },
-    display_orientation: { present: 0, anticlockwise_rotation: 0, hflip: 0, vflip: 0 },
-    alternative_transfer: { present: 0, preferred_transfer_characteristics: 0 },
+    display_orientation: {
+      present: 0,
+      anticlockwise_rotation: 0,
+      hflip: 0,
+      vflip: 0,
+    },
+    alternative_transfer: { present: 0, preferred_transfer_characteristics: 0, },
     ambient_viewing_environment: {
       present: 0,
       ambient_illuminance: 0U,
@@ -302,16 +321,16 @@ pub fn new_h264_sei_context() -> H264SeiContext {
     },
     mastering_display: {
       present: 0,
-      display_primaries: [
-        [0, 0],
-        [0, 0],
-        [0, 0],
-      ],
+      display_primaries: [[0, 0], [0, 0], [0, 0]],
       white_point: [0, 0],
       max_luminance: 0U,
       min_luminance: 0U,
     },
-    content_light: { present: 0, max_content_light_level: 0, max_pic_average_light_level: 0 },
+    content_light: {
+      present: 0,
+      max_content_light_level: 0,
+      max_pic_average_light_level: 0,
+    },
     film_grain_characteristics: None,
     picture_timing: {
       payload: None,
@@ -321,15 +340,14 @@ pub fn new_h264_sei_context() -> H264SeiContext {
       ct_type: 0,
       dpb_output_delay: 0,
       cpb_removal_delay: 0,
-      timecode: [
-        new_sei_time_code(),
-        new_sei_time_code(),
-        new_sei_time_code(),
-      ],
+      timecode: [new_sei_time_code(), new_sei_time_code(), new_sei_time_code()],
       timecode_cnt: 0,
     },
-    recovery_point: { recovery_frame_cnt: 0 },
-    buffering_period: { present: 0, initial_cpb_removal_delay: Array::make(32, 0) },
+    recovery_point: { recovery_frame_cnt: 0, },
+    buffering_period: {
+      present: 0,
+      initial_cpb_removal_delay: Array::make(32, 0),
+    },
     green_metadata: {
       green_metadata_type: 0,
       period_type: 0,
@@ -371,25 +389,29 @@ pub fn H264SeiContext::sei_uninit(self : H264SeiContext) -> Unit {
 /// (everything here is byte-aligned until a bit-level message starts). */
 priv struct SeiByteCursor {
   data : Bytes
-  mut pos : Int
+  mut pos : Int32
 }
 
+///|
 fn sei_cur_new(data : Bytes) -> SeiByteCursor {
-  { data, pos: 0 }
+  { data, pos: 0, }
 }
 
-fn SeiByteCursor::left(self : SeiByteCursor) -> Int {
+///|
+fn SeiByteCursor::left(self : SeiByteCursor) -> Int32 {
   self.data.length() - self.pos
 }
 
-fn SeiByteCursor::peek(self : SeiByteCursor) -> Int {
+///|
+fn SeiByteCursor::peek(self : SeiByteCursor) -> Int32 {
   if self.pos >= self.data.length() {
     return 0
   }
   self.data[self.pos].to_int()
 }
 
-fn SeiByteCursor::get(self : SeiByteCursor) -> Int {
+///|
+fn SeiByteCursor::get(self : SeiByteCursor) -> Int32 {
   if self.pos >= self.data.length() {
     return 0
   }
@@ -400,7 +422,7 @@ fn SeiByteCursor::get(self : SeiByteCursor) -> Int {
 
 ///|
 /// Little-endian 16-bit peek, `bytestream2_peek_ne16`. */
-fn SeiByteCursor::peek_le16(self : SeiByteCursor) -> Int {
+fn SeiByteCursor::peek_le16(self : SeiByteCursor) -> Int32 {
   if self.pos + 1 >= self.data.length() {
     return 0
   }
@@ -409,7 +431,7 @@ fn SeiByteCursor::peek_le16(self : SeiByteCursor) -> Int {
 
 ///|
 /// Big-endian `bytestream2_get_be16u`. */
-fn SeiByteCursor::get_be16(self : SeiByteCursor) -> Int {
+fn SeiByteCursor::get_be16(self : SeiByteCursor) -> Int32 {
   if self.pos + 1 >= self.data.length() {
     self.pos = self.data.length()
     return 0
@@ -431,7 +453,7 @@ fn SeiByteCursor::get_be32(self : SeiByteCursor) -> UInt32 {
 
 ///|
 /// Payload byte slice, `bytestream2_get_bufferu`. */
-fn SeiByteCursor::get_buffer(self : SeiByteCursor, size : Int) -> Bytes {
+fn SeiByteCursor::get_buffer(self : SeiByteCursor, size : Int32) -> Bytes {
   let b = self.data.clamped_view(start=self.pos, end=self.pos + size).to_owned()
   self.pos = self.pos + size
   b
@@ -472,7 +494,9 @@ pub fn H264SeiContext::sei_process_picture_timing(
     h.cpb_removal_delay = gb
       .read(sps.cpb_removal_delay_length)
       .reinterpret_as_int()
-    h.dpb_output_delay = gb.read(sps.dpb_output_delay_length).reinterpret_as_int()
+    h.dpb_output_delay = gb
+      .read(sps.dpb_output_delay_length)
+      .reinterpret_as_int()
   }
   if sps.pic_struct_present_flag != 0 {
     h.pic_struct = gb.read(4).reinterpret_as_int()
@@ -529,9 +553,12 @@ pub fn H264SeiContext::sei_process_picture_timing(
 
 ///|
 /// `decode_recovery_point`. */
-fn decode_recovery_point(h : SeiRecoveryPoint, gb : BitReader) -> Result[Int32, String] {
+fn decode_recovery_point(
+  h : SeiRecoveryPoint,
+  gb : BitReader,
+) -> Result[Int32, String] {
   let recovery_frame_cnt = gb.read_ue_long()
-  if recovery_frame_cnt >= (1UL << max_log2_max_frame_num) {
+  if recovery_frame_cnt >= 1UL << max_log2_max_frame_num {
     return Err("EINVAL")
   }
   h.recovery_frame_cnt = recovery_frame_cnt.to_int()
@@ -561,7 +588,9 @@ fn decode_buffering_period(
   }
   // NOTE: this is really so duplicated in the standard... See H.264, D.1.1
   if sps.nal_hrd_parameters_present_flag != 0 {
-    for sched_sel_idx = 0; sched_sel_idx < sps.cpb_cnt; sched_sel_idx = sched_sel_idx + 1 {
+    for sched_sel_idx = 0
+        sched_sel_idx < sps.cpb_cnt
+        sched_sel_idx = sched_sel_idx + 1 {
       h.initial_cpb_removal_delay[sched_sel_idx] = gb
         .read(sps.initial_cpb_removal_delay_length)
         .reinterpret_as_int()
@@ -570,7 +599,9 @@ fn decode_buffering_period(
     }
   }
   if sps.vcl_hrd_parameters_present_flag != 0 {
-    for sched_sel_idx = 0; sched_sel_idx < sps.cpb_cnt; sched_sel_idx = sched_sel_idx + 1 {
+    for sched_sel_idx = 0
+        sched_sel_idx < sps.cpb_cnt
+        sched_sel_idx = sched_sel_idx + 1 {
       h.initial_cpb_removal_delay[sched_sel_idx] = gb
         .read(sps.initial_cpb_removal_delay_length)
         .reinterpret_as_int()
@@ -584,7 +615,10 @@ fn decode_buffering_period(
 
 ///|
 /// `decode_green_metadata`. */
-fn decode_green_metadata(h : SeiGreenMetaData, cur : SeiByteCursor) -> Result[Int32, String] {
+fn decode_green_metadata(
+  h : SeiGreenMetaData,
+  cur : SeiByteCursor,
+) -> Result[Int32, String] {
   h.green_metadata_type = cur.get()
   if h.green_metadata_type == 0 {
     h.period_type = cur.get()
@@ -639,17 +673,27 @@ fn decode_unregistered_user_data(
     if prefix_ok {
       // sscanf("%d") skips leading whitespace, then an optional sign
       let mut i = 28
-      while i < size && (user_data[i].to_int() == ' '.to_int() || user_data[i].to_int() == '\t'.to_int()) {
+      while i < size &&
+            (
+              user_data[i].to_int() == ' '.to_int() ||
+              user_data[i].to_int() == '\t'.to_int()
+            ) {
         i = i + 1
       }
       let mut neg = false
-      if i < size && (user_data[i].to_int() == '+'.to_int() || user_data[i].to_int() == '-'.to_int()) {
+      if i < size &&
+        (
+          user_data[i].to_int() == '+'.to_int() ||
+          user_data[i].to_int() == '-'.to_int()
+        ) {
         neg = user_data[i].to_int() == '-'.to_int()
         i = i + 1
       }
       let start = i
       let mut v = 0
-      while i < size && user_data[i].to_int() >= '0'.to_int() && user_data[i].to_int() <= '9'.to_int() {
+      while i < size &&
+            user_data[i].to_int() >= '0'.to_int() &&
+            user_data[i].to_int() <= '9'.to_int() {
         v = v * 10 + (user_data[i].to_int() - '0'.to_int())
         i = i + 1
       }
@@ -661,7 +705,10 @@ fn decode_unregistered_user_data(
     if matched && build > 0 {
       h.x264_build = build
     }
-    if matched && build == 1 && size >= 32 && user_data[28].to_int() == '0'.to_int() &&
+    if matched &&
+      build == 1 &&
+      size >= 32 &&
+      user_data[28].to_int() == '0'.to_int() &&
       user_data[29].to_int() == '0'.to_int() &&
       user_data[30].to_int() == '0'.to_int() &&
       user_data[31].to_int() == '0'.to_int() {
@@ -673,7 +720,10 @@ fn decode_unregistered_user_data(
 
 ///|
 /// `decode_display_orientation`. */
-fn decode_display_orientation(h : SeiDisplayOrientation, gb : BitReader) -> Result[Int32, String] {
+fn decode_display_orientation(
+  h : SeiDisplayOrientation,
+  gb : BitReader,
+) -> Result[Int32, String] {
   // display_orientation_cancel_flag
   h.present = if gb.read1().reinterpret_as_int() == 0 { 1 } else { 0 }
   if h.present != 0 {
@@ -762,7 +812,7 @@ fn decode_ambient_viewing_environment(
 
 ///|
 /// int16_t truncation used when storing `comp_model_value`. */
-fn trunc_i16(v : Int) -> Int {
+fn trunc_i16(v : Int32) -> Int32 {
   let mut x = v & 0xFFFF
   if x >= 0x8000 {
     x = x - 0x10000
@@ -829,8 +879,12 @@ fn decode_film_grain_characteristics(
           return Err("EINVAL")
         }
         for i = 0; i < h.num_intensity_intervals[c]; i = i + 1 {
-          h.intensity_interval_lower_bound[c][i] = gb.read(8).reinterpret_as_int()
-          h.intensity_interval_upper_bound[c][i] = gb.read(8).reinterpret_as_int()
+          h.intensity_interval_lower_bound[c][i] = gb
+            .read(8)
+            .reinterpret_as_int()
+          h.intensity_interval_upper_bound[c][i] = gb
+            .read(8)
+            .reinterpret_as_int()
           for j = 0; j < h.num_model_values[c]; j = j + 1 {
             h.comp_model_value[c][i][j] = trunc_i16(gb.read_se_long())
           }
@@ -849,7 +903,10 @@ fn decode_film_grain_characteristics(
 
 ///|
 /// `decode_nal_sei_mastering_display_info`. */
-fn decode_mastering_display_info(h : SeiMasteringDisplay, cur : SeiByteCursor) -> Result[Int32, String] {
+fn decode_mastering_display_info(
+  h : SeiMasteringDisplay,
+  cur : SeiByteCursor,
+) -> Result[Int32, String] {
   if cur.left() < 24 {
     return Err("EINVAL")
   }
@@ -872,7 +929,10 @@ fn decode_mastering_display_info(h : SeiMasteringDisplay, cur : SeiByteCursor) -
 
 ///|
 /// `decode_nal_sei_content_light_info`. */
-fn decode_content_light_info(h : SeiContentLight, cur : SeiByteCursor) -> Result[Int32, String] {
+fn decode_content_light_info(
+  h : SeiContentLight,
+  cur : SeiByteCursor,
+) -> Result[Int32, String] {
   if cur.left() < 4 {
     return Err("EINVAL")
   }
@@ -966,13 +1026,19 @@ pub fn H264SeiContext::h264_sei_decode(
     let gbyte_payload = sei_cur_new(payload_bytes)
     let gb_payload = BitReader::new(payload_bytes)
     let ret : Result[Int32, String] = match type_ {
-      t if t == sei_type_pic_timing => decode_picture_timing(self.picture_timing, gbyte_payload)
-      t if t == sei_type_recovery_point => decode_recovery_point(self.recovery_point, gb_payload)
+      t if t == sei_type_pic_timing =>
+        decode_picture_timing(self.picture_timing, gbyte_payload)
+      t if t == sei_type_recovery_point =>
+        decode_recovery_point(self.recovery_point, gb_payload)
       t if t == sei_type_buffering_period =>
         decode_buffering_period(self.buffering_period, gb_payload, ps)
-      t if t == sei_type_green_metadata => decode_green_metadata(self.green_metadata, gbyte_payload)
+      t if t == sei_type_green_metadata =>
+        decode_green_metadata(self.green_metadata, gbyte_payload)
       _ =>
-        match h2645_sei_message_decode(self, type_, is_h264, gb_payload, gbyte_payload) {
+        match
+          h2645_sei_message_decode(
+            self, type_, is_h264, gb_payload, gbyte_payload,
+          ) {
           Ok(v) => Ok(v)
           Err("EUNHANDLED") => Ok(0)
           Err(e) => Err(e)
