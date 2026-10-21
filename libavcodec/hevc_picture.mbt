@@ -26,6 +26,18 @@ pub fn hevc_picture_new(width : Int32, height : Int32) -> HevcPicture {
 }
 
 ///|
+/// Deep copy: output frames must not alias DPB slots that later pictures reuse. */
+fn HevcPicture::clone(self : HevcPicture) -> HevcPicture {
+  {
+    width: self.width,
+    height: self.height,
+    y: self.y.copy(),
+    cb: self.cb.copy(),
+    cr: self.cr.copy(),
+  }
+}
+
+///|
 fn HevcPicture::plane(self : HevcPicture, c_idx : Int32) -> Array[Int32] {
   if c_idx == 0 {
     self.y

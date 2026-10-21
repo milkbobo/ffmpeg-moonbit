@@ -7,14 +7,70 @@
 ///
 /// Scope: first_slice flag, IRAP `no_output_of_prior_pics_flag`, PPS lookup,
 /// slice address (independently coded non-first slices), extra header bits,
-/// slice type, output flag, colour plane, POC LSB, short/long-term RPS
-/// selection, temporal-MVP flag, SAO flags, and for I slices the QP/chroma-QP/
-/// deblocking fields up to the slice header extension. `header_bits` gives the
-/// bit position where the CABAC payload starts.
+/// slice type, output flag, colour plane, POC LSB (plus full POC derivation
+/// against the caller's temporal-id-0 POC), short/long-term RPS, temporal-MVP
+/// flag, SAO flags, P/B reference counts, collocated picture selection, the
+/// prediction weight table, and the QP/chroma-QP/deblocking fields up to the
+/// slice header extension. `header_bits` gives the bit position where the
+/// CABAC payload starts.
 ///
-/// Out of scope: dependent slice segments (rejected), P/B reference-list
-/// construction and prediction-weight tables (rejected after SAO, since they
-/// need the DPB), CABAC, and the slice data itself.
+/// Out of scope: dependent slice segments (rejected), reference-list
+/// modification (rejected), CABAC, and the slice data itself.
+
+///|
+/// The weight/offset tables of `pred_weight_table` (C `SliceHeader`). */
+pub struct HevcPredWeight {
+  mut luma_log2_weight_denom : Int32
+  mut chroma_log2_weight_denom : Int32
+  luma_weight_l0 : Array[Int32]
+  luma_offset_l0 : Array[Int32]
+  luma_weight_l1 : Array[Int32]
+  luma_offset_l1 : Array[Int32]
+  chroma_weight_l0 : Array[Array[Int32]]
+  chroma_offset_l0 : Array[Array[Int32]]
+  chroma_weight_l1 : Array[Array[Int32]]
+  chroma_offset_l1 : Array[Array[Int32]]
+}
+
+///|
+fn new_hevc_pred_weight() -> HevcPredWeight {
+  {
+    luma_log2_weight_denom: 0,
+    chroma_log2_weight_denom: 0,
+    luma_weight_l0: Array::make(16, 1),
+    luma_offset_l0: Array::make(16, 0),
+    luma_weight_l1: Array::make(16, 1),
+    luma_offset_l1: Array::make(16, 0),
+    chroma_weight_l0: {
+      let arr : Array[Array[Int32]] = []
+      for _ in 0..<16 {
+        arr.push(Array::make(2, 1))
+      }
+      arr
+    },
+    chroma_offset_l0: {
+      let arr : Array[Array[Int32]] = []
+      for _ in 0..<16 {
+        arr.push(Array::make(2, 0))
+      }
+      arr
+    },
+    chroma_weight_l1: {
+      let arr : Array[Array[Int32]] = []
+      for _ in 0..<16 {
+        arr.push(Array::make(2, 1))
+      }
+      arr
+    },
+    chroma_offset_l1: {
+      let arr : Array[Array[Int32]] = []
+      for _ in 0..<16 {
+        arr.push(Array::make(2, 0))
+      }
+      arr
+    },
+  }
+}
 
 ///|
 pub struct HevcSliceHeader {
@@ -46,6 +102,16 @@ pub struct HevcSliceHeader {
   beta_offset : Int32
   tc_offset : Int32
   slice_loop_filter_across_slices_enabled_flag : Bool
+  /// Fully derived POC (IDR = 0).
+  poc : Int32
+  /// The resolved short-term RPS of this slice (SPS entry copied or parsed).
+  st_rps : HevcStRps
+  /// Long-term RPS with absolute POCs (`decode_lt_rps`).
+  lt_rps : HevcLongTermRps
+  /// 0 = L0, 1 = L1 (C `sh->collocated_list`).
+  collocated_list : Int32
+  /// Prediction weight table (all-default when the weighted flag is off).
+  pw : HevcPredWeight
   /// Bit offset just past the slice header (CABAC starts here).
   header_bits : Int32
 }
@@ -86,40 +152,82 @@ fn hevc_ceil_log2(v : Int32) -> Int32 {
 }
 
 ///|
-/// `pred_weight_table`: consume the luma/chroma weight flags and deltas. The
-/// values are not retained (the pixel decoder will need them later).
-fn hevc_skip_pred_weight_table(
+/// `pred_weight_table` (C `hevcdec.c`), storing luma/chroma weights and the
+/// remapped chroma offsets into `pw`. */
+fn hevc_parse_pred_weight_table(
   gb : BitReader,
+  pw : HevcPredWeight,
   chroma : Bool,
   nb_l0 : Int32,
   nb_l1 : Int32,
+  slice_is_b : Bool,
 ) -> Result[Unit, String] {
-  ignore(gb.read_ue_long()) // luma_log2_weight_denom
+  let luma_denom = gb.read_ue_long().to_int()
+  if luma_denom < 0 || luma_denom > 7 {
+    return Err("hevc: invalid luma_log2_weight_denom")
+  }
+  pw.luma_log2_weight_denom = luma_denom
   if chroma {
-    ignore(gb.read_ue_long()) // delta_chroma_log2_weight_denom
+    let chroma_denom = luma_denom + gb.read_se()
+    if chroma_denom < 0 || chroma_denom > 7 {
+      return Err("hevc: invalid chroma_log2_weight_denom")
+    }
+    pw.chroma_log2_weight_denom = chroma_denom
   }
-  let total = nb_l0 + nb_l1
-  let luma_flags : Array[Bool] = []
-  for _ in 0..<total {
-    luma_flags.push(gb.read1() != 0)
-  }
-  for i in 0..<total {
-    if luma_flags[i] {
-      ignore(gb.read_se()) // delta_luma_weight
-      ignore(gb.read_se()) // luma_offset
+  let hevc_clip_s17 = fn (v : Int32) -> Int32 {
+    if v < -(1 << 17) {
+      -(1 << 17)
+    } else if v > (1 << 17) {
+      1 << 17
+    } else {
+      v
     }
   }
-  if chroma {
-    let chroma_flags : Array[Bool] = []
-    for _ in 0..<total {
-      chroma_flags.push(gb.read1() != 0)
+  let lists : Array[(Array[Int32], Array[Int32], Array[Array[Int32]], Array[Array[Int32]], Int32)] = [
+    (pw.luma_weight_l0, pw.luma_offset_l0, pw.chroma_weight_l0, pw.chroma_offset_l0, nb_l0),
+  ]
+  if slice_is_b {
+    lists.push((pw.luma_weight_l1, pw.luma_offset_l1, pw.chroma_weight_l1, pw.chroma_offset_l1, nb_l1))
+  }
+  for entry in lists {
+    let (luma_weight, luma_offset, chroma_weight, chroma_offset, nb) = entry
+    let luma_flags = gb.read(nb).reinterpret_as_int()
+    let chroma_flags = if chroma {
+      gb.read(nb).reinterpret_as_int()
+    } else {
+      0
     }
-    for i in 0..<total {
-      if chroma_flags[i] {
-        ignore(gb.read_se()) // delta_chroma_weight_cb
-        ignore(gb.read_se()) // delta_chroma_offset_cb
-        ignore(gb.read_se()) // delta_chroma_weight_cr
-        ignore(gb.read_se()) // delta_chroma_offset_cr
+    for i in 0..<nb {
+      let flag_bit = 1 << (nb - 1 - i)
+      if (luma_flags & flag_bit) != 0 {
+        let delta = gb.read_se()
+        luma_weight[i] = (1 << pw.luma_log2_weight_denom) + delta
+        luma_offset[i] = gb.read_se()
+      } else {
+        luma_weight[i] = 1 << pw.luma_log2_weight_denom
+        luma_offset[i] = 0
+      }
+      if (chroma_flags & flag_bit) != 0 {
+        for j in 0..<2 {
+          let delta_w = gb.read_se()
+          let delta_o = hevc_clip_s17(gb.read_se())
+          chroma_weight[i][j] = (1 << pw.chroma_log2_weight_denom) + delta_w
+          let o = delta_o -
+            ((128 * chroma_weight[i][j]) >> pw.chroma_log2_weight_denom) +
+            128
+          chroma_offset[i][j] = if o < -128 {
+            -128
+          } else if o > 127 {
+            127
+          } else {
+            o
+          }
+        }
+      } else {
+        for j in 0..<2 {
+          chroma_weight[i][j] = 1 << pw.chroma_log2_weight_denom
+          chroma_offset[i][j] = 0
+        }
       }
     }
   }
@@ -127,11 +235,69 @@ fn hevc_skip_pred_weight_table(
 }
 
 ///|
-/// Parse a slice segment header. `gb` is positioned after the 16-bit NAL header.
+/// `decode_lt_rps` (hevcdec.c): long-term RPS with absolute POCs. Returns
+/// `(num_long_term_sps, num_long_term_pics)`. */
+fn hevc_decode_lt_rps(
+  gb : BitReader,
+  rps : HevcLongTermRps,
+  sps : HevcSps,
+  cur_poc : Int32,
+  poc_lsb : Int32,
+) -> Result[(Int32, Int32), String] {
+  rps.nb_refs = 0
+  if sps.long_term_ref_pics_present == 0 {
+    return Ok((0, 0))
+  }
+  let max_poc_lsb = 1 << sps.log2_max_poc_lsb
+  let mut prev_delta_msb = 0
+  let mut nb_sps = 0
+  if sps.num_long_term_ref_pics_sps > 0 {
+    nb_sps = gb.read_ue_long().to_int()
+    if nb_sps > sps.num_long_term_ref_pics_sps {
+      return Err("hevc: invalid long-term RPS")
+    }
+  }
+  let nb_sh = gb.read_ue_long().to_int()
+  if nb_sh < 0 || nb_sps + nb_sh > 16 {
+    return Err("hevc: invalid long-term RPS")
+  }
+  rps.nb_refs = nb_sh + nb_sps
+  for i in 0..<rps.nb_refs {
+    if i < nb_sps {
+      let mut lt_idx_sps = 0
+      if sps.num_long_term_ref_pics_sps > 1 {
+        let bits = hevc_ceil_log2(sps.num_long_term_ref_pics_sps)
+        lt_idx_sps = gb.read(bits).reinterpret_as_int()
+      }
+      rps.poc[i] = sps.lt_ref_pic_poc_lsb_sps[lt_idx_sps]
+      rps.used[i] = (sps.used_by_curr_pic_lt & (1U << lt_idx_sps)) != 0U
+    } else {
+      rps.poc[i] = gb.read(sps.log2_max_poc_lsb).reinterpret_as_int()
+      rps.used[i] = gb.read1() != 0
+    }
+    rps.poc_msb_present[i] = gb.read1() != 0
+    if rps.poc_msb_present[i] {
+      let mut delta = gb.read_ue_long().to_int()
+      if i != 0 && i != nb_sps {
+        delta += prev_delta_msb
+      }
+      let poc = rps.poc[i] + cur_poc - delta * max_poc_lsb - poc_lsb
+      rps.poc[i] = poc
+      prev_delta_msb = delta
+    }
+  }
+  Ok((nb_sps, nb_sh))
+}
+
+///|
+/// Parse a slice segment header. `gb` is positioned after the 16-bit NAL
+/// header; `poc_tid0` is the decoder's most recent temporal-id-0 POC
+/// (`s->poc_tid0`).
 pub fn ff_hevc_decode_slice_header(
   gb : BitReader,
   nal_type : Int32,
   ps : HevcParamSets,
+  poc_tid0 : Int32,
 ) -> Result[HevcSliceHeader, String] {
   let first_slice = gb.read1() != 0
   let no_output = if hevc_is_irap(nal_type) { gb.read1() != 0 } else { false }
@@ -189,8 +355,12 @@ pub fn ff_hevc_decode_slice_header(
   let mut num_lt_sps = 0
   let mut num_lt_pics = 0
   let mut temporal_mvp = false
+  let mut poc = 0
+  let st_rps = new_hevc_st_rps()
+  let lt_rps = new_hevc_long_term_rps()
   if !hevc_is_idr(nal_type) {
     poc_lsb = gb.read(sps.log2_max_poc_lsb).reinterpret_as_int()
+    poc = ff_hevc_compute_poc2(sps.log2_max_poc_lsb, poc_tid0, poc_lsb, nal_type)
     st_flag = gb.read1() != 0
     if st_flag {
       if sps.nb_st_rps == 0 {
@@ -200,12 +370,18 @@ pub fn ff_hevc_decode_slice_header(
       if bits > 0 {
         st_idx = gb.read(bits).reinterpret_as_int()
       }
+      let src = sps.st_rps[st_idx]
+      st_rps.delta_poc = src.delta_poc
+      st_rps.used = src.used
+      st_rps.num_negative_pics = src.num_negative_pics
+      st_rps.num_delta_pocs = src.num_delta_pocs
+      st_rps.rps_idx_num_delta_pocs = src.rps_idx_num_delta_pocs
+      st_rps.use_delta = src.use_delta
     } else {
-      let slice_rps = new_hevc_st_rps()
       match
         ff_hevc_decode_short_term_rps(
           gb,
-          slice_rps,
+          st_rps,
           sps.st_rps,
           sps.nb_st_rps,
           0,
@@ -215,22 +391,12 @@ pub fn ff_hevc_decode_slice_header(
         Err(e) => return Err(e)
       }
     }
-    if sps.long_term_ref_pics_present != 0 {
-      num_lt_sps = gb.read_ue_long().to_int()
-      num_lt_pics = gb.read_ue_long().to_int()
-      if num_lt_sps < 0 || num_lt_pics < 0 || num_lt_sps + num_lt_pics > 32 {
-        return Err("hevc: invalid long-term RPS")
+    match hevc_decode_lt_rps(gb, lt_rps, sps, poc, poc_lsb) {
+      Ok(v) => {
+        num_lt_sps = v.0
+        num_lt_pics = v.1
       }
-      let lt_bits = hevc_ceil_log2(sps.num_long_term_ref_pics_sps)
-      for i in 0..<(num_lt_sps + num_lt_pics) {
-        if i < num_lt_sps && lt_bits > 0 {
-          gb.skip(lt_bits)
-        }
-        ignore(gb.read1()) // used_by_curr_pic_lt_flag
-        if gb.read1() != 0 {
-          ignore(gb.read_ue_long()) // delta_poc_msb_cycle_lt
-        }
-      }
+      Err(e) => return Err(e)
     }
     if sps.temporal_mvp_enabled != 0 {
       temporal_mvp = gb.read1() != 0
@@ -249,7 +415,9 @@ pub fn ff_hevc_decode_slice_header(
   let mut mvd_l1_zero = false
   let mut cabac_init = false
   let mut collocated_ref_idx = 0
+  let mut collocated_list = 0
   let mut max_merge_cand = 0
+  let pw = new_hevc_pred_weight()
   if slice_type != hevc_slice_i {
     nb_l0 = pps.num_ref_idx_l0_default_active
     if slice_type == hevc_slice_b {
@@ -280,6 +448,7 @@ pub fn ff_hevc_decode_slice_header(
       } else {
         true
       }
+      collocated_list = if collocated_from_l0 { 0 } else { 1 }
       let collocated_nb = if collocated_from_l0 { nb_l0 } else { nb_l1 }
       if collocated_nb > 1 {
         collocated_ref_idx = gb.read_ue_long().to_int()
@@ -292,11 +461,13 @@ pub fn ff_hevc_decode_slice_header(
       (pps.weighted_bipred_flag != 0 && slice_type == hevc_slice_b)
     if weighted {
       match
-        hevc_skip_pred_weight_table(
+        hevc_parse_pred_weight_table(
           gb,
+          pw,
           sps.chroma_format_idc != 0,
           nb_l0,
           nb_l1,
+          slice_type == hevc_slice_b,
         ) {
         Ok(_) => ()
         Err(e) => return Err(e)
@@ -354,6 +525,11 @@ pub fn ff_hevc_decode_slice_header(
     }
     gb.skip(ext_bits.to_int() * 8)
   }
+  // `alignment_bit_equal_to_one` + byte alignment (C: `align_get_bits`).
+  if gb.read1() == 0 && gb.bits_left() >= 0 {
+    return Err("hevc: alignment_bit_equal_to_one=0")
+  }
+  gb.align()
   Ok({
     first_slice_segment_in_pic_flag: first_slice,
     no_output_of_prior_pics_flag: no_output,
@@ -383,6 +559,11 @@ pub fn ff_hevc_decode_slice_header(
     beta_offset,
     tc_offset,
     slice_loop_filter_across_slices_enabled_flag: loop_filter_across_slices,
+    poc,
+    st_rps,
+    lt_rps,
+    collocated_list,
+    pw,
     header_bits: gb.count(),
   })
 }
@@ -409,7 +590,7 @@ pub fn ff_hevc_parse_slice_headers(
     if nal.nal_type <= 31 {
       let gb = BitReader::with_size(nal.data, nal.size_bits)
       gb.skip(16)
-      match ff_hevc_decode_slice_header(gb, nal.nal_type, ps) {
+      match ff_hevc_decode_slice_header(gb, nal.nal_type, ps, 0) {
         Ok(h) => out.push(h)
         Err(e) => return Err(e)
       }

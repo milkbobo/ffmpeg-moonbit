@@ -463,6 +463,30 @@ $msg | git commit -F -
   重建放在反量化后、TNS 前，先撤销 4/3 幂再加 pulse 再反量化；重复位置必须顺序
   应用，NOISE_BT 与零缩放带跳过。短窗中的 pulse 必须拒绝。参考向量生成脚本为
   `scripts/generate_aac_transient_vectors.py`（包括 native/FDK 真实窗口切换和合成 pulse）。
+- **HEVC B 帧对拍先按 POC 排序**：`ff_hevc_decode_frames` 返回的是**解码序**
+  （I,P,B,P,B,P…），framemd5 是**显示序**；不排序直接逐帧比 MD5，B 帧会"全错"，
+  从而误判成"未滤波输出一致、滤波后才有差"的假结论（本轮实际是 B 帧重建本身就错）。
+  任何含 B 帧的端到端对拍，第一步就是把输出数组按 POC 升序排。
+- **HEVC slice header 尾部必须读 `alignment_bit_equal_to_one` 并字节对齐**：
+  `header_bits` 是**对齐后**的位置（对应 C 的 `align_get_bits`），CABAC 数据从
+  `(header_bits+7)>>3` 字节开始。头部恰好在字节边界结束时，少读这 1 位会让 CABAC
+  起点整体错 1 字节、整帧语法全乱；注意 `(x+7)>>3` 与 `align()` 数值等价，但**读对齐
+  位本身会推进 1 位**，header_bits 的期望值要按对齐后写（既有测试 28→32）。
+- **HEVC MC 的参考图尺寸参数（rw/rh）按路径分别传**：uni 路径传 `cw,ch` 正确、
+  bi 路径容易误传 `ch,ch`——`hevc_fill_edge` 会把图内 x≥rw 的区域当越界做边缘复制，
+  表现为"从第 rw 列起整体错、左侧全对"。chroma 的 rw/rh 独立传（chw/chh），
+  所以 chroma 可能全对而 luma 半幅错。差异起点坐标 == 传错的参数值，可直接反推。
+- **像素级对拍先分 plane 再定位**：先分 Y/Cb/Cr 统计差异数与首差坐标，能一刀切开
+  "MV/预测错（chroma 也错）"与"luma 插值错（chroma 对）"；再用 8x8 块级差异计数看
+  空间分布。另外"我方没滤边"的结论要用 C 参考的滤波/不滤波 YUV 逐像素 diff 先证实
+  C 确实动了像素，再决定查 bS 推导还是查滤波本身，避免在错误的假设上二分。
+- **构造 HEVC 负例流**：多 slice 用 x265 `-x265-params slices=2`（第二片
+  `first_slice_segment_in_pic_flag=0` 即触发拒绝路径）；tiles/PCM 用位级补丁——
+  按语法走完 SPS/PPS 后重序列化（PPS 字段序：`tiles_enabled` →
+  `entropy_coding_sync` → tile 字段（含 `loop_filter_across_tiles`）→
+  `loop_filter_across_slices`；SPS 的 VUI 可整体丢弃，不影响切片解码）。
+  补丁基流与生成逻辑见 `scripts/_gen_hevc_inter_realdata.py`。
+
 - **差分向量生成走 stdin/stdout 管道**：Git Bash 会把 `-v "$(pwd):/w"` 的卷挂载
   改写成无效路径，docker 报 `destination can't be '/'`；用
   `docker run --rm -i ... pipe:1 > out` 绕开。
@@ -583,6 +607,24 @@ moonbit/                      # git 仓库根
     ├── aac_spectrum.mbt      # AAC 频谱解码（码书 1..11/scalefactor/pulse/PNS/TNS）
     ├── aac_tables.mbt        # AAC 解码表（脚本批量提取）
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS + hvcC
+    ├── hevc_slice.mbt        # HEVC slice header（I/P/B、RPS、权重表、对齐位）
+    ├── hevc_sei.mbt          # HEVC SEI
+    ├── hevc_access_unit.mbt  # HEVC 访问单元组装 + POC 跟踪
+    ├── hevc_cabac.mbt        # HEVC CABAC 引擎
+    ├── hevc_cabac_syntax.mbt # HEVC CABAC 语法元素
+    ├── hevc_intra.mbt        # HEVC 帧内预测（33 模式）
+    ├── hevc_scan.mbt         # HEVC 系数扫描
+    ├── hevc_transform.mbt    # HEVC IDCT/DST/反量化/residual
+    ├── hevc_intra_ref.mbt    # HEVC 参考样本可用性/邻域
+    ├── hevc_picture.mbt      # HEVC 图像缓冲
+    ├── hevc_residual.mbt     # HEVC 残差解码
+    ├── hevc_deblock.mbt      # HEVC 去块滤波
+    ├── hevc_sao.mbt          # HEVC SAO
+    ├── hevc_intra_decode.mbt # HEVC I 片整帧解码器
+    ├── hevc_refs.mbt         # HEVC 参考帧管理（DPB/RPS/L0/L1/MV 缩放）
+    ├── hevc_mc.mbt           # HEVC 运动补偿（qpel/epel uni/bi/加权）
+    ├── hevc_inter.mbt        # HEVC inter 语法（merge/AMVP/mvd）
+    ├── hevc_inter_decode.mbt # HEVC P/B 帧级驱动 + bS
     ├── audio_headers.mbt     # ADTS + MPEG 音频帧头
     ├── mp3_tables.mbt        # Layer III 码表/Huffman 表
     ├── mp3_dsp.mbt           # 定点 IMDCT/DCT32/合成窗

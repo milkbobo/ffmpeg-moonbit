@@ -12,6 +12,8 @@ pub struct HevcNeighbourAvail {
   mut cand_left : Bool
   mut cand_up_left : Bool
   mut cand_up_right : Bool
+  /// `cand_up_right_sap` in the C: without the end-of-tile clamp.
+  mut cand_up_right_sap : Bool
   mut cand_bottom_left : Bool
 }
 
@@ -22,6 +24,7 @@ pub fn hevc_neighbour_avail() -> HevcNeighbourAvail {
     cand_left: false,
     cand_up_left: false,
     cand_up_right: false,
+    cand_up_right_sap: false,
     cand_bottom_left: false,
   }
 }

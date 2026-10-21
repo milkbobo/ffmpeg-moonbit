@@ -115,6 +115,24 @@ moonbit/
     ├── aac_spectrum.mbt      # AAC 频谱解码（码书 1..11/scalefactor/pulse/PNS/TNS）
     ├── aac_tables.mbt        # AAC 解码表（脚本批量提取，与 C 源逐值 diff）
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS/VUI + hvcC extradata
+    ├── hevc_slice.mbt        # HEVC slice segment header（I/P/B、RPS、权重表、对齐）
+    ├── hevc_sei.mbt          # HEVC SEI（前缀/后缀、CLL/mastering display 等）
+    ├── hevc_access_unit.mbt  # HEVC 访问单元组装与 POC 跟踪
+    ├── hevc_cabac.mbt        # HEVC CABAC 引擎（3×199 init_values 与状态迁移）
+    ├── hevc_cabac_syntax.mbt # HEVC CABAC 语法元素（split/cbf/merge/mvd/系数）
+    ├── hevc_intra.mbt        # HEVC 帧内预测（planar/DC/33 角度，4..32）
+    ├── hevc_scan.mbt         # HEVC 系数扫描（对角/水平/垂直，3 组尺寸）
+    ├── hevc_transform.mbt    # HEVC IDCT/DST/反量化/residual 叠加
+    ├── hevc_intra_ref.mbt    # HEVC 参考样本可用性/边界填充/邻域表
+    ├── hevc_picture.mbt      # HEVC 图像缓冲（y/cb/cr 平面与 clone）
+    ├── hevc_residual.mbt     # HEVC 残差解码（transform_skip 外的全路径）
+    ├── hevc_deblock.mbt      # HEVC 去块滤波（weak/strong、亮度+色度、bS 驱动）
+    ├── hevc_sao.mbt          # HEVC SAO（merge/band/edge、CTB 边界恢复）
+    ├── hevc_intra_decode.mbt # HEVC I 片整帧解码器（CTU/CU/PU/TU 编排）
+    ├── hevc_refs.mbt         # HEVC 参考帧管理（MvField、DPB 槽位、RPS/L0/L1）
+    ├── hevc_mc.mbt           # HEVC 运动补偿（luma qpel/chroma epel、uni/bi/加权）
+    ├── hevc_inter.mbt        # HEVC inter 语法（merge/AMVP/mvd/ref_idx）
+    ├── hevc_inter_decode.mbt # HEVC P/B 帧级驱动（DPB+RPL+MC 编排+bS）
     ├── audio_headers.mbt     # AAC ADTS 头 + MPEG 音频帧头（MP1/MP2/MP3）
     ├── mp3_tables.mbt        # Layer III 码表/Huffman 表（C 源批量提取）
     ├── mp3_dsp.mbt           # 定点 IMDCT/DCT32/合成窗（mpegaudiodsp fixed 路径）
@@ -137,6 +155,15 @@ moonbit/
     ├── h2645_parse_wbtest.mbt# RBSP/NAL 拆分合成与真实参数集用例
     ├── h264_ps_wbtest.mbt    # 真实 avcC + trace_headers 字段逐项断言
     ├── hevc_ps_wbtest.mbt    # 真实 hvcC/Annex B（8-bit/Main10）+ RPS/POC 用例
+    ├── hevc_slice_wbtest.mbt # slice header 逐字段对照 trace_headers
+    ├── hevc_sei_wbtest.mbt   # 真实 x265 SEI 逐字段对照 trace_headers
+    ├── hevc_access_unit_wbtest.mbt # 真实 B 帧 GOP 的 POC/解码序
+    ├── hevc_cabac_wbtest.mbt # CABAC init 状态 + 真实 slice bin/位对 C
+    ├── hevc_intra_wbtest.mbt # 33 种帧内模式对自编译 C pred.c 逐值
+    ├── hevc_transform_wbtest.mbt # IDCT/DST/反量化对 C DSP 逐值
+    ├── hevc_intra_decode_wbtest.mbt # I 片真实码流逐帧 YUV MD5
+    ├── hevc_inter_wbtest.mbt # P/B 真实码流逐帧 YUV MD5 + 拒绝路径负例
+    ├── hevc_inter_realdata_wbtest.mbt # P/B 码流 base64 素材与期望 MD5
     ├── audio_headers_wbtest.mbt # 真实 ADTS/MP3 帧头 + LSF/自由格式
     ├── idct_wbtest.mbt       # 对照 dctref 参考 + FFmpeg dct.c 判据
     ├── huffman_wbtest.mbt    # Kraft/最优性/两实现互证/往返
@@ -166,15 +193,18 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行（实测 1,595,275 行），本次完成 MoonBit 源文件
-（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **79005 行**（libavutil 6483 行 +
+（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **101699 行**（libavutil 6483 行 +
 libavformat 的 aviobuf 流式 AVIO 层、MP4 解复用、Matroska EBML/Segment/Tracks/Cluster、
-裸 AAC/MP3 分帧与容器码流参数桥 26427 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
+裸 AAC/MP3 分帧与容器码流参数桥 32305 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
 IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CAVLC 全通 / CABAC 部分
 向量 / MP4 `avcC` 长度前缀入口）**、**H.264 P 帧解码与滑窗 DPB（运动补偿/MV 预测/inter
 宏块层，含 CABAC P 路径的合成码流端到端向量）**、**H.264 SEI 解析**、**AAC 频谱解码
 （Huffman 码书 1..11 + scalefactor + PNS/TNS + IMDCT/加窗全管线，真实 libfdk_aac
-码流逐帧解码）** 与 **MPEG 音频 Layer I/II/III 定点解码** 46095 行，
-均含白盒测试）——约占整体 **4.95%**。
+码流逐帧解码）**、**MPEG 音频 Layer I/II/III 定点解码**、**HEVC I 片整帧解码与完整
+环路滤波（SAO+去块，真实 x265 码流逐帧 YUV MD5 与 ffmpeg 逐字节一致）** 与
+**HEVC P/B 帧间预测（merge/AMVP、luma qpel/chroma epel 的 uni/bi/加权 MC、DPB+RPL、
+MV 去块边界强度，真实 x265 码流 21/21 帧逐字节一致）** 62911 行，
+均含白盒测试）——约占整体 **6.37%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 码流层）
 
@@ -636,7 +666,8 @@ Huffman 规范化码另有等效性说明，见下文）：
   MP3 Layer III 定点解码（IMDCT/合成滤波/PCM）+ MPEG 音频 Layer I/II（分配/scalefactor/
   组量化）、+ **H.264 SEI**（`h264_sei.mbt`，含公共消息集）与 **AAC 频谱解码**
   （码书 1..11/scalefactor/PNS/TNS + 四窗口序列 IMDCT/KBD 窗，真实码流逐帧出 PCM）；
-  其余未做：**CABAC 多行复杂码流的收敛**、B/SP/SI slice、HEVC 的全部解码层，
+  其余未做：**CABAC 多行复杂码流的收敛**、B/SP/SI slice、HEVC 的 10/12-bit 与
+  tiles/WPP 解码层（I/P/B 主链路已出数据）、
   AAC SBR/PS 与无法命名的 height+CCE 布局、**SEI 的 ITU-T T.35 与 AVFrame side-data 层**、
   VLC 表构建、LZO 与其余编解码器
 - libswscale / libswresample / libavdevice / fftools：**未开始**
@@ -667,8 +698,9 @@ Huffman 规范化码另有等效性说明，见下文）：
 | 码流头 | [opus_packet.mbt](libavcodec/opus_packet.mbt)、[av1.mbt](libavcodec/av1.mbt)、[vp9.mbt](libavcodec/vp9.mbt) | Opus TOC/四种包码/Xiph lacing/120 ms 限制；AV1 OBU LEB128 + `av1C`/序列头（含 order-hint/screen-content/superres 状态）与关键/帧内/inter frame header（类型/show/尺寸/render/superres/intrabc、primary_ref/refresh、7 个参考槽、统一 tile 布局与 base_q_idx/量化 delta；关键帧与 inter 字段均对齐 `trace_headers`）；VP9 帧头（profile、关键帧/帧内、色彩配置、尺寸、刷新掩码）与 superframe index 拆分；真实 WebM 包与 ffprobe 对齐 |
 | VP9 压缩头/分片 | [vp9_rac.mbt](libavcodec/vp9_rac.mbt)、[vp9.mbt](libavcodec/vp9.mbt) | FFmpeg `VPXRangeCoder` 的 MoonBit 移植（norm_shift/renorm/概率与等概率比特/`update_prob`）；压缩头 marker、tx_mode 0–4（lossless 强制 0，switchable 的 tx8/16/32 概率更新）、skip 概率、系数/模式/MV 更新语法的精确消费；tile 布局 tile_cols/rows log2、多行多列、除末片外的 4 字节大端长度、末片剩余字节。libvpx-vp9 真实向量的 tx_mode 由 FFmpeg 解码器 `vp9.c` 插桩逐帧核对（0/1/2/3/4 均覆盖）；512×256 双列与 512×512 双行双列分片的 offset/size/首 marker 均逐值断言 |
 | HEVC 整帧解码（I 片） | [hevc_intra_decode.mbt](libavcodec/hevc_intra_decode.mbt)、[hevc_cabac_syntax.mbt](libavcodec/hevc_cabac_syntax.mbt)、[hevc_residual.mbt](libavcodec/hevc_residual.mbt)、[hevc_intra_ref.mbt](libavcodec/hevc_intra_ref.mbt)、[hevc_scan.mbt](libavcodec/hevc_scan.mbt)、[hevc_picture.mbt](libavcodec/hevc_picture.mbt)、[hevc_deblock.mbt](libavcodec/hevc_deblock.mbt)、[hevc_sao.mbt](libavcodec/hevc_sao.mbt) | 打通 I 片主链路与完整环路滤波：CTU/CU 四叉树、split/part_mode、帧内 MPM（含 CTB 边界规则）、变换树与 cbf、cu_qp_delta/qP 预测、残差语法（sign hiding）、反量化、IDCT/DST、参考样本可用性/z-scan/3-tap 与 strong 平滑、4:2:0 重建、TU 边界 bS=2 的去块（亮度 weak/strong、色度）、SAO（merge、band/edge offset、图片边界恢复）。真实 x265 流 32×32、64×48 四 CTU（默认与未滤波）、64×48 SAO+去块（默认解码）、64×64 强平滑、80×64 部分 CTU 的 yuv420p MD5 均与 ffmpeg 逐字节一致；长度前缀 NAL 输入一致；另有 8×8 真实块 IDCT 对 C DSP 的逐值回归。范围：8-bit 4:2:0 单 I 片、无 PCM/scaling list/transform skip/tiles/WPP；`ff_hevc_decode_intra_frame_unfiltered` 返回滤波前像素 |
+| HEVC P/B 帧间预测 | [hevc_refs.mbt](libavcodec/hevc_refs.mbt)、[hevc_mc.mbt](libavcodec/hevc_mc.mbt)、[hevc_inter.mbt](libavcodec/hevc_inter.mbt)、[hevc_inter_decode.mbt](libavcodec/hevc_inter_decode.mbt) | 在 I 片链路上补齐 P/B：MvField/DPB 槽位池、RPS 候选列表与 `ff_hevc_slice_rpl` L0/L1 拼接、`mv_scale`/`check_mvset` 时域 MV 缩放；运动补偿全套（luma 8-tap qpel / chroma 4-tap epel 的 uni/bi 与加权变体、`ff_emulated_edge_mc` 语义的边界复制）；inter 语法（skip/merge/merge_idx/inter_pred_idc/ref_idx/mvd_coding/mvp_lx/part_mode 全模式含 AMP）；merge 候选推导（空间 A1/B1/B0/A0/B2 + 时域 + 组合 BI + 零 MV 填充）、AMVP（`ff_hevc_luma_mv_mvp_mode` 含 `mp_mx`/`mp_mx_lt`/`dist_scale`）；prediction_unit 的 MC 编排（PF_L0/L1/BI 分派 + 加权分支）；inter 去块 bS 推导（`ff_hevc_deblocking_boundary_strengths` + `boundary_strength`）。三条真实 x265 流（gray I+6P、moving I+6P、I/P/B bframes=2）共 21 帧逐帧 YUV MD5 与 FFmpeg 9.0.2 默认解码逐字节一致；slice header 补 POC 全推导/short-term RPS/long-term RPS/collocated/完整 pred_weight_table/alignment_bit_equal_to_one。范围：8-bit 4:2:0 单 slice、closed GOP、无 dependent slice/tiles/WPP/PCM/scaling list/transform skip（均有具体错误串的负例） |
 
-测试总数 490/490（`moon test --target wasm`）。仍未完成的重点：HEVC 的 P/B 帧间预测与 10/12-bit、tiles/WPP，
+测试总数 496/496（`moon test --target wasm`）。仍未完成的重点：HEVC 的 10/12-bit、tiles/WPP，
 VP9/AV1 的像素解码（VP9 压缩头已解析）、Opus SILK/CELT 解码、HLS/DASH 的网络/分片 IO、
 MJPEG 无损/12-bit/算术编码。
 

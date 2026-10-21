@@ -232,7 +232,7 @@ fn new_hevc_window() -> HevcWindow {
 ///|
 /// `ShortTermRPS`. */
 pub struct HevcStRps {
-  delta_poc : Array[Int32]
+  mut delta_poc : Array[Int32]
   mut used : UInt32
   mut delta_idx : Int32
   mut num_negative_pics : Int32

@@ -42,6 +42,30 @@ pub let hevc_cabac_intra_chroma_pred_mode : Int32 = 18
 pub let hevc_cabac_no_residual_data_flag : Int32 = 36
 
 ///|
+pub let hevc_cabac_merge_flag : Int32 = 20
+
+///|
+pub let hevc_cabac_merge_idx : Int32 = 21
+
+///|
+pub let hevc_cabac_inter_pred_idc : Int32 = 22
+
+///|
+pub let hevc_cabac_ref_idx_l0 : Int32 = 27
+
+///|
+pub let hevc_cabac_ref_idx_l1 : Int32 = 29
+
+///|
+pub let hevc_cabac_abs_mvd_greater0_flag : Int32 = 31
+
+///|
+pub let hevc_cabac_abs_mvd_greater1_flag : Int32 = 33
+
+///|
+pub let hevc_cabac_mvp_lx_flag : Int32 = 35
+
+///|
 pub let hevc_cabac_split_transform_flag : Int32 = 37
 
 ///|
@@ -106,7 +130,8 @@ fn HevcCabac::bypass(self : HevcCabac) -> Int32 {
 
 ///|
 fn HevcCabac::terminate(self : HevcCabac) -> Bool {
-  self.cc.get_cabac_terminate() != 0
+  let r = self.cc.get_cabac_terminate() != 0
+  r
 }
 
 ///|
@@ -136,30 +161,214 @@ fn HevcCabac::split_coding_unit_flag(
   }
   let inc = (if depth_left > ct_depth { 1 } else { 0 }) +
     (if depth_top > ct_depth { 1 } else { 0 })
-  self.bin(hevc_cabac_split_coding_unit_flag + inc)
+  let r = self.bin(hevc_cabac_split_coding_unit_flag + inc)
+  r
 }
 
 ///|
-/// `ff_hevc_part_mode_decode` for an intra slice: only 2Nx2N (0) and NxN (3)
-/// are reachable when `amp_enabled` is 0. */
-fn HevcCabac::part_mode_intra(
+/// `ff_hevc_part_mode_decode` for any pred mode. `pred_mode` is 1 for intra. */
+fn HevcCabac::part_mode_decode(
   self : HevcCabac,
   log2_cb_size : Int32,
-  min : Int32,
+  min_cb : Int32,
+  amp_enabled : Bool,
+  pred_mode_intra : Bool,
 ) -> Int32 {
-  if self.bin(hevc_cabac_part_mode) != 0 {
+  let r = if self.bin(hevc_cabac_part_mode) != 0 {
+    0
+  } else if log2_cb_size == min_cb {
+    if pred_mode_intra {
+      3
+    } else if self.bin(hevc_cabac_part_mode + 1) != 0 {
+      1
+    } else if log2_cb_size == 3 {
+      2
+    } else if self.bin(hevc_cabac_part_mode + 2) != 0 {
+      2
+    } else {
+      3
+    }
+  } else if !amp_enabled {
+    if self.bin(hevc_cabac_part_mode + 1) != 0 {
+      1
+    } else {
+      2
+    }
+  } else if self.bin(hevc_cabac_part_mode + 1) != 0 {
+    if self.bin(hevc_cabac_part_mode + 3) != 0 {
+      1
+    } else if self.bypass() != 0 {
+      hevc_part_2nxnd
+    } else {
+      hevc_part_2nxnu
+    }
+  } else if self.bin(hevc_cabac_part_mode + 3) != 0 {
+    2
+  } else if self.bypass() != 0 {
+    hevc_part_nrx2n
+  } else {
+    hevc_part_nlx2n
+  }
+  r
+}
+
+///|
+/// `ff_hevc_skip_flag_decode`. */
+fn HevcCabac::skip_flag(
+  self : HevcCabac,
+  skip_flag : Array[Int32],
+  x0b : Int32,
+  y0b : Int32,
+  x_cb : Int32,
+  y_cb : Int32,
+  min_cb_width : Int32,
+  ctb_left : Bool,
+  ctb_up : Bool,
+) -> Int32 {
+  let mut inc = 0
+  if ctb_left || x0b != 0 {
+    if skip_flag[y_cb * min_cb_width + x_cb - 1] != 0 {
+      inc = inc + 1
+    }
+  }
+  if ctb_up || y0b != 0 {
+    if skip_flag[(y_cb - 1) * min_cb_width + x_cb] != 0 {
+      inc = inc + 1
+    }
+  }
+  let r = self.bin(hevc_cabac_skip_flag + inc)
+  r
+}
+
+///|
+/// `ff_hevc_pred_mode_decode`: 0 = MODE_INTER, 1 = MODE_INTRA. */
+fn HevcCabac::pred_mode_flag(self : HevcCabac) -> Int32 {
+  let r = self.bin(hevc_cabac_pred_mode_flag)
+  r
+}
+
+///|
+/// `ff_hevc_merge_flag_decode`. */
+fn HevcCabac::merge_flag(self : HevcCabac) -> Int32 {
+  self.bin(hevc_cabac_merge_flag)
+}
+
+///|
+/// `ff_hevc_merge_idx_decode`. */
+fn HevcCabac::merge_idx(self : HevcCabac, max_num_merge_cand : Int32) -> Int32 {
+  let mut i = self.bin(hevc_cabac_merge_idx)
+  if i != 0 {
+    while i < max_num_merge_cand - 1 && self.bypass() != 0 {
+      i = i + 1
+    }
+  }
+  i
+}
+
+///|
+/// `ff_hevc_inter_pred_idc_decode`: returns 0 = PRED_L0, 1 = PRED_L1,
+/// 2 = PRED_BI (C `enum InterPredIdc`). */
+fn HevcCabac::inter_pred_idc(
+  self : HevcCabac,
+  ct_depth : Int32,
+  n_pb_w : Int32,
+  n_pb_h : Int32,
+) -> Int32 {
+  if n_pb_w + n_pb_h == 12 {
+    return self.bin(hevc_cabac_inter_pred_idc + 4)
+  }
+  if self.bin(hevc_cabac_inter_pred_idc + ct_depth) != 0 {
+    return 2
+  }
+  self.bin(hevc_cabac_inter_pred_idc + 4)
+}
+
+///|
+/// `ff_hevc_ref_idx_lx_decode`. */
+fn HevcCabac::ref_idx_lx(self : HevcCabac, num_ref_idx_lx : Int32, list : Int32) -> Int32 {
+  let max = num_ref_idx_lx - 1
+  let max_ctx = if max < 2 { max } else { 2 }
+  let base = if list == 0 {
+    hevc_cabac_ref_idx_l0
+  } else {
+    hevc_cabac_ref_idx_l1
+  }
+  let mut i = 0
+  while i < max_ctx && self.bin(base + i) != 0 {
+    i = i + 1
+  }
+  if i == 2 {
+    while i < max && self.bypass() != 0 {
+      i = i + 1
+    }
+  }
+  i
+}
+
+///|
+/// `ff_hevc_mvp_lx_flag_decode`. */
+fn HevcCabac::mvp_lx_flag(self : HevcCabac) -> Int32 {
+  self.bin(hevc_cabac_mvp_lx_flag)
+}
+
+///|
+/// `ff_hevc_no_residual_syntax_flag_decode` (`rqt_root_cbf`). */
+fn HevcCabac::no_residual_flag(self : HevcCabac) -> Int32 {
+  self.bin(hevc_cabac_no_residual_data_flag)
+}
+
+///|
+/// `ff_hevc_hls_mvd_coding`: returns `(mvd_x, mvd_y)`. */
+fn HevcCabac::mvd_coding(self : HevcCabac) -> (Int32, Int32) {
+  let mut x = self.bin(hevc_cabac_abs_mvd_greater0_flag)
+  let mut y = self.bin(hevc_cabac_abs_mvd_greater0_flag)
+  if x != 0 {
+    x = x + self.bin(hevc_cabac_abs_mvd_greater1_flag + 1)
+  }
+  if y != 0 {
+    y = y + self.bin(hevc_cabac_abs_mvd_greater1_flag + 1)
+  }
+  let mvx = if x == 2 {
+    self.mvd_decode()
+  } else if x == 1 {
+    self.cc.get_cabac_bypass_sign(-1)
+  } else {
+    0
+  }
+  let mvy = if y == 2 {
+    self.mvd_decode()
+  } else if y == 1 {
+    self.cc.get_cabac_bypass_sign(-1)
+  } else {
+    0
+  }
+  (mvx, mvy)
+}
+
+///|
+/// `mvd_decode`: EG1-style bypass magnitude with bypass sign. */
+fn HevcCabac::mvd_decode(self : HevcCabac) -> Int32 {
+  let mut ret = 2
+  let mut k = 1
+  while k < 31 && self.bypass() != 0 {
+    ret = ret + (1 << k)
+    k = k + 1
+  }
+  if k == 31 {
     return 0
   }
-  if log2_cb_size == min {
-    return 3
+  while k > 0 {
+    k = k - 1
+    ret = ret + (self.bypass() << k)
   }
-  0
+  self.cc.get_cabac_bypass_sign(-ret)
 }
 
 ///|
 /// `ff_hevc_prev_intra_luma_pred_flag_decode`. */
 fn HevcCabac::prev_intra_luma_pred_flag(self : HevcCabac) -> Int32 {
-  self.bin(hevc_cabac_prev_intra_luma_pred_flag)
+  let r = self.bin(hevc_cabac_prev_intra_luma_pred_flag)
+  r
 }
 
 ///|
@@ -185,10 +394,12 @@ fn HevcCabac::rem_intra_luma_pred_mode(self : HevcCabac) -> Int32 {
 ///|
 /// `ff_hevc_intra_chroma_pred_mode_decode`. */
 fn HevcCabac::intra_chroma_pred_mode(self : HevcCabac) -> Int32 {
-  if self.bin(hevc_cabac_intra_chroma_pred_mode) == 0 {
-    return 4
+  let r = if self.bin(hevc_cabac_intra_chroma_pred_mode) == 0 {
+    4
+  } else {
+    (self.bypass() << 1) | self.bypass()
   }
-  (self.bypass() << 1) | self.bypass()
+  r
 }
 
 ///|
@@ -197,38 +408,42 @@ fn HevcCabac::split_transform_flag(
   self : HevcCabac,
   log2_trafo_size : Int32,
 ) -> Int32 {
-  self.bin(hevc_cabac_split_transform_flag + 5 - log2_trafo_size)
+  let r = self.bin(hevc_cabac_split_transform_flag + 5 - log2_trafo_size)
+  r
 }
 
 ///|
 /// `ff_hevc_cbf_cb_cr_decode`. */
 fn HevcCabac::cbf_cb_cr(self : HevcCabac, trafo_depth : Int32) -> Int32 {
-  self.bin(hevc_cabac_cbf_cb_cr + trafo_depth)
+  let r = self.bin(hevc_cabac_cbf_cb_cr + trafo_depth)
+  r
 }
 
 ///|
 /// `ff_hevc_cbf_luma_decode`. */
 fn HevcCabac::cbf_luma(self : HevcCabac, trafo_depth : Int32) -> Int32 {
-  self.bin(hevc_cabac_cbf_luma + (if trafo_depth == 0 { 1 } else { 0 }))
+  let r = self.bin(hevc_cabac_cbf_luma + (if trafo_depth == 0 { 1 } else { 0 }))
+  r
 }
 
 ///|
 /// `ff_hevc_sao_merge_flag_decode`. */
 fn HevcCabac::sao_merge_flag(self : HevcCabac) -> Bool {
-  self.bin(hevc_cabac_sao_merge_flag) != 0
+  let r = self.bin(hevc_cabac_sao_merge_flag) != 0
+  r
 }
 
 ///|
 /// `ff_hevc_sao_type_idx_decode`: 0 = off, 1 = band, 2 = edge. */
 fn HevcCabac::sao_type_idx(self : HevcCabac) -> Int32 {
-  if self.bin(hevc_cabac_sao_type_idx) == 0 {
-    return 0
-  }
-  if self.bypass() == 0 {
+  let r = if self.bin(hevc_cabac_sao_type_idx) == 0 {
+    0
+  } else if self.bypass() == 0 {
     1
   } else {
     2
   }
+  r
 }
 
 ///|
@@ -288,7 +503,8 @@ fn HevcCabac::cu_qp_delta_abs(self : HevcCabac) -> Result[Int32, String] {
       suffix = suffix + (self.bypass() << k)
     }
   }
-  Ok(prefix + suffix)
+  let r = Ok(prefix + suffix)
+  r
 }
 
 ///|
