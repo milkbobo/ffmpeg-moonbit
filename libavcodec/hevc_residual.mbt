@@ -1,9 +1,10 @@
 ///|
 /// HEVC residual coding and inverse transform, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/cabac.c` (`ff_hevc_hls_residual_coding`) for 8/10/12-bit
-/// 4:2:0/4:2:2/4:4:4 streams. Transform skip is supported (including the transform-skip
-/// significance contexts and rotation swap); RDPCM, cross-component prediction
-/// and scaling lists are not.
+/// 4:2:0/4:2:2/4:4:4 streams. Transform skip is supported (including the
+/// transform-skip significance contexts and rotation swap), as are scaling
+/// lists (SPS/PPS matrices and DC scales); RDPCM and cross-component
+/// prediction are not.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -134,6 +135,21 @@ pub fn hevc_hls_residual_coding(
     false
   }
   let ts_ctx = sps.transform_skip_context_enabled != 0 && transform_skip
+
+  let use_scaling = sps.scaling_list_enabled != 0 &&
+    !(transform_skip && log2_trafo_size > 2)
+  let scaling = if pps.scaling_list_data_present_flag != 0 {
+    pps.scaling_list
+  } else {
+    sps.scaling_list
+  }
+  let matrix_id = (if is_intra { 0 } else { 3 }) + c_idx
+  let scale_matrix = scaling.sl[log2_trafo_size - 2][matrix_id]
+  let dc_scale = if log2_trafo_size >= 4 {
+    scaling.sl_dc[log2_trafo_size - 4][matrix_id]
+  } else {
+    16
+  }
 
   let (lx_prefix, ly_prefix) = cabac.last_sig_xy_prefix(c_idx, log2_trafo_size)
   last_x = lx_prefix
@@ -381,7 +397,27 @@ pub fn hevc_hls_residual_coding(
           level = -level
         }
         sign_flags = (sign_flags << 1) & 0xFFFF
-        let mut dq = level.to_int64() * scale.to_int64() * 16L + add.to_int64()
+        let mut scale_m = 16
+        if use_scaling {
+          if y_c != 0 || x_c != 0 || log2_trafo_size < 4 {
+            let pos = if log2_trafo_size == 3 {
+              (y_c << 3) + x_c
+            } else if log2_trafo_size == 4 {
+              ((y_c >> 1) << 3) + (x_c >> 1)
+            } else if log2_trafo_size == 5 {
+              ((y_c >> 2) << 3) + (x_c >> 2)
+            } else {
+              (y_c << 2) + x_c
+            }
+            scale_m = scale_matrix[pos]
+          } else {
+            scale_m = dc_scale
+          }
+        }
+        let mut dq = level.to_int64() *
+          scale.to_int64() *
+          scale_m.to_int64() +
+          add.to_int64()
         dq = dq >> shift
         if dq < -32768L {
           dq = -32768L

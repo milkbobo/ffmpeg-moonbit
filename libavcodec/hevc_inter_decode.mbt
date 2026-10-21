@@ -13,7 +13,7 @@
 /// terminate bin and seeded from the state saved after the previous row's
 /// second CTB. Tiles are decoded in tile-scan order with a fresh CABAC state
 /// at each tile boundary. Rejected upstream: dependent slices, reference-list
-/// modification, tiles combined with WPP, PCM, scaling lists, RDPCM,
+/// modification, tiles combined with WPP, PCM, RDPCM,
 /// current-picture referencing.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
@@ -1112,9 +1112,6 @@ fn hevc_decode_picture(
   }
   if pps.cross_component_prediction_enabled_flag != 0 {
     return Err("PATCHWELCOME: HEVC cross-component prediction is not supported")
-  }
-  if sps.scaling_list_enabled != 0 {
-    return Err("PATCHWELCOME: HEVC scaling lists are not supported")
   }
   if pps.tiles_enabled_flag != 0 && pps.entropy_coding_sync_enabled_flag != 0 {
     return Err("PATCHWELCOME: HEVC tiles with WPP are not supported")

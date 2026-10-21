@@ -5,8 +5,9 @@
 /// `libavcodec/hevc/pred_template.c`.
 ///
 /// Supported: 8/10/12-bit 4:2:0/4:2:2/4:4:4, one slice per picture,
-/// all-intra deblocking and SAO, no PCM, no scaling lists, no transform
-/// skip/RDPCM/cross-component prediction, no tiles or WPP.
+/// all-intra deblocking and SAO, no PCM, no transform
+/// skip/RDPCM/cross-component prediction, no tiles or WPP. Scaling lists are
+/// applied during dequantization (default, SPS and PPS matrices).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -1265,9 +1266,6 @@ fn hevc_decode_intra_frame_impl(
   }
   if pps.cross_component_prediction_enabled_flag != 0 {
     return Err("PATCHWELCOME: HEVC cross-component prediction is not supported")
-  }
-  if sps.scaling_list_enabled != 0 {
-    return Err("PATCHWELCOME: HEVC scaling lists are not supported")
   }
   if pps.tiles_enabled_flag != 0 || pps.entropy_coding_sync_enabled_flag != 0 {
     return Err("PATCHWELCOME: HEVC tiles/WPP are not supported")
