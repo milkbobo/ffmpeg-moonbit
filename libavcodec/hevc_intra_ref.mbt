@@ -1,8 +1,8 @@
 ///|
 /// HEVC intra reference-sample preparation, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/pred_template.c` (`intra_pred`, `ref_filter_3tap`,
-/// `ref_filter_strong`) for 8-bit 4:2:0 pictures without constrained intra
-/// prediction.
+/// `ref_filter_strong`) for 8/10/12-bit 4:2:0 pictures without constrained
+/// intra prediction.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -129,6 +129,7 @@ pub fn hevc_intra_predict(
   mode : Int32,
 ) -> Unit {
   let size = 1 << log2_size
+  let bd = sps.bit_depth
   let hshift = sps.hshift[c_idx]
   let vshift = sps.vshift[c_idx]
   let size_in_luma_h = size << hshift
@@ -238,7 +239,7 @@ pub fn hevc_intra_predict(
       cand_up_left = true
       cand_left = true
     } else {
-      left[0] = 128
+      left[0] = 1 << (bd - 1)
       hevc_extend(top, 1, 2 * size, left[0])
       hevc_extend(left, 1, 2 * size, left[0])
     }
@@ -275,7 +276,7 @@ pub fn hevc_intra_predict(
     let min_dist = if dist26 < dist10 { dist26 } else { dist10 }
     if min_dist > threshold {
       if sps.strong_intra_smoothing_enabled != 0 && c_idx == 0 && log2_size == 5 {
-        let threshold2 = 1 << (8 - 5)
+        let threshold2 = 1 << (bd - 5)
         let d1 = top[0] + top[2 * size] - 2 * top[size]
         let d2 = left[0] + left[2 * size] - 2 * left[size]
         let ad1 = if d1 < 0 { -d1 } else { d1 }
@@ -303,7 +304,7 @@ pub fn hevc_intra_predict(
   } else if mode == 1 {
     hevc_pred_dc(dst, size, size, use_top, use_left, c_idx)
   } else {
-    hevc_pred_angular(dst, size, size, use_top, use_left, c_idx, mode)
+    hevc_pred_angular(dst, size, size, use_top, use_left, c_idx, mode, bd)
   }
   let plane = pic.plane(c_idx)
   let stride = pic.plane_stride(c_idx)

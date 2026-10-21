@@ -1,7 +1,7 @@
 ///|
 /// MoonBit port of the HEVC intra predictors from FFmpeg 9.0.2
 /// `libavcodec/hevc/pred_template.c` (`pred_planar`, `pred_dc`,
-/// `pred_angular`) for 8-bit samples.
+/// `pred_angular`) for 8/10/12-bit samples.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
@@ -27,11 +27,14 @@ let hevc_intra_inv_angles : FixedArray[Int32] = [
 ]
 
 ///|
-fn hevc_clip_pixel(v : Int32) -> Int32 {
+///|
+/// `av_clip_pixel`: clip a predicted sample to the coded bit depth. */
+fn hevc_clip_pixel(v : Int32, bd : Int32) -> Int32 {
+  let max = (1 << bd) - 1
   if v < 0 {
     0
-  } else if v > 255 {
-    255
+  } else if v > max {
+    max
   } else {
     v
   }
@@ -111,6 +114,7 @@ pub fn hevc_pred_angular(
   left : Array[Int32],
   c_idx : Int32,
   mode : Int32,
+  bd : Int32,
 ) -> Unit {
   if mode < 2 || mode > 34 {
     return
@@ -150,6 +154,7 @@ pub fn hevc_pred_angular(
       for y in 0..<size {
         dst[y * stride] = hevc_clip_pixel(
           top[1] + ((left[y + 1] - left[0]) >> 1),
+          bd,
         )
       }
     }
@@ -182,7 +187,7 @@ pub fn hevc_pred_angular(
     }
     if mode == 10 && c_idx == 0 && size < 32 {
       for x in 0..<size {
-        dst[x] = hevc_clip_pixel(left[1] + ((top[x + 1] - top[0]) >> 1))
+        dst[x] = hevc_clip_pixel(left[1] + ((top[x + 1] - top[0]) >> 1), bd)
       }
     }
   }

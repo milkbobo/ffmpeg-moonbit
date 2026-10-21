@@ -1,6 +1,6 @@
 ///|
 /// HEVC residual coding and inverse transform, ported from FFmpeg 9.0.2
-/// `libavcodec/hevc/cabac.c` (`ff_hevc_hls_residual_coding`) for 8-bit
+/// `libavcodec/hevc/cabac.c` (`ff_hevc_hls_residual_coding`) for 8/10/12-bit
 /// 4:2:0 streams without transform skip, RDPCM, cross-component prediction or
 /// scaling lists.
 ///
@@ -59,16 +59,18 @@ fn hevc_add_residual_at(
   y : Int32,
   res : Array[Int32],
   size : Int32,
+  bd : Int32,
 ) -> Unit {
   let plane = pic.plane(c_idx)
   let stride = pic.plane_stride(c_idx)
+  let max = (1 << bd) - 1
   for row in 0..<size {
     for col in 0..<size {
       let v = plane[(y + row) * stride + x + col] + res[row * size + col]
       plane[(y + row) * stride + x + col] = if v < 0 {
         0
-      } else if v > 255 {
-        255
+      } else if v > max {
+        max
       } else {
         v
       }
@@ -108,7 +110,8 @@ pub fn hevc_hls_residual_coding(
     }
     hevc_chroma_qp(qp_y, offset, sps.qp_bd_offset)
   }
-  let shift = 8 + log2_trafo_size - 5
+  // C: shift = sps->bit_depth + log2_trafo_size - 5 (8 for 8-bit)
+  let shift = sps.bit_depth + log2_trafo_size - 5
   let add = 1 << (shift - 1)
   let scale = hevc_level_scale[qp % 6] << (qp / 6)
 
@@ -365,10 +368,11 @@ pub fn hevc_hls_residual_coding(
   }
 
   let max_xy = if last_x > last_y { last_x } else { last_y }
+  let bd = sps.bit_depth
   if c_idx == 0 && log2_trafo_size == 2 {
-    hevc_transform_4x4_luma(coeffs)
+    hevc_transform_4x4_luma(coeffs, bd)
   } else if max_xy == 0 {
-    match hevc_idct_dc(coeffs, log2_trafo_size) {
+    match hevc_idct_dc(coeffs, log2_trafo_size, bd) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
@@ -381,7 +385,7 @@ pub fn hevc_hls_residual_coding(
     } else if max_xy < 12 {
       col_limit = if col_limit < 24 { col_limit } else { 24 }
     }
-    match hevc_idct(coeffs, log2_trafo_size, col_limit) {
+    match hevc_idct(coeffs, log2_trafo_size, col_limit, bd) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
@@ -395,6 +399,7 @@ pub fn hevc_hls_residual_coding(
     y0 >> vshift,
     coeffs,
     trafo_size,
+    bd,
   )
   Ok(())
 }

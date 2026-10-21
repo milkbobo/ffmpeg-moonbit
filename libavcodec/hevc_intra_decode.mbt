@@ -4,8 +4,8 @@
 /// `hls_transform_tree`, `hls_transform_unit`) and
 /// `libavcodec/hevc/pred_template.c`.
 ///
-/// Supported: 8-bit 4:2:0, one slice per picture, all-intra deblocking, no
-/// SAO, no PCM, no scaling lists, no transform skip/RDPCM/cross-component
+/// Supported: 8/10/12-bit 4:2:0, one slice per picture, all-intra deblocking
+/// and SAO, no PCM, no scaling lists, no transform skip/RDPCM/cross-component
 /// prediction, no tiles or WPP.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
@@ -1033,7 +1033,7 @@ fn HevcIntraDecoder::coding_quadtree(
 
 ///|
 /// Decode the single intra slice of `data` (Annex B or length-prefixed) into
-/// pre-loop-filter 8-bit 4:2:0 planes.
+/// pre-loop-filter 8/10/12-bit 4:2:0 planes.
 fn hevc_decode_intra_frame_impl(
   data : Bytes,
   is_nalff : Bool,
@@ -1087,10 +1087,10 @@ fn hevc_decode_intra_frame_impl(
     Some(s) => s
     None => return Err("hevc: missing SPS")
   }
-  if sps.bit_depth != 8 ||
+  if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
     sps.chroma_format_idc != 1 ||
     sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8-bit 4:2:0 HEVC is supported")
+    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 HEVC is supported")
   }
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")

@@ -1,8 +1,11 @@
 ///|
 /// MoonBit port of the HEVC inverse transforms from FFmpeg 9.0.2
 /// `libavcodec/hevc/dsp_template.c` (`idct_4x4/8x8/16x16/32x32`,
-/// `idct_*_dc`, `transform_4x4_luma`, `dequant`, `add_residual`) for 8-bit
-/// samples.
+/// `idct_*_dc`, `transform_4x4_luma`, `dequant`, `add_residual`) for
+/// 8/10/12-bit samples. The transforms take the coded bit depth because the
+/// C templates are compiled per depth (`20 - BIT_DEPTH` shifts), and
+/// `dequant` uses `15 - BIT_DEPTH - log2_size` (negative shifts for 12-bit
+/// large blocks).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
@@ -283,6 +286,7 @@ pub fn hevc_idct(
   coeffs : Array[Int32],
   log2_size : Int32,
   col_limit : Int32,
+  bd : Int32,
 ) -> Result[Unit, String] {
   if log2_size < 2 || log2_size > 5 {
     return Err("hevc: invalid transform size")
@@ -296,8 +300,12 @@ pub fn hevc_idct(
     }
   }
   let limit = if col_limit < h { col_limit } else { h }
+  // vertical pass: shift = 20 - BIT_DEPTH (12 for 8-bit), with the C's
+  // rounding offset 1 << (shift - 1) (2048 for 8-bit).
+  let vshift = 20 - bd
+  let vadd = 1 << (vshift - 1)
   for row in 0..<h {
-    hevc_tr(h, coeffs, row * h, 1, coeffs, row * h, 1, limit, 2048, 12, true)
+    hevc_tr(h, coeffs, row * h, 1, coeffs, row * h, 1, limit, vadd, vshift, true)
   }
   Ok(())
 }
@@ -307,12 +315,13 @@ pub fn hevc_idct(
 pub fn hevc_idct_dc(
   coeffs : Array[Int32],
   log2_size : Int32,
+  bd : Int32,
 ) -> Result[Unit, String] {
   if log2_size < 2 || log2_size > 5 {
     return Err("hevc: invalid transform size")
   }
   let h = 1 << log2_size
-  let shift : Int32 = 6
+  let shift : Int32 = 14 - bd
   let add : Int32 = 1 << (shift - 1)
   let coeff = (((coeffs[0] + 1) >> 1) + add) >> shift
   for i in 0..<(h * h) {
@@ -323,45 +332,63 @@ pub fn hevc_idct_dc(
 
 ///|
 /// `transform_4x4_luma`: HEVC 4x4 DST for intra luma. */
-pub fn hevc_transform_4x4_luma(coeffs : Array[Int32]) -> Unit {
+pub fn hevc_transform_4x4_luma(coeffs : Array[Int32], bd : Int32) -> Unit {
   for i in 0..<4 {
     hevc_tr4_luma(coeffs, i, 4, coeffs, i, 4, 64, 7, true)
   }
+  let vshift = 20 - bd
+  let vadd = 1 << (vshift - 1)
   for row in 0..<4 {
-    hevc_tr4_luma(coeffs, row * 4, 1, coeffs, row * 4, 1, 2048, 12, true)
+    hevc_tr4_luma(coeffs, row * 4, 1, coeffs, row * 4, 1, vadd, vshift, true)
   }
 }
 
 ///|
-/// `dequant` for 8-bit samples (ITU-T H.265 8.6.3). */
+/// `dequant` (ITU-T H.265 8.6.3), bit-depth aware: the shift is
+/// `15 - BIT_DEPTH - log2_size`; it right-shifts (with rounding) when
+/// positive, is the identity when zero, and left-shifts (reinterpreting the
+/// int16 bit pattern as unsigned, as the C does) for 12-bit large blocks. */
 pub fn hevc_dequant(
   coeffs : Array[Int32],
   log2_size : Int32,
+  bd : Int32,
 ) -> Result[Unit, String] {
   if log2_size < 2 || log2_size > 5 {
     return Err("hevc: invalid transform size")
   }
-  let shift = 15 - 8 - log2_size
-  let offset = 1 << (shift - 1)
+  let shift = 15 - bd - log2_size
   let size = (1 << log2_size) * (1 << log2_size)
-  for i in 0..<size {
-    coeffs[i] = hevc_i16((coeffs[i] + offset) >> shift)
+  if bd <= 9 || shift > 0 {
+    let offset = 1 << (shift - 1)
+    for i in 0..<size {
+      coeffs[i] = hevc_i16((coeffs[i] + offset) >> shift)
+    }
+  } else if bd > 10 && shift < 0 {
+    for i in 0..<size {
+      // C: *coeffs = *(uint16_t*)coeffs << -shift
+      let v = ((coeffs[i] & 0xFFFF) << (0 - shift)) & 0xFFFF
+      coeffs[i] = if v >= 0x8000 { v - 0x10000 } else { v }
+    }
   }
+  // shift == 0: identity, nothing to do
   Ok(())
 }
 
 ///|
-/// `add_residualNxN`: clip-add the transformed residual onto pixels. */
+/// `add_residualNxN`: clip-add the transformed residual onto pixels
+/// (`av_clip_pixel` clips to the coded bit depth). */
 pub fn hevc_add_residual(
   dst : Array[Int32],
   res : Array[Int32],
   stride : Int32,
   size : Int32,
+  bd : Int32,
 ) -> Unit {
+  let max = (1 << bd) - 1
   for y in 0..<size {
     for x in 0..<size {
       let v = dst[y * stride + x] + res[y * size + x]
-      dst[y * stride + x] = if v < 0 { 0 } else if v > 255 { 255 } else { v }
+      dst[y * stride + x] = if v < 0 { 0 } else if v > max { max } else { v }
     }
   }
 }

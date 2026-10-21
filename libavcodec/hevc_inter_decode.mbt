@@ -5,7 +5,7 @@
 /// `hevc_frame_start`, `ff_hevc_deblocking_boundary_strengths` from
 /// `filter.c`, `boundary_strength`) and `libavcodec/hevc/refs.c`.
 ///
-/// Supported: 8-bit 4:2:0, one slice per picture, closed-GOP streams whose
+/// Supported: 8/10/12-bit 4:2:0, one slice per picture, closed-GOP streams whose
 /// reference pictures are all present (missing refs are generated grey),
 /// weighted and unweighted uni/bi prediction. Rejected upstream: dependent
 /// slices, reference-list modification, tiles/WPP, PCM, scaling lists,
@@ -97,6 +97,7 @@ fn HevcIntraDecoder::prediction_unit(
   let n_pb_h_c = n_pb_h >> sps.vshift[1]
   let weighted = (sh.slice_type == hevc_slice_p && self.pps.weighted_pred_flag != 0) ||
     (sh.slice_type == hevc_slice_b && self.pps.weighted_bipred_flag != 0)
+  let bd = sps.bit_depth
   let pw = sh.pw
   if current_mv.pred_flag == hevc_pf_l0 {
     let ref0 = self.rpl[0].entries[current_mv.ref_idx0].frame
@@ -115,6 +116,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv0.y,
         n_pb_w,
         n_pb_h,
+        bd,
       )
       hevc_chroma_mc_uni(
         ref0.pic.cb,
@@ -129,6 +131,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv0.y,
         n_pb_w_c,
         n_pb_h_c,
+        bd,
       )
       hevc_chroma_mc_uni(
         ref0.pic.cr,
@@ -143,6 +146,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv0.y,
         n_pb_w_c,
         n_pb_h_c,
+        bd,
       )
     } else {
       hevc_luma_mc_uni_w(
@@ -161,6 +165,7 @@ fn HevcIntraDecoder::prediction_unit(
         pw.luma_log2_weight_denom,
         pw.luma_weight_l0[idx],
         pw.luma_offset_l0[idx],
+        bd,
       )
       hevc_chroma_mc_uni_w(
         ref0.pic.cb,
@@ -178,6 +183,7 @@ fn HevcIntraDecoder::prediction_unit(
         pw.chroma_log2_weight_denom,
         pw.chroma_weight_l0[idx][0],
         pw.chroma_offset_l0[idx][0],
+        bd,
       )
       hevc_chroma_mc_uni_w(
         ref0.pic.cr,
@@ -195,6 +201,7 @@ fn HevcIntraDecoder::prediction_unit(
         pw.chroma_log2_weight_denom,
         pw.chroma_weight_l0[idx][1],
         pw.chroma_offset_l0[idx][1],
+        bd,
       )
     }
   } else if current_mv.pred_flag == hevc_pf_l1 {
@@ -214,6 +221,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv1.y,
         n_pb_w,
         n_pb_h,
+        bd,
       )
       hevc_chroma_mc_uni(
         ref1.pic.cb,
@@ -228,6 +236,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv1.y,
         n_pb_w_c,
         n_pb_h_c,
+        bd,
       )
       hevc_chroma_mc_uni(
         ref1.pic.cr,
@@ -242,6 +251,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv1.y,
         n_pb_w_c,
         n_pb_h_c,
+        bd,
       )
     } else {
       hevc_luma_mc_uni_w(
@@ -260,6 +270,7 @@ fn HevcIntraDecoder::prediction_unit(
         pw.luma_log2_weight_denom,
         pw.luma_weight_l1[idx],
         pw.luma_offset_l1[idx],
+        bd,
       )
       hevc_chroma_mc_uni_w(
         ref1.pic.cb,
@@ -277,6 +288,7 @@ fn HevcIntraDecoder::prediction_unit(
         pw.chroma_log2_weight_denom,
         pw.chroma_weight_l1[idx][0],
         pw.chroma_offset_l1[idx][0],
+        bd,
       )
       hevc_chroma_mc_uni_w(
         ref1.pic.cr,
@@ -294,6 +306,7 @@ fn HevcIntraDecoder::prediction_unit(
         pw.chroma_log2_weight_denom,
         pw.chroma_weight_l1[idx][1],
         pw.chroma_offset_l1[idx][1],
+        bd,
       )
     }
   } else if current_mv.pred_flag == hevc_pf_bi {
@@ -319,6 +332,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv1.y,
         n_pb_w,
         n_pb_h,
+        bd,
       )
       hevc_chroma_mc_bi(
         ref0.pic.cb,
@@ -337,6 +351,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv1.y,
         n_pb_w_c,
         n_pb_h_c,
+        bd,
       )
       hevc_chroma_mc_bi(
         ref0.pic.cr,
@@ -355,6 +370,7 @@ fn HevcIntraDecoder::prediction_unit(
         current_mv.mv1.y,
         n_pb_w_c,
         n_pb_h_c,
+        bd,
       )
     } else {
       hevc_luma_mc_bi_w(
@@ -379,6 +395,7 @@ fn HevcIntraDecoder::prediction_unit(
         pw.luma_weight_l1[i1],
         pw.luma_offset_l0[i0],
         pw.luma_offset_l1[i1],
+        bd,
       )
       for c in 0..<2 {
         let ref0p = if c == 0 { ref0.pic.cb } else { ref0.pic.cr }
@@ -406,6 +423,7 @@ fn HevcIntraDecoder::prediction_unit(
           pw.chroma_weight_l1[i1][c],
           pw.chroma_offset_l0[i0][c],
           pw.chroma_offset_l1[i1][c],
+          bd,
         )
       }
     }
@@ -803,10 +821,10 @@ fn hevc_decode_one_picture(
     Some(s) => s
     None => return Err("hevc: missing SPS")
   }
-  if sps.bit_depth != 8 ||
+  if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
     sps.chroma_format_idc != 1 ||
     sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8-bit 4:2:0 HEVC is supported")
+    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 HEVC is supported")
   }
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")

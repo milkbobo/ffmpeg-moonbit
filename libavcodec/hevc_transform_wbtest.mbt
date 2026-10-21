@@ -40,14 +40,14 @@ fn hgen_dst4() -> Array[Int32] {
 ///|
 test "hevc transform: idct4 matches FFmpeg C" {
   let c = hgen4()
-  hevc_idct(c, 2, 4).unwrap()
+  hevc_idct(c, 2, 4, 8).unwrap()
   assert_eq(c, [1, 1, 0, 0, 1, -2, 0, 3, 2, 0, 2, 1, 1, 0, 3, 0])
 }
 
 ///|
 test "hevc transform: idct8 matches FFmpeg C" {
   let c = hgen8()
-  hevc_idct(c, 3, 8).unwrap()
+  hevc_idct(c, 3, 8, 8).unwrap()
   assert_eq(c, [
     2, 0, -1, 0, 4, 5, -7, -2, 3, 3, 3, 4, 2, 1, 4, 4, 1, 2, 2, 5, 3, 3, -1, 2, 3,
     3, 3, 3, 2, 3, 3, 3, -1, 1, 4, 16, 2, 2, -6, 5, -7, 1, -16, -8, 11, -7, 2, 8,
@@ -59,14 +59,14 @@ test "hevc transform: idct8 matches FFmpeg C" {
 test "hevc transform: DC and 4x4 DST match FFmpeg C" {
   let v4 : Array[Int32] = Array::make(16, 0)
   v4[0] = 512
-  hevc_idct_dc(v4, 2).unwrap()
+  hevc_idct_dc(v4, 2, 8).unwrap()
   assert_eq(v4, Array::make(16, 4))
   let v8 : Array[Int32] = Array::make(64, 0)
   v8[0] = 1024
-  hevc_idct_dc(v8, 3).unwrap()
+  hevc_idct_dc(v8, 3, 8).unwrap()
   assert_eq(v8, Array::make(64, 8))
   let d = hgen_dst4()
-  hevc_transform_4x4_luma(d)
+  hevc_transform_4x4_luma(d, 8)
   assert_eq(d, [-1, 1, 3, 2, 0, -1, 1, 2, 1, 1, 1, 0, 0, 0, 1, 1])
 }
 
@@ -75,12 +75,12 @@ test "hevc transform: dequant and add residual" {
   let c : Array[Int32] = Array::make(16, 0)
   c[0] = 65
   c[1] = -65
-  hevc_dequant(c, 2).unwrap()
+  hevc_dequant(c, 2, 8).unwrap()
   // shift 5, offset 16: (65+16)>>5 = 2, (-65+16)>>5 = -2.
   assert_eq(c, [2, -2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
   let dst : Array[Int32] = [250, 0, 10, 0]
   let res : Array[Int32] = [10, -10, -20, 5]
-  hevc_add_residual(dst, res, 2, 2)
+  hevc_add_residual(dst, res, 2, 2, 8)
   assert_eq(dst, [255, 0, 0, 5])
 }
 
@@ -91,7 +91,7 @@ test "hevc transform: 16x16/32x32 match FFmpeg C metrics" {
     c16.push((i * 41 + 5) % 255 - 127)
   }
   c16[0] = 300
-  hevc_idct(c16, 4, 16).unwrap()
+  hevc_idct(c16, 4, 16, 8).unwrap()
   let mut sum16 = 0
   for v in c16 {
     sum16 = sum16 + v
@@ -105,7 +105,7 @@ test "hevc transform: 16x16/32x32 match FFmpeg C metrics" {
     c32.push((i * 23 + 9) % 255 - 127)
   }
   c32[0] = 500
-  hevc_idct(c32, 5, 32).unwrap()
+  hevc_idct(c32, 5, 32, 8).unwrap()
   let mut sum32 = 0
   for v in c32 {
     sum32 = sum32 + v

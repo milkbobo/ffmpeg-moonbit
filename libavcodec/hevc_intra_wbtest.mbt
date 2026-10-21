@@ -33,7 +33,7 @@ fn hevc_intra_check(
     } else if mode == 1 {
       hevc_pred_dc(dst, size, size, top, left, 0)
     } else {
-      hevc_pred_angular(dst, size, size, top, left, 0, mode)
+      hevc_pred_angular(dst, size, size, top, left, 0, mode, 8)
     }
     let mut sum = 0
     for v in dst {

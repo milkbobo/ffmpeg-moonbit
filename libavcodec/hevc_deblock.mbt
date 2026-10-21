@@ -1,8 +1,9 @@
 ///|
 /// HEVC deblocking filter, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/filter.c` and `libavcodec/h26x/h2656_deblock_template.c`
-/// for 8-bit 4:2:0 all-intra pictures with a single slice (no tiles, no PCM,
-/// no transquant bypass).
+/// for 8/10/12-bit 4:2:0 pictures with a single slice (no tiles, no PCM, no
+/// transquant bypass). `beta`/`tc` are scaled by `bit_depth - 8` like the
+/// bit-depth-specific C DSP templates.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -92,6 +93,7 @@ fn hevc_luma_group(
   yp : Int32,
   beta : Int32,
   tc : Int32,
+  max : Int32,
 ) -> Unit {
   let p3 = plane[base - 4 * xp]
   let p2 = plane[base - 3 * xp]
@@ -149,12 +151,12 @@ fn hevc_luma_group(
             tc2,
           ),
           0,
-          255,
+          max,
         )
         plane[b - 2 * xp] = hevc_clip_i(
           pp1 + hevc_clip_i(((pp2 + pp1 + pp0 + qq0 + 2) >> 2) - pp1, -tc2, tc2),
           0,
-          255,
+          max,
         )
         plane[b - 3 * xp] = hevc_clip_i(
           pp2 +
@@ -164,7 +166,7 @@ fn hevc_luma_group(
             tc2,
           ),
           0,
-          255,
+          max,
         )
         plane[b] = hevc_clip_i(
           qq0 +
@@ -174,12 +176,12 @@ fn hevc_luma_group(
             tc2,
           ),
           0,
-          255,
+          max,
         )
         plane[b + xp] = hevc_clip_i(
           qq1 + hevc_clip_i(((pp0 + qq0 + qq1 + qq2 + 2) >> 2) - qq1, -tc2, tc2),
           0,
-          255,
+          max,
         )
         plane[b + 2 * xp] = hevc_clip_i(
           qq2 +
@@ -189,7 +191,7 @@ fn hevc_luma_group(
             tc2,
           ),
           0,
-          255,
+          max,
         )
       }
     } else {
@@ -213,15 +215,15 @@ fn hevc_luma_group(
         let mut delta0 = (9 * (qq0 - pp0) - 3 * (qq1 - pp1) + 8) >> 4
         if hevc_abs_i(delta0) < 10 * tc {
           delta0 = hevc_clip_i(delta0, -tc, tc)
-          plane[b - xp] = hevc_clip_i(pp0 + delta0, 0, 255)
-          plane[b] = hevc_clip_i(qq0 - delta0, 0, 255)
+          plane[b - xp] = hevc_clip_i(pp0 + delta0, 0, max)
+          plane[b] = hevc_clip_i(qq0 - delta0, 0, max)
           if nd_p > 1 {
             let deltap1 = hevc_clip_i(
               (((pp2 + pp0 + 1) >> 1) - pp1 + delta0) >> 1,
               -tc_2,
               tc_2,
             )
-            plane[b - 2 * xp] = hevc_clip_i(pp1 + deltap1, 0, 255)
+            plane[b - 2 * xp] = hevc_clip_i(pp1 + deltap1, 0, max)
           }
           if nd_q > 1 {
             let deltaq1 = hevc_clip_i(
@@ -229,7 +231,7 @@ fn hevc_luma_group(
               -tc_2,
               tc_2,
             )
-            plane[b + xp] = hevc_clip_i(qq1 + deltaq1, 0, 255)
+            plane[b + xp] = hevc_clip_i(qq1 + deltaq1, 0, max)
           }
         }
       }
@@ -248,14 +250,15 @@ fn hevc_deblock_luma(
   beta : Int32,
   tc0 : Int32,
   tc1 : Int32,
+  max : Int32,
 ) -> Unit {
   let xp = if vertical { 1 } else { stride }
   let yp = if vertical { stride } else { 1 }
   if base < plane.length() {
-    hevc_luma_group(plane, base, xp, yp, beta, tc0)
+    hevc_luma_group(plane, base, xp, yp, beta, tc0, max)
   }
   if base + 4 * yp < plane.length() {
-    hevc_luma_group(plane, base + 4 * yp, xp, yp, beta, tc1)
+    hevc_luma_group(plane, base + 4 * yp, xp, yp, beta, tc1, max)
   }
 }
 
@@ -268,6 +271,7 @@ fn hevc_deblock_chroma(
   vertical : Bool,
   tc0 : Int32,
   tc1 : Int32,
+  max : Int32,
 ) -> Unit {
   let xp = if vertical { 1 } else { stride }
   let yp = if vertical { stride } else { 1 }
@@ -282,8 +286,8 @@ fn hevc_deblock_chroma(
         let q0 = plane[b]
         let q1 = plane[b + xp]
         let delta0 = hevc_clip_i(((q0 - p0) * 4 + p1 - q1 + 4) >> 3, -tc, tc)
-        plane[b - xp] = hevc_clip_i(p0 + delta0, 0, 255)
-        plane[b] = hevc_clip_i(q0 - delta0, 0, 255)
+        plane[b - xp] = hevc_clip_i(p0 + delta0, 0, max)
+        plane[b] = hevc_clip_i(q0 - delta0, 0, max)
       }
     }
   }
@@ -305,6 +309,8 @@ pub fn hevc_deblock_picture(
     return
   }
   let ctb_size = 1 << sps.log2_ctb_size
+  let max = (1 << sps.bit_depth) - 1
+  let bd_shift = sps.bit_depth - 8
   let tc_offset = sh.tc_offset
   let beta_offset = sh.beta_offset
   let y_plane = pic.y
@@ -343,9 +349,17 @@ pub fn hevc_deblock_picture(
               1
             ) >>
             1
-          let beta = hevc_betatable[hevc_clip_i(qp + beta_offset, 0, 51)]
-          let tc0 = if bs0 != 0 { hevc_tc_calc(qp, bs0, tc_offset) } else { 0 }
-          let tc1 = if bs1 != 0 { hevc_tc_calc(qp, bs1, tc_offset) } else { 0 }
+          let beta = hevc_betatable[hevc_clip_i(qp + beta_offset, 0, 51)] << bd_shift
+          let tc0 = if bs0 != 0 {
+            hevc_tc_calc(qp, bs0, tc_offset) << bd_shift
+          } else {
+            0
+          }
+          let tc1 = if bs1 != 0 {
+            hevc_tc_calc(qp, bs1, tc_offset) << bd_shift
+          } else {
+            0
+          }
           hevc_deblock_luma(
             y_plane,
             y * stride_y + x,
@@ -354,6 +368,7 @@ pub fn hevc_deblock_picture(
             beta,
             tc0,
             tc1,
+            max,
           )
         }
         x = x + 8
@@ -370,14 +385,14 @@ pub fn hevc_deblock_picture(
                 1
               ) >>
               1
-            let beta = hevc_betatable[hevc_clip_i(qp + beta_offset, 0, 51)]
+            let beta = hevc_betatable[hevc_clip_i(qp + beta_offset, 0, 51)] << bd_shift
             let tc0 = if bs0 != 0 {
-              hevc_tc_calc(qp, bs0, tc_offset)
+              hevc_tc_calc(qp, bs0, tc_offset) << bd_shift
             } else {
               0
             }
             let tc1 = if bs1 != 0 {
-              hevc_tc_calc(qp, bs1, tc_offset)
+              hevc_tc_calc(qp, bs1, tc_offset) << bd_shift
             } else {
               0
             }
@@ -389,6 +404,7 @@ pub fn hevc_deblock_picture(
               beta,
               tc0,
               tc1,
+              max,
             )
           }
           x = x + 8
@@ -422,12 +438,12 @@ pub fn hevc_deblock_picture(
               ) >>
               1
             let tc0 = if bs0 == 2 {
-              hevc_chroma_tc(pps, qp0, chroma, tc_offset)
+              hevc_chroma_tc(pps, qp0, chroma, tc_offset) << bd_shift
             } else {
               0
             }
             let tc1 = if bs1 == 2 {
-              hevc_chroma_tc(pps, qp1, chroma, tc_offset)
+              hevc_chroma_tc(pps, qp1, chroma, tc_offset) << bd_shift
             } else {
               0
             }
@@ -438,6 +454,7 @@ pub fn hevc_deblock_picture(
               true,
               tc0,
               tc1,
+              max,
             )
           }
           x = x + 8 * h
@@ -473,12 +490,12 @@ pub fn hevc_deblock_picture(
                 0
               }
               let tc0 = if bs0 == 2 {
-                hevc_chroma_tc(pps, qp0, chroma, tc_offset)
+                hevc_chroma_tc(pps, qp0, chroma, tc_offset) << bd_shift
               } else {
                 0
               }
               let tc1 = if bs1 == 2 {
-                hevc_chroma_tc(pps, qp1, chroma, tc_offset)
+                hevc_chroma_tc(pps, qp1, chroma, tc_offset) << bd_shift
               } else {
                 0
               }
@@ -489,6 +506,7 @@ pub fn hevc_deblock_picture(
                 false,
                 tc0,
                 tc1,
+                max,
               )
             }
             x = x + 8 * h

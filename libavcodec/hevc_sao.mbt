@@ -166,11 +166,13 @@ fn hevc_sao_copy_plane(src : Array[Int32]) -> Array[Int32] {
 }
 
 ///|
-fn hevc_sao_clip(v : Int32) -> Int32 {
+/// `av_clip_pixel`: clip to the coded bit depth (255 for 8-bit). */
+fn hevc_sao_clip(v : Int32, bd : Int32) -> Int32 {
+  let max = (1 << bd) - 1
   if v < 0 {
     0
-  } else if v > 255 {
-    255
+  } else if v > max {
+    max
   } else {
     v
   }
@@ -187,6 +189,7 @@ pub fn hevc_sao_apply(
   if sps.sao_enabled == 0 {
     return
   }
+  let bd = sps.bit_depth
   let mut any = false
   for t in sao.type_idx {
     if t != 0 {
@@ -251,11 +254,13 @@ pub fn hevc_sao_apply(
         for k in 0..<4 {
           table[(k + band) & 31] = sao.offset_val[ctb * 15 + c_idx * 5 + k + 1]
         }
+        // C: shift = BIT_DEPTH - 5 (3 for 8-bit)
+        let band_shift = bd - 5
         for y in 0..<height {
           for x in 0..<width {
             let idx = (y0 + y) * stride + x0 + x
             let v = src[idx]
-            dst[idx] = hevc_sao_clip(v + table[(v >> 3) & 31])
+            dst[idx] = hevc_sao_clip(v + table[(v >> band_shift) & 31], bd)
           }
         }
       } else if sao_type == hevc_sao_edge {
@@ -289,7 +294,7 @@ pub fn hevc_sao_apply(
             let d0 = hevc_sao_cmp(v, n0)
             let d1 = hevc_sao_cmp(v, n1)
             let oi = edge_idx[2 + d0 + d1]
-            dst[idx] = hevc_sao_clip(v + sao.offset_val[ctb * 15 + off + oi])
+            dst[idx] = hevc_sao_clip(v + sao.offset_val[ctb * 15 + off + oi], bd)
           }
         }
         if eo != 1 {
