@@ -82,7 +82,8 @@ test "aac: TDAC of three long blocks reconstructs the stream" {
   // sample in consecutive frames.
   let w = aac_sine_half_window(n)
   for m = 0; m < n_half; m = m + 1 {
-    let sum = w[n_half - 1 - m] * w[n_half - 1 - m] + w[n_half + m] * w[n_half + m]
+    let sum = w[n_half - 1 - m] * w[n_half - 1 - m] +
+      w[n_half + m] * w[n_half + m]
     assert_true(sum > 0.999999 && sum < 1.000001)
   }
   // The IMDCT is linear and reproduces kernel rows for basis spectra.

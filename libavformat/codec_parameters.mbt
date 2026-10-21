@@ -200,10 +200,16 @@ pub fn codec_parameters_from_extradata(
       }
     }
   } else if codec == "aac" {
-    let cfg = @libavcodec.new_mpeg4_audio_config()
+    let mut cfg = @libavcodec.new_mpeg4_audio_config()
     match @libavcodec.ff_mpeg4audio_get_config(cfg, extra, true) {
       Err(_) => return p
       Ok(_) => ()
+    }
+    if cfg.object_type == 2 && cfg.chan_config == 0 {
+      match @libavcodec.aac_parse_audio_specific_config(extra) {
+        Ok(parsed) => cfg = parsed.config
+        Err(_) => return p
+      }
     }
     p.profile = cfg.object_type
     if cfg.sample_rate > 0 {

@@ -69,7 +69,8 @@ pub struct AacPulse {
 }
 
 ///|
-/// A parsed `individual_channel_stream` (common window not covered). */
+/// A parsed `individual_channel_stream`; common-window CPEs reuse only
+/// `info`, keeping sections and all channel tools separate. */
 pub struct AacIcs {
   info : AacIcsInfo
   global_gain : Int32
@@ -188,6 +189,9 @@ fn aac_decode_section_data(
     let cbs : Array[Int32] = Array::make(info.max_sfb, -1)
     let mut end = 0
     while end < info.max_sfb {
+      if gb.bits_left() < 4 + bits {
+        return Err("truncated AAC section data")
+      }
       let cb = gb.read(4).reinterpret_as_int()
       if cb == 12 {
         return Err("invalid band type")
@@ -195,8 +199,14 @@ fn aac_decode_section_data(
       let mut sect_len = 0
       let mut incr = escape
       while incr == escape {
+        if gb.bits_left() < bits {
+          return Err("truncated AAC section data")
+        }
         incr = gb.read(bits).reinterpret_as_int()
         sect_len = sect_len + incr
+        if sect_len > info.max_sfb - end {
+          return Err("section too long")
+        }
       }
       end = end + sect_len
       if end > info.max_sfb {
@@ -294,10 +304,24 @@ fn aac_tns_none(num_windows : Int32) -> AacTns {
 /// decoded separately. Pulse positions are validated against the SWB
 /// table by the frame decoder before it reads spectral data.
 pub fn aac_decode_ics(gb : BitReader) -> Result[AacIcs, String] {
+  aac_decode_ics_with_info(gb, None)
+}
+
+///|
+/// `common_window` CPE channels share ICS info but retain independent
+/// global gain, sections, scalefactors, pulse and TNS syntax.
+fn aac_decode_ics_with_info(
+  gb : BitReader,
+  common : AacIcsInfo?,
+) -> Result[AacIcs, String] {
   let global_gain = gb.read(8).reinterpret_as_int()
-  let info = match aac_decode_ics_info(gb) {
-    Ok(v) => v
-    Err(e) => return Err(e)
+  let info = match common {
+    Some(v) => v
+    None =>
+      match aac_decode_ics_info(gb) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
   }
   let sect_cb = match aac_decode_section_data(gb, info) {
     Ok(v) => v

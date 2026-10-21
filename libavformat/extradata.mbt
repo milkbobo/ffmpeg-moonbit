@@ -12,7 +12,7 @@
 ///     (the codec-specific records are decoded by libavcodec, not here).
 ///   * `esds` walks the MPEG-4 descriptor chain down to the
 ///     DecoderSpecificInfo, which becomes the extradata; for AAC tracks the
-///     AudioSpecificConfig is parsed (the libavcodec `mpeg4audio.mbt` port)
+///     AudioSpecificConfig is parsed (`mpeg4audio.mbt` plus LC PCE in `aac_config.mbt`)
 ///     to fill channels / sample rate / frame length, and the codec-id may
 ///     be refined to `mp3on4` / `mp4als`.
 ///   * the `dvc1`/`dvvC`/`dvh1`-style mov_read_extradata boxes (which store
@@ -218,7 +218,7 @@ fn mp4_read_dec_config_descr(
     }
     st.cur.extradata = Some(Bytes::from_array(bytes[:]))
     if st.cur.codec_id == "aac" {
-      let cfg = @libavcodec.new_mpeg4_audio_config()
+      let mut cfg = @libavcodec.new_mpeg4_audio_config()
       match
         @libavcodec.ff_mpeg4audio_get_config(
           cfg,
@@ -227,6 +227,14 @@ fn mp4_read_dec_config_descr(
         ) {
         Err(_) => raise InvalidData("invalid audio specific config")
         Ok(_) => ()
+      }
+      if cfg.object_type == 2 && cfg.chan_config == 0 {
+        match
+          @libavcodec.aac_parse_audio_specific_config(st.cur.extradata.unwrap()) {
+          Ok(parsed) => cfg = parsed.config
+          Err(_) =>
+            raise InvalidData("invalid AAC PCE in audio specific config")
+        }
       }
       if cfg.channels != st.cur.channels.reinterpret_as_int() {
         st.cur.channels = cfg.channels.reinterpret_as_uint()

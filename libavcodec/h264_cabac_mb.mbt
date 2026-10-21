@@ -818,6 +818,11 @@ fn h264_decode_mb_cabac_intra(
         }
       }
     }
+  } else {
+    // C's residual-decode else branch (`h264_cabac.c` end of
+    // `ff_h264_decode_mb_cabac`): all nz counts are zero (already cleared)
+    // and the QP-delta context resets.
+    ctx.last_qscale_diff = 0
   }
   match
     h264_recon_mb(

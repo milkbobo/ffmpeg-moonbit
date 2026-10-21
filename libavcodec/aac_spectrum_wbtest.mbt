@@ -84,7 +84,7 @@ test "aac: all 46 FDK frames match FFmpeg PCM within 1 LSB" {
 
 ///|
 /// Quantise one normalized PCM sample to signed 16-bit, with clipping. */
-fn aac_s16p(x : Double) -> Int {
+fn aac_s16p(x : Double) -> Int32 {
   let v = x * 32768.0
   if v >= 32767.5 {
     32767

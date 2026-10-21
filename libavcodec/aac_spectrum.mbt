@@ -239,8 +239,8 @@ pub fn new_aac_spectrum_state() -> AacSpectrumState {
 }
 
 ///|
-/// Scalefactor band geometry for one sampling index: the long (1024) and
-/// short (128) window offset tables, their band counts and the TNS band
+/// Scalefactor band geometry for one sampling index: the long (1024/960) and
+/// short (128/120) window offset tables, their band counts and the TNS band
 /// limits. */
 pub struct AacSwb {
   offsets_long : Array[UInt32]
@@ -254,17 +254,31 @@ pub struct AacSwb {
 
 ///|
 /// `ff_swb_offset_1024/128` and `ff_aac_num_swb_1024/128` per sampling
-/// index (0..11; the escape index 12 shares the 96000 Hz entry like the C
-/// pointer tables). */
-pub fn aac_swb_tables(sampling_index : Int32) -> Result[AacSwb, String] {
+/// index 0..12 (96000 through 7350 Hz), including 960/120 geometry.
+pub fn aac_swb_tables(
+  sampling_index : Int32,
+  frame_length_short~ : Bool = false,
+) -> Result[AacSwb, String] {
   if sampling_index < 0 || sampling_index > 12 {
     return Err("invalid sampling index")
   }
   let i = sampling_index
   Ok({
-    offsets_long: aac_swb_offset_1024[i],
-    num_long: aac_num_swb_1024[i],
-    offsets_short: aac_swb_offset_128[i],
+    offsets_long: if frame_length_short {
+      aac_swb_offset_960[i]
+    } else {
+      aac_swb_offset_1024[i]
+    },
+    num_long: if frame_length_short {
+      aac_num_swb_960[i]
+    } else {
+      aac_num_swb_1024[i]
+    },
+    offsets_short: if frame_length_short {
+      aac_swb_offset_120[i]
+    } else {
+      aac_swb_offset_128[i]
+    },
     num_short: aac_num_swb_128[i],
     tns_max_long: aac_tns_max_bands_1024[i],
     tns_max_short: aac_tns_max_bands_128[i],
@@ -536,8 +550,13 @@ fn aac_read_sign_bits(gb : BitReader, n : Int32) -> Int32 {
 /// `decode_pulses` position checks, deferred from syntax parsing until
 /// the actual sampling-rate SWB table is available. The full long-window
 /// band count, not max_sfb, bounds the encoded start and positions.
-fn aac_resolve_pulses(pulse : AacPulse, swb : AacSwb) -> Result[Array[Int32], String] {
-  if pulse.offsets.length() == 0 { return Ok([]) }
+fn aac_resolve_pulses(
+  pulse : AacPulse,
+  swb : AacSwb,
+) -> Result[Array[Int32], String] {
+  if pulse.offsets.length() == 0 {
+    return Ok([])
+  }
   if pulse.start_sfb >= swb.num_long {
     return Err("pulse start band out of range")
   }

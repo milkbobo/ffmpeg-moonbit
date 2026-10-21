@@ -231,6 +231,17 @@ lines.append("  " + ", ".join("aac_swb_128_%d" % s for s in swb128_ptr) + ",")
 lines.append("]")
 lines.append("")
 
+# 960/120 uses the same TNS limits and short-band counts as 1024/128.
+emit_ints(lines, "aac_num_swb_960", [to_int(t) for t in parse_array("ff_aac_num_swb_960")], "Int32")
+for size in [960, 120]:
+    for sub in [96, 64, 48, 24, 16, 8] if size == 960 else [96, 48, 24, 16, 8]:
+        emit_ints(lines, f"aac_swb_{size}_{sub}",
+                  [to_int(t) for t in parse_array(f"swb_offset_{size}_{sub}")], "UInt32")
+    mapping = [96, 96, 64, 48, 48, 48, 24, 24, 16, 16, 16, 8, 8] if size == 960 else swb128_ptr
+    lines.append(f"let aac_swb_offset_{size} : Array[Array[UInt32]] = [")
+    lines.append("  " + ", ".join(f"aac_swb_{size}_{sub}" for sub in mapping) + ",")
+    lines.extend(["]", ""])
+
 output = Path(ROOT) / "moonbit/libavcodec/aac_tables.mbt"
 generated = "\n".join(lines)
 if args.check:

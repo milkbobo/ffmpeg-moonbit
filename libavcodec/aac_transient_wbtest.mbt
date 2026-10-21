@@ -12,7 +12,10 @@ priv struct AacTransientCoverage {
 }
 
 ///|
-fn aac_check_transient(encoded : Bytes, reference : Bytes) -> AacTransientCoverage raise {
+fn aac_check_transient(
+  encoded : Bytes,
+  reference : Bytes,
+) -> AacTransientCoverage raise {
   let data = @libavutil.av_base64_decode(encoded, 16384).unwrap()
   let pcm = @libavutil.av_base64_decode(reference, 65536).unwrap()
   let header = ff_adts_header_parse_buf(data).unwrap()
@@ -34,18 +37,23 @@ fn aac_check_transient(encoded : Bytes, reference : Bytes) -> AacTransientCovera
   let mut max_diff = 0
   let mut exact = 0
   while pos < data.length() {
-    let hdr = ff_adts_header_parse_buf(data.clamped_view(start=pos,
-      end=pos + av_aac_adts_header_size).to_owned()).unwrap()
+    let hdr = ff_adts_header_parse_buf(
+      data.clamped_view(start=pos, end=pos + av_aac_adts_header_size).to_owned(),
+    ).unwrap()
     let end = pos + hdr.frame_length
     assert_true(end <= data.length())
-    let payload_start = pos + av_aac_adts_header_size +
+    let payload_start = pos +
+      av_aac_adts_header_size +
       (if hdr.crc_absent == 0 { 2 } else { 0 })
-    let payload = data.clamped_view(start=payload_start, end=end).to_owned()
+    let payload = data.clamped_view(start=payload_start, end~).to_owned()
     let gb = BitReader::new(payload)
     let mut id = gb.read(3).reinterpret_as_int()
     while id == aac_id_filler || id == aac_id_pce {
-      if id == aac_id_filler { aac_skip_filler(gb).unwrap() }
-      else { aac_skip_pce(gb).unwrap() }
+      if id == aac_id_filler {
+        aac_skip_filler(gb).unwrap()
+      } else {
+        ignore(aac_decode_pce(gb).unwrap())
+      }
       id = gb.read(3).reinterpret_as_int()
     }
     assert_eq(id, aac_id_sce)
@@ -56,9 +64,13 @@ fn aac_check_transient(encoded : Bytes, reference : Bytes) -> AacTransientCovera
     shapes[ics.info.window_shape] = shapes[ics.info.window_shape] + 1
     tns = tns + ics.tns_present
     for g = 0; g < ics.info.num_window_groups; g = g + 1 {
-      if ics.info.window_group_length[g] > 1 { grouped = grouped + 1 }
+      if ics.info.window_group_length[g] > 1 {
+        grouped = grouped + 1
+      }
       for band = 0; band < ics.info.max_sfb; band = band + 1 {
-        if ics.sect_cb[g][band] == 13 { pns = pns + 1 }
+        if ics.sect_cb[g][band] == 13 {
+          pns = pns + 1
+        }
       }
     }
     let out = dec.decode_frame(payload).unwrap()
@@ -71,8 +83,12 @@ fn aac_check_transient(encoded : Bytes, reference : Bytes) -> AacTransientCovera
       let want = if value >= 32768 { value - 65536 } else { value }
       let got = aac_s16p(out[0].samples[i])
       let diff = if got > want { got - want } else { want - got }
-      if diff > max_diff { max_diff = diff }
-      if diff == 0 { exact = exact + 1 }
+      if diff > max_diff {
+        max_diff = diff
+      }
+      if diff == 0 {
+        exact = exact + 1
+      }
     }
     frames = frames + 1
     pos = end
@@ -84,7 +100,9 @@ fn aac_check_transient(encoded : Bytes, reference : Bytes) -> AacTransientCovera
 
 ///|
 test "aac: native transient PCM matches FFmpeg across window transitions" {
-  let coverage = aac_check_transient(aac_transient_native_b64, aac_transient_native_pcm_b64)
+  let coverage = aac_check_transient(
+    aac_transient_native_b64, aac_transient_native_pcm_b64,
+  )
   assert_eq(coverage.windows, [1, 2, 9, 1])
   assert_eq(coverage.shapes, [11, 2])
   assert_eq(coverage.grouped, 24)
@@ -95,7 +113,9 @@ test "aac: native transient PCM matches FFmpeg across window transitions" {
 
 ///|
 test "aac: FDK transient PCM matches FFmpeg across window transitions" {
-  let coverage = aac_check_transient(aac_transient_fdk_b64, aac_transient_fdk_pcm_b64)
+  let coverage = aac_check_transient(
+    aac_transient_fdk_b64, aac_transient_fdk_pcm_b64,
+  )
   assert_eq(coverage.windows, [3, 2, 7, 2])
   assert_eq(coverage.shapes, [9, 5])
   assert_eq(coverage.grouped, 16)

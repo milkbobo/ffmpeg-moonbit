@@ -59,9 +59,18 @@
   批量提取并与 C 源逐值 diff）+ `aac_spectrum.mbt`（scalefactor 差分/noise 前导、
   码书 1..11 Huffman + VMUL 打包索引解包、book 11 escape、pulse 重建、PNS、TNS Levinson+AR、
   gain-control 语法）+ `aac_mdct.mbt`（四窗口序列 + KBD/正弦窗、综合 2/N、
-  `vector_fmul_window` 2×len、FIL/PCE 跳过）。真实 libfdk_aac 码流逐帧解码出 PCM；
-  **单声道长窗、真实短窗/窗口切换/TNS/PNS 及合成 pulse 向量与 FFmpeg 参考的
-  最大差分为 1 LSB**（见 README §3）。
+  `vector_fmul_window` 2×len、FIL/DSE 跳过及 SCE/CPE/LFE 多元素帧编排）。真实 libfdk_aac 码流逐帧解码出 PCM；
+  `aac_stereo.mbt` 支持 CPE 共享/独立窗口、M/S 与强度立体声。**单/双声道长短窗、
+  窗口切换/TNS/PNS 及合成 pulse 向量与 FFmpeg 参考的最大差分为 1 LSB**（见 README §3）。
+  `aac_layout.mbt` 支持默认配置 1..7/11..14 和三层 PCE、FFmpeg 元素输出排序；真实 5.1/PCE
+  5.1/7.1 与标签乱序向量的最大差分同样为 1 LSB。
+  `aac_config.mbt` 支持 LC GASpecificConfig/ASC-only PCE 与 `new_aac_decoder_from_asc`；
+  MP4 esds 和参数桥接能解析 PCE 声道数，真实 MP4→raw packets→PCM 最大差分 1 LSB。
+  ASC frameLengthFlag 可选择 960/120 的频带与综合窗口；短窗频谱步长仍为 128，
+  逆变换结果按 120 排列。合成 mono/CPE 的四序列/双窗形/首尾频带对拍最大差分 1 LSB；
+  本机 FDK 拒绝 960 配置，真实编码器样本仍待验证。
+  `aac_coupling.mbt` 支持 CCE 三个耦合位置、四增益尺度与 CPE 声道选择，
+  PCE/ASC 保存耦合声明，源历史按标签独立维护。1024/960 合成码流对拍最大差分 1 LSB。
 - **libavutil（bessel）**：`av_bessel_i0`（Blair/Edwards 极小有理逼近，KBD 窗用）。
 - **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
   - H.264 Baseline **I 帧重建 + 环路去块滤波**：`h264_slice.mbt`（I/SI slice header）+
@@ -425,6 +434,30 @@ $msg | git commit -F -
   移植同样只消费语法。
 - **AAC PCM 差分不能重复补编码器延迟**：参考 `ffmpeg -i tone_fade.aac -f s16le`
   的 PCM 与本解码器都保留 priming，按同一帧比较；额外偏移 1024 样本会制造失配。
+- **AAC CPE 的工具顺序与状态边界**：左/右频谱（含 pulse）→M/S→强度立体声→
+  各声道 TNS→IMDCT。共享 ICS 只共享当前窗口/频带信息，不能覆盖右声道的历史窗
+  shape。M/S 掩码按 window group × max_sfb 读取，mode=2 不读显式位；噪声/强度带
+  不做 butterfly。强度书 14/15 的符号相反，有 M/S 掩码时再翻转。帧尾 END 校验
+  失败不推进窗口历史；多元素由布局核对完整性，不能静默返回首个声道。
+  `scripts/generate_aac_stereo_vectors.py` 生成真实与合成 CPE 参考，期望 PCM 为
+  FFmpeg 9.0.2 解码同一码流的交错 s16le；对照时需按 L/R 交错索引分离声道。
+- **AAC 多元素不能按到达次序绑定历史**：以 type/tag/subchannel 为 key，输出按
+  AVChannel 排列；`decoder.layout` 是输出顺序，`decoder.channels` 是历史存储槽位。
+  PCE 开头还有四位 instance tag，不能直接从 object_type 读起；PCE 对齐相对于
+  raw_data_block 开始。默认布局表与 PCE 在错误帧中不能提交，PNS 随机状态也须恢复。
+  PCE 非连续标签与每帧元素乱序参考见 `scripts/generate_aac_layout_vectors.py`；7.1
+  native ADTS 必须强制 PCE（indexed config 12 放不进 ADTS 的三位 channel_config）。
+  本移植对歧义及无法命名的 height+CCE PCE 显式拒绝；CCE 标签单独保存，不计输出声道，
+  不仿真 C 的 unspecified 输出顺序回退。高度 comment 长度只计 front/side/back，
+  保留高度值 3 按 C 行为忽略重排。普通布局按整个元素的掩码排序、CPE 保持相邻；
+  22.2 必须执行 C 的特殊元素交换，不能改成逐个 AVChannel 排序。
+- **AAC ASC-only PCE 不能靠等待第一包补布局**：MP4/MKV 可能只在 extradata 中携带
+  PCE。用 `aac_parse_audio_specific_config` 读取 GA/PCE 并用 `new_aac_decoder_from_asc`
+  建立布局/容量；不要改通用 `ff_mpeg4audio_get_config` 的返回位数契约。coreCoderDelay
+  多出 14 位时，PCE 的 byte align 仍相对 ASC bit zero。容器 LC config=0 的声道数
+  也须从 GA/PCE 得到，不能用通用头部返回的 0 覆盖轨道；非法 PCE 不宣称解析成功。
+  MP4 原始包与 FFmpeg PCM 对拍用 `-flags2 +skip_manual` 保留完整帧，避免再补一次
+  priming。参考生成脚本为 `scripts/generate_aac_asc_vectors.py`。
 - **AAC pulse 的位置依赖实际采样率的 SWB 表**：语法层保留起始带和每个 5 位
   offset，帧层在频谱解码前转为累计位置；起始带按完整 num_swb 校验，不按 max_sfb。
   重建放在反量化后、TNS 前，先撤销 4/3 幂再加 pulse 再反量化；重复位置必须顺序
@@ -543,6 +576,10 @@ moonbit/                      # git 仓库根
     ├── h264_dpb.mbt          # 滑窗 DPB + H264Decoder（Annex B/avcC 入口）
     ├── aac_ics.mbt           # AAC ICS 语法（ics_info/section/pulse/TNS/gain-control）
     ├── aac_mdct.mbt          # AAC IMDCT/加窗（四窗口序列 + KBD/正弦窗）
+    ├── aac_coupling.mbt      # CCE 三耦合位置、增益与标签历史
+    ├── aac_stereo.mbt        # CPE、M/S/强度立体声、独立声道状态
+    ├── aac_layout.mbt        # 默认 1..7/11..14 / 三层 PCE / FFmpeg 元素排序 / DSE
+    ├── aac_config.mbt        # ASC/GA/PCE 初始化与 AAC-LC 解码器工厂
     ├── aac_spectrum.mbt      # AAC 频谱解码（码书 1..11/scalefactor/pulse/PNS/TNS）
     ├── aac_tables.mbt        # AAC 解码表（脚本批量提取）
     ├── hevc_ps.mbt           # HEVC VPS/SPS/PPS/PTL/RPS + hvcC
