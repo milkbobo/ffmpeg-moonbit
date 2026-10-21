@@ -383,6 +383,11 @@ pub struct Av1FrameHeader {
   disable_frame_end_update_cdf : Bool
   tile_cols : Int32
   tile_rows : Int32
+  tile_cols_log2 : Int32
+  tile_rows_log2 : Int32
+  context_update_tile_id : Int32
+  tile_size_bytes_minus1 : Int32
+  header_bits : Int32
   base_q_idx : Int32
   using_qmatrix : Bool
   segmentation_enabled : Bool
@@ -482,6 +487,11 @@ pub fn av1_parse_frame_header(
           disable_frame_end_update_cdf: false,
           tile_cols: 1,
           tile_rows: 1,
+          tile_cols_log2: 0,
+          tile_rows_log2: 0,
+          context_update_tile_id: 0,
+          tile_size_bytes_minus1: 0,
+          header_bits: 0,
           base_q_idx: 0,
           using_qmatrix: false,
           segmentation_enabled: false,
@@ -622,8 +632,12 @@ pub fn av1_parse_frame_header(
       let mut disable_frame_end = false
       let mut tile_cols = 1
       let mut tile_rows = 1
+      let mut tile_cols_log2 = 0
+      let mut tile_rows_log2 = 0
       let mut base_q_idx = 0
       let mut using_qmatrix = false
+      let mut context_update_tile_id = 0
+      let mut tile_size_minus1 = 0
       {
         disable_frame_end = if !seq.reduced_still_picture_header {
           br.read(1) != 0
@@ -673,7 +687,7 @@ pub fn av1_parse_frame_header(
         if !uniform_tiles {
           return Err("PATCHWELCOME: AV1 non-uniform tile spacing")
         }
-        let mut tile_cols_log2 = min_log2_cols
+        tile_cols_log2 = min_log2_cols
         while tile_cols_log2 < max_log2_cols {
           if br.read1() == 0 {
             break
@@ -687,7 +701,7 @@ pub fn av1_parse_frame_header(
         if min_log2_rows < 0 {
           min_log2_rows = 0
         }
-        let mut tile_rows_log2 = min_log2_rows
+        tile_rows_log2 = min_log2_rows
         while tile_rows_log2 < max_log2_rows {
           if br.read1() == 0 {
             break
@@ -698,8 +712,10 @@ pub fn av1_parse_frame_header(
           tile_rows_log2
         tile_rows = (sb_rows + tile_height_sb - 1) / tile_height_sb
         if tile_cols_log2 > 0 || tile_rows_log2 > 0 {
-          br.skip(tile_cols_log2 + tile_rows_log2)
-          br.skip(2) // tile_size_bytes_minus1
+          context_update_tile_id = br
+            .read(tile_cols_log2 + tile_rows_log2)
+            .to_int()
+          tile_size_minus1 = br.read(2).to_int()
         }
         // quantization_params
         base_q_idx = br.read(8).to_int()
@@ -875,6 +891,11 @@ pub fn av1_parse_frame_header(
         disable_frame_end_update_cdf: disable_frame_end,
         tile_cols,
         tile_rows,
+        tile_cols_log2,
+        tile_rows_log2,
+        context_update_tile_id,
+        tile_size_bytes_minus1: tile_size_minus1,
+        header_bits: (br.count() + 7) / 8 * 8,
         base_q_idx,
         using_qmatrix,
         segmentation_enabled,
@@ -899,4 +920,69 @@ pub fn av1_parse_frame_header(
     pos = p + size
   }
   Err("av1: no frame header OBU")
+}
+
+///|
+/// AV1 tile-group header (the tile data itself is left to the decoder). */
+pub struct Av1TileGroup {
+  tile_start : Int32
+  tile_end : Int32
+  num_tiles : Int32
+  header_bits : Int32
+}
+
+///|
+/// Parse the tile-group header from OBU_TILE_GROUP or OBU_FRAME.
+pub fn av1_parse_tile_group(
+  data : Bytes,
+  fh : Av1FrameHeader,
+) -> Result[Av1TileGroup, String] {
+  let mut pos = 0
+  while pos < data.length() {
+    let header = data[pos].to_int()
+    let obu_type = (header >> 3) & 0x0F
+    let extension = (header & 0x04) != 0
+    let has_size = (header & 0x02) != 0
+    let p_ref = Ref(pos + 1 + (if extension { 1 } else { 0 }))
+    if !has_size {
+      return Err("av1: OBU without size")
+    }
+    let size = av1_leb128(data, p_ref)
+    let p = p_ref.val
+    if size < 0 || p + size > data.length() {
+      return Err("av1: bad OBU size")
+    }
+    if obu_type == 4 || obu_type == 6 {
+      let payload = data[p:p + size].to_owned()
+      let br = BitReader::with_size(payload, size * 8)
+      if obu_type == 6 {
+        let skip = fh.header_bits
+        if skip > size * 8 {
+          return Err("av1: frame header overruns OBU")
+        }
+        br.skip(skip)
+      }
+      let num_tiles = fh.tile_cols * fh.tile_rows
+      let mut start = 0
+      let mut end = num_tiles - 1
+      if num_tiles > 1 {
+        if br.read(1) != 0 {
+          let bits = fh.tile_cols_log2 + fh.tile_rows_log2
+          start = br.read(bits).to_int()
+          end = br.read(bits).to_int()
+          if start > end || end >= num_tiles {
+            return Err("av1: invalid tile range")
+          }
+        }
+      }
+      return Ok({
+        tile_start: start,
+        tile_end: end,
+        num_tiles,
+        header_bits: br.count(),
+      })
+    }
+    pos = p + size
+  }
+  Err("av1: no tile group OBU")
 }
