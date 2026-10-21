@@ -397,6 +397,9 @@ pub struct Av1FrameHeader {
   interpolation_filter : Int32
   is_motion_mode_switchable : Bool
   use_ref_frame_mvs : Bool
+  reference_select : Bool
+  allow_warped_motion : Bool
+  is_global : Array[Bool]
 }
 
 ///|
@@ -491,6 +494,9 @@ pub fn av1_parse_frame_header(
           interpolation_filter: 0,
           is_motion_mode_switchable: false,
           use_ref_frame_mvs: false,
+          reference_select: false,
+          allow_warped_motion: false,
+          is_global: [],
         })
       }
       let frame_type = br.read(2).to_int()
@@ -732,6 +738,9 @@ pub fn av1_parse_frame_header(
       let mut cdef_bits = 0
       let mut tx_mode = 0
       let mut reduced_tx_set = false
+      let mut reference_select = false
+      let mut allow_warped = false
+      let global_motion : Array[Bool] = []
       {
         segmentation_enabled = br.read1() != 0
         if segmentation_enabled {
@@ -782,9 +791,24 @@ pub fn av1_parse_frame_header(
         }
         if !seq.reduced_still_picture_header {
           tx_mode = if br.read1() != 0 { 2 } else { 1 }
+          if frame_type == av1_frame_inter {
+            reference_select = br.read1() != 0
+          }
+          if !error_resilient {
+            allow_warped = br.read1() != 0
+          }
           reduced_tx_set = br.read1() != 0
         } else {
           tx_mode = 1
+        }
+        if frame_type == av1_frame_inter {
+          for _ in 0..<7 {
+            let g = br.read1() != 0
+            global_motion.push(g)
+            if g {
+              return Err("PATCHWELCOME: AV1 global motion")
+            }
+          }
         }
       }
       return Ok({
@@ -826,6 +850,9 @@ pub fn av1_parse_frame_header(
         interpolation_filter,
         is_motion_mode_switchable: motion_mode_switchable,
         use_ref_frame_mvs: use_ref_mvs,
+        reference_select,
+        allow_warped_motion: allow_warped,
+        is_global: global_motion,
       })
     }
     pos = p + size

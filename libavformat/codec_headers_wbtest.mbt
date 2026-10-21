@@ -192,6 +192,14 @@ test "av1: inter frame header reference slots match trace_headers" {
   assert_eq(f1.tile_rows, 1)
   assert_eq(f1.base_q_idx, 159)
   assert_eq(f1.loop_filter_level, [4, 4, 8, 0])
+  assert_eq(f1.tx_mode, 1)
+  assert_false(f1.reference_select)
+  assert_true(f1.allow_warped_motion)
+  assert_false(f1.reduced_tx_set)
+  assert_eq(f1.is_global.length(), 7)
+  for i in 0..<7 {
+    assert_false(f1.is_global[i])
+  }
   let f2 = @libavcodec.av1_parse_frame_header(mkv.packets[2].data, seq).unwrap()
   assert_eq(f2.frame_type, @libavcodec.av1_frame_inter)
   assert_eq(f2.order_hint, 2)
