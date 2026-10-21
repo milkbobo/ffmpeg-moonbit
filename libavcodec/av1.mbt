@@ -44,6 +44,7 @@ pub struct Av1SequenceParameters {
   mut enable_restoration : Bool
   mut use_128x128_superblock : Bool
   mut separate_uv_delta_q : Bool
+  mut film_grain_params_present : Bool
 }
 
 ///|
@@ -263,7 +264,7 @@ fn av1_parse_sequence_payload(
   seq.enable_cdef = br.read(1) != 0
   seq.enable_restoration = br.read(1) != 0
   av1_parse_color_config(seq, br)
-  ignore(br.read(1)) // film_grain_params_present
+  seq.film_grain_params_present = br.read(1) != 0
   Ok(())
 }
 
@@ -301,6 +302,7 @@ pub fn av1_parse_sequence_header(
     enable_restoration: false,
     use_128x128_superblock: false,
     separate_uv_delta_q: false,
+    film_grain_params_present: false,
   }
   if data.length() == 0 {
     return Err("av1: empty input")
@@ -407,6 +409,24 @@ pub struct Av1FrameHeader {
   reference_select : Bool
   allow_warped_motion : Bool
   is_global : Array[Bool]
+  apply_grain : Bool
+  grain_seed : Int32
+  num_y_points : Int32
+  num_cb_points : Int32
+  num_cr_points : Int32
+  chroma_scaling_from_luma : Bool
+  grain_scaling_minus_8 : Int32
+  ar_coeff_lag : Int32
+  ar_coeff_shift_minus_6 : Int32
+  grain_scale_shift : Int32
+  cb_mult : Int32
+  cb_luma_mult : Int32
+  cb_offset : Int32
+  cr_mult : Int32
+  cr_luma_mult : Int32
+  cr_offset : Int32
+  overlap_flag : Bool
+  clip_to_restricted_range : Bool
 }
 
 ///|
@@ -511,6 +531,24 @@ pub fn av1_parse_frame_header(
           reference_select: false,
           allow_warped_motion: false,
           is_global: [],
+          apply_grain: false,
+          grain_seed: 0,
+          num_y_points: 0,
+          num_cb_points: 0,
+          num_cr_points: 0,
+          chroma_scaling_from_luma: false,
+          grain_scaling_minus_8: 0,
+          ar_coeff_lag: 0,
+          ar_coeff_shift_minus_6: 0,
+          grain_scale_shift: 0,
+          cb_mult: 0,
+          cb_luma_mult: 0,
+          cb_offset: 0,
+          cr_mult: 0,
+          cr_luma_mult: 0,
+          cr_offset: 0,
+          overlap_flag: false,
+          clip_to_restricted_range: false,
         })
       }
       let frame_type = br.read(2).to_int()
@@ -763,6 +801,24 @@ pub fn av1_parse_frame_header(
       let mut reference_select = false
       let mut allow_warped = false
       let global_motion : Array[Bool] = []
+      let mut apply_grain = false
+      let mut grain_seed = 0
+      let mut num_y_points = 0
+      let mut num_cb_points = 0
+      let mut num_cr_points = 0
+      let mut chroma_scaling_from_luma = false
+      let mut grain_scaling_minus_8 = 0
+      let mut ar_coeff_lag = 0
+      let mut ar_coeff_shift_minus_6 = 0
+      let mut grain_scale_shift = 0
+      let mut cb_mult = 0
+      let mut cb_luma_mult = 0
+      let mut cb_offset = 0
+      let mut cr_mult = 0
+      let mut cr_luma_mult = 0
+      let mut cr_offset = 0
+      let mut overlap_flag = false
+      let mut clip_to_restricted = false
       {
         segmentation_enabled = br.read1() != 0
         let seg_masks : Array[Int32] = []
@@ -865,6 +921,82 @@ pub fn av1_parse_frame_header(
             }
           }
         }
+        if seq.film_grain_params_present && (show_frame || showable) {
+          apply_grain = br.read1() != 0
+          if apply_grain {
+            grain_seed = br.read(16).to_int()
+            let update = if frame_type == av1_frame_inter {
+              br.read1() != 0
+            } else {
+              true
+            }
+            if !update {
+              return Err("PATCHWELCOME: AV1 grain from reference")
+            }
+            num_y_points = br.read(4).to_int()
+            if num_y_points > 14 {
+              return Err("av1: invalid grain points")
+            }
+            for _ in 0..<num_y_points {
+              br.skip(16) // point_y_value + point_y_scaling
+            }
+            if !seq.monochrome {
+              chroma_scaling_from_luma = br.read1() != 0
+            }
+            let skip_chroma = seq.monochrome ||
+              chroma_scaling_from_luma ||
+              (
+                seq.chroma_subsampling_x &&
+                seq.chroma_subsampling_y &&
+                num_y_points == 0
+              )
+            if !skip_chroma {
+              num_cb_points = br.read(4).to_int()
+              if num_cb_points > 10 {
+                return Err("av1: invalid cb grain points")
+              }
+              for _ in 0..<num_cb_points {
+                br.skip(16)
+              }
+              num_cr_points = br.read(4).to_int()
+              if num_cr_points > 10 {
+                return Err("av1: invalid cr grain points")
+              }
+              for _ in 0..<num_cr_points {
+                br.skip(16)
+              }
+            }
+            grain_scaling_minus_8 = br.read(2).to_int()
+            ar_coeff_lag = br.read(2).to_int()
+            let num_pos_luma = 2 * ar_coeff_lag * (ar_coeff_lag + 1)
+            let num_pos_chroma = if num_y_points > 0 {
+              br.skip(8 * num_pos_luma)
+              num_pos_luma + 1
+            } else {
+              num_pos_luma
+            }
+            if chroma_scaling_from_luma || num_cb_points > 0 {
+              br.skip(8 * num_pos_chroma)
+            }
+            if chroma_scaling_from_luma || num_cr_points > 0 {
+              br.skip(8 * num_pos_chroma)
+            }
+            ar_coeff_shift_minus_6 = br.read(2).to_int()
+            grain_scale_shift = br.read(2).to_int()
+            if num_cb_points > 0 {
+              cb_mult = br.read(8).to_int()
+              cb_luma_mult = br.read(8).to_int()
+              cb_offset = br.read(9).to_int()
+            }
+            if num_cr_points > 0 {
+              cr_mult = br.read(8).to_int()
+              cr_luma_mult = br.read(8).to_int()
+              cr_offset = br.read(9).to_int()
+            }
+            overlap_flag = br.read1() != 0
+            clip_to_restricted = br.read1() != 0
+          }
+        }
       }
       return Ok({
         show_existing_frame: false,
@@ -915,6 +1047,24 @@ pub fn av1_parse_frame_header(
         reference_select,
         allow_warped_motion: allow_warped,
         is_global: global_motion,
+        apply_grain,
+        grain_seed,
+        num_y_points,
+        num_cb_points,
+        num_cr_points,
+        chroma_scaling_from_luma,
+        grain_scaling_minus_8,
+        ar_coeff_lag,
+        ar_coeff_shift_minus_6,
+        grain_scale_shift,
+        cb_mult,
+        cb_luma_mult,
+        cb_offset,
+        cr_mult,
+        cr_luma_mult,
+        cr_offset,
+        overlap_flag,
+        clip_to_restricted_range: clip_to_restricted,
       })
     }
     pos = p + size

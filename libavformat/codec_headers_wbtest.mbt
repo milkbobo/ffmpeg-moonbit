@@ -304,3 +304,55 @@ test "av1: multi-tile layout and tile group header" {
   }
   assert_eq(sum, tg.data_size)
 }
+
+///|
+let av1_grain_b64 : Bytes = bcat([
+  b"GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQJChYECGFOAZwEAAAAAAAWEEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZU",
+  b"rmtTrIHWTbuMU6uEElTDZ1OsggMkTbuMU6uEHFO7a1OsggVu7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsCrXsYMPQkBNgIxM",
+  b"YXZmNjMuMS4xMDJXQYxMYXZmNjMuMS4xMDJEiYhAaQAAAAAAABZUrmtCSK4BAAAAAAACP9eBAXPFiBB/fzHtLAdRnIEAIrWcg3Vu",
+  b"ZIiBAIaFVl9BVjGDgQEj44OEC+vCAOCQsIFAuoEwmoECVbCEVbmBAVXugQDsAQAAAAAAAAIAAGOikIEADAAKCgAAAAKv95tfIBjs",
+  b"AQAAAAAAAdUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAElTDZ/5zc59jwIBnyJlFo4dFTkNPREVSRIeMTGF2ZjYzLjEuMTAyc3PZY8CLY8WI",
+  b"EH9/Me0sB1FnyKRFo4dFTkNPREVSRIeXTGF2YzYzLjEuMTAyIGxpYmFvbS1hdjFnyKFFo4hEVVJBVElPTkSHkzAwOjAwOjAwLjIw",
+  b"MDAwMDAwMAAfQ7Z1QcHngQCjQbuBAACACgoAAAACr/ebXyAYMqgDFAA0AAAAoAuthX8IAAzEEMgU0BhUHEQhwClIMMw4yEBYR9RP",
+  b"WFlcIEAAUQBxYPGhaiGmghqio0JEAAcYDhQQmBQaGxgenCJcKmw6AgEaAgIA05FWATdKAgE+AgIBclmKAWoengIBRgICAYZ9ngGC",
+  b"NHI98AJcuANk23GkLM5N83gvC7U5r4Tnb7SAfGY3pPLGQFmYHMuZvqWqXjBNjkiaQIwtZ52qNnrAYEAvyQ3AigL5PukCfQoKFq4l",
+  b"reqOi0zAZ0btsdwKAGlP2/Gjt60IWiteZlfpjWzMg8efm+sE3lvn23n7YYmUbjzTSz7fWo8g7YR2HnTGLeFaBCfsdUQbdUcpMtxv",
+  b"kJhJY3n3UtcAIVSYFSqHwSEqU2g/1DD+cSXmGPrYbvXvktxcWGXwkB+VAtcOLLf49uugT1QFSsbl7iBFpG5MSFpwd2RyHIrsroXi",
+  b"I4E6YbInPiqauI4p7gNJS04fupEUHHnTqiYO4lwsdt7ziY9+VmyFcIwVQQetB66/EF8pHqVYuQW9JPFT7JXD9fT+F83FekDMY4sY",
+  b"4EZ2eVGK1rsbcR27chxTu2uRu4+zgQC3iveBAfGCA6fwgQM=",
+])
+
+///|
+test "av1: film grain parameters" {
+  let bytes = @libavutil.av_base64_decode(av1_grain_b64, 100000).unwrap()
+  let mkv = av_matroska_open(bytes).unwrap()
+  let packet = mkv.packets[0].data
+  let seq = @libavcodec.av1_parse_sequence_header(packet).unwrap()
+  assert_true(seq.film_grain_params_present)
+  let fh = @libavcodec.av1_parse_frame_header(packet, seq).unwrap()
+  assert_true(fh.apply_grain)
+  assert_eq(fh.grain_seed, 45231)
+  assert_eq(fh.num_y_points, 14)
+  assert_eq(fh.num_cb_points, 8)
+  assert_eq(fh.num_cr_points, 9)
+  assert_false(fh.chroma_scaling_from_luma)
+  assert_eq(fh.grain_scaling_minus_8, 3)
+  assert_eq(fh.ar_coeff_lag, 2)
+  assert_eq(fh.ar_coeff_shift_minus_6, 2)
+  assert_eq(fh.grain_scale_shift, 0)
+  assert_eq(fh.cb_mult, 247)
+  assert_eq(fh.cb_luma_mult, 192)
+  assert_eq(fh.cb_offset, 18)
+  assert_eq(fh.cr_mult, 229)
+  assert_eq(fh.cr_luma_mult, 192)
+  assert_eq(fh.cr_offset, 54)
+  assert_false(fh.overlap_flag)
+  assert_true(fh.clip_to_restricted_range)
+}

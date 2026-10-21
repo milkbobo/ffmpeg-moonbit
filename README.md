@@ -660,7 +660,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | HEVC access unit | [hevc_access_unit.mbt](libavcodec/hevc_access_unit.mbt) | 按 `first_slice_segment_in_pic_flag` 组装访问单元、IDR/IRAP 关键帧标记、按 temporal-id-0 更新 POC；真实 x265 B 帧 GOP（I/P/B/B）的 POC 0,3,2,1 与解码顺序逐值一致 |
 | 码流头 | [opus_packet.mbt](libavcodec/opus_packet.mbt)、[av1.mbt](libavcodec/av1.mbt)、[vp9.mbt](libavcodec/vp9.mbt) | Opus TOC/四种包码/Xiph lacing/120 ms 限制；AV1 OBU LEB128 + `av1C`/序列头（含 order-hint/screen-content/superres 状态）与关键/帧内/inter frame header（类型/show/尺寸/render/superres/intrabc、primary_ref/refresh、7 个参考槽、统一 tile 布局与 base_q_idx/量化 delta；关键帧与 inter 字段均对齐 `trace_headers`）；VP9 帧头（profile、关键帧/帧内、色彩配置、尺寸、刷新掩码）；真实 WebM 包与 ffprobe 对齐 |
 
-测试总数 447/447（`moon test --target wasm`）。仍未完成的重点：HEVC CABAC/帧内预测/变换与像素重建、
+测试总数 448/448（`moon test --target wasm`）。仍未完成的重点：HEVC CABAC/帧内预测/变换与像素重建、
 VP9/AV1 压缩头与像素解码、Opus SILK/CELT 解码、HLS/DASH 的网络/分片 IO 与 AES-128、
 PNG Adam7/APNG 与 CRC 校验、MJPEG 渐进式/无损/12-bit。
 
