@@ -58,12 +58,20 @@ fn h264_mc_luma(
   // Unclipped horizontal 6-tap at (x, y). `put_h264_qpelN_hv_lowpass` keeps
   // these sums unshifted and unclipped until the final `(v + 512) >> 10`.
   fn hsum(x : Int32, y : Int32) -> Int32 {
-    px(x - 2, y) - 5 * px(x - 1, y) + 20 * px(x, y) + 20 * px(x + 1, y) -
-    5 * px(x + 2, y) + px(x + 3, y)
+    px(x - 2, y) -
+    5 * px(x - 1, y) +
+    20 * px(x, y) +
+    20 * px(x + 1, y) -
+    5 * px(x + 2, y) +
+    px(x + 3, y)
   }
   fn vsum(g : (Int32, Int32) -> Int32, x : Int32, y : Int32) -> Int32 {
-    g(x, y - 2) - 5 * g(x, y - 1) + 20 * g(x, y) + 20 * g(x, y + 1) -
-    5 * g(x, y + 2) + g(x, y + 3)
+    g(x, y - 2) -
+    5 * g(x, y - 1) +
+    20 * g(x, y) +
+    20 * g(x, y + 1) -
+    5 * g(x, y + 2) +
+    g(x, y + 3)
   }
   fn half_h(x : Int32, y : Int32) -> Int32 {
     clip_uint8((hsum(x, y) + 16) >> 5)
@@ -110,16 +118,14 @@ fn h264_mc_luma(
         } else {
           (half_h(x, y + 1) + half_v(x, y) + 1) >> 1
         }
+      } else if suby == 0 {
+        (half_h(x, y) + px(x + 1, y) + 1) >> 1
+      } else if suby == 2 {
+        (half_v(x + 1, y) + half_hv(x, y) + 1) >> 1
+      } else if suby == 1 {
+        (half_h(x, y) + half_v(x + 1, y) + 1) >> 1
       } else {
-        if suby == 0 {
-          (half_h(x, y) + px(x + 1, y) + 1) >> 1
-        } else if suby == 2 {
-          (half_v(x + 1, y) + half_hv(x, y) + 1) >> 1
-        } else if suby == 1 {
-          (half_h(x, y) + half_v(x + 1, y) + 1) >> 1
-        } else {
-          (half_h(x, y + 1) + half_v(x + 1, y) + 1) >> 1
-        }
+        (half_h(x, y + 1) + half_v(x + 1, y) + 1) >> 1
       }
       dst[dstoff + row * dstride + col] = v
     }
