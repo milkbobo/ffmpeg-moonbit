@@ -5,7 +5,7 @@
 /// `hevc_frame_start`, `ff_hevc_deblocking_boundary_strengths` from
 /// `filter.c`, `boundary_strength`) and `libavcodec/hevc/refs.c`.
 ///
-/// Supported: 8/10/12-bit 4:2:0, single- and multi-slice pictures with WPP
+/// Supported: 8/10/12-bit 4:2:0 and 4:4:4, single- and multi-slice pictures with WPP
 /// and/or uniform/non-uniform tiles, closed-GOP streams whose reference
 /// pictures are all present (missing refs are generated grey), weighted and
 /// unweighted uni/bi prediction. WPP follows FFmpeg's single-thread semantics:
@@ -94,8 +94,8 @@ fn HevcIntraDecoder::prediction_unit(
   let cstride = pic.plane_stride(1)
   let cw = pic.width
   let ch = pic.height
-  let chw = (cw + 1) >> 1
-  let chh = (ch + 1) >> 1
+  let chw = pic.cw
+  let chh = pic.ch
   let x0_c = x0 >> sps.hshift[1]
   let y0_c = y0 >> sps.vshift[1]
   let n_pb_w_c = n_pb_w >> sps.hshift[1]
@@ -137,6 +137,8 @@ fn HevcIntraDecoder::prediction_unit(
         n_pb_w_c,
         n_pb_h_c,
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
       hevc_chroma_mc_uni(
         ref0.pic.cr,
@@ -152,6 +154,8 @@ fn HevcIntraDecoder::prediction_unit(
         n_pb_w_c,
         n_pb_h_c,
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
     } else {
       hevc_luma_mc_uni_w(
@@ -189,6 +193,8 @@ fn HevcIntraDecoder::prediction_unit(
         pw.chroma_weight_l0[idx][0],
         pw.chroma_offset_l0[idx][0],
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
       hevc_chroma_mc_uni_w(
         ref0.pic.cr,
@@ -207,6 +213,8 @@ fn HevcIntraDecoder::prediction_unit(
         pw.chroma_weight_l0[idx][1],
         pw.chroma_offset_l0[idx][1],
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
     }
   } else if current_mv.pred_flag == hevc_pf_l1 {
@@ -242,6 +250,8 @@ fn HevcIntraDecoder::prediction_unit(
         n_pb_w_c,
         n_pb_h_c,
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
       hevc_chroma_mc_uni(
         ref1.pic.cr,
@@ -257,6 +267,8 @@ fn HevcIntraDecoder::prediction_unit(
         n_pb_w_c,
         n_pb_h_c,
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
     } else {
       hevc_luma_mc_uni_w(
@@ -294,6 +306,8 @@ fn HevcIntraDecoder::prediction_unit(
         pw.chroma_weight_l1[idx][0],
         pw.chroma_offset_l1[idx][0],
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
       hevc_chroma_mc_uni_w(
         ref1.pic.cr,
@@ -312,6 +326,8 @@ fn HevcIntraDecoder::prediction_unit(
         pw.chroma_weight_l1[idx][1],
         pw.chroma_offset_l1[idx][1],
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
     }
   } else if current_mv.pred_flag == hevc_pf_bi {
@@ -357,6 +373,8 @@ fn HevcIntraDecoder::prediction_unit(
         n_pb_w_c,
         n_pb_h_c,
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
       hevc_chroma_mc_bi(
         ref0.pic.cr,
@@ -376,6 +394,8 @@ fn HevcIntraDecoder::prediction_unit(
         n_pb_w_c,
         n_pb_h_c,
         bd,
+        sps.hshift[1],
+        sps.vshift[1],
       )
     } else {
       hevc_luma_mc_bi_w(
@@ -429,6 +449,8 @@ fn HevcIntraDecoder::prediction_unit(
           pw.chroma_offset_l0[i0][c],
           pw.chroma_offset_l1[i1][c],
           bd,
+          sps.hshift[1],
+          sps.vshift[1],
         )
       }
     }
@@ -1075,9 +1097,9 @@ fn hevc_decode_picture(
     None => return Err("hevc: missing SPS")
   }
   if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
-    sps.chroma_format_idc != 1 ||
+    (sps.chroma_format_idc != 1 && sps.chroma_format_idc != 3) ||
     sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 HEVC is supported")
+    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 and 4:4:4 HEVC is supported")
   }
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")
@@ -1101,14 +1123,21 @@ fn hevc_decode_picture(
     return Err("PATCHWELCOME: HEVC current picture referencing is not supported")
   }
   // (Re)allocate the DPB when the picture geometry appears or changes.
+  let cw = sps.width >> sps.hshift[1]
+  let ch = sps.height >> sps.vshift[1]
   let dpb = match dec.dpb {
     Some(d) =>
-      if d.width == sps.width && d.height == sps.height {
+      if d.width == sps.width &&
+        d.height == sps.height &&
+        d.cw == cw &&
+        d.ch == ch {
         d
       } else {
         let d = hevc_dpb_new(
           sps.width,
           sps.height,
+          cw,
+          ch,
           sps.min_pu_width,
           sps.min_pu_height,
         )
@@ -1116,7 +1145,14 @@ fn hevc_decode_picture(
         d
       }
     None => {
-      let d = hevc_dpb_new(sps.width, sps.height, sps.min_pu_width, sps.min_pu_height)
+      let d = hevc_dpb_new(
+        sps.width,
+        sps.height,
+        cw,
+        ch,
+        sps.min_pu_width,
+        sps.min_pu_height,
+      )
       dec.dpb = Some(d)
       d
     }

@@ -209,10 +209,7 @@ pub fn hevc_sao_apply(
   let pcr = hevc_sao_copy_plane(pic.cr)
   let y_stride = pic.width
   let c_stride = pic.plane_stride(1)
-  let c_width = (pic.width + 1) >> 1
-  let c_height = (pic.height + 1) >> 1
   let ctb_size = 1 << sps.log2_ctb_size
-  let ctb_size_c = ctb_size >> 1
   let edge_idx : FixedArray[Int32] = [1, 2, 0, 3, 4]
   let pos : FixedArray[Int32] = [
     -1, 0, 1, 0, 0, -1, 0, 1, -1, -1, 1, 1, 1, -1, -1, 1,
@@ -240,13 +237,14 @@ pub fn hevc_sao_apply(
         pic.cr
       }
       let stride = if c_idx == 0 { y_stride } else { c_stride }
-      let pw = if c_idx == 0 { pic.width } else { c_width }
-      let ph = if c_idx == 0 { pic.height } else { c_height }
-      let cs = if c_idx == 0 { ctb_size } else { ctb_size_c }
-      let x0 = x_ctb * cs
-      let y0 = y_ctb * cs
-      let mut width = cs
-      let mut height = cs
+      let pw = pic.chroma_width(c_idx)
+      let ph = pic.chroma_height(c_idx)
+      let cs_h = ctb_size >> sps.hshift[c_idx]
+      let cs_v = ctb_size >> sps.vshift[c_idx]
+      let x0 = x_ctb * cs_h
+      let y0 = y_ctb * cs_v
+      let mut width = cs_h
+      let mut height = cs_v
       if x0 + width > pw {
         width = pw - x0
       }

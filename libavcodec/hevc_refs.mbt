@@ -174,6 +174,8 @@ pub struct HevcDpb {
   slots : Array[HevcRefFrame]
   width : Int32
   height : Int32
+  cw : Int32
+  ch : Int32
   min_pu_width : Int32
   min_pu_height : Int32
   /// `s->rps[]` candidate lists for the picture being decoded.
@@ -185,7 +187,14 @@ pub struct HevcDpb {
 }
 
 ///|
-fn hevc_dpb_new(width : Int32, height : Int32, min_pu_width : Int32, min_pu_height : Int32) -> HevcDpb {
+fn hevc_dpb_new(
+  width : Int32,
+  height : Int32,
+  cw : Int32,
+  ch : Int32,
+  min_pu_width : Int32,
+  min_pu_height : Int32,
+) -> HevcDpb {
   let slots : Array[HevcRefFrame] = []
   for i in 0..<40 {
     let tab_mvf : Array[HevcMvField] = []
@@ -195,7 +204,7 @@ fn hevc_dpb_new(width : Int32, height : Int32, min_pu_width : Int32, min_pu_heig
     slots.push({
       slot: i,
       poc: 0,
-      pic: hevc_picture_new(width, height),
+      pic: hevc_picture_new(width, height, cw, ch),
       tab_mvf,
       rpl0: hevc_ref_pic_list_new(),
       rpl1: hevc_ref_pic_list_new(),
@@ -209,6 +218,8 @@ fn hevc_dpb_new(width : Int32, height : Int32, min_pu_width : Int32, min_pu_heig
     slots,
     width,
     height,
+    cw,
+    ch,
     min_pu_width,
     min_pu_height,
     rps: {

@@ -1,7 +1,7 @@
 ///|
 /// HEVC residual coding and inverse transform, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/cabac.c` (`ff_hevc_hls_residual_coding`) for 8/10/12-bit
-/// 4:2:0 streams. Transform skip is supported (including the transform-skip
+/// 4:2:0 and 4:4:4 streams. Transform skip is supported (including the transform-skip
 /// significance contexts and rotation swap); RDPCM, cross-component prediction
 /// and scaling lists are not.
 ///
@@ -32,8 +32,14 @@ let hevc_sig_ctx_idx_map : Array[Int32] = [
 ]
 
 ///|
-/// `qp_c` mapping for 4:2:0 chroma (`sps.qp_bd_offset` included). */
-fn hevc_chroma_qp(qp_y : Int32, offset : Int32, qp_bd_offset : Int32) -> Int32 {
+/// `qp_c` mapping for 4:2:0 chroma; other formats clip to 51
+/// (`sps.qp_bd_offset` included). */
+fn hevc_chroma_qp(
+  qp_y : Int32,
+  offset : Int32,
+  qp_bd_offset : Int32,
+  chroma_format_idc : Int32,
+) -> Int32 {
   let qp_i = if qp_y + offset < -qp_bd_offset {
     -qp_bd_offset
   } else if qp_y + offset > 57 {
@@ -41,7 +47,13 @@ fn hevc_chroma_qp(qp_y : Int32, offset : Int32, qp_bd_offset : Int32) -> Int32 {
   } else {
     qp_y + offset
   }
-  let qp = if qp_i < 30 {
+  let qp = if chroma_format_idc != 1 {
+    if qp_i > 51 {
+      51
+    } else {
+      qp_i
+    }
+  } else if qp_i < 30 {
     qp_i
   } else if qp_i > 43 {
     qp_i - 6
@@ -109,7 +121,7 @@ pub fn hevc_hls_residual_coding(
     } else {
       pps.cr_qp_offset + sh.slice_cr_qp_offset
     }
-    hevc_chroma_qp(qp_y, offset, sps.qp_bd_offset)
+    hevc_chroma_qp(qp_y, offset, sps.qp_bd_offset, sps.chroma_format_idc)
   }
   // C: shift = sps->bit_depth + log2_trafo_size - 5 (8 for 8-bit)
   let shift = sps.bit_depth + log2_trafo_size - 5

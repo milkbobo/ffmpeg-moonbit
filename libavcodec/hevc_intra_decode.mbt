@@ -4,9 +4,9 @@
 /// `hls_transform_tree`, `hls_transform_unit`) and
 /// `libavcodec/hevc/pred_template.c`.
 ///
-/// Supported: 8/10/12-bit 4:2:0, one slice per picture, all-intra deblocking
-/// and SAO, no PCM, no scaling lists, no transform skip/RDPCM/cross-component
-/// prediction, no tiles or WPP.
+/// Supported: 8/10/12-bit 4:2:0 and 4:4:4, one slice per picture,
+/// all-intra deblocking and SAO, no PCM, no scaling lists, no transform
+/// skip/RDPCM/cross-component prediction, no tiles or WPP.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -376,18 +376,36 @@ fn HevcIntraDecoder::intra_prediction_unit(
     }
   }
   let intra_chroma_table : FixedArray[Int32] = [0, 26, 10, 1]
-  let chroma_mode = self.cabac.intra_chroma_pred_mode()
-  if chroma_mode != 4 {
-    if self.pu_mode[0] == intra_chroma_table[chroma_mode] {
-      self.pu_mode_c[0] = 34
-    } else {
-      self.pu_mode_c[0] = intra_chroma_table[chroma_mode]
+  if self.sps.chroma_format_idc == 3 {
+    for i in 0..<side {
+      for j in 0..<side {
+        let idx = 2 * i + j
+        let chroma_mode = self.cabac.intra_chroma_pred_mode()
+        if chroma_mode != 4 {
+          if self.pu_mode[idx] == intra_chroma_table[chroma_mode] {
+            self.pu_mode_c[idx] = 34
+          } else {
+            self.pu_mode_c[idx] = intra_chroma_table[chroma_mode]
+          }
+        } else {
+          self.pu_mode_c[idx] = self.pu_mode[idx]
+        }
+      }
     }
   } else {
-    self.pu_mode_c[0] = self.pu_mode[0]
-  }
-  for i in 1..<4 {
-    self.pu_mode_c[i] = self.pu_mode_c[0]
+    let chroma_mode = self.cabac.intra_chroma_pred_mode()
+    if chroma_mode != 4 {
+      if self.pu_mode[0] == intra_chroma_table[chroma_mode] {
+        self.pu_mode_c[0] = 34
+      } else {
+        self.pu_mode_c[0] = intra_chroma_table[chroma_mode]
+      }
+    } else {
+      self.pu_mode_c[0] = self.pu_mode[0]
+    }
+    for i in 1..<4 {
+      self.pu_mode_c[i] = self.pu_mode_c[0]
+    }
   }
 }
 
@@ -515,7 +533,8 @@ fn HevcIntraDecoder::transform_unit(
         Err(e) => return Err(e)
       }
     }
-    if log2_trafo_size > 2 {
+    if sps.chroma_format_idc != 0 &&
+      (log2_trafo_size > 2 || sps.chroma_format_idc == 3) {
       let trafo_size_h = 1 << (log2_trafo_size_c + sps.hshift[1])
       let trafo_size_v = 1 << (log2_trafo_size_c + sps.vshift[1])
       self.set_neighbour_available(x0, y0, trafo_size_h, trafo_size_v)
@@ -586,21 +605,23 @@ fn HevcIntraDecoder::transform_unit(
           Err(e) => return Err(e)
         }
       }
-    } else if blk_idx == 3 {
+    } else if sps.chroma_format_idc != 0 && blk_idx == 3 {
       let trafo_size_h = 1 << (log2_trafo_size + 1)
       let trafo_size_v = 1 << (log2_trafo_size + sps.vshift[1])
       self.set_neighbour_available(x_base, y_base, trafo_size_h, trafo_size_v)
-      hevc_intra_predict(
-        self.pic,
-        sps,
-        pps,
-        self.na,
-        x_base,
-        y_base,
-        log2_trafo_size,
-        1,
-        self.tu_mode_c,
-      )
+      if self.cu_pred_mode == hevc_mode_intra {
+        hevc_intra_predict(
+          self.pic,
+          sps,
+          pps,
+          self.na,
+          x_base,
+          y_base,
+          log2_trafo_size,
+          1,
+          self.tu_mode_c,
+        )
+      }
       if cbf_cb != 0 {
         match
           hevc_hls_residual_coding(
@@ -622,17 +643,19 @@ fn HevcIntraDecoder::transform_unit(
         }
       }
       self.set_neighbour_available(x_base, y_base, trafo_size_h, trafo_size_v)
-      hevc_intra_predict(
-        self.pic,
-        sps,
-        pps,
-        self.na,
-        x_base,
-        y_base,
-        log2_trafo_size,
-        2,
-        self.tu_mode_c,
-      )
+      if self.cu_pred_mode == hevc_mode_intra {
+        hevc_intra_predict(
+          self.pic,
+          sps,
+          pps,
+          self.na,
+          x_base,
+          y_base,
+          log2_trafo_size,
+          2,
+          self.tu_mode_c,
+        )
+      }
       if cbf_cr != 0 {
         match
           hevc_hls_residual_coding(
@@ -654,37 +677,37 @@ fn HevcIntraDecoder::transform_unit(
         }
       }
     }
-  } else if log2_trafo_size > 2 {
-    let trafo_size_h = 1 << (log2_trafo_size_c + sps.hshift[1])
-    let trafo_size_v = 1 << (log2_trafo_size_c + sps.vshift[1])
-    self.set_neighbour_available(x0, y0, trafo_size_h, trafo_size_v)
-    hevc_intra_predict(
-      self.pic,
-      sps,
-      pps,
-      self.na,
-      x0,
-      y0,
-      log2_trafo_size_c,
-      1,
-      self.tu_mode_c,
-    )
-    hevc_intra_predict(
-      self.pic,
-      sps,
-      pps,
-      self.na,
-      x0,
-      y0,
-      log2_trafo_size_c,
-      2,
-      self.tu_mode_c,
-    )
-  } else if blk_idx == 3 {
-    let trafo_size_h = 1 << (log2_trafo_size + 1)
-    let trafo_size_v = 1 << (log2_trafo_size + sps.vshift[1])
-    self.set_neighbour_available(x_base, y_base, trafo_size_h, trafo_size_v)
-    if self.cu_pred_mode == hevc_mode_intra {
+  } else if sps.chroma_format_idc != 0 && self.cu_pred_mode == hevc_mode_intra {
+    if log2_trafo_size > 2 || sps.chroma_format_idc == 3 {
+      let trafo_size_h = 1 << (log2_trafo_size_c + sps.hshift[1])
+      let trafo_size_v = 1 << (log2_trafo_size_c + sps.vshift[1])
+      self.set_neighbour_available(x0, y0, trafo_size_h, trafo_size_v)
+      hevc_intra_predict(
+        self.pic,
+        sps,
+        pps,
+        self.na,
+        x0,
+        y0,
+        log2_trafo_size_c,
+        1,
+        self.tu_mode_c,
+      )
+      hevc_intra_predict(
+        self.pic,
+        sps,
+        pps,
+        self.na,
+        x0,
+        y0,
+        log2_trafo_size_c,
+        2,
+        self.tu_mode_c,
+      )
+    } else if blk_idx == 3 {
+      let trafo_size_h = 1 << (log2_trafo_size + 1)
+      let trafo_size_v = 1 << (log2_trafo_size + sps.vshift[1])
+      self.set_neighbour_available(x_base, y_base, trafo_size_h, trafo_size_v)
       hevc_intra_predict(
         self.pic,
         sps,
@@ -696,8 +719,6 @@ fn HevcIntraDecoder::transform_unit(
         1,
         self.tu_mode_c,
       )
-    }
-    if self.cu_pred_mode == hevc_mode_intra {
       hevc_intra_predict(
         self.pic,
         sps,
@@ -735,7 +756,11 @@ fn HevcIntraDecoder::transform_tree(
   if self.intra_split {
     if trafo_depth == 1 {
       self.tu_mode = self.pu_mode[blk_idx]
-      self.tu_mode_c = self.pu_mode_c[0]
+      self.tu_mode_c = if sps.chroma_format_idc == 3 {
+        self.pu_mode_c[blk_idx]
+      } else {
+        self.pu_mode_c[0]
+      }
     }
   } else {
     self.tu_mode = self.pu_mode[0]
@@ -1172,9 +1197,9 @@ fn hevc_decode_intra_frame_impl(
     None => return Err("hevc: missing SPS")
   }
   if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
-    sps.chroma_format_idc != 1 ||
+    (sps.chroma_format_idc != 1 && sps.chroma_format_idc != 3) ||
     sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 HEVC is supported")
+    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 and 4:4:4 HEVC is supported")
   }
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")
@@ -1215,7 +1240,12 @@ fn hevc_decode_intra_frame_impl(
     sh,
     cabac,
     slice_qp,
-    hevc_picture_new(sps.width, sps.height),
+    hevc_picture_new(
+      sps.width,
+      sps.height,
+      sps.width >> sps.hshift[1],
+      sps.height >> sps.vshift[1],
+    ),
     tab_mvf,
     [],
     None,

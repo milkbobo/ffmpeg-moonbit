@@ -1,7 +1,7 @@
 ///|
 /// HEVC deblocking filter, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/filter.c` and `libavcodec/h26x/h2656_deblock_template.c`
-/// for 8/10/12-bit 4:2:0 pictures (no PCM, no transquant bypass). Tile and
+/// for 8/10/12-bit 4:2:0/4:4:4 pictures (no PCM, no transquant bypass). Tile and
 /// slice boundaries are unfiltered unless their respective across-edge flags
 /// are set.
 /// `beta`/`tc` are scaled by `bit_depth - 8` like the bit-depth-specific C
@@ -71,13 +71,16 @@ fn hevc_tc_calc(qp : Int32, bs : Int32, tc_offset : Int32) -> Int32 {
 /// `chroma_tc` for the deblock filter (PPS offsets only). */
 fn hevc_chroma_tc(
   pps : HevcPps,
+  sps : HevcSps,
   qp_y : Int32,
   c_idx : Int32,
   tc_offset : Int32,
 ) -> Int32 {
   let offset = if c_idx == 1 { pps.cb_qp_offset } else { pps.cr_qp_offset }
   let qp_i = hevc_clip_i(qp_y + offset, 0, 57)
-  let qp = if qp_i < 30 {
+  let qp = if sps.chroma_format_idc != 1 {
+    hevc_clip_i(qp_i, 0, 51)
+  } else if qp_i < 30 {
     qp_i
   } else if qp_i > 43 {
     qp_i - 6
@@ -446,12 +449,12 @@ pub fn hevc_deblock_picture(
               ) >>
               1
             let tc0 = if bs0 == 2 {
-              hevc_chroma_tc(pps, qp0, chroma, tc_offset) << bd_shift
+              hevc_chroma_tc(pps, sps, qp0, chroma, tc_offset) << bd_shift
             } else {
               0
             }
             let tc1 = if bs1 == 2 {
-              hevc_chroma_tc(pps, qp1, chroma, tc_offset) << bd_shift
+              hevc_chroma_tc(pps, sps, qp1, chroma, tc_offset) << bd_shift
             } else {
               0
             }
@@ -499,12 +502,12 @@ pub fn hevc_deblock_picture(
                 0
               }
               let tc0 = if bs0 == 2 {
-                hevc_chroma_tc(pps, qp0, chroma, tc_offset) << bd_shift
+                hevc_chroma_tc(pps, sps, qp0, chroma, tc_offset) << bd_shift
               } else {
                 0
               }
               let tc1 = if bs1 == 2 {
-                hevc_chroma_tc(pps, qp1, chroma, cur_tc_offset) << bd_shift
+                hevc_chroma_tc(pps, sps, qp1, chroma, cur_tc_offset) << bd_shift
               } else {
                 0
               }
