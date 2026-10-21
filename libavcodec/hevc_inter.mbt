@@ -102,6 +102,7 @@ fn HevcInterCtx::set_neighbour_available(
 /// 6.4.1 z-scan block availability (`z_scan_block_avail`). */
 fn hevc_z_scan_block_avail(
   sps : HevcSps,
+  pps : HevcPps,
   x_curr : Int32,
   y_curr : Int32,
   x_n : Int32,
@@ -116,11 +117,13 @@ fn hevc_z_scan_block_avail(
   }
   let curr = hevc_min_tb_addr_zs(
     sps,
+    pps,
     (x_curr >> sps.log2_min_tb_size) & sps.tb_mask,
     (y_curr >> sps.log2_min_tb_size) & sps.tb_mask,
   )
   let n = hevc_min_tb_addr_zs(
     sps,
+    pps,
     (x_n >> sps.log2_min_tb_size) & sps.tb_mask,
     (y_n >> sps.log2_min_tb_size) & sps.tb_mask,
   )
@@ -367,7 +370,7 @@ fn hevc_derive_spatial_merge_candidates(
   }
   let is_available_b0 = available(cand_up_right, x_b0, y_b0) &&
     x_b0 < sps.width &&
-    hevc_z_scan_block_avail(sps, x0, y0, x_b0, y_b0) &&
+    hevc_z_scan_block_avail(sps, pps, x0, y0, x_b0, y_b0) &&
     !hevc_is_diff_mer(pps, x_b0, y_b0, x0, y0)
   if is_available_b0 &&
     !(is_available_b1 && hevc_compare_mv_ref_idx(mvf(x_b0, y_b0), mvf(x_b1, y_b1))) {
@@ -375,7 +378,7 @@ fn hevc_derive_spatial_merge_candidates(
   }
   let is_available_a0 = available(cand_bottom_left, x_a0, y_a0) &&
     y_a0 < sps.height &&
-    hevc_z_scan_block_avail(sps, x0, y0, x_a0, y_a0) &&
+    hevc_z_scan_block_avail(sps, pps, x0, y0, x_a0, y_a0) &&
     !hevc_is_diff_mer(pps, x_a0, y_a0, x0, y0)
   if is_available_a0 &&
     !(is_available_a1 && hevc_compare_mv_ref_idx(mvf(x_a0, y_a0), mvf(x_a1, y_a1))) {
@@ -648,7 +651,7 @@ fn hevc_luma_mv_mvp_mode(
   let x_a0 = x0 - 1
   let y_a0 = y0 + n_pb_h
   let is_available_a0 = available(cand_bottom_left, x_a0, y_a0) && y_a0 < sps.height &&
-  hevc_z_scan_block_avail(sps, x0, y0, x_a0, y_a0)
+  hevc_z_scan_block_avail(sps, ctx.pps, x0, y0, x_a0, y_a0)
   let x_a1 = x0 - 1
   let y_a1 = y0 + n_pb_h - 1
   let is_available_a1 = available(cand_left, x_a1, y_a1)
@@ -701,7 +704,7 @@ fn hevc_luma_mv_mvp_mode(
   let x_b0 = x0 + n_pb_w
   let y_b0 = y0 - 1
   let is_available_b0 = available(cand_up_right, x_b0, y_b0) && x_b0 < sps.width &&
-  hevc_z_scan_block_avail(sps, x0, y0, x_b0, y_b0)
+  hevc_z_scan_block_avail(sps, ctx.pps, x0, y0, x_b0, y_b0)
   let x_b1 = x0 + n_pb_w - 1
   let y_b1 = y0 - 1
   let is_available_b1 = available(cand_up, x_b1, y_b1)

@@ -319,9 +319,6 @@ pub fn ff_hevc_decode_slice_header(
     Some(s) => s
     None => return Err("hevc: missing SPS")
   }
-  if pps.tiles_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC tiles are not supported")
-  }
   let mut dependent = false
   let mut slice_segment_address = 0
   if !first_slice {

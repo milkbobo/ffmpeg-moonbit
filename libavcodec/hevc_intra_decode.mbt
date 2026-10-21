@@ -141,7 +141,7 @@ fn hevc_intra_decoder_new(
     cbf_luma_tab: Array::make(sps.min_tb_width * sps.min_tb_height, 0),
     rpl,
     inter,
-    ctb_slice_idx: Array::make(sps.ctb_size, 0),
+    ctb_slice_idx: Array::make(sps.ctb_size, -1),
     slice_rpls: [],
     slice_idx: 0,
     deblock_tc: Array::make(sps.ctb_size, 0),
@@ -457,6 +457,7 @@ fn HevcIntraDecoder::transform_unit(
     hevc_intra_predict(
       self.pic,
       sps,
+      pps,
       self.na,
       x0,
       y0,
@@ -522,6 +523,7 @@ fn HevcIntraDecoder::transform_unit(
         hevc_intra_predict(
           self.pic,
           sps,
+          pps,
           self.na,
           x0,
           y0,
@@ -555,6 +557,7 @@ fn HevcIntraDecoder::transform_unit(
         hevc_intra_predict(
           self.pic,
           sps,
+          pps,
           self.na,
           x0,
           y0,
@@ -590,6 +593,7 @@ fn HevcIntraDecoder::transform_unit(
       hevc_intra_predict(
         self.pic,
         sps,
+        pps,
         self.na,
         x_base,
         y_base,
@@ -621,6 +625,7 @@ fn HevcIntraDecoder::transform_unit(
       hevc_intra_predict(
         self.pic,
         sps,
+        pps,
         self.na,
         x_base,
         y_base,
@@ -656,6 +661,7 @@ fn HevcIntraDecoder::transform_unit(
     hevc_intra_predict(
       self.pic,
       sps,
+      pps,
       self.na,
       x0,
       y0,
@@ -666,6 +672,7 @@ fn HevcIntraDecoder::transform_unit(
     hevc_intra_predict(
       self.pic,
       sps,
+      pps,
       self.na,
       x0,
       y0,
@@ -681,6 +688,7 @@ fn HevcIntraDecoder::transform_unit(
       hevc_intra_predict(
         self.pic,
         sps,
+        pps,
         self.na,
         x_base,
         y_base,
@@ -693,6 +701,7 @@ fn HevcIntraDecoder::transform_unit(
       hevc_intra_predict(
         self.pic,
         sps,
+        pps,
         self.na,
         x_base,
         y_base,
@@ -1026,14 +1035,14 @@ fn HevcIntraDecoder::coding_quadtree(
 ) -> Result[Bool, String] {
   let sps = self.sps
   let pps = self.pps
+  match self.inter {
+    Some(ctx) => ctx.ct_depth = cb_depth
+    None => ()
+  }
   let cb_size = 1 << log2_cb_size
   let split = if x0 + cb_size <= sps.width &&
     y0 + cb_size <= sps.height &&
     log2_cb_size > sps.log2_min_cb_size {
-    match self.inter {
-      Some(ctx) => ctx.ct_depth = cb_depth
-      None => ()
-    }
     self.cabac.split_coding_unit_flag(
       self.ctb_left,
       self.ctb_up,

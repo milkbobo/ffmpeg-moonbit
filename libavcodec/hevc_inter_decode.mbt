@@ -5,14 +5,16 @@
 /// `hevc_frame_start`, `ff_hevc_deblocking_boundary_strengths` from
 /// `filter.c`, `boundary_strength`) and `libavcodec/hevc/refs.c`.
 ///
-/// Supported: 8/10/12-bit 4:2:0, single- and multi-slice pictures with or
-/// without WPP, closed-GOP streams whose reference pictures are all present
-/// (missing refs are generated grey), weighted and unweighted uni/bi
-/// prediction. WPP follows FFmpeg's single-thread semantics: each CTB row is
-/// decoded as a substream whose CABAC is rewound after the terminate bin and
-/// seeded from the state saved after the previous row's second CTB. Rejected
-/// upstream: dependent slices, reference-list modification, tiles, PCM,
-/// scaling lists, transform skip, current-picture referencing.
+/// Supported: 8/10/12-bit 4:2:0, single- and multi-slice pictures with WPP
+/// and/or uniform/non-uniform tiles, closed-GOP streams whose reference
+/// pictures are all present (missing refs are generated grey), weighted and
+/// unweighted uni/bi prediction. WPP follows FFmpeg's single-thread semantics:
+/// each CTB row is decoded as a substream whose CABAC is rewound after the
+/// terminate bin and seeded from the state saved after the previous row's
+/// second CTB. Tiles are decoded in tile-scan order with a fresh CABAC state
+/// at each tile boundary. Rejected upstream: dependent slices, reference-list
+/// modification, tiles combined with WPP, PCM, scaling lists, transform skip,
+/// current-picture referencing.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -520,36 +522,49 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
   let ctb_x = x0 >> sps.log2_ctb_size
   let ctb_y = y0 >> sps.log2_ctb_size
   let curr_rs = ctb_y * sps.ctb_width + ctb_x
+  let pps = self.pps
   let mut upper_slice_edge = false
+  let mut upper_tile_edge = false
   let mut up_rs = curr_rs
   if y0 > 0 && (y0 & 7) == 0 && (y0 % ctb_size) == 0 {
     up_rs = curr_rs - sps.ctb_width
     upper_slice_edge = self.ctb_slice_idx[up_rs] != self.slice_idx
+    if pps.tiles_enabled_flag != 0 {
+      upper_tile_edge = pps.tile_id[pps.ctb_addr_rs_to_ts[up_rs]] !=
+        pps.tile_id[pps.ctb_addr_rs_to_ts[curr_rs]]
+    }
   }
   let mut boundary_upper = y0 > 0 && (y0 & 7) == 0
   if boundary_upper &&
-    upper_slice_edge &&
-    !self.sh.slice_loop_filter_across_slices_enabled_flag {
+    ((upper_slice_edge &&
+    !self.sh.slice_loop_filter_across_slices_enabled_flag) ||
+    (upper_tile_edge && pps.loop_filter_across_tiles_enabled_flag == 0)) {
     boundary_upper = false
   }
   let mut left_slice_edge = false
+  let mut left_tile_edge = false
   let mut left_rs = curr_rs
   if x0 > 0 && (x0 & 7) == 0 && (x0 % ctb_size) == 0 {
     left_rs = curr_rs - 1
     left_slice_edge = self.ctb_slice_idx[left_rs] != self.slice_idx
+    if pps.tiles_enabled_flag != 0 {
+      left_tile_edge = pps.tile_id[pps.ctb_addr_rs_to_ts[left_rs]] !=
+        pps.tile_id[pps.ctb_addr_rs_to_ts[curr_rs]]
+    }
   }
   let mut boundary_left = x0 > 0 && (x0 & 7) == 0
   if boundary_left &&
-    left_slice_edge &&
-    !self.sh.slice_loop_filter_across_slices_enabled_flag {
+    ((left_slice_edge &&
+    !self.sh.slice_loop_filter_across_slices_enabled_flag) ||
+    (left_tile_edge && pps.loop_filter_across_tiles_enabled_flag == 0)) {
     boundary_left = false
   }
-  let top_rpl = if upper_slice_edge {
+  let top_rpl = if upper_slice_edge || upper_tile_edge {
     self.slice_rpls[self.ctb_slice_idx[up_rs]]
   } else {
     rpl
   }
-  let left_nb_rpl = if left_slice_edge {
+  let left_nb_rpl = if left_slice_edge || left_tile_edge {
     self.slice_rpls[self.ctb_slice_idx[left_rs]]
   } else {
     rpl
@@ -926,24 +941,71 @@ fn hevc_decode_ctb(
   pps : HevcPps,
   sh : HevcSliceHeader,
   rs : Int32,
+  ts : Int32,
   slice_start : Int32,
   ctb_size : Int32,
 ) -> Result[Bool, String] {
   let x_ctb = (rs % sps.ctb_width) << sps.log2_ctb_size
   let y_ctb = (rs / sps.ctb_width) << sps.log2_ctb_size
   let ctb_addr_in_slice = rs - slice_start
-  dec_slice.ctb_left = x_ctb > 0 && ctb_addr_in_slice > 0
-  dec_slice.ctb_up = y_ctb > 0 && ctb_addr_in_slice >= sps.ctb_width
+  let tiles = pps.tiles_enabled_flag != 0
+  let mut left_tile = false
+  let mut upper_tile = false
+  let mut up_left_same_tile = true
+  let mut up_right_same_tile = true
+  if tiles {
+    let curr_tile = pps.tile_id[ts]
+    if x_ctb > 0 {
+      left_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs - 1]] != curr_tile
+    }
+    if y_ctb > 0 {
+      upper_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs - sps.ctb_width]] !=
+        curr_tile
+      if x_ctb > 0 {
+        up_left_same_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs - sps.ctb_width -
+          1]] ==
+          curr_tile
+      }
+      if x_ctb + ctb_size < sps.width {
+        up_right_same_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs + 1 -
+          sps.ctb_width]] ==
+          curr_tile
+      } else {
+        up_right_same_tile = false
+      }
+    }
+  }
+  dec_slice.ctb_left = x_ctb > 0 && ctb_addr_in_slice > 0 && !left_tile
+  dec_slice.ctb_up = y_ctb > 0 &&
+    ctb_addr_in_slice >= sps.ctb_width &&
+    !upper_tile
   dec_slice.ctb_up_left = x_ctb > 0 &&
     y_ctb > 0 &&
-    ctb_addr_in_slice - 1 >= sps.ctb_width
+    ctb_addr_in_slice - 1 >= sps.ctb_width &&
+    up_left_same_tile
   dec_slice.ctb_up_right = y_ctb > 0 &&
-    ctb_addr_in_slice + 1 >= sps.ctb_width
-  dec_slice.end_of_tiles_x = sps.width
+    ctb_addr_in_slice + 1 >= sps.ctb_width &&
+    up_right_same_tile
+  if tiles {
+    let ctb_x = x_ctb >> sps.log2_ctb_size
+    let mut tx = 0
+    for i in 0..<pps.num_tile_columns {
+      if ctb_x < pps.col_bd[i + 1] {
+        tx = i
+        break
+      }
+    }
+    dec_slice.end_of_tiles_x = pps.col_bd[tx + 1] << sps.log2_ctb_size
+  } else {
+    dec_slice.end_of_tiles_x = sps.width
+  }
   dec_slice.end_of_tiles_y = if y_ctb + ctb_size < sps.height {
     y_ctb + ctb_size
   } else {
     sps.height
+  }
+  if tiles && ts > 0 && pps.tile_id[ts] != pps.tile_id[ts - 1] {
+    dec_slice.first_qp_group = true
   }
   match dec_slice.inter {
     Some(ctx) => {
@@ -1032,8 +1094,8 @@ fn hevc_decode_picture(
   if sps.scaling_list_enabled != 0 {
     return Err("PATCHWELCOME: HEVC scaling lists are not supported")
   }
-  if pps.tiles_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC tiles are not supported")
+  if pps.tiles_enabled_flag != 0 && pps.entropy_coding_sync_enabled_flag != 0 {
+    return Err("PATCHWELCOME: HEVC tiles with WPP are not supported")
   }
   if pps.pps_curr_pic_ref_enabled_flag != 0 {
     return Err("PATCHWELCOME: HEVC current picture referencing is not supported")
@@ -1177,7 +1239,7 @@ fn hevc_decode_picture(
         let mut more = true
         while more && col < sps.ctb_width && rs < sps.ctb_size {
           more = match
-            hevc_decode_ctb(dec_slice, sps, pps, sh, rs, slice_start, ctb_size) {
+            hevc_decode_ctb(dec_slice, sps, pps, sh, rs, rs, slice_start, ctb_size) {
             Ok(v) => v
             Err(e) => return Err(e)
           }
@@ -1192,12 +1254,42 @@ fn hevc_decode_picture(
         }
         row = row + 1
       }
+    } else if pps.tiles_enabled_flag != 0 {
+      let start_ts = pps.ctb_addr_rs_to_ts[slice_start]
+      let mut ts = start_ts
+      let mut more = true
+      while more && ts < sps.ctb_size {
+        if ts > start_ts && pps.tile_id[ts] != pps.tile_id[ts - 1] {
+          // C `ff_hevc_cabac_init` tile branch: align at the tile substream
+          // boundary and restart with fresh context states.
+          match dec_slice.cabac.cc.reinit() {
+            Ok(_) => ()
+            Err(e) => return Err(e)
+          }
+          let states = ff_hevc_init_cabac_states(
+            dec_slice.slice_qp,
+            sh.slice_type,
+            sh.cabac_init_flag,
+          )
+          for k in 0..<dec_slice.cabac.states.length() {
+            dec_slice.cabac.states[k] = states[k]
+          }
+          dec_slice.first_qp_group = true
+        }
+        let rs = pps.ctb_addr_ts_to_rs[ts]
+        more = match
+          hevc_decode_ctb(dec_slice, sps, pps, sh, rs, ts, slice_start, ctb_size) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        ts = ts + 1
+      }
     } else {
       let mut rs = slice_start
       let mut more = true
       while more && rs < sps.ctb_size {
         more = match
-          hevc_decode_ctb(dec_slice, sps, pps, sh, rs, slice_start, ctb_size) {
+          hevc_decode_ctb(dec_slice, sps, pps, sh, rs, rs, slice_start, ctb_size) {
           Ok(v) => v
           Err(e) => return Err(e)
         }

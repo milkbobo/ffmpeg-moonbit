@@ -4,8 +4,9 @@
 /// `libavcodec/h26x/h2656_sao_template.c`.
 ///
 /// Filtering reads neighbouring samples from a pre-SAO copy of the deblocked
-/// picture, which is equivalent to FFmpeg's CTB edge buffers for a single
-/// slice without tiles.
+/// picture, which is equivalent to FFmpeg's CTB edge buffers. Slice and tile
+/// boundaries whose across-edge filter flags are clear are restored after the
+/// edge filter, mirroring `sao_edge_restore_0/1`.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -185,7 +186,7 @@ fn hevc_sao_clip(v : Int32, bd : Int32) -> Int32 {
 pub fn hevc_sao_apply(
   pic : HevcPicture,
   sps : HevcSps,
-  _pps : HevcPps,
+  pps : HevcPps,
   sao : HevcSaoParams,
   filter_slice_edges : Array[Int32],
   ctb_slice_idx : Array[Int32],
@@ -317,6 +318,7 @@ pub fn hevc_sao_apply(
           eo,
           filter_slice_edges[ctb],
           ctb_slice_idx,
+          pps,
         )
       }
     }
@@ -345,6 +347,7 @@ fn hevc_sao_restore_edges(
   eo : Int32,
   lfase : Int32,
   ctb_slice_idx : Array[Int32],
+  pps : HevcPps,
 ) -> Unit {
   let left_edge = x_ctb == 0
   let top_edge = y_ctb == 0
@@ -387,32 +390,38 @@ fn hevc_sao_restore_edges(
       h = h - 1
     }
   }
-  if lfase != 0 {
+  let no_tile_filter = pps.tiles_enabled_flag != 0 &&
+    pps.loop_filter_across_tiles_enabled_flag == 0
+  if lfase != 0 && !no_tile_filter {
     return
   }
   let curr_slice = ctb_slice_idx[ctb]
-  let vert_left = !left_edge && ctb_slice_idx[ctb - 1] != curr_slice
-  let vert_right = !right_edge && ctb_slice_idx[ctb + 1] != curr_slice
-  let horiz_up = !top_edge && ctb_slice_idx[ctb - ctb_width] != curr_slice
-  let horiz_down = !bottom_edge &&
-    ctb_slice_idx[ctb + ctb_width] !=
-    curr_slice
-  let diag_ul = !left_edge &&
-    !top_edge &&
-    ctb_slice_idx[ctb - ctb_width - 1] !=
-    curr_slice
-  let diag_ur = !right_edge &&
-    !top_edge &&
-    ctb_slice_idx[ctb - ctb_width + 1] !=
-    curr_slice
-  let diag_lr = !right_edge &&
-    !bottom_edge &&
-    ctb_slice_idx[ctb + ctb_width + 1] !=
-    curr_slice
-  let diag_ll = !left_edge &&
-    !bottom_edge &&
-    ctb_slice_idx[ctb + ctb_width - 1] !=
-    curr_slice
+  let curr_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[ctb]]
+  let left_tile = no_tile_filter && !left_edge &&
+    pps.tile_id[pps.ctb_addr_rs_to_ts[ctb - 1]] != curr_tile
+  let right_tile = no_tile_filter && !right_edge &&
+    pps.tile_id[pps.ctb_addr_rs_to_ts[ctb + 1]] != curr_tile
+  let up_tile = no_tile_filter && !top_edge &&
+    pps.tile_id[pps.ctb_addr_rs_to_ts[ctb - ctb_width]] != curr_tile
+  let down_tile = no_tile_filter && !bottom_edge &&
+    pps.tile_id[pps.ctb_addr_rs_to_ts[ctb + ctb_width]] != curr_tile
+  let no_slice = lfase == 0
+  let vert_left = (no_slice && !left_edge &&
+    ctb_slice_idx[ctb - 1] != curr_slice) || left_tile
+  let vert_right = (no_slice && !right_edge &&
+    ctb_slice_idx[ctb + 1] != curr_slice) || right_tile
+  let horiz_up = (no_slice && !top_edge &&
+    ctb_slice_idx[ctb - ctb_width] != curr_slice) || up_tile
+  let horiz_down = (no_slice && !bottom_edge &&
+    ctb_slice_idx[ctb + ctb_width] != curr_slice) || down_tile
+  let diag_ul = (no_slice && !left_edge && !top_edge &&
+    ctb_slice_idx[ctb - ctb_width - 1] != curr_slice) || left_tile || up_tile
+  let diag_ur = (no_slice && !right_edge && !top_edge &&
+    ctb_slice_idx[ctb - ctb_width + 1] != curr_slice) || right_tile || up_tile
+  let diag_lr = (no_slice && !right_edge && !bottom_edge &&
+    ctb_slice_idx[ctb + ctb_width + 1] != curr_slice) || right_tile || down_tile
+  let diag_ll = (no_slice && !left_edge && !bottom_edge &&
+    ctb_slice_idx[ctb + ctb_width - 1] != curr_slice) || left_tile || down_tile
   let save_ul = if !diag_ul && eo == 2 && !left_edge && !top_edge { 1 } else { 0 }
   let save_ur = if !diag_ur && eo == 3 && !top_edge && !right_edge { 1 } else { 0 }
   let save_lr = if !diag_lr && eo == 2 && !right_edge && !bottom_edge { 1 } else { 0 }

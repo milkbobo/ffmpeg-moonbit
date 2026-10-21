@@ -1,7 +1,9 @@
 ///|
 /// HEVC deblocking filter, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/filter.c` and `libavcodec/h26x/h2656_deblock_template.c`
-/// for 8/10/12-bit 4:2:0 pictures (no tiles, no PCM, no transquant bypass).
+/// for 8/10/12-bit 4:2:0 pictures (no PCM, no transquant bypass). Tile and
+/// slice boundaries are unfiltered unless their respective across-edge flags
+/// are set.
 /// `beta`/`tc` are scaled by `bit_depth - 8` like the bit-depth-specific C
 /// DSP templates, and are looked up per CTB so slices may carry different
 /// deblocking offsets.
@@ -295,7 +297,8 @@ fn hevc_deblock_chroma(
 }
 
 ///|
-/// `deblocking_filter_CTB` for a no-tile picture (single- or multi-slice).
+/// `deblocking_filter_CTB` for a single- or multi-slice picture. Tiles use
+/// the same per-CTB offsets; bS already reflects tile boundaries.
 pub fn hevc_deblock_picture(
   pic : HevcPicture,
   sps : HevcSps,

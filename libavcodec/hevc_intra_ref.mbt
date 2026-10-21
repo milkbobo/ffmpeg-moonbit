@@ -43,9 +43,14 @@ fn hevc_extend(
 
 ///|
 /// Z-scan address of a minimum transform block inside one CTB
-/// (`MIN_TB_ADDR_ZS` with identity tile mapping). Out-of-range coordinates
-/// return -1 like the C's padding entries. */
-fn hevc_min_tb_addr_zs(sps : HevcSps, x_tb : Int32, y_tb : Int32) -> Int32 {
+/// (`MIN_TB_ADDR_ZS`, using the slice's tile-scan CTB map). Out-of-range
+/// coordinates return -1 like the C's padding entries. */
+fn hevc_min_tb_addr_zs(
+  sps : HevcSps,
+  pps : HevcPps,
+  x_tb : Int32,
+  y_tb : Int32,
+) -> Int32 {
   if x_tb < 0 || y_tb < 0 || x_tb > sps.tb_mask || y_tb > sps.tb_mask {
     return -1
   }
@@ -53,7 +58,7 @@ fn hevc_min_tb_addr_zs(sps : HevcSps, x_tb : Int32, y_tb : Int32) -> Int32 {
   let tb_x = x_tb >> log2_diff
   let tb_y = y_tb >> log2_diff
   let rs = sps.ctb_width * tb_y + tb_x
-  let mut val = rs << (log2_diff * 2)
+  let mut val = pps.ctb_addr_rs_to_ts[rs] << (log2_diff * 2)
   for i in 0..<log2_diff {
     let m = 1 << i
     if (m & x_tb) != 0 {
@@ -121,6 +126,7 @@ fn hevc_ref_filter_strong(
 pub fn hevc_intra_predict(
   pic : HevcPicture,
   sps : HevcSps,
+  pps : HevcPps,
   na : HevcNeighbourAvail,
   x0 : Int32,
   y0 : Int32,
@@ -143,11 +149,12 @@ pub fn hevc_intra_predict(
   let spin = c_idx != 0 &&
     size_in_tbs_v == 0 &&
     ((2 * y0) & (1 << sps.log2_min_tb_size)) != 0
-  let cur_tb_addr = hevc_min_tb_addr_zs(sps, x_tb, y_tb)
+  let cur_tb_addr = hevc_min_tb_addr_zs(sps, pps, x_tb, y_tb)
   let cand_bottom_left = na.cand_bottom_left &&
     cur_tb_addr >
     hevc_min_tb_addr_zs(
       sps,
+      pps,
       x_tb - 1,
       (y_tb + size_in_tbs_v + (if spin { 1 } else { 0 })) & sps.tb_mask,
     )
@@ -157,7 +164,7 @@ pub fn hevc_intra_predict(
   let cand_up_right = na.cand_up_right &&
     !spin &&
     cur_tb_addr >
-    hevc_min_tb_addr_zs(sps, (x_tb + size_in_tbs_h) & sps.tb_mask, y_tb - 1)
+    hevc_min_tb_addr_zs(sps, pps, (x_tb + size_in_tbs_h) & sps.tb_mask, y_tb - 1)
   let bottom_left_size = (
       (if y0 + 2 * size_in_luma_v < sps.height {
         y0 + 2 * size_in_luma_v

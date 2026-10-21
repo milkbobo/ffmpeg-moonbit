@@ -624,6 +624,13 @@ pub struct HevcPps {
   mut loop_filter_across_tiles_enabled_flag : Int32
   column_width : Array[Int32]
   row_height : Array[Int32]
+  /// Derived tile boundaries and CTB raster<->tile-scan maps (`setup_pps`).
+  col_bd : Array[Int32]
+  row_bd : Array[Int32]
+  col_idxX : Array[Int32]
+  ctb_addr_rs_to_ts : Array[Int32]
+  ctb_addr_ts_to_rs : Array[Int32]
+  tile_id : Array[Int32]
   mut seq_loop_filter_across_slices_enabled_flag : Int32
   mut deblocking_filter_control_present_flag : Int32
   mut deblocking_filter_override_enabled_flag : Int32
@@ -697,6 +704,12 @@ fn new_hevc_pps() -> HevcPps {
     loop_filter_across_tiles_enabled_flag: 1,
     column_width: [],
     row_height: [],
+    col_bd: [],
+    row_bd: [],
+    col_idxX: [],
+    ctb_addr_rs_to_ts: [],
+    ctb_addr_ts_to_rs: [],
+    tile_id: [],
     seq_loop_filter_across_slices_enabled_flag: 0,
     deblocking_filter_control_present_flag: 0,
     deblocking_filter_override_enabled_flag: 0,
@@ -1991,6 +2004,94 @@ fn pps_scc_extension(
 
 ///|
 /// `ff_hevc_decode_nal_pps`. */
+///|
+/// `setup_pps` (ps.c): uniform tile sizes and the CTB raster/tile-scan maps. */
+fn hevc_setup_pps_tiles(pps : HevcPps, sps : HevcSps) -> Unit {
+  let ncols = pps.num_tile_columns
+  let nrows = pps.num_tile_rows
+  let w = sps.ctb_width
+  let h = sps.ctb_height
+  if pps.uniform_spacing_flag != 0 {
+    pps.column_width.clear()
+    pps.row_height.clear()
+    for i in 0..<ncols {
+      pps.column_width.push(((i + 1) * w) / ncols - (i * w) / ncols)
+    }
+    for i in 0..<nrows {
+      pps.row_height.push(((i + 1) * h) / nrows - (i * h) / nrows)
+    }
+  }
+  pps.col_bd.clear()
+  pps.col_bd.push(0)
+  for i in 0..<ncols {
+    pps.col_bd.push(pps.col_bd[i] + pps.column_width[i])
+  }
+  pps.row_bd.clear()
+  pps.row_bd.push(0)
+  for i in 0..<nrows {
+    pps.row_bd.push(pps.row_bd[i] + pps.row_height[i])
+  }
+  pps.col_idxX.clear()
+  let mut j = 0
+  for i in 0..<w {
+    if i > pps.col_bd[j] {
+      j = j + 1
+    }
+    pps.col_idxX.push(j)
+  }
+  let ctbs = w * h
+  pps.ctb_addr_rs_to_ts.clear()
+  pps.ctb_addr_ts_to_rs.clear()
+  pps.tile_id.clear()
+  for _ in 0..<ctbs {
+    pps.ctb_addr_rs_to_ts.push(0)
+    pps.ctb_addr_ts_to_rs.push(0)
+    pps.tile_id.push(0)
+  }
+  for rs in 0..<ctbs {
+    let tb_x = rs % w
+    let tb_y = rs / w
+    let mut tile_x = 0
+    let mut tile_y = 0
+    for i in 0..<ncols {
+      if tb_x < pps.col_bd[i + 1] {
+        tile_x = i
+        break
+      }
+    }
+    for i in 0..<nrows {
+      if tb_y < pps.row_bd[i + 1] {
+        tile_y = i
+        break
+      }
+    }
+    let mut val = 0
+    for i in 0..<tile_x {
+      val = val + pps.row_height[tile_y] * pps.column_width[i]
+    }
+    for i in 0..<tile_y {
+      val = val + w * pps.row_height[i]
+    }
+    val = val +
+      (tb_y - pps.row_bd[tile_y]) * pps.column_width[tile_x] +
+      tb_x -
+      pps.col_bd[tile_x]
+    pps.ctb_addr_rs_to_ts[rs] = val
+    pps.ctb_addr_ts_to_rs[val] = rs
+  }
+  let mut tile = 0
+  for ty in 0..<nrows {
+    for tx in 0..<ncols {
+      for y in pps.row_bd[ty]..<pps.row_bd[ty + 1] {
+        for x in pps.col_bd[tx]..<pps.col_bd[tx + 1] {
+          pps.tile_id[pps.ctb_addr_rs_to_ts[y * w + x]] = tile
+        }
+      }
+      tile = tile + 1
+    }
+  }
+}
+
 pub fn ff_hevc_decode_nal_pps(
   gb : BitReader,
   ps : HevcParamSets,
@@ -2146,6 +2247,7 @@ pub fn ff_hevc_decode_nal_pps(
   if gb.bits_left() < 0 {
     // C only warns here.
   }
+  hevc_setup_pps_tiles(pps, sps)
   ps.pps_list[pps_id] = Some(pps)
   Ok(())
 }

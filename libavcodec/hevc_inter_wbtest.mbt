@@ -104,10 +104,3 @@ test "hevc pb: PCM is rejected" {
   )
 }
 
-///|
-test "hevc pb: tiles are rejected" {
-  hevc_check_rejected(
-    hevc_pb_neg_tiles_b64,
-    "PATCHWELCOME: HEVC tiles are not supported",
-  )
-}
