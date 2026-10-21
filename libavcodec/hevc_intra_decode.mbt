@@ -4,7 +4,7 @@
 /// `hls_transform_tree`, `hls_transform_unit`) and
 /// `libavcodec/hevc/pred_template.c`.
 ///
-/// Supported: 8/10/12-bit 4:2:0/4:2:2/4:4:4, one slice per picture,
+/// Supported: 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4, one slice per picture,
 /// all-intra deblocking and SAO, no PCM, no transform
 /// skip/RDPCM/cross-component prediction, no tiles or WPP. Scaling lists are
 /// applied during dequantization (default, SPS and PPS matrices).
@@ -400,7 +400,7 @@ fn HevcIntraDecoder::intra_prediction_unit(
         }
       }
     }
-  } else {
+  } else if self.sps.chroma_format_idc != 0 {
     let chroma_mode = self.cabac.intra_chroma_pred_mode()
     let mode_idx = if chroma_mode != 4 {
       if self.pu_mode[0] == intra_chroma_table[chroma_mode] {
@@ -1251,9 +1251,8 @@ fn hevc_decode_intra_frame_impl(
     None => return Err("hevc: missing SPS")
   }
   if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
-    sps.chroma_format_idc == 0 ||
     sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0/4:2:2/4:4:4 HEVC is supported")
+    return Err("PATCHWELCOME: only 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 HEVC is supported")
   }
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")
@@ -1294,8 +1293,8 @@ fn hevc_decode_intra_frame_impl(
     hevc_picture_new(
       sps.width,
       sps.height,
-      sps.width >> sps.hshift[1],
-      sps.height >> sps.vshift[1],
+      if sps.chroma_format_idc == 0 { 0 } else { sps.width >> sps.hshift[1] },
+      if sps.chroma_format_idc == 0 { 0 } else { sps.height >> sps.vshift[1] },
     ),
     tab_mvf,
     [],

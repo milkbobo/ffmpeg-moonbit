@@ -1,5 +1,5 @@
 ///|
-/// Decoded 8/10/12-bit 4:2:0/4:2:2/4:4:4 picture planes (samples stored as
+/// Decoded 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 picture planes (samples stored as
 /// `Int32`).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.

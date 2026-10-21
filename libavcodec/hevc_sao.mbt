@@ -89,7 +89,8 @@ pub fn hevc_sao_parse(
     sao.copy_ctb(ctb_rs, ctb_rs - sao.ctb_width)
     return
   }
-  for c_idx in 0..<3 {
+  let num_comps = if sps.chroma_format_idc != 0 { 3 } else { 1 }
+  for c_idx in 0..<num_comps {
     let active = if c_idx == 0 {
       sh.slice_sao_luma_flag
     } else {
@@ -214,10 +215,11 @@ pub fn hevc_sao_apply(
   let pos : FixedArray[Int32] = [
     -1, 0, 1, 0, 0, -1, 0, 1, -1, -1, 1, 1, 1, -1, -1, 1,
   ]
+  let num_comps = if sps.chroma_format_idc != 0 { 3 } else { 1 }
   for ctb in 0..<sps.ctb_size {
     let x_ctb = ctb % sao.ctb_width
     let y_ctb = ctb / sao.ctb_width
-    for c_idx in 0..<3 {
+    for c_idx in 0..<num_comps {
       let sao_type = sao.type_idx[ctb * 3 + c_idx]
       if sao_type == 0 {
         continue

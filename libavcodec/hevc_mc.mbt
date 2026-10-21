@@ -661,6 +661,9 @@ fn hevc_chroma_mc_uni(
   hshift : Int32,
   vshift : Int32,
 ) -> Unit {
+  if rw <= 0 || rh <= 0 {
+    return
+  }
   let mx = (mvx & ((1 << (2 + hshift)) - 1)) << (1 - hshift)
   let my = (mvy & ((1 << (2 + vshift)) - 1)) << (1 - vshift)
   let x_off = x0 + (mvx >> (2 + hshift))
@@ -755,6 +758,9 @@ fn hevc_chroma_mc_raw(
   hshift : Int32,
   vshift : Int32,
 ) -> Unit {
+  if rw <= 0 || rh <= 0 {
+    return
+  }
   let mx = (mvx & ((1 << (2 + hshift)) - 1)) << (1 - hshift)
   let my = (mvy & ((1 << (2 + vshift)) - 1)) << (1 - vshift)
   let x_off = x0 + (mvx >> (2 + hshift))
@@ -847,6 +853,9 @@ fn hevc_chroma_mc_uni_w(
   hshift : Int32,
   vshift : Int32,
 ) -> Unit {
+  if rw <= 0 || rh <= 0 {
+    return
+  }
   let shift = denom + 14 - bd
   let offset = 1 << (shift - 1)
   let oxs = ox * (1 << (bd - 8))
@@ -900,6 +909,9 @@ fn hevc_chroma_mc_bi(
   hshift : Int32,
   vshift : Int32,
 ) -> Unit {
+  if rw <= 0 || rh <= 0 {
+    return
+  }
   let buf : FixedArray[Int32] = FixedArray::make(
     hevc_mc_chroma_stride * hevc_mc_chroma_stride,
     0,
@@ -1081,6 +1093,9 @@ fn hevc_chroma_mc_bi_w(
   hshift : Int32,
   vshift : Int32,
 ) -> Unit {
+  if rw <= 0 || rh <= 0 {
+    return
+  }
   let log2_wd = denom + 14 - bd
   let wshift = log2_wd + 1
   let ox0s = ox0 * (1 << (bd - 8))

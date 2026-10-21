@@ -1,7 +1,7 @@
 ///|
 /// HEVC residual coding and inverse transform, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/cabac.c` (`ff_hevc_hls_residual_coding`) for 8/10/12-bit
-/// 4:2:0/4:2:2/4:4:4 streams. Transform skip is supported (including the
+/// monochrome/4:2:0/4:2:2/4:4:4 streams. Transform skip is supported (including the
 /// transform-skip significance contexts and rotation swap), as are scaling
 /// lists (SPS/PPS matrices and DC scales); RDPCM and cross-component
 /// prediction are not.
