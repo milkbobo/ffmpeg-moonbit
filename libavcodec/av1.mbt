@@ -30,6 +30,18 @@ pub struct Av1SequenceParameters {
   /// `max_frame_width_minus_1 + 1` (0 for `av1C` records).
   mut width : Int32
   mut height : Int32
+  mut reduced_still_picture_header : Bool
+  mut frame_id_numbers_present : Bool
+  mut delta_frame_id_length : Int32
+  mut additional_frame_id_length : Int32
+  mut enable_order_hint : Bool
+  mut order_hint_bits : Int32
+  /// 0 = off, 1 = on, 2 = choose per frame.
+  mut seq_force_screen_content_tools : Int32
+  mut seq_force_integer_mv : Int32
+  mut enable_superres : Bool
+  mut enable_cdef : Bool
+  mut enable_restoration : Bool
 }
 
 ///|
@@ -169,6 +181,7 @@ fn av1_parse_sequence_payload(
   seq.profile = br.read(3).to_int()
   ignore(br.read(1)) // still_picture
   let reduced = br.read(1) != 0
+  seq.reduced_still_picture_header = reduced
   if reduced {
     seq.level = br.read(5).to_int()
     seq.tier = 0
@@ -212,32 +225,40 @@ fn av1_parse_sequence_payload(
   seq.width = br.read(width_bits).to_int() + 1
   seq.height = br.read(height_bits).to_int() + 1
   if !reduced {
-    if br.read(1) != 0 {
-      br.skip(7) // frame_id_numbers
+    seq.frame_id_numbers_present = br.read(1) != 0
+    if seq.frame_id_numbers_present {
+      seq.delta_frame_id_length = br.read(4).to_int() + 2
+      seq.additional_frame_id_length = br.read(3).to_int() + 1
     }
   }
   br.skip(3) // use_128x128_superblock, filter_intra, intra_edge_filter
   if !reduced {
     br.skip(4)
-    let order_hint = br.read(1) != 0
-    if order_hint {
+    seq.enable_order_hint = br.read(1) != 0
+    if seq.enable_order_hint {
       br.skip(2)
     }
-    let force_screen_content = if br.read(1) != 0 {
-      true
+    let choose_sct = br.read(1) != 0
+    if choose_sct {
+      seq.seq_force_screen_content_tools = 2
     } else {
-      br.read(1) != 0
+      seq.seq_force_screen_content_tools = br.read(1).to_int()
     }
-    if force_screen_content {
-      if br.read(1) == 0 {
-        ignore(br.read(1))
+    if seq.seq_force_screen_content_tools != 0 {
+      let choose_mv = br.read(1) != 0
+      if choose_mv {
+        seq.seq_force_integer_mv = 2
+      } else {
+        seq.seq_force_integer_mv = br.read(1).to_int()
       }
     }
-    if order_hint {
-      br.skip(3)
+    if seq.enable_order_hint {
+      seq.order_hint_bits = br.read(3).to_int() + 1
     }
   }
-  br.skip(3) // superres, cdef, restoration
+  seq.enable_superres = br.read(1) != 0
+  seq.enable_cdef = br.read(1) != 0
+  seq.enable_restoration = br.read(1) != 0
   av1_parse_color_config(seq, br)
   ignore(br.read(1)) // film_grain_params_present
   Ok(())
@@ -264,6 +285,17 @@ pub fn av1_parse_sequence_header(
     color_range: 0,
     width: 0,
     height: 0,
+    reduced_still_picture_header: false,
+    frame_id_numbers_present: false,
+    delta_frame_id_length: 0,
+    additional_frame_id_length: 0,
+    enable_order_hint: false,
+    order_hint_bits: 0,
+    seq_force_screen_content_tools: 0,
+    seq_force_integer_mv: 0,
+    enable_superres: false,
+    enable_cdef: false,
+    enable_restoration: false,
   }
   if data.length() == 0 {
     return Err("av1: empty input")
@@ -317,4 +349,202 @@ pub fn av1_parse_sequence_header(
     pos = p + size
   }
   Err("av1: no sequence header OBU")
+}
+
+///|
+/// AV1 uncompressed frame header fields (key/intra frames). */
+pub struct Av1FrameHeader {
+  show_existing_frame : Bool
+  frame_to_show_map_idx : Int32
+  frame_type : Int32
+  show_frame : Bool
+  showable_frame : Bool
+  error_resilient_mode : Bool
+  disable_cdf_update : Bool
+  allow_screen_content_tools : Bool
+  force_integer_mv : Bool
+  frame_size_override_flag : Bool
+  order_hint : Int32
+  primary_ref_frame : Int32
+  refresh_frame_flags : Int32
+  width : Int32
+  height : Int32
+  render_width : Int32
+  render_height : Int32
+  use_superres : Bool
+  allow_intrabc : Bool
+}
+
+///|
+/// `av1_frame_type`. */
+pub let av1_frame_key : Int32 = 0
+
+///|
+pub let av1_frame_inter : Int32 = 1
+
+///|
+pub let av1_frame_intra_only : Int32 = 2
+
+///|
+pub let av1_frame_switch : Int32 = 3
+
+///|
+/// Parse the first frame header OBU (type 3 or 6) of `data`. Key and
+/// intra-only frames are supported; inter/switch headers need the reference
+/// frame state and return PATCHWELCOME.
+pub fn av1_parse_frame_header(
+  data : Bytes,
+  seq : Av1SequenceParameters,
+) -> Result[Av1FrameHeader, String] {
+  let mut pos = 0
+  while pos < data.length() {
+    let header = data[pos].to_int()
+    if (header & 0x80) != 0 {
+      return Err("av1: OBU forbidden bit set")
+    }
+    let obu_type = (header >> 3) & 0x0F
+    let extension = (header & 0x04) != 0
+    let has_size = (header & 0x02) != 0
+    let p_ref = Ref(pos + 1 + (if extension { 1 } else { 0 }))
+    if !has_size {
+      return Err("av1: OBU without size")
+    }
+    let size = av1_leb128(data, p_ref)
+    let p = p_ref.val
+    if size < 0 || p + size > data.length() {
+      return Err("av1: bad OBU size")
+    }
+    if obu_type == 3 || obu_type == 6 {
+      let br = BitReader::with_size(data[p:p + size].to_owned(), size * 8)
+      let show_existing = br.read(1) != 0
+      if show_existing {
+        return Ok({
+          show_existing_frame: true,
+          frame_to_show_map_idx: br.read(3).to_int(),
+          frame_type: 0,
+          show_frame: true,
+          showable_frame: false,
+          error_resilient_mode: false,
+          disable_cdf_update: false,
+          allow_screen_content_tools: false,
+          force_integer_mv: false,
+          frame_size_override_flag: false,
+          order_hint: 0,
+          primary_ref_frame: 0,
+          refresh_frame_flags: 0,
+          width: seq.width,
+          height: seq.height,
+          render_width: seq.width,
+          render_height: seq.height,
+          use_superres: false,
+          allow_intrabc: false,
+        })
+      }
+      let frame_type = br.read(2).to_int()
+      let show_frame = br.read(1) != 0
+      let showable = if show_frame { false } else { br.read(1) != 0 }
+      let error_resilient = if frame_type == av1_frame_switch ||
+        (frame_type == av1_frame_key && show_frame) {
+        true
+      } else {
+        br.read(1) != 0
+      }
+      let disable_cdf_update = if !seq.reduced_still_picture_header {
+        br.read(1) != 0
+      } else {
+        false
+      }
+      let allow_sct = if seq.seq_force_screen_content_tools == 2 {
+        br.read(1) != 0
+      } else {
+        seq.seq_force_screen_content_tools == 1
+      }
+      let force_integer = if allow_sct {
+        if seq.seq_force_integer_mv == 2 {
+          br.read(1) != 0
+        } else {
+          seq.seq_force_integer_mv == 1
+        }
+      } else {
+        false
+      }
+      if seq.frame_id_numbers_present {
+        br.skip(seq.delta_frame_id_length + seq.additional_frame_id_length)
+      }
+      let frame_size_override = if seq.reduced_still_picture_header {
+        false
+      } else {
+        br.read(1) != 0
+      }
+      let order_hint = if seq.enable_order_hint {
+        br.read(seq.order_hint_bits).to_int()
+      } else {
+        0
+      }
+      let mut refresh = 0
+      let primary_ref = 0
+      if frame_type == av1_frame_key && show_frame {
+        refresh = 0xFF
+      } else if frame_type == av1_frame_key ||
+        frame_type == av1_frame_intra_only {
+        refresh = if seq.reduced_still_picture_header {
+          0xFF
+        } else {
+          br.read(8).to_int()
+        }
+      } else {
+        return Err("PATCHWELCOME: AV1 inter frame header")
+      }
+      let mut width = seq.width
+      let mut height = seq.height
+      if frame_size_override {
+        let wb = br.read(4).to_int() + 1
+        let hb = br.read(4).to_int() + 1
+        width = br.read(wb).to_int() + 1
+        height = br.read(hb).to_int() + 1
+      }
+      let mut render_width = width
+      let mut render_height = height
+      if br.read(1) != 0 {
+        render_width = br.read(16).to_int() + 1
+        render_height = br.read(16).to_int() + 1
+      }
+      let mut use_superres = false
+      if seq.enable_superres && !frame_size_override {
+        use_superres = br.read(1) != 0
+        if use_superres {
+          ignore(br.read(3))
+        }
+      }
+      let allow_intrabc = if allow_sct &&
+        (frame_type == av1_frame_key || frame_type == av1_frame_intra_only) {
+        br.read(1) != 0
+      } else {
+        false
+      }
+      return Ok({
+        show_existing_frame: false,
+        frame_to_show_map_idx: 0,
+        frame_type,
+        show_frame,
+        showable_frame: showable,
+        error_resilient_mode: error_resilient,
+        disable_cdf_update,
+        allow_screen_content_tools: allow_sct,
+        force_integer_mv: force_integer,
+        frame_size_override_flag: frame_size_override,
+        order_hint,
+        primary_ref_frame: primary_ref,
+        refresh_frame_flags: refresh,
+        width,
+        height,
+        render_width,
+        render_height,
+        use_superres,
+        allow_intrabc,
+      })
+    }
+    pos = p + size
+  }
+  Err("av1: no frame header OBU")
 }

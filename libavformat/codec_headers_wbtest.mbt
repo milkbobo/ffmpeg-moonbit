@@ -122,3 +122,30 @@ test "vp9: rejects bad frame marker and sync code" {
     Err(e) => assert_true(e.contains("sync"))
   }
 }
+
+///|
+test "av1: keyframe frame header matches trace_headers" {
+  let bytes = @libavutil.av_base64_decode(webm_av1_b64, 100000).unwrap()
+  let mkv = av_matroska_open(bytes).unwrap()
+  let packet = mkv.packets[0].data
+  let seq = @libavcodec.av1_parse_sequence_header(packet).unwrap()
+  assert_true(seq.enable_order_hint)
+  assert_eq(seq.order_hint_bits, 7)
+  assert_eq(seq.seq_force_screen_content_tools, 2)
+  let fh = @libavcodec.av1_parse_frame_header(packet, seq).unwrap()
+  assert_false(fh.show_existing_frame)
+  assert_eq(fh.frame_type, @libavcodec.av1_frame_key)
+  assert_true(fh.show_frame)
+  assert_true(fh.error_resilient_mode) // KEY+show_frame infers resilient
+  assert_false(fh.disable_cdf_update)
+  assert_true(fh.allow_screen_content_tools)
+  assert_false(fh.force_integer_mv)
+  assert_false(fh.frame_size_override_flag)
+  assert_eq(fh.order_hint, 0)
+  assert_eq(fh.width, 64)
+  assert_eq(fh.height, 48)
+  assert_eq(fh.render_width, 64)
+  assert_eq(fh.render_height, 48)
+  assert_false(fh.use_superres)
+  assert_false(fh.allow_intrabc)
+}
