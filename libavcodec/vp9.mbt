@@ -170,3 +170,56 @@ pub fn vp9_parse_frame_header(data : Bytes) -> Result[Vp9FrameHeader, String] {
   }
   Ok(h)
 }
+
+///|
+/// Split a VP9 superframe packet (`libavcodec/bsf/vp9_superframe_split.c`).
+/// A trailing index of `1 + (marker & 7)` frames with `1 + ((marker >> 3) & 3)`
+/// bytes per length is recognized when both the first and last index bytes
+/// equal the marker (`0b110xxxxx`). Non-superframe input is returned as one
+/// frame with `is_superframe == false`.
+pub struct Vp9Superframe {
+  is_superframe : Bool
+  frames : Array[Bytes]
+}
+
+///|
+pub fn vp9_split_superframe(data : Bytes) -> Result[Vp9Superframe, String] {
+  if data.length() == 0 {
+    return Ok({ is_superframe: false, frames: [data], })
+  }
+  let marker = data[data.length() - 1].to_int()
+  if (marker & 0xE0) != 0xC0 {
+    return Ok({ is_superframe: false, frames: [data], })
+  }
+  let length_size = 1 + ((marker >> 3) & 0x3)
+  let nb_frames = 1 + (marker & 0x7)
+  let idx_size = 2 + nb_frames * length_size
+  if data.length() < idx_size ||
+    data[data.length() - idx_size].to_int() != marker {
+    return Ok({ is_superframe: false, frames: [data], })
+  }
+  let idx_start = data.length() - idx_size + 1
+  let sizes : Array[Int32] = []
+  let mut total = 0
+  for i in 0..<nb_frames {
+    let mut size = 0
+    for j in 0..<length_size {
+      size = size | (data[idx_start + i * length_size + j].to_int() << (j * 8))
+    }
+    if size <= 0 {
+      return Err("vp9: invalid superframe size")
+    }
+    total = total + size
+    sizes.push(size)
+  }
+  if total > data.length() - idx_size {
+    return Err("vp9: superframe sizes exceed packet")
+  }
+  let frames : Array[Bytes] = []
+  let mut off = 0
+  for size in sizes {
+    frames.push(data[off:off + size].to_owned())
+    off = off + size
+  }
+  Ok({ is_superframe: true, frames, })
+}
