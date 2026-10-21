@@ -27,21 +27,6 @@ fn h264_mc_clamp(v : Int32, limit : Int32) -> Int32 {
 }
 
 ///|
-/// One 6-tap half-pel filter application; `p0..p5` are the six input samples
-/// `src[-2..3]`. Both the horizontal and the vertical stage clip to uint8,
-/// matching `ff_put_h264_qpel16_h_lowpass`.
-fn h264_mc_hpel6(
-  p0 : Int32,
-  p1 : Int32,
-  p2 : Int32,
-  p3 : Int32,
-  p4 : Int32,
-  p5 : Int32,
-) -> Int32 {
-  clip_uint8((p0 - 5 * p1 + 20 * p2 + 20 * p3 - 5 * p4 + p5 + 16) >> 5)
-}
-
-///|
 /// Put a luma block of `w` x `h` from `src` at full-pel offset
 /// (`src_x`, `src_y`) relative to the plane origin, with quarter-pel
 /// remainders `subx`/`suby` (0..3). `pic_w`/`pic_h` delimit the reference
@@ -70,56 +55,71 @@ fn h264_mc_luma(
   fn px(x : Int32, y : Int32) -> Int32 {
     src[h264_mc_clamp(y, pic_h) * sstride + h264_mc_clamp(x, pic_w)]
   }
-  // `hpel_h(x, y)` is the half-pel sample at (x + 0.5, y): filter over
-  // x - 2 .. x + 3, matching `src[y][x - 2 .. x + 3]` in the C.
-  fn hpel_h(x : Int32, y : Int32) -> Int32 {
-    h264_mc_hpel6(
-      px(x - 2, y),
-      px(x - 1, y),
-      px(x, y),
-      px(x + 1, y),
-      px(x + 2, y),
-      px(x + 3, y),
-    )
+  // Unclipped horizontal 6-tap at (x, y). `put_h264_qpelN_hv_lowpass` keeps
+  // these sums unshifted and unclipped until the final `(v + 512) >> 10`.
+  fn hsum(x : Int32, y : Int32) -> Int32 {
+    px(x - 2, y) - 5 * px(x - 1, y) + 20 * px(x, y) + 20 * px(x + 1, y) -
+    5 * px(x + 2, y) + px(x + 3, y)
   }
-  // `hpel_v(g, x, y)` is the sample at (x?, y + 0.5) for the x-generator
-  // `g` (identity or `hpel_h`): filter over rows y - 2 .. y + 3.
-  fn hpel_v(g : (Int32, Int32) -> Int32, x : Int32, y : Int32) -> Int32 {
-    h264_mc_hpel6(
-      g(x, y - 2),
-      g(x, y - 1),
-      g(x, y),
-      g(x, y + 1),
-      g(x, y + 2),
-      g(x, y + 3),
-    )
+  fn vsum(g : (Int32, Int32) -> Int32, x : Int32, y : Int32) -> Int32 {
+    g(x, y - 2) - 5 * g(x, y - 1) + 20 * g(x, y) + 20 * g(x, y + 1) -
+    5 * g(x, y + 2) + g(x, y + 3)
   }
-  // Vertically processed value at (x, y) for sub-pel `sy` (0, 1, 2, 3):
-  // sy==2 filters, odd sy averages the full and the filtered row.
-  fn vert(
-    g : (Int32, Int32) -> Int32,
-    x : Int32,
-    y : Int32,
-    sy : Int32,
-  ) -> Int32 {
-    if sy == 0 {
-      g(x, y)
-    } else if sy == 2 {
-      hpel_v(g, x, y)
-    } else {
-      (g(x, y) + hpel_v(g, x, y) + 1) >> 1
-    }
+  fn half_h(x : Int32, y : Int32) -> Int32 {
+    clip_uint8((hsum(x, y) + 16) >> 5)
+  }
+  fn half_v(x : Int32, y : Int32) -> Int32 {
+    clip_uint8((vsum(px, x, y) + 16) >> 5)
+  }
+  fn half_hv(x : Int32, y : Int32) -> Int32 {
+    clip_uint8((vsum(hsum, x, y) + 512) >> 10)
   }
   for row = 0; row < h; row = row + 1 {
     let y = src_y + row
     for col = 0; col < w; col = col + 1 {
       let x = src_x + col
+      // `ff_h264_qpel_pixels_tab[...][subx + 4 * suby]`, i.e. the mcXY
+      // functions of h264qpel_template.c.
       let v = if subx == 0 {
-        vert(px, x, y, suby)
+        if suby == 0 {
+          px(x, y)
+        } else if suby == 2 {
+          half_v(x, y)
+        } else if suby == 1 {
+          (px(x, y) + half_v(x, y) + 1) >> 1
+        } else {
+          (half_v(x, y) + px(x, y + 1) + 1) >> 1
+        }
       } else if subx == 2 {
-        vert(hpel_h, x, y, suby)
+        if suby == 0 {
+          half_h(x, y)
+        } else if suby == 2 {
+          half_hv(x, y)
+        } else if suby == 1 {
+          (half_h(x, y) + half_hv(x, y) + 1) >> 1
+        } else {
+          (half_h(x, y + 1) + half_hv(x, y) + 1) >> 1
+        }
+      } else if subx == 1 {
+        if suby == 0 {
+          (px(x, y) + half_h(x, y) + 1) >> 1
+        } else if suby == 2 {
+          (half_v(x, y) + half_hv(x, y) + 1) >> 1
+        } else if suby == 1 {
+          (half_h(x, y) + half_v(x, y) + 1) >> 1
+        } else {
+          (half_h(x, y + 1) + half_v(x, y) + 1) >> 1
+        }
       } else {
-        (vert(px, x, y, suby) + vert(hpel_h, x, y, suby) + 1) >> 1
+        if suby == 0 {
+          (half_h(x, y) + px(x + 1, y) + 1) >> 1
+        } else if suby == 2 {
+          (half_v(x + 1, y) + half_hv(x, y) + 1) >> 1
+        } else if suby == 1 {
+          (half_h(x, y) + half_v(x + 1, y) + 1) >> 1
+        } else {
+          (half_h(x, y + 1) + half_v(x + 1, y) + 1) >> 1
+        }
       }
       dst[dstoff + row * dstride + col] = v
     }

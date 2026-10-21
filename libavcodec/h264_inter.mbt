@@ -47,7 +47,7 @@ fn h264_cabac_mb_skip(
   if mb_y > 0 {
     let t = ctx.infos[mb_idx - ctx.mb_width]
     if t.mb_type_bits != 0 && (t.mb_type_bits & h264_mb_type_skip) == 0 {
-      c = c + 2
+      c = c + 1
     }
   }
   cabac.get_cabac(states, 11 + c)
@@ -142,14 +142,9 @@ fn h264_cabac_mb_mvd(
   base : Int32,
   amvd : Int32,
 ) -> Result[(Int32, Int32), String] {
-  let mut ctxi = 0
-  if amvd > 2 {
-    ctxi = ctxi + 1
-  }
-  if amvd > 32 {
-    ctxi = ctxi + 1
-  }
-  if cabac.get_cabac(states, base + ctxi + 2) == 0 {
+  // `ctxbase + ((amvd-3)>>31) + ((amvd-33)>>31) + 2`, i.e. 0/1/2.
+  let ctxi = if amvd > 32 { 2 } else if amvd > 2 { 1 } else { 0 }
+  if cabac.get_cabac(states, base + ctxi) == 0 {
     return Ok((0, 0))
   }
   let mut mvd = 1
@@ -737,7 +732,7 @@ fn h264_decode_mb_cabac_p(
     ctx.last_qscale_diff = 0
   }
   info.qp = ctx.qscale
-  h264_recon_inter_mb(
+  return h264_recon_inter_mb(
     ctx, mb_x, mb_y, mc_ops, cbp, mb, nz, chroma_qp0, chroma_qp1, qmul_luma, chroma_dc_nz,
   )
 }
@@ -762,7 +757,7 @@ fn h264_decode_mb_skip_common(
   info.cbp_all = 0
   info.qp = ctx.qscale
   ctx.last_qscale_diff = 0
-  h264_recon_inter_mb(
+  return h264_recon_inter_mb(
     ctx,
     mb_x,
     mb_y,
@@ -1073,7 +1068,7 @@ fn h264_decode_mb_cavlc_p(
     ctx.last_qscale_diff = 0
   }
   info.qp = ctx.qscale
-  h264_recon_inter_mb(
+  return h264_recon_inter_mb(
     ctx, mb_x, mb_y, mc_ops, cbp, mb, nz, chroma_qp0, chroma_qp1, qmul_luma, chroma_dc_nz,
   )
 }

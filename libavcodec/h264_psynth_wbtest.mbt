@@ -316,14 +316,14 @@ test "h264: synthetic CABAC P frame decodes to the translated I_PCM reference" {
   for mb = 0; mb < mb_w * mb_h; mb = mb + 1 {
     let mx = mb % mb_w
     let my = mb / mb_w
-    // mb_skip_flag: ctx 11 + (left coded non-skip) + 2*(top coded non-skip);
+    // mb_skip_flag: ctx 11 + (left coded non-skip) + (top coded non-skip);
     // every previous macroblock is a coded non-skip P_L0_16x16.
     let mut c = 0
     if mx > 0 {
       c = c + 1
     }
     if my > 0 {
-      c = c + 2
+      c = c + 1
     }
     psyn_put_cabac(enc, states, 11 + c, 0)
     // mb_type: 14 -> 0 (P), 15 -> 0, 16 -> 0 => P_L0_16x16
@@ -339,19 +339,13 @@ test "h264: synthetic CABAC P frame decodes to the translated I_PCM reference" {
     for pair = 0; pair < 2; pair = pair + 1 {
       let base = if pair == 0 { 40 } else { 47 }
       let amvd = if pair == 0 { lamvd.0 + tamvd.0 } else { lamvd.1 + tamvd.1 }
-      let mut ctxi = 0
-      if amvd > 2 {
-        ctxi = ctxi + 1
-      }
-      if amvd > 32 {
-        ctxi = ctxi + 1
-      }
+      let ctxi = if amvd > 32 { 2 } else if amvd > 2 { 1 } else { 0 }
       let comp = if pair == 0 { mvd.0 } else { mvd.1 }
       let mag = if comp < 0 { -comp } else { comp }
       if mag == 0 {
-        psyn_put_cabac(enc, states, base + ctxi + 2, 0)
+        psyn_put_cabac(enc, states, base + ctxi, 0)
       } else {
-        psyn_put_cabac(enc, states, base + ctxi + 2, 1)
+        psyn_put_cabac(enc, states, base + ctxi, 1)
         let mut ctxbase = base + 3
         let mut v = 1
         while v < 9 && v < mag {

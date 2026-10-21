@@ -336,7 +336,7 @@ fn h264_cabac_chroma_pre_mode(
     c = c + 1
   }
   if top_type != 0 && ctx.infos[mb_idx - ctx.mb_width].chroma_mode != 0 {
-    c = c + 2
+    c = c + 1
   }
   if cabac.get_cabac(states, 64 + c) == 0 {
     return 0

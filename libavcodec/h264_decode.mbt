@@ -426,6 +426,8 @@ fn h264_decode_mb(
     cbp = h264_golomb_to_intra4x4_cbp[cbp_code]
   }
   let mut qmul_luma : Array[Int32] = []
+  let mut chroma_qp0 = h264_get_chroma_qp(pps, 0, ctx.qscale)
+  let mut chroma_qp1 = h264_get_chroma_qp(pps, 1, ctx.qscale)
   if cbp != 0 || is_i16x16 {
     let dquant = gb.read_se()
     if dquant == -2147483648 {
@@ -440,8 +442,8 @@ fn h264_decode_mb(
     }
     ctx.qscale = q
     qmul_luma = h264_build_dequant4(pps, 0, q)
-    let chroma_qp0 = h264_get_chroma_qp(pps, 0, q)
-    let chroma_qp1 = h264_get_chroma_qp(pps, 1, q)
+    chroma_qp0 = h264_get_chroma_qp(pps, 0, q)
+    chroma_qp1 = h264_get_chroma_qp(pps, 1, q)
     if is_i16x16 {
       luma_dc_nz = match
         h264_decode_residual(
@@ -548,14 +550,14 @@ fn h264_decode_mb(
         }
       }
     }
-    match
-      h264_recon_mb(
-        ctx, mb_x, mb_y, is_i4x4, is_i16x16, pred16, chroma_mode, modes, cbp, luma_dc_nz,
-        chroma_dc_nz, chroma_qp0, chroma_qp1, qmul_luma, mb, luma_dc, nz,
-      ) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
-    }
+  }
+  match
+    h264_recon_mb(
+      ctx, mb_x, mb_y, is_i4x4, is_i16x16, pred16, chroma_mode, modes, cbp, luma_dc_nz,
+      chroma_dc_nz, chroma_qp0, chroma_qp1, qmul_luma, mb, luma_dc, nz,
+    ) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
   }
   for g = 0; g < 16; g = g + 1 {
     info.modes[g] = modes[g]
