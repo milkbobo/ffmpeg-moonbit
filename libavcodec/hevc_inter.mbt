@@ -358,12 +358,11 @@ fn hevc_derive_spatial_merge_candidates(
     ctx.part_mode == hevc_part_2nxnd)) ||
     hevc_is_diff_mer(pps, x_b1, y_b1, x0, y0) {
     false
-  } else if available(cand_up, x_b1, y_b1) {
-    !(is_available_a1 && hevc_compare_mv_ref_idx(mvf(x_b1, y_b1), mvf(x_a1, y_a1)))
   } else {
-    false
+    available(cand_up, x_b1, y_b1)
   }
-  if is_available_b1 {
+  if is_available_b1 &&
+    !(is_available_a1 && hevc_compare_mv_ref_idx(mvf(x_b1, y_b1), mvf(x_a1, y_a1))) {
     push(mvf(x_b1, y_b1))
   }
   let is_available_b0 = available(cand_up_right, x_b0, y_b0) &&

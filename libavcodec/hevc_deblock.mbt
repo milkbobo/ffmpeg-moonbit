@@ -1,9 +1,10 @@
 ///|
 /// HEVC deblocking filter, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/filter.c` and `libavcodec/h26x/h2656_deblock_template.c`
-/// for 8/10/12-bit 4:2:0 pictures with a single slice (no tiles, no PCM, no
-/// transquant bypass). `beta`/`tc` are scaled by `bit_depth - 8` like the
-/// bit-depth-specific C DSP templates.
+/// for 8/10/12-bit 4:2:0 pictures (no tiles, no PCM, no transquant bypass).
+/// `beta`/`tc` are scaled by `bit_depth - 8` like the bit-depth-specific C
+/// DSP templates, and are looked up per CTB so slices may carry different
+/// deblocking offsets.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -294,25 +295,21 @@ fn hevc_deblock_chroma(
 }
 
 ///|
-/// `deblocking_filter_CTB` for a single-slice, no-tile, all-intra picture.
+/// `deblocking_filter_CTB` for a no-tile picture (single- or multi-slice).
 pub fn hevc_deblock_picture(
   pic : HevcPicture,
   sps : HevcSps,
   pps : HevcPps,
-  sh : HevcSliceHeader,
+  tc_offsets : Array[Int32],
+  beta_offsets : Array[Int32],
   qp_y_tab : Array[Int32],
   vertical_bs : Array[Int32],
   horizontal_bs : Array[Int32],
   bs_width : Int32,
 ) -> Unit {
-  if sh.disable_deblocking_filter_flag {
-    return
-  }
   let ctb_size = 1 << sps.log2_ctb_size
   let max = (1 << sps.bit_depth) - 1
   let bd_shift = sps.bit_depth - 8
-  let tc_offset = sh.tc_offset
-  let beta_offset = sh.beta_offset
   let y_plane = pic.y
   let stride_y = pic.width
   let cb_plane = pic.cb
@@ -322,6 +319,12 @@ pub fn hevc_deblock_picture(
   for ctb in 0..<sps.ctb_size {
     let x0 = (ctb % sps.ctb_width) << sps.log2_ctb_size
     let y0 = (ctb / sps.ctb_width) << sps.log2_ctb_size
+    let cur_tc_offset = tc_offsets[ctb]
+    let cur_beta_offset = beta_offsets[ctb]
+    let left_tc_offset = if x0 > 0 { tc_offsets[ctb - 1] } else { 0 }
+    let left_beta_offset = if x0 > 0 { beta_offsets[ctb - 1] } else { 0 }
+    let mut tc_offset = cur_tc_offset
+    let mut beta_offset = cur_beta_offset
     let mut x_end = x0 + ctb_size
     if x_end > sps.width {
       x_end = sps.width
@@ -349,14 +352,14 @@ pub fn hevc_deblock_picture(
               1
             ) >>
             1
-          let beta = hevc_betatable[hevc_clip_i(qp + beta_offset, 0, 51)] << bd_shift
+          let beta = hevc_betatable[hevc_clip_i(qp + cur_beta_offset, 0, 51)] << bd_shift
           let tc0 = if bs0 != 0 {
-            hevc_tc_calc(qp, bs0, tc_offset) << bd_shift
+            hevc_tc_calc(qp, bs0, cur_tc_offset) << bd_shift
           } else {
             0
           }
           let tc1 = if bs1 != 0 {
-            hevc_tc_calc(qp, bs1, tc_offset) << bd_shift
+            hevc_tc_calc(qp, bs1, cur_tc_offset) << bd_shift
           } else {
             0
           }
@@ -385,6 +388,8 @@ pub fn hevc_deblock_picture(
                 1
               ) >>
               1
+            tc_offset = if x >= x0 { cur_tc_offset } else { left_tc_offset }
+            beta_offset = if x >= x0 { cur_beta_offset } else { left_beta_offset }
             let beta = hevc_betatable[hevc_clip_i(qp + beta_offset, 0, 51)] << bd_shift
             let tc0 = if bs0 != 0 {
               hevc_tc_calc(qp, bs0, tc_offset) << bd_shift
@@ -460,6 +465,7 @@ pub fn hevc_deblock_picture(
           x = x + 8 * h
         }
         if y != 0 {
+          tc_offset = if x0 > 0 { left_tc_offset } else { cur_tc_offset }
           let mut x_end2c = x_end
           if x_end != sps.width {
             x_end2c = x_end - 8 * h
@@ -495,7 +501,7 @@ pub fn hevc_deblock_picture(
                 0
               }
               let tc1 = if bs1 == 2 {
-                hevc_chroma_tc(pps, qp1, chroma, tc_offset) << bd_shift
+                hevc_chroma_tc(pps, qp1, chroma, cur_tc_offset) << bd_shift
               } else {
                 0
               }

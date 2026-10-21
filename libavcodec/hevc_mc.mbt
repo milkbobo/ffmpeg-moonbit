@@ -126,15 +126,20 @@ fn hevc_qpel_h(row : FixedArray[Int32], i : Int32, f : FixedArray[Int32]) -> Int
 
 ///|
 /// Vertical 8-tap filter of one column over a MAX_PB_SIZE-stride int buffer. */
-fn hevc_qpel_v(buf : FixedArray[Int32], idx : Int32, f : FixedArray[Int32]) -> Int32 {
-  f[0] * buf[idx - 3 * hevc_mc_max_pb] +
-  f[1] * buf[idx - 2 * hevc_mc_max_pb] +
-  f[2] * buf[idx - hevc_mc_max_pb] +
+fn hevc_qpel_v(
+  buf : FixedArray[Int32],
+  idx : Int32,
+  stride : Int32,
+  f : FixedArray[Int32],
+) -> Int32 {
+  f[0] * buf[idx - 3 * stride] +
+  f[1] * buf[idx - 2 * stride] +
+  f[2] * buf[idx - stride] +
   f[3] * buf[idx] +
-  f[4] * buf[idx + hevc_mc_max_pb] +
-  f[5] * buf[idx + 2 * hevc_mc_max_pb] +
-  f[6] * buf[idx + 3 * hevc_mc_max_pb] +
-  f[7] * buf[idx + 4 * hevc_mc_max_pb]
+  f[4] * buf[idx + stride] +
+  f[5] * buf[idx + 2 * stride] +
+  f[6] * buf[idx + 3 * stride] +
+  f[7] * buf[idx + 4 * stride]
 }
 
 ///|
@@ -145,11 +150,16 @@ fn hevc_epel_h(row : FixedArray[Int32], i : Int32, f : FixedArray[Int32]) -> Int
 
 ///|
 /// Vertical 4-tap filter over a MAX_PB_SIZE-stride int buffer. */
-fn hevc_epel_v(buf : FixedArray[Int32], idx : Int32, f : FixedArray[Int32]) -> Int32 {
-  f[0] * buf[idx - hevc_mc_max_pb] +
+fn hevc_epel_v(
+  buf : FixedArray[Int32],
+  idx : Int32,
+  stride : Int32,
+  f : FixedArray[Int32],
+) -> Int32 {
+  f[0] * buf[idx - stride] +
   f[1] * buf[idx] +
-  f[2] * buf[idx + hevc_mc_max_pb] +
-  f[3] * buf[idx + 2 * hevc_mc_max_pb]
+  f[2] * buf[idx + stride] +
+  f[3] * buf[idx + 2 * stride]
 }
 
 ///|
@@ -217,7 +227,7 @@ fn hevc_luma_mc_uni(
     let f = hevc_qpel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, f) >> norm) + offset
+        let v = (hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, hevc_mc_luma_stride, f) >> norm) + offset
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v >> shift, bd)
       }
     }
@@ -229,7 +239,7 @@ fn hevc_luma_mc_uni(
       0,
     )
     for j in 0..<(bh + 7) {
-      let row = j * hevc_mc_luma_stride
+      let row = 3 + j * hevc_mc_luma_stride
       for i in 0..<bw {
         tmp[j * hevc_mc_max_pb + i] = hevc_qpel_h(buf, row + i, fh) >> norm
       }
@@ -237,7 +247,7 @@ fn hevc_luma_mc_uni(
     let tbase = 3 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hevc_qpel_v(tmp, tbase + j * hevc_mc_max_pb + i, fv) >> 6) + offset
+        let v = (hevc_qpel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6) + offset
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v >> shift, bd)
       }
     }
@@ -318,7 +328,7 @@ fn hevc_luma_mc_bi(
     let f = hevc_qpel_filters[my0]
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, f) >> norm
+        tmp[j * hevc_mc_max_pb + i] = hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, hevc_mc_luma_stride, f) >> norm
       }
     }
   } else {
@@ -329,7 +339,7 @@ fn hevc_luma_mc_bi(
       0,
     )
     for j in 0..<(bh + 7) {
-      let row = j * hevc_mc_luma_stride
+      let row = 3 + j * hevc_mc_luma_stride
       for i in 0..<bw {
         tmp2[j * hevc_mc_max_pb + i] = hevc_qpel_h(buf, row + i, fh) >> norm
       }
@@ -337,7 +347,7 @@ fn hevc_luma_mc_bi(
     let tbase = 3 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = hevc_qpel_v(tmp2, tbase + j * hevc_mc_max_pb + i, fv) >> 6
+        tmp[j * hevc_mc_max_pb + i] = hevc_qpel_v(tmp2, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6
       }
     }
   }
@@ -387,7 +397,7 @@ fn hevc_luma_mc_bi(
     let f = hevc_qpel_filters[my1]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, f) >> norm) +
+        let v = ((hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, hevc_mc_luma_stride, f) >> norm) +
         tmp[j * hevc_mc_max_pb + i] +
         offset) >>
         shift
@@ -402,7 +412,7 @@ fn hevc_luma_mc_bi(
       0,
     )
     for j in 0..<(bh + 7) {
-      let row = j * hevc_mc_luma_stride
+      let row = 3 + j * hevc_mc_luma_stride
       for i in 0..<bw {
         tmp2[j * hevc_mc_max_pb + i] = hevc_qpel_h(buf, row + i, fh) >> norm
       }
@@ -410,7 +420,7 @@ fn hevc_luma_mc_bi(
     let tbase = 3 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((hevc_qpel_v(tmp2, tbase + j * hevc_mc_max_pb + i, fv) >> 6) +
+        let v = ((hevc_qpel_v(tmp2, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6) +
         tmp[j * hevc_mc_max_pb + i] +
         offset) >>
         shift
@@ -532,7 +542,7 @@ fn hevc_luma_mc_raw(
     let f = hevc_qpel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, f) >> norm
+        out[j * out_stride + i] = hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, hevc_mc_luma_stride, f) >> norm
       }
     }
   } else {
@@ -543,7 +553,7 @@ fn hevc_luma_mc_raw(
       0,
     )
     for j in 0..<(bh + 7) {
-      let row = j * hevc_mc_luma_stride
+      let row = 3 + j * hevc_mc_luma_stride
       for i in 0..<bw {
         tmp[j * hevc_mc_max_pb + i] = hevc_qpel_h(buf, row + i, fh) >> norm
       }
@@ -551,7 +561,7 @@ fn hevc_luma_mc_raw(
     let tbase = 3 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = hevc_qpel_v(tmp, tbase + j * hevc_mc_max_pb + i, fv) >> 6
+        out[j * out_stride + i] = hevc_qpel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6
       }
     }
   }
@@ -696,7 +706,7 @@ fn hevc_chroma_mc_uni(
     let f = hevc_epel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, f) >> norm) + offset
+        let v = (hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, hevc_mc_chroma_stride, f) >> norm) + offset
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v >> shift, bd)
       }
     }
@@ -708,7 +718,7 @@ fn hevc_chroma_mc_uni(
       0,
     )
     for j in 0..<(bh + 3) {
-      let row = j * hevc_mc_chroma_stride
+      let row = 1 + j * hevc_mc_chroma_stride
       for i in 0..<bw {
         tmp[j * hevc_mc_max_pb + i] = hevc_epel_h(buf, row + i, fh) >> norm
       }
@@ -716,7 +726,7 @@ fn hevc_chroma_mc_uni(
     let tbase = 1 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hevc_epel_v(tmp, tbase + j * hevc_mc_max_pb + i, fv) >> 6) + offset
+        let v = (hevc_epel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6) + offset
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v >> shift, bd)
       }
     }
@@ -785,7 +795,7 @@ fn hevc_chroma_mc_raw(
     let f = hevc_epel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, f) >> norm
+        out[j * out_stride + i] = hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, hevc_mc_chroma_stride, f) >> norm
       }
     }
   } else {
@@ -796,7 +806,7 @@ fn hevc_chroma_mc_raw(
       0,
     )
     for j in 0..<(bh + 3) {
-      let row = j * hevc_mc_chroma_stride
+      let row = 1 + j * hevc_mc_chroma_stride
       for i in 0..<bw {
         tmp[j * hevc_mc_max_pb + i] = hevc_epel_h(buf, row + i, fh) >> norm
       }
@@ -804,7 +814,7 @@ fn hevc_chroma_mc_raw(
     let tbase = 1 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = hevc_epel_v(tmp, tbase + j * hevc_mc_max_pb + i, fv) >> 6
+        out[j * out_stride + i] = hevc_epel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6
       }
     }
   }
@@ -930,7 +940,7 @@ fn hevc_chroma_mc_bi(
     let f = hevc_epel_filters[my0]
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, f) >> norm
+        tmp[j * hevc_mc_max_pb + i] = hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, hevc_mc_chroma_stride, f) >> norm
       }
     }
   } else {
@@ -941,7 +951,7 @@ fn hevc_chroma_mc_bi(
       0,
     )
     for j in 0..<(bh + 3) {
-      let row = j * hevc_mc_chroma_stride
+      let row = 1 + j * hevc_mc_chroma_stride
       for i in 0..<bw {
         tmp2[j * hevc_mc_max_pb + i] = hevc_epel_h(buf, row + i, fh) >> norm
       }
@@ -949,7 +959,7 @@ fn hevc_chroma_mc_bi(
     let tbase = 1 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = hevc_epel_v(tmp2, tbase + j * hevc_mc_max_pb + i, fv) >> 6
+        tmp[j * hevc_mc_max_pb + i] = hevc_epel_v(tmp2, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6
       }
     }
   }
@@ -999,7 +1009,7 @@ fn hevc_chroma_mc_bi(
     let f = hevc_epel_filters[my1]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, f) >> norm) +
+        let v = ((hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, hevc_mc_chroma_stride, f) >> norm) +
         tmp[j * hevc_mc_max_pb + i] +
         offset) >>
         shift
@@ -1014,7 +1024,7 @@ fn hevc_chroma_mc_bi(
       0,
     )
     for j in 0..<(bh + 3) {
-      let row = j * hevc_mc_chroma_stride
+      let row = 1 + j * hevc_mc_chroma_stride
       for i in 0..<bw {
         tmp2[j * hevc_mc_max_pb + i] = hevc_epel_h(buf, row + i, fh) >> norm
       }
@@ -1022,7 +1032,7 @@ fn hevc_chroma_mc_bi(
     let tbase = 1 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((hevc_epel_v(tmp2, tbase + j * hevc_mc_max_pb + i, fv) >> 6) +
+        let v = ((hevc_epel_v(tmp2, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6) +
         tmp[j * hevc_mc_max_pb + i] +
         offset) >>
         shift

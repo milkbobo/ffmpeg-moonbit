@@ -188,11 +188,15 @@ pub struct HevcDpb {
 fn hevc_dpb_new(width : Int32, height : Int32, min_pu_width : Int32, min_pu_height : Int32) -> HevcDpb {
   let slots : Array[HevcRefFrame] = []
   for i in 0..<40 {
+    let tab_mvf : Array[HevcMvField] = []
+    for _ in 0..<(min_pu_width * min_pu_height) {
+      tab_mvf.push(hevc_mv_field_new())
+    }
     slots.push({
       slot: i,
       poc: 0,
       pic: hevc_picture_new(width, height),
-      tab_mvf: Array::make(min_pu_width * min_pu_height, hevc_mv_field_new()),
+      tab_mvf,
       rpl0: hevc_ref_pic_list_new(),
       rpl1: hevc_ref_pic_list_new(),
       short_ref: false,
@@ -260,7 +264,9 @@ fn HevcDpb::generate_missing_ref(self : HevcDpb, poc : Int32) -> HevcRefFrame? {
       pic.y.fill(128)
       pic.cb.fill(128)
       pic.cr.fill(128)
-      frame.tab_mvf.fill(hevc_mv_field_new())
+      for i in 0..<frame.tab_mvf.length() {
+        frame.tab_mvf[i] = hevc_mv_field_new()
+      }
       frame.rpl0.clear()
       frame.rpl1.clear()
       frame.poc = poc
@@ -318,7 +324,9 @@ fn HevcDpb::set_new_ref(self : HevcDpb, poc : Int32) -> HevcRefFrame? {
       frame.pic.y.fill(0)
       frame.pic.cb.fill(0)
       frame.pic.cr.fill(0)
-      frame.tab_mvf.fill(hevc_mv_field_new())
+      for i in 0..<frame.tab_mvf.length() {
+        frame.tab_mvf[i] = hevc_mv_field_new()
+      }
       frame.rpl0.clear()
       frame.rpl1.clear()
       frame.poc = poc

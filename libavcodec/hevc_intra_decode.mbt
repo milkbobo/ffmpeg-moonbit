@@ -21,9 +21,9 @@ let hevc_mode_intra : Int32 = 1
 priv struct HevcIntraDecoder {
   sps : HevcSps
   pps : HevcPps
-  sh : HevcSliceHeader
+  mut sh : HevcSliceHeader
   pic : HevcPicture
-  cabac : HevcCabac
+  mut cabac : HevcCabac
   tab_ipm : Array[Int32]
   tab_ct_depth : Array[Int32]
   qp_y_tab : Array[Int32]
@@ -31,7 +31,7 @@ priv struct HevcIntraDecoder {
   horizontal_bs : Array[Int32]
   bs_width : Int32
   sao : HevcSaoParams
-  na : HevcNeighbourAvail
+  mut na : HevcNeighbourAvail
   mut ctb_left : Bool
   mut ctb_up : Bool
   mut ctb_up_left : Bool
@@ -50,7 +50,7 @@ priv struct HevcIntraDecoder {
   mut first_qp_group : Bool
   mut cu_qp_delta : Int32
   mut is_cu_qp_delta_coded : Bool
-  slice_qp : Int32
+  mut slice_qp : Int32
   mut cur_cu_x : Int32
   mut cur_cu_y : Int32
   // --- inter slice state (I slices leave these at their defaults) ---
@@ -64,10 +64,21 @@ priv struct HevcIntraDecoder {
   skip_flag : Array[Int32]
   /// Per-min-TU cbf luma (`l->cbf_luma`).
   cbf_luma_tab : Array[Int32]
-  /// Reference picture lists of the current picture (empty for I slices).
-  rpl : Array[HevcRefPicList]
+  /// Reference picture lists of the current slice (empty for I slices).
+  mut rpl : Array[HevcRefPicList]
   /// Inter-prediction context (set for P/B slices).
-  inter : HevcInterCtx?
+  mut inter : HevcInterCtx?
+  // --- multi-slice picture state (shared across slice segments) ---
+  /// CTB raster -> slice index in `slice_rpls` (`l->tab_slice_address`).
+  ctb_slice_idx : Array[Int32]
+  /// Per-slice reference-list snapshots, used for cross-slice bS.
+  slice_rpls : Array[Array[HevcRefPicList]]
+  mut slice_idx : Int32
+  /// Per-CTB deblocking offsets and across-slices filter flag
+  /// (`l->deblock[].tc_offset/beta_offset`, `l->filter_slice_edges`).
+  deblock_tc : Array[Int32]
+  deblock_beta : Array[Int32]
+  filter_slice_edges : Array[Int32]
 }
 
 ///|
@@ -130,7 +141,71 @@ fn hevc_intra_decoder_new(
     cbf_luma_tab: Array::make(sps.min_tb_width * sps.min_tb_height, 0),
     rpl,
     inter,
+    ctb_slice_idx: Array::make(sps.ctb_size, 0),
+    slice_rpls: [],
+    slice_idx: 0,
+    deblock_tc: Array::make(sps.ctb_size, 0),
+    deblock_beta: Array::make(sps.ctb_size, 0),
+    filter_slice_edges: Array::make(sps.ctb_size, 0),
   }
+}
+
+///|
+/// Switch the decoder to a new slice segment of the same picture, keeping the
+/// shared picture tables. Mirrors the per-slice resets in C `decode_slice_data`
+/// (`first_qp_group = 1`, `qp_y = slice_qp`) plus a snapshot of the slice's
+/// reference lists for cross-slice boundary strengths.
+fn HevcIntraDecoder::start_slice(
+  self : HevcIntraDecoder,
+  sh : HevcSliceHeader,
+  cabac : HevcCabac,
+  slice_qp : Int32,
+  rpl : Array[HevcRefPicList],
+  inter : HevcInterCtx?,
+) -> Unit {
+  self.sh = sh
+  self.cabac = cabac
+  self.slice_qp = slice_qp
+  self.rpl = rpl
+  self.inter = inter
+  self.slice_idx = self.slice_rpls.length()
+  let snap : Array[HevcRefPicList] = []
+  for list in rpl {
+    let entries : Array[HevcRplEntry] = []
+    for e in list.entries {
+      entries.push(e)
+    }
+    snap.push({ entries: entries })
+  }
+  self.slice_rpls.push(snap)
+  self.qp_y = slice_qp
+  self.qpy_pred = slice_qp
+  self.first_qp_group = true
+  self.cu_qp_delta = 0
+  self.is_cu_qp_delta_coded = false
+  self.cur_cu_x = 0
+  self.cur_cu_y = 0
+  self.cu_pred_mode = hevc_mode_intra
+  self.pu_merge_flag = false
+  self.part_mode = hevc_part_2nx2n
+  self.intra_split = false
+  self.max_trafo_depth = 0
+  self.tu_mode = 1
+  self.tu_mode_c = 1
+  self.na = hevc_neighbour_avail()
+}
+
+///|
+/// Start a WPP CTB row: QP prediction restarts from the slice QP and the
+/// neighbour state is recomputed (C `ff_hevc_cabac_init` row reset). The
+/// CABAC context itself is rewound and reloaded by the caller.
+fn HevcIntraDecoder::restart_wpp_row(self : HevcIntraDecoder) -> Unit {
+  self.first_qp_group = true
+  self.qp_y = self.slice_qp
+  self.qpy_pred = self.slice_qp
+  self.cu_qp_delta = 0
+  self.is_cu_qp_delta_coded = false
+  self.na = hevc_neighbour_avail()
 }
 
 ///|
@@ -407,7 +482,7 @@ fn HevcIntraDecoder::transform_unit(
     }
     let mut scan_luma = hevc_scan_diag
     let mut scan_chroma = hevc_scan_diag
-    if log2_trafo_size < 4 {
+    if self.cu_pred_mode == hevc_mode_intra && log2_trafo_size < 4 {
       if self.tu_mode >= 6 && self.tu_mode <= 14 {
         scan_luma = hevc_scan_vert
       } else if self.tu_mode >= 22 && self.tu_mode <= 30 {
@@ -1121,6 +1196,10 @@ fn hevc_decode_intra_frame_impl(
     Ok(c) => c
     Err(e) => return Err(e)
   }
+  let tab_mvf : Array[HevcMvField] = []
+  for _ in 0..<(sps.min_pu_width * sps.min_pu_height) {
+    tab_mvf.push(hevc_mv_field_new())
+  }
   let dec = hevc_intra_decoder_new(
     sps,
     pps,
@@ -1128,11 +1207,21 @@ fn hevc_decode_intra_frame_impl(
     cabac,
     slice_qp,
     hevc_picture_new(sps.width, sps.height),
-    Array::make(sps.min_pu_width * sps.min_pu_height, hevc_mv_field_new()),
+    tab_mvf,
     [],
     None,
   )
   let ctb_size = 1 << sps.log2_ctb_size
+  for i in 0..<sps.ctb_size {
+    dec.ctb_slice_idx[i] = 0
+    dec.deblock_tc[i] = sh.tc_offset
+    dec.deblock_beta[i] = sh.beta_offset
+    dec.filter_slice_edges[i] = if sh.slice_loop_filter_across_slices_enabled_flag {
+      1
+    } else {
+      0
+    }
+  }
   let mut rs = 0
   let mut more = true
   while more && rs < sps.ctb_size {
@@ -1149,7 +1238,18 @@ fn hevc_decode_intra_frame_impl(
       sps.height
     }
     if sps.sao_enabled != 0 {
-      hevc_sao_parse(dec.cabac, sps, pps, sh, dec.sao, rs, x_ctb, y_ctb)
+      hevc_sao_parse(
+        dec.cabac,
+        sps,
+        pps,
+        sh,
+        dec.sao,
+        rs,
+        x_ctb,
+        y_ctb,
+        dec.ctb_left,
+        dec.ctb_up,
+      )
     }
     more = match dec.coding_quadtree(x_ctb, y_ctb, sps.log2_ctb_size, 0) {
       Ok(v) => v
@@ -1162,13 +1262,21 @@ fn hevc_decode_intra_frame_impl(
       dec.pic,
       sps,
       pps,
-      sh,
+      dec.deblock_tc,
+      dec.deblock_beta,
       dec.qp_y_tab,
       dec.vertical_bs,
       dec.horizontal_bs,
       dec.bs_width,
     )
-    hevc_sao_apply(dec.pic, sps, pps, dec.sao)
+    hevc_sao_apply(
+      dec.pic,
+      sps,
+      pps,
+      dec.sao,
+      dec.filter_slice_edges,
+      dec.ctb_slice_idx,
+    )
   }
   Ok(dec.pic)
 }

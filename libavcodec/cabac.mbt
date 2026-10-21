@@ -111,6 +111,28 @@ pub fn ff_init_cabac_decoder(
 }
 
 ///|
+/// `skip_bytes(c, 0)` / `cabac_reinit`: rewind the pending guard bits and
+/// reinitialise the arithmetic decoder at the resulting byte position.
+fn CabacContext::reinit(self : CabacContext) -> Result[Unit, String] {
+  let mut ptr = self.pos
+  if (self.low & 1) != 0 {
+    ptr = ptr - 1
+  }
+  if (self.low & 0x1FF) != 0 {
+    ptr = ptr - 1
+  }
+  match ff_init_cabac_decoder(self.bytes, ptr) {
+    Ok(c) => {
+      self.low = c.low
+      self.range = c.range
+      self.pos = c.pos
+      Ok(())
+    }
+    Err(e) => Err(e)
+  }
+}
+
+///|
 /// `refill`. */
 fn CabacContext::refill(self : CabacContext) -> Unit {
   self.low = self.low + ((self.byte_at(0) << 9) + (self.byte_at(1) << 1))

@@ -5,11 +5,14 @@
 /// `hevc_frame_start`, `ff_hevc_deblocking_boundary_strengths` from
 /// `filter.c`, `boundary_strength`) and `libavcodec/hevc/refs.c`.
 ///
-/// Supported: 8/10/12-bit 4:2:0, one slice per picture, closed-GOP streams whose
-/// reference pictures are all present (missing refs are generated grey),
-/// weighted and unweighted uni/bi prediction. Rejected upstream: dependent
-/// slices, reference-list modification, tiles/WPP, PCM, scaling lists,
-/// transform skip, current-picture referencing.
+/// Supported: 8/10/12-bit 4:2:0, single- and multi-slice pictures with or
+/// without WPP, closed-GOP streams whose reference pictures are all present
+/// (missing refs are generated grey), weighted and unweighted uni/bi
+/// prediction. WPP follows FFmpeg's single-thread semantics: each CTB row is
+/// decoded as a substream whose CABAC is rewound after the terminate bin and
+/// seeded from the state saved after the previous row's second CTB. Rejected
+/// upstream: dependent slices, reference-list modification, tiles, PCM,
+/// scaling lists, transform skip, current-picture referencing.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -513,7 +516,45 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
   let is_intra = tab_mvf[(y0 >> l2pu) * min_pu_width + (x0 >> l2pu)].pred_flag ==
     hevc_pf_intra
   let rpl = self.rpl
-  if y0 > 0 && (y0 & 7) == 0 {
+  let ctb_size = 1 << sps.log2_ctb_size
+  let ctb_x = x0 >> sps.log2_ctb_size
+  let ctb_y = y0 >> sps.log2_ctb_size
+  let curr_rs = ctb_y * sps.ctb_width + ctb_x
+  let mut upper_slice_edge = false
+  let mut up_rs = curr_rs
+  if y0 > 0 && (y0 & 7) == 0 && (y0 % ctb_size) == 0 {
+    up_rs = curr_rs - sps.ctb_width
+    upper_slice_edge = self.ctb_slice_idx[up_rs] != self.slice_idx
+  }
+  let mut boundary_upper = y0 > 0 && (y0 & 7) == 0
+  if boundary_upper &&
+    upper_slice_edge &&
+    !self.sh.slice_loop_filter_across_slices_enabled_flag {
+    boundary_upper = false
+  }
+  let mut left_slice_edge = false
+  let mut left_rs = curr_rs
+  if x0 > 0 && (x0 & 7) == 0 && (x0 % ctb_size) == 0 {
+    left_rs = curr_rs - 1
+    left_slice_edge = self.ctb_slice_idx[left_rs] != self.slice_idx
+  }
+  let mut boundary_left = x0 > 0 && (x0 & 7) == 0
+  if boundary_left &&
+    left_slice_edge &&
+    !self.sh.slice_loop_filter_across_slices_enabled_flag {
+    boundary_left = false
+  }
+  let top_rpl = if upper_slice_edge {
+    self.slice_rpls[self.ctb_slice_idx[up_rs]]
+  } else {
+    rpl
+  }
+  let left_nb_rpl = if left_slice_edge {
+    self.slice_rpls[self.ctb_slice_idx[left_rs]]
+  } else {
+    rpl
+  }
+  if boundary_upper {
     let yp_pu = (y0 - 1) >> l2pu
     let yq_pu = y0 >> l2pu
     let yp_tu = (y0 - 1) >> l2tu
@@ -531,7 +572,7 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
       } else if curr_cbf != 0 || top_cbf != 0 {
         1
       } else if rpl.length() >= 2 {
-        hevc_boundary_strength(rpl, rpl, curr, top)
+        hevc_boundary_strength(rpl, top_rpl, curr, top)
       } else {
         1
       }
@@ -539,7 +580,7 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
       i = i + 4
     }
   }
-  if x0 > 0 && (x0 & 7) == 0 {
+  if boundary_left {
     let xp_pu = (x0 - 1) >> l2pu
     let xq_pu = x0 >> l2pu
     let xp_tu = (x0 - 1) >> l2tu
@@ -557,7 +598,7 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
       } else if curr_cbf != 0 || left_cbf != 0 {
         1
       } else if rpl.length() >= 2 {
-        hevc_boundary_strength(rpl, rpl, curr, left)
+        hevc_boundary_strength(rpl, left_nb_rpl, curr, left)
       } else {
         1
       }
@@ -768,7 +809,9 @@ pub fn ff_hevc_decode_frames_ex(
     Ok(p) => p
     Err(e) => return Err(e)
   }
-  // Pictures are single slices here; group VCL NALs conservatively.
+  // Group consecutive VCL NALs into one access unit: a VCL NAL whose
+  // first_slice_segment_in_pic_flag is set starts a new picture.
+  let mut au : Array[H2645Nal] = []
   let mut idx = 0
   let nnals = pkt.nals.length()
   while idx < nnals {
@@ -787,116 +830,45 @@ pub fn ff_hevc_decode_frames_ex(
       idx = idx + 1
       continue
     }
-    // VCL NAL: decode one picture (multi-slice pictures are rejected inside).
-    match hevc_decode_one_picture(dec, nal, apply_filters) {
+    if hevc_nal_is_first_slice(nal) && au.length() > 0 {
+      match hevc_decode_picture(dec, au, apply_filters) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+      au = []
+    }
+    au.push(nal)
+    idx = idx + 1
+  }
+  if au.length() > 0 {
+    match hevc_decode_picture(dec, au, apply_filters) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
-    idx = idx + 1
   }
   Ok(dec.frames)
 }
 
 ///|
-fn hevc_decode_one_picture(
-  dec : HevcDecoder,
-  nal : H2645Nal,
-  apply_filters : Bool,
-) -> Result[Unit, String] {
-  let ps = dec.ps
+fn hevc_nal_is_first_slice(nal : H2645Nal) -> Bool {
+  if nal.size_bits < 17 {
+    return false
+  }
   let gb = BitReader::with_size(nal.data, nal.size_bits)
   gb.skip(16)
-  let sh = match ff_hevc_decode_slice_header(gb, nal.nal_type, ps, dec.poc_tid0) {
-    Ok(h) => h
-    Err(e) => return Err(e)
-  }
-  if !sh.first_slice_segment_in_pic_flag {
-    return Err("PATCHWELCOME: HEVC slice segment address != 0")
-  }
-  let pps = match ps.pps_list[sh.pps_id] {
-    Some(p) => p
-    None => return Err("hevc: missing PPS")
-  }
-  let sps = match ps.sps_list[pps.sps_id] {
-    Some(s) => s
-    None => return Err("hevc: missing SPS")
-  }
-  if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
-    sps.chroma_format_idc != 1 ||
-    sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 HEVC is supported")
-  }
-  if sps.pcm_enabled != 0 {
-    return Err("PATCHWELCOME: HEVC PCM is not supported")
-  }
-  if pps.transform_skip_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC transform skip is not supported")
-  }
-  if pps.transquant_bypass_enable_flag != 0 {
-    return Err("PATCHWELCOME: HEVC transquant bypass is not supported")
-  }
-  if pps.cross_component_prediction_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC cross-component prediction is not supported")
-  }
-  if sps.scaling_list_enabled != 0 {
-    return Err("PATCHWELCOME: HEVC scaling lists are not supported")
-  }
-  if pps.tiles_enabled_flag != 0 || pps.entropy_coding_sync_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC tiles/WPP are not supported")
-  }
-  if pps.pps_curr_pic_ref_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC current picture referencing is not supported")
-  }
-  // (Re)allocate the DPB when the picture geometry appears or changes.
-  let dpb = match dec.dpb {
-    Some(d) =>
-      if d.width == sps.width && d.height == sps.height {
-        d
-      } else {
-        let d = hevc_dpb_new(
-          sps.width,
-          sps.height,
-          sps.min_pu_width,
-          sps.min_pu_height,
-        )
-        dec.dpb = Some(d)
-        d
-      }
-    None => {
-      let d = hevc_dpb_new(sps.width, sps.height, sps.min_pu_width, sps.min_pu_height)
-      dec.dpb = Some(d)
-      d
-    }
-  }
-  let is_idr = nal.nal_type == 19 || nal.nal_type == 20
-  let is_irap = nal.nal_type >= 16 && nal.nal_type <= 23
-  if is_idr {
-    dpb.clear_refs()
-  }
-  // 8.3.1: update the temporal-id-0 POC outside the N/R NAL types
-  // (TRAIL_R/TSA_R/STSA_R still update, as in the C).
-  let nal_type = nal.nal_type
-  if nal.temporal_id == 0 &&
-    nal_type != 0 &&
-    nal_type != 2 &&
-    nal_type != 4 &&
-    nal_type != 6 &&
-    nal_type != 7 &&
-    nal_type != 8 &&
-    nal_type != 9 {
-    dec.poc_tid0 = sh.poc
-  }
-  let cur = match dpb.set_new_ref(sh.poc) {
-    Some(f) => f
-    None => return Err("hevc: duplicate POC in a sequence")
-  }
-  hevc_frame_rps(dpb, sh, sps.log2_max_poc_lsb)
-  if sh.slice_type != hevc_slice_i {
-    match hevc_slice_rpl(dpb, cur, sh) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
-    }
-  }
+  gb.read1() != 0
+}
+
+///|
+/// Build the per-slice CABAC/context state after `ff_hevc_slice_rpl` has run.
+fn hevc_make_slice_state(
+  dpb : HevcDpb,
+  cur : HevcRefFrame,
+  sps : HevcSps,
+  pps : HevcPps,
+  sh : HevcSliceHeader,
+  nal : H2645Nal,
+) -> Result[(Int32, HevcCabac, Array[HevcRefPicList], HevcInterCtx?), String] {
   let slice_qp = 26 + pps.pic_init_qp_minus26 + sh.slice_qp_delta
   let states = ff_hevc_init_cabac_states(
     slice_qp,
@@ -908,7 +880,6 @@ fn hevc_decode_one_picture(
     Ok(c) => c
     Err(e) => return Err(e)
   }
-  // Inter-prediction context shares the decoder's mutable per-CTB flags.
   let rpl : Array[HevcRefPicList] = if sh.slice_type == hevc_slice_i {
     []
   } else {
@@ -944,65 +915,316 @@ fn hevc_decode_one_picture(
       last_merge_flag: false,
     })
   }
+  Ok((slice_qp, cabac, rpl, inter_ctx))
+}
+
+///|
+/// Decode one CTB of the current slice; returns the C `more_data` flag.
+fn hevc_decode_ctb(
+  dec_slice : HevcIntraDecoder,
+  sps : HevcSps,
+  pps : HevcPps,
+  sh : HevcSliceHeader,
+  rs : Int32,
+  slice_start : Int32,
+  ctb_size : Int32,
+) -> Result[Bool, String] {
+  let x_ctb = (rs % sps.ctb_width) << sps.log2_ctb_size
+  let y_ctb = (rs / sps.ctb_width) << sps.log2_ctb_size
+  let ctb_addr_in_slice = rs - slice_start
+  dec_slice.ctb_left = x_ctb > 0 && ctb_addr_in_slice > 0
+  dec_slice.ctb_up = y_ctb > 0 && ctb_addr_in_slice >= sps.ctb_width
+  dec_slice.ctb_up_left = x_ctb > 0 &&
+    y_ctb > 0 &&
+    ctb_addr_in_slice - 1 >= sps.ctb_width
+  dec_slice.ctb_up_right = y_ctb > 0 &&
+    ctb_addr_in_slice + 1 >= sps.ctb_width
+  dec_slice.end_of_tiles_x = sps.width
+  dec_slice.end_of_tiles_y = if y_ctb + ctb_size < sps.height {
+    y_ctb + ctb_size
+  } else {
+    sps.height
+  }
+  match dec_slice.inter {
+    Some(ctx) => {
+      ctx.ctb_left = dec_slice.ctb_left
+      ctx.ctb_up = dec_slice.ctb_up
+      ctx.ctb_up_left = dec_slice.ctb_up_left
+      ctx.ctb_up_right = dec_slice.ctb_up_right
+      ctx.end_of_tiles_x = dec_slice.end_of_tiles_x
+      ctx.end_of_tiles_y = dec_slice.end_of_tiles_y
+    }
+    None => ()
+  }
+  dec_slice.ctb_slice_idx[rs] = dec_slice.slice_idx
+  dec_slice.deblock_tc[rs] = sh.tc_offset
+  dec_slice.deblock_beta[rs] = sh.beta_offset
+  dec_slice.filter_slice_edges[rs] = if sh.slice_loop_filter_across_slices_enabled_flag {
+    1
+  } else {
+    0
+  }
+  if sps.sao_enabled != 0 {
+    hevc_sao_parse(
+      dec_slice.cabac,
+      sps,
+      pps,
+      sh,
+      dec_slice.sao,
+      rs,
+      x_ctb,
+      y_ctb,
+      dec_slice.ctb_left,
+      dec_slice.ctb_up,
+    )
+  }
+  dec_slice.coding_quadtree(x_ctb, y_ctb, sps.log2_ctb_size, 0)
+}
+
+///|
+fn hevc_decode_picture(
+  dec : HevcDecoder,
+  nals : Array[H2645Nal],
+  apply_filters : Bool,
+) -> Result[Unit, String] {
+  let ps = dec.ps
+  let first_nal = nals[0]
+  let first_gb = BitReader::with_size(first_nal.data, first_nal.size_bits)
+  first_gb.skip(16)
+  let first_sh = match
+    ff_hevc_decode_slice_header(
+      first_gb,
+      first_nal.nal_type,
+      ps,
+      dec.poc_tid0,
+    ) {
+    Ok(h) => h
+    Err(e) => return Err(e)
+  }
+  if !first_sh.first_slice_segment_in_pic_flag {
+    return Err("hevc: access unit does not start with a first slice segment")
+  }
+  let pps = match ps.pps_list[first_sh.pps_id] {
+    Some(p) => p
+    None => return Err("hevc: missing PPS")
+  }
+  let sps = match ps.sps_list[pps.sps_id] {
+    Some(s) => s
+    None => return Err("hevc: missing SPS")
+  }
+  if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
+    sps.chroma_format_idc != 1 ||
+    sps.separate_colour_plane != 0 {
+    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 HEVC is supported")
+  }
+  if sps.pcm_enabled != 0 {
+    return Err("PATCHWELCOME: HEVC PCM is not supported")
+  }
+  if pps.transform_skip_enabled_flag != 0 {
+    return Err("PATCHWELCOME: HEVC transform skip is not supported")
+  }
+  if pps.transquant_bypass_enable_flag != 0 {
+    return Err("PATCHWELCOME: HEVC transquant bypass is not supported")
+  }
+  if pps.cross_component_prediction_enabled_flag != 0 {
+    return Err("PATCHWELCOME: HEVC cross-component prediction is not supported")
+  }
+  if sps.scaling_list_enabled != 0 {
+    return Err("PATCHWELCOME: HEVC scaling lists are not supported")
+  }
+  if pps.tiles_enabled_flag != 0 {
+    return Err("PATCHWELCOME: HEVC tiles are not supported")
+  }
+  if pps.pps_curr_pic_ref_enabled_flag != 0 {
+    return Err("PATCHWELCOME: HEVC current picture referencing is not supported")
+  }
+  // (Re)allocate the DPB when the picture geometry appears or changes.
+  let dpb = match dec.dpb {
+    Some(d) =>
+      if d.width == sps.width && d.height == sps.height {
+        d
+      } else {
+        let d = hevc_dpb_new(
+          sps.width,
+          sps.height,
+          sps.min_pu_width,
+          sps.min_pu_height,
+        )
+        dec.dpb = Some(d)
+        d
+      }
+    None => {
+      let d = hevc_dpb_new(sps.width, sps.height, sps.min_pu_width, sps.min_pu_height)
+      dec.dpb = Some(d)
+      d
+    }
+  }
+  let first_nal_type = first_nal.nal_type
+  let is_idr = first_nal_type == 19 || first_nal_type == 20
+  let is_irap = first_nal_type >= 16 && first_nal_type <= 23
+  if is_idr {
+    dpb.clear_refs()
+  }
+  // 8.3.1: update the temporal-id-0 POC outside the N/R NAL types
+  // (TRAIL_R/TSA_R/STSA_R still update, as in the C).
+  let nal_type = first_nal_type
+  if first_nal.temporal_id == 0 &&
+    nal_type != 0 &&
+    nal_type != 2 &&
+    nal_type != 4 &&
+    nal_type != 6 &&
+    nal_type != 7 &&
+    nal_type != 8 &&
+    nal_type != 9 {
+    dec.poc_tid0 = first_sh.poc
+  }
+  let cur = match dpb.set_new_ref(first_sh.poc) {
+    Some(f) => f
+    None => return Err("hevc: duplicate POC in a sequence")
+  }
+  hevc_frame_rps(dpb, first_sh, sps.log2_max_poc_lsb)
+  if first_sh.slice_type != hevc_slice_i {
+    match hevc_slice_rpl(dpb, cur, first_sh) {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+  }
+  let (first_qp, first_cabac, first_rpl, first_inter) = match
+    hevc_make_slice_state(dpb, cur, sps, pps, first_sh, first_nal) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
   let dec_slice = hevc_intra_decoder_new(
     sps,
     pps,
-    sh,
-    cabac,
-    slice_qp,
+    first_sh,
+    first_cabac,
+    first_qp,
     cur.pic,
     cur.tab_mvf,
-    rpl,
-    inter_ctx,
+    first_rpl,
+    first_inter,
   )
+  dec_slice.start_slice(first_sh, first_cabac, first_qp, first_rpl, first_inter)
   let ctb_size = 1 << sps.log2_ctb_size
-  let mut rs = 0
-  let mut more = true
-  while more && rs < sps.ctb_size {
-    let x_ctb = (rs % sps.ctb_width) << sps.log2_ctb_size
-    let y_ctb = (rs / sps.ctb_width) << sps.log2_ctb_size
-    dec_slice.ctb_left = x_ctb > 0
-    dec_slice.ctb_up = y_ctb > 0
-    dec_slice.ctb_up_left = x_ctb > 0 && y_ctb > 0
-    dec_slice.ctb_up_right = y_ctb > 0
-    dec_slice.end_of_tiles_x = sps.width
-    dec_slice.end_of_tiles_y = if y_ctb + ctb_size < sps.height {
-      y_ctb + ctb_size
+  for i in 0..<nals.length() {
+    let nal = nals[i]
+    let sh = if i == 0 {
+      first_sh
     } else {
-      sps.height
-    }
-    match dec_slice.inter {
-      Some(ctx) => {
-        ctx.ctb_left = dec_slice.ctb_left
-        ctx.ctb_up = dec_slice.ctb_up
-        ctx.ctb_up_left = dec_slice.ctb_up_left
-        ctx.ctb_up_right = dec_slice.ctb_up_right
-        ctx.end_of_tiles_x = dec_slice.end_of_tiles_x
-        ctx.end_of_tiles_y = dec_slice.end_of_tiles_y
+      let gb = BitReader::with_size(nal.data, nal.size_bits)
+      gb.skip(16)
+      let h = match
+        ff_hevc_decode_slice_header(gb, nal.nal_type, ps, dec.poc_tid0) {
+        Ok(h) => h
+        Err(e) => return Err(e)
       }
-      None => ()
+      if h.pps_id != first_sh.pps_id {
+        return Err("hevc: PPS changed between slices")
+      }
+      // C ignores POC changes between slices of one picture.
+      h.poc = first_sh.poc
+      if h.slice_type != hevc_slice_i {
+        match hevc_slice_rpl(dpb, cur, h) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      let (slice_qp, cabac, rpl, inter_ctx) = match
+        hevc_make_slice_state(dpb, cur, sps, pps, h, nal) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+      dec_slice.start_slice(h, cabac, slice_qp, rpl, inter_ctx)
+      h
     }
-    if sps.sao_enabled != 0 {
-      hevc_sao_parse(dec_slice.cabac, sps, pps, sh, dec_slice.sao, rs, x_ctb, y_ctb)
+    let slice_start = sh.slice_segment_address
+    let wpp = pps.entropy_coding_sync_enabled_flag != 0 &&
+      sh.num_entry_point_offsets > 0
+    if wpp {
+      if slice_start % sps.ctb_width != 0 {
+        return Err("PATCHWELCOME: WPP slice starting mid-row")
+      }
+      let mut common_states = dec_slice.cabac.states.copy()
+      let mut ended = false
+      let mut row = 0
+      let n_rows = sh.num_entry_point_offsets + 1
+      while row < n_rows && !ended {
+        if row > 0 {
+          // C `ff_hevc_cabac_init` non-WPP path: consume the row's terminate
+          // bin, rewind to the next byte, then load the saved context state.
+          ignore(dec_slice.cabac.terminate())
+          match dec_slice.cabac.cc.reinit() {
+            Ok(_) => ()
+            Err(e) => return Err(e)
+          }
+          let states = if sps.ctb_width == 1 {
+            ff_hevc_init_cabac_states(
+              dec_slice.slice_qp,
+              sh.slice_type,
+              sh.cabac_init_flag,
+            )
+          } else {
+            common_states
+          }
+          for k in 0..<dec_slice.cabac.states.length() {
+            dec_slice.cabac.states[k] = states[k]
+          }
+          dec_slice.restart_wpp_row()
+        }
+        let mut rs = slice_start + row * sps.ctb_width
+        let mut col = 0
+        let mut more = true
+        while more && col < sps.ctb_width && rs < sps.ctb_size {
+          more = match
+            hevc_decode_ctb(dec_slice, sps, pps, sh, rs, slice_start, ctb_size) {
+            Ok(v) => v
+            Err(e) => return Err(e)
+          }
+          if col == 1 {
+            common_states = dec_slice.cabac.states.copy()
+          }
+          col = col + 1
+          rs = rs + 1
+        }
+        if !more {
+          ended = true
+        }
+        row = row + 1
+      }
+    } else {
+      let mut rs = slice_start
+      let mut more = true
+      while more && rs < sps.ctb_size {
+        more = match
+          hevc_decode_ctb(dec_slice, sps, pps, sh, rs, slice_start, ctb_size) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        rs = rs + 1
+      }
     }
-    more = match dec_slice.coding_quadtree(x_ctb, y_ctb, sps.log2_ctb_size, 0) {
-      Ok(v) => v
-      Err(e) => return Err(e)
-    }
-    rs = rs + 1
   }
   if apply_filters {
     hevc_deblock_picture(
       dec_slice.pic,
       sps,
       pps,
-      sh,
+      dec_slice.deblock_tc,
+      dec_slice.deblock_beta,
       dec_slice.qp_y_tab,
       dec_slice.vertical_bs,
       dec_slice.horizontal_bs,
       dec_slice.bs_width,
     )
-    hevc_sao_apply(dec_slice.pic, sps, pps, dec_slice.sao)
+    hevc_sao_apply(
+      dec_slice.pic,
+      sps,
+      pps,
+      dec_slice.sao,
+      dec_slice.filter_slice_edges,
+      dec_slice.ctb_slice_idx,
+    )
   }
   dec.frames.push({
     pic: cur.pic.clone(),

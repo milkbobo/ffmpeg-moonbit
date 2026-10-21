@@ -67,14 +67,16 @@ pub fn hevc_sao_parse(
   ctb_rs : Int32,
   x_ctb : Int32,
   y_ctb : Int32,
+  ctb_left : Bool,
+  ctb_up : Bool,
 ) -> Unit {
   let mut merge_left = false
   let mut merge_up = false
   if sh.slice_sao_luma_flag || sh.slice_sao_chroma_flag {
-    if x_ctb > 0 {
+    if x_ctb > 0 && ctb_left {
       merge_left = cabac.sao_merge_flag()
     }
-    if y_ctb > 0 && !merge_left {
+    if y_ctb > 0 && ctb_up && !merge_left {
       merge_up = cabac.sao_merge_flag()
     }
   }
@@ -185,6 +187,8 @@ pub fn hevc_sao_apply(
   sps : HevcSps,
   _pps : HevcPps,
   sao : HevcSaoParams,
+  filter_slice_edges : Array[Int32],
+  ctb_slice_idx : Array[Int32],
 ) -> Unit {
   if sps.sao_enabled == 0 {
     return
@@ -297,34 +301,160 @@ pub fn hevc_sao_apply(
             dst[idx] = hevc_sao_clip(v + sao.offset_val[ctb * 15 + off + oi], bd)
           }
         }
-        if eo != 1 {
-          if x0 == 0 {
-            for y in 0..<height {
-              let idx = (y0 + y) * stride
-              dst[idx] = src[idx]
-            }
-          }
-          if x0 + width == pw {
-            for y in 0..<height {
-              let idx = (y0 + y) * stride + pw - 1
-              dst[idx] = src[idx]
-            }
-          }
-        }
-        if eo != 0 {
-          if y0 == 0 {
-            for x in 0..<width {
-              dst[x0 + x] = src[x0 + x]
-            }
-          }
-          if y0 + height == ph {
-            let base = (ph - 1) * stride + x0
-            for x in 0..<width {
-              dst[base + x] = src[base + x]
-            }
-          }
-        }
+        hevc_sao_restore_edges(
+          dst,
+          src,
+          stride,
+          x0,
+          y0,
+          width,
+          height,
+          x_ctb,
+          y_ctb,
+          ctb,
+          sao.ctb_width,
+          (sps.height + ctb_size - 1) >> sps.log2_ctb_size,
+          eo,
+          filter_slice_edges[ctb],
+          ctb_slice_idx,
+        )
       }
     }
+  }
+}
+
+
+///|
+/// `sao_edge_restore_0/1` for a single CTB: restore picture-border pixels and,
+/// when the slice does not filter across slice boundaries (`lfase == 0`),
+/// the CTB rows/columns that border another slice. Offsets at index 0 are
+/// always zero, so restored samples equal the pre-SAO source.
+fn hevc_sao_restore_edges(
+  dst : Array[Int32],
+  src : Array[Int32],
+  stride : Int32,
+  x0 : Int32,
+  y0 : Int32,
+  width : Int32,
+  height : Int32,
+  x_ctb : Int32,
+  y_ctb : Int32,
+  ctb : Int32,
+  ctb_width : Int32,
+  ctb_height : Int32,
+  eo : Int32,
+  lfase : Int32,
+  ctb_slice_idx : Array[Int32],
+) -> Unit {
+  let left_edge = x_ctb == 0
+  let top_edge = y_ctb == 0
+  let right_edge = x_ctb == ctb_width - 1
+  let bottom_edge = y_ctb == ctb_height - 1
+  let mut init_x = 0
+  let mut init_y = 0
+  let mut w = width
+  let mut h = height
+  // Restore pixels that can't be modified (picture borders).
+  if eo != 1 {
+    if left_edge {
+      for y in 0..<h {
+        let idx = (y0 + y) * stride + x0
+        dst[idx] = src[idx]
+      }
+      init_x = 1
+    }
+    if right_edge {
+      for y in 0..<h {
+        let idx = (y0 + y) * stride + x0 + w - 1
+        dst[idx] = src[idx]
+      }
+      w = w - 1
+    }
+  }
+  if eo != 0 {
+    if top_edge {
+      for x in init_x..<w {
+        let idx = y0 * stride + x0 + x
+        dst[idx] = src[idx]
+      }
+      init_y = 1
+    }
+    if bottom_edge {
+      for x in init_x..<w {
+        let idx = (y0 + h - 1) * stride + x0 + x
+        dst[idx] = src[idx]
+      }
+      h = h - 1
+    }
+  }
+  if lfase != 0 {
+    return
+  }
+  let curr_slice = ctb_slice_idx[ctb]
+  let vert_left = !left_edge && ctb_slice_idx[ctb - 1] != curr_slice
+  let vert_right = !right_edge && ctb_slice_idx[ctb + 1] != curr_slice
+  let horiz_up = !top_edge && ctb_slice_idx[ctb - ctb_width] != curr_slice
+  let horiz_down = !bottom_edge &&
+    ctb_slice_idx[ctb + ctb_width] !=
+    curr_slice
+  let diag_ul = !left_edge &&
+    !top_edge &&
+    ctb_slice_idx[ctb - ctb_width - 1] !=
+    curr_slice
+  let diag_ur = !right_edge &&
+    !top_edge &&
+    ctb_slice_idx[ctb - ctb_width + 1] !=
+    curr_slice
+  let diag_lr = !right_edge &&
+    !bottom_edge &&
+    ctb_slice_idx[ctb + ctb_width + 1] !=
+    curr_slice
+  let diag_ll = !left_edge &&
+    !bottom_edge &&
+    ctb_slice_idx[ctb + ctb_width - 1] !=
+    curr_slice
+  let save_ul = if !diag_ul && eo == 2 && !left_edge && !top_edge { 1 } else { 0 }
+  let save_ur = if !diag_ur && eo == 3 && !top_edge && !right_edge { 1 } else { 0 }
+  let save_lr = if !diag_lr && eo == 2 && !right_edge && !bottom_edge { 1 } else { 0 }
+  let save_ll = if !diag_ll && eo == 3 && !left_edge && !bottom_edge { 1 } else { 0 }
+  if vert_left && eo != 1 {
+    for y in (init_y + save_ul)..<(h - save_ll) {
+      let idx = (y0 + y) * stride + x0
+      dst[idx] = src[idx]
+    }
+  }
+  if vert_right && eo != 1 {
+    for y in (init_y + save_ur)..<(h - save_lr) {
+      let idx = (y0 + y) * stride + x0 + w - 1
+      dst[idx] = src[idx]
+    }
+  }
+  if horiz_up && eo != 0 {
+    for x in (init_x + save_ul)..<(w - save_ur) {
+      let idx = y0 * stride + x0 + x
+      dst[idx] = src[idx]
+    }
+  }
+  if horiz_down && eo != 0 {
+    for x in (init_x + save_ll)..<(w - save_lr) {
+      let idx = (y0 + h - 1) * stride + x0 + x
+      dst[idx] = src[idx]
+    }
+  }
+  if diag_ul && eo == 2 {
+    let idx = y0 * stride + x0
+    dst[idx] = src[idx]
+  }
+  if diag_ur && eo == 3 {
+    let idx = y0 * stride + x0 + w - 1
+    dst[idx] = src[idx]
+  }
+  if diag_lr && eo == 2 {
+    let idx = (y0 + h - 1) * stride + x0 + w - 1
+    dst[idx] = src[idx]
+  }
+  if diag_ll && eo == 3 {
+    let idx = (y0 + h - 1) * stride + x0
+    dst[idx] = src[idx]
   }
 }

@@ -77,6 +77,8 @@ pub struct HevcSliceHeader {
   first_slice_segment_in_pic_flag : Bool
   no_output_of_prior_pics_flag : Bool
   dependent_slice_segment_flag : Bool
+  /// CTB raster-scan address of the first CTB in this slice segment.
+  slice_segment_address : Int32
   pps_id : Int32
   slice_type : Int32
   num_ref_idx_l0_active : Int32
@@ -102,8 +104,11 @@ pub struct HevcSliceHeader {
   beta_offset : Int32
   tc_offset : Int32
   slice_loop_filter_across_slices_enabled_flag : Bool
+  /// WPP/tile substream count and per-entry byte offsets (offset + 1).
+  num_entry_point_offsets : Int32
+  entry_point_offsets : Array[Int32]
   /// Fully derived POC (IDR = 0).
-  poc : Int32
+  mut poc : Int32
   /// The resolved short-term RPS of this slice (SPS entry copied or parsed).
   st_rps : HevcStRps
   /// Long-term RPS with absolute POCs (`decode_lt_rps`).
@@ -314,7 +319,11 @@ pub fn ff_hevc_decode_slice_header(
     Some(s) => s
     None => return Err("hevc: missing SPS")
   }
+  if pps.tiles_enabled_flag != 0 {
+    return Err("PATCHWELCOME: HEVC tiles are not supported")
+  }
   let mut dependent = false
+  let mut slice_segment_address = 0
   if !first_slice {
     if pps.dependent_slice_segments_enabled_flag != 0 {
       dependent = gb.read1() != 0
@@ -325,7 +334,10 @@ pub fn ff_hevc_decode_slice_header(
     }
     let addr_bits = hevc_ceil_log2(ctbs)
     if addr_bits > 0 {
-      gb.skip(addr_bits)
+      slice_segment_address = gb.read(addr_bits).reinterpret_as_int()
+    }
+    if slice_segment_address >= ctbs {
+      return Err("hevc: invalid slice segment address")
     }
     if dependent {
       return Err("PATCHWELCOME: dependent HEVC slice segment")
@@ -518,6 +530,24 @@ pub fn ff_hevc_decode_slice_header(
     (sao_luma || sao_chroma || !disable_dbf) {
     loop_filter_across_slices = gb.read1() != 0
   }
+  let mut num_entry_point_offsets = 0
+  let entry_point_offsets : Array[Int32] = []
+  if pps.tiles_enabled_flag != 0 || pps.entropy_coding_sync_enabled_flag != 0 {
+    let n = gb.read_ue_long().to_int()
+    if n < 0 || n > 4096 {
+      return Err("hevc: invalid num_entry_point_offsets")
+    }
+    num_entry_point_offsets = n
+    if n > 0 {
+      let offset_len = gb.read_ue_long().to_int() + 1
+      if offset_len < 1 || offset_len > 24 {
+        return Err("hevc: invalid entry_point_offset length")
+      }
+      for _ in 0..<n {
+        entry_point_offsets.push(gb.read(offset_len).reinterpret_as_int() + 1)
+      }
+    }
+  }
   if pps.slice_header_extension_present_flag != 0 {
     let ext_bits = gb.read_ue_long()
     if ext_bits > 1024UL {
@@ -534,6 +564,7 @@ pub fn ff_hevc_decode_slice_header(
     first_slice_segment_in_pic_flag: first_slice,
     no_output_of_prior_pics_flag: no_output,
     dependent_slice_segment_flag: dependent,
+    slice_segment_address,
     pps_id,
     slice_type,
     num_ref_idx_l0_active: nb_l0,
@@ -559,6 +590,8 @@ pub fn ff_hevc_decode_slice_header(
     beta_offset,
     tc_offset,
     slice_loop_filter_across_slices_enabled_flag: loop_filter_across_slices,
+    num_entry_point_offsets,
+    entry_point_offsets,
     poc,
     st_rps,
     lt_rps,
