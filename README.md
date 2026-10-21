@@ -657,9 +657,10 @@ Huffman 规范化码另有等效性说明，见下文）：
 | PNG | [inflate.mbt](libavcodec/inflate.mbt)、[png.mbt](libavcodec/png.mbt) | 纯 MoonBit zlib/DEFLATE（stored/fixed/dynamic Huffman、LZ77、Adler32）+ PNG IHDR/PLTE/tRNS/IDAT、五种行滤波、1/8/16-bit 与调色板/灰度/RGB/RGBA/GA、tRNS 提升；8 种原生 pix_fmt 的原始输出 MD5 与 `ffmpeg -f rawvideo` 完全一致（含 pal8 的 256 项 BGRA 调色板） |
 | MJPEG | [mjpeg.mbt](libavcodec/mjpeg.mbt) | 基线 SOF0/SOF1、DQT/DHT/DRI/SOS、重启标记、DC 预测（`4<<8` 偏置）、AC 游程、Simple-C IDCT、4:2:0/4:2:2/4:4:4 采样与原生 yuvj 输出；真实 ffmpeg JPEG 三平面 MD5 逐字节一致 |
 | HEVC slice header | [hevc_slice.mbt](libavcodec/hevc_slice.mbt) | 首片/独立非首片的 slice segment header：IRAP no_output、PPS/SPS 查找、slice address、slice_type、POC LSB、short/long-term RPS 选择、temporal-MVP、SAO、I 片 QP/chroma-QP/去块字段；真实 x265 IDR 的字段与 `trace_headers` 逐值一致（header 结束位 27），依赖片段返回 PATCHWELCOME |
+| HEVC access unit | [hevc_access_unit.mbt](libavcodec/hevc_access_unit.mbt) | 按 `first_slice_segment_in_pic_flag` 组装访问单元、IDR/IRAP 关键帧标记、按 temporal-id-0 更新 POC；真实 x265 B 帧 GOP（I/P/B/B）的 POC 0,3,2,1 与解码顺序逐值一致 |
 | 码流头 | [opus_packet.mbt](libavcodec/opus_packet.mbt)、[av1.mbt](libavcodec/av1.mbt)、[vp9.mbt](libavcodec/vp9.mbt) | Opus TOC/四种包码/Xiph lacing/120 ms 限制；AV1 OBU LEB128 + `av1C`/序列头（profile/level/位深/chroma/最大帧尺寸）；VP9 帧头（profile、关键帧/帧内、色彩配置、尺寸、刷新掩码）；真实 WebM 包与 ffprobe 对齐 |
 
-测试总数 440/440（`moon test --target wasm`）。仍未完成的重点：HEVC CABAC/帧内预测/变换与像素重建、
+测试总数 442/442（`moon test --target wasm`）。仍未完成的重点：HEVC CABAC/帧内预测/变换与像素重建、
 VP9/AV1 压缩头与像素解码、Opus SILK/CELT 解码、HLS/DASH 的网络/分片 IO 与 AES-128、
 PNG Adam7/APNG 与 CRC 校验、MJPEG 渐进式/无损/12-bit。
 
