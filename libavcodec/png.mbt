@@ -112,6 +112,44 @@ fn png_row(rows : Array[Byte], y : Int32, rowbytes : Int32) -> Array[Byte] {
 }
 
 ///|
+/// Adam7 pass geometry: (x_start, y_start, x_step, y_step, width, height). */
+fn png_pass_geometry(
+  pass : Int32,
+  width : Int32,
+  height : Int32,
+) -> (Int32, Int32, Int32, Int32, Int32, Int32) {
+  let (xs, ys, xstep, ystep) = match pass {
+    0 => (0, 0, 8, 8)
+    1 => (4, 0, 8, 8)
+    2 => (0, 4, 4, 8)
+    3 => (2, 0, 4, 4)
+    4 => (0, 2, 2, 4)
+    5 => (1, 0, 2, 2)
+    _ => (0, 1, 1, 2)
+  }
+  let pw = if width > xs { (width - xs + xstep - 1) / xstep } else { 0 }
+  let ph = if height > ys { (height - ys + ystep - 1) / ystep } else { 0 }
+  (xs, ys, xstep, ystep, pw, ph)
+}
+
+///|
+/// Write a packed sample (bit depth 1/2/4) into a scanline. */
+fn png_set_sample(
+  row : Array[Byte],
+  base : Int32,
+  index : Int32,
+  depth : Int32,
+  value : Int32,
+) -> Unit {
+  let bit = index * depth
+  let shift = 8 - depth - bit % 8
+  let mask = (1 << depth) - 1
+  let old = row[base + bit / 8].to_int()
+  row[base + bit / 8] = ((old & (0xFF ^ (mask << shift))) |
+  ((value & mask) << shift)).to_byte()
+}
+
+///|
 /// Read a packed sample (bit depth 2/4/8) from a scanline. */
 fn png_sample(row : Array[Byte], index : Int32, depth : Int32) -> Int32 {
   if depth == 8 {
@@ -209,8 +247,8 @@ pub fn av_png_decode(data : Bytes) -> Result[PngImage, String] {
       if compression != 0 || filter != 0 {
         return Err("png: unsupported compression/filter method")
       }
-      if interlace != 0 {
-        return Err("PATCHWELCOME: Adam7 interlacing")
+      if interlace != 0 && interlace != 1 {
+        return Err("png: invalid interlace method")
       }
       saw_ihdr = true
     } else if kind == "PLTE" {
@@ -249,7 +287,18 @@ pub fn av_png_decode(data : Bytes) -> Result[PngImage, String] {
   let bits_per_pixel = channels * bit_depth
   let rowbytes = (width * bits_per_pixel + 7) / 8
   let bpp = if bits_per_pixel >= 8 { bits_per_pixel / 8 } else { 1 }
-  let expected = (rowbytes + 1) * height
+  let expected = if interlace == 0 {
+    (rowbytes + 1) * height
+  } else {
+    let mut total = 0
+    for pass in 0..<7 {
+      let (_, _, _, _, pw, ph) = png_pass_geometry(pass, width, height)
+      if pw > 0 && ph > 0 {
+        total = total + ((pw * bits_per_pixel + 7) / 8 + 1) * ph
+      }
+    }
+    total
+  }
   if idat.length() == 0 {
     return Err("png: no IDAT")
   }
@@ -265,31 +314,85 @@ pub fn av_png_decode(data : Bytes) -> Result[PngImage, String] {
   for _ in 0..<(rowbytes * height) {
     rows.push(b'\x00')
   }
-  let zero_row = Bytes::make(rowbytes, b'\x00')
-  for y in 0..<height {
-    let src_off = y * (rowbytes + 1)
-    let filter = inflated[src_off].to_int()
-    if filter < 0 || filter > 4 {
-      return Err("png: invalid filter type")
-    }
-    let cur : Array[Byte] = []
-    for x in 0..<rowbytes {
-      cur.push(inflated[src_off + 1 + x])
-    }
-    let prev : Array[Byte] = []
-    if y == 0 {
-      for x in 0..<rowbytes {
-        prev.push(zero_row[x])
+  if interlace == 0 {
+    let zero_row = Bytes::make(rowbytes, b'\x00')
+    for y in 0..<height {
+      let src_off = y * (rowbytes + 1)
+      let filter = inflated[src_off].to_int()
+      if filter < 0 || filter > 4 {
+        return Err("png: invalid filter type")
       }
-    } else {
-      let base = (y - 1) * rowbytes
+      let cur : Array[Byte] = []
       for x in 0..<rowbytes {
-        prev.push(rows[base + x])
+        cur.push(inflated[src_off + 1 + x])
+      }
+      let prev : Array[Byte] = []
+      if y == 0 {
+        for x in 0..<rowbytes {
+          prev.push(zero_row[x])
+        }
+      } else {
+        let base = (y - 1) * rowbytes
+        for x in 0..<rowbytes {
+          prev.push(rows[base + x])
+        }
+      }
+      png_unfilter_row(filter, cur, prev, bpp, rowbytes)
+      for x in 0..<rowbytes {
+        rows[y * rowbytes + x] = cur[x]
       }
     }
-    png_unfilter_row(filter, cur, prev, bpp, rowbytes)
-    for x in 0..<rowbytes {
-      rows[y * rowbytes + x] = cur[x]
+  } else {
+    let mut off = 0
+    for pass in 0..<7 {
+      let (xs, ys, xstep, ystep, pw, ph) = png_pass_geometry(
+        pass, width, height,
+      )
+      if pw <= 0 || ph <= 0 {
+        continue
+      }
+      let prb = (pw * bits_per_pixel + 7) / 8
+      let prev : Array[Byte] = []
+      for _ in 0..<prb {
+        prev.push(b'\x00')
+      }
+      for py in 0..<ph {
+        let filter = inflated[off].to_int()
+        if filter < 0 || filter > 4 {
+          return Err("png: invalid filter type")
+        }
+        let cur : Array[Byte] = []
+        for x in 0..<prb {
+          cur.push(inflated[off + 1 + x])
+        }
+        png_unfilter_row(filter, cur, prev, bpp, prb)
+        for px in 0..<pw {
+          let x = xs + px * xstep
+          let y = ys + py * ystep
+          if bit_depth == 8 {
+            for c in 0..<channels {
+              rows[y * rowbytes + x * channels + c] = cur[px * channels + c]
+            }
+          } else if bit_depth == 16 {
+            for c in 0..<(channels * 2) {
+              rows[y * rowbytes + x * channels * 2 + c] = cur[px * channels * 2 +
+                c]
+            }
+          } else {
+            png_set_sample(
+              rows,
+              y * rowbytes,
+              x,
+              bit_depth,
+              png_sample(cur, px, bit_depth),
+            )
+          }
+        }
+        for x in 0..<prb {
+          prev[x] = cur[x]
+        }
+        off = off + prb + 1
+      }
     }
   }
   // Expand into FFmpeg's native pixel format.

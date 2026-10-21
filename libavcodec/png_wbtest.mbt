@@ -233,3 +233,39 @@ test "inflate: stored block round-trip and adler32" {
   assert_eq(out[4], b'o')
   assert_eq(inflate_adler32(b"hello"), 0x062C0215U)
 }
+
+///|
+let png_adam7_rgb_b64 : Bytes = bcat([
+  b"iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAAHnlligAAADKUlEQVR42gEeA+H8AAAAAIA4aAAYWCiYkJAAQBw0wFScAFh0XNis",
+  b"xAAMLBRMSEiMZHzMgLAAJIQ8ZKBwpLyk5NjYACAOGmAqTqBGguBitgAsOi5sVmKscpbsjsoAOGZCeIJ2uJ6q+LreAESSVoSuisTK",
+  b"vgTm8gAGFgomJCRGMj5mQFiGTnKmXIzGaqbmeMAAEkIeMlA4Ul5ScmxsknqGsoig0pa68qTUAB5uMj58TF6KZn6YgJ6mmr60tN7C",
+  b"zv7Q6AAqmkZKqGBqtnqKxJSq0q7K4Mjq7uIK/PwAEAcNMBUnUCNBcDFbkD91sE2P0Fup8GnDABYdFzYrMVY5S3ZHZZZVf7ZjmdZx",
+  b"s/Z/zQAcMyE8QTtcT1V8XW+ca4m8eaPch738ldcAIkkrQldFYmVfgnN5ooGTwo+t4p3HAqvhAChfNUhtT2h7aYiJg6iXncilt+iz",
+  b"0QjB6wAudT9Og1lukXOOn42urafOu8HuydsO1/UANItJVJljdKd9lLWXtMOx1NHL9N/lFO3/ADqhU1qvbXq9h5rLobrZu9rn1fr1",
+  b"7xoDCQADCwUTEhIjGR8zICxDJzlTLkZjNVNzPGCDQ22TSnqjUYezWJTDX6HTZq7jbbvzdMgACSEPGSgcKS8pOTY2ST1DWURQaUtd",
+  b"eVJqiVl3mWCEqWeRuW6eyXWr2Xy46YPF+YrSAA83GR8+Ji9FMz9MQE9TTV9aWm9hZ39odI9vgZ92jq99m7+EqM+Ltd+Swu+Zz/+g",
+  b"3AAVTSMlVDA1Wz1FYkpVaVdlcGR1d3GFfn6VhYuljJi1k6XFmrLVob/lqMz1r9kFtuYAG2MtK2o6O3FHS3hUW39ha4Zue417i5SI",
+  b"m5uVq6Kiu6mvy7C827fJ677W+8XjC8zwACF5NzGAREGHUVGOXmGVa3GceIGjhZGqkqGxn7G4rMG/udHGxuHN0/HU4AHb7RHi+gAn",
+  b"j0E3lk5HnVtXpGhnq3V3soKHuY+XwJynx6m3zrbH1cPX3NDn49336uoH8fcX+AQALaVLPaxYTbNlXbpybcF/fciMjc+Zndamrd2z",
+  b"veTAzevN3fLa7fnn/QD0DQcBHQ4OawOFkF+JqQ4AAAAASUVORK5CYII=",
+])
+
+///|
+let png_adam7_mono_b64 : Bytes = bcat([
+  b"iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAQAAAAFAj/JaAAAAGklEQVR42mNgQAIfoHAVHIaiYGNjhjNnMEkAEYoSXfwvABsAAAAA",
+  b"SUVORK5CYII=",
+])
+
+///|
+test "png: Adam7 interlaced RGB and 1-bit gray match ffmpeg" {
+  let rgb = png_test_decode(png_adam7_rgb_b64, 10000)
+  assert_eq(rgb.pix_fmt, "rgb24")
+  assert_eq(rgb.width, 16)
+  assert_eq(rgb.height, 16)
+  assert_eq(rgb.pixels.length(), 768)
+  assert_eq(png_test_md5(rgb.pixels), "8b71dd82e3f8bb35641086c3f30541c9")
+  let mono = png_test_decode(png_adam7_mono_b64, 10000)
+  assert_eq(mono.pix_fmt, "monob")
+  assert_eq(mono.pixels.length(), 32)
+  assert_eq(png_test_md5(mono.pixels), "946fb03323d3e4981674221fe6b0fd43")
+}
