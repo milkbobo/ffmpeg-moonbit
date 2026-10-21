@@ -149,3 +149,31 @@ test "av1: keyframe frame header matches trace_headers" {
   assert_false(fh.use_superres)
   assert_false(fh.allow_intrabc)
 }
+
+///|
+test "av1: inter frame header reference slots match trace_headers" {
+  let bytes = @libavutil.av_base64_decode(webm_av1_b64, 100000).unwrap()
+  let mkv = av_matroska_open(bytes).unwrap()
+  let seq = @libavcodec.av1_parse_sequence_header(mkv.packets[0].data).unwrap()
+  let f1 = @libavcodec.av1_parse_frame_header(mkv.packets[1].data, seq).unwrap()
+  assert_eq(f1.frame_type, @libavcodec.av1_frame_inter)
+  assert_true(f1.show_frame)
+  assert_false(f1.error_resilient_mode)
+  assert_eq(f1.order_hint, 1)
+  assert_eq(f1.primary_ref_frame, 7)
+  assert_eq(f1.refresh_frame_flags, 2)
+  assert_false(f1.frame_refs_short_signaling)
+  assert_eq(f1.ref_frame_idx.length(), 7)
+  for i in 0..<7 {
+    assert_eq(f1.ref_frame_idx[i], 0)
+  }
+  assert_eq(f1.width, 64)
+  assert_eq(f1.height, 48)
+  assert_eq(f1.render_width, 64)
+  let f2 = @libavcodec.av1_parse_frame_header(mkv.packets[2].data, seq).unwrap()
+  assert_eq(f2.frame_type, @libavcodec.av1_frame_inter)
+  assert_eq(f2.order_hint, 2)
+  assert_eq(f2.refresh_frame_flags, 4)
+  assert_eq(f2.ref_frame_idx[0], 1)
+  assert_eq(f2.ref_frame_idx[6], 0)
+}

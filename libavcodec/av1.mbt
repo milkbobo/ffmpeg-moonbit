@@ -373,6 +373,8 @@ pub struct Av1FrameHeader {
   render_height : Int32
   use_superres : Bool
   allow_intrabc : Bool
+  frame_refs_short_signaling : Bool
+  ref_frame_idx : Array[Int32]
 }
 
 ///|
@@ -438,6 +440,8 @@ pub fn av1_parse_frame_header(
           render_height: seq.height,
           use_superres: false,
           allow_intrabc: false,
+          frame_refs_short_signaling: false,
+          ref_frame_idx: [],
         })
       }
       let frame_type = br.read(2).to_int()
@@ -482,7 +486,9 @@ pub fn av1_parse_frame_header(
         0
       }
       let mut refresh = 0
-      let primary_ref = 0
+      let mut primary_ref = 0
+      let refs : Array[Int32] = []
+      let mut short_sig = false
       if frame_type == av1_frame_key && show_frame {
         refresh = 0xFF
       } else if frame_type == av1_frame_key ||
@@ -493,7 +499,21 @@ pub fn av1_parse_frame_header(
           br.read(8).to_int()
         }
       } else {
-        return Err("PATCHWELCOME: AV1 inter frame header")
+        primary_ref = if error_resilient { 7 } else { br.read(3).to_int() }
+        refresh = br.read(8).to_int()
+        if seq.enable_order_hint {
+          short_sig = br.read(1) != 0
+        }
+        if short_sig {
+          br.skip(6) // last_frame_idx + gold_frame_idx
+        } else {
+          for _ in 0..<7 {
+            refs.push(br.read(3).to_int())
+            if seq.frame_id_numbers_present {
+              br.skip(seq.delta_frame_id_length)
+            }
+          }
+        }
       }
       let mut width = seq.width
       let mut height = seq.height
@@ -542,6 +562,8 @@ pub fn av1_parse_frame_header(
         render_height,
         use_superres,
         allow_intrabc,
+        frame_refs_short_signaling: short_sig,
+        ref_frame_idx: refs,
       })
     }
     pos = p + size
