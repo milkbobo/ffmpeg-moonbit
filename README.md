@@ -653,6 +653,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | MPEG-TS | [mpegts.mbt](libavformat/mpegts.mbt) | 188/192(M2TS)/204 布局、PAT/PMT（PSI 分片累积）、PES 头部/PTS/DTS、无长度视频 PES 在下一 PUSI/EOF 冲刷、已知长度 PES 即时输出、PCR、ISO/HDMV/registration 流类型表；真实 H.264+AAC 与 B 帧 TS 的 5 个/3 个 PES 的 pos/pts/dts/size 与 `ffprobe -fflags +noparse` 逐值一致；合成 HEVC+Opus 注册描述符与 M2TS 用例 |
 | HLS | [hls.mbt](libavformat/hls.mbt)、[hls_crypto.mbt](libavformat/hls_crypto.mbt) | 主/媒体 M3U8（VERSION/TARGETDURATION/MEDIA-SEQUENCE/ENDLIST/PLAYLIST-TYPE）、EXTINF、BYTERANGE 续接、KEY/MAP/DISCONTINUITY/GAP/PROGRAM-DATE-TIME、STREAM-INF/I-FRAME-STREAM-INF/EXT-X-MEDIA、`$...$` 之外的 URI 相对解析；真实 ffmpeg TS/fMP4 播放列表与手工边界用例 |
 | DASH | [xml.mbt](libavformat/xml.mbt)、[dash.mbt](libavformat/dash.mbt) | 最小 XML（元素/属性/CDATA/注释/实体/命名空间后缀匹配）+ MPD Period/AdaptationSet/Representation 继承、BaseURL 链、SegmentTemplate `$Number%05d$`/`$Time$`/`$RepresentationID$`/`$Bandwidth$`、SegmentTimeline（含 `r="-1"`）、duration 枚举、SegmentList/SegmentBase；真实 ffmpeg MPD 的 3+3 个分片编号/时间/时长/URL 逐值断言 |
+| Matroska Cues | [matroska_cues.mbt](libavformat/matroska_cues.mbt) | CuePoint/CueTime/CueTrackPositions/CueClusterPosition/RelativePosition/BlockNumber 解析与按时间二分 seek；真实 x264 MKV（关键帧 0/1/2s）3 条 cue 与 ffprobe 关键帧位置对应 |
 | WebM 参数桥 | [codec_parameters.mbt](libavformat/codec_parameters.mbt)、[extradata.mbt](libavformat/extradata.mbt) | VP9 `vpcC`、AV1 `av1C`、Opus`OpusHead` 解析；MP4 `dOps` → OpusHead 转换；真实 VP9/AV1/Opus WebM 与 MP4 Opus 的 codec/尺寸/位深/声道/pre-skip 对齐 ffprobe |
 | PNG | [inflate.mbt](libavcodec/inflate.mbt)、[png.mbt](libavcodec/png.mbt) | 纯 MoonBit zlib/DEFLATE（stored/fixed/dynamic Huffman、LZ77、Adler32）+ PNG IHDR/PLTE/tRNS/IDAT、五种行滤波、1/8/16-bit 与调色板/灰度/RGB/RGBA/GA、tRNS 提升；8 种原生 pix_fmt 的原始输出 MD5 与 `ffmpeg -f rawvideo` 完全一致（含 pal8 的 256 项 BGRA 调色板） |
 | MJPEG | [mjpeg.mbt](libavcodec/mjpeg.mbt) | 基线 SOF0/SOF1、DQT/DHT/DRI/SOS、重启标记、DC 预测（`4<<8` 偏置）、AC 游程、Simple-C IDCT、4:2:0/4:2:2/4:4:4 采样与原生 yuvj 输出；真实 ffmpeg JPEG 三平面 MD5 逐字节一致 |
@@ -662,7 +663,7 @@ Huffman 规范化码另有等效性说明，见下文）：
 | HEVC access unit | [hevc_access_unit.mbt](libavcodec/hevc_access_unit.mbt) | 按 `first_slice_segment_in_pic_flag` 组装访问单元、IDR/IRAP 关键帧标记、按 temporal-id-0 更新 POC；真实 x265 B 帧 GOP（I/P/B/B）的 POC 0,3,2,1 与解码顺序逐值一致 |
 | 码流头 | [opus_packet.mbt](libavcodec/opus_packet.mbt)、[av1.mbt](libavcodec/av1.mbt)、[vp9.mbt](libavcodec/vp9.mbt) | Opus TOC/四种包码/Xiph lacing/120 ms 限制；AV1 OBU LEB128 + `av1C`/序列头（含 order-hint/screen-content/superres 状态）与关键/帧内/inter frame header（类型/show/尺寸/render/superres/intrabc、primary_ref/refresh、7 个参考槽、统一 tile 布局与 base_q_idx/量化 delta；关键帧与 inter 字段均对齐 `trace_headers`）；VP9 帧头（profile、关键帧/帧内、色彩配置、尺寸、刷新掩码）；真实 WebM 包与 ffprobe 对齐 |
 
-测试总数 453/453（`moon test --target wasm`）。仍未完成的重点：HEVC CABAC/帧内预测/变换与像素重建、
+测试总数 454/454（`moon test --target wasm`）。仍未完成的重点：HEVC CABAC/帧内预测/变换与像素重建、
 VP9/AV1 压缩头与像素解码、Opus SILK/CELT 解码、HLS/DASH 的网络/分片 IO 与 AES-128、
 PNG Adam7/APNG 与 CRC 校验、MJPEG 渐进式/无损/12-bit。
 
