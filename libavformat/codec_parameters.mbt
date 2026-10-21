@@ -30,6 +30,8 @@ pub struct CodecParameters {
   mut channels : Int32
   /// PCM samples per frame (AAC 1024, MP3 1152/576); 0 for video.
   mut frame_size : Int32
+  /// Opus pre-skip (`OpusHead`/`dOps`), in 48 kHz samples.
+  mut initial_padding : Int32
   /// Frame rate from the H.264/HEVC VUI, as a rational; 0/0 when absent.
   mut fps_num : Int32
   mut fps_den : Int32
@@ -55,6 +57,7 @@ fn new_codec_parameters(codec : String) -> CodecParameters {
     sample_rate: 0,
     channels: 0,
     frame_size: 0,
+    initial_padding: 0,
     fps_num: 0,
     fps_den: 0,
     sar_num: 0,
@@ -82,6 +85,99 @@ fn pix_fmt_name(chroma : Int32, depth : Int32) -> String {
     let suffix = "le"
     base + depth.to_string() + suffix
   }
+}
+
+///|
+fn cp_u16le(b : BytesView, o : Int32) -> Int32 {
+  if o + 2 > b.length() {
+    0
+  } else {
+    b[o].to_int() | (b[o + 1].to_int() << 8)
+  }
+}
+
+///|
+fn cp_u32le(b : BytesView, o : Int32) -> Int32 {
+  if o + 4 > b.length() {
+    0
+  } else {
+    b[o].to_int() |
+    (b[o + 1].to_int() << 8) |
+    (b[o + 2].to_int() << 16) |
+    (b[o + 3].to_int() << 24)
+  }
+}
+
+///|
+/// AV1 `av1C` record: profile, level, bit depth and chroma format. */
+pub fn av1c_parse(extra : Bytes) -> (Int32, Int32, Int32, Int32)? {
+  if extra.length() < 4 {
+    return None
+  }
+  if (extra[0].to_int() & 0x80) == 0 {
+    return None
+  }
+  let profile = extra[1].to_int() >> 5
+  let level = extra[1].to_int() & 0x1F
+  let high_bitdepth = (extra[2].to_int() >> 6) & 1
+  let twelve_bit = (extra[2].to_int() >> 5) & 1
+  let monochrome = (extra[2].to_int() >> 4) & 1
+  let sx = (extra[2].to_int() >> 3) & 1
+  let sy = (extra[2].to_int() >> 2) & 1
+  let depth = if high_bitdepth != 0 {
+    if twelve_bit != 0 {
+      12
+    } else {
+      10
+    }
+  } else {
+    8
+  }
+  let chroma = if monochrome != 0 {
+    0
+  } else if sx != 0 && sy != 0 {
+    1
+  } else if sx != 0 {
+    2
+  } else {
+    3
+  }
+  Some((profile, level, depth, chroma))
+}
+
+///|
+/// VP9 `vpcC` (ISO/IEC 14496-15) record: version, profile, level,
+/// bit depth and chroma subsampling. */
+pub fn vp9_parse_vpcc(extra : Bytes) -> (Int32, Int32, Int32, Int32)? {
+  if extra.length() < 4 {
+    return None
+  }
+  let profile = extra[1].to_int()
+  let level = extra[2].to_int()
+  let packed = extra[3].to_int()
+  let depth = (packed >> 4) & 0x0F
+  let chroma = (packed >> 1) & 0x07
+  Some((profile, level, depth, chroma))
+}
+
+///|
+/// `OpusHead`: channels, pre-skip and the original input sample rate. */
+pub fn opus_head_parse(extra : Bytes) -> (Int32, Int32, Int32)? {
+  if extra.length() < 19 ||
+    extra[0] != b'O' ||
+    extra[1] != b'p' ||
+    extra[2] != b'u' ||
+    extra[3] != b's' ||
+    extra[4] != b'H' ||
+    extra[5] != b'e' ||
+    extra[6] != b'a' ||
+    extra[7] != b'd' {
+    return None
+  }
+  let channels = extra[9].to_int()
+  let pre_skip = cp_u16le(extra, 10)
+  let rate = cp_u32le(extra, 12)
+  Some((channels, pre_skip, rate))
 }
 
 ///|
@@ -198,6 +294,43 @@ pub fn codec_parameters_from_extradata(
         p.sar_den = sps.vui.common.sar_den
         p.extradata_parsed = true
       }
+    }
+  } else if codec == "av1" {
+    match av1c_parse(extra) {
+      Some((profile, level, depth, chroma)) => {
+        p.profile = profile
+        p.level = level
+        p.bit_depth = depth
+        p.chroma_format = chroma
+        p.pix_fmt = pix_fmt_name(chroma, depth)
+        p.extradata_parsed = true
+      }
+      None => ()
+    }
+  } else if codec == "vp9" {
+    match vp9_parse_vpcc(extra) {
+      Some((profile, level, depth, chroma)) => {
+        p.profile = profile
+        p.level = level
+        p.bit_depth = depth
+        p.chroma_format = chroma
+        p.pix_fmt = pix_fmt_name(chroma, depth)
+        p.extradata_parsed = true
+      }
+      None => ()
+    }
+  } else if codec == "opus" {
+    match opus_head_parse(extra) {
+      Some((channels, pre_skip, _rate)) => {
+        if channels > 0 {
+          p.channels = channels
+        }
+        // Opus always decodes at 48 kHz (libavcodec/opus/dec.c).
+        p.sample_rate = 48000
+        p.initial_padding = pre_skip
+        p.extradata_parsed = true
+      }
+      None => ()
     }
   } else if codec == "aac" {
     let mut cfg = @libavcodec.new_mpeg4_audio_config()

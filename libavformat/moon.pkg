@@ -2,4 +2,5 @@ import {
   "ffmpeg/moonbit/libavutil",
   "ffmpeg/moonbit/libavcodec",
   "moonbitlang/core/double",
+  "moonbitlang/core/string",
 }

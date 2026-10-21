@@ -85,6 +85,52 @@ fn mp4_audio_type_codec(object_type : Int32) -> String? {
 let mpa_freq_tab : FixedArray[Int32] = [44100, 48000, 32000]
 
 ///|
+/// `mov_read_dops`: convert an OpusSpecificBox into an `OpusHead`-shaped
+/// extradata block (magic + version 1 + payload with little-endian pre-skip,
+/// input sample rate and output gain), exactly like the C demuxer.
+fn parse_dops(st : MovState, r : AvioContext, size : Int64) -> Unit {
+  if !st.in_trak || size < 11 || size > 1073741824 {
+    let _ = r.avio_skip(size)
+    return
+  }
+  let has_extra = match st.cur.extradata {
+    Some(b) => b.length() > 0
+    None => false
+  }
+  if has_extra {
+    let _ = r.avio_skip(size)
+    return
+  }
+  let version = r.avio_r8()
+  if version != 0 {
+    let _ = r.avio_skip(size - 1L)
+    return
+  }
+  let out : Array[Byte] = [
+    b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', b'\x01',
+  ]
+  for _ in 1..<size.to_int() {
+    out.push(r.avio_r8().to_byte())
+  }
+  // OpusSpecificBox is big-endian; OpusHead is little-endian.
+  let pre_skip = (out[10].to_int() << 8) | out[11].to_int()
+  out[10] = (pre_skip & 0xFF).to_byte()
+  out[11] = ((pre_skip >> 8) & 0xFF).to_byte()
+  let rate = (out[12].to_int() << 24) |
+    (out[13].to_int() << 16) |
+    (out[14].to_int() << 8) |
+    out[15].to_int()
+  out[12] = (rate & 0xFF).to_byte()
+  out[13] = ((rate >> 8) & 0xFF).to_byte()
+  out[14] = ((rate >> 16) & 0xFF).to_byte()
+  out[15] = ((rate >> 24) & 0xFF).to_byte()
+  let gain = (out[16].to_int() << 8) | out[17].to_int()
+  out[16] = (gain & 0xFF).to_byte()
+  out[17] = ((gain >> 8) & 0xFF).to_byte()
+  st.cur.extradata = Some(Bytes::from_array(out[:]))
+}
+
+///|
 /// `mov_read_glbl`: store the payload as the track's extradata. The
 /// legacy-broken `fiel`-wrapped variant is ported too (recursing into the
 /// payload as child boxes).

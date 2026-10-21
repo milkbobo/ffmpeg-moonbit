@@ -643,6 +643,25 @@ Huffman 规范化码另有等效性说明，见下文）：
 
 ---
 
+### 2026-10-21 增量：WAV/TS/HLS/DASH 容器 + PNG/MJPEG 解码 + VP9/AV1/Opus 码流头
+
+本轮在既有 MP4/MKV/H.264/AAC/MP3 切片之上新增：
+
+| 切片 | 文件 | 范围与验证 |
+|---|---|---|
+| WAV/RIFF | [wav.mbt](libavformat/wav.mbt) | RIFF/RIFX/RF64/BW64、`fmt `/`fact`/`data` 走查、WAVE_FORMAT_EXTENSIBLE、`ff_pcm_default_packet_size` 的 10 fps 包长与块对齐；真实 ffmpeg s16/f32/s24 文件的 pos/size/pts/duration 逐值对齐 ffprobe，另含 RIFX/RF64/奇数块填充/缺失块负例 |
+| MPEG-TS | [mpegts.mbt](libavformat/mpegts.mbt) | 188/192(M2TS)/204 布局、PAT/PMT（PSI 分片累积）、PES 头部/PTS/DTS、无长度视频 PES 在下一 PUSI/EOF 冲刷、已知长度 PES 即时输出、PCR、ISO/HDMV/registration 流类型表；真实 H.264+AAC 与 B 帧 TS 的 5 个/3 个 PES 的 pos/pts/dts/size 与 `ffprobe -fflags +noparse` 逐值一致；合成 HEVC+Opus 注册描述符与 M2TS 用例 |
+| HLS | [hls.mbt](libavformat/hls.mbt) | 主/媒体 M3U8（VERSION/TARGETDURATION/MEDIA-SEQUENCE/ENDLIST/PLAYLIST-TYPE）、EXTINF、BYTERANGE 续接、KEY/MAP/DISCONTINUITY/GAP/PROGRAM-DATE-TIME、STREAM-INF/I-FRAME-STREAM-INF/EXT-X-MEDIA、`$...$` 之外的 URI 相对解析；真实 ffmpeg TS/fMP4 播放列表与手工边界用例 |
+| DASH | [xml.mbt](libavformat/xml.mbt)、[dash.mbt](libavformat/dash.mbt) | 最小 XML（元素/属性/CDATA/注释/实体/命名空间后缀匹配）+ MPD Period/AdaptationSet/Representation 继承、BaseURL 链、SegmentTemplate `$Number%05d$`/`$Time$`/`$RepresentationID$`/`$Bandwidth$`、SegmentTimeline（含 `r="-1"`）、duration 枚举、SegmentList/SegmentBase；真实 ffmpeg MPD 的 3+3 个分片编号/时间/时长/URL 逐值断言 |
+| WebM 参数桥 | [codec_parameters.mbt](libavformat/codec_parameters.mbt)、[extradata.mbt](libavformat/extradata.mbt) | VP9 `vpcC`、AV1 `av1C`、Opus`OpusHead` 解析；MP4 `dOps` → OpusHead 转换；真实 VP9/AV1/Opus WebM 与 MP4 Opus 的 codec/尺寸/位深/声道/pre-skip 对齐 ffprobe |
+| PNG | [inflate.mbt](libavcodec/inflate.mbt)、[png.mbt](libavcodec/png.mbt) | 纯 MoonBit zlib/DEFLATE（stored/fixed/dynamic Huffman、LZ77、Adler32）+ PNG IHDR/PLTE/tRNS/IDAT、五种行滤波、1/8/16-bit 与调色板/灰度/RGB/RGBA/GA、tRNS 提升；8 种原生 pix_fmt 的原始输出 MD5 与 `ffmpeg -f rawvideo` 完全一致（含 pal8 的 256 项 BGRA 调色板） |
+| MJPEG | [mjpeg.mbt](libavcodec/mjpeg.mbt) | 基线 SOF0/SOF1、DQT/DHT/DRI/SOS、重启标记、DC 预测（`4<<8` 偏置）、AC 游程、Simple-C IDCT、4:2:0/4:2:2/4:4:4 采样与原生 yuvj 输出；真实 ffmpeg JPEG 三平面 MD5 逐字节一致 |
+| 码流头 | [opus_packet.mbt](libavcodec/opus_packet.mbt)、[av1.mbt](libavcodec/av1.mbt)、[vp9.mbt](libavcodec/vp9.mbt) | Opus TOC/四种包码/Xiph lacing/120 ms 限制；AV1 OBU LEB128 + `av1C`/序列头（profile/level/位深/chroma/最大帧尺寸）；VP9 帧头（profile、关键帧/帧内、色彩配置、尺寸、刷新掩码）；真实 WebM 包与 ffprobe 对齐 |
+
+测试总数 438/438（`moon test --target wasm`）。仍未完成的重点：HEVC slice/CABAC/像素重建、
+VP9/AV1 压缩头与像素解码、Opus SILK/CELT 解码、HLS/DASH 的网络/分片 IO 与 AES-128、
+PNG Adam7/APNG 与 CRC 校验、MJPEG 渐进式/无损/12-bit。
+
 ## 4. 验证方式
 
 所有期望值都取自 FFmpeg 仓库内的**一手资料**，不使用自造数据：
@@ -792,7 +811,9 @@ edit 时间轴索引重建/discard 时间戳重写/`skip_samples`/`min_corrected
    resync + Tracks + **Cluster/Block 与三种 lacing** 完成，`av_matroska_open` 已产出带
    pos/size/pts/keyframe 的 `MkvPacket` 队列，多 Cluster 走查并对尾部截断容忍；余下 Cues
    索引与 `skip_to_keyframe` 懒解复用、BlockAdditions 侧数据、header-strip 解压、RM 音频 /
-   WebVTT 特化）；AVI、MPEG-TS（字节级解析优先）
+   WebVTT 特化）。**WAV/RIFF、MPEG-TS（188/192/204、PAT/PMT/PES/PCR）、HLS（主/媒体
+   播放列表与分片元数据）、DASH（MPD + SegmentTemplate/Timeline/BaseURL）已在
+   2026-10-21 切片中落地**；余 AVI、HLS/DASH 的实际网络/分片 IO 与 AES-128。
 2. **裸 AAC/MP3 流**：`rawaudio.mbt` 完成 ADTS 与 MPEG 音频分帧（ID3v2/v1、Xing/Info/VBRI、
    `ffprobe` 对齐的 pos/size），后续可接公共 `avformat_open_input` 风格入口
 3. **码流参数桥**：`codec_tags.mbt`/`codec_parameters.mbt` 让 MP4/MKV 共用
@@ -816,7 +837,8 @@ I 帧重建 + 环路去块滤波**（slice header + CAVLC + 4x4 IDCT + 帧内预
 2. `vlc.c` 的 `ff_vlc_init_from_lengths` 表构建（当前只产出它需要的 `lens`/`xlat`）
 3. ~~接 MP4 的 avcC + 长度前缀入口 → CABAC（`h264_cabac.c`）→ P 帧与 DPB/参考帧管理~~
    **已完成**（`h264_inter/mvpred/mc/dpb`；B/SP/SI slice 与 CABAC 多行收敛仍开放）
-4. HEVC slice segment header + CABAC + 帧内预测/变换，先 I 帧
+4. HEVC slice segment header + CABAC + 帧内预测/变换，先 I 帧（本轮未动；VP9/AV1/Opus
+   目前只到帧头/包级解析，像素解码仍未开始）
 5. AAC 原始帧解析：ICS/TNS/MDCT/**频谱 Huffman**/scalefactor/pulse/PNS/gain-control
    语法与**全四窗口序列 + KBD 窗**已完成（`aac_spectrum.mbt`/`aac_tables.mbt`，
    真实长窗、短窗/窗口切换及 pulse 合成码流 PCM 对照 FFmpeg 最大误差 1 LSB）；
