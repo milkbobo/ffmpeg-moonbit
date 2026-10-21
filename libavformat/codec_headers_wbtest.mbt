@@ -148,6 +148,11 @@ test "av1: keyframe frame header matches trace_headers" {
   assert_eq(fh.render_height, 48)
   assert_false(fh.use_superres)
   assert_false(fh.allow_intrabc)
+  assert_false(fh.disable_frame_end_update_cdf)
+  assert_eq(fh.tile_cols, 1)
+  assert_eq(fh.tile_rows, 1)
+  assert_eq(fh.base_q_idx, 122)
+  assert_false(fh.using_qmatrix)
 }
 
 ///|

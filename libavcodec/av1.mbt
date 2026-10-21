@@ -42,6 +42,8 @@ pub struct Av1SequenceParameters {
   mut enable_superres : Bool
   mut enable_cdef : Bool
   mut enable_restoration : Bool
+  mut use_128x128_superblock : Bool
+  mut separate_uv_delta_q : Bool
 }
 
 ///|
@@ -148,7 +150,7 @@ fn av1_parse_color_config(seq : Av1SequenceParameters, br : BitReader) -> Unit {
       seq.chroma_sample_position = br.read(2).to_int()
     }
   }
-  ignore(br.read(1)) // separate_uv_delta_q
+  seq.separate_uv_delta_q = br.read(1) != 0
 }
 
 ///|
@@ -231,7 +233,8 @@ fn av1_parse_sequence_payload(
       seq.additional_frame_id_length = br.read(3).to_int() + 1
     }
   }
-  br.skip(3) // use_128x128_superblock, filter_intra, intra_edge_filter
+  seq.use_128x128_superblock = br.read(1) != 0
+  br.skip(2) // filter_intra, intra_edge_filter
   if !reduced {
     br.skip(4)
     seq.enable_order_hint = br.read(1) != 0
@@ -296,6 +299,8 @@ pub fn av1_parse_sequence_header(
     enable_superres: false,
     enable_cdef: false,
     enable_restoration: false,
+    use_128x128_superblock: false,
+    separate_uv_delta_q: false,
   }
   if data.length() == 0 {
     return Err("av1: empty input")
@@ -375,6 +380,11 @@ pub struct Av1FrameHeader {
   allow_intrabc : Bool
   frame_refs_short_signaling : Bool
   ref_frame_idx : Array[Int32]
+  disable_frame_end_update_cdf : Bool
+  tile_cols : Int32
+  tile_rows : Int32
+  base_q_idx : Int32
+  using_qmatrix : Bool
 }
 
 ///|
@@ -389,6 +399,16 @@ pub let av1_frame_intra_only : Int32 = 2
 
 ///|
 pub let av1_frame_switch : Int32 = 3
+
+///|
+/// `cbs_av1_tile_log2`. */
+fn av1_tile_log2(blksize : Int32, target : Int32) -> Int32 {
+  let mut k = 0
+  while blksize << k < target {
+    k = k + 1
+  }
+  k
+}
 
 ///|
 /// Parse the first frame header OBU (type 3 or 6) of `data`. Key and
@@ -442,6 +462,11 @@ pub fn av1_parse_frame_header(
           allow_intrabc: false,
           frame_refs_short_signaling: false,
           ref_frame_idx: [],
+          disable_frame_end_update_cdf: false,
+          tile_cols: 1,
+          tile_rows: 1,
+          base_q_idx: 0,
+          using_qmatrix: false,
         })
       }
       let frame_type = br.read(2).to_int()
@@ -542,6 +567,121 @@ pub fn av1_parse_frame_header(
       } else {
         false
       }
+      let mut disable_frame_end = false
+      let mut tile_cols = 1
+      let mut tile_rows = 1
+      let mut base_q_idx = 0
+      let mut using_qmatrix = false
+      if frame_type == av1_frame_key || frame_type == av1_frame_intra_only {
+        disable_frame_end = if !seq.reduced_still_picture_header {
+          br.read(1) != 0
+        } else {
+          false
+        }
+        // tile_info (uniform spacing; non-uniform tiles are not ported yet).
+        let mi_cols = 2 * ((width + 7) >> 3)
+        let mi_rows = 2 * ((height + 7) >> 3)
+        let sb_cols = if seq.use_128x128_superblock {
+          (mi_cols + 31) >> 5
+        } else {
+          (mi_cols + 15) >> 4
+        }
+        let sb_rows = if seq.use_128x128_superblock {
+          (mi_rows + 31) >> 5
+        } else {
+          (mi_rows + 15) >> 4
+        }
+        let sb_size = if seq.use_128x128_superblock { 7 } else { 6 }
+        let max_tile_width_sb = 4096 >> sb_size
+        let max_tile_area_sb = 9437184 >> (2 * sb_size)
+        let min_log2_cols = av1_tile_log2(max_tile_width_sb, sb_cols)
+        let max_log2_cols = av1_tile_log2(
+          1,
+          if sb_cols < 64 {
+            sb_cols
+          } else {
+            64
+          },
+        )
+        let max_log2_rows = av1_tile_log2(
+          1,
+          if sb_rows < 64 {
+            sb_rows
+          } else {
+            64
+          },
+        )
+        let min_log2_tiles = if min_log2_cols >
+          av1_tile_log2(max_tile_area_sb, sb_cols * sb_rows) {
+          min_log2_cols
+        } else {
+          av1_tile_log2(max_tile_area_sb, sb_cols * sb_rows)
+        }
+        let uniform_tiles = br.read(1) != 0
+        if !uniform_tiles {
+          return Err("PATCHWELCOME: AV1 non-uniform tile spacing")
+        }
+        let mut tile_cols_log2 = min_log2_cols
+        while tile_cols_log2 < max_log2_cols {
+          if br.read1() == 0 {
+            break
+          }
+          tile_cols_log2 = tile_cols_log2 + 1
+        }
+        let tile_width_sb = (sb_cols + (1 << tile_cols_log2) - 1) >>
+          tile_cols_log2
+        tile_cols = (sb_cols + tile_width_sb - 1) / tile_width_sb
+        let mut min_log2_rows = min_log2_tiles - tile_cols_log2
+        if min_log2_rows < 0 {
+          min_log2_rows = 0
+        }
+        let mut tile_rows_log2 = min_log2_rows
+        while tile_rows_log2 < max_log2_rows {
+          if br.read1() == 0 {
+            break
+          }
+          tile_rows_log2 = tile_rows_log2 + 1
+        }
+        let tile_height_sb = (sb_rows + (1 << tile_rows_log2) - 1) >>
+          tile_rows_log2
+        tile_rows = (sb_rows + tile_height_sb - 1) / tile_height_sb
+        if tile_cols_log2 > 0 || tile_rows_log2 > 0 {
+          br.skip(tile_cols_log2 + tile_rows_log2)
+          br.skip(2) // tile_size_bytes_minus1
+        }
+        // quantization_params
+        base_q_idx = br.read(8).to_int()
+        if br.read1() != 0 {
+          br.skip(7) // delta_q_y_dc
+        }
+        if !seq.monochrome {
+          let mut diff_uv = false
+          if seq.separate_uv_delta_q {
+            diff_uv = br.read1() != 0
+          }
+          if br.read1() != 0 {
+            br.skip(7) // delta_q_u_dc
+          }
+          if br.read1() != 0 {
+            br.skip(7) // delta_q_u_ac
+          }
+          if diff_uv {
+            if br.read1() != 0 {
+              br.skip(7)
+            }
+            if br.read1() != 0 {
+              br.skip(7)
+            }
+          }
+        }
+        using_qmatrix = br.read1() != 0
+        if using_qmatrix {
+          br.skip(8)
+          if seq.separate_uv_delta_q {
+            br.skip(4)
+          }
+        }
+      }
       return Ok({
         show_existing_frame: false,
         frame_to_show_map_idx: 0,
@@ -564,6 +704,11 @@ pub fn av1_parse_frame_header(
         allow_intrabc,
         frame_refs_short_signaling: short_sig,
         ref_frame_idx: refs,
+        disable_frame_end_update_cdf: disable_frame_end,
+        tile_cols,
+        tile_rows,
+        base_q_idx,
+        using_qmatrix,
       })
     }
     pos = p + size
