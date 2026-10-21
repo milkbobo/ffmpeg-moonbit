@@ -393,6 +393,10 @@ pub struct Av1FrameHeader {
   cdef_bits : Int32
   tx_mode : Int32
   reduced_tx_set : Bool
+  allow_high_precision_mv : Bool
+  interpolation_filter : Int32
+  is_motion_mode_switchable : Bool
+  use_ref_frame_mvs : Bool
 }
 
 ///|
@@ -483,6 +487,10 @@ pub fn av1_parse_frame_header(
           cdef_bits: 0,
           tx_mode: 0,
           reduced_tx_set: false,
+          allow_high_precision_mv: false,
+          interpolation_filter: 0,
+          is_motion_mode_switchable: false,
+          use_ref_frame_mvs: false,
         })
       }
       let frame_type = br.read(2).to_int()
@@ -577,18 +585,36 @@ pub fn av1_parse_frame_header(
           ignore(br.read(3))
         }
       }
-      let allow_intrabc = if allow_sct &&
-        (frame_type == av1_frame_key || frame_type == av1_frame_intra_only) {
-        br.read(1) != 0
+      let mut allow_intrabc = false
+      let mut allow_high_precision = false
+      let mut interpolation_filter = 0
+      let mut motion_mode_switchable = false
+      let mut use_ref_mvs = false
+      if frame_type == av1_frame_key || frame_type == av1_frame_intra_only {
+        allow_intrabc = if allow_sct { br.read(1) != 0 } else { false }
       } else {
-        false
+        if !force_integer {
+          allow_high_precision = br.read(1) != 0
+        }
+        let filter_switchable = br.read(1) != 0
+        if filter_switchable {
+          interpolation_filter = 3
+        } else {
+          interpolation_filter = br.read(2).to_int()
+        }
+        if !seq.reduced_still_picture_header {
+          motion_mode_switchable = br.read(1) != 0
+        }
+        if seq.enable_order_hint && !error_resilient {
+          use_ref_mvs = br.read(1) != 0
+        }
       }
       let mut disable_frame_end = false
       let mut tile_cols = 1
       let mut tile_rows = 1
       let mut base_q_idx = 0
       let mut using_qmatrix = false
-      if frame_type == av1_frame_key || frame_type == av1_frame_intra_only {
+      {
         disable_frame_end = if !seq.reduced_still_picture_header {
           br.read(1) != 0
         } else {
@@ -706,7 +732,7 @@ pub fn av1_parse_frame_header(
       let mut cdef_bits = 0
       let mut tx_mode = 0
       let mut reduced_tx_set = false
-      if frame_type == av1_frame_key || frame_type == av1_frame_intra_only {
+      {
         segmentation_enabled = br.read1() != 0
         if segmentation_enabled {
           return Err("PATCHWELCOME: AV1 segmentation params")
@@ -722,6 +748,7 @@ pub fn av1_parse_frame_header(
         loop_filter_level.push(lf0)
         loop_filter_level.push(lf1)
         if !seq.monochrome && (lf0 != 0 || lf1 != 0) {
+          loop_filter_level.push(br.read(6).to_int())
           loop_filter_level.push(br.read(6).to_int())
         }
         loop_filter_sharpness = br.read(3).to_int()
@@ -795,6 +822,10 @@ pub fn av1_parse_frame_header(
         cdef_bits,
         tx_mode,
         reduced_tx_set,
+        allow_high_precision_mv: allow_high_precision,
+        interpolation_filter,
+        is_motion_mode_switchable: motion_mode_switchable,
+        use_ref_frame_mvs: use_ref_mvs,
       })
     }
     pos = p + size
