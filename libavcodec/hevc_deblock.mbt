@@ -1,7 +1,7 @@
 ///|
 /// HEVC deblocking filter, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/filter.c` and `libavcodec/h26x/h2656_deblock_template.c`
-/// for 8/10/12-bit 4:2:0/4:4:4 pictures (no PCM, no transquant bypass). Tile and
+/// for 8/10/12-bit 4:2:0/4:2:2/4:4:4 pictures (no PCM, no transquant bypass). Tile and
 /// slice boundaries are unfiltered unless their respective across-edge flags
 /// are set.
 /// `beta`/`tc` are scaled by `bit_depth - 8` like the bit-depth-specific C

@@ -5,7 +5,7 @@
 /// `hevc_frame_start`, `ff_hevc_deblocking_boundary_strengths` from
 /// `filter.c`, `boundary_strength`) and `libavcodec/hevc/refs.c`.
 ///
-/// Supported: 8/10/12-bit 4:2:0 and 4:4:4, single- and multi-slice pictures with WPP
+/// Supported: 8/10/12-bit 4:2:0/4:2:2/4:4:4, single- and multi-slice pictures with WPP
 /// and/or uniform/non-uniform tiles, closed-GOP streams whose reference
 /// pictures are all present (missing refs are generated grey), weighted and
 /// unweighted uni/bi prediction. WPP follows FFmpeg's single-thread semantics:
@@ -1097,9 +1097,9 @@ fn hevc_decode_picture(
     None => return Err("hevc: missing SPS")
   }
   if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
-    (sps.chroma_format_idc != 1 && sps.chroma_format_idc != 3) ||
+    sps.chroma_format_idc == 0 ||
     sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0 and 4:4:4 HEVC is supported")
+    return Err("PATCHWELCOME: only 8/10/12-bit 4:2:0/4:2:2/4:4:4 HEVC is supported")
   }
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")
