@@ -29,6 +29,7 @@ struct HevcIntraDecoder {
   vertical_bs : Array[Int32]
   horizontal_bs : Array[Int32]
   bs_width : Int32
+  sao : HevcSaoParams
   na : HevcNeighbourAvail
   mut ctb_left : Bool
   mut ctb_up : Bool
@@ -79,6 +80,7 @@ fn hevc_intra_decoder_new(
       0,
     ),
     bs_width: (sps.width >> 2) + 1,
+    sao: hevc_sao_params_new(sps.ctb_size, sps.ctb_width),
     na: hevc_neighbour_avail(),
     ctb_left: false,
     ctb_up: false,
@@ -962,9 +964,6 @@ fn hevc_decode_intra_frame_impl(
   if sps.scaling_list_enabled != 0 {
     return Err("PATCHWELCOME: HEVC scaling lists are not supported")
   }
-  if sps.sao_enabled != 0 {
-    return Err("PATCHWELCOME: HEVC SAO is not supported")
-  }
   if pps.tiles_enabled_flag != 0 || pps.entropy_coding_sync_enabled_flag != 0 {
     return Err("PATCHWELCOME: HEVC tiles/WPP are not supported")
   }
@@ -996,6 +995,9 @@ fn hevc_decode_intra_frame_impl(
     } else {
       sps.height
     }
+    if sps.sao_enabled != 0 {
+      hevc_sao_parse(dec.cabac, sps, pps, sh, dec.sao, rs, x_ctb, y_ctb)
+    }
     more = match dec.coding_quadtree(x_ctb, y_ctb, sps.log2_ctb_size, 0) {
       Ok(v) => v
       Err(e) => return Err(e)
@@ -1013,6 +1015,7 @@ fn hevc_decode_intra_frame_impl(
       dec.horizontal_bs,
       dec.bs_width,
     )
+    hevc_sao_apply(dec.pic, sps, pps, dec.sao)
   }
   Ok(dec.pic)
 }

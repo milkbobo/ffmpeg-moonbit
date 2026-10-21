@@ -45,6 +45,7 @@ pub struct HevcSliceHeader {
   disable_deblocking_filter_flag : Bool
   beta_offset : Int32
   tc_offset : Int32
+  slice_loop_filter_across_slices_enabled_flag : Bool
   /// Bit offset just past the slice header (CABAC starts here).
   header_bits : Int32
 }
@@ -340,6 +341,12 @@ pub fn ff_hevc_decode_slice_header(
       }
     }
   }
+  let mut loop_filter_across_slices = pps.seq_loop_filter_across_slices_enabled_flag !=
+    0
+  if pps.seq_loop_filter_across_slices_enabled_flag != 0 &&
+    (sao_luma || sao_chroma || !disable_dbf) {
+    loop_filter_across_slices = gb.read1() != 0
+  }
   if pps.slice_header_extension_present_flag != 0 {
     let ext_bits = gb.read_ue_long()
     if ext_bits > 1024UL {
@@ -375,6 +382,7 @@ pub fn ff_hevc_decode_slice_header(
     disable_deblocking_filter_flag: disable_dbf,
     beta_offset,
     tc_offset,
+    slice_loop_filter_across_slices_enabled_flag: loop_filter_across_slices,
     header_bits: gb.count(),
   })
 }

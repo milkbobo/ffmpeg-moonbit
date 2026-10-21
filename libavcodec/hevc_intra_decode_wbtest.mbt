@@ -229,6 +229,48 @@ test "hevc intra: deblocking 32x32" {
 }
 
 ///|
+/// 64x48 sample with SAO enabled (x265 defaults) on top of deblocking:
+///
+///   ffmpeg -f lavfi -i "testsrc2=size=64x48:rate=1:duration=1" \
+///          -c:v libx265 -x265-params "...:sao=1:wpp=0" saod.hevc
+///
+/// Expected MD5 is the default raw yuv420p decode.
+
+///|
+let hevc_intra_saod_b64 : Bytes = bcat([
+  b"AAAAAUABDAH//wQIAAADAJ+oAAADAAAeugJAAAAAAUIBAQQIAAADAJ+oAAADAAAeoCCDFlurkyrAWgIAAAMAAgAAAwACEAAAAAFE",
+  b"AcFzwIkAAAEoAa94VflF5y7OcyG+teyPJaldGQcP6xviHBVdIYp0c/eOT8elckfyga8+xgTVOxj+zzXqChMYJIS+YXX2HpYorwFa",
+  b"vJcx/ZTbdcezIYoIWD///xTMhgjVphPjnEHcRYZyOmEbcz8rPLwX+j1hyxNx2+pELaBRCcBDt6PDAqofNgxpPy1Pt4ullfoaDlbw",
+  b"zHwcl9nv1YQYCi3AL48UwsAV09J9EHHBjnIZXZXi6kP2KzZU+naAUApNm1aFGbDTA18fHDlTN+7UH2iiREu4yHgx56ONpdttpjMh",
+  b"ya2GKoorxs1KdEN4OIhNY1YGgY1Gz/IPcArNMghg48TqTqcQ/NOdmFv3k2tiR8w0H5hch8CbqNaQ44ZMZAh/FjsbOq98WFdFpEYR",
+  b"s+9+nUK6MnJFJNz0GwS5a9B6NHm28NjuypGu24msahlzR+qPOOEHlPfyu0CH6JBbszc/CISpxYTE+K01BiolRNp9NWdUHsNb1jjv",
+  b"iGUUP1xiW/ZacuEiRg9ySQcEjFsAaDTvhAlP5lCUHRYJR41VVph7JoKcqmKfkrAaYW91wpnp99a04NNQCRBqrUmoau7PNtsew+k7",
+  b"zmxPq45+vesMBECQFIDbMKuQpxFX0hn8pC/jlgf/3ZUMfA9bzkSGqaa28NkT+YHzNUFJmCNY+nazS4FD1Cdczs7CuBVoPoQ7K84D",
+  b"HokOLjayORABXoRwyqckaMNpWY1AaqOhX+cHhmKFFGvRLSKOQfrpNWHX7fpUdDl3pQ59nVy767kOZkeC/6IHTs/FVnbLWy66yYzG",
+  b"5OSPcZs+oexWJIIG1oS3JIyWIQ8gi2QVF7uOge4dUY6Kqwdy1ymcVvsjU+GHhckYVGKDMy0el1jhWWqY6vlmdGBYdW9xZp0m5PUJ",
+  b"GT5T8ZqW4oRxqYP0E+y7aC2eqBaF0CjZTA13iyHTKEHtqrGqbm8T9tJTDQTuWjdA1CkAMMeDYZEYlfxHxSIQoVosXEZC0WXvNQoO",
+  b"jMCEyF+wWUV+FjEEvPfkeIy3XZWEH5aDS2MJ9Xc84PRV5uz0371iCIYvwdXGdW9Ihmrd1KEmkIsp3V5tw7TEAsIFh2958wcIm7yh",
+  b"WVPxkHHP2gOausYO3MvCgdXeb/c6Gss5",
+])
+
+///|
+test "hevc intra: SAO + deblocking matches default ffmpeg decode" {
+  let bytes = @libavutil.av_base64_decode(hevc_intra_saod_b64, 100000).unwrap()
+  let pic = ff_hevc_decode_intra_frame(bytes, false, 0).unwrap()
+  let yuv = hevc_intra_yuv(pic)
+  assert_eq(yuv.length(), 4608)
+  let digest = FixedArray::make(16, b'\x00')
+  @libavutil.av_md5_sum(digest, yuv, yuv.length())
+  let expected : FixedArray[Int32] = [
+    0xdd, 0x84, 0x18, 0x71, 0xc4, 0xed, 0x29, 0xc7, 0x5f, 0xae, 0x89, 0x00, 0x52,
+    0xb9, 0x5a, 0x08,
+  ]
+  for i in 0..<16 {
+    assert_eq(digest[i].to_int(), expected[i])
+  }
+}
+
+///|
 test "hevc intra: length-prefixed NAL input decodes identically" {
   let annexb = @libavutil.av_base64_decode(hevc_intra_b64, 100000).unwrap()
   let pkt = ff_h2645_packet_split(annexb, 0, Hevc, false).unwrap()

@@ -213,6 +213,58 @@ fn HevcCabac::cbf_luma(self : HevcCabac, trafo_depth : Int32) -> Int32 {
 }
 
 ///|
+/// `ff_hevc_sao_merge_flag_decode`. */
+fn HevcCabac::sao_merge_flag(self : HevcCabac) -> Bool {
+  self.bin(hevc_cabac_sao_merge_flag) != 0
+}
+
+///|
+/// `ff_hevc_sao_type_idx_decode`: 0 = off, 1 = band, 2 = edge. */
+fn HevcCabac::sao_type_idx(self : HevcCabac) -> Int32 {
+  if self.bin(hevc_cabac_sao_type_idx) == 0 {
+    return 0
+  }
+  if self.bypass() == 0 {
+    1
+  } else {
+    2
+  }
+}
+
+///|
+/// `ff_hevc_sao_offset_abs_decode`. */
+fn HevcCabac::sao_offset_abs(self : HevcCabac, bit_depth : Int32) -> Int32 {
+  let length = (1 << ((if bit_depth < 10 { bit_depth } else { 10 }) - 5)) - 1
+  let mut i = 0
+  while i < length && self.bypass() != 0 {
+    i = i + 1
+  }
+  i
+}
+
+///|
+/// `ff_hevc_sao_offset_sign_decode`. */
+fn HevcCabac::sao_offset_sign(self : HevcCabac) -> Int32 {
+  self.bypass()
+}
+
+///|
+/// `ff_hevc_sao_band_position_decode`. */
+fn HevcCabac::sao_band_position(self : HevcCabac) -> Int32 {
+  let mut value = self.bypass()
+  for _ in 0..<4 {
+    value = (value << 1) | self.bypass()
+  }
+  value
+}
+
+///|
+/// `ff_hevc_sao_eo_class_decode`. */
+fn HevcCabac::sao_eo_class(self : HevcCabac) -> Int32 {
+  (self.bypass() << 1) | self.bypass()
+}
+
+///|
 /// `ff_hevc_cu_qp_delta_abs`. */
 fn HevcCabac::cu_qp_delta_abs(self : HevcCabac) -> Result[Int32, String] {
   let mut prefix = 0
