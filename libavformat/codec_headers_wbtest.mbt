@@ -153,6 +153,14 @@ test "av1: keyframe frame header matches trace_headers" {
   assert_eq(fh.tile_rows, 1)
   assert_eq(fh.base_q_idx, 122)
   assert_false(fh.using_qmatrix)
+  assert_false(fh.segmentation_enabled)
+  assert_false(fh.delta_q_present)
+  assert_eq(fh.loop_filter_level, [0, 0])
+  assert_eq(fh.loop_filter_sharpness, 0)
+  assert_eq(fh.cdef_damping_minus_3, 1)
+  assert_eq(fh.cdef_bits, 0)
+  assert_eq(fh.tx_mode, 2)
+  assert_false(fh.reduced_tx_set)
 }
 
 ///|

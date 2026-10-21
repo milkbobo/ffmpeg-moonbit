@@ -385,6 +385,14 @@ pub struct Av1FrameHeader {
   tile_rows : Int32
   base_q_idx : Int32
   using_qmatrix : Bool
+  segmentation_enabled : Bool
+  delta_q_present : Bool
+  loop_filter_level : Array[Int32]
+  loop_filter_sharpness : Int32
+  cdef_damping_minus_3 : Int32
+  cdef_bits : Int32
+  tx_mode : Int32
+  reduced_tx_set : Bool
 }
 
 ///|
@@ -467,6 +475,14 @@ pub fn av1_parse_frame_header(
           tile_rows: 1,
           base_q_idx: 0,
           using_qmatrix: false,
+          segmentation_enabled: false,
+          delta_q_present: false,
+          loop_filter_level: [],
+          loop_filter_sharpness: 0,
+          cdef_damping_minus_3: 0,
+          cdef_bits: 0,
+          tx_mode: 0,
+          reduced_tx_set: false,
         })
       }
       let frame_type = br.read(2).to_int()
@@ -682,6 +698,68 @@ pub fn av1_parse_frame_header(
           }
         }
       }
+      let mut segmentation_enabled = false
+      let mut delta_q_present = false
+      let loop_filter_level : Array[Int32] = []
+      let mut loop_filter_sharpness = 0
+      let mut cdef_damping = 0
+      let mut cdef_bits = 0
+      let mut tx_mode = 0
+      let mut reduced_tx_set = false
+      if frame_type == av1_frame_key || frame_type == av1_frame_intra_only {
+        segmentation_enabled = br.read1() != 0
+        if segmentation_enabled {
+          return Err("PATCHWELCOME: AV1 segmentation params")
+        }
+        if base_q_idx > 0 {
+          delta_q_present = br.read1() != 0
+          if delta_q_present {
+            br.skip(2) // delta_q_res
+          }
+        }
+        let lf0 = br.read(6).to_int()
+        let lf1 = br.read(6).to_int()
+        loop_filter_level.push(lf0)
+        loop_filter_level.push(lf1)
+        if !seq.monochrome && (lf0 != 0 || lf1 != 0) {
+          loop_filter_level.push(br.read(6).to_int())
+        }
+        loop_filter_sharpness = br.read(3).to_int()
+        let lf_delta_enabled = br.read1() != 0
+        if lf_delta_enabled {
+          let update = br.read1() != 0
+          if update {
+            for _ in 0..<8 {
+              if br.read1() != 0 {
+                br.skip(7) // ref_delta su(1+6)
+              }
+            }
+            for _ in 0..<2 {
+              if br.read1() != 0 {
+                br.skip(7) // mode_delta su(1+6)
+              }
+            }
+          }
+        }
+        if seq.enable_cdef && !allow_intrabc {
+          cdef_damping = br.read(2).to_int()
+          cdef_bits = br.read(2).to_int()
+          for _ in 0..<(1 << cdef_bits) {
+            br.skip(4) // cdef_y_pri_strength
+            br.skip(2) // cdef_y_sec_strength
+            if !seq.monochrome {
+              br.skip(4)
+              br.skip(2)
+            }
+          }
+        }
+        if !seq.reduced_still_picture_header {
+          tx_mode = if br.read1() != 0 { 2 } else { 1 }
+          reduced_tx_set = br.read1() != 0
+        } else {
+          tx_mode = 1
+        }
+      }
       return Ok({
         show_existing_frame: false,
         frame_to_show_map_idx: 0,
@@ -709,6 +787,14 @@ pub fn av1_parse_frame_header(
         tile_rows,
         base_q_idx,
         using_qmatrix,
+        segmentation_enabled,
+        delta_q_present,
+        loop_filter_level,
+        loop_filter_sharpness,
+        cdef_damping_minus_3: cdef_damping,
+        cdef_bits,
+        tx_mode,
+        reduced_tx_set,
       })
     }
     pos = p + size
