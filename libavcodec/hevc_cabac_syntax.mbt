@@ -474,6 +474,12 @@ fn HevcCabac::sao_band_position(self : HevcCabac) -> Int32 {
 }
 
 ///|
+/// `hevc_transform_skip_flag_decode`: one context for luma, one for chroma. */
+fn HevcCabac::transform_skip_flag(self : HevcCabac, c_idx : Int32) -> Bool {
+  self.bin(hevc_cabac_transform_skip_flag + (if c_idx > 0 { 1 } else { 0 })) != 0
+}
+
+///|
 /// `ff_hevc_sao_eo_class_decode`. */
 fn HevcCabac::sao_eo_class(self : HevcCabac) -> Int32 {
   (self.bypass() << 1) | self.bypass()

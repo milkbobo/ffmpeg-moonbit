@@ -1,8 +1,9 @@
 ///|
 /// HEVC residual coding and inverse transform, ported from FFmpeg 9.0.2
 /// `libavcodec/hevc/cabac.c` (`ff_hevc_hls_residual_coding`) for 8/10/12-bit
-/// 4:2:0 streams without transform skip, RDPCM, cross-component prediction or
-/// scaling lists.
+/// 4:2:0 streams. Transform skip is supported (including the transform-skip
+/// significance contexts and rotation swap); RDPCM, cross-component prediction
+/// and scaling lists are not.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -93,7 +94,7 @@ pub fn hevc_hls_residual_coding(
   scan_idx : Int32,
   c_idx : Int32,
   qp_y : Int32,
-  _pred_mode_intra : Int32,
+  is_intra : Bool,
 ) -> Result[Unit, String] {
   let trafo_size = 1 << log2_trafo_size
   let coeffs : Array[Int32] = Array::make(trafo_size * trafo_size, 0)
@@ -114,6 +115,13 @@ pub fn hevc_hls_residual_coding(
   let shift = sps.bit_depth + log2_trafo_size - 5
   let add = 1 << (shift - 1)
   let scale = hevc_level_scale[qp % 6] << (qp / 6)
+  let transform_skip = if pps.transform_skip_enabled_flag != 0 &&
+    log2_trafo_size <= pps.log2_max_transform_skip_block_size {
+    cabac.transform_skip_flag(c_idx)
+  } else {
+    false
+  }
+  let ts_ctx = sps.transform_skip_context_enabled != 0 && transform_skip
 
   let (lx_prefix, ly_prefix) = cabac.last_sig_xy_prefix(c_idx, log2_trafo_size)
   last_x = lx_prefix
@@ -223,27 +231,32 @@ pub fn hevc_hls_residual_coding(
     if sig_cg[x_cg + y_cg * 8] != 0 && n_end >= 0 {
       let mut scf_offset = 0
       let mut map_base = 0
-      if c_idx != 0 {
-        scf_offset = 27
-      }
-      if log2_trafo_size == 2 {
-        map_base = 0
+      if ts_ctx {
+        map_base = 4 * 16
+        scf_offset = if c_idx == 0 { 40 } else { 41 }
       } else {
-        map_base = (prev_sig + 1) << 4
-        if c_idx == 0 {
-          if x_cg > 0 || y_cg > 0 {
-            scf_offset = scf_offset + 3
-          }
-          if log2_trafo_size == 3 {
-            scf_offset = scf_offset +
-              (if scan_idx == hevc_scan_diag { 9 } else { 15 })
-          } else {
-            scf_offset = scf_offset + 21
-          }
-        } else if log2_trafo_size == 3 {
-          scf_offset = scf_offset + 9
+        if c_idx != 0 {
+          scf_offset = 27
+        }
+        if log2_trafo_size == 2 {
+          map_base = 0
         } else {
-          scf_offset = scf_offset + 12
+          map_base = (prev_sig + 1) << 4
+          if c_idx == 0 {
+            if x_cg > 0 || y_cg > 0 {
+              scf_offset = scf_offset + 3
+            }
+            if log2_trafo_size == 3 {
+              scf_offset = scf_offset +
+                (if scan_idx == hevc_scan_diag { 9 } else { 15 })
+            } else {
+              scf_offset = scf_offset + 21
+            }
+          } else if log2_trafo_size == 3 {
+            scf_offset = scf_offset + 9
+          } else {
+            scf_offset = scf_offset + 12
+          }
         }
       }
       while n_end > 0 {
@@ -260,7 +273,9 @@ pub fn hevc_hls_residual_coding(
         n_end = n_end - 1
       }
       if implicit_non_zero == 0 {
-        if subset == 0 {
+        if ts_ctx {
+          scf_offset = if c_idx == 0 { 42 } else { 43 }
+        } else if subset == 0 {
           scf_offset = if c_idx == 0 { 0 } else { 27 }
         } else {
           scf_offset = scf_offset + 2
@@ -369,7 +384,21 @@ pub fn hevc_hls_residual_coding(
 
   let max_xy = if last_x > last_y { last_x } else { last_y }
   let bd = sps.bit_depth
-  if c_idx == 0 && log2_trafo_size == 2 {
+  if transform_skip {
+    if sps.transform_skip_rotation_enabled != 0 &&
+      log2_trafo_size == 2 &&
+      is_intra {
+      for i in 0..<8 {
+        let t = coeffs[i]
+        coeffs[i] = coeffs[16 - i - 1]
+        coeffs[16 - i - 1] = t
+      }
+    }
+    match hevc_dequant(coeffs, log2_trafo_size, bd) {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+  } else if c_idx == 0 && log2_trafo_size == 2 {
     hevc_transform_4x4_luma(coeffs, bd)
   } else if max_xy == 0 {
     match hevc_idct_dc(coeffs, log2_trafo_size, bd) {

@@ -509,7 +509,7 @@ fn HevcIntraDecoder::transform_unit(
           scan_luma,
           0,
           self.qp_y,
-          self.tu_mode,
+          self.cu_pred_mode == hevc_mode_intra,
         ) {
         Ok(_) => ()
         Err(e) => return Err(e)
@@ -546,7 +546,7 @@ fn HevcIntraDecoder::transform_unit(
             scan_chroma,
             1,
             self.qp_y,
-            self.tu_mode_c,
+            self.cu_pred_mode == hevc_mode_intra,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -580,7 +580,7 @@ fn HevcIntraDecoder::transform_unit(
             scan_chroma,
             2,
             self.qp_y,
-            self.tu_mode_c,
+            self.cu_pred_mode == hevc_mode_intra,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -615,7 +615,7 @@ fn HevcIntraDecoder::transform_unit(
             scan_chroma,
             1,
             self.qp_y,
-            self.tu_mode_c,
+            self.cu_pred_mode == hevc_mode_intra,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -647,7 +647,7 @@ fn HevcIntraDecoder::transform_unit(
             scan_chroma,
             2,
             self.qp_y,
-            self.tu_mode_c,
+            self.cu_pred_mode == hevc_mode_intra,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)

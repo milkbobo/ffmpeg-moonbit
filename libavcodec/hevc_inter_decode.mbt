@@ -13,7 +13,7 @@
 /// terminate bin and seeded from the state saved after the previous row's
 /// second CTB. Tiles are decoded in tile-scan order with a fresh CABAC state
 /// at each tile boundary. Rejected upstream: dependent slices, reference-list
-/// modification, tiles combined with WPP, PCM, scaling lists, transform skip,
+/// modification, tiles combined with WPP, PCM, scaling lists, RDPCM,
 /// current-picture referencing.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
@@ -1082,8 +1082,8 @@ fn hevc_decode_picture(
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")
   }
-  if pps.transform_skip_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC transform skip is not supported")
+  if sps.implicit_rdpcm_enabled != 0 || sps.explicit_rdpcm_enabled != 0 {
+    return Err("PATCHWELCOME: HEVC RDPCM is not supported")
   }
   if pps.transquant_bypass_enable_flag != 0 {
     return Err("PATCHWELCOME: HEVC transquant bypass is not supported")
