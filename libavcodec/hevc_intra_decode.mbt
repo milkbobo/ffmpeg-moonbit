@@ -4,9 +4,9 @@
 /// `hls_transform_tree`, `hls_transform_unit`) and
 /// `libavcodec/hevc/pred_template.c`.
 ///
-/// Supported: 8-bit 4:2:0, one slice per picture, no SAO, no deblocking
-/// (the returned picture is pre-loop-filter), no PCM, no scaling lists, no
-/// transform skip/RDPCM/cross-component prediction, no tiles or WPP.
+/// Supported: 8-bit 4:2:0, one slice per picture, all-intra deblocking, no
+/// SAO, no PCM, no scaling lists, no transform skip/RDPCM/cross-component
+/// prediction, no tiles or WPP.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -26,6 +26,9 @@ struct HevcIntraDecoder {
   tab_ipm : Array[Int32]
   tab_ct_depth : Array[Int32]
   qp_y_tab : Array[Int32]
+  vertical_bs : Array[Int32]
+  horizontal_bs : Array[Int32]
+  bs_width : Int32
   na : HevcNeighbourAvail
   mut ctb_left : Bool
   mut ctb_up : Bool
@@ -67,6 +70,15 @@ fn hevc_intra_decoder_new(
     tab_ipm: Array::make(sps.min_pu_width * sps.min_pu_height, 1),
     tab_ct_depth: Array::make(sps.min_cb_width * sps.min_cb_height, 0),
     qp_y_tab: Array::make(sps.min_cb_width * sps.min_cb_height, 0),
+    vertical_bs: Array::make(
+      ((sps.width >> 2) + 1) * ((sps.height >> 2) + 1),
+      0,
+    ),
+    horizontal_bs: Array::make(
+      ((sps.width >> 2) + 1) * ((sps.height >> 2) + 1),
+      0,
+    ),
+    bs_width: (sps.width >> 2) + 1,
     na: hevc_neighbour_avail(),
     ctb_left: false,
     ctb_up: false,
@@ -121,6 +133,31 @@ fn HevcIntraDecoder::set_neighbour_available(
     false
   } else {
     self.na.cand_left
+  }
+}
+
+///|
+/// `ff_hevc_deblocking_boundary_strengths` for an all-intra picture: every
+/// TU boundary lying on the 8-pixel grid has bS=2.
+fn HevcIntraDecoder::mark_deblock(
+  self : HevcIntraDecoder,
+  x0 : Int32,
+  y0 : Int32,
+  size : Int32,
+) -> Unit {
+  if x0 > 0 && (x0 & 7) == 0 {
+    let mut i = 0
+    while i < size {
+      self.vertical_bs[(x0 + (y0 + i) * self.bs_width) >> 2] = 2
+      i = i + 4
+    }
+  }
+  if y0 > 0 && (y0 & 7) == 0 {
+    let mut i = 0
+    while i < size {
+      self.horizontal_bs[(x0 + i + y0 * self.bs_width) >> 2] = 2
+      i = i + 4
+    }
   }
 }
 
@@ -700,6 +737,9 @@ fn HevcIntraDecoder::transform_tree(
       Ok(_) => ()
       Err(e) => return Err(e)
     }
+    if !self.sh.disable_deblocking_filter_flag {
+      self.mark_deblock(x0, y0, 1 << log2_trafo_size)
+    }
   }
   Ok(())
 }
@@ -849,10 +889,11 @@ fn HevcIntraDecoder::coding_quadtree(
 ///|
 /// Decode the single intra slice of `data` (Annex B or length-prefixed) into
 /// pre-loop-filter 8-bit 4:2:0 planes.
-pub fn ff_hevc_decode_intra_frame(
+fn hevc_decode_intra_frame_impl(
   data : Bytes,
   is_nalff : Bool,
   nal_length_size : Int32,
+  apply_filters : Bool,
 ) -> Result[HevcPicture, String] {
   let ps = new_hevc_param_sets()
   let pkt = match ff_h2645_packet_split(data, nal_length_size, Hevc, is_nalff) {
@@ -961,5 +1002,39 @@ pub fn ff_hevc_decode_intra_frame(
     }
     rs = rs + 1
   }
+  if apply_filters {
+    hevc_deblock_picture(
+      dec.pic,
+      sps,
+      pps,
+      sh,
+      dec.qp_y_tab,
+      dec.vertical_bs,
+      dec.horizontal_bs,
+      dec.bs_width,
+    )
+  }
   Ok(dec.pic)
+}
+
+///|
+/// Decode one intra slice and apply the in-loop filters (deblocking, and SAO
+/// once supported).
+pub fn ff_hevc_decode_intra_frame(
+  data : Bytes,
+  is_nalff : Bool,
+  nal_length_size : Int32,
+) -> Result[HevcPicture, String] {
+  hevc_decode_intra_frame_impl(data, is_nalff, nal_length_size, true)
+}
+
+///|
+/// Decode one intra slice without in-loop filters (pre-deblock reconstruction),
+/// for bit-exact comparison against `ffmpeg -skip_loop_filter all`.
+pub fn ff_hevc_decode_intra_frame_unfiltered(
+  data : Bytes,
+  is_nalff : Bool,
+  nal_length_size : Int32,
+) -> Result[HevcPicture, String] {
+  hevc_decode_intra_frame_impl(data, is_nalff, nal_length_size, false)
 }

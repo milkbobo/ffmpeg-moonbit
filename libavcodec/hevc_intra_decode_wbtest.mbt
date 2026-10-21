@@ -114,7 +114,7 @@ let hevc_intra_strong_b64 : Bytes = bcat([
 ///|
 test "hevc intra: 64x64 strong-smoothing sample matches ffmpeg" {
   let bytes = @libavutil.av_base64_decode(hevc_intra_strong_b64, 100000).unwrap()
-  let pic = ff_hevc_decode_intra_frame(bytes, false, 0).unwrap()
+  let pic = ff_hevc_decode_intra_frame_unfiltered(bytes, false, 0).unwrap()
   assert_eq(pic.width, 64)
   assert_eq(pic.height, 64)
   let yuv = hevc_intra_yuv(pic)
@@ -160,7 +160,7 @@ let hevc_intra_partial_b64 : Bytes = bcat([
 ///|
 test "hevc intra: 80x64 partial-CTB sample matches ffmpeg" {
   let bytes = @libavutil.av_base64_decode(hevc_intra_partial_b64, 100000).unwrap()
-  let pic = ff_hevc_decode_intra_frame(bytes, false, 0).unwrap()
+  let pic = ff_hevc_decode_intra_frame_unfiltered(bytes, false, 0).unwrap()
   assert_eq(pic.width, 80)
   assert_eq(pic.height, 64)
   let yuv = hevc_intra_yuv(pic)
@@ -177,9 +177,26 @@ test "hevc intra: 80x64 partial-CTB sample matches ffmpeg" {
 }
 
 ///|
-test "hevc intra: 64x48 four-CTU picture matches ffmpeg without loop filter" {
+test "hevc intra: deblocking matches ffmpeg for the 64x48 sample" {
   let bytes = @libavutil.av_base64_decode(hevc_intra_multi_b64, 100000).unwrap()
   let pic = ff_hevc_decode_intra_frame(bytes, false, 0).unwrap()
+  let yuv = hevc_intra_yuv(pic)
+  assert_eq(yuv.length(), 4608)
+  let digest = FixedArray::make(16, b'\x00')
+  @libavutil.av_md5_sum(digest, yuv, yuv.length())
+  let expected : FixedArray[Int32] = [
+    0x8b, 0xe6, 0x77, 0x15, 0x85, 0x76, 0xf0, 0xd3, 0x0c, 0xda, 0x43, 0x32, 0x58,
+    0xd2, 0x3b, 0xd9,
+  ]
+  for i in 0..<16 {
+    assert_eq(digest[i].to_int(), expected[i])
+  }
+}
+
+///|
+test "hevc intra: 64x48 four-CTU picture matches ffmpeg without loop filter" {
+  let bytes = @libavutil.av_base64_decode(hevc_intra_multi_b64, 100000).unwrap()
+  let pic = ff_hevc_decode_intra_frame_unfiltered(bytes, false, 0).unwrap()
   assert_eq(pic.width, 64)
   assert_eq(pic.height, 48)
   let yuv = hevc_intra_yuv(pic)
@@ -189,6 +206,22 @@ test "hevc intra: 64x48 four-CTU picture matches ffmpeg without loop filter" {
   let expected : FixedArray[Int32] = [
     0xee, 0x7f, 0x36, 0xf2, 0xb8, 0xb6, 0xf9, 0xaf, 0x05, 0x2e, 0x53, 0xb3, 0x9c,
     0xe4, 0x4c, 0x9c,
+  ]
+  for i in 0..<16 {
+    assert_eq(digest[i].to_int(), expected[i])
+  }
+}
+
+///|
+test "hevc intra: deblocking 32x32" {
+  let bytes = @libavutil.av_base64_decode(hevc_intra_b64, 100000).unwrap()
+  let pic = ff_hevc_decode_intra_frame(bytes, false, 0).unwrap()
+  let yuv = hevc_intra_yuv(pic)
+  let digest = FixedArray::make(16, b'\x00')
+  @libavutil.av_md5_sum(digest, yuv, yuv.length())
+  let expected : FixedArray[Int32] = [
+    0xd6, 0xd0, 0xe1, 0x0c, 0xde, 0x08, 0x65, 0x24, 0x31, 0xef, 0xda, 0x51, 0xb8,
+    0xc8, 0xfa, 0x14,
   ]
   for i in 0..<16 {
     assert_eq(digest[i].to_int(), expected[i])
@@ -210,7 +243,11 @@ test "hevc intra: length-prefixed NAL input decodes identically" {
       out.push(b)
     }
   }
-  let pic = ff_hevc_decode_intra_frame(Bytes::from_array(out), true, 4).unwrap()
+  let pic = ff_hevc_decode_intra_frame_unfiltered(
+    Bytes::from_array(out),
+    true,
+    4,
+  ).unwrap()
   let yuv = hevc_intra_yuv(pic)
   let digest = FixedArray::make(16, b'\x00')
   @libavutil.av_md5_sum(digest, yuv, yuv.length())
@@ -226,7 +263,7 @@ test "hevc intra: length-prefixed NAL input decodes identically" {
 ///|
 test "hevc intra: real x265 IDR frame matches ffmpeg without loop filter" {
   let bytes = @libavutil.av_base64_decode(hevc_intra_b64, 100000).unwrap()
-  let pic = ff_hevc_decode_intra_frame(bytes, false, 0).unwrap()
+  let pic = ff_hevc_decode_intra_frame_unfiltered(bytes, false, 0).unwrap()
   assert_eq(pic.width, 32)
   assert_eq(pic.height, 32)
   let yuv = hevc_intra_yuv(pic)
