@@ -929,6 +929,12 @@ pub struct Av1TileGroup {
   tile_end : Int32
   num_tiles : Int32
   header_bits : Int32
+  /// Byte offset of the first tile payload within the OBU payload.
+  data_offset : Int32
+  /// Tile sizes in bytes (last tile size is implicit).
+  tile_sizes : Array[Int32]
+  /// Bytes of tile payload following the header.
+  data_size : Int32
 }
 
 ///|
@@ -975,11 +981,51 @@ pub fn av1_parse_tile_group(
           }
         }
       }
+      let aligned = (br.count() + 7) / 8 * 8
+      let data_offset = aligned / 8
+      let sizes : Array[Int32] = []
+      let total = payload.length()
+      let count = end - start + 1
+      if count > 1 && fh.tile_size_bytes_minus1 >= 0 {
+        let size_bytes = fh.tile_size_bytes_minus1 + 1
+        let mut pbyte = data_offset
+        for _ in 0..<(count - 1) {
+          if pbyte + size_bytes > total {
+            return Err("av1: truncated tile size")
+          }
+          let mut v = 0
+          for b in 0..<size_bytes {
+            v = v | (payload[pbyte + b].to_int() << (8 * b))
+          }
+          pbyte = pbyte + size_bytes
+          sizes.push(v + 1)
+        }
+        let mut used = 0
+        for sz in sizes {
+          used = used + sz
+        }
+        let last = total - pbyte - used
+        if last < 0 {
+          return Err("av1: tile sizes exceed OBU")
+        }
+        sizes.push(last)
+      }
       return Ok({
         tile_start: start,
         tile_end: end,
         num_tiles,
-        header_bits: br.count(),
+        header_bits: aligned,
+        data_offset,
+        tile_sizes: sizes,
+        data_size: if sizes.length() > 0 {
+          let mut dsum = 0
+          for sz in sizes {
+            dsum = dsum + sz
+          }
+          dsum
+        } else {
+          total - data_offset
+        },
       })
     }
     pos = p + size
