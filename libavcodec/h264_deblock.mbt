@@ -356,7 +356,7 @@ fn h264_bs_pair(
     return if mb_edge { 4 } else { 3 }
   }
   if pnz > 0 || qnz > 0 {
-    return 3
+    return if mb_edge { 3 } else { 2 }
   }
   if pref != qref {
     return 1
@@ -364,8 +364,6 @@ fn h264_bs_pair(
   let dx = if pmvx > qmvx { pmvx - qmvx } else { qmvx - pmvx }
   let dy = if pmvy > qmvy { pmvy - qmvy } else { qmvy - pmvy }
   if dx >= 4 || dy >= 4 {
-    2
-  } else if dx >= 1 || dy >= 1 {
     1
   } else {
     0
@@ -528,7 +526,11 @@ fn h264_filter_mb(
               yoff + 4 * s * ystep,
               ctx.ystride,
               1,
-              qp,
+              if edge == 0 {
+                yqp
+              } else {
+                qp
+              },
               a,
               b,
               bs[s],
