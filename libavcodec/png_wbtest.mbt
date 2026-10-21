@@ -269,3 +269,27 @@ test "png: Adam7 interlaced RGB and 1-bit gray match ffmpeg" {
   assert_eq(mono.pixels.length(), 32)
   assert_eq(png_test_md5(mono.pixels), "946fb03323d3e4981674221fe6b0fd43")
 }
+
+///|
+let png_gray2_b64 : Bytes = bcat([
+  b"iVBORw0KGgoAAAANSUhEUgAAABAAAAAQAgAAAABwKLgcAAAAFUlEQVR42mOQlpaWZti4ceNGBqqwAM2dGYGmkduKAAAAAElFTkSu",
+  b"QmCC",
+])
+
+///|
+let png_gray4_b64 : Bytes = bcat([
+  b"iVBORw0KGgoAAAANSUhEUgAAABAAAAAQBAAAAAD/aE28AAAATElEQVR42i3NQRFAEQAA0Z1RQQUVVFBBBRVUUEEFFX4FKqggwb/s",
+  b"9V0eoe00blnUL/aT52NJPIkiMSWuRJYYEkciSXSJLRElzAPm9Qferz/BF7WI4wAAAABJRU5ErkJggg==",
+])
+
+///|
+test "png: 2/4-bit grayscale expands like ffmpeg" {
+  let g2 = png_test_decode(png_gray2_b64, 10000)
+  assert_eq(g2.pix_fmt, "gray")
+  assert_eq(g2.pixels.length(), 256)
+  assert_eq(png_test_md5(g2.pixels), "ee77a2aa137cc02bc6678d6032330080")
+  let g4 = png_test_decode(png_gray4_b64, 10000)
+  assert_eq(g4.pix_fmt, "gray")
+  assert_eq(g4.pixels.length(), 256)
+  assert_eq(png_test_md5(g4.pixels), "bd16b808a77a6781c1409192a8a82787")
+}
