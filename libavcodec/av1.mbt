@@ -386,6 +386,8 @@ pub struct Av1FrameHeader {
   base_q_idx : Int32
   using_qmatrix : Bool
   segmentation_enabled : Bool
+  segmentation_feature_mask : Array[Int32]
+  segmentation_alt_q : Array[Int32]
   delta_q_present : Bool
   loop_filter_level : Array[Int32]
   loop_filter_sharpness : Int32
@@ -483,6 +485,8 @@ pub fn av1_parse_frame_header(
           base_q_idx: 0,
           using_qmatrix: false,
           segmentation_enabled: false,
+          segmentation_feature_mask: [],
+          segmentation_alt_q: [],
           delta_q_present: false,
           loop_filter_level: [],
           loop_filter_sharpness: 0,
@@ -541,7 +545,7 @@ pub fn av1_parse_frame_header(
         0
       }
       let mut refresh = 0
-      let mut primary_ref = 0
+      let mut primary_ref = 7
       let refs : Array[Int32] = []
       let mut short_sig = false
       if frame_type == av1_frame_key && show_frame {
@@ -731,6 +735,8 @@ pub fn av1_parse_frame_header(
         }
       }
       let mut segmentation_enabled = false
+      let mut segmentation_masks : Array[Int32] = []
+      let mut segmentation_alt_qs : Array[Int32] = []
       let mut delta_q_present = false
       let loop_filter_level : Array[Int32] = []
       let mut loop_filter_sharpness = 0
@@ -743,9 +749,42 @@ pub fn av1_parse_frame_header(
       let global_motion : Array[Bool] = []
       {
         segmentation_enabled = br.read1() != 0
+        let seg_masks : Array[Int32] = []
+        let seg_alt_q : Array[Int32] = []
         if segmentation_enabled {
-          return Err("PATCHWELCOME: AV1 segmentation params")
+          let mut update_map = true
+          let mut update_data = true
+          if primary_ref != 7 {
+            update_map = br.read1() != 0
+            if update_map {
+              ignore(br.read1()) // segmentation_temporal_update
+            }
+            update_data = br.read1() != 0
+          }
+          if update_data {
+            for _ in 0..<8 {
+              let mut mask = 0
+              let mut altq = 0
+              for f in 0..<8 {
+                if br.read1() != 0 {
+                  mask = mask | (1 << f)
+                  if f == 0 {
+                    let v = br.read(9).to_int()
+                    altq = if (v & 0x100) != 0 { v - 0x200 } else { v }
+                  } else if f <= 4 {
+                    br.skip(7)
+                  } else if f == 5 {
+                    br.skip(3)
+                  }
+                }
+              }
+              seg_masks.push(mask)
+              seg_alt_q.push(altq)
+            }
+          }
         }
+        segmentation_masks = seg_masks
+        segmentation_alt_qs = seg_alt_q
         if base_q_idx > 0 {
           delta_q_present = br.read1() != 0
           if delta_q_present {
@@ -839,6 +878,8 @@ pub fn av1_parse_frame_header(
         base_q_idx,
         using_qmatrix,
         segmentation_enabled,
+        segmentation_feature_mask: segmentation_masks,
+        segmentation_alt_q: segmentation_alt_qs,
         delta_q_present,
         loop_filter_level,
         loop_filter_sharpness,
