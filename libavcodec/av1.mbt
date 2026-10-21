@@ -57,7 +57,7 @@ fn av1_leb128(data : BytesView, pos : Ref[Int32]) -> Int32 {
     }
     let b = data[pos.val].to_int()
     pos.val = pos.val + 1
-    value = value | ((b & 0x7F).to_uint() << shift)
+    value = value | ((b & 0x7F).reinterpret_as_uint() << shift)
     if (b & 0x80) == 0 {
       break
     }
@@ -98,25 +98,25 @@ fn av1_obu_bit_length(data : BytesView, start : Int32, size : Int32) -> Int32 {
 ///|
 /// `parse_color_config` from libavformat/av1.c. */
 fn av1_parse_color_config(seq : Av1SequenceParameters, br : BitReader) -> Unit {
-  let high_bitdepth = br.read(1).to_int()
+  let high_bitdepth = br.read(1).reinterpret_as_int()
   let mut twelve_bit = 0
   if seq.profile == 2 && high_bitdepth != 0 {
-    twelve_bit = br.read(1).to_int()
+    twelve_bit = br.read(1).reinterpret_as_int()
   }
   seq.bitdepth = 8 + high_bitdepth * 2 + twelve_bit * 2
   seq.monochrome = if seq.profile == 1 { false } else { br.read(1) != 0 }
   seq.color_description_present_flag = br.read(1) != 0
   if seq.color_description_present_flag {
-    seq.color_primaries = br.read(8).to_int()
-    seq.transfer_characteristics = br.read(8).to_int()
-    seq.matrix_coefficients = br.read(8).to_int()
+    seq.color_primaries = br.read(8).reinterpret_as_int()
+    seq.transfer_characteristics = br.read(8).reinterpret_as_int()
+    seq.matrix_coefficients = br.read(8).reinterpret_as_int()
   } else {
     seq.color_primaries = 2 // AVCOL_PRI_UNSPECIFIED
     seq.transfer_characteristics = 2 // AVCOL_TRC_UNSPECIFIED
     seq.matrix_coefficients = 2 // AVCOL_SPC_UNSPECIFIED
   }
   if seq.monochrome {
-    seq.color_range = br.read(1).to_int()
+    seq.color_range = br.read(1).reinterpret_as_int()
     seq.chroma_subsampling_x = true
     seq.chroma_subsampling_y = true
     seq.chroma_sample_position = 0
@@ -129,7 +129,7 @@ fn av1_parse_color_config(seq : Av1SequenceParameters, br : BitReader) -> Unit {
     seq.chroma_subsampling_x = false
     seq.chroma_subsampling_y = false
   } else {
-    seq.color_range = br.read(1).to_int()
+    seq.color_range = br.read(1).reinterpret_as_int()
     if seq.profile == 0 {
       seq.chroma_subsampling_x = true
       seq.chroma_subsampling_y = true
@@ -148,7 +148,7 @@ fn av1_parse_color_config(seq : Av1SequenceParameters, br : BitReader) -> Unit {
       seq.chroma_subsampling_y = false
     }
     if seq.chroma_subsampling_x && seq.chroma_subsampling_y {
-      seq.chroma_sample_position = br.read(2).to_int()
+      seq.chroma_sample_position = br.read(2).reinterpret_as_int()
     }
   }
   seq.separate_uv_delta_q = br.read(1) != 0
@@ -181,12 +181,12 @@ fn av1_parse_sequence_payload(
     return Err("av1: empty sequence header")
   }
   let br = BitReader::with_size(data, bits)
-  seq.profile = br.read(3).to_int()
+  seq.profile = br.read(3).reinterpret_as_int()
   ignore(br.read(1)) // still_picture
   let reduced = br.read(1) != 0
   seq.reduced_still_picture_header = reduced
   if reduced {
-    seq.level = br.read(5).to_int()
+    seq.level = br.read(5).reinterpret_as_int()
     seq.tier = 0
   } else {
     let mut decoder_model_info_present = false
@@ -199,16 +199,16 @@ fn av1_parse_sequence_payload(
       }
       decoder_model_info_present = br.read(1) != 0
       if decoder_model_info_present {
-        buffer_delay_length_minus_1 = br.read(5).to_int()
+        buffer_delay_length_minus_1 = br.read(5).reinterpret_as_int()
         br.skip(32 + 10 + 5) // num_units_in_decoding_tick, lengths
       }
     }
     let initial_display_delay_present = br.read(1) != 0
-    let operating_points = br.read(5).to_int()
+    let operating_points = br.read(5).reinterpret_as_int()
     for i in 0..<=operating_points {
       br.skip(12) // operating_point_idc
-      let level = br.read(5).to_int()
-      let tier = if level > 7 { br.read(1).to_int() } else { 0 }
+      let level = br.read(5).reinterpret_as_int()
+      let tier = if level > 7 { br.read(1).reinterpret_as_int() } else { 0 }
       if decoder_model_info_present && br.read(1) != 0 {
         br.skip(buffer_delay_length_minus_1 + 1)
         br.skip(buffer_delay_length_minus_1 + 1)
@@ -223,15 +223,15 @@ fn av1_parse_sequence_payload(
       }
     }
   }
-  let width_bits = br.read(4).to_int() + 1
-  let height_bits = br.read(4).to_int() + 1
-  seq.width = br.read(width_bits).to_int() + 1
-  seq.height = br.read(height_bits).to_int() + 1
+  let width_bits = br.read(4).reinterpret_as_int() + 1
+  let height_bits = br.read(4).reinterpret_as_int() + 1
+  seq.width = br.read(width_bits).reinterpret_as_int() + 1
+  seq.height = br.read(height_bits).reinterpret_as_int() + 1
   if !reduced {
     seq.frame_id_numbers_present = br.read(1) != 0
     if seq.frame_id_numbers_present {
-      seq.delta_frame_id_length = br.read(4).to_int() + 2
-      seq.additional_frame_id_length = br.read(3).to_int() + 1
+      seq.delta_frame_id_length = br.read(4).reinterpret_as_int() + 2
+      seq.additional_frame_id_length = br.read(3).reinterpret_as_int() + 1
     }
   }
   seq.use_128x128_superblock = br.read(1) != 0
@@ -246,18 +246,18 @@ fn av1_parse_sequence_payload(
     if choose_sct {
       seq.seq_force_screen_content_tools = 2
     } else {
-      seq.seq_force_screen_content_tools = br.read(1).to_int()
+      seq.seq_force_screen_content_tools = br.read(1).reinterpret_as_int()
     }
     if seq.seq_force_screen_content_tools != 0 {
       let choose_mv = br.read(1) != 0
       if choose_mv {
         seq.seq_force_integer_mv = 2
       } else {
-        seq.seq_force_integer_mv = br.read(1).to_int()
+        seq.seq_force_integer_mv = br.read(1).reinterpret_as_int()
       }
     }
     if seq.enable_order_hint {
-      seq.order_hint_bits = br.read(3).to_int() + 1
+      seq.order_hint_bits = br.read(3).reinterpret_as_int() + 1
     }
   }
   seq.enable_superres = br.read(1) != 0
@@ -314,16 +314,16 @@ pub fn av1_parse_sequence_header(
     }
     let br = BitReader::with_size(data, 32)
     br.skip(8)
-    seq.profile = br.read(3).to_int()
-    seq.level = br.read(5).to_int()
-    seq.tier = br.read(1).to_int()
-    let high = br.read(1).to_int()
-    let twelve = br.read(1).to_int()
+    seq.profile = br.read(3).reinterpret_as_int()
+    seq.level = br.read(5).reinterpret_as_int()
+    seq.tier = br.read(1).reinterpret_as_int()
+    let high = br.read(1).reinterpret_as_int()
+    let twelve = br.read(1).reinterpret_as_int()
     seq.bitdepth = 8 + high * 2 + twelve * 2
     seq.monochrome = br.read(1) != 0
     seq.chroma_subsampling_x = br.read(1) != 0
     seq.chroma_subsampling_y = br.read(1) != 0
-    seq.chroma_sample_position = br.read(2).to_int()
+    seq.chroma_sample_position = br.read(2).reinterpret_as_int()
     return Ok(seq)
   }
   let mut pos = 0
@@ -484,7 +484,7 @@ pub fn av1_parse_frame_header(
       if show_existing {
         return Ok({
           show_existing_frame: true,
-          frame_to_show_map_idx: br.read(3).to_int(),
+          frame_to_show_map_idx: br.read(3).reinterpret_as_int(),
           frame_type: 0,
           show_frame: true,
           showable_frame: false,
@@ -551,7 +551,7 @@ pub fn av1_parse_frame_header(
           clip_to_restricted_range: false,
         })
       }
-      let frame_type = br.read(2).to_int()
+      let frame_type = br.read(2).reinterpret_as_int()
       let show_frame = br.read(1) != 0
       let showable = if show_frame { false } else { br.read(1) != 0 }
       let error_resilient = if frame_type == av1_frame_switch ||
@@ -588,7 +588,7 @@ pub fn av1_parse_frame_header(
         br.read(1) != 0
       }
       let order_hint = if seq.enable_order_hint {
-        br.read(seq.order_hint_bits).to_int()
+        br.read(seq.order_hint_bits).reinterpret_as_int()
       } else {
         0
       }
@@ -603,11 +603,11 @@ pub fn av1_parse_frame_header(
         refresh = if seq.reduced_still_picture_header {
           0xFF
         } else {
-          br.read(8).to_int()
+          br.read(8).reinterpret_as_int()
         }
       } else {
-        primary_ref = if error_resilient { 7 } else { br.read(3).to_int() }
-        refresh = br.read(8).to_int()
+        primary_ref = if error_resilient { 7 } else { br.read(3).reinterpret_as_int() }
+        refresh = br.read(8).reinterpret_as_int()
         if seq.enable_order_hint {
           short_sig = br.read(1) != 0
         }
@@ -615,7 +615,7 @@ pub fn av1_parse_frame_header(
           br.skip(6) // last_frame_idx + gold_frame_idx
         } else {
           for _ in 0..<7 {
-            refs.push(br.read(3).to_int())
+            refs.push(br.read(3).reinterpret_as_int())
             if seq.frame_id_numbers_present {
               br.skip(seq.delta_frame_id_length)
             }
@@ -625,16 +625,16 @@ pub fn av1_parse_frame_header(
       let mut width = seq.width
       let mut height = seq.height
       if frame_size_override {
-        let wb = br.read(4).to_int() + 1
-        let hb = br.read(4).to_int() + 1
-        width = br.read(wb).to_int() + 1
-        height = br.read(hb).to_int() + 1
+        let wb = br.read(4).reinterpret_as_int() + 1
+        let hb = br.read(4).reinterpret_as_int() + 1
+        width = br.read(wb).reinterpret_as_int() + 1
+        height = br.read(hb).reinterpret_as_int() + 1
       }
       let mut render_width = width
       let mut render_height = height
       if br.read(1) != 0 {
-        render_width = br.read(16).to_int() + 1
-        render_height = br.read(16).to_int() + 1
+        render_width = br.read(16).reinterpret_as_int() + 1
+        render_height = br.read(16).reinterpret_as_int() + 1
       }
       let mut use_superres = false
       if seq.enable_superres && !frame_size_override {
@@ -658,7 +658,7 @@ pub fn av1_parse_frame_header(
         if filter_switchable {
           interpolation_filter = 3
         } else {
-          interpolation_filter = br.read(2).to_int()
+          interpolation_filter = br.read(2).reinterpret_as_int()
         }
         if !seq.reduced_still_picture_header {
           motion_mode_switchable = br.read(1) != 0
@@ -752,11 +752,11 @@ pub fn av1_parse_frame_header(
         if tile_cols_log2 > 0 || tile_rows_log2 > 0 {
           context_update_tile_id = br
             .read(tile_cols_log2 + tile_rows_log2)
-            .to_int()
-          tile_size_minus1 = br.read(2).to_int()
+            .reinterpret_as_int()
+          tile_size_minus1 = br.read(2).reinterpret_as_int()
         }
         // quantization_params
-        base_q_idx = br.read(8).to_int()
+        base_q_idx = br.read(8).reinterpret_as_int()
         if br.read1() != 0 {
           br.skip(7) // delta_q_y_dc
         }
@@ -841,7 +841,7 @@ pub fn av1_parse_frame_header(
                 if br.read1() != 0 {
                   mask = mask | (1 << f)
                   if f == 0 {
-                    let v = br.read(9).to_int()
+                    let v = br.read(9).reinterpret_as_int()
                     altq = if (v & 0x100) != 0 { v - 0x200 } else { v }
                   } else if f <= 4 {
                     br.skip(7)
@@ -863,15 +863,15 @@ pub fn av1_parse_frame_header(
             br.skip(2) // delta_q_res
           }
         }
-        let lf0 = br.read(6).to_int()
-        let lf1 = br.read(6).to_int()
+        let lf0 = br.read(6).reinterpret_as_int()
+        let lf1 = br.read(6).reinterpret_as_int()
         loop_filter_level.push(lf0)
         loop_filter_level.push(lf1)
         if !seq.monochrome && (lf0 != 0 || lf1 != 0) {
-          loop_filter_level.push(br.read(6).to_int())
-          loop_filter_level.push(br.read(6).to_int())
+          loop_filter_level.push(br.read(6).reinterpret_as_int())
+          loop_filter_level.push(br.read(6).reinterpret_as_int())
         }
-        loop_filter_sharpness = br.read(3).to_int()
+        loop_filter_sharpness = br.read(3).reinterpret_as_int()
         let lf_delta_enabled = br.read1() != 0
         if lf_delta_enabled {
           let update = br.read1() != 0
@@ -889,8 +889,8 @@ pub fn av1_parse_frame_header(
           }
         }
         if seq.enable_cdef && !allow_intrabc {
-          cdef_damping = br.read(2).to_int()
-          cdef_bits = br.read(2).to_int()
+          cdef_damping = br.read(2).reinterpret_as_int()
+          cdef_bits = br.read(2).reinterpret_as_int()
           for _ in 0..<(1 << cdef_bits) {
             br.skip(4) // cdef_y_pri_strength
             br.skip(2) // cdef_y_sec_strength
@@ -924,7 +924,7 @@ pub fn av1_parse_frame_header(
         if seq.film_grain_params_present && (show_frame || showable) {
           apply_grain = br.read1() != 0
           if apply_grain {
-            grain_seed = br.read(16).to_int()
+            grain_seed = br.read(16).reinterpret_as_int()
             let update = if frame_type == av1_frame_inter {
               br.read1() != 0
             } else {
@@ -933,7 +933,7 @@ pub fn av1_parse_frame_header(
             if !update {
               return Err("PATCHWELCOME: AV1 grain from reference")
             }
-            num_y_points = br.read(4).to_int()
+            num_y_points = br.read(4).reinterpret_as_int()
             if num_y_points > 14 {
               return Err("av1: invalid grain points")
             }
@@ -951,14 +951,14 @@ pub fn av1_parse_frame_header(
                 num_y_points == 0
               )
             if !skip_chroma {
-              num_cb_points = br.read(4).to_int()
+              num_cb_points = br.read(4).reinterpret_as_int()
               if num_cb_points > 10 {
                 return Err("av1: invalid cb grain points")
               }
               for _ in 0..<num_cb_points {
                 br.skip(16)
               }
-              num_cr_points = br.read(4).to_int()
+              num_cr_points = br.read(4).reinterpret_as_int()
               if num_cr_points > 10 {
                 return Err("av1: invalid cr grain points")
               }
@@ -966,8 +966,8 @@ pub fn av1_parse_frame_header(
                 br.skip(16)
               }
             }
-            grain_scaling_minus_8 = br.read(2).to_int()
-            ar_coeff_lag = br.read(2).to_int()
+            grain_scaling_minus_8 = br.read(2).reinterpret_as_int()
+            ar_coeff_lag = br.read(2).reinterpret_as_int()
             let num_pos_luma = 2 * ar_coeff_lag * (ar_coeff_lag + 1)
             let num_pos_chroma = if num_y_points > 0 {
               br.skip(8 * num_pos_luma)
@@ -981,17 +981,17 @@ pub fn av1_parse_frame_header(
             if chroma_scaling_from_luma || num_cr_points > 0 {
               br.skip(8 * num_pos_chroma)
             }
-            ar_coeff_shift_minus_6 = br.read(2).to_int()
-            grain_scale_shift = br.read(2).to_int()
+            ar_coeff_shift_minus_6 = br.read(2).reinterpret_as_int()
+            grain_scale_shift = br.read(2).reinterpret_as_int()
             if num_cb_points > 0 {
-              cb_mult = br.read(8).to_int()
-              cb_luma_mult = br.read(8).to_int()
-              cb_offset = br.read(9).to_int()
+              cb_mult = br.read(8).reinterpret_as_int()
+              cb_luma_mult = br.read(8).reinterpret_as_int()
+              cb_offset = br.read(9).reinterpret_as_int()
             }
             if num_cr_points > 0 {
-              cr_mult = br.read(8).to_int()
-              cr_luma_mult = br.read(8).to_int()
-              cr_offset = br.read(9).to_int()
+              cr_mult = br.read(8).reinterpret_as_int()
+              cr_luma_mult = br.read(8).reinterpret_as_int()
+              cr_offset = br.read(9).reinterpret_as_int()
             }
             overlap_flag = br.read1() != 0
             clip_to_restricted = br.read1() != 0
@@ -1124,8 +1124,8 @@ pub fn av1_parse_tile_group(
       if num_tiles > 1 {
         if br.read(1) != 0 {
           let bits = fh.tile_cols_log2 + fh.tile_rows_log2
-          start = br.read(bits).to_int()
-          end = br.read(bits).to_int()
+          start = br.read(bits).reinterpret_as_int()
+          end = br.read(bits).reinterpret_as_int()
           if start > end || end >= num_tiles {
             return Err("av1: invalid tile range")
           }

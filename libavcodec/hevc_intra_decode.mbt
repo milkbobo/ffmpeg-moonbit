@@ -17,7 +17,7 @@ let hevc_part_2nx2n : Int32 = 0
 let hevc_part_nxn : Int32 = 3
 
 ///|
-struct HevcIntraDecoder {
+priv struct HevcIntraDecoder {
   sps : HevcSps
   pps : HevcPps
   sh : HevcSliceHeader
@@ -363,7 +363,7 @@ fn HevcIntraDecoder::transform_unit(
   y0 : Int32,
   x_base : Int32,
   y_base : Int32,
-  log2_cb_size : Int32,
+  _log2_cb_size : Int32,
   log2_trafo_size : Int32,
   blk_idx : Int32,
   cbf_luma_in : Int32,

@@ -54,14 +54,3 @@ fn HevcPicture::sample(
 ) -> Int32 {
   self.plane(c_idx)[y * self.plane_stride(c_idx) + x]
 }
-
-///|
-fn HevcPicture::set_sample(
-  self : HevcPicture,
-  c_idx : Int32,
-  x : Int32,
-  y : Int32,
-  v : Int32,
-) -> Unit {
-  self.plane(c_idx)[y * self.plane_stride(c_idx) + x] = v
-}

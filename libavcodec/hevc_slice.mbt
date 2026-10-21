@@ -179,7 +179,7 @@ pub fn ff_hevc_decode_slice_header(
     true
   }
   let colour_plane_id = if sps.separate_colour_plane != 0 {
-    gb.read(2).to_int()
+    gb.read(2).reinterpret_as_int()
   } else {
     0
   }
@@ -190,7 +190,7 @@ pub fn ff_hevc_decode_slice_header(
   let mut num_lt_pics = 0
   let mut temporal_mvp = false
   if !hevc_is_idr(nal_type) {
-    poc_lsb = gb.read(sps.log2_max_poc_lsb).to_int()
+    poc_lsb = gb.read(sps.log2_max_poc_lsb).reinterpret_as_int()
     st_flag = gb.read1() != 0
     if st_flag {
       if sps.nb_st_rps == 0 {
@@ -198,7 +198,7 @@ pub fn ff_hevc_decode_slice_header(
       }
       let bits = hevc_ceil_log2(sps.nb_st_rps)
       if bits > 0 {
-        st_idx = gb.read(bits).to_int()
+        st_idx = gb.read(bits).reinterpret_as_int()
       }
     } else {
       let slice_rps = new_hevc_st_rps()

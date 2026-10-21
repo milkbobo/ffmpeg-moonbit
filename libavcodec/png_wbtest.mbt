@@ -293,3 +293,91 @@ test "png: 2/4-bit grayscale expands like ffmpeg" {
   assert_eq(g4.pixels.length(), 256)
   assert_eq(png_test_md5(g4.pixels), "bd16b808a77a6781c1409192a8a82787")
 }
+
+///|
+test "png: chunk CRC validation is opt-in" {
+  let bytes = @libavutil.av_base64_decode(png_rgba_b64, 10000).unwrap()
+  let corrupt : Array[Byte] = []
+  for b in bytes {
+    corrupt.push(b)
+  }
+  // IHDR is the first chunk: signature (8) + length (4) + type (4) + body
+  // (13), so byte 29 is the first CRC byte.
+  corrupt[29] = (corrupt[29].to_int() ^ 0xFF).to_byte()
+  let bad = Bytes::from_array(corrupt[:])
+  // FFmpeg's default err_recognition does not check chunk CRCs.
+  let img = av_png_decode(bad).unwrap()
+  assert_eq(img.pix_fmt, "rgba")
+  match av_png_decode_ex(bad, true) {
+    Ok(_) => fail("expected IHDR CRC mismatch")
+    Err(e) => assert_true(e.contains("CRC mismatch"))
+  }
+  match av_png_decode_ex(bytes, true) {
+    Ok(_) => ()
+    Err(e) => fail("valid CRC rejected: \{e}")
+  }
+}
+
+///|
+/// 16x16, 3-frame RGBA APNG written by `linuxserver/ffmpeg:9.0.2` from
+/// `testsrc2` (`-plays 0 -f apng`). Frame 1 is a full-canvas IDAT frame; frames
+/// 2 and 3 are smaller OVER-blended fdAT rectangles.
+let png_apng_b64 : Bytes = bcat([
+  b"iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAABAAAAAQBPJcTWAAAACGFjVEwAAAADAAAAAM7tusAA",
+  b"AAAaZmNUTAAAAAAAAAAQAAAAEAAAAAAAAAAAAAEAAQAAbxMgxAAAASZJREFUeJxjrGf4958BD2hE4/9jgChn+s8EplnwaSYGwA2Y",
+  b"z+BAlAZ7qAsY7Bmp7ILBY4AYw3kwvaVBGUz/ZoIoMa+7AaaFGCChf8tbBrcL2lvaGRj+zGGobLjA8BHIn9hkwjCxayJDflk+WL6u",
+  b"pg5IzmOYOvUaA0sd1MT9UM0H6kHW5jDY7wPStgwMhw/bMawDqv9Xn8wQXA+zooSBaasdA4OCHQ0D0RDo9oQEPYYfXloM+ZUzMOQ9",
+  b"Xh9iyM4OoaELzvMD8fpLwDAQAPKA/mU4hCK/Q9SOYceqVzRwgeomBoaiojCGlewHGRYseMkgCrQZFI1rOeaCo9EUGGugaLzlDY1G",
+  b"bKb29a1iCAwVBwaiOEPsH1mwGCwNgEBTSxNDd6cMMBC1GAAskFRzoyb1eAAAABpmY1RMAAAAAQAAAAoAAAAKAAAAAAAAAAAAAQAB",
+  b"AAHOXTihAAAAWGZkQVQAAAACeJxj/MvA8J8BCTD/g9B/oaLMzAyMIJqFgUgAV8jMANHJwATng4Ecg91/8kykn8JTDZ+IU1jZcIGh",
+  b"vcGAgQXmW5jvHjEcQuHvBWKzBhLcCADvhBGYUboykAAAABpmY1RMAAAAAwAAAAoAAAAMAAAAAgAAAAIAAQABAAHOwpdSAAAAcWZk",
+  b"QVQAAAAEeJxjtGNg+M8ABIfsGMDA9j+EPnwYKsBwiBFEsjAQCWip8BAD2C2HkQRAwISB9z9RJra3tDNU1lQSVuhak0Oir4EuYUQW",
+  b"8AaGa3tTEphdWTePYStUnvzgucxgx+BTdwfKA8XOIewKcQEAcFMXXtK73wQAAAAASUVORK5CYII=",
+])
+
+///|
+test "apng: composited frames match ffmpeg rawvideo" {
+  let bytes = @libavutil.av_base64_decode(png_apng_b64, 10000).unwrap()
+  let apng = av_apng_decode(bytes).unwrap()
+  assert_eq(apng.width, 16)
+  assert_eq(apng.height, 16)
+  assert_eq(apng.loop_count, 0)
+  assert_eq(apng.frames.length(), 3)
+  let expected : Array[(Int32, Int32, Int32, Int32, Int32, String)] = [
+    (16, 16, 0, 0, 0, "73cad3afc263c9ac34ee111a0c166d95"),
+    (10, 10, 0, 0, 1, "0c6d886d70124e0450d0f8cd435f41c4"),
+    (10, 12, 2, 2, 1, "ba612246f5340462338cac717ad93f79"),
+  ]
+  for i in 0..<3 {
+    let f = apng.frames[i]
+    let (w, h, x, y, blend, md5) = expected[i]
+    assert_eq(f.width, w)
+    assert_eq(f.height, h)
+    assert_eq(f.x_offset, x)
+    assert_eq(f.y_offset, y)
+    assert_eq(f.blend_op, blend)
+    assert_eq(f.delay_num, 1)
+    assert_eq(f.delay_den, 1)
+    assert_eq(f.rgba.length(), 1024)
+    assert_eq(png_test_md5(f.rgba), md5)
+  }
+}
+
+///|
+test "apng: malformed chunk layouts are rejected" {
+  // A normal PNG has no acTL and is not an animation.
+  let still = @libavutil.av_base64_decode(png_rgba_b64, 10000).unwrap()
+  match av_apng_decode(still) {
+    Ok(_) => fail("expected missing acTL")
+    Err(e) => assert_true(e.contains("acTL"))
+  }
+  let bad : Array[Byte] = []
+  for b in still {
+    bad.push(b)
+  }
+  bad[0] = b'X'
+  match av_apng_decode(Bytes::from_array(bad[:])) {
+    Ok(_) => fail("expected signature error")
+    Err(e) => assert_true(e.contains("signature"))
+  }
+}

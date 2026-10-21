@@ -11,10 +11,11 @@
 /// gray/16, monob, pal8 (indices + 256-entry RGBA palette), rgb24/48be,
 /// rgba/64be, ya8/16be, with tRNS promoted to the alpha formats.
 ///
-/// Out of scope: Adam7 interlacing (rejected), APNG (animation chunks ignored),
-/// gamma/ICC/sRGB processing, and CRC verification (chunk CRCs are skipped,
-/// like the decoder's non-fatal path). Non-interlaced 1/8/16-bit samples are
-/// supported; 2/4-bit grayscale is expanded to 8-bit by bit replication.
+/// Out of scope: gamma/ICC/sRGB processing. Chunk CRCs are skipped by
+/// `av_png_decode` (matching FFmpeg's default `err_recognition` of zero) and
+/// can be enforced with `av_png_decode_ex(data, true)`. Adam7 interlacing and
+/// 1/2/4/8/16-bit samples are supported; 2/4-bit grayscale is expanded to 8-bit
+/// by bit replication. APNG animation is decoded by `av_apng_decode`.
 
 ///|
 pub struct PngImage {
@@ -50,6 +51,15 @@ fn png_u16(data : BytesView, off : Int32) -> Int32 {
   } else {
     (data[off].to_int() << 8) | data[off + 1].to_int()
   }
+}
+
+///|
+/// CRC-32 computed over a complete PNG chunk type-and-data range, i.e. the
+/// value stored in the chunk's trailing CRC field. FFmpeg uses
+/// `~av_crc(AV_CRC_32_IEEE_LE, UINT32_MAX, ...)`.
+fn png_crc32(data : Bytes) -> Int32 {
+  let table = @libavutil.av_crc_init(true, 32, 0xEDB88320).unwrap()
+  @libavutil.av_crc(table, 0xFFFFFFFFU, data).reinterpret_as_int() ^ -1
 }
 
 ///|
@@ -180,8 +190,19 @@ fn png_expand_sample(v : Int32, depth : Int32) -> Int32 {
 }
 
 ///|
-/// Decode an in-memory PNG. */
+/// Decode an in-memory PNG, skipping chunk CRC validation. */
 pub fn av_png_decode(data : Bytes) -> Result[PngImage, String] {
+  av_png_decode_ex(data, false)
+}
+
+///|
+/// Decode an in-memory PNG. When `verify_crc` is true, every chunk CRC is
+/// checked before the chunk is parsed. A mismatch is fatal, matching
+/// `-err_detect crccheck+explode` rather than FFmpeg's default non-fatal path.
+pub fn av_png_decode_ex(
+  data : Bytes,
+  verify_crc : Bool,
+) -> Result[PngImage, String] {
   let signature : Bytes = b"\x89PNG\r\n\x1a\n"
   if data.length() < 8 {
     return Err("png: file too short")
@@ -213,6 +234,13 @@ pub fn av_png_decode(data : Bytes) -> Result[PngImage, String] {
     }
     if length < 0 || pos + 12 + length > data.length() {
       return Err("png: truncated chunk \{kind}")
+    }
+    if verify_crc {
+      let expected = png_u32(data, pos + 8 + length)
+      let actual = png_crc32(data[pos + 4:pos + 8 + length].to_owned())
+      if expected != actual {
+        return Err("png: CRC mismatch in chunk \{kind}")
+      }
     }
     let body = pos + 8
     if kind == "IHDR" {

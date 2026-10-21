@@ -79,7 +79,7 @@ fn hevc_peek_slice_info(
   let idr = hevc_is_idr(nal_type)
   let mut poc_lsb = 0
   if !idr {
-    poc_lsb = gb.read(sps.log2_max_poc_lsb).to_int()
+    poc_lsb = gb.read(sps.log2_max_poc_lsb).reinterpret_as_int()
   }
   Ok(
     (

@@ -181,7 +181,7 @@ fn hevc_sao_clip(v : Int32) -> Int32 {
 pub fn hevc_sao_apply(
   pic : HevcPicture,
   sps : HevcSps,
-  pps : HevcPps,
+  _pps : HevcPps,
   sao : HevcSaoParams,
 ) -> Unit {
   if sps.sao_enabled == 0 {

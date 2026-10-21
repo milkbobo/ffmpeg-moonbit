@@ -91,7 +91,7 @@ pub fn hevc_hls_residual_coding(
   scan_idx : Int32,
   c_idx : Int32,
   qp_y : Int32,
-  pred_mode_intra : Int32,
+  _pred_mode_intra : Int32,
 ) -> Result[Unit, String] {
   let trafo_size = 1 << log2_trafo_size
   let coeffs : Array[Int32] = Array::make(trafo_size * trafo_size, 0)

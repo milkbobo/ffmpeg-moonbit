@@ -1,20 +1,23 @@
 ///|
-/// MoonBit port of the FFmpeg 9.0.2 baseline JPEG/MJPEG decoder slice:
+/// MoonBit port of the FFmpeg 9.0.2 JPEG/MJPEG decoder slice:
 /// `libavcodec/mjpegdec.c` (`ff_mjpeg_decode_sof`, `ff_mjpeg_decode_dqt`,
 /// `ff_mjpeg_decode_dht`, `ff_mjpeg_decode_sos`, `decode_block`,
-/// `mjpeg_decode_scan`), using the existing Simple-C IDCT
-/// (`ff_simple_idct_put_int16_8bit`).
+/// `decode_dc_progressive`, `decode_block_progressive`,
+/// `decode_block_refinement`, `mjpeg_decode_scan`,
+/// `mjpeg_decode_scan_progressive_ac`, `mjpeg_idct_scan_progressive_ac`),
+/// using the existing Simple-C IDCT (`ff_simple_idct_put_int16_8bit`).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: 8-bit sequential DCT (SOF0/SOF1), interleaved and single-component
-/// scans, arbitrary 1..4 h/v sampling, DQT (8/16-bit entries), DHT, DRI restart
-/// markers and the native `yuvj420p`/`yuvj422p`/`yuvj444p`/`yuvj440p`/`gray`
-/// output formats FFmpeg selects. Planes are cropped to the visible size.
+/// Scope: 8-bit sequential DCT (SOF0/SOF1) and progressive DCT (SOF2),
+/// interleaved and single-component scans, multi-scan sequential files,
+/// progressive DC first/refinement, AC first/refinement and EOB runs, arbitrary
+/// 1..4 h/v sampling, DQT (8/16-bit entries), DHT, DRI restart markers and the
+/// native `yuvj420p`/`yuvj422p`/`yuvj444p`/`yuvj440p`/`gray` output formats
+/// FFmpeg selects. Planes are cropped to the visible size.
 ///
-/// Out of scope: progressive JPEG (SOF2), arithmetic coding, lossless JPEG
-/// (SOF3), 12-bit samples, CMYK/YCCK (4 components), Adobe APP14 transforms,
-/// and EXIF orientation.
+/// Out of scope: arithmetic coding, lossless JPEG (SOF3), 12-bit samples,
+/// CMYK/YCCK (4 components), Adobe APP14 transforms, and EXIF orientation.
 
 ///|
 pub struct JpegImage {
@@ -157,15 +160,23 @@ fn je_align(bits : JpegEntropy) -> Unit {
 fn je_restart(bits : JpegEntropy) -> Unit {
   je_align(bits)
   bits.at_end = false
-  if bits.pos + 1 < bits.data.length() && bits.data[bits.pos].to_int() == 0xFF {
-    while bits.pos < bits.data.length() && bits.data[bits.pos].to_int() == 0xFF {
-      bits.pos = bits.pos + 1
+  let mut p = bits.pos
+  // The entropy reader may stop either on the marker prefix or on its second
+  // byte, depending on whether the prefix was already consumed while filling
+  // the bit cache.
+  if p < bits.data.length() && bits.data[p].to_int() == 0xFF {
+    while p < bits.data.length() && bits.data[p].to_int() == 0xFF {
+      p = p + 1
     }
-    if bits.pos < bits.data.length() {
-      let m = bits.data[bits.pos].to_int()
-      if m >= 0xD0 && m <= 0xD7 {
-        bits.pos = bits.pos + 1
-      }
+  } else if p > 0 && bits.data[p - 1].to_int() == 0xFF {
+    // p already points at RSTn.
+  } else {
+    return
+  }
+  if p < bits.data.length() {
+    let m = bits.data[p].to_int()
+    if m >= 0xD0 && m <= 0xD7 {
+      bits.pos = p + 1
     }
   }
 }
@@ -264,10 +275,17 @@ priv struct JpegComponent {
   mut dc_table : Int32
   mut ac_table : Int32
   mut dc_pred : Int32
+  /// Uncropped component dimensions in 8x8 blocks.
+  mut blocks_w : Int32
+  mut blocks_h : Int32
+  /// Dequantised coefficients in natural order, row-major blocks of 64.
+  coeffs : Array[Int32]
+  /// Progressive AC end-of-band position for each block.
+  last_nnz : Array[Int32]
 }
 
 ///|
-/// Decode an 8-bit baseline JPEG. */
+/// Decode an 8-bit baseline or progressive JPEG. */
 pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
   if data.length() < 4 || data[0] != b'\xff' || data[1] != b'\xd8' {
     return Err("mjpeg: missing SOI")
@@ -282,6 +300,8 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
   let mut max_v = 1
   let mut restart_interval = 0
   let mut saw_sof = false
+  let mut saw_scan = false
+  let mut progressive = false
   let mut pos = 2
   while pos + 1 < data.length() {
     if data[pos] != b'\xff' {
@@ -379,8 +399,11 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
           ac_tables[th] = Some(h)
         }
       }
-    } else if marker == 0xC0 || marker == 0xC1 {
-      // SOF0/SOF1
+    } else if marker == 0xC0 || marker == 0xC1 || marker == 0xC2 {
+      // SOF0/SOF1/SOF2
+      if saw_sof {
+        return Err("mjpeg: duplicate SOF")
+      }
       if seg.length() < 6 {
         return Err("mjpeg: short SOF")
       }
@@ -397,6 +420,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
       if seg.length() < 6 + ncomp * 3 {
         return Err("mjpeg: truncated SOF components")
       }
+      progressive = marker == 0xC2
       for i in 0..<ncomp {
         let base = 6 + i * 3
         let id = seg[base].to_int()
@@ -420,7 +444,24 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
           dc_table: 0,
           ac_table: 0,
           dc_pred: 4 << 8,
+          blocks_w: 0,
+          blocks_h: 0,
+          coeffs: [],
+          last_nnz: [],
         })
+      }
+      for comp in components {
+        let cw = (width * comp.h + max_h - 1) / max_h
+        let ch = (height * comp.v + max_v - 1) / max_v
+        comp.blocks_w = (cw + 7) / 8
+        comp.blocks_h = (ch + 7) / 8
+        let nblocks = comp.blocks_w * comp.blocks_h
+        for _ in 0..<nblocks {
+          comp.last_nnz.push(0)
+          for _ in 0..<64 {
+            comp.coeffs.push(0)
+          }
+        }
       }
       saw_sof = true
     } else if marker == 0xDD {
@@ -448,33 +489,20 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         if found < 0 {
           return Err("mjpeg: unknown scan component")
         }
-        components[found].dc_table = tables >> 4
-        components[found].ac_table = tables & 0x0F
+        let dc_id = tables >> 4
+        let ac_id = tables & 0x0F
+        if dc_id > 3 || ac_id > 3 {
+          return Err("mjpeg: invalid scan Huffman table id")
+        }
+        components[found].dc_table = dc_id
+        components[found].ac_table = ac_id
         scan_components.push(found)
       }
       let ss = seg[1 + ns * 2].to_int()
-      if ss != 0 {
-        return Err("PATCHWELCOME: progressive JPEG scan")
-      }
-      // Allocate padded planes.
-      let mcu_w = max_h * 8
-      let mcu_h = max_v * 8
-      let mcu_cols = (width + mcu_w - 1) / mcu_w
-      let mcu_rows = (height + mcu_h - 1) / mcu_h
-      let strides : Array[Int32] = []
-      let plane_h : Array[Int32] = []
-      let planes : Array[Array[Int32]] = []
-      for comp in components {
-        let stride = mcu_cols * comp.h * 8
-        let ph = mcu_rows * comp.v * 8
-        strides.push(stride)
-        plane_h.push(ph)
-        let p : Array[Int32] = []
-        for _ in 0..<(stride * ph) {
-          p.push(0)
-        }
-        planes.push(p)
-      }
+      let se = seg[2 + ns * 2].to_int()
+      let ahal = seg[3 + ns * 2].to_int()
+      let ah = ahal >> 4
+      let al = ahal & 0x0F
       let bits : JpegEntropy = {
         data,
         pos,
@@ -482,151 +510,53 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         count: 0,
         at_end: false,
       }
-      if ns == 1 {
-        let ci = scan_components[0]
-        let comp = components[ci]
-        let qt = if comp.tq >= 0 && comp.tq < 4 { quant[comp.tq] } else { [] }
-        if qt.length() < 64 {
-          return Err("mjpeg: missing quant table")
-        }
-        let dct = match dc_tables[comp.dc_table] {
-          Some(h) => h
-          None => return Err("mjpeg: missing DC Huffman table")
-        }
-        let act = match ac_tables[comp.ac_table] {
-          Some(h) => h
-          None => return Err("mjpeg: missing AC Huffman table")
-        }
-        let cw = (width * comp.h + max_h - 1) / max_h
-        let ch = (height * comp.v + max_v - 1) / max_v
-        let bw = (cw + 7) / 8
-        let bh = (ch + 7) / 8
-        let total = bw * bh
-        let mut index = 0
-        let mut by = 0
-        while by < bh && !bits.at_end {
-          let mut bx = 0
-          while bx < bw && !bits.at_end {
-            let block : Array[Int32] = []
-            for _ in 0..<64 {
-              block.push(0)
-            }
-            match jpeg_decode_block(bits, block, comp, qt, dct, act) {
-              Ok(_) => ()
-              Err(e) => return Err(e)
-            }
-            mjpeg_idct_put(planes[ci], strides[ci], block, bx * 8, by * 8)
-            index = index + 1
-            bx = bx + 1
-            if restart_interval > 0 &&
-              index % restart_interval == 0 &&
-              index < total {
-              je_restart(bits)
-              comp.dc_pred = 4 << 8
-            }
-          }
-          by = by + 1
-        }
+      let scan_result = if progressive {
+        mjpeg_decode_scan_progressive(
+          bits,
+          components,
+          scan_components,
+          quant,
+          dc_tables,
+          ac_tables,
+          width,
+          height,
+          max_h,
+          max_v,
+          restart_interval,
+          ss,
+          se,
+          ah,
+          al,
+        )
       } else {
-        let mcu_cols = (width + mcu_w - 1) / mcu_w
-        let mcu_rows = (height + mcu_h - 1) / mcu_h
-        let total = mcu_cols * mcu_rows
-        let mut mcu_index = 0
-        let mut mcu_y = 0
-        while mcu_y < mcu_rows && !bits.at_end {
-          let mut mcu_x = 0
-          while mcu_x < mcu_cols && !bits.at_end {
-            for ci in scan_components {
-              let comp = components[ci]
-              let qt = if comp.tq >= 0 && comp.tq < 4 {
-                quant[comp.tq]
-              } else {
-                []
-              }
-              if qt.length() < 64 {
-                return Err("mjpeg: missing quant table")
-              }
-              let dct = match dc_tables[comp.dc_table] {
-                Some(h) => h
-                None => return Err("mjpeg: missing DC Huffman table")
-              }
-              let act = match ac_tables[comp.ac_table] {
-                Some(h) => h
-                None => return Err("mjpeg: missing AC Huffman table")
-              }
-              for by in 0..<comp.v {
-                for bx in 0..<comp.h {
-                  let block : Array[Int32] = []
-                  for _ in 0..<64 {
-                    block.push(0)
-                  }
-                  match jpeg_decode_block(bits, block, comp, qt, dct, act) {
-                    Ok(_) => ()
-                    Err(e) => return Err(e)
-                  }
-                  mjpeg_idct_put(
-                    planes[ci],
-                    strides[ci],
-                    block,
-                    (mcu_x * comp.h + bx) * 8,
-                    (mcu_y * comp.v + by) * 8,
-                  )
-                }
-              }
-            }
-            mcu_index = mcu_index + 1
-            mcu_x = mcu_x + 1
-            if restart_interval > 0 &&
-              mcu_index % restart_interval == 0 &&
-              mcu_index < total {
-              je_restart(bits)
-              for comp in components {
-                comp.dc_pred = 4 << 8
-              }
-            }
-          }
-          mcu_y = mcu_y + 1
+        if ss != 0 || se != 63 || ah != 0 || al != 0 {
+          return Err("mjpeg: invalid sequential scan parameters")
         }
+        mjpeg_decode_scan_sequential(
+          bits,
+          components,
+          scan_components,
+          quant,
+          dc_tables,
+          ac_tables,
+          width,
+          height,
+          max_h,
+          max_v,
+          restart_interval,
+        )
       }
-      // Crop padded planes to visible dimensions and choose the pixel format.
-      let out_planes : Array[Bytes] = []
-      let plane_widths : Array[Int32] = []
-      let plane_heights : Array[Int32] = []
-      for ci in 0..<components.length() {
-        let comp = components[ci]
-        let pw = (width * comp.h + max_h - 1) / max_h
-        let ph = (height * comp.v + max_v - 1) / max_v
-        plane_widths.push(pw)
-        plane_heights.push(ph)
-        let out : Array[Byte] = []
-        for y in 0..<ph {
-          for x in 0..<pw {
-            out.push(planes[ci][y * strides[ci] + x].to_byte())
-          }
-        }
-        out_planes.push(Bytes::from_array(out[:]))
+      match scan_result {
+        Ok(_) => ()
+        Err(e) => return Err(e)
       }
-      let pix_fmt = if components.length() == 1 {
-        "gray"
-      } else if plane_widths[1] >= width && plane_heights[1] >= height {
-        "yuvj444p"
-      } else if plane_heights[1] >= height {
-        "yuvj422p"
-      } else if plane_widths[1] >= width {
-        "yuvj440p"
-      } else {
-        "yuvj420p"
+      saw_scan = true
+      // Continue at the marker that terminated the entropy segment.
+      pos = jpeg_marker_start(data, bits.pos)
+      if bits.at_end && pos >= data.length() {
+        break
       }
-      return Ok({
-        width,
-        height,
-        pix_fmt,
-        planes: out_planes,
-        plane_widths,
-        plane_heights,
-      })
-    } else if marker == 0xC2 ||
-      marker == 0xC3 ||
+    } else if marker == 0xC3 ||
       marker == 0xC6 ||
       marker == 0xC7 ||
       marker == 0xC9 ||
@@ -638,5 +568,11 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
       return Err("PATCHWELCOME: mjpeg JPEG process")
     }
   }
-  Err("mjpeg: no scan found")
+  if !saw_sof {
+    return Err("mjpeg: missing SOF")
+  }
+  if !saw_scan {
+    return Err("mjpeg: no scan found")
+  }
+  mjpeg_finalize_image(components, width, height, max_h, max_v)
 }

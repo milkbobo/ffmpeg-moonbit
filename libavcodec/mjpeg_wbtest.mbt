@@ -1,5 +1,5 @@
 ///|
-/// Tests for the baseline MJPEG decoder.
+/// Tests for the baseline and progressive MJPEG decoder.
 ///
 /// Reference files from `linuxserver/ffmpeg:9.0.2`:
 ///   ffmpeg -f lavfi -i testsrc2=size=16x16:rate=1 -frames:v 1 \
@@ -38,6 +38,21 @@ let mjpeg_444_b64 : Bytes = bcat([
   b"toZCup7Qp15LfjbHbdA69w20NsP/AEW0bgUdf/KZwDZz+pJC67jNqwpyzruLQmuRHjl265euqqpPWHYls/x8Lq1t/j8puYaxX3ZG",
   b"u5dMuX43vB/Yx7mGvVGyPNXKykDjlYFN/KyFf592p48xUHMjJ+aaIpHxMdvtj+W2+hNRiql/GZLGFuW6ooLqLoCikyCF7CNIH7V4",
   b"RdEGSagRNPdCt/ub6//Z",
+])
+
+///|
+let mjpeg_prog420_b64 : Bytes = bcat([
+  b"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wgARCAAQABADASIAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAABgMF/8QAFAEBAAAAAAAAAAAAAAAAAAAAA//aAAwDAQACEAMQAAABPrcuBJ//xAAZEAEAAgMAAAAAAAAAAAAAAAAEABQCBRP/2gAIAQEAAQUCDrZS5HOtmUXbQj//xAAYEQEBAQEBAAAAAAAAAAAAAAABAgQAIf/aAAgBAwEBPwGnTnyNVRK+Hf/EABkRAAIDAQAAAAAAAAAAAAAAAAEDAAIFEv/aAAgBAgEBPwHOU9rB3YCf/8QAHRABAAICAgMAAAAAAAAAAAAAAQARAgMEIRIyUf/aAAgBAQAGPwL1lh29ETDXr1/GrSeOXI2JVINE/8QAGxABAAIDAQEAAAAAAAAAAAAAAQAhETFRYZH/2gAIAQEAAT8h0Rki99zMFCloxGfafkThe3Vd0Vyf/9oADAMBAAIAAwAAABAD/8QAGhEAAgIDAAAAAAAAAAAAAAAAAREhMQBBUf/aAAgBAwEBPxDYZEZZsxEBm7A68//EABgRAAMBAQAAAAAAAAAAAAAAAAERIaEA/9oACAECAQE/EEIAprOTe//EABoQAQEBAAMBAAAAAAAAAAAAAAERIQAxUfH/2gAIAQEAAT8Q+NxNEgA7BraJAY+zmrf96wK1pi+2BkwSXACHOEAk7Gmq/wD/2Q==",
+])
+
+///|
+let mjpeg_prog444_b64 : Bytes = bcat([
+  b"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wgARCAAQABADAREAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAABgMF/8QAFwEAAwEAAAAAAAAAAAAAAAAAAgQFBv/aAAwDAQACEAMQAAABPzQWvOZc44atH//EABkQAQACAwAAAAAAAAAAAAAAAAQAFAIFE//aAAgBAQABBQIOtlLkc62ZRdtCP//EACARAAECBgMBAAAAAAAAAAAAAAECBAADBREh8DFBcVH/2gAIAQMBAT8Bau4qVYLRoVJ5OBu5hhSWqbFRJ3e4q89qXKZctIsjznvPPzy0f//EAB0RAAEEAgMAAAAAAAAAAAAAAAMAAQIEBRESEyH/2gAIAQIBAT8BjdVSz2E9QaQI65O7rGQAEe2iy//EAB0QAQACAgIDAAAAAAAAAAAAAAEAEQIDBCESMlH/2gAIAQEABj8C9ZYdvREw169fxq0njlyNiVSDRP/EABsQAQACAwEBAAAAAAAAAAAAAAEAIRExUWGR/9oACAEBAAE/IdEZIvfczBQpaMRn2n5E4Xt1XdFcn//aAAwDAQACAAMAAAAQaD//xAAbEQEBAQEBAAMAAAAAAAAAAAABESEAMUFhgf/aAAgBAwEBPxDx3n5R7Hwo1oiIDE8jJzraeigLPopuh+l6FcwYkbUaUxrpAE7/xAAcEQEAAgIDAQAAAAAAAAAAAAABESEAMVGR8GH/2gAIAQIBAT8Q+uEAqLferFlAbJgeiTnfeDjmZGJa1be5S9Rn/8QAGhABAQEAAwEAAAAAAAAAAAAAAREhADFR8f/aAAgBAQABPxD43E0SADsGtokBj7Oat/3rArWmL7YGTBJcAIc4QCTsaar/AP/Z",
+])
+
+///|
+let mjpeg_proggray_b64 : Bytes = bcat([
+  b"/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/wgALCAAQABABAREA/8QAFgABAQEAAAAAAAAAAAAAAAAABgMF/9oACAEBAAAAAT63Lh//xAAZEAEAAgMAAAAAAAAAAAAAAAAEABQCBRP/2gAIAQEAAQUCDrZS5HOtmUXbQj//xAAdEAEAAgICAwAAAAAAAAAAAAABABECAwQhEjJR/9oACAEBAAY/AvWWHb0RMNevX8atJ45cjYlUg0T/xAAbEAEAAgMBAQAAAAAAAAAAAAABACERMVFhkf/aAAgBAQABPyHRGSL33MwUKWjEZ9p+ROF7dV3RXJ//2gAIAQEAAAAQD//EABoQAQEBAAMBAAAAAAAAAAAAAAERIQAxUfH/2gAIAQEAAT8Q+NxNEgA7BraJAY+zmrf96wK1pi+2BkwSXACHOEAk7Gmq/wD/2Q==",
 ])
 
 ///|
@@ -127,15 +142,61 @@ test "mjpeg: 4:4:4 matches ffmpeg rawvideo" {
 }
 
 ///|
-test "mjpeg: rejects non-JPEG and progressive input" {
+test "mjpeg: progressive 4:2:0 matches ffmpeg rawvideo" {
+  let img = mjpeg_test_decode(mjpeg_prog420_b64)
+  assert_eq(img.width, 16)
+  assert_eq(img.height, 16)
+  assert_eq(img.pix_fmt, "yuvj420p")
+  assert_eq(img.plane_widths, [16, 8, 8])
+  assert_eq(img.plane_heights, [16, 8, 8])
+  assert_eq(
+    mjpeg_test_md5(mjpeg_test_concat(img)),
+    "3348b49a2f253e01d9f80467dd856b89",
+  )
+}
+
+///|
+test "mjpeg: progressive 4:4:4 matches ffmpeg rawvideo" {
+  let img = mjpeg_test_decode(mjpeg_prog444_b64)
+  assert_eq(img.pix_fmt, "yuvj444p")
+  assert_eq(img.plane_widths, [16, 16, 16])
+  assert_eq(img.plane_heights, [16, 16, 16])
+  assert_eq(
+    mjpeg_test_md5(mjpeg_test_concat(img)),
+    "94ae31749296f5b6ec5112a0aa931400",
+  )
+}
+
+///|
+test "mjpeg: progressive grayscale matches ffmpeg rawvideo" {
+  let img = mjpeg_test_decode(mjpeg_proggray_b64)
+  assert_eq(img.width, 16)
+  assert_eq(img.height, 16)
+  assert_eq(img.pix_fmt, "gray")
+  assert_eq(img.plane_widths, [16])
+  assert_eq(img.plane_heights, [16])
+  assert_eq(
+    mjpeg_test_md5(mjpeg_test_concat(img)),
+    "1abce7d28fe97eb5d583aacd94605b94",
+  )
+}
+
+///|
+test "mjpeg: rejects non-JPEG and unsupported processes" {
   match av_mjpeg_decode(b"not a jpeg") {
     Ok(_) => fail("expected SOI error")
     Err(e) => assert_true(e.contains("SOI"))
   }
-  // SOI + SOF2 (progressive) with a minimal segment.
+  // SOI + SOF3 (lossless) with a minimal segment.
+  let sof3 : Bytes = b"\xff\xd8\xff\xc3\x00\x0b\x08\x00\x10\x00\x10\x01\x01\x11\x00"
+  match av_mjpeg_decode(sof3) {
+    Ok(_) => fail("expected lossless error")
+    Err(e) => assert_true(e.contains("JPEG process"))
+  }
+  // A progressive frame without any scan is incomplete.
   let sof2 : Bytes = b"\xff\xd8\xff\xc2\x00\x0b\x08\x00\x10\x00\x10\x01\x01\x11\x00"
   match av_mjpeg_decode(sof2) {
-    Ok(_) => fail("expected progressive error")
-    Err(e) => assert_true(e.contains("JPEG process") || e.contains("scan"))
+    Ok(_) => fail("expected missing scan error")
+    Err(e) => assert_true(e.contains("scan"))
   }
 }
