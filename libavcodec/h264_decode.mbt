@@ -88,6 +88,8 @@ pub struct H264RefPic {
   /// Full-plane dimensions in pixels (macroblock aligned).
   width : Int32
   height : Int32
+  /// Picture order count, used as the deblocking `ref2frm` identity.
+  poc : Int32
 }
 
 ///|
@@ -159,6 +161,8 @@ priv struct H264DecCtx {
   ref_list0 : Array[H264RefPic]
   /// CAVLC `sl->mb_skip_run`; -1 means the next macroblock reads a new run.
   mut mb_skip_run : Int32
+  /// `sl->pwt`: explicit weighted prediction for P slices.
+  pwt : H264PredWeight
 }
 
 ///|
@@ -687,6 +691,17 @@ fn h264_decode_slice_ex(
       mvd: Array::make(32, 0),
     })
   }
+  // `ff_h264_build_ref_list`'s missing-reference pass substitutes
+  // `default_ref = ref_list[0]` for every inactive entry up to `ref_count`.
+  let ref_list0 = if ref_list0.length() == 0 {
+    ref_list0
+  } else {
+    let padded = ref_list0.copy()
+    while padded.length() < sh.num_ref_idx_l0_active {
+      padded.push(ref_list0[0])
+    }
+    padded
+  }
   let ctx : H264DecCtx = {
     pps,
     mb_width,
@@ -703,6 +718,7 @@ fn h264_decode_slice_ex(
     ref_count0: sh.num_ref_idx_l0_active,
     ref_list0,
     mb_skip_run: -1,
+    pwt: sh.pwt,
   }
   // Deblocking parameters (`h264_loopfilter.c`, 8-bit so `qp_bd_offset` is 0).
   // `disable_deblocking_filter_idc == 1` disables the filter and `== 2` asks for

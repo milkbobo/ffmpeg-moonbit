@@ -9,12 +9,15 @@
 ///
 /// Scope: I/P reference management only — no B pictures, no MMCO adaptive
 /// marking (the syntax is consumed by the slice header parser and ignored),
-/// no long-term references, no reordering of the output order.
+/// no long-term references, no reordering of the output order. Short-term
+/// `ref_pic_list_modification` and `default_ref` substitution are applied
+/// when the P slice's L0 list is built.
 
 ///|
 /// One short-term reference entry: POC plus the picture planes. */
 struct H264DpbEntry {
   poc : Int32
+  frame_num : Int32
   pic : H264RefPic
 }
 
@@ -50,15 +53,69 @@ pub fn new_h264_decoder() -> H264Decoder {
 fn H264Decoder::ref_list0(
   self : H264Decoder,
   count : Int32,
-) -> Array[H264RefPic] {
+  mod_ops : Array[Int32],
+  mod_vals : Array[Int32],
+  curr_frame_num : Int32,
+  max_pic_num : Int32,
+) -> Result[Array[H264RefPic], String] {
+  let list : Array[H264RefPic] = []
+  if self.refs.length() == 0 {
+    return Ok(list)
+  }
   let entries = [..self.refs]
   // Highest POC first (`ff_h264_build_ref_list0`'s default ordering).
   entries.sort_by((a, b) => b.poc.compare(a.poc))
-  let list : Array[H264RefPic] = []
-  for i = 0; i < entries.length() && i < count; i = i + 1 {
-    list.push(entries[i].pic)
+  // `ff_h264_build_ref_list`'s missing-reference pass uses `default_ref =
+  // ref_list[0]`, so pad the default list to the coded reference count.
+  let base : Array[H264DpbEntry] = []
+  for i = 0; i < count; i = i + 1 {
+    if i < entries.length() {
+      base.push(entries[i])
+    } else {
+      base.push(entries[0])
+    }
   }
-  list
+  let mut pred = curr_frame_num
+  for k = 0; k < mod_ops.length(); k = k + 1 {
+    let op = mod_ops[k]
+    if op == 2 {
+      return Err("long-term reference reordering is not supported")
+    }
+    let diff = mod_vals[k] + 1
+    if diff > max_pic_num {
+      return Err("EINVAL")
+    }
+    pred = if op == 0 { pred - diff } else { pred + diff }
+    pred = pred & (max_pic_num - 1)
+    let mut found = -1
+    for i = 0; i < entries.length(); i = i + 1 {
+      if entries[i].frame_num == pred {
+        found = i
+        break
+      }
+    }
+    if found < 0 {
+      return Err("reference picture missing during reorder")
+    }
+    let entry = entries[found]
+    // Shift the previous occupant (and any duplicate) as in the C.
+    let mut i = k
+    while i + 1 < count {
+      if base[i].frame_num == entry.frame_num {
+        break
+      }
+      i = i + 1
+    }
+    while i > k {
+      base[i] = base[i - 1]
+      i = i - 1
+    }
+    base[k] = entry
+  }
+  for e in base {
+    list.push(e.pic)
+  }
+  Ok(list)
 }
 
 ///|
@@ -152,7 +209,17 @@ fn H264Decoder::decode_slice(
     self.prev_frame_num = 0
   }
   let refs = if sh.slice_type_nos == 0 {
-    let list = self.ref_list0(sh.num_ref_idx_l0_active)
+    let list = match
+      self.ref_list0(
+        sh.num_ref_idx_l0_active,
+        sh.ref_mod_l0_ops,
+        sh.ref_mod_l0_vals,
+        sh.frame_num,
+        1 << sps.log2_max_frame_num,
+      ) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
     if list.length() == 0 {
       return Err("no reference picture for a P slice")
     }
@@ -177,8 +244,9 @@ fn H264Decoder::decode_slice(
       // bounds of motion compensation.
       width: frame.ystride,
       height: frame.pheight,
+      poc,
     }
-    self.refs.insert(0, { poc, pic, })
+    self.refs.insert(0, { poc, frame_num: sh.frame_num, pic, })
     while self.refs.length() > sps.ref_frame_count {
       ignore(self.refs.pop())
     }

@@ -8,8 +8,9 @@
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: progressive frame pictures, 8-bit 4:2:0, single L0 list, no
-/// weighted prediction, no B slices.
+/// Scope: progressive frame pictures, 8-bit 4:2:0, single L0 list with
+/// reordering and missing-reference substitution, explicit weighted
+/// prediction, no B slices.
 
 ///| One motion compensation operation: luma rectangle (x, y, w, h) within the
 
@@ -199,6 +200,27 @@ fn h264_cabac_read_mvd(
 }
 
 ///|
+/// Fill a partition's `ref_idx` before the remaining reference indices are
+/// decoded: `decode_cabac_mb_ref`'s neighbour contexts read the values already
+/// parsed for earlier partitions of the same macroblock.
+fn h264_write_back_ref(
+  ctx : H264DecCtx,
+  mb_idx : Int32,
+  bx : Int32,
+  by : Int32,
+  bw : Int32,
+  bh : Int32,
+  refi : Int32,
+) -> Unit {
+  let info = ctx.infos[mb_idx]
+  for y = 0; y < bh; y = y + 1 {
+    for x = 0; x < bw; x = x + 1 {
+      info.ref_idx[(by + y) * 4 + bx + x] = refi
+    }
+  }
+}
+
+///|
 /// Write a partition's MV/ref back over its 4x4 blocks (`fill_rectangle` on
 /// the mv/ref caches plus `write_back_motion`).
 fn h264_write_back_part(
@@ -223,6 +245,31 @@ fn h264_write_back_part(
       info.ref_idx[i] = refi
       info.mvd[2 * i] = mvd_absx
       info.mvd[2 * i + 1] = mvd_absy
+    }
+  }
+}
+
+///|
+/// `weight_h264_pixels*`: in-place explicit weighted prediction over a
+/// rectangle.
+fn h264_weight_rect(
+  plane : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  w : Int32,
+  h : Int32,
+  log2_denom : Int32,
+  weight : Int32,
+  offset : Int32,
+) -> Unit {
+  let mut off2 = offset << log2_denom
+  if log2_denom != 0 {
+    off2 = off2 + (1 << (log2_denom - 1))
+  }
+  for y = 0; y < h; y = y + 1 {
+    for x = 0; x < w; x = x + 1 {
+      let i = off + y * stride + x
+      plane[i] = clip_uint8((plane[i] * weight + off2) >> log2_denom)
     }
   }
 }
@@ -297,6 +344,33 @@ fn h264_recon_inter_mb(
       refpic.width / 2,
       refpic.height / 2,
     )
+    if ctx.pwt.use_weight != 0 {
+      let refi = op.ref_idx
+      h264_weight_rect(
+        ctx.y,
+        ybase + op.y * ctx.ystride + op.x,
+        ctx.ystride,
+        op.w,
+        op.h,
+        ctx.pwt.luma_log2_weight_denom,
+        ctx.pwt.luma_weight_l0[refi],
+        ctx.pwt.luma_offset_l0[refi],
+      )
+      if ctx.pwt.use_weight_chroma != 0 {
+        for c = 0; c < 2; c = c + 1 {
+          h264_weight_rect(
+            if c == 0 { ctx.u } else { ctx.v },
+            cbase + op.y / 2 * ctx.cstride + op.x / 2,
+            ctx.cstride,
+            op.w / 2,
+            op.h / 2,
+            ctx.pwt.chroma_log2_weight_denom,
+            ctx.pwt.chroma_weight_l0[refi][c],
+            ctx.pwt.chroma_offset_l0[refi][c],
+          )
+        }
+      }
+    }
   }
   // Residual: per-8x8 luma CBP bits, coefficients in z-ordered blocks.
   ignore(qmul_luma)
@@ -426,6 +500,7 @@ fn h264_decode_mb_cabac_p(
     } else {
       0
     }
+    h264_write_back_ref(ctx, mb_idx, 0, 0, 4, 4, refi)
     let (pmvx, pmvy) = h264_pred_motion(ctx, mb_idx, mb_x, mb_y, 0, 0, 4, refi)
     let (mvx, mvy, ax, ay) = match
       h264_cabac_read_mvd(
@@ -460,6 +535,7 @@ fn h264_decode_mb_cabac_p(
       } else {
         0
       }
+      h264_write_back_ref(ctx, mb_idx, 0, 2 * i, 4, 2, refs[i])
     }
     for i = 0; i < 2; i = i + 1 {
       let by = 2 * i
@@ -499,6 +575,7 @@ fn h264_decode_mb_cabac_p(
       } else {
         0
       }
+      h264_write_back_ref(ctx, mb_idx, 2 * i, 0, 2, 4, refs[i])
     }
     for i = 0; i < 2; i = i + 1 {
       let bx = 2 * i
@@ -545,6 +622,7 @@ fn h264_decode_mb_cabac_p(
       } else {
         0
       }
+      h264_write_back_ref(ctx, mb_idx, 2 * x8, 2 * y8, 2, 2, refs[k])
     }
     for k = 0; k < 4; k = k + 1 {
       let x8 = k % 2

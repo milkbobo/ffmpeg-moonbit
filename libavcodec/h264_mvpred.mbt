@@ -220,9 +220,14 @@ fn h264_pred_8x16_motion(
       return (mx, my)
     }
   } else {
-    let (diag_ref, mx, my) = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, 4, -1)
-    if diag_ref == refi {
-      return (mx, my)
+    // `fetch_diagonal_mv(scan8[4], 2)`: the above-right block, or the
+    // above-left one when the above-right is unavailable.
+    let mut diag = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, 4, -1)
+    if diag.0 == h264_ref_not_avail {
+      diag = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, 1, -1)
+    }
+    if diag.0 == refi {
+      return (diag.1, diag.2)
     }
   }
   h264_pred_motion(ctx, mb_idx, mb_x, mb_y, 2 * i, 0, 2, refi)

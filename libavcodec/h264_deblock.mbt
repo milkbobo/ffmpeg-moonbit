@@ -7,14 +7,16 @@
 /// Original FFmpeg code is LGPL-2.1-or-later, Copyright (c) 2003-2011
 /// Michael Niedermayer <michaelni@gmx.at>. This port keeps the same license.
 ///
-/// Scope: the slice decoder only produces progressive, frame-coded, intra-only
-/// 8-bit 4:2:0 pictures, which collapses `ff_h264_filter_mb` to:
-///   * every macroblock is intra, so bS is 4 on macroblock edges and 3 on the
-///     internal edges (`ff_h264_filter_mb` raises 3 to 4 for progressive
-///     content), and all four bS values of an edge are equal — the kernels
-///     therefore take a single `tc0` instead of the C `int8_t tc[4]`;
-///   * no MBAFF / field coding, so `check_mv`, `mvy_limit`, `MB_FIELD` splits
-///     and the `filter_mb_mbaff_*` kernels are not ported;
+/// Scope: progressive, frame-coded, 8-bit 4:2:0 I/P pictures, so:
+///   * intra macroblocks use bS 4 on macroblock edges and 3 on internal
+///     edges; inter macroblocks derive bS per 4x4 block (2 for non-zero
+///     coefficients, 1 for reference or motion-vector differences) and
+///     compare reference indices through their POC identity, matching the
+///     C `ref2frm` mapping;
+///   * chroma edges reuse the four luma bS values, each controlling two
+///     chroma samples (`tc0_table[..][bS[i]] + 1`);
+///   * no MBAFF / field coding, so `check_mv`'s field cases, `MB_FIELD`
+///     splits and the `filter_mb_mbaff_*` kernels are not ported;
 ///   * no 8x8DCT, so `deblock_edge` is always true and the per-edge
 ///     `mb_type & (edge<<24)` flags are never consulted;
 ///   * `disable_deblocking_filter_idc == 2` means "filter slice boundaries
@@ -245,6 +247,67 @@ fn h264_lf_chroma_intra(
 }
 
 ///|
+/// `filter_mb_edgec{v,h}`: the chroma edge uses the same four luma bS values,
+/// each controlling two chroma samples (`tc0_table[..][bS[i]] + 1`).
+fn h264_filter_chroma_edge(
+  data : Array[Int32],
+  start : Int32,
+  stride : Int32,
+  qp : Int32,
+  a : Int32,
+  b : Int32,
+  bs : Array[Int32],
+  intra : Bool,
+  vertical : Bool,
+) -> Unit {
+  let index_a = qp + a
+  let index_b = qp + b
+  if index_a < 0 ||
+    index_a >= h264_alpha_table.length() ||
+    index_b < 0 ||
+    index_b >= h264_beta_table.length() {
+    return
+  }
+  let alpha = h264_alpha_table[index_a]
+  let beta = h264_beta_table[index_b]
+  if alpha == 0 || beta == 0 {
+    return
+  }
+  let xstep = if vertical { 1 } else { stride }
+  let ystep = if vertical { stride } else { 1 }
+  if intra && bs[0] >= 4 {
+    h264_lf_chroma_intra(data, start, xstep, ystep, 2, alpha, beta)
+    return
+  }
+  let mut p = start
+  for i = 0; i < 4; i = i + 1 {
+    let tc = if bs[i] > 0 { h264_tc0_table[4 * index_a + bs[i]] + 1 } else { 0 }
+    if tc <= 0 {
+      p = p + 2 * ystep
+    } else {
+      for _d = 0; _d < 2; _d = _d + 1 {
+        let p0 = data[p - xstep]
+        let p1 = data[p - 2 * xstep]
+        let q0 = data[p]
+        let q1 = data[p + xstep]
+        if h264_deblock_abs(p0 - q0) < alpha &&
+          h264_deblock_abs(p1 - p0) < beta &&
+          h264_deblock_abs(q1 - q0) < beta {
+          let delta = h264_deblock_clip(
+            ((q0 - p0) * 4 + (p1 - q1) + 4) >> 3,
+            -tc,
+            tc,
+          )
+          data[p - xstep] = h264_deblock_clip_pixel(p0 + delta)
+          data[p] = h264_deblock_clip_pixel(q0 - delta)
+        }
+        p = p + ystep
+      }
+    }
+  }
+}
+
+///|
 /// One filtered edge: the C `filter_mb_edge{v,h}` / `filter_mb_edgec{v,h}`
 /// with `intra` telling whether the strong (bS == 4) kernel may be used.
 fn h264_filter_edge(
@@ -356,9 +419,22 @@ fn h264_bs_pair(
     return if mb_edge { 4 } else { 3 }
   }
   if pnz > 0 || qnz > 0 {
-    return if mb_edge { 3 } else { 2 }
+    return 2
   }
-  if pref != qref {
+  // `fill_filter_caches` maps each ref index through `ref2frm`, so two
+  // indices that name the same picture (reordered/duplicated lists) compare
+  // equal.
+  let pid = if pref >= 0 && pref < ctx.ref_list0.length() {
+    ctx.ref_list0[pref].poc
+  } else {
+    pref
+  }
+  let qid = if qref >= 0 && qref < ctx.ref_list0.length() {
+    ctx.ref_list0[qref].poc
+  } else {
+    qref
+  }
+  if pid != qid {
     return 1
   }
   let dx = if pmvx > qmvx { pmvx - qmvx } else { qmvx - pmvx }
@@ -414,7 +490,6 @@ fn h264_filter_mb(
   for dir = 0; dir < 2; dir = dir + 1 {
     let vertical = dir == 0
     let ystep = if vertical { ctx.ystride } else { 1 }
-    let cstep = if vertical { ctx.cstride } else { 1 }
     for edge = 0; edge < 4; edge = edge + 1 {
       let neigh_intra = if edge == 0 {
         if vertical {
@@ -474,32 +549,7 @@ fn h264_filter_mb(
             false,
             vertical,
           )
-          h264_filter_edge(
-            ctx.u,
-            coff,
-            ctx.cstride,
-            2,
-            cq0,
-            a,
-            b,
-            4,
-            true,
-            true,
-            vertical,
-          )
-          h264_filter_edge(
-            ctx.v,
-            coff,
-            ctx.cstride,
-            2,
-            cq1,
-            a,
-            b,
-            4,
-            true,
-            true,
-            vertical,
-          )
+
         } else {
           h264_filter_edge(
             ctx.y,
@@ -542,48 +592,14 @@ fn h264_filter_mb(
         }
       }
       // Chroma: filtered on the macroblock edge and every second inner edge
-      // (luma edges 4 and 8). For inter edges each 4-sample chroma chunk
-      // takes the max bS of its two luma segments.
+      // (luma edges 0 and 2), with one tc per luma bS segment.
       if edge == 0 || edge == 2 {
-        if strong && edge == 0 {
-          // handled by the strong branch above
-          continue
-        }
-        for j = 0; j < 2; j = j + 1 {
-          let cb = if bs[2 * j] > bs[2 * j + 1] {
-            bs[2 * j]
-          } else {
-            bs[2 * j + 1]
-          }
-          if cb > 0 {
-            h264_filter_edge(
-              ctx.u,
-              coff + 4 * j * cstep,
-              ctx.cstride,
-              1,
-              cq0,
-              a,
-              b,
-              cb,
-              false,
-              true,
-              vertical,
-            )
-            h264_filter_edge(
-              ctx.v,
-              coff + 4 * j * cstep,
-              ctx.cstride,
-              1,
-              cq1,
-              a,
-              b,
-              cb,
-              false,
-              true,
-              vertical,
-            )
-          }
-        }
+        h264_filter_chroma_edge(
+          ctx.u, coff, ctx.cstride, cq0, a, b, bs, strong, vertical,
+        )
+        h264_filter_chroma_edge(
+          ctx.v, coff, ctx.cstride, cq1, a, b, bs, strong, vertical,
+        )
       }
     }
   }

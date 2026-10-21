@@ -8,9 +8,48 @@
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
 /// Supported: first_mb_in_slice, slice_type, PPS/SPS lookup, frame_num,
-/// field flags, IDR POC and reference-marking fields, slice_qp_delta, and the
-/// deblocking filter controls. P/B reference-list and prediction-weight
-/// syntax is rejected explicitly rather than parsed partially.
+/// field flags, IDR POC and reference-marking fields, P reference-list
+/// modification and `pred_weight_table`, slice_qp_delta, and the deblocking
+/// filter controls. B/SP/SI reference-list and weight syntax is rejected
+/// explicitly rather than parsed partially.
+
+///|
+/// `H264PredWeightTable` for P slices (L0 only; B/implicit weights are
+/// outside this port). */
+pub struct H264PredWeight {
+  mut luma_log2_weight_denom : Int32
+  mut chroma_log2_weight_denom : Int32
+  mut use_weight : Int32
+  mut use_weight_chroma : Int32
+  luma_weight_l0 : Array[Int32]
+  luma_offset_l0 : Array[Int32]
+  /// `[ref][component]` (0 = Cb, 1 = Cr).
+  chroma_weight_l0 : Array[Array[Int32]]
+  chroma_offset_l0 : Array[Array[Int32]]
+}
+
+///|
+/// Neutral weight table (`weighted_pred_flag == 0`). */
+pub fn new_h264_pred_weight() -> H264PredWeight {
+  let lw : Array[Int32] = Array::make(16, 1)
+  let lo : Array[Int32] = Array::make(16, 0)
+  let cw : Array[Array[Int32]] = []
+  let co : Array[Array[Int32]] = []
+  for i = 0; i < 16; i = i + 1 {
+    cw.push([1, 1])
+    co.push([0, 0])
+  }
+  {
+    luma_log2_weight_denom: 0,
+    chroma_log2_weight_denom: 0,
+    use_weight: 0,
+    use_weight_chroma: 0,
+    luma_weight_l0: lw,
+    luma_offset_l0: lo,
+    chroma_weight_l0: cw,
+    chroma_offset_l0: co,
+  }
+}
 
 ///|
 /// Decoded fields of an H.264 slice header. */
@@ -39,6 +78,12 @@ pub struct H264SliceHeader {
   num_ref_idx_l0_active : Int32
   /// `cabac_init_idc` (0 when absent or CAVLC).
   cabac_init_flag : Int32
+  /// `pred_weight_table` (all-default when `weighted_pred_flag == 0`).
+  pwt : H264PredWeight
+  /// `ref_pic_list_modification` for L0 (`modification_of_pic_nums_idc`
+  /// 0/1/2 with their operand; the idc == 3 terminator is not stored).
+  ref_mod_l0_ops : Array[Int32]
+  ref_mod_l0_vals : Array[Int32]
 }
 
 ///|
@@ -113,7 +158,9 @@ pub fn ff_h264_decode_slice_header(
     let _ = gb.read_ue() // redundant_pic_cnt
   }
   // P slices: reference picture list number override, list modification and
-  // the (unsupported) explicit prediction-weight table.
+  // the explicit prediction-weight table.
+  let ref_mod_l0_ops : Array[Int32] = []
+  let ref_mod_l0_vals : Array[Int32] = []
   let mut num_ref_idx_l0_active = 1
   if is_p {
     num_ref_idx_l0_active = pps.ref_count_l0
@@ -135,17 +182,80 @@ pub fn ff_h264_decode_slice_header(
         if idc < 0 {
           return Err("EINVAL")
         }
-        if idc == 0 {
+        if idc == 3 {
           break
         }
-        // Reordering commands 0..5 (0/1: short-term reorder, 2: long-term
-        // reorder, 4/5: trailing gaps): the operand is consumed; this port
-        // keeps a plain most-recent-first list and ignores the reorder.
-        let _ = gb.read_ue() // abs_diff_pic_num_minus1 / long_term_pic_num
+        if idc > 2 {
+          return Err("EINVAL")
+        }
+        let val = gb.read_ue()
+        if val < 0 {
+          return Err("EINVAL")
+        }
+        ref_mod_l0_ops.push(idc)
+        ref_mod_l0_vals.push(val)
       }
     }
-    if pps.weighted_pred != 0 {
-      return Err("explicit weighted prediction is not supported")
+  }
+  let pwt = new_h264_pred_weight()
+  if is_p && pps.weighted_pred != 0 {
+    // `ff_h264_pred_weight_table`, L0 only.
+    let luma_denom = gb.read_ue()
+    pwt.luma_log2_weight_denom = if luma_denom < 0 || luma_denom > 7 {
+      0
+    } else {
+      luma_denom
+    }
+    let luma_def = 1 << pwt.luma_log2_weight_denom
+    let mut chroma_def = 1
+    if sps.chroma_format_idc != 0 {
+      let chroma_denom = gb.read_ue()
+      pwt.chroma_log2_weight_denom = if chroma_denom < 0 || chroma_denom > 7 {
+        0
+      } else {
+        chroma_denom
+      }
+      chroma_def = 1 << pwt.chroma_log2_weight_denom
+    }
+    for i = 0; i < num_ref_idx_l0_active; i = i + 1 {
+      if gb.read1().reinterpret_as_int() != 0 {
+        let w = gb.read_se()
+        let o = gb.read_se()
+        if w < -128 || w > 127 || o < -128 || o > 127 {
+          return Err("EINVAL")
+        }
+        pwt.luma_weight_l0[i] = w
+        pwt.luma_offset_l0[i] = o
+        if w != luma_def || o != 0 {
+          pwt.use_weight = 1
+        }
+      } else {
+        pwt.luma_weight_l0[i] = luma_def
+        pwt.luma_offset_l0[i] = 0
+      }
+      if sps.chroma_format_idc != 0 {
+        let has_chroma = gb.read1().reinterpret_as_int() != 0
+        for j = 0; j < 2; j = j + 1 {
+          if has_chroma {
+            let w = gb.read_se()
+            let o = gb.read_se()
+            if w < -128 || w > 127 || o < -128 || o > 127 {
+              return Err("EINVAL")
+            }
+            pwt.chroma_weight_l0[i][j] = w
+            pwt.chroma_offset_l0[i][j] = o
+            if w != chroma_def || o != 0 {
+              pwt.use_weight_chroma = 1
+            }
+          } else {
+            pwt.chroma_weight_l0[i][j] = chroma_def
+            pwt.chroma_offset_l0[i][j] = 0
+          }
+        }
+      }
+    }
+    if pwt.use_weight_chroma != 0 {
+      pwt.use_weight = 1
     }
   }
   // dec_ref_pic_marking
@@ -243,5 +353,8 @@ pub fn ff_h264_decode_slice_header(
     slice_beta_offset: beta,
     num_ref_idx_l0_active,
     cabac_init_flag,
+    pwt,
+    ref_mod_l0_ops,
+    ref_mod_l0_vals,
   })
 }

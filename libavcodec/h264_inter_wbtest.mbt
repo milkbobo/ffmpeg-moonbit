@@ -212,6 +212,7 @@ test "h264 mvpred: 16x16 median prediction from neighbours" {
     ref_count0: 1,
     ref_list0: [],
     mb_skip_run: 0,
+    pwt: new_h264_pred_weight(),
   }
   // MB3 = (1, 1): A = MB2 block (3, 0) = (16, 8), B = MB1 block (1, 3) =
   // (12, -4), C: top-right of the partition is outside → top-left MB0
@@ -267,9 +268,11 @@ test "h264 mvpred: P skip zero shortcut" {
         cstride: 16,
         width: 32,
         height: 32,
+        poc: 0,
       },
     ],
     mb_skip_run: 0,
+    pwt: new_h264_pred_weight(),
   }
   let (mx, my) = h264_pred_pskip_motion(ctx, 3, 1, 1)
   assert_eq(mx, 0)
