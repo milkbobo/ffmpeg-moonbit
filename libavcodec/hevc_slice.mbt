@@ -23,6 +23,12 @@ pub struct HevcSliceHeader {
   dependent_slice_segment_flag : Bool
   pps_id : Int32
   slice_type : Int32
+  num_ref_idx_l0_active : Int32
+  num_ref_idx_l1_active : Int32
+  mvd_l1_zero_flag : Bool
+  cabac_init_flag : Bool
+  collocated_ref_idx : Int32
+  max_num_merge_cand : Int32
   pic_output_flag : Bool
   colour_plane_id : Int32
   pic_order_cnt_lsb : Int32
@@ -76,6 +82,47 @@ fn hevc_ceil_log2(v : Int32) -> Int32 {
     n = n + 1
   }
   n
+}
+
+///|
+/// `pred_weight_table`: consume the luma/chroma weight flags and deltas. The
+/// values are not retained (the pixel decoder will need them later).
+fn hevc_skip_pred_weight_table(
+  gb : BitReader,
+  chroma : Bool,
+  nb_l0 : Int32,
+  nb_l1 : Int32,
+) -> Result[Unit, String] {
+  ignore(gb.read_ue_long()) // luma_log2_weight_denom
+  if chroma {
+    ignore(gb.read_ue_long()) // delta_chroma_log2_weight_denom
+  }
+  let total = nb_l0 + nb_l1
+  let luma_flags : Array[Bool] = []
+  for _ in 0..<total {
+    luma_flags.push(gb.read1() != 0)
+  }
+  for i in 0..<total {
+    if luma_flags[i] {
+      ignore(gb.read_se()) // delta_luma_weight
+      ignore(gb.read_se()) // luma_offset
+    }
+  }
+  if chroma {
+    let chroma_flags : Array[Bool] = []
+    for _ in 0..<total {
+      chroma_flags.push(gb.read1() != 0)
+    }
+    for i in 0..<total {
+      if chroma_flags[i] {
+        ignore(gb.read_se()) // delta_chroma_weight_cb
+        ignore(gb.read_se()) // delta_chroma_offset_cb
+        ignore(gb.read_se()) // delta_chroma_weight_cr
+        ignore(gb.read_se()) // delta_chroma_offset_cr
+      }
+    }
+  }
+  Ok(())
 }
 
 ///|
@@ -196,8 +243,71 @@ pub fn ff_hevc_decode_slice_header(
       sao_chroma = gb.read1() != 0
     }
   }
+  let mut nb_l0 = 0
+  let mut nb_l1 = 0
+  let mut mvd_l1_zero = false
+  let mut cabac_init = false
+  let mut collocated_ref_idx = 0
+  let mut max_merge_cand = 0
   if slice_type != hevc_slice_i {
-    return Err("PATCHWELCOME: HEVC inter slice header")
+    nb_l0 = pps.num_ref_idx_l0_default_active
+    if slice_type == hevc_slice_b {
+      nb_l1 = pps.num_ref_idx_l1_default_active
+    }
+    if gb.read1() != 0 {
+      nb_l0 = gb.read_ue_long().to_int() + 1
+      if slice_type == hevc_slice_b {
+        nb_l1 = gb.read_ue_long().to_int() + 1
+      }
+    }
+    if nb_l0 < 1 || nb_l0 > 16 || nb_l1 < 0 || nb_l1 > 16 {
+      return Err("hevc: invalid reference count")
+    }
+    if pps.lists_modification_present_flag != 0 {
+      // Needs the RPS-derived frame reference count; not ported yet.
+      return Err("PATCHWELCOME: HEVC reference list modification")
+    }
+    if slice_type == hevc_slice_b {
+      mvd_l1_zero = gb.read1() != 0
+    }
+    if pps.cabac_init_present_flag != 0 {
+      cabac_init = gb.read1() != 0
+    }
+    if temporal_mvp {
+      let collocated_from_l0 = if slice_type == hevc_slice_b {
+        gb.read1() != 0
+      } else {
+        true
+      }
+      let collocated_nb = if collocated_from_l0 { nb_l0 } else { nb_l1 }
+      if collocated_nb > 1 {
+        collocated_ref_idx = gb.read_ue_long().to_int()
+        if collocated_ref_idx >= collocated_nb {
+          return Err("hevc: invalid collocated_ref_idx")
+        }
+      }
+    }
+    let weighted = (pps.weighted_pred_flag != 0 && slice_type == hevc_slice_p) ||
+      (pps.weighted_bipred_flag != 0 && slice_type == hevc_slice_b)
+    if weighted {
+      match
+        hevc_skip_pred_weight_table(
+          gb,
+          sps.chroma_format_idc != 0,
+          nb_l0,
+          nb_l1,
+        ) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+    }
+    max_merge_cand = 5 - gb.read_ue_long().to_int()
+    if max_merge_cand < 1 || max_merge_cand > 5 {
+      return Err("hevc: invalid merge candidate count")
+    }
+    if sps.motion_vector_resolution_control_idc == 2 {
+      ignore(gb.read1()) // use_integer_mv_flag
+    }
   }
   let slice_qp_delta = gb.read_se()
   let mut cb_qp_offset = 0
@@ -243,6 +353,12 @@ pub fn ff_hevc_decode_slice_header(
     dependent_slice_segment_flag: dependent,
     pps_id,
     slice_type,
+    num_ref_idx_l0_active: nb_l0,
+    num_ref_idx_l1_active: nb_l1,
+    mvd_l1_zero_flag: mvd_l1_zero,
+    cabac_init_flag: cabac_init,
+    collocated_ref_idx,
+    max_num_merge_cand: max_merge_cand,
     pic_output_flag: pic_output,
     colour_plane_id,
     pic_order_cnt_lsb: poc_lsb,
