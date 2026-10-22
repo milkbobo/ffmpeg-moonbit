@@ -197,7 +197,8 @@ fn opus_celt_spread(
 ///|
 /// Decode a non-recursive CELT PVQ band (`celt_alg_unquant`).
 /// `spread` is 0:none, 1:light, 2:normal or 3:aggressive; `blocks` is
-/// 1/2/4/8 and must divide N. K must be positive and gain finite/nonnegative.
+/// 1/2/4/8/16 and must divide N. Sixteen blocks occur after CELT TF subdivision.
+/// K must be positive and gain finite/nonnegative.
 /// Invalid parameters leave the entropy state unchanged. This kernel does
 /// not perform bit allocation, folding or stereo band splitting.
 ///
@@ -215,7 +216,7 @@ pub fn OpusRangeDecoder::decode_celt_band(
 ) -> Result[OpusCeltBand, String] {
   if k <= 0 { return Err("opus: CELT band requires positive pulse count") }
   if spread < 0 || spread > 3 { return Err("opus: invalid CELT spread") }
-  if !(blocks == 1 || blocks == 2 || blocks == 4 || blocks == 8) || n % blocks != 0 {
+  if !(blocks == 1 || blocks == 2 || blocks == 4 || blocks == 8 || blocks == 16) || n % blocks != 0 {
     return Err("opus: invalid CELT block count")
   }
   if !(gain >= 0.0 && gain <= 3.4028234663852886e38) {

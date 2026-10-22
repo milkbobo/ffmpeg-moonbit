@@ -46,13 +46,16 @@ fn append_packet(out : Array[Byte], data : Bytes) -> Unit {
 
 fn main raise {
   if @env.args().contains("--prepare") {
-    let root = @json.parse(@fs.read_file_to_string(".scratch/opus_51_probe.json"))
+    // Optional prefix also prepares the CELT duration/channel matrix.
+    let mut stem = "opus_51"
+    for arg in @env.args() { if arg.has_prefix("--stem=") { stem = arg[7:].to_owned() } }
+    let root = @json.parse(@fs.read_file_to_string(".scratch/" + stem + "_probe.json"))
     guard field(root, "streams") is Array([stream, ..]) else { fail("missing stream") }
     guard field(root, "packets") is Array(packets) else { fail("missing packets") }
     let out : Array[Byte] = []
     append_packet(out, hex_dump(text_field(stream, "extradata")))
     for packet in packets { append_packet(out, hex_dump(text_field(packet, "data"))) }
-    @fs.write_bytes_to_file(".scratch/opus_51_packets.bin", Bytes::from_array(out[:]))
+    @fs.write_bytes_to_file(".scratch/" + stem + "_packets.bin", Bytes::from_array(out[:]))
     println("prepared \{packets.length()} packets for original C parser")
     return
   }

@@ -527,6 +527,31 @@ $msg | git commit -F -
   coupled stream 的左右通道；255 表示静音，重复索引复制先前输出。family 2/255
   保持原顺序。OpusHead 的输入采样率只是元数据，解码时基始终 48 kHz，pre-skip 同理。
   MP4 dOps 的增益/pre-skip/rate 是大端，转换后的 OpusHead 为小端，增益按有符号 Q8 解释。
+- **CELT 分配中的隐式无符号比较**：`opus_rc_tell_frac` 返回 UInt32，和有符号
+  `tbits_8ths` 比较时 C 会把预算转成无符号；`CeltBlockSize` 仅含非负枚举值，GCC
+  下 `(f->size + 2) << 3` 同样使 anti-collapse 预留比较转成无符号。极小畸形帧中
+  预算可为负，照普通 Int 比较会在 trim/boost/anti-collapse 上分歧；移植显式用 UInt32
+  比较，896 组 C 分配回归覆盖这些情况。`pvq_bits` 是 eighth-bit 预算，不是 K 脉冲数。
+- **CELT setup 不是帧终态**：`decode_celt_setup` 仅解到 fine-energy 后、PVQ 前，
+  输入历史为两个声道各 21 个 Float32 能量，mono 先取两行最大值。输出的 energy 不应
+  立即当成下一帧历史；还须 PVQ、最终能量、静音修正和帧尾历史提交。TF 的正负值
+  区分频率/时间分辨率，静音 setup 也要保留 C 的中间状态。`opus_celt_reference.c`
+  以 `-ffp-contract=off` 编译，粗细能量与后滤波增益按 Float32 位模式对拍。
+- **CELT 的 TF 块数与物理短块数不同**：physical blocks 最多 8，负 TF 可使内部 PVQ
+  blocks 达到 16；基本 PVQ 核必须允许 16。TF 检查需依据 `size/transient` 对应的四项
+  表，不能只检查 -3..size；伪造 transient TF=-3 可把 stride 扩到 64 并越过 Hadamard 表。
+  C 的 `M_SQRT1_2`/`M_SQRT2` 是 double 常量，Haar/anti-collapse 的对应乘法先在 Double
+  完成再转 Float，不能提早把常量舍入成 Float。折叠向量在 TF 重排前复制，防止污染 norm。
+- **CELT 连续频域历史的提交顺序**：先 PVQ、保留的 anti-collapse bit、最终能量，
+  然后 anti-collapse/反归一化/静音修正。mono 再把 energy 复制到第二行；长块推进两代
+  previous，transient 只取 recent 的最小值，频带外 energy=0/recent=-28。帧尾 noise seed
+  必须设为 range coder 的 `range`，不能持久化最终 LCG。`OpusCeltHistory` 输入保持不变，
+  只提交返回历史。静音帧安全余量可使 PVQ budget=-1，归一化入口需要保留此合法情况。
+- **最小 C 树的 Opus reference callback**：若 CONFIG_OPUS_DECODER=0，`pvq_decode_band`
+  会直接返回 0；对拍需显式用 `quant_band_template(..., quant=0)` 作回调，再调用原始
+  `ff_celt_quant_bands`。黄金脚本为 `opus_celt_spectrum_reference.c`，同前用
+  `-ffp-contract=off`。新流的 ffprobe 转换可用
+  `emit_opus_multistream_vectors.mbtx --prepare --stem=NAME`，不会改动运行时依赖。
 - **HLS 初始化的密钥属于声明时刻**：MAP 之后发生 KEY 轮换，不能用媒体段的当前密钥
   解密已声明的 MAP；按 key entry 缓存，同 URI 的两次声明也要区分。加密 MAP 必须显式 IV。
   `MediaFetch` 范围回调返回恰好请求的字节；短响应拒绝，Err 后游标不前进，允许重试。

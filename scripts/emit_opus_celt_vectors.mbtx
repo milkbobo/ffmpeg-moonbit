@@ -1,0 +1,48 @@
+import { "moonbitlang/x/fs", "moonbitlang/core/encoding/base64" }
+
+fn main raise {
+  let alloc = StringBuilder()
+  let setup = StringBuilder()
+  let real = StringBuilder()
+  let silence = StringBuilder()
+  let mut a = 0
+  let mut e = 0
+  let mut r = 0
+  let mut z = 0
+  for line in @fs.read_file_to_string(".scratch/opus_celt_reference.txt").split("\n") {
+    if line.trim().is_empty() { continue }
+    let quoted = "  \"" + line.trim().to_owned() + "\",\n"
+    if line.has_prefix("A ") { alloc.write_string(quoted); a += 1 }
+    else if line.has_prefix("E ") { setup.write_string(quoted); e += 1 }
+    else if line.has_prefix("R ") { real.write_string(quoted); r += 1 }
+    else if line.has_prefix("Z ") { silence.write_string(quoted); z += 1 }
+    else { fail("unknown CELT reference row") }
+  }
+  guard a == 896 && e == 896 && r == 16 && z == 8 else { fail("incomplete CELT reference") }
+  let out = StringBuilder()
+  out.write_string("// Original FFmpeg 9.0.2 celt.c/dec_celt.c golden results.\n// Produced by scripts/opus_celt_reference.c, embedded with\n// scripts/emit_opus_celt_vectors.mbtx. LGPL-2.1-or-later.\n// A/E/R/Z: allocation, synthetic setup, real 5.1 setup, silence setup.\n// Fields: spread trim anticollapse coded_bands intensity dual remaining,\n// range value total_bits tell_frac, caps[21] pvq_bits[21] fine_bits[21]\n// fine_priority[21]. A ends with a 3-bit raw probe; E/R/Z end with\n// silence transient blocks postfilter_period postfilter_gains[3] TF[21]\n// energy[2][21] (Float32 bit patterns, before PVQ and final energy).\n")
+  for (name, data) in [("alloc",alloc.to_string()), ("setup",setup.to_string()), ("real",real.to_string()), ("silence",silence.to_string())] {
+    out.write_string("\n///|\nlet opus_celt_" + name + "_reference : Array[String] = [\n" + data + "]\n")
+  }
+  let corpus = @fs.read_file_to_bytes(".scratch/opus_51_packets.bin")
+  let mut pos = 0
+  let mut count = 0
+  while pos + 4 <= corpus.length() {
+    let size = corpus[pos].to_int() | (corpus[pos + 1].to_int() << 8) |
+      (corpus[pos + 2].to_int() << 16) | (corpus[pos + 3].to_int() << 24)
+    pos += 4
+    guard size > 0 && size <= corpus.length() - pos else { fail("bad ffprobe corpus record") }
+    let encoded = @base64.encode(corpus[pos:pos + size])
+    out.write_string("\n///|\nlet opus_celt_real_record_\{count} : Bytes =\n")
+    for i = 0; i < encoded.length(); i = i + 112 {
+      if i > 0 { out.write_string(" +\n") }
+      out.write_string("  b\"" + encoded[i:(i + 112).min(encoded.length())].to_owned() + "\"")
+    }
+    out.write_string("\n")
+    pos += size
+    count += 1
+  }
+  guard pos == corpus.length() && count == 5 else { fail("expected header and four real packets") }
+  @fs.write_string_to_file("libavcodec/opus_celt_realdata_wbtest.mbt", out.to_string())
+  println("embedded \{a} allocations, \{e} setups, \{z} silence setups, \{r} real frames")
+}

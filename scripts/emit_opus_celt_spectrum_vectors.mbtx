@@ -1,0 +1,49 @@
+import { "moonbitlang/x/fs", "moonbitlang/core/encoding/base64" }
+
+fn main raise {
+  let names=["opus_51","opus_celt_120_mono","opus_celt_120_stereo",
+    "opus_celt_240_mono","opus_celt_240_stereo","opus_celt_480_mono",
+    "opus_celt_480_stereo","opus_celt_960_mono","opus_celt_960_stereo"]
+  let out=StringBuilder()
+  out.write_string("///|\n/// Original FFmpeg opus/celt.c + pvq.c + dec_celt.c on libopus frames.\n/// S: flush-history normalized spectrum; T: continuous finalized spectrum.\n/// S fields: packet stream phase samples channels range value bits frac seed,\n/// then channel-major masks[21] and coefficient Float32 bits.\n/// T additionally has silence transient blocks anti period gains[3] after seed,\n/// and energy[42]/previous[84] after masks.\n/// Additional streams: decaying 440/660 Hz at 48 kHz for 0.04 s; libopus\n/// -application lowdelay -frame_duration 2.5/5/10/20 -b:a 64000/128000.\n/// Prepare ffprobe records with emit_opus_multistream_vectors.mbtx --prepare\n/// --stem=NAME; run opus_celt_spectrum_reference.c on NAME_packets.bin.\n/// Regenerate with scripts/emit_opus_celt_spectrum_vectors.mbtx.\n/// LGPL-2.1-or-later.\nlet opus_celt_spectrum_corpora : Array[CeltSpectrumCorpus] = [\n")
+  let mut total=0
+  let silence : Array[String]=[]
+  for name in names {
+    let bytes=@fs.read_file_to_bytes(".scratch/"+name+"_packets.bin")
+    let records : Array[Bytes]=[]
+    let mut pos=0
+    while pos+4<=bytes.length() {
+      let size=bytes[pos].to_int() | (bytes[pos+1].to_int()<<8) | (bytes[pos+2].to_int()<<16) | (bytes[pos+3].to_int()<<24)
+      pos+=4
+      guard size>0 && size<=bytes.length()-pos else {fail("bad corpus record")}
+      records.push(bytes[pos:pos+size].to_owned()); pos+=size
+    }
+    guard pos==bytes.length() && records.length()>1 else {fail("truncated corpus")}
+    let streams=if records[0][18].to_int()==0 {1} else {records[0][19].to_int()}
+    let expected=2*(records.length()-1)*streams
+    let normalized : Array[String]=[]
+    let complete : Array[String]=[]
+    for line in @fs.read_file_to_string(".scratch/"+name+"_spectrum_reference.txt").split("\n") {
+      if line.has_prefix("S ") {normalized.push(line.trim().to_owned())}
+      if line.has_prefix("T ") {complete.push(line.trim().to_owned())}
+      if name=="opus_51" && line.has_prefix("Z ") {silence.push(line.trim().to_owned())}
+    }
+    guard normalized.length()==expected && complete.length()==expected else {fail("incomplete reference for "+name)}
+    total+=expected
+    out.write_string("  { name: \""+name+"\", head: b\""+@base64.encode(records[0])+"\", packets: [\n")
+    for i in 1..<records.length() {out.write_string("    b\""+@base64.encode(records[i])+"\",\n")}
+    out.write_string("  ], normalized: [\n")
+    for line in normalized {out.write_string("    \""+line+"\",\n")}
+    out.write_string("  ], complete: [\n")
+    for line in complete {out.write_string("    \""+line+"\",\n")}
+    out.write_string("  ] },\n")
+  }
+  guard total==168 else {fail("unexpected total frame count")}
+  out.write_string("]\n")
+  guard silence.length()==8 else {fail("incomplete canonical silence reference")}
+  out.write_string("\n///|\nlet opus_celt_spectrum_silence_reference : Array[String] = [\n")
+  for line in silence {out.write_string("  \""+line+"\",\n")}
+  out.write_string("]\n")
+  @fs.write_string_to_file("libavcodec/opus_celt_spectrum_realdata_wbtest.mbt",out.to_string())
+  println("embedded nine corpora, 168 normalized + 168 continuous frames")
+}
