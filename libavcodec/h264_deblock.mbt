@@ -379,10 +379,14 @@ fn h264_deblock_block(
   let nmb = ay / 4 * ctx.mb_width + ax / 4
   let info = ctx.infos[nmb]
   let idx = ay % 4 * 4 + ax % 4
+  // CAVLC stores four entropy counts, with their sum in the 8x8 leader.
+  // The deblock cache expands the actual 8x8 coefficient presence to all
+  // four 4x4 locations; entropy counts themselves must remain unchanged.
+  let nz_idx = if info.transform_8x8 { (idx & 8) + (idx & 2) } else { idx }
   (
     h264_is_intra_type(info.mb_type_bits),
-    info.nz[idx],
-    info.ref_idx[idx],
+    info.nz[nz_idx],
+    info.ref_identity[idx],
     info.mv[2 * idx],
     info.mv[2 * idx + 1],
   )
@@ -424,16 +428,8 @@ fn h264_bs_pair(
   // `fill_filter_caches` maps each ref index through `ref2frm`, so two
   // indices that name the same picture (reordered/duplicated lists) compare
   // equal.
-  let pid = if pref >= 0 && pref < ctx.ref_list0.length() {
-    ctx.ref_list0[pref].poc
-  } else {
-    pref
-  }
-  let qid = if qref >= 0 && qref < ctx.ref_list0.length() {
-    ctx.ref_list0[qref].poc
-  } else {
-    qref
-  }
+  let pid = pref
+  let qid = qref
   if pid != qid {
     return 1
   }
@@ -513,6 +509,10 @@ fn h264_filter_mb(
       }
       if at_border {
         continue
+      }
+      if edge == 0 && ctx.infos[mb_idx].deblock_idc == 2 {
+        let neighbor = mb_idx - (if vertical { 1 } else { ctx.mb_width })
+        if ctx.infos[neighbor].slice_num != ctx.infos[mb_idx].slice_num { continue }
       }
       // Neighbour QP for the macroblock edge, own QP for inner edges.
       let neigh_qp = if edge == 0 {

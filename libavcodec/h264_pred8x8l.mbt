@@ -17,10 +17,11 @@ fn h264_pred8x8l(
   top : Bool,
   left : Bool,
   topright : Bool,
+  topleft? : Bool = top && left,
 ) -> Result[Unit, String] {
   let top_raw : Array[Int32] = Array::make(16, 128)
   let left_raw : Array[Int32] = Array::make(8, 128)
-  let has_topleft = top && left
+  let has_topleft = topleft
   let has_topright = top && topright
   let lt = if has_topleft { plane[base - stride - 1] } else { 128 }
   if top {

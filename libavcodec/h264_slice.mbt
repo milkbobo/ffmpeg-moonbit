@@ -1,21 +1,16 @@
 ///|
 /// H.264 slice header parsing (FFmpeg 9.0.2 `h264_slice.c`,
-/// `ff_h264_decode_slice_header`), currently for I/SI slices of a single
-/// frame. This is the video-side slice-layer foundation; macroblock
-/// reconstruction (CAVLC, intra prediction, transforms, deblocking) is the
-/// next slice.
+/// `ff_h264_decode_slice_header`): I/P/B/SP/SI header syntax. Pixel decoding
+/// remains a separate layer and currently supports progressive I/P.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
 /// Supported: first_mb_in_slice, slice_type, PPS/SPS lookup, frame_num,
-/// field flags, IDR POC and reference-marking fields, P reference-list
-/// modification and `pred_weight_table`, slice_qp_delta, and the deblocking
-/// filter controls. B/SP/SI reference-list and weight syntax is rejected
-/// explicitly rather than parsed partially.
+/// field flags, POC 0/1/2, reference marking, L0/L1 list modification and
+/// explicit weights, B direct flag, SP/SI QS and deblocking controls.
 
 ///|
-/// `H264PredWeightTable` for P slices (L0 only; B/implicit weights are
-/// outside this port). */
+/// Explicit prediction weights for L0/L1; implicit B weights are derived later.
 pub struct H264PredWeight {
   mut luma_log2_weight_denom : Int32
   mut chroma_log2_weight_denom : Int32
@@ -26,6 +21,10 @@ pub struct H264PredWeight {
   /// `[ref][component]` (0 = Cb, 1 = Cr).
   chroma_weight_l0 : Array[Array[Int32]]
   chroma_offset_l0 : Array[Array[Int32]]
+  luma_weight_l1 : Array[Int32]
+  luma_offset_l1 : Array[Int32]
+  chroma_weight_l1 : Array[Array[Int32]]
+  chroma_offset_l1 : Array[Array[Int32]]
 }
 
 ///|
@@ -48,6 +47,10 @@ pub fn new_h264_pred_weight() -> H264PredWeight {
     luma_offset_l0: lo,
     chroma_weight_l0: cw,
     chroma_offset_l0: co,
+    luma_weight_l1: Array::make(16, 1),
+    luma_offset_l1: Array::make(16, 0),
+    chroma_weight_l1: [for _ in 0..<16 => [1, 1]],
+    chroma_offset_l1: [for _ in 0..<16 => [0, 0]],
   }
 }
 
@@ -68,6 +71,12 @@ pub struct H264SliceHeader {
   /// `pic_order_cnt_lsb` (POC type 0 only; -1 otherwise).
   pic_order_cnt_lsb : Int32
   delta_pic_order_cnt_bottom : Int32
+  delta_pic_order_cnt : Array[Int32]
+  no_output_of_prior_pics : Bool
+  long_term_reference : Bool
+  adaptive_ref_marking : Bool
+  /// MMCO opcode, short difference-minus-one/long pic number, long index/max+1.
+  mmco : Array[(Int32, Int32, Int32)]
   slice_qp_delta : Int32
   /// Slice QP (`pps->init_qp + slice_qp_delta`).
   qscale : Int32
@@ -76,6 +85,10 @@ pub struct H264SliceHeader {
   slice_beta_offset : Int32
   /// `num_ref_idx_l0_active` (P slices; 1 for I slices).
   num_ref_idx_l0_active : Int32
+  num_ref_idx_l1_active : Int32
+  direct_spatial_mv_pred : Bool
+  sp_for_switch : Bool
+  slice_qs_delta : Int32
   /// `cabac_init_idc` (0 when absent or CAVLC).
   cabac_init_flag : Int32
   /// `pred_weight_table` (all-default when `weighted_pred_flag == 0`).
@@ -84,10 +97,12 @@ pub struct H264SliceHeader {
   /// 0/1/2 with their operand; the idc == 3 terminator is not stored).
   ref_mod_l0_ops : Array[Int32]
   ref_mod_l0_vals : Array[Int32]
+  ref_mod_l1_ops : Array[Int32]
+  ref_mod_l1_vals : Array[Int32]
 }
 
 ///|
-/// `ff_h264_decode_slice_header` for I/SI slices. `nal_type`/`nal_ref_idc`
+/// `ff_h264_decode_slice_header`. `nal_type`/`nal_ref_idc`
 /// come from the NAL header; `gb` must be positioned after that header.
 pub fn ff_h264_decode_slice_header(
   gb : BitReader,
@@ -104,11 +119,8 @@ pub fn ff_h264_decode_slice_header(
     return Err("EINVAL")
   }
   let slice_type_nos = slice_type % 5
-  if slice_type_nos != 2 && slice_type_nos != 4 && slice_type_nos != 0 {
-    // B/SP reference-list and weight-table syntax is outside this slice.
-    return Err("PATCHWELCOME")
-  }
-  let is_p = slice_type_nos == 0
+  let is_b = slice_type_nos == 1
+  let is_p = slice_type_nos == 0 || slice_type_nos == 3
   let pps_id = gb.read_ue()
   if pps_id < 0 || pps_id >= max_pps_count {
     return Err("EINVAL")
@@ -143,27 +155,32 @@ pub fn ff_h264_decode_slice_header(
   }
   let mut pic_order_cnt_lsb = -1
   let mut delta_pic_order_cnt_bottom = 0
+  let delta_pic_order_cnt = [0, 0]
   if sps.poc_type == 0 {
     pic_order_cnt_lsb = gb.read(sps.log2_max_poc_lsb).reinterpret_as_int()
-    if bottom_field_flag != 0 && sps.delta_pic_order_always_zero_flag == 0 {
+    if pps.pic_order_present != 0 && field_pic_flag == 0 {
       delta_pic_order_cnt_bottom = gb.read_se()
     }
   } else if sps.poc_type == 1 && sps.delta_pic_order_always_zero_flag == 0 {
-    let _ = gb.read_se() // delta_pic_order_cnt[0]
-    if bottom_field_flag != 0 {
-      let _ = gb.read_se() // delta_pic_order_cnt[1]
+    delta_pic_order_cnt[0] = gb.read_se()
+    if pps.pic_order_present != 0 && field_pic_flag == 0 {
+      delta_pic_order_cnt[1] = gb.read_se()
     }
   }
   if pps.redundant_pic_cnt_present != 0 {
     let _ = gb.read_ue() // redundant_pic_cnt
   }
-  // P slices: reference picture list number override, list modification and
-  // the explicit prediction-weight table.
+  // Reference counts, direct flag and both reference-list modifications.
   let ref_mod_l0_ops : Array[Int32] = []
   let ref_mod_l0_vals : Array[Int32] = []
+  let ref_mod_l1_ops : Array[Int32] = []
+  let ref_mod_l1_vals : Array[Int32] = []
+  let direct_spatial_mv_pred = is_b && gb.read1() != 0U
   let mut num_ref_idx_l0_active = 1
-  if is_p {
+  let mut num_ref_idx_l1_active = 1
+  if is_p || is_b {
     num_ref_idx_l0_active = pps.ref_count_l0
+    num_ref_idx_l1_active = pps.ref_count_l1
     let ovr = gb.read1().reinterpret_as_int()
     if ovr != 0 {
       let n = gb.read_ue()
@@ -171,12 +188,20 @@ pub fn ff_h264_decode_slice_header(
         return Err("EINVAL")
       }
       num_ref_idx_l0_active = n + 1
+      if is_b {
+        let n = gb.read_ue()
+        if n < 0 || n >= 16 { return Err("EINVAL") }
+        num_ref_idx_l1_active = n + 1
+      }
     }
-    if num_ref_idx_l0_active > 16 {
+    if num_ref_idx_l0_active > 16 || (is_b && num_ref_idx_l1_active > 16) {
       return Err("EINVAL")
     }
-    let mod_flag = gb.read1().reinterpret_as_int()
-    if mod_flag != 0 {
+    for list in 0..<(if is_b { 2 } else { 1 }) {
+      let ops = if list == 0 { ref_mod_l0_ops } else { ref_mod_l1_ops }
+      let vals = if list == 0 { ref_mod_l0_vals } else { ref_mod_l1_vals }
+      let mod_flag = gb.read1().reinterpret_as_int()
+      if mod_flag != 0 {
       while true {
         let idc = gb.read_ue()
         if idc < 0 {
@@ -185,21 +210,22 @@ pub fn ff_h264_decode_slice_header(
         if idc == 3 {
           break
         }
-        if idc > 2 {
+        if idc > 2 || ops.length() >= 32 {
           return Err("EINVAL")
         }
         let val = gb.read_ue()
         if val < 0 {
           return Err("EINVAL")
         }
-        ref_mod_l0_ops.push(idc)
-        ref_mod_l0_vals.push(val)
+        ops.push(idc)
+        vals.push(val)
+      }
       }
     }
   }
   let pwt = new_h264_pred_weight()
-  if is_p && pps.weighted_pred != 0 {
-    // `ff_h264_pred_weight_table`, L0 only.
+  if (is_p && pps.weighted_pred != 0) || (is_b && pps.weighted_bipred_idc == 1) {
+    // `ff_h264_pred_weight_table`, both coded reference lists.
     let luma_denom = gb.read_ue()
     pwt.luma_log2_weight_denom = if luma_denom < 0 || luma_denom > 7 {
       0
@@ -217,21 +243,27 @@ pub fn ff_h264_decode_slice_header(
       }
       chroma_def = 1 << pwt.chroma_log2_weight_denom
     }
-    for i = 0; i < num_ref_idx_l0_active; i = i + 1 {
+    for list in 0..<(if is_b { 2 } else { 1 }) {
+      let count = if list == 0 { num_ref_idx_l0_active } else { num_ref_idx_l1_active }
+      let lw = if list == 0 { pwt.luma_weight_l0 } else { pwt.luma_weight_l1 }
+      let lo = if list == 0 { pwt.luma_offset_l0 } else { pwt.luma_offset_l1 }
+      let cw = if list == 0 { pwt.chroma_weight_l0 } else { pwt.chroma_weight_l1 }
+      let co = if list == 0 { pwt.chroma_offset_l0 } else { pwt.chroma_offset_l1 }
+    for i = 0; i < count; i = i + 1 {
       if gb.read1().reinterpret_as_int() != 0 {
         let w = gb.read_se()
         let o = gb.read_se()
         if w < -128 || w > 127 || o < -128 || o > 127 {
           return Err("EINVAL")
         }
-        pwt.luma_weight_l0[i] = w
-        pwt.luma_offset_l0[i] = o
+        lw[i] = w
+        lo[i] = o
         if w != luma_def || o != 0 {
           pwt.use_weight = 1
         }
       } else {
-        pwt.luma_weight_l0[i] = luma_def
-        pwt.luma_offset_l0[i] = 0
+        lw[i] = luma_def
+        lo[i] = 0
       }
       if sps.chroma_format_idc != 0 {
         let has_chroma = gb.read1().reinterpret_as_int() != 0
@@ -242,50 +274,51 @@ pub fn ff_h264_decode_slice_header(
             if w < -128 || w > 127 || o < -128 || o > 127 {
               return Err("EINVAL")
             }
-            pwt.chroma_weight_l0[i][j] = w
-            pwt.chroma_offset_l0[i][j] = o
+            cw[i][j] = w
+            co[i][j] = o
             if w != chroma_def || o != 0 {
               pwt.use_weight_chroma = 1
             }
           } else {
-            pwt.chroma_weight_l0[i][j] = chroma_def
-            pwt.chroma_offset_l0[i][j] = 0
+            cw[i][j] = chroma_def
+            co[i][j] = 0
           }
         }
       }
+    }
     }
     if pwt.use_weight_chroma != 0 {
       pwt.use_weight = 1
     }
   }
   // dec_ref_pic_marking
+  let mut no_output_of_prior_pics = false
+  let mut long_term_reference = false
+  let mut adaptive_ref_marking = false
+  let mmco : Array[(Int32, Int32, Int32)] = []
   if nal_ref_idc != 0 {
     if is_idr {
-      let _ = gb.read1() // no_output_of_prior_pics_flag
-      let _ = gb.read1() // long_term_reference_flag
+      no_output_of_prior_pics = gb.read1() != 0U
+      long_term_reference = gb.read1() != 0U
     } else {
       let adaptive = gb.read1().reinterpret_as_int()
       if adaptive != 0 {
+        adaptive_ref_marking = true
         while true {
-          let mmco = gb.read_ue()
-          if mmco < 0 {
+          let opcode = gb.read_ue()
+          if opcode < 0 || opcode > 6 || mmco.length() >= 66 {
             return Err("EINVAL")
           }
-          if mmco == 0 {
+          if opcode == 0 {
             break
           }
-          if mmco == 1 || mmco == 3 || mmco == 6 {
-            let _ = gb.read_ue() // difference_of_pic_nums_minus1 / long_term_pic_num / ...
+          let short = if opcode == 1 || opcode == 2 || opcode == 3 { gb.read_ue() } else { 0 }
+          let long = if opcode == 3 || opcode == 4 || opcode == 6 { gb.read_ue() } else { 0 }
+          if short < 0 || long < 0 || (opcode == 2 && short >= 16) ||
+            ((opcode == 3 || opcode == 6) && long >= 16) || (opcode == 4 && long > 16) {
+            return Err("EINVAL")
           }
-          if mmco == 2 {
-            let _ = gb.read_ue() // long_term_pic_num
-          }
-          if mmco == 3 || mmco == 6 {
-            let _ = gb.read_ue() // long_term_frame_idx
-          }
-          if mmco == 4 {
-            let _ = gb.read_ue() // max_long_term_frame_idx_plus1
-          }
+          mmco.push((opcode, short, long))
         }
       }
     }
@@ -302,13 +335,13 @@ pub fn ff_h264_decode_slice_header(
     return Err("EINVAL")
   }
   let mut slice_qs_delta = 0
+  let mut sp_for_switch = false
   if slice_type_nos == 3 || slice_type_nos == 4 {
-    if slice_type_nos == 4 {
-      let _ = gb.read1() // sp_for_switch_flag
+    if slice_type_nos == 3 {
+      sp_for_switch = gb.read1() != 0U
     }
     slice_qs_delta = gb.read_se()
   }
-  let _ = slice_qs_delta
   let qscale = pps.init_qp + slice_qp_delta
   if qscale < 0 || qscale > 51 {
     return Err("EINVAL")
@@ -318,7 +351,7 @@ pub fn ff_h264_decode_slice_header(
   let mut beta = 0
   if pps.deblocking_filter_parameters_present != 0 {
     disable_idc = gb.read_ue()
-    if disable_idc < 0 {
+    if disable_idc < 0 || disable_idc > 2 {
       return Err("EINVAL")
     }
     if disable_idc != 1 {
@@ -346,15 +379,26 @@ pub fn ff_h264_decode_slice_header(
     idr_pic_id,
     pic_order_cnt_lsb,
     delta_pic_order_cnt_bottom,
+    delta_pic_order_cnt,
+    no_output_of_prior_pics,
+    long_term_reference,
+    adaptive_ref_marking,
+    mmco,
     slice_qp_delta,
     qscale,
     disable_deblocking_filter_idc: disable_idc,
     slice_alpha_c0_offset: alpha,
     slice_beta_offset: beta,
     num_ref_idx_l0_active,
+    num_ref_idx_l1_active,
+    direct_spatial_mv_pred,
+    sp_for_switch,
+    slice_qs_delta,
     cabac_init_flag,
     pwt,
     ref_mod_l0_ops,
     ref_mod_l0_vals,
+    ref_mod_l1_ops,
+    ref_mod_l1_vals,
   })
 }

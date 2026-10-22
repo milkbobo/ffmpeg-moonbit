@@ -35,17 +35,17 @@ fn h264_cabac_mb_skip(
   states : Array[Int32],
   ctx : H264DecCtx,
   mb_idx : Int32,
-  mb_x : Int32,
-  mb_y : Int32,
+  _mb_x : Int32,
+  _mb_y : Int32,
 ) -> Int32 {
   let mut c = 0
-  if mb_x > 0 {
+  if h264_has_left(ctx, mb_idx) {
     let l = ctx.infos[mb_idx - 1]
     if l.mb_type_bits != 0 && (l.mb_type_bits & h264_mb_type_skip) == 0 {
       c = c + 1
     }
   }
-  if mb_y > 0 {
+  if h264_has_top(ctx, mb_idx) {
     let t = ctx.infos[mb_idx - ctx.mb_width]
     if t.mb_type_bits != 0 && (t.mb_type_bits & h264_mb_type_skip) == 0 {
       c = c + 1
@@ -487,7 +487,7 @@ fn h264_decode_mb_cabac_p(
     Ok(t) => t
     Err(intra) => {
       if intra == 25 {
-        return Err("I_PCM in a CABAC slice is not supported")
+        return h264_decode_pcm_cabac(cabac, ctx, mb_idx, mb_x, mb_y)
       }
       ctx.cur_mb_is_intra = true
       let modes : Array[Int32] = Array::make(16, 0)
@@ -610,10 +610,8 @@ fn h264_decode_mb_cabac_p(
     for k = 0; k < 4; k = k + 1 {
       sub_types[k] = h264_cabac_p_sub_type(cabac, states)
     }
-    // `get_dct8x8_allowed`: 8x8DCT requires four 8x8 sub-partitions and
-    // `direct_8x8_inference_flag`.
+    // P sub-partitions have no direct mode: only their dimensions matter.
     dct8x8_allowed = dct8x8_allowed &&
-      ctx.direct_8x8 != 0 &&
       sub_types[0] == 0 &&
       sub_types[1] == 0 &&
       sub_types[2] == 0 &&
@@ -1050,7 +1048,7 @@ fn h264_decode_mb_cavlc_p(
     for k = 0; k < 4; k = k + 1 {
       let x8 = k % 2
       let y8 = k / 2
-      refs[k] = match read_ref(gb, rc, 2 * x8, 2 * y8) {
+      refs[k] = match read_ref(gb, if mb_type_raw == 4 { 1 } else { rc }, 2 * x8, 2 * y8) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
@@ -1109,9 +1107,9 @@ fn h264_decode_mb_cavlc_p(
   }
   let cbp = h264_golomb_to_inter_cbp[cbp_code]
   info.cbp_all = cbp
-  if ctx.pps.transform_8x8_mode != 0 && (cbp & 15) != 0 && gb.read1() != 0U {
-    return Err("8x8DCT in CAVLC is not supported")
-  }
+  let dct8x8_allowed = mc_ops.all(fn(part) { part.w >= 8 && part.h >= 8 })
+  info.transform_8x8 = ctx.pps.transform_8x8_mode != 0 && dct8x8_allowed &&
+    (cbp & 15) != 0 && gb.read1() != 0U
   let mb : Array[Int32] = Array::make(768, 0)
   let chroma_dc_nz : Array[Int32] = Array::make(2, 0)
   let mut chroma_qp0 = h264_get_chroma_qp(pps, 0, ctx.qscale)
@@ -1133,7 +1131,12 @@ fn h264_decode_mb_cavlc_p(
     chroma_qp0 = h264_get_chroma_qp(pps, 0, q)
     chroma_qp1 = h264_get_chroma_qp(pps, 1, q)
     qmul_luma = h264_build_dequant4(pps, 0, q)
-    for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
+    if info.transform_8x8 {
+      match h264_cavlc_luma8(gb, ctx, mb_idx, mb_x, mb_y, cbp, 3, mb) {
+        Ok(_) => ()
+        Err(error) => return Err(error)
+      }
+    } else { for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
       if (cbp & (1 << i8x8)) != 0 {
         for i4x4 = 0; i4x4 < 4; i4x4 = i4x4 + 1 {
           let i = i8x8 * 4 + i4x4
@@ -1157,6 +1160,7 @@ fn h264_decode_mb_cavlc_p(
           nz[gy * 4 + gx] = total
         }
       }
+    }
     }
     if (cbp & 0x30) != 0 {
       for c = 0; c < 2; c = c + 1 {

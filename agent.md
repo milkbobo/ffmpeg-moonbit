@@ -51,7 +51,7 @@
   chroma 1/8 双线性 MC，边界复制；**块基准位置必须显式传**，见 §7）、`h264_mvpred.mbt`
   （A/B/C 邻块、`mid_pred`、P_SKIP 捷径）、`h264_inter.mbt`（P 宏块层：skip/type 四种
   划分/ref/mvd + inter 残差，CAVLC 与 CABAC 共用重建）、`h264_dpb.mbt`（滑窗 DPB、
-  POC type 0/2 跟踪、默认 L0 序；`H264Decoder` 的 Annex B/avcC 入口跨样本保状态）。
+  POC type 0/1/2、MMCO 1–6、短长参考 L0；`H264Decoder` 的 Annex B/avcC 入口跨样本保状态）。
   向量：真实 I+P+P 流 + 合成 CABAC P 帧（`h264_psynth_wbtest.mbt`：全 I_PCM 非平坦
   参考 + P_L0_16x16 整数 MV，编码器逐 bin 镜像解码端上下文）。
 - **libavcodec（AAC 频谱解码，2026-10 新增）**：`aac_tables.mbt`（aactab.c 全部
@@ -559,6 +559,18 @@ $msg | git commit -F -
   去加重从新 buf[1024-frame_size] 读。不能在静音帧直接清空重叠或滤波历史。
   transition 中 C 的 `(1.0-w)` 使累加链提升到 Double，另三项先算 Float；移植需保留。
   `opus_celt_pcm_reference.c` 使用原始 AVTX/DSP 的完整解码入口生成期望值。
+- **H.264 CAVLC 8×8 的两种 nz 语义**：四路 residual 列表各有 4×4 熵计数，
+  解析完一个 8×8 后把总和加到 leader；去块则把 leader 的存在标志展开到整个 8×8。
+  不能覆盖原熵计数，否则后续 CAVLC nC 上下文变化。P_8x8ref0 不读取 ref_idx。
+- **H.264 slice 边界不只限制 MV**：CABAC mvd 邻居也必须在同 slice，否则会造成
+  后续 bin 分歧和 end_of_slice_flag 丢失。重建共享未滤波平面，语法/预测缓存独立；
+  deblock 按 MB 保存参数与真实参考图身份，idc=2 只跳过跨片边。I_PCM 须设置 mb_type，
+  否则完整性检查误判缺块。CABAC PCM 退回 lookahead 后读样本，再重启 coder；两个
+  PCM 之间还有 end_of_slice_flag=0，不能漏编码。
+- **H.264 POC/MMCO 操作数**：POC delta_bottom 的存在条件是 PPS 的 pic_order_present
+  且非 field_pic，不能取 bottom_field_flag。MMCO6 只有 long_term_frame_idx，
+  MMCO3 才同时有短图差与长索引。MMCO5 后 prev_poc_lsb 应取归一化后的 top POC，
+  需先加回 poc_msb，不能直接用旧 lsb 减整帧 POC。P 默认 L0 按 FrameNumWrap 排序。
 - **HLS 初始化的密钥属于声明时刻**：MAP 之后发生 KEY 轮换，不能用媒体段的当前密钥
   解密已声明的 MAP；按 key entry 缓存，同 URI 的两次声明也要区分。加密 MAP 必须显式 IV。
   `MediaFetch` 范围回调返回恰好请求的字节；短响应拒绝，Err 后游标不前进，允许重试。
@@ -657,7 +669,7 @@ moonbit/                      # git 仓库根
     ├── h2645_parse.mbt       # RBSP/NAL 拆分（Annex B + 长度前缀）
     ├── h2645_vui.mbt         # 公共 VUI
     ├── h264_ps.mbt           # H.264 SPS/PPS/VUI + avcC
-    ├── h264_slice.mbt        # H.264 I/P slice header（B/SP/SI 拒绝）
+    ├── h264_slice.mbt        # I/P/B/SP/SI header、L0/L1 显式权重
     ├── h264_cavlc.mbt        # CAVLC 残差 + dequant/chroma-QP 表
     ├── h264_idct.mbt         # H.264 4x4 IDCT + DC Hadamard（8-bit）
     ├── h264_pred.mbt         # 帧内预测 4x4/16x16/chroma 8x8

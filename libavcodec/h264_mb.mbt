@@ -32,8 +32,9 @@ fn h264_recon_mb(
   luma_dc : Array[Int32],
   nz : Array[Int32],
 ) -> Result[Unit, String] {
+  let mb_idx = mb_y * ctx.mb_width + mb_x
   let pps = ctx.pps
-  if cbp != 0 || is_i16x16 {
+  if cbp != 0 || is_i16x16 || ctx.infos[mb_y * ctx.mb_width + mb_x].transform_8x8 {
     // Reconstruction, following hl_decode_mb_predict_luma /
     // hl_decode_mb_idct_luma and the chroma path of h264_mb_template.c.
     let ybase = mb_y * 16 * ctx.ystride + mb_x * 16
@@ -46,15 +47,16 @@ fn h264_recon_mb(
           let by8 = i8 / 2
           let off = ybase + by8 * 8 * ctx.ystride + bx8 * 8
           let mode = modes[(by8 * 2) * 4 + bx8 * 2]
-          let top = by8 > 0 || mb_y > 0
-          let left = bx8 > 0 || mb_x > 0
+          let top = by8 > 0 || h264_intra_top(ctx, mb_idx)
+          let left = bx8 > 0 || h264_intra_left(ctx, mb_idx)
           let topright = if by8 == 0 {
-            top && (bx8 == 0 || mb_x < ctx.mb_width - 1)
+            top && (bx8 == 0 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, mb_idx - ctx.mb_width + 1)))
           } else {
             bx8 == 0
           }
           match
-            h264_pred8x8l(ctx.y, off, ctx.ystride, mode, top, left, topright) {
+            h264_pred8x8l(ctx.y, off, ctx.ystride, mode, top, left, topright,
+              topleft=h264_intra_topleft(ctx, mb_idx, bx8, by8)) {
             Ok(_) => ()
             Err(e) => return Err(e)
           }
@@ -68,10 +70,10 @@ fn h264_recon_mb(
           let by = h264_luma_block_y[i]
           let g = by * 4 + bx
           let off = ybase + by * 4 * ctx.ystride + bx * 4
-          let top = by > 0 || mb_y > 0
-          let left = bx > 0 || mb_x > 0
+          let top = by > 0 || h264_intra_top(ctx, mb_idx)
+          let left = bx > 0 || h264_intra_left(ctx, mb_idx)
           let topright = if by == 0 {
-            mb_y > 0 && (bx < 3 || mb_x < ctx.mb_width - 1)
+            h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, mb_idx - ctx.mb_width + 1)))
           } else {
             bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
           }
@@ -91,7 +93,7 @@ fn h264_recon_mb(
       }
     } else {
       match
-        h264_pred16x16(ctx.y, ybase, ctx.ystride, pred16, mb_y > 0, mb_x > 0) {
+        h264_pred16x16(ctx.y, ybase, ctx.ystride, pred16, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
@@ -111,12 +113,12 @@ fn h264_recon_mb(
       }
     }
     match
-      h264_pred8x8(ctx.u, cbase, ctx.cstride, chroma_mode, mb_y > 0, mb_x > 0) {
+      h264_pred8x8(ctx.u, cbase, ctx.cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
     match
-      h264_pred8x8(ctx.v, cbase, ctx.cstride, chroma_mode, mb_y > 0, mb_x > 0) {
+      h264_pred8x8(ctx.v, cbase, ctx.cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
@@ -147,13 +149,13 @@ fn h264_recon_mb(
         let by = h264_luma_block_y[i]
         let g = by * 4 + bx
         let off = ybase + by * 4 * ctx.ystride + bx * 4
-        let top = by > 0 || mb_y > 0
-        let left = bx > 0 || mb_x > 0
+        let top = by > 0 || h264_intra_top(ctx, mb_idx)
+        let left = bx > 0 || h264_intra_left(ctx, mb_idx)
         let topright = if by == 0 {
           // Top-row blocks read the top MB's row; only bx == 3 needs the
           // top-right macroblock. Blocks are reconstructed in 8x8 z-order,
           // so a same-MB top-right block is causal for bx 0/2 and (1, even y).
-          mb_y > 0 && (bx < 3 || mb_x < ctx.mb_width - 1)
+          h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, mb_idx - ctx.mb_width + 1)))
         } else {
           bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
         }
@@ -165,18 +167,18 @@ fn h264_recon_mb(
       }
     } else {
       match
-        h264_pred16x16(ctx.y, ybase, ctx.ystride, pred16, mb_y > 0, mb_x > 0) {
+        h264_pred16x16(ctx.y, ybase, ctx.ystride, pred16, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
     }
     match
-      h264_pred8x8(ctx.u, cbase, ctx.cstride, chroma_mode, mb_y > 0, mb_x > 0) {
+      h264_pred8x8(ctx.u, cbase, ctx.cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
     match
-      h264_pred8x8(ctx.v, cbase, ctx.cstride, chroma_mode, mb_y > 0, mb_x > 0) {
+      h264_pred8x8(ctx.v, cbase, ctx.cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }

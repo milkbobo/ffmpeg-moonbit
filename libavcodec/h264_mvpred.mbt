@@ -89,7 +89,7 @@ fn h264_mv_fetch(
   let nmb = ay / 4 * ctx.mb_width + ax / 4
   let info = ctx.infos[nmb]
   // An undecoded macroblock counts as unavailable (`sl->top_type == 0`).
-  if nmb != mb_idx && info.mb_type_bits == 0 {
+  if nmb != mb_idx && !h264_same_slice(ctx, nmb) {
     return (h264_ref_not_avail, 0, 0)
   }
   if h264_is_intra_type(info.mb_type_bits) {
@@ -284,7 +284,7 @@ fn h264_mvd_fetch(
   }
   let nmb = ay / 4 * ctx.mb_width + ax / 4
   let info = ctx.infos[nmb]
-  if nmb != mb_idx && info.mb_type_bits == 0 {
+  if nmb != mb_idx && !h264_same_slice(ctx, nmb) {
     return (0, 0)
   }
   if h264_is_intra_type(info.mb_type_bits) {

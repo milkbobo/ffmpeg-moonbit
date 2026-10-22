@@ -7,17 +7,15 @@
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: I/P reference management only — no B pictures, no MMCO adaptive
-/// marking (the syntax is consumed by the slice header parser and ignored),
-/// no long-term references, no reordering of the output order. Short-term
-/// `ref_pic_list_modification` and `default_ref` substitution are applied
-/// when the P slice's L0 list is built.
+/// Scope: progressive I/P, POC 0/1/2 and frame_num wrap, MMCO 1..6 and IDR
+/// long references. Default/reordered L0 includes short/long references.
+/// B pictures, fields, frame_num-gap synthesis and display reordering remain.
 
 ///|
-/// One short-term reference entry: POC plus the picture planes. */
+/// One short/long-term reference entry; POC belongs to the picture planes.
 struct H264DpbEntry {
-  poc : Int32
   frame_num : Int32
+  long_index : Int32
   pic : H264RefPic
 }
 
@@ -33,6 +31,7 @@ pub struct H264Decoder {
   mut prev_poc_lsb : Int32
   /// `PrevRefFrameNum` (POC type 2 / sliding window).
   mut prev_frame_num : Int32
+  mut prev_frame_num_offset : Int32
 }
 
 ///|
@@ -44,12 +43,12 @@ pub fn new_h264_decoder() -> H264Decoder {
     prev_poc_msb: 0,
     prev_poc_lsb: 0,
     prev_frame_num: 0,
+    prev_frame_num_offset: 0,
   }
 }
 
 ///|
-/// The default L0 list for a P picture with no reordering syntax: the
-/// short-term references in decreasing POC order (most recent first).
+/// Default P L0: descending FrameNumWrap, then ascending LongTermPicNum.
 fn H264Decoder::ref_list0(
   self : H264Decoder,
   count : Int32,
@@ -63,8 +62,17 @@ fn H264Decoder::ref_list0(
     return Ok(list)
   }
   let entries = [..self.refs]
-  // Highest POC first (`ff_h264_build_ref_list0`'s default ordering).
-  entries.sort_by((a, b) => b.poc.compare(a.poc))
+  // P default short list uses descending FrameNumWrap, then ascending long index.
+  entries.sort_by(fn(a, b) {
+    if a.long_index >= 0 && b.long_index >= 0 { a.long_index.compare(b.long_index) }
+    else if a.long_index >= 0 { 1 }
+    else if b.long_index >= 0 { -1 }
+    else {
+      let aw = if a.frame_num > curr_frame_num { a.frame_num - max_pic_num } else { a.frame_num }
+      let bw = if b.frame_num > curr_frame_num { b.frame_num - max_pic_num } else { b.frame_num }
+      bw.compare(aw)
+    }
+  })
   // `ff_h264_build_ref_list`'s missing-reference pass uses `default_ref =
   // ref_list[0]`, so pad the default list to the coded reference count.
   let base : Array[H264DpbEntry] = []
@@ -78,18 +86,18 @@ fn H264Decoder::ref_list0(
   let mut pred = curr_frame_num
   for k = 0; k < mod_ops.length(); k = k + 1 {
     let op = mod_ops[k]
-    if op == 2 {
-      return Err("long-term reference reordering is not supported")
-    }
     let diff = mod_vals[k] + 1
-    if diff > max_pic_num {
+    if k >= count || (op != 2 && diff > max_pic_num) {
       return Err("EINVAL")
     }
-    pred = if op == 0 { pred - diff } else { pred + diff }
-    pred = pred & (max_pic_num - 1)
+    if op != 2 {
+      pred = if op == 0 { pred - diff } else { pred + diff }
+      pred = pred & (max_pic_num - 1)
+    }
     let mut found = -1
     for i = 0; i < entries.length(); i = i + 1 {
-      if entries[i].frame_num == pred {
+      if (op == 2 && entries[i].long_index == mod_vals[k]) ||
+        (op != 2 && entries[i].long_index < 0 && entries[i].frame_num == pred) {
         found = i
         break
       }
@@ -101,7 +109,7 @@ fn H264Decoder::ref_list0(
     // Shift the previous occupant (and any duplicate) as in the C.
     let mut i = k
     while i + 1 < count {
-      if base[i].frame_num == entry.frame_num {
+      if base[i].frame_num == entry.frame_num && base[i].long_index == entry.long_index {
         break
       }
       i = i + 1
@@ -127,7 +135,7 @@ fn H264Decoder::decode_nals(
   nals : Array[H2645Nal],
   skip_lf : Bool,
 ) -> Result[H264Frame?, String] {
-  let mut frame : H264Frame? = None
+  let slices : Array[H2645Nal] = []
   for k = 0; k < nals.length(); k = k + 1 {
     let nal = nals[k]
     if nal.nal_type == h264_nal_sps {
@@ -145,29 +153,22 @@ fn H264Decoder::decode_nals(
         Err(e) => return Err(e)
       }
     } else if nal.nal_type == h264_nal_idr_slice || nal.nal_type == 1 {
-      if frame is Some(_) {
-        return Err("multi-slice pictures are not supported")
-      }
-      frame = Some(
-        match self.decode_slice(nal, skip_lf) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        },
-      )
+      slices.push(nal)
     }
   }
-  Ok(frame)
+  if slices.is_empty() { Ok(None) } else {
+    match self.decode_picture(slices, skip_lf) { Ok(frame) => Ok(Some(frame)); Err(error) => Err(error) }
+  }
 }
 
 ///|
-/// Decode one coded slice and run the reference marking: IDR clears the
-/// buffer (`no_output_of_prior_pics_flag` ignored), other reference pictures
-/// enter it and the sliding window (`sps.ref_frame_count`) trims the oldest.
-fn H264Decoder::decode_slice(
+/// Decode a complete picture before committing POC history and reference marking.
+fn H264Decoder::decode_picture(
   self : H264Decoder,
-  nal : H2645Nal,
+  nals : Array[H2645Nal],
   skip_lf : Bool,
 ) -> Result[H264Frame, String] {
+  let nal = nals[0]
   let is_idr = nal.nal_type == h264_nal_idr_slice
   // POC (h264_slice.c): type 0 tracks the MSB wraps, type 2 is 2*frame_num.
   let gb = BitReader::with_size(nal.data, nal.size_bits)
@@ -185,36 +186,18 @@ fn H264Decoder::decode_slice(
     Some(s) => s
     None => return Err("missing SPS")
   }
-  let mut poc = 0
-  if sps.poc_type == 0 {
-    let max_lsb = 1 << sps.log2_max_poc_lsb
-    let lsb = sh.pic_order_cnt_lsb
-    let mut msb = self.prev_poc_msb
-    if lsb < self.prev_poc_lsb && self.prev_poc_lsb - lsb >= max_lsb / 2 {
-      msb = msb + max_lsb
-    } else if lsb > self.prev_poc_lsb && lsb - self.prev_poc_lsb > max_lsb / 2 {
-      msb = msb - max_lsb
-    }
-    poc = msb + lsb
-  } else if sps.poc_type == 2 {
-    poc = 2 * sh.frame_num
-  } else {
-    return Err("POC type 1 is not supported")
+  let (poc, poc_msb, frame_offset) = match self.picture_order(sps, sh, nal.ref_idc, is_idr) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
-  if is_idr {
-    poc = 0
-    self.refs.clear()
-    self.prev_poc_msb = 0
-    self.prev_poc_lsb = 0
-    self.prev_frame_num = 0
-  }
-  let refs = if sh.slice_type_nos == 0 {
+  fn refs_for(header : H264SliceHeader) -> Result[Array[H264RefPic], String] {
+    if header.slice_type_nos != 0 { return Ok([]) }
     let list = match
       self.ref_list0(
-        sh.num_ref_idx_l0_active,
-        sh.ref_mod_l0_ops,
-        sh.ref_mod_l0_vals,
-        sh.frame_num,
+        header.num_ref_idx_l0_active,
+        header.ref_mod_l0_ops,
+        header.ref_mod_l0_vals,
+        header.frame_num,
         1 << sps.log2_max_frame_num,
       ) {
       Ok(v) => v
@@ -223,16 +206,13 @@ fn H264Decoder::decode_slice(
     if list.length() == 0 {
       return Err("no reference picture for a P slice")
     }
-    list
-  } else {
-    []
+    Ok(list)
   }
-  let frame = match h264_decode_slice_ex(nal, self.ps, refs, skip_lf) {
+  let frame = match h264_decode_picture_ex(nals, self.ps, refs_for, skip_lf) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
-  // Reference marking (`ff_h264_execute_ref_pic_marking`, sliding window;
-  // adaptive MMCO commands were consumed by the header parser and ignored).
+  // Commit reference marking only after every slice reconstructed successfully.
   if nal.ref_idc != 0 {
     let pic : H264RefPic = {
       y: frame.y,
@@ -246,21 +226,24 @@ fn H264Decoder::decode_slice(
       height: frame.pheight,
       poc,
     }
-    self.refs.insert(0, { poc, frame_num: sh.frame_num, pic, })
-    while self.refs.length() > sps.ref_frame_count {
-      ignore(self.refs.pop())
+    match self.mark_reference(pic, sh, sps, is_idr) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
     }
-    self.prev_poc_msb = poc - sh.pic_order_cnt_lsb
-    self.prev_poc_lsb = sh.pic_order_cnt_lsb
-    self.prev_frame_num = sh.frame_num
+    let reset = sh.mmco.any(fn(op) { op.0 == 5 })
+    self.prev_poc_msb = if reset { 0 } else { poc_msb }
+    self.prev_poc_lsb = if reset { poc_msb + sh.pic_order_cnt_lsb - poc } else { sh.pic_order_cnt_lsb }
   }
+  let reset = sh.mmco.any(fn(op) { op.0 == 5 })
+  self.prev_frame_num = if reset { 0 } else { sh.frame_num }
+  self.prev_frame_num_offset = if reset { 0 } else { frame_offset }
   Ok(frame)
 }
 
 ///|
 /// Decode an Annex B stream (parameter sets plus an I/P picture sequence)
-/// into frames in decoding order. B slices, multi-slice pictures and
-/// interlaced pictures are rejected by the slice decoder.
+/// into frames in decoding order, grouping multiple slices per picture.
+/// B slices and interlaced pictures remain unsupported.
 pub fn H264Decoder::decode_annexb(
   self : H264Decoder,
   data : Bytes,
@@ -271,31 +254,22 @@ pub fn H264Decoder::decode_annexb(
     Err(e) => return Err(e)
   }
   let frames : Array[H264Frame] = []
+  let pending : Array[H2645Nal] = []
+  let mut has_slice = false
   for k = 0; k < pkt.nals.length(); k = k + 1 {
     let nal = pkt.nals[k]
-    if nal.nal_type == h264_nal_sps {
-      let g = BitReader::with_size(nal.data, nal.size_bits)
-      g.skip(8)
-      match ff_h264_decode_seq_parameter_set(g, self.ps, false) {
-        Ok(_) => ()
-        Err(e) => return Err(e)
-      }
-    } else if nal.nal_type == h264_nal_pps {
-      let g = BitReader::with_size(nal.data, nal.size_bits)
-      g.skip(8)
-      match ff_h264_decode_picture_parameter_set(g, self.ps, g.size_bits()) {
-        Ok(_) => ()
-        Err(e) => return Err(e)
-      }
-    } else if nal.nal_type == h264_nal_idr_slice || nal.nal_type == 1 {
-      frames.push(
-        match self.decode_slice(nal, skip_lf) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        },
-      )
+    let slice = nal.nal_type == 1 || nal.nal_type == 5
+    let first = if slice {
+      let gb = BitReader::with_size(nal.data, nal.size_bits); gb.skip(8); gb.read_ue() == 0
+    } else { false }
+    if has_slice && (first || nal.nal_type == 6 || nal.nal_type == 7 || nal.nal_type == 8 || nal.nal_type == 9) {
+      match self.decode_nals(pending, skip_lf) { Ok(Some(frame)) => frames.push(frame); Ok(None) => (); Err(error) => return Err(error) }
+      pending.clear(); has_slice = false
     }
+    pending.push(nal)
+    has_slice = has_slice || slice
   }
+  match self.decode_nals(pending, skip_lf) { Ok(Some(frame)) => frames.push(frame); Ok(None) => (); Err(error) => return Err(error) }
   Ok(frames)
 }
 

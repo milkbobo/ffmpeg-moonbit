@@ -153,14 +153,14 @@ let h264_cabac_last8 : FixedArray[Int32] = [
 fn h264_neighbor_transform_size(
   ctx : H264DecCtx,
   mb_idx : Int32,
-  mb_x : Int32,
-  mb_y : Int32,
+  _mb_x : Int32,
+  _mb_y : Int32,
 ) -> Int32 {
   let mut n = 0
-  if mb_x > 0 && ctx.infos[mb_idx - 1].transform_8x8 {
+  if h264_has_left(ctx, mb_idx) && ctx.infos[mb_idx - 1].transform_8x8 {
     n = n + 1
   }
-  if mb_y > 0 && ctx.infos[mb_idx - ctx.mb_width].transform_8x8 {
+  if h264_has_top(ctx, mb_idx) && ctx.infos[mb_idx - ctx.mb_width].transform_8x8 {
     n = n + 1
   }
   n
@@ -201,7 +201,7 @@ fn h264_cabac_cbf_ctx(
     let y = r / w
     nza = if x > 0 {
       nz[base + r - 1]
-    } else if mb_x > 0 {
+    } else if h264_has_left(ctx, mb_idx) {
       ctx.infos[mb_idx - 1].nz[base + y * w + (w - 1)]
     } else if ctx.cur_mb_is_intra {
       64
@@ -212,7 +212,7 @@ fn h264_cabac_cbf_ctx(
     // row: luma `nz[3*4 + x]`, chroma `nz[1*2 + x]`.
     nzb = if y > 0 {
       nz[base + r - w]
-    } else if mb_y > 0 {
+    } else if h264_has_top(ctx, mb_idx) {
       ctx.infos[mb_idx - ctx.mb_width].nz[base + (w - 1) * w + x]
     } else if ctx.cur_mb_is_intra {
       64
@@ -235,8 +235,8 @@ fn h264_cabac_cbf_ctx(
 /// chroma/DC flags, `left_block[0] & ~1 == 0` contributes the luma bit of the
 /// top-left 8x8 and `left_block[2] & ~1 == 2` the bottom-left one shifted into
 /// bit 3.
-fn h264_cabac_left_cbp(ctx : H264DecCtx, mb_idx : Int32, mb_x : Int32) -> Int32 {
-  if mb_x > 0 {
+fn h264_cabac_left_cbp(ctx : H264DecCtx, mb_idx : Int32, _mb_x : Int32) -> Int32 {
+  if h264_has_left(ctx, mb_idx) {
     let l = ctx.infos[mb_idx - 1].cbp_all
     (l & 0x7F0) | ((l >> 0) & 2) | (((l >> 2) & 2) << 2)
     // Unavailable neighbour: `IS_INTRA(cur mb_type) ? 0x7CF : 0x00F`.
@@ -249,8 +249,8 @@ fn h264_cabac_left_cbp(ctx : H264DecCtx, mb_idx : Int32, mb_x : Int32) -> Int32 
 
 ///|
 /// `fill_decode_caches()`'s `top_cbp`. */
-fn h264_cabac_top_cbp(ctx : H264DecCtx, mb_idx : Int32, mb_y : Int32) -> Int32 {
-  if mb_y > 0 {
+fn h264_cabac_top_cbp(ctx : H264DecCtx, mb_idx : Int32, _mb_y : Int32) -> Int32 {
+  if h264_has_top(ctx, mb_idx) {
     ctx.infos[mb_idx - ctx.mb_width].cbp_all
   } else if ctx.cur_mb_is_intra {
     0x7CF
@@ -316,9 +316,9 @@ fn h264_cabac_intra_mb_type(
 fn h264_cabac_left_type(
   ctx : H264DecCtx,
   mb_idx : Int32,
-  mb_x : Int32,
+  _mb_x : Int32,
 ) -> Int32 {
-  if mb_x > 0 {
+  if h264_has_left(ctx, mb_idx) {
     ctx.infos[mb_idx - 1].mb_type_bits
   } else {
     0
@@ -327,8 +327,8 @@ fn h264_cabac_left_type(
 
 ///|
 /// `sl->top_type`. */
-fn h264_cabac_top_type(ctx : H264DecCtx, mb_idx : Int32, mb_y : Int32) -> Int32 {
-  if mb_y > 0 {
+fn h264_cabac_top_type(ctx : H264DecCtx, mb_idx : Int32, _mb_y : Int32) -> Int32 {
+  if h264_has_top(ctx, mb_idx) {
     ctx.infos[mb_idx - ctx.mb_width].mb_type_bits
   } else {
     0
@@ -680,8 +680,8 @@ fn h264_decode_mb_cabac_intra(
     for gy = 0; gy < 4; gy = gy + 1 {
       for gx = 0; gx < 4; gx = gx + 1 {
         let g = gy * 4 + gx
-        let top = gy > 0 || mb_y > 0
-        let left = gx > 0 || mb_x > 0
+        let top = gy > 0 || h264_intra_top(ctx, mb_idx)
+        let left = gx > 0 || h264_intra_left(ctx, mb_idx)
         modes_ck[g] = match h264_check_intra4x4_mode(modes[g], top, left) {
           Ok(v) => v
           Err(e) => return Err(e)
@@ -689,7 +689,7 @@ fn h264_decode_mb_cabac_intra(
       }
     }
   } else {
-    pred16 = match h264_check_intra_pred_mode(pred16, mb_y > 0, mb_x > 0) {
+    pred16 = match h264_check_intra_pred_mode(pred16, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
@@ -700,7 +700,7 @@ fn h264_decode_mb_cabac_intra(
   )
   info.chroma_mode = raw_chroma
   let chroma_mode = match
-    h264_check_intra_pred_mode(raw_chroma, mb_y > 0, mb_x > 0) {
+    h264_check_intra_pred_mode(raw_chroma, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -976,7 +976,7 @@ fn h264_decode_mb_cabac(
     cabac, states, ctx, mb_idx, mb_x, mb_y, 3, 1,
   )
   if mb_type == 25 {
-    return Err("I_PCM in a CABAC slice is not supported")
+    return h264_decode_pcm_cabac(cabac, ctx, mb_idx, mb_x, mb_y)
   }
   h264_decode_mb_cabac_intra(
     cabac,

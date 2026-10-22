@@ -196,11 +196,12 @@ test "h264: P slices decode through the DPB entry" {
 }
 
 ///|
-test "h264: multiple slices per picture are rejected" {
-  assert_eq(
-    h264_err(h264_multislice_b64, 4096),
-    "multi-slice pictures are not supported",
-  )
+test "h264: legacy intra entry groups multiple slices into one picture" {
+  let data = @libavutil.av_base64_decode(h264_multislice_b64, 4096).unwrap()
+  let frames = h264_decode_annexb_i_frames(data).unwrap()
+  assert_eq(frames.length(), 1)
+  assert_eq(frames[0].width, 64)
+  assert_eq(frames[0].height, 48)
 }
 
 ///|
