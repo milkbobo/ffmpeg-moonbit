@@ -20,7 +20,7 @@ priv struct H264BPart {
 fn h264_b_cabac_type(c : CabacContext, states : Array[Int32], ctx : H264DecCtx, index : Int32) -> Int32 {
   let mut context = 0
   for n in [if h264_has_left(ctx, index) { index - 1 } else { -1 },
-    if h264_has_top(ctx, index) { index - ctx.mb_width } else { -1 }] {
+    if h264_has_top(ctx, index) { h264_top_index(ctx, index) } else { -1 }] {
     if n >= 0 && (ctx.infos[n].mb_type_bits & h264_mb_type_direct) == 0 { context += 1 }
   }
   if c.get_cabac(states, 27 + context) == 0 { return 0 }
@@ -96,7 +96,37 @@ fn h264_decode_b_mb(entropy : H264BEntropy, ctx : H264DecCtx, index : Int32) -> 
   let my = index / ctx.mb_width
   let info = ctx.infos[index]
   let skip = match entropy {
-    Cabac(c, states) => h264_cabac_mb_skip(c, states, ctx, index, mx, my) != 0
+    Cabac(c, states) => {
+      let skip = if ctx.mb_aff && (my & 1) == 1 && ctx.prev_mb_skipped {
+        ctx.next_mb_skipped
+      } else {
+        h264_cabac_mb_skip(c, states, ctx, index, mx, my) != 0
+      }
+      if skip {
+        if ctx.mb_aff && (my & 1) == 0 {
+          info.mb_type_bits = h264_mb_type_skip
+          ctx.next_mb_skipped = h264_cabac_mb_skip(
+            c,
+            states,
+            ctx,
+            index + ctx.mb_width,
+            mx,
+            my + 1,
+          ) !=
+            0
+          if !ctx.next_mb_skipped {
+            ctx.mb_field = h264_cabac_field_decoding_flag(c, states, ctx, index, mx)
+          }
+        }
+        ctx.prev_mb_skipped = true
+      } else {
+        if ctx.mb_aff && (my & 1) == 0 {
+          ctx.mb_field = h264_cabac_field_decoding_flag(c, states, ctx, index, mx)
+        }
+        ctx.prev_mb_skipped = false
+      }
+      skip
+    }
     Cavlc(gb) => {
       if ctx.mb_skip_run < 0 {
         ctx.mb_skip_run = gb.read_ue()
@@ -104,9 +134,17 @@ fn h264_decode_b_mb(entropy : H264BEntropy, ctx : H264DecCtx, index : Int32) -> 
       }
       let value = ctx.mb_skip_run > 0
       ctx.mb_skip_run -= 1
+      if ctx.mb_aff && (my & 1) == 0 {
+        if value {
+          if ctx.mb_skip_run == 0 { ctx.mb_field = gb.read1() != 0U }
+        } else {
+          ctx.mb_field = gb.read1() != 0U
+        }
+      }
       value
     }
   }
+  info.field_mb = ctx.mb_field
   let kind = if skip { 0 } else { match entropy { Cavlc(gb) => gb.read_ue(); Cabac(c, states) => h264_b_cabac_type(c, states, ctx, index) } }
   if kind < 0 || kind > 48 { return Err("invalid B macroblock type") }
   if kind >= 23 {
@@ -132,7 +170,7 @@ fn h264_decode_b_mb(entropy : H264BEntropy, ctx : H264DecCtx, index : Int32) -> 
   let refs = [Array::make(4, -1), Array::make(4, -1)]
   for list in 0..<2 {
     ctx.active_list = list
-    let count = if list == 0 { ctx.ref_count0 } else { ctx.ref_count1 }
+    let count = if list == 0 { h264_ref_count(ctx) } else if ctx.mb_aff && ctx.mb_field { ctx.ref_count1 * 2 } else { ctx.ref_count1 }
     for part in groups {
       if (part.mask & (1 << list)) == 0 { continue }
       let refi = if count <= 1 { 0 } else { match entropy {

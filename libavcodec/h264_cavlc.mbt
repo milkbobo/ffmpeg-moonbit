@@ -515,6 +515,53 @@ fn h264_build_dequant8(
 }
 
 ///|
+/// `h->field_scan[i] = TRANSPOSE(field_scan[i])`: field-coded MB 4x4 scan. */
+let h264_field_scan_t : Array[Int32] = [
+  0, 1, 4, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+]
+
+///|
+/// `h->field_scan8x8[i] = TRANSPOSE(field_scan8x8[i])`: CABAC field 8x8 scan. */
+let h264_field_scan8x8 : Array[Int32] = [
+  0, 1, 2, 8, 9, 3, 4, 10, 16, 11, 5, 6, 7, 12, 17, 24, 18, 13, 14, 15, 19, 25,
+  32, 26, 20, 21, 22, 23, 27, 33, 40, 34, 28, 29, 30, 31, 35, 41, 48, 42, 36, 37,
+  38, 39, 43, 49, 50, 44, 45, 46, 47, 51, 56, 57, 52, 53, 54, 55, 58, 59, 60, 61,
+  62, 63,
+]
+
+///|
+/// `h->field_scan8x8_cavlc` rearranged for the port's per-4x4 list indexing
+/// (`scan[4 * coeff + sub]`), i.e. the transposed C table read at `16*sub+j`.
+let h264_field_scan8x8_cavlc : Array[Int32] = [
+  0, 1, 2, 8, 9, 3, 4, 10, 16, 11, 5, 6, 7, 12, 17, 24, 18, 13, 14, 15, 19, 25,
+  32, 26, 20, 21, 22, 23, 27, 33, 40, 34, 28, 29, 30, 31, 35, 41, 48, 42, 36, 37,
+  38, 39, 43, 49, 50, 44, 45, 46, 47, 51, 56, 57, 52, 53, 54, 55, 58, 59, 60, 61,
+  62, 63,
+]
+
+///|
+/// Residual scan of the current macroblock (field MBs use the field scan). */
+fn h264_scan4(ctx : H264DecCtx) -> Array[Int32] {
+  if ctx.mb_field { h264_field_scan_t } else { h264_zigzag_scan_t }
+}
+
+///|
+/// CABAC 8x8 residual scan of the current macroblock. */
+fn h264_scan8x8(ctx : H264DecCtx) -> Array[Int32] {
+  if ctx.mb_field { h264_field_scan8x8 } else { h264_zigzag_scan8x8 }
+}
+
+///|
+/// CAVLC 8x8 residual scan for 4x4 sub-block `sub` of the current MB. */
+fn h264_cavlc_scan8x8(ctx : H264DecCtx, sub : Int) -> Array[Int32] {
+  if ctx.mb_field {
+    [for j in 0..<16 => h264_field_scan8x8_cavlc[4 * j + sub]]
+  } else {
+    [for j in 0..<16 => h264_zigzag_scan8x8[4 * j + sub]]
+  }
+}
+
+///|
 /// `h->zigzag_scan[i] = TRANSPOSE(ff_zigzag_scan[i])`. */
 let h264_zigzag_scan_t : Array[Int32] = {
   let t : Array[Int32] = []

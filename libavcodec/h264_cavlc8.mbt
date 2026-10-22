@@ -17,7 +17,7 @@ fn h264_cavlc_luma8(
         let gx = h264_luma_block_x[index]
         let gy = h264_luma_block_y[index]
         let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz, base=nz_base)
-        let scan = [for j in 0..<16 => h264_zigzag_scan8x8[4 * j + sub]]
+        let scan = h264_cavlc_scan8x8(ctx, sub)
         nz[nz_base + gy * 4 + gx] = match h264_decode_residual(gb, mb, mb_off + 64 * quadrant, scan, 0, Some(qmul), 16, nc, bit_depth=ctx.bit_depth) {
           Ok(value) => value
           Err(error) => return Err(error)

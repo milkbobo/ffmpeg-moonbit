@@ -21,13 +21,16 @@ fn h264_decode_pcm_cabac(
   }
   let reader = BitReader::with_size(cabac.bytes, cabac.bytes.length() * 8)
   reader.skip(ptr * 8)
+  let ystride = h264_mb_ystride(ctx)
+  let ybase = h264_mb_ybase(ctx, mb_x, mb_y)
   for row in 0..<16 { for col in 0..<16 {
-    ctx.y[(mb_y * 16 + row) * ctx.ystride + mb_x * 16 + col] = reader.read(ctx.bit_depth).reinterpret_as_int()
+    ctx.y[ybase + row * ystride + col] = reader.read(ctx.bit_depth).reinterpret_as_int()
   } }
-  let cbase = mb_y * chh * ctx.cstride + mb_x * cw
+  let cstride = h264_mb_cstride(ctx)
+  let cbase = h264_mb_cbase(ctx, mb_x, mb_y)
   if ctx.chroma_format != 0 {
     for plane in [ctx.u, ctx.v] { for row in 0..<chh { for col in 0..<cw {
-      plane[cbase + row * ctx.cstride + col] = reader.read(ctx.bit_depth).reinterpret_as_int()
+      plane[cbase + row * cstride + col] = reader.read(ctx.bit_depth).reinterpret_as_int()
     } } }
   }
   cabac.low = next.low

@@ -7,18 +7,20 @@
 /// Original FFmpeg code is LGPL-2.1-or-later, Copyright (c) 2003-2011
 /// Michael Niedermayer <michaelni@gmx.at>. This port keeps the same license.
 ///
-/// Scope: progressive, frame-coded, 8-bit 4:2:0 I/P pictures, so:
-///   * intra macroblocks use bS 4 on macroblock edges and 3 on internal
-///     edges; inter macroblocks derive bS per 4x4 block (2 for non-zero
-///     coefficients, 1 for reference or motion-vector differences) and
-///     compare reference indices through their POC identity, matching the
-///     C `ref2frm` mapping;
+/// Scope: progressive and homogeneous MBAFF frame pictures, 8..14-bit
+/// 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B:
+///   * intra macroblocks use bS 4 on macroblock edges (3 for a field MB's top
+///     edge) and 3 on internal edges; inter macroblocks derive bS per 4x4
+///     block (2 for non-zero coefficients, 1 for reference or motion-vector
+///     differences) and compare reference indices through the `ref2frm`
+///     identity (frame MBs `4*id+3`, field MBs `4*id+{1,2}`);
 ///   * chroma edges reuse the four luma bS values, each controlling two
 ///     chroma samples (`tc0_table[..][bS[i]] + 1`);
-///   * no MBAFF / field coding, so `check_mv`'s field cases, `MB_FIELD`
-///     splits and the `filter_mb_mbaff_*` kernels are not ported;
-///   * no 8x8DCT, so `deblock_edge` is always true and the per-edge
-///     `mb_type & (edge<<24)` flags are never consulted;
+///   * MBAFF field MBs use doubled strides and field reference views; mixed
+///     field/frame MB pairs are rejected before filtering;
+///   * 8x8DCT skips the internal odd luma edges (`4:2:2` still filters the
+///     corresponding chroma), matching `mb_type & (edge << 24)`. The port's
+///     `H264MbInfo.transform_8x8` carries that bit;
 ///   * `disable_deblocking_filter_idc == 2` means "filter slice boundaries
 ///     only", which for the single-slice pictures we accept filters nothing.
 ///
@@ -399,7 +401,15 @@ fn h264_deblock_block(
 ) -> (Bool, Int32, Int32, Int32, Int32) {
   let ax = mb_x * 4 + bx
   let ay = mb_y * 4 + by
-  let nmb = ay / 4 * ctx.mb_width + ax / 4
+  // Field-coded MBs reach the same-parity MB two frame rows up (`top_xy =
+  // mb_xy - (mb_stride << MB_FIELD)`), not the MB of the adjacent line.
+  let nmb = if ctx.mb_field && by < 0 {
+    (mb_y - 2) * ctx.mb_width + ax / 4
+  } else if ctx.mb_field {
+    mb_y * ctx.mb_width + ax / 4
+  } else {
+    ay / 4 * ctx.mb_width + ax / 4
+  }
   let info = ctx.infos[nmb]
   let idx = ay % 4 * 4 + ax % 4
   // CAVLC stores four entropy counts, with their sum in the 8x8 leader.
@@ -427,6 +437,7 @@ fn h264_bs_pair(
   pxy : (Int32, Int32),
   qxy : (Int32, Int32),
   mb_edge : Bool,
+  vertical : Bool,
 ) -> Int32 {
   let (pintra, pnz, _, _, _) = h264_deblock_block(
     ctx,
@@ -443,26 +454,44 @@ fn h264_bs_pair(
     qxy.1,
   )
   if pintra || qintra {
-    return if mb_edge { 4 } else { 3 }
+    // `filter_mb_dir`: the MB edge is bS 4 for progressive pictures and for
+    // the vertical edge of field MBs; a field MB's top edge stays at 3.
+    if !mb_edge {
+      3
+    } else if vertical || !ctx.mb_field {
+      4
+    } else {
+      3
+    }
+  } else if pnz > 0 || qnz > 0 {
+    2
+  } else {
+    // `fill_filter_caches` maps each ref index through `ref2frm`, so two
+    // indices that name the same picture (reordered/duplicated lists) compare
+    // equal.
+    let p = h264_deblock_lists(ctx, mb_x, mb_y, pxy.0, pxy.1)
+    let q = h264_deblock_lists(ctx, mb_x, mb_y, qxy.0, qxy.1)
+    let limit = if ctx.mb_field { 2 } else { 4 }
+    let same = h264_deblock_match(p[0], q[0], limit~) &&
+      h264_deblock_match(p[1], q[1], limit~)
+    let swapped = h264_deblock_match(p[0], q[1], limit~) &&
+      h264_deblock_match(p[1], q[0], limit~)
+    if same || swapped { 0 } else { 1 }
   }
-  if pnz > 0 || qnz > 0 {
-    return 2
-  }
-  // `fill_filter_caches` maps each ref index through `ref2frm`, so two
-  // indices that name the same picture (reordered/duplicated lists) compare
-  // equal.
-  let p = h264_deblock_lists(ctx, mb_x, mb_y, pxy.0, pxy.1)
-  let q = h264_deblock_lists(ctx, mb_x, mb_y, qxy.0, qxy.1)
-  let same = h264_deblock_match(p[0], q[0]) && h264_deblock_match(p[1], q[1])
-  let swapped = h264_deblock_match(p[0], q[1]) && h264_deblock_match(p[1], q[0])
-  if same || swapped { 0 } else { 1 }
 }
 
 ///|
 fn h264_deblock_lists(ctx : H264DecCtx, mx : Int32, my : Int32, bx : Int32, by : Int32) -> Array[(Int32, Int32, Int32)] {
   let ax = mx * 4 + bx
   let ay = my * 4 + by
-  let info = ctx.infos[ay / 4 * ctx.mb_width + ax / 4]
+  let nmb = if ctx.mb_field && by < 0 {
+    (my - 2) * ctx.mb_width + ax / 4
+  } else if ctx.mb_field {
+    my * ctx.mb_width + ax / 4
+  } else {
+    ay / 4 * ctx.mb_width + ax / 4
+  }
+  let info = ctx.infos[nmb]
   let index = ay % 4 * 4 + ax % 4
   [
     (if info.ref_idx[index] >= 0 { info.ref_identity[index] } else { -1 }, info.mv[2 * index], info.mv[2 * index + 1]),
@@ -471,8 +500,11 @@ fn h264_deblock_lists(ctx : H264DecCtx, mx : Int32, my : Int32, bx : Int32, by :
 }
 
 ///|
-fn h264_deblock_match(a : (Int32, Int32, Int32), b : (Int32, Int32, Int32)) -> Bool {
-  a.0 == b.0 && (a.1 - b.1).abs() < 4 && (a.2 - b.2).abs() < 4
+fn h264_deblock_match(a : (Int32, Int32, Int32), b : (Int32, Int32, Int32),
+  limit? : Int32 = 4) -> Bool {
+  // `check_mv`: horizontal threshold is always 4 quarter-pels, vertical uses
+  // `mvy_limit` (2 for field MBs, 4 otherwise).
+  a.0 == b.0 && (a.1 - b.1).abs() < 4 && (a.2 - b.2).abs() < limit
 }
 
 ///|
@@ -488,9 +520,9 @@ fn h264_bs_edge(
   let bs : Array[Int32] = [0, 0, 0, 0]
   for s = 0; s < 4; s = s + 1 {
     bs[s] = if vertical {
-      h264_bs_pair(ctx, mb_x, mb_y, (edge - 1, s), (edge, s), edge == 0)
+      h264_bs_pair(ctx, mb_x, mb_y, (edge - 1, s), (edge, s), edge == 0, true)
     } else {
-      h264_bs_pair(ctx, mb_x, mb_y, (s, edge - 1), (s, edge), edge == 0)
+      h264_bs_pair(ctx, mb_x, mb_y, (s, edge - 1), (s, edge), edge == 0, false)
     }
   }
   bs
@@ -510,17 +542,18 @@ fn h264_filter_mb(
 ) -> Unit {
   let pps = ctx.pps
   let qp = ctx.infos[mb_idx].qp
+  ctx.mb_field = ctx.infos[mb_idx].field_mb
   let cqp0 = h264_get_chroma_qp(pps, 0, qp, bit_depth=ctx.bit_depth)
   let cqp1 = h264_get_chroma_qp(pps, 1, qp, bit_depth=ctx.bit_depth)
-  let ybase = mb_y * 16 * ctx.ystride + mb_x * 16
-  let cw = 16 >> ctx.chroma_hshift
-  let chh = 16 >> ctx.chroma_vshift
-  let cbase = mb_y * chh * ctx.cstride + mb_x * cw
+  let ystride = h264_mb_ystride(ctx)
+  let cstride = h264_mb_cstride(ctx)
+  let ybase = h264_mb_ybase(ctx, mb_x, mb_y)
+  let cbase = h264_mb_cbase(ctx, mb_x, mb_y)
   let cur_intra = h264_is_intra_type(ctx.infos[mb_idx].mb_type_bits)
   // Vertical edges (dir == 0), then horizontal (dir == 1).
   for dir = 0; dir < 2; dir = dir + 1 {
     let vertical = dir == 0
-    let ystep = if vertical { ctx.ystride } else { 1 }
+    let ystep = if vertical { ystride } else { 1 }
     for edge = 0; edge < 4; edge = edge + 1 {
       // `deblock_edge = !IS_8x8DCT(mb_type & (edge << 24))`: odd internal
       // edges lie inside an 8x8 transform and are not filtered. 4:2:2 still
@@ -532,6 +565,9 @@ fn h264_filter_mb(
       let neigh_intra = if edge == 0 {
         if vertical {
           mb_x > 0 && h264_is_intra_type(ctx.infos[mb_idx - 1].mb_type_bits)
+        } else if ctx.mb_field {
+          h264_has_top(ctx, mb_idx) &&
+          h264_is_intra_type(ctx.infos[h264_top_index(ctx, mb_idx)].mb_type_bits)
         } else {
           mb_y > 0 &&
           h264_is_intra_type(ctx.infos[mb_idx - ctx.mb_width].mb_type_bits)
@@ -542,7 +578,7 @@ fn h264_filter_mb(
       let at_border = if vertical {
         edge == 0 && mb_x == 0
       } else {
-        edge == 0 && mb_y == 0
+        edge == 0 && (mb_y == 0 || (ctx.mb_field && mb_y == 1))
       }
       if at_border {
         continue
@@ -556,7 +592,7 @@ fn h264_filter_mb(
         if vertical {
           ctx.infos[mb_idx - 1].qp
         } else {
-          ctx.infos[mb_idx - ctx.mb_width].qp
+          ctx.infos[h264_top_index(ctx, mb_idx)].qp
         }
       } else {
         qp
@@ -565,7 +601,7 @@ fn h264_filter_mb(
       let cq0 = (cqp0 + h264_get_chroma_qp(pps, 0, neigh_qp, bit_depth=ctx.bit_depth) + 1) >> 1
       let cq1 = (cqp1 + h264_get_chroma_qp(pps, 1, neigh_qp, bit_depth=ctx.bit_depth) + 1) >> 1
       let yoff = ybase +
-        (if vertical { 4 * edge } else { 4 * edge * ctx.ystride })
+        (if vertical { 4 * edge } else { 4 * edge * ystride })
       let bs = h264_bs_edge(ctx, mb_x, mb_y, vertical, edge)
       let strong = cur_intra || neigh_intra
       let mut any_bs = false
@@ -582,12 +618,12 @@ fn h264_filter_mb(
             h264_filter_edge(
               ctx.y,
               yoff,
-              ctx.ystride,
+              ystride,
               4,
               yqp,
               a,
               b,
-              4,
+              if vertical || !ctx.mb_field { 4 } else { 3 },
               true,
               false,
               vertical,
@@ -597,7 +633,7 @@ fn h264_filter_mb(
             h264_filter_edge(
               ctx.y,
               yoff,
-              ctx.ystride,
+              ystride,
               4,
               qp,
               a,
@@ -614,7 +650,7 @@ fn h264_filter_mb(
               h264_filter_edge(
                 ctx.y,
                 yoff + 4 * s * ystep,
-                ctx.ystride,
+                ystride,
                 1,
                 if edge == 0 {
                   yqp
@@ -645,8 +681,8 @@ fn h264_filter_mb(
       }
       if ctx.chroma_format == 3 {
         let coff = cbase +
-          (if vertical { 4 * edge } else { 4 * edge * ctx.cstride })
-        let cstep = if vertical { ctx.cstride } else { 1 }
+          (if vertical { 4 * edge } else { 4 * edge * cstride })
+        let cstep = if vertical { cstride } else { 1 }
         let planes = [(ctx.u, cq0, cqp0), (ctx.v, cq1, cqp1)]
         for plane_q in planes {
           let (plane, cq_avg, cq_own) = plane_q
@@ -654,7 +690,7 @@ fn h264_filter_mb(
             h264_filter_edge(
               plane,
               coff,
-              ctx.cstride,
+              cstride,
               4,
               if edge == 0 { cq_avg } else { cq_own },
               a,
@@ -670,7 +706,7 @@ fn h264_filter_mb(
                 h264_filter_edge(
                   plane,
                   coff + 4 * s * cstep,
-                  ctx.cstride,
+                  cstride,
                   1,
                   if edge == 0 {
                     cq_avg
@@ -700,16 +736,16 @@ fn h264_filter_mb(
           let coff = if vertical {
             cbase + 2 * edge
           } else if ctx.chroma_format == 2 {
-            cbase + 4 * edge * ctx.cstride
+            cbase + 4 * edge * cstride
           } else {
-            cbase + 2 * edge * ctx.cstride
+            cbase + 2 * edge * cstride
           }
           let group = if vertical && ctx.chroma_format == 2 { 4 } else { 2 }
           h264_filter_chroma_edge(
-            ctx.u, coff, ctx.cstride, cq0, a, b, bs, strong, vertical,
+            ctx.u, coff, cstride, cq0, a, b, bs, strong, vertical,
            group=group, bit_depth=ctx.bit_depth,)
           h264_filter_chroma_edge(
-            ctx.v, coff, ctx.cstride, cq1, a, b, bs, strong, vertical,
+            ctx.v, coff, cstride, cq1, a, b, bs, strong, vertical,
            group=group, bit_depth=ctx.bit_depth,)
         }
       }

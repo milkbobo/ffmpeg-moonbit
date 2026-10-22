@@ -3,7 +3,7 @@
 /// LGPL-2.1-or-later. Int64 intermediates retain C's overflow validation.
 fn H264Decoder::picture_order(
   self : H264Decoder, sps : H264Sps, sh : H264SliceHeader, ref_idc : Int32, idr : Bool,
-) -> Result[(Int32, Int32, Int32), String] {
+) -> Result[(Int32, Int32, Int32, Int32, Int32), String] {
   let max_frame = 1 << sps.log2_max_frame_num
   let offset = if idr { 0 } else {
     self.prev_frame_num_offset + (if sh.frame_num < self.prev_frame_num { max_frame } else { 0 })
@@ -40,5 +40,5 @@ fn H264Decoder::picture_order(
   guard top >= -2147483648L && top <= 2147483647L && bottom >= -2147483648L && bottom <= 2147483647L else {
     return Err("H.264 picture order overflow")
   }
-  Ok((top.min(bottom).to_int(), msb, offset))
+  Ok((top.min(bottom).to_int(), top.to_int(), bottom.to_int(), msb, offset))
 }

@@ -77,6 +77,25 @@ let h264_cabac_significant_coeff_offset : Array[Int32] = [
 ]
 
 ///|
+/// `significant_coeff_flag_offset[1][14]` (MB_FIELD == 1). */
+let h264_cabac_significant_coeff_offset_field : Array[Int32] = [
+  277 + 0,
+  277 + 15,
+  277 + 29,
+  277 + 44,
+  277 + 47,
+  436,
+  776 + 0,
+  776 + 15,
+  776 + 29,
+  675,
+  820 + 0,
+  820 + 15,
+  820 + 29,
+  733,
+]
+
+///|
 /// `last_coeff_flag_offset[0][14]` (MB_FIELD == 0). */
 let h264_cabac_last_coeff_flag_offset : Array[Int32] = [
   166 + 0,
@@ -93,6 +112,25 @@ let h264_cabac_last_coeff_flag_offset : Array[Int32] = [
   616 + 15,
   616 + 29,
   748,
+]
+
+///|
+/// `last_coeff_flag_offset[1][14]` (MB_FIELD == 1). */
+let h264_cabac_last_coeff_flag_offset_field : Array[Int32] = [
+  338 + 0,
+  338 + 15,
+  338 + 29,
+  338 + 44,
+  338 + 47,
+  451,
+  864 + 0,
+  864 + 15,
+  864 + 29,
+  699,
+  908 + 0,
+  908 + 15,
+  908 + 29,
+  757,
 ]
 
 ///|
@@ -160,6 +198,14 @@ let h264_cabac_sig8 : FixedArray[Int32] = [
 ]
 
 ///|
+/// `significant_coeff_flag_offset_8x8[1][63]` (field-coded 8x8DCT luma). */
+let h264_cabac_sig8_field : FixedArray[Int32] = [
+  0, 1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 7, 7, 8, 4, 5, 6, 9, 10, 10, 8, 11, 12, 11, 9,
+  9, 10, 10, 8, 11, 12, 11, 9, 9, 10, 10, 8, 11, 12, 11, 9, 9, 10, 10, 8, 13, 13, 9,
+  9, 10, 10, 8, 13, 13, 9, 9, 10, 10, 14, 14, 14, 14, 14,
+]
+
+///|
 /// `ff_h264_last_coeff_flag_offset_8x8[63]`: the 8x8 `last_coeff_flag`
 /// contexts are a compressed function of the scan position, not the position
 /// itself. */
@@ -182,7 +228,7 @@ fn h264_neighbor_transform_size(
   if h264_has_left(ctx, mb_idx) && ctx.infos[mb_idx - 1].transform_8x8 {
     n = n + 1
   }
-  if h264_has_top(ctx, mb_idx) && ctx.infos[mb_idx - ctx.mb_width].transform_8x8 {
+  if h264_has_top(ctx, mb_idx) && ctx.infos[h264_top_index(ctx, mb_idx)].transform_8x8 {
     n = n + 1
   }
   n
@@ -235,7 +281,7 @@ fn h264_cabac_cbf_ctx(
     nzb = if y > 0 {
       nz[base + r - w]
     } else if h264_has_top(ctx, mb_idx) {
-      ctx.infos[mb_idx - ctx.mb_width].nz[base + (w - 1) * w + x]
+      ctx.infos[h264_top_index(ctx, mb_idx)].nz[base + (w - 1) * w + x]
     } else if ctx.cur_mb_is_intra {
       64
     } else {
@@ -260,7 +306,7 @@ fn h264_cabac_cbf_ctx(
     nzb = if i >= 2 {
       nz[base + i - 2]
     } else if h264_has_top(ctx, mb_idx) {
-      ctx.infos[mb_idx - ctx.mb_width].nz[base + 6 + i]
+      ctx.infos[h264_top_index(ctx, mb_idx)].nz[base + 6 + i]
     } else {
       unavail
     }
@@ -294,7 +340,7 @@ fn h264_cabac_cbf_ctx(
     nzb = if y > 0 {
       nz[base + r - w]
     } else if h264_has_top(ctx, mb_idx) {
-      let top = ctx.infos[mb_idx - ctx.mb_width]
+      let top = ctx.infos[h264_top_index(ctx, mb_idx)]
       if quirk_zero && !top.transform_8x8 {
         if (top.mb_type_bits & h264_mb_type_intra_pcm) != 0 { 64 } else { 0 }
       } else {
@@ -337,7 +383,7 @@ fn h264_cabac_left_cbp(ctx : H264DecCtx, mb_idx : Int32, _mb_x : Int32) -> Int32
 /// `fill_decode_caches()`'s `top_cbp`. */
 fn h264_cabac_top_cbp(ctx : H264DecCtx, mb_idx : Int32, _mb_y : Int32) -> Int32 {
   if h264_has_top(ctx, mb_idx) {
-    ctx.infos[mb_idx - ctx.mb_width].cbp_all
+    ctx.infos[h264_top_index(ctx, mb_idx)].cbp_all
   } else if ctx.cur_mb_is_intra {
     0x7CF
   } else {
@@ -415,7 +461,7 @@ fn h264_cabac_left_type(
 /// `sl->top_type`. */
 fn h264_cabac_top_type(ctx : H264DecCtx, mb_idx : Int32, _mb_y : Int32) -> Int32 {
   if h264_has_top(ctx, mb_idx) {
-    ctx.infos[mb_idx - ctx.mb_width].mb_type_bits
+    ctx.infos[h264_top_index(ctx, mb_idx)].mb_type_bits
   } else {
     0
   }
@@ -458,7 +504,7 @@ fn h264_cabac_chroma_pre_mode(
   if left_type != 0 && ctx.infos[mb_idx - 1].chroma_mode != 0 {
     c = c + 1
   }
-  if top_type != 0 && ctx.infos[mb_idx - ctx.mb_width].chroma_mode != 0 {
+  if top_type != 0 && ctx.infos[h264_top_index(ctx, mb_idx)].chroma_mode != 0 {
     c = c + 1
   }
   if cabac.get_cabac(states, 64 + c) == 0 {
@@ -610,8 +656,16 @@ fn h264_cabac_residual(
       return Ok(0)
     }
   }
-  let sig_base = h264_cabac_significant_coeff_offset[cat]
-  let last_base = h264_cabac_last_coeff_flag_offset[cat]
+  let sig_base = if ctx.mb_field {
+    h264_cabac_significant_coeff_offset_field[cat]
+  } else {
+    h264_cabac_significant_coeff_offset[cat]
+  }
+  let last_base = if ctx.mb_field {
+    h264_cabac_last_coeff_flag_offset_field[cat]
+  } else {
+    h264_cabac_last_coeff_flag_offset[cat]
+  }
   let abs_base = h264_cabac_coeff_abs_level_m1_offset[cat]
   let index : Array[Int32] = Array::make(64, 0)
   let mut coeff_count = 0
@@ -643,7 +697,11 @@ fn h264_cabac_residual(
     let coefs = max_coeff - 1
     let mut last = 0
     while last < coefs {
-      let sig_ctx = if is_8x8 { sig_base + h264_cabac_sig8[last] } else { sig_base + last }
+      let sig_ctx = if is_8x8 {
+        sig_base + (if ctx.mb_field { h264_cabac_sig8_field[last] } else { h264_cabac_sig8[last] })
+      } else {
+        sig_base + last
+      }
       if cabac.get_cabac(states, sig_ctx) != 0 {
         index[coeff_count] = last
         coeff_count = coeff_count + 1
@@ -762,7 +820,7 @@ fn h264_cabac_luma_residual(
     luma_dc_nz[p] = match
       h264_cabac_residual(
         cabac, states, ctx, mb_idx, mb_x, mb_y, luma_dc[p], 0, cat_dc, 48 + p, nz,
-        h264_zigzag_scan_t, 0, None, 16, true,
+        h264_scan4(ctx), 0, None, 16, true,
       ) {
       Ok(v) => v
       Err(e) => return Err(e)
@@ -773,7 +831,7 @@ fn h264_cabac_luma_residual(
         match
           h264_cabac_residual(
             cabac, states, ctx, mb_idx, mb_x, mb_y, mb, mb_off + 16 * i, cat_ac16,
-            16 * p + i, nz, h264_zigzag_scan_t, 1, Some(qmul), 15, false,
+            16 * p + i, nz, h264_scan4(ctx), 1, Some(qmul), 15, false,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -789,7 +847,7 @@ fn h264_cabac_luma_residual(
         match
           h264_cabac_residual(
             cabac, states, ctx, mb_idx, mb_x, mb_y, mb, mb_off + 64 * i8x8, cat_ac8,
-            16 * p + 4 * i8x8, nz, h264_zigzag_scan8x8, 0, Some(qmul8), 64, false,
+            16 * p + 4 * i8x8, nz, h264_scan8x8(ctx), 0, Some(qmul8), 64, false,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -806,7 +864,7 @@ fn h264_cabac_luma_residual(
         match
           h264_cabac_residual(
             cabac, states, ctx, mb_idx, mb_x, mb_y, mb, mb_off + 16 * i, cat_ac4,
-            16 * p + i, nz, h264_zigzag_scan_t, 0, Some(qmul), 16, false,
+            16 * p + i, nz, h264_scan4(ctx), 0, Some(qmul), 16, false,
           ) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -1040,7 +1098,7 @@ fn h264_decode_mb_cabac_intra(
                 4,
                 16 + 16 * c + i,
                 nz,
-                h264_zigzag_scan_t,
+                h264_scan4(ctx),
                 1,
                 Some(qmul_c),
                 15,
@@ -1088,6 +1146,23 @@ fn h264_decode_mb_cabac_intra(
 }
 
 ///|
+/// `decode_cabac_field_decoding_flag` (`h264_cabac.c`): one context per MBAFF
+/// pair, using the current/predicted flag and the MB above the pair.
+fn h264_cabac_field_decoding_flag(
+  cabac : CabacContext, states : Array[Int32], ctx : H264DecCtx, mb_idx : Int32,
+  mb_x : Int32,
+) -> Bool {
+  let mut context = if ctx.mb_field && mb_x > 0 { 1 } else { 0 }
+  let above = mb_idx - ctx.mb_width * 2
+  if above >= 0 && ctx.infos[above].slice_num == ctx.slice_num &&
+    ctx.infos[above].field_mb {
+    context = context + 1
+  }
+  let bit = cabac.get_cabac(states, 70 + context)
+  bit != 0
+}
+
+///|
 /// `ff_h264_decode_mb_cabac` dispatcher: clears the per-macroblock
 /// neighbour arrays, then routes to the P-slice inter decoder
 /// (`h264_inter.mbt`) or the intra continuation. An I slice goes straight
@@ -1106,8 +1181,43 @@ fn h264_decode_mb_cabac(
   }
   if ctx.slice_type_nos == 1 { return h264_decode_b_mb(Cabac(cabac, states), ctx, mb_idx) }
   if ctx.slice_type_nos != 2 {
+    let skip = if ctx.mb_aff && (mb_y & 1) == 1 && ctx.prev_mb_skipped {
+      ctx.next_mb_skipped
+    } else {
+      h264_cabac_mb_skip(cabac, states, ctx, mb_idx, mb_x, mb_y) != 0
+    }
+    if skip {
+      if ctx.mb_aff && (mb_y & 1) == 0 {
+        ctx.infos[mb_idx].mb_type_bits = h264_mb_type_skip
+        ctx.next_mb_skipped = h264_cabac_mb_skip(
+          cabac,
+          states,
+          ctx,
+          mb_idx + ctx.mb_width,
+          mb_x,
+          mb_y + 1,
+        ) !=
+          0
+        if !ctx.next_mb_skipped {
+          ctx.mb_field = h264_cabac_field_decoding_flag(cabac, states, ctx, mb_idx, mb_x)
+        }
+      }
+      ctx.infos[mb_idx].field_mb = ctx.mb_field
+      ctx.prev_mb_skipped = true
+      return h264_cabac_skip_mb(ctx, mb_idx, mb_x, mb_y)
+    }
+    if ctx.mb_aff && (mb_y & 1) == 0 {
+      ctx.mb_field = h264_cabac_field_decoding_flag(cabac, states, ctx, mb_idx, mb_x)
+    }
+    ctx.infos[mb_idx].field_mb = ctx.mb_field
+    ctx.prev_mb_skipped = false
     return h264_decode_mb_cabac_p(cabac, states, ctx, mb_idx, mb_x, mb_y)
   }
+  if ctx.mb_aff && (mb_y & 1) == 0 {
+    ctx.mb_field = h264_cabac_field_decoding_flag(cabac, states, ctx, mb_idx, mb_x)
+  }
+  ctx.infos[mb_idx].field_mb = ctx.mb_field
+  ctx.prev_mb_skipped = false
   ctx.cur_mb_is_intra = true
   let coded_type = h264_cabac_intra_mb_type(
     cabac, states, ctx, mb_idx, mb_x, mb_y, 3, 1,

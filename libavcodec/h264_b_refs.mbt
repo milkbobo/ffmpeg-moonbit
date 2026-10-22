@@ -7,11 +7,14 @@ priv struct H264SliceRefs {
   colocated : Array[H264MbInfo]
   long_pocs : Array[Int32]
   poc : Int32
+  poc_top : Int32
+  poc_bottom : Int32
 }
 
 ///|
 fn H264Decoder::b_references(
-  self : H264Decoder, sh : H264SliceHeader, sps : H264Sps, poc : Int32, long_pocs : Array[Int32],
+  self : H264Decoder, sh : H264SliceHeader, sps : H264Sps, poc : Int32,
+  poc_top : Int32, poc_bottom : Int32, long_pocs : Array[Int32],
 ) -> Result[H264SliceRefs, String] {
   let past = self.refs.filter(fn(entry) { entry.long_index < 0 && entry.pic.poc < poc })
   let future = self.refs.filter(fn(entry) { entry.long_index < 0 && entry.pic.poc >= poc })
@@ -31,5 +34,5 @@ fn H264Decoder::b_references(
     sh.frame_num, 1 << sps.log2_max_frame_num, order=order1) { Ok(value) => value; Err(error) => return Err(error) }
   let col = self.refs.search_by(fn(entry) { entry.pic.poc == list1[0].poc })
   guard col is Some(index) else { return Err("missing B colocated picture") }
-  Ok({ list0, list1, colocated: self.refs[index].infos, long_pocs, poc })
+  Ok({ list0, list1, colocated: self.refs[index].infos, long_pocs, poc, poc_top, poc_bottom })
 }

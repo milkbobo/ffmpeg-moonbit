@@ -7,9 +7,10 @@
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: progressive I/P/B, POC 0/1/2 and frame_num wrap, MMCO 1..6 and IDR
-/// long references. Default/reordered L0 includes short/long references.
-/// Field pictures and frame_num-gap synthesis remain unsupported.
+/// Scope: progressive and MBAFF frame I/P/B, POC 0/1/2 and frame_num wrap,
+/// MMCO 1..6 and IDR long references, MBAFF top/bottom field reference views.
+/// Default/reordered L0 includes short/long references. Field pictures (PAFF)
+/// and frame_num-gap synthesis remain unsupported.
 
 ///|
 /// One short/long-term reference entry; POC belongs to the picture planes.
@@ -192,14 +193,14 @@ fn H264Decoder::decode_picture(
     Some(s) => s
     None => return Err("missing SPS")
   }
-  let (poc, poc_msb, frame_offset) = match self.picture_order(sps, sh, nal.ref_idc, is_idr) {
+  let (poc, poc_top, poc_bottom, poc_msb, frame_offset) = match self.picture_order(sps, sh, nal.ref_idc, is_idr) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
   fn refs_for(header : H264SliceHeader) -> Result[H264SliceRefs, String] {
     let longs = self.refs.filter(fn(entry) { entry.long_index >= 0 }).map(fn(entry) { entry.pic.identity })
-    if header.slice_type_nos == 1 { return self.b_references(header, sps, poc, longs) }
-    if header.slice_type_nos != 0 && header.slice_type_nos != 3 { return Ok({ list0: [], list1: [], colocated: [], long_pocs: longs, poc }) }
+    if header.slice_type_nos == 1 { return self.b_references(header, sps, poc, poc_top, poc_bottom, longs) }
+    if header.slice_type_nos != 0 && header.slice_type_nos != 3 { return Ok({ list0: [], list1: [], colocated: [], long_pocs: longs, poc, poc_top, poc_bottom }) }
     let list = match
       self.ref_list0(
         header.num_ref_idx_l0_active,
@@ -214,7 +215,7 @@ fn H264Decoder::decode_picture(
     if list.length() == 0 {
       return Err("no reference picture for a P slice")
     }
-    Ok({ list0: list, list1: [], colocated: [], long_pocs: longs, poc })
+    Ok({ list0: list, list1: [], colocated: [], long_pocs: longs, poc, poc_top, poc_bottom })
   }
   let frame = match h264_decode_picture_ex(nals, self.ps, refs_for, skip_lf) {
     Ok(v) => v
@@ -236,6 +237,12 @@ fn H264Decoder::decode_picture(
       cwidth: frame.ystride >> frame.chroma_hshift,
       cheight: frame.pheight >> frame.chroma_vshift,
       poc,
+      field_poc_top: poc_top,
+      field_poc_bottom: poc_bottom,
+      base_y: 0,
+      base_u: 0,
+      base_v: 0,
+      parity: 0,
     }
     match self.mark_reference(pic, frame.infos, sh, sps, is_idr) {
       Ok(_) => ()

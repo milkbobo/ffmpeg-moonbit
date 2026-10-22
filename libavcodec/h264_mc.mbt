@@ -52,10 +52,11 @@ fn h264_mc_luma(
   pic_w : Int32,
   pic_h : Int32,
 
+  sbase? : Int32 = 0,
   bit_depth? : Int32 = 8,
 ) -> Unit {
   fn px(x : Int32, y : Int32) -> Int32 {
-    src[h264_mc_clamp(y, pic_h) * sstride + h264_mc_clamp(x, pic_w)]
+    src[sbase + h264_mc_clamp(y, pic_h) * sstride + h264_mc_clamp(x, pic_w)]
   }
   // Unclipped horizontal 6-tap at (x, y). `put_h264_qpelN_hv_lowpass` keeps
   // these sums unshifted and unclipped until the final `(v + 512) >> 10`.
@@ -157,6 +158,7 @@ fn h264_mc_chroma(
   pic_w : Int32,
   pic_h : Int32,
 
+  sbase? : Int32 = 0,
   vshift? : Int32 = 1,
 ) -> Unit {
   let ysh = 2 + vshift
@@ -176,10 +178,10 @@ fn h264_mc_chroma(
       let fx = src_x + (mx >> 3)
       let xa = h264_mc_clamp(fx + col, pic_w)
       let xb = h264_mc_clamp(fx + col + 1, pic_w)
-      let a = src[y0 * sstride + xa]
-      let b = src[y0 * sstride + xb]
-      let c = src[y1 * sstride + xa]
-      let d = src[y1 * sstride + xb]
+      let a = src[sbase + y0 * sstride + xa]
+      let b = src[sbase + y0 * sstride + xb]
+      let c = src[sbase + y1 * sstride + xa]
+      let d = src[sbase + y1 * sstride + xb]
       dst[dstoff + row * dstride + col] = (
           a * ax * ay + b * dx * ay + c * ax * dy + d * dx * dy + 32
         ) >>

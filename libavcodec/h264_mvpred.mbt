@@ -81,12 +81,19 @@ fn h264_mv_fetch(
   let ax = mb_x * 4 + bx
   let ay = mb_y * 4 + by
   if ax < 0 ||
+    (ctx.mb_field && by < 0 && mb_y < 2) ||
     ay < 0 ||
     ax >= ctx.mb_width * 4 ||
     ay >= ctx.infos.length() / ctx.mb_width * 4 {
     return (h264_ref_not_avail, 0, 0)
   }
-  let nmb = ay / 4 * ctx.mb_width + ax / 4
+  let nmb = if ctx.mb_field && by < 0 {
+    (mb_y - 2) * ctx.mb_width + ax / 4
+  } else if ctx.mb_field {
+    mb_y * ctx.mb_width + ax / 4
+  } else {
+    ay / 4 * ctx.mb_width + ax / 4
+  }
   let info = ctx.infos[nmb]
   // An undecoded macroblock counts as unavailable (`sl->top_type == 0`).
   if nmb != mb_idx && !h264_same_slice(ctx, nmb) {
@@ -279,12 +286,19 @@ fn h264_mvd_fetch(
   let ax = mb_x * 4 + bx
   let ay = mb_y * 4 + by
   if ax < 0 ||
+    (ctx.mb_field && by < 0 && mb_y < 2) ||
     ay < 0 ||
     ax >= ctx.mb_width * 4 ||
     ay >= ctx.infos.length() / ctx.mb_width * 4 {
     return (0, 0)
   }
-  let nmb = ay / 4 * ctx.mb_width + ax / 4
+  let nmb = if ctx.mb_field && by < 0 {
+    (mb_y - 2) * ctx.mb_width + ax / 4
+  } else if ctx.mb_field {
+    mb_y * ctx.mb_width + ax / 4
+  } else {
+    ay / 4 * ctx.mb_width + ax / 4
+  }
   let info = ctx.infos[nmb]
   if nmb != mb_idx && !h264_same_slice(ctx, nmb) {
     return (0, 0)
