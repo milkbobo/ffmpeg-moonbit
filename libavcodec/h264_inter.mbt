@@ -423,7 +423,7 @@ fn h264_recon_inter_mb(
   if ctx.chroma_format == 3 {
     h264_inter_luma_add(ctx, ctx.u, cbase, ctx.cstride, cbp, mb, nz, 16, 256, info.transform_8x8)
     h264_inter_luma_add(ctx, ctx.v, cbase, ctx.cstride, cbp, mb, nz, 32, 512, info.transform_8x8)
-  } else {
+  } else if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
     h264_inter_chroma_residual(
       ctx, cbase, cbp, mb, nz, chroma_qp0, chroma_qp1, chroma_dc_nz,
     )
@@ -1017,9 +1017,9 @@ fn h264_inter_residual_cabac(
 ) -> Result[Unit, String] {
   let info = ctx.infos[mb_idx]
   let nz = info.nz
-  // cbp (inter): luma + chroma (4:4:4 codes no chroma bits).
+  // cbp (inter): luma + chroma (4:4:4 and 4:0:0 code no chroma bits).
   let cbp_luma = h264_cabac_mb_cbp_luma(cabac, states, ctx, mb_idx, mb_x, mb_y)
-  let cbp = if ctx.chroma_format == 3 {
+  let cbp = if ctx.chroma_format == 0 || ctx.chroma_format == 3 {
     cbp_luma
   } else {
     let cbp_chroma = h264_cabac_mb_cbp_chroma(
@@ -1081,7 +1081,7 @@ fn h264_inter_residual_cabac(
         Err(e) => return Err(e)
       }
     }
-    if ctx.chroma_format != 3 {
+    if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
       let num_c8x8 = ctx.chroma_format
       // Chroma: inter dequant tables 4/5.
       if (cbp & 0x30) != 0 {
@@ -1158,9 +1158,9 @@ fn h264_inter_residual_cavlc(
   let pps = ctx.pps
   let info = ctx.infos[mb_idx]
   let nz = info.nz
-  // Inter cbp: `ff_h264_golomb_to_inter_cbp` (gray variant for 4:4:4).
+  // Inter cbp: `ff_h264_golomb_to_inter_cbp` (gray variant for 4:4:4/4:0:0).
   let cbp_code = gb.read_ue31()
-  let cbp = if ctx.chroma_format == 3 {
+  let cbp = if ctx.chroma_format == 0 || ctx.chroma_format == 3 {
     if cbp_code < 0 || cbp_code > 15 {
       return Err("cbp out of range")
     }
@@ -1230,7 +1230,7 @@ fn h264_inter_residual_cavlc(
         }
       }
     }
-    if ctx.chroma_format != 3 {
+    if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
       let num_c8x8 = ctx.chroma_format
       if (cbp & 0x30) != 0 {
         for c = 0; c < 2; c = c + 1 {

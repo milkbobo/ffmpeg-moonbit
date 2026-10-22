@@ -5,10 +5,10 @@
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: 8-bit 4:2:0 frame-coded I/P pictures, CAVLC/CABAC, 4x4/8x8,
-/// I_PCM, slice-local prediction and weighted P prediction. The persistent
-/// reference/POC/MMCO state lives in h264_dpb.mbt. B/SP/SI reconstruction,
-/// fields/MBAFF, other pixel formats and transform bypass remain unfinished.
+/// Scope: 8..14-bit 4:0:0/4:2:0/4:2:2/4:4:4 frame-coded I/P/B pictures,
+/// CAVLC/CABAC, 4x4/8x8, I_PCM, slice-local prediction and weighted
+/// prediction. The persistent reference/POC/MMCO state lives in h264_dpb.mbt.
+/// SP/SI reconstruction, fields/MBAFF and transform bypass remain unfinished.
 
 ///|
 /// FFmpeg luma 4x4 block order (8x8-grouped) to 4x4 raster grid x. */
@@ -443,10 +443,11 @@ fn h264_decode_mb_cavlc_intra(
   let mut chroma_mode = 0
   if is_pcm {
     gb.align()
-    // Chroma samples per plane: 8x8 (4:2:0), 8x16 (4:2:2) or 16x16 (4:4:4).
+    // Chroma samples per plane: 8x8 (4:2:0), 8x16 (4:2:2) or 16x16 (4:4:4);
+    // monochrome PCM carries luma only (`ff_h264_mb_sizes[0] == 256`).
     let cw = 16 >> ctx.chroma_hshift
     let chh = 16 >> ctx.chroma_vshift
-    let samples = 256 + 2 * cw * chh
+    let samples = if ctx.chroma_format == 0 { 256 } else { 256 + 2 * cw * chh }
     if gb.bits_left() < samples * ctx.bit_depth {
       return Err("not enough data for I_PCM")
     }
@@ -456,14 +457,16 @@ fn h264_decode_mb_cavlc_intra(
         ctx.y[ybase + row * ctx.ystride + col] = gb.read(ctx.bit_depth).reinterpret_as_int()
       }
     }
-    let cbase = mb_y * chh * ctx.cstride + mb_x * cw
-    for p = 0; p < 2; p = p + 1 {
-      let plane = if p == 0 { ctx.u } else { ctx.v }
-      for row = 0; row < chh; row = row + 1 {
-        for col = 0; col < cw; col = col + 1 {
-          plane[cbase + row * ctx.cstride + col] = gb
-            .read(ctx.bit_depth)
-            .reinterpret_as_int()
+    if ctx.chroma_format != 0 {
+      let cbase = mb_y * chh * ctx.cstride + mb_x * cw
+      for p = 0; p < 2; p = p + 1 {
+        let plane = if p == 0 { ctx.u } else { ctx.v }
+        for row = 0; row < chh; row = row + 1 {
+          for col = 0; col < cw; col = col + 1 {
+            plane[cbase + row * ctx.cstride + col] = gb
+              .read(ctx.bit_depth)
+              .reinterpret_as_int()
+          }
         }
       }
     }
@@ -502,10 +505,11 @@ fn h264_decode_mb_cavlc_intra(
       }
     }
   }
-  // Chroma prediction mode follows the luma intra modes / mb_type; 4:4:4
-  // codes none (`decode_chroma == 0` in the C, chroma reuses the luma modes).
+  // Chroma prediction mode follows the luma intra modes / mb_type; 4:4:4 and
+  // monochrome code none (`decode_chroma == 0` in the C: 4:4:4 reuses the
+  // luma modes, 4:0:0 uses the DC_128 placeholder).
   let mut raw_cm = 0
-  if ctx.chroma_format != 3 {
+  if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
     let cm = gb.read_ue31()
     raw_cm = cm
     if cm < 0 || cm > 3 {
@@ -537,7 +541,7 @@ fn h264_decode_mb_cavlc_intra(
   }
   if !is_i16x16 {
     let cbp_code = gb.read_ue31()
-    if ctx.chroma_format == 3 {
+    if ctx.chroma_format == 0 || ctx.chroma_format == 3 {
       if cbp_code < 0 || cbp_code > 15 {
         return Err("cbp out of range")
       }
@@ -548,7 +552,7 @@ fn h264_decode_mb_cavlc_intra(
       }
       cbp = h264_golomb_to_intra4x4_cbp[cbp_code]
     }
-  } else if ctx.chroma_format == 3 && cbp > 15 {
+  } else if (ctx.chroma_format == 0 || ctx.chroma_format == 3) && cbp > 15 {
     return Err("gray chroma")
   }
   let mut chroma_qp0 = h264_get_chroma_qp(pps, 0, ctx.qscale, bit_depth=ctx.bit_depth)
@@ -581,7 +585,7 @@ fn h264_decode_mb_cavlc_intra(
       }
     }
 
-    if ctx.chroma_format != 3 {
+    if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
       let num_c8x8 = ctx.chroma_format
       if (cbp & 0x30) != 0 {
         for c = 0; c < 2; c = c + 1 {
@@ -845,8 +849,8 @@ fn h264_decode_picture_ex(
     Some(s) => s
     None => return Err("missing SPS")
   }
-  if sps.chroma_format_idc == 0 || sps.chroma_format_idc > 3 {
-    return Err("only 4:2:0/4:2:2/4:4:4 is supported")
+  if sps.chroma_format_idc < 0 || sps.chroma_format_idc > 3 {
+    return Err("invalid H.264 chroma format")
   }
   if ![8, 9, 10, 12, 14].contains(sps.bit_depth_luma) || sps.bit_depth_chroma != sps.bit_depth_luma {
     return Err("unsupported H.264 bit depths")
@@ -858,8 +862,11 @@ fn h264_decode_picture_ex(
     return Err("slice QP out of range")
   }
   let chroma_format = sps.chroma_format_idc
-  let chroma_hshift = if chroma_format == 1 || chroma_format == 2 { 1 } else { 0 }
-  let chroma_vshift = if chroma_format == 1 { 1 } else { 0 }
+  // FFmpeg decodes 4:0:0 into yuv420p, filling chroma with the mid value
+  // (`h264_slice.c: h->chroma_y_shift = sps->chroma_format_idc <= 1`), so
+  // monochrome keeps the 4:2:0 plane geometry.
+  let chroma_hshift = if chroma_format <= 2 { 1 } else { 0 }
+  let chroma_vshift = if chroma_format == 0 || chroma_format == 1 { 1 } else { 0 }
   let mb_width = sps.mb_width
   let mb_height = sps.mb_height
   let mb_count = mb_width * mb_height
@@ -868,8 +875,11 @@ fn h264_decode_picture_ex(
   let cstride = ystride >> chroma_hshift
   let cheight = yheight >> chroma_vshift
   let y : Array[Int32] = Array::make(ystride * yheight, 0)
-  let u : Array[Int32] = Array::make(cstride * cheight, 0)
-  let v : Array[Int32] = Array::make(cstride * cheight, 0)
+  // Monochrome frames keep neutral chroma, matching FFmpeg's yuv420p output
+  // (DC_128 chroma prediction and byte-exact chroma motion compensation).
+  let chroma_fill = if chroma_format == 0 { 1 << (sps.bit_depth_luma - 1) } else { 0 }
+  let u : Array[Int32] = Array::make(cstride * cheight, chroma_fill)
+  let v : Array[Int32] = Array::make(cstride * cheight, chroma_fill)
   let infos : Array[H264MbInfo] = []
   for _i = 0; _i < mb_count; _i = _i + 1 {
     infos.push({

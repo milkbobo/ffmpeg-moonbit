@@ -173,7 +173,7 @@ fn h264_recon_mb(
         }
         ignore(chroma_qps)
       }
-    } else {
+    } else if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
       let cw = 16 >> ctx.chroma_hshift
       let ch = 16 >> ctx.chroma_vshift
       let cbase = mb_y * ch * ctx.cstride + mb_x * cw
@@ -261,7 +261,7 @@ fn h264_recon_mb(
           }
         }
       }
-    } else {
+    } else if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
       let cw = 16 >> ctx.chroma_hshift
       let ch = 16 >> ctx.chroma_vshift
       let cbase = mb_y * ch * ctx.cstride + mb_x * cw

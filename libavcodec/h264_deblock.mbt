@@ -639,6 +639,10 @@ fn h264_filter_mb(
       if !strong && !any_bs {
         continue
       }
+      // `CHROMA(h)` is false for 4:0:0: monochrome edges only filter luma.
+      if ctx.chroma_format == 0 {
+        continue
+      }
       if ctx.chroma_format == 3 {
         let coff = cbase +
           (if vertical { 4 * edge } else { 4 * edge * ctx.cstride })

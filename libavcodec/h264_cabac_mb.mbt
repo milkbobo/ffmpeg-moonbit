@@ -908,11 +908,12 @@ fn h264_decode_mb_cabac_intra(
       Err(e) => return Err(e)
     }
   }
-  // Chroma prediction mode (`decode_cabac_mb_chroma_pre_mode`); 4:4:4 codes
-  // none and `sl->chroma_pred_mode` keeps the DC_128 placeholder.
+  // Chroma prediction mode (`decode_cabac_mb_chroma_pre_mode`); 4:4:4 and
+  // monochrome code none and `sl->chroma_pred_mode` keeps the DC_128
+  // placeholder.
   let mut raw_chroma = 0
   let mut chroma_mode = 0
-  if ctx.chroma_format != 3 {
+  if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
     raw_chroma = h264_cabac_chroma_pre_mode(
       cabac, states, ctx, mb_idx, mb_x, mb_y,
     )
@@ -929,7 +930,7 @@ fn h264_decode_mb_cabac_intra(
     let cbp_luma = h264_cabac_mb_cbp_luma(
       cabac, states, ctx, mb_idx, mb_x, mb_y,
     )
-    cbp = if ctx.chroma_format == 3 {
+    cbp = if ctx.chroma_format == 0 || ctx.chroma_format == 3 {
       cbp_luma
     } else {
       let cbp_chroma = h264_cabac_mb_cbp_chroma(
@@ -937,7 +938,7 @@ fn h264_decode_mb_cabac_intra(
       )
       cbp_luma | (cbp_chroma << 4)
     }
-  } else if ctx.chroma_format == 3 && cbp > 15 {
+  } else if (ctx.chroma_format == 0 || ctx.chroma_format == 3) && cbp > 15 {
     return Err("gray chroma")
   }
   info.cbp_all = cbp
@@ -993,7 +994,7 @@ fn h264_decode_mb_cabac_intra(
         Err(e) => return Err(e)
       }
     }
-    if ctx.chroma_format != 3 {
+    if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
       let num_c8x8 = ctx.chroma_format
       if (cbp & 0x30) != 0 {
         for c = 0; c < 2; c = c + 1 {
