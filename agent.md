@@ -491,6 +491,18 @@ $msg | git commit -F -
   改写成无效路径，docker 报 `destination can't be '/'`；用
   `docker run --rm -i ... pipe:1 > out` 绕开。
 
+- **VP9 系数对拍先收敛语法，再比较像素**：在 C/MoonBit 的 EOB 读取处记录
+  `i/band/nnz/tp0/code_word/high/bits/val`，按字段归一化后找首个分歧。
+  `prob_coef[tx][plane][inter]` 的 slab 步长为 **396 = 6×6×11**；UV 的 band counts
+  取 `uvtx`。非零上下文必须按 **MERGE → decode → SPLAT** 更新，helper 的 end
+  是相对长度。TU 逆变换后清系数；DC-only 缩放位数为 **4/5/6/6**。
+- **VP9 超块像素与滤波地址**：逐 SB 调用时 y/uv 偏移都要加当前 col；滤波前写入
+  `level[row7*8+col7]` 的块矩形。混合滤波参数为宽度索引 **0/1 → 4/8**，不得直接
+  当像素宽度；有语法完全一致、像素仍不同的情况时，分 Y/Cb/Cr 定位首差。
+- **VP9 负例使用 MSB-first 帧头**：show-existing 的最短 profile-0 包为 `0x88`；
+  inter 负例复用真实 P 包，解码器在依赖参考尺寸或消费压缩头之前拒绝。五流验收为
+  3+3+2+2+2 = **12 帧**，生成脚本和参考 MD5 见 `vp9_kf_realdata_wbtest.mbt`。
+
 ---
 
 ## 8. 边界与偏差原则

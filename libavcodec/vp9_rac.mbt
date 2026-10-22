@@ -25,6 +25,7 @@ pub struct Vp9RangeDecoder {
   mut pos : Int32
   end : Int32
   mut code_word : UInt32
+  mut end_reached : Int32
 }
 
 ///|
@@ -80,7 +81,18 @@ pub fn vp9_rac_init(
     pos: offset + 3,
     end: offset + size,
     code_word: (b0 << 16) | (b1 << 8) | b2,
+    end_reached: 0,
   })
+}
+
+///|
+/// `vpx_rac_is_end`: the decoder has drained the declared range (the > 10
+/// counter gives truncated streams a little slack, mirroring the C). */
+pub fn vp9_rac_is_end(c : Vp9RangeDecoder) -> Bool {
+  if c.end <= c.pos && c.bits >= 0 {
+    c.end_reached = c.end_reached + 1
+  }
+  c.end_reached > 10
 }
 
 ///|
