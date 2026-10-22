@@ -60,6 +60,5 @@ test "h264: explicit B weights for both lists match FFmpeg trace" {
   assert_eq(weights.chroma_offset_l0[0], [1, -1])
   assert_eq(weights.chroma_weight_l1[0], [2, 3])
   assert_eq(weights.chroma_offset_l1[0], [0, 2])
-  // Header support alone must not silently route B macroblocks through P syntax.
-  assert_true(h264_decode_annexb_frames(data, false) is Err("only I and P slices are supported"))
+  assert_eq(h264_decode_annexb_frames(data, false).unwrap().length(), 3)
 }

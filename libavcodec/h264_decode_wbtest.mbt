@@ -175,15 +175,6 @@ test "h264: deblocking matches FFmpeg default output (crop / qp variants)" {
 // panic and never as silently wrong pixels.
 // ---------------------------------------------------------------------------
 
-///|
-/// Error string of a stream that must be rejected (`"no error"` if decoded).
-fn h264_err(b64 : Bytes, hint : Int32) -> String {
-  let data = @libavutil.av_base64_decode(b64, hint).unwrap()
-  match h264_decode_annexb_i_frames(data) {
-    Ok(_) => "no error"
-    Err(e) => e
-  }
-}
 
 ///|
 test "h264: P slices decode through the DPB entry" {
@@ -205,11 +196,25 @@ test "h264: legacy intra entry groups multiple slices into one picture" {
 }
 
 ///|
-test "h264: 4:2:2 chroma format is rejected" {
-  assert_eq(h264_err(h264_422_b64, 4096), "only 4:2:0 is supported")
+test "h264: 4:2:2 stream decodes with 4:2:2 plane geometry" {
+  // The stream's SPS says chroma_format_idc 2; with 4:2:2 decoding in
+  // place it reconstructs fine (chroma planes are 32x48, half width).
+  let data = @libavutil.av_base64_decode(h264_422_b64, 4096).unwrap()
+  let frames = h264_decode_annexb_frames(data, true).unwrap()
+  assert_eq(frames.length(), 1)
+  let f = frames[0]
+  assert_eq(f.width, 64)
+  assert_eq(f.height, 48)
+  assert_eq(f.u.length(), 32 * 48)
+  assert_eq(f.cstride, 32)
+  assert_eq(f.yuv420p().length(), 64 * 48 + 2 * 32 * 48)
 }
 
 ///|
-test "h264: 10-bit sample depth is rejected" {
-  assert_eq(h264_err(h264_10bit_b64, 4096), "only 8-bit decoding is supported")
+test "h264: 10-bit sample depth is retained in output" {
+  let data = @libavutil.av_base64_decode(h264_10bit_b64, 4096).unwrap()
+  let frames = h264_decode_annexb_frames(data, false).unwrap()
+  assert_eq(frames.length(), 1)
+  assert_eq(frames[0].bit_depth, 10)
+  assert_eq(frames[0].yuv420p().length(), frames[0].width * frames[0].height * 3)
 }

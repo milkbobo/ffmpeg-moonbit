@@ -179,6 +179,8 @@ test "h264 mvpred: 16x16 median prediction from neighbours" {
       cbp_all: 0,
       chroma_mode: 0,
       mv: Array::make(32, 0),
+      mv1: Array::make(32, 0), ref_idx1: Array::make(16, -1), mvd1: Array::make(32, 0),
+      ref_identity1: Array::make(16, -1), direct: Array::make(16, false),
       ref_idx: Array::make(16, h264_ref_not_avail),
       mvd: Array::make(32, 0),
       transform_8x8: false,
@@ -200,7 +202,14 @@ test "h264 mvpred: 16x16 median prediction from neighbours" {
     infos[2].ref_idx[i] = 0
   }
   let ctx : H264DecCtx = {
+    bit_depth: 8,
+    chroma_format: 1,
+    chroma_hshift: 1,
+    chroma_vshift: 1,
+    si_slice: false,
     slice_num: 0,
+    active_list: 0, ref_list1: [], ref_count1: 1, direct_spatial: true, direct_8x8: true,
+    colocated: [], poc: 0, long_pocs: [],
     pps: inter_test_pps(),
     mb_width: 2,
     y: Array::make(ystride * 32, 0),
@@ -242,6 +251,8 @@ test "h264 mvpred: P skip zero shortcut" {
       cbp_all: 0,
       chroma_mode: 0,
       mv: Array::make(32, 0),
+      mv1: Array::make(32, 0), ref_idx1: Array::make(16, -1), mvd1: Array::make(32, 0),
+      ref_identity1: Array::make(16, -1), direct: Array::make(16, false),
       ref_idx: Array::make(16, h264_ref_not_avail),
       mvd: Array::make(32, 0),
       transform_8x8: false,
@@ -253,7 +264,14 @@ test "h264 mvpred: P skip zero shortcut" {
     infos[2].ref_idx[i] = 0
   }
   let ctx : H264DecCtx = {
+    bit_depth: 8,
+    chroma_format: 1,
+    chroma_hshift: 1,
+    chroma_vshift: 1,
+    si_slice: false,
     slice_num: 0,
+    active_list: 0, ref_list1: [], ref_count1: 1, direct_spatial: true, direct_8x8: true,
+    colocated: [], poc: 0, long_pocs: [],
     pps: inter_test_pps(),
     mb_width: 2,
     y: Array::make(32 * 32, 0),
@@ -276,7 +294,10 @@ test "h264 mvpred: P skip zero shortcut" {
         cstride: 16,
         width: 32,
         height: 32,
+        cwidth: 16,
+        cheight: 16,
         poc: 0,
+        identity: 1,
       },
     ],
     mb_skip_run: 0,

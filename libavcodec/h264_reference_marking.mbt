@@ -2,7 +2,7 @@
 /// Progressive reference marking from FFmpeg 9.0.2 h264_refs.c.
 /// Copyright (c) 2003 Michael Niedermayer. LGPL-2.1-or-later.
 fn H264Decoder::mark_reference(
-  self : H264Decoder, pic : H264RefPic, sh : H264SliceHeader, sps : H264Sps, idr : Bool,
+  self : H264Decoder, pic : H264RefPic, infos : Array[H264MbInfo], sh : H264SliceHeader, sps : H264Sps, idr : Bool,
 ) -> Result[Unit, String] {
   let refs = if idr { [] } else { self.refs.copy() }
   let max_frame = 1 << sps.log2_max_frame_num
@@ -55,7 +55,7 @@ fn H264Decoder::mark_reference(
       if refs[i].long_index < 0 && refs[i].frame_num == frame_num { ignore(refs.remove(i)) }
     }
   }
-  refs.insert(0, { frame_num, long_index: current_long, pic: { ..pic, poc } })
+  refs.insert(0, { frame_num, long_index: current_long, pic: { ..pic, poc }, infos })
   guard refs.length() <= sps.ref_frame_count.max(1) else { return Err("too many H.264 reference pictures") }
   self.refs.clear()
   for entry in refs { self.refs.push(entry) }

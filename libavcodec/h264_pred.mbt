@@ -159,6 +159,8 @@ fn h264_pred4x4(
   top : Bool,
   left : Bool,
   topright : Bool,
+
+  bit_depth? : Int32 = 8,
 ) -> Result[Unit, String] {
   if mode == h264_pred_vert {
     if !top {
@@ -196,7 +198,7 @@ fn h264_pred4x4(
     } else if top || left {
       (sum + 2) >> 2
     } else {
-      128
+      (1 << (bit_depth - 1))
     }
     for j = 0; j < 4; j = j + 1 {
       for i = 0; i < 4; i = i + 1 {
@@ -234,7 +236,7 @@ fn h264_pred4x4(
   } else if mode == h264_pred_128_dc {
     for j = 0; j < 4; j = j + 1 {
       for i = 0; i < 4; i = i + 1 {
-        dst[off + j * stride + i] = 128
+        dst[off + j * stride + i] = (1 << (bit_depth - 1))
       }
     }
   } else {
@@ -281,7 +283,7 @@ fn h264_pred4x4(
       lt = dst[off - stride - 1]
     }
     let put = fn(x : Int32, y : Int32, v : Int32) -> Unit {
-      o[y * 4 + x] = h264_clip8(v)
+      o[y * 4 + x] = h264_clip8(v, bit_depth=bit_depth)
     }
     if mode == h264_pred_ddl {
       put(0, 0, (t[0] + t[2] + 2 * t[1] + 2) >> 2)
@@ -406,6 +408,8 @@ fn h264_pred16x16(
   mode : Int32,
   top : Bool,
   left : Bool,
+
+  bit_depth? : Int32 = 8,
 ) -> Result[Unit, String] {
   if mode == h264_pred8_vert {
     if !top {
@@ -430,7 +434,7 @@ fn h264_pred16x16(
     mode == h264_pred8_left_dc ||
     mode == h264_pred8_top_dc ||
     mode == h264_pred8_128_dc {
-    let mut dc = 128
+    let mut dc = (1 << (bit_depth - 1))
     if mode == h264_pred8_dc {
       let mut sum = 0
       if top {
@@ -448,7 +452,7 @@ fn h264_pred16x16(
       } else if top || left {
         (sum + 8) >> 4
       } else {
-        128
+        (1 << (bit_depth - 1))
       }
     } else if mode == h264_pred8_left_dc {
       if !left {
@@ -494,10 +498,10 @@ fn h264_pred16x16(
       a = a + v
       for i4 = 0; i4 < 4; i4 = i4 + 1 {
         let p = off + j * stride + 4 * i4
-        dst[p] = h264_clip8(b >> 5)
-        dst[p + 1] = h264_clip8((b + h) >> 5)
-        dst[p + 2] = h264_clip8((b + 2 * h) >> 5)
-        dst[p + 3] = h264_clip8((b + 3 * h) >> 5)
+        dst[p] = h264_clip8(b >> 5, bit_depth=bit_depth)
+        dst[p + 1] = h264_clip8((b + h) >> 5, bit_depth=bit_depth)
+        dst[p + 2] = h264_clip8((b + 2 * h) >> 5, bit_depth=bit_depth)
+        dst[p + 3] = h264_clip8((b + 3 * h) >> 5, bit_depth=bit_depth)
         b = b + 4 * h
       }
     }
@@ -516,6 +520,8 @@ fn h264_pred8x8(
   mode : Int32,
   top : Bool,
   left : Bool,
+
+  bit_depth? : Int32 = 8,
 ) -> Result[Unit, String] {
   if mode == h264_pred8_vert {
     if !top {
@@ -599,7 +605,7 @@ fn h264_pred8x8(
   } else if mode == h264_pred8_128_dc {
     for j = 0; j < 8; j = j + 1 {
       for i = 0; i < 8; i = i + 1 {
-        dst[off + j * stride + i] = 128
+        dst[off + j * stride + i] = (1 << (bit_depth - 1))
       }
     }
   } else if mode == h264_pred8_plane {
@@ -621,11 +627,164 @@ fn h264_pred8x8(
       let b = a
       a = a + v
       for i = 0; i < 8; i = i + 1 {
-        dst[off + j * stride + i] = h264_clip8((b + i * h) >> 5)
+        dst[off + j * stride + i] = h264_clip8((b + i * h) >> 5, bit_depth=bit_depth)
       }
     }
   } else {
     return Err("unsupported 8x8 prediction mode")
+  }
+  Ok(())
+}
+
+///|
+/// `pred8x16_*`: 8x16 chroma prediction for 4:2:2 (`h264pred_template.c`).
+/// The mode indices are the same `h264_pred8_*` codes as the 8x8 set. */
+fn h264_pred8x16(
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  mode : Int32,
+  top : Bool,
+  left : Bool,
+
+  bit_depth? : Int32 = 8,
+) -> Result[Unit, String] {
+  if mode == h264_pred8_vert {
+    if !top {
+      return Err("8x16 vertical prediction without top samples")
+    }
+    for j = 0; j < 16; j = j + 1 {
+      for i = 0; i < 8; i = i + 1 {
+        dst[off + j * stride + i] = dst[off - stride + i]
+      }
+    }
+  } else if mode == h264_pred8_hor {
+    if !left {
+      return Err("8x16 horizontal prediction without left samples")
+    }
+    for j = 0; j < 16; j = j + 1 {
+      let v = dst[off - 1 + j * stride]
+      for i = 0; i < 8; i = i + 1 {
+        dst[off + j * stride + i] = v
+      }
+    }
+  } else if mode == h264_pred8_dc {
+    if !top || !left {
+      return Err("8x16 DC prediction without both edges")
+    }
+    // Four 4-row bands: band 0 mixes top and left rows 0..3, bands 1..3 mix
+    // the top half-columns with their own left rows.
+    let mut dc0 = 0
+    let mut dc1 = 0
+    let mut dc2 = 0
+    let mut dc3 = 0
+    let mut dc4 = 0
+    for i = 0; i < 4; i = i + 1 {
+      dc0 = dc0 + dst[off - 1 + i * stride] + dst[off - stride + i]
+      dc1 = dc1 + dst[off - stride + 4 + i]
+      dc2 = dc2 + dst[off - 1 + (i + 4) * stride]
+      dc3 = dc3 + dst[off - 1 + (i + 8) * stride]
+      dc4 = dc4 + dst[off - 1 + (i + 12) * stride]
+    }
+    let v0 = (dc0 + 4) >> 3
+    let v1 = (dc1 + 2) >> 2
+    let v2 = (dc2 + 2) >> 2
+    let v3 = (dc1 + dc2 + 4) >> 3
+    let v4 = (dc3 + 2) >> 2
+    let v5 = (dc1 + dc3 + 4) >> 3
+    let v6 = (dc4 + 2) >> 2
+    let v7 = (dc1 + dc4 + 4) >> 3
+    let lvals = [v0, v2, v4, v6]
+    let rvals = [v1, v3, v5, v7]
+    for band = 0; band < 4; band = band + 1 {
+      for j = 0; j < 4; j = j + 1 {
+        let row = off + (band * 4 + j) * stride
+        for i = 0; i < 4; i = i + 1 {
+          dst[row + i] = lvals[band]
+          dst[row + 4 + i] = rvals[band]
+        }
+      }
+    }
+  } else if mode == h264_pred8_left_dc {
+    if !left {
+      return Err("8x16 left DC without left samples")
+    }
+    // `pred8x16_left_dc` stacks two `pred8x8_left_dc` calls, each splitting
+    // its 8 rows into two 4-row halves with their own left mean.
+    for quad = 0; quad < 4; quad = quad + 1 {
+      let mut dc = 0
+      for i = 0; i < 4; i = i + 1 {
+        dc = dc + dst[off - 1 + (quad * 4 + i) * stride]
+      }
+      let v = (dc + 2) >> 2
+      for j = 0; j < 4; j = j + 1 {
+        for i = 0; i < 8; i = i + 1 {
+          dst[off + (quad * 4 + j) * stride + i] = v
+        }
+      }
+    }
+  } else if mode == h264_pred8_top_dc {
+    if !top {
+      return Err("8x16 top DC without top samples")
+    }
+    let mut dc0 = 0
+    let mut dc1 = 0
+    for i = 0; i < 4; i = i + 1 {
+      dc0 = dc0 + dst[off - stride + i]
+      dc1 = dc1 + dst[off - stride + 4 + i]
+    }
+    let v0 = (dc0 + 2) >> 2
+    let v1 = (dc1 + 2) >> 2
+    for j = 0; j < 16; j = j + 1 {
+      for i = 0; i < 4; i = i + 1 {
+        dst[off + j * stride + i] = v0
+        dst[off + j * stride + 4 + i] = v1
+      }
+    }
+  } else if mode == h264_pred8_128_dc {
+    for j = 0; j < 16; j = j + 1 {
+      for i = 0; i < 8; i = i + 1 {
+        dst[off + j * stride + i] = (1 << (bit_depth - 1))
+      }
+    }
+  } else if mode == h264_pred8_plane {
+    if !top || !left {
+      return Err("8x16 plane prediction without both edges")
+    }
+    let tl = dst[off - stride - 1]
+    let top_at = fn(i : Int32) -> Int32 {
+      if i < 0 {
+        tl
+      } else {
+        dst[off - stride + i]
+      }
+    }
+    let left_at = fn(y : Int32) -> Int32 {
+      if y < 0 {
+        tl
+      } else {
+        dst[off + y * stride - 1]
+      }
+    }
+    let mut h = top_at(4) - top_at(2)
+    let mut v = left_at(8) - left_at(6)
+    for k = 2; k <= 4; k = k + 1 {
+      h = h + k * (top_at(3 + k) - top_at(3 - k))
+      v = v + k * (left_at(7 + k) - left_at(7 - k))
+    }
+    for k = 5; k <= 8; k = k + 1 {
+      v = v + k * (left_at(7 + k) - left_at(7 - k))
+    }
+    h = (17 * h + 16) >> 5
+    v = (5 * v + 32) >> 6
+    let a0 = 16 * (left_at(15) + top_at(7) + 1) - 7 * v - 3 * h
+    for j = 0; j < 16; j = j + 1 {
+      for i = 0; i < 8; i = i + 1 {
+        dst[off + j * stride + i] = h264_clip8((a0 + j * v + i * h) >> 5, bit_depth=bit_depth)
+      }
+    }
+  } else {
+    return Err("unsupported 8x16 prediction mode")
   }
   Ok(())
 }

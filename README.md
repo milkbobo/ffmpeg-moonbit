@@ -141,6 +141,13 @@ moonbit/
     ├── h264_mvpred.mbt       # MV 预测：A/B/C 邻块、mid_pred、P_SKIP 捷径
     ├── h264_inter.mbt        # P 宏块层（CABAC+CAVLC）：skip/type/ref/mvd + inter 残差
     ├── h264_dpb.mbt          # 滑窗 DPB：POC 跟踪、默认 L0、参考标记（H264Decoder）
+    ├── h264_b_mb.mbt         # B 宏块层：类型/子分区/L0L1 ref+mvd/直接模式
+    ├── h264_b_mc.mbt         # B 双向 MC：显式/隐式加权与 (a+b+1)>>1 平均
+    ├── h264_b_refs.mbt       # B 默认 L0/L1 列表（短/长参考排序）
+    ├── h264_b_direct.mbt     # 空间/时间 direct 运动推导与 colocated 缩放
+    ├── h264_depth.mbt        # 8–14 bit 的样本截断与 QP 上限
+    ├── h264_output.mbt       # 显示重排：POC 排序、epoch、reorder_depth drain
+    ├── h264_chroma_realdata_wbtest.mbt # 4:2:2/4:4:4 真实码流逐帧 MD5
     ├── aac_ics.mbt           # AAC ICS 语法：ics_info/section 数据/TNS/pulse/gain-control
     ├── aac_mdct.mbt          # AAC IMDCT/加窗 + SCE/CPE/LFE 多元素帧入口与标签状态绑定
     ├── aac_coupling.mbt      # CCE 增益、频域/时域耦合及声道选择
@@ -358,7 +365,7 @@ CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，88961 行，含测�
 | [aac_spectrum.mbt](libavcodec/aac_spectrum.mbt) | `aacdec_proc_template.c`(`decode_spectrum_and_dequant` 浮点路径)、`aacdec.c`(`decode_scalefactors`/`decode_pulses`)、`aacdec_dsp_template.c`(`dequant_scalefactors`/`apply_tns`、Levinson 展开) | **AAC 频谱解码**：scalefactor 差分、码书 1..11 Huffman + 打包索引/符号位、book 11 escape、PNS 单位能量噪声、intensity 零填充、采样率相关 pulse 位置校验与重建、TNS Levinson + 就地 AR 滤波 | ✅ |
 | [aac_tables.mbt](libavcodec/aac_tables.mbt) | `aactab.c` 全部解码表 + `ff_aac_pow2sf_tab`/`ff_cbrt_tab` 生成算法 | 批量提取表：scalefactor VLC（121 项）、码书 1..11 的 codes/bits、5 张 `codebook_vector_*_idx` 打包索引表、3 张 vals 表、`pow2sf` 428 项 float32、`pow43` 8192 项、swb 偏移表（1024/128 与 960/120 全采样率）与 `tns_max_bands`；提取脚本 `scripts/extract_aac_tables.py`（与 C 源逐值 diff 校验） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **627/627 全绿**。各格式的能力边界见本节末尾的迁移矩阵。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **654/654 全绿**。各格式的能力边界见本节末尾的迁移矩阵。
 
 ### CABAC 的验证范围
 
@@ -554,8 +561,9 @@ Huffman 规范化码另有等效性说明，见下文）：
   HRD、bitstream restriction、裁剪尺寸、`num_reorder_frames` 的水平表推导）与
   `avcC`/Annex B extradata。**像素解码已开始**：Baseline I 帧重建通路（slice header、
   CAVLC、宏块重建、环路去块滤波）见下一小节；**SEI 已完成**（`h264_sei.mbt`，T.35 与
-  side-data 层未接）；**P 帧与滑窗 DPB 已完成**（`h264_inter/mvpred/mc/dpb`，B/SP/SI
-  slice 仍拒绝）；CABAC 的多行与运动 I/P 验证范围见 §3。
+  side-data 层未接）；**P/B 帧与滑窗 DPB 已完成**（`h264_inter/mvpred/mc/dpb` + `h264_b_*`：
+  B 全子分区、空间/时间 direct、显式/隐式双向加权与显示重排；SP/SI 重建仍拒绝）；
+  CABAC 的多行与运动 I/P 验证范围见 §3。
 - **H.265**：`hevc_ps.mbt` 完成 VPS/SPS/PPS 与 PTL、short-term RPS、VUI、缩放列表、
   Range Extension 与 SCC 语法、`hvcC`/Annex B extradata、POC 计算。**未做**：slice
   segment header、CABAC、预测/变换/滤波、SEI；多层扩展（VPS multilayer、PPS
@@ -603,9 +611,10 @@ Huffman 规范化码另有等效性说明，见下文）：
   `loop_filter()` + 预测读滤波前备份的 `sl->top_borders`。本移植的等价做法是
   **先把整帧重建完，再按宏块光栅序整帧滤波**——「每解一个宏块就立刻滤波」会让后续宏块
   的帧内预测吃到已滤波的左邻，整帧像素会偏。
-- **只支持**：Progressive、8-bit 4:2:0、单 slice、`first_mb_in_slice == 0`、每帧一个
-  slice。**显式拒绝**（返回 `Err`，不 panic）：CABAC、P/B/SP/SI slice、多 slice、
-  场/MBAFF、8x8DCT、非 4:2:0、非 8-bit。
+- 该切片当时的边界是 Progressive 8-bit 4:2:0 单 slice；后续切片已解除大部分限制：
+  CABAC、P/B slice、多 slice、8x8DCT、8–14 bit 与 4:2:2/4:4:4 均已支持
+  （见 2026-10-22/23 增量）。**仍显式拒绝**（返回 `Err`，不 panic）：场/MBAFF、
+  separate colour plane、单色、SP/SI 重建、参考帧间隙。
 - **代码已写但无真实向量**：`I_PCM` 宏块路径（x264 的 baseline profile 不接受
   `-qp 0` lossless，且 lossless 走变换旁路而非 I_PCM，需手工构造码流才能覆盖；该路径在
   滤波里按 C 的 `qscale_table = 0` 处理）。
@@ -757,7 +766,7 @@ Huffman 规范化码另有等效性说明，见下文）：
   MP3 Layer III 定点解码（IMDCT/合成滤波/PCM）+ MPEG 音频 Layer I/II（分配/scalefactor/
   组量化）、+ **H.264 SEI**（`h264_sei.mbt`，含公共消息集）与 **AAC 频谱解码**
   （码书 1..11/scalefactor/PNS/TNS + 四窗口序列 IMDCT/KBD 窗，真实码流逐帧出 PCM）；
-  其余未做：B/SP/SI slice、HEVC 的 tiles+WPP 组合与
+  其余未做（H.264 的 B 帧与 4:2:2/4:4:4 已在 2026-10-22/23 增量完成）：SP/SI 重建、HEVC 的 tiles+WPP 组合与
   dependent slice（I/P/B、10/12-bit、多 slice、WPP、tiles 与 transform skip 主链路已出数据）、
   AAC SBR/PS 与无法命名的 height+CCE 布局、**SEI 的 ITU-T T.35 与 AVFrame side-data 层**、
   VLC 表构建、LZO 与其余编解码器
@@ -846,7 +855,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 
 | 请求范围 | 当前可用切片 | 主要剩余项 |
 |---|---|---|
-| H.264 | progressive 8-bit 4:2:0 I/P；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考；B 双列表 header | B 像素/direct/双向加权/显示重排、SP/SI 重建、场编码/MBAFF、高位深、单色/4:2:2/4:4:4、transform bypass、参考帧间隙补偿 |
+| H.264 | progressive 8–14 bit 4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排 | SP/SI 重建、场编码/MBAFF、单色、transform bypass、参考帧间隙补偿 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
 | AV1 | OBU/序列与帧头、实际 tile payload 提取 | 熵解码、预测/变换、环路滤波与像素输出 |
 | VP9 | profile-0 关键帧、隐藏/show-existing、superframe | inter/intra-only、参考预测与概率适配、其他 profile |
@@ -993,13 +1002,43 @@ C harness 仅生成黄金参考，运行时保持纯 MoonBit。
 `scripts/generate_h264_marking_vectors.mbtx`、`scripts/emit_h264_completion_vectors.mbtx`
 及向量文件头。全量 Wasm **627/627**；`moon check` 零错误/零警告。
 
-完整 H.264 解码目标仍有以下工作，不能按当前 I/P 对拍结果宣称完成：
+2026-10-23 增量完成后，原清单 1、2 两项中的 B 帧全套、高位深（8–14 bit）与
+4:2:2/4:4:4 均已完成（见下节）；仍开放：
 
-1. B 宏块与子分区、L1/双向 MC、空间/时间 direct、显式/隐式双向加权、共位运动历史及显示重排。
-2. 高位深、单色/4:2:2/4:4:4 与 separate colour plane，transform bypass/残差 DPCM，SP/SI 重建。
-3. 场图/PAFF/MBAFF：场扫描、场参考与 POC、预测/MC/去块及成对场输出。
-4. frame_num gap 的非存在参考补偿、数据分区/冗余 slice、错误恢复及 SEI T.35/输出元数据接入。
+1. 单色（chroma_format_idc 0）、separate colour plane、transform bypass/残差 DPCM、SP/SI 重建。
+2. 场图/PAFF/MBAFF：场扫描、场参考与 POC、预测/MC/去块及成对场输出。
+3. frame_num gap 的非存在参考补偿、数据分区/冗余 slice、错误恢复及 SEI T.35/输出元数据接入。
    原 C 本身拒绝的 FMO 等功能继续保留对应拒绝边界。
+
+### 2026-10-23 H.264 B 帧与 4:2:2/4:4:4 解码
+
+在 I/P 链路上补齐 B 帧全套与全部非单色色度格式，入口与门禁不变：
+
+- **B 帧**（`h264_b_mb/b_mc/b_refs/b_direct`、`h264_output`）：B_Skip/B_Direct 与
+  B_16x16/16x8/8x16/8x8 全子分区，L0/L1 参考、mvd 与残差（CAVLC/CABAC 共用）；
+  空间/时间 direct（colocated MV 缩放、`direct_8x8_inference`）；显式双向加权与
+  隐式权重（POC 距离缩放）；默认 B 列表（FrameNumWrap + LongTermPicNum 两套）。
+  输出按 POC 显示重排，IDR/MMCO5 开新 epoch，drain 延迟 B 帧。
+- **高位深**（`h264_depth.mbt`）：8/9/10/12/14-bit 样本截断（`h264_store_coef`/`clip8`
+  按 bit_depth 缩放）、QP 范围 51+6*(depth-8)、去块 alpha/beta/tc 移位。
+- **4:2:2**：chroma422 DC 专用 coeff_token/total_zeros 码表与 8 系数扫描、2×4 DC
+  Hadamard（dequant 表取 chroma_qp+3）、`pred8x16_*` 全模式（DC 四行象限、plane 的
+  `V=(5v+32)>>6`）、色度 MC `my>>2` + `(my<<1)&7` 相位、CABAC DC `sig_coeff_offset_dc`
+  三上下文与 `coeff_abs_levelgt1_ctx` 的 422 变体、`scan8` 缓存纵向堆叠的 nC/cbf
+  邻居（偶数块读左宏块 b1/b3/b5/b7、首行块读上宏块 b6/b7）、去块垂直边 16 行
+  （每个 bS 管 4 行）与水平边全滤。
+- **4:4:4**：色度平面复用 luma 机器（I4x4/I16x16 预测、4×4/8×8 残差、逐平面 DC），
+  `ctx_cat` 扩展的 CABAC 类别 6–13 与 cbf 上下文（cat 5 在 444 也读 cbf）、灰度
+  cbp 映射表、`fill_decode_caches` 的 444 邻居填充与 8x8DCT/4x4 邻接 quirk
+  （非 8x8 邻居按 0/PCM 64 参与上下文）、cbf=0 时整象限 nz 清零、色度 MC 直接用
+  luma qpel 滤波器、PCM 768 样本/宏块、去块色度用 luma 核与色度 QP。
+
+验证：`h264_b_realdata_wbtest.mbt` 21 条真实流（加权、CQM、多片、多 GOP、参考切换、
+9–14 bit、连续 PCM、稠密残差）共 **142 帧**、`h264_chroma_realdata_wbtest.mbt` 6 条
+4:2:2/4:4:4 真实流（CAVLC/CABAC × 8/10 bit）共 **42 帧**，均含默认滤波与
+`-skip_loop_filter all` 两套 framemd5，与 FFmpeg 9.0.2 逐字节一致；生成命令在
+`scripts/emit_h264_b_vectors.mbtx`、`scripts/emit_h264_chroma_vectors.mbtx` 与文件头。
+全量 Wasm **654/654**；`moon check` 零错误/零警告。
 
 ## 4. 验证方式
 
@@ -1175,7 +1214,7 @@ I 帧重建 + 环路去块滤波**（slice header + CAVLC + 4x4 IDCT + 帧内预
    HEVC SEI 入口（`hevc/sei.c`）
 2. `vlc.c` 的 `ff_vlc_init_from_lengths` 表构建（当前只产出它需要的 `lens`/`xlat`）
 3. ~~接 MP4 的 avcC + 长度前缀入口 → CABAC（`h264_cabac.c`）→ P 帧与 DPB/参考帧管理~~
-   **已完成**（`h264_inter/mvpred/mc/dpb`；B/SP/SI slice 与 CABAC 多行收敛仍开放）
+   **已完成**（`h264_inter/mvpred/mc/dpb` + `h264_b_*` 全套 B 帧；SP/SI 重建仍开放）
 4. VP9 profile-0 关键帧像素解码已完成；后续为 VP9 帧间参考/概率适配、AV1 像素与
    Opus 音频解码。HEVC 剩余边界见上方范围清单。
 5. AAC 原始帧解析：ICS/TNS/MDCT/**频谱 Huffman**/scalefactor/pulse/PNS/gain-control

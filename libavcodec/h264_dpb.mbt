@@ -7,13 +7,14 @@
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: progressive I/P, POC 0/1/2 and frame_num wrap, MMCO 1..6 and IDR
+/// Scope: progressive I/P/B, POC 0/1/2 and frame_num wrap, MMCO 1..6 and IDR
 /// long references. Default/reordered L0 includes short/long references.
-/// B pictures, fields, frame_num-gap synthesis and display reordering remain.
+/// Field pictures and frame_num-gap synthesis remain unsupported.
 
 ///|
 /// One short/long-term reference entry; POC belongs to the picture planes.
 struct H264DpbEntry {
+  infos : Array[H264MbInfo]
   frame_num : Int32
   long_index : Int32
   pic : H264RefPic
@@ -23,6 +24,8 @@ struct H264DpbEntry {
 /// Decoder state across pictures: the parameter sets and the sliding-window
 /// short-term reference buffer.
 pub struct H264Decoder {
+  mut picture_serial : Int32
+  mut epoch : Int32
   /// Parameter sets, updated by in-band SPS/PPS NALs.
   ps : H264ParamSets
   refs : Array[H264DpbEntry]
@@ -38,6 +41,8 @@ pub struct H264Decoder {
 /// Create a decoder with an empty reference buffer. */
 pub fn new_h264_decoder() -> H264Decoder {
   {
+    picture_serial: 0,
+    epoch: 0,
     ps: new_h264_param_sets(),
     refs: [],
     prev_poc_msb: 0,
@@ -56,14 +61,15 @@ fn H264Decoder::ref_list0(
   mod_vals : Array[Int32],
   curr_frame_num : Int32,
   max_pic_num : Int32,
+  order? : Array[H264DpbEntry] = [],
 ) -> Result[Array[H264RefPic], String] {
   let list : Array[H264RefPic] = []
   if self.refs.length() == 0 {
     return Ok(list)
   }
-  let entries = [..self.refs]
+  let entries = if order.is_empty() { [..self.refs] } else { order.copy() }
   // P default short list uses descending FrameNumWrap, then ascending long index.
-  entries.sort_by(fn(a, b) {
+  if order.is_empty() { entries.sort_by(fn(a, b) {
     if a.long_index >= 0 && b.long_index >= 0 { a.long_index.compare(b.long_index) }
     else if a.long_index >= 0 { 1 }
     else if b.long_index >= 0 { -1 }
@@ -72,7 +78,7 @@ fn H264Decoder::ref_list0(
       let bw = if b.frame_num > curr_frame_num { b.frame_num - max_pic_num } else { b.frame_num }
       bw.compare(aw)
     }
-  })
+  }) }
   // `ff_h264_build_ref_list`'s missing-reference pass uses `default_ref =
   // ref_list[0]`, so pad the default list to the coded reference count.
   let base : Array[H264DpbEntry] = []
@@ -190,8 +196,10 @@ fn H264Decoder::decode_picture(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  fn refs_for(header : H264SliceHeader) -> Result[Array[H264RefPic], String] {
-    if header.slice_type_nos != 0 { return Ok([]) }
+  fn refs_for(header : H264SliceHeader) -> Result[H264SliceRefs, String] {
+    let longs = self.refs.filter(fn(entry) { entry.long_index >= 0 }).map(fn(entry) { entry.pic.identity })
+    if header.slice_type_nos == 1 { return self.b_references(header, sps, poc, longs) }
+    if header.slice_type_nos != 0 && header.slice_type_nos != 3 { return Ok({ list0: [], list1: [], colocated: [], long_pocs: longs, poc }) }
     let list = match
       self.ref_list0(
         header.num_ref_idx_l0_active,
@@ -206,7 +214,7 @@ fn H264Decoder::decode_picture(
     if list.length() == 0 {
       return Err("no reference picture for a P slice")
     }
-    Ok(list)
+    Ok({ list0: list, list1: [], colocated: [], long_pocs: longs, poc })
   }
   let frame = match h264_decode_picture_ex(nals, self.ps, refs_for, skip_lf) {
     Ok(v) => v
@@ -215,6 +223,7 @@ fn H264Decoder::decode_picture(
   // Commit reference marking only after every slice reconstructed successfully.
   if nal.ref_idc != 0 {
     let pic : H264RefPic = {
+      identity: self.picture_serial + 1,
       y: frame.y,
       u: frame.u,
       v: frame.v,
@@ -224,9 +233,11 @@ fn H264Decoder::decode_picture(
       // bounds of motion compensation.
       width: frame.ystride,
       height: frame.pheight,
+      cwidth: frame.ystride >> frame.chroma_hshift,
+      cheight: frame.pheight >> frame.chroma_vshift,
       poc,
     }
-    match self.mark_reference(pic, sh, sps, is_idr) {
+    match self.mark_reference(pic, frame.infos, sh, sps, is_idr) {
       Ok(_) => ()
       Err(error) => return Err(error)
     }
@@ -237,13 +248,15 @@ fn H264Decoder::decode_picture(
   let reset = sh.mmco.any(fn(op) { op.0 == 5 })
   self.prev_frame_num = if reset { 0 } else { sh.frame_num }
   self.prev_frame_num_offset = if reset { 0 } else { frame_offset }
-  Ok(frame)
+  if (is_idr && self.picture_serial > 0) || reset { self.epoch += 1 }
+  self.picture_serial += 1
+  Ok({ ..frame, epoch: self.epoch, poc: if reset { 0 } else { frame.poc } })
 }
 
 ///|
-/// Decode an Annex B stream (parameter sets plus an I/P picture sequence)
+/// Decode an Annex B stream (parameter sets plus an I/P/B picture sequence)
 /// into frames in decoding order, grouping multiple slices per picture.
-/// B slices and interlaced pictures remain unsupported.
+/// Interlaced pictures remain unsupported.
 pub fn H264Decoder::decode_annexb(
   self : H264Decoder,
   data : Bytes,

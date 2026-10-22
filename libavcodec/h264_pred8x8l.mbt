@@ -18,12 +18,14 @@ fn h264_pred8x8l(
   left : Bool,
   topright : Bool,
   topleft? : Bool = top && left,
+
+  bit_depth? : Int32 = 8,
 ) -> Result[Unit, String] {
-  let top_raw : Array[Int32] = Array::make(16, 128)
-  let left_raw : Array[Int32] = Array::make(8, 128)
+  let top_raw : Array[Int32] = Array::make(16, (1 << (bit_depth - 1)))
+  let left_raw : Array[Int32] = Array::make(8, (1 << (bit_depth - 1)))
   let has_topleft = topleft
   let has_topright = top && topright
-  let lt = if has_topleft { plane[base - stride - 1] } else { 128 }
+  let lt = if has_topleft { plane[base - stride - 1] } else { (1 << (bit_depth - 1)) }
   if top {
     for i = 0; i < 8; i = i + 1 {
       top_raw[i] = plane[base - stride + i]
@@ -106,7 +108,7 @@ fn h264_pred8x8l(
     } else if left {
       (sum_l + 4) >> 3
     } else {
-      128
+      (1 << (bit_depth - 1))
     }
     for j = 0; j < 8; j = j + 1 {
       for i = 0; i < 8; i = i + 1 {
@@ -128,7 +130,7 @@ fn h264_pred8x8l(
       }
     }
     let dc = if mode == 11 {
-      128
+      (1 << (bit_depth - 1))
     } else {
       (sum + 4) >> 3
     }

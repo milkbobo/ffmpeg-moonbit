@@ -96,7 +96,9 @@ fn h264_mv_fetch(
     return (h264_ref_list_not_used, 0, 0)
   }
   let idx = ay % 4 * 4 + ax % 4
-  (info.ref_idx[idx], info.mv[2 * idx], info.mv[2 * idx + 1])
+  let refs = if ctx.active_list == 0 { info.ref_idx } else { info.ref_idx1 }
+  let mv = if ctx.active_list == 0 { info.mv } else { info.mv1 }
+  (refs[idx], mv[2 * idx], mv[2 * idx + 1])
 }
 
 ///|
@@ -291,5 +293,6 @@ fn h264_mvd_fetch(
     return (0, 0)
   }
   let idx = ay % 4 * 4 + ax % 4
-  (info.mvd[2 * idx], info.mvd[2 * idx + 1])
+  let mvd = if ctx.active_list == 0 { info.mvd } else { info.mvd1 }
+  (mvd[2 * idx], mvd[2 * idx + 1])
 }

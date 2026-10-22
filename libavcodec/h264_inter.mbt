@@ -51,7 +51,7 @@ fn h264_cabac_mb_skip(
       c = c + 1
     }
   }
-  cabac.get_cabac(states, 11 + c)
+  cabac.get_cabac(states, (if ctx.slice_type_nos == 1 { 24 } else { 11 }) + c)
 }
 
 ///|
@@ -114,10 +114,10 @@ fn h264_cabac_mb_ref(
   let (refb, _, _) = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, bx, by - 1)
   let mut refv = 0
   let mut c = 0
-  if refa > 0 {
+  if refa > 0 && (ctx.slice_type_nos != 1 || !h264_b_direct_neighbor(ctx, mb_idx, mb_x, mb_y, bx - 1, by)) {
     c = c + 1
   }
-  if refb > 0 {
+  if refb > 0 && (ctx.slice_type_nos != 1 || !h264_b_direct_neighbor(ctx, mb_idx, mb_x, mb_y, bx, by - 1)) {
     c = c + 2
   }
   while cabac.get_cabac(states, 54 + c) != 0 {
@@ -213,9 +213,10 @@ fn h264_write_back_ref(
   refi : Int32,
 ) -> Unit {
   let info = ctx.infos[mb_idx]
+  let refs = if ctx.active_list == 0 { info.ref_idx } else { info.ref_idx1 }
   for y = 0; y < bh; y = y + 1 {
     for x = 0; x < bw; x = x + 1 {
-      info.ref_idx[(by + y) * 4 + bx + x] = refi
+      refs[(by + y) * 4 + bx + x] = refi
     }
   }
 }
@@ -237,14 +238,17 @@ fn h264_write_back_part(
   mvd_absy : Int32,
 ) -> Unit {
   let info = ctx.infos[mb_idx]
+  let mv = if ctx.active_list == 0 { info.mv } else { info.mv1 }
+  let refs = if ctx.active_list == 0 { info.ref_idx } else { info.ref_idx1 }
+  let mvd = if ctx.active_list == 0 { info.mvd } else { info.mvd1 }
   for y = 0; y < bh; y = y + 1 {
     for x = 0; x < bw; x = x + 1 {
       let i = (by + y) * 4 + bx + x
-      info.mv[2 * i] = mvx
-      info.mv[2 * i + 1] = mvy
-      info.ref_idx[i] = refi
-      info.mvd[2 * i] = mvd_absx
-      info.mvd[2 * i + 1] = mvd_absy
+      mv[2 * i] = h264_i16(mvx)
+      mv[2 * i + 1] = h264_i16(mvy)
+      refs[i] = refi
+      mvd[2 * i] = mvd_absx
+      mvd[2 * i + 1] = mvd_absy
     }
   }
 }
@@ -261,15 +265,17 @@ fn h264_weight_rect(
   log2_denom : Int32,
   weight : Int32,
   offset : Int32,
+
+  bit_depth? : Int32 = 8,
 ) -> Unit {
-  let mut off2 = offset << log2_denom
+  let mut off2 = offset << (bit_depth - 8 + log2_denom)
   if log2_denom != 0 {
     off2 = off2 + (1 << (log2_denom - 1))
   }
   for y = 0; y < h; y = y + 1 {
     for x = 0; x < w; x = x + 1 {
       let i = off + y * stride + x
-      plane[i] = clip_uint8((plane[i] * weight + off2) >> log2_denom)
+      plane[i] = h264_clip8((plane[i] * weight + off2) >> log2_denom, bit_depth=bit_depth)
     }
   }
 }
@@ -288,11 +294,12 @@ fn h264_recon_inter_mb(
   nz : Array[Int32],
   chroma_qp0 : Int32,
   chroma_qp1 : Int32,
-  qmul_luma : Array[Int32],
   chroma_dc_nz : Array[Int32],
 ) -> Result[Unit, String] {
   let ybase = mb_y * 16 * ctx.ystride + mb_x * 16
-  let cbase = mb_y * 8 * ctx.cstride + mb_x * 8
+  let cw = 16 >> ctx.chroma_hshift
+  let chh = 16 >> ctx.chroma_vshift
+  let cbase = mb_y * chh * ctx.cstride + mb_x * cw
   for op_idx = 0; op_idx < mc_ops.length(); op_idx = op_idx + 1 {
     let op = mc_ops[op_idx]
     if op.ref_idx < 0 || op.ref_idx >= ctx.ref_list0.length() {
@@ -313,37 +320,75 @@ fn h264_recon_inter_mb(
       op.mvy & 3,
       refpic.width,
       refpic.height,
-    )
-    h264_mc_chroma(
-      ctx.u,
-      cbase + op.y / 2 * ctx.cstride + op.x / 2,
-      ctx.cstride,
-      refpic.u,
-      mb_x * 8 + op.x / 2,
-      mb_y * 8 + op.y / 2,
-      op.mvx,
-      op.mvy,
-      refpic.cstride,
-      op.w / 2,
-      op.h / 2,
-      refpic.width / 2,
-      refpic.height / 2,
-    )
-    h264_mc_chroma(
-      ctx.v,
-      cbase + op.y / 2 * ctx.cstride + op.x / 2,
-      ctx.cstride,
-      refpic.v,
-      mb_x * 8 + op.x / 2,
-      mb_y * 8 + op.y / 2,
-      op.mvx,
-      op.mvy,
-      refpic.cstride,
-      op.w / 2,
-      op.h / 2,
-      refpic.width / 2,
-      refpic.height / 2,
-    )
+     bit_depth=ctx.bit_depth,)
+    if ctx.chroma_format == 3 {
+      // 4:4:4 chroma is motion compensated with the luma quarter-pel filter.
+      h264_mc_luma(
+        ctx.u,
+        cbase + op.y * ctx.cstride + op.x,
+        ctx.cstride,
+        refpic.u,
+        mb_x * 16 + op.x + (op.mvx >> 2),
+        mb_y * 16 + op.y + (op.mvy >> 2),
+        refpic.cstride,
+        op.w,
+        op.h,
+        op.mvx & 3,
+        op.mvy & 3,
+        refpic.cwidth,
+        refpic.cheight,
+       bit_depth=ctx.bit_depth,)
+      h264_mc_luma(
+        ctx.v,
+        cbase + op.y * ctx.cstride + op.x,
+        ctx.cstride,
+        refpic.v,
+        mb_x * 16 + op.x + (op.mvx >> 2),
+        mb_y * 16 + op.y + (op.mvy >> 2),
+        refpic.cstride,
+        op.w,
+        op.h,
+        op.mvx & 3,
+        op.mvy & 3,
+        refpic.cwidth,
+        refpic.cheight,
+       bit_depth=ctx.bit_depth,)
+    } else {
+      let csx = op.x >> ctx.chroma_hshift
+      let csy = op.y >> ctx.chroma_vshift
+      let ccw = op.w >> ctx.chroma_hshift
+      let cch = op.h >> ctx.chroma_vshift
+      h264_mc_chroma(
+        ctx.u,
+        cbase + csy * ctx.cstride + csx,
+        ctx.cstride,
+        refpic.u,
+        mb_x * cw + csx,
+        mb_y * chh + csy,
+        op.mvx,
+        op.mvy,
+        refpic.cstride,
+        ccw,
+        cch,
+        refpic.cwidth,
+        refpic.cheight,
+       vshift=ctx.chroma_vshift,)
+      h264_mc_chroma(
+        ctx.v,
+        cbase + csy * ctx.cstride + csx,
+        ctx.cstride,
+        refpic.v,
+        mb_x * cw + csx,
+        mb_y * chh + csy,
+        op.mvx,
+        op.mvy,
+        refpic.cstride,
+        ccw,
+        cch,
+        refpic.cwidth,
+        refpic.cheight,
+       vshift=ctx.chroma_vshift,)
+    }
     if ctx.pwt.use_weight != 0 {
       let refi = op.ref_idx
       h264_weight_rect(
@@ -355,57 +400,81 @@ fn h264_recon_inter_mb(
         ctx.pwt.luma_log2_weight_denom,
         ctx.pwt.luma_weight_l0[refi],
         ctx.pwt.luma_offset_l0[refi],
-      )
+       bit_depth=ctx.bit_depth,)
       if ctx.pwt.use_weight_chroma != 0 {
         for c = 0; c < 2; c = c + 1 {
           h264_weight_rect(
             if c == 0 { ctx.u } else { ctx.v },
-            cbase + op.y / 2 * ctx.cstride + op.x / 2,
+            cbase + (op.y >> ctx.chroma_vshift) * ctx.cstride + (op.x >> ctx.chroma_hshift),
             ctx.cstride,
-            op.w / 2,
-            op.h / 2,
+            op.w >> ctx.chroma_hshift,
+            op.h >> ctx.chroma_vshift,
             ctx.pwt.chroma_log2_weight_denom,
             ctx.pwt.chroma_weight_l0[refi][c],
             ctx.pwt.chroma_offset_l0[refi][c],
-          )
+           bit_depth=ctx.bit_depth,)
         }
       }
     }
   }
   // Residual: per-8x8 luma CBP bits, coefficients in z-ordered blocks.
-  ignore(qmul_luma)
   let info = ctx.infos[mb_y * ctx.mb_width + mb_x]
-  if (cbp & 15) != 0 {
-    if info.transform_8x8 {
-      for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
-        if (cbp & (1 << i8x8)) != 0 {
-          let off = ybase + (i8x8 / 2) * 8 * ctx.ystride + (i8x8 % 2) * 8
-          h264_idct8_add4(ctx.y, off, ctx.ystride, mb, 64 * i8x8, nz, i8x8)
-        }
+  h264_inter_luma_add(ctx, ctx.y, ybase, ctx.ystride, cbp, mb, nz, 0, 0, info.transform_8x8)
+  if ctx.chroma_format == 3 {
+    h264_inter_luma_add(ctx, ctx.u, cbase, ctx.cstride, cbp, mb, nz, 16, 256, info.transform_8x8)
+    h264_inter_luma_add(ctx, ctx.v, cbase, ctx.cstride, cbp, mb, nz, 32, 512, info.transform_8x8)
+  } else {
+    h264_inter_chroma_residual(
+      ctx, cbase, cbp, mb, nz, chroma_qp0, chroma_qp1, chroma_dc_nz,
+    )
+  }
+  Ok(())
+}
+
+///|
+/// The luma-plane residual add of `hl_decode_mb_idct_luma` for inter
+/// macroblocks: per-8x8 CBP bits, 8x8 or 4x4 transforms (`nz_base`/`mb_off`
+/// select the 4:4:4 chroma planes).
+fn h264_inter_luma_add(
+  ctx : H264DecCtx,
+  dst : Array[Int32],
+  base : Int32,
+  stride : Int32,
+  cbp : Int32,
+  mb : Array[Int32],
+  nz : Array[Int32],
+  nz_base : Int32,
+  mb_off : Int32,
+  transform_8x8 : Bool,
+) -> Unit {
+  if (cbp & 15) == 0 {
+    return
+  }
+  if transform_8x8 {
+    for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
+      if (cbp & (1 << i8x8)) != 0 {
+        let off = base + (i8x8 / 2) * 8 * stride + (i8x8 % 2) * 8
+        h264_idct8_add4(dst, off, stride, mb, mb_off + 64 * i8x8, nz, i8x8, nz_base=nz_base, bit_depth=ctx.bit_depth)
       }
-    } else {
-      for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
-        if (cbp & (1 << i8x8)) != 0 {
-          for i4x4 = 0; i4x4 < 4; i4x4 = i4x4 + 1 {
-            let i = i8x8 * 4 + i4x4
-            let g = h264_luma_block_grid[i]
-            if nz[g] != 0 {
-              let off = ybase + g / 4 * 4 * ctx.ystride + g % 4 * 4
-              h264_idct_add(ctx.y, off, ctx.ystride, mb, 16 * i)
-            }
+    }
+  } else {
+    for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
+      if (cbp & (1 << i8x8)) != 0 {
+        for i4x4 = 0; i4x4 < 4; i4x4 = i4x4 + 1 {
+          let i = i8x8 * 4 + i4x4
+          let g = h264_luma_block_grid[i]
+          if nz[nz_base + g] != 0 {
+            let off = base + g / 4 * 4 * stride + g % 4 * 4
+            h264_idct_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth=ctx.bit_depth)
           }
         }
       }
     }
   }
-  h264_inter_chroma_residual(
-    ctx, cbase, cbp, mb, nz, chroma_qp0, chroma_qp1, chroma_dc_nz,
-  )
-  Ok(())
 }
 
 ///|
-/// Chroma residual + DC fold for an inter macroblock, following the yuv420
+/// Chroma residual + DC fold for an inter macroblock, following the yuv420/422
 /// branch of `ff_h264_decode_mb_cabac` and `hl_decode_mb`: inter chroma uses
 /// dequant tables 4/5 (`c + 1 + 3`) instead of the intra tables 1/2.
 fn h264_inter_chroma_residual(
@@ -418,20 +487,34 @@ fn h264_inter_chroma_residual(
   chroma_qp1 : Int32,
   chroma_dc_nz : Array[Int32],
 ) -> Unit {
+  let num_c8x8 = ctx.chroma_format
   for c = 0; c < 2; c = c + 1 {
     if chroma_dc_nz[c] != 0 {
-      let cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
+      let mut cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
+      // The 2x4 DC Hadamard's gain halves the dequant scale, compensated
+      // by indexing the table three QP steps up (`h264_mb_template.c`).
+      if num_c8x8 == 2 {
+        cqp = cqp + 3
+      }
       let qmul_dc = h264_build_dequant4(ctx.pps, 4 + c, cqp)[0]
-      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_dc)
+      if num_c8x8 == 2 {
+        h264_chroma422_dc_dequant_idct(mb, 256 + 256 * c, qmul_dc, bit_depth=ctx.bit_depth)
+      } else {
+        h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_dc, bit_depth=ctx.bit_depth)
+      }
     }
     let plane = if c == 0 { ctx.u } else { ctx.v }
-    for i = 0; i < 4; i = i + 1 {
-      let off = cbase + i / 2 * 4 * ctx.cstride + i % 2 * 4
+    for i = 0; i < 4 * num_c8x8; i = i + 1 {
+      // 4:2:2 blocks are two vertically stacked 8x8s: `i` is
+      // `8 * i8x8 + i4x4` with i4x4 the 2x2 raster inside each 8x8.
+      let bx = i % 2
+      let by = i / 2
+      let off = cbase + by * 4 * ctx.cstride + bx * 4
       let g = 16 + 16 * c + i
       if nz[g] != 0 {
-        h264_idct_add(plane, off, ctx.cstride, mb, 256 + 256 * c + 16 * i)
+        h264_idct_add(plane, off, ctx.cstride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
       } else if mb[256 + 256 * c + 16 * i] != 0 {
-        h264_idct_dc_add(plane, off, ctx.cstride, mb, 256 + 256 * c + 16 * i)
+        h264_idct_dc_add(plane, off, ctx.cstride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
       }
     }
   }
@@ -475,9 +558,8 @@ fn h264_decode_mb_cabac_p(
       0,
       empty_mb,
       nz,
-      h264_get_chroma_qp(ctx.pps, 0, ctx.qscale),
-      h264_get_chroma_qp(ctx.pps, 1, ctx.qscale),
-      [],
+      h264_get_chroma_qp(ctx.pps, 0, ctx.qscale, bit_depth=ctx.bit_depth),
+      h264_get_chroma_qp(ctx.pps, 1, ctx.qscale, bit_depth=ctx.bit_depth),
       Array::make(2, 0),
     )
   }
@@ -693,179 +775,7 @@ fn h264_decode_mb_cabac_p(
     mb_type_bits = h264_mb_type_8x8 | h264_mb_type_p0l0 | h264_mb_type_p1l0
   }
   info.mb_type_bits = mb_type_bits
-  // cbp (inter): luma + chroma.
-  let cbp_luma = h264_cabac_mb_cbp_luma(cabac, states, ctx, mb_idx, mb_x, mb_y)
-  let cbp_chroma = h264_cabac_mb_cbp_chroma(
-    cabac, states, ctx, mb_idx, mb_x, mb_y,
-  )
-  let cbp = cbp_luma | (cbp_chroma << 4)
-  info.cbp_all = cbp
-  if dct8x8_allowed && (cbp & 15) != 0 {
-    info.transform_8x8 = cabac.get_cabac(
-      states,
-      399 + h264_neighbor_transform_size(ctx, mb_idx, mb_x, mb_y),
-    ) != 0
-  }
-  let mb : Array[Int32] = Array::make(768, 0)
-  let chroma_dc_nz : Array[Int32] = Array::make(2, 0)
-  let mut chroma_qp0 = h264_get_chroma_qp(ctx.pps, 0, ctx.qscale)
-  let mut chroma_qp1 = h264_get_chroma_qp(ctx.pps, 1, ctx.qscale)
-  let mut qmul_luma : Array[Int32] = []
-  if cbp != 0 {
-    // decode_cabac_mb_dqp (same contexts as the intra path).
-    if cabac.get_cabac(
-        states,
-        60 + (if ctx.last_qscale_diff != 0 { 1 } else { 0 }),
-      ) !=
-      0 {
-      let mut val = 1
-      let mut c = 2
-      while cabac.get_cabac(states, 60 + c) != 0 {
-        c = 3
-        val = val + 1
-        if val > 2 * 51 {
-          return Err("cabac decode of qscale diff failed")
-        }
-      }
-      val = if (val & 0x01) != 0 { (val + 1) >> 1 } else { -((val + 1) >> 1) }
-      ctx.last_qscale_diff = val
-      let mut q = ctx.qscale + val
-      if q < 0 {
-        q = q + 52
-      } else if q > 51 {
-        q = q - 52
-      }
-      ctx.qscale = q
-      chroma_qp0 = h264_get_chroma_qp(ctx.pps, 0, q)
-      chroma_qp1 = h264_get_chroma_qp(ctx.pps, 1, q)
-    } else {
-      ctx.last_qscale_diff = 0
-    }
-    qmul_luma = h264_build_dequant4(ctx.pps, 0, ctx.qscale)
-    if info.transform_8x8 {
-      let qmul_luma8 = h264_build_dequant8(ctx.pps, 3, ctx.qscale)
-      for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
-        if (cbp & (1 << i8x8)) != 0 {
-          match
-            h264_cabac_residual(
-              cabac,
-              states,
-              ctx,
-              mb_idx,
-              mb_x,
-              mb_y,
-              mb,
-              64 * i8x8,
-              5,
-              4 * i8x8,
-              nz,
-              h264_zigzag_scan8x8,
-              0,
-              Some(qmul_luma8),
-              64,
-              false,
-            ) {
-            Ok(_) => ()
-            Err(e) => return Err(e)
-          }
-        }
-      }
-    } else {
-      // Luma AC (cat 2), z-order blocks per 8x8 CBP bit.
-      for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
-        if (cbp & (1 << i8x8)) != 0 {
-          for i4x4 = 0; i4x4 < 4; i4x4 = i4x4 + 1 {
-            let i = 4 * i8x8 + i4x4
-            match
-              h264_cabac_residual(
-                cabac,
-                states,
-                ctx,
-                mb_idx,
-                mb_x,
-                mb_y,
-                mb,
-                16 * i,
-                2,
-                i,
-                nz,
-                h264_zigzag_scan_t,
-                0,
-                Some(qmul_luma),
-                16,
-                false,
-              ) {
-              Ok(_) => ()
-              Err(e) => return Err(e)
-            }
-          }
-        }
-      }
-    }
-    // Chroma: inter dequant tables 4/5.
-    if (cbp & 0x30) != 0 {
-      for c = 0; c < 2; c = c + 1 {
-        chroma_dc_nz[c] = match
-          h264_cabac_residual(
-            cabac,
-            states,
-            ctx,
-            mb_idx,
-            mb_x,
-            mb_y,
-            mb,
-            256 + 256 * c,
-            3,
-            49 + c,
-            nz,
-            h264_chroma_dc_scan,
-            0,
-            None,
-            4,
-            true,
-          ) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        }
-      }
-    }
-    if (cbp & 0x20) != 0 {
-      for c = 0; c < 2; c = c + 1 {
-        let cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
-        let qmul_c = h264_build_dequant4(ctx.pps, 4 + c, cqp)
-        for i = 0; i < 4; i = i + 1 {
-          match
-            h264_cabac_residual(
-              cabac,
-              states,
-              ctx,
-              mb_idx,
-              mb_x,
-              mb_y,
-              mb,
-              256 + 256 * c + 16 * i,
-              4,
-              16 + 16 * c + i,
-              nz,
-              h264_zigzag_scan_t,
-              1,
-              Some(qmul_c),
-              15,
-              false,
-            ) {
-            Ok(_) => ()
-            Err(e) => return Err(e)
-          }
-        }
-      }
-    }
-  } else {
-    ctx.last_qscale_diff = 0
-  }
-  info.qp = ctx.qscale
-  return h264_recon_inter_mb(
-    ctx, mb_x, mb_y, mc_ops, cbp, mb, nz, chroma_qp0, chroma_qp1, qmul_luma, chroma_dc_nz,
-  )
+  h264_inter_residual_cabac(cabac, states, ctx, mb_idx, mb_x, mb_y, mc_ops, dct8x8_allowed)
 }
 
 ///|
@@ -896,9 +806,8 @@ fn h264_decode_mb_skip_common(
     0,
     Array::make(768, 0),
     info.nz,
-    h264_get_chroma_qp(ctx.pps, 0, ctx.qscale),
-    h264_get_chroma_qp(ctx.pps, 1, ctx.qscale),
-    [],
+    h264_get_chroma_qp(ctx.pps, 0, ctx.qscale, bit_depth=ctx.bit_depth),
+    h264_get_chroma_qp(ctx.pps, 1, ctx.qscale, bit_depth=ctx.bit_depth),
     Array::make(2, 0),
   )
 }
@@ -923,9 +832,7 @@ fn h264_decode_mb_cavlc_p(
   mb_y : Int32,
   mb_type_raw : Int32,
 ) -> Result[Unit, String] {
-  let pps = ctx.pps
   let info = ctx.infos[mb_idx]
-  let nz = info.nz
   let rc = ctx.ref_count0
   ctx.cur_mb_is_intra = false
   let mc_ops : Array[H264McOp] = []
@@ -1100,107 +1007,137 @@ fn h264_decode_mb_cavlc_p(
     mb_type_bits = h264_mb_type_8x8 | h264_mb_type_p0l0 | h264_mb_type_p1l0
   }
   info.mb_type_bits = mb_type_bits
-  // Inter cbp: `ff_h264_golomb_to_inter_cbp`.
-  let cbp_code = gb.read_ue31()
-  if cbp_code < 0 || cbp_code > 47 {
-    return Err("cbp out of range")
+  h264_inter_residual_cavlc(gb, ctx, mb_idx, mb_x, mb_y, mc_ops, mc_ops.all(fn(part) { part.w >= 8 && part.h >= 8 }))
+}
+
+///|
+fn h264_inter_residual_cabac(
+  cabac : CabacContext, states : Array[Int32], ctx : H264DecCtx,
+  mb_idx : Int32, mb_x : Int32, mb_y : Int32, mc_ops : Array[H264McOp], dct8x8_allowed : Bool,
+) -> Result[Unit, String] {
+  let info = ctx.infos[mb_idx]
+  let nz = info.nz
+  // cbp (inter): luma + chroma (4:4:4 codes no chroma bits).
+  let cbp_luma = h264_cabac_mb_cbp_luma(cabac, states, ctx, mb_idx, mb_x, mb_y)
+  let cbp = if ctx.chroma_format == 3 {
+    cbp_luma
+  } else {
+    let cbp_chroma = h264_cabac_mb_cbp_chroma(
+      cabac, states, ctx, mb_idx, mb_x, mb_y,
+    )
+    cbp_luma | (cbp_chroma << 4)
   }
-  let cbp = h264_golomb_to_inter_cbp[cbp_code]
   info.cbp_all = cbp
-  let dct8x8_allowed = mc_ops.all(fn(part) { part.w >= 8 && part.h >= 8 })
-  info.transform_8x8 = ctx.pps.transform_8x8_mode != 0 && dct8x8_allowed &&
-    (cbp & 15) != 0 && gb.read1() != 0U
+  if dct8x8_allowed && (cbp & 15) != 0 {
+    info.transform_8x8 = cabac.get_cabac(
+      states,
+      399 + h264_neighbor_transform_size(ctx, mb_idx, mb_x, mb_y),
+    ) != 0
+  }
   let mb : Array[Int32] = Array::make(768, 0)
   let chroma_dc_nz : Array[Int32] = Array::make(2, 0)
-  let mut chroma_qp0 = h264_get_chroma_qp(pps, 0, ctx.qscale)
-  let mut chroma_qp1 = h264_get_chroma_qp(pps, 1, ctx.qscale)
-  let mut qmul_luma : Array[Int32] = []
+  let mut chroma_qp0 = h264_get_chroma_qp(ctx.pps, 0, ctx.qscale, bit_depth=ctx.bit_depth)
+  let mut chroma_qp1 = h264_get_chroma_qp(ctx.pps, 1, ctx.qscale, bit_depth=ctx.bit_depth)
   if cbp != 0 {
-    let dquant = gb.read_se()
-    if dquant == -2147483648 {
-      return Err("invalid mb_qp_delta")
-    }
-    let mut q = ctx.qscale + dquant
-    if q < 0 || q > 51 {
-      q = if q < 0 { q + 52 } else { q - 52 }
-      if q < 0 || q > 51 {
-        return Err("dquant out of range")
+    // decode_cabac_mb_dqp (same contexts as the intra path).
+    if cabac.get_cabac(
+        states,
+        60 + (if ctx.last_qscale_diff != 0 { 1 } else { 0 }),
+      ) !=
+      0 {
+      let mut val = 1
+      let mut c = 2
+      while cabac.get_cabac(states, 60 + c) != 0 {
+        c = 3
+        val = val + 1
+        if val > 2 * h264_max_qp(ctx) {
+          return Err("cabac decode of qscale diff failed")
+        }
       }
+      val = if (val & 0x01) != 0 { (val + 1) >> 1 } else { -((val + 1) >> 1) }
+      ctx.last_qscale_diff = val
+      let mut q = ctx.qscale + val
+      if q < 0 {
+        q = q + h264_max_qp(ctx) + 1
+      } else if q > h264_max_qp(ctx) {
+        q = q - h264_max_qp(ctx) - 1
+      }
+      ctx.qscale = q
+      chroma_qp0 = h264_get_chroma_qp(ctx.pps, 0, q, bit_depth=ctx.bit_depth)
+      chroma_qp1 = h264_get_chroma_qp(ctx.pps, 1, q, bit_depth=ctx.bit_depth)
+    } else {
+      ctx.last_qscale_diff = 0
     }
-    ctx.qscale = q
-    chroma_qp0 = h264_get_chroma_qp(pps, 0, q)
-    chroma_qp1 = h264_get_chroma_qp(pps, 1, q)
-    qmul_luma = h264_build_dequant4(pps, 0, q)
-    if info.transform_8x8 {
-      match h264_cavlc_luma8(gb, ctx, mb_idx, mb_x, mb_y, cbp, 3, mb) {
+    let plane_count = if ctx.chroma_format == 3 { 3 } else { 1 }
+    let chroma_qps = [0, chroma_qp0, chroma_qp1]
+    for p = 0; p < plane_count; p = p + 1 {
+      match
+        h264_cabac_luma_residual(
+          cabac, states, ctx, mb_idx, mb_x, mb_y, false, cbp, p,
+          chroma_qps[p], 3, mb, [Array::make(16, 0), Array::make(16, 0), Array::make(16, 0)],
+          Array::make(3, 0), nz,
+        ) {
         Ok(_) => ()
-        Err(error) => return Err(error)
+        Err(e) => return Err(e)
       }
-    } else { for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
-      if (cbp & (1 << i8x8)) != 0 {
-        for i4x4 = 0; i4x4 < 4; i4x4 = i4x4 + 1 {
-          let i = i8x8 * 4 + i4x4
-          let gx = h264_luma_block_x[i]
-          let gy = h264_luma_block_y[i]
-          let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz)
-          let total = match
-            h264_decode_residual(
-              gb,
+    }
+    if ctx.chroma_format != 3 {
+      let num_c8x8 = ctx.chroma_format
+      // Chroma: inter dequant tables 4/5.
+      if (cbp & 0x30) != 0 {
+        for c = 0; c < 2; c = c + 1 {
+          chroma_dc_nz[c] = match
+            h264_cabac_residual(
+              cabac,
+              states,
+              ctx,
+              mb_idx,
+              mb_x,
+              mb_y,
               mb,
-              16 * i,
-              h264_zigzag_scan_t,
+              256 + 256 * c,
+              3,
+              49 + c,
+              nz,
+              if num_c8x8 == 2 { h264_chroma422_dc_scan } else { h264_chroma_dc_scan },
               0,
-              Some(qmul_luma),
-              16,
-              nc,
+              None,
+              4 * num_c8x8,
+              true,
             ) {
             Ok(v) => v
             Err(e) => return Err(e)
           }
-          nz[gy * 4 + gx] = total
         }
       }
-    }
-    }
-    if (cbp & 0x30) != 0 {
-      for c = 0; c < 2; c = c + 1 {
-        chroma_dc_nz[c] = match
-          h264_decode_residual(
-            gb,
-            mb,
-            256 + 256 * c,
-            h264_chroma_dc_scan,
-            0,
-            None,
-            4,
-            0,
-          ) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        }
-      }
-    }
-    if (cbp & 0x20) != 0 {
-      for c = 0; c < 2; c = c + 1 {
-        let cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
-        let qmul_c = h264_build_dequant4(pps, 4 + c, cqp)
-        for i = 0; i < 4; i = i + 1 {
-          let nc = h264_nc_chroma(ctx, mb_idx, mb_x, mb_y, c, i, nz)
-          let total = match
-            h264_decode_residual(
-              gb,
-              mb,
-              256 + 256 * c + 16 * i,
-              h264_zigzag_scan_t,
-              1,
-              Some(qmul_c),
-              15,
-              nc,
-            ) {
-            Ok(v) => v
-            Err(e) => return Err(e)
+      if (cbp & 0x20) != 0 {
+        for c = 0; c < 2; c = c + 1 {
+          let cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
+          let qmul_c = h264_build_dequant4(ctx.pps, 4 + c, cqp)
+          for i = 0; i < 4 * num_c8x8; i = i + 1 {
+            match
+              h264_cabac_residual(
+                cabac,
+                states,
+                ctx,
+                mb_idx,
+                mb_x,
+                mb_y,
+                mb,
+                256 + 256 * c + 16 * i,
+                4,
+                16 + 16 * c + i,
+                nz,
+                h264_zigzag_scan_t,
+                1,
+                Some(qmul_c),
+                15,
+                false,
+              ) {
+              Ok(_) => ()
+              Err(e) => return Err(e)
+            }
           }
-          nz[16 + 16 * c + i] = total
         }
       }
     }
@@ -1209,6 +1146,144 @@ fn h264_decode_mb_cavlc_p(
   }
   info.qp = ctx.qscale
   return h264_recon_inter_mb(
-    ctx, mb_x, mb_y, mc_ops, cbp, mb, nz, chroma_qp0, chroma_qp1, qmul_luma, chroma_dc_nz,
+    ctx, mb_x, mb_y, mc_ops, cbp, mb, nz, chroma_qp0, chroma_qp1, chroma_dc_nz,
+  )
+}
+
+///|
+fn h264_inter_residual_cavlc(
+  gb : BitReader, ctx : H264DecCtx, mb_idx : Int32, mb_x : Int32, mb_y : Int32,
+  mc_ops : Array[H264McOp], dct8x8_allowed : Bool,
+) -> Result[Unit, String] {
+  let pps = ctx.pps
+  let info = ctx.infos[mb_idx]
+  let nz = info.nz
+  // Inter cbp: `ff_h264_golomb_to_inter_cbp` (gray variant for 4:4:4).
+  let cbp_code = gb.read_ue31()
+  let cbp = if ctx.chroma_format == 3 {
+    if cbp_code < 0 || cbp_code > 15 {
+      return Err("cbp out of range")
+    }
+    h264_golomb_to_inter_cbp_gray[cbp_code]
+  } else {
+    if cbp_code < 0 || cbp_code > 47 {
+      return Err("cbp out of range")
+    }
+    h264_golomb_to_inter_cbp[cbp_code]
+  }
+  info.cbp_all = cbp
+  info.transform_8x8 = ctx.pps.transform_8x8_mode != 0 && dct8x8_allowed &&
+    (cbp & 15) != 0 && gb.read1() != 0U
+  let mb : Array[Int32] = Array::make(768, 0)
+  let chroma_dc_nz : Array[Int32] = Array::make(2, 0)
+  let mut chroma_qp0 = h264_get_chroma_qp(pps, 0, ctx.qscale, bit_depth=ctx.bit_depth)
+  let mut chroma_qp1 = h264_get_chroma_qp(pps, 1, ctx.qscale, bit_depth=ctx.bit_depth)
+  if cbp != 0 {
+    let dquant = gb.read_se()
+    if dquant == -2147483648 {
+      return Err("invalid mb_qp_delta")
+    }
+    let mut q = ctx.qscale + dquant
+    if q < 0 || q > h264_max_qp(ctx) {
+      q = if q < 0 { q + h264_max_qp(ctx) + 1 } else { q - h264_max_qp(ctx) - 1 }
+      if q < 0 || q > h264_max_qp(ctx) {
+        return Err("dquant out of range")
+      }
+    }
+    ctx.qscale = q
+    chroma_qp0 = h264_get_chroma_qp(pps, 0, q, bit_depth=ctx.bit_depth)
+    chroma_qp1 = h264_get_chroma_qp(pps, 1, q, bit_depth=ctx.bit_depth)
+    let plane_count = if ctx.chroma_format == 3 { 3 } else { 1 }
+    let chroma_qps = [0, chroma_qp0, chroma_qp1]
+    for p = 0; p < plane_count; p = p + 1 {
+      let plane_qp = if p == 0 { ctx.qscale } else { chroma_qps[p] }
+      if info.transform_8x8 {
+        match h264_cavlc_luma8(gb, ctx, mb_idx, mb_x, mb_y, cbp, 3 + p, plane_qp, 16 * p, 256 * p, mb) {
+          Ok(_) => ()
+          Err(error) => return Err(error)
+        }
+      } else {
+        for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
+          if (cbp & (1 << i8x8)) != 0 {
+            for i4x4 = 0; i4x4 < 4; i4x4 = i4x4 + 1 {
+              let i = i8x8 * 4 + i4x4
+              let gx = h264_luma_block_x[i]
+              let gy = h264_luma_block_y[i]
+              let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz, base=16 * p)
+              let total = match
+                h264_decode_residual(
+                  gb,
+                  mb,
+                  256 * p + 16 * i,
+                  h264_zigzag_scan_t,
+                  0,
+                  Some(h264_build_dequant4(pps, 3 + p, plane_qp)),
+                  16,
+                  nc,
+                 bit_depth=ctx.bit_depth,) {
+                Ok(v) => v
+                Err(e) => return Err(e)
+              }
+              nz[16 * p + gy * 4 + gx] = total
+            }
+          }
+        }
+      }
+    }
+    if ctx.chroma_format != 3 {
+      let num_c8x8 = ctx.chroma_format
+      if (cbp & 0x30) != 0 {
+        for c = 0; c < 2; c = c + 1 {
+          chroma_dc_nz[c] = match
+            h264_decode_residual(
+              gb,
+              mb,
+              256 + 256 * c,
+              if num_c8x8 == 2 { h264_chroma422_dc_scan } else { h264_chroma_dc_scan },
+              0,
+              None,
+              4 * num_c8x8,
+              0,
+             bit_depth=ctx.bit_depth,) {
+            Ok(v) => v
+            Err(e) => return Err(e)
+          }
+        }
+      }
+      if (cbp & 0x20) != 0 {
+        for c = 0; c < 2; c = c + 1 {
+          let cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
+          let qmul_c = h264_build_dequant4(pps, 4 + c, cqp)
+          for i = 0; i < 4 * num_c8x8; i = i + 1 {
+            let nc = if num_c8x8 == 2 {
+              h264_nc_chroma_422(ctx, mb_idx, c, i, nz)
+            } else {
+              h264_nc_chroma(ctx, mb_idx, mb_x, mb_y, c, i, nz)
+            }
+            let total = match
+              h264_decode_residual(
+                gb,
+                mb,
+                256 + 256 * c + 16 * i,
+                h264_zigzag_scan_t,
+                1,
+                Some(qmul_c),
+                15,
+                nc,
+               bit_depth=ctx.bit_depth,) {
+              Ok(v) => v
+              Err(e) => return Err(e)
+            }
+            nz[16 + 16 * c + i] = total
+          }
+        }
+      }
+    }
+  } else {
+    ctx.last_qscale_diff = 0
+  }
+  info.qp = ctx.qscale
+  return h264_recon_inter_mb(
+    ctx, mb_x, mb_y, mc_ops, cbp, mb, nz, chroma_qp0, chroma_qp1, chroma_dc_nz,
   )
 }

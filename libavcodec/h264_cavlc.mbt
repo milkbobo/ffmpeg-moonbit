@@ -8,9 +8,9 @@
 ///
 /// The C VLC subsystem is replaced by explicit binary tries built from the
 /// same `(length, bits)` tables; decoding is bit-exact but not table-driven.
-/// `decode_residual` covers the 4:2:0/8-bit paths: 16-entry luma blocks,
-/// 15-entry luma AC blocks, 4-entry chroma DC and 15-entry chroma AC blocks.
-/// 4:2:2 chroma DC (8-entry) is not ported.
+/// `decode_residual` covers 16-entry luma blocks, 15-entry luma AC blocks,
+/// the 4-entry (4:2:0) and 8-entry (4:2:2) chroma DC blocks and 15-entry
+/// chroma AC blocks.
 ///
 /// Coefficient blocks use FFmpeg's transposed layout: the scan tables and the
 /// `qmul` arrays are both transposed by `(x >> 2) | ((x << 2) & 0xF)`, so the
@@ -89,6 +89,82 @@ let h264_coeff_token_vlcs : Array[H264Vlc] = [
 let h264_chroma_dc_coeff_token_vlc : H264Vlc = h264_vlc_build(
   h264_chroma_dc_coeff_token_len, h264_chroma_dc_coeff_token_bits,
 )
+
+///|
+/// `chroma422_dc_coeff_token_len[4*9]` (`h264_cavlc.c`). */
+let h264_chroma422_dc_coeff_token_len : Array[Int32] = [
+  1, 0, 0, 0, 7, 2, 0, 0, 7, 7, 3, 0, 9, 7, 7, 5, 9, 9, 7, 6, 10, 10, 9, 7, 11,
+  11, 10, 7, 12, 12, 11, 10, 13, 12, 12, 11,
+]
+
+///|
+/// `chroma422_dc_coeff_token_bits[4*9]`. */
+let h264_chroma422_dc_coeff_token_bits : Array[Int32] = [
+  1, 0, 0, 0, 15, 1, 0, 0, 14, 13, 1, 0, 7, 12, 11, 1, 6, 5, 10, 1, 7, 6, 4, 9, 7,
+  6, 5, 8, 7, 6, 5, 4, 7, 5, 4, 4,
+]
+
+///|
+/// `chroma422_dc_coeff_token_vlc_table`. */
+let h264_chroma422_dc_coeff_token_vlc : H264Vlc = h264_vlc_build(
+  h264_chroma422_dc_coeff_token_len, h264_chroma422_dc_coeff_token_bits,
+)
+
+///|
+/// `chroma422_dc_total_zeros_len[7][8]`. */
+let h264_chroma422_dc_total_zeros_len : Array[Array[Int32]] = [
+  [1, 3, 3, 4, 4, 4, 5, 5],
+  [3, 2, 3, 3, 3, 3, 3],
+  [3, 3, 2, 2, 3, 3],
+  [3, 2, 2, 2, 3],
+  [2, 2, 2, 2],
+  [2, 2, 1],
+  [1, 1],
+]
+
+///|
+/// `chroma422_dc_total_zeros_bits[7][8]`. */
+let h264_chroma422_dc_total_zeros_bits : Array[Array[Int32]] = [
+  [1, 2, 3, 2, 3, 1, 1, 0],
+  [0, 1, 1, 4, 5, 6, 7],
+  [0, 1, 1, 2, 6, 7],
+  [6, 0, 1, 2, 7],
+  [0, 1, 2, 3],
+  [0, 1, 1],
+  [0, 1],
+]
+
+///|
+/// `chroma422_dc_total_zeros_vlc[1..7]`. */
+let h264_chroma422_dc_total_zeros_vlcs : Array[H264Vlc] = {
+  let v : Array[H264Vlc] = []
+  for i = 0; i < 7; i = i + 1 {
+    v.push(
+      h264_vlc_build(
+        h264_chroma422_dc_total_zeros_len[i],
+        h264_chroma422_dc_total_zeros_bits[i],
+      ),
+    )
+  }
+  v
+}
+
+///|
+/// `ff_h264_chroma422_dc_scan[8]`: coefficient i lands at block offset
+/// `(x + 2 * y) * 16` of the macroblock coefficient buffer. */
+let h264_chroma422_dc_scan : Array[Int32] = [0, 32, 16, 64, 96, 48, 80, 112]
+
+///|
+/// `golomb_to_inter_cbp_gray[16]` (`h264_cavlc.c`): 4:4:4 codes no chroma CBP. */
+let h264_golomb_to_inter_cbp_gray : Array[Int32] = [
+  0, 1, 2, 4, 8, 3, 5, 10, 12, 15, 7, 11, 13, 14, 6, 9,
+]
+
+///|
+/// `golomb_to_intra4x4_cbp_gray[16]`. */
+let h264_golomb_to_intra4x4_cbp_gray : Array[Int32] = [
+  15, 0, 7, 11, 13, 14, 3, 5, 10, 12, 1, 2, 4, 8, 6, 9,
+]
 
 ///|
 /// `total_zeros_vlc[1..15]` (row i is total_coeff = i + 1). */
@@ -171,9 +247,11 @@ fn h264_get_level_prefix(gb : BitReader) -> Int32 {
 
 ///|
 /// `((int)(level * qmul + 32)) >> 6`, with the C's 32-bit unsigned product. */
-fn h264_dequant_level(level : Int32, qmul : Int32) -> Int32 {
+fn h264_dequant_level(level : Int32, qmul : Int32,
+  bit_depth? : Int32 = 8,
+) -> Int32 {
   let prod = level.reinterpret_as_uint() * qmul.reinterpret_as_uint() + 32U
-  h264_i16(prod.reinterpret_as_int() >> 6)
+  h264_store_coef(prod.reinterpret_as_int() >> 6, bit_depth=bit_depth)
 }
 
 ///|
@@ -195,8 +273,12 @@ fn h264_decode_residual(
   qmul : Array[Int32]?,
   max_coeff : Int32,
   nc : Int32,
+
+  bit_depth? : Int32 = 8,
 ) -> Result[Int32, String] {
-  let coeff_token = if max_coeff <= 8 {
+  let coeff_token = if max_coeff == 8 {
+    h264_chroma422_dc_coeff_token_vlc.decode(gb)
+  } else if max_coeff == 4 {
     h264_chroma_dc_coeff_token_vlc.decode(gb)
   } else {
     h264_coeff_token_vlcs[h264_coeff_token_table_for_nc(nc & 31)].decode(gb)
@@ -224,7 +306,6 @@ fn h264_decode_residual(
     } else {
       0
     }
-    let initial_suffix = suffix_length
     let prefix = h264_get_level_prefix(gb)
     let mut code = 0
     if prefix < 14 {
@@ -255,7 +336,10 @@ fn h264_decode_residual(
     let mask = -(code & 1)
     let signed = (((2 + code) >> 1) ^ mask) - mask
     level[trailing_ones] = signed
-    suffix_length = if prefix + 1 + initial_suffix <= 8 {
+    // `init_cavlc_level_tab` (LEVEL_TAB_BITS == 8): prefixes within the
+    // 8-bit window use the folded table value and the small-level suffix
+    // rule; longer ones take the escape path with suffix_length 2.
+    suffix_length = if prefix + 1 + suffix_length <= 8 {
       1 + (if (if signed < 0 { -signed } else { signed }) > 3 { 1 } else { 0 })
     } else {
       2
@@ -286,7 +370,13 @@ fn h264_decode_residual(
   }
   let zeros_left = if total_coeff == max_coeff {
     0
-  } else if max_coeff <= 8 {
+  } else if max_coeff == 8 {
+    let z = h264_chroma422_dc_total_zeros_vlcs[total_coeff - 1].decode(gb)
+    if z < 0 {
+      return Err("invalid chroma422_dc_total_zeros")
+    }
+    z
+  } else if max_coeff == 4 {
     let z = h264_chroma_dc_total_zeros_vlcs[total_coeff - 1].decode(gb)
     if z < 0 {
       return Err("invalid chroma_dc_total_zeros")
@@ -322,8 +412,8 @@ fn h264_decode_residual(
     }
     let pos = scan[si]
     block[base + pos] = match qmul {
-      Some(q) => h264_dequant_level(level[i], q[pos])
-      None => h264_i16(level[i])
+      Some(q) => h264_dequant_level(level[i], q[pos], bit_depth=bit_depth)
+      None => h264_store_coef(level[i], bit_depth=bit_depth)
     }
     i = i + 1
   }
@@ -356,15 +446,17 @@ fn h264_build_dequant4(
 
 ///|
 /// `get_chroma_qp(pps, t, qscale)` for 8-bit streams. */
-fn h264_get_chroma_qp(pps : H264Pps, t : Int32, qscale : Int32) -> Int32 {
+fn h264_get_chroma_qp(pps : H264Pps, t : Int32, qscale : Int32,
+  bit_depth? : Int32 = 8,
+) -> Int32 {
   let offset = if t == 0 {
     pps.chroma_qp_index_offset0
   } else {
     pps.chroma_qp_index_offset1
   }
-  let idx = qscale + offset
-  let clipped = if idx < 0 { 0 } else if idx > 51 { 51 } else { idx }
-  h264_chroma_qp_8bit[clipped]
+  let depth_offset = 6 * (bit_depth - 8)
+  let idx = (qscale + offset).max(0).min(51 + depth_offset)
+  if idx < depth_offset { idx } else { h264_chroma_qp_8bit[idx - depth_offset] + depth_offset }
 }
 
 ///|

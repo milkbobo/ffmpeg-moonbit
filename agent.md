@@ -487,6 +487,36 @@ $msg | git commit -F -
   `loop_filter_across_slices`；SPS 的 VUI 可整体丢弃，不影响切片解码）。
   补丁基流与生成逻辑见 `scripts/_gen_hevc_inter_realdata.py`。
 
+- **H.264 4:2:2 的 nz 邻居按 scan8 缓存的纵向堆叠**：两个 8x8 色度块在缓存里是
+  **上下叠放**（8x8#1 在第 6–7 行、#2 在第 8–9 行，各占列 4–5），不是左右并排。
+  因此块 i（0..7，行 6+i/2、列 4+i%2）的左邻：奇数 i 取块 i-1，偶数 i 取**左宏块
+  同分量的 b1/b3/b5/b7**；上邻：i>=2 取块 i-2，i<2 取**上宏块同分量的 b6/b7**
+  （`fill_decode_caches` 的 `!chroma_y_shift` 填充正是这个几何）。nC 与 CABAC cbf
+  上下文都要用这套关系。
+- **H.264 4:2:2 色度 DC 反量化查 chroma_qp+3 的表**：2x4 Hadamard 的增益比 2x2 低
+  一半，C 用 `qp[0] = sl->chroma_qp[0] + 3` 补偿（`h264_mb_template.c`），AC 残差仍
+  用原 QP。漏掉 +3 时整帧色度系统性偏移。
+- **H.264 4:2:2 垂直色度去块边滤 16 行、每个 bS 管 4 行**：`h264_h_loop_filter_chroma422`
+  传 `inner_iters=4`（普通版为 2），intra 变体 `4*inner_iters=16` 行；水平色度边仍
+  8 列、bS 各管 2 列。另外 422 水平奇数边在 8x8DCT 宏块里**亮度跳过滤、色度仍滤**
+  （`!deblock_edge && (!chroma422 || dir == 0)` 才 continue）。
+- **H.264 4:2:2 的 pred8x16_left_dc 是四象限**：两个 `pred8x8_left_dc` 纵向堆叠，
+  每 4 行用自己的左列均值 `(dc+2)>>2`；写成 8 行平均 `(dc+8rows+4)>>3` 会让 MB 边
+  缘象限恒差 ±4。pred8x16_plane 的垂直梯度 `V=(5V+32)>>6`、求和到 k=8 且左列 y=15
+  与 topleft 相接。
+- **H.264 4:4:4 CABAC 的三个陷阱**：① cat 5（luma 8x8）在 444 **也读 coded block
+  flag**（`(cat != 5 || CHROMA444)`），cbf=0 时要清**整个 2x2 象限**的 nz
+  （420 里 cat5 从不读 cbf，这条路径从未执行过）；② 8x8DCT/4x4 邻接 quirk 对
+  **三个平面**都生效（当前宏块是 8x8DCT 而左/上邻是 4x4 变换时，该邻居的边界
+  nz 按 0 参与（I_PCM 邻居为 64）），不能限定 luma 平面；③ 444 的 nz 象限索引要
+  用 `n & 15`（平面内相对索引），用全局 n/4 会写越界。
+- **对照 harness 要先在已验证路径上校准**：本轮用 C 表复刻 decode_residual 的
+  harness 连续暴露四个自身 bug（total_zeros 数组差一、run 循环起点、escape 分界、
+  缓冲未初始化），一度把正确的 MoonBit 实现改错又回退。正确顺序是先让 harness
+  在 420（已 byte-exact）的调用序列上复现已知结果，再拿它质疑 422。
+- **README 是 CRLF**：脚本做多行替换时把 `
+` 换成 `
+` 再匹配，否则静默失配。
 - **差分向量生成走 stdin/stdout 管道**：Git Bash 会把 `-v "$(pwd):/w"` 的卷挂载
   改写成无效路径，docker 报 `destination can't be '/'`；用
   `docker run --rm -i ... pipe:1 > out` 绕开。

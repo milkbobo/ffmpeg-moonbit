@@ -343,7 +343,7 @@ pub fn ff_h264_decode_slice_header(
     slice_qs_delta = gb.read_se()
   }
   let qscale = pps.init_qp + slice_qp_delta
-  if qscale < 0 || qscale > 51 {
+  if qscale < 0 || qscale > 51 + 6 * (sps.bit_depth_luma - 8) {
     return Err("EINVAL")
   }
   let mut disable_idc = 0

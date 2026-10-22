@@ -44,6 +44,11 @@ priv struct H264MbInfo {
   mut alpha_offset : Int32
   mut beta_offset : Int32
   ref_identity : Array[Int32]
+  mv1 : Array[Int32]
+  ref_idx1 : Array[Int32]
+  mvd1 : Array[Int32]
+  ref_identity1 : Array[Int32]
+  direct : Array[Bool]
   /// Non-zero coefficient counts in the C `h->non_zero_count` layout:
   ///| 0..15 luma raster, 16..19 Cb, 32..35 Cr (4:2:0).
   nz : Array[Int32]
@@ -80,6 +85,8 @@ priv struct H264MbInfo {
 ///|
 /// Reference picture planes (`H264Picture` data pointers in the C).
 pub struct H264RefPic {
+  /// Decoder-local identity, independent of repeated/negative POC values.
+  identity : Int32
   y : Array[Int32]
   u : Array[Int32]
   v : Array[Int32]
@@ -88,6 +95,10 @@ pub struct H264RefPic {
   /// Full-plane dimensions in pixels (macroblock aligned).
   width : Int32
   height : Int32
+  /// Chroma plane dimensions in pixels (macroblock aligned); the border
+  /// replication bounds of chroma motion compensation.
+  cwidth : Int32
+  cheight : Int32
   /// Picture order count, used as the deblocking `ref2frm` identity.
   poc : Int32
 }
@@ -95,6 +106,13 @@ pub struct H264RefPic {
 ///|
 /// A decoded H.264 frame: full MB-aligned planes plus cropping offsets. */
 pub struct H264Frame {
+  bit_depth : Int32
+  priv epoch : Int32
+  priv reorder_depth : Int32
+  priv no_output_prior : Bool
+  /// Picture order count; batch output retains decoding order.
+  poc : Int32
+  priv infos : Array[H264MbInfo]
   /// Visible (cropped) width.
   width : Int32
   /// Visible (cropped) height.
@@ -109,27 +127,43 @@ pub struct H264Frame {
   cstride : Int32
   crop_left : Int32
   crop_top : Int32
+  /// Chroma subsampling: `cw = width >> hshift`, `ch = height >> vshift`.
+  chroma_hshift : Int32
+  chroma_vshift : Int32
 }
 
 ///|
-/// Pack the visible area as YUV420P, matching FFmpeg's rawvideo output for a
-/// progressive 4:2:0 frame.
+/// Pack the visible area as planar YUV, matching FFmpeg's rawvideo output
+/// (`yuv420p`/`yuv422p`/`yuv444p` by chroma format; the generic entry keeps
+/// the historical name).
 pub fn H264Frame::yuv420p(self : H264Frame) -> Bytes {
+  self.yuvp()
+}
+
+///|
+/// Pack the visible area as planar YUV of the frame's chroma format. */
+pub fn H264Frame::yuvp(self : H264Frame) -> Bytes {
   let out : Array[Byte] = []
   for row = 0; row < self.height; row = row + 1 {
     let o = self.crop_left + (self.crop_top + row) * self.ystride
     for col = 0; col < self.width; col = col + 1 {
-      out.push(self.y[o + col].to_byte())
+      let sample = self.y[o + col]
+      out.push(sample.to_byte())
+      if self.bit_depth > 8 { out.push((sample >> 8).to_byte()) }
     }
   }
-  let cw = self.width / 2
-  let ch = self.height / 2
+  let cw = self.width >> self.chroma_hshift
+  let ch = self.height >> self.chroma_vshift
+  let ccrop_l = self.crop_left >> self.chroma_hshift
+  let ccrop_t = self.crop_top >> self.chroma_vshift
   for plane = 0; plane < 2; plane = plane + 1 {
     let src = if plane == 0 { self.u } else { self.v }
     for row = 0; row < ch; row = row + 1 {
-      let o = self.crop_left / 2 + (self.crop_top / 2 + row) * self.cstride
+      let o = ccrop_l + (ccrop_t + row) * self.cstride
       for col = 0; col < cw; col = col + 1 {
-        out.push(src[o + col].to_byte())
+        let sample = src[o + col]
+        out.push(sample.to_byte())
+        if self.bit_depth > 8 { out.push((sample >> 8).to_byte()) }
       }
     }
   }
@@ -139,6 +173,22 @@ pub fn H264Frame::yuv420p(self : H264Frame) -> Bytes {
 ///|
 /// Shared planes and slice-local syntax state for one progressive I/P picture.
 priv struct H264DecCtx {
+  bit_depth : Int32
+  /// `sps.chroma_format_idc`: 1 (4:2:0), 2 (4:2:2) or 3 (4:4:4).
+  chroma_format : Int32
+  /// Chroma plane shifts derived from `chroma_format` (`chroma_x_shift`,
+  /// `chroma_y_shift` in `h264_slice.c`).
+  chroma_hshift : Int32
+  chroma_vshift : Int32
+  mut si_slice : Bool
+  mut active_list : Int32
+  mut ref_list1 : Array[H264RefPic]
+  mut ref_count1 : Int32
+  mut direct_spatial : Bool
+  direct_8x8 : Bool
+  mut colocated : Array[H264MbInfo]
+  mut poc : Int32
+  mut long_pocs : Array[Int32]
   mut slice_num : Int32
   pps : H264Pps
   mb_width : Int32
@@ -211,7 +261,8 @@ fn h264_pred_intra_mode(
 }
 
 ///|
-/// Luma 4x4 block nC prediction from the retained neighbour counts. */
+/// Luma 4x4 block nC prediction from the retained neighbour counts. `base`
+/// selects the plane's section of `nz` (4:4:4 chroma planes use 16 * p). */
 fn h264_nc_luma(
   ctx : H264DecCtx,
   mb_idx : Int32,
@@ -220,18 +271,19 @@ fn h264_nc_luma(
   gx : Int32,
   gy : Int32,
   nz : Array[Int32],
+  base? : Int32 = 0,
 ) -> Int32 {
   let left = if gx > 0 {
-    nz[gy * 4 + gx - 1]
+    nz[base + gy * 4 + gx - 1]
   } else if h264_has_left(ctx, mb_idx) {
-    ctx.infos[mb_idx - 1].nz[gy * 4 + 3]
+    ctx.infos[mb_idx - 1].nz[base + gy * 4 + 3]
   } else {
     64
   }
   let top = if gy > 0 {
-    nz[(gy - 1) * 4 + gx]
+    nz[base + (gy - 1) * 4 + gx]
   } else if h264_has_top(ctx, mb_idx) {
-    ctx.infos[mb_idx - ctx.mb_width].nz[3 * 4 + gx]
+    ctx.infos[mb_idx - ctx.mb_width].nz[base + 3 * 4 + gx]
   } else {
     64
   }
@@ -269,6 +321,43 @@ fn h264_nc_chroma(
   h264_pred_non_zero_count(left, top)
 }
 
+///|
+/// 4:2:2 chroma AC nC prediction. FFmpeg's `non_zero_count_cache` lays the
+/// two vertically stacked 8x8s side by side (`scan8[16..23]`), so the
+/// neighbour relations follow that cache, not the image geometry: the left
+/// neighbour of the bottom 8x8's left column is the top 8x8's right column,
+/// and the top-MB border row reads the top macroblock's (always zero for
+/// 4:2:2) blocks 28..31 (`fill_decode_caches`'s `!chroma_y_shift` fill).
+fn h264_nc_chroma_422(
+  ctx : H264DecCtx,
+  mb_idx : Int32,
+  component : Int32,
+  i : Int32,
+  nz : Array[Int32],
+) -> Int32 {
+  let base = 16 + 16 * component
+  // `scan8` stacks the two 8x8s vertically: block i sits at cache row
+  // 6 + i/2, column 4 + i%2. Column-4 blocks read the left macroblock's
+  // right column (b1/b3/b5/b7 of this component), row-6 blocks read the
+  // top macroblock's bottom row (b6/b7) - `fill_decode_caches`'s
+  // `!chroma_y_shift` fills mirror exactly that.
+  let left = if (i & 1) == 1 {
+    nz[base + i - 1]
+  } else if h264_has_left(ctx, mb_idx) {
+    ctx.infos[mb_idx - 1].nz[base + i + 1]
+  } else {
+    64
+  }
+  let top = if i >= 2 {
+    nz[base + i - 2]
+  } else if h264_has_top(ctx, mb_idx) {
+    ctx.infos[mb_idx - ctx.mb_width].nz[base + 6 + i]
+  } else {
+    64
+  }
+  h264_pred_non_zero_count(left, top)
+}
+
 ///| Decode one macroblock: the CAVLC path of `ff_h264_decode_mb_cavlc`,
 
 ///|
@@ -280,7 +369,7 @@ fn h264_decode_mb(
   mb_x : Int32,
   mb_y : Int32,
 ) -> Result[Unit, String] {
-  let pps = ctx.pps
+  if ctx.slice_type_nos == 1 { return h264_decode_b_mb(Cavlc(gb), ctx, mb_idx) }
   if ctx.slice_type_nos != 2 {
     // `mb_skip_run`: -1 means "read a new run" (the value after a coded
     // macroblock, matching `sl->mb_skip_run--` in the C).
@@ -302,6 +391,7 @@ fn h264_decode_mb(
   if mb_type_raw < 0 {
     return Err("invalid mb_type")
   }
+  if ctx.si_slice && mb_type_raw > 0 { mb_type_raw -= 1 }
   if ctx.slice_type_nos != 2 {
     if mb_type_raw <= 4 {
       return h264_decode_mb_cavlc_p(gb, ctx, mb_idx, mb_x, mb_y, mb_type_raw)
@@ -313,6 +403,14 @@ fn h264_decode_mb(
     // shifted by 5 (`ff_h264_decode_mb_cavlc`).
     mb_type_raw = mb_type_raw - 5
   }
+  h264_decode_mb_cavlc_intra(gb, ctx, mb_idx, mb_x, mb_y, mb_type_raw)
+}
+
+///|
+fn h264_decode_mb_cavlc_intra(
+  gb : BitReader, ctx : H264DecCtx, mb_idx : Int32, mb_x : Int32, mb_y : Int32, mb_type_raw : Int32,
+) -> Result[Unit, String] {
+  let pps = ctx.pps
   let mut is_i4x4 = false
   let mut is_i16x16 = false
   let mut is_pcm = false
@@ -333,31 +431,38 @@ fn h264_decode_mb(
   let info = ctx.infos[mb_idx]
   let nz = info.nz
   let mb : Array[Int32] = Array::make(768, 0)
-  let luma_dc : Array[Int32] = Array::make(16, 0)
-  let mut luma_dc_nz = 0
+  let luma_dc : Array[Array[Int32]] = [
+    Array::make(16, 0),
+    Array::make(16, 0),
+    Array::make(16, 0),
+  ]
+  let luma_dc_nz : Array[Int32] = Array::make(3, 0)
   let chroma_dc_nz : Array[Int32] = Array::make(2, 0)
   let modes : Array[Int32] = Array::make(16, 0)
   let modes_ck : Array[Int32] = Array::make(16, 0)
   let mut chroma_mode = 0
   if is_pcm {
     gb.align()
-    let samples = 256 + 128
-    if gb.bits_left() < samples * 8 {
+    // Chroma samples per plane: 8x8 (4:2:0), 8x16 (4:2:2) or 16x16 (4:4:4).
+    let cw = 16 >> ctx.chroma_hshift
+    let chh = 16 >> ctx.chroma_vshift
+    let samples = 256 + 2 * cw * chh
+    if gb.bits_left() < samples * ctx.bit_depth {
       return Err("not enough data for I_PCM")
     }
     let ybase = mb_y * 16 * ctx.ystride + mb_x * 16
     for row = 0; row < 16; row = row + 1 {
       for col = 0; col < 16; col = col + 1 {
-        ctx.y[ybase + row * ctx.ystride + col] = gb.read(8).reinterpret_as_int()
+        ctx.y[ybase + row * ctx.ystride + col] = gb.read(ctx.bit_depth).reinterpret_as_int()
       }
     }
+    let cbase = mb_y * chh * ctx.cstride + mb_x * cw
     for p = 0; p < 2; p = p + 1 {
       let plane = if p == 0 { ctx.u } else { ctx.v }
-      let cbase = mb_y * 8 * ctx.cstride + mb_x * 8
-      for row = 0; row < 8; row = row + 1 {
-        for col = 0; col < 8; col = col + 1 {
+      for row = 0; row < chh; row = row + 1 {
+        for col = 0; col < cw; col = col + 1 {
           plane[cbase + row * ctx.cstride + col] = gb
-            .read(8)
+            .read(ctx.bit_depth)
             .reinterpret_as_int()
         }
       }
@@ -397,9 +502,10 @@ fn h264_decode_mb(
       }
     }
   }
-  // Chroma prediction mode follows the luma intra modes / mb_type.
+  // Chroma prediction mode follows the luma intra modes / mb_type; 4:4:4
+  // codes none (`decode_chroma == 0` in the C, chroma reuses the luma modes).
   let mut raw_cm = 0
-  {
+  if ctx.chroma_format != 3 {
     let cm = gb.read_ue31()
     raw_cm = cm
     if cm < 0 || cm > 3 {
@@ -431,146 +537,109 @@ fn h264_decode_mb(
   }
   if !is_i16x16 {
     let cbp_code = gb.read_ue31()
-    if cbp_code < 0 || cbp_code > 47 {
-      return Err("cbp out of range")
+    if ctx.chroma_format == 3 {
+      if cbp_code < 0 || cbp_code > 15 {
+        return Err("cbp out of range")
+      }
+      cbp = h264_golomb_to_intra4x4_cbp_gray[cbp_code]
+    } else {
+      if cbp_code < 0 || cbp_code > 47 {
+        return Err("cbp out of range")
+      }
+      cbp = h264_golomb_to_intra4x4_cbp[cbp_code]
     }
-    cbp = h264_golomb_to_intra4x4_cbp[cbp_code]
+  } else if ctx.chroma_format == 3 && cbp > 15 {
+    return Err("gray chroma")
   }
-  let mut qmul_luma : Array[Int32] = []
-  let mut chroma_qp0 = h264_get_chroma_qp(pps, 0, ctx.qscale)
-  let mut chroma_qp1 = h264_get_chroma_qp(pps, 1, ctx.qscale)
+  let mut chroma_qp0 = h264_get_chroma_qp(pps, 0, ctx.qscale, bit_depth=ctx.bit_depth)
+  let mut chroma_qp1 = h264_get_chroma_qp(pps, 1, ctx.qscale, bit_depth=ctx.bit_depth)
   if cbp != 0 || is_i16x16 {
     let dquant = gb.read_se()
     if dquant == -2147483648 {
       return Err("invalid mb_qp_delta")
     }
     let mut q = ctx.qscale + dquant
-    if q < 0 || q > 51 {
-      q = if q < 0 { q + 52 } else { q - 52 }
-      if q < 0 || q > 51 {
+    if q < 0 || q > h264_max_qp(ctx) {
+      q = if q < 0 { q + h264_max_qp(ctx) + 1 } else { q - h264_max_qp(ctx) - 1 }
+      if q < 0 || q > h264_max_qp(ctx) {
         return Err("dquant out of range")
       }
     }
     ctx.qscale = q
-    qmul_luma = h264_build_dequant4(pps, 0, q)
-    chroma_qp0 = h264_get_chroma_qp(pps, 0, q)
-    chroma_qp1 = h264_get_chroma_qp(pps, 1, q)
-    if is_i16x16 {
-      luma_dc_nz = match
-        h264_decode_residual(
-          gb,
-          luma_dc,
-          0,
-          h264_zigzag_scan_t,
-          0,
-          None,
-          16,
-          h264_block0_nc(ctx, mb_idx, mb_x, mb_y),
+    chroma_qp0 = h264_get_chroma_qp(pps, 0, q, bit_depth=ctx.bit_depth)
+    chroma_qp1 = h264_get_chroma_qp(pps, 1, q, bit_depth=ctx.bit_depth)
+    let plane_count = if ctx.chroma_format == 3 { 3 } else { 1 }
+    let chroma_qps = [0, chroma_qp0, chroma_qp1]
+    for p = 0; p < plane_count; p = p + 1 {
+      let plane_qp = if p == 0 { ctx.qscale } else { chroma_qps[p] }
+      match
+        h264_cavlc_luma_residual(
+          gb, ctx, mb_idx, mb_x, mb_y, cbp, p, plane_qp, is_i16x16, mb, luma_dc, luma_dc_nz, nz,
         ) {
-        Ok(v) => v
-        Err(e) => return Err(e)
-      }
-      if (cbp & 15) != 0 {
-        for i = 0; i < 16; i = i + 1 {
-          let gx = h264_luma_block_x[i]
-          let gy = h264_luma_block_y[i]
-          let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz)
-          let total = match
-            h264_decode_residual(
-              gb,
-              mb,
-              16 * i,
-              h264_zigzag_scan_t,
-              1,
-              Some(qmul_luma),
-              15,
-              nc,
-            ) {
-            Ok(v) => v
-            Err(e) => return Err(e)
-          }
-          nz[gy * 4 + gx] = total
-        }
-      }
-    } else if info.transform_8x8 {
-      match h264_cavlc_luma8(gb, ctx, mb_idx, mb_x, mb_y, cbp, 0, mb) {
         Ok(_) => ()
         Err(error) => return Err(error)
       }
-    } else {
-      for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
-        if (cbp & (1 << i8x8)) != 0 {
-          for i4x4 = 0; i4x4 < 4; i4x4 = i4x4 + 1 {
-            let i = i8x8 * 4 + i4x4
-            let gx = h264_luma_block_x[i]
-            let gy = h264_luma_block_y[i]
-            let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz)
-            let total = match
-              h264_decode_residual(
-                gb,
-                mb,
-                16 * i,
-                h264_zigzag_scan_t,
-                0,
-                Some(qmul_luma),
-                16,
-                nc,
-              ) {
-              Ok(v) => v
-              Err(e) => return Err(e)
-            }
-            nz[gy * 4 + gx] = total
-          }
-        }
-      }
     }
-    if (cbp & 0x30) != 0 {
-      for c = 0; c < 2; c = c + 1 {
-        chroma_dc_nz[c] = match
-          h264_decode_residual(
-            gb,
-            mb,
-            256 + 256 * c,
-            h264_chroma_dc_scan,
-            0,
-            None,
-            4,
-            0,
-          ) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        }
-      }
-    }
-    if (cbp & 0x20) != 0 {
-      for c = 0; c < 2; c = c + 1 {
-        let cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
-        let qmul_c = h264_build_dequant4(pps, 1 + c, cqp)
-        for i = 0; i < 4; i = i + 1 {
-          let nc = h264_nc_chroma(ctx, mb_idx, mb_x, mb_y, c, i, nz)
-          let total = match
+
+    if ctx.chroma_format != 3 {
+      let num_c8x8 = ctx.chroma_format
+      if (cbp & 0x30) != 0 {
+        for c = 0; c < 2; c = c + 1 {
+          chroma_dc_nz[c] = match
             h264_decode_residual(
               gb,
               mb,
-              256 + 256 * c + 16 * i,
-              h264_zigzag_scan_t,
-              1,
-              Some(qmul_c),
-              15,
-              nc,
-            ) {
+              256 + 256 * c,
+              if num_c8x8 == 2 { h264_chroma422_dc_scan } else { h264_chroma_dc_scan },
+              0,
+              None,
+              4 * num_c8x8,
+              0,
+             bit_depth=ctx.bit_depth,) {
             Ok(v) => v
             Err(e) => return Err(e)
           }
-          nz[16 + 16 * c + i] = total
+        }
+      }
+      if (cbp & 0x20) != 0 {
+        for c = 0; c < 2; c = c + 1 {
+          let cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
+          let qmul_c = h264_build_dequant4(pps, 1 + c, cqp)
+          for i = 0; i < 4 * num_c8x8; i = i + 1 {
+            let nc = if num_c8x8 == 2 {
+              h264_nc_chroma_422(ctx, mb_idx, c, i, nz)
+            } else {
+              h264_nc_chroma(ctx, mb_idx, mb_x, mb_y, c, i, nz)
+            }
+              let total = match
+              h264_decode_residual(
+                gb,
+                mb,
+                256 + 256 * c + 16 * i,
+                h264_zigzag_scan_t,
+                1,
+                Some(qmul_c),
+                15,
+                nc,
+               bit_depth=ctx.bit_depth,) {
+              Ok(v) => v
+              Err(e) => return Err(e)
+            }
+            nz[16 + 16 * c + i] = total
+          }
         }
       }
     }
   }
+  let plane_dc_mul : Array[Int32] = [
+    h264_build_dequant4(pps, 0, ctx.qscale)[0],
+    h264_build_dequant4(pps, 1, chroma_qp0)[0],
+    h264_build_dequant4(pps, 2, chroma_qp1)[0],
+  ]
   match
     h264_recon_mb(
       ctx, mb_x, mb_y, is_i4x4, is_i16x16, pred16, chroma_mode, modes_ck, cbp, luma_dc_nz,
-      chroma_dc_nz, chroma_qp0, chroma_qp1, qmul_luma, mb, luma_dc, nz,
+      chroma_dc_nz, chroma_qp0, chroma_qp1, plane_dc_mul, mb, luma_dc, nz,
     ) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -591,6 +660,103 @@ fn h264_decode_mb(
 }
 
 ///|
+/// `decode_luma_residual` (CAVLC) for one full-size plane `p`: the I16x16 DC
+/// block plus the CBP-gated AC blocks, 4x4 or 8x8 transform, writing raster
+/// nz at `16 * p` and coefficients at `256 * p` of `mb`.
+fn h264_cavlc_luma_residual(
+  gb : BitReader,
+  ctx : H264DecCtx,
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  cbp : Int32,
+  p : Int32,
+  plane_qp : Int32,
+  is_i16x16 : Bool,
+  mb : Array[Int32],
+  luma_dc : Array[Array[Int32]],
+  luma_dc_nz : Array[Int32],
+  nz : Array[Int32],
+) -> Result[Unit, String] {
+  let info = ctx.infos[mb_idx]
+  let base = 16 * p
+  let mb_off = 256 * p
+  let qmul = h264_build_dequant4(ctx.pps, p, plane_qp)
+  if is_i16x16 {
+    luma_dc_nz[p] = match
+      h264_decode_residual(
+        gb,
+        luma_dc[p],
+        0,
+        h264_zigzag_scan_t,
+        0,
+        None,
+        16,
+        h264_block0_nc(ctx, mb_idx, mb_x, mb_y, base=base),
+       bit_depth=ctx.bit_depth,) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    if (cbp & 15) != 0 {
+      for i = 0; i < 16; i = i + 1 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz, base=base)
+        let total = match
+          h264_decode_residual(
+            gb,
+            mb,
+            mb_off + 16 * i,
+            h264_zigzag_scan_t,
+            1,
+            Some(qmul),
+            15,
+            nc,
+           bit_depth=ctx.bit_depth,) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        nz[base + gy * 4 + gx] = total
+      }
+    }
+    return Ok(())
+  }
+  if info.transform_8x8 {
+    match h264_cavlc_luma8(gb, ctx, mb_idx, mb_x, mb_y, cbp, p, plane_qp, base, mb_off, mb) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+    return Ok(())
+  }
+  for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
+    if (cbp & (1 << i8x8)) != 0 {
+      for i4x4 = 0; i4x4 < 4; i4x4 = i4x4 + 1 {
+        let i = i8x8 * 4 + i4x4
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz, base=base)
+        let total = match
+          h264_decode_residual(
+            gb,
+            mb,
+            mb_off + 16 * i,
+            h264_zigzag_scan_t,
+            0,
+            Some(qmul),
+            16,
+            nc,
+           bit_depth=ctx.bit_depth,) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        nz[base + gy * 4 + gx] = total
+      }
+    }
+  }
+  Ok(())
+}
+
+///|
 /// nC for the I16x16 luma DC block: `pred_non_zero_count` of luma block 0's
 /// left/top neighbours.
 fn h264_block0_nc(
@@ -598,9 +764,10 @@ fn h264_block0_nc(
   mb_idx : Int32,
   _mb_x : Int32,
   _mb_y : Int32,
+  base? : Int32 = 0,
 ) -> Int32 {
-  let left = if h264_has_left(ctx, mb_idx) { ctx.infos[mb_idx - 1].nz[3] } else { 64 }
-  let top = if h264_has_top(ctx, mb_idx) { ctx.infos[mb_idx - ctx.mb_width].nz[12] } else { 64 }
+  let left = if h264_has_left(ctx, mb_idx) { ctx.infos[mb_idx - 1].nz[base + 3] } else { 64 }
+  let top = if h264_has_top(ctx, mb_idx) { ctx.infos[mb_idx - ctx.mb_width].nz[base + 12] } else { 64 }
   h264_pred_non_zero_count(left, top)
 }
 
@@ -636,13 +803,13 @@ fn h264_decode_slice_ex(
   ref_list0 : Array[H264RefPic],
   skip_lf : Bool,
 ) -> Result[H264Frame, String] {
-  h264_decode_picture_ex([nal], ps, fn(_) { Ok(ref_list0) }, skip_lf)
+  h264_decode_picture_ex([nal], ps, fn(_) { Ok({ list0: ref_list0, list1: [], colocated: [], long_pocs: [], poc: 0 }) }, skip_lf)
 }
 
 ///|
 fn h264_decode_picture_ex(
   nals : Array[H2645Nal], ps : H264ParamSets,
-  resolve_refs : (H264SliceHeader) -> Result[Array[H264RefPic], String], skip_lf : Bool,
+  resolve_refs : (H264SliceHeader) -> Result[H264SliceRefs, String], skip_lf : Bool,
 ) -> Result[H264Frame, String] {
   guard nals.length() > 0 else { return Err("empty H.264 picture") }
   let slices = nals.copy()
@@ -662,10 +829,8 @@ fn h264_decode_picture_ex(
     Ok(v) => v
     Err(e) => return Err(e)
   }
-  let ref_list0 = match resolve_refs(sh) { Ok(value) => value; Err(error) => return Err(error) }
-  if sh.slice_type_nos != 2 && sh.slice_type_nos != 0 {
-    return Err("only I and P slices are supported")
-  }
+  let references = match resolve_refs(sh) { Ok(value) => value; Err(error) => return Err(error) }
+  let ref_list0 = references.list0
   if sh.first_mb_in_slice != 0 {
     return Err("multi-slice pictures are not supported")
   }
@@ -680,25 +845,28 @@ fn h264_decode_picture_ex(
     Some(s) => s
     None => return Err("missing SPS")
   }
-  if sps.chroma_format_idc != 1 {
-    return Err("only 4:2:0 is supported")
+  if sps.chroma_format_idc == 0 || sps.chroma_format_idc > 3 {
+    return Err("only 4:2:0/4:2:2/4:4:4 is supported")
   }
-  if sps.bit_depth_luma != 8 || sps.bit_depth_chroma != 8 {
-    return Err("only 8-bit decoding is supported")
+  if ![8, 9, 10, 12, 14].contains(sps.bit_depth_luma) || sps.bit_depth_chroma != sps.bit_depth_luma {
+    return Err("unsupported H.264 bit depths")
   }
   if sps.frame_mbs_only_flag == 0 || sps.mb_aff != 0 {
     return Err("interlaced pictures are not supported")
   }
-  if sh.qscale < 0 || sh.qscale > 51 {
+  if sh.qscale < 0 || sh.qscale > 51 + 6 * (sps.bit_depth_luma - 8) {
     return Err("slice QP out of range")
   }
+  let chroma_format = sps.chroma_format_idc
+  let chroma_hshift = if chroma_format == 1 || chroma_format == 2 { 1 } else { 0 }
+  let chroma_vshift = if chroma_format == 1 { 1 } else { 0 }
   let mb_width = sps.mb_width
   let mb_height = sps.mb_height
   let mb_count = mb_width * mb_height
   let ystride = mb_width * 16
   let yheight = mb_height * 16
-  let cstride = ystride / 2
-  let cheight = yheight / 2
+  let cstride = ystride >> chroma_hshift
+  let cheight = yheight >> chroma_vshift
   let y : Array[Int32] = Array::make(ystride * yheight, 0)
   let u : Array[Int32] = Array::make(cstride * cheight, 0)
   let v : Array[Int32] = Array::make(cstride * cheight, 0)
@@ -713,6 +881,8 @@ fn h264_decode_picture_ex(
       cbp_all: 0,
       chroma_mode: 0,
       mv: Array::make(32, 0),
+      mv1: Array::make(32, 0), ref_idx1: Array::make(16, -1), mvd1: Array::make(32, 0),
+      ref_identity1: Array::make(16, -1), direct: Array::make(16, false),
       ref_idx: Array::make(16, h264_ref_not_avail),
       mvd: Array::make(32, 0),
       transform_8x8: false,
@@ -732,6 +902,11 @@ fn h264_decode_picture_ex(
     padded
   }
   let ctx : H264DecCtx = {
+    bit_depth: sps.bit_depth_luma,
+    chroma_format,
+    chroma_hshift,
+    chroma_vshift,
+    si_slice: false,
     slice_num: 0,
     pps,
     mb_width,
@@ -747,6 +922,9 @@ fn h264_decode_picture_ex(
     cur_mb_is_intra: true,
     ref_count0: sh.num_ref_idx_l0_active,
     ref_list0,
+    active_list: 0, ref_list1: references.list1, ref_count1: sh.num_ref_idx_l1_active,
+    direct_spatial: sh.direct_spatial_mv_pred, direct_8x8: sps.direct_8x8_inference_flag != 0,
+    colocated: references.colocated, poc: references.poc, long_pocs: references.long_pocs,
     mb_skip_run: -1,
     pwt: sh.pwt,
   }
@@ -801,6 +979,12 @@ fn h264_decode_picture_ex(
     return Err("invalid cropping rectangle")
   }
   Ok({
+    bit_depth: sps.bit_depth_luma,
+    epoch: 0,
+    reorder_depth: sps.num_reorder_frames.max(0).min(16),
+    no_output_prior: sh.no_output_of_prior_pics,
+    poc: references.poc,
+    infos,
     width,
     height,
     pheight: yheight,
@@ -811,6 +995,8 @@ fn h264_decode_picture_ex(
     cstride,
     crop_left: sps.crop_left,
     crop_top: sps.crop_top,
+    chroma_hshift,
+    chroma_vshift,
   })
 }
 

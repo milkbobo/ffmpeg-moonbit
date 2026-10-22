@@ -51,6 +51,8 @@ fn h264_mc_luma(
   suby : Int32,
   pic_w : Int32,
   pic_h : Int32,
+
+  bit_depth? : Int32 = 8,
 ) -> Unit {
   fn px(x : Int32, y : Int32) -> Int32 {
     src[h264_mc_clamp(y, pic_h) * sstride + h264_mc_clamp(x, pic_w)]
@@ -74,13 +76,13 @@ fn h264_mc_luma(
     g(x, y + 3)
   }
   fn half_h(x : Int32, y : Int32) -> Int32 {
-    clip_uint8((hsum(x, y) + 16) >> 5)
+    h264_clip8((hsum(x, y) + 16) >> 5, bit_depth=bit_depth)
   }
   fn half_v(x : Int32, y : Int32) -> Int32 {
-    clip_uint8((vsum(px, x, y) + 16) >> 5)
+    h264_clip8((vsum(px, x, y) + 16) >> 5, bit_depth=bit_depth)
   }
   fn half_hv(x : Int32, y : Int32) -> Int32 {
-    clip_uint8((vsum(hsum, x, y) + 512) >> 10)
+    h264_clip8((vsum(hsum, x, y) + 512) >> 10, bit_depth=bit_depth)
   }
   for row = 0; row < h; row = row + 1 {
     let y = src_y + row
@@ -136,7 +138,10 @@ fn h264_mc_luma(
 /// Put a chroma block of `w` x `h` from `src`: (`src_x`, `src_y`) is the
 /// block's full-pel chroma position in the reference picture, and the luma
 /// quarter-pel MV (`mx`, `my`) displaces it by `(mx >> 3)` full pels plus
-/// `mx & 7` eighths (`mc_dir_part`'s chroma half).
+/// `mx & 7` eighths horizontally (`mc_dir_part`'s chroma half). Vertically
+/// 4:2:0 uses the same `>> 3` / `& 7`; 4:2:2 keeps the luma grid, so the
+/// full-pel offset is `my >> 2` and the quarter-pel fraction doubles into
+/// the eighth-pel phase (`((unsigned)my << 1) & 7` in the C).
 fn h264_mc_chroma(
   dst : Array[Int32],
   dstoff : Int32,
@@ -151,10 +156,13 @@ fn h264_mc_chroma(
   h : Int32,
   pic_w : Int32,
   pic_h : Int32,
+
+  vshift? : Int32 = 1,
 ) -> Unit {
-  let fy = src_y + (my >> 3)
+  let ysh = 2 + vshift
+  let fy = src_y + (my >> ysh)
   let dx = mx & 7
-  let dy = my & 7
+  let dy = if vshift == 1 { my & 7 } else { (my << 1) & 7 }
   // `put_h264_chroma_mc8`: (A*(8-dx)(8-dy) + B*dx(8-dy) + C*(8-dx)dy +
   // D*dx*dy + 32) >> 6.
   let ax = 8 - dx
