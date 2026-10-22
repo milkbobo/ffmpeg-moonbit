@@ -473,6 +473,7 @@ fn h264_inter_luma_add(
   mb_off : Int32,
   transform_8x8 : Bool,
 ) -> Unit {
+  let bypass = h264_transform_bypass(ctx)
   if (cbp & 15) == 0 {
     return
   }
@@ -480,7 +481,11 @@ fn h264_inter_luma_add(
     for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
       if (cbp & (1 << i8x8)) != 0 {
         let off = base + (i8x8 / 2) * 8 * stride + (i8x8 % 2) * 8
-        h264_idct8_add4(dst, off, stride, mb, mb_off + 64 * i8x8, nz, i8x8, nz_base=nz_base, bit_depth=ctx.bit_depth)
+        if bypass {
+          h264_add_pixels8(dst, off, stride, mb, mb_off + 64 * i8x8, bit_depth=ctx.bit_depth)
+        } else {
+          h264_idct8_add4(dst, off, stride, mb, mb_off + 64 * i8x8, nz, i8x8, nz_base=nz_base, bit_depth=ctx.bit_depth)
+        }
       }
     }
   } else {
@@ -491,7 +496,11 @@ fn h264_inter_luma_add(
           let g = h264_luma_block_grid[i]
           if nz[nz_base + g] != 0 {
             let off = base + g / 4 * 4 * stride + g % 4 * 4
-            h264_idct_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth=ctx.bit_depth)
+            if bypass {
+              h264_add_pixels4(dst, off, stride, mb, mb_off + 16 * i, bit_depth=ctx.bit_depth)
+            } else {
+              h264_idct_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth=ctx.bit_depth)
+            }
           }
         }
       }
@@ -515,8 +524,9 @@ fn h264_inter_chroma_residual(
   chroma_dc_nz : Array[Int32],
 ) -> Unit {
   let num_c8x8 = ctx.chroma_format
+  let bypass = h264_transform_bypass(ctx)
   for c = 0; c < 2; c = c + 1 {
-    if chroma_dc_nz[c] != 0 {
+    if chroma_dc_nz[c] != 0 && !bypass {
       let mut cqp = if c == 0 { chroma_qp0 } else { chroma_qp1 }
       // The 2x4 DC Hadamard's gain halves the dequant scale, compensated
       // by indexing the table three QP steps up (`h264_mb_template.c`).
@@ -538,7 +548,11 @@ fn h264_inter_chroma_residual(
       let by = i / 2
       let off = cbase + by * 4 * stride + bx * 4
       let g = 16 + 16 * c + i
-      if nz[g] != 0 {
+      if bypass {
+        if nz[g] != 0 || mb[256 + 256 * c + 16 * i] != 0 {
+          h264_add_pixels4(plane, off, stride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
+        }
+      } else if nz[g] != 0 {
         h264_idct_add(plane, off, stride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
       } else if mb[256 + 256 * c + 16 * i] != 0 {
         h264_idct_dc_add(plane, off, stride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)

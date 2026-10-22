@@ -177,6 +177,9 @@ pub struct H264Sps {
 pub struct H264Pps {
   mut pps_id : Int32
   mut sps_id : Int32
+  /// `profile_idc` of the referenced SPS (244 selects the pred_add bypass
+  /// kernels for vertical/horizontal intra modes).
+  mut profile_idc : Int32
   mut cabac : Int32
   mut pic_order_present : Int32
   mut slice_group_count : Int32
@@ -193,6 +196,8 @@ pub struct H264Pps {
   mut constrained_intra_pred : Int32
   mut redundant_pic_cnt_present : Int32
   mut transform_8x8_mode : Int32
+  /// `qpprime_y_zero_transform_bypass_flag` copied from the SPS.
+  mut transform_bypass : Int32
   mut pic_scaling_matrix_present_flag : Int32
   mut pic_scaling_matrix_present_mask : Int32
   scaling_matrix4 : Array[Array[Int32]]
@@ -286,6 +291,7 @@ fn new_h264_pps() -> H264Pps {
   {
     pps_id: 0,
     sps_id: 0,
+    profile_idc: 0,
     cabac: 0,
     pic_order_present: 0,
     slice_group_count: 0,
@@ -302,6 +308,7 @@ fn new_h264_pps() -> H264Pps {
     constrained_intra_pred: 0,
     redundant_pic_cnt_present: 0,
     transform_8x8_mode: 0,
+    transform_bypass: 0,
     pic_scaling_matrix_present_flag: 0,
     pic_scaling_matrix_present_mask: 0,
     scaling_matrix4: make_scaling4(),
@@ -963,6 +970,8 @@ pub fn ff_h264_decode_picture_parameter_set(
   pps.redundant_pic_cnt_present = gb.read1().reinterpret_as_int()
 
   pps.transform_8x8_mode = 0
+  pps.transform_bypass = sps.transform_bypass
+  pps.profile_idc = sps.profile_idc
   for i = 0; i < 6; i = i + 1 {
     for j = 0; j < 16; j = j + 1 {
       pps.scaling_matrix4[i][j] = sps.scaling_matrix4[i][j]

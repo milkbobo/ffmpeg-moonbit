@@ -6,11 +6,11 @@
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
 /// Scope: 8..14-bit 4:0:0/4:2:0/4:2:2/4:4:4 frame-coded I/P/B pictures,
-/// CAVLC/CABAC, 4x4/8x8, I_PCM, slice-local prediction, weighted prediction
-/// and MBAFF frame pictures (all-field or all-frame pairs). The persistent
-/// reference/POC/MMCO state lives in h264_dpb.mbt. SP/SI reconstruction, field
-/// pictures (PAFF), mixed field/frame MBAFF pairs and transform bypass remain
-/// unfinished.
+/// CAVLC/CABAC, 4x4/8x8, I_PCM, slice-local prediction, weighted prediction,
+/// High 4:4:4 lossless transform bypass and MBAFF frame pictures (all-field
+/// or all-frame pairs). The persistent reference/POC/MMCO state lives in
+/// h264_dpb.mbt. SP/SI reconstruction, field pictures (PAFF) and mixed
+/// field/frame MBAFF pairs remain unfinished.
 
 ///|
 /// FFmpeg luma 4x4 block order (8x8-grouped) to 4x4 raster grid x. */

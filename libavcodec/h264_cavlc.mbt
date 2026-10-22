@@ -432,6 +432,9 @@ fn h264_build_dequant4(
   matrix : Int32,
   qp : Int32,
 ) -> Array[Int32] {
+  if pps.transform_bypass != 0 && qp == 0 {
+    return Array::make(16, 64)
+  }
   let out : Array[Int32] = Array::make(16, 0)
   let scaling = pps.scaling_matrix4[matrix]
   let rem = qp % 6
@@ -502,6 +505,9 @@ fn h264_build_dequant8(
   matrix : Int32,
   qp : Int32,
 ) -> Array[Int32] {
+  if pps.transform_bypass != 0 && qp == 0 {
+    return Array::make(64, 64)
+  }
   let out : Array[Int32] = Array::make(64, 0)
   let scaling = pps.scaling_matrix8[matrix]
   let rem = qp % 6
@@ -540,21 +546,67 @@ let h264_field_scan8x8_cavlc : Array[Int32] = [
 ]
 
 ///|
+/// `ff_zigzag_direct`: the natural 8x8 order used when transform bypass makes
+/// coefficients spatial residuals (`scan8x8_q0`).
+let h264_zigzag_direct : Array[Int32] = [
+  0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48,
+  41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15,
+  23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+]
+
+///|
+/// `field_scan_q0` (untransposed field 4x4 scan, used with transform bypass). */
+let h264_field_scan_q0 : Array[Int32] = [
+  0, 4, 1, 8, 12, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15,
+]
+
+///|
+/// `field_scan8x8_q0` (untransposed field 8x8 scan, used with transform
+/// bypass). */
+let h264_field_scan8x8_q0 : Array[Int32] = [
+  0, 8, 16, 1, 9, 24, 32, 17, 2, 25, 40, 48, 56, 33, 10, 3, 18, 41, 49, 57, 26, 11,
+  4, 19, 34, 42, 50, 58, 27, 12, 5, 20, 35, 43, 51, 59, 28, 13, 6, 21, 36, 44, 52,
+  60, 29, 14, 22, 37, 45, 53, 61, 30, 7, 15, 38, 46, 54, 62, 23, 31, 39, 47, 55, 63,
+]
+
+///|
+/// `qscale == 0 && qpprime_y_zero_transform_bypass_flag`: residual levels are
+/// spatial samples, so the C uses the `_q0` (untransposed) scan tables.
+fn h264_transform_bypass(ctx : H264DecCtx) -> Bool {
+  ctx.qscale == 0 && ctx.pps.transform_bypass != 0
+}
+
+///|
 /// Residual scan of the current macroblock (field MBs use the field scan). */
 fn h264_scan4(ctx : H264DecCtx) -> Array[Int32] {
-  if ctx.mb_field { h264_field_scan_t } else { h264_zigzag_scan_t }
+  if h264_transform_bypass(ctx) {
+    if ctx.mb_field { h264_field_scan_q0 } else { h264_zigzag_scan }
+  } else if ctx.mb_field {
+    h264_field_scan_t
+  } else {
+    h264_zigzag_scan_t
+  }
 }
 
 ///|
 /// CABAC 8x8 residual scan of the current macroblock. */
 fn h264_scan8x8(ctx : H264DecCtx) -> Array[Int32] {
-  if ctx.mb_field { h264_field_scan8x8 } else { h264_zigzag_scan8x8 }
+  if h264_transform_bypass(ctx) {
+    if ctx.mb_field { h264_field_scan8x8_q0 } else { h264_zigzag_direct }
+  } else if ctx.mb_field {
+    h264_field_scan8x8
+  } else {
+    h264_zigzag_scan8x8
+  }
 }
 
 ///|
 /// CAVLC 8x8 residual scan for 4x4 sub-block `sub` of the current MB. */
 fn h264_cavlc_scan8x8(ctx : H264DecCtx, sub : Int) -> Array[Int32] {
-  if ctx.mb_field {
+  if h264_transform_bypass(ctx) {
+    let base = if ctx.mb_field { h264_field_scan8x8_q0 } else { h264_zigzag_direct }
+    [for j in 0..<16 => base[4 * j + sub]]
+  } else if ctx.mb_field {
     [for j in 0..<16 => h264_field_scan8x8_cavlc[4 * j + sub]]
   } else {
     [for j in 0..<16 => h264_zigzag_scan8x8[4 * j + sub]]

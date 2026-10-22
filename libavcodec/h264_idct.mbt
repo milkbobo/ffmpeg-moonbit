@@ -50,6 +50,138 @@ fn h264_clip8(x : Int32,
 }
 
 ///|
+/// `h264_add_pixels4_clear`: transform bypass residual add for a 4x4 block
+/// (coefficients are spatial differences and are cleared afterwards).
+fn h264_add_pixels4(
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+
+  bit_depth? : Int32 = 8,
+) -> Unit {
+  for y = 0; y < 4; y = y + 1 {
+    for x = 0; x < 4; x = x + 1 {
+      let i = y * 4 + x
+      let mask = (1 << bit_depth) - 1
+      dst[off + y * stride + x] = (dst[off + y * stride + x] + block[bo + i]) & mask
+      block[bo + i] = 0
+    }
+  }
+}
+
+///|
+/// `h264_add_pixels8_clear`: transform bypass residual add for an 8x8 block. */
+fn h264_add_pixels8(
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+
+  bit_depth? : Int32 = 8,
+) -> Unit {
+  for y = 0; y < 8; y = y + 1 {
+    for x = 0; x < 8; x = x + 1 {
+      let i = y * 8 + x
+      let mask = (1 << bit_depth) - 1
+      dst[off + y * stride + x] = (dst[off + y * stride + x] + block[bo + i]) & mask
+      block[bo + i] = 0
+    }
+  }
+}
+
+///|
+/// `pred4x4_vertical_add`: transform-bypass vertical prediction with residual
+/// accumulated down each column (FFmpeg's profile-244 kernel).
+fn h264_add_pixels4_vertical(
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+
+  bit_depth? : Int32 = 8,
+) -> Unit {
+  let mask = (1 << bit_depth) - 1
+  for x = 0; x < 4; x = x + 1 {
+    let mut v = dst[off - stride + x]
+    for y = 0; y < 4; y = y + 1 {
+      v = (v + block[bo + y * 4 + x]) & mask
+      dst[off + y * stride + x] = v
+      block[bo + y * 4 + x] = 0
+    }
+  }
+}
+
+///|
+/// `pred4x4_horizontal_add`: residual accumulated along each row. */
+fn h264_add_pixels4_horizontal(
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+
+  bit_depth? : Int32 = 8,
+) -> Unit {
+  let mask = (1 << bit_depth) - 1
+  for y = 0; y < 4; y = y + 1 {
+    let mut v = dst[off + y * stride - 1]
+    for x = 0; x < 4; x = x + 1 {
+      v = (v + block[bo + y * 4 + x]) & mask
+      dst[off + y * stride + x] = v
+      block[bo + y * 4 + x] = 0
+    }
+  }
+}
+
+///|
+/// `pred8x8l_vertical_add`. */
+fn h264_add_pixels8_vertical(
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+
+  bit_depth? : Int32 = 8,
+) -> Unit {
+  let mask = (1 << bit_depth) - 1
+  for x = 0; x < 8; x = x + 1 {
+    let mut v = dst[off - stride + x]
+    for y = 0; y < 8; y = y + 1 {
+      v = (v + block[bo + y * 8 + x]) & mask
+      dst[off + y * stride + x] = v
+      block[bo + y * 8 + x] = 0
+    }
+  }
+}
+
+///|
+/// `pred8x8l_horizontal_add`. */
+fn h264_add_pixels8_horizontal(
+  dst : Array[Int32],
+  off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+
+  bit_depth? : Int32 = 8,
+) -> Unit {
+  let mask = (1 << bit_depth) - 1
+  for y = 0; y < 8; y = y + 1 {
+    let mut v = dst[off + y * stride - 1]
+    for x = 0; x < 8; x = x + 1 {
+      v = (v + block[bo + y * 8 + x]) & mask
+      dst[off + y * stride + x] = v
+      block[bo + y * 8 + x] = 0
+    }
+  }
+}
+
+///|
 /// `ff_h264_idct_add`: 4x4 inverse transform, add to `dst` and clear the
 /// coefficient block. `block[bo..bo+16]` is in FFmpeg's transposed layout.
 fn h264_idct_add(
