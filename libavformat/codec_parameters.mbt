@@ -88,27 +88,6 @@ fn pix_fmt_name(chroma : Int32, depth : Int32) -> String {
 }
 
 ///|
-fn cp_u16le(b : BytesView, o : Int32) -> Int32 {
-  if o + 2 > b.length() {
-    0
-  } else {
-    b[o].to_int() | (b[o + 1].to_int() << 8)
-  }
-}
-
-///|
-fn cp_u32le(b : BytesView, o : Int32) -> Int32 {
-  if o + 4 > b.length() {
-    0
-  } else {
-    b[o].to_int() |
-    (b[o + 1].to_int() << 8) |
-    (b[o + 2].to_int() << 16) |
-    (b[o + 3].to_int() << 24)
-  }
-}
-
-///|
 /// AV1 `av1C` record: profile, level, bit depth and chroma format. */
 pub fn av1c_parse(extra : Bytes) -> (Int32, Int32, Int32, Int32)? {
   if extra.length() < 4 {
@@ -161,23 +140,13 @@ pub fn vp9_parse_vpcc(extra : Bytes) -> (Int32, Int32, Int32, Int32)? {
 }
 
 ///|
-/// `OpusHead`: channels, pre-skip and the original input sample rate. */
+/// `OpusHead`: channels, pre-skip and the original input sample rate.
+/// Malformed versions, channel maps and stream counts return None.
 pub fn opus_head_parse(extra : Bytes) -> (Int32, Int32, Int32)? {
-  if extra.length() < 19 ||
-    extra[0] != b'O' ||
-    extra[1] != b'p' ||
-    extra[2] != b'u' ||
-    extra[3] != b's' ||
-    extra[4] != b'H' ||
-    extra[5] != b'e' ||
-    extra[6] != b'a' ||
-    extra[7] != b'd' {
-    return None
+  match @libavcodec.opus_parse_head(extra) {
+    Ok(head) => Some((head.channels, head.pre_skip, head.input_sample_rate.reinterpret_as_int()))
+    Err(_) => None
   }
-  let channels = extra[9].to_int()
-  let pre_skip = cp_u16le(extra, 10)
-  let rate = cp_u32le(extra, 12)
-  Some((channels, pre_skip, rate))
 }
 
 ///|

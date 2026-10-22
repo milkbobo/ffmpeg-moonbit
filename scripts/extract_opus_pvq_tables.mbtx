@@ -1,0 +1,44 @@
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+}
+
+// Extract decimal C initializers, excluding block comments and their numbers.
+fn numbers(source : StringView) -> Array[String] {
+  let out : Array[String] = []
+  let mut p = 0
+  while p < source.length() {
+    if p + 1 < source.length() && source[p] == '/' && source[p + 1] == '*' {
+      p += 2
+      while p + 1 < source.length() && !(source[p] == '*' && source[p + 1] == '/') { p += 1 }
+      p += 2
+    } else if source[p] is '0'..='9' {
+      let start = p
+      while p < source.length() && source[p] is '0'..='9' { p += 1 }
+      out.push(source[start:p].to_owned())
+    } else { p += 1 }
+  }
+  out
+}
+
+fn main raise {
+  let source = @fs.read_file_to_string("../libavcodec/opus/tab.c")
+  let body = source.split("static const uint32_t celt_pvq_u[1272] = {").collect()[1]
+    .split("};").collect()[0]
+  let values = numbers(body)
+  guard values.length() == 1272 else { fail("PVQ table size changed") }
+  let out = StringBuilder()
+  out.write_string("///|\n/// Generated from FFmpeg 9.0.2 opus/tab.c, celt_pvq_u.\n/// Copyright (c) 2012 Andrew D'Addesio, 2013-2014 Mozilla Corporation,\n/// 2016 Rostislav Pehlivanov. LGPL-2.1-or-later.\n/// Regenerate with scripts/extract_opus_pvq_tables.mbtx.\nlet opus_pvq_u : FixedArray[UInt32] = [\n")
+  for i, value in values {
+    if i % 10 == 0 { out.write_string("  ") }
+    out.write_string(value + "U,")
+    out.write_string(if i % 10 == 9 || i == values.length() - 1 { "\n" } else { " " })
+  }
+  out.write_string("]\n")
+  let path = "libavcodec/opus_pvq_tables.mbt"
+  if @env.args().contains("--check") {
+    guard @fs.read_file_to_string(path) == out.to_string() else { fail("Opus PVQ table differs from C") }
+    println("Opus PVQ table matches C (1272 entries)")
+  } else { @fs.write_string_to_file(path, out.to_string()) }
+}

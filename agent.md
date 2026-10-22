@@ -513,6 +513,20 @@ $msg | git commit -F -
 - **Opus 两端读同一帧**：熵符号按 MSB-first 向前，CELT raw bits 按低位优先从尾部
   向后读；tell/tell_frac 同时计入二者。回归应交错两种读取并比较完整 range/value/
   total_bits，不能只测符号。self-delimiting 的末帧长度位于长度头末尾、padding 在包尾。
+- **CELT PVQ 查表与数值宽度**：`U(n,k)` 对称，原 C 的行指针含偏移，必须同时校验
+  `U(n,k)` 与 `U(n,k+1)` 的有效列。`V=U+U` 用 UInt64 检查再转 UInt32，不能先经过
+  Int；指数解码的索引可能超过 INT_MAX。`celt_cwrsi` 的末两维是专门路径，符号顺序
+  不能改成普通字典序。零脉冲不读熵；归一化的正脉冲核不能用于折叠/零能量频带。
+  表生成/核对用 `scripts/extract_opus_pvq_tables.mbtx [--check]`；原 C harness 为
+  `scripts/opus_pvq_reference.c`，使用 `-ffp-contract=off`，整数与熵状态精确比较，
+  Float32 频带以绝对误差 1e-6 比较。Float 转换由 `Float::from_int/from_double/from_int64`
+  完成，平方根可直接 `Float::sqrt`，不要假设 Int/Double 有 `to_float()`。
+- **Opus 多流与通道映射是两层**：仅最后一条逻辑流没有 self-delimiting 长度；所有流
+  的 `frame_count * frame_duration` 必须一致，但帧数可以不同。偏移先是流内相对值，
+  访问原容器包时要加流偏移。family 1 的 header map 先按 Vorbis 顺序重排，再解释
+  coupled stream 的左右通道；255 表示静音，重复索引复制先前输出。family 2/255
+  保持原顺序。OpusHead 的输入采样率只是元数据，解码时基始终 48 kHz，pre-skip 同理。
+  MP4 dOps 的增益/pre-skip/rate 是大端，转换后的 OpusHead 为小端，增益按有符号 Q8 解释。
 - **HLS 初始化的密钥属于声明时刻**：MAP 之后发生 KEY 轮换，不能用媒体段的当前密钥
   解密已声明的 MAP；按 key entry 缓存，同 URI 的两次声明也要区分。加密 MAP 必须显式 IV。
   `MediaFetch` 范围回调返回恰好请求的字节；短响应拒绝，Err 后游标不前进，允许重试。

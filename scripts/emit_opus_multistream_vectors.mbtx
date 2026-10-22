@@ -1,0 +1,81 @@
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+  "moonbitlang/core/json",
+  "moonbitlang/core/encoding/base64",
+}
+
+fn field(object : Json, name : String) -> Json raise {
+  guard object is Object(fields) else { fail("expected ffprobe JSON object") }
+  match fields.get(name) { Some(value) => value; None => fail("missing ffprobe field " + name) }
+}
+
+fn text_field(object : Json, name : String) -> String raise {
+  guard field(object, name) is String(value) else { fail("expected string field " + name) }
+  value
+}
+
+fn hex_dump(dump : String) -> Bytes raise {
+  let bytes : Array[Byte] = []
+  for line in dump.split("\n") {
+    if line.length() < 10 { continue }
+    let hex = line[10:line.length().min(49)]
+    let mut nibble = -1
+    for ch in hex {
+      let value = match ch {
+        '0'..='9' => ch.to_int() - '0'
+        'a'..='f' => ch.to_int() - 'a' + 10
+        ' ' => continue
+        _ => fail("bad ffprobe hex dump")
+      }
+      if nibble < 0 { nibble = value } else {
+        bytes.push((nibble * 16 + value).to_byte())
+        nibble = -1
+      }
+    }
+    guard nibble == -1 else { fail("odd ffprobe hex dump") }
+  }
+  Bytes::from_array(bytes[:])
+}
+
+fn append_packet(out : Array[Byte], data : Bytes) -> Unit {
+  let n = data.length()
+  for j in 0..<4 { out.push(((n >> (8 * j)) & 255).to_byte()) }
+  for byte in data { out.push(byte) }
+}
+
+fn main raise {
+  if @env.args().contains("--prepare") {
+    let root = @json.parse(@fs.read_file_to_string(".scratch/opus_51_probe.json"))
+    guard field(root, "streams") is Array([stream, ..]) else { fail("missing stream") }
+    guard field(root, "packets") is Array(packets) else { fail("missing packets") }
+    let out : Array[Byte] = []
+    append_packet(out, hex_dump(text_field(stream, "extradata")))
+    for packet in packets { append_packet(out, hex_dump(text_field(packet, "data"))) }
+    @fs.write_bytes_to_file(".scratch/opus_51_packets.bin", Bytes::from_array(out[:]))
+    println("prepared \{packets.length()} packets for original C parser")
+    return
+  }
+  let out = StringBuilder()
+  out.write_string("///|\n/// FFmpeg 9.0.2 libopus: six sine tones, 5.1, 48 kHz, 0.06 s,\n/// -mapping_family 1 -b:a 256k -vbr off -f webm. Four packets, 640 bytes each.\n/// ffprobe: 48000 Hz / 6 channels / 5.1 / initial_padding 312; 20 ms packets.\n/// Reference header/maps/stream spans from scripts/opus_multistream_reference.c.\n/// Regenerate: scripts/emit_opus_multistream_vectors.mbtx --prepare, run C,\n/// then scripts/emit_opus_multistream_vectors.mbtx without flags.\n/// LGPL-2.1-or-later.\nlet opus_51_webm_b64 : Bytes =\n")
+  let b64 = @base64.encode(@fs.read_file_to_bytes(".scratch/opus_51.webm"))
+  for i = 0; i < b64.length(); i = i + 112 {
+    if i > 0 { out.write_string(" +\n") }
+    out.write_string("  b\"" + b64[i:(i + 112).min(b64.length())].to_owned() + "\"")
+  }
+  out.write_string("\n\n///|\n/// Same packets remuxed with -i opus_51.webm -map 0:a -c copy opus_51.mp4.\nlet opus_51_mp4_b64 : Bytes =\n")
+  let mp4 = @base64.encode(@fs.read_file_to_bytes(".scratch/opus_51.mp4"))
+  for i = 0; i < mp4.length(); i = i + 112 {
+    if i > 0 { out.write_string(" +\n") }
+    out.write_string("  b\"" + mp4[i:(i + 112).min(mp4.length())].to_owned() + "\"")
+  }
+  out.write_string("\n\n///|\nlet opus_51_reference : Array[String] = [\n")
+  let reference = @fs.read_file_to_string(".scratch/opus_51_reference.txt").split("\n")
+    .filter(line => !line.trim().is_empty()).collect()
+  guard reference.length() == 39 else { fail("incomplete multi-stream C reference") }
+  for line in reference {
+    out.write_string("  \"" + line.trim().to_owned() + "\",\n")
+  }
+  out.write_string("]\n")
+  @fs.write_string_to_file("libavformat/opus_multistream_realdata_wbtest.mbt", out.to_string())
+}

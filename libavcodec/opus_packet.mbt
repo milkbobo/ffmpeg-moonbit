@@ -49,7 +49,7 @@ let opus_frame_duration : FixedArray[Int32] = [
 
 ///|
 /// `xiph_lacing_16bit`: one byte, plus `4 * next` when the first is >= 252. */
-fn opus_lacing_16bit(data : Bytes, pos : Ref[Int32]) -> Int32 {
+fn opus_lacing_16bit(data : BytesView, pos : Ref[Int32]) -> Int32 {
   if pos.val >= data.length() {
     return -1
   }
@@ -67,7 +67,7 @@ fn opus_lacing_16bit(data : Bytes, pos : Ref[Int32]) -> Int32 {
 
 ///|
 /// `xiph_lacing_full`: 255-continuation length used for padding. */
-fn opus_lacing_full(data : Bytes, pos : Ref[Int32]) -> Int32 {
+fn opus_lacing_full(data : BytesView, pos : Ref[Int32]) -> Int32 {
   let mut val = 0
   for ;; {
     if pos.val >= data.length() || val > 2147483393 {
@@ -105,6 +105,15 @@ pub fn opus_parse_packet(data : Bytes) -> Result[OpusPacket, String] {
 /// ```
 pub fn opus_parse_packet_with(
   data : Bytes,
+  self_delimiting : Bool,
+) -> Result[OpusPacket, String] {
+  opus_parse_packet_view(data[:], self_delimiting)
+}
+
+///|
+// Shared view parser avoids copying the remaining packet for each substream.
+fn opus_parse_packet_view(
+  data : BytesView,
   self_delimiting : Bool,
 ) -> Result[OpusPacket, String] {
   let len = data.length()

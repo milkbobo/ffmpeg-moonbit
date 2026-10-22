@@ -96,6 +96,9 @@ moonbit/
     ├── bitstream.mbt         # MSB-first 位读取 + Exp-Golomb（get_bits.h/golomb.h）
     ├── av1_tiles.mbt         # AV1 tile group 连续覆盖与压缩 payload 边界提取
     ├── opus_rc.mbt           # Opus SILK/CELT 共享熵解码（448 条 C 状态对拍）
+    ├── opus_head.mbt         # OpusHead 四类通道映射与完整多流包拆分
+    ├── opus_pvq.mbt          # CELT PVQ 脉冲向量、频带归一化/spread/collapse mask
+    ├── opus_pvq_tables.mbt   # 从原 C 提取的 1272 项 PVQ U 表（.mbtx --check）
     ├── vp9_packet_decode.mbt # superframe、隐藏关键帧与八槽 show-existing 输出
     ├── vp9_decode.mbt        # profile-0 关键帧解码入口、概率更新、tile 编排与 YUV 输出
     ├── vp9_block.mbt         # 分区/模式/系数解码，MERGE/SPLAT 非零上下文
@@ -232,9 +235,9 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行（实测 1,595,275 行），本次完成 MoonBit 源文件
-（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **118818 行**（libavutil 6483 行 +
+（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **122221 行**（libavutil 6483 行 +
 libavformat 的 aviobuf 流式 AVIO 层、MP4 解复用、Matroska EBML/Segment/Tracks/Cluster、
-裸 AAC/MP3 分帧、容器码流参数桥与 HLS/DASH 分片回调 33137 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
+裸 AAC/MP3 分帧、容器码流参数桥与 HLS/DASH 分片回调 33319 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
 IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CAVLC 全通 / CABAC 部分
 向量 / MP4 `avcC` 长度前缀入口）**、**H.264 P 帧解码与滑窗 DPB（运动补偿/MV 预测/inter
 宏块层，含 CABAC P 路径的合成码流端到端向量、显式加权预测、参考列表重排与多参考去块）**、
@@ -257,8 +260,8 @@ skip（transform_skip_flag/上下文、仅反量化不做反变换，x265 真实
 scaling list（默认/SPS/PPS 矩阵、逐系数 scale_m 与 DC 缩放，kvazaar 默认矩阵
 I/P/B+WPP 码流逐字节一致）**、**HEVC 单色（chroma_format_idc=0：仅亮度平面，跳过色度帧内模式/
 残差/MC/去块/SAO，8/10-bit I/P/B 真实码流逐字节一致）**
-及 **VP9 profile-0 关键帧解码（五流 12 帧 YUV MD5 一致）**，
-79198 行，含测试）——约占整体 **7.4%**。
+及 **VP9 profile-0 关键帧解码（五流 12 帧 YUV MD5 一致）**、**Opus 共享熵解码、
+CELT PVQ 频带核与 OpusHead 多流映射**，82419 行，含测试）——约占整体 **7.7%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 码流层）
 
@@ -339,7 +342,7 @@ I/P/B+WPP 码流逐字节一致）**、**HEVC 单色（chroma_format_idc=0：仅
 | [aac_spectrum.mbt](libavcodec/aac_spectrum.mbt) | `aacdec_proc_template.c`(`decode_spectrum_and_dequant` 浮点路径)、`aacdec.c`(`decode_scalefactors`/`decode_pulses`)、`aacdec_dsp_template.c`(`dequant_scalefactors`/`apply_tns`、Levinson 展开) | **AAC 频谱解码**：scalefactor 差分、码书 1..11 Huffman + 打包索引/符号位、book 11 escape、PNS 单位能量噪声、intensity 零填充、采样率相关 pulse 位置校验与重建、TNS Levinson + 就地 AR 滤波 | ✅ |
 | [aac_tables.mbt](libavcodec/aac_tables.mbt) | `aactab.c` 全部解码表 + `ff_aac_pow2sf_tab`/`ff_cbrt_tab` 生成算法 | 批量提取表：scalefactor VLC（121 项）、码书 1..11 的 codes/bits、5 张 `codebook_vector_*_idx` 打包索引表、3 张 vals 表、`pow2sf` 428 项 float32、`pow43` 8192 项、swb 偏移表（1024/128 与 960/120 全采样率）与 `tns_max_bands`；提取脚本 `scripts/extract_aac_tables.py`（与 C 源逐值 diff 校验） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **579/579 全绿**。各格式的能力边界见本节末尾的迁移矩阵。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **592/592 全绿**。各格式的能力边界见本节末尾的迁移矩阵。
 
 ### CABAC 的验证范围
 
@@ -772,9 +775,9 @@ Huffman 规范化码另有等效性说明，见下文）：
 | HEVC 整帧解码（I 片） | [hevc_intra_decode.mbt](libavcodec/hevc_intra_decode.mbt)、[hevc_cabac_syntax.mbt](libavcodec/hevc_cabac_syntax.mbt)、[hevc_residual.mbt](libavcodec/hevc_residual.mbt)、[hevc_intra_ref.mbt](libavcodec/hevc_intra_ref.mbt)、[hevc_scan.mbt](libavcodec/hevc_scan.mbt)、[hevc_picture.mbt](libavcodec/hevc_picture.mbt)、[hevc_deblock.mbt](libavcodec/hevc_deblock.mbt)、[hevc_sao.mbt](libavcodec/hevc_sao.mbt) | 打通 I 片主链路与完整环路滤波：CTU/CU 四叉树、split/part_mode、帧内 MPM（含 CTB 边界规则）、变换树与 cbf、cu_qp_delta/qP 预测、残差语法（sign hiding）、反量化、IDCT/DST、参考样本可用性/z-scan/3-tap 与 strong 平滑、4:2:0 重建、TU 边界 bS=2 的去块（亮度 weak/strong、色度）、SAO（merge、band/edge offset、图片边界恢复）。真实 x265 流 32×32、64×48 四 CTU（默认与未滤波）、64×48 SAO+去块（默认解码）、64×64 强平滑、80×64 部分 CTU 的 yuv420p MD5 均与 ffmpeg 逐字节一致；长度前缀 NAL 输入一致；另有 8×8 真实块 IDCT 对 C DSP 的逐值回归。范围：8/10/12-bit 单色/4:2:0/4:2:2/4:4:4 单 I 片（Main10 IDR 已逐字节验证），支持 SPS/PPS scaling list（默认矩阵与显式数据），无 PCM/transform skip/tiles/WPP；`ff_hevc_decode_intra_frame_unfiltered` 返回滤波前像素 |
 | HEVC P/B 帧间预测 | [hevc_refs.mbt](libavcodec/hevc_refs.mbt)、[hevc_mc.mbt](libavcodec/hevc_mc.mbt)、[hevc_inter.mbt](libavcodec/hevc_inter.mbt)、[hevc_inter_decode.mbt](libavcodec/hevc_inter_decode.mbt) | 在 I 片链路上补齐 P/B：MvField/DPB 槽位池、RPS 候选列表与 `ff_hevc_slice_rpl` L0/L1 拼接、`mv_scale`/`check_mvset` 时域 MV 缩放；运动补偿全套（luma 8-tap qpel / chroma 4-tap epel 的 uni/bi 与加权变体、`ff_emulated_edge_mc` 语义的边界复制）；inter 语法（skip/merge/merge_idx/inter_pred_idc/ref_idx/mvd_coding/mvp_lx/part_mode 全模式含 AMP）；merge 候选推导（空间 A1/B1/B0/A0/B2 + 时域 + 组合 BI + 零 MV 填充）、AMVP（`ff_hevc_luma_mv_mvp_mode` 含 `mp_mx`/`mp_mx_lt`/`dist_scale`）；prediction_unit 的 MC 编排（PF_L0/L1/BI 分派 + 加权分支）；inter 去块 bS 推导（`ff_hevc_deblocking_boundary_strengths` + `boundary_strength`）。三条真实 x265 流（gray I+6P、moving I+6P、I/P/B bframes=2）共 21 帧逐帧 YUV MD5 与 FFmpeg 9.0.2 默认解码逐字节一致；slice header 补 POC 全推导/short-term RPS/long-term RPS/collocated/完整 pred_weight_table/alignment_bit_equal_to_one。范围：8/10/12-bit 4:2:0，支持单/多 slice、WPP（单线程语义：entry point 解析、行边界 terminate+reinit、第二 CTB 后状态同步、跨 slice bS/SAO 边界恢复）与 tiles（PPS 尺寸派生、CTB raster↔tile-scan、tile 边界 CABAC 重置、tile 感知邻居/预测可用性、跨 tile bS/SAO 边界；kvazaar 2×2 uniform tiles 已验证，tiles+WPP 暂拒绝）；closed GOP、无 dependent slice/reference-list modification/PCM/scaling list/RDPCM（均有具体错误串的负例）。transform skip 支持 transform-skip significance 上下文（x265 `tskip=1` 真实流中 4×4 亮度/色度 skip 块逐字节一致）。Main10 加权 I/P/B、Main12 32×32 TU、320×240 四 slice、单 slice WPP、2×2 tiles 与 transform skip 流共 27 帧，滤波后与 `-skip_loop_filter all` 未滤波两条路径均与 FFmpeg 9.0.2 逐字节一致；去块 `beta`/`tc` 按 `bit_depth - 8` 缩放并按 CTB 取 slice 偏移。4:4:4（hshift = vshift = 0）复用同一驱动：全尺寸色度平面、逐 PU 色度模式、4×4 色度 TU、色度 QP 截断 51、4:4:4 色度 MC/去块/SAO，8-bit I/P、8-bit 加权 B、10-bit 加权 B 三流共 17 帧同样逐字节一致。4:2:2（hshift = 1, vshift = 0）：半宽全高色度平面、每亮度 TU 两个纵向堆叠色度块、`tab_mode_idx` 重映射、色度 QP 截断 51 与通用 `mv >> (2+shift)` 色度 MC，8-bit I/P、8-bit 加权 B、10-bit 加权 B 三流共 17 帧同样逐字节一致。单色（chroma_format_idc=0）仅分配亮度平面，跳过色度模式/cbf/MC/去块/SAO，8/10-bit I/P/B 两流共 14 帧同样逐字节一致。scaling list 在反量化时按 `sl[log2-2][3*inter+c_idx]` 取系数矩阵、`sl_dc` 取 DC 缩放（transform skip 且 log2>2 时禁用），kvazaar 默认矩阵流（I/P/B+WPP）3 帧逐字节一致 |
 
-测试总数 579/579（`moon test --target wasm`）。仍未完成的重点：HEVC 的 dependent slice、
+测试总数 592/592（`moon test --target wasm`）。仍未完成的重点：HEVC 的 dependent slice、
 tiles+WPP 组合、PCM 与 RDPCM，VP9 帧间解码与 AV1 像素解码、
-Opus SILK/CELT 解码、HLS/DASH 的网络/分片 IO、MJPEG 无损/12-bit/算术编码。
+Opus SILK/完整 CELT 帧与 PCM 合成、HLS/DASH 网络 adapter/live reload、MJPEG 无损/12-bit/算术编码。
 
 ### 2026-10-22 增量：VP9 profile-0 关键帧像素解码
 
@@ -835,7 +838,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 | PNG | 灰度/RGB/RGBA/调色板、1–16-bit、Adam7、APNG | 更多扩展元数据/色彩管理 |
 | AAC | LC，多声道/PCE、CCE、960/1024、短窗/TNS/PNS/pulse | SBR/PS、USAC 与更多真实 CCE/960 向量 |
 | MP3 | Layer I/II/III 定点 PCM | 更多损坏流恢复/边界向量 |
-| Opus | 包边界、多流 self-delimiting、共享熵解码 | SILK/CELT 频谱/合成、PCM、PLC |
+| Opus | OpusHead 四类映射、多流包拆分、共享熵解码、CELT PVQ 频带核 | SILK、CELT 比特分配/递归分带/折叠/立体声、IMDCT/合成、PCM、PLC |
 | MP4 | 普通/碎片化、索引/seek、avcC/hvcC/av1C/vpcC、cenc | 公共统一播放入口及更多扩展 |
 | MKV / WebM | EBML、轨道、Cluster/Block/lacing、Cues | 更多压缩/侧数据与流式特化 |
 | TS | 188/192/204、PAT/PMT、PES、PTS/DTS/PCR | CRC、加扰、33-bit 时间回绕等 |
@@ -846,6 +849,34 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 新增黄金向量与复现方式见 `scripts/emit_*_vectors.mbtx`、
 `scripts/emit_h264_cabac_regression.mbtx`、`scripts/opus_rc_reference.c`、
 `scripts/av1_tiles_reference.c` 及对应 `*_realdata_wbtest.mbt` 文件头。
+
+### 2026-10-22 继续迁移：Opus CELT PVQ 与多声道容器链路
+
+- [opus_pvq.mbt](libavcodec/opus_pvq.mbt) 移植 `opus/pvq.c` 的 `celt_cwrsi`、
+  `celt_decode_pulses`、`celt_alg_unquant`：有符号脉冲向量、平方范数、频带归一化、
+  四种 spread 与 collapse mask。支持原 C 查表域、2..176 维，拒绝越界参数/索引；
+  码本大小用 UInt64 求和，超过 UInt32 时拒绝，不能用有符号 Int 存储大码本。
+  零脉冲向量不消费熵状态；频带归一化要求正脉冲数。
+- 1,272 项 U 表由 `scripts/extract_opus_pvq_tables.mbtx` 从 `opus/tab.c` 提取，
+  `--check` 可逐值核对。`scripts/opus_pvq_reference.c` 直接调用原 C 核，验证
+  **2,000 个码本大小、14,181 个整数向量**；向量整体 MD5 为
+  `b6bac12c1663ec747dbd52166094338e`（LE N/K/index/norm64/pulses32）。
+  同一 forward/raw coder 连续解码的 **416 组频带**覆盖四种 spread、长短块和高脉冲数：
+  collapse mask、range/value/total_bits/tell_frac 完全一致，Float32 系数绝对误差 ≤1e-6。
+- [opus_head.mbt](libavcodec/opus_head.mbt) 移植 OpusHead 版本、pre-skip、
+  有符号 Q8 增益、原输入采样率和 0/1/2/255 四种映射族；包括 Vorbis→原 C 输出顺序、
+  coupled/mono 流定位、重复通道复制与静音通道。`OpusHead::parse_packet` 拆分整个多流包，
+  仅末流使用普通 framing，检查各流总样本数一致，允许帧数不同、padding 与零字节 DTX。
+  使用 BytesView 解析，避免对每条流复制剩余容器包。
+- 真实 libopus **5.1 WebM 与无损重封装 MP4**：各 4 包、每包 640 字节，4 条逻辑流、
+  2 条 coupled stream、pre-skip=312；OpusHead/dOps、6 个输出通道映射及全部 16 条逻辑包
+  的 offset/size/config/stereo/frame spans 与原 `opus/parse.c` 一致。MP4 与 WebM 的
+  原始 packet bytes 逐字节一致。畸形 OpusHead 不再覆盖容器中已有的采样率/声道元数据。
+
+本轮仍未产出 Opus PCM：SILK、CELT 比特分配、递归分带、折叠、立体声耦合、反变换、
+加窗及 PLC 尚待迁移。C harness 仅生成黄金参考，运行时保持纯 MoonBit。
+上述数值回归在默认 Wasm 目标验收；native 补测在运行测试前因本机 MSVC/Windows SDK
+工具链不可用而未能构建，不能据此宣称 native 已通过。
 
 ## 4. 验证方式
 
@@ -946,7 +977,7 @@ mp2 demuxer 探测），期望值取 FFmpeg 解码同一段码流的定点 PCM M
 ```bash
 cd moonbit
 moon check     # 0 error / 0 warning
-moon test      # 579/579 passed
+moon test      # 592/592 passed
 ```
 
 ---
