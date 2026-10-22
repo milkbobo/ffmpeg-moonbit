@@ -38,32 +38,54 @@ fn h264_recon_mb(
     // hl_decode_mb_idct_luma and the chroma path of h264_mb_template.c.
     let ybase = mb_y * 16 * ctx.ystride + mb_x * 16
     let cbase = mb_y * 8 * ctx.cstride + mb_x * 8
+    let info = ctx.infos[mb_y * ctx.mb_width + mb_x]
     if is_i4x4 {
-      for i = 0; i < 16; i = i + 1 {
-        let bx = h264_luma_block_x[i]
-        let by = h264_luma_block_y[i]
-        let g = by * 4 + bx
-        let off = ybase + by * 4 * ctx.ystride + bx * 4
-        let top = by > 0 || mb_y > 0
-        let left = bx > 0 || mb_x > 0
-        let topright = if by == 0 {
-          // Top-row blocks read the top MB's row; only bx == 3 needs the
-          // top-right macroblock. Blocks are reconstructed in 8x8 z-order,
-          // so a same-MB top-right block is causal for bx 0/2 and (1, even y).
-          mb_y > 0 && (bx < 3 || mb_x < ctx.mb_width - 1)
-        } else {
-          bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
-        }
-        match
-          h264_pred4x4(ctx.y, off, ctx.ystride, modes[g], top, left, topright) {
-          Ok(_) => ()
-          Err(e) => return Err(e)
-        }
-        if nz[g] != 0 {
-          if nz[g] == 1 && mb[16 * i] != 0 {
-            h264_idct_dc_add(ctx.y, off, ctx.ystride, mb, 16 * i)
+      if info.transform_8x8 {
+        for i8 = 0; i8 < 4; i8 = i8 + 1 {
+          let bx8 = i8 % 2
+          let by8 = i8 / 2
+          let off = ybase + by8 * 8 * ctx.ystride + bx8 * 8
+          let mode = modes[(by8 * 2) * 4 + bx8 * 2]
+          let top = by8 > 0 || mb_y > 0
+          let left = bx8 > 0 || mb_x > 0
+          let topright = if by8 == 0 {
+            top && (bx8 == 0 || mb_x < ctx.mb_width - 1)
           } else {
-            h264_idct_add(ctx.y, off, ctx.ystride, mb, 16 * i)
+            bx8 == 0
+          }
+          match
+            h264_pred8x8l(ctx.y, off, ctx.ystride, mode, top, left, topright) {
+            Ok(_) => ()
+            Err(e) => return Err(e)
+          }
+          if (cbp & (1 << i8)) != 0 {
+            h264_idct8_add4(ctx.y, off, ctx.ystride, mb, 64 * i8, nz, i8)
+          }
+        }
+      } else {
+        for i = 0; i < 16; i = i + 1 {
+          let bx = h264_luma_block_x[i]
+          let by = h264_luma_block_y[i]
+          let g = by * 4 + bx
+          let off = ybase + by * 4 * ctx.ystride + bx * 4
+          let top = by > 0 || mb_y > 0
+          let left = bx > 0 || mb_x > 0
+          let topright = if by == 0 {
+            mb_y > 0 && (bx < 3 || mb_x < ctx.mb_width - 1)
+          } else {
+            bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
+          }
+          match
+            h264_pred4x4(ctx.y, off, ctx.ystride, modes[g], top, left, topright) {
+            Ok(_) => ()
+            Err(e) => return Err(e)
+          }
+          if nz[g] != 0 {
+            if nz[g] == 1 && mb[16 * i] != 0 {
+              h264_idct_dc_add(ctx.y, off, ctx.ystride, mb, 16 * i)
+            } else {
+              h264_idct_add(ctx.y, off, ctx.ystride, mb, 16 * i)
+            }
           }
         }
       }

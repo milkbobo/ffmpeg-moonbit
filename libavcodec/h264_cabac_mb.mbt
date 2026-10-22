@@ -130,6 +130,43 @@ let h264_cabac_coeff_abs_level_transition : Array[Array[Int32]] = [
 ]
 
 ///|
+/// `significant_coeff_flag_offset_8x8[0][63]` (8x8DCT luma). */
+let h264_cabac_sig8 : FixedArray[Int32] = [
+  0, 1, 2, 3, 4, 5, 5, 4, 4, 3, 3, 4, 4, 4, 5, 5, 4, 4, 4, 4, 3, 3, 6, 7, 7, 7, 8,
+  9, 10, 9, 8, 7, 7, 6, 11, 12, 13, 11, 6, 7, 8, 9, 14, 10, 9, 8, 6, 11, 12, 13, 11,
+  6, 9, 14, 10, 9, 11, 12, 13, 11, 14, 10, 12,
+]
+
+///|
+/// `ff_h264_last_coeff_flag_offset_8x8[63]`: the 8x8 `last_coeff_flag`
+/// contexts are a compressed function of the scan position, not the position
+/// itself. */
+let h264_cabac_last8 : FixedArray[Int32] = [
+  0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+  2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6,
+  6, 6, 7, 7, 7, 7, 8, 8, 8,
+]
+
+///|
+/// `sl->neighbor_transform_size`: number of 8x8DCT neighbours (left + top)
+/// selecting the context of the `transform_size_8x8_flag` bin.
+fn h264_neighbor_transform_size(
+  ctx : H264DecCtx,
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+) -> Int32 {
+  let mut n = 0
+  if mb_x > 0 && ctx.infos[mb_idx - 1].transform_8x8 {
+    n = n + 1
+  }
+  if mb_y > 0 && ctx.infos[mb_idx - ctx.mb_width].transform_8x8 {
+    n = n + 1
+  }
+  n
+}
+
+///|
 /// `get_cabac_cbf_ctx`: coded-block-flag context. `cat` is the C's residual
 /// category (0 luma DC, 1 luma AC in I16x16, 2 luma 4x4, 3 chroma DC,
 /// 4 chroma AC) and `n` the block index in the C's numbering
@@ -456,19 +493,23 @@ fn h264_cabac_residual(
   max_coeff : Int32,
   is_dc : Bool,
 ) -> Result[Int32, String] {
-  let cbf_ctx = h264_cabac_cbf_ctx(ctx, mb_idx, mb_x, mb_y, cat, n, nz)
-  if cabac.get_cabac(states, cbf_ctx) == 0 {
-    // Coded block flag is zero: no coefficients. Keep the neighbour arrays in
-    // sync (`sl->non_zero_count_cache[...] = 0`).
-    if !is_dc {
-      if cat == 1 || cat == 2 {
-        let r = h264_luma_block_grid[n & 15]
-        nz[r] = 0
-      } else {
-        nz[n] = 0
+  let is_8x8 = cat == 5
+  // For 8x8DCT luma the coded-block flag is implied by the luma CBP bit.
+  if !is_8x8 {
+    let cbf_ctx = h264_cabac_cbf_ctx(ctx, mb_idx, mb_x, mb_y, cat, n, nz)
+    if cabac.get_cabac(states, cbf_ctx) == 0 {
+      // Coded block flag is zero: no coefficients. Keep the neighbour arrays
+      // in sync (`sl->non_zero_count_cache[...] = 0`).
+      if !is_dc {
+        if cat == 1 || cat == 2 {
+          let r = h264_luma_block_grid[n & 15]
+          nz[r] = 0
+        } else {
+          nz[n] = 0
+        }
       }
+      return Ok(0)
     }
-    return Ok(0)
   }
   let sig_base = h264_cabac_significant_coeff_offset[cat]
   let last_base = h264_cabac_last_coeff_flag_offset[cat]
@@ -480,10 +521,13 @@ fn h264_cabac_residual(
   let coefs = max_coeff - 1
   let mut last = 0
   while last < coefs {
-    if cabac.get_cabac(states, sig_base + last) != 0 {
+    let sig_ctx = if is_8x8 { 402 + h264_cabac_sig8[last] } else { sig_base + last }
+    if cabac.get_cabac(states, sig_ctx) != 0 {
       index[coeff_count] = last
       coeff_count = coeff_count + 1
-      if cabac.get_cabac(states, last_base + last) != 0 {
+      let last_ctx = last_base +
+        (if is_8x8 { h264_cabac_last8[last] } else { last })
+      if cabac.get_cabac(states, last_ctx) != 0 {
         last = max_coeff
         break
       }
@@ -504,6 +548,16 @@ fn h264_cabac_residual(
     } else {
       ctx.infos[mb_idx].cbp_all = ctx.infos[mb_idx].cbp_all |
         (0x100 << (n - 48))
+    }
+  } else if is_8x8 {
+    // `fill_rectangle(non_zero_count_cache[scan8[n]], 2, 2, 8, count)`.
+    let i8 = n / 4
+    let x0 = (i8 % 2) * 2
+    let y0 = (i8 / 2) * 2
+    for dy = 0; dy < 2; dy = dy + 1 {
+      for dx = 0; dx < 2; dx = dx + 1 {
+        nz[(y0 + dy) * 4 + x0 + dx] = coeff_count
+      }
     }
   } else if cat == 1 || cat == 2 {
     nz[h264_luma_block_grid[n & 15]] = coeff_count
@@ -591,11 +645,32 @@ fn h264_decode_mb_cabac_intra(
   let mut cbp = h264_i_mb_type_cbp[mb_type]
   let mut pred16 = h264_i_mb_type_pred[mb_type]
   if is_i4x4 {
-    for i = 0; i < 16; i = i + 1 {
-      let gx = h264_luma_block_x[i]
-      let gy = h264_luma_block_y[i]
-      let pred = h264_pred_intra_mode(ctx, mb_idx, mb_x, mb_y, gx, gy, modes)
-      modes[gy * 4 + gx] = h264_cabac_intra4x4_pred_mode(cabac, states, pred)
+    let use8x8 = pps.transform_8x8_mode != 0 &&
+      cabac.get_cabac(
+        states,
+        399 + h264_neighbor_transform_size(ctx, mb_idx, mb_x, mb_y),
+      ) !=
+      0
+    if use8x8 {
+      info.transform_8x8 = true
+      for i = 0; i < 16; i = i + 4 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let pred = h264_pred_intra_mode(ctx, mb_idx, mb_x, mb_y, gx, gy, modes)
+        let mode = h264_cabac_intra4x4_pred_mode(cabac, states, pred)
+        for dy = 0; dy < 2; dy = dy + 1 {
+          for dx = 0; dx < 2; dx = dx + 1 {
+            modes[(gy + dy) * 4 + gx + dx] = mode
+          }
+        }
+      }
+    } else {
+      for i = 0; i < 16; i = i + 1 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let pred = h264_pred_intra_mode(ctx, mb_idx, mb_x, mb_y, gx, gy, modes)
+        modes[gy * 4 + gx] = h264_cabac_intra4x4_pred_mode(cabac, states, pred)
+      }
     }
     // `ff_h264_check_intra4x4_pred_mode` remaps DC at unavailable edges, but
     // FFmpeg calls `write_back_intra_pred_mode()` *before* that check, so the
@@ -679,6 +754,7 @@ fn h264_decode_mb_cabac_intra(
       ctx.last_qscale_diff = 0
     }
     qmul_luma = h264_build_dequant4(pps, 0, ctx.qscale)
+    let qmul_luma8 = h264_build_dequant8(pps, 0, ctx.qscale)
     if is_i16x16 {
       luma_dc_nz = match
         h264_cabac_residual(
@@ -721,6 +797,34 @@ fn h264_decode_mb_cabac_intra(
               1,
               Some(qmul_luma),
               15,
+              false,
+            ) {
+            Ok(v) => v
+            Err(e) => return Err(e)
+          }
+          let _ = total
+        }
+      }
+    } else if info.transform_8x8 {
+      for i8x8 = 0; i8x8 < 4; i8x8 = i8x8 + 1 {
+        if (cbp & (1 << i8x8)) != 0 {
+          let total = match
+            h264_cabac_residual(
+              cabac,
+              states,
+              ctx,
+              mb_idx,
+              mb_x,
+              mb_y,
+              mb,
+              64 * i8x8,
+              5,
+              4 * i8x8,
+              nz,
+              h264_zigzag_scan8x8,
+              0,
+              Some(qmul_luma8),
+              64,
               false,
             ) {
             Ok(v) => v

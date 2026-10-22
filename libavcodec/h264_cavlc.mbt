@@ -368,6 +368,61 @@ fn h264_get_chroma_qp(pps : H264Pps, t : Int32, qscale : Int32) -> Int32 {
 }
 
 ///|
+/// `h->zigzag_scan8x8[i] = TRANSPOSE(ff_zigzag_direct[i])`, the 8x8 scan used
+/// by 8x8DCT residual coding (the coefficient blocks are stored transposed). */
+let h264_zigzag_scan8x8 : Array[Int32] = {
+  let direct : Array[Int32] = [
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40,
+    48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29,
+    22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47,
+    55, 62, 63,
+  ]
+  let t : Array[Int32] = []
+  for i = 0; i < 64; i = i + 1 {
+    let x = direct[i]
+    t.push((x >> 3) | ((x & 7) << 3))
+  }
+  t
+}
+
+///|
+/// `ff_h264_dequant8_coeff_init_scan[16]`. */
+let h264_dequant8_init_scan : FixedArray[Int32] = [
+  0, 3, 4, 3, 3, 1, 5, 1, 4, 5, 2, 5, 3, 1, 5, 1,
+]
+
+///|
+/// `ff_h264_dequant8_coeff_init[6][6]`. */
+let h264_dequant8_init : FixedArray[FixedArray[Int32]] = [
+  [20, 18, 32, 19, 25, 24],
+  [22, 19, 35, 21, 28, 26],
+  [26, 23, 42, 24, 33, 31],
+  [28, 25, 45, 26, 35, 33],
+  [32, 28, 51, 30, 40, 38],
+  [36, 32, 58, 34, 46, 43],
+]
+
+///|
+/// `init_dequant8_coeff_table`: 64 8x8 dequantisation factors for one matrix
+/// (`matrix` = 0 intra luma, 3 inter luma).
+fn h264_build_dequant8(
+  pps : H264Pps,
+  matrix : Int32,
+  qp : Int32,
+) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(64, 0)
+  let scaling = pps.scaling_matrix8[matrix]
+  let rem = qp % 6
+  let div = qp / 6
+  for x = 0; x < 64; x = x + 1 {
+    let idx = (x >> 3) | ((x & 7) << 3)
+    let init_idx = h264_dequant8_init_scan[((x >> 1) & 12) | (x & 3)]
+    out[idx] = (h264_dequant8_init[rem][init_idx] * scaling[x]) << div
+  }
+  out
+}
+
+///|
 /// `h->zigzag_scan[i] = TRANSPOSE(ff_zigzag_scan[i])`. */
 let h264_zigzag_scan_t : Array[Int32] = {
   let t : Array[Int32] = []

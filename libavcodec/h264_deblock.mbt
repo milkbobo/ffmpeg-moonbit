@@ -491,6 +491,11 @@ fn h264_filter_mb(
     let vertical = dir == 0
     let ystep = if vertical { ctx.ystride } else { 1 }
     for edge = 0; edge < 4; edge = edge + 1 {
+      // `deblock_edge = !IS_8x8DCT(mb_type & (edge << 24))`: odd internal
+      // edges lie inside an 8x8 transform and are not filtered.
+      if ctx.infos[mb_idx].transform_8x8 && (edge & 1) != 0 {
+        continue
+      }
       let neigh_intra = if edge == 0 {
         if vertical {
           mb_x > 0 && h264_is_intra_type(ctx.infos[mb_idx - 1].mb_type_bits)

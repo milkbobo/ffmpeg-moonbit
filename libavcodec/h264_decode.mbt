@@ -75,6 +75,8 @@ priv struct H264MbInfo {
   ref_idx : Array[Int32]
   /// Motion vector differences per 4x4 raster block (CABAC `mvd_cache`).
   mvd : Array[Int32]
+  /// `MB_TYPE_8x8DCT`: luma uses one 8x8 transform per quadrant.
+  mut transform_8x8 : Bool
 }
 
 ///|
@@ -163,6 +165,8 @@ priv struct H264DecCtx {
   mut mb_skip_run : Int32
   /// `sl->pwt`: explicit weighted prediction for P slices.
   pwt : H264PredWeight
+  /// `sps->direct_8x8_inference_flag` (8x8DCT availability for P_8x8).
+  direct_8x8 : Int32
 }
 
 ///|
@@ -651,9 +655,6 @@ fn h264_decode_slice_ex(
     Some(s) => s
     None => return Err("missing SPS")
   }
-  if pps.transform_8x8_mode != 0 {
-    return Err("8x8 transform is not supported")
-  }
   if sps.chroma_format_idc != 1 {
     return Err("only 4:2:0 is supported")
   }
@@ -689,6 +690,7 @@ fn h264_decode_slice_ex(
       mv: Array::make(32, 0),
       ref_idx: Array::make(16, h264_ref_not_avail),
       mvd: Array::make(32, 0),
+      transform_8x8: false,
     })
   }
   // `ff_h264_build_ref_list`'s missing-reference pass substitutes
@@ -719,6 +721,7 @@ fn h264_decode_slice_ex(
     ref_list0,
     mb_skip_run: -1,
     pwt: sh.pwt,
+    direct_8x8: sps.direct_8x8_inference_flag,
   }
   // Deblocking parameters (`h264_loopfilter.c`, 8-bit so `qp_bd_offset` is 0).
   // `disable_deblocking_filter_idc == 1` disables the filter and `== 2` asks for

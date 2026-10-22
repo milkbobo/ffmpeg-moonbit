@@ -181,6 +181,7 @@ test "h264 mvpred: 16x16 median prediction from neighbours" {
       mv: Array::make(32, 0),
       ref_idx: Array::make(16, h264_ref_not_avail),
       mvd: Array::make(32, 0),
+      transform_8x8: false,
     })
   }
   // MB0 (top-left): mv (8, 4); MB1 (top-right): mv (12, -4);
@@ -213,6 +214,7 @@ test "h264 mvpred: 16x16 median prediction from neighbours" {
     ref_list0: [],
     mb_skip_run: 0,
     pwt: new_h264_pred_weight(),
+    direct_8x8: 1,
   }
   // MB3 = (1, 1): A = MB2 block (3, 0) = (16, 8), B = MB1 block (1, 3) =
   // (12, -4), C: top-right of the partition is outside → top-left MB0
@@ -240,6 +242,7 @@ test "h264 mvpred: P skip zero shortcut" {
       mv: Array::make(32, 0),
       ref_idx: Array::make(16, h264_ref_not_avail),
       mvd: Array::make(32, 0),
+      transform_8x8: false,
     })
   }
   for i = 0; i < 16; i = i + 1 {
@@ -273,6 +276,7 @@ test "h264 mvpred: P skip zero shortcut" {
     ],
     mb_skip_run: 0,
     pwt: new_h264_pred_weight(),
+    direct_8x8: 1,
   }
   let (mx, my) = h264_pred_pskip_motion(ctx, 3, 1, 1)
   assert_eq(mx, 0)

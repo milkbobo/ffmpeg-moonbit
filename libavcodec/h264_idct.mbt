@@ -6,10 +6,9 @@
 /// Original FFmpeg code is LGPL-2.1-or-later, Copyright (c) 2004-2011
 /// Michael Niedermayer <michaelni@gmx.at>. This port keeps the same license.
 ///
-/// Scope: `ff_h264_idct_add`, `ff_h264_idct_dc_add`,
+/// Scope: `ff_h264_idct_add`, `ff_h264_idct8_add`, `ff_h264_idct_dc_add`,
 /// `ff_h264_luma_dc_dequant_idct` and `ff_h264_chroma_dc_dequant_idct`.
-/// The 8x8 variants (`ff_h264_idct8_*`, High-profile transform_8x8_mode) are
-/// not ported; the CAVLC decoder rejects 8x8DCT macroblocks.
+/// The CAVLC decoder still rejects 8x8DCT macroblocks.
 ///
 /// Implementation notes:
 ///   * The C `SUINT` accumulators are modelled with 32-bit `UInt` so the
@@ -94,6 +93,159 @@ fn h264_idct_add(
   }
   for i = 0; i < 16; i = i + 1 {
     block[bo + i] = 0
+  }
+}
+
+///|
+/// `ff_h264_idct8_add`: 8x8 inverse transform (High-profile
+/// `transform_8x8_mode`), add to `dst` and clear the 64 coefficients.
+fn h264_idct8_add(
+  dst : Array[Int32],
+  dst_off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+) -> Unit {
+  block[bo] = h264_i16(block[bo] + 32)
+  for i = 0; i < 8; i = i + 1 {
+    let b = bo + i
+    let a0 = h264_u(block[b]) + h264_u(block[b + 32])
+    let a2 = h264_u(block[b]) - h264_u(block[b + 32])
+    let a4 = h264_u(block[b + 16] >> 1) - h264_u(block[b + 48])
+    let a6 = h264_u(block[b + 48] >> 1) + h264_u(block[b + 16])
+    let b0 = a0 + a6
+    let b2 = a2 + a4
+    let b4 = a2 - a4
+    let b6 = a0 - a6
+    let a1 = h264_s(
+      h264_u(0) - h264_u(block[b + 24]) + h264_u(block[b + 40]) -
+      h264_u(block[b + 56]) - h264_u(block[b + 56] >> 1),
+    )
+    let a3 = h264_s(
+      h264_u(block[b + 8]) + h264_u(block[b + 56]) -
+      h264_u(block[b + 24]) - h264_u(block[b + 24] >> 1),
+    )
+    let a5 = h264_s(
+      h264_u(0) - h264_u(block[b + 8]) + h264_u(block[b + 56]) +
+      h264_u(block[b + 40]) + h264_u(block[b + 40] >> 1),
+    )
+    let a7 = h264_s(
+      h264_u(block[b + 24]) + h264_u(block[b + 40]) +
+      h264_u(block[b + 8]) + h264_u(block[b + 8] >> 1),
+    )
+    let b1 = h264_s(h264_u(a7 >> 2) + h264_u(a1))
+    let b3 = h264_s(h264_u(a3) + h264_u(a5 >> 2))
+    let b5 = h264_s(h264_u(a3 >> 2) - h264_u(a5))
+    let b7 = h264_s(h264_u(a7) - h264_u(a1 >> 2))
+    block[b] = h264_i16u(b0 + h264_u(b7))
+    block[b + 56] = h264_i16u(b0 - h264_u(b7))
+    block[b + 8] = h264_i16u(b2 + h264_u(b5))
+    block[b + 48] = h264_i16u(b2 - h264_u(b5))
+    block[b + 16] = h264_i16u(b4 + h264_u(b3))
+    block[b + 40] = h264_i16u(b4 - h264_u(b3))
+    block[b + 24] = h264_i16u(b6 + h264_u(b1))
+    block[b + 32] = h264_i16u(b6 - h264_u(b1))
+  }
+  for i = 0; i < 8; i = i + 1 {
+    let b = bo + i * 8
+    let a0 = h264_u(block[b]) + h264_u(block[b + 4])
+    let a2 = h264_u(block[b]) - h264_u(block[b + 4])
+    let a4 = h264_u(block[b + 2] >> 1) - h264_u(block[b + 6])
+    let a6 = h264_u(block[b + 6] >> 1) + h264_u(block[b + 2])
+    let b0 = a0 + a6
+    let b2 = a2 + a4
+    let b4 = a2 - a4
+    let b6 = a0 - a6
+    let a1 = h264_s(
+      h264_u(0) - h264_u(block[b + 3]) + h264_u(block[b + 5]) -
+      h264_u(block[b + 7]) - h264_u(block[b + 7] >> 1),
+    )
+    let a3 = h264_s(
+      h264_u(block[b + 1]) + h264_u(block[b + 7]) -
+      h264_u(block[b + 3]) - h264_u(block[b + 3] >> 1),
+    )
+    let a5 = h264_s(
+      h264_u(0) - h264_u(block[b + 1]) + h264_u(block[b + 7]) +
+      h264_u(block[b + 5]) + h264_u(block[b + 5] >> 1),
+    )
+    let a7 = h264_s(
+      h264_u(block[b + 3]) + h264_u(block[b + 5]) +
+      h264_u(block[b + 1]) + h264_u(block[b + 1] >> 1),
+    )
+    let b1 = h264_s(h264_u(a7 >> 2) + h264_u(a1))
+    let b3 = h264_s(h264_u(a3) + h264_u(a5 >> 2))
+    let b5 = h264_s(h264_u(a3 >> 2) - h264_u(a5))
+    let b7 = h264_s(h264_u(a7) - h264_u(a1 >> 2))
+    let p = dst_off + i
+    dst[p] = h264_clip8(dst[p] + (h264_s(b0 + h264_u(b7)) >> 6))
+    dst[p + stride] = h264_clip8(
+      dst[p + stride] + (h264_s(b2 + h264_u(b5)) >> 6),
+    )
+    dst[p + 2 * stride] = h264_clip8(
+      dst[p + 2 * stride] + (h264_s(b4 + h264_u(b3)) >> 6),
+    )
+    dst[p + 3 * stride] = h264_clip8(
+      dst[p + 3 * stride] + (h264_s(b6 + h264_u(b1)) >> 6),
+    )
+    dst[p + 4 * stride] = h264_clip8(
+      dst[p + 4 * stride] + (h264_s(b6 - h264_u(b1)) >> 6),
+    )
+    dst[p + 5 * stride] = h264_clip8(
+      dst[p + 5 * stride] + (h264_s(b4 - h264_u(b3)) >> 6),
+    )
+    dst[p + 6 * stride] = h264_clip8(
+      dst[p + 6 * stride] + (h264_s(b2 - h264_u(b5)) >> 6),
+    )
+    dst[p + 7 * stride] = h264_clip8(
+      dst[p + 7 * stride] + (h264_s(b0 - h264_u(b7)) >> 6),
+    )
+  }
+  for i = 0; i < 64; i = i + 1 {
+    block[bo + i] = 0
+  }
+}
+
+///|
+/// `ff_h264_idct8_dc_add`: 8x8 block with only the DC coefficient. Its
+/// rounding (`+32` then `>>6`) differs from the full transform, so
+/// `ff_h264_idct8_add4`'s shortcut has to be ported explicitly. */
+fn h264_idct8_dc_add(
+  dst : Array[Int32],
+  dst_off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+) -> Unit {
+  let dc = (block[bo] + 32) >> 6
+  block[bo] = 0
+  for j = 0; j < 8; j = j + 1 {
+    for i = 0; i < 8; i = i + 1 {
+      let p = dst_off + j * stride + i
+      dst[p] = h264_clip8(dst[p] + dc)
+    }
+  }
+}
+
+///|
+/// `ff_h264_idct8_add4` for one 8x8 quadrant: dispatch on the quadrant's
+/// non-zero count (`nz` uses this port's raster 4x4 grid; the quadrant's
+/// top-left block holds the count written by the 8x8 residual decode).
+fn h264_idct8_add4(
+  dst : Array[Int32],
+  dst_off : Int32,
+  stride : Int32,
+  block : Array[Int32],
+  bo : Int32,
+  nz : Array[Int32],
+  i8x8 : Int32,
+) -> Unit {
+  let nnz = nz[(i8x8 / 2) * 8 + (i8x8 % 2) * 2]
+  if nnz == 0 {
+    ()
+  } else if nnz == 1 && block[bo] != 0 {
+    h264_idct8_dc_add(dst, dst_off, stride, block, bo)
+  } else {
+    h264_idct8_add(dst, dst_off, stride, block, bo)
   }
 }
 
