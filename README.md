@@ -368,7 +368,7 @@ CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，88961 行，含测�
 | [aac_spectrum.mbt](libavcodec/aac_spectrum.mbt) | `aacdec_proc_template.c`(`decode_spectrum_and_dequant` 浮点路径)、`aacdec.c`(`decode_scalefactors`/`decode_pulses`)、`aacdec_dsp_template.c`(`dequant_scalefactors`/`apply_tns`、Levinson 展开) | **AAC 频谱解码**：scalefactor 差分、码书 1..11 Huffman + 打包索引/符号位、book 11 escape、PNS 单位能量噪声、intensity 零填充、采样率相关 pulse 位置校验与重建、TNS Levinson + 就地 AR 滤波 | ✅ |
 | [aac_tables.mbt](libavcodec/aac_tables.mbt) | `aactab.c` 全部解码表 + `ff_aac_pow2sf_tab`/`ff_cbrt_tab` 生成算法 | 批量提取表：scalefactor VLC（121 项）、码书 1..11 的 codes/bits、5 张 `codebook_vector_*_idx` 打包索引表、3 张 vals 表、`pow2sf` 428 项 float32、`pow43` 8192 项、swb 偏移表（1024/128 与 960/120 全采样率）与 `tns_max_bands`；提取脚本 `scripts/extract_aac_tables.py`（与 C 源逐值 diff 校验） | ✅ |
 
-**当前状态**：`moon check` 0 error / 0 warning，`moon test` **684/684 全绿**。各格式的能力边界见本节末尾的迁移矩阵。
+**当前状态**：`moon check` 0 error / 0 warning，`moon test` **685/685 全绿**。各格式的能力边界见本节末尾的迁移矩阵。
 
 ### CABAC 的验证范围
 
@@ -1045,7 +1045,7 @@ C harness 仅生成黄金参考，运行时保持纯 MoonBit。
 4:2:2/4:4:4 真实流（CAVLC/CABAC × 8/10 bit）共 **42 帧**，均含默认滤波与
 `-skip_loop_filter all` 两套 framemd5，与 FFmpeg 9.0.2 逐字节一致；生成命令在
 `scripts/emit_h264_b_vectors.mbtx`、`scripts/emit_h264_chroma_vectors.mbtx` 与文件头。
-全量 Wasm **684/684**；`moon check` 零错误/零警告。
+全量 Wasm **685/685**；`moon check` 零错误/零警告。
 
 ## 4. 验证方式
 
