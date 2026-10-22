@@ -10,7 +10,8 @@
 ///
 /// Scope: 8-bit 4:2:0 keyframes (`profile 0`), single- or multi-tile, with
 /// segmentation and the lossless WHT path.  Inter frames / intra-only frames
-/// are rejected (`vp9: inter frame not supported`); probability adaptation
+/// are rejected (`vp9: inter frame not supported`); keyframe reference refresh,
+/// hidden frames and show-existing display are supported. Probability adaptation
 /// (`ff_vp9_adapt_probs`) belongs to the inter-frame slice.  Planes are
 /// allocated with 64px padding around the frame so that block overhangs and
 /// the 16-wide loop filter stay in bounds (the C relies on AVFrame padding
@@ -104,6 +105,9 @@ pub struct Vp9Decoder {
   mut b_col : Int32
   mut tx_mode : Int32
   mut frame_ready : Bool
+  // Packed display snapshots; inter prediction remains outside this slice.
+  references : FixedArray[(Int32, Int32, Bytes)?]
+  mut display_bytes : Bytes?
 }
 
 ///|
@@ -188,6 +192,8 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     b_col: 0,
     tx_mode: 0,
     frame_ready: false,
+    references: FixedArray::make(8, None),
+    display_bytes: None,
   }
 }
 
@@ -494,27 +500,38 @@ fn vp9_set_tile_offset(idx : Int32, log2_n : Int32, n : Int32) -> (Int32, Int32)
 }
 
 ///|
-/// Decode one frame (8 bpp keyframes).  Returns an error for inter /
-/// intra-only / show-existing frames, which the next slices cover. */
+/// Decode one profile-0 keyframe or display an existing reference slot.
+/// Inter and intra-only coded frames remain unsupported.
 pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit, String] {
   let header = match vp9_parse_frame_header(data) {
     Ok(h) => h
     Err(e) => return Err(e)
   }
+  if header.profile != 0 {
+    return Err("vp9: only profile 0 (8-bit 4:2:0) is supported")
+  }
   if header.show_existing_frame {
-    return Err("vp9: show_existing_frame not supported")
+    guard self.references[header.frame_to_show] is Some((width, height, bytes)) else {
+      return Err("vp9: show_existing_frame references an empty slot")
+    }
+    self.width = width
+    self.height = height
+    self.display_bytes = Some(bytes)
+    self.frame_ready = true
+    header.width = width
+    header.height = height
+    self.header = header
+    return Ok(())
   }
   if !header.keyframe {
     return Err("vp9: inter frame not supported")
-  }
-  if header.profile != 0 {
-    return Err("vp9: only profile 0 (8-bit 4:2:0) is supported")
   }
   let pkt = match vp9_parse_packet(data) {
     Ok(p) => p
     Err(e) => return Err(e)
   }
   let h = pkt.header
+  self.display_bytes = None
   self.header = h
   self.update_size(h.width, h.height, if h.chroma_subsampling_x {
     1
@@ -629,6 +646,12 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
     tile_idx += h.tile_cols
   }
   self.frame_ready = h.show_frame
+  let snapshot = self.frame_bytes()
+  for i in 0..<8 {
+    if (h.refresh_frame_flags & (1 << i)) != 0 {
+      self.references[i] = Some((self.width, self.height, snapshot))
+    }
+  }
   Ok(())
 }
 
@@ -636,6 +659,7 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
 /// Pack the current frame as contiguous yuv420p bytes (width×height luma,
 /// then chroma planes), for MD5 comparison against the reference decoder. */
 pub fn Vp9Decoder::frame_bytes(self : Vp9Decoder) -> Bytes {
+  if self.display_bytes is Some(bytes) { return bytes }
   let w = self.width
   let h = self.height
   let cw = (w + 1) >> 1

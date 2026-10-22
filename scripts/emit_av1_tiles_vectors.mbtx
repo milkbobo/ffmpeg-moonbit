@@ -1,0 +1,34 @@
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/encoding/base64",
+  "moonbitlang/core/string",
+}
+fn main raise {
+  let ivf = @fs.read_file_to_bytes(".scratch/av1_tiles4.ivf")
+  let length = ivf[32].to_int() | (ivf[33].to_int() << 8) |
+    (ivf[34].to_int() << 16) | (ivf[35].to_int() << 24)
+  let encoded = @base64.encode(ivf[44:44 + length])
+  let out = StringBuilder()
+  out.write_string("///|\n/// FFmpeg 9.0.2 libaom-av1: testsrc2=size=256x128:rate=1, one frame,\n/// -cpu-used 8 -tiles 2x2 -crf 30 -g 1 -f ivf av1_tiles4.ivf.\n/// trace_headers: frame payload header 104 bits; tile group starts at byte 13,\n/// group flag/alignment add one byte. Golden tile offsets/sizes/MD5s come\n/// from scripts/av1_tiles_reference.c (args: input.ivf 14 4 2).\n/// Regenerate: moon run scripts/emit_av1_tiles_vectors.mbtx\n/// LGPL-2.1-or-later.\nlet av1_tiles4_obu_b64 : Bytes =\n")
+  for i = 0; i < encoded.length(); i = i + 112 {
+    if i > 0 { out.write_string(" +\n") }
+    out.write_string("  b\"" + encoded[i:(i + 112).min(encoded.length())].to_owned() + "\"")
+  }
+  out.write_string("\n\n///|\nlet av1_tiles4_reference : Array[(Int32, Int32, String)] = [\n")
+  let mut count = 0
+  for line in @fs.read_file_to_string(".scratch/av1_tiles4_reference.txt").split("\n") {
+    if !line.trim().is_empty() {
+      let fields = line.trim().split(" ").collect()
+      guard fields.length() == 4 && fields[3].length() == 32 else { fail("bad C reference") }
+      let index = @string.parse_int(fields[0])
+      guard index == count else { fail("noncontiguous reference tile index") }
+      let offset = @string.parse_int(fields[1])
+      let size = @string.parse_int(fields[2])
+      out.write_string("  (\{offset}, \{size}, \"\{fields[3]}\"),\n")
+      count += 1
+    }
+  }
+  guard count == 4 else { fail("expected four C reference tiles") }
+  out.write_string("]\n")
+  @fs.write_string_to_file("libavcodec/av1_tiles_realdata_wbtest.mbt", out.to_string())
+}

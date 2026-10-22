@@ -1,0 +1,49 @@
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/encoding/base64",
+}
+
+fn emit_md5(out : StringBuilder, name : String, suffix : String) -> Unit raise {
+  out.write_string("///|\nlet " + name + suffix + " : Array[String] = [\n")
+  for line in @fs.read_file_to_string(".scratch/" + name + suffix + ".md5").split("\n") {
+    if !line.trim().is_empty() && !line.has_prefix("#") {
+      let fields = line.split(",").collect()
+      out.write_string("  \"" + fields[fields.length() - 1].trim().to_owned() + "\",\n")
+    }
+  }
+  out.write_string("]\n\n")
+}
+
+fn main raise {
+  let out = StringBuilder()
+  let header =
+    #|///|
+    #|/// Real libx264 CABAC regression streams, FFmpeg 9.0.2 reference YUV MD5.
+    #|/// Source: testsrc2 16x48/32x48/64x48, 1 fps, one IDR each; smptebars
+    #|/// 64x16, 1 fps, I+3P; testsrc2 96x64, 5 fps, I+5P.
+    #|/// All: profile main, yuv420p, cabac=1:bframes=0:8x8dct=0:slices=1:ref=1.
+    #|/// IDR-only: keyint=1:scenecut=0. Inter: keyint=999:min-keyint=999:
+    #|/// scenecut=0:weightp=0:fast-pskip=0. Output is Annex B H.264.
+    #|/// References: ffmpeg [-skip_loop_filter all] -i in.264 -f framemd5 out.md5
+    #|/// Emit after generation: moon run scripts/emit_h264_cabac_regression.mbtx
+    #|/// LGPL-2.1-or-later.
+    #|
+  out.write_string(header)
+  for name in ["cabac_dense", "cabac_dense32", "cabac_dense64", "cabac_inter64", "cabac_moving96"] {
+    let b64 = @base64.encode(@fs.read_file_to_bytes(".scratch/" + name + ".264"))
+    out.write_string("///|\nlet " + name + "_b64 : Bytes =\n")
+    for start = 0; start < b64.length(); start = start + 112 {
+      if start > 0 { out.write_string(" +\n") }
+      out.write_string("  b\"" + b64[start:(start + 112).min(b64.length())].to_owned() + "\"")
+    }
+    out.write_string("\n\n")
+    emit_md5(out, name, "")
+    emit_md5(out, name, "_unf")
+    out.write_string("///|\ntest \"h264 CABAC regression: " + name + " filtered and unfiltered YUV\" {\n")
+    out.write_string("  let data = @libavutil.av_base64_decode(" + name + "_b64, 65536).unwrap()\n")
+    out.write_string("  for skip in [false, true] {\n    let frames = h264_decode_annexb_frames(data, skip).unwrap()\n")
+    out.write_string("    let expected = if skip { " + name + "_unf } else { " + name + " }\n")
+    out.write_string("    assert_eq(frames.length(), expected.length())\n    for i in 0..<frames.length() { assert_eq(h264_yuv_md5(frames[i]), expected[i]) }\n  }\n}\n\n")
+  }
+  @fs.write_string_to_file("libavcodec/h264_cabac_regression_wbtest.mbt", out.to_string())
+}

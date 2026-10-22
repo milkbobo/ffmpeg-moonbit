@@ -8,12 +8,13 @@
 ///
 /// Scope: parsing of already-downloaded M3U8 text — master variants, media
 /// renditions, I-frame streams, segment URIs/durations/byte ranges, keys, maps,
-/// discontinuities, gaps and program date-time. Fetching playlists/segments
-/// stays at the platform boundary, as does AES-128 decryption.
+/// discontinuities, gaps and program date-time. segment_io.mbt fetches
+/// initialization/key/media resources through a caller-provided callback and
+/// hls_crypto.mbt decrypts AES-128 segments; network IO stays with the caller.
 ///
 /// Out of scope: EXT-X-START, EXT-X-SESSION-KEY/DATA, EXT-X-SKIP delta
 /// updates (tags are accepted and ignored), LL-HLS partial segments, and
-/// parsing the segment payload itself.
+/// parsing the segment payload itself (use the existing TS/MP4 demuxers).
 
 ///|
 /// A byte range on a segment/map (`EXT-X-BYTERANGE`); `offset` is -1 when the
@@ -57,6 +58,8 @@ pub struct HlsKey {
 pub struct HlsMap {
   uri : String
   byterange : HlsByteRange?
+  /// Key in effect when the initialization section was declared.
+  key_index : Int32
 }
 
 ///|
@@ -427,7 +430,7 @@ pub fn av_hls_parse(
       } else {
         playlist.keys.push({
           method_: key_method,
-          uri: hls_attr(attrs, "URI", ""),
+          uri: hls_resolve_uri(base_uri, hls_attr(attrs, "URI", "")),
           iv: hls_attr(attrs, "IV", ""),
           key_format: hls_attr(attrs, "KEYFORMAT", "identity"),
           key_format_versions: hls_attr(attrs, "KEYFORMATVERSIONS", "1"),
@@ -438,7 +441,8 @@ pub fn av_hls_parse(
       let attrs = hls_parse_attributes(line[11:])
       let br = hls_attr(attrs, "BYTERANGE", "")
       playlist.maps.push({
-        uri: hls_attr(attrs, "URI", ""),
+        uri: hls_resolve_uri(base_uri, hls_attr(attrs, "URI", "")),
+        key_index: current_key,
         byterange: if br == "" {
           None
         } else {

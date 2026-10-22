@@ -295,7 +295,7 @@ test "av1: multi-tile layout and tile group header" {
   assert_eq(tg.num_tiles, 2)
   assert_eq(tg.tile_start, 0)
   assert_eq(tg.tile_end, 1)
-  assert_eq(tg.data_offset, 12)
+  assert_eq(tg.data_offset, 14) // aligned header + first 2-byte size prefix
   assert_eq(tg.tile_sizes.length(), 2)
   let mut sum = 0
   for sz in tg.tile_sizes {

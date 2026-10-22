@@ -10,8 +10,8 @@
 /// Michael Niedermayer <michaelni@gmx.at>. This port keeps the same license.
 ///
 /// Scope: 8-bit 4:2:0 progressive I slices, single slice per picture, one
-/// reference frame list. Explicitly rejected (Err, never a panic): I_PCM in a
-/// CABAC slice, 8x8DCT, field/MBAFF coding, 4:2:2/4:4:4 and high bit depth.
+/// reference frame list. I/P paths and 8x8DCT are supported. Explicitly
+/// rejected: I_PCM in a CABAC slice, field/MBAFF, 4:2:2/4:4:4 and high bit depth.
 ///
 /// Neighbour bookkeeping: the C keeps `left_type`/`top_type`/`left_cbp`/
 /// `top_cbp` in `H264SliceContext` plus an `non_zero_count_cache` with a

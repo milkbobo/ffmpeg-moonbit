@@ -1,0 +1,12 @@
+import { "moonbitlang/x/fs" }
+
+fn main raise {
+  let lines = @fs.read_file_to_string(".scratch/opus_rc_reference.txt").split("\n")
+    .filter(x => !x.trim().is_empty()).map(x => x.trim().to_owned()).collect()
+  guard lines.length() == 448 else { fail("expected 32 x 14 reference states") }
+  let out = StringBuilder()
+  out.write_string("///|\n/// Generated from original FFmpeg opus/rc.c by scripts/opus_rc_reference.c.\n/// Each row: result, range, value, total_bits, tell, tell_frac.\n/// Regenerate: moon run scripts/emit_opus_rc_vectors.mbtx\n/// LGPL-2.1-or-later.\nlet opus_rc_reference_states : Array[String] = [\n")
+  for line in lines { out.write_string("  \"" + line + "\",\n") }
+  out.write_string("]\n")
+  @fs.write_string_to_file("libavcodec/opus_rc_realdata_wbtest.mbt", out.to_string())
+}

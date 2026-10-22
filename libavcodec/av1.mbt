@@ -57,6 +57,7 @@ fn av1_leb128(data : BytesView, pos : Ref[Int32]) -> Int32 {
     }
     let b = data[pos.val].to_int()
     pos.val = pos.val + 1
+    if shift == 28 && (b & 0xf8) != 0 { return -1 }
     value = value | ((b & 0x7F).reinterpret_as_uint() << shift)
     if (b & 0x80) == 0 {
       break
@@ -1083,6 +1084,10 @@ pub struct Av1TileGroup {
   data_offset : Int32
   /// Tile sizes in bytes (last tile size is implicit).
   tile_sizes : Array[Int32]
+  /// Absolute offset of this OBU payload inside the input buffer.
+  payload_offset : Int32
+  /// Each tile's byte offset within the OBU payload (size prefixes excluded).
+  tile_offsets : Array[Int32]
   /// Bytes of tile payload following the header.
   data_size : Int32
 }
@@ -1093,19 +1098,33 @@ pub fn av1_parse_tile_group(
   data : Bytes,
   fh : Av1FrameHeader,
 ) -> Result[Av1TileGroup, String] {
+  if fh.show_existing_frame || fh.tile_cols < 1 || fh.tile_cols > 64 ||
+    fh.tile_rows < 1 || fh.tile_rows > 64 || fh.tile_cols_log2 < 0 ||
+    fh.tile_cols_log2 > 6 || fh.tile_rows_log2 < 0 || fh.tile_rows_log2 > 6 ||
+    fh.tile_size_bytes_minus1 < 0 || fh.tile_size_bytes_minus1 > 3 {
+    return Err("av1: invalid tile layout")
+  }
+  if fh.tile_cols_log2 != av1_tile_log2(1, fh.tile_cols) ||
+    fh.tile_rows_log2 != av1_tile_log2(1, fh.tile_rows) {
+    return Err("av1: invalid tile layout")
+  }
   let mut pos = 0
   while pos < data.length() {
     let header = data[pos].to_int()
+    if (header & 0x80) != 0 { return Err("av1: OBU forbidden bit set") }
+    if (header & 1) != 0 { return Err("av1: OBU reserved bit set") }
     let obu_type = (header >> 3) & 0x0F
     let extension = (header & 0x04) != 0
     let has_size = (header & 0x02) != 0
+    if extension && pos + 1 >= data.length() { return Err("av1: truncated OBU extension") }
+    if extension && (data[pos + 1].to_int() & 7) != 0 { return Err("av1: OBU extension reserved bits set") }
     let p_ref = Ref(pos + 1 + (if extension { 1 } else { 0 }))
     if !has_size {
       return Err("av1: OBU without size")
     }
     let size = av1_leb128(data, p_ref)
     let p = p_ref.val
-    if size < 0 || p + size > data.length() {
+    if size < 0 || size > data.length() - p {
       return Err("av1: bad OBU size")
     }
     if obu_type == 4 || obu_type == 6 {
@@ -1113,7 +1132,7 @@ pub fn av1_parse_tile_group(
       let br = BitReader::with_size(payload, size * 8)
       if obu_type == 6 {
         let skip = fh.header_bits
-        if skip > size * 8 {
+        if skip < 0 || skip > size * 8 {
           return Err("av1: frame header overruns OBU")
         }
         br.skip(skip)
@@ -1122,8 +1141,10 @@ pub fn av1_parse_tile_group(
       let mut start = 0
       let mut end = num_tiles - 1
       if num_tiles > 1 {
+        if br.bits_left() < 1 { return Err("av1: truncated tile group header") }
         if br.read(1) != 0 {
           let bits = fh.tile_cols_log2 + fh.tile_rows_log2
+          if br.bits_left() < 2 * bits { return Err("av1: truncated tile group header") }
           start = br.read(bits).reinterpret_as_int()
           end = br.read(bits).reinterpret_as_int()
           if start > end || end >= num_tiles {
@@ -1132,34 +1153,38 @@ pub fn av1_parse_tile_group(
         }
       }
       let aligned = (br.count() + 7) / 8 * 8
-      let data_offset = aligned / 8
+      while br.count() < aligned {
+        if br.read(1) != 0 { return Err("av1: nonzero tile group alignment bit") }
+      }
       let sizes : Array[Int32] = []
+      let offsets : Array[Int32] = []
       let total = payload.length()
       let count = end - start + 1
-      if count > 1 && fh.tile_size_bytes_minus1 >= 0 {
-        let size_bytes = fh.tile_size_bytes_minus1 + 1
-        let mut pbyte = data_offset
-        for _ in 0..<(count - 1) {
+      let size_bytes = fh.tile_size_bytes_minus1 + 1
+      let mut pbyte = aligned / 8
+      for tile in 0..<count {
+        if tile < count - 1 {
           if pbyte + size_bytes > total {
             return Err("av1: truncated tile size")
           }
-          let mut v = 0
+          let mut v = 0U
           for b in 0..<size_bytes {
-            v = v | (payload[pbyte + b].to_int() << (8 * b))
+            v = v | (payload[pbyte + b].to_uint() << (8 * b))
           }
           pbyte = pbyte + size_bytes
-          sizes.push(v + 1)
+          if v >= (total - pbyte).reinterpret_as_uint() {
+            return Err("av1: tile sizes exceed OBU")
+          }
+          offsets.push(pbyte)
+          sizes.push(v.reinterpret_as_int() + 1)
+          // Size fields are interleaved with each tile's compressed data.
+          pbyte += v.reinterpret_as_int() + 1
+        } else {
+          offsets.push(pbyte)
+          sizes.push(total - pbyte)
         }
-        let mut used = 0
-        for sz in sizes {
-          used = used + sz
-        }
-        let last = total - pbyte - used
-        if last < 0 {
-          return Err("av1: tile sizes exceed OBU")
-        }
-        sizes.push(last)
       }
+      let data_offset = offsets[0]
       return Ok({
         tile_start: start,
         tile_end: end,
@@ -1167,6 +1192,8 @@ pub fn av1_parse_tile_group(
         header_bits: aligned,
         data_offset,
         tile_sizes: sizes,
+        tile_offsets: offsets,
+        payload_offset: p,
         data_size: if sizes.length() > 0 {
           let mut dsum = 0
           for sz in sizes {

@@ -45,8 +45,8 @@
   由脚本批量提取，规范见 §9）、`h264_cabac_mb.mbt`（I 宏块的 CABAC
   解析：mb_type/chroma 预模式/CBP/dqp/残差）、`h264_mb.mbt`（CAVLC 与 CABAC 共用的宏块
   重建）、`h264_decode_avc_frames`（MP4 `avcC` + 长度前缀样本入口）。
-  **算术核心已用 FFmpeg 自己的 `tests/cabac.c` 逐比特验证；宏块层只在「单行」与「平坦
-  多行」向量上 byte-exact，多行 + 稠密残差会失步**（见 README §3「CABAC 的已知偏差」）。
+  **算术核心已用 FFmpeg 自己的 `tests/cabac.c` 逐比特验证；稠密多行 I 与运动 I/P
+  的 13 帧新增回归，在滤波/未滤波两套 MD5 下均 byte-exact**（见 README §3）。
 - **libavcodec（P 帧 + DPB，2026-10 新增）**：`h264_mc.mbt`（luma 6 抽头 qpel +
   chroma 1/8 双线性 MC，边界复制；**块基准位置必须显式传**，见 §7）、`h264_mvpred.mbt`
   （A/B/C 邻块、`mid_pred`、P_SKIP 捷径）、`h264_inter.mbt`（P 宏块层：skip/type 四种
@@ -100,7 +100,7 @@ NASM（`*.asm`）是 x86 汇编，**无法**编译进本模块的 `wasm` 目标�
 | 项 | 值 |
 |---|---|
 | 工作目录 | `d:\project\FFmpeg-n9.0.2`（FFmpeg 源码根，**不是** git 仓库） |
-| git 仓库 | `d:\project\FFmpeg-n9.0.2\moonbit`（分支 `master`，**未配置远端**） |
+| git 仓库 | `d:\project\FFmpeg-n9.0.2\moonbit`（分支 `master`，origin 为 `git@github.com:milkbobo/ffmpeg-moonbit.git`） |
 | 忽略项 | `_build/`（`.gitignore` 已含；勿提交） |
 | 模块名 | `ffmpeg/moonbit`，`preferred_target = "wasm"` |
 | 包 | `ffmpeg/moonbit/libavutil`、`ffmpeg/moonbit/libavformat`、`ffmpeg/moonbit/libavcodec`（后两者依赖 libavutil；libavcodec 的 libavutil 依赖仅白盒测试用） |
@@ -502,6 +502,22 @@ $msg | git commit -F -
 - **VP9 负例使用 MSB-first 帧头**：show-existing 的最短 profile-0 包为 `0x88`；
   inter 负例复用真实 P 包，解码器在依赖参考尺寸或消费压缩头之前拒绝。五流验收为
   3+3+2+2+2 = **12 帧**，生成脚本和参考 MD5 见 `vp9_kf_realdata_wbtest.mbt`。
+
+- **H.264 P_SKIP 的缺邻规则独立于普通 MV 中值预测**：左邻或上邻为
+  `REF_NOT_AVAIL` 时直接取零 MV；不能只处理「ref 0 且 MV=0」的捷径。真实 HLS/DASH
+  4 帧流在第 4 帧左边界首次暴露此错误，TS/fMP4/DASH 三条端到端 MD5 都会抓住。
+- **AV1 tile size 与数据交错**：读一个 little-endian `tile_size_minus_1` 后先跳过
+  此 tile，再读下一长度；末 tile 吃剩余字节。用 UInt32 解析四字节长度，先与剩余
+  字节比较再加 1，避免 `0xffffffff + 1` 回绕。`data_offset` 指向真实首 tile payload，
+  不包含首个长度字段。四 tile 的 offset/size/MD5 用 `av1_tiles_reference.c` 独立生成。
+- **Opus 两端读同一帧**：熵符号按 MSB-first 向前，CELT raw bits 按低位优先从尾部
+  向后读；tell/tell_frac 同时计入二者。回归应交错两种读取并比较完整 range/value/
+  total_bits，不能只测符号。self-delimiting 的末帧长度位于长度头末尾、padding 在包尾。
+- **HLS 初始化的密钥属于声明时刻**：MAP 之后发生 KEY 轮换，不能用媒体段的当前密钥
+  解密已声明的 MAP；按 key entry 缓存，同 URI 的两次声明也要区分。加密 MAP 必须显式 IV。
+  `MediaFetch` 范围回调返回恰好请求的字节；短响应拒绝，Err 后游标不前进，允许重试。
+- **DASH SegmentList 保留原 startNumber**：枚举使用单独 number/time 游标，不改表示层
+  的 start_number。初始化和媒体字节范围均为闭区间，传给 IO 前换算为 offset/length。
 
 ---
 

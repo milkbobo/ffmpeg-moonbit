@@ -11,11 +11,9 @@
 /// contexts), and 2/3 rows of flat I16x16 content (top-neighbour contexts,
 /// luma DC coded-block flags).
 ///
-/// KNOWN GAP (see README "CABAC 的已知偏差"): streams that combine a top
-/// neighbour with dense residual/I4x4 content (for example testsrc2 at 64x48)
-/// still desynchronise from the third row on. The vectors below are the
-/// combinations that are byte-exact today; they are kept as regression pins so
-/// any change to the context derivation is caught immediately.
+/// Dense multi-row I and coded-inter P coverage now lives in
+/// h264_cabac_regression_wbtest.mbt. These original vectors retain the small
+/// left/top-neighbour regression cases.
 
 ///|
 /// `ts_16x16.h264`: testsrc2 16x16, 1 macroblock.

@@ -89,13 +89,13 @@ test "vp9 kf: inter frame is rejected with a specific error" {
 }
 
 ///|
-test "vp9 kf: show_existing_frame is rejected with a specific error" {
+test "vp9: show_existing_frame requires a populated reference slot" {
   let dec = vp9_decoder_new()
   // marker 10, profile 0, show_existing=1, frame_to_show=0
   let data : Bytes = b"\x88"
   match dec.decode_frame(data) {
     Ok(_) => fail("show_existing must be rejected")
-    Err(e) => inspect(e, content="vp9: show_existing_frame not supported")
+    Err(e) => inspect(e, content="vp9: show_existing_frame references an empty slot")
   }
 }
 

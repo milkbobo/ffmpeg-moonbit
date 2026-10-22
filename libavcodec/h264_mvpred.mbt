@@ -245,13 +245,14 @@ fn h264_pred_pskip_motion(
   mb_x : Int32,
   mb_y : Int32,
 ) -> (Int32, Int32) {
-  // zeromv shortcuts: left / top neighbour inter with ref 0 and zero MV.
+  // Missing left/top neighbours force zero, independently of the other
+  // neighbour. Otherwise ref 0 with a zero MV gives the same early out.
   let (lref, lmvx, lmvy) = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, -1, 0)
-  if lref == 0 && lmvx == 0 && lmvy == 0 {
+  if lref == h264_ref_not_avail || (lref == 0 && lmvx == 0 && lmvy == 0) {
     return (0, 0)
   }
   let (tref, tmvx, tmvy) = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, 0, -1)
-  if tref == 0 && tmvx == 0 && tmvy == 0 {
+  if tref == h264_ref_not_avail || (tref == 0 && tmvx == 0 && tmvy == 0) {
     return (0, 0)
   }
   // Reference 0 must exist for a meaningful prediction.

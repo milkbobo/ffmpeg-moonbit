@@ -12,8 +12,8 @@
 /// `r="-1"`), and duration-driven segment enumeration. The C's HTTP layer and
 /// lazy per-representation download contexts stay at the platform boundary.
 ///
-/// Out of scope: SegmentList/SegmentBase byte-range playback (the indexRange
-/// and single-file URLs are parsed), xlink remote elements, UTCTiming clock
+/// SegmentList initialization/media ranges are consumed by segment_io.mbt.
+/// Out of scope: SegmentBase index-range playback, xlink remote elements, UTCTiming clock
 /// synchronisation, multi-period overlap checks, and DRM (`ContentProtection`).
 
 ///|
@@ -23,6 +23,8 @@ pub struct DashSegment {
   time : Int64
   duration : Int64
   uri : String
+  /// SegmentList@mediaRange (inclusive start-end); empty for whole resources.
+  media_range : String
 }
 
 ///|
@@ -43,6 +45,7 @@ pub struct DashRepresentation {
   timescale : Int64
   start_number : Int64
   initialization : String
+  initialization_range : String
   media_template : String
   /// SegmentTemplate@media absent: a single-file Representation.
   index_range : String
@@ -260,29 +263,17 @@ fn dash_join_base(base : String, node : XmlNode) -> String {
 }
 
 ///|
-fn dash_find_template(rep : XmlNode) -> XmlNode? {
-  match rep.child("SegmentTemplate") {
-    Some(t) => Some(t)
-    None => None
-  }
-}
-
-///|
-/// Walk Period → AdaptationSet → Representation for a SegmentTemplate child,
-/// returning the nearest one. */
-fn dash_template_node(
+/// Resolve the nearest segment-addressing element through DASH inheritance.
+fn dash_segment_node(
   period : XmlNode,
   adapt : XmlNode,
   rep : XmlNode,
+  name : String,
 ) -> XmlNode? {
-  match dash_find_template(rep) {
-    Some(t) => Some(t)
-    None =>
-      match dash_find_template(adapt) {
-        Some(t) => Some(t)
-        None => dash_find_template(period)
-      }
+  for node in [rep, adapt, period] {
+    if node.child(name) is Some(child) { return Some(child) }
   }
+  None
 }
 
 ///|
@@ -349,6 +340,7 @@ fn dash_segments_from_timeline(
         time: seg_time,
         duration: d,
         uri: hls_resolve_uri(base, uri),
+        media_range: "",
       })
       number = number + 1L
     }
@@ -409,8 +401,9 @@ fn dash_parse_representation(
   let mut initialization = ""
   let mut media_template = ""
   let mut index_range = ""
+  let mut initialization_range = ""
   let mut segments : Array[DashSegment] = []
-  match dash_template_node(period, adapt, rep) {
+  match dash_segment_node(period, adapt, rep, "SegmentTemplate") {
     Some(tmpl) => {
       timescale = match tmpl.attr("timescale") {
         Some(v) => @string.parse_int64(v) catch { _ => 1L }
@@ -455,6 +448,7 @@ fn dash_parse_representation(
                   time,
                   duration: seg_duration,
                   uri: hls_resolve_uri(rep_base, uri),
+                  media_range: "",
                 })
               }
             }
@@ -464,12 +458,19 @@ fn dash_parse_representation(
     }
     None => {
       // SegmentBase / SegmentList style: expose the BaseURL as a single URI.
-      match rep.child("SegmentBase") {
+      match dash_segment_node(period, adapt, rep, "SegmentBase") {
         Some(sb) => index_range = sb.attr_or("indexRange", "")
         None => ()
       }
-      match rep.child("SegmentList") {
+      match dash_segment_node(period, adapt, rep, "SegmentList") {
         Some(sl) => {
+          timescale = @string.parse_int64(sl.attr_or("timescale", "1")) catch { _ => 1L }
+          if timescale < 1L { timescale = 1L }
+          start_number = @string.parse_int64(sl.attr_or("startNumber", "1")) catch { _ => 1L }
+          initialization_range = match sl.child("Initialization") {
+            Some(init) => init.attr_or("range", "")
+            None => ""
+          }
           initialization = match sl.child("Initialization") {
             Some(init) =>
               hls_resolve_uri(rep_base, init.attr_or("sourceURL", ""))
@@ -479,14 +480,18 @@ fn dash_parse_representation(
             Some(v) => @string.parse_int64(v) catch { _ => 0L }
             None => 0L
           }
+          let mut number = start_number
+          let mut time = 0L
           for su in sl.children_named("SegmentURL") {
             segments.push({
-              number: start_number,
-              time: 0L,
+              number,
+              time,
               duration: dur,
               uri: hls_resolve_uri(rep_base, su.attr_or("media", "")),
+              media_range: su.attr_or("mediaRange", ""),
             })
-            start_number = start_number + 1L
+            number += 1L
+            time += dur
           }
         }
         None => ()
@@ -498,6 +503,7 @@ fn dash_parse_representation(
           time: 0L,
           duration: dash_time_scale(period_duration, 1L),
           uri: rep_base,
+          media_range: "",
         })
       }
     }
@@ -517,6 +523,7 @@ fn dash_parse_representation(
     timescale,
     start_number,
     initialization,
+    initialization_range,
     media_template,
     index_range,
     segments,
