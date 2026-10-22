@@ -9,7 +9,7 @@ fn main raise {
     "h264_mbaff_i_cabac_frame", "h264_mbaff_p_cavlc", "h264_mbaff_p_cabac",
     "h264_mbaff_basic", "h264_mbaff_p10", "h264_mbaff_frame_cavlc",
     "h264_mbaff_b_cavlc", "h264_mbaff_b_cabac",
-    "h264_mbaff_422", "h264_mbaff_444", "h264_mbaff_b_temporal", "h264_mbaff_slices",
+    "h264_mbaff_422", "h264_mbaff_444", "h264_mbaff_b_temporal", "h264_mbaff_slices", "h264_mbaff_b_refs", "h264_mbaff_cqm", "h264_mbaff_444_10", "h264_mbaff_b_linear", "h264_mbaff_b_pyr", "h264_mbaff_b_linear_cavlc", "h264_mbaff_b_ref2", "h264_mbaff_b_linear_none", "h264_mbaff_b_linear_temporal",
   ]
   for name in names {
     let b64 = @base64.encode(@fs.read_file_to_bytes(".scratch/" + name + ".264"))
