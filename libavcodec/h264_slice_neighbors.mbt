@@ -12,6 +12,20 @@ fn h264_has_left(ctx : H264DecCtx, index : Int32) -> Bool {
 }
 
 ///|
+/// Corrected top neighbour (`fill_decode_neighbors`): for a field-coded MB in
+/// an even pair row, a frame-coded neighbour MB one pair up is addressed at
+/// the pair's bottom MB (`top_xy += mb_stride`).
+fn h264_top_corrected(ctx : H264DecCtx, index : Int32, dx : Int32) -> Int32 {
+  let base = index - h264_mb_top_offset(ctx) + dx
+  if ctx.mb_aff && ctx.mb_field && ((index / ctx.mb_width) & 1) == 0 &&
+    base >= 0 && base < ctx.infos.length() && !ctx.infos[base].field_mb {
+    base + ctx.mb_width
+  } else {
+    base
+  }
+}
+
+///|
 /// Top macroblock distance: two MB rows for a field-coded MB, one otherwise
 /// (`mb_stride << MB_FIELD` in `fill_decode_neighbors`).
 fn h264_mb_top_offset(ctx : H264DecCtx) -> Int32 {
@@ -20,13 +34,23 @@ fn h264_mb_top_offset(ctx : H264DecCtx) -> Int32 {
 
 ///|
 fn h264_top_index(ctx : H264DecCtx, index : Int32) -> Int32 {
-  index - h264_mb_top_offset(ctx)
+  h264_top_corrected(ctx, index, 0)
+}
+
+///|
+fn h264_topleft_index(ctx : H264DecCtx, index : Int32) -> Int32 {
+  h264_top_corrected(ctx, index, -1)
+}
+
+///|
+fn h264_topright_index(ctx : H264DecCtx, index : Int32) -> Int32 {
+  h264_top_corrected(ctx, index, 1)
 }
 
 ///|
 fn h264_has_top(ctx : H264DecCtx, index : Int32) -> Bool {
-  index >= h264_mb_top_offset(ctx) &&
-  h264_same_slice(ctx, h264_top_index(ctx, index))
+  let top = h264_top_index(ctx, index)
+  top >= 0 && top < ctx.infos.length() && h264_same_slice(ctx, top)
 }
 
 ///|
@@ -70,13 +94,15 @@ fn h264_intra_left(ctx : H264DecCtx, index : Int32) -> Bool {
 
 ///|
 fn h264_intra_top(ctx : H264DecCtx, index : Int32) -> Bool {
-  index >= h264_mb_top_offset(ctx) && h264_intra_available(ctx, h264_top_index(ctx, index))
+  let top = h264_top_index(ctx, index)
+  top >= 0 && top < ctx.infos.length() && h264_intra_available(ctx, top)
 }
 
 ///|
 fn h264_intra_topleft(ctx : H264DecCtx, index : Int32, gx : Int32, gy : Int32) -> Bool {
   if gx > 0 { return gy > 0 || h264_intra_top(ctx, index) }
   if gy > 0 { return h264_intra_left(ctx, index) }
-  index % ctx.mb_width > 0 && index >= h264_mb_top_offset(ctx) &&
-    h264_intra_available(ctx, h264_top_index(ctx, index) - 1)
+  let top_left = h264_topleft_index(ctx, index)
+  index % ctx.mb_width > 0 && top_left >= 0 && top_left < ctx.infos.length() &&
+    h264_intra_available(ctx, top_left)
 }

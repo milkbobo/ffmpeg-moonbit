@@ -7,19 +7,22 @@ let h264_mb_type_direct : Int32 = 1 << 8
 fn h264_b_direct_neighbor(ctx : H264DecCtx, index : Int32, mx : Int32, my : Int32, x : Int32, y : Int32) -> Bool {
   let ax = mx * 4 + x
   let ay = my * 4 + y
-  if ax < 0 ||
-    ay < 0 ||
-    (ctx.mb_field && y < 0 && my < 2) ||
-    ax >= ctx.mb_width * 4 ||
-    ay >= ctx.infos.length() / ctx.mb_width * 4 {
+  if ax < 0 || ax >= ctx.mb_width * 4 || (y >= 0 && ay >= ctx.infos.length() / ctx.mb_width * 4) {
     return false
   }
-  let mb = if ctx.mb_field && y < 0 {
-    (my - 2) * ctx.mb_width + ax / 4
-  } else if ctx.mb_field {
-    my * ctx.mb_width + ax / 4
+  let mb = if y < 0 {
+    if x < 0 {
+      h264_topleft_index(ctx, index)
+    } else if x >= 4 {
+      h264_topright_index(ctx, index)
+    } else {
+      h264_top_index(ctx, index)
+    }
   } else {
-    ay / 4 * ctx.mb_width + ax / 4
+    my * ctx.mb_width + ax / 4
+  }
+  if mb < 0 || mb >= ctx.infos.length() {
+    return false
   }
   (mb == index || h264_same_slice(ctx, mb)) && ctx.infos[mb].direct[ay % 4 * 4 + ax % 4]
 }

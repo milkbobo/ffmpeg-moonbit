@@ -7,10 +7,10 @@
 ///
 /// Scope: 8..14-bit 4:0:0/4:2:0/4:2:2/4:4:4 frame-coded I/P/B pictures,
 /// CAVLC/CABAC, 4x4/8x8, I_PCM, slice-local prediction, weighted prediction,
-/// High 4:4:4 lossless transform bypass and MBAFF frame pictures (all-field
-/// or all-frame pairs). The persistent reference/POC/MMCO state lives in
-/// h264_dpb.mbt. SP/SI reconstruction, field pictures (PAFF) and mixed
-/// field/frame MBAFF pairs remain unfinished.
+/// High 4:4:4 lossless transform bypass and MBAFF frame pictures (including
+/// mixed field/frame MB pairs). The persistent reference/POC/MMCO state lives
+/// in h264_dpb.mbt. SP/SI reconstruction and field pictures (PAFF) remain
+/// unfinished.
 
 ///|
 /// FFmpeg luma 4x4 block order (8x8-grouped) to 4x4 raster grid x. */
@@ -1085,15 +1085,6 @@ fn h264_decode_picture_ex(
     }
   }
   for info in infos { if info.mb_type_bits == 0 { return Err("incomplete H.264 picture") } }
-  // Mixed field/frame MB pairs need FFmpeg's sample-availability borders and
-  // MBAFF deblock pair kernels, which this port does not model yet.
-  if mb_aff {
-    let any_field = infos.any(fn(info) { info.field_mb })
-    let any_frame = infos.any(fn(info) { !info.field_mb })
-    if any_field && any_frame {
-      return Err("mixed field/frame macroblocks are not supported")
-    }
-  }
   // Deblocking runs *after* the whole picture is reconstructed, in macroblock
   // raster order, exactly reproducing FFmpeg's observable behaviour:
   //

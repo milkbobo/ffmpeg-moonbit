@@ -50,7 +50,7 @@ fn h264_recon_full_plane(
         let top = by8 > 0 || h264_intra_top(ctx, mb_idx)
         let left = bx8 > 0 || h264_intra_left(ctx, mb_idx)
         let topright = if by8 == 0 {
-          top && (bx8 == 0 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_top_index(ctx, mb_idx) + 1)))
+          top && (bx8 == 0 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))))
         } else {
           bx8 == 0
         }
@@ -85,7 +85,7 @@ fn h264_recon_full_plane(
         let top = by > 0 || h264_intra_top(ctx, mb_idx)
         let left = bx > 0 || h264_intra_left(ctx, mb_idx)
         let topright = if by == 0 {
-          h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_top_index(ctx, mb_idx) + 1)))
+          h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))))
         } else {
           bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
         }
@@ -259,7 +259,7 @@ fn h264_recon_mb(
           // Top-row blocks read the top MB's row; only bx == 3 needs the
           // top-right macroblock. Blocks are reconstructed in 8x8 z-order,
           // so a same-MB top-right block is causal for bx 0/2 and (1, even y).
-          h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_top_index(ctx, mb_idx) + 1)))
+          h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))))
         } else {
           bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
         }
@@ -286,7 +286,7 @@ fn h264_recon_mb(
           let top = by > 0 || h264_intra_top(ctx, mb_idx)
           let left = bx > 0 || h264_intra_left(ctx, mb_idx)
           let topright = if by == 0 {
-            h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_top_index(ctx, mb_idx) + 1)))
+            h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))))
           } else {
             bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
           }

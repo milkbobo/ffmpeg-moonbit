@@ -68,7 +68,7 @@ fn h264_is_intra_type(mb_type_bits : Int32) -> Bool {
 /// Fetch the neighbour 4x4 block at (`bx`, `by`) in macroblock-relative 4x4
 /// units. `by == -1` reads the macroblock row above (bottom row of those
 /// macroblocks), `bx == -1` the macroblock to the left, `bx == 4` the
-/// macroblock to the upper right. Returns `(ref, mvx, mvy)` with the
+/// macroblock to the upper right. Returns `(refv, mvx, mvy)` with the
 /// reference semantics above; the motion vector of a non-inter neighbour is 0.
 fn h264_mv_fetch(
   ctx : H264DecCtx,
@@ -80,19 +80,22 @@ fn h264_mv_fetch(
 ) -> (Int32, Int32, Int32) {
   let ax = mb_x * 4 + bx
   let ay = mb_y * 4 + by
-  if ax < 0 ||
-    (ctx.mb_field && by < 0 && mb_y < 2) ||
-    ay < 0 ||
-    ax >= ctx.mb_width * 4 ||
-    ay >= ctx.infos.length() / ctx.mb_width * 4 {
+  if ax < 0 || ax >= ctx.mb_width * 4 || (by >= 0 && ay >= ctx.infos.length() / ctx.mb_width * 4) {
     return (h264_ref_not_avail, 0, 0)
   }
-  let nmb = if ctx.mb_field && by < 0 {
-    (mb_y - 2) * ctx.mb_width + ax / 4
-  } else if ctx.mb_field {
-    mb_y * ctx.mb_width + ax / 4
+  let nmb = if by < 0 {
+    if bx < 0 {
+      h264_topleft_index(ctx, mb_idx)
+    } else if bx >= 4 {
+      h264_topright_index(ctx, mb_idx)
+    } else {
+      h264_top_index(ctx, mb_idx)
+    }
   } else {
-    ay / 4 * ctx.mb_width + ax / 4
+    mb_y * ctx.mb_width + ax / 4
+  }
+  if nmb < 0 || nmb >= ctx.infos.length() {
+    return (h264_ref_not_avail, 0, 0)
   }
   let info = ctx.infos[nmb]
   // An undecoded macroblock counts as unavailable (`sl->top_type == 0`).
@@ -105,7 +108,18 @@ fn h264_mv_fetch(
   let idx = ay % 4 * 4 + ax % 4
   let refs = if ctx.active_list == 0 { info.ref_idx } else { info.ref_idx1 }
   let mv = if ctx.active_list == 0 { info.mv } else { info.mv1 }
-  (refs[idx], mv[2 * idx], mv[2 * idx + 1])
+  let mut refv = refs[idx]
+  let mvx = mv[2 * idx]
+  let mut mvy = mv[2 * idx + 1]
+  // `MAP_F2F`: field/frame neighbours use different reference numbering and
+  // vertical motion units.
+  if ctx.mb_aff && info.field_mb != ctx.mb_field {
+    if refv >= 0 {
+      refv = if ctx.mb_field { refv * 2 } else { refv / 2 }
+    }
+    mvy = if ctx.mb_field { mvy / 2 } else { mvy * 2 }
+  }
+  (refv, mvx, mvy)
 }
 
 ///|
@@ -285,19 +299,22 @@ fn h264_mvd_fetch(
 ) -> (Int32, Int32) {
   let ax = mb_x * 4 + bx
   let ay = mb_y * 4 + by
-  if ax < 0 ||
-    (ctx.mb_field && by < 0 && mb_y < 2) ||
-    ay < 0 ||
-    ax >= ctx.mb_width * 4 ||
-    ay >= ctx.infos.length() / ctx.mb_width * 4 {
+  if ax < 0 || ax >= ctx.mb_width * 4 || (by >= 0 && ay >= ctx.infos.length() / ctx.mb_width * 4) {
     return (0, 0)
   }
-  let nmb = if ctx.mb_field && by < 0 {
-    (mb_y - 2) * ctx.mb_width + ax / 4
-  } else if ctx.mb_field {
-    mb_y * ctx.mb_width + ax / 4
+  let nmb = if by < 0 {
+    if bx < 0 {
+      h264_topleft_index(ctx, mb_idx)
+    } else if bx >= 4 {
+      h264_topright_index(ctx, mb_idx)
+    } else {
+      h264_top_index(ctx, mb_idx)
+    }
   } else {
-    ay / 4 * ctx.mb_width + ax / 4
+    mb_y * ctx.mb_width + ax / 4
+  }
+  if nmb < 0 || nmb >= ctx.infos.length() {
+    return (0, 0)
   }
   let info = ctx.infos[nmb]
   if nmb != mb_idx && !h264_same_slice(ctx, nmb) {
@@ -308,5 +325,9 @@ fn h264_mvd_fetch(
   }
   let idx = ay % 4 * 4 + ax % 4
   let mvd = if ctx.active_list == 0 { info.mvd } else { info.mvd1 }
-  (mvd[2 * idx], mvd[2 * idx + 1])
+  let mut mvdy = mvd[2 * idx + 1]
+  if ctx.mb_aff && info.field_mb != ctx.mb_field {
+    mvdy = if ctx.mb_field { mvdy >> 1 } else { mvdy << 1 }
+  }
+  (mvd[2 * idx], mvdy)
 }

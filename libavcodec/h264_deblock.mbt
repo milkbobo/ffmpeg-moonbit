@@ -16,8 +16,9 @@
 ///     identity (frame MBs `4*id+3`, field MBs `4*id+{1,2}`);
 ///   * chroma edges reuse the four luma bS values, each controlling two
 ///     chroma samples (`tc0_table[..][bS[i]] + 1`);
-///   * MBAFF field MBs use doubled strides and field reference views; mixed
-///     field/frame MB pairs are rejected before filtering;
+///   * MBAFF field MBs use doubled strides and field reference views;
+///     mixed field/frame MB pairs use the corrected top/topleft/topright
+///     neighbour indices and `ref2frm` field ids;
 ///   * 8x8DCT skips the internal odd luma edges (`4:2:2` still filters the
 ///     corresponding chroma), matching `mb_type & (edge << 24)`. The port's
 ///     `H264MbInfo.transform_8x8` carries that bit;
