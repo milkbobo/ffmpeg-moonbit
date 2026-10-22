@@ -552,6 +552,13 @@ $msg | git commit -F -
   `ff_celt_quant_bands`。黄金脚本为 `opus_celt_spectrum_reference.c`，同前用
   `-ffp-contract=off`。新流的 ffprobe 转换可用
   `emit_opus_multistream_vectors.mbtx --prepare --stem=NAME`，不会改动运行时依赖。
+- **CELT 合成的 half-IMDCT 约定**：N 个输入系数返回 N 个半逆样本，AVTX scale 为
+  -1/32768；transient 输入按 block 交错，输出按 block 连续。写入 buf+1024+60，
+  再用原 C 的 120 项窗 overlap/add。后滤波必须先跑 old→current 的首 120 点过渡，
+  再提交 current←new；长帧继续跑第二次过渡和稳态区。最后 memmove 1084 个 Float，
+  去加重从新 buf[1024-frame_size] 读。不能在静音帧直接清空重叠或滤波历史。
+  transition 中 C 的 `(1.0-w)` 使累加链提升到 Double，另三项先算 Float；移植需保留。
+  `opus_celt_pcm_reference.c` 使用原始 AVTX/DSP 的完整解码入口生成期望值。
 - **HLS 初始化的密钥属于声明时刻**：MAP 之后发生 KEY 轮换，不能用媒体段的当前密钥
   解密已声明的 MAP；按 key entry 缓存，同 URI 的两次声明也要区分。加密 MAP 必须显式 IV。
   `MediaFetch` 范围回调返回恰好请求的字节；短响应拒绝，Err 后游标不前进，允许重试。
