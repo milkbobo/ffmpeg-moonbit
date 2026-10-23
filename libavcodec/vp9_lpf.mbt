@@ -217,9 +217,9 @@ fn Vp9Decoder::filter_plane_cols(
           let mut i = self.lim_lut[lq]
           if (mask[hm1row] & x) != 0 {
             if (mask[hm2row] & x) != 0 {
-              vp9_loop_filter_16(0, dst, p, ls, e, i, hh)
+              vp9_loop_filter_16(0, dst, p, ls, e, i, hh, self.bpp, self.pixel_max)
             } else {
-              vp9_lf8(2, 0, dst, p, ls, e, i, hh)
+              vp9_lf8(2, 0, dst, p, ls, e, i, hh, self.bpp, self.pixel_max)
             }
           } else if (hm2 & x) != 0 {
             lq = self.lf_level[l + (8 << ss_v)]
@@ -244,13 +244,15 @@ fn Vp9Decoder::filter_plane_cols(
               e,
               i,
               hh,
+              self.bpp,
+              self.pixel_max,
             )
           } else {
             vp9_lf8(if (mask[hm1row + 1] & x) != 0 {
               1
             } else {
               0
-            }, 0, dst, p, ls, e, i, hh)
+            }, 0, dst, p, ls, e, i, hh, self.bpp, self.pixel_max)
           }
         } else if (hm2 & x) != 0 {
           let lq = self.lf_level[l + (8 << ss_v)]
@@ -261,7 +263,7 @@ fn Vp9Decoder::filter_plane_cols(
             1
           } else {
             0
-          }, 0, dst, p + 8 * ls, ls, e, i, hh)
+          }, 0, dst, p + 8 * ls, ls, e, i, hh, self.bpp, self.pixel_max)
         }
       }
       if ss_h != 0 {
@@ -279,16 +281,16 @@ fn Vp9Decoder::filter_plane_cols(
             hh = hh | ((lq >> 4) << 8)
             e = e | (self.mblim_lut[lq] << 8)
             i = i | (self.lim_lut[lq] << 8)
-            vp9_loop_filter_mix2(0, 0, 0, dst, p + 4, ls, e, i, hh)
+            vp9_loop_filter_mix2(0, 0, 0, dst, p + 4, ls, e, i, hh, self.bpp, self.pixel_max)
           } else {
-            vp9_lf8(0, 0, dst, p + 4, ls, e, i, hh)
+            vp9_lf8(0, 0, dst, p + 4, ls, e, i, hh, self.bpp, self.pixel_max)
           }
         } else if (hm23 & x) != 0 {
           let lq = self.lf_level[l + (8 << ss_v)]
           let hh = lq >> 4
           let e = self.mblim_lut[lq]
           let i = self.lim_lut[lq]
-          vp9_lf8(0, 0, dst, p + 8 * ls + 4, ls, e, i, hh)
+          vp9_lf8(0, 0, dst, p + 8 * ls + 4, ls, e, i, hh, self.bpp, self.pixel_max)
         }
         l += 1
       }
@@ -337,9 +339,9 @@ fn Vp9Decoder::filter_plane_rows(
           let mut i = self.lim_lut[lq]
           if (mask[vmask] & x) != 0 {
             if (mask[vmask] & (x << (1 + ss_h))) != 0 {
-              vp9_loop_filter_16(1, dst, p, ls, e, i, hh)
+              vp9_loop_filter_16(1, dst, p, ls, e, i, hh, self.bpp, self.pixel_max)
             } else {
-              vp9_lf8(2, 1, dst, p, ls, e, i, hh)
+              vp9_lf8(2, 1, dst, p, ls, e, i, hh, self.bpp, self.pixel_max)
             }
           } else if (vm & (x << (1 + ss_h))) != 0 {
             lq = self.lf_level[l + 1 + ss_h]
@@ -364,13 +366,15 @@ fn Vp9Decoder::filter_plane_rows(
               e,
               i,
               hh,
+              self.bpp,
+              self.pixel_max,
             )
           } else {
             vp9_lf8(if (mask[vmask + 1] & x) != 0 {
               1
             } else {
               0
-            }, 1, dst, p, ls, e, i, hh)
+            }, 1, dst, p, ls, e, i, hh, self.bpp, self.pixel_max)
           }
         } else if (vm & (x << (1 + ss_h))) != 0 {
           let lq = self.lf_level[l + 1 + ss_h]
@@ -381,7 +385,7 @@ fn Vp9Decoder::filter_plane_rows(
             1
           } else {
             0
-          }, 1, dst, p + 8, ls, e, i, hh)
+          }, 1, dst, p + 8, ls, e, i, hh, self.bpp, self.pixel_max)
         }
       }
       if ss_v == 0 {
@@ -395,16 +399,16 @@ fn Vp9Decoder::filter_plane_rows(
             hh = hh | ((lq >> 4) << 8)
             e = e | (self.mblim_lut[lq] << 8)
             i = i | (self.lim_lut[lq] << 8)
-            vp9_loop_filter_mix2(1, 0, 0, dst, p + ls * 4, ls, e, i, hh)
+            vp9_loop_filter_mix2(1, 0, 0, dst, p + ls * 4, ls, e, i, hh, self.bpp, self.pixel_max)
           } else {
-            vp9_lf8(0, 1, dst, p + ls * 4, ls, e, i, hh)
+            vp9_lf8(0, 1, dst, p + ls * 4, ls, e, i, hh, self.bpp, self.pixel_max)
           }
         } else if (vm3 & (x << (1 + ss_h))) != 0 {
           let lq = self.lf_level[l + 1 + ss_h]
           let hh = lq >> 4
           let e = self.mblim_lut[lq]
           let i = self.lim_lut[lq]
-          vp9_lf8(0, 1, dst, p + ls * 4 + 8, ls, e, i, hh)
+          vp9_lf8(0, 1, dst, p + ls * 4 + 8, ls, e, i, hh, self.bpp, self.pixel_max)
         }
       }
       x = x << xstep
@@ -455,11 +459,11 @@ fn Vp9Decoder::sb_row_of(self : Vp9Decoder, lflvl_idx : Int32) -> Int32 {
 
 ///|
 /// `dsp->loop_filter_8[sel][dir]`: wd = 4 << sel. */
-fn vp9_lf8(sel : Int32, dir : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, e : Int32, i : Int32, h : Int32) -> Unit {
+fn vp9_lf8(sel : Int32, dir : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, e : Int32, i : Int32, h : Int32, bpp : Int32, pixel_max : Int32) -> Unit {
   let wd = 4 << sel
   if dir == 0 {
-    vp9_loop_filter_h(p, off, stride, e, i, h, wd)
+    vp9_loop_filter_h(p, off, stride, e, i, h, wd, bpp, pixel_max)
   } else {
-    vp9_loop_filter_v(p, off, stride, e, i, h, wd)
+    vp9_loop_filter_v(p, off, stride, e, i, h, wd, bpp, pixel_max)
   }
 }

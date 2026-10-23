@@ -8,11 +8,15 @@
 /// Ronald S. Bultje <rsbultje gmail com> and Clément Bœsch <u pkh me>.
 /// This port keeps the same license.
 ///
-/// Scope: 8-bit 4:2:0 keyframes (`profile 0`), single- or multi-tile, with
-/// segmentation and the lossless WHT path.  Inter frames / intra-only frames
-/// are rejected (`vp9: inter frame not supported`); keyframe reference refresh,
-/// hidden frames and show-existing display are supported. Probability adaptation
-/// (`ff_vp9_adapt_probs`) belongs to the inter-frame slice.  Planes are
+/// Scope: 8-bit 4:2:0 (`profile 0`), single- or multi-tile, with
+/// segmentation and the lossless WHT path.  Keyframes, intra-only frames
+/// and inter frames are supported (NEARESTMV/NEARMV/ZEROMV/NEWMV,
+/// switchable and fixed interpolation filters, single reference).
+/// Keyframe reference refresh, hidden frames and show-existing display
+/// are supported; probability back-adaptation covers both the
+/// parallel-mode commit and the counts-driven `ff_vp9_adapt_probs` path
+/// (real-world vectors so far only exercise the commit path).  Scaled
+/// reference frames are rejected.  Planes are
 /// allocated with 64px padding around the frame so that block overhangs and
 /// the 16-wide loop filter stay in bounds (the C relies on AVFrame padding
 /// plus emulated-edge MC for the same reason).
@@ -42,6 +46,12 @@ pub struct Vp9Decoder {
   mut header : Vp9FrameHeader
   mut width : Int32
   mut height : Int32
+  /// Bit depth of the current frame (8/10/12) and derived limits. */
+  mut bpp : Int32
+  mut bpp_index : Int32
+  mut pixel_max : Int32
+  /// Mid-gray value `128 << (bpp-8)` used by DC intra prediction. */
+  mut pixel_mid : Int32
   /// 8-px units. */
   mut cols : Int32
   mut rows : Int32
@@ -66,6 +76,13 @@ pub struct Vp9Decoder {
   mut above_skip : FixedArray[Int32]
   mut above_txfm : FixedArray[Int32]
   mut above_segpred : FixedArray[Int32]
+  // inter contexts (above)
+  mut above_intra : FixedArray[Int32]
+  mut above_comp : FixedArray[Int32]
+  mut above_ref : FixedArray[Int32]
+  mut above_filter : FixedArray[Int32]
+  mut above_mv_x : FixedArray[Int32]
+  mut above_mv_y : FixedArray[Int32]
   // left contexts (per tile, 8/16 entries)
   left_partition : FixedArray[Int32]
   left_mode : FixedArray[Int32]
@@ -74,15 +91,25 @@ pub struct Vp9Decoder {
   left_skip : FixedArray[Int32]
   left_txfm : FixedArray[Int32]
   left_segpred : FixedArray[Int32]
+  // inter contexts (left)
+  left_intra : FixedArray[Int32]
+  left_comp : FixedArray[Int32]
+  left_ref : FixedArray[Int32]
+  left_filter : FixedArray[Int32]
+  left_mv_x : FixedArray[Int32]
+  left_mv_y : FixedArray[Int32]
   // per-superblock loop-filter state
   mut lf_level : FixedArray[Int32]
   mut lf_mask : FixedArray[Int32]
   // above-SB-row backup of the pre-loopfilter bottom row (y/cb/cr)
   mut intra_pred : FixedArray[FixedArray[Int32]]
-  // probability model
+  // probability model: working copy + four persistent frame-context slots
   prob : FixedArray[Int32]
+  prob_ctx : FixedArray[Int32]
   prob_coef : FixedArray[Int32]
   prob_ctx_coef : FixedArray[Int32]
+  // backward-adaptation statistics
+  counts : FixedArray[Int32]
   // segmentation-derived quantizer and filter levels
   seg_qmul : FixedArray[Int32]
   seg_lflvl : FixedArray[Int32]
@@ -98,6 +125,8 @@ pub struct Vp9Decoder {
   uveob0 : FixedArray[Int32]
   uveob1 : FixedArray[Int32]
   cache : FixedArray[Int32]
+  // motion compensation scratch (edge emulation + 2d filter temp)
+  mc_tmp : FixedArray[Int32]
   b : Vp9Block
   mut rac : Vp9RangeDecoder
   mut tile_col_start : Int32
@@ -105,9 +134,58 @@ pub struct Vp9Decoder {
   mut b_col : Int32
   mut tx_mode : Int32
   mut frame_ready : Bool
-  // Packed display snapshots; inter prediction remains outside this slice.
-  references : FixedArray[(Int32, Int32, Bytes)?]
+  // MV clamping window for the current block
+  mut min_mv_x : Int32
+  mut min_mv_y : Int32
+  mut max_mv_x : Int32
+  mut max_mv_y : Int32
+  // per-reference scale factors ((refw << 14) / w, 0 = unscaled)
+  mvscale_x : FixedArray[Int32]
+  mvscale_y : FixedArray[Int32]
+  mvstep_x : FixedArray[Int32]
+  mvstep_y : FixedArray[Int32]
+  // MV reference map of the current frame and the previous one
+  mut mvmap : FixedArray[Vp9MvRefPair]
+  mut prev_mvmap : FixedArray[Vp9MvRefPair]
+  mut use_last_frame_mvs : Bool
+  // segmentation map of the reference frame (REF_FRAME_SEGMAP)
+  mut ref_segmap : FixedArray[Int32]?
+  // previous-frame flags
+  mut last_keyframe : Bool
+  mut last_invisible : Bool
+  // Packed display snapshots; the planes of refreshed references are kept
+  // by reference (each frame allocates fresh planes).
+  references : FixedArray[Vp9RefFrame?]
   mut display_bytes : Bytes?
+}
+
+///|
+/// One 8x8 position's motion-vector reference pair (`VP9mvrefPair`).
+pub struct Vp9MvRefPair {
+  mut ref0 : Int32
+  mut ref1 : Int32
+  mut x0 : Int32
+  mut y0 : Int32
+  mut x1 : Int32
+  mut y1 : Int32
+}
+
+///|
+/// A stored reference frame: padded planes plus the packed display bytes and
+/// the per-position MV/segmentation maps other frames predict from.
+pub struct Vp9RefFrame {
+  width : Int32
+  height : Int32
+  y : FixedArray[Int32]
+  cb : FixedArray[Int32]
+  cr : FixedArray[Int32]
+  ystride : Int32
+  uvstride : Int32
+  ybase : Int32
+  uvbase : Int32
+  packed : Bytes
+  mvmap : FixedArray[Vp9MvRefPair]
+  segmap : FixedArray[Int32]
 }
 
 ///|
@@ -126,6 +204,10 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     header: vp9_default_header(),
     width: 0,
     height: 0,
+    bpp: 8,
+    bpp_index: 0,
+    pixel_max: 255,
+    pixel_mid: 128,
     cols: 0,
     rows: 0,
     sb_cols: 0,
@@ -149,6 +231,12 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     above_skip: FixedArray::make(1, 0),
     above_txfm: FixedArray::make(1, 0),
     above_segpred: FixedArray::make(1, 0),
+    above_intra: FixedArray::make(1, 0),
+    above_comp: FixedArray::make(1, 0),
+    above_ref: FixedArray::make(1, 0),
+    above_filter: FixedArray::make(1, 0),
+    above_mv_x: FixedArray::make(1, 0),
+    above_mv_y: FixedArray::make(1, 0),
     left_partition: FixedArray::make(8, 0),
     left_mode: FixedArray::make(16, 0),
     left_y_nnz: FixedArray::make(16, 0),
@@ -159,6 +247,12 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     left_skip: FixedArray::make(8, 0),
     left_txfm: FixedArray::make(8, 0),
     left_segpred: FixedArray::make(8, 0),
+    left_intra: FixedArray::make(8, 0),
+    left_comp: FixedArray::make(8, 0),
+    left_ref: FixedArray::make(8, 0),
+    left_filter: FixedArray::make(8, 0),
+    left_mv_x: FixedArray::make(32, 0),
+    left_mv_y: FixedArray::make(32, 0),
     lf_level: FixedArray::make(1, 0),
     lf_mask: FixedArray::make(1, 0),
     intra_pred: [
@@ -167,8 +261,10 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
       FixedArray::make(1, 0),
     ],
     prob: FixedArray::make(VP9_PC_SIZE, 0),
+    prob_ctx: FixedArray::make(4 * VP9_PC_SIZE, 0),
     prob_coef: FixedArray::make(4 * 2 * 2 * 6 * 6 * 11, 0),
     prob_ctx_coef: FixedArray::make(4 * 4 * 2 * 2 * 6 * 6 * 3, 0),
+    counts: FixedArray::make(VP9_CT_SIZE, 0),
     seg_qmul: FixedArray::make(32, 0),
     seg_lflvl: FixedArray::make(64, 0),
     seg_map: FixedArray::make(1, 0),
@@ -182,6 +278,7 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     uveob0: FixedArray::make(64, 0),
     uveob1: FixedArray::make(64, 0),
     cache: FixedArray::make(1024, 0),
+    mc_tmp: FixedArray::make(160 * 80, 0),
     b: vp9_block_new(),
     rac: match vp9_rac_init(b"\x00\x00\x00", 0, 3) {
       Ok(c) => c
@@ -192,6 +289,20 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     b_col: 0,
     tx_mode: 0,
     frame_ready: false,
+    min_mv_x: 0,
+    min_mv_y: 0,
+    max_mv_x: 0,
+    max_mv_y: 0,
+    mvscale_x: FixedArray::make(3, 0),
+    mvscale_y: FixedArray::make(3, 0),
+    mvstep_x: FixedArray::make(3, 0),
+    mvstep_y: FixedArray::make(3, 0),
+    mvmap: FixedArray::make(1, Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0 }),
+    prev_mvmap: FixedArray::make(1, Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0 }),
+    use_last_frame_mvs: false,
+    ref_segmap: None,
+    last_keyframe: false,
+    last_invisible: false,
     references: FixedArray::make(8, None),
     display_bytes: None,
   }
@@ -216,11 +327,6 @@ fn vp9_bwh4_at(bs : Int32) -> FixedArray[Int32] {
 }
 
 ///|
-fn vp9_seg_tree_probs(h : Vp9FrameHeader) -> Array[Int32] {
-  h.segmentation.tree_probs
-}
-
-///|
 fn Vp9Decoder::lossless(self : Vp9Decoder) -> Int32 {
   if self.header.lossless {
     1
@@ -242,6 +348,10 @@ fn Vp9Decoder::filter_level(self : Vp9Decoder) -> Int32 {
 fn Vp9Decoder::update_size(self : Vp9Decoder, w : Int32, h : Int32, ss_h : Int32, ss_v : Int32) -> Unit {
   self.width = w
   self.height = h
+  self.bpp = self.header.bit_depth
+  self.bpp_index = (self.bpp - 8) >> 1
+  self.pixel_max = (1 << self.bpp) - 1
+  self.pixel_mid = 128 << (self.bpp - 8)
   self.ss_h = ss_h
   self.ss_v = ss_v
   self.cols = (w + 7) >> 3
@@ -269,6 +379,12 @@ fn Vp9Decoder::update_size(self : Vp9Decoder, w : Int32, h : Int32, ss_h : Int32
   self.above_skip = FixedArray::make(self.cols, 0)
   self.above_txfm = FixedArray::make(self.cols, 0)
   self.above_segpred = FixedArray::make(self.cols, 0)
+  self.above_intra = FixedArray::make(self.cols, 0)
+  self.above_comp = FixedArray::make(self.cols, 0)
+  self.above_ref = FixedArray::make(self.cols, 0)
+  self.above_filter = FixedArray::make(self.cols, 0)
+  self.above_mv_x = FixedArray::make(self.cols * 4, 0)
+  self.above_mv_y = FixedArray::make(self.cols * 4, 0)
   let n_sb = self.sb_cols * self.sb_rows
   self.lf_level = FixedArray::make(n_sb * 64, 0)
   self.lf_mask = FixedArray::make(n_sb * 128, 0)
@@ -278,6 +394,15 @@ fn Vp9Decoder::update_size(self : Vp9Decoder, w : Int32, h : Int32, ss_h : Int32
     FixedArray::make((self.cols * 8) >> ss_h, 0),
   ]
   self.seg_map = FixedArray::make(self.sb_cols * 8 * self.sb_rows * 8, 0)
+  // the MV reference map shares the segmentation map's superblock-grid
+  // layout: blocks overhanging the right/bottom frame edge still write
+  // their full extent (C `VP9Frame.mv`)
+  let n_pos = self.sb_cols * 8 * self.sb_rows * 8
+  let mvmap : FixedArray[Vp9MvRefPair] = FixedArray::make(n_pos, Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0 })
+  for i in 0..<n_pos {
+    mvmap[i] = Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0 }
+  }
+  self.mvmap = mvmap
 }
 
 ///|
@@ -285,6 +410,12 @@ fn Vp9Decoder::update_size(self : Vp9Decoder, w : Int32, h : Int32, ss_h : Int32
 /// error-resilient / intra-only resetctx=3). */
 fn Vp9Decoder::reset_prob_ctx(self : Vp9Decoder) -> Unit {
   // all four slots receive the defaults; the active model starts from them
+  for c in 0..<4 {
+    let base = c * VP9_PC_SIZE
+    for i in 0..<VP9_PC_SIZE {
+      self.prob_ctx[base + i] = vp9_default_probs[i]
+    }
+  }
   for i in 0..<VP9_PC_SIZE {
     self.prob[i] = vp9_default_probs[i]
   }
@@ -293,6 +424,19 @@ fn Vp9Decoder::reset_prob_ctx(self : Vp9Decoder) -> Unit {
     for i in 0..<1728 {
       self.prob_ctx_coef[base + i] = vp9_default_coef_probs[i]
     }
+  }
+}
+
+///|
+/// Reset a single frame-context slot to the defaults (intra-only resetctx=2).
+fn Vp9Decoder::reset_one_prob_ctx(self : Vp9Decoder, c : Int32) -> Unit {
+  let base = c * VP9_PC_SIZE
+  for i in 0..<VP9_PC_SIZE {
+    self.prob_ctx[base + i] = vp9_default_probs[i]
+  }
+  let cbase = c * 1728
+  for i in 0..<1728 {
+    self.prob_ctx_coef[cbase + i] = vp9_default_coef_probs[i]
   }
 }
 
@@ -339,10 +483,12 @@ fn Vp9Decoder::setup_segmentation(self : Vp9Decoder) -> Unit {
     let quvdc = vp9_clip_u8(qyac + h.uvdc_qdelta)
     let quvac = vp9_clip_u8(qyac + h.uvac_qdelta)
     qyac = vp9_clip_u8(qyac)
-    self.seg_qmul[i * 4] = vp9_dc_qlookup[qydc]
-    self.seg_qmul[i * 4 + 1] = vp9_ac_qlookup[qyac]
-    self.seg_qmul[i * 4 + 2] = vp9_dc_qlookup[quvdc]
-    self.seg_qmul[i * 4 + 3] = vp9_ac_qlookup[quvac]
+    // qlookup rows are bpp-index major (0=8, 1=10, 2=12 bit)
+    let qrow = self.bpp_index * 256
+    self.seg_qmul[i * 4] = vp9_dc_qlookup[qrow + qydc]
+    self.seg_qmul[i * 4 + 1] = vp9_ac_qlookup[qrow + qyac]
+    self.seg_qmul[i * 4 + 2] = vp9_dc_qlookup[qrow + quvdc]
+    self.seg_qmul[i * 4 + 3] = vp9_ac_qlookup[qrow + quvac]
     let sh = if h.filter_level >= 32 {
       1
     } else {
@@ -488,6 +634,141 @@ fn Vp9Decoder::apply_compressed_header(self : Vp9Decoder, data : Bytes) -> Resul
       self.prob[VP9_PC_SKIP + i] = vp9_rac_update_prob(c, self.prob[VP9_PC_SKIP + i])
     }
   }
+  if !h.keyframe && !h.intra_only {
+    // inter mode updates; the MV-related fields use the plain 7-bit
+    // subexp reading instead of the update_prob model (C quirk)
+    for i in 0..<7 {
+      for j in 0..<3 {
+        let idx = VP9_PC_MV_MODE + i * 3 + j
+        if vp9_rac_get_prob(c, 252) != 0 {
+          self.prob[idx] = vp9_rac_update_prob(c, self.prob[idx])
+        }
+      }
+    }
+    if h.filter_mode == 4 {
+      for i in 0..<4 {
+        for j in 0..<2 {
+          let idx = VP9_PC_FILTER + i * 2 + j
+          if vp9_rac_get_prob(c, 252) != 0 {
+            self.prob[idx] = vp9_rac_update_prob(c, self.prob[idx])
+          }
+        }
+      }
+    }
+    for i in 0..<4 {
+      let idx = VP9_PC_INTRA + i
+      if vp9_rac_get_prob(c, 252) != 0 {
+        self.prob[idx] = vp9_rac_update_prob(c, self.prob[idx])
+      }
+    }
+    if h.allow_comp_inter {
+      h.comp_pred_mode = vp9_rac_get_bool(c)
+      if h.comp_pred_mode != 0 {
+        h.comp_pred_mode = h.comp_pred_mode + vp9_rac_get_bool(c)
+      }
+      if h.comp_pred_mode == 2 {
+        for i in 0..<5 {
+          let idx = VP9_PC_COMP + i
+          if vp9_rac_get_prob(c, 252) != 0 {
+            self.prob[idx] = vp9_rac_update_prob(c, self.prob[idx])
+          }
+        }
+      }
+    } else {
+      h.comp_pred_mode = 0
+    }
+    if h.comp_pred_mode != 1 {
+      for i in 0..<5 {
+        for j in 0..<2 {
+          let idx = VP9_PC_SINGLE_REF + i * 2 + j
+          if vp9_rac_get_prob(c, 252) != 0 {
+            self.prob[idx] = vp9_rac_update_prob(c, self.prob[idx])
+          }
+        }
+      }
+    }
+    if h.comp_pred_mode != 0 {
+      for i in 0..<5 {
+        let idx = VP9_PC_COMP_REF + i
+        if vp9_rac_get_prob(c, 252) != 0 {
+          self.prob[idx] = vp9_rac_update_prob(c, self.prob[idx])
+        }
+      }
+    }
+    for i in 0..<4 {
+      for j in 0..<9 {
+        let idx = VP9_PC_Y_MODE + i * 9 + j
+        if vp9_rac_get_prob(c, 252) != 0 {
+          self.prob[idx] = vp9_rac_update_prob(c, self.prob[idx])
+        }
+      }
+    }
+    for i in 0..<4 {
+      for j in 0..<4 {
+        for k in 0..<3 {
+          let idx = VP9_PC_PARTITION + ((3 - i) * 4 + j) * 3 + k
+          if vp9_rac_get_prob(c, 252) != 0 {
+            self.prob[idx] = vp9_rac_update_prob(c, self.prob[idx])
+          }
+        }
+      }
+    }
+    for i in 0..<3 {
+      let idx = VP9_PC_MV_JOINT + i
+      if vp9_rac_get_prob(c, 252) != 0 {
+        self.prob[idx] = (vp9_rac_get_uint(c, 7) << 1) | 1
+      }
+    }
+    for i in 0..<2 {
+      let base = VP9_PC_MV_COMP + i * VP9_MV_COMP_SIZE
+      if vp9_rac_get_prob(c, 252) != 0 {
+        self.prob[base] = (vp9_rac_get_uint(c, 7) << 1) | 1
+      }
+      for j in 0..<10 {
+        let idx = base + 1 + j
+        if vp9_rac_get_prob(c, 252) != 0 {
+          self.prob[idx] = (vp9_rac_get_uint(c, 7) << 1) | 1
+        }
+      }
+      if vp9_rac_get_prob(c, 252) != 0 {
+        self.prob[base + 11] = (vp9_rac_get_uint(c, 7) << 1) | 1
+      }
+      for j in 0..<10 {
+        let idx = base + 12 + j
+        if vp9_rac_get_prob(c, 252) != 0 {
+          self.prob[idx] = (vp9_rac_get_uint(c, 7) << 1) | 1
+        }
+      }
+    }
+    for i in 0..<2 {
+      let base = VP9_PC_MV_COMP + i * VP9_MV_COMP_SIZE
+      for j in 0..<2 {
+        for k in 0..<3 {
+          let idx = base + 22 + j * 3 + k
+          if vp9_rac_get_prob(c, 252) != 0 {
+            self.prob[idx] = (vp9_rac_get_uint(c, 7) << 1) | 1
+          }
+        }
+      }
+      for j in 0..<3 {
+        let idx = base + 28 + j
+        if vp9_rac_get_prob(c, 252) != 0 {
+          self.prob[idx] = (vp9_rac_get_uint(c, 7) << 1) | 1
+        }
+      }
+    }
+    if h.high_precision_mvs {
+      for i in 0..<2 {
+        let base = VP9_PC_MV_COMP + i * VP9_MV_COMP_SIZE
+        if vp9_rac_get_prob(c, 252) != 0 {
+          self.prob[base + 31] = (vp9_rac_get_uint(c, 7) << 1) | 1
+        }
+        if vp9_rac_get_prob(c, 252) != 0 {
+          self.prob[base + 32] = (vp9_rac_get_uint(c, 7) << 1) | 1
+        }
+      }
+    }
+  }
   Ok(())
 }
 
@@ -500,39 +781,131 @@ fn vp9_set_tile_offset(idx : Int32, log2_n : Int32, n : Int32) -> (Int32, Int32)
 }
 
 ///|
-/// Decode one profile-0 keyframe or display an existing reference slot.
-/// Inter and intra-only coded frames remain unsupported.
+/// Decode one profile-0 frame (keyframe, intra-only or inter) or display an
+/// existing reference slot.
 pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit, String] {
-  let header = match vp9_parse_frame_header(data) {
+  // reference dimensions for inter size inheritance
+  let refw : Array[Int32] = []
+  let refh : Array[Int32] = []
+  for i in 0..<8 {
+    match self.references[i] {
+      Some(r) => {
+        refw.push(r.width)
+        refh.push(r.height)
+      }
+      None => {
+        refw.push(0)
+        refh.push(0)
+      }
+    }
+  }
+  let header = match vp9_parse_frame_header_with_refs(data, refw, refh) {
     Ok(h) => h
     Err(e) => return Err(e)
   }
-  if header.profile != 0 {
-    return Err("vp9: only profile 0 (8-bit 4:2:0) is supported")
+  if header.profile != 0 && header.profile != 2 {
+    return Err("vp9: only profiles 0 (8-bit) and 2 (10/12-bit 4:2:0) are supported")
+  }
+  if header.profile == 2 &&
+    (header.chroma_subsampling_x != true || header.chroma_subsampling_y != true) {
+    return Err("vp9: profile 2 must be 4:2:0")
   }
   if header.show_existing_frame {
-    guard self.references[header.frame_to_show] is Some((width, height, bytes)) else {
+    guard self.references[header.frame_to_show] is Some(ref_frame) else {
       return Err("vp9: show_existing_frame references an empty slot")
     }
-    self.width = width
-    self.height = height
-    self.display_bytes = Some(bytes)
+    self.width = ref_frame.width
+    self.height = ref_frame.height
+    self.display_bytes = Some(ref_frame.packed)
     self.frame_ready = true
-    header.width = width
-    header.height = height
+    header.width = ref_frame.width
+    header.height = ref_frame.height
     self.header = header
     return Ok(())
   }
-  if !header.keyframe {
-    return Err("vp9: inter frame not supported")
+  if !header.keyframe && !header.intra_only {
+    for i in 0..<3 {
+      if self.references[header.ref_indices[i]] is None {
+        return Err("vp9: not all references are available")
+      }
+    }
   }
-  let pkt = match vp9_parse_packet(data) {
+  // snapshot the previous frame's maps before reallocation
+  let old_mvmap = self.mvmap
+  let old_segmap = self.seg_map
+  let old_valid = self.width > 0 && self.height > 0
+  let old_w = self.width
+  let old_h = self.height
+  let pkt = match vp9_parse_packet_with_refs(data, refw, refh) {
     Ok(p) => p
     Err(e) => return Err(e)
   }
   let h = pkt.header
+  if !h.keyframe && !h.intra_only {
+    // inter frames do not re-parse the colourspace details; C keeps them in
+    // the persistent frame header, so profile/bit-depth/subsampling carry
+    // over from the previous frame
+    let prev = self.header
+    h.profile = prev.profile
+    h.bit_depth = prev.bit_depth
+    h.chroma_subsampling_x = prev.chroma_subsampling_x
+    h.chroma_subsampling_y = prev.chroma_subsampling_y
+  }
   self.display_bytes = None
   self.header = h
+  let ctx = h.frame_context_idx
+  // probability context selection / reset (C decode_frame_header)
+  if h.keyframe || h.error_resilient || (h.intra_only && h.resetctx == 3) {
+    self.reset_prob_ctx()
+  } else if h.intra_only && h.resetctx == 2 {
+    self.reset_one_prob_ctx(ctx)
+  }
+  self.load_prob_ctx()
+  match self.apply_compressed_header(data) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  h.tx_mode = self.tx_mode
+  // backward-adaptation statistics start from zero every frame
+  for i in 0..<VP9_CT_SIZE {
+    self.counts[i] = 0
+  }
+  // REF_FRAME_SEGMAP / REF_FRAME_MVPAIR bookkeeping (vp9_decode_frame)
+  if !h.keyframe && !h.intra_only {
+    // scaled references are a later slice
+    for i in 0..<3 {
+      match self.references[h.ref_indices[i]] {
+        Some(r) => {
+          if r.width == h.width && r.height == h.height {
+            self.mvscale_x[i] = 0
+            self.mvscale_y[i] = 0
+          } else {
+            return Err("vp9: scaled reference frames not supported")
+          }
+        }
+        None => return Err("vp9: not all references are available")
+      }
+    }
+    let retain_segmap = self.ref_segmap is Some(_) &&
+      (!h.segmentation.enabled || !h.segmentation.update_map)
+    if !retain_segmap || h.keyframe || h.intra_only {
+      self.ref_segmap = if !h.error_resilient && old_valid {
+        Some(old_segmap)
+      } else {
+        None
+      }
+    }
+    // C drops the segmap reference when the MV-pair frame dimensions do not
+    // match the current frame
+    if !old_valid || old_w != h.width || old_h != h.height {
+      self.ref_segmap = None
+    }
+    self.use_last_frame_mvs = !h.error_resilient && !self.last_invisible &&
+      old_valid &&
+      old_w == h.width &&
+      old_h == h.height
+    self.prev_mvmap = old_mvmap
+  }
   self.update_size(h.width, h.height, if h.chroma_subsampling_x {
     1
   } else {
@@ -543,13 +916,6 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
     0
   })
   self.frame_ready = false
-  // probability contexts: keyframes reset all four slots
-  self.reset_prob_ctx()
-  match self.apply_compressed_header(data) {
-    Ok(_) => ()
-    Err(e) => return Err(e)
-  }
-  h.tx_mode = self.tx_mode
   self.init_filter_lut(h.filter_sharpness)
   self.setup_segmentation()
   // main tile decode loop
@@ -558,8 +924,14 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
     self.above_skip[i] = 0
     self.above_segpred[i] = 0
   }
-  for i in 0..<(self.cols * 2) {
-    self.above_mode[i] = 2
+  if h.keyframe || h.intra_only {
+    for i in 0..<(self.cols * 2) {
+      self.above_mode[i] = 2
+    }
+  } else {
+    for i in 0..<self.cols {
+      self.above_mode[i] = 10
+    }
   }
   for i in 0..<(self.sb_cols * 16) {
     self.above_y_nnz[i] = 0
@@ -599,8 +971,16 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
           self.left_skip[i] = 0
           self.left_segpred[i] = 0
         }
+        if h.keyframe || h.intra_only {
+          for i in 0..<16 {
+            self.left_mode[i] = 2
+          }
+        } else {
+          for i in 0..<8 {
+            self.left_mode[i] = 10
+          }
+        }
         for i in 0..<16 {
-          self.left_mode[i] = 2
           self.left_y_nnz[i] = 0
           self.left_uv_nnz[0][i] = 0
           self.left_uv_nnz[1][i] = 0
@@ -645,11 +1025,33 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
     }
     tile_idx += h.tile_cols
   }
+  // probability back-adaptation / commit
+  if h.refreshctx == 1 && h.parallelmode == 0 {
+    self.adapt_probs()
+  } else if h.refreshctx == 1 && h.parallelmode == 1 {
+    self.commit_prob_ctx()
+  }
+  self.last_keyframe = h.keyframe
+  self.last_invisible = !h.show_frame
   self.frame_ready = h.show_frame
   let snapshot = self.frame_bytes()
+  let snap_ref : Vp9RefFrame = {
+    width: self.width,
+    height: self.height,
+    y: self.y,
+    cb: self.cb,
+    cr: self.cr,
+    ystride: self.ystride,
+    uvstride: self.uvstride,
+    ybase: self.ybase,
+    uvbase: self.uvbase,
+    packed: snapshot,
+    mvmap: self.mvmap,
+    segmap: self.seg_map,
+  }
   for i in 0..<8 {
     if (h.refresh_frame_flags & (1 << i)) != 0 {
-      self.references[i] = Some((self.width, self.height, snapshot))
+      self.references[i] = Some(snap_ref)
     }
   }
   Ok(())
@@ -657,20 +1059,35 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
 
 ///|
 /// Pack the current frame as contiguous yuv420p bytes (width×height luma,
-/// then chroma planes), for MD5 comparison against the reference decoder. */
+/// then chroma planes), for MD5 comparison against the reference decoder.
+/// Above 8 bpp each sample becomes a little-endian 16-bit word, matching
+/// the decoder's yuv420p10le/yuv420p12le output layout. */
 pub fn Vp9Decoder::frame_bytes(self : Vp9Decoder) -> Bytes {
   if self.display_bytes is Some(bytes) { return bytes }
   let w = self.width
   let h = self.height
   let cw = (w + 1) >> 1
   let ch = (h + 1) >> 1
-  let buf : FixedArray[Byte] = FixedArray::make(w * h + 2 * cw * ch, b'\x00')
+  let sbytes = if self.bpp > 8 { 2 } else { 1 }
+  let buf : FixedArray[Byte] = FixedArray::make(
+    (w * h + 2 * cw * ch) * sbytes,
+    b'\x00',
+  )
   let mut o = 0
+  let store = (v : Int32) => {
+    if sbytes == 2 {
+      buf[o] = (v & 0xFF).to_byte()
+      buf[o + 1] = ((v >> 8) & 0xFF).to_byte()
+      o += 2
+    } else {
+      buf[o] = v.to_byte()
+      o += 1
+    }
+  }
   for y in 0..<h {
     let src = self.ybase + y * self.ystride
     for x in 0..<w {
-      buf[o] = self.y[src + x].to_byte()
-      o += 1
+      store(self.y[src + x])
     }
   }
   for pl in 0..<2 {
@@ -682,8 +1099,7 @@ pub fn Vp9Decoder::frame_bytes(self : Vp9Decoder) -> Bytes {
     for y in 0..<ch {
       let src = self.uvbase + y * self.uvstride
       for x in 0..<cw {
-        buf[o] = plane[src + x].to_byte()
-        o += 1
+        store(plane[src + x])
       }
     }
   }

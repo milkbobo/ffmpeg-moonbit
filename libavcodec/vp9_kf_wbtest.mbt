@@ -77,14 +77,14 @@ test "vp9 kf: 512x128 2x2 tiles matches FFmpeg YUV" {
 }
 
 ///|
-test "vp9 kf: inter frame is rejected with a specific error" {
+test "vp9 kf: inter frame without references is rejected with a specific error" {
   let dec = vp9_decoder_new()
-  // Real inter packet from the header-parser vectors. Reject it before
-  // reference dimensions or compressed-header probabilities are required.
+  // Real inter packet from the header-parser vectors. With no reference
+  // slots populated the frame cannot even resolve its dimensions.
   let data = vp9_test_bytes(vp9_inter_a_b64)
   match dec.decode_frame(data) {
     Ok(_) => fail("inter frame must be rejected")
-    Err(e) => inspect(e, content="vp9: inter frame not supported")
+    Err(e) => inspect(e, content="vp9: not all references are available")
   }
 }
 

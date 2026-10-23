@@ -1,18 +1,17 @@
 ///|
 /// MoonBit port of the VP9 block layer from FFmpeg 9.0.2
 /// `libavcodec/vp9block.c`: partition tree walk (`decode_sb`), block mode
-/// syntax (`decode_mode`, keyframe path), coefficient decoding
+/// syntax (`decode_mode`), coefficient decoding
 /// (`decode_coeffs`) and the per-block driver (`ff_vp9_decode_block`).
+/// The inter branches of `decode_mode` live in `vp9_inter_block.mbt`.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later, Copyright (C) 2013
 /// Ronald S. Bultje <rsbultje gmail com> and Clément Bœsch <u pkh me>.
 /// This port keeps the same license.
 ///
-/// Scope notes: segmentation is fully supported (qmul/filter-level features);
-/// inter-frame blocks are rejected (`intra_only`/inter slices are a later
-/// slice), so the inter branches of `decode_mode` are not ported yet.  The
-/// `counts` statistics are only consumed by probability adaptation, which
-/// belongs to the inter-frame slice, and are therefore omitted.
+/// Scope notes: segmentation is fully supported (qmul/filter-level
+/// features); the `counts` statistics feed probability adaptation
+/// (`vp9_probs.mbt`).
 
 ///|
 const VP9_BS_8x8 : Int32 = 9
@@ -26,13 +25,14 @@ const VP9_BL_8X8 : Int32 = 3
 const VP9_PARTITION_NONE : Int32 = 0
 const VP9_PARTITION_H : Int32 = 1
 const VP9_PARTITION_V : Int32 = 2
+const VP9_PARTITION_SPLIT : Int32 = 3
 
 ///|
 /// `enum TxfmMode`: TX_4X4=0 .. TX_32X32=3, TX_SWITCHABLE=4. */
 const VP9_TX_SWITCHABLE : Int32 = 4
 
 ///|
-/// Per-block syntax state (`VP9Block`). */
+/// Per-block syntax state (`VP9Block`).
 pub struct Vp9Block {
   mut seg_id : Int32
   mut intra : Int32
@@ -42,6 +42,18 @@ pub struct Vp9Block {
   mut bs : Int32
   mut tx : Int32
   mut uvtx : Int32
+  /// compound prediction flag (0/1)
+  mut comp : Int32
+  /// reference indices into the frame header's ref slot list (0..2)
+  refidx : FixedArray[Int32]
+  /// interpolation FilterMode (0 regular, 1 smooth, 2 sharp, 3 bilinear)
+  mut filter : Int32
+  /// motion vectors, indexed `b_idx * 2 + ref` (x then y in mvx/mvy)
+  mvx : FixedArray[Int32]
+  mvy : FixedArray[Int32]
+  /// block level / partition of the current block (C VP9Block.bl/bp)
+  mut bl : Int32
+  mut bp : Int32
 }
 
 ///|
@@ -55,6 +67,13 @@ fn vp9_block_new() -> Vp9Block {
     bs: 0,
     tx: 0,
     uvtx: 0,
+    comp: 0,
+    refidx: FixedArray::make(2, 0),
+    filter: 0,
+    mvx: FixedArray::make(8, 0),
+    mvy: FixedArray::make(8, 0),
+    bl: 0,
+    bp: 0,
   }
 }
 
@@ -64,6 +83,26 @@ fn vp9_rac_get_tree_flat(
   c : Vp9RangeDecoder,
   tree : Array[Int32],
   probs : Array[Int32],
+  pbase : Int32,
+) -> Int32 {
+  let mut i = 0
+  while true {
+    let bit = vp9_rac_get_prob(c, probs[pbase + i])
+    i = tree[i * 2 + bit]
+    if i <= 0 {
+      break
+    }
+  }
+  -i
+}
+
+///|
+/// Same tree walk over a `FixedArray` probability model (the decoder's
+/// working `ProbContext`).
+fn vp9_rac_get_tree_flat_ctx(
+  c : Vp9RangeDecoder,
+  tree : Array[Int32],
+  probs : FixedArray[Int32],
   pbase : Int32,
 ) -> Int32 {
   let mut i = 0
@@ -114,209 +153,8 @@ fn vp9_clip_u6(v : Int32) -> Int32 {
 }
 
 ///|
-/// `decode_mode`, keyframe/intra-only path (the inter branches of the C are
-/// part of a later slice). */
-fn Vp9Decoder::decode_mode(self : Vp9Decoder) -> Unit {
-  let b = self.b
-  let h = self.header
-  let row = self.b_row
-  let col = self.b_col
-  let row7 = row & 7
-  // max_tx_for_bl_bp: BS 0..3 -> TX_32X32, 4..6 -> TX_16X16, 7..9 -> TX_8X8,
-  // 10..12 -> TX_4X4
-  let max_tx = match b.bs {
-    bs if bs <= 3 => 3
-    bs if bs <= 6 => 2
-    bs if bs <= 9 => 1
-    _ => 0
-  }
-  let bwh8 = vp9_bwh8_at(b.bs)
-  let bw4 = bwh8[0]
-  let bh4 = bwh8[1]
-  let have_a = row > 0
-  let have_l = col > self.tile_col_start
-  // left_ctx / above_ctx LUTs from decode_mode
-  let left_ctx_tbl : Array[Int32] = [
-    0x0, 0x8, 0x0, 0x8, 0xc, 0x8, 0xc, 0xe, 0xc, 0xe, 0xf, 0xe, 0xf,
-  ]
-  let above_ctx_tbl : Array[Int32] = [
-    0x0, 0x0, 0x8, 0x8, 0x8, 0xc, 0xc, 0xc, 0xe, 0xe, 0xe, 0xf, 0xf,
-  ]
-  if !h.segmentation.enabled {
-    b.seg_id = 0
-  } else {
-    // keyframes always take the direct branch of the C
-    b.seg_id = if !h.segmentation.update_map {
-      0
-    } else {
-      vp9_rac_get_tree_flat(
-        self.rac,
-        vp9_segmentation_tree,
-        vp9_seg_tree_probs(self.header),
-        0,
-      )
-    }
-  }
-  if h.segmentation.enabled && (h.segmentation.update_map || h.keyframe) {
-    self.set_seg_map(row, col, bw4, bh4, b.seg_id)
-  }
-  b.skip = if h.segmentation.enabled &&
-    h.segmentation.features[b.seg_id].skip_enabled {
-    1
-  } else {
-    0
-  }
-  if b.skip == 0 {
-    let cidx = self.left_skip[row7] + self.above_skip[col]
-    b.skip = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_SKIP + cidx])
-  }
-  b.intra = 1
-  if (b.intra != 0 || b.skip == 0) && self.tx_mode == VP9_TX_SWITCHABLE {
-    let mut cidx = 0
-    if have_a {
-      if have_l {
-        let av = if self.above_skip[col] != 0 {
-          max_tx
-        } else {
-          self.above_txfm[col]
-        }
-        let lv = if self.left_skip[row7] != 0 {
-          max_tx
-        } else {
-          self.left_txfm[row7]
-        }
-        cidx = if av + lv > max_tx {
-          1
-        } else {
-          0
-        }
-      } else {
-        cidx = if self.above_skip[col] != 0 {
-          1
-        } else if self.above_txfm[col] * 2 > max_tx {
-          1
-        } else {
-          0
-        }
-      }
-    } else if have_l {
-      cidx = if self.left_skip[row7] != 0 {
-        1
-      } else if self.left_txfm[row7] * 2 > max_tx {
-        1
-      } else {
-        0
-      }
-    } else {
-      cidx = 1
-    }
-    match max_tx {
-      3 => {
-        b.tx = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_TX32P + cidx * 3])
-        if b.tx != 0 {
-          b.tx += vp9_rac_get_prob(
-            self.rac,
-            self.prob[VP9_PC_TX32P + cidx * 3 + 1],
-          )
-          if b.tx == 2 {
-            b.tx += vp9_rac_get_prob(
-              self.rac,
-              self.prob[VP9_PC_TX32P + cidx * 3 + 2],
-            )
-          }
-        }
-      }
-      2 => {
-        b.tx = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_TX16P + cidx * 2])
-        if b.tx != 0 {
-          b.tx += vp9_rac_get_prob(
-            self.rac,
-            self.prob[VP9_PC_TX16P + cidx * 2 + 1],
-          )
-        }
-      }
-      1 => b.tx = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_TX8P + cidx])
-      _ => b.tx = 0
-    }
-  } else {
-    b.tx = vp9_min(max_tx, self.tx_mode)
-  }
-  // keyframe y-mode + uv-mode
-  let amode = self.above_mode
-  let lmode = self.left_mode
-  let a0 = col * 2
-  let l0 = row7 * 2
-  if b.bs > VP9_BS_8x8 {
-    // sub-8x8 partitions: four modes for the four 4x4 quadrants
-    b.mode[0] = vp9_rac_get_tree_kf_ymode(self.rac, amode[a0], lmode[l0])
-    amode[a0] = b.mode[0]
-    if b.bs != 10 {
-      // BS_8x4 = 10
-      b.mode[1] = vp9_rac_get_tree_kf_ymode(self.rac, amode[a0 + 1], b.mode[0])
-      lmode[l0] = b.mode[1]
-      amode[a0 + 1] = b.mode[1]
-    } else {
-      lmode[l0] = b.mode[0]
-      amode[a0 + 1] = b.mode[0]
-      b.mode[1] = b.mode[0]
-    }
-    if b.bs != 11 {
-      // BS_4x8 = 11
-      b.mode[2] = vp9_rac_get_tree_kf_ymode(self.rac, amode[a0], lmode[l0 + 1])
-      amode[a0] = b.mode[2]
-      if b.bs != 10 {
-        b.mode[3] = vp9_rac_get_tree_kf_ymode(
-          self.rac,
-          amode[a0 + 1],
-          b.mode[2],
-        )
-        lmode[l0 + 1] = b.mode[3]
-        amode[a0 + 1] = b.mode[3]
-      } else {
-        lmode[l0 + 1] = b.mode[2]
-        amode[a0 + 1] = b.mode[2]
-        b.mode[3] = b.mode[2]
-      }
-    } else {
-      b.mode[2] = b.mode[0]
-      lmode[l0 + 1] = b.mode[1]
-      amode[a0 + 1] = b.mode[1]
-      b.mode[3] = b.mode[1]
-    }
-  } else {
-    b.mode[0] = vp9_rac_get_tree_kf_ymode(self.rac, amode[a0], lmode[l0])
-    b.mode[1] = b.mode[0]
-    b.mode[2] = b.mode[0]
-    b.mode[3] = b.mode[0]
-    let aw = vp9_bwh4_at(b.bs)[0]
-    let lh = vp9_bwh4_at(b.bs)[1]
-    for i in 0..<aw {
-      amode[a0 + i] = b.mode[0]
-    }
-    for i in 0..<lh {
-      lmode[l0 + i] = b.mode[0]
-    }
-  }
-  b.uvmode = vp9_rac_get_tree_flat(
-    self.rac,
-    vp9_intramode_tree,
-    vp9_kf_uvmode_probs,
-    b.mode[3] * 9,
-  )
-  // SET_CTXS (keyframe: skip/txfm/partition only)
-  let left_ctx_v = left_ctx_tbl[b.bs]
-  let above_ctx_v = above_ctx_tbl[b.bs]
-  for i in 0..<bw4 {
-    self.above_skip[col + i] = b.skip
-    self.above_txfm[col + i] = b.tx
-    self.above_partition[col + i] = above_ctx_v
-  }
-  for i in 0..<bh4 {
-    self.left_skip[row7 + i] = b.skip
-    self.left_txfm[row7 + i] = b.tx
-    self.left_partition[row7 + i] = left_ctx_v
-  }
-}
+/// `decode_mode` (the full C port incl. inter branches) lives in
+/// `vp9_inter_block.mbt`.
 
 ///|
 /// `setctx_2d` on the current frame's segmentation map (8-px units). */
@@ -352,7 +190,8 @@ fn vp9_i16(v : Int32) -> Int32 {
 ///|
 /// `decode_coeffs_b_generic` for the 8-bit path.  `pbase` points at
 /// `prob_coef[tx][pl][inter][0][0][0]` (the [6][6][11] slab); `qmul_dc` /
-/// `qmul_ac` are the segmentation qmul pair.  Returns the coefficient
+/// `qmul_ac` are the segmentation qmul pair; `ct_coef`/`ct_eob` are the flat
+/// counts bases for the same slab.  Returns the coefficient
 /// position the loop stopped at (0 = empty block). */
 fn Vp9Decoder::decode_coeffs_b(
   self : Vp9Decoder,
@@ -367,6 +206,8 @@ fn Vp9Decoder::decode_coeffs_b(
   qmul_dc : Int32,
   qmul_ac : Int32,
   btx : Int32,
+  ct_coef : Int32,
+  ct_eob : Int32,
 ) -> Int32 {
   let counts : FixedArray[Int32] = FixedArray::make(8, 0)
   match btx {
@@ -417,6 +258,7 @@ fn Vp9Decoder::decode_coeffs_b(
   while true {
     // eob
     let eob_bit = vp9_rac_get_prob(rac, pc[tp])
+    self.counts[ct_eob + (band * 6 + nnz) * 2 + eob_bit] += 1
     if eob_bit == 0 {
       break
     }
@@ -424,6 +266,7 @@ fn Vp9Decoder::decode_coeffs_b(
     let mut not_zero = false
     while true {
       if vp9_rac_get_prob(rac, pc[tp + 1]) == 0 {
+        self.counts[ct_coef + (band * 6 + nnz) * 3] += 1
         band_left -= 1
         if band_left == 0 {
           band += 1
@@ -446,62 +289,76 @@ fn Vp9Decoder::decode_coeffs_b(
     let mut val = 0
     if vp9_rac_get_prob(rac, pc[tp + 2]) == 0 {
       // one
+      self.counts[ct_coef + (band * 6 + nnz) * 3 + 1] += 1
       val = 1
       cache[rc] = 1
-    } else if vp9_rac_get_prob(rac, pc[tp + 3]) == 0 {
-      // 2, 3, 4
-      if vp9_rac_get_prob(rac, pc[tp + 4]) == 0 {
-        cache[rc] = 2
-        val = 2
-      } else {
-        val = 3 + vp9_rac_get_prob(rac, pc[tp + 5])
-        cache[rc] = 3
-      }
-    } else if vp9_rac_get_prob(rac, pc[tp + 6]) == 0 {
-      // cat1/2
-      cache[rc] = 4
-      if vp9_rac_get_prob(rac, pc[tp + 7]) == 0 {
-        val = vp9_rac_get_prob(rac, 159) + 5
-      } else {
-        val = (vp9_rac_get_prob(rac, 165) << 1) + 7
-        val += vp9_rac_get_prob(rac, 145)
-      }
     } else {
-      // cat 3-6
-      cache[rc] = 5
-      if vp9_rac_get_prob(rac, pc[tp + 8]) == 0 {
-        if vp9_rac_get_prob(rac, pc[tp + 9]) == 0 {
-          val = 11 + (vp9_rac_get_prob(rac, 173) << 2)
-          val += vp9_rac_get_prob(rac, 148) << 1
-          val += vp9_rac_get_prob(rac, 140)
+      self.counts[ct_coef + (band * 6 + nnz) * 3 + 2] += 1
+      if vp9_rac_get_prob(rac, pc[tp + 3]) == 0 {
+        // 2, 3, 4
+        if vp9_rac_get_prob(rac, pc[tp + 4]) == 0 {
+          cache[rc] = 2
+          val = 2
         } else {
-          val = 19 + (vp9_rac_get_prob(rac, 176) << 3)
-          val += vp9_rac_get_prob(rac, 155) << 2
-          val += vp9_rac_get_prob(rac, 140) << 1
-          val += vp9_rac_get_prob(rac, 135)
+          val = 3 + vp9_rac_get_prob(rac, pc[tp + 5])
+          cache[rc] = 3
         }
-      } else if vp9_rac_get_prob(rac, pc[tp + 10]) == 0 {
-        val = (vp9_rac_get_prob(rac, 180) << 4) + 35
-        val += vp9_rac_get_prob(rac, 157) << 3
-        val += vp9_rac_get_prob(rac, 141) << 2
-        val += vp9_rac_get_prob(rac, 134) << 1
-        val += vp9_rac_get_prob(rac, 130)
+      } else if vp9_rac_get_prob(rac, pc[tp + 6]) == 0 {
+        // cat1/2
+        cache[rc] = 4
+        if vp9_rac_get_prob(rac, pc[tp + 7]) == 0 {
+          val = vp9_rac_get_prob(rac, 159) + 5
+        } else {
+          val = (vp9_rac_get_prob(rac, 165) << 1) + 7
+          val += vp9_rac_get_prob(rac, 145)
+        }
       } else {
-        val = 67
-        val += vp9_rac_get_prob(rac, 254) << 13
-        val += vp9_rac_get_prob(rac, 254) << 12
-        val += vp9_rac_get_prob(rac, 254) << 11
-        val += vp9_rac_get_prob(rac, 252) << 10
-        val += vp9_rac_get_prob(rac, 249) << 9
-        val += vp9_rac_get_prob(rac, 243) << 8
-        val += vp9_rac_get_prob(rac, 230) << 7
-        val += vp9_rac_get_prob(rac, 196) << 6
-        val += vp9_rac_get_prob(rac, 177) << 5
-        val += vp9_rac_get_prob(rac, 153) << 4
-        val += vp9_rac_get_prob(rac, 140) << 3
-        val += vp9_rac_get_prob(rac, 133) << 2
-        val += vp9_rac_get_prob(rac, 130) << 1
-        val += vp9_rac_get_prob(rac, 129)
+        // cat 3-6
+        cache[rc] = 5
+        if vp9_rac_get_prob(rac, pc[tp + 8]) == 0 {
+          if vp9_rac_get_prob(rac, pc[tp + 9]) == 0 {
+            val = 11 + (vp9_rac_get_prob(rac, 173) << 2)
+            val += vp9_rac_get_prob(rac, 148) << 1
+            val += vp9_rac_get_prob(rac, 140)
+          } else {
+            val = 19 + (vp9_rac_get_prob(rac, 176) << 3)
+            val += vp9_rac_get_prob(rac, 155) << 2
+            val += vp9_rac_get_prob(rac, 140) << 1
+            val += vp9_rac_get_prob(rac, 135)
+          }
+        } else if vp9_rac_get_prob(rac, pc[tp + 10]) == 0 {
+          val = (vp9_rac_get_prob(rac, 180) << 4) + 35
+          val += vp9_rac_get_prob(rac, 157) << 3
+          val += vp9_rac_get_prob(rac, 141) << 2
+          val += vp9_rac_get_prob(rac, 134) << 1
+          val += vp9_rac_get_prob(rac, 130)
+        } else {
+          val = 67
+          // 16bpp cat6 reads two (12-bit: four) extra low-probability bits
+          // above the 14 shared ones (C decode_coeffs_b_generic)
+          if self.bpp != 8 {
+            if self.bpp == 12 {
+              val += vp9_rac_get_prob(rac, 255) << 17
+              val += vp9_rac_get_prob(rac, 255) << 16
+            }
+            val += vp9_rac_get_prob(rac, 255) << 15
+            val += vp9_rac_get_prob(rac, 255) << 14
+          }
+          val += vp9_rac_get_prob(rac, 254) << 13
+          val += vp9_rac_get_prob(rac, 254) << 12
+          val += vp9_rac_get_prob(rac, 254) << 11
+          val += vp9_rac_get_prob(rac, 252) << 10
+          val += vp9_rac_get_prob(rac, 249) << 9
+          val += vp9_rac_get_prob(rac, 243) << 8
+          val += vp9_rac_get_prob(rac, 230) << 7
+          val += vp9_rac_get_prob(rac, 196) << 6
+          val += vp9_rac_get_prob(rac, 177) << 5
+          val += vp9_rac_get_prob(rac, 153) << 4
+          val += vp9_rac_get_prob(rac, 140) << 3
+          val += vp9_rac_get_prob(rac, 133) << 2
+          val += vp9_rac_get_prob(rac, 130) << 1
+          val += vp9_rac_get_prob(rac, 129)
+        }
       }
     }
     band_left -= 1
@@ -515,7 +372,8 @@ fn Vp9Decoder::decode_coeffs_b(
       qmul_dc
     }
     let sign = vp9_rac_get(rac)
-    // C multiplies in 32-bit (wrapping) and stores into an int16_t
+    // C multiplies in 32-bit (wrapping) and stores into a dctcoef array:
+    // int16_t at 8 bpp, int32_t at 10/12 bpp
     let prod = (if sign != 0 {
       0U - val.reinterpret_as_uint()
     } else {
@@ -525,7 +383,7 @@ fn Vp9Decoder::decode_coeffs_b(
     if is_tx32x32 {
       v = v / 2
     }
-    coef[cobase + rc] = vp9_i16(v)
+    coef[cobase + rc] = if self.bpp == 8 { vp9_i16(v) } else { v }
     nnz = (1 + cache[nb[i * 2]] + cache[nb[i * 2 + 1]]) >> 1
     tp = pbase + (band * 66 + nnz * 11)
     i += 1
@@ -620,8 +478,11 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
   let end_x = vp9_min(2 * (self.cols - self.b_col), w4)
   let end_y = vp9_min(2 * (self.rows - self.b_row), h4)
   let tx_kind = 4 * self.lossless() + b.tx
-  let inter = 0 // keyframes only in this slice
+  let inter = 1 - b.intra // coefficient slab selector (`!b->intra`)
+  let slab_y = (b.tx * 2 + 0) * 2 + inter
   let p_y = vp9_coef_base(b.tx, 0, inter)
+  let ct_y_coef = VP9_CT_COEF + slab_y * 108
+  let ct_y_eob = VP9_CT_EOB + slab_y * 72
   let qmul0 = self.seg_qmul[b.seg_id * 4]
   let qmul1 = self.seg_qmul[b.seg_id * 4 + 1]
   let mut total_coeff = 0
@@ -644,7 +505,11 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
       } else {
         0
       }
-      let txtp = vp9_intra_txfm_type[b.mode[mode_idx]]
+      let txtp = if b.intra != 0 {
+        vp9_intra_txfm_type[b.mode[mode_idx]]
+      } else {
+        0 // DCT_DCT
+      }
       let pair = vp9_scan_for(tx_kind, txtp)
       let ret = self.decode_coeffs_b(
         self.block,
@@ -658,6 +523,8 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
         qmul0,
         qmul1,
         b.tx,
+        ct_y_coef,
+        ct_y_eob,
       )
       let nz = if ret != 0 {
         1
@@ -680,6 +547,9 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
   // uv tokens
   let uvtx = b.uvtx
   let p_uv = vp9_coef_base(uvtx, 1, inter)
+  let slab_uv = (uvtx * 2 + 1) * 2 + inter
+  let ct_uv_coef = VP9_CT_COEF + slab_uv * 108
+  let ct_uv_eob = VP9_CT_EOB + slab_uv * 72
   let qmul2 = self.seg_qmul[b.seg_id * 4 + 2]
   let qmul3 = self.seg_qmul[b.seg_id * 4 + 3]
   let uvpair = vp9_scan_for(uvtx, 0)
@@ -722,6 +592,8 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
           qmul2,
           qmul3,
           uvtx,
+          ct_uv_coef,
+          ct_uv_eob,
         )
         let nz = if ret != 0 {
           1
@@ -758,23 +630,25 @@ fn Vp9Decoder::decode_sb(
   let c = ((self.above_partition[col] >> (3 - bl)) & 1) |
     (((self.left_partition[row & 7] >> (3 - bl)) & 1) << 1)
   let pbase = (bl * 4 + c) * 3
+  // keyframes and intra-only frames use the static kf partition
+  // probabilities; inter frames use the adaptive model
+  let kf = self.header.keyframe || self.header.intra_only
   let hbs = 4 >> bl
+  let mut bp = 0
   if bl == VP9_BL_8X8 {
-    let bp = vp9_rac_get_tree_flat(
-      self.rac,
-      vp9_partition_tree,
-      vp9_kf_partition_probs,
-      pbase,
-    )
+    bp = if kf {
+      vp9_rac_get_tree_flat(self.rac, vp9_partition_tree, vp9_kf_partition_probs, pbase)
+    } else {
+      vp9_rac_get_tree_flat_ctx(self.rac, vp9_partition_tree, self.prob, VP9_PC_PARTITION + pbase)
+    }
     self.decode_block(row, col, lflvl_idx, yoff, uvoff, bl, bp)
   } else if col + hbs < self.cols {
     if row + hbs < self.rows {
-      let bp = vp9_rac_get_tree_flat(
-        self.rac,
-        vp9_partition_tree,
-        vp9_kf_partition_probs,
-        pbase,
-      )
+      bp = if kf {
+        vp9_rac_get_tree_flat(self.rac, vp9_partition_tree, vp9_kf_partition_probs, pbase)
+      } else {
+        vp9_rac_get_tree_flat_ctx(self.rac, vp9_partition_tree, self.prob, VP9_PC_PARTITION + pbase)
+      }
       if bp == VP9_PARTITION_NONE {
         self.decode_block(row, col, lflvl_idx, yoff, uvoff, bl, bp)
       } else if bp == VP9_PARTITION_H {
@@ -809,7 +683,15 @@ fn Vp9Decoder::decode_sb(
           bl + 1,
         )
       }
-    } else if vp9_rac_get_prob(self.rac, vp9_kf_partition_probs[pbase + 1]) != 0 {
+    } else if vp9_rac_get_prob(
+      self.rac,
+      if kf {
+        vp9_kf_partition_probs[pbase + 1]
+      } else {
+        self.prob[VP9_PC_PARTITION + pbase + 1]
+      },
+    ) != 0 {
+      bp = VP9_PARTITION_SPLIT
       self.decode_sb(row, col, lflvl_idx, yoff, uvoff, bl + 1)
       self.decode_sb(
         row,
@@ -820,10 +702,19 @@ fn Vp9Decoder::decode_sb(
         bl + 1,
       )
     } else {
+      bp = VP9_PARTITION_H
       self.decode_block(row, col, lflvl_idx, yoff, uvoff, bl, VP9_PARTITION_H)
     }
   } else if row + hbs < self.rows {
-    if vp9_rac_get_prob(self.rac, vp9_kf_partition_probs[pbase + 2]) != 0 {
+    if vp9_rac_get_prob(
+      self.rac,
+      if kf {
+        vp9_kf_partition_probs[pbase + 2]
+      } else {
+        self.prob[VP9_PC_PARTITION + pbase + 2]
+      },
+    ) != 0 {
+      bp = VP9_PARTITION_SPLIT
       self.decode_sb(row, col, lflvl_idx, yoff, uvoff, bl + 1)
       self.decode_sb(
         row + hbs,
@@ -834,16 +725,18 @@ fn Vp9Decoder::decode_sb(
         bl + 1,
       )
     } else {
+      bp = VP9_PARTITION_V
       self.decode_block(row, col, lflvl_idx, yoff, uvoff, bl, VP9_PARTITION_V)
     }
   } else {
+    bp = VP9_PARTITION_SPLIT
     self.decode_sb(row, col, lflvl_idx, yoff, uvoff, bl + 1)
   }
+  self.counts[VP9_CT_PARTITION + (bl * 4 + c) * 4 + bp] += 1
 }
 
-
 ///|
-/// `ff_vp9_decode_block` (single-pass, keyframe slice). */
+/// `ff_vp9_decode_block` (single-pass port). */
 fn Vp9Decoder::decode_block(
   self : Vp9Decoder,
   row : Int32,
@@ -862,6 +755,13 @@ fn Vp9Decoder::decode_block(
   self.b_row = row
   self.b_col = col
   b.bs = bs
+  b.bl = bl
+  b.bp = bp
+  // td->min_mv / max_mv
+  self.min_mv_x = -(128 + col * 64)
+  self.min_mv_y = -(128 + row * 64)
+  self.max_mv_x = 128 + (self.cols - col - w4) * 64
+  self.max_mv_y = 128 + (self.rows - row - h4) * 64
   self.decode_mode()
   b.uvtx = b.tx - (if (self.ss_h != 0 && w4 * 2 == (1 << b.tx)) ||
     (self.ss_v != 0 && h4 * 2 == (1 << b.tx)) {
@@ -873,7 +773,18 @@ fn Vp9Decoder::decode_block(
     b.uvtx = 0
   }
   if b.skip == 0 {
-    let _has_coeffs = self.decode_coeffs()
+    let has_coeffs = self.decode_coeffs()
+    // an inter BS_8x8-or-smaller block without any coefficient counts as
+    // skipped (C ff_vp9_decode_block)
+    if has_coeffs == 0 && bs <= 9 && b.intra == 0 {
+      b.skip = 1
+      for i in 0..<w4 {
+        self.above_skip[col + i] = 1
+      }
+      for i in 0..<h4 {
+        self.left_skip[(row & 7) + i] = 1
+      }
+    }
   } else {
     let row7 = row & 7
     let a0 = col * 2
@@ -899,10 +810,25 @@ fn Vp9Decoder::decode_block(
       }
     }
   }
-  self.intra_recon(yoff, uvoff)
-  // pick filter level and mark edges to filter (keyframes: intra row 0)
+  if b.intra != 0 {
+    self.intra_recon(yoff, uvoff)
+  } else {
+    self.inter_recon(yoff, uvoff)
+  }
+  // pick filter level and mark edges to filter
   if self.filter_level() > 0 {
-    let lvl = self.seg_lflvl[b.seg_id * 8]
+    let lvl = self.seg_lflvl[b.seg_id * 8 +
+      (if b.intra != 0 {
+        0
+      } else {
+        b.refidx[0] + 1
+      }) *
+      2 +
+      (if b.mode[3] != 12 {
+        1
+      } else {
+        0
+      })]
     if lvl > 0 {
       for y in 0..<h4 {
         for x in 0..<w4 {
@@ -911,7 +837,12 @@ fn Vp9Decoder::decode_block(
       }
       let x_end = vp9_min(self.cols - col, w4)
       let y_end = vp9_min(self.rows - row, h4)
-      self.mask_edges(lflvl_idx, 0, 0, 0, (row & 7), (col & 7), x_end, y_end, 0, 0, b.tx, 0)
+      let skip_inter = if b.intra == 0 && b.skip != 0 {
+        1
+      } else {
+        0
+      }
+      self.mask_edges(lflvl_idx, 0, 0, 0, (row & 7), (col & 7), x_end, y_end, 0, 0, b.tx, skip_inter)
       if self.ss_h != 0 || self.ss_v != 0 {
         let col_end = if (self.cols & 1) != 0 && col + w4 >= self.cols {
           self.cols & 7
@@ -935,7 +866,7 @@ fn Vp9Decoder::decode_block(
           col_end,
           row_end,
           b.uvtx,
-          0,
+          skip_inter,
         )
       }
     }

@@ -515,7 +515,7 @@ $msg | git commit -F -
   缓冲未初始化），一度把正确的 MoonBit 实现改错又回退。正确顺序是先让 harness
   在 420（已 byte-exact）的调用序列上复现已知结果，再拿它质疑 422。
 - **README 是 CRLF**：脚本做多行替换时把 `
-` 换成 `
+` 换成 `
 ` 再匹配，否则静默失配。
 - **差分向量生成走 stdin/stdout 管道**：Git Bash 会把 `-v "$(pwd):/w"` 的卷挂载
   改写成无效路径，docker 报 `destination can't be '/'`；用
@@ -532,6 +532,32 @@ $msg | git commit -F -
 - **VP9 负例使用 MSB-first 帧头**：show-existing 的最短 profile-0 包为 `0x88`；
   inter 负例复用真实 P 包，解码器在依赖参考尺寸或消费压缩头之前拒绝。五流验收为
   3+3+2+2+2 = **12 帧**，生成脚本和参考 MD5 见 `vp9_kf_realdata_wbtest.mbt`。
+
+- **VP9 inter 对拍插桩用 IMD 行**：在 C `ff_vp9_decode_block`（decode_mode 之后）
+  与 MoonBit `decode_block` 对应位置打印 `bs/col/row/comp/ref/mode[4]/uvmode/
+  filter/tx/uvtx/skip/mv[4]`，加上块入口 BLK 行（带 cw/hi/bits）与 EOB 的 STEP
+  行即可覆盖 inter 全路径；C 的 `VP9mv` 是 int16 结构体，printf 时必须取
+  `.x/.y` 字段，整 struct 传 %d 会打印打包后的 32 位值造成假分歧。
+- **VP9 工作概率表与上下文表的槽步长不同**：`prob_coef` 每槽 **11** 个值
+  （3 真概率 + 8 pareto 尾），`prob_ctx_coef` 每槽 **3** 个；parallelmode 的
+  commit 从工作表拷回上下文表时源偏移必须按 11 算（曾按 3 算导致帧 1 起概率
+  全错、帧间像素大面积 ±1~2 偏差，对拍首个 STEP 的 `tp0` 即定位）。
+- **VP9 帧级 filter 字段与 switchable 树码顺序不同**：帧头 `interp_filter`
+  原码为 **0=smooth,1=regular,2=sharp,3=bilinear**（C 直接当 FilterMode 枚举
+  用），而 switchable 树码为 0=regular、1=smooth（C 经 `ff_vp9_filter_lut`
+  转换）；两个顺序恰在前两项互换，non-switchable 帧直接透传原码会选错 tap。
+- **VP9 adapt_prob 的负向舍入必须用算术右移**：C 的
+  `p1 + (((p2 - p1) * uf + 128) >> 8)` 对负调整量向负无穷取整（-96>>8=-1），
+  用 `/ 256`（向零截断，-96/256=0）会让自适应概率逐帧 +1 漂移；帧 1 起首个
+  分歧 NZ 行的 pareto 尾概率差 1 即此因。触发条件：`-frame-parallel 0` 编码
+  （默认 auto 时 libvpx 常开并行模式，只走 commit 路径测不出）。
+- **VP9 av_clip_intp2 通带是 [-2^p, 2^p-1]**（p = BIT_DEPTH-1）：上界在 2^p-1，
+  负号在移位**外**（`-((8192+sum)>>14)`）；iadst 类负号位置与括号结合极易抄错，
+  用「C 模板编 ktest.c 真值 + MBT 同 LCG 序列 A/B」逐核抓（vp9_kernels_wbtest.mbt
+  已固化为常驻校验和）。**String::to_bytes() 是 UTF-16LE**，喂 av_md5_sum 前要逐
+  code unit 取低字节转 ASCII。
+- **VP9 向量 b64 内嵌用单行 `b"..."`**：多行续行需要每段都带 `b` 前缀，
+  否则续段是 String 字面量触发 deprecated overload 警告（交付要求 0 警告）。
 
 - **H.264 P_SKIP 的缺邻规则独立于普通 MV 中值预测**：左邻或上邻为
   `REF_NOT_AVAIL` 时直接取零 MV；不能只处理「ref 0 且 MV=0」的捷径。真实 HLS/DASH

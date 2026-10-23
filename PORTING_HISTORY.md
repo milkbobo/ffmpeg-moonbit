@@ -1548,3 +1548,47 @@ MBAFF 回归用 96×64、6×2 宏块对、每帧两 slice 的流，丢弃 12 个
 清理：删除 `scripts/compare_h264_er.mbtx`（脚本模式解析不了本地包导入）、`scripts/inspect_h264_er_reference.mbtx`、`h264_picture_wbtest.mbt` 里的 `moon sums` 调试块，以及已成死代码的单次 `h264_er_guess_mv`（B 帧恒用零矢量，P 帧在 `!picture_mv_done` 分支不可达）。`filter181` 的 `value * 10923` 经核算在 14-bit 最坏值 1.4e9，仍在 Int32 内，与上游 32 位求值一致，加了说明注释。
 
 `moon check --target wasm --deny-warn --no-render` 通过，`moon test --target wasm --no-render` 为 **783/783**。
+
+## 12. 2026-10-23 VP9 帧间帧（inter）解码
+
+补齐 profile-0 帧间路径：`decode_mode` 的 inter 分支（is_inter/comp/参考选择/四种 MV 模式/switchable filter，`vp9_inter_block.mbt`）、`find_ref_mvs` 候选与 sub8x8 直接 MV（`vp9_mvs.mbt`）、非缩放运动补偿与 8tap/sixtap/bilinear 亚像素滤波（`vp9_inter_recon.mbt`）、概率模型 `ff_vp9_adapt_probs` 与 parallelmode 提交（`vp9_probs.mbt`）、inter 概率常量表（`vp9_inter_tables.mbt`）。
+
+验收向量：`testsrc2` 160×120、libvpx-vp9、单参考无 altref 的 IVF（关键帧 + 14 个 P 帧，`-g 6`），**15 帧逐帧 YUV MD5 与 Docker `linuxserver/ffmpeg:9.0.2` 一致**（`vp9_inter_realdata_wbtest.mbt`）。另与插桩 C 参考解码器做了全轨迹对拍：15 帧的块入口（RAC 状态）、skip、系数 STEP 与块级 IMD（模式/MV/滤波器）逐行一致后才比像素。
+
+本轮修掉两个真 bug，定位方法值得复用：
+
+- **commit 的槽步长**：工作表 `prob_coef` 每槽 11 个值（3 真概率 + 8 pareto 尾），上下文表每槽 3 个；parallelmode 下从工作表拷回上下文表时源偏移按 3 计算，读到了别的槽（144 恰为 band0/ctx2/pos2 的默认值），导致帧 1 起系数概率整体错位、约半数像素 ±1~2 偏差。首个分歧 STEP 的 `tp0`（C=14 / MBT=144）配合默认表比对直接锁定。
+- **帧级 filter 顺序**：帧头 `interp_filter` 原码是 **0=smooth,1=regular,2=sharp,3=bilinear**（C 直接当 FilterMode 枚举消费），switchable 树码才是 0=regular、1=smooth（C 经 `ff_vp9_filter_lut` 转换）；non-switchable 帧直接透传原码会选错 tap。
+
+对拍中的两个假分歧也记录在案：C 的 `VP9mv` 是 int16 结构体，printf 传整个 struct 会打出打包的 32 位值（如 -1048576 实为 (0,-16)），必须取 `.x/.y`；两侧 filter 枚举顺序不同（C 0=smooth/1=regular，本移植 0=regular/1=smooth）时 diff 脚本要先做 0↔1 归一化。
+
+边界：复合预测（B 帧）、多参考与参考缩放（缩放明确报错）、profile 1/2 未覆盖；`ff_vp9_adapt_probs` 的计数驱动路径已移植，但现有真实流全部是 parallelmode（走 commit 路径），该分支尚未被真实向量验证。调试插桩（IMD/BLK/SKIP/HDR/ADAPT 打印、`vp9_dbg` 字段、临时 trace 测试与脚本）已全部清理，`scripts/extract_vp9_tables.py --check` 复核通过。
+
+`moon check --no-render` 0 error/0 warning，`moon test` **784/784**。
+
+### 2026-10-23 补：VP9 计数驱动概率自适应与多参考验证
+
+用 `-frame-parallel 0` 生成的 160×120 流（关键帧 + 20 个 inter 帧）补齐上一节的验证缺口：21 帧全部 `parallelmode=0`（走 `ff_vp9_adapt_probs` 计数驱动路径而非 parallelmode commit），且三路参考（last/gold/altref）都有块使用。21 帧逐帧 YUV MD5 与 Docker FFmpeg 9.0.2 一致（`vp9_np_realdata_wbtest.mbt`，生成脚本 `scripts/_emit_vp9_np_vectors.py`）。
+
+对拍又抓到一个真 bug：`adapt_prob` 的合成公式 C 侧是 `p1 + (((p2 - p1) * uf + 128) >> 8)`，算术右移对负调整量向负无穷取整；移植初版用 `/ 256`（向零截断），负值时该退位的概率不退位，帧 1 起自适应概率逐槽 +1 漂移（首个分歧 NZ 行的 pareto 尾概率差 1 直接可见）。改为 `>> 8` 后 21 帧语法轨迹（含每系数 NZ 行）与 C 完全一致。
+
+FFmpeg 的 libvpx-vp9 封装不支持编码 B 帧（`libvpxenc.c` 无 max_b_frames 传递），复合预测无法用该编码器生成向量，维持未验证；参考缩放与 profile 1/2 仍是明确边界。
+
+`moon check --no-render` 0 error/0 warning，`moon test` **785/785**。
+
+### 2026-10-23 补：VP9 profile 2（10/12-bit）
+
+在 8-bit inter 之上补齐 profile 2 的 10/12-bit 路径。C 侧 16bpp 与 8bpp 的差异经逐项核对为：`dctcoef`/`dctint` 变宽（int16→int32 存储、int64 蝶形）、q 表按 bpp 行选（`ff_vp9_{dc,ac}_qlookup[bpp_index]`，表早已提取只是索引漏了行偏移）、cat6 系数在 12-bit 多读 4 个高位概率位、LF 的 E/I/H/F 按 `<<(bpp-8)` 缩放且 clip_intp2 位宽为 bpp-1、DC 边缘常量 127/129/128 按 `<<(bpp-8)` 缩放、MC 的 clip 上限放开、输出按 yuv420p10le/12le 打包 LE16。实现方式是把全部 1D 变换核统一到 Int64 蝶形（对 8-bit 有界输入逐位等价，已由 785 帧回归确认）、clip/LF/预测入口带 bpp/pixel_max 参数。
+
+本轮对拍修掉四个真 bug，前两个是移植错、后两个是一次脚本化重写引入又靠真值对拍抓回：
+
+- **av_clip_intp2 的通带**：定义是裁到 `[-2^p, 2^p-1]`（p=BIT_DEPTH-1），首版误写成 `1<<(bits-1)`，8-bit 回归恰好只差 19 像素、由旧新核随机 A/B（2000 组 1 组分歧）定位。
+- **iadst16 两处正则重写损伤**：`-(t2a+t3a)*11585` 被改写成 `-(t2a3 + t3a3*11585)`（乘法结合错对象）、`-((8192+sum)>>14)` 的负号被移进移位里。8-bit 向量覆盖不到这些分支（单系数稀疏 TU 才触发），靠「C 模板编成 ktest.c 真值发生器 + MBT 同 LCG 序列 A/B」逐核抓出：七个核各 3000 组随机输入全对齐后，三条 10/12-bit 真实流（45 帧）MD5 全部收敛。
+- **系数存储截断**：`decode_coeffs_b` 的存入在 16bpp 下不得做 int16 截断。
+- **inter 帧 header 继承**：C 的帧头是持久结构体，inter 帧不重读 coloursspace；本实现的逐帧默认 header 需要把 profile/bit_depth/subsampling 从上一帧带过来。
+
+新增三条真实向量（`vp9_10p/10np/12p_realdata_wbtest.mbt`，生成脚本 `scripts/_emit_vp9_p2_vectors.py`）：10-bit 关键帧+P、10-bit 计数驱动自适应、12-bit，共 45 帧逐帧 MD5 与 Docker FFmpeg 一致。核 A/B 固化为常驻测试 `vp9_kernels_wbtest.mbt`（每核 3000 组 LCG 输入的输出 MD5 对 C 真值），覆盖 8-bit 流触不到的分支。
+
+对拍技巧沉淀：LF 探针按 (E,I,wd) 值组合过滤即可在 C/MBT 两侧对齐同一批调用而不必打印坐标；`String::to_bytes()` 是 **UTF-16LE** 不是 UTF-8，喂 MD5 前须逐 code unit 取低字节。
+
+`moon check --no-render` 0 error/0 warning，`moon test` **789/789**。

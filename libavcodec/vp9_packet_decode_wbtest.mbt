@@ -23,7 +23,9 @@ fn vp9_display_superframe(frames : Array[Bytes]) -> Bytes {
 test "vp9 display: all eight slots reproduce the decoded keyframe" {
   let decoder = vp9_decoder_new()
   decoder.decode_frame(vp9_kf_qfull_frames[0]).unwrap()
-  assert_true(decoder.decode_packet(b"\xa8") is Err("vp9: only profile 0 (8-bit 4:2:0) is supported"))
+  // 0x90 = truncated profile-2 keyframe probe; profile 2 headers now parse
+  // (10/12-bit support), and this 1-byte packet dies later in the parser
+  assert_true(decoder.decode_packet(b"\x90") is Err(_))
   for slot in 0..<8 {
     let packet = Bytes::from_array([(0x88 | slot).to_byte()])
     let frames = decoder.decode_packet(packet).unwrap()

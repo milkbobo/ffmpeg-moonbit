@@ -160,7 +160,7 @@ fn Vp9Decoder::check_intra_mode(
         }
       } else {
         for i in 0..<n_px_need {
-          top[1 + i] = 127
+          top[1 + i] = self.pixel_mid - 1
         }
       }
       if needs_topleft {
@@ -171,9 +171,9 @@ fn Vp9Decoder::check_intra_mode(
             plane[src_off - 1]
           }
         } else if have_top {
-          top[0] = 129
+          top[0] = self.pixel_mid + 1
         } else {
-          top[0] = 127
+          top[0] = self.pixel_mid - 1
         }
       }
       if tx == 0 && needs_topright {
@@ -231,7 +231,7 @@ fn Vp9Decoder::check_intra_mode(
       }
     } else {
       for i in 0..<(4 << tx) {
-        left[i] = 129
+        left[i] = self.pixel_mid + 1
       }
     }
   }
@@ -289,7 +289,17 @@ fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
         0,
         0,
       )
-      vp9_intra_pred(b.tx, mode, self.y, tu_off, self.ystride, left, top)
+              vp9_intra_pred(
+        b.tx,
+        mode,
+        self.y,
+        tu_off,
+        self.ystride,
+        left,
+        top,
+        self.pixel_mid,
+        self.pixel_max,
+      )
       if eob != 0 {
         vp9_itxfm_add(
           tx_kind,
@@ -300,6 +310,8 @@ fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
           self.block,
           16 * n,
           eob,
+          self.bpp,
+          self.pixel_max,
         )
       }
       n += step
@@ -348,7 +360,17 @@ fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
           self.ss_h,
           self.ss_v,
         )
-        vp9_intra_pred(b.uvtx, mode, plane, tu_off, self.uvstride, left, top)
+        vp9_intra_pred(
+          b.uvtx,
+          mode,
+          plane,
+          tu_off,
+          self.uvstride,
+          left,
+          top,
+          self.pixel_mid,
+          self.pixel_max,
+        )
         if eob != 0 {
           let ublock = if pl == 0 {
             self.uvblock0
@@ -364,6 +386,8 @@ fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
             ublock,
             16 * n,
             eob,
+            self.bpp,
+            self.pixel_max,
           )
         }
         n += step
