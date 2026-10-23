@@ -1535,7 +1535,15 @@ MBAFF 回归用 96×64、6×2 宏块对、每帧两 slice 的流，丢弃 12 个
 
 新增回归：渐进流缺失首段/中段/连续两段/截断末段 4 个变体逐帧对齐上游；10-bit 4:2:0、4:4:4、4:2:2 的多 slice 流在开关补偿两种模式下均逐帧一致。`put_dc` 的 DC 钳位补上了上游的 `dc > 2040 → 2040`（不随位深缩放，10-bit 因此封顶 255）。
 
-**已知偏差**：P 帧大缺口场景仍未逐像素对齐。`trunc_p_mid`（P 帧中间 slice 截断）只有 V 平面 3 个像素差 1–2，Y/U 完全一致，差异位于恢复区滤波的宏块边界；`two_split`（参考帧本身被补偿过）与丢整段 slice 的 10-bit/4:4:4/4:2:2 场景差异更大，Y 平面即不同，源于多轮 `guess_mv` 与 DC 估计的取值分歧。这些场景不纳入断言，避免把未对齐的行为固化。
+**已知偏差**：P 帧大缺口场景仍未逐像素对齐。`trunc_p_mid`（P 帧中间 slice 截断）最终只剩 V 平面 2 个像素差 1–2，Y/U 整帧一致；`two_split`（参考帧本身被补偿过）与丢整段 slice 的 10-bit/4:4:4/4:2:2 场景差异更大，Y 平面即不同，源于多轮 `guess_mv` 与 DC 估计的取值分歧。这些场景不纳入断言，避免把未对齐的行为固化。
+
+对 `trunc_p_mid` 做过四轮定位，已确认与已排除如下（供后续接手，避免重走）：
+
+- **恢复本身完全正确**。关掉两侧滤波后，恢复宏块 mb16 的 V 区域（x32..39, y16..31）与上游 `-ec 1 -skip_loop_filter all` 逐字节相同；色度 MC 手算校验一致（`mv=(8,-15)` → `dx=0, dy=1` → `(7a+c+4)>>3`）。
+- **FFmpeg 的 `-ec` 是位掩码**（`FF_EC_DEBLOCK = 2`）。`-ec 1` 配合 `-skip_loop_filter all` 可以取到"恢复后 / 两种滤波前"的四种中间状态，与移植侧 `skip_lf × er_deblock` 四组合逐一对比——这是这类问题最有效的手段。
+- **已排除**：weighted prediction（补上 `h264_weight_rect` 后输出零变化，这些帧 `use_weight == 0`）、bS 取值（1→2 无变化）、QP（恢复宏块 QP 强制 1..40 全无变化）、slice 的 alpha/beta offset（都是 0）、恢复宏块 `deblock_idc`（1→0）、`cstride` 与 `cbase` 坐标（实测 `p=1186 stride=48 len=1920` 正确）、`tc0` 表越界（表长 624，索引有效）。
+- **实测参数**：mb22 上边界的判决为 `bs=[2,2,2,2]`、`cq0=20` → `index_a=72` → `alpha=7 beta=3 tc=1`。这条边界上 V 平面 x=34 的 `|p0-q0|=6 < 7` 本应通过，但日志里 `p0` 全是 225~228 这类高值，**V 平面那次调用没有出现在日志中**，说明它与 U 平面共用 `coff`、无法从 `start` 区分，且 V 侧可能提前返回。
+- **遗留线索**：在 `h264_filter_chroma_edge` 开头的 `if alpha == 0 || beta == 0 { return }` 插桩，并在 `h264_filter_mb` 调用处用 `data == ctx.v` 区分平面，可以判定 V 是否提前返回。
 
 清理：删除 `scripts/compare_h264_er.mbtx`（脚本模式解析不了本地包导入）、`scripts/inspect_h264_er_reference.mbtx`、`h264_picture_wbtest.mbt` 里的 `moon sums` 调试块，以及已成死代码的单次 `h264_er_guess_mv`（B 帧恒用零矢量，P 帧在 `!picture_mv_done` 分支不可达）。`filter181` 的 `value * 10923` 经核算在 14-bit 最坏值 1.4e9，仍在 Int32 内，与上游 32 位求值一致，加了说明注释。
 
