@@ -140,11 +140,14 @@ moonbit/
     ├── h264_mc.mbt           # 运动补偿：luma 6 抽头 qpel + chroma 1/8 双线性 + 边界复制
     ├── h264_mvpred.mbt       # MV 预测：A/B/C 邻块、mid_pred、P_SKIP 捷径
     ├── h264_inter.mbt        # P 宏块层（CABAC+CAVLC）：skip/type/ref/mvd + inter 残差
-    ├── h264_dpb.mbt          # 滑窗 DPB：POC 跟踪、默认 L0、参考标记（H264Decoder）
+    ├── h264_dpb.mbt          # 滑窗 DPB、PAFF 互补场配对与共享平面/运动历史（H264Decoder）
+    ├── h264_ref_list.mbt     # 帧/场默认短长参考表、场交错、重排与缺失参考替换
     ├── h264_b_mb.mbt         # B 宏块层：类型/子分区/L0L1 ref+mvd/直接模式
     ├── h264_b_mc.mbt         # B 双向 MC：显式/隐式加权与 (a+b+1)>>1 平均
     ├── h264_b_refs.mbt       # B 默认 L0/L1 列表（短/长参考排序）
-    ├── h264_b_direct.mbt     # 空间/时间 direct 运动推导与 colocated 缩放
+    ├── h264_b_direct.mbt     # 帧/场空间/时间 direct、异场 colocated 行偏移与缩放
+    ├── h264_paff_realdata_wbtest.mbt # JM 19.0 PAFF 8 流/84 帧，滤波与未滤波 MD5
+    ├── h264_paff_wbtest.mbt   # 场配对/POC、slice 隔离、B 表场交换、MMCO 场掩码/超限
     ├── h264_depth.mbt        # 8–14 bit 的样本截断与 QP 上限
     ├── h264_output.mbt       # 显示重排：POC 排序、epoch、reorder_depth drain
     ├── h264_chroma_realdata_wbtest.mbt # 4:2:2/4:4:4 真实码流逐帧 MD5
@@ -261,7 +264,7 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行（实测 1,595,275 行），本次完成 MoonBit 源文件
-（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **128763 行**（libavutil 6483 行 +
+（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **144502 行**（libavutil 6483 行 +
 libavformat 的 aviobuf 流式 AVIO 层、MP4 解复用、Matroska EBML/Segment/Tracks/Cluster、
 裸 AAC/MP3 分帧、容器码流参数桥与 HLS/DASH 分片回调 33319 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
 IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CAVLC 全通 / CABAC 部分
@@ -287,7 +290,7 @@ scaling list（默认/SPS/PPS 矩阵、逐系数 scale_m 与 DC 缩放，kvazaar
 I/P/B+WPP 码流逐字节一致）**、**HEVC 单色（chroma_format_idc=0：仅亮度平面，跳过色度帧内模式/
 残差/MC/去块/SAO，8/10-bit I/P/B 真实码流逐字节一致）**
 及 **VP9 profile-0 关键帧解码（五流 12 帧 YUV MD5 一致）**、**Opus 共享熵解码、
-CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，88961 行，含测试）——约占整体 **8.1%**。
+CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，104700 行，含测试）——约占整体 **9.1%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 码流层）
 
@@ -358,7 +361,7 @@ CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，88961 行，含测�
 | [h264_mc.mbt](libavcodec/h264_mc.mbt) | `h264_mb.c`/`mc.h`(`mc_dir_part`、`qpel_mc`/`chroma_mc` 标量内核) | **运动补偿**：6 抽头半像素 luma 滤波（qpel 四分插值取全/半平均）、chroma 1/8 双线性；越界取样按 `ff_emulated_edge_mc` 的边界复制钳制。块基准位置显式传入（luma 与 chroma 一致） | ✅ |
 | [h264_mvpred.mbt](libavcodec/h264_mvpred.mbt) | `h264_mvpred.h`(`pred_motion`/`pred_16x8_motion`/`pred_8x16_motion`/`pred_pskip_motion`) | **MV 预测**：A/B/C 邻块提取（topright 缺席回退 topleft）、`match_count` 分支（多数取中值 `mid_pred`、单一匹配取该邻块、全不匹配且仅有左邻取 A）、`mvd_cache` 语义（不可用/intra 邻居贡献 0） | ✅ |
 | [h264_inter.mbt](libavcodec/h264_inter.mbt) | `h264_cabac.c` 的 P 分支(`decode_cabac_mb_skip`/`decode_cabac_mb_type`/`decode_cabac_p_mb_sub_type`/`decode_cabac_mb_ref`/`decode_cabac_mb_mvd`)、`h264_cavlc.c` 的 P 分支、`h264_mb.c`(`mc_part_std`/`mc_part_weighted`) | **P 宏块层**：skip flag、P_L0_16x16/16x8/8x16/8x8 四种划分与子划分、ref_idx（`ref_count>1` 才解码，且每个分区的 ref 立即写回邻域表供后续分区的 CABAC 上下文使用）、mvd 读取与写回、inter CBP 与残差路径、分块运动补偿编排（CAVLC/CABAC 共用）、显式加权预测（luma/chroma 权重与偏移，`(v*w + off<<denom + round) >> denom`，含 skip 与所有划分） | ✅ |
-| [h264_dpb.mbt](libavcodec/h264_dpb.mbt) | `h264dec.c`、`h264_parse.c`、`h264_refs.c` | progressive I/P 的 POC 0/1/2、frame_num 回绕、MMCO 1–6/IDR 长参考；默认 P L0 按 FrameNumWrap 降序再接长参考升序，支持短/长重排与 missing-reference substitution；Annex B/avcC 两入口聚合多 slice，画面完整后才提交参考与 POC | ✅ |
+| [h264_dpb.mbt](libavcodec/h264_dpb.mbt)、[h264_ref_list.mbt](libavcodec/h264_ref_list.mbt)、[h264_reference_marking.mbt](libavcodec/h264_reference_marking.mbt) | `h264dec.c`、`h264_parse.c`、`h264_refs.c` | I/P/B 的 POC 0/1/2、frame_num 回绕、MMCO 1–6/IDR 长参考；帧/场短长参考表与重排、缺失参考替换、B 同表场交换；PAFF 互补场配对、共享平面/运动历史、逐场参考掩码与 DPB 超限回收；Annex B/avcC 多 slice 入口，画面完整后提交参考与 POC | ✅ |
 | [aac_ics.mbt](libavcodec/aac_ics.mbt) | `libavcodec/aac/aacdec.c`(`decode_ics_info`/`decode_band_types`/`ff_aac_decode_tns`/`decode_pulses`、gain-control) | **AAC ICS 语法层**：窗口序列/`max_sfb`/分组、section escape、scalefactor 差分、TNS 压缩系数、1..4 个 pulse 的起始带/offset/amp、gain-control；短窗 pulse 与截断语法拒绝 | ✅ |
 | [aac_mdct.mbt](libavcodec/aac_mdct.mbt) | `aacdec_dsp_template.c`(`imdct_and_windowing`)、`aacdec.c` 的 raw_data_block/SCE/CPE/LFE 框架、`kbdwin.c` | **AAC IMDCT/加窗 + 多元素帧框架**：直接法 MDCT/IMDCT（O(N²)，适配 FFmpeg 符号与浮点缩放）、四种窗口序列、正弦/KBD 窗；循环解码 SCE/CPE/LFE/FIL/PCE/DSE，按布局输出 PCM，以类型/标签/子声道绑定历史；校验 END 和元素完整性后才提交布局与窗状态，错误时恢复 PNS 随机状态 | ✅ |
 | [aac_stereo.mbt](libavcodec/aac_stereo.mbt) | `aacdec.c`(`decode_cpe`/`decode_mid_side_stereo`)、`aacdec_dsp_template.c`(`apply_mid_side_stereo`/`apply_intensity_stereo`) | **AAC-LC CPE**：共享或独立 ICS、M/S 模式 0/1/2 与逐组掩码、噪声带排除、强度立体声 14/15 的极性与 M/S 反转；左右频谱/pulse→M/S→强度立体声→各声道 TNS/IMDCT，左右历史窗口独立 | ✅ |
@@ -570,7 +573,9 @@ Huffman 规范化码另有等效性说明，见下文）：
   MBAFF 帧图（I/P/B、CAVLC/CABAC、混合 field/frame 宏块对、多参考/B-pyramid、
   空间/时间 direct、CQM、8/10-bit 4:2:0/4:2:2/4:4:4、多 slice）已逐字节对齐，
   High 4:4:4 lossless transform bypass（4:0:0/4:2:0/4:2:2/4:4:4、8/10-bit、CABAC/CAVLC、含 MBAFF）
-  也已逐字节对齐；场图（PAFF）仍拒绝）；
+  也已逐字节对齐；PAFF 场图（8-bit 4:2:0 I/P/B、CAVLC/CABAC、空间/时间 direct、
+  多 slice、互补场共享平面与成对输出）已由 JM 19.0 真实流逐字节验证；
+  PAFF 其他位深/色度与帧场混编的交叉引用仍待真实向量验证）；
   CABAC 的多行与运动 I/P 验证范围见 §3。
 - **H.265**：`hevc_ps.mbt` 完成 VPS/SPS/PPS 与 PTL、short-term RPS、VUI、缩放列表、
   Range Extension 与 SCC 语法、`hvcC`/Annex B extradata、POC 计算。**未做**：slice
@@ -1013,10 +1018,36 @@ C harness 仅生成黄金参考，运行时保持纯 MoonBit。
 2026-10-23 增量完成后，原清单 1、2 两项中的 B 帧全套、高位深（8–14 bit）与
 4:2:2/4:4:4 均已完成（见下节）；仍开放：
 
-1. 单色（chroma_format_idc 0）、separate colour plane、transform bypass/残差 DPCM、SP/SI 重建。
-2. 场图/PAFF/MBAFF：场扫描、场参考与 POC、预测/MC/去块及成对场输出。
+1. SP/SI 重建；separate colour plane 与 FMO 继续按原 C 的拒绝边界处理。
+2. 单色、transform bypass、MBAFF 与 PAFF 已完成本轮真实流验证（PAFF 范围见下节）；
+   PAFF 其他位深/色度、帧场混编的交叉引用仍需扩充真实向量。
 3. frame_num gap 的非存在参考补偿、数据分区/冗余 slice、错误恢复及 SEI T.35/输出元数据接入。
    原 C 本身拒绝的 FMO 等功能继续保留对应拒绝边界。
+
+### 2026-10-23 H.264 PAFF 场图
+
+支持 `field_pic_flag=1` 的 I/P/B 场图：按场奇偶遍历宏块、扫描/预测/运动补偿/去块，
+互补场以 frame_num、场奇偶及 droppable 状态配对，共享平面与宏块历史，第二场完成后输出。
+第一场未解码的另一场 POC 保持 INT_MAX，成对输出取两场 POC 的最小值；第二场 slice
+编号接续第一场，避免跨场邻居被误判为同一 slice。场参考表按同/异场交错，最多 32 项；
+MMCO 按场掩码移除参考，短参考操作先还原 PicNum 差值；超限时按原 C 丢最旧 short，
+只有 long 时丢最小长索引。B 时域 direct 用每个宏块保存的参考身份和场奇偶完成 colocated
+映射，异场读取偏移到对应场行。P/B 的 8×8 子分区参考缓存写入顺序同步原 C。
+
+验证：`h264_paff_realdata_wbtest.mbt` 内嵌 JM 19.0 的 8 条真实流，共 **84 帧 ×
+滤波/未滤波两套 framemd5**，全部逐字节对齐 Docker `linuxserver/ffmpeg:9.0.2`
+（镜像 ID `sha256:742e17516dd4d7b76b939d774bd08f0f6b7cab8bce1c014b95ab2fb992fd0a1f`）。
+覆盖 CAVLC/CABAC I/P/B、空间/时间 direct、12 帧参考标记与多 slice；另有 5 项场状态回归。
+本轮验收范围为 8-bit 4:2:0 PAFF；其他位深/色度和帧场混编的交叉引用尚未实流验证。
+
+复现：解压并构建 JM 19.0 到 `.scratch/JM/`（保留其原始 `bin/encoder.cfg` 与
+`foreman_part_qcif.yuv`），依次运行 `scripts/gen_jm_paff_input.mbtx`、
+`scripts/gen_jm_paff_cfgs.mbtx`、`scripts/run_h264_paff_reference.mbtx <JM/bin绝对路径>`、
+`scripts/emit_h264_paff_vectors.mbtx`。参考生成器仅挂载 JM/bin 样本目录，容器禁用网络。
+运行命令为 `moon run <脚本> [参数]`。全量 `moon test --target wasm`：**712/712**；
+`moon check --target wasm --deny-warn` 零错误/零警告，`moon info --target wasm` 通过。
+剩余 H.264 重点为 SP/SI、data partitioning 与 frame_num gap 合成；FMO 与 separate
+colour plane 保持与原 C 相同的拒绝边界。
 
 ### 2026-10-23 H.264 B 帧与 4:2:2/4:4:4 解码
 
@@ -1147,7 +1178,7 @@ mp2 demuxer 探测），期望值取 FFmpeg 解码同一段码流的定点 PCM M
 ```bash
 cd moonbit
 moon check     # 0 error / 0 warning
-moon test      # 627/627 passed
+moon test --target wasm  # 712/712 passed
 ```
 
 ---

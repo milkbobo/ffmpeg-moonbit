@@ -1,0 +1,79 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+// Build JM 19.0 lencod.exe in .scratch/JM/bin first, then run:
+// moon run scripts/gen_jm_paff_input.mbtx
+// moon run scripts/gen_jm_paff_cfgs.mbtx
+// moon run scripts/run_h264_paff_reference.mbtx D:/project/FFmpeg-n9.0.2/moonbit/.scratch/JM/bin
+// moon run scripts/emit_h264_paff_vectors.mbtx
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() >= 2 else {
+    fail("expected absolute JM bin directory (only vector files are mounted)")
+  }
+  let names = if args.length() > 2 {
+    args[2:].to_owned()
+  } else {
+    [
+      "jm_paff_p_cavlc", "jm_paff_p_cabac", "jm_paff_b_cavlc", "jm_paff_b_cabac",
+      "jm_paff_p_long", "jm_paff_b_temporal_cavlc", "jm_paff_b_temporal_cabac", "jm_paff_b_slices",
+    ]
+  }
+  for name in names {
+    println("Generating \{name}")
+    let log = StringBuilder()
+    let status = @shell.Cmd("docker", [
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "-v",
+      args[1] + ":/vectors",
+      "-w",
+      "/vectors",
+      "--entrypoint",
+      "./lencod.exe",
+      "linuxserver/ffmpeg:9.0.2",
+      "-f",
+      name + ".cfg",
+    ]).each_line(line => log.write_string(line + "\n"))
+    @fs.write_string_to_file(
+      ".scratch/JM/bin/" + name + "_encode.log",
+      log.to_string(),
+    )
+    guard status == 0 else { fail("JM failed: \{name}") }
+    for skip in [false, true] {
+      let suffix = if skip { "_unf" } else { "" }
+      let options = if skip { ["-skip_loop_filter", "all"] } else { [] }
+      let status = @shell.Cmd(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--network",
+          "none",
+          "-v",
+          args[1] + ":/vectors",
+          "-w",
+          "/vectors",
+          "--entrypoint",
+          "ffmpeg",
+          "linuxserver/ffmpeg:9.0.2",
+          "-v",
+          "error",
+          "-y",
+        ] +
+        options +
+        ["-i", name + ".264", "-f", "framemd5", name + suffix + ".md5"],
+      ).each_line(line => println(line))
+      guard status == 0 else { fail("FFmpeg failed: \{name}\{suffix}") }
+    }
+  }
+}

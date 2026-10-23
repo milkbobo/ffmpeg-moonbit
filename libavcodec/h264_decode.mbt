@@ -1,5 +1,5 @@
 ///|
-/// MoonBit port of FFmpeg 9.0.2 progressive H.264 I/P reconstruction:
+/// MoonBit port of FFmpeg 9.0.2 H.264 I/P/B reconstruction:
 /// CAVLC/CABAC macroblocks, 4x4/8x8 transforms, intra/inter prediction,
 /// multiple slices sharing one picture and the in-loop deblocking filter.
 ///
@@ -8,8 +8,8 @@
 /// Scope: 8..14-bit 4:0:0/4:2:0/4:2:2/4:4:4 frame-coded I/P/B pictures,
 /// CAVLC/CABAC, 4x4/8x8, I_PCM, slice-local prediction, weighted prediction,
 /// High 4:4:4 lossless transform bypass and MBAFF frame pictures (including
-/// mixed field/frame MB pairs). The persistent reference/POC/MMCO state lives
-/// in h264_dpb.mbt. SP/SI reconstruction and field pictures (PAFF) remain
+/// mixed field/frame MB pairs), plus PAFF field pictures. The persistent
+/// reference/POC/MMCO state lives in h264_dpb.mbt. SP/SI reconstruction remains
 /// unfinished.
 
 ///|
@@ -161,7 +161,9 @@ pub fn H264Frame::yuvp(self : H264Frame) -> Bytes {
     for col = 0; col < self.width; col = col + 1 {
       let sample = self.y[o + col]
       out.push(sample.to_byte())
-      if self.bit_depth > 8 { out.push((sample >> 8).to_byte()) }
+      if self.bit_depth > 8 {
+        out.push((sample >> 8).to_byte())
+      }
     }
   }
   let cw = self.width >> self.chroma_hshift
@@ -175,7 +177,9 @@ pub fn H264Frame::yuvp(self : H264Frame) -> Bytes {
       for col = 0; col < cw; col = col + 1 {
         let sample = src[o + col]
         out.push(sample.to_byte())
-        if self.bit_depth > 8 { out.push((sample >> 8).to_byte()) }
+        if self.bit_depth > 8 {
+          out.push((sample >> 8).to_byte())
+        }
       }
     }
   }
@@ -207,6 +211,11 @@ priv struct H264DecCtx {
   pps : H264Pps
   mb_width : Int32
   mb_height : Int32
+  /// `FIELD_PICTURE(h)`: a coded field (`field_pic_flag`), every MB is field
+  /// coded and only rows of one parity belong to the picture.
+  field_picture : Bool
+  /// `picture_structure == PICT_BOTTOM_FIELD`.
+  bottom_field : Bool
   /// `FRAME_MBAFF(h)`: MBAFF frame picture (adaptive field/frame MB pairs).
   mb_aff : Bool
   /// `MB_FIELD(sl)`: the macroblock currently being decoded is field-coded.
@@ -241,7 +250,10 @@ priv struct H264DecCtx {
 ///|
 /// `h264_fill_mbaff_ref_list`: frame refs stay at 0..15, top/bottom field
 /// views go to 16+2*i and 17+2*i with doubled strides and half heights.
-fn h264_fill_mbaff_refs(frames : Array[H264RefPic], mb_aff : Bool) -> Array[H264RefPic] {
+fn h264_fill_mbaff_refs(
+  frames : Array[H264RefPic],
+  mb_aff : Bool,
+) -> Array[H264RefPic] {
   if !mb_aff || frames.length() == 0 {
     return frames
   }
@@ -283,8 +295,12 @@ fn h264_fill_mbaff_refs(frames : Array[H264RefPic], mb_aff : Bool) -> Array[H264
 ///|
 /// Deblocking reference id after `ref2frm`: frame MBs use `4*id+3`, field MBs
 /// `4*id + (r even ? 1 : 2)` (top/bottom field of every other ref list entry).
-fn h264_deblock_ref_id(ctx : H264DecCtx, ref_index : Int32, field_mb : Bool,
-  list? : Int32 = 0) -> Int32 {
+fn h264_deblock_ref_id(
+  ctx : H264DecCtx,
+  ref_index : Int32,
+  field_mb : Bool,
+  list~ : Int32 = 0,
+) -> Int32 {
   if ref_index < 0 {
     return -1
   }
@@ -303,7 +319,14 @@ fn h264_deblock_ref_id(ctx : H264DecCtx, ref_index : Int32, field_mb : Bool,
       -1
     }
   } else if ref_index < refs.length() {
-    refs[ref_index].identity
+    // Field-picture lists already contain field views; `ref2frm` distinguishes
+    // the two fields of one picture (`4*id + parity`).
+    let entry = refs[ref_index]
+    if entry.parity != 0 {
+      entry.identity * 4 + entry.parity
+    } else {
+      entry.identity
+    }
   } else {
     -1
   }
@@ -313,14 +336,27 @@ fn h264_deblock_ref_id(ctx : H264DecCtx, ref_index : Int32, field_mb : Bool,
 /// `sl->ref_count[list] << MB_MBAFF(sl)`: MBAFF field MBs index both fields
 /// of every reference.
 fn h264_ref_count(ctx : H264DecCtx) -> Int32 {
-  if ctx.mb_aff && ctx.mb_field { ctx.ref_count0 * 2 } else { ctx.ref_count0 }
+  if ctx.mb_aff && ctx.mb_field {
+    ctx.ref_count0 * 2
+  } else {
+    ctx.ref_count0
+  }
 }
 
 ///|
 /// Map a coded ref index to its entry in the MBAFF reference list: field MBs
 /// use `16 + (ref ^ parity)` (`ff_h264_decode_mb_*` + `hl_decode_mb`).
-fn h264_ref_entry(ctx : H264DecCtx, ref_index : Int32, field_mb : Bool, parity : Int32) -> Int32 {
-  if ctx.mb_aff && field_mb && ref_index >= 0 { 16 + (ref_index ^ parity) } else { ref_index }
+fn h264_ref_entry(
+  ctx : H264DecCtx,
+  ref_index : Int32,
+  field_mb : Bool,
+  parity : Int32,
+) -> Int32 {
+  if ctx.mb_aff && field_mb && ref_index >= 0 {
+    16 + (ref_index ^ parity)
+  } else {
+    ref_index
+  }
 }
 
 ///|
@@ -378,7 +414,7 @@ fn h264_nc_luma(
   gx : Int32,
   gy : Int32,
   nz : Array[Int32],
-  base? : Int32 = 0,
+  base~ : Int32 = 0,
 ) -> Int32 {
   let left = if gx > 0 {
     nz[base + gy * 4 + gx - 1]
@@ -476,7 +512,9 @@ fn h264_decode_mb(
   mb_x : Int32,
   mb_y : Int32,
 ) -> Result[Unit, String] {
-  if ctx.slice_type_nos == 1 { return h264_decode_b_mb(Cavlc(gb), ctx, mb_idx) }
+  if ctx.slice_type_nos == 1 {
+    return h264_decode_b_mb(Cavlc(gb), ctx, mb_idx)
+  }
   if ctx.slice_type_nos != 2 {
     // `mb_skip_run`: -1 means "read a new run" (the value after a coded
     // macroblock, matching `sl->mb_skip_run--` in the C).
@@ -508,7 +546,9 @@ fn h264_decode_mb(
   if mb_type_raw < 0 {
     return Err("invalid mb_type")
   }
-  if ctx.si_slice && mb_type_raw > 0 { mb_type_raw -= 1 }
+  if ctx.si_slice && mb_type_raw > 0 {
+    mb_type_raw -= 1
+  }
   if ctx.slice_type_nos != 2 {
     if mb_type_raw <= 4 {
       return h264_decode_mb_cavlc_p(gb, ctx, mb_idx, mb_x, mb_y, mb_type_raw)
@@ -525,7 +565,12 @@ fn h264_decode_mb(
 
 ///|
 fn h264_decode_mb_cavlc_intra(
-  gb : BitReader, ctx : H264DecCtx, mb_idx : Int32, mb_x : Int32, mb_y : Int32, mb_type_raw : Int32,
+  gb : BitReader,
+  ctx : H264DecCtx,
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  mb_type_raw : Int32,
 ) -> Result[Unit, String] {
   let pps = ctx.pps
   let mut is_i4x4 = false
@@ -572,7 +617,9 @@ fn h264_decode_mb_cavlc_intra(
     let ybase = h264_mb_ybase(ctx, mb_x, mb_y)
     for row = 0; row < 16; row = row + 1 {
       for col = 0; col < 16; col = col + 1 {
-        ctx.y[ybase + row * ystride + col] = gb.read(ctx.bit_depth).reinterpret_as_int()
+        ctx.y[ybase + row * ystride + col] = gb
+          .read(ctx.bit_depth)
+          .reinterpret_as_int()
       }
     }
     if ctx.chroma_format != 0 {
@@ -620,7 +667,11 @@ fn h264_decode_mb_cavlc_intra(
       }
       modes[gy * 4 + gx] = mode
       if info.transform_8x8 {
-        for dy in 0..<2 { for dx in 0..<2 { modes[(gy + dy) * 4 + gx + dx] = mode } }
+        for dy in 0..<2 {
+          for dx in 0..<2 {
+            modes[(gy + dy) * 4 + gx + dx] = mode
+          }
+        }
       }
     }
   }
@@ -634,13 +685,23 @@ fn h264_decode_mb_cavlc_intra(
     if cm < 0 || cm > 3 {
       return Err("chroma prediction mode out of range")
     }
-    chroma_mode = match h264_check_intra_pred_mode(cm, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
+    chroma_mode = match
+      h264_check_intra_pred_mode(
+        cm,
+        h264_intra_top(ctx, mb_idx),
+        h264_intra_left(ctx, mb_idx),
+      ) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
   }
   if is_i16x16 {
-    pred16 = match h264_check_intra_pred_mode(pred16, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx)) {
+    pred16 = match
+      h264_check_intra_pred_mode(
+        pred16,
+        h264_intra_top(ctx, mb_idx),
+        h264_intra_left(ctx, mb_idx),
+      ) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
@@ -674,8 +735,18 @@ fn h264_decode_mb_cavlc_intra(
   } else if (ctx.chroma_format == 0 || ctx.chroma_format == 3) && cbp > 15 {
     return Err("gray chroma")
   }
-  let mut chroma_qp0 = h264_get_chroma_qp(pps, 0, ctx.qscale, bit_depth=ctx.bit_depth)
-  let mut chroma_qp1 = h264_get_chroma_qp(pps, 1, ctx.qscale, bit_depth=ctx.bit_depth)
+  let mut chroma_qp0 = h264_get_chroma_qp(
+    pps,
+    0,
+    ctx.qscale,
+    bit_depth=ctx.bit_depth,
+  )
+  let mut chroma_qp1 = h264_get_chroma_qp(
+    pps,
+    1,
+    ctx.qscale,
+    bit_depth=ctx.bit_depth,
+  )
   if cbp != 0 || is_i16x16 {
     let dquant = gb.read_se()
     if dquant == -2147483648 {
@@ -683,7 +754,11 @@ fn h264_decode_mb_cavlc_intra(
     }
     let mut q = ctx.qscale + dquant
     if q < 0 || q > h264_max_qp(ctx) {
-      q = if q < 0 { q + h264_max_qp(ctx) + 1 } else { q - h264_max_qp(ctx) - 1 }
+      q = if q < 0 {
+        q + h264_max_qp(ctx) + 1
+      } else {
+        q - h264_max_qp(ctx) - 1
+      }
       if q < 0 || q > h264_max_qp(ctx) {
         return Err("dquant out of range")
       }
@@ -697,7 +772,8 @@ fn h264_decode_mb_cavlc_intra(
       let plane_qp = if p == 0 { ctx.qscale } else { chroma_qps[p] }
       match
         h264_cavlc_luma_residual(
-          gb, ctx, mb_idx, mb_x, mb_y, cbp, p, plane_qp, is_i16x16, mb, luma_dc, luma_dc_nz, nz,
+          gb, ctx, mb_idx, mb_x, mb_y, cbp, p, plane_qp, is_i16x16, mb, luma_dc,
+          luma_dc_nz, nz,
         ) {
         Ok(_) => ()
         Err(error) => return Err(error)
@@ -713,12 +789,17 @@ fn h264_decode_mb_cavlc_intra(
               gb,
               mb,
               256 + 256 * c,
-              if num_c8x8 == 2 { h264_chroma422_dc_scan } else { h264_chroma_dc_scan },
+              if num_c8x8 == 2 {
+                h264_chroma422_dc_scan
+              } else {
+                h264_chroma_dc_scan
+              },
               0,
               None,
               4 * num_c8x8,
               0,
-             bit_depth=ctx.bit_depth,) {
+              bit_depth=ctx.bit_depth,
+            ) {
             Ok(v) => v
             Err(e) => return Err(e)
           }
@@ -734,7 +815,7 @@ fn h264_decode_mb_cavlc_intra(
             } else {
               h264_nc_chroma(ctx, mb_idx, mb_x, mb_y, c, i, nz)
             }
-              let total = match
+            let total = match
               h264_decode_residual(
                 gb,
                 mb,
@@ -744,7 +825,8 @@ fn h264_decode_mb_cavlc_intra(
                 Some(qmul_c),
                 15,
                 nc,
-               bit_depth=ctx.bit_depth,) {
+                bit_depth=ctx.bit_depth,
+              ) {
               Ok(v) => v
               Err(e) => return Err(e)
             }
@@ -815,8 +897,9 @@ fn h264_cavlc_luma_residual(
         0,
         None,
         16,
-        h264_block0_nc(ctx, mb_idx, mb_x, mb_y, base=base),
-       bit_depth=ctx.bit_depth,) {
+        h264_block0_nc(ctx, mb_idx, mb_x, mb_y, base~),
+        bit_depth=ctx.bit_depth,
+      ) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
@@ -824,7 +907,7 @@ fn h264_cavlc_luma_residual(
       for i = 0; i < 16; i = i + 1 {
         let gx = h264_luma_block_x[i]
         let gy = h264_luma_block_y[i]
-        let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz, base=base)
+        let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz, base~)
         let total = match
           h264_decode_residual(
             gb,
@@ -835,7 +918,8 @@ fn h264_cavlc_luma_residual(
             Some(qmul),
             15,
             nc,
-           bit_depth=ctx.bit_depth,) {
+            bit_depth=ctx.bit_depth,
+          ) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -845,7 +929,10 @@ fn h264_cavlc_luma_residual(
     return Ok(())
   }
   if info.transform_8x8 {
-    match h264_cavlc_luma8(gb, ctx, mb_idx, mb_x, mb_y, cbp, p, plane_qp, base, mb_off, mb) {
+    match
+      h264_cavlc_luma8(
+        gb, ctx, mb_idx, mb_x, mb_y, cbp, p, plane_qp, base, mb_off, mb,
+      ) {
       Ok(_) => ()
       Err(error) => return Err(error)
     }
@@ -857,7 +944,7 @@ fn h264_cavlc_luma_residual(
         let i = i8x8 * 4 + i4x4
         let gx = h264_luma_block_x[i]
         let gy = h264_luma_block_y[i]
-        let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz, base=base)
+        let nc = h264_nc_luma(ctx, mb_idx, mb_x, mb_y, gx, gy, nz, base~)
         let total = match
           h264_decode_residual(
             gb,
@@ -868,7 +955,8 @@ fn h264_cavlc_luma_residual(
             Some(qmul),
             16,
             nc,
-           bit_depth=ctx.bit_depth,) {
+            bit_depth=ctx.bit_depth,
+          ) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -887,10 +975,18 @@ fn h264_block0_nc(
   mb_idx : Int32,
   _mb_x : Int32,
   _mb_y : Int32,
-  base? : Int32 = 0,
+  base~ : Int32 = 0,
 ) -> Int32 {
-  let left = if h264_has_left(ctx, mb_idx) { ctx.infos[mb_idx - 1].nz[base + 3] } else { 64 }
-  let top = if h264_has_top(ctx, mb_idx) { ctx.infos[h264_top_index(ctx, mb_idx)].nz[base + 12] } else { 64 }
+  let left = if h264_has_left(ctx, mb_idx) {
+    ctx.infos[mb_idx - 1].nz[base + 3]
+  } else {
+    64
+  }
+  let top = if h264_has_top(ctx, mb_idx) {
+    ctx.infos[h264_top_index(ctx, mb_idx)].nz[base + 12]
+  } else {
+    64
+  }
   h264_pred_non_zero_count(left, top)
 }
 
@@ -926,19 +1022,80 @@ fn h264_decode_slice_ex(
   ref_list0 : Array[H264RefPic],
   skip_lf : Bool,
 ) -> Result[H264Frame, String] {
-  h264_decode_picture_ex([nal], ps, fn(_) { Ok({ list0: ref_list0, list1: [], colocated: [], long_pocs: [], poc: 0, poc_top: 0, poc_bottom: 0 }) }, skip_lf)
+  h264_decode_picture_ex(
+    [nal],
+    ps,
+    fn(_) {
+      Ok({
+        list0: ref_list0,
+        list1: [],
+        colocated: [],
+        long_pocs: [],
+        poc: 0,
+        poc_top: 0,
+        poc_bottom: 0,
+      })
+    },
+    skip_lf,
+  )
+}
+
+///|
+
+///|
+fn h264_new_mb_info() -> H264MbInfo {
+  {
+    nz: Array::make(48, 0),
+    modes: Array::make(16, 0),
+    intra4x4: false,
+    field_mb: false,
+    qp: 0,
+    mb_type_bits: 0,
+    cbp_all: 0,
+    chroma_mode: 0,
+    mv: Array::make(32, 0),
+    mv1: Array::make(32, 0),
+    ref_idx1: Array::make(16, -1),
+    mvd1: Array::make(32, 0),
+    ref_identity1: Array::make(16, -1),
+    direct: Array::make(16, false),
+    ref_idx: Array::make(16, h264_ref_not_avail),
+    mvd: Array::make(32, 0),
+    transform_8x8: false,
+    slice_num: 0,
+    deblock_idc: 0,
+    alpha_offset: 52,
+    beta_offset: 52,
+    ref_identity: Array::make(16, -1),
+  }
+}
+
+///|
+/// Planes and macroblock state of a decoded first field, reused when the
+/// complementary second field of the same frame arrives. FFmpeg shares one
+/// picture buffer (and `cur_pic.mb_type`/motion arrays) between both fields.
+priv struct H264PictureCarry {
+  y : Array[Int32]
+  u : Array[Int32]
+  v : Array[Int32]
+  infos : Array[H264MbInfo]
 }
 
 ///|
 fn h264_decode_picture_ex(
-  nals : Array[H2645Nal], ps : H264ParamSets,
-  resolve_refs : (H264SliceHeader) -> Result[H264SliceRefs, String], skip_lf : Bool,
+  nals : Array[H2645Nal],
+  ps : H264ParamSets,
+  resolve_refs : (H264SliceHeader) -> Result[H264SliceRefs, String],
+  skip_lf : Bool,
+  carry~ : H264PictureCarry? = None,
 ) -> Result[H264Frame, String] {
   guard nals.length() > 0 else { return Err("empty H.264 picture") }
   let slices = nals.copy()
   slices.sort_by(fn(a, b) {
-    let ga = BitReader::with_size(a.data, a.size_bits); ga.skip(8)
-    let gb = BitReader::with_size(b.data, b.size_bits); gb.skip(8)
+    let ga = BitReader::with_size(a.data, a.size_bits)
+    ga.skip(8)
+    let gb = BitReader::with_size(b.data, b.size_bits)
+    gb.skip(8)
     ga.read_ue().compare(gb.read_ue())
   })
   let nal = slices[0]
@@ -952,14 +1109,16 @@ fn h264_decode_picture_ex(
     Ok(v) => v
     Err(e) => return Err(e)
   }
-  let references = match resolve_refs(sh) { Ok(value) => value; Err(error) => return Err(error) }
+  let references = match resolve_refs(sh) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   let ref_list0 = references.list0
   if sh.first_mb_in_slice != 0 {
     return Err("multi-slice pictures are not supported")
   }
-  if sh.field_pic_flag != 0 {
-    return Err("field pictures are not supported")
-  }
+  let field_picture = sh.field_pic_flag != 0
+  let bottom_field = field_picture && sh.bottom_field_flag != 0
   let pps = match ps.pps_list[sh.pps_id] {
     Some(p) => p
     None => return Err("missing PPS")
@@ -971,12 +1130,15 @@ fn h264_decode_picture_ex(
   if sps.chroma_format_idc < 0 || sps.chroma_format_idc > 3 {
     return Err("invalid H.264 chroma format")
   }
-  if ![8, 9, 10, 12, 14].contains(sps.bit_depth_luma) || sps.bit_depth_chroma != sps.bit_depth_luma {
+  if ![8, 9, 10, 12, 14].contains(sps.bit_depth_luma) ||
+    sps.bit_depth_chroma != sps.bit_depth_luma {
     return Err("unsupported H.264 bit depths")
   }
   // Frame pictures with `frame_mbs_only_flag == 0` are either MBAFF (adaptive
   // field/frame MB pairs) or plain frames; the per-MB field flag decides.
-  let mb_aff = sps.frame_mbs_only_flag == 0 && sps.mb_aff != 0
+  // A coded field is never MBAFF: `h->mb_aff_frame = sps->mb_aff &&
+  // picture_structure == PICT_FRAME`.
+  let mb_aff = sps.frame_mbs_only_flag == 0 && sps.mb_aff != 0 && !field_picture
   if sh.qscale < 0 || sh.qscale > 51 + 6 * (sps.bit_depth_luma - 8) {
     return Err("slice QP out of range")
   }
@@ -985,7 +1147,11 @@ fn h264_decode_picture_ex(
   // (`h264_slice.c: h->chroma_y_shift = sps->chroma_format_idc <= 1`), so
   // monochrome keeps the 4:2:0 plane geometry.
   let chroma_hshift = if chroma_format <= 2 { 1 } else { 0 }
-  let chroma_vshift = if chroma_format == 0 || chroma_format == 1 { 1 } else { 0 }
+  let chroma_vshift = if chroma_format == 0 || chroma_format == 1 {
+    1
+  } else {
+    0
+  }
   let mb_width = sps.mb_width
   let mb_height = sps.mb_height
   let mb_count = mb_width * mb_height
@@ -993,32 +1159,37 @@ fn h264_decode_picture_ex(
   let yheight = mb_height * 16
   let cstride = ystride >> chroma_hshift
   let cheight = yheight >> chroma_vshift
-  let y : Array[Int32] = Array::make(ystride * yheight, 0)
   // Monochrome frames keep neutral chroma, matching FFmpeg's yuv420p output
   // (DC_128 chroma prediction and byte-exact chroma motion compensation).
-  let chroma_fill = if chroma_format == 0 { 1 << (sps.bit_depth_luma - 1) } else { 0 }
-  let u : Array[Int32] = Array::make(cstride * cheight, chroma_fill)
-  let v : Array[Int32] = Array::make(cstride * cheight, chroma_fill)
-  let infos : Array[H264MbInfo] = []
-  for _i = 0; _i < mb_count; _i = _i + 1 {
-    infos.push({
-      nz: Array::make(48, 0),
-      modes: Array::make(16, 0),
-      intra4x4: false,
-      field_mb: false,
-      qp: 0,
-      mb_type_bits: 0,
-      cbp_all: 0,
-      chroma_mode: 0,
-      mv: Array::make(32, 0),
-      mv1: Array::make(32, 0), ref_idx1: Array::make(16, -1), mvd1: Array::make(32, 0),
-      ref_identity1: Array::make(16, -1), direct: Array::make(16, false),
-      ref_idx: Array::make(16, h264_ref_not_avail),
-      mvd: Array::make(32, 0),
-      transform_8x8: false,
-      slice_num: 0, deblock_idc: 0, alpha_offset: 52, beta_offset: 52,
-      ref_identity: Array::make(16, -1),
-    })
+  let chroma_fill = if chroma_format == 0 {
+    1 << (sps.bit_depth_luma - 1)
+  } else {
+    0
+  }
+  let (y, u, v, infos) = match carry {
+    Some(state) => (state.y, state.u, state.v, state.infos)
+    None => {
+      let y : Array[Int32] = Array::make(ystride * yheight, 0)
+      let u : Array[Int32] = Array::make(cstride * cheight, chroma_fill)
+      let v : Array[Int32] = Array::make(cstride * cheight, chroma_fill)
+      let infos : Array[H264MbInfo] = []
+      for _i = 0; _i < mb_count; _i = _i + 1 {
+        infos.push(h264_new_mb_info())
+      }
+      (y, u, v, infos)
+    }
+  }
+  ignore(chroma_fill)
+  // FFmpeg's current_slice continues across complementary fields. The first
+  // field's macroblocks share this buffer, so the second field must use fresh
+  // slice ids even when both fields start at first_mb_in_slice == 0.
+  let mut slice_base = 0
+  if carry is Some(_) {
+    for info in infos {
+      if info.mb_type_bits != 0 {
+        slice_base = slice_base.max(info.slice_num + 1)
+      }
+    }
   }
   // `ff_h264_build_ref_list`'s missing-reference pass substitutes
   // `default_ref = ref_list[0]` for every inactive entry up to `ref_count`.
@@ -1041,8 +1212,10 @@ fn h264_decode_picture_ex(
     pps,
     mb_width,
     mb_height,
+    field_picture,
+    bottom_field,
     mb_aff,
-    mb_field: false,
+    mb_field: field_picture,
     prev_mb_skipped: false,
     next_mb_skipped: false,
     y,
@@ -1057,34 +1230,79 @@ fn h264_decode_picture_ex(
     cur_mb_is_intra: true,
     ref_count0: sh.num_ref_idx_l0_active,
     ref_list0,
-    active_list: 0, ref_list1: references.list1, ref_count1: sh.num_ref_idx_l1_active,
-    direct_spatial: sh.direct_spatial_mv_pred, direct_8x8: sps.direct_8x8_inference_flag != 0,
-    colocated: references.colocated, poc: references.poc,
-    poc_top: references.poc_top, poc_bottom: references.poc_bottom,
+    active_list: 0,
+    ref_list1: references.list1,
+    ref_count1: sh.num_ref_idx_l1_active,
+    direct_spatial: sh.direct_spatial_mv_pred,
+    direct_8x8: sps.direct_8x8_inference_flag != 0,
+    colocated: references.colocated,
+    poc: references.poc,
+    poc_top: references.poc_top,
+    poc_bottom: references.poc_bottom,
     long_pocs: references.long_pocs,
     mb_skip_run: -1,
     pwt: sh.pwt,
   }
   for number, slice in slices {
-    let reader = BitReader::with_size(slice.data, slice.size_bits); reader.skip(8)
-    let header = match ff_h264_decode_slice_header(reader, slice.nal_type, slice.ref_idc, ps) {
-      Ok(value) => value; Err(error) => return Err(error)
+    let reader = BitReader::with_size(slice.data, slice.size_bits)
+    reader.skip(8)
+    let header = match
+      ff_h264_decode_slice_header(reader, slice.nal_type, slice.ref_idc, ps) {
+      Ok(value) => value
+      Err(error) => return Err(error)
     }
-    if header.pps_id != sh.pps_id || header.frame_num != sh.frame_num ||
-      header.pic_order_cnt_lsb != sh.pic_order_cnt_lsb || header.idr_pic_id != sh.idr_pic_id ||
+    if header.pps_id != sh.pps_id ||
+      header.frame_num != sh.frame_num ||
+      header.pic_order_cnt_lsb != sh.pic_order_cnt_lsb ||
+      header.idr_pic_id != sh.idr_pic_id ||
       header.delta_pic_order_cnt_bottom != sh.delta_pic_order_cnt_bottom ||
-      header.delta_pic_order_cnt != sh.delta_pic_order_cnt || header.mmco != sh.mmco ||
-      header.long_term_reference != sh.long_term_reference || header.adaptive_ref_marking != sh.adaptive_ref_marking ||
+      header.delta_pic_order_cnt != sh.delta_pic_order_cnt ||
+      header.mmco != sh.mmco ||
+      header.long_term_reference != sh.long_term_reference ||
+      header.adaptive_ref_marking != sh.adaptive_ref_marking ||
       header.no_output_of_prior_pics != sh.no_output_of_prior_pics ||
-      header.field_pic_flag != 0 || slice.ref_idc != nal.ref_idc || slice.nal_type != nal.nal_type {
+      header.field_pic_flag != sh.field_pic_flag ||
+      header.bottom_field_flag != sh.bottom_field_flag ||
+      slice.ref_idc != nal.ref_idc ||
+      slice.nal_type != nal.nal_type {
       return Err("inconsistent H.264 picture slices")
     }
-    let refs = match resolve_refs(header) { Ok(value) => value; Err(error) => return Err(error) }
-    match h264_decode_picture_slice(ctx, slice, reader, header, refs, number) {
-      Ok(_) => (); Err(error) => return Err(error)
+    let refs = match resolve_refs(header) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    match
+      h264_decode_picture_slice(
+        ctx,
+        slice,
+        reader,
+        header,
+        refs,
+        slice_base + number,
+      ) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
     }
   }
-  for info in infos { if info.mb_type_bits == 0 { return Err("incomplete H.264 picture") } }
+  // A field picture only owns the macroblock rows of its parity; rows of the
+  // other field belong to the complementary picture (if it was decoded).
+  if field_picture {
+    for row = 0; row < mb_height; row = row + 1 {
+      if (row & 1) == (if bottom_field { 1 } else { 0 }) {
+        for x = 0; x < mb_width; x = x + 1 {
+          if infos[row * mb_width + x].mb_type_bits == 0 {
+            return Err("incomplete H.264 picture")
+          }
+        }
+      }
+    }
+  } else {
+    for info in infos {
+      if info.mb_type_bits == 0 {
+        return Err("incomplete H.264 picture")
+      }
+    }
+  }
   // Deblocking runs *after* the whole picture is reconstructed, in macroblock
   // raster order, exactly reproducing FFmpeg's observable behaviour:
   //
@@ -1109,15 +1327,52 @@ fn h264_decode_picture_ex(
             let idx = (pair_y + parity) * mb_width + x
             let info = infos[idx]
             if info.deblock_idc != 1 {
-              h264_filter_mb(ctx, idx, x, pair_y + parity, info.alpha_offset, info.beta_offset)
+              h264_filter_mb(
+                ctx,
+                idx,
+                x,
+                pair_y + parity,
+                info.alpha_offset,
+                info.beta_offset,
+              )
             }
+          }
+        }
+      }
+    } else if field_picture {
+      // `loop_filter` walks this field's MB rows (`1 + FIELD_OR_MBAFF_PICTURE`
+      // stride) starting at the field parity.
+      for row = (if bottom_field { 1 } else { 0 })
+          row < mb_height
+          row = row + 2 {
+        for x = 0; x < mb_width; x = x + 1 {
+          let idx = row * mb_width + x
+          let info = infos[idx]
+          if info.deblock_idc != 1 {
+            h264_filter_mb(
+              ctx,
+              idx,
+              x,
+              row,
+              info.alpha_offset,
+              info.beta_offset,
+            )
           }
         }
       }
     } else {
       for i = 0; i < mb_count; i = i + 1 {
         let info = infos[i]
-        if info.deblock_idc != 1 { h264_filter_mb(ctx, i, i % mb_width, i / mb_width, info.alpha_offset, info.beta_offset) }
+        if info.deblock_idc != 1 {
+          h264_filter_mb(
+            ctx,
+            i,
+            i % mb_width,
+            i / mb_width,
+            info.alpha_offset,
+            info.beta_offset,
+          )
+        }
       }
     }
   }

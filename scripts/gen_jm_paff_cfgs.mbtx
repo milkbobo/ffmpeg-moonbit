@@ -1,0 +1,102 @@
+///|
+import {
+  "moonbitlang/x/fs",
+}
+
+///|
+fn replace_value(src : String, key : String, value : String) -> String {
+  let out = StringBuilder()
+  for line in src.split("\n") {
+    let trimmed = line.trim_start()
+    if trimmed.has_prefix(key) {
+      let rest = trimmed[key.length():]
+      let after = rest.trim_start()
+      if after.has_prefix("=") {
+        out.write_string(key + " = " + value + "\n")
+        continue
+      }
+    }
+    out.write_string(line.to_owned() + "\n")
+  }
+  let text = out.to_string()
+  if text.has_suffix("\n") {
+    text[:text.length() - 1].to_owned()
+  } else {
+    text
+  }
+}
+
+///|
+fn make_cfg(
+  base : String,
+  name : String,
+  frames : Int32,
+  bframes : Int32,
+  symbol : Int32,
+  input~ : String = "foreman_part_qcif.yuv",
+  direct~ : Int32 = 1,
+  slice_mbs~ : Int32 = 0,
+) -> Unit raise {
+  let mut cfg = replace_value(base, "InputFile", "\"" + input + "\"")
+  cfg = replace_value(cfg, "ProfileIDC", "77")
+  cfg = replace_value(cfg, "LevelIDC", "30")
+  cfg = replace_value(cfg, "PicInterlace", "1")
+  cfg = replace_value(cfg, "MbInterlace", "0")
+  cfg = replace_value(cfg, "Transform8x8Mode", "0")
+  cfg = replace_value(cfg, "FramesToBeEncoded", frames.to_string())
+  cfg = replace_value(cfg, "NumberBFrames", bframes.to_string())
+  cfg = replace_value(cfg, "SymbolMode", symbol.to_string())
+  cfg = replace_value(cfg, "DirectModeType", direct.to_string())
+  cfg = replace_value(cfg, "SliceMode", if slice_mbs > 0 { "1" } else { "0" })
+  cfg = replace_value(cfg, "SliceArgument", slice_mbs.max(1).to_string())
+  cfg = replace_value(
+    cfg,
+    "HierarchicalCoding",
+    if bframes > 0 {
+      "0"
+    } else {
+      "3"
+    },
+  )
+  cfg = replace_value(cfg, "OutputFile", "\"" + name + ".264\"")
+  cfg = replace_value(cfg, "ReconFile", "\"" + name + "_recon.yuv\"")
+  cfg = replace_value(cfg, "TraceFile", "\"" + name + "_trace.txt\"")
+  @fs.write_string_to_file(".scratch/JM/bin/" + name + ".cfg", cfg)
+}
+
+///|
+fn main raise {
+  let base = @fs.read_file_to_string(".scratch/JM/bin/encoder.cfg")
+  make_cfg(base, "jm_paff_p_cavlc", 6, 0, 0)
+  make_cfg(base, "jm_paff_p_cabac", 6, 0, 1)
+  make_cfg(base, "jm_paff_b_cavlc", 12, 2, 0, input="foreman_12f_qcif.yuv")
+  make_cfg(base, "jm_paff_b_cabac", 12, 2, 1, input="foreman_12f_qcif.yuv")
+  make_cfg(base, "jm_paff_p_long", 12, 0, 0, input="foreman_12f_qcif.yuv")
+  make_cfg(
+    base,
+    "jm_paff_b_temporal_cavlc",
+    12,
+    2,
+    0,
+    input="foreman_12f_qcif.yuv",
+    direct=0,
+  )
+  make_cfg(
+    base,
+    "jm_paff_b_temporal_cabac",
+    12,
+    2,
+    1,
+    input="foreman_12f_qcif.yuv",
+    direct=0,
+  )
+  make_cfg(
+    base,
+    "jm_paff_b_slices",
+    12,
+    2,
+    1,
+    input="foreman_12f_qcif.yuv",
+    slice_mbs=11,
+  )
+}

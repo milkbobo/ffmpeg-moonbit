@@ -30,11 +30,12 @@ pub struct H264PredWeight {
 ///|
 /// Neutral weight table (`weighted_pred_flag == 0`). */
 pub fn new_h264_pred_weight() -> H264PredWeight {
-  let lw : Array[Int32] = Array::make(16, 1)
-  let lo : Array[Int32] = Array::make(16, 0)
+  // Field pictures address up to 32 field references.
+  let lw : Array[Int32] = Array::make(32, 1)
+  let lo : Array[Int32] = Array::make(32, 0)
   let cw : Array[Array[Int32]] = []
   let co : Array[Array[Int32]] = []
-  for i = 0; i < 16; i = i + 1 {
+  for i = 0; i < 32; i = i + 1 {
     cw.push([1, 1])
     co.push([0, 0])
   }
@@ -47,10 +48,14 @@ pub fn new_h264_pred_weight() -> H264PredWeight {
     luma_offset_l0: lo,
     chroma_weight_l0: cw,
     chroma_offset_l0: co,
-    luma_weight_l1: Array::make(16, 1),
-    luma_offset_l1: Array::make(16, 0),
-    chroma_weight_l1: [for _ in 0..<16 => [1, 1]],
-    chroma_offset_l1: [for _ in 0..<16 => [0, 0]],
+    luma_weight_l1: Array::make(32, 1),
+    luma_offset_l1: Array::make(32, 0),
+    chroma_weight_l1: [
+      for _ in 0..<32 => [1, 1]
+    ],
+    chroma_offset_l1: [
+      for _ in 0..<32 => [0, 0]
+    ],
   }
 }
 
@@ -133,9 +138,6 @@ pub fn ff_h264_decode_slice_header(
     Some(s) => s
     None => return Err("EINVAL")
   }
-  if first_mb >= sps.mb_width * sps.mb_height {
-    return Err("EINVAL")
-  }
   let frame_num = gb.read(sps.log2_max_frame_num).reinterpret_as_int()
   let mut field_pic_flag = 0
   let mut bottom_field_flag = 0
@@ -144,6 +146,17 @@ pub fn ff_h264_decode_slice_header(
     if field_pic_flag != 0 {
       bottom_field_flag = gb.read1().reinterpret_as_int()
     }
+  }
+  // `first_mb_in_slice` counts field macroblocks in field pictures (and MB
+  // pairs in MBAFF frame pictures); `h264_slice_init` shifts it by
+  // `FIELD_OR_MBAFF_PICTURE`.
+  let first_mb_limit = if field_pic_flag != 0 {
+    sps.mb_width * (sps.mb_height / 2)
+  } else {
+    sps.mb_width * sps.mb_height
+  }
+  if first_mb >= first_mb_limit {
+    return Err("EINVAL")
   }
   let is_idr = nal_type == 5
   let mut idr_pic_id = -1
@@ -190,11 +203,17 @@ pub fn ff_h264_decode_slice_header(
       num_ref_idx_l0_active = n + 1
       if is_b {
         let n = gb.read_ue()
-        if n < 0 || n >= 16 { return Err("EINVAL") }
+        if n < 0 || n >= 32 {
+          return Err("EINVAL")
+        }
         num_ref_idx_l1_active = n + 1
       }
     }
-    if num_ref_idx_l0_active > 16 || (is_b && num_ref_idx_l1_active > 16) {
+    // `ff_h264_parse_ref_count`: frame pictures address at most 16 frames,
+    // field pictures up to 32 individual fields.
+    let max_active = if field_pic_flag != 0 { 32 } else { 16 }
+    if num_ref_idx_l0_active > max_active ||
+      (is_b && num_ref_idx_l1_active > max_active) {
       return Err("EINVAL")
     }
     for list in 0..<(if is_b { 2 } else { 1 }) {
@@ -202,24 +221,24 @@ pub fn ff_h264_decode_slice_header(
       let vals = if list == 0 { ref_mod_l0_vals } else { ref_mod_l1_vals }
       let mod_flag = gb.read1().reinterpret_as_int()
       if mod_flag != 0 {
-      while true {
-        let idc = gb.read_ue()
-        if idc < 0 {
-          return Err("EINVAL")
+        while true {
+          let idc = gb.read_ue()
+          if idc < 0 {
+            return Err("EINVAL")
+          }
+          if idc == 3 {
+            break
+          }
+          if idc > 2 || ops.length() >= 32 {
+            return Err("EINVAL")
+          }
+          let val = gb.read_ue()
+          if val < 0 {
+            return Err("EINVAL")
+          }
+          ops.push(idc)
+          vals.push(val)
         }
-        if idc == 3 {
-          break
-        }
-        if idc > 2 || ops.length() >= 32 {
-          return Err("EINVAL")
-        }
-        let val = gb.read_ue()
-        if val < 0 {
-          return Err("EINVAL")
-        }
-        ops.push(idc)
-        vals.push(val)
-      }
       }
     }
   }
@@ -244,48 +263,60 @@ pub fn ff_h264_decode_slice_header(
       chroma_def = 1 << pwt.chroma_log2_weight_denom
     }
     for list in 0..<(if is_b { 2 } else { 1 }) {
-      let count = if list == 0 { num_ref_idx_l0_active } else { num_ref_idx_l1_active }
+      let count = if list == 0 {
+        num_ref_idx_l0_active
+      } else {
+        num_ref_idx_l1_active
+      }
       let lw = if list == 0 { pwt.luma_weight_l0 } else { pwt.luma_weight_l1 }
       let lo = if list == 0 { pwt.luma_offset_l0 } else { pwt.luma_offset_l1 }
-      let cw = if list == 0 { pwt.chroma_weight_l0 } else { pwt.chroma_weight_l1 }
-      let co = if list == 0 { pwt.chroma_offset_l0 } else { pwt.chroma_offset_l1 }
-    for i = 0; i < count; i = i + 1 {
-      if gb.read1().reinterpret_as_int() != 0 {
-        let w = gb.read_se()
-        let o = gb.read_se()
-        if w < -128 || w > 127 || o < -128 || o > 127 {
-          return Err("EINVAL")
-        }
-        lw[i] = w
-        lo[i] = o
-        if w != luma_def || o != 0 {
-          pwt.use_weight = 1
-        }
+      let cw = if list == 0 {
+        pwt.chroma_weight_l0
       } else {
-        lw[i] = luma_def
-        lo[i] = 0
+        pwt.chroma_weight_l1
       }
-      if sps.chroma_format_idc != 0 {
-        let has_chroma = gb.read1().reinterpret_as_int() != 0
-        for j = 0; j < 2; j = j + 1 {
-          if has_chroma {
-            let w = gb.read_se()
-            let o = gb.read_se()
-            if w < -128 || w > 127 || o < -128 || o > 127 {
-              return Err("EINVAL")
+      let co = if list == 0 {
+        pwt.chroma_offset_l0
+      } else {
+        pwt.chroma_offset_l1
+      }
+      for i = 0; i < count; i = i + 1 {
+        if gb.read1().reinterpret_as_int() != 0 {
+          let w = gb.read_se()
+          let o = gb.read_se()
+          if w < -128 || w > 127 || o < -128 || o > 127 {
+            return Err("EINVAL")
+          }
+          lw[i] = w
+          lo[i] = o
+          if w != luma_def || o != 0 {
+            pwt.use_weight = 1
+          }
+        } else {
+          lw[i] = luma_def
+          lo[i] = 0
+        }
+        if sps.chroma_format_idc != 0 {
+          let has_chroma = gb.read1().reinterpret_as_int() != 0
+          for j = 0; j < 2; j = j + 1 {
+            if has_chroma {
+              let w = gb.read_se()
+              let o = gb.read_se()
+              if w < -128 || w > 127 || o < -128 || o > 127 {
+                return Err("EINVAL")
+              }
+              cw[i][j] = w
+              co[i][j] = o
+              if w != chroma_def || o != 0 {
+                pwt.use_weight_chroma = 1
+              }
+            } else {
+              cw[i][j] = chroma_def
+              co[i][j] = 0
             }
-            cw[i][j] = w
-            co[i][j] = o
-            if w != chroma_def || o != 0 {
-              pwt.use_weight_chroma = 1
-            }
-          } else {
-            cw[i][j] = chroma_def
-            co[i][j] = 0
           }
         }
       }
-    }
     }
     if pwt.use_weight_chroma != 0 {
       pwt.use_weight = 1
@@ -312,10 +343,22 @@ pub fn ff_h264_decode_slice_header(
           if opcode == 0 {
             break
           }
-          let short = if opcode == 1 || opcode == 2 || opcode == 3 { gb.read_ue() } else { 0 }
-          let long = if opcode == 3 || opcode == 4 || opcode == 6 { gb.read_ue() } else { 0 }
-          if short < 0 || long < 0 || (opcode == 2 && short >= 16) ||
-            ((opcode == 3 || opcode == 6) && long >= 16) || (opcode == 4 && long > 16) {
+          let short = if opcode == 1 || opcode == 2 || opcode == 3 {
+            gb.read_ue()
+          } else {
+            0
+          }
+          let long = if opcode == 3 || opcode == 4 || opcode == 6 {
+            gb.read_ue()
+          } else {
+            0
+          }
+          let long_pic_limit = if field_pic_flag != 0 { 32 } else { 16 }
+          if short < 0 ||
+            long < 0 ||
+            (opcode == 2 && short >= long_pic_limit) ||
+            ((opcode == 3 || opcode == 6) && long >= 16) ||
+            (opcode == 4 && long > 16) {
             return Err("EINVAL")
           }
           mmco.push((opcode, short, long))

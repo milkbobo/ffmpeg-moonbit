@@ -1,0 +1,19 @@
+///|
+import {
+  "moonbitlang/x/fs",
+}
+
+///|
+fn main raise {
+  let src = @fs.read_file_to_bytes(".scratch/JM/bin/foreman_part_qcif.yuv")
+  let out : Array[Byte] = []
+  for _i in 0..<4 {
+    for byte in src {
+      out.push(byte)
+    }
+  }
+  @fs.write_bytes_to_file(
+    ".scratch/JM/bin/foreman_12f_qcif.yuv",
+    Bytes::from_array(out),
+  )
+}
