@@ -18,11 +18,8 @@
 /// for the full license header.
 ///
 /// Implementation deviations from the C:
-/// - `SEI_TYPE_USER_DATA_REGISTERED_ITU_T_T35` (type 4) is treated as
-///   unhandled for now: the `itut35.c`/`atsc_a53.c` payload parsing
-///   (A53 captions / AFD / LCEVC / AOM film grain) is a separate slice.
-/// - The AVFrame/AVCodecContext side-data plumbing (`ff_h2645_sei_to_frame`,
-///   `ff_h2645_sei_to_context`) is not ported; this slice only decodes the
+/// - The AVFrame/AVCodecContext side-data plumbing lives in
+///   `h264_side_data.mbt` (`sei_to_frame`); this file only decodes the
 ///   messages into the structs below.
 /// - Diagnostic av_log calls (unknown type, overread, verbose T35) are
 ///   dropped; errors keep the exact `EINVAL` semantics of the C.
@@ -273,8 +270,7 @@ pub struct SeiContentLight {
 
 ///|
 /// `H264SEIContext`: the H.264-specific messages plus the common
-/// `H2645SEI` set. The ITU-T T.35 slot of the common struct is not ported
-/// yet (see the file header). */
+/// `H2645SEI` set (including the ITU-T T.35 slot, `itut35.mbt`). */
 pub struct H264SeiContext {
   unregistered : SeiUnregistered
   frame_packing : SeiFramePacking
@@ -288,6 +284,7 @@ pub struct H264SeiContext {
   recovery_point : SeiRecoveryPoint
   buffering_period : SeiBufferingPeriod
   green_metadata : SeiGreenMetaData
+  itut_t35 : ItutT35Meta
 }
 
 ///|
@@ -360,13 +357,15 @@ pub fn new_h264_sei_context() -> H264SeiContext {
       xsd_metric_type: 0,
       xsd_metric_value: 0,
     },
+    itut_t35: new_itut_t35_meta(),
   }
   ctx.sei_uninit()
   ctx
 }
 
 ///|
-/// `ff_h264_sei_uninit`: reset at the beginning of a frame. */
+/// `ff_h264_sei_uninit` (including `ff_h2645_sei_reset`'s T.35 unref):
+/// reset at the beginning of a frame. */
 pub fn H264SeiContext::sei_uninit(self : H264SeiContext) -> Unit {
   self.recovery_point.recovery_frame_cnt = -1
   self.picture_timing.dpb_output_delay = 0
@@ -382,6 +381,7 @@ pub fn H264SeiContext::sei_uninit(self : H264SeiContext) -> Unit {
   self.mastering_display.present = 0
   self.content_light.present = 0
   self.film_grain_characteristics = None
+  itut_t35_unref(self.itut_t35)
 }
 
 ///|
@@ -400,6 +400,12 @@ fn sei_cur_new(data : Bytes) -> SeiByteCursor {
 ///|
 fn SeiByteCursor::left(self : SeiByteCursor) -> Int32 {
   self.data.length() - self.pos
+}
+
+///|
+/// `bytestream2_skipu`. */
+fn SeiByteCursor::skip(self : SeiByteCursor, n : Int32) -> Unit {
+  self.pos = (self.pos + n).min(self.data.length())
 }
 
 ///|
@@ -943,6 +949,30 @@ fn decode_content_light_info(
 }
 
 ///|
+/// `decode_registered_user_data` (`h2645_sei.c`): hand the payload bytes to
+/// the T.35 parser and store the recognized provider payload in the
+/// context's `itut_t35` slot. `Ok(0)` = unsupported combination, ignored. */
+fn decode_registered_user_data(
+  h : H264SeiContext,
+  cur : SeiByteCursor,
+) -> Result[Int32, String] {
+  let itut_t35 : ItutT35 = {
+    country_code: 0,
+    provider_code: 0,
+    provider_oriented_code: 0,
+    payload: b"",
+  }
+  let ret = itut_t35_parse_buffer(itut_t35, cur.get_buffer(cur.left()))
+  match ret {
+    Ok(v) => if v <= 0 {
+      return Ok(0)
+    }
+    Err(e) => return Err(e)
+  }
+  itut_t35_parse_payload(h.itut_t35, itut_t35)
+}
+
+///|
 /// `ff_h2645_sei_message_decode` (h2645_sei.c) for the common message set.
 /// Returns `Err("EUNHANDLED")` for types outside the common set. */
 fn h2645_sei_message_decode(
@@ -954,9 +984,7 @@ fn h2645_sei_message_decode(
 ) -> Result[Int32, String] {
   match type_ {
     t if t == sei_type_user_data_registered_itu_t_t35 =>
-      // itut35.c / atsc_a53.c payload parsing is a separate slice; the C
-      // would log "Unsupported ... T35" and skip unsupported payloads.
-      Err("EUNHANDLED")
+      decode_registered_user_data(h, cur)
     t if t == sei_type_user_data_unregistered =>
       decode_unregistered_user_data(h.unregistered, cur, is_h264)
     t if t == sei_type_display_orientation =>

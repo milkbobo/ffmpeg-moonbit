@@ -45,6 +45,7 @@ moonbit/
 │   ├── moon.pkg              # 包配置（空 = 默认）
 │   ├── mathematics.mbt       # av_gcd / av_rescale_rnd / av_log2 / ...
 │   ├── rational.mbt          # AVRational 全部运算
+│   ├── display.mbt           # av_display_rotation_set / av_display_matrix_flip
 │   ├── crc.mbt               # CRC 表生成与计算
 │   ├── adler32.mbt           # Adler-32
 │   ├── base64.mbt            # Base64 编解码
@@ -137,6 +138,8 @@ moonbit/
     ├── h264_decode.mbt       # Baseline I 帧重建（CAVLC→dequant→IDCT→预测→写回）+ Annex B 入口
     ├── h264_deblock.mbt      # 环路去块滤波（h264dsp 核 + h264_loopfilter 边界强度推导）
     ├── h264_sei.mbt          # H.264 SEI：消息框架 + BP/PT/恢复点/green + 公共消息集
+    ├── itut35.mbt           # ITU-T T.35 注册用户数据：provider 分发 + A53/AFD/LCEVC/HDR Vivid/AOM 颗粒
+    ├── h264_side_data.mbt   # SEI→帧 side-data 导出与访问单元边界语义（stereo3d/矩阵/mastering 等）
     ├── h264_mc.mbt           # 运动补偿：luma 6 抽头 qpel + chroma 1/8 双线性 + 边界复制
     ├── h264_mvpred.mbt       # MV 预测：A/B/C 邻块、mid_pred、P_SKIP 捷径
     ├── h264_inter.mbt        # P 宏块层（CABAC+CAVLC）：skip/type/ref/mvd + inter 残差
@@ -301,6 +304,7 @@ CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，109651 行，含测
 | 模块 | 对应 C 源码 | 移植内容 | 测试 |
 |---|---|---|---|
 | [mathematics.mbt](libavutil/mathematics.mbt) | `libavutil/mathematics.c`、`intmath.h` | `av_gcd`(Stein 二进制 GCD)、`av_rescale_rnd`(128 位拆分乘法 + 位长除法)、`av_rescale`/`av_rescale_q`/`av_rescale_q_rnd`、`av_log2`、`ff_ctzll`、`av_compare_ts`、`av_compare_mod` | ✅ |
+| [display.mbt](libavutil/display.mbt) | `libavutil/display.c` | `av_display_rotation_set`（16.16 定点、C 截断语义）、`av_display_matrix_flip` | ✅ |
 | [rational.mbt](libavutil/rational.mbt) | `libavutil/rational.c` | `AVRational`、`av_make_q`、`av_cmp_q`、`av_q2d`、`av_inv_q`、`av_reduce`、`av_mul_q`/`av_div_q`/`av_add_q`/`av_sub_q`、`av_d2q`(自实现 `frexp`)、`av_gcd_q`、`av_q2intfloat` | ✅ |
 | [crc.mbt](libavutil/crc.mbt) | `libavutil/crc.c` | `AVCRCId`、`av_crc_init`(任意多项式表生成)、`av_crc_get_table`、`av_crc`、`av_crc_ids` | ✅ |
 | [adler32.mbt](libavutil/adler32.mbt) | `libavutil/adler32.c` | `av_adler32_update`（标量，`DO1`/`DO4`） | ✅ |
@@ -345,7 +349,9 @@ CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，109651 行，含测
 | [h264_pred.mbt](libavcodec/h264_pred.mbt) | `libavcodec/h264pred_template.c`、`h264_parse.c`(`ff_h264_check_intra4x4_pred_mode`/`ff_h264_check_intra_pred_mode`) | 4x4 九模式（含 DC 边缘变体）、16x16 四模式、chroma 8x8 四模式的 8-bit 帧内预测，以及「参考样本可用性 → 模式改判」逻辑；邻居直接读重建平面（FFmpeg 读每 MB 的边界缓冲，样本值相同） | ✅ |
 | [h264_decode.mbt](libavcodec/h264_decode.mbt) | `h264_cavlc.c`(`ff_h264_decode_mb_cavlc`)、`h264_mb_template.c`(`hl_decode_mb`)、`h264_slice.c`(`init_dimensions`) | **H.264 Baseline I 帧重建**：CAVLC 宏块解析 → dequant → 4x4 IDCT / luma & chroma DC Hadamard → 帧内预测 → 写回平面；`I_4x4`/`I_16x16`/`I_PCM` 三条宏块路径、8x8 z-order 块序与 top-right 可用性掩码、SPS 裁剪与 `H264Frame::yuv420p` 输出；入口 `h264_decode_annexb_i_frames`（Annex B，就地解析 SPS/PPS），默认出厂即走环路滤波，`..._ex(data, true)` 跳过 | ✅ |
 | [h264_deblock.mbt](libavcodec/h264_deblock.mbt) | `h264dsp_template.c`(`h264_loop_filter_luma{,_intra}`、`h264_loop_filter_chroma{,_intra}`)、`h264_loopfilter.c`(`filter_mb_dir`/`ff_h264_filter_mb_fast`) | **环路去块滤波**：弱/强（intra）luma 与 chroma 内核（`xstep`/`ystep` 参数化后一套代码同时覆盖横向/纵向边）；bS 按 8.7.2.3 逐 4x4：intra 宏块边=4/内部边=3，非零系数=2，ref 或 MV（|dx|/|dy|≥4）差异=1；参考索引经 `ref2frm` 的 POC 身份比较（重排列表中的重复图片视为同一参考）；色度边沿用 luma 的 bS[4]，每段 2 样本各取 `tc0_table[..][bS[i]]+1`；`alpha_table`/`beta_table`/`tc0_table` 由 C 源批量提取；左右/上下 QP 取均值、chroma QP 按 `chroma_qp_index_offset` 派生、slice 偏移按 C 的 `div2 * 2` 缩放 | ✅ |
-| [h264_sei.mbt](libavcodec/h264_sei.mbt) | `libavcodec/h264_sei.c`、`h2645_sei.c`、`sei.h` | **H.264 SEI 解析**：消息框架（type/size 的 0xFF 扩展、双零字节截尾）；buffering period（缺失 SPS 返回 `AVERROR_PS_NOT_FOUND` 非致命）、picture timing（payload 暂存 + `ff_h264_sei_process_picture_timing` 对 SPS 延迟解析，含时钟时间戳全语法）、recovery point、green metadata；公共消息集（h2645_sei.c）：user data unregistered（含 `x264 - core N` 版本嗅探）、display orientation、frame packing arrangement（H.264 分支）、film grain characteristics、alternative transfer、ambient viewing environment、mastering display（`present=2` 语义）、content light。未接：ITU-T T.35（type 4）与 AVFrame side-data 层、HEVC 侧入口 | ✅ |
+| [h264_sei.mbt](libavcodec/h264_sei.mbt) | `libavcodec/h264_sei.c`、`h2645_sei.c`、`sei.h` | **H.264 SEI 解析**：消息框架（type/size 的 0xFF 扩展、双零字节截尾）；buffering period（缺失 SPS 返回 `AVERROR_PS_NOT_FOUND` 非致命）、picture timing（payload 暂存 + `ff_h264_sei_process_picture_timing` 对 SPS 延迟解析，含时钟时间戳全语法）、recovery point、green metadata；公共消息集（h2645_sei.c）：user data unregistered（含 `x264 - core N` 版本嗅探）、display orientation、frame packing arrangement（H.264 分支）、film grain characteristics、alternative transfer、ambient viewing environment、mastering display（`present=2` 语义）、content light。ITU-T T.35（type 4）经 `itut35.mbt` 解析，帧 side-data 导出在 `h264_side_data.mbt`（均见下两行）；HEVC 侧入口未接 | ✅ |
+| [itut35.mbt](libavcodec/itut35.mbt) | `libavcodec/itut35.c`、`atsc_a53.c`、`dynamic_hdr_vivid.c`、`aom_film_grain.c` | **ITU-T T.35 注册用户数据**：`ff_itut_t35_parse_buffer` 全 provider 分发（US 的 ATSC GA94/DTG1、AOM、Samsung、Dolby、SMPTE；UK V-Nova；CN HDR Vivid，含 0xFF 国家码扩展字节与截断 EINVAL）；载荷解析：A53 CC（`ff_parse_a53_cc` 双场合并、尾 marker 字节边界）、AFD（`&0xf`）、LCEVC 原样保存、HDR Vivid 全字段（T/UWA 005.1-2022）、AOM AFGS1 颗粒集（含 scaling 预测/参考集、CICP 合法性、错误清空）。Dolby 与 C 一致忽略（H.264 路径无 DOVIContext）；HDR10+/SMPTE 2094-40 App5 保留原始载荷（结构级解析未做） | ✅ |
+| [h264_side_data.mbt](libavcodec/h264_side_data.mbt) | `h2645_sei.c`(`ff_h2645_sei_to_frame`/`h2645_sei_to_side_data`)、`libavutil/display.c`、`h264dec.c`(`decode_nal_units` 的 SEI/边界)、`h264_slice.c`(`h264_export_frame_props`/`h264_frame_start`) | **帧 side-data 与 NAL 边界语义**：`H264FrameSideData` 标签列表（stereo3d、displaymatrix、A53/AFD/LCEVC、SEI 未注册、ambient、mastering display（g,b,r→r,g,b 重排与合法性检查）、content light、H.274 颗粒、AOM 颗粒集）；`H264Decoder.decode_nals` 按 C 语义在 AU 入口 `ff_h264_sei_uninit`（待配场跳过）、首 slice 前 SEI 归属本图、slice 后 SEI 只更新状态；导出时机=帧图或场对第二场；场对 A53 合并/AFD 取后场/LCEVC 先场挂载；`sei_recovery_frame_cnt` 取首场值。HDR10+/2094-App5/HDR Vivid 与 C 一致留在 SEI 上下文不导出 | ✅ |
 | [audio_headers.mbt](libavcodec/audio_headers.mbt) | `libavcodec/adts_header.c`、`adts_parser.c`、`mpegaudiodecheader.c`、`mpegaudiotabs.h` | `ff_adts_header_parse{,_buf}`（AAC-LC/Main/SSR/LTP、采样率/声道/帧长/码率）、`ff_mpa_check_header`、`avpriv_mpegaudio_decode_header`（MPEG1/2/2.5、Layer I/II/III、LSF、自由格式）、`ff_mpa_decode_header`；码率/采样率全表 | ✅ |
 | [mp3_tables.mbt](libavcodec/mp3_tables.mbt) | `libavcodec/mpegaudiodec_common.c`、`mpegaudiodsp_data.c` | `ff_band_size_long/short`、`ff_slen_table`、`ff_lsf_nsf_table`、`ff_mpa_pretab`、`ff_mpa_huff_data` 与 Layer III 的 15 张 Huffman 码长/符号表，全部由 C 源批量提取（不手工转录） | ✅ |
 | [mp3_dsp.mbt](libavcodec/mp3_dsp.mbt) | `mpegaudiodsp_template.c`(fixed, `USE_FLOATS=0`)、`mpegaudiodsp.c`、`dct32_template.c` | 定点 IMDCT/多相合成滤波：`ff_imdct36` 与 36 点/12 点窗表生成、`ff_dct32`、合成窗与频率反转；`INTFLOAT`=`int` → MoonBit 32 位回绕 `Int`，`mulh`/`mull` 走 64 位中间积 | ✅ |
@@ -570,8 +576,8 @@ Huffman 规范化码另有等效性说明，见下文）：
   H.264/HEVC NAL 头；`h264_ps.mbt` 完成 SPS/PPS 全语法（含高 profile 缩放矩阵、VUI、
   HRD、bitstream restriction、裁剪尺寸、`num_reorder_frames` 的水平表推导）与
   `avcC`/Annex B extradata。**像素解码已开始**：Baseline I 帧重建通路（slice header、
-  CAVLC、宏块重建、环路去块滤波）见下一小节；**SEI 已完成**（`h264_sei.mbt`，T.35 与
-  side-data 层未接）；**P/B 帧与滑窗 DPB 已完成**（`h264_inter/mvpred/mc/dpb` + `h264_b_*`：
+  CAVLC、宏块重建、环路去块滤波）见下一小节；**SEI 已完成**（`h264_sei.mbt` + `itut35.mbt` 的 T.35 与
+  `h264_side_data.mbt` 的帧 side-data/NAL 边界语义）；**P/B 帧与滑窗 DPB 已完成**（`h264_inter/mvpred/mc/dpb` + `h264_b_*`：
   B 全子分区、空间/时间 direct、显式/隐式双向加权与显示重排；SP/SI 重建仍拒绝；
   单色 4:0:0 已支持，按 FFmpeg 的 yuv420p 中性色度输出逐字节对齐；
   MBAFF 帧图（I/P/B、CAVLC/CABAC、混合 field/frame 宏块对、多参考/B-pyramid、
@@ -1025,7 +1031,7 @@ C harness 仅生成黄金参考，运行时保持纯 MoonBit。
 1. SP/SI 重建；separate colour plane 与 FMO 继续按原 C 的拒绝边界处理。
 2. 单色、transform bypass、MBAFF、PAFF 场图与帧场交叉引用已完成实流验证；
    PAFF 位深/色度、POC 与场顺序的验收矩阵见下节。
-3. frame_num gap 已完成（见下节）；数据分区/冗余 slice、错误恢复及 SEI T.35/输出元数据接入仍待补齐。
+3. frame_num gap、SEI T.35 与帧 side-data/边界语义均已完成（见后续小节）；数据分区/冗余 slice、错误恢复仍待补齐。
    原 C 本身拒绝的 FMO 等功能继续保留对应拒绝边界。
 
 ### 2026-10-23 H.264 frame_num 间隙参考合成
@@ -1055,8 +1061,28 @@ C harness 仅生成黄金参考，运行时保持纯 MoonBit。
 提交的回归内嵌码流和固定黄金 MD5，运行测试无需 Docker 或原始生成文件。
 
 全量 Wasm **758/758**；`moon check --target wasm --deny-warn --no-render` 与
-`moon info --target wasm` 通过。H.264 剩余重点仍有 SP/SI、数据分区/冗余 slice、
-错误恢复和 SEI 输出元数据；FMO 与 separate colour plane 保持原 C 的拒绝边界。
+`moon info --target wasm` 通过。H.264 剩余重点仍有 SP/SI、数据分区/冗余 slice、错误恢复（SEI 输出元数据已在后续切片完成）；
+FMO 与 separate colour plane 保持原 C 的拒绝边界。
+
+### 2026-10-23 H.264 SEI T.35、帧 side-data 与 NAL 边界语义
+
+`itut35.mbt` 移植 `itut35.c`/`atsc_a53.c`/`dynamic_hdr_vivid.c` 与 `aom_film_grain.c` 的
+解析侧：T.35 country/provider 全分发（ATSC GA94 字幕/AFD、AOM 颗粒、Samsung、Dolby、SMPTE、V-Nova LCEVC、HDR Vivid）。
+与 C 一致的关键语义：Dolby 0x800 在 H.264 路径因无 DOVIContext 忽略；HDR10+/SMPTE 2094-40 App5/HDR Vivid 解析后留在 SEI 上下文不导出到帧（原 C 中 `ff_itut_t35_parse_payload_to_frame` 仅 AV1 解码器调用）；0xFF 国家码消费扩展字节后仍落 default 忽略。
+`h264_side_data.mbt` 移植 `ff_h2645_sei_to_frame`：帧标签列表覆盖 stereo3d、displaymatrix、A53/AFD/LCEVC、未注册用户数据、ambient、
+mastering display（g,b,r→r,g,b 重排、合法性检查）、content light、H.274 与 AOM 颗粒参数；携带即消费语义与 C 一致。
+NAL 边界语义接入 `H264Decoder.decode_nals`：AU 入口在非待配场时 `ff_h264_sei_uninit`（孤场残留带给下一图，同 `!h->first_field`）；
+首 slice 前的 SEI 归属本图、slice 后的 SEI 只更新状态；导出时机=帧图或场对第二场（`!FIELD_PICTURE || !first_field`）。
+场对细节：A53 双场合并、AFD 取第二场值、LCEVC 第一场在 picture start 挂到待配帧并入对帧输出、
+`sei_recovery_frame_cnt` 取首场值（`h264_frame_start` 仅帧图/首场运行）；帧图无恢复点 SEI 时保持 -1。
+H.274 颗粒 seed 用图片 POC（本移植无 poc_offset）；另移植 `libavutil/display.c` 的旋转/翻转矩阵。
+
+验证：T.35 分发表/A53 合并/HDR Vivid 位流/AOM 颗粒集单元测试；合成 SEI 流的帧 side-data 逐字段对 trace_headers 转写值断言；
+真实 x264 流验证未注册数据挂载与 per-AU 排空；JM PAFF 流注入 SEI 验证场对边界与合并语义。
+
+全量 Wasm **767/767**；`moon check --target wasm --deny-warn --no-render` 与
+`moon info --target wasm` 通过。H.264 剩余重点：SP/SI、数据分区/冗余 slice、错误恢复、
+HDR10+/SMPTE 2094-40 App5 结构级 T.35 解析与颗粒合成应用。
 
 ### 2026-10-23 H.264 PAFF 场图
 

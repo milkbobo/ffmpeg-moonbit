@@ -9,8 +9,9 @@
 /// CAVLC/CABAC, 4x4/8x8, I_PCM, slice-local prediction, weighted prediction,
 /// High 4:4:4 lossless transform bypass and MBAFF frame pictures (including
 /// mixed field/frame MB pairs), plus PAFF field pictures. The persistent
-/// reference/POC/MMCO state lives in h264_dpb.mbt. SP/SI reconstruction remains
-/// unfinished.
+/// reference/POC/MMCO state lives in h264_dpb.mbt; the SEI side-data export
+/// and its access-unit boundary semantics live in h264_side_data.mbt and
+/// itut35.mbt. SP/SI reconstruction remains unfinished.
 
 ///|
 /// FFmpeg luma 4x4 block order (8x8-grouped) to 4x4 raster grid x. */
@@ -142,6 +143,16 @@ pub struct H264Frame {
   /// Chroma subsampling: `cw = width >> hshift`, `ch = height >> vshift`.
   chroma_hshift : Int32
   chroma_vshift : Int32
+  /// The SPS VUI of the picture, kept for side-data export (film grain
+  /// colour description of `ff_h2645_sei_to_frame`).
+  vui : H2645Vui
+  /// Side data exported at the picture boundary (`AVFrame.side_data`):
+  /// SEI messages carried by the access unit(s) of this picture.
+  side_data : Array[H264FrameSideData]
+  /// `H264Picture.sei_recovery_frame_cnt`: the recovery point SEI seen at
+  /// the picture start. `output_frame` marks the frame
+  /// `AV_FRAME_FLAG_KEY` when this is 0.
+  mut sei_recovery_frame_cnt : Int32
 }
 
 ///|
@@ -1414,6 +1425,9 @@ fn h264_decode_picture_ex(
     crop_top: sps.crop_top,
     chroma_hshift,
     chroma_vshift,
+    vui: sps.vui,
+    side_data: [],
+    sei_recovery_frame_cnt: -1,
   })
 }
 

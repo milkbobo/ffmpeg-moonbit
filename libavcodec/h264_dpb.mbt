@@ -43,6 +43,10 @@ struct H264PendingField {
   poc_bottom : Int32
   ref_idc : Int32
   identity : Int32
+  /// The recovery point SEI seen at this field's picture start; the C sets
+  /// `pic->sei_recovery_frame_cnt` in `h264_frame_start`, which only runs
+  /// for frame pictures and first fields, so the pair keeps this value.
+  sei_recovery_frame_cnt : Int32
 }
 
 ///|
@@ -61,6 +65,11 @@ pub struct H264Decoder {
   /// `PrevRefFrameNum` (POC type 2 / sliding window).
   mut prev_frame_num : Int32
   mut prev_frame_num_offset : Int32
+  /// `h->sei`: SEI state carried across access units; reset at an AU
+  /// boundary unless a complementary second field is still expected.
+  sei : H264SeiContext
+  /// `h->has_recovery_point`.
+  mut has_recovery_point : Bool
 }
 
 ///|
@@ -77,19 +86,49 @@ pub fn new_h264_decoder() -> H264Decoder {
     prev_poc_lsb: 0,
     prev_frame_num: -1,
     prev_frame_num_offset: 0,
+    sei: new_h264_sei_context(),
+    has_recovery_point: false,
   }
 }
 
 ///|
-/// Decode one coded-slice NAL (plus any SPS/PPS NALs of the same access
+/// Decode the SEI messages of one type-6 NAL (`decode_nal_units`'s
+/// `H264_NAL_SEI` case; errors are not fatal without AV_EF_EXPLODE, so a
+/// malformed message only leaves its partial state behind).
+fn H264Decoder::decode_sei_nal(self : H264Decoder, nal : H2645Nal) -> Unit {
+  let nbytes = (nal.size_bits - 8) / 8
+  if nbytes <= 0 {
+    return
+  }
+  let payload = nal.data.clamped_view(start=1, end=1 + nbytes).to_owned()
+  let _ = self.sei.h264_sei_decode(payload, self.ps)
+  self.has_recovery_point = self.has_recovery_point ||
+    self.sei.recovery_point.recovery_frame_cnt != -1
+}
+
+///|
+/// Decode one coded-slice NAL (plus any SPS/PPS/SEI NALs of the same access
 /// unit) into a picture, updating the reference buffer. Returns `None` for
-/// access units without a slice (parameter sets only).
+/// access units without a slice (parameter sets only) and for an unpaired
+/// first field.
+///
+/// NAL boundary semantics (`h264dec.c: decode_nal_units`): the per-AU SEI
+/// state is reset when a new access unit begins, unless a complementary
+/// second field is still expected (`!h->first_field`); SEI NALs preceding
+/// the first slice apply to this picture (the C exports them at
+/// `h264_field_start` → `h264_export_frame_props`); SEI NALs after the
+/// first slice only update state a later access unit may still see.
 fn H264Decoder::decode_nals(
   self : H264Decoder,
   nals : Array[H2645Nal],
   skip_lf : Bool,
 ) -> Result[H264Frame?, String] {
+  if self.pending_field is None {
+    self.sei.sei_uninit()
+  }
   let slices : Array[H2645Nal] = []
+  let late_sei : Array[H2645Nal] = []
+  let mut has_slice = false
   for k = 0; k < nals.length(); k = k + 1 {
     let nal = nals[k]
     if nal.nal_type == h264_nal_sps {
@@ -108,12 +147,49 @@ fn H264Decoder::decode_nals(
       }
     } else if nal.nal_type == h264_nal_idr_slice || nal.nal_type == 1 {
       slices.push(nal)
+      has_slice = true
+    } else if nal.nal_type == 6 {
+      if has_slice {
+        late_sei.push(nal)
+      } else {
+        self.decode_sei_nal(nal)
+      }
     }
   }
   if slices.is_empty() {
-    Ok(None)
-  } else {
-    self.decode_picture(slices, skip_lf)
+    return Ok(None)
+  }
+  let result = self.decode_picture(slices, skip_lf)
+  // The export mirrors `h264_export_frame_props`, which runs at the picture
+  // start of frame pictures and of second fields (`!FIELD_PICTURE ||
+  // !h->first_field`): exactly the pictures `decode_picture` returns.
+  match result {
+    Ok(Some(frame)) => {
+      // C: `cur->poc + (h->poc_offset << 5)`; this port has no poc_offset
+      // (gap handling resets poc and bumps the epoch instead), so the seed
+      // is the picture POC.
+      let seed = frame.poc.reinterpret_as_uint()
+      self.sei.sei_to_frame(
+        frame.side_data,
+        frame.vui,
+        frame.bit_depth,
+        frame.bit_depth,
+        frame.width,
+        frame.height,
+        seed,
+      )
+      for k = 0; k < late_sei.length(); k = k + 1 {
+        self.decode_sei_nal(late_sei[k])
+      }
+      Ok(Some(frame))
+    }
+    Ok(None) => {
+      for k = 0; k < late_sei.length(); k = k + 1 {
+        self.decode_sei_nal(late_sei[k])
+      }
+      Ok(None)
+    }
+    Err(e) => Err(e)
   }
 }
 
@@ -198,6 +274,12 @@ fn H264Decoder::decode_picture_with_gaps(
   let mut pair_identity = -1
   let mut pending_top = 2147483647
   let mut pending_bottom = 2147483647
+  // Carried state of a pending first field: the recovery point SEI of its
+  // access unit and the side data its picture start attached
+  // (`h264_frame_start` / `alloc_picture` only run for frame pictures and
+  // first fields).
+  let mut pending_recovery = -1
+  let mut pending_side_data : Array[H264FrameSideData] = []
   if field_picture {
     match self.pending_field {
       Some(pending) =>
@@ -213,6 +295,8 @@ fn H264Decoder::decode_picture_with_gaps(
           pair_identity = pending.identity
           pending_top = pending.poc_top
           pending_bottom = pending.poc_bottom
+          pending_recovery = pending.sei_recovery_frame_cnt
+          pending_side_data = pending.frame.side_data
           carry = Some({
             y: pending.frame.y,
             u: pending.frame.u,
@@ -395,6 +479,16 @@ fn H264Decoder::decode_picture_with_gaps(
   if field_picture && !paired {
     // First field: keep the picture (and its reference marking) waiting for
     // the complementary field; it is never displayed on its own.
+    // `alloc_picture` attaches the AU's LCEVC payload at the picture start;
+    // carry it on the pending frame so a pair's output keeps it (an
+    // unmatched field drops it with the picture, like the C).
+    match self.sei.itut_t35.lcevc {
+      Some(lcevc) => {
+        frame.side_data.push(Lcevc(lcevc))
+        self.sei.itut_t35.lcevc = None
+      }
+      None => ()
+    }
     self.pending_field = Some({
       frame,
       structure,
@@ -403,10 +497,23 @@ fn H264Decoder::decode_picture_with_gaps(
       poc_bottom,
       ref_idc: nal.ref_idc,
       identity,
+      sei_recovery_frame_cnt: self.sei.recovery_point.recovery_frame_cnt,
     })
     Ok(None)
   } else {
     self.pending_field = None
+    // `pic->sei_recovery_frame_cnt` comes from the first field's picture
+    // start for a completed pair; frame pictures read the current state.
+    frame.sei_recovery_frame_cnt = if paired {
+      pending_recovery
+    } else {
+      self.sei.recovery_point.recovery_frame_cnt
+    }
+    if paired {
+      for k = 0; k < pending_side_data.length(); k = k + 1 {
+        frame.side_data.push(pending_side_data[k])
+      }
+    }
     Ok(
       Some({ ..frame, epoch: self.epoch, poc: if reset { 0 } else { poc_min }, }),
     )
