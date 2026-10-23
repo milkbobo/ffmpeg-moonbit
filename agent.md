@@ -72,6 +72,15 @@
   `aac_coupling.mbt` 支持 CCE 三个耦合位置、四增益尺度与 CPE 声道选择，
   PCE/ASC 保存耦合声明，源历史按标签独立维护。1024/960 合成码流对拍最大差分 1 LSB。
 - **libavutil（bessel）**：`av_bessel_i0`（Blair/Edwards 极小有理逼近，KBD 窗用）。
+- **libavcodec（Opus SILK/hybrid 全模式解码，2026-10 新增）**：`opus_silk.mbt`
+  （silk.c 全量：NLSF 稳定化 + RFC 8251 LPC 稳定性检查、LSF→LPC 带宽扩展、激励
+  PVQ/LSB/符号、LTP/LPC 合成、mid-only、立体声 unmix）+ `opus_silk_tables.mbt`
+  （tab.c 的 63 张表，脚本批量提取）+ `opus_resample.mbt`（libswresample 浮点多相
+  重采样器按 dec.c 配置的专用移植：filter_size 16、Kaiser β9、exact_rational、
+  invert_initial_buffer/resample_flush/padless=7 全套状态机）+ `opus_decode.mbt`
+  （dec.c 包级编排：SILK/hybrid/CELT 分派、redundancy 交叉淡化、celt_delay FIFO、
+  多流 sync FIFO、Ogg pre-skip/end-trim 属测试层）。SILK-only 流与 FFmpeg 逐位
+  一致（framemd5），hybrid 流系数级位级一致（合成阶段沿用 CELT 3e-6 容差标准）。
 - **libavcodec（解码切片，2026-10 新增，首次产出像素/PCM）**：
   - H.264 Baseline **I 帧重建 + 环路去块滤波**：`h264_slice.mbt`（I/SI slice header）+
     `h264_cavlc.mbt`（CAVLC + dequant/chroma-QP 表）+ `h264_idct.mbt`（4x4 IDCT +
@@ -559,6 +568,23 @@ $msg | git commit -F -
 - **VP9 向量 b64 内嵌用单行 `b"..."`**：多行续行需要每段都带 `b` 前缀，
   否则续段是 String 字面量触发 deprecated overload 警告（交付要求 0 警告）。
 
+- **Opus SILK 对拍必须用 asm 禁用的 FFmpeg 构建**：x86 的 swr 重采样内核
+  （resample_common_float_fma3）与 float_dsp 用 FMA，位模式与标量 C 不同；
+  vpxdev-img 里 `./configure --disable-asm --disable-everything
+  --enable-decoder=opus --enable-demuxer=ogg --enable-muxer=framemd5
+  --enable-encoder=pcm_f32le --enable-filter=aresample,aformat,anull
+  --enable-protocol=file` 构建参考解码器，`-c:a pcm_f32le -f framemd5` 给出
+  逐帧 f32 位模式 MD5（CLI 已扣 pre-skip、按 Ogg granule 末端裁剪、末帧为
+  drain）。CELT 合成本身沿用 opus_celt_pcm_reference.c 的 3e-6 容差。
+- **Opus SILK 的三个 C 怪癖必须复刻**：①`silk_lsf2lpc` 的 maxabs 扫描读的是
+  `lpc32[k]`（上一个 argmax 槽位）而不是 `lpc32[j]`——maxabs 实际只跟踪
+  |lpc32[0]|，照「正常」写法会在应扩展时不扩展；②Q12 系数赋值有 int16 截断
+  （wrap），病态 NLSF 下依赖回绕行为；③`ff_silk_decode_superframe` 对单声道
+  读未初始化的 `redundancy[1]`（移植按 0 处理，值不可观测）。
+- **Opus 包级编排的 cur_out 时序**：`opus_decode_frame` 内 cur_out 在整帧
+  （SILK 重采样 + CELT 叠加 + redundancy 淡化）完成后才由调用方按 samples
+  推进；SILK 分支提前推进会与 hybrid 的 CELT 叠加重叠越界（症状：hybrid 首
+  包即 OOB）。hybrid 的 CELT 叠加基点是帧首（out_tmp = cur_pos + delay）。
 - **H.264 P_SKIP 的缺邻规则独立于普通 MV 中值预测**：左邻或上邻为
   `REF_NOT_AVAIL` 时直接取零 MV；不能只处理「ref 0 且 MV=0」的捷径。真实 HLS/DASH
   4 帧流在第 4 帧左边界首次暴露此错误，TS/fMP4/DASH 三条端到端 MD5 都会抓住。

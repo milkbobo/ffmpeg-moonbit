@@ -9,7 +9,7 @@
 | H.264 | I/P/B 帧；CAVLC/CABAC；8/9/10/12/14 bit、单色及 4:2:0/4:2:2/4:4:4；多 slice、MBAFF/PAFF、参考帧管理、SEI、去块滤波；Annex B 与 MP4 `avcC` 入口；渐进帧与 MBAFF 帧缺失或截断 slice 的宏块补偿 | P 帧大缺口、高位深等复杂恢复场景尚未逐像素对齐 FFmpeg；场图片按上游边界明确报错；SP/SI 明确不做。FMO、separate colour plane 和数据分区不在 FFmpeg 9.0.2 的可解码范围内 |
 | HEVC | I/P/B 帧；8/10/12 bit、多种色度格式及单色；多 slice、WPP、tiles、去块滤波与 SAO | dependent slice、tiles 与 WPP 的组合、PCM/RDPCM 等仍缺 |
 | AAC / MPEG 音频 / FLAC | AAC-LC PCM；MPEG 音频 Layer I/II/III 定点 PCM；FLAC 无损 PCM | AAC 的 SBR/PS、USAC 等未覆盖 |
-| 其他视频 / 音频 | VP9 profile 0/2：关键帧与帧间帧（P 帧四种 MV 模式、三路参考、可切换/固定插值滤波、并行提交与计数驱动概率自适应）、8/10/12-bit 4:2:0、MJPEG、PNG/APNG；Opus CELT 单/双声道 PCM | VP9 复合预测（B 帧，编码器无法生成）、参考缩放、profile 1/3 与非 4:2:0 色度；Opus SILK/混合模式与包级播放编排未完成；AV1 目前只有码流和 tile 解析，没有像素解码 |
+| 其他视频 / 音频 | VP9 profile 0/2：关键帧与帧间帧（P 帧四种 MV 模式、三路参考、可切换/固定插值滤波、并行提交与计数驱动概率自适应）、8/10/12-bit 4:2:0、MJPEG、PNG/APNG；Opus SILK/混合/CELT 全模式与多流包级解码 | VP9 复合预测（B 帧，编码器无法生成）、参考缩放、profile 1/3 与非 4:2:0 色度；Opus 包丢失隐藏（PLC）未实现；AV1 目前只有码流和 tile 解析，没有像素解码 |
 | 容器与分片 | MP4/MOV、Matroska/WebM、MPEG-TS、WAV、裸 AAC/MP3；HLS/DASH 通过回调读取 TS/fMP4 | 尚无统一播放 API、完整网络协议层或完整 muxer 集合 |
 | 基础算法 | 位流、哈希/校验和、AES 等密码算法、数学/时间基及部分 `@v128` 内核 | `libavutil` 其余模块及 `libswscale`、`libswresample` 等尚未整体移植 |
 
@@ -29,7 +29,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-10-23）：`moon check --deny-warn` 通过，Wasm 测试 **783/783** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-10-24）：`moon check --deny-warn` 通过，Wasm 测试 **791/791** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

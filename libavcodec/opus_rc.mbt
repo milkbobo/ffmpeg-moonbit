@@ -148,6 +148,16 @@ pub fn OpusRangeDecoder::decode_log(
 }
 
 ///|
+/// Re-point the backwards raw-bit reader at `data[0..end]`, as
+/// `ff_opus_rc_dec_raw_init(&rc, data + size, size)` does after SILK consumed
+/// the front of a hybrid frame. Clears the cached raw bits.
+fn OpusRangeDecoder::reinit_raw(self : OpusRangeDecoder, end : Int) -> Unit {
+  self.raw_pos = end
+  self.raw_cache = 0U
+  self.raw_count = 0
+}
+
+///|
 /// Read 0..25 CELT raw bits, backwards byte-wise and low bit first.
 /// An exhausted raw buffer returns an error without changing the decoder.
 pub fn OpusRangeDecoder::get_raw(

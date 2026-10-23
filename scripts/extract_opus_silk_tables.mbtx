@@ -1,0 +1,160 @@
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+}
+
+// Tokenize a C initializer: signed decimal integers, skipping // and /* */
+// comments. Multi-dimensional brace nesting is irrelevant, only the values.
+fn numbers(source : StringView) -> Array[String] {
+  let out : Array[String] = []
+  let mut p = 0
+  while p < source.length() {
+    let c = source[p]
+    if c == '/' && p + 1 < source.length() && source[p + 1] == '/' {
+      while p < source.length() && source[p] != '\n' { p += 1 }
+    } else if c == '/' && p + 1 < source.length() && source[p + 1] == '*' {
+      p += 2
+      while p + 1 < source.length() && !(source[p] == '*' && source[p + 1] == '/') { p += 1 }
+      p += 2
+    } else if c is ('-' | '0'..='9') {
+      let start = p
+      if c == '-' { p += 1 }
+      while p < source.length() && source[p] is '0'..='9' { p += 1 }
+      // Only a minus directly attached to digits is a value.
+      if p > start + 1 || source[start] != '-' {
+        out.push(source[start:p].to_owned())
+      }
+    } else { p += 1 }
+  }
+  out
+}
+
+// Parse the declared dimensions, e.g. "[2][2][33]"; empty for [].
+fn dims(decl : StringView) -> Array[Int] {
+  let out : Array[Int] = []
+  let mut p = 0
+  while p < decl.length() {
+    if decl[p] == '[' {
+      let mut q = p + 1
+      while q < decl.length() && decl[q] != ']' { q += 1 }
+      if q > p + 1 {
+        let mut value = 0
+        for j in (p + 1)..<q {
+          let d = decl[j].to_int() - 48
+          if d >= 0 && d <= 9 { value = value * 10 + d }
+        }
+        out.push(value)
+      }
+      p = q + 1
+    } else { p += 1 }
+  }
+  out
+}
+
+fn emit_table(source : String, name : String) -> Result[String, String] {
+  let marker = "ff_silk_\{name}"
+  let at = match source.find(marker) {
+    Some(index) => index
+    None => return Err("table \{marker} not found")
+  }
+  // Declaration header up to '=': capture the bracketed dimensions.
+  let eq = match source[at:].find("=") {
+    Some(offset) => at + offset
+    None => return Err("\{name}: no =")
+  }
+  let shape = dims(source[at:eq])
+  // Initializer body: from '{' after '=' to the matching closing brace.
+  let open = match source[eq:].find("{") {
+    Some(offset) => eq + offset
+    None => return Err("\{name}: no {{")
+  }
+  let mut depth = 0
+  let mut close = open
+  for i in open..<source.length() {
+    if source[i] == '{' { depth += 1 }
+    if source[i] == '}' {
+      depth -= 1
+      if depth == 0 { close = i; break }
+    }
+  }
+  let values = numbers(source[open + 1:close])
+  let expected = shape.fold(init=1, (a, b) => a * b)
+  if expected != 1 && values.length() > expected {
+    return Err("\{name}: expected \{expected} values, got \{values.length()}")
+  }
+  // Dimensionless tables: pin the size so silent drift cannot slip through.
+  let size = if expected == 1 { values.length() } else { expected }
+  let out = StringBuilder()
+  out.write_string("let silk_\{name} : Array[Int32] = [ // \{size} entries")
+  for d in shape { out.write_string(" [\{d}]") }
+  out.write_string("\n")
+  for i, value in values {
+    if i % 12 == 0 { out.write_string("  ") }
+    out.write_string(value + ",")
+    out.write_string(if i % 12 == 11 || i == values.length() - 1 { "\n" } else { " " })
+  }
+  // C leaves trailing aggregate entries zero-initialized (e.g. lsf_s2 rows
+  // 16..31 are never written); mirror that here.
+  if values.length() < size {
+    out.write_string("  // zero-initialized tail, as in C\n")
+    for i in values.length()..<size {
+      if i % 12 == 0 { out.write_string("  ") }
+      out.write_string("0,")
+      out.write_string(if i % 12 == 11 || i == size - 1 { "\n" } else { " " })
+    }
+  }
+  out.write_string("]\n")
+  Ok(out.to_string())
+}
+
+fn main raise {
+  let source = @fs.read_file_to_string("../libavcodec/opus/tab.c")
+  let names : Array[String] = [
+    // Entropy model CDFs (uint16_t, total followed by upper bounds).
+    "model_lbrr_flags_40", "model_lbrr_flags_60", "model_stereo_s1",
+    "model_stereo_s2", "model_stereo_s3", "model_mid_only",
+    "model_frame_type_inactive", "model_frame_type_active",
+    "model_gain_highbits", "model_gain_lowbits", "model_gain_delta",
+    "model_lsf_s1", "model_lsf_s2", "model_lsf_s2_ext",
+    "model_lsf_interpolation_offset", "model_pitch_highbits",
+    // model_pitch_lowbits_nb/wb are #define aliases in tab.h for
+    // model_lcg_seed / model_gain_lowbits; silk.mbt references those directly.
+    "model_pitch_lowbits_mb", "model_pitch_delta",
+    "model_pitch_contour_nb10ms", "model_pitch_contour_nb20ms",
+    "model_pitch_contour_mbwb10ms", "model_pitch_contour_mbwb20ms",
+    "model_ltp_filter", "model_ltp_filter0_sel", "model_ltp_filter1_sel",
+    "model_ltp_filter2_sel", "model_ltp_scale_index", "model_lcg_seed",
+    "model_exc_rate", "model_pulse_count", "model_pulse_location",
+    "model_excitation_lsb", "model_excitation_sign",
+    "model_lsf_weight_nbmb", "model_lsf_weight_wb",
+    // Codebooks and parameter tables.
+    "stereo_weights", "lsf_s2_model_sel_nbmb", "lsf_s2_model_sel_wb",
+    "lsf_pred_weights_nbmb", "lsf_pred_weights_wb", "lsf_weight_sel_nbmb",
+    "lsf_weight_sel_wb", "lsf_codebook_nbmb", "lsf_codebook_wb",
+    "lsf_min_spacing_nbmb", "lsf_min_spacing_wb", "lsf_ordering_nbmb",
+    "lsf_ordering_wb", "cosine", "pitch_scale", "pitch_min_lag",
+    "pitch_max_lag", "pitch_offset_nb10ms", "pitch_offset_nb20ms",
+    "pitch_offset_mbwb10ms", "pitch_offset_mbwb20ms", "ltp_filter0_taps",
+    "ltp_filter1_taps", "ltp_filter2_taps", "ltp_scale_factor",
+    "quant_offset", "stereo_interp_len", "shell_blocks",
+  ]
+  let out = StringBuilder()
+  out.write_string("///|\n/// SILK decoder tables, generated from FFmpeg 9.0.2 libavcodec/opus/tab.c.\n/// Copyright (c) 2012 Andrew D'Addesio, 2013-2014 Mozilla Corporation.\n/// LGPL-2.1-or-later. Multi-dimensional tables are flattened row-major;\n/// regenerate with scripts/extract_opus_silk_tables.mbtx (--check to verify).\n")
+  let mut ok = 0
+  for name in names {
+    match emit_table(source, name) {
+      Ok(text) => { out.write_string(text); ok += 1 }
+      Err(error) => println("SKIP \{name}: \{error}")
+    }
+  }
+  let text = out.to_string()
+  let path = "libavcodec/opus_silk_tables.mbt"
+  if @env.args().contains("--check") {
+    guard @fs.read_file_to_string(path) == text
+      else { println("SILK tables differ from C"); abort("mismatch") }
+    println("SILK tables match C (\{ok} tables)")
+  } else {
+    @fs.write_string_to_file(path, text)
+    println("wrote \{path} with \{ok} tables")
+  }
+}

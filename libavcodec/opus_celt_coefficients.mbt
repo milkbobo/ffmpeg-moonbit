@@ -20,6 +20,7 @@ pub fn OpusCeltHistory::new() -> OpusCeltHistory {
 ///|
 /// Final energy-scaled spectrum and next-frame history, without PCM synthesis.
 pub struct OpusCeltCoefficients {
+  start_band : Int32
   coefficients : Array[Array[Float]]
   collapse_masks : Array[Array[UInt32]]
   history : OpusCeltHistory
@@ -137,6 +138,7 @@ fn opus_celt_finish_coefficients(
   let next : OpusCeltHistory = { energy: setup.energy, previous, seed: rc.range }
   { coefficients: spectrum.coefficients, collapse_masks: spectrum.collapse_masks, history: next,
     silence: setup.silence, transient: setup.transient, blocks: setup.blocks, anticollapse,
+    start_band: setup.start_band,
     postfilter_period: setup.postfilter_period, postfilter_gains: setup.postfilter_gains }
 }
 

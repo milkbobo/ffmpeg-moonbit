@@ -1590,5 +1590,33 @@ FFmpeg 的 libvpx-vp9 封装不支持编码 B 帧（`libvpxenc.c` 无 max_b_fram
 新增三条真实向量（`vp9_10p/10np/12p_realdata_wbtest.mbt`，生成脚本 `scripts/_emit_vp9_p2_vectors.py`）：10-bit 关键帧+P、10-bit 计数驱动自适应、12-bit，共 45 帧逐帧 MD5 与 Docker FFmpeg 一致。核 A/B 固化为常驻测试 `vp9_kernels_wbtest.mbt`（每核 3000 组 LCG 输入的输出 MD5 对 C 真值），覆盖 8-bit 流触不到的分支。
 
 对拍技巧沉淀：LF 探针按 (E,I,wd) 值组合过滤即可在 C/MBT 两侧对齐同一批调用而不必打印坐标；`String::to_bytes()` 是 **UTF-16LE** 不是 UTF-8，喂 MD5 前须逐 code unit 取低字节。
+## 13. 2026-10-24 Opus SILK/混合模式与包级解码
+
+**范围**：Opus 解码器补全 LP 层——`opus_silk.mbt`（silk.c 全量移植：NLSF 稳定化、RFC 8251
+LPC 稳定性检查、LSF→LPC 带宽扩展、激励 PVQ/LSB 展开/符号建模、LTP/LPC 合成、mid-only
+边声道、立体声 unmix）、`opus_silk_tables.mbt`（tab.c 63 张表，`scripts/extract_opus_silk_tables.mbtx`
+批量提取 + `--check` 核对）、`opus_resample.mbt`（libswresample 浮点多相重采样器在
+dec.c 配置下的专用移植：filter_size 16、Kaiser β9、exact_rational 精确有理比、
+invert_initial_buffer/resample_flush/padless=7 全套状态机；SILK 8/12/16 kHz→48 kHz 全部
+走 frac≡0 的 common 核）、`opus_decode.mbt`（dec.c 包级编排：三模式分派、SILK 流的
+CELT redundancy 交叉淡化、hybrid 的 celt_delay FIFO、多流 sync FIFO、增益、flush/drain）。
+CELT 侧为此增加 `decode_frame_rc`（复用外部 rc + start_band 17 的 hybrid 入口）与
+`coefficients_log` 诊断钩子。
+
+**验证**（两层标准，均为 asm 禁用构建的 FFmpeg 9.0.2——x86 swr/float_dsp 内核带 FMA，
+位模式与标量不同）：
+- SILK-only 七条真实流（NB/MB/WB × 10/20/40/60 ms、CBR code-3 lacing、FEC/LBRR、立体声、
+  mid-only）与原生解码器 **framemd5 逐帧位级一致**（含 pre-skip、Ogg granule 末端裁剪、
+  resampler drain 帧），向量内嵌于 `opus_silk_realdata_wbtest.mbt`。
+- hybrid 两条流（mono/stereo FB）：去归一化 CELT 系数经插桩 dec_celt.c 逐帧 dump，
+  **位级 MD5 一致**（语法/能量/分配/PVQ 全链路）；合成阶段（naive IMDCT vs AVTX）沿用
+  既有 CELT 3e-6 容差标准。排障路径：熵消耗 tell 全帧一致 → 系数一致 → IMDCT 输入一致
+  输出差 ulp → 定位为合成层。
+
+**排障沉淀**：`silk_lsf2lpc` 的 maxabs 扫描读 `lpc32[k]`（上一 argmax）而非 `lpc32[j]`，
+maxabs 实际只跟踪 |lpc32[0]|；Q12 赋值的 int16 截断在病态 NLSF 下依赖回绕；编排层
+cur_out 必须整帧完成后推进。向量生成与 C 参考构建命令见 `scripts/emit_opus_silk_vectors.py`
+文件头与 agent.md §7。
+
 
 `moon check --no-render` 0 error/0 warning，`moon test` **789/789**。
