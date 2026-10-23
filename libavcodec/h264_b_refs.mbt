@@ -5,6 +5,7 @@ priv struct H264SliceRefs {
   list0 : Array[H264RefPic]
   list1 : Array[H264RefPic]
   colocated : Array[H264MbInfo]
+  reference_buffers : Array[(Int32, Int32)]
   colocated_mbaff : Bool
   colocated_field_picture : Bool
   long_pocs : Array[Int32]
@@ -87,6 +88,11 @@ fn H264Decoder::b_references(
       sh.ref_mod_l0_vals,
       curr_pic_num,
       max_pic_num,
+      other_default=if defaults1.is_empty() {
+        None
+      } else {
+        Some(defaults1[if same { 1 } else { 0 }])
+      },
     ) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -102,6 +108,7 @@ fn H264Decoder::b_references(
       curr_pic_num,
       max_pic_num,
       swap_first=same,
+      other_default=if defaults0.is_empty() { None } else { Some(defaults0[0]) },
     ) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -120,6 +127,9 @@ fn H264Decoder::b_references(
     list0,
     list1,
     colocated: entry.infos,
+    reference_buffers: self.refs.map(fn(entry) {
+      (entry.pic.identity, entry.buffer_identity)
+    }),
     colocated_mbaff: entry.mbaff,
     colocated_field_picture: entry.field_picture,
     long_pocs,

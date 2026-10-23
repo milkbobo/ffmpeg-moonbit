@@ -10,6 +10,9 @@ fn h264_decode_picture_slice(
   slice_num : Int32,
 ) -> Result[Unit, String] {
   let refs = references.list0
+  for (identity, buffer) in references.reference_buffers {
+    ctx.reference_buffers[identity] = buffer
+  }
   ctx.ref_list1 = references.list1
   ctx.ref_count1 = sh.num_ref_idx_l1_active
   ctx.colocated = references.colocated

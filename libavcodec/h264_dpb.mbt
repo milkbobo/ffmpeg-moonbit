@@ -10,11 +10,16 @@
 /// Scope: progressive, MBAFF frame and PAFF field I/P/B, POC 0/1/2 and frame_num wrap,
 /// MMCO 1..6 and IDR long references, MBAFF top/bottom field reference views.
 /// Default/reordered L0 includes short/long references. Complementary fields
-/// share planes and motion history; frame_num-gap synthesis remains unsupported.
+/// share planes and motion history; frame_num gaps synthesize reference-only pictures.
 
 ///|
 /// One short/long-term reference entry; POC belongs to the picture planes.
 struct H264DpbEntry {
+  buffer_identity : Int32
+  invalid_gap : Bool
+  gray : Bool
+  bit_depth : Int32
+  chroma_format : Int32
   mbaff : Bool
   field_picture : Bool
   infos : Array[H264MbInfo]
@@ -44,6 +49,7 @@ struct H264PendingField {
 pub struct H264Decoder {
   mut picture_serial : Int32
   mut epoch : Int32
+  mut non_gray : Bool
   /// Parameter sets, updated by in-band SPS/PPS NALs.
   ps : H264ParamSets
   refs : Array[H264DpbEntry]
@@ -63,12 +69,13 @@ pub fn new_h264_decoder() -> H264Decoder {
   {
     picture_serial: 0,
     epoch: 0,
+    non_gray: false,
     ps: new_h264_param_sets(),
     refs: [],
     pending_field: None,
     prev_poc_msb: 0,
     prev_poc_lsb: 0,
-    prev_frame_num: 0,
+    prev_frame_num: -1,
     prev_frame_num_offset: 0,
   }
 }
@@ -117,6 +124,33 @@ fn H264Decoder::decode_picture(
   nals : Array[H2645Nal],
   skip_lf : Bool,
 ) -> Result[H264Frame?, String] {
+  // Gap synthesis happens before reference-list resolution. Stage all DPB
+  // and history updates so a rejected picture cannot leave dummy references
+  // or an advanced frame_num behind.
+  let next : H264Decoder = { ..self, refs: self.refs.copy(), }
+  let output = match next.decode_picture_with_gaps(nals, skip_lf) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  self.refs.clear()
+  self.refs.append(next.refs)
+  self.pending_field = next.pending_field
+  self.picture_serial = next.picture_serial
+  self.epoch = next.epoch
+  self.non_gray = next.non_gray
+  self.prev_poc_msb = next.prev_poc_msb
+  self.prev_poc_lsb = next.prev_poc_lsb
+  self.prev_frame_num = next.prev_frame_num
+  self.prev_frame_num_offset = next.prev_frame_num_offset
+  Ok(output)
+}
+
+///|
+fn H264Decoder::decode_picture_with_gaps(
+  self : H264Decoder,
+  nals : Array[H2645Nal],
+  skip_lf : Bool,
+) -> Result[H264Frame?, String] {
   let nal = nals[0]
   let is_idr = nal.nal_type == h264_nal_idr_slice
   // POC (h264_slice.c): type 0 tracks the MSB wraps, type 2 is 2*frame_num.
@@ -134,6 +168,10 @@ fn H264Decoder::decode_picture(
   let sps = match self.ps.sps_list[pps.sps_id] {
     Some(s) => s
     None => return Err("missing SPS")
+  }
+  match self.synthesize_frame_num_gaps(sh, sps, is_idr) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
   }
   let (poc_pic, top, bottom, poc_msb, frame_offset) = match
     self.picture_order(sps, sh, nal.ref_idc, is_idr) {
@@ -219,20 +257,33 @@ fn H264Decoder::decode_picture(
     bottom
   }
   let poc_min = poc_top.min(poc_bottom)
+  let mut picture_gray = false
   fn refs_for(header : H264SliceHeader) -> Result[H264SliceRefs, String] {
+    let reference_buffers = self.refs.map(fn(entry) {
+      (entry.pic.identity, entry.buffer_identity)
+    })
     let longs = self.refs
       .filter(fn(entry) { entry.long_index >= 0 })
       .map(fn(entry) { entry.pic.identity })
     if header.slice_type_nos == 1 {
-      return self.b_references(
+      let result = self.b_references(
         header, sps, current_poc, poc_top, poc_bottom, longs, field_picture, structure,
       )
+      if result is Ok(refs) {
+        picture_gray = (refs.list0 + refs.list1).any(fn(pic) {
+          self.reference_is_gray(pic)
+        })
+      }
+      return result
     }
     if header.slice_type_nos != 0 && header.slice_type_nos != 3 {
+      self.non_gray = true
+      picture_gray = false
       return Ok({
         list0: [],
         list1: [],
         colocated: [],
+        reference_buffers,
         colocated_mbaff: false,
         colocated_field_picture: false,
         long_pocs: longs,
@@ -268,10 +319,12 @@ fn H264Decoder::decode_picture(
     if list.length() == 0 {
       return Err("no reference picture for a P slice")
     }
+    picture_gray = list.any(fn(pic) { self.reference_is_gray(pic) })
     Ok({
       list0: list,
       list1: [],
       colocated: [],
+      reference_buffers,
       colocated_mbaff: false,
       colocated_field_picture: false,
       long_pocs: longs,
@@ -319,6 +372,7 @@ fn H264Decoder::decode_picture(
         field_picture,
         structure,
         paired,
+        gray=picture_gray,
       ) {
       Ok(_) => ()
       Err(error) => return Err(error)

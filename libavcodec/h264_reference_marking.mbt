@@ -18,6 +18,10 @@ fn H264Decoder::mark_reference(
   field_picture : Bool,
   structure : Int32,
   second_field : Bool,
+  gray~ : Bool = false,
+  invalid_gap~ : Bool = false,
+  aging_frame_num~ : Int32? = None,
+  buffer_identity~ : Int32? = None,
 ) -> Result[Unit, String] {
   let refs = if idr { [] } else { self.refs.copy() }
   let capacity = sps.ref_frame_count.max(1)
@@ -124,6 +128,11 @@ fn H264Decoder::mark_reference(
       }
     }
     refs.insert(0, {
+      buffer_identity: buffer_identity.unwrap_or(pic.identity),
+      gray,
+      invalid_gap,
+      bit_depth: sps.bit_depth_luma,
+      chroma_format: sps.chroma_format_idc,
       mbaff: sps.mb_aff != 0 && !field_picture,
       field_picture,
       frame_num,
@@ -146,6 +155,7 @@ fn H264Decoder::mark_reference(
             ..entry,
             pic: { ..pic, poc, },
             reference: entry.reference | structure,
+            gray,
           }
           updated = true
         }
@@ -161,6 +171,11 @@ fn H264Decoder::mark_reference(
         }
       }
       refs.insert(0, {
+        buffer_identity: buffer_identity.unwrap_or(pic.identity),
+        gray,
+        invalid_gap,
+        bit_depth: sps.bit_depth_luma,
+        chroma_format: sps.chroma_format_idc,
         mbaff: sps.mb_aff != 0 && !field_picture,
         field_picture,
         frame_num,
@@ -196,6 +211,19 @@ fn H264Decoder::mark_reference(
       }
     }
     ignore(refs.remove(victim))
+  }
+  // Disallowed gaps are tolerated by the default FFmpeg decoder but their
+  // synthetic short references expire once the current coded frame is more
+  // than ref_frame_count away. During synthesis the comparison still uses
+  // the incoming picture's frame_num, rather than the dummy's number.
+  let current = aging_frame_num.unwrap_or(sh.frame_num)
+  let mask = (1 << sps.log2_max_frame_num) - 1
+  for i = refs.length() - 1; i >= 0; i = i - 1 {
+    if refs[i].long_index < 0 &&
+      refs[i].invalid_gap &&
+      ((current - refs[i].frame_num) & mask) > sps.ref_frame_count {
+      ignore(refs.remove(i))
+    }
   }
   self.refs.clear()
   for entry in refs {

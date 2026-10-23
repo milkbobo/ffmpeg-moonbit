@@ -1,0 +1,464 @@
+///|
+import {
+  "moonbitlang/x/fs",
+}
+
+///|
+struct Bits {
+  data : Array[Int32]
+}
+
+///|
+fn Bits::new() -> Bits {
+  { data: [], }
+}
+
+///|
+fn Bits::put(self : Bits, value : Int32, count : Int32) -> Unit {
+  for i = count - 1; i >= 0; i = i - 1 {
+    self.data.push((value >> i) & 1)
+  }
+}
+
+///|
+fn Bits::ue(self : Bits, value : Int32) -> Unit {
+  let v = value + 1
+  let mut count = 0
+  for n = v; n > 1; n = n >> 1 {
+    count += 1
+  }
+  self.put(0, count)
+  self.put(v, count + 1)
+}
+
+///|
+fn Bits::se(self : Bits, value : Int32) -> Unit {
+  self.ue(if value > 0 { 2 * value - 1 } else { -2 * value })
+}
+
+///|
+fn Bits::align(self : Bits) -> Unit {
+  while self.data.length() % 8 != 0 {
+    self.put(0, 1)
+  }
+}
+
+///|
+fn emit_nal(output : Array[Byte], rbsp : Array[Byte]) -> Unit {
+  for byte in [0, 0, 0, 1] {
+    output.push(byte.to_byte())
+  }
+  let mut zeros = 0
+  for byte in rbsp {
+    if zeros == 2 && byte <= 3 {
+      output.push(3)
+      zeros = 0
+    }
+    output.push(byte)
+    zeros = if byte == 0 { zeros + 1 } else { 0 }
+  }
+}
+
+///|
+fn Bits::nal(self : Bits, output : Array[Byte], header : Int32) -> Unit {
+  self.put(1, 1)
+  self.align()
+  let bytes : Array[Byte] = [header.to_byte()]
+  for start = 0; start < self.data.length(); start = start + 8 {
+    let mut byte = 0
+    for i in 0..<8 {
+      byte = (byte << 1) | self.data[start + i]
+    }
+    bytes.push(byte.to_byte())
+  }
+  emit_nal(output, bytes)
+}
+
+// kind: 0=P, 1=IDR, 2=non-IDR I, 3=P removing the previous short,
+// 4=P MMCO5, 5=P reordered to frame_num-2, 6=non-reference P.
+
+///|
+fn synthetic(
+  name : String,
+  sequence : Array[(Int32, Int32)],
+  poc : Int32,
+  allowed : Bool,
+  depth~ : Int32 = 8,
+  chroma~ : Int32 = 1,
+  fields~ : Bool = false,
+) -> Unit raise {
+  let output : Array[Byte] = []
+  let sps = Bits::new()
+  let high = depth != 8 || chroma != 1
+  sps.put(if high { 244 } else { 77 }, 8)
+  sps.put(0, 8)
+  sps.put(30, 8)
+  sps.ue(0)
+  if high {
+    sps.ue(chroma)
+    if chroma == 3 {
+      sps.put(0, 1)
+    }
+    sps.ue(depth - 8)
+    sps.ue(depth - 8)
+    sps.put(0, 1)
+    sps.put(0, 1)
+  }
+  sps.ue(0)
+  sps.ue(poc)
+  if poc == 0 {
+    sps.ue(0)
+  }
+  if poc == 1 {
+    sps.put(0, 1)
+    sps.se(-1)
+    sps.se(1)
+    sps.ue(2)
+    sps.se(2)
+    sps.se(3)
+  }
+  sps.ue(4)
+  sps.put(if allowed { 1 } else { 0 }, 1)
+  sps.ue(1)
+  sps.ue(if fields { 0 } else { 1 })
+  sps.put(if fields { 0 } else { 1 }, 1)
+  if fields {
+    sps.put(0, 1)
+  }
+  sps.put(1, 1)
+  sps.put(0, 1)
+  sps.put(0, 1)
+  sps.nal(output, 0x67)
+  let pps = Bits::new()
+  pps.ue(0)
+  pps.ue(0)
+  pps.put(0, 1)
+  pps.put(0, 1)
+  pps.ue(0)
+  pps.ue(0)
+  pps.ue(0)
+  pps.put(0, 1)
+  pps.put(0, 2)
+  pps.se(0)
+  pps.se(0)
+  pps.se(0)
+  pps.put(1, 1)
+  pps.put(0, 1)
+  pps.put(0, 1)
+  pps.nal(output, 0x68)
+  for i, (number, kind) in sequence {
+    for parity in 0..<(if fields { 2 } else { 1 }) {
+      let idr = kind == 1 && parity == 0
+      let intra = (kind == 1 || kind == 2) && (!fields || parity == 0)
+      let slice = Bits::new()
+      slice.ue(0)
+      slice.ue(if intra { 2 } else { 0 })
+      slice.ue(0)
+      slice.put(number, 4)
+      if fields {
+        slice.put(1, 1)
+        slice.put(parity, 1)
+      }
+      if idr {
+        slice.ue(i)
+      }
+      if poc == 0 {
+        slice.put((i * 2 + parity) & 15, 4)
+      }
+      if poc == 1 {
+        slice.se(0)
+      }
+      if !intra {
+        slice.put(0, 1)
+        slice.put(if kind == 5 { 1 } else { 0 }, 1)
+        if kind == 5 {
+          slice.ue(0)
+          slice.ue(1)
+          slice.ue(3)
+        }
+      }
+      if idr {
+        slice.put(0, 1)
+        slice.put(0, 1)
+      } else if kind != 6 {
+        let adaptive = kind == 3 || kind == 4
+        slice.put(if adaptive { 1 } else { 0 }, 1)
+        if kind == 3 {
+          slice.ue(1)
+          slice.ue(0)
+          slice.ue(0)
+        }
+        if kind == 4 {
+          slice.ue(5)
+          slice.ue(0)
+        }
+      }
+      slice.se(0)
+      slice.ue(0)
+      slice.se(0)
+      slice.se(0)
+      if intra {
+        for mb in 0..<(if fields { 2 } else { 4 }) {
+          slice.ue(25)
+          slice.align()
+          for plane in 0..<(if chroma == 0 { 1 } else { 3 }) {
+            let samples = if plane == 0 || chroma == 3 {
+              256
+            } else if chroma == 2 {
+              128
+            } else {
+              64
+            }
+            for sample in 0..<samples {
+              slice.put(
+                (
+                  (
+                    29 +
+                    mb * 17 +
+                    plane * 53 +
+                    sample % 16 * 3 +
+                    sample / 16 * 5 +
+                    i * 31
+                  ) &
+                  255
+                ) <<
+                (depth - 8),
+                depth,
+              )
+            }
+          }
+        }
+      } else {
+        slice.ue(if fields { 2 } else { 4 })
+      }
+      slice.nal(
+        output,
+        if idr {
+          0x65
+        } else if kind == 6 {
+          0x01
+        } else {
+          0x41
+        },
+      )
+    }
+  }
+  @fs.write_bytes_to_file(
+    ".scratch/h264_gaps/" + name + ".264",
+    Bytes::from_array(output),
+  )
+}
+
+///|
+struct Reader {
+  data : Array[Byte]
+  mut pos : Int32
+}
+
+///|
+fn Reader::bit(self : Reader) -> Int32 {
+  let value = (self.data[self.pos / 8].to_int() >> (7 - (self.pos & 7))) & 1
+  self.pos += 1
+  value
+}
+
+///|
+fn Reader::read(self : Reader, count : Int32) -> Int32 {
+  for _ in 0..<count; value = 0 {
+    continue (value << 1) | self.bit()
+  } nobreak {
+    value
+  }
+}
+
+///|
+fn Reader::ue(self : Reader) -> Int32 {
+  let mut zeros = 0
+  while self.bit() == 0 {
+    zeros += 1
+    guard zeros < 31 else { abort("invalid ue") }
+  }
+  (1 << zeros) - 1 + self.read(zeros)
+}
+
+///|
+fn Reader::se(self : Reader) -> Int32 {
+  let code = self.ue()
+  if (code & 1) != 0 {
+    (code + 1) / 2
+  } else {
+    -code / 2
+  }
+}
+
+///|
+fn start_code(data : Bytes, from : Int32) -> (Int32, Int32)? {
+  for i = from; i + 2 < data.length(); i = i + 1 {
+    if data[i] == 0 && data[i + 1] == 0 {
+      if data[i + 2] == 1 {
+        return Some((i, 3))
+      }
+      if i + 3 < data.length() && data[i + 2] == 0 && data[i + 3] == 1 {
+        return Some((i, 4))
+      }
+    }
+  }
+  None
+}
+
+///|
+fn dropped(
+  name : String,
+  path : String,
+  allowed : Bool,
+  drop : Array[Int32],
+) -> Int32 raise {
+  let data = @fs.read_file_to_bytes(path)
+  let output : Array[Byte] = []
+  let mut next = start_code(data, 0)
+  let mut frame_bits = 4
+  let mut frame_units = 0
+  let mut fields = false
+  while next is Some((start, size)) {
+    let payload = start + size
+    next = start_code(data, payload)
+    let end = match next {
+      Some((pos, _)) => pos
+      None => data.length()
+    }
+    let rbsp : Array[Byte] = []
+    let mut zeros = 0
+    for i in payload..<end {
+      let byte = data[i]
+      if zeros == 2 && byte == 3 {
+        zeros = 0
+        continue
+      }
+      rbsp.push(byte)
+      zeros = if byte == 0 { zeros + 1 } else { 0 }
+    }
+    let kind = rbsp[0].to_int() & 31
+    let bits : Reader = { data: rbsp, pos: 8, }
+    if kind == 7 {
+      let profile = bits.read(8)
+      ignore(bits.read(16))
+      ignore(bits.ue())
+      if [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].contains(
+          profile,
+        ) {
+        let format = bits.ue()
+        if format == 3 {
+          ignore(bits.bit())
+        }
+        ignore(bits.ue())
+        ignore(bits.ue())
+        ignore(bits.bit())
+        if bits.bit() != 0 {
+          for i in 0..<(if format == 3 { 12 } else { 8 }) {
+            if bits.bit() != 0 {
+              let mut last = 8
+              let mut value = 8
+              for _ in 0..<(if i < 6 { 16 } else { 64 }) {
+                if value != 0 {
+                  value = (last + bits.se() + 256) & 255
+                }
+                if value != 0 {
+                  last = value
+                }
+              }
+            }
+          }
+        }
+      }
+      frame_bits = bits.ue() + 4
+      let poc = bits.ue()
+      if poc == 0 {
+        ignore(bits.ue())
+      } else if poc == 1 {
+        ignore(bits.bit())
+        ignore(bits.se())
+        ignore(bits.se())
+        let cycle = bits.ue()
+        for _ in 0..<cycle {
+          ignore(bits.se())
+        }
+      }
+      ignore(bits.ue())
+      let gap_bit = bits.pos
+      ignore(bits.bit())
+      ignore(bits.ue())
+      ignore(bits.ue())
+      fields = bits.bit() == 0
+      let shift = 7 - (gap_bit & 7)
+      rbsp[gap_bit / 8] = ((rbsp[gap_bit / 8].to_int() & (255 ^ (1 << shift))) |
+      ((if allowed { 1 } else { 0 }) << shift)).to_byte()
+    } else if kind == 1 || kind == 5 {
+      ignore(bits.ue())
+      ignore(bits.ue())
+      ignore(bits.ue())
+      let number = bits.read(frame_bits)
+      if drop.contains(number) {
+        continue
+      }
+      let field_picture = fields && bits.bit() != 0
+      frame_units += if field_picture { 1 } else { 2 }
+    }
+    emit_nal(output, rbsp)
+  }
+  @fs.write_bytes_to_file(
+    ".scratch/h264_gaps/" + name + ".264",
+    Bytes::from_array(output),
+  )
+  frame_units / 2
+}
+
+///|
+fn main raise {
+  let manifest = StringBuilder()
+  for poc in [0, 1, 2] {
+    let name = "gap_poc" + poc.to_string()
+    synthetic(name, [(0, 1), (3, 0), (4, 0), (8, 0)], poc, true)
+    manifest.write_string(name + "\t4\n")
+  }
+  for
+    (name, sequence, allowed) in [
+      ("gap_large", [(0, 1), (12, 0), (13, 0)], true),
+      ("gap_wrap", [(0, 1), (14, 0), (1, 0), (2, 0)], true),
+      ("gap_invalid", [(0, 1), (3, 0), (4, 3), (5, 3), (6, 3), (7, 3)], false),
+      (
+        "gap_valid_aging",
+        [(0, 1), (3, 0), (4, 3), (5, 3), (6, 3), (7, 3)],
+        true,
+      ),
+      ("gap_gray8", [(3, 0), (4, 0)], true),
+      ("gap_gray_reorder", [(3, 0), (4, 2), (5, 5)], true),
+      ("gap_idr", [(0, 1), (3, 0), (0, 1), (3, 0)], true),
+      ("gap_mmco5", [(0, 1), (3, 4), (1, 0), (4, 0)], true),
+      ("gap_nonref", [(0, 1), (3, 6), (4, 0)], true),
+    ] {
+    synthetic(name, sequence, 2, allowed)
+    manifest.write_string(name + "\t" + sequence.length().to_string() + "\n")
+  }
+  for (name, depth, chroma) in [("gap_gray10", 10, 1), ("gap_gray44412", 12, 3)] {
+    synthetic(name, [(3, 0), (4, 0)], 2, true, depth~, chroma~)
+    manifest.write_string(name + "\t2\n")
+  }
+  synthetic("gap_paff", [(0, 1), (3, 0), (4, 0)], 0, true, fields=true)
+  manifest.write_string("gap_paff\t3\n")
+  for
+    (name, path, allowed, drop) in [
+      ("gap_real_cavlc", ".scratch/h264_baseline.264", true, [1]),
+      ("gap_real_cabac", ".scratch/h264_slices1.264", false, [1]),
+      ("gap_real_mbaff", ".scratch/h264_mbaff_p_cabac.264", true, [1]),
+      ("gap_real_paff", ".scratch/JM/bin/jm_paff_p_long.264", true, [1, 2]),
+    ] {
+    let count = dropped(name, path, allowed, drop)
+    // Multi-slice stream has three slice NALs per frame.
+    let count = if name == "gap_real_cabac" { count / 3 } else { count }
+    manifest.write_string(name + "\t" + count.to_string() + "\n")
+  }
+  @fs.write_string_to_file(
+    ".scratch/h264_gaps/manifest.tsv",
+    manifest.to_string(),
+  )
+}

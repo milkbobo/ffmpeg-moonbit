@@ -1,0 +1,66 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+// moon run scripts/run_h264_gap_reference.mbtx <absolute .scratch/h264_gaps>
+// showall makes the deliberately non-IDR gray-start samples observable;
+// normal recovered streams retain the default decoder's output semantics.
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 2 else {
+    fail("expected absolute gap-vector directory")
+  }
+  for
+    line in @fs.read_file_to_string(".scratch/h264_gaps/manifest.tsv").split(
+      "\n",
+    ) {
+    if line.trim().is_empty() {
+      continue
+    }
+    let name = line.split("\t").collect()[0].to_owned()
+    println("Reference " + name)
+    for skip in [false, true] {
+      let suffix = if skip { "_unf" } else { "" }
+      let status = @shell.Cmd(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--network",
+          "none",
+          "-v",
+          args[1] + ":/vectors",
+          "-w",
+          "/vectors",
+          "--entrypoint",
+          "ffmpeg",
+          "linuxserver/ffmpeg:9.0.2",
+          "-v",
+          "error",
+          "-y",
+          "-flags2",
+          "+showall",
+        ] +
+        (if skip { ["-skip_loop_filter", "all"] } else { [] }) +
+        [
+          "-f",
+          "h264",
+          "-i",
+          name + ".264",
+          "-fps_mode",
+          "passthrough",
+          "-f",
+          "framemd5",
+          name + suffix + ".md5",
+        ],
+      ).each_line(line => println(line))
+      guard status == 0 else { fail("reference failed: " + name) }
+    }
+  }
+}

@@ -540,7 +540,7 @@ fn h264_deblock_lists(
   [
     (
       if info.ref_idx[index] >= 0 {
-        info.ref_identity[index]
+        h264_deblock_buffer_id(ctx, info.ref_identity[index])
       } else {
         -1
       },
@@ -549,7 +549,7 @@ fn h264_deblock_lists(
     ),
     (
       if info.ref_idx1[index] >= 0 {
-        info.ref_identity1[index]
+        h264_deblock_buffer_id(ctx, info.ref_identity1[index])
       } else {
         -1
       },
@@ -557,6 +557,19 @@ fn h264_deblock_lists(
       info.mv1[2 * index + 1],
     ),
   ]
+}
+
+///|
+/// ref2frm compares AVFrame buffer identity. A concealed gap has its own
+/// frame_num/motion identity but shares the previous reference's pixels in
+/// FFmpeg. Keep those logical ids for temporal direct and collapse only for
+/// deblocking; otherwise identical copied pixels get a spurious bS=1 edge.
+fn h264_deblock_buffer_id(ctx : H264DecCtx, identity : Int32) -> Int32 {
+  if identity < 0 {
+    return identity
+  }
+  let picture = identity >> 2
+  ctx.reference_buffers.get(picture).unwrap_or(picture) * 4 + (identity & 3)
 }
 
 ///|

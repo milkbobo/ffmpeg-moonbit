@@ -124,6 +124,7 @@ fn H264Decoder::build_reference_list(
   curr_pic_num : Int32,
   max_pic_num : Int32,
   swap_first~ : Bool = false,
+  other_default~ : (H264RefPic, Int32)? = None,
 ) -> Result[Array[H264RefPic], String] {
   if count <= 0 {
     return Ok([])
@@ -241,6 +242,20 @@ fn H264Decoder::build_reference_list(
             return Err("missing reference picture")
           }
         None => return Err("missing reference picture")
+      }
+    }
+    // ff_h264_build_ref_list: noref_gray defaults to true. Once an intra
+    // picture established a non-gray reference, replace a reordered gray
+    // gap with a usable default from this list, then the other B list.
+    let current = slots[i].unwrap()
+    if self.non_gray && self.reference_is_gray(current.0) {
+      for candidate in [default_view, other_default] {
+        if candidate is Some(view) &&
+          !self.reference_is_gray(view.0) &&
+          (field_picture || (view.1 & 3) == 3) {
+          slots[i] = Some(view)
+          break
+        }
       }
     }
   }

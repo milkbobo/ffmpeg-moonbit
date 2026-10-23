@@ -203,6 +203,7 @@ priv struct H264DecCtx {
   mut direct_spatial : Bool
   direct_8x8 : Bool
   mut colocated : Array[H264MbInfo]
+  reference_buffers : Map[Int32, Int32]
   mut colocated_mbaff : Bool
   mut colocated_field_picture : Bool
   mut poc : Int32
@@ -1032,6 +1033,7 @@ fn h264_decode_slice_ex(
         list0: ref_list0,
         list1: [],
         colocated: [],
+        reference_buffers: [],
         colocated_mbaff: false,
         colocated_field_picture: false,
         long_pocs: [],
@@ -1240,6 +1242,7 @@ fn h264_decode_picture_ex(
     direct_spatial: sh.direct_spatial_mv_pred,
     direct_8x8: sps.direct_8x8_inference_flag != 0,
     colocated: references.colocated,
+    reference_buffers: Map([]),
     colocated_mbaff: references.colocated_mbaff,
     colocated_field_picture: references.colocated_field_picture,
     poc: references.poc,
