@@ -36,6 +36,7 @@ fn make_cfg(
   input~ : String = "foreman_part_qcif.yuv",
   direct~ : Int32 = 1,
   slice_mbs~ : Int32 = 0,
+  overrides~ : Array[(String, String)] = [],
 ) -> Unit raise {
   let mut cfg = replace_value(base, "InputFile", "\"" + input + "\"")
   cfg = replace_value(cfg, "ProfileIDC", "77")
@@ -61,14 +62,17 @@ fn make_cfg(
   cfg = replace_value(cfg, "OutputFile", "\"" + name + ".264\"")
   cfg = replace_value(cfg, "ReconFile", "\"" + name + "_recon.yuv\"")
   cfg = replace_value(cfg, "TraceFile", "\"" + name + "_trace.txt\"")
+  for (key, value) in overrides {
+    cfg = replace_value(cfg, key, value)
+  }
   @fs.write_string_to_file(".scratch/JM/bin/" + name + ".cfg", cfg)
 }
 
 ///|
 fn main raise {
   let base = @fs.read_file_to_string(".scratch/JM/bin/encoder.cfg")
-  make_cfg(base, "jm_paff_p_cavlc", 6, 0, 0)
-  make_cfg(base, "jm_paff_p_cabac", 6, 0, 1)
+  make_cfg(base, "jm_paff_p_cavlc", 6, 0, 0, input="foreman_12f_qcif.yuv")
+  make_cfg(base, "jm_paff_p_cabac", 6, 0, 1, input="foreman_12f_qcif.yuv")
   make_cfg(base, "jm_paff_b_cavlc", 12, 2, 0, input="foreman_12f_qcif.yuv")
   make_cfg(base, "jm_paff_b_cabac", 12, 2, 1, input="foreman_12f_qcif.yuv")
   make_cfg(base, "jm_paff_p_long", 12, 0, 0, input="foreman_12f_qcif.yuv")
@@ -99,4 +103,105 @@ fn main raise {
     input="foreman_12f_qcif.yuv",
     slice_mbs=11,
   )
+  for
+    (name, direct, symbol) in [
+      ("jm_paff_mixed_spatial", 1, 1),
+      ("jm_paff_mixed_temporal", 0, 0),
+    ] {
+    make_cfg(
+      base,
+      name,
+      12,
+      2,
+      symbol,
+      input="foreman_12f_mixed.yuv",
+      direct~,
+      overrides=[("PicInterlace", "2"), ("SearchMode", "0"), ("HMEEnable", "0")],
+    )
+  }
+  for poc in [1, 2] {
+    make_cfg(
+      base,
+      "jm_paff_p_poc" + poc.to_string(),
+      12,
+      0,
+      1,
+      input="foreman_12f_qcif.yuv",
+      overrides=[("PicOrderCntType", poc.to_string())],
+    )
+  }
+  for
+    (name, format, profile) in [
+      ("jm_paff_b_mono", 0, 100),
+      ("jm_paff_b_422", 2, 122),
+      ("jm_paff_b_444", 3, 244),
+    ] {
+    make_cfg(
+      base,
+      name,
+      12,
+      2,
+      1,
+      input="foreman_12f_" + format.to_string() + ".yuv",
+      overrides=[
+        ("YUVFormat", format.to_string()),
+        ("ProfileIDC", profile.to_string()),
+      ],
+    )
+  }
+  for (name, symbol) in [("jm_paff_b_10_cavlc", 0), ("jm_paff_b_10_cabac", 1)] {
+    make_cfg(base, name, 12, 2, symbol, input="foreman_12f_10.yuv", direct=0, overrides=[
+      ("ProfileIDC", "110"),
+      ("SourceBitDepthLuma", "10"),
+      ("SourceBitDepthChroma", "10"),
+      ("OutputBitDepthLuma", "10"),
+      ("OutputBitDepthChroma", "10"),
+    ])
+  }
+  make_cfg(
+    base,
+    "jm_paff_slices_no_cross",
+    12,
+    2,
+    1,
+    input="foreman_12f_qcif.yuv",
+    slice_mbs=22,
+    overrides=[
+      ("DFParametersFlag", "1"),
+      ("DFDisableRefISlice", "2"),
+      ("DFDisableRefPSlice", "2"),
+      ("DFDisableRefBSlice", "2"),
+      ("DFDisableNRefBSlice", "2"),
+    ],
+  )
+  for
+    (name, depth, format, profile) in [
+      ("jm_paff_b_9", 9, 1, 110),
+      ("jm_paff_b_12", 12, 1, 244),
+      ("jm_paff_b_444_14", 14, 3, 244),
+      ("jm_paff_b_422_10", 10, 2, 122),
+      ("jm_paff_b_444_10", 10, 3, 244),
+    ] {
+    make_cfg(
+      base,
+      name,
+      12,
+      2,
+      1,
+      input="foreman_12f_" +
+        format.to_string() +
+        "_" +
+        depth.to_string() +
+        ".yuv",
+      direct=0,
+      overrides=[
+        ("YUVFormat", format.to_string()),
+        ("ProfileIDC", profile.to_string()),
+        ("SourceBitDepthLuma", depth.to_string()),
+        ("SourceBitDepthChroma", depth.to_string()),
+        ("OutputBitDepthLuma", depth.to_string()),
+        ("OutputBitDepthChroma", depth.to_string()),
+      ],
+    )
+  }
 }

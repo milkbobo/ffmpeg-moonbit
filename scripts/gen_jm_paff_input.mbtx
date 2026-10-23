@@ -16,4 +16,93 @@ fn main raise {
     ".scratch/JM/bin/foreman_12f_qcif.yuv",
     Bytes::from_array(out),
   )
+  let frame_size = 176 * 144 * 3 / 2
+  for format in [0, 2, 3] {
+    let converted : Array[Byte] = []
+    for f in 0..<12 {
+      let base = f % 3 * frame_size
+      for i in 0..<(176 * 144) {
+        converted.push(src[base + i])
+      }
+      if format != 0 {
+        let width = if format == 3 { 176 } else { 88 }
+        for c in 0..<2 {
+          for y in 0..<144 {
+            for x in 0..<width {
+              converted.push(
+                src[base +
+                176 * 144 +
+                c * 88 * 72 +
+                y / 2 * 88 +
+                (if format == 3 { x / 2 } else { x })],
+              )
+            }
+          }
+        }
+      }
+    }
+    @fs.write_bytes_to_file(
+      ".scratch/JM/bin/foreman_12f_" + format.to_string() + ".yuv",
+      Bytes::from_array(converted),
+    )
+  }
+  let high : Array[Byte] = []
+  for byte in out {
+    let sample = byte.to_int() << 2
+    high.push(sample.to_byte())
+    high.push((sample >> 8).to_byte())
+  }
+  @fs.write_bytes_to_file(
+    ".scratch/JM/bin/foreman_12f_10.yuv",
+    Bytes::from_array(high),
+  )
+  let mixed : Array[Byte] = []
+  for f in 0..<12 {
+    let comb = (f >= 3 && f <= 5) || (f >= 9 && f <= 10)
+    let base = f % 3 * frame_size
+    for
+      (width, height, plane_base) in [
+        (176, 144, 0),
+        (88, 72, 176 * 144),
+        (88, 72, 176 * 144 + 88 * 72),
+      ] {
+      for y in 0..<height {
+        for x in 0..<width {
+          let sx = if comb && (y & 1) != 0 {
+            (x + width / 4) % width
+          } else {
+            x
+          }
+          mixed.push(src[base + plane_base + y * width + sx])
+        }
+      }
+    }
+  }
+  @fs.write_bytes_to_file(
+    ".scratch/JM/bin/foreman_12f_mixed.yuv",
+    Bytes::from_array(mixed),
+  )
+  for (depth, format) in [(9, 1), (12, 1), (14, 3), (10, 2), (10, 3)] {
+    let input = if format == 1 {
+      Bytes::from_array(out)
+    } else {
+      @fs.read_file_to_bytes(
+        ".scratch/JM/bin/foreman_12f_" + format.to_string() + ".yuv",
+      )
+    }
+    let bytes : Array[Byte] = []
+    for byte in input {
+      let sample = byte.to_int() << (depth - 8)
+      bytes.push(sample.to_byte())
+      bytes.push((sample >> 8).to_byte())
+    }
+    @fs.write_bytes_to_file(
+      ".scratch/JM/bin/foreman_12f_" +
+      format.to_string() +
+      "_" +
+      depth.to_string() +
+      ".yuv",
+      Bytes::from_array(bytes),
+    )
+  }
 }

@@ -1,0 +1,110 @@
+///|
+/// Derive a bottom-first regression from a real JM 19.0 temporal-direct
+/// field stream. Invert every bottom_field_flag; all other coded syntax,
+/// reference differences, motion differences and residuals stay intact.
+/// Independent FFmpeg decoding supplies the new golden pixels.
+import {
+  "moonbitlang/x/fs",
+}
+
+///|
+struct HeaderBits {
+  data : Array[Byte]
+  mut pos : Int32
+}
+
+///|
+fn HeaderBits::bit(self : HeaderBits) -> Int32 {
+  let value = (self.data[self.pos / 8].to_int() >> (7 - (self.pos & 7))) & 1
+  self.pos += 1
+  value
+}
+
+///|
+fn HeaderBits::ue(self : HeaderBits) -> Int32 {
+  let mut zeros = 0
+  while self.bit() == 0 {
+    zeros += 1
+    guard zeros < 31 else { abort("invalid ue") }
+  }
+  let mut value = 1
+  for _ in 0..<zeros {
+    value = (value << 1) | self.bit()
+  }
+  value - 1
+}
+
+///|
+fn next_start(data : Bytes, from : Int32) -> (Int32, Int32)? {
+  for i = from; i + 2 < data.length(); i = i + 1 {
+    if data[i] == 0 && data[i + 1] == 0 {
+      if data[i + 2] == 1 {
+        return Some((i, 3))
+      }
+      if i + 3 < data.length() && data[i + 2] == 0 && data[i + 3] == 1 {
+        return Some((i, 4))
+      }
+    }
+  }
+  None
+}
+
+///|
+fn main raise {
+  let source = @fs.read_file_to_bytes(
+    ".scratch/JM/bin/jm_paff_b_temporal_cavlc.264",
+  )
+  let output : Array[Byte] = []
+  let mut delimiter = next_start(source, 0)
+  let mut changed = 0
+  while delimiter is Some((start, size)) {
+    let payload = start + size
+    let next = next_start(source, payload)
+    let end = match next {
+      Some((pos, _)) => pos
+      None => source.length()
+    }
+    let rbsp : Array[Byte] = []
+    let mut zeros = 0
+    for i in payload..<end {
+      let byte = source[i]
+      if zeros == 2 && byte == 3 {
+        zeros = 0
+        continue
+      }
+      rbsp.push(byte)
+      zeros = if byte == 0 { zeros + 1 } else { 0 }
+    }
+    let kind = rbsp[0].to_int() & 31
+    if kind == 1 || kind == 5 {
+      let bits : HeaderBits = { data: rbsp, pos: 8, }
+      ignore(bits.ue())
+      ignore(bits.ue())
+      ignore(bits.ue())
+      // gen_jm_paff_cfgs uses JM's Log2MaxFNumMinus4=0 (4 bits).
+      bits.pos += 4
+      guard bits.bit() == 1 else { abort("expected field_pic_flag=1") }
+      rbsp[bits.pos / 8] = (rbsp[bits.pos / 8].to_int() ^
+      (1 << (7 - (bits.pos & 7)))).to_byte()
+      changed += 1
+    }
+    for byte in [0, 0, 0, 1] {
+      output.push(byte.to_byte())
+    }
+    zeros = 0
+    for byte in rbsp {
+      if zeros == 2 && byte <= 3 {
+        output.push(3)
+        zeros = 0
+      }
+      output.push(byte)
+      zeros = if byte == 0 { zeros + 1 } else { 0 }
+    }
+    delimiter = next
+  }
+  guard changed == 24 else { abort("expected 12 complementary pairs") }
+  @fs.write_bytes_to_file(
+    ".scratch/JM/bin/jm_paff_b_bottom_first.264",
+    Bytes::from_array(output),
+  )
+}

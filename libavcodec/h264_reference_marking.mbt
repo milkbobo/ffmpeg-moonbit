@@ -124,6 +124,8 @@ fn H264Decoder::mark_reference(
       }
     }
     refs.insert(0, {
+      mbaff: sps.mb_aff != 0 && !field_picture,
+      field_picture,
       frame_num,
       long_index: current_long,
       pic: { ..pic, poc, },
@@ -159,6 +161,8 @@ fn H264Decoder::mark_reference(
         }
       }
       refs.insert(0, {
+        mbaff: sps.mb_aff != 0 && !field_picture,
+        field_picture,
         frame_num,
         long_index: current_long,
         pic: { ..pic, poc, },

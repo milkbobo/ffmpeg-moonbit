@@ -5,6 +5,8 @@ priv struct H264SliceRefs {
   list0 : Array[H264RefPic]
   list1 : Array[H264RefPic]
   colocated : Array[H264MbInfo]
+  colocated_mbaff : Bool
+  colocated_field_picture : Bool
   long_pocs : Array[Int32]
   poc : Int32
   poc_top : Int32
@@ -109,10 +111,20 @@ fn H264Decoder::b_references(
   }
   // The colocated picture is list 1 entry 0; field views keep the parent
   // picture's macroblock state (`H264Picture.mb_type`).
-  let colocated = match
+  let entry = match
     self.refs.search_by(fn(entry) { entry.pic.identity == list1[0].identity }) {
-    Some(index) => self.refs[index].infos
+    Some(index) => self.refs[index]
     None => return Err("missing B colocated picture")
   }
-  Ok({ list0, list1, colocated, long_pocs, poc: cur_poc, poc_top, poc_bottom, })
+  Ok({
+    list0,
+    list1,
+    colocated: entry.infos,
+    colocated_mbaff: entry.mbaff,
+    colocated_field_picture: entry.field_picture,
+    long_pocs,
+    poc: cur_poc,
+    poc_top,
+    poc_bottom,
+  })
 }

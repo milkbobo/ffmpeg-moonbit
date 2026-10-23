@@ -24,31 +24,52 @@ async fn main {
     [
       "jm_paff_p_cavlc", "jm_paff_p_cabac", "jm_paff_b_cavlc", "jm_paff_b_cabac",
       "jm_paff_p_long", "jm_paff_b_temporal_cavlc", "jm_paff_b_temporal_cabac", "jm_paff_b_slices",
+      "jm_paff_mixed_spatial", "jm_paff_mixed_temporal", "jm_paff_p_poc1", "jm_paff_p_poc2",
+      "jm_paff_b_mono", "jm_paff_b_422", "jm_paff_b_444", "jm_paff_b_10_cavlc", "jm_paff_b_10_cabac",
+      "jm_paff_slices_no_cross", "jm_paff_b_bottom_first", "jm_paff_b_9", "jm_paff_b_12",
+      "jm_paff_b_444_14", "jm_paff_b_422_10", "jm_paff_b_444_10",
     ]
   }
   for name in names {
     println("Generating \{name}")
     let log = StringBuilder()
-    let status = @shell.Cmd("docker", [
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      "-v",
-      args[1] + ":/vectors",
-      "-w",
-      "/vectors",
-      "--entrypoint",
-      "./lencod.exe",
-      "linuxserver/ffmpeg:9.0.2",
-      "-f",
-      name + ".cfg",
-    ]).each_line(line => log.write_string(line + "\n"))
+    let status = if name == "jm_paff_b_bottom_first" {
+      @shell.Cmd("moon", ["run", "scripts/gen_jm_paff_bottom_first.mbtx"]).each_line(line => {
+          log.write_string(line + "\n")
+        },
+      )
+    } else {
+      @shell.Cmd("docker", [
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "-v",
+        args[1] + ":/vectors",
+        "-w",
+        "/vectors",
+        "--entrypoint",
+        "./lencod.exe",
+        "linuxserver/ffmpeg:9.0.2",
+        "-f",
+        name + ".cfg",
+      ]).each_line(line => log.write_string(line + "\n"))
+    }
     @fs.write_string_to_file(
       ".scratch/JM/bin/" + name + "_encode.log",
       log.to_string(),
     )
-    guard status == 0 else { fail("JM failed: \{name}") }
+    // JM 19.0's monochrome teardown frees absent chroma planes after the
+    // completed sequence. Accept only that named case after its completion
+    // marker; strict FFmpeg decoding and the embedded 12-frame assertions
+    // below remain the independent validity checks for the resulting stream.
+    guard status == 0 ||
+      (
+        name == "jm_paff_b_mono" &&
+        log.to_string().contains("Exit JM 19 (FRExt) encoder ver 19.0")
+      ) else {
+      fail("JM failed: \{name}")
+    }
     for skip in [false, true] {
       let suffix = if skip { "_unf" } else { "" }
       let options = if skip { ["-skip_loop_filter", "all"] } else { [] }
@@ -71,7 +92,9 @@ async fn main {
           "-y",
         ] +
         options +
-        ["-i", name + ".264", "-f", "framemd5", name + suffix + ".md5"],
+        ["-err_detect", "explode", "-i", name + ".264"] +
+        (if name == "jm_paff_b_mono" { ["-pix_fmt", "yuv420p"] } else { [] }) +
+        ["-f", "framemd5", name + suffix + ".md5"],
       ).each_line(line => println(line))
       guard status == 0 else { fail("FFmpeg failed: \{name}\{suffix}") }
     }

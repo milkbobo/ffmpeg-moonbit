@@ -15,6 +15,8 @@
 ///|
 /// One short/long-term reference entry; POC belongs to the picture planes.
 struct H264DpbEntry {
+  mbaff : Bool
+  field_picture : Bool
   infos : Array[H264MbInfo]
   frame_num : Int32
   long_index : Int32
@@ -231,6 +233,8 @@ fn H264Decoder::decode_picture(
         list0: [],
         list1: [],
         colocated: [],
+        colocated_mbaff: false,
+        colocated_field_picture: false,
         long_pocs: longs,
         poc: current_poc,
         poc_top,
@@ -268,6 +272,8 @@ fn H264Decoder::decode_picture(
       list0: list,
       list1: [],
       colocated: [],
+      colocated_mbaff: false,
+      colocated_field_picture: false,
       long_pocs: longs,
       poc: current_poc,
       poc_top,

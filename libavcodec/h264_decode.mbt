@@ -203,6 +203,8 @@ priv struct H264DecCtx {
   mut direct_spatial : Bool
   direct_8x8 : Bool
   mut colocated : Array[H264MbInfo]
+  mut colocated_mbaff : Bool
+  mut colocated_field_picture : Bool
   mut poc : Int32
   mut poc_top : Int32
   mut poc_bottom : Int32
@@ -325,7 +327,7 @@ fn h264_deblock_ref_id(
     if entry.parity != 0 {
       entry.identity * 4 + entry.parity
     } else {
-      entry.identity
+      entry.identity * 4 + 3
     }
   } else {
     -1
@@ -1030,6 +1032,8 @@ fn h264_decode_slice_ex(
         list0: ref_list0,
         list1: [],
         colocated: [],
+        colocated_mbaff: false,
+        colocated_field_picture: false,
         long_pocs: [],
         poc: 0,
         poc_top: 0,
@@ -1236,6 +1240,8 @@ fn h264_decode_picture_ex(
     direct_spatial: sh.direct_spatial_mv_pred,
     direct_8x8: sps.direct_8x8_inference_flag != 0,
     colocated: references.colocated,
+    colocated_mbaff: references.colocated_mbaff,
+    colocated_field_picture: references.colocated_field_picture,
     poc: references.poc,
     poc_top: references.poc_top,
     poc_bottom: references.poc_bottom,

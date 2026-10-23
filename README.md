@@ -146,7 +146,8 @@ moonbit/
     ├── h264_b_mc.mbt         # B 双向 MC：显式/隐式加权与 (a+b+1)>>1 平均
     ├── h264_b_refs.mbt       # B 默认 L0/L1 列表（短/长参考排序）
     ├── h264_b_direct.mbt     # 帧/场空间/时间 direct、异场 colocated 行偏移与缩放
-    ├── h264_paff_realdata_wbtest.mbt # JM 19.0 PAFF 8 流/84 帧，滤波与未滤波 MD5
+    ├── h264_colocated.mbt    # 帧↔场 colocated 抽取、参考身份映射与场奇偶选择
+    ├── h264_paff_realdata_wbtest.mbt # JM 19.0 PAFF/帧场混编 24 流/276 帧，滤波与未滤波 MD5
     ├── h264_paff_wbtest.mbt   # 场配对/POC、slice 隔离、B 表场交换、MMCO 场掩码/超限
     ├── h264_depth.mbt        # 8–14 bit 的样本截断与 QP 上限
     ├── h264_output.mbt       # 显示重排：POC 排序、epoch、reorder_depth drain
@@ -264,7 +265,7 @@ moonbit/
 ## 3. 当前进度
 
 **总体**：全量 FFmpeg 约 160 万行（实测 1,595,275 行），本次完成 MoonBit 源文件
-（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **144502 行**（libavutil 6483 行 +
+（`moonbit/**/*.mbt`，不含 `_build` 生成文件）共 **147773 行**（libavutil 6483 行 +
 libavformat 的 aviobuf 流式 AVIO 层、MP4 解复用、Matroska EBML/Segment/Tracks/Cluster、
 裸 AAC/MP3 分帧、容器码流参数桥与 HLS/DASH 分片回调 33319 行 + libavcodec 的位流/H.264/HEVC/AAC/MP3 码流头、
 IDCT/Huffman/MPEG-4 音频切片、**H.264 I 帧重建 + 环路去块滤波（CAVLC 全通 / CABAC 部分
@@ -290,7 +291,7 @@ scaling list（默认/SPS/PPS 矩阵、逐系数 scale_m 与 DC 缩放，kvazaar
 I/P/B+WPP 码流逐字节一致）**、**HEVC 单色（chroma_format_idc=0：仅亮度平面，跳过色度帧内模式/
 残差/MC/去块/SAO，8/10-bit I/P/B 真实码流逐字节一致）**
 及 **VP9 profile-0 关键帧解码（五流 12 帧 YUV MD5 一致）**、**Opus 共享熵解码、
-CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，104700 行，含测试）——约占整体 **9.1%**。
+CELT 连续帧频域/PCM 解码与 OpusHead 多流映射**，107971 行，含测试）——约占整体 **9.3%**。
 
 ### 已完成模块（阶段 0 + 阶段 1 开端 + 阶段 4/5 码流层）
 
@@ -573,9 +574,9 @@ Huffman 规范化码另有等效性说明，见下文）：
   MBAFF 帧图（I/P/B、CAVLC/CABAC、混合 field/frame 宏块对、多参考/B-pyramid、
   空间/时间 direct、CQM、8/10-bit 4:2:0/4:2:2/4:4:4、多 slice）已逐字节对齐，
   High 4:4:4 lossless transform bypass（4:0:0/4:2:0/4:2:2/4:4:4、8/10-bit、CABAC/CAVLC、含 MBAFF）
-  也已逐字节对齐；PAFF 场图（8-bit 4:2:0 I/P/B、CAVLC/CABAC、空间/时间 direct、
-  多 slice、互补场共享平面与成对输出）已由 JM 19.0 真实流逐字节验证；
-  PAFF 其他位深/色度与帧场混编的交叉引用仍待真实向量验证）；
+  也已逐字节对齐；PAFF 场图与帧场交叉引用已验证（I/P/B、CAVLC/CABAC、空间/时间 direct，
+  8/9/10/12/14-bit、4:0:0/4:2:0/4:2:2/4:4:4、POC 0/1/2、bottom-first、
+  多 slice 与禁止跨 slice 去块），具体组合见下方 PAFF 验收矩阵；
   CABAC 的多行与运动 I/P 验证范围见 §3。
 - **H.265**：`hevc_ps.mbt` 完成 VPS/SPS/PPS 与 PTL、short-term RPS、VUI、缩放列表、
   Range Extension 与 SCC 语法、`hvcC`/Annex B extradata、POC 计算。**未做**：slice
@@ -1019,35 +1020,56 @@ C harness 仅生成黄金参考，运行时保持纯 MoonBit。
 4:2:2/4:4:4 均已完成（见下节）；仍开放：
 
 1. SP/SI 重建；separate colour plane 与 FMO 继续按原 C 的拒绝边界处理。
-2. 单色、transform bypass、MBAFF 与 PAFF 已完成本轮真实流验证（PAFF 范围见下节）；
-   PAFF 其他位深/色度、帧场混编的交叉引用仍需扩充真实向量。
+2. 单色、transform bypass、MBAFF、PAFF 场图与帧场交叉引用已完成实流验证；
+   PAFF 位深/色度、POC 与场顺序的验收矩阵见下节。
 3. frame_num gap 的非存在参考补偿、数据分区/冗余 slice、错误恢复及 SEI T.35/输出元数据接入。
    原 C 本身拒绝的 FMO 等功能继续保留对应拒绝边界。
 
 ### 2026-10-23 H.264 PAFF 场图
 
-支持 `field_pic_flag=1` 的 I/P/B 场图：按场奇偶遍历宏块、扫描/预测/运动补偿/去块，
-互补场以 frame_num、场奇偶及 droppable 状态配对，共享平面与宏块历史，第二场完成后输出。
-第一场未解码的另一场 POC 保持 INT_MAX，成对输出取两场 POC 的最小值；第二场 slice
-编号接续第一场，避免跨场邻居被误判为同一 slice。场参考表按同/异场交错，最多 32 项；
-MMCO 按场掩码移除参考，短参考操作先还原 PicNum 差值；超限时按原 C 丢最旧 short，
-只有 long 时丢最小长索引。B 时域 direct 用每个宏块保存的参考身份和场奇偶完成 colocated
-映射，异场读取偏移到对应场行。P/B 的 8×8 子分区参考缓存写入顺序同步原 C。
+支持 `field_pic_flag=1` 的 I/P/B 场图与帧场交叉引用：互补场共享平面与运动历史，
+按 frame_num、场奇偶及 droppable 状态配对，第二场完成后输出。未解码场 POC 保持
+INT_MAX，成对输出取两场最小 POC；第二场接续 slice 编号。场参考表按同/异场交错，
+最多 32 项；MMCO 按场掩码更新参考并还原 PicNum 差值；DPB 超限按原 C 回收参考。
 
-验证：`h264_paff_realdata_wbtest.mbt` 内嵌 JM 19.0 的 8 条真实流，共 **84 帧 ×
-滤波/未滤波两套 framemd5**，全部逐字节对齐 Docker `linuxserver/ffmpeg:9.0.2`
+`h264_colocated.mbt` 对照 `h264_direct.c` 补齐 col_parity、异场行偏移、帧→场半宏块
+抽取与场→帧双宏块抽取；时域 direct 统一参考身份为 `4*identity+structure`，映射
+MBAFF/PAFF 场奇偶并使用对应场 POC 缩放，纵向 MV 按帧/场单位换算（除法向零截断）。
+4:4:4 场图的水平宏块边使用 bS=3；禁止跨 slice 滤波时定位同场上邻，避免误读另一场。
+
+验证：`h264_paff_realdata_wbtest.mbt` 共 **24 流、276 帧 × 滤波/未滤波两套
+framemd5**，全部逐字节对齐 Docker `linuxserver/ffmpeg:9.0.2`
 （镜像 ID `sha256:742e17516dd4d7b76b939d774bd08f0f6b7cab8bce1c014b95ab2fb992fd0a1f`）。
-覆盖 CAVLC/CABAC I/P/B、空间/时间 direct、12 帧参考标记与多 slice；另有 5 项场状态回归。
-本轮验收范围为 8-bit 4:2:0 PAFF；其他位深/色度和帧场混编的交叉引用尚未实流验证。
+每条流同时断言固定帧数，另有 9 项场状态/真实特性覆盖测试。
 
-复现：解压并构建 JM 19.0 到 `.scratch/JM/`（保留其原始 `bin/encoder.cfg` 与
-`foreman_part_qcif.yuv`），依次运行 `scripts/gen_jm_paff_input.mbtx`、
-`scripts/gen_jm_paff_cfgs.mbtx`、`scripts/run_h264_paff_reference.mbtx <JM/bin绝对路径>`、
-`scripts/emit_h264_paff_vectors.mbtx`。参考生成器仅挂载 JM/bin 样本目录，容器禁用网络。
-运行命令为 `moon run <脚本> [参数]`。全量 `moon test --target wasm`：**712/712**；
-`moon check --target wasm --deny-warn` 零错误/零警告，`moon info --target wasm` 通过。
-剩余 H.264 重点为 SP/SI、data partitioning 与 frame_num gap 合成；FMO 与 separate
-colour plane 保持与原 C 相同的拒绝边界。
+| 实流组合 | 验收内容 |
+| --- | --- |
+| 8-bit 4:2:0 | I/P/B、CAVLC/CABAC、空间/时间 direct、12 帧参考标记、多 slice |
+| 自适应 frame/field | 空间 direct 流含 7 帧图+10 场图，时间 direct 流含 6 帧图+12 场图；断言帧→场、场→帧 direct 均实际使用 |
+| 场顺序/POC | bottom-first 互补场、POC type 0/1/2 |
+| 8-bit 4:0:0/4:2:2/4:4:4 | B 帧与完整滤波；单色按 yuv420p 中性色度输出 |
+| 高位深 | 4:2:0 的 9/10/12-bit；4:2:2 的 10-bit；4:4:4 的 10/14-bit，含时间 direct |
+| slice 去块边界 | 每场多个 slice，`disable_deblocking_filter_idc=2`，同时覆盖同 slice 相邻场行与真实边界 |
+
+底层均保持纯 MoonBit。实流基础来自 JM 19.0；bottom-first 是对真实 JM 时域 direct
+流逐 slice 翻转 bottom_field_flag 后的派生样本，其新像素仍由独立 FFmpeg 严格解码取得。
+JM 单色编码完成后存在空色度释放错误；生成器仅对完成标记后的该特例继续，并强制
+FFmpeg `-err_detect explode` 与回归的固定 12 帧断言。未逐一穷举上表以外的工具组合。
+
+复现：构建 JM 19.0 到 `.scratch/JM/`，保留原版 `bin/encoder.cfg` 与
+`foreman_part_qcif.yuv`，依次执行 `moon run scripts/gen_jm_paff_input.mbtx`、
+`moon run scripts/gen_jm_paff_cfgs.mbtx`、
+`moon run scripts/run_h264_paff_reference.mbtx <JM/bin绝对路径>`、
+`moon run scripts/emit_h264_paff_vectors.mbtx`。参考生成器仅挂载 JM/bin，容器禁用网络；
+混编配置使用 Full Search，避开 JM EPZS 在跨结构参考时的崩溃。大型码流按需加载，
+避免完整 Wasm 测试的包初始化函数超过局部变量上限。
+
+全量 `moon test --target wasm`：**732/732**；`moon check --target wasm --deny-warn`
+零错误/零警告；`moon info --target wasm` 通过。剩余 H.264 重点为 SP/SI、
+data partitioning 与 frame_num gap 合成；FMO、separate colour plane 保持原 C 拒绝边界。
+
+原两条 P 流曾请求 6 帧却只有 3 帧输入，旧“8 流 84 帧”统计应为 78 帧；本轮已补足
+输入并重建为各 6 帧，以上 24 流 276 帧由固定帧数断言核验。
 
 ### 2026-10-23 H.264 B 帧与 4:2:2/4:4:4 解码
 
@@ -1128,6 +1150,7 @@ colour plane 保持与原 C 相同的拒绝边界。
 | H.264 去块滤波 | **同一批 6 条码流的第二套期望值**：参考输出改取 FFmpeg **默认解码**（不传 `-skip_loop_filter`）的 rawvideo yuv420p，逐帧 YUV MD5 必须与默认入口 `h264_decode_annexb_i_frames` 一致；原先的 6 组向量继续以 `..._ex(data, true)` 钉住未滤波重建。两组向量合起来同时钉死「重建是否正确」与「滤波是否只改了该改的样本」——本切片最初就是靠这组对照发现「逐宏块滤波破坏了帧内预测输入」的。这 6 条里 `gradients` 的第 2 帧与纯色流两帧的滤波前后 MD5 相同（边沿低于 `alpha`/`beta`，滤波器合法地不改任何样本） |
 | H.264 CABAC 核心 | FFmpeg 自带 `libavcodec/tests/cabac.c`：测试内的参考编码器（`put_cabac`/`put_cabac_bypass`/`put_cabac_terminate`）与 `av_lfg_get`（`libavutil/lfg.c`，MD5 播种、种子 1）一并移植，10240 bypass + 10240 上下文比特逐比特还原；`get_cabac_terminate` 必须非零。注意 `init_cabac_encoder` 的 `pb.bit_left++` 会吞掉首个比特，打包时要丢掉流的第一位 |
 | H.264 CABAC 宏块层 | 原五条单行/平坦 IDR 向量；新增 16×48/32×48/64×48 稠密 I、64×16 I+3P、96×64 运动 I+5P，共 13 帧滤波/未滤波 MD5。16×48 的 2403 条、64×48 的 8233 条 ctx/state/bin 与原 C 一致，见 §3「CABAC 的验证范围」 |
+| H.264 PAFF / 帧场交叉引用 | JM 19.0 及 bottom-first 派生实流，24 流 276 帧，默认滤波与跳过滤波两套 framemd5 对齐 Docker FFmpeg 9.0.2；覆盖位深/色度、POC、场顺序与多 slice 的具体矩阵见 PAFF 小节 |
 | H.264 P 帧 / DPB | 真实码流：`keyint=10` 的 Baseline I+P+P 流经 `h264_decode_annexb_frames` 解出 3 帧（滑窗 DPB 出参考）；单元测试覆盖 MC 的整数/半像素/四分像素与 chroma 1/8 双线性（含负位移的边界复制）、`mid_pred` 与 A/B/C 邻块回退、P_SKIP 零捷径。**合成码流**：全 `I_PCM` IDR（非平坦图案 = `I_PCM` 路径首个向量）+ CABAC P 帧（`P_L0_16x16`、整数 MV、零残差），P 帧逐像素等于参考帧平移（左/上边界按 `ff_emulated_edge_mc` 复制）；编码器镜像复刻解码端每个 CABAC 上下文推导 |
 | AAC ICS/TNS/IMDCT | 合成位串手推：`ics_info` 各窗口序列与 `max_sfb`、section 数据（含 escape 长度）、TNS 逐字段、EIGHT_SHORT 分组展开、codebook 0 静音帧、TNS 一阶 AR 滤波、predictor 数据拒绝；全部 11 本码书的元组/符号组合与位消费；MDCT/加窗的 Princen-Bradley 互补性、核行逐点、`vector_fmul_window` 2×len、KBD 窗和窗口转换结构；长短窗综合对照 `ff_tx_mdct_naive_inv` 的符号与 PCM 缩放；**真实码流**：libfdk_aac 46 帧正弦淡入流的 47,104 样本对照 FFmpeg PCM，最大误差 1 LSB、精确匹配率 ≥99.9%（见 §3） |
 | AAC 真实窗口切换 / pulse | `generate_aac_transient_vectors.py` 调用 Docker FFmpeg 9.0.2：native/FDK 分别编码同一 48 kHz 突发信号，覆盖四种序列、两种 window shape、短窗分组、PNS/TNS，27 帧共 27,648 样本最大误差 1 LSB；六帧合成 pulse 码流由 FFmpeg 解码取得参考 PCM，6,144 样本最大误差 1 LSB；另有 pulse 语法、多采样率边界及短窗/截断/越界负例 |
@@ -1178,7 +1201,7 @@ mp2 demuxer 探测），期望值取 FFmpeg 解码同一段码流的定点 PCM M
 ```bash
 cd moonbit
 moon check     # 0 error / 0 warning
-moon test --target wasm  # 712/712 passed
+moon test --target wasm  # 732/732 passed
 ```
 
 ---

@@ -13,6 +13,8 @@ fn h264_decode_picture_slice(
   ctx.ref_list1 = references.list1
   ctx.ref_count1 = sh.num_ref_idx_l1_active
   ctx.colocated = references.colocated
+  ctx.colocated_mbaff = references.colocated_mbaff
+  ctx.colocated_field_picture = references.colocated_field_picture
   ctx.poc = references.poc
   ctx.poc_top = references.poc_top
   ctx.poc_bottom = references.poc_bottom

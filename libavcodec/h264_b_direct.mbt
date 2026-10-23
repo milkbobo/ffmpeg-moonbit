@@ -48,21 +48,6 @@ fn h264_b_direct(
   }
   let mx = index % ctx.mb_width
   let my = index / ctx.mb_width
-  let ref1 = ctx.ref_list1[0]
-  // h264_direct.c: col_fieldoff = 2 * reference - 3 for a field
-  // referencing the opposite parity. Motion history belongs to the parent
-  // frame, whose macroblock rows alternate top and bottom fields.
-  let col_index = if ctx.field_picture &&
-    ref1.parity != 0 &&
-    ctx.colocated[index].field_mb {
-    (my / 2 * 2 + ref1.parity - 1) * ctx.mb_width + mx
-  } else {
-    index
-  }
-  guard col_index < ctx.colocated.length() else {
-    return Err("missing colocated field history")
-  }
-  let col = ctx.colocated[col_index]
   let refs = [-1, -1]
   let motions = [(0, 0), (0, 0)]
   if ctx.direct_spatial {
@@ -105,46 +90,55 @@ fn h264_b_direct(
       if !quadrants[quadrant] {
         continue
       }
-      let cx = if ctx.direct_8x8 { gx / 2 * 3 } else { gx }
-      let cy = if ctx.direct_8x8 { gy / 2 * 3 } else { gy }
-      let ci = cy * 4 + cx
+      let source = match h264_colocated_sample(ctx, index, gx, gy) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      let col = source.info
+      let ci = source.block
       let intra = h264_is_intra_type(col.mb_type_bits)
       let use0 = col.ref_idx[ci] >= 0
       let cr = if use0 { col.ref_idx[ci] } else { col.ref_idx1[ci] }
       let cv = if use0 { col.mv } else { col.mv1 }
       let cvx = cv[2 * ci]
-      let cvy = cv[2 * ci + 1]
+      let raw_cvy = cv[2 * ci + 1]
+      let cvy = if source.field == ctx.mb_field {
+        raw_cvy
+      } else if ctx.mb_field {
+        raw_cvy / 2
+      } else {
+        raw_cvy * 2
+      }
       let cpoc = (if use0 { col.ref_identity } else { col.ref_identity1 })[ci]
       let zero = !intra &&
         !ctx.long_pocs.contains(ctx.ref_list1[0].identity) &&
         cr == 0 &&
         cvx.abs() <= 1 &&
-        cvy.abs() <= 1
+        raw_cvy.abs() <= 1
       let mut temporal_ref = 0
       let mut temporal_mv = (0, 0)
       if !ctx.direct_spatial && !intra {
         // Per-block reference identities already capture the colocated slice's
         // list mapping, separately for each field. This is the local equivalent
         // of ref_poc[colfield][list] + fill_colmap; the parity is part of the id.
-        temporal_ref = ctx.ref_list0
-          .search_by(fn(pic) {
-            (if pic.parity != 0 {
-              pic.identity * 4 + pic.parity
-            } else {
-              pic.identity
-            }) ==
-            cpoc
-          })
-          .unwrap_or(0)
-        let td = (ctx.ref_list1[0].poc - ctx.ref_list0[temporal_ref].poc)
-          .max(-128)
-          .min(127)
+        temporal_ref = h264_direct_ref(ctx, source, cpoc, my & 1)
+        let e0 = h264_ref_entry(ctx, temporal_ref, ctx.mb_field, my & 1)
+        let e1 = h264_ref_entry(ctx, 0, ctx.mb_field, my & 1)
+        let ref0 = ctx.ref_list0[e0]
+        let ref1 = ctx.ref_list1[e1]
+        let current_poc = if ctx.mb_aff && ctx.mb_field {
+          if (my & 1) == 0 {
+            ctx.poc_top
+          } else {
+            ctx.poc_bottom
+          }
+        } else {
+          ctx.poc
+        }
+        let td = (ref1.poc - ref0.poc).max(-128).min(127)
         let mut scale = 256
-        if td != 0 &&
-          !ctx.long_pocs.contains(ctx.ref_list0[temporal_ref].identity) {
-          let tb = (ctx.poc - ctx.ref_list0[temporal_ref].poc)
-            .max(-128)
-            .min(127)
+        if td != 0 && !ctx.long_pocs.contains(ref0.identity) {
+          let tb = (current_poc - ref0.poc).max(-128).min(127)
           let tx = (16384 + (td.abs() >> 1)) / td
           scale = ((tb * tx + 32) >> 6).max(-1024).min(1023)
         }
