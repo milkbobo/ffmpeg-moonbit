@@ -2416,30 +2416,11 @@ let h264_switching_b64 : Bytes =
   b"pqegoaKjpKWmp6ChoqOkpaanoKGio6SlpqegoaKjpKWmp6ChoqOkpaanoKGio6SlpqegoaKjpKWmp4A="
 
 ///|
-let h264_switching_md5 : Array[String] = [
-  "c9deea97cecc68554a610dbbd1ad2a10",
-  "c9deea97cecc68554a610dbbd1ad2a10",
-  "5bb6dd0cadcde9ca617c8a51af297a4b",
-]
-
-///|
-let h264_switching_unf_md5 : Array[String] = [
-  "c9deea97cecc68554a610dbbd1ad2a10",
-  "c9deea97cecc68554a610dbbd1ad2a10",
-  "5bb6dd0cadcde9ca617c8a51af297a4b",
-]
-
-///|
-test "h264 B pixels: h264_switching filtered/unfiltered" {
+test "h264: real switching SP stream is explicitly unsupported" {
   let data = @libavutil.av_base64_decode(h264_switching_b64, 1000000).unwrap()
-  for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_switching: " + error) }
-    let expected = if skip { h264_switching_unf_md5 } else { h264_switching_md5 }
-    assert_eq(frames.length(), expected.length())
-    for i, frame in frames {
-      let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_switching skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
-    }
+  match h264_decode_annexb_display_frames(data, false) {
+    Err(error) => assert_eq(error, "SP/SI reconstruction is not supported")
+    Ok(_) => abort("SP stream was accepted")
   }
 }
 

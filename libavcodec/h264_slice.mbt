@@ -68,6 +68,8 @@ pub struct H264SliceHeader {
   /// `slice_type % 5` (0 P, 1 B, 2 I, 3 SP, 4 SI).
   slice_type_nos : Int32
   pps_id : Int32
+  /// `redundant_pic_cnt`; a value above zero marks a redundant coded slice.
+  redundant_pic_count : Int32
   sps_id : Int32
   frame_num : Int32
   field_pic_flag : Int32
@@ -180,8 +182,12 @@ pub fn ff_h264_decode_slice_header(
       delta_pic_order_cnt[1] = gb.read_se()
     }
   }
+  let mut redundant_pic_count = 0
   if pps.redundant_pic_cnt_present != 0 {
-    let _ = gb.read_ue() // redundant_pic_cnt
+    redundant_pic_count = gb.read_ue()
+    if redundant_pic_count < 0 {
+      return Err("EINVAL")
+    }
   }
   // Reference counts, direct flag and both reference-list modifications.
   let ref_mod_l0_ops : Array[Int32] = []
@@ -415,6 +421,7 @@ pub fn ff_h264_decode_slice_header(
     slice_type,
     slice_type_nos,
     pps_id,
+    redundant_pic_count,
     sps_id: pps.sps_id,
     frame_num,
     field_pic_flag,

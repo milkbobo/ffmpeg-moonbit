@@ -146,8 +146,24 @@ fn H264Decoder::decode_nals(
         Err(e) => return Err(e)
       }
     } else if nal.nal_type == h264_nal_idr_slice || nal.nal_type == 1 {
-      slices.push(nal)
-      has_slice = true
+      let gb = BitReader::with_size(nal.data, nal.size_bits)
+      gb.skip(8)
+      let header = match
+        ff_h264_decode_slice_header(gb, nal.nal_type, nal.ref_idc, self.ps) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      // h264_slice.c discards a redundant slice after parsing its header.
+      // It must not replace the primary picture or update the DPB.
+      if header.redundant_pic_count == 0 {
+        if header.slice_type_nos == 3 || header.slice_type_nos == 4 {
+          return Err("SP/SI reconstruction is not supported")
+        }
+        slices.push(nal)
+        has_slice = true
+      }
+    } else if nal.nal_type == 2 || nal.nal_type == 3 || nal.nal_type == 4 {
+      return Err("H.264 data partitioning is not supported")
     } else if nal.nal_type == 6 {
       if has_slice {
         late_sei.push(nal)

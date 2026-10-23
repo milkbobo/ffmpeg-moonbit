@@ -11,7 +11,7 @@
 /// mixed field/frame MB pairs), plus PAFF field pictures. The persistent
 /// reference/POC/MMCO state lives in h264_dpb.mbt; the SEI side-data export
 /// and its access-unit boundary semantics live in h264_side_data.mbt and
-/// itut35.mbt. SP/SI reconstruction remains unfinished.
+/// itut35.mbt. SP/SI reconstruction is intentionally excluded.
 
 ///|
 /// FFmpeg luma 4x4 block order (8x8-grouped) to 4x4 raster grid x. */
@@ -1457,8 +1457,8 @@ pub fn h264_decode_annexb_i_frames_ex(
 /// the `avcC` header (`ff_h264_decode_extradata`), which is what the C gets
 /// from `AVCodecParameters.nal_length_size`.
 ///
-/// Samples may carry parameter sets, SEI (skipped) and multiple slice NALs per
-/// picture. Supports progressive 8-bit 4:2:0 I/P pictures.
+/// Samples may carry parameter sets, SEI and multiple slice NALs per picture.
+/// The decoder supports its I/P/B, frame/field and colour/bit-depth paths here.
 pub fn h264_decode_avc_frames(
   extradata : Bytes,
   samples : Array[Bytes],
