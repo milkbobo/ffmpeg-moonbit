@@ -1271,6 +1271,7 @@ fn h264_decode_picture_ex(
     pwt: sh.pwt,
   }
   let mut slice_error = false
+  let mut last_qscale = sh.qscale
   let er_spans : Array[H264ErSpan] = []
   let filter_until_row = Array::make(slices.length(), mb_height)
   for number, slice in slices {
@@ -1342,6 +1343,10 @@ fn h264_decode_picture_ex(
       }
       er_spans.push({ start: er_start, end, failed, })
     }
+    // `h264_er_decode_mb` reads `slice_ctx[0]`, which in sequential decoding
+    // holds the *last* parsed slice. Its `qscale` therefore governs the
+    // deblocking parameters of every concealed macroblock.
+    last_qscale = header.qscale
   }
   let mut missing = 0
   // A field picture only owns the macroblock rows of its parity; rows of the
@@ -1466,7 +1471,13 @@ fn h264_decode_picture_ex(
   }
   if damaged > 0 {
     h264_conceal_missing_mbs(
-      ctx, sh.slice_type_nos, er_status, er_previous_infos~,
+      ctx,
+      sh.slice_type_nos,
+      er_status,
+      last_qscale,
+      52 + sh.slice_alpha_c0_offset,
+      52 + sh.slice_beta_offset,
+      er_previous_infos~,
     )
   }
   // `sps.crop_*` is already scaled to luma pixels by step_x/step_y in

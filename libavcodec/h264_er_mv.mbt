@@ -40,6 +40,43 @@ fn h264_er_put_inter(
     cw, ch, pic.cwidth, pic.cheight,
     sbase=pic.base_v, vshift=ctx.chroma_vshift,
   )
+  // `h264_er_decode_mb` reconstructs through `ff_h264_hl_decode_mb`, whose
+  // single-list path always runs `luma_weight_op` and, when
+  // `use_weight_chroma` is set, `chroma_weight_op`. Weighted prediction is
+  // therefore part of concealment too: skipping it silently drops the Cr
+  // offset when only chroma weights are non-neutral.
+  if ctx.pwt.use_weight != 0 {
+    h264_weight_rect(
+      ctx.y,
+      mb_y * 16 * ctx.ystride + mb_x * 16,
+      ctx.ystride,
+      16,
+      16,
+      ctx.pwt.luma_log2_weight_denom,
+      ctx.pwt.luma_weight_l0[ref_index],
+      ctx.pwt.luma_offset_l0[ref_index],
+      bit_depth=ctx.bit_depth,
+    )
+    if ctx.pwt.use_weight_chroma != 0 {
+      for c = 0; c < 2; c = c + 1 {
+        h264_weight_rect(
+          if c == 0 {
+            ctx.u
+          } else {
+            ctx.v
+          },
+          mb_y * ch * ctx.cstride + mb_x * cw,
+          ctx.cstride,
+          cw,
+          ch,
+          ctx.pwt.chroma_log2_weight_denom,
+          ctx.pwt.chroma_weight_l0[ref_index][c],
+          ctx.pwt.chroma_offset_l0[ref_index][c],
+          bit_depth=ctx.bit_depth,
+        )
+      }
+    }
+  }
   let info = ctx.infos[idx]
   info.mb_type_bits = h264_mb_type_16x16 | h264_mb_type_p0l0
   for block = 0; block < 16; block = block + 1 {

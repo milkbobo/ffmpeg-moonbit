@@ -4,6 +4,8 @@
 /// loop filter and uses the first L0 picture for temporal concealment.
 /// LGPL-2.1-or-later.
 
+let zz_er_deblock : Ref[Bool] = { val: true }
+
 ///|
 fn h264_er_dc_plane(
   ctx : H264DecCtx,
@@ -114,6 +116,9 @@ fn h264_conceal_missing_mbs(
   ctx : H264DecCtx,
   slice_type : Int32,
   status : Array[Int32],
+  qscale : Int32,
+  alpha_offset : Int32,
+  beta_offset : Int32,
   er_previous_infos~ : Array[H264MbInfo]? = None,
 ) -> Unit {
   let reference : H264RefPic? = if slice_type == 2 {
@@ -211,13 +216,20 @@ fn h264_conceal_missing_mbs(
         info.mb_type_bits = h264_mb_type_intra4x4
       }
     }
-    info.qp = ctx.qscale
+    info.qp = qscale
     info.cbp_all = 0
-    info.deblock_idc = 1
-    // `h264_er_decode_mb` sets `mb_field_decoding_flag = 0`: a concealed
-    // macroblock is always reconstructed as a frame macroblock, even inside an
-    // MBAFF pair whose original coding mode was field.
+    // The concealed macroblock keeps the slice's deblocking state so that its
+    // neighbours still filter against it. Marking it as disabled would suppress
+    // the whole boundary, which upstream never does.
+    info.deblock_idc = 0
+    // A concealed macroblock still takes part in the ordinary loop filter as a
+    // neighbour, so it must carry the slice's deblocking offsets instead of the
+    // neutral default. `h264_er_decode_mb` inherits them from `slice_ctx[0]`.
+    info.alpha_offset = alpha_offset
+    info.beta_offset = beta_offset
     info.field_mb = false
   }
-  h264_er_deblock(ctx, status)
+  if zz_er_deblock.val {
+    h264_er_deblock(ctx, status)
+  }
 }
