@@ -9,6 +9,7 @@ fn h264_decode_picture_slice(
   references : H264SliceRefs,
   slice_num : Int32,
 ) -> Result[Unit, String] {
+  ctx.failed_mb = -1
   let refs = references.list0
   for (identity, buffer) in references.reference_buffers {
     ctx.reference_buffers[identity] = buffer
@@ -210,6 +211,7 @@ fn h264_decode_picture_slice(
       if info.mb_type_bits != 0 {
         return Err("overlapping H.264 slices")
       }
+      ctx.failed_mb = index
       info.slice_num = slice_num
       info.deblock_idc = sh.disable_deblocking_filter_idc
       info.alpha_offset = 52 + sh.slice_alpha_c0_offset
@@ -237,6 +239,16 @@ fn h264_decode_picture_slice(
         Ok(_) => ()
         Err(error) => return Err(error)
       }
+      let eos = match cabac {
+        Some(coder) => {
+          let ended = coder.get_cabac_terminate() != 0
+          if coder.pos > (nal.size_bits + 7) / 8 + 4 {
+            return Err("H.264 CABAC bytestream overread")
+          }
+          ended
+        }
+        None => false
+      }
       for block in 0..<16 {
         let ref_index = info.ref_idx[block]
         info.ref_identity[block] = h264_deblock_ref_id(
@@ -253,7 +265,8 @@ fn h264_decode_picture_slice(
         )
       }
       index += 1
-      if cabac is Some(coder) && coder.get_cabac_terminate() != 0 {
+      ctx.failed_mb = -1
+      if eos {
         terminated = true
         break
       }

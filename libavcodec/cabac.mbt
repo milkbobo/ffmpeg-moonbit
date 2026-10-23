@@ -137,9 +137,7 @@ fn CabacContext::reinit(self : CabacContext) -> Result[Unit, String] {
 fn CabacContext::refill(self : CabacContext) -> Unit {
   self.low = self.low + ((self.byte_at(0) << 9) + (self.byte_at(1) << 1))
   self.low = self.low - cabac_mask
-  if self.pos < self.bytes.length() {
-    self.pos = self.pos + cabac_bits / 8
-  }
+  self.pos = self.pos + cabac_bits / 8
 }
 
 ///|
@@ -155,9 +153,7 @@ fn CabacContext::refill2(self : CabacContext) -> Unit {
   } else {
     self.low = self.low + (x >> -i)
   }
-  if self.pos < self.bytes.length() {
-    self.pos = self.pos + cabac_bits / 8
-  }
+  self.pos = self.pos + cabac_bits / 8
 }
 
 ///|

@@ -120,6 +120,8 @@ pub struct H264RefPic {
 /// A decoded H.264 frame: full MB-aligned planes plus cropping offsets. */
 pub struct H264Frame {
   bit_depth : Int32
+  /// Number of macroblocks replaced because the coded picture was incomplete.
+  damaged_macroblocks : Int32
   priv epoch : Int32
   priv reorder_depth : Int32
   priv no_output_prior : Bool
@@ -243,6 +245,8 @@ priv struct H264DecCtx {
   ystride : Int32
   cstride : Int32
   infos : Array[H264MbInfo]
+  /// Macroblock being parsed; used to discard an incomplete MB on failure.
+  mut failed_mb : Int32
   mut qscale : Int32
   /// `sl->last_qscale_diff`: selects the `mb_qp_delta` CABAC context.
   mut last_qscale_diff : Int32
@@ -1105,6 +1109,8 @@ fn h264_decode_picture_ex(
   resolve_refs : (H264SliceHeader) -> Result[H264SliceRefs, String],
   skip_lf : Bool,
   carry~ : H264PictureCarry? = None,
+  conceal_errors~ : Bool = false,
+  er_previous_infos~ : Array[H264MbInfo]? = None,
 ) -> Result[H264Frame, String] {
   guard nals.length() > 0 else { return Err("empty H.264 picture") }
   let slices = nals.copy()
@@ -1131,7 +1137,7 @@ fn h264_decode_picture_ex(
     Err(error) => return Err(error)
   }
   let ref_list0 = references.list0
-  if sh.first_mb_in_slice != 0 {
+  if sh.first_mb_in_slice != 0 && !conceal_errors {
     return Err("multi-slice pictures are not supported")
   }
   let field_picture = sh.field_pic_flag != 0
@@ -1241,6 +1247,7 @@ fn h264_decode_picture_ex(
     ystride,
     cstride,
     infos,
+    failed_mb: -1,
     qscale: sh.qscale,
     last_qscale_diff: 0,
     slice_type_nos: sh.slice_type_nos,
@@ -1263,6 +1270,9 @@ fn h264_decode_picture_ex(
     mb_skip_run: -1,
     pwt: sh.pwt,
   }
+  let mut slice_error = false
+  let er_spans : Array[H264ErSpan] = []
+  let filter_until_row = Array::make(slices.length(), mb_height)
   for number, slice in slices {
     let reader = BitReader::with_size(slice.data, slice.size_bits)
     reader.skip(8)
@@ -1291,6 +1301,7 @@ fn h264_decode_picture_ex(
       Ok(value) => value
       Err(error) => return Err(error)
     }
+    let mut failed = false
     match
       h264_decode_picture_slice(
         ctx,
@@ -1301,9 +1312,38 @@ fn h264_decode_picture_ex(
         slice_base + number,
       ) {
       Ok(_) => ()
-      Err(error) => return Err(error)
+      Err(error) => {
+        if !conceal_errors || field_picture ||
+          error == "overlapping H.264 slices" {
+          return Err(error)
+        }
+        if ctx.failed_mb >= 0 {
+          infos[ctx.failed_mb].mb_type_bits = 0
+          filter_until_row[number] = ctx.failed_mb / mb_width
+        }
+        failed = true
+        slice_error = true
+      }
+    }
+    if conceal_errors && !field_picture {
+      // `h264_slice_init` scales the slice address by `FIELD_OR_MBAFF_PICTURE`:
+      // an MBAFF frame counts macroblock *pairs*, so the raster address of the
+      // first macroblock doubles the pair row. Everything downstream
+      // (`ff_er_frame_end`, `guess_mv`, `filter181`) then works on the plain
+      // `mb_width * mb_height` raster grid, which is what the state table uses.
+      let er_start = h264_er_raster_start(header.first_mb_in_slice, mb_width, mb_aff)
+      let mut end = er_start
+      for i = er_start; i < mb_count; i = i + 1 {
+        if infos[i].slice_num == slice_base + number &&
+          infos[i].mb_type_bits != 0 { end = i }
+      }
+      if failed {
+        end = if ctx.failed_mb >= 0 { ctx.failed_mb } else { end + 1 }
+      }
+      er_spans.push({ start: er_start, end, failed, })
     }
   }
+  let mut missing = 0
   // A field picture only owns the macroblock rows of its parity; rows of the
   // other field belong to the complementary picture (if it was decoded).
   if field_picture {
@@ -1311,7 +1351,7 @@ fn h264_decode_picture_ex(
       if (row & 1) == (if bottom_field { 1 } else { 0 }) {
         for x = 0; x < mb_width; x = x + 1 {
           if infos[row * mb_width + x].mb_type_bits == 0 {
-            return Err("incomplete H.264 picture")
+            missing += 1
           }
         }
       }
@@ -1319,9 +1359,24 @@ fn h264_decode_picture_ex(
   } else {
     for info in infos {
       if info.mb_type_bits == 0 {
-        return Err("incomplete H.264 picture")
+        missing += 1
       }
     }
+  }
+  if missing > 0 && (!conceal_errors || field_picture) {
+    return Err("incomplete H.264 picture")
+  }
+  let er_status = if conceal_errors && !field_picture {
+    h264_er_status(mb_count, er_spans)
+  } else {
+    []
+  }
+  let mut damaged = 0
+  for status in er_status {
+    if (status & 14) != 0 { damaged += 1 }
+  }
+  if slice_error && damaged == 0 {
+    return Err("damaged H.264 slice without missing macroblocks")
   }
   // Deblocking runs *after* the whole picture is reconstructed, in macroblock
   // raster order, exactly reproducing FFmpeg's observable behaviour:
@@ -1340,9 +1395,17 @@ fn h264_decode_picture_ex(
   if !skip_lf {
     if ctx.mb_aff {
       // `loop_filter`: per MB pair row, walk x and filter the top then the
-      // bottom MB of each pair.
+      // bottom MB of each pair. A failed slice never runs `loop_filter` for the
+      // pair row it died on, so `filter_until_row` holds the raster row of the
+      // failing macroblock (the top MB of its pair).
       for pair_y = 0; pair_y < mb_height; pair_y = pair_y + 2 {
         for x = 0; x < mb_width; x = x + 1 {
+          let top = infos[pair_y * mb_width + x]
+          let slice_index = top.slice_num - slice_base
+          let filter_ready = slice_index < 0 ||
+            slice_index >= filter_until_row.length() ||
+            pair_y < filter_until_row[slice_index]
+          if !filter_ready { continue }
           for parity = 0; parity < 2; parity = parity + 1 {
             let idx = (pair_y + parity) * mb_width + x
             let info = infos[idx]
@@ -1383,7 +1446,12 @@ fn h264_decode_picture_ex(
     } else {
       for i = 0; i < mb_count; i = i + 1 {
         let info = infos[i]
-        if info.deblock_idc != 1 {
+        let slice_index = info.slice_num - slice_base
+        let filter_ready = slice_index < 0 ||
+          slice_index >= filter_until_row.length() ||
+          i / mb_width < filter_until_row[slice_index]
+        if info.mb_type_bits != 0 && info.deblock_idc != 1 &&
+          filter_ready {
           h264_filter_mb(
             ctx,
             i,
@@ -1395,6 +1463,11 @@ fn h264_decode_picture_ex(
         }
       }
     }
+  }
+  if damaged > 0 {
+    h264_conceal_missing_mbs(
+      ctx, sh.slice_type_nos, er_status, er_previous_infos~,
+    )
   }
   // `sps.crop_*` is already scaled to luma pixels by step_x/step_y in
   // `h264_ps.mbt` (`h264_ps.c:510-513`), so no further factor of two here:
@@ -1408,6 +1481,7 @@ fn h264_decode_picture_ex(
   }
   Ok({
     bit_depth: sps.bit_depth_luma,
+    damaged_macroblocks: damaged,
     epoch: 0,
     reorder_depth: sps.num_reorder_frames.max(0).min(16),
     no_output_prior: sh.no_output_of_prior_pics,

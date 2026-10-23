@@ -1,0 +1,46 @@
+import { "moonbitlang/x/fs" }
+
+///|
+fn is_start(data : Bytes, i : Int32) -> Bool {
+  i + 3 <= data.length() && data[i] == 0 && data[i + 1] == 0 &&
+  data[i + 2] == 1
+}
+
+///|
+fn main raise {
+  let source = @fs.read_file_to_bytes(".scratch/h264_slices1.264")
+  let starts : Array[(Int32, Int32)] = []
+  for i = 0; i + 3 <= source.length(); i = i + 1 {
+    if is_start(source, i) {
+      starts.push((if i > 0 && source[i - 1] == 0 { i - 1 } else { i }, i + 3))
+    }
+  }
+  starts.push((source.length(), source.length()))
+  let kinds : Array[Int32] = []
+  for i = 0; i + 1 < starts.length(); i = i + 1 {
+    kinds.push(source[starts[i].1].to_int() & 31)
+  }
+  let mut slice_no = 0
+  for kind in ["drop_i_middle", "drop_p_tail", "truncate_p_tail"] {
+    let output : Array[Byte] = []
+    slice_no = 0
+    for i = 0; i + 1 < starts.length(); i = i + 1 {
+      let nal_type = kinds[i]
+      let is_slice = nal_type == 1 || nal_type == 5
+      let drop = (kind == "drop_i_middle" && slice_no == 1) ||
+        (kind == "drop_p_tail" && slice_no == 5)
+      if !drop {
+        let end = if kind == "truncate_p_tail" && slice_no == 5 {
+          starts[i].0 + (starts[i + 1].0 - starts[i].0) * 3 / 4
+        } else {
+          starts[i + 1].0
+        }
+        for j = starts[i].0; j < end; j = j + 1 { output.push(source[j]) }
+      }
+      if is_slice { slice_no += 1 }
+    }
+    @fs.write_bytes_to_file(
+      ".scratch/h264_er_" + kind + ".264", Bytes::from_array(output[:]),
+    )
+  }
+}

@@ -51,6 +51,7 @@ struct H264PendingField {
 
 ///|
 pub struct H264Decoder {
+  mut conceal_errors : Bool
   mut picture_serial : Int32
   mut epoch : Int32
   mut non_gray : Bool
@@ -76,6 +77,7 @@ pub struct H264Decoder {
 /// Create a decoder with an empty reference buffer. */
 pub fn new_h264_decoder() -> H264Decoder {
   {
+    conceal_errors: false,
     picture_serial: 0,
     epoch: 0,
     non_gray: false,
@@ -89,6 +91,16 @@ pub fn new_h264_decoder() -> H264Decoder {
     sei: new_h264_sei_context(),
     has_recovery_point: false,
   }
+}
+
+///|
+/// Recover missing macroblocks in progressive frame pictures. The default
+/// remains strict so callers can retry a failed sample with more slices.
+pub fn H264Decoder::set_error_concealment(
+  self : H264Decoder,
+  enabled : Bool,
+) -> Unit {
+  self.conceal_errors = enabled
 }
 
 ///|
@@ -434,7 +446,14 @@ fn H264Decoder::decode_picture_with_gaps(
     })
   }
   let frame = match
-    h264_decode_picture_ex(nals, self.ps, refs_for, skip_lf, carry~) {
+    h264_decode_picture_ex(
+      nals, self.ps, refs_for, skip_lf, carry~, conceal_errors=self.conceal_errors,
+      er_previous_infos=if self.refs.is_empty() {
+        None
+      } else {
+        Some(self.refs[0].infos)
+      },
+    ) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -540,6 +559,49 @@ fn H264Decoder::decode_picture_with_gaps(
 /// Decode an Annex B stream (parameter sets plus an I/P/B picture sequence)
 /// into frames in decoding order, grouping multiple slices per picture.
 /// Complementary PAFF fields are paired before a frame is returned.
+/// Slice header fields that delimit a picture. `h264_decode_picture_ex` rejects
+/// a group whose slices disagree on them, so the Annex B grouper compares the
+/// same set: a slice that differs starts a new picture even when
+/// `first_mb_in_slice` is not zero, which happens when the first slices of the
+/// picture were lost.
+fn h264_same_picture(
+  a : H264SliceHeader,
+  a_type : Int32,
+  a_ref_idc : Int32,
+  b : H264SliceHeader,
+  b_type : Int32,
+  b_ref_idc : Int32,
+) -> Bool {
+  a.pps_id == b.pps_id &&
+  a.frame_num == b.frame_num &&
+  a.pic_order_cnt_lsb == b.pic_order_cnt_lsb &&
+  a.idr_pic_id == b.idr_pic_id &&
+  a.delta_pic_order_cnt_bottom == b.delta_pic_order_cnt_bottom &&
+  a.delta_pic_order_cnt == b.delta_pic_order_cnt &&
+  a.mmco == b.mmco &&
+  a.long_term_reference == b.long_term_reference &&
+  a.adaptive_ref_marking == b.adaptive_ref_marking &&
+  a.no_output_of_prior_pics == b.no_output_of_prior_pics &&
+  a.field_pic_flag == b.field_pic_flag &&
+  a.bottom_field_flag == b.bottom_field_flag &&
+  a_type == b_type &&
+  a_ref_idc == b_ref_idc
+}
+
+///|
+/// Parse a slice header only to fingerprint its picture. `None` means the
+/// header could not be parsed yet (parameter sets still pending), in which case
+/// the caller falls back to `first_mb_in_slice == 0`.
+fn h264_probe_slice_header(nal : H2645Nal, ps : H264ParamSets) -> H264SliceHeader? {
+  let gb = BitReader::with_size(nal.data, nal.size_bits)
+  gb.skip(8)
+  match ff_h264_decode_slice_header(gb, nal.nal_type, nal.ref_idc, ps) {
+    Ok(value) => Some(value)
+    Err(_) => None
+  }
+}
+
+///|
 pub fn H264Decoder::decode_annexb(
   self : H264Decoder,
   data : Bytes,
@@ -552,34 +614,85 @@ pub fn H264Decoder::decode_annexb(
   let frames : Array[H264Frame] = []
   let pending : Array[H2645Nal] = []
   let mut has_slice = false
+  // Fingerprint of the picture being accumulated, used to find its end.
+  let mut anchor : H264SliceHeader? = None
+  let mut anchor_type = 0
+  let mut anchor_ref_idc = 0
   for k = 0; k < pkt.nals.length(); k = k + 1 {
     let nal = pkt.nals[k]
     let slice = nal.nal_type == 1 || nal.nal_type == 5
-    let first = if slice {
+    let mut new_picture = false
+    // Parameter sets must be live before a header probe can succeed. The
+    // picture decoder parses the same NALs again when the group is flushed, so
+    // this is idempotent.
+    if nal.nal_type == h264_nal_sps {
       let gb = BitReader::with_size(nal.data, nal.size_bits)
       gb.skip(8)
-      gb.read_ue() == 0
-    } else {
-      false
-    }
-    if has_slice &&
-      (
-        first ||
-        nal.nal_type == 6 ||
-        nal.nal_type == 7 ||
-        nal.nal_type == 8 ||
-        nal.nal_type == 9
-      ) {
-      match self.decode_nals(pending, skip_lf) {
-        Ok(Some(frame)) => frames.push(frame)
-        Ok(None) => ()
+      match ff_h264_decode_seq_parameter_set(gb, self.ps, false) {
+        Ok(_) => ()
         Err(error) => return Err(error)
       }
-      pending.clear()
-      has_slice = false
+    } else if nal.nal_type == h264_nal_pps {
+      let gb = BitReader::with_size(nal.data, nal.size_bits)
+      gb.skip(8)
+      match
+        ff_h264_decode_picture_parameter_set(gb, self.ps, gb.size_bits()) {
+        Ok(_) => ()
+        Err(error) => return Err(error)
+      }
     }
-    pending.push(nal)
-    has_slice = has_slice || slice
+    if slice {
+      let probe = h264_probe_slice_header(nal, self.ps)
+      match (probe, anchor) {
+        (Some(header), Some(current)) =>
+          new_picture = !h264_same_picture(
+            current,
+            anchor_type,
+            anchor_ref_idc,
+            header,
+            nal.nal_type,
+            nal.ref_idc,
+          )
+        _ => {
+          let gb = BitReader::with_size(nal.data, nal.size_bits)
+          gb.skip(8)
+          new_picture = has_slice && gb.read_ue() == 0
+        }
+      }
+      if new_picture {
+        match self.decode_nals(pending, skip_lf) {
+          Ok(Some(frame)) => frames.push(frame)
+          Ok(None) => ()
+          Err(error) => return Err(error)
+        }
+        pending.clear()
+        has_slice = false
+        anchor = None
+      }
+      anchor = probe
+      anchor_type = nal.nal_type
+      anchor_ref_idc = nal.ref_idc
+      pending.push(nal)
+      has_slice = true
+    } else {
+      if has_slice &&
+        (
+          nal.nal_type == 6 ||
+          nal.nal_type == 7 ||
+          nal.nal_type == 8 ||
+          nal.nal_type == 9
+        ) {
+        match self.decode_nals(pending, skip_lf) {
+          Ok(Some(frame)) => frames.push(frame)
+          Ok(None) => ()
+          Err(error) => return Err(error)
+        }
+        pending.clear()
+        has_slice = false
+        anchor = None
+      }
+      pending.push(nal)
+    }
   }
   match self.decode_nals(pending, skip_lf) {
     Ok(Some(frame)) => frames.push(frame)

@@ -880,7 +880,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 
 | 请求范围 | 当前可用切片 | 主要剩余项 |
 |---|---|---|
-| H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成 | SP/SI 重建、FMO、数据分区/冗余 slice 与错误恢复 |
+| H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成；渐进帧与 MBAFF 帧的错误补偿（多轮 MV 猜测 + 恢复区滤波） | SP/SI 重建、FMO、数据分区；场图片按上游边界报错；P 帧大缺口/高位深恢复未逐像素对齐 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
 | AV1 | OBU/序列与帧头、实际 tile payload 提取 | 熵解码、预测/变换、环路滤波与像素输出 |
 | VP9 | profile-0 关键帧、隐藏/show-existing、superframe | inter/intra-only、参考预测与概率适配、其他 profile |
@@ -1513,4 +1513,30 @@ I 帧重建 + 环路去块滤波**（slice header + CAVLC + 4x4 IDCT + 帧内预
 
 SP/SI 像素重建明确不纳入项目范围；真实 SP switching 流与合成 SI 流现在都要求返回未支持错误，避免通用 P/I 路径偶然输出错误像素。FFmpeg 9.0.2 自身未解码的数据分区和 FMO 维持未支持边界；本移植对数据分区 NAL 明确报错。
 
-损坏码流的完整错误恢复仍未移植。此次变更后 `moon check --target wasm --deny-warn --no-render` 通过，`moon test --target wasm --no-render` 为 **770/770**。
+损坏码流的错误恢复当时仍未移植（随后在第 10、11 节补齐渐进帧和 MBAFF）。此次变更后 `moon check --target wasm --deny-warn --no-render` 通过，`moon test --target wasm --no-render` 为 **770/770**。
+
+## 10. 2026-10-23 H.264 渐进帧错误补偿
+
+持久解码器新增可选的 `set_error_concealment(true)`。渐进帧允许缺失首段、中段或尾段 slice；切片内部解码失败时保留已完成的宏块并补偿剩余区域。帧的 `damaged_macroblocks` 记录补偿数量，恢复后的参考帧照常进入 DPB。严格模式仍可在补齐 slice 后重试同一帧。
+
+空间补偿从四个方向的有效宏块估计每个 8×8 luma 和色度子块的 DC；时间补偿从首个 L0 参考帧选取零矢量和相邻宏块矢量，以 16×16 边界差选择候选。实现位于 `h264_error_resilience.mbt`，时序保持“正常 slice 去块滤波之后补偿”，与 FFmpeg 的 `ff_er_frame_end` 一致。回归覆盖缺失中段、末段、首段和截断 CABAC P slice；完整 Wasm 测试为 **772/772**。
+
+这一版仍不是逐像素移植：多轮运动矢量猜测、恢复区专用去块滤波和损坏参考帧的输出策略在下一节补齐；损坏的 MBAFF 帧及场图片当时仍报错。
+
+## 11. 2026-10-23 H.264 MBAFF 错误补偿与场图片边界
+
+MBAFF 损坏帧现在可以补偿。关键在于 `h264_slice_init` 对 `first_mb_in_slice` 做了 `<< FIELD_OR_MBAFF_PICTURE`：MBAFF 帧按宏块**对**编址，换算出 raster 起点后，`ff_er_frame_end` 全程在普通的 `mb_width × mb_height` 网格上工作——上游 `error_resilience.c` 没有任何 MBAFF 分支，`er->mb_height` 仍是宏块行数。因此只需在 `h264_er_raster_start` 里把 pair 地址展开，其余沿用渐进帧逻辑。补偿出的宏块统一按帧宏块重建（`h264_er_decode_mb` 把 `mb_field_decoding_flag` 清 0），`h264_conceal_missing_mbs` 同步清 `field_mb`。
+
+MBAFF 回归用 96×64、6×2 宏块对、每帧两 slice 的流，丢弃 12 个变体（覆盖 I/P/B、前半/后半 slice、损坏参考帧传播），**12/12 逐帧 YUV MD5 与 Docker FFmpeg 9.0.2 一致**。丢 IDR 后半 slice 时上游记录 `concealing 12 DC, 12 AC, 12 MV`，移植侧的 `damaged_macroblocks` 同样是 12。
+
+**场图片不做恢复，这是上游边界而非移植缺失**：`h264_slice.c` 设置 `pic->field_picture = picture_structure != PICT_FRAME`，`er_supported()` 见到它就返回 0，`ff_er_frame_end()` 开头即 `return`，源码里还留着 "We do not support ER of field pictures yet"。实测 PAFF 多 slice 流丢弃一个 slice 后，上游既没有 `concealing` 也没有 `corrupt decoded frame` 日志，输出的是缺失宏块保持缓冲旧值的帧，无法复现。移植侧因此继续明确报 `incomplete H.264 picture`。
+
+同时修掉一个 Annex B 分组缺陷：原先用 `first_mb_in_slice == 0` 判断新图，丢失某帧首 slice 后该帧剩余 slice 会被粘到下一帧，触发 `inconsistent H.264 picture slices`。现在按 slice header 的图标识（`frame_num`/`poc_lsb`/`idr_pic_id`/`field` 标志/`nal_type`/`ref_idc` 等，与 `h264_decode_picture_ex` 的一致性检查同一组字段）比较，`h264_same_picture` 负责判定，解析不出 header 时退回原判据。
+
+新增回归：渐进流缺失首段/中段/连续两段/截断末段 4 个变体逐帧对齐上游；10-bit 4:2:0、4:4:4、4:2:2 的多 slice 流在开关补偿两种模式下均逐帧一致。`put_dc` 的 DC 钳位补上了上游的 `dc > 2040 → 2040`（不随位深缩放，10-bit 因此封顶 255）。
+
+**已知偏差**：P 帧大缺口场景仍未逐像素对齐。`trunc_p_mid`（P 帧中间 slice 截断）只有 V 平面 3 个像素差 1–2，Y/U 完全一致，差异位于恢复区滤波的宏块边界；`two_split`（参考帧本身被补偿过）与丢整段 slice 的 10-bit/4:4:4/4:2:2 场景差异更大，Y 平面即不同，源于多轮 `guess_mv` 与 DC 估计的取值分歧。这些场景不纳入断言，避免把未对齐的行为固化。
+
+清理：删除 `scripts/compare_h264_er.mbtx`（脚本模式解析不了本地包导入）、`scripts/inspect_h264_er_reference.mbtx`、`h264_picture_wbtest.mbt` 里的 `moon sums` 调试块，以及已成死代码的单次 `h264_er_guess_mv`（B 帧恒用零矢量，P 帧在 `!picture_mv_done` 分支不可达）。`filter181` 的 `value * 10923` 经核算在 14-bit 最坏值 1.4e9，仍在 Int32 内，与上游 32 位求值一致，加了说明注释。
+
+`moon check --target wasm --deny-warn --no-render` 通过，`moon test --target wasm --no-render` 为 **783/783**。
