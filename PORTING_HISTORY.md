@@ -2071,3 +2071,21 @@ CodecID/CodecPrivate、4 个包的交错顺序、stream_index、PTS 与 payload�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **844/844**。
+
+## 44. 2026-10-24 fMP4 初始化段与媒体段写入器
+
+新增 `libavformat/fmp4_mux.mbt`：面向 DASH/HLS 分片，单轨一段。初始化段写
+`ftyp`（isom/iso6/mp41/dash）与 `moov`（`mvhd`/`trak`/`mvex`/`trex`，`stbl`
+只保留 `stsd` 和空样本表）；媒体段写 `styp`（msdh/msix/cmfs）、`moof`
+（`mfhd`/`tfhd` default-base-is-moof/`tfdt` v1/`trun` 带 per-sample
+duration/size/flags）与紧随其后的 `mdat`，`trun` 的 data_offset 指向 mdat
+负载。支持 H.264（`avc1`/`avcC`）与 AAC（`mp4a`/`esds`）两种初始化段；
+抽出 `mp4_h264_entry`/`mp4_aac_entry` 供普通与分片写入器共用。
+
+回归把初始化段与两段媒体段拼接后交给 `av_mov_open`，验证编解码器、尺寸、
+extradata、样本 DTS/时长/keyframe 与负载偏移；负例覆盖空段与零时长。另用
+FFmpeg 9.0.2 外部校验：生成的 H.264 分片文件逐帧 framemd5 与源 MP4 完全一致，
+AAC 分片解码 PCM 去掉首帧 priming 后与源文件逐样本一致。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **848/848**。

@@ -56,7 +56,9 @@ pub fn Mp4H264Muxer::write_packet(
 }
 
 ///|
-fn Mp4H264Muxer::video_entry(self : Mp4H264Muxer) -> Array[Byte] {
+/// `VisualSampleEntry` with an `avcC` child, shared by the plain and
+/// fragmented H.264 writers.
+fn mp4_h264_entry(width : Int32, height : Int32, avcc : Bytes) -> Array[Byte] {
   let body : Array[Byte] = []
   for _ in 0..<6 {
     body.push(b'\x00')
@@ -67,8 +69,8 @@ fn Mp4H264Muxer::video_entry(self : Mp4H264Muxer) -> Array[Byte] {
   for _ in 0..<3 {
     mp4_u32(body, 0U)
   }
-  mp4_u16(body, self.width)
-  mp4_u16(body, self.height)
+  mp4_u16(body, width)
+  mp4_u16(body, height)
   mp4_u32(body, 0x00480000U) // 72 dpi
   mp4_u32(body, 0x00480000U)
   mp4_u32(body, 0U)
@@ -79,11 +81,16 @@ fn Mp4H264Muxer::video_entry(self : Mp4H264Muxer) -> Array[Byte] {
   mp4_u16(body, 0x0018) // depth
   mp4_u16(body, 0xFFFF) // pre_defined = -1
   let avcc_body : Array[Byte] = []
-  for b in self.avcc {
+  for b in avcc {
     avcc_body.push(b)
   }
   body.append(mp4_box("avcC", avcc_body))
   mp4_box("avc1", body)
+}
+
+///|
+fn Mp4H264Muxer::video_entry(self : Mp4H264Muxer) -> Array[Byte] {
+  mp4_h264_entry(self.width, self.height, self.avcc)
 }
 
 ///|

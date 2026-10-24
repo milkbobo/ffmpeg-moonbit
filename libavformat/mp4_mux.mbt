@@ -153,6 +153,27 @@ fn mp4_esds(sample_rate : Int32, channels : Int32) -> Array[Byte] {
 }
 
 ///|
+/// `AudioSampleEntry` with an `esds` child, shared by the plain and
+/// fragmented AAC writers.
+fn mp4_aac_entry(sample_rate : Int32, channels : Int32) -> Array[Byte] {
+  let entry_body : Array[Byte] = []
+  for _ in 0..<6 {
+    entry_body.push(b'\x00')
+  }
+  mp4_u16(entry_body, 1) // data_reference_index
+  mp4_u16(entry_body, 0) // version
+  mp4_u16(entry_body, 0) // revision
+  mp4_u32(entry_body, 0U) // vendor
+  mp4_u16(entry_body, channels)
+  mp4_u16(entry_body, 16) // sample size
+  mp4_u16(entry_body, 0) // compression id
+  mp4_u16(entry_body, 0) // packet size
+  mp4_u32(entry_body, (sample_rate << 16).reinterpret_as_uint())
+  entry_body.append(mp4_esds(sample_rate, channels))
+  mp4_box("mp4a", entry_body)
+}
+
+///|
 /// Append one raw AAC access unit. `duration` is in the media timescale
 /// (typically 1024 samples).
 pub fn Mp4AacMuxer::write_packet(
@@ -261,24 +282,9 @@ pub fn Mp4AacMuxer::finish(self : Mp4AacMuxer) -> Bytes {
   let dref = mp4_full_box("dref", 0, 0, dref_body)
   let dinf = mp4_box("dinf", dref)
 
-  let entry_body : Array[Byte] = []
-  for _ in 0..<6 {
-    entry_body.push(b'\x00')
-  }
-  mp4_u16(entry_body, 1) // data_reference_index
-  mp4_u16(entry_body, 0) // version
-  mp4_u16(entry_body, 0) // revision
-  mp4_u32(entry_body, 0U) // vendor
-  mp4_u16(entry_body, self.channels)
-  mp4_u16(entry_body, 16) // sample size
-  mp4_u16(entry_body, 0) // compression id
-  mp4_u16(entry_body, 0) // packet size
-  mp4_u32(entry_body, (self.sample_rate << 16).reinterpret_as_uint())
-  entry_body.append(mp4_esds(self.sample_rate, self.channels))
-  let mp4a = mp4_box("mp4a", entry_body)
   let stsd_body : Array[Byte] = []
   mp4_u32(stsd_body, 1U)
-  stsd_body.append(mp4a)
+  stsd_body.append(mp4_aac_entry(self.sample_rate, self.channels))
   let stsd = mp4_full_box("stsd", 0, 0, stsd_body)
 
   let stts_body : Array[Byte] = []
