@@ -2143,3 +2143,23 @@ extradata/OpusHead、`codec_delay`/`seek_preroll`、包与 PTS round-trip）
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **860/860**。
+
+## 48. 2026-10-24 VP9 复合预测触发确认与 alt-ref 真实向量测试
+
+`Vp9Decoder` 新增诊断计数器 `comp_inter_blocks`：`decode_mode_inter` 进入
+复合参考分支（`b.comp != 0`，含 `comp_pred_mode` 1/2 两种来源）时累加，
+用于确认复合预测是否真的被码流触发。
+
+用它检查 libvpx `-auto-alt-ref 1` 生成的 21 包码流：所有 inter 帧的
+`comp_pred_mode` 均为 0（单参考），复合块计数为 0——即 libvpx 在该模式下
+确实不产生复合预测块，README 的"编码器无法生成"表述经计数探针证实。
+顺带发现旧探针向量（`.trash` 内 base64）是截断的（4159/17953 字节），
+已从 `.scratch/vp9_alt.ivf` 重新提取。
+
+这组码流转正为 `vp9_vectors/vp9_altref_test.mbt`：21 帧逐帧 MD5 与
+FFmpeg 9.0.2 framemd5 全部一致，并断言 `comp_inter_blocks == 0`。
+大 base64 字面量仍需放独立向量包（libavcodec 主包会撞 Wasm `__init`
+局部变量上限）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **861/861**。

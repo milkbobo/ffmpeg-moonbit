@@ -154,6 +154,9 @@ pub struct Vp9Decoder {
   // previous-frame flags
   mut last_keyframe : Bool
   mut last_invisible : Bool
+  // lifetime count of inter blocks decoded with compound prediction
+  // (comp flag set), for diagnostics
+  mut comp_inter_blocks : Int32
   // Packed display snapshots; the planes of refreshed references are kept
   // by reference (each frame allocates fresh planes).
   references : FixedArray[Vp9RefFrame?]
@@ -304,6 +307,7 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     ref_segmap: None,
     last_keyframe: false,
     last_invisible: false,
+    comp_inter_blocks: 0,
     references: FixedArray::make(8, None),
     display_bytes: None,
   }

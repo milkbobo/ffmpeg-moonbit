@@ -561,6 +561,7 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
     // references
     if b.comp != 0 {
       // two references
+      self.comp_inter_blocks = self.comp_inter_blocks + 1
       let fix_idx = if h.ref_sign_biases[h.fix_comp_ref] {
         1
       } else {
