@@ -54,11 +54,23 @@ fn TsMuxer::next_cc(self : TsMuxer, pid : Int32) -> Int32 {
 
 ///|
 /// One 188-byte packet carrying a PES/PSI payload (last packet is padded with
-/// an adaptation field).
-fn TsMuxer::emit(self : TsMuxer, pid : Int32, pusi : Bool, payload : ArrayView[Byte]) -> Unit {
+/// an adaptation field).  `pcr < 0` means no PCR in this packet.
+fn TsMuxer::emit(
+  self : TsMuxer,
+  pid : Int32,
+  pusi : Bool,
+  payload : ArrayView[Byte],
+  pcr : Int64,
+) -> Unit {
   let mut pos = 0
   while pos < payload.length() {
-    let n = if payload.length() - pos < 184 { payload.length() - pos } else { 184 }
+    let with_pcr = pcr >= 0L && pos == 0
+    let max_n = if with_pcr { 176 } else { 184 }
+    let n = if payload.length() - pos < max_n {
+      payload.length() - pos
+    } else {
+      max_n
+    }
     let cc = self.next_cc(pid)
     self.out.push(b'\x47')
     self.out.push((if pusi && pos == 0 { 0x40 } else { 0 }).to_byte() |
@@ -70,7 +82,18 @@ fn TsMuxer::emit(self : TsMuxer, pid : Int32, pusi : Bool, payload : ArrayView[B
       self.out.push((0x30 | cc).to_byte())
       let adapt_len = 183 - n
       self.out.push(adapt_len.to_byte())
-      if adapt_len > 0 {
+      if with_pcr {
+        self.out.push(b'\x10') // PCR_flag
+        self.out.push(((pcr >> 25) & 0xFFL).to_int().to_byte())
+        self.out.push(((pcr >> 17) & 0xFFL).to_int().to_byte())
+        self.out.push(((pcr >> 9) & 0xFFL).to_int().to_byte())
+        self.out.push(((pcr >> 1) & 0xFFL).to_int().to_byte())
+        self.out.push((((pcr & 1L) << 7) | 0x7EL).to_int().to_byte())
+        self.out.push(b'\x00')
+        for _ in 7..<adapt_len {
+          self.out.push(b'\xFF')
+        }
+      } else if adapt_len > 0 {
         self.out.push(b'\x00')
         for _ in 1..<adapt_len {
           self.out.push(b'\xFF')
@@ -91,7 +114,7 @@ fn TsMuxer::section(self : TsMuxer, pid : Int32, section : Array[Byte]) -> Unit 
   while payload.length() < 184 {
     payload.push(b'\xFF')
   }
-  self.emit(pid, true, payload[:184])
+  self.emit(pid, true, payload[:184], -1L)
 }
 
 ///|
@@ -163,6 +186,7 @@ fn TsMuxer::pes(
   pts : Int64,
   payload : Bytes,
   bounded : Bool,
+  pcr : Int64,
 ) -> Unit {
   let pes : Array[Byte] = [0, 0, 1, stream_id.to_byte()]
   let header_data = 8 // flags(2) + header_length(1) + PTS(5)
@@ -179,21 +203,21 @@ fn TsMuxer::pes(
   for b in payload {
     pes.push(b)
   }
-  self.emit(pid, true, pes[:])
+  self.emit(pid, true, pes[:], pcr)
 }
 
 ///|
 /// Write one H.264 access-unit payload with a PTS in 90 kHz units.
 pub fn TsMuxer::write_video(self : TsMuxer, pts : Int64, payload : Bytes) -> Unit {
   self.ensure_tables()
-  self.pes( self.video_pid, 0xE0, pts, payload, false)
+  self.pes(self.video_pid, 0xE0, pts, payload, false, pts)
 }
 
 ///|
 /// Write one AAC (ADTS) payload with a PTS in 90 kHz units.
 pub fn TsMuxer::write_audio(self : TsMuxer, pts : Int64, payload : Bytes) -> Unit {
   self.ensure_tables()
-  self.pes( self.audio_pid, 0xC0, pts, payload, true)
+  self.pes(self.audio_pid, 0xC0, pts, payload, true, -1L)
 }
 
 ///|

@@ -35,6 +35,10 @@ test "ts muxer: PAT/PMT and PES round-trip through the demuxer" {
     }
   }
   assert_true(video_ok && audio_ok)
+  assert_eq(demux.pcrs.length(), 1)
+  assert_eq(demux.pcrs[0].pid, 0x100)
+  assert_eq(demux.pcrs[0].base, 90000L)
+  assert_eq(demux.pcrs[0].ext, 0)
 }
 
 ///|
