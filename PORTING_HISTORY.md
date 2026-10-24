@@ -1882,3 +1882,17 @@ buffer_fullness 全 1）。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **822/822**。
+
+## 28. 2026-10-24 Opus-in-MP4 写入器
+
+新增 `libavformat/mp4_opus_mux.mbt`：写 `Opus` AudioSampleEntry + `dOps`
+（version/channels/pre-skip/input rate/gain/mapping family 按大端存放），
+复用 MP4 的 `mvhd`/`trak`/`stbl` 样本表布局。逐包 duration 从
+`opus_parse_packet` 的 TOC 得到，`stts` 自动 run-length。
+
+回归用真实 20 ms Opus 包写 3 帧，经 `av_mov_open` 回读：track
+`Opus`、48 kHz、单声道、19 字节 OpusHead extradata，3 个样本的
+size/dts/duration 与 payload 全部一致。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **823/823**。
