@@ -85,7 +85,8 @@ fn Av1TileCtx::recon_b_intra(
           let skip_y_pred = b.pal_sz.0 != 0
           if !skip_y_pred {
             let mut angle = b.y_angle
-            let edge_flags = ((if y > init_y || !sb_has_tr {
+            let edge_flags = ((if (y > init_y || !sb_has_tr) &&
+                  x + t_dim_w >= sub_w4 {
                   0
                 } else {
                   av1_edge_i444_top_has_right
@@ -256,7 +257,8 @@ fn Av1TileCtx::recon_b_intra(
                 b.pal_sz.1 != 0
               if !skip_uv {
                 let mut angle = b.uv_angle
-                let edge_flags = ((if y > (init_y >> ss_ver) || !uv_sb_has_tr {
+                let edge_flags = ((if (y > (init_y >> ss_ver) || !uv_sb_has_tr) &&
+                      x + uv_t_dim_w >= sub_cw4 {
                       0
                     } else {
                       av1_edge_i444_top_has_right

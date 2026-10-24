@@ -48,13 +48,15 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 
 ## 3. 当前卡点：无损关键帧 MD5 未对齐
 
-`ll128` 单帧：got `1c948163640dc170d64e87e3621c50fc`，want
+`ll128` 单帧：got `59c794743afb69e60ad1fddab53d7344`，want
 `f9db7bbaf792b693d4c88d3039a68d75`。
 
 2026-10-24 后续修复：`av1_prepare_intra_edges` 的 Z3 左下参考像素写入
 位置已按 dav1d 调整；FILTER_PRED 补齐 p5 抽头并修正后续行的 top 来源；
 palette 索引完成阶段按 dav1d 填充不可见的右/下边缘。以上改变了 MD5，
 但尚未对齐参考值，仍需从首个熵解码/重建分叉继续排查。
+后续还修复了 luma/chroma 子块的 top-right 可用性判断：dav1d 只在子块
+触及当前块右边界时禁用该参考边缘，不能整行禁用。
 
 **语法层（熵解码）已与真 dav1d 逐步对拍确认一致**的部分：
 - 3000 步 `decode_bool_equi` 位级一致（rng/difhi/cnt/pos 全同）
