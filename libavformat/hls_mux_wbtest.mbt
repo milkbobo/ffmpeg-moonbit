@@ -30,3 +30,22 @@ test "hls muxer: empty playlist and explicit target duration" {
   assert_false(playlist.endlist)
   assert_eq(playlist.segments.length(), 0)
 }
+
+///|
+test "hls muxer: master playlist round-trips" {
+  let variants : Array[(String, Int32, Int32, Int32, String)] = [
+    ("720p.m3u8", 1500000, 1280, 720, "avc1.64001f,mp4a.40.2"),
+    ("360p.m3u8", 600000, 640, 360, "avc1.64001e,mp4a.40.2"),
+  ]
+  let text = hls_write_master_playlist(variants[:])
+  let pl = av_hls_parse(text).unwrap()
+  assert_true(pl.is_master)
+  assert_eq(pl.version, 3)
+  assert_eq(pl.streams.length(), 2)
+  assert_eq(pl.streams[0].bandwidth, 1500000L)
+  assert_eq(pl.streams[0].width, 1280)
+  assert_eq(pl.streams[0].height, 720)
+  assert_eq(pl.streams[0].codecs, "avc1.64001f,mp4a.40.2")
+  assert_eq(pl.streams[0].uri, "720p.m3u8")
+  assert_eq(pl.streams[1].uri, "360p.m3u8")
+}

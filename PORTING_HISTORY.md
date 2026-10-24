@@ -2062,3 +2062,12 @@ CodecID/CodecPrivate、4 个包的交错顺序、stream_index、PTS 与 payload�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **843/843**。
+
+## 43. 2026-10-24 HLS 主播放列表写入
+
+新增 `hls_write_master_playlist`：输出 `#EXTM3U`/VERSION 与
+`#EXT-X-STREAM-INF:BANDWIDTH,RESOLUTION,CODECS` + variant URI。回归用
+`av_hls_parse` 回读验证 `is_master`、两条 variant 的带宽/分辨率/codecs/URI。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **844/844**。

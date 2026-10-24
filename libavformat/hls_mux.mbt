@@ -42,3 +42,24 @@ pub fn hls_write_media_playlist(
   }
   sb.to_string()
 }
+
+///|
+/// Write a master playlist. Each entry is
+/// `(uri, bandwidth, width, height, codecs)`.
+pub fn hls_write_master_playlist(
+  variants : ArrayView[(String, Int32, Int32, Int32, String)],
+  version? : Int32 = 3,
+) -> String {
+  let sb = StringBuilder()
+  sb.write_string("#EXTM3U\n")
+  sb.write_string("#EXT-X-VERSION:\{version}\n")
+  for variant in variants {
+    let (uri, bandwidth, width, height, codecs) = variant
+    sb.write_string(
+      "#EXT-X-STREAM-INF:BANDWIDTH=\{bandwidth},RESOLUTION=\{width}x\{height},CODECS=\"\{codecs}\"\n",
+    )
+    sb.write_string(uri)
+    sb.write_string("\n")
+  }
+  sb.to_string()
+}
