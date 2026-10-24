@@ -1850,3 +1850,20 @@ buffer_fullness 全 1）。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **818/818**。
+
+## 26. 2026-10-24 AAC-in-MP4 写入器
+
+新增 `libavformat/mp4_mux.mbt`，写出最小非分片 MP4：
+
+- `ftyp` + `mdat` + `moov`；`mvhd`/`tkhd`/`mdhd`/`hdlr`/`smhd`/`dinf`
+  与音频 `stbl`（`stsd`/`stts`/`stsc`/`stsz`/`stco`）。
+- `mp4a` AudioSampleEntry + `esds`（ES/DecoderConfig/DecoderSpecific/SL
+  descriptors），DecoderSpecificInfo 为 AAC-LC 的 2 字节 AudioSpecificConfig。
+- 支持任意 AAC 采样率表中的采样率与 1–7 声道、逐包 duration；`stts`
+  自动做 run-length 压缩，单个 chunk 记录全部样本。
+- `libavformat/mp4_mux_wbtest.mbt` 用 `av_mov_open` 回读：track
+  `mp4a`/`aac`、48 kHz/双声道、ASC、3 个样本的 offset/size/dts/duration 与
+  payload 全部一致；非法采样率与空包负例通过。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **820/820**。
