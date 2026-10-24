@@ -1,7 +1,9 @@
 ///|
 /// Minimal WebM/Opus writer: EBML header, Segment Info, one A_OPUS track and
 /// a single Cluster of SimpleBlocks.  Sizes use the fixed 8-byte EBML VINT so
-/// the document can be assembled in one pass.
+/// the document can be assembled in one pass.  The EBML DocType defaults to
+/// "webm" and can be switched to "matroska" for standalone .mkv output (same
+/// CodecID and OpusHead private data).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -10,6 +12,7 @@ pub struct WebmOpusMuxer {
   channels : Int32
   pre_skip : Int32
   input_sample_rate : Int32
+  doctype : String
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -19,14 +22,19 @@ pub fn webm_opus_muxer_new(
   channels? : Int32 = 2,
   pre_skip? : Int32 = 0,
   input_sample_rate? : Int32 = 48000,
+  doctype? : String = "webm",
 ) -> Result[WebmOpusMuxer, String] {
   if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 {
     return Err("EINVAL: invalid WebM/Opus stream parameters")
+  }
+  if doctype != "webm" && doctype != "matroska" {
+    return Err("EINVAL: DocType must be webm or matroska")
   }
   Ok({
     channels,
     pre_skip,
     input_sample_rate,
+    doctype,
     packets: [],
     durations: [],
   })
@@ -140,10 +148,15 @@ fn WebmOpusMuxer::opus_head(self : WebmOpusMuxer) -> Bytes {
 fn WebmOpusMuxer::cluster(self : WebmOpusMuxer) -> Array[Byte] {
   let cluster : Array[Byte] = []
   webm_uint_elem(cluster, 0xE7, 1, 0UL) // Timecode 0
+  // FFmpeg `matroskaenc.c` shifts block timestamps by `ts_offset` (the
+  // pre-skip rescaled to the 1 ms track timebase, rounded half away from
+  // zero) so that the demuxer's `- codec_delay` restores the original
+  // timestamps.  With no pre-skip the offset is 0.
+  let ts_offset = (self.pre_skip.to_int64() * 1000L + 24000L) / 48000L
   let mut samples = 0
   for i in 0..<self.packets.length() {
     let packet = self.packets[i]
-    let ms = samples * 1000 / 48000
+    let ms = samples * 1000 / 48000 + ts_offset.to_int()
     let block : Array[Byte] = [
       b'\x81', ((ms >> 8) & 0xFF).to_byte(), (ms & 0xFF).to_byte(), b'\x80',
     ]
@@ -163,7 +176,7 @@ pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
   webm_uint_elem(header_body, 0x42F7, 2, 1UL) // EBMLReadVersion
   webm_uint_elem(header_body, 0x42F2, 2, 4UL) // EBMLMaxIDLength
   webm_uint_elem(header_body, 0x42F3, 2, 8UL) // EBMLMaxSizeLength
-  webm_string_elem(header_body, 0x4282, 2, "webm")
+  webm_string_elem(header_body, 0x4282, 2, self.doctype)
   webm_uint_elem(header_body, 0x4287, 2, 4UL) // DocTypeVersion
   webm_uint_elem(header_body, 0x4285, 2, 2UL) // DocTypeReadVersion
   let ebml : Array[Byte] = []
@@ -194,6 +207,14 @@ pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
     head_body.push(b)
   }
   webm_elem(track, 0x63A2, 2, head_body)
+  if self.pre_skip > 0 {
+    // CodecDelay in ns, as FFmpeg `matroskaenc.c` derives it from the Opus
+    // pre-skip at the fixed 48 kHz rate; the demuxer turns it back into
+    // initial_padding/skip_samples.
+    let delay_ns = self.pre_skip.to_int64() * 1000000000L / 48000L
+    webm_uint_elem(track, 0x56AA, 2, delay_ns.reinterpret_as_uint64())
+  }
+  webm_uint_elem(track, 0x56BB, 2, 80000000UL) // SeekPreRoll (80 ms)
   webm_elem(track, 0xE1, 1, audio)
   webm_elem(track, 0xEC, 1, []) // Void keeps nested levels from ending together
 

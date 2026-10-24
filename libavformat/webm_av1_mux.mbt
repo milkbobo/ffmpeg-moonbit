@@ -1,7 +1,9 @@
 ///|
 /// Minimal WebM/AV1 writer: EBML header, Segment Info, one V_AV1 track and a
 /// single Cluster of SimpleBlocks.  Reuses the EBML helpers from the Opus
-/// writer and keeps the same level-boundary Void padding.
+/// writer and keeps the same level-boundary Void padding.  The EBML DocType
+/// defaults to "webm" and can be switched to "matroska" for standalone .mkv
+/// output (same CodecID and av1C private data).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -9,6 +11,7 @@
 pub struct WebmAv1Muxer {
   width : Int32
   height : Int32
+  doctype : String
   av1c : Bytes
   packets : Array[Bytes]
   durations : Array[Int32]
@@ -20,13 +23,18 @@ pub fn webm_av1_muxer_new(
   width : Int32,
   height : Int32,
   av1c : Bytes,
+  doctype? : String = "webm",
 ) -> Result[WebmAv1Muxer, String] {
   if width <= 0 || height <= 0 || av1c.length() < 4 {
     return Err("EINVAL: invalid WebM/AV1 parameters")
   }
+  if doctype != "webm" && doctype != "matroska" {
+    return Err("EINVAL: DocType must be webm or matroska")
+  }
   Ok({
     width,
     height,
+    doctype,
     av1c,
     packets: [],
     durations: [],
@@ -77,7 +85,7 @@ pub fn WebmAv1Muxer::finish(self : WebmAv1Muxer) -> Bytes {
   webm_uint_elem(header_body, 0x42F7, 2, 1UL)
   webm_uint_elem(header_body, 0x42F2, 2, 4UL)
   webm_uint_elem(header_body, 0x42F3, 2, 8UL)
-  webm_string_elem(header_body, 0x4282, 2, "webm")
+  webm_string_elem(header_body, 0x4282, 2, self.doctype)
   webm_uint_elem(header_body, 0x4287, 2, 4UL)
   webm_uint_elem(header_body, 0x4285, 2, 2UL)
   let ebml : Array[Byte] = []

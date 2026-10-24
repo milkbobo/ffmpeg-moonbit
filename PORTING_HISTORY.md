@@ -2120,3 +2120,26 @@ access unit）与 libmp3lame（4 帧 MPEG-1 Layer III），以 HEVC+MP3 组合
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **854/854**。
+
+## 47. 2026-10-24 Matroska DocType 下的 VP9/AV1/Opus 写入器
+
+`webm_vp9_muxer_new`/`webm_av1_muxer_new`/`webm_opus_muxer_new` 新增
+`doctype` 命名参数（默认 `webm`，可选 `matroska`，其余值报 EINVAL），
+EBML 头的 DocType 改由参数驱动，VP9/AV1/Opus 由此可直接产出独立 .mkv。
+
+同轮对齐 FFmpeg `matroskaenc.c` 的 Opus 语义：pre-skip 非零时写
+`CodecDelay`（0x56AA，pre-skip 按 48 kHz 换算成 ns）与 `SeekPreRoll`
+（0x56BB，80 ms），并把 SimpleBlock 时间戳加上 ms 时间基下的 ts_offset
+（半远离零舍入），使解复用器的 `- codec_delay_in_track_tb`（已有逻辑）
+恢复原始时间戳。此前 webm/matroska 产物缺这三者，ffmpeg 解码时 pre-skip
+时间戳语义与 mp4 路径不一致。
+
+回归新增三种编码的 matroska DocType 回读（`is_webm` 为假、CodecID、
+extradata/OpusHead、`codec_delay`/`seek_preroll`、包与 PTS round-trip）
+与非法 DocType 负例。外部用 FFmpeg 9.0.2 校验：三个 .mkv 均被 ffprobe
+识别为 vp9/av1/opus；VP9、AV1 各 3 帧 framemd5 与源完全一致；Opus 前
+3 帧解码 PCM（跳过 pre-skip 312 样本后 2568 样本）与源 mp4 解码输出
+逐字节一致。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **860/860**。
