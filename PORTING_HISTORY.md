@@ -1930,3 +1930,14 @@ extradata、size/dts/duration/keyframe 全部一致；非法参数与空包负�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **827/827**。
+
+## 32. 2026-10-24 VP9-in-MP4 写入器
+
+新增 `libavformat/mp4_vp9_mux.mbt`：写 `vp09` VisualSampleEntry + `vpcC`
+FullBox 与视频样本表，支持关键帧、逐包 duration、`stts` run-length。
+
+回归写 12 字节 vpcC（version 1、8-bit 4:2:0）与 2 个样本，`av_mov_open`
+回读验证 `vp09`、64×48、样本 dts/duration/keyframe。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **828/828**。
