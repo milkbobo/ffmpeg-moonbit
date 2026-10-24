@@ -3,8 +3,9 @@
 /// Emits a DASH/HLS-style initialization segment (`ftyp`+`moov` with
 /// `mvex`/`trex`) and media segments (`styp`+`moof`+`mdat`) that the existing
 /// MOV demuxer and FFmpeg's `mov` demuxer both accept.  Tracks cover H.264
-/// (`avc1`/`avcC`) and AAC (`mp4a`/`esds`), which is what the DASH
-/// SegmentTemplate writer addresses as one Representation per track.
+/// (`avc1`), HEVC (`hvc1`), AV1 (`av01`), VP9 (`vp09`), AAC (`mp4a`) and Opus
+/// (`Opus`), which is what the DASH SegmentTemplate writer addresses as one
+/// Representation per track.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -218,6 +219,91 @@ pub fn fmp4_aac_init_segment(
   Ok(
     fmp4_init_segment(
       track_id, sample_rate, "soun", mp4_aac_entry(sample_rate, channels), 0, 0,
+    ),
+  )
+}
+
+///|
+/// Initialization segment for a HEVC track (`hvc1`/`hvcC`).
+pub fn fmp4_hevc_init_segment(
+  width : Int32,
+  height : Int32,
+  timescale : Int32,
+  hvcc : Bytes,
+  track_id? : Int32 = 1,
+) -> Result[Bytes, String] {
+  if width <= 0 || height <= 0 || timescale <= 0 || track_id <= 0 ||
+    hvcc.length() < 4 {
+    return Err("EINVAL: invalid HEVC fMP4 stream parameters")
+  }
+  Ok(
+    fmp4_init_segment(
+      track_id, timescale, "vide", mp4_hevc_entry(width, height, hvcc), width,
+      height,
+    ),
+  )
+}
+
+///|
+/// Initialization segment for an AV1 track (`av01`/`av1C`).
+pub fn fmp4_av1_init_segment(
+  width : Int32,
+  height : Int32,
+  timescale : Int32,
+  av1c : Bytes,
+  track_id? : Int32 = 1,
+) -> Result[Bytes, String] {
+  if width <= 0 || height <= 0 || timescale <= 0 || track_id <= 0 ||
+    av1c.length() < 4 {
+    return Err("EINVAL: invalid AV1 fMP4 stream parameters")
+  }
+  Ok(
+    fmp4_init_segment(
+      track_id, timescale, "vide", mp4_av1_entry(width, height, av1c), width,
+      height,
+    ),
+  )
+}
+
+///|
+/// Initialization segment for a VP9 track (`vp09`/`vpcC`).
+pub fn fmp4_vp9_init_segment(
+  width : Int32,
+  height : Int32,
+  timescale : Int32,
+  vpcc : Bytes,
+  track_id? : Int32 = 1,
+) -> Result[Bytes, String] {
+  if width <= 0 || height <= 0 || timescale <= 0 || track_id <= 0 ||
+    vpcc.length() < 4 {
+    return Err("EINVAL: invalid VP9 fMP4 stream parameters")
+  }
+  Ok(
+    fmp4_init_segment(
+      track_id, timescale, "vide", mp4_vp9_entry(width, height, vpcc), width,
+      height,
+    ),
+  )
+}
+
+///|
+/// Initialization segment for an Opus track (`Opus`/`dOps`).  The media
+/// timescale is normally 48000, the Opus decoder rate.
+pub fn fmp4_opus_init_segment(
+  channels : Int32,
+  pre_skip : Int32,
+  input_sample_rate : Int32,
+  timescale : Int32,
+  track_id? : Int32 = 1,
+) -> Result[Bytes, String] {
+  if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 ||
+    timescale <= 0 || track_id <= 0 {
+    return Err("EINVAL: invalid Opus fMP4 stream parameters")
+  }
+  Ok(
+    fmp4_init_segment(
+      track_id, timescale, "soun",
+      mp4_opus_entry(channels, pre_skip, input_sample_rate), 0, 0,
     ),
   )
 }

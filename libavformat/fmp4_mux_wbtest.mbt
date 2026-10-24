@@ -109,3 +109,90 @@ test "fmp4 muxer: invalid parameters are rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "fmp4 muxer: HEVC init and media segments round-trip" {
+  let hvcc = @libavutil.av_base64_decode(mp4_hevc_hvcc_b64, 1024).unwrap()
+  let init = fmp4_hevc_init_segment(64, 48, 90000, hvcc).unwrap()
+  let seg = fmp4_media_segment(1, 1, 0L, [
+    { data: b"\x00\x00\x01\x02", duration: 3000, keyframe: true },
+    { data: b"\x00\x00\x01\x03", duration: 3000, keyframe: false },
+  ]).unwrap()
+  let track = av_mov_open(fmp4_join([init, seg])).unwrap().tracks[0]
+  assert_eq(track.codec, "hvc1")
+  assert_eq(track.width, 64)
+  assert_eq(track.height, 48)
+  assert_eq(track.extradata.unwrap(), hvcc)
+  assert_eq(track.samples.length(), 2)
+  assert_eq(track.samples[0].keyframe, true)
+  assert_eq(track.samples[1].keyframe, false)
+}
+
+///|
+test "fmp4 muxer: AV1 init and media segments round-trip" {
+  let av1c : Bytes = b"\x81\x08\x4c\x00"
+  let init = fmp4_av1_init_segment(64, 48, 90000, av1c).unwrap()
+  let seg = fmp4_media_segment(1, 1, 0L, [
+    { data: b"\x0A\x0B\x0C", duration: 3000, keyframe: true },
+  ]).unwrap()
+  let track = av_mov_open(fmp4_join([init, seg])).unwrap().tracks[0]
+  assert_eq(track.codec, "av01")
+  assert_eq(track.extradata.unwrap(), av1c)
+  assert_eq(track.samples.length(), 1)
+  assert_eq(track.samples[0].size, 3U)
+}
+
+///|
+test "fmp4 muxer: VP9 init and media segments round-trip" {
+  let vpcc : Bytes = b"\x01\x00\x00\x00\x00\x00\x82\x02\x02\x02\x00\x00"
+  let init = fmp4_vp9_init_segment(64, 48, 90000, vpcc).unwrap()
+  let seg = fmp4_media_segment(1, 1, 0L, [
+    { data: b"\x82\x00\x01", duration: 3000, keyframe: true },
+    { data: b"\x82\x00\x02", duration: 3000, keyframe: false },
+  ]).unwrap()
+  let track = av_mov_open(fmp4_join([init, seg])).unwrap().tracks[0]
+  assert_eq(track.codec, "vp09")
+  assert_eq(track.width, 64)
+  assert_eq(track.height, 48)
+  assert_true(track.extradata.unwrap().length() > 0)
+  assert_eq(track.samples.length(), 2)
+}
+
+///|
+test "fmp4 muxer: Opus init and media segments round-trip" {
+  let init = fmp4_opus_init_segment(1, 312, 48000, 48000).unwrap()
+  let seg = fmp4_media_segment(1, 1, 0L, [
+    { data: b"\xF8\x00", duration: 960, keyframe: true },
+    { data: b"\xF8\x01", duration: 960, keyframe: true },
+  ]).unwrap()
+  let track = av_mov_open(fmp4_join([init, seg])).unwrap().tracks[0]
+  assert_eq(track.codec, "Opus")
+  assert_eq(track.sample_rate, 48000U)
+  assert_eq(track.channels, 1U)
+  assert_eq(track.extradata.unwrap().length(), 19)
+  assert_eq(track.samples.length(), 2)
+  assert_eq(track.samples[1].dts, 960L)
+  assert_eq(track.samples[1].duration, 960U)
+}
+
+///|
+test "fmp4 muxer: invalid HEVC/AV1/VP9/Opus parameters are rejected" {
+  match fmp4_hevc_init_segment(64, 48, 90000, b"") {
+    Ok(_) => fail("short hvcC must fail")
+    Err(_) => ()
+  }
+  let av1c : Bytes = b"\x81\x08\x4c\x00"
+  match fmp4_av1_init_segment(-1, 48, 90000, av1c) {
+    Ok(_) => fail("negative width must fail")
+    Err(_) => ()
+  }
+  let vpcc : Bytes = b"\x01\x00\x00\x00"
+  match fmp4_vp9_init_segment(64, 48, 0, vpcc) {
+    Ok(_) => fail("zero timescale must fail")
+    Err(_) => ()
+  }
+  match fmp4_opus_init_segment(3, 312, 48000, 48000) {
+    Ok(_) => fail("more than two channels must fail")
+    Err(_) => ()
+  }
+}

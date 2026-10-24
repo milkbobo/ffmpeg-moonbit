@@ -53,14 +53,19 @@ pub fn Mp4OpusMuxer::write_packet(
 }
 
 ///|
-fn Mp4OpusMuxer::dops(self : Mp4OpusMuxer) -> Array[Byte] {
+/// `dOps` (OpusSpecificBox) for a mapping-family-0 stream.
+fn mp4_opus_dops(
+  channels : Int32,
+  pre_skip : Int32,
+  input_sample_rate : Int32,
+) -> Array[Byte] {
   let body : Array[Byte] = [0]
-  body.push(self.channels.to_byte())
+  body.push(channels.to_byte())
   // OpusSpecificBox fields are big-endian.
-  body.push(((self.pre_skip >> 8) & 0xFF).to_byte())
-  body.push((self.pre_skip & 0xFF).to_byte())
+  body.push(((pre_skip >> 8) & 0xFF).to_byte())
+  body.push((pre_skip & 0xFF).to_byte())
   for i in 0..<4 {
-    body.push(((self.input_sample_rate >> (24 - 8 * i)) & 0xFF).to_byte())
+    body.push(((input_sample_rate >> (24 - 8 * i)) & 0xFF).to_byte())
   }
   body.push(b'\x00')
   body.push(b'\x00') // output gain
@@ -69,7 +74,13 @@ fn Mp4OpusMuxer::dops(self : Mp4OpusMuxer) -> Array[Byte] {
 }
 
 ///|
-fn Mp4OpusMuxer::entry(self : Mp4OpusMuxer) -> Array[Byte] {
+/// `AudioSampleEntry` with a `dOps` child, shared by the plain and fragmented
+/// Opus writers.
+fn mp4_opus_entry(
+  channels : Int32,
+  pre_skip : Int32,
+  input_sample_rate : Int32,
+) -> Array[Byte] {
   let body : Array[Byte] = []
   for _ in 0..<6 {
     body.push(b'\x00')
@@ -78,13 +89,18 @@ fn Mp4OpusMuxer::entry(self : Mp4OpusMuxer) -> Array[Byte] {
   mp4_u16(body, 0)
   mp4_u16(body, 0)
   mp4_u32(body, 0U)
-  mp4_u16(body, self.channels)
+  mp4_u16(body, channels)
   mp4_u16(body, 16)
   mp4_u16(body, 0)
   mp4_u16(body, 0)
-  mp4_u32(body, (self.input_sample_rate << 16).reinterpret_as_uint())
-  body.append(self.dops())
+  mp4_u32(body, (input_sample_rate << 16).reinterpret_as_uint())
+  body.append(mp4_opus_dops(channels, pre_skip, input_sample_rate))
   mp4_box("Opus", body)
+}
+
+///|
+fn Mp4OpusMuxer::entry(self : Mp4OpusMuxer) -> Array[Byte] {
+  mp4_opus_entry(self.channels, self.pre_skip, self.input_sample_rate)
 }
 
 ///|

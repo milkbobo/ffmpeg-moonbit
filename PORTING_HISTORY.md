@@ -2089,3 +2089,18 @@ AAC 分片解码 PCM 去掉首帧 priming 后与源文件逐样本一致。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **848/848**。
+
+## 45. 2026-10-24 fMP4 扩展到 HEVC/AV1/VP9/Opus
+
+把 fMP4 写入器从 H.264/AAC 扩展到 HEVC（`hvc1`/`hvcC`）、AV1
+（`av01`/`av1C`）、VP9（`vp09`/`vpcC`）与 Opus（`Opus`/`dOps`）。抽出
+`mp4_visual_entry` 统一生成 VisualSampleEntry，HEVC/AV1/VP9 与 H.264
+写入器共用；Opus 抽出 `mp4_opus_entry`/`mp4_opus_dops`，普通 MP4 与分片
+写入器复用。
+
+回归新增四组初始化段+媒体段回读（编解码器、尺寸、extradata、DTS/时长）
+与参数负例。外部用 FFmpeg 9.0.2 校验：四种分片文件均被正确识别为
+hevc/av1/vp9/opus，前 3 帧（或 Opus 前 3 包）解码结果与源 MP4 完全一致。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **853/853**。

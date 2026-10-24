@@ -56,9 +56,15 @@ pub fn Mp4H264Muxer::write_packet(
 }
 
 ///|
-/// `VisualSampleEntry` with an `avcC` child, shared by the plain and
-/// fragmented H.264 writers.
-fn mp4_h264_entry(width : Int32, height : Int32, avcc : Bytes) -> Array[Byte] {
+/// `VisualSampleEntry` with one decoder-config child, shared by the plain and
+/// fragmented video writers.
+fn mp4_visual_entry(
+  width : Int32,
+  height : Int32,
+  tag : String,
+  config_tag : String,
+  config : Bytes,
+) -> Array[Byte] {
   let body : Array[Byte] = []
   for _ in 0..<6 {
     body.push(b'\x00')
@@ -80,12 +86,32 @@ fn mp4_h264_entry(width : Int32, height : Int32, avcc : Bytes) -> Array[Byte] {
   }
   mp4_u16(body, 0x0018) // depth
   mp4_u16(body, 0xFFFF) // pre_defined = -1
-  let avcc_body : Array[Byte] = []
-  for b in avcc {
-    avcc_body.push(b)
+  let config_body : Array[Byte] = []
+  for b in config {
+    config_body.push(b)
   }
-  body.append(mp4_box("avcC", avcc_body))
-  mp4_box("avc1", body)
+  body.append(mp4_box(config_tag, config_body))
+  mp4_box(tag, body)
+}
+
+///|
+fn mp4_h264_entry(width : Int32, height : Int32, avcc : Bytes) -> Array[Byte] {
+  mp4_visual_entry(width, height, "avc1", "avcC", avcc)
+}
+
+///|
+fn mp4_hevc_entry(width : Int32, height : Int32, hvcc : Bytes) -> Array[Byte] {
+  mp4_visual_entry(width, height, "hvc1", "hvcC", hvcc)
+}
+
+///|
+fn mp4_av1_entry(width : Int32, height : Int32, av1c : Bytes) -> Array[Byte] {
+  mp4_visual_entry(width, height, "av01", "av1C", av1c)
+}
+
+///|
+fn mp4_vp9_entry(width : Int32, height : Int32, vpcc : Bytes) -> Array[Byte] {
+  mp4_visual_entry(width, height, "vp09", "vpcC", vpcc)
 }
 
 ///|

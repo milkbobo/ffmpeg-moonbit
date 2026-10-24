@@ -57,33 +57,7 @@ pub fn Mp4Vp9Muxer::write_packet(
 
 ///|
 fn Mp4Vp9Muxer::video_entry(self : Mp4Vp9Muxer) -> Array[Byte] {
-  let body : Array[Byte] = []
-  for _ in 0..<6 {
-    body.push(b'\x00')
-  }
-  mp4_u16(body, 1) // data_reference_index
-  mp4_u16(body, 0) // pre_defined
-  mp4_u16(body, 0) // reserved
-  for _ in 0..<3 {
-    mp4_u32(body, 0U)
-  }
-  mp4_u16(body, self.width)
-  mp4_u16(body, self.height)
-  mp4_u32(body, 0x00480000U) // 72 dpi
-  mp4_u32(body, 0x00480000U)
-  mp4_u32(body, 0U)
-  mp4_u16(body, 1) // frame_count
-  for _ in 0..<32 {
-    body.push(b'\x00') // compressorname
-  }
-  mp4_u16(body, 0x0018) // depth
-  mp4_u16(body, 0xFFFF) // pre_defined = -1
-  let vpcc_body : Array[Byte] = []
-  for b in self.vpcc {
-    vpcc_body.push(b)
-  }
-  body.append(mp4_box("vpcC", vpcc_body))
-  mp4_box("vp09", body)
+  mp4_vp9_entry(self.width, self.height, self.vpcc)
 }
 
 ///|
