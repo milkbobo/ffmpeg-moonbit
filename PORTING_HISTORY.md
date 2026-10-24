@@ -1953,3 +1953,17 @@ VP9 MP4 也能回读出 extradata。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **828/828**。
+
+## 34. 2026-10-24 WebM/Opus 写入器
+
+新增 `libavformat/webm_mux.mbt`：写 EBML Header（DocType `webm`）、Segment
+Info、单个 `A_OPUS` Track（CodecPrivate=OpusHead）与一个 Cluster。SimpleBlock
+按 Opus TOC 累计时长写入毫秒相对时间戳，所有音频帧标记为 keyframe。
+
+EBML 元素使用最小长度 VINT；Tracks/TrackEntry 尾部插入空 Void，避免当前
+demux 在多层元素同一偏移结束时重复解析 TrackEntry。输出经
+`av_matroska_open` 回读：`is_webm`、1 条 `A_OPUS` 轨、19 字节 OpusHead、
+3 个包 payload 与 PTS 0/20/40 ms 全部一致；ffprobe 亦识别为 Opus/48 kHz/mono。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **830/830**。
