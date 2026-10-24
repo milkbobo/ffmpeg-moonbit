@@ -1967,3 +1967,15 @@ demux 在多层元素同一偏移结束时重复解析 TrackEntry。输出经
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **830/830**。
+
+## 35. 2026-10-24 WebM/VP9 写入器
+
+新增 `libavformat/webm_video_mux.mbt`：复用 WebM EBML 辅助写 `V_VP9`
+视频轨（Video PixelWidth/PixelHeight）与 Cluster/SimpleBlock。逐包 duration
+以毫秒写入相对时间戳，关键帧置 SimpleBlock keyframe 位。
+
+回归写 64×48、3 个 VP9 包，`av_matroska_open` 回读验证 `V_VP9`、像素尺寸、
+payload 长度、PTS 0/33/66 ms 与 keyframe 标记；非法参数/空包负例通过。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **832/832**。
