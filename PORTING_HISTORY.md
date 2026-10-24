@@ -1979,3 +1979,15 @@ payload 长度、PTS 0/33/66 ms 与 keyframe 标记；非法参数/空包负例�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **832/832**。
+
+## 36. 2026-10-24 WebM VP9+Opus 多轨写入器
+
+新增 `libavformat/webm_av_mux.mbt`：单文件写入 `V_VP9` 视频轨与 `A_OPUS`
+音频轨。调用方按毫秒提供每包 PTS/duration，`finish` 按 PTS 稳定排序后在
+一个 Cluster 中交错输出 SimpleBlock；视频保留 keyframe 位，音频恒为同步帧。
+
+回归写 3 个视频包 + 3 个音频包，`av_matroska_open` 回读验证两条轨道的
+CodecID/Video/Audio 参数、6 个包的交错顺序、stream_index、PTS 与 payload。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **834/834**。
