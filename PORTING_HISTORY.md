@@ -1867,3 +1867,18 @@ buffer_fullness 全 1）。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **820/820**。
+
+## 27. 2026-10-24 H.264-in-MP4 写入器
+
+新增 `libavformat/mp4_video_mux.mbt`：
+
+- 调用方提供 `avcC` 与长度前缀访问单元；写 `avc1` VisualSampleEntry、
+  `avcC`、`vmhd`/`dinf` 与视频 `stbl`。
+- 支持时间基、逐包 duration、关键帧标记；`stss` 只列出关键帧，
+  `stts` 做 run-length，`tkhd` 宽高按 16.16 写入。
+- 回归用真实 44 字节 High-profile avcC，`av_mov_open` 回读验证
+  `avc1`、64×48、时间基、extradata、3 个样本的 size/dts/duration/
+  keyframe 全部一致；非法参数与空包负例通过。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **822/822**。
