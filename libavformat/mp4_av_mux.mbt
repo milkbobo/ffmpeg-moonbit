@@ -1,0 +1,396 @@
+///|
+/// Minimal H.264 + AAC MP4 writer with two tracks sharing one `mdat`.
+/// Video and audio samples occupy separate chunks; each track has its own
+/// sample table and chunk offset.  Non-fragmented `moov` layout only.
+///
+/// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
+
+///|
+pub struct Mp4AvMuxer {
+  width : Int32
+  height : Int32
+  avcc : Bytes
+  video_packets : Array[Bytes]
+  video_durations : Array[Int32]
+  video_keyframes : Array[Bool]
+  sample_rate : Int32
+  channels : Int32
+  audio_packets : Array[Bytes]
+  audio_durations : Array[Int32]
+}
+
+///|
+pub fn mp4_av_muxer_new(
+  width : Int32,
+  height : Int32,
+  avcc : Bytes,
+  sample_rate : Int32,
+  channels : Int32,
+) -> Result[Mp4AvMuxer, String] {
+  if width <= 0 || height <= 0 || avcc.length() < 7 || sample_rate <= 0 ||
+    channels < 1 || channels > 7 {
+    return Err("EINVAL: invalid MP4 A/V parameters")
+  }
+  let mut rate_ok = false
+  for rate in mp4_mux_rates() {
+    if rate == sample_rate {
+      rate_ok = true
+    }
+  }
+  if !rate_ok {
+    return Err("EINVAL: unsupported AAC sample rate")
+  }
+  Ok({
+    width,
+    height,
+    avcc,
+    video_packets: [],
+    video_durations: [],
+    video_keyframes: [],
+    sample_rate,
+    channels,
+    audio_packets: [],
+    audio_durations: [],
+  })
+}
+
+///|
+pub fn Mp4AvMuxer::write_video(
+  self : Mp4AvMuxer,
+  packet : Bytes,
+  duration? : Int32 = 3000,
+  keyframe? : Bool = false,
+) -> Result[Unit, String] {
+  if packet.length() == 0 || duration <= 0 {
+    return Err("EINVAL: invalid MP4 video packet")
+  }
+  self.video_packets.push(packet)
+  self.video_durations.push(duration)
+  self.video_keyframes.push(keyframe)
+  Ok(())
+}
+
+///|
+pub fn Mp4AvMuxer::write_audio(
+  self : Mp4AvMuxer,
+  packet : Bytes,
+  duration? : Int32 = 1024,
+) -> Result[Unit, String] {
+  if packet.length() == 0 || duration <= 0 {
+    return Err("EINVAL: invalid MP4 audio packet")
+  }
+  self.audio_packets.push(packet)
+  self.audio_durations.push(duration)
+  Ok(())
+}
+
+///|
+fn mp4_av_asc(rate : Int32, channels : Int32) -> Array[Byte] {
+  let rates = mp4_mux_rates()
+  let mut idx = 0
+  for i in 0..<rates.length() {
+    if rates[i] == rate {
+      idx = i
+    }
+  }
+  [
+    ((2 << 3) | (idx >> 1)).to_byte(),
+    (((idx & 1) << 7) | (channels << 3)).to_byte(),
+  ]
+}
+
+///|
+fn mp4_av_aac_entry(rate : Int32, channels : Int32) -> Array[Byte] {
+  let asc = mp4_av_asc(rate, channels)
+  let dcd_len = 15 + asc.length()
+  let es_len = 8 + dcd_len
+  let esds_body : Array[Byte] = []
+  mp4_u32(esds_body, 0U)
+  esds_body.push(b'\x03')
+  esds_body.push(es_len.to_byte())
+  mp4_u16(esds_body, 1)
+  esds_body.push(b'\x00')
+  esds_body.push(b'\x04')
+  esds_body.push(dcd_len.to_byte())
+  esds_body.push(b'\x40')
+  esds_body.push(b'\x15')
+  esds_body.push(b'\x00')
+  esds_body.push(b'\x00')
+  esds_body.push(b'\x00')
+  for _ in 0..<8 {
+    esds_body.push(b'\x00')
+  }
+  esds_body.push(b'\x05')
+  esds_body.push(asc.length().to_byte())
+  esds_body.append(asc)
+  esds_body.push(b'\x06')
+  esds_body.push(b'\x01')
+  esds_body.push(b'\x02')
+  let entry : Array[Byte] = []
+  for _ in 0..<6 {
+    entry.push(b'\x00')
+  }
+  mp4_u16(entry, 1)
+  mp4_u16(entry, 0)
+  mp4_u16(entry, 0)
+  mp4_u32(entry, 0U)
+  mp4_u16(entry, channels)
+  mp4_u16(entry, 16)
+  mp4_u16(entry, 0)
+  mp4_u16(entry, 0)
+  mp4_u32(entry, (rate << 16).reinterpret_as_uint())
+  entry.append(mp4_box("esds", esds_body))
+  mp4_box("mp4a", entry)
+}
+
+///|
+fn mp4_av_stbl(
+  entry : Array[Byte],
+  packets : Array[Bytes],
+  durations : Array[Int32],
+  keyframes : Array[Bool],
+  chunk_offset : Int32,
+) -> Array[Byte] {
+  let stsd_body : Array[Byte] = []
+  mp4_u32(stsd_body, 1U)
+  stsd_body.append(entry)
+  let stsd = mp4_full_box("stsd", 0, 0, stsd_body)
+  let runs : Array[(Int32, Int32)] = []
+  for d in durations {
+    if runs.length() > 0 && runs[runs.length() - 1].1 == d {
+      runs[runs.length() - 1] = (runs[runs.length() - 1].0 + 1, d)
+    } else {
+      runs.push((1, d))
+    }
+  }
+  let stts_body : Array[Byte] = []
+  mp4_u32(stts_body, runs.length().reinterpret_as_uint())
+  for run in runs {
+    mp4_u32(stts_body, run.0.reinterpret_as_uint())
+    mp4_u32(stts_body, run.1.reinterpret_as_uint())
+  }
+  let parts : Array[Array[Byte]] = [stsd, mp4_full_box("stts", 0, 0, stts_body)]
+  let sync : Array[Int32] = []
+  for i in 0..<keyframes.length() {
+    if keyframes[i] {
+      sync.push(i + 1)
+    }
+  }
+  if sync.length() > 0 {
+    let body : Array[Byte] = []
+    mp4_u32(body, sync.length().reinterpret_as_uint())
+    for n in sync {
+      mp4_u32(body, n.reinterpret_as_uint())
+    }
+    parts.push(mp4_full_box("stss", 0, 0, body))
+  }
+  let count = packets.length()
+  let stsc_body : Array[Byte] = []
+  mp4_u32(stsc_body, if count > 0 { 1U } else { 0U })
+  if count > 0 {
+    mp4_u32(stsc_body, 1U)
+    mp4_u32(stsc_body, count.reinterpret_as_uint())
+    mp4_u32(stsc_body, 1U)
+  }
+  parts.push(mp4_full_box("stsc", 0, 0, stsc_body))
+  let stsz_body : Array[Byte] = []
+  mp4_u32(stsz_body, 0U)
+  mp4_u32(stsz_body, count.reinterpret_as_uint())
+  for p in packets {
+    mp4_u32(stsz_body, p.length().reinterpret_as_uint())
+  }
+  parts.push(mp4_full_box("stsz", 0, 0, stsz_body))
+  let stco_body : Array[Byte] = []
+  mp4_u32(stco_body, if count > 0 { 1U } else { 0U })
+  if count > 0 {
+    mp4_u32(stco_body, chunk_offset.reinterpret_as_uint())
+  }
+  parts.push(mp4_full_box("stco", 0, 0, stco_body))
+  mp4_box("stbl", mp4_cat(parts))
+}
+
+///|
+fn mp4_av_trak(
+  track_id : Int32,
+  volume : Int32,
+  width : Int32,
+  height : Int32,
+  media_timescale : Int32,
+  media_duration : Int32,
+  movie_duration : Int32,
+  handler : String,
+  media_header : Array[Byte],
+  entry : Array[Byte],
+  packets : Array[Bytes],
+  durations : Array[Int32],
+  keyframes : Array[Bool],
+  chunk_offset : Int32,
+) -> Array[Byte] {
+  let tkhd_body : Array[Byte] = []
+  mp4_u32(tkhd_body, 0U)
+  mp4_u32(tkhd_body, 0U)
+  mp4_u32(tkhd_body, track_id.reinterpret_as_uint())
+  mp4_u32(tkhd_body, 0U)
+  mp4_u32(tkhd_body, movie_duration.reinterpret_as_uint())
+  for _ in 0..<2 {
+    mp4_u32(tkhd_body, 0U)
+  }
+  mp4_u16(tkhd_body, 0)
+  mp4_u16(tkhd_body, 0)
+  mp4_u16(tkhd_body, volume)
+  mp4_u16(tkhd_body, 0)
+  mp4_matrix(tkhd_body)
+  mp4_u32(tkhd_body, (width << 16).reinterpret_as_uint())
+  mp4_u32(tkhd_body, (height << 16).reinterpret_as_uint())
+  let tkhd = mp4_full_box("tkhd", 0, 7, tkhd_body)
+
+  let mdhd_body : Array[Byte] = []
+  mp4_u32(mdhd_body, 0U)
+  mp4_u32(mdhd_body, 0U)
+  mp4_u32(mdhd_body, media_timescale.reinterpret_as_uint())
+  mp4_u32(mdhd_body, media_duration.reinterpret_as_uint())
+  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, 0)
+  let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
+
+  let hdlr_body : Array[Byte] = []
+  mp4_u32(hdlr_body, 0U)
+  mp4_tag(hdlr_body, handler)
+  for _ in 0..<3 {
+    mp4_u32(hdlr_body, 0U)
+  }
+  mp4_tag(
+    hdlr_body,
+    if handler == "vide" { "VideoHandler" } else { "SoundHandler" },
+  )
+  hdlr_body.push(b'\x00')
+  let hdlr = mp4_full_box("hdlr", 0, 0, hdlr_body)
+
+  let url_body : Array[Byte] = []
+  mp4_u32(url_body, 1U)
+  let url = mp4_box("url ", url_body)
+  let dref_body : Array[Byte] = []
+  mp4_u32(dref_body, 1U)
+  dref_body.append(url)
+  let dinf = mp4_box("dinf", mp4_full_box("dref", 0, 0, dref_body))
+  let stbl = mp4_av_stbl(entry, packets, durations, keyframes, chunk_offset)
+  let minf = mp4_box("minf", mp4_cat([media_header, dinf, stbl]))
+  let mdia = mp4_box("mdia", mp4_cat([mdhd, hdlr, minf]))
+  mp4_box("trak", mp4_cat([tkhd, mdia]))
+}
+
+///|
+pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
+  let ftyp_body : Array[Byte] = []
+  mp4_tag(ftyp_body, "isom")
+  mp4_u32(ftyp_body, 0x200U)
+  for brand in ["isom", "iso2", "avc1", "mp41"] {
+    mp4_tag(ftyp_body, brand)
+  }
+  let ftyp = mp4_box("ftyp", ftyp_body)
+  let vdata : Array[Byte] = []
+  for p in self.video_packets {
+    for b in p {
+      vdata.push(b)
+    }
+  }
+  let adata : Array[Byte] = []
+  for p in self.audio_packets {
+    for b in p {
+      adata.push(b)
+    }
+  }
+  let mdat_body : Array[Byte] = []
+  mdat_body.append(vdata)
+  mdat_body.append(adata)
+  let mdat = mp4_box("mdat", mdat_body)
+  let video_offset = ftyp.length() + 8
+  let audio_offset = video_offset + vdata.length()
+
+  let mut vdur = 0
+  for d in self.video_durations {
+    vdur = vdur + d
+  }
+  let mut adur = 0
+  for d in self.audio_durations {
+    adur = adur + d
+  }
+  let vms = vdur.to_int64() * 1000L / 90000L
+  let ams = adur.to_int64() * 1000L / self.sample_rate.to_int64()
+  let movie_ms = if vms > ams { vms.to_int() } else { ams.to_int() }
+  let mvhd_body : Array[Byte] = []
+  mp4_u32(mvhd_body, 0U)
+  mp4_u32(mvhd_body, 0U)
+  mp4_u32(mvhd_body, 1000U)
+  mp4_u32(mvhd_body, movie_ms.reinterpret_as_uint())
+  mp4_u32(mvhd_body, 0x00010000U)
+  mp4_u16(mvhd_body, 0x0100)
+  mp4_u16(mvhd_body, 0)
+  for _ in 0..<2 {
+    mp4_u32(mvhd_body, 0U)
+  }
+  mp4_matrix(mvhd_body)
+  for _ in 0..<6 {
+    mp4_u32(mvhd_body, 0U)
+  }
+  mp4_u32(mvhd_body, 3U)
+  let mvhd = mp4_full_box("mvhd", 0, 0, mvhd_body)
+
+  let h264 = mp4_h264_muxer_new(
+    self.width,
+    self.height,
+    self.avcc,
+    timescale=90000,
+  ).unwrap()
+  let ventry = h264.video_entry()
+  let vmhd_body : Array[Byte] = []
+  mp4_u16(vmhd_body, 0)
+  for _ in 0..<3 {
+    mp4_u16(vmhd_body, 0)
+  }
+  let vmhd = mp4_full_box("vmhd", 0, 1, vmhd_body)
+  let vtrack = mp4_av_trak(
+    1,
+    0,
+    self.width,
+    self.height,
+    90000,
+    vdur,
+    movie_ms,
+    "vide",
+    vmhd,
+    ventry,
+    self.video_packets,
+    self.video_durations,
+    self.video_keyframes,
+    video_offset,
+  )
+
+  let aentry = mp4_av_aac_entry(self.sample_rate, self.channels)
+  let smhd_body : Array[Byte] = []
+  mp4_u16(smhd_body, 0)
+  mp4_u16(smhd_body, 0)
+  let smhd = mp4_full_box("smhd", 0, 0, smhd_body)
+  let empty_keys : Array[Bool] = []
+  for _ in 0..<self.audio_packets.length() {
+    empty_keys.push(false)
+  }
+  let atrack = mp4_av_trak(
+    2,
+    0x0100,
+    0,
+    0,
+    self.sample_rate,
+    adur,
+    movie_ms,
+    "soun",
+    smhd,
+    aentry,
+    self.audio_packets,
+    self.audio_durations,
+    empty_keys,
+    audio_offset,
+  )
+  let moov = mp4_box("moov", mp4_cat([mvhd, vtrack, atrack]))
+  Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
+}

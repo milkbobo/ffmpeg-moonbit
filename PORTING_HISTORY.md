@@ -2001,3 +2001,17 @@ CodecPrivate、尺寸、PTS 与 keyframe。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **835/835**。
+
+## 38. 2026-10-24 H.264 + AAC 双轨 MP4 写入器
+
+新增 `libavformat/mp4_av_mux.mbt`：一个文件内写 video (`avc1`/`avcC`)
+与 audio (`mp4a`/`esds`) 两条轨，共用一个 `mdat`；视频/音频样本分别成 chunk，
+`stco` 记录各自偏移，`stbl` 的 `stts`/`stsc`/`stsz` 与视频 `stss` 逐轨生成。
+movie timescale 固定 1000，tkhd/mvhd 时长按各自媒体时长换算。
+
+回归写 2 个 H.264 样本 + 3 个 AAC 样本，`av_mov_open` 回读验证两轨
+codec/尺寸/采样率/声道、样本 dts/duration/keyframe、chunk payload 与
+AAC esds。非法参数与空包负例通过。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **837/837**。
