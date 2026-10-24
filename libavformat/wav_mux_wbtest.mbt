@@ -43,12 +43,34 @@ test "wav muxer: 24-bit mono pads the odd data chunk" {
 
 ///|
 test "wav muxer: invalid PCM formats are rejected" {
-  match wav_muxer_new(48000, 2, 8) {
-    Ok(_) => fail("8-bit WAV muxing is not supported")
+  match wav_muxer_new(48000, 2, 12) {
+    Ok(_) => fail("12-bit WAV muxing is not supported")
     Err(_) => ()
   }
   match wav_muxer_new(0, 2, 16) {
     Ok(_) => fail("zero sample rate must fail")
     Err(_) => ()
   }
+}
+
+///|
+test "wav muxer: 8-bit unsigned PCM and extensible multichannel" {
+  let mono = wav_muxer_new(8000, 1, 8).unwrap()
+  mono.write_samples([0, 127, -128][:])
+  let mono_bytes = mono.finish()
+  let mono_demux = av_wav_open(mono_bytes).unwrap()
+  assert_eq(mono_demux.format.codec, "pcm_u8")
+  assert_eq(mono_demux.format.bits_per_sample, 8)
+  assert_eq(mono_demux.data_size, 3L)
+  assert_eq(mono_bytes[44:47].to_owned(), Bytes::from_array([0x80, 0xFF, 0x00]))
+
+  let mux = wav_muxer_new(48000, 6, 16, channel_mask=0x3FU).unwrap()
+  mux.write_samples([0, 0, 0, 0, 0, 0][:])
+  let bytes = mux.finish()
+  let demux = av_wav_open(bytes).unwrap()
+  assert_eq(demux.format.codec, "pcm_s16le")
+  assert_eq(demux.format.channels, 6)
+  assert_eq(demux.format.bits_per_sample, 16)
+  assert_eq(demux.format.channel_mask, 0x3FU)
+  assert_eq(demux.data_size, 12L)
 }

@@ -1836,3 +1836,17 @@ buffer_fullness 全 1）。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **817/817**。
+
+## 25. 2026-10-24 WAV 8-bit 与 WAVE_FORMAT_EXTENSIBLE
+
+`WavMuxer` 扩展：
+
+- 支持 8-bit PCM，按 WAV 约定把有符号输入偏移到无符号字节（`pcm_u8`）。
+- `wav_muxer_new` 新增 `channel_mask`；声道数 >2 或 mask 非零时写
+  `WAVE_FORMAT_EXTENSIBLE`（fmt chunk 40 字节、valid_bits、channel mask 与
+  KSDATAFORMAT_SUBTYPE_PCM GUID）。
+- 回归覆盖 8-bit 单声道字节值、6 声道/mask 0x3F 的 extensible 头与
+  `av_wav_open` 回读（codec、声道、位深、channel_mask、data 大小）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **818/818**。
