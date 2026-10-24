@@ -2051,3 +2051,14 @@ CodecID/CodecPrivate、4 个包的交错顺序、stream_index、PTS 与 payload�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **842/842**。
+
+## 42. 2026-10-24 DASH SegmentTemplate MPD 写入
+
+新增 `libavformat/dash_mux.mbt` 的 `dash_write_segment_template_mpd`：
+生成单 Period/单 AdaptationSet/单 Representation 的静态 MPD，含
+`SegmentTemplate` 的 timescale/duration/startNumber/initialization/media
+模板。回归交给 `av_dash_parse`，验证 `$RepresentationID$` 与
+`$Number%03d$` 展开、5 个 segment、编号 5..9 与 URI。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **843/843**。
