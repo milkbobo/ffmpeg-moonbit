@@ -882,7 +882,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 |---|---|---|
 | H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成；渐进帧与 MBAFF 帧的错误补偿（多轮 MV 猜测 + 恢复区滤波） | SP/SI 重建、FMO、数据分区；场图片按上游边界报错；P 帧大缺口/高位深恢复未逐像素对齐 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
-| AV1 | OBU/序列与帧头、tile payload 提取；8-bit 4:2:0/4:2:2/4:4:4 多 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、高位深、`enable_intra_edge_filter=0` 等 |
+| AV1 | OBU/序列与帧头、tile payload 提取；8-bit 4:2:0/4:2:2/4:4:4 多 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、高位深等 |
 | VP9 | profile 0/1/2/3 关键帧与帧间帧，8/10/12-bit，4:2:0/4:2:2/4:4:4；隐藏/show-existing、superframe、多 tile、概率自适应 | 复合预测（B 帧）、参考缩放 |
 | MJPEG | 8-bit baseline/progressive，重启标记与多采样 | 无损、12-bit、算术编码 |
 | PNG | 灰度/RGB/RGBA/调色板、1–16-bit、Adam7、APNG | 更多扩展元数据/色彩管理 |
@@ -1682,9 +1682,9 @@ AV1 像素路径原先按 8-bit 4:2:0 写死。序列头解析早已读取
   由 `scripts/_emit_av1_444_vectors.py` 生成两条 libaom `-crf 0 -g 1` 流：
   64×48 yuv444p 与 yuv422p，各 9 帧，**18 帧逐帧 MD5 与 libdav1d 一致**。
 
-**已知边界**：`enable_intra_edge_filter=0` 的流仍与上游不一致；用同参数生成的
-4:2:0 流同样复现，确认是本轮之前就存在的 AV1 预测边滤波缺口，不是 4:4:4 引入。
-有损帧、帧间帧、10/12-bit 与单色仍明确报错。
+**已知边界**：`enable_intra_edge_filter=0` 的流当时仍与上游不一致；用同参数生成的
+4:2:0 流同样复现，确认是本轮之前就存在的 AV1 预测边滤波缺口，不是 4:4:4 引入
+（已在 §17 修复）。有损帧、帧间帧、10/12-bit 与单色仍明确报错。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **798/798**。
@@ -1710,3 +1710,18 @@ AV1 像素路径原先按 8-bit 4:2:0 写死。序列头解析早已读取
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **800/800**。
+
+## 17. 2026-10-24 AV1 无帧内边滤波（Z2）修复
+
+上一节登记的 `enable_intra_edge_filter=0` 缺口定位到 `ipred_z2` 的无滤波左侧
+边缘拷贝：dav1d 的 `pixel_copy(&topleft[-height], &topleft_in[-height], height)`
+要求写入 `topleft-height .. topleft-1`，移植写成了 `topleft .. topleft-height+1`，
+整体偏移一位且丢失 `topleft-height`。滤波/上采样路径不经过该分支，因此此前所有
+默认流都能通过；关闭 edge filter 后 Z2 预测块开始出现偏差。
+
+修正为按 `topleft - height + i` / `topleft_in - height + i` 顺序拷贝。新增
+`av1_420_noedge` 真实流（64×48、关闭 palette/CFL/filter-intra/edge-filter，3 帧），
+连同原有 4:4:4/4:2:2 两流共 **21 帧**逐帧 MD5 与 libdav1d 一致。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **801/801**。

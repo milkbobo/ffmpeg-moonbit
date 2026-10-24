@@ -944,7 +944,7 @@ fn av1_ipred_z2(
       )
     } else {
       for i in 0..<height {
-        buf[topleft - i] = edge_buf[topleft_in - i]
+        buf[topleft - height + i] = edge_buf[topleft_in - height + i]
       }
     }
   }
