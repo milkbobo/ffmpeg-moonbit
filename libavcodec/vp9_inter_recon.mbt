@@ -373,9 +373,9 @@ fn Vp9Decoder::mc_luma(
 }
 
 ///|
-/// `mc_chroma_unscaled`: predicts both chroma planes.  The MV maps onto
-/// 1/16-pel chroma phases (for 4:2:0 the factor from the 1/8-pel luma MV is
-/// exactly one).
+/// `mc_chroma_unscaled`: predicts both chroma planes.  With 4:2:0 the 1/8-pel
+/// luma MV already is a 1/16-pel chroma MV; with 4:2:2/4:4:4 it is scaled by
+/// `1 << (1 - ss_h)` / `1 << (1 - ss_v)` first, matching the C.
 fn Vp9Decoder::mc_chroma(
   self : Vp9Decoder,
   ref_frame : Vp9RefFrame,
@@ -392,18 +392,20 @@ fn Vp9Decoder::mc_chroma(
   filter : Int32,
   avg : Bool,
 ) -> Unit {
-  let mx = mvx & 15
-  let my = mvy & 15
-  let x = px_x + (mvx >> 4)
-  let y = px_y + (mvy >> 4)
+  let smx = mvx * (1 << (1 - self.ss_h))
+  let smy = mvy * (1 << (1 - self.ss_v))
+  let mx = smx & 15
+  let my = smy & 15
+  let x = px_x + (smx >> 4)
+  let y = px_y + (smy >> 4)
   let emx = if mx != 0 { 1 } else { 0 }
   let emy = if my != 0 { 1 } else { 0 }
   let src_cb = ref_frame.cb
   let src_cr = ref_frame.cr
   let base = ref_frame.uvbase + y * ref_frame.uvstride + x
   let sstride = ref_frame.uvstride
-  let cw = (ref_frame.width + 1) >> 1
-  let ch = (ref_frame.height + 1) >> 1
+  let cw = (ref_frame.width + self.ss_h) >> self.ss_h
+  let ch = (ref_frame.height + self.ss_v) >> self.ss_v
   if x < emx * 3 || y < emy * 3 || x + emx * 4 > cw - bw || y + emy * 5 > ch - bh {
     vp9_emulated_edge(
       self.mc_tmp,

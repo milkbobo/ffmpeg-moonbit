@@ -8,7 +8,8 @@
 /// Ronald S. Bultje <rsbultje gmail com> and Clément Bœsch <u pkh me>.
 /// This port keeps the same license.
 ///
-/// Scope: 8-bit 4:2:0 (`profile 0`), single- or multi-tile, with
+/// Scope: profiles 0/2 (4:2:0, 8/10/12-bit) and profiles 1/3 (4:2:2/4:4:4),
+/// single- or multi-tile, with
 /// segmentation and the lossless WHT path.  Keyframes, intra-only frames
 /// and inter frames are supported (NEARESTMV/NEARMV/ZEROMV/NEWMV,
 /// switchable and fixed interpolation filters, single reference).
@@ -189,7 +190,7 @@ pub struct Vp9RefFrame {
 }
 
 ///|
-/// Create a profile-0 keyframe decoder. Feed individual VP9 frame payloads
+/// Create a VP9 decoder. Feed individual VP9 frame payloads
 /// (strip IVF/container framing, or split a superframe packet first), then
 /// read tightly packed Y, Cb and Cr bytes with `frame_bytes`.
 ///
@@ -272,11 +273,11 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     mblim_lut: FixedArray::make(64, 0),
     sharpness: -1,
     block: FixedArray::make(4096, 0),
-    uvblock0: FixedArray::make(1024, 0),
-    uvblock1: FixedArray::make(1024, 0),
+    uvblock0: FixedArray::make(4096, 0),
+    uvblock1: FixedArray::make(4096, 0),
     eob: FixedArray::make(256, 0),
-    uveob0: FixedArray::make(64, 0),
-    uveob1: FixedArray::make(64, 0),
+    uveob0: FixedArray::make(256, 0),
+    uveob1: FixedArray::make(256, 0),
     cache: FixedArray::make(1024, 0),
     mc_tmp: FixedArray::make(160 * 80, 0),
     b: vp9_block_new(),
@@ -781,7 +782,7 @@ fn vp9_set_tile_offset(idx : Int32, log2_n : Int32, n : Int32) -> (Int32, Int32)
 }
 
 ///|
-/// Decode one profile-0 frame (keyframe, intra-only or inter) or display an
+/// Decode one VP9 frame (keyframe, intra-only or inter) or display an
 /// existing reference slot.
 pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit, String] {
   // reference dimensions for inter size inheritance
@@ -802,13 +803,6 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
   let header = match vp9_parse_frame_header_with_refs(data, refw, refh) {
     Ok(h) => h
     Err(e) => return Err(e)
-  }
-  if header.profile != 0 && header.profile != 2 {
-    return Err("vp9: only profiles 0 (8-bit) and 2 (10/12-bit 4:2:0) are supported")
-  }
-  if header.profile == 2 &&
-    (header.chroma_subsampling_x != true || header.chroma_subsampling_y != true) {
-    return Err("vp9: profile 2 must be 4:2:0")
   }
   if header.show_existing_frame {
     guard self.references[header.frame_to_show] is Some(ref_frame) else {
@@ -850,6 +844,13 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
     h.bit_depth = prev.bit_depth
     h.chroma_subsampling_x = prev.chroma_subsampling_x
     h.chroma_subsampling_y = prev.chroma_subsampling_y
+  }
+  if h.profile == 0 || h.profile == 2 {
+    if h.chroma_subsampling_x != true || h.chroma_subsampling_y != true {
+      return Err("vp9: profiles 0/2 must be 4:2:0")
+    }
+  } else if h.chroma_subsampling_x && h.chroma_subsampling_y {
+    return Err("vp9: profiles 1/3 must be 4:2:2 or 4:4:4")
   }
   self.display_bytes = None
   self.header = h
@@ -1058,16 +1059,16 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
 }
 
 ///|
-/// Pack the current frame as contiguous yuv420p bytes (width×height luma,
-/// then chroma planes), for MD5 comparison against the reference decoder.
-/// Above 8 bpp each sample becomes a little-endian 16-bit word, matching
-/// the decoder's yuv420p10le/yuv420p12le output layout. */
+/// Pack the current frame as contiguous bytes (width×height luma, then the
+/// two chroma planes at the frame's subsampling), for MD5 comparison against
+/// the reference decoder.  Above 8 bpp each sample becomes a little-endian
+/// 16-bit word, matching the yuv420p10le/yuv444p12le output layout. */
 pub fn Vp9Decoder::frame_bytes(self : Vp9Decoder) -> Bytes {
   if self.display_bytes is Some(bytes) { return bytes }
   let w = self.width
   let h = self.height
-  let cw = (w + 1) >> 1
-  let ch = (h + 1) >> 1
+  let cw = (w + self.ss_h) >> self.ss_h
+  let ch = (h + self.ss_v) >> self.ss_v
   let sbytes = if self.bpp > 8 { 2 } else { 1 }
   let buf : FixedArray[Byte] = FixedArray::make(
     (w * h + 2 * cw * ch) * sbytes,

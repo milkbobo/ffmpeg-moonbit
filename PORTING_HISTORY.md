@@ -113,7 +113,7 @@ moonbit/
     ├── opus_celt_decode.mbt  # 有状态 CELT-only 帧 → 48 kHz planar Float PCM
     ├── opus_celt_windows.mbt # 两张原 C 合成窗（.mbtx --check）
     ├── vp9_packet_decode.mbt # superframe、隐藏关键帧与八槽 show-existing 输出
-    ├── vp9_decode.mbt        # profile-0 关键帧解码入口、概率更新、tile 编排与 YUV 输出
+    ├── vp9_decode.mbt        # VP9 帧解码入口、概率更新、tile 编排与 YUV 输出
     ├── vp9_block.mbt         # 分区/模式/系数解码，MERGE/SPLAT 非零上下文
     ├── vp9_recon.mbt         # 帧内参考样本准备与 TU 重建
     ├── vp9_dsp.mbt           # 帧内预测、DCT/ADST/WHT 与去块内核
@@ -883,7 +883,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 | H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成；渐进帧与 MBAFF 帧的错误补偿（多轮 MV 猜测 + 恢复区滤波） | SP/SI 重建、FMO、数据分区；场图片按上游边界报错；P 帧大缺口/高位深恢复未逐像素对齐 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
 | AV1 | OBU/序列与帧头、实际 tile payload 提取；8-bit 4:2:0 单 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、多 tile、高位深等 |
-| VP9 | profile-0 关键帧、隐藏/show-existing、superframe | inter/intra-only、参考预测与概率适配、其他 profile |
+| VP9 | profile 0/1/2/3 关键帧与帧间帧，8/10/12-bit，4:2:0/4:2:2/4:4:4；隐藏/show-existing、superframe、多 tile、概率自适应 | 复合预测（B 帧）、参考缩放 |
 | MJPEG | 8-bit baseline/progressive，重启标记与多采样 | 无损、12-bit、算术编码 |
 | PNG | 灰度/RGB/RGBA/调色板、1–16-bit、Adam7、APNG | 更多扩展元数据/色彩管理 |
 | AAC | LC，多声道/PCE、CCE、960/1024、短窗/TNS/PNS/pulse | SBR/PS、USAC 与更多真实 CCE/960 向量 |
@@ -1636,3 +1636,29 @@ AC 符号、palette 色度左侧缓存的行索引、partition 上下文覆盖�
 当前像素入口对有损帧、帧间帧、多 tile、segmentation、delta Q、qmatrix 和 superres
 明确报错；环路滤波、帧间预测及其他像素格式仍待移植。本轮验证：
 `moon check --deny-warn --no-render` 0 error/0 warning，`moon test --no-render` **792/792**。
+
+## 14. 2026-10-24 VP9 profile 1/3（4:2:2 / 4:4:4）
+
+在既有 4:2:0 路径上补齐 profile 1（8-bit 4:2:2/4:4:4）与 profile 3（10/12-bit
+4:2:2/4:4:4）。解码头解析早已读取 `subsampling_x/y`，缺口集中在像素路径：
+
+- **色度运动补偿**：C 的 `mc_chroma_unscaled` 先把 1/8-pel 亮度 MV 缩放为
+  `mv * (1 << (1 - ss_h/v))`，再按 1/16-pel 取整/取相位；移植此前直接使用亮度 MV，
+  只对 4:2:0 成立。同步把边界判断的参考色度尺寸改为 `(w + ss_h) >> ss_h`。
+- **4:4:4 色度系数缓冲**：C 按 `64*64 >> (ss_h + ss_v)` 分配色度块与 EOB 缓冲；
+  4:4:4 的 64×64 块可有四个 32×32 色度 TU，需要 4096 系数与 256 个 EOB。移植的
+  1024/64 仅够 4:2:0，12-bit 4:4:4 在 `uveob[n]` 越界，按最大尺寸统一分配。
+- **输出打包**：`frame_bytes` 按当前帧的 ss 计算色度宽高，覆盖 yuv422p 与 yuv444p
+  （含 10/12-bit LE16），不再硬编码 4:2:0。
+- **inter 帧头继承顺序**：profile 1/3 的 inter 帧不重读色彩配置，必须先把上一帧的
+  profile/bit-depth/subsampling 带入当前帧，再做“profile 0/2 必须 4:2:0、profile
+  1/3 必须 4:2:2/4:4:4”的合法性检查。
+
+验证向量位于独立测试包 `libavcodec/vp9_vectors`（避免主包 wasm `__init` 的局部变量
+上限），由 `scripts/_emit_vp9_444_vectors.py` 生成：8-bit 4:4:4、8-bit 4:2:2、
+10-bit 4:4:4、12-bit 4:4:4 四条 libvpx-vp9 流，各 6 帧（两个关键帧 + P 帧），
+24 帧逐帧 YUV MD5 与 Docker `linuxserver/ffmpeg:9.0.2` 一致。仍余：复合预测（B 帧）、
+参考缩放，以及 profile 3 的 4:2:2 组合未单独出向量。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **796/796**。
