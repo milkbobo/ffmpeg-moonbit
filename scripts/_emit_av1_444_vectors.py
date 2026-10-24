@@ -12,6 +12,9 @@ STREAMS = [
     ("av1_422", "8-bit 4:2:2 lossless keyframes", "yuv422p",
      "testsrc2=size=64x48:rate=30 -t 0.3 -vf format=yuv422p "
      "-c:v libaom-av1 -crf 0 -cpu-used 8 -g 1 -an -y av1_422.ivf"),
+    ("av1_gray", "8-bit monochrome lossless keyframes", "gray",
+     "testsrc2=size=64x48:rate=30 -t 0.1 -vf format=gray "
+     "-c:v libaom-av1 -crf 0 -cpu-used 8 -g 1 -an -y av1_gray.ivf"),
     ("av1_420_noedge", "8-bit 4:2:0 lossless, intra edge filter off", "yuv420p",
      "testsrc2=size=64x48:rate=30 -t 0.1 -vf format=yuv420p "
      "-c:v libaom-av1 -crf 0 -cpu-used 8 -g 1 -enable-palette 0 "

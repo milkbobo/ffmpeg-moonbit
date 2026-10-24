@@ -78,11 +78,12 @@ pub struct Av1FrameOutput {
   uv_stride : Int32
   ss_h : Int32
   ss_v : Int32
+  mono : Bool
 }
 
 ///|
 /// Pack the frame as contiguous planar bytes: luma at `width`×`height`, then
-/// Cb and Cr at the sequence's chroma subsampling.
+/// Cb and Cr at the sequence's chroma subsampling (none for monochrome).
 pub fn Av1FrameOutput::packed(self : Av1FrameOutput) -> Bytes {
   let cw = (self.width + self.ss_h) >> self.ss_h
   let ch = (self.height + self.ss_v) >> self.ss_v
@@ -95,8 +96,10 @@ pub fn Av1FrameOutput::packed(self : Av1FrameOutput) -> Bytes {
     }
   }
   feed(self.y, self.y_stride, self.width, self.height)
-  feed(self.u, self.uv_stride, cw, ch)
-  feed(self.v, self.uv_stride, cw, ch)
+  if !self.mono {
+    feed(self.u, self.uv_stride, cw, ch)
+    feed(self.v, self.uv_stride, cw, ch)
+  }
   Bytes::from_array(buf)
 }
 
@@ -158,9 +161,6 @@ fn av1_decode_keyframe_payloads(
   }
   if seq.bitdepth != 8 {
     return Err("av1: only 8-bit pixel output is supported")
-  }
-  if seq.monochrome {
-    return Err("av1: monochrome pixel output is unsupported")
   }
   let num_tiles = hdr.tile_cols * hdr.tile_rows
   if payloads.length() != num_tiles {
@@ -288,6 +288,7 @@ fn av1_decode_keyframe_payloads(
       uv_stride,
       ss_h,
       ss_v,
+      mono: seq.monochrome,
     })
   } catch {
     Av1DecError::Unsupported(msg) => Err(msg)

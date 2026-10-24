@@ -22,7 +22,8 @@ fn Av1TileCtx::recon_b_intra(
   let h4 = av1_imin(bh4, f.bh - self.by)
   let cw4 = (w4 + ss_hor) >> ss_hor
   let ch4 = (h4 + ss_ver) >> ss_ver
-  let has_chroma = (bw4 > ss_hor || (self.bx & 1) != 0) &&
+  let has_chroma = !f.seq.monochrome &&
+    (bw4 > ss_hor || (self.bx & 1) != 0) &&
     (bh4 > ss_ver || (self.by & 1) != 0)
   let t_dim_w = av1_txfm_w(b.tx)
   let t_dim_h = av1_txfm_h(b.tx)

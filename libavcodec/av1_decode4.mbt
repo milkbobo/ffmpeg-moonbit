@@ -191,7 +191,8 @@ fn Av1TileCtx::decode_b(
   let h4 = av1_imin(bh4, f.bh - self.by)
   let cbw4 = (bw4 + ss_hor) >> ss_hor
   let cbh4 = (bh4 + ss_ver) >> ss_ver
-  let has_chroma = (bw4 > ss_hor || (self.bx & 1) != 0) &&
+  let has_chroma = !f.seq.monochrome &&
+    (bw4 > ss_hor || (self.bx & 1) != 0) &&
     (bh4 > ss_ver || (self.by & 1) != 0)
   let a = f.a[self.a_idx]
   let l = f.l

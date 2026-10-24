@@ -882,7 +882,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 |---|---|---|
 | H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成；渐进帧与 MBAFF 帧的错误补偿（多轮 MV 猜测 + 恢复区滤波） | SP/SI 重建、FMO、数据分区；场图片按上游边界报错；P 帧大缺口/高位深恢复未逐像素对齐 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
-| AV1 | OBU/序列与帧头、tile payload 提取；8-bit 4:2:0/4:2:2/4:4:4 多 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、高位深等 |
+| AV1 | OBU/序列与帧头、tile payload 提取；8-bit 4:2:0/4:2:2/4:4:4/单色 多 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、10/12-bit 等 |
 | VP9 | profile 0/1/2/3 关键帧与帧间帧，8/10/12-bit，4:2:0/4:2:2/4:4:4；隐藏/show-existing、superframe、多 tile、概率自适应 | 复合预测（B 帧）、参考缩放 |
 | MJPEG | 8-bit baseline/progressive，重启标记与多采样 | 无损、12-bit、算术编码 |
 | PNG | 灰度/RGB/RGBA/调色板、1–16-bit、Adam7、APNG | 更多扩展元数据/色彩管理 |
@@ -1684,7 +1684,7 @@ AV1 像素路径原先按 8-bit 4:2:0 写死。序列头解析早已读取
 
 **已知边界**：`enable_intra_edge_filter=0` 的流当时仍与上游不一致；用同参数生成的
 4:2:0 流同样复现，确认是本轮之前就存在的 AV1 预测边滤波缺口，不是 4:4:4 引入
-（已在 §17 修复）。有损帧、帧间帧、10/12-bit 与单色仍明确报错。
+（已在 §17 修复）。有损帧、帧间帧与 10/12-bit 仍明确报错（单色见 §18）。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **798/798**。
@@ -1725,3 +1725,17 @@ AV1 像素路径原先按 8-bit 4:2:0 写死。序列头解析早已读取
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **801/801**。
+
+## 18. 2026-10-24 AV1 单色无损关键帧
+
+AV1 monochrome 不再在入口拒绝：
+
+- `decode_b` 与 `recon_b_intra` 的 `has_chroma` 增加 `!seq.monochrome` 条件，
+  所有 UV 模式、palette、色度 CBF/变换与色度预测语法按规范跳过。
+- `Av1FrameOutput` 记录 `mono`，`packed()` 在单色时只输出 Y 平面，匹配
+  ffmpeg 的 `gray` 帧布局。
+- 新增 64×48 8-bit 灰度 libaom 无损流（3 帧），与 4:4:4/4:2:2/noedge 三条流
+  合计 **24 帧逐帧 MD5 与 libdav1d 一致**。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **802/802**。
