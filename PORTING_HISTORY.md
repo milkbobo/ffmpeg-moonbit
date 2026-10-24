@@ -2025,3 +2025,16 @@ AAC esds。非法参数与空包负例通过。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **838/838**。
+
+## 40. 2026-10-24 MKV/H.264+AAC 双轨写入器
+
+新增 `libavformat/mkv_av_mux.mbt`：DocType `matroska`，同时写
+`V_MPEG4/ISO/AVC`（CodecPrivate=avcC）与 `A_AAC`（CodecPrivate=
+AudioSpecificConfig）两轨。按毫秒 PTS 稳定排序后交错写 SimpleBlock；
+两轨 TrackNumber/UID 分别为 1/2。
+
+回归写 2 个 H.264 + 2 个 AAC 包，`av_matroska_open` 回读验证两条轨
+CodecID/CodecPrivate、4 个包的交错顺序、stream_index、PTS 与 payload。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **840/840**。
