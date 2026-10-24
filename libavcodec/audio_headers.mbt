@@ -125,6 +125,42 @@ pub fn ff_adts_header_parse_buf(
   ff_adts_header_parse(gb)
 }
 
+///|
+/// Build a 7-byte ADTS header without CRC. `object_type` is the AAC object
+/// type (2 for AAC-LC), `channels` is the channel_configuration field and
+/// `frame_length` includes the header.
+pub fn aac_adts_header_write(
+  sample_rate : Int32,
+  channels : Int32,
+  object_type : Int32,
+  frame_length : Int32,
+) -> Result[Bytes, String] {
+  if channels < 1 || channels > 7 || object_type < 1 || object_type > 4 ||
+    frame_length < av_aac_adts_header_size || frame_length > 0x1FFF {
+    return Err("EINVAL: invalid ADTS header fields")
+  }
+  let mut sampling_index = -1
+  for i in 0..<mpeg4audio_sample_rates.length() {
+    if mpeg4audio_sample_rates[i] == sample_rate {
+      sampling_index = i
+    }
+  }
+  if sampling_index < 0 {
+    return Err("EINVAL: unsupported AAC sample rate")
+  }
+  let profile = object_type - 1
+  let out : Array[Byte] = [
+    0xFF,
+    0xF1,
+    ((profile << 6) | (sampling_index << 2) | (channels >> 2)).to_byte(),
+    (((channels & 3) << 6) | ((frame_length >> 11) & 3)).to_byte(),
+    ((frame_length >> 3) & 0xFF).to_byte(),
+    (((frame_length & 7) << 5) | 0x1F).to_byte(),
+    0xFC,
+  ]
+  Ok(Bytes::from_array(out))
+}
+
 // ---------------------------------------------------------------------------
 // MPEG audio
 // ---------------------------------------------------------------------------

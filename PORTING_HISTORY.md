@@ -1789,3 +1789,19 @@ PES 布局写出单节目 TS：
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **811/811**。
+
+## 22. 2026-10-24 ADTS AAC 写入器
+
+`libavcodec/audio_headers.mbt` 新增 `aac_adts_header_write`：按 ADTS 54-bit
+fixed/variable header 生成 7 字节无 CRC 头（MPEG-4、AAC object type、
+sampling_frequency_index、channel_configuration、13-bit frame_length、
+buffer_fullness 全 1）。
+
+`libavformat/adts_mux.mbt` 的 `AdtsMuxer` 将每个 AAC 原始帧加头后累积；
+`adts_muxer_new(rate, channels, object_type=2)` 校验参数，`write_frame`
+限制帧长不超过 8191，`finish` 返回完整 ADTS 流。回归把输出交给现有
+`av_adts_open`，验证 codec/profile/sample rate/channels、两帧长度与
+`total_samples == 2048`，并覆盖不支持采样率与超长帧的负例。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **813/813**。
