@@ -714,6 +714,8 @@ fn parse_box(
     parse_esds(st, r)
   } else if kind == "dOps" {
     parse_dops(st, r, size)
+  } else if kind == "vpcC" {
+    parse_vpcc(st, r, size)
   } else if kind == "avcC" ||
     kind == "hvcC" ||
     kind == "av1C" ||

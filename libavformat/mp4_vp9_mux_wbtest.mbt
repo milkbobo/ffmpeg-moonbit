@@ -14,6 +14,10 @@ test "mp4 muxer: VP9 samples and vpcC round-trip" {
   assert_eq(track.codec, "vp09")
   assert_eq(track.width, 64)
   assert_eq(track.height, 48)
+  assert_eq(track.extradata.unwrap(), Bytes::from_array([1, 0, 0, 0x82]))
+  let params = mp4_track_codec_parameters(track)
+  assert_eq(params.profile, 0)
+  assert_eq(params.pix_fmt, "yuv420p")
   assert_eq(track.samples.length(), 2)
   for i in 0..<2 {
     let sample = track.samples[i]

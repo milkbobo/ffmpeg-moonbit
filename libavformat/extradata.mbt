@@ -131,6 +131,37 @@ fn parse_dops(st : MovState, r : AvioContext, size : Int64) -> Unit {
 }
 
 ///|
+/// `mov_read_vpcc`: pull the 4-byte profile/level/bit-depth record out of a
+/// VP Codec Configuration FullBox for `vp9_parse_vpcc`.
+fn parse_vpcc(st : MovState, r : AvioContext, size : Int64) -> Unit {
+  if !st.in_trak || size < 8 || size > 1073741824 {
+    let _ = r.avio_skip(size)
+    return
+  }
+  let has_extra = match st.cur.extradata {
+    Some(b) => b.length() > 0
+    None => false
+  }
+  if has_extra {
+    let _ = r.avio_skip(size)
+    return
+  }
+  let version = r.avio_r8()
+  let _ = r.avio_skip(3L)
+  let profile = r.avio_r8()
+  let level = r.avio_r8()
+  let packed = r.avio_r8()
+  let _ = r.avio_skip(size - 7L)
+  if version == 1U {
+    st.cur.extradata = Some(
+      Bytes::from_array([
+        version.to_byte(), profile.to_byte(), level.to_byte(), packed.to_byte(),
+      ]),
+    )
+  }
+}
+
+///|
 /// `mov_read_glbl`: store the payload as the track's extradata. The
 /// legacy-broken `fiel`-wrapped variant is ported too (recursing into the
 /// payload as child boxes).

@@ -265,12 +265,15 @@ test "codec params: MP4 AV1 av1C" {
 }
 
 ///|
-test "codec params: MP4 VP9 dimensions without vpcC" {
+test "codec params: MP4 VP9 vpcC profile/level" {
   let bytes = @libavutil.av_base64_decode(mp4_vp9_b64, 100000).unwrap()
   let movie = av_mov_open(bytes).unwrap()
   let p = mp4_track_codec_parameters(movie.tracks[0])
   assert_eq(p.codec, "vp9")
   assert_eq(p.width, 64)
   assert_eq(p.height, 48)
-  assert_false(p.extradata_parsed)
+  assert_true(p.extradata_parsed)
+  assert_eq(p.profile, 0)
+  assert_eq(p.level, 10)
+  assert_eq(p.pix_fmt, "yuv420p")
 }

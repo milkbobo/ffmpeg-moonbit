@@ -1941,3 +1941,15 @@ FullBox 与视频样本表，支持关键帧、逐包 duration、`stts` run-leng
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **828/828**。
+
+## 33. 2026-10-24 MP4 `vpcC` 解析
+
+`mov_read_vpcc` 之前未移植，VP9-in-MP4 的 `vpcC` 被当作未知 box 跳过。新增
+`parse_vpcc`：从 FullBox 读取 version/flags、profile、level、bit-depth/
+chroma/range 打包字节，保存为 4 字节 `vpcC` 记录供 `vp9_parse_vpcc` 使用。
+既有 `mp4_vp9_b64` fixture 实际含 12 字节 vpcC（profile 0、level 10、
+8-bit 4:2:0），测试由“未解析”更新为校验 profile/level/pix_fmt；新写的
+VP9 MP4 也能回读出 extradata。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **828/828**。
