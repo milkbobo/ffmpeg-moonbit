@@ -2212,3 +2212,29 @@ lo_ctx 会错。入口对 `!coded_lossless` 保持拒绝（待 LF 移植与符�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **862/862**（既有无损向量不受影响）。
+
+## 51. 2026-10-25 AV1 有损对拍基础设施：全帧 C 仲裁器（进行中）
+
+有损符号分歧（见 §50）的对拍工具建设。apt 网络持续不可用使
+meson 构建 dav1d-dbg 不可行；改走 alpine:3.20 + `apk add gcc`
+（可用），参照 trace_arb.c 的 include 真源码模式写全帧仲裁器
+`.scratch/av1_hbd/kfarb.c`（decode_sb 递归含 T-split 三子块/H4/V4、
+decode_b 的 skip/ymode/uvmode/CFL/palette/txsize、decode_coefs 全
+token 链），符号 tag 打印用于与 MoonBit 侧逐行 diff。
+
+已修通的 kfarb 自身 bug：partition 的 n_symbols 应为
+`partition_type_count[bl]`（不减 1，MoonBit 侧本来就对）；txsz CDF
+三维索引 `[max-1][ctx]`；CDF qcat 按 qidx 分档（>120/>60/>20）；
+palette 的 sz_ctx=`b_dim[2]+b_dim[3]-2` 与 pal_ctx 双比特、
+`allow_screen_content_tools` + `bw4+bh4>=4` 门控；CFL 的 joint
+sign（`cfl_sign` 8 值拆 sign_u/sign_v）+ `cfl_alpha[ctx]` 两段式。
+
+当前卡点：trace 在 f2 的 (4,0) bl=2 bp=8（T_LEFT_SPLIT）块
+bs=9 处 segfault，uvmode 符号已解出、后续 pre-palette 探针未达，
+崩因待查（疑 read_pal_plane 的 al_pal 索引或 T-split 边界坐标）。
+向量与现场保留在 `.scratch/av1_hbd/`（kfarb.c、run_kfarb.py、
+lossy8.ivf、crf30/crf55 向量）；下一步修通后与 MoonBit 侧 trace
+diff 定位首个分歧符号，再开 LF 移植。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **862/862**。
