@@ -2015,3 +2015,13 @@ AAC esds。非法参数与空包负例通过。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **837/837**。
+
+## 39. 2026-10-24 MKV/H.264 写入器
+
+新增 `libavformat/mkv_h264_mux.mbt`：EBML DocType `matroska`、`V_MPEG4/ISO/AVC`
+视频轨与 `CodecPrivate`（avcC）、Video 尺寸、Cluster/SimpleBlock。回归用真实
+44 字节 avcC 写 2 个样本，`av_matroska_open` 回读验证 CodecID/CodecPrivate、
+64×48、PTS 与 keyframe。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **838/838**。
