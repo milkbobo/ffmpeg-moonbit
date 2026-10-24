@@ -32,8 +32,14 @@ fn Av1TileCtx::decode_tile_sbrow(
   let f = self.f
   let sb_step = f.sb_step
   f.l.reset_keyframe()
+  for i in 0..<32 {
+    self.pal_sz_uv[32 + i] = 0
+  }
+  for i in 0..<(32 * 3 * 8) {
+    self.al_pal[32 * 3 * 8 + i] = b'\x00'
+  }
   let mut bx = self.col_start
-  self.a_idx = self.tile_row * f.sb128w
+  self.a_idx = self.tile_row * f.sb128w + (self.col_start >> 5)
   while bx < self.col_end {
     // cdef idx init for this SB
     if root_bl == 0 {
@@ -95,14 +101,41 @@ pub fn Av1FrameOutput::packed(self : Av1FrameOutput) -> Bytes {
 }
 
 ///|
-/// Decode one AV1 key frame (lossless 8-bit software path).
-/// `frame_obus` is the OBU byte stream of one frame (sequence header OBU
-/// included or already parsed); `seq`/`hdr` are the parsed headers and
-/// `tile` the entropy payload for tile 0 (single-tile frames only).
+/// Decode one AV1 key frame from a single-tile payload (lossless 8-bit
+/// software path).  Multi-tile frames must use `av1_decode_keyframe_tiles`.
 pub fn av1_decode_keyframe(
   seq : Av1SequenceParameters,
   hdr : Av1FrameHeader,
   tile : Bytes,
+) -> Result[Av1FrameOutput, String] {
+  if hdr.tile_cols != 1 || hdr.tile_rows != 1 {
+    return Err("av1: multi-tile frames require av1_decode_keyframe_tiles")
+  }
+  let tiles : Array[Bytes] = [tile]
+  av1_decode_keyframe_payloads(seq, hdr, tiles)
+}
+
+///|
+/// Decode one AV1 key frame from all of its extracted tiles.
+pub fn av1_decode_keyframe_tiles(
+  seq : Av1SequenceParameters,
+  hdr : Av1FrameHeader,
+  tiles : Array[Av1Tile],
+) -> Result[Av1FrameOutput, String] {
+  let payloads : Array[Bytes] = []
+  for tile in tiles {
+    payloads.push(tile.data)
+  }
+  av1_decode_keyframe_payloads(seq, hdr, payloads)
+}
+
+///|
+/// Shared key-frame driver: one independent range decoder and CDF context per
+/// tile, with above contexts banked per tile row.
+fn av1_decode_keyframe_payloads(
+  seq : Av1SequenceParameters,
+  hdr : Av1FrameHeader,
+  payloads : Array[Bytes],
 ) -> Result[Av1FrameOutput, String] {
   if hdr.frame_type != av1_frame_key {
     return Err("av1: not a key frame")
@@ -119,9 +152,6 @@ pub fn av1_decode_keyframe(
   if hdr.use_superres {
     return Err("av1: superres unsupported")
   }
-  if hdr.tile_cols != 1 || hdr.tile_rows != 1 {
-    return Err("av1: multi-tile frames unsupported")
-  }
   if !hdr.coded_lossless {
     // Lossy frames require the in-loop filters (not yet ported).
     return Err("av1: lossy frames unsupported (need CDEF/LF/LR)")
@@ -131,6 +161,10 @@ pub fn av1_decode_keyframe(
   }
   if seq.monochrome {
     return Err("av1: monochrome pixel output is unsupported")
+  }
+  let num_tiles = hdr.tile_cols * hdr.tile_rows
+  if payloads.length() != num_tiles {
+    return Err("av1: tile count does not match the frame header")
   }
   let ss_h = if seq.chroma_subsampling_x { 1 } else { 0 }
   let ss_v = if seq.chroma_subsampling_y { 1 } else { 0 }
@@ -143,6 +177,12 @@ pub fn av1_decode_keyframe(
   let sb128h = (bh + 31) >> 5
   let sb_shift = 4 + sb128
   let sb_step = 16 << sb128
+  let sb_cols = (bw + sb_step - 1) / sb_step
+  let sb_rows = (bh + sb_step - 1) / sb_step
+  let tile_width_sb = (sb_cols + (1 << hdr.tile_cols_log2) - 1) >>
+    hdr.tile_cols_log2
+  let tile_height_sb = (sb_rows + (1 << hdr.tile_rows_log2) - 1) >>
+    hdr.tile_rows_log2
   let aligned_w = (w + 127) & -128
   let y_stride = aligned_w
   let uv_stride = aligned_w >> ss_h
@@ -161,7 +201,7 @@ pub fn av1_decode_keyframe(
   )
   let planes : FixedArray[FixedArray[Byte]] = [y_plane, u_plane, v_plane]
   let a = []
-  for _ in 0..<(sb128w * 1) {
+  for _ in 0..<(sb128w * hdr.tile_rows) {
     let a_ctx = av1_block_context_new()
     a_ctx.reset_keyframe()
     a.push(a_ctx)
@@ -186,50 +226,62 @@ pub fn av1_decode_keyframe(
     ss_v,
     a,
     l: av1_block_context_new(),
-    al_pal: FixedArray::make(2 * 32 * 3 * 8, b'\x00'),
-    pal_sz_uv: FixedArray::make(64, 0),
     ipred_edge,
     dq: FixedArray::make(8 * 6, 4),
     seg_lossless: FixedArray::make(8, false),
     seg_qidx: FixedArray::make(8, 0),
   }
   f.init_quant()
-  let ts : Av1TileCtx = {
-    f,
-    msac: Av1Msac::init(tile, hdr.disable_cdf_update),
-    cdf: av1_cdf_copy_defaults(hdr.base_q_idx),
-    col_start: 0,
-    col_end: av1_imin(bw, bw),
-    row_start: 0,
-    row_end: av1_imin(bh, bh),
-    tile_row: 0,
-    bx: 0,
-    by: 0,
-    a_idx: 0,
-    cur_sb_cdef_idx: FixedArray::make(4, -1),
-    levels: FixedArray::make(32 * 34, b'\x00'),
-    edge_buf: FixedArray::make(128 * 3, b'\x00'),
-    cf: FixedArray::make(64 * 64, 0),
-    pal_idx_y: FixedArray::make(64 * 64, b'\x00'),
-    pal_idx_uv: FixedArray::make(64 * 64, b'\x00'),
-    pal: FixedArray::make(3 * 8, b'\x00'),
-    ac: FixedArray::make(32 * 32, 0),
-  }
   let root_bl = if seq.use_128x128_superblock { 0 } else { 1 }
   let result : Result[Av1FrameOutput, String] = try {
-    let mut by = 0
-    while by < ts.row_end {
-      ts.by = by
-      if ts.decode_tile_sbrow(root_bl) {
-        raise Av1DecError::Unsupported("symbol decoder overread")
+    for tile_idx in 0..<num_tiles {
+      let tile_row = tile_idx / hdr.tile_cols
+      let tile_col = tile_idx % hdr.tile_cols
+      let col_start_sb = tile_col * tile_width_sb
+      let row_start_sb = tile_row * tile_height_sb
+      let col_end_sb = av1_imin(col_start_sb + tile_width_sb, sb_cols)
+      let row_end_sb = av1_imin(row_start_sb + tile_height_sb, sb_rows)
+      let col_start = col_start_sb * sb_step
+      let row_start = row_start_sb * sb_step
+      let col_end = col_end_sb * sb_step
+      let row_end = row_end_sb * sb_step
+      let ts : Av1TileCtx = {
+        f,
+        msac: Av1Msac::init(payloads[tile_idx], hdr.disable_cdf_update),
+        cdf: av1_cdf_copy_defaults(hdr.base_q_idx),
+        col_start,
+        col_end,
+        row_start,
+        row_end,
+        tile_row,
+        bx: col_start,
+        by: row_start,
+        a_idx: tile_row * sb128w + (col_start >> 5),
+        cur_sb_cdef_idx: FixedArray::make(4, -1),
+        al_pal: FixedArray::make(2 * 32 * 3 * 8, b'\x00'),
+        pal_sz_uv: FixedArray::make(64, 0),
+        levels: FixedArray::make(32 * 34, b'\x00'),
+        edge_buf: FixedArray::make(128 * 3, b'\x00'),
+        cf: FixedArray::make(64 * 64, 0),
+        pal_idx_y: FixedArray::make(64 * 64, b'\x00'),
+        pal_idx_uv: FixedArray::make(64 * 64, b'\x00'),
+        pal: FixedArray::make(3 * 8, b'\x00'),
+        ac: FixedArray::make(32 * 32, 0),
       }
-      by = by + sb_step
+      let mut by = row_start
+      while by < row_end {
+        ts.by = by
+        if ts.decode_tile_sbrow(root_bl) {
+          raise Av1DecError::Unsupported("symbol decoder overread")
+        }
+        by = by + sb_step
+      }
     }
     // clear trailing bits check is skipped (strict mode off)
     Ok({
-      y: ts.f.planes[0],
-      u: ts.f.planes[1],
-      v: ts.f.planes[2],
+      y: f.planes[0],
+      u: f.planes[1],
+      v: f.planes[2],
       width: w,
       height: h,
       y_stride,

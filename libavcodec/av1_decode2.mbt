@@ -336,18 +336,17 @@ fn Av1TileCtx::read_pal_plane(
       6,
     ) +
     2
-  let f = self.f
   let cache = FixedArray::make(16, 0)
   let used_cache = FixedArray::make(8, 0)
   let mut l_cache = if pl != 0 {
-    self.f.pal_sz_uv[32 + by4]
+    self.pal_sz_uv[32 + by4]
   } else {
     self.f.l.pal_sz[by4]
   }
   let mut n_cache = 0
   let mut a_cache = if (by4 & 15) != 0 {
     if pl != 0 {
-      self.f.pal_sz_uv[bx4]
+      self.pal_sz_uv[bx4]
     } else {
       self.f.a[self.a_idx].pal_sz[bx4]
     }
@@ -356,7 +355,7 @@ fn Av1TileCtx::read_pal_plane(
   }
   // al_pal: [2][32][3][8]
   let al = (d : Int32, i : Int32, p : Int32, k : Int32) => {
-    f.al_pal[((d * 32 + i) * 3 + p) * 8 + k].to_int()
+    self.al_pal[((d * 32 + i) * 3 + p) * 8 + k].to_int()
   }
   let mut li = 0
   let mut ai = 0
@@ -504,12 +503,12 @@ fn Av1TileCtx::copy_pal_block_y(
 ) -> Unit {
   for x in 0..<bw4 {
     for k in 0..<8 {
-      self.f.al_pal[((0 * 32 + bx4 + x) * 3 + 0) * 8 + k] = self.pal[k]
+      self.al_pal[((0 * 32 + bx4 + x) * 3 + 0) * 8 + k] = self.pal[k]
     }
   }
   for y in 0..<bh4 {
     for k in 0..<8 {
-      self.f.al_pal[((1 * 32 + by4 + y) * 3 + 0) * 8 + k] = self.pal[k]
+      self.al_pal[((1 * 32 + by4 + y) * 3 + 0) * 8 + k] = self.pal[k]
     }
   }
 }
@@ -526,13 +525,13 @@ fn Av1TileCtx::copy_pal_block_uv(
   for pl in 1..<=2 {
     for x in 0..<bw4 {
       for k in 0..<8 {
-        self.f.al_pal[((0 * 32 + bx4 + x) * 3 + pl) * 8 + k] = self.pal[pl * 8 +
+        self.al_pal[((0 * 32 + bx4 + x) * 3 + pl) * 8 + k] = self.pal[pl * 8 +
           k]
       }
     }
     for y in 0..<bh4 {
       for k in 0..<8 {
-        self.f.al_pal[((1 * 32 + by4 + y) * 3 + pl) * 8 + k] = self.pal[pl * 8 +
+        self.al_pal[((1 * 32 + by4 + y) * 3 + pl) * 8 + k] = self.pal[pl * 8 +
           k]
       }
     }

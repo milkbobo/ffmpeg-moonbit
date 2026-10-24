@@ -115,10 +115,6 @@ priv struct Av1FrameCtx {
   a : Array[Av1BlockContext]
   /// Left context for the current SB row.
   l : Av1BlockContext
-  /// Above/left palette cache: [2][32][3][8] flattened bytes.
-  al_pal : FixedArray[Byte]
-  /// pal_sz_uv[2][32].
-  pal_sz_uv : FixedArray[Int32]
   /// ipred edge backup: 3 planes of sb128w*128*(sb128h+1).
   ipred_edge : FixedArray[FixedArray[Byte]]
   /// Dequant per segment: [seg*6 + plane*2 + (0 dc,1 ac)].
@@ -146,6 +142,10 @@ priv struct Av1TileCtx {
   mut a_idx : Int32
   /// cdef indices for the current SB (cdef_bits may be 0).
   cur_sb_cdef_idx : FixedArray[Int32]
+  /// Per-tile above/left palette cache: [2][32][3][8] flattened bytes.
+  al_pal : FixedArray[Byte]
+  /// Per-tile pal_sz_uv[2][32].
+  pal_sz_uv : FixedArray[Int32]
   // scratch buffers
   levels : FixedArray[Byte] // 32*34
   edge_buf : FixedArray[Byte] // 128*3, anchor at 128+128

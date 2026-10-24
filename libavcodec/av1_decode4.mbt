@@ -408,7 +408,7 @@ fn Av1TileCtx::decode_b(
     a.skip_mode[bx4 + i] = 0
     a.intra[bx4 + i] = 1
     a.skip[bx4 + i] = if skip { 1 } else { 0 }
-    f.pal_sz_uv[bx4 + i] = if has_chroma { pal_sz.1 } else { 0 }
+    self.pal_sz_uv[bx4 + i] = if has_chroma { pal_sz.1 } else { 0 }
   }
   for i in 0..<bh4 {
     l.tx_intra[by4 + i] = t_lh
@@ -419,7 +419,7 @@ fn Av1TileCtx::decode_b(
     l.skip_mode[by4 + i] = 0
     l.intra[by4 + i] = 1
     l.skip[by4 + i] = if skip { 1 } else { 0 }
-    f.pal_sz_uv[32 + by4 + i] = if has_chroma { pal_sz.1 } else { 0 }
+    self.pal_sz_uv[32 + by4 + i] = if has_chroma { pal_sz.1 } else { 0 }
   }
   if has_chroma {
     for i in 0..<cbw4 {

@@ -882,7 +882,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 |---|---|---|
 | H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成；渐进帧与 MBAFF 帧的错误补偿（多轮 MV 猜测 + 恢复区滤波） | SP/SI 重建、FMO、数据分区；场图片按上游边界报错；P 帧大缺口/高位深恢复未逐像素对齐 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
-| AV1 | OBU/序列与帧头、实际 tile payload 提取；8-bit 4:2:0/4:2:2/4:4:4 单 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、多 tile、高位深、`enable_intra_edge_filter=0` 等 |
+| AV1 | OBU/序列与帧头、tile payload 提取；8-bit 4:2:0/4:2:2/4:4:4 多 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、高位深、`enable_intra_edge_filter=0` 等 |
 | VP9 | profile 0/1/2/3 关键帧与帧间帧，8/10/12-bit，4:2:0/4:2:2/4:4:4；隐藏/show-existing、superframe、多 tile、概率自适应 | 复合预测（B 帧）、参考缩放 |
 | MJPEG | 8-bit baseline/progressive，重启标记与多采样 | 无损、12-bit、算术编码 |
 | PNG | 灰度/RGB/RGBA/调色板、1–16-bit、Adam7、APNG | 更多扩展元数据/色彩管理 |
@@ -1684,7 +1684,29 @@ AV1 像素路径原先按 8-bit 4:2:0 写死。序列头解析早已读取
 
 **已知边界**：`enable_intra_edge_filter=0` 的流仍与上游不一致；用同参数生成的
 4:2:0 流同样复现，确认是本轮之前就存在的 AV1 预测边滤波缺口，不是 4:4:4 引入。
-有损帧、帧间帧、多 tile、10/12-bit 与单色仍明确报错。
+有损帧、帧间帧、10/12-bit 与单色仍明确报错。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **798/798**。
+
+## 16. 2026-10-24 AV1 多 tile 无损关键帧
+
+多 tile 解码的关键是让每个 tile 成为独立的熵解码单元，同时共享帧级像素平面：
+
+- `av1_decode_keyframe_tiles()` 接收 `av1_extract_tiles` 的全部 tile；核心驱动按
+  `tile_cols/tile_rows` 推导每个 tile 的 SB 行列范围，并为每个 tile 新建
+  `Av1Msac` 与 `av1_cdf_copy_defaults()`，避免 tile 间概率状态串联。
+- above 上下文按 tile row 分 bank（`sb128w * tile_rows`），起始索引加上
+  `col_start >> 5`；left 上下文在每行 SB 起始处重置。这样 tile 边界两侧不会互相
+  读取预测/系数上下文。
+- palette 的 above/left 缓存与 `pal_sz_uv` 从帧级共享改为**每 tile 独立**，并在
+  每个 SB 行重置左侧缓存；此前多 tile 会在 tile 边界串用上一 tile 的 palette
+  上下文，导致 `pal_sz`/`use_pal` 语法错位并最终熵解码越界。
+- 像素写入仍共用整帧平面；tile 边界只影响上下文与预测可用性，不影响最终拼图。
+
+验证：`libavcodec/av1_tiles_vectors` 内嵌两条 libaom 无损流（128×64 双 tile
+列、128×128 2×2 tile），各 3 帧，**6 帧逐帧 MD5 与 libdav1d 一致**（生成脚本
+`scripts/_emit_av1_tiles_vectors.py`）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **800/800**。
