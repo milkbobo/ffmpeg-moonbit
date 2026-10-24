@@ -45,6 +45,10 @@ pub struct Av1SequenceParameters {
   mut use_128x128_superblock : Bool
   mut separate_uv_delta_q : Bool
   mut film_grain_params_present : Bool
+  /// `enable_filter_intra` (FILTER_PRED availability).
+  mut enable_filter_intra : Bool
+  /// `enable_intra_edge_filter` (intra edge filter/upsample availability).
+  mut enable_intra_edge_filter : Bool
 }
 
 ///|
@@ -236,7 +240,8 @@ fn av1_parse_sequence_payload(
     }
   }
   seq.use_128x128_superblock = br.read(1) != 0
-  br.skip(2) // filter_intra, intra_edge_filter
+  seq.enable_filter_intra = br.read(1) != 0
+  seq.enable_intra_edge_filter = br.read(1) != 0
   if !reduced {
     br.skip(4)
     seq.enable_order_hint = br.read(1) != 0
@@ -304,6 +309,8 @@ pub fn av1_parse_sequence_header(
     use_128x128_superblock: false,
     separate_uv_delta_q: false,
     film_grain_params_present: false,
+    enable_filter_intra: false,
+    enable_intra_edge_filter: false,
   }
   if data.length() == 0 {
     return Err("av1: empty input")
@@ -380,6 +387,9 @@ pub struct Av1FrameHeader {
   render_width : Int32
   render_height : Int32
   use_superres : Bool
+  /// `frame_width` before superres upscaling; equals `width` when
+  /// `use_superres` is false.
+  upscaled_width : Int32
   allow_intrabc : Bool
   frame_refs_short_signaling : Bool
   ref_frame_idx : Array[Int32]
@@ -392,11 +402,33 @@ pub struct Av1FrameHeader {
   tile_size_bytes_minus1 : Int32
   header_bits : Int32
   base_q_idx : Int32
+  /// Quantization deltas (0 when absent). V mirrors U unless
+  /// separate_uv_delta_q signalled a diff.
+  dq_y_dc : Int32
+  dq_u_dc : Int32
+  dq_u_ac : Int32
+  dq_v_dc : Int32
+  dq_v_ac : Int32
   using_qmatrix : Bool
   segmentation_enabled : Bool
   segmentation_feature_mask : Array[Int32]
   segmentation_alt_q : Array[Int32]
   delta_q_present : Bool
+  /// `delta_q_res` shift (0..=3), meaningful when `delta_q_present`.
+  delta_q_res : Int32
+  /// Per-block loop-filter deltas; only present when `delta_q_present` and
+  /// not `allow_intrabc`.
+  delta_lf_present : Bool
+  delta_lf_res : Int32
+  delta_lf_multi : Bool
+  /// Derived: all plane qindices (base + deltas) are zero.
+  coded_lossless : Bool
+  /// Derived: `coded_lossless && upscaled_width == width`.
+  all_lossless : Bool
+  /// `lr_type[i]`: 0 = none, 1 = switchable, 2/3 = Wiener, 4..=6 = SGR.
+  lr_type : Array[Int32]
+  lr_unit_shift : Int32
+  lr_uv_shift : Bool
   loop_filter_level : Array[Int32]
   loop_filter_sharpness : Int32
   cdef_damping_minus_3 : Int32
@@ -499,6 +531,7 @@ pub fn av1_parse_frame_header(
           refresh_frame_flags: 0,
           width: seq.width,
           height: seq.height,
+          upscaled_width: seq.width,
           render_width: seq.width,
           render_height: seq.height,
           use_superres: false,
@@ -514,11 +547,25 @@ pub fn av1_parse_frame_header(
           tile_size_bytes_minus1: 0,
           header_bits: 0,
           base_q_idx: 0,
+          dq_y_dc: 0,
+          dq_u_dc: 0,
+          dq_u_ac: 0,
+          dq_v_dc: 0,
+          dq_v_ac: 0,
           using_qmatrix: false,
           segmentation_enabled: false,
           segmentation_feature_mask: [],
           segmentation_alt_q: [],
           delta_q_present: false,
+          delta_q_res: 0,
+          delta_lf_present: false,
+          delta_lf_res: 0,
+          delta_lf_multi: false,
+          coded_lossless: false,
+          all_lossless: false,
+          lr_type: [],
+          lr_unit_shift: 0,
+          lr_uv_shift: false,
           loop_filter_level: [],
           loop_filter_sharpness: 0,
           cdef_damping_minus_3: 0,
@@ -631,18 +678,21 @@ pub fn av1_parse_frame_header(
         width = br.read(wb).reinterpret_as_int() + 1
         height = br.read(hb).reinterpret_as_int() + 1
       }
+      // superres_params() sits inside frame_size(), before render_size().
+      let mut use_superres = false
+      let upscaled_width = width
+      if seq.enable_superres {
+        use_superres = br.read(1) != 0
+        if use_superres {
+          let denom = br.read(3).reinterpret_as_int() + 9
+          width = (upscaled_width * 8 + denom / 2) / denom
+        }
+      }
       let mut render_width = width
       let mut render_height = height
       if br.read(1) != 0 {
         render_width = br.read(16).reinterpret_as_int() + 1
         render_height = br.read(16).reinterpret_as_int() + 1
-      }
-      let mut use_superres = false
-      if seq.enable_superres && !frame_size_override {
-        use_superres = br.read(1) != 0
-        if use_superres {
-          ignore(br.read(3))
-        }
       }
       let mut allow_intrabc = false
       let mut allow_high_precision = false
@@ -650,7 +700,12 @@ pub fn av1_parse_frame_header(
       let mut motion_mode_switchable = false
       let mut use_ref_mvs = false
       if frame_type == av1_frame_key || frame_type == av1_frame_intra_only {
-        allow_intrabc = if allow_sct { br.read(1) != 0 } else { false }
+        // allow_intrabc requires screen-content tools and no superres.
+        allow_intrabc = if allow_sct && upscaled_width == width {
+          br.read(1) != 0
+        } else {
+          false
+        }
       } else {
         if !force_integer {
           allow_high_precision = br.read(1) != 0
@@ -674,6 +729,11 @@ pub fn av1_parse_frame_header(
       let mut tile_cols_log2 = 0
       let mut tile_rows_log2 = 0
       let mut base_q_idx = 0
+      let mut dq_y_dc = 0
+      let mut dq_u_dc = 0
+      let mut dq_u_ac = 0
+      let mut dq_v_dc = 0
+      let mut dq_v_ac = 0
       let mut using_qmatrix = false
       let mut context_update_tile_id = 0
       let mut tile_size_minus1 = 0
@@ -758,26 +818,30 @@ pub fn av1_parse_frame_header(
         }
         // quantization_params
         base_q_idx = br.read(8).reinterpret_as_int()
-        if br.read1() != 0 {
-          br.skip(7) // delta_q_y_dc
+        let su7 = () => {
+          let v = br.read(7).reinterpret_as_int()
+          if (v & 0x40) != 0 {
+            v - 0x80
+          } else {
+            v
+          }
         }
+        dq_y_dc = if br.read1() != 0 { su7() } else { 0 }
         if !seq.monochrome {
           let mut diff_uv = false
           if seq.separate_uv_delta_q {
             diff_uv = br.read1() != 0
           }
-          if br.read1() != 0 {
-            br.skip(7) // delta_q_u_dc
-          }
-          if br.read1() != 0 {
-            br.skip(7) // delta_q_u_ac
-          }
+          dq_u_dc = if br.read1() != 0 { su7() } else { 0 }
+          dq_u_ac = if br.read1() != 0 { su7() } else { 0 }
+          dq_v_dc = dq_u_dc
+          dq_v_ac = dq_u_ac
           if diff_uv {
             if br.read1() != 0 {
-              br.skip(7)
+              dq_v_dc = su7()
             }
             if br.read1() != 0 {
-              br.skip(7)
+              dq_v_ac = su7()
             }
           }
         }
@@ -793,6 +857,15 @@ pub fn av1_parse_frame_header(
       let mut segmentation_masks : Array[Int32] = []
       let mut segmentation_alt_qs : Array[Int32] = []
       let mut delta_q_present = false
+      let mut delta_q_res = 0
+      let mut delta_lf_present = false
+      let mut delta_lf_res = 0
+      let mut delta_lf_multi = false
+      let lr_type : Array[Int32] = []
+      let mut lr_unit_shift = 0
+      let mut lr_uv_shift = false
+      let mut coded_lossless = false
+      let mut all_lossless = false
       let loop_filter_level : Array[Int32] = []
       let mut loop_filter_sharpness = 0
       let mut cdef_damping = 0
@@ -861,35 +934,53 @@ pub fn av1_parse_frame_header(
         if base_q_idx > 0 {
           delta_q_present = br.read1() != 0
           if delta_q_present {
-            br.skip(2) // delta_q_res
+            delta_q_res = br.read(2).reinterpret_as_int()
           }
         }
-        let lf0 = br.read(6).reinterpret_as_int()
-        let lf1 = br.read(6).reinterpret_as_int()
-        loop_filter_level.push(lf0)
-        loop_filter_level.push(lf1)
-        if !seq.monochrome && (lf0 != 0 || lf1 != 0) {
-          loop_filter_level.push(br.read(6).reinterpret_as_int())
-          loop_filter_level.push(br.read(6).reinterpret_as_int())
+        // delta_lf_params follow delta_q, suppressed by intrabc.
+        if delta_q_present && !allow_intrabc {
+          delta_lf_present = br.read1() != 0
+          if delta_lf_present {
+            delta_lf_res = br.read(2).reinterpret_as_int()
+            delta_lf_multi = br.read1() != 0
+          }
         }
-        loop_filter_sharpness = br.read(3).reinterpret_as_int()
-        let lf_delta_enabled = br.read1() != 0
-        if lf_delta_enabled {
-          let update = br.read1() != 0
-          if update {
-            for _ in 0..<8 {
-              if br.read1() != 0 {
-                br.skip(7) // ref_delta su(1+6)
+        // coded_lossless: every plane qindex (base + deltas) is zero.
+        coded_lossless = base_q_idx == 0 &&
+          dq_y_dc == 0 &&
+          dq_u_dc == 0 &&
+          dq_u_ac == 0
+        all_lossless = coded_lossless && upscaled_width == width
+        // loop_filter_params are absent when lossless or intrabc.
+        if !coded_lossless && !allow_intrabc {
+          let lf0 = br.read(6).reinterpret_as_int()
+          let lf1 = br.read(6).reinterpret_as_int()
+          loop_filter_level.push(lf0)
+          loop_filter_level.push(lf1)
+          if !seq.monochrome && (lf0 != 0 || lf1 != 0) {
+            loop_filter_level.push(br.read(6).reinterpret_as_int())
+            loop_filter_level.push(br.read(6).reinterpret_as_int())
+          }
+          loop_filter_sharpness = br.read(3).reinterpret_as_int()
+          let lf_delta_enabled = br.read1() != 0
+          if lf_delta_enabled {
+            let update = br.read1() != 0
+            if update {
+              for _ in 0..<8 {
+                if br.read1() != 0 {
+                  br.skip(7) // ref_delta su(1+6)
+                }
               }
-            }
-            for _ in 0..<2 {
-              if br.read1() != 0 {
-                br.skip(7) // mode_delta su(1+6)
+              for _ in 0..<2 {
+                if br.read1() != 0 {
+                  br.skip(7) // mode_delta su(1+6)
+                }
               }
             }
           }
         }
-        if seq.enable_cdef && !allow_intrabc {
+        // cdef_params are absent when lossless, intrabc or disabled.
+        if !coded_lossless && !allow_intrabc && seq.enable_cdef {
           cdef_damping = br.read(2).reinterpret_as_int()
           cdef_bits = br.read(2).reinterpret_as_int()
           for _ in 0..<(1 << cdef_bits) {
@@ -901,17 +992,57 @@ pub fn av1_parse_frame_header(
             }
           }
         }
-        if !seq.reduced_still_picture_header {
+        // lr_params: per-plane restoration type and unit sizing.
+        let num_planes = if seq.monochrome { 1 } else { 3 }
+        if !all_lossless && !allow_intrabc && seq.enable_restoration {
+          let mut uses_lr = false
+          let mut uses_chroma_lr = false
+          for i in 0..<num_planes {
+            let t = br.read(2).reinterpret_as_int()
+            lr_type.push(t)
+            if t != 0 {
+              uses_lr = true
+              if i > 0 {
+                uses_chroma_lr = true
+              }
+            }
+          }
+          if uses_lr {
+            // increment(lo, hi): one or two flag bits.
+            if seq.use_128x128_superblock {
+              lr_unit_shift = 1
+              if br.read1() != 0 {
+                lr_unit_shift = 2
+              }
+            } else {
+              lr_unit_shift = 0
+              if br.read1() != 0 {
+                lr_unit_shift = if br.read1() != 0 { 2 } else { 1 }
+              }
+            }
+            if seq.chroma_subsampling_x &&
+              seq.chroma_subsampling_y &&
+              uses_chroma_lr {
+              lr_uv_shift = br.read1() != 0
+            }
+          }
+        }
+        if coded_lossless {
+          tx_mode = 0 // ONLY_4X4
+        } else if !seq.reduced_still_picture_header {
           tx_mode = if br.read1() != 0 { 2 } else { 1 }
-          if frame_type == av1_frame_inter {
-            reference_select = br.read1() != 0
-          }
-          if !error_resilient {
-            allow_warped = br.read1() != 0
-          }
-          reduced_tx_set = br.read1() != 0
         } else {
           tx_mode = 1
+        }
+        if frame_type == av1_frame_inter {
+          reference_select = br.read1() != 0
+        }
+        // allow_warped_motion is suppressed for intra frames.
+        if frame_type == av1_frame_inter && !error_resilient {
+          allow_warped = br.read1() != 0
+        }
+        if !seq.reduced_still_picture_header {
+          reduced_tx_set = br.read1() != 0
         }
         if frame_type == av1_frame_inter {
           for _ in 0..<7 {
@@ -1018,6 +1149,7 @@ pub fn av1_parse_frame_header(
         render_width,
         render_height,
         use_superres,
+        upscaled_width,
         allow_intrabc,
         frame_refs_short_signaling: short_sig,
         ref_frame_idx: refs,
@@ -1030,11 +1162,25 @@ pub fn av1_parse_frame_header(
         tile_size_bytes_minus1: tile_size_minus1,
         header_bits: (br.count() + 7) / 8 * 8,
         base_q_idx,
+        dq_y_dc,
+        dq_u_dc,
+        dq_u_ac,
+        dq_v_dc,
+        dq_v_ac,
         using_qmatrix,
         segmentation_enabled,
         segmentation_feature_mask: segmentation_masks,
         segmentation_alt_q: segmentation_alt_qs,
         delta_q_present,
+        delta_q_res,
+        delta_lf_present,
+        delta_lf_res,
+        delta_lf_multi,
+        coded_lossless,
+        all_lossless,
+        lr_type,
+        lr_unit_shift,
+        lr_uv_shift,
         loop_filter_level,
         loop_filter_sharpness,
         cdef_damping_minus_3: cdef_damping,
