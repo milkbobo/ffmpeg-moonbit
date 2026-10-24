@@ -1921,3 +1921,12 @@ extradata、size/dts/duration/keyframe 全部一致；非法参数与空包负�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **826/826**。
+
+## 31. 2026-10-24 HEVC-in-MP4 写入器
+
+新增 `libavformat/mp4_hevc_mux.mbt`：写 `hvc1` VisualSampleEntry + `hvcC`
+与视频样本表。回归使用真实 108 字节 Main-profile hvcC，`av_mov_open`
+验证 `hvc1`、64×48、extradata、两个样本的 dts/duration/keyframe。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **827/827**。
