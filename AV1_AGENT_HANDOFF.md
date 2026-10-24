@@ -219,12 +219,18 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 
 ## 7. 收敛后的路线（按优先级）
 
-1. **有损关键帧**：帧头已有 LF/CDEF/LR 参数；需要移植 dav1d 的
-   `lf_apply_tmpl.c`+`lf_mask.c`（去块）、`cdef_apply_tmpl.c`+
-   `cdef_tmpl.c`、`lr_apply_tmpl.c`+SGR/Wiener 核；注意无损路径里
-   `av1_decode_keyframe` 目前对 `!coded_lossless` 直接报
-   `"av1: lossy frames unsupported (need CDEF/LF/LR)"`。
-   有损还带出非 4x4 tx（itx 分发已就绪）与 txtp 符号解码路径。
+1. **有损关键帧**（2026-10-24 晚开工，见 PORTING_HISTORY §50）：解码层
+   （tx_mode=2 逐块 tx size、txtp_intra1/2、eob_bin 全表、dequant/cf_max）
+   已就位；`-enable-cdef 0 -enable-restoration 0` 的 crf30 向量 8 帧中
+   6 帧可整帧解码、2 帧 overread——分歧点已用逐 tx 子块 msac cnt 插桩
+   定位到帧尾 (18,23) 的 4x4 IDTX 块附近（levels 转置布局已修，见 §50，
+   但该分歧另有原因）。**下一步**：①写全帧 C 仲裁器（在
+   `C:/Users/milkb/AppData/Local/Temp/trace_arb.c` 基础上扩展，或扩展
+   `.scratch/av1/trace2.py` 补 tx size/txtp/eob 大表符号）对拍找首个
+   分歧符号；②移植 LF（`lf_mask.c`+`lf_apply_tmpl.c`+
+   `loopfilter_tmpl.c`，帧头 LF 参数已解析但 delta 被 skip、CDEF 强度
+   被 skip）；③CDEF/LR 后续。注意 ffmpeg `-skip_loop_filter` 对
+   libdav1d 无效，未滤波参考不可得。
 2. **多 tile / 128x128 SB / 4:2:2 / 4:4:4 / 高位深**：入口现在硬编码
    4:2:0、8bit、单 tile、64x64 SB（`seq.use_128x128_superblock` 支持
    读但 edge 树/上下文环按 64x64 布局）。
