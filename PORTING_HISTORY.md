@@ -2038,3 +2038,16 @@ CodecID/CodecPrivate、4 个包的交错顺序、stream_index、PTS 与 payload�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **840/840**。
+
+## 41. 2026-10-24 HLS 媒体播放列表写入
+
+新增 `libavformat/hls_mux.mbt` 的 `hls_write_media_playlist`：输出
+`#EXTM3U`/`EXT-X-VERSION`/`EXT-X-TARGETDURATION`/`EXT-X-MEDIA-SEQUENCE`、
+逐段 `#EXTINF` 与可选 `#EXT-X-ENDLIST`。target duration 可显式给出，否则
+取最大段时长上取整。
+
+回归把输出重新交给 `av_hls_parse`，验证版本、目标时长、media sequence、
+3 个 segment 的 URI/时长与 ENDLIST；空列表/无 ENDLIST 也覆盖。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **842/842**。
