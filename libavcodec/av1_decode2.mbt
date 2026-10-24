@@ -120,7 +120,7 @@ fn Av1TileCtx::decode_coefs(
     for i in 0..<(stride * clear_rows) {
       levels[i] = b'\x00'
     }
-    let shift = slh + 2
+    let shift = if tx_class == 2 { slw + 2 } else { slh + 2 }
     let shift2 = if tx_class == 2 { slh + 2 } else { 0 }
     let mask = if tx_class == 2 { (4 << slw) - 1 } else { (4 << slh) - 1 }
     let mut ctx = 1 +
