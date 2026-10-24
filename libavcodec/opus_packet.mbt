@@ -40,6 +40,12 @@ pub struct OpusPacket {
 }
 
 ///|
+/// Total packet duration in 48 kHz samples.
+pub fn OpusPacket::total_samples(self : OpusPacket) -> Int32 {
+  self.total_samples
+}
+
+///|
 /// `ff_opus_frame_duration`: samples per frame at 48 kHz by TOC config. */
 let opus_frame_duration : FixedArray[Int32] = [
   480, 960, 1920, 2880, 480, 960, 1920, 2880, 480, 960, 1920, 2880, 480, 960, 480,

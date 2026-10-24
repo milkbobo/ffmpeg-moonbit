@@ -1805,3 +1805,19 @@ buffer_fullness 全 1）。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **813/813**。
+
+## 23. 2026-10-24 Ogg/Opus demuxer
+
+新增 `libavformat/ogg.mbt`，支持单个 Opus 逻辑流的常见 `.opus`/`.ogg` 文件：
+
+- Ogg 页解析：`OggS` 捕获、granule、serial、segment table 与 lacing
+  重组（含跨页 packet）；按页 CRC-32/MPEG-2（非反射、init 0）校验。
+- 识别 `OpusHead`/`OpusTags`，保存 OpusHead 为 extradata，输出 48 kHz、
+  pre-skip 与声道数。
+- 数据包用 `opus_parse_packet` 得到 TOC 时长；PTS 按
+  `cumulative - pre_skip` 计算，并用页 granule 修正末包 duration。
+- 真实 libopus 流（48 kHz 单声道、0.2 s、64 kb/s）回归：11 个包的大小、
+  PTS、duration 与 ffprobe 一致，包负载 MD5 全部对齐；损坏页 CRC 负例通过。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **815/815**。
