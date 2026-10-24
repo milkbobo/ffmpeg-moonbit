@@ -1896,3 +1896,15 @@ size/dts/duration 与 payload 全部一致。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **823/823**。
+
+## 29. 2026-10-24 AV1-in-MP4 写入器
+
+新增 `libavformat/mp4_av1_mux.mbt`：写 `av01` VisualSampleEntry + `av1C`
+（调用方提供配置记录）、`vmhd`/`dinf` 与视频样本表。逐包 duration、
+关键帧 `stss`、`stts` run-length 与 H.264 写入器一致。
+
+回归用 4 字节 av1C 写 3 个样本，`av_mov_open` 回读验证 `av01`、64×48、
+extradata、size/dts/duration/keyframe 全部一致；非法参数与空包负例通过。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **825/825**。
