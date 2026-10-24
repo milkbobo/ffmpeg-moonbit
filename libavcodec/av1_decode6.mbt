@@ -14,7 +14,7 @@ fn Av1TileCtx::backup_ipred_edge(self : Av1TileCtx) -> Unit {
   }
   let uv_off = ((x_off * 4) >> 1) +
     ((((self.by + f.sb_step) * 4) >> 1) - 1) * f.uv_stride
-  for pl in 1..=2 {
+  for pl in 1..<=2 {
     let plane = f.planes[pl]
     let edge = f.ipred_edge[pl]
     for i in 0..<((4 * (self.col_end - x_off)) >> 1) {
@@ -27,11 +27,10 @@ fn Av1TileCtx::backup_ipred_edge(self : Av1TileCtx) -> Unit {
 /// One superblock row of one tile (decode_tile_sbrow, pass 0, intra only).
 fn Av1TileCtx::decode_tile_sbrow(
   self : Av1TileCtx,
-  root_bl : Int,
+  root_bl : Int32,
 ) -> Bool raise Av1DecError {
   let f = self.f
   let sb_step = f.sb_step
-  self.xrow_by = self.by
   f.l.reset_keyframe()
   let mut bx = self.col_start
   self.a_idx = self.tile_row * f.sb128w
@@ -56,7 +55,6 @@ fn Av1TileCtx::decode_tile_sbrow(
   self.backup_ipred_edge()
   // error out on symbol decoder overread
   if self.msac.cnt <= -15 {
-    println("OVERREAD rowby=" + self.xrow_by.to_string() + " cnt=" + self.msac.cnt.to_string())
     return true
   }
   false
@@ -68,10 +66,10 @@ pub struct Av1FrameOutput {
   y : FixedArray[Byte]
   u : FixedArray[Byte]
   v : FixedArray[Byte]
-  width : Int
-  height : Int
-  y_stride : Int
-  uv_stride : Int
+  width : Int32
+  height : Int32
+  y_stride : Int32
+  uv_stride : Int32
 }
 
 ///|
@@ -108,8 +106,8 @@ pub fn av1_decode_keyframe(
   }
   let w = hdr.width
   let h = hdr.height
-  let bw = ((w + 7) >> 3) << 1
-  let bh = ((h + 7) >> 3) << 1
+  let bw = (w + 7) >> 3 << 1
+  let bh = (h + 7) >> 3 << 1
   let sb128 = if seq.use_128x128_superblock { 1 } else { 0 }
   let sb128w = (bw + 31) >> 5
   let sb128h = (bh + 31) >> 5
@@ -119,14 +117,17 @@ pub fn av1_decode_keyframe(
   let y_stride = aligned_w
   let uv_stride = aligned_w >> 1
   let y_plane : FixedArray[Byte] = FixedArray::make(
-    y_stride * (h + 2 * sb_step * 4 + 64), b'\x80',
+    y_stride * (h + 2 * sb_step * 4 + 64),
+    b'\x80',
   )
   let uv_h = (h + 1) >> 1
   let u_plane : FixedArray[Byte] = FixedArray::make(
-    uv_stride * (uv_h + sb_step * 2 + 64), b'\x80',
+    uv_stride * (uv_h + sb_step * 2 + 64),
+    b'\x80',
   )
   let v_plane : FixedArray[Byte] = FixedArray::make(
-    uv_stride * (uv_h + sb_step * 2 + 64), b'\x80',
+    uv_stride * (uv_h + sb_step * 2 + 64),
+    b'\x80',
   )
   let planes : FixedArray[FixedArray[Byte]] = [y_plane, u_plane, v_plane]
   let a = []
@@ -161,7 +162,6 @@ pub fn av1_decode_keyframe(
     seg_qidx: FixedArray::make(8, 0),
   }
   f.init_quant()
-  println("PROBE frame w=" + w.to_string() + " h=" + h.to_string() + " bw=" + bw.to_string() + " bh=" + bh.to_string() + " tiles=" + tile.length().to_string())
   let ts : Av1TileCtx = {
     f,
     msac: Av1Msac::init(tile, hdr.disable_cdf_update),
@@ -173,7 +173,6 @@ pub fn av1_decode_keyframe(
     tile_row: 0,
     bx: 0,
     by: 0,
-    xrow_by: 0,
     a_idx: 0,
     cur_sb_cdef_idx: FixedArray::make(4, -1),
     levels: FixedArray::make(32 * 34, b'\x00'),
@@ -189,17 +188,20 @@ pub fn av1_decode_keyframe(
     let mut by = 0
     while by < ts.row_end {
       ts.by = by
-      println("PROBE sbrow by=" + by.to_string())
       if ts.decode_tile_sbrow(root_bl) {
         raise Av1DecError::Unsupported("symbol decoder overread")
       }
-      println("ROWDONE by=" + by.to_string())
       by = by + sb_step
     }
     // clear trailing bits check is skipped (strict mode off)
     Ok({
-      y: ts.f.planes[0], u: ts.f.planes[1], v: ts.f.planes[2], width: w,
-      height: h, y_stride, uv_stride,
+      y: ts.f.planes[0],
+      u: ts.f.planes[1],
+      v: ts.f.planes[2],
+      width: w,
+      height: h,
+      y_stride,
+      uv_stride,
     })
   } catch {
     Av1DecError::Unsupported(msg) => Err(msg)

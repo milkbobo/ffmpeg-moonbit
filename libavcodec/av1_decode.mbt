@@ -7,49 +7,49 @@
 
 ///|
 /// Block partition values (dav1d `enum BlockPartition`).
-let av1_partition_none : Int = 0
+let av1_partition_none : Int32 = 0
 
 ///|
-let av1_partition_h : Int = 1
+let av1_partition_h : Int32 = 1
 
 ///|
-let av1_partition_v : Int = 2
+let av1_partition_v : Int32 = 2
 
 ///|
-let av1_partition_split : Int = 3
+let av1_partition_split : Int32 = 3
 
 ///|
-let av1_partition_t_top : Int = 4
+let av1_partition_t_top : Int32 = 4
 
 ///|
-let av1_partition_t_left : Int = 6
+let av1_partition_t_left : Int32 = 6
 
 ///|
-let av1_partition_t_right : Int = 7
+let av1_partition_t_right : Int32 = 7
 
 ///|
-let av1_partition_h4 : Int = 8
+let av1_partition_h4 : Int32 = 8
 
 ///|
-let av1_partition_v4 : Int = 9
+let av1_partition_v4 : Int32 = 9
 
 ///|
 /// `BlockContext` from dav1d env.h. All arrays use Int for signed entries.
 priv struct Av1BlockContext {
-  mode : FixedArray[Int]
-  lcoef : FixedArray[Int]
-  ccoef : FixedArray[Int] // [2][32] flattened
-  seg_pred : FixedArray[Int]
-  skip : FixedArray[Int]
-  skip_mode : FixedArray[Int]
-  intra : FixedArray[Int]
-  tx_intra : FixedArray[Int]
-  tx : FixedArray[Int]
-  tx_lpf_y : FixedArray[Int]
-  tx_lpf_uv : FixedArray[Int]
-  partition : FixedArray[Int] // [16]
-  uvmode : FixedArray[Int]
-  pal_sz : FixedArray[Int]
+  mode : FixedArray[Int32]
+  lcoef : FixedArray[Int32]
+  ccoef : FixedArray[Int32] // [2][32] flattened
+  seg_pred : FixedArray[Int32]
+  skip : FixedArray[Int32]
+  skip_mode : FixedArray[Int32]
+  intra : FixedArray[Int32]
+  tx_intra : FixedArray[Int32]
+  tx : FixedArray[Int32]
+  tx_lpf_y : FixedArray[Int32]
+  tx_lpf_uv : FixedArray[Int32]
+  partition : FixedArray[Int32] // [16]
+  uvmode : FixedArray[Int32]
+  pal_sz : FixedArray[Int32]
 }
 
 ///|
@@ -99,15 +99,15 @@ fn Av1BlockContext::reset_keyframe(self : Av1BlockContext) -> Unit {
 priv struct Av1FrameCtx {
   seq : Av1SequenceParameters
   hdr : Av1FrameHeader
-  bw : Int
-  bh : Int
-  sb128w : Int
-  sb_shift : Int
-  sb_step : Int
+  bw : Int32
+  bh : Int32
+  sb128w : Int32
+  sb_shift : Int32
+  sb_step : Int32
   /// Picture planes (8-bit), stride in pixels.
   planes : FixedArray[FixedArray[Byte]]
-  y_stride : Int
-  uv_stride : Int
+  y_stride : Int32
+  uv_stride : Int32
   /// Above-context ring: sb128w * tile_rows entries.
   a : Array[Av1BlockContext]
   /// Left context for the current SB row.
@@ -115,15 +115,15 @@ priv struct Av1FrameCtx {
   /// Above/left palette cache: [2][32][3][8] flattened bytes.
   al_pal : FixedArray[Byte]
   /// pal_sz_uv[2][32].
-  pal_sz_uv : FixedArray[Int]
+  pal_sz_uv : FixedArray[Int32]
   /// ipred edge backup: 3 planes of sb128w*128*(sb128h+1).
   ipred_edge : FixedArray[FixedArray[Byte]]
   /// Dequant per segment: [seg*6 + plane*2 + (0 dc,1 ac)].
-  dq : FixedArray[Int]
+  dq : FixedArray[Int32]
   /// Per-segment lossless flags (dav1d segmentation.lossless).
   seg_lossless : FixedArray[Bool]
   /// Per-segment qidx.
-  seg_qidx : FixedArray[Int]
+  seg_qidx : FixedArray[Int32]
 }
 
 ///|
@@ -132,70 +132,69 @@ priv struct Av1TileCtx {
   f : Av1FrameCtx
   msac : Av1Msac
   cdf : Av1CdfCtx
-  col_start : Int
-  col_end : Int
-  row_start : Int
-  row_end : Int
-  tile_row : Int
-  mut bx : Int
-  mut by : Int
+  col_start : Int32
+  col_end : Int32
+  row_start : Int32
+  row_end : Int32
+  tile_row : Int32
+  mut bx : Int32
+  mut by : Int32
   /// Row start y for diagnostics.
-  mut xrow_by : Int
-  mut a_idx : Int
+  mut a_idx : Int32
   /// cdef indices for the current SB (cdef_bits may be 0).
-  cur_sb_cdef_idx : FixedArray[Int]
+  cur_sb_cdef_idx : FixedArray[Int32]
   // scratch buffers
   levels : FixedArray[Byte] // 32*34
   edge_buf : FixedArray[Byte] // 128*3, anchor at 128+128
-  cf : FixedArray[Int] // coefficients
+  cf : FixedArray[Int32] // coefficients
   pal_idx_y : FixedArray[Byte] // 64*64/2? use full byte per idx (bw4*bh4*16)
   pal_idx_uv : FixedArray[Byte]
   pal : FixedArray[Byte] // [3][8]
-  ac : FixedArray[Int] // 32*32
+  ac : FixedArray[Int32] // 32*32
 }
 
 ///|
-fn av1_txfm_w(tx : Int) -> Int {
+fn av1_txfm_w(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 0)
 }
 
 ///|
-fn av1_txfm_h(tx : Int) -> Int {
+fn av1_txfm_h(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 1)
 }
 
 ///|
-fn av1_txfm_lw(tx : Int) -> Int {
+fn av1_txfm_lw(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 2)
 }
 
 ///|
-fn av1_txfm_lh(tx : Int) -> Int {
+fn av1_txfm_lh(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 3)
 }
 
 ///|
-fn av1_txfm_min(tx : Int) -> Int {
+fn av1_txfm_min(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 4)
 }
 
 ///|
-fn av1_txfm_max(tx : Int) -> Int {
+fn av1_txfm_max(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 5)
 }
 
 ///|
-fn av1_txfm_sub(tx : Int) -> Int {
+fn av1_txfm_sub(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 6)
 }
 
 ///|
-fn av1_txfm_ctx(tx : Int) -> Int {
+fn av1_txfm_ctx(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 7)
 }
 
 ///|
-fn av1_bdim(bs : Int, i : Int) -> Int {
+fn av1_bdim(bs : Int32, i : Int32) -> Int32 {
   av1_block_dimensions[bs * 4 + i].to_int()
 }
 
@@ -218,10 +217,10 @@ fn Av1FrameCtx::init_quant(self : Av1FrameCtx) -> Unit {
       av1_iclip_u8(
         self.hdr.base_q_idx +
         (if i < self.hdr.segmentation_alt_q.length() {
-            self.hdr.segmentation_alt_q[i]
-          } else {
-            0
-          }),
+          self.hdr.segmentation_alt_q[i]
+        } else {
+          0
+        }),
       )
     } else {
       self.hdr.base_q_idx
@@ -252,49 +251,43 @@ fn Av1FrameCtx::init_quant(self : Av1FrameCtx) -> Unit {
 }
 
 ///|
-fn av1_iclip_u8(v : Int) -> Int {
+fn av1_iclip_u8(v : Int32) -> Int32 {
   av1_imin(av1_imax(v, 0), 255)
 }
 
 ///|
 /// Intra-block record (the intra half of dav1d's Av1Block).
 priv struct Av1IntraBlock {
-  seg_id : Int
+  seg_id : Int32
   skip : Bool
-  y_mode : Int
-  y_angle : Int
-  uv_mode : Int
-  uv_angle : Int
-  cfl_alpha : (Int, Int)
-  pal_sz : (Int, Int)
-  tx : Int
-  uvtx : Int
+  y_mode : Int32
+  y_angle : Int32
+  uv_mode : Int32
+  uv_angle : Int32
+  cfl_alpha : (Int32, Int32)
+  pal_sz : (Int32, Int32)
+  tx : Int32
+  uvtx : Int32
 }
 
 ///|
 /// `get_skip_ctx` from recon_tmpl.c (loop form of the bit tricks).
 fn av1_get_skip_ctx(
-  tx : Int,
-  bs : Int,
-  a : FixedArray[Int],
-  a_off : Int,
-  l : FixedArray[Int],
-  l_off : Int,
+  tx : Int32,
+  bs : Int32,
+  a : FixedArray[Int32],
+  a_off : Int32,
+  l : FixedArray[Int32],
+  l_off : Int32,
   chroma : Bool,
-) -> Int {
+) -> Int32 {
   let lw = av1_txfm_lw(tx)
   let lh = av1_txfm_lh(tx)
   if chroma {
     let not_one_blk = av1_bdim(bs, 2) -
-        (
-          if av1_bdim(bs, 2) != 0 && true { 1 } else { 0 }
-        ) >
-        lw ||
-      av1_bdim(bs, 3) -
-        (
-          if av1_bdim(bs, 3) != 0 && true { 1 } else { 0 }
-        ) >
-        lh
+      (if av1_bdim(bs, 2) != 0 && true { 1 } else { 0 }) >
+      lw ||
+      av1_bdim(bs, 3) - (if av1_bdim(bs, 3) != 0 && true { 1 } else { 0 }) > lh
     let ca = {
       let mut any = false
       for i in 0..<(1 << lw) {
@@ -313,8 +306,10 @@ fn av1_get_skip_ctx(
       }
       any
     }
-    7 + (if not_one_blk { 3 } else { 0 }) + (if ca { 1 } else { 0 }) +
-      (if cl { 1 } else { 0 })
+    7 +
+    (if not_one_blk { 3 } else { 0 }) +
+    (if ca { 1 } else { 0 }) +
+    (if cl { 1 } else { 0 })
   } else if av1_bdim(bs, 2) == lw && av1_bdim(bs, 3) == lh {
     0
   } else {
@@ -341,12 +336,12 @@ fn av1_get_skip_ctx(
 ///|
 /// `get_dc_sign_ctx` (loop form).
 fn av1_get_dc_sign_ctx(
-  tx : Int,
-  a : FixedArray[Int],
-  a_off : Int,
-  l : FixedArray[Int],
-  l_off : Int,
-) -> Int {
+  tx : Int32,
+  a : FixedArray[Int32],
+  a_off : Int32,
+  l : FixedArray[Int32],
+  l_off : Int32,
+) -> Int32 {
   let nw = av1_imin(1 << av1_txfm_lw(tx), 16)
   let nh = av1_imin(1 << av1_txfm_lh(tx), 16)
   let mut s = 0
@@ -362,7 +357,7 @@ fn av1_get_dc_sign_ctx(
 
 ///|
 /// `read_golomb` from recon_tmpl.c.
-fn Av1Msac::read_golomb(self : Av1Msac) -> Int {
+fn Av1Msac::read_golomb(self : Av1Msac) -> Int32 {
   let mut len = 0
   let mut val = 1
   while self.decode_bool_equi() == 0 && len < 32 {
@@ -379,19 +374,21 @@ fn Av1Msac::read_golomb(self : Av1Msac) -> Int {
 /// `get_lo_ctx` from recon_tmpl.c; returns (ctx, hi_mag).
 fn av1_get_lo_ctx(
   levels : FixedArray[Byte],
-  tx_class : Int,
-  ctx_tbl : Int,
-  x : Int,
-  y : Int,
-  stride : Int,
-) -> (Int, Int) {
-  let lv = (i : Int, j : Int) => levels[i * stride + j].to_int()
+  base : Int32,
+  tx_class : Int32,
+  ctx_tbl : Int32,
+  x : Int32,
+  y : Int32,
+  stride : Int32,
+) -> (Int32, Int32) {
+  let lv = (i : Int32, j : Int32) => levels[base + i * stride + j].to_int()
   let mag0 = lv(0, 1) + lv(1, 0)
   if tx_class == 0 {
     let hi_mag = mag0 + lv(1, 1)
     let mag = hi_mag + lv(0, 2) + lv(2, 0)
-    let offset = av1_lo_ctx_offsets[ctx_tbl * 25 + av1_imin(y, 4) * 5 +
-        av1_imin(x, 4)].to_int()
+    let offset = av1_lo_ctx_offsets[ctx_tbl * 25 +
+    av1_imin(y, 4) * 5 +
+    av1_imin(x, 4)].to_int()
     (offset + (if mag > 512 { 4 } else { (mag + 64) >> 7 }), hi_mag)
   } else {
     let hi_mag = mag0 + lv(0, 2)

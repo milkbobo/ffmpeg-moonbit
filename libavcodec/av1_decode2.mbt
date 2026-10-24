@@ -3,30 +3,29 @@
 /// `(eob, txtp, res_ctx)`; eob = -1 means all-skip.
 fn Av1TileCtx::decode_coefs(
   self : Av1TileCtx,
-  a : FixedArray[Int],
-  a_off : Int,
-  l : FixedArray[Int],
-  l_off : Int,
-  tx : Int,
-  bs : Int,
+  a : FixedArray[Int32],
+  a_off : Int32,
+  l : FixedArray[Int32],
+  l_off : Int32,
+  tx : Int32,
+  bs : Int32,
   b : Av1IntraBlock,
   intra : Bool,
-  plane : Int,
-  cf : FixedArray[Int],
-) -> (Int, Int, Int) {
+  plane : Int32,
+  cf : FixedArray[Int32],
+) -> (Int32, Int32, Int32) {
   let chroma = if plane != 0 { 1 } else { 0 }
   let lossless = self.f.seg_lossless[b.seg_id]
   let t_dim_ctx = av1_txfm_ctx(tx)
   let sctx = av1_get_skip_ctx(tx, bs, a, a_off, l, l_off, chroma == 1)
   let all_skip = self.msac.decode_bool_adapt(
-    self.cdf.coef_skip, (t_dim_ctx * 13 + sctx) * 2,
+    self.cdf.coef_skip,
+    (t_dim_ctx * 13 + sctx) * 2,
   )
   if all_skip != 0 {
     let txtp0 = if lossless { 16 } else { 0 }
-    println("CF p" + plane.to_string() + " skip=1 rng=" + self.msac.rng.reinterpret_as_int().to_string())
     return (-1, txtp0, 0x40)
   }
-  println("CF p" + plane.to_string() + " skip=0 rng=" + self.msac.rng.reinterpret_as_int().to_string())
   let txtp = if lossless {
     16 // WHT_WHT
   } else if av1_txfm_max(tx) + (if intra { 1 } else { 0 }) >= 4 {
@@ -48,12 +47,16 @@ fn Av1TileCtx::decode_coefs(
     let t_dim_min = av1_txfm_min(tx)
     if self.f.hdr.reduced_tx_set || t_dim_min == 2 {
       let idx = self.msac.decode_symbol_adapt(
-        self.cdf.txtp_intra2, (t_dim_min * 13 + y_mode_nofilt) * 8, 4,
+        self.cdf.txtp_intra2,
+        (t_dim_min * 13 + y_mode_nofilt) * 8,
+        4,
       )
       av1_tx_types_per_set[idx].to_int()
     } else {
       let idx = self.msac.decode_symbol_adapt(
-        self.cdf.txtp_intra1, (t_dim_min * 13 + y_mode_nofilt) * 8, 6,
+        self.cdf.txtp_intra1,
+        (t_dim_min * 13 + y_mode_nofilt) * 8,
+        6,
       )
       av1_tx_types_per_set[idx + 5].to_int()
     }
@@ -66,29 +69,37 @@ fn Av1TileCtx::decode_coefs(
   let eob_bin = match tx2dszctx {
     0 =>
       self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_16, (chroma * 2 + is_1d) * 8, 4,
+        self.cdf.eob_bin_16,
+        (chroma * 2 + is_1d) * 8,
+        4,
       )
     1 =>
       self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_32, (chroma * 2 + is_1d) * 8, 5,
+        self.cdf.eob_bin_32,
+        (chroma * 2 + is_1d) * 8,
+        5,
       )
     2 =>
       self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_64, (chroma * 2 + is_1d) * 8, 6,
+        self.cdf.eob_bin_64,
+        (chroma * 2 + is_1d) * 8,
+        6,
       )
     3 =>
       self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_128, (chroma * 2 + is_1d) * 8, 7,
+        self.cdf.eob_bin_128,
+        (chroma * 2 + is_1d) * 8,
+        7,
       )
     4 =>
       self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_256, (chroma * 2 + is_1d) * 16, 8,
+        self.cdf.eob_bin_256,
+        (chroma * 2 + is_1d) * 16,
+        8,
       )
     5 => self.msac.decode_symbol_adapt(self.cdf.eob_bin_512, chroma * 16, 9)
-    _ =>
-      self.msac.decode_symbol_adapt(self.cdf.eob_bin_1024, chroma * 16, 10)
+    _ => self.msac.decode_symbol_adapt(self.cdf.eob_bin_1024, chroma * 16, 10)
   }
-  println("CF p" + plane.to_string() + " eob_bin=" + eob_bin.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
   let eob = if eob_bin > 1 {
     let hi = self.msac.decode_bool_adapt(
       self.cdf.eob_hi_bit,
@@ -99,9 +110,7 @@ fn Av1TileCtx::decode_coefs(
   } else {
     eob_bin
   }
-  println("C tx=" + tx.to_string() + " eob_bin=" + eob_bin.to_string() + " eob=" + eob.to_string() + " txtp=" + txtp.to_string())
-  println("CF p" + plane.to_string() + " eob=" + eob.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
-  let eob_cdf_base = (t_dim_ctx * 2 + chroma) * 4
+  let eob_cdf_base = (t_dim_ctx * 2 + chroma) * 4 * 4
   let hi_cdf_base = (av1_imin(t_dim_ctx, 3) * 2 + chroma) * 84
   let mut rc = 0
   let mut dc_tok = 0
@@ -127,9 +136,10 @@ fn Av1TileCtx::decode_coefs(
       (if eob > 2 << tx2dszctx { 1 } else { 0 }) +
       (if eob > 4 << tx2dszctx { 1 } else { 0 })
     let eob_tok = self.msac.decode_symbol_adapt(
-      self.cdf.eob_base_tok, eob_cdf_base + ctx * 4, 2,
+      self.cdf.eob_base_tok,
+      eob_cdf_base + ctx * 4,
+      2,
     )
-    println("CF p" + plane.to_string() + " eobtok=" + eob_tok.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
     let mut tok = eob_tok + 1
     let mut level_tok = tok * 0x41
     let mut mag = 0
@@ -151,22 +161,16 @@ fn Av1TileCtx::decode_coefs(
       rc = (x << shift2) | y
     }
     if eob_tok == 2 {
-      ctx = if
-        (if tx_class == 0 { (x | y) > 1 } else { y != 0 }) {
+      ctx = if (if tx_class == 0 { (x | y) > 1 } else { y != 0 }) {
         14
       } else {
         7
       }
       tok = self.msac.decode_hi_tok(self.cdf.br_tok, hi_cdf_base + ctx * 4)
       level_tok = tok + (3 << 6)
-      println("CF p" + plane.to_string() + " hitok=" + tok.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
     }
     cf[rc] = tok << 11
-    let level_idx = if scan_2d {
-      rc
-    } else {
-      x * stride + y
-    }
+    let level_idx = if scan_2d { rc } else { x * stride + y }
     levels[level_idx] = level_tok.to_byte()
     // ac coefficients
     let mut i = eob - 1
@@ -185,13 +189,9 @@ fn Av1TileCtx::decode_coefs(
         y = i >> shift
         (x << shift2) | y
       }
-      let lvl_idx = if scan_2d {
-        rc
-      } else {
-        x * stride + y
-      }
+      let lvl_idx = x * stride + y
       let (c2, mag2) = av1_get_lo_ctx(
-        levels, tx_class, lo_ctx_tbl, x, y, stride,
+        levels, lvl_idx, tx_class, lo_ctx_tbl, x, y, stride,
       )
       ctx = c2
       mag = mag2
@@ -199,20 +199,15 @@ fn Av1TileCtx::decode_coefs(
         y = y | x
       }
       tok = self.msac.decode_symbol_adapt(
-        self.cdf.base_tok, lo_cdf_base + ctx * 4, 3,
+        self.cdf.base_tok,
+        lo_cdf_base + ctx * 4,
+        3,
       )
-      println("CF p" + plane.to_string() + " i=" + i.to_string() + " ctx=" + ctx.to_string() + " tok=" + tok.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
       if tok == 3 {
         mag = mag & 63
-        ctx = (if y > (if tx_class == 0 { 1 } else { 0 }) {
-            14
-          } else {
-            7
-          }) +
+        ctx = (if y > (if tx_class == 0 { 1 } else { 0 }) { 14 } else { 7 }) +
           (if mag > 12 { 6 } else { (mag + 1) >> 1 })
-        tok = self.msac.decode_hi_tok(
-          self.cdf.br_tok, hi_cdf_base + ctx * 4,
-        )
+        tok = self.msac.decode_hi_tok(self.cdf.br_tok, hi_cdf_base + ctx * 4)
         levels[lvl_idx] = (tok + (3 << 6)).to_byte()
         cf[rc_i] = (tok << 11) | rc
         rc = rc_i
@@ -232,13 +227,14 @@ fn Av1TileCtx::decode_coefs(
     ctx = if tx_class == 0 {
       0
     } else {
-      let (c0, _) = av1_get_lo_ctx(levels, tx_class, 0, 0, 0, stride)
+      let (c0, _) = av1_get_lo_ctx(levels, 0, tx_class, 0, 0, 0, stride)
       c0
     }
     dc_tok = self.msac.decode_symbol_adapt(
-      self.cdf.base_tok, lo_cdf_base + ctx * 4, 3,
+      self.cdf.base_tok,
+      lo_cdf_base + ctx * 4,
+      3,
     )
-    println("CF p" + plane.to_string() + " dclo=" + dc_tok.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
     if dc_tok == 3 {
       if tx_class == 0 {
         mag = levels[0 * stride + 1].to_int() +
@@ -248,12 +244,13 @@ fn Av1TileCtx::decode_coefs(
       mag = mag & 63
       ctx = if mag > 12 { 6 } else { (mag + 1) >> 1 }
       dc_tok = self.msac.decode_hi_tok(self.cdf.br_tok, hi_cdf_base + ctx * 4)
-      println("CF p" + plane.to_string() + " dchi=" + dc_tok.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
     }
   } else {
     // dc-only
     let tok_br = self.msac.decode_symbol_adapt(
-      self.cdf.eob_base_tok, eob_cdf_base, 2,
+      self.cdf.eob_base_tok,
+      eob_cdf_base,
+      2,
     )
     dc_tok = 1 + tok_br
     if tok_br == 2 {
@@ -266,15 +263,15 @@ fn Av1TileCtx::decode_coefs(
   let dq_tbl0 = self.f.dq[dq_base + 0]
   let dq_tbl1 = self.f.dq[dq_base + 1]
   let dq_shift = av1_imax(0, t_dim_ctx - 2)
-  let cf_max = 255
+  let cf_max = 32767
   let cul_level = Ref(0)
   let dc_sign_level = Ref(1 << 6)
   if dc_tok != 0 {
     let dc_sign_ctx = av1_get_dc_sign_ctx(tx, a, a_off, l, l_off)
     let dc_sign = self.msac.decode_bool_adapt(
-      self.cdf.dc_sign, (chroma * 3 + dc_sign_ctx) * 2,
+      self.cdf.dc_sign,
+      (chroma * 3 + dc_sign_ctx) * 2,
     )
-    println("CF p" + plane.to_string() + " dcs=" + dc_sign.reinterpret_as_int().to_string() + " ctx=" + dc_sign_ctx.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
     dc_sign_level.val = (dc_sign.reinterpret_as_int() - 1) & (2 << 6)
     let (dcv, dcul) = if dc_tok == 15 {
       let dkt = (self.msac.read_golomb() + 15) & 0xfffff
@@ -285,40 +282,32 @@ fn Av1TileCtx::decode_coefs(
     }
     cul_level.val = dcul
     cf[0] = if dc_sign != 0 { -dcv } else { dcv }
-    if rc != 0 {
-      let mut r = rc
-      let ac_dq = dq_tbl1
-      while r != 0 {
-        let sign = self.msac.decode_bool_equi()
-        let rc_tok = cf[r]
-        println("CF p" + plane.to_string() + " sign r=" + r.to_string() + "=" + sign.reinterpret_as_int().to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
-        let (tok, dq) = if rc_tok >= 15 << 11 {
-          let t = (self.msac.read_golomb() + 15) & 0xfffff
-          (t, ((ac_dq * t) & 0xffffff) >> dq_shift)
-        } else {
-          let t = rc_tok >> 11
-          (t, (ac_dq * t) >> dq_shift)
-        }
-        cul_level.val = cul_level.val + tok
-        let dq_sat = av1_imin(dq, cf_max + sign.reinterpret_as_int())
-        cf[r] = if sign != 0 { -dq_sat } else { dq_sat }
-        r = rc_tok & 0x3ff
+  }
+  if rc != 0 {
+    let mut r = rc
+    let ac_dq = dq_tbl1
+    while r != 0 {
+      let sign = self.msac.decode_bool_equi()
+      let rc_tok = cf[r]
+      let (tok, dq) = if rc_tok >= 15 << 11 {
+        let t = (self.msac.read_golomb() + 15) & 0xfffff
+        (t, ((ac_dq * t) & 0xffffff) >> dq_shift)
+      } else {
+        let t = rc_tok >> 11
+        (t, (ac_dq * t) >> dq_shift)
       }
+      cul_level.val = cul_level.val + tok
+      let dq_sat = av1_imin(dq, cf_max + sign.reinterpret_as_int())
+      cf[r] = if sign != 0 { -dq_sat } else { dq_sat }
+      r = rc_tok & 0x3ff
     }
   }
   let res_ctx = av1_imin(cul_level.val, 63) | dc_sign_level.val
-  if plane == 1 && self.bx < 8 && self.by < 8 {
-    let mut cfs = "CF p1 cfs=["
-    for k in 0..<16 {
-      cfs = cfs + cf[k].to_string() + " "
-    }
-    println(cfs + "]")
-  }
   (eob, txtp, res_ctx)
 }
 
 ///|
-fn av1_lnot(v : Int) -> Int {
+fn av1_lnot(v : Int32) -> Int32 {
   -1 - v
 }
 
@@ -326,17 +315,17 @@ fn av1_lnot(v : Int) -> Int {
 /// `read_pal_plane` from recon_tmpl.c (8-bit).
 fn Av1TileCtx::read_pal_plane(
   self : Av1TileCtx,
-  pl : Int,
-  sz_ctx : Int,
-  bx4 : Int,
-  by4 : Int,
-) -> Int {
+  pl : Int32,
+  sz_ctx : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+) -> Int32 {
   let pal_sz = self.msac.decode_symbol_adapt(
-    self.cdf.pal_sz, (pl * 7 + sz_ctx) * 8, 6,
-  ) + 2
-  if self.bx < 4 && self.by < 4 {
-    println("PP sz=" + pal_sz.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string() + " difhi=" + (self.msac.dif >> 48).to_uint().to_string())
-  }
+      self.cdf.pal_sz,
+      (pl * 7 + sz_ctx) * 8,
+      6,
+    ) +
+    2
   let f = self.f
   let cache = FixedArray::make(16, 0)
   let used_cache = FixedArray::make(8, 0)
@@ -356,9 +345,9 @@ fn Av1TileCtx::read_pal_plane(
     0
   }
   // al_pal: [2][32][3][8]
-  let al = (d : Int, i : Int, p : Int, k : Int) => f.al_pal[
-      ((d * 32 + i) * 3 + p) * 8 + k
-    ].to_int()
+  let al = (d : Int32, i : Int32, p : Int32, k : Int32) => {
+    f.al_pal[((d * 32 + i) * 3 + p) * 8 + k].to_int()
+  }
   let mut li = 0
   let mut ai = 0
   // fill/sort cache (merge two sorted lists)
@@ -418,27 +407,14 @@ fn Av1TileCtx::read_pal_plane(
   let bpc = 8
   let mut i = n_used
   if i < pal_sz {
-    if self.bx < 4 && self.by < 8 {
-      println("PRE8 rng=" + self.msac.rng.reinterpret_as_int().to_string() + " dif=" + self.msac.dif.to_string() + " cnt=" + self.msac.cnt.to_string() + " pos=" + self.msac.pos.to_string())
-    }
     let mut prev = self.msac.decode_bools(bpc).reinterpret_as_int()
-    if self.bx < 4 && self.by < 4 {
-      println("PP first=" + prev.to_string() + " difhi=" + (self.msac.dif >> 48).to_uint().to_string() + " cnt=" + self.msac.cnt.to_string())
-    }
     self.pal[pal_base + i] = prev.to_byte()
     i = i + 1
     if i < pal_sz {
-      let mut bits = bpc - 3 +
-        self.msac.decode_bools(2).reinterpret_as_int()
-    if self.bx < 4 && self.by < 4 {
-      println("PP bits=" + bits.to_string() + " difhi=" + (self.msac.dif >> 48).to_uint().to_string())
-    }
+      let mut bits = bpc - 3 + self.msac.decode_bools(2).reinterpret_as_int()
       let max = (1 << bpc) - 1
       while i < pal_sz {
         let delta = self.msac.decode_bools(bits).reinterpret_as_int()
-        if self.bx < 4 && self.by < 4 {
-          println("PP d=" + delta.to_string() + " bits=" + bits.to_string() + " difhi=" + (self.msac.dif >> 48).to_uint().to_string() + " cnt=" + self.msac.cnt.to_string())
-        }
         prev = av1_imin(prev + delta + (if pl != 0 { 0 } else { 1 }), max)
         self.pal[pal_base + i] = prev.to_byte()
         i = i + 1
@@ -451,7 +427,10 @@ fn Av1TileCtx::read_pal_plane(
         }
         bits = av1_imin(
           bits,
-          1 + av1_ulog2((max - prev - (if pl != 0 { 0 } else { 1 })).reinterpret_as_uint()),
+          1 +
+          av1_ulog2(
+            (max - prev - (if pl != 0 { 0 } else { 1 })).reinterpret_as_uint(),
+          ),
         )
       }
     }
@@ -459,7 +438,8 @@ fn Av1TileCtx::read_pal_plane(
     let mut nn = 0
     let mut m = n_used
     for k in 0..<pal_sz {
-      if nn < n_used && (m >= pal_sz || used_cache[nn] <= self.pal[pal_base + m].to_int()) {
+      if nn < n_used &&
+        (m >= pal_sz || used_cache[nn] <= self.pal[pal_base + m].to_int()) {
         self.pal[pal_base + k] = used_cache[nn].to_byte()
         nn = nn + 1
       } else {
@@ -477,7 +457,7 @@ fn Av1TileCtx::read_pal_plane(
 
 ///|
 /// `read_pal_uv` V-plane palette continuation.
-fn Av1TileCtx::read_pal_uv(self : Av1TileCtx, pal_sz : Int) -> Unit {
+fn Av1TileCtx::read_pal_uv(self : Av1TileCtx, pal_sz : Int32) -> Unit {
   let pal_base = 2 * 8
   let bpc = 8
   if self.msac.decode_bool_equi() != 0 {
@@ -495,7 +475,10 @@ fn Av1TileCtx::read_pal_uv(self : Av1TileCtx, pal_sz : Int) -> Unit {
     }
   } else {
     for i in 0..<pal_sz {
-      self.pal[pal_base + i] = self.msac.decode_bools(bpc).reinterpret_as_int().to_byte()
+      self.pal[pal_base + i] = self.msac
+        .decode_bools(bpc)
+        .reinterpret_as_int()
+        .to_byte()
     }
   }
 }
@@ -504,10 +487,10 @@ fn Av1TileCtx::read_pal_uv(self : Av1TileCtx, pal_sz : Int) -> Unit {
 /// `dav1d_copy_pal_block_y`: splat the luma palette across the block.
 fn Av1TileCtx::copy_pal_block_y(
   self : Av1TileCtx,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
 ) -> Unit {
   for x in 0..<bw4 {
     for k in 0..<8 {
@@ -525,24 +508,22 @@ fn Av1TileCtx::copy_pal_block_y(
 /// `dav1d_copy_pal_block_uv` (luma coordinates per aomedia bug 2183).
 fn Av1TileCtx::copy_pal_block_uv(
   self : Av1TileCtx,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
 ) -> Unit {
-  for pl in 1..=2 {
+  for pl in 1..<=2 {
     for x in 0..<bw4 {
       for k in 0..<8 {
-        self.f.al_pal[((0 * 32 + bx4 + x) * 3 + pl) * 8 + k] = self.pal[
-            pl * 8 + k
-          ]
+        self.f.al_pal[((0 * 32 + bx4 + x) * 3 + pl) * 8 + k] = self.pal[pl * 8 +
+          k]
       }
     }
     for y in 0..<bh4 {
       for k in 0..<8 {
-        self.f.al_pal[((1 * 32 + by4 + y) * 3 + pl) * 8 + k] = self.pal[
-            pl * 8 + k
-          ]
+        self.f.al_pal[((1 * 32 + by4 + y) * 3 + pl) * 8 + k] = self.pal[pl * 8 +
+          k]
       }
     }
   }

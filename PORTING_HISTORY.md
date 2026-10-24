@@ -882,7 +882,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 |---|---|---|
 | H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成；渐进帧与 MBAFF 帧的错误补偿（多轮 MV 猜测 + 恢复区滤波） | SP/SI 重建、FMO、数据分区；场图片按上游边界报错；P 帧大缺口/高位深恢复未逐像素对齐 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
-| AV1 | OBU/序列与帧头、实际 tile payload 提取 | 熵解码、预测/变换、环路滤波与像素输出 |
+| AV1 | OBU/序列与帧头、实际 tile payload 提取；8-bit 4:2:0 单 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、多 tile、高位深等 |
 | VP9 | profile-0 关键帧、隐藏/show-existing、superframe | inter/intra-only、参考预测与概率适配、其他 profile |
 | MJPEG | 8-bit baseline/progressive，重启标记与多采样 | 无损、12-bit、算术编码 |
 | PNG | 灰度/RGB/RGBA/调色板、1–16-bit、Adam7、APNG | 更多扩展元数据/色彩管理 |
@@ -1620,3 +1620,19 @@ cur_out 必须整帧完成后推进。向量生成与 C 参考构建命令见 `s
 
 
 `moon check --no-render` 0 error/0 warning，`moon test` **789/789**。
+
+## AV1 无损关键帧像素解码
+
+以 dav1d 1.5.1 的 `decode.c`、`recon_tmpl.c`、`ipred_tmpl.c` 和 `itx_tmpl.c` 为对照，
+完成 8-bit 4:2:0、单 tile、无损关键帧的分区、熵解码、palette、预测、WHT 逆变换和
+YUV 输出。参考源码仅用于独立对拍，运行时不依赖 C FFI。
+
+`av1_kf_realdata_wbtest.mbt` 内嵌 libaom 编码的 128×96 单帧及 160×120 六帧码流；
+七帧的逐帧 YUV MD5 与 libdav1d 一致。定位时逐块比对 dav1d 的符号解码 range，并
+逐行比对原始 YUV。关键修正包括系数 CDF 步长与邻居上下文地址、零 DC 时继续读取
+AC 符号、palette 色度左侧缓存的行索引、partition 上下文覆盖长度，以及 8-bit
+路径的 32767 系数上限。
+
+当前像素入口对有损帧、帧间帧、多 tile、segmentation、delta Q、qmatrix 和 superres
+明确报错；环路滤波、帧间预测及其他像素格式仍待移植。本轮验证：
+`moon check --deny-warn --no-render` 0 error/0 warning，`moon test --no-render` **792/792**。

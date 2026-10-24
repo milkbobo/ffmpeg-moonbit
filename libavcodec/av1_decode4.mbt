@@ -1,13 +1,11 @@
 ///|
 /// `sm_flag`: smooth-mode bit for the angle parameter.
-fn av1_sm_flag(bctx : Av1BlockContext, idx : Int) -> Int {
+fn av1_sm_flag(bctx : Av1BlockContext, idx : Int32) -> Int32 {
   if bctx.intra[idx] == 0 {
     return 0
   }
   let m = bctx.mode[idx]
-  if m == av1_smooth_pred ||
-    m == av1_smooth_h_pred ||
-    m == av1_smooth_v_pred {
+  if m == av1_smooth_pred || m == av1_smooth_h_pred || m == av1_smooth_v_pred {
     av1_angle_smooth_edge_flag
   } else {
     0
@@ -15,11 +13,9 @@ fn av1_sm_flag(bctx : Av1BlockContext, idx : Int) -> Int {
 }
 
 ///|
-fn av1_sm_uv_flag(bctx : Av1BlockContext, idx : Int) -> Int {
+fn av1_sm_uv_flag(bctx : Av1BlockContext, idx : Int32) -> Int32 {
   let m = bctx.uvmode[idx]
-  if m == av1_smooth_pred ||
-    m == av1_smooth_h_pred ||
-    m == av1_smooth_v_pred {
+  if m == av1_smooth_pred || m == av1_smooth_h_pred || m == av1_smooth_v_pred {
     av1_angle_smooth_edge_flag
   } else {
     0
@@ -28,7 +24,7 @@ fn av1_sm_uv_flag(bctx : Av1BlockContext, idx : Int) -> Int {
 
 ///|
 /// cfl_allowed_mask from tables.h (BS values are dav1d enum indices).
-let av1_cfl_allowed_mask : Int = (1 << 7) |
+let av1_cfl_allowed_mask : Int32 = (1 << 7) |
   (1 << 8) |
   (1 << 9) |
   (1 << 11) |
@@ -49,21 +45,19 @@ let av1_cfl_allowed_mask : Int = (1 << 7) |
 fn Av1TileCtx::read_pal_indices(
   self : Av1TileCtx,
   pal_idx : FixedArray[Byte],
-  pal_sz : Int,
-  pl : Int,
-  w4 : Int,
-  h4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  pal_sz : Int32,
+  pl : Int32,
+  w4 : Int32,
+  h4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
 ) -> Unit {
   let stride = bw4 * 4
   let pal_tmp = self.pal_idx_uv // reused as the temp scan buffer
-  let pal_tmp_size = 64 * 64
-  ignore(pal_tmp_size)
   pal_tmp[0] = self.msac.decode_uniform(pal_sz.reinterpret_as_uint()).to_byte()
-  let color_map_base = ((pl * 7 + (pal_sz - 2)) * 5) * 8
-  let order = FixedArray::make(8 * 8, 0)
-  let pctx = FixedArray::make(8, 0)
+  let color_map_base = (pl * 7 + (pal_sz - 2)) * 5 * 8
+  let order = FixedArray::make(64 * 8, 0)
+  let pctx = FixedArray::make(64, 0)
   for i in 1..<(4 * (w4 + h4) - 1) {
     // diagonals ("wave-front")
     let first = av1_imin(i, w4 * 4 - 1)
@@ -77,7 +71,7 @@ fn Av1TileCtx::read_pal_indices(
       let base = (i - j) * stride + j
       let mut mask = 0
       let mut o_idx = 0
-      let add = (v : Int) => {
+      let add = (v : Int32) => {
         order[m * 8 + o_idx] = v
         o_idx = o_idx + 1
         mask = mask | (1 << v)
@@ -133,7 +127,9 @@ fn Av1TileCtx::read_pal_indices(
     let mut m2 = 0
     while j2 >= last {
       let color_idx = self.msac.decode_symbol_adapt(
-        self.cdf.color_map, color_map_base + pctx[m2] * 8, pal_sz - 1,
+        self.cdf.color_map,
+        color_map_base + pctx[m2] * 8,
+        pal_sz - 1,
       )
       pal_tmp[(i - j2) * stride + j2] = order[m2 * 8 + color_idx].to_byte()
       m2 = m2 + 1
@@ -170,10 +166,10 @@ fn Av1TileCtx::read_pal_indices(
 /// `decode_b` for intra blocks (key/intra-only frames; intrabc rejected).
 fn Av1TileCtx::decode_b(
   self : Av1TileCtx,
-  _bl : Int,
-  bs : Int,
-  _bp : Int,
-  intra_edge_flags : Int,
+  _bl : Int32,
+  bs : Int32,
+  _bp : Int32,
+  intra_edge_flags : Int32,
 ) -> Unit raise Av1DecError {
   let f = self.f
   let hdr = f.hdr
@@ -183,7 +179,6 @@ fn Av1TileCtx::decode_b(
   if hdr.frame_type != av1_frame_key && hdr.frame_type != av1_frame_intra_only {
     raise Av1DecError::Unsupported("PATCHWELCOME: AV1 inter frame")
   }
-  println("B " + self.bx.to_string() + "," + self.by.to_string() + " bs=" + bs.to_string() + " dims=" + av1_bdim(bs, 0).to_string() + "x" + av1_bdim(bs, 1).to_string())
   let bx4 = self.bx & 31
   let by4 = self.by & 31
   let ss_ver = 1 // 4:2:0
@@ -203,26 +198,12 @@ fn Av1TileCtx::decode_b(
   // skip (segmentation not enabled for our streams; seg_id stays 0)
   let seg_id = 0
   if hdr.segmentation_enabled {
-    raise Av1DecError::Unsupported("PATCHWELCOME: AV1 segmentation in pixel path")
+    raise Av1DecError::Unsupported(
+      "PATCHWELCOME: AV1 segmentation in pixel path",
+    )
   }
   let sctx = a.skip[bx4] + l.skip[by4]
   let skip = self.msac.decode_bool_adapt(self.cdf.skip, sctx * 2) != 0
-  println(
-    "B " +
-    self.bx.to_string() +
-    "," +
-    self.by.to_string() +
-    " bs=" +
-    bs.to_string() +
-    " skip=" +
-    (if skip { "1" } else { "0" }) +
-    " rng=" +
-    self.msac.rng.reinterpret_as_int().to_string() +
-    " difhi=" +
-    (self.msac.dif >> 48).to_uint().to_string() +
-    " pos=" +
-    self.msac.pos.to_string(),
-  )
   // cdef index (n_bits may be 0: no bits consumed)
   if !skip {
     let idx = if f.seq.use_128x128_superblock {
@@ -249,35 +230,26 @@ fn Av1TileCtx::decode_b(
     raise Av1DecError::Unsupported("PATCHWELCOME: AV1 delta_q in pixel path")
   }
   // intra block syntax
-  let ymode_cdf_base = (av1_intra_mode_context[
-        a.mode[bx4]
-      ].to_int() * 5 +
-    av1_intra_mode_context[l.mode[by4]].to_int()) *
+  let ymode_cdf_base = (
+      av1_intra_mode_context[a.mode[bx4]].to_int() * 5 +
+      av1_intra_mode_context[l.mode[by4]].to_int()
+    ) *
     16
   let mut y_mode = self.msac.decode_symbol_adapt(
-    self.cdf.kfym, ymode_cdf_base, av1_n_intra_pred_modes - 1,
-  )
-  println(
-    "  ymode=" +
-    y_mode.to_string() +
-    " base=" +
-    ymode_cdf_base.to_string() +
-    " rng=" +
-    self.msac.rng.reinterpret_as_int().to_string() +
-    " difhi=" +
-    (self.msac.dif >> 48).to_uint().to_string() +
-    " pos=" +
-    self.msac.pos.to_string(),
+    self.cdf.kfym,
+    ymode_cdf_base,
+    av1_n_intra_pred_modes - 1,
   )
   let mut y_angle = 0
   if av1_bdim(bs, 2) + av1_bdim(bs, 3) >= 2 &&
     y_mode >= av1_vert_pred &&
     y_mode <= av1_vert_left_pred {
     let angle = self.msac.decode_symbol_adapt(
-      self.cdf.angle_delta, (y_mode - av1_vert_pred) * 8, 6,
+      self.cdf.angle_delta,
+      (y_mode - av1_vert_pred) * 8,
+      6,
     )
     y_angle = angle - 3
-    println("  yang=" + y_angle.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
   }
   let mut uv_mode = av1_dc_pred
   let mut uv_angle = 0
@@ -291,52 +263,43 @@ fn Av1TileCtx::decode_b(
     }
     let nsym = av1_n_uv_intra_pred_modes - 1 - (if cfl_allowed { 0 } else { 1 })
     let uv_base = ((if cfl_allowed { 1 } else { 0 }) * 13 + y_mode) * 16
-    println(
-      "  uvbase=" +
-      uv_base.to_string() +
-      " nsym=" +
-      nsym.to_string() +
-      " cdf0=" +
-      self.cdf.uv_mode[uv_base].to_int().to_string() +
-      " cdf1=" +
-      self.cdf.uv_mode[uv_base + 1].to_int().to_string() +
-      " cdf12=" +
-      self.cdf.uv_mode[uv_base + 12].to_int().to_string(),
-    )
-    uv_mode = self.msac.decode_symbol_adapt(
-      self.cdf.uv_mode, uv_base,
-      nsym,
-    )
-    println("  uvmode=" + uv_mode.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
+    uv_mode = self.msac.decode_symbol_adapt(self.cdf.uv_mode, uv_base, nsym)
     if uv_mode == av1_cfl_pred {
       let sign = self.msac.decode_symbol_adapt(self.cdf.cfl_sign, 0, 7) + 1
       let sign_u = (sign * 0x56) >> 8
       let sign_v = sign - sign_u * 3
       let au = if sign_u != 0 {
         let ctx = (if sign_u == 2 { 3 } else { 0 }) + sign_v
-        let v = self.msac.decode_symbol_adapt(
-          self.cdf.cfl_alpha, ctx * 16, 15,
-        ) + 1
-        if sign_u == 1 { -v } else { v }
+        let v = self.msac.decode_symbol_adapt(self.cdf.cfl_alpha, ctx * 16, 15) +
+          1
+        if sign_u == 1 {
+          -v
+        } else {
+          v
+        }
       } else {
         0
       }
       let av = if sign_v != 0 {
         let ctx = (if sign_v == 2 { 3 } else { 0 }) + sign_u
-        let v = self.msac.decode_symbol_adapt(
-          self.cdf.cfl_alpha, ctx * 16, 15,
-        ) + 1
-        if sign_v == 1 { -v } else { v }
+        let v = self.msac.decode_symbol_adapt(self.cdf.cfl_alpha, ctx * 16, 15) +
+          1
+        if sign_v == 1 {
+          -v
+        } else {
+          v
+        }
       } else {
         0
       }
       cfl_alpha = (au, av)
-      println("  cfl=" + au.to_string() + "," + av.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
     } else if av1_bdim(bs, 2) + av1_bdim(bs, 3) >= 2 &&
       uv_mode >= av1_vert_pred &&
       uv_mode <= av1_vert_left_pred {
       let angle = self.msac.decode_symbol_adapt(
-        self.cdf.angle_delta, (uv_mode - av1_vert_pred) * 8, 6,
+        self.cdf.angle_delta,
+        (uv_mode - av1_vert_pred) * 8,
+        6,
       )
       uv_angle = angle - 3
     }
@@ -350,37 +313,20 @@ fn Av1TileCtx::decode_b(
       let pal_ctx = (if a.pal_sz[bx4] > 0 { 1 } else { 0 }) +
         (if l.pal_sz[by4] > 0 { 1 } else { 0 })
       let use_y_pal = self.msac.decode_bool_adapt(
-        self.cdf.pal_y, (sz_ctx * 3 + pal_ctx) * 2,
+        self.cdf.pal_y,
+        (sz_ctx * 3 + pal_ctx) * 2,
       )
-      println("  ypal=" + use_y_pal.reinterpret_as_int().to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
       if use_y_pal != 0 {
         pal_sz = (self.read_pal_plane(0, sz_ctx, bx4, by4), pal_sz.1)
-        let mut pv = "PALY sz=" + pal_sz.0.to_string() + ":"
-        for k in 0..<pal_sz.0 {
-          pv = pv + " " + self.pal[k].to_int().to_string()
-        }
-        println(pv)
         self.copy_pal_block_y(bx4, by4, bw4, bh4)
       }
     }
     if has_chroma && uv_mode == av1_dc_pred {
       let pal_ctx = if pal_sz.0 > 0 { 1 } else { 0 }
-      let use_uv_pal = self.msac.decode_bool_adapt(
-        self.cdf.pal_uv, pal_ctx * 2,
-      )
-      println("  uvpal=" + use_uv_pal.reinterpret_as_int().to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string() + " difhi=" + (self.msac.dif >> 48).to_uint().to_string())
+      let use_uv_pal = self.msac.decode_bool_adapt(self.cdf.pal_uv, pal_ctx * 2)
       if use_uv_pal != 0 {
         pal_sz = (pal_sz.0, self.read_pal_plane(1, sz_ctx, bx4, by4))
         self.read_pal_uv(pal_sz.1)
-        let mut pv = "PALUV sz=" + pal_sz.1.to_string() + ":"
-        for k in 0..<pal_sz.1 {
-          pv = pv +
-            " " +
-            self.pal[8 + k].to_int().to_string() +
-            "/" +
-            self.pal[16 + k].to_int().to_string()
-        }
-        println(pv)
         self.copy_pal_block_uv(bx4, by4, bw4, bh4)
       }
     }
@@ -391,13 +337,12 @@ fn Av1TileCtx::decode_b(
     av1_imax(av1_bdim(bs, 2), av1_bdim(bs, 3)) <= 3 &&
     f.seq.enable_filter_intra {
     let is_filter = self.msac.decode_bool_adapt(
-      self.cdf.use_filter_intra, bs * 2,
+      self.cdf.use_filter_intra,
+      bs * 2,
     )
-    println("  filti=" + is_filter.reinterpret_as_int().to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
     if is_filter != 0 {
       y_mode = av1_filter_pred
       y_angle = self.msac.decode_symbol_adapt(self.cdf.filter_intra, 0, 4)
-      println("  filtidx=" + y_angle.to_string() + " rng=" + self.msac.rng.reinterpret_as_int().to_string())
     }
   }
   // tx size
@@ -411,7 +356,9 @@ fn Av1TileCtx::decode_b(
         (if a.tx_intra[bx4] >= av1_txfm_lw(t0) { 1 } else { 0 })
       let tx_cdf_base = ((av1_txfm_max(t0) - 1) * 3 + tctx) * 4
       let depth = self.msac.decode_symbol_adapt(
-        self.cdf.txsz, tx_cdf_base, av1_imin(av1_txfm_max(t0), 2),
+        self.cdf.txsz,
+        tx_cdf_base,
+        av1_imin(av1_txfm_max(t0), 2),
       )
       let mut d = depth
       while d > 0 {
@@ -435,21 +382,12 @@ fn Av1TileCtx::decode_b(
   }
   // palette indices (decoded after filter_intra, before tx)
   if pal_sz.0 != 0 {
-    self.read_pal_indices(
-      self.pal_idx_y, pal_sz.0, 0, w4, h4, bw4, bh4,
-    )
-    let mut pv = "PIDXY w4=" + w4.to_string() + ":"
-    for k in 0..<((w4 * 4 + 1) >> 1) {
-      pv = pv + " " + self.pal_idx_y[k].to_int().to_string()
-    }
-    println(pv)
+    self.read_pal_indices(self.pal_idx_y, pal_sz.0, 0, w4, h4, bw4, bh4)
   }
   if has_chroma && pal_sz.1 != 0 {
     let cw4 = (w4 + ss_hor) >> ss_hor
     let ch4 = (h4 + ss_ver) >> ss_ver
-    self.read_pal_indices(
-      self.pal_idx_uv, pal_sz.1, 1, cw4, ch4, cbw4, cbh4,
-    )
+    self.read_pal_indices(self.pal_idx_uv, pal_sz.1, 1, cw4, ch4, cbw4, cbh4)
   }
   // reconstruction
   self.recon_b_intra(bs, intra_edge_flags, b)
@@ -471,7 +409,6 @@ fn Av1TileCtx::decode_b(
     a.intra[bx4 + i] = 1
     a.skip[bx4 + i] = if skip { 1 } else { 0 }
     f.pal_sz_uv[bx4 + i] = if has_chroma { pal_sz.1 } else { 0 }
-    f.pal_sz_uv[32 + bx4 + i] = f.pal_sz_uv[bx4 + i]
   }
   for i in 0..<bh4 {
     l.tx_intra[by4 + i] = t_lh
@@ -482,6 +419,7 @@ fn Av1TileCtx::decode_b(
     l.skip_mode[by4 + i] = 0
     l.intra[by4 + i] = 1
     l.skip[by4 + i] = if skip { 1 } else { 0 }
+    f.pal_sz_uv[32 + by4 + i] = if has_chroma { pal_sz.1 } else { 0 }
   }
   if has_chroma {
     for i in 0..<cbw4 {
