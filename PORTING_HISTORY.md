@@ -1991,3 +1991,13 @@ CodecID/Video/Audio 参数、6 个包的交错顺序、stream_index、PTS 与 pa
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **834/834**。
+
+## 37. 2026-10-24 WebM/AV1 写入器
+
+新增 `libavformat/webm_av1_mux.mbt`：写 `V_AV1` 视频轨、Video
+PixelWidth/PixelHeight 与 `CodecPrivate`（av1C），复用 WebM EBML 与
+SimpleBlock 写入器。回归用 4 字节 av1C、2 个样本回读验证 CodecID/
+CodecPrivate、尺寸、PTS 与 keyframe。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **835/835**。
