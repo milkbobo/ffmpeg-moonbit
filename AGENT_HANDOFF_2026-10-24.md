@@ -3,8 +3,8 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> 当前 HEAD：`eb4306f feat: fMP4 写入器支持 HEVC/AV1/VP9/Opus`
-> 全量 Wasm 测试：**853/853 通过**；`moon check --deny-warn` 0 error / 0 warning。
+> 当前 HEAD：`0ae19ea feat: VP9 新增复合预测诊断计数器并转正 alt-ref 向量测试`
+> 全量 Wasm 测试：**861/861 通过**；`moon check --deny-warn` 0 error / 0 warning。
 
 先读这几份文档，再动手：
 
@@ -110,46 +110,42 @@ wav_muxer_*、ogg_opus_mux_*、mp4_*_muxer_new、webm_*、mkv_*、hls_*、dash_*
 
 ## 4. 下一步优先级建议
 
-按“可独立验收 + 风险”排序，前两项适合直接开工：
+**2026-10-24 晚间更新**：原清单前 3 项已全部完成（提交 `5b0a7c8`、
+`5113d54`、`0ae19ea`），详见 PORTING_HISTORY 第 46–48 节：
 
-1. **MPEG-TS 写入器扩展编解码器选择**
-   - 现状：`ts_mux.mbt` 固定 PMT 写 H.264(0x1B)+AAC(0x0F)。
-   - 解复用器 `mpegts.mbt` 已支持 HEVC(0x24) 与 MP3(0x03/0x04)。
-   - 做法：给 `ts_muxer_new` 增加 `video_stream_type`/`audio_stream_type`（保持默认值兼容），
-     PMT 用参数；补 HEVC+MP3 回读测试，并用 ffmpeg 校验。
-   - 验收：`av_mpegts_open` 回读 codec 为 `hevc`/`mp3`，包/PCR 正确；ffmpeg 能解出帧。
+- ✅ MPEG-TS `ts_muxer_new` 新增 `video_stream_type`/`audio_stream_type`
+  （默认 0x1B/0x0F 兼容），HEVC+MP3 回读与 ffmpeg framemd5 全一致。
+- ✅ `webm_{vp9,av1,opus}_muxer_new` 新增 `doctype` 参数（webm/matroska）；
+  同轮对齐 ffmpeg `matroskaenc.c` 的 Opus 语义（CodecDelay/SeekPreRoll/
+  ts_offset 补偿），三类 .mkv 经 ffprobe 识别 + 解码对拍全一致。
+- ✅ VP9 新增 `comp_inter_blocks` 诊断计数器；alt-ref 21 包码流证实
+  `comp_pred_mode` 全 0（libvpx 不触发复合块），向量已转正为
+  `vp9_vectors/vp9_altref_test.mbt`。
 
-2. **Matroska VP9/AV1/Opus 写入器**
-   - 现状：VP9/AV1/Opus 只在 WebM DocType 下写过；Matroska 下只有 H.264/AAC。
-   - 做法：复用 `webm_video_mux.mbt`/`webm_av1_mux.mbt`/`webm_mux.mbt` 的 EBML 与
-     SimpleBlock 逻辑，DocType 改 `matroska`，CodecID 用 `V_VP9`/`V_AV1`/`A_OPUS`。
-   - 验收：`av_matroska_open` 回读 + ffprobe 识别。
+剩余优先级（按"可独立验收 + 风险"排序）：
 
-3. **VP9 复合预测/参考缩放**
-   - 复合预测的解析与重建代码已存在（`vp9_inter_block.mbt` 的 comp 分支、
-     `vp9_inter_recon.mbt` 的 `avg`）。临时探针用 libvpx `-auto-alt-ref 1` 生成的
-     30 帧码流已全部与 ffmpeg 对齐，但尚不能证明复合块真正被触发。
-   - 建议：先加计数/断言确认 composite 是否出现；若出现则补真实向量测试并更新
-     README 的“编码器无法生成”表述。参考缩放仍需移植 `mc_*_scaled`。
-
-4. **AV1 高位深与有损/帧间**
+1. **AV1 高位深与有损/帧间**
    - 顺序必须是：像素平面改 `Int32`（一次大重构，之前因类型级联报错回退过）→
      10/12-bit 无损 → 有损（IDCT/ADST、dequant、CDEF/LF/LR）→ 帧间。
    - 入口在 `av1_decode6.mbt`，当前对 `!coded_lossless`、`bitdepth != 8` 显式拒绝。
 
-5. **AAC SBR/PS**
+2. **AAC SBR/PS**
    - 工作量大（QMF、包络/噪声、patch、HF 生成、PS）；先确认 docker 镜像是否有可用的
      HE-AAC 编码器（大概率没有 libfdk_aac），否则需要外部样本。
 
-6. **HEVC dependent slice / tiles+WPP / PCM / RDPCM**
+3. **HEVC dependent slice / tiles+WPP / PCM / RDPCM**
    - tiles+WPP：FFmpeg 9.0.2 的单线程路径对组合情形的处理本身可疑（`ctb_addr_ts %
      ctb_width` 与 tile scan 不完全对应），先确认上游能否正确解码再决定是否跟进。
 
-7. **H.264 错误恢复残余**
+4. **VP9 参考缩放**
+   - 复合预测已证实编码器无法触发（见上）；剩余工作是参考帧缩放
+     （`mc_*_scaled` 的移植），需自己构造不同分辨率的参考链或用外部样本。
+
+5. **H.264 错误恢复残余**
    - 不要基于 `.scratch/h264_er_trunc_p_mid.yuv` 改去块：该参考不可复现（新旧参考
      frame 0 一致、1–5 不一致）。先用脚本重新生成干净 fixture，再复现残差。
 
-8. **Opus PLC**
+6. **Opus PLC**
    - 无位精确上游基准（FFmpeg 原生 opus 解码器不实现 PLC），优先级最低。
 
 ---
@@ -251,7 +247,7 @@ MSYS_NO_PATHCONV=1 docker run --rm --entrypoint ffprobe -v "...:/s" -w /s \
 ## 8. 当前工作区状态
 
 ```text
-HEAD  eb4306f  feat: fMP4 写入器支持 HEVC/AV1/VP9/Opus
+HEAD  0ae19ea  feat: VP9 新增复合预测诊断计数器并转正 alt-ref 向量测试
       bfacdd8  feat: 新增 fMP4 初始化段与媒体段写入器
       12035a1  feat: 新增 HLS 主播放列表写入器
 ```
@@ -267,8 +263,8 @@ HEAD  eb4306f  feat: fMP4 写入器支持 HEVC/AV1/VP9/Opus
 
 ```sh
 moon check --target wasm --deny-warn --no-render   # 期望：0 error / 0 warning
-moon test --target wasm --no-render                # 期望：853/853
-git log --oneline -1                               # 期望：eb4306f 或更新
+moon test --target wasm --no-render                # 期望：861/861
+git log --oneline -1                               # 期望：0ae19ea 或更新
 ```
 
 达标后再开始新增量；每个增量结束重复上面的命令并更新文档。
