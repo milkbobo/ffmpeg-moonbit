@@ -1821,3 +1821,18 @@ buffer_fullness 全 1）。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **815/815**。
+
+## 24. 2026-10-24 Ogg/Opus 写入器
+
+`libavformat/ogg_mux.mbt` 新增 `OggOpusMuxer`：
+
+- `ogg_opus_muxer_new` 支持 1/2 声道、pre-skip、输入采样率与 serial。
+- 首包前写 BOS 的 `OpusHead` 与 `OpusTags`；随后每个 Opus 包一页，
+  granule 为累计 48 kHz 样本数，末页置 EOS。
+- 每页按 Ogg lacing（255 续段）编码，并用非反射 MPEG-2 CRC32 回填校验和。
+- 回归将写出的 Ogg 交给 `av_ogg_opus_open`：3 个真实 Opus 包的
+  payload、PTS `[-312, 648, 1608]`、duration 960、pre-skip 与 extradata
+  全部一致；空包负例通过。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **817/817**。
