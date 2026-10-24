@@ -1,7 +1,7 @@
 ///|
 /// MoonBit port of dav1d 1.5.1 `src/decode.c` + `src/recon_tmpl.c` for the
 /// AV1 key-frame (intra) software decode path, single-threaded, 8-bit
-/// 4:2:0. Inter frames, intrabc, film grain application and the in-loop
+/// 4:2:0/4:2:2/4:4:4. Inter frames, intrabc, film grain application and the in-loop
 /// filters (CDEF/loop filter/restoration) are not part of this file; the
 /// entry point rejects streams that need them.
 
@@ -108,6 +108,9 @@ priv struct Av1FrameCtx {
   planes : FixedArray[FixedArray[Byte]]
   y_stride : Int32
   uv_stride : Int32
+  /// Chroma subsampling shifts from the sequence header.
+  ss_h : Int32
+  ss_v : Int32
   /// Above-context ring: sb128w * tile_rows entries.
   a : Array[Av1BlockContext]
   /// Left context for the current SB row.
@@ -280,14 +283,17 @@ fn av1_get_skip_ctx(
   l : FixedArray[Int32],
   l_off : Int32,
   chroma : Bool,
+  ss_h : Int32,
+  ss_v : Int32,
 ) -> Int32 {
   let lw = av1_txfm_lw(tx)
   let lh = av1_txfm_lh(tx)
   if chroma {
     let not_one_blk = av1_bdim(bs, 2) -
-      (if av1_bdim(bs, 2) != 0 && true { 1 } else { 0 }) >
+      (if av1_bdim(bs, 2) != 0 && ss_h != 0 { 1 } else { 0 }) >
       lw ||
-      av1_bdim(bs, 3) - (if av1_bdim(bs, 3) != 0 && true { 1 } else { 0 }) > lh
+      av1_bdim(bs, 3) -
+      (if av1_bdim(bs, 3) != 0 && ss_v != 0 { 1 } else { 0 }) > lh
     let ca = {
       let mut any = false
       for i in 0..<(1 << lw) {

@@ -17,7 +17,17 @@ fn Av1TileCtx::decode_coefs(
   let chroma = if plane != 0 { 1 } else { 0 }
   let lossless = self.f.seg_lossless[b.seg_id]
   let t_dim_ctx = av1_txfm_ctx(tx)
-  let sctx = av1_get_skip_ctx(tx, bs, a, a_off, l, l_off, chroma == 1)
+  let sctx = av1_get_skip_ctx(
+    tx,
+    bs,
+    a,
+    a_off,
+    l,
+    l_off,
+    chroma == 1,
+    self.f.ss_h,
+    self.f.ss_v,
+  )
   let all_skip = self.msac.decode_bool_adapt(
     self.cdf.coef_skip,
     (t_dim_ctx * 13 + sctx) * 2,

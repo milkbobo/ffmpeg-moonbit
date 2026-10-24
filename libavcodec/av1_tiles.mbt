@@ -12,6 +12,12 @@ pub struct Av1Tile {
 }
 
 ///|
+/// Entropy payload of this tile.
+pub fn Av1Tile::data(self : Av1Tile) -> Bytes {
+  self.data
+}
+
+///|
 /// Extract all tiles of the first frame from consecutive tile groups. Groups
 /// must cover the frame once, in order, without gaps or overlaps. The caller
 /// supplies the corresponding parsed frame header; show-existing has no tiles.

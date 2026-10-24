@@ -1,6 +1,6 @@
 ///|
-/// `dav1d_recon_b_intra` (8-bit, 4:2:0, single thread): prediction +
-/// coefficient decode + inverse transform for one intra block.
+/// `dav1d_recon_b_intra` (8-bit, single thread): prediction + coefficient
+/// decode + inverse transform for one intra block.
 fn Av1TileCtx::recon_b_intra(
   self : Av1TileCtx,
   bs : Int32,
@@ -8,8 +8,8 @@ fn Av1TileCtx::recon_b_intra(
   b : Av1IntraBlock,
 ) -> Unit {
   let f = self.f
-  let ss_ver = 1
-  let ss_hor = 1
+  let ss_ver = f.ss_v
+  let ss_hor = f.ss_h
   let bx4 = self.bx & 31
   let by4 = self.by & 31
   let cbx4 = bx4 >> ss_hor
@@ -307,14 +307,16 @@ fn Av1TileCtx::recon_b_intra(
         } else if init_y != 0 {
           false
         } else {
-          (intra_edge_flags & (av1_edge_i420_top_has_right >> 0)) != 0
+          (intra_edge_flags &
+            (av1_edge_i444_top_has_right << (ss_hor + ss_ver))) != 0
         }
         let uv_sb_has_bl = if init_x != 0 {
           false
         } else if (init_y + 16) >> ss_ver < ch4 {
           true
         } else {
-          (intra_edge_flags & (av1_edge_i420_left_has_bottom >> 0)) != 0
+          (intra_edge_flags &
+            (av1_edge_i444_left_has_bottom << (ss_hor + ss_ver))) != 0
         }
         let sub_cw4 = av1_imin(cw4, (init_x + 16) >> ss_hor)
         for pl in 0..<2 {

@@ -181,8 +181,8 @@ fn Av1TileCtx::decode_b(
   }
   let bx4 = self.bx & 31
   let by4 = self.by & 31
-  let ss_ver = 1 // 4:2:0
-  let ss_hor = 1
+  let ss_ver = f.ss_v
+  let ss_hor = f.ss_h
   let cbx4 = bx4 >> ss_hor
   let cby4 = by4 >> ss_ver
   let bw4 = av1_bdim(bs, 0)

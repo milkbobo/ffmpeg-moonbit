@@ -1,6 +1,6 @@
 ///|
-/// `dav1d_backup_ipred_edge` (8-bit, 4:2:0): copy the bottom pixel row of
-/// the current SB row into the per-plane edge buffers.
+/// `dav1d_backup_ipred_edge` (8-bit): copy the bottom pixel row of the
+/// current SB row into the per-plane edge buffers.
 fn Av1TileCtx::backup_ipred_edge(self : Av1TileCtx) -> Unit {
   let f = self.f
   let sby = self.by >> f.sb_shift
@@ -12,13 +12,13 @@ fn Av1TileCtx::backup_ipred_edge(self : Av1TileCtx) -> Unit {
   for i in 0..<(4 * (self.col_end - x_off)) {
     edge0[sby_off + x_off * 4 + i] = y_plane[y + i]
   }
-  let uv_off = ((x_off * 4) >> 1) +
-    ((((self.by + f.sb_step) * 4) >> 1) - 1) * f.uv_stride
+  let uv_off = ((x_off * 4) >> f.ss_h) +
+    ((((self.by + f.sb_step) * 4) >> f.ss_v) - 1) * f.uv_stride
   for pl in 1..<=2 {
     let plane = f.planes[pl]
     let edge = f.ipred_edge[pl]
-    for i in 0..<((4 * (self.col_end - x_off)) >> 1) {
-      edge[sby_off + ((x_off * 4) >> 1) + i] = plane[uv_off + i]
+    for i in 0..<((4 * (self.col_end - x_off)) >> f.ss_h) {
+      edge[sby_off + ((x_off * 4) >> f.ss_h) + i] = plane[uv_off + i]
     }
   }
 }
@@ -61,7 +61,7 @@ fn Av1TileCtx::decode_tile_sbrow(
 }
 
 ///|
-/// Decoded frame output: planar yuv420p planes plus geometry.
+/// Decoded frame output: planar planes plus geometry and subsampling.
 pub struct Av1FrameOutput {
   y : FixedArray[Byte]
   u : FixedArray[Byte]
@@ -70,10 +70,32 @@ pub struct Av1FrameOutput {
   height : Int32
   y_stride : Int32
   uv_stride : Int32
+  ss_h : Int32
+  ss_v : Int32
 }
 
 ///|
-/// Decode one AV1 key frame (lossless 8-bit 4:2:0 software path).
+/// Pack the frame as contiguous planar bytes: luma at `width`×`height`, then
+/// Cb and Cr at the sequence's chroma subsampling.
+pub fn Av1FrameOutput::packed(self : Av1FrameOutput) -> Bytes {
+  let cw = (self.width + self.ss_h) >> self.ss_h
+  let ch = (self.height + self.ss_v) >> self.ss_v
+  let buf : Array[Byte] = []
+  let feed = (plane : FixedArray[Byte], stride : Int32, w : Int32, h : Int32) => {
+    for y in 0..<h {
+      for x in 0..<w {
+        buf.push(plane[y * stride + x])
+      }
+    }
+  }
+  feed(self.y, self.y_stride, self.width, self.height)
+  feed(self.u, self.uv_stride, cw, ch)
+  feed(self.v, self.uv_stride, cw, ch)
+  Bytes::from_array(buf)
+}
+
+///|
+/// Decode one AV1 key frame (lossless 8-bit software path).
 /// `frame_obus` is the OBU byte stream of one frame (sequence header OBU
 /// included or already parsed); `seq`/`hdr` are the parsed headers and
 /// `tile` the entropy payload for tile 0 (single-tile frames only).
@@ -104,6 +126,14 @@ pub fn av1_decode_keyframe(
     // Lossy frames require the in-loop filters (not yet ported).
     return Err("av1: lossy frames unsupported (need CDEF/LF/LR)")
   }
+  if seq.bitdepth != 8 {
+    return Err("av1: only 8-bit pixel output is supported")
+  }
+  if seq.monochrome {
+    return Err("av1: monochrome pixel output is unsupported")
+  }
+  let ss_h = if seq.chroma_subsampling_x { 1 } else { 0 }
+  let ss_v = if seq.chroma_subsampling_y { 1 } else { 0 }
   let w = hdr.width
   let h = hdr.height
   let bw = (w + 7) >> 3 << 1
@@ -115,12 +145,12 @@ pub fn av1_decode_keyframe(
   let sb_step = 16 << sb128
   let aligned_w = (w + 127) & -128
   let y_stride = aligned_w
-  let uv_stride = aligned_w >> 1
+  let uv_stride = aligned_w >> ss_h
   let y_plane : FixedArray[Byte] = FixedArray::make(
     y_stride * (h + 2 * sb_step * 4 + 64),
     b'\x80',
   )
-  let uv_h = (h + 1) >> 1
+  let uv_h = (h + ss_v) >> ss_v
   let u_plane : FixedArray[Byte] = FixedArray::make(
     uv_stride * (uv_h + sb_step * 2 + 64),
     b'\x80',
@@ -152,6 +182,8 @@ pub fn av1_decode_keyframe(
     planes,
     y_stride,
     uv_stride,
+    ss_h,
+    ss_v,
     a,
     l: av1_block_context_new(),
     al_pal: FixedArray::make(2 * 32 * 3 * 8, b'\x00'),
@@ -202,6 +234,8 @@ pub fn av1_decode_keyframe(
       height: h,
       y_stride,
       uv_stride,
+      ss_h,
+      ss_v,
     })
   } catch {
     Av1DecError::Unsupported(msg) => Err(msg)

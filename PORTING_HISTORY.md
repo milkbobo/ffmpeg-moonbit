@@ -882,7 +882,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 |---|---|---|
 | H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成；渐进帧与 MBAFF 帧的错误补偿（多轮 MV 猜测 + 恢复区滤波） | SP/SI 重建、FMO、数据分区；场图片按上游边界报错；P 帧大缺口/高位深恢复未逐像素对齐 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
-| AV1 | OBU/序列与帧头、实际 tile payload 提取；8-bit 4:2:0 单 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、多 tile、高位深等 |
+| AV1 | OBU/序列与帧头、实际 tile payload 提取；8-bit 4:2:0/4:2:2/4:4:4 单 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、多 tile、高位深、`enable_intra_edge_filter=0` 等 |
 | VP9 | profile 0/1/2/3 关键帧与帧间帧，8/10/12-bit，4:2:0/4:2:2/4:4:4；隐藏/show-existing、superframe、多 tile、概率自适应 | 复合预测（B 帧）、参考缩放 |
 | MJPEG | 8-bit baseline/progressive，重启标记与多采样 | 无损、12-bit、算术编码 |
 | PNG | 灰度/RGB/RGBA/调色板、1–16-bit、Adam7、APNG | 更多扩展元数据/色彩管理 |
@@ -1662,3 +1662,29 @@ AC 符号、palette 色度左侧缓存的行索引、partition 上下文覆盖�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **796/796**。
+
+## 15. 2026-10-24 AV1 无损关键帧 4:2:2 / 4:4:4
+
+AV1 像素路径原先按 8-bit 4:2:0 写死。序列头解析早已读取
+`chroma_subsampling_x/y`，本轮把像素侧也参数化：
+
+- `Av1FrameCtx` 保存 `ss_h/ss_v`，`decode_b` 与 `recon_b_intra` 的
+  `cbx4/cby4/cbw4/cbh4/has_chroma` 全部改用实际采样；色度边缘可用性标志按
+  `I444_FLAG << (ss_h + ss_v)` 选择（与 dav1d 的
+  `EDGE_I420_* >> (layout - 1)` 等价）。
+- 修正**色度 skip 上下文**的 `not_one_blk`：C 用
+  `b_dim[2] - (!!b_dim[2] && ss_hor)`，移植此前把两个采样位都写死为 1。
+  这个分歧会让 4:4:4/4:2:2 的 `coef.skip` CDF 上下文错位，轻则像素偏差、
+  重则熵解码越界；修正后基础 4:4:4 流即逐帧对齐。
+- `Av1FrameOutput::packed()` 按 `ss_h/ss_v` 打包 Y/Cb/Cr，4:2:2 为半宽全高、
+  4:4:4 为全尺寸色度；`Av1Tile::data()` 暴露 tile 熵负载供跨包测试使用。
+- 新增独立回归包 `libavcodec/av1_vectors`（避免主包 wasm `__init` 局部变量上限），
+  由 `scripts/_emit_av1_444_vectors.py` 生成两条 libaom `-crf 0 -g 1` 流：
+  64×48 yuv444p 与 yuv422p，各 9 帧，**18 帧逐帧 MD5 与 libdav1d 一致**。
+
+**已知边界**：`enable_intra_edge_filter=0` 的流仍与上游不一致；用同参数生成的
+4:2:0 流同样复现，确认是本轮之前就存在的 AV1 预测边滤波缺口，不是 4:4:4 引入。
+有损帧、帧间帧、多 tile、10/12-bit 与单色仍明确报错。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **798/798**。
