@@ -1771,3 +1771,19 @@ RIFF/WAVE 布局写出 16/24/32-bit 有符号 PCM：
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **809/809**。
+
+## 21. 2026-10-24 MPEG-TS 写入器
+
+新增 `TsMuxer`（`libavformat/ts_mux.mbt`），按 `mpegtsenc.c` 的静态表与
+PES 布局写出单节目 TS：
+
+- PAT（PID 0）与 PMT（PID 0x1000）用 MPEG-2 CRC32（poly `0x04C11DB7`、
+  init `0xFFFFFFFF`）生成，PMT 声明 H.264 `0x1B` 与 AAC ADTS `0x0F`。
+- PES 支持 PTS-only 头；视频 PES 使用无界长度、音频使用有界长度。
+- 188 字节打包：首包 PUSI、按 PID 维护 4-bit continuity counter；不足 184
+  字节时用 adaptation field stuffing 补齐。
+- 大负载自动跨多个 TS 包；测试用现有 `av_mpegts_open` 回读，验证
+  stream PID/codec、PES 负载、PTS 与多包拆分。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **811/811**。
