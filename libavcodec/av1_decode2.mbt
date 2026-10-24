@@ -128,13 +128,13 @@ fn Av1TileCtx::decode_coefs(
   if eob != 0 {
     let lo_cdf_base = (t_dim_ctx * 2 + chroma) * 41 * 4
     // Per-class scan layout.
-    let (stride, lo_ctx_tbl, scan_2d, clear_rows) = if tx_class == 0 {
+    let (stride, lo_ctx_tbl, clear_rows) = if tx_class == 0 {
       let nonsquare = if tx >= 5 { 1 } else { 0 }
-      (4 << slh, nonsquare + (tx & nonsquare), true, (4 << slw) + 2)
+      (4 << slh, nonsquare + (tx & nonsquare), (4 << slw) + 2)
     } else if tx_class == 1 {
-      (16, 0, false, (4 << slh) + 2)
+      (16, 0, (4 << slh) + 2)
     } else {
-      (16, 0, false, (4 << slw) + 2)
+      (16, 0, (4 << slw) + 2)
     }
     for i in 0..<(stride * clear_rows) {
       levels[i] = b'\x00'
@@ -180,7 +180,10 @@ fn Av1TileCtx::decode_coefs(
       level_tok = tok + (3 << 6)
     }
     cf[rc] = tok << 11
-    let level_idx = if scan_2d { rc } else { x * stride + y }
+    // dav1d's DECODE_COEFS_CLASS keeps levels in transposed layout
+    // (x * stride + y) for every tx class; rc only coincides with it for
+    // square transforms.
+    let level_idx = x * stride + y
     levels[level_idx] = level_tok.to_byte()
     // ac coefficients
     let mut i = eob - 1

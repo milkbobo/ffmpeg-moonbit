@@ -2191,3 +2191,24 @@ libaom `-crf 0` 三帧向量（128x96），与 libdav1d framemd5 逐帧一致。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **862/862**。
+
+## 50. 2026-10-24 AV1 有损帧开工：非方形变换 levels 布局修正
+
+有损帧（lossless=0）支持的前置调研与首个正确性修复。侦察结论：
+tx_mode=2 的逐块 tx size 符号、txtp_intra1/2 符号、eob_bin 全表
+（16..1024）、dequant/cf_max、tx_type_class 等解码层组件此前均已就位；
+用 `-enable-cdef 0 -enable-restoration 0` 的 crf30 8 帧向量试探，6 帧
+可完整解码、2 帧在帧尾附近块符号分歧导致 overread（分歧点已用逐
+tx 子块的 msac cnt 插桩定位到 (18,23) 的 4x4 IDTX 块附近，root cause
+尚需全帧符号仲裁器对拍）。ffmpeg `-skip_loop_filter` 对 libdav1d 无效，
+未滤波参考不可得，LF 必须实现后才能整帧验收。
+
+修复 `decode_coefs` 的 levels 布局：dav1d 的 DECODE_COEFS_CLASS 宏中
+`if (TX_CLASS_2D)` 以枚举常量 0 参与判断恒为假，levels 对**所有**
+tx class 都取转置布局 `x*stride+y`；原实现 2D 类用 `rc` 索引，仅在
+方形变换（含全部无损 4x4 路径）时数值巧合相等，非方形变换的
+lo_ctx 会错。入口对 `!coded_lossless` 保持拒绝（待 LF 移植与符号
+分歧收敛后放开）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **862/862**（既有无损向量不受影响）。

@@ -167,7 +167,9 @@ fn av1_decode_keyframe_payloads(
     return Err("av1: superres unsupported")
   }
   if !hdr.coded_lossless {
-    // Lossy frames require the in-loop filters (not yet ported).
+    // Lossy frames need the in-loop filters (LF/CDEF/LR) plus the remaining
+    // lossy symbol paths; the decode layer is mostly in place (tx size/txtp/
+    // eob tables) but one symbol divergence is still being tracked down.
     return Err("av1: lossy frames unsupported (need CDEF/LF/LR)")
   }
   if seq.bitdepth != 8 && seq.bitdepth != 10 && seq.bitdepth != 12 {
