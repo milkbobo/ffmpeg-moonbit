@@ -74,3 +74,23 @@ test "wav muxer: 8-bit unsigned PCM and extensible multichannel" {
   assert_eq(demux.format.channel_mask, 0x3FU)
   assert_eq(demux.data_size, 12L)
 }
+
+///|
+test "wav muxer: IEEE float32 round-trips" {
+  let mux = wav_muxer_new(48000, 2, 32, float=true).unwrap()
+  let samples : Array[Float] = [0.5, -0.5]
+  mux.write_float_samples(samples[:])
+  let bytes = mux.finish()
+  let demux = av_wav_open(bytes).unwrap()
+  assert_eq(demux.format.codec, "pcm_f32le")
+  assert_eq(demux.format.bits_per_sample, 32)
+  assert_eq(demux.data_size, 8L)
+  assert_eq(
+    bytes[44:52].to_owned(),
+    Bytes::from_array([0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x00, 0xBF]),
+  )
+  match wav_muxer_new(48000, 2, 16, float=true) {
+    Ok(_) => fail("16-bit float WAV must fail")
+    Err(_) => ()
+  }
+}

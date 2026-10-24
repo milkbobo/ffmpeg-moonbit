@@ -1908,3 +1908,16 @@ extradata、size/dts/duration/keyframe 全部一致；非法参数与空包负�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **825/825**。
+
+## 30. 2026-10-24 WAV IEEE float32 写入
+
+`WavMuxer` 新增 `float=true` 模式：
+
+- 仅允许 32-bit；`write_float_samples` 按 IEEE-754 位模式写小端。
+- `fmt` 使用 format tag 3（IEEE float）；extensible 时 GUID 首 4 字节
+  改为 0x00000003。
+- 回归写 `[0.5, -0.5]` 双声道，`av_wav_open` 回读为 `pcm_f32le`，
+  位模式 `00 00 00 3F / 00 00 00 BF` 与 data 大小一致；16-bit float 负例报错。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **826/826**。
