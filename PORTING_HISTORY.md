@@ -1756,3 +1756,18 @@ VP9 的色度路径在第 14/15 节已按 `ss_h/ss_v` 通用化，但此前只�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **806/806**。
+
+## 20. 2026-10-24 WAV PCM 写入器
+
+新增 `WavMuxer`（`libavformat/wav_mux.mbt`），按 FFmpeg `wavenc.c` 的
+RIFF/WAVE 布局写出 16/24/32-bit 有符号 PCM：
+
+- `wav_muxer_new` 校验采样率、声道数与位深；8-bit（WAV 的无符号 PCM）明确拒绝。
+- `write_samples` 接收交错 `Int32` 样本并按小端写入低 `bits` 位；
+  `finish` 生成 `RIFF`/`fmt `/`data`、计算 `block_align`/`byte_rate`，
+  奇数长度 data 自动补 pad 字节。
+- 回归将写出的字节重新交给现有 `av_wav_open`，验证格式字段、数据偏移/长度、
+  样本计数、16-bit 立体声与 24-bit 单声道奇数长度补位。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **809/809**。
