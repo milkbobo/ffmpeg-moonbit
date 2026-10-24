@@ -883,7 +883,7 @@ payload，输出紧密排列的 8-bit Y/Cb/Cr。支持 4:2:0 关键帧、单/多
 | H.264 | progressive + MBAFF（含混合 field/frame 宏块对）8–14 bit 4:0:0/4:2:0/4:2:2/4:4:4 I/P/B；CAVLC/CABAC 4×4/8×8、I_PCM、多 slice/受限帧内预测、POC 0/1/2、MMCO/短长参考、空间/时间 direct、显式/隐式双向加权、显示重排、High 4:4:4 lossless transform bypass；PAFF 与 frame_num 间隙参考合成；渐进帧与 MBAFF 帧的错误补偿（多轮 MV 猜测 + 恢复区滤波） | SP/SI 重建、FMO、数据分区；场图片按上游边界报错；P 帧大缺口/高位深恢复未逐像素对齐 |
 | HEVC | I/P/B，8/10/12-bit，多色度/单色，WPP/tiles/多 slice | dependent slice、tiles+WPP、PCM/RDPCM 等 |
 | AV1 | OBU/序列与帧头、tile payload 提取；8-bit 4:2:0/4:2:2/4:4:4/单色 多 tile 无损关键帧像素输出 | 有损帧的环路滤波、帧间帧、10/12-bit 等 |
-| VP9 | profile 0/1/2/3 关键帧与帧间帧，8/10/12-bit，4:2:0/4:2:2/4:4:4；隐藏/show-existing、superframe、多 tile、概率自适应 | 复合预测（B 帧）、参考缩放 |
+| VP9 | profile 0/1/2/3 关键帧与帧间帧，8/10/12-bit，4:2:0/4:2:2/4:4:0/4:4:4；隐藏/show-existing、superframe、多 tile、概率自适应 | 复合预测（B 帧）、参考缩放 |
 | MJPEG | 8-bit baseline/progressive，重启标记与多采样 | 无损、12-bit、算术编码 |
 | PNG | 灰度/RGB/RGBA/调色板、1–16-bit、Adam7、APNG | 更多扩展元数据/色彩管理 |
 | AAC | LC，多声道/PCE、CCE、960/1024、短窗/TNS/PNS/pulse | SBR/PS、USAC 与更多真实 CCE/960 向量 |
@@ -1739,3 +1739,20 @@ AV1 monochrome 不再在入口拒绝：
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **802/802**。
+
+## 19. 2026-10-24 VP9 profile 3 4:2:2 与 4:4:0 覆盖
+
+VP9 的色度路径在第 14/15 节已按 `ss_h/ss_v` 通用化，但此前只验证过
+4:2:0、8-bit 4:2:2 与 10/12-bit 4:4:4。本轮补齐四个真实流组合：
+
+- profile 3：10-bit 4:2:2、12-bit 4:2:2；
+- profile 1：8-bit 4:4:0；
+- profile 3：10-bit 4:4:0。
+
+四条流均为 64×48、6 帧（关键帧 + P 帧），色度 MC、4:4:0 的半高色度平面、
+输出打包与循环滤波均直接复用现有通用实现，**无需改动解码代码**；
+24 帧逐帧 YUV MD5 与 Docker FFmpeg 9.0.2 一致。VP9 4:4:4/4:2:2/4:4:0
+回归现共 8 条流、48 帧。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **806/806**。

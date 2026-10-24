@@ -30,6 +30,26 @@ STREAMS = [
      "testsrc2=size=64x48:rate=30 -t 0.2 -vf format=yuv444p12le "
      "-c:v libvpx-vp9 -profile:v 3 -b:v 80k -g 3 -an -y vp9_444_12.ivf",
      "yuv444p12le"),
+    ("vp9_422_10", "profile-3 10-bit 4:2:2 keyframe + P frames",
+     "vp9 422 10-bit: profile-3 keyframes and P frames match FFmpeg YUV",
+     "testsrc2=size=64x48:rate=30 -t 0.2 -vf format=yuv422p10le "
+     "-c:v libvpx-vp9 -profile:v 3 -b:v 80k -g 3 -an -y vp9_422_10.ivf",
+     "yuv422p10le"),
+    ("vp9_422_12", "profile-3 12-bit 4:2:2 keyframe + P frames",
+     "vp9 422 12-bit: profile-3 keyframes and P frames match FFmpeg YUV",
+     "testsrc2=size=64x48:rate=30 -t 0.2 -vf format=yuv422p12le "
+     "-c:v libvpx-vp9 -profile:v 3 -b:v 80k -g 3 -an -y vp9_422_12.ivf",
+     "yuv422p12le"),
+    ("vp9_440_8", "profile-1 8-bit 4:4:0 keyframe + P frames",
+     "vp9 440 8-bit: profile-1 keyframes and P frames match FFmpeg YUV",
+     "testsrc2=size=64x48:rate=30 -t 0.2 -vf format=yuv440p "
+     "-c:v libvpx-vp9 -profile:v 1 -b:v 80k -g 3 -an -y vp9_440_8.ivf",
+     "yuv440p"),
+    ("vp9_440_10", "profile-3 10-bit 4:4:0 keyframe + P frames",
+     "vp9 440 10-bit: profile-3 keyframes and P frames match FFmpeg YUV",
+     "testsrc2=size=64x48:rate=30 -t 0.2 -vf format=yuv440p10le "
+     "-c:v libvpx-vp9 -profile:v 3 -b:v 80k -g 3 -an -y vp9_440_10.ivf",
+     "yuv440p10le"),
 ]
 
 
