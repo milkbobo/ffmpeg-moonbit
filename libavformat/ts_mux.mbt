@@ -1,8 +1,10 @@
 ///|
-/// Minimal in-memory MPEG-TS writer for one H.264 video and one AAC audio
-/// elementary stream.  It mirrors the table/PES layout used by FFmpeg 9.0.2
+/// Minimal in-memory MPEG-TS writer for one video and one audio elementary
+/// stream.  It mirrors the table/PES layout used by FFmpeg 9.0.2
 /// `mpegtsenc.c` (PAT, PMT, PES with PTS-only headers) without the transport
-/// buffering and PCR scheduling.
+/// buffering and PCR scheduling.  The PMT stream types default to H.264
+/// (0x1B) + AAC ADTS (0x0F) and can be overridden per constructor call
+/// (HEVC 0x24, MP3 0x03/0x04, ... as written by FFmpeg `mpegtsenc.c`).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later, Copyright (c) 2004 Alex Beregszaszi.
 /// This port keeps the same license.
@@ -12,6 +14,8 @@ pub struct TsMuxer {
   pmt_pid : Int32
   video_pid : Int32
   audio_pid : Int32
+  video_stream_type : Int32
+  audio_stream_type : Int32
   mut wrote_tables : Bool
   /// Continuity counters indexed by PID (13-bit PID space).
   cc : FixedArray[Int32]
@@ -22,11 +26,17 @@ pub struct TsMuxer {
 pub fn ts_muxer_new(
   video_pid? : Int32 = 0x100,
   audio_pid? : Int32 = 0x101,
+  /// PMT stream type of the video ES (0x1B H.264, 0x24 HEVC, ...).
+  video_stream_type? : Int32 = 0x1B,
+  /// PMT stream type of the audio ES (0x0F AAC ADTS, 0x03 MP3, ...).
+  audio_stream_type? : Int32 = 0x0F,
 ) -> TsMuxer {
   {
     pmt_pid: 0x1000,
     video_pid,
     audio_pid,
+    video_stream_type,
+    audio_stream_type,
     wrote_tables: false,
     cc: FixedArray::make(8192, 0),
     out: [],
@@ -146,11 +156,10 @@ fn TsMuxer::pmt(self : TsMuxer) -> Unit {
   section.push(b'\x00')
   ts_mux_u16(section, 0xE000 | self.video_pid) // PCR_PID
   ts_mux_u16(section, 0xF000) // program_info_length = 0
-  // H.264 (0x1B) and AAC ADTS (0x0F).
-  section.push(b'\x1B')
+  section.push(self.video_stream_type.to_byte())
   ts_mux_u16(section, 0xE000 | self.video_pid)
   ts_mux_u16(section, 0xF000)
-  section.push(b'\x0F')
+  section.push(self.audio_stream_type.to_byte())
   ts_mux_u16(section, 0xE000 | self.audio_pid)
   ts_mux_u16(section, 0xF000)
   let crc = ts_mux_crc(section)
@@ -207,14 +216,15 @@ fn TsMuxer::pes(
 }
 
 ///|
-/// Write one H.264 access-unit payload with a PTS in 90 kHz units.
+/// Write one video access-unit payload (H.264/HEVC Annex B) with a PTS in
+/// 90 kHz units.
 pub fn TsMuxer::write_video(self : TsMuxer, pts : Int64, payload : Bytes) -> Unit {
   self.ensure_tables()
   self.pes(self.video_pid, 0xE0, pts, payload, false, pts)
 }
 
 ///|
-/// Write one AAC (ADTS) payload with a PTS in 90 kHz units.
+/// Write one audio payload (AAC ADTS or MP3 frame) with a PTS in 90 kHz units.
 pub fn TsMuxer::write_audio(self : TsMuxer, pts : Int64, payload : Bytes) -> Unit {
   self.ensure_tables()
   self.pes(self.audio_pid, 0xC0, pts, payload, true, -1L)

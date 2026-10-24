@@ -2104,3 +2104,19 @@ hevc/av1/vp9/opus，前 3 帧（或 Opus 前 3 包）解码结果与源 MP4 完�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **853/853**。
+
+## 46. 2026-10-24 MPEG-TS 写入器支持自定义 stream type
+
+`ts_muxer_new` 新增 `video_stream_type`/`audio_stream_type` 命名参数（默认
+0x1B H.264 与 0x0F AAC，保持既有调用兼容），PMT 中的流类型改由字段驱动，
+由此支持 HEVC（0x24）、MP3（0x03/0x04）等解复用器已能识别的组合。
+
+回归内嵌 docker FFmpeg 9.0.2 生成的真实向量：libx265（AUD 拆分的 3 个
+access unit）与 libmp3lame（4 帧 MPEG-1 Layer III），以 HEVC+MP3 组合
+写入并经 `av_mpegts_open` 回读，验证 codec/pid/PTS/payload/PCR 全部一致。
+外部校验：同参数产物 `.ts` 被 ffprobe 正确识别为 hevc+mp3，视频 3 帧与
+音频 4 帧的 framemd5 与源码流解码完全一致，ffprobe 的 pts_time 序列
+（视频 0/0.1/0.2 s，音频 1152 样本步进）符合预期。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **854/854**。
