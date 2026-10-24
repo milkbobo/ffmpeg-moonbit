@@ -38,23 +38,13 @@ fn av1_kf_md5_hex(digest : FixedArray[Byte]) -> String {
 }
 
 ///|
-/// MD5 over the frame planes, line by line like framemd5 (no padding).
+/// MD5 over the frame planes, line by line like framemd5 (no paddin///|
+/// MD5 over the packed frame bytes (matches framemd5 over the packed pixel
+/// output; 8-bit packs one byte per sample).
 fn av1_kf_frame_md5(frame : Av1FrameOutput) -> String {
-  let digest : FixedArray[Byte] = FixedArray::make(16, b' ')
-  let cw = (frame.width + 1) >> 1
-  let ch = (frame.height + 1) >> 1
-  let buf : Array[Byte] = []
-  let feed = (plane : FixedArray[Byte], stride : Int32, w : Int32, h : Int32) => {
-    for y in 0..<h {
-      for x in 0..<w {
-        buf.push(plane[y * stride + x])
-      }
-    }
-  }
-  feed(frame.y, frame.y_stride, frame.width, frame.height)
-  feed(frame.u, frame.uv_stride, cw, ch)
-  feed(frame.v, frame.uv_stride, cw, ch)
-  @libavutil.av_md5_sum(digest, Bytes::from_array(buf), buf.length())
+  let digest : FixedArray[Byte] = FixedArray::make(16, b' ')
+  let packed = frame.packed()
+  @libavutil.av_md5_sum(digest, packed, packed.length())
   av1_kf_md5_hex(digest)
 }
 

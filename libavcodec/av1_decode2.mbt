@@ -273,7 +273,8 @@ fn Av1TileCtx::decode_coefs(
   let dq_tbl0 = self.f.dq[dq_base + 0]
   let dq_tbl1 = self.f.dq[dq_base + 1]
   let dq_shift = av1_imax(0, t_dim_ctx - 2)
-  let cf_max = 32767
+  // ~(~127U << bpc): 8->32767, 10->131071, 12->524287
+  let cf_max = (1 << (self.f.bpc + 7)) - 1
   let cul_level = Ref(0)
   let dc_sign_level = Ref(1 << 6)
   if dc_tok != 0 {
@@ -322,7 +323,7 @@ fn av1_lnot(v : Int32) -> Int32 {
 }
 
 ///|
-/// `read_pal_plane` from recon_tmpl.c (8-bit).
+/// `read_pal_plane` from recon_tmpl.c.
 fn Av1TileCtx::read_pal_plane(
   self : Av1TileCtx,
   pl : Int32,
@@ -355,7 +356,7 @@ fn Av1TileCtx::read_pal_plane(
   }
   // al_pal: [2][32][3][8]
   let al = (d : Int32, i : Int32, p : Int32, k : Int32) => {
-    self.al_pal[((d * 32 + i) * 3 + p) * 8 + k].to_int()
+    self.al_pal[((d * 32 + i) * 3 + p) * 8 + k]
   }
   let mut li = 0
   let mut ai = 0
@@ -413,11 +414,11 @@ fn Av1TileCtx::read_pal_plane(
   }
   // parse new entries into pal[pl]
   let pal_base = pl * 8
-  let bpc = 8
+  let bpc = self.f.bpc
   let mut i = n_used
   if i < pal_sz {
     let mut prev = self.msac.decode_bools(bpc).reinterpret_as_int()
-    self.pal[pal_base + i] = prev.to_byte()
+    self.pal[pal_base + i] = prev
     i = i + 1
     if i < pal_sz {
       let mut bits = bpc - 3 + self.msac.decode_bools(2).reinterpret_as_int()
@@ -425,11 +426,11 @@ fn Av1TileCtx::read_pal_plane(
       while i < pal_sz {
         let delta = self.msac.decode_bools(bits).reinterpret_as_int()
         prev = av1_imin(prev + delta + (if pl != 0 { 0 } else { 1 }), max)
-        self.pal[pal_base + i] = prev.to_byte()
+        self.pal[pal_base + i] = prev
         i = i + 1
         if prev + (if pl != 0 { 0 } else { 1 }) >= max {
           while i < pal_sz {
-            self.pal[pal_base + i] = max.to_byte()
+            self.pal[pal_base + i] = max
             i = i + 1
           }
           break
@@ -448,8 +449,8 @@ fn Av1TileCtx::read_pal_plane(
     let mut m = n_used
     for k in 0..<pal_sz {
       if nn < n_used &&
-        (m >= pal_sz || used_cache[nn] <= self.pal[pal_base + m].to_int()) {
-        self.pal[pal_base + k] = used_cache[nn].to_byte()
+        (m >= pal_sz || used_cache[nn] <= self.pal[pal_base + m]) {
+        self.pal[pal_base + k] = used_cache[nn]
         nn = nn + 1
       } else {
         self.pal[pal_base + k] = self.pal[pal_base + m]
@@ -458,7 +459,7 @@ fn Av1TileCtx::read_pal_plane(
     }
   } else {
     for k in 0..<n_used {
-      self.pal[pal_base + k] = used_cache[k].to_byte()
+      self.pal[pal_base + k] = used_cache[k]
     }
   }
   pal_sz
@@ -468,11 +469,11 @@ fn Av1TileCtx::read_pal_plane(
 /// `read_pal_uv` V-plane palette continuation.
 fn Av1TileCtx::read_pal_uv(self : Av1TileCtx, pal_sz : Int32) -> Unit {
   let pal_base = 2 * 8
-  let bpc = 8
+  let bpc = self.f.bpc
   if self.msac.decode_bool_equi() != 0 {
     let bits = bpc - 4 + self.msac.decode_bools(2).reinterpret_as_int()
     let mut prev = self.msac.decode_bools(bpc).reinterpret_as_int()
-    self.pal[pal_base + 0] = prev.to_byte()
+    self.pal[pal_base + 0] = prev
     let max = (1 << bpc) - 1
     for i in 1..<pal_sz {
       let mut delta = self.msac.decode_bools(bits).reinterpret_as_int()
@@ -480,14 +481,13 @@ fn Av1TileCtx::read_pal_uv(self : Av1TileCtx, pal_sz : Int32) -> Unit {
         delta = -delta
       }
       prev = (prev + delta) & max
-      self.pal[pal_base + i] = prev.to_byte()
+      self.pal[pal_base + i] = prev
     }
   } else {
     for i in 0..<pal_sz {
       self.pal[pal_base + i] = self.msac
         .decode_bools(bpc)
         .reinterpret_as_int()
-        .to_byte()
     }
   }
 }

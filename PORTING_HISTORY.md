@@ -2163,3 +2163,31 @@ FFmpeg 9.0.2 framemd5 全部一致，并断言 `comp_inter_blocks == 0`。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **861/861**。
+
+## 49. 2026-10-24 AV1 无损关键帧支持 10/12-bit
+
+把 AV1 像素路径从 8-bit 泛化到 8/10/12-bit。核心是像素平面
+`FixedArray[Byte]` → `FixedArray[Int32]` 的一次性重构：`planes`/
+`ipred_edge`/`edge_buf`/`pal`/`al_pal` 换为分量值存储，`Av1FrameCtx` 增加
+`bpc`/`pixel_max`/`mid`，`Av1FrameOutput::packed` 对高位深按小端 uint16
+打包（对应 ffmpeg 的 yuv420p10le/p12le）。
+
+位深相关语义逐点对齐 dav1d（BITDEPTH 模板分支）：
+- ipred 常量参数化——edge 填充 129/127/128 → `mid±1`/`mid`；DC_128 →
+  `(1<<bpc)>>1`；`dc_gen` 非方形乘数 8-bit (0x5556/0x3334,>>16) 与
+  10/12-bit (0xAAAB/0x6667,>>17) 分支；`iclip_pixel` 上限 `pixel_max`；
+  ipred/itx 系列函数加 `bd_max`/`mid` 可选命名参数（默认 255/128 兼容）。
+- palette 解析 `bpc` 来自序列头（`decode_bools(bpc)`、delta bits、max 环绕）。
+- dequant 表按 `dav1d_dq_tbl[hbd]` 三组选取（init_quant 原已就绪）。
+- **decode_coefs 的 cf_max 修正**：原硬编码 32767（8-bit），改为
+  `~(~127<<bpc)`（10→131071、12→524287）。这是 12-bit 不收敛的根因——
+  大系数被错误钳制；10-bit 流恰未触发但同属错误，一并修复。
+- CFL AC 模拟 dav1d `int16_t` 存储的环绕语义（12-bit AC 和可达 131040）。
+
+回归：既有 8-bit 无损向量 MD5 不变（11/11）；新增 10/12-bit yuv420p
+libaom `-crf 0` 三帧向量（128x96），与 libdav1d framemd5 逐帧一致。
+调试过程沉淀：先按行/平面 MD5 定位到 U 平面 16x8 区域，再用块参数
+插桩（uv_mode/pal_sz/cfl_alpha）区分 CFL 与非 CFL 块，最终锁定 cf_max。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **862/862**。

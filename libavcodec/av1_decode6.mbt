@@ -36,7 +36,7 @@ fn Av1TileCtx::decode_tile_sbrow(
     self.pal_sz_uv[32 + i] = 0
   }
   for i in 0..<(32 * 3 * 8) {
-    self.al_pal[32 * 3 * 8 + i] = b'\x00'
+    self.al_pal[32 * 3 * 8 + i] = 0
   }
   let mut bx = self.col_start
   self.a_idx = self.tile_row * f.sb128w + (self.col_start >> 5)
@@ -67,11 +67,12 @@ fn Av1TileCtx::decode_tile_sbrow(
 }
 
 ///|
-/// Decoded frame output: planar planes plus geometry and subsampling.
+/// Decoded frame output: planar planes (component values) plus geometry,
+/// subsampling and bit depth.
 pub struct Av1FrameOutput {
-  y : FixedArray[Byte]
-  u : FixedArray[Byte]
-  v : FixedArray[Byte]
+  y : FixedArray[Int32]
+  u : FixedArray[Int32]
+  v : FixedArray[Int32]
   width : Int32
   height : Int32
   y_stride : Int32
@@ -79,19 +80,29 @@ pub struct Av1FrameOutput {
   ss_h : Int32
   ss_v : Int32
   mono : Bool
+  bitdepth : Int32
 }
 
 ///|
-/// Pack the frame as contiguous planar bytes: luma at `width`×`height`, then
+/// Pack the frame as contiguous planar samples: luma at `width`×`height`, then
 /// Cb and Cr at the sequence's chroma subsampling (none for monochrome).
+/// 8-bit packs one byte per sample; 10/12-bit pack little-endian uint16 as
+/// FFmpeg does for `yuv*PG(10|12)le`.
 pub fn Av1FrameOutput::packed(self : Av1FrameOutput) -> Bytes {
   let cw = (self.width + self.ss_h) >> self.ss_h
   let ch = (self.height + self.ss_v) >> self.ss_v
   let buf : Array[Byte] = []
-  let feed = (plane : FixedArray[Byte], stride : Int32, w : Int32, h : Int32) => {
+  let wide = self.bitdepth > 8
+  let feed = (plane : FixedArray[Int32], stride : Int32, w : Int32, h : Int32) => {
     for y in 0..<h {
       for x in 0..<w {
-        buf.push(plane[y * stride + x])
+        let v = plane[y * stride + x]
+        if wide {
+          buf.push((v & 0xFF).to_byte())
+          buf.push(((v >> 8) & 0xFF).to_byte())
+        } else {
+          buf.push(v.to_byte())
+        }
       }
     }
   }
@@ -159,8 +170,8 @@ fn av1_decode_keyframe_payloads(
     // Lossy frames require the in-loop filters (not yet ported).
     return Err("av1: lossy frames unsupported (need CDEF/LF/LR)")
   }
-  if seq.bitdepth != 8 {
-    return Err("av1: only 8-bit pixel output is supported")
+  if seq.bitdepth != 8 && seq.bitdepth != 10 && seq.bitdepth != 12 {
+    return Err("av1: unsupported bit depth")
   }
   let num_tiles = hdr.tile_cols * hdr.tile_rows
   if payloads.length() != num_tiles {
@@ -186,30 +197,33 @@ fn av1_decode_keyframe_payloads(
   let aligned_w = (w + 127) & -128
   let y_stride = aligned_w
   let uv_stride = aligned_w >> ss_h
-  let y_plane : FixedArray[Byte] = FixedArray::make(
+  let bpc = seq.bitdepth
+  let pixel_max = (1 << bpc) - 1
+  let mid = (1 << bpc) >> 1
+  let y_plane : FixedArray[Int32] = FixedArray::make(
     y_stride * (h + 2 * sb_step * 4 + 64),
-    b'\x80',
+    mid,
   )
   let uv_h = (h + ss_v) >> ss_v
-  let u_plane : FixedArray[Byte] = FixedArray::make(
+  let u_plane : FixedArray[Int32] = FixedArray::make(
     uv_stride * (uv_h + sb_step * 2 + 64),
-    b'\x80',
+    mid,
   )
-  let v_plane : FixedArray[Byte] = FixedArray::make(
+  let v_plane : FixedArray[Int32] = FixedArray::make(
     uv_stride * (uv_h + sb_step * 2 + 64),
-    b'\x80',
+    mid,
   )
-  let planes : FixedArray[FixedArray[Byte]] = [y_plane, u_plane, v_plane]
+  let planes : FixedArray[FixedArray[Int32]] = [y_plane, u_plane, v_plane]
   let a = []
   for _ in 0..<(sb128w * hdr.tile_rows) {
     let a_ctx = av1_block_context_new()
     a_ctx.reset_keyframe()
     a.push(a_ctx)
   }
-  let ipred_edge : FixedArray[FixedArray[Byte]] = [
-    FixedArray::make(sb128w * 128 * (sb128h + 1), b'\x80'),
-    FixedArray::make(sb128w * 128 * (sb128h + 1), b'\x80'),
-    FixedArray::make(sb128w * 128 * (sb128h + 1), b'\x80'),
+  let ipred_edge : FixedArray[FixedArray[Int32]] = [
+    FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
+    FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
+    FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
   ]
   let f : Av1FrameCtx = {
     seq,
@@ -219,6 +233,9 @@ fn av1_decode_keyframe_payloads(
     sb128w,
     sb_shift,
     sb_step,
+    bpc,
+    pixel_max,
+    mid,
     planes,
     y_stride,
     uv_stride,
@@ -258,14 +275,14 @@ fn av1_decode_keyframe_payloads(
         by: row_start,
         a_idx: tile_row * sb128w + (col_start >> 5),
         cur_sb_cdef_idx: FixedArray::make(4, -1),
-        al_pal: FixedArray::make(2 * 32 * 3 * 8, b'\x00'),
+        al_pal: FixedArray::make(2 * 32 * 3 * 8, 0),
         pal_sz_uv: FixedArray::make(64, 0),
         levels: FixedArray::make(32 * 34, b'\x00'),
-        edge_buf: FixedArray::make(128 * 3, b'\x00'),
+        edge_buf: FixedArray::make(128 * 3, 0),
         cf: FixedArray::make(64 * 64, 0),
         pal_idx_y: FixedArray::make(64 * 64, b'\x00'),
         pal_idx_uv: FixedArray::make(64 * 64, b'\x00'),
-        pal: FixedArray::make(3 * 8, b'\x00'),
+        pal: FixedArray::make(3 * 8, 0),
         ac: FixedArray::make(32 * 32, 0),
       }
       let mut by = row_start
@@ -289,6 +306,7 @@ fn av1_decode_keyframe_payloads(
       ss_h,
       ss_v,
       mono: seq.monochrome,
+      bitdepth: bpc,
     })
   } catch {
     Av1DecError::Unsupported(msg) => Err(msg)

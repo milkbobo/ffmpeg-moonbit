@@ -714,10 +714,11 @@ fn av1_inv_wht4_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
 ///|
 /// `inv_txfm_add_wht_wht_4x4_c`: lossless inverse transform + add.
 fn av1_inv_txfm_add_wht_wht_4x4(
-  dst : FixedArray[Byte],
+  dst : FixedArray[Int],
   dst_off : Int,
   dst_stride : Int,
   coeff : FixedArray[Int],
+  bd_max : Int,
 ) -> Unit {
   let tmp = FixedArray::make(16, 0)
   for y in 0..<4 {
@@ -735,21 +736,21 @@ fn av1_inv_txfm_add_wht_wht_4x4(
   let mut i = 0
   for y in 0..<4 {
     for x in 0..<4 {
-      let v = dst[dst_off + y * dst_stride + x].to_int() + tmp[i]
+      let v = dst[dst_off + y * dst_stride + x] + tmp[i]
       i = i + 1
-      dst[dst_off + y * dst_stride + x] = av1_clip_u8(v)
+      dst[dst_off + y * dst_stride + x] = av1_clip_px(v, bd_max)
     }
   }
 }
 
 ///|
-fn av1_clip_u8(v : Int) -> Byte {
+fn av1_clip_px(v : Int, bd_max : Int) -> Int {
   if v < 0 {
     0
-  } else if v > 255 {
-    255
+  } else if v > bd_max {
+    bd_max
   } else {
-    v.to_byte()
+    v
   }
 }
 
@@ -757,7 +758,7 @@ fn av1_clip_u8(v : Int) -> Byte {
 /// Generic `inv_txfm_add_c` from dav1d itx_tmpl.c. `tx` is a RectTxfmSize,
 /// `txtp` a TxfmType. `shift` comes from the itxfm_fn table.
 fn av1_inv_txfm_add(
-  dst : FixedArray[Byte],
+  dst : FixedArray[Int],
   dst_off : Int,
   dst_stride : Int,
   coeff : FixedArray[Int],
@@ -765,6 +766,7 @@ fn av1_inv_txfm_add(
   tx : Int,
   shift : Int,
   txtp : Int,
+  bd_max : Int,
 ) -> Unit {
   let lw = av1_txfm_info(tx, 2)
   let lh = av1_txfm_info(tx, 3)
@@ -785,7 +787,7 @@ fn av1_inv_txfm_add(
     for y in 0..<h {
       for x in 0..<w {
         let p = dst_off + y * dst_stride + x
-        dst[p] = av1_clip_u8(dst[p].to_int() + dc)
+        dst[p] = av1_clip_px(dst[p] + dc, bd_max)
       }
     }
     return
@@ -834,7 +836,7 @@ fn av1_inv_txfm_add(
   for y in 0..<h {
     for x in 0..<w {
       let p = dst_off + y * dst_stride + x
-      dst[p] = av1_clip_u8(dst[p].to_int() + ((tmp[i] + 8) >> 4))
+      dst[p] = av1_clip_px(dst[p] + ((tmp[i] + 8) >> 4), bd_max)
       i = i + 1
     }
   }
@@ -844,24 +846,25 @@ fn av1_inv_txfm_add(
 /// `itxfm_add` dispatch: WHT_WHT special-cased, shift per dav1d's macro
 /// table (`inv_txfm_fn(w, h, shift)`).
 pub fn av1_itxfm_add(
-  dst : FixedArray[Byte],
+  dst : FixedArray[Int],
   dst_off : Int,
   dst_stride : Int,
   coeff : FixedArray[Int],
   eob : Int,
   tx : Int,
   txtp : Int,
+  bd_max : Int,
 ) -> Unit {
   if tx == 0 && txtp == 16 {
     // TX_4X4 + WHT_WHT (lossless)
-    av1_inv_txfm_add_wht_wht_4x4(dst, dst_off, dst_stride, coeff)
+    av1_inv_txfm_add_wht_wht_4x4(dst, dst_off, dst_stride, coeff, bd_max)
     return
   }
   let lw = av1_txfm_info(tx, 2)
   let lh = av1_txfm_info(tx, 3)
   let shift = av1_itx_shift(lw, lh)
   av1_inv_txfm_add(
-    dst, dst_off, dst_stride, coeff, eob, tx, shift, txtp,
+    dst, dst_off, dst_stride, coeff, eob, tx, shift, txtp, bd_max,
   )
 }
 

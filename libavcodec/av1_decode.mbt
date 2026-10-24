@@ -104,8 +104,14 @@ priv struct Av1FrameCtx {
   sb128w : Int32
   sb_shift : Int32
   sb_step : Int32
-  /// Picture planes (8-bit), stride in pixels.
-  planes : FixedArray[FixedArray[Byte]]
+  /// Bits per component (8/10/12).
+  bpc : Int32
+  /// (1 << bpc) - 1, the clip ceiling (dav1d `bitdepth_max`).
+  pixel_max : Int32
+  /// (1 << bpc) >> 1, the midpoint (dav1d DC_128 / plane fill).
+  mid : Int32
+  /// Picture planes (component values), stride in pixels.
+  planes : FixedArray[FixedArray[Int32]]
   y_stride : Int32
   uv_stride : Int32
   /// Chroma subsampling shifts from the sequence header.
@@ -116,7 +122,7 @@ priv struct Av1FrameCtx {
   /// Left context for the current SB row.
   l : Av1BlockContext
   /// ipred edge backup: 3 planes of sb128w*128*(sb128h+1).
-  ipred_edge : FixedArray[FixedArray[Byte]]
+  ipred_edge : FixedArray[FixedArray[Int32]]
   /// Dequant per segment: [seg*6 + plane*2 + (0 dc,1 ac)].
   dq : FixedArray[Int32]
   /// Per-segment lossless flags (dav1d segmentation.lossless).
@@ -142,17 +148,17 @@ priv struct Av1TileCtx {
   mut a_idx : Int32
   /// cdef indices for the current SB (cdef_bits may be 0).
   cur_sb_cdef_idx : FixedArray[Int32]
-  /// Per-tile above/left palette cache: [2][32][3][8] flattened bytes.
-  al_pal : FixedArray[Byte]
+  /// Per-tile above/left palette cache: [2][32][3][8] flattened values.
+  al_pal : FixedArray[Int32]
   /// Per-tile pal_sz_uv[2][32].
   pal_sz_uv : FixedArray[Int32]
   // scratch buffers
   levels : FixedArray[Byte] // 32*34
-  edge_buf : FixedArray[Byte] // 128*3, anchor at 128+128
+  edge_buf : FixedArray[Int32] // 128*3, anchor at 128+128
   cf : FixedArray[Int32] // coefficients
   pal_idx_y : FixedArray[Byte] // 64*64/2? use full byte per idx (bw4*bh4*16)
   pal_idx_uv : FixedArray[Byte]
-  pal : FixedArray[Byte] // [3][8]
+  pal : FixedArray[Int32] // [3][8]
   ac : FixedArray[Int32] // 32*32
 }
 
@@ -204,8 +210,7 @@ fn av1_bdim(bs : Int32, i : Int32) -> Int32 {
 ///|
 /// `init_quant_tables` (8-bit rows of dav1d_dq_tbl).
 fn Av1FrameCtx::init_quant(self : Av1FrameCtx) -> Unit {
-  // 8-bit streams use dq_tbl_0; the 10/12-bit tables stay referenced for
-  // the higher-bitdepth path (currently rejected at entry).
+  // dq_tbl rows follow dav1d_dq_tbl[hbd] (8/10/12-bit streams).
   let dq_tbl : FixedArray[UInt16] = if self.seq.bitdepth == 8 {
     av1_dq_tbl_0
   } else if self.seq.bitdepth == 10 {

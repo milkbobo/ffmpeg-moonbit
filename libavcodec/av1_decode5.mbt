@@ -135,6 +135,7 @@ fn Av1TileCtx::recon_b_intra(
               },
               edge_buf,
               topleft,
+              mid=f.mid,
             )
             angle = angle_ref.val
             av1_ipred_predict(
@@ -149,6 +150,8 @@ fn Av1TileCtx::recon_b_intra(
               angle | intra_flags,
               4 * f.bw - 4 * self.bx,
               4 * f.bh - 4 * self.by,
+              bd_max=f.pixel_max,
+              mid=f.mid,
             )
           }
           if !b.skip {
@@ -181,6 +184,7 @@ fn Av1TileCtx::recon_b_intra(
                 eob,
                 b.tx,
                 txtp,
+                f.pixel_max,
               )
             }
           } else {
@@ -263,6 +267,7 @@ fn Av1TileCtx::recon_b_intra(
               0,
               edge_buf,
               topleft,
+              mid=f.mid,
             )
             // cfl_pred uses DC-family predictors with the AC array
             av1_cfl_predict(
@@ -271,9 +276,18 @@ fn Av1TileCtx::recon_b_intra(
               uv_stride,
               uv_t_dim_w * 4,
               uv_t_dim_h * 4,
-              av1_cfl_dc(m, edge_buf, topleft, uv_t_dim_w * 4, uv_t_dim_h * 4),
+              av1_cfl_dc(
+                m,
+                edge_buf,
+                topleft,
+                uv_t_dim_w * 4,
+                uv_t_dim_h * 4,
+                bd_max=f.pixel_max,
+                mid=f.mid,
+              ),
               ac,
               alpha,
+              bd_max=f.pixel_max,
             )
           }
         } else if b.pal_sz.1 != 0 {
@@ -393,6 +407,7 @@ fn Av1TileCtx::recon_b_intra(
                   },
                   edge_buf,
                   topleft,
+                  mid=f.mid,
                 )
                 angle = angle_ref.val
                 angle = angle | intra_edge_filter_flag
@@ -408,6 +423,8 @@ fn Av1TileCtx::recon_b_intra(
                   angle | sm_uv_fl,
                   (4 * f.bw + ss_hor - 4 * (self.bx & (-1 - ss_hor))) >> ss_hor,
                   (4 * f.bh + ss_ver - 4 * (self.by & (-1 - ss_ver))) >> ss_ver,
+                  bd_max=f.pixel_max,
+                  mid=f.mid,
                 )
               }
               if !b.skip {
@@ -450,6 +467,7 @@ fn Av1TileCtx::recon_b_intra(
                     eob,
                     b.uvtx,
                     txtp,
+                    f.pixel_max,
                   )
                 }
               } else {
