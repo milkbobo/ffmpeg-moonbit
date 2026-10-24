@@ -22,7 +22,7 @@ def read_md5s(path):
     for line in io.open(path):
         parts = line.strip().split(',')
         if len(parts) >= 5 and parts[0] == '0':
-            out.append(parts[-1])
+            out.append(parts[-1].strip())
     return out
 
 
