@@ -12,7 +12,7 @@
 > 复合预测 `prep` 与等权/距离加权平均见 PORTING_HISTORY §64；
 > 实现提交 `29159c1`，该阶段全量测试 **876/876**。
 > 逐像素 mask 混合及差值 mask 见 PORTING_HISTORY §65；
-> 最新 Wasm 全量测试 **877/877**。
+> 实现提交 `3f2ca44`，最新 Wasm 全量测试 **877/877**。
 
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）

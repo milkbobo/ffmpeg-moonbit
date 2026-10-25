@@ -3,8 +3,8 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> AV1 复合预测基础提交：`29159c1 feat: 补齐 AV1 复合预测中间样本与平均合成`（原文为 2026-10-24 阶段记录）。
-> 全量 Wasm 测试：**876/876 通过**；`moon check --deny-warn` 0 error / 0 warning。
+> AV1 mask 混合提交：`3f2ca44 feat: 增加 AV1 复合预测 mask 混合与差值掩码`（原文为 2026-10-24 阶段记录）。
+> 全量 Wasm 测试：**877/877 通过**；`moon check --deny-warn` 0 error / 0 warning。
 
 先读这几份文档，再动手：
 
