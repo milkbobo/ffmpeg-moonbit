@@ -2288,3 +2288,30 @@ chroma 掩码 `sidx` 的移位（应为 `sidx << vbits/hbits`，此前写成
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **864/864**。
+
+## 53. 2026-10-25 AV1 CDEF（约束方向增强滤波）
+
+新增 `libavcodec/av1_cdef.mbt`：dav1d `cdef_tmpl.c` 的
+`cdef_find_dir`（八方向代价 + 方差）与 `cdef_filter_block`（主/次抽头、
+`constrain`、主+次分支的 min/max 钳制），以及 `cdef_apply_tmpl.c` 的
+单线程逐块调度（cdef_idx/强度/方向/边缘标志）。
+
+实现要点：
+- 每 128x128 区域的 `cdef_idx[4]` 与 `noskip_mask[16][2]` 挂在
+  `Av1Filter` 上：前者在 `decode_b` 读 cdef 索引时按 64-SB 槽位
+  （`((bx&16)>>4)+((by&16)>>3)`）写入（此前所有 64-SB 共用槽 0，
+  导致 3/4 的块被漏滤）；后者按 dav1d 的 4x8 位布局在 `!skip` 时填充。
+- 滤波在 LF 之后进行，但先对整帧做一次**未 CDEF 快照**：CDEF 每个
+  8x8 块只读快照、写当前帧。对 intra 帧这与 dav1d 的逐 SB 行+2 行滞后
+  调度等价（deblock 不能消费 CDEF 输出），实现上更简单。
+- `cdef_find_dir` 只在 luma 主强度或 chroma 主强度非零时计算；luma
+  次强度单开时 dav1d 传 `dir=0`（这是本轮最后一个差异点）。
+- 4:2:0 色度用 4x4 核、damping-1；4:2:2 用 4x8 核与 uv 方向映射。
+
+验证：libaom crf30（`-enable-restoration 0`，CDEF 开启）128x96 8 帧，
+逐块 (bx,by,cdef_idx,yl,uvl,dir,var,edges) 与 dav1d 完全一致，
+framemd5 8/8 与 FFmpeg 9.0.2（libdav1d）一致；向量见
+`libavcodec/av1_lossy_vectors/cdef_test.mbt`。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **865/865**。

@@ -138,6 +138,9 @@ priv struct Av1FrameCtx {
   lf_y_active : Bool
   lf_u_active : Bool
   lf_v_active : Bool
+  /// CDEF strengths/damping and whether CDEF is active for this frame.
+  cdef : Av1CdefParams
+  cdef_on : Bool
 }
 
 ///|

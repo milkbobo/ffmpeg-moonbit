@@ -207,22 +207,26 @@ fn Av1TileCtx::decode_b(
   let skip = self.msac.decode_bool_adapt(self.cdf.skip, sctx * 2) != 0
   // cdef index (n_bits may be 0: no bits consumed)
   if !skip {
-    let idx = if f.seq.use_128x128_superblock {
-      ((self.bx & 16) >> 4) + ((self.by & 16) >> 3)
-    } else {
-      0
-    }
+    // 64x64 SBs use one of the four 128-area slots; 128x128 SBs use the
+    // quadrant index within the area (dav1d passes an already-offset pointer
+    // for 64x64 SBs).
+    let idx = ((self.bx & 16) >> 4) + ((self.by & 16) >> 3)
     if self.cur_sb_cdef_idx[idx] == -1 {
       let v = self.msac.decode_bools(hdr.cdef_bits).reinterpret_as_int()
       self.cur_sb_cdef_idx[idx] = v
+      let lfm = f.lf_mask[(self.by >> 5) * f.sb128w + (self.bx >> 5)]
+      lfm.cdef_idx[idx] = v
       if bw4 > 16 {
         self.cur_sb_cdef_idx[idx + 1] = v
+        lfm.cdef_idx[idx + 1] = v
       }
       if bh4 > 16 {
         self.cur_sb_cdef_idx[idx + 2] = v
+        lfm.cdef_idx[idx + 2] = v
       }
       if bw4 == 32 && bh4 == 32 {
         self.cur_sb_cdef_idx[idx + 3] = v
+        lfm.cdef_idx[idx + 3] = v
       }
     }
   }
@@ -413,6 +417,23 @@ fn Av1TileCtx::decode_b(
       f.lf_lvl,
       seg_id,
     )
+  }
+  // CDEF noskip mask: 8x8 blocks that contain any coded coefficients.
+  if !skip {
+    let lfm = f.lf_mask[(self.by >> 5) * f.sb128w + (self.bx >> 5)]
+    let mask : UInt = ((0xFFFFFFFFU >> (32 - bw4)) << (bx4 & 15))
+    let bx_idx = (bx4 & 16) >> 4
+    let mut row = by4 >> 1
+    let mut y = 0
+    while y < bh4 {
+      let i = row * 2 + bx_idx
+      lfm.noskip[i] = lfm.noskip[i] | mask
+      if bw4 == 32 {
+        lfm.noskip[row * 2 + 1] = lfm.noskip[row * 2 + 1] | mask
+      }
+      y = y + 2
+      row = row + 1
+    }
   }
   // update contexts
   let y_mode_nofilt = if y_mode == av1_filter_pred {

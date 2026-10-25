@@ -21,7 +21,7 @@ let av1_lossy8_md5 : Array[String] = [
 
 ///|
 /// IVF: 32-byte header, then per frame a 12-byte header and the OBU payload.
-fn av1_lossy8_ivf_frames(ivf : Bytes) -> Array[Bytes] {
+fn av1_lossy_ivf_frames(ivf : Bytes) -> Array[Bytes] {
   let frames : Array[Bytes] = []
   let mut pos = 32
   while pos + 12 <= ivf.length() {
@@ -35,7 +35,7 @@ fn av1_lossy8_ivf_frames(ivf : Bytes) -> Array[Bytes] {
 }
 
 ///|
-fn av1_lossy8_hex(digest : FixedArray[Byte]) -> String {
+fn av1_lossy_hex(digest : FixedArray[Byte]) -> String {
   let digits : Bytes = b"0123456789abcdef"
   let chars : Array[Char] = []
   for i in 0..<16 {
@@ -47,16 +47,16 @@ fn av1_lossy8_hex(digest : FixedArray[Byte]) -> String {
 }
 
 ///|
-fn av1_lossy8_frame_md5(packed : Bytes) -> String {
+fn av1_lossy_frame_md5(packed : Bytes) -> String {
   let digest : FixedArray[Byte] = FixedArray::make(16, b' ')
   @libavutil.av_md5_sum(digest, packed, packed.length())
-  av1_lossy8_hex(digest)
+  av1_lossy_hex(digest)
 }
 
 ///|
 test "av1 lossy: 8-bit 4:2:0 keyframes match libdav1d framemd5" {
   let ivf = @libavutil.av_base64_decode(av1_lossy8_stream_b64, 1048576).unwrap()
-  let frames = av1_lossy8_ivf_frames(ivf)
+  let frames = av1_lossy_ivf_frames(ivf)
   assert_eq(frames.length(), av1_lossy8_md5.length())
   let mut seq : @libavcodec.Av1SequenceParameters? = None
   let md5s : Array[String] = []
@@ -83,7 +83,7 @@ test "av1 lossy: 8-bit 4:2:0 keyframes match libdav1d framemd5" {
       Ok(f) => f
       Err(e) => fail(e)
     }
-    md5s.push(av1_lossy8_frame_md5(out.packed()))
+    md5s.push(av1_lossy_frame_md5(out.packed()))
   }
   for i in 0..<md5s.length() {
     if md5s[i] != av1_lossy8_md5[i] {

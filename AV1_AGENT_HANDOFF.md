@@ -38,6 +38,7 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 | `libavcodec/av1_ipred.mbt` | ipred_tmpl.c + ipred_prepare_tmpl.c：DC 家族、V/H、Paeth、Smooth×3、Z1/Z2/Z3（含 edge filter/upsample）、FILTER_PRED、CFL AC/pred、pal_pred、`av1_prepare_intra_edges`、`av1_ipred_predict` 分发 | 部分经像素对拍间接验证 |
 | `libavcodec/av1_decode.mbt`~`av1_decode6.mbt` | decode.c+recon_tmpl.c 关键帧路径：BlockContext、FrameCtx/TileCtx、edge 树（intra_edge.c）、partition 递归（10 种）、decode_b（skip/ymode/angle/uv/CFL/palette/filter-intra/tx）、decode_coefs（eob/tokens/golomb/sign/dequant）、recon_b_intra（预测+itx 逐子块）、backup_ipred_edge、tile sbrow 循环、入口 `av1_decode_keyframe` | **无损与有损关键帧均与 libdav1d 逐帧 MD5 一致** |
 | `libavcodec/av1_lf.mbt` | 环路去块滤波：lf_mask.c intra 掩码/level cache/calc_eih/calc_lf_values、loopfilter_tmpl.c 四个 C 核、lf_apply_tmpl.c 列/行驱动（单 tile） | 8-bit 4:2:0 有损向量 8/8 帧 MD5 一致 |
+| `libavcodec/av1_cdef.mbt` | CDEF：方向搜索（八方向代价/方差）、主次抽头约束滤波、cdef_idx/noskip 掩码、全帧快照调度 | 开启 CDEF 的 crf30 向量 8/8 帧 MD5 一致 |
 | `libavcodec/itx_probe/` | 155 个 (RectTxfmSize, TxfmType) 逆变换组合与 dav1d DSP 校验和回归 | 全绿 |
 | `libavcodec/av1_lossy_vectors/` | 8 帧 8-bit 4:2:0 有损关键帧（crf30，CDEF/LR 关闭）framemd5 回归 | 全绿 |
 | `libavcodec/av1_kf_realdata_wbtest.mbt` | 两条无损向量（ll128 单帧 128×96、ll160 六帧 160×120，base64 内嵌）+ framemd5 期望 + 全链测试 | 结构就绪，MD5 待收敛 |
@@ -54,9 +55,9 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 无损关键帧的符号与像素均已与 dav1d 1.5.1 一致（ll128/ll160、10/12-bit、
 4:4:4/4:2:2/单色）。历史排查记录见 §3.4 与 PORTING_HISTORY §49。
 
-有损关键帧（2026-10-25，PORTING_HISTORY §52）也已收敛：8 帧符号轨迹
-与 dav1d 完全一致，未滤波重建逐字节一致，带环路滤波的 framemd5 与
-FFmpeg 9.0.2（libdav1d）完全一致。已修复的 bug：
+有损关键帧（2026-10-25，PORTING_HISTORY §52/§53）也已收敛：8 帧符号
+轨迹与 dav1d 完全一致，未滤波重建逐字节一致，带 LF 与 CDEF 的 framemd5
+均与 FFmpeg 9.0.2（libdav1d）完全一致。已修复的 bug：
 `cfl_allowed_mask` 位集、非 2D DC hi-token 上下文、palette 索引与 tx_size
 的符号顺序、逆变换 1D 类型表的行列转置、ADST16/DCT64 核转录错误、
 chroma LF 掩码 sidx 移位与行滤波 level 偏移。
@@ -225,9 +226,10 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 
 ## 7. 路线（按优先级）
 
-1. **CDEF + 环路恢复（LR）**：帧头参数已解析/保存（CDEF 强度四组数组、
-   `lr_type`），有损入口在二者生效时显式拒绝。移植 `cdef_apply_tmpl.c`
-   与 `looprestoration_tmpl.c`/`lr_apply_tmpl.c` 后即可放开。
+1. **环路恢复（LR）**：CDEF 已完成；`lr_type` 已解析，发生非零类型时
+   有损入口仍显式拒绝。需移植 `looprestoration_tmpl.c` +
+   `lr_apply_tmpl.c`（Wiener/SGR/Switchable、逐 unit 的
+   `read_restoration_info` 符号与 2 行/2 列边界备份）。
 2. **高位深有损**：10/12-bit 的 ipred/itx/LF 已参数化（`bd_max`/`mid`），
    但仅无损经过验证；需要高位深有损向量。
 3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界

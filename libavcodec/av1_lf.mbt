@@ -20,6 +20,10 @@ priv struct Av1Filter {
   fy : FixedArray[UInt]
   /// `[dir][col4][level][sidx]` for chroma (levels 0/1 are block edges).
   fuv : FixedArray[UInt]
+  /// CDEF index per 64x64 sub-block inside the 128x128 area (-1 = unset).
+  cdef_idx : FixedArray[Int32]
+  /// `noskip_mask[16][2]` flattened: 8x8 blocks, stored on a 4x8 basis.
+  noskip : FixedArray[UInt]
 }
 
 ///|
@@ -27,6 +31,8 @@ fn av1_filter_new() -> Av1Filter {
   {
     fy: FixedArray::make(2 * 32 * 3 * 2, (0 : UInt)),
     fuv: FixedArray::make(2 * 32 * 2 * 2, (0 : UInt)),
+    cdef_idx: FixedArray::make(4, -1),
+    noskip: FixedArray::make(32, (0 : UInt)),
   }
 }
 

@@ -167,33 +167,8 @@ fn av1_decode_keyframe_payloads(
     return Err("av1: superres unsupported")
   }
   if !hdr.coded_lossless {
-    // Lossy key frames run reconstruction + the loop filter; the remaining
-    // in-loop tools (CDEF, loop restoration) and per-block delta-lf are not
-    // implemented, so reject frames that actually need them.
-    let mut cdef_on = false
-    for v in hdr.cdef_y_pri_strength {
-      if v != 0 {
-        cdef_on = true
-      }
-    }
-    for v in hdr.cdef_y_sec_strength {
-      if v != 0 {
-        cdef_on = true
-      }
-    }
-    for v in hdr.cdef_uv_pri_strength {
-      if v != 0 {
-        cdef_on = true
-      }
-    }
-    for v in hdr.cdef_uv_sec_strength {
-      if v != 0 {
-        cdef_on = true
-      }
-    }
-    if cdef_on {
-      return Err("av1: CDEF unsupported in pixel path")
-    }
+    // Lossy key frames run reconstruction + loop filter + CDEF; loop
+    // restoration and per-block delta-lf are still missing.
     for t in hdr.lr_type {
       if t != 0 {
         return Err("av1: loop restoration unsupported in pixel path")
@@ -258,6 +233,8 @@ fn av1_decode_keyframe_payloads(
     FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
     FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
   ]
+  let cdef = av1_cdef_params(hdr, bpc)
+  let cdef_on = av1_cdef_active(cdef)
   let lf_lut = av1_filter_lut_new()
   av1_calc_eih(lf_lut, hdr.loop_filter_sharpness)
   let lf_lvl = FixedArray::make(8 * 64, 0)
@@ -302,6 +279,8 @@ fn av1_decode_keyframe_payloads(
     lf_y_active,
     lf_u_active,
     lf_v_active,
+    cdef,
+    cdef_on,
   }
   f.init_quant()
   let root_bl = if seq.use_128x128_superblock { 0 } else { 1 }
@@ -357,6 +336,15 @@ fn av1_decode_keyframe_payloads(
         )
       }
       f.loop_filter_frame()
+    }
+    if f.cdef_on {
+      if num_tiles > 1 {
+        raise Av1DecError::Unsupported("av1: multi-tile CDEF unsupported")
+      }
+      let snap0 = av1_copy_plane(f.planes[0])
+      let snap1 = av1_copy_plane(f.planes[1])
+      let snap2 = av1_copy_plane(f.planes[2])
+      f.cdef_frame(f.cdef, snap0, snap1, snap2)
     }
     Ok({
       y: f.planes[0],
