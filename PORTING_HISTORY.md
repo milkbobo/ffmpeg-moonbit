@@ -2594,3 +2594,18 @@ rav1e 4:4:4 10-bit 的 4 帧关键帧（含 segmentation 与 SWITCHABLE LR），
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **876/876**。
+
+## 65. 2026-10-25 AV1 复合预测逐像素 mask
+
+新增 `av1_mc_core/mask.mbt`，移植 dav1d 1.5.1 `mc_tmpl.c` 的
+`mask_c`、`blend_c` 与 `w_mask_c`。支持外部 0..64 mask 对两个
+`prep` 中间块加权、已重建像素块混合，以及按两个中间块差值生成
+compound mask 和对应像素。差值 mask 的 4:4:4/4:2:2/4:2:0 缩采样
+与 `sign` 舍入按 dav1d 的行/列顺序实现。
+
+独立 C 参考程序固定 4 组 8/10/12-bit、三种布局和两种 sign 的输出；
+`av1_mc_vectors/mask_test.mbt` 同时对拍像素与缩采样 mask。
+OBMC 专用空间掩码、wedge 掩码、warp/缩放和帧间块语法仍待实现。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **877/877**。
