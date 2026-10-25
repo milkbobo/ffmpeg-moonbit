@@ -2579,3 +2579,18 @@ rav1e 4:4:4 10-bit 的 4 帧关键帧（含 segmentation 与 SWITCHABLE LR），
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **874/874**。
+
+## 64. 2026-10-25 AV1 复合预测中间样本与平均合成
+
+在 `av1_mc_core/compound.mbt` 接入 dav1d 1.5.1 的 `prep_8tap_c`、
+`prep_bilin_c`、`avg_c` 和 `w_avg_c` 整数路径。`prep` 保留滤波后的
+中间精度与高位深偏置，等权/距离加权合成再完成舍入和像素钳制；
+复合预测的 mask、wedge、OBMC、warp 和缩放路径仍待后续实现。
+
+先修正 §63 的向量生成位置：当时独立测试包实际只收录了 10 组，
+文档误写成 14 组；本轮已把余下 4 组写入并通过。新增两个测试，
+用独立 C 参考程序的固定输出逐像素验证 14 组 `prep` 和 3 组
+8/10/12-bit 双参考的等权/加权合成（各 2 种合成结果）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **876/876**。
