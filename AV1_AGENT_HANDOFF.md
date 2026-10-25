@@ -19,7 +19,7 @@
 > §67 新增 wedge 复合预测掩码与 inter-intra 掩码表（wedge.c 完整
 > 移植，含 wedge blend 向量）；§68 新增缩放参考 MC 与 superres
 > resize；§69 新增 warp 仿射 8x8 MC；最新全量测试 885/885。
->  的 MC 核（单参考/复合/mask/wedge/OBMC/缩放/warp）
+> `av1_mc_core` 的 MC 核（单参考/复合/mask/wedge/OBMC/缩放/warp）
 > 至此全部就绪，剩余 refmvs、帧间块语法与整帧入口。
 > 本文 §2/§3 中「仍错的像素模式」等段落是无损收敛期的历史记录，已全部解决。
 
