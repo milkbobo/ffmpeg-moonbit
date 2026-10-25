@@ -3,8 +3,8 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> 当前 HEAD：`2864f26 feat: AV1 逐 SB delta-lf`
-> 全量 Wasm 测试：**871/871 通过**；`moon check --deny-warn` 0 error / 0 warning。
+> 当前 HEAD：`2706d4c test: AV1 环路恢复 4:2:2/4:4:4/10-bit 整帧向量`
+> 全量 Wasm 测试：**872/872 通过**；`moon check --deny-warn` 0 error / 0 warning。
 
 先读这几份文档，再动手：
 
