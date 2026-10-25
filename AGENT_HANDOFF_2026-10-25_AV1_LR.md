@@ -3,7 +3,7 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> **当前 HEAD：`707bb45 feat: AV1 多 tile 有损环内滤波（LF tile 边界强度修正）`**
+> **当前 HEAD：`2864f26 feat: AV1 逐 SB delta-lf`**（多 tile 见 §59、delta-lf 见 §60，均已收敛）
 > **工作区干净（无未提交改动）**；`moon check --target wasm --deny-warn` 0 error / 0 warning；
 > `moon test --target wasm --no-render` **871/871 通过**。
 >
