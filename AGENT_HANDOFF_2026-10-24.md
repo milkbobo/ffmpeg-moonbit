@@ -3,14 +3,14 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> 当前 HEAD：`0ae19ea feat: VP9 新增复合预测诊断计数器并转正 alt-ref 向量测试`
+> 当前 HEAD：`33257e8 feat: AV1 有损关键帧支持 4:4:4/4:2:2/10-bit`
 > 全量 Wasm 测试：**869/869 通过**；`moon check --deny-warn` 0 error / 0 warning。
 
 先读这几份文档，再动手：
 
 1. [README.md](README.md)：能力矩阵、边界、构建/测试命令（动态进度以它为准）。
 2. [agent.md](agent.md)：稳定约定、目录结构、历史踩坑。
-3. [PORTING_HISTORY.md](PORTING_HISTORY.md)：逐次增量的实现与验收记录（共 45 节）。
+3. [PORTING_HISTORY.md](PORTING_HISTORY.md)：逐次增量的实现与验收记录（共 56 节）。
 4. [AV1_AGENT_HANDOFF.md](AV1_AGENT_HANDOFF.md)、[H264_AGENT_HANDOFF.md](H264_AGENT_HANDOFF.md)：两条大解码链路的专题交接。
 5. 本文：**当前状态、下一步优先级、验证流程与禁止事项**。
 
@@ -265,7 +265,7 @@ HEAD  0ae19ea  feat: VP9 新增复合预测诊断计数器并转正 alt-ref 向�
 ```sh
 moon check --target wasm --deny-warn --no-render   # 期望：0 error / 0 warning
 moon test --target wasm --no-render                # 期望：869/869
-git log --oneline -1                               # 期望：0ae19ea 或更新
+git log --oneline -1                               # 期望：33257e8 或更新
 ```
 
 达标后再开始新增量；每个增量结束重复上面的命令并更新文档。
