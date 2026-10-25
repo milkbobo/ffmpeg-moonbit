@@ -128,6 +128,7 @@ pub fn Av1Msac::decode_bool(self : Av1Msac, f : UInt) -> UInt {
   1 - ret
 }
 
+
 ///|
 /// `dav1d_msac_decode_symbol_adapt`: symbol from (and possibly update) a
 /// Q15 CDF. `cdf_base` indexes `n_symbols + 1` slots (last = count).

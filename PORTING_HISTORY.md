@@ -2739,3 +2739,32 @@ refmvs、帧间块语法、参考帧生命周期与整帧解码入口仍需后�
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **887/887**。剩余：refmvs、
 帧间块语法、参考帧生命周期与整帧解码入口。
+
+## 71. 2026-10-26 AV1 NEWMV 残差解码原语
+
+新增 `libavcodec/av1_inter.mbt`：移植 dav1d 1.5.1 `decode.c` 的
+`read_mv_component_diff` 与 `read_mv_residual`——joint（3 符号）+
+每分量的 sign/classes(10)/class0/class0_fp/class0_hp 或
+classN[cl]/classN_fp/classN_hp 链，`mv_prec < 0`（整像素）跳过
+fp/hp 位；CDF 用 `Av1CdfCtx` 的 mv0/mv1 平铺表（comp[1] 与 comp[0]
+同源，dav1d copy 规则）。MVJoint 映射：H=1→x 分量、V=2→y 分量。
+
+C 对拍（docker vpxdev-img）：`dump_mvres.c` 逐字拷贝 dav1d 的两个
+函数 + `msac.c`/`cdf.c` 直编（mem pool 链接桩），经公开的
+`dav1d_cdf_thread_init_static/copy` 取默认 MV CDF（default 表是
+file-static 不能直接引）；LCG 字节流 × 4 组（seed/精度组合）×
+400 步，逐步对拍 y/x/rng/dif。`av1_mvres_vectors/`（emit：
+`scripts/_emit_av1_mvres_vectors.py`）全部一致。
+
+调试记录（教训）：(1) dav1d 的 `class0_hp` 读取**不带 up 索引**
+（永远用行 0，classN_hp 同理）——初版按直觉传了 up 导致第 2 步
+rng 分叉；(2) C dump 的 `dav1d_msac_init` 第 4 参是
+**disable_cdf_update_flag**，误传 1 得到"永不更新的 CDF"，
+与 MoonBit 的允许更新在首步后表值分叉——用"在 i=1 前打印两侧
+joint 表"定位；(3) CDF 宏 `CDF1(x)=(32768-x)`，dav1d 内存即镜像
+表示，与 MoonBit 提取表一致，勿按 cdf.c 字面值对照。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **892/892**。帧间块语法主体
+（skip_mode/is_comp/refidx/comp 类型/interintra/motion_mode）与
+refmvs 仍待移植。

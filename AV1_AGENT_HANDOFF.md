@@ -22,7 +22,8 @@
 > `av1_mc_core` 的 MC 核（单参考/复合/mask/wedge/OBMC/缩放/warp）
 > 至此全部就绪；§70 补齐帧间帧头（GM/skip_mode/短信令/
 > frame_size_with_refs + 8-slot 参考状态 Av1RefSlotState）。
-> 剩余 refmvs、帧间块语法与整帧入口。
+> §71 新增 NEWMV 残差解码原语（4×400 步位级对拍）。
+> 剩余帧间块语法主体、refmvs 与整帧入口。
 > 本文 §2/§3 中「仍错的像素模式」等段落是无损收敛期的历史记录，已全部解决。
 
 ---
