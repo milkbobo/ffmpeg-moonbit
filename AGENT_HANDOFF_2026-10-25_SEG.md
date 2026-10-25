@@ -11,9 +11,9 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> **当前 HEAD：`143bcbf docs: 同步交接文档 HEAD`**
+> **segmentation 实现提交：`e0ff9e0 feat: 完成 AV1 关键帧 segmentation 与 SWITCHABLE LR 验证`**
 > 已提交基线：`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
-> `moon test --target wasm --no-render` **872/872**。
+> `moon test --target wasm --no-render` **873/873**。
 > **工作区有未提交的 segmentation WIP（3 个文件，编译差 1 个错误）**，
 > 备份 patch 在 `.scratch/dav1d_dbg/segmentation_wip.patch`（.scratch 不入库）。
 >

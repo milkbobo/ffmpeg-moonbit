@@ -3,9 +3,9 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> **当前 HEAD：`2706d4c test: AV1 环路恢复 4:2:2/4:4:4/10-bit 整帧向量`**（多 tile §59、delta-lf §60、LR 格式扩展 §61 均已收敛）
-> **工作区干净（无未提交改动）**；`moon check --target wasm --deny-warn` 0 error / 0 warning；
-> `moon test --target wasm --no-render` **871/871 通过**。
+> **AV1 segmentation 实现提交：`e0ff9e0 feat: 完成 AV1 关键帧 segmentation 与 SWITCHABLE LR 验证`**（本文件其余内容为 LR 阶段记录）
+> `moon check --target wasm --deny-warn` 0 error / 0 warning；
+> `moon test --target wasm --no-render` **873/873 通过**。
 >
 > 先读：[README.md](README.md)、[agent.md](agent.md)、[PORTING_HISTORY.md](PORTING_HISTORY.md)
 > （§52–§58 是本轮）、[AGENT_HANDOFF_2026-10-24.md](AGENT_HANDOFF_2026-10-24.md)（总体）、
