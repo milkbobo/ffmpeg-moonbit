@@ -15,7 +15,7 @@
 > §64 已补齐复合预测的 `prep` 中间样本和等权/距离加权平均；
 > 并修正 §63 的实际向量数（原提交 10 组，现已补至 14 组）。
 > §65 新增 mask 混合及 4:4:4/4:2:2/4:2:0 差值 mask；
-> 最新全量测试 877/877。
+> §66 新增 OBMC 水平/垂直重叠混合（`4fe3c70`）；最新全量测试 878/878。
 > 本文 §2/§3 中「仍错的像素模式」等段落是无损收敛期的历史记录，已全部解决。
 
 ---
@@ -269,9 +269,9 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 4. **delta_lf**：已收敛（PORTING_HISTORY §60）——单模式（`multi=false`）
    向量两条通过；`multi=true` 的码流 libaom（硬编码单模式）、SVT
    （不发 delta_lf）、rav1e 均产不出，同 VP9 复合预测的情况留待手搓。
-5. **inter 帧**：非缩放单参考 8-tap/bilinear MC 与复合预测
-   `prep`/等权/距离加权/mask 合成已实现（§63–§65，`av1_mc_core`）；
-   接下来需要 refmvs、帧间块语法、参考帧生命周期、wedge/OBMC、
+5. **inter 帧**：非缩放单参考 8-tap/bilinear MC、复合预测
+   `prep`/等权/距离加权/mask 合成及 OBMC 混合已实现（§63–§66，`av1_mc_core`）；
+   接下来需要 refmvs、帧间块语法、参考帧生命周期、wedge、
    缩放/warp MC 与整帧对拍。
 6. intrabc、film grain 明确报 PATCHWELCOME（入口已有检查）。
 

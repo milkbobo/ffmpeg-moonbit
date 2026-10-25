@@ -2609,3 +2609,19 @@ OBMC 专用空间掩码、wedge 掩码、warp/缩放和帧间块语法仍待实�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **877/877**。
+
+## 66. 2026-10-25 AV1 OBMC 水平与垂直重叠混合
+
+新增 `av1_mc_core/obmc.mbt`，按 dav1d 1.5.1 `tables.c` 的
+`dav1d_obmc_masks` 与 `mc_tmpl.c` 的 `blend_v_c`、`blend_h_c`
+实现 OBMC。垂直路径只混合左侧 3/4 宽度，水平路径只混合顶部
+3/4 高度，剩余像素保留原目标块；2/4/8/16/32 像素掩码按
+宽度或高度索引，使用整数舍入公式 `(a*(64-m)+b*m+32)>>6`。
+
+独立 C 参考程序固定 5 组 8/10/12-bit 块，覆盖全部掩码尺寸及
+两个混合方向；`av1_mc_vectors/obmc_test.mbt` 对拍完整块摘要并
+检查输入块不被修改。wedge、warp/缩放、refmvs、帧间块语法与整帧
+解码入口仍需后续实现。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **878/878**。
