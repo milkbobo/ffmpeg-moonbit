@@ -1,5 +1,13 @@
 # AI 交接文档（2026-10-25）：AV1 关键帧链路收敛 + segmentation 进行中
 
+> **完成状态（2026-10-25）**：segmentation 关键帧路径与 SWITCHABLE LR
+> 已实现；rav1e 4:4:4 10-bit 4 帧逐帧 MD5 匹配 libdav1d，
+> `moon check --target wasm --deny-warn --no-render` 通过，
+> `moon test --target wasm --no-render` **873/873**。详见
+> [PORTING_HISTORY.md](PORTING_HISTORY.md) §62。下文 §2 保留原 WIP 交接记录。
+> 其中“ALT_LF 为 7 数据位+1 符号位”的判断有误：dav1d
+> `get_sbits(gb, 7)` 实际读取 7 位补码；最终代码已按源码修正。
+
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`

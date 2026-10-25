@@ -215,7 +215,7 @@ fn av1_lr_sbrow(
     if restore_next {
       av1_lr_backup4x_u(
         border,
-        bit * 132 * 4,
+        bit * 132,
         f.planes[plane_idx],
         y * stride + x + unit_size - 4,
         stride,

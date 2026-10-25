@@ -158,9 +158,6 @@ fn av1_decode_keyframe_payloads(
   if hdr.frame_type != av1_frame_key {
     return Err("av1: not a key frame")
   }
-  if hdr.segmentation_enabled {
-    return Err("av1: segmentation unsupported in pixel path")
-  }
   if hdr.using_qmatrix {
     return Err("av1: qmatrix unsupported")
   }
@@ -281,6 +278,7 @@ fn av1_decode_keyframe_payloads(
     dq: FixedArray::make(8 * 6, 4),
     seg_lossless: FixedArray::make(8, false),
     seg_qidx: FixedArray::make(8, 0),
+    cur_segmap: FixedArray::make(b4_stride * bh, 8),
     b4_stride,
     lf_mask,
     lf_level: FixedArray::make(b4_stride * av1_imax(bh, 1) * 4, 0),

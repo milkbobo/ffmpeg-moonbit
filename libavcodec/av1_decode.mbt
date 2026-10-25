@@ -129,6 +129,9 @@ priv struct Av1FrameCtx {
   seg_lossless : FixedArray[Bool]
   /// Per-segment qidx.
   seg_qidx : FixedArray[Int32]
+  /// Per-4x4 segment ids of the current frame, 8 = not yet assigned
+  /// (dav1d cur_segmap; only written when segmentation is enabled).
+  cur_segmap : FixedArray[Byte]
   /// Loop-filter state (b4-aligned level cache + per-128x128 masks).
   b4_stride : Int32
   lf_mask : Array[Av1Filter]
@@ -204,6 +207,69 @@ fn av1_txfm_h(tx : Int32) -> Int32 {
 }
 
 ///|
+/// `neg_deinterleave`: map the interleaved segment-id difference symbol
+/// back to an absolute segment id around the prediction (dav1d decode.c).
+fn av1_neg_deinterleave(diff : Int32, ref_ : Int32, max : Int32) -> Int32 {
+  if ref_ == 0 {
+    return diff
+  }
+  if ref_ >= max - 1 {
+    return max - diff - 1
+  }
+  if 2 * ref_ < max {
+    if diff <= 2 * ref_ {
+      if (diff & 1) != 0 {
+        return ref_ + ((diff + 1) >> 1)
+      }
+      return ref_ - (diff >> 1)
+    }
+    return diff
+  }
+  if diff <= 2 * (max - ref_ - 1) {
+    if (diff & 1) != 0 {
+      return ref_ + ((diff + 1) >> 1)
+    }
+    return ref_ - (diff >> 1)
+  }
+  return max - (diff + 1)
+}
+
+///|
+/// `get_cur_frame_segid`: spatial segment-id prediction from the current
+/// frame's segmap (dav1d env.h). Uses left/above/above-left samples;
+/// ctx 2 = all equal, 1 = any two equal, 0 = all differ; the prediction
+/// prefers the above sample when it matches the above-left one.
+fn av1_get_cur_frame_segid(
+  cur_segmap : FixedArray[Byte],
+  b4_stride : Int32,
+  by : Int32,
+  bx : Int32,
+  have_top : Bool,
+  have_left : Bool,
+) -> (Int32, Int32) {
+  let off = by * b4_stride + bx
+  if have_left && have_top {
+    let l = cur_segmap[off - 1].to_int()
+    let a = cur_segmap[off - b4_stride].to_int()
+    let al = cur_segmap[off - b4_stride - 1].to_int()
+    let ctx = if l == a && al == l {
+      2
+    } else if l == a || al == l || a == al {
+      1
+    } else {
+      0
+    }
+    (if a == al { a } else { l }, ctx)
+  } else if have_left {
+    (cur_segmap[off - 1].to_int(), 0)
+  } else if have_top {
+    (cur_segmap[off - b4_stride].to_int(), 0)
+  } else {
+    (0, 0)
+  }
+}
+
+///|
 fn av1_txfm_lw(tx : Int32) -> Int32 {
   av1_txfm_info(tx, 2)
 }
@@ -239,8 +305,9 @@ fn av1_bdim(bs : Int32, i : Int32) -> Int32 {
 }
 
 ///|
-/// Compute the dequant table for one base qindex (segmentation disabled):
-/// fills all 8 segments with the same values (dav1d `init_quant_tables`).
+/// Compute the dequant table for one base qindex, applying per-segment
+/// ALT_Q offsets when segmentation is enabled (dav1d `init_quant_tables`
+/// with `qidx + seg_data.d[i].delta_q`).
 fn Av1FrameCtx::fill_dq(self : Av1FrameCtx, base_qidx : Int32, out : FixedArray[Int32]) -> Unit {
   let dq_tbl : FixedArray[UInt16] = if self.seq.bitdepth == 8 {
     av1_dq_tbl_0
@@ -249,21 +316,37 @@ fn Av1FrameCtx::fill_dq(self : Av1FrameCtx, base_qidx : Int32, out : FixedArray[
   } else {
     av1_dq_tbl_2
   }
-  let yac = av1_iclip_u8(base_qidx)
-  let ydc = av1_iclip_u8(yac + self.hdr.dq_y_dc)
-  let udc = av1_iclip_u8(yac + self.hdr.dq_u_dc)
-  let uac = av1_iclip_u8(yac + self.hdr.dq_u_ac)
-  let vdc = av1_iclip_u8(yac + self.hdr.dq_v_dc)
-  let vac = av1_iclip_u8(yac + self.hdr.dq_v_ac)
-  out[0] = dq_tbl[ydc * 2 + 0].to_int()
-  out[1] = dq_tbl[yac * 2 + 1].to_int()
-  out[2] = dq_tbl[udc * 2 + 0].to_int()
-  out[3] = dq_tbl[uac * 2 + 1].to_int()
-  out[4] = dq_tbl[vdc * 2 + 0].to_int()
-  out[5] = dq_tbl[vac * 2 + 1].to_int()
-  for i in 1..<8 {
-    for k in 0..<6 {
-      out[i * 6 + k] = out[k]
+  let segs = if self.hdr.segmentation_enabled { 8 } else { 1 }
+  for i in 0..<segs {
+    let yac = if self.hdr.segmentation_enabled {
+      av1_iclip_u8(
+        base_qidx +
+        (if i < self.hdr.segmentation_alt_q.length() {
+          self.hdr.segmentation_alt_q[i]
+        } else {
+          0
+        }),
+      )
+    } else {
+      av1_iclip_u8(base_qidx)
+    }
+    let ydc = av1_iclip_u8(yac + self.hdr.dq_y_dc)
+    let udc = av1_iclip_u8(yac + self.hdr.dq_u_dc)
+    let uac = av1_iclip_u8(yac + self.hdr.dq_u_ac)
+    let vdc = av1_iclip_u8(yac + self.hdr.dq_v_dc)
+    let vac = av1_iclip_u8(yac + self.hdr.dq_v_ac)
+    out[i * 6 + 0 * 2 + 0] = dq_tbl[ydc * 2 + 0].to_int()
+    out[i * 6 + 0 * 2 + 1] = dq_tbl[yac * 2 + 1].to_int()
+    out[i * 6 + 1 * 2 + 0] = dq_tbl[udc * 2 + 0].to_int()
+    out[i * 6 + 1 * 2 + 1] = dq_tbl[uac * 2 + 1].to_int()
+    out[i * 6 + 2 * 2 + 0] = dq_tbl[vdc * 2 + 0].to_int()
+    out[i * 6 + 2 * 2 + 1] = dq_tbl[vac * 2 + 1].to_int()
+  }
+  if segs == 1 {
+    for i in 1..<8 {
+      for k in 0..<6 {
+        out[i * 6 + k] = out[k]
+      }
     }
   }
 }
@@ -306,7 +389,11 @@ fn Av1FrameCtx::init_quant(self : Av1FrameCtx) -> Unit {
     self.dq[i * 6 + 1 * 2 + 1] = dq_tbl[uac * 2 + 1].to_int()
     self.dq[i * 6 + 2 * 2 + 0] = dq_tbl[vdc * 2 + 0].to_int()
     self.dq[i * 6 + 2 * 2 + 1] = dq_tbl[vac * 2 + 1].to_int()
-    self.seg_lossless[i] = self.hdr.coded_lossless
+    self.seg_lossless[i] = if i < self.hdr.seg_lossless.length() {
+      self.hdr.seg_lossless[i]
+    } else {
+      self.hdr.coded_lossless
+    }
   }
   if !self.hdr.segmentation_enabled {
     for i in 1..<8 {

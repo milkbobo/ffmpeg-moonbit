@@ -196,15 +196,43 @@ fn Av1TileCtx::decode_b(
     (bh4 > ss_ver || (self.by & 1) != 0)
   let a = f.a[self.a_idx]
   let l = f.l
-  // skip (segmentation not enabled for our streams; seg_id stays 0)
-  let seg_id = 0
-  if hdr.segmentation_enabled {
-    raise Av1DecError::Unsupported(
-      "PATCHWELCOME: AV1 segmentation in pixel path",
+  let mut seg_id = 0
+  if hdr.segmentation_enabled && hdr.seg_preskip {
+    let (pred, ctx) = av1_get_cur_frame_segid(
+      f.cur_segmap, f.b4_stride, self.by, self.bx,
+      self.by > self.row_start, self.bx > self.col_start,
     )
+    let diff = self.msac.decode_symbol_adapt(self.cdf.seg_id, ctx * 8, 7)
+    seg_id = av1_neg_deinterleave(diff, pred, hdr.seg_last_active + 1)
+    if seg_id > hdr.seg_last_active || seg_id >= 8 {
+      seg_id = 0
+    }
   }
   let sctx = a.skip[bx4] + l.skip[by4]
-  let skip = self.msac.decode_bool_adapt(self.cdf.skip, sctx * 2) != 0
+  let skip = if hdr.segmentation_enabled && hdr.seg_preskip &&
+    (hdr.segmentation_feature_mask[seg_id] & (1 << 5)) != 0 {
+    true
+  } else {
+    self.msac.decode_bool_adapt(self.cdf.skip, sctx * 2) != 0
+  }
+  if hdr.segmentation_enabled && !hdr.seg_preskip {
+    let (pred, ctx) = av1_get_cur_frame_segid(
+      f.cur_segmap, f.b4_stride, self.by, self.bx,
+      self.by > self.row_start, self.bx > self.col_start,
+    )
+    if skip {
+      seg_id = pred
+    } else {
+      let diff = self.msac.decode_symbol_adapt(self.cdf.seg_id, ctx * 8, 7)
+      seg_id = av1_neg_deinterleave(diff, pred, hdr.seg_last_active + 1)
+      if seg_id > hdr.seg_last_active {
+        seg_id = 0
+      }
+    }
+    if seg_id >= 8 {
+      seg_id = 0
+    }
+  }
   // cdef index (n_bits may be 0: no bits consumed)
   if !skip {
     // 64x64 SBs use one of the four 128-area slots; 128x128 SBs use the
@@ -481,6 +509,13 @@ fn Av1TileCtx::decode_b(
   }
   // reconstruction
   self.recon_b_intra(bs, intra_edge_flags, b)
+  if hdr.segmentation_enabled {
+    for y in 0..<bh4 {
+      for x in 0..<bw4 {
+        f.cur_segmap[(self.by + y) * f.b4_stride + self.bx + x] = seg_id.to_byte()
+      }
+    }
+  }
   if f.lf_y_active {
     let lfm = f.lf_mask[(self.by >> 5) * f.sb128w + (self.bx >> 5)]
     f.create_lf_mask_intra(

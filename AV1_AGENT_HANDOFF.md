@@ -6,9 +6,9 @@
 
 > **2026-10-25 最新进展请先读
 > [AGENT_HANDOFF_2026-10-25_SEG.md](AGENT_HANDOFF_2026-10-25_SEG.md)**：
-> 多 tile 有损 LF（§59）、delta-lf（§60）、LR 全格式（§61）均已收敛并
-> 推送；**segmentation 正在进行**（WIP 未提交，编译差 1 个命名错误，
-> 现成验证向量与剩余步骤见该文 §2）。环路恢复与高位深有损见
+> 多 tile 有损 LF（§59）、delta-lf（§60）、LR 全格式（§61）及关键帧
+> segmentation + SWITCHABLE LR（§62）已收敛；rav1e 4:4:4 10-bit 的
+> 4 帧 MD5 与 libdav1d 一致，全量测试 873/873。环路恢复与高位深有损见
 > [AGENT_HANDOFF_2026-10-25_AV1_LR.md](AGENT_HANDOFF_2026-10-25_AV1_LR.md)。
 > 本文 §2/§3 中「仍错的像素模式」等段落是无损收敛期的历史记录，已全部解决。
 
@@ -251,8 +251,8 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 
 1. **有损覆盖扩展**：LR 已收敛且覆盖 4:2:0/4:2:2/4:4:4 × 8/10/12-bit
    （PORTING_HISTORY §57/§61，`av1_lossy_lr` + `av1_lossy_lr_fmt`）。
-   尚无 `lr_type=SWITCHABLE` 向量（rav1e 能产但其码流带 segmentation，
-   入口仍拒绝）。
+   rav1e 4:4:4 10-bit 的 `lr_type=SWITCHABLE` + segmentation 向量已通过
+   （PORTING_HISTORY §62，`av1_seg_vectors`）。
 2. **高位深有损**：10/12-bit 4:2:0 与 10/12-bit 4:4:4、10-bit 4:2:2 均有
    整帧向量并通过（`av1_lossy_extra`、`av1_lossy_lr`）。
 3. **多 tile / 128x128 SB**：已收敛（PORTING_HISTORY §59）——LF 的

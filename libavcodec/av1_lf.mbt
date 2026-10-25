@@ -89,11 +89,12 @@ fn av1_calc_lf_value(
   off : Int32,
   base_lvl : Int32,
   lf_delta : Int32,
+  seg_delta : Int32,
   mr : Bool,
   ref_deltas : Array[Int32],
   mode_deltas : Array[Int32],
 ) -> Unit {
-  let base = av1_iclip(av1_iclip(base_lvl + lf_delta, 0, 63), 0, 63)
+  let base = av1_iclip(av1_iclip(base_lvl + lf_delta, 0, 63) + seg_delta, 0, 63)
   if !mr {
     for i in 0..<16 {
       values[off + i] = base
@@ -150,11 +151,11 @@ fn av1_calc_lf_values(
     }
     let base = s * 64
     av1_calc_lf_value(
-      values, base + 0 * 16, y_v, dy_v, mr, hdr.loop_filter_ref_deltas,
+      values, base + 0 * 16, y_v, dy_v, hdr.seg_delta_lf[s * 4], mr, hdr.loop_filter_ref_deltas,
       hdr.loop_filter_mode_deltas,
     )
     av1_calc_lf_value(
-      values, base + 1 * 16, y_h, dy_h, mr, hdr.loop_filter_ref_deltas,
+      values, base + 1 * 16, y_h, dy_h, hdr.seg_delta_lf[s * 4 + 1], mr, hdr.loop_filter_ref_deltas,
       hdr.loop_filter_mode_deltas,
     )
     if u == 0 {
@@ -163,7 +164,7 @@ fn av1_calc_lf_values(
       }
     } else {
       av1_calc_lf_value(
-        values, base + 2 * 16, u, du, mr, hdr.loop_filter_ref_deltas,
+        values, base + 2 * 16, u, du, hdr.seg_delta_lf[s * 4 + 2], mr, hdr.loop_filter_ref_deltas,
         hdr.loop_filter_mode_deltas,
       )
     }
@@ -173,7 +174,7 @@ fn av1_calc_lf_values(
       }
     } else {
       av1_calc_lf_value(
-        values, base + 3 * 16, v, dv, mr, hdr.loop_filter_ref_deltas,
+        values, base + 3 * 16, v, dv, hdr.seg_delta_lf[s * 4 + 3], mr, hdr.loop_filter_ref_deltas,
         hdr.loop_filter_mode_deltas,
       )
     }

@@ -413,6 +413,17 @@ pub struct Av1FrameHeader {
   segmentation_enabled : Bool
   segmentation_feature_mask : Array[Int32]
   segmentation_alt_q : Array[Int32]
+  /// Per-segment ALT_LF deltas `[seg*4 + dir]`, dir 0/1/2/3 = y_v/y_h/u/v
+  /// (only meaningful when `segmentation_enabled`).
+  seg_delta_lf : Array[Int32]
+  /// Any REF/SKIP/GLOBALMV feature enabled: seg_id is coded before skip.
+  seg_preskip : Bool
+  /// Highest segment id with any feature enabled (-1 = none).
+  seg_last_active : Int32
+  /// Per-segment absolute qindex: `clip_u8(base_q_idx + alt_q[seg])`.
+  seg_qidx : Array[Int32]
+  /// Per-segment lossless: `seg_qidx[seg] == 0` and all plane deltas zero.
+  seg_lossless : Array[Bool]
   delta_q_present : Bool
   /// `delta_q_res` shift (0..=3), meaningful when `delta_q_present`.
   delta_q_res : Int32
@@ -564,6 +575,11 @@ pub fn av1_parse_frame_header(
           segmentation_enabled: false,
           segmentation_feature_mask: [],
           segmentation_alt_q: [],
+          seg_delta_lf: [],
+          seg_preskip: false,
+          seg_last_active: -1,
+          seg_qidx: [],
+          seg_lossless: [],
           delta_q_present: false,
           delta_q_res: 0,
           delta_lf_present: false,
@@ -870,6 +886,11 @@ pub fn av1_parse_frame_header(
       let mut segmentation_enabled = false
       let mut segmentation_masks : Array[Int32] = []
       let mut segmentation_alt_qs : Array[Int32] = []
+      let seg_lf : Array[Int32] = []
+      let mut seg_preskip = false
+      let mut seg_last_active : Int32 = -1
+      let seg_qs : Array[Int32] = []
+      let seg_ls : Array[Bool] = []
       let mut delta_q_present = false
       let mut delta_q_res = 0
       let mut delta_lf_present = false
@@ -928,25 +949,41 @@ pub fn av1_parse_frame_header(
             update_data = br.read1() != 0
           }
           if update_data {
-            for _ in 0..<8 {
+            for i in 0..<8 {
               let mut mask = 0
               let mut altq = 0
+              let mut any = false
               for f in 0..<8 {
                 if br.read1() != 0 {
                   mask = mask | (1 << f)
+                  any = true
                   if f == 0 {
                     let v = br.read(9).reinterpret_as_int()
                     altq = if (v & 0x100) != 0 { v - 0x200 } else { v }
                   } else if f <= 4 {
-                    br.skip(7)
+                    // dav1d get_sbits(gb, 7): signed 7-bit two's complement.
+                    let v = br.read(7).reinterpret_as_int()
+                    seg_lf.push(if (v & 0x40) != 0 { v - 0x80 } else { v })
                   } else if f == 5 {
                     br.skip(3)
+                    seg_preskip = true
+                  } else {
+                    seg_preskip = true
                   }
+                } else if f >= 1 && f <= 4 {
+                  seg_lf.push(0)
                 }
+              }
+              if any {
+                seg_last_active = i
               }
               seg_masks.push(mask)
               seg_alt_q.push(altq)
             }
+          }
+        } else {
+          for _ in 0..<32 {
+            seg_lf.push(0)
           }
         }
         segmentation_masks = seg_masks
@@ -965,11 +1002,40 @@ pub fn av1_parse_frame_header(
             delta_lf_multi = br.read1() != 0
           }
         }
-        // coded_lossless: every plane qindex (base + deltas) is zero.
-        coded_lossless = base_q_idx == 0 &&
-          dq_y_dc == 0 &&
+        // coded_lossless: every plane qindex (base + deltas, per segment)
+        // is zero. V mirrors U unless separate_uv_delta_q, both are
+        // covered here (dav1d delta_lossless checks all five deltas).
+        let delta_lossless = dq_y_dc == 0 &&
           dq_u_dc == 0 &&
-          dq_u_ac == 0
+          dq_u_ac == 0 &&
+          dq_v_dc == 0 &&
+          dq_v_ac == 0
+        for i in 0..<8 {
+          let qi = if segmentation_enabled {
+            av1_iclip_u8(
+              base_q_idx +
+              (if i < segmentation_alt_qs.length() {
+                segmentation_alt_qs[i]
+              } else {
+                0
+              }),
+            )
+          } else {
+            av1_iclip_u8(base_q_idx)
+          }
+          seg_qs.push(qi)
+          seg_ls.push(qi == 0 && delta_lossless)
+        }
+        if segmentation_enabled {
+          coded_lossless = true
+          for i in 0..<8 {
+            if !seg_ls[i] {
+              coded_lossless = false
+            }
+          }
+        } else {
+          coded_lossless = base_q_idx == 0 && delta_lossless
+        }
         all_lossless = coded_lossless && upscaled_width == width
         // loop_filter_params are absent when lossless or intrabc.
         if !coded_lossless && !allow_intrabc {
@@ -1200,6 +1266,21 @@ pub fn av1_parse_frame_header(
         segmentation_enabled,
         segmentation_feature_mask: segmentation_masks,
         segmentation_alt_q: segmentation_alt_qs,
+        seg_delta_lf: {
+          if seg_lf.length() == 32 {
+            seg_lf
+          } else {
+            let z : Array[Int32] = []
+            for _ in 0..<32 {
+              z.push(0)
+            }
+            z
+          }
+        },
+        seg_preskip,
+        seg_last_active,
+        seg_qidx: seg_qs,
+        seg_lossless: seg_ls,
         delta_q_present,
         delta_q_res,
         delta_lf_present,

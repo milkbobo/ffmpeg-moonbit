@@ -2540,3 +2540,24 @@ enable-restoration=1` 后 chroma Wiener 稳定启用；SVT 走 ffmpeg 包装时
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **872/872**。
+
+## 62. 2026-10-25 AV1 关键帧 segmentation 与 SWITCHABLE 环路恢复
+
+在关键帧路径接入 segmentation：帧头保存每段 ALT_Q/ALT_LF、preskip 与
+last_active；量化和 lossless 状态按段计算；块级 seg_id 依 dav1d 的空间
+预测、neg_deinterleave 和 preskip/postskip 顺序解码，并写回当前帧 segmap。
+SKIP feature 直接设置块 skip；LF 等级按段叠加 ALT_LF。关键帧没有上一参考帧，
+temporal/update_map=false 路径仍属于后续 inter 帧工作。
+
+复核 dav1d `get_sbits(gb, 7)` 后确认 ALT_LF 是 **7 位补码**，不是额外
+读取符号位；修正了交接草稿中的错误判断。同时修复 LR 多 restoration unit
+时四列边界备份的行偏移单位错误。新包 `libavcodec/av1_seg_vectors/` 使用
+rav1e 4:4:4 10-bit 的 4 帧关键帧（含 segmentation 与 SWITCHABLE LR），
+逐帧 packed MD5 与 libdav1d framemd5 相同：
+`6d2e878462c1662a0d512bdfe777939f`、
+`409f3b3dba66f0ad7d11d913c562ed9d`、
+`4697af2a0fe6608f8d665fb11c1265a9`、
+`82650ec88b7303f28d4d9e90bbfc5a56`。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **873/873**。
