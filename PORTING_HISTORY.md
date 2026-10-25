@@ -2518,3 +2518,25 @@ crf30，LF 配置不同），均 `multi=false`、4 帧 framemd5 与 libdav1d 一
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **871/871**。
+
+## 61. 2026-10-25 AV1 环路恢复的 4:2:2 / 4:4:4 / 10-bit 覆盖
+
+LR 的整帧向量此前全是 4:2:0（§57）。本轮补齐格式矩阵，代码零改动——
+五条向量全部直接通过，验证的是既有实现：
+
+- `svt42010`：SVT-AV1 420 **10-bit**（320x240 crf35），`lr_type=[SGR,
+  Wiener, Wiener]` 的混合 + 逐 SB delta-q——首个高位深 SGR 整帧向量；
+- `ts4448` / `ts44410`：libaom 4:4:4 8/10-bit，chroma Wiener（y=NONE）；
+- `ts422` / `ts42210`：libaom 4:2:2 8/10-bit，chroma Wiener。
+
+**向量生成的关键经验**：libaom 对 mandelbrot 内容永不启用 restoration，
+但换成 `testsrc2`（`-f lavfi -i testsrc2=...`）+ `-aom-params
+enable-restoration=1` 后 chroma Wiener 稳定启用；SVT 走 ffmpeg 包装时
+只支持 yuv420p/420p10（444/422 输入被静默转成 420，三条探测流 md5
+完全相同才发现），SVT CLI（alpine v2.0）也只编 420。444/422 的 LR
+只能靠 libaom+testsrc2。rav1e 虽能编 444 10-bit 且 `lr_type=SWITCHABLE`
+（每 unit 动态选核，尚无向量覆盖），但其码流带 segmentation（入口仍
+拒绝），暂不可用。向量入新包 `libavcodec/av1_lossy_lr_fmt/`。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **872/872**。

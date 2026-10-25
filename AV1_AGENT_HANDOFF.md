@@ -247,9 +247,10 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 
 ## 7. 路线（按优先级）
 
-1. **有损覆盖扩展**：LR 已收敛（PORTING_HISTORY §57）。下一步可补更多
-   SGR 组合与 4:4:4/4:2:2 的有损 LR 整帧向量（目前 LR 整帧向量均为
-   4:2:0）。
+1. **有损覆盖扩展**：LR 已收敛且覆盖 4:2:0/4:2:2/4:4:4 × 8/10/12-bit
+   （PORTING_HISTORY §57/§61，`av1_lossy_lr` + `av1_lossy_lr_fmt`）。
+   尚无 `lr_type=SWITCHABLE` 向量（rav1e 能产但其码流带 segmentation，
+   入口仍拒绝）。
 2. **高位深有损**：10/12-bit 4:2:0 与 10/12-bit 4:4:4、10-bit 4:2:2 均有
    整帧向量并通过（`av1_lossy_extra`、`av1_lossy_lr`）。
 3. **多 tile / 128x128 SB**：已收敛（PORTING_HISTORY §59）——LF 的
