@@ -7,6 +7,8 @@
 > [PORTING_HISTORY.md](PORTING_HISTORY.md) §62。下文 §2 保留原 WIP 交接记录。
 > 其中“ALT_LF 为 7 数据位+1 符号位”的判断有误：dav1d
 > `get_sbits(gb, 7)` 实际读取 7 位补码；最终代码已按源码修正。
+> **后续进展**：AV1 帧间单参考 MC 基础核见 PORTING_HISTORY §63；
+> 最新 Wasm 全量测试 **874/874**。本文件其余内容保留 segmentation 阶段记录。
 
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）

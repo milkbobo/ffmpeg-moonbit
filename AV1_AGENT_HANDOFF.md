@@ -10,6 +10,8 @@
 > segmentation + SWITCHABLE LR（§62）已收敛；rav1e 4:4:4 10-bit 的
 > 4 帧 MD5 与 libdav1d 一致，全量测试 873/873。环路恢复与高位深有损见
 > [AGENT_HANDOFF_2026-10-25_AV1_LR.md](AGENT_HANDOFF_2026-10-25_AV1_LR.md)。
+> 帧间帧的非缩放单参考 MC 核已在 §63 落地，14 组 C 参考像素通过，
+> 最新全量测试 874/874；帧间块语法与整帧入口尚未接入。
 > 本文 §2/§3 中「仍错的像素模式」等段落是无损收敛期的历史记录，已全部解决。
 
 ---
@@ -263,7 +265,9 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 4. **delta_lf**：已收敛（PORTING_HISTORY §60）——单模式（`multi=false`）
    向量两条通过；`multi=true` 的码流 libaom（硬编码单模式）、SVT
    （不发 delta_lf）、rav1e 均产不出，同 VP9 复合预测的情况留待手搓。
-5. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。
+5. **inter 帧**：非缩放单参考 8-tap/bilinear MC 核已实现（§63，
+   `av1_mc_core`）；接下来需要 refmvs、帧间块语法、参考帧生命周期、
+   复合/缩放/warp MC 与整帧对拍。
 6. intrabc、film grain 明确报 PATCHWELCOME（入口已有检查）。
 
 ## 8. 相关约定速查

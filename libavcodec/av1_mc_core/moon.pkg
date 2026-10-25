@@ -1,0 +1,2 @@
+// AV1 motion-compensation kernels live separately so large filter tables do
+// not inflate the main libavcodec Wasm test module's initialization function.

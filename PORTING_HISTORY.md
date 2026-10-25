@@ -2561,3 +2561,21 @@ rav1e 4:4:4 10-bit 的 4 帧关键帧（含 segmentation 与 SWITCHABLE LR），
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **873/873**。
+
+## 63. 2026-10-25 AV1 帧间帧基础：非缩放单参考运动补偿
+
+新增 `libavcodec/av1_mc_core/`：移植 dav1d 1.5.1 `mc_tmpl.c` 的
+`put_8tap_c` 与 `put_bilin_c`，支持 8/10/12-bit、九种 8-tap 水平/垂直
+组合、bilinear、单轴/双轴十六分之一像素相位，以及宽或高不超过 4 时的
+短滤波器选择。边界抽样按 dav1d 的 edge emulation 重复最近像素。
+滤波系数由 dav1d `tables.c` 的 6×15×8 表机械提取，逐行和均为 64。
+
+独立 C 参考程序按 dav1d 的整数舍入与滤波顺序生成 14 组固定像素结果；
+新包 `libavcodec/av1_mc_vectors/` 逐像素对拍，覆盖各滤波家族、
+8/10/12-bit、帧边界和窄块。大型系数表放进独立 `av1_mc_core` 包，
+避免主 `libavcodec` Wasm 白盒测试模块的初始化局部变量超限。
+这一步只实现单参考 MC 核；参考帧管理、帧间块语法、复合预测、
+缩放/warp 与整帧入口仍需继续。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **874/874**。
