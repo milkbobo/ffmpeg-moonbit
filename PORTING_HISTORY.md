@@ -2679,3 +2679,25 @@ C 的 `-(F[0]*…+F[7]*…)` 误读成仅取反首抽头——负号作用于整
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **884/884**。warp MC、refmvs、
 帧间块语法与整帧解码入口仍需后续实现。
+
+## 69. 2026-10-25 AV1 warp 仿射运动补偿
+
+新增 `av1_mc_core/warp.mbt`：移植 dav1d 1.5.1 `mc_tmpl.c` 的
+`warp_affine_8x8_c`（像素）与 `warp_affine_8x8t_c`（prep 中间样本）。
+两核共享 15 行 × 8 列水平中间层：每行按仿射模型推进
+`mx += abcd[1]`、每列 `tmx += abcd[0]`，相位
+`64 + ((tmx+512)>>10)` 查 193 相位 warp 滤波表（机械提取为
+`av1_mc_warp_filter`，1544 个系数）；垂直pass 以
+`my += abcd[3]`、`tmy += abcd[2]` 查同一表，put 走 `7+ib` 舍入并
+钳位，prep 走 `7` 舍入保留中间精度再减 bias。块锚点以显式
+`(ox, oy)` 传入，对应 dav1d 传入的源指针。
+
+C 参考沿用 §67/§68 的 docker 管道：8bpc/16bpc 两份 TU 实例化真
+`warp_affine_8x8*_c`，112×80 填充平面（块锚 (8,8)），10 组向量覆盖
+单位矩阵（相位 64 恒等抽头）、正/负混合 abcd 与 8/10/12-bit 的
+put/prep；测试侧同一 LCG 重建平面并以 FNV-32 锚定
+（`scripts/_emit_av1_warp_vectors.py`）。本轮一次对拍通过。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **885/885**。MC 核全部就绪；
+refmvs、帧间块语法、参考帧生命周期与整帧解码入口仍需后续实现。

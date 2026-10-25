@@ -17,7 +17,8 @@
 > 实现提交 `4fe3c70`，该阶段 Wasm 全量测试 **878/878**。
 > wedge 复合预测掩码与 inter-intra 掩码表见 PORTING_HISTORY §67
 > （wedge.c 完整移植 + wedge blend 向量）；缩放参考 MC 与 superres
-> resize 见 PORTING_HISTORY §68；最新 Wasm 全量测试 **884/884**。
+> resize 见 PORTING_HISTORY §68；warp 仿射 MC 见 §69（MC 核全就绪）；
+> 最新 Wasm 全量测试 **885/885**。
 
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
