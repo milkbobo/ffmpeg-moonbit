@@ -2625,3 +2625,32 @@ OBMC 专用空间掩码、wedge 掩码、warp/缩放和帧间块语法仍待实�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **878/878**。
+
+## 67. 2026-10-25 AV1 wedge 复合预测掩码与 inter-intra 掩码表
+
+新增 `av1_mc_core/wedge.mbt`：完整移植 dav1d 1.5.1 `src/wedge.c`
+的一次性初始化 `dav1d_init_ii_wedge_masks`——六个 64×64 主模板
+（insert_border/transposed/hflip）、三套 16 项 wedge codebook
+（heqw/hltw/hgtw，逐尺寸 signs 位掩码）、`fill2d_16x2` 的 444 掩码
+裁剪与 422/420 色度下采样（含两种极性的舍入差），以及 inter-intra
+的 ii_dc 常量掩码与九个共享 nondc 缓冲（vert/hor/smooth 三平面）。
+对外提供 `av1_wedge_mask(layout, bs, sign, wedge_idx)` 与
+`av1_ii_mask(layout, bs, mode)`，按 dav1d `enum BlockSize` 值索引，
+444 两个 sign 槽位同值（亮度路径极性由操作数顺序处理）。
+
+验证走 docker（`vpxdev-img` 自带 gcc，绕开 apt 网络不稳）：C dump
+程序包含真实 `wedge.c`，dump 全部 864 条 wedge 掩码与 84 条
+inter-intra 掩码字节，并按 8bpc/16bpc 两份 TU 实例化 `mc_tmpl.c`
+用真 `mask_c` 生成 7 组固定 blend 向量；`av1_mc_vectors/wedge_test.mbt`
+（`scripts/_emit_av1_wedge_vectors.py` 生成）逐条 FNV-32 对拍掩码、
+4 组逐像素 + 3 组校验和比对 blend。期间修掉三处移植坑：MoonBit
+`FixedArray::make(n, ref_init)` 会让嵌套引用数组互相别名（主模板
+六方向共板、ii 槽位三布局共板，须 `makei` 逐个新建）；dav1d 1.5.1
+`wedge_codebook_16_hgtw` 的 idx5/idx6 是 (H,4,4)、(H,4,6)（初抄时
+二者颠倒，靠 C-dump 反向暴力搜索裁剪参数定位）；16bpc `mc_tmpl.c`
+的 `PXSTRIDE` 是字节跨距（`w*sizeof(pixel)`，误传像素数导致 10-bit
+fixture 行错位）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **883/883**。warp/缩放 MC、
+refmvs、帧间块语法与整帧解码入口仍需后续实现。

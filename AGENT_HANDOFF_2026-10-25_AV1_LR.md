@@ -5,7 +5,7 @@
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
 > **AV1 OBMC 混合提交：`4fe3c70 feat: 增加 AV1 OBMC 水平与垂直重叠混合`**（本文件其余内容为 LR 阶段记录）
 > `moon check --target wasm --deny-warn` 0 error / 0 warning；
-> `moon test --target wasm --no-render` **878/878 通过**。
+> `moon test --target wasm --no-render` **883/883 通过**。
 >
 > 先读：[README.md](README.md)、[agent.md](agent.md)、[PORTING_HISTORY.md](PORTING_HISTORY.md)
 > （§52–§58 是本轮）、[AGENT_HANDOFF_2026-10-24.md](AGENT_HANDOFF_2026-10-24.md)（总体）、
