@@ -129,6 +129,15 @@ priv struct Av1FrameCtx {
   seg_lossless : FixedArray[Bool]
   /// Per-segment qidx.
   seg_qidx : FixedArray[Int32]
+  /// Loop-filter state (b4-aligned level cache + per-128x128 masks).
+  b4_stride : Int32
+  lf_mask : Array[Av1Filter]
+  lf_level : FixedArray[Int32]
+  lf_lut : Av1FilterLut
+  lf_lvl : FixedArray[Int32]
+  lf_y_active : Bool
+  lf_u_active : Bool
+  lf_v_active : Bool
 }
 
 ///|

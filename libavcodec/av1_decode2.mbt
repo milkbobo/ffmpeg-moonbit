@@ -237,11 +237,12 @@ fn Av1TileCtx::decode_coefs(
       i = i - 1
     }
     // dc
-    ctx = if tx_class == 0 {
-      0
+    if tx_class == 0 {
+      ctx = 0
     } else {
-      let (c0, _) = av1_get_lo_ctx(levels, 0, tx_class, 0, 0, 0, stride)
-      c0
+      let (c0, m0) = av1_get_lo_ctx(levels, 0, tx_class, 0, 0, 0, stride)
+      ctx = c0
+      mag = m0
     }
     dc_tok = self.msac.decode_symbol_adapt(
       self.cdf.base_tok,
@@ -288,7 +289,8 @@ fn Av1TileCtx::decode_coefs(
     )
     dc_sign_level.val = (dc_sign.reinterpret_as_int() - 1) & (2 << 6)
     let (dcv, dcul) = if dc_tok == 15 {
-      let dkt = (self.msac.read_golomb() + 15) & 0xfffff
+      let dkt_raw = self.msac.read_golomb() + 15
+      let dkt = dkt_raw & 0xfffff
       let dq = ((dq_tbl0 * dkt) & 0xffffff) >> dq_shift
       (av1_imin(dq, cf_max + dc_sign.reinterpret_as_int()), dkt)
     } else {

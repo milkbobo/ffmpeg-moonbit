@@ -431,8 +431,16 @@ pub struct Av1FrameHeader {
   lr_uv_shift : Bool
   loop_filter_level : Array[Int32]
   loop_filter_sharpness : Int32
+  /// `loop_filter_delta_enabled` plus the (defaulted) mode/ref deltas.
+  loop_filter_delta_enabled : Bool
+  loop_filter_ref_deltas : Array[Int32]
+  loop_filter_mode_deltas : Array[Int32]
   cdef_damping_minus_3 : Int32
   cdef_bits : Int32
+  cdef_y_pri_strength : Array[Int32]
+  cdef_y_sec_strength : Array[Int32]
+  cdef_uv_pri_strength : Array[Int32]
+  cdef_uv_sec_strength : Array[Int32]
   tx_mode : Int32
   reduced_tx_set : Bool
   allow_high_precision_mv : Bool
@@ -568,8 +576,15 @@ pub fn av1_parse_frame_header(
           lr_uv_shift: false,
           loop_filter_level: [],
           loop_filter_sharpness: 0,
+          loop_filter_delta_enabled: false,
+          loop_filter_ref_deltas: [1, 0, 0, 0, -1, 0, -1, -1],
+          loop_filter_mode_deltas: [0, 0],
           cdef_damping_minus_3: 0,
           cdef_bits: 0,
+          cdef_y_pri_strength: [],
+          cdef_y_sec_strength: [],
+          cdef_uv_pri_strength: [],
+          cdef_uv_sec_strength: [],
           tx_mode: 0,
           reduced_tx_set: false,
           allow_high_precision_mv: false,
@@ -868,8 +883,15 @@ pub fn av1_parse_frame_header(
       let mut all_lossless = false
       let loop_filter_level : Array[Int32] = []
       let mut loop_filter_sharpness = 0
+      let mut loop_filter_delta_enabled = false
+      let loop_filter_ref_deltas : Array[Int32] = [1, 0, 0, 0, -1, 0, -1, -1]
+      let loop_filter_mode_deltas : Array[Int32] = [0, 0]
       let mut cdef_damping = 0
       let mut cdef_bits = 0
+      let cdef_y_pri : Array[Int32] = []
+      let cdef_y_sec : Array[Int32] = []
+      let cdef_uv_pri : Array[Int32] = []
+      let cdef_uv_sec : Array[Int32] = []
       let mut tx_mode = 0
       let mut reduced_tx_set = false
       let mut reference_select = false
@@ -963,17 +985,22 @@ pub fn av1_parse_frame_header(
           }
           loop_filter_sharpness = br.read(3).reinterpret_as_int()
           let lf_delta_enabled = br.read1() != 0
+          loop_filter_delta_enabled = lf_delta_enabled
           if lf_delta_enabled {
             let update = br.read1() != 0
             if update {
-              for _ in 0..<8 {
+              for i in 0..<8 {
                 if br.read1() != 0 {
-                  br.skip(7) // ref_delta su(1+6)
+                  loop_filter_ref_deltas[i] = br.read(7).reinterpret_as_int() <<
+                    25 >>
+                    25
                 }
               }
-              for _ in 0..<2 {
+              for i in 0..<2 {
                 if br.read1() != 0 {
-                  br.skip(7) // mode_delta su(1+6)
+                  loop_filter_mode_deltas[i] = br.read(7).reinterpret_as_int() <<
+                    25 >>
+                    25
                 }
               }
             }
@@ -984,11 +1011,11 @@ pub fn av1_parse_frame_header(
           cdef_damping = br.read(2).reinterpret_as_int()
           cdef_bits = br.read(2).reinterpret_as_int()
           for _ in 0..<(1 << cdef_bits) {
-            br.skip(4) // cdef_y_pri_strength
-            br.skip(2) // cdef_y_sec_strength
+            cdef_y_pri.push(br.read(4).reinterpret_as_int())
+            cdef_y_sec.push(br.read(2).reinterpret_as_int())
             if !seq.monochrome {
-              br.skip(4)
-              br.skip(2)
+              cdef_uv_pri.push(br.read(4).reinterpret_as_int())
+              cdef_uv_sec.push(br.read(2).reinterpret_as_int())
             }
           }
         }
@@ -1183,8 +1210,15 @@ pub fn av1_parse_frame_header(
         lr_uv_shift,
         loop_filter_level,
         loop_filter_sharpness,
+        loop_filter_delta_enabled,
+        loop_filter_ref_deltas,
+        loop_filter_mode_deltas,
         cdef_damping_minus_3: cdef_damping,
         cdef_bits,
+        cdef_y_pri_strength: cdef_y_pri,
+        cdef_y_sec_strength: cdef_y_sec,
+        cdef_uv_pri_strength: cdef_uv_pri,
+        cdef_uv_sec_strength: cdef_uv_sec,
         tx_mode,
         reduced_tx_set,
         allow_high_precision_mv: allow_high_precision,

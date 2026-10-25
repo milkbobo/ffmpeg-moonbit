@@ -23,22 +23,22 @@ fn av1_sm_uv_flag(bctx : Av1BlockContext, idx : Int32) -> Int32 {
 }
 
 ///|
-/// cfl_allowed_mask from tables.h (BS values are dav1d enum indices).
+/// cfl_allowed_mask from dav1d tables.h (bit = dav1d `enum BlockSize`).
 let av1_cfl_allowed_mask : Int32 = (1 << 7) |
   (1 << 8) |
   (1 << 9) |
   (1 << 11) |
   (1 << 12) |
   (1 << 13) |
+  (1 << 14) |
+  (1 << 15) |
+  (1 << 16) |
+  (1 << 17) |
   (1 << 18) |
-  (1 << 5) |
-  (1 << 10) |
-  (1 << 4) |
-  (1 << 6) |
-  (1 << 3) |
-  (1 << 2) |
-  (1 << 1) // BS_32x32, 32x16, 32x8, 16x32, 16x16, 16x8, 8x32, 8x16, 8x8,
-// 8x4, 16x4, 4x16, 4x8, 4x4
+  (1 << 19) |
+  (1 << 20) |
+  (1 << 21) // BS_32x32, 32x16, 32x8, 16x32, 16x16, 16x8, 16x4,
+// 8x32, 8x16, 8x8, 8x4, 4x16, 4x8, 4x4
 
 ///|
 /// `order_palette` + `read_pal_indices` from decode.c.
@@ -346,6 +346,15 @@ fn Av1TileCtx::decode_b(
       y_angle = self.msac.decode_symbol_adapt(self.cdf.filter_intra, 0, 4)
     }
   }
+  // palette indices (dav1d reads them after filter_intra, before tx size)
+  if pal_sz.0 != 0 {
+    self.read_pal_indices(self.pal_idx_y, pal_sz.0, 0, w4, h4, bw4, bh4)
+  }
+  if has_chroma && pal_sz.1 != 0 {
+    let cw4 = (w4 + ss_hor) >> ss_hor
+    let ch4 = (h4 + ss_ver) >> ss_ver
+    self.read_pal_indices(self.pal_idx_uv, pal_sz.1, 1, cw4, ch4, cbw4, cbh4)
+  }
   // tx size
   let (tx, uvtx) = if f.seg_lossless[seg_id] {
     (0, 0)
@@ -381,17 +390,30 @@ fn Av1TileCtx::decode_b(
     tx,
     uvtx,
   }
-  // palette indices (decoded after filter_intra, before tx)
-  if pal_sz.0 != 0 {
-    self.read_pal_indices(self.pal_idx_y, pal_sz.0, 0, w4, h4, bw4, bh4)
-  }
-  if has_chroma && pal_sz.1 != 0 {
-    let cw4 = (w4 + ss_hor) >> ss_hor
-    let ch4 = (h4 + ss_ver) >> ss_ver
-    self.read_pal_indices(self.pal_idx_uv, pal_sz.1, 1, cw4, ch4, cbw4, cbh4)
-  }
   // reconstruction
   self.recon_b_intra(bs, intra_edge_flags, b)
+  if f.lf_y_active {
+    let lfm = f.lf_mask[(self.by >> 5) * f.sb128w + (self.bx >> 5)]
+    f.create_lf_mask_intra(
+      lfm,
+      self.bx,
+      self.by,
+      bs,
+      b.tx,
+      b.uvtx,
+      a.tx_lpf_y,
+      bx4,
+      l.tx_lpf_y,
+      by4,
+      a.tx_lpf_uv,
+      cbx4,
+      l.tx_lpf_uv,
+      cby4,
+      has_chroma,
+      f.lf_lvl,
+      seg_id,
+    )
+  }
   // update contexts
   let y_mode_nofilt = if y_mode == av1_filter_pred {
     av1_dc_pred

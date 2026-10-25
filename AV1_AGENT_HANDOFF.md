@@ -36,7 +36,10 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 | `libavcodec/av1_cdf.mbt` | 每帧 CDF 工作副本 `Av1CdfCtx` + `av1_cdf_copy_defaults(qidx)`（qcat 规则与 dav1d 一致） | 编译绿 |
 | `libavcodec/av1_itx.mbt` + `av1_itx64.mbt` | itx_1d.c 全部 1D 核（dct4/8/16/32/64、adst4/8/16+flip、identity、wht4）+ 通用 `inv_txfm_add` + `itxfm_add` 分发（shift 表）+ tx1d_types + scan/lnz 访问器 | WHT 已用 python 重算 dav1d C 数学对拍通过（74 填充 ±3 残差与解码输出一致）；其余核尚未单测 |
 | `libavcodec/av1_ipred.mbt` | ipred_tmpl.c + ipred_prepare_tmpl.c：DC 家族、V/H、Paeth、Smooth×3、Z1/Z2/Z3（含 edge filter/upsample）、FILTER_PRED、CFL AC/pred、pal_pred、`av1_prepare_intra_edges`、`av1_ipred_predict` 分发 | 部分经像素对拍间接验证 |
-| `libavcodec/av1_decode.mbt`~`av1_decode6.mbt` | decode.c+recon_tmpl.c 关键帧路径：BlockContext、FrameCtx/TileCtx、edge 树（intra_edge.c）、partition 递归（10 种）、decode_b（skip/ymode/angle/uv/CFL/palette/filter-intra/tx）、decode_coefs（eob/tokens/golomb/sign/dequant）、recon_b_intra（预测+itx 逐子块）、backup_ipred_edge、tile sbrow 循环、入口 `av1_decode_keyframe` | **全帧解码已跑通**（6 行 SB 无 overread），MD5 尚未对齐（见 §3） |
+| `libavcodec/av1_decode.mbt`~`av1_decode6.mbt` | decode.c+recon_tmpl.c 关键帧路径：BlockContext、FrameCtx/TileCtx、edge 树（intra_edge.c）、partition 递归（10 种）、decode_b（skip/ymode/angle/uv/CFL/palette/filter-intra/tx）、decode_coefs（eob/tokens/golomb/sign/dequant）、recon_b_intra（预测+itx 逐子块）、backup_ipred_edge、tile sbrow 循环、入口 `av1_decode_keyframe` | **无损与有损关键帧均与 libdav1d 逐帧 MD5 一致** |
+| `libavcodec/av1_lf.mbt` | 环路去块滤波：lf_mask.c intra 掩码/level cache/calc_eih/calc_lf_values、loopfilter_tmpl.c 四个 C 核、lf_apply_tmpl.c 列/行驱动（单 tile） | 8-bit 4:2:0 有损向量 8/8 帧 MD5 一致 |
+| `libavcodec/itx_probe/` | 155 个 (RectTxfmSize, TxfmType) 逆变换组合与 dav1d DSP 校验和回归 | 全绿 |
+| `libavcodec/av1_lossy_vectors/` | 8 帧 8-bit 4:2:0 有损关键帧（crf30，CDEF/LR 关闭）framemd5 回归 | 全绿 |
 | `libavcodec/av1_kf_realdata_wbtest.mbt` | 两条无损向量（ll128 单帧 128×96、ll160 六帧 160×120，base64 内嵌）+ framemd5 期望 + 全链测试 | 结构就绪，MD5 待收敛 |
 | `scripts/_gen_av1_kf_vectors.py` + `_av1_kf_test_body.tpl` | 向量生成脚本（模板文件分离） | 可重跑 |
 | `scripts/extract_av1_cdf_tables.py`、`extract_av1_decode_tables.py` | CDF/解码表提取器（支持 `--check`；后者需要 §4 的 dump 文件） | C 对拍 0 差异 |
@@ -46,17 +49,17 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 - 解码器内的 `println` 调试输出（av1_decode2/3/4/5/6.mbt 里所有
   `println("B "/"PART"/"CF "/"PP "/"Z1"...` 等）——见 §6 清理清单
 
-## 3. 当前卡点：无损关键帧 MD5 未对齐
+## 3. 无损关键帧（已收敛）
 
-`ll128` 单帧：got `59c794743afb69e60ad1fddab53d7344`，want
-`f9db7bbaf792b693d4c88d3039a68d75`。
+无损关键帧的符号与像素均已与 dav1d 1.5.1 一致（ll128/ll160、10/12-bit、
+4:4:4/4:2:2/单色）。历史排查记录见 §3.4 与 PORTING_HISTORY §49。
 
-2026-10-24 后续修复：`av1_prepare_intra_edges` 的 Z3 左下参考像素写入
-位置已按 dav1d 调整；FILTER_PRED 补齐 p5 抽头并修正后续行的 top 来源；
-palette 索引完成阶段按 dav1d 填充不可见的右/下边缘。以上改变了 MD5，
-但尚未对齐参考值，仍需从首个熵解码/重建分叉继续排查。
-后续还修复了 luma/chroma 子块的 top-right 可用性判断：dav1d 只在子块
-触及当前块右边界时禁用该参考边缘，不能整行禁用。
+有损关键帧（2026-10-25，PORTING_HISTORY §52）也已收敛：8 帧符号轨迹
+与 dav1d 完全一致，未滤波重建逐字节一致，带环路滤波的 framemd5 与
+FFmpeg 9.0.2（libdav1d）完全一致。已修复的 bug：
+`cfl_allowed_mask` 位集、非 2D DC hi-token 上下文、palette 索引与 tx_size
+的符号顺序、逆变换 1D 类型表的行列转置、ADST16/DCT64 核转录错误、
+chroma LF 掩码 sidx 移位与行滤波 level 偏移。
 
 **语法层（熵解码）已与真 dav1d 逐步对拍确认一致**的部分：
 - 3000 步 `decode_bool_equi` 位级一致（rng/difhi/cnt/pos 全同）
@@ -176,13 +179,16 @@ docker 里 **apt 网络当前不稳**（universe 连不上，pip 装不了），
 
 ```sh
 cd D:\project\FFmpeg-n9.0.2\moonbit
-moon check --target wasm --deny-warn --no-render     # 必须 0 警告
-moon test --target wasm --no-render                  # 全量（收敛前 AV1 向量会挂）
-moon test --target wasm --no-render libavcodec/av1_kf_realdata_wbtest.mbt   # AV1 向量
-moon test --target wasm --no-render libavcodec/av1_probe_wbtest.mbt         # 像素探针
-python .scratch/av1/trace2.py .scratch/av1/ll128.ivf > py_full.txt          # python 参照轨迹
-python .scratch/av1/norm_diff.py mb_full.txt py_full.txt                    # 轨迹 diff
+moon check --target wasm --deny-warn --no-render
+moon test --target wasm --no-render                              # 全量 864
+moon test --target wasm --no-render -p libavcodec/itx_probe      # 逆变换回归
+moon test --target wasm --no-render -p libavcodec/av1_lossy_vectors
 ```
+
+有损对拍的权威参照由 `.scratch/dav1d_dbg/build_trace.sh` 构建：直接
+gcc 编译 dav1d 源码（不用 meson），打开 `DEBUG_BLOCK_INFO` 与
+`decode_coefs` 的 `dbg`，并可选择 `inloop_filters=0` 导出未滤波 YUV。
+`build_itx_ref.sh` 导出 `inv_txfm_add`/1D 核校验和。
 
 素材在 `.scratch/av1/`：`ll128.ivf`（单帧）、`ll160_multi.ivf`（六帧）、
 `ll128_ref.yuv`/`ll160_multi.framemd5`（期望）、探针/补丁脚本若干
@@ -217,26 +223,17 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 6. git commit（用户约定：不主动 commit，先问或等用户指示；
    提交信息风格看 git log，如 `feat: 支持 AV1 无损关键帧解码`）
 
-## 7. 收敛后的路线（按优先级）
+## 7. 路线（按优先级）
 
-1. **有损关键帧**（2026-10-24 晚开工，见 PORTING_HISTORY §50）：解码层
-   （tx_mode=2 逐块 tx size、txtp_intra1/2、eob_bin 全表、dequant/cf_max）
-   已就位；`-enable-cdef 0 -enable-restoration 0` 的 crf30 向量 8 帧中
-   6 帧可整帧解码、2 帧 overread——分歧点已用逐 tx 子块 msac cnt 插桩
-   定位到帧尾 (18,23) 的 4x4 IDTX 块附近（levels 转置布局已修，见 §50，
-   但该分歧另有原因）。**下一步**：①写全帧 C 仲裁器（在
-   `C:/Users/milkb/AppData/Local/Temp/trace_arb.c` 基础上扩展，或扩展
-   `.scratch/av1/trace2.py` 补 tx size/txtp/eob 大表符号）对拍找首个
-   分歧符号；②移植 LF（`lf_mask.c`+`lf_apply_tmpl.c`+
-   `loopfilter_tmpl.c`，帧头 LF 参数已解析但 delta 被 skip、CDEF 强度
-   被 skip）；③CDEF/LR 后续。注意 ffmpeg `-skip_loop_filter` 对
-   libdav1d 无效，未滤波参考不可得。
-2. **多 tile / 128x128 SB / 4:2:2 / 4:4:4 / 高位深**：入口现在硬编码
-   4:2:0、8bit、单 tile、64x64 SB（`seq.use_128x128_superblock` 支持
-   读但 edge 树/上下文环按 64x64 布局）。
-3. **inter 帧**：需要 refmvs/mc 全家（工程量大，参照 VP9 inter 的
-   移植节奏）。
-4. intrabc、film grain 明确报 PATCHWELCOME（入口已有检查）。
+1. **CDEF + 环路恢复（LR）**：帧头参数已解析/保存（CDEF 强度四组数组、
+   `lr_type`），有损入口在二者生效时显式拒绝。移植 `cdef_apply_tmpl.c`
+   与 `looprestoration_tmpl.c`/`lr_apply_tmpl.c` 后即可放开。
+2. **高位深有损**：10/12-bit 的 ipred/itx/LF 已参数化（`bd_max`/`mid`），
+   但仅无损经过验证；需要高位深有损向量。
+3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界
+   强度修正）；128x128 SB 的 edge 树/上下文环仍按 64x64 布局。
+4. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。
+5. intrabc、film grain 明确报 PATCHWELCOME（入口已有检查）。
 
 ## 8. 相关约定速查
 

@@ -167,10 +167,41 @@ fn av1_decode_keyframe_payloads(
     return Err("av1: superres unsupported")
   }
   if !hdr.coded_lossless {
-    // Lossy frames need the in-loop filters (LF/CDEF/LR) plus the remaining
-    // lossy symbol paths; the decode layer is mostly in place (tx size/txtp/
-    // eob tables) but one symbol divergence is still being tracked down.
-    return Err("av1: lossy frames unsupported (need CDEF/LF/LR)")
+    // Lossy key frames run reconstruction + the loop filter; the remaining
+    // in-loop tools (CDEF, loop restoration) and per-block delta-lf are not
+    // implemented, so reject frames that actually need them.
+    let mut cdef_on = false
+    for v in hdr.cdef_y_pri_strength {
+      if v != 0 {
+        cdef_on = true
+      }
+    }
+    for v in hdr.cdef_y_sec_strength {
+      if v != 0 {
+        cdef_on = true
+      }
+    }
+    for v in hdr.cdef_uv_pri_strength {
+      if v != 0 {
+        cdef_on = true
+      }
+    }
+    for v in hdr.cdef_uv_sec_strength {
+      if v != 0 {
+        cdef_on = true
+      }
+    }
+    if cdef_on {
+      return Err("av1: CDEF unsupported in pixel path")
+    }
+    for t in hdr.lr_type {
+      if t != 0 {
+        return Err("av1: loop restoration unsupported in pixel path")
+      }
+    }
+    if hdr.delta_lf_present {
+      return Err("av1: delta_lf unsupported in pixel path")
+    }
   }
   if seq.bitdepth != 8 && seq.bitdepth != 10 && seq.bitdepth != 12 {
     return Err("av1: unsupported bit depth")
@@ -227,6 +258,20 @@ fn av1_decode_keyframe_payloads(
     FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
     FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
   ]
+  let lf_lut = av1_filter_lut_new()
+  av1_calc_eih(lf_lut, hdr.loop_filter_sharpness)
+  let lf_lvl = FixedArray::make(8 * 64, 0)
+  av1_calc_lf_values(lf_lvl, hdr)
+  let lf_level_arr = hdr.loop_filter_level
+  let lf_y_active = lf_level_arr.length() >= 2 &&
+    (lf_level_arr[0] != 0 || lf_level_arr[1] != 0)
+  let lf_u_active = lf_level_arr.length() > 2 && lf_level_arr[2] != 0
+  let lf_v_active = lf_level_arr.length() > 3 && lf_level_arr[3] != 0
+  let lf_mask : Array[Av1Filter] = []
+  for _ in 0..<(sb128w * sb128h) {
+    lf_mask.push(av1_filter_new())
+  }
+  let b4_stride = (bw + 31) & -32
   let f : Av1FrameCtx = {
     seq,
     hdr,
@@ -249,6 +294,14 @@ fn av1_decode_keyframe_payloads(
     dq: FixedArray::make(8 * 6, 4),
     seg_lossless: FixedArray::make(8, false),
     seg_qidx: FixedArray::make(8, 0),
+    b4_stride,
+    lf_mask,
+    lf_level: FixedArray::make(b4_stride * av1_imax(bh, 1) * 4, 0),
+    lf_lut,
+    lf_lvl,
+    lf_y_active,
+    lf_u_active,
+    lf_v_active,
   }
   f.init_quant()
   let root_bl = if seq.use_128x128_superblock { 0 } else { 1 }
@@ -297,6 +350,14 @@ fn av1_decode_keyframe_payloads(
       }
     }
     // clear trailing bits check is skipped (strict mode off)
+    if f.lf_y_active {
+      if num_tiles > 1 {
+        raise Av1DecError::Unsupported(
+          "av1: multi-tile lossy loop filter unsupported",
+        )
+      }
+      f.loop_filter_frame()
+    }
     Ok({
       y: f.planes[0],
       u: f.planes[1],

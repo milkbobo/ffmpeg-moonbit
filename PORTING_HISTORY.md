@@ -2238,3 +2238,53 @@ diff 定位首个分歧符号，再开 LF 移植。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **862/862**。
+
+## 52. 2026-10-25 AV1 有损关键帧解码 + 环路去块滤波
+
+接续 §50/§51：放弃手写 C 仲裁器，改为**直接编译 dav1d 1.5.1 源码**
+（alpine `gcc`，`HAVE_ASM=0`，非模板文件不定义 `BITDEPTH`，模板文件
+`-DBITDEPTH=8`；用 `config.h` + 空 `vcs_version.h`）并打开
+`DEBUG_BLOCK_INFO`、`decode_coefs` 的 `dbg`，得到权威逐符号轨迹；
+同时把 `Dav1dSettings.inloop_filters` 置 0 取得未滤波参考帧，便于分离
+「重建」与「滤波」两类差异。工具落在 `.scratch/dav1d_dbg/`（不入库）。
+
+符号层对比（8 帧全部一致）后定位并修复五个真 bug：
+1. `cfl_allowed_mask` 位集错误：按自然色度尺寸写的，dav1d 的
+   `enum BlockSize` 顺序下 CFL 允许集是 7,8,9,11..21（含 `BS_8x8=17`）。
+   有损路径首个块即分歧；无损走 `cbw4==cbh4==1` 分支所以从未暴露。
+2. `decode_coefs` 非 2D（H/V）变换的 DC hi-token 上下文：必须用 DC 处
+   `get_lo_ctx` 返回的 `hi_mag`，原实现丢弃后沿用了 AC 循环残留值。
+3. palette 索引与 tx_size 的**符号顺序**：dav1d 是
+   palette → filter_intra → palette 索引 → tx_size；原实现在 tx_size 之后
+   读索引。无损时 tx_size 不读符号，顺序错也通过。
+4. 逆变换 1D 类型表方向：dav1d 的 DSP 赋值对非对称类型做了行列转置
+   （`[ADST_DCT] = inv_txfm_add_dct_adst`、`[V_DCT] = identity_dct`），
+   原表按名字序，导致所有混合类型（DCT+ADST/FLIPADST/IDENTITY）错，
+   同类型组合因对称而通过。
+5. 逆变换核自身：`inv_adst16_1d` 的第二级旋转读到了被覆盖的中间量；
+   `inv_dct64_1d` 多处系数转录错误（-2824/-1474/-2191）与 SSA 名混淆，
+   改为脚本从 C 源机械生成（357 条语句的 SSA 版本）。
+
+新增 `libavcodec/av1_lf.mbt`：`lf_mask.c` 的 intra 掩码/level cache /
+`calc_eih` / `calc_lf_values`，`loopfilter_tmpl.c` 的 4 个 C 核，以及
+`lf_apply_tmpl.c` 的列/行驱动（单 tile；多 tile 有损显式拒绝）。
+整帧解码完成后按超级块行依次做「列→行」滤波，对 intra 帧与 dav1d 的
+逐行时序等价（预测已消费未滤波像素，行间只读上一行）。修复了
+chroma 掩码 `sidx` 的移位（应为 `sidx << vbits/hbits`，此前写成
+`sidx * vbits`）、行滤波 level 的重复行偏移、行分量漏加 `+1`、
+64x64 行级别指针基准等错误。
+
+契约收紧：有损帧在 CDEF 强度非零、任一平面环路恢复类型非零、
+`delta_lf_present` 时仍显式拒绝（`cdef` 强度位已完整解析保存）。
+
+验证：
+- 符号轨迹：8 帧逐符号与 dav1d 完全一致（含 palette/CFL/所有 token）。
+- 逆变换：155 个 (RectTxfmSize, TxfmType) 组合的 `inv_txfm_add` 校验和
+  与 dav1d DSP 逐值一致，固化在 `libavcodec/itx_probe/itx_probe_test.mbt`。
+- 像素：未滤波重建与 dav1d（`inloop_filters=0`）逐字节一致；
+  带环路滤波的 8 帧 framemd5 与 `linuxserver/ffmpeg:9.0.2`（libdav1d）
+  完全一致，向量见 `libavcodec/av1_lossy_vectors/av1_lossy_test.mbt`
+  （libaom crf30、`-enable-cdef 0 -enable-restoration 0`、128x96）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **864/864**。

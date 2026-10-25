@@ -342,8 +342,12 @@ fn Av1TileCtx::decode_sb(
     let is_split = self.msac.decode_bool(
       av1_gather_top_partition_prob(self.cdf.partition, pc_base, bl),
     )
+    bp = if is_split != 0 {
+      av1_partition_split
+    } else {
+      av1_partition_h
+    }
     if is_split != 0 {
-      bp = av1_partition_split
       if self.decode_sb(bl + 1, node.split[0]) {
         return true
       }
@@ -353,7 +357,6 @@ fn Av1TileCtx::decode_sb(
       }
       self.bx = self.bx - hsz
     } else {
-      bp = av1_partition_h
       let bs = av1_block_sizes[(bl * 10 + av1_partition_h) * 2].to_int()
       self.decode_b(bl, bs, av1_partition_h, node.h.0)
     }
@@ -361,8 +364,12 @@ fn Av1TileCtx::decode_sb(
     let is_split = self.msac.decode_bool(
       av1_gather_left_partition_prob(self.cdf.partition, pc_base, bl),
     )
+    bp = if is_split != 0 {
+      av1_partition_split
+    } else {
+      av1_partition_v
+    }
     if is_split != 0 {
-      bp = av1_partition_split
       if self.decode_sb(bl + 1, node.split[0]) {
         return true
       }
@@ -372,7 +379,6 @@ fn Av1TileCtx::decode_sb(
       }
       self.by = self.by - hsz
     } else {
-      bp = av1_partition_v
       let bs = av1_block_sizes[(bl * 10 + av1_partition_v) * 2].to_int()
       self.decode_b(bl, bs, av1_partition_v, node.v.0)
     }
