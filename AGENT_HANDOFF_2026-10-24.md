@@ -3,8 +3,8 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> AV1 segmentation 实现提交：`e0ff9e0 feat: 完成 AV1 关键帧 segmentation 与 SWITCHABLE LR 验证`（原文为 2026-10-24 阶段记录）。
-> 全量 Wasm 测试：**873/873 通过**；`moon check --deny-warn` 0 error / 0 warning。
+> AV1 帧间 MC 基础提交：`4598726 feat: 增加 AV1 帧间单参考运动补偿插值核`（原文为 2026-10-24 阶段记录）。
+> 全量 Wasm 测试：**874/874 通过**；`moon check --deny-warn` 0 error / 0 warning。
 
 先读这几份文档，再动手：
 
