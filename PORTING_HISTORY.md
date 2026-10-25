@@ -2439,3 +2439,48 @@ framemd5 均与 libdav1d 一致，加入 `av1_lossy_extra`。这同时回归了 
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **871/871**。
+
+## 59. 2026-10-25 AV1 多 tile 有损环内滤波（LF tile 边界强度修正）
+
+补上多 tile 有损帧的最后缺口：去块滤波在 tile 边界处的**变换尺寸档位
+修正**（dav1d 1.5.1 `src/lf_apply_tmpl.c` `dav1d_loopfilter_sbrow_cols`
+前半，约 331–401 行）。此前 `av1_decode6.mbt` 对 LF/CDEF/LR 开启且
+`num_tiles > 1` 的帧显式拒绝；CDEF/LR 本身无 tile 专用逻辑（消费 LF
+输出），拒绝解除后即可整帧通过。
+
+实现分三块：
+
+- **右边缘备份**（`src/decode.c` 2734–2742 行的移植）：`decode_tile_sbrow`
+  返回后把左上下文 `f.l.tx_lpf_y[by&16 .. +sb_step)` / `tx_lpf_uv` 存入
+  `Av1FrameCtx` 新增的 `tile_lpf_y` / `tile_lpf_uv`（每 tile 列行距
+  `align_h=(bh+31)&~31`，chroma 为 `align_h>>ss_v`——dav1d 源码里
+  chroma 行距在保存处有 `align_h >>= ss_ver` 一句，易漏）；同时每 tile
+  行首个 sbrow 在 `start_of_tile_row[by/sb_step]` 记下 tile 行号。
+- **tile 列边界修正**（`av1_lf.mbt` `lf_sbrow_cols` 开头）：对每个
+  `tile_col >= 1`，取该列首个 SB 的 4x4 起点 `tile_col_start4[tc]`，
+  用左邻 tile 的右边缘值钳制列方向掩码档位：`idx = 2*!!(lvl2)+!!(lvl1)`，
+  清 0/1/2 三档后置 `min(idx, lpf_y[y-starty4])`。luma 位图 16 位半区
+  （`sidx = bit>=0x10000`），chroma 半区 `16>>ss_v` 位、基址
+  `(tc-1)*(align_h>>ss_v) + (sby<<sbl2)>>ss_v`。
+- **tile 行边界修正**：`start_of_tile_row[sby] != 0` 时用**上一 tile 行
+  残留的 above 上下文** `f.a[sb128w*(r-1)+x].tx_lpf_y/uv` 钳制行方向
+  掩码（`f.a` 按 tile 行分段，`a_idx = tile_row*sb128w + col_start>>5`，
+  与 dav1d 布局一致）；uv 只有 0/1 两档。
+
+新向量（libaom 320x240 crf30，`-g 1`，`tile-columns=1:tile-rows=1`，
+均 4 帧、framemd5 与 libdav1d 一致，入 `av1_lossy_extra`）：
+
+- `mt8`：64x64 SB、4:2:0 8-bit 2x2 tile（上一会话备好）；
+- `mt444`：64x64 SB、4:4:4 10-bit 2x2 tile——覆盖 `ss_h=ss_v=0` 的
+  chroma 半区/基址路径；
+- `mtsb128`：**128x128 SB**、4:2:0 8-bit 2x2 tile。扫描发现此前全部
+  有损向量（§52–§58）都是 64x64 SB——libaom 的
+  `AOM_SUPERBLOCK_SIZE_DYNAMIC` 恒选 64（720p 也是），ffmpeg 9.0.2 又
+  没透传 `--sb-size`；该向量改用 debian `aom-tools` 的 aomenc
+  `--sb-size=128 --tile-columns=1 --tile-rows=1` 生成（ffmpeg 出
+  rawvideo 管道进容器）。这是 128x128 SB 有损链路（LF 的
+  `is_sb64=0` 分支）首次被整帧验证。
+
+三条向量解码与 dav1d 逐帧 md5 全部一致。`moon check --target wasm
+--deny-warn --no-render` 0 error/0 warning，`moon test --target wasm
+--no-render` **871/871**（向量并入既有 test 块，总数不变）。

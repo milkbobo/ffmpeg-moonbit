@@ -141,6 +141,12 @@ priv struct Av1FrameCtx {
   /// CDEF strengths/damping and whether CDEF is active for this frame.
   cdef : Av1CdefParams
   cdef_on : Bool
+  /// Tile layout for the loop-filter tile-boundary mask fixups.
+  tile_cols : Int32
+  tile_col_start4 : Array[Int32]
+  tile_lpf_y : FixedArray[Int32]
+  tile_lpf_uv : FixedArray[Int32]
+  start_of_tile_row : FixedArray[Int32]
   /// Planes with a non-NONE loop-restoration type.
   restore_planes : Int32
   lr_active : Bool

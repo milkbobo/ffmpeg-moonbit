@@ -880,21 +880,137 @@ fn av1_lf_plane_rows_uv(
 }
 
 ///|
-/// `dav1d_loopfilter_sbrow_cols` for a single tile (tile-boundary strength
-/// fixups omitted; multi-tile lossy frames are rejected before this runs).
+/// `dav1d_loopfilter_sbrow_cols`, including the tile-boundary strength
+/// fixups: at tile column/row edges the initial (maximum) transform-size
+/// level is clamped against the neighbouring tile's saved `tx_lpf` values.
 fn Av1FrameCtx::lf_sbrow_cols(self : Av1FrameCtx, sby : Int32) -> Unit {
   let is_sb64 = if self.seq.use_128x128_superblock { 0 } else { 1 }
   let starty4 = (sby & is_sb64) << 4
   let sbsz = 32 >> is_sb64
+  let sbl2 = 5 - is_sb64
   let endy4 = starty4 + av1_imin(self.bh - sby * sbsz, sbsz)
   let uv_endy4 = (endy4 + self.ss_v) >> self.ss_v
+  let mask_row = sby >> is_sb64
+  let mono = self.seq.monochrome
+  // fix lpf strength at tile col boundaries
+  if self.tile_cols > 1 {
+    let halign = (self.bh + 31) & -32
+    let uv_halign = halign >> self.ss_v
+    let vshift = 4 - self.ss_v
+    let vmax = 1U << (16 >> self.ss_v)
+    for tc in 1..<self.tile_cols {
+      let x4 = self.tile_col_start4[tc]
+      if x4 >= self.bw {
+        break
+      }
+      let bx4 = if is_sb64 != 0 && (x4 & 16) != 0 { 16 } else { 0 }
+      let mask = self.lf_mask[mask_row * self.sb128w + (x4 >> 5)]
+      let lpf_base = (tc - 1) * halign + (sby << sbl2)
+      for y in starty4..<endy4 {
+        let bit = 1U << y
+        let sidx = if bit >= 0x10000U { 1 } else { 0 }
+        let smask = bit >> (sidx * 16)
+        let i2 = av1_fy_i(0, bx4, 2, sidx)
+        let i1 = av1_fy_i(0, bx4, 1, sidx)
+        let i0 = av1_fy_i(0, bx4, 0, sidx)
+        let idx = 2 *
+            (if (mask.fy[i2] & smask) != (0 : UInt) { 1 } else { 0 }) +
+          (if (mask.fy[i1] & smask) != (0 : UInt) { 1 } else { 0 })
+        mask.fy[i2] = mask.fy[i2] & smask.lnot()
+        mask.fy[i1] = mask.fy[i1] & smask.lnot()
+        mask.fy[i0] = mask.fy[i0] & smask.lnot()
+        let inew = av1_fy_i(0, bx4, av1_imin(idx, self.tile_lpf_y[lpf_base + (y - starty4)]), sidx)
+        mask.fy[inew] = mask.fy[inew] | smask
+      }
+      if !mono {
+        let cbx4 = bx4 >> self.ss_h
+        let uv_start = starty4 >> self.ss_v
+        let lpf_base = (tc - 1) * uv_halign + ((sby << sbl2) >> self.ss_v)
+        let mut vbit = 1U << uv_start
+        for y in uv_start..<uv_endy4 {
+          let sidx = if vbit >= vmax { 1 } else { 0 }
+          let smask = vbit >> (sidx << vshift)
+          let i1 = av1_fuv_i(0, cbx4, 1, sidx)
+          let i0 = av1_fuv_i(0, cbx4, 0, sidx)
+          let idx = if (mask.fuv[i1] & smask) != (0 : UInt) {
+            1
+          } else {
+            0
+          }
+          mask.fuv[i1] = mask.fuv[i1] & smask.lnot()
+          mask.fuv[i0] = mask.fuv[i0] & smask.lnot()
+          let inew = av1_fuv_i(
+            0,
+            cbx4,
+            av1_imin(idx, self.tile_lpf_uv[lpf_base + (y - uv_start)]),
+            sidx,
+          )
+          mask.fuv[inew] = mask.fuv[inew] | smask
+          vbit = vbit << 1
+        }
+      }
+    }
+  }
+  // fix lpf strength at tile row boundaries
+  let tile_row_above = self.start_of_tile_row[sby]
+  if tile_row_above > 0 {
+    let hshift = 4 - self.ss_h
+    let hmax = 1U << (16 >> self.ss_h)
+    for x in 0..<self.sb128w {
+      let a = self.a[self.sb128w * (tile_row_above - 1) + x]
+      let mask = self.lf_mask[mask_row * self.sb128w + x]
+      let w = av1_imin(32, self.bw - x * 32)
+      let mut bit = 1U
+      for i in 0..<w {
+        let sidx = if bit >= 0x10000U { 1 } else { 0 }
+        let smask = bit >> (sidx * 16)
+        let i2 = av1_fy_i(1, starty4, 2, sidx)
+        let i1 = av1_fy_i(1, starty4, 1, sidx)
+        let i0 = av1_fy_i(1, starty4, 0, sidx)
+        let idx = 2 *
+            (if (mask.fy[i2] & smask) != (0 : UInt) { 1 } else { 0 }) +
+          (if (mask.fy[i1] & smask) != (0 : UInt) { 1 } else { 0 })
+        mask.fy[i2] = mask.fy[i2] & smask.lnot()
+        mask.fy[i1] = mask.fy[i1] & smask.lnot()
+        mask.fy[i0] = mask.fy[i0] & smask.lnot()
+        let inew = av1_fy_i(1, starty4, av1_imin(idx, a.tx_lpf_y[i]), sidx)
+        mask.fy[inew] = mask.fy[inew] | smask
+        bit = bit << 1
+      }
+      if !mono {
+        let cw = (w + self.ss_h) >> self.ss_h
+        let uv_col = starty4 >> self.ss_v
+        let mut uvbit = 1U
+        for i in 0..<cw {
+          let sidx = if uvbit >= hmax { 1 } else { 0 }
+          let smask = uvbit >> (sidx << hshift)
+          let i1 = av1_fuv_i(1, uv_col, 1, sidx)
+          let i0 = av1_fuv_i(1, uv_col, 0, sidx)
+          let idx = if (mask.fuv[i1] & smask) != (0 : UInt) {
+            1
+          } else {
+            0
+          }
+          mask.fuv[i1] = mask.fuv[i1] & smask.lnot()
+          mask.fuv[i0] = mask.fuv[i0] & smask.lnot()
+          let inew = av1_fuv_i(
+            1,
+            uv_col,
+            av1_imin(idx, a.tx_lpf_uv[i]),
+            sidx,
+          )
+          mask.fuv[inew] = mask.fuv[inew] | smask
+          uvbit = uvbit << 1
+        }
+      }
+    }
+  }
   let y_off = sby * sbsz * 4 * self.y_stride
   let uv_off = ((sby * sbsz * 4) >> self.ss_v) * self.uv_stride
   let row4 = sby * sbsz
   let lvl_off = row4 * self.b4_stride * 4
   let uv_row4 = row4 >> self.ss_v
   let uv_lvl_off = uv_row4 * self.b4_stride * 4
-  let mask_row = sby >> is_sb64
   let chroma_lf = self.lf_u_active || self.lf_v_active
   for x in 0..<self.sb128w {
     let mask = self.lf_mask[mask_row * self.sb128w + x]

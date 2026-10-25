@@ -257,6 +257,15 @@ fn av1_decode_keyframe_payloads(
     lf_mask.push(av1_filter_new())
   }
   let b4_stride = (bw + 31) & -32
+  let tile_col_start4 : Array[Int32] = []
+  for c in 0..<hdr.tile_cols {
+    let sb = av1_imin(c * tile_width_sb * sb_step, bw)
+    tile_col_start4.push(sb)
+  }
+  let align_h = (bh + 31) & -32
+  let tile_lpf_y = FixedArray::make(align_h * hdr.tile_cols, 0)
+  let align_h_uv = align_h >> ss_v
+  let tile_lpf_uv = FixedArray::make(align_h_uv * hdr.tile_cols, 0)
   let f : Av1FrameCtx = {
     seq,
     hdr,
@@ -289,6 +298,11 @@ fn av1_decode_keyframe_payloads(
     lf_v_active,
     cdef,
     cdef_on,
+    tile_cols: hdr.tile_cols,
+    tile_col_start4,
+    tile_lpf_y,
+    tile_lpf_uv,
+    start_of_tile_row: FixedArray::make(sb_rows, 0),
     restore_planes,
     lr_active,
   }
@@ -348,23 +362,27 @@ fn av1_decode_keyframe_payloads(
         if ts.decode_tile_sbrow(root_bl) {
           raise Av1DecError::Unsupported("symbol decoder overread")
         }
+        // dav1d: back up the tile's right-edge tx_lpf values and mark tile
+        // row starts for the loop filter's tile-boundary mask fixups.
+        for k in 0..<sb_step {
+          f.tile_lpf_y[align_h * tile_col + by + k] = f.l.tx_lpf_y[(by & 16) +
+            k]
+        }
+        for k in 0..<(sb_step >> ss_v) {
+          f.tile_lpf_uv[align_h_uv * tile_col + (by >> ss_v) + k] = f.l.tx_lpf_uv[((by &
+            16) >>
+            ss_v) +
+            k]
+        }
+        if by == row_start && tile_row > 0 {
+          f.start_of_tile_row[by / sb_step] = tile_row
+        }
         by = by + sb_step
       }
     }
     // clear trailing bits check is skipped (strict mode off)
     if f.lf_y_active {
-      if num_tiles > 1 {
-        raise Av1DecError::Unsupported(
-          "av1: multi-tile lossy loop filter unsupported",
-        )
-      }
       f.loop_filter_frame()
-    }
-    if f.cdef_on && num_tiles > 1 {
-      raise Av1DecError::Unsupported("av1: multi-tile CDEF unsupported")
-    }
-    if f.lr_active && num_tiles > 1 {
-      raise Av1DecError::Unsupported("av1: multi-tile LR unsupported")
     }
     // LR stripe boundaries use the post-deblock, pre-CDEF pixels, so the
     // snapshot is needed whenever either in-loop filter runs.

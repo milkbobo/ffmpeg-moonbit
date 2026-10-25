@@ -6,10 +6,9 @@
 
 > **2026-10-25 最新进展请先读
 > [AGENT_HANDOFF_2026-10-25_AV1_LR.md](AGENT_HANDOFF_2026-10-25_AV1_LR.md)**：
-> 环路恢复（Wiener/SGR）与高位深有损已收敛（PORTING_HISTORY §56–§58），
-> 多 tile 有损 LF 的 tile 边界掩码修正正在做（含 dav1d 对应代码位置、
-> 已备好的 patch 与验收步骤）。本文 §2/§3 中「仍错的像素模式」等段落是
-> 无损收敛期的历史记录，已全部解决。
+> 环路恢复（Wiener/SGR）、高位深有损（PORTING_HISTORY §56–§58）与
+> **多 tile 有损环内滤波**（§59，含 128x128 SB 有损）均已收敛。本文
+> §2/§3 中「仍错的像素模式」等段落是无损收敛期的历史记录，已全部解决。
 
 ---
 
@@ -253,10 +252,11 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
    4:2:0）。
 2. **高位深有损**：10/12-bit 4:2:0 与 10/12-bit 4:4:4、10-bit 4:2:2 均有
    整帧向量并通过（`av1_lossy_extra`、`av1_lossy_lr`）。
-3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界
-   强度修正）——**设计与脚手架见
-   [AGENT_HANDOFF_2026-10-25_AV1_LR.md](AGENT_HANDOFF_2026-10-25_AV1_LR.md) §2**；
-   128x128 SB 的 edge 树/上下文环仍按 64x64 布局。
+3. **多 tile / 128x128 SB**：已收敛（PORTING_HISTORY §59）——LF 的
+   tile 列/行边界强度修正已移植，`mt8`（64SB）、`mt444`（444 10-bit）、
+   `mtsb128`（128SB）三条 2x2 tile 向量通过；128x128 SB 有损链路首次
+   被整帧验证（向量由 debian aom-tools `aomenc --sb-size=128` 生成，
+   libaom DYNAMIC 恒选 64）。
 4. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。
 5. intrabc、film grain 明确报 PATCHWELCOME（入口已有检查）。
 
