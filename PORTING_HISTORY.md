@@ -2701,3 +2701,41 @@ put/prep；测试侧同一 LCG 重建平面并以 FNV-32 锚定
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **885/885**。MC 核全部就绪；
 refmvs、帧间块语法、参考帧生命周期与整帧解码入口仍需后续实现。
+
+## 70. 2026-10-25 AV1 帧间帧头：全局运动、skip_mode 与参考状态
+
+补齐 `av1.mbt` 帧间/switch 帧头的全部缺口，为此前跳过的位与桩：
+
+- **序列头六工具位**：interintra/masked_compound/warped_motion/dual_filter
+  与 jnt_comp/ref_frame_mvs 此前 `skip` 丢弃，现读入
+  `Av1SequenceParameters`（warp/use_ref_frame_mvs 的帧级位以它们为门）。
+- **全局运动**：替换 `PATCHWELCOME` 桩为完整解析（类型三连位 +
+  ROT_ZOOM/AFFINE 的 mat[2..5] 与 TRANSLATION 的 mat[0..1] subexp 增量，
+  基准取 primary ref 的矩阵或默认）。为此给帧头 BitReader 移植了
+  dav1d getbits.c 的 `get_uniform`/`get_bits_subexp`（复用已有
+  `inv_recenter`）。
+- **skip_mode**：按 dav1d 的 off_before/off_after → before2 两段推导
+  计算 `skip_mode_allowed` 与 refs 对，需要 8 slot 的 order hint。
+- **frame_size_with_refs**：inter/switch 且非 error-resilient、
+  frame_size_override 时逐 ref 读 found_ref 位，命中则从该 slot 拷贝
+  尺寸（superres 位仍读）；未命中走显式尺寸。superres 下采样宽度
+  补上 dav1d 的 `imax(ds, imin(16, w))` 钳位。
+- **短信令 refidx 派生**：`frame_ref_short_signaling` 的完整移植
+  （refidx0/3 显式读，其余按 8 slot 的 wrapped order hint 推导，
+  含全局最早兜底），此前只 skip(6) 且不填 ref_frame_idx。
+- switch 帧的 frame_size_override 强制为 1；reference_select/
+  allow_warped_motion 扩展到 switch 帧。
+- 新增 `Av1RefSlotState`（order hint/尺寸/GM）与可选参数
+  `av1_parse_frame_header(data, seq, ref_slots?=...)`。
+
+向量 `libavcodec/av1_inter_hdr_vectors/`（docker libaom）：testsrc2
+-crf 30 的普通 P 帧（identity GM，检验全字段 + tile group 分裂的位
+精确性）与 mandelbrot -crf 20 的 P 帧（**LAST 带 ROT_ZOOM 矩阵
+[73728,67584,64458,72,-72,64458]，subexp 路径实测**；后续 P 帧
+**skip_mode 开启 refs=[0,6]**，覆盖 skip 推导分支）。两向量共用
+8-slot 参考池模拟 key 0xFF 刷新。libavcodec 主测试包的 Wasm init
+已到局部变量上限，向量放独立包（同 av1_tiles_vectors 惯例）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **887/887**。剩余：refmvs、
+帧间块语法、参考帧生命周期与整帧解码入口。

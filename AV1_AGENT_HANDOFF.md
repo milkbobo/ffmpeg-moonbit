@@ -20,7 +20,9 @@
 > 移植，含 wedge blend 向量）；§68 新增缩放参考 MC 与 superres
 > resize；§69 新增 warp 仿射 8x8 MC；最新全量测试 885/885。
 > `av1_mc_core` 的 MC 核（单参考/复合/mask/wedge/OBMC/缩放/warp）
-> 至此全部就绪，剩余 refmvs、帧间块语法与整帧入口。
+> 至此全部就绪；§70 补齐帧间帧头（GM/skip_mode/短信令/
+> frame_size_with_refs + 8-slot 参考状态 Av1RefSlotState）。
+> 剩余 refmvs、帧间块语法与整帧入口。
 > 本文 §2/§3 中「仍错的像素模式」等段落是无损收敛期的历史记录，已全部解决。
 
 ---

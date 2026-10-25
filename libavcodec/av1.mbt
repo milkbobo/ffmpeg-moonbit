@@ -36,6 +36,12 @@ pub struct Av1SequenceParameters {
   mut additional_frame_id_length : Int32
   mut enable_order_hint : Bool
   mut order_hint_bits : Int32
+  mut enable_interintra : Bool
+  mut enable_masked_compound : Bool
+  mut enable_warped_motion : Bool
+  mut enable_dual_filter : Bool
+  mut enable_jnt_comp : Bool
+  mut enable_ref_frame_mvs : Bool
   /// 0 = off, 1 = on, 2 = choose per frame.
   mut seq_force_screen_content_tools : Int32
   mut seq_force_integer_mv : Int32
@@ -243,10 +249,14 @@ fn av1_parse_sequence_payload(
   seq.enable_filter_intra = br.read(1) != 0
   seq.enable_intra_edge_filter = br.read(1) != 0
   if !reduced {
-    br.skip(4)
+    seq.enable_interintra = br.read(1) != 0
+    seq.enable_masked_compound = br.read(1) != 0
+    seq.enable_warped_motion = br.read(1) != 0
+    seq.enable_dual_filter = br.read(1) != 0
     seq.enable_order_hint = br.read(1) != 0
     if seq.enable_order_hint {
-      br.skip(2)
+      seq.enable_jnt_comp = br.read(1) != 0
+      seq.enable_ref_frame_mvs = br.read(1) != 0
     }
     let choose_sct = br.read(1) != 0
     if choose_sct {
@@ -301,6 +311,12 @@ pub fn av1_parse_sequence_header(
     additional_frame_id_length: 0,
     enable_order_hint: false,
     order_hint_bits: 0,
+    enable_interintra: false,
+    enable_masked_compound: false,
+    enable_warped_motion: false,
+    enable_dual_filter: false,
+    enable_jnt_comp: false,
+    enable_ref_frame_mvs: false,
     seq_force_screen_content_tools: 0,
     seq_force_integer_mv: 0,
     enable_superres: false,
@@ -461,6 +477,15 @@ pub struct Av1FrameHeader {
   reference_select : Bool
   allow_warped_motion : Bool
   is_global : Array[Bool]
+  /// dav1d `Dav1dWarpedMotionType` per ref: 0 identity, 1 translation,
+  /// 2 rot-zoom, 3 affine.
+  gm_types : Array[Int32]
+  /// 7×6 affine matrices (`matrix` in `Dav1dWarpedMotionParams`).
+  gm_matrices : Array[Array[Int32]]
+  ref_frame_short_signaling : Bool
+  skip_mode_enabled : Bool
+  /// The two ref-frame indices skip-mode blocks refer to.
+  skip_mode_refs : Array[Int32]
   apply_grain : Bool
   grain_seed : Int32
   num_y_points : Int32
@@ -495,6 +520,121 @@ pub let av1_frame_intra_only : Int32 = 2
 pub let av1_frame_switch : Int32 = 3
 
 ///|
+/// Per-ref-slot state needed to parse inter/switch frame headers: the
+/// fields dav1d reads from the stored frame header of each reference slot
+/// (frame_offset for skip-mode/short-signaling derivation, sizes for
+/// frame_size_with_refs, gmv of the primary ref for global-motion deltas).
+pub struct Av1RefSlotState {
+  order_hint : Int32
+  upscaled_width : Int32
+  height : Int32
+  render_width : Int32
+  render_height : Int32
+  gm_types : Array[Int32]
+  gm_matrices : Array[Array[Int32]]
+}
+
+///|
+/// Build a ref-slot state from a decoded reference frame (identity GM).
+pub fn av1_ref_slot_state(
+  order_hint : Int32,
+  upscaled_width : Int32,
+  height : Int32,
+  render_width~ : Int32 = 0,
+  render_height~ : Int32 = 0,
+) -> Av1RefSlotState {
+  let d = av1_ref_slot_state_default()
+  let rw = if render_width == 0 { upscaled_width } else { render_width }
+  let rh = if render_height == 0 { height } else { render_height }
+  {
+    order_hint,
+    upscaled_width,
+    height,
+    render_width: rw,
+    render_height: rh,
+    gm_types: d.gm_types,
+    gm_matrices: d.gm_matrices,
+  }
+}
+
+///|
+/// Identity/global-motion defaults for a slot (`dav1d_default_wm_params`).
+pub fn av1_ref_slot_state_default() -> Av1RefSlotState {
+  {
+    order_hint: 0,
+    upscaled_width: 0,
+    height: 0,
+    render_width: 0,
+    render_height: 0,
+    gm_types: [0, 0, 0, 0, 0, 0, 0],
+    gm_matrices: [
+      [0, 0, 65536, 0, 0, 65536],
+      [0, 0, 65536, 0, 0, 65536],
+      [0, 0, 65536, 0, 0, 65536],
+      [0, 0, 65536, 0, 0, 65536],
+      [0, 0, 65536, 0, 0, 65536],
+      [0, 0, 65536, 0, 0, 65536],
+      [0, 0, 65536, 0, 0, 65536],
+    ],
+  }
+}
+
+///|
+/// `get_poc_diff` from dav1d obu.c: wrapped order-hint difference.
+fn av1_get_poc_diff(n : Int32, a : Int32, b : Int32) -> Int32 {
+  ((a - b + (1 << (n - 1))) & ((1 << n) - 1)) - (1 << (n - 1))
+}
+
+///|
+/// `dav1d_get_uniform` from getbits.c: value in `[0, max-1]`, `max > 1`.
+fn av1_br_read_uniform(br : BitReader, max : Int32) -> Int32 {
+  let l = av1_ulog2(max.reinterpret_as_uint()) + 1
+  let m = (1 << l) - max
+  let v = br.read(l - 1).reinterpret_as_int()
+  if v < m {
+    v
+  } else {
+    (v << 1) - m + br.read1().reinterpret_as_int()
+  }
+}
+
+///|
+/// `dav1d_get_bits_subexp` from getbits.c (`get_bits_subexp_u`).
+fn av1_br_read_subexp(br : BitReader, ref_val : Int32, n : Int32) -> Int32 {
+  let nbits = n
+  let n_lim = 2 << nbits // the `n` argument of get_bits_subexp_u
+  let ref_u = ref_val + (1 << nbits)
+  let mut v : Int32 = 0
+  let mut i = 0
+  let mut done = false
+  while !done {
+    let b = if i != 0 { 3 + i - 1 } else { 3 }
+    if n_lim < v + 3 * (1 << b) {
+      v = v + av1_br_read_uniform(br, n_lim - v + 1)
+      done = true
+    } else if br.read1() == 0 {
+      v = v + br.read(b).reinterpret_as_int()
+      done = true
+    } else {
+      v = v + (1 << b)
+      i = i + 1
+    }
+  }
+  let rec = if ref_u * 2 <= n_lim {
+    av1_inv_recenter(ref_u.reinterpret_as_uint(), v.reinterpret_as_uint())
+      .reinterpret_as_int()
+  } else {
+    n_lim -
+    av1_inv_recenter(
+        (n_lim - ref_u).reinterpret_as_uint(),
+        v.reinterpret_as_uint(),
+      )
+      .reinterpret_as_int()
+  }
+  rec - (1 << nbits)
+}
+
+///|
 /// `cbs_av1_tile_log2`. */
 fn av1_tile_log2(blksize : Int32, target : Int32) -> Int32 {
   let mut k = 0
@@ -511,7 +651,18 @@ fn av1_tile_log2(blksize : Int32, target : Int32) -> Int32 {
 pub fn av1_parse_frame_header(
   data : Bytes,
   seq : Av1SequenceParameters,
+  ref_slots? : Array[Av1RefSlotState],
 ) -> Result[Av1FrameHeader, String] {
+  // Ref-slot state for inter/switch headers; empty means "no decoded
+  // references available" (key/intra headers never consult it).
+  let slots : Array[Av1RefSlotState] = ref_slots.unwrap_or([])
+  fn ref_state(idx : Int32) -> Av1RefSlotState? {
+    if idx < 0 || idx >= slots.length() {
+      None
+    } else {
+      Some(slots[idx])
+    }
+  }
   let mut pos = 0
   while pos < data.length() {
     let header = data[pos].to_int()
@@ -609,6 +760,11 @@ pub fn av1_parse_frame_header(
           reference_select: false,
           allow_warped_motion: false,
           is_global: [],
+          gm_types: [],
+          gm_matrices: [],
+          ref_frame_short_signaling: false,
+          skip_mode_enabled: false,
+          skip_mode_refs: [],
           apply_grain: false,
           grain_seed: 0,
           num_y_points: 0,
@@ -662,6 +818,8 @@ pub fn av1_parse_frame_header(
       }
       let frame_size_override = if seq.reduced_still_picture_header {
         false
+      } else if frame_type == av1_frame_switch {
+        true
       } else {
         br.read(1) != 0
       }
@@ -674,6 +832,14 @@ pub fn av1_parse_frame_header(
       let mut primary_ref = 7
       let refs : Array[Int32] = []
       let mut short_sig = false
+      let gm_types : Array[Int32] = []
+      let gm_matrices : Array[Array[Int32]] = []
+      for _ in 0..<7 {
+        gm_types.push(0)
+        gm_matrices.push([0, 0, 65536, 0, 0, 65536])
+      }
+      let mut skip_mode_enabled = false
+      let skip_mode_refs : Array[Int32] = []
       if frame_type == av1_frame_key && show_frame {
         refresh = 0xFF
       } else if frame_type == av1_frame_key ||
@@ -690,7 +856,88 @@ pub fn av1_parse_frame_header(
           short_sig = br.read(1) != 0
         }
         if short_sig {
-          br.skip(6) // last_frame_idx + gold_frame_idx
+          // frame_ref_short_signaling: derive refidx[1..6] from the order
+          // hints of all 8 ref slots (dav1d obu.c near-verbatim).
+          let refidx : FixedArray[Int32] = FixedArray::make(7, -1)
+          refidx[0] = br.read(3).reinterpret_as_int()
+          refidx[3] = br.read(3).reinterpret_as_int()
+          let hints : FixedArray[Int32] = FixedArray::make(8, 0)
+          for i in 0..<8 {
+            match ref_state(i) {
+              Some(st) =>
+                hints[i] = (1 << (seq.order_hint_bits - 1)) +
+                av1_get_poc_diff(seq.order_hint_bits, st.order_hint, order_hint)
+              None =>
+                return Err("av1: short signaling needs all 8 ref slots")
+            }
+          }
+          let current = 1 << (seq.order_hint_bits - 1)
+          let used : FixedArray[Bool] = FixedArray::make(8, false)
+          used[refidx[0]] = true
+          used[refidx[3]] = true
+          let mut latest : Int32 = -1
+          for i in 0..<8 {
+            if !used[i] && hints[i] >= current && hints[i] >= latest {
+              refidx[6] = i
+              latest = hints[i]
+            }
+          }
+          if latest != -1 {
+            used[refidx[6]] = true
+          }
+          let int_max = 2147483647
+          let mut earliest : Int32 = int_max
+          for i in 0..<8 {
+            if !used[i] && hints[i] >= current && hints[i] < earliest {
+              refidx[4] = i
+              earliest = hints[i]
+            }
+          }
+          if earliest != int_max {
+            used[refidx[4]] = true
+          }
+          earliest = int_max
+          for i in 0..<8 {
+            if !used[i] && hints[i] >= current && hints[i] < earliest {
+              refidx[5] = i
+              earliest = hints[i]
+            }
+          }
+          if earliest != int_max {
+            used[refidx[5]] = true
+          }
+          for i in 1..<7 {
+            if refidx[i] < 0 {
+              latest = -1
+              for j in 0..<8 {
+                if !used[j] &&
+                  hints[j] < current &&
+                  hints[j] >= latest {
+                  refidx[i] = j
+                  latest = hints[j]
+                }
+              }
+              if latest != -1 {
+                used[refidx[i]] = true
+              }
+            }
+          }
+          earliest = int_max
+          let mut any_slot = -1
+          for i in 0..<8 {
+            if hints[i] < earliest {
+              any_slot = i
+              earliest = hints[i]
+            }
+          }
+          for i in 0..<7 {
+            if refidx[i] < 0 {
+              refidx[i] = any_slot
+            }
+          }
+          for i in 0..<7 {
+            refs.push(refidx[i])
+          }
         } else {
           for _ in 0..<7 {
             refs.push(br.read(3).reinterpret_as_int())
@@ -700,9 +947,36 @@ pub fn av1_parse_frame_header(
           }
         }
       }
+      // read_frame_size(): inter/switch frames may find a ref with the same
+      // size (frame_size_with_refs) and copy it wholesale; only the superres
+      // bit is still read in that case.
+      let inter_or_switch = frame_type == av1_frame_inter ||
+        frame_type == av1_frame_switch
       let mut width = seq.width
       let mut height = seq.height
-      if frame_size_override {
+      let mut render_width = 0
+      let mut render_height = 0
+      let mut found_ref = -1
+      if inter_or_switch && !error_resilient && frame_size_override {
+        for i in 0..<7 {
+          if br.read1() != 0 {
+            found_ref = i
+            break
+          }
+        }
+      }
+      if found_ref >= 0 {
+        match ref_state(refs[found_ref]) {
+          Some(st) => {
+            width = st.upscaled_width
+            height = st.height
+            render_width = st.render_width
+            render_height = st.render_height
+          }
+          None =>
+            return Err("av1: frame_size_with_refs needs ref slot state")
+        }
+      } else if frame_size_override {
         let wb = br.read(4).reinterpret_as_int() + 1
         let hb = br.read(4).reinterpret_as_int() + 1
         width = br.read(wb).reinterpret_as_int() + 1
@@ -715,14 +989,18 @@ pub fn av1_parse_frame_header(
         use_superres = br.read(1) != 0
         if use_superres {
           let denom = br.read(3).reinterpret_as_int() + 9
-          width = (upscaled_width * 8 + denom / 2) / denom
+          let min_w = if upscaled_width < 16 { upscaled_width } else { 16 }
+          let ds = (upscaled_width * 8 + denom / 2) / denom
+          width = if ds > min_w { ds } else { min_w }
         }
       }
-      let mut render_width = width
-      let mut render_height = height
-      if br.read(1) != 0 {
-        render_width = br.read(16).reinterpret_as_int() + 1
-        render_height = br.read(16).reinterpret_as_int() + 1
+      if found_ref < 0 {
+        render_width = width
+        render_height = height
+        if br.read(1) != 0 {
+          render_width = br.read(16).reinterpret_as_int() + 1
+          render_height = br.read(16).reinterpret_as_int() + 1
+        }
       }
       let mut allow_intrabc = false
       let mut allow_high_precision = false
@@ -749,7 +1027,9 @@ pub fn av1_parse_frame_header(
         if !seq.reduced_still_picture_header {
           motion_mode_switchable = br.read(1) != 0
         }
-        if seq.enable_order_hint && !error_resilient {
+        if seq.enable_order_hint &&
+          seq.enable_ref_frame_mvs &&
+          !error_resilient {
           use_ref_mvs = br.read(1) != 0
         }
       }
@@ -1129,24 +1409,161 @@ pub fn av1_parse_frame_header(
         } else {
           tx_mode = 1
         }
-        if frame_type == av1_frame_inter {
+        if inter_or_switch {
           reference_select = br.read1() != 0
         }
-        // allow_warped_motion is suppressed for intra frames.
-        if frame_type == av1_frame_inter && !error_resilient {
+        // skip_mode: allowed when reference select is on and two refs with
+        // distinct temporal offsets exist (dav1d obu.c).
+        if reference_select && inter_or_switch && seq.enable_order_hint {
+          let poc = order_hint
+          let mut off_before : Int32 = -1
+          let mut off_after : Int32 = -1
+          let mut before_idx : Int32 = -1
+          let mut after_idx : Int32 = -1
+          for i in 0..<7 {
+            let ridx = refs[i]
+            if ridx < 0 {
+              continue
+            }
+            let st = match ref_state(ridx) {
+              Some(st) => st
+              None => return Err("av1: skip_mode needs ref slot state")
+            }
+            let refpoc = st.order_hint
+            let diff = av1_get_poc_diff(seq.order_hint_bits, refpoc, poc)
+            if diff > 0 {
+              if off_after == -1 ||
+                av1_get_poc_diff(seq.order_hint_bits, off_after, refpoc) > 0 {
+                off_after = refpoc
+                after_idx = i
+              }
+            } else if diff < 0 &&
+              (
+                off_before == -1 ||
+                av1_get_poc_diff(seq.order_hint_bits, refpoc, off_before) > 0
+              ) {
+              off_before = refpoc
+              before_idx = i
+            }
+          }
+          let mut skip_mode_allowed = false
+          if off_before != -1 && off_after != -1 {
+            skip_mode_refs.push(
+                if before_idx < after_idx { before_idx } else { after_idx },
+              )
+            skip_mode_refs.push(
+                if before_idx > after_idx { before_idx } else { after_idx },
+              )
+            skip_mode_allowed = true
+          } else if off_before != -1 {
+            let mut off_before2 : Int32 = -1
+            let mut before2_idx : Int32 = -1
+            for i in 0..<7 {
+              let ridx = refs[i]
+              if ridx < 0 {
+                continue
+              }
+              let st = match ref_state(ridx) {
+                Some(st) => st
+                None => return Err("av1: skip_mode needs ref slot state")
+              }
+              let refpoc = st.order_hint
+              if av1_get_poc_diff(seq.order_hint_bits, refpoc, off_before) < 0 &&
+                (
+                  off_before2 == -1 ||
+                  av1_get_poc_diff(seq.order_hint_bits, refpoc, off_before2) > 0
+                ) {
+                off_before2 = refpoc
+                before2_idx = i
+              }
+            }
+            if off_before2 != -1 {
+              skip_mode_refs.push(
+                  if before_idx < before2_idx {
+                    before_idx
+                  } else {
+                    before2_idx
+                  },
+                )
+              skip_mode_refs.push(
+                  if before_idx > before2_idx {
+                    before_idx
+                  } else {
+                    before2_idx
+                  },
+                )
+              skip_mode_allowed = true
+            }
+          }
+          if skip_mode_allowed {
+            skip_mode_enabled = br.read1() != 0
+          }
+        }
+        // allow_warped_motion: inter/switch, gated by the sequence header.
+        if inter_or_switch &&
+          !error_resilient &&
+          seq.enable_warped_motion {
           allow_warped = br.read1() != 0
         }
         if !seq.reduced_still_picture_header {
           reduced_tx_set = br.read1() != 0
         }
-        if frame_type == av1_frame_inter {
-          for _ in 0..<7 {
-            let g = br.read1() != 0
-            global_motion.push(g)
-            if g {
-              return Err("PATCHWELCOME: AV1 global motion")
+        if inter_or_switch {
+          for i in 0..<7 {
+            let gm_type = if br.read1() == 0 {
+              0 // identity
+            } else if br.read1() != 0 {
+              2 // rot-zoom
+            } else if br.read1() != 0 {
+              1 // translation
+            } else {
+              3 // affine
             }
+            gm_types[i] = gm_type
+            if gm_type == 0 {
+              continue
+            }
+            // Delta base: the primary ref's params, or defaults.
+            let ref_mat : Array[Int32] = if primary_ref == 7 {
+              [0, 0, 65536, 0, 0, 65536]
+            } else {
+              let ridx = refs[primary_ref]
+              match ref_state(ridx) {
+                Some(st) => st.gm_matrices[i]
+                None =>
+                  return Err("av1: global motion needs primary ref state")
+              }
+            }
+            let mat = gm_matrices[i]
+            let mut bits = 0
+            let mut shift = 0
+            if gm_type >= 2 {
+              mat[2] = 65536 +
+                2 * av1_br_read_subexp(br, (ref_mat[2] - 65536) >> 1, 12)
+              mat[3] = 2 * av1_br_read_subexp(br, ref_mat[3] >> 1, 12)
+              bits = 12
+              shift = 10
+            } else {
+              let no_hp = if allow_high_precision { 0 } else { 1 }
+              bits = 9 - no_hp
+              shift = 13 + no_hp
+            }
+            if gm_type == 3 {
+              mat[4] = 2 * av1_br_read_subexp(br, ref_mat[4] >> 1, 12)
+              mat[5] = 65536 +
+                2 * av1_br_read_subexp(br, (ref_mat[5] - 65536) >> 1, 12)
+            } else {
+              mat[4] = -mat[3]
+              mat[5] = mat[2]
+            }
+            mat[0] = av1_br_read_subexp(br, ref_mat[0] >> shift, bits) *
+              (1 << shift)
+            mat[1] = av1_br_read_subexp(br, ref_mat[1] >> shift, bits) *
+              (1 << shift)
           }
+        }
+        for i in 0..<7 {
+          global_motion.push(gm_types[i] != 0)
         }
         if seq.film_grain_params_present && (show_frame || showable) {
           apply_grain = br.read1() != 0
@@ -1310,6 +1727,11 @@ pub fn av1_parse_frame_header(
         reference_select,
         allow_warped_motion: allow_warped,
         is_global: global_motion,
+        gm_types: gm_types,
+        gm_matrices: gm_matrices,
+        ref_frame_short_signaling: short_sig,
+        skip_mode_enabled: skip_mode_enabled,
+        skip_mode_refs: skip_mode_refs,
         apply_grain,
         grain_seed,
         num_y_points,
