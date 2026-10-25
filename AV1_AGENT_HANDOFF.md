@@ -244,8 +244,8 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 1. **有损覆盖扩展**：LR 已收敛（PORTING_HISTORY §57）。下一步可补更多
    SGR 组合与 4:4:4/4:2:2 的有损 LR 整帧向量（目前 LR 整帧向量均为
    4:2:0）。
-2. **高位深有损**：10/12-bit 4:2:0 均有整帧向量并通过（`av1_lossy_extra`、
-   `av1_lossy_lr`）；高位深 4:2:2/4:4:4 仍缺向量（相关路径已参数化）。
+2. **高位深有损**：10/12-bit 4:2:0 与 10/12-bit 4:4:4、10-bit 4:2:2 均有
+   整帧向量并通过（`av1_lossy_extra`、`av1_lossy_lr`）。
 3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界
    强度修正）；128x128 SB 的 edge 树/上下文环仍按 64x64 布局。
 4. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。

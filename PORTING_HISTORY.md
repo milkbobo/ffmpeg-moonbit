@@ -2429,3 +2429,13 @@ dav1d 用 `~bitdepth_max << 7` / `<< 5` 的更大范围。固定 int16 会让
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **871/871**。
+
+## 58. 2026-10-25 AV1 高位深 4:4:4 / 4:2:2 有损覆盖
+
+在 LR 收敛后补齐高位深非 4:2:0 的有损关键帧向量（libaom，128x96，4 帧，
+crf30，LF+CDEF 默认开启）：10-bit 4:4:4、10-bit 4:2:2、12-bit 4:4:4，
+framemd5 均与 libdav1d 一致，加入 `av1_lossy_extra`。这同时回归了 §57
+的逆变换裁剪修正与高位深 CDEF/LF 在 444/422 布局下的路径。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **871/871**。
