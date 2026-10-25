@@ -229,11 +229,13 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 ## 7. 路线（按优先级）
 
 1. **环路恢复（LR）滤波核**：语法层已完成（`av1_lr.mbt`，符号与
-   dav1d 一致），入口对非零 `lr_type` 仍拒绝。需移植
-   `looprestoration_tmpl.c` 的 Wiener/SGR（3x3、5x5、mix）与
-   `lr_apply_tmpl.c` 的 unit/stripe 几何。建议先用 C 单元 harness
-   （同 `lf_kernel`/`itx_probe` 模式）验证滤波核，再接整帧向量
-   （`.scratch/av1_hbd/t5.ivf`，SVT 生成的 SGR keyframe）。
+   dav1d 一致），入口对非零 `lr_type` 仍拒绝。Wiener 原型（快照+整
+   unit）除 stripe 边界外与 dav1d 一致——dav1d 的 LR 按 8 行滞后的
+   stripe 处理，顶部 56/120/184 行用 `lr_lpf_line` 两行 + 特殊重复
+   窗口；需按 stripe 移植（`looprestoration_tmpl.c` 的 streaming
+   结构）才能 byte-exact。SGR（3x3/5x5/mix）尚未实现。可用
+   `.scratch/av1_hbd/wt1.ivf`（libaom+mandelbrot，Wiener）与
+   `t5.ivf`（SVT，SGR）验收。
 2. **高位深有损**：10/12-bit 的 ipred/itx/LF 已参数化（`bd_max`/`mid`），
    但仅无损经过验证；需要高位深有损向量。
 3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界

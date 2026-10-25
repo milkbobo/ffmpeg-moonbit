@@ -230,10 +230,12 @@ fn av1_decode_keyframe_payloads(
     a_ctx.reset_keyframe()
     a.push(a_ctx)
   }
+  // One 128-entry row per 64x64 SB row (dav1d: sbh * sb128w * 128).
+  let ipred_edge_rows = (bh + sb_step - 1) / sb_step
   let ipred_edge : FixedArray[FixedArray[Int32]] = [
-    FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
-    FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
-    FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
+    FixedArray::make(sb128w * 128 * ipred_edge_rows, mid),
+    FixedArray::make(sb128w * 128 * ipred_edge_rows, mid),
+    FixedArray::make(sb128w * 128 * ipred_edge_rows, mid),
   ]
   let restore_planes = {
     let mut m : Int32 = 0

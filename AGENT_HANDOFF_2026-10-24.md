@@ -4,7 +4,7 @@
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
 > 当前 HEAD：`0ae19ea feat: VP9 新增复合预测诊断计数器并转正 alt-ref 向量测试`
-> 全量 Wasm 测试：**867/867 通过**；`moon check --deny-warn` 0 error / 0 warning。
+> 全量 Wasm 测试：**868/868 通过**；`moon check --deny-warn` 0 error / 0 warning。
 
 先读这几份文档，再动手：
 
@@ -264,7 +264,7 @@ HEAD  0ae19ea  feat: VP9 新增复合预测诊断计数器并转正 alt-ref 向�
 
 ```sh
 moon check --target wasm --deny-warn --no-render   # 期望：0 error / 0 warning
-moon test --target wasm --no-render                # 期望：867/867
+moon test --target wasm --no-render                # 期望：868/868
 git log --oneline -1                               # 期望：0ae19ea 或更新
 ```
 

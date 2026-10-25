@@ -2351,3 +2351,23 @@ LR（环路恢复）本轮完成了**语法层**：帧头 `unit_size[2]` 解析�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **867/867**。
+
+## 55. 2026-10-25 AV1 ipred edge 缓冲尺寸修正（高帧)
+
+在尝试接入 LR 向量（libaom + mandelbrot 内容可产出 Wiener 类型）时发现：
+`ipred_edge` 按 `sb128w * 128 * (sb128h + 1)` 分配，而 dav1d 按
+`sbh * sb128w * 128`（`sbh` = 64/128 行超级块行数）。对高度 >128 的帧，
+`backup_ipred_edge` 的 `sby = by >> sb_shift` 可超过 `sb128h`，写入越界
+（320x240 直接 trap）。改为按实际 SB 行数分配。
+
+新增 320x240 的 SVT-AV1 delta-q 关键帧向量（6 帧，framemd5 与 libdav1d
+一致），覆盖多 SB 行、`ipred_edge` 跨行备份与 LF/CDEF 的多行驱动。
+
+LR 部分留待下一增量：本轮实现了 Wiener unit 滤波原型（快照 + 逐 unit），
+帧内绝大多数像素正确，但 dav1d 的 LR 按 8 行滞后的 **stripe** 处理，
+stripe 顶部（56/120/184 行）使用 `lr_lpf_line` 的两行 + 特殊重复窗口，
+与「整 unit 按帧边界钳制」相差 ±1。SGR（3x3/5x5/mix）尚未实现。
+入口对任何非零 `lr_type` 仍显式拒绝。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **868/868**。
