@@ -1,9 +1,9 @@
-# AI 交接文档（2026-10-25）：AV1 环路恢复完成 + 多 tile 有损 LF 进行中
+# AI 交接文档（2026-10-25）：AV1 环路恢复 + 多 tile 有损 LF 均已完成
 
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> **当前 HEAD：`114643a docs: 新增 2026-10-25 交接文档`**（代码 HEAD 为 `0c3230e`）
+> **当前 HEAD：`707bb45 feat: AV1 多 tile 有损环内滤波（LF tile 边界强度修正）`**
 > **工作区干净（无未提交改动）**；`moon check --target wasm --deny-warn` 0 error / 0 warning；
 > `moon test --target wasm --no-render` **871/871 通过**。
 >
@@ -26,7 +26,7 @@ AV1 关键帧（帧内）像素链路现在覆盖：**8/10/12-bit × 4:2:0/4:2:2
 
 ---
 
-## 2. 正在进行的任务：AV1 多 tile 有损环内滤波（未提交，已回滚到 HEAD）
+## 2. 任务：AV1 多 tile 有损环内滤波——**已完成（commit `707bb45`，PORTING_HISTORY §59）**；以下为当时的进行时记录
 
 ### 2.1 现象与已确认的事实
 
