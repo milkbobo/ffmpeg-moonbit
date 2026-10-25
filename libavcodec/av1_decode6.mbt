@@ -167,13 +167,6 @@ fn av1_decode_keyframe_payloads(
   if hdr.use_superres {
     return Err("av1: superres unsupported")
   }
-  if !hdr.coded_lossless {
-    // Lossy key frames run reconstruction + loop filter + CDEF + LR; the
-    // per-block delta-lf path is still missing.
-    if hdr.delta_lf_present {
-      return Err("av1: delta_lf unsupported in pixel path")
-    }
-  }
   if seq.bitdepth != 8 && seq.bitdepth != 10 && seq.bitdepth != 12 {
     return Err("av1: unsupported bit depth")
   }
@@ -246,7 +239,7 @@ fn av1_decode_keyframe_payloads(
   let lf_lut = av1_filter_lut_new()
   av1_calc_eih(lf_lut, hdr.loop_filter_sharpness)
   let lf_lvl = FixedArray::make(8 * 64, 0)
-  av1_calc_lf_values(lf_lvl, hdr)
+  av1_calc_lf_values(lf_lvl, hdr, FixedArray::make(4, 0))
   let lf_level_arr = hdr.loop_filter_level
   let lf_y_active = lf_level_arr.length() >= 2 &&
     (lf_level_arr[0] != 0 || lf_level_arr[1] != 0)
@@ -354,6 +347,14 @@ fn av1_decode_keyframe_payloads(
             d[i] = f.dq[i]
           }
           d
+        },
+        last_delta_lf: FixedArray::make(4, 0),
+        lf_lvl_cur: {
+          let t = FixedArray::make(8 * 64, 0)
+          for i in 0..<(8 * 64) {
+            t[i] = f.lf_lvl[i]
+          }
+          t
         },
       }
       let mut by = row_start

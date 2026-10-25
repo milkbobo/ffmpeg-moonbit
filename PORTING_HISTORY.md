@@ -2484,3 +2484,37 @@ framemd5 均与 libdav1d 一致，加入 `av1_lossy_extra`。这同时回归了 
 三条向量解码与 dav1d 逐帧 md5 全部一致。`moon check --target wasm
 --deny-warn --no-render` 0 error/0 warning，`moon test --target wasm
 --no-render` **871/871**（向量并入既有 test 块，总数不变）。
+
+## 60. 2026-10-25 AV1 逐 SB delta-lf
+
+补上最后一个显式拒绝的帧头特性：`delta_lf_present`。实现完全对齐
+dav1d `decode.c` 960–1027 行的符号读取与 `ts->lflvl` 切换：
+
+- `Av1TileCtx` 新增 `last_delta_lf[4]`（每 tile 重置为 0，对应
+  `setup_tile` 的 `ts->last_delta_lf.u32 = 0`）与 `lf_lvl_cur[8*64]`
+  （SB 级 LF level 表副本，对应 `ts->lflvl`/`ts->lflvlmem` 的指针切换）。
+- `decode_b` 在 delta_q 符号之后、同一 SB 原点门控内读取 delta_lf：
+  `n_lfs = multi ? (单色 ? 2 : 4) : 1`，CDF 行 `i + multi`
+  （`av1_cdf_delta_lf[5][4]`）；`3` → n_bits 扩展、符号位、
+  `<< delta_lf_res`、clip ±63。
+- 表切换与 dav1d 一比一（用 prev 快照替代指针状态）：全 0 → 回帧级
+  `f.lf_lvl`；非 0 且（从 0 变来或值变化）→ `av1_calc_lf_values` 重算
+  副本；非 0 未变 → 不动。`create_lf_mask_intra` 改用 tile 的
+  `lf_lvl_cur`。
+- `av1_calc_lf_values` 补 `lf_delta[4]` 参数：dir0 用 `lf_delta[0]`，
+  dir1/2/3 用 `lf_delta[multi ? i : 0]`（chroma 的 level==0 早退在加
+  delta 之前判断，与 dav1d `calc_lf_value_chroma` 一致）。
+
+**向量生成的坑**：libaom 的全帧内路径不发 delta_q（`-g 1` 时
+`--deltaq-mode=1` 无效），SVT 任意 preset 都只发 deltaq 不发 delta_lf，
+SVT 也没有 `enable-deltalf` 参数键。可行组合是 aomenc
+`--enable-tpl-model=1 --deltaq-mode=3 --delta-lf-mode=1`
+（mode 3 = key frame visual quality，关键帧专用 deltaq）+ `--kf-max-dist=1`。
+bookworm 与 trixie 的 aom-tools 各出一条（`dlfm3`/`dlft3`，320x240
+crf30，LF 配置不同），均 `multi=false`、4 帧 framemd5 与 libdav1d 一致，
+入 `av1_lossy_extra`。`multi=true` 的码流主流编码器产不出
+（libaom 硬编码单模式），multi 分支（n_lfs=4/2 + CDF 行 +1）已实现但
+暂无向量，同 VP9 复合预测的情况留待手搓码流。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **871/871**。

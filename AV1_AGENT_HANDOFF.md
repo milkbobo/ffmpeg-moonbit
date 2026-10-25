@@ -257,8 +257,11 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
    `mtsb128`（128SB）三条 2x2 tile 向量通过；128x128 SB 有损链路首次
    被整帧验证（向量由 debian aom-tools `aomenc --sb-size=128` 生成，
    libaom DYNAMIC 恒选 64）。
-4. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。
-5. intrabc、film grain 明确报 PATCHWELCOME（入口已有检查）。
+4. **delta_lf**：已收敛（PORTING_HISTORY §60）——单模式（`multi=false`）
+   向量两条通过；`multi=true` 的码流 libaom（硬编码单模式）、SVT
+   （不发 delta_lf）、rav1e 均产不出，同 VP9 复合预测的情况留待手搓。
+5. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。
+6. intrabc、film grain 明确报 PATCHWELCOME（入口已有检查）。
 
 ## 8. 相关约定速查
 

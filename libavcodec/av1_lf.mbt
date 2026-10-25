@@ -113,10 +113,13 @@ fn av1_calc_lf_value(
 }
 
 ///|
-/// `dav1d_calc_lf_values` into `[seg][dir][ref][mode]`.
+/// `dav1d_calc_lf_values` into `[seg][dir][ref][mode]`. `lf_delta[4]` is the
+/// per-superblock delta-lf offset (all zeros for the frame-wide table);
+/// without `delta_lf_multi` every direction uses `lf_delta[0]`.
 fn av1_calc_lf_values(
   values : FixedArray[Int32],
   hdr : Av1FrameHeader,
+  lf_delta : FixedArray[Int32],
 ) -> Unit {
   let n_seg = if hdr.segmentation_enabled { 8 } else { 1 }
   if hdr.loop_filter_level.length() < 2 ||
@@ -127,6 +130,11 @@ fn av1_calc_lf_values(
     return
   }
   let mr = hdr.loop_filter_delta_enabled
+  let multi = hdr.delta_lf_multi
+  let dy_v = lf_delta[0]
+  let dy_h = lf_delta[if multi { 1 } else { 0 }]
+  let du = lf_delta[if multi { 2 } else { 0 }]
+  let dv = lf_delta[if multi { 3 } else { 0 }]
   for s in 0..<n_seg {
     let y_v = hdr.loop_filter_level[0]
     let y_h = hdr.loop_filter_level[1]
@@ -141,14 +149,13 @@ fn av1_calc_lf_values(
       0
     }
     let base = s * 64
-    let multi = hdr.delta_lf_multi
     av1_calc_lf_value(
-      values, base + 0 * 16, y_v, 0, mr,
-      hdr.loop_filter_ref_deltas, hdr.loop_filter_mode_deltas,
+      values, base + 0 * 16, y_v, dy_v, mr, hdr.loop_filter_ref_deltas,
+      hdr.loop_filter_mode_deltas,
     )
     av1_calc_lf_value(
-      values, base + 1 * 16, y_h, 0, mr,
-      hdr.loop_filter_ref_deltas, hdr.loop_filter_mode_deltas,
+      values, base + 1 * 16, y_h, dy_h, mr, hdr.loop_filter_ref_deltas,
+      hdr.loop_filter_mode_deltas,
     )
     if u == 0 {
       for i in 0..<16 {
@@ -156,8 +163,8 @@ fn av1_calc_lf_values(
       }
     } else {
       av1_calc_lf_value(
-        values, base + 2 * 16, u, 0, mr,
-        hdr.loop_filter_ref_deltas, hdr.loop_filter_mode_deltas,
+        values, base + 2 * 16, u, du, mr, hdr.loop_filter_ref_deltas,
+        hdr.loop_filter_mode_deltas,
       )
     }
     if v == 0 {
@@ -166,11 +173,10 @@ fn av1_calc_lf_values(
       }
     } else {
       av1_calc_lf_value(
-        values, base + 3 * 16, v, 0, mr,
-        hdr.loop_filter_ref_deltas, hdr.loop_filter_mode_deltas,
+        values, base + 3 * 16, v, dv, mr, hdr.loop_filter_ref_deltas,
+        hdr.loop_filter_mode_deltas,
       )
     }
-    ignore(multi)
   }
 }
 

@@ -230,11 +230,18 @@ fn Av1TileCtx::decode_b(
       }
     }
   }
-  // delta-q: per-superblock qindex update (dav1d decode_b).
+  // delta-q/lf: per-superblock qindex and loop-filter level updates
+  // (dav1d decode_b).
   let sb_align = 31 >> (if f.seq.use_128x128_superblock { 0 } else { 1 })
   if (self.bx & sb_align) == 0 && (self.by & sb_align) == 0 {
     let max_bs : Int32 = if f.seq.use_128x128_superblock { 0 } else { 3 }
     let have_delta_q = hdr.delta_q_present && (bs != max_bs || !skip)
+    let dl = self.last_delta_lf
+    let prev_zero = dl[0] == 0 && dl[1] == 0 && dl[2] == 0 && dl[3] == 0
+    let prev0 = dl[0]
+    let prev1 = dl[1]
+    let prev2 = dl[2]
+    let prev3 = dl[3]
     if have_delta_q {
       let mut delta_q = self.msac.decode_symbol_adapt(self.cdf.delta_q, 0, 3)
       if delta_q == 3 {
@@ -250,6 +257,33 @@ fn Av1TileCtx::decode_b(
         delta_q = delta_q << hdr.delta_q_res
       }
       self.last_qidx = av1_imin(av1_imax(self.last_qidx + delta_q, 1), 255)
+      // delta-lf symbols are coded right after delta_q.
+      if hdr.delta_lf_present {
+        let multi = if hdr.delta_lf_multi { 1 } else { 0 }
+        let n_lfs = if hdr.delta_lf_multi {
+          if f.seq.monochrome { 2 } else { 4 }
+        } else {
+          1
+        }
+        for i in 0..<n_lfs {
+          let mut delta_lf = self.msac.decode_symbol_adapt(
+            self.cdf.delta_lf, (i + multi) * 4, 3,
+          )
+          if delta_lf == 3 {
+            let n_bits = 1 + self.msac.decode_bools(3).reinterpret_as_int()
+            delta_lf = self.msac.decode_bools(n_bits).reinterpret_as_int() +
+              1 +
+              (1 << n_bits)
+          }
+          if delta_lf != 0 {
+            if self.msac.decode_bool_equi() != 0 {
+              delta_lf = -delta_lf
+            }
+            delta_lf = delta_lf << hdr.delta_lf_res
+          }
+          dl[i] = av1_imin(av1_imax(dl[i] + delta_lf, -63), 63)
+        }
+      }
     }
     if self.last_qidx == hdr.base_q_idx {
       for i in 0..<48 {
@@ -257,6 +291,23 @@ fn Av1TileCtx::decode_b(
       }
     } else {
       f.fill_dq(self.last_qidx, self.dq_cur)
+    }
+    // SB-level LF level table (dav1d ts->lflvl selection): all-zero deltas
+    // fall back to the frame-wide table, a changed non-zero combination
+    // recomputes the copy.
+    let cur_zero = dl[0] == 0 && dl[1] == 0 && dl[2] == 0 && dl[3] == 0
+    if cur_zero {
+      if !prev_zero {
+        for i in 0..<(8 * 64) {
+          self.lf_lvl_cur[i] = f.lf_lvl[i]
+        }
+      }
+    } else if prev_zero ||
+      dl[0] != prev0 ||
+      dl[1] != prev1 ||
+      dl[2] != prev2 ||
+      dl[3] != prev3 {
+      av1_calc_lf_values(self.lf_lvl_cur, hdr, dl)
     }
   }
   // intra block syntax
@@ -448,7 +499,7 @@ fn Av1TileCtx::decode_b(
       l.tx_lpf_uv,
       cby4,
       has_chroma,
-      f.lf_lvl,
+      self.lf_lvl_cur,
       seg_id,
     )
   }

@@ -178,6 +178,11 @@ priv struct Av1TileCtx {
   /// Per-SB delta-q state (`ts->last_qidx` / `ts->dq`).
   mut last_qidx : Int32
   dq_cur : FixedArray[Int32]
+  /// Per-SB delta-lf offsets (`ts->last_delta_lf.i8[4]`, clipped ±63).
+  last_delta_lf : FixedArray[Int32]
+  /// LF level table copy for the current SB (`ts->lflvl`/`ts->lflvlmem`);
+  /// refreshed from `f.lf_lvl` when the deltas are all zero.
+  lf_lvl_cur : FixedArray[Int32]
   // scratch buffers
   levels : FixedArray[Byte] // 32*34
   edge_buf : FixedArray[Int32] // 128*3, anchor at 128+128
