@@ -168,14 +168,8 @@ fn av1_decode_keyframe_payloads(
     return Err("av1: superres unsupported")
   }
   if !hdr.coded_lossless {
-    // Lossy key frames run reconstruction + loop filter + CDEF; the loop
-    // restoration filter kernels and per-block delta-lf are still missing
-    // (restoration info is already parsed, see av1_lr.mbt).
-    for t in hdr.lr_type {
-      if t != 0 {
-        return Err("av1: loop restoration unsupported in pixel path")
-      }
-    }
+    // Lossy key frames run reconstruction + loop filter + CDEF + LR; the
+    // per-block delta-lf path is still missing.
     if hdr.delta_lf_present {
       return Err("av1: delta_lf unsupported in pixel path")
     }
@@ -366,14 +360,29 @@ fn av1_decode_keyframe_payloads(
       }
       f.loop_filter_frame()
     }
+    if f.cdef_on && num_tiles > 1 {
+      raise Av1DecError::Unsupported("av1: multi-tile CDEF unsupported")
+    }
+    if f.lr_active && num_tiles > 1 {
+      raise Av1DecError::Unsupported("av1: multi-tile LR unsupported")
+    }
+    // LR stripe boundaries use the post-deblock, pre-CDEF pixels, so the
+    // snapshot is needed whenever either in-loop filter runs.
+    let need_snap = f.cdef_on || f.lr_active
+    let snap0 = if need_snap { av1_copy_plane(f.planes[0]) } else {
+      f.planes[0]
+    }
+    let snap1 = if need_snap { av1_copy_plane(f.planes[1]) } else {
+      f.planes[1]
+    }
+    let snap2 = if need_snap { av1_copy_plane(f.planes[2]) } else {
+      f.planes[2]
+    }
     if f.cdef_on {
-      if num_tiles > 1 {
-        raise Av1DecError::Unsupported("av1: multi-tile CDEF unsupported")
-      }
-      let snap0 = av1_copy_plane(f.planes[0])
-      let snap1 = av1_copy_plane(f.planes[1])
-      let snap2 = av1_copy_plane(f.planes[2])
       f.cdef_frame(f.cdef, snap0, snap1, snap2)
+    }
+    if f.lr_active {
+      f.lr_frame(snap0, snap1, snap2)
     }
     Ok({
       y: f.planes[0],

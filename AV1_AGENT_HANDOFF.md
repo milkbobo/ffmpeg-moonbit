@@ -39,7 +39,11 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 | `libavcodec/av1_decode.mbt`~`av1_decode6.mbt` | decode.c+recon_tmpl.c 关键帧路径：BlockContext、FrameCtx/TileCtx、edge 树（intra_edge.c）、partition 递归（10 种）、decode_b（skip/ymode/angle/uv/CFL/palette/filter-intra/tx）、decode_coefs（eob/tokens/golomb/sign/dequant）、recon_b_intra（预测+itx 逐子块）、backup_ipred_edge、tile sbrow 循环、入口 `av1_decode_keyframe` | **无损与有损关键帧均与 libdav1d 逐帧 MD5 一致** |
 | `libavcodec/av1_lf.mbt` | 环路去块滤波：lf_mask.c intra 掩码/level cache/calc_eih/calc_lf_values、loopfilter_tmpl.c 四个 C 核、lf_apply_tmpl.c 列/行驱动（单 tile） | 8-bit 4:2:0 有损向量 8/8 帧 MD5 一致 |
 | `libavcodec/av1_cdef.mbt` | CDEF：方向搜索（八方向代价/方差）、主次抽头约束滤波、cdef_idx/noskip 掩码、全帧快照调度 | 开启 CDEF 的 crf30 向量 8/8 帧 MD5 一致 |
-| `libavcodec/av1_lr.mbt` | 环路恢复语法层：帧头 unit_size、逐 unit 的 switchable/wiener/sgrproj 符号与 lr_ref、SGR 表 | 符号轨迹与 dav1d 一致；滤波核待移植 |
+| `libavcodec/av1_lr.mbt` | 环路恢复语法层：帧头 unit_size、逐 unit 的 switchable/wiener/sgrproj 符号与 lr_ref、SGR 表 | 符号轨迹与 dav1d 一致 |
+| `libavcodec/av1_lr_filter.mbt` | LR 滤波核：Wiener h/v/hv（滑窗）、SGR 3x3/5x5/mix | 1980 组 C 参考哈希全绿 |
+| `libavcodec/av1_lr_apply.mbt` | LR 应用：逐 SB 行 stripe 调度（8 行滞后）、`backup4xU` 左边界、`backup_lpf` 12 行备份 | 整帧 framemd5 一致 |
+| `libavcodec/lr_kernel/` | LR 核级回归（dav1d C 参考 1980 例 FNV 哈希） | 全绿 |
+| `libavcodec/av1_lossy_lr/` | 整帧 LR 回归：wt1(Wiener) / t5(SGR) / lr10 / lr10nc / lr12 | 全绿 |
 | `libavcodec/lf_kernel/` | 去块滤波核 800 组随机输入与 dav1d `loop_filter` 校验和回归 | 全绿 |
 | `libavcodec/itx_probe/` | 155 个 (RectTxfmSize, TxfmType) 逆变换组合与 dav1d DSP 校验和回归 | 全绿 |
 | `libavcodec/av1_lossy_vectors/` | 8 帧 8-bit 4:2:0 有损关键帧（crf30，CDEF/LR 关闭）framemd5 回归 | 全绿 |
@@ -237,17 +241,11 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 
 ## 7. 路线（按优先级）
 
-1. **环路恢复（LR）滤波核**：语法层已完成（`av1_lr.mbt`，符号与
-   dav1d 一致），入口对非零 `lr_type` 仍拒绝。Wiener 原型（快照+整
-   unit）除 stripe 边界外与 dav1d 一致——dav1d 的 LR 按 8 行滞后的
-   stripe 处理，顶部 56/120/184 行用 `lr_lpf_line` 两行 + 特殊重复
-   窗口；需按 stripe 移植（`looprestoration_tmpl.c` 的 streaming
-   结构）才能 byte-exact。SGR（3x3/5x5/mix）尚未实现。可用
-   `.scratch/av1_hbd/wt1.ivf`（libaom+mandelbrot，Wiener）与
-   `t5.ivf`（SVT，SGR）验收。
-2. **高位深有损**：10-bit 4:2:0 已有向量并通过（`av1_lossy_extra`）；
-   12-bit 有损与高位深 4:2:2/4:4:4 仍缺向量验证（ipred/itx/LF 已参数化
-   `bd_max`/`mid`）。
+1. **有损覆盖扩展**：LR 已收敛（PORTING_HISTORY §57）。下一步可补更多
+   SGR 组合与 4:4:4/4:2:2 的有损 LR 整帧向量（目前 LR 整帧向量均为
+   4:2:0）。
+2. **高位深有损**：10/12-bit 4:2:0 均有整帧向量并通过（`av1_lossy_extra`、
+   `av1_lossy_lr`）；高位深 4:2:2/4:4:4 仍缺向量（相关路径已参数化）。
 3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界
    强度修正）；128x128 SB 的 edge 树/上下文环仍按 64x64 布局。
 4. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。

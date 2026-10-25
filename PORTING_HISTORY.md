@@ -2393,3 +2393,39 @@ yuv422p 8-bit）与 10-bit 4:2:0 三条流，各 4 帧 framemd5 对拍。
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **869/869**。
+
+## 57. 2026-10-25 AV1 环路恢复（Wiener / SGR）
+
+补齐 AV1 有损关键帧最后一个环内滤波：环路恢复（LR）。照 dav1d 1.5.1
+`looprestoration_tmpl.c` / `lr_apply_tmpl.c` / `lf_apply_tmpl.c` 移植：
+
+- **滤波核**（`av1_lr_filter.mbt`）：wiener_filter_h/v/hv + wiener_c 的
+  流式滑窗；SGR 的 3x3 / 5x5 / mix 三套（行聚合、A/B 反演、finish 与
+  加权）。行缓冲按 dav1d 的 400/390/384 步长组织。
+- **应用驱动**（`av1_lr_apply.mbt`）：逐 SB 行、逐 unit 的 stripe 调度，
+  8 行滞后 + 每 stripe 56/64 行；unit 左右边界的 4 列备份
+  （`backup4xU`）与 `lr_lpf_line` 12 行备份（`backup_lpf`，含跨 SB 行
+  顶部 4 行复制与帧末 3 行复制规则）。
+
+对拍方式：先做**核级回归** `libavcodec/lr_kernel`——用 dav1d C 参考
+（`looprestoration_tmpl.c` 直接编入）在 w=4/8/13/64/128/256、h=1/2/3/7/
+56/64、11 种 edge 组合上跑 1980 组随机输入，FNV 哈希逐例一致。期间
+修掉两个移植错误：Wiener `hv` 的中间行必须写临时缓冲（`ptrs[6]` 在
+稳态会等于 `ptrs[0]`，先写会破坏仍要被读的窗口）；SGR 的 A/B 目标行
+必须用旋转后的指针（`A_ptrs[2]`/`A_ptrs[1]`/`A3_ptrs[3]`），不能写死；
+mix 的第二行 3x3 邻居需从 `&A3_ptrs[1]` 起算。
+
+整帧验收（`libavcodec/av1_lossy_lr`）：
+- `wt1.ivf` 320x240 ×4（libaom + mandelbrot，Wiener）
+- `t5.ivf` 160x120 ×6（SVT-AV1，SGR）
+- `lr10.ivf` / `lr10nc.ivf` / `lr12.ivf` 128x96 ×4（10/12-bit 关键帧）
+全部 framemd5 与 libdav1d 一致。
+
+整帧测试还暴露出一个**高位深逆变换** bug：`av1_inv_txfm_add` 的
+行/列中间裁剪此前固定为 int16（dav1d 的 8-bit 分支），10-bit 时
+dav1d 用 `~bitdepth_max << 7` / `<< 5` 的更大范围。固定 int16 会让
+大系数块（本例 x=80 的 16x16 H 分块）产生 ±1..47 偏差；改为按
+`bd_max` 选择后 lr10/lr12 逐帧一致（8-bit 不变）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **871/871**。

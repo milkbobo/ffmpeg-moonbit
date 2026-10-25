@@ -800,9 +800,12 @@ fn av1_inv_txfm_add(
   let txtps1 = av1_tx1d_types[txtp * 2 + 1].to_int()
   let sh = if h < 32 { h } else { 32 }
   let sw = if w < 32 { w } else { 32 }
-  // 8-bit: row/col clip range is int16.
-  let clip_min = -32768
-  let clip_max = 32767
+  // dav1d uses int16 limits for 8-bit and looser (bitdepth-scaled) limits for
+  // high bit depths; the row and column stages differ.
+  let row_clip_min = if bd_max <= 255 { -32768 } else { -(bd_max + 1) << 7 }
+  let row_clip_max = -row_clip_min - 1
+  let col_clip_min = if bd_max <= 255 { -32768 } else { -(bd_max + 1) << 5 }
+  let col_clip_max = -col_clip_min - 1
   let tmp = FixedArray::make(64 * 64, 0)
   let last_nonzero_col = if txtps1 == 3 && txtps0 != 3 {
     if sh - 1 < eob { sh - 1 } else { eob }
@@ -822,7 +825,7 @@ fn av1_inv_txfm_add(
         tmp[cbase + x] = coeff[y + x * sh]
       }
     }
-    av1_itx_1d(lw, txtps0, tmp, cbase, 1, clip_min, clip_max)
+    av1_itx_1d(lw, txtps0, tmp, cbase, 1, row_clip_min, row_clip_max)
   }
   for i in ((last_nonzero_col + 1) * w)..<(sh * w) {
     tmp[i] = 0
@@ -831,10 +834,10 @@ fn av1_inv_txfm_add(
     coeff[i] = 0
   }
   for i in 0..<(w * sh) {
-    tmp[i] = clip_i((tmp[i] + rnd) >> shift, clip_min, clip_max)
+    tmp[i] = clip_i((tmp[i] + rnd) >> shift, col_clip_min, col_clip_max)
   }
   for x in 0..<w {
-    av1_itx_1d(lh, txtps1, tmp, x, w, clip_min, clip_max)
+    av1_itx_1d(lh, txtps1, tmp, x, w, col_clip_min, col_clip_max)
   }
   let mut i = 0
   for y in 0..<h {

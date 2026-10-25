@@ -4,13 +4,13 @@
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
 > 当前 HEAD：`33257e8 feat: AV1 有损关键帧支持 4:4:4/4:2:2/10-bit`
-> 全量 Wasm 测试：**869/869 通过**；`moon check --deny-warn` 0 error / 0 warning。
+> 全量 Wasm 测试：**871/871 通过**；`moon check --deny-warn` 0 error / 0 warning。
 
 先读这几份文档，再动手：
 
 1. [README.md](README.md)：能力矩阵、边界、构建/测试命令（动态进度以它为准）。
 2. [agent.md](agent.md)：稳定约定、目录结构、历史踩坑。
-3. [PORTING_HISTORY.md](PORTING_HISTORY.md)：逐次增量的实现与验收记录（共 56 节）。
+3. [PORTING_HISTORY.md](PORTING_HISTORY.md)：逐次增量的实现与验收记录（共 57 节）。
 4. [AV1_AGENT_HANDOFF.md](AV1_AGENT_HANDOFF.md)、[H264_AGENT_HANDOFF.md](H264_AGENT_HANDOFF.md)：两条大解码链路的专题交接。
 5. 本文：**当前状态、下一步优先级、验证流程与禁止事项**。
 
@@ -38,7 +38,7 @@ docker `linuxserver/ffmpeg:9.0.2` 的 framemd5 / 原始 PCM 为基准。用户�
 | --- | --- | --- |
 | H.264 | I/P/B、CAVLC/CABAC、8/9/10/12/14-bit、单色、4:2:0/4:2:2/4:4:4、多 slice、MBAFF/PAFF、DPB、SEI、去块；Annex B 与 MP4 `avcC` 入口；渐进帧/MBAFF 错误补偿 | 高位深与 P 帧大缺口下的错误恢复未逐像素对齐；SP/SI 明确不做；FMO/数据分区/separate colour plane 上游不支持 |
 | HEVC | I/P/B、8/10/12-bit、多种色度与单色、多 slice、WPP、tiles、去块、SAO、scaling list、transform skip（RDPCM 拒绝） | dependent slice、tiles 与 WPP 组合、PCM/RDPCM 未做 |
-| AV1 | 8/10/12-bit 多 tile 无损关键帧；8-bit 4:2:0 **有损关键帧**（全变换核 + 环路去块滤波 + CDEF + delta-q） | 环路恢复、高位深有损、帧间帧；入口显式报错 |
+| AV1 | 8/10/12-bit 多 tile 无损关键帧；8/10/12-bit **有损关键帧**（全变换核 + 环路去块滤波 + CDEF + 环路恢复 Wiener/SGR + delta-q） | 帧间帧、有损多 tile；入口显式报错 |
 | VP9 | profile 0/1/2/3、8/10/12-bit、4:2:0/4:2:2/4:4:0/4:4:4、关键帧与 P 帧、三路参考、插值滤波、概率自适应 | 参考帧缩放（scaled reference）；复合预测代码已存在但文档仍写“编码器无法生成”，需进一步确认 |
 | MJPEG | SOF0/SOF1/SOF2（含渐进）、4:2:0/4:2:2/4:4:4、灰度 | 算术编码、无损 JPEG、12-bit |
 | PNG/APNG | 8/16-bit、调色板、1/2/4-bit、Adam7、APNG 合成 | 无重大缺口 |
@@ -124,8 +124,8 @@ wav_muxer_*、ogg_opus_mux_*、mp4_*_muxer_new、webm_*、mkv_*、hls_*、dash_*
 
 剩余优先级（按"可独立验收 + 风险"排序）：
 
-1. **AV1 CDEF / 环路恢复 / 高位深有损 / 帧间**（有损关键帧已于 2026-10-25 收敛，
-   见 PORTING_HISTORY §52 与 `AV1_AGENT_HANDOFF.md` §7）
+1. **AV1 帧间 / 有损多 tile**（关键帧链路含 CDEF/LR/高位深已于 2026-10-25 收敛，
+   见 PORTING_HISTORY §52/§57 与 `AV1_AGENT_HANDOFF.md` §7）
    - 8-bit 4:2:0 有损关键帧（含 LF、CDEF、delta-q）已与 libdav1d framemd5 完全一致；
      LR 语法层已就位但滤波核未移植，`lr_type`/delta_lf 生效时入口显式拒绝。
    - 下一步：LR 滤波核 → 高位深有损 → 多 tile/128 SB → 帧间。
@@ -264,7 +264,7 @@ HEAD  0ae19ea  feat: VP9 新增复合预测诊断计数器并转正 alt-ref 向�
 
 ```sh
 moon check --target wasm --deny-warn --no-render   # 期望：0 error / 0 warning
-moon test --target wasm --no-render                # 期望：869/869
+moon test --target wasm --no-render                # 期望：871/871
 git log --oneline -1                               # 期望：33257e8 或更新
 ```
 
