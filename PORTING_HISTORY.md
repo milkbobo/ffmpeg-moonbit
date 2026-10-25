@@ -2654,3 +2654,28 @@ fixture 行错位）。
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
 `moon test --target wasm --no-render` **883/883**。warp/缩放 MC、
 refmvs、帧间块语法与整帧解码入口仍需后续实现。
+
+## 68. 2026-10-25 AV1 缩放参考 MC 与 superres resize
+
+新增 `av1_mc_core/scaled.mbt`：移植 dav1d 1.5.1 `mc_tmpl.c` 的
+`put_8tap_scaled_c`、`prep_8tap_scaled_c`、`put_bilin_scaled_c`、
+`prep_bilin_scaled_c` 与 `resize_c`。环形缓冲实现改写为等价的直接
+二维求值：输出像素 (x,y) 的源位置为 `(mx+x·dx, my+y·dy)`（1/1024
+单位），8-tap 相位 `(pos>>6)&15` 查 `av1_mc_subpel_filters`（含
+w/h≤4 的短滤波行与 phase-0 直通路径）；prep 保留中间精度。resize
+按 1/16384 步进查新表 `av1_mc_resize_filter`（64 相位 × 8 抽头，
+机械提取进 `tables.mbt`），每个抽头围绕未钳位 `src_x` 独立钳位，
+整个抽头和取反（dav1d 全抽头取反存储）。
+
+C 参考按 §67 的 docker 管道（vpxdev-img gcc）实例化真
+`mc_tmpl.c`（8bpc/16bpc 两份 TU）：源平面 96×64 加 8px 边距、
+LCG 生成，25 组向量覆盖上/下采样步进、双相位、窄块、phase-0
+直通、bilinear 与 resize 的 8/10/12-bit；测试侧用同一 LCG 重建
+平面并以 FNV-32 锚定（`av1_mc_vectors/scaled_test.mbt`，生成器
+`scripts/_emit_av1_scaled_vectors.py`）。修复两处移植错误：resize
+的 F[3] 抽头漏了 `src_x=-1` 起点的独立钳位（越界 trap），以及把
+C 的 `-(F[0]*…+F[7]*…)` 误读成仅取反首抽头——负号作用于整个和。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **884/884**。warp MC、refmvs、
+帧间块语法与整帧解码入口仍需后续实现。

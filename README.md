@@ -22,7 +22,8 @@
 AV1 帧间帧的基础工作已开始：`av1_mc_core` 提供非缩放单参考的 8-tap 与
 bilinear 运动补偿插值、复合预测中间样本及等权/距离加权/mask 合成，
 OBMC 水平/垂直重叠混合、wedge 掩码与 inter-intra 掩码表
-（444/422/420 全布局、两种极性，含 wedge 复合 blend），支持
+（444/422/420 全布局、两种极性，含 wedge 复合 blend），缩放参考
+MC（8-tap/bilinear put+prep）与 superres resize，支持
 8/10/12-bit、边界复制和窄块滤波，并与 dav1d C 参考输出对拍。
 帧间块语法、参考帧管理和整帧解码入口仍待接入。
 
@@ -36,7 +37,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-10-25）：`moon check --deny-warn` 通过，Wasm 测试 **883/883** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-10-25）：`moon check --deny-warn` 通过，Wasm 测试 **884/884** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 
