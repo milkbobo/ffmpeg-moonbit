@@ -2768,3 +2768,33 @@ joint 表"定位；(3) CDF 宏 `CDF1(x)=(32768-x)`，dav1d 内存即镜像
 `moon test --target wasm --no-render` **892/892**。帧间块语法主体
 （skip_mode/is_comp/refidx/comp 类型/interintra/motion_mode）与
 refmvs 仍待移植。
+
+## 72. 2026-10-26 AV1 refmvs 候选查找（空间/时域 + gmv + 上下文）
+
+新增 `libavcodec/av1_refmvs.mbt`：移植 dav1d 1.5.1 `src/refmvs.c` 的
+`dav1d_refmvs_find` 主体——空间候选（scan_row/scan_col 的单块直扫与
+多块步进两种权重形态、top-right/top-left、8x8 分辨率的 secondary
+行列）、时域候选（rp_proj 8x8 网格投影 + 右下角补点，首点探
+globalmv_ctx）、`mv_projection`（7.9.3 舍入/钳位）、`get_gmv_2d`
+（translation/rot-zoom/affine 的块中心投影）与 `fix_mv_precision`；
+nearest/secondary 两段稳定冒泡排序、compound 的 same/diff 扩展候选
+合并（**dav1d 的 `same` 是 mvstack 尾部别名**，cnt=1 时槽位偏移）、
+single 扩展候选、±(block+4)*32 边界钳位与 ctx 输出（单参考
+`(refmv<<4)|(gmv<<3)|newmv`，compound 的三分支映射）。
+
+C 对拍（docker vpxdev-img）：`dump_refmvs.c` 直接 include 真
+`refmvs.c`，LCG 构造 37×48 空间块阵 + 16×40 时域块（24 seed ×
+14 尺寸 × 3 ref 组合 = 1008 例，覆盖单/双参考、bs 1..32、
+ROT_ZOOM/TRANSLATION GM），外加 12 组 gmv_2d 与 16 组 projection
+单元向量；`av1_refmvs_vectors/`（emit：
+`scripts/_emit_av1_refmvs_vectors.py` + 模板 `_av1_refmvs_test_body.tpl`）
+全部一致。调试记录：(1) C dump 初版漏设 `use_ref_frame_mvs`，
+时域路径被静默跳过（首例 cnt 8 vs 3 暴露）；(2) compound 扩展候选
+初用独立数组，cnt=1 时错覆 stack[0]——dav1d 的 same 指针别名语义
+是关键；(3) 测试 bs 表把 BS_64x32 误写为 5（枚举值是 4）；
+(4) 单参考时 C dump 的 mv1 是未初始化栈内存，emit 侧归零对拍。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **894/894**。剩余：
+refmvs 的 init_frame/load-save_tmvs/splat（状态机接线）、帧间块
+语法主体与整帧解码入口。
