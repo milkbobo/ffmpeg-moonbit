@@ -4,6 +4,13 @@
 [PORTING_HISTORY.md](PORTING_HISTORY.md) 与 [agent.md](agent.md)；
 本文只覆盖 **AV1 像素解码** 这一条正在进行的切片。
 
+> **2026-10-25 最新进展请先读
+> [AGENT_HANDOFF_2026-10-25_AV1_LR.md](AGENT_HANDOFF_2026-10-25_AV1_LR.md)**：
+> 环路恢复（Wiener/SGR）与高位深有损已收敛（PORTING_HISTORY §56–§58），
+> 多 tile 有损 LF 的 tile 边界掩码修正正在做（含 dav1d 对应代码位置、
+> 已备好的 patch 与验收步骤）。本文 §2/§3 中「仍错的像素模式」等段落是
+> 无损收敛期的历史记录，已全部解决。
+
 ---
 
 ## 1. 任务与总体策略
@@ -247,7 +254,9 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 2. **高位深有损**：10/12-bit 4:2:0 与 10/12-bit 4:4:4、10-bit 4:2:2 均有
    整帧向量并通过（`av1_lossy_extra`、`av1_lossy_lr`）。
 3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界
-   强度修正）；128x128 SB 的 edge 树/上下文环仍按 64x64 布局。
+   强度修正）——**设计与脚手架见
+   [AGENT_HANDOFF_2026-10-25_AV1_LR.md](AGENT_HANDOFF_2026-10-25_AV1_LR.md) §2**；
+   128x128 SB 的 edge 树/上下文环仍按 64x64 布局。
 4. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。
 5. intrabc、film grain 明确报 PATCHWELCOME（入口已有检查）。
 
