@@ -3,7 +3,7 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> **当前 HEAD：`0c3230e test: AV1 高位深 4:4:4/4:2:2 有损关键帧向量`**
+> **当前 HEAD：`114643a docs: 新增 2026-10-25 交接文档`**（代码 HEAD 为 `0c3230e`）
 > **工作区干净（无未提交改动）**；`moon check --target wasm --deny-warn` 0 error / 0 warning；
 > `moon test --target wasm --no-render` **871/871 通过**。
 >
