@@ -43,6 +43,7 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 | `libavcodec/lf_kernel/` | 去块滤波核 800 组随机输入与 dav1d `loop_filter` 校验和回归 | 全绿 |
 | `libavcodec/itx_probe/` | 155 个 (RectTxfmSize, TxfmType) 逆变换组合与 dav1d DSP 校验和回归 | 全绿 |
 | `libavcodec/av1_lossy_vectors/` | 8 帧 8-bit 4:2:0 有损关键帧（crf30，CDEF/LR 关闭）framemd5 回归 | 全绿 |
+| `libavcodec/av1_lossy_extra/` | 4:4:4 / 4:2:2 8-bit 与 10-bit 4:2:0 有损关键帧（各 4 帧）framemd5 回归 | 全绿 |
 | `libavcodec/av1_kf_realdata_wbtest.mbt` | 两条无损向量（ll128 单帧 128×96、ll160 六帧 160×120，base64 内嵌）+ framemd5 期望 + 全链测试 | 结构就绪，MD5 待收敛 |
 | `scripts/_gen_av1_kf_vectors.py` + `_av1_kf_test_body.tpl` | 向量生成脚本（模板文件分离） | 可重跑 |
 | `scripts/extract_av1_cdf_tables.py`、`extract_av1_decode_tables.py` | CDF/解码表提取器（支持 `--check`；后者需要 §4 的 dump 文件） | C 对拍 0 差异 |
@@ -63,6 +64,13 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 `cfl_allowed_mask` 位集、非 2D DC hi-token 上下文、palette 索引与 tx_size
 的符号顺序、逆变换 1D 类型表的行列转置、ADST16/DCT64 核转录错误、
 chroma LF 掩码 sidx 移位与行滤波 level 偏移。
+
+有损格式覆盖（2026-10-25，PORTING_HISTORY §56）：4:4:4、4:2:2 与
+10-bit 4:2:0 关键帧的 framemd5 也已与 libdav1d 一致。这里踩过的坑：
+`decode_b` 的色度变换尺寸必须按 `dav1d_max_txfm_size_for_bs`
+的**像素布局列**（y / 420 / 422 / 444）取值，曾固定用 4:2:0 列，
+4:4:4 有损时色度 tx 取小导致 `decode_coefs` 熵解码分叉、连 luma 也错；
+无损因强制 4x4 tx 掩盖了该 bug。
 
 **语法层（熵解码）已与真 dav1d 逐步对拍确认一致**的部分：
 - 3000 步 `decode_bool_equi` 位级一致（rng/difhi/cnt/pos 全同）
@@ -217,14 +225,15 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 3. `.scratch/av1/` 的调试脚本不需要提交（惯例是 `_*` 前缀/scratch
    不进库；`scripts/_gen_av1_kf_vectors.py` 按惯例可提交，`_` 前缀
    表示生成器）
-4. `moon fmt` + `moon info`，review `pkg.generated.mbti`
+4. `moon info`（不要跑 `moon fmt`），review `pkg.generated.mbti` 但不提交
 5. `moon check --deny-warn` + 全量 `moon test` 绿后：
    - ll128/ll160 全帧 MD5 断言进 `av1_kf_realdata_wbtest.mbt`
    - 更新 README 表格（AV1 行）与 PORTING_HISTORY.md 新章节
      （记录：参照=dav1d 1.5.1 及其许可证说明、对拍方法、
      踩过的坑——可直接引用 §3.4）
-6. git commit（用户约定：不主动 commit，先问或等用户指示；
-   提交信息风格看 git log，如 `feat: 支持 AV1 无损关键帧解码`）
+6. 每个增量中文 commit 并 `git push origin master`（用户约定：自主推进，
+   不需要逐次询问；提交信息风格看 git log，如
+   `feat: 支持 AV1 无损关键帧解码`）
 
 ## 7. 路线（按优先级）
 
@@ -236,8 +245,9 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
    结构）才能 byte-exact。SGR（3x3/5x5/mix）尚未实现。可用
    `.scratch/av1_hbd/wt1.ivf`（libaom+mandelbrot，Wiener）与
    `t5.ivf`（SVT，SGR）验收。
-2. **高位深有损**：10/12-bit 的 ipred/itx/LF 已参数化（`bd_max`/`mid`），
-   但仅无损经过验证；需要高位深有损向量。
+2. **高位深有损**：10-bit 4:2:0 已有向量并通过（`av1_lossy_extra`）；
+   12-bit 有损与高位深 4:2:2/4:4:4 仍缺向量验证（ipred/itx/LF 已参数化
+   `bd_max`/`mid`）。
 3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界
    强度修正）；128x128 SB 的 edge 树/上下文环仍按 64x64 布局。
 4. **inter 帧**：需要 refmvs/mc 全家（参照 VP9 inter 的移植节奏）。

@@ -2371,3 +2371,25 @@ stripe 顶部（56/120/184 行）使用 `lr_lpf_line` 的两行 + 特殊重复�
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **868/868**。
+
+## 56. 2026-10-25 AV1 有损 4:4:4 / 4:2:2 / 10-bit
+
+此前有损路径只在 8-bit 4:2:0 上验收。补上 libaom 生成的 128x96 关键帧
+向量（4 帧，crf30，关闭 CDEF/LR，仅去块滤波）后发现 **4:4:4 未滤波
+重建即错**：首块 luma 正确，随后整帧 Y/U/V 全错。
+
+根因是 `decode_b` 里色度变换尺寸取了 `dav1d_max_txfm_size_for_bs`
+的**固定 4:2:0 列**（`bs*4+1`）。dav1d 用的是
+`...[bs][f->cur.p.layout]`（列 0=y、1=420、2=422、3=444）；4:4:4 时
+色度 tx 被取小（如 16x16 块应 16x16 却按 8x8），`decode_coefs` 读错的
+系数个数导致**熵解码分叉**，此后连 luma 也错。无损路径强制 4x4 tx，
+所以此前的 4:4:4 无损向量发现不了。
+
+修正：按 `monochrome/420/422/444` 选择列。修正后未滤波 4:4:4 首帧
+与 dav1d 逐字节一致，带 LF 的 framemd5 也与 libdav1d 完全一致。
+
+新增 `libavcodec/av1_lossy_extra/`：4:4:4、4:2:2（均为 yuv444p/
+yuv422p 8-bit）与 10-bit 4:2:0 三条流，各 4 帧 framemd5 对拍。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **869/869**。

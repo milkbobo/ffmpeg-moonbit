@@ -388,8 +388,17 @@ fn Av1TileCtx::decode_b(
   let (tx, uvtx) = if f.seg_lossless[seg_id] {
     (0, 0)
   } else {
+    let layout : Int32 = if f.seq.monochrome {
+      0
+    } else if ss_hor != 0 && ss_ver != 0 {
+      1
+    } else if ss_hor != 0 {
+      2
+    } else {
+      3
+    }
     let mut t0 = av1_max_txfm_size_for_bs[bs * 4].to_int()
-    let uvt = av1_max_txfm_size_for_bs[bs * 4 + 1].to_int() // 4:2:0 column
+    let uvt = av1_max_txfm_size_for_bs[bs * 4 + layout].to_int()
     if hdr.tx_mode == 2 && av1_txfm_max(t0) > 0 {
       let tctx = (if l.tx_intra[by4] >= av1_txfm_lh(t0) { 1 } else { 0 }) +
         (if a.tx_intra[bx4] >= av1_txfm_lw(t0) { 1 } else { 0 })
