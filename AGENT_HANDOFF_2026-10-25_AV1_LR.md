@@ -3,9 +3,9 @@
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）
 > 远端：`github.com:milkbobo/ffmpeg-moonbit.git`，分支 `master`
-> **AV1 帧间 MC 基础提交：`4598726 feat: 增加 AV1 帧间单参考运动补偿插值核`**（本文件其余内容为 LR 阶段记录）
+> **AV1 复合预测基础提交：`29159c1 feat: 补齐 AV1 复合预测中间样本与平均合成`**（本文件其余内容为 LR 阶段记录）
 > `moon check --target wasm --deny-warn` 0 error / 0 warning；
-> `moon test --target wasm --no-render` **874/874 通过**。
+> `moon test --target wasm --no-render` **876/876 通过**。
 >
 > 先读：[README.md](README.md)、[agent.md](agent.md)、[PORTING_HISTORY.md](PORTING_HISTORY.md)
 > （§52–§58 是本轮）、[AGENT_HANDOFF_2026-10-24.md](AGENT_HANDOFF_2026-10-24.md)（总体）、
