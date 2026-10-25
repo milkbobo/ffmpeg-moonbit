@@ -39,6 +39,8 @@ CodedLossless=1，环内滤波（LF/CDEF/LR）全部旁路，只需
 | `libavcodec/av1_decode.mbt`~`av1_decode6.mbt` | decode.c+recon_tmpl.c 关键帧路径：BlockContext、FrameCtx/TileCtx、edge 树（intra_edge.c）、partition 递归（10 种）、decode_b（skip/ymode/angle/uv/CFL/palette/filter-intra/tx）、decode_coefs（eob/tokens/golomb/sign/dequant）、recon_b_intra（预测+itx 逐子块）、backup_ipred_edge、tile sbrow 循环、入口 `av1_decode_keyframe` | **无损与有损关键帧均与 libdav1d 逐帧 MD5 一致** |
 | `libavcodec/av1_lf.mbt` | 环路去块滤波：lf_mask.c intra 掩码/level cache/calc_eih/calc_lf_values、loopfilter_tmpl.c 四个 C 核、lf_apply_tmpl.c 列/行驱动（单 tile） | 8-bit 4:2:0 有损向量 8/8 帧 MD5 一致 |
 | `libavcodec/av1_cdef.mbt` | CDEF：方向搜索（八方向代价/方差）、主次抽头约束滤波、cdef_idx/noskip 掩码、全帧快照调度 | 开启 CDEF 的 crf30 向量 8/8 帧 MD5 一致 |
+| `libavcodec/av1_lr.mbt` | 环路恢复语法层：帧头 unit_size、逐 unit 的 switchable/wiener/sgrproj 符号与 lr_ref、SGR 表 | 符号轨迹与 dav1d 一致；滤波核待移植 |
+| `libavcodec/lf_kernel/` | 去块滤波核 800 组随机输入与 dav1d `loop_filter` 校验和回归 | 全绿 |
 | `libavcodec/itx_probe/` | 155 个 (RectTxfmSize, TxfmType) 逆变换组合与 dav1d DSP 校验和回归 | 全绿 |
 | `libavcodec/av1_lossy_vectors/` | 8 帧 8-bit 4:2:0 有损关键帧（crf30，CDEF/LR 关闭）framemd5 回归 | 全绿 |
 | `libavcodec/av1_kf_realdata_wbtest.mbt` | 两条无损向量（ll128 单帧 128×96、ll160 六帧 160×120，base64 内嵌）+ framemd5 期望 + 全链测试 | 结构就绪，MD5 待收敛 |
@@ -226,10 +228,12 @@ python scripts/_gen_av1_kf_vectors.py    # 重 emit 测试文件
 
 ## 7. 路线（按优先级）
 
-1. **环路恢复（LR）**：CDEF 已完成；`lr_type` 已解析，发生非零类型时
-   有损入口仍显式拒绝。需移植 `looprestoration_tmpl.c` +
-   `lr_apply_tmpl.c`（Wiener/SGR/Switchable、逐 unit 的
-   `read_restoration_info` 符号与 2 行/2 列边界备份）。
+1. **环路恢复（LR）滤波核**：语法层已完成（`av1_lr.mbt`，符号与
+   dav1d 一致），入口对非零 `lr_type` 仍拒绝。需移植
+   `looprestoration_tmpl.c` 的 Wiener/SGR（3x3、5x5、mix）与
+   `lr_apply_tmpl.c` 的 unit/stripe 几何。建议先用 C 单元 harness
+   （同 `lf_kernel`/`itx_probe` 模式）验证滤波核，再接整帧向量
+   （`.scratch/av1_hbd/t5.ivf`，SVT 生成的 SGR keyframe）。
 2. **高位深有损**：10/12-bit 的 ipred/itx/LF 已参数化（`bd_max`/`mid`），
    但仅无损经过验证；需要高位深有损向量。
 3. **多 tile / 128x128 SB**：有损多 tile 目前显式拒绝（LF 缺 tile 边界

@@ -47,9 +47,13 @@ fn Av1TileCtx::decode_tile_sbrow(
         self.cur_sb_cdef_idx[i] = -1
       }
     } else {
-      self.cur_sb_cdef_idx[0] = -1
+      // 64x64 SBs own one of the four 128-area slots (dav1d uses a pointer
+      // offset; our array is indexed absolutely).
+      let slot = ((bx & 16) >> 4) + ((self.by & 16) >> 3)
+      self.cur_sb_cdef_idx[slot] = -1
     }
     self.bx = bx
+    self.read_restoration_sb()
     if self.decode_sb(root_bl, av1_intra_edge_tree(root_bl)) {
       return true
     }
@@ -157,9 +161,6 @@ fn av1_decode_keyframe_payloads(
   if hdr.segmentation_enabled {
     return Err("av1: segmentation unsupported in pixel path")
   }
-  if hdr.delta_q_present {
-    return Err("av1: delta q unsupported in pixel path")
-  }
   if hdr.using_qmatrix {
     return Err("av1: qmatrix unsupported")
   }
@@ -167,8 +168,9 @@ fn av1_decode_keyframe_payloads(
     return Err("av1: superres unsupported")
   }
   if !hdr.coded_lossless {
-    // Lossy key frames run reconstruction + loop filter + CDEF; loop
-    // restoration and per-block delta-lf are still missing.
+    // Lossy key frames run reconstruction + loop filter + CDEF; the loop
+    // restoration filter kernels and per-block delta-lf are still missing
+    // (restoration info is already parsed, see av1_lr.mbt).
     for t in hdr.lr_type {
       if t != 0 {
         return Err("av1: loop restoration unsupported in pixel path")
@@ -233,6 +235,16 @@ fn av1_decode_keyframe_payloads(
     FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
     FixedArray::make(sb128w * 128 * (sb128h + 1), mid),
   ]
+  let restore_planes = {
+    let mut m : Int32 = 0
+    for i in 0..<hdr.lr_type.length() {
+      if hdr.lr_type[i] != 0 {
+        m = m | (1 << i)
+      }
+    }
+    m
+  }
+  let lr_active = restore_planes != 0
   let cdef = av1_cdef_params(hdr, bpc)
   let cdef_on = av1_cdef_active(cdef)
   let lf_lut = av1_filter_lut_new()
@@ -281,6 +293,8 @@ fn av1_decode_keyframe_payloads(
     lf_v_active,
     cdef,
     cdef_on,
+    restore_planes,
+    lr_active,
   }
   f.init_quant()
   let root_bl = if seq.use_128x128_superblock { 0 } else { 1 }
@@ -292,10 +306,10 @@ fn av1_decode_keyframe_payloads(
       let row_start_sb = tile_row * tile_height_sb
       let col_end_sb = av1_imin(col_start_sb + tile_width_sb, sb_cols)
       let row_end_sb = av1_imin(row_start_sb + tile_height_sb, sb_rows)
-      let col_start = col_start_sb * sb_step
-      let row_start = row_start_sb * sb_step
-      let col_end = col_end_sb * sb_step
-      let row_end = row_end_sb * sb_step
+      let col_start = av1_imin(col_start_sb * sb_step, bw)
+      let row_start = av1_imin(row_start_sb * sb_step, bh)
+      let col_end = av1_imin(col_end_sb * sb_step, bw)
+      let row_end = av1_imin(row_end_sb * sb_step, bh)
       let ts : Av1TileCtx = {
         f,
         msac: Av1Msac::init(payloads[tile_idx], hdr.disable_cdf_update),
@@ -318,6 +332,19 @@ fn av1_decode_keyframe_payloads(
         pal_idx_uv: FixedArray::make(64 * 64, b'\x00'),
         pal: FixedArray::make(3 * 8, 0),
         ac: FixedArray::make(32 * 32, 0),
+        lr_prev: [
+          av1_restoration_unit_default(),
+          av1_restoration_unit_default(),
+          av1_restoration_unit_default(),
+        ],
+        last_qidx: hdr.base_q_idx,
+        dq_cur: {
+          let d = FixedArray::make(48, 0)
+          for i in 0..<48 {
+            d[i] = f.dq[i]
+          }
+          d
+        },
       }
       let mut by = row_start
       while by < row_end {

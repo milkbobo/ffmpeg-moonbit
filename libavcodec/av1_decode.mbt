@@ -141,6 +141,9 @@ priv struct Av1FrameCtx {
   /// CDEF strengths/damping and whether CDEF is active for this frame.
   cdef : Av1CdefParams
   cdef_on : Bool
+  /// Planes with a non-NONE loop-restoration type.
+  restore_planes : Int32
+  lr_active : Bool
 }
 
 ///|
@@ -164,6 +167,11 @@ priv struct Av1TileCtx {
   al_pal : FixedArray[Int32]
   /// Per-tile pal_sz_uv[2][32].
   pal_sz_uv : FixedArray[Int32]
+  /// Previous restoration unit per plane (`ts->lr_ref`).
+  lr_prev : Array[Av1RestorationUnit]
+  /// Per-SB delta-q state (`ts->last_qidx` / `ts->dq`).
+  mut last_qidx : Int32
+  dq_cur : FixedArray[Int32]
   // scratch buffers
   levels : FixedArray[Byte] // 32*34
   edge_buf : FixedArray[Int32] // 128*3, anchor at 128+128
@@ -217,6 +225,36 @@ fn av1_txfm_ctx(tx : Int32) -> Int32 {
 ///|
 fn av1_bdim(bs : Int32, i : Int32) -> Int32 {
   av1_block_dimensions[bs * 4 + i].to_int()
+}
+
+///|
+/// Compute the dequant table for one base qindex (segmentation disabled):
+/// fills all 8 segments with the same values (dav1d `init_quant_tables`).
+fn Av1FrameCtx::fill_dq(self : Av1FrameCtx, base_qidx : Int32, out : FixedArray[Int32]) -> Unit {
+  let dq_tbl : FixedArray[UInt16] = if self.seq.bitdepth == 8 {
+    av1_dq_tbl_0
+  } else if self.seq.bitdepth == 10 {
+    av1_dq_tbl_1
+  } else {
+    av1_dq_tbl_2
+  }
+  let yac = av1_iclip_u8(base_qidx)
+  let ydc = av1_iclip_u8(yac + self.hdr.dq_y_dc)
+  let udc = av1_iclip_u8(yac + self.hdr.dq_u_dc)
+  let uac = av1_iclip_u8(yac + self.hdr.dq_u_ac)
+  let vdc = av1_iclip_u8(yac + self.hdr.dq_v_dc)
+  let vac = av1_iclip_u8(yac + self.hdr.dq_v_ac)
+  out[0] = dq_tbl[ydc * 2 + 0].to_int()
+  out[1] = dq_tbl[yac * 2 + 1].to_int()
+  out[2] = dq_tbl[udc * 2 + 0].to_int()
+  out[3] = dq_tbl[uac * 2 + 1].to_int()
+  out[4] = dq_tbl[vdc * 2 + 0].to_int()
+  out[5] = dq_tbl[vac * 2 + 1].to_int()
+  for i in 1..<8 {
+    for k in 0..<6 {
+      out[i * 6 + k] = out[k]
+    }
+  }
 }
 
 ///|

@@ -427,8 +427,8 @@ pub struct Av1FrameHeader {
   all_lossless : Bool
   /// `lr_type[i]`: 0 = none, 1 = switchable, 2/3 = Wiener, 4..=6 = SGR.
   lr_type : Array[Int32]
-  lr_unit_shift : Int32
-  lr_uv_shift : Bool
+  /// Restoration unit size log2: `[0]` luma, `[1]` chroma.
+  lr_unit_size : Array[Int32]
   loop_filter_level : Array[Int32]
   loop_filter_sharpness : Int32
   /// `loop_filter_delta_enabled` plus the (defaulted) mode/ref deltas.
@@ -572,8 +572,7 @@ pub fn av1_parse_frame_header(
           coded_lossless: false,
           all_lossless: false,
           lr_type: [],
-          lr_unit_shift: 0,
-          lr_uv_shift: false,
+          lr_unit_size: [],
           loop_filter_level: [],
           loop_filter_sharpness: 0,
           loop_filter_delta_enabled: false,
@@ -877,8 +876,7 @@ pub fn av1_parse_frame_header(
       let mut delta_lf_res = 0
       let mut delta_lf_multi = false
       let lr_type : Array[Int32] = []
-      let mut lr_unit_shift = 0
-      let mut lr_uv_shift = false
+      let lr_unit_size : Array[Int32] = []
       let mut coded_lossless = false
       let mut all_lossless = false
       let loop_filter_level : Array[Int32] = []
@@ -1035,23 +1033,27 @@ pub fn av1_parse_frame_header(
             }
           }
           if uses_lr {
-            // increment(lo, hi): one or two flag bits.
-            if seq.use_128x128_superblock {
-              lr_unit_shift = 1
-              if br.read1() != 0 {
-                lr_unit_shift = 2
-              }
-            } else {
-              lr_unit_shift = 0
-              if br.read1() != 0 {
-                lr_unit_shift = if br.read1() != 0 { 2 } else { 1 }
+            // Log2 of the restoration unit size (dav1d obu.c).
+            let mut u0 = 6 + (if seq.use_128x128_superblock { 1 } else { 0 })
+            if br.read1() != 0 {
+              u0 = u0 + 1
+              if !seq.use_128x128_superblock {
+                u0 = u0 + br.read1().reinterpret_as_int()
               }
             }
-            if seq.chroma_subsampling_x &&
-              seq.chroma_subsampling_y &&
-              uses_chroma_lr {
-              lr_uv_shift = br.read1() != 0
+            let mut u1 = u0
+            if uses_chroma_lr &&
+              seq.chroma_subsampling_x &&
+              seq.chroma_subsampling_y {
+              if br.read1() != 0 {
+                u1 = u1 - 1
+              }
             }
+            lr_unit_size.push(u0)
+            lr_unit_size.push(u1)
+          } else {
+            lr_unit_size.push(8)
+            lr_unit_size.push(8)
           }
         }
         if coded_lossless {
@@ -1206,8 +1208,7 @@ pub fn av1_parse_frame_header(
         coded_lossless,
         all_lossless,
         lr_type,
-        lr_unit_shift,
-        lr_uv_shift,
+        lr_unit_size,
         loop_filter_level,
         loop_filter_sharpness,
         loop_filter_delta_enabled,

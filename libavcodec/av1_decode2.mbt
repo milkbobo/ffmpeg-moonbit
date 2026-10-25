@@ -274,8 +274,8 @@ fn Av1TileCtx::decode_coefs(
   }
   // residual and sign (non-qmatrix path)
   let dq_base = b.seg_id * 6 + plane * 2
-  let dq_tbl0 = self.f.dq[dq_base + 0]
-  let dq_tbl1 = self.f.dq[dq_base + 1]
+  let dq_tbl0 = self.dq_cur[dq_base + 0]
+  let dq_tbl1 = self.dq_cur[dq_base + 1]
   let dq_shift = av1_imax(0, t_dim_ctx - 2)
   // ~(~127U << bpc): 8->32767, 10->131071, 12->524287
   let cf_max = (1 << (self.f.bpc + 7)) - 1

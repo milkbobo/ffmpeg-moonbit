@@ -2315,3 +2315,39 @@ framemd5 8/8 与 FFmpeg 9.0.2（libdav1d）一致；向量见
 
 `moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
 `moon test --target wasm --no-render` **865/865**。
+
+## 54. 2026-10-25 AV1 逐 SB delta-q 与 tile 边界修正；LR 语法层
+
+为接入 SVT-AV1 的环路恢复向量（本机 libaom 在 `-enable-restoration 1`
+下仍选择 NONE，只有 SVT/rav1e 实际发出 LR；SVT 同时启用 delta-q），实现
+了 `decode_b` 的逐超级块 delta_q：
+
+- `Av1TileCtx` 增加 `last_qidx` 与 `dq_cur[8*6]`；在 SB 原点（`bx/by`
+  按 64/128 对齐）于 skip/cdef 索引之后解析 `delta_q` 符号（含
+  `3` → n_bits 扩展、符号位、`<< delta_q_res`、clip 到 1..255），并按
+  当前 qidx 重建 dequant 表（新增 `fill_dq`，与 `init_quant_tables` 的
+  非分割路径一致）。`decode_coefs` 改用 tile 的 `dq_cur`。
+- delta_lf 仍未实现（该向量 dlf=false），入口在 `delta_lf_present` 时
+  继续拒绝。
+
+顺带修复一个**帧边界裁剪** bug：tile 的 `col_start/row_start/col_end/
+row_end` 此前按 SB 对齐（如 160x120 得到 48/32），未按 `bw/bh` 裁剪；
+dav1d 的 `setup_tile` 用 `imin(..., f->bw/f->bh)`。该差异使
+`prepare_intra_edges` 的 `px_have = imin(sz,(h-y)<<2)` 多读越界行，
+导致帧底部 CFL 块的 AC 用到错误的 luma 填充值（同帧可见像素仍完全
+正确，只有 CFL 色度错）。修正后 SVT delta-q 向量 6/6 帧 framemd5 与
+libdav1d 一致；向量见 `av1_lossy_vectors/deltaq_test.mbt`。
+
+另外把去块滤波核的对拍固化：用 dav1d 的 `loop_filter` C 参考在
+4/6/8/16 四种宽度上跑 800 组随机输入，FNV-1a 校验和作为期望值，
+新增 `libavcodec/lf_kernel` 回归包（为排查本轮 CFL 伪影时建立）。
+
+LR（环路恢复）本轮完成了**语法层**：帧头 `unit_size[2]` 解析、
+`read_restoration_info`（switchable/wiener/sgrproj + subexp + lr_ref
+初值）与逐 SB 的 unit 槽位存放（`Av1Filter.lr[3*4]`），8 帧 SVT SGR
+向量的 `Post-lr_sgrproj` 轨迹与 dav1d 完全一致。滤波核（Wiener/SGR）
+尚未移植，入口仍对非零 `lr_type` 显式拒绝；`av1_lr.mbt` 已含
+`sgr_params`/`sgr_x_by_x` 表（脚本自 c->src 提取）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning，
+`moon test --target wasm --no-render` **867/867**。

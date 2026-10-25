@@ -230,9 +230,34 @@ fn Av1TileCtx::decode_b(
       }
     }
   }
-  // delta-q (not present in our streams; guard anyway)
-  if hdr.delta_q_present {
-    raise Av1DecError::Unsupported("PATCHWELCOME: AV1 delta_q in pixel path")
+  // delta-q: per-superblock qindex update (dav1d decode_b).
+  let sb_align = 31 >> (if f.seq.use_128x128_superblock { 0 } else { 1 })
+  if (self.bx & sb_align) == 0 && (self.by & sb_align) == 0 {
+    let max_bs : Int32 = if f.seq.use_128x128_superblock { 0 } else { 3 }
+    let have_delta_q = hdr.delta_q_present && (bs != max_bs || !skip)
+    if have_delta_q {
+      let mut delta_q = self.msac.decode_symbol_adapt(self.cdf.delta_q, 0, 3)
+      if delta_q == 3 {
+        let n_bits = 1 + self.msac.decode_bools(3).reinterpret_as_int()
+        delta_q = self.msac.decode_bools(n_bits).reinterpret_as_int() +
+          1 +
+          (1 << n_bits)
+      }
+      if delta_q != 0 {
+        if self.msac.decode_bool_equi() != 0 {
+          delta_q = -delta_q
+        }
+        delta_q = delta_q << hdr.delta_q_res
+      }
+      self.last_qidx = av1_imin(av1_imax(self.last_qidx + delta_q, 1), 255)
+    }
+    if self.last_qidx == hdr.base_q_idx {
+      for i in 0..<48 {
+        self.dq_cur[i] = f.dq[i]
+      }
+    } else {
+      f.fill_dq(self.last_qidx, self.dq_cur)
+    }
   }
   // intra block syntax
   let ymode_cdf_base = (

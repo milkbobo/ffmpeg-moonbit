@@ -24,6 +24,8 @@ priv struct Av1Filter {
   cdef_idx : FixedArray[Int32]
   /// `noskip_mask[16][2]` flattened: 8x8 blocks, stored on a 4x8 basis.
   noskip : FixedArray[UInt]
+  /// Loop-restoration units: `[plane * 4 + unit_idx]`.
+  lr : FixedArray[Av1RestorationUnit]
 }
 
 ///|
@@ -33,6 +35,13 @@ fn av1_filter_new() -> Av1Filter {
     fuv: FixedArray::make(2 * 32 * 2 * 2, (0 : UInt)),
     cdef_idx: FixedArray::make(4, -1),
     noskip: FixedArray::make(32, (0 : UInt)),
+    lr: {
+      let l = FixedArray::make(12, av1_restoration_unit_new())
+      for i in 0..<12 {
+        l[i] = av1_restoration_unit_new()
+      }
+      l
+    },
   }
 }
 
@@ -951,4 +960,20 @@ fn Av1FrameCtx::loop_filter_frame(self : Av1FrameCtx) -> Unit {
     self.lf_sbrow_cols(sby)
     self.lf_sbrow_rows(sby)
   }
+}
+
+///|
+/// LF kernel entry exposed for the `lf_kernel` regression package, which
+/// compares it against dav1d's `loop_filter` on randomized inputs.
+pub fn av1_lf_filter_kernel(
+  dst : FixedArray[Int32],
+  off : Int32,
+  stridea : Int32,
+  strideb : Int32,
+  wd : Int32,
+  e : Int32,
+  i : Int32,
+  h : Int32,
+) -> Unit {
+  av1_lf_filter(dst, off, stridea, strideb, wd, 8, e, i, h)
 }
