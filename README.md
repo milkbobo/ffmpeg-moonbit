@@ -37,8 +37,8 @@ superblock 行环、空间发布、时域保存、缩放投影与等值游程快
 帧间变换类型选择（`txtp_inter1/2/3` 与色度 `get_uv_inter_txtp` 派生）
 与 var-tx 分区树（`read_vartx_tree`/`txpart` 与 tx 邻域上下文）完成
 C 位级对拍；帧间残差遍历（luma 系数树 + 色度 uvtx 循环、系数上下文
-与 luma-txtp 映射）也已对拍。块重建（预测写回帧平面）与整帧解码入口
-仍待接入。
+与 luma-txtp 映射）也已对拍；块重建已把预测与残差（含逆变换）装配到帧
+平面（`av1_recon_b_inter`）。`decode_b` 的 inter 入口与整帧解码入口仍待接入。
 
 ## 构建与测试
 
@@ -50,7 +50,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **954/954** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **956/956** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

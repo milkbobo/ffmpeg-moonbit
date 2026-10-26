@@ -77,22 +77,44 @@ pub fn av1_decode_txtp(
 ///|
 /// `decode_coefs` from dav1d recon_tmpl.c. Returns
 /// `(eob, txtp, res_ctx)`; eob = -1 means all-skip.
-fn Av1TileCtx::decode_coefs(
-  self : Av1TileCtx,
+///|
+/// Coefficient/transform state for `decode_coefs`, so inter reconstruction
+/// can run the coefficient walk without a full tile context.
+pub(all) struct Av1CoefState {
+  msac : Av1Msac
+  cdf : Av1CdfCtx
+  levels : FixedArray[Byte]
+  dq_cur : FixedArray[Int32]
+  seg_lossless : FixedArray[Bool]
+  seg_qidx : FixedArray[Int32]
+  reduced_tx_set : Bool
+  bpc : Int32
+  ss_h : Int32
+  ss_v : Int32
+}
+
+///|
+/// `decode_coefs` from dav1d recon_tmpl.c. Returns
+/// `(eob, txtp, res_ctx)`; eob = -1 means all-skip.
+pub fn av1_decode_coefs(
+  st : Av1CoefState,
   a : FixedArray[Int32],
   a_off : Int32,
   l : FixedArray[Int32],
   l_off : Int32,
   tx : Int32,
   bs : Int32,
-  b : Av1IntraBlock,
+  seg_id : Int32,
+  y_mode : Int32,
+  y_angle : Int32,
+  uv_mode : Int32,
   intra : Bool,
   plane : Int32,
   cf : FixedArray[Int32],
   luma_txtp? : Int = 0,
 ) -> (Int32, Int32, Int32) {
   let chroma = if plane != 0 { 1 } else { 0 }
-  let lossless = self.f.seg_lossless[b.seg_id]
+  let lossless = st.seg_lossless[seg_id]
   let t_dim_ctx = av1_txfm_ctx(tx)
   let sctx = av1_get_skip_ctx(
     tx,
@@ -102,11 +124,11 @@ fn Av1TileCtx::decode_coefs(
     l,
     l_off,
     chroma == 1,
-    self.f.ss_h,
-    self.f.ss_v,
+    st.ss_h,
+    st.ss_v,
   )
-  let all_skip = self.msac.decode_bool_adapt(
-    self.cdf.coef_skip,
+  let all_skip = st.msac.decode_bool_adapt(
+    st.cdf.coef_skip,
     (t_dim_ctx * 13 + sctx) * 2,
   )
   if all_skip != 0 {
@@ -117,8 +139,8 @@ fn Av1TileCtx::decode_coefs(
     16 // WHT_WHT
   } else {
     av1_decode_txtp(
-      self.msac, self.cdf, intra, plane, tx, self.f.seg_qidx[b.seg_id] == 0,
-      self.f.hdr.reduced_tx_set, b.y_mode, b.y_angle, b.uv_mode, luma_txtp,
+      st.msac, st.cdf, intra, plane, tx, st.seg_qidx[seg_id] == 0,
+      st.reduced_tx_set, y_mode, y_angle, uv_mode, luma_txtp,
     )
   }
   let slw = av1_imin(av1_txfm_lw(tx), 3)
@@ -128,45 +150,45 @@ fn Av1TileCtx::decode_coefs(
   let is_1d = if tx_class != 0 { 1 } else { 0 }
   let eob_bin = match tx2dszctx {
     0 =>
-      self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_16,
+      st.msac.decode_symbol_adapt(
+        st.cdf.eob_bin_16,
         (chroma * 2 + is_1d) * 8,
         4,
       )
     1 =>
-      self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_32,
+      st.msac.decode_symbol_adapt(
+        st.cdf.eob_bin_32,
         (chroma * 2 + is_1d) * 8,
         5,
       )
     2 =>
-      self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_64,
+      st.msac.decode_symbol_adapt(
+        st.cdf.eob_bin_64,
         (chroma * 2 + is_1d) * 8,
         6,
       )
     3 =>
-      self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_128,
+      st.msac.decode_symbol_adapt(
+        st.cdf.eob_bin_128,
         (chroma * 2 + is_1d) * 8,
         7,
       )
     4 =>
-      self.msac.decode_symbol_adapt(
-        self.cdf.eob_bin_256,
+      st.msac.decode_symbol_adapt(
+        st.cdf.eob_bin_256,
         (chroma * 2 + is_1d) * 16,
         8,
       )
-    5 => self.msac.decode_symbol_adapt(self.cdf.eob_bin_512, chroma * 16, 9)
-    _ => self.msac.decode_symbol_adapt(self.cdf.eob_bin_1024, chroma * 16, 10)
+    5 => st.msac.decode_symbol_adapt(st.cdf.eob_bin_512, chroma * 16, 9)
+    _ => st.msac.decode_symbol_adapt(st.cdf.eob_bin_1024, chroma * 16, 10)
   }
   let eob = if eob_bin > 1 {
-    let hi = self.msac.decode_bool_adapt(
-      self.cdf.eob_hi_bit,
+    let hi = st.msac.decode_bool_adapt(
+      st.cdf.eob_hi_bit,
       ((t_dim_ctx * 2 + chroma) * 11 + eob_bin) * 2,
     )
     ((hi.reinterpret_as_int() | 2) << (eob_bin - 2)) |
-    self.msac.decode_bools(eob_bin - 2).reinterpret_as_int()
+    st.msac.decode_bools(eob_bin - 2).reinterpret_as_int()
   } else {
     eob_bin
   }
@@ -174,7 +196,7 @@ fn Av1TileCtx::decode_coefs(
   let hi_cdf_base = (av1_imin(t_dim_ctx, 3) * 2 + chroma) * 84
   let mut rc = 0
   let mut dc_tok = 0
-  let levels = self.levels
+  let levels = st.levels
   if eob != 0 {
     let lo_cdf_base = (t_dim_ctx * 2 + chroma) * 41 * 4
     // Per-class scan layout.
@@ -195,8 +217,8 @@ fn Av1TileCtx::decode_coefs(
     let mut ctx = 1 +
       (if eob > 2 << tx2dszctx { 1 } else { 0 }) +
       (if eob > 4 << tx2dszctx { 1 } else { 0 })
-    let eob_tok = self.msac.decode_symbol_adapt(
-      self.cdf.eob_base_tok,
+    let eob_tok = st.msac.decode_symbol_adapt(
+      st.cdf.eob_base_tok,
       eob_cdf_base + ctx * 4,
       2,
     )
@@ -226,7 +248,7 @@ fn Av1TileCtx::decode_coefs(
       } else {
         7
       }
-      tok = self.msac.decode_hi_tok(self.cdf.br_tok, hi_cdf_base + ctx * 4)
+      tok = st.msac.decode_hi_tok(st.cdf.br_tok, hi_cdf_base + ctx * 4)
       level_tok = tok + (3 << 6)
     }
     cf[rc] = tok << 11
@@ -261,8 +283,8 @@ fn Av1TileCtx::decode_coefs(
       if tx_class == 0 {
         y = y | x
       }
-      tok = self.msac.decode_symbol_adapt(
-        self.cdf.base_tok,
+      tok = st.msac.decode_symbol_adapt(
+        st.cdf.base_tok,
         lo_cdf_base + ctx * 4,
         3,
       )
@@ -270,7 +292,7 @@ fn Av1TileCtx::decode_coefs(
         mag = mag & 63
         ctx = (if y > (if tx_class == 0 { 1 } else { 0 }) { 14 } else { 7 }) +
           (if mag > 12 { 6 } else { (mag + 1) >> 1 })
-        tok = self.msac.decode_hi_tok(self.cdf.br_tok, hi_cdf_base + ctx * 4)
+        tok = st.msac.decode_hi_tok(st.cdf.br_tok, hi_cdf_base + ctx * 4)
         levels[lvl_idx] = (tok + (3 << 6)).to_byte()
         cf[rc_i] = (tok << 11) | rc
         rc = rc_i
@@ -294,8 +316,8 @@ fn Av1TileCtx::decode_coefs(
       ctx = c0
       mag = m0
     }
-    dc_tok = self.msac.decode_symbol_adapt(
-      self.cdf.base_tok,
+    dc_tok = st.msac.decode_symbol_adapt(
+      st.cdf.base_tok,
       lo_cdf_base + ctx * 4,
       3,
     )
@@ -307,39 +329,39 @@ fn Av1TileCtx::decode_coefs(
       }
       mag = mag & 63
       ctx = if mag > 12 { 6 } else { (mag + 1) >> 1 }
-      dc_tok = self.msac.decode_hi_tok(self.cdf.br_tok, hi_cdf_base + ctx * 4)
+      dc_tok = st.msac.decode_hi_tok(st.cdf.br_tok, hi_cdf_base + ctx * 4)
     }
   } else {
     // dc-only
-    let tok_br = self.msac.decode_symbol_adapt(
-      self.cdf.eob_base_tok,
+    let tok_br = st.msac.decode_symbol_adapt(
+      st.cdf.eob_base_tok,
       eob_cdf_base,
       2,
     )
     dc_tok = 1 + tok_br
     if tok_br == 2 {
-      dc_tok = self.msac.decode_hi_tok(self.cdf.br_tok, hi_cdf_base)
+      dc_tok = st.msac.decode_hi_tok(st.cdf.br_tok, hi_cdf_base)
     }
     rc = 0
   }
   // residual and sign (non-qmatrix path)
-  let dq_base = b.seg_id * 6 + plane * 2
-  let dq_tbl0 = self.dq_cur[dq_base + 0]
-  let dq_tbl1 = self.dq_cur[dq_base + 1]
+  let dq_base = seg_id * 6 + plane * 2
+  let dq_tbl0 = st.dq_cur[dq_base + 0]
+  let dq_tbl1 = st.dq_cur[dq_base + 1]
   let dq_shift = av1_imax(0, t_dim_ctx - 2)
   // ~(~127U << bpc): 8->32767, 10->131071, 12->524287
-  let cf_max = (1 << (self.f.bpc + 7)) - 1
+  let cf_max = (1 << (st.bpc + 7)) - 1
   let cul_level = Ref(0)
   let dc_sign_level = Ref(1 << 6)
   if dc_tok != 0 {
     let dc_sign_ctx = av1_get_dc_sign_ctx(tx, a, a_off, l, l_off)
-    let dc_sign = self.msac.decode_bool_adapt(
-      self.cdf.dc_sign,
+    let dc_sign = st.msac.decode_bool_adapt(
+      st.cdf.dc_sign,
       (chroma * 3 + dc_sign_ctx) * 2,
     )
     dc_sign_level.val = (dc_sign.reinterpret_as_int() - 1) & (2 << 6)
     let (dcv, dcul) = if dc_tok == 15 {
-      let dkt_raw = self.msac.read_golomb() + 15
+      let dkt_raw = st.msac.read_golomb() + 15
       let dkt = dkt_raw & 0xfffff
       let dq = ((dq_tbl0 * dkt) & 0xffffff) >> dq_shift
       (av1_imin(dq, cf_max + dc_sign.reinterpret_as_int()), dkt)
@@ -353,10 +375,10 @@ fn Av1TileCtx::decode_coefs(
     let mut r = rc
     let ac_dq = dq_tbl1
     while r != 0 {
-      let sign = self.msac.decode_bool_equi()
+      let sign = st.msac.decode_bool_equi()
       let rc_tok = cf[r]
       let (tok, dq) = if rc_tok >= 15 << 11 {
-        let t = (self.msac.read_golomb() + 15) & 0xfffff
+        let t = (st.msac.read_golomb() + 15) & 0xfffff
         (t, ((ac_dq * t) & 0xffffff) >> dq_shift)
       } else {
         let t = rc_tok >> 11
@@ -370,6 +392,43 @@ fn Av1TileCtx::decode_coefs(
   }
   let res_ctx = av1_imin(cul_level.val, 63) | dc_sign_level.val
   (eob, txtp, res_ctx)
+}
+
+///|
+fn Av1TileCtx::coef_state(self : Av1TileCtx) -> Av1CoefState {
+  {
+    msac: self.msac,
+    cdf: self.cdf,
+    levels: self.levels,
+    dq_cur: self.dq_cur,
+    seg_lossless: self.f.seg_lossless,
+    seg_qidx: self.f.seg_qidx,
+    reduced_tx_set: self.f.hdr.reduced_tx_set,
+    bpc: self.f.bpc,
+    ss_h: self.f.ss_h,
+    ss_v: self.f.ss_v,
+  }
+}
+
+///|
+fn Av1TileCtx::decode_coefs(
+  self : Av1TileCtx,
+  a : FixedArray[Int32],
+  a_off : Int32,
+  l : FixedArray[Int32],
+  l_off : Int32,
+  tx : Int32,
+  bs : Int32,
+  b : Av1IntraBlock,
+  intra : Bool,
+  plane : Int32,
+  cf : FixedArray[Int32],
+  luma_txtp? : Int = 0,
+) -> (Int32, Int32, Int32) {
+  av1_decode_coefs(
+    self.coef_state(), a, a_off, l, l_off, tx, bs, b.seg_id, b.y_mode,
+    b.y_angle, b.uv_mode, intra, plane, cf, luma_txtp=luma_txtp,
+  )
 }
 
 ///|

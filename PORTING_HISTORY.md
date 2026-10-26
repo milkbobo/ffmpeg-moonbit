@@ -3296,3 +3296,30 @@ uvtx, layout)` 用例；比较叶子顺序哈希（相对坐标/tx/txtp/eob）�
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 全量测试 **954/954**。
+
+## 93. 2026-10-26 AV1 帧间块重建装配（预测 + 残差）
+
+- `decode_coefs` 从 `Av1TileCtx` 方法抽成 `Av1CoefState` + 公开
+  `av1_decode_coefs`：状态只含 msac/cdf/levels/dq_cur/seg_lossless/
+  seg_qidx/reduced_tx_set/bpc/ss_h/ss_v，块信息改传
+  `seg_id/y_mode/y_angle/uv_mode`（不再依赖私有 `Av1IntraBlock`）；
+  tile 侧保留 `coef_state()` + 薄包装，帧内调用点不变。
+- `av1_recon_predict_block` 新增 `mono` 可选参数：单色时跳过色度
+  预测/子 8x8 派生/II 色度混合，避免访问空参考数组。
+- 新增 `av1_recon_b_inter`（`av1_recon_inter.mbt`）：先经
+  `av1_recon_predict_block` 预测并把整块（含边距）写回 `ctx.y/u/v`
+  帧平面；skip 时按块尺寸把 lcoef/ccoef 置 0x40；否则用
+  `Av1CoefReader` 包装 `av1_decode_coefs`，交给
+  `av1_read_inter_residual` 遍历，apply 回调按
+  `4*((by+ry)*stride + bx+rx)`（色度按 `(by>>ss_v)+cy` 等）直接在
+  帧平面上执行 `av1_itxfm_add`。
+
+测试（`av1_recon_vectors` 9/9，新增 2 个）：
+- 8x8 单参考 skip 块：输出等于 `av1_recon_predict_block` 在相同偏移的
+  拷贝，且 lcoef/ccoef 上下文被清为 0x40；
+- 非 skip 块：用独立 msac/CDF 与显式坐标重建「预测 + 残差」期望，
+  与 `av1_recon_b_inter` 的输出逐像素一致，且两路 msac 终态、lcoef/
+  ccoef 上下文完全一致（并断言至少解码出一个系数块）。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+全量测试 **956/956**。

@@ -500,6 +500,7 @@ pub fn av1_recon_predict_block(
   jnt_weight : Int,
   intra : Av1ReconPlanes?,
   obmc : Av1ReconObmc?,
+  mono? : Bool = false,
 ) -> Result[Av1ReconPlanes, String] {
   if b.interintra.kind != 0 && intra is None {
     return Err("av1 recon: inter-intra needs an intra prediction")
@@ -508,7 +509,7 @@ pub fn av1_recon_predict_block(
     return Err("av1 recon: OBMC needs neighbour state")
   }
   let single = b.ref1 < 0
-  let sub8x8 = single && ss_h == 1 && (bw4 == 1 || bh4 == ss_v)
+  let sub8x8 = !mono && single && ss_h == 1 && (bw4 == 1 || bh4 == ss_v)
   if sub8x8 && obmc is None {
     return Err("av1 recon: chroma sub8x8 needs neighbours")
   }
@@ -527,7 +528,9 @@ pub fn av1_recon_predict_block(
       0, bitdepth, jnt_weight, av1_recon_wedge_mask(b, 0),
     )
   }
-  let u0 = if single {
+  let u0 = if mono {
+    FixedArray::make(0, 0)
+  } else if single {
     let sub = match obmc {
       Some(o) if sub8x8 =>
         av1_recon_sub8x8_chroma(
@@ -551,7 +554,9 @@ pub fn av1_recon_predict_block(
       av1_recon_wedge_mask(b, av1_recon_layout(ss_h, ss_v)),
     )
   }
-  let v0 = if single {
+  let v0 = if mono {
+    FixedArray::make(0, 0)
+  } else if single {
     let sub = match obmc {
       Some(o) if sub8x8 =>
         av1_recon_sub8x8_chroma(
@@ -583,7 +588,7 @@ pub fn av1_recon_predict_block(
     _ => y0
   }
   let u1 = match obmc {
-    Some(o) if b.motion_mode == 1 =>
+    Some(o) if b.motion_mode == 1 && !mono =>
       av1_recon_obmc_plane(
         u0, ref_u, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v, bitdepth,
         true, o,
@@ -591,31 +596,37 @@ pub fn av1_recon_predict_block(
     _ => u0
   }
   let v1 = match obmc {
-    Some(o) if b.motion_mode == 1 =>
+    Some(o) if b.motion_mode == 1 && !mono =>
       av1_recon_obmc_plane(
         v0, ref_v, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v, bitdepth,
         true, o,
       )
     _ => v0
   }
-  let cw_out = if sub8x8 && single && bw4 == ss_h {
+  let cw_out = if mono {
+    0
+  } else if sub8x8 && single && bw4 == ss_h {
     4
   } else {
     cw
   }
-  let ch_out = if sub8x8 && single && bh4 == ss_v {
+  let ch_out = if mono {
+    0
+  } else if sub8x8 && single && bh4 == ss_v {
     4
   } else {
     ch
   }
   let layout = av1_recon_layout(ss_h, ss_v)
   let (y, u, v) = match intra {
-    Some(ip) if b.interintra.kind != 0 =>
+    Some(ip) if b.interintra.kind != 0 && !mono =>
       (
         av1_recon_interintra_blend(y1, ip.y, b, 0),
         av1_recon_interintra_blend(u1, ip.u, b, layout),
         av1_recon_interintra_blend(v1, ip.v, b, layout),
       )
+    Some(ip) if b.interintra.kind != 0 =>
+      (av1_recon_interintra_blend(y1, ip.y, b, 0), u1, v1)
     _ => (y1, u1, v1)
   }
   { y, u, v, w, h, cw: cw_out, ch: ch_out } |> Ok
@@ -630,4 +641,142 @@ fn av1_recon_wedge_mask(b : Av1InterBlock, layout : Int) -> FixedArray[Int32] {
   }
   let sign = if layout == 0 { 0 } else { b.mask_sign }
   @av1_mc_core.av1_wedge_mask(layout, b.bs, sign, b.wedge_idx)
+}
+
+///|
+/// Frame planes, coefficient scratch, sequence geometry and neighbour
+/// coefficient contexts used by inter block reconstruction.
+pub(all) struct Av1ReconInterCtx {
+  coef : Av1CoefState
+  cf : FixedArray[Int32]
+  y : FixedArray[Int32]
+  u : FixedArray[Int32]
+  v : FixedArray[Int32]
+  y_stride : Int
+  uv_stride : Int
+  bw : Int
+  bh : Int
+  ss_h : Int
+  ss_v : Int
+  bpc : Int32
+  pixel_max : Int32
+  mono : Bool
+  a_lcoef : FixedArray[Int32]
+  l_lcoef : FixedArray[Int32]
+  a_ccoef : FixedArray[Int32]
+  l_ccoef : FixedArray[Int32]
+}
+
+///|
+/// `recon_b_inter` prediction + residual half: predict all planes into the
+/// frame buffers, then either reset the coefficient contexts (skip) or run
+/// the inter coefficient walk applying inverse transforms in place.
+/// `tx_max`/`split0`/`split1`/`uvtx` come from `read_vartx_tree`.
+pub fn av1_recon_b_inter(
+  ctx : Av1ReconInterCtx,
+  bs : Int,
+  b : Av1InterBlock,
+  seg_id : Int32,
+  skip : Bool,
+  tx_max : Int32,
+  split0 : UInt,
+  split1 : UInt,
+  uvtx : Int32,
+  ref_y : FixedArray[Av1ReconRefPlane],
+  ref_u : FixedArray[Av1ReconRefPlane],
+  ref_v : FixedArray[Av1ReconRefPlane],
+  cur_w : Int,
+  cur_h : Int,
+  bx4 : Int,
+  by4 : Int,
+  jnt_weight : Int,
+  intra : Av1ReconPlanes?,
+  obmc : Av1ReconObmc?,
+) -> Result[Unit, String] {
+  let bw4 = av1_block_dimensions[bs * 4].to_int()
+  let bh4 = av1_block_dimensions[bs * 4 + 1].to_int()
+  let has_chroma = !ctx.mono && (bw4 > ctx.ss_h || (bx4 & 1) != 0) &&
+    (bh4 > ctx.ss_v || (by4 & 1) != 0)
+  let planes = match av1_recon_predict_block(
+    b, ref_y, ref_u, ref_v, cur_w, cur_h, bx4, by4, bw4, bh4, ctx.ss_h,
+    ctx.ss_v, ctx.bpc, jnt_weight, intra, obmc, mono=ctx.mono,
+  ) {
+    Ok(p) => p
+    Err(e) => return Err(e)
+  }
+  // write the predicted block into the frame planes
+  let y_off = 4 * (by4 * ctx.y_stride + bx4)
+  for yy in 0..<planes.h {
+    for xx in 0..<planes.w {
+      ctx.y[y_off + yy * ctx.y_stride + xx] = planes.y[yy * planes.w + xx]
+    }
+  }
+  if has_chroma {
+    let uv_off = 4 * ((by4 >> ctx.ss_v) * ctx.uv_stride + (bx4 >> ctx.ss_h))
+    for yy in 0..<planes.ch {
+      for xx in 0..<planes.cw {
+        ctx.u[uv_off + yy * ctx.uv_stride + xx] = planes.u[yy * planes.cw + xx]
+        ctx.v[uv_off + yy * ctx.uv_stride + xx] = planes.v[yy * planes.cw + xx]
+      }
+    }
+  }
+  let abx = bx4 & 31
+  let aby = by4 & 31
+  if skip {
+    for i in 0..<bw4 {
+      ctx.a_lcoef[abx + i] = 0x40
+    }
+    for i in 0..<bh4 {
+      ctx.l_lcoef[aby + i] = 0x40
+    }
+    if has_chroma {
+      let cbw4 = (bw4 + ctx.ss_h) >> ctx.ss_h
+      let cbh4 = (bh4 + ctx.ss_v) >> ctx.ss_v
+      for pl in 0..<2 {
+        let base = pl * 32 + (abx >> ctx.ss_h)
+        for i in 0..<cbw4 {
+          ctx.a_ccoef[base + i] = 0x40
+        }
+        let lbase = pl * 32 + (aby >> ctx.ss_v)
+        for i in 0..<cbh4 {
+          ctx.l_ccoef[lbase + i] = 0x40
+        }
+      }
+    }
+    return Ok(())
+  }
+  let reader : Av1CoefReader = {
+    decode: (a_arr, a_off, l_arr, l_off, tx, plane, _intra, luma_txtp) => {
+      let (eob, txtp, res_ctx) = av1_decode_coefs(
+        ctx.coef, a_arr, a_off, l_arr, l_off, tx, bs, seg_id, 0, 0, 0, false,
+        plane, ctx.cf, luma_txtp=luma_txtp,
+      )
+      (eob, txtp, res_ctx)
+    },
+  }
+  let apply_y = (rx, ry, tx, txtp, eob) => {
+    av1_itxfm_add(
+      ctx.y, 4 * ((by4 + ry) * ctx.y_stride + bx4 + rx), ctx.y_stride, ctx.cf,
+      eob, tx, txtp, ctx.pixel_max,
+    )
+  }
+  let apply_uv = (pl, cx, cy, tx, txtp, eob) => {
+    let plane = if pl == 0 { ctx.u } else { ctx.v }
+    av1_itxfm_add(
+      plane,
+      4 * (((by4 >> ctx.ss_v) + cy) * ctx.uv_stride + (bx4 >> ctx.ss_h) + cx),
+      ctx.uv_stride, ctx.cf, eob, tx, txtp, ctx.pixel_max,
+    )
+  }
+  let w4 = av1_imin(bw4, ctx.bw - bx4)
+  let h4 = av1_imin(bh4, ctx.bh - by4)
+  let cw4 = (w4 + ctx.ss_h) >> ctx.ss_h
+  let ch4 = (h4 + ctx.ss_v) >> ctx.ss_v
+  let txtp_map = FixedArray::make(1024, b'\x00')
+  av1_read_inter_residual(
+    reader, bs, tx_max, split0, split1, uvtx, w4, h4, cw4, ch4, ctx.ss_h,
+    ctx.ss_v, has_chroma, bx4, by4, ctx.bw, ctx.bh, ctx.a_lcoef, ctx.l_lcoef,
+    ctx.a_ccoef, ctx.l_ccoef, txtp_map, Some(apply_y), Some(apply_uv),
+  )
+  Ok(())
 }
