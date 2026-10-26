@@ -1,6 +1,7 @@
 ///|
 /// Inputs available after skip-mode and segmentation syntax in decode_b.
-/// References use dav1d's 0..6 indices; `forced_ref` is -1 when unset.
+/// References use dav1d's 0..6 indices. Segment REF/GLOBALMV/SKIP features
+/// (when `seg_present`) force the reference and inter mode.
 pub(all) struct Av1InterMotionParams {
   bs : Int
   bx4 : Int
@@ -14,8 +15,10 @@ pub(all) struct Av1InterMotionParams {
   skip_mode : Bool
   skip_ref0 : Int
   skip_ref1 : Int
-  forced_ref : Int
-  force_global : Bool
+  seg_present : Bool
+  seg_ref : Int // -1 = no REF feature
+  seg_globalmv : Bool
+  seg_skip : Bool
 }
 
 ///|
@@ -23,6 +26,7 @@ pub(all) struct Av1InterMotionParams {
 /// transform decoding, and pixel reconstruction.
 pub(all) struct Av1InterMotion {
   ref0 : Int
+  find_ctx : Int
   ref1 : Int
   mode : Int
   drl_idx : Int
@@ -46,10 +50,14 @@ pub fn av1_inter_read_block_motion(
 ) -> Av1InterMotion {
   let bw4 = av1_block_dimensions[params.bs * 4].to_int()
   let bh4 = av1_block_dimensions[params.bs * 4 + 1].to_int()
+  let seg_ref_forced = params.seg_present && params.seg_ref > 0
+  let seg_gmv = params.seg_present && (params.seg_globalmv || params.seg_skip)
+  let seg_comp_ok = !params.seg_present ||
+    (params.seg_ref == -1 && !params.seg_globalmv && !params.seg_skip)
   let is_comp = if params.skip_mode {
     true
-  } else if params.switchable_comp_refs && params.forced_ref < 0 &&
-    !params.force_global && bw4 > 1 && bh4 > 1 {
+  } else if params.switchable_comp_refs && seg_comp_ok && bw4 > 1 &&
+    bh4 > 1 {
     msac.decode_bool_adapt(
       cdf.comp, av1_inter_comp_ctx(top, left) * 2,
     ) != 0
@@ -60,9 +68,9 @@ pub fn av1_inter_read_block_motion(
     (params.skip_ref0, params.skip_ref1)
   } else if is_comp {
     av1_inter_read_refs(msac, cdf, top, left, true)
-  } else if params.forced_ref >= 0 {
-    (params.forced_ref, -1)
-  } else if params.force_global {
+  } else if seg_ref_forced {
+    (params.seg_ref - 1, -1)
+  } else if seg_gmv {
     (0, -1)
   } else {
     av1_inter_read_refs(msac, cdf, top, left, false)
@@ -75,7 +83,7 @@ pub fn av1_inter_read_block_motion(
   )
   if params.skip_mode {
     return {
-      ref0, ref1, mode: 0, drl_idx: 0,
+      ref0, ref1, find_ctx: stack.ctx, mode: 0, drl_idx: 0,
       mv0: av1_rmv_fix_precision(
         stack.cands[0].mv0, state.rf.force_integer_mv, state.rf.hp,
       ),
@@ -91,17 +99,17 @@ pub fn av1_inter_read_block_motion(
       params.bs, params.by4, params.bx4,
     )
     return {
-      ref0, ref1, mode: mv.mode, drl_idx: mv.drl_idx,
+      ref0, ref1, find_ctx: stack.ctx, mode: mv.mode, drl_idx: mv.drl_idx,
       mv0: mv.mv0, mv1: mv.mv1,
       has_subpel_filter: mv.has_subpel_filter, skip_mode: false,
     }
   }
   let mv = av1_inter_read_single_mv(
     msac, cdf, state.rf, stack, ref0,
-    params.bs, params.by4, params.bx4, params.force_global,
+    params.bs, params.by4, params.bx4, seg_gmv,
   )
   {
-    ref0, ref1: -1, mode: mv.mode, drl_idx: mv.drl_idx,
+    ref0, ref1: -1, find_ctx: stack.ctx, mode: mv.mode, drl_idx: mv.drl_idx,
     mv0: mv.mv, mv1: (0, 0),
     has_subpel_filter: mv.has_subpel_filter, skip_mode: false,
   }

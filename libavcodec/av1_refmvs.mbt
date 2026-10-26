@@ -718,7 +718,9 @@ pub fn av1_refmvs_find(
   }
   // top-left (part of "secondary")
   let dummy_newmv = Ref(false)
-  if n_rows != none || n_cols != none {
+  // dav1d reads `r[-1][bx4 - 1]` here even at bx4 == 0, which addresses the
+  // cell before the row buffer; skip that undefined column instead.
+  if (n_rows != none || n_cols != none) && bx4 > 0 {
     av1_rmv_add_spatial(
       stack, cnt, 4, rows[top_row][bx4 - 1], ref0, ref1, gmv0, gmv1,
       dummy_newmv, have_row_mvs,

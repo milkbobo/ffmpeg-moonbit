@@ -30,7 +30,7 @@ test "AV1 skip-mode motion uses refmvs stack without consuming symbols" {
     tile_row_start4: 0, tile_row_end4: 32,
     top_has_right: false, switchable_comp_refs: true,
     skip_mode: true, skip_ref0: 0, skip_ref1: 4,
-    forced_ref: -1, force_global: false,
+    seg_present: false, seg_ref: -1, seg_globalmv: false, seg_skip: false,
   }
   let motion = @libavcodec.av1_inter_read_block_motion(
     msac, cdf, state, None, None, params,
@@ -81,7 +81,7 @@ test "AV1 forced-reference motion selects its declared reference" {
     tile_row_start4: 0, tile_row_end4: 32,
     top_has_right: false, switchable_comp_refs: true,
     skip_mode: false, skip_ref0: 0, skip_ref1: 4,
-    forced_ref: 3, force_global: true,
+    seg_present: true, seg_ref: 4, seg_globalmv: true, seg_skip: false,
   }
   let motion = @libavcodec.av1_inter_read_block_motion(
     msac, cdf, state, None, None, params,

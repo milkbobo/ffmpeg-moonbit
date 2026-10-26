@@ -64,8 +64,8 @@ pub fn av1_inter_comp_ctx(
         (if a.ref0 >= 4 { 1 } else { 0 })
       }
     }
-    (Some(a), None) => if a.comp_type != 0 { 3 } else if a.ref0 < 0 || a.ref0 >= 4 { 1 } else { 0 }
-    (None, Some(l)) => if l.comp_type != 0 { 3 } else if l.ref0 < 0 || l.ref0 >= 4 { 1 } else { 0 }
+    (Some(a), None) => if a.comp_type != 0 { 3 } else if a.ref0 >= 4 { 1 } else { 0 }
+    (None, Some(l)) => if l.comp_type != 0 { 3 } else if l.ref0 >= 4 { 1 } else { 0 }
     (None, None) => 1
   }
 }

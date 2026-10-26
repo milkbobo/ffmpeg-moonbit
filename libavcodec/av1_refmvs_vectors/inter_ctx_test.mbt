@@ -52,13 +52,15 @@ test "AV1 intra filter mask and joint contexts follow neighbour state" {
 }
 
 ///|
-test "AV1 compound context treats a sole intra neighbour as unsigned backward" {
+test "AV1 compound context ignores a sole intra neighbour reference" {
   let intra : @libavcodec.Av1InterNeighbor = {
     intra: true, comp_type: 0, ref0: -1, ref1: -1,
     filter0: 3, filter1: 3,
   }
-  inspect(@libavcodec.av1_inter_comp_ctx(Some(intra), None), content="1")
-  inspect(@libavcodec.av1_inter_comp_ctx(None, Some(intra)), content="1")
+  // dav1d compares the lone neighbour's ref with a signed `>= 4`,
+  // so an intra neighbour (-1) does not count as backward.
+  inspect(@libavcodec.av1_inter_comp_ctx(Some(intra), None), content="0")
+  inspect(@libavcodec.av1_inter_comp_ctx(None, Some(intra)), content="0")
   inspect(@libavcodec.av1_inter_comp_ctx(None, None), content="1")
 }
 

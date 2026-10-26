@@ -3041,3 +3041,34 @@ MoonBit 不符；②`case_set_upto16` 的写入个数是 `1<<t_dim->lw`
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_lf_mask_vectors` **1/1**，全量测试 **935/935**。
+
+## 83. 2026-10-26 AV1 帧间块语法驱动接线
+
+新增 `av1_inter_block.mbt`：`Av1InterTileState` 维护逐 4x4 的
+上/左邻域（dav1d `BlockContext` 的 inter 子集，含 `set_block` 与
+`findoddzero` 等价的重叠邻块判定）；`av1_inter_read_block` 按
+dav1d `decode_b` 顺序串联参考/MV（`av1_inter_read_block_motion`）、
+复合 mask、inter-intra、motion variation（含 `find_matching_ref`/
+`derive_warpmv` 与 `allow_warp`）、subpel 滤波器，并把最终块发布到
+refmvs。返回的 `Av1InterBlock` 含 refs/mode/DRL/MV/复合类型/wedge/
+mask 符号/inter-intra/motion mode/warp 矩阵/滤波器/掩码与 refmvs
+find 上下文，可直接供重建使用。
+
+C 源码对照发现一处关键语义：dav1d 1.5.1 的 inter-intra 与 motion
+variation **位于单参考 `else` 分支内部**，复合（含 skip mode）块不读
+这两个语法；驱动据此只在 `ref1 < 0` 时读取。另修正
+`av1_inter_comp_ctx` 单邻块分支：dav1d 对 `ref[0] >= 4` 使用有符号
+比较，帧内邻块（-1）不算后向（此前 §76 的测试假设相反，已更新）。
+
+对拍进展（探针 `.scratch/av1/interblock_dump.c` + 生成器，均不入库）：
+直接拷贝 dav1d `decode_b` 的 inter 分支（1383–1872 行）并复用真实
+`env.h` 上下文函数、refmvs 与默认 CDF，96 组随机码流/邻居/行环下，
+**已解码语法字段、refmvs find 上下文、warp 掩码与 `allow_warp` 全部
+与 C 一致**；但算术解码器的 `msac` 最终状态仍有差异，尚未定位到
+具体 CDF 选择，故本轮不提交该对拍测试，仅提交确定性单元测试
+（skip mode 零符号消费、复合块不读 inter-intra/motion、发布结果与
+邻域更新）。该差异意味着驱动尚不能宣称位级对拍完成，接线整帧入口
+前需继续收敛。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_refmvs_vectors` **34/34**，全量测试 **937/937**。
