@@ -281,6 +281,7 @@ fn av1_mask_edges_chroma(
   cbx4 : Int32,
   cw4 : Int32,
   ch4 : Int32,
+  skip_inter : Bool,
   tx : Int32,
   a : FixedArray[Int32],
   a_off : Int32,
@@ -317,39 +318,41 @@ fn av1_mask_edges_chroma(
     fuv[i] = fuv[i] | smask
     mask2 = mask2 << 1
   }
-  // inner (tx) left|right edges
-  let hstep = 1 << twl4
-  let inner = av1_inner_mask(cby4, ch4)
-  let inner1 = inner & (((1 : UInt) << vmask) - 1)
-  let inner2 = inner >> vmask
-  let mut x = hstep
-  while x < cw4 {
-    if inner1 != 0 {
-      let i = av1_fuv_i(0, cbx4 + x, twl4c, 0)
-      fuv[i] = fuv[i] | inner1
+  if !skip_inter {
+    // inner (tx) left|right edges
+    let hstep = 1 << twl4
+    let inner = av1_inner_mask(cby4, ch4)
+    let inner1 = inner & (((1 : UInt) << vmask) - 1)
+    let inner2 = inner >> vmask
+    let mut x = hstep
+    while x < cw4 {
+      if inner1 != 0 {
+        let i = av1_fuv_i(0, cbx4 + x, twl4c, 0)
+        fuv[i] = fuv[i] | inner1
+      }
+      if inner2 != 0 {
+        let i = av1_fuv_i(0, cbx4 + x, twl4c, 1)
+        fuv[i] = fuv[i] | inner2
+      }
+      x = x + hstep
     }
-    if inner2 != 0 {
-      let i = av1_fuv_i(0, cbx4 + x, twl4c, 1)
-      fuv[i] = fuv[i] | inner2
+    // inner (tx) top|bottom edges
+    let vstep = 1 << thl4
+    let inner_v = av1_inner_mask(cbx4, cw4)
+    let inner_v1 = inner_v & (((1 : UInt) << hmask) - 1)
+    let inner_v2 = inner_v >> hmask
+    let mut y = vstep
+    while y < ch4 {
+      if inner_v1 != 0 {
+        let i = av1_fuv_i(1, cby4 + y, thl4c, 0)
+        fuv[i] = fuv[i] | inner_v1
+      }
+      if inner_v2 != 0 {
+        let i = av1_fuv_i(1, cby4 + y, thl4c, 1)
+        fuv[i] = fuv[i] | inner_v2
+      }
+      y = y + vstep
     }
-    x = x + hstep
-  }
-  // inner (tx) top|bottom edges
-  let vstep = 1 << thl4
-  let inner_v = av1_inner_mask(cbx4, cw4)
-  let inner_v1 = inner_v & (((1 : UInt) << hmask) - 1)
-  let inner_v2 = inner_v >> hmask
-  let mut y = vstep
-  while y < ch4 {
-    if inner_v1 != 0 {
-      let i = av1_fuv_i(1, cby4 + y, thl4c, 0)
-      fuv[i] = fuv[i] | inner_v1
-    }
-    if inner_v2 != 0 {
-      let i = av1_fuv_i(1, cby4 + y, thl4c, 1)
-      fuv[i] = fuv[i] | inner_v2
-    }
-    y = y + vstep
   }
   for i in 0..<cw4 {
     a[a_off + i] = thl4c
@@ -402,14 +405,254 @@ fn Av1FrameCtx::create_lf_mask_intra(
   if !has_chroma {
     return
   }
-  let ss_v = self.ss_v
-  let ss_h = self.ss_h
   let cbw4 = av1_imin(
-    ((self.bw + ss_h) >> ss_h) - (bx >> ss_h),
+    ((self.bw + self.ss_h) >> self.ss_h) - (bx >> self.ss_h),
+    (av1_bdim(bs, 0) + self.ss_h) >> self.ss_h,
+  )
+  let cbh4 = av1_imin(
+    ((self.bh + self.ss_v) >> self.ss_v) - (by >> self.ss_v),
+    (av1_bdim(bs, 1) + self.ss_v) >> self.ss_v,
+  )
+  if cbw4 <= 0 || cbh4 <= 0 {
+    return
+  }
+  let cbx4 = bx4 >> self.ss_h
+  let cby4 = by4 >> self.ss_v
+  let u_level = lvl[seg * 64 + 2 * 16]
+  let v_level = lvl[seg * 64 + 3 * 16]
+  for y in 0..<cbh4 {
+    for x in 0..<cbw4 {
+      let o = (((by >> self.ss_v) + y) * self.b4_stride + ((bx >> self.ss_h) + x)) * 4
+      self.lf_level[o + 2] = u_level
+      self.lf_level[o + 3] = v_level
+    }
+  }
+  av1_mask_edges_chroma(
+    mask.fuv, cby4, cbx4, cbw4, cbh4, false, uvtx, auv, auv_off, luv,
+    luv_off, self.ss_h, self.ss_v,
+  )
+}
+
+///|
+/// `decomp_tx`: expand the tx split masks into per-4x4 width (log2, capped
+/// at 2) and step contexts used by the inter edge builder. `txa` mirrors
+/// dav1d's `uint8_t txa[2][2][32][32]` (edge, field, y, x).
+fn av1_decomp_tx(
+  txa : FixedArray[Int32],
+  base : Int32,
+  from : Int32,
+  depth : Int32,
+  y_off : Int32,
+  x_off : Int32,
+  tx_masks : FixedArray[Int32],
+) -> Unit {
+  let is_split = if from == 0 || depth > 1 {
+    false
+  } else {
+    ((tx_masks[depth] >> (y_off * 4 + x_off)) & 1) != 0
+  }
+  if is_split {
+    let sub = av1_txfm_sub(from)
+    let w = av1_txfm_w(from)
+    let h = av1_txfm_h(from)
+    let htw4 = w >> 1
+    let hth4 = h >> 1
+    av1_decomp_tx(txa, base, sub, depth + 1, y_off * 2, x_off * 2, tx_masks)
+    if w >= h {
+      av1_decomp_tx(
+        txa, base + htw4, sub, depth + 1, y_off * 2, x_off * 2 + 1, tx_masks,
+      )
+    }
+    if h >= w {
+      av1_decomp_tx(
+        txa, base + hth4 * 32, sub, depth + 1, y_off * 2 + 1, x_off * 2,
+        tx_masks,
+      )
+      if w >= h {
+        av1_decomp_tx(
+          txa, base + hth4 * 32 + htw4, sub, depth + 1, y_off * 2 + 1,
+          x_off * 2 + 1, tx_masks,
+        )
+      }
+    }
+  } else {
+    let lw = av1_txfm_lw(from)
+    let lh = av1_txfm_lh(from)
+    let w = av1_txfm_w(from)
+    let h = av1_txfm_h(from)
+    let val_w = av1_imin(2, lw)
+    let val_h = av1_imin(2, lh)
+    let n = 1 << lw
+    for y in 0..<h {
+      for x in 0..<n {
+        txa[base + y * 32 + x] = val_w
+        txa[base + 2048 + y * 32 + x] = val_h
+      }
+      txa[base + 1024 + y * 32] = w
+    }
+    for x in 0..<n {
+      txa[base + 3072 + x] = h
+    }
+  }
+}
+
+///|
+/// `mask_edges_inter`: block and tx edges for an inter block, including
+/// the `skip` shortcut that avoids inner tx edges. Updates the a/l
+/// contexts with the right/bottom tx widths.
+fn av1_mask_edges_inter(
+  fy : FixedArray[UInt],
+  by4 : Int32,
+  bx4 : Int32,
+  w4 : Int32,
+  h4 : Int32,
+  skip : Bool,
+  max_tx : Int32,
+  tx_masks : FixedArray[Int32],
+  a : FixedArray[Int32],
+  a_off : Int32,
+  l : FixedArray[Int32],
+  l_off : Int32,
+) -> Unit {
+  let txa = FixedArray::make(4096, 0)
+  let tw = av1_txfm_w(max_tx)
+  let th = av1_txfm_h(max_tx)
+  let mut y_off = 0
+  let mut y = 0
+  while y < h4 {
+    let mut x_off = 0
+    let mut x = 0
+    while x < w4 {
+      av1_decomp_tx(txa, y * 32 + x, max_tx, 0, y_off, x_off, tx_masks)
+      x = x + tw
+      x_off = x_off + 1
+    }
+    y = y + th
+    y_off = y_off + 1
+  }
+  // left block edge
+  let mut mask : UInt = (1 : UInt) << by4
+  for yy in 0..<h4 {
+    let sidx : Int32 = if mask >= 0x10000U { 1 } else { 0 }
+    let smask = if sidx != 0 { mask >> 16 } else { mask }
+    let i = av1_fy_i(0, bx4, av1_imin(txa[yy * 32], l[l_off + yy]), sidx)
+    fy[i] = fy[i] | smask
+    mask = mask << 1
+  }
+  // top block edge
+  let mut mask2 : UInt = (1 : UInt) << bx4
+  for xx in 0..<w4 {
+    let sidx : Int32 = if mask2 >= 0x10000U { 1 } else { 0 }
+    let smask = if sidx != 0 { mask2 >> 16 } else { mask2 }
+    let i = av1_fy_i(1, by4, av1_imin(txa[2048 + xx], a[a_off + xx]), sidx)
+    fy[i] = fy[i] | smask
+    mask2 = mask2 << 1
+  }
+  if !skip {
+    // inner (tx) left|right edges
+    let mut mask3 : UInt = (1 : UInt) << by4
+    for yy in 0..<h4 {
+      let sidx : Int32 = if mask3 >= 0x10000U { 1 } else { 0 }
+      let smask = if sidx != 0 { mask3 >> 16 } else { mask3 }
+      let mut ltx = txa[yy * 32]
+      let mut step = txa[1024 + yy * 32]
+      let mut xx = step
+      while xx < w4 {
+        let rtx = txa[yy * 32 + xx]
+        let i = av1_fy_i(0, bx4 + xx, av1_imin(rtx, ltx), sidx)
+        fy[i] = fy[i] | smask
+        ltx = rtx
+        step = txa[1024 + yy * 32 + xx]
+        xx = xx + step
+      }
+      mask3 = mask3 << 1
+    }
+    // inner (tx) top|bottom edges
+    let mut mask4 : UInt = (1 : UInt) << bx4
+    for xx in 0..<w4 {
+      let sidx : Int32 = if mask4 >= 0x10000U { 1 } else { 0 }
+      let smask = if sidx != 0 { mask4 >> 16 } else { mask4 }
+      let mut ttx = txa[2048 + xx]
+      let mut step = txa[3072 + xx]
+      let mut yy = step
+      while yy < h4 {
+        let btx = txa[2048 + yy * 32 + xx]
+        let i = av1_fy_i(1, by4 + yy, av1_imin(ttx, btx), sidx)
+        fy[i] = fy[i] | smask
+        ttx = btx
+        step = txa[3072 + yy * 32 + xx]
+        yy = yy + step
+      }
+      mask4 = mask4 << 1
+    }
+  }
+  for yy in 0..<h4 {
+    l[l_off + yy] = txa[yy * 32 + w4 - 1]
+  }
+  for xx in 0..<w4 {
+    a[a_off + xx] = txa[2048 + (h4 - 1) * 32 + xx]
+  }
+}
+
+///|
+/// `dav1d_create_lf_mask_inter` (level cache + per-128-area masks).
+/// `lf_level` is the `[4]` per-4x4 level cache, `lvl` the per-segment
+/// `[seg][dir][ref][mode]` table.
+pub fn av1_create_lf_mask_inter(
+  lf_level : FixedArray[Int32],
+  lvl : FixedArray[Int32],
+  b4_stride : Int32,
+  frame_bw : Int32,
+  frame_bh : Int32,
+  ss_h : Int32,
+  ss_v : Int32,
+  fy : FixedArray[UInt],
+  fuv : FixedArray[UInt],
+  bx : Int32,
+  by : Int32,
+  skip : Bool,
+  bs : Int32,
+  ytx : Int32,
+  tx_masks : FixedArray[Int32],
+  uvtx : Int32,
+  ay : FixedArray[Int32],
+  ay_off : Int32,
+  ly : FixedArray[Int32],
+  ly_off : Int32,
+  auv : FixedArray[Int32],
+  auv_off : Int32,
+  luv : FixedArray[Int32],
+  luv_off : Int32,
+  has_chroma : Bool,
+  seg : Int32,
+) -> Unit {
+  let bw4 = av1_imin(frame_bw - bx, av1_bdim(bs, 0))
+  let bh4 = av1_imin(frame_bh - by, av1_bdim(bs, 1))
+  let bx4 = bx & 31
+  let by4 = by & 31
+  if bw4 > 0 && bh4 > 0 {
+    let v_level = lvl[seg * 64 + 0 * 16]
+    let h_level = lvl[seg * 64 + 1 * 16]
+    for y in 0..<bh4 {
+      for x in 0..<bw4 {
+        let o = ((by + y) * b4_stride + (bx + x)) * 4
+        lf_level[o + 0] = v_level
+        lf_level[o + 1] = h_level
+      }
+    }
+    av1_mask_edges_inter(
+      fy, by4, bx4, bw4, bh4, skip, ytx, tx_masks, ay, ay_off, ly, ly_off,
+    )
+  }
+  if !has_chroma {
+    return
+  }
+  let cbw4 = av1_imin(
+    ((frame_bw + ss_h) >> ss_h) - (bx >> ss_h),
     (av1_bdim(bs, 0) + ss_h) >> ss_h,
   )
   let cbh4 = av1_imin(
-    ((self.bh + ss_v) >> ss_v) - (by >> ss_v),
+    ((frame_bh + ss_v) >> ss_v) - (by >> ss_v),
     (av1_bdim(bs, 1) + ss_v) >> ss_v,
   )
   if cbw4 <= 0 || cbh4 <= 0 {
@@ -421,14 +664,14 @@ fn Av1FrameCtx::create_lf_mask_intra(
   let v_level = lvl[seg * 64 + 3 * 16]
   for y in 0..<cbh4 {
     for x in 0..<cbw4 {
-      let o = (((by >> ss_v) + y) * self.b4_stride + ((bx >> ss_h) + x)) * 4
-      self.lf_level[o + 2] = u_level
-      self.lf_level[o + 3] = v_level
+      let o = (((by >> ss_v) + y) * b4_stride + ((bx >> ss_h) + x)) * 4
+      lf_level[o + 2] = u_level
+      lf_level[o + 3] = v_level
     }
   }
   av1_mask_edges_chroma(
-    mask.fuv, cby4, cbx4, cbw4, cbh4, uvtx, auv, auv_off, luv, luv_off, ss_h,
-    ss_v,
+    fuv, cby4, cbx4, cbw4, cbh4, skip, uvtx, auv, auv_off, luv, luv_off,
+    ss_h, ss_v,
   )
 }
 

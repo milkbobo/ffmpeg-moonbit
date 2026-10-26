@@ -3012,3 +3012,32 @@ superblock 行），否则行环槽位越界。
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_inter_warp_vectors` **4/4**，全量测试 **934/934**。
+
+## 82. 2026-10-26 AV1 帧间环路滤波掩码（decomp_tx / mask_edges_inter）
+
+补齐 `lf_mask.c` 的 inter 分支：`av1_decomp_tx` 按 `tx_split` 递归
+展开每个 4x4 的 tx 宽度（log2 截到 2）与步长上下文；
+`av1_mask_edges_inter` 写块左/上边与内部 tx 边（skip 时跳过内部边），
+并回写 a/l 的右/下 tx 宽度；`av1_mask_edges_chroma` 增加 `skip_inter`
+参数（intra 调用传 false），从而与 dav1d 的 chroma skip 语义一致。
+新增自由函数 `av1_create_lf_mask_inter`（显式传入 4x4 级缓存、
+b4_stride、帧宽高、色度移位、mask 数组与 a/l），供后续帧间块解码
+调用；intra 路径保持不变。
+
+对拍探针 `.scratch/av1/lfmask_dump.c`（不入库）直接 `#include`
+dav1d 1.5.1 `lf_mask.c`，调用真实 `dav1d_create_lf_mask_inter`，
+覆盖 8 组合法 block/tx、48 个随机位置、skip、`tx_split`、四种
+pixel layout；对 `filter_y`/`filter_uv`/级缓存/a/l 做哈希比较。
+生成器 `scripts/_emit_av1_lf_mask_vectors.py` → 独立测试包
+`av1_lf_mask_vectors`（1/1，48 组）。
+
+坑：①C 的 chroma 分支只看 `auv != NULL`，不看 layout，I400 调用者
+必须传 NULL；探针起初无条件传数组，导致 I400 的 chroma 哈希与
+MoonBit 不符；②`case_set_upto16` 的写入个数是 `1<<t_dim->lw`
+（未截断），而写入值是 `min(2, lw)`；③`dav1d_memset_pow2[lw]`
+写 `1<<lw` 个字节的 `t_dim->h`，两者都按未截断的 lw 取个数；
+④最初把 inter 包装改成公开方法时误伤了 intra 函数（同名片段被
+全局替换），已按函数切片修复并由关键帧真实码流测试回归。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_lf_mask_vectors` **1/1**，全量测试 **935/935**。
