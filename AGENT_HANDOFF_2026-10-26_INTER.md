@@ -1,5 +1,12 @@
 # AV1 帧间帧解码交接报告（2026-10-26）
 
+> **本文已被取代**：块级工作（原 §3.1/§3.2）已全部完成并提交至
+> `509e30e`（§74–§94，956/956 绿）。当前唯一剩余工作是**帧间整帧
+> 入口**，完整调研结论与实施路线见
+> [AGENT_HANDOFF_2026-10-26_FRAME_ENTRY.md](AGENT_HANDOFF_2026-10-26_FRAME_ENTRY.md)
+> （含 decode_b 接线全图/CDF 继承/槽位刷新/superres/GM warp 缺口
+> 与逐步验收方案）。下文仅作历史参考与工具链速查。
+
 > 后续进展：`PORTING_HISTORY.md` §74–§84 已加入 refmvs 行状态、
 > 参考/MV 模式语法原语、参考槽位与上采样宽度语义、复合 mask/
 > inter-intra/motion variation/subpel 滤波器语法、warp 邻居匹配与
