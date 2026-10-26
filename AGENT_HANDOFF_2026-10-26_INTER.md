@@ -5,8 +5,9 @@
 > inter-intra/motion variation/subpel 滤波器语法、warp 邻居匹配与
 > 仿射模型推导、帧间环路滤波掩码，以及帧间块语法驱动；块驱动已完成
 > 与 dav1d `decode_b` inter 分支的 96 组随机位级对拍（含 msac 终态），
-> 并新增 warp 平面预测驱动（§85），Wasm 全量测试 941/941；下一步是
-> 帧间重建（OBMC/inter-intra/复合合成/残差）与整帧入口。
+> 并新增 warp 平面预测/prep 与复合预测合成（§85–§86），Wasm 全量
+> 测试 944/944；下一步是帧间重建（OBMC/inter-intra/残差叠加）与
+> 整帧入口。
 > 本文 §3.1 对 `save_tmvs` 实参的描述有误；真实实参见
 > dav1d `src/refmvs.h`，为 `rt->r + 6`。
 

@@ -160,3 +160,65 @@ pub fn av1_mc_warp_predict_plane(
   }
   dst
 }
+
+///|
+/// Warp-predict a whole plane at compound `prep` precision: same 8x8 loop as
+/// `av1_mc_warp_predict_plane`, but each block uses `warp_affine_8x8t`.
+pub fn av1_mc_warp_prepare_plane(
+  src : FixedArray[Int32],
+  stride : Int32,
+  ref_w : Int,
+  ref_h : Int,
+  bx4 : Int,
+  by4 : Int,
+  bw4 : Int,
+  bh4 : Int,
+  ss_h : Int,
+  ss_v : Int,
+  bitdepth : Int32,
+  matrix : FixedArray[Int32],
+  alpha : Int,
+  beta : Int,
+  gamma : Int,
+  delta : Int,
+) -> FixedArray[Int32] {
+  let h_mul = 4 >> ss_h
+  let v_mul = 4 >> ss_v
+  let width = (ref_w + ss_h) >> ss_h
+  let height = (ref_h + ss_v) >> ss_v
+  let w = bw4 * h_mul
+  let h = bh4 * v_mul
+  let dst = FixedArray::make(w * h, 0)
+  let abcd : FixedArray[Int32] = [
+    matrix[2] - 0x10000, matrix[3], matrix[4], matrix[5] - 0x10000,
+  ]
+  let mut y = 0
+  while y < h {
+    let src_y = by4 * 4 + ((y + 4) << ss_v)
+    let mat3_y : Int64 = matrix[3].to_int64() * src_y.to_int64() +
+      matrix[0].to_int64()
+    let mat5_y : Int64 = matrix[5].to_int64() * src_y.to_int64() +
+      matrix[1].to_int64()
+    let mut x = 0
+    while x < w {
+      let src_x = bx4 * 4 + ((x + 4) << ss_h)
+      let mvx : Int64 = (matrix[2].to_int64() * src_x.to_int64() + mat3_y) >> ss_h
+      let mvy : Int64 = (matrix[4].to_int64() * src_x.to_int64() + mat5_y) >> ss_v
+      let dx = (mvx >> 16).to_int() - 4
+      let mx = ((mvx & 0xffffL).to_int() - alpha * 4 - beta * 7) & -64
+      let dy = (mvy >> 16).to_int() - 4
+      let my = ((mvy & 0xffffL).to_int() - gamma * 4 - delta * 4) & -64
+      let block = av1_mc_warp_affine_8x8t(
+        src, stride, width, height, dx, dy, abcd, mx, my, bitdepth,
+      )
+      for yy in 0..<8 {
+        for xx in 0..<8 {
+          dst[(y + yy) * w + x + xx] = block[yy * 8 + xx]
+        }
+      }
+      x = x + 8
+    }
+    y = y + 8
+  }
+  dst
+}

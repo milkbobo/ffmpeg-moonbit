@@ -3116,3 +3116,25 @@ dav1d `emu_edge`。支持 4:2:0/4:2:2/4:4:4 与 8/10/12-bit。
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_mc_vectors` **18/18**，全量测试 **941/941**。
+
+## 86. 2026-10-26 AV1 复合预测合成与 warp prep 平面驱动
+
+`av1_mc_core/compound.mbt` 新增 `av1_mc_compound_blend`：按 dav1d
+`recon_inter_block` 的分派把两块 `prep` 合成——AVG（`avg`）、
+WEIGHTED_AVG（`w_avg`，权重来自 `jnt_weights`）、SEG（`w_mask`，
+`mask_sign` 交换输入并参与掩码）与 WEDGE（`mask`，掩码由调用方按
+亮度/色度选择，输入按 `mask_sign` 交换）。WEDGE/SEG 的输入顺序与
+dav1d `tmp[mask_sign]` / `tmp[!mask_sign]` 一致。
+
+`av1_mc_core/warp.mbt` 新增 `av1_mc_warp_prepare_plane`：与
+`av1_mc_warp_predict_plane` 相同的 8x8 相位/ABCD 遍历，改用
+`warp_affine_8x8t` 输出复合预测精度的 `prep` 平面（全局 warp 复合的
+两参考准备）。
+
+测试（`av1_mc_vectors/compound_blend_test.mbt`）：AVG 与直接 `avg` 核一致；
+WEIGHTED_AVG 使用传入权重且忽略 `mask_sign`；WEDGE 在 `mask_sign=0/1`
+下分别等价于 `mask(a,b)` / `mask(b,a)`；SEG 等价于 `w_mask` 的对应
+符号与输入顺序；warp prep 8x8 与直接 `warp_affine_8x8t` 一致。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_mc_vectors` **21/21**，全量测试 **944/944**。

@@ -115,3 +115,38 @@ pub fn av1_mc_w_avg(
   }
   dst
 }
+
+///|
+/// Finish compound prediction from two `prep` planes (dav1d
+/// `recon_inter_block` blend dispatch). `comp_type` is dav1d `CompInterType`
+/// (1 weighted, 2 average, 3 segment, 4 wedge); `sign` is `mask_sign` and
+/// swaps the segment/wedge inputs. `mask` is the wedge mask (or any array
+/// for the other types). `ss_hor/ss_v` describe this plane.
+pub fn av1_mc_compound_blend(
+  prep0 : FixedArray[Int32],
+  prep1 : FixedArray[Int32],
+  comp_type : Int,
+  sign : Int,
+  weight : Int,
+  mask : FixedArray[Int32],
+  w : Int32,
+  h : Int32,
+  ss_hor : Int32,
+  ss_v : Int32,
+  bitdepth : Int32,
+) -> FixedArray[Int32] {
+  if comp_type == 2 {
+    return av1_mc_avg(prep0, prep1, bitdepth)
+  }
+  if comp_type == 1 {
+    return av1_mc_w_avg(prep0, prep1, weight, bitdepth)
+  }
+  let (a, b) = if sign != 0 { (prep1, prep0) } else { (prep0, prep1) }
+  if comp_type == 3 {
+    let (dst, _) = av1_mc_diffwtd_mask(
+      a, b, w, h, sign, ss_hor, ss_v, bitdepth,
+    )
+    return dst
+  }
+  av1_mc_mask(a, b, mask, bitdepth)
+}
