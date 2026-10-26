@@ -2978,3 +2978,37 @@ filter 为 3 符号、wedge_idx 为 15 符号。
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_inter_syntax_vectors` **4/4**，全量测试 **930/930**。
+
+## 81. 2026-10-26 AV1 warp 邻居匹配与仿射模型推导
+
+新增 `av1_warpmv.mbt`（dav1d `src/warpmv.c` 完整移植）：257 项
+`div_lut`、`resolve_divisor_32/64`、`iclip_wmp`、
+`get_shear_params`（alpha/beta/gamma/delta 与发散判定）、
+`find_affine_int`（int64 最小二乘、对角/非对角权重裁剪）以及
+`set_affine_mv2d`（帧级 GM 的 warp 锚定）。
+
+新增 `av1_inter_warp.mbt`：`find_matching_ref` 在 refmvs 行环上沿
+块尺寸步进扫描上/左邻域，输出两段 32 位游程掩码（bit 32 表示
+top-left / top-right），最多 8 个候选；`derive_warpmv` 按掩码取样
+（含 `-off` 左对齐特例）、以 `4 * clip(max(bw4,bh4),4,28)` 为阈值
+剔除离群样本、压缩后做仿射拟合，拟合或 shear 检查失败时回退
+identity。至此 `motion_mode == MM_WARP` 的矩阵来源齐备（warp MC
+核已在 §69 就绪）。
+
+对拍探针 `.scratch/av1/warp_dump.c`（不入库）**直接链接 dav1d
+`warpmv.c`**，并原样拷贝 `decode.c` 的 `find_matching_ref` /
+`derive_warpmv`（仅把 `t->rt.r`/`t->bx`/`t->by`/`t->ts->tiling.col_end`
+换成探针全局）；覆盖 64 个随机矩阵的 shear、64 组点集的最小二乘、
+32 组 `set_affine_mv2d`、96 组合成行环的掩码+推导（矩阵/type/
+shear 全比较）。生成器 `scripts/_emit_av1_warpmv_vectors.py` →
+独立测试包 `av1_inter_warp_vectors`（4/4）。
+
+坑：①拷贝 `derive_warpmv` 时 `bs()` 宏定义在 `find_matching_ref`
+尾部被 `#undef`，推导函数内要重新 `#define`；②`find_matching_ref`
+假定 `have_top/have_left` 与块位置一致，随机测试若在 `bx=0` 置
+`have_left` 会读 `[-1]` 列（C 越界、MoonBit 越界 panic）；
+③合成行环的 `by` 需满足 `(by&31)+h4 <= 32`（真实解码中块不跨
+superblock 行），否则行环槽位越界。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_inter_warp_vectors` **4/4**，全量测试 **934/934**。

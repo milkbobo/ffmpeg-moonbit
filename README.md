@@ -31,7 +31,9 @@ refmvs 的候选查找、时域加载/保存、superblock 行环和单/双参考
 superblock 行环、空间发布、时域保存、缩放投影与等值游程快进）；
 参考帧槽位按上采样（width[0]）网格管理时域 MV 图。MV 之后的
 帧间语法（复合 mask/jnt、inter-intra、motion variation、subpel
-滤波器）也已与 dav1d C 逐位对拍。帧间块重建与整帧解码入口仍待接入。
+滤波器）也已与 dav1d C 逐位对拍；warp 邻居匹配与仿射模型推导
+（find_matching_ref/derive_warpmv/warpmv.c）同样完成。帧间块重建与
+整帧解码入口仍待接入。
 
 ## 构建与测试
 
@@ -43,7 +45,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **930/930** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **934/934** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

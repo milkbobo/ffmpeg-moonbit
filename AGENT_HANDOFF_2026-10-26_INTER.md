@@ -1,10 +1,10 @@
 # AV1 帧间帧解码交接报告（2026-10-26）
 
-> 后续进展：`PORTING_HISTORY.md` §74–§80 已加入 refmvs 行状态、
-> 参考/MV 模式语法原语、参考槽位与上采样宽度语义，以及复合 mask、
-> inter-intra、motion variation、subpel 滤波器语法；refmvs 状态机与
-> 帧间语法均已用 dav1d C 随机对拍，Wasm 全量测试 930/930；
-> 帧间整帧解码仍未完成。
+> 后续进展：`PORTING_HISTORY.md` §74–§81 已加入 refmvs 行状态、
+> 参考/MV 模式语法原语、参考槽位与上采样宽度语义、复合 mask/
+> inter-intra/motion variation/subpel 滤波器语法，以及 warp 邻居匹配
+> 与仿射模型推导；refmvs 状态机、帧间语法和 warp 推导均已用 dav1d C
+> 随机对拍，Wasm 全量测试 934/934；帧间整帧解码仍未完成。
 > 本文 §3.1 对 `save_tmvs` 实参的描述有误；真实实参见
 > dav1d `src/refmvs.h`，为 `rt->r + 6`。
 

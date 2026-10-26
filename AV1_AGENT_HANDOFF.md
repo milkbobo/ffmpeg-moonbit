@@ -6,10 +6,10 @@
 
 > **2026-10-26 帧间交接请先读
 > [AGENT_HANDOFF_2026-10-26_INTER.md](AGENT_HANDOFF_2026-10-26_INTER.md)**
-> （§67–§80 已推送：refmvs 的 find/初始化/行环/load/save/参考槽位，
-> 状态机与 MV 之后的帧间语法已用 dav1d C 随机对拍，宽度按 superres
-> 上采样网格，930/930；仍需接入 decode_b inter 与整帧入口）。以下为
-> 2026-10-25 的快照：
+> （§67–§81 已推送：refmvs 的 find/初始化/行环/load/save/参考槽位，
+> 状态机、MV 之后的帧间语法与 warp 仿射推导均已用 dav1d C 随机对拍，
+> 宽度按 superres 上采样网格，934/934；仍需接入 decode_b inter 与
+> 整帧入口）。以下为 2026-10-25 的快照：
 
 > **2026-10-25 最新进展请先读
 > [AGENT_HANDOFF_2026-10-25_SEG.md](AGENT_HANDOFF_2026-10-25_SEG.md)**：
