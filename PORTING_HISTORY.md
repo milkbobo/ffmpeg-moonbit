@@ -2912,3 +2912,36 @@ superblock 尺寸。
 `moon check --target wasm --deny-warn --no-render`、`moon info -p libavcodec`
 通过；`av1_refmvs_vectors` **26/26**，帧头向量 **2/2**，全量测试
 **920/920**。
+
+## 79. 2026-10-26 AV1 refmvs 状态机随机对拍与上采样宽度语义
+
+新增 `libavcodec/av1_refmvs_vectors/refmvs_state_parity_test.mbt`（生成器
+`scripts/_emit_av1_refmvs_state_vectors.py`）。探针
+`.scratch/av1/state_dump.c`（不入库）直接 `#include` dav1d 1.5.1
+`refmvs.c`，取 `dump_refmvs.c` 的 static 符号，覆盖五组几何：
+64×80/64×56/128×80/128×96/64×72 等（各含奇数尾行与 sb64/sb128），
+每个 sbrow 依次 `tile_sbrow_init`、8 次随机 `splat_mv_c`（随机
+ref/bs/mf、±4200 MV 触发 4096 保存门限）、`save_tmvs_c`，对
+37 槽行环（含奇偶 sby 交换，跳过 dav1d 的 NULL 槽 1/3）、当前 rp
+和 16 行 rp_proj 做 31 进制模 1e9+7 哈希；随后每组几何再用三组
+`load_tmvs_c`：整幅、部分列 + SB 对齐的次行带、超宽列（内部截断），
+源时域图按 3 列 × 2 行的等值游程构造，MV 为 ±64 的倍数，覆盖
+正/负投影、ref2cur/ref2ref 缩放、跨 8×8 时域块边界与游程快进。
+5 例空间哈希与 15 例投影哈希全部与 C 一致。
+
+对拍陷阱：`load_tmvs` 的 `row_start8` 必须是 superblock 行对齐。
+dav1d 清行时用 `&rf->rp_proj[(row_start8 & 15) * stride]` 再线性前进
+`row_end8 - row_start8` 行；行带若从 10 起且长 10 行会越过 16 行
+环形缓冲（C 侧越界写）。MoonBit 按 `(y & 15)` 逐行取模，只在合法
+SB 行带上与 C 等价，因此探针改用对齐行带；这不是移植偏差。
+
+修正 refmvs 宽度语义：dav1d `dav1d_refmvs_init_frame` 的
+`iw8/rp_stride` 与参考尺寸门都用 `frame_hdr->width[0]`（superres
+上采样后的宽度），不是编码宽度 `width[1]`。`Av1RefmvsReference` /
+`Av1RefmvsPreparedFrame` 的 `coded_width` 更名 `upscaled_width`，
+`prepare_header` 改传 `hdr.upscaled_width`；尺寸门仍先按 8 像素
+向上取整。新增测试验证两个上采样宽度同为 128 的 superres 帧可共享
+时域 MV 图，而编码宽度相同、上采样宽度 119 的参考被排除。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_refmvs_vectors` **32/32**，帧头向量 **2/2**，全量测试 **926/926**。

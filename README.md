@@ -27,8 +27,10 @@ MC（8-tap/bilinear put+prep）、superres resize 与 warp 仿射
 8x8（put/prep），支持
 8/10/12-bit、边界复制和窄块滤波，并与 dav1d C 参考输出对拍。
 refmvs 的候选查找、时域加载/保存、superblock 行环和单/双参考
-模式/MV 解码原语已加入；参考帧管理、帧间块重建和整帧解码入口
-仍待接入。
+模式/MV 解码原语已加入，并用 dav1d C 随机状态机对拍（16/32 像素
+superblock 行环、空间发布、时域保存、缩放投影与等值游程快进）；
+参考帧槽位按上采样（width[0]）网格管理时域 MV 图。帧间块重建与
+整帧解码入口仍待接入。
 
 ## 构建与测试
 
@@ -40,7 +42,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **904/904** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **926/926** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

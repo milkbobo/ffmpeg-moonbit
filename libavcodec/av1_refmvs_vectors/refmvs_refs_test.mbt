@@ -46,7 +46,7 @@ test "refmvs reference slots preserve a temporal map across refreshes" {
 }
 
 ///|
-test "refmvs reference slots gate temporal maps by rounded coded size" {
+test "refmvs reference slots gate temporal maps by rounded upscaled size" {
   let (rf, _, _, _) = av1_refmvs_test_build(1)
   let slots = @libavcodec.av1_refmvs_reference_store_new()
   let temporal : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(
@@ -54,14 +54,15 @@ test "refmvs reference slots gate temporal maps by rounded coded size" {
   )
   temporal[6 * 16 + 3] = { mv: (128, -192), ref_: 1 }
   let history : FixedArray[Int] = FixedArray::make(7, 2)
-  // Width 127 rounds to the same 16 8x8 columns as width 128.
+  // Superres-coded width 127 still has a 128-pixel upscaled grid, the
+  // 16 8x8 columns refmvs stores motion on.
   slots.slots[0] = Some({
-    poc: 3, coded_width: 127, height: 128,
+    poc: 3, upscaled_width: 127, height: 128,
     ref_poc: history, rp: Some(temporal),
   })
-  // Width 119 rounds to 15 columns and must be excluded.
+  // Upscaled width 119 rounds to 15 columns and must be excluded.
   slots.slots[1] = Some({
-    poc: 3, coded_width: 119, height: 128,
+    poc: 3, upscaled_width: 119, height: 128,
     ref_poc: history, rp: Some(temporal),
   })
   slots.refresh_without_mvs(1, 128, 128, 252)
@@ -125,11 +126,11 @@ test "refmvs later temporal reference replaces earlier projection" {
   let last_history : FixedArray[Int] = FixedArray::make(7, 2)
   let bwd_history : FixedArray[Int] = FixedArray::make(7, 6)
   slots.slots[0] = Some({
-    poc: 3, coded_width: 128, height: 128,
+    poc: 3, upscaled_width: 128, height: 128,
     ref_poc: last_history, rp: Some(last_map),
   })
   slots.slots[4] = Some({
-    poc: 7, coded_width: 128, height: 128,
+    poc: 7, upscaled_width: 128, height: 128,
     ref_poc: bwd_history, rp: Some(bwd_map),
   })
   let refs : Array[Int] = [0, 1, 2, 3, 4, 5, 6]
@@ -144,4 +145,44 @@ test "refmvs later temporal reference replaces earlier projection" {
   assert_eq(frame.state.init.mfmv_ref[1], 4)
   frame.state.begin_sbrow(0, 0, 16, 0, 8)
   assert_eq(frame.state.tile.rp_proj[4 * 16 + 4].mv, (16, 0))
+}
+
+///|
+test "refmvs superres frames share temporal maps on the upscaled grid" {
+  let (rf, _, _, _) = av1_refmvs_test_build(1)
+  let slots = @libavcodec.av1_refmvs_reference_store_new()
+  let temporal : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(
+    16 * 16, _ => { mv: (0, 0), ref_: 0 },
+  )
+  temporal[6 * 16 + 3] = { mv: (128, -192), ref_: 1 }
+  let history : FixedArray[Int] = FixedArray::make(7, 2)
+  // Both pictures upscale to 128 pixels, so they share the 16x16-column
+  // motion grid even though their superres-coded widths differ.
+  slots.slots[0] = Some({
+    poc: 3, upscaled_width: 128, height: 128,
+    ref_poc: history, rp: Some(temporal),
+  })
+  // A picture that only matches on coded width is not eligible: refmvs
+  // compares the upscaled grid (dav1d `width[0]`), not the coded width.
+  slots.slots[1] = Some({
+    poc: 3, upscaled_width: 119, height: 128,
+    ref_poc: history, rp: Some(temporal),
+  })
+  slots.refresh_without_mvs(1, 128, 128, 252)
+  let frame = match slots.prepare_frame(
+    [0, 2, 2, 3, 4, 5, 6], 4, 5, 128, 128, true, rf, 16,
+  ) {
+    Ok(v) => v
+    Err(e) => fail(e)
+  }
+  inspect(frame.state.tile.iw8, content="16")
+  inspect(frame.state.init.mfmv_ref[0], content="0")
+  assert_true(frame.state.init.use_ref_frame_mvs)
+  let rejected = match slots.prepare_frame(
+    [1, 2, 2, 3, 4, 5, 6], 4, 5, 128, 128, true, rf, 16,
+  ) {
+    Ok(v) => v
+    Err(e) => fail(e)
+  }
+  assert_true(!rejected.state.init.use_ref_frame_mvs)
 }

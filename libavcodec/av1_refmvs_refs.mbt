@@ -1,9 +1,11 @@
 ///|
 /// refmvs data retained in one AV1 reference slot. `ref_poc` is the seven
 /// order hints used while decoding this picture, as in dav1d `refs[i].refpoc`.
+/// `upscaled_width` is dav1d's `frame_hdr->width[0]`: the post-superres grid
+/// that refmvs stores motion on.
 pub(all) struct Av1RefmvsReference {
   poc : Int
-  coded_width : Int
+  upscaled_width : Int
   height : Int
   ref_poc : FixedArray[Int]
   rp : FixedArray[Av1Rtb]?
@@ -26,7 +28,7 @@ pub fn av1_refmvs_reference_store_new() -> Av1RefmvsReferenceStore {
 pub(all) struct Av1RefmvsPreparedFrame {
   state : Av1RefmvsFrameState
   poc : Int
-  coded_width : Int
+  upscaled_width : Int
   height : Int
   ref_poc : FixedArray[Int]
 }
@@ -41,7 +43,7 @@ pub fn Av1RefmvsReferenceStore::refresh(
 ) -> Unit {
   let reference : Av1RefmvsReference = {
     poc: frame.poc,
-    coded_width: frame.coded_width,
+    upscaled_width: frame.upscaled_width,
     height: frame.height,
     ref_poc: frame.ref_poc.copy(),
     rp: Some(frame.state.rp),
@@ -59,12 +61,12 @@ pub fn Av1RefmvsReferenceStore::refresh(
 pub fn Av1RefmvsReferenceStore::refresh_without_mvs(
   self : Av1RefmvsReferenceStore,
   poc : Int,
-  coded_width : Int,
+  upscaled_width : Int,
   height : Int,
   refresh_mask : Int,
 ) -> Unit {
   let reference : Av1RefmvsReference = {
-    poc, coded_width, height,
+    poc, upscaled_width, height,
     ref_poc: FixedArray::make(7, 0),
     rp: None,
   }
@@ -84,19 +86,19 @@ pub fn Av1RefmvsReferenceStore::prepare_frame(
   ref_slots : Array[Int],
   order_hint_bits : Int,
   poc : Int,
-  coded_width : Int,
+  upscaled_width : Int,
   height : Int,
   use_ref_frame_mvs : Bool,
   rf : Av1Rf,
   sbsz : Int,
 ) -> Result[Av1RefmvsPreparedFrame, String] {
-  if ref_slots.length() != 7 || coded_width <= 0 || height <= 0 ||
+  if ref_slots.length() != 7 || upscaled_width <= 0 || height <= 0 ||
     (sbsz != 16 && sbsz != 32) {
     return Err("av1 refmvs: invalid frame geometry or reference list")
   }
-  let iw8 = (coded_width + 7) >> 3
+  let iw8 = (upscaled_width + 7) >> 3
   let ih8 = (height + 7) >> 3
-  let rp_stride = (coded_width + 127) >> 7 << 4
+  let rp_stride = (upscaled_width + 127) >> 7 << 4
   let ref_poc = FixedArray::make(7, 0)
   let has_tmvs = FixedArray::make(7, false)
   let ref_ref_poc : FixedArray[FixedArray[Int]] = FixedArray::makei(
@@ -120,9 +122,10 @@ pub fn Av1RefmvsReferenceStore::prepare_frame(
     for j in 0..<7 {
       ref_ref_poc[i][j] = reference.ref_poc[j]
     }
-    // dav1d compares 4x4 dimensions after rounding both widths/heights
-    // up to 8-pixel boundaries, not the raw coded dimensions.
-    let ref_iw8 = (reference.coded_width + 7) >> 3
+    // dav1d rounds both widths/heights up to 8-pixel boundaries before
+    // comparing `width[0]` (upscaled), so superres-coded references only
+    // share temporal motion when their upscaled grids match.
+    let ref_iw8 = (reference.upscaled_width + 7) >> 3
     let ref_ih8 = (reference.height + 7) >> 3
     if ref_iw8 == iw8 && ref_ih8 == ih8 {
       if reference.rp is Some(map) {
@@ -151,7 +154,7 @@ pub fn Av1RefmvsReferenceStore::prepare_frame(
     state: av1_refmvs_frame_state_new(
       frame_rf, init, rp_ref, rp_stride, iw8, ih8, sbsz,
     ),
-    poc, coded_width, height, ref_poc,
+    poc, upscaled_width, height, ref_poc,
   } |> Ok
 }
 
@@ -196,7 +199,7 @@ pub fn Av1RefmvsReferenceStore::prepare_header(
   }
   self.prepare_frame(
     refs, seq.order_hint_bits, hdr.order_hint,
-    hdr.width, hdr.height, hdr.use_ref_frame_mvs,
+    hdr.upscaled_width, hdr.height, hdr.use_ref_frame_mvs,
     rf, if seq.use_128x128_superblock { 32 } else { 16 },
   )
 }

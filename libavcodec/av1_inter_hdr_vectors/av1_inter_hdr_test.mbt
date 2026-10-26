@@ -38,6 +38,9 @@ test "av1 inter frame header parse" {
   refmvs.refresh_without_mvs(0, seq.width, seq.height, 255)
   let prepared = refmvs.prepare_header(seq, hdr).unwrap()
   inspect(prepared.poc, content="1")
+  // The motion grid follows `width[0]` (upscaled width), not the height-only
+  // reference picture geometry.
+  inspect(prepared.state.tile.iw8, content="20")
   inspect(prepared.state.tile.rp_stride, content="32")
   assert_true(!prepared.state.init.use_ref_frame_mvs)
   // Bit-exactness of the header path: the tile group must still split.

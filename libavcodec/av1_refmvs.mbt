@@ -1005,6 +1005,32 @@ pub struct Av1RefmvsFrameInit {
 }
 
 ///|
+/// Public constructor for `Av1RefmvsFrameInit`, used by state-machine
+/// parity vectors that do not derive the temporal reference selection from
+/// order hints.
+pub fn av1_refmvs_frame_init_probe(
+  sign_bias : FixedArray[Int],
+  mfmv_sign : FixedArray[Int],
+  pocdiff : FixedArray[Int],
+  mfmv_ref : FixedArray[Int],
+  mfmv_ref2cur : FixedArray[Int],
+  mfmv_ref2ref : FixedArray[FixedArray[Int]],
+  n_mfmvs : Int,
+  use_ref_frame_mvs : Bool,
+) -> Av1RefmvsFrameInit {
+  {
+    sign_bias,
+    mfmv_sign,
+    pocdiff,
+    mfmv_ref,
+    mfmv_ref2cur,
+    mfmv_ref2ref,
+    n_mfmvs,
+    use_ref_frame_mvs,
+  }
+}
+
+///|
 /// `dav1d_refmvs_init_frame` (single tile/frame thread): sign biases,
 /// poc deltas and the temporal-MV reference selection (last/bwd/altref2/
 /// altref/last2 with ref2cur/ref2ref projection distances).
