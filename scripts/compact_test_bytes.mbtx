@@ -1,0 +1,36 @@
+///|
+import {
+  "moonbitlang/x/fs",
+}
+
+// Adjacent generated base64 Bytes chunks are constant data. Keeping them
+// as one literal avoids thousands of runtime concatenations in the Wasm
+// whitebox-test initializer. The encoded bytes are unchanged.
+
+///|
+fn main raise {
+  let path = "libavcodec/aac_height_realdata_wbtest.mbt"
+  let source = @fs.read_file_to_string(path).replace_all(old="\r\n", new="\n")
+  let compact = source.replace_all(old="\" +\n  b\"", new="")
+  let out = StringBuilder()
+  for line in compact.split("\n") {
+    let parts = line.split(" : Bytes = b\"").collect()
+    if parts.length() == 2 && line.length() > 60000 && line.has_suffix("\"") {
+      let tail = parts[1].to_owned()
+      let data = tail[0:tail.length() - 1]
+      out.write_string(parts[0].to_owned() + " : Bytes = ")
+      for i = 0; i < data.length(); i = i + 60000 {
+        if i > 0 {
+          out.write_string(" +\n  ")
+        }
+        out.write_string(
+          "b\"" + data[i:(i + 60000).min(data.length())].to_owned() + "\"",
+        )
+      }
+      out.write_string("\n")
+    } else {
+      out.write_string(line.to_owned() + "\n")
+    }
+  }
+  @fs.write_string_to_file(path, out.to_string().trim_end().to_owned() + "\n")
+}

@@ -1,0 +1,117 @@
+///|
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+}
+
+///|
+fn c_field(name : String, coefficient : Bool) -> String {
+  if name == "coef_skip" {
+    return "coef.skip"
+  }
+  if coefficient {
+    return "coef." + name
+  }
+  if name == "kfym" {
+    return "kfym"
+  }
+  if name == "joint" {
+    return "mv.joint"
+  }
+  for (prefix, component) in [("mv0_", "0"), ("mv1_", "1")] {
+    if name.has_prefix(prefix) {
+      return "mv.comp[" + component + "]." + name[prefix.length():].to_owned()
+    }
+  }
+  "m." + (if name == "ref_" { "ref" } else { name })
+}
+
+///|
+fn main raise {
+  let source = @fs.read_file_to_string("libavcodec/av1_cdf.mbt")
+  let names : Array[String] = []
+  let fields : Array[String] = []
+  let mut inside = false
+  let mut coef = true
+  for line in source.split("\n") {
+    let s = line.trim().to_owned()
+    if s == "pub struct Av1CdfCtx {" {
+      inside = true
+      continue
+    }
+    if inside && s == "}" {
+      break
+    }
+    if inside && !s.has_prefix("//") && s.contains(" : FixedArray[UInt16]") {
+      let name = s.split(" : ").collect()[0].to_owned()
+      if name == "uv_mode" {
+        coef = false
+      }
+      names.push(name)
+      fields.push(c_field(name, coef))
+    }
+  }
+  guard names.length() == 82 else { fail("CDF field discovery changed") }
+  let args = @env.args()
+  if args.length() > 1 && args[1] == "--prepare" {
+    let c = StringBuilder()
+    c.write_string(
+      "#include \"config.h\"\n#include <stdio.h>\n#include <stdint.h>\n#include \"src/cdf.h\"\n#include \"src/mem.h\"\nvoid dav1d_mem_pool_push(Dav1dMemPool*p,Dav1dMemPoolBuffer*b){(void)p;(void)b;}\nDav1dMemPoolBuffer*dav1d_mem_pool_pop(Dav1dMemPool*p,size_t s){(void)p;(void)s;return NULL;}\nint main(void){static CdfContext src,dst;CdfThreadContext tc;dav1d_cdf_thread_init_static(&tc,80);dav1d_cdf_thread_copy(&src,&tc);dav1d_cdf_thread_copy(&dst,&tc);\n",
+    )
+    for i, field in fields {
+      c.write_string(
+        "{uint16_t*p=(uint16_t*)&src.\{field};for(int j=0;j<sizeof(src.\{field})/2;j++)p[j]=(j*17+\{i}*101)%30000;}\n",
+      )
+    }
+    c.write_string(
+      "Dav1dFrameHeader hdr={0};hdr.frame_type=DAV1D_FRAME_TYPE_INTER;dav1d_cdf_thread_update(&hdr,&dst,&src);\n",
+    )
+    for i, field in fields {
+      if names[i] == "intrabc" || names[i] == "kfym" {
+        continue
+      }
+      c.write_string(
+        "{uint16_t*p=(uint16_t*)&dst.\{field};uint64_t h=0;for(int j=0;j<sizeof(dst.\{field})/2;j++)h=(h*31+p[j])%1000000007;printf(\"\{names[i]} %zu %llu\\n\",sizeof(dst.\{field})/2,(unsigned long long)h);}\n",
+      )
+    }
+    c.write_string("return 0;}\n")
+    @fs.write_string_to_file(".scratch/av1/cdf_reference.c", c.to_string())
+    return
+  }
+  let out = StringBuilder()
+  out.write_string(
+    "///|\n/// Exact counter offsets and retained padding from dav1d 1.5.1\n/// dav1d_cdf_thread_update on independent deterministic input arrays.\n/// Regenerate with scripts/emit_av1_cdf_reference_vectors.mbtx.\ntest \"reference CDF counts match dav1d\" {\n  let source = @libavcodec.av1_cdf_copy_defaults(80)\n",
+  )
+  for i, name in names {
+    out.write_string(
+      "  for j in 0..<source.\{name}.length() { source.\{name}[j] = ((j * 17 + \{i} * 101) % 30000).to_uint16() }\n",
+    )
+  }
+  out.write_string("  let result = source.for_reference()\n")
+  let mut count = 0
+  for
+    line in @fs.read_file_to_string(".scratch/av1/cdf_reference.txt").split(
+      "\n",
+    ) {
+    let s = line.trim()
+    if s.is_empty() {
+      continue
+    }
+    let f = s.split(" ").collect()
+    guard f.length() == 3 else { fail("bad CDF oracle row") }
+    let name = f[0].to_owned()
+    let _ = @string.parse_int(f[1])
+    let _ = @string.parse_int64(f[2])
+    out.write_string(
+      "  assert_eq(result.\{name}.length(), \{f[1]})\n  { let mut hash = 0L\n    for value in result.\{name} { hash = (hash * 31L + value.to_int().to_int64()) % 1000000007L }\n    assert_eq(hash, \{f[2]}L, msg=\"\{name}\")\n  }\n",
+    )
+    count += 1
+  }
+  guard count == 80 else { fail("expected 80 CDF tables") }
+  out.write_string("}\n")
+  @fs.write_string_to_file(
+    "libavcodec/av1_segment_vectors/cdf_reference_test.mbt",
+    out.to_string(),
+  )
+}

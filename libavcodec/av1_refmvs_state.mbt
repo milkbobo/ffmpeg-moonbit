@@ -203,6 +203,7 @@ pub fn Av1RefmvsTileState::load_tmvs(
 /// frame's temporal MV projection after all superblock rows have been saved.
 pub(all) struct Av1RefmvsFrameState {
   rf : Av1Rf
+  hdr_use_ref_frame_mvs : Bool
   init : Av1RefmvsFrameInit
   tile : Av1RefmvsTileState
   rp : FixedArray[Av1Rtb]
@@ -218,6 +219,7 @@ pub fn av1_refmvs_frame_state_new(
   iw8 : Int,
   ih8 : Int,
   sbsz : Int,
+  hdr_use_ref_frame_mvs? : Bool = rf.use_ref_frame_mvs,
 ) -> Av1RefmvsFrameState {
   let frame_rf : Av1Rf = {
     iw4: rf.iw4,
@@ -232,6 +234,7 @@ pub fn av1_refmvs_frame_state_new(
   }
   {
     rf: frame_rf,
+    hdr_use_ref_frame_mvs,
     init,
     tile: av1_refmvs_tile_state_new(rp_stride, iw8, ih8, sbsz),
     rp: FixedArray::makei(
@@ -296,6 +299,7 @@ pub fn Av1RefmvsFrameState::find(
     self.rf, self.tile.rows, self.tile.rp_proj, self.tile.rp_stride,
     tile_col_start4, tile_col_end4, tile_row_start4, tile_row_end4,
     ref0, ref1, bs, top_has_right, by4, bx4,
+    initial_globalmv_ctx=if self.hdr_use_ref_frame_mvs { 1 } else { 0 },
   )
 }
 

@@ -1,5 +1,16 @@
 # AV1 帧间整帧入口交接报告（2026-10-26 晚，第三份）
 
+> 最新接续见 [INTER_SESSION](AGENT_HANDOFF_2026-10-26_INTER_SESSION.md)
+> 与 PORTING_HISTORY §96。inter 整帧与会话入口已接入，5 组真实流 MD5
+> 收敛；本报告的上游接线说明仍供参考，待办以最新报告为准。
+> §3 的 inter reset_context.intra 初值应为 0；已由真实多帧对拍修正。
+
+> 接续状态见 [FRAME_STATE 报告](AGENT_HANDOFF_2026-10-26_FRAME_STATE.md)
+> 与 PORTING_HISTORY §95：G1 的 set_block 坐标、G3 的块级分段语法和
+> 特征继承、G4 的 CDF 深拷贝已有工作区实现；整帧入口仍待接入。
+> 本文 §3.1 的 get_prev_frame_segid 应为「遍历可见块取最小值」，
+> 并非首块一致性检查。以 dav1d decode.c:494–510 原文和新 C 对拍为准。
+
 > 交接对象：下一个接手本仓库的 AI。本文取代
 > [AGENT_HANDOFF_2026-10-26_INTER.md](AGENT_HANDOFF_2026-10-26_INTER.md)
 > （其 §3.1 refmvs 接线、§3.2 decode_b 块语法**均已完成**，见

@@ -178,9 +178,6 @@ fn Av1TileCtx::decode_b(
   }
   let is_inter = hdr.frame_type == av1_frame_inter ||
     hdr.frame_type == av1_frame_switch
-  if is_inter {
-    raise Av1DecError::Unsupported("PATCHWELCOME: AV1 inter frame")
-  }
   let bx4 = self.bx & 31
   let by4 = self.by & 31
   let ss_ver = f.ss_v
@@ -198,32 +195,54 @@ fn Av1TileCtx::decode_b(
     (bh4 > ss_ver || (self.by & 1) != 0)
   let a = f.a[self.a_idx]
   let l = f.l
+  let segments : Av1SegmentContext = {
+    msac: self.msac,
+    cdf: self.cdf,
+    enabled: hdr.segmentation_enabled,
+    update_map: hdr.segmentation_update_map,
+    temporal: hdr.segmentation_temporal_update,
+    preskip: hdr.seg_preskip,
+    last_active: hdr.seg_last_active,
+    current: f.cur_segmap,
+    previous: f.prev_segmap,
+    stride: f.b4_stride,
+  }
   let mut seg_id = 0
-  if hdr.segmentation_enabled && hdr.seg_preskip {
-    let (pred, ctx) = av1_get_cur_frame_segid(
-      f.cur_segmap, f.b4_stride, self.by, self.bx,
-      self.by > self.row_start, self.bx > self.col_start,
+  let mut seg_pred = 0
+  if hdr.segmentation_enabled &&
+    (!hdr.segmentation_update_map || hdr.seg_preskip) {
+    let (id, pred) = segments.read_id(
+      self.bx,
+      self.by,
+      w4,
+      h4,
+      self.by > self.row_start,
+      self.bx > self.col_start,
+      a.seg_pred[bx4] + l.seg_pred[by4],
+      false,
     )
-    let diff = self.msac.decode_symbol_adapt(self.cdf.seg_id, ctx * 8, 7)
-    seg_id = av1_neg_deinterleave(diff, pred, hdr.seg_last_active + 1)
-    if seg_id > hdr.seg_last_active || seg_id >= 8 {
-      seg_id = 0
-    }
+    seg_id = id
+    seg_pred = pred
   }
   // With preskip segmentation the segment features are known before the
   // skip flag; without it dav1d reads skip_mode/skip with `seg == NULL`
   // and only then decodes the segment id.
-  let seg_preskip = hdr.segmentation_enabled && hdr.seg_preskip
+  let seg_preskip = hdr.segmentation_enabled &&
+    (!hdr.segmentation_update_map || hdr.seg_preskip)
   let seg_ref_ps : Int32 = if seg_preskip { hdr.seg_ref[seg_id] } else { -1 }
   let seg_skip_ps = seg_preskip && hdr.seg_skip[seg_id]
   let seg_gmv_ps = seg_preskip && hdr.seg_globalmv[seg_id]
-  let skip_mode_ok = (!hdr.segmentation_enabled ||
-    (seg_ref_ps == -1 && !seg_gmv_ps && !seg_skip_ps)) &&
-    hdr.skip_mode_enabled && av1_imin(bw4, bh4) > 1
+  let skip_mode_ok = (
+      !seg_preskip || (seg_ref_ps == -1 && !seg_gmv_ps && !seg_skip_ps)
+    ) &&
+    hdr.skip_mode_enabled &&
+    av1_imin(bw4, bh4) > 1
   let skip_mode = if skip_mode_ok {
     self.msac.decode_bool_adapt(
-      self.cdf.skip_mode, (a.skip_mode[bx4] + l.skip_mode[by4]) * 2,
-    ) != 0
+      self.cdf.skip_mode,
+      (a.skip_mode[bx4] + l.skip_mode[by4]) * 2,
+    ) !=
+    0
   } else {
     false
   }
@@ -233,23 +252,19 @@ fn Av1TileCtx::decode_b(
   } else {
     self.msac.decode_bool_adapt(self.cdf.skip, sctx * 2) != 0
   }
-  if hdr.segmentation_enabled && !hdr.seg_preskip {
-    let (pred, ctx) = av1_get_cur_frame_segid(
-      f.cur_segmap, f.b4_stride, self.by, self.bx,
-      self.by > self.row_start, self.bx > self.col_start,
+  if hdr.segmentation_enabled && hdr.segmentation_update_map && !hdr.seg_preskip {
+    let (id, pred) = segments.read_id(
+      self.bx,
+      self.by,
+      w4,
+      h4,
+      self.by > self.row_start,
+      self.bx > self.col_start,
+      a.seg_pred[bx4] + l.seg_pred[by4],
+      skip,
     )
-    if skip {
-      seg_id = pred
-    } else {
-      let diff = self.msac.decode_symbol_adapt(self.cdf.seg_id, ctx * 8, 7)
-      seg_id = av1_neg_deinterleave(diff, pred, hdr.seg_last_active + 1)
-      if seg_id > hdr.seg_last_active {
-        seg_id = 0
-      }
-    }
-    if seg_id >= 8 {
-      seg_id = 0
-    }
+    seg_id = id
+    seg_pred = pred
   }
   // cdef index (n_bits may be 0: no bits consumed)
   if !skip {
@@ -307,13 +322,19 @@ fn Av1TileCtx::decode_b(
       if hdr.delta_lf_present {
         let multi = if hdr.delta_lf_multi { 1 } else { 0 }
         let n_lfs = if hdr.delta_lf_multi {
-          if f.seq.monochrome { 2 } else { 4 }
+          if f.seq.monochrome {
+            2
+          } else {
+            4
+          }
         } else {
           1
         }
         for i in 0..<n_lfs {
           let mut delta_lf = self.msac.decode_symbol_adapt(
-            self.cdf.delta_lf, (i + multi) * 4, 3,
+            self.cdf.delta_lf,
+            (i + multi) * 4,
+            3,
           )
           if delta_lf == 3 {
             let n_bits = 1 + self.msac.decode_bools(3).reinterpret_as_int()
@@ -356,6 +377,23 @@ fn Av1TileCtx::decode_b(
       av1_calc_lf_values(self.lf_lvl_cur, hdr, dl)
     }
   }
+  // Intra is read after delta-q/lf. Segment SKIP alone does not force it.
+  let intra = if !is_inter { true } else if skip_mode { false }
+    else if hdr.segmentation_enabled && (hdr.seg_ref[seg_id] >= 0 || hdr.seg_globalmv[seg_id]) {
+      hdr.seg_ref[seg_id] == 0
+    } else {
+      let neighbors = f.inter_a[self.a_idx]
+      let ctx = av1_inter_intra_ctx(
+        if self.by > self.row_start { Some(neighbors.top[bx4]) } else { None },
+        if self.bx > self.col_start { Some(neighbors.left[by4]) } else { None },
+      )
+      self.msac.decode_bool_adapt(self.cdf.intra, ctx * 2) == 0
+    }
+  if !intra {
+    self.decode_inter_block(bs, intra_edge_flags, seg_id, seg_pred, skip_mode, skip)
+    self.finish_inter_block(bs, seg_id, skip)
+    return
+  }
   // intra block syntax
   let ymode_cdf_base = (
       av1_intra_mode_context[a.mode[bx4]].to_int() * 5 +
@@ -363,8 +401,8 @@ fn Av1TileCtx::decode_b(
     ) *
     16
   let mut y_mode = self.msac.decode_symbol_adapt(
-    self.cdf.kfym,
-    ymode_cdf_base,
+    if is_inter { self.cdf.y_mode } else { self.cdf.kfym },
+    if is_inter { av1_ymode_size_context[bs].to_int() * 16 } else { ymode_cdf_base },
     av1_n_intra_pred_modes - 1,
   )
   let mut y_angle = 0
@@ -527,7 +565,7 @@ fn Av1TileCtx::decode_b(
   }
   // reconstruction
   self.recon_b_intra(bs, intra_edge_flags, b)
-  if hdr.segmentation_enabled {
+  if hdr.segmentation_enabled && hdr.segmentation_update_map {
     for y in 0..<bh4 {
       for x in 0..<bw4 {
         f.cur_segmap[(self.by + y) * f.b4_stride + self.bx + x] = seg_id.to_byte()
@@ -559,7 +597,7 @@ fn Av1TileCtx::decode_b(
   // CDEF noskip mask: 8x8 blocks that contain any coded coefficients.
   if !skip {
     let lfm = f.lf_mask[(self.by >> 5) * f.sb128w + (self.bx >> 5)]
-    let mask : UInt = ((0xFFFFFFFFU >> (32 - bw4)) << (bx4 & 15))
+    let mask : UInt32 = 0xFFFFFFFFU >> (32 - bw4) << (bx4 & 15)
     let bx_idx = (bx4 & 16) >> 4
     let mut row = by4 >> 1
     let mut y = 0
@@ -586,7 +624,7 @@ fn Av1TileCtx::decode_b(
     a.tx[bx4 + i] = t_lw
     a.mode[bx4 + i] = y_mode_nofilt
     a.pal_sz[bx4 + i] = pal_sz.0
-    a.seg_pred[bx4 + i] = 0
+    a.seg_pred[bx4 + i] = seg_pred
     a.skip_mode[bx4 + i] = 0
     a.intra[bx4 + i] = 1
     a.skip[bx4 + i] = if skip { 1 } else { 0 }
@@ -597,7 +635,7 @@ fn Av1TileCtx::decode_b(
     l.tx[by4 + i] = t_lh
     l.mode[by4 + i] = y_mode_nofilt
     l.pal_sz[by4 + i] = pal_sz.0
-    l.seg_pred[by4 + i] = 0
+    l.seg_pred[by4 + i] = seg_pred
     l.skip_mode[by4 + i] = 0
     l.intra[by4 + i] = 1
     l.skip[by4 + i] = if skip { 1 } else { 0 }
@@ -618,5 +656,12 @@ fn Av1TileCtx::decode_b(
         uv_mode
       }
     }
+  }
+  if is_inter {
+    f.inter_a[self.a_idx].set_block(self.bx, self.by, bw4, bh4, av1_inter_intra_neighbor())
+    guard self.rstate is Some(rstate) else {
+      raise Av1DecError::Unsupported("av1: missing inter motion state")
+    }
+    rstate.splat_intra(bs, self.bx, self.by, bw4, bh4)
   }
 }

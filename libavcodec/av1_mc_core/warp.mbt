@@ -127,9 +127,7 @@ pub fn av1_mc_warp_predict_plane(
   let w = bw4 * h_mul
   let h = bh4 * v_mul
   let dst = FixedArray::make(w * h, 0)
-  let abcd : FixedArray[Int32] = [
-    matrix[2] - 0x10000, matrix[3], matrix[4], matrix[5] - 0x10000,
-  ]
+  let abcd : FixedArray[Int32] = [alpha, beta, gamma, delta]
   let mut y = 0
   while y < h {
     let src_y = by4 * 4 + ((y + 4) << ss_v)
@@ -151,7 +149,9 @@ pub fn av1_mc_warp_predict_plane(
       )
       for yy in 0..<8 {
         for xx in 0..<8 {
-          dst[(y + yy) * w + x + xx] = block[yy * 8 + xx]
+          if y + yy < h && x + xx < w {
+            dst[(y + yy) * w + x + xx] = block[yy * 8 + xx]
+          }
         }
       }
       x = x + 8
@@ -189,9 +189,7 @@ pub fn av1_mc_warp_prepare_plane(
   let w = bw4 * h_mul
   let h = bh4 * v_mul
   let dst = FixedArray::make(w * h, 0)
-  let abcd : FixedArray[Int32] = [
-    matrix[2] - 0x10000, matrix[3], matrix[4], matrix[5] - 0x10000,
-  ]
+  let abcd : FixedArray[Int32] = [alpha, beta, gamma, delta]
   let mut y = 0
   while y < h {
     let src_y = by4 * 4 + ((y + 4) << ss_v)
@@ -213,7 +211,9 @@ pub fn av1_mc_warp_prepare_plane(
       )
       for yy in 0..<8 {
         for xx in 0..<8 {
-          dst[(y + yy) * w + x + xx] = block[yy * 8 + xx]
+          if y + yy < h && x + xx < w {
+            dst[(y + yy) * w + x + xx] = block[yy * 8 + xx]
+          }
         }
       }
       x = x + 8

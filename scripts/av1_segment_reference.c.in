@@ -1,0 +1,101 @@
+/* Copyright © 2018-2021, VideoLAN and dav1d authors
+ * Copyright © 2018, Two Orioles, LLC
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+/* dav1d 1.5.1 segmentation oracle. Helpers and both decode_b branches are
+ * inserted verbatim by emit_av1_segment_oracle.mbtx. BSD-2-Clause. */
+#include "config.h"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include "src/internal.h"
+#include "src/mem.h"
+#undef DEBUG_BLOCK_INFO
+#define DEBUG_BLOCK_INFO 0
+void dav1d_mem_pool_push(Dav1dMemPool *p, Dav1dMemPoolBuffer *b) { (void)p; (void)b; }
+Dav1dMemPoolBuffer *dav1d_mem_pool_pop(Dav1dMemPool *p, size_t s) { (void)p; (void)s; return NULL; }
+//<<HELPERS>>
+static int probe(Dav1dTaskContext *t, Av1Block *b, int skip,
+                 int have_top, int have_left) {
+    const Dav1dFrameContext *const f = t->f;
+    Dav1dTileState *const ts = t->ts;
+    const int bx4 = t->bx & 31, by4 = t->by & 31;
+    const int w4 = 4, h4 = 3;
+    const Dav1dSegmentationData *seg = NULL;
+//<<PRESKIP>>
+    b->skip = skip;
+//<<POSTSKIP>>
+    (void)seg;
+    return seg_pred;
+}
+int main(void) {
+    static Dav1dFrameContext f;
+    static Dav1dFrameHeader hdr;
+    static Dav1dTaskContext t;
+    static Dav1dTileState ts;
+    static BlockContext above;
+    static uint8_t current[64 * 64], previous[64 * 64], buf[512];
+    f.frame_hdr = &hdr; f.cur_segmap = current; f.b4_stride = 64;
+    t.f = &f; t.ts = &ts; t.a = &above; t.bx = 36; t.by = 34;
+    for (int c = 0; c < 96; c++) {
+        const int variant = c % 12;
+        hdr.segmentation.enabled = 1;
+        hdr.segmentation.update_map = variant >= 2;
+        hdr.segmentation.temporal = variant >= 6;
+        hdr.segmentation.seg_data.preskip = variant % 2;
+        hdr.segmentation.seg_data.last_active_segid = c % 8;
+        f.prev_segmap = c % 3 ? previous : NULL;
+        for (int i = 0; i < 64 * 64; i++) {
+            current[i] = (i * 3 + c) % 8;
+            previous[i] = 3 + (i * 5 + c) % 5;
+        }
+        /* A minimum on the final visible row distinguishes this from the
+         * old handoff's incorrect first-cell/uniformity description. */
+        previous[(t.by + 2) * 64 + t.bx + 3] = c % 3;
+        current[t.by * 64 + t.bx - 1] = c % 8;
+        current[(t.by - 1) * 64 + t.bx] = (c / 4) % 8;
+        current[(t.by - 1) * 64 + t.bx - 1] = c % 4 == 0 ? c % 8 :
+            c % 4 == 1 ? (c / 4) % 8 : (c + 2) % 8;
+        above.seg_pred[t.bx & 31] = c % 2;
+        t.l.seg_pred[t.by & 31] = (c / 2) % 2;
+        uint32_t seed = 0x12345678U + c * 977U;
+        for (int i = 0; i < 512; i++) {
+            seed = seed * 1664525U + 1013904223U;
+            buf[i] = seed >> 16;
+        }
+        CdfThreadContext tc;
+        dav1d_cdf_thread_init_static(&tc, 80);
+        dav1d_cdf_thread_copy(&ts.cdf, &tc);
+        dav1d_msac_init(&ts.msac, buf, sizeof(buf), c / 48);
+        Av1Block b = {0};
+        const int skip = (c / 12) % 2;
+        const int pred = probe(&t, &b, skip, (c / 3) % 2, (c / 5) % 2);
+        printf("%d %d %d %u %u", c, b.seg_id, pred, ts.msac.rng,
+               (uint32_t)(ts.msac.dif >> 32));
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 2; j++)
+            printf(" %u", ts.cdf.m.seg_pred[i][j]);
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 8; j++)
+            printf(" %u", ts.cdf.m.seg_id[i][j]);
+        putchar('\n');
+    }
+    return 0;
+}

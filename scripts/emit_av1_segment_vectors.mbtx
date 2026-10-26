@@ -1,0 +1,38 @@
+///|
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/string",
+}
+
+///|
+fn main raise {
+  let out = StringBuilder()
+  out.write_string(
+    "///|\n/// dav1d 1.5.1 decode_b segmentation branch and CDF terminal states.\n/// Generated with scripts/emit_av1_segment_oracle.mbtx and\n/// scripts/emit_av1_segment_vectors.mbtx; see av1_segment_reference.c.in.\nlet segment_reference : Array[UInt] = [\n",
+  )
+  let mut cases = 0
+  for
+    line in @fs.read_file_to_string(".scratch/av1/segment_reference.txt").split(
+      "\n",
+    ) {
+    let fields = line.trim().split(" ").collect()
+    if fields.length() == 1 && fields[0].is_empty() {
+      continue
+    }
+    guard fields.length() == 35 else { fail("bad segment oracle row") }
+    guard @string.parse_int(fields[0]) == cases else { fail("bad case order") }
+    out.write_string("  ")
+    for value in fields[1:] {
+      let _ = @string.parse_uint(value)
+      out.write_string(value.to_owned() + "U, ")
+    }
+    out.write_string("\n")
+    cases += 1
+  }
+  guard cases == 96 else { fail("expected 96 oracle cases") }
+  out.write_string("]\n")
+  @fs.write_string_to_file(
+    "libavcodec/av1_segment_vectors/reference_test.mbt",
+    out.to_string(),
+  )
+}

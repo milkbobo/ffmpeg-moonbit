@@ -67,7 +67,9 @@ fn av1_leb128(data : BytesView, pos : Ref[Int32]) -> Int32 {
     }
     let b = data[pos.val].to_int()
     pos.val = pos.val + 1
-    if shift == 28 && (b & 0xf8) != 0 { return -1 }
+    if shift == 28 && (b & 0xf8) != 0 {
+      return -1
+    }
     value = value | ((b & 0x7F).reinterpret_as_uint() << shift)
     if (b & 0x80) == 0 {
       break
@@ -383,7 +385,7 @@ pub fn av1_parse_sequence_header(
 }
 
 ///|
-/// AV1 uncompressed frame header fields (key/intra frames). */
+/// AV1 uncompressed frame header fields (key/intra/inter/switch frames).
 pub struct Av1FrameHeader {
   show_existing_frame : Bool
   frame_to_show_map_idx : Int32
@@ -427,6 +429,10 @@ pub struct Av1FrameHeader {
   dq_v_ac : Int32
   using_qmatrix : Bool
   segmentation_enabled : Bool
+  /// Map syntax inherited/updated independently of segment feature data.
+  segmentation_update_map : Bool
+  segmentation_temporal_update : Bool
+  segmentation_update_data : Bool
   segmentation_feature_mask : Array[Int32]
   segmentation_alt_q : Array[Int32]
   /// Per-segment REF_FRAME feature (raw 3-bit 0..7, -1 = not coded).
@@ -528,7 +534,8 @@ pub let av1_frame_switch : Int32 = 3
 /// Per-ref-slot state needed to parse inter/switch frame headers: the
 /// fields dav1d reads from the stored frame header of each reference slot
 /// (frame_offset for skip-mode/short-signaling derivation, sizes for
-/// frame_size_with_refs, gmv of the primary ref for global-motion deltas).
+/// frame_size_with_refs, gmv of the primary ref for global-motion deltas,
+/// and the retained header for inherited segment feature data).
 pub struct Av1RefSlotState {
   order_hint : Int32
   upscaled_width : Int32
@@ -537,6 +544,8 @@ pub struct Av1RefSlotState {
   render_height : Int32
   gm_types : Array[Int32]
   gm_matrices : Array[Array[Int32]]
+  /// Stored header supplies segmentation and loop-filter inheritance.
+  header : Av1FrameHeader?
 }
 
 ///|
@@ -559,6 +568,7 @@ pub fn av1_ref_slot_state(
     render_height: rh,
     gm_types: d.gm_types,
     gm_matrices: d.gm_matrices,
+    header: None,
   }
 }
 
@@ -571,6 +581,7 @@ pub fn av1_ref_slot_state_default() -> Av1RefSlotState {
     height: 0,
     render_width: 0,
     render_height: 0,
+    header: None,
     gm_types: [0, 0, 0, 0, 0, 0, 0],
     gm_matrices: [
       [0, 0, 65536, 0, 0, 65536],
@@ -626,15 +637,13 @@ fn av1_br_read_subexp(br : BitReader, ref_val : Int32, n : Int32) -> Int32 {
     }
   }
   let rec = if ref_u * 2 <= n_lim {
-    av1_inv_recenter(ref_u.reinterpret_as_uint(), v.reinterpret_as_uint())
-      .reinterpret_as_int()
+    av1_inv_recenter(ref_u.reinterpret_as_uint(), v.reinterpret_as_uint()).reinterpret_as_int()
   } else {
     n_lim -
     av1_inv_recenter(
-        (n_lim - ref_u).reinterpret_as_uint(),
-        v.reinterpret_as_uint(),
-      )
-      .reinterpret_as_int()
+      (n_lim - ref_u).reinterpret_as_uint(),
+      v.reinterpret_as_uint(),
+    ).reinterpret_as_int()
   }
   rec - (1 << nbits)
 }
@@ -650,9 +659,9 @@ fn av1_tile_log2(blksize : Int32, target : Int32) -> Int32 {
 }
 
 ///|
-/// Parse the first frame header OBU (type 3 or 6) of `data`. Key and
-/// intra-only frames are supported; inter/switch headers need the reference
-/// frame state and return PATCHWELCOME.
+/// Parse the first frame header OBU (type 3 or 6) of `data`. Inter/switch
+/// headers need reference-slot state. Use `av1_ref_slot_state_from_header`
+/// to retain segment feature data when segmentation_update_data is false.
 pub fn av1_parse_frame_header(
   data : Bytes,
   seq : Av1SequenceParameters,
@@ -729,6 +738,9 @@ pub fn av1_parse_frame_header(
           dq_v_ac: 0,
           using_qmatrix: false,
           segmentation_enabled: false,
+          segmentation_update_map: false,
+          segmentation_temporal_update: false,
+          segmentation_update_data: false,
           segmentation_feature_mask: [],
           segmentation_alt_q: [],
           seg_ref: [],
@@ -858,7 +870,11 @@ pub fn av1_parse_frame_header(
           br.read(8).reinterpret_as_int()
         }
       } else {
-        primary_ref = if error_resilient { 7 } else { br.read(3).reinterpret_as_int() }
+        primary_ref = if error_resilient {
+          7
+        } else {
+          br.read(3).reinterpret_as_int()
+        }
         refresh = br.read(8).reinterpret_as_int()
         if seq.enable_order_hint {
           short_sig = br.read(1) != 0
@@ -874,9 +890,12 @@ pub fn av1_parse_frame_header(
             match ref_state(i) {
               Some(st) =>
                 hints[i] = (1 << (seq.order_hint_bits - 1)) +
-                av1_get_poc_diff(seq.order_hint_bits, st.order_hint, order_hint)
-              None =>
-                return Err("av1: short signaling needs all 8 ref slots")
+                  av1_get_poc_diff(
+                    seq.order_hint_bits,
+                    st.order_hint,
+                    order_hint,
+                  )
+              None => return Err("av1: short signaling needs all 8 ref slots")
             }
           }
           let current = 1 << (seq.order_hint_bits - 1)
@@ -918,9 +937,7 @@ pub fn av1_parse_frame_header(
             if refidx[i] < 0 {
               latest = -1
               for j in 0..<8 {
-                if !used[j] &&
-                  hints[j] < current &&
-                  hints[j] >= latest {
+                if !used[j] && hints[j] < current && hints[j] >= latest {
                   refidx[i] = j
                   latest = hints[j]
                 }
@@ -981,8 +998,7 @@ pub fn av1_parse_frame_header(
             render_width = st.render_width
             render_height = st.render_height
           }
-          None =>
-            return Err("av1: frame_size_with_refs needs ref slot state")
+          None => return Err("av1: frame_size_with_refs needs ref slot state")
         }
       } else if frame_size_override {
         let wb = br.read(4).reinterpret_as_int() + 1
@@ -1035,9 +1051,7 @@ pub fn av1_parse_frame_header(
         if !seq.reduced_still_picture_header {
           motion_mode_switchable = br.read(1) != 0
         }
-        if seq.enable_order_hint &&
-          seq.enable_ref_frame_mvs &&
-          !error_resilient {
+        if seq.enable_order_hint && seq.enable_ref_frame_mvs && !error_resilient {
           use_ref_mvs = br.read(1) != 0
         }
       }
@@ -1172,6 +1186,9 @@ pub fn av1_parse_frame_header(
         }
       }
       let mut segmentation_enabled = false
+      let mut segmentation_update_map = false
+      let mut segmentation_temporal_update = false
+      let mut segmentation_update_data = false
       let mut segmentation_masks : Array[Int32] = []
       let mut segmentation_alt_qs : Array[Int32] = []
       let seg_refs : Array[Int32] = []
@@ -1230,15 +1247,16 @@ pub fn av1_parse_frame_header(
         let seg_masks : Array[Int32] = []
         let seg_alt_q : Array[Int32] = []
         if segmentation_enabled {
-          let mut update_map = true
+          segmentation_update_map = true
           let mut update_data = true
           if primary_ref != 7 {
-            update_map = br.read1() != 0
-            if update_map {
-              ignore(br.read1()) // segmentation_temporal_update
+            segmentation_update_map = br.read1() != 0
+            if segmentation_update_map {
+              segmentation_temporal_update = br.read1() != 0
             }
             update_data = br.read1() != 0
           }
+          segmentation_update_data = update_data
           if update_data {
             for i in 0..<8 {
               let mut mask = 0
@@ -1282,6 +1300,52 @@ pub fn av1_parse_frame_header(
               seg_skips.push(sskip)
               seg_gmvs.push(sgmv)
             }
+          } else {
+            let stored = match ref_state(refs[primary_ref]) {
+              Some(slot) => slot.header
+              None => None
+            }
+            guard stored is Some(prev) else {
+              return Err("av1: missing primary reference segmentation data")
+            }
+            for i in 0..<8 {
+              seg_masks.push(
+                if i < prev.segmentation_feature_mask.length() {
+                  prev.segmentation_feature_mask[i]
+                } else {
+                  0
+                },
+              )
+              seg_alt_q.push(
+                if i < prev.segmentation_alt_q.length() {
+                  prev.segmentation_alt_q[i]
+                } else {
+                  0
+                },
+              )
+              seg_refs.push(
+                if i < prev.seg_ref.length() {
+                  prev.seg_ref[i]
+                } else {
+                  -1
+                },
+              )
+              seg_skips.push(i < prev.seg_skip.length() && prev.seg_skip[i])
+              seg_gmvs.push(
+                i < prev.seg_globalmv.length() && prev.seg_globalmv[i],
+              )
+            }
+            for i in 0..<32 {
+              seg_lf.push(
+                if i < prev.seg_delta_lf.length() {
+                  prev.seg_delta_lf[i]
+                } else {
+                  0
+                },
+              )
+            }
+            seg_preskip = prev.seg_preskip
+            seg_last_active = prev.seg_last_active
           }
         } else {
           for _ in 0..<32 {
@@ -1357,6 +1421,12 @@ pub fn av1_parse_frame_header(
             loop_filter_level.push(br.read(6).reinterpret_as_int())
           }
           loop_filter_sharpness = br.read(3).reinterpret_as_int()
+          if primary_ref != 7 {
+            if ref_state(refs[primary_ref]) is Some(slot) && slot.header is Some(previous) {
+              for i in 0..<8 { loop_filter_ref_deltas[i] = previous.loop_filter_ref_deltas[i] }
+              for i in 0..<2 { loop_filter_mode_deltas[i] = previous.loop_filter_mode_deltas[i] }
+            }
+          }
           let lf_delta_enabled = br.read1() != 0
           loop_filter_delta_enabled = lf_delta_enabled
           if lf_delta_enabled {
@@ -1478,11 +1548,19 @@ pub fn av1_parse_frame_header(
           let mut skip_mode_allowed = false
           if off_before != -1 && off_after != -1 {
             skip_mode_refs.push(
-                if before_idx < after_idx { before_idx } else { after_idx },
-              )
+              if before_idx < after_idx {
+                before_idx
+              } else {
+                after_idx
+              },
+            )
             skip_mode_refs.push(
-                if before_idx > after_idx { before_idx } else { after_idx },
-              )
+              if before_idx > after_idx {
+                before_idx
+              } else {
+                after_idx
+              },
+            )
             skip_mode_allowed = true
           } else if off_before != -1 {
             let mut off_before2 : Int32 = -1
@@ -1508,19 +1586,19 @@ pub fn av1_parse_frame_header(
             }
             if off_before2 != -1 {
               skip_mode_refs.push(
-                  if before_idx < before2_idx {
-                    before_idx
-                  } else {
-                    before2_idx
-                  },
-                )
+                if before_idx < before2_idx {
+                  before_idx
+                } else {
+                  before2_idx
+                },
+              )
               skip_mode_refs.push(
-                  if before_idx > before2_idx {
-                    before_idx
-                  } else {
-                    before2_idx
-                  },
-                )
+                if before_idx > before2_idx {
+                  before_idx
+                } else {
+                  before2_idx
+                },
+              )
               skip_mode_allowed = true
             }
           }
@@ -1529,9 +1607,7 @@ pub fn av1_parse_frame_header(
           }
         }
         // allow_warped_motion: inter/switch, gated by the sequence header.
-        if inter_or_switch &&
-          !error_resilient &&
-          seq.enable_warped_motion {
+        if inter_or_switch && !error_resilient && seq.enable_warped_motion {
           allow_warped = br.read1() != 0
         }
         if !seq.reduced_still_picture_header {
@@ -1559,8 +1635,7 @@ pub fn av1_parse_frame_header(
               let ridx = refs[primary_ref]
               match ref_state(ridx) {
                 Some(st) => st.gm_matrices[i]
-                None =>
-                  return Err("av1: global motion needs primary ref state")
+                None => return Err("av1: global motion needs primary ref state")
               }
             }
             let mat = gm_matrices[i]
@@ -1710,21 +1785,22 @@ pub fn av1_parse_frame_header(
         dq_v_ac,
         using_qmatrix,
         segmentation_enabled,
+        segmentation_update_map,
+        segmentation_temporal_update,
+        segmentation_update_data,
         segmentation_feature_mask: segmentation_masks,
         segmentation_alt_q: segmentation_alt_qs,
         seg_ref: seg_refs,
         seg_skip: seg_skips,
         seg_globalmv: seg_gmvs,
-        seg_delta_lf: {
-          if seg_lf.length() == 32 {
-            seg_lf
-          } else {
-            let z : Array[Int32] = []
-            for _ in 0..<32 {
-              z.push(0)
-            }
-            z
+        seg_delta_lf: if seg_lf.length() == 32 {
+          seg_lf
+        } else {
+          let z : Array[Int32] = []
+          for _ in 0..<32 {
+            z.push(0)
           }
+          z
         },
         seg_preskip,
         seg_last_active,
@@ -1759,11 +1835,11 @@ pub fn av1_parse_frame_header(
         reference_select,
         allow_warped_motion: allow_warped,
         is_global: global_motion,
-        gm_types: gm_types,
-        gm_matrices: gm_matrices,
+        gm_types,
+        gm_matrices,
         ref_frame_short_signaling: short_sig,
-        skip_mode_enabled: skip_mode_enabled,
-        skip_mode_refs: skip_mode_refs,
+        skip_mode_enabled,
+        skip_mode_refs,
         apply_grain,
         grain_seed,
         num_y_points,
@@ -1814,10 +1890,17 @@ pub fn av1_parse_tile_group(
   data : Bytes,
   fh : Av1FrameHeader,
 ) -> Result[Av1TileGroup, String] {
-  if fh.show_existing_frame || fh.tile_cols < 1 || fh.tile_cols > 64 ||
-    fh.tile_rows < 1 || fh.tile_rows > 64 || fh.tile_cols_log2 < 0 ||
-    fh.tile_cols_log2 > 6 || fh.tile_rows_log2 < 0 || fh.tile_rows_log2 > 6 ||
-    fh.tile_size_bytes_minus1 < 0 || fh.tile_size_bytes_minus1 > 3 {
+  if fh.show_existing_frame ||
+    fh.tile_cols < 1 ||
+    fh.tile_cols > 64 ||
+    fh.tile_rows < 1 ||
+    fh.tile_rows > 64 ||
+    fh.tile_cols_log2 < 0 ||
+    fh.tile_cols_log2 > 6 ||
+    fh.tile_rows_log2 < 0 ||
+    fh.tile_rows_log2 > 6 ||
+    fh.tile_size_bytes_minus1 < 0 ||
+    fh.tile_size_bytes_minus1 > 3 {
     return Err("av1: invalid tile layout")
   }
   if fh.tile_cols_log2 != av1_tile_log2(1, fh.tile_cols) ||
@@ -1827,13 +1910,21 @@ pub fn av1_parse_tile_group(
   let mut pos = 0
   while pos < data.length() {
     let header = data[pos].to_int()
-    if (header & 0x80) != 0 { return Err("av1: OBU forbidden bit set") }
-    if (header & 1) != 0 { return Err("av1: OBU reserved bit set") }
+    if (header & 0x80) != 0 {
+      return Err("av1: OBU forbidden bit set")
+    }
+    if (header & 1) != 0 {
+      return Err("av1: OBU reserved bit set")
+    }
     let obu_type = (header >> 3) & 0x0F
     let extension = (header & 0x04) != 0
     let has_size = (header & 0x02) != 0
-    if extension && pos + 1 >= data.length() { return Err("av1: truncated OBU extension") }
-    if extension && (data[pos + 1].to_int() & 7) != 0 { return Err("av1: OBU extension reserved bits set") }
+    if extension && pos + 1 >= data.length() {
+      return Err("av1: truncated OBU extension")
+    }
+    if extension && (data[pos + 1].to_int() & 7) != 0 {
+      return Err("av1: OBU extension reserved bits set")
+    }
     let p_ref = Ref(pos + 1 + (if extension { 1 } else { 0 }))
     if !has_size {
       return Err("av1: OBU without size")
@@ -1857,10 +1948,14 @@ pub fn av1_parse_tile_group(
       let mut start = 0
       let mut end = num_tiles - 1
       if num_tiles > 1 {
-        if br.bits_left() < 1 { return Err("av1: truncated tile group header") }
+        if br.bits_left() < 1 {
+          return Err("av1: truncated tile group header")
+        }
         if br.read(1) != 0 {
           let bits = fh.tile_cols_log2 + fh.tile_rows_log2
-          if br.bits_left() < 2 * bits { return Err("av1: truncated tile group header") }
+          if br.bits_left() < 2 * bits {
+            return Err("av1: truncated tile group header")
+          }
           start = br.read(bits).reinterpret_as_int()
           end = br.read(bits).reinterpret_as_int()
           if start > end || end >= num_tiles {
@@ -1870,7 +1965,9 @@ pub fn av1_parse_tile_group(
       }
       let aligned = (br.count() + 7) / 8 * 8
       while br.count() < aligned {
-        if br.read(1) != 0 { return Err("av1: nonzero tile group alignment bit") }
+        if br.read(1) != 0 {
+          return Err("av1: nonzero tile group alignment bit")
+        }
       }
       let sizes : Array[Int32] = []
       let offsets : Array[Int32] = []

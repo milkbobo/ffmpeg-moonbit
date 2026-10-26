@@ -1,0 +1,44 @@
+///|
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/encoding/base64",
+}
+
+///|
+fn u32(data : Bytes, off : Int32) -> Int32 {
+  data[off].to_int() |
+  (data[off + 1].to_int() << 8) |
+  (data[off + 2].to_int() << 16) |
+  (data[off + 3].to_int() << 24)
+}
+
+///|
+fn main raise {
+  let ivf = @fs.read_file_to_bytes(".scratch/av1/seg_inter.ivf")
+  let mut pos = 32
+  let packets : Array[Bytes] = []
+  for _ in 0..<3 {
+    let size = u32(ivf, pos)
+    packets.push(ivf[pos + 12:pos + 12 + size].to_owned())
+    pos += size + 12
+  }
+  // Key: TD(2), sequence OBU(12), frame OBU header(3).
+  // P2: TD(2), frame OBU header(3). Both headers fit in 32 payload bytes.
+  guard packets[0][2] == b'\x0a' &&
+    packets[0][14] == b'\x32' &&
+    packets[2][2] == b'\x32' else {
+    fail("unexpected fixture OBU layout")
+  }
+  let key : Array[Byte] = packets[0][2:14].to_owned().to_array()
+  key.push(b'\x32')
+  key.push(32)
+  key.append(packets[0][17:49].to_owned().to_array())
+  let text = "///|\n/// Header-only prefixes of libaom testsrc2 160x120, cpu-used=6, crf=30,\n/// aq-mode=1, lag-in-frames=0, g=30 (linuxserver/ffmpeg:9.0.2).\n/// FFmpeg trace_headers: P2 primary_ref_frame=0, base_q_idx=120,\n/// segmentation_enabled at payload bit 72 (OBU bit 96).\n/// Regenerate: moon run scripts/emit_av1_segment_header_fixture.mbtx\nfn av1_segment_key_header() -> Bytes { b\"" +
+    @base64.encode(Bytes::from_array(key)) +
+    "\" }\n\n///|\nfn av1_segment_inter_payload() -> Bytes { b\"" +
+    @base64.encode(packets[2][5:37]) +
+    "\" }\n"
+  @fs.write_string_to_file(
+    "libavcodec/av1_segment_vectors/header_fixture_test.mbt", text,
+  )
+}

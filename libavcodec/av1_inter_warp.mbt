@@ -183,7 +183,7 @@ pub fn av1_inter_derive_warpmv(
     pts[n * 4 + 3] = iy + by_mv
     np.val = n + 1
   }
-  if masks0 == 1UL && (masks1 >> 32) == 0UL {
+  if (masks0 & 0xffffffffUL) == 1UL && (masks1 >> 32) == 0UL {
     let b = rows[r - 1][bx4]
     let off = bx4 & (av1_inter_warp_bs_w(b) - 1)
     add(-off, 0, 1, -1, b)

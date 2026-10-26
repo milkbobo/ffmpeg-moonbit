@@ -1,0 +1,53 @@
+///|
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/encoding/base64",
+  "moonbitlang/core/env",
+}
+
+///|
+fn main raise {
+  let args = @env.args()
+  let stem = if args.length() > 1 { args[1] } else { "seg_inter" }
+  let prefix = if stem == "seg_inter" { "session" } else { stem }
+  let source = @fs.read_file_to_bytes(".scratch/av1/" + stem + ".ivf")
+  let b64 = @base64.encode(source)
+  let out = StringBuilder()
+  out.write_string(
+    "///|\n/// Real libaom \{stem} IVF fixture; encoding settings are recorded in\n/// AGENT_HANDOFF_2026-10-26_INTER_SESSION.md. Reference: FFmpeg 9.0.2\n/// libdav1d framemd5. Regenerate: moon run scripts/emit_av1_session_vectors.mbtx \{stem}\nlet \{prefix}_ivf_b64 : Bytes =\n",
+  )
+  for i = 0; i < b64.length(); i = i + 112 {
+    if i > 0 {
+      out.write_string(" +\n")
+    }
+    out.write_string(
+      "  b\"" + b64[i:(i + 112).min(b64.length())].to_owned() + "\"",
+    )
+  }
+  out.write_string("\n\n///|\nlet \{prefix}_md5 : Array[String] = [\n")
+  let mut count = 0
+  for
+    line in @fs.read_file_to_string(".scratch/av1/" + stem + ".framemd5").split(
+      "\n",
+    ) {
+    let s = line.trim()
+    if s.is_empty() || s.has_prefix("#") {
+      continue
+    }
+    let fields = s.split(",").collect()
+    guard fields.length() == 6 else { fail("bad framemd5 line") }
+    out.write_string("  \"" + fields[5].trim().to_owned() + "\",\n")
+    count += 1
+  }
+  guard count > 0 else { fail("missing reference frames") }
+  out.write_string("]\n")
+  let filename = if stem == "seg_inter" {
+    "fixture_test.mbt"
+  } else {
+    stem + "_fixture_test.mbt"
+  }
+  @fs.write_string_to_file(
+    "libavcodec/av1_inter_realdata_vectors/" + filename,
+    out.to_string(),
+  )
+}

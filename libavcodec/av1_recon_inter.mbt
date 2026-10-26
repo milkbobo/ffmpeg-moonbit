@@ -94,7 +94,8 @@ fn av1_recon_single_plane(
 ) -> FixedArray[Int32] {
   let (mvy, mvx) = mv
   match b.warp {
-    Some(matrix) if b.motion_mode == 2 && b.warp_type == 3 =>
+    Some(matrix) if b.motion_mode == 2 && b.warp_type > 1 &&
+      ((bw4 + ss_h) >> ss_h) > 1 && ((bh4 + ss_v) >> ss_v) > 1 =>
       @av1_mc_core.av1_mc_warp_predict_plane(
         plane.src, plane.stride, plane.width, plane.height, bx4, by4, bw4, bh4,
         ss_h, ss_v, bitdepth, matrix, b.warp_alpha, b.warp_beta,
@@ -147,21 +148,38 @@ fn av1_recon_compound_plane(
   bitdepth : Int32,
   jnt_weight : Int,
   mask : FixedArray[Int32],
-) -> FixedArray[Int32] {
-  let p0 = av1_recon_prep_plane(
-    ref0, b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v, b.filter2d,
-    bitdepth,
-  )
-  let p1 = av1_recon_prep_plane(
-    ref1, b.mv1, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v, b.filter2d,
-    bitdepth,
-  )
+  global0 : Av1WarpedMotion?,
+  global1 : Av1WarpedMotion?,
+  segment_layout : (Int, Int)?,
+) -> (FixedArray[Int32], FixedArray[Int32]) {
+  let prepare = (plane : Av1ReconRefPlane, mv : (Int, Int), global : Av1WarpedMotion?) => {
+    match global {
+      Some(wm) if b.mode == 6 && ((bw4 + ss_h) >> ss_h) > 1 && ((bh4 + ss_v) >> ss_v) > 1 =>
+        @av1_mc_core.av1_mc_warp_prepare_plane(plane.src, plane.stride, plane.width,
+          plane.height, bx4, by4, bw4, bh4, ss_h, ss_v, bitdepth,
+          wm.matrix, wm.alpha, wm.beta, wm.gamma, wm.delta)
+      _ => av1_recon_prep_plane(plane, mv, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h,
+        ss_v, b.filter2d, bitdepth)
+    }
+  }
+  let p0 = prepare(ref0, b.mv0, global0)
+  let p1 = prepare(ref1, b.mv1, global1)
   let w = (bw4 * (4 >> ss_h))
   let h = (bh4 * (4 >> ss_v))
-  @av1_mc_core.av1_mc_compound_blend(
+  if b.comp_type == 3 {
+    // Generate the segment mask from luma once; chroma reuses that mask
+    // after subsampling, rather than deriving another mask from chroma.
+    let (a, c) = if b.mask_sign == 0 { (p0, p1) } else { (p1, p0) }
+    return match segment_layout {
+      Some((sx, sy)) => @av1_mc_core.av1_mc_diffwtd_mask(a, c, w, h,
+        b.mask_sign, sx, sy, bitdepth)
+      None => (@av1_mc_core.av1_mc_mask(a, c, mask, bitdepth), mask)
+    }
+  }
+  (@av1_mc_core.av1_mc_compound_blend(
     p0, p1, b.comp_type, b.mask_sign, jnt_weight, mask, w, h, ss_h,
     ss_v, bitdepth,
-  )
+  ), mask)
 }
 
 
@@ -481,8 +499,8 @@ fn av1_recon_sub8x8_chroma(
 }
 
 ///|
-/// Predict all planes for one inter block. Compound global-warp is not wired
-/// yet.
+/// Predict all planes for one inter block, including frame-level global
+/// warp when the reference is unscaled and its shear parameters are valid.
 pub fn av1_recon_predict_block(
   b : Av1InterBlock,
   ref_y : FixedArray[Av1ReconRefPlane],
@@ -501,6 +519,7 @@ pub fn av1_recon_predict_block(
   intra : Av1ReconPlanes?,
   obmc : Av1ReconObmc?,
   mono? : Bool = false,
+  global_motion? : FixedArray[Av1WarpedMotion?]? = None,
 ) -> Result[Av1ReconPlanes, String] {
   if b.interintra.kind != 0 && intra is None {
     return Err("av1 recon: inter-intra needs an intra prediction")
@@ -509,6 +528,15 @@ pub fn av1_recon_predict_block(
     return Err("av1 recon: OBMC needs neighbour state")
   }
   let single = b.ref1 < 0
+  let global0 = match global_motion { Some(g) => g[b.ref0]; None => None }
+  let global1 = match global_motion { Some(g) if b.ref1 >= 0 => g[b.ref1]; _ => None }
+  let single_b = match global0 {
+    Some(wm) if single && b.mode == 2 => {
+      ..b, motion_mode: 2, warp: Some(wm.matrix), warp_type: wm.typ,
+      warp_alpha: wm.alpha, warp_beta: wm.beta, warp_gamma: wm.gamma, warp_delta: wm.delta,
+    }
+    _ => b
+  }
   let sub8x8 = !mono && single && ss_h == 1 && (bw4 == 1 || bh4 == ss_v)
   if sub8x8 && obmc is None {
     return Err("av1 recon: chroma sub8x8 needs neighbours")
@@ -517,15 +545,16 @@ pub fn av1_recon_predict_block(
   let h = bh4 * 4
   let cw = bw4 * (4 >> ss_h)
   let ch = bh4 * (4 >> ss_v)
-  let y0 = if single {
-    av1_recon_single_plane(
-      b, ref_y[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, 0, 0,
+  let (y0, segment_mask) = if single {
+    (av1_recon_single_plane(
+      single_b, ref_y[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, 0, 0,
       bitdepth,
-    )
+    ), FixedArray::make(0, 0))
   } else {
     av1_recon_compound_plane(
       b, ref_y[b.ref0], ref_y[b.ref1], cur_w, cur_h, bx4, by4, bw4, bh4, 0,
-      0, bitdepth, jnt_weight, av1_recon_wedge_mask(b, 0),
+      0, bitdepth, jnt_weight, av1_recon_wedge_mask(b, 0), global0, global1,
+      Some((ss_h, ss_v)),
     )
   }
   let u0 = if mono {
@@ -543,7 +572,11 @@ pub fn av1_recon_predict_block(
       Some(p) => p
       None =>
         av1_recon_single_plane(
-          b, ref_u[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h,
+          single_b, ref_u[b.ref0], b.mv0, cur_w, cur_h,
+          if bw4 == ss_h { bx4 & (-1 - ss_h) } else { bx4 },
+          if bh4 == ss_v { by4 & (-1 - ss_v) } else { by4 },
+          bw4 << (if bw4 == ss_h { 1 } else { 0 }),
+          bh4 << (if bh4 == ss_v { 1 } else { 0 }), ss_h,
           ss_v, bitdepth,
         )
     }
@@ -551,8 +584,9 @@ pub fn av1_recon_predict_block(
     av1_recon_compound_plane(
       b, ref_u[b.ref0], ref_u[b.ref1], cur_w, cur_h, bx4, by4, bw4, bh4,
       ss_h, ss_v, bitdepth, jnt_weight,
-      av1_recon_wedge_mask(b, av1_recon_layout(ss_h, ss_v)),
-    )
+      if b.comp_type == 3 { segment_mask } else { av1_recon_wedge_mask(b, av1_recon_layout(ss_h, ss_v)) },
+      global0, global1, None,
+    ).0
   }
   let v0 = if mono {
     FixedArray::make(0, 0)
@@ -569,7 +603,11 @@ pub fn av1_recon_predict_block(
       Some(p) => p
       None =>
         av1_recon_single_plane(
-          b, ref_v[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h,
+          single_b, ref_v[b.ref0], b.mv0, cur_w, cur_h,
+          if bw4 == ss_h { bx4 & (-1 - ss_h) } else { bx4 },
+          if bh4 == ss_v { by4 & (-1 - ss_v) } else { by4 },
+          bw4 << (if bw4 == ss_h { 1 } else { 0 }),
+          bh4 << (if bh4 == ss_v { 1 } else { 0 }), ss_h,
           ss_v, bitdepth,
         )
     }
@@ -577,8 +615,9 @@ pub fn av1_recon_predict_block(
     av1_recon_compound_plane(
       b, ref_v[b.ref0], ref_v[b.ref1], cur_w, cur_h, bx4, by4, bw4, bh4,
       ss_h, ss_v, bitdepth, jnt_weight,
-      av1_recon_wedge_mask(b, av1_recon_layout(ss_h, ss_v)),
-    )
+      if b.comp_type == 3 { segment_mask } else { av1_recon_wedge_mask(b, av1_recon_layout(ss_h, ss_v)) },
+      global0, global1, None,
+    ).0
   }
   let y1 = match obmc {
     Some(o) if b.motion_mode == 1 =>
@@ -692,6 +731,7 @@ pub fn av1_recon_b_inter(
   jnt_weight : Int,
   intra : Av1ReconPlanes?,
   obmc : Av1ReconObmc?,
+  global_motion? : FixedArray[Av1WarpedMotion?]? = None,
 ) -> Result[Unit, String] {
   let bw4 = av1_block_dimensions[bs * 4].to_int()
   let bh4 = av1_block_dimensions[bs * 4 + 1].to_int()
@@ -699,7 +739,7 @@ pub fn av1_recon_b_inter(
     (bh4 > ctx.ss_v || (by4 & 1) != 0)
   let planes = match av1_recon_predict_block(
     b, ref_y, ref_u, ref_v, cur_w, cur_h, bx4, by4, bw4, bh4, ctx.ss_h,
-    ctx.ss_v, ctx.bpc, jnt_weight, intra, obmc, mono=ctx.mono,
+    ctx.ss_v, ctx.bpc, jnt_weight, intra, obmc, mono=ctx.mono, global_motion=global_motion,
   ) {
     Ok(p) => p
     Err(e) => return Err(e)

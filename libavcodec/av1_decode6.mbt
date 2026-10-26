@@ -24,7 +24,7 @@ fn Av1TileCtx::backup_ipred_edge(self : Av1TileCtx) -> Unit {
 }
 
 ///|
-/// One superblock row of one tile (decode_tile_sbrow, pass 0, intra only).
+/// One superblock row of one tile (decode_tile_sbrow, single-thread pass 0).
 fn Av1TileCtx::decode_tile_sbrow(
   self : Av1TileCtx,
   root_bl : Int32,
@@ -32,6 +32,13 @@ fn Av1TileCtx::decode_tile_sbrow(
   let f = self.f
   let sb_step = f.sb_step
   f.l.reset_keyframe()
+  if f.inter is Some(_) {
+    for i in 0..<32 { f.l.intra[i] = 0 }
+    f.inter_a[0].reset_left(intra=false)
+  }
+  if self.rstate is Some(rstate) {
+    rstate.tile.init_sbrow(self.by >> f.sb_shift)
+  }
   for i in 0..<32 {
     self.pal_sz_uv[32 + i] = 0
   }
@@ -158,6 +165,29 @@ fn av1_decode_keyframe_payloads(
   if hdr.frame_type != av1_frame_key {
     return Err("av1: not a key frame")
   }
+  match av1_decode_frame_payloads(seq, hdr, payloads,
+    av1_cdf_copy_defaults(hdr.base_q_idx), None, None) {
+    Ok(decoded) => Ok(decoded.picture)
+    Err(e) => Err(e)
+  }
+}
+
+///|
+priv struct Av1DecodedPicture {
+  picture : Av1FrameOutput
+  cdf : Av1CdfCtx
+  segmap : FixedArray[Byte]
+}
+
+///|
+fn av1_decode_frame_payloads(
+  seq : Av1SequenceParameters,
+  hdr : Av1FrameHeader,
+  payloads : Array[Bytes],
+  in_cdf : Av1CdfCtx,
+  inter : Av1InterFrameCtx?,
+  prev_segmap : FixedArray[Byte]?,
+) -> Result[Av1DecodedPicture, String] {
   if hdr.using_qmatrix {
     return Err("av1: qmatrix unsupported")
   }
@@ -209,10 +239,16 @@ fn av1_decode_keyframe_payloads(
   )
   let planes : FixedArray[FixedArray[Int32]] = [y_plane, u_plane, v_plane]
   let a = []
+  let inter_a = []
+  let left = FixedArray::makei(32, _ => { ..av1_inter_intra_neighbor(), intra: false })
   for _ in 0..<(sb128w * hdr.tile_rows) {
     let a_ctx = av1_block_context_new()
     a_ctx.reset_keyframe()
+    if inter is Some(_) { for i in 0..<32 { a_ctx.intra[i] = 0 } }
     a.push(a_ctx)
+    inter_a.push({
+      top: FixedArray::makei(32, _ => { ..av1_inter_intra_neighbor(), intra: false }), left,
+    })
   }
   // One 128-entry row per 64x64 SB row (dav1d: sbh * sb128w * 128).
   let ipred_edge_rows = (bh + sb_step - 1) / sb_step
@@ -273,12 +309,17 @@ fn av1_decode_keyframe_payloads(
     ss_h,
     ss_v,
     a,
+    inter_a,
+    inter,
     l: av1_block_context_new(),
     ipred_edge,
     dq: FixedArray::make(8 * 6, 4),
     seg_lossless: FixedArray::make(8, false),
     seg_qidx: FixedArray::make(8, 0),
-    cur_segmap: FixedArray::make(b4_stride * bh, 8),
+    cur_segmap: if hdr.segmentation_enabled && !hdr.segmentation_update_map {
+      prev_segmap.unwrap_or(FixedArray::make(b4_stride * bh, b'\x00'))
+    } else { FixedArray::make(b4_stride * bh, b'\x08') },
+    prev_segmap,
     b4_stride,
     lf_mask,
     lf_level: FixedArray::make(b4_stride * av1_imax(bh, 1) * 4, 0),
@@ -299,7 +340,8 @@ fn av1_decode_keyframe_payloads(
   }
   f.init_quant()
   let root_bl = if seq.use_128x128_superblock { 0 } else { 1 }
-  let result : Result[Av1FrameOutput, String] = try {
+  let result : Result[Av1DecodedPicture, String] = try {
+    let tasks : Array[Av1TileCtx] = []
     for tile_idx in 0..<num_tiles {
       let tile_row = tile_idx / hdr.tile_cols
       let tile_col = tile_idx % hdr.tile_cols
@@ -314,7 +356,14 @@ fn av1_decode_keyframe_payloads(
       let ts : Av1TileCtx = {
         f,
         msac: Av1Msac::init(payloads[tile_idx], hdr.disable_cdf_update),
-        cdf: av1_cdf_copy_defaults(hdr.base_q_idx),
+        cdf: in_cdf.copy(),
+        rstate: match inter {
+          Some(fr) => {
+            let base = fr.prepared.state
+            Some({ ..base, tile: { ..base.tile, rows: base.tile.rows.copy() } })
+          }
+          None => None
+        },
         col_start,
         col_end,
         row_start,
@@ -355,28 +404,35 @@ fn av1_decode_keyframe_payloads(
           t
         },
       }
-      let mut by = row_start
-      while by < row_end {
-        ts.by = by
-        if ts.decode_tile_sbrow(root_bl) {
-          raise Av1DecError::Unsupported("symbol decoder overread")
+      tasks.push(ts)
+    }
+    for tile_row in 0..<hdr.tile_rows {
+      let first = tasks[tile_row * hdr.tile_cols]
+      for by = first.row_start; by < first.row_end; by = by + sb_step {
+        let end8 = av1_imin((by + sb_step) >> 1, bh >> 1)
+        if inter is Some(fr) {
+          fr.prepared.state.begin_sbrow(by >> sb_shift, 0, bw >> 1, by >> 1, end8)
         }
-        // dav1d: back up the tile's right-edge tx_lpf values and mark tile
-        // row starts for the loop filter's tile-boundary mask fixups.
-        for k in 0..<sb_step {
-          f.tile_lpf_y[align_h * tile_col + by + k] = f.l.tx_lpf_y[(by & 16) +
-            k]
+        for tile_col in 0..<hdr.tile_cols {
+          let ts = tasks[tile_row * hdr.tile_cols + tile_col]
+          ts.by = by
+          if ts.decode_tile_sbrow(root_bl) {
+            raise Av1DecError::Unsupported("tile \{tile_col},\{tile_row}, sbrow \{by}: symbol decoder overread")
+          }
+          for k in 0..<sb_step {
+            f.tile_lpf_y[align_h * tile_col + by + k] = f.l.tx_lpf_y[(by & 16) + k]
+          }
+          for k in 0..<(sb_step >> ss_v) {
+            f.tile_lpf_uv[align_h_uv * tile_col + (by >> ss_v) + k] =
+              f.l.tx_lpf_uv[((by & 16) >> ss_v) + k]
+          }
+          if by == ts.row_start && tile_row > 0 {
+            f.start_of_tile_row[by / sb_step] = tile_row
+          }
         }
-        for k in 0..<(sb_step >> ss_v) {
-          f.tile_lpf_uv[align_h_uv * tile_col + (by >> ss_v) + k] = f.l.tx_lpf_uv[((by &
-            16) >>
-            ss_v) +
-            k]
+        if inter is Some(fr) {
+          fr.prepared.state.finish_sbrow(0, bw >> 1, by >> 1, end8)
         }
-        if by == row_start && tile_row > 0 {
-          f.start_of_tile_row[by / sb_step] = tile_row
-        }
-        by = by + sb_step
       }
     }
     // clear trailing bits check is skipped (strict mode off)
@@ -401,7 +457,10 @@ fn av1_decode_keyframe_payloads(
     if f.lr_active {
       f.lr_frame(snap0, snap1, snap2)
     }
-    Ok({
+    let out_cdf = if hdr.disable_frame_end_update_cdf { in_cdf } else {
+      tasks[hdr.context_update_tile_id].cdf.for_reference()
+    }
+    Ok({ picture: {
       y: f.planes[0],
       u: f.planes[1],
       v: f.planes[2],
@@ -413,7 +472,7 @@ fn av1_decode_keyframe_payloads(
       ss_v,
       mono: seq.monochrome,
       bitdepth: bpc,
-    })
+    }, cdf: out_cdf, segmap: f.cur_segmap })
   } catch {
     Av1DecError::Unsupported(msg) => Err(msg)
   }

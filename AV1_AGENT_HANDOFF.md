@@ -4,6 +4,12 @@
 [PORTING_HISTORY.md](PORTING_HISTORY.md) 与 [agent.md](agent.md)；
 本文只覆盖 **AV1 像素解码** 这一条正在进行的切片。
 
+> **2026-10-26 最新接续（§95–96 提交版）**：请先读
+> [会话入口报告](AGENT_HANDOFF_2026-10-26_INTER_SESSION.md)。§96 已接入
+> inter 整帧、参考槽位/CDF/segmap、GM warp、隐藏帧/show-existing；
+> 5 组真实码流共 35 个显示帧与 libdav1d MD5 一致。剩余整帧 superres、
+> qmatrix，以及更广 inter 格式/尺寸变化验证；film grain、intrabc 不做。
+
 > **2026-10-26 帧间交接请先读
 > [AGENT_HANDOFF_2026-10-26_INTER.md](AGENT_HANDOFF_2026-10-26_INTER.md)**
 > （§67–§84 已推送：refmvs 的 find/初始化/行环/load/save/参考槽位，

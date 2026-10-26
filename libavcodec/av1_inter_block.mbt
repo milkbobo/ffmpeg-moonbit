@@ -5,7 +5,10 @@
 /// the refmvs publish.
 
 ///|
-/// Neighbour state for one tile, in absolute 4x4 coordinates. Cells start
+/// Neighbour state for one 128-pixel above-context bank and the current
+/// superblock row's left edge. Indices are within-bank 4x4 coordinates.
+/// The frame driver retains a separate top array for each bank across rows
+/// and resets the shared left array at each tile superblock row. Cells start
 /// as intra (dav1d resets tile edges to intra=1) and are overwritten as
 /// blocks are decoded.
 pub(all) struct Av1InterTileState {
@@ -15,7 +18,7 @@ pub(all) struct Av1InterTileState {
 
 ///|
 fn av1_inter_intra_neighbor() -> Av1InterNeighbor {
-  { intra: true, comp_type: 0, ref0: -1, ref1: -1, filter0: 3, filter1: 3 }
+  { intra: true, comp_type: 0, ref0: -1, ref1: -1, filter0: 3, filter1: 3, }
 }
 
 ///|
@@ -27,8 +30,17 @@ pub fn av1_inter_tile_state_new(w4 : Int, h4 : Int) -> Av1InterTileState {
 }
 
 ///|
-/// Publish one decoded block into the top/left edge contexts; the top row
-/// sees it as `top`, the left column as `left`.
+/// dav1d reset_context's inter edge defaults. Reset left at each tile SB
+/// row while keeping the selected above bank from the preceding row.
+pub fn Av1InterTileState::reset_left(self : Av1InterTileState, intra? : Bool = true) -> Unit {
+  for i in 0..<self.left.length() {
+    self.left[i] = { ..av1_inter_intra_neighbor(), intra }
+  }
+}
+
+///|
+/// Publish one decoded block using absolute 4x4 coordinates. The caller
+/// selects the above-context bank; both edge offsets use dav1d's `& 31`.
 pub fn Av1InterTileState::set_block(
   self : Av1InterTileState,
   bx4 : Int,
@@ -37,10 +49,12 @@ pub fn Av1InterTileState::set_block(
   bh4 : Int,
   n : Av1InterNeighbor,
 ) -> Unit {
-  for x in bx4..<(bx4 + bw4) {
+  let bx = bx4 & 31
+  let by = by4 & 31
+  for x in bx..<(bx + bw4) {
     self.top[x] = n
   }
-  for y in by4..<(by4 + bh4) {
+  for y in by..<(by + bh4) {
     self.left[y] = n
   }
 }

@@ -119,6 +119,8 @@ priv struct Av1FrameCtx {
   ss_v : Int32
   /// Above-context ring: sb128w * tile_rows entries.
   a : Array[Av1BlockContext]
+  inter_a : Array[Av1InterTileState]
+  inter : Av1InterFrameCtx?
   /// Left context for the current SB row.
   l : Av1BlockContext
   /// ipred edge backup: 3 planes of sb128w*128*(sb128h+1).
@@ -132,6 +134,7 @@ priv struct Av1FrameCtx {
   /// Per-4x4 segment ids of the current frame, 8 = not yet assigned
   /// (dav1d cur_segmap; only written when segmentation is enabled).
   cur_segmap : FixedArray[Byte]
+  prev_segmap : FixedArray[Byte]?
   /// Loop-filter state (b4-aligned level cache + per-128x128 masks).
   b4_stride : Int32
   lf_mask : Array[Av1Filter]
@@ -161,6 +164,7 @@ priv struct Av1TileCtx {
   f : Av1FrameCtx
   msac : Av1Msac
   cdf : Av1CdfCtx
+  rstate : Av1RefmvsFrameState?
   col_start : Int32
   col_end : Int32
   row_start : Int32

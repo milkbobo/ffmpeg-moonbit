@@ -153,6 +153,7 @@ pub fn Av1RefmvsReferenceStore::prepare_frame(
   {
     state: av1_refmvs_frame_state_new(
       frame_rf, init, rp_ref, rp_stride, iw8, ih8, sbsz,
+      hdr_use_ref_frame_mvs=use_ref_frame_mvs,
     ),
     poc, upscaled_width, height, ref_poc,
   } |> Ok

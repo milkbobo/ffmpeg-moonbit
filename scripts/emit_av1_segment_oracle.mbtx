@@ -1,0 +1,44 @@
+///|
+import {
+  "moonbitlang/x/fs",
+}
+
+///|
+fn between(source : String, start : String, end : String) -> String {
+  let pieces = source.split(start).collect()
+  guard pieces.length() == 2 else {
+    println("missing or ambiguous source marker: " + start)
+    abort("source marker")
+  }
+  let tail = pieces[1].to_owned()
+  let ends = tail.split(end).collect()
+  guard ends.length() >= 2 else {
+    println("missing end marker: " + end)
+    abort("end marker")
+  }
+  ends[0].to_owned()
+}
+
+///|
+fn main raise {
+  let source = @fs.read_file_to_string(
+    "C:/Users/milkb/AppData/Local/Temp/dav1d-src/src/decode.c",
+  ).replace_all(old="\r\n", new="\n")
+  let helpers = "static int neg_deinterleave" +
+    between(
+      source, "static int neg_deinterleave", "static void find_matching_ref",
+    )
+  let previous = "static inline unsigned get_prev_frame_segid" +
+    between(
+      source, "static inline unsigned get_prev_frame_segid", "static inline void splat_oneref_mv",
+    )
+  let pre = "    int seg_pred = 0;" +
+    between(source, "    int seg_pred = 0;", "    // skip_mode")
+  let post = between(source, "    // segment_id\n", "    // cdef index")
+  let template = @fs.read_file_to_string("scripts/av1_segment_reference.c.in")
+  let emitted = template
+    .replace(old="//<<HELPERS>>", new=helpers + previous)
+    .replace(old="//<<PRESKIP>>", new=pre)
+    .replace(old="//<<POSTSKIP>>", new=post)
+  @fs.write_string_to_file(".scratch/av1/segment_reference.c", emitted)
+}

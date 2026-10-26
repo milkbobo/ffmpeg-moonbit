@@ -550,6 +550,7 @@ pub fn av1_refmvs_find(
   top_has_right : Bool,
   by4 : Int,
   bx4 : Int,
+  initial_globalmv_ctx? : Int = 0,
 ) -> Av1RefmvsResult {
   let bw4 = av1_block_dimensions[bs * 4].to_int()
   let bh4 = av1_block_dimensions[bs * 4 + 1].to_int()
@@ -635,7 +636,7 @@ pub fn av1_refmvs_find(
     stack[n].weight = stack[n].weight + 640
   }
   // temporal
-  let mut globalmv_ctx = if rf.use_ref_frame_mvs { 1 } else { 0 }
+  let mut globalmv_ctx = initial_globalmv_ctx
   if rf.use_ref_frame_mvs {
     let by8 = by4 >> 1
     let bx8 = bx4 >> 1
@@ -646,7 +647,7 @@ pub fn av1_refmvs_find(
     let h8a = (h4 + 1) >> 1
     let w8 = if w8a < 8 { w8a } else { 8 }
     let h8 = if h8a < 8 { h8a } else { 8 }
-    let gctx = Ref(0)
+    let gctx = Ref(globalmv_ctx)
     let mut rb_row = rbi
     let mut y = 0
     while y < h8 {
@@ -679,10 +680,10 @@ pub fn av1_refmvs_find(
         bot_cap_b
       })
       let col_cap_a = tile_col_start4 >> 1
-      let col_x_cap = if col_cap_a > (bx8 & -7) {
+      let col_x_cap = if col_cap_a > (bx8 & -8) {
         col_cap_a
       } else {
-        bx8 & -7
+        bx8 & -8
       }
       if has_bottom && bx8 - 1 >= col_x_cap {
         av1_rmv_add_temporal(
@@ -691,7 +692,7 @@ pub fn av1_refmvs_find(
         )
       }
       let end_cap_a = tile_col_end4 >> 1
-      let end_cap_b = (bx8 & -7) + 8
+      let end_cap_b = (bx8 & -8) + 8
       let end_cap = if end_cap_a < end_cap_b { end_cap_a } else { end_cap_b }
       if bx8 + bw8 < end_cap {
         if has_bottom {
@@ -701,7 +702,7 @@ pub fn av1_refmvs_find(
           )
         }
         let row_cap_a = tile_row_end4 >> 1
-        let row_cap_b = (by8 & -7) + 8
+        let row_cap_b = (by8 & -8) + 8
         let row_cap = if row_cap_a < row_cap_b {
           row_cap_a
         } else {
@@ -718,9 +719,9 @@ pub fn av1_refmvs_find(
   }
   // top-left (part of "secondary")
   let dummy_newmv = Ref(false)
-  // dav1d reads `r[-1][bx4 - 1]` here even at bx4 == 0, which addresses the
-  // cell before the row buffer; skip that undefined column instead.
-  if (n_rows != none || n_cols != none) && bx4 > 0 {
+  // C tests (n_rows | n_cols) != ~0U: both edges must be available.
+  // In particular, never read the neighbouring tile at its left border.
+  if n_rows != none && n_cols != none {
     av1_rmv_add_spatial(
       stack, cnt, 4, rows[top_row][bx4 - 1], ref0, ref1, gmv0, gmv1,
       dummy_newmv, have_row_mvs,

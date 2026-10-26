@@ -3348,3 +3348,53 @@ uvtx, layout)` 用例；比较叶子顺序哈希（相对坐标/tx/txtp/eob）�
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 全量测试 **956/956**。
+
+## 95. AV1 整帧前置状态：分段继承与 temporal 语法、CDF 快照、邻域坐标
+
+- `av1_segment.mbt` 统一 decode_b 的空间/temporal/旧 map 分段读取：
+  postskip 的 skip 块不消耗 seg_pred/seg_id 符号；旧 map 取可见块最小 id；
+  真实 seg_pred 回写 a/l，cur_segmap 仅在 update_map 时更新。
+  帧入口的 prev_segmap 仍为 None，会话选择和尺寸匹配还未接入。
+- 帧头保留三个 segmentation 更新标志；新增 reference-header 快照，
+  update_data=false 通过 ref_frame_idx[primary_ref] 继承全部 feature 数据，
+  qidx/lossless 按新帧重新推导。使用真实 libaom P2 header 插入 feature
+  syntax 验证三种更新组合、slot 1 间接引用和数组隔离；缺旧 header 明确报错。
+- `Av1CdfCtx::copy` 深拷贝 82 个表；逐元素验证源、reference、tile 三者隔离。
+  `set_block` 写入改为 &31，增加仅清 left 的 reset；跨 bank 回归保证 top 保留。
+- 独立 `av1_segment_vectors` 包加入 96 组 dav1d 原文 C 分支对拍，比较
+  决策、rng/dif 和两组 CDF 全表。新自动化均为 `.mbtx`，C 源来自
+  dav1d 1.5.1 decode.c:169、494、816–944，未自造期望值。
+
+这一步补齐状态原语；inter 主体、会话与端到端 MD5 仍未完成。接续说明见
+[FRAME_STATE](AGENT_HANDOFF_2026-10-26_FRAME_STATE.md)。改动未提交、未推送。
+
+`moon check --target wasm --deny-warn --no-render` 零警告，Wasm 全量 **960/960**。
+
+## 96. AV1 帧间整帧与持久会话、真实多帧 MD5
+
+`Av1Decoder::decode_packet` 现在维护 sequence、8 个参考槽位及图像/header/
+CDF/segmap/refmvs 状态，支持隐藏帧与 show-existing。decode_b 接入 inter
+语法、inter 帧内 intra、var-tx、预测/残差、LF、邻域与 segmap；通用帧驱动
+按 sbrow × tile 共享时域投影，保留独立 tile CDF 与 above bank，继续使用
+完整 deblock/CDEF/LR。原关键帧 API 保留。
+
+参考 CDF 清真实 symbol-count 位置的计数，保留 padding，80 表与 dav1d
+原始函数对拍；primary ref 同时用于 segmap 与 LF delta 继承。有效 frame
+GM warp 接入单/双参考，按 plane 最小尺寸和参考缩放条件选择。
+
+真实流修正了 refmvs header temporal bit 与 globalmv_ctx、时域坐标清低三位、
+tile 左边界的左上候选、warp unsigned mask 比较、DSP rounded shear、
+小色度 plane 的 warp 门控、sub8x8 fallback 与 segment compound 的亮度掩码
+复用。新独立测试包用 5 组 libaom IVF 的 **35 个显示帧** 对拍 libdav1d
+framemd5，覆盖普通 P 帧、2×2 tiles、10-bit、GM、隐藏/重排序帧，全部一致。
+
+主包 Wasm 测试 init 达到 local 上限，合并既有 AAC height fixture 的相邻
+base64 Bytes 字面量以减少运行时拼接，编码字节不变；再生后可运行
+`scripts/compact_test_bytes.mbtx`。新增 AV1 大向量保持独立包。
+
+下一步为整帧 superres、qmatrix 及更广 inter 格式/尺寸变化。film grain、
+intrabc 按原范围不做。完整参数、入口约定与再生步骤见
+[INTER_SESSION](AGENT_HANDOFF_2026-10-26_INTER_SESSION.md)。本轮按用户要求提交并推送。
+
+`moon check --target wasm --deny-warn --no-render` 零警告，Wasm 全量
+**968/968**；`moon info --target wasm` 已运行并检查新增接口。
