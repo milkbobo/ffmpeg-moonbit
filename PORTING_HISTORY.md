@@ -3268,3 +3268,31 @@ RTX_64X16=18`，与按 16x64/64x16/8x32/32x8 的直觉顺序不同（表已按�
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 全量测试 **953/953**。
+
+## 92. 2026-10-26 AV1 帧间残差遍历（系数树 + 色度）
+
+`av1_inter_residual.mbt` 移植 dav1d `recon_b_inter` 的残差半段：
+- `av1_read_coef_tree`：按 `tx_split0/1` 递归下探（深度 <2、父 tx >8x8），
+  每叶读一个系数块（`Av1CoefReader` 注入，生产端接 `decode_coefs`），
+  按 `imin(txw, bw-bx)` / `imin(txh, bh-by)` 写 `a->lcoef`/`l->lcoef`，
+  并把 txtp 填满 `txtp_map` 的 `txh × txw` 区域；
+- `av1_read_inter_residual`：luma 以 **块尺寸** 划分 16x16 初始化窗口、
+  内层止于可见 `w4/h4`（`x_off/y_off = !!init`）；色度按 `uvtx`
+  逐块循环，`luma_txtp` 从 `txtp_map[(by+(y<<ss_v))*32 + bx+(x<<ss_h)]`
+  取，上下文写长度用 `((bw-bx+ss)>>ss)`；`has_chroma=false` 跳过色度。
+
+对拍：`.scratch/av1/coeftree_dump.c` 逐行拷贝上述两段（仅把
+`decode_coefs` 换成确定性 1 位读取器，并把 itxfm 换成叶子记录），
+2 个 LCG seed × 64 组随机 `(bs, abx/aby, bw/bh, max_ytx, split0/1,
+uvtx, layout)` 用例；比较叶子顺序哈希（相对坐标/tx/txtp/eob）、
+`lcoef`/`ccoef` 上下文、`txtp_map` 区域哈希与 msac 终态。
+生成器 `scripts/_emit_av1_inter_residual_vectors.py` 产出
+`av1_inter_residual_vectors/residual_test.mbt`，128 组全部一致。
+
+注意点：luma 外层窗口按 **块** 尺寸（含不可见部分）推进、内层才按可见
+尺寸停止；色度上下文索引用块内 SB 偏移 + 色度相对坐标；`txtp_map`
+以 4x4 luma 单元为粒度。真实 `decode_coefs` 已由关键帧整帧位精确覆盖，
+本夹具只验证遍历与上下文，两者互补。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+全量测试 **954/954**。
