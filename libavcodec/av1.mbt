@@ -429,6 +429,11 @@ pub struct Av1FrameHeader {
   segmentation_enabled : Bool
   segmentation_feature_mask : Array[Int32]
   segmentation_alt_q : Array[Int32]
+  /// Per-segment REF_FRAME feature (raw 3-bit 0..7, -1 = not coded).
+  seg_ref : Array[Int32]
+  /// Per-segment SKIP / GLOBALMV features.
+  seg_skip : Array[Bool]
+  seg_globalmv : Array[Bool]
   /// Per-segment ALT_LF deltas `[seg*4 + dir]`, dir 0/1/2/3 = y_v/y_h/u/v
   /// (only meaningful when `segmentation_enabled`).
   seg_delta_lf : Array[Int32]
@@ -726,6 +731,9 @@ pub fn av1_parse_frame_header(
           segmentation_enabled: false,
           segmentation_feature_mask: [],
           segmentation_alt_q: [],
+          seg_ref: [],
+          seg_skip: [],
+          seg_globalmv: [],
           seg_delta_lf: [],
           seg_preskip: false,
           seg_last_active: -1,
@@ -1166,6 +1174,9 @@ pub fn av1_parse_frame_header(
       let mut segmentation_enabled = false
       let mut segmentation_masks : Array[Int32] = []
       let mut segmentation_alt_qs : Array[Int32] = []
+      let seg_refs : Array[Int32] = []
+      let seg_skips : Array[Bool] = []
+      let seg_gmvs : Array[Bool] = []
       let seg_lf : Array[Int32] = []
       let mut seg_preskip = false
       let mut seg_last_active : Int32 = -1
@@ -1233,6 +1244,9 @@ pub fn av1_parse_frame_header(
               let mut mask = 0
               let mut altq = 0
               let mut any = false
+              let mut sref : Int32 = -1
+              let mut sskip = false
+              let mut sgmv = false
               for f in 0..<8 {
                 if br.read1() != 0 {
                   mask = mask | (1 << f)
@@ -1245,9 +1259,14 @@ pub fn av1_parse_frame_header(
                     let v = br.read(7).reinterpret_as_int()
                     seg_lf.push(if (v & 0x40) != 0 { v - 0x80 } else { v })
                   } else if f == 5 {
-                    br.skip(3)
+                    sref = br.read(3).reinterpret_as_int()
                     seg_preskip = true
                   } else {
+                    if f == 6 {
+                      sskip = true
+                    } else {
+                      sgmv = true
+                    }
                     seg_preskip = true
                   }
                 } else if f >= 1 && f <= 4 {
@@ -1259,11 +1278,21 @@ pub fn av1_parse_frame_header(
               }
               seg_masks.push(mask)
               seg_alt_q.push(altq)
+              seg_refs.push(sref)
+              seg_skips.push(sskip)
+              seg_gmvs.push(sgmv)
             }
           }
         } else {
           for _ in 0..<32 {
             seg_lf.push(0)
+          }
+        }
+        if !segmentation_enabled {
+          for _ in 0..<8 {
+            seg_refs.push(-1)
+            seg_skips.push(false)
+            seg_gmvs.push(false)
           }
         }
         segmentation_masks = seg_masks
@@ -1683,6 +1712,9 @@ pub fn av1_parse_frame_header(
         segmentation_enabled,
         segmentation_feature_mask: segmentation_masks,
         segmentation_alt_q: segmentation_alt_qs,
+        seg_ref: seg_refs,
+        seg_skip: seg_skips,
+        seg_globalmv: seg_gmvs,
         seg_delta_lf: {
           if seg_lf.length() == 32 {
             seg_lf

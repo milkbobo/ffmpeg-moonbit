@@ -38,7 +38,10 @@ superblock 行环、空间发布、时域保存、缩放投影与等值游程快
 与 var-tx 分区树（`read_vartx_tree`/`txpart` 与 tx 邻域上下文）完成
 C 位级对拍；帧间残差遍历（luma 系数树 + 色度 uvtx 循环、系数上下文
 与 luma-txtp 映射）也已对拍；块重建已把预测与残差（含逆变换）装配到帧
-平面（`av1_recon_b_inter`）。`decode_b` 的 inter 入口与整帧解码入口仍待接入。
+平面（`av1_recon_b_inter`）。帧头分段已解析 inter 的 REF_FRAME/SKIP/
+GLOBALMV 特征，`decode_b` 已加入 skip_mode 前置语法并使用分段 SKIP；
+帧间邻域上下文区分「绝对坐标（refmvs/OBMC 行）」与「SB 内坐标（a/l）」。
+`decode_b` 的 inter 主体分支与整帧解码入口仍待接入。
 
 ## 构建与测试
 

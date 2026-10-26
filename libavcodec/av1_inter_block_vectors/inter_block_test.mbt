@@ -434,7 +434,7 @@ test "inter block syntax driver matches dav1d" {
     let subpel = ((fl >> 18) % 5U).reinterpret_as_int()
     let seg_present = av1_ib_bit(fl, 11)
     let params : @libavcodec.Av1InterBlockParams = {
-      bs, bx4: bx, by4: by, w4: bw4, h4: bh4,
+      bs, bx4: bx, by4: by, bx4_ctx: bx, by4_ctx: by, w4: bw4, h4: bh4,
       tile_col_start4: 0, tile_col_end4: 16,
       tile_row_start4: 0, tile_row_end4: 16,
       top_has_right: av1_ib_bit(fl, 17),

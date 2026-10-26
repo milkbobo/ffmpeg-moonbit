@@ -32,7 +32,7 @@ fn inter_block_test_params(
   switchable_filter : Bool,
 ) -> @libavcodec.Av1InterBlockParams {
   {
-    bs: 17, bx4: 2, by4: 0, w4: 2, h4: 2,
+    bs: 17, bx4: 2, by4: 0, bx4_ctx: 2, by4_ctx: 0, w4: 2, h4: 2,
     tile_col_start4: 0, tile_col_end4: 16,
     tile_row_start4: 0, tile_row_end4: 16,
     top_has_right: false, have_top: false, have_left: true,

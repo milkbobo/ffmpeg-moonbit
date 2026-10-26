@@ -297,8 +297,8 @@ fn av1_recon_obmc_plane(
         let ow4 = av1_recon_imin(step, bw4)
         let oh4 = av1_recon_imin(bh4, 16) >> 1
         let filter2d = av1_inter_filter2d(
-          obmc.nstate.top[bx4 + x + 1].filter0,
-          obmc.nstate.top[bx4 + x + 1].filter1,
+          obmc.nstate.top[(bx4 & 31) + x + 1].filter0,
+          obmc.nstate.top[(bx4 & 31) + x + 1].filter1,
         )
         av1_recon_obmc_region(
           out, dst_w, x * h_mul, 0, refs, cur_w, cur_h, bx4 + x, by4, ow4,
@@ -320,8 +320,8 @@ fn av1_recon_obmc_plane(
         let ow4 = av1_recon_imin(bw4, 16) >> 1
         let oh4 = av1_recon_imin(step, bh4)
         let filter2d = av1_inter_filter2d(
-          obmc.nstate.left[by4 + y + 1].filter0,
-          obmc.nstate.left[by4 + y + 1].filter1,
+          obmc.nstate.left[(by4 & 31) + y + 1].filter0,
+          obmc.nstate.left[(by4 & 31) + y + 1].filter1,
         )
         av1_recon_obmc_region(
           out, dst_w, 0, y * v_mul, refs, cur_w, cur_h, bx4, by4 + y, ow4,
@@ -440,8 +440,8 @@ fn av1_recon_sub8x8_chroma(
       None => return None
     }
     let f = av1_inter_filter2d(
-      neigh.nstate.top[if bx4 > 0 { bx4 - 1 } else { 0 }].filter0,
-      neigh.nstate.top[if bx4 > 0 { bx4 - 1 } else { 0 }].filter1,
+      neigh.nstate.top[if (bx4 & 31) > 0 { (bx4 & 31) - 1 } else { 0 }].filter0,
+      neigh.nstate.top[if (bx4 & 31) > 0 { (bx4 & 31) - 1 } else { 0 }].filter1,
     )
     place(predict_from(nb, bx4 - 1, by4 - 1, f), 0, 0)
     v_off = 2
@@ -453,7 +453,7 @@ fn av1_recon_sub8x8_chroma(
       None => return None
     }
     let f = av1_inter_filter2d(
-      neigh.nstate.left[by4].filter0, neigh.nstate.left[by4].filter1,
+      neigh.nstate.left[by4 & 31].filter0, neigh.nstate.left[by4 & 31].filter1,
     )
     place(predict_from(nb, bx4 - 1, by4, f), 0, v_off)
     h_off = 2
@@ -464,7 +464,7 @@ fn av1_recon_sub8x8_chroma(
       None => return None
     }
     let f = av1_inter_filter2d(
-      neigh.nstate.top[bx4].filter0, neigh.nstate.top[bx4].filter1,
+      neigh.nstate.top[bx4 & 31].filter0, neigh.nstate.top[bx4 & 31].filter1,
     )
     place(predict_from(nb, bx4, by4 - 1, f), h_off, 0)
     v_off = 2

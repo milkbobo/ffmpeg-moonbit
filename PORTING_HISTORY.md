@@ -3323,3 +3323,28 @@ uvtx, layout)` 用例；比较叶子顺序哈希（相对坐标/tx/txtp/eob）�
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 全量测试 **956/956**。
+
+## 94. 2026-10-26 AV1 分段 inter 特征、skip_mode 前置与邻域坐标修正
+
+- **分段特征**（`av1.mbt`）：`Av1FrameHeader` 新增 `seg_ref`（原始 3-bit，
+  -1 = 未编码）、`seg_skip`、`seg_globalmv`；解析 feature 5/6/7 时分别
+  保存。`decode_b` 的 preskip 强制跳过改用 `seg_skip[seg_id]`——此前
+  误用了 feature 5（REF_FRAME）的掩码位，是潜伏 bug（关键帧向量未触发）。
+  `update_data=false` 的「从 primary ref 复制分段」尚未实现（inter 整帧
+  入口时补）。
+- **skip_mode 前置**（`av1_decode4.mbt`）：按 dav1d 顺序在 preskip seg_id
+  之后、skip 之前读 `skip_mode`：仅当没有强制 ref/GMV/SKIP 分段、
+  `skip_mode_enabled` 且 `min(bw4,bh4)>1` 时读取；
+  `skip = skip_mode || seg_skip || cdf skip`。非 preskip 时 dav1d 的
+  `seg == NULL`，因此不参与 skip_mode/skip 判定。inter 主体分支仍未接入
+  （入口继续显式拒绝）。
+- **邻域坐标语义修正**（`av1_inter_block.mbt` / `av1_recon_inter.mbt`）：
+  `Av1InterBlockParams` 增加 `bx4_ctx/by4_ctx`——refmvs find/splat、
+  `find_matching_ref` 与 OBMC 行仍用**绝对** 4x4 坐标，而
+  `a/l` 邻域（mask/jnt/filter ctx、has_overlappable_neighbor、OBMC 邻块
+  滤波器、色度 sub8x8 派生）用 `& 31` 的 SB 内坐标，与 dav1d
+  `bx4 = t->bx & 31` 一致。既有 96 组块驱动对拍（坐标 <32 时两者相同）
+  保持通过。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+全量测试 **956/956**。

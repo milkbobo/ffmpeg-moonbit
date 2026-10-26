@@ -176,7 +176,9 @@ fn Av1TileCtx::decode_b(
   if hdr.allow_intrabc {
     raise Av1DecError::Unsupported("PATCHWELCOME: AV1 intrabc")
   }
-  if hdr.frame_type != av1_frame_key && hdr.frame_type != av1_frame_intra_only {
+  let is_inter = hdr.frame_type == av1_frame_inter ||
+    hdr.frame_type == av1_frame_switch
+  if is_inter {
     raise Av1DecError::Unsupported("PATCHWELCOME: AV1 inter frame")
   }
   let bx4 = self.bx & 31
@@ -208,9 +210,25 @@ fn Av1TileCtx::decode_b(
       seg_id = 0
     }
   }
+  // With preskip segmentation the segment features are known before the
+  // skip flag; without it dav1d reads skip_mode/skip with `seg == NULL`
+  // and only then decodes the segment id.
+  let seg_preskip = hdr.segmentation_enabled && hdr.seg_preskip
+  let seg_ref_ps : Int32 = if seg_preskip { hdr.seg_ref[seg_id] } else { -1 }
+  let seg_skip_ps = seg_preskip && hdr.seg_skip[seg_id]
+  let seg_gmv_ps = seg_preskip && hdr.seg_globalmv[seg_id]
+  let skip_mode_ok = (!hdr.segmentation_enabled ||
+    (seg_ref_ps == -1 && !seg_gmv_ps && !seg_skip_ps)) &&
+    hdr.skip_mode_enabled && av1_imin(bw4, bh4) > 1
+  let skip_mode = if skip_mode_ok {
+    self.msac.decode_bool_adapt(
+      self.cdf.skip_mode, (a.skip_mode[bx4] + l.skip_mode[by4]) * 2,
+    ) != 0
+  } else {
+    false
+  }
   let sctx = a.skip[bx4] + l.skip[by4]
-  let skip = if hdr.segmentation_enabled && hdr.seg_preskip &&
-    (hdr.segmentation_feature_mask[seg_id] & (1 << 5)) != 0 {
+  let skip = if skip_mode || seg_skip_ps {
     true
   } else {
     self.msac.decode_bool_adapt(self.cdf.skip, sctx * 2) != 0

@@ -77,8 +77,12 @@ pub fn Av1InterTileState::has_overlappable_neighbor(
 /// Inputs shared by every inter block in the tile.
 pub(all) struct Av1InterBlockParams {
   bs : Int
+  /// Absolute 4x4 position for refmvs lookups and publishing.
   bx4 : Int
   by4 : Int
+  /// Within-SB (`& 31`) position for the a/l neighbour contexts.
+  bx4_ctx : Int
+  by4_ctx : Int
   w4 : Int
   h4 : Int
   tile_col_start4 : Int
@@ -158,20 +162,20 @@ pub fn av1_inter_read_block(
   let bw4 = av1_block_dimensions[params.bs * 4].to_int()
   let bh4 = av1_block_dimensions[params.bs * 4 + 1].to_int()
   let top = if params.have_top {
-    Some(nstate.top[params.bx4])
+    Some(nstate.top[params.bx4_ctx])
   } else {
     None
   }
   let left = if params.have_left {
-    Some(nstate.left[params.by4])
+    Some(nstate.left[params.by4_ctx])
   } else {
     None
   }
   // dav1d's mask/jnt/filter contexts read the a/l arrays unconditionally
   // (tile-edge entries are pre-reset to intra); only the reference trees
   // and the compound flag take have_top/have_left.
-  let top_any = Some(nstate.top[params.bx4])
-  let left_any = Some(nstate.left[params.by4])
+  let top_any = Some(nstate.top[params.bx4_ctx])
+  let left_any = Some(nstate.left[params.by4_ctx])
   let motion = av1_inter_read_block_motion(
     msac, cdf, rstate, top, left,
     {
@@ -204,12 +208,12 @@ pub fn av1_inter_read_block(
     let mask = av1_inter_read_compound_mask(
       msac, cdf, params.masked_compound, params.jnt_comp, params.bs,
       av1_inter_mask_comp_ctx(
-        nstate.top[params.bx4], nstate.left[params.by4],
+        nstate.top[params.bx4_ctx], nstate.left[params.by4_ctx],
       ),
       av1_inter_jnt_comp_ctx(
         params.order_hint_bits, params.cur_order_hint,
         params.ref_order_hint[motion.ref0], params.ref_order_hint[motion.ref1],
-        nstate.top[params.bx4], nstate.left[params.by4],
+        nstate.top[params.bx4_ctx], nstate.left[params.by4_ctx],
       ),
     )
     comp_type = mask.comp_type
@@ -232,7 +236,7 @@ pub fn av1_inter_read_block(
   let mm_enabled = single && params.switchable_motion_mode && ii.kind == 0 &&
     min_wh >= 2 && !warped_global &&
     nstate.has_overlappable_neighbor(
-      params.bx4, params.by4, params.w4, params.h4,
+      params.bx4_ctx, params.by4_ctx, params.w4, params.h4,
       params.have_top, params.have_left,
     )
   let mut motion_mode = 0
