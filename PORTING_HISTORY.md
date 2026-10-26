@@ -3099,3 +3099,20 @@ refmvs find 上下文、`msac.rng` 与 `dif>>32`、warp 掩码与
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_inter_block_vectors` **1/1**（96 组），
 `av1_refmvs_vectors` **34/34**，全量测试 **938/938**。
+
+## 85. 2026-10-26 AV1 warp 平面预测驱动
+
+`av1_mc_core/warp.mbt` 新增 `av1_mc_warp_predict_plane`：按 dav1d
+`recon_tmpl.c` 的 `warp_affine` 逐 8x8 子块计算变换中心
+（`src_x/src_y` 含色度移位）、`abcd`（矩阵 2/3/4/5 减 0x10000）与
+相位 `mx/my`（含 alpha/beta/gamma/delta 修正并 `& ~0x3f`），再调用
+已对拍的 `warp_affine_8x8` 核；边界由核内最近像素扩展等价于
+dav1d `emu_edge`。支持 4:2:0/4:2:2/4:4:4 与 8/10/12-bit。
+
+新增 `av1_mc_vectors/warp_plane_test.mbt`：恒等矩阵逐像素等于源块、
+整像素平移（含负向平移的边界钳制）、4:2:0 色度按 2 倍子采样相位
+取样。该驱动补齐了 `MM_WARP` 从语法/矩阵推导到像素预测的最后一环；
+帧间重建仍缺 OBMC 驱动、inter-intra 混合、复合 mask 合成与残差叠加。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_mc_vectors` **18/18**，全量测试 **941/941**。
