@@ -50,7 +50,9 @@ fn aac_check_transient(
     let mut id = gb.read(3).reinterpret_as_int()
     while id == aac_id_filler || id == aac_id_pce {
       if id == aac_id_filler {
-        aac_skip_filler(gb).unwrap()
+        // filler before the first audio element: the SBR-aware FIL reader
+        // consumes and ignores the payload just like the C.
+        ignore(dec.decode_fill_element(gb, -1, -1))
       } else {
         ignore(aac_decode_pce(gb).unwrap())
       }

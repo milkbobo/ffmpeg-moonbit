@@ -441,6 +441,14 @@ pub struct AacDecoder {
   swb : AacSwb
   /// PNS noise state (`ac->random_state`).
   noise : AacSpectrumState
+  /// Per-element SBR state keyed by element key (type*32 + tag*2).
+  sbr_states : Map[Int32, AacSbr]
+  /// `m4ac.sbr` evolution: 0 absent, 1 present, -1 unknown (ADTS).
+  mut sbr_signalling : Int32
+  /// `m4ac.ps` evolution, same encoding.
+  mut ps_signalling : Int32
+  /// Frames fully decoded; approximates `OC_LOCKED` for implicit SBR.
+  mut frames_decoded : Int32
 }
 
 ///|
@@ -474,25 +482,11 @@ pub fn new_aac_decoder(config : Mpeg4AudioConfig, n : Int32) -> AacDecoder {
     coupling_tags: [],
     swb,
     noise: new_aac_spectrum_state(),
+    sbr_states: Map([]),
+    sbr_signalling: config.sbr,
+    ps_signalling: config.ps,
+    frames_decoded: 0,
   }
-}
-
-///|
-/// `fill_element` skip: 4-bit count (15 extends with 8 more bits) then that
-/// many bytes of extension payload. */
-fn aac_skip_filler(gb : BitReader) -> Result[Unit, String] {
-  let cnt = gb.read(4).reinterpret_as_int()
-  let mut n = cnt
-  if cnt == 15 {
-    n = cnt + gb.read(8).reinterpret_as_int() - 1
-  }
-  // `n` is the byte length of the extension payload that follows; an
-  // empty FIL (count 0) carries no payload at all.
-  if n < 0 || gb.bits_left() < 8 * n {
-    return Err("filler overruns the frame")
-  }
-  gb.skip(8 * n)
-  Ok(())
 }
 
 ///|
@@ -541,6 +535,9 @@ fn AacDecoder::decode_raw_block(
   let couplings : Array[AacCoupling] = []
   let keys : Array[Int32] = []
   let seen = Array::make(128, false)
+  // che_prev of aacdec.c: the element the next TYPE_FIL extension targets.
+  let mut prev_elem : Int32 = -1
+  let mut prev_tag : Int32 = -1
   while true {
     if gb.bits_left() < 3 {
       return Err("missing ID_END")
@@ -550,7 +547,12 @@ fn AacDecoder::decode_raw_block(
       break
     }
     if elem == aac_id_filler {
-      match aac_skip_filler(gb) {
+      let prev_key : Int32 = if prev_elem < 0 {
+        -1
+      } else {
+        prev_elem * 32 + prev_tag * 2
+      }
+      match self.decode_fill_element(gb, prev_key, prev_elem) {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
@@ -649,6 +651,10 @@ fn AacDecoder::decode_raw_block(
       keys.push(key)
     }
     audio_elements = audio_elements + 1
+    if elem < 4 {
+      prev_elem = elem
+      prev_tag = tag
+    }
   }
   if decoded.length() == 0 {
     return Err("missing channel element")
@@ -841,5 +847,10 @@ fn AacDecoder::decode_raw_block(
   if pce_seen {
     self.config.chan_config = 0
   }
+  match self.apply_sbr(out, layout) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  self.frames_decoded = self.frames_decoded + 1
   Ok(out)
 }

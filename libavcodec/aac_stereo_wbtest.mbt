@@ -53,7 +53,7 @@ fn aac_check_stereo(
     let mut id = gb.read(3).reinterpret_as_int()
     while id == aac_id_filler || id == aac_id_pce {
       if id == aac_id_filler {
-        aac_skip_filler(gb).unwrap()
+        ignore(probe.decode_fill_element(gb, -1, -1))
       } else {
         ignore(aac_decode_pce(gb).unwrap())
       }

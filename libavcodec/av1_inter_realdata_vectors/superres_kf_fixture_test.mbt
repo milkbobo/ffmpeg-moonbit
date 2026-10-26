@@ -2,8 +2,7 @@
 /// Real libaom superres_kf IVF fixture; encoding settings are recorded in
 /// AGENT_HANDOFF_2026-10-26_SUPERRES.md. Reference: FFmpeg 9.0.2
 /// libdav1d framemd5. Regenerate: moon run scripts/emit_av1_session_vectors.mbtx superres_kf
-let superres_kf_ivf_b64 : Bytes =
-  b"REtJRgAAIABBVjAxwACAAAUAAAABAAAACgAAAAAAAACCCAAAAAAAAAAAAAASAAoKAAAAA7X/92vuATLxEBAATwAeeYYJLLAI9k8NTYHWfyet3toR" +
+let superres_kf_ivf_b64 : Bytes = b"REtJRgAAIABBVjAxwACAAAUAAAABAAAACgAAAAAAAACCCAAAAAAAAAAAAAASAAoKAAAAA7X/92vuATLxEBAATwAeeYYJLLAI9k8NTYHWfyet3toR" +
   b"aF/9yMALBzjIIN2Ys9Q21XH3RLU/rVknuapUXjPYM0qYSVdmFa5X9irlg2qPBmUm7cNLa9ybP7ky9JyDMl9YcOj3LCmaaL3PxPkrxg5FNU6pSILX" +
   b"mJUsuGIQ9SDZcd7nKl8W3ejtvMk2nnQpSg41965UiNzKUSSdmwCdcv7dTSs3rIX7cMlejYS226cAPRJ1nNjwGMagQnoEf6yFX6UzPZRUCGuD5crp" +
   b"sD3NNoDAgxoT2WdXZqafT4j5u8PWKJeS3nwMnQITqFcXliV5UrpOpqQIGxzwkFFm80N0o5K/aSb2c0ag/85QQNVxFy22ihF2xt72U0i0lNkcFy7J" +
@@ -279,14 +278,8 @@ let superres_kf_ivf_b64 : Bytes =
 
 ///|
 let superres_kf_md5 : Array[String] = [
-  "ff53908578dbeb05e06837283e782647",
-  "afd4c06a1cb2d8a07ee94144d170dc30",
-  "364ed961d931b019eb981f6634e098f1",
-  "7fb26a6f7e1a3cfd03885bdb2223c67c",
-  "4b801147f2b393d894582c35cf3f5a4b",
-  "983857ba8ecde9e0c5cc84c8ece3f09a",
-  "3c27aa2fff5bbbf2b808207552c46bcb",
-  "b07ff0fce74ba02352cbd1ef90734398",
-  "c26e36a4d9c6e6838493d961da51b3d6",
+  "ff53908578dbeb05e06837283e782647", "afd4c06a1cb2d8a07ee94144d170dc30", "364ed961d931b019eb981f6634e098f1",
+  "7fb26a6f7e1a3cfd03885bdb2223c67c", "4b801147f2b393d894582c35cf3f5a4b", "983857ba8ecde9e0c5cc84c8ece3f09a",
+  "3c27aa2fff5bbbf2b808207552c46bcb", "b07ff0fce74ba02352cbd1ef90734398", "c26e36a4d9c6e6838493d961da51b3d6",
   "d9769958d5d98d58528c34028c1862f4",
 ]

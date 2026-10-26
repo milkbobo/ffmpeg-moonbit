@@ -3440,3 +3440,46 @@ intrabc 不做。再生步骤与编码参数见
 
 `moon check --target wasm --deny-warn --no-render` 零警告，Wasm 全量
 **972/972**；`moon fmt`/`moon info --target wasm` 已运行。
+
+## 98. AAC SBR（HE-AAC 频谱带复制）
+
+参照 FFmpeg 9.0.2 `libavcodec/aacsbr_template.c`（float 实例，经 `aacsbr.c`
+include）、`aacsbr.c`（dequant/chirp/hf_inverse_filter/gain_calc/hf_assemble）、
+`sbrdsp_template.c`（QMF kernel 与噪声表）、`aacsbrdata.h`、`aac/aacdec_tab.c`
+（SBR Huffman 表）。新增 `aac_sbr.mbt`（状态与语法层）、`aac_sbr_dsp.mbt`
+（DSP 层）、`aac_sbr_entry.mbt`（FIL 扩展分发与 per-element 应用）、
+`aac_sbr_tables.mbt`（脚本提取的常量表）。
+
+**语法层**：`read_sbr_header/grid/dtdf/invf/envelope/noise/data/extension`、
+`sbr_make_f_master/f_derived/hf_calc_npatches/f_tablelim`；`make_bands` 的
+连乘保留在 f32（`lrintf` 舍入须与 C 位级一致）；`env_facs_q` 的 uint8
+回绕与 `>127/>30` 判定逐条对齐。**对接**：`decode_raw_block` 记录
+`che_prev`，TYPE_FIL 分发到 `decode_fill_element`（EXT_SBR_DATA_CRC 门控：
+sbr=0 拒绝、隐式 sbr=-1 首帧后拒绝、单声道隐式 PS 升格），输出通道数
+按元素翻倍（2048 样本/通道）。
+
+**DSP 层**：QMF 分析/合成（naive IMDCT64 直译 `ff_tx_mdct_naive_inv`，
+scale −2·32768 / 1/(64·32768)）、sum64x5/pre/post_shuffle/deint/bfly/
+autocorrelate/hf_gen/hf_g_filt/hf_apply_noise、dequant（exp2fi）、chirp、
+mapping/env_estimate/gain_calc/hf_assemble/x_gen/lf_gen。
+
+**对拍方法**：docker vpxdev-img 最小化构建插桩 ffmpeg
+（`_build/sbr_work/instrument_sbr.py` 锚点式插桩，产出逐帧语法文本与
+in/W/XLOW/XHIGH/ALPHA/ECURR/GAIN/QM/SM/YF/X0/OUT 逐级 f32 dump），
+MoonBit 测试以 f32 位模式序列化同序状态全量比对。修复链（每条都由
+分级 dump 定位）：①表提取正则漏掉 aacsbrdata.h 的 4 处 `-Q31(...)`
+负号；②`vector_fmul_reverse` 方向（实为 `dst[i]=win[i]*x[319-i]`）；
+③`env_estimate` 的 `+ilb` 与 `sum_square` 计数是复元素单位；④`hf_gen`
+的 `X_high[k]+2` 指针偏移（+2 复元素）；⑤`hf_g_filt` 的 `X_high+kx`
+行偏移；⑥`indexnoise` 双重递增（kernel 内递增按值传递不回传，帧内每槽
+仅在尾部 +m_max，e_a 槽也递增）。
+
+**向量**：libfdk_aac `-profile:a aac_he` 生成 4 组 ADTS 流（48 kHz 单声道
+64k、44.1 kHz 单声道 32k、32 kHz 三声道 96k、48 kHz 立体声 128k），参考
+PCM 由原生 `aac` 解码器输出。语法层 24+17 帧全字段位级一致（含 coupling=1
+立体声耦合）；端到端 PCM 单声道/三声道 max_diff=1 LSB、精确率 99%
+（Double vs C float32 舍入，98234/98304 逐样本精确）。PS 载荷出现时
+显式报错（PS 合成未移植）。
+
+`moon check --target wasm --deny-warn --no-render` 零警告，Wasm 全量
+**976/976**；`moon fmt`/`moon info --target wasm` 已运行并检查新增接口。
