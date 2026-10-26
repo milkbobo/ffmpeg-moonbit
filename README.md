@@ -46,7 +46,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **944/944** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **947/947** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

@@ -3138,3 +3138,24 @@ WEIGHTED_AVG 使用传入权重且忽略 `mask_sign`；WEDGE 在 `mask_sign=0/1`
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_mc_vectors` **21/21**，全量测试 **944/944**。
+
+## 87. 2026-10-26 AV1 帧间块预测装配（单/复合/warp）
+
+新增 `av1_recon_inter.mbt`（libavcodec 现依赖 `av1_mc_core`）：
+- `Av1InterBlock` 增加 `bs` 与派生 warp 的 alpha/beta/gamma/delta；
+- `av1_jnt_comp_weight`：dav1d `jnt_weights` 的距离量化权重
+  （`quant_dist_weight`/`lookup` 搜索）；
+- `av1_recon_predict_block`：单参考按 `filter2d` 走 put 平面预测，
+  `motion_mode=MM_WARP` 且仿射有效时走 warp 平面预测（8x8 相位 +
+  派生剪切参数）；复合参考先对两帧做 `prep`，再按
+  `av1_mc_compound_blend` 合成（AVG/W_AVG/WEDGE/SEG，WEDGE 掩码
+  亮度用 sign 0、色度用 `mask_sign`）；亮度/色度分别按 4:2:0/4:2:2/
+  4:4:4 取样。inter-intra、OBMC 与复合 GLOBALMV warp 暂显式返回错误，
+  色度 sub8x8 派生也未接入。
+
+新增测试包 `av1_recon_vectors`（3/3）：单参考逐平面与 MC 核一致、
+复合 AVG 与 `prep+avg` 一致、WEDGE(sign=1) 与交换输入的 `mask` 一致、
+未支持路径返回错误，以及两组 jnt 权重（5/11）核对。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+全量测试 **947/947**。

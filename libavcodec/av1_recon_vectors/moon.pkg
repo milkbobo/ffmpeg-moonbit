@@ -1,0 +1,4 @@
+import {
+  "ffmpeg/moonbit/libavcodec",
+  "ffmpeg/moonbit/libavcodec/av1_mc_core",
+} for "test"

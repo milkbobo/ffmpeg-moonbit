@@ -115,6 +115,7 @@ pub(all) struct Av1InterBlockParams {
 ///|
 /// Fully decoded inter block (before reconstruction).
 pub(all) struct Av1InterBlock {
+  bs : Int
   ref0 : Int
   ref1 : Int
   comp_type : Int
@@ -127,6 +128,10 @@ pub(all) struct Av1InterBlock {
   motion_mode : Int
   warp : FixedArray[Int]?
   warp_type : Int
+  warp_alpha : Int
+  warp_beta : Int
+  warp_gamma : Int
+  warp_delta : Int
   mask0 : UInt64
   mask1 : UInt64
   find_ctx : Int
@@ -233,6 +238,10 @@ pub fn av1_inter_read_block(
   let mut motion_mode = 0
   let mut warp : FixedArray[Int]? = None
   let mut warp_type = 0
+  let mut warp_alpha = 0
+  let mut warp_beta = 0
+  let mut warp_gamma = 0
+  let mut warp_delta = 0
   let mut mask0 = 0UL
   let mut mask1 = 0UL
   let mut has_subpel = motion.has_subpel_filter
@@ -258,6 +267,10 @@ pub fn av1_inter_read_block(
       )
       warp = Some(w.matrix)
       warp_type = w.typ
+      warp_alpha = w.alpha
+      warp_beta = w.beta
+      warp_gamma = w.gamma
+      warp_delta = w.delta
     }
   }
   // subpel filter
@@ -284,6 +297,7 @@ pub fn av1_inter_read_block(
     )
   }
   {
+    bs: params.bs,
     ref0: motion.ref0,
     ref1: motion.ref1,
     comp_type,
@@ -296,6 +310,10 @@ pub fn av1_inter_read_block(
     motion_mode,
     warp,
     warp_type,
+    warp_alpha,
+    warp_beta,
+    warp_gamma,
+    warp_delta,
     mask0,
     mask1,
     find_ctx: motion.find_ctx,
