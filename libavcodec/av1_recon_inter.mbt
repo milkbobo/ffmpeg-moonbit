@@ -164,9 +164,197 @@ fn av1_recon_compound_plane(
   )
 }
 
+
 ///|
-/// Predict all planes for one inter block. Inter-intra, OBMC and compound
-/// global-warp paths are not wired yet and return an error.
+/// Neighbour data needed by OBMC: the refmvs row ring, filter contexts and
+/// tile-relative block bounds.
+pub(all) struct Av1ReconObmc {
+  rows : FixedArray[FixedArray[Av1Rb]]
+  nstate : Av1InterTileState
+  w4 : Int
+  h4 : Int
+  have_top : Bool
+  have_left : Bool
+}
+
+///|
+fn av1_recon_imin(a : Int, b : Int) -> Int {
+  if a < b { a } else { b }
+}
+
+///|
+fn av1_recon_clip(v : Int, lo : Int, hi : Int) -> Int {
+  if v < lo {
+    lo
+  } else if v > hi {
+    hi
+  } else {
+    v
+  }
+}
+
+///|
+fn av1_recon_ulog2(v : Int) -> Int {
+  let mut x = v
+  let mut n = 0
+  while x > 1 {
+    x = x >> 1
+    n = n + 1
+  }
+  n
+}
+
+///|
+fn av1_recon_block_w(b : Av1Rb) -> Int {
+  av1_block_dimensions[b.bs * 4].to_int()
+}
+
+///|
+fn av1_recon_block_h(b : Av1Rb) -> Int {
+  av1_block_dimensions[b.bs * 4 + 1].to_int()
+}
+
+///|
+/// Predict one overlap region and blend it into the destination sub-block.
+/// `horizontal` selects dav1d `blend_h` (top neighbour) over `blend_v`
+/// (left neighbour).
+fn av1_recon_obmc_region(
+  dst : FixedArray[Int32],
+  dst_w : Int,
+  dst_x : Int,
+  dst_y : Int,
+  refs : FixedArray[Av1ReconRefPlane],
+  cur_w : Int,
+  cur_h : Int,
+  bx4 : Int,
+  by4 : Int,
+  bw4 : Int,
+  bh4 : Int,
+  ss_h : Int,
+  ss_v : Int,
+  bitdepth : Int32,
+  nb : Av1Rb,
+  filter2d : Int,
+  horizontal : Bool,
+) -> Unit {
+  let h_mul = 4 >> ss_h
+  let v_mul = 4 >> ss_v
+  let rw = bw4 * h_mul
+  let rh = bh4 * v_mul
+  let plane = refs[nb.ref0 - 1]
+  let (mvy, mvx) = nb.mv0
+  let lap = @av1_mc_core.av1_mc_predict_plane(
+    plane.src, plane.stride, plane.width, plane.height, cur_w, cur_h, bx4, by4,
+    bw4, bh4, mvy, mvx, ss_h, ss_v, filter2d, bitdepth,
+  )
+  let sub = FixedArray::makei(
+    rw * rh,
+    i => dst[(dst_y + i / rw) * dst_w + dst_x + i % rw],
+  )
+  let blended = if horizontal {
+    @av1_mc_core.av1_mc_obmc_horizontal(sub, lap, rw, rh)
+  } else {
+    @av1_mc_core.av1_mc_obmc_vertical(sub, lap, rw, rh)
+  }
+  for i in 0..<(rw * rh) {
+    dst[(dst_y + i / rw) * dst_w + dst_x + i % rw] = blended[i]
+  }
+}
+
+///|
+/// dav1d `obmc()` for one plane: top and left neighbour overlaps.
+fn av1_recon_obmc_plane(
+  dst : FixedArray[Int32],
+  refs : FixedArray[Av1ReconRefPlane],
+  cur_w : Int,
+  cur_h : Int,
+  bx4 : Int,
+  by4 : Int,
+  bw4 : Int,
+  bh4 : Int,
+  ss_h : Int,
+  ss_v : Int,
+  bitdepth : Int32,
+  chroma : Bool,
+  obmc : Av1ReconObmc,
+) -> FixedArray[Int32] {
+  let h_mul = 4 >> ss_h
+  let v_mul = 4 >> ss_v
+  let dst_w = bw4 * h_mul
+  let dst_h = bh4 * v_mul
+  let out = FixedArray::makei(dst_w * dst_h, i => dst[i])
+  let r = (by4 & 31) + 5
+  let top_ok = obmc.have_top &&
+    (!chroma || bw4 * h_mul + bh4 * v_mul >= 16)
+  if top_ok {
+    let cap = av1_recon_imin(av1_recon_ulog2(bw4), 4)
+    let mut i = 0
+    let mut x = 0
+    while x < obmc.w4 && i < cap {
+      let nb = obmc.rows[r - 1][bx4 + x + 1]
+      let step = av1_recon_clip(av1_recon_block_w(nb), 2, 16)
+      if nb.ref0 > 0 {
+        let ow4 = av1_recon_imin(step, bw4)
+        let oh4 = av1_recon_imin(bh4, 16) >> 1
+        let filter2d = av1_inter_filter2d(
+          obmc.nstate.top[bx4 + x + 1].filter0,
+          obmc.nstate.top[bx4 + x + 1].filter1,
+        )
+        av1_recon_obmc_region(
+          out, dst_w, x * h_mul, 0, refs, cur_w, cur_h, bx4 + x, by4, ow4,
+          (oh4 * 3 + 3) >> 2, ss_h, ss_v, bitdepth, nb, filter2d, true,
+        )
+        i = i + 1
+      }
+      x = x + step
+    }
+  }
+  if obmc.have_left {
+    let cap = av1_recon_imin(av1_recon_ulog2(bh4), 4)
+    let mut i = 0
+    let mut y = 0
+    while y < obmc.h4 && i < cap {
+      let nb = obmc.rows[r + y + 1][bx4 - 1]
+      let step = av1_recon_clip(av1_recon_block_h(nb), 2, 16)
+      if nb.ref0 > 0 {
+        let ow4 = av1_recon_imin(bw4, 16) >> 1
+        let oh4 = av1_recon_imin(step, bh4)
+        let filter2d = av1_inter_filter2d(
+          obmc.nstate.left[by4 + y + 1].filter0,
+          obmc.nstate.left[by4 + y + 1].filter1,
+        )
+        av1_recon_obmc_region(
+          out, dst_w, 0, y * v_mul, refs, cur_w, cur_h, bx4, by4 + y, ow4,
+          oh4, ss_h, ss_v, bitdepth, nb, filter2d, false,
+        )
+        i = i + 1
+      }
+      y = y + step
+    }
+  }
+  out
+}
+
+///|
+/// Blend an inter-intra prediction: the mask weights the intra samples
+/// (dav1d `II_MASK`, with the wedge variant for wedge inter-intra).
+fn av1_recon_interintra_blend(
+  inter : FixedArray[Int32],
+  intra : FixedArray[Int32],
+  b : Av1InterBlock,
+  layout : Int,
+) -> FixedArray[Int32] {
+  let mask = if b.interintra.kind == 1 {
+    @av1_mc_core.av1_ii_mask(layout, b.bs, b.interintra.mode)
+  } else {
+    @av1_mc_core.av1_wedge_mask(layout, b.bs, 0, b.interintra.wedge_idx)
+  }
+  @av1_mc_core.av1_mc_blend_pixels(inter, intra, mask)
+}
+
+///|
+/// Predict all planes for one inter block. Compound global-warp is not wired
+/// yet.
 pub fn av1_recon_predict_block(
   b : Av1InterBlock,
   ref_y : FixedArray[Av1ReconRefPlane],
@@ -182,19 +370,21 @@ pub fn av1_recon_predict_block(
   ss_v : Int,
   bitdepth : Int32,
   jnt_weight : Int,
+  intra : Av1ReconPlanes?,
+  obmc : Av1ReconObmc?,
 ) -> Result[Av1ReconPlanes, String] {
-  if b.interintra.kind != 0 {
-    return Err("av1 recon: inter-intra pending")
+  if b.interintra.kind != 0 && intra is None {
+    return Err("av1 recon: inter-intra needs an intra prediction")
   }
-  if b.motion_mode == 1 {
-    return Err("av1 recon: OBMC pending")
+  if b.motion_mode == 1 && obmc is None {
+    return Err("av1 recon: OBMC needs neighbour state")
   }
   let single = b.ref1 < 0
   let w = bw4 * 4
   let h = bh4 * 4
   let cw = bw4 * (4 >> ss_h)
   let ch = bh4 * (4 >> ss_v)
-  let y = if single {
+  let y0 = if single {
     av1_recon_single_plane(
       b, ref_y[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, 0, 0,
       bitdepth,
@@ -205,7 +395,7 @@ pub fn av1_recon_predict_block(
       0, bitdepth, jnt_weight, av1_recon_wedge_mask(b, 0),
     )
   }
-  let u = if single {
+  let u0 = if single {
     av1_recon_single_plane(
       b, ref_u[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v,
       bitdepth,
@@ -217,7 +407,7 @@ pub fn av1_recon_predict_block(
       av1_recon_wedge_mask(b, av1_recon_layout(ss_h, ss_v)),
     )
   }
-  let v = if single {
+  let v0 = if single {
     av1_recon_single_plane(
       b, ref_v[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v,
       bitdepth,
@@ -228,6 +418,39 @@ pub fn av1_recon_predict_block(
       ss_h, ss_v, bitdepth, jnt_weight,
       av1_recon_wedge_mask(b, av1_recon_layout(ss_h, ss_v)),
     )
+  }
+  let y1 = match obmc {
+    Some(o) if b.motion_mode == 1 =>
+      av1_recon_obmc_plane(
+        y0, ref_y, cur_w, cur_h, bx4, by4, bw4, bh4, 0, 0, bitdepth, false, o,
+      )
+    _ => y0
+  }
+  let u1 = match obmc {
+    Some(o) if b.motion_mode == 1 =>
+      av1_recon_obmc_plane(
+        u0, ref_u, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v, bitdepth,
+        true, o,
+      )
+    _ => u0
+  }
+  let v1 = match obmc {
+    Some(o) if b.motion_mode == 1 =>
+      av1_recon_obmc_plane(
+        v0, ref_v, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v, bitdepth,
+        true, o,
+      )
+    _ => v0
+  }
+  let layout = av1_recon_layout(ss_h, ss_v)
+  let (y, u, v) = match intra {
+    Some(ip) if b.interintra.kind != 0 =>
+      (
+        av1_recon_interintra_blend(y1, ip.y, b, 0),
+        av1_recon_interintra_blend(u1, ip.u, b, layout),
+        av1_recon_interintra_blend(v1, ip.v, b, layout),
+      )
+    _ => (y1, u1, v1)
   }
   { y, u, v, w, h, cw, ch } |> Ok
 }

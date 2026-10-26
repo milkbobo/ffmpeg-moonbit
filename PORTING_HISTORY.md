@@ -3159,3 +3159,30 @@ WEIGHTED_AVG 使用传入权重且忽略 `mask_sign`；WEDGE 在 `mask_sign=0/1`
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 全量测试 **947/947**。
+
+## 88. 2026-10-26 AV1 inter-intra 混合与 OBMC 驱动
+
+`av1_recon_inter.mbt` 扩展：
+- **inter-intra**：`interintra_type` 为 BLEND 时用 `av1_ii_mask`
+  （按 interintra_mode），WEDGE 时用 `av1_wedge_mask(layout, bs, 0,
+  wedge_idx)`（II_MASK 语义：亮度 sign 0、色度同样 sign 0），再用
+  `blend_pixels` 以掩码加权 intra 样本；由 `av1_recon_predict_block`
+  的 `intra` 参数接入，缺失时返回错误。
+- **OBMC**：按 dav1d `obmc()` 遍历上/左邻块（refmvs 行环、邻块
+  `bs` 尺寸 clip 2..16、每侧最多 `min(ulog2(w4/h4),4)` 个重叠、
+  top 高度 `min(bh4,16)>>1` 且预测高度 `(oh4*3+3)>>2`、left 宽度
+  `min(bw4,16)>>1`），邻块滤波器由 `Av1InterTileState` 的 filter0/1
+  合成 `Filter2d`；重叠块经单参考预测后用 `blend_h`/`blend_v` 写回
+  目标子块。色度要求边界像素和 ≥16（dav1d 条件）。`obmc` 参数缺失
+  且 `motion_mode=MM_OBMC` 时返回错误。
+
+新增测试（`av1_recon_vectors` 5/5）：II BLEND 逐平面等于
+`blend_pixels(inter, intra, ii_mask)`；OBMC 顶部邻块的重叠预测与
+直接 `predict + obmc_horizontal` 一致，且 8x8 4:2:0 块按 dav1d 条件
+跳过色度 OBMC。
+
+已知未接：色度 sub8x8 派生（bw4==ss_hor/ bh4==ss_v 时邻块 MV 推导）、
+复合 GLOBALMV warp、残差系数与加法、`decode_b`/整帧入口。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+全量测试 **949/949**。

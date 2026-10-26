@@ -192,3 +192,10 @@ pub fn av1_inter_read_filter(
   }
   { filter0, filter1, filter2d: av1_filter_2d[filter1 * 4 + filter0] }
 }
+
+///|
+/// Combine a horizontal/vertical switchable filter pair into dav1d `Filter2d`
+/// (neighbour blocks store the two filter modes separately).
+pub fn av1_inter_filter2d(filter0 : Int, filter1 : Int) -> Int {
+  av1_filter_2d[filter1 * 4 + filter0]
+}
