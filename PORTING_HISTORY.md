@@ -3207,3 +3207,35 @@ WEIGHTED_AVG 使用传入权重且忽略 `mask_sign`；WEDGE 在 `mask_sign=0/1`
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 全量测试 **951/951**。
+
+## 90. 2026-10-26 AV1 帧间变换类型选择（txtp）
+
+`av1_decode2.mbt` 把 `decode_coefs` 里的变换类型选择抽成
+`av1_decode_txtp`，并补齐帧间路径（此前只实现帧内分支）：
+- 早退：`t_dim->max + intra >= TX_64X64` 直接 DCT_DCT；色度先走
+  `get_uv_inter_txtp`（32x32 上限只允许 IDTX，16x16 下限剔除
+  H/V_FLIPADST 与 H/V_ADST），帧内色度仍用 `dav1d_txtp_from_uvmode`；
+- 帧间亮度 `qidx==0` 隐式 DCT_DCT；
+- `reduced_txtp_set || max==TX_32X32`：`txtp_inter3[min]` 单 bool
+  （`idx ? DCT_DCT : IDTX`）；
+- `min==TX_16X16`：`txtp_inter2`（11 符号、基址 12）；
+- 其余：`txtp_inter1[min]`（15 符号、基址 24）；
+- `decode_coefs` 增加 `luma_txtp` 参数，色度帧间由亮度类型派生；
+  无损块仍直接 WHT_WHT，全跳过返回 DCT_DCT。
+
+对拍：`.scratch/av1/txtp_dump.c` 直接链接 dav1d 的 msac/cdf 表，按
+2 个 LCG seed × 256 组随机 `(intra, plane, tx, qidx_zero, reduced,
+y_mode, y_angle, uv_mode, luma_txtp)` 调用 `txtp_select`，dump
+返回值、`msac.rng`、`dif>>32` 与该步实际 CDF 概率；生成器
+`scripts/_emit_av1_txtp_vectors.py` 产出
+`av1_inter_syntax_vectors/txtp_test.mbt`（逐例校验 txtp/rng/dif）。
+
+踩坑：C 探针的 `CdfContext` 在两个 seed 之间**不重置**（只在最外层
+`dav1d_cdf_thread_copy` 一次），最初生成的测试每个 seed 新建 CDF，
+seed 1 的 k=281 首次复用 `txtp_inter3[2]` 时概率仍为默认 30770，
+而 C 已被 seed 0 自适应到 29321，rng 随即分叉（48964 vs 46720）。
+把 CDF 提出 seed 循环后完全一致——这不是实现错误，而是对拍夹具的
+状态生命周期写错。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+全量测试 **952/952**。

@@ -1,4 +1,80 @@
 ///|
+/// `get_uv_inter_txtp` from dav1d `env.h`: chroma inherits the luma transform
+/// type unless the chroma tx is too large or a directional type is not
+/// representable.
+fn av1_get_uv_inter_txtp(tx : Int32, ytxtp : Int) -> Int {
+  if av1_txfm_max(tx) == 3 {
+    if ytxtp == 9 { 9 } else { 0 }
+  } else if av1_txfm_min(tx) == 2 &&
+    ((1 << ytxtp) & ((1 << 14) | (1 << 15) | (1 << 12) | (1 << 13))) != 0 {
+    0
+  } else {
+    ytxtp
+  }
+}
+
+///|
+/// Transform-type selection from dav1d `decode_coefs` (non-lossless only).
+/// Inter luma uses `txtp_inter1/2/3`; chroma derives from the luma type via
+/// `get_uv_inter_txtp`, intra chroma from the uv-mode LUT.
+pub fn av1_decode_txtp(
+  msac : Av1Msac,
+  cdf : Av1CdfCtx,
+  intra : Bool,
+  plane : Int,
+  tx : Int32,
+  qidx_zero : Bool,
+  reduced_txtp_set : Bool,
+  y_mode : Int,
+  y_angle : Int,
+  uv_mode : Int,
+  luma_txtp : Int,
+) -> Int {
+  if av1_txfm_max(tx) + (if intra { 1 } else { 0 }) >= 4 {
+    return 0 // DCT_DCT
+  }
+  if plane != 0 {
+    if intra {
+      return av1_txtp_from_uvmode[uv_mode].to_int()
+    }
+    return av1_get_uv_inter_txtp(tx, luma_txtp)
+  }
+  if qidx_zero {
+    return 0
+  }
+  let t_dim_min = av1_txfm_min(tx)
+  if intra {
+    let y_mode_nofilt = if y_mode == av1_filter_pred {
+      av1_filter_mode_to_y_mode[y_angle].to_int()
+    } else {
+      y_mode
+    }
+    if reduced_txtp_set || t_dim_min == 2 {
+      let idx = msac.decode_symbol_adapt(
+        cdf.txtp_intra2, (t_dim_min * 13 + y_mode_nofilt) * 8, 4,
+      )
+      av1_tx_types_per_set[idx].to_int()
+    } else {
+      let idx = msac.decode_symbol_adapt(
+        cdf.txtp_intra1, (t_dim_min * 13 + y_mode_nofilt) * 8, 6,
+      )
+      av1_tx_types_per_set[idx + 5].to_int()
+    }
+  } else if reduced_txtp_set || av1_txfm_max(tx) == 3 {
+    let idx = msac.decode_bool_adapt(
+      cdf.txtp_inter3, t_dim_min * 2,
+    ).reinterpret_as_int()
+    if idx != 0 { 0 } else { 9 } // DCT_DCT : IDTX
+  } else if t_dim_min == 2 {
+    let idx = msac.decode_symbol_adapt(cdf.txtp_inter2, 0, 11)
+    av1_tx_types_per_set[idx + 12].to_int()
+  } else {
+    let idx = msac.decode_symbol_adapt(cdf.txtp_inter1, t_dim_min * 16, 15)
+    av1_tx_types_per_set[idx + 24].to_int()
+  }
+}
+
+///|
 /// `decode_coefs` from dav1d recon_tmpl.c. Returns
 /// `(eob, txtp, res_ctx)`; eob = -1 means all-skip.
 fn Av1TileCtx::decode_coefs(
@@ -13,6 +89,7 @@ fn Av1TileCtx::decode_coefs(
   intra : Bool,
   plane : Int32,
   cf : FixedArray[Int32],
+  luma_txtp? : Int = 0,
 ) -> (Int32, Int32, Int32) {
   let chroma = if plane != 0 { 1 } else { 0 }
   let lossless = self.f.seg_lossless[b.seg_id]
@@ -38,38 +115,11 @@ fn Av1TileCtx::decode_coefs(
   }
   let txtp = if lossless {
     16 // WHT_WHT
-  } else if av1_txfm_max(tx) + (if intra { 1 } else { 0 }) >= 4 {
-    0 // DCT_DCT
-  } else if chroma != 0 {
-    if intra {
-      av1_txtp_from_uvmode[b.uv_mode].to_int()
-    } else {
-      0
-    }
-  } else if self.f.seg_qidx[b.seg_id] == 0 {
-    0
   } else {
-    let y_mode_nofilt = if b.y_mode == av1_filter_pred {
-      av1_filter_mode_to_y_mode[b.y_angle].to_int()
-    } else {
-      b.y_mode
-    }
-    let t_dim_min = av1_txfm_min(tx)
-    if self.f.hdr.reduced_tx_set || t_dim_min == 2 {
-      let idx = self.msac.decode_symbol_adapt(
-        self.cdf.txtp_intra2,
-        (t_dim_min * 13 + y_mode_nofilt) * 8,
-        4,
-      )
-      av1_tx_types_per_set[idx].to_int()
-    } else {
-      let idx = self.msac.decode_symbol_adapt(
-        self.cdf.txtp_intra1,
-        (t_dim_min * 13 + y_mode_nofilt) * 8,
-        6,
-      )
-      av1_tx_types_per_set[idx + 5].to_int()
-    }
+    av1_decode_txtp(
+      self.msac, self.cdf, intra, plane, tx, self.f.seg_qidx[b.seg_id] == 0,
+      self.f.hdr.reduced_tx_set, b.y_mode, b.y_angle, b.uv_mode, luma_txtp,
+    )
   }
   let slw = av1_imin(av1_txfm_lw(tx), 3)
   let slh = av1_imin(av1_txfm_lh(tx), 3)
