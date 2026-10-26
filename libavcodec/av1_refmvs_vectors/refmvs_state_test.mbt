@@ -216,3 +216,49 @@ test "refmvs saved temporal map propagates into the next frame" {
   let result = second.find(0, 32, 0, 32, 1, -1, 17, false, 4, 18)
   assert_eq(result.candidate(0).0, (256, -384))
 }
+
+///|
+test "refmvs block publishers retain dav1d reference and mode flags" {
+  let (rf, _, _, _) = av1_refmvs_test_build(1)
+  let ref_poc : FixedArray[Int] = FixedArray::make(7, 0)
+  let ref_has : FixedArray[Bool] = FixedArray::make(7, false)
+  let ref_ref_poc : FixedArray[FixedArray[Int]] = FixedArray::makei(
+    7, _ => FixedArray::make(7, 0),
+  )
+  let init = @libavcodec.av1_refmvs_init_frame(
+    4, 1, false, ref_poc, ref_has, ref_ref_poc,
+  )
+  let refs : FixedArray[FixedArray[@libavcodec.Av1Rtb]] = FixedArray::makei(
+    7,
+    _ => FixedArray::makei(32 * 32, _ => { mv: (0, 0), ref_: 0 }),
+  )
+  let state = @libavcodec.av1_refmvs_frame_state_new(
+    rf, init, refs, 32, 32, 32, 16,
+  )
+  state.begin_sbrow(0, 0, 16, 0, 8)
+  state.splat_intra(17, 0, 0, 2, 2)
+  inspect(state.tile.rows[5][0].ref0, content="0")
+  assert_eq(state.tile.rows[5][0].mv0, (32768, 32768))
+
+  state.splat_single(0, 2, (12, 20), false, 17, 2, 0, 2, 2)
+  inspect(state.tile.rows[5][2].mf, content="1")
+  state.splat_single(0, 2, (12, 20), false, 17, 4, 0, 1, 1)
+  inspect(state.tile.rows[5][4].mf, content="0")
+  state.splat_single(1, 3, (24, -16), true, 17, 6, 0, 2, 2)
+  inspect(state.tile.rows[5][6].ref0, content="2")
+  inspect(state.tile.rows[5][6].ref1, content="0")
+  inspect(state.tile.rows[5][6].mf, content="2")
+
+  for mode in 0..<8 {
+    state.splat_compound(
+      0, 4, mode, (40, 8), (-24, 16), 17,
+      mode * 2, 2, 2, 2,
+    )
+    let block = state.tile.rows[7][mode * 2]
+    inspect(block.ref0, content="1")
+    inspect(block.ref1, content="5")
+    let expected = if mode == 6 { 1 } else if mode >= 2 && mode != 6 { 2 } else { 0 }
+    assert_eq(block.mf, expected)
+    assert_eq(block.mv1, (-24, 16))
+  }
+}

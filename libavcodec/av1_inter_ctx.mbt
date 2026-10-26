@@ -40,7 +40,7 @@ pub fn av1_inter_ref_tree_ctx(
   let (a, b) = match tree {
     0 | 2 | 3 | 5 => (cnt[0], cnt[1])
     1 => (cnt[0] + cnt[1], cnt[2] + cnt[3])
-    4 => (cnt[0] + cnt[1], cnt[2])
+    4 => (cnt[2], cnt[0] + cnt[1])
     6 => (cnt[0], cnt[1] + cnt[2])
     _ => (0, 0)
   }
@@ -64,8 +64,8 @@ pub fn av1_inter_comp_ctx(
         (if a.ref0 >= 4 { 1 } else { 0 })
       }
     }
-    (Some(a), None) => if a.comp_type != 0 { 3 } else if a.ref0 >= 4 { 1 } else { 0 }
-    (None, Some(l)) => if l.comp_type != 0 { 3 } else if l.ref0 >= 4 { 1 } else { 0 }
+    (Some(a), None) => if a.comp_type != 0 { 3 } else if a.ref0 < 0 || a.ref0 >= 4 { 1 } else { 0 }
+    (None, Some(l)) => if l.comp_type != 0 { 3 } else if l.ref0 < 0 || l.ref0 >= 4 { 1 } else { 0 }
     (None, None) => 1
   }
 }

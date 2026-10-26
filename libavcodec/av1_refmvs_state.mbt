@@ -311,3 +311,75 @@ pub fn Av1RefmvsFrameState::splat(
 ) -> Unit {
   self.tile.splat_mv(block, bx4, by4, bw4, bh4)
 }
+
+///|
+/// Publish an intra block in an inter frame (`splat_intraref`).
+pub fn Av1RefmvsFrameState::splat_intra(
+  self : Av1RefmvsFrameState,
+  bs : Int,
+  bx4 : Int,
+  by4 : Int,
+  bw4 : Int,
+  bh4 : Int,
+) -> Unit {
+  self.splat(
+    {
+      ref0: 0, ref1: -1, bs, mf: 0,
+      mv0: av1_rmv_invalid, mv1: (0, 0),
+    },
+    bx4, by4, bw4, bh4,
+  )
+}
+
+///|
+/// Publish a single-reference inter block (`splat_oneref_mv`). Reference
+/// indices and mode use dav1d's 0..6 and NEAREST/NEAR/GLOBAL/NEW values.
+pub fn Av1RefmvsFrameState::splat_single(
+  self : Av1RefmvsFrameState,
+  ref_idx : Int,
+  mode : Int,
+  mv : (Int, Int),
+  interintra : Bool,
+  bs : Int,
+  bx4 : Int,
+  by4 : Int,
+  bw4 : Int,
+  bh4 : Int,
+) -> Unit {
+  let global = if mode == 2 && bw4 >= 2 && bh4 >= 2 { 1 } else { 0 }
+  let newmv = if mode == 3 { 2 } else { 0 }
+  self.splat(
+    {
+      ref0: ref_idx + 1, ref1: if interintra { 0 } else { -1 },
+      bs, mf: global | newmv, mv0: mv, mv1: (0, 0),
+    },
+    bx4, by4, bw4, bh4,
+  )
+}
+
+///|
+/// Publish a compound inter block (`splat_tworef_mv`). The new-MV flag is
+/// present in compound modes 2, 3, 4, 5 and 7.
+pub fn Av1RefmvsFrameState::splat_compound(
+  self : Av1RefmvsFrameState,
+  ref_idx0 : Int,
+  ref_idx1 : Int,
+  mode : Int,
+  mv0 : (Int, Int),
+  mv1 : (Int, Int),
+  bs : Int,
+  bx4 : Int,
+  by4 : Int,
+  bw4 : Int,
+  bh4 : Int,
+) -> Unit {
+  let global = if mode == 6 { 1 } else { 0 }
+  let newmv = if ((1 << mode) & 0xbc) != 0 { 2 } else { 0 }
+  self.splat(
+    {
+      ref0: ref_idx0 + 1, ref1: ref_idx1 + 1,
+      bs, mf: global | newmv, mv0, mv1,
+    },
+    bx4, by4, bw4, bh4,
+  )
+}

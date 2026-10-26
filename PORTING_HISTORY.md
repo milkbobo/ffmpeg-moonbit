@@ -2860,3 +2860,21 @@ sby=0/1 行映射、双参考保存和时域投影。C 输出 `save -30 40 2
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_refmvs_vectors` **16/16**，全量测试 **907/907**。`moon fmt --check` 在当前 Windows 路径下
 因 formatter 生成文件路径不可读而失败；`moon info -p libavcodec` 通过。
+
+## 76. 2026-10-26 AV1 帧间块 MV 入口与参考上下文修正
+
+`av1_inter_ctx.mbt` 修正两个对照 dav1d `env.h` 发现的参考上下文偏差：
+只有一个帧内邻块时，`get_comp_ctx` 要把参考索引 `-1` 按 C 的无符号
+比较视为后向；`av1_get_bwd_ref_ctx` 的计数顺序是 ALTREF 对 BWD +
+ALTREF2，原实现反向。增加七棵参考树对单个参考索引 0..6 的完整
+49 格期望值测试。
+
+`av1_refmvs_state.mbt` 增加与 dav1d `splat_intraref`、
+`splat_oneref_mv`、`splat_tworef_mv` 对应的发布方法，保存参考索引、
+NEWMV/GLOBALMV 标记与 MV。新增 `av1_inter_motion.mbt`，串联复合标志、
+单/双参考选择、refmvs 候选、skip mode 及单/双 MV 模式读取；块内其余
+语法读取与重建仍需接入 `decode_b`。定向测试覆盖发布标记、skip mode
+不消耗算术码以及 segmentation 强制参考的全局 MV。
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_refmvs_vectors` **22/22**，全量测试 **913/913**；
+`moon info -p libavcodec` 通过。
