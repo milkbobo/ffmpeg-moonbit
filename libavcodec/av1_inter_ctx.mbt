@@ -40,7 +40,7 @@ pub fn av1_inter_ref_tree_ctx(
   let (a, b) = match tree {
     0 | 2 | 3 | 5 => (cnt[0], cnt[1])
     1 => (cnt[0] + cnt[1], cnt[2] + cnt[3])
-    4 => (cnt[2], cnt[0] + cnt[1])
+    4 => (cnt[0] + cnt[1], cnt[2])
     6 => (cnt[0], cnt[1] + cnt[2])
     _ => (0, 0)
   }

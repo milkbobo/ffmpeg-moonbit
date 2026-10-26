@@ -162,14 +162,11 @@ pub fn av1_inter_read_block(
   } else {
     None
   }
-  let top_n = match top {
-    Some(v) => v
-    None => av1_inter_intra_neighbor()
-  }
-  let left_n = match left {
-    Some(v) => v
-    None => av1_inter_intra_neighbor()
-  }
+  // dav1d's mask/jnt/filter contexts read the a/l arrays unconditionally
+  // (tile-edge entries are pre-reset to intra); only the reference trees
+  // and the compound flag take have_top/have_left.
+  let top_any = Some(nstate.top[params.bx4])
+  let left_any = Some(nstate.left[params.by4])
   let motion = av1_inter_read_block_motion(
     msac, cdf, rstate, top, left,
     {
@@ -201,11 +198,13 @@ pub fn av1_inter_read_block(
   } else if is_comp {
     let mask = av1_inter_read_compound_mask(
       msac, cdf, params.masked_compound, params.jnt_comp, params.bs,
-      av1_inter_mask_comp_ctx(top_n, left_n),
+      av1_inter_mask_comp_ctx(
+        nstate.top[params.bx4], nstate.left[params.by4],
+      ),
       av1_inter_jnt_comp_ctx(
         params.order_hint_bits, params.cur_order_hint,
         params.ref_order_hint[motion.ref0], params.ref_order_hint[motion.ref1],
-        top_n, left_n,
+        nstate.top[params.bx4], nstate.left[params.by4],
       ),
     )
     comp_type = mask.comp_type
@@ -263,10 +262,10 @@ pub fn av1_inter_read_block(
   }
   // subpel filter
   let f0_ctx = av1_inter_filter_ctx(
-    top, left, if is_comp { 1 } else { 0 }, 0, motion.ref0,
+    top_any, left_any, if is_comp { 1 } else { 0 }, 0, motion.ref0,
   )
   let f1_ctx = av1_inter_filter_ctx(
-    top, left, if is_comp { 1 } else { 0 }, 1, motion.ref0,
+    top_any, left_any, if is_comp { 1 } else { 0 }, 1, motion.ref0,
   )
   let filters = av1_inter_read_filter(
     msac, cdf, params.switchable_filter, has_subpel, params.dual_filter,

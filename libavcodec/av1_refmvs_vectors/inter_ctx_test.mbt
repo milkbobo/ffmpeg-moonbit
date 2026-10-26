@@ -10,7 +10,8 @@ test "AV1 reference tree contexts count forward and backward neighbours" {
   }
   inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(top), Some(left), 0), content="1")
   inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(top), Some(left), 1), content="2")
-  inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(top), Some(left), 4), content="2")
+  // bwd context: only the left ALTREF counts, on the "greater" side
+  inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(top), Some(left), 4), content="0")
   inspect(@libavcodec.av1_inter_comp_ctx(Some(top), Some(left)), content="1")
   inspect(@libavcodec.av1_inter_comp_dir_ctx(Some(top), Some(left)), content="1")
 }
@@ -74,8 +75,8 @@ test "AV1 backward reference tree compares ALTREF against BWD and ALTREF2" {
     intra: false, comp_type: 0, ref0: 4, ref1: -1,
     filter0: 3, filter1: 3,
   }
-  inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(altref), None, 4), content="2")
-  inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(bwd), None, 4), content="0")
+  inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(altref), None, 4), content="0")
+  inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(bwd), None, 4), content="2")
   inspect(@libavcodec.av1_inter_ref_tree_ctx(Some(bwd), Some(altref), 4), content="1")
 }
 
@@ -86,9 +87,9 @@ test "AV1 seven reference-tree contexts agree with each lone reference" {
     [2, 2, 0, 1, 1, 1, 2],
     [2, 0, 1, 2, 1, 1, 0],
     [2, 0, 1, 0, 1, 1, 0],
-    [0, 1, 1, 1, 0, 2, 1],
-    [0, 1, 1, 1, 0, 0, 1],
-    [0, 1, 1, 1, 2, 1, 1],
+    [0, 1, 1, 1, 2, 2, 1],
+    [0, 1, 1, 1, 2, 0, 1],
+    [0, 1, 1, 1, 0, 1, 1],
   ]
   for ref_idx in 0..<7 {
     let neighbor : @libavcodec.Av1InterNeighbor = {

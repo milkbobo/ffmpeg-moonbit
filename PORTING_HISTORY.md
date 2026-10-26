@@ -3072,3 +3072,30 @@ variation **位于单参考 `else` 分支内部**，复合（含 skip mode）块
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_refmvs_vectors` **34/34**，全量测试 **937/937**。
+
+## 84. 2026-10-26 AV1 帧间块驱动 C 位级对拍收敛
+
+上一节遗留的 `msac` 状态差异定位到参考树上下文，并顺带修正两处
+真实偏差：
+
+1. `av1_inter_ref_tree_ctx` 的 **bwd 变体（tree 4）比较方向写反**
+   （应等价于 `cnt[0]+cnt[1]` 与 `cnt[2]` 比较，0 表示前者更小）；
+   `ref_2_ctx` 即 bwd 上下文，`ref_3/4/5/6` 分别复用
+   fwd/fwd_1/fwd_2/bwd_1 变体（与 env.h 的宏别名一致）。
+2. dav1d 的 `get_mask_comp_ctx` / `get_jnt_comp_ctx` / `get_filter_ctx`
+   **不使用 have_top/have_left**，直接读 a/l 数组（tile 边界预置为
+   intra）；驱动此前对缺失邻居传默认 intra 邻块，随机上下文中会选错
+   上下文。改为始终传数组值后，msac 状态与 C 完全一致。
+
+修正后，完整对拍（96 组随机码流/邻居/refmvs 行环）在
+`scripts/_emit_av1_inter_block_vectors.py` 生成、测试包
+`av1_inter_block_vectors` 中比较：refs、复合类型/wedge/mask 符号、
+mode/DRL/MV、inter-intra、motion mode、warp type/矩阵、滤波器、
+refmvs find 上下文、`msac.rng` 与 `dif>>32`、warp 掩码与
+`allow_warp` —— **全部与 dav1d 一致**。生成器复用
+`scripts/_av1_inter_block_test_body.tpl`（测试体与数据分离）；探针
+`.scratch/av1/interblock_dump.c`/`interblock_gen2.py` 不入库。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_inter_block_vectors` **1/1**（96 组），
+`av1_refmvs_vectors` **34/34**，全量测试 **938/938**。
