@@ -2945,3 +2945,36 @@ SB 行带上与 C 等价，因此探针改用对齐行带；这不是移植偏�
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_refmvs_vectors` **32/32**，帧头向量 **2/2**，全量测试 **926/926**。
+
+## 80. 2026-10-26 AV1 帧间块复合/inter-intra/motion/filter 语法
+
+新增 `av1_inter_syntax.mbt`，补齐 `decode_b` 帧间分支里 MV 之后的语法：
+
+- 复合 mask：`mask_comp` 判定 seg/wedge，`jnt_comp`（weighted/avg），
+  `wedge_comp` + `wedge_idx`（16 符号），以及等概率 `mask_sign`；
+- inter-intra：`interintra` 门、4 值 `interintra_mode`、
+  `interintra_wedge` 与楔形索引；
+- motion variation：可 warp 时三值 `motion_mode`，否则 `obmc` 布尔；
+- subpel 滤波器：可切换时按 `filter[dir][ctx]` 读水平/垂直滤波器
+  （dual_filter 才读第二个），输出 dav1d `Filter2d` 组合索引。
+
+同时移植 `dav1d_wedge_ctx_lut`、`dav1d_filter_2d` 与
+`wedge_allowed`/`interintra_allowed` 尺寸门（32x8、8x32 不参与
+inter-intra）。CDF 行宽与 dav1d 一致：interintra_mode/motion_mode/
+filter 为 3 符号、wedge_idx 为 15 符号。
+
+对拍探针 `.scratch/av1/inter_syntax_dump.c`（不入库）把 dav1d 1.5.1
+`decode_b` 的对应片段原样拷出，用 `dump_mvres.c` 的 MSAC/CDF 设施跑
+4 组 LCG 字节流 × 256 次随机上下文调用，逐例比较输出并在每组末尾
+校验 `msac.rng`，生成器
+`scripts/_emit_av1_inter_syntax_vectors.py` → 独立测试包
+`av1_inter_syntax_vectors`（4/4）。
+
+坑：`Dav1dFilterMode` 的顺序是 REGULAR=0、**SMOOTH=1、SHARP=2**
+（不是 regular/sharp/smooth），因此 `dav1d_filter_2d` 的三行是
+`{0,1,2}`、`{6,7,8}`、`{3,4,5}`。最初按字面初始器猜成
+`{0,2,1}`，C 对拍在 subpel_mode=2 时立即暴露；另外
+`interintra_wedge` 表只有 7 行，靠尺寸门排除 wedge_ctx 7/8 才不越界。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_inter_syntax_vectors` **4/4**，全量测试 **930/930**。
