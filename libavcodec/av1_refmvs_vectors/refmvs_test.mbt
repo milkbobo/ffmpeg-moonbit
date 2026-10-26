@@ -5,28 +5,25 @@
 /// (`scripts/_emit_av1_refmvs_vectors.py`).
 
 ///|
-let av1_refmvs_test_rnd_state : Ref[UInt] = Ref(0)
-
-///|
-fn av1_refmvs_test_rnd() -> UInt {
-  av1_refmvs_test_rnd_state.val = av1_refmvs_test_rnd_state.val * 1664525 + 1013904223
-  av1_refmvs_test_rnd_state.val >> 8
+fn av1_refmvs_test_rnd(st : Ref[UInt]) -> UInt {
+  st.val = st.val * 1664525 + 1013904223
+  st.val >> 8
 }
 
 ///|
-fn av1_refmvs_test_inrange(hi : Int) -> Int {
-  (av1_refmvs_test_rnd() % hi.reinterpret_as_uint()).reinterpret_as_int()
+fn av1_refmvs_test_inrange(st : Ref[UInt], hi : Int) -> Int {
+  (av1_refmvs_test_rnd(st) % hi.reinterpret_as_uint()).reinterpret_as_int()
 }
 
 ///|
 /// Rebuild one seed's contexts; mirrors dump_refmvs.c build_case.
-fn av1_refmvs_test_build(seed : Int) -> (@libavcodec.Av1Rf, FixedArray[FixedArray[@libavcodec.Av1Rb]], FixedArray[@libavcodec.Av1Rtb]) {
-  av1_refmvs_test_rnd_state.val = seed.reinterpret_as_uint()
+fn av1_refmvs_test_build(seed : Int) -> (@libavcodec.Av1Rf, FixedArray[FixedArray[@libavcodec.Av1Rb]], FixedArray[@libavcodec.Av1Rtb], UInt) {
+  let st : Ref[UInt] = Ref(seed.reinterpret_as_uint())
   let sign_bias : FixedArray[Int] = FixedArray::make(7, 0)
   let pocdiff : FixedArray[Int] = FixedArray::make(7, 0)
   for i in 0..<7 {
-    sign_bias[i] = (av1_refmvs_test_rnd() & 1).reinterpret_as_int()
-    pocdiff[i] = av1_refmvs_test_inrange(63) - 31
+    sign_bias[i] = (av1_refmvs_test_rnd(st) & 1).reinterpret_as_int()
+    pocdiff[i] = av1_refmvs_test_inrange(st, 63) - 31
   }
   let invalid = (0x8000, 0x8000)
   let blank : @libavcodec.Av1Rb = {
@@ -36,7 +33,7 @@ fn av1_refmvs_test_build(seed : Int) -> (@libavcodec.Av1Rf, FixedArray[FixedArra
   for y in 0..<37 {
     let mut x = 0
     while x < 48 {
-      let k = av1_refmvs_test_inrange(4)
+      let k = av1_refmvs_test_inrange(st, 4)
       if k == 0 {
         let b : @libavcodec.Av1Rb = {
           ref0: 0, ref1: -1, bs: 17, mf: 0, mv0: invalid, mv1: invalid,
@@ -45,13 +42,13 @@ fn av1_refmvs_test_build(seed : Int) -> (@libavcodec.Av1Rf, FixedArray[FixedArra
         rows[y][x + 1] = b
         x = x + 2
       } else {
-        let r0 = 1 + av1_refmvs_test_inrange(7)
-        let r1 = if k == 3 { 1 + av1_refmvs_test_inrange(7) } else { -1 }
-        let y0 = av1_refmvs_test_inrange(4096) - 2048
-        let x0 = av1_refmvs_test_inrange(4096) - 2048
-        let y1 = av1_refmvs_test_inrange(4096) - 2048
-        let x1 = av1_refmvs_test_inrange(4096) - 2048
-        let mf = (av1_refmvs_test_rnd() & 3).reinterpret_as_int()
+        let r0 = 1 + av1_refmvs_test_inrange(st, 7)
+        let r1 = if k == 3 { 1 + av1_refmvs_test_inrange(st, 7) } else { -1 }
+        let y0 = av1_refmvs_test_inrange(st, 4096) - 2048
+        let x0 = av1_refmvs_test_inrange(st, 4096) - 2048
+        let y1 = av1_refmvs_test_inrange(st, 4096) - 2048
+        let x1 = av1_refmvs_test_inrange(st, 4096) - 2048
+        let mf = (av1_refmvs_test_rnd(st) & 3).reinterpret_as_int()
         let b : @libavcodec.Av1Rb = {
           ref0: r0, ref1: r1, bs: 17, mf, mv0: (y0, x0), mv1: (y1, x1),
         }
@@ -64,12 +61,12 @@ fn av1_refmvs_test_build(seed : Int) -> (@libavcodec.Av1Rf, FixedArray[FixedArra
   let tblank : @libavcodec.Av1Rtb = { mv: invalid, ref_: 0 }
   let rp = FixedArray::makei(16 * 40, _ => tblank)
   for i in 0..<(16 * 40) {
-    if av1_refmvs_test_inrange(4) == 0 {
+    if av1_refmvs_test_inrange(st, 4) == 0 {
       rp[i] = { mv: invalid, ref_: 0 }
     } else {
-      let y = av1_refmvs_test_inrange(4096) - 2048
-      let x = av1_refmvs_test_inrange(4096) - 2048
-      let r = 1 + av1_refmvs_test_inrange(7)
+      let y = av1_refmvs_test_inrange(st, 4096) - 2048
+      let x = av1_refmvs_test_inrange(st, 4096) - 2048
+      let r = 1 + av1_refmvs_test_inrange(st, 7)
       rp[i] = { mv: (y, x), ref_: r }
     }
   }
@@ -94,7 +91,7 @@ fn av1_refmvs_test_build(seed : Int) -> (@libavcodec.Av1Rf, FixedArray[FixedArra
     gm_types,
     gm_matrices: gm_mats,
   }
-  (rf, rows, rp)
+  (rf, rows, rp, st.val)
 }
 
 ///|
@@ -2624,14 +2621,38 @@ let av1_refmvs_gmv_expect : FixedArray[Int] = [
 
 ///|
 let av1_refmvs_proj_expect : FixedArray[Int] = [
-  -22, 29, -1345, -2275, 1019, 1723, 21, 3, -753, 3587, -5271, 16383,
-  -18, 5, 1803, 2601, -6489, -9361, -19, 20, -2217, -3614, 2106, 3432,
-  17, 16, 1240, 1731, 1318, 1839, -17, 26, 689, -1634, -450, 1068,
-  26, 17, 1094, -375, 1672, -573, -7, 31, 315, 215, -71, -49,
-  -4, 8, -1675, -2275, 838, 1138, -4, 3, -1769, -2259, 2359, 3012,
-  -18, 11, -891, 2589, 1458, -4235, 17, 1, -2973, 64, -16383, 1088,
-  0, 21, 2454, 1322, 0, 0, 1, 2, 321, -3152, 161, -1576,
-  -16, 17, 200, 2533, -188, -2382, 7, 4, -3633, -739, -6358, -1293,
+  -1, 7, -2176, -714, 311, 102, 9, 22, -481, 3228, -197, 1319,
+  -29, 4, 2038, 3934, -14776, -16383, 23, 4, 1641, -114, 9436, -656,
+  -22, 26, 3868, 3715, -3272, -3143, -20, 12, -12, -1842, 20, 3069,
+  20, 24, 788, -1468, 656, -1222, -11, 23, -3360, 506, 1606, -242,
+  3, 23, -516, 1603, -67, 209, 10, 24, 2893, -1868, 1204, -778,
+  -5, 21, -522, -1505, 124, 358, -12, 24, -1701, 3738, 850, -1867,
+  -11, 4, 1312, -3720, -3608, 10230, 15, 7, -3798, 2382, -8137, 5103,
+  0, 19, -1636, -1042, 0, 0, 28, 5, 2778, 622, 15553, 3482,
+]
+
+///|
+let av1_refmvs_init_expect : Array[String] = [
+  "0 3 1,0,-17 1,0,-24 0,1,31 0,0,0 0,1,31 1,0,-21 1,0,-31 0:-17 6:-2147483648 1:-24 R,0,0,5,0,11,23,0,0,0,0,0,0,0,0,0,0,0,0,0,29,0 1",
+  "1 3 1,0,-20 1,0,-4 1,0,-12 0,1,31 1,0,-3 1,0,-31 1,0,-16 0:-20 4:3 5:-2147483648 R,0,0,0,2,19,0,0,0,0,28,2,11,0,24,0,0,0,0,0,0,0 1",
+  "2 1 1,0,-31 1,0,-1 0,1,31 0,1,10 0,1,27 1,0,-2 1,0,-7 5:2 0:0 0:0 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "3 3 0,1,31 1,0,-31 1,0,-31 0,1,31 0,1,12 1,0,-31 1,0,-31 0:-2147483648 5:-2147483648 6:31 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,18,3,14 1",
+  "4 3 0,1,3 0,1,11 0,1,17 0,1,30 0,1,31 1,0,-31 1,0,-31 0:3 5:-2147483648 6:-2147483648 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "5 2 0,1,7 1,0,-31 1,0,-31 1,0,-25 1,0,-22 1,0,-31 1,0,-31 4:22 6:-2147483648 0:0 R,0,29,0,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "6 2 0,1,31 1,0,-31 1,0,-31 0,1,18 0,1,31 0,1,8 0,1,22 0:-2147483648 1:-2147483648 0:0 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "7 3 1,0,-31 0,1,31 0,1,29 1,0,-31 1,0,-2 1,0,-16 1,0,-31 0:-2147483648 6:-2147483648 1:-2147483648 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "8 2 1,0,-31 0,1,-31 1,0,-31 1,0,-31 0,1,31 0,1,5 1,0,-28 0:-2147483648 1:-2147483648 0:0 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "9 3 0,1,31 1,0,-31 1,0,-7 1,0,-31 0,1,31 1,0,-31 0,1,7 0:-2147483648 5:31 1:-2147483648 R,0,0,0,0,0,0,0,0,30,0,0,0,0,2,0,0,0,0,0,0,0 1",
+  "10 3 1,0,-10 0,1,23 0,1,31 1,0,-31 0,1,31 1,0,-31 0,1,31 0:-10 5:-2147483648 1:23 R,0,0,0,0,0,25,0,0,0,0,0,0,0,0,0,25,0,0,0,0,0 1",
+  "11 2 1,0,-27 0,1,7 1,0,-31 1,0,-4 1,0,-31 0,1,29 1,0,-20 4:-2147483648 6:20 0:0 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "12 2 0,1,17 1,0,-3 1,0,-9 0,1,31 1,0,-31 0,1,31 1,0,-31 4:-2147483648 6:-2147483648 0:0 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "13 2 1,0,-24 1,0,-31 0,1,31 0,1,31 0,1,16 1,0,-7 1,0,-31 6:-2147483648 1:-2147483648 0:0 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "14 3 0,1,31 0,1,31 1,0,-31 1,0,-31 1,0,-11 1,0,-12 1,0,-31 0:-2147483648 4:11 1:-2147483648 R,0,0,0,0,0,0,0,0,22,0,0,0,8,5,0,0,0,0,0,0,0 1",
+  "15 3 0,1,25 0,1,31 0,1,7 0,1,13 1,0,-25 1,0,-31 0,1,31 0:25 4:25 1:-2147483648 R,16,0,0,12,0,0,16,3,25,15,0,0,0,0,0,0,0,0,0,0,0 1",
+  "16 2 1,0,-31 1,0,-12 0,1,6 1,0,-20 1,0,-31 0,1,31 1,0,-18 0:-2147483648 4:-2147483648 0:0 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "17 3 0,1,21 1,0,-31 0,1,31 0,1,31 0,1,31 1,0,-29 0,1,10 0:21 5:29 1:-2147483648 R,0,26,0,0,8,0,16,0,0,13,16,0,0,0,0,0,0,0,0,0,0 1",
+  "18 2 1,0,-31 0,1,18 0,1,7 1,0,-31 0,1,21 0,1,31 1,0,-31 0:-2147483648 6:-2147483648 0:0 R,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 1",
+  "19 3 1,0,-28 1,0,-28 0,1,2 0,1,4 0,1,5 0,1,2 1,0,-21 0:-28 6:21 1:-28 R,26,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0 1",
 ]
 
 ///|
@@ -2669,7 +2690,7 @@ test "av1 refmvs find matches dav1d C reference" {
   ]
   let mut k = 0
   for seed in 1..=24 {
-    let (rf, rows, rp) = av1_refmvs_test_build(seed)
+    let (rf, rows, rp, _) = av1_refmvs_test_build(seed)
     for bi in 0..<14 {
       let bs = bs_list[bi]
       let by4 = 8 + (bi % 2) * 4
@@ -2732,5 +2753,56 @@ test "av1 mv_projection matches dav1d" {
       p.1 != av1_refmvs_proj_expect[k * 6 + 5] {
       fail("proj \{k}: got (\{p.0},\{p.1})")
     }
+  }
+}
+
+///|
+test "av1 refmvs init_frame matches dav1d" {
+  // rnd state continues after build_case(24) in the dumper
+  let (_, _, _, tail) = av1_refmvs_test_build(24)
+  let st : Ref[UInt] = Ref(tail)
+  for t in 0..<20 {
+    let ref_poc = FixedArray::make(7, 0)
+    let has = FixedArray::make(7, false)
+    let rrp = FixedArray::makei(7, _ => FixedArray::make(7, 0))
+    for i in 0..<7 {
+      ref_poc[i] = av1_refmvs_test_inrange(st, 128)
+      has[i] = av1_refmvs_test_inrange(st, 3) != 0
+      for m in 0..<7 {
+        rrp[i][m] = av1_refmvs_test_inrange(st, 128)
+      }
+    }
+    let r = @libavcodec.av1_refmvs_init_frame(
+      7, 9, true, ref_poc, has, rrp,
+    )
+    let want : Array[String] = []
+    for sv in av1_refmvs_init_expect[t].split(" ") {
+      want.push(sv.to_owned())
+    }
+    inspect(r.n_mfmvs.to_string(), content=want[1])
+    for i in 0..<7 {
+      let tri : Array[StringView] = want[2 + i].split(",").to_array()
+      inspect(r.sign_bias[i].to_string(), content=(tri[0]).to_owned())
+      inspect(r.mfmv_sign[i].to_string(), content=(tri[1]).to_owned())
+      inspect(r.pocdiff[i].to_string(), content=(tri[2]).to_owned())
+    }
+    for n in 0..<3 {
+      let pair : Array[StringView] = want[9 + n].split(":").to_array()
+      inspect(r.mfmv_ref[n].to_string(), content=(pair[0]).to_owned())
+      inspect(r.mfmv_ref2cur[n].to_string(), content=(pair[1]).to_owned())
+    }
+    let refs_all : Array[StringView] = want[12].split(",").to_array()
+    let refs : Array[StringView] = []
+    for i in 1..<refs_all.length() {
+      refs.push(refs_all[i])
+    }
+    let mut k = 0
+    for n in 0..<3 {
+      for m in 0..<7 {
+        inspect(r.mfmv_ref2ref[n][m].to_string(), content=(refs[k]).to_owned())
+        k = k + 1
+      }
+    }
+    inspect((if r.use_ref_frame_mvs { "1" } else { "0" }), content=want[13])
   }
 }

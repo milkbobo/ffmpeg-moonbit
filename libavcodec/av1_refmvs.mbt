@@ -988,3 +988,114 @@ pub fn av1_rmv_get_gmv_2d_probe(
     gm_type, mat, bx4, by4, bw4, bh4, hp, force_integer_mv,
   )
 }
+
+///|
+/// Per-frame refmvs scalars produced by `dav1d_refmvs_init_frame`.
+pub struct Av1RefmvsFrameInit {
+  sign_bias : FixedArray[Int] // [7]
+  mfmv_sign : FixedArray[Int] // [7]
+  pocdiff : FixedArray[Int] // [7]
+  mfmv_ref : FixedArray[Int] // [3]
+  mfmv_ref2cur : FixedArray[Int] // [3], INT_MIN sentinel = far
+  mfmv_ref2ref : FixedArray[FixedArray[Int]] // [3][7]
+  n_mfmvs : Int
+  use_ref_frame_mvs : Bool
+}
+
+///|
+/// `dav1d_refmvs_init_frame` (single tile/frame thread): sign biases,
+/// poc deltas and the temporal-MV reference selection (last/bwd/altref2/
+/// altref/last2 with ref2cur/ref2ref projection distances).
+pub fn av1_refmvs_init_frame(
+  order_hint_bits : Int,
+  frame_offset : Int,
+  hdr_use_ref_frame_mvs : Bool,
+  ref_poc : FixedArray[Int],
+  ref_has_tmvs : FixedArray[Bool],
+  ref_ref_poc : FixedArray[FixedArray[Int]],
+) -> Av1RefmvsFrameInit {
+  let sign_bias = FixedArray::make(7, 0)
+  let mfmv_sign = FixedArray::make(7, 0)
+  let pocdiff = FixedArray::make(7, 0)
+  for i in 0..<7 {
+    let d1 = av1_get_poc_diff(order_hint_bits, ref_poc[i], frame_offset)
+    sign_bias[i] = if d1 > 0 { 1 } else { 0 }
+    mfmv_sign[i] = if d1 < 0 { 1 } else { 0 }
+    let d2 = av1_get_poc_diff(order_hint_bits, frame_offset, ref_poc[i])
+    pocdiff[i] = if d2 < -31 {
+      -31
+    } else if d2 > 31 {
+      31
+    } else {
+      d2
+    }
+  }
+  // temporal MV reference selection
+  let mfmv_ref = FixedArray::make(3, 0)
+  let mfmv_ref2cur = FixedArray::make(3, 0)
+  let mfmv_ref2ref : FixedArray[FixedArray[Int]] = FixedArray::makei(
+    3,
+    _ => FixedArray::make(7, 0),
+  )
+  let mut n_mfmvs = 0
+  let mut use_ref = false
+  if hdr_use_ref_frame_mvs && order_hint_bits != 0 {
+    let mut total = 2
+    // last (slot 0), unless alt-of-last == gold (unscaled mixing)
+    if ref_has_tmvs[0] && ref_ref_poc[0][6] != ref_poc[3] {
+      mfmv_ref[n_mfmvs] = 0
+      n_mfmvs = n_mfmvs + 1
+      total = 3
+    }
+    // bwd (slot 4), altref2 (slot 5): must be past frames
+    if ref_has_tmvs[4] &&
+      av1_get_poc_diff(order_hint_bits, ref_poc[4], frame_offset) > 0 {
+      mfmv_ref[n_mfmvs] = 4
+      n_mfmvs = n_mfmvs + 1
+    }
+    if ref_has_tmvs[5] &&
+      av1_get_poc_diff(order_hint_bits, ref_poc[5], frame_offset) > 0 {
+      mfmv_ref[n_mfmvs] = 5
+      n_mfmvs = n_mfmvs + 1
+    }
+    if n_mfmvs < total &&
+      ref_has_tmvs[6] &&
+      av1_get_poc_diff(order_hint_bits, ref_poc[6], frame_offset) > 0 {
+      mfmv_ref[n_mfmvs] = 6
+      n_mfmvs = n_mfmvs + 1
+    }
+    if n_mfmvs < total && ref_has_tmvs[1] {
+      mfmv_ref[n_mfmvs] = 1
+      n_mfmvs = n_mfmvs + 1
+    }
+    for n in 0..<n_mfmvs {
+      let rpoc = ref_poc[mfmv_ref[n]]
+      let diff1 = av1_get_poc_diff(order_hint_bits, rpoc, frame_offset)
+      if diff1 < -31 || diff1 > 31 {
+        mfmv_ref2cur[n] = -2147483647 - 1 // INT_MIN
+      } else {
+        mfmv_ref2cur[n] = if mfmv_ref[n] < 4 { -diff1 } else { diff1 }
+        for m in 0..<7 {
+          let rrpoc = ref_ref_poc[mfmv_ref[n]][m]
+          let diff2 = av1_get_poc_diff(order_hint_bits, rpoc, rrpoc)
+          mfmv_ref2ref[n][m] = if diff2 < 0 || diff2 > 31 {
+            0
+          } else {
+            diff2
+          }
+        }
+      }
+    }
+    use_ref = n_mfmvs > 0
+  }
+  {
+    sign_bias,
+    mfmv_sign,
+    pocdiff,
+    mfmv_ref,
+    mfmv_ref2cur,
+    mfmv_ref2ref,
+    n_mfmvs,
+    use_ref_frame_mvs: use_ref,
+  }
+}

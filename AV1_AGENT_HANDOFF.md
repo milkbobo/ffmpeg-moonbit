@@ -23,8 +23,9 @@
 > 至此全部就绪；§70 补齐帧间帧头（GM/skip_mode/短信令/
 > frame_size_with_refs + 8-slot 参考状态 Av1RefSlotState）。
 > §71 新增 NEWMV 残差解码原语（4×400 步位级对拍）；
-> §72 新增 refmvs 候选查找（1008 例 C 对拍，空间/时域/gmv/ctx）。
-> 剩余 refmvs 状态机接线、帧间块语法主体与整帧入口。
+> §72 新增 refmvs 候选查找（1008 例 C 对拍，空间/时域/gmv/ctx）；
+> §73 新增 refmvs 帧初始化（sign/mfmv 选择，20 组对拍）。
+> 剩余 load/save_tmvs 接线、帧间块语法主体与整帧入口。
 > 本文 §2/§3 中「仍错的像素模式」等段落是无损收敛期的历史记录，已全部解决。
 
 ---

@@ -2798,3 +2798,27 @@ ROT_ZOOM/TRANSLATION GM），外加 12 组 gmv_2d 与 16 组 projection
 `moon test --target wasm --no-render` **894/894**。剩余：
 refmvs 的 init_frame/load-save_tmvs/splat（状态机接线）、帧间块
 语法主体与整帧解码入口。
+
+## 73. 2026-10-26 AV1 refmvs 帧初始化（sign 偏置与 mfmv 选择）
+
+`av1_refmvs.mbt` 新增 `av1_refmvs_init_frame`（dav1d 同名函数的
+标量部分，单 tile/帧线程路径）：7 个参考的 sign_bias/mfmv_sign/
+pocdiff（wrapped order-hint 差与 ±31 钳位），以及时域 MV 的参考
+选择——last（slot0，除非 alt-of-last==gold）、bwd(4)/altref2(5)/
+altref(6)（须为过去帧）、last2(1) 兜底，共 total 个；ref2cur 取
+±diff1（INT_MIN 表示超界）并填 ref2ref 的 21 个投影距离
+（unsigned >31 归零）。
+
+C 对拍扩展进 `dump_refmvs.c`：20 组随机 ref_poc/rp_ref/
+ref_ref_poc（7-bit order hint 环绕），逐字段对拍 n_mfmvs、三组
+偏置、pocdiff、mfmv_ref/ref2cur 与 21 个 ref2ref。调试记录：
+(1) **rp_ref 的 has 语义**——dav1d `rnd()%3==0` 是 NULL（无时域），
+初版条件写反；(2) F 行的 `ref:cur` 对与 ref2ref 列表间需显式
+分隔符，否则解析粘连；(3) 期望表去掉行首标记后 token 下标整体
+-1。测试基建：**rnd 状态从全局改为 build 返回尾状态**（MoonBit
+测试并行，全局可变状态会数据竞争）。
+
+`moon check --target wasm --deny-warn --no-render` 0 error/0 warning；
+`moon test --target wasm --no-render` **895/895**。剩余：
+load/save_tmvs、splat_mv、sbrow_init（与 decode 接线）、帧间块
+语法主体与整帧解码入口。

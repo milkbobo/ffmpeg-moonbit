@@ -33,7 +33,7 @@ test "av1 refmvs find matches dav1d C reference" {
   ]
   let mut k = 0
   for seed in 1..=24 {
-    let (rf, rows, rp) = av1_refmvs_test_build(seed)
+    let (rf, rows, rp, _) = av1_refmvs_test_build(seed)
     for bi in 0..<14 {
       let bs = bs_list[bi]
       let by4 = 8 + (bi % 2) * 4
@@ -96,5 +96,56 @@ test "av1 mv_projection matches dav1d" {
       p.1 != av1_refmvs_proj_expect[k * 6 + 5] {
       fail("proj \{k}: got (\{p.0},\{p.1})")
     }
+  }
+}
+
+///|
+test "av1 refmvs init_frame matches dav1d" {
+  // rnd state continues after build_case(24) in the dumper
+  let (_, _, _, tail) = av1_refmvs_test_build(24)
+  let st : Ref[UInt] = Ref(tail)
+  for t in 0..<20 {
+    let ref_poc = FixedArray::make(7, 0)
+    let has = FixedArray::make(7, false)
+    let rrp = FixedArray::makei(7, _ => FixedArray::make(7, 0))
+    for i in 0..<7 {
+      ref_poc[i] = av1_refmvs_test_inrange(st, 128)
+      has[i] = av1_refmvs_test_inrange(st, 3) != 0
+      for m in 0..<7 {
+        rrp[i][m] = av1_refmvs_test_inrange(st, 128)
+      }
+    }
+    let r = @libavcodec.av1_refmvs_init_frame(
+      7, 9, true, ref_poc, has, rrp,
+    )
+    let want : Array[String] = []
+    for sv in av1_refmvs_init_expect[t].split(" ") {
+      want.push(sv.to_owned())
+    }
+    inspect(r.n_mfmvs.to_string(), content=want[1])
+    for i in 0..<7 {
+      let tri : Array[StringView] = want[2 + i].split(",").to_array()
+      inspect(r.sign_bias[i].to_string(), content=(tri[0]).to_owned())
+      inspect(r.mfmv_sign[i].to_string(), content=(tri[1]).to_owned())
+      inspect(r.pocdiff[i].to_string(), content=(tri[2]).to_owned())
+    }
+    for n in 0..<3 {
+      let pair : Array[StringView] = want[9 + n].split(":").to_array()
+      inspect(r.mfmv_ref[n].to_string(), content=(pair[0]).to_owned())
+      inspect(r.mfmv_ref2cur[n].to_string(), content=(pair[1]).to_owned())
+    }
+    let refs_all : Array[StringView] = want[12].split(",").to_array()
+    let refs : Array[StringView] = []
+    for i in 1..<refs_all.length() {
+      refs.push(refs_all[i])
+    }
+    let mut k = 0
+    for n in 0..<3 {
+      for m in 0..<7 {
+        inspect(r.mfmv_ref2ref[n][m].to_string(), content=(refs[k]).to_owned())
+        k = k + 1
+      }
+    }
+    inspect((if r.use_ref_frame_mvs { "1" } else { "0" }), content=want[13])
   }
 }
