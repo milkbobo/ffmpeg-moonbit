@@ -3398,3 +3398,45 @@ intrabc 按原范围不做。完整参数、入口约定与再生步骤见
 
 `moon check --target wasm --deny-warn --no-render` 零警告，Wasm 全量
 **968/968**；`moon info --target wasm` 已运行并检查新增接口。
+
+## 97. AV1 整帧 superres 与 sb128 LR 左边界修复
+
+`av1_decode_frame_payloads` 去掉 superres guard，按 dav1d 双平面模型接通：
+coded 宽度完成解码/deblock/CDEF 后新增 resize 级（`av1_scale_fac` =
+`scale_fac(coded, upscaled)` 14bit 步长、`av1_get_upscale_x0` 相位，
+逐行调用 `av1_mc_resize`，该原语新增 `src_off` 参数），随后把
+`f.planes/y_stride/uv_stride` 重绑到上采样平面；LR 在上采样宽度上运行
+（`Av1FrameCtx.sr_sb128w` 网格、`av1_lr_sbrow` 用 `hdr.upscaled_width`），
+输出 picture 宽度 = upscaled。帧头新增 `superres_denom` 字段。
+
+`read_restoration_sb` 补 superres 分支：单元网格跨上采样宽度，coded SB
+区间经 `x = ((bx*4*d >> ss_h) + unit_size*8 - 1) >> (log2+3)` 映射到单元
+索引，一个 SB 可读多个单元；`lr_frame` 的 12 行边界备份按 dav1d
+`backup_lpf` resize 分支逐行上采样（src 推进用固定 64 行条带步长，尾行
+复制），buffer 以重绑后的上采样 stride 分配、源平面用 coded stride 传入。
+会话入口参考帧保持上采样宽度（scaled MC svc 与 2×/16× 限制基准），但
+`Av1RefmvsReference` 改存 **coded** 宽度：dav1d 的时域 MV 同尺寸门比较
+ref `frame_hdr->width[0]`（coded）与当前 `bw`。
+
+顺带修复 LR 条带循环两处与 dav1d 的偏差：左边界指针需按「刚滤波完的
+条带高度」推进（此前完全没推进；sb64 每调用恰一条带从未暴露，sb128 或
+superres 单次调用多条带即触发），推进时机在下一条带高度推导之前。
+
+真实流验证：aomenc（apt `aom-tools`，FFmpeg 封装不暴露 superres 参数）
+四组 yuv420p 流——`superres_inter`（denom13 fixed，8 帧）、`superres_kf`
+（kf-max-dist=1 全关键帧对照，10 帧）、`superres_10bit`（yuv420p10le
+denom12，8 帧）、`superres_mixed`（superres-mode=2 逐帧随机 denom 9–15
+且含非 superres inter 帧，8 帧）——共 **34 个显示帧**与 libdav1d framemd5
+逐帧一致；scaled-reference MC 路径首次被真实流覆盖。调试方法：vpxdev-img
+gcc 直编 trace_src dav1d 树并插桩逐级 dump（coded 级 0 差异定位到 resize
+参数序错误 `scale_fac(upscaled, coded)`；resize 级 0 差异定位到 LR 左边界
+指针推进），`run_sr_stage.py` 用 base64 通道回传二进制（Windows 管道吃
+NUL 字节）。
+
+aomenc superres fixed 模式只对 inter 帧启用（关键帧恒 denom16），
+superres-mode=2 才会出现 superres 关键帧。qmatrix 仍拒绝；film grain、
+intrabc 不做。再生步骤与编码参数见
+[SUPERRES](AGENT_HANDOFF_2026-10-26_SUPERRES.md)。
+
+`moon check --target wasm --deny-warn --no-render` 零警告，Wasm 全量
+**972/972**；`moon fmt`/`moon info --target wasm` 已运行。

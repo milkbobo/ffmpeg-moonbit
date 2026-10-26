@@ -102,6 +102,9 @@ priv struct Av1FrameCtx {
   bw : Int32
   bh : Int32
   sb128w : Int32
+  /// LR-unit grid stride: `(upscaled_width + 127) >> 7`, >= `sb128w`; the
+  /// grid LR units live on is the upscaled (post-superres-resize) width.
+  sr_sb128w : Int32
   sb_shift : Int32
   sb_step : Int32
   /// Bits per component (8/10/12).
@@ -110,10 +113,13 @@ priv struct Av1FrameCtx {
   pixel_max : Int32
   /// (1 << bpc) >> 1, the midpoint (dav1d DC_128 / plane fill).
   mid : Int32
-  /// Picture planes (component values), stride in pixels.
-  planes : FixedArray[FixedArray[Int32]]
-  y_stride : Int32
-  uv_stride : Int32
+  /// Picture planes (component values), stride in pixels. With superres the
+  /// fields are rebound to the upscaled planes right before loop
+  /// restoration (dav1d runs LR on `sr_cur`), so LF/CDEF (coded) must run
+  /// before the rebind and only LR/output may follow it.
+  mut planes : FixedArray[FixedArray[Int32]]
+  mut y_stride : Int32
+  mut uv_stride : Int32
   /// Chroma subsampling shifts from the sequence header.
   ss_h : Int32
   ss_v : Int32
@@ -312,7 +318,11 @@ fn av1_bdim(bs : Int32, i : Int32) -> Int32 {
 /// Compute the dequant table for one base qindex, applying per-segment
 /// ALT_Q offsets when segmentation is enabled (dav1d `init_quant_tables`
 /// with `qidx + seg_data.d[i].delta_q`).
-fn Av1FrameCtx::fill_dq(self : Av1FrameCtx, base_qidx : Int32, out : FixedArray[Int32]) -> Unit {
+fn Av1FrameCtx::fill_dq(
+  self : Av1FrameCtx,
+  base_qidx : Int32,
+  out : FixedArray[Int32],
+) -> Unit {
   let dq_tbl : FixedArray[UInt16] = if self.seq.bitdepth == 8 {
     av1_dq_tbl_0
   } else if self.seq.bitdepth == 10 {
@@ -449,8 +459,8 @@ fn av1_get_skip_ctx(
     let not_one_blk = av1_bdim(bs, 2) -
       (if av1_bdim(bs, 2) != 0 && ss_h != 0 { 1 } else { 0 }) >
       lw ||
-      av1_bdim(bs, 3) -
-      (if av1_bdim(bs, 3) != 0 && ss_v != 0 { 1 } else { 0 }) > lh
+      av1_bdim(bs, 3) - (if av1_bdim(bs, 3) != 0 && ss_v != 0 { 1 } else { 0 }) >
+      lh
     let ca = {
       let mut any = false
       for i in 0..<(1 << lw) {

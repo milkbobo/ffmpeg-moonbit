@@ -408,6 +408,8 @@ pub struct Av1FrameHeader {
   /// `frame_width` before superres upscaling; equals `width` when
   /// `use_superres` is false.
   upscaled_width : Int32
+  /// `SuperresDenom` (9..=16); 16 when `use_superres` is false.
+  superres_denom : Int32
   allow_intrabc : Bool
   frame_refs_short_signaling : Bool
   ref_frame_idx : Array[Int32]
@@ -719,6 +721,7 @@ pub fn av1_parse_frame_header(
           render_width: seq.width,
           render_height: seq.height,
           use_superres: false,
+          superres_denom: 16,
           allow_intrabc: false,
           frame_refs_short_signaling: false,
           ref_frame_idx: [],
@@ -1008,11 +1011,13 @@ pub fn av1_parse_frame_header(
       }
       // superres_params() sits inside frame_size(), before render_size().
       let mut use_superres = false
+      let mut superres_denom = 16
       let upscaled_width = width
       if seq.enable_superres {
         use_superres = br.read(1) != 0
         if use_superres {
           let denom = br.read(3).reinterpret_as_int() + 9
+          superres_denom = denom
           let min_w = if upscaled_width < 16 { upscaled_width } else { 16 }
           let ds = (upscaled_width * 8 + denom / 2) / denom
           width = if ds > min_w { ds } else { min_w }
@@ -1422,9 +1427,14 @@ pub fn av1_parse_frame_header(
           }
           loop_filter_sharpness = br.read(3).reinterpret_as_int()
           if primary_ref != 7 {
-            if ref_state(refs[primary_ref]) is Some(slot) && slot.header is Some(previous) {
-              for i in 0..<8 { loop_filter_ref_deltas[i] = previous.loop_filter_ref_deltas[i] }
-              for i in 0..<2 { loop_filter_mode_deltas[i] = previous.loop_filter_mode_deltas[i] }
+            if ref_state(refs[primary_ref]) is Some(slot) &&
+              slot.header is Some(previous) {
+              for i in 0..<8 {
+                loop_filter_ref_deltas[i] = previous.loop_filter_ref_deltas[i]
+              }
+              for i in 0..<2 {
+                loop_filter_mode_deltas[i] = previous.loop_filter_mode_deltas[i]
+              }
             }
           }
           let lf_delta_enabled = br.read1() != 0
@@ -1766,6 +1776,7 @@ pub fn av1_parse_frame_header(
         render_height,
         use_superres,
         upscaled_width,
+        superres_denom,
         allow_intrabc,
         frame_refs_short_signaling: short_sig,
         ref_frame_idx: refs,

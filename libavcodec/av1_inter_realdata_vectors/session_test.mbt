@@ -69,6 +69,26 @@ test "AV1 hidden and show-existing frames match libdav1d" {
 }
 
 ///|
+test "AV1 fixed-denom superres inter frames match libdav1d" {
+  check_session(superres_inter_ivf_b64, superres_inter_md5, "superres")
+}
+
+///|
+test "AV1 all-keyframe superres (denom 9) matches libdav1d" {
+  check_session(superres_kf_ivf_b64, superres_kf_md5, "superres-kf")
+}
+
+///|
+test "AV1 10-bit superres frames match libdav1d" {
+  check_session(superres_10bit_ivf_b64, superres_10bit_md5, "superres-10bit")
+}
+
+///|
+test "AV1 random-denom superres frames match libdav1d" {
+  check_session(superres_mixed_ivf_b64, superres_mixed_md5, "superres-mixed")
+}
+
+///|
 test "AV1 session rejects incomplete packets and returns saved key pictures" {
   let decoder = @libavcodec.Av1Decoder::new()
   assert_true(decoder.decode_packet(b"\x80") is Err(_))

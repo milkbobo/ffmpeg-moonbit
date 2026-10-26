@@ -33,7 +33,9 @@ fn Av1TileCtx::decode_tile_sbrow(
   let sb_step = f.sb_step
   f.l.reset_keyframe()
   if f.inter is Some(_) {
-    for i in 0..<32 { f.l.intra[i] = 0 }
+    for i in 0..<32 {
+      f.l.intra[i] = 0
+    }
     f.inter_a[0].reset_left(intra=false)
   }
   if self.rstate is Some(rstate) {
@@ -75,6 +77,21 @@ fn Av1TileCtx::decode_tile_sbrow(
     return true
   }
   false
+}
+
+///|
+/// dav1d `scale_fac`: 14-bit fixed-point ratio `ref_sz / this_sz`.
+fn av1_scale_fac(ref_sz : Int32, this_sz : Int32) -> Int32 {
+  ((ref_sz << 14) + (this_sz >> 1)) / this_sz
+}
+
+///|
+/// dav1d `get_upscale_x0`: horizontal phase offset (14-bit) for the superres
+/// upscale from `in_w` coded columns to `out_w` output columns.
+fn av1_get_upscale_x0(in_w : Int32, out_w : Int32, step : Int32) -> Int32 {
+  let err = out_w * step - (in_w << 14)
+  let x0 = (-((out_w - in_w) << 13) + (out_w >> 1)) / out_w + 128 - err / 2
+  x0 & 0x3fff
 }
 
 ///|
@@ -165,8 +182,15 @@ fn av1_decode_keyframe_payloads(
   if hdr.frame_type != av1_frame_key {
     return Err("av1: not a key frame")
   }
-  match av1_decode_frame_payloads(seq, hdr, payloads,
-    av1_cdf_copy_defaults(hdr.base_q_idx), None, None) {
+  match
+    av1_decode_frame_payloads(
+      seq,
+      hdr,
+      payloads,
+      av1_cdf_copy_defaults(hdr.base_q_idx),
+      None,
+      None,
+    ) {
     Ok(decoded) => Ok(decoded.picture)
     Err(e) => Err(e)
   }
@@ -190,9 +214,6 @@ fn av1_decode_frame_payloads(
 ) -> Result[Av1DecodedPicture, String] {
   if hdr.using_qmatrix {
     return Err("av1: qmatrix unsupported")
-  }
-  if hdr.use_superres {
-    return Err("av1: superres unsupported")
   }
   if seq.bitdepth != 8 && seq.bitdepth != 10 && seq.bitdepth != 12 {
     return Err("av1: unsupported bit depth")
@@ -221,9 +242,17 @@ fn av1_decode_frame_payloads(
   let aligned_w = (w + 127) & -128
   let y_stride = aligned_w
   let uv_stride = aligned_w >> ss_h
+  // Superres geometry: decode/deblock/CDEF run at the coded width; the
+  // frame is then upscaled to `upscaled_width` before loop restoration.
+  // dav1d sizes the LR-unit grid (`sr_sb128w`) from the upscaled width.
+  let sr_w = hdr.upscaled_width
+  let sr_aligned_w = (sr_w + 127) & -128
+  let sr_y_stride = sr_aligned_w
+  let sr_uv_stride = sr_aligned_w >> ss_h
+  let sr_sb128w = (sr_w + 127) >> 7
   let bpc = seq.bitdepth
   let pixel_max = (1 << bpc) - 1
-  let mid = (1 << bpc) >> 1
+  let mid = 1 << bpc >> 1
   let y_plane : FixedArray[Int32] = FixedArray::make(
     y_stride * (h + 2 * sb_step * 4 + 64),
     mid,
@@ -240,14 +269,25 @@ fn av1_decode_frame_payloads(
   let planes : FixedArray[FixedArray[Int32]] = [y_plane, u_plane, v_plane]
   let a = []
   let inter_a = []
-  let left = FixedArray::makei(32, _ => { ..av1_inter_intra_neighbor(), intra: false })
+  let left = FixedArray::makei(32, _ => {
+    ..av1_inter_intra_neighbor(),
+    intra: false,
+  })
   for _ in 0..<(sb128w * hdr.tile_rows) {
     let a_ctx = av1_block_context_new()
     a_ctx.reset_keyframe()
-    if inter is Some(_) { for i in 0..<32 { a_ctx.intra[i] = 0 } }
+    if inter is Some(_) {
+      for i in 0..<32 {
+        a_ctx.intra[i] = 0
+      }
+    }
     a.push(a_ctx)
     inter_a.push({
-      top: FixedArray::makei(32, _ => { ..av1_inter_intra_neighbor(), intra: false }), left,
+      top: FixedArray::makei(32, _ => {
+        ..av1_inter_intra_neighbor(),
+        intra: false,
+      }),
+      left,
     })
   }
   // One 128-entry row per 64x64 SB row (dav1d: sbh * sb128w * 128).
@@ -279,7 +319,9 @@ fn av1_decode_frame_payloads(
   let lf_u_active = lf_level_arr.length() > 2 && lf_level_arr[2] != 0
   let lf_v_active = lf_level_arr.length() > 3 && lf_level_arr[3] != 0
   let lf_mask : Array[Av1Filter] = []
-  for _ in 0..<(sb128w * sb128h) {
+  // LR units index this array with the upscaled-grid stride `sr_sb128w`
+  // (dav1d `lr_mask`), while LF/CDEF use `sb128w`; `sr_sb128w >= sb128w`.
+  for _ in 0..<(sr_sb128w * sb128h) {
     lf_mask.push(av1_filter_new())
   }
   let b4_stride = (bw + 31) & -32
@@ -298,6 +340,7 @@ fn av1_decode_frame_payloads(
     bw,
     bh,
     sb128w,
+    sr_sb128w,
     sb_shift,
     sb_step,
     bpc,
@@ -318,7 +361,9 @@ fn av1_decode_frame_payloads(
     seg_qidx: FixedArray::make(8, 0),
     cur_segmap: if hdr.segmentation_enabled && !hdr.segmentation_update_map {
       prev_segmap.unwrap_or(FixedArray::make(b4_stride * bh, b'\x00'))
-    } else { FixedArray::make(b4_stride * bh, b'\x08') },
+    } else {
+      FixedArray::make(b4_stride * bh, b'\x08')
+    },
     prev_segmap,
     b4_stride,
     lf_mask,
@@ -360,7 +405,10 @@ fn av1_decode_frame_payloads(
         rstate: match inter {
           Some(fr) => {
             let base = fr.prepared.state
-            Some({ ..base, tile: { ..base.tile, rows: base.tile.rows.copy() } })
+            Some({
+              ..base,
+              tile: { ..base.tile, rows: base.tile.rows.copy(), },
+            })
           }
           None => None
         },
@@ -411,20 +459,31 @@ fn av1_decode_frame_payloads(
       for by = first.row_start; by < first.row_end; by = by + sb_step {
         let end8 = av1_imin((by + sb_step) >> 1, bh >> 1)
         if inter is Some(fr) {
-          fr.prepared.state.begin_sbrow(by >> sb_shift, 0, bw >> 1, by >> 1, end8)
+          fr.prepared.state.begin_sbrow(
+            by >> sb_shift,
+            0,
+            bw >> 1,
+            by >> 1,
+            end8,
+          )
         }
         for tile_col in 0..<hdr.tile_cols {
           let ts = tasks[tile_row * hdr.tile_cols + tile_col]
           ts.by = by
           if ts.decode_tile_sbrow(root_bl) {
-            raise Av1DecError::Unsupported("tile \{tile_col},\{tile_row}, sbrow \{by}: symbol decoder overread")
+            raise Av1DecError::Unsupported(
+              "tile \{tile_col},\{tile_row}, sbrow \{by}: symbol decoder overread",
+            )
           }
           for k in 0..<sb_step {
-            f.tile_lpf_y[align_h * tile_col + by + k] = f.l.tx_lpf_y[(by & 16) + k]
+            f.tile_lpf_y[align_h * tile_col + by + k] = f.l.tx_lpf_y[(by & 16) +
+              k]
           }
           for k in 0..<(sb_step >> ss_v) {
-            f.tile_lpf_uv[align_h_uv * tile_col + (by >> ss_v) + k] =
-              f.l.tx_lpf_uv[((by & 16) >> ss_v) + k]
+            f.tile_lpf_uv[align_h_uv * tile_col + (by >> ss_v) + k] = f.l.tx_lpf_uv[(
+                (by & 16) >> ss_v
+              ) +
+              k]
           }
           if by == ts.row_start && tile_row > 0 {
             f.start_of_tile_row[by / sb_step] = tile_row
@@ -442,37 +501,128 @@ fn av1_decode_frame_payloads(
     // LR stripe boundaries use the post-deblock, pre-CDEF pixels, so the
     // snapshot is needed whenever either in-loop filter runs.
     let need_snap = f.cdef_on || f.lr_active
-    let snap0 = if need_snap { av1_copy_plane(f.planes[0]) } else {
+    let snap0 = if need_snap {
+      av1_copy_plane(f.planes[0])
+    } else {
       f.planes[0]
     }
-    let snap1 = if need_snap { av1_copy_plane(f.planes[1]) } else {
+    let snap1 = if need_snap {
+      av1_copy_plane(f.planes[1])
+    } else {
       f.planes[1]
     }
-    let snap2 = if need_snap { av1_copy_plane(f.planes[2]) } else {
+    let snap2 = if need_snap {
+      av1_copy_plane(f.planes[2])
+    } else {
       f.planes[2]
     }
     if f.cdef_on {
       f.cdef_frame(f.cdef, snap0, snap1, snap2)
     }
-    if f.lr_active {
-      f.lr_frame(snap0, snap1, snap2)
+    if hdr.use_superres {
+      // dav1d `filter_sbrow_resize` + `scale_fac`/`get_upscale_x0`: upscale
+      // the CDEF'd coded planes to the output width; LR then runs on these
+      // upscaled planes (dav1d LR is applied to `sr_cur`).
+      let step0 = av1_scale_fac(w, sr_w)
+      let in_cw = (w + ss_h) >> ss_h
+      let out_cw = (sr_w + ss_h) >> ss_h
+      let step1 = av1_scale_fac(in_cw, out_cw)
+      let start0 = av1_get_upscale_x0(w, sr_w, step0)
+      let start1 = av1_get_upscale_x0(in_cw, out_cw, step1)
+      let src_w_y = bw << 2
+      let src_w_uv = (bw * 4 + ss_h) >> ss_h
+      let uv_h_out = (h + ss_v) >> ss_v
+      let sr_y : FixedArray[Int32] = FixedArray::make(
+        sr_y_stride * (h + 2 * sb_step * 4 + 64),
+        mid,
+      )
+      let sr_u : FixedArray[Int32] = FixedArray::make(
+        sr_uv_stride * (uv_h_out + sb_step * 2 + 64),
+        mid,
+      )
+      let sr_v : FixedArray[Int32] = FixedArray::make(
+        sr_uv_stride * (uv_h_out + sb_step * 2 + 64),
+        mid,
+      )
+      for row in 0..<h {
+        let line = @av1_mc_core.av1_mc_resize(
+          f.planes[0],
+          row * y_stride,
+          y_stride,
+          src_w_y,
+          1,
+          sr_w,
+          step0,
+          start0,
+          bpc,
+        )
+        for x in 0..<sr_w {
+          sr_y[row * sr_y_stride + x] = line[x]
+        }
+      }
+      for row in 0..<uv_h_out {
+        let line = @av1_mc_core.av1_mc_resize(
+          f.planes[1],
+          row * uv_stride,
+          uv_stride,
+          src_w_uv,
+          1,
+          out_cw,
+          step1,
+          start1,
+          bpc,
+        )
+        for x in 0..<out_cw {
+          sr_u[row * sr_uv_stride + x] = line[x]
+        }
+        let line = @av1_mc_core.av1_mc_resize(
+          f.planes[2],
+          row * uv_stride,
+          uv_stride,
+          src_w_uv,
+          1,
+          out_cw,
+          step1,
+          start1,
+          bpc,
+        )
+        for x in 0..<out_cw {
+          sr_v[row * sr_uv_stride + x] = line[x]
+        }
+      }
+      f.planes = [sr_y, sr_u, sr_v]
+      f.y_stride = sr_y_stride
+      f.uv_stride = sr_uv_stride
     }
-    let out_cdf = if hdr.disable_frame_end_update_cdf { in_cdf } else {
+    if f.lr_active {
+      f.lr_frame(snap0, snap1, snap2, y_stride, uv_stride)
+    }
+    let out_cdf = if hdr.disable_frame_end_update_cdf {
+      in_cdf
+    } else {
       tasks[hdr.context_update_tile_id].cdf.for_reference()
     }
-    Ok({ picture: {
-      y: f.planes[0],
-      u: f.planes[1],
-      v: f.planes[2],
-      width: w,
-      height: h,
-      y_stride,
-      uv_stride,
-      ss_h,
-      ss_v,
-      mono: seq.monochrome,
-      bitdepth: bpc,
-    }, cdf: out_cdf, segmap: f.cur_segmap })
+    Ok({
+      picture: {
+        y: f.planes[0],
+        u: f.planes[1],
+        v: f.planes[2],
+        width: if hdr.use_superres {
+          sr_w
+        } else {
+          w
+        },
+        height: h,
+        y_stride: f.y_stride,
+        uv_stride: f.uv_stride,
+        ss_h,
+        ss_v,
+        mono: seq.monochrome,
+        bitdepth: bpc,
+      },
+      cdf: out_cdf,
+      segmap: f.cur_segmap,
+    })
   } catch {
     Av1DecError::Unsupported(msg) => Err(msg)
   }

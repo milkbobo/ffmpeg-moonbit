@@ -9,7 +9,7 @@
 | H.264 | I/P/B 帧；CAVLC/CABAC；8/9/10/12/14 bit、单色及 4:2:0/4:2:2/4:4:4；多 slice、MBAFF/PAFF、参考帧管理、SEI、去块滤波；Annex B 与 MP4 `avcC` 入口；渐进帧与 MBAFF 帧缺失或截断 slice 的宏块补偿 | P 帧大缺口、高位深等复杂恢复场景尚未逐像素对齐 FFmpeg；场图片按上游边界明确报错；SP/SI 明确不做。FMO、separate colour plane 和数据分区不在 FFmpeg 9.0.2 的可解码范围内 |
 | HEVC | I/P/B 帧；8/10/12 bit、多种色度格式及单色；多 slice、WPP、tiles、去块滤波与 SAO | dependent slice、tiles 与 WPP 的组合、PCM/RDPCM 等仍缺 |
 | AAC / MPEG 音频 / FLAC | AAC-LC PCM；MPEG 音频 Layer I/II/III 定点 PCM；FLAC 无损 PCM | AAC 的 SBR/PS、USAC 等未覆盖 |
-| 其他视频 / 音频 | VP9 profile 0/1/2/3：关键帧与帧间帧（P 帧四种 MV 模式、三路参考、可切换/固定插值滤波、并行提交与计数驱动概率自适应；`comp_inter_blocks` 诊断计数器）、8/10/12-bit、4:2:0/4:2:2/4:4:0/4:4:4；AV1 8/10/12-bit 4:2:0/4:2:2/4:4:4/单色 多 tile 无损关键帧、有损关键帧（8/10/12-bit，DCT/ADST/IDTX 全变换、环路去块滤波、CDEF、环路恢复 Wiener/SGR 与 SWITCHABLE（4:2:0/4:2:2/4:4:4 全布局）、逐 SB delta-q/delta-lf、关键帧 segmentation 的 ALT_Q/ALT_LF/SKIP 与 seg_id 空间预测，多 tile 含 64/128 SB 与 tile 边界强度修正）；AV1 inter 会话入口（8/10-bit 4:2:0，含 2×2 tiles、GM warp、隐藏帧/show-existing，5 组真实流 35 帧 MD5 对齐）；MJPEG、PNG/APNG；Opus SILK/混合/CELT 全模式与多流包级解码 | VP9 复合预测（B 帧，libvpx 编码器无法生成，已用 alt-ref 码流计数探针证实）与参考缩放；AV1 整帧 superres 与 qmatrix 尚缺，film grain/intrabc 不做；inter 更广格式与尺寸变化待验证；Opus 包丢失隐藏（PLC）未实现 |
+| 其他视频 / 音频 | VP9 profile 0/1/2/3：关键帧与帧间帧（P 帧四种 MV 模式、三路参考、可切换/固定插值滤波、并行提交与计数驱动概率自适应；`comp_inter_blocks` 诊断计数器）、8/10/12-bit、4:2:0/4:2:2/4:4:0/4:4:4；AV1 8/10/12-bit 4:2:0/4:2:2/4:4:4/单色 多 tile 无损关键帧、有损关键帧（8/10/12-bit，DCT/ADST/IDTX 全变换、环路去块滤波、CDEF、环路恢复 Wiener/SGR 与 SWITCHABLE（4:2:0/4:2:2/4:4:4 全布局）、逐 SB delta-q/delta-lf、关键帧 segmentation 的 ALT_Q/ALT_LF/SKIP 与 seg_id 空间预测，多 tile 含 64/128 SB 与 tile 边界强度修正）；AV1 inter 会话入口（8/10-bit 4:2:0，含 2×2 tiles、GM warp、隐藏帧/show-existing，5 组真实流 35 帧 MD5 对齐）；AV1 整帧 superres（coded 解码 + resize 上采样 + LR 上采样网格 + scaled 参考 MC，4 组 aomenc 流 34 帧 MD5 对齐）；MJPEG、PNG/APNG；Opus SILK/混合/CELT 全模式与多流包级解码 | VP9 复合预测（B 帧，libvpx 编码器无法生成，已用 alt-ref 码流计数探针证实）与参考缩放；AV1 整帧 qmatrix 尚缺（superres 已接通），film grain/intrabc 不做；inter 更广格式与尺寸变化待验证；Opus 包丢失隐藏（PLC）未实现 |
 | 容器与分片 | MP4/MOV（含 AAC/H.264/HEVC/AV1/VP9/Opus 及 H.264+AAC 双轨写入器）、Matroska/WebM（含 H.264/VP9/AV1/Opus、VP9+Opus 与 H.264+AAC 多轨写入器；VP9/AV1/Opus 写入器可选 webm/matroska DocType）、MPEG-TS（含 H.264+AAC 写入器，PMT stream type 可选 HEVC/MP3 等）、WAV（含 PCM 8/16/24/32-bit、IEEE float32 与 extensible 写入器）、Ogg/Opus（读写）、裸 AAC/MP3（含 ADTS AAC 写入器）；HLS/DASH 通过回调读取 TS/fMP4，含 H.264/HEVC/AV1/VP9/AAC/Opus 单轨 fMP4 初始化段/媒体段写入器、HLS 主/媒体播放列表与 DASH SegmentTemplate MPD 写入器 | 尚无统一播放 API、完整网络协议层或完整 muxer 集合 |
 | 基础算法 | 位流、哈希/校验和、AES 等密码算法、数学/时间基及部分 `@v128` 内核 | `libavutil` 其余模块及 `libswscale`、`libswresample` 等尚未整体移植 |
 
@@ -29,7 +29,7 @@ MC（8-tap/bilinear put+prep）、superres resize 与 warp 仿射
 refmvs 的候选查找、时域加载/保存、superblock 行环和单/双参考
 模式/MV 解码原语已加入，并用 dav1d C 随机状态机对拍（16/32 像素
 superblock 行环、空间发布、时域保存、缩放投影与等值游程快进）；
-参考帧槽位按上采样（width[0]）网格管理时域 MV 图。MV 之后的
+参考帧槽位按 coded（dav1d width[0]）网格管理时域 MV 图。MV 之后的
 帧间语法（复合 mask/jnt、inter-intra、motion variation、subpel
 滤波器）也已与 dav1d C 逐位对拍；warp 邻居匹配与仿射模型推导
 （find_matching_ref/derive_warpmv/warpmv.c）同样完成；帧间环路
@@ -47,9 +47,19 @@ CDF 支持独立快照，邻域发布使用 `&31` 并可单独重置 left（§95
 CDF/segmap 继承、隐藏帧与 show-existing；主循环按 sbrow × tile 共享时域
 MV 投影，完整执行 deblock/CDEF/LR。5 组 libaom 真实码流共 35 个显示帧
 与 libdav1d 逐帧 MD5 一致，覆盖普通 P 帧、2×2 tiles、10-bit、帧级 GM warp
-和隐藏/重排序帧。整帧 superres 与 qmatrix 仍明确拒绝；film grain、intrabc
-仍不做。当前 inter 端到端验证以 4:2:0 为限，更广格式和尺寸变化待补。
-实现与再生步骤见 [会话入口交接](AGENT_HANDOFF_2026-10-26_INTER_SESSION.md)。
+和隐藏/重排序帧。film grain、intrabc 仍不做，qmatrix 仍明确拒绝。
+整帧 superres 已接通：coded 宽度解码/deblock/CDEF 后按 dav1d
+`resize_c`（`scale_fac(coded, upscaled)` 步长 + `get_upscale_x0` 相位）
+水平上采样，LR 在上采样宽度上运行（单元网格用 `sr_sb128w`，
+`read_restoration_sb` 按 SuperresDenom 把 coded SB 区间映射到上采样
+单元索引，可一 SB 多单元），LR 边界备份行逐行 resize；参考帧按其上采样
+宽度参与 scaled MC 与 2×/16× 尺寸限制，refmvs/segmap 继承按 coded 网格
+比较。另修复 LR 条带循环未随 dav1d `left += stripe_h` 推进左边界指针的
+潜伏问题（sb128 单次调用多条带才触发）。4 组 aomenc superres 真实流
+（fixed denom 13/12、全关键帧、random 逐帧变 denom 含非 superres inter 帧）
+共 34 个显示帧与 libdav1d 逐帧 MD5 一致；scaled MC 路径首次被真实流覆盖。
+当前 inter 端到端验证以 4:2:0 为限，更广格式和尺寸变化待补。
+实现与再生步骤见 [superres 交接](AGENT_HANDOFF_2026-10-26_SUPERRES.md)。
 
 ## 构建与测试
 

@@ -10,7 +10,8 @@
 ///|
 /// `dav1d_sgr_params[16][2]`: (s0, s1) for the 3x3 / 5x5 self-guided filter.
 let av1_sgr_params : FixedArray[Int32] = [
-  140, 3236, 112, 2158, 93, 1618, 80, 1438, 70, 1295, 58, 1177, 47, 1079, 37, 996, 30, 925, 25, 863, 0, 2589, 0, 1618, 0, 1177, 0, 925, 56, 0, 22, 0,
+  140, 3236, 112, 2158, 93, 1618, 80, 1438, 70, 1295, 58, 1177, 47, 1079, 37, 996,
+  30, 925, 25, 863, 0, 2589, 0, 1618, 0, 1177, 0, 925, 56, 0, 22, 0,
 ]
 
 ///|
@@ -56,7 +57,9 @@ fn Av1TileCtx::read_restoration_info(
   if frame_type == 1 {
     // switchable: NONE / WIENER / SGRPROJ
     let filter = self.msac.decode_symbol_adapt(
-      self.cdf.restore_switchable, 0, 2,
+      self.cdf.restore_switchable,
+      0,
+      2,
     )
     unit.typ = filter + (if filter > 0 { 1 } else { 0 })
   } else {
@@ -77,15 +80,19 @@ fn Av1TileCtx::read_restoration_info(
     } else {
       self.msac.decode_subexp(prev.filter_v[0] + 5, 16, 1) - 5
     }
-    unit.filter_v[1] = self.msac.decode_subexp(prev.filter_v[1] + 23, 32, 2) - 23
-    unit.filter_v[2] = self.msac.decode_subexp(prev.filter_v[2] + 17, 64, 3) - 17
+    unit.filter_v[1] = self.msac.decode_subexp(prev.filter_v[1] + 23, 32, 2) -
+      23
+    unit.filter_v[2] = self.msac.decode_subexp(prev.filter_v[2] + 17, 64, 3) -
+      17
     unit.filter_h[0] = if p != 0 {
       0
     } else {
       self.msac.decode_subexp(prev.filter_h[0] + 5, 16, 1) - 5
     }
-    unit.filter_h[1] = self.msac.decode_subexp(prev.filter_h[1] + 23, 32, 2) - 23
-    unit.filter_h[2] = self.msac.decode_subexp(prev.filter_h[2] + 17, 64, 3) - 17
+    unit.filter_h[1] = self.msac.decode_subexp(prev.filter_h[1] + 23, 32, 2) -
+      23
+    unit.filter_h[2] = self.msac.decode_subexp(prev.filter_h[2] + 17, 64, 3) -
+      17
     unit.sgr_weights[0] = prev.sgr_weights[0]
     unit.sgr_weights[1] = prev.sgr_weights[1]
   } else if unit.typ >= 3 {
@@ -111,14 +118,18 @@ fn Av1TileCtx::read_restoration_info(
     unit.filter_h[2] = prev.filter_h[2]
   }
   if unit.typ == 2 {
+
   } else if unit.typ >= 3 {
+
   }
   unit
 }
 
 ///|
 /// Read the restoration units whose top-left corner lies in the current
-/// superblock (dav1d's per-SB loop in `decode_tile_sbrow`).
+/// superblock (dav1d's per-SB loop in `decode_tile_sbrow`). With superres
+/// the unit grid spans the upscaled width, so one coded SB can carry
+/// several units; the coded/upscaled x mapping uses `SuperresDenom`.
 fn Av1TileCtx::read_restoration_sb(self : Av1TileCtx) -> Unit {
   let f = self.f
   if !f.lr_active {
@@ -132,7 +143,8 @@ fn Av1TileCtx::read_restoration_sb(self : Av1TileCtx) -> Unit {
     let chroma = p != 0
     let ss_v = if chroma { f.ss_v } else { 0 }
     let ss_h = if chroma { f.ss_h } else { 0 }
-    let unit_size = 1 << hdr.lr_unit_size[if chroma { 1 } else { 0 }]
+    let unit_log2 = hdr.lr_unit_size[if chroma { 1 } else { 0 }]
+    let unit_size = 1 << unit_log2
     let mask = unit_size - 1
     let y = (self.by * 4) >> ss_v
     let plane_h = (hdr.height + ss_v) >> ss_v
@@ -143,6 +155,31 @@ fn Av1TileCtx::read_restoration_sb(self : Av1TileCtx) -> Unit {
     if y != 0 && y + half > plane_h {
       continue
     }
+    if hdr.use_superres {
+      // dav1d read_restoration_sb superres branch: units live on the
+      // upscaled grid; map the SB's coded x range into unit indices.
+      let plane_w = (hdr.upscaled_width + ss_h) >> ss_h
+      let n_units = av1_imax(1, (plane_w + half) >> unit_log2)
+      let d = hdr.superres_denom
+      let rnd = unit_size * 8 - 1
+      let shift = unit_log2 + 3
+      let x0 = (((self.bx * 4 * d) >> ss_h) + rnd) >> shift
+      let x1 = ((((self.bx + f.sb_step) * 4 * d) >> ss_h) + rnd) >> shift
+      let x_end = av1_imin(x1, n_units)
+      let mut x = x0
+      while x < x_end {
+        let px_x = x << (unit_log2 + ss_h)
+        let sb_idx = (self.by >> 5) * f.sr_sb128w + (px_x >> 7)
+        let unit_idx = ((self.by & 16) >> 3) + ((px_x & 64) >> 6)
+        let unit = self.read_restoration_info(p, hdr.lr_type[p])
+        f.lf_mask[sb_idx].lr[p * 4 + unit_idx] = unit
+        if unit.typ != 0 {
+          self.lr_prev[p] = unit
+        }
+        x += 1
+      }
+      continue
+    }
     let x = (self.bx * 4) >> ss_h
     let plane_w = (hdr.width + ss_h) >> ss_h
     if (x & mask) != 0 {
@@ -151,7 +188,7 @@ fn Av1TileCtx::read_restoration_sb(self : Av1TileCtx) -> Unit {
     if x != 0 && x + half > plane_w {
       continue
     }
-    let sb_idx = (self.by >> 5) * f.sb128w + (self.bx >> 5)
+    let sb_idx = (self.by >> 5) * f.sr_sb128w + (self.bx >> 5)
     let unit_idx = ((self.by & 16) >> 3) + ((self.bx & 16) >> 4)
     let unit = self.read_restoration_info(p, hdr.lr_type[p])
     let lfm = f.lf_mask[sb_idx]
