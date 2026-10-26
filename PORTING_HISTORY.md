@@ -2878,3 +2878,19 @@ NEWMV/GLOBALMV 标记与 MV。新增 `av1_inter_motion.mbt`，串联复合标志
 `moon check --target wasm --deny-warn --no-render` 无警告，
 `av1_refmvs_vectors` **22/22**，全量测试 **913/913**；
 `moon info -p libavcodec` 通过。
+
+## 77. 2026-10-26 AV1 帧间 MC 坐标桥接
+
+已有 `av1_mc_core` 具备经 dav1d C 向量对拍的 8-tap、bilinear、
+复合、缩放、OBMC 和 warp 内核；本节补上 `predict.mbt`，从块 4×4 坐标、
+luma 1/8 像素 MV、色度 subsampling 和参考帧尺寸推导单参考 MC 的源像素
+位置、1/16 相位，以及缩放路径的 1/1024 起点和步长。提供单参考像素块
+预测和复合预测 prep 两个入口，边界由现有内核执行最近边缘像素扩展。
+定向测试涵盖负 MV 的 luma/chroma 相位、80×48 参考帧对 64×64 当前帧的
+缩放坐标，以及预测/prep 与内核的逐像素一致性。
+`av1_mc_vectors` **15/15**，全量测试 **916/916**；
+`moon check --target wasm --deny-warn --no-render` 与
+`moon info -p av1_mc_core` 通过。
+
+尚需在帧间块解码入口接入参考帧图像、剩余 inter 语法、复合模式与残差
+重建，才能解出 P/B 帧。
