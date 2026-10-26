@@ -3239,3 +3239,32 @@ seed 1 的 k=281 首次复用 `txtp_inter3[2]` 时概率仍为默认 30770，
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 全量测试 **952/952**。
+
+## 91. 2026-10-26 AV1 帧间 var-tx 分区树
+
+`av1_tx_tree.mbt` 移植 dav1d `read_vartx_tree`/`read_tx_tree`：
+- 帧间块不做逐块 `txsz` 读取，而是从 `max_txfm_size_for_bs[bs][0]`
+  开始按 `txpart` 递归二分（深度 < 2、且当前 tx 大于 8x8 时继续），
+  记录 `tx_split0/tx_split1` 供重建与 LF 掩码使用；
+- `txpart` 上下文取 `cat = 2*(TX_64X64 - t_dim->max) - depth` 与左右邻
+  `a->tx`/`l.tx` 是否小于 tx 宽高（0..2）；
+- 叶节点按 `1 << lw` 写 `a->tx`/`l.tx`（split 到 4x4 时写 TX_4X4），
+  skip 或非 SWITCHABLE 时按块尺寸一次性填上下文；无损/coded-4x4 走
+  TX_4X4 分支；
+- `max_ytx`/`uvtx` 与 dav1d 一致（色度取 `max_txfm_size_for_bs[bs][layout]`，
+  layout 0=I400/1=I420/2=I422/3=I444）。
+
+对拍：`.scratch/av1/txtree_dump.c` 逐行拷贝上述两个函数（仅替换
+tile context 为测试结构），2 个 LCG seed × 128 组随机
+`(bs, skip, lossless, tx_mode, layout, bx/by/bw/bh)` 用例，dump
+`max_ytx/uvtx/tx_split/rng/dif` 及调用后的 32+32 个 `tx` 上下文；
+生成器 `scripts/_emit_av1_txtree_vectors.py` 产出
+`av1_tx_tree_vectors/txtree_test.mbt`，256 组全部位级一致。
+探针的初始上下文由 `(j*3+bs)%5` / `(j*5+seg)%5` 确定性生成，
+避免额外转储。踩坑：dav1d `RectTxfmSize` 枚举顺序是
+`RTX_4X16=13, RTX_16X4=14, RTX_8X32=15, RTX_32X8=16, RTX_16X64=17,
+RTX_64X16=18`，与按 16x64/64x16/8x32/32x8 的直觉顺序不同（表已按此
+转储，勿按名字重排）。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+全量测试 **953/953**。

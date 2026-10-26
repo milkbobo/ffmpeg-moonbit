@@ -7,7 +7,7 @@
 > 与 dav1d `decode_b` inter 分支的 96 组随机位级对拍（含 msac 终态），
 > 并新增 warp 平面预测/prep、复合合成、块级预测装配、inter-intra
 > 与 OBMC、色度 sub8x8 派生（§85–§89），以及帧间变换类型选择
-> `txtp_inter1/2/3` 与色度派生（§90），Wasm 全量测试 952/952；
+> `txtp_inter1/2/3` 与色度派生、var-tx 分区树（§90–§91），Wasm 全量测试 953/953；
 > 下一步是残差叠加与整帧入口。
 > 本文 §3.1 对 `save_tmvs` 实参的描述有误；真实实参见
 > dav1d `src/refmvs.h`，为 `rt->r + 6`。
