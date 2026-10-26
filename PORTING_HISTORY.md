@@ -2848,3 +2848,15 @@ sby=0/1 行映射、双参考保存和时域投影。C 输出 `save -30 40 2
 生命周期、整帧入口、P/B 帧 framemd5 对拍。此阶段不能声称 AV1
 迁移完成。`moon check --target wasm --deny-warn --no-render` 无警告，
 `moon test --target wasm --no-render` **904/904**。
+
+## 75. 2026-10-26 AV1 refmvs 缩放投影与跨帧传播验证
+
+新增 refmvs 测试覆盖非零 MV 的 LAST/BWD 双向时域投影、2:1 参考帧距离
+缩放、8×8 时域 superblock 边界、128×128 superblock 的空间行环，以及
+“当前帧 splat/save → 下一帧 load/find”完整传播链。直接编译 dav1d 1.5.1
+`refmvs.c` 的 C 探针确认两种方向的投影坐标与保存的原始 MV 一致。
+`mv_projection` 的倍率表改为模块级常量，避免每次候选查询重复创建数组。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+`av1_refmvs_vectors` **16/16**，全量测试 **907/907**。`moon fmt --check` 在当前 Windows 路径下
+因 formatter 生成文件路径不可读而失败；`moon info -p libavcodec` 通过。

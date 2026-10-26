@@ -57,17 +57,19 @@ fn av1_rmv_fix_precision(
 
 ///|
 /// `mv_projection` (AV1 spec 7.9.3 rounding).
+let av1_rmv_div_mult : FixedArray[Int] = [
+  0, 16384, 8192, 5461, 4096, 3276, 2730, 2340, 2048, 1820, 1638, 1489,
+  1365, 1260, 1170, 1092, 1024, 963, 910, 862, 819, 780, 744, 712, 682,
+  655, 630, 606, 585, 564, 546, 528,
+]
+
+///|
 fn av1_rmv_projection(
   mv : (Int, Int),
   num : Int,
   den : Int,
 ) -> (Int, Int) {
-  let div_mult : FixedArray[Int] = [
-    0, 16384, 8192, 5461, 4096, 3276, 2730, 2340, 2048, 1820, 1638, 1489,
-    1365, 1260, 1170, 1092, 1024, 963, 910, 862, 819, 780, 744, 712, 682,
-    655, 630, 606, 585, 564, 546, 528,
-  ]
-  let frac = num * div_mult[den]
+  let frac = num * av1_rmv_div_mult[den]
   let (yv, xv) = mv
   let yy = yv * frac
   let xx = xv * frac
