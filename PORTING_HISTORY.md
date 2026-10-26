@@ -2894,3 +2894,21 @@ luma 1/8 像素 MV、色度 subsampling 和参考帧尺寸推导单参考 MC 的
 
 尚需在帧间块解码入口接入参考帧图像、剩余 inter 语法、复合模式与残差
 重建，才能解出 P/B 帧。
+
+## 78. 2026-10-26 AV1 refmvs 参考槽位与跨帧投影
+
+新增 `av1_refmvs_refs.mbt`，管理 AV1 的 8 个参考槽位。完成帧的
+时域 MV 图及其 7 个参考 order hint 随 refresh mask 保存；下一帧从帧头
+的 `ref_frame_idx` 取槽位、检查参考图尺寸，并构造 refmvs 初始化参数。
+尺寸判断按 dav1d 的 8 像素向上取整规则。`prepare_header` 将已解析的
+inter/switch 帧头直接接入这一流程，包含全局运动、MV 精度与
+superblock 尺寸。
+
+测试验证 key 帧槽位刷新、前帧 MV 图保存到后帧 LAST 投影、2:1 距离
+缩放、尺寸不匹配时禁用时域图、四个连续 superblock 行的空间环与时域
+保存，以及 LAST/BWD 投影相撞时后者覆盖前者。帧头向量测试也调用
+`prepare_header`。参考槽位生命周期目前是可供帧间解码器调用的独立
+模块；`decode_b` 尚未接入帧间块语法和重建，P/B 帧解码仍未完成。
+`moon check --target wasm --deny-warn --no-render`、`moon info -p libavcodec`
+通过；`av1_refmvs_vectors` **26/26**，帧头向量 **2/2**，全量测试
+**920/920**。

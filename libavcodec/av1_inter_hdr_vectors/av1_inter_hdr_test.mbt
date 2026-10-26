@@ -34,6 +34,12 @@ test "av1 inter frame header parse" {
   for i in 0..<7 {
     inspect(hdr.gm_types[i], content="0")
   }
+  let refmvs = @libavcodec.av1_refmvs_reference_store_new()
+  refmvs.refresh_without_mvs(0, seq.width, seq.height, 255)
+  let prepared = refmvs.prepare_header(seq, hdr).unwrap()
+  inspect(prepared.poc, content="1")
+  inspect(prepared.state.tile.rp_stride, content="32")
+  assert_true(!prepared.state.init.use_ref_frame_mvs)
   // Bit-exactness of the header path: the tile group must still split.
   let group = @libavcodec.av1_parse_tile_group(inter_pkt, hdr).unwrap()
   inspect(group.num_tiles, content="1")
