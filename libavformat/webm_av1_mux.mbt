@@ -23,7 +23,7 @@ pub fn webm_av1_muxer_new(
   width : Int32,
   height : Int32,
   av1c : Bytes,
-  doctype? : String = "webm",
+  doctype~ : String = "webm",
 ) -> Result[WebmAv1Muxer, String] {
   if width <= 0 || height <= 0 || av1c.length() < 4 {
     return Err("EINVAL: invalid WebM/AV1 parameters")
@@ -46,8 +46,8 @@ pub fn webm_av1_muxer_new(
 pub fn WebmAv1Muxer::write_packet(
   self : WebmAv1Muxer,
   packet : Bytes,
-  duration? : Int32 = 33,
-  keyframe? : Bool = false,
+  duration~ : Int32 = 33,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty AV1 packet or duration")
@@ -66,8 +66,14 @@ fn WebmAv1Muxer::cluster(self : WebmAv1Muxer) -> Array[Byte] {
   for i in 0..<self.packets.length() {
     let packet = self.packets[i]
     let block : Array[Byte] = [
-      b'\x81', ((ms >> 8) & 0xFF).to_byte(), (ms & 0xFF).to_byte(),
-      if self.keyframes[i] { b'\x80' } else { b'\x00' },
+      b'\x81',
+      ((ms >> 8) & 0xFF).to_byte(),
+      (ms & 0xFF).to_byte(),
+      if self.keyframes[i] {
+        b'\x80'
+      } else {
+        b'\x00'
+      },
     ]
     for b in packet {
       block.push(b)

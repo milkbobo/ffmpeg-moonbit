@@ -10,14 +10,10 @@ let av1_lossy8_stream_b64 : Bytes = b"REtJRgAAIABBVjAxgABgAAIAAAABAAAACAAAAAAAAA
 
 ///|
 let av1_lossy8_md5 : Array[String] = [
-  "0d7f8479de7420cefc09907fb7f52889",
-  "d6d46870a4158cb2e6cf2f4c3db28901",
-  "5356343c6d6c0a325e8923b294d027b1",
-  "75717412306cba671dc844130a62ecf0",
-  "7caa2db96f5af29a854c7253ac432033",
-  "2e0d96c6ee56f982f9e5c84d59e3c905",
-  "b346b68bef70913f39cf9812ae3608d3",
-  "36104da0adbf958eda0322289210e5bb",]
+  "0d7f8479de7420cefc09907fb7f52889", "d6d46870a4158cb2e6cf2f4c3db28901", "5356343c6d6c0a325e8923b294d027b1",
+  "75717412306cba671dc844130a62ecf0", "7caa2db96f5af29a854c7253ac432033", "2e0d96c6ee56f982f9e5c84d59e3c905",
+  "b346b68bef70913f39cf9812ae3608d3", "36104da0adbf958eda0322289210e5bb",
+]
 
 ///|
 /// IVF: 32-byte header, then per frame a 12-byte header and the OBU payload.
@@ -25,8 +21,9 @@ fn av1_lossy_ivf_frames(ivf : Bytes) -> Array[Bytes] {
   let frames : Array[Bytes] = []
   let mut pos = 32
   while pos + 12 <= ivf.length() {
-    let size = (ivf[pos].to_int() | (ivf[pos + 1].to_int() << 8) |
-      (ivf[pos + 2].to_int() << 16)) |
+    let size = ivf[pos].to_int() |
+      (ivf[pos + 1].to_int() << 8) |
+      (ivf[pos + 2].to_int() << 16) |
       (ivf[pos + 3].to_int() << 24)
     frames.push(ivf[pos + 12:pos + 12 + size].to_owned())
     pos = pos + 12 + size

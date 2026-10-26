@@ -7,21 +7,38 @@
 
 ///|
 fn av1_mc_clip(v : Int32, lo : Int32, hi : Int32) -> Int32 {
-  if v < lo { lo } else if v > hi { hi } else { v }
+  if v < lo {
+    lo
+  } else if v > hi {
+    hi
+  } else {
+    v
+  }
 }
 
 ///|
 fn av1_mc_sample(
-  src : FixedArray[Int32], stride : Int32, width : Int32, height : Int32,
-  x : Int32, y : Int32,
+  src : FixedArray[Int32],
+  stride : Int32,
+  width : Int32,
+  height : Int32,
+  x : Int32,
+  y : Int32,
 ) -> Int32 {
   src[av1_mc_clip(y, 0, height - 1) * stride + av1_mc_clip(x, 0, width - 1)]
 }
 
 ///|
 fn av1_mc_filter_sum(
-  src : FixedArray[Int32], stride : Int32, width : Int32, height : Int32,
-  x : Int32, y : Int32, phase : Int32, filter : Int32, vertical : Bool,
+  src : FixedArray[Int32],
+  stride : Int32,
+  width : Int32,
+  height : Int32,
+  x : Int32,
+  y : Int32,
+  phase : Int32,
+  filter : Int32,
+  vertical : Bool,
 ) -> Int32 {
   let off = (filter * 15 + phase - 1) * 8
   let mut sum = 0
@@ -38,9 +55,18 @@ fn av1_mc_filter_sum(
 /// `filter_type`: dav1d `Filter2d` 0..8 (all 8-tap combinations), 9 bilinear.
 /// Output is a packed `w*h` block. The caller supplies a valid source plane.
 pub fn av1_mc_put_unscaled(
-  src : FixedArray[Int32], stride : Int32, width : Int32, height : Int32,
-  src_x : Int32, src_y : Int32, w : Int32, h : Int32,
-  mx : Int32, my : Int32, filter_type : Int32, bitdepth : Int32,
+  src : FixedArray[Int32],
+  stride : Int32,
+  width : Int32,
+  height : Int32,
+  src_x : Int32,
+  src_y : Int32,
+  w : Int32,
+  h : Int32,
+  mx : Int32,
+  my : Int32,
+  filter_type : Int32,
+  bitdepth : Int32,
 ) -> FixedArray[Int32] {
   let dst = FixedArray::make(w * h, 0)
   let max_pixel = (1 << bitdepth) - 1
@@ -57,8 +83,7 @@ pub fn av1_mc_put_unscaled(
           let c = av1_mc_sample(src, stride, width, height, sx, sy + 1)
           let d = av1_mc_sample(src, stride, width, height, sx + 1, sy + 1)
           let top = ((16 - mx) * a + mx * b + h_rnd) >> (4 - ib)
-          let bottom = ((16 - mx) * c + mx * d +
-            h_rnd) >> (4 - ib)
+          let bottom = ((16 - mx) * c + mx * d + h_rnd) >> (4 - ib)
           ((16 - my) * top + my * bottom + (1 << (3 + ib))) >> (4 + ib)
         } else if mx != 0 {
           let b = av1_mc_sample(src, stride, width, height, sx + 1, sy)
@@ -75,7 +100,13 @@ pub fn av1_mc_put_unscaled(
     }
     return dst
   }
-  let h_filter = if filter_type < 3 { 0 } else if filter_type < 6 { 2 } else { 1 }
+  let h_filter = if filter_type < 3 {
+    0
+  } else if filter_type < 6 {
+    2
+  } else {
+    1
+  }
   let v_filter = filter_type % 3
   let hf = if w > 4 { h_filter } else { 3 + (h_filter & 1) }
   let vf = if h > 4 { v_filter } else { 3 + (v_filter & 1) }
@@ -88,7 +119,15 @@ pub fn av1_mc_put_unscaled(
         let voff = (vf * 15 + my - 1) * 8
         for tap in 0..<8 {
           let horizontal = av1_mc_filter_sum(
-            src, stride, width, height, sx, sy + tap - 3, mx, hf, false,
+            src,
+            stride,
+            width,
+            height,
+            sx,
+            sy + tap - 3,
+            mx,
+            hf,
+            false,
           )
           let mid = (horizontal + (1 << (5 - ib))) >> (6 - ib)
           sum += av1_mc_subpel_filters[voff + tap] * mid

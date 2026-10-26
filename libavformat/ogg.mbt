@@ -29,8 +29,10 @@ pub struct OggOpusDemux {
 
 ///|
 fn ogg_u32(data : BytesView, off : Int32) -> UInt32 {
-  data[off].to_uint() | (data[off + 1].to_uint() << 8) |
-  (data[off + 2].to_uint() << 16) | (data[off + 3].to_uint() << 24)
+  data[off].to_uint() |
+  (data[off + 1].to_uint() << 8) |
+  (data[off + 2].to_uint() << 16) |
+  (data[off + 3].to_uint() << 24)
 }
 
 ///|
@@ -157,17 +159,13 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
         let (packet, nominal) = completed[i]
         let pts = cumulative - pre_skip.to_int64()
         let mut duration = nominal
-        if i == completed.length() - 1 && end >= 0L && end > pts &&
+        if i == completed.length() - 1 &&
+          end >= 0L &&
+          end > pts &&
           pts + duration.to_int64() > end {
           duration = (end - pts).to_int()
         }
-        packets.push({
-          data: packet,
-          pts,
-          duration,
-          pos: page_pos,
-          granule,
-        })
+        packets.push({ data: packet, pts, duration, pos: page_pos, granule, })
         cumulative = cumulative + nominal.to_int64()
       }
       // The Ogg granule is the authoritative sample position at page end.

@@ -5,19 +5,21 @@
 /// equal-run fast-forward (`scripts/_emit_av1_refmvs_state_vectors.py`).
 
 ///|
-fn refmvs_state_hash_v(h : Int64, v : Int) -> Int64 {
+fn refmvs_state_hash_v(h : Int64, v : Int32) -> Int64 {
   (h * 31L + (v & 0xffff).to_int64()) % 1000000007L
 }
 
 ///|
 fn refmvs_state_hash_slots(
   state : @libavcodec.Av1RefmvsTileState,
-  off : Int,
-  sbsz : Int,
+  off : Int32,
+  sbsz : Int32,
 ) -> Int64 {
   let mut h = 17L
   for i in 0..<37 {
-    let used = i == off || i == off + 2 || i == off + 4 ||
+    let used = i == off ||
+      i == off + 2 ||
+      i == off + 4 ||
       (i >= off + 5 && i < off + 5 + sbsz)
     if !used {
       continue
@@ -41,7 +43,7 @@ fn refmvs_state_hash_slots(
 ///|
 fn refmvs_state_hash_rp(
   rp : FixedArray[@libavcodec.Av1Rtb],
-  n : Int,
+  n : Int32,
 ) -> Int64 {
   let mut h = 17L
   for i in 0..<n {
@@ -65,13 +67,12 @@ fn refmvs_state_hash_proj(state : @libavcodec.Av1RefmvsTileState) -> Int64 {
 
 ///|
 fn refmvs_state_src_maps(
-  seed : Int,
-  stride : Int,
-  ih8 : Int,
+  seed : Int32,
+  stride : Int32,
+  ih8 : Int32,
 ) -> FixedArray[FixedArray[@libavcodec.Av1Rtb]] {
-  FixedArray::makei(
-    7,
-    _ => FixedArray::makei(stride * ih8, i => {
+  FixedArray::makei(7, _ => {
+    FixedArray::makei(stride * ih8, i => {
       let y = i / stride
       let x = i % stride
       let qx = x / 3
@@ -82,20 +83,25 @@ fn refmvs_state_src_maps(
           ((qx * 11 + qy * 13 + seed * 17) % 9 - 4) * 64,
           ((qx * 19 + qy * 23 + seed * 29) % 9 - 4) * 64,
         ),
-        ref_: if k % 6 == 0 { 0 } else { 1 + (k & 7) % 7 },
+        ref_: if k % 6 == 0 {
+          0
+        } else {
+          1 + (k & 7) % 7
+        },
       }
-    }),
-  )
+    })
+  })
 }
 
 ///|
 test "refmvs state machine matches dav1d C (case 0)" {
-  let sign : FixedArray[Int] = [1, 1, 0, 1, 1, 0, 0]
-  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(
-    32 * 20, _ => { mv: (0, 0), ref_: 0 },
-  )
+  let sign : FixedArray[Int32] = [1, 1, 0, 1, 1, 0, 0]
+  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(32 * 20, _ => {
+    mv: (0, 0),
+    ref_: 0,
+  })
   let state = @libavcodec.av1_refmvs_tile_state_new(32, 24, 20, 16)
-  let ops : Array[Array[Int]] = [
+  let ops : Array[Array[Int32]] = [
     [31, 14, 8, 1, 1, 0, 7, 1, 4057, -1026, -580, 3395],
     [20, 6, 8, 4, 5, 4, 14, 0, 1414, 2968, 2444, -2670],
     [28, 7, 8, 1, 1, 0, 21, 3, -3232, 2462, -202, 4116],
@@ -121,8 +127,8 @@ test "refmvs state machine matches dav1d C (case 0)" {
     [25, 36, 1, 4, 1, 6, 12, 0, -4195, 767, -2879, -3105],
     [9, 33, 16, 7, 1, 5, 7, 1, -3228, 1365, -2420, -1517],
   ]
-  let sbys : Array[Int] = [0, 1, 2]
-  let nops : Array[Int] = [8, 8, 8]
+  let sbys : Array[Int32] = [0, 1, 2]
+  let nops : Array[Int32] = [8, 8, 8]
   let slot_hashes : Array[Int64] = [430955401L, 255223572L, 304438182L]
   let rp_hashes : Array[Int64] = [11615094L, 202807972L, 712462839L]
   let mut oi = 0
@@ -133,8 +139,12 @@ test "refmvs state machine matches dav1d C (case 0)" {
       let o = ops[oi]
       oi = oi + 1
       let block : @libavcodec.Av1Rb = {
-        ref0: o[4], ref1: o[5], bs: o[6], mf: o[7],
-        mv0: (o[8], o[9]), mv1: (o[10], o[11]),
+        ref0: o[4],
+        ref1: o[5],
+        bs: o[6],
+        mf: o[7],
+        mv0: (o[8], o[9]),
+        mv1: (o[10], o[11]),
       }
       state.splat_mv(block, o[0], o[1], o[2], o[3])
     }
@@ -145,30 +155,38 @@ test "refmvs state machine matches dav1d C (case 0)" {
       refmvs_state_hash_slots(state, (16 * sby) & 16, 16),
       slot_hashes[s],
     )
-    assert_eq(
-      refmvs_state_hash_rp(rp, 32 * 20),
-      rp_hashes[s],
-    )
+    assert_eq(refmvs_state_hash_rp(rp, 32 * 20), rp_hashes[s])
   }
   let refs = refmvs_state_src_maps(1, 32, 20)
   for i in 0..<(16 * 32) {
-    state.rp_proj[i] = { mv: (0, 0), ref_: 0 }
+    state.rp_proj[i] = { mv: (0, 0), ref_: 0, }
   }
-  let loads : Array[Array[Int]] = [
-    [0, 0, 24, 0, 16, 1, 0, 0, 0, 1, 0, 0, 1, 4, 3, 2, 1, 4, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 5, 22, 8, 16, 2, 0, 4, 0, 6, 8, 0, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 0, 0, 0, 0, 0, 0, 0],
-    [2, 3, 27, 0, 9, 3, 0, 4, 6, 2, 4, 6, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3],
+  let loads : Array[Array[Int32]] = [
+    [
+      0, 0, 24, 0, 16, 1, 0, 0, 0, 1, 0, 0, 1, 4, 3, 2, 1, 4, 3, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+      1, 5, 22, 8, 16, 2, 0, 4, 0, 6, 8, 0, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4,
+      3, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+      2, 3, 27, 0, 9, 3, 0, 4, 6, 2, 4, 6, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3,
+      2, 1, 4, 3, 2, 1, 4, 3,
+    ],
   ]
   let proj_hashes : Array[Int64] = [605740144L, 309887726L, 739429810L]
   for li in 0..<loads.length() {
     let l = loads[li]
     let init = @libavcodec.av1_refmvs_frame_init_probe(
-      FixedArray::make(7, 0), FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
       FixedArray::make(7, 0),
       FixedArray::makei(3, i => l[6 + i]),
       FixedArray::makei(3, i => l[9 + i]),
       FixedArray::makei(3, m => FixedArray::makei(7, j => l[12 + m * 7 + j])),
-      l[5], true,
+      l[5],
+      true,
     )
     state.load_tmvs(init, refs, l[1], l[2], l[3], l[4])
     assert_eq(refmvs_state_hash_proj(state), proj_hashes[li])
@@ -177,12 +195,13 @@ test "refmvs state machine matches dav1d C (case 0)" {
 
 ///|
 test "refmvs state machine matches dav1d C (case 1)" {
-  let sign : FixedArray[Int] = [1, 0, 1, 1, 0, 0, 1]
-  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(
-    32 * 24, _ => { mv: (0, 0), ref_: 0 },
-  )
+  let sign : FixedArray[Int32] = [1, 0, 1, 1, 0, 0, 1]
+  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(32 * 24, _ => {
+    mv: (0, 0),
+    ref_: 0,
+  })
   let state = @libavcodec.av1_refmvs_tile_state_new(32, 20, 24, 32)
-  let ops : Array[Array[Int]] = [
+  let ops : Array[Array[Int32]] = [
     [1, 29, 4, 2, 3, 3, 14, 0, 2139, -855, 1462, 3834],
     [22, 28, 16, 4, 7, 6, 15, 1, 408, -1864, 398, 4105],
     [11, 21, 16, 8, 6, 6, 15, 3, 1275, -4102, 1960, -1168],
@@ -200,8 +219,8 @@ test "refmvs state machine matches dav1d C (case 1)" {
     [11, 38, 2, 1, 0, 7, 14, 1, -2497, 724, 1943, -4085],
     [15, 38, 4, 10, 3, -1, 15, 3, -2638, 1717, -2203, -2932],
   ]
-  let sbys : Array[Int] = [0, 1]
-  let nops : Array[Int] = [8, 8]
+  let sbys : Array[Int32] = [0, 1]
+  let nops : Array[Int32] = [8, 8]
   let slot_hashes : Array[Int64] = [595817387L, 755945490L]
   let rp_hashes : Array[Int64] = [883176718L, 698097895L]
   let mut oi = 0
@@ -212,8 +231,12 @@ test "refmvs state machine matches dav1d C (case 1)" {
       let o = ops[oi]
       oi = oi + 1
       let block : @libavcodec.Av1Rb = {
-        ref0: o[4], ref1: o[5], bs: o[6], mf: o[7],
-        mv0: (o[8], o[9]), mv1: (o[10], o[11]),
+        ref0: o[4],
+        ref1: o[5],
+        bs: o[6],
+        mf: o[7],
+        mv0: (o[8], o[9]),
+        mv1: (o[10], o[11]),
       }
       state.splat_mv(block, o[0], o[1], o[2], o[3])
     }
@@ -224,30 +247,38 @@ test "refmvs state machine matches dav1d C (case 1)" {
       refmvs_state_hash_slots(state, (32 * sby) & 16, 32),
       slot_hashes[s],
     )
-    assert_eq(
-      refmvs_state_hash_rp(rp, 32 * 24),
-      rp_hashes[s],
-    )
+    assert_eq(refmvs_state_hash_rp(rp, 32 * 24), rp_hashes[s])
   }
   let refs = refmvs_state_src_maps(14, 32, 24)
   for i in 0..<(16 * 32) {
-    state.rp_proj[i] = { mv: (0, 0), ref_: 0 }
+    state.rp_proj[i] = { mv: (0, 0), ref_: 0, }
   }
-  let loads : Array[Array[Int]] = [
-    [0, 0, 20, 0, 16, 2, 0, 4, 0, 8, 1, 0, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 0, 0, 0, 0, 0, 0, 0],
-    [1, 5, 18, 16, 24, 3, 0, 4, 6, 4, 6, 8, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3],
-    [2, 3, 23, 0, 9, 1, 0, 0, 0, 9, 0, 0, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  let loads : Array[Array[Int32]] = [
+    [
+      0, 0, 20, 0, 16, 2, 0, 4, 0, 8, 1, 0, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4,
+      3, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+      1, 5, 18, 16, 24, 3, 0, 4, 6, 4, 6, 8, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4,
+      3, 2, 1, 4, 3, 2, 1, 4, 3,
+    ],
+    [
+      2, 3, 23, 0, 9, 1, 0, 0, 0, 9, 0, 0, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0,
+    ],
   ]
   let proj_hashes : Array[Int64] = [519119326L, 650537584L, 979194402L]
   for li in 0..<loads.length() {
     let l = loads[li]
     let init = @libavcodec.av1_refmvs_frame_init_probe(
-      FixedArray::make(7, 0), FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
       FixedArray::make(7, 0),
       FixedArray::makei(3, i => l[6 + i]),
       FixedArray::makei(3, i => l[9 + i]),
       FixedArray::makei(3, m => FixedArray::makei(7, j => l[12 + m * 7 + j])),
-      l[5], true,
+      l[5],
+      true,
     )
     state.load_tmvs(init, refs, l[1], l[2], l[3], l[4])
     assert_eq(refmvs_state_hash_proj(state), proj_hashes[li])
@@ -256,12 +287,13 @@ test "refmvs state machine matches dav1d C (case 1)" {
 
 ///|
 test "refmvs state machine matches dav1d C (case 2)" {
-  let sign : FixedArray[Int] = [0, 1, 1, 0, 0, 1, 1]
-  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(
-    16 * 16, _ => { mv: (0, 0), ref_: 0 },
-  )
+  let sign : FixedArray[Int32] = [0, 1, 1, 0, 0, 1, 1]
+  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(16 * 16, _ => {
+    mv: (0, 0),
+    ref_: 0,
+  })
   let state = @libavcodec.av1_refmvs_tile_state_new(16, 16, 16, 16)
-  let ops : Array[Array[Int]] = [
+  let ops : Array[Array[Int32]] = [
     [6, 14, 2, 1, 2, 7, 14, 3, -1247, -3981, 4098, 2075],
     [3, 8, 8, 1, 0, 6, 17, 0, -2884, -647, -1492, 3618],
     [16, 3, 4, 13, 4, 6, 12, 0, 232, 826, -3836, -225],
@@ -279,8 +311,8 @@ test "refmvs state machine matches dav1d C (case 2)" {
     [7, 21, 1, 11, 7, 1, 7, 1, -3364, 797, 2130, -339],
     [9, 23, 16, 2, 3, 3, 21, 2, 2693, -3105, 1136, -2083],
   ]
-  let sbys : Array[Int] = [0, 1]
-  let nops : Array[Int] = [8, 8]
+  let sbys : Array[Int32] = [0, 1]
+  let nops : Array[Int32] = [8, 8]
   let slot_hashes : Array[Int64] = [552370318L, 633135332L]
   let rp_hashes : Array[Int64] = [34867706L, 255730248L]
   let mut oi = 0
@@ -291,8 +323,12 @@ test "refmvs state machine matches dav1d C (case 2)" {
       let o = ops[oi]
       oi = oi + 1
       let block : @libavcodec.Av1Rb = {
-        ref0: o[4], ref1: o[5], bs: o[6], mf: o[7],
-        mv0: (o[8], o[9]), mv1: (o[10], o[11]),
+        ref0: o[4],
+        ref1: o[5],
+        bs: o[6],
+        mf: o[7],
+        mv0: (o[8], o[9]),
+        mv1: (o[10], o[11]),
       }
       state.splat_mv(block, o[0], o[1], o[2], o[3])
     }
@@ -303,30 +339,38 @@ test "refmvs state machine matches dav1d C (case 2)" {
       refmvs_state_hash_slots(state, (16 * sby) & 16, 16),
       slot_hashes[s],
     )
-    assert_eq(
-      refmvs_state_hash_rp(rp, 16 * 16),
-      rp_hashes[s],
-    )
+    assert_eq(refmvs_state_hash_rp(rp, 16 * 16), rp_hashes[s])
   }
   let refs = refmvs_state_src_maps(27, 16, 16)
   for i in 0..<(16 * 16) {
-    state.rp_proj[i] = { mv: (0, 0), ref_: 0 }
+    state.rp_proj[i] = { mv: (0, 0), ref_: 0, }
   }
-  let loads : Array[Array[Int]] = [
-    [0, 0, 16, 0, 16, 3, 0, 4, 6, 6, 8, 1, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3],
-    [1, 5, 14, 8, 16, 1, 0, 0, 0, 2, 0, 0, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [2, 3, 15, 0, 9, 2, 0, 4, 0, 7, 9, 0, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0, 0],
+  let loads : Array[Array[Int32]] = [
+    [
+      0, 0, 16, 0, 16, 3, 0, 4, 6, 6, 8, 1, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3,
+      2, 1, 4, 3, 2, 1, 4, 3,
+    ],
+    [
+      1, 5, 14, 8, 16, 1, 0, 0, 0, 2, 0, 0, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+      2, 3, 15, 0, 9, 2, 0, 4, 0, 7, 9, 0, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1,
+      4, 0, 0, 0, 0, 0, 0, 0,
+    ],
   ]
   let proj_hashes : Array[Int64] = [588874849L, 201612762L, 873058574L]
   for li in 0..<loads.length() {
     let l = loads[li]
     let init = @libavcodec.av1_refmvs_frame_init_probe(
-      FixedArray::make(7, 0), FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
       FixedArray::make(7, 0),
       FixedArray::makei(3, i => l[6 + i]),
       FixedArray::makei(3, i => l[9 + i]),
       FixedArray::makei(3, m => FixedArray::makei(7, j => l[12 + m * 7 + j])),
-      l[5], true,
+      l[5],
+      true,
     )
     state.load_tmvs(init, refs, l[1], l[2], l[3], l[4])
     assert_eq(refmvs_state_hash_proj(state), proj_hashes[li])
@@ -335,12 +379,13 @@ test "refmvs state machine matches dav1d C (case 2)" {
 
 ///|
 test "refmvs state machine matches dav1d C (case 3)" {
-  let sign : FixedArray[Int] = [0, 1, 1, 1, 0, 1, 1]
-  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(
-    16 * 7, _ => { mv: (0, 0), ref_: 0 },
-  )
+  let sign : FixedArray[Int32] = [0, 1, 1, 1, 0, 1, 1]
+  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(16 * 7, _ => {
+    mv: (0, 0),
+    ref_: 0,
+  })
   let state = @libavcodec.av1_refmvs_tile_state_new(16, 9, 7, 32)
-  let ops : Array[Array[Int]] = [
+  let ops : Array[Array[Int32]] = [
     [8, 4, 10, 8, 6, 4, 7, 0, -1426, 3590, -2861, -3918],
     [9, 8, 4, 1, 3, 3, 14, 2, -973, 3314, -2623, -2702],
     [14, 6, 2, 4, 3, 6, 15, 2, -2053, -3568, 2599, 2878],
@@ -350,8 +395,8 @@ test "refmvs state machine matches dav1d C (case 3)" {
     [14, 9, 2, 5, 1, 3, 14, 0, -3871, 1890, -3007, 708],
     [10, 7, 8, 2, 1, 5, 14, 0, -1602, 1487, 2203, -2328],
   ]
-  let sbys : Array[Int] = [0]
-  let nops : Array[Int] = [8]
+  let sbys : Array[Int32] = [0]
+  let nops : Array[Int32] = [8]
   let slot_hashes : Array[Int64] = [586551442L]
   let rp_hashes : Array[Int64] = [772768757L]
   let mut oi = 0
@@ -362,8 +407,12 @@ test "refmvs state machine matches dav1d C (case 3)" {
       let o = ops[oi]
       oi = oi + 1
       let block : @libavcodec.Av1Rb = {
-        ref0: o[4], ref1: o[5], bs: o[6], mf: o[7],
-        mv0: (o[8], o[9]), mv1: (o[10], o[11]),
+        ref0: o[4],
+        ref1: o[5],
+        bs: o[6],
+        mf: o[7],
+        mv0: (o[8], o[9]),
+        mv1: (o[10], o[11]),
       }
       state.splat_mv(block, o[0], o[1], o[2], o[3])
     }
@@ -374,30 +423,38 @@ test "refmvs state machine matches dav1d C (case 3)" {
       refmvs_state_hash_slots(state, (32 * sby) & 16, 32),
       slot_hashes[s],
     )
-    assert_eq(
-      refmvs_state_hash_rp(rp, 16 * 7),
-      rp_hashes[s],
-    )
+    assert_eq(refmvs_state_hash_rp(rp, 16 * 7), rp_hashes[s])
   }
   let refs = refmvs_state_src_maps(40, 16, 7)
   for i in 0..<(16 * 16) {
-    state.rp_proj[i] = { mv: (0, 0), ref_: 0 }
+    state.rp_proj[i] = { mv: (0, 0), ref_: 0, }
   }
-  let loads : Array[Array[Int]] = [
-    [0, 0, 9, 0, 7, 1, 0, 0, 0, 4, 0, 0, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 5, 7, 0, 7, 2, 0, 4, 0, 9, 2, 0, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0, 0],
-    [2, 3, 12, 0, 7, 3, 0, 4, 6, 5, 7, 9, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4],
+  let loads : Array[Array[Int32]] = [
+    [
+      0, 0, 9, 0, 7, 1, 0, 0, 0, 4, 0, 0, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+      1, 5, 7, 0, 7, 2, 0, 4, 0, 9, 2, 0, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1,
+      4, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+      2, 3, 12, 0, 7, 3, 0, 4, 6, 5, 7, 9, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4,
+      3, 2, 1, 4, 3, 2, 1, 4,
+    ],
   ]
   let proj_hashes : Array[Int64] = [186192311L, 984959997L, 53560572L]
   for li in 0..<loads.length() {
     let l = loads[li]
     let init = @libavcodec.av1_refmvs_frame_init_probe(
-      FixedArray::make(7, 0), FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
       FixedArray::make(7, 0),
       FixedArray::makei(3, i => l[6 + i]),
       FixedArray::makei(3, i => l[9 + i]),
       FixedArray::makei(3, m => FixedArray::makei(7, j => l[12 + m * 7 + j])),
-      l[5], true,
+      l[5],
+      true,
     )
     state.load_tmvs(init, refs, l[1], l[2], l[3], l[4])
     assert_eq(refmvs_state_hash_proj(state), proj_hashes[li])
@@ -406,12 +463,13 @@ test "refmvs state machine matches dav1d C (case 3)" {
 
 ///|
 test "refmvs state machine matches dav1d C (case 4)" {
-  let sign : FixedArray[Int] = [1, 1, 0, 1, 0, 1, 1]
-  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(
-    32 * 20, _ => { mv: (0, 0), ref_: 0 },
-  )
+  let sign : FixedArray[Int32] = [1, 1, 0, 1, 0, 1, 1]
+  let rp : FixedArray[@libavcodec.Av1Rtb] = FixedArray::makei(32 * 20, _ => {
+    mv: (0, 0),
+    ref_: 0,
+  })
   let state = @libavcodec.av1_refmvs_tile_state_new(32, 24, 20, 32)
-  let ops : Array[Array[Int]] = [
+  let ops : Array[Array[Int32]] = [
     [24, 30, 2, 1, 7, 0, 12, 3, 3310, -1789, 1037, -363],
     [23, 26, 2, 6, 2, 5, 7, 1, -310, 4105, 2841, -1845],
     [6, 13, 4, 2, 0, 2, 15, 0, 1590, 1120, -1598, -772],
@@ -429,8 +487,8 @@ test "refmvs state machine matches dav1d C (case 4)" {
     [40, 36, 8, 4, 7, 3, 5, 3, -976, 921, 967, 1262],
     [16, 36, 1, 1, 3, 2, 12, 0, 144, 229, 3153, -681],
   ]
-  let sbys : Array[Int] = [0, 1]
-  let nops : Array[Int] = [8, 8]
+  let sbys : Array[Int32] = [0, 1]
+  let nops : Array[Int32] = [8, 8]
   let slot_hashes : Array[Int64] = [550091985L, 756640194L]
   let rp_hashes : Array[Int64] = [935036728L, 733375501L]
   let mut oi = 0
@@ -441,8 +499,12 @@ test "refmvs state machine matches dav1d C (case 4)" {
       let o = ops[oi]
       oi = oi + 1
       let block : @libavcodec.Av1Rb = {
-        ref0: o[4], ref1: o[5], bs: o[6], mf: o[7],
-        mv0: (o[8], o[9]), mv1: (o[10], o[11]),
+        ref0: o[4],
+        ref1: o[5],
+        bs: o[6],
+        mf: o[7],
+        mv0: (o[8], o[9]),
+        mv1: (o[10], o[11]),
       }
       state.splat_mv(block, o[0], o[1], o[2], o[3])
     }
@@ -453,30 +515,38 @@ test "refmvs state machine matches dav1d C (case 4)" {
       refmvs_state_hash_slots(state, (32 * sby) & 16, 32),
       slot_hashes[s],
     )
-    assert_eq(
-      refmvs_state_hash_rp(rp, 32 * 20),
-      rp_hashes[s],
-    )
+    assert_eq(refmvs_state_hash_rp(rp, 32 * 20), rp_hashes[s])
   }
   let refs = refmvs_state_src_maps(53, 32, 20)
   for i in 0..<(16 * 32) {
-    state.rp_proj[i] = { mv: (0, 0), ref_: 0 }
+    state.rp_proj[i] = { mv: (0, 0), ref_: 0, }
   }
-  let loads : Array[Array[Int]] = [
-    [0, 0, 24, 0, 16, 2, 0, 4, 0, 2, 4, 0, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 0, 0, 0, 0, 0, 0, 0],
-    [1, 5, 22, 16, 20, 3, 0, 4, 6, 7, 9, 2, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4],
-    [2, 3, 27, 0, 9, 1, 0, 0, 0, 3, 0, 0, 3, 2, 1, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  let loads : Array[Array[Int32]] = [
+    [
+      0, 0, 24, 0, 16, 2, 0, 4, 0, 2, 4, 0, 1, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1,
+      4, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+      1, 5, 22, 16, 20, 3, 0, 4, 6, 7, 9, 2, 4, 3, 2, 1, 4, 3, 2, 1, 4, 3, 2, 1,
+      4, 3, 2, 1, 4, 3, 2, 1, 4,
+    ],
+    [
+      2, 3, 27, 0, 9, 1, 0, 0, 0, 3, 0, 0, 3, 2, 1, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0,
+    ],
   ]
   let proj_hashes : Array[Int64] = [715228694L, 643532476L, 755309723L]
   for li in 0..<loads.length() {
     let l = loads[li]
     let init = @libavcodec.av1_refmvs_frame_init_probe(
-      FixedArray::make(7, 0), FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
+      FixedArray::make(7, 0),
       FixedArray::make(7, 0),
       FixedArray::makei(3, i => l[6 + i]),
       FixedArray::makei(3, i => l[9 + i]),
       FixedArray::makei(3, m => FixedArray::makei(7, j => l[12 + m * 7 + j])),
-      l[5], true,
+      l[5],
+      true,
     )
     state.load_tmvs(init, refs, l[1], l[2], l[3], l[4])
     assert_eq(refmvs_state_hash_proj(state), proj_hashes[li])

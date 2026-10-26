@@ -6,21 +6,21 @@
 ///|
 pub(all) struct Av1VarTxTree {
   /// `b->max_ytx` (luma tx at tree root; TX_4X4 for lossless/coded-4x4).
-  max_ytx : Int
+  max_ytx : Int32
   /// `b->uvtx` (chroma tx; always the block's max for inter).
-  uvtx : Int
+  uvtx : Int32
   /// `b->tx_split0` / `b->tx_split1`: split masks for depth 0/1.
-  split0 : UInt
-  split1 : UInt
+  split0 : UInt32
+  split1 : UInt32
 }
 
 ///|
 /// `dav1d_memset_pow2[lw]`: fill `1 << len_lw` context entries.
 fn av1_tx_ctx_fill(
   tx : FixedArray[Int32],
-  off : Int,
-  len_lw : Int,
-  value : Int,
+  off : Int32,
+  len_lw : Int32,
+  value : Int32,
 ) -> Unit {
   for i in 0..<(1 << len_lw) {
     tx[off + i] = value
@@ -34,17 +34,17 @@ fn av1_tx_ctx_fill(
 fn av1_read_tx_tree(
   msac : Av1Msac,
   cdf : Av1CdfCtx,
-  from : Int,
-  depth : Int,
-  masks : FixedArray[UInt],
-  x_off : Int,
-  y_off : Int,
+  from : Int32,
+  depth : Int32,
+  masks : FixedArray[UInt32],
+  x_off : Int32,
+  y_off : Int32,
   a_tx : FixedArray[Int32],
   l_tx : FixedArray[Int32],
-  bx : Int,
-  by : Int,
-  bw : Int,
-  bh : Int,
+  bx : Int32,
+  by : Int32,
+  bw : Int32,
+  bh : Int32,
 ) -> Unit {
   let txw = av1_txfm_lw(from)
   let txh = av1_txfm_lh(from)
@@ -55,10 +55,9 @@ fn av1_read_tx_tree(
     let cat = 2 * (4 - av1_txfm_max(from)) - depth
     let a = if a_tx[bx4] < txw { 1 } else { 0 }
     let l = if l_tx[by4] < txh { 1 } else { 0 }
-    is_split = msac.decode_bool_adapt(
-      cdf.txpart,
-      (cat * 3 + a + l)* 2,
-    ).reinterpret_as_int()
+    is_split = msac
+      .decode_bool_adapt(cdf.txpart, (cat * 3 + a + l) * 2)
+      .reinterpret_as_int()
     if is_split != 0 {
       let d = depth
       masks[d] = masks[d] | (1U << (y_off * 4 + x_off))
@@ -69,24 +68,68 @@ fn av1_read_tx_tree(
     let txsw = av1_txfm_w(sub)
     let txsh = av1_txfm_h(sub)
     av1_read_tx_tree(
-      msac, cdf, sub, depth + 1, masks, x_off * 2, y_off * 2, a_tx, l_tx, bx,
-      by, bw, bh,
+      msac,
+      cdf,
+      sub,
+      depth + 1,
+      masks,
+      x_off * 2,
+      y_off * 2,
+      a_tx,
+      l_tx,
+      bx,
+      by,
+      bw,
+      bh,
     )
     if txw >= txh && bx + txsw < bw {
       av1_read_tx_tree(
-        msac, cdf, sub, depth + 1, masks, x_off * 2 + 1, y_off * 2, a_tx, l_tx,
-        bx + txsw, by, bw, bh,
+        msac,
+        cdf,
+        sub,
+        depth + 1,
+        masks,
+        x_off * 2 + 1,
+        y_off * 2,
+        a_tx,
+        l_tx,
+        bx + txsw,
+        by,
+        bw,
+        bh,
       )
     }
     if txh >= txw && by + txsh < bh {
       av1_read_tx_tree(
-        msac, cdf, sub, depth + 1, masks, x_off * 2, y_off * 2 + 1, a_tx, l_tx,
-        bx, by + txsh, bw, bh,
+        msac,
+        cdf,
+        sub,
+        depth + 1,
+        masks,
+        x_off * 2,
+        y_off * 2 + 1,
+        a_tx,
+        l_tx,
+        bx,
+        by + txsh,
+        bw,
+        bh,
       )
       if txw >= txh && bx + txsw < bw {
         av1_read_tx_tree(
-          msac, cdf, sub, depth + 1, masks, x_off * 2 + 1, y_off * 2 + 1, a_tx,
-          l_tx, bx + txsw, by + txsh, bw, bh,
+          msac,
+          cdf,
+          sub,
+          depth + 1,
+          masks,
+          x_off * 2 + 1,
+          y_off * 2 + 1,
+          a_tx,
+          l_tx,
+          bx + txsw,
+          by + txsh,
+          bw,
+          bh,
         )
       }
     }
@@ -106,17 +149,17 @@ fn av1_read_tx_tree(
 pub fn av1_read_vartx_tree(
   msac : Av1Msac,
   cdf : Av1CdfCtx,
-  bs : Int,
+  bs : Int32,
   skip : Bool,
   lossless : Bool,
   switchable : Bool,
-  layout : Int,
+  layout : Int32,
   a_tx : FixedArray[Int32],
   l_tx : FixedArray[Int32],
-  bx : Int,
-  by : Int,
-  bw : Int,
-  bh : Int,
+  bx : Int32,
+  by : Int32,
+  bw : Int32,
+  bh : Int32,
 ) -> Av1VarTxTree {
   let bw4 = av1_block_dimensions[bs * 4].to_int()
   let bh4 = av1_block_dimensions[bs * 4 + 1].to_int()
@@ -148,8 +191,19 @@ pub fn av1_read_vartx_tree(
       let mut x_off = 0
       while x < bw4 {
         av1_read_tx_tree(
-          msac, cdf, max_ytx, 0, masks, x_off, y_off, a_tx, l_tx, bx + x,
-          by + y, bw, bh,
+          msac,
+          cdf,
+          max_ytx,
+          0,
+          masks,
+          x_off,
+          y_off,
+          a_tx,
+          l_tx,
+          bx + x,
+          by + y,
+          bw,
+          bh,
         )
         x = x + ytx_w
         x_off = x_off + 1
@@ -158,5 +212,5 @@ pub fn av1_read_vartx_tree(
       y_off = y_off + 1
     }
   }
-  { max_ytx, uvtx, split0: masks[0], split1: masks[1] }
+  { max_ytx, uvtx, split0: masks[0], split1: masks[1], }
 }

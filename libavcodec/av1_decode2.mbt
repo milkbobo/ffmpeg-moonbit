@@ -2,9 +2,13 @@
 /// `get_uv_inter_txtp` from dav1d `env.h`: chroma inherits the luma transform
 /// type unless the chroma tx is too large or a directional type is not
 /// representable.
-fn av1_get_uv_inter_txtp(tx : Int32, ytxtp : Int) -> Int {
+fn av1_get_uv_inter_txtp(tx : Int32, ytxtp : Int32) -> Int32 {
   if av1_txfm_max(tx) == 3 {
-    if ytxtp == 9 { 9 } else { 0 }
+    if ytxtp == 9 {
+      9
+    } else {
+      0
+    }
   } else if av1_txfm_min(tx) == 2 &&
     ((1 << ytxtp) & ((1 << 14) | (1 << 15) | (1 << 12) | (1 << 13))) != 0 {
     0
@@ -21,15 +25,15 @@ pub fn av1_decode_txtp(
   msac : Av1Msac,
   cdf : Av1CdfCtx,
   intra : Bool,
-  plane : Int,
+  plane : Int32,
   tx : Int32,
   qidx_zero : Bool,
   reduced_txtp_set : Bool,
-  y_mode : Int,
-  y_angle : Int,
-  uv_mode : Int,
-  luma_txtp : Int,
-) -> Int {
+  y_mode : Int32,
+  y_angle : Int32,
+  uv_mode : Int32,
+  luma_txtp : Int32,
+) -> Int32 {
   if av1_txfm_max(tx) + (if intra { 1 } else { 0 }) >= 4 {
     return 0 // DCT_DCT
   }
@@ -51,20 +55,28 @@ pub fn av1_decode_txtp(
     }
     if reduced_txtp_set || t_dim_min == 2 {
       let idx = msac.decode_symbol_adapt(
-        cdf.txtp_intra2, (t_dim_min * 13 + y_mode_nofilt) * 8, 4,
+        cdf.txtp_intra2,
+        (t_dim_min * 13 + y_mode_nofilt) * 8,
+        4,
       )
       av1_tx_types_per_set[idx].to_int()
     } else {
       let idx = msac.decode_symbol_adapt(
-        cdf.txtp_intra1, (t_dim_min * 13 + y_mode_nofilt) * 8, 6,
+        cdf.txtp_intra1,
+        (t_dim_min * 13 + y_mode_nofilt) * 8,
+        6,
       )
       av1_tx_types_per_set[idx + 5].to_int()
     }
   } else if reduced_txtp_set || av1_txfm_max(tx) == 3 {
-    let idx = msac.decode_bool_adapt(
-      cdf.txtp_inter3, t_dim_min * 2,
-    ).reinterpret_as_int()
-    if idx != 0 { 0 } else { 9 } // DCT_DCT : IDTX
+    let idx = msac
+      .decode_bool_adapt(cdf.txtp_inter3, t_dim_min * 2)
+      .reinterpret_as_int()
+    if idx != 0 {
+      0
+    } else {
+      9
+    } // DCT_DCT : IDTX
   } else if t_dim_min == 2 {
     let idx = msac.decode_symbol_adapt(cdf.txtp_inter2, 0, 11)
     av1_tx_types_per_set[idx + 12].to_int()
@@ -77,6 +89,7 @@ pub fn av1_decode_txtp(
 ///|
 /// `decode_coefs` from dav1d recon_tmpl.c. Returns
 /// `(eob, txtp, res_ctx)`; eob = -1 means all-skip.
+
 ///|
 /// Coefficient/transform state for `decode_coefs`, so inter reconstruction
 /// can run the coefficient walk without a full tile context.
@@ -111,7 +124,7 @@ pub fn av1_decode_coefs(
   intra : Bool,
   plane : Int32,
   cf : FixedArray[Int32],
-  luma_txtp? : Int = 0,
+  luma_txtp~ : Int32 = 0,
 ) -> (Int32, Int32, Int32) {
   let chroma = if plane != 0 { 1 } else { 0 }
   let lossless = st.seg_lossless[seg_id]
@@ -139,8 +152,17 @@ pub fn av1_decode_coefs(
     16 // WHT_WHT
   } else {
     av1_decode_txtp(
-      st.msac, st.cdf, intra, plane, tx, st.seg_qidx[seg_id] == 0,
-      st.reduced_tx_set, y_mode, y_angle, uv_mode, luma_txtp,
+      st.msac,
+      st.cdf,
+      intra,
+      plane,
+      tx,
+      st.seg_qidx[seg_id] == 0,
+      st.reduced_tx_set,
+      y_mode,
+      y_angle,
+      uv_mode,
+      luma_txtp,
     )
   }
   let slw = av1_imin(av1_txfm_lw(tx), 3)
@@ -423,11 +445,24 @@ fn Av1TileCtx::decode_coefs(
   intra : Bool,
   plane : Int32,
   cf : FixedArray[Int32],
-  luma_txtp? : Int = 0,
+  luma_txtp~ : Int32 = 0,
 ) -> (Int32, Int32, Int32) {
   av1_decode_coefs(
-    self.coef_state(), a, a_off, l, l_off, tx, bs, b.seg_id, b.y_mode,
-    b.y_angle, b.uv_mode, intra, plane, cf, luma_txtp=luma_txtp,
+    self.coef_state(),
+    a,
+    a_off,
+    l,
+    l_off,
+    tx,
+    bs,
+    b.seg_id,
+    b.y_mode,
+    b.y_angle,
+    b.uv_mode,
+    intra,
+    plane,
+    cf,
+    luma_txtp~,
   )
 }
 
@@ -599,9 +634,7 @@ fn Av1TileCtx::read_pal_uv(self : Av1TileCtx, pal_sz : Int32) -> Unit {
     }
   } else {
     for i in 0..<pal_sz {
-      self.pal[pal_base + i] = self.msac
-        .decode_bools(bpc)
-        .reinterpret_as_int()
+      self.pal[pal_base + i] = self.msac.decode_bools(bpc).reinterpret_as_int()
     }
   }
 }
@@ -639,14 +672,12 @@ fn Av1TileCtx::copy_pal_block_uv(
   for pl in 1..<=2 {
     for x in 0..<bw4 {
       for k in 0..<8 {
-        self.al_pal[((0 * 32 + bx4 + x) * 3 + pl) * 8 + k] = self.pal[pl * 8 +
-          k]
+        self.al_pal[((0 * 32 + bx4 + x) * 3 + pl) * 8 + k] = self.pal[pl * 8 + k]
       }
     }
     for y in 0..<bh4 {
       for k in 0..<8 {
-        self.al_pal[((1 * 32 + by4 + y) * 3 + pl) * 8 + k] = self.pal[pl * 8 +
-          k]
+        self.al_pal[((1 * 32 + by4 + y) * 3 + pl) * 8 + k] = self.pal[pl * 8 + k]
       }
     }
   }

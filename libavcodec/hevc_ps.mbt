@@ -2004,6 +2004,7 @@ fn pps_scc_extension(
 
 ///|
 /// `ff_hevc_decode_nal_pps`. */
+
 ///|
 /// `setup_pps` (ps.c): uniform tile sizes and the CTB raster/tile-scan maps. */
 fn hevc_setup_pps_tiles(pps : HevcPps, sps : HevcSps) -> Unit {
@@ -2015,10 +2016,10 @@ fn hevc_setup_pps_tiles(pps : HevcPps, sps : HevcSps) -> Unit {
     pps.column_width.clear()
     pps.row_height.clear()
     for i in 0..<ncols {
-      pps.column_width.push(((i + 1) * w) / ncols - (i * w) / ncols)
+      pps.column_width.push((i + 1) * w / ncols - i * w / ncols)
     }
     for i in 0..<nrows {
-      pps.row_height.push(((i + 1) * h) / nrows - (i * h) / nrows)
+      pps.row_height.push((i + 1) * h / nrows - i * h / nrows)
     }
   }
   pps.col_bd.clear()
@@ -2092,6 +2093,7 @@ fn hevc_setup_pps_tiles(pps : HevcPps, sps : HevcSps) -> Unit {
   }
 }
 
+///|
 pub fn ff_hevc_decode_nal_pps(
   gb : BitReader,
   ps : HevcParamSets,

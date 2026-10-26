@@ -175,7 +175,6 @@ test "h264: deblocking matches FFmpeg default output (crop / qp variants)" {
 // panic and never as silently wrong pixels.
 // ---------------------------------------------------------------------------
 
-
 ///|
 test "h264: P slices decode through the DPB entry" {
   // keyint=10: frame 0 decodes as I, the following P slices reference it
@@ -216,5 +215,8 @@ test "h264: 10-bit sample depth is retained in output" {
   let frames = h264_decode_annexb_frames(data, false).unwrap()
   assert_eq(frames.length(), 1)
   assert_eq(frames[0].bit_depth, 10)
-  assert_eq(frames[0].yuv420p().length(), frames[0].width * frames[0].height * 3)
+  assert_eq(
+    frames[0].yuv420p().length(),
+    frames[0].width * frames[0].height * 3,
+  )
 }

@@ -299,7 +299,10 @@ pub fn hevc_sao_apply(
             let d0 = hevc_sao_cmp(v, n0)
             let d1 = hevc_sao_cmp(v, n1)
             let oi = edge_idx[2 + d0 + d1]
-            dst[idx] = hevc_sao_clip(v + sao.offset_val[ctb * 15 + off + oi], bd)
+            dst[idx] = hevc_sao_clip(
+              v + sao.offset_val[ctb * 15 + off + oi],
+              bd,
+            )
           }
         }
         hevc_sao_restore_edges(
@@ -324,7 +327,6 @@ pub fn hevc_sao_apply(
     }
   }
 }
-
 
 ///|
 /// `sao_edge_restore_0/1` for a single CTB: restore picture-border pixels and,
@@ -397,35 +399,87 @@ fn hevc_sao_restore_edges(
   }
   let curr_slice = ctb_slice_idx[ctb]
   let curr_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[ctb]]
-  let left_tile = no_tile_filter && !left_edge &&
+  let left_tile = no_tile_filter &&
+    !left_edge &&
     pps.tile_id[pps.ctb_addr_rs_to_ts[ctb - 1]] != curr_tile
-  let right_tile = no_tile_filter && !right_edge &&
+  let right_tile = no_tile_filter &&
+    !right_edge &&
     pps.tile_id[pps.ctb_addr_rs_to_ts[ctb + 1]] != curr_tile
-  let up_tile = no_tile_filter && !top_edge &&
+  let up_tile = no_tile_filter &&
+    !top_edge &&
     pps.tile_id[pps.ctb_addr_rs_to_ts[ctb - ctb_width]] != curr_tile
-  let down_tile = no_tile_filter && !bottom_edge &&
+  let down_tile = no_tile_filter &&
+    !bottom_edge &&
     pps.tile_id[pps.ctb_addr_rs_to_ts[ctb + ctb_width]] != curr_tile
   let no_slice = lfase == 0
-  let vert_left = (no_slice && !left_edge &&
-    ctb_slice_idx[ctb - 1] != curr_slice) || left_tile
-  let vert_right = (no_slice && !right_edge &&
-    ctb_slice_idx[ctb + 1] != curr_slice) || right_tile
-  let horiz_up = (no_slice && !top_edge &&
-    ctb_slice_idx[ctb - ctb_width] != curr_slice) || up_tile
-  let horiz_down = (no_slice && !bottom_edge &&
-    ctb_slice_idx[ctb + ctb_width] != curr_slice) || down_tile
-  let diag_ul = (no_slice && !left_edge && !top_edge &&
-    ctb_slice_idx[ctb - ctb_width - 1] != curr_slice) || left_tile || up_tile
-  let diag_ur = (no_slice && !right_edge && !top_edge &&
-    ctb_slice_idx[ctb - ctb_width + 1] != curr_slice) || right_tile || up_tile
-  let diag_lr = (no_slice && !right_edge && !bottom_edge &&
-    ctb_slice_idx[ctb + ctb_width + 1] != curr_slice) || right_tile || down_tile
-  let diag_ll = (no_slice && !left_edge && !bottom_edge &&
-    ctb_slice_idx[ctb + ctb_width - 1] != curr_slice) || left_tile || down_tile
-  let save_ul = if !diag_ul && eo == 2 && !left_edge && !top_edge { 1 } else { 0 }
-  let save_ur = if !diag_ur && eo == 3 && !top_edge && !right_edge { 1 } else { 0 }
-  let save_lr = if !diag_lr && eo == 2 && !right_edge && !bottom_edge { 1 } else { 0 }
-  let save_ll = if !diag_ll && eo == 3 && !left_edge && !bottom_edge { 1 } else { 0 }
+  let vert_left = (
+      no_slice && !left_edge && ctb_slice_idx[ctb - 1] != curr_slice
+    ) ||
+    left_tile
+  let vert_right = (
+      no_slice && !right_edge && ctb_slice_idx[ctb + 1] != curr_slice
+    ) ||
+    right_tile
+  let horiz_up = (
+      no_slice && !top_edge && ctb_slice_idx[ctb - ctb_width] != curr_slice
+    ) ||
+    up_tile
+  let horiz_down = (
+      no_slice && !bottom_edge && ctb_slice_idx[ctb + ctb_width] != curr_slice
+    ) ||
+    down_tile
+  let diag_ul = (
+      no_slice &&
+      !left_edge &&
+      !top_edge &&
+      ctb_slice_idx[ctb - ctb_width - 1] != curr_slice
+    ) ||
+    left_tile ||
+    up_tile
+  let diag_ur = (
+      no_slice &&
+      !right_edge &&
+      !top_edge &&
+      ctb_slice_idx[ctb - ctb_width + 1] != curr_slice
+    ) ||
+    right_tile ||
+    up_tile
+  let diag_lr = (
+      no_slice &&
+      !right_edge &&
+      !bottom_edge &&
+      ctb_slice_idx[ctb + ctb_width + 1] != curr_slice
+    ) ||
+    right_tile ||
+    down_tile
+  let diag_ll = (
+      no_slice &&
+      !left_edge &&
+      !bottom_edge &&
+      ctb_slice_idx[ctb + ctb_width - 1] != curr_slice
+    ) ||
+    left_tile ||
+    down_tile
+  let save_ul = if !diag_ul && eo == 2 && !left_edge && !top_edge {
+    1
+  } else {
+    0
+  }
+  let save_ur = if !diag_ur && eo == 3 && !top_edge && !right_edge {
+    1
+  } else {
+    0
+  }
+  let save_lr = if !diag_lr && eo == 2 && !right_edge && !bottom_edge {
+    1
+  } else {
+    0
+  }
+  let save_ll = if !diag_ll && eo == 3 && !left_edge && !bottom_edge {
+    1
+  } else {
+    0
+  }
   if vert_left && eo != 1 {
     for y in (init_y + save_ul)..<(h - save_ll) {
       let idx = (y0 + y) * stride + x0

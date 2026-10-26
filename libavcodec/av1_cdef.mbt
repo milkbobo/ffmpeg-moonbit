@@ -13,19 +13,31 @@
 
 ///|
 /// `dav1d_cdef_directions[12][2]` flattened (offsets with luma row stride 12).
-let av1_cdef_directions : FixedArray[Int] = [
-  1 * 12 + 0, 2 * 12 + 0, // 6
-  1 * 12 + 0, 2 * 12 - 1, // 7
-  -1 * 12 + 1, -2 * 12 + 2, // 0
-  0 * 12 + 1, -1 * 12 + 2, // 1
-  0 * 12 + 1, 0 * 12 + 2, // 2
-  0 * 12 + 1, 1 * 12 + 2, // 3
-  1 * 12 + 1, 2 * 12 + 2, // 4
-  1 * 12 + 0, 2 * 12 + 1, // 5
-  1 * 12 + 0, 2 * 12 + 0, // 6
-  1 * 12 + 0, 2 * 12 - 1, // 7
-  -1 * 12 + 1, -2 * 12 + 2, // 0
-  0 * 12 + 1, -1 * 12 + 2, // 1
+let av1_cdef_directions : FixedArray[Int32] = [
+  1 * 12 + 0,
+  2 * 12 + 0, // 6
+  1 * 12 + 0,
+  2 * 12 - 1, // 7
+  -1 * 12 + 1,
+  -2 * 12 + 2, // 0
+  0 * 12 + 1,
+  -1 * 12 + 2, // 1
+  0 * 12 + 1,
+  0 * 12 + 2, // 2
+  0 * 12 + 1,
+  1 * 12 + 2, // 3
+  1 * 12 + 1,
+  2 * 12 + 2, // 4
+  1 * 12 + 0,
+  2 * 12 + 1, // 5
+  1 * 12 + 0,
+  2 * 12 + 0, // 6
+  1 * 12 + 0,
+  2 * 12 - 1, // 7
+  -1 * 12 + 1,
+  -2 * 12 + 2, // 0
+  0 * 12 + 1,
+  -1 * 12 + 2, // 1
 ]
 
 ///|
@@ -46,7 +58,7 @@ fn av1_cdef_find_dir(
   off : Int32,
   stride : Int32,
   bpc : Int32,
-) -> (Int32, UInt) {
+) -> (Int32, UInt32) {
   let bd8 = bpc - 8
   let psum_hv = FixedArray::make(16, 0) // [2][8]
   let psum_diag = FixedArray::make(30, 0) // [2][15]
@@ -66,7 +78,7 @@ fn av1_cdef_find_dir(
       psum_alt[3 * 11 + (y >> 1) + x] = psum_alt[3 * 11 + (y >> 1) + x] + px
     }
   }
-  let cost = FixedArray::make(8, (0 : UInt))
+  let cost = FixedArray::make(8, (0 : UInt32))
   for n in 0..<8 {
     cost[2] = cost[2] +
       (psum_hv[0 * 8 + n] * psum_hv[0 * 8 + n]).reinterpret_as_uint()
@@ -91,7 +103,7 @@ fn av1_cdef_find_dir(
     (psum_diag[1 * 15 + 7] * psum_diag[1 * 15 + 7] * 105).reinterpret_as_uint()
   for n in 0..<4 {
     let ci = n * 2 + 1
-    let mut c : UInt = 0
+    let mut c : UInt32 = 0
     for m in 0..<5 {
       let v = psum_alt[n * 11 + 3 + m]
       c = c + (v * v).reinterpret_as_uint()
@@ -113,17 +125,21 @@ fn av1_cdef_find_dir(
       best_dir = n
     }
   }
-  let variance = (best_cost - cost[(best_dir ^ 4)]) >> 10
+  let variance = (best_cost - cost[best_dir ^ 4]) >> 10
   (best_dir, variance)
 }
 
 ///|
-fn av1_cdef_adjust_strength(strength : Int32, variance : UInt) -> Int32 {
+fn av1_cdef_adjust_strength(strength : Int32, variance : UInt32) -> Int32 {
   if variance == 0 {
     return 0
   }
   let v = variance.reinterpret_as_int()
-  let i = if (v >> 6) != 0 { av1_imin(av1_ulog2((v >> 6).reinterpret_as_uint()), 12) } else { 0 }
+  let i = if v >> 6 != 0 {
+    av1_imin(av1_ulog2((v >> 6).reinterpret_as_uint()), 12)
+  } else {
+    0
+  }
   (strength * (4 + i) + 8) >> 4
 }
 
@@ -310,7 +326,11 @@ fn av1_cdef_filter_block(
 fn av1_umin_int(a : Int32, b : Int32) -> Int32 {
   let ua = a.reinterpret_as_uint()
   let ub = b.reinterpret_as_uint()
-  if ua < ub { a } else { b }
+  if ua < ub {
+    a
+  } else {
+    b
+  }
 }
 
 ///|
@@ -383,16 +403,14 @@ fn Av1FrameCtx::cdef_frame(
   let bd8 = self.bpc - 8
   let mut by4 : Int32 = 0
   while by4 < self.bh {
-    let by_idx = ((by4 & 30) >> 1)
+    let by_idx = (by4 & 30) >> 1
     let have_top = by4 > 0
     let have_bottom = by4 + 2 < self.bh
     let mut bx4 : Int32 = 0
     while bx4 < self.bw {
       let sb128x = bx4 >> 5
-      let mask = self.lf_mask[
-        ((by4 >> 5) * self.sb128w + sb128x)
-      ]
-      let sb64_idx = (((by4 & 16) >> 3) + ((bx4 & 16) >> 4))
+      let mask = self.lf_mask[(by4 >> 5) * self.sb128w + sb128x]
+      let sb64_idx = ((by4 & 16) >> 3) + ((bx4 & 16) >> 4)
       let cdef_idx = mask.cdef_idx[sb64_idx]
       let y_lvl = if cdef_idx >= 0 && cdef_idx < p.y_strength.length() {
         p.y_strength[cdef_idx]
@@ -409,30 +427,33 @@ fn Av1FrameCtx::cdef_frame(
         continue
       }
       let noskip = (mask.noskip[by_idx * 2 + 1] << 16) | mask.noskip[by_idx * 2]
-      let bx_mask : UInt = (3 : UInt) << (bx4 & 30)
+      let bx_mask : UInt32 = (3 : UInt32) << (bx4 & 30)
       if (noskip & bx_mask) == 0 {
         bx4 = bx4 + 2
         continue
       }
       let have_left = bx4 > 0
       let have_right = bx4 + 2 < self.bw
-      let y_pri_lvl = (y_lvl >> 2) << bd8
+      let y_pri_lvl = y_lvl >> 2 << bd8
       let mut y_sec_lvl = y_lvl & 3
       if y_sec_lvl == 3 {
         y_sec_lvl = 4
       }
       y_sec_lvl = y_sec_lvl << bd8
-      let uv_pri_lvl = (uv_lvl >> 2) << bd8
+      let uv_pri_lvl = uv_lvl >> 2 << bd8
       let mut uv_sec_lvl = uv_lvl & 3
       if uv_sec_lvl == 3 {
         uv_sec_lvl = 4
       }
       uv_sec_lvl = uv_sec_lvl << bd8
       let mut dir : Int32 = 0
-      let mut variance : UInt = 0
+      let mut variance : UInt32 = 0
       if y_pri_lvl != 0 || uv_pri_lvl != 0 {
         let (d, v) = av1_cdef_find_dir(
-          snap0, (by4 * 4) * self.y_stride + bx4 * 4, self.y_stride, self.bpc,
+          snap0,
+          by4 * 4 * self.y_stride + bx4 * 4,
+          self.y_stride,
+          self.bpc,
         )
         dir = d
         variance = v
@@ -447,9 +468,22 @@ fn Av1FrameCtx::cdef_frame(
           // dav1d passes dir=0 for the secondary-only luma case.
           let ydir = if y_pri_lvl != 0 { dir } else { 0 }
           av1_cdef_filter_block(
-            snap0, self.planes[0], bx4 * 4, by4 * 4, self.y_stride, 8, 8,
-            have_top, have_bottom, have_left, have_right, adj, y_sec_lvl, ydir,
-            p.damping, self.bpc,
+            snap0,
+            self.planes[0],
+            bx4 * 4,
+            by4 * 4,
+            self.y_stride,
+            8,
+            8,
+            have_top,
+            have_bottom,
+            have_left,
+            have_right,
+            adj,
+            y_sec_lvl,
+            ydir,
+            p.damping,
+            self.bpc,
           )
         }
       }
@@ -460,10 +494,26 @@ fn Av1FrameCtx::cdef_frame(
         let mut pl = 1
         while pl <= 2 {
           av1_cdef_filter_block(
-            if pl == 1 { snap1 } else { snap2 }, self.planes[pl],
-            (bx4 * 4) >> ss_h, (by4 * 4) >> ss_v, self.uv_stride, cw, ch,
-            have_top, have_bottom, have_left, have_right, uv_pri_lvl,
-            uv_sec_lvl, uvdir, p.damping - 1, self.bpc,
+            if pl == 1 {
+              snap1
+            } else {
+              snap2
+            },
+            self.planes[pl],
+            (bx4 * 4) >> ss_h,
+            (by4 * 4) >> ss_v,
+            self.uv_stride,
+            cw,
+            ch,
+            have_top,
+            have_bottom,
+            have_left,
+            have_right,
+            uv_pri_lvl,
+            uv_sec_lvl,
+            uvdir,
+            p.damping - 1,
+            self.bpc,
           )
           pl = pl + 1
         }

@@ -51,9 +51,8 @@ fn h264_mc_luma(
   suby : Int32,
   pic_w : Int32,
   pic_h : Int32,
-
-  sbase? : Int32 = 0,
-  bit_depth? : Int32 = 8,
+  sbase~ : Int32 = 0,
+  bit_depth~ : Int32 = 8,
 ) -> Unit {
   fn px(x : Int32, y : Int32) -> Int32 {
     src[sbase + h264_mc_clamp(y, pic_h) * sstride + h264_mc_clamp(x, pic_w)]
@@ -77,13 +76,13 @@ fn h264_mc_luma(
     g(x, y + 3)
   }
   fn half_h(x : Int32, y : Int32) -> Int32 {
-    h264_clip8((hsum(x, y) + 16) >> 5, bit_depth=bit_depth)
+    h264_clip8((hsum(x, y) + 16) >> 5, bit_depth~)
   }
   fn half_v(x : Int32, y : Int32) -> Int32 {
-    h264_clip8((vsum(px, x, y) + 16) >> 5, bit_depth=bit_depth)
+    h264_clip8((vsum(px, x, y) + 16) >> 5, bit_depth~)
   }
   fn half_hv(x : Int32, y : Int32) -> Int32 {
-    h264_clip8((vsum(hsum, x, y) + 512) >> 10, bit_depth=bit_depth)
+    h264_clip8((vsum(hsum, x, y) + 512) >> 10, bit_depth~)
   }
   for row = 0; row < h; row = row + 1 {
     let y = src_y + row
@@ -157,9 +156,8 @@ fn h264_mc_chroma(
   h : Int32,
   pic_w : Int32,
   pic_h : Int32,
-
-  sbase? : Int32 = 0,
-  vshift? : Int32 = 1,
+  sbase~ : Int32 = 0,
+  vshift~ : Int32 = 1,
 ) -> Unit {
   let ysh = 2 + vshift
   let fy = src_y + (my >> ysh)

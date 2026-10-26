@@ -322,16 +322,22 @@ fn Av1TileCtx::recon_b_intra(
         } else if init_y != 0 {
           false
         } else {
-          (intra_edge_flags &
-            (av1_edge_i444_top_has_right << (ss_hor + ss_ver))) != 0
+          (
+            intra_edge_flags &
+            (av1_edge_i444_top_has_right << (ss_hor + ss_ver))
+          ) !=
+          0
         }
         let uv_sb_has_bl = if init_x != 0 {
           false
         } else if (init_y + 16) >> ss_ver < ch4 {
           true
         } else {
-          (intra_edge_flags &
-            (av1_edge_i444_left_has_bottom << (ss_hor + ss_ver))) != 0
+          (
+            intra_edge_flags &
+            (av1_edge_i444_left_has_bottom << (ss_hor + ss_ver))
+          ) !=
+          0
         }
         let sub_cw4 = av1_imin(cw4, (init_x + 16) >> ss_hor)
         for pl in 0..<2 {

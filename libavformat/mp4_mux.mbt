@@ -30,19 +30,14 @@ pub fn mp4_aac_muxer_new(
   if !rate_ok {
     return Err("EINVAL: unsupported AAC sample rate")
   }
-  Ok({
-    sample_rate,
-    channels,
-    packets: [],
-    durations: [],
-  })
+  Ok({ sample_rate, channels, packets: [], durations: [], })
 }
 
 ///|
 fn mp4_mux_rates() -> Array[Int32] {
   [
-    96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000,
-    11025, 8000, 7350,
+    96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025,
+    8000, 7350,
   ]
 }
 
@@ -87,9 +82,17 @@ fn mp4_box(tag : String, body : Array[Byte]) -> Array[Byte] {
 }
 
 ///|
-fn mp4_full_box(tag : String, version : Int32, flags : Int32, body : Array[Byte]) -> Array[Byte] {
+fn mp4_full_box(
+  tag : String,
+  version : Int32,
+  flags : Int32,
+  body : Array[Byte],
+) -> Array[Byte] {
   let full : Array[Byte] = []
-  mp4_u32(full, (version << 24).reinterpret_as_uint() | flags.reinterpret_as_uint())
+  mp4_u32(
+    full,
+    (version << 24).reinterpret_as_uint() | flags.reinterpret_as_uint(),
+  )
   full.append(body)
   mp4_box(tag, full)
 }
@@ -179,7 +182,7 @@ fn mp4_aac_entry(sample_rate : Int32, channels : Int32) -> Array[Byte] {
 pub fn Mp4AacMuxer::write_packet(
   self : Mp4AacMuxer,
   packet : Bytes,
-  duration? : Int32 = 1024,
+  duration~ : Int32 = 1024,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty AAC packet or duration")

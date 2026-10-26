@@ -11,14 +11,10 @@ let av1_cdef8_stream_b64 : Bytes = b"REtJRgAAIABBVjAxgABgAAoAAAABAAAA/////wAAAAC
 
 ///|
 let av1_cdef8_md5 : Array[String] = [
-  "e4d418f6dfab080ff49aedef91c14eee",
-  "080613e8f19e7dbaacac0100b08f2de0",
-  "9a4e5741706d38afb59c2b692f3c2e11",
-  "e831b591a0d05a81840ffd41e4244f4e",
-  "174c673b1db90422aa9e6b304ff6e108",
-  "ec856bc11baf68ee2fa1f7518a79e363",
-  "5504baf3d1dfddf101360d0a9d7565a5",
-  "781c6a544e58367e5f88e0e34cdfc6f3",]
+  "e4d418f6dfab080ff49aedef91c14eee", "080613e8f19e7dbaacac0100b08f2de0", "9a4e5741706d38afb59c2b692f3c2e11",
+  "e831b591a0d05a81840ffd41e4244f4e", "174c673b1db90422aa9e6b304ff6e108", "ec856bc11baf68ee2fa1f7518a79e363",
+  "5504baf3d1dfddf101360d0a9d7565a5", "781c6a544e58367e5f88e0e34cdfc6f3",
+]
 
 ///|
 test "av1 cdef: 8-bit 4:2:0 keyframes match libdav1d framemd5" {

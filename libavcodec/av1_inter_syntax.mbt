@@ -6,7 +6,7 @@
 
 ///|
 /// `dav1d_wedge_ctx_lut`: wedge CDF context per block size (0 elsewhere).
-let av1_wedge_ctx_lut : FixedArray[Int] = [
+let av1_wedge_ctx_lut : FixedArray[Int32] = [
   0, 0, 0, 0, 0, 0, 0, 6, 5, 8, 0, 4, 3, 2, 0, 7, 1, 0, 0, 0, 0, 0,
 ]
 
@@ -14,17 +14,14 @@ let av1_wedge_ctx_lut : FixedArray[Int] = [
 /// `dav1d_filter_2d[filter1][filter0]` flattened. `Dav1dFilterMode` is
 /// REGULAR=0, SMOOTH=1, SHARP=2, BILINEAR=3; values are dav1d `Filter2d`
 /// (0..8 = 8-tap combinations, 9 = bilinear).
-let av1_filter_2d : FixedArray[Int] = [
-  0, 1, 2, 0,
-  6, 7, 8, 0,
-  3, 4, 5, 0,
-  0, 0, 0, 9,
+let av1_filter_2d : FixedArray[Int32] = [
+  0, 1, 2, 0, 6, 7, 8, 0, 3, 4, 5, 0, 0, 0, 0, 9,
 ]
 
 ///|
 /// `wedge_allowed_mask`: 32x32, 32x16, 32x8, 16x32, 16x16, 16x8, 8x32,
 /// 8x16 and 8x8.
-pub fn av1_inter_wedge_allowed(bs : Int) -> Bool {
+pub fn av1_inter_wedge_allowed(bs : Int32) -> Bool {
   match bs {
     7 | 8 | 9 | 11 | 12 | 13 | 15 | 16 | 17 => true
     _ => false
@@ -33,7 +30,7 @@ pub fn av1_inter_wedge_allowed(bs : Int) -> Bool {
 
 ///|
 /// `interintra_allowed_mask`: wedge sizes minus 32x8 and 8x32.
-pub fn av1_interintra_allowed(bs : Int) -> Bool {
+pub fn av1_interintra_allowed(bs : Int32) -> Bool {
   match bs {
     7 | 8 | 11 | 12 | 13 | 16 | 17 => true
     _ => false
@@ -45,26 +42,26 @@ pub fn av1_interintra_allowed(bs : Int) -> Bool {
 /// `CompInterType` (1 weighted, 2 average, 3 segment, 4 wedge); 0 means
 /// no compound. `mask_sign` is only read for segment/wedge.
 pub(all) struct Av1InterCompoundSyntax {
-  comp_type : Int
-  wedge_idx : Int
-  mask_sign : Int
+  comp_type : Int32
+  wedge_idx : Int32
+  mask_sign : Int32
 }
 
 ///|
 /// `interintra` / `interintra_mode` / `interintra_wedge` / `wedge_idx`.
 /// `kind` is dav1d `InterIntraType` (0 none, 1 blend, 2 wedge).
 pub(all) struct Av1InterIntraSyntax {
-  kind : Int
-  mode : Int
-  wedge_idx : Int
+  kind : Int32
+  mode : Int32
+  wedge_idx : Int32
 }
 
 ///|
 /// Subpel filter pair plus the combined `Filter2d` index.
 pub(all) struct Av1InterFilterSyntax {
-  filter0 : Int
-  filter1 : Int
-  filter2d : Int
+  filter0 : Int32
+  filter1 : Int32
+  filter2d : Int32
 }
 
 ///|
@@ -75,9 +72,9 @@ pub fn av1_inter_read_compound_mask(
   cdf : Av1CdfCtx,
   masked_compound : Bool,
   jnt_comp : Bool,
-  bs : Int,
-  mask_ctx : Int,
-  jnt_ctx : Int,
+  bs : Int32,
+  mask_ctx : Int32,
+  jnt_ctx : Int32,
 ) -> Av1InterCompoundSyntax {
   let mut wedge_idx = 0
   let mut mask_sign = 0
@@ -94,7 +91,8 @@ pub fn av1_inter_read_compound_mask(
   } else {
     let comp = if av1_inter_wedge_allowed(bs) {
       let ctx = av1_wedge_ctx_lut[bs]
-      let c = 4 - msac.decode_bool_adapt(cdf.wedge_comp, ctx * 2).reinterpret_as_int()
+      let c = 4 -
+        msac.decode_bool_adapt(cdf.wedge_comp, ctx * 2).reinterpret_as_int()
       if c == 4 {
         wedge_idx = msac.decode_symbol_adapt(cdf.wedge_idx, ctx * 16, 15)
       }
@@ -105,7 +103,7 @@ pub fn av1_inter_read_compound_mask(
     mask_sign = msac.decode_bool_equi().reinterpret_as_int()
     comp
   }
-  { comp_type, wedge_idx, mask_sign }
+  { comp_type, wedge_idx, mask_sign, }
 }
 
 ///|
@@ -115,9 +113,9 @@ pub fn av1_inter_read_interintra(
   msac : Av1Msac,
   cdf : Av1CdfCtx,
   inter_intra : Bool,
-  bs : Int,
+  bs : Int32,
 ) -> Av1InterIntraSyntax {
-  let none : Av1InterIntraSyntax = { kind: 0, mode: 0, wedge_idx: 0 }
+  let none : Av1InterIntraSyntax = { kind: 0, mode: 0, wedge_idx: 0, }
   if !inter_intra || !av1_interintra_allowed(bs) {
     return none
   }
@@ -128,12 +126,14 @@ pub fn av1_inter_read_interintra(
   let mode = msac.decode_symbol_adapt(cdf.interintra_mode, grp * 4, 3)
   let wedge_ctx = av1_wedge_ctx_lut[bs]
   let kind = 1 +
-    msac.decode_bool_adapt(cdf.interintra_wedge, wedge_ctx * 2).reinterpret_as_int()
+    msac
+    .decode_bool_adapt(cdf.interintra_wedge, wedge_ctx * 2)
+    .reinterpret_as_int()
   let mut wedge_idx = 0
   if kind == 2 {
     wedge_idx = msac.decode_symbol_adapt(cdf.wedge_idx, wedge_ctx * 16, 15)
   }
-  { kind, mode, wedge_idx }
+  { kind, mode, wedge_idx, }
 }
 
 ///|
@@ -146,8 +146,8 @@ pub fn av1_inter_read_motion_mode(
   cdf : Av1CdfCtx,
   enabled : Bool,
   allow_warp : Bool,
-  bs : Int,
-) -> Int {
+  bs : Int32,
+) -> Int32 {
   if !enabled {
     return 0
   }
@@ -168,9 +168,9 @@ pub fn av1_inter_read_filter(
   switchable : Bool,
   has_subpel_filter : Bool,
   dual_filter : Bool,
-  subpel_mode : Int,
-  ctx0 : Int,
-  ctx1 : Int,
+  subpel_mode : Int32,
+  ctx0 : Int32,
+  ctx1 : Int32,
 ) -> Av1InterFilterSyntax {
   let filter0 = if !switchable {
     subpel_mode
@@ -190,12 +190,12 @@ pub fn av1_inter_read_filter(
   } else {
     0
   }
-  { filter0, filter1, filter2d: av1_filter_2d[filter1 * 4 + filter0] }
+  { filter0, filter1, filter2d: av1_filter_2d[filter1 * 4 + filter0], }
 }
 
 ///|
 /// Combine a horizontal/vertical switchable filter pair into dav1d `Filter2d`
 /// (neighbour blocks store the two filter modes separately).
-pub fn av1_inter_filter2d(filter0 : Int, filter1 : Int) -> Int {
+pub fn av1_inter_filter2d(filter0 : Int32, filter1 : Int32) -> Int32 {
   av1_filter_2d[filter1 * 4 + filter0]
 }

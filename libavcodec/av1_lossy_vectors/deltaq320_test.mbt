@@ -9,12 +9,9 @@ let av1_deltaq320_stream_b64 : Bytes = b"REtJRgAAIABBVjAxQAHwAAoAAAABAAAA/////wA
 
 ///|
 let av1_deltaq320_md5 : Array[String] = [
-  "c9b93d4e4c32949142d347221863b6f9",
-  "c09f2110d3df604abeca9f2b098a3b95",
-  "a87590a14793aeaa6bd32b09e65b37d5",
-  "8635ac7d98416e60ec5407c2fbc7571c",
-  "92196cf26bc2f4d0806ae65d3ed5b907",
-  "b5582b9d1eb358210383e5b8403a0640",]
+  "c9b93d4e4c32949142d347221863b6f9", "c09f2110d3df604abeca9f2b098a3b95", "a87590a14793aeaa6bd32b09e65b37d5",
+  "8635ac7d98416e60ec5407c2fbc7571c", "92196cf26bc2f4d0806ae65d3ed5b907", "b5582b9d1eb358210383e5b8403a0640",
+]
 
 ///|
 test "av1 delta-q 320x240: keyframes match libdav1d framemd5" {

@@ -17,13 +17,13 @@
 /// Per 128x128 area filter masks. Each bit is one 4x4 column/row edge.
 priv struct Av1Filter {
   /// `[dir][col4][level][sidx]`, dir 0 = vertical (column) edges.
-  fy : FixedArray[UInt]
+  fy : FixedArray[UInt32]
   /// `[dir][col4][level][sidx]` for chroma (levels 0/1 are block edges).
-  fuv : FixedArray[UInt]
+  fuv : FixedArray[UInt32]
   /// CDEF index per 64x64 sub-block inside the 128x128 area (-1 = unset).
   cdef_idx : FixedArray[Int32]
   /// `noskip_mask[16][2]` flattened: 8x8 blocks, stored on a 4x8 basis.
-  noskip : FixedArray[UInt]
+  noskip : FixedArray[UInt32]
   /// Loop-restoration units: `[plane * 4 + unit_idx]`.
   lr : FixedArray[Av1RestorationUnit]
 }
@@ -31,10 +31,10 @@ priv struct Av1Filter {
 ///|
 fn av1_filter_new() -> Av1Filter {
   {
-    fy: FixedArray::make(2 * 32 * 3 * 2, (0 : UInt)),
-    fuv: FixedArray::make(2 * 32 * 2 * 2, (0 : UInt)),
+    fy: FixedArray::make(2 * 32 * 3 * 2, (0 : UInt32)),
+    fuv: FixedArray::make(2 * 32 * 2 * 2, (0 : UInt32)),
     cdef_idx: FixedArray::make(4, -1),
-    noskip: FixedArray::make(32, (0 : UInt)),
+    noskip: FixedArray::make(32, (0 : UInt32)),
     lr: {
       let l = FixedArray::make(12, av1_restoration_unit_new())
       for i in 0..<12 {
@@ -64,7 +64,7 @@ priv struct Av1FilterLut {
 
 ///|
 fn av1_filter_lut_new() -> Av1FilterLut {
-  { e: FixedArray::make(64, 0), i: FixedArray::make(64, 0) }
+  { e: FixedArray::make(64, 0), i: FixedArray::make(64, 0), }
 }
 
 ///|
@@ -151,11 +151,23 @@ fn av1_calc_lf_values(
     }
     let base = s * 64
     av1_calc_lf_value(
-      values, base + 0 * 16, y_v, dy_v, hdr.seg_delta_lf[s * 4], mr, hdr.loop_filter_ref_deltas,
+      values,
+      base + 0 * 16,
+      y_v,
+      dy_v,
+      hdr.seg_delta_lf[s * 4],
+      mr,
+      hdr.loop_filter_ref_deltas,
       hdr.loop_filter_mode_deltas,
     )
     av1_calc_lf_value(
-      values, base + 1 * 16, y_h, dy_h, hdr.seg_delta_lf[s * 4 + 1], mr, hdr.loop_filter_ref_deltas,
+      values,
+      base + 1 * 16,
+      y_h,
+      dy_h,
+      hdr.seg_delta_lf[s * 4 + 1],
+      mr,
+      hdr.loop_filter_ref_deltas,
       hdr.loop_filter_mode_deltas,
     )
     if u == 0 {
@@ -164,7 +176,13 @@ fn av1_calc_lf_values(
       }
     } else {
       av1_calc_lf_value(
-        values, base + 2 * 16, u, du, hdr.seg_delta_lf[s * 4 + 2], mr, hdr.loop_filter_ref_deltas,
+        values,
+        base + 2 * 16,
+        u,
+        du,
+        hdr.seg_delta_lf[s * 4 + 2],
+        mr,
+        hdr.loop_filter_ref_deltas,
         hdr.loop_filter_mode_deltas,
       )
     }
@@ -174,7 +192,13 @@ fn av1_calc_lf_values(
       }
     } else {
       av1_calc_lf_value(
-        values, base + 3 * 16, v, dv, hdr.seg_delta_lf[s * 4 + 3], mr, hdr.loop_filter_ref_deltas,
+        values,
+        base + 3 * 16,
+        v,
+        dv,
+        hdr.seg_delta_lf[s * 4 + 3],
+        mr,
+        hdr.loop_filter_ref_deltas,
         hdr.loop_filter_mode_deltas,
       )
     }
@@ -184,12 +208,12 @@ fn av1_calc_lf_values(
 ///|
 /// `inner = ((1 << start) << n) - (1 << start)` truncated to 32 bits, built
 /// bitwise so a start+n >= 32 range does not depend on shift masking.
-fn av1_inner_mask(start : Int32, n : Int32) -> UInt {
-  let mut m : UInt = 0
+fn av1_inner_mask(start : Int32, n : Int32) -> UInt32 {
+  let mut m : UInt32 = 0
   for k in 0..<n {
     let bit = start + k
     if bit < 32 {
-      m = m | ((1 : UInt) << bit)
+      m = m | ((1 : UInt32) << bit)
     }
   }
   m
@@ -198,7 +222,7 @@ fn av1_inner_mask(start : Int32, n : Int32) -> UInt {
 ///|
 /// `mask_edges_intra`.
 fn av1_mask_edges_intra(
-  fy : FixedArray[UInt],
+  fy : FixedArray[UInt32],
   by4 : Int32,
   bx4 : Int32,
   w4 : Int32,
@@ -214,7 +238,7 @@ fn av1_mask_edges_intra(
   let twl4c = av1_imin(2, twl4)
   let thl4c = av1_imin(2, thl4)
   // left block edge
-  let mut mask : UInt = (1 : UInt) << by4
+  let mut mask : UInt32 = (1 : UInt32) << by4
   for y in 0..<h4 {
     let sidx : Int32 = if mask >= 0x10000U { 1 } else { 0 }
     let smask = if sidx != 0 { mask >> 16 } else { mask }
@@ -223,7 +247,7 @@ fn av1_mask_edges_intra(
     mask = mask << 1
   }
   // top block edge
-  let mut mask2 : UInt = (1 : UInt) << bx4
+  let mut mask2 : UInt32 = (1 : UInt32) << bx4
   for x in 0..<w4 {
     let sidx : Int32 = if mask2 >= 0x10000U { 1 } else { 0 }
     let smask = if sidx != 0 { mask2 >> 16 } else { mask2 }
@@ -276,7 +300,7 @@ fn av1_mask_edges_intra(
 ///|
 /// `mask_edges_chroma`.
 fn av1_mask_edges_chroma(
-  fuv : FixedArray[UInt],
+  fuv : FixedArray[UInt32],
   cby4 : Int32,
   cbx4 : Int32,
   cw4 : Int32,
@@ -298,10 +322,10 @@ fn av1_mask_edges_chroma(
   let hbits = 4 - ss_hor
   let vmask = 16 >> ss_ver
   let hmask = 16 >> ss_hor
-  let vmax : UInt = (1 : UInt) << vmask
-  let hmax : UInt = (1 : UInt) << hmask
+  let vmax : UInt32 = (1 : UInt32) << vmask
+  let hmax : UInt32 = (1 : UInt32) << hmask
   // left block edge
-  let mut mask : UInt = (1 : UInt) << cby4
+  let mut mask : UInt32 = (1 : UInt32) << cby4
   for y in 0..<ch4 {
     let sidx : Int32 = if mask >= vmax { 1 } else { 0 }
     let smask = if sidx != 0 { mask >> (sidx << vbits) } else { mask }
@@ -310,7 +334,7 @@ fn av1_mask_edges_chroma(
     mask = mask << 1
   }
   // top block edge
-  let mut mask2 : UInt = (1 : UInt) << cbx4
+  let mut mask2 : UInt32 = (1 : UInt32) << cbx4
   for x in 0..<cw4 {
     let sidx : Int32 = if mask2 >= hmax { 1 } else { 0 }
     let smask = if sidx != 0 { mask2 >> (sidx << hbits) } else { mask2 }
@@ -322,7 +346,7 @@ fn av1_mask_edges_chroma(
     // inner (tx) left|right edges
     let hstep = 1 << twl4
     let inner = av1_inner_mask(cby4, ch4)
-    let inner1 = inner & (((1 : UInt) << vmask) - 1)
+    let inner1 = inner & (((1 : UInt32) << vmask) - 1)
     let inner2 = inner >> vmask
     let mut x = hstep
     while x < cw4 {
@@ -339,7 +363,7 @@ fn av1_mask_edges_chroma(
     // inner (tx) top|bottom edges
     let vstep = 1 << thl4
     let inner_v = av1_inner_mask(cbx4, cw4)
-    let inner_v1 = inner_v & (((1 : UInt) << hmask) - 1)
+    let inner_v1 = inner_v & (((1 : UInt32) << hmask) - 1)
     let inner_v2 = inner_v >> hmask
     let mut y = vstep
     while y < ch4 {
@@ -399,7 +423,16 @@ fn Av1FrameCtx::create_lf_mask_intra(
       }
     }
     av1_mask_edges_intra(
-      mask.fy, by4, bx4, bw4, bh4, ytx, ay, ay_off, ly, ly_off,
+      mask.fy,
+      by4,
+      bx4,
+      bw4,
+      bh4,
+      ytx,
+      ay,
+      ay_off,
+      ly,
+      ly_off,
     )
   }
   if !has_chroma {
@@ -422,14 +455,28 @@ fn Av1FrameCtx::create_lf_mask_intra(
   let v_level = lvl[seg * 64 + 3 * 16]
   for y in 0..<cbh4 {
     for x in 0..<cbw4 {
-      let o = (((by >> self.ss_v) + y) * self.b4_stride + ((bx >> self.ss_h) + x)) * 4
+      let o = (
+          ((by >> self.ss_v) + y) * self.b4_stride + ((bx >> self.ss_h) + x)
+        ) *
+        4
       self.lf_level[o + 2] = u_level
       self.lf_level[o + 3] = v_level
     }
   }
   av1_mask_edges_chroma(
-    mask.fuv, cby4, cbx4, cbw4, cbh4, false, uvtx, auv, auv_off, luv,
-    luv_off, self.ss_h, self.ss_v,
+    mask.fuv,
+    cby4,
+    cbx4,
+    cbw4,
+    cbh4,
+    false,
+    uvtx,
+    auv,
+    auv_off,
+    luv,
+    luv_off,
+    self.ss_h,
+    self.ss_v,
   )
 }
 
@@ -460,18 +507,34 @@ fn av1_decomp_tx(
     av1_decomp_tx(txa, base, sub, depth + 1, y_off * 2, x_off * 2, tx_masks)
     if w >= h {
       av1_decomp_tx(
-        txa, base + htw4, sub, depth + 1, y_off * 2, x_off * 2 + 1, tx_masks,
+        txa,
+        base + htw4,
+        sub,
+        depth + 1,
+        y_off * 2,
+        x_off * 2 + 1,
+        tx_masks,
       )
     }
     if h >= w {
       av1_decomp_tx(
-        txa, base + hth4 * 32, sub, depth + 1, y_off * 2 + 1, x_off * 2,
+        txa,
+        base + hth4 * 32,
+        sub,
+        depth + 1,
+        y_off * 2 + 1,
+        x_off * 2,
         tx_masks,
       )
       if w >= h {
         av1_decomp_tx(
-          txa, base + hth4 * 32 + htw4, sub, depth + 1, y_off * 2 + 1,
-          x_off * 2 + 1, tx_masks,
+          txa,
+          base + hth4 * 32 + htw4,
+          sub,
+          depth + 1,
+          y_off * 2 + 1,
+          x_off * 2 + 1,
+          tx_masks,
         )
       }
     }
@@ -501,7 +564,7 @@ fn av1_decomp_tx(
 /// the `skip` shortcut that avoids inner tx edges. Updates the a/l
 /// contexts with the right/bottom tx widths.
 fn av1_mask_edges_inter(
-  fy : FixedArray[UInt],
+  fy : FixedArray[UInt32],
   by4 : Int32,
   bx4 : Int32,
   w4 : Int32,
@@ -531,7 +594,7 @@ fn av1_mask_edges_inter(
     y_off = y_off + 1
   }
   // left block edge
-  let mut mask : UInt = (1 : UInt) << by4
+  let mut mask : UInt32 = (1 : UInt32) << by4
   for yy in 0..<h4 {
     let sidx : Int32 = if mask >= 0x10000U { 1 } else { 0 }
     let smask = if sidx != 0 { mask >> 16 } else { mask }
@@ -540,7 +603,7 @@ fn av1_mask_edges_inter(
     mask = mask << 1
   }
   // top block edge
-  let mut mask2 : UInt = (1 : UInt) << bx4
+  let mut mask2 : UInt32 = (1 : UInt32) << bx4
   for xx in 0..<w4 {
     let sidx : Int32 = if mask2 >= 0x10000U { 1 } else { 0 }
     let smask = if sidx != 0 { mask2 >> 16 } else { mask2 }
@@ -550,7 +613,7 @@ fn av1_mask_edges_inter(
   }
   if !skip {
     // inner (tx) left|right edges
-    let mut mask3 : UInt = (1 : UInt) << by4
+    let mut mask3 : UInt32 = (1 : UInt32) << by4
     for yy in 0..<h4 {
       let sidx : Int32 = if mask3 >= 0x10000U { 1 } else { 0 }
       let smask = if sidx != 0 { mask3 >> 16 } else { mask3 }
@@ -568,7 +631,7 @@ fn av1_mask_edges_inter(
       mask3 = mask3 << 1
     }
     // inner (tx) top|bottom edges
-    let mut mask4 : UInt = (1 : UInt) << bx4
+    let mut mask4 : UInt32 = (1 : UInt32) << bx4
     for xx in 0..<w4 {
       let sidx : Int32 = if mask4 >= 0x10000U { 1 } else { 0 }
       let smask = if sidx != 0 { mask4 >> 16 } else { mask4 }
@@ -606,8 +669,8 @@ pub fn av1_create_lf_mask_inter(
   frame_bh : Int32,
   ss_h : Int32,
   ss_v : Int32,
-  fy : FixedArray[UInt],
-  fuv : FixedArray[UInt],
+  fy : FixedArray[UInt32],
+  fuv : FixedArray[UInt32],
   bx : Int32,
   by : Int32,
   skip : Bool,
@@ -670,14 +733,17 @@ pub fn av1_create_lf_mask_inter(
     }
   }
   av1_mask_edges_chroma(
-    fuv, cby4, cbx4, cbw4, cbh4, skip, uvtx, auv, auv_off, luv, luv_off,
-    ss_h, ss_v,
+    fuv, cby4, cbx4, cbw4, cbh4, skip, uvtx, auv, auv_off, luv, luv_off, ss_h, ss_v,
   )
 }
 
 ///|
 fn av1_abs(v : Int32) -> Int32 {
-  if v < 0 { -v } else { v }
+  if v < 0 {
+    -v
+  } else {
+    v
+  }
 }
 
 ///|
@@ -759,33 +825,215 @@ fn av1_lf_filter(
         av1_abs(q2 - q0) <= f_add
     }
     if wd >= 8 {
-      flat8in = flat8in && av1_abs(p3 - p0) <= f_add && av1_abs(q3 - q0) <= f_add
+      flat8in = flat8in &&
+        av1_abs(p3 - p0) <= f_add &&
+        av1_abs(q3 - q0) <= f_add
     }
     if wd >= 16 && flat8out && flat8in {
-      dst[o - 6 * strideb] = (p6 + p6 + p6 + p6 + p6 + p6 * 2 + p5 * 2 +
-        p4 * 2 + p3 + p2 + p1 + p0 + q0 + 8) >> 4
-      dst[o - 5 * strideb] = (p6 + p6 + p6 + p6 + p6 + p5 * 2 + p4 * 2 +
-        p3 * 2 + p2 + p1 + p0 + q0 + q1 + 8) >> 4
-      dst[o - 4 * strideb] = (p6 + p6 + p6 + p6 + p5 + p4 * 2 + p3 * 2 +
-        p2 * 2 + p1 + p0 + q0 + q1 + q2 + 8) >> 4
-      dst[o - 3 * strideb] = (p6 + p6 + p6 + p5 + p4 + p3 * 2 + p2 * 2 +
-        p1 * 2 + p0 + q0 + q1 + q2 + q3 + 8) >> 4
-      dst[o - 2 * strideb] = (p6 + p6 + p5 + p4 + p3 + p2 * 2 + p1 * 2 +
-        p0 * 2 + q0 + q1 + q2 + q3 + q4 + 8) >> 4
-      dst[o - 1 * strideb] = (p6 + p5 + p4 + p3 + p2 + p1 * 2 + p0 * 2 +
-        q0 * 2 + q1 + q2 + q3 + q4 + q5 + 8) >> 4
-      dst[o + 0] = (p5 + p4 + p3 + p2 + p1 + p0 * 2 + q0 * 2 + q1 * 2 + q2 +
-        q3 + q4 + q5 + q6 + 8) >> 4
-      dst[o + 1 * strideb] = (p4 + p3 + p2 + p1 + p0 + q0 * 2 + q1 * 2 +
-        q2 * 2 + q3 + q4 + q5 + q6 + q6 + 8) >> 4
-      dst[o + 2 * strideb] = (p3 + p2 + p1 + p0 + q0 + q1 * 2 + q2 * 2 +
-        q3 * 2 + q4 + q5 + q6 + q6 + q6 + 8) >> 4
-      dst[o + 3 * strideb] = (p2 + p1 + p0 + q0 + q1 + q2 * 2 + q3 * 2 +
-        q4 * 2 + q5 + q6 + q6 + q6 + q6 + 8) >> 4
-      dst[o + 4 * strideb] = (p1 + p0 + q0 + q1 + q2 + q3 * 2 + q4 * 2 +
-        q5 * 2 + q6 + q6 + q6 + q6 + q6 + 8) >> 4
-      dst[o + 5 * strideb] = (p0 + q0 + q1 + q2 + q3 + q4 * 2 + q5 * 2 +
-        q6 * 2 + q6 + q6 + q6 + q6 + q6 + 8) >> 4
+      dst[o - 6 * strideb] = (
+          p6 +
+          p6 +
+          p6 +
+          p6 +
+          p6 +
+          p6 * 2 +
+          p5 * 2 +
+          p4 * 2 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          8
+        ) >>
+        4
+      dst[o - 5 * strideb] = (
+          p6 +
+          p6 +
+          p6 +
+          p6 +
+          p6 +
+          p5 * 2 +
+          p4 * 2 +
+          p3 * 2 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          8
+        ) >>
+        4
+      dst[o - 4 * strideb] = (
+          p6 +
+          p6 +
+          p6 +
+          p6 +
+          p5 +
+          p4 * 2 +
+          p3 * 2 +
+          p2 * 2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          8
+        ) >>
+        4
+      dst[o - 3 * strideb] = (
+          p6 +
+          p6 +
+          p6 +
+          p5 +
+          p4 +
+          p3 * 2 +
+          p2 * 2 +
+          p1 * 2 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          8
+        ) >>
+        4
+      dst[o - 2 * strideb] = (
+          p6 +
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 * 2 +
+          p1 * 2 +
+          p0 * 2 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          8
+        ) >>
+        4
+      dst[o - 1 * strideb] = (
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 * 2 +
+          p0 * 2 +
+          q0 * 2 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          8
+        ) >>
+        4
+      dst[o + 0] = (
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 * 2 +
+          q0 * 2 +
+          q1 * 2 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          8
+        ) >>
+        4
+      dst[o + 1 * strideb] = (
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 * 2 +
+          q1 * 2 +
+          q2 * 2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          q6 +
+          8
+        ) >>
+        4
+      dst[o + 2 * strideb] = (
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 * 2 +
+          q2 * 2 +
+          q3 * 2 +
+          q4 +
+          q5 +
+          q6 +
+          q6 +
+          q6 +
+          8
+        ) >>
+        4
+      dst[o + 3 * strideb] = (
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 * 2 +
+          q3 * 2 +
+          q4 * 2 +
+          q5 +
+          q6 +
+          q6 +
+          q6 +
+          q6 +
+          8
+        ) >>
+        4
+      dst[o + 4 * strideb] = (
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 * 2 +
+          q4 * 2 +
+          q5 * 2 +
+          q6 +
+          q6 +
+          q6 +
+          q6 +
+          q6 +
+          8
+        ) >>
+        4
+      dst[o + 5 * strideb] = (
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 * 2 +
+          q5 * 2 +
+          q6 * 2 +
+          q6 +
+          q6 +
+          q6 +
+          q6 +
+          q6 +
+          8
+        ) >>
+        4
     } else if wd >= 8 && flat8in {
       dst[o - 3 * strideb] = (p3 + p3 + p3 + 2 * p2 + p1 + p0 + q0 + 4) >> 3
       dst[o - 2 * strideb] = (p3 + p3 + p2 + 2 * p1 + p0 + q0 + q1 + 4) >> 3
@@ -831,7 +1079,7 @@ fn av1_lf_h_y(
   dst : FixedArray[Int32],
   dst_off : Int32,
   stride : Int32,
-  vmask : FixedArray[UInt],
+  vmask : FixedArray[UInt32],
   lvl : FixedArray[Int32],
   lvl_off : Int32,
   b4_stride : Int32,
@@ -839,7 +1087,7 @@ fn av1_lf_h_y(
   bpc : Int32,
 ) -> Unit {
   let vm = vmask[0] | vmask[1] | vmask[2]
-  let mut y : UInt = 1
+  let mut y : UInt32 = 1
   let mut o = dst_off
   let mut li = lvl_off
   while (vm & (y - 1).lnot()) != 0 {
@@ -855,7 +1103,15 @@ fn av1_lf_h_y(
           0
         }
         av1_lf_filter(
-          dst, o, stride, 1, 4 << idx, bpc, lut.e[l], lut.i[l], l >> 4,
+          dst,
+          o,
+          stride,
+          1,
+          4 << idx,
+          bpc,
+          lut.e[l],
+          lut.i[l],
+          l >> 4,
         )
       }
     }
@@ -872,7 +1128,7 @@ fn av1_lf_v_y(
   dst : FixedArray[Int32],
   dst_off : Int32,
   stride : Int32,
-  vmask : FixedArray[UInt],
+  vmask : FixedArray[UInt32],
   lvl : FixedArray[Int32],
   lvl_off : Int32,
   b4_stride : Int32,
@@ -880,13 +1136,17 @@ fn av1_lf_v_y(
   bpc : Int32,
 ) -> Unit {
   let vm = vmask[0] | vmask[1] | vmask[2]
-  let mut x : UInt = 1
+  let mut x : UInt32 = 1
   let mut o = dst_off
   let mut li = lvl_off
   while (vm & (x - 1).lnot()) != 0 {
     if (vm & x) != 0 {
       let l0 = lvl[li]
-      let l = if l0 != 0 || li < b4_stride * 4 { l0 } else { lvl[li - b4_stride * 4] }
+      let l = if l0 != 0 || li < b4_stride * 4 {
+        l0
+      } else {
+        lvl[li - b4_stride * 4]
+      }
       if l != 0 {
         let idx = if (vmask[2] & x) != 0 {
           2
@@ -896,7 +1156,15 @@ fn av1_lf_v_y(
           0
         }
         av1_lf_filter(
-          dst, o, 1, stride, 4 << idx, bpc, lut.e[l], lut.i[l], l >> 4,
+          dst,
+          o,
+          1,
+          stride,
+          4 << idx,
+          bpc,
+          lut.e[l],
+          lut.i[l],
+          l >> 4,
         )
       }
     }
@@ -912,7 +1180,7 @@ fn av1_lf_h_uv(
   dst : FixedArray[Int32],
   dst_off : Int32,
   stride : Int32,
-  vmask : FixedArray[UInt],
+  vmask : FixedArray[UInt32],
   lvl : FixedArray[Int32],
   lvl_off : Int32,
   b4_stride : Int32,
@@ -920,7 +1188,7 @@ fn av1_lf_h_uv(
   bpc : Int32,
 ) -> Unit {
   let vm = vmask[0] | vmask[1]
-  let mut y : UInt = 1
+  let mut y : UInt32 = 1
   let mut o = dst_off
   let mut li = lvl_off
   while (vm & (y - 1).lnot()) != 0 {
@@ -930,7 +1198,15 @@ fn av1_lf_h_uv(
       if l != 0 {
         let idx = if (vmask[1] & y) != 0 { 1 } else { 0 }
         av1_lf_filter(
-          dst, o, stride, 1, 4 + 2 * idx, bpc, lut.e[l], lut.i[l], l >> 4,
+          dst,
+          o,
+          stride,
+          1,
+          4 + 2 * idx,
+          bpc,
+          lut.e[l],
+          lut.i[l],
+          l >> 4,
         )
       }
     }
@@ -946,7 +1222,7 @@ fn av1_lf_v_uv(
   dst : FixedArray[Int32],
   dst_off : Int32,
   stride : Int32,
-  vmask : FixedArray[UInt],
+  vmask : FixedArray[UInt32],
   lvl : FixedArray[Int32],
   lvl_off : Int32,
   b4_stride : Int32,
@@ -954,17 +1230,29 @@ fn av1_lf_v_uv(
   bpc : Int32,
 ) -> Unit {
   let vm = vmask[0] | vmask[1]
-  let mut x : UInt = 1
+  let mut x : UInt32 = 1
   let mut o = dst_off
   let mut li = lvl_off
   while (vm & (x - 1).lnot()) != 0 {
     if (vm & x) != 0 {
       let l0 = lvl[li]
-      let l = if l0 != 0 || li < b4_stride * 4 { l0 } else { lvl[li - b4_stride * 4] }
+      let l = if l0 != 0 || li < b4_stride * 4 {
+        l0
+      } else {
+        lvl[li - b4_stride * 4]
+      }
       if l != 0 {
         let idx = if (vmask[1] & x) != 0 { 1 } else { 0 }
         av1_lf_filter(
-          dst, o, 1, stride, 4 + 2 * idx, bpc, lut.e[l], lut.i[l], l >> 4,
+          dst,
+          o,
+          1,
+          stride,
+          4 + 2 * idx,
+          bpc,
+          lut.e[l],
+          lut.i[l],
+          l >> 4,
         )
       }
     }
@@ -988,7 +1276,7 @@ fn av1_lf_plane_cols_y(
   let dst = f.planes[0]
   let ls = f.y_stride
   let b4_stride = f.b4_stride
-  let hm = FixedArray::make(3, (0 : UInt))
+  let hm = FixedArray::make(3, (0 : UInt32))
   for x in 0..<w {
     if !have_left && x == 0 {
       continue
@@ -1008,8 +1296,15 @@ fn av1_lf_plane_cols_y(
       hm[2] = mask.fy[av1_fy_i(0, x, 2, 1)]
     }
     av1_lf_h_y(
-      dst, dst_off + x * 4, ls, hm, f.lf_level, lvl_off + x * 4, b4_stride,
-      f.lf_lut, f.bpc,
+      dst,
+      dst_off + x * 4,
+      ls,
+      hm,
+      f.lf_level,
+      lvl_off + x * 4,
+      b4_stride,
+      f.lf_lut,
+      f.bpc,
     )
   }
 }
@@ -1028,7 +1323,7 @@ fn av1_lf_plane_rows_y(
   let dst = f.planes[0]
   let ls = f.y_stride
   let b4_stride = f.b4_stride
-  let vm = FixedArray::make(4, (0 : UInt))
+  let vm = FixedArray::make(4, (0 : UInt32))
   for y in starty4..<endy4 {
     if !have_top && y == 0 {
       continue
@@ -1040,8 +1335,15 @@ fn av1_lf_plane_rows_y(
     vm[2] = mask.fy[av1_fy_i(1, y, 2, 0)] |
       (mask.fy[av1_fy_i(1, y, 2, 1)] << 16)
     av1_lf_v_y(
-      dst, dst_off + (y - starty4) * 4 * ls, ls, vm, f.lf_level, lvl_off +
-      (y - starty4) * b4_stride * 4 + 1, b4_stride, f.lf_lut, f.bpc,
+      dst,
+      dst_off + (y - starty4) * 4 * ls,
+      ls,
+      vm,
+      f.lf_level,
+      lvl_off + (y - starty4) * b4_stride * 4 + 1,
+      b4_stride,
+      f.lf_lut,
+      f.bpc,
     )
   }
   ignore(w)
@@ -1064,7 +1366,7 @@ fn av1_lf_plane_cols_uv(
   let ls = f.uv_stride
   let b4_stride = f.b4_stride
   let ss_v = f.ss_v
-  let hm = FixedArray::make(3, (0 : UInt))
+  let hm = FixedArray::make(3, (0 : UInt32))
   for x in 0..<w {
     if !have_left && x == 0 {
       continue
@@ -1072,7 +1374,7 @@ fn av1_lf_plane_cols_uv(
     if starty4 == 0 {
       hm[0] = mask.fuv[av1_fuv_i(0, x, 0, 0)]
       hm[1] = mask.fuv[av1_fuv_i(0, x, 1, 0)]
-      if endy4 > (16 >> ss_v) {
+      if endy4 > 16 >> ss_v {
         hm[0] = hm[0] | (mask.fuv[av1_fuv_i(0, x, 0, 1)] << (16 >> ss_v))
         hm[1] = hm[1] | (mask.fuv[av1_fuv_i(0, x, 1, 1)] << (16 >> ss_v))
       }
@@ -1081,12 +1383,26 @@ fn av1_lf_plane_cols_uv(
       hm[1] = mask.fuv[av1_fuv_i(0, x, 1, 1)]
     }
     av1_lf_h_uv(
-      u, u_off + x * 4, ls, hm, f.lf_level, lvl_off + x * 4 + 2, b4_stride,
-      f.lf_lut, f.bpc,
+      u,
+      u_off + x * 4,
+      ls,
+      hm,
+      f.lf_level,
+      lvl_off + x * 4 + 2,
+      b4_stride,
+      f.lf_lut,
+      f.bpc,
     )
     av1_lf_h_uv(
-      v, v_off + x * 4, ls, hm, f.lf_level, lvl_off + x * 4 + 3, b4_stride,
-      f.lf_lut, f.bpc,
+      v,
+      v_off + x * 4,
+      ls,
+      hm,
+      f.lf_level,
+      lvl_off + x * 4 + 3,
+      b4_stride,
+      f.lf_lut,
+      f.bpc,
     )
   }
 }
@@ -1108,7 +1424,7 @@ fn av1_lf_plane_rows_uv(
   let ls = f.uv_stride
   let b4_stride = f.b4_stride
   let ss_h = f.ss_h
-  let vm = FixedArray::make(3, (0 : UInt))
+  let vm = FixedArray::make(3, (0 : UInt32))
   for y in starty4..<endy4 {
     if !have_top && y == 0 {
       continue
@@ -1118,12 +1434,26 @@ fn av1_lf_plane_rows_uv(
     vm[1] = mask.fuv[av1_fuv_i(1, y, 1, 0)] |
       (mask.fuv[av1_fuv_i(1, y, 1, 1)] << (16 >> ss_h))
     av1_lf_v_uv(
-      u, u_off + (y - starty4) * 4 * ls, ls, vm, f.lf_level, lvl_off +
-      (y - starty4) * b4_stride * 4 + 2, b4_stride, f.lf_lut, f.bpc,
+      u,
+      u_off + (y - starty4) * 4 * ls,
+      ls,
+      vm,
+      f.lf_level,
+      lvl_off + (y - starty4) * b4_stride * 4 + 2,
+      b4_stride,
+      f.lf_lut,
+      f.bpc,
     )
     av1_lf_v_uv(
-      v, v_off + (y - starty4) * 4 * ls, ls, vm, f.lf_level, lvl_off +
-      (y - starty4) * b4_stride * 4 + 3, b4_stride, f.lf_lut, f.bpc,
+      v,
+      v_off + (y - starty4) * 4 * ls,
+      ls,
+      vm,
+      f.lf_level,
+      lvl_off + (y - starty4) * b4_stride * 4 + 3,
+      b4_stride,
+      f.lf_lut,
+      f.bpc,
     )
   }
   ignore(w)
@@ -1164,29 +1494,30 @@ fn Av1FrameCtx::lf_sbrow_cols(self : Av1FrameCtx, sby : Int32) -> Unit {
         let i1 = av1_fy_i(0, bx4, 1, sidx)
         let i0 = av1_fy_i(0, bx4, 0, sidx)
         let idx = 2 *
-            (if (mask.fy[i2] & smask) != (0 : UInt) { 1 } else { 0 }) +
-          (if (mask.fy[i1] & smask) != (0 : UInt) { 1 } else { 0 })
+          (if (mask.fy[i2] & smask) != (0 : UInt32) { 1 } else { 0 }) +
+          (if (mask.fy[i1] & smask) != (0 : UInt32) { 1 } else { 0 })
         mask.fy[i2] = mask.fy[i2] & smask.lnot()
         mask.fy[i1] = mask.fy[i1] & smask.lnot()
         mask.fy[i0] = mask.fy[i0] & smask.lnot()
-        let inew = av1_fy_i(0, bx4, av1_imin(idx, self.tile_lpf_y[lpf_base + (y - starty4)]), sidx)
+        let inew = av1_fy_i(
+          0,
+          bx4,
+          av1_imin(idx, self.tile_lpf_y[lpf_base + (y - starty4)]),
+          sidx,
+        )
         mask.fy[inew] = mask.fy[inew] | smask
       }
       if !mono {
         let cbx4 = bx4 >> self.ss_h
         let uv_start = starty4 >> self.ss_v
-        let lpf_base = (tc - 1) * uv_halign + ((sby << sbl2) >> self.ss_v)
+        let lpf_base = (tc - 1) * uv_halign + (sby << sbl2 >> self.ss_v)
         let mut vbit = 1U << uv_start
         for y in uv_start..<uv_endy4 {
           let sidx = if vbit >= vmax { 1 } else { 0 }
           let smask = vbit >> (sidx << vshift)
           let i1 = av1_fuv_i(0, cbx4, 1, sidx)
           let i0 = av1_fuv_i(0, cbx4, 0, sidx)
-          let idx = if (mask.fuv[i1] & smask) != (0 : UInt) {
-            1
-          } else {
-            0
-          }
+          let idx = if (mask.fuv[i1] & smask) != (0 : UInt32) { 1 } else { 0 }
           mask.fuv[i1] = mask.fuv[i1] & smask.lnot()
           mask.fuv[i0] = mask.fuv[i0] & smask.lnot()
           let inew = av1_fuv_i(
@@ -1218,8 +1549,8 @@ fn Av1FrameCtx::lf_sbrow_cols(self : Av1FrameCtx, sby : Int32) -> Unit {
         let i1 = av1_fy_i(1, starty4, 1, sidx)
         let i0 = av1_fy_i(1, starty4, 0, sidx)
         let idx = 2 *
-            (if (mask.fy[i2] & smask) != (0 : UInt) { 1 } else { 0 }) +
-          (if (mask.fy[i1] & smask) != (0 : UInt) { 1 } else { 0 })
+          (if (mask.fy[i2] & smask) != (0 : UInt32) { 1 } else { 0 }) +
+          (if (mask.fy[i1] & smask) != (0 : UInt32) { 1 } else { 0 })
         mask.fy[i2] = mask.fy[i2] & smask.lnot()
         mask.fy[i1] = mask.fy[i1] & smask.lnot()
         mask.fy[i0] = mask.fy[i0] & smask.lnot()
@@ -1236,19 +1567,10 @@ fn Av1FrameCtx::lf_sbrow_cols(self : Av1FrameCtx, sby : Int32) -> Unit {
           let smask = uvbit >> (sidx << hshift)
           let i1 = av1_fuv_i(1, uv_col, 1, sidx)
           let i0 = av1_fuv_i(1, uv_col, 0, sidx)
-          let idx = if (mask.fuv[i1] & smask) != (0 : UInt) {
-            1
-          } else {
-            0
-          }
+          let idx = if (mask.fuv[i1] & smask) != (0 : UInt32) { 1 } else { 0 }
           mask.fuv[i1] = mask.fuv[i1] & smask.lnot()
           mask.fuv[i0] = mask.fuv[i0] & smask.lnot()
-          let inew = av1_fuv_i(
-            1,
-            uv_col,
-            av1_imin(idx, a.tx_lpf_uv[i]),
-            sidx,
-          )
+          let inew = av1_fuv_i(1, uv_col, av1_imin(idx, a.tx_lpf_uv[i]), sidx)
           mask.fuv[inew] = mask.fuv[inew] | smask
           uvbit = uvbit << 1
         }
@@ -1266,15 +1588,27 @@ fn Av1FrameCtx::lf_sbrow_cols(self : Av1FrameCtx, sby : Int32) -> Unit {
     let mask = self.lf_mask[mask_row * self.sb128w + x]
     let w = av1_imin(32, self.bw - x * 32)
     av1_lf_plane_cols_y(
-      self, x > 0, lvl_off + x * 32 * 4, mask, y_off + x * 128, w, starty4,
+      self,
+      x > 0,
+      lvl_off + x * 32 * 4,
+      mask,
+      y_off + x * 128,
+      w,
+      starty4,
       endy4,
     )
     if chroma_lf {
       let cw = (w + self.ss_h) >> self.ss_h
       av1_lf_plane_cols_uv(
-        self, x > 0, uv_lvl_off + x * (32 >> self.ss_h) * 4, mask,
-        uv_off + x * (128 >> self.ss_h), uv_off + x * (128 >> self.ss_h), cw,
-        starty4 >> self.ss_v, uv_endy4,
+        self,
+        x > 0,
+        uv_lvl_off + x * (32 >> self.ss_h) * 4,
+        mask,
+        uv_off + x * (128 >> self.ss_h),
+        uv_off + x * (128 >> self.ss_h),
+        cw,
+        starty4 >> self.ss_v,
+        uv_endy4,
       )
     }
   }
@@ -1300,15 +1634,27 @@ fn Av1FrameCtx::lf_sbrow_rows(self : Av1FrameCtx, sby : Int32) -> Unit {
     let mask = self.lf_mask[mask_row * self.sb128w + x]
     let w = av1_imin(32, self.bw - x * 32)
     av1_lf_plane_rows_y(
-      self, sby > 0, lvl_off + x * 32 * 4, mask, y_off + x * 128, w, starty4,
+      self,
+      sby > 0,
+      lvl_off + x * 32 * 4,
+      mask,
+      y_off + x * 128,
+      w,
+      starty4,
       endy4,
     )
     if chroma_lf {
       let cw = (w + self.ss_h) >> self.ss_h
       av1_lf_plane_rows_uv(
-        self, sby > 0, uv_lvl_off + x * (32 >> self.ss_h) * 4, mask,
-        uv_off + x * (128 >> self.ss_h), uv_off + x * (128 >> self.ss_h), cw,
-        starty4 >> self.ss_v, uv_endy4,
+        self,
+        sby > 0,
+        uv_lvl_off + x * (32 >> self.ss_h) * 4,
+        mask,
+        uv_off + x * (128 >> self.ss_h),
+        uv_off + x * (128 >> self.ss_h),
+        cw,
+        starty4 >> self.ss_v,
+        uv_endy4,
       )
     }
   }

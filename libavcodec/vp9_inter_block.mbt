@@ -72,11 +72,15 @@ fn Vp9Decoder::decode_mode(self : Vp9Decoder) -> Unit {
       )
     }
   } else if !h.segmentation.update_map ||
-    (h.segmentation.temporal &&
-    vp9_rac_get_prob(
-      self.rac,
-      h.segmentation.pred_probs[self.above_segpred[col] + self.left_segpred[row7]],
-    ) != 0) {
+    (
+      h.segmentation.temporal &&
+      vp9_rac_get_prob(
+        self.rac,
+        h.segmentation.pred_probs[self.above_segpred[col] +
+        self.left_segpred[row7]],
+      ) !=
+      0
+    ) {
     if !h.error_resilient && self.ref_segmap is Some(refsegmap) {
       let mut pred = 8
       let stride = self.sb_cols * 8
@@ -154,11 +158,7 @@ fn Vp9Decoder::decode_mode(self : Vp9Decoder) -> Unit {
     }
     let bit = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_INTRA + cidx])
     self.counts[VP9_CT_INTRA + cidx * 2 + bit] += 1
-    b.intra = if bit != 0 {
-      0
-    } else {
-      1
-    }
+    b.intra = if bit != 0 { 0 } else { 1 }
   }
   // tx size (same as the keyframe path)
   if (b.intra != 0 || b.skip == 0) && self.tx_mode == VP9_TX_SWITCHABLE {
@@ -175,11 +175,7 @@ fn Vp9Decoder::decode_mode(self : Vp9Decoder) -> Unit {
         } else {
           self.left_txfm[row7]
         }
-        cidx = if av + lv > max_tx {
-          1
-        } else {
-          0
-        }
+        cidx = if av + lv > max_tx { 1 } else { 0 }
       } else {
         cidx = if self.above_skip[col] != 0 {
           1
@@ -204,7 +200,10 @@ fn Vp9Decoder::decode_mode(self : Vp9Decoder) -> Unit {
       3 => {
         b.tx = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_TX32P + cidx * 3])
         if b.tx != 0 {
-          b.tx += vp9_rac_get_prob(self.rac, self.prob[VP9_PC_TX32P + cidx * 3 + 1])
+          b.tx += vp9_rac_get_prob(
+            self.rac,
+            self.prob[VP9_PC_TX32P + cidx * 3 + 1],
+          )
           if b.tx == 2 {
             b.tx += vp9_rac_get_prob(
               self.rac,
@@ -217,7 +216,10 @@ fn Vp9Decoder::decode_mode(self : Vp9Decoder) -> Unit {
       2 => {
         b.tx = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_TX16P + cidx * 2])
         if b.tx != 0 {
-          b.tx += vp9_rac_get_prob(self.rac, self.prob[VP9_PC_TX16P + cidx * 2 + 1])
+          b.tx += vp9_rac_get_prob(
+            self.rac,
+            self.prob[VP9_PC_TX16P + cidx * 2 + 1],
+          )
         }
         self.counts[VP9_CT_TX16P + cidx * 3 + b.tx] += 1
       }
@@ -303,11 +305,7 @@ fn Vp9Decoder::decode_mode(self : Vp9Decoder) -> Unit {
   // vref: the reference used for the above/left ref context
   let vref = if b.intra == 0 {
     if b.comp != 0 {
-      b.refidx[if h.ref_sign_biases[h.var_comp_refs[0]] {
-        1
-      } else {
-        0
-      }]
+      b.refidx[if h.ref_sign_biases[h.var_comp_refs[0]] { 1 } else { 0 }]
     } else {
       b.refidx[0]
     }
@@ -447,7 +445,11 @@ fn Vp9Decoder::decode_mode_kf_modes(self : Vp9Decoder) -> Unit {
       b.mode[2] = vp9_rac_get_tree_kf_ymode(self.rac, amode[a0], lmode[l0 + 1])
       amode[a0] = b.mode[2]
       if b.bs != 10 {
-        b.mode[3] = vp9_rac_get_tree_kf_ymode(self.rac, amode[a0 + 1], b.mode[2])
+        b.mode[3] = vp9_rac_get_tree_kf_ymode(
+          self.rac,
+          amode[a0 + 1],
+          b.mode[2],
+        )
         lmode[l0 + 1] = b.mode[3]
         amode[a0 + 1] = b.mode[3]
       } else {
@@ -486,7 +488,11 @@ fn Vp9Decoder::decode_mode_kf_modes(self : Vp9Decoder) -> Unit {
 ///|
 /// The inter branch of `decode_mode`: comp flag, references, mode, filter
 /// and motion vectors.
-fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool) -> Unit {
+fn Vp9Decoder::decode_mode_inter(
+  self : Vp9Decoder,
+  have_a : Bool,
+  have_l : Bool,
+) -> Unit {
   let b = self.b
   let h = self.header
   let row7 = self.b_row & 7
@@ -499,11 +505,7 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
   } else {
     // comp_pred flag
     if h.comp_pred_mode != 2 {
-      b.comp = if h.comp_pred_mode == 1 {
-        1
-      } else {
-        0
-      }
+      b.comp = if h.comp_pred_mode == 1 { 1 } else { 0 }
     } else {
       let cidx = if have_a {
         if have_l {
@@ -511,14 +513,16 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
             4
           } else if self.above_comp[col] != 0 {
             2 +
-            (if self.left_intra[row7] != 0 || self.left_ref[row7] == h.fix_comp_ref {
+            (if self.left_intra[row7] != 0 ||
+              self.left_ref[row7] == h.fix_comp_ref {
               1
             } else {
               0
             })
           } else if self.left_comp[row7] != 0 {
             2 +
-            (if self.above_intra[col] != 0 || self.above_ref[col] == h.fix_comp_ref {
+            (if self.above_intra[col] != 0 ||
+              self.above_ref[col] == h.fix_comp_ref {
               1
             } else {
               0
@@ -539,7 +543,8 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
           }
         } else if self.above_comp[col] != 0 {
           3
-        } else if self.above_intra[col] == 0 && self.above_ref[col] == h.fix_comp_ref {
+        } else if self.above_intra[col] == 0 &&
+          self.above_ref[col] == h.fix_comp_ref {
           1
         } else {
           0
@@ -547,7 +552,8 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
       } else if have_l {
         if self.left_comp[row7] != 0 {
           3
-        } else if self.left_intra[row7] == 0 && self.left_ref[row7] == h.fix_comp_ref {
+        } else if self.left_intra[row7] == 0 &&
+          self.left_ref[row7] == h.fix_comp_ref {
           1
         } else {
           0
@@ -562,11 +568,7 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
     if b.comp != 0 {
       // two references
       self.comp_inter_blocks = self.comp_inter_blocks + 1
-      let fix_idx = if h.ref_sign_biases[h.fix_comp_ref] {
-        1
-      } else {
-        0
-      }
+      let fix_idx = if h.ref_sign_biases[h.fix_comp_ref] { 1 } else { 0 }
       let var_idx = 1 - fix_idx
       b.refidx[fix_idx] = h.fix_comp_ref
       let cidx = if have_a {
@@ -577,20 +579,11 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
             } else {
               1 +
               2 *
-              (if self.left_ref[row7] != h.var_comp_refs[1] {
-                1
-              } else {
-                0
-              })
+              (if self.left_ref[row7] != h.var_comp_refs[1] { 1 } else { 0 })
             }
           } else if self.left_intra[row7] != 0 {
             1 +
-            2 *
-            (if self.above_ref[col] != h.var_comp_refs[1] {
-              1
-            } else {
-              0
-            })
+            2 * (if self.above_ref[col] != h.var_comp_refs[1] { 1 } else { 0 })
           } else {
             let refl = self.left_ref[row7]
             let refa = self.above_ref[col]
@@ -630,33 +623,17 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
         } else if self.above_intra[col] != 0 {
           2
         } else if self.above_comp[col] != 0 {
-          4 * (if self.above_ref[col] != h.var_comp_refs[1] {
-            1
-          } else {
-            0
-          })
+          4 * (if self.above_ref[col] != h.var_comp_refs[1] { 1 } else { 0 })
         } else {
-          3 * (if self.above_ref[col] != h.var_comp_refs[1] {
-            1
-          } else {
-            0
-          })
+          3 * (if self.above_ref[col] != h.var_comp_refs[1] { 1 } else { 0 })
         }
       } else if have_l {
         if self.left_intra[row7] != 0 {
           2
         } else if self.left_comp[row7] != 0 {
-          4 * (if self.left_ref[row7] != h.var_comp_refs[1] {
-            1
-          } else {
-            0
-          })
+          4 * (if self.left_ref[row7] != h.var_comp_refs[1] { 1 } else { 0 })
         } else {
-          3 * (if self.left_ref[row7] != h.var_comp_refs[1] {
-            1
-          } else {
-            0
-          })
+          3 * (if self.left_ref[row7] != h.var_comp_refs[1] { 1 } else { 0 })
         }
       } else {
         2
@@ -671,18 +648,15 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
           if self.left_comp[row7] != 0 {
             if self.above_comp[col] != 0 {
               1 +
-              (if h.fix_comp_ref == 0 || self.left_ref[row7] == 0 ||
+              (if h.fix_comp_ref == 0 ||
+                self.left_ref[row7] == 0 ||
                 self.above_ref[col] == 0 {
                 1
               } else {
                 0
               })
             } else {
-              3 * (if self.above_ref[col] == 0 {
-                1
-              } else {
-                0
-              }) +
+              3 * (if self.above_ref[col] == 0 { 1 } else { 0 }) +
               (if h.fix_comp_ref == 0 || self.left_ref[row7] == 0 {
                 1
               } else {
@@ -690,64 +664,38 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
               })
             }
           } else if self.above_comp[col] != 0 {
-            3 * (if self.left_ref[row7] == 0 {
-              1
-            } else {
-              0
-            }) +
+            3 * (if self.left_ref[row7] == 0 { 1 } else { 0 }) +
             (if h.fix_comp_ref == 0 || self.above_ref[col] == 0 {
               1
             } else {
               0
             })
           } else {
-            2 * (if self.left_ref[row7] == 0 {
-              1
-            } else {
-              0
-            }) +
-            2 *
-            (if self.above_ref[col] == 0 {
-              1
-            } else {
-              0
-            })
+            2 * (if self.left_ref[row7] == 0 { 1 } else { 0 }) +
+            2 * (if self.above_ref[col] == 0 { 1 } else { 0 })
           }
         } else if self.above_intra[col] != 0 {
           2
         } else if self.above_comp[col] != 0 {
           1 +
-          (if h.fix_comp_ref == 0 || self.above_ref[col] == 0 {
-            1
-          } else {
-            0
-          })
+          (if h.fix_comp_ref == 0 || self.above_ref[col] == 0 { 1 } else { 0 })
         } else {
-          4 * (if self.above_ref[col] == 0 {
-            1
-          } else {
-            0
-          })
+          4 * (if self.above_ref[col] == 0 { 1 } else { 0 })
         }
       } else if have_l && self.left_intra[row7] == 0 {
         if self.left_comp[row7] != 0 {
           1 +
-          (if h.fix_comp_ref == 0 || self.left_ref[row7] == 0 {
-            1
-          } else {
-            0
-          })
+          (if h.fix_comp_ref == 0 || self.left_ref[row7] == 0 { 1 } else { 0 })
         } else {
-          4 * (if self.left_ref[row7] == 0 {
-            1
-          } else {
-            0
-          })
+          4 * (if self.left_ref[row7] == 0 { 1 } else { 0 })
         }
       } else {
         2
       }
-      let bit = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_SINGLE_REF + cidx * 2])
+      let bit = vp9_rac_get_prob(
+        self.rac,
+        self.prob[VP9_PC_SINGLE_REF + cidx * 2],
+      )
       self.counts[VP9_CT_SINGLE_REF + cidx * 4 + bit] += 1
       if bit == 0 {
         b.refidx[0] = 0
@@ -768,11 +716,7 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
               } else if self.above_ref[col] == 0 {
                 3
               } else {
-                4 * (if self.above_ref[col] == 1 {
-                  1
-                } else {
-                  0
-                })
+                4 * (if self.above_ref[col] == 1 { 1 } else { 0 })
               }
             } else if self.above_intra[col] != 0 {
               if self.left_intra[row7] != 0 {
@@ -788,11 +732,7 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
               } else if self.left_ref[row7] == 0 {
                 3
               } else {
-                4 * (if self.left_ref[row7] == 1 {
-                  1
-                } else {
-                  0
-                })
+                4 * (if self.left_ref[row7] == 1 { 1 } else { 0 })
               }
             } else if self.above_comp[col] != 0 {
               if self.left_comp[row7] != 0 {
@@ -815,12 +755,7 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
                   0
                 })
               } else {
-                3 *
-                (if self.left_ref[row7] == 1 {
-                  1
-                } else {
-                  0
-                }) +
+                3 * (if self.left_ref[row7] == 1 { 1 } else { 0 }) +
                 (if h.fix_comp_ref == 1 || self.above_ref[col] == 1 {
                   1
                 } else {
@@ -837,12 +772,7 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
                   0
                 })
               } else {
-                3 *
-                (if self.above_ref[col] == 1 {
-                  1
-                } else {
-                  0
-                }) +
+                3 * (if self.above_ref[col] == 1 { 1 } else { 0 }) +
                 (if h.fix_comp_ref == 1 || self.left_ref[row7] == 1 {
                   1
                 } else {
@@ -853,69 +783,48 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
               if self.left_ref[row7] == 0 {
                 3
               } else {
-                4 * (if self.left_ref[row7] == 1 {
-                  1
-                } else {
-                  0
-                })
+                4 * (if self.left_ref[row7] == 1 { 1 } else { 0 })
               }
             } else if self.left_ref[row7] == 0 {
-              4 * (if self.above_ref[col] == 1 {
-                1
-              } else {
-                0
-              })
+              4 * (if self.above_ref[col] == 1 { 1 } else { 0 })
             } else {
-              2 *
-              (if self.left_ref[row7] == 1 {
-                1
-              } else {
-                0
-              }) +
-              2 *
-              (if self.above_ref[col] == 1 {
-                1
-              } else {
-                0
-              })
+              2 * (if self.left_ref[row7] == 1 { 1 } else { 0 }) +
+              2 * (if self.above_ref[col] == 1 { 1 } else { 0 })
             }
           } else if self.above_intra[col] != 0 ||
             (self.above_comp[col] == 0 && self.above_ref[col] == 0) {
             2
           } else if self.above_comp[col] != 0 {
-            3 * (if h.fix_comp_ref == 1 || self.above_ref[col] == 1 {
+            3 *
+            (if h.fix_comp_ref == 1 || self.above_ref[col] == 1 {
               1
             } else {
               0
             })
           } else {
-            4 * (if self.above_ref[col] == 1 {
-              1
-            } else {
-              0
-            })
+            4 * (if self.above_ref[col] == 1 { 1 } else { 0 })
           }
         } else if have_l {
           if self.left_intra[row7] != 0 ||
             (self.left_comp[row7] == 0 && self.left_ref[row7] == 0) {
             2
           } else if self.left_comp[row7] != 0 {
-            3 * (if h.fix_comp_ref == 1 || self.left_ref[row7] == 1 {
+            3 *
+            (if h.fix_comp_ref == 1 || self.left_ref[row7] == 1 {
               1
             } else {
               0
             })
           } else {
-            4 * (if self.left_ref[row7] == 1 {
-              1
-            } else {
-              0
-            })
+            4 * (if self.left_ref[row7] == 1 { 1 } else { 0 })
           }
         } else {
           2
         }
-        let bit2 = vp9_rac_get_prob(self.rac, self.prob[VP9_PC_SINGLE_REF + cidx2 * 2 + 1])
+        let bit2 = vp9_rac_get_prob(
+          self.rac,
+          self.prob[VP9_PC_SINGLE_REF + cidx2 * 2 + 1],
+        )
         self.counts[VP9_CT_SINGLE_REF + cidx2 * 4 + 2 + bit2] += 1
         b.refidx[0] = 1 + bit2
       }
@@ -930,10 +839,10 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
       b.mode[2] = 12
       b.mode[3] = 12
     } else {
-      let cidx = vp9_inter_mode_ctx_lut[
-        self.above_mode[col + vp9_mode_off_tab(b.bs)] * 14 +
-        self.left_mode[row7 + vp9_mode_off_tab(b.bs)]
-      ]
+      let cidx = vp9_inter_mode_ctx_lut[self.above_mode[col +
+        vp9_mode_off_tab(b.bs)] *
+        14 +
+        self.left_mode[row7 + vp9_mode_off_tab(b.bs)]]
       b.mode[0] = vp9_rac_get_tree_flat_ctx(
         self.rac,
         vp9_inter_mode_tree,
@@ -983,7 +892,8 @@ fn Vp9Decoder::decode_mode_inter(self : Vp9Decoder, have_a : Bool, have_l : Bool
   }
   // per-sub-block modes + motion vectors
   if b.bs > 9 {
-    let cidx = vp9_inter_mode_ctx_lut[self.above_mode[col] * 14 + self.left_mode[row7]]
+    let cidx = vp9_inter_mode_ctx_lut[self.above_mode[col] * 14 +
+      self.left_mode[row7]]
     b.mode[0] = vp9_rac_get_tree_flat_ctx(
       self.rac,
       vp9_inter_mode_tree,

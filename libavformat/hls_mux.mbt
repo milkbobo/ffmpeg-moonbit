@@ -10,10 +10,10 @@
 /// ceiling of the largest segment duration".
 pub fn hls_write_media_playlist(
   segments : ArrayView[(String, Double)],
-  target_duration? : Int32 = 0,
-  media_sequence? : Int64 = 0L,
-  version? : Int32 = 3,
-  endlist? : Bool = true,
+  target_duration~ : Int32 = 0,
+  media_sequence~ : Int64 = 0L,
+  version~ : Int32 = 3,
+  endlist~ : Bool = true,
 ) -> String {
   let mut max_duration = 0.0
   for entry in segments {
@@ -25,7 +25,11 @@ pub fn hls_write_media_playlist(
     target_duration
   } else {
     let v = max_duration.to_int()
-    if max_duration > v.to_double() { v + 1 } else { v }
+    if max_duration > v.to_double() {
+      v + 1
+    } else {
+      v
+    }
   }
   let sb = StringBuilder()
   sb.write_string("#EXTM3U\n")
@@ -48,7 +52,7 @@ pub fn hls_write_media_playlist(
 /// `(uri, bandwidth, width, height, codecs)`.
 pub fn hls_write_master_playlist(
   variants : ArrayView[(String, Int32, Int32, Int32, String)],
-  version? : Int32 = 3,
+  version~ : Int32 = 3,
 ) -> String {
   let sb = StringBuilder()
   sb.write_string("#EXTM3U\n")

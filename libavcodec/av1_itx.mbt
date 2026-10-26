@@ -9,13 +9,13 @@
 /// One entry per (tx_size_log2, Tx1dType) following `dav1d_tx1d_fns`.
 /// DCT = 0, ADST = 1, FLIPADST = 2, IDENTITY = 3 (dav1d `enum Tx1dType`).
 fn av1_itx_1d(
-  lw : Int,
-  kind : Int,
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  lw : Int32,
+  kind : Int32,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
 ) -> Unit {
   match (lw, kind) {
     (0, 0) => av1_inv_dct4_1d(c, base, stride, min, max)
@@ -38,7 +38,7 @@ fn av1_itx_1d(
 }
 
 ///|
-fn clip_i(v : Int, min : Int, max : Int) -> Int {
+fn clip_i(v : Int32, min : Int32, max : Int32) -> Int32 {
   if v < min {
     min
   } else if v > max {
@@ -51,11 +51,11 @@ fn clip_i(v : Int, min : Int, max : Int) -> Int {
 ///|
 /// `inv_dct4_1d_internal_c` (tx64 variant folded into inv_dct32/64 chain).
 fn av1_inv_dct4_1d_internal(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
   tx64 : Bool,
 ) -> Unit {
   let in0 = c[base]
@@ -81,22 +81,22 @@ fn av1_inv_dct4_1d_internal(
 
 ///|
 fn av1_inv_dct4_1d(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
 ) -> Unit {
   av1_inv_dct4_1d_internal(c, base, stride, min, max, false)
 }
 
 ///|
 fn av1_inv_dct8_1d_internal(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
   tx64 : Bool,
 ) -> Unit {
   av1_inv_dct4_1d_internal(c, base, stride << 1, min, max, tx64)
@@ -141,22 +141,22 @@ fn av1_inv_dct8_1d_internal(
 
 ///|
 fn av1_inv_dct8_1d(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
 ) -> Unit {
   av1_inv_dct8_1d_internal(c, base, stride, min, max, false)
 }
 
 ///|
 fn av1_inv_dct16_1d_internal(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
   tx64 : Bool,
 ) -> Unit {
   av1_inv_dct8_1d_internal(c, base, stride << 1, min, max, tx64)
@@ -243,22 +243,22 @@ fn av1_inv_dct16_1d_internal(
 
 ///|
 fn av1_inv_dct16_1d(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
 ) -> Unit {
   av1_inv_dct16_1d_internal(c, base, stride, min, max, false)
 }
 
 ///|
 fn av1_inv_dct32_1d_internal(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
   tx64 : Bool,
 ) -> Unit {
   av1_inv_dct16_1d_internal(c, base, stride << 1, min, max, tx64)
@@ -270,7 +270,24 @@ fn av1_inv_dct32_1d_internal(
   let in11 = c[base + 11 * stride]
   let in13 = c[base + 13 * stride]
   let in15 = c[base + 15 * stride]
-  let (t16a, t17a, t18a, t19a, t20a, t21a, t22a, t23a, t24a, t25a, t26a, t27a, t28a, t29a, t30a, t31a) = if tx64 {
+  let (
+    t16a,
+    t17a,
+    t18a,
+    t19a,
+    t20a,
+    t21a,
+    t22a,
+    t23a,
+    t24a,
+    t25a,
+    t26a,
+    t27a,
+    t28a,
+    t29a,
+    t30a,
+    t31a,
+  ) = if tx64 {
     (
       (in1 * 201 + 2048) >> 12,
       (in15 * -2751 + 2048) >> 12,
@@ -440,7 +457,11 @@ fn av1_inv_dct32_1d_internal(
 }
 
 ///|
-fn av1_inv_identity4_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
+fn av1_inv_identity4_1d(
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+) -> Unit {
   for i in 0..<4 {
     let x = base + stride * i
     let v = c[x]
@@ -449,7 +470,11 @@ fn av1_inv_identity4_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
 }
 
 ///|
-fn av1_inv_identity8_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
+fn av1_inv_identity8_1d(
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+) -> Unit {
   for i in 0..<8 {
     let x = base + stride * i
     c[x] = c[x] * 2
@@ -457,7 +482,11 @@ fn av1_inv_identity8_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
 }
 
 ///|
-fn av1_inv_identity16_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
+fn av1_inv_identity16_1d(
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+) -> Unit {
   for i in 0..<16 {
     let x = base + stride * i
     let v = c[x]
@@ -466,7 +495,11 @@ fn av1_inv_identity16_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit 
 }
 
 ///|
-fn av1_inv_identity32_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
+fn av1_inv_identity32_1d(
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+) -> Unit {
   for i in 0..<32 {
     let x = base + stride * i
     c[x] = c[x] * 4
@@ -476,24 +509,57 @@ fn av1_inv_identity32_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit 
 ///|
 /// `inv_adst4_1d_internal_c`; flip is the FLIPADST output order.
 fn av1_inv_adst4_1d(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
   flip : Bool,
 ) -> Unit {
   let in0 = c[base]
   let in1 = c[base + stride]
   let in2 = c[base + 2 * stride]
   let in3 = c[base + 3 * stride]
-  let o0 = ((1321 * in0 + (3803 - 4096) * in2 + (2482 - 4096) * in3 +
-      (3344 - 4096) * in1 + 2048) >> 12) + in2 + in3 + in1
-  let o1 = (((2482 - 4096) * in0 - 1321 * in2 - (3803 - 4096) * in3 +
-      (3344 - 4096) * in1 + 2048) >> 12) + in0 - in3 + in1
+  let o0 = (
+      (
+        1321 * in0 +
+        (3803 - 4096) * in2 +
+        (2482 - 4096) * in3 +
+        (3344 - 4096) * in1 +
+        2048
+      ) >>
+      12
+    ) +
+    in2 +
+    in3 +
+    in1
+  let o1 = (
+      (
+        (2482 - 4096) * in0 -
+        1321 * in2 -
+        (3803 - 4096) * in3 +
+        (3344 - 4096) * in1 +
+        2048
+      ) >>
+      12
+    ) +
+    in0 -
+    in3 +
+    in1
   let o2 = (209 * (in0 - in2 + in3) + 128) >> 8
-  let o3 = (((3803 - 4096) * in0 + (2482 - 4096) * in2 - 1321 * in3 -
-      (3344 - 4096) * in1 + 2048) >> 12) + in0 + in2 - in1
+  let o3 = (
+      (
+        (3803 - 4096) * in0 +
+        (2482 - 4096) * in2 -
+        1321 * in3 -
+        (3344 - 4096) * in1 +
+        2048
+      ) >>
+      12
+    ) +
+    in0 +
+    in2 -
+    in1
   let s0 = clip_i(o0, min, max)
   let s1 = clip_i(o1, min, max)
   let s2 = clip_i(o2, min, max)
@@ -514,11 +580,11 @@ fn av1_inv_adst4_1d(
 ///|
 /// `inv_adst8_1d_internal_c`.
 fn av1_inv_adst8_1d(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
   flip : Bool,
 ) -> Unit {
   let in0 = c[base]
@@ -550,10 +616,10 @@ fn av1_inv_adst8_1d(
   t6a = (((3784 - 4096) * t7 - 1567 * t6 + 2048) >> 12) + t7
   t7a = ((1567 * t7 + (3784 - 4096) * t6 + 2048) >> 12) + t6
   let o0 = clip_i(t0 + t2, min, max)
-  let o7 = -(clip_i(t1 + t3, min, max))
+  let o7 = -clip_i(t1 + t3, min, max)
   t2 = clip_i(t0 - t2, min, max)
   t3 = clip_i(t1 - t3, min, max)
-  let o1 = -(clip_i(t4a + t6a, min, max))
+  let o1 = -clip_i(t4a + t6a, min, max)
   let o6 = clip_i(t5a + t7a, min, max)
   t6 = clip_i(t4a - t6a, min, max)
   t7 = clip_i(t5a - t7a, min, max)
@@ -585,11 +651,11 @@ fn av1_inv_adst8_1d(
 ///|
 /// `inv_adst16_1d_internal_c`.
 fn av1_inv_adst16_1d(
-  c : FixedArray[Int],
-  base : Int,
-  stride : Int,
-  min : Int,
-  max : Int,
+  c : FixedArray[Int32],
+  base : Int32,
+  stride : Int32,
+  min : Int32,
+  max : Int32,
   flip : Bool,
 ) -> Unit {
   let inp = FixedArray::make(16, 0)
@@ -668,19 +734,19 @@ fn av1_inv_adst16_1d(
   t[15] = ((ta[15] * 1567 + ta[14] * (3784 - 4096) + 2048) >> 12) + ta[14]
   let o = FixedArray::make(16, 0)
   o[0] = clip_i(t[0] + t[2], min, max)
-  o[15] = -(clip_i(t[1] + t[3], min, max))
+  o[15] = -clip_i(t[1] + t[3], min, max)
   let t2a = clip_i(t[0] - t[2], min, max)
   let t3a = clip_i(t[1] - t[3], min, max)
-  o[3] = -(clip_i(t[4] + t[6], min, max))
+  o[3] = -clip_i(t[4] + t[6], min, max)
   o[12] = clip_i(t[5] + t[7], min, max)
   let t6 = clip_i(t[4] - t[6], min, max)
   let t7 = clip_i(t[5] - t[7], min, max)
-  o[1] = -(clip_i(ta[8] + ta[10], min, max))
+  o[1] = -clip_i(ta[8] + ta[10], min, max)
   o[14] = clip_i(ta[9] + ta[11], min, max)
   let t10 = clip_i(ta[8] - ta[10], min, max)
   let t11 = clip_i(ta[9] - ta[11], min, max)
   o[2] = clip_i(t[12] + t[14], min, max)
-  o[13] = -(clip_i(t[13] + t[15], min, max))
+  o[13] = -clip_i(t[13] + t[15], min, max)
   let t14a = clip_i(t[12] - t[14], min, max)
   let t15a = clip_i(t[13] - t[15], min, max)
   o[7] = -(((t2a + t3a) * 181 + 128) >> 8)
@@ -699,7 +765,7 @@ fn av1_inv_adst16_1d(
 
 ///|
 /// `dav1d_inv_wht4_1d_c`.
-fn av1_inv_wht4_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
+fn av1_inv_wht4_1d(c : FixedArray[Int32], base : Int32, stride : Int32) -> Unit {
   let in0 = c[base]
   let in1 = c[base + stride]
   let in2 = c[base + 2 * stride]
@@ -718,11 +784,11 @@ fn av1_inv_wht4_1d(c : FixedArray[Int], base : Int, stride : Int) -> Unit {
 ///|
 /// `inv_txfm_add_wht_wht_4x4_c`: lossless inverse transform + add.
 fn av1_inv_txfm_add_wht_wht_4x4(
-  dst : FixedArray[Int],
-  dst_off : Int,
-  dst_stride : Int,
-  coeff : FixedArray[Int],
-  bd_max : Int,
+  dst : FixedArray[Int32],
+  dst_off : Int32,
+  dst_stride : Int32,
+  coeff : FixedArray[Int32],
+  bd_max : Int32,
 ) -> Unit {
   let tmp = FixedArray::make(16, 0)
   for y in 0..<4 {
@@ -748,7 +814,7 @@ fn av1_inv_txfm_add_wht_wht_4x4(
 }
 
 ///|
-fn av1_clip_px(v : Int, bd_max : Int) -> Int {
+fn av1_clip_px(v : Int32, bd_max : Int32) -> Int32 {
   if v < 0 {
     0
   } else if v > bd_max {
@@ -762,15 +828,15 @@ fn av1_clip_px(v : Int, bd_max : Int) -> Int {
 /// Generic `inv_txfm_add_c` from dav1d itx_tmpl.c. `tx` is a RectTxfmSize,
 /// `txtp` a TxfmType. `shift` comes from the itxfm_fn table.
 fn av1_inv_txfm_add(
-  dst : FixedArray[Int],
-  dst_off : Int,
-  dst_stride : Int,
-  coeff : FixedArray[Int],
-  eob : Int,
-  tx : Int,
-  shift : Int,
-  txtp : Int,
-  bd_max : Int,
+  dst : FixedArray[Int32],
+  dst_off : Int32,
+  dst_stride : Int32,
+  coeff : FixedArray[Int32],
+  eob : Int32,
+  tx : Int32,
+  shift : Int32,
+  txtp : Int32,
+  bd_max : Int32,
 ) -> Unit {
   let lw = av1_txfm_info(tx, 2)
   let lh = av1_txfm_info(tx, 3)
@@ -778,7 +844,7 @@ fn av1_inv_txfm_add(
   let h = 4 << lh
   let has_dconly = txtp == 0 // DCT_DCT
   let is_rect2 = w * 2 == h || h * 2 == w
-  let rnd = (1 << shift) >> 1
+  let rnd = 1 << shift >> 1
   if eob < (if has_dconly { 1 } else { 0 }) {
     let mut dc = coeff[0]
     coeff[0] = 0
@@ -808,13 +874,17 @@ fn av1_inv_txfm_add(
   let col_clip_max = -col_clip_min - 1
   let tmp = FixedArray::make(64 * 64, 0)
   let last_nonzero_col = if txtps1 == 3 && txtps0 != 3 {
-    if sh - 1 < eob { sh - 1 } else { eob }
+    if sh - 1 < eob {
+      sh - 1
+    } else {
+      eob
+    }
   } else if txtps0 == 3 && txtps1 != 3 {
     eob >> (lw + 2)
   } else {
     av1_lnz(tx, eob)
   }
-  for y in 0..=last_nonzero_col {
+  for y in 0..<=last_nonzero_col {
     let cbase = y * w
     if is_rect2 {
       for x in 0..<sw {
@@ -853,14 +923,14 @@ fn av1_inv_txfm_add(
 /// `itxfm_add` dispatch: WHT_WHT special-cased, shift per dav1d's macro
 /// table (`inv_txfm_fn(w, h, shift)`).
 pub fn av1_itxfm_add(
-  dst : FixedArray[Int],
-  dst_off : Int,
-  dst_stride : Int,
-  coeff : FixedArray[Int],
-  eob : Int,
-  tx : Int,
-  txtp : Int,
-  bd_max : Int,
+  dst : FixedArray[Int32],
+  dst_off : Int32,
+  dst_stride : Int32,
+  coeff : FixedArray[Int32],
+  eob : Int32,
+  tx : Int32,
+  txtp : Int32,
+  bd_max : Int32,
 ) -> Unit {
   if tx == 0 && txtp == 16 {
     // TX_4X4 + WHT_WHT (lossless)
@@ -877,7 +947,7 @@ pub fn av1_itxfm_add(
 
 ///|
 /// Shift table from `inv_txfm_fn84( , 4, 4, 0)` etc.
-fn av1_itx_shift(lw : Int, lh : Int) -> Int {
+fn av1_itx_shift(lw : Int32, lh : Int32) -> Int32 {
   match (lw, lh) {
     (0, 0) => 0 // 4x4
     (0, 1) => 0 // 4x8

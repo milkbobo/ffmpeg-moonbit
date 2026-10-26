@@ -46,4 +46,3 @@ let hevc_scaling_b64 : Bytes = bcat([
   b"E6s+dIOyFaS8AAABUAGEDQIAA4DwAAFnCQABmRaAAAAAAQIB4JL/2Ozu9+15BuRma4TC10g8jvHop/uzCAKa1c3zIcynCwAAAVAB",
   b"hA0CAAOBXQABaJcAAZfegA==",
 ])
-

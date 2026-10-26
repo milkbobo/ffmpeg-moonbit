@@ -17,16 +17,36 @@
 ///|
 /// Flat `ProbContext` offsets (C struct order, 311 entries total).
 const VP9_PC_Y_MODE : Int32 = 0 // [4][9]
+
+///|
 const VP9_PC_UV_MODE : Int32 = 36 // [10][9]
+
+///|
 const VP9_PC_FILTER : Int32 = 126 // [4][2]
+
+///|
 const VP9_PC_MV_MODE : Int32 = 134 // [7][3]
+
+///|
 const VP9_PC_INTRA : Int32 = 155 // [4]
+
+///|
 const VP9_PC_COMP : Int32 = 159 // [5]
+
+///|
 const VP9_PC_SINGLE_REF : Int32 = 164 // [5][2]
+
+///|
 const VP9_PC_COMP_REF : Int32 = 174 // [5]
 // TX32P/TX16P/TX8P/SKIP offsets reuse VP9_PC_* constants in vp9_decode.mbt.
+
+///|
 const VP9_PC_MV_JOINT : Int32 = 194 // [3]
+
+///|
 const VP9_PC_MV_COMP : Int32 = 197 // [2][33]
+
+///|
 const VP9_PC_PARTITION : Int32 = 263 // [4][4][3]
 
 ///|
@@ -37,22 +57,56 @@ const VP9_MV_COMP_SIZE : Int32 = 33
 ///|
 /// Flat `counts` offsets (element order mirrors `ff_vp9_adapt_probs`).
 const VP9_CT_Y_MODE : Int32 = 0 // [4][10]
+
+///|
 const VP9_CT_UV_MODE : Int32 = 40 // [10][10]
+
+///|
 const VP9_CT_FILTER : Int32 = 140 // [4][3]
+
+///|
 const VP9_CT_MV_MODE : Int32 = 152 // [7][4]
+
+///|
 const VP9_CT_INTRA : Int32 = 180 // [4][2]
+
+///|
 const VP9_CT_COMP : Int32 = 188 // [5][2]
+
+///|
 const VP9_CT_SINGLE_REF : Int32 = 198 // [5][2][2]
+
+///|
 const VP9_CT_COMP_REF : Int32 = 218 // [5][2]
+
+///|
 const VP9_CT_TX32P : Int32 = 228 // [2][4]
+
+///|
 const VP9_CT_TX16P : Int32 = 236 // [2][3]
+
+///|
 const VP9_CT_TX8P : Int32 = 242 // [2][2]
+
+///|
 const VP9_CT_SKIP : Int32 = 246 // [3][2]
+
+///|
 const VP9_CT_MV_JOINT : Int32 = 252 // [4]
+
+///|
 const VP9_CT_MV_COMP : Int32 = 256 // [2][51]
+
+///|
 const VP9_CT_PARTITION : Int32 = 358 // [4][4][4]
+
+///|
 const VP9_CT_COEF : Int32 = 422 // [4][2][2][6][6][3]
+
+///|
 const VP9_CT_EOB : Int32 = 2150 // [4][2][2][6][6][2]
+
+///|
 const VP9_CT_SIZE : Int32 = 3302
 
 ///|
@@ -75,20 +129,12 @@ fn vp9_adapt_prob(
   if ct == 0 {
     return
   }
-  let uf = update_factor * (if ct < max_count {
-    ct
-  } else {
+  let uf = update_factor *
+    (if ct < max_count { ct } else { max_count }) /
     max_count
-  }) / max_count
   let p1 = probs[idx]
   let mut p2 = (ct0 * 256 + ct / 2) / ct
-  p2 = if p2 < 1 {
-    1
-  } else if p2 > 255 {
-    255
-  } else {
-    p2
-  }
+  p2 = if p2 < 1 { 1 } else if p2 > 255 { 255 } else { p2 }
   // (p1 * (256 - update_factor) + p2 * update_factor + 128) >> 8, with
   // the C arithmetic shift: negative adjustments must floor (not truncate
   // toward zero) or adapted probabilities drift by +1
@@ -130,7 +176,14 @@ fn Vp9Decoder::adapt_probs(self : Vp9Decoder) -> Unit {
               24,
               uf,
             )
-            vp9_adapt_prob(self.prob_ctx_coef, pp + 2, c[ci + 1], c[ci + 2], 24, uf)
+            vp9_adapt_prob(
+              self.prob_ctx_coef,
+              pp + 2,
+              c[ci + 1],
+              c[ci + 2],
+              24,
+              uf,
+            )
           }
         }
       }
@@ -202,7 +255,14 @@ fn Vp9Decoder::adapt_probs(self : Vp9Decoder) -> Unit {
   if h.comp_pred_mode != 1 {
     for i in 0..<5 {
       let ci = VP9_CT_SINGLE_REF + i * 4
-      vp9_adapt_prob(p, slot + VP9_PC_SINGLE_REF + i * 2, c[ci], c[ci + 1], 20, 128)
+      vp9_adapt_prob(
+        p,
+        slot + VP9_PC_SINGLE_REF + i * 2,
+        c[ci],
+        c[ci + 1],
+        20,
+        128,
+      )
       vp9_adapt_prob(
         p,
         slot + VP9_PC_SINGLE_REF + i * 2 + 1,
@@ -244,7 +304,14 @@ fn Vp9Decoder::adapt_probs(self : Vp9Decoder) -> Unit {
         20,
         128,
       )
-      vp9_adapt_prob(p, slot + VP9_PC_TX16P + i * 2 + 1, c[c16 + 1], c[c16 + 2], 20, 128)
+      vp9_adapt_prob(
+        p,
+        slot + VP9_PC_TX16P + i * 2 + 1,
+        c[c16 + 1],
+        c[c16 + 2],
+        20,
+        128,
+      )
       vp9_adapt_prob(
         p,
         slot + VP9_PC_TX32P + i * 3,
@@ -261,7 +328,14 @@ fn Vp9Decoder::adapt_probs(self : Vp9Decoder) -> Unit {
         20,
         128,
       )
-      vp9_adapt_prob(p, slot + VP9_PC_TX32P + i * 3 + 2, c[c32 + 2], c[c32 + 3], 20, 128)
+      vp9_adapt_prob(
+        p,
+        slot + VP9_PC_TX32P + i * 3 + 2,
+        c[c32 + 2],
+        c[c32 + 3],
+        20,
+        128,
+      )
     }
   }
   // interpolation filter
@@ -310,14 +384,28 @@ fn Vp9Decoder::adapt_probs(self : Vp9Decoder) -> Unit {
     vp9_adapt_prob(p, pi + 6, c[cb + 2 + 4], c[cb + 2 + 5], 20, 128)
     sum -= c[cb + 2 + 6]
     vp9_adapt_prob(p, pi + 7, c[cb + 2 + 6], sum, 20, 128)
-    vp9_adapt_prob(p, pi + 8, c[cb + 2 + 7] + c[cb + 2 + 8], c[cb + 2 + 9] + c[cb + 2 + 10], 20, 128)
+    vp9_adapt_prob(
+      p,
+      pi + 8,
+      c[cb + 2 + 7] + c[cb + 2 + 8],
+      c[cb + 2 + 9] + c[cb + 2 + 10],
+      20,
+      128,
+    )
     vp9_adapt_prob(p, pi + 9, c[cb + 2 + 7], c[cb + 2 + 8], 20, 128)
     vp9_adapt_prob(p, pi + 10, c[cb + 2 + 9], c[cb + 2 + 10], 20, 128)
     // class0
     vp9_adapt_prob(p, pi + 11, c[cb + 13], c[cb + 14], 20, 128)
     // bits
     for j in 0..<10 {
-      vp9_adapt_prob(p, pi + 12 + j, c[cb + 15 + j * 2], c[cb + 16 + j * 2], 20, 128)
+      vp9_adapt_prob(
+        p,
+        pi + 12 + j,
+        c[cb + 15 + j * 2],
+        c[cb + 16 + j * 2],
+        20,
+        128,
+      )
     }
     // class0_fp
     for j in 0..<2 {
@@ -416,7 +504,8 @@ fn Vp9Decoder::commit_prob_ctx(self : Vp9Decoder) -> Unit {
             // tail) while the context copy stores 3
             let q = vp9_coef_base(tx, pl, inter) + (band * 6 + ctxn) * 11
             for n in 0..<3 {
-              self.prob_ctx_coef[pb + (band * 6 + ctxn) * 3 + n] = self.prob_coef[q + n]
+              self.prob_ctx_coef[pb + (band * 6 + ctxn) * 3 + n] = self.prob_coef[q +
+                n]
             }
           }
         }

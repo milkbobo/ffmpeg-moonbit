@@ -13,7 +13,11 @@ test "opus rc: 448 mixed entropy states match FFmpeg C" {
       let result = match op % 7 {
         0 => rc.decode_log(1 + seed % 12).unwrap()
         1 => rc.decode_cdf(cdf).unwrap()
-        2 => rc.decode_uint(if op < 7 { 251U } else { 65537U }).unwrap().reinterpret_as_int()
+        2 =>
+          rc
+          .decode_uint(if op < 7 { 251U } else { 65537U })
+          .unwrap()
+          .reinterpret_as_int()
         3 => rc.decode_step(1 + seed % 24).unwrap()
         4 => rc.decode_tri(2 * (1 + seed % 32)).unwrap()
         5 => rc.decode_laplace(6000 + seed * 13, 9000 + seed * 31).unwrap()

@@ -71,11 +71,7 @@ fn apng_put_u32(out : Array[Byte], v : Int32) -> Unit {
 }
 
 ///|
-fn apng_put_chunk(
-  out : Array[Byte],
-  kind : Bytes,
-  body : Array[Byte],
-) -> Unit {
+fn apng_put_chunk(out : Array[Byte], kind : Bytes, body : Array[Byte]) -> Unit {
   apng_put_u32(out, body.length())
   let typed : Array[Byte] = []
   for b in kind {
@@ -271,8 +267,7 @@ fn apng_compose_frame(
     for y in 0..<spec.height {
       for x in 0..<spec.width {
         let src = (y * spec.width + x) * 4
-        let dst = (spec.y_offset + y) * canvas_stride +
-          (spec.x_offset + x) * 4
+        let dst = (spec.y_offset + y) * canvas_stride + (spec.x_offset + x) * 4
         out[dst] = source[src]
         out[dst + 1] = source[src + 1]
         out[dst + 2] = source[src + 2]
@@ -283,8 +278,7 @@ fn apng_compose_frame(
     for y in 0..<spec.height {
       for x in 0..<spec.width {
         let src = (y * spec.width + x) * 4
-        let dst = (spec.y_offset + y) * canvas_stride +
-          (spec.x_offset + x) * 4
+        let dst = (spec.y_offset + y) * canvas_stride + (spec.x_offset + x) * 4
         let fg_a = source[src + 3].to_int()
         if fg_a == 255 {
           out[dst] = source[src]
@@ -342,8 +336,7 @@ fn apng_compose_frame(
     }
     for y in 0..<spec.height {
       for x in 0..<spec.width {
-        let dst = (spec.y_offset + y) * canvas_stride +
-          (spec.x_offset + x) * 4
+        let dst = (spec.y_offset + y) * canvas_stride + (spec.x_offset + x) * 4
         next[dst] = b'\x00'
         next[dst + 1] = b'\x00'
         next[dst + 2] = b'\x00'
@@ -356,7 +349,10 @@ fn apng_compose_frame(
 }
 
 ///|
-fn apng_parse_fctl(body : Bytes, length : Int32) -> Result[ApngFrameSpec, String] {
+fn apng_parse_fctl(
+  body : Bytes,
+  length : Int32,
+) -> Result[ApngFrameSpec, String] {
   if length != 26 {
     return Err("apng: fcTL must be 26 bytes")
   }
@@ -475,10 +471,11 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
         return Err("apng: fcTL before IHDR")
       }
       if pending is Some(spec) {
-        previous = match apng_compose_frame(
-          spec, bit_depth, color_type, compression, filter, interlace, plte,
-          trns, width, height, previous, frames,
-        ) {
+        previous = match
+          apng_compose_frame(
+            spec, bit_depth, color_type, compression, filter, interlace, plte, trns,
+            width, height, previous, frames,
+          ) {
           Ok(canvas) => canvas
           Err(e) => return Err(e)
         }
@@ -497,10 +494,12 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
         return Err("apng: frame rectangle outside canvas")
       }
       if spec.sequence_number == 0 &&
-        (spec.width != width ||
+        (
+          spec.width != width ||
           spec.height != height ||
           spec.x_offset != 0 ||
-          spec.y_offset != 0) {
+          spec.y_offset != 0
+        ) {
         return Err("apng: first frame must cover the canvas")
       }
       if spec.blend_op != 0 && spec.blend_op != 1 {
@@ -518,11 +517,10 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
       // An IDAT without a preceding fcTL is the static default image and is
       // not part of the animation.
       match pending {
-        Some(spec) => {
+        Some(spec) =>
           for i in 0..<length {
             spec.data.push(data[body_off + i])
           }
-        }
         None => ()
       }
     } else if kind == "fdAT" {
@@ -530,11 +528,10 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
         return Err("apng: short fdAT")
       }
       match pending {
-        Some(spec) => {
+        Some(spec) =>
           for i in 4..<length {
             spec.data.push(data[body_off + i])
           }
-        }
         None => return Err("apng: fdAT without fcTL")
       }
     } else if kind == "IEND" {
@@ -553,10 +550,11 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
     return Err("apng: missing IEND")
   }
   if pending is Some(spec) {
-    previous = match apng_compose_frame(
-      spec, bit_depth, color_type, compression, filter, interlace, plte, trns,
-      width, height, previous, frames,
-    ) {
+    previous = match
+      apng_compose_frame(
+        spec, bit_depth, color_type, compression, filter, interlace, plte, trns,
+        width, height, previous, frames,
+      ) {
       Ok(canvas) => canvas
       Err(e) => return Err(e)
     }

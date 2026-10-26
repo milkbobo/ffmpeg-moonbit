@@ -29,7 +29,9 @@ fn hevc_yuv_md5(pic : HevcPicture) -> String {
 ///|
 /// `ff_hevc_decode_frames` returns pictures in decode order; sort a copy by
 /// POC to obtain presentation order for the framemd5 comparison. */
-fn hevc_sorted_by_poc(frames : Array[HevcDecodedFrame]) -> Array[HevcDecodedFrame] {
+fn hevc_sorted_by_poc(
+  frames : Array[HevcDecodedFrame],
+) -> Array[HevcDecodedFrame] {
   let arr = frames.copy()
   arr.sort_by((a, b) => a.poc.compare(b.poc))
   arr
@@ -93,14 +95,14 @@ test "hevc pb: four-slice pictures match FFmpeg (deblock+SAO)" {
 
 ///|
 test "hevc pb: four-slice pictures match FFmpeg (unfiltered)" {
-  hevc_check_stream_ex(hevc_pb_slices_b64, hevc_pb_slices_unfiltered_refs, false)
+  hevc_check_stream_ex(
+    hevc_pb_slices_b64, hevc_pb_slices_unfiltered_refs, false,
+  )
 }
 
 ///|
 test "hevc pb: PCM is rejected" {
   hevc_check_rejected(
-    hevc_pb_neg_pcm_b64,
-    "PATCHWELCOME: HEVC PCM is not supported",
+    hevc_pb_neg_pcm_b64, "PATCHWELCOME: HEVC PCM is not supported",
   )
 }
-

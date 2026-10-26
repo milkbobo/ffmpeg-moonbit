@@ -17,7 +17,9 @@ test "opus framing: self-delimiting codes preserve frame spans and following str
     for i in 0..<packet.frame_count {
       let start = packet.frame_offsets[i]
       assert_true(start >= 1)
-      assert_true(start + packet.frame_sizes[i] <= packet.packet_size - packet.padding)
+      assert_true(
+        start + packet.frame_sizes[i] <= packet.packet_size - packet.padding,
+      )
     }
   }
 }
@@ -25,10 +27,22 @@ test "opus framing: self-delimiting codes preserve frame spans and following str
 ///|
 test "opus framing: reject oversized frames and negative CBR payload" {
   let huge = Bytes::from_array(Array::make(1277, b'\x00')[:])
-  assert_true(@libavcodec.opus_parse_packet(huge) is Err("opus: frame size exceeds 1275 bytes"))
-  assert_true(@libavcodec.opus_parse_packet(b"\x83\x41\x01") is Err("opus: padding exceeds packet"))
-  for data in [b"\x80\x03\x01", b"\x81\x02\x01", b"\x82\x01\x03\x01", b"\x83\x02\x02\x01"] {
-    assert_true(@libavcodec.opus_parse_packet_with(data, true) is Err("opus: bad self-delimited frame length"))
+  assert_true(
+    @libavcodec.opus_parse_packet(huge)
+    is Err("opus: frame size exceeds 1275 bytes"),
+  )
+  assert_true(
+    @libavcodec.opus_parse_packet(b"\x83\x41\x01")
+    is Err("opus: padding exceeds packet"),
+  )
+  for
+    data in [
+      b"\x80\x03\x01", b"\x81\x02\x01", b"\x82\x01\x03\x01", b"\x83\x02\x02\x01",
+    ] {
+    assert_true(
+      @libavcodec.opus_parse_packet_with(data, true)
+      is Err("opus: bad self-delimited frame length"),
+    )
   }
   let dtx = @libavcodec.opus_parse_packet_with(b"\x80\x00\xee", true).unwrap()
   assert_eq(dtx.frame_sizes, [0])

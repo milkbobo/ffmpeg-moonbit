@@ -94,5 +94,9 @@ test "hevc main10: standalone intra IDR matches FFmpeg (deblock+SAO)" {
 
 ///|
 test "hevc main10: standalone intra IDR unfiltered matches FFmpeg" {
-  hevc_check_intra_bitdepth(hevc_m10b_idr_b64, false, hevc_m10b_unfiltered_refs[0])
+  hevc_check_intra_bitdepth(
+    hevc_m10b_idr_b64,
+    false,
+    hevc_m10b_unfiltered_refs[0],
+  )
 }

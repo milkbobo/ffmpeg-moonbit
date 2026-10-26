@@ -1314,7 +1314,8 @@ fn h264_decode_picture_ex(
       ) {
       Ok(_) => ()
       Err(error) => {
-        if !conceal_errors || field_picture ||
+        if !conceal_errors ||
+          field_picture ||
           error == "overlapping H.264 slices" {
           return Err(error)
         }
@@ -1332,11 +1333,17 @@ fn h264_decode_picture_ex(
       // first macroblock doubles the pair row. Everything downstream
       // (`ff_er_frame_end`, `guess_mv`, `filter181`) then works on the plain
       // `mb_width * mb_height` raster grid, which is what the state table uses.
-      let er_start = h264_er_raster_start(header.first_mb_in_slice, mb_width, mb_aff)
+      let er_start = h264_er_raster_start(
+        header.first_mb_in_slice,
+        mb_width,
+        mb_aff,
+      )
       let mut end = er_start
       for i = er_start; i < mb_count; i = i + 1 {
         if infos[i].slice_num == slice_base + number &&
-          infos[i].mb_type_bits != 0 { end = i }
+          infos[i].mb_type_bits != 0 {
+          end = i
+        }
       }
       if failed {
         end = if ctx.failed_mb >= 0 { ctx.failed_mb } else { end + 1 }
@@ -1378,7 +1385,9 @@ fn h264_decode_picture_ex(
   }
   let mut damaged = 0
   for status in er_status {
-    if (status & 14) != 0 { damaged += 1 }
+    if (status & 14) != 0 {
+      damaged += 1
+    }
   }
   if slice_error && damaged == 0 {
     return Err("damaged H.264 slice without missing macroblocks")
@@ -1410,7 +1419,9 @@ fn h264_decode_picture_ex(
           let filter_ready = slice_index < 0 ||
             slice_index >= filter_until_row.length() ||
             pair_y < filter_until_row[slice_index]
-          if !filter_ready { continue }
+          if !filter_ready {
+            continue
+          }
           for parity = 0; parity < 2; parity = parity + 1 {
             let idx = (pair_y + parity) * mb_width + x
             let info = infos[idx]
@@ -1455,8 +1466,7 @@ fn h264_decode_picture_ex(
         let filter_ready = slice_index < 0 ||
           slice_index >= filter_until_row.length() ||
           i / mb_width < filter_until_row[slice_index]
-        if info.mb_type_bits != 0 && info.deblock_idc != 1 &&
-          filter_ready {
+        if info.mb_type_bits != 0 && info.deblock_idc != 1 && filter_ready {
           h264_filter_mb(
             ctx,
             i,

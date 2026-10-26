@@ -138,59 +138,11 @@ fn av1_iclip(v : Int32, lo : Int32, hi : Int32) -> Int32 {
 /// `av1_mode_conv` + `av1_mode_to_angle_map` + edge-requirement table.
 let av1_mode_conv : FixedArray[Int32] = [
   // DC_PRED
-  av1_dc_128_pred,
-  av1_top_dc_pred,
-  av1_left_dc_pred,
-  av1_dc_pred,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
+  av1_dc_128_pred, av1_top_dc_pred, av1_left_dc_pred, av1_dc_pred, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   // PAETH_PRED
-  av1_dc_128_pred,
-  av1_vert_pred,
-  av1_hor_pred,
-  av1_paeth_pred,
+   av1_dc_128_pred, av1_vert_pred, av1_hor_pred, av1_paeth_pred,
 ]
 
 ///|
@@ -221,7 +173,7 @@ fn av1_prepare_intra_edges(
   filter_edge : Int32,
   edge_buf : FixedArray[Int32],
   topleft : Int32,
-  mid? : Int32 = 128,
+  mid~ : Int32 = 128,
 ) -> Int32 {
   let have_left = have_left_in
   let have_top = have_top_in
@@ -318,11 +270,7 @@ fn av1_prepare_intra_edges(
         }
       }
     } else {
-      let v = if have_left {
-        plane[dst_off - 1]
-      } else {
-        mid - 1
-      }
+      let v = if have_left { plane[dst_off - 1] } else { mid - 1 }
       for i in 0..<sz {
         edge_buf[top_base + i] = v
       }
@@ -374,12 +322,12 @@ fn av1_prepare_intra_edges(
       mid
     }
     if mode == av1_z2_pred && tw + th >= 6 && filter_edge != 0 {
-      edge_buf[topleft] = ((
-        (edge_buf[topleft - 1] + edge_buf[topleft + 1]) * 5 +
-        edge_buf[topleft] * 6 +
-        8
-      ) >>
-      4)
+      edge_buf[topleft] = (
+          (edge_buf[topleft - 1] + edge_buf[topleft + 1]) * 5 +
+          edge_buf[topleft] * 6 +
+          8
+        ) >>
+        4
     }
   }
   mode
@@ -477,7 +425,7 @@ fn av1_dc_gen(
   topleft : Int32,
   width : Int32,
   height : Int32,
-  bd_max? : Int32 = 255,
+  bd_max~ : Int32 = 255,
 ) -> Int32 {
   let mut dc = (width + height) >> 1
   for i in 0..<width {
@@ -491,9 +439,15 @@ fn av1_dc_gen(
     // dav1d: 8bpc uses (0x5556/0x3334, >>16); 10/12bpc (0xAAAB/0x6667, >>17)
     let hbd = bd_max > 255
     let m = if width > height * 2 || height > width * 2 {
-      if hbd { 0x6667 } else { 0x3334 }
+      if hbd {
+        0x6667
+      } else {
+        0x3334
+      }
+    } else if hbd {
+      0xAAAB
     } else {
-      if hbd { 0xAAAB } else { 0x5556 }
+      0x5556
     }
     dc = (dc * m) >> (if hbd { 17 } else { 16 })
   }
@@ -589,7 +543,7 @@ fn av1_ipred_smooth(
         (256 - wv) * bottom +
         wh * edge_buf[topleft - (1 + y)] +
         (256 - wh) * right
-      dst[dst_off + y * stride + x] = ((pred + 256) >> 9)
+      dst[dst_off + y * stride + x] = (pred + 256) >> 9
     }
   }
 }
@@ -610,7 +564,7 @@ fn av1_ipred_smooth_v(
     let wv = av1_sm_weights[height + y].to_int()
     for x in 0..<width {
       let pred = wv * edge_buf[topleft + 1 + x] + (256 - wv) * bottom
-      dst[dst_off + y * stride + x] = ((pred + 128) >> 8)
+      dst[dst_off + y * stride + x] = (pred + 128) >> 8
     }
   }
 }
@@ -631,7 +585,7 @@ fn av1_ipred_smooth_h(
     for x in 0..<width {
       let wh = av1_sm_weights[width + x].to_int()
       let pred = wh * edge_buf[topleft - (y + 1)] + (256 - wh) * right
-      dst[dst_off + y * stride + x] = ((pred + 128) >> 8)
+      dst[dst_off + y * stride + x] = (pred + 128) >> 8
     }
   }
 }
@@ -723,10 +677,9 @@ fn av1_filter_edge(
     let k = kernel[strength - 1]
     for j2 in 0..<5 {
       acc = acc +
-        in_buf[inp + av1_iclip(i - 2 + j2, from, to - 1)] *
-        k[j2].to_int()
+        in_buf[inp + av1_iclip(i - 2 + j2, from, to - 1)] * k[j2].to_int()
     }
-    out_buf[outp + i] = ((acc + 8) >> 4)
+    out_buf[outp + i] = (acc + 8) >> 4
     i = i + 1
   }
   while i < sz {
@@ -750,7 +703,7 @@ fn av1_upsample_edge(
   inp : Int32,
   from : Int32,
   to : Int32,
-  bd_max? : Int32 = 255,
+  bd_max~ : Int32 = 255,
 ) -> Unit {
   let kernel : FixedArray[Int32] = [-1, 9, 9, -1]
   let mut i = 0
@@ -758,8 +711,7 @@ fn av1_upsample_edge(
     out_buf[outp + i * 2] = in_buf[inp + av1_iclip(i, from, to - 1)]
     let mut s = 0
     for j in 0..<4 {
-      s = s +
-        in_buf[inp + av1_iclip(i + j - 1, from, to - 1)] * kernel[j]
+      s = s + in_buf[inp + av1_iclip(i + j - 1, from, to - 1)] * kernel[j]
     }
     out_buf[outp + i * 2 + 1] = av1_clip_pixel((s + 8) >> 4, bd_max~)
     i = i + 1
@@ -768,7 +720,7 @@ fn av1_upsample_edge(
 }
 
 ///|
-fn av1_clip_pixel(v : Int32, bd_max? : Int32 = 255) -> Int32 {
+fn av1_clip_pixel(v : Int32, bd_max~ : Int32 = 255) -> Int32 {
   av1_iclip(v, 0, bd_max)
 }
 
@@ -783,7 +735,7 @@ fn av1_ipred_z1(
   width : Int32,
   height : Int32,
   angle_in : Int32,
-  bd_max? : Int32 = 255,
+  bd_max~ : Int32 = 255,
 ) -> Unit {
   let is_sm = ((angle_in >> 9) & 0x1) != 0
   let enable_filter = angle_in >> 10
@@ -841,7 +793,7 @@ fn av1_ipred_z1(
     while x < width {
       if base < max_base_x {
         let v = top[base] * (64 - frac) + top[base + 1] * frac
-        dst[dst_off + y * stride + x] = ((v + 32) >> 6)
+        dst[dst_off + y * stride + x] = (v + 32) >> 6
         x = x + 1
         base = base + base_inc
       } else {
@@ -870,7 +822,7 @@ fn av1_ipred_z2(
   angle_in : Int32,
   max_width : Int32,
   max_height : Int32,
-  bd_max? : Int32 = 255,
+  bd_max~ : Int32 = 255,
 ) -> Unit {
   let is_sm = ((angle_in >> 9) & 0x1) != 0
   let enable_filter = angle_in >> 10
@@ -976,7 +928,7 @@ fn av1_ipred_z2(
         buf[left_base - base_y] * (64 - frac_y) +
         buf[left_base - (base_y + 1)] * frac_y
       }
-      dst[dst_off + y * stride + x] = ((v + 32) >> 6)
+      dst[dst_off + y * stride + x] = (v + 32) >> 6
       base_x = base_x + base_inc_x
       ypos = ypos - dy
     }
@@ -995,7 +947,7 @@ fn av1_ipred_z3(
   width : Int32,
   height : Int32,
   angle_in : Int32,
-  bd_max? : Int32 = 255,
+  bd_max~ : Int32 = 255,
 ) -> Unit {
   let is_sm = ((angle_in >> 9) & 0x1) != 0
   let enable_filter = angle_in >> 10
@@ -1060,7 +1012,7 @@ fn av1_ipred_z3(
           (64 - frac) +
           av1_z3_left(left, width, height, upsample_left, z3_filtered, base + 1) *
           frac
-        dst[dst_off + y * stride + x] = ((vv + 32) >> 6)
+        dst[dst_off + y * stride + x] = (vv + 32) >> 6
         y = y + 1
         base = base + base_inc
       } else {
@@ -1109,7 +1061,7 @@ fn av1_ipred_filter(
   width : Int32,
   height : Int32,
   filt_idx_in : Int32,
-  bd_max? : Int32 = 255,
+  bd_max~ : Int32 = 255,
 ) -> Unit {
   let filt_idx = filt_idx_in & 511
   // dav1d_filter_intra_taps is [5][64] int8; flt_ptr walks 8 taps per
@@ -1158,7 +1110,10 @@ fn av1_ipred_filter(
             av1_tap(fp + 32) * p4 +
             av1_tap(fp + 40) * p5 +
             av1_tap(fp + 48) * p6
-          dst[dst_y + yy * stride + x + xx] = av1_clip_pixel((acc + 8) >> 4, bd_max~)
+          dst[dst_y + yy * stride + x + xx] = av1_clip_pixel(
+            (acc + 8) >> 4,
+            bd_max~,
+          )
         }
       }
       x = x + 4
@@ -1249,7 +1204,7 @@ fn av1_cfl_predict(
   dc : Int32,
   ac : FixedArray[Int32],
   alpha : Int32,
-  bd_max? : Int32 = 255,
+  bd_max~ : Int32 = 255,
 ) -> Unit {
   for y in 0..<height {
     for x in 0..<width {
@@ -1317,8 +1272,8 @@ fn av1_ipred_predict(
   angle_flags : Int32,
   max_width : Int32,
   max_height : Int32,
-  bd_max? : Int32 = 255,
-  mid? : Int32 = 128,
+  bd_max~ : Int32 = 255,
+  mid~ : Int32 = 128,
 ) -> Unit {
   match m {
     0 => {
@@ -1350,21 +1305,54 @@ fn av1_ipred_predict(
       )
     6 =>
       av1_ipred_z1(
-        plane, dst_off, stride, edge_buf, topleft, width, height, angle_flags, bd_max~,
+        plane,
+        dst_off,
+        stride,
+        edge_buf,
+        topleft,
+        width,
+        height,
+        angle_flags,
+        bd_max~,
       )
     7 =>
       av1_ipred_z2(
-        plane, dst_off, stride, edge_buf, topleft, width, height, angle_flags, max_width,
-        max_height, bd_max~,
+        plane,
+        dst_off,
+        stride,
+        edge_buf,
+        topleft,
+        width,
+        height,
+        angle_flags,
+        max_width,
+        max_height,
+        bd_max~,
       )
     8 =>
       av1_ipred_z3(
-        plane, dst_off, stride, edge_buf, topleft, width, height, angle_flags, bd_max~,
+        plane,
+        dst_off,
+        stride,
+        edge_buf,
+        topleft,
+        width,
+        height,
+        angle_flags,
+        bd_max~,
       )
     _ =>
       // FILTER_PRED: angle_flags low bits hold the filter index.
       av1_ipred_filter(
-        plane, dst_off, stride, edge_buf, topleft, width, height, angle_flags, bd_max~,
+        plane,
+        dst_off,
+        stride,
+        edge_buf,
+        topleft,
+        width,
+        height,
+        angle_flags,
+        bd_max~,
       )
   }
 }
@@ -1377,8 +1365,8 @@ fn av1_cfl_dc(
   topleft : Int32,
   width : Int32,
   height : Int32,
-  bd_max? : Int32 = 255,
-  mid? : Int32 = 128,
+  bd_max~ : Int32 = 255,
+  mid~ : Int32 = 128,
 ) -> Int32 {
   match m {
     5 => mid // DC_128

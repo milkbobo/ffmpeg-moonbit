@@ -27,8 +27,12 @@ pub fn mp4_av_muxer_new(
   sample_rate : Int32,
   channels : Int32,
 ) -> Result[Mp4AvMuxer, String] {
-  if width <= 0 || height <= 0 || avcc.length() < 7 || sample_rate <= 0 ||
-    channels < 1 || channels > 7 {
+  if width <= 0 ||
+    height <= 0 ||
+    avcc.length() < 7 ||
+    sample_rate <= 0 ||
+    channels < 1 ||
+    channels > 7 {
     return Err("EINVAL: invalid MP4 A/V parameters")
   }
   let mut rate_ok = false
@@ -58,8 +62,8 @@ pub fn mp4_av_muxer_new(
 pub fn Mp4AvMuxer::write_video(
   self : Mp4AvMuxer,
   packet : Bytes,
-  duration? : Int32 = 3000,
-  keyframe? : Bool = false,
+  duration~ : Int32 = 3000,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: invalid MP4 video packet")
@@ -74,7 +78,7 @@ pub fn Mp4AvMuxer::write_video(
 pub fn Mp4AvMuxer::write_audio(
   self : Mp4AvMuxer,
   packet : Bytes,
-  duration? : Int32 = 1024,
+  duration~ : Int32 = 1024,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: invalid MP4 audio packet")
@@ -261,7 +265,11 @@ fn mp4_av_trak(
   }
   mp4_tag(
     hdlr_body,
-    if handler == "vide" { "VideoHandler" } else { "SoundHandler" },
+    if handler == "vide" {
+      "VideoHandler"
+    } else {
+      "SoundHandler"
+    },
   )
   hdlr_body.push(b'\x00')
   let hdlr = mp4_full_box("hdlr", 0, 0, hdlr_body)

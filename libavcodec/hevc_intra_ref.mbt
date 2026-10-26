@@ -164,7 +164,12 @@ pub fn hevc_intra_predict(
   let cand_up_right = na.cand_up_right &&
     !spin &&
     cur_tb_addr >
-    hevc_min_tb_addr_zs(sps, pps, (x_tb + size_in_tbs_h) & sps.tb_mask, y_tb - 1)
+    hevc_min_tb_addr_zs(
+      sps,
+      pps,
+      (x_tb + size_in_tbs_h) & sps.tb_mask,
+      y_tb - 1,
+    )
   let bottom_left_size = (
       (if y0 + 2 * size_in_luma_v < sps.height {
         y0 + 2 * size_in_luma_v

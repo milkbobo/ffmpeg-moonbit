@@ -6,9 +6,7 @@
 ///|
 test "wav muxer: 16-bit stereo round-trips through the demuxer" {
   let mux = wav_muxer_new(48000, 2, 16).unwrap()
-  let samples : Array[Int32] = [
-    0, -1, 32767, -32768, 1234, -4321, 255, -256,
-  ]
+  let samples : Array[Int32] = [0, -1, 32767, -32768, 1234, -4321, 255, -256]
   mux.write_samples(samples[:])
   let bytes = mux.finish()
   let demux = av_wav_open(bytes).unwrap()

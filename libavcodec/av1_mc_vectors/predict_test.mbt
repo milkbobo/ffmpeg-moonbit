@@ -42,10 +42,9 @@ test "AV1 scaled MV converts to dav1d start and step coordinates" {
 
 ///|
 test "AV1 plane prediction dispatches to existing unscaled and scaled MC" {
-  let src = FixedArray::makei(80 * 64, i => (i * 37 + (i / 80) * 13) & 255)
+  let src = FixedArray::makei(80 * 64, i => (i * 37 + i / 80 * 13) & 255)
   let plain = @av1_mc_core.av1_mc_predict_plane(
-    src, 80, 80, 64, 80, 64,
-    2, 3, 2, 2, -9, 17, 0, 0, 4, 8,
+    src, 80, 80, 64, 80, 64, 2, 3, 2, 2, -9, 17, 0, 0, 4, 8,
   )
   let expected_plain = @av1_mc_core.av1_mc_put_unscaled(
     src, 80, 80, 64, 10, 10, 8, 8, 2, 14, 4, 8,
@@ -55,8 +54,7 @@ test "AV1 plane prediction dispatches to existing unscaled and scaled MC" {
   }
 
   let scaled = @av1_mc_core.av1_mc_predict_plane(
-    src, 80, 80, 48, 64, 64,
-    2, 3, 2, 2, 7, -11, 0, 0, 0, 8,
+    src, 80, 80, 48, 64, 64, 2, 3, 2, 2, 7, -11, 0, 0, 0, 8,
   )
   let expected_scaled = @av1_mc_core.av1_mc_put_scaled(
     src, 80, 80, 48, 8, 8, 8640, 9792, 1280, 768, 0, 8,
@@ -65,8 +63,7 @@ test "AV1 plane prediction dispatches to existing unscaled and scaled MC" {
     assert_eq(scaled[i], expected_scaled[i])
   }
   let prep = @av1_mc_core.av1_mc_prepare_plane(
-    src, 80, 80, 48, 64, 64,
-    2, 3, 2, 2, 7, -11, 0, 0, 0, 8,
+    src, 80, 80, 48, 64, 64, 2, 3, 2, 2, 7, -11, 0, 0, 0, 8,
   )
   let expected_prep = @av1_mc_core.av1_mc_prep_scaled(
     src, 80, 80, 48, 8, 8, 8640, 9792, 1280, 768, 0, 8,

@@ -18,11 +18,15 @@ pub struct Vp9Frame {
 /// ```mbt check
 /// test {
 ///   let decoder = @libavcodec.vp9_decoder_new()
-///   assert_true(decoder.decode_packet(b"\x88") is Err("vp9: show_existing_frame references an empty slot"))
+///   assert_true(
+///     decoder.decode_packet(b"\x88")
+///     is Err("vp9: show_existing_frame references an empty slot"),
+///   )
 /// }
 /// ```
 pub fn Vp9Decoder::decode_packet(
-  self : Vp9Decoder, packet : Bytes,
+  self : Vp9Decoder,
+  packet : Bytes,
 ) -> Result[Array[Vp9Frame], String] {
   let split = match vp9_split_superframe(packet) {
     Ok(value) => value
@@ -35,7 +39,11 @@ pub fn Vp9Decoder::decode_packet(
       Ok(_) => ()
     }
     if self.frame_ready {
-      frames.push({ width: self.width, height: self.height, data: self.frame_bytes() })
+      frames.push({
+        width: self.width,
+        height: self.height,
+        data: self.frame_bytes(),
+      })
     }
   }
   Ok(frames)

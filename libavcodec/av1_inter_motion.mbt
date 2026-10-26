@@ -3,20 +3,20 @@
 /// References use dav1d's 0..6 indices. Segment REF/GLOBALMV/SKIP features
 /// (when `seg_present`) force the reference and inter mode.
 pub(all) struct Av1InterMotionParams {
-  bs : Int
-  bx4 : Int
-  by4 : Int
-  tile_col_start4 : Int
-  tile_col_end4 : Int
-  tile_row_start4 : Int
-  tile_row_end4 : Int
+  bs : Int32
+  bx4 : Int32
+  by4 : Int32
+  tile_col_start4 : Int32
+  tile_col_end4 : Int32
+  tile_row_start4 : Int32
+  tile_row_end4 : Int32
   top_has_right : Bool
   switchable_comp_refs : Bool
   skip_mode : Bool
-  skip_ref0 : Int
-  skip_ref1 : Int
+  skip_ref0 : Int32
+  skip_ref1 : Int32
   seg_present : Bool
-  seg_ref : Int // -1 = no REF feature
+  seg_ref : Int32 // -1 = no REF feature
   seg_globalmv : Bool
   seg_skip : Bool
 }
@@ -25,13 +25,13 @@ pub(all) struct Av1InterMotionParams {
 /// Motion syntax output before compound masking, interpolation filters,
 /// transform decoding, and pixel reconstruction.
 pub(all) struct Av1InterMotion {
-  ref0 : Int
-  find_ctx : Int
-  ref1 : Int
-  mode : Int
-  drl_idx : Int
-  mv0 : (Int, Int)
-  mv1 : (Int, Int)
+  ref0 : Int32
+  find_ctx : Int32
+  ref1 : Int32
+  mode : Int32
+  drl_idx : Int32
+  mv0 : (Int32, Int32)
+  mv1 : (Int32, Int32)
   has_subpel_filter : Bool
   skip_mode : Bool
 }
@@ -56,11 +56,8 @@ pub fn av1_inter_read_block_motion(
     (params.seg_ref == -1 && !params.seg_globalmv && !params.seg_skip)
   let is_comp = if params.skip_mode {
     true
-  } else if params.switchable_comp_refs && seg_comp_ok && bw4 > 1 &&
-    bh4 > 1 {
-    msac.decode_bool_adapt(
-      cdf.comp, av1_inter_comp_ctx(top, left) * 2,
-    ) != 0
+  } else if params.switchable_comp_refs && seg_comp_ok && bw4 > 1 && bh4 > 1 {
+    msac.decode_bool_adapt(cdf.comp, av1_inter_comp_ctx(top, left) * 2) != 0
   } else {
     false
   }
@@ -76,41 +73,86 @@ pub fn av1_inter_read_block_motion(
     av1_inter_read_refs(msac, cdf, top, left, false)
   }
   let stack = state.find(
-    params.tile_col_start4, params.tile_col_end4,
-    params.tile_row_start4, params.tile_row_end4,
-    ref0 + 1, if is_comp { ref1 + 1 } else { -1 },
-    params.bs, params.top_has_right, params.by4, params.bx4,
+    params.tile_col_start4,
+    params.tile_col_end4,
+    params.tile_row_start4,
+    params.tile_row_end4,
+    ref0 + 1,
+    if is_comp {
+      ref1 + 1
+    } else {
+      -1
+    },
+    params.bs,
+    params.top_has_right,
+    params.by4,
+    params.bx4,
   )
   if params.skip_mode {
     return {
-      ref0, ref1, find_ctx: stack.ctx, mode: 0, drl_idx: 0,
+      ref0,
+      ref1,
+      find_ctx: stack.ctx,
+      mode: 0,
+      drl_idx: 0,
       mv0: av1_rmv_fix_precision(
-        stack.cands[0].mv0, state.rf.force_integer_mv, state.rf.hp,
+        stack.cands[0].mv0,
+        state.rf.force_integer_mv,
+        state.rf.hp,
       ),
       mv1: av1_rmv_fix_precision(
-        stack.cands[0].mv1, state.rf.force_integer_mv, state.rf.hp,
+        stack.cands[0].mv1,
+        state.rf.force_integer_mv,
+        state.rf.hp,
       ),
-      has_subpel_filter: false, skip_mode: true,
+      has_subpel_filter: false,
+      skip_mode: true,
     }
   }
   if is_comp {
     let mv = av1_inter_read_compound_mv(
-      msac, cdf, state.rf, stack, ref0, ref1,
-      params.bs, params.by4, params.bx4,
+      msac,
+      cdf,
+      state.rf,
+      stack,
+      ref0,
+      ref1,
+      params.bs,
+      params.by4,
+      params.bx4,
     )
     return {
-      ref0, ref1, find_ctx: stack.ctx, mode: mv.mode, drl_idx: mv.drl_idx,
-      mv0: mv.mv0, mv1: mv.mv1,
-      has_subpel_filter: mv.has_subpel_filter, skip_mode: false,
+      ref0,
+      ref1,
+      find_ctx: stack.ctx,
+      mode: mv.mode,
+      drl_idx: mv.drl_idx,
+      mv0: mv.mv0,
+      mv1: mv.mv1,
+      has_subpel_filter: mv.has_subpel_filter,
+      skip_mode: false,
     }
   }
   let mv = av1_inter_read_single_mv(
-    msac, cdf, state.rf, stack, ref0,
-    params.bs, params.by4, params.bx4, seg_gmv,
+    msac,
+    cdf,
+    state.rf,
+    stack,
+    ref0,
+    params.bs,
+    params.by4,
+    params.bx4,
+    seg_gmv,
   )
   {
-    ref0, ref1: -1, find_ctx: stack.ctx, mode: mv.mode, drl_idx: mv.drl_idx,
-    mv0: mv.mv, mv1: (0, 0),
-    has_subpel_filter: mv.has_subpel_filter, skip_mode: false,
+    ref0,
+    ref1: -1,
+    find_ctx: stack.ctx,
+    mode: mv.mode,
+    drl_idx: mv.drl_idx,
+    mv0: mv.mv,
+    mv1: (0, 0),
+    has_subpel_filter: mv.has_subpel_filter,
+    skip_mode: false,
   }
 }

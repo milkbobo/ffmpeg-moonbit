@@ -144,7 +144,14 @@ pub fn vp9_parse_vpcc(extra : Bytes) -> (Int32, Int32, Int32, Int32)? {
 /// Malformed versions, channel maps and stream counts return None.
 pub fn opus_head_parse(extra : Bytes) -> (Int32, Int32, Int32)? {
   match @libavcodec.opus_parse_head(extra) {
-    Ok(head) => Some((head.channels, head.pre_skip, head.input_sample_rate.reinterpret_as_int()))
+    Ok(head) =>
+      Some(
+        (
+          head.channels,
+          head.pre_skip,
+          head.input_sample_rate.reinterpret_as_int(),
+        ),
+      )
     Err(_) => None
   }
 }

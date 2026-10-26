@@ -16,24 +16,24 @@
 pub struct Av1Msac {
   data : Bytes
   /// Next unread byte (like `buf_pos`).
-  mut pos : Int
+  mut pos : Int32
   mut dif : UInt64
-  mut rng : UInt
-  mut cnt : Int
+  mut rng : UInt32
+  mut cnt : Int32
   /// `allow_update_cdf` in dav1d (set once at init).
   allow_update_cdf : Bool
 }
 
 ///|
 /// `EC_WIN_SIZE` is 64 (bits of `dif`).
-let av1_ec_win_size : Int = 64
+let av1_ec_win_size : Int32 = 64
 
 ///|
 /// `clz` for nonzero UInt (dav1d common/intops.h `clz`).
-fn av1_clz(v : UInt) -> Int {
+fn av1_clz(v : UInt32) -> Int32 {
   let mut n = 0
   let mut x = v
-  while (x >> 31) == 0 {
+  while x >> 31 == 0 {
     n = n + 1
     x = x << 1
   }
@@ -65,7 +65,7 @@ fn Av1Msac::refill(self : Av1Msac) -> Unit {
 
 ///|
 /// `ctx_norm`: renormalize so 32768 <= rng < 65536.
-fn Av1Msac::norm(self : Av1Msac, dif : UInt64, rng : UInt) -> Unit {
+fn Av1Msac::norm(self : Av1Msac, dif : UInt64, rng : UInt32) -> Unit {
   let d = 15 ^ (31 ^ av1_clz(rng))
   let cnt = self.cnt
   self.dif = dif << d
@@ -80,10 +80,7 @@ fn Av1Msac::norm(self : Av1Msac, dif : UInt64, rng : UInt) -> Unit {
 
 ///|
 /// `dav1d_msac_init`.
-pub fn Av1Msac::init(
-  data : Bytes,
-  disable_cdf_update_flag : Bool,
-) -> Av1Msac {
+pub fn Av1Msac::init(data : Bytes, disable_cdf_update_flag : Bool) -> Av1Msac {
   let s : Av1Msac = {
     data,
     pos: 0,
@@ -98,12 +95,12 @@ pub fn Av1Msac::init(
 
 ///|
 /// `dav1d_msac_decode_bool_equi`: bool with probability 1/2.
-pub fn Av1Msac::decode_bool_equi(self : Av1Msac) -> UInt {
+pub fn Av1Msac::decode_bool_equi(self : Av1Msac) -> UInt32 {
   let r = self.rng
   let mut dif = self.dif
-  let mut v = ((r >> 8) << 7) + 4
+  let mut v = (r >> 8 << 7) + 4
   let vw = v.to_uint64() << (av1_ec_win_size - 16)
-  let ret : UInt = if dif >= vw { 1 } else { 0 }
+  let ret : UInt32 = if dif >= vw { 1 } else { 0 }
   if ret != 0 {
     dif = dif - vw
     v = v + (r - 2 * v)
@@ -114,12 +111,12 @@ pub fn Av1Msac::decode_bool_equi(self : Av1Msac) -> UInt {
 
 ///|
 /// `dav1d_msac_decode_bool`: bool with probability `f` (Q15).
-pub fn Av1Msac::decode_bool(self : Av1Msac, f : UInt) -> UInt {
+pub fn Av1Msac::decode_bool(self : Av1Msac, f : UInt32) -> UInt32 {
   let r = self.rng
   let mut dif = self.dif
   let mut v = (((r >> 8) * (f >> 6)) >> 1) + 4
   let vw = v.to_uint64() << (av1_ec_win_size - 16)
-  let ret : UInt = if dif >= vw { 1 } else { 0 }
+  let ret : UInt32 = if dif >= vw { 1 } else { 0 }
   if ret != 0 {
     dif = dif - vw
     v = v + (r - 2 * v)
@@ -128,7 +125,6 @@ pub fn Av1Msac::decode_bool(self : Av1Msac, f : UInt) -> UInt {
   1 - ret
 }
 
-
 ///|
 /// `dav1d_msac_decode_symbol_adapt`: symbol from (and possibly update) a
 /// Q15 CDF. `cdf_base` indexes `n_symbols + 1` slots (last = count).
@@ -136,14 +132,14 @@ pub fn Av1Msac::decode_bool(self : Av1Msac, f : UInt) -> UInt {
 pub fn Av1Msac::decode_symbol_adapt(
   self : Av1Msac,
   cdf : FixedArray[UInt16],
-  cdf_base : Int,
-  n_symbols : Int,
-) -> Int {
-  let c : UInt = (self.dif >> (av1_ec_win_size - 16)).to_uint()
+  cdf_base : Int32,
+  n_symbols : Int32,
+) -> Int32 {
+  let c : UInt32 = (self.dif >> (av1_ec_win_size - 16)).to_uint()
   let r = self.rng >> 8
   let n_u = n_symbols.reinterpret_as_uint()
-  let mut u : UInt = 0
-  let mut v : UInt = self.rng
+  let mut u : UInt32 = 0
+  let mut v : UInt32 = self.rng
   let mut val = 0
   while true {
     u = v
@@ -154,10 +150,7 @@ pub fn Av1Msac::decode_symbol_adapt(
     }
     val = val + 1
   }
-  self.norm(
-    self.dif - (v.to_uint64() << (av1_ec_win_size - 16)),
-    u - v,
-  )
+  self.norm(self.dif - (v.to_uint64() << (av1_ec_win_size - 16)), u - v)
   if self.allow_update_cdf {
     let count = cdf[cdf_base + n_symbols].to_uint()
     let rate = 4 +
@@ -174,8 +167,7 @@ pub fn Av1Msac::decode_symbol_adapt(
       cdf[cdf_base + i] = (x - (x >> rate)).to_uint16()
       i = i + 1
     }
-    cdf[cdf_base + n_symbols] = (count +
-        (if count < 32 { 1 } else { 0 })).to_uint16()
+    cdf[cdf_base + n_symbols] = (count + (if count < 32 { 1 } else { 0 })).to_uint16()
   }
   val
 }
@@ -186,8 +178,8 @@ pub fn Av1Msac::decode_symbol_adapt(
 pub fn Av1Msac::decode_bool_adapt(
   self : Av1Msac,
   cdf : FixedArray[UInt16],
-  cdf_base : Int,
-) -> UInt {
+  cdf_base : Int32,
+) -> UInt32 {
   let bit = self.decode_bool(cdf[cdf_base].to_uint())
   if self.allow_update_cdf {
     let count = cdf[cdf_base + 1].to_uint()
@@ -199,16 +191,15 @@ pub fn Av1Msac::decode_bool_adapt(
       let x = cdf[cdf_base].to_uint()
       cdf[cdf_base] = (x - (x >> rate)).to_uint16()
     }
-    cdf[cdf_base + 1] = (count +
-        (if count < 32 { 1 } else { 0 })).to_uint16()
+    cdf[cdf_base + 1] = (count + (if count < 32 { 1 } else { 0 })).to_uint16()
   }
   bit
 }
 
 ///|
 /// `dav1d_msac_decode_bools`: `n` raw bits MSB-first at probability 1/2.
-pub fn Av1Msac::decode_bools(self : Av1Msac, n : Int) -> UInt {
-  let mut v : UInt = 0
+pub fn Av1Msac::decode_bools(self : Av1Msac, n : Int32) -> UInt32 {
+  let mut v : UInt32 = 0
   for _ in 0..<n {
     v = (v << 1) | self.decode_bool_equi()
   }
@@ -217,13 +208,13 @@ pub fn Av1Msac::decode_bools(self : Av1Msac, n : Int) -> UInt {
 
 ///|
 /// `ulog2` as in dav1d common/intops.h.
-fn av1_ulog2(v : UInt) -> Int {
+fn av1_ulog2(v : UInt32) -> Int32 {
   31 - av1_clz(v)
 }
 
 ///|
 /// `dav1d_msac_decode_uniform`: uniform value in 0..n-1 (n > 1).
-pub fn Av1Msac::decode_uniform(self : Av1Msac, n : UInt) -> Int {
+pub fn Av1Msac::decode_uniform(self : Av1Msac, n : UInt32) -> Int32 {
   let l = av1_ulog2(n) + 1
   let m = (1U << l) - n
   let v = self.decode_bools(l - 1)
@@ -236,8 +227,8 @@ pub fn Av1Msac::decode_uniform(self : Av1Msac, n : UInt) -> Int {
 
 ///|
 /// `inv_recenter` from dav1d common/intops.h.
-fn av1_inv_recenter(r : UInt, v : UInt) -> UInt {
-  if v > (r << 1) {
+fn av1_inv_recenter(r : UInt32, v : UInt32) -> UInt32 {
+  if v > r << 1 {
     v
   } else if (v & 1) == 0 {
     (v >> 1) + r
@@ -250,12 +241,12 @@ fn av1_inv_recenter(r : UInt, v : UInt) -> UInt {
 /// `dav1d_msac_decode_subexp` (palette-delta path).
 pub fn Av1Msac::decode_subexp(
   self : Av1Msac,
-  ref_val : Int,
-  n : Int,
-  k : UInt,
-) -> Int {
+  ref_val : Int32,
+  n : Int32,
+  k : UInt32,
+) -> Int32 {
   let mut k = k
-  let mut a : UInt = 0
+  let mut a : UInt32 = 0
   if self.decode_bool_equi() != 0 {
     if self.decode_bool_equi() != 0 {
       k = k + self.decode_bool_equi() + 1
@@ -266,7 +257,8 @@ pub fn Av1Msac::decode_subexp(
   if ref_val * 2 <= n {
     av1_inv_recenter(ref_val.reinterpret_as_uint(), v).reinterpret_as_int()
   } else {
-    n - 1 -
+    n -
+    1 -
     av1_inv_recenter((n - 1 - ref_val).reinterpret_as_uint(), v).reinterpret_as_int()
   }
 }
@@ -276,8 +268,8 @@ pub fn Av1Msac::decode_subexp(
 pub fn Av1Msac::decode_hi_tok(
   self : Av1Msac,
   cdf : FixedArray[UInt16],
-  cdf_base : Int,
-) -> Int {
+  cdf_base : Int32,
+) -> Int32 {
   let mut tok_br = self.decode_symbol_adapt(cdf, cdf_base, 3)
   let mut tok = 3 + tok_br
   if tok_br == 3 {

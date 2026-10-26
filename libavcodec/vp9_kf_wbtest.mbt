@@ -48,32 +48,37 @@ fn vp9_kf_check(
 
 ///|
 test "vp9 kf: 160x144 multi-TU stream matches FFmpeg YUV" {
-  vp9_kf_check("basic", vp9_kf_basic_frames, vp9_kf_basic_size, vp9_kf_basic_md5)
+  vp9_kf_check(
+    "basic", vp9_kf_basic_frames, vp9_kf_basic_size, vp9_kf_basic_md5,
+  )
 }
 
 ///|
 test "vp9 kf: 70x36 (non-SB-aligned width) matches FFmpeg YUV" {
-  vp9_kf_check("small", vp9_kf_small_frames, vp9_kf_small_size, vp9_kf_small_md5)
+  vp9_kf_check(
+    "small", vp9_kf_small_frames, vp9_kf_small_size, vp9_kf_small_md5,
+  )
 }
 
 ///|
 test "vp9 kf: 64x48 lowest-quantizer stream matches FFmpeg YUV" {
-  vp9_kf_check("qfull", vp9_kf_qfull_frames, vp9_kf_qfull_size, vp9_kf_qfull_md5)
+  vp9_kf_check(
+    "qfull", vp9_kf_qfull_frames, vp9_kf_qfull_size, vp9_kf_qfull_md5,
+  )
 }
 
 ///|
 test "vp9 kf: lossless (WHT) stream matches FFmpeg YUV" {
   vp9_kf_check(
-    "lossless",
-    vp9_kf_lossless_frames,
-    vp9_kf_lossless_size,
-    vp9_kf_lossless_md5,
+    "lossless", vp9_kf_lossless_frames, vp9_kf_lossless_size, vp9_kf_lossless_md5,
   )
 }
 
 ///|
 test "vp9 kf: 512x128 2x2 tiles matches FFmpeg YUV" {
-  vp9_kf_check("tiles", vp9_kf_tiles_frames, vp9_kf_tiles_size, vp9_kf_tiles_md5)
+  vp9_kf_check(
+    "tiles", vp9_kf_tiles_frames, vp9_kf_tiles_size, vp9_kf_tiles_md5,
+  )
 }
 
 ///|
@@ -95,7 +100,8 @@ test "vp9: show_existing_frame requires a populated reference slot" {
   let data : Bytes = b"\x88"
   match dec.decode_frame(data) {
     Ok(_) => fail("show_existing must be rejected")
-    Err(e) => inspect(e, content="vp9: show_existing_frame references an empty slot")
+    Err(e) =>
+      inspect(e, content="vp9: show_existing_frame references an empty slot")
   }
 }
 

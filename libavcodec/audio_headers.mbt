@@ -135,8 +135,12 @@ pub fn aac_adts_header_write(
   object_type : Int32,
   frame_length : Int32,
 ) -> Result[Bytes, String] {
-  if channels < 1 || channels > 7 || object_type < 1 || object_type > 4 ||
-    frame_length < av_aac_adts_header_size || frame_length > 0x1FFF {
+  if channels < 1 ||
+    channels > 7 ||
+    object_type < 1 ||
+    object_type > 4 ||
+    frame_length < av_aac_adts_header_size ||
+    frame_length > 0x1FFF {
     return Err("EINVAL: invalid ADTS header fields")
   }
   let mut sampling_index = -1

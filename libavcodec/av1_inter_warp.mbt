@@ -4,27 +4,35 @@
 /// the refmvs row ring (`t->rt.r[(by4 & 31) + 5]`).
 
 ///|
-fn av1_inter_warp_max(a : Int, b : Int) -> Int {
-  if a > b { a } else { b }
+fn av1_inter_warp_max(a : Int32, b : Int32) -> Int32 {
+  if a > b {
+    a
+  } else {
+    b
+  }
 }
 
 ///|
-fn av1_inter_warp_abs(v : Int) -> Int {
-  if v < 0 { -v } else { v }
+fn av1_inter_warp_abs(v : Int32) -> Int32 {
+  if v < 0 {
+    -v
+  } else {
+    v
+  }
 }
 
 ///|
-fn av1_inter_warp_bs_w(b : Av1Rb) -> Int {
+fn av1_inter_warp_bs_w(b : Av1Rb) -> Int32 {
   av1_block_dimensions[b.bs * 4].to_int()
 }
 
 ///|
-fn av1_inter_warp_bs_h(b : Av1Rb) -> Int {
+fn av1_inter_warp_bs_h(b : Av1Rb) -> Int32 {
   av1_block_dimensions[b.bs * 4 + 1].to_int()
 }
 
 ///|
-fn av1_inter_warp_ctz(v : UInt) -> Int {
+fn av1_inter_warp_ctz(v : UInt32) -> Int32 {
   let mut x = v
   let mut n = 0
   while (x & 1) == 0 {
@@ -40,25 +48,27 @@ fn av1_inter_warp_ctz(v : UInt) -> Int {
 /// = top-right), `masks[1]` the left run (bit 32 = top-left).
 pub fn av1_inter_find_matching_ref(
   rows : FixedArray[FixedArray[Av1Rb]],
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
-  w4 : Int,
-  h4 : Int,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
+  w4 : Int32,
+  h4 : Int32,
   have_left : Bool,
   have_top : Bool,
   top_has_right : Bool,
-  tile_col_end4 : Int,
-  ref_ : Int,
+  tile_col_end4 : Int32,
+  ref_ : Int32,
 ) -> (UInt64, UInt64) {
   let r = (by4 & 31) + 5
   let mut masks0 : UInt64 = 0
   let mut masks1 : UInt64 = 0
   let mut count = 0
   let mut have_topleft = have_top && have_left
-  let mut have_topright = av1_inter_warp_max(bw4, bh4) < 32 && have_top &&
-    bx4 + bw4 < tile_col_end4 && top_has_right
+  let mut have_topright = av1_inter_warp_max(bw4, bh4) < 32 &&
+    have_top &&
+    bx4 + bw4 < tile_col_end4 &&
+    top_has_right
   let matches = (b : Av1Rb) => b.ref0 == ref_ + 1 && b.ref1 == -1
   if have_top {
     let top = rows[r - 1]
@@ -78,7 +88,7 @@ pub fn av1_inter_find_matching_ref(
       }
     } else {
       let mut xidx = bx4
-      let mut mask : UInt = 1 << aw4
+      let mut mask : UInt32 = 1 << aw4
       let mut x = aw4
       while x < w4 {
         xidx = xidx + aw4
@@ -112,7 +122,7 @@ pub fn av1_inter_find_matching_ref(
       }
     } else {
       let mut yidx = 0
-      let mut mask : UInt = 1 << lh4
+      let mut mask : UInt32 = 1 << lh4
       let mut y = lh4
       while y < h4 {
         yidx = yidx + lh4
@@ -146,12 +156,12 @@ pub fn av1_inter_find_matching_ref(
 ///|
 /// Derived warp model for `MM_WARP`.
 pub(all) struct Av1WarpDeriveResult {
-  typ : Int
-  matrix : FixedArray[Int]
-  alpha : Int
-  beta : Int
-  gamma : Int
-  delta : Int
+  typ : Int32
+  matrix : FixedArray[Int32]
+  alpha : Int32
+  beta : Int32
+  gamma : Int32
+  delta : Int32
 }
 
 ///|
@@ -161,18 +171,18 @@ pub(all) struct Av1WarpDeriveResult {
 /// both pass, otherwise 0 (identity).
 pub fn av1_inter_derive_warpmv(
   rows : FixedArray[FixedArray[Av1Rb]],
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
   masks0 : UInt64,
   masks1 : UInt64,
-  mv : (Int, Int),
+  mv : (Int32, Int32),
 ) -> Av1WarpDeriveResult {
   let r = (by4 & 31) + 5
   let pts = FixedArray::make(8 * 4, 0)
   let np = Ref(0)
-  let add = (dx : Int, dy : Int, sx : Int, sy : Int, b : Av1Rb) => {
+  let add = (dx : Int32, dy : Int32, sx : Int32, sy : Int32, b : Av1Rb) => {
     let n = np.val
     let ix = 16 * (2 * dx + sx * av1_inter_warp_bs_w(b)) - 8
     let iy = 16 * (2 * dy + sy * av1_inter_warp_bs_h(b)) - 8
@@ -183,7 +193,7 @@ pub fn av1_inter_derive_warpmv(
     pts[n * 4 + 3] = iy + by_mv
     np.val = n + 1
   }
-  if (masks0 & 0xffffffffUL) == 1UL && (masks1 >> 32) == 0UL {
+  if (masks0 & 0xffffffffUL) == 1UL && masks1 >> 32 == 0UL {
     let b = rows[r - 1][bx4]
     let off = bx4 & (av1_inter_warp_bs_w(b) - 1)
     add(-off, 0, 1, -1, b)
@@ -213,16 +223,14 @@ pub fn av1_inter_derive_warpmv(
       ymask = ymask & (ymask - 1)
     }
   }
-  if np.val < 8 && (masks1 >> 32) != 0UL {
+  if np.val < 8 && masks1 >> 32 != 0UL {
     add(0, 0, -1, -1, rows[r - 1][bx4 - 1])
   }
-  if np.val < 8 && (masks0 >> 32) != 0UL {
+  if np.val < 8 && masks0 >> 32 != 0UL {
     add(bw4, 0, 1, -1, rows[r - 1][bx4 + bw4])
   }
   let (mvy, mvx) = mv
-  let thresh = 4 * av1_warp_clip(
-    av1_inter_warp_max(bw4, bh4), 4, 28,
-  )
+  let thresh = 4 * av1_warp_clip(av1_inter_warp_max(bw4, bh4), 4, 28)
   let mvd = FixedArray::make(8, 0)
   let mut ret = 0
   for i in 0..<np.val {

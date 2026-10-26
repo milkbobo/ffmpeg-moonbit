@@ -159,8 +159,7 @@ fn h264_pred4x4(
   top : Bool,
   left : Bool,
   topright : Bool,
-
-  bit_depth? : Int32 = 8,
+  bit_depth~ : Int32 = 8,
 ) -> Result[Unit, String] {
   if mode == h264_pred_vert {
     if !top {
@@ -198,7 +197,7 @@ fn h264_pred4x4(
     } else if top || left {
       (sum + 2) >> 2
     } else {
-      (1 << (bit_depth - 1))
+      1 << (bit_depth - 1)
     }
     for j = 0; j < 4; j = j + 1 {
       for i = 0; i < 4; i = i + 1 {
@@ -236,7 +235,7 @@ fn h264_pred4x4(
   } else if mode == h264_pred_128_dc {
     for j = 0; j < 4; j = j + 1 {
       for i = 0; i < 4; i = i + 1 {
-        dst[off + j * stride + i] = (1 << (bit_depth - 1))
+        dst[off + j * stride + i] = 1 << (bit_depth - 1)
       }
     }
   } else {
@@ -283,7 +282,7 @@ fn h264_pred4x4(
       lt = dst[off - stride - 1]
     }
     let put = fn(x : Int32, y : Int32, v : Int32) -> Unit {
-      o[y * 4 + x] = h264_clip8(v, bit_depth=bit_depth)
+      o[y * 4 + x] = h264_clip8(v, bit_depth~)
     }
     if mode == h264_pred_ddl {
       put(0, 0, (t[0] + t[2] + 2 * t[1] + 2) >> 2)
@@ -408,8 +407,7 @@ fn h264_pred16x16(
   mode : Int32,
   top : Bool,
   left : Bool,
-
-  bit_depth? : Int32 = 8,
+  bit_depth~ : Int32 = 8,
 ) -> Result[Unit, String] {
   if mode == h264_pred8_vert {
     if !top {
@@ -434,7 +432,7 @@ fn h264_pred16x16(
     mode == h264_pred8_left_dc ||
     mode == h264_pred8_top_dc ||
     mode == h264_pred8_128_dc {
-    let mut dc = (1 << (bit_depth - 1))
+    let mut dc = 1 << (bit_depth - 1)
     if mode == h264_pred8_dc {
       let mut sum = 0
       if top {
@@ -452,7 +450,7 @@ fn h264_pred16x16(
       } else if top || left {
         (sum + 8) >> 4
       } else {
-        (1 << (bit_depth - 1))
+        1 << (bit_depth - 1)
       }
     } else if mode == h264_pred8_left_dc {
       if !left {
@@ -498,10 +496,10 @@ fn h264_pred16x16(
       a = a + v
       for i4 = 0; i4 < 4; i4 = i4 + 1 {
         let p = off + j * stride + 4 * i4
-        dst[p] = h264_clip8(b >> 5, bit_depth=bit_depth)
-        dst[p + 1] = h264_clip8((b + h) >> 5, bit_depth=bit_depth)
-        dst[p + 2] = h264_clip8((b + 2 * h) >> 5, bit_depth=bit_depth)
-        dst[p + 3] = h264_clip8((b + 3 * h) >> 5, bit_depth=bit_depth)
+        dst[p] = h264_clip8(b >> 5, bit_depth~)
+        dst[p + 1] = h264_clip8((b + h) >> 5, bit_depth~)
+        dst[p + 2] = h264_clip8((b + 2 * h) >> 5, bit_depth~)
+        dst[p + 3] = h264_clip8((b + 3 * h) >> 5, bit_depth~)
         b = b + 4 * h
       }
     }
@@ -520,8 +518,7 @@ fn h264_pred8x8(
   mode : Int32,
   top : Bool,
   left : Bool,
-
-  bit_depth? : Int32 = 8,
+  bit_depth~ : Int32 = 8,
 ) -> Result[Unit, String] {
   if mode == h264_pred8_vert {
     if !top {
@@ -605,7 +602,7 @@ fn h264_pred8x8(
   } else if mode == h264_pred8_128_dc {
     for j = 0; j < 8; j = j + 1 {
       for i = 0; i < 8; i = i + 1 {
-        dst[off + j * stride + i] = (1 << (bit_depth - 1))
+        dst[off + j * stride + i] = 1 << (bit_depth - 1)
       }
     }
   } else if mode == h264_pred8_plane {
@@ -627,7 +624,7 @@ fn h264_pred8x8(
       let b = a
       a = a + v
       for i = 0; i < 8; i = i + 1 {
-        dst[off + j * stride + i] = h264_clip8((b + i * h) >> 5, bit_depth=bit_depth)
+        dst[off + j * stride + i] = h264_clip8((b + i * h) >> 5, bit_depth~)
       }
     }
   } else {
@@ -646,8 +643,7 @@ fn h264_pred8x16(
   mode : Int32,
   top : Bool,
   left : Bool,
-
-  bit_depth? : Int32 = 8,
+  bit_depth~ : Int32 = 8,
 ) -> Result[Unit, String] {
   if mode == h264_pred8_vert {
     if !top {
@@ -744,7 +740,7 @@ fn h264_pred8x16(
   } else if mode == h264_pred8_128_dc {
     for j = 0; j < 16; j = j + 1 {
       for i = 0; i < 8; i = i + 1 {
-        dst[off + j * stride + i] = (1 << (bit_depth - 1))
+        dst[off + j * stride + i] = 1 << (bit_depth - 1)
       }
     }
   } else if mode == h264_pred8_plane {
@@ -780,7 +776,10 @@ fn h264_pred8x16(
     let a0 = 16 * (left_at(15) + top_at(7) + 1) - 7 * v - 3 * h
     for j = 0; j < 16; j = j + 1 {
       for i = 0; i < 8; i = i + 1 {
-        dst[off + j * stride + i] = h264_clip8((a0 + j * v + i * h) >> 5, bit_depth=bit_depth)
+        dst[off + j * stride + i] = h264_clip8(
+          (a0 + j * v + i * h) >> 5,
+          bit_depth~,
+        )
       }
     }
   } else {

@@ -5,7 +5,9 @@
 ///|
 /// Blend two packed `prep` blocks using a 0..64 mask for the first block.
 pub fn av1_mc_mask(
-  a : FixedArray[Int32], b : FixedArray[Int32], mask : FixedArray[Int32],
+  a : FixedArray[Int32],
+  b : FixedArray[Int32],
+  mask : FixedArray[Int32],
   bitdepth : Int32,
 ) -> FixedArray[Int32] {
   let dst = FixedArray::make(a.length(), 0)
@@ -17,7 +19,8 @@ pub fn av1_mc_mask(
     let m = mask[i]
     dst[i] = av1_mc_clip(
       (a[i] * m + b[i] * (64 - m) + rnd) >> (ib + 6),
-      0, max_pixel,
+      0,
+      max_pixel,
     )
   }
   dst
@@ -27,7 +30,9 @@ pub fn av1_mc_mask(
 /// Blend two packed pixel blocks; `mask` weights the second block (dav1d
 /// `blend_c`, used by OBMC). Both input blocks are already clipped pixels.
 pub fn av1_mc_blend_pixels(
-  a : FixedArray[Int32], b : FixedArray[Int32], mask : FixedArray[Int32],
+  a : FixedArray[Int32],
+  b : FixedArray[Int32],
+  mask : FixedArray[Int32],
 ) -> FixedArray[Int32] {
   let dst = FixedArray::make(a.length(), 0)
   for i in 0..<a.length() {
@@ -42,9 +47,14 @@ pub fn av1_mc_blend_pixels(
 /// subsampled mask. `ss_hor/ss_ver` are (0,0), (1,0), or (1,1); dimensions
 /// must be even where subsampled. `sign` is dav1d's 0/1 rounding adjustment.
 pub fn av1_mc_diffwtd_mask(
-  a : FixedArray[Int32], b : FixedArray[Int32],
-  w : Int32, h : Int32, sign : Int32,
-  ss_hor : Int32, ss_ver : Int32, bitdepth : Int32,
+  a : FixedArray[Int32],
+  b : FixedArray[Int32],
+  w : Int32,
+  h : Int32,
+  sign : Int32,
+  ss_hor : Int32,
+  ss_ver : Int32,
+  bitdepth : Int32,
 ) -> (FixedArray[Int32], FixedArray[Int32]) {
   let dst = FixedArray::make(w * h, 0)
   let mask_w = w >> ss_hor
@@ -63,7 +73,8 @@ pub fn av1_mc_diffwtd_mask(
       let m = av1_mc_clip(38 + ((abs_diff + mask_rnd) >> mask_sh), 0, 64)
       dst[i] = av1_mc_clip(
         (a[i] * m + b[i] * (64 - m) + rnd) >> (ib + 6),
-        0, max_pixel,
+        0,
+        max_pixel,
       )
       if ss_hor == 0 {
         mask[y * mask_w + x] = m
@@ -71,9 +82,7 @@ pub fn av1_mc_diffwtd_mask(
         let prev_i = i - 1
         let prev_diff = a[prev_i] - b[prev_i]
         let prev_abs = if prev_diff < 0 { -prev_diff } else { prev_diff }
-        let prev_m = av1_mc_clip(
-          38 + ((prev_abs + mask_rnd) >> mask_sh), 0, 64,
-        )
+        let prev_m = av1_mc_clip(38 + ((prev_abs + mask_rnd) >> mask_sh), 0, 64)
         let mi = (y >> ss_ver) * mask_w + (x >> 1)
         if ss_ver == 0 {
           mask[mi] = (prev_m + m + 1 - sign) >> 1

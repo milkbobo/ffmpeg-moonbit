@@ -35,8 +35,7 @@ fn h264_recon_full_plane(
   mb : Array[Int32],
   mb_off : Int32,
   nz_base : Int32,
-
-  bit_depth? : Int32 = 8,
+  bit_depth~ : Int32 = 8,
 ) -> Result[Unit, String] {
   let info = ctx.infos[mb_idx]
   let bypass = h264_transform_bypass(ctx)
@@ -46,17 +45,33 @@ fn h264_recon_full_plane(
         let bx8 = i8 % 2
         let by8 = i8 / 2
         let off = base + by8 * 8 * stride + bx8 * 8
-        let mode = modes[(by8 * 2) * 4 + bx8 * 2]
+        let mode = modes[by8 * 2 * 4 + bx8 * 2]
         let top = by8 > 0 || h264_intra_top(ctx, mb_idx)
         let left = bx8 > 0 || h264_intra_left(ctx, mb_idx)
         let topright = if by8 == 0 {
-          top && (bx8 == 0 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))))
+          top &&
+          (
+            bx8 == 0 ||
+            (
+              mb_x < ctx.mb_width - 1 &&
+              h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))
+            )
+          )
         } else {
           bx8 == 0
         }
         match
-          h264_pred8x8l(dst, off, stride, mode, top, left, topright,
-            topleft=h264_intra_topleft(ctx, mb_idx, bx8, by8), bit_depth=bit_depth) {
+          h264_pred8x8l(
+            dst,
+            off,
+            stride,
+            mode,
+            top,
+            left,
+            topright,
+            topleft=h264_intra_topleft(ctx, mb_idx, bx8, by8),
+            bit_depth~,
+          ) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
@@ -64,15 +79,46 @@ fn h264_recon_full_plane(
           if bypass {
             if mode <= 1 && ctx.pps.profile_idc == 244 {
               if mode == 0 {
-                h264_add_pixels8_vertical(dst, off, stride, mb, mb_off + 64 * i8, bit_depth=bit_depth)
+                h264_add_pixels8_vertical(
+                  dst,
+                  off,
+                  stride,
+                  mb,
+                  mb_off + 64 * i8,
+                  bit_depth~,
+                )
               } else {
-                h264_add_pixels8_horizontal(dst, off, stride, mb, mb_off + 64 * i8, bit_depth=bit_depth)
+                h264_add_pixels8_horizontal(
+                  dst,
+                  off,
+                  stride,
+                  mb,
+                  mb_off + 64 * i8,
+                  bit_depth~,
+                )
               }
             } else {
-              h264_add_pixels8(dst, off, stride, mb, mb_off + 64 * i8, bit_depth=bit_depth)
+              h264_add_pixels8(
+                dst,
+                off,
+                stride,
+                mb,
+                mb_off + 64 * i8,
+                bit_depth~,
+              )
             }
           } else {
-            h264_idct8_add4(dst, off, stride, mb, mb_off + 64 * i8, nz, i8, nz_base=nz_base, bit_depth=bit_depth)
+            h264_idct8_add4(
+              dst,
+              off,
+              stride,
+              mb,
+              mb_off + 64 * i8,
+              nz,
+              i8,
+              nz_base~,
+              bit_depth~,
+            )
           }
         }
       }
@@ -85,12 +131,28 @@ fn h264_recon_full_plane(
         let top = by > 0 || h264_intra_top(ctx, mb_idx)
         let left = bx > 0 || h264_intra_left(ctx, mb_idx)
         let topright = if by == 0 {
-          h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))))
+          h264_intra_top(ctx, mb_idx) &&
+          (
+            bx < 3 ||
+            (
+              mb_x < ctx.mb_width - 1 &&
+              h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))
+            )
+          )
         } else {
           bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
         }
         match
-          h264_pred4x4(dst, off, stride, modes[g], top, left, topright, bit_depth=bit_depth) {
+          h264_pred4x4(
+            dst,
+            off,
+            stride,
+            modes[g],
+            top,
+            left,
+            topright,
+            bit_depth~,
+          ) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
@@ -99,24 +161,53 @@ fn h264_recon_full_plane(
             let mode = modes[g]
             if mode <= 1 && ctx.pps.profile_idc == 244 {
               if mode == 0 {
-                h264_add_pixels4_vertical(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+                h264_add_pixels4_vertical(
+                  dst,
+                  off,
+                  stride,
+                  mb,
+                  mb_off + 16 * i,
+                  bit_depth~,
+                )
               } else {
-                h264_add_pixels4_horizontal(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+                h264_add_pixels4_horizontal(
+                  dst,
+                  off,
+                  stride,
+                  mb,
+                  mb_off + 16 * i,
+                  bit_depth~,
+                )
               }
             } else {
-              h264_add_pixels4(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+              h264_add_pixels4(
+                dst,
+                off,
+                stride,
+                mb,
+                mb_off + 16 * i,
+                bit_depth~,
+              )
             }
           } else if nz[nz_base + g] == 1 && mb[mb_off + 16 * i] != 0 {
-            h264_idct_dc_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+            h264_idct_dc_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth~)
           } else {
-            h264_idct_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+            h264_idct_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth~)
           }
         }
       }
     }
   } else {
     match
-      h264_pred16x16(dst, base, stride, pred_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=bit_depth) {
+      h264_pred16x16(
+        dst,
+        base,
+        stride,
+        pred_mode,
+        h264_intra_top(ctx, mb_idx),
+        h264_intra_left(ctx, mb_idx),
+        bit_depth~,
+      ) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
@@ -134,18 +225,32 @@ fn h264_recon_full_plane(
         if nz[nz_base + g] != 0 || mb[mb_off + 16 * i] != 0 {
           if (pred_mode == 0 || pred_mode == 1) && ctx.pps.profile_idc == 244 {
             if pred_mode == 0 {
-              h264_add_pixels4_vertical(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+              h264_add_pixels4_vertical(
+                dst,
+                off,
+                stride,
+                mb,
+                mb_off + 16 * i,
+                bit_depth~,
+              )
             } else {
-              h264_add_pixels4_horizontal(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+              h264_add_pixels4_horizontal(
+                dst,
+                off,
+                stride,
+                mb,
+                mb_off + 16 * i,
+                bit_depth~,
+              )
             }
           } else {
-            h264_add_pixels4(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+            h264_add_pixels4(dst, off, stride, mb, mb_off + 16 * i, bit_depth~)
           }
         }
       }
     } else {
       if dc_nz != 0 {
-        h264_luma_dc_dequant_idct(mb, mb_off, dc, 0, dc_mul, bit_depth=bit_depth)
+        h264_luma_dc_dequant_idct(mb, mb_off, dc, 0, dc_mul, bit_depth~)
       }
       for i = 0; i < 16; i = i + 1 {
         let bx = h264_luma_block_x[i]
@@ -153,9 +258,9 @@ fn h264_recon_full_plane(
         let off = base + by * 4 * stride + bx * 4
         let g = h264_luma_block_grid[i]
         if nz[nz_base + g] != 0 {
-          h264_idct_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+          h264_idct_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth~)
         } else if mb[mb_off + 16 * i] != 0 {
-          h264_idct_dc_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth=bit_depth)
+          h264_idct_dc_add(dst, off, stride, mb, mb_off + 16 * i, bit_depth~)
         }
       }
     }
@@ -199,8 +304,24 @@ fn h264_recon_mb(
   if cbp != 0 || is_i16x16 || ctx.infos[mb_idx].transform_8x8 {
     match
       h264_recon_full_plane(
-        ctx, ctx.y, ybase, ystride, mb_idx, mb_x, is_i4x4, is_i16x16, pred16,
-        modes, cbp, luma_dc[0], luma_dc_nz[0], plane_dc_mul[0], nz, mb, 0, 0,
+        ctx,
+        ctx.y,
+        ybase,
+        ystride,
+        mb_idx,
+        mb_x,
+        is_i4x4,
+        is_i16x16,
+        pred16,
+        modes,
+        cbp,
+        luma_dc[0],
+        luma_dc_nz[0],
+        plane_dc_mul[0],
+        nz,
+        mb,
+        0,
+        0,
         bit_depth=ctx.bit_depth,
       ) {
       Ok(_) => ()
@@ -214,9 +335,24 @@ fn h264_recon_mb(
         let plane = if p == 1 { ctx.u } else { ctx.v }
         match
           h264_recon_full_plane(
-            ctx, plane, cbase, cstride, mb_idx, mb_x, is_i4x4, is_i16x16,
-            pred16, modes, cbp, luma_dc[p], luma_dc_nz[p], plane_dc_mul[p], nz, mb,
-            256 * p, 16 * p,
+            ctx,
+            plane,
+            cbase,
+            cstride,
+            mb_idx,
+            mb_x,
+            is_i4x4,
+            is_i16x16,
+            pred16,
+            modes,
+            cbp,
+            luma_dc[p],
+            luma_dc_nz[p],
+            plane_dc_mul[p],
+            nz,
+            mb,
+            256 * p,
+            16 * p,
             bit_depth=ctx.bit_depth,
           ) {
           Ok(_) => ()
@@ -226,24 +362,59 @@ fn h264_recon_mb(
       }
     } else if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
       let pred = if ctx.chroma_format == 2 {
-        h264_pred8x16(ctx.u, cbase, cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth)
+        h264_pred8x16(
+          ctx.u,
+          cbase,
+          cstride,
+          chroma_mode,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        )
       } else {
-        h264_pred8x8(ctx.u, cbase, cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth)
+        h264_pred8x8(
+          ctx.u,
+          cbase,
+          cstride,
+          chroma_mode,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        )
       }
       match pred {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
       let pred_v = if ctx.chroma_format == 2 {
-        h264_pred8x16(ctx.v, cbase, cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth)
+        h264_pred8x16(
+          ctx.v,
+          cbase,
+          cstride,
+          chroma_mode,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        )
       } else {
-        h264_pred8x8(ctx.v, cbase, cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth)
+        h264_pred8x8(
+          ctx.v,
+          cbase,
+          cstride,
+          chroma_mode,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        )
       }
       match pred_v {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
-      h264_chroma_residual_intra(ctx, cbase, cstride, chroma_mode, chroma_dc_nz, chroma_qp0, chroma_qp1, cbp, mb, nz)
+      h264_chroma_residual_intra(
+        ctx, cbase, cstride, chroma_mode, chroma_dc_nz, chroma_qp0, chroma_qp1, cbp,
+        mb, nz,
+      )
     }
   } else {
     // No residual: predict only.
@@ -259,19 +430,43 @@ fn h264_recon_mb(
           // Top-row blocks read the top MB's row; only bx == 3 needs the
           // top-right macroblock. Blocks are reconstructed in 8x8 z-order,
           // so a same-MB top-right block is causal for bx 0/2 and (1, even y).
-          h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))))
+          h264_intra_top(ctx, mb_idx) &&
+          (
+            bx < 3 ||
+            (
+              mb_x < ctx.mb_width - 1 &&
+              h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))
+            )
+          )
         } else {
           bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
         }
         match
-          h264_pred4x4(ctx.y, off, ystride, modes[g], top, left, topright, bit_depth=ctx.bit_depth) {
+          h264_pred4x4(
+            ctx.y,
+            off,
+            ystride,
+            modes[g],
+            top,
+            left,
+            topright,
+            bit_depth=ctx.bit_depth,
+          ) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
       }
     } else {
       match
-        h264_pred16x16(ctx.y, ybase, ystride, pred16, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth) {
+        h264_pred16x16(
+          ctx.y,
+          ybase,
+          ystride,
+          pred16,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        ) {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
@@ -286,13 +481,29 @@ fn h264_recon_mb(
           let top = by > 0 || h264_intra_top(ctx, mb_idx)
           let left = bx > 0 || h264_intra_left(ctx, mb_idx)
           let topright = if by == 0 {
-            h264_intra_top(ctx, mb_idx) && (bx < 3 || (mb_x < ctx.mb_width - 1 && h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))))
+            h264_intra_top(ctx, mb_idx) &&
+            (
+              bx < 3 ||
+              (
+                mb_x < ctx.mb_width - 1 &&
+                h264_intra_available(ctx, h264_topright_index(ctx, mb_idx))
+              )
+            )
           } else {
             bx == 0 || bx == 2 || (bx == 1 && by % 2 == 0)
           }
           for plane in [ctx.u, ctx.v] {
             match
-              h264_pred4x4(plane, off, cstride, modes[g], top, left, topright, bit_depth=ctx.bit_depth) {
+              h264_pred4x4(
+                plane,
+                off,
+                cstride,
+                modes[g],
+                top,
+                left,
+                topright,
+                bit_depth=ctx.bit_depth,
+              ) {
               Ok(_) => ()
               Err(e) => return Err(e)
             }
@@ -301,7 +512,15 @@ fn h264_recon_mb(
       } else {
         for plane in [ctx.u, ctx.v] {
           match
-            h264_pred16x16(plane, cbase, cstride, pred16, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth) {
+            h264_pred16x16(
+              plane,
+              cbase,
+              cstride,
+              pred16,
+              h264_intra_top(ctx, mb_idx),
+              h264_intra_left(ctx, mb_idx),
+              bit_depth=ctx.bit_depth,
+            ) {
             Ok(_) => ()
             Err(e) => return Err(e)
           }
@@ -309,18 +528,50 @@ fn h264_recon_mb(
       }
     } else if ctx.chroma_format == 1 || ctx.chroma_format == 2 {
       let pred = if ctx.chroma_format == 2 {
-        h264_pred8x16(ctx.u, cbase, cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth)
+        h264_pred8x16(
+          ctx.u,
+          cbase,
+          cstride,
+          chroma_mode,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        )
       } else {
-        h264_pred8x8(ctx.u, cbase, cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth)
+        h264_pred8x8(
+          ctx.u,
+          cbase,
+          cstride,
+          chroma_mode,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        )
       }
       match pred {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
       let pred_v = if ctx.chroma_format == 2 {
-        h264_pred8x16(ctx.v, cbase, cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth)
+        h264_pred8x16(
+          ctx.v,
+          cbase,
+          cstride,
+          chroma_mode,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        )
       } else {
-        h264_pred8x8(ctx.v, cbase, cstride, chroma_mode, h264_intra_top(ctx, mb_idx), h264_intra_left(ctx, mb_idx), bit_depth=ctx.bit_depth)
+        h264_pred8x8(
+          ctx.v,
+          cbase,
+          cstride,
+          chroma_mode,
+          h264_intra_top(ctx, mb_idx),
+          h264_intra_left(ctx, mb_idx),
+          bit_depth=ctx.bit_depth,
+        )
       }
       match pred_v {
         Ok(_) => ()
@@ -360,9 +611,19 @@ fn h264_chroma_residual_intra(
       }
       let qmul_dc = h264_build_dequant4(ctx.pps, 1 + c, cqp)[0]
       if num_c8x8 == 2 {
-        h264_chroma422_dc_dequant_idct(mb, 256 + 256 * c, qmul_dc, bit_depth=ctx.bit_depth)
+        h264_chroma422_dc_dequant_idct(
+          mb,
+          256 + 256 * c,
+          qmul_dc,
+          bit_depth=ctx.bit_depth,
+        )
       } else {
-        h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_dc, bit_depth=ctx.bit_depth)
+        h264_chroma_dc_dequant_idct(
+          mb,
+          256 + 256 * c,
+          qmul_dc,
+          bit_depth=ctx.bit_depth,
+        )
       }
     }
     let plane = if c == 0 { ctx.u } else { ctx.v }
@@ -376,17 +637,52 @@ fn h264_chroma_residual_intra(
       if bypass {
         if (chroma_mode == 1 || chroma_mode == 2) && ctx.pps.profile_idc == 244 {
           if chroma_mode == 2 {
-            h264_add_pixels4_vertical(plane, off, stride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
+            h264_add_pixels4_vertical(
+              plane,
+              off,
+              stride,
+              mb,
+              256 + 256 * c + 16 * i,
+              bit_depth=ctx.bit_depth,
+            )
           } else {
-            h264_add_pixels4_horizontal(plane, off, stride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
+            h264_add_pixels4_horizontal(
+              plane,
+              off,
+              stride,
+              mb,
+              256 + 256 * c + 16 * i,
+              bit_depth=ctx.bit_depth,
+            )
           }
         } else if nz[g] != 0 || mb[256 + 256 * c + 16 * i] != 0 {
-          h264_add_pixels4(plane, off, stride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
+          h264_add_pixels4(
+            plane,
+            off,
+            stride,
+            mb,
+            256 + 256 * c + 16 * i,
+            bit_depth=ctx.bit_depth,
+          )
         }
       } else if nz[g] != 0 {
-        h264_idct_add(plane, off, stride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
+        h264_idct_add(
+          plane,
+          off,
+          stride,
+          mb,
+          256 + 256 * c + 16 * i,
+          bit_depth=ctx.bit_depth,
+        )
       } else if mb[256 + 256 * c + 16 * i] != 0 {
-        h264_idct_dc_add(plane, off, stride, mb, 256 + 256 * c + 16 * i, bit_depth=ctx.bit_depth)
+        h264_idct_dc_add(
+          plane,
+          off,
+          stride,
+          mb,
+          256 + 256 * c + 16 * i,
+          bit_depth=ctx.bit_depth,
+        )
       }
     }
   }

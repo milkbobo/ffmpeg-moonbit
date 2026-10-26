@@ -25,34 +25,20 @@ test "itut35: parse_buffer dispatch table" {
   // parse_a53_cc strips it.
   assert_eq(itut.payload, b"\x03\x41\x00\xCC\xCC\xCC\xFF")
   // US / ATSC / DTG1 active format: active_format_flag must be set
-  let afd_ok : Array[Byte] = [
-    0xB5, 0x00, 0x31, 68, 84, 71, 49, 0x40, 0x0B,
-  ]
-  assert_eq(
-    itut_t35_parse_buffer(itut, Bytes::from_array(afd_ok[:])),
-    Ok(1),
-  )
+  let afd_ok : Array[Byte] = [0xB5, 0x00, 0x31, 68, 84, 71, 49, 0x40, 0x0B]
+  assert_eq(itut_t35_parse_buffer(itut, Bytes::from_array(afd_ok[:])), Ok(1))
   assert_eq(itut.payload, b"\x0B")
-  let afd_off : Array[Byte] = [
-    0xB5, 0x00, 0x31, 68, 84, 71, 49, 0x00, 0x0B,
-  ]
-  assert_eq(
-    itut_t35_parse_buffer(itut, Bytes::from_array(afd_off[:])),
-    Ok(0),
-  )
+  let afd_off : Array[Byte] = [0xB5, 0x00, 0x31, 68, 84, 71, 49, 0x00, 0x0B]
+  assert_eq(itut_t35_parse_buffer(itut, Bytes::from_array(afd_off[:])), Ok(0))
   // US / ATSC unknown identifier
   assert_eq(
     itut_t35_parse_buffer(
-      itut,
-      b"\xB5\x00\x31\x58\x58\x58\x58\x00\x00\x00\x00\x00",
+      itut, b"\xB5\x00\x31\x58\x58\x58\x58\x00\x00\x00\x00\x00",
     ),
     Ok(0),
   )
   // US / AOM 0x0001
-  assert_eq(
-    itut_t35_parse_buffer(itut, b"\xB5\x58\x90\x01\x81\x40"),
-    Ok(1),
-  )
+  assert_eq(itut_t35_parse_buffer(itut, b"\xB5\x58\x90\x01\x81\x40"), Ok(1))
   assert_eq(itut.provider_code, 0x5890)
   assert_eq(itut.provider_oriented_code, 1)
   assert_eq(itut_t35_parse_buffer(itut, b"\xB5\x58\x90\x02\x81\x40"), Ok(0))
@@ -80,17 +66,11 @@ test "itut35: parse_buffer dispatch table" {
   // US unknown provider
   assert_eq(itut_t35_parse_buffer(itut, b"\xB5\x12\x34\x81\x40"), Ok(0))
   // UK / V-Nova: second octet skipped, provider 0x5000
-  assert_eq(
-    itut_t35_parse_buffer(itut, b"\xB4\x01\x50\x00\x81\x40"),
-    Ok(1),
-  )
+  assert_eq(itut_t35_parse_buffer(itut, b"\xB4\x01\x50\x00\x81\x40"), Ok(1))
   assert_eq(itut.payload, b"\x81\x40")
   assert_eq(itut_t35_parse_buffer(itut, b"\xB4\x01\x50\x01\x81\x40"), Ok(0))
   // CN / HDR Vivid: provider 4, oriented code 5
-  assert_eq(
-    itut_t35_parse_buffer(itut, b"\x26\x00\x04\x00\x05\x81\x40"),
-    Ok(1),
-  )
+  assert_eq(itut_t35_parse_buffer(itut, b"\x26\x00\x04\x00\x05\x81\x40"), Ok(1))
   assert_eq(itut_t35_parse_buffer(itut, b"\x26\x00\x04\x00\x06\x81\x40"), Ok(0))
   assert_eq(itut_t35_parse_buffer(itut, b"\x26\x00\x05\x00\x05\x81\x40"), Ok(0))
   // unknown country
@@ -106,7 +86,10 @@ test "itut35: parse_buffer dispatch table" {
   assert_eq(itut_t35_parse_buffer(itut, b"\xB5\x00\x31"), Err("EINVAL"))
   // GA94 has no extra length check beyond the oriented code: a 1-byte
   // payload is accepted here (parse_a53_cc then rejects it with EINVAL).
-  assert_eq(itut_t35_parse_buffer(itut, b"\xB5\x00\x31\x47\x41\x39\x34\x03"), Ok(1))
+  assert_eq(
+    itut_t35_parse_buffer(itut, b"\xB5\x00\x31\x47\x41\x39\x34\x03"),
+    Ok(1),
+  )
   assert_eq(itut_t35_parse_buffer(itut, b"\xB4\x01\x50"), Err("EINVAL"))
   assert_eq(itut_t35_parse_buffer(itut, b"\xFF"), Err("EINVAL"))
   // recognized provider but empty payload
@@ -396,14 +379,16 @@ test "itut35: parse_payload fills the T.35 meta slots" {
   assert_eq(itut_t35_parse_payload(meta, itut), Ok(0))
   assert_eq(meta.lcevc, Some(b"\x81\x40\x00"))
   // Dolby is acknowledged but ignored (no DOVIContext in the H.264 path)
-  assert_eq(itut_t35_parse_buffer(itut, b"\xB5\x00\x3B\x00\x00\x08\x00\x81"), Ok(1))
+  assert_eq(
+    itut_t35_parse_buffer(itut, b"\xB5\x00\x3B\x00\x00\x08\x00\x81"),
+    Ok(1),
+  )
   assert_eq(itut_t35_parse_payload(meta, itut), Ok(0))
   assert_true(meta.hdr_vivid is None)
   // HDR Vivid
   assert_eq(
     itut_t35_parse_buffer(
-      itut,
-      b"\x26\x00\x04\x00\x05\x01\x11\x12\x22\x33\x34\x44\x00",
+      itut, b"\x26\x00\x04\x00\x05\x01\x11\x12\x22\x33\x34\x44\x00",
     ),
     Ok(1),
   )
@@ -414,7 +399,9 @@ test "itut35: parse_payload fills the T.35 meta slots" {
   ignore(itut_t35_parse_buffer(itut, b"\x26\x00\x04\x00\x05\x01\x11").unwrap())
   assert_eq(itut_t35_parse_payload(meta, itut), Err("EINVAL"))
   // Samsung / SMPTE payloads are kept raw (see itut35.mbt header)
-  ignore(itut_t35_parse_buffer(itut, b"\xB5\x00\x3C\x00\x01\x04\x81\x40").unwrap())
+  ignore(
+    itut_t35_parse_buffer(itut, b"\xB5\x00\x3C\x00\x01\x04\x81\x40").unwrap(),
+  )
   assert_eq(itut_t35_parse_payload(meta, itut), Ok(0))
   assert_eq(meta.hdr_plus, Some(b"\x81\x40"))
   ignore(itut_t35_parse_buffer(itut, b"\xB5\x00\x90\x00\x01\x81\x40").unwrap())

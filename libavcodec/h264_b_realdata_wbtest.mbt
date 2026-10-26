@@ -5,23 +5,15 @@
 
 ///|
 let h264_b_header_md5 : Array[String] = [
-  "9e73a47392583681edf57f88b353d056",
-  "068724eac718bcdf90606ac04c122d8e",
-  "c467717b72d0a501e7783bc26f3177b8",
-  "a8b71865b291dcbaa2f08f51bc75ee9f",
-  "bcfa734b9da173a9863abf8edfaafff2",
-  "8d46b0fd16ee2757b9ea303c0e28ee85",
+  "9e73a47392583681edf57f88b353d056", "068724eac718bcdf90606ac04c122d8e", "c467717b72d0a501e7783bc26f3177b8",
+  "a8b71865b291dcbaa2f08f51bc75ee9f", "bcfa734b9da173a9863abf8edfaafff2", "8d46b0fd16ee2757b9ea303c0e28ee85",
   "84f2160ab037791aa630eef434f44fc2",
 ]
 
 ///|
 let h264_b_header_unf_md5 : Array[String] = [
-  "5351a5a11f2f7650ca226352d9ee0ab1",
-  "2bab992ffbfc37be3a2ac362877dba31",
-  "7a4fb98551c5a68798115092db292bd7",
-  "d605082c99efed2c6b8b936f4a4faa1b",
-  "2568271de2447a4e153d42813b55db5b",
-  "ee81a40a15b461010bca4f64ef95e264",
+  "5351a5a11f2f7650ca226352d9ee0ab1", "2bab992ffbfc37be3a2ac362877dba31", "7a4fb98551c5a68798115092db292bd7",
+  "d605082c99efed2c6b8b936f4a4faa1b", "2568271de2447a4e153d42813b55db5b", "ee81a40a15b461010bca4f64ef95e264",
   "9470c4ffe4f7b3b057c6ea3c44aee6d7",
 ]
 
@@ -29,47 +21,60 @@ let h264_b_header_unf_md5 : Array[String] = [
 test "h264 B pixels: h264_b_header filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_header_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_header: " + error) }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_header: " + error)
+    }
     let expected = if skip { h264_b_header_unf_md5 } else { h264_b_header_md5 }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_header skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_header skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
 let h264_b_weighted_md5 : Array[String] = [
-  "c9deea97cecc68554a610dbbd1ad2a10",
-  "41bac1e1a2872a0721fda76adea1ab73",
-  "de647f59bd33c28476959d5044bc6895",
+  "c9deea97cecc68554a610dbbd1ad2a10", "41bac1e1a2872a0721fda76adea1ab73", "de647f59bd33c28476959d5044bc6895",
 ]
 
 ///|
 let h264_b_weighted_unf_md5 : Array[String] = [
-  "c9deea97cecc68554a610dbbd1ad2a10",
-  "41bac1e1a2872a0721fda76adea1ab73",
-  "de647f59bd33c28476959d5044bc6895",
+  "c9deea97cecc68554a610dbbd1ad2a10", "41bac1e1a2872a0721fda76adea1ab73", "de647f59bd33c28476959d5044bc6895",
 ]
 
 ///|
 test "h264 B pixels: h264_b_weighted filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_weighted_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_weighted: " + error) }
-    let expected = if skip { h264_b_weighted_unf_md5 } else { h264_b_weighted_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_weighted: " + error)
+    }
+    let expected = if skip {
+      h264_b_weighted_unf_md5
+    } else {
+      h264_b_weighted_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_weighted skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_weighted skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_cavlc_spatial_b64 : Bytes =
-  b"AAAAAWdkAAqs2UINsBEAAAMAAQAAAwAQDxIllgAAAAFoySnLIsAAAAEGBf//a9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let h264_b_cavlc_spatial_b64 : Bytes = b"AAAAAWdkAAqs2UINsBEAAAMAAQAAAwAQDxIllgAAAAFoySnLIsAAAAEGBf//a9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MCByZWY9NCBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -230,29 +235,17 @@ let h264_b_cavlc_spatial_b64 : Bytes =
 
 ///|
 let h264_b_cavlc_spatial_md5 : Array[String] = [
-  "48197fc26b089159bc3efe9f20b5c278",
-  "a2961833f24ed6815a4210f05ac1e940",
-  "934028d4c46f89e5cb82851b7d32fd5b",
-  "9e193bb956b237e9cecab2c25bb527ca",
-  "f53f3b645753edec7fa7c239a1665f2a",
-  "00b1e26c6467f493841f2f5782940c0a",
-  "89d0612de409fa83c67c31b38d8b8874",
-  "d29bb3d6b72763ed592142d05275af14",
-  "fdd027b7d898186806eba8b5061f13c8",
+  "48197fc26b089159bc3efe9f20b5c278", "a2961833f24ed6815a4210f05ac1e940", "934028d4c46f89e5cb82851b7d32fd5b",
+  "9e193bb956b237e9cecab2c25bb527ca", "f53f3b645753edec7fa7c239a1665f2a", "00b1e26c6467f493841f2f5782940c0a",
+  "89d0612de409fa83c67c31b38d8b8874", "d29bb3d6b72763ed592142d05275af14", "fdd027b7d898186806eba8b5061f13c8",
   "e6cfb53266badda850d69f2479107813",
 ]
 
 ///|
 let h264_b_cavlc_spatial_unf_md5 : Array[String] = [
-  "e468e97785d843e884cbb696975d33ea",
-  "9960b56b8e3c312ec108aaf03699b554",
-  "0fd09b3bf8bb13b3b20c550c2e220f17",
-  "16c5efb366f4cd3b35c9c4b429a454f9",
-  "157d95f448547cf65e052d95166a9b10",
-  "ed22fc7b4dbdf2d52d68b26ad09ea876",
-  "b3631bbfdfedcb43f04be04e1ec4e07a",
-  "20b78bdcf054dfd3a72912e387d17f36",
-  "3c836037e46144bdebb2e892970bb693",
+  "e468e97785d843e884cbb696975d33ea", "9960b56b8e3c312ec108aaf03699b554", "0fd09b3bf8bb13b3b20c550c2e220f17",
+  "16c5efb366f4cd3b35c9c4b429a454f9", "157d95f448547cf65e052d95166a9b10", "ed22fc7b4dbdf2d52d68b26ad09ea876",
+  "b3631bbfdfedcb43f04be04e1ec4e07a", "20b78bdcf054dfd3a72912e387d17f36", "3c836037e46144bdebb2e892970bb693",
   "491c801c3d6443f34ff3f356b046c11b",
 ]
 
@@ -260,19 +253,29 @@ let h264_b_cavlc_spatial_unf_md5 : Array[String] = [
 test "h264 B pixels: h264_b_cavlc_spatial filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_cavlc_spatial_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_cavlc_spatial: " + error) }
-    let expected = if skip { h264_b_cavlc_spatial_unf_md5 } else { h264_b_cavlc_spatial_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_cavlc_spatial: " + error)
+    }
+    let expected = if skip {
+      h264_b_cavlc_spatial_unf_md5
+    } else {
+      h264_b_cavlc_spatial_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_cavlc_spatial skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_cavlc_spatial skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_cabac_temporal_b64 : Bytes =
-  b"AAAAAWdkAAqs2UINsBEAAAMAAQAAAwAQDxIllgAAAAFo6SnLIsAAAAEGBf//a9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let h264_b_cabac_temporal_b64 : Bytes = b"AAAAAWdkAAqs2UINsBEAAAMAAQAAAwAQDxIllgAAAAFo6SnLIsAAAAEGBf//a9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MSByZWY9NCBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -423,29 +426,17 @@ let h264_b_cabac_temporal_b64 : Bytes =
 
 ///|
 let h264_b_cabac_temporal_md5 : Array[String] = [
-  "b0aef1cde16c2ae03545e00d537c7c72",
-  "d8808f873426f34eac0e09eed445d76a",
-  "8d5538edd0c532c637775096a9d16d16",
-  "079b33d6ea9584fb3ffb8b7370ca7a66",
-  "54fa58a7815ad008f3642089c6030806",
-  "cfb8276e1d31769c685a231100dca170",
-  "4dd1c8e3a87c3ff6136c52dddda79236",
-  "1a650afa9b4b76896414948f3f113a68",
-  "b4f69e8b49316a7421406766401af2ca",
+  "b0aef1cde16c2ae03545e00d537c7c72", "d8808f873426f34eac0e09eed445d76a", "8d5538edd0c532c637775096a9d16d16",
+  "079b33d6ea9584fb3ffb8b7370ca7a66", "54fa58a7815ad008f3642089c6030806", "cfb8276e1d31769c685a231100dca170",
+  "4dd1c8e3a87c3ff6136c52dddda79236", "1a650afa9b4b76896414948f3f113a68", "b4f69e8b49316a7421406766401af2ca",
   "8ce890ee4510ba22a3b50f6f5cdd8f41",
 ]
 
 ///|
 let h264_b_cabac_temporal_unf_md5 : Array[String] = [
-  "58d54c20387b5b045211a2ad53e2747e",
-  "df9a7f76a8f55d478ad3a3655ac024da",
-  "a5f47d83dbbd800dbdccbab1b075f594",
-  "224c86e51dd17650c72ede8298b593fa",
-  "5c4c5085c284de74c65b0d85c2d5bdf4",
-  "0cb3177a895e13db91b090d5c3f80976",
-  "8801e666a99c2dd90a2fd1c06b86934b",
-  "85c4ba574bde99e70e697f1578c3e04e",
-  "569861944b18ed0a3f0777210a7bba3e",
+  "58d54c20387b5b045211a2ad53e2747e", "df9a7f76a8f55d478ad3a3655ac024da", "a5f47d83dbbd800dbdccbab1b075f594",
+  "224c86e51dd17650c72ede8298b593fa", "5c4c5085c284de74c65b0d85c2d5bdf4", "0cb3177a895e13db91b090d5c3f80976",
+  "8801e666a99c2dd90a2fd1c06b86934b", "85c4ba574bde99e70e697f1578c3e04e", "569861944b18ed0a3f0777210a7bba3e",
   "f1a047c85345101517d4c3d0f2b04f4b",
 ]
 
@@ -453,19 +444,29 @@ let h264_b_cabac_temporal_unf_md5 : Array[String] = [
 test "h264 B pixels: h264_b_cabac_temporal filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_cabac_temporal_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_cabac_temporal: " + error) }
-    let expected = if skip { h264_b_cabac_temporal_unf_md5 } else { h264_b_cabac_temporal_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_cabac_temporal: " + error)
+    }
+    let expected = if skip {
+      h264_b_cabac_temporal_unf_md5
+    } else {
+      h264_b_cabac_temporal_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_cabac_temporal skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_cabac_temporal skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_cavlc_temporal_b64 : Bytes =
-  b"AAAAAWdkAAqs2UINsBEAAAMAAQAAAwAQDxIllgAAAAFoySnLIsAAAAEGBf//a9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let h264_b_cavlc_temporal_b64 : Bytes = b"AAAAAWdkAAqs2UINsBEAAAMAAQAAAwAQDxIllgAAAAFoySnLIsAAAAEGBf//a9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MCByZWY9NCBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -626,29 +627,17 @@ let h264_b_cavlc_temporal_b64 : Bytes =
 
 ///|
 let h264_b_cavlc_temporal_md5 : Array[String] = [
-  "48197fc26b089159bc3efe9f20b5c278",
-  "1a1abf813a52bcd2081e7a2baaaba274",
-  "d4df9aff34083d3a0d4ccc2521737021",
-  "f5a7860e332adddccc0f39a374d3d2bd",
-  "f53f3b645753edec7fa7c239a1665f2a",
-  "b7abc31dabfae4f1dcd05f657ba772a2",
-  "293deef1c58b2f3b842371547942ac52",
-  "0a3d6d5895806cbddcdf8b924167dcf0",
-  "f63a2f9df2c40aeb007674ab0c0bac15",
+  "48197fc26b089159bc3efe9f20b5c278", "1a1abf813a52bcd2081e7a2baaaba274", "d4df9aff34083d3a0d4ccc2521737021",
+  "f5a7860e332adddccc0f39a374d3d2bd", "f53f3b645753edec7fa7c239a1665f2a", "b7abc31dabfae4f1dcd05f657ba772a2",
+  "293deef1c58b2f3b842371547942ac52", "0a3d6d5895806cbddcdf8b924167dcf0", "f63a2f9df2c40aeb007674ab0c0bac15",
   "bfd26a67e85226e0bd5fd0b521147e71",
 ]
 
 ///|
 let h264_b_cavlc_temporal_unf_md5 : Array[String] = [
-  "e468e97785d843e884cbb696975d33ea",
-  "736860d5d6db29b768b6ab5c5a3e2e70",
-  "57f1b87c315aa9e6553ad5a3403742dc",
-  "29293022a51c7250c9199d896fb960a5",
-  "157d95f448547cf65e052d95166a9b10",
-  "c5df1f2976697f9728d2c944121951d1",
-  "4e16757affa052a0eb99b3e074d4aaa8",
-  "a48449cd49908e5e35d010866f2651a6",
-  "955d904674931acd710c4b918001cd03",
+  "e468e97785d843e884cbb696975d33ea", "736860d5d6db29b768b6ab5c5a3e2e70", "57f1b87c315aa9e6553ad5a3403742dc",
+  "29293022a51c7250c9199d896fb960a5", "157d95f448547cf65e052d95166a9b10", "c5df1f2976697f9728d2c944121951d1",
+  "4e16757affa052a0eb99b3e074d4aaa8", "a48449cd49908e5e35d010866f2651a6", "955d904674931acd710c4b918001cd03",
   "d3f65e7fa422912c50a2b4d766b963d5",
 ]
 
@@ -656,19 +645,29 @@ let h264_b_cavlc_temporal_unf_md5 : Array[String] = [
 test "h264 B pixels: h264_b_cavlc_temporal filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_cavlc_temporal_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_cavlc_temporal: " + error) }
-    let expected = if skip { h264_b_cavlc_temporal_unf_md5 } else { h264_b_cavlc_temporal_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_cavlc_temporal: " + error)
+    }
+    let expected = if skip {
+      h264_b_cavlc_temporal_unf_md5
+    } else {
+      h264_b_cavlc_temporal_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_cavlc_temporal skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_cavlc_temporal skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_cabac_spatial_b64 : Bytes =
-  b"AAAAAWdkAAqs2UINsBEAAAMAAQAAAwAQDxIllgAAAAFo6SnLIsAAAAEGBf//a9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let h264_b_cabac_spatial_b64 : Bytes = b"AAAAAWdkAAqs2UINsBEAAAMAAQAAAwAQDxIllgAAAAFo6SnLIsAAAAEGBf//a9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MSByZWY9NCBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -818,29 +817,17 @@ let h264_b_cabac_spatial_b64 : Bytes =
 
 ///|
 let h264_b_cabac_spatial_md5 : Array[String] = [
-  "b0aef1cde16c2ae03545e00d537c7c72",
-  "57edcee6a1c81abdabce0d11126b6584",
-  "5f86ef30d73b8120d88fc7c6393c5b2b",
-  "084b1201c51311c40ac29b194cd19a97",
-  "54fa58a7815ad008f3642089c6030806",
-  "3630e0cc7388cc0ac596ee1d5ed9b67d",
-  "551b85b4e198efd0a8c54d1cbaafb5f7",
-  "2c543d9650044522e76ead9240980950",
-  "236d916edd4686ce9d58358cde830b9c",
+  "b0aef1cde16c2ae03545e00d537c7c72", "57edcee6a1c81abdabce0d11126b6584", "5f86ef30d73b8120d88fc7c6393c5b2b",
+  "084b1201c51311c40ac29b194cd19a97", "54fa58a7815ad008f3642089c6030806", "3630e0cc7388cc0ac596ee1d5ed9b67d",
+  "551b85b4e198efd0a8c54d1cbaafb5f7", "2c543d9650044522e76ead9240980950", "236d916edd4686ce9d58358cde830b9c",
   "b3533ec63261f73d22fa0f9c9167961d",
 ]
 
 ///|
 let h264_b_cabac_spatial_unf_md5 : Array[String] = [
-  "58d54c20387b5b045211a2ad53e2747e",
-  "fcdcaefd359058f312ea0390fac3bf61",
-  "e2d56222bd165f4831751b44a5228b2d",
-  "14b0be50ee9eefa0fb937e4fd8516d56",
-  "5c4c5085c284de74c65b0d85c2d5bdf4",
-  "694fc2da65f24d64238ab862fe7f1012",
-  "f03181c64ab3da8f619a0cb8278d12c4",
-  "950be71fcd15f2899fa7c544a8b22748",
-  "569861944b18ed0a3f0777210a7bba3e",
+  "58d54c20387b5b045211a2ad53e2747e", "fcdcaefd359058f312ea0390fac3bf61", "e2d56222bd165f4831751b44a5228b2d",
+  "14b0be50ee9eefa0fb937e4fd8516d56", "5c4c5085c284de74c65b0d85c2d5bdf4", "694fc2da65f24d64238ab862fe7f1012",
+  "f03181c64ab3da8f619a0cb8278d12c4", "950be71fcd15f2899fa7c544a8b22748", "569861944b18ed0a3f0777210a7bba3e",
   "4123252fc5d7228d85788e5fe7b47d95",
 ]
 
@@ -848,19 +835,29 @@ let h264_b_cabac_spatial_unf_md5 : Array[String] = [
 test "h264 B pixels: h264_b_cabac_spatial filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_cabac_spatial_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_cabac_spatial: " + error) }
-    let expected = if skip { h264_b_cabac_spatial_unf_md5 } else { h264_b_cabac_spatial_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_cabac_spatial: " + error)
+    }
+    let expected = if skip {
+      h264_b_cabac_spatial_unf_md5
+    } else {
+      h264_b_cabac_spatial_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_cabac_spatial skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_cabac_spatial skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_slices_cavlc_b64 : Bytes =
-  b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwBQPEiWWAAAAAFoyTFLIsAAAAEGBf//ddxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let h264_b_slices_cavlc_b64 : Bytes = b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwBQPEiWWAAAAAFoyTFLIsAAAAEGBf//ddxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MCByZWY9NCBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -1001,35 +998,19 @@ let h264_b_slices_cavlc_b64 : Bytes =
 
 ///|
 let h264_b_slices_cavlc_md5 : Array[String] = [
-  "a26ec1954d678eb677995eb4275e4cb2",
-  "19695670eca89121de7b00343883796e",
-  "3e649bd4dddc5756d9da1b0cbfdecbed",
-  "9efdb69813a7ef6871cef9c7599bb0d8",
-  "d71b9e2cc0fa311c25d2b32d1f44e7e8",
-  "9996c0e6d97a59bb5fcd3128a9570307",
-  "4c6d60c63ed09da93cb27b8346c35738",
-  "335df24ee8f2ffb9c42020c5be309d4e",
-  "b5955e40c267762cdd1718e735adf376",
-  "34feefd5b421da7a44650cb9ee0dca70",
-  "fda2b4806c42152db96167ecd0079457",
-  "a5ce1c0d459fb3a5ecde0d52008c34e1",
+  "a26ec1954d678eb677995eb4275e4cb2", "19695670eca89121de7b00343883796e", "3e649bd4dddc5756d9da1b0cbfdecbed",
+  "9efdb69813a7ef6871cef9c7599bb0d8", "d71b9e2cc0fa311c25d2b32d1f44e7e8", "9996c0e6d97a59bb5fcd3128a9570307",
+  "4c6d60c63ed09da93cb27b8346c35738", "335df24ee8f2ffb9c42020c5be309d4e", "b5955e40c267762cdd1718e735adf376",
+  "34feefd5b421da7a44650cb9ee0dca70", "fda2b4806c42152db96167ecd0079457", "a5ce1c0d459fb3a5ecde0d52008c34e1",
   "ff8201f7aba283540a5b278b606291b7",
 ]
 
 ///|
 let h264_b_slices_cavlc_unf_md5 : Array[String] = [
-  "598d4f2079d05d2c5e9fb9dcd816c60c",
-  "166d1506e49f1d6b0849c59810cbb2e8",
-  "10e838b953b7aeaeb9f6e65a17c8d2e3",
-  "301511af579bc816f5ed33018b1e62ff",
-  "b630e4a52f3cd62814699a22c888824e",
-  "d1dd62077c028d2f5dd825d9c87ee7d7",
-  "118a9b65ca9d40711cc7181ff91eb9f7",
-  "68e7ece481c1909c27d6a04aee715bf5",
-  "0312a444a0dcd8e0f914cb0be7f6c4d8",
-  "59cbcd8896ff6b83b685ef520fe53dc3",
-  "38936208df50be62185e69f4fd936acb",
-  "ea2ad10fe5b50f9179e3d5e5c504eb40",
+  "598d4f2079d05d2c5e9fb9dcd816c60c", "166d1506e49f1d6b0849c59810cbb2e8", "10e838b953b7aeaeb9f6e65a17c8d2e3",
+  "301511af579bc816f5ed33018b1e62ff", "b630e4a52f3cd62814699a22c888824e", "d1dd62077c028d2f5dd825d9c87ee7d7",
+  "118a9b65ca9d40711cc7181ff91eb9f7", "68e7ece481c1909c27d6a04aee715bf5", "0312a444a0dcd8e0f914cb0be7f6c4d8",
+  "59cbcd8896ff6b83b685ef520fe53dc3", "38936208df50be62185e69f4fd936acb", "ea2ad10fe5b50f9179e3d5e5c504eb40",
   "82c4871f1dc034b96d32613b208e9aa0",
 ]
 
@@ -1037,19 +1018,29 @@ let h264_b_slices_cavlc_unf_md5 : Array[String] = [
 test "h264 B pixels: h264_b_slices_cavlc filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_slices_cavlc_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_slices_cavlc: " + error) }
-    let expected = if skip { h264_b_slices_cavlc_unf_md5 } else { h264_b_slices_cavlc_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_slices_cavlc: " + error)
+    }
+    let expected = if skip {
+      h264_b_slices_cavlc_unf_md5
+    } else {
+      h264_b_slices_cavlc_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_slices_cavlc skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_slices_cavlc skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_slices_cabac_b64 : Bytes =
-  b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwBQPEiWWAAAAAFo6TFLIsAAAAEGBf//ddxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let h264_b_slices_cabac_b64 : Bytes = b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwBQPEiWWAAAAAFo6TFLIsAAAAEGBf//ddxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MSByZWY9NCBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -1187,35 +1178,19 @@ let h264_b_slices_cabac_b64 : Bytes =
 
 ///|
 let h264_b_slices_cabac_md5 : Array[String] = [
-  "7f7ae5343ecab3499625f3701786b3e8",
-  "83ae2f94e69e59be8123ce859a661d33",
-  "a2dab463033bbec7fcad2cdc50376de8",
-  "95f2accefd3a7c77ed81b896213de5b5",
-  "293dae4b803afc4c279bb19fc2cc048f",
-  "9c69bb0879bc47704f0970c62292d77c",
-  "91216d44b41ab4b02315c179c9237e65",
-  "af6eae8222fd4dde9f393d63675707bc",
-  "61a93c04902ec80df4d48a21cb3da576",
-  "aa430921cab3cca0bd2929d9737dea64",
-  "0417ef0b9b122dc831a8326e300af33a",
-  "82964520328ab3c8598de088cd750c83",
+  "7f7ae5343ecab3499625f3701786b3e8", "83ae2f94e69e59be8123ce859a661d33", "a2dab463033bbec7fcad2cdc50376de8",
+  "95f2accefd3a7c77ed81b896213de5b5", "293dae4b803afc4c279bb19fc2cc048f", "9c69bb0879bc47704f0970c62292d77c",
+  "91216d44b41ab4b02315c179c9237e65", "af6eae8222fd4dde9f393d63675707bc", "61a93c04902ec80df4d48a21cb3da576",
+  "aa430921cab3cca0bd2929d9737dea64", "0417ef0b9b122dc831a8326e300af33a", "82964520328ab3c8598de088cd750c83",
   "8c374d3303939f8cf28d7f274b774203",
 ]
 
 ///|
 let h264_b_slices_cabac_unf_md5 : Array[String] = [
-  "facd37ad1792c49a643e9b38a133b6ce",
-  "54ecc4804e6767f189ce5e707e7b908d",
-  "5c9956a424f6efb9742fb37371530fc7",
-  "681955eb99e74b0f3be3e9520e85b848",
-  "7e34d371bac3e33ab216e8b97edca68e",
-  "ec84da79833d1483bff1f140679d1b38",
-  "8e2be656e5c5cda298915fa661b1fa2a",
-  "f240c71d225fbbf82a39bd05fcf53eb6",
-  "d3f2fad917771bd9d73b6f3c8f051fb9",
-  "fe77e533f34b1cb0f27b28ccb4c5a79d",
-  "223578655ea33fe5e768f539dc8ce58d",
-  "a9ad371ee295398f9d19391fd16476d4",
+  "facd37ad1792c49a643e9b38a133b6ce", "54ecc4804e6767f189ce5e707e7b908d", "5c9956a424f6efb9742fb37371530fc7",
+  "681955eb99e74b0f3be3e9520e85b848", "7e34d371bac3e33ab216e8b97edca68e", "ec84da79833d1483bff1f140679d1b38",
+  "8e2be656e5c5cda298915fa661b1fa2a", "f240c71d225fbbf82a39bd05fcf53eb6", "d3f2fad917771bd9d73b6f3c8f051fb9",
+  "fe77e533f34b1cb0f27b28ccb4c5a79d", "223578655ea33fe5e768f539dc8ce58d", "a9ad371ee295398f9d19391fd16476d4",
   "3e4b1cc92134c00218703394193dd4b1",
 ]
 
@@ -1223,19 +1198,29 @@ let h264_b_slices_cabac_unf_md5 : Array[String] = [
 test "h264 B pixels: h264_b_slices_cabac filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_slices_cabac_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_slices_cabac: " + error) }
-    let expected = if skip { h264_b_slices_cabac_unf_md5 } else { h264_b_slices_cabac_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_slices_cabac: " + error)
+    }
+    let expected = if skip {
+      h264_b_slices_cabac_unf_md5
+    } else {
+      h264_b_slices_cabac_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_slices_cabac skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_slices_cabac skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_motion_b64 : Bytes =
-  b"AAAAAWdkAAqs2UKEbARAAAADAEAAAAUDxIllgAAAAAFo6TFLIsAAAAEGBf//fNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let h264_b_motion_b64 : Bytes = b"AAAAAWdkAAqs2UKEbARAAAADAEAAAAUDxIllgAAAAAFo6TFLIsAAAAEGBf//fNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MSByZWY9NCBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -1473,35 +1458,19 @@ let h264_b_motion_b64 : Bytes =
 
 ///|
 let h264_b_motion_md5 : Array[String] = [
-  "a078922db943415239634d2d33a445f8",
-  "d766ad12ded690b6f173059188e85473",
-  "47783ab0e9d033bbe79c808fd6e1ea26",
-  "40b629a2230f767f6c50a2b405eb2ca6",
-  "5001106f7a5e820017ef086a77bce5b1",
-  "e3b70ba34f71d1e8f3273d2318f3a40b",
-  "b381194f2da27cafe50702c56d698f00",
-  "018dd715c7c65e5109d2a1c05ed05490",
-  "5dec6c86bd2bdfee19033f0af25a8162",
-  "9533755b702983189bbd201f75893556",
-  "11a75417f2e5bf51d15a06f3f4bc2181",
-  "eb69853818ad37cceb64f886b674f59a",
+  "a078922db943415239634d2d33a445f8", "d766ad12ded690b6f173059188e85473", "47783ab0e9d033bbe79c808fd6e1ea26",
+  "40b629a2230f767f6c50a2b405eb2ca6", "5001106f7a5e820017ef086a77bce5b1", "e3b70ba34f71d1e8f3273d2318f3a40b",
+  "b381194f2da27cafe50702c56d698f00", "018dd715c7c65e5109d2a1c05ed05490", "5dec6c86bd2bdfee19033f0af25a8162",
+  "9533755b702983189bbd201f75893556", "11a75417f2e5bf51d15a06f3f4bc2181", "eb69853818ad37cceb64f886b674f59a",
   "df5415ffe99795fb3aede0d50e910ec7",
 ]
 
 ///|
 let h264_b_motion_unf_md5 : Array[String] = [
-  "0d3aee3fa4b55a77af38c711769722be",
-  "b9d2be32ec154021ff83b6f7ca2b688d",
-  "052648e1803e9669207a6f0fe978b807",
-  "12de0e1c8e5d251710836b4cbee7ef3c",
-  "939196fa4404ea41ed2b2f9a8809394c",
-  "742aca1087ad2bd691561f9c4091e5db",
-  "9fb998268c11f70c4751f9901b5ef825",
-  "29792fd55a82a81b4bf75b0f1f258c9e",
-  "15a824c29e8bf28906ddace661ebf9fd",
-  "ad7adc93103d718c2b491a32619cbcfe",
-  "0ee91aee3b542245df60cefc5dafe653",
-  "23e9a0ad370e1b47c4f44d7fedab7e27",
+  "0d3aee3fa4b55a77af38c711769722be", "b9d2be32ec154021ff83b6f7ca2b688d", "052648e1803e9669207a6f0fe978b807",
+  "12de0e1c8e5d251710836b4cbee7ef3c", "939196fa4404ea41ed2b2f9a8809394c", "742aca1087ad2bd691561f9c4091e5db",
+  "9fb998268c11f70c4751f9901b5ef825", "29792fd55a82a81b4bf75b0f1f258c9e", "15a824c29e8bf28906ddace661ebf9fd",
+  "ad7adc93103d718c2b491a32619cbcfe", "0ee91aee3b542245df60cefc5dafe653", "23e9a0ad370e1b47c4f44d7fedab7e27",
   "c89c57073366e88056db1cb4c9ceb0f1",
 ]
 
@@ -1509,19 +1478,25 @@ let h264_b_motion_unf_md5 : Array[String] = [
 test "h264 B pixels: h264_b_motion filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_motion_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_motion: " + error) }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_motion: " + error)
+    }
     let expected = if skip { h264_b_motion_unf_md5 } else { h264_b_motion_md5 }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_motion skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_motion skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_cqm_cabac_b64 : Bytes =
-  b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwA4PEiWWAAAAAFo6TiyzACwAAABBgX//23cRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
+let h264_b_cqm_cabac_b64 : Bytes = b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwA4PEiWWAAAAAFo6TiyzACwAAABBgX//23cRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
   b"NjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlv" +
   b"bnM6IGNhYmFjPTEgcmVmPTQgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDow" +
   b"LjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MSBkZWFkem9uZT0yMSwxMSBmYXN0" +
@@ -1736,63 +1711,51 @@ let h264_b_cqm_cabac_b64 : Bytes =
 
 ///|
 let h264_b_cqm_cabac_md5 : Array[String] = [
-  "b031bd8fe5603513fdb8c524ce1482c9",
-  "b9708a130e1f6178c6708f5c4c6633c0",
-  "95aee738bf35ce457233c4353f8a9beb",
-  "676fa129a8ae13c7d55e4a15b57495b9",
-  "c68bb792a11cda28b95c0abfe3f67bfd",
-  "d0201d2cb43699e46a02d1a888d5a2d6",
-  "c046c347cf19c0c70d381b6de0605656",
-  "9830cc7810084bebcbbfcebc89a3b58a",
-  "58491386a07c280e0b943a2b049fcd19",
-  "dc62ff1a0f180b5da2be04f394209b86",
-  "a218b58ca9f540a17a6e2be489b1dae3",
-  "0f738c3d989bd656a9c0db4996919088",
-  "619ca4e3e03c2f6f7bff599bfc375c54",
-  "e1a0cf2614b2bebbd16aee9944098c71",
-  "722602dba2f8bc73aad4dc0dec48170f",
-  "984738b283e879cd10f9c5cdbef4f3b2",
-  "bfc4ae52c311d0ed77232afbd10ab2ab",
+  "b031bd8fe5603513fdb8c524ce1482c9", "b9708a130e1f6178c6708f5c4c6633c0", "95aee738bf35ce457233c4353f8a9beb",
+  "676fa129a8ae13c7d55e4a15b57495b9", "c68bb792a11cda28b95c0abfe3f67bfd", "d0201d2cb43699e46a02d1a888d5a2d6",
+  "c046c347cf19c0c70d381b6de0605656", "9830cc7810084bebcbbfcebc89a3b58a", "58491386a07c280e0b943a2b049fcd19",
+  "dc62ff1a0f180b5da2be04f394209b86", "a218b58ca9f540a17a6e2be489b1dae3", "0f738c3d989bd656a9c0db4996919088",
+  "619ca4e3e03c2f6f7bff599bfc375c54", "e1a0cf2614b2bebbd16aee9944098c71", "722602dba2f8bc73aad4dc0dec48170f",
+  "984738b283e879cd10f9c5cdbef4f3b2", "bfc4ae52c311d0ed77232afbd10ab2ab",
 ]
 
 ///|
 let h264_b_cqm_cabac_unf_md5 : Array[String] = [
-  "54a10746ed9466a4570b6e5353a6efce",
-  "589fd1715320cc97551b086bb587e35d",
-  "f09b76ec53baf930fd69d563168e7d95",
-  "1cc0dd8991a8b3f38ff718c22e86fb4a",
-  "ff4decacca960efdd2f7c355b6dc27ca",
-  "11017643c7c63487e41802d8e111da91",
-  "cfaf77926f64484bac2caa00b0b6d08a",
-  "cea1e152dae61bece40ccb7906b6ae01",
-  "50e0e40f02fed348694d34c54e3b9a2c",
-  "ff172d4451fedd73851e75679c433a71",
-  "fea111aba7cff4b469ae0bdcd0590d99",
-  "357ecb48f08ea6cc2fa6034e84ca2738",
-  "15cb2cfadaa34091d26a039d64afca2c",
-  "e052827a8e587fe041fe78e1f4aefc35",
-  "034af4cf114e57317a251730f9127100",
-  "6c4c274a68f403c9b99b906ab94f57dc",
-  "3a66ce822651ed8d84807556fd02378b",
+  "54a10746ed9466a4570b6e5353a6efce", "589fd1715320cc97551b086bb587e35d", "f09b76ec53baf930fd69d563168e7d95",
+  "1cc0dd8991a8b3f38ff718c22e86fb4a", "ff4decacca960efdd2f7c355b6dc27ca", "11017643c7c63487e41802d8e111da91",
+  "cfaf77926f64484bac2caa00b0b6d08a", "cea1e152dae61bece40ccb7906b6ae01", "50e0e40f02fed348694d34c54e3b9a2c",
+  "ff172d4451fedd73851e75679c433a71", "fea111aba7cff4b469ae0bdcd0590d99", "357ecb48f08ea6cc2fa6034e84ca2738",
+  "15cb2cfadaa34091d26a039d64afca2c", "e052827a8e587fe041fe78e1f4aefc35", "034af4cf114e57317a251730f9127100",
+  "6c4c274a68f403c9b99b906ab94f57dc", "3a66ce822651ed8d84807556fd02378b",
 ]
 
 ///|
 test "h264 B pixels: h264_b_cqm_cabac filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_cqm_cabac_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_cqm_cabac: " + error) }
-    let expected = if skip { h264_b_cqm_cabac_unf_md5 } else { h264_b_cqm_cabac_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_cqm_cabac: " + error)
+    }
+    let expected = if skip {
+      h264_b_cqm_cabac_unf_md5
+    } else {
+      h264_b_cqm_cabac_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_cqm_cabac skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_cqm_cabac skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_cqm_cavlc_b64 : Bytes =
-  b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwA4PEiWWAAAAAFoyTiyzACwAAABBgX//23cRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
+let h264_b_cqm_cavlc_b64 : Bytes = b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwA4PEiWWAAAAAFoyTiyzACwAAABBgX//23cRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
   b"NjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlv" +
   b"bnM6IGNhYmFjPTAgcmVmPTQgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDow" +
   b"LjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MSBkZWFkem9uZT0yMSwxMSBmYXN0" +
@@ -2023,63 +1986,51 @@ let h264_b_cqm_cavlc_b64 : Bytes =
 
 ///|
 let h264_b_cqm_cavlc_md5 : Array[String] = [
-  "f6ee9c8b58b979b48282633739ec8903",
-  "0f5b604947ec7e9bfa90f6de1201f016",
-  "76f6f2771a9a3d5eb0bc5d8b148e0cad",
-  "7699f2946edc59657a86d4c5e7ac8fff",
-  "6ba8190eceada03154b3cd1d8ef3e8f9",
-  "e4a1104b313c7920ef1d996207c9f039",
-  "852f4c9bdd34ccc1a2eb182cd7f71f6a",
-  "dfe86a7bc66a611aee29c35558237b7b",
-  "2a58c907bdadd2a6bcc6d3c16c28f16a",
-  "52b4a30051576a30a769ad0561459696",
-  "3f0800c308b6a5d5b628d0ea2aea0548",
-  "b75b9a1f270aca8307f98ee9877a3bcc",
-  "d1178de7617945e2e06677900882f2df",
-  "d1bf56f005e14a2d058994245009f0f1",
-  "764cffb601e6db2edbcffe2cf875b2bf",
-  "ef5dc89921b0aa821c31b572d848bf74",
-  "0c30b858c418cfe3750917930c9198b5",
+  "f6ee9c8b58b979b48282633739ec8903", "0f5b604947ec7e9bfa90f6de1201f016", "76f6f2771a9a3d5eb0bc5d8b148e0cad",
+  "7699f2946edc59657a86d4c5e7ac8fff", "6ba8190eceada03154b3cd1d8ef3e8f9", "e4a1104b313c7920ef1d996207c9f039",
+  "852f4c9bdd34ccc1a2eb182cd7f71f6a", "dfe86a7bc66a611aee29c35558237b7b", "2a58c907bdadd2a6bcc6d3c16c28f16a",
+  "52b4a30051576a30a769ad0561459696", "3f0800c308b6a5d5b628d0ea2aea0548", "b75b9a1f270aca8307f98ee9877a3bcc",
+  "d1178de7617945e2e06677900882f2df", "d1bf56f005e14a2d058994245009f0f1", "764cffb601e6db2edbcffe2cf875b2bf",
+  "ef5dc89921b0aa821c31b572d848bf74", "0c30b858c418cfe3750917930c9198b5",
 ]
 
 ///|
 let h264_b_cqm_cavlc_unf_md5 : Array[String] = [
-  "a97851af10d84cab9cda4b7d800492ba",
-  "084dd70dc3a1a1b835107801ef069a04",
-  "11378d7ef12b1ad3c55b205ad4db8c02",
-  "6a3f1448ad1cae555b4e41d3422f8f01",
-  "b2de07577c4d8ccc1d11c74302f95f3a",
-  "9432338056d43d09d46c3ad6ef8fb909",
-  "26068b1d8d19e6bf6f3b4cd3fb472ca9",
-  "dcdd2a86403ded0f249606c18ebdfcc3",
-  "89ceb3572c2e4c2e097cef23b51f13e8",
-  "d1710da0d74f3de2fa19eed4cd94e848",
-  "cfc18a842fe49a821a19c0c5e2b40960",
-  "b2b15dfcc14721549f465aa594374336",
-  "b6a2d1a701685910ddc090e72be423c4",
-  "75e631bcd26c1087ba505de6115ac400",
-  "6204d1547e702fe133507d0f5a3c1ecb",
-  "f0b128a59cefcff704454403705603c7",
-  "49a8146e29dc5cbe19f1e56a93f190b1",
+  "a97851af10d84cab9cda4b7d800492ba", "084dd70dc3a1a1b835107801ef069a04", "11378d7ef12b1ad3c55b205ad4db8c02",
+  "6a3f1448ad1cae555b4e41d3422f8f01", "b2de07577c4d8ccc1d11c74302f95f3a", "9432338056d43d09d46c3ad6ef8fb909",
+  "26068b1d8d19e6bf6f3b4cd3fb472ca9", "dcdd2a86403ded0f249606c18ebdfcc3", "89ceb3572c2e4c2e097cef23b51f13e8",
+  "d1710da0d74f3de2fa19eed4cd94e848", "cfc18a842fe49a821a19c0c5e2b40960", "b2b15dfcc14721549f465aa594374336",
+  "b6a2d1a701685910ddc090e72be423c4", "75e631bcd26c1087ba505de6115ac400", "6204d1547e702fe133507d0f5a3c1ecb",
+  "f0b128a59cefcff704454403705603c7", "49a8146e29dc5cbe19f1e56a93f190b1",
 ]
 
 ///|
 test "h264 B pixels: h264_b_cqm_cavlc filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_cqm_cavlc_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_cqm_cavlc: " + error) }
-    let expected = if skip { h264_b_cqm_cavlc_unf_md5 } else { h264_b_cqm_cavlc_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_cqm_cavlc: " + error)
+    }
+    let expected = if skip {
+      h264_b_cqm_cavlc_unf_md5
+    } else {
+      h264_b_cqm_cavlc_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_cqm_cavlc skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_cqm_cavlc skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_b_multigop_b64 : Bytes =
-  b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwA4PEiWWAAAAAFo6TiyyLAAAAEGBf//adxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let h264_b_multigop_b64 : Bytes = b"AAAAAWdkAAqs2UYuwEQAAAMABAAAAwA4PEiWWAAAAAFo6TiyyLAAAAEGBf//adxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MSByZWY9NCBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgzOjB4MTEzIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTEgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0xIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -2348,63 +2299,51 @@ let h264_b_multigop_b64 : Bytes =
 
 ///|
 let h264_b_multigop_md5 : Array[String] = [
-  "281a06a6587498c1564917a3602af027",
-  "6cef8dc00c657a2f58a7cbcb4665f71d",
-  "98a4cbc7d39f50fc5f9889aa4c11bf6f",
-  "f744425d43feb10f311304f17f3c701e",
-  "c4ab7dfd017d3af5e49f9bb987899e2f",
-  "4eeefac2c668bd5fcd06bafd4c369d71",
-  "83717b61892fe59204b965d8b5f78c61",
-  "9870d1abf2234992522844a62f0a793c",
-  "6f4e7c564638f658f8245ce4a6443086",
-  "507b426baea752f58c644d691e48685a",
-  "3362e003201dc08cc285f522bd2a1af0",
-  "6de66e6bb86008bba2ee72b708544c7e",
-  "ac0ec1e7a9b057b5668190e47e009856",
-  "5987c50ba865ed8772a03b2301ff6660",
-  "8989e4d86721f6e5e2b0595a171f2af8",
-  "da63f0f51fbc1b80021acec5eaeef481",
-  "7499f2481f4196cbded5357563b6843f",
+  "281a06a6587498c1564917a3602af027", "6cef8dc00c657a2f58a7cbcb4665f71d", "98a4cbc7d39f50fc5f9889aa4c11bf6f",
+  "f744425d43feb10f311304f17f3c701e", "c4ab7dfd017d3af5e49f9bb987899e2f", "4eeefac2c668bd5fcd06bafd4c369d71",
+  "83717b61892fe59204b965d8b5f78c61", "9870d1abf2234992522844a62f0a793c", "6f4e7c564638f658f8245ce4a6443086",
+  "507b426baea752f58c644d691e48685a", "3362e003201dc08cc285f522bd2a1af0", "6de66e6bb86008bba2ee72b708544c7e",
+  "ac0ec1e7a9b057b5668190e47e009856", "5987c50ba865ed8772a03b2301ff6660", "8989e4d86721f6e5e2b0595a171f2af8",
+  "da63f0f51fbc1b80021acec5eaeef481", "7499f2481f4196cbded5357563b6843f",
 ]
 
 ///|
 let h264_b_multigop_unf_md5 : Array[String] = [
-  "bdcf6b723df6b996ad54cd257accdd01",
-  "3d12f1a692612a59a79f6efa7d31780e",
-  "2f1a4e9d527f542bcc9437170722034e",
-  "90a928dace7396b411da100603668d98",
-  "fc56cbbe799d9322786a692004229647",
-  "01de37d61ca8230ddbbf9d1f441ef152",
-  "50d42c054bd51d8cfd6a0962840c7b2f",
-  "7d6fd9d03036f3004e85b65f7dd0beba",
-  "94e3a2d7872d1395c08c55773e6dcae5",
-  "b4f3f6ae9b97428426eb6d0837277f75",
-  "2b77cc1527b74517d4e1c7d8674b023a",
-  "34628017a04fd6b1d3f93df5a73d4c81",
-  "336209d943d09dc839515bbe596bfd77",
-  "bd1af34925e9bfbd50d07e78f1ea3150",
-  "7c5afd6261064d7b4aa0b02aa45309aa",
-  "28cc223b269760e9f3b565a021636f22",
-  "2c8b89b15df0eda3aaff1d135e4b65e4",
+  "bdcf6b723df6b996ad54cd257accdd01", "3d12f1a692612a59a79f6efa7d31780e", "2f1a4e9d527f542bcc9437170722034e",
+  "90a928dace7396b411da100603668d98", "fc56cbbe799d9322786a692004229647", "01de37d61ca8230ddbbf9d1f441ef152",
+  "50d42c054bd51d8cfd6a0962840c7b2f", "7d6fd9d03036f3004e85b65f7dd0beba", "94e3a2d7872d1395c08c55773e6dcae5",
+  "b4f3f6ae9b97428426eb6d0837277f75", "2b77cc1527b74517d4e1c7d8674b023a", "34628017a04fd6b1d3f93df5a73d4c81",
+  "336209d943d09dc839515bbe596bfd77", "bd1af34925e9bfbd50d07e78f1ea3150", "7c5afd6261064d7b4aa0b02aa45309aa",
+  "28cc223b269760e9f3b565a021636f22", "2c8b89b15df0eda3aaff1d135e4b65e4",
 ]
 
 ///|
 test "h264 B pixels: h264_b_multigop filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_b_multigop_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_b_multigop: " + error) }
-    let expected = if skip { h264_b_multigop_unf_md5 } else { h264_b_multigop_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_b_multigop: " + error)
+    }
+    let expected = if skip {
+      h264_b_multigop_unf_md5
+    } else {
+      h264_b_multigop_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_b_multigop skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_b_multigop skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_switching_b64 : Bytes =
-  b"AAAAAWdYAB728gAAAAFozjyAAAAAAWW4QKDQFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsU" +
+let h264_switching_b64 : Bytes = b"AAAAAWdYAB728gAAAAFozjyAAAAAAWW4QKDQFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsU" +
   b"FRYXGBkaGxQVFhcYGRobFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsUFRYXGBkaGxQVFhcY" +
   b"GRobFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsUFRYXGBkaGxQVFhcYGRobFBUWFxgZGhsU" +
   b"FRYXGBkaGxQVFhcYGRobFBUWFxgZGhsUFRYXGBkaGzIzNDU2Nzg5MjM0NTY3ODkyMzQ1Njc4OTIzNDU2Nzg5MjM0NTY3ODkyMzQ1Njc4OTIzNDU2" +
@@ -2425,8 +2364,7 @@ test "h264: real switching SP stream is explicitly unsupported" {
 }
 
 ///|
-let h264_depth10_0_b64 : Bytes =
-  b"AAAAAWduAAqmzZRi7ARAAAADAEAAAAMDg8SJZYAAAAABaMvgQyyLAAABBgX//3TcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
+let h264_depth10_0_b64 : Bytes = b"AAAAAWduAAqmzZRi7ARAAAADAEAAAAMDg8SJZYAAAAABaMvgQyyLAAABBgX//3TcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
   b"NjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlv" +
   b"bnM6IGNhYmFjPTAgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDow" +
   b"LjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0" +
@@ -2706,47 +2644,45 @@ let h264_depth10_0_b64 : Bytes =
 
 ///|
 let h264_depth10_0_md5 : Array[String] = [
-  "a96865fa78e2775a9a64edcb5d90c5fb",
-  "a5d8b823b0f788df558660b23f9ed226",
-  "0dbff7cc9afe27c6f16a705e338e4f86",
-  "78b1ae076760415d3b0cd6bd90e9f42e",
-  "9b8cea98a754e20f473c74bbcdbc0dfe",
-  "ef1a8351f64f9a232b03f6827cc4c97b",
-  "9fbe066192c27650c4cdde76b050a40b",
-  "34ad9722ed35e9faf08246a7ad0dc643",
-  "007ea752c3a54c4ef202b6999b837137",
+  "a96865fa78e2775a9a64edcb5d90c5fb", "a5d8b823b0f788df558660b23f9ed226", "0dbff7cc9afe27c6f16a705e338e4f86",
+  "78b1ae076760415d3b0cd6bd90e9f42e", "9b8cea98a754e20f473c74bbcdbc0dfe", "ef1a8351f64f9a232b03f6827cc4c97b",
+  "9fbe066192c27650c4cdde76b050a40b", "34ad9722ed35e9faf08246a7ad0dc643", "007ea752c3a54c4ef202b6999b837137",
 ]
 
 ///|
 let h264_depth10_0_unf_md5 : Array[String] = [
-  "a96865fa78e2775a9a64edcb5d90c5fb",
-  "a5d8b823b0f788df558660b23f9ed226",
-  "0dbff7cc9afe27c6f16a705e338e4f86",
-  "78b1ae076760415d3b0cd6bd90e9f42e",
-  "9b8cea98a754e20f473c74bbcdbc0dfe",
-  "ef1a8351f64f9a232b03f6827cc4c97b",
-  "9fbe066192c27650c4cdde76b050a40b",
-  "34ad9722ed35e9faf08246a7ad0dc643",
-  "007ea752c3a54c4ef202b6999b837137",
+  "a96865fa78e2775a9a64edcb5d90c5fb", "a5d8b823b0f788df558660b23f9ed226", "0dbff7cc9afe27c6f16a705e338e4f86",
+  "78b1ae076760415d3b0cd6bd90e9f42e", "9b8cea98a754e20f473c74bbcdbc0dfe", "ef1a8351f64f9a232b03f6827cc4c97b",
+  "9fbe066192c27650c4cdde76b050a40b", "34ad9722ed35e9faf08246a7ad0dc643", "007ea752c3a54c4ef202b6999b837137",
 ]
 
 ///|
 test "h264 B pixels: h264_depth10_0 filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_depth10_0_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_depth10_0: " + error) }
-    let expected = if skip { h264_depth10_0_unf_md5 } else { h264_depth10_0_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_depth10_0: " + error)
+    }
+    let expected = if skip {
+      h264_depth10_0_unf_md5
+    } else {
+      h264_depth10_0_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_depth10_0 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_depth10_0 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_depth10_1_b64 : Bytes =
-  b"AAAAAWduAAqmzZRi7ARAAAADAEAAAAMDg8SJZYAAAAABaOvgQyyLAAABBgX//3TcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
+let h264_depth10_1_b64 : Bytes = b"AAAAAWduAAqmzZRi7ARAAAADAEAAAAMDg8SJZYAAAAABaOvgQyyLAAABBgX//3TcRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
   b"NjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlv" +
   b"bnM6IGNhYmFjPTEgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDow" +
   b"LjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0" +
@@ -3012,47 +2948,45 @@ let h264_depth10_1_b64 : Bytes =
 
 ///|
 let h264_depth10_1_md5 : Array[String] = [
-  "b8b3d1c3413c1609a352207b48e75b98",
-  "da2fe53501e5479674001cedc32e1c3d",
-  "3b395bc2a406dcd8f3151db066779f90",
-  "604cdeb4419926764f00f05fc3cbe9ad",
-  "12404cc5162c58c840984cca8125bc79",
-  "66197d51aeff39ca5a1e7bcc231263ef",
-  "b7616704fcf297265aae1a92b9e45d14",
-  "0b4f107816ebb00d6f9319d009a81a71",
-  "3561869b316fdf9b3f8a723cbd649d80",
+  "b8b3d1c3413c1609a352207b48e75b98", "da2fe53501e5479674001cedc32e1c3d", "3b395bc2a406dcd8f3151db066779f90",
+  "604cdeb4419926764f00f05fc3cbe9ad", "12404cc5162c58c840984cca8125bc79", "66197d51aeff39ca5a1e7bcc231263ef",
+  "b7616704fcf297265aae1a92b9e45d14", "0b4f107816ebb00d6f9319d009a81a71", "3561869b316fdf9b3f8a723cbd649d80",
 ]
 
 ///|
 let h264_depth10_1_unf_md5 : Array[String] = [
-  "b8b3d1c3413c1609a352207b48e75b98",
-  "da2fe53501e5479674001cedc32e1c3d",
-  "3b395bc2a406dcd8f3151db066779f90",
-  "604cdeb4419926764f00f05fc3cbe9ad",
-  "12404cc5162c58c840984cca8125bc79",
-  "66197d51aeff39ca5a1e7bcc231263ef",
-  "b7616704fcf297265aae1a92b9e45d14",
-  "0b4f107816ebb00d6f9319d009a81a71",
-  "3561869b316fdf9b3f8a723cbd649d80",
+  "b8b3d1c3413c1609a352207b48e75b98", "da2fe53501e5479674001cedc32e1c3d", "3b395bc2a406dcd8f3151db066779f90",
+  "604cdeb4419926764f00f05fc3cbe9ad", "12404cc5162c58c840984cca8125bc79", "66197d51aeff39ca5a1e7bcc231263ef",
+  "b7616704fcf297265aae1a92b9e45d14", "0b4f107816ebb00d6f9319d009a81a71", "3561869b316fdf9b3f8a723cbd649d80",
 ]
 
 ///|
 test "h264 B pixels: h264_depth10_1 filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_depth10_1_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_depth10_1: " + error) }
-    let expected = if skip { h264_depth10_1_unf_md5 } else { h264_depth10_1_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_depth10_1: " + error)
+    }
+    let expected = if skip {
+      h264_depth10_1_unf_md5
+    } else {
+      h264_depth10_1_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_depth10_1 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_depth10_1 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_pcm9_b64 : Bytes =
-  b"AAAAAWf0AB6kjp5AAAAAAWjOPIAAAAABZbhAoNAAJWVb8qOm/BNUT3pGd+ZETLuoeU9Q/SDlnWP8I2RbcmOG7AtQTXlF96YkPLOkd05QfODFjVv4" +
+let h264_pcm9_b64 : Bytes = b"AAAAAWf0AB6kjp5AAAAAAWjOPIAAAAABZbhAoNAAJWVb8qOm/BNUT3pGd+ZETLuoeU9Q/SDlnWP8I2RbcmOG7AtQTXlF96YkPLOkd05QfODFjVv4" +
   b"IWNa8iNm3ANMS3hFd2YELKugdU1P/KClfVP0H2JaceNGzftISXdE9yXkHKOcc0xPfGCFbUvwHWFZ8aMmvfNER3ZEduXEDJuYcUtO/CBlXUPsG2BZ" +
   b"cWMGretARXVD9qWn/JOUb0pOe+BFTTvoGV9Y8SLmneM8Q3RDdmWH7IuQbUlN+6AlPTPkF15YcOLGjds4QXNC9iVn3IOMa0hNe2AFLSvgFV1X8KKm" +
   b"fdM0P3JCdeVHzHuIaUdM+yflHSPcE1xXcGKGbcswPXFB9aUnvHOEZ0ZMeufFDRvYEVtW8CJmXcMsO3BBdWUHrGsvvTEh5Z0junKD5wYsat/BCxrX" +
@@ -3061,33 +2995,37 @@ let h264_pcm9_b64 : Bytes =
 
 ///|
 let h264_pcm9_md5 : Array[String] = [
-  "0ddc91bf9654c24d47cc5e33f26f6d45",
-  "0ddc91bf9654c24d47cc5e33f26f6d45",
+  "0ddc91bf9654c24d47cc5e33f26f6d45", "0ddc91bf9654c24d47cc5e33f26f6d45",
 ]
 
 ///|
 let h264_pcm9_unf_md5 : Array[String] = [
-  "0ddc91bf9654c24d47cc5e33f26f6d45",
-  "0ddc91bf9654c24d47cc5e33f26f6d45",
+  "0ddc91bf9654c24d47cc5e33f26f6d45", "0ddc91bf9654c24d47cc5e33f26f6d45",
 ]
 
 ///|
 test "h264 B pixels: h264_pcm9 filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_pcm9_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_pcm9: " + error) }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_pcm9: " + error)
+    }
     let expected = if skip { h264_pcm9_unf_md5 } else { h264_pcm9_md5 }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_pcm9 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_pcm9 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_pcm10_b64 : Bytes =
-  b"AAAAAWf0AB6mzp5AAAAAAWjOPIAAAAABZbhAoNAACVSpv5UunfgTKhPXSme/ORCYu1QeWesP6QOTOWN+KNyLtxMOFdoLqDNfKF89GJh6s9I90ckH" +
+let h264_pcm10_b64 : Bytes = b"AAAAAWf0AB6mzp5AAAAAAWjOPIAAAAABZbhAoNAACVSpv5UunfgTKhPXSme/ORCYu1QeWesP6QOTOWN+KNyLtxMOFdoLqDNfKF89GJh6s9I90ckH" +
   b"ZyMbG1v8CFRpr5EtnbgDJhLXCle7OBBYq1AdWar/5QKS+VN6J9xLpw8NFZn7pDJe6E85F5g6o8480Yj3YyIa20v4B1Qpn40snXvzIhHWyke3NxAY" +
   b"m0wcWWrv4QGSuUN2JtwLlwsMFVnroDFeqD81Fpf6k8o70UjnXyEamzv0BlPpj4krnTvjHhDWijezNh/Yi0gbWSrf3QCSeTNyJdvLhwcLFRnbnDBe" +
   b"aC8xFZe6g8Y60QjXWyAaWyvwBVOpf4UqnPvTGg/WSievNR+Ye0QaWOrP2T+SOSNuJNuLdwMKFNnLmC9eKB8tFJd6c8I50MjHVx8aGxvsBFNpb4Ep" +
@@ -3097,33 +3035,37 @@ let h264_pcm10_b64 : Bytes =
 
 ///|
 let h264_pcm10_md5 : Array[String] = [
-  "d30a98b3ccb48684a73b474e3d5980eb",
-  "d30a98b3ccb48684a73b474e3d5980eb",
+  "d30a98b3ccb48684a73b474e3d5980eb", "d30a98b3ccb48684a73b474e3d5980eb",
 ]
 
 ///|
 let h264_pcm10_unf_md5 : Array[String] = [
-  "d30a98b3ccb48684a73b474e3d5980eb",
-  "d30a98b3ccb48684a73b474e3d5980eb",
+  "d30a98b3ccb48684a73b474e3d5980eb", "d30a98b3ccb48684a73b474e3d5980eb",
 ]
 
 ///|
 test "h264 B pixels: h264_pcm10 filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_pcm10_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_pcm10: " + error) }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_pcm10: " + error)
+    }
     let expected = if skip { h264_pcm10_unf_md5 } else { h264_pcm10_md5 }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_pcm10 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_pcm10 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_pcm12_b64 : Bytes =
-  b"AAAAAWf0AB6ilOnkAAAAAWjOPIAAAAABZbhAoNAAAJUSob8lQuk35BNKhT1dJmdvx5GCaLuVCeWnqw+6TDnM7WPfjo3yL7cEwOEXYgsqAzU8pF9P" +
+let h264_pcm12_b64 : Bytes = b"AAAAAWf0AB6ilOnkAAAAAWjOPIAAAAABZbhAoNAAAJUSob8lQuk35BNKhT1dJmdvx5GCaLuVCeWnqw+6TDnM7WPfjo3yL7cEwOEXYgsqAzU8pF9P" +
   b"RYlh5rN0h92HKQeZyjGsa1u/DIXRra/kTtn24AMJgS0cIlcuw4FBZKtUBdVmpv95SCmL6VOein2xK6fDzNHWbfvpDyX7oE8OQXkg4qMzg81GJPdY" +
   b"xiFrZ0t+CHWQqZ+jSsm16/PIjR3bLkftz3EAYJsTAcUlou84RBlK5UNdhm1wJ5eCyMGVaeuoCxW6rD/NTWnf7pPyj70FIOcXwhEqYzs9BGVPpY9i" +
   b"Rrl05+OHiQ2aKjesy2G/bIvSDbXkrt/3QAkJ4TMcgl0vI4dBxLFUZdtnBwV5qC+MSVme6oOxi63ELNfWzgHpbyv8AFUOoX8hQqkz49NGhP1ZJidr" +
@@ -3134,33 +3076,37 @@ let h264_pcm12_b64 : Bytes =
 
 ///|
 let h264_pcm12_md5 : Array[String] = [
-  "78b8cf1f7dfd9d2965a57fb393ec3f97",
-  "78b8cf1f7dfd9d2965a57fb393ec3f97",
+  "78b8cf1f7dfd9d2965a57fb393ec3f97", "78b8cf1f7dfd9d2965a57fb393ec3f97",
 ]
 
 ///|
 let h264_pcm12_unf_md5 : Array[String] = [
-  "78b8cf1f7dfd9d2965a57fb393ec3f97",
-  "78b8cf1f7dfd9d2965a57fb393ec3f97",
+  "78b8cf1f7dfd9d2965a57fb393ec3f97", "78b8cf1f7dfd9d2965a57fb393ec3f97",
 ]
 
 ///|
 test "h264 B pixels: h264_pcm12 filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_pcm12_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_pcm12: " + error) }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_pcm12: " + error)
+    }
     let expected = if skip { h264_pcm12_unf_md5 } else { h264_pcm12_md5 }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_pcm12 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_pcm12 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_pcm14_b64 : Bytes =
-  b"AAAAAWf0AB6jnOnkAAAAAWjOPIAAAAABZbhAoNAAAAlQSoG/CVAukN+EExKgU9F0hmcb8HkSCYi7JUCeUp6LDy6Qw5MzjWM34OjTyI+3QTEOFF2S" +
+let h264_pcm14_b64 : Bytes = b"AAAAAWf0AB6jnOnkAAAAAWjOPIAAAAABZbhAoNAAAAlQSoG/CVAukN+EExKgU9F0hmcb8HkSCYi7JUCeUp6LDy6Qw5MzjWM34OjTyI+3QTEOFF2S" +
   b"C0qBM1TylF9T0ViVh5azXSF91hyZB2Zxoxaxm1tvwchXRp2veRHtl9ugA4JiEthwoleLsjgZBaSrlQJdWZqm/55SgpovqVOnoqfaxKunsPLNG1mt" +
   b"+7pC8lvusE/Dkxecg7KjzOM83Ri099YzYh2tt0vfg4deQrmf6NOsnte78/Ij0d9svkf7c/cQAYCbBMAcUJaC7w4QQZErhUMXYGbRwIeXILCMElWJ" +
   b"6yoAsVLqjD8zUNaTf46TPKD71BSQ50XxIRSpkztPQUZVPpWPWJFrldOX42HhkNZomjdrMbYW/ZyLdIHbV5Ke333SAJgnoTOHIiXYvKOHkHJLGVGl" +
@@ -3172,33 +3118,37 @@ let h264_pcm14_b64 : Bytes =
 
 ///|
 let h264_pcm14_md5 : Array[String] = [
-  "0359f08cb60ba19cdb9f1a8eced9454c",
-  "0359f08cb60ba19cdb9f1a8eced9454c",
+  "0359f08cb60ba19cdb9f1a8eced9454c", "0359f08cb60ba19cdb9f1a8eced9454c",
 ]
 
 ///|
 let h264_pcm14_unf_md5 : Array[String] = [
-  "0359f08cb60ba19cdb9f1a8eced9454c",
-  "0359f08cb60ba19cdb9f1a8eced9454c",
+  "0359f08cb60ba19cdb9f1a8eced9454c", "0359f08cb60ba19cdb9f1a8eced9454c",
 ]
 
 ///|
 test "h264 B pixels: h264_pcm14 filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_pcm14_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_pcm14: " + error) }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_pcm14: " + error)
+    }
     let expected = if skip { h264_pcm14_unf_md5 } else { h264_pcm14_md5 }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_pcm14 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_pcm14 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_depth10_dense0_b64 : Bytes =
-  b"AAAAAWduAAqmzZRi7ARAAAADAEAAAAMDg8SJZYAAAAABaMvgJMsiwAAAAQYF//9z3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAtIEgu" +
+let h264_depth10_dense0_b64 : Bytes = b"AAAAAWduAAqmzZRi7ARAAAADAEAAAAMDg8SJZYAAAAABaMvgJMsiwAAAAQYF//9z3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAtIEgu" +
   b"MjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjUgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRp" +
   b"b25zOiBjYWJhYz0wIHJlZj0zIGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDM6MHgxMTMgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3JkPTEuMDA6" +
   b"MC4wMCBtaXhlZF9yZWY9MSBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4ZGN0PTEgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFz" +
@@ -3762,47 +3712,45 @@ let h264_depth10_dense0_b64 : Bytes =
 
 ///|
 let h264_depth10_dense0_md5 : Array[String] = [
-  "b4f8dc024ef47f0ee3d2829e105ab5af",
-  "bcf083735307769d0f79aaad10ca6fc0",
-  "16fb181e19a752650d74650f2ea62bb4",
-  "b7ef649ff2be93e38279c4639aaa5778",
-  "902627f074a79c76841a5d75c53e625d",
-  "e491f54a87718097caa630d7994d205c",
-  "58d4f3eb628110cdc73ab879aa62b306",
-  "86c015f67c9011a9616317cf086934bd",
-  "3a8d1b8129a8fda420dfb1d08acc7b53",
+  "b4f8dc024ef47f0ee3d2829e105ab5af", "bcf083735307769d0f79aaad10ca6fc0", "16fb181e19a752650d74650f2ea62bb4",
+  "b7ef649ff2be93e38279c4639aaa5778", "902627f074a79c76841a5d75c53e625d", "e491f54a87718097caa630d7994d205c",
+  "58d4f3eb628110cdc73ab879aa62b306", "86c015f67c9011a9616317cf086934bd", "3a8d1b8129a8fda420dfb1d08acc7b53",
 ]
 
 ///|
 let h264_depth10_dense0_unf_md5 : Array[String] = [
-  "b4f8dc024ef47f0ee3d2829e105ab5af",
-  "bcf083735307769d0f79aaad10ca6fc0",
-  "16fb181e19a752650d74650f2ea62bb4",
-  "b7ef649ff2be93e38279c4639aaa5778",
-  "902627f074a79c76841a5d75c53e625d",
-  "e491f54a87718097caa630d7994d205c",
-  "58d4f3eb628110cdc73ab879aa62b306",
-  "86c015f67c9011a9616317cf086934bd",
-  "3a8d1b8129a8fda420dfb1d08acc7b53",
+  "b4f8dc024ef47f0ee3d2829e105ab5af", "bcf083735307769d0f79aaad10ca6fc0", "16fb181e19a752650d74650f2ea62bb4",
+  "b7ef649ff2be93e38279c4639aaa5778", "902627f074a79c76841a5d75c53e625d", "e491f54a87718097caa630d7994d205c",
+  "58d4f3eb628110cdc73ab879aa62b306", "86c015f67c9011a9616317cf086934bd", "3a8d1b8129a8fda420dfb1d08acc7b53",
 ]
 
 ///|
 test "h264 B pixels: h264_depth10_dense0 filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_depth10_dense0_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_depth10_dense0: " + error) }
-    let expected = if skip { h264_depth10_dense0_unf_md5 } else { h264_depth10_dense0_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_depth10_dense0: " + error)
+    }
+    let expected = if skip {
+      h264_depth10_dense0_unf_md5
+    } else {
+      h264_depth10_dense0_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_depth10_dense0 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_depth10_dense0 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }
 
 ///|
-let h264_depth10_dense1_b64 : Bytes =
-  b"AAAAAWduAAqmzZRi7ARAAAADAEAAAAMDg8SJZYAAAAABaOvgJMsiwAAAAQYF//9z3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAtIEgu" +
+let h264_depth10_dense1_b64 : Bytes = b"AAAAAWduAAqmzZRi7ARAAAADAEAAAAMDg8SJZYAAAAABaOvgJMsiwAAAAQYF//9z3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAtIEgu" +
   b"MjY0L01QRUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjUgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRp" +
   b"b25zOiBjYWJhYz0xIHJlZj0zIGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDM6MHgxMTMgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3JkPTEuMDA6" +
   b"MC4wMCBtaXhlZF9yZWY9MSBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4ZGN0PTEgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFz" +
@@ -4306,40 +4254,39 @@ let h264_depth10_dense1_b64 : Bytes =
 
 ///|
 let h264_depth10_dense1_md5 : Array[String] = [
-  "6e989aaac0044bcf342da9db33ad4642",
-  "af19cff9b4638ac8f7b8d7c1bb76228c",
-  "3844b6bd75b18b889fcc990ce182b1fb",
-  "e3a7225d9a2d961526b91d8a58ef2bf4",
-  "11c2c2dc459937d44cb0d3bcea547892",
-  "c389cbffc446b26e89ea88c6aba50c41",
-  "8c762faf9d21e3d478852f7191568b37",
-  "0d5fb9e15eed9f8d3262433f9358357a",
-  "714998a05f8ca587d3f7a939a0a81033",
+  "6e989aaac0044bcf342da9db33ad4642", "af19cff9b4638ac8f7b8d7c1bb76228c", "3844b6bd75b18b889fcc990ce182b1fb",
+  "e3a7225d9a2d961526b91d8a58ef2bf4", "11c2c2dc459937d44cb0d3bcea547892", "c389cbffc446b26e89ea88c6aba50c41",
+  "8c762faf9d21e3d478852f7191568b37", "0d5fb9e15eed9f8d3262433f9358357a", "714998a05f8ca587d3f7a939a0a81033",
 ]
 
 ///|
 let h264_depth10_dense1_unf_md5 : Array[String] = [
-  "6e989aaac0044bcf342da9db33ad4642",
-  "af19cff9b4638ac8f7b8d7c1bb76228c",
-  "3844b6bd75b18b889fcc990ce182b1fb",
-  "e3a7225d9a2d961526b91d8a58ef2bf4",
-  "11c2c2dc459937d44cb0d3bcea547892",
-  "c389cbffc446b26e89ea88c6aba50c41",
-  "8c762faf9d21e3d478852f7191568b37",
-  "0d5fb9e15eed9f8d3262433f9358357a",
-  "714998a05f8ca587d3f7a939a0a81033",
+  "6e989aaac0044bcf342da9db33ad4642", "af19cff9b4638ac8f7b8d7c1bb76228c", "3844b6bd75b18b889fcc990ce182b1fb",
+  "e3a7225d9a2d961526b91d8a58ef2bf4", "11c2c2dc459937d44cb0d3bcea547892", "c389cbffc446b26e89ea88c6aba50c41",
+  "8c762faf9d21e3d478852f7191568b37", "0d5fb9e15eed9f8d3262433f9358357a", "714998a05f8ca587d3f7a939a0a81033",
 ]
 
 ///|
 test "h264 B pixels: h264_depth10_dense1 filtered/unfiltered" {
   let data = @libavutil.av_base64_decode(h264_depth10_dense1_b64, 1000000).unwrap()
   for skip in [true, false] {
-    let frames = match h264_decode_annexb_display_frames(data, skip) { Ok(value) => value; Err(error) => fail("h264_depth10_dense1: " + error) }
-    let expected = if skip { h264_depth10_dense1_unf_md5 } else { h264_depth10_dense1_md5 }
+    let frames = match h264_decode_annexb_display_frames(data, skip) {
+      Ok(value) => value
+      Err(error) => fail("h264_depth10_dense1: " + error)
+    }
+    let expected = if skip {
+      h264_depth10_dense1_unf_md5
+    } else {
+      h264_depth10_dense1_md5
+    }
     assert_eq(frames.length(), expected.length())
     for i, frame in frames {
       let got = h264_yuv_md5(frame)
-      if got != expected[i] { fail("h264_depth10_dense1 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}") }
+      if got != expected[i] {
+        fail(
+          "h264_depth10_dense1 skip=\{skip} frame=\{i} poc=\{frame.poc}: \{got} != \{expected[i]}",
+        )
+      }
     }
   }
 }

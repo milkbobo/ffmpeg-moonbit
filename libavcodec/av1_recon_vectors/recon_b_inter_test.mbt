@@ -17,7 +17,7 @@ fn av1_rbi_block() -> @libavcodec.Av1InterBlock {
     drl_idx: 0,
     mv0: (0, 0),
     mv1: (0, 0),
-    interintra: { kind: 0, mode: 0, wedge_idx: 0 },
+    interintra: { kind: 0, mode: 0, wedge_idx: 0, },
     motion_mode: 0,
     warp: None,
     warp_type: 0,
@@ -40,11 +40,11 @@ fn av1_rbi_block() -> @libavcodec.Av1InterBlock {
 ///|
 fn av1_rbi_ref1(
   src : FixedArray[Int32],
-  stride : Int,
-  w : Int,
-  h : Int,
+  stride : Int32,
+  w : Int32,
+  h : Int32,
 ) -> FixedArray[@libavcodec.Av1ReconRefPlane] {
-  FixedArray::makei(1, _ => { src, stride, width: w, height: h })
+  FixedArray::makei(1, _ => { src, stride, width: w, height: h, })
 }
 
 ///|
@@ -84,7 +84,10 @@ test "recon_b_inter writes prediction and skip contexts" {
   let refs_u = av1_rbi_ref1(ref_u, 16, 16, 16)
   let refs_v = av1_rbi_ref1(ref_u, 16, 16, 16)
   let b = av1_rbi_block()
-  let msac = @libavcodec.Av1Msac::init(Bytes::from_array([0, 0, 0, 0, 0, 0, 0, 0]), false)
+  let msac = @libavcodec.Av1Msac::init(
+    Bytes::from_array([0, 0, 0, 0, 0, 0, 0, 0]),
+    false,
+  )
   let a_lcoef : FixedArray[Int32] = FixedArray::make(32, 0)
   let l_lcoef : FixedArray[Int32] = FixedArray::make(32, 0)
   let a_ccoef : FixedArray[Int32] = FixedArray::make(64, 0)
@@ -110,8 +113,25 @@ test "recon_b_inter writes prediction and skip contexts" {
     l_ccoef,
   }
   let r = @libavcodec.av1_recon_b_inter(
-    ctx, 17, b, 0, true, 1, 0U, 0U, 0, refs_y, refs_u, refs_v, 32, 32, 4, 4,
-    0, None, None,
+    ctx,
+    17,
+    b,
+    0,
+    true,
+    1,
+    0U,
+    0U,
+    0,
+    refs_y,
+    refs_u,
+    refs_v,
+    32,
+    32,
+    4,
+    4,
+    0,
+    None,
+    None,
   )
   match r {
     Ok(_) => ()
@@ -121,9 +141,25 @@ test "recon_b_inter writes prediction and skip contexts" {
   let exp_y : FixedArray[Int32] = FixedArray::make(32 * 32, 7)
   let exp_u : FixedArray[Int32] = FixedArray::make(16 * 16, 9)
   let exp_v : FixedArray[Int32] = FixedArray::make(16 * 16, 9)
-  let pred = match @libavcodec.av1_recon_predict_block(
-    b, refs_y, refs_u, refs_v, 32, 32, 4, 4, 2, 2, 1, 1, 8, 0, None, None,
-  ) {
+  let pred = match
+    @libavcodec.av1_recon_predict_block(
+      b,
+      refs_y,
+      refs_u,
+      refs_v,
+      32,
+      32,
+      4,
+      4,
+      2,
+      2,
+      1,
+      1,
+      8,
+      0,
+      None,
+      None,
+    ) {
     Ok(p) => p
     Err(e) => {
       fail("predict failed: " + e)
@@ -143,7 +179,14 @@ test "recon_b_inter writes prediction and skip contexts" {
   }
   for i in 0..<(32 * 32) {
     if y0[i] != exp_y[i] {
-      fail("skip Y @" + i.to_string() + ": " + y0[i].to_string() + " != " + exp_y[i].to_string())
+      fail(
+        "skip Y @" +
+        i.to_string() +
+        ": " +
+        y0[i].to_string() +
+        " != " +
+        exp_y[i].to_string(),
+      )
     }
   }
   for i in 0..<(16 * 16) {
@@ -157,8 +200,10 @@ test "recon_b_inter writes prediction and skip contexts" {
     }
   }
   for i in 0..<1 {
-    if a_ccoef[2 + i] != 0x40 || l_ccoef[2 + i] != 0x40 ||
-      a_ccoef[32 + 2 + i] != 0x40 || l_ccoef[32 + 2 + i] != 0x40 {
+    if a_ccoef[2 + i] != 0x40 ||
+      l_ccoef[2 + i] != 0x40 ||
+      a_ccoef[32 + 2 + i] != 0x40 ||
+      l_ccoef[32 + 2 + i] != 0x40 {
       fail("skip ccoef ctx not reset")
     }
   }
@@ -212,8 +257,25 @@ test "recon_b_inter applies residual transforms in place" {
     l_ccoef,
   }
   let r = @libavcodec.av1_recon_b_inter(
-    ctx, 17, b, 0, false, 1, 0U, 0U, 0, refs_y, refs_u, refs_v, 32, 32, 4, 4,
-    0, None, None,
+    ctx,
+    17,
+    b,
+    0,
+    false,
+    1,
+    0U,
+    0U,
+    0,
+    refs_y,
+    refs_u,
+    refs_v,
+    32,
+    32,
+    4,
+    4,
+    0,
+    None,
+    None,
   )
   match r {
     Ok(_) => ()
@@ -223,9 +285,25 @@ test "recon_b_inter applies residual transforms in place" {
   let exp_y : FixedArray[Int32] = FixedArray::make(32 * 32, 0)
   let exp_u : FixedArray[Int32] = FixedArray::make(16 * 16, 0)
   let exp_v : FixedArray[Int32] = FixedArray::make(16 * 16, 0)
-  let pred = match @libavcodec.av1_recon_predict_block(
-    b, refs_y, refs_u, refs_v, 32, 32, 4, 4, 2, 2, 1, 1, 8, 0, None, None,
-  ) {
+  let pred = match
+    @libavcodec.av1_recon_predict_block(
+      b,
+      refs_y,
+      refs_u,
+      refs_v,
+      32,
+      32,
+      4,
+      4,
+      2,
+      2,
+      1,
+      1,
+      8,
+      0,
+      None,
+      None,
+    ) {
     Ok(p) => p
     Err(e) => {
       fail("predict failed: " + e)
@@ -254,28 +332,76 @@ test "recon_b_inter applies residual transforms in place" {
   let reader : @libavcodec.Av1CoefReader = {
     decode: (a_arr, a_off, l_arr, l_off, tx, plane, _intra, luma_txtp) => {
       @libavcodec.av1_decode_coefs(
-        exp_coef, a_arr, a_off, l_arr, l_off, tx, 17, 0, 0, 0, 0, false, plane,
-        exp_cf, luma_txtp=luma_txtp,
+        exp_coef,
+        a_arr,
+        a_off,
+        l_arr,
+        l_off,
+        tx,
+        17,
+        0,
+        0,
+        0,
+        0,
+        false,
+        plane,
+        exp_cf,
+        luma_txtp~,
       )
     },
   }
   let apply_y = (rx, ry, tx, txtp, eob) => {
     applied.val = applied.val + 1
     @libavcodec.av1_itxfm_add(
-      exp_y, 4 * ((4 + ry) * 32 + 4 + rx), 32, exp_cf, eob, tx, txtp, 255,
+      exp_y,
+      4 * ((4 + ry) * 32 + 4 + rx),
+      32,
+      exp_cf,
+      eob,
+      tx,
+      txtp,
+      255,
     )
   }
   let apply_uv = (pl, cx, cy, tx, txtp, eob) => {
     applied.val = applied.val + 1
     let plane = if pl == 0 { exp_u } else { exp_v }
     @libavcodec.av1_itxfm_add(
-      plane, 4 * ((2 + cy) * 16 + 2 + cx), 16, exp_cf, eob, tx, txtp, 255,
+      plane,
+      4 * ((2 + cy) * 16 + 2 + cx),
+      16,
+      exp_cf,
+      eob,
+      tx,
+      txtp,
+      255,
     )
   }
   let txtp_map : FixedArray[Byte] = FixedArray::make(1024, b'\x00')
   @libavcodec.av1_read_inter_residual(
-    reader, 17, 1, 0U, 0U, 0, 2, 2, 1, 1, 1, 1, true, 4, 4, 8, 8,
-    e_a_lcoef, e_l_lcoef, e_a_ccoef, e_l_ccoef, txtp_map, Some(apply_y),
+    reader,
+    17,
+    1,
+    0U,
+    0U,
+    0,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    true,
+    4,
+    4,
+    8,
+    8,
+    e_a_lcoef,
+    e_l_lcoef,
+    e_a_ccoef,
+    e_l_ccoef,
+    txtp_map,
+    Some(apply_y),
     Some(apply_uv),
   )
   if applied.val == 0 {
@@ -283,12 +409,26 @@ test "recon_b_inter applies residual transforms in place" {
   }
   for i in 0..<(32 * 32) {
     if y0[i] != exp_y[i] {
-      fail("res Y @" + i.to_string() + ": " + y0[i].to_string() + " != " + exp_y[i].to_string())
+      fail(
+        "res Y @" +
+        i.to_string() +
+        ": " +
+        y0[i].to_string() +
+        " != " +
+        exp_y[i].to_string(),
+      )
     }
   }
   for i in 0..<(16 * 16) {
     if u0[i] != exp_u[i] {
-      fail("res U @" + i.to_string() + ": " + u0[i].to_string() + " != " + exp_u[i].to_string())
+      fail(
+        "res U @" +
+        i.to_string() +
+        ": " +
+        u0[i].to_string() +
+        " != " +
+        exp_u[i].to_string(),
+      )
     }
     if v0[i] != exp_v[i] {
       fail("res V @" + i.to_string())

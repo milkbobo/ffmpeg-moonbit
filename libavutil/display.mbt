@@ -26,7 +26,11 @@ pub fn av_display_matrix_flip(
   hflip : Int32,
   vflip : Int32,
 ) -> Unit {
-  let flip : Array[Int32] = [1 - 2 * (if hflip != 0 { 1 } else { 0 }), 1 - 2 * (if vflip != 0 { 1 } else { 0 }), 1]
+  let flip : Array[Int32] = [
+    1 - 2 * (if hflip != 0 { 1 } else { 0 }),
+    1 - 2 * (if vflip != 0 { 1 } else { 0 }),
+    1,
+  ]
   if hflip != 0 || vflip != 0 {
     for i = 0; i < 9; i = i + 1 {
       matrix[i] = matrix[i] * flip[i % 3]

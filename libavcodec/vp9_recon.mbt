@@ -86,13 +86,10 @@ fn Vp9Decoder::check_intra_mode(
   let have_top = row > 0 || y > 0
   let have_left = col > self.tile_col_start || x > 0
   let have_right = x < w4 - 1
-  let mode = vp9_mode_conv(mode0, have_left, if have_top {
-    1
-  } else {
-    0
-  })
-  let (needs_left, needs_top, needs_topleft, needs_topright, invert_left) =
-    vp9_edges_needs(mode)
+  let mode = vp9_mode_conv(mode0, have_left, if have_top { 1 } else { 0 })
+  let (needs_left, needs_top, needs_topleft, needs_topright, invert_left) = vp9_edges_needs(
+    mode,
+  )
   if needs_top {
     let n_px_need = 4 << tx
     let n_px_have = (((self.cols - col) << (1 - ss_h)) - x) * 4
@@ -104,23 +101,15 @@ fn Vp9Decoder::check_intra_mode(
     // top source: the above-SB-row backup for the first TU row of a SB row,
     // otherwise the plane row above the current TU
     let use_backup = have_top && (row & 7) == 0 && y == 0
-    let backup_idx = (col * (8 >> ss_h) + x * 4) - 1
+    let backup_idx = col * (8 >> ss_h) + x * 4 - 1
     let src_off = tu_off - stride
-    let top_src_off = if use_backup {
-      0
-    } else {
-      src_off
-    }
+    let top_src_off = if use_backup { 0 } else { src_off }
     if have_top &&
       (!needs_topleft || have_left) &&
       (tx != 0 || !needs_topright || have_right) &&
       n_px_need + n_px_need_tr <= n_px_have {
       // fast path: enough contiguous pixels — copy them verbatim
-      let base = if use_backup {
-        backup_idx + 1
-      } else {
-        top_src_off
-      }
+      let base = if use_backup { backup_idx + 1 } else { top_src_off }
       for i in 0..<(n_px_need + n_px_need_tr) {
         top[1 + i] = if use_backup {
           self.intra_pred[p][base + i]
@@ -214,19 +203,17 @@ fn Vp9Decoder::check_intra_mode(
             left[i] = last
           }
         }
+      } else if n_px_need <= n_px_have {
+        for i in 0..<n_px_need {
+          left[n_px_need - 1 - i] = plane[tu_off + i * stride - 1]
+        }
       } else {
-        if n_px_need <= n_px_have {
-          for i in 0..<n_px_need {
-            left[n_px_need - 1 - i] = plane[tu_off + i * stride - 1]
-          }
-        } else {
-          for i in 0..<n_px_have {
-            left[n_px_need - 1 - i] = plane[tu_off + i * stride - 1]
-          }
-          let last = left[n_px_need - n_px_have]
-          for i in 0..<(n_px_need - n_px_have) {
-            left[i] = last
-          }
+        for i in 0..<n_px_have {
+          left[n_px_need - 1 - i] = plane[tu_off + i * stride - 1]
+        }
+        let last = left[n_px_need - n_px_have]
+        for i in 0..<(n_px_need - n_px_have) {
+          left[i] = last
         }
       }
     } else {
@@ -240,7 +227,11 @@ fn Vp9Decoder::check_intra_mode(
 
 ///|
 /// `intra_recon` (8 bpp): predict + inverse-transform every TU of the block. */
-fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> Unit {
+fn Vp9Decoder::intra_recon(
+  self : Vp9Decoder,
+  y_off : Int32,
+  uv_off : Int32,
+) -> Unit {
   let b = self.b
   let row = self.b_row
   let col = self.b_col
@@ -261,17 +252,9 @@ fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
   while y < end_y {
     let mut x = 0
     while x < end_x {
-      let mode_idx = if b.bs > VP9_BS_8x8 && b.tx == 0 {
-        y * 2 + x
-      } else {
-        0
-      }
+      let mode_idx = if b.bs > VP9_BS_8x8 && b.tx == 0 { y * 2 + x } else { 0 }
       let tu_off = y_off + x * 4 + y * 4 * self.ystride
-      let eob = if b.skip != 0 {
-        0
-      } else {
-        self.eob[n]
-      }
+      let eob = if b.skip != 0 { 0 } else { self.eob[n] }
       let mode = self.check_intra_mode(
         b.mode[mode_idx],
         top,
@@ -289,7 +272,7 @@ fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
         0,
         0,
       )
-              vp9_intra_pred(
+      vp9_intra_pred(
         b.tx,
         mode,
         self.y,
@@ -325,11 +308,7 @@ fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
   let end_yc = end_y >> self.ss_v
   step = 1 << (b.uvtx * 2)
   for pl in 0..<2 {
-    let plane = if pl == 0 {
-      self.cb
-    } else {
-      self.cr
-    }
+    let plane = if pl == 0 { self.cb } else { self.cr }
     let mut n = 0
     let mut y = 0
     while y < end_yc {
@@ -372,11 +351,7 @@ fn Vp9Decoder::intra_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
           self.pixel_max,
         )
         if eob != 0 {
-          let ublock = if pl == 0 {
-            self.uvblock0
-          } else {
-            self.uvblock1
-          }
+          let ublock = if pl == 0 { self.uvblock0 } else { self.uvblock1 }
           vp9_itxfm_add(
             uvtx_kind,
             0,

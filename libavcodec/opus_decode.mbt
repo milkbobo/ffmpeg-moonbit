@@ -14,22 +14,22 @@
 /// differ by a ulp, so gain-free streams are the validated configuration.
 
 ///|
-let opus_celt_band_end : Array[Int] = [13, 17, 17, 19, 21]
+let opus_celt_band_end : Array[Int32] = [13, 17, 17, 19, 21]
 
 ///|
-let opus_silk_frame_duration_ms : Array[Int] = [
+let opus_silk_frame_duration_ms : Array[Int32] = [
   10, 20, 40, 60, 10, 20, 40, 60, 10, 20, 40, 60, 10, 20, 10, 20,
 ]
 
 ///|
 /// Number of leading silence samples fed to the resampler, indexed by the
 /// packet bandwidth (0..4).
-let opus_silk_resample_delay : Array[Int] = [4, 8, 11, 11, 11]
+let opus_silk_resample_delay : Array[Int32] = [4, 8, 11, 11, 11]
 
 ///|
 /// `get_silk_samplerate`: 8/12/16 kHz by config group. Hybrid frames also
 /// land at 16 kHz — the SILK layer always covers up to 8 kHz.
-fn opus_silk_samplerate(config : Int) -> Int {
+fn opus_silk_samplerate(config : Int32) -> Int32 {
   if config < 4 {
     8000
   } else if config < 8 {
@@ -42,14 +42,18 @@ fn opus_silk_samplerate(config : Int) -> Int {
 ///|
 /// Numeric bandwidth 0..4 from the TOC config, as `opus/parse.c` derives it
 /// (the MoonBit `OpusPacket` keeps the string form).
-fn opus_bandwidth_index(config : Int) -> Int {
+fn opus_bandwidth_index(config : Int32) -> Int32 {
   if config < 12 {
     config >> 2
   } else if config < 16 {
     3 + (if config >= 14 { 1 } else { 0 })
   } else {
     let bandwidth = (config - 16) >> 2
-    if bandwidth != 0 { bandwidth + 1 } else { 0 }
+    if bandwidth != 0 {
+      bandwidth + 1
+    } else {
+      0
+    }
   }
 }
 
@@ -58,20 +62,23 @@ fn opus_bandwidth_index(config : Int) -> Int {
 /// promotion order — the second product and the sum are computed in double.
 fn opus_fade(
   out : Array[Float],
-  out_pos : Int,
+  out_pos : Int32,
   in1 : Array[Float],
-  in1_pos : Int,
+  in1_pos : Int32,
   in2 : Array[Float],
-  in2_pos : Int,
+  in2_pos : Int32,
   window : FixedArray[Float],
-  window_pos : Int,
-  len : Int,
+  window_pos : Int32,
+  len : Int32,
 ) -> Unit {
   for i in 0..<len {
     let first = in2[in2_pos + i] * window[window_pos + i]
-    let second = Float::from_double(in1[in1_pos + i].to_double() *
-      (1.0 - window[window_pos + i].to_double()))
-    out[out_pos + i] = Float::from_double(first.to_double() + second.to_double())
+    let second = Float::from_double(
+      in1[in1_pos + i].to_double() * (1.0 - window[window_pos + i].to_double()),
+    )
+    out[out_pos + i] = Float::from_double(
+      first.to_double() + second.to_double(),
+    )
   }
 }
 
@@ -80,21 +87,21 @@ fn opus_fade(
 /// counts match; storage layout does not.
 priv struct OpusFifo {
   chans : Array[Array[Float]]
-  mut start : Int
-  mut count : Int
+  mut start : Int32
+  mut count : Int32
 }
 
 ///|
-fn OpusFifo::new(channels : Int) -> OpusFifo {
+fn OpusFifo::new(channels : Int32) -> OpusFifo {
   let chans : Array[Array[Float]] = []
   for _ in 0..<channels {
     chans.push([])
   }
-  { chans, start: 0, count: 0 }
+  { chans, start: 0, count: 0, }
 }
 
 ///|
-fn OpusFifo::size(self : OpusFifo) -> Int {
+fn OpusFifo::size(self : OpusFifo) -> Int32 {
   self.count
 }
 
@@ -106,7 +113,12 @@ fn OpusFifo::reset(self : OpusFifo) -> Unit {
 
 ///|
 /// Append `n` samples starting at `src_pos` of each channel array.
-fn OpusFifo::write(self : OpusFifo, src : Array[Array[Float]], src_pos : Int, n : Int) -> Unit {
+fn OpusFifo::write(
+  self : OpusFifo,
+  src : Array[Array[Float]],
+  src_pos : Int32,
+  n : Int32,
+) -> Unit {
   for c in 0..<self.chans.length() {
     let buf = self.chans[c]
     let from = src[c]
@@ -126,7 +138,12 @@ fn OpusFifo::write(self : OpusFifo, src : Array[Array[Float]], src_pos : Int, n 
 ///|
 /// Take up to `n` samples into channel arrays at `dst_pos`; returns false if
 /// fewer than `n` are queued (state unchanged).
-fn OpusFifo::read(self : OpusFifo, dst : Array[Array[Float]], dst_pos : Int, n : Int) -> Bool {
+fn OpusFifo::read(
+  self : OpusFifo,
+  dst : Array[Array[Float]],
+  dst_pos : Int32,
+  n : Int32,
+) -> Bool {
   if self.count < n {
     return false
   }
@@ -145,28 +162,31 @@ fn OpusFifo::read(self : OpusFifo, dst : Array[Array[Float]], dst_pos : Int, n :
 ///|
 /// One logical Opus stream's decoder state (`OpusStreamContext`).
 priv struct OpusStream {
-  output_channels : Int
+  output_channels : Int32
   silk : OpusSilkDecoder
   celt : OpusCeltDecoder
   swr : OpusResampler
-  mut silk_samplerate : Int
-  mut delayed_samples : Int
+  mut silk_samplerate : Int32
+  mut delayed_samples : Int32
   celt_delay : OpusFifo
   sync_buffer : OpusFifo
   silk_buf : Array[Array[Float]]
   celt_buf : Array[Array[Float]]
   dummy_buf : Array[Array[Float]]
   mut redundancy_pcm : Array[Array[Float]]
-  mut redundancy_idx : Int
+  mut redundancy_idx : Int32
   mut current_packet : OpusPacket?
   // Output view for the current packet; `chans[c]` is the mapped output
   // channel's storage (or the dummy buffer), `pos` the write cursor.
   mut out_buf : AudioBuf
-  mut decoded_samples : Int
+  mut decoded_samples : Int32
 }
 
 ///|
-fn OpusStream::new(output_channels : Int, apply_phase_inv : Bool) -> OpusStream {
+fn OpusStream::new(
+  output_channels : Int32,
+  apply_phase_inv : Bool,
+) -> OpusStream {
   let silk_buf : Array[Array[Float]] = []
   let celt_buf : Array[Array[Float]] = []
   let dummy : Array[Array[Float]] = []
@@ -178,7 +198,7 @@ fn OpusStream::new(output_channels : Int, apply_phase_inv : Bool) -> OpusStream 
   {
     output_channels,
     silk: OpusSilkDecoder::new(output_channels),
-    celt: match OpusCeltDecoder::new(output_channels, apply_phase_inv=apply_phase_inv) {
+    celt: match OpusCeltDecoder::new(output_channels, apply_phase_inv~) {
       Ok(decoder) => decoder
       Err(_) => abort("opus: CELT decoder init failed")
     },
@@ -193,7 +213,7 @@ fn OpusStream::new(output_channels : Int, apply_phase_inv : Bool) -> OpusStream 
     redundancy_pcm: [],
     redundancy_idx: 0,
     current_packet: None,
-    out_buf: AudioBuf::{ chans: dummy, pos: 0 },
+    out_buf: AudioBuf::{ chans: dummy, pos: 0, },
     decoded_samples: 0,
   }
 }
@@ -204,8 +224,8 @@ fn OpusStream::new(output_channels : Int, apply_phase_inv : Bool) -> OpusStream 
 fn OpusStream::bind_out(
   self : OpusStream,
   outputs : Array[Array[Float]],
-  mapped : Array[Int?],
-  capacity : Int,
+  mapped : Array[Int32?],
+  capacity : Int32,
 ) -> Unit {
   let chans : Array[Array[Float]] = []
   for ch in 0..<self.output_channels {
@@ -219,21 +239,28 @@ fn OpusStream::bind_out(
       }
     }
   }
-  self.out_buf = AudioBuf::{ chans, pos: 0 }
+  self.out_buf = AudioBuf::{ chans, pos: 0, }
 }
 
 ///|
 /// `opus_init_resample`: open the resampler at the SILK rate and feed the
 /// bandwidth-dependent initial silence.
-fn OpusStream::init_resample(self : OpusStream, bandwidth : Int) -> Result[Unit, String] {
+fn OpusStream::init_resample(
+  self : OpusStream,
+  bandwidth : Int32,
+) -> Result[Unit, String] {
   self.swr.open(self.silk_samplerate)
   let silence : Array[Array[Float]] = []
   for _ in 0..<self.output_channels {
     silence.push(Array::make(16, 0.0))
   }
-  let dummy_out = AudioBuf::{ chans: self.dummy_buf, pos: 0 }
-  let _ = self.swr.convert(dummy_out, 0,
-    Some(AudioBuf::{ chans: silence, pos: 0 }), opus_silk_resample_delay[bandwidth])
+  let dummy_out = AudioBuf::{ chans: self.dummy_buf, pos: 0, }
+  let _ = self.swr.convert(
+    dummy_out,
+    0,
+    Some(AudioBuf::{ chans: silence, pos: 0, }),
+    opus_silk_resample_delay[bandwidth],
+  )
   Ok(())
 }
 
@@ -242,16 +269,20 @@ fn OpusStream::init_resample(self : OpusStream, bandwidth : Int) -> Result[Unit,
 /// mix any queued CELT delay samples, and fade out pending redundancy.
 fn OpusStream::flush_resample(
   self : OpusStream,
-  nb_samples : Int,
+  nb_samples : Int32,
   window : FixedArray[Float],
 ) -> Result[Unit, String] {
   let celt_size = self.celt_delay.size()
   let pos_before = self.out_buf.pos
   let produced = self.swr.convert(self.out_buf, nb_samples, None, 0)
-  guard produced == nb_samples else { return Err("opus: wrong number of flushed samples") }
+  guard produced == nb_samples else {
+    return Err("opus: wrong number of flushed samples")
+  }
   self.out_buf.pos += nb_samples
   if celt_size > 0 {
-    guard celt_size == nb_samples else { return Err("opus: wrong number of CELT delay samples") }
+    guard celt_size == nb_samples else {
+      return Err("opus: wrong number of CELT delay samples")
+    }
     let _ = self.celt_delay.read(self.celt_buf, 0, nb_samples)
     for ch in 0..<self.output_channels {
       let dst = self.out_buf.chans[ch]
@@ -263,9 +294,17 @@ fn OpusStream::flush_resample(
   }
   if self.redundancy_idx > 0 {
     for ch in 0..<self.output_channels {
-      opus_fade(self.out_buf.chans[ch], pos_before, self.out_buf.chans[ch], pos_before,
-        self.redundancy_pcm[ch], 120 + self.redundancy_idx,
-        window, self.redundancy_idx, 120 - self.redundancy_idx)
+      opus_fade(
+        self.out_buf.chans[ch],
+        pos_before,
+        self.out_buf.chans[ch],
+        pos_before,
+        self.redundancy_pcm[ch],
+        120 + self.redundancy_idx,
+        window,
+        self.redundancy_idx,
+        120 - self.redundancy_idx,
+      )
     }
     self.redundancy_idx = 0
   }
@@ -278,15 +317,17 @@ fn OpusStream::flush_resample(
 fn OpusStream::decode_redundancy(
   self : OpusStream,
   packet_data : Bytes,
-  frame_offset : Int,
-  size : Int,
-  bandwidth : Int,
+  frame_offset : Int32,
+  size : Int32,
+  bandwidth : Int32,
 ) -> Result[Unit, String] {
-  let rc = match opus_rc_init(packet_data[frame_offset:frame_offset + size].to_owned()) {
+  let rc = match
+    opus_rc_init(packet_data[frame_offset:frame_offset + size].to_owned()) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  match self.celt.decode_frame_rc(rc, size, 240, 0, opus_celt_band_end[bandwidth]) {
+  match
+    self.celt.decode_frame_rc(rc, size, 240, 0, opus_celt_band_end[bandwidth]) {
     Ok(pcm) => {
       self.redundancy_pcm = pcm
       Ok(())
@@ -301,10 +342,10 @@ fn OpusStream::decode_redundancy(
 fn OpusStream::decode_frame(
   self : OpusStream,
   packet_data : Bytes,
-  frame_offset : Int,
-  size : Int,
+  frame_offset : Int32,
+  size : Int32,
   window : FixedArray[Float],
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let packet = match self.current_packet {
     Some(value) => value
     None => return Err("opus: no packet header")
@@ -326,16 +367,29 @@ fn OpusStream::decode_frame(
         Err(error) => return Err(error)
       }
     }
-    let silk_samples = match self.silk.decode_superframe(rc, self.silk_buf,
-      if bandwidth < 2 { bandwidth } else { 2 }, packet.stereo.to_int() + 1,
-      opus_silk_frame_duration_ms[packet.config]) {
+    let silk_samples = match
+      self.silk.decode_superframe(
+        rc,
+        self.silk_buf,
+        if bandwidth < 2 {
+          bandwidth
+        } else {
+          2
+        },
+        packet.stereo.to_int() + 1,
+        opus_silk_frame_duration_ms[packet.config],
+      ) {
       Ok(value) => value
       Err(error) => return Err(error)
     }
     // cur_out stays at the frame start for the whole frame; the caller
     // advances it once after the frame completes (as in dec.c).
-    samples = self.swr.convert(self.out_buf, packet.frame_duration,
-      Some(AudioBuf::{ chans: self.silk_buf, pos: 0 }), silk_samples)
+    samples = self.swr.convert(
+      self.out_buf,
+      packet.frame_duration,
+      Some(AudioBuf::{ chans: self.silk_buf, pos: 0, }),
+      silk_samples,
+    )
     self.delayed_samples += packet.frame_duration - samples
     delayed_samples = self.delayed_samples
   } else {
@@ -372,7 +426,13 @@ fn OpusStream::decode_frame(
       return Err("opus: invalid redundancy frame size")
     }
     if redundancy_pos != 0 {
-      match self.decode_redundancy(packet_data, frame_offset + size, redundancy_size, bandwidth) {
+      match
+        self.decode_redundancy(
+          packet_data,
+          frame_offset + size,
+          redundancy_size,
+          bandwidth,
+        ) {
         Ok(_) => ()
         Err(error) => return Err(error)
       }
@@ -402,8 +462,14 @@ fn OpusStream::decode_frame(
       }
     }
     let start_band = if hybrid { 17 } else { 0 }
-    let pcm = match self.celt.decode_frame_rc(rc, size, packet.frame_duration,
-      start_band, opus_celt_band_end[bandwidth]) {
+    let pcm = match
+      self.celt.decode_frame_rc(
+        rc,
+        size,
+        packet.frame_duration,
+        start_band,
+        opus_celt_band_end[bandwidth],
+      ) {
       Ok(value) => value
       Err(error) => return Err(error)
     }
@@ -443,24 +509,47 @@ fn OpusStream::decode_frame(
     for ch in 0..<self.output_channels {
       let out = self.out_buf.chans[ch]
       let out_pos = self.out_buf.pos
-      opus_fade(out, out_pos, out, out_pos,
-        self.redundancy_pcm[ch], 120 + self.redundancy_idx,
-        window, self.redundancy_idx, 120 - self.redundancy_idx)
+      opus_fade(
+        out,
+        out_pos,
+        out,
+        out_pos,
+        self.redundancy_pcm[ch],
+        120 + self.redundancy_idx,
+        window,
+        self.redundancy_idx,
+        120 - self.redundancy_idx,
+      )
     }
     self.redundancy_idx = 0
   }
   if redundancy != 0 {
     if redundancy_pos == 0 {
       self.celt.reset()
-      match self.decode_redundancy(packet_data, frame_offset + size, redundancy_size, bandwidth) {
+      match
+        self.decode_redundancy(
+          packet_data,
+          frame_offset + size,
+          redundancy_size,
+          bandwidth,
+        ) {
         Ok(_) => ()
         Err(error) => return Err(error)
       }
       for ch in 0..<self.output_channels {
         let out = self.out_buf.chans[ch]
         let fade_pos = self.out_buf.pos + samples - 120 + delayed_samples
-        opus_fade(out, fade_pos, out, fade_pos,
-          self.redundancy_pcm[ch], 120, window, 0, 120 - delayed_samples)
+        opus_fade(
+          out,
+          fade_pos,
+          out,
+          fade_pos,
+          self.redundancy_pcm[ch],
+          120,
+          window,
+          0,
+          120 - delayed_samples,
+        )
         if delayed_samples > 0 {
           self.redundancy_idx = 120 - delayed_samples
         }
@@ -472,10 +561,17 @@ fn OpusStream::decode_frame(
         for i in 0..<120 {
           out[out_pos + delayed_samples + i] = self.redundancy_pcm[ch][i]
         }
-        opus_fade(out, out_pos + 120 + delayed_samples,
-          self.redundancy_pcm[ch], 120,
-          out, out_pos + 120 + delayed_samples,
-          window, 0, 120)
+        opus_fade(
+          out,
+          out_pos + 120 + delayed_samples,
+          self.redundancy_pcm[ch],
+          120,
+          out,
+          out_pos + 120 + delayed_samples,
+          window,
+          0,
+          120,
+        )
       }
     }
   }
@@ -489,7 +585,7 @@ fn OpusStream::decode_subpacket(
   self : OpusStream,
   packet_data : Bytes?,
   window : FixedArray[Float],
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let mut output_samples = 0
   let mut flush_needed = false
   if self.swr.is_opened() {
@@ -525,7 +621,8 @@ fn OpusStream::decode_subpacket(
   }
   for i in 0..<packet.frame_count {
     let size = packet.frame_sizes[i]
-    let samples = match self.decode_frame(data, packet.frame_offsets[i], size, window) {
+    let samples = match
+      self.decode_frame(data, packet.frame_offsets[i], size, window) {
       Ok(value) => value
       Err(_) => {
         // Concealment: silence for the frame duration.
@@ -566,18 +663,23 @@ pub struct OpusDecoder {
 ///|
 /// Create a decoder for the given OpusHead extradata. One stream decoder per
 /// logical stream; stereo streams come first, as in the C.
-pub fn OpusDecoder::new(head : OpusHead, apply_phase_inv? : Bool = true) -> Result[OpusDecoder, String] {
+pub fn OpusDecoder::new(
+  head : OpusHead,
+  apply_phase_inv~ : Bool = true,
+) -> Result[OpusDecoder, String] {
   let streams : Array[OpusStream] = []
   for i in 0..<head.stream_count {
     let output_channels = if i < head.coupled_count { 2 } else { 1 }
     streams.push(OpusStream::new(output_channels, apply_phase_inv))
   }
   let gain : Float = if head.output_gain != 0 {
-    Float::from_double(@math.pow(10.0, head.output_gain.to_double() / (20.0 * 256.0)))
+    Float::from_double(
+      @math.pow(10.0, head.output_gain.to_double() / (20.0 * 256.0)),
+    )
   } else {
     1.0
   }
-  Ok({ head, streams, gain })
+  Ok({ head, streams, gain, })
 }
 
 ///|
@@ -602,25 +704,30 @@ pub fn OpusDecoder::flush(self : OpusDecoder) -> Unit {
 pub fn OpusDecoder::decode_packet(
   self : OpusDecoder,
   data : Bytes?,
-) -> Result[(Array[Array[Float]], Int), String] {
+) -> Result[(Array[Array[Float]], Int32), String] {
   let channels = self.head.channels
   let window = opus_celt_window2
   let mut coded_samples = 0
   let mut delayed_samples = 0
   let spans : Array[OpusStreamPacket] = match data {
-    Some(buf) => match self.head.parse_packet(buf) {
-      Ok(value) => value
-      Err(error) => return Err(error)
-    }
+    Some(buf) =>
+      match self.head.parse_packet(buf) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
     None => []
   }
   if data is Some(_) {
     coded_samples = spans[0].packet.frame_count * spans[0].packet.frame_duration
-    self.streams[0].silk_samplerate = opus_silk_samplerate(spans[0].packet.config)
+    self.streams[0].silk_samplerate = opus_silk_samplerate(
+      spans[0].packet.config,
+    )
     for i in 0..<self.streams.length() {
       self.streams[i].current_packet = Some(spans[i].packet)
       if i > 0 {
-        self.streams[i].silk_samplerate = opus_silk_samplerate(spans[i].packet.config)
+        self.streams[i].silk_samplerate = opus_silk_samplerate(
+          spans[i].packet.config,
+        )
       }
     }
   }
@@ -634,13 +741,13 @@ pub fn OpusDecoder::decode_packet(
   if nb_samples == 0 {
     return Ok(([], 0))
   }
-  let aligned = ((nb_samples + 7) >> 3) << 3
+  let aligned = (nb_samples + 7) >> 3 << 3
   let outputs : Array[Array[Float]] = []
   for _ in 0..<channels {
     outputs.push(Array::make(aligned, 0.0))
   }
   // Per-stream: which output channel (if any) feeds stream channel ch.
-  let stream_maps : Array[Array[Int?]] = []
+  let stream_maps : Array[Array[Int32?]] = []
   for _ in 0..<self.streams.length() {
     stream_maps.push([None, None])
   }
@@ -658,7 +765,11 @@ pub fn OpusDecoder::decode_packet(
   for stream in self.streams {
     let sync_size = stream.sync_buffer.size()
     if sync_size > 0 {
-      let _ = stream.sync_buffer.read(stream.out_buf.chans, stream.out_buf.pos, sync_size)
+      let _ = stream.sync_buffer.read(
+        stream.out_buf.chans,
+        stream.out_buf.pos,
+        sync_size,
+      )
       stream.out_buf.pos += sync_size
     }
   }
@@ -697,21 +808,19 @@ pub fn OpusDecoder::decode_packet(
   for i in 0..<channels {
     let map = self.head.output_map[i]
     match map.copy_from {
-      Some(source) => {
+      Some(source) =>
         for j in 0..<nb_samples {
           outputs[i][j] = outputs[source][j]
         }
-      }
-      None => {
+      None =>
         if map.silence {
           for j in 0..<nb_samples {
             outputs[i][j] = 0.0
           }
         }
-      }
     }
     if self.head.output_gain != 0 && decoded_samples > 0 {
-      let limit = ((decoded_samples + 7) >> 3) << 3
+      let limit = (decoded_samples + 7) >> 3 << 3
       for j in 0..<limit {
         outputs[i][j] *= self.gain
       }
@@ -719,4 +828,3 @@ pub fn OpusDecoder::decode_packet(
   }
   Ok((outputs, decoded_samples))
 }
-

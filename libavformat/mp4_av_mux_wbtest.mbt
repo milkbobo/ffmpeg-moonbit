@@ -26,9 +26,7 @@ test "mp4 muxer: H.264 + AAC tracks round-trip" {
   assert_eq(audio.sample_rate, 48000U)
   assert_eq(audio.channels, 2U)
   assert_eq(audio.samples.length(), 3)
-  let vpayloads : Array[Bytes] = [
-    b"\x00\x00\x01\x02", b"\x00\x00\x01\x03",
-  ]
+  let vpayloads : Array[Bytes] = [b"\x00\x00\x01\x02", b"\x00\x00\x01\x03"]
   for i in 0..<2 {
     let s = video.samples[i]
     assert_eq(s.dts, (i * 3000).to_int64())

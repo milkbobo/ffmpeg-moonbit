@@ -37,7 +37,6 @@ fn vp9_rounded_div4(a : Int32) -> Int32 {
   }
 }
 
-
 ///|
 /// `emulated_edge_mc` (videodsp semantics, 8-bit): copy a `bw x bh` block
 /// whose top-left corner sits at frame coordinates (`x`, `y`) — possibly
@@ -62,13 +61,7 @@ fn vp9_emulated_edge(
   // (sx, sy) as src_off + (sy - y) * stride + (sx - x)
   for j in 0..<bh {
     let fy = y + j
-    let sy = if fy < 0 {
-      0
-    } else if fy >= h {
-      h - 1
-    } else {
-      fy
-    }
+    let sy = if fy < 0 { 0 } else if fy >= h { h - 1 } else { fy }
     let row = src_off + (sy - y) * src_stride
     let orow = buf_off + j * buf_stride
     if x >= 0 && x + bw <= w {
@@ -78,13 +71,7 @@ fn vp9_emulated_edge(
     } else {
       for i in 0..<bw {
         let fx = x + i
-        let sx = if fx < 0 {
-          0
-        } else if fx >= w {
-          w - 1
-        } else {
-          fx
-        }
+        let sx = if fx < 0 { 0 } else if fx >= w { w - 1 } else { fx }
         buf[orow + i] = src[row + (sx - x)]
       }
     }
@@ -139,12 +126,9 @@ fn Vp9Decoder::mc_kernel(
         for x in 0..<w {
           let v = vp9_clip_pixel(
             src[so + x] + ((fx * (src[so + x + 1] - src[so + x]) + 8) >> 4),
-          self.pixel_max)
-          dst[do_ + x] = if avg {
-            (dst[do_ + x] + v + 1) / 2
-          } else {
-            v
-          }
+            self.pixel_max,
+          )
+          dst[do_ + x] = if avg { (dst[do_ + x] + v + 1) / 2 } else { v }
         }
         so += src_stride
         do_ += dst_stride
@@ -155,13 +139,11 @@ fn Vp9Decoder::mc_kernel(
       for _ in 0..<h {
         for x in 0..<w {
           let v = vp9_clip_pixel(
-            src[so + x] + ((fy * (src[so + x + src_stride] - src[so + x]) + 8) >> 4),
-          self.pixel_max)
-          dst[do_ + x] = if avg {
-            (dst[do_ + x] + v + 1) / 2
-          } else {
-            v
-          }
+            src[so + x] +
+            ((fy * (src[so + x + src_stride] - src[so + x]) + 8) >> 4),
+            self.pixel_max,
+          )
+          dst[do_ + x] = if avg { (dst[do_ + x] + v + 1) / 2 } else { v }
         }
         so += src_stride
         do_ += dst_stride
@@ -175,7 +157,8 @@ fn Vp9Decoder::mc_kernel(
         for x in 0..<w {
           tmp[to + x] = vp9_clip_pixel(
             src[so + x] + ((fx * (src[so + x + 1] - src[so + x]) + 8) >> 4),
-          self.pixel_max)
+            self.pixel_max,
+          )
         }
         to += 64
         so += src_stride
@@ -184,12 +167,11 @@ fn Vp9Decoder::mc_kernel(
       to = 0
       for _ in 0..<h {
         for x in 0..<w {
-          let v = vp9_clip_pixel(tmp[to + x] + ((fy * (tmp[to + x + 64] - tmp[to + x]) + 8) >> 4), self.pixel_max)
-          dst[do_ + x] = if avg {
-            (dst[do_ + x] + v + 1) / 2
-          } else {
-            v
-          }
+          let v = vp9_clip_pixel(
+            tmp[to + x] + ((fy * (tmp[to + x + 64] - tmp[to + x]) + 8) >> 4),
+            self.pixel_max,
+          )
+          dst[do_ + x] = if avg { (dst[do_ + x] + v + 1) / 2 } else { v }
         }
         to += 64
         do_ += dst_stride
@@ -207,22 +189,21 @@ fn Vp9Decoder::mc_kernel(
     for _ in 0..<h {
       for x in 0..<w {
         let v = vp9_clip_pixel(
-          (filters[fb] * src[so + x - 3] +
-          filters[fb + 1] * src[so + x - 2] +
-          filters[fb + 2] * src[so + x - 1] +
-          filters[fb + 3] * src[so + x] +
-          filters[fb + 4] * src[so + x + 1] +
-          filters[fb + 5] * src[so + x + 2] +
-          filters[fb + 6] * src[so + x + 3] +
-          filters[fb + 7] * src[so + x + 4] +
-          64) >>
+          (
+            filters[fb] * src[so + x - 3] +
+            filters[fb + 1] * src[so + x - 2] +
+            filters[fb + 2] * src[so + x - 1] +
+            filters[fb + 3] * src[so + x] +
+            filters[fb + 4] * src[so + x + 1] +
+            filters[fb + 5] * src[so + x + 2] +
+            filters[fb + 6] * src[so + x + 3] +
+            filters[fb + 7] * src[so + x + 4] +
+            64
+          ) >>
           7,
-        self.pixel_max)
-        dst[do_ + x] = if avg {
-          (dst[do_ + x] + v + 1) / 2
-        } else {
-          v
-        }
+          self.pixel_max,
+        )
+        dst[do_ + x] = if avg { (dst[do_ + x] + v + 1) / 2 } else { v }
       }
       so += src_stride
       do_ += dst_stride
@@ -234,22 +215,21 @@ fn Vp9Decoder::mc_kernel(
     for _ in 0..<h {
       for x in 0..<w {
         let v = vp9_clip_pixel(
-          (filters[fb] * src[so + x - 3 * src_stride] +
-          filters[fb + 1] * src[so + x - 2 * src_stride] +
-          filters[fb + 2] * src[so + x - src_stride] +
-          filters[fb + 3] * src[so + x] +
-          filters[fb + 4] * src[so + x + src_stride] +
-          filters[fb + 5] * src[so + x + 2 * src_stride] +
-          filters[fb + 6] * src[so + x + 3 * src_stride] +
-          filters[fb + 7] * src[so + x + 4 * src_stride] +
-          64) >>
+          (
+            filters[fb] * src[so + x - 3 * src_stride] +
+            filters[fb + 1] * src[so + x - 2 * src_stride] +
+            filters[fb + 2] * src[so + x - src_stride] +
+            filters[fb + 3] * src[so + x] +
+            filters[fb + 4] * src[so + x + src_stride] +
+            filters[fb + 5] * src[so + x + 2 * src_stride] +
+            filters[fb + 6] * src[so + x + 3 * src_stride] +
+            filters[fb + 7] * src[so + x + 4 * src_stride] +
+            64
+          ) >>
           7,
-        self.pixel_max)
-        dst[do_ + x] = if avg {
-          (dst[do_ + x] + v + 1) / 2
-        } else {
-          v
-        }
+          self.pixel_max,
+        )
+        dst[do_ + x] = if avg { (dst[do_ + x] + v + 1) / 2 } else { v }
       }
       so += src_stride
       do_ += dst_stride
@@ -263,17 +243,20 @@ fn Vp9Decoder::mc_kernel(
     for _ in 0..<(h + 7) {
       for x in 0..<w {
         tmp[to + x] = vp9_clip_pixel(
-          (filters[fb] * src[so + x - 3] +
-          filters[fb + 1] * src[so + x - 2] +
-          filters[fb + 2] * src[so + x - 1] +
-          filters[fb + 3] * src[so + x] +
-          filters[fb + 4] * src[so + x + 1] +
-          filters[fb + 5] * src[so + x + 2] +
-          filters[fb + 6] * src[so + x + 3] +
-          filters[fb + 7] * src[so + x + 4] +
-          64) >>
+          (
+            filters[fb] * src[so + x - 3] +
+            filters[fb + 1] * src[so + x - 2] +
+            filters[fb + 2] * src[so + x - 1] +
+            filters[fb + 3] * src[so + x] +
+            filters[fb + 4] * src[so + x + 1] +
+            filters[fb + 5] * src[so + x + 2] +
+            filters[fb + 6] * src[so + x + 3] +
+            filters[fb + 7] * src[so + x + 4] +
+            64
+          ) >>
           7,
-        self.pixel_max)
+          self.pixel_max,
+        )
       }
       to += 64
       so += src_stride
@@ -284,22 +267,21 @@ fn Vp9Decoder::mc_kernel(
     for _ in 0..<h {
       for x in 0..<w {
         let v = vp9_clip_pixel(
-          (filters[fb2] * tmp[to + x - 3 * 64] +
-          filters[fb2 + 1] * tmp[to + x - 2 * 64] +
-          filters[fb2 + 2] * tmp[to + x - 64] +
-          filters[fb2 + 3] * tmp[to + x] +
-          filters[fb2 + 4] * tmp[to + x + 64] +
-          filters[fb2 + 5] * tmp[to + x + 2 * 64] +
-          filters[fb2 + 6] * tmp[to + x + 3 * 64] +
-          filters[fb2 + 7] * tmp[to + x + 4 * 64] +
-          64) >>
+          (
+            filters[fb2] * tmp[to + x - 3 * 64] +
+            filters[fb2 + 1] * tmp[to + x - 2 * 64] +
+            filters[fb2 + 2] * tmp[to + x - 64] +
+            filters[fb2 + 3] * tmp[to + x] +
+            filters[fb2 + 4] * tmp[to + x + 64] +
+            filters[fb2 + 5] * tmp[to + x + 2 * 64] +
+            filters[fb2 + 6] * tmp[to + x + 3 * 64] +
+            filters[fb2 + 7] * tmp[to + x + 4 * 64] +
+            64
+          ) >>
           7,
-        self.pixel_max)
-        dst[do_ + x] = if avg {
-          (dst[do_ + x] + v + 1) / 2
-        } else {
-          v
-        }
+          self.pixel_max,
+        )
+        dst[do_ + x] = if avg { (dst[do_ + x] + v + 1) / 2 } else { v }
       }
       to += 64
       do_ += dst_stride
@@ -406,7 +388,10 @@ fn Vp9Decoder::mc_chroma(
   let sstride = ref_frame.uvstride
   let cw = (ref_frame.width + self.ss_h) >> self.ss_h
   let ch = (ref_frame.height + self.ss_v) >> self.ss_v
-  if x < emx * 3 || y < emy * 3 || x + emx * 4 > cw - bw || y + emy * 5 > ch - bh {
+  if x < emx * 3 ||
+    y < emy * 3 ||
+    x + emx * 4 > cw - bw ||
+    y + emy * 5 > ch - bh {
     vp9_emulated_edge(
       self.mc_tmp,
       0,
@@ -466,32 +451,10 @@ fn Vp9Decoder::mc_chroma(
     return
   }
   self.mc_kernel(
-    dst_cb,
-    dst_off,
-    dst_stride,
-    src_cb,
-    base,
-    sstride,
-    bw,
-    bh,
-    mx,
-    my,
-    filter,
-    avg,
+    dst_cb, dst_off, dst_stride, src_cb, base, sstride, bw, bh, mx, my, filter, avg,
   )
   self.mc_kernel(
-    dst_cr,
-    dst_off,
-    dst_stride,
-    src_cr,
-    base,
-    sstride,
-    bw,
-    bh,
-    mx,
-    my,
-    filter,
-    avg,
+    dst_cr, dst_off, dst_stride, src_cr, base, sstride, bw, bh, mx, my, filter, avg,
   )
 }
 
@@ -505,7 +468,11 @@ fn vp9_uvmv2(ax : Int32, ay : Int32, bx : Int32, by : Int32) -> (Int32, Int32) {
 /// `inter_pred` (`vp9_mc_template.c`, unscaled path): predict the whole
 /// block for one or both references.  `yoff`/`uvoff` are the current frame
 /// plane offsets of the block origin.
-fn Vp9Decoder::inter_pred(self : Vp9Decoder, yoff : Int32, uvoff : Int32) -> Unit {
+fn Vp9Decoder::inter_pred(
+  self : Vp9Decoder,
+  yoff : Int32,
+  uvoff : Int32,
+) -> Unit {
   let b = self.b
   let h = self.header
   let r1 : Vp9RefFrame = match self.references[h.ref_indices[b.refidx[0]]] {
@@ -532,7 +499,20 @@ fn Vp9Decoder::inter_pred(self : Vp9Decoder, yoff : Int32, uvoff : Int32) -> Uni
     // sub-8x8: BS_8x4 = 10, BS_4x8 = 11, BS_4x4 = 12
     if b.bs == 10 {
       // 8x4
-      self.mc_luma(r1, self.y, yoff, ystride, col8, row8, b.mvx[0], b.mvy[0], 8, 4, filter, false)
+      self.mc_luma(
+        r1,
+        self.y,
+        yoff,
+        ystride,
+        col8,
+        row8,
+        b.mvx[0],
+        b.mvy[0],
+        8,
+        4,
+        filter,
+        false,
+      )
       self.mc_luma(
         r1,
         self.y,
@@ -689,7 +669,20 @@ fn Vp9Decoder::inter_pred(self : Vp9Decoder, yoff : Int32, uvoff : Int32) -> Uni
       }
     } else if b.bs == 11 {
       // 4x8
-      self.mc_luma(r1, self.y, yoff, ystride, col8, row8, b.mvx[0], b.mvy[0], 4, 8, filter, false)
+      self.mc_luma(
+        r1,
+        self.y,
+        yoff,
+        ystride,
+        col8,
+        row8,
+        b.mvx[0],
+        b.mvy[0],
+        4,
+        8,
+        filter,
+        false,
+      )
       self.mc_luma(
         r1,
         self.y,
@@ -834,7 +827,20 @@ fn Vp9Decoder::inter_pred(self : Vp9Decoder, yoff : Int32, uvoff : Int32) -> Uni
       }
     } else {
       // 4x4
-      self.mc_luma(r1, self.y, yoff, ystride, col8, row8, b.mvx[0], b.mvy[0], 4, 4, filter, false)
+      self.mc_luma(
+        r1,
+        self.y,
+        yoff,
+        ystride,
+        col8,
+        row8,
+        b.mvx[0],
+        b.mvy[0],
+        4,
+        4,
+        filter,
+        false,
+      )
       self.mc_luma(
         r1,
         self.y,
@@ -1069,8 +1075,12 @@ fn Vp9Decoder::inter_pred(self : Vp9Decoder, yoff : Int32, uvoff : Int32) -> Uni
         )
         if ss_v != 0 {
           if ss_h != 0 {
-            let uvx = vp9_rounded_div4(b.mvx[1] + b.mvx[3] + b.mvx[5] + b.mvx[7])
-            let uvy = vp9_rounded_div4(b.mvy[1] + b.mvy[3] + b.mvy[5] + b.mvy[7])
+            let uvx = vp9_rounded_div4(
+              b.mvx[1] + b.mvx[3] + b.mvx[5] + b.mvx[7],
+            )
+            let uvy = vp9_rounded_div4(
+              b.mvy[1] + b.mvy[3] + b.mvy[5] + b.mvy[7],
+            )
             self.mc_chroma(
               r2,
               self.cb,
@@ -1257,7 +1267,11 @@ fn Vp9Decoder::inter_pred(self : Vp9Decoder, yoff : Int32, uvoff : Int32) -> Uni
 ///|
 /// `inter_recon` (8 bpp, unscaled): predict the block and, unless skipped,
 /// add the decoded residual (inter blocks always use DCT_DCT).
-fn Vp9Decoder::inter_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> Unit {
+fn Vp9Decoder::inter_recon(
+  self : Vp9Decoder,
+  y_off : Int32,
+  uv_off : Int32,
+) -> Unit {
   let b = self.b
   let row = self.b_row
   let col = self.b_col
@@ -1303,21 +1317,9 @@ fn Vp9Decoder::inter_recon(self : Vp9Decoder, y_off : Int32, uv_off : Int32) -> 
   let uvstep1d = 1 << b.uvtx
   step = 1 << (b.uvtx * 2)
   for pl in 0..<2 {
-    let plane = if pl == 0 {
-      self.cb
-    } else {
-      self.cr
-    }
-    let ublock = if pl == 0 {
-      self.uvblock0
-    } else {
-      self.uvblock1
-    }
-    let ueob = if pl == 0 {
-      self.uveob0
-    } else {
-      self.uveob1
-    }
+    let plane = if pl == 0 { self.cb } else { self.cr }
+    let ublock = if pl == 0 { self.uvblock0 } else { self.uvblock1 }
+    let ueob = if pl == 0 { self.uveob0 } else { self.uveob1 }
     let mut n2 = 0
     let mut y2 = 0
     while y2 < uend_y {

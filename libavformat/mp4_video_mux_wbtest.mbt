@@ -9,9 +9,15 @@ let mp4_h264_avcc_b64 : Bytes = b"AWQAHv/hABdnZAAerLII9gIgAAADACAAAAMBQeLFyQEABm
 test "mp4 muxer: H.264 samples and avcC round-trip" {
   let avcc = @libavutil.av_base64_decode(mp4_h264_avcc_b64, 1024).unwrap()
   let mux = mp4_h264_muxer_new(64, 48, avcc, timescale=90000).unwrap()
-  mux.write_packet(b"\x00\x00\x00\x02\x65\x88", duration=3000, keyframe=true).unwrap()
-  mux.write_packet(b"\x00\x00\x00\x02\x41\x9A", duration=3000, keyframe=false).unwrap()
-  mux.write_packet(b"\x00\x00\x00\x02\x65\x88", duration=3000, keyframe=true).unwrap()
+  mux
+  .write_packet(b"\x00\x00\x00\x02\x65\x88", duration=3000, keyframe=true)
+  .unwrap()
+  mux
+  .write_packet(b"\x00\x00\x00\x02\x41\x9A", duration=3000, keyframe=false)
+  .unwrap()
+  mux
+  .write_packet(b"\x00\x00\x00\x02\x65\x88", duration=3000, keyframe=true)
+  .unwrap()
   let bytes = mux.finish()
   let movie = av_mov_open(bytes).unwrap()
   assert_eq(movie.tracks.length(), 1)

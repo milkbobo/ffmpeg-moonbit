@@ -15,14 +15,28 @@ test "HLS reader: ranges, cached init, GAP, discontinuity and retry" {
     #|#EXTINF:1,
     #|shared.bin
     #|#EXT-X-ENDLIST
-  let playlist = @libavformat.av_hls_parse(text, base_uri="https://example.test/v/list.m3u8").unwrap()
+  let playlist = @libavformat.av_hls_parse(
+    text,
+    base_uri="https://example.test/v/list.m3u8",
+  ).unwrap()
   let calls : Array[String] = []
   let retry = Ref(true)
-  let reader = @libavformat.hls_segment_reader_new(playlist, (uri, offset, length) => {
+  let reader = @libavformat.hls_segment_reader_new(playlist, (
+    uri,
+    offset,
+    length,
+  ) => {
     calls.push("\{uri} \{offset} \{length}")
-    if uri == "https://example.test/init.mp4" { return Ok(b"INIT") }
-    if offset == 5L { return Ok(b"abc") }
-    if retry.val { retry.val = false; return Err("temporary transport failure") }
+    if uri == "https://example.test/init.mp4" {
+      return Ok(b"INIT")
+    }
+    if offset == 5L {
+      return Ok(b"abc")
+    }
+    if retry.val {
+      retry.val = false
+      return Err("temporary transport failure")
+    }
     Ok(b"de")
   }).unwrap()
   let first = reader.next().unwrap().unwrap()
@@ -36,10 +50,8 @@ test "HLS reader: ranges, cached init, GAP, discontinuity and retry" {
   assert_eq(second.bytes(), b"INITde")
   assert_true(reader.next().unwrap() is None)
   assert_eq(calls, [
-    "https://example.test/init.mp4 2 4",
-    "https://example.test/v/shared.bin 5 3",
-    "https://example.test/v/shared.bin 8 2",
-    "https://example.test/v/shared.bin 8 2",
+    "https://example.test/init.mp4 2 4", "https://example.test/v/shared.bin 5 3",
+    "https://example.test/v/shared.bin 8 2", "https://example.test/v/shared.bin 8 2",
   ])
 }
 
@@ -58,13 +70,20 @@ test "HLS reader: initialization retains its key across same-URI key rotation" {
     #|one
     #|#EXTINF:1,
     #|two
-  let playlist = @libavformat.av_hls_parse(text, base_uri="https://example.test/a/list").unwrap()
+  let playlist = @libavformat.av_hls_parse(
+    text,
+    base_uri="https://example.test/a/list",
+  ).unwrap()
   let key_calls = Ref(0)
   let init_calls = Ref(0)
   let reader = @libavformat.hls_segment_reader_new(playlist, (uri, _, _) => {
-    if uri == "https://example.test/a/key" { key_calls.val += 1; Ok(key) }
-    else {
-      if uri == "https://example.test/a/init" { init_calls.val += 1 }
+    if uri == "https://example.test/a/key" {
+      key_calls.val += 1
+      Ok(key)
+    } else {
+      if uri == "https://example.test/a/init" {
+        init_calls.val += 1
+      }
       Ok(cipher)
     }
   }).unwrap()
@@ -80,15 +99,32 @@ test "HLS reader: initialization retains its key across same-URI key rotation" {
 
 ///|
 test "HLS reader: range response, unsupported encryption and encrypted map IV errors" {
-  let playlist = @libavformat.av_hls_parse("#EXTM3U\n#EXT-X-BYTERANGE:4@0\n#EXTINF:1,\na.ts").unwrap()
-  let reader = @libavformat.hls_segment_reader_new(playlist, (_, _, _) => Ok(b"abc")).unwrap()
-  assert_true(reader.next() is Err("segment: response length does not match byte range"))
-  let encrypted = @libavformat.av_hls_parse("#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=key\n#EXT-X-MAP:URI=init\n#EXTINF:1,\na.m4s").unwrap()
-  let reader = @libavformat.hls_segment_reader_new(encrypted, (_, _, _) => Ok(b"" )).unwrap()
-  assert_true(reader.next() is Err("hls: encrypted initialization requires an explicit IV"))
-  let sample = @libavformat.av_hls_parse("#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=key\n#EXTINF:1,\na.ts").unwrap()
-  let reader = @libavformat.hls_segment_reader_new(sample, (_, _, _) => Ok(b"" )).unwrap()
-  assert_true(reader.next() is Err("hls: only identity AES-128 encryption is supported"))
+  let playlist = @libavformat.av_hls_parse(
+    "#EXTM3U\n#EXT-X-BYTERANGE:4@0\n#EXTINF:1,\na.ts",
+  ).unwrap()
+  let reader = @libavformat.hls_segment_reader_new(playlist, (_, _, _) => {
+    Ok(b"abc")
+  }).unwrap()
+  assert_true(
+    reader.next() is Err("segment: response length does not match byte range"),
+  )
+  let encrypted = @libavformat.av_hls_parse(
+    "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=key\n#EXT-X-MAP:URI=init\n#EXTINF:1,\na.m4s",
+  ).unwrap()
+  let reader = @libavformat.hls_segment_reader_new(encrypted, (_, _, _) => {
+    Ok(b"")
+  }).unwrap()
+  assert_true(
+    reader.next()
+    is Err("hls: encrypted initialization requires an explicit IV"),
+  )
+  let sample = @libavformat.av_hls_parse(
+    "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=key\n#EXTINF:1,\na.ts",
+  ).unwrap()
+  let reader = @libavformat.hls_segment_reader_new(sample, (_, _, _) => Ok(b"")).unwrap()
+  assert_true(
+    reader.next() is Err("hls: only identity AES-128 encryption is supported"),
+  )
 }
 
 ///|
@@ -100,24 +136,33 @@ test "DASH reader: SegmentList byte ranges, init caching and retry" {
     #|<SegmentURL media="all.mp4" mediaRange="4-6"/>
     #|<SegmentURL media="all.mp4" mediaRange="7-8"/>
     #|</SegmentList></Representation></AdaptationSet></Period></MPD>
-  let mpd = @libavformat.av_dash_parse(manifest, base_uri="https://example.test/stream/main.mpd").unwrap()
+  let mpd = @libavformat.av_dash_parse(
+    manifest,
+    base_uri="https://example.test/stream/main.mpd",
+  ).unwrap()
   let rep = mpd.periods[0].adaptation_sets[0].representations[0]
   let calls : Array[String] = []
   let retry = Ref(true)
   let reader = @libavformat.dash_segment_reader_new(rep, (uri, offset, length) => {
     calls.push("\{uri} \{offset} \{length}")
-    if offset == 0L { Ok(b"INIT") } else if offset == 4L { Ok(b"abc") }
-    else if retry.val { retry.val = false; Err("temporary failure") } else { Ok(b"de") }
+    if offset == 0L {
+      Ok(b"INIT")
+    } else if offset == 4L {
+      Ok(b"abc")
+    } else if retry.val {
+      retry.val = false
+      Err("temporary failure")
+    } else {
+      Ok(b"de")
+    }
   })
   assert_eq(reader.next().unwrap().unwrap().bytes(), b"INITabc")
   assert_true(reader.next() is Err("temporary failure"))
   assert_eq(reader.next().unwrap().unwrap().bytes(), b"INITde")
   assert_true(reader.next().unwrap() is None)
   assert_eq(calls, [
-    "https://example.test/stream/all.mp4 0 4",
-    "https://example.test/stream/all.mp4 4 3",
-    "https://example.test/stream/all.mp4 7 2",
-    "https://example.test/stream/all.mp4 7 2",
+    "https://example.test/stream/all.mp4 0 4", "https://example.test/stream/all.mp4 4 3",
+    "https://example.test/stream/all.mp4 7 2", "https://example.test/stream/all.mp4 7 2",
   ])
 }
 
@@ -144,7 +189,9 @@ test "DASH SegmentList inherits timescale numbering timing and byte ranges" {
 ///|
 test "DASH reader: invalid range is rejected without a fetch" {
   for range in ["3-1", "-1-8", "0-9223372036854775807", "abc", "0-"] {
-    let manifest = "<MPD><Period><AdaptationSet><Representation><SegmentList><SegmentURL media=\"file\" mediaRange=\"" + range + "\"/></SegmentList></Representation></AdaptationSet></Period></MPD>"
+    let manifest = "<MPD><Period><AdaptationSet><Representation><SegmentList><SegmentURL media=\"file\" mediaRange=\"" +
+      range +
+      "\"/></SegmentList></Representation></AdaptationSet></Period></MPD>"
     let mpd = @libavformat.av_dash_parse(manifest).unwrap()
     let rep = mpd.periods[0].adaptation_sets[0].representations[0]
     let calls = Ref(0)

@@ -25,9 +25,7 @@ pub fn dash_write_segment_template_mpd(
   sb.write_string(
     "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\"\n",
   )
-  sb.write_string(
-    "     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\"\n",
-  )
+  sb.write_string("     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\"\n")
   sb.write_string(
     "     mediaPresentationDuration=\"PT\{media_duration_seconds}S\" minBufferTime=\"PT1.5S\">\n",
   )

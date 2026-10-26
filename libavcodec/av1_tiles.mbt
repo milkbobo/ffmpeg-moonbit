@@ -22,7 +22,8 @@ pub fn Av1Tile::data(self : Av1Tile) -> Bytes {
 /// must cover the frame once, in order, without gaps or overlaps. The caller
 /// supplies the corresponding parsed frame header; show-existing has no tiles.
 pub fn av1_extract_tiles(
-  data : Bytes, header : Av1FrameHeader,
+  data : Bytes,
+  header : Av1FrameHeader,
 ) -> Result[Array[Av1Tile], String] {
   let tiles : Array[Av1Tile] = []
   let mut cursor = 0
@@ -31,17 +32,28 @@ pub fn av1_extract_tiles(
       Ok(value) => value
       Err(e) => return Err(e)
     }
-    if group.tile_start != tiles.length() { return Err("av1: noncontiguous tile groups") }
+    if group.tile_start != tiles.length() {
+      return Err("av1: noncontiguous tile groups")
+    }
     for i in 0..<group.tile_sizes.length() {
       let index = group.tile_start + i
       let offset = cursor + group.payload_offset + group.tile_offsets[i]
       let size = group.tile_sizes[i]
-      tiles.push({ index, row: index / header.tile_cols, column: index % header.tile_cols,
-        offset, data: data[offset:offset + size].to_owned() })
+      tiles.push({
+        index,
+        row: index / header.tile_cols,
+        column: index % header.tile_cols,
+        offset,
+        data: data[offset:offset + size].to_owned(),
+      })
     }
-    if tiles.length() == group.num_tiles { return Ok(tiles) }
+    if tiles.length() == group.num_tiles {
+      return Ok(tiles)
+    }
     let last = group.tile_sizes.length() - 1
-    cursor += group.payload_offset + group.tile_offsets[last] + group.tile_sizes[last]
+    cursor += group.payload_offset +
+      group.tile_offsets[last] +
+      group.tile_sizes[last]
   }
   Err("av1: incomplete tile groups")
 }

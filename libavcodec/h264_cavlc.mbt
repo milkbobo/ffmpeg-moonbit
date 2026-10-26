@@ -93,8 +93,8 @@ let h264_chroma_dc_coeff_token_vlc : H264Vlc = h264_vlc_build(
 ///|
 /// `chroma422_dc_coeff_token_len[4*9]` (`h264_cavlc.c`). */
 let h264_chroma422_dc_coeff_token_len : Array[Int32] = [
-  1, 0, 0, 0, 7, 2, 0, 0, 7, 7, 3, 0, 9, 7, 7, 5, 9, 9, 7, 6, 10, 10, 9, 7, 11,
-  11, 10, 7, 12, 12, 11, 10, 13, 12, 12, 11,
+  1, 0, 0, 0, 7, 2, 0, 0, 7, 7, 3, 0, 9, 7, 7, 5, 9, 9, 7, 6, 10, 10, 9, 7, 11, 11,
+  10, 7, 12, 12, 11, 10, 13, 12, 12, 11,
 ]
 
 ///|
@@ -247,11 +247,13 @@ fn h264_get_level_prefix(gb : BitReader) -> Int32 {
 
 ///|
 /// `((int)(level * qmul + 32)) >> 6`, with the C's 32-bit unsigned product. */
-fn h264_dequant_level(level : Int32, qmul : Int32,
-  bit_depth? : Int32 = 8,
+fn h264_dequant_level(
+  level : Int32,
+  qmul : Int32,
+  bit_depth~ : Int32 = 8,
 ) -> Int32 {
   let prod = level.reinterpret_as_uint() * qmul.reinterpret_as_uint() + 32U
-  h264_store_coef(prod.reinterpret_as_int() >> 6, bit_depth=bit_depth)
+  h264_store_coef(prod.reinterpret_as_int() >> 6, bit_depth~)
 }
 
 ///|
@@ -273,8 +275,7 @@ fn h264_decode_residual(
   qmul : Array[Int32]?,
   max_coeff : Int32,
   nc : Int32,
-
-  bit_depth? : Int32 = 8,
+  bit_depth~ : Int32 = 8,
 ) -> Result[Int32, String] {
   let coeff_token = if max_coeff == 8 {
     h264_chroma422_dc_coeff_token_vlc.decode(gb)
@@ -412,8 +413,8 @@ fn h264_decode_residual(
     }
     let pos = scan[si]
     block[base + pos] = match qmul {
-      Some(q) => h264_dequant_level(level[i], q[pos], bit_depth=bit_depth)
-      None => h264_store_coef(level[i], bit_depth=bit_depth)
+      Some(q) => h264_dequant_level(level[i], q[pos], bit_depth~)
+      None => h264_store_coef(level[i], bit_depth~)
     }
     i = i + 1
   }
@@ -449,8 +450,11 @@ fn h264_build_dequant4(
 
 ///|
 /// `get_chroma_qp(pps, t, qscale)` for 8-bit streams. */
-fn h264_get_chroma_qp(pps : H264Pps, t : Int32, qscale : Int32,
-  bit_depth? : Int32 = 8,
+fn h264_get_chroma_qp(
+  pps : H264Pps,
+  t : Int32,
+  qscale : Int32,
+  bit_depth~ : Int32 = 8,
 ) -> Int32 {
   let offset = if t == 0 {
     pps.chroma_qp_index_offset0
@@ -459,7 +463,11 @@ fn h264_get_chroma_qp(pps : H264Pps, t : Int32, qscale : Int32,
   }
   let depth_offset = 6 * (bit_depth - 8)
   let idx = (qscale + offset).max(0).min(51 + depth_offset)
-  if idx < depth_offset { idx } else { h264_chroma_qp_8bit[idx - depth_offset] + depth_offset }
+  if idx < depth_offset {
+    idx
+  } else {
+    h264_chroma_qp_8bit[idx - depth_offset] + depth_offset
+  }
 }
 
 ///|
@@ -467,10 +475,10 @@ fn h264_get_chroma_qp(pps : H264Pps, t : Int32, qscale : Int32,
 /// by 8x8DCT residual coding (the coefficient blocks are stored transposed). */
 let h264_zigzag_scan8x8 : Array[Int32] = {
   let direct : Array[Int32] = [
-    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40,
-    48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29,
-    22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47,
-    55, 62, 63,
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48,
+    41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22,
+    15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55,
+    62, 63,
   ]
   let t : Array[Int32] = []
   for i = 0; i < 64; i = i + 1 {
@@ -529,20 +537,20 @@ let h264_field_scan_t : Array[Int32] = [
 ///|
 /// `h->field_scan8x8[i] = TRANSPOSE(field_scan8x8[i])`: CABAC field 8x8 scan. */
 let h264_field_scan8x8 : Array[Int32] = [
-  0, 1, 2, 8, 9, 3, 4, 10, 16, 11, 5, 6, 7, 12, 17, 24, 18, 13, 14, 15, 19, 25,
-  32, 26, 20, 21, 22, 23, 27, 33, 40, 34, 28, 29, 30, 31, 35, 41, 48, 42, 36, 37,
-  38, 39, 43, 49, 50, 44, 45, 46, 47, 51, 56, 57, 52, 53, 54, 55, 58, 59, 60, 61,
-  62, 63,
+  0, 1, 2, 8, 9, 3, 4, 10, 16, 11, 5, 6, 7, 12, 17, 24, 18, 13, 14, 15, 19, 25, 32,
+  26, 20, 21, 22, 23, 27, 33, 40, 34, 28, 29, 30, 31, 35, 41, 48, 42, 36, 37, 38,
+  39, 43, 49, 50, 44, 45, 46, 47, 51, 56, 57, 52, 53, 54, 55, 58, 59, 60, 61, 62,
+  63,
 ]
 
 ///|
 /// `h->field_scan8x8_cavlc` rearranged for the port's per-4x4 list indexing
 /// (`scan[4 * coeff + sub]`), i.e. the transposed C table read at `16*sub+j`.
 let h264_field_scan8x8_cavlc : Array[Int32] = [
-  0, 1, 2, 8, 9, 3, 4, 10, 16, 11, 5, 6, 7, 12, 17, 24, 18, 13, 14, 15, 19, 25,
-  32, 26, 20, 21, 22, 23, 27, 33, 40, 34, 28, 29, 30, 31, 35, 41, 48, 42, 36, 37,
-  38, 39, 43, 49, 50, 44, 45, 46, 47, 51, 56, 57, 52, 53, 54, 55, 58, 59, 60, 61,
-  62, 63,
+  0, 1, 2, 8, 9, 3, 4, 10, 16, 11, 5, 6, 7, 12, 17, 24, 18, 13, 14, 15, 19, 25, 32,
+  26, 20, 21, 22, 23, 27, 33, 40, 34, 28, 29, 30, 31, 35, 41, 48, 42, 36, 37, 38,
+  39, 43, 49, 50, 44, 45, 46, 47, 51, 56, 57, 52, 53, 54, 55, 58, 59, 60, 61, 62,
+  63,
 ]
 
 ///|
@@ -551,7 +559,8 @@ let h264_field_scan8x8_cavlc : Array[Int32] = [
 let h264_zigzag_direct : Array[Int32] = [
   0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48,
   41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15,
-  23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+  23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62,
+  63,
 ]
 
 ///|
@@ -566,7 +575,8 @@ let h264_field_scan_q0 : Array[Int32] = [
 let h264_field_scan8x8_q0 : Array[Int32] = [
   0, 8, 16, 1, 9, 24, 32, 17, 2, 25, 40, 48, 56, 33, 10, 3, 18, 41, 49, 57, 26, 11,
   4, 19, 34, 42, 50, 58, 27, 12, 5, 20, 35, 43, 51, 59, 28, 13, 6, 21, 36, 44, 52,
-  60, 29, 14, 22, 37, 45, 53, 61, 30, 7, 15, 38, 46, 54, 62, 23, 31, 39, 47, 55, 63,
+  60, 29, 14, 22, 37, 45, 53, 61, 30, 7, 15, 38, 46, 54, 62, 23, 31, 39, 47, 55,
+  63,
 ]
 
 ///|
@@ -580,7 +590,11 @@ fn h264_transform_bypass(ctx : H264DecCtx) -> Bool {
 /// Residual scan of the current macroblock (field MBs use the field scan). */
 fn h264_scan4(ctx : H264DecCtx) -> Array[Int32] {
   if h264_transform_bypass(ctx) {
-    if ctx.mb_field { h264_field_scan_q0 } else { h264_zigzag_scan }
+    if ctx.mb_field {
+      h264_field_scan_q0
+    } else {
+      h264_zigzag_scan
+    }
   } else if ctx.mb_field {
     h264_field_scan_t
   } else {
@@ -592,7 +606,11 @@ fn h264_scan4(ctx : H264DecCtx) -> Array[Int32] {
 /// CABAC 8x8 residual scan of the current macroblock. */
 fn h264_scan8x8(ctx : H264DecCtx) -> Array[Int32] {
   if h264_transform_bypass(ctx) {
-    if ctx.mb_field { h264_field_scan8x8_q0 } else { h264_zigzag_direct }
+    if ctx.mb_field {
+      h264_field_scan8x8_q0
+    } else {
+      h264_zigzag_direct
+    }
   } else if ctx.mb_field {
     h264_field_scan8x8
   } else {
@@ -602,14 +620,24 @@ fn h264_scan8x8(ctx : H264DecCtx) -> Array[Int32] {
 
 ///|
 /// CAVLC 8x8 residual scan for 4x4 sub-block `sub` of the current MB. */
-fn h264_cavlc_scan8x8(ctx : H264DecCtx, sub : Int) -> Array[Int32] {
+fn h264_cavlc_scan8x8(ctx : H264DecCtx, sub : Int32) -> Array[Int32] {
   if h264_transform_bypass(ctx) {
-    let base = if ctx.mb_field { h264_field_scan8x8_q0 } else { h264_zigzag_direct }
-    [for j in 0..<16 => base[4 * j + sub]]
+    let base = if ctx.mb_field {
+      h264_field_scan8x8_q0
+    } else {
+      h264_zigzag_direct
+    }
+    [
+      for j in 0..<16 => base[4 * j + sub]
+    ]
   } else if ctx.mb_field {
-    [for j in 0..<16 => h264_field_scan8x8_cavlc[4 * j + sub]]
+    [
+      for j in 0..<16 => h264_field_scan8x8_cavlc[4 * j + sub]
+    ]
   } else {
-    [for j in 0..<16 => h264_zigzag_scan8x8[4 * j + sub]]
+    [
+      for j in 0..<16 => h264_zigzag_scan8x8[4 * j + sub]
+    ]
   }
 }
 

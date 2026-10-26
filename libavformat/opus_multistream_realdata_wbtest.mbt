@@ -6,8 +6,7 @@
 /// Regenerate: scripts/emit_opus_multistream_vectors.mbtx --prepare, run C,
 /// then scripts/emit_opus_multistream_vectors.mbtx without flags.
 /// LGPL-2.1-or-later.
-let opus_51_webm_b64 : Bytes =
-  b"GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYECGFOAZwEAAAAAAAwcEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHWTbuM" +
+let opus_51_webm_b64 : Bytes = b"GkXfo59ChoEBQveBAULygQRC84EIQoKEd2VibUKHgQRChYECGFOAZwEAAAAAAAwcEU2bdLpNu4tTq4QVSalmU6yBoU27i1OrhBZUrmtTrIHWTbuM" +
   b"U6uEElTDZ1OsggFUTbuMU6uEHFO7a1OsggwG7AEAAAAAAABZAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
   b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVSalmsCrXsYMPQkBNgIxMYXZmNjMuMS4xMDJXQYxMYXZmNjMuMS4xMDJE" +
   b"iYhAUQAAAAAAABZUrmv5rgEAAAAAAABw14EBc8WIV7Nf4OBUszycgQAitZyDdW5kiIEAhoZBX09QVVNWqoNjLqBWu4QExLQAg4ECI+ODhAExLQDh" +
@@ -48,8 +47,7 @@ let opus_51_webm_b64 : Bytes =
 
 ///|
 /// Same packets remuxed with -i opus_51.webm -map 0:a -c copy opus_51.mp4.
-let opus_51_mp4_b64 : Bytes =
-  b"AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAKCG1kYXT87XybvV9PeL0uAeyj+D11LmLPhCVguZQOaMDk+9pA6v8gP2mdO6QX" +
+let opus_51_mp4_b64 : Bytes = b"AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAKCG1kYXT87XybvV9PeL0uAeyj+D11LmLPhCVguZQOaMDk+9pA6v8gP2mdO6QX" +
   b"r/bCxKTugqYB/psSFP/JnwEzP3GqV1KYr0Rc0Ed0Al6rJ/pBM1U1IS71IWLwwbt6M8l6zuawpyyBpkFgY83+b7EahgJXsyKV1wRWP+c7lCKPpvBm" +
   b"Z2iHPoiHPoCDeqRLYhzZHUqdwu9VNNqgY6U9z9OkGkPsPBS7W83seS2ioGUB9LLzzhKKAeEwysb274XyT3e6nHpXRgqi6OpM+ePbYfDKuL6PAy0B" +
   b"bYj4J37tDPqQ8dTCcbOdz8yYpS+8Lk2BgfG5AO6r2PztyV1rt9z/djFCdQ23tpU0uUZXK5jQ37uG80ZGOP6Qw130eIWxx3kcc4QMSWz5iTWk0NW1" +
@@ -92,43 +90,14 @@ let opus_51_mp4_b64 : Bytes =
 
 ///|
 let opus_51_reference : Array[String] = [
-  "H 6 312 0 4 2",
-  "M 0 0 0 0 -1",
-  "M 1 0 1 0 -1",
-  "M 2 2 0 0 -1",
-  "M 3 3 0 0 -1",
-  "M 4 1 0 0 -1",
-  "M 5 1 1 0 -1",
-  "P 0 0 0 239 31 1 1 960",
-  "F 0 0 0 2 237",
-  "P 0 1 239 239 31 1 1 960",
-  "F 0 1 0 2 237",
-  "P 0 2 478 145 31 0 1 960",
-  "F 0 2 0 2 143",
-  "P 0 3 623 17 19 0 1 960",
-  "F 0 3 0 1 16",
-  "P 1 0 0 239 31 1 1 960",
-  "F 1 0 0 2 237",
-  "P 1 1 239 239 31 1 1 960",
-  "F 1 1 0 2 237",
-  "P 1 2 478 145 31 0 1 960",
-  "F 1 2 0 2 143",
-  "P 1 3 623 17 19 0 1 960",
-  "F 1 3 0 1 16",
-  "P 2 0 0 239 31 1 1 960",
-  "F 2 0 0 2 237",
-  "P 2 1 239 239 31 1 1 960",
-  "F 2 1 0 2 237",
-  "P 2 2 478 145 31 0 1 960",
-  "F 2 2 0 2 143",
-  "P 2 3 623 17 19 0 1 960",
-  "F 2 3 0 1 16",
-  "P 3 0 0 239 31 1 1 960",
-  "F 3 0 0 2 237",
-  "P 3 1 239 239 31 1 1 960",
-  "F 3 1 0 2 237",
-  "P 3 2 478 145 31 0 1 960",
-  "F 3 2 0 2 143",
-  "P 3 3 623 17 19 0 1 960",
+  "H 6 312 0 4 2", "M 0 0 0 0 -1", "M 1 0 1 0 -1", "M 2 2 0 0 -1", "M 3 3 0 0 -1",
+  "M 4 1 0 0 -1", "M 5 1 1 0 -1", "P 0 0 0 239 31 1 1 960", "F 0 0 0 2 237", "P 0 1 239 239 31 1 1 960",
+  "F 0 1 0 2 237", "P 0 2 478 145 31 0 1 960", "F 0 2 0 2 143", "P 0 3 623 17 19 0 1 960",
+  "F 0 3 0 1 16", "P 1 0 0 239 31 1 1 960", "F 1 0 0 2 237", "P 1 1 239 239 31 1 1 960",
+  "F 1 1 0 2 237", "P 1 2 478 145 31 0 1 960", "F 1 2 0 2 143", "P 1 3 623 17 19 0 1 960",
+  "F 1 3 0 1 16", "P 2 0 0 239 31 1 1 960", "F 2 0 0 2 237", "P 2 1 239 239 31 1 1 960",
+  "F 2 1 0 2 237", "P 2 2 478 145 31 0 1 960", "F 2 2 0 2 143", "P 2 3 623 17 19 0 1 960",
+  "F 2 3 0 1 16", "P 3 0 0 239 31 1 1 960", "F 3 0 0 2 237", "P 3 1 239 239 31 1 1 960",
+  "F 3 1 0 2 237", "P 3 2 478 145 31 0 1 960", "F 3 2 0 2 143", "P 3 3 623 17 19 0 1 960",
   "F 3 3 0 1 16",
 ]

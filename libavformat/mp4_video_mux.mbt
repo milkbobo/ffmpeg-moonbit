@@ -22,7 +22,7 @@ pub fn mp4_h264_muxer_new(
   width : Int32,
   height : Int32,
   avcc : Bytes,
-  timescale? : Int32 = 90000,
+  timescale~ : Int32 = 90000,
 ) -> Result[Mp4H264Muxer, String] {
   if width <= 0 || height <= 0 || timescale <= 0 || avcc.length() < 7 {
     return Err("EINVAL: invalid H.264 MP4 stream parameters")
@@ -43,8 +43,8 @@ pub fn mp4_h264_muxer_new(
 pub fn Mp4H264Muxer::write_packet(
   self : Mp4H264Muxer,
   packet : Bytes,
-  duration? : Int32 = 3000,
-  keyframe? : Bool = false,
+  duration~ : Int32 = 3000,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty H.264 packet or duration")

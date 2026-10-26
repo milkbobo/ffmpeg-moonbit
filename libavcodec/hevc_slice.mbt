@@ -179,29 +179,47 @@ fn hevc_parse_pred_weight_table(
     }
     pw.chroma_log2_weight_denom = chroma_denom
   }
-  let hevc_clip_s17 = fn (v : Int32) -> Int32 {
+  let hevc_clip_s17 = fn(v : Int32) -> Int32 {
     if v < -(1 << 17) {
       -(1 << 17)
-    } else if v > (1 << 17) {
+    } else if v > 1 << 17 {
       1 << 17
     } else {
       v
     }
   }
-  let lists : Array[(Array[Int32], Array[Int32], Array[Array[Int32]], Array[Array[Int32]], Int32)] = [
-    (pw.luma_weight_l0, pw.luma_offset_l0, pw.chroma_weight_l0, pw.chroma_offset_l0, nb_l0),
+  let lists : Array[
+    (
+      Array[Int32],
+      Array[Int32],
+      Array[Array[Int32]],
+      Array[Array[Int32]],
+      Int32,
+    ),
+  ] = [
+    (
+      pw.luma_weight_l0,
+      pw.luma_offset_l0,
+      pw.chroma_weight_l0,
+      pw.chroma_offset_l0,
+      nb_l0,
+    ),
   ]
   if slice_is_b {
-    lists.push((pw.luma_weight_l1, pw.luma_offset_l1, pw.chroma_weight_l1, pw.chroma_offset_l1, nb_l1))
+    lists.push(
+      (
+        pw.luma_weight_l1,
+        pw.luma_offset_l1,
+        pw.chroma_weight_l1,
+        pw.chroma_offset_l1,
+        nb_l1,
+      ),
+    )
   }
   for entry in lists {
     let (luma_weight, luma_offset, chroma_weight, chroma_offset, nb) = entry
     let luma_flags = gb.read(nb).reinterpret_as_int()
-    let chroma_flags = if chroma {
-      gb.read(nb).reinterpret_as_int()
-    } else {
-      0
-    }
+    let chroma_flags = if chroma { gb.read(nb).reinterpret_as_int() } else { 0 }
     for i in 0..<nb {
       let flag_bit = 1 << (nb - 1 - i)
       if (luma_flags & flag_bit) != 0 {
@@ -369,7 +387,12 @@ pub fn ff_hevc_decode_slice_header(
   let lt_rps = new_hevc_long_term_rps()
   if !hevc_is_idr(nal_type) {
     poc_lsb = gb.read(sps.log2_max_poc_lsb).reinterpret_as_int()
-    poc = ff_hevc_compute_poc2(sps.log2_max_poc_lsb, poc_tid0, poc_lsb, nal_type)
+    poc = ff_hevc_compute_poc2(
+      sps.log2_max_poc_lsb,
+      poc_tid0,
+      poc_lsb,
+      nal_type,
+    )
     st_flag = gb.read1() != 0
     if st_flag {
       if sps.nb_st_rps == 0 {

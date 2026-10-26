@@ -6,8 +6,7 @@
 /// from scripts/av1_tiles_reference.c (args: input.ivf 14 4 2).
 /// Regenerate: moon run scripts/emit_av1_tiles_vectors.mbtx
 /// LGPL-2.1-or-later.
-let av1_tiles4_obu_b64 : Bytes =
-  b"EgAKCgAAAAO3//Nr5AEytgoUADReABxyCxKEFddAABkC21x8/0d7focYMYz1lod/o+Sz9/JBWx4xkwqfcNk6bC+EJIz6+cvlVjOyfSPXauI8VW34" +
+let av1_tiles4_obu_b64 : Bytes = b"EgAKCgAAAAO3//Nr5AEytgoUADReABxyCxKEFddAABkC21x8/0d7focYMYz1lod/o+Sz9/JBWx4xkwqfcNk6bC+EJIz6+cvlVjOyfSPXauI8VW34" +
   b"mkwp8zbzrlJO5tw0FZ4gvQTH8uECJlC9TyYhHflfJevl7/GmFISckCy1/mNWDthCg6U+LnPO96rkaeB99SSxg76Ln+9POAN9YODTbJOuZexlYnfu" +
   b"yqr5kBEjXM2sA9L8TwWoueqUVF1zIOFFJLkj8YeHibktQFfrx3zFp2P0bI85uVy7z+zqlNx5GYqJNqquwrngy6jDargJc0eCn5mAlgjwF993Y6+t" +
   b"Qud/ZgZ7m069eMxoC2+Fi3Bdz4o7tqs5wueJ2l5hC9OenaH9Wh1YaLguIJOR1N6/yf83kTaRZQJsD+GyuSKJPHBrAAkMbV9K195/KjB5t8J4KQSM" +

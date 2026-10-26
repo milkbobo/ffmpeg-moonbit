@@ -80,7 +80,9 @@ fn h264_mv_fetch(
 ) -> (Int32, Int32, Int32) {
   let ax = mb_x * 4 + bx
   let ay = mb_y * 4 + by
-  if ax < 0 || ax >= ctx.mb_width * 4 || (by >= 0 && ay >= ctx.infos.length() / ctx.mb_width * 4) {
+  if ax < 0 ||
+    ax >= ctx.mb_width * 4 ||
+    (by >= 0 && ay >= ctx.infos.length() / ctx.mb_width * 4) {
     return (h264_ref_not_avail, 0, 0)
   }
   let nmb = if by < 0 {
@@ -299,7 +301,9 @@ fn h264_mvd_fetch(
 ) -> (Int32, Int32) {
   let ax = mb_x * 4 + bx
   let ay = mb_y * 4 + by
-  if ax < 0 || ax >= ctx.mb_width * 4 || (by >= 0 && ay >= ctx.infos.length() / ctx.mb_width * 4) {
+  if ax < 0 ||
+    ax >= ctx.mb_width * 4 ||
+    (by >= 0 && ay >= ctx.infos.length() / ctx.mb_width * 4) {
     return (0, 0)
   }
   let nmb = if by < 0 {

@@ -17,10 +17,10 @@ pub struct OggOpusMuxer {
 
 ///|
 pub fn ogg_opus_muxer_new(
-  channels? : Int32 = 2,
-  pre_skip? : Int32 = 0,
-  input_sample_rate? : Int32 = 48000,
-  serial? : Int32 = 0x12345678,
+  channels~ : Int32 = 2,
+  pre_skip~ : Int32 = 0,
+  input_sample_rate~ : Int32 = 48000,
+  serial~ : Int32 = 0x12345678,
 ) -> Result[OggOpusMuxer, String] {
   if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 {
     return Err("EINVAL: invalid Ogg/Opus stream parameters")

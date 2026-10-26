@@ -132,9 +132,15 @@ fn hevc_z_scan_block_avail(
 
 ///|
 /// `is_diff_mer`. */
-fn hevc_is_diff_mer(pps : HevcPps, x_n : Int32, y_n : Int32, x_p : Int32, y_p : Int32) -> Bool {
+fn hevc_is_diff_mer(
+  pps : HevcPps,
+  x_n : Int32,
+  y_n : Int32,
+  x_p : Int32,
+  y_p : Int32,
+) -> Bool {
   let plevel = pps.log2_parallel_merge_level
-  (x_n >> plevel) == (x_p >> plevel) && (y_n >> plevel) == (y_p >> plevel)
+  x_n >> plevel == x_p >> plevel && y_n >> plevel == y_p >> plevel
 }
 
 ///|
@@ -143,15 +149,19 @@ fn hevc_compare_mv_ref_idx(a : HevcMvField, b : HevcMvField) -> Bool {
   if a.pred_flag == b.pred_flag {
     if a.pred_flag == hevc_pf_bi {
       return a.ref_idx0 == b.ref_idx0 &&
-      a.mv0.x == b.mv0.x &&
-      a.mv0.y == b.mv0.y &&
-      a.ref_idx1 == b.ref_idx1 &&
-      a.mv1.x == b.mv1.x &&
-      a.mv1.y == b.mv1.y
+        a.mv0.x == b.mv0.x &&
+        a.mv0.y == b.mv0.y &&
+        a.ref_idx1 == b.ref_idx1 &&
+        a.mv1.x == b.mv1.x &&
+        a.mv1.y == b.mv1.y
     } else if a.pred_flag == hevc_pf_l0 {
-      return a.ref_idx0 == b.ref_idx0 && a.mv0.x == b.mv0.x && a.mv0.y == b.mv0.y
+      return a.ref_idx0 == b.ref_idx0 &&
+        a.mv0.x == b.mv0.x &&
+        a.mv0.y == b.mv0.y
     } else if a.pred_flag == hevc_pf_l1 {
-      return a.ref_idx1 == b.ref_idx1 && a.mv1.x == b.mv1.x && a.mv1.y == b.mv1.y
+      return a.ref_idx1 == b.ref_idx1 &&
+        a.mv1.x == b.mv1.x &&
+        a.mv1.y == b.mv1.y
     }
   }
   false
@@ -174,13 +184,25 @@ fn hevc_derive_temporal_colocated_mvs(
   let check = fn(l : Int32) -> Bool {
     hevc_check_mvset(
       mv_lx_col,
-      if l == 0 { temp_col.mv0 } else { temp_col.mv1 },
+      if l == 0 {
+        temp_col.mv0
+      } else {
+        temp_col.mv1
+      },
       col_pic,
       ctx.poc,
       ctx.rpl[x_list],
       ref_idx_lx,
-      if l == 0 { col_frame.rpl0 } else { col_frame.rpl1 },
-      if l == 0 { temp_col.ref_idx0 } else { temp_col.ref_idx1 },
+      if l == 0 {
+        col_frame.rpl0
+      } else {
+        col_frame.rpl1
+      },
+      if l == 0 {
+        temp_col.ref_idx0
+      } else {
+        temp_col.ref_idx1
+      },
     )
   }
   if (temp_col.pred_flag & hevc_pf_l0) == 0 {
@@ -234,34 +256,22 @@ fn hevc_temporal_luma_motion_vector(
   let mut available = false
   let x_br = x0 + n_pb_w
   let y_br = y0 + n_pb_h
-  if (y0 >> sps.log2_ctb_size) == (y_br >> sps.log2_ctb_size) &&
+  if y0 >> sps.log2_ctb_size == y_br >> sps.log2_ctb_size &&
     y_br < sps.height &&
     x_br < sps.width {
-    let x = x_br & (-16)
-    let y = y_br & (-16)
+    let x = x_br & -16
+    let y = y_br & -16
     let temp_col = tab_mvf[(y >> l2pu) * sps.min_pu_width + (x >> l2pu)]
     available = hevc_derive_temporal_colocated_mvs(
-      ctx,
-      temp_col,
-      ref_idx_lx,
-      mv_lx_col,
-      x_list,
-      col_pic,
-      col_frame,
+      ctx, temp_col, ref_idx_lx, mv_lx_col, x_list, col_pic, col_frame,
     )
   }
   if !available {
-    let x = (x0 + (n_pb_w >> 1)) & (-16)
-    let y = (y0 + (n_pb_h >> 1)) & (-16)
+    let x = (x0 + (n_pb_w >> 1)) & -16
+    let y = (y0 + (n_pb_h >> 1)) & -16
     let temp_col = tab_mvf[(y >> l2pu) * sps.min_pu_width + (x >> l2pu)]
     available = hevc_derive_temporal_colocated_mvs(
-      ctx,
-      temp_col,
-      ref_idx_lx,
-      mv_lx_col,
-      x_list,
-      col_pic,
-      col_frame,
+      ctx, temp_col, ref_idx_lx, mv_lx_col, x_list, col_pic, col_frame,
     )
   }
   available
@@ -332,7 +342,9 @@ fn hevc_derive_spatial_merge_candidates(
   let mut nb_merge_cand = 0
   let mut nb_orig_merge_cand = 0
   let available = fn(cand : Bool, x_v : Int32, y_v : Int32) -> Bool {
-    cand && tab_mvf[(y_v >> l2pu) * sps.min_pu_width + (x_v >> l2pu)].pred_flag != hevc_pf_intra
+    cand &&
+    tab_mvf[(y_v >> l2pu) * sps.min_pu_width + (x_v >> l2pu)].pred_flag !=
+    hevc_pf_intra
   }
   let mvf = fn(x_v : Int32, y_v : Int32) -> HevcMvField {
     tab_mvf[(y_v >> l2pu) * sps.min_pu_width + (x_v >> l2pu)]
@@ -341,11 +353,15 @@ fn hevc_derive_spatial_merge_candidates(
     mergecand_list[nb_merge_cand].copy_from(src)
     nb_merge_cand = nb_merge_cand + 1
   }
-  let is_available_a1 = if (!single_mcl_flag &&
-    part_idx == 1 &&
-    (ctx.part_mode == hevc_part_nx2n ||
-    ctx.part_mode == hevc_part_nlx2n ||
-    ctx.part_mode == hevc_part_nrx2n)) ||
+  let is_available_a1 = if (
+      !single_mcl_flag &&
+      part_idx == 1 &&
+      (
+        ctx.part_mode == hevc_part_nx2n ||
+        ctx.part_mode == hevc_part_nlx2n ||
+        ctx.part_mode == hevc_part_nrx2n
+      )
+    ) ||
     hevc_is_diff_mer(pps, x_a1, y_a1, x0, y0) {
     false
   } else {
@@ -354,18 +370,23 @@ fn hevc_derive_spatial_merge_candidates(
   if is_available_a1 {
     push(mvf(x_a1, y_a1))
   }
-  let is_available_b1 = if (!single_mcl_flag &&
-    part_idx == 1 &&
-    (ctx.part_mode == hevc_part_2nxn ||
-    ctx.part_mode == hevc_part_2nxnu ||
-    ctx.part_mode == hevc_part_2nxnd)) ||
+  let is_available_b1 = if (
+      !single_mcl_flag &&
+      part_idx == 1 &&
+      (
+        ctx.part_mode == hevc_part_2nxn ||
+        ctx.part_mode == hevc_part_2nxnu ||
+        ctx.part_mode == hevc_part_2nxnd
+      )
+    ) ||
     hevc_is_diff_mer(pps, x_b1, y_b1, x0, y0) {
     false
   } else {
     available(cand_up, x_b1, y_b1)
   }
   if is_available_b1 &&
-    !(is_available_a1 && hevc_compare_mv_ref_idx(mvf(x_b1, y_b1), mvf(x_a1, y_a1))) {
+    !(is_available_a1 &&
+    hevc_compare_mv_ref_idx(mvf(x_b1, y_b1), mvf(x_a1, y_a1))) {
     push(mvf(x_b1, y_b1))
   }
   let is_available_b0 = available(cand_up_right, x_b0, y_b0) &&
@@ -373,7 +394,8 @@ fn hevc_derive_spatial_merge_candidates(
     hevc_z_scan_block_avail(sps, pps, x0, y0, x_b0, y_b0) &&
     !hevc_is_diff_mer(pps, x_b0, y_b0, x0, y0)
   if is_available_b0 &&
-    !(is_available_b1 && hevc_compare_mv_ref_idx(mvf(x_b0, y_b0), mvf(x_b1, y_b1))) {
+    !(is_available_b1 &&
+    hevc_compare_mv_ref_idx(mvf(x_b0, y_b0), mvf(x_b1, y_b1))) {
     push(mvf(x_b0, y_b0))
   }
   let is_available_a0 = available(cand_bottom_left, x_a0, y_a0) &&
@@ -381,14 +403,17 @@ fn hevc_derive_spatial_merge_candidates(
     hevc_z_scan_block_avail(sps, pps, x0, y0, x_a0, y_a0) &&
     !hevc_is_diff_mer(pps, x_a0, y_a0, x0, y0)
   if is_available_a0 &&
-    !(is_available_a1 && hevc_compare_mv_ref_idx(mvf(x_a0, y_a0), mvf(x_a1, y_a1))) {
+    !(is_available_a1 &&
+    hevc_compare_mv_ref_idx(mvf(x_a0, y_a0), mvf(x_a1, y_a1))) {
     push(mvf(x_a0, y_a0))
   }
   let is_available_b2 = available(cand_up_left, x_b2, y_b2) &&
     !hevc_is_diff_mer(pps, x_b2, y_b2, x0, y0)
   if is_available_b2 &&
-    !(is_available_a1 && hevc_compare_mv_ref_idx(mvf(x_b2, y_b2), mvf(x_a1, y_a1))) &&
-    !(is_available_b1 && hevc_compare_mv_ref_idx(mvf(x_b2, y_b2), mvf(x_b1, y_b1))) &&
+    !(is_available_a1 &&
+    hevc_compare_mv_ref_idx(mvf(x_b2, y_b2), mvf(x_a1, y_a1))) &&
+    !(is_available_b1 &&
+    hevc_compare_mv_ref_idx(mvf(x_b2, y_b2), mvf(x_b1, y_b1))) &&
     nb_merge_cand != 4 {
     push(mvf(x_b2, y_b2))
   }
@@ -396,32 +421,22 @@ fn hevc_derive_spatial_merge_candidates(
     let mv_l0_col = hevc_mv_new()
     let mv_l1_col = hevc_mv_new()
     let available_l0 = hevc_temporal_luma_motion_vector(
-      ctx,
-      x0,
-      y0,
-      n_pb_w,
-      n_pb_h,
-      0,
-      mv_l0_col,
-      0,
+      ctx, x0, y0, n_pb_w, n_pb_h, 0, mv_l0_col, 0,
     )
     let available_l1 = if sh.slice_type == hevc_slice_b {
       hevc_temporal_luma_motion_vector(
-        ctx,
-        x0,
-        y0,
-        n_pb_w,
-        n_pb_h,
-        0,
-        mv_l1_col,
-        1,
+        ctx, x0, y0, n_pb_w, n_pb_h, 0, mv_l1_col, 1,
       )
     } else {
       false
     }
     if available_l0 || available_l1 {
-      mergecand_list[nb_merge_cand].pred_flag = (if available_l0 { 1 } else { 0 }) +
-      (if available_l1 { 2 } else { 0 })
+      mergecand_list[nb_merge_cand].pred_flag = (if available_l0 {
+          1
+        } else {
+          0
+        }) +
+        (if available_l1 { 2 } else { 0 })
       mergecand_list[nb_merge_cand].ref_idx0 = 0
       mergecand_list[nb_merge_cand].ref_idx1 = 0
       mergecand_list[nb_merge_cand].mv0.x = mv_l0_col.x
@@ -437,15 +452,17 @@ fn hevc_derive_spatial_merge_candidates(
     nb_orig_merge_cand < sh.max_num_merge_cand {
     let mut comb_idx = 0
     while nb_merge_cand < sh.max_num_merge_cand &&
-      comb_idx < nb_orig_merge_cand * (nb_orig_merge_cand - 1) {
+          comb_idx < nb_orig_merge_cand * (nb_orig_merge_cand - 1) {
       let pair = hevc_l0_l1_cand_idx[comb_idx]
       let l0_cand = mergecand_list[pair.0]
       let l1_cand = mergecand_list[pair.1]
       if (l0_cand.pred_flag & hevc_pf_l0) != 0 &&
         (l1_cand.pred_flag & hevc_pf_l1) != 0 &&
-        (ctx.rpl[0].poc(l0_cand.ref_idx0) != ctx.rpl[1].poc(l1_cand.ref_idx1) ||
-        l0_cand.mv0.x != l1_cand.mv1.x ||
-        l0_cand.mv0.y != l1_cand.mv1.y) {
+        (
+          ctx.rpl[0].poc(l0_cand.ref_idx0) != ctx.rpl[1].poc(l1_cand.ref_idx1) ||
+          l0_cand.mv0.x != l1_cand.mv1.x ||
+          l0_cand.mv0.y != l1_cand.mv1.y
+        ) {
         mergecand_list[nb_merge_cand].ref_idx0 = l0_cand.ref_idx0
         mergecand_list[nb_merge_cand].ref_idx1 = l1_cand.ref_idx1
         mergecand_list[nb_merge_cand].pred_flag = hevc_pf_bi
@@ -460,7 +477,7 @@ fn hevc_derive_spatial_merge_candidates(
   }
   while nb_merge_cand < sh.max_num_merge_cand {
     mergecand_list[nb_merge_cand].pred_flag = hevc_pf_l0 +
-    (if sh.slice_type == hevc_slice_b { 2 } else { 0 })
+      (if sh.slice_type == hevc_slice_b { 2 } else { 0 })
     mergecand_list[nb_merge_cand].mv0.x = 0
     mergecand_list[nb_merge_cand].mv0.y = 0
     mergecand_list[nb_merge_cand].mv1.x = 0
@@ -517,16 +534,10 @@ fn hevc_luma_mv_merge_mode(
     mergecand_list.push(hevc_mv_field_new())
   }
   hevc_derive_spatial_merge_candidates(
-    ctx,
-    x0,
-    y0,
-    n_pb_w,
-    n_pb_h,
-    single_mcl_flag,
-    part_idx,
-    mergecand_list,
+    ctx, x0, y0, n_pb_w, n_pb_h, single_mcl_flag, part_idx, mergecand_list,
   )
-  if mergecand_list[merge_idx].pred_flag == hevc_pf_bi && n_pb_w2 + n_pb_h2 == 12 {
+  if mergecand_list[merge_idx].pred_flag == hevc_pf_bi &&
+    n_pb_w2 + n_pb_h2 == 12 {
     mergecand_list[merge_idx].pred_flag = hevc_pf_l0
   }
   mv.copy_from(mergecand_list[merge_idx])
@@ -544,7 +555,8 @@ fn HevcInterCtx::mp_mx(
   ref_idx : Int32,
 ) -> Bool {
   let sps = self.sps
-  let f = self.tab_mvf[(y >> sps.log2_min_pu_size) * sps.min_pu_width + (x >> sps.log2_min_pu_size)]
+  let f = self.tab_mvf[(y >> sps.log2_min_pu_size) * sps.min_pu_width +
+    (x >> sps.log2_min_pu_size)]
   let rpl = self.rpl[pred_flag_index]
   let idx = if pred_flag_index == 0 { f.ref_idx0 } else { f.ref_idx1 }
   if (f.pred_flag & (1 << pred_flag_index)) != 0 &&
@@ -569,7 +581,8 @@ fn HevcInterCtx::dist_scale(
   ref_idx : Int32,
 ) -> Unit {
   let sps = self.sps
-  let f = self.tab_mvf[(y >> sps.log2_min_pu_size) * sps.min_pu_width + (x >> sps.log2_min_pu_size)]
+  let f = self.tab_mvf[(y >> sps.log2_min_pu_size) * sps.min_pu_width +
+    (x >> sps.log2_min_pu_size)]
   let eidx = if elist == 0 { f.ref_idx0 } else { f.ref_idx1 }
   let ref_pic_elist = self.rpl[elist].poc(eidx)
   let ref_pic_curr = self.rpl[ref_idx_curr].poc(ref_idx)
@@ -594,7 +607,8 @@ fn HevcInterCtx::mp_mx_lt(
   ref_idx : Int32,
 ) -> Bool {
   let sps = self.sps
-  let f = self.tab_mvf[(y >> sps.log2_min_pu_size) * sps.min_pu_width + (x >> sps.log2_min_pu_size)]
+  let f = self.tab_mvf[(y >> sps.log2_min_pu_size) * sps.min_pu_width +
+    (x >> sps.log2_min_pu_size)]
   if (f.pred_flag & (1 << pred_flag_index)) != 0 {
     let fidx = if pred_flag_index == 0 { f.ref_idx0 } else { f.ref_idx1 }
     let curr_is_long_term = self.rpl[ref_idx_curr].is_long_term(ref_idx)
@@ -639,19 +653,22 @@ fn hevc_luma_mv_mvp_mode(
   let ref_idx_curr = lx
   let ref_idx = if lx == 0 { mv.ref_idx0 } else { mv.ref_idx1 }
   let pred_flag_index_l0 = lx
-  let pred_flag_index_l1 = (if lx == 0 { 1 } else { 0 })
+  let pred_flag_index_l1 = if lx == 0 { 1 } else { 0 }
   let cand_bottom_left = ctx.na.cand_bottom_left
   let cand_left = ctx.na.cand_left
   let cand_up_left = ctx.na.cand_up_left
   let cand_up = ctx.na.cand_up
   let cand_up_right = ctx.na.cand_up_right_sap
   let available = fn(cand : Bool, x_v : Int32, y_v : Int32) -> Bool {
-    cand && tab_mvf[(y_v >> l2pu) * sps.min_pu_width + (x_v >> l2pu)].pred_flag != hevc_pf_intra
+    cand &&
+    tab_mvf[(y_v >> l2pu) * sps.min_pu_width + (x_v >> l2pu)].pred_flag !=
+    hevc_pf_intra
   }
   let x_a0 = x0 - 1
   let y_a0 = y0 + n_pb_h
-  let is_available_a0 = available(cand_bottom_left, x_a0, y_a0) && y_a0 < sps.height &&
-  hevc_z_scan_block_avail(sps, ctx.pps, x0, y0, x_a0, y_a0)
+  let is_available_a0 = available(cand_bottom_left, x_a0, y_a0) &&
+    y_a0 < sps.height &&
+    hevc_z_scan_block_avail(sps, ctx.pps, x0, y0, x_a0, y_a0)
   let x_a1 = x0 - 1
   let y_a1 = y0 + n_pb_h - 1
   let is_available_a1 = available(cand_left, x_a1, y_a1)
@@ -679,20 +696,28 @@ fn hevc_luma_mv_mvp_mode(
   }
   if !goto_b {
     if is_available_a0 {
-      if ctx.mp_mx_lt(x_a0, y_a0, pred_flag_index_l0, mx_a, ref_idx_curr, ref_idx) {
+      if ctx.mp_mx_lt(
+          x_a0, y_a0, pred_flag_index_l0, mx_a, ref_idx_curr, ref_idx,
+        ) {
         goto_b = true
       }
       if !goto_b &&
-        ctx.mp_mx_lt(x_a0, y_a0, pred_flag_index_l1, mx_a, ref_idx_curr, ref_idx) {
+        ctx.mp_mx_lt(
+          x_a0, y_a0, pred_flag_index_l1, mx_a, ref_idx_curr, ref_idx,
+        ) {
         goto_b = true
       }
     }
     if !goto_b && is_available_a1 {
-      if ctx.mp_mx_lt(x_a1, y_a1, pred_flag_index_l0, mx_a, ref_idx_curr, ref_idx) {
+      if ctx.mp_mx_lt(
+          x_a1, y_a1, pred_flag_index_l0, mx_a, ref_idx_curr, ref_idx,
+        ) {
         goto_b = true
       }
       if !goto_b &&
-        ctx.mp_mx_lt(x_a1, y_a1, pred_flag_index_l1, mx_a, ref_idx_curr, ref_idx) {
+        ctx.mp_mx_lt(
+          x_a1, y_a1, pred_flag_index_l1, mx_a, ref_idx_curr, ref_idx,
+        ) {
         goto_b = true
       }
     }
@@ -703,8 +728,9 @@ fn hevc_luma_mv_mvp_mode(
   // b_candidates:
   let x_b0 = x0 + n_pb_w
   let y_b0 = y0 - 1
-  let is_available_b0 = available(cand_up_right, x_b0, y_b0) && x_b0 < sps.width &&
-  hevc_z_scan_block_avail(sps, ctx.pps, x0, y0, x_b0, y_b0)
+  let is_available_b0 = available(cand_up_right, x_b0, y_b0) &&
+    x_b0 < sps.width &&
+    hevc_z_scan_block_avail(sps, ctx.pps, x0, y0, x_b0, y_b0)
   let x_b1 = x0 + n_pb_w - 1
   let y_b1 = y0 - 1
   let is_available_b1 = available(cand_up, x_b1, y_b1)
@@ -751,21 +777,33 @@ fn hevc_luma_mv_mvp_mode(
     }
     available_flag_lxb0 = false
     if is_available_b0 {
-      available_flag_lxb0 = ctx.mp_mx_lt(x_b0, y_b0, pred_flag_index_l0, mx_b, ref_idx_curr, ref_idx)
+      available_flag_lxb0 = ctx.mp_mx_lt(
+        x_b0, y_b0, pred_flag_index_l0, mx_b, ref_idx_curr, ref_idx,
+      )
       if !available_flag_lxb0 {
-        available_flag_lxb0 = ctx.mp_mx_lt(x_b0, y_b0, pred_flag_index_l1, mx_b, ref_idx_curr, ref_idx)
+        available_flag_lxb0 = ctx.mp_mx_lt(
+          x_b0, y_b0, pred_flag_index_l1, mx_b, ref_idx_curr, ref_idx,
+        )
       }
     }
     if is_available_b1 && !available_flag_lxb0 {
-      available_flag_lxb0 = ctx.mp_mx_lt(x_b1, y_b1, pred_flag_index_l0, mx_b, ref_idx_curr, ref_idx)
+      available_flag_lxb0 = ctx.mp_mx_lt(
+        x_b1, y_b1, pred_flag_index_l0, mx_b, ref_idx_curr, ref_idx,
+      )
       if !available_flag_lxb0 {
-        available_flag_lxb0 = ctx.mp_mx_lt(x_b1, y_b1, pred_flag_index_l1, mx_b, ref_idx_curr, ref_idx)
+        available_flag_lxb0 = ctx.mp_mx_lt(
+          x_b1, y_b1, pred_flag_index_l1, mx_b, ref_idx_curr, ref_idx,
+        )
       }
     }
     if is_available_b2 && !available_flag_lxb0 {
-      available_flag_lxb0 = ctx.mp_mx_lt(x_b2, y_b2, pred_flag_index_l0, mx_b, ref_idx_curr, ref_idx)
+      available_flag_lxb0 = ctx.mp_mx_lt(
+        x_b2, y_b2, pred_flag_index_l0, mx_b, ref_idx_curr, ref_idx,
+      )
       if !available_flag_lxb0 {
-        available_flag_lxb0 = ctx.mp_mx_lt(x_b2, y_b2, pred_flag_index_l1, mx_b, ref_idx_curr, ref_idx)
+        available_flag_lxb0 = ctx.mp_mx_lt(
+          x_b2, y_b2, pred_flag_index_l1, mx_b, ref_idx_curr, ref_idx,
+        )
       }
     }
   }
@@ -786,14 +824,7 @@ fn hevc_luma_mv_mvp_mode(
     mvp_lx_flag == num_mvp_cand {
     let mv_col = hevc_mv_new()
     let available_col = hevc_temporal_luma_motion_vector(
-      ctx,
-      x0,
-      y0,
-      n_pb_w,
-      n_pb_h,
-      ref_idx,
-      mv_col,
-      lx,
+      ctx, x0, y0, n_pb_w, n_pb_h, ref_idx, mv_col, lx,
     )
     if available_col {
       let slot = if num_mvp_cand == 0 { mvpcand0 } else { mvpcand1 }
@@ -838,15 +869,7 @@ fn hevc_hls_prediction_unit(
       merge_idx = ctx.cabac.merge_idx(sh.max_num_merge_cand)
     }
     hevc_luma_mv_merge_mode(
-      ctx,
-      x0,
-      y0,
-      n_pb_w,
-      n_pb_h,
-      log2_cb_size,
-      part_idx,
-      merge_idx,
-      current_mv,
+      ctx, x0, y0, n_pb_w, n_pb_h, log2_cb_size, part_idx, merge_idx, current_mv,
     )
   } else {
     ctx.set_neighbour_available(x0, y0, n_pb_w, n_pb_h)
@@ -862,7 +885,9 @@ fn hevc_hls_prediction_unit(
       current_mv.pred_flag = hevc_pf_l0
       let (dx, dy) = ctx.cabac.mvd_coding()
       let mvp_flag = ctx.cabac.mvp_lx_flag()
-      hevc_luma_mv_mvp_mode(ctx, x0, y0, n_pb_w, n_pb_h, mvp_flag, 0, current_mv)
+      hevc_luma_mv_mvp_mode(
+        ctx, x0, y0, n_pb_w, n_pb_h, mvp_flag, 0, current_mv,
+      )
       current_mv.mv0.x = current_mv.mv0.x + dx
       current_mv.mv0.y = current_mv.mv0.y + dy
     }
@@ -877,7 +902,9 @@ fn hevc_hls_prediction_unit(
       }
       current_mv.pred_flag = current_mv.pred_flag + hevc_pf_l1
       let mvp_flag = ctx.cabac.mvp_lx_flag()
-      hevc_luma_mv_mvp_mode(ctx, x0, y0, n_pb_w, n_pb_h, mvp_flag, 1, current_mv)
+      hevc_luma_mv_mvp_mode(
+        ctx, x0, y0, n_pb_w, n_pb_h, mvp_flag, 1, current_mv,
+      )
       current_mv.mv1.x = current_mv.mv1.x + dx
       current_mv.mv1.y = current_mv.mv1.y + dy
     }

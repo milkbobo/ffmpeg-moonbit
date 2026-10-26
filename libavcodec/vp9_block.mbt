@@ -23,8 +23,14 @@ const VP9_BL_8X8 : Int32 = 3
 ///|
 /// `enum BlockPartition`. */
 const VP9_PARTITION_NONE : Int32 = 0
+
+///|
 const VP9_PARTITION_H : Int32 = 1
+
+///|
 const VP9_PARTITION_V : Int32 = 2
+
+///|
 const VP9_PARTITION_SPLIT : Int32 = 3
 
 ///|
@@ -173,8 +179,6 @@ fn Vp9Decoder::set_seg_map(
     }
   }
 }
-
-
 
 ///|
 /// int16 truncation (`dctcoef` is int16_t at 8 bpp). */
@@ -366,19 +370,16 @@ fn Vp9Decoder::decode_coeffs_b(
       band += 1
       band_left = counts[band]
     }
-    let q = if i != 0 {
-      qmul_ac
-    } else {
-      qmul_dc
-    }
+    let q = if i != 0 { qmul_ac } else { qmul_dc }
     let sign = vp9_rac_get(rac)
     // C multiplies in 32-bit (wrapping) and stores into a dctcoef array:
     // int16_t at 8 bpp, int32_t at 10/12 bpp
     let prod = (if sign != 0 {
-      0U - val.reinterpret_as_uint()
-    } else {
-      val.reinterpret_as_uint()
-    }) * q.reinterpret_as_uint()
+        0U - val.reinterpret_as_uint()
+      } else {
+        val.reinterpret_as_uint()
+      }) *
+      q.reinterpret_as_uint()
     let mut v = prod.reinterpret_as_int()
     if is_tx32x32 {
       v = v / 2
@@ -429,18 +430,19 @@ fn vp9_scan_for(kind : Int32, txtp : Int32) -> (Array[Int32], Array[Int32]) {
 /// OR-merge the above/left nnz contexts per TU group (`MERGE`): `base` is
 /// the block's first slot (the C offsets the pointer), `end` the relative
 /// length. */
-fn vp9_merge_ctx(arr : FixedArray[Int32], base : Int32, end : Int32, step : Int32) -> Unit {
+fn vp9_merge_ctx(
+  arr : FixedArray[Int32],
+  base : Int32,
+  end : Int32,
+  step : Int32,
+) -> Unit {
   let mut n = 0
   while n < end {
     let mut v = 0
     for k in 0..<step {
       v = v | arr[base + n + k]
     }
-    arr[base + n] = if v != 0 {
-      1
-    } else {
-      0
-    }
+    arr[base + n] = if v != 0 { 1 } else { 0 }
     n += step
   }
 }
@@ -448,7 +450,12 @@ fn vp9_merge_ctx(arr : FixedArray[Int32], base : Int32, end : Int32, step : Int3
 ///|
 /// Splat the group leader nnz flag over its TU group (`SPLAT`): `base` is
 /// the block's first slot, `end` the relative length. */
-fn vp9_splat_ctx(arr : FixedArray[Int32], base : Int32, end : Int32, step : Int32) -> Unit {
+fn vp9_splat_ctx(
+  arr : FixedArray[Int32],
+  base : Int32,
+  end : Int32,
+  step : Int32,
+) -> Unit {
   if step == 2 {
     let mut n = 1
     while n < end {
@@ -460,7 +467,7 @@ fn vp9_splat_ctx(arr : FixedArray[Int32], base : Int32, end : Int32, step : Int3
     while n < end {
       let v = arr[base + n]
       let m = vp9_min(end - n - 1, step - 1)
-      for k in 1..=m {
+      for k in 1..<=m {
         arr[base + n + k] = v
       }
       n += step
@@ -500,11 +507,7 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
   while y < end_y {
     let mut x = 0
     while x < end_x {
-      let mode_idx = if b.bs > VP9_BS_8x8 && b.tx == 0 {
-        n
-      } else {
-        0
-      }
+      let mode_idx = if b.bs > VP9_BS_8x8 && b.tx == 0 { n } else { 0 }
       let txtp = if b.intra != 0 {
         vp9_intra_txfm_type[b.mode[mode_idx]]
       } else {
@@ -526,11 +529,7 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
         ct_y_coef,
         ct_y_eob,
       )
-      let nz = if ret != 0 {
-        1
-      } else {
-        0
-      }
+      let nz = if ret != 0 { 1 } else { 0 }
       a[aoff + x] = nz
       l[loff + y] = nz
       total_coeff = total_coeff | nz
@@ -561,16 +560,8 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
     let ul = self.left_uv_nnz[pl]
     let uaoff = self.b_col << (1 - self.ss_h)
     let uloff = (self.b_row & 7) << (1 - self.ss_v)
-    let ublock = if pl == 0 {
-      self.uvblock0
-    } else {
-      self.uvblock1
-    }
-    let ueob = if pl == 0 {
-      self.uveob0
-    } else {
-      self.uveob1
-    }
+    let ublock = if pl == 0 { self.uvblock0 } else { self.uvblock1 }
+    let ueob = if pl == 0 { self.uveob0 } else { self.uveob1 }
     if ustep >= 2 {
       vp9_merge_ctx(ul, uloff, uend_y, ustep)
       vp9_merge_ctx(ua, uaoff, uend_x, ustep)
@@ -595,11 +586,7 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
           ct_uv_coef,
           ct_uv_eob,
         )
-        let nz = if ret != 0 {
-          1
-        } else {
-          0
-        }
+        let nz = if ret != 0 { 1 } else { 0 }
         ua[uaoff + x] = nz
         ul[uloff + y] = nz
         total_coeff = total_coeff | nz
@@ -616,6 +603,7 @@ fn Vp9Decoder::decode_coeffs(self : Vp9Decoder) -> Int32 {
   }
   total_coeff
 }
+
 ///|
 /// `decode_sb`: partition tree recursion over one superblock position. */
 fn Vp9Decoder::decode_sb(
@@ -637,28 +625,48 @@ fn Vp9Decoder::decode_sb(
   let mut bp = 0
   if bl == VP9_BL_8X8 {
     bp = if kf {
-      vp9_rac_get_tree_flat(self.rac, vp9_partition_tree, vp9_kf_partition_probs, pbase)
+      vp9_rac_get_tree_flat(
+        self.rac,
+        vp9_partition_tree,
+        vp9_kf_partition_probs,
+        pbase,
+      )
     } else {
-      vp9_rac_get_tree_flat_ctx(self.rac, vp9_partition_tree, self.prob, VP9_PC_PARTITION + pbase)
+      vp9_rac_get_tree_flat_ctx(
+        self.rac,
+        vp9_partition_tree,
+        self.prob,
+        VP9_PC_PARTITION + pbase,
+      )
     }
     self.decode_block(row, col, lflvl_idx, yoff, uvoff, bl, bp)
   } else if col + hbs < self.cols {
     if row + hbs < self.rows {
       bp = if kf {
-        vp9_rac_get_tree_flat(self.rac, vp9_partition_tree, vp9_kf_partition_probs, pbase)
+        vp9_rac_get_tree_flat(
+          self.rac,
+          vp9_partition_tree,
+          vp9_kf_partition_probs,
+          pbase,
+        )
       } else {
-        vp9_rac_get_tree_flat_ctx(self.rac, vp9_partition_tree, self.prob, VP9_PC_PARTITION + pbase)
+        vp9_rac_get_tree_flat_ctx(
+          self.rac,
+          vp9_partition_tree,
+          self.prob,
+          VP9_PC_PARTITION + pbase,
+        )
       }
       if bp == VP9_PARTITION_NONE {
         self.decode_block(row, col, lflvl_idx, yoff, uvoff, bl, bp)
       } else if bp == VP9_PARTITION_H {
         self.decode_block(row, col, lflvl_idx, yoff, uvoff, bl, bp)
-        let yoff2 = yoff + (hbs * 8 * self.ystride)
+        let yoff2 = yoff + hbs * 8 * self.ystride
         let uvoff2 = uvoff + ((hbs * 8 * self.uvstride) >> self.ss_v)
         self.decode_block(row + hbs, col, lflvl_idx, yoff2, uvoff2, bl, bp)
       } else if bp == VP9_PARTITION_V {
         self.decode_block(row, col, lflvl_idx, yoff, uvoff, bl, bp)
-        let yoff2 = yoff + (hbs * 8)
+        let yoff2 = yoff + hbs * 8
         let uvoff2 = uvoff + ((hbs * 8) >> self.ss_h)
         self.decode_block(row, col + hbs, lflvl_idx, yoff2, uvoff2, bl, bp)
       } else {
@@ -667,37 +675,38 @@ fn Vp9Decoder::decode_sb(
           row,
           col + hbs,
           lflvl_idx,
-          yoff + (hbs * 8),
+          yoff + hbs * 8,
           uvoff + ((hbs * 8) >> self.ss_h),
           bl + 1,
         )
-        let yoff2 = yoff + (hbs * 8 * self.ystride)
+        let yoff2 = yoff + hbs * 8 * self.ystride
         let uvoff2 = uvoff + ((hbs * 8 * self.uvstride) >> self.ss_v)
         self.decode_sb(row + hbs, col, lflvl_idx, yoff2, uvoff2, bl + 1)
         self.decode_sb(
           row + hbs,
           col + hbs,
           lflvl_idx,
-          yoff2 + (hbs * 8),
+          yoff2 + hbs * 8,
           uvoff2 + ((hbs * 8) >> self.ss_h),
           bl + 1,
         )
       }
     } else if vp9_rac_get_prob(
-      self.rac,
-      if kf {
-        vp9_kf_partition_probs[pbase + 1]
-      } else {
-        self.prob[VP9_PC_PARTITION + pbase + 1]
-      },
-    ) != 0 {
+        self.rac,
+        if kf {
+          vp9_kf_partition_probs[pbase + 1]
+        } else {
+          self.prob[VP9_PC_PARTITION + pbase + 1]
+        },
+      ) !=
+      0 {
       bp = VP9_PARTITION_SPLIT
       self.decode_sb(row, col, lflvl_idx, yoff, uvoff, bl + 1)
       self.decode_sb(
         row,
         col + hbs,
         lflvl_idx,
-        yoff + (hbs * 8),
+        yoff + hbs * 8,
         uvoff + ((hbs * 8) >> self.ss_h),
         bl + 1,
       )
@@ -707,20 +716,21 @@ fn Vp9Decoder::decode_sb(
     }
   } else if row + hbs < self.rows {
     if vp9_rac_get_prob(
-      self.rac,
-      if kf {
-        vp9_kf_partition_probs[pbase + 2]
-      } else {
-        self.prob[VP9_PC_PARTITION + pbase + 2]
-      },
-    ) != 0 {
+        self.rac,
+        if kf {
+          vp9_kf_partition_probs[pbase + 2]
+        } else {
+          self.prob[VP9_PC_PARTITION + pbase + 2]
+        },
+      ) !=
+      0 {
       bp = VP9_PARTITION_SPLIT
       self.decode_sb(row, col, lflvl_idx, yoff, uvoff, bl + 1)
       self.decode_sb(
         row + hbs,
         col,
         lflvl_idx,
-        yoff + (hbs * 8 * self.ystride),
+        yoff + hbs * 8 * self.ystride,
         uvoff + ((hbs * 8 * self.uvstride) >> self.ss_v),
         bl + 1,
       )
@@ -763,12 +773,13 @@ fn Vp9Decoder::decode_block(
   self.max_mv_x = 128 + (self.cols - col - w4) * 64
   self.max_mv_y = 128 + (self.rows - row - h4) * 64
   self.decode_mode()
-  b.uvtx = b.tx - (if (self.ss_h != 0 && w4 * 2 == (1 << b.tx)) ||
-    (self.ss_v != 0 && h4 * 2 == (1 << b.tx)) {
-    1
-  } else {
-    0
-  })
+  b.uvtx = b.tx -
+    (if (self.ss_h != 0 && w4 * 2 == 1 << b.tx) ||
+      (self.ss_v != 0 && h4 * 2 == 1 << b.tx) {
+      1
+    } else {
+      0
+    })
   if b.uvtx < 0 {
     b.uvtx = 0
   }
@@ -818,17 +829,8 @@ fn Vp9Decoder::decode_block(
   // pick filter level and mark edges to filter
   if self.filter_level() > 0 {
     let lvl = self.seg_lflvl[b.seg_id * 8 +
-      (if b.intra != 0 {
-        0
-      } else {
-        b.refidx[0] + 1
-      }) *
-      2 +
-      (if b.mode[3] != 12 {
-        1
-      } else {
-        0
-      })]
+      (if b.intra != 0 { 0 } else { b.refidx[0] + 1 }) * 2 +
+      (if b.mode[3] != 12 { 1 } else { 0 })]
     if lvl > 0 {
       for y in 0..<h4 {
         for x in 0..<w4 {
@@ -837,12 +839,21 @@ fn Vp9Decoder::decode_block(
       }
       let x_end = vp9_min(self.cols - col, w4)
       let y_end = vp9_min(self.rows - row, h4)
-      let skip_inter = if b.intra == 0 && b.skip != 0 {
-        1
-      } else {
-        0
-      }
-      self.mask_edges(lflvl_idx, 0, 0, 0, (row & 7), (col & 7), x_end, y_end, 0, 0, b.tx, skip_inter)
+      let skip_inter = if b.intra == 0 && b.skip != 0 { 1 } else { 0 }
+      self.mask_edges(
+        lflvl_idx,
+        0,
+        0,
+        0,
+        row & 7,
+        col & 7,
+        x_end,
+        y_end,
+        0,
+        0,
+        b.tx,
+        skip_inter,
+      )
       if self.ss_h != 0 || self.ss_v != 0 {
         let col_end = if (self.cols & 1) != 0 && col + w4 >= self.cols {
           self.cols & 7
@@ -859,8 +870,8 @@ fn Vp9Decoder::decode_block(
           1,
           self.ss_h,
           self.ss_v,
-          (row & 7),
-          (col & 7),
+          row & 7,
+          col & 7,
           x_end,
           y_end,
           col_end,

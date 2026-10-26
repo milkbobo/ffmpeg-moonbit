@@ -19,10 +19,10 @@ pub struct WebmOpusMuxer {
 
 ///|
 pub fn webm_opus_muxer_new(
-  channels? : Int32 = 2,
-  pre_skip? : Int32 = 0,
-  input_sample_rate? : Int32 = 48000,
-  doctype? : String = "webm",
+  channels~ : Int32 = 2,
+  pre_skip~ : Int32 = 0,
+  input_sample_rate~ : Int32 = 48000,
+  doctype~ : String = "webm",
 ) -> Result[WebmOpusMuxer, String] {
   if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 {
     return Err("EINVAL: invalid WebM/Opus stream parameters")
@@ -73,7 +73,7 @@ fn webm_size(dst : Array[Byte], size : Int32) -> Unit {
   }
   let payload_bits = 8 - len
   let first = (1 << (8 - len)) |
-    (((v >> (8 * (len - 1))) & ((1L << payload_bits) - 1L)).to_int())
+    ((v >> (8 * (len - 1))) & ((1L << payload_bits) - 1L)).to_int()
   dst.push(first.to_byte())
   for i in 1..<len {
     dst.push(((v >> (8 * (len - 1 - i))) & 0xFFL).to_int().to_byte())
@@ -81,7 +81,12 @@ fn webm_size(dst : Array[Byte], size : Int32) -> Unit {
 }
 
 ///|
-fn webm_elem(dst : Array[Byte], id : UInt32, id_len : Int32, body : Array[Byte]) -> Unit {
+fn webm_elem(
+  dst : Array[Byte],
+  id : UInt32,
+  id_len : Int32,
+  body : Array[Byte],
+) -> Unit {
   webm_id(dst, id, id_len)
   webm_size(dst, body.length())
   dst.append(body)
@@ -102,12 +107,22 @@ fn webm_uint_body(value : UInt64) -> Array[Byte] {
 }
 
 ///|
-fn webm_uint_elem(dst : Array[Byte], id : UInt32, id_len : Int32, value : UInt64) -> Unit {
+fn webm_uint_elem(
+  dst : Array[Byte],
+  id : UInt32,
+  id_len : Int32,
+  value : UInt64,
+) -> Unit {
   webm_elem(dst, id, id_len, webm_uint_body(value))
 }
 
 ///|
-fn webm_string_elem(dst : Array[Byte], id : UInt32, id_len : Int32, text : String) -> Unit {
+fn webm_string_elem(
+  dst : Array[Byte],
+  id : UInt32,
+  id_len : Int32,
+  text : String,
+) -> Unit {
   let body : Array[Byte] = []
   for c in text {
     body.push(c.to_int().to_byte())
@@ -116,7 +131,12 @@ fn webm_string_elem(dst : Array[Byte], id : UInt32, id_len : Int32, text : Strin
 }
 
 ///|
-fn webm_float_elem(dst : Array[Byte], id : UInt32, id_len : Int32, value : Double) -> Unit {
+fn webm_float_elem(
+  dst : Array[Byte],
+  id : UInt32,
+  id_len : Int32,
+  value : Double,
+) -> Unit {
   let bits = value.reinterpret_as_int64()
   let body : Array[Byte] = []
   for i in 0..<8 {
@@ -158,7 +178,10 @@ fn WebmOpusMuxer::cluster(self : WebmOpusMuxer) -> Array[Byte] {
     let packet = self.packets[i]
     let ms = samples * 1000 / 48000 + ts_offset.to_int()
     let block : Array[Byte] = [
-      b'\x81', ((ms >> 8) & 0xFF).to_byte(), (ms & 0xFF).to_byte(), b'\x80',
+      b'\x81',
+      ((ms >> 8) & 0xFF).to_byte(),
+      (ms & 0xFF).to_byte(),
+      b'\x80',
     ]
     for b in packet {
       block.push(b)
@@ -195,7 +218,12 @@ pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
 
   let audio : Array[Byte] = []
   webm_float_elem(audio, 0xB5, 1, 48000.0)
-  webm_uint_elem(audio, 0x9F, 1, self.channels.reinterpret_as_uint().to_uint64())
+  webm_uint_elem(
+    audio,
+    0x9F,
+    1,
+    self.channels.reinterpret_as_uint().to_uint64(),
+  )
 
   let track : Array[Byte] = []
   webm_uint_elem(track, 0xD7, 1, 1UL) // TrackNumber

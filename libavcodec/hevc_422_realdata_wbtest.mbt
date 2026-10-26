@@ -377,4 +377,3 @@ let hevc_y422_idr_b64 : Bytes = bcat([
   b"t2uyAfDQOgHQCDJPRyBzCZ0hzy06hIbivW3xR+fjGgqMJULplu7SK6cd/H318wDIZUzRfG6pU7FTJZzR+RmPBhXmlHYcFmZtAGoS",
   b"9CT0mI67GzNzjFvMhBYYoU3mf3iAGMQgRw==",
 ])
-

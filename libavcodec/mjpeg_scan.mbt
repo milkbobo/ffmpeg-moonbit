@@ -241,9 +241,7 @@ fn jpeg_decode_ac_first(
         return Err("mjpeg: progressive AC index out of range")
       }
       let level = jpeg_extend(je_read(bits, size), size)
-      comp.coeffs[base + jpeg_zigzag[i]] = jpeg_i16(
-        level * (quant[i] << al),
-      )
+      comp.coeffs[base + jpeg_zigzag[i]] = jpeg_i16(level * (quant[i] << al))
       i = i + 1
     } else if run == 15 {
       i = i + 15
@@ -352,9 +350,8 @@ fn jpeg_decode_ac_refine(
       let run = code >> 4
       if (code & 0x0F) != 0 {
         let negative = je_read(bits, 1) == 0
-        i = match jpeg_refine_zero_run(
-          bits, comp, base, i, run, last, se, quant, al,
-        ) {
+        i = match
+          jpeg_refine_zero_run(bits, comp, base, i, run, last, se, quant, al) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -369,9 +366,8 @@ fn jpeg_decode_ac_refine(
         }
         i = i + 1
       } else if run == 15 {
-        i = match jpeg_refine_zero_run(
-          bits, comp, base, i, run, last, se, quant, al,
-        ) {
+        i = match
+          jpeg_refine_zero_run(bits, comp, base, i, run, last, se, quant, al) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -534,22 +530,20 @@ fn mjpeg_decode_scan_progressive(
     for bx in 0..<comp.blocks_w {
       let bi = by * comp.blocks_w + bx
       if ah == 0 {
-        match jpeg_decode_ac_first(bits, comp, bi, qt, act, ss, se, al, eobrun) {
+        match
+          jpeg_decode_ac_first(bits, comp, bi, qt, act, ss, se, al, eobrun) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
       } else {
-        match jpeg_decode_ac_refine(
-          bits, comp, bi, qt, act, ss, se, al, eobrun,
-        ) {
+        match
+          jpeg_decode_ac_refine(bits, comp, bi, qt, act, ss, se, al, eobrun) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
       }
       index = index + 1
-      if restart_interval > 0 &&
-        index % restart_interval == 0 &&
-        index < total {
+      if restart_interval > 0 && index % restart_interval == 0 && index < total {
         je_restart(bits)
         eobrun.val = 0
       }
@@ -611,7 +605,14 @@ fn mjpeg_finalize_image(
   } else {
     "yuvj420p"
   }
-  Ok({ width, height, pix_fmt, planes: out_planes, plane_widths, plane_heights, })
+  Ok({
+    width,
+    height,
+    pix_fmt,
+    planes: out_planes,
+    plane_widths,
+    plane_heights,
+  })
 }
 
 ///|

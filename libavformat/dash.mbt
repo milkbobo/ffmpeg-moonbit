@@ -271,7 +271,9 @@ fn dash_segment_node(
   name : String,
 ) -> XmlNode? {
   for node in [rep, adapt, period] {
-    if node.child(name) is Some(child) { return Some(child) }
+    if node.child(name) is Some(child) {
+      return Some(child)
+    }
   }
   None
 }
@@ -464,9 +466,15 @@ fn dash_parse_representation(
       }
       match dash_segment_node(period, adapt, rep, "SegmentList") {
         Some(sl) => {
-          timescale = @string.parse_int64(sl.attr_or("timescale", "1")) catch { _ => 1L }
-          if timescale < 1L { timescale = 1L }
-          start_number = @string.parse_int64(sl.attr_or("startNumber", "1")) catch { _ => 1L }
+          timescale = @string.parse_int64(sl.attr_or("timescale", "1")) catch {
+            _ => 1L
+          }
+          if timescale < 1L {
+            timescale = 1L
+          }
+          start_number = @string.parse_int64(sl.attr_or("startNumber", "1")) catch {
+            _ => 1L
+          }
           initialization_range = match sl.child("Initialization") {
             Some(init) => init.attr_or("range", "")
             None => ""

@@ -23,7 +23,7 @@ pub fn fmp4_sample(
   duration : Int32,
   keyframe : Bool,
 ) -> Fmp4Sample {
-  { data, duration, keyframe }
+  { data, duration, keyframe, }
 }
 
 ///|
@@ -139,7 +139,11 @@ fn fmp4_init_segment(
   }
   mp4_tag(
     hdlr_body,
-    if handler == "soun" { "SoundHandler" } else { "VideoHandler" },
+    if handler == "soun" {
+      "SoundHandler"
+    } else {
+      "VideoHandler"
+    },
   )
   hdlr_body.push(b'\x00')
   let hdlr = mp4_full_box("hdlr", 0, 0, hdlr_body)
@@ -182,15 +186,22 @@ pub fn fmp4_h264_init_segment(
   height : Int32,
   timescale : Int32,
   avcc : Bytes,
-  track_id? : Int32 = 1,
+  track_id~ : Int32 = 1,
 ) -> Result[Bytes, String] {
-  if width <= 0 || height <= 0 || timescale <= 0 || track_id <= 0 ||
+  if width <= 0 ||
+    height <= 0 ||
+    timescale <= 0 ||
+    track_id <= 0 ||
     avcc.length() < 7 {
     return Err("EINVAL: invalid H.264 fMP4 stream parameters")
   }
   Ok(
     fmp4_init_segment(
-      track_id, timescale, "vide", mp4_h264_entry(width, height, avcc), width,
+      track_id,
+      timescale,
+      "vide",
+      mp4_h264_entry(width, height, avcc),
+      width,
       height,
     ),
   )
@@ -202,7 +213,7 @@ pub fn fmp4_h264_init_segment(
 pub fn fmp4_aac_init_segment(
   sample_rate : Int32,
   channels : Int32,
-  track_id? : Int32 = 1,
+  track_id~ : Int32 = 1,
 ) -> Result[Bytes, String] {
   if sample_rate <= 0 || channels < 1 || channels > 7 || track_id <= 0 {
     return Err("EINVAL: invalid AAC fMP4 stream parameters")
@@ -218,7 +229,12 @@ pub fn fmp4_aac_init_segment(
   }
   Ok(
     fmp4_init_segment(
-      track_id, sample_rate, "soun", mp4_aac_entry(sample_rate, channels), 0, 0,
+      track_id,
+      sample_rate,
+      "soun",
+      mp4_aac_entry(sample_rate, channels),
+      0,
+      0,
     ),
   )
 }
@@ -230,15 +246,22 @@ pub fn fmp4_hevc_init_segment(
   height : Int32,
   timescale : Int32,
   hvcc : Bytes,
-  track_id? : Int32 = 1,
+  track_id~ : Int32 = 1,
 ) -> Result[Bytes, String] {
-  if width <= 0 || height <= 0 || timescale <= 0 || track_id <= 0 ||
+  if width <= 0 ||
+    height <= 0 ||
+    timescale <= 0 ||
+    track_id <= 0 ||
     hvcc.length() < 4 {
     return Err("EINVAL: invalid HEVC fMP4 stream parameters")
   }
   Ok(
     fmp4_init_segment(
-      track_id, timescale, "vide", mp4_hevc_entry(width, height, hvcc), width,
+      track_id,
+      timescale,
+      "vide",
+      mp4_hevc_entry(width, height, hvcc),
+      width,
       height,
     ),
   )
@@ -251,15 +274,22 @@ pub fn fmp4_av1_init_segment(
   height : Int32,
   timescale : Int32,
   av1c : Bytes,
-  track_id? : Int32 = 1,
+  track_id~ : Int32 = 1,
 ) -> Result[Bytes, String] {
-  if width <= 0 || height <= 0 || timescale <= 0 || track_id <= 0 ||
+  if width <= 0 ||
+    height <= 0 ||
+    timescale <= 0 ||
+    track_id <= 0 ||
     av1c.length() < 4 {
     return Err("EINVAL: invalid AV1 fMP4 stream parameters")
   }
   Ok(
     fmp4_init_segment(
-      track_id, timescale, "vide", mp4_av1_entry(width, height, av1c), width,
+      track_id,
+      timescale,
+      "vide",
+      mp4_av1_entry(width, height, av1c),
+      width,
       height,
     ),
   )
@@ -272,15 +302,22 @@ pub fn fmp4_vp9_init_segment(
   height : Int32,
   timescale : Int32,
   vpcc : Bytes,
-  track_id? : Int32 = 1,
+  track_id~ : Int32 = 1,
 ) -> Result[Bytes, String] {
-  if width <= 0 || height <= 0 || timescale <= 0 || track_id <= 0 ||
+  if width <= 0 ||
+    height <= 0 ||
+    timescale <= 0 ||
+    track_id <= 0 ||
     vpcc.length() < 4 {
     return Err("EINVAL: invalid VP9 fMP4 stream parameters")
   }
   Ok(
     fmp4_init_segment(
-      track_id, timescale, "vide", mp4_vp9_entry(width, height, vpcc), width,
+      track_id,
+      timescale,
+      "vide",
+      mp4_vp9_entry(width, height, vpcc),
+      width,
       height,
     ),
   )
@@ -294,16 +331,24 @@ pub fn fmp4_opus_init_segment(
   pre_skip : Int32,
   input_sample_rate : Int32,
   timescale : Int32,
-  track_id? : Int32 = 1,
+  track_id~ : Int32 = 1,
 ) -> Result[Bytes, String] {
-  if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 ||
-    timescale <= 0 || track_id <= 0 {
+  if channels < 1 ||
+    channels > 2 ||
+    pre_skip < 0 ||
+    input_sample_rate <= 0 ||
+    timescale <= 0 ||
+    track_id <= 0 {
     return Err("EINVAL: invalid Opus fMP4 stream parameters")
   }
   Ok(
     fmp4_init_segment(
-      track_id, timescale, "soun",
-      mp4_opus_entry(channels, pre_skip, input_sample_rate), 0, 0,
+      track_id,
+      timescale,
+      "soun",
+      mp4_opus_entry(channels, pre_skip, input_sample_rate),
+      0,
+      0,
     ),
   )
 }
@@ -356,10 +401,7 @@ pub fn fmp4_media_segment(
     for sample in samples {
       mp4_u32(body, sample.duration.reinterpret_as_uint())
       mp4_u32(body, sample.data.length().reinterpret_as_uint())
-      mp4_u32(
-        body,
-        if sample.keyframe { 0x02000000U } else { 0x01010000U },
-      )
+      mp4_u32(body, if sample.keyframe { 0x02000000U } else { 0x01010000U })
     }
     mp4_full_box("trun", 0, 0x0701, body)
   }

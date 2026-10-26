@@ -24,22 +24,15 @@ pub fn mkv_h264_muxer_new(
   if width <= 0 || height <= 0 || avcc.length() < 7 {
     return Err("EINVAL: invalid MKV/H.264 parameters")
   }
-  Ok({
-    width,
-    height,
-    avcc,
-    packets: [],
-    durations: [],
-    keyframes: [],
-  })
+  Ok({ width, height, avcc, packets: [], durations: [], keyframes: [], })
 }
 
 ///|
 pub fn MkvH264Muxer::write_packet(
   self : MkvH264Muxer,
   packet : Bytes,
-  duration? : Int32 = 33,
-  keyframe? : Bool = false,
+  duration~ : Int32 = 33,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty H.264 packet or duration")
@@ -58,8 +51,14 @@ fn MkvH264Muxer::cluster(self : MkvH264Muxer) -> Array[Byte] {
   for i in 0..<self.packets.length() {
     let packet = self.packets[i]
     let block : Array[Byte] = [
-      b'\x81', ((ms >> 8) & 0xFF).to_byte(), (ms & 0xFF).to_byte(),
-      if self.keyframes[i] { b'\x80' } else { b'\x00' },
+      b'\x81',
+      ((ms >> 8) & 0xFF).to_byte(),
+      (ms & 0xFF).to_byte(),
+      if self.keyframes[i] {
+        b'\x80'
+      } else {
+        b'\x00'
+      },
     ]
     for b in packet {
       block.push(b)

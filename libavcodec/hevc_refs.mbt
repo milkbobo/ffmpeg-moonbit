@@ -32,7 +32,7 @@ pub struct HevcMv {
 
 ///|
 fn hevc_mv_new() -> HevcMv {
-  { x: 0, y: 0 }
+  { x: 0, y: 0, }
 }
 
 ///|
@@ -47,7 +47,13 @@ pub struct HevcMvField {
 
 ///|
 fn hevc_mv_field_new() -> HevcMvField {
-  { pred_flag: 0, mv0: hevc_mv_new(), mv1: hevc_mv_new(), ref_idx0: 0, ref_idx1: 0 }
+  {
+    pred_flag: 0,
+    mv0: hevc_mv_new(),
+    mv1: hevc_mv_new(),
+    ref_idx0: 0,
+    ref_idx1: 0,
+  }
 }
 
 ///|
@@ -95,7 +101,7 @@ pub struct HevcRefPicList {
 
 ///|
 fn hevc_ref_pic_list_new() -> HevcRefPicList {
-  { entries: [] }
+  { entries: [], }
 }
 
 ///|
@@ -125,7 +131,7 @@ fn HevcRefPicList::push(
   is_long_term : Bool,
   frame : HevcRefFrame,
 ) -> Unit {
-  self.entries.push({ poc, is_long_term, frame })
+  self.entries.push({ poc, is_long_term, frame, })
 }
 
 ///|
@@ -243,19 +249,25 @@ fn HevcDpb::reset_rps(self : HevcDpb) -> Unit {
 
 ///|
 /// `mark_ref`: set exactly one reference flag. */
-fn hevc_mark_ref(frame : HevcRefFrame, short_ref : Bool, long_ref : Bool) -> Unit {
+fn hevc_mark_ref(
+  frame : HevcRefFrame,
+  short_ref : Bool,
+  long_ref : Bool,
+) -> Unit {
   frame.short_ref = short_ref
   frame.long_ref = long_ref
 }
 
 ///|
 /// `find_ref_idx`: find an in-use frame by (possibly masked) POC. */
-fn HevcDpb::find_ref_idx(self : HevcDpb, poc : Int32, use_msb : Bool, log2_max_poc_lsb : Int32, cur_poc : Int32) -> HevcRefFrame? {
-  let mask = if use_msb {
-    -1
-  } else {
-    (1 << log2_max_poc_lsb) - 1
-  }
+fn HevcDpb::find_ref_idx(
+  self : HevcDpb,
+  poc : Int32,
+  use_msb : Bool,
+  log2_max_poc_lsb : Int32,
+  cur_poc : Int32,
+) -> HevcRefFrame? {
+  let mask = if use_msb { -1 } else { (1 << log2_max_poc_lsb) - 1 }
   for frame in self.slots {
     if frame.in_use {
       if (frame.poc & mask) == poc && (use_msb || frame.poc != cur_poc) {
@@ -305,17 +317,16 @@ fn HevcDpb::add_candidate_ref(
 ) -> Unit {
   let frame = self.find_ref_idx(poc, use_msb, log2_max_poc_lsb, cur_poc)
   match frame {
-    Some(f) => if f.slot == self.cur.slot {
-      return
-    }
+    Some(f) => if f.slot == self.cur.slot { return }
     None => ()
   }
   let f = match frame {
     Some(f) => f
-    None => match self.generate_missing_ref(poc) {
-      Some(f) => f
-      None => return
-    }
+    None =>
+      match self.generate_missing_ref(poc) {
+        Some(f) => f
+        None => return
+      }
   }
   self.rps[list_idx].push(poc, false, f)
   hevc_mark_ref(f, short_ref, long_ref)
@@ -369,10 +380,7 @@ fn HevcDpb::clear_refs(self : HevcDpb) -> Unit {
 /// at the end of `ff_hevc_frame_rps`). */
 fn HevcDpb::release_unused(self : HevcDpb) -> Unit {
   for frame in self.slots {
-    if frame.in_use &&
-      !frame.short_ref &&
-      !frame.long_ref &&
-      !frame.unavailable {
+    if frame.in_use && !frame.short_ref && !frame.long_ref && !frame.unavailable {
       frame.in_use = false
     }
   }
@@ -390,7 +398,12 @@ fn HevcDpb::unref_missing_refs(self : HevcDpb) -> Unit {
 
 ///|
 /// `mv_scale` (H.265 8.5.3; C `mvs.c`). */
-fn hevc_mv_scale(dst : HevcMv, src : HevcMv, td_in : Int32, tb_in : Int32) -> Unit {
+fn hevc_mv_scale(
+  dst : HevcMv,
+  src : HevcMv,
+  td_in : Int32,
+  tb_in : Int32,
+) -> Unit {
   let mut td = td_in
   let mut tb = tb_in
   if td < -128 {
@@ -410,8 +423,18 @@ fn hevc_mv_scale(dst : HevcMv, src : HevcMv, td_in : Int32, tb_in : Int32) -> Un
   } else if scale_factor < -4096 {
     scale_factor = -4096
   }
-  let x = (scale_factor * src.x + 127 + (if scale_factor * src.x < 0 { 1 } else { 0 })) >> 8
-  let y = (scale_factor * src.y + 127 + (if scale_factor * src.y < 0 { 1 } else { 0 })) >> 8
+  let x = (
+      scale_factor * src.x +
+      127 +
+      (if scale_factor * src.x < 0 { 1 } else { 0 })
+    ) >>
+    8
+  let y = (
+      scale_factor * src.y +
+      127 +
+      (if scale_factor * src.y < 0 { 1 } else { 0 })
+    ) >>
+    8
   dst.x = if x < -32768 { -32768 } else if x > 32767 { 32767 } else { x }
   dst.y = if y < -32768 { -32768 } else if y > 32767 { 32767 } else { y }
 }

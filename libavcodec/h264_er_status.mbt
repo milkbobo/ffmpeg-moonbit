@@ -15,11 +15,15 @@ priv struct H264ErSpan {
 /// An MBAFF frame addresses macroblock pairs, so the raster start of a slice
 /// doubles its pair row. Field pictures keep their own address space and are
 /// handled by the field path instead.
-fn h264_er_raster_start(first_mb : Int32, mb_width : Int32, mb_aff : Bool) -> Int32 {
+fn h264_er_raster_start(
+  first_mb : Int32,
+  mb_width : Int32,
+  mb_aff : Bool,
+) -> Int32 {
   if !mb_aff || mb_width <= 0 {
     return first_mb
   }
-  (first_mb / mb_width) * 2 * mb_width + first_mb % mb_width
+  first_mb / mb_width * 2 * mb_width + first_mb % mb_width
 }
 
 ///|
@@ -29,8 +33,12 @@ fn h264_er_status(mb_count : Int32, spans : Array[H264ErSpan]) -> Array[Int32] {
   for span in spans {
     let start = span.start.max(0).min(mb_count - 1)
     let end = span.end.max(0).min(mb_count - 1)
-    if end < start { continue }
-    for i = start; i < end; i = i + 1 { status[i] = 0 }
+    if end < start {
+      continue
+    }
+    for i = start; i < end; i = i + 1 {
+      status[i] = 0
+    }
     status[end] = if span.failed { 14 } else { 112 }
     status[start] = status[start] | 1
   }
@@ -39,10 +47,15 @@ fn h264_er_status(mb_count : Int32, spans : Array[H264ErSpan]) -> Array[Int32] {
     let mut end_ok = false
     for i = mb_count - 1; i >= 0; i = i - 1 {
       let old = status[i]
-      if (old & (1 << error_type)) != 0 ||
-        (old & (8 << error_type)) != 0 { end_ok = true }
-      if !end_ok { status[i] = status[i] | (1 << error_type) }
-      if (old & 1) != 0 { end_ok = false }
+      if (old & (1 << error_type)) != 0 || (old & (8 << error_type)) != 0 {
+        end_ok = true
+      }
+      if !end_ok {
+        status[i] = status[i] | (1 << error_type)
+      }
+      if (old & 1) != 0 {
+        end_ok = false
+      }
     }
   }
   // Backward propagation from a damaged MB, capped at 50 MBs and bounded by
@@ -52,9 +65,15 @@ fn h264_er_status(mb_count : Int32, spans : Array[H264ErSpan]) -> Array[Int32] {
     for i = mb_count - 1; i >= 0; i = i - 1 {
       let old = status[i]
       distance += 1
-      if (old & (1 << error_type)) != 0 { distance = 0 }
-      if distance < 50 { status[i] = status[i] | (1 << error_type) }
-      if (old & 1) != 0 { distance = 9999999 }
+      if (old & (1 << error_type)) != 0 {
+        distance = 0
+      }
+      if distance < 50 {
+        status[i] = status[i] | (1 << error_type)
+      }
+      if (old & 1) != 0 {
+        distance = 9999999
+      }
     }
   }
   // Forward propagation of macroblock errors until the next slice start.

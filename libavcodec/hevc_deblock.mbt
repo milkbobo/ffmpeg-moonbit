@@ -359,7 +359,8 @@ pub fn hevc_deblock_picture(
               1
             ) >>
             1
-          let beta = hevc_betatable[hevc_clip_i(qp + cur_beta_offset, 0, 51)] << bd_shift
+          let beta = hevc_betatable[hevc_clip_i(qp + cur_beta_offset, 0, 51)] <<
+            bd_shift
           let tc0 = if bs0 != 0 {
             hevc_tc_calc(qp, bs0, cur_tc_offset) << bd_shift
           } else {
@@ -396,8 +397,13 @@ pub fn hevc_deblock_picture(
               ) >>
               1
             tc_offset = if x >= x0 { cur_tc_offset } else { left_tc_offset }
-            beta_offset = if x >= x0 { cur_beta_offset } else { left_beta_offset }
-            let beta = hevc_betatable[hevc_clip_i(qp + beta_offset, 0, 51)] << bd_shift
+            beta_offset = if x >= x0 {
+              cur_beta_offset
+            } else {
+              left_beta_offset
+            }
+            let beta = hevc_betatable[hevc_clip_i(qp + beta_offset, 0, 51)] <<
+              bd_shift
             let tc0 = if bs0 != 0 {
               hevc_tc_calc(qp, bs0, tc_offset) << bd_shift
             } else {

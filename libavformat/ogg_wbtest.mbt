@@ -16,13 +16,19 @@ let ogg_opus_md5 : Array[String] = [
 ]
 
 ///|
-let ogg_opus_size : Array[Int32] = [307, 168, 175, 175, 176, 177, 174, 175, 175, 176, 318]
+let ogg_opus_size : Array[Int32] = [
+  307, 168, 175, 175, 176, 177, 174, 175, 175, 176, 318,
+]
 
 ///|
-let ogg_opus_pts : Array[Int64] = [-312L, 648L, 1608L, 2568L, 3528L, 4488L, 5448L, 6408L, 7368L, 8328L, 9288L]
+let ogg_opus_pts : Array[Int64] = [
+  -312L, 648L, 1608L, 2568L, 3528L, 4488L, 5448L, 6408L, 7368L, 8328L, 9288L,
+]
 
 ///|
-let ogg_opus_duration : Array[Int32] = [960, 960, 960, 960, 960, 960, 960, 960, 960, 960, 312]
+let ogg_opus_duration : Array[Int32] = [
+  960, 960, 960, 960, 960, 960, 960, 960, 960, 960, 312,
+]
 
 ///|
 test "ogg: real Opus stream headers and packets match ffprobe" {

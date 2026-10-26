@@ -21,7 +21,7 @@ pub struct WebmVp9Muxer {
 pub fn webm_vp9_muxer_new(
   width : Int32,
   height : Int32,
-  doctype? : String = "webm",
+  doctype~ : String = "webm",
 ) -> Result[WebmVp9Muxer, String] {
   if width <= 0 || height <= 0 {
     return Err("EINVAL: invalid WebM/VP9 dimensions")
@@ -29,22 +29,15 @@ pub fn webm_vp9_muxer_new(
   if doctype != "webm" && doctype != "matroska" {
     return Err("EINVAL: DocType must be webm or matroska")
   }
-  Ok({
-    width,
-    height,
-    doctype,
-    packets: [],
-    durations: [],
-    keyframes: [],
-  })
+  Ok({ width, height, doctype, packets: [], durations: [], keyframes: [], })
 }
 
 ///|
 pub fn WebmVp9Muxer::write_packet(
   self : WebmVp9Muxer,
   packet : Bytes,
-  duration? : Int32 = 33,
-  keyframe? : Bool = false,
+  duration~ : Int32 = 33,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty VP9 packet or duration")
@@ -63,8 +56,14 @@ fn WebmVp9Muxer::cluster(self : WebmVp9Muxer) -> Array[Byte] {
   for i in 0..<self.packets.length() {
     let packet = self.packets[i]
     let block : Array[Byte] = [
-      b'\x81', ((ms >> 8) & 0xFF).to_byte(), (ms & 0xFF).to_byte(),
-      if self.keyframes[i] { b'\x80' } else { b'\x00' },
+      b'\x81',
+      ((ms >> 8) & 0xFF).to_byte(),
+      (ms & 0xFF).to_byte(),
+      if self.keyframes[i] {
+        b'\x80'
+      } else {
+        b'\x00'
+      },
     ]
     for b in packet {
       block.push(b)

@@ -8,9 +8,9 @@
 /// References: ffmpeg [-skip_loop_filter all] -i in.264 -f framemd5 out.md5
 /// Emit after generation: moon run scripts/emit_h264_cabac_regression.mbtx
 /// LGPL-2.1-or-later.
+
 ///|
-let cabac_dense_b64 : Bytes =
-  b"AAAAAWdNQArdewEQAAADABAAAAMAIPEieAAAAAFo7g8sgAAAAQYF//9U3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAtIEguMjY0L01Q" +
+let cabac_dense_b64 : Bytes = b"AAAAAWdNQArdewEQAAADABAAAAMAIPEieAAAAAFo7g8sgAAAAQYF//9U3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAtIEguMjY0L01Q" +
   b"RUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjUgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRpb25zOiBj" +
   b"YWJhYz0xIHJlZj0xIGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDE6MHgxMTEgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBt" +
   b"aXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tp" +
@@ -24,14 +24,10 @@ let cabac_dense_b64 : Bytes =
   b"E90uYe4IIEZOzboH"
 
 ///|
-let cabac_dense : Array[String] = [
-  "1af1b8dc6a7875aa51eea15bcd43a191",
-]
+let cabac_dense : Array[String] = ["1af1b8dc6a7875aa51eea15bcd43a191"]
 
 ///|
-let cabac_dense_unf : Array[String] = [
-  "5ce99a5d3c5c2141158e8555b25b8467",
-]
+let cabac_dense_unf : Array[String] = ["5ce99a5d3c5c2141158e8555b25b8467"]
 
 ///|
 test "h264 CABAC regression: cabac_dense filtered and unfiltered YUV" {
@@ -40,12 +36,14 @@ test "h264 CABAC regression: cabac_dense filtered and unfiltered YUV" {
     let frames = h264_decode_annexb_frames(data, skip).unwrap()
     let expected = if skip { cabac_dense_unf } else { cabac_dense }
     assert_eq(frames.length(), expected.length())
-    for i in 0..<frames.length() { assert_eq(h264_yuv_md5(frames[i]), expected[i]) }
+    for i in 0..<frames.length() {
+      assert_eq(h264_yuv_md5(frames[i]), expected[i])
+    }
   }
 }
+
 ///|
-let cabac_dense32_b64 : Bytes =
-  b"AAAAAWdNQArcnsBEAAADAAQAAAMACDxIngAAAAFo7g8sgAAAAQYF//9U3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAtIEguMjY0L01Q" +
+let cabac_dense32_b64 : Bytes = b"AAAAAWdNQArcnsBEAAADAAQAAAMACDxIngAAAAFo7g8sgAAAAQYF//9U3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NSAtIEguMjY0L01Q" +
   b"RUctNCBBVkMgY29kZWMgLSBDb3B5bGVmdCAyMDAzLTIwMjUgLSBodHRwOi8vd3d3LnZpZGVvbGFuLm9yZy94MjY0Lmh0bWwgLSBvcHRpb25zOiBj" +
   b"YWJhYz0xIHJlZj0xIGRlYmxvY2s9MTowOjAgYW5hbHlzZT0weDE6MHgxMTEgbWU9aGV4IHN1Ym1lPTcgcHN5PTEgcHN5X3JkPTEuMDA6MC4wMCBt" +
   b"aXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTEgOHg4ZGN0PTAgY3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tp" +
@@ -62,14 +60,10 @@ let cabac_dense32_b64 : Bytes =
   b"ks1sRuCuiy9bnKE="
 
 ///|
-let cabac_dense32 : Array[String] = [
-  "73bae6910b3158555ee66945e9d28d02",
-]
+let cabac_dense32 : Array[String] = ["73bae6910b3158555ee66945e9d28d02"]
 
 ///|
-let cabac_dense32_unf : Array[String] = [
-  "7a44648c138e1cb61cc98952f0db20c8",
-]
+let cabac_dense32_unf : Array[String] = ["7a44648c138e1cb61cc98952f0db20c8"]
 
 ///|
 test "h264 CABAC regression: cabac_dense32 filtered and unfiltered YUV" {
@@ -78,13 +72,14 @@ test "h264 CABAC regression: cabac_dense32 filtered and unfiltered YUV" {
     let frames = h264_decode_annexb_frames(data, skip).unwrap()
     let expected = if skip { cabac_dense32_unf } else { cabac_dense32 }
     assert_eq(frames.length(), expected.length())
-    for i in 0..<frames.length() { assert_eq(h264_yuv_md5(frames[i]), expected[i]) }
+    for i in 0..<frames.length() {
+      assert_eq(h264_yuv_md5(frames[i]), expected[i])
+    }
   }
 }
 
 ///|
-let cabac_dense64_b64 : Bytes =
-  b"AAAAAWdNQArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaO4PLIAAAAEGBf//VNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2NC9N" +
+let cabac_dense64_b64 : Bytes = b"AAAAAWdNQArcR7ARAAADAAEAAAMAAg8SJ4AAAAABaO4PLIAAAAEGBf//VNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2NC9N" +
   b"UEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczog" +
   b"Y2FiYWM9MSByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAg" +
   b"bWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0wIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3RfcHNr" +
@@ -105,14 +100,10 @@ let cabac_dense64_b64 : Bytes =
   b"kAkXfPibILODUWvuN8T217Wb6ODRWfWrII6QT4HuiS9YxY62IcF4xjZgb366yCu4oaj9jJ7yRf0HRbvSWd429wFA6/glmHqAtkGqRRZd"
 
 ///|
-let cabac_dense64 : Array[String] = [
-  "0d0e1e41b85c93d65be60889a5b97e22",
-]
+let cabac_dense64 : Array[String] = ["0d0e1e41b85c93d65be60889a5b97e22"]
 
 ///|
-let cabac_dense64_unf : Array[String] = [
-  "2782458ffb5d1a106a2eaf63a43a9ce4",
-]
+let cabac_dense64_unf : Array[String] = ["2782458ffb5d1a106a2eaf63a43a9ce4"]
 
 ///|
 test "h264 CABAC regression: cabac_dense64 filtered and unfiltered YUV" {
@@ -121,13 +112,14 @@ test "h264 CABAC regression: cabac_dense64 filtered and unfiltered YUV" {
     let frames = h264_decode_annexb_frames(data, skip).unwrap()
     let expected = if skip { cabac_dense64_unf } else { cabac_dense64 }
     assert_eq(frames.length(), expected.length())
-    for i in 0..<frames.length() { assert_eq(h264_yuv_md5(frames[i]), expected[i]) }
+    for i in 0..<frames.length() {
+      assert_eq(h264_yuv_md5(frames[i]), expected[i])
+    }
   }
 }
 
 ///|
-let cabac_inter64_b64 : Bytes =
-  b"AAAAAWdNQAraE7AWoEBAqAAAAwAIAAADABB4kTUAAAABaO4PLIAAAAEGBf//aNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
+let cabac_inter64_b64 : Bytes = b"AAAAAWdNQAraE7AWoEBAqAAAAwAIAAADABB4kTUAAAABaO4PLIAAAAEGBf//aNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2" +
   b"NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9u" +
   b"czogY2FiYWM9MSByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAu" +
   b"MDAgbWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0wIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3Rf" +
@@ -143,17 +135,13 @@ let cabac_inter64_b64 : Bytes =
 
 ///|
 let cabac_inter64 : Array[String] = [
-  "6850f8451e7f9f794c9e695a4da1e1e9",
-  "6850f8451e7f9f794c9e695a4da1e1e9",
-  "6850f8451e7f9f794c9e695a4da1e1e9",
+  "6850f8451e7f9f794c9e695a4da1e1e9", "6850f8451e7f9f794c9e695a4da1e1e9", "6850f8451e7f9f794c9e695a4da1e1e9",
   "6850f8451e7f9f794c9e695a4da1e1e9",
 ]
 
 ///|
 let cabac_inter64_unf : Array[String] = [
-  "ff876d604d9d8c7bf954f832bcbcd497",
-  "ff876d604d9d8c7bf954f832bcbcd497",
-  "ff876d604d9d8c7bf954f832bcbcd497",
+  "ff876d604d9d8c7bf954f832bcbcd497", "ff876d604d9d8c7bf954f832bcbcd497", "ff876d604d9d8c7bf954f832bcbcd497",
   "ff876d604d9d8c7bf954f832bcbcd497",
 ]
 
@@ -164,13 +152,14 @@ test "h264 CABAC regression: cabac_inter64 filtered and unfiltered YUV" {
     let frames = h264_decode_annexb_frames(data, skip).unwrap()
     let expected = if skip { cabac_inter64_unf } else { cabac_inter64 }
     assert_eq(frames.length(), expected.length())
-    for i in 0..<frames.length() { assert_eq(h264_yuv_md5(frames[i]), expected[i]) }
+    for i in 0..<frames.length() {
+      assert_eq(h264_yuv_md5(frames[i]), expected[i])
+    }
   }
 }
 
 ///|
-let cabac_moving96_b64 : Bytes =
-  b"AAAAAWdNQAraGJsBEAAAAwAQAAADAKDxImoAAAABaO4PLIAAAAEGBf//aNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2NC9N" +
+let cabac_moving96_b64 : Bytes = b"AAAAAWdNQAraGJsBEAAAAwAQAAADAKDxImoAAAABaO4PLIAAAAEGBf//aNxF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2NC9N" +
   b"UEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDI1IC0gaHR0cDovL3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczog" +
   b"Y2FiYWM9MSByZWY9MSBkZWJsb2NrPTE6MDowIGFuYWx5c2U9MHgxOjB4MTExIG1lPWhleCBzdWJtZT03IHBzeT0xIHBzeV9yZD0xLjAwOjAuMDAg" +
   b"bWl4ZWRfcmVmPTAgbWVfcmFuZ2U9MTYgY2hyb21hX21lPTEgdHJlbGxpcz0xIDh4OGRjdD0wIGNxbT0wIGRlYWR6b25lPTIxLDExIGZhc3RfcHNr" +
@@ -245,22 +234,14 @@ let cabac_moving96_b64 : Bytes =
 
 ///|
 let cabac_moving96 : Array[String] = [
-  "74d1f78ce4086ad7e63394dfe6d5bea1",
-  "318015e7739b7ee4ef5b9362a4bdb0ac",
-  "0f338e63858f03bfd2900483ac56e2e9",
-  "fd093b6529fff56c4e19313338d69e12",
-  "0c3bfc337820a5f026b3976da1ecda20",
-  "cb419e23a412b2d2a72d74ed69cbcbe8",
+  "74d1f78ce4086ad7e63394dfe6d5bea1", "318015e7739b7ee4ef5b9362a4bdb0ac", "0f338e63858f03bfd2900483ac56e2e9",
+  "fd093b6529fff56c4e19313338d69e12", "0c3bfc337820a5f026b3976da1ecda20", "cb419e23a412b2d2a72d74ed69cbcbe8",
 ]
 
 ///|
 let cabac_moving96_unf : Array[String] = [
-  "8e2e3355b552b33e638a3099199d638d",
-  "d5e1a816a79013c772305e39491f1b32",
-  "8e42c96e7ba7e24cbd657386c66e5c22",
-  "f3d15c7d30d9a5475184eef06d10b6a4",
-  "cf8ce7198ca5f3cfa5c8d3bcf0aeafbe",
-  "fa1c71e30a71e01640d6dcb765ae8b8f",
+  "8e2e3355b552b33e638a3099199d638d", "d5e1a816a79013c772305e39491f1b32", "8e42c96e7ba7e24cbd657386c66e5c22",
+  "f3d15c7d30d9a5475184eef06d10b6a4", "cf8ce7198ca5f3cfa5c8d3bcf0aeafbe", "fa1c71e30a71e01640d6dcb765ae8b8f",
 ]
 
 ///|
@@ -270,6 +251,8 @@ test "h264 CABAC regression: cabac_moving96 filtered and unfiltered YUV" {
     let frames = h264_decode_annexb_frames(data, skip).unwrap()
     let expected = if skip { cabac_moving96_unf } else { cabac_moving96 }
     assert_eq(frames.length(), expected.length())
-    for i in 0..<frames.length() { assert_eq(h264_yuv_md5(frames[i]), expected[i]) }
+    for i in 0..<frames.length() {
+      assert_eq(h264_yuv_md5(frames[i]), expected[i])
+    }
   }
 }

@@ -21,9 +21,7 @@ let vp9_kf_basic_size : (Int32, Int32) = (160, 144)
 
 ///|
 let vp9_kf_basic_md5 : Array[String] = [
-  "6cefb8b2bda9962ac1adb4a9b406fd1c",
-  "7ecd6d5e5618ae4d6b9c08c27a399fb6",
-  "1f5eb81e095460156225b7e9c3c4537c",
+  "6cefb8b2bda9962ac1adb4a9b406fd1c", "7ecd6d5e5618ae4d6b9c08c27a399fb6", "1f5eb81e095460156225b7e9c3c4537c",
 ]
 
 ///|
@@ -1043,9 +1041,7 @@ let vp9_kf_small_size : (Int32, Int32) = (70, 36)
 
 ///|
 let vp9_kf_small_md5 : Array[String] = [
-  "97ca01ab0430ee614551d2d4214ff8f4",
-  "97ca01ab0430ee614551d2d4214ff8f4",
-  "ac085f32372a3ddace223e792add8f0c",
+  "97ca01ab0430ee614551d2d4214ff8f4", "97ca01ab0430ee614551d2d4214ff8f4", "ac085f32372a3ddace223e792add8f0c",
 ]
 
 ///|
@@ -1322,8 +1318,7 @@ let vp9_kf_qfull_size : (Int32, Int32) = (64, 48)
 
 ///|
 let vp9_kf_qfull_md5 : Array[String] = [
-  "7476553695d6397f4ab595fa8fb2b68c",
-  "17ded6c78c01a2b9778d0393ee2fd3c5",
+  "7476553695d6397f4ab595fa8fb2b68c", "17ded6c78c01a2b9778d0393ee2fd3c5",
 ]
 
 ///|
@@ -1532,8 +1527,7 @@ let vp9_kf_lossless_size : (Int32, Int32) = (64, 48)
 
 ///|
 let vp9_kf_lossless_md5 : Array[String] = [
-  "f3936bd3d203e94846a56dd090f73e14",
-  "e77b6d61544c0797bd78e04b37827d57",
+  "f3936bd3d203e94846a56dd090f73e14", "e77b6d61544c0797bd78e04b37827d57",
 ]
 
 ///|
@@ -1829,8 +1823,7 @@ let vp9_kf_tiles_size : (Int32, Int32) = (512, 128)
 
 ///|
 let vp9_kf_tiles_md5 : Array[String] = [
-  "8e55ad08305e2c864161d84f8e483c39",
-  "a6f29ac3bfbea7d76d6d38c2824171ab",
+  "8e55ad08305e2c864161d84f8e483c39", "a6f29ac3bfbea7d76d6d38c2824171ab",
 ]
 
 ///|

@@ -29,20 +29,17 @@ pub fn mkv_av_muxer_new(
   height : Int32,
   avcc : Bytes,
   sample_rate : Int32,
-  channels? : Int32 = 2,
+  channels~ : Int32 = 2,
 ) -> Result[MkvAvMuxer, String] {
-  if width <= 0 || height <= 0 || avcc.length() < 7 || sample_rate <= 0 ||
-    channels < 1 || channels > 7 {
+  if width <= 0 ||
+    height <= 0 ||
+    avcc.length() < 7 ||
+    sample_rate <= 0 ||
+    channels < 1 ||
+    channels > 7 {
     return Err("EINVAL: invalid MKV A/V parameters")
   }
-  Ok({
-    width,
-    height,
-    avcc,
-    sample_rate,
-    channels,
-    events: [],
-  })
+  Ok({ width, height, avcc, sample_rate, channels, events: [], })
 }
 
 ///|
@@ -51,18 +48,12 @@ pub fn MkvAvMuxer::write_video(
   packet : Bytes,
   pts_ms : Int64,
   duration_ms : Int32,
-  keyframe? : Bool = false,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration_ms <= 0 || pts_ms < 0L {
     return Err("EINVAL: invalid WebM video packet")
   }
-  self.events.push({
-    pts_ms,
-    track: 1,
-    data: packet,
-    duration_ms,
-    keyframe,
-  })
+  self.events.push({ pts_ms, track: 1, data: packet, duration_ms, keyframe, })
   Ok(())
 }
 
@@ -112,10 +103,18 @@ fn MkvAvMuxer::cluster(self : MkvAvMuxer) -> Array[Byte] {
   webm_uint_elem(cluster, 0xE7, 1, 0UL)
   for e in mkv_av_sorted(self.events) {
     let block : Array[Byte] = [
-      if e.track == 1 { b'\x81' } else { b'\x82' },
+      if e.track == 1 {
+        b'\x81'
+      } else {
+        b'\x82'
+      },
       ((e.pts_ms >> 8) & 0xFF).to_int().to_byte(),
       (e.pts_ms & 0xFF).to_int().to_byte(),
-      if e.keyframe { b'\x80' } else { b'\x00' },
+      if e.keyframe {
+        b'\x80'
+      } else {
+        b'\x00'
+      },
     ]
     for b in e.data {
       block.push(b)
@@ -169,7 +168,12 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
 
   let audio : Array[Byte] = []
   webm_float_elem(audio, 0xB5, 1, self.sample_rate.to_double())
-  webm_uint_elem(audio, 0x9F, 1, self.channels.reinterpret_as_uint().to_uint64())
+  webm_uint_elem(
+    audio,
+    0x9F,
+    1,
+    self.channels.reinterpret_as_uint().to_uint64(),
+  )
   let atrack : Array[Byte] = []
   webm_uint_elem(atrack, 0xD7, 1, 2UL)
   webm_uint_elem(atrack, 0x73C5, 2, 2UL)

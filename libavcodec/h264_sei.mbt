@@ -964,9 +964,7 @@ fn decode_registered_user_data(
   }
   let ret = itut_t35_parse_buffer(itut_t35, cur.get_buffer(cur.left()))
   match ret {
-    Ok(v) => if v <= 0 {
-      return Ok(0)
-    }
+    Ok(v) => if v <= 0 { return Ok(0) }
     Err(e) => return Err(e)
   }
   itut_t35_parse_payload(h.itut_t35, itut_t35)

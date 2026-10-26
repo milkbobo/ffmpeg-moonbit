@@ -18,11 +18,11 @@ test "fmp4 muxer: H.264 init and media segments round-trip" {
   let avcc = @libavutil.av_base64_decode(mp4_h264_avcc_b64, 1024).unwrap()
   let init = fmp4_h264_init_segment(64, 48, 90000, avcc).unwrap()
   let seg0 = fmp4_media_segment(1, 1, 0L, [
-    { data: b"\x00\x00\x00\x02\x65\x88", duration: 3000, keyframe: true },
-    { data: b"\x00\x00\x00\x02\x41\x9A", duration: 3000, keyframe: false },
+    { data: b"\x00\x00\x00\x02\x65\x88", duration: 3000, keyframe: true, },
+    { data: b"\x00\x00\x00\x02\x41\x9A", duration: 3000, keyframe: false, },
   ]).unwrap()
   let seg1 = fmp4_media_segment(1, 2, 6000L, [
-    { data: b"\x00\x00\x00\x03\x41\x9B\x9C", duration: 3000, keyframe: true },
+    { data: b"\x00\x00\x00\x03\x41\x9B\x9C", duration: 3000, keyframe: true, },
   ]).unwrap()
   let movie = av_mov_open(fmp4_join([init, seg0, seg1])).unwrap()
   assert_eq(movie.tracks.length(), 1)
@@ -47,8 +47,8 @@ test "fmp4 muxer: H.264 init and media segments round-trip" {
 test "fmp4 muxer: AAC init and media segments round-trip" {
   let init = fmp4_aac_init_segment(48000, 2).unwrap()
   let seg = fmp4_media_segment(1, 1, 0L, [
-    { data: b"\x11\x22\x33", duration: 1024, keyframe: true },
-    { data: b"\x44\x55", duration: 1024, keyframe: true },
+    { data: b"\x11\x22\x33", duration: 1024, keyframe: true, },
+    { data: b"\x44\x55", duration: 1024, keyframe: true, },
   ]).unwrap()
   let movie = av_mov_open(fmp4_join([init, seg])).unwrap()
   assert_eq(movie.tracks.length(), 1)
@@ -70,14 +70,14 @@ test "fmp4 muxer: media payload sits at the sample offsets" {
   let init = fmp4_h264_init_segment(64, 48, 90000, avcc).unwrap()
   let payload = b"\x00\x00\x00\x02\x65\x88"
   let seg = fmp4_media_segment(1, 1, 0L, [
-    { data: payload, duration: 3000, keyframe: true },
+    { data: payload, duration: 3000, keyframe: true, },
   ]).unwrap()
   let file = fmp4_join([init, seg])
   let track = av_mov_open(file).unwrap().tracks[0]
   let sample = track.samples[0]
   assert_eq(
     file[sample.offset.to_int():sample.offset.to_int() +
-      sample.size.reinterpret_as_int()],
+    sample.size.reinterpret_as_int()],
     payload,
   )
 }
@@ -103,7 +103,7 @@ test "fmp4 muxer: invalid parameters are rejected" {
   }
   match
     fmp4_media_segment(1, 1, 0L, [
-      { data: b"\x00", duration: 0, keyframe: true },
+      { data: b"\x00", duration: 0, keyframe: true, },
     ]) {
     Ok(_) => fail("zero duration must fail")
     Err(_) => ()
@@ -115,8 +115,8 @@ test "fmp4 muxer: HEVC init and media segments round-trip" {
   let hvcc = @libavutil.av_base64_decode(mp4_hevc_hvcc_b64, 1024).unwrap()
   let init = fmp4_hevc_init_segment(64, 48, 90000, hvcc).unwrap()
   let seg = fmp4_media_segment(1, 1, 0L, [
-    { data: b"\x00\x00\x01\x02", duration: 3000, keyframe: true },
-    { data: b"\x00\x00\x01\x03", duration: 3000, keyframe: false },
+    { data: b"\x00\x00\x01\x02", duration: 3000, keyframe: true, },
+    { data: b"\x00\x00\x01\x03", duration: 3000, keyframe: false, },
   ]).unwrap()
   let track = av_mov_open(fmp4_join([init, seg])).unwrap().tracks[0]
   assert_eq(track.codec, "hvc1")
@@ -133,7 +133,7 @@ test "fmp4 muxer: AV1 init and media segments round-trip" {
   let av1c : Bytes = b"\x81\x08\x4c\x00"
   let init = fmp4_av1_init_segment(64, 48, 90000, av1c).unwrap()
   let seg = fmp4_media_segment(1, 1, 0L, [
-    { data: b"\x0A\x0B\x0C", duration: 3000, keyframe: true },
+    { data: b"\x0A\x0B\x0C", duration: 3000, keyframe: true, },
   ]).unwrap()
   let track = av_mov_open(fmp4_join([init, seg])).unwrap().tracks[0]
   assert_eq(track.codec, "av01")
@@ -147,8 +147,8 @@ test "fmp4 muxer: VP9 init and media segments round-trip" {
   let vpcc : Bytes = b"\x01\x00\x00\x00\x00\x00\x82\x02\x02\x02\x00\x00"
   let init = fmp4_vp9_init_segment(64, 48, 90000, vpcc).unwrap()
   let seg = fmp4_media_segment(1, 1, 0L, [
-    { data: b"\x82\x00\x01", duration: 3000, keyframe: true },
-    { data: b"\x82\x00\x02", duration: 3000, keyframe: false },
+    { data: b"\x82\x00\x01", duration: 3000, keyframe: true, },
+    { data: b"\x82\x00\x02", duration: 3000, keyframe: false, },
   ]).unwrap()
   let track = av_mov_open(fmp4_join([init, seg])).unwrap().tracks[0]
   assert_eq(track.codec, "vp09")
@@ -162,8 +162,8 @@ test "fmp4 muxer: VP9 init and media segments round-trip" {
 test "fmp4 muxer: Opus init and media segments round-trip" {
   let init = fmp4_opus_init_segment(1, 312, 48000, 48000).unwrap()
   let seg = fmp4_media_segment(1, 1, 0L, [
-    { data: b"\xF8\x00", duration: 960, keyframe: true },
-    { data: b"\xF8\x01", duration: 960, keyframe: true },
+    { data: b"\xF8\x00", duration: 960, keyframe: true, },
+    { data: b"\xF8\x01", duration: 960, keyframe: true, },
   ]).unwrap()
   let track = av_mov_open(fmp4_join([init, seg])).unwrap().tracks[0]
   assert_eq(track.codec, "Opus")

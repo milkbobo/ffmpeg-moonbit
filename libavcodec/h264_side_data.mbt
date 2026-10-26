@@ -245,16 +245,15 @@ pub fn H264SeiContext::sei_to_frame(
   }
   let o = self.display_orientation
   if o.present != 0 &&
-    (
-      o.anticlockwise_rotation != 0 || o.hflip != 0 || o.vflip != 0
-    ) {
+    (o.anticlockwise_rotation != 0 || o.hflip != 0 || o.vflip != 0) {
     let mut angle = o.anticlockwise_rotation.to_double() * 360.0 / 65536.0
     let rotation : Array[Int32] = Array::make(9, 0)
     // av_display_rotation_set() expects the angle in the clockwise
     // direction, hence the first minus. The flips must apply before the
     // rotation, so negate the degree once per applied flip
     // (R O(phi) = O(-phi) R).
-    angle = -angle * (1 - 2 * (if o.hflip != 0 { 1 } else { 0 })).to_double() *
+    angle = -angle *
+      (1 - 2 * (if o.hflip != 0 { 1 } else { 0 })).to_double() *
       (1 - 2 * (if o.vflip != 0 { 1 } else { 0 })).to_double()
     @libavutil.av_display_rotation_set(rotation, angle)
     @libavutil.av_display_matrix_flip(rotation, o.hflip, o.vflip)
@@ -319,51 +318,48 @@ pub fn H264SeiContext::sei_to_frame(
         chroma_den,
       )
       metadata.has_primaries = metadata.has_primaries &
-        (
-          if md.display_primaries[j][0] >= 5 &&
-            md.display_primaries[j][0] <= 37000 {
-            1
-          } else {
-            0
-          }
-        )
+        (if md.display_primaries[j][0] >= 5 &&
+          md.display_primaries[j][0] <= 37000 {
+          1
+        } else {
+          0
+        })
       metadata.display_primaries[i][1] = @libavutil.av_make_q(
         md.display_primaries[j][1],
         chroma_den,
       )
       metadata.has_primaries = metadata.has_primaries &
-        (
-          if md.display_primaries[j][1] >= 5 &&
-            md.display_primaries[j][1] <= 42000 {
-            1
-          } else {
-            0
-          }
-        )
+        (if md.display_primaries[j][1] >= 5 &&
+          md.display_primaries[j][1] <= 42000 {
+          1
+        } else {
+          0
+        })
     }
-    metadata.white_point[0] = @libavutil.av_make_q(md.white_point[0], chroma_den)
+    metadata.white_point[0] = @libavutil.av_make_q(
+      md.white_point[0],
+      chroma_den,
+    )
     metadata.has_primaries = metadata.has_primaries &
       (if md.white_point[0] >= 5 && md.white_point[0] <= 37000 { 1 } else { 0 })
-    metadata.white_point[1] = @libavutil.av_make_q(md.white_point[1], chroma_den)
+    metadata.white_point[1] = @libavutil.av_make_q(
+      md.white_point[1],
+      chroma_den,
+    )
     metadata.has_primaries = metadata.has_primaries &
       (if md.white_point[1] >= 5 && md.white_point[1] <= 42000 { 1 } else { 0 })
     metadata.has_luminance = metadata.has_luminance &
-      (
-        if md.max_luminance >= 50000U && md.max_luminance <= 100000000U {
-          1
-        } else {
-          0
-        }
-      )
+      (if md.max_luminance >= 50000U && md.max_luminance <= 100000000U {
+        1
+      } else {
+        0
+      })
     metadata.has_luminance = metadata.has_luminance &
-      (
-        if md.min_luminance <= 50000U &&
-          md.min_luminance < md.max_luminance {
-          1
-        } else {
-          0
-        }
-      )
+      (if md.min_luminance <= 50000U && md.min_luminance < md.max_luminance {
+        1
+      } else {
+        0
+      })
     // Real (blu-ray) releases in the wild come with minimum luminance
     // values of 0.000 cd/m2, so permit this edge case
     if strict {

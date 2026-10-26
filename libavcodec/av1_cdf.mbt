@@ -97,32 +97,70 @@ pub struct Av1CdfCtx {
   kfym : FixedArray[UInt16] // [5][5][16]
 }
 
+///|
 fn cdf_copy(src : FixedArray[UInt16]) -> FixedArray[UInt16] {
   src.copy()
 }
 
 ///|
 /// `dav1d_cdf_thread_copy` with `dav1d_cdf_thread_init_static`'s qcat rule.
-pub fn av1_cdf_copy_defaults(qidx : Int) -> Av1CdfCtx {
+pub fn av1_cdf_copy_defaults(qidx : Int32) -> Av1CdfCtx {
   let qcat = (if qidx > 120 { 1 } else { 0 }) +
     (if qidx > 60 { 1 } else { 0 }) +
     (if qidx > 20 { 1 } else { 0 })
   let coef = qcat
   let _ = coef
   let c : Av1CdfCtx = {
-    eob_bin_16: qsel(qidx, av1_cdf_coef0_eob_bin_16, av1_cdf_coef1_eob_bin_16, av1_cdf_coef2_eob_bin_16, av1_cdf_coef3_eob_bin_16).copy(),
-    eob_bin_32: qsel(qidx, av1_cdf_coef0_eob_bin_32, av1_cdf_coef1_eob_bin_32, av1_cdf_coef2_eob_bin_32, av1_cdf_coef3_eob_bin_32).copy(),
-    eob_bin_64: qsel(qidx, av1_cdf_coef0_eob_bin_64, av1_cdf_coef1_eob_bin_64, av1_cdf_coef2_eob_bin_64, av1_cdf_coef3_eob_bin_64).copy(),
-    eob_bin_128: qsel(qidx, av1_cdf_coef0_eob_bin_128, av1_cdf_coef1_eob_bin_128, av1_cdf_coef2_eob_bin_128, av1_cdf_coef3_eob_bin_128).copy(),
-    eob_bin_256: qsel(qidx, av1_cdf_coef0_eob_bin_256, av1_cdf_coef1_eob_bin_256, av1_cdf_coef2_eob_bin_256, av1_cdf_coef3_eob_bin_256).copy(),
-    eob_bin_512: qsel(qidx, av1_cdf_coef0_eob_bin_512, av1_cdf_coef1_eob_bin_512, av1_cdf_coef2_eob_bin_512, av1_cdf_coef3_eob_bin_512).copy(),
-    eob_bin_1024: qsel(qidx, av1_cdf_coef0_eob_bin_1024, av1_cdf_coef1_eob_bin_1024, av1_cdf_coef2_eob_bin_1024, av1_cdf_coef3_eob_bin_1024).copy(),
-    eob_base_tok: qsel(qidx, av1_cdf_coef0_eob_base_tok, av1_cdf_coef1_eob_base_tok, av1_cdf_coef2_eob_base_tok, av1_cdf_coef3_eob_base_tok).copy(),
-    base_tok: qsel(qidx, av1_cdf_coef0_base_tok, av1_cdf_coef1_base_tok, av1_cdf_coef2_base_tok, av1_cdf_coef3_base_tok).copy(),
-    br_tok: qsel(qidx, av1_cdf_coef0_br_tok, av1_cdf_coef1_br_tok, av1_cdf_coef2_br_tok, av1_cdf_coef3_br_tok).copy(),
-    eob_hi_bit: qsel(qidx, av1_cdf_coef0_eob_hi_bit, av1_cdf_coef1_eob_hi_bit, av1_cdf_coef2_eob_hi_bit, av1_cdf_coef3_eob_hi_bit).copy(),
-    coef_skip: qsel(qidx, av1_cdf_coef0_skip, av1_cdf_coef1_skip, av1_cdf_coef2_skip, av1_cdf_coef3_skip).copy(),
-    dc_sign: qsel(qidx, av1_cdf_coef0_dc_sign, av1_cdf_coef1_dc_sign, av1_cdf_coef2_dc_sign, av1_cdf_coef3_dc_sign).copy(),
+    eob_bin_16: qsel(
+      qidx, av1_cdf_coef0_eob_bin_16, av1_cdf_coef1_eob_bin_16, av1_cdf_coef2_eob_bin_16,
+      av1_cdf_coef3_eob_bin_16,
+    ).copy(),
+    eob_bin_32: qsel(
+      qidx, av1_cdf_coef0_eob_bin_32, av1_cdf_coef1_eob_bin_32, av1_cdf_coef2_eob_bin_32,
+      av1_cdf_coef3_eob_bin_32,
+    ).copy(),
+    eob_bin_64: qsel(
+      qidx, av1_cdf_coef0_eob_bin_64, av1_cdf_coef1_eob_bin_64, av1_cdf_coef2_eob_bin_64,
+      av1_cdf_coef3_eob_bin_64,
+    ).copy(),
+    eob_bin_128: qsel(
+      qidx, av1_cdf_coef0_eob_bin_128, av1_cdf_coef1_eob_bin_128, av1_cdf_coef2_eob_bin_128,
+      av1_cdf_coef3_eob_bin_128,
+    ).copy(),
+    eob_bin_256: qsel(
+      qidx, av1_cdf_coef0_eob_bin_256, av1_cdf_coef1_eob_bin_256, av1_cdf_coef2_eob_bin_256,
+      av1_cdf_coef3_eob_bin_256,
+    ).copy(),
+    eob_bin_512: qsel(
+      qidx, av1_cdf_coef0_eob_bin_512, av1_cdf_coef1_eob_bin_512, av1_cdf_coef2_eob_bin_512,
+      av1_cdf_coef3_eob_bin_512,
+    ).copy(),
+    eob_bin_1024: qsel(
+      qidx, av1_cdf_coef0_eob_bin_1024, av1_cdf_coef1_eob_bin_1024, av1_cdf_coef2_eob_bin_1024,
+      av1_cdf_coef3_eob_bin_1024,
+    ).copy(),
+    eob_base_tok: qsel(
+      qidx, av1_cdf_coef0_eob_base_tok, av1_cdf_coef1_eob_base_tok, av1_cdf_coef2_eob_base_tok,
+      av1_cdf_coef3_eob_base_tok,
+    ).copy(),
+    base_tok: qsel(
+      qidx, av1_cdf_coef0_base_tok, av1_cdf_coef1_base_tok, av1_cdf_coef2_base_tok,
+      av1_cdf_coef3_base_tok,
+    ).copy(),
+    br_tok: qsel(
+      qidx, av1_cdf_coef0_br_tok, av1_cdf_coef1_br_tok, av1_cdf_coef2_br_tok, av1_cdf_coef3_br_tok,
+    ).copy(),
+    eob_hi_bit: qsel(
+      qidx, av1_cdf_coef0_eob_hi_bit, av1_cdf_coef1_eob_hi_bit, av1_cdf_coef2_eob_hi_bit,
+      av1_cdf_coef3_eob_hi_bit,
+    ).copy(),
+    coef_skip: qsel(
+      qidx, av1_cdf_coef0_skip, av1_cdf_coef1_skip, av1_cdf_coef2_skip, av1_cdf_coef3_skip,
+    ).copy(),
+    dc_sign: qsel(
+      qidx, av1_cdf_coef0_dc_sign, av1_cdf_coef1_dc_sign, av1_cdf_coef2_dc_sign,
+      av1_cdf_coef3_dc_sign,
+    ).copy(),
     uv_mode: av1_cdf_uv_mode.copy(),
     partition: av1_cdf_partition.copy(),
     cfl_alpha: av1_cdf_cfl_alpha.copy(),
@@ -197,8 +235,9 @@ pub fn av1_cdf_copy_defaults(qidx : Int) -> Av1CdfCtx {
   c
 }
 
+///|
 fn qsel(
-  qidx : Int,
+  qidx : Int32,
   a : FixedArray[UInt16],
   b : FixedArray[UInt16],
   c : FixedArray[UInt16],

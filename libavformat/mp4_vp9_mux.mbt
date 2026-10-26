@@ -22,7 +22,7 @@ pub fn mp4_vp9_muxer_new(
   width : Int32,
   height : Int32,
   vpcc : Bytes,
-  timescale? : Int32 = 90000,
+  timescale~ : Int32 = 90000,
 ) -> Result[Mp4Vp9Muxer, String] {
   if width <= 0 || height <= 0 || timescale <= 0 || vpcc.length() < 4 {
     return Err("EINVAL: invalid VP9 MP4 stream parameters")
@@ -43,8 +43,8 @@ pub fn mp4_vp9_muxer_new(
 pub fn Mp4Vp9Muxer::write_packet(
   self : Mp4Vp9Muxer,
   packet : Bytes,
-  duration? : Int32 = 3000,
-  keyframe? : Bool = false,
+  duration~ : Int32 = 3000,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty VP9 packet or duration")

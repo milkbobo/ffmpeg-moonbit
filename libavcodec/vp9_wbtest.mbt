@@ -47,7 +47,10 @@ fn vp9_test_ref_32() -> (Array[Int32], Array[Int32]) {
 }
 
 ///|
-fn vp9_test_assert_tile_markers(data : Bytes, pkt : Vp9PacketInfo) -> Unit raise {
+fn vp9_test_assert_tile_markers(
+  data : Bytes,
+  pkt : Vp9PacketInfo,
+) -> Unit raise {
   for tile in pkt.tiles {
     let c = vp9_rac_init(data, tile.offset, tile.size).unwrap()
     // Every tile starts with a zero marker bit.

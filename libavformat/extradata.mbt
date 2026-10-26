@@ -155,7 +155,10 @@ fn parse_vpcc(st : MovState, r : AvioContext, size : Int64) -> Unit {
   if version == 1U {
     st.cur.extradata = Some(
       Bytes::from_array([
-        version.to_byte(), profile.to_byte(), level.to_byte(), packed.to_byte(),
+        version.to_byte(),
+        profile.to_byte(),
+        level.to_byte(),
+        packed.to_byte(),
       ]),
     )
   }

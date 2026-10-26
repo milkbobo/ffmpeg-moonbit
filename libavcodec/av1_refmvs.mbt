@@ -6,15 +6,15 @@
 
 ///|
 /// dav1d `INVALID_MV` as a (y, x) pair.
-let av1_rmv_invalid : (Int, Int) = (0x8000, 0x8000)
+let av1_rmv_invalid : (Int32, Int32) = (0x8000, 0x8000)
 
 ///|
-fn av1_rmv_is_invalid(mv : (Int, Int)) -> Bool {
+fn av1_rmv_is_invalid(mv : (Int32, Int32)) -> Bool {
   mv is (0x8000, 0x8000)
 }
 
 ///|
-fn av1_rmv_clip(v : Int, lo : Int, hi : Int) -> Int {
+fn av1_rmv_clip(v : Int32, lo : Int32, hi : Int32) -> Int32 {
   if v < lo {
     lo
   } else if v > hi {
@@ -26,14 +26,18 @@ fn av1_rmv_clip(v : Int, lo : Int, hi : Int) -> Int {
 
 ///|
 /// `apply_sign` from dav1d intops.h.
-fn av1_rmv_apply_sign(v : Int, sign : Int) -> Int {
-  if sign < 0 { -v } else { v }
+fn av1_rmv_apply_sign(v : Int32, sign : Int32) -> Int32 {
+  if sign < 0 {
+    -v
+  } else {
+    v
+  }
 }
 
 ///|
 /// `fix_int_mv_precision` (`x - (x >> 15)` emulates the unsigned
 /// rounding of the int16 storage).
-fn av1_rmv_fix_int(mv : (Int, Int)) -> (Int, Int) {
+fn av1_rmv_fix_int(mv : (Int32, Int32)) -> (Int32, Int32) {
   let (y, x) = mv
   ((y - (y >> 15) + 3) & -8, (x - (x >> 15) + 3) & -8)
 }
@@ -41,10 +45,10 @@ fn av1_rmv_fix_int(mv : (Int, Int)) -> (Int, Int) {
 ///|
 /// `fix_mv_precision`.
 fn av1_rmv_fix_precision(
-  mv : (Int, Int),
+  mv : (Int32, Int32),
   force_integer_mv : Bool,
   hp : Bool,
-) -> (Int, Int) {
+) -> (Int32, Int32) {
   let (y, x) = mv
   if force_integer_mv {
     av1_rmv_fix_int(mv)
@@ -57,18 +61,18 @@ fn av1_rmv_fix_precision(
 
 ///|
 /// `mv_projection` (AV1 spec 7.9.3 rounding).
-let av1_rmv_div_mult : FixedArray[Int] = [
-  0, 16384, 8192, 5461, 4096, 3276, 2730, 2340, 2048, 1820, 1638, 1489,
-  1365, 1260, 1170, 1092, 1024, 963, 910, 862, 819, 780, 744, 712, 682,
-  655, 630, 606, 585, 564, 546, 528,
+let av1_rmv_div_mult : FixedArray[Int32] = [
+  0, 16384, 8192, 5461, 4096, 3276, 2730, 2340, 2048, 1820, 1638, 1489, 1365, 1260,
+  1170, 1092, 1024, 963, 910, 862, 819, 780, 744, 712, 682, 655, 630, 606, 585, 564,
+  546, 528,
 ]
 
 ///|
 fn av1_rmv_projection(
-  mv : (Int, Int),
-  num : Int,
-  den : Int,
-) -> (Int, Int) {
+  mv : (Int32, Int32),
+  num : Int32,
+  den : Int32,
+) -> (Int32, Int32) {
   let frac = num * av1_rmv_div_mult[den]
   let (yv, xv) = mv
   let yy = yv * frac
@@ -84,15 +88,15 @@ fn av1_rmv_projection(
 /// Dav1dWarpedMotionType (0 identity, 1 translation, 2 rot-zoom,
 /// 3 affine).
 fn av1_rmv_get_gmv_2d(
-  gm_type : Int,
-  mat : FixedArray[Int],
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  gm_type : Int32,
+  mat : FixedArray[Int32],
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
   hp : Bool,
   force_integer_mv : Bool,
-) -> (Int, Int) {
+) -> (Int32, Int32) {
   if gm_type == 0 {
     return (0, 0)
   }
@@ -113,8 +117,8 @@ fn av1_rmv_get_gmv_2d(
   let abs_yc = if yc < 0 { -yc } else { yc }
   let abs_xc = if xc < 0 { -xc } else { xc }
   let res = (
-    av1_rmv_apply_sign(((abs_yc + round) >> shift) << no_hp, yc),
-    av1_rmv_apply_sign(((abs_xc + round) >> shift) << no_hp, xc),
+    av1_rmv_apply_sign((abs_yc + round) >> shift << no_hp, yc),
+    av1_rmv_apply_sign((abs_xc + round) >> shift << no_hp, xc),
   )
   if force_integer_mv {
     return av1_rmv_fix_int(res)
@@ -125,53 +129,53 @@ fn av1_rmv_get_gmv_2d(
 ///|
 /// dav1d `refmvs_block` (spatial context on the 4x4 grid).
 pub(all) struct Av1Rb {
-  ref0 : Int // 0 = none, 1..7 = refidx+1
-  ref1 : Int // -1 = single-ref block, 0 = none, 1..7
-  bs : Int
-  mf : Int // bit0: globalmv variant, bit1: newmv
-  mv0 : (Int, Int)
-  mv1 : (Int, Int)
+  ref0 : Int32 // 0 = none, 1..7 = refidx+1
+  ref1 : Int32 // -1 = single-ref block, 0 = none, 1..7
+  bs : Int32
+  mf : Int32 // bit0: globalmv variant, bit1: newmv
+  mv0 : (Int32, Int32)
+  mv1 : (Int32, Int32)
 }
 
 ///|
 /// dav1d `refmvs_temporal_block`.
 pub(all) struct Av1Rtb {
-  mv : (Int, Int)
-  ref_ : Int // 0 = invalid
+  mv : (Int32, Int32)
+  ref_ : Int32 // 0 = invalid
 }
 
 ///|
 /// dav1d `refmvs_candidate`.
 pub(all) struct Av1Rcand {
-  mut mv0 : (Int, Int)
-  mut mv1 : (Int, Int)
-  mut weight : Int
+  mut mv0 : (Int32, Int32)
+  mut mv1 : (Int32, Int32)
+  mut weight : Int32
 }
 
 ///|
 /// Frame-level parameters of `refmvs_frame` consumed by find().
 pub(all) struct Av1Rf {
-  iw4 : Int
-  ih4 : Int
-  sign_bias : FixedArray[Int] // [7], 0/1
-  pocdiff : FixedArray[Int] // [7]
+  iw4 : Int32
+  ih4 : Int32
+  sign_bias : FixedArray[Int32] // [7], 0/1
+  pocdiff : FixedArray[Int32] // [7]
   hp : Bool
   force_integer_mv : Bool
   use_ref_frame_mvs : Bool
-  gm_types : FixedArray[Int] // [7]
-  gm_matrices : FixedArray[FixedArray[Int]] // [7][6]
+  gm_types : FixedArray[Int32] // [7]
+  gm_matrices : FixedArray[FixedArray[Int32]] // [7][6]
 }
 
 ///|
 fn av1_rmv_add_spatial(
   stack : FixedArray[Av1Rcand],
-  cnt : Ref[Int],
-  weight : Int,
+  cnt : Ref[Int32],
+  weight : Int32,
   b : Av1Rb,
-  ref0 : Int,
-  ref1 : Int,
-  gmv0 : (Int, Int),
-  gmv1 : (Int, Int),
+  ref0 : Int32,
+  ref1 : Int32,
+  gmv0 : (Int32, Int32),
+  gmv1 : (Int32, Int32),
   have_newmv_match : Ref[Bool],
   have_refmv_match : Ref[Bool],
 ) -> Unit {
@@ -189,7 +193,7 @@ fn av1_rmv_add_spatial(
           bmv
         }
         have_refmv_match.val = true
-        have_newmv_match.val = have_newmv_match.val || ((b.mf >> 1) != 0)
+        have_newmv_match.val = have_newmv_match.val || b.mf >> 1 != 0
         let last = cnt.val
         for m in 0..<last {
           if stack[m].mv0 == cand_mv {
@@ -198,7 +202,7 @@ fn av1_rmv_add_spatial(
           }
         }
         if last < 8 {
-          stack[last] = { mv0: cand_mv, mv1: (0, 0), weight }
+          stack[last] = { mv0: cand_mv, mv1: (0, 0), weight, }
           cnt.val = last + 1
         }
         return
@@ -216,7 +220,7 @@ fn av1_rmv_add_spatial(
       b.mv1
     }
     have_refmv_match.val = true
-    have_newmv_match.val = have_newmv_match.val || ((b.mf >> 1) != 0)
+    have_newmv_match.val = have_newmv_match.val || b.mf >> 1 != 0
     let last = cnt.val
     for n in 0..<last {
       if stack[n].mv0 == cand0 && stack[n].mv1 == cand1 {
@@ -225,7 +229,7 @@ fn av1_rmv_add_spatial(
       }
     }
     if last < 8 {
-      stack[last] = { mv0: cand0, mv1: cand1, weight }
+      stack[last] = { mv0: cand0, mv1: cand1, weight, }
       cnt.val = last + 1
     }
   }
@@ -236,20 +240,20 @@ fn av1_rmv_add_spatial(
 /// Returns `weight >> 1` (or 1 in the multi-block path).
 fn av1_rmv_scan_row(
   stack : FixedArray[Av1Rcand],
-  cnt : Ref[Int],
-  ref0 : Int,
-  ref1 : Int,
-  gmv0 : (Int, Int),
-  gmv1 : (Int, Int),
+  cnt : Ref[Int32],
+  ref0 : Int32,
+  ref1 : Int32,
+  gmv0 : (Int32, Int32),
+  gmv1 : (Int32, Int32),
   row : FixedArray[Av1Rb],
-  bx4 : Int,
-  bw4 : Int,
-  w4 : Int,
-  max_rows : Int,
-  step : Int,
+  bx4 : Int32,
+  bw4 : Int32,
+  w4 : Int32,
+  max_rows : Int32,
+  step : Int32,
   have_newmv_match : Ref[Bool],
   have_refmv_match : Ref[Bool],
-) -> Int {
+) -> Int32 {
   let first_bs = row[bx4].bs
   let cand_bw4 = av1_block_dimensions[first_bs * 4].to_int()
   let inner = if bw4 < cand_bw4 { bw4 } else { cand_bw4 }
@@ -262,11 +266,23 @@ fn av1_rmv_scan_row(
     } else {
       let a = if dim1 < 2 { 2 } else { dim1 }
       let b = if m < 2 { 2 } else { m }
-      if a < b { a } else { b }
+      if a < b {
+        a
+      } else {
+        b
+      }
     }
     av1_rmv_add_spatial(
-      stack, cnt, len * weight, row[bx4], ref0, ref1, gmv0, gmv1,
-      have_newmv_match, have_refmv_match,
+      stack,
+      cnt,
+      len * weight,
+      row[bx4],
+      ref0,
+      ref1,
+      gmv0,
+      gmv1,
+      have_newmv_match,
+      have_refmv_match,
     )
     return weight >> 1
   }
@@ -275,8 +291,16 @@ fn av1_rmv_scan_row(
   let mut l = len
   for ;; {
     av1_rmv_add_spatial(
-      stack, cnt, l * 2, row[bx4 + x], ref0, ref1, gmv0, gmv1,
-      have_newmv_match, have_refmv_match,
+      stack,
+      cnt,
+      l * 2,
+      row[bx4 + x],
+      ref0,
+      ref1,
+      gmv0,
+      gmv1,
+      have_newmv_match,
+      have_refmv_match,
     )
     x = x + l
     if x >= w4 {
@@ -291,21 +315,21 @@ fn av1_rmv_scan_row(
 /// `scan_col`: scans the column left of the block via absolute row index.
 fn av1_rmv_scan_col(
   stack : FixedArray[Av1Rcand],
-  cnt : Ref[Int],
-  ref0 : Int,
-  ref1 : Int,
-  gmv0 : (Int, Int),
-  gmv1 : (Int, Int),
+  cnt : Ref[Int32],
+  ref0 : Int32,
+  ref1 : Int32,
+  gmv0 : (Int32, Int32),
+  gmv1 : (Int32, Int32),
   rows : FixedArray[FixedArray[Av1Rb]],
-  row_start : Int,
-  bx4 : Int,
-  bh4 : Int,
-  h4 : Int,
-  max_cols : Int,
-  step : Int,
+  row_start : Int32,
+  bx4 : Int32,
+  bh4 : Int32,
+  h4 : Int32,
+  max_cols : Int32,
+  step : Int32,
   have_newmv_match : Ref[Bool],
   have_refmv_match : Ref[Bool],
-) -> Int {
+) -> Int32 {
   let first_bs = rows[row_start][bx4].bs
   let cand_bh4 = av1_block_dimensions[first_bs * 4 + 1].to_int()
   let inner = if bh4 < cand_bh4 { bh4 } else { cand_bh4 }
@@ -318,11 +342,23 @@ fn av1_rmv_scan_col(
     } else {
       let a = if dim0 < 2 { 2 } else { dim0 }
       let b = if m < 2 { 2 } else { m }
-      if a < b { a } else { b }
+      if a < b {
+        a
+      } else {
+        b
+      }
     }
     av1_rmv_add_spatial(
-      stack, cnt, len * weight, rows[row_start][bx4], ref0, ref1, gmv0,
-      gmv1, have_newmv_match, have_refmv_match,
+      stack,
+      cnt,
+      len * weight,
+      rows[row_start][bx4],
+      ref0,
+      ref1,
+      gmv0,
+      gmv1,
+      have_newmv_match,
+      have_refmv_match,
     )
     return weight >> 1
   }
@@ -331,8 +367,16 @@ fn av1_rmv_scan_col(
   let mut l = len
   for ;; {
     av1_rmv_add_spatial(
-      stack, cnt, l * 2, rows[row_start + y][bx4], ref0, ref1, gmv0, gmv1,
-      have_newmv_match, have_refmv_match,
+      stack,
+      cnt,
+      l * 2,
+      rows[row_start + y][bx4],
+      ref0,
+      ref1,
+      gmv0,
+      gmv1,
+      have_newmv_match,
+      have_refmv_match,
     )
     y = y + l
     if y >= h4 {
@@ -348,12 +392,12 @@ fn av1_rmv_scan_col(
 fn av1_rmv_add_temporal(
   rf : Av1Rf,
   stack : FixedArray[Av1Rcand],
-  cnt : Ref[Int],
+  cnt : Ref[Int32],
   rb : Av1Rtb,
-  ref0 : Int,
-  ref1 : Int,
-  gmv0 : (Int, Int),
-  globalmv_ctx : Ref[Int]?,
+  ref0 : Int32,
+  ref1 : Int32,
+  gmv0 : (Int32, Int32),
+  globalmv_ctx : Ref[Int32]?,
 ) -> Unit {
   if av1_rmv_is_invalid(rb.mv) {
     return
@@ -379,7 +423,7 @@ fn av1_rmv_add_temporal(
       }
     }
     if last < 8 {
-      stack[last] = { mv0: mv, mv1: (0, 0), weight: 2 }
+      stack[last] = { mv0: mv, mv1: (0, 0), weight: 2, }
       cnt.val = last + 1
     }
   } else {
@@ -395,7 +439,7 @@ fn av1_rmv_add_temporal(
       }
     }
     if last < 8 {
-      stack[last] = { mv0: mv, mv1: mv_p1, weight: 2 }
+      stack[last] = { mv0: mv, mv1: mv_p1, weight: 2, }
       cnt.val = last + 1
     }
   }
@@ -406,14 +450,14 @@ fn av1_rmv_add_temporal(
 /// diff0, diff1) with counts in `same_count[0..3]`.
 fn av1_rmv_add_compound_extended(
   stack : FixedArray[Av1Rcand],
-  same_base : Int,
-  same_count : FixedArray[Int],
+  same_base : Int32,
+  same_count : FixedArray[Int32],
   cand_b : Av1Rb,
-  sign0 : Int,
-  sign1 : Int,
-  ref0 : Int,
-  ref1 : Int,
-  sign_bias : FixedArray[Int],
+  sign0 : Int32,
+  sign1 : Int32,
+  ref0 : Int32,
+  ref1 : Int32,
+  sign_bias : FixedArray[Int32],
 ) -> Unit {
   for n in 0..<2 {
     let cand_ref = if n == 0 { cand_b.ref0 } else { cand_b.ref1 }
@@ -452,7 +496,10 @@ fn av1_rmv_add_compound_extended(
     } else {
       let i_cand_mv = (-cand_mv.0, -cand_mv.1)
       if same_count[2] < 2 {
-        stack[same_base + 2 + same_count[2]].mv0 = if (sign0 ^ sign_bias[cand_ref - 1]) != 0 {
+        stack[same_base + 2 + same_count[2]].mv0 = if (
+            sign0 ^ sign_bias[cand_ref - 1]
+          ) !=
+          0 {
           i_cand_mv
         } else {
           cand_mv
@@ -460,7 +507,10 @@ fn av1_rmv_add_compound_extended(
         same_count[2] = same_count[2] + 1
       }
       if same_count[3] < 2 {
-        stack[same_base + 2 + same_count[3]].mv1 = if (sign1 ^ sign_bias[cand_ref - 1]) != 0 {
+        stack[same_base + 2 + same_count[3]].mv1 = if (
+            sign1 ^ sign_bias[cand_ref - 1]
+          ) !=
+          0 {
           i_cand_mv
         } else {
           cand_mv
@@ -475,10 +525,10 @@ fn av1_rmv_add_compound_extended(
 /// `add_single_extended_candidate`.
 fn av1_rmv_add_single_extended(
   stack : FixedArray[Av1Rcand],
-  cnt : Ref[Int],
+  cnt : Ref[Int32],
   cand_b : Av1Rb,
-  sign : Int,
-  sign_bias : FixedArray[Int],
+  sign : Int32,
+  sign_bias : FixedArray[Int32],
 ) -> Unit {
   for n in 0..<2 {
     let cand_ref = if n == 0 { cand_b.ref0 } else { cand_b.ref1 }
@@ -498,7 +548,7 @@ fn av1_rmv_add_single_extended(
       m = m + 1
     }
     if m == last {
-      stack[m] = { mv0: cand_mv, mv1: (0, 0), weight: 2 }
+      stack[m] = { mv0: cand_mv, mv1: (0, 0), weight: 2, }
       cnt.val = last + 1
     }
   }
@@ -508,16 +558,16 @@ fn av1_rmv_add_single_extended(
 /// Result of `av1_refmvs_find`.
 pub struct Av1RefmvsResult {
   cands : FixedArray[Av1Rcand]
-  cnt : Int
-  ctx : Int
+  cnt : Int32
+  ctx : Int32
 }
 
 ///|
 /// MV pair of candidate `n` (requires `n < cnt`).
 pub fn Av1RefmvsResult::candidate(
   self : Av1RefmvsResult,
-  n : Int,
-) -> ((Int, Int), (Int, Int)) {
+  n : Int32,
+) -> ((Int32, Int32), (Int32, Int32)) {
   (self.cands[n].mv0, self.cands[n].mv1)
 }
 
@@ -525,8 +575,8 @@ pub fn Av1RefmvsResult::candidate(
 /// Sorting weight of candidate `n` (diagnostics).
 pub fn Av1RefmvsResult::candidate_weight(
   self : Av1RefmvsResult,
-  n : Int,
-) -> Int {
+  n : Int32,
+) -> Int32 {
   self.cands[n].weight
 }
 
@@ -539,39 +589,48 @@ pub fn av1_refmvs_find(
   rf : Av1Rf,
   rows : FixedArray[FixedArray[Av1Rb]],
   rp : FixedArray[Av1Rtb],
-  rp_stride : Int,
-  tile_col_start4 : Int,
-  tile_col_end4 : Int,
-  tile_row_start4 : Int,
-  tile_row_end4 : Int,
-  ref0 : Int,
-  ref1 : Int,
-  bs : Int,
+  rp_stride : Int32,
+  tile_col_start4 : Int32,
+  tile_col_end4 : Int32,
+  tile_row_start4 : Int32,
+  tile_row_end4 : Int32,
+  ref0 : Int32,
+  ref1 : Int32,
+  bs : Int32,
   top_has_right : Bool,
-  by4 : Int,
-  bx4 : Int,
-  initial_globalmv_ctx? : Int = 0,
+  by4 : Int32,
+  bx4 : Int32,
+  initial_globalmv_ctx~ : Int32 = 0,
 ) -> Av1RefmvsResult {
   let bw4 = av1_block_dimensions[bs * 4].to_int()
   let bh4 = av1_block_dimensions[bs * 4 + 1].to_int()
   let w4 = if bw4 < 16 {
-    if bw4 < tile_col_end4 - bx4 { bw4 } else { tile_col_end4 - bx4 }
+    if bw4 < tile_col_end4 - bx4 {
+      bw4
+    } else {
+      tile_col_end4 - bx4
+    }
   } else if tile_col_end4 - bx4 < 16 {
     tile_col_end4 - bx4
   } else {
     16
   }
   let h4 = if bh4 < 16 {
-    if bh4 < tile_row_end4 - by4 { bh4 } else { tile_row_end4 - by4 }
+    if bh4 < tile_row_end4 - by4 {
+      bh4
+    } else {
+      tile_row_end4 - by4
+    }
   } else if tile_row_end4 - by4 < 16 {
     tile_row_end4 - by4
   } else {
     16
   }
-  let stack : FixedArray[Av1Rcand] = FixedArray::makei(
-    8,
-    _ => { mv0: (0, 0), mv1: (0, 0), weight: 0 },
-  )
+  let stack : FixedArray[Av1Rcand] = FixedArray::makei(8, _ => {
+    mv0: (0, 0),
+    mv1: (0, 0),
+    weight: 0,
+  })
   let cnt = Ref(0)
   let have_newmv = Ref(false)
   let have_row_mvs = Ref(false)
@@ -582,20 +641,32 @@ pub fn av1_refmvs_find(
   let mut tgmv1 = (0, 0)
   if ref0 > 0 {
     tgmv0 = av1_rmv_get_gmv_2d(
-      rf.gm_types[ref0 - 1], rf.gm_matrices[ref0 - 1], bx4, by4, bw4, bh4,
-      rf.hp, rf.force_integer_mv,
+      rf.gm_types[ref0 - 1],
+      rf.gm_matrices[ref0 - 1],
+      bx4,
+      by4,
+      bw4,
+      bh4,
+      rf.hp,
+      rf.force_integer_mv,
     )
     gmv0 = if rf.gm_types[ref0 - 1] > 1 { tgmv0 } else { av1_rmv_invalid }
   }
   if ref1 > 0 {
     tgmv1 = av1_rmv_get_gmv_2d(
-      rf.gm_types[ref1 - 1], rf.gm_matrices[ref1 - 1], bx4, by4, bw4, bh4,
-      rf.hp, rf.force_integer_mv,
+      rf.gm_types[ref1 - 1],
+      rf.gm_matrices[ref1 - 1],
+      bx4,
+      by4,
+      bw4,
+      bh4,
+      rf.hp,
+      rf.force_integer_mv,
     )
     gmv1 = if rf.gm_types[ref1 - 1] > 1 { tgmv1 } else { av1_rmv_invalid }
   }
   // top
-  let none : Int = -1 // ~0 sentinel
+  let none : Int32 = -1 // ~0 sentinel
   let mut n_rows = none
   let mut n_cols = none
   let top_row = (by4 & 31) - 1 + 5
@@ -604,8 +675,24 @@ pub fn av1_refmvs_find(
     let cap = 2 + (if bh4 > 1 { 1 } else { 0 })
     let max_rows = if half < cap { half } else { cap }
     n_rows = av1_rmv_scan_row(
-      stack, cnt, ref0, ref1, gmv0, gmv1, rows[top_row], bx4, bw4, w4,
-      max_rows, if bw4 >= 16 { 4 } else { 1 }, have_newmv, have_row_mvs,
+      stack,
+      cnt,
+      ref0,
+      ref1,
+      gmv0,
+      gmv1,
+      rows[top_row],
+      bx4,
+      bw4,
+      w4,
+      max_rows,
+      if bw4 >= 16 {
+        4
+      } else {
+        1
+      },
+      have_newmv,
+      have_row_mvs,
     )
   }
   // left
@@ -615,8 +702,25 @@ pub fn av1_refmvs_find(
     let cap = 2 + (if bw4 > 1 { 1 } else { 0 })
     let max_cols = if half < cap { half } else { cap }
     n_cols = av1_rmv_scan_col(
-      stack, cnt, ref0, ref1, gmv0, gmv1, rows, left_row, bx4 - 1, bh4, h4,
-      max_cols, if bh4 >= 16 { 4 } else { 1 }, have_newmv, have_col_mvs,
+      stack,
+      cnt,
+      ref0,
+      ref1,
+      gmv0,
+      gmv1,
+      rows,
+      left_row,
+      bx4 - 1,
+      bh4,
+      h4,
+      max_cols,
+      if bh4 >= 16 {
+        4
+      } else {
+        1
+      },
+      have_newmv,
+      have_col_mvs,
     )
   }
   // top-right
@@ -624,8 +728,16 @@ pub fn av1_refmvs_find(
     let mb = if bw4 > bh4 { bw4 } else { bh4 }
     if mb <= 16 && bw4 + bx4 < tile_col_end4 {
       av1_rmv_add_spatial(
-        stack, cnt, 4, rows[top_row][bx4 + bw4], ref0, ref1, gmv0, gmv1,
-        have_newmv, have_row_mvs,
+        stack,
+        cnt,
+        4,
+        rows[top_row][bx4 + bw4],
+        ref0,
+        ref1,
+        gmv0,
+        gmv1,
+        have_newmv,
+        have_row_mvs,
       )
     }
   }
@@ -653,13 +765,20 @@ pub fn av1_refmvs_find(
     while y < h8 {
       let mut x = 0
       while x < w8 {
-        let probe : Ref[Int]? = if x == 0 && y == 0 {
+        let probe : Ref[Int32]? = if x == 0 && y == 0 {
           Some(gctx)
         } else {
           None
         }
         av1_rmv_add_temporal(
-          rf, stack, cnt, rp[rb_row + x], ref0, ref1, tgmv0, probe,
+          rf,
+          stack,
+          cnt,
+          rp[rb_row + x],
+          ref0,
+          ref1,
+          tgmv0,
+          probe,
         )
         x = x + step_h
       }
@@ -674,20 +793,19 @@ pub fn av1_refmvs_find(
       let bw8 = bw4 >> 1
       let bot_cap_a = tile_row_end4 >> 1
       let bot_cap_b = (by8 & -8) + 8
-      let has_bottom = by8 + bh8 < (if bot_cap_a < bot_cap_b {
-        bot_cap_a
-      } else {
-        bot_cap_b
-      })
+      let has_bottom = by8 + bh8 <
+        (if bot_cap_a < bot_cap_b { bot_cap_a } else { bot_cap_b })
       let col_cap_a = tile_col_start4 >> 1
-      let col_x_cap = if col_cap_a > (bx8 & -8) {
-        col_cap_a
-      } else {
-        bx8 & -8
-      }
+      let col_x_cap = if col_cap_a > (bx8 & -8) { col_cap_a } else { bx8 & -8 }
       if has_bottom && bx8 - 1 >= col_x_cap {
         av1_rmv_add_temporal(
-          rf, stack, cnt, rp[rbi + bh8 * rp_stride - 1], ref0, ref1, tgmv0,
+          rf,
+          stack,
+          cnt,
+          rp[rbi + bh8 * rp_stride - 1],
+          ref0,
+          ref1,
+          tgmv0,
           None,
         )
       }
@@ -697,21 +815,29 @@ pub fn av1_refmvs_find(
       if bx8 + bw8 < end_cap {
         if has_bottom {
           av1_rmv_add_temporal(
-            rf, stack, cnt, rp[rbi + bh8 * rp_stride + bw8], ref0, ref1,
-            tgmv0, None,
+            rf,
+            stack,
+            cnt,
+            rp[rbi + bh8 * rp_stride + bw8],
+            ref0,
+            ref1,
+            tgmv0,
+            None,
           )
         }
         let row_cap_a = tile_row_end4 >> 1
         let row_cap_b = (by8 & -8) + 8
-        let row_cap = if row_cap_a < row_cap_b {
-          row_cap_a
-        } else {
-          row_cap_b
-        }
+        let row_cap = if row_cap_a < row_cap_b { row_cap_a } else { row_cap_b }
         if by8 + bh8 - 1 < row_cap {
           av1_rmv_add_temporal(
-            rf, stack, cnt, rp[rbi + bh8 * rp_stride + bw8 - rp_stride],
-            ref0, ref1, tgmv0, None,
+            rf,
+            stack,
+            cnt,
+            rp[rbi + bh8 * rp_stride + bw8 - rp_stride],
+            ref0,
+            ref1,
+            tgmv0,
+            None,
           )
         }
       }
@@ -723,12 +849,20 @@ pub fn av1_refmvs_find(
   // In particular, never read the neighbouring tile at its left border.
   if n_rows != none && n_cols != none {
     av1_rmv_add_spatial(
-      stack, cnt, 4, rows[top_row][bx4 - 1], ref0, ref1, gmv0, gmv1,
-      dummy_newmv, have_row_mvs,
+      stack,
+      cnt,
+      4,
+      rows[top_row][bx4 - 1],
+      ref0,
+      ref1,
+      gmv0,
+      gmv1,
+      dummy_newmv,
+      have_row_mvs,
     )
   }
   // secondary top & left edges (8x8 resolution)
-  for n in 2..=3 {
+  for n in 2..<=3 {
     if n > n_rows && n <= 2 + (if bh4 > 1 { 1 } else { 0 }) {
       // max_rows may have been capped; dav1d compares against the cap
       let half = (by4 - tile_row_start4 + 1) >> 1
@@ -736,11 +870,27 @@ pub fn av1_refmvs_find(
       let max_rows = if half < cap { half } else { cap }
       if n <= max_rows {
         let src = (((by4 & 31) - 2 * n + 1) | 1) + 5
-        n_rows = n_rows + av1_rmv_scan_row(
-          stack, cnt, ref0, ref1, gmv0, gmv1, rows[src], (bx4 | 1) + 1 - 1,
-          bw4, w4, 1 + max_rows - n, if bw4 >= 16 { 4 } else { 2 },
-          dummy_newmv, have_row_mvs,
-        )
+        n_rows = n_rows +
+          av1_rmv_scan_row(
+            stack,
+            cnt,
+            ref0,
+            ref1,
+            gmv0,
+            gmv1,
+            rows[src],
+            (bx4 | 1) + 1 - 1,
+            bw4,
+            w4,
+            1 + max_rows - n,
+            if bw4 >= 16 {
+              4
+            } else {
+              2
+            },
+            dummy_newmv,
+            have_row_mvs,
+          )
       }
     }
     if n > n_cols && n <= 2 + (if bw4 > 1 { 1 } else { 0 }) {
@@ -749,11 +899,28 @@ pub fn av1_refmvs_find(
       let max_cols = if half < cap { half } else { cap }
       if n <= max_cols {
         let src = ((by4 & 31) | 1) + 5
-        n_cols = n_cols + av1_rmv_scan_col(
-          stack, cnt, ref0, ref1, gmv0, gmv1, rows, src, (bx4 - n * 2 + 1) | 1,
-          bh4, h4, 1 + max_cols - n, if bh4 >= 16 { 4 } else { 2 },
-          dummy_newmv, have_col_mvs,
-        )
+        n_cols = n_cols +
+          av1_rmv_scan_col(
+            stack,
+            cnt,
+            ref0,
+            ref1,
+            gmv0,
+            gmv1,
+            rows,
+            src,
+            (bx4 - n * 2 + 1) | 1,
+            bh4,
+            h4,
+            1 + max_cols - n,
+            if bh4 >= 16 {
+              4
+            } else {
+              2
+            },
+            dummy_newmv,
+            have_col_mvs,
+          )
       }
     }
   }
@@ -806,13 +973,20 @@ pub fn av1_refmvs_find(
       let sz4 = if w4 < h4 { w4 } else { h4 }
       // dav1d: `same` aliases the mvstack tail at *cnt (4 slots).
       let same_base = cnt.val
-      let same_count : FixedArray[Int] = FixedArray::make(4, 0)
+      let same_count : FixedArray[Int32] = FixedArray::make(4, 0)
       if n_rows != none {
         let mut x = 0
         while x < sz4 {
           let cand_b = rows[top_row][bx4 + x]
           av1_rmv_add_compound_extended(
-            stack, same_base, same_count, cand_b, sign0, sign1, ref0, ref1,
+            stack,
+            same_base,
+            same_count,
+            cand_b,
+            sign0,
+            sign1,
+            ref0,
+            ref1,
             rf.sign_bias,
           )
           x = x + av1_block_dimensions[cand_b.bs * 4].to_int()
@@ -823,7 +997,14 @@ pub fn av1_refmvs_find(
         while y < sz4 {
           let cand_b = rows[left_row + y][bx4 - 1]
           av1_rmv_add_compound_extended(
-            stack, same_base, same_count, cand_b, sign0, sign1, ref0, ref1,
+            stack,
+            same_base,
+            same_count,
+            cand_b,
+            sign0,
+            sign1,
+            ref0,
+            ref1,
             rf.sign_bias,
           )
           y = y + av1_block_dimensions[cand_b.bs * 4 + 1].to_int()
@@ -920,7 +1101,7 @@ pub fn av1_refmvs_find(
         }
       }
     }
-    return { cands: stack, cnt: cnt.val, ctx: ctx_out }
+    return { cands: stack, cnt: cnt.val, ctx: ctx_out, }
   }
   if cnt.val < 2 && ref0 > 0 {
     let sign = rf.sign_bias[ref0 - 1]
@@ -929,9 +1110,7 @@ pub fn av1_refmvs_find(
       let mut x = 0
       while x < sz4 && cnt.val < 2 {
         let cand_b = rows[top_row][bx4 + x]
-        av1_rmv_add_single_extended(
-          stack, cnt, cand_b, sign, rf.sign_bias,
-        )
+        av1_rmv_add_single_extended(stack, cnt, cand_b, sign, rf.sign_bias)
         x = x + av1_block_dimensions[cand_b.bs * 4].to_int()
       }
     }
@@ -939,9 +1118,7 @@ pub fn av1_refmvs_find(
       let mut y = 0
       while y < sz4 && cnt.val < 2 {
         let cand_b = rows[left_row + y][bx4 - 1]
-        av1_rmv_add_single_extended(
-          stack, cnt, cand_b, sign, rf.sign_bias,
-        )
+        av1_rmv_add_single_extended(stack, cnt, cand_b, sign, rf.sign_bias)
         y = y + av1_block_dimensions[cand_b.bs * 4 + 1].to_int()
       }
     }
@@ -964,46 +1141,44 @@ pub fn av1_refmvs_find(
     stack[n].mv0 = tgmv0
   }
   ctx_out = (refmv_ctx << 4) | (globalmv_ctx << 3) | newmv_ctx
-  { cands: stack, cnt: cnt.val, ctx: ctx_out }
+  { cands: stack, cnt: cnt.val, ctx: ctx_out, }
 }
 
 ///|
 /// Public probe of `av1_rmv_projection` for vector tests.
 pub fn av1_rmv_projection_probe(
-  mv : (Int, Int),
-  num : Int,
-  den : Int,
-) -> (Int, Int) {
+  mv : (Int32, Int32),
+  num : Int32,
+  den : Int32,
+) -> (Int32, Int32) {
   av1_rmv_projection(mv, num, den)
 }
 
 ///|
 /// Public probe of `av1_rmv_get_gmv_2d` for vector tests.
 pub fn av1_rmv_get_gmv_2d_probe(
-  gm_type : Int,
-  mat : FixedArray[Int],
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  gm_type : Int32,
+  mat : FixedArray[Int32],
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
   hp : Bool,
   force_integer_mv : Bool,
-) -> (Int, Int) {
-  av1_rmv_get_gmv_2d(
-    gm_type, mat, bx4, by4, bw4, bh4, hp, force_integer_mv,
-  )
+) -> (Int32, Int32) {
+  av1_rmv_get_gmv_2d(gm_type, mat, bx4, by4, bw4, bh4, hp, force_integer_mv)
 }
 
 ///|
 /// Per-frame refmvs scalars produced by `dav1d_refmvs_init_frame`.
 pub struct Av1RefmvsFrameInit {
-  sign_bias : FixedArray[Int] // [7]
-  mfmv_sign : FixedArray[Int] // [7]
-  pocdiff : FixedArray[Int] // [7]
-  mfmv_ref : FixedArray[Int] // [3]
-  mfmv_ref2cur : FixedArray[Int] // [3], INT_MIN sentinel = far
-  mfmv_ref2ref : FixedArray[FixedArray[Int]] // [3][7]
-  n_mfmvs : Int
+  sign_bias : FixedArray[Int32] // [7]
+  mfmv_sign : FixedArray[Int32] // [7]
+  pocdiff : FixedArray[Int32] // [7]
+  mfmv_ref : FixedArray[Int32] // [3]
+  mfmv_ref2cur : FixedArray[Int32] // [3], INT_MIN sentinel = far
+  mfmv_ref2ref : FixedArray[FixedArray[Int32]] // [3][7]
+  n_mfmvs : Int32
   use_ref_frame_mvs : Bool
 }
 
@@ -1012,13 +1187,13 @@ pub struct Av1RefmvsFrameInit {
 /// parity vectors that do not derive the temporal reference selection from
 /// order hints.
 pub fn av1_refmvs_frame_init_probe(
-  sign_bias : FixedArray[Int],
-  mfmv_sign : FixedArray[Int],
-  pocdiff : FixedArray[Int],
-  mfmv_ref : FixedArray[Int],
-  mfmv_ref2cur : FixedArray[Int],
-  mfmv_ref2ref : FixedArray[FixedArray[Int]],
-  n_mfmvs : Int,
+  sign_bias : FixedArray[Int32],
+  mfmv_sign : FixedArray[Int32],
+  pocdiff : FixedArray[Int32],
+  mfmv_ref : FixedArray[Int32],
+  mfmv_ref2cur : FixedArray[Int32],
+  mfmv_ref2ref : FixedArray[FixedArray[Int32]],
+  n_mfmvs : Int32,
   use_ref_frame_mvs : Bool,
 ) -> Av1RefmvsFrameInit {
   {
@@ -1038,12 +1213,12 @@ pub fn av1_refmvs_frame_init_probe(
 /// poc deltas and the temporal-MV reference selection (last/bwd/altref2/
 /// altref/last2 with ref2cur/ref2ref projection distances).
 pub fn av1_refmvs_init_frame(
-  order_hint_bits : Int,
-  frame_offset : Int,
+  order_hint_bits : Int32,
+  frame_offset : Int32,
   hdr_use_ref_frame_mvs : Bool,
-  ref_poc : FixedArray[Int],
+  ref_poc : FixedArray[Int32],
   ref_has_tmvs : FixedArray[Bool],
-  ref_ref_poc : FixedArray[FixedArray[Int]],
+  ref_ref_poc : FixedArray[FixedArray[Int32]],
 ) -> Av1RefmvsFrameInit {
   let sign_bias = FixedArray::make(7, 0)
   let mfmv_sign = FixedArray::make(7, 0)
@@ -1053,21 +1228,14 @@ pub fn av1_refmvs_init_frame(
     sign_bias[i] = if d1 > 0 { 1 } else { 0 }
     mfmv_sign[i] = if d1 < 0 { 1 } else { 0 }
     let d2 = av1_get_poc_diff(order_hint_bits, frame_offset, ref_poc[i])
-    pocdiff[i] = if d2 < -31 {
-      -31
-    } else if d2 > 31 {
-      31
-    } else {
-      d2
-    }
+    pocdiff[i] = if d2 < -31 { -31 } else if d2 > 31 { 31 } else { d2 }
   }
   // temporal MV reference selection
   let mfmv_ref = FixedArray::make(3, 0)
   let mfmv_ref2cur = FixedArray::make(3, 0)
-  let mfmv_ref2ref : FixedArray[FixedArray[Int]] = FixedArray::makei(
-    3,
-    _ => FixedArray::make(7, 0),
-  )
+  let mfmv_ref2ref : FixedArray[FixedArray[Int32]] = FixedArray::makei(3, _ => {
+    FixedArray::make(7, 0)
+  })
   let mut n_mfmvs = 0
   let mut use_ref = false
   if hdr_use_ref_frame_mvs && order_hint_bits != 0 {
@@ -1109,11 +1277,7 @@ pub fn av1_refmvs_init_frame(
         for m in 0..<7 {
           let rrpoc = ref_ref_poc[mfmv_ref[n]][m]
           let diff2 = av1_get_poc_diff(order_hint_bits, rpoc, rrpoc)
-          mfmv_ref2ref[n][m] = if diff2 < 0 || diff2 > 31 {
-            0
-          } else {
-            diff2
-          }
+          mfmv_ref2ref[n][m] = if diff2 < 0 || diff2 > 31 { 0 } else { diff2 }
         }
       }
     }

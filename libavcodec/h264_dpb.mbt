@@ -447,7 +447,12 @@ fn H264Decoder::decode_picture_with_gaps(
   }
   let frame = match
     h264_decode_picture_ex(
-      nals, self.ps, refs_for, skip_lf, carry~, conceal_errors=self.conceal_errors,
+      nals,
+      self.ps,
+      refs_for,
+      skip_lf,
+      carry~,
+      conceal_errors=self.conceal_errors,
       er_previous_infos=if self.refs.is_empty() {
         None
       } else {
@@ -592,7 +597,10 @@ fn h264_same_picture(
 /// Parse a slice header only to fingerprint its picture. `None` means the
 /// header could not be parsed yet (parameter sets still pending), in which case
 /// the caller falls back to `first_mb_in_slice == 0`.
-fn h264_probe_slice_header(nal : H2645Nal, ps : H264ParamSets) -> H264SliceHeader? {
+fn h264_probe_slice_header(
+  nal : H2645Nal,
+  ps : H264ParamSets,
+) -> H264SliceHeader? {
   let gb = BitReader::with_size(nal.data, nal.size_bits)
   gb.skip(8)
   match ff_h264_decode_slice_header(gb, nal.nal_type, nal.ref_idc, ps) {
@@ -635,8 +643,7 @@ pub fn H264Decoder::decode_annexb(
     } else if nal.nal_type == h264_nal_pps {
       let gb = BitReader::with_size(nal.data, nal.size_bits)
       gb.skip(8)
-      match
-        ff_h264_decode_picture_parameter_set(gb, self.ps, gb.size_bits()) {
+      match ff_h264_decode_picture_parameter_set(gb, self.ps, gb.size_bits()) {
         Ok(_) => ()
         Err(error) => return Err(error)
       }

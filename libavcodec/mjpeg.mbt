@@ -512,38 +512,16 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
       }
       let scan_result = if progressive {
         mjpeg_decode_scan_progressive(
-          bits,
-          components,
-          scan_components,
-          quant,
-          dc_tables,
-          ac_tables,
-          width,
-          height,
-          max_h,
-          max_v,
-          restart_interval,
-          ss,
-          se,
-          ah,
-          al,
+          bits, components, scan_components, quant, dc_tables, ac_tables, width,
+          height, max_h, max_v, restart_interval, ss, se, ah, al,
         )
       } else {
         if ss != 0 || se != 63 || ah != 0 || al != 0 {
           return Err("mjpeg: invalid sequential scan parameters")
         }
         mjpeg_decode_scan_sequential(
-          bits,
-          components,
-          scan_components,
-          quant,
-          dc_tables,
-          ac_tables,
-          width,
-          height,
-          max_h,
-          max_v,
-          restart_interval,
+          bits, components, scan_components, quant, dc_tables, ac_tables, width,
+          height, max_h, max_v, restart_interval,
         )
       }
       match scan_result {

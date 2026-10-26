@@ -26,8 +26,8 @@ pub fn wav_muxer_new(
   sample_rate : Int32,
   channels : Int32,
   bits : Int32,
-  channel_mask? : UInt32 = 0U,
-  float? : Bool = false,
+  channel_mask~ : UInt32 = 0U,
+  float~ : Bool = false,
 ) -> Result[WavMuxer, String] {
   if sample_rate <= 0 || channels <= 0 {
     return Err("EINVAL: invalid WAV sample rate or channel count")
@@ -139,8 +139,8 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
     // KSDATAFORMAT_SUBTYPE_PCM / IEEE_FLOAT
     let subformat = if self.float_samples { 3 } else { 1 }
     let guid : Array[Int32] = [
-      subformat, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00,
-      0xAA, 0x00, 0x38, 0x9B, 0x71,
+      subformat, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA,
+      0x00, 0x38, 0x9B, 0x71,
     ]
     for b in guid {
       out.push(b.to_byte())

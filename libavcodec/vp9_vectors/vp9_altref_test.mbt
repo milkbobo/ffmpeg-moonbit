@@ -43,8 +43,9 @@ test "vp9 altref: 21 frames match ffmpeg and use no compound prediction" {
   let mut pos = 32
   let mut i = 0
   while pos + 12 <= ivf.length() {
-    let sz = (ivf[pos].to_int() | (ivf[pos + 1].to_int() << 8) |
-        (ivf[pos + 2].to_int() << 16)) |
+    let sz = ivf[pos].to_int() |
+      (ivf[pos + 1].to_int() << 8) |
+      (ivf[pos + 2].to_int() << 16) |
       (ivf[pos + 3].to_int() << 24)
     if sz < 0 || pos + 12 + sz > ivf.length() {
       break
@@ -52,7 +53,7 @@ test "vp9 altref: 21 frames match ffmpeg and use no compound prediction" {
     let pkt = ivf[pos + 12:pos + 12 + sz].to_owned()
     pos = pos + 12 + sz
     match dec.decode_packet(pkt) {
-      Ok(fs) => {
+      Ok(fs) =>
         for _ in 0..<fs.length() {
           let yuv = dec.frame_bytes()
           let digest = FixedArray::make(16, b' ')
@@ -61,7 +62,6 @@ test "vp9 altref: 21 frames match ffmpeg and use no compound prediction" {
           assert_eq(hex, vp9_altref_md5[i])
           i = i + 1
         }
-      }
       Err(e) => fail("packet \{i}: \{e}")
     }
   }

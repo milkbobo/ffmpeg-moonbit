@@ -10,12 +10,9 @@ let av1_deltaq6_stream_b64 : Bytes = b"REtJRgAAIABBVjAxoAB4AAoAAAABAAAA/////wAAA
 
 ///|
 let av1_deltaq6_md5 : Array[String] = [
-  "f57b4819a1ed8aba814407ba538c2508",
-  "cd36c4f94c06f547ae18d8dd269bbf5b",
-  "b1ff33b9fcb0031735f85dfc8323a066",
-  "b36c4aba3f00695f992a422c2f40b9c6",
-  "0332ea6c22a5dfeac07b4868e06cfd51",
-  "fe137ab7d6893107abb9c3e8432d34ff",]
+  "f57b4819a1ed8aba814407ba538c2508", "cd36c4f94c06f547ae18d8dd269bbf5b", "b1ff33b9fcb0031735f85dfc8323a066",
+  "b36c4aba3f00695f992a422c2f40b9c6", "0332ea6c22a5dfeac07b4868e06cfd51", "fe137ab7d6893107abb9c3e8432d34ff",
+]
 
 ///|
 test "av1 delta-q: 8-bit 4:2:0 keyframes match libdav1d framemd5" {

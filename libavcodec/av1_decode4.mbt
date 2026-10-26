@@ -378,19 +378,33 @@ fn Av1TileCtx::decode_b(
     }
   }
   // Intra is read after delta-q/lf. Segment SKIP alone does not force it.
-  let intra = if !is_inter { true } else if skip_mode { false }
-    else if hdr.segmentation_enabled && (hdr.seg_ref[seg_id] >= 0 || hdr.seg_globalmv[seg_id]) {
-      hdr.seg_ref[seg_id] == 0
-    } else {
-      let neighbors = f.inter_a[self.a_idx]
-      let ctx = av1_inter_intra_ctx(
-        if self.by > self.row_start { Some(neighbors.top[bx4]) } else { None },
-        if self.bx > self.col_start { Some(neighbors.left[by4]) } else { None },
-      )
-      self.msac.decode_bool_adapt(self.cdf.intra, ctx * 2) == 0
-    }
+  let intra = if !is_inter {
+    true
+  } else if skip_mode {
+    false
+  } else if hdr.segmentation_enabled &&
+    (hdr.seg_ref[seg_id] >= 0 || hdr.seg_globalmv[seg_id]) {
+    hdr.seg_ref[seg_id] == 0
+  } else {
+    let neighbors = f.inter_a[self.a_idx]
+    let ctx = av1_inter_intra_ctx(
+      if self.by > self.row_start {
+        Some(neighbors.top[bx4])
+      } else {
+        None
+      },
+      if self.bx > self.col_start {
+        Some(neighbors.left[by4])
+      } else {
+        None
+      },
+    )
+    self.msac.decode_bool_adapt(self.cdf.intra, ctx * 2) == 0
+  }
   if !intra {
-    self.decode_inter_block(bs, intra_edge_flags, seg_id, seg_pred, skip_mode, skip)
+    self.decode_inter_block(
+      bs, intra_edge_flags, seg_id, seg_pred, skip_mode, skip,
+    )
     self.finish_inter_block(bs, seg_id, skip)
     return
   }
@@ -401,8 +415,16 @@ fn Av1TileCtx::decode_b(
     ) *
     16
   let mut y_mode = self.msac.decode_symbol_adapt(
-    if is_inter { self.cdf.y_mode } else { self.cdf.kfym },
-    if is_inter { av1_ymode_size_context[bs].to_int() * 16 } else { ymode_cdf_base },
+    if is_inter {
+      self.cdf.y_mode
+    } else {
+      self.cdf.kfym
+    },
+    if is_inter {
+      av1_ymode_size_context[bs].to_int() * 16
+    } else {
+      ymode_cdf_base
+    },
     av1_n_intra_pred_modes - 1,
   )
   let mut y_angle = 0
@@ -658,7 +680,13 @@ fn Av1TileCtx::decode_b(
     }
   }
   if is_inter {
-    f.inter_a[self.a_idx].set_block(self.bx, self.by, bw4, bh4, av1_inter_intra_neighbor())
+    f.inter_a[self.a_idx].set_block(
+      self.bx,
+      self.by,
+      bw4,
+      bh4,
+      av1_inter_intra_neighbor(),
+    )
     guard self.rstate is Some(rstate) else {
       raise Av1DecError::Unsupported("av1: missing inter motion state")
     }

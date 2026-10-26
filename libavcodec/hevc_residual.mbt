@@ -403,9 +403,9 @@ pub fn hevc_hls_residual_coding(
             let pos = if log2_trafo_size == 3 {
               (y_c << 3) + x_c
             } else if log2_trafo_size == 4 {
-              ((y_c >> 1) << 3) + (x_c >> 1)
+              (y_c >> 1 << 3) + (x_c >> 1)
             } else if log2_trafo_size == 5 {
-              ((y_c >> 2) << 3) + (x_c >> 2)
+              (y_c >> 2 << 3) + (x_c >> 2)
             } else {
               (y_c << 2) + x_c
             }
@@ -414,9 +414,7 @@ pub fn hevc_hls_residual_coding(
             scale_m = dc_scale
           }
         }
-        let mut dq = level.to_int64() *
-          scale.to_int64() *
-          scale_m.to_int64() +
+        let mut dq = level.to_int64() * scale.to_int64() * scale_m.to_int64() +
           add.to_int64()
         dq = dq >> shift
         if dq < -32768L {

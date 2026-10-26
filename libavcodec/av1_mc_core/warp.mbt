@@ -9,8 +9,16 @@
 /// One horizontal intermediate: 8-tap warp filter over columns
 /// `ox+x-3 .. ox+x+4` of source row `oy+row-3`, at `ib` precision.
 fn av1_mc_warp_h_mid(
-  src : FixedArray[Int32], stride : Int32, width : Int32, height : Int32,
-  ox : Int32, oy : Int32, row : Int32, x : Int32, fidx : Int32, ib : Int32,
+  src : FixedArray[Int32],
+  stride : Int32,
+  width : Int32,
+  height : Int32,
+  ox : Int32,
+  oy : Int32,
+  row : Int32,
+  x : Int32,
+  fidx : Int32,
+  ib : Int32,
 ) -> Int32 {
   let off = fidx * 8
   let mut sum = 0
@@ -24,16 +32,31 @@ fn av1_mc_warp_h_mid(
 ///|
 /// Build the 15 horizontal intermediate rows shared by both warp kernels.
 fn av1_mc_warp_mid_rows(
-  src : FixedArray[Int32], stride : Int32, width : Int32, height : Int32,
-  ox : Int32, oy : Int32, abcd : FixedArray[Int32], mx : Int32, ib : Int32,
+  src : FixedArray[Int32],
+  stride : Int32,
+  width : Int32,
+  height : Int32,
+  ox : Int32,
+  oy : Int32,
+  abcd : FixedArray[Int32],
+  mx : Int32,
+  ib : Int32,
 ) -> FixedArray[Int32] {
   let mid = FixedArray::make(15 * 8, 0)
   for m in 0..<15 {
     let row_mx = mx + m * abcd[1]
     for x in 0..<8 {
       mid[m * 8 + x] = av1_mc_warp_h_mid(
-        src, stride, width, height, ox, oy, m, x,
-        64 + ((row_mx + x * abcd[0] + 512) >> 10), ib,
+        src,
+        stride,
+        width,
+        height,
+        ox,
+        oy,
+        m,
+        x,
+        64 + ((row_mx + x * abcd[0] + 512) >> 10),
+        ib,
       )
     }
   }
@@ -43,8 +66,15 @@ fn av1_mc_warp_mid_rows(
 ///|
 /// Warp-affine predicted 8x8 pixel block.
 pub fn av1_mc_warp_affine_8x8(
-  src : FixedArray[Int32], stride : Int32, width : Int32, height : Int32,
-  ox : Int32, oy : Int32, abcd : FixedArray[Int32], mx : Int32, my : Int32,
+  src : FixedArray[Int32],
+  stride : Int32,
+  width : Int32,
+  height : Int32,
+  ox : Int32,
+  oy : Int32,
+  abcd : FixedArray[Int32],
+  mx : Int32,
+  my : Int32,
   bitdepth : Int32,
 ) -> FixedArray[Int32] {
   let dst = FixedArray::make(8 * 8, 0)
@@ -62,7 +92,9 @@ pub fn av1_mc_warp_affine_8x8(
         acc += av1_mc_warp_filter[off + tap] * mid[(y + tap) * 8 + x]
       }
       dst[y * 8 + x] = av1_mc_clip(
-        (acc + (1 << (6 + ib))) >> (7 + ib), 0, max_pixel,
+        (acc + (1 << (6 + ib))) >> (7 + ib),
+        0,
+        max_pixel,
       )
     }
   }
@@ -73,8 +105,15 @@ pub fn av1_mc_warp_affine_8x8(
 /// Warp-affine 8x8 `prep` block: biased intermediate samples for compound
 /// prediction (dav1d `warp_affine_8x8t_c`).
 pub fn av1_mc_warp_affine_8x8t(
-  src : FixedArray[Int32], stride : Int32, width : Int32, height : Int32,
-  ox : Int32, oy : Int32, abcd : FixedArray[Int32], mx : Int32, my : Int32,
+  src : FixedArray[Int32],
+  stride : Int32,
+  width : Int32,
+  height : Int32,
+  ox : Int32,
+  oy : Int32,
+  abcd : FixedArray[Int32],
+  mx : Int32,
+  my : Int32,
   bitdepth : Int32,
 ) -> FixedArray[Int32] {
   let dst = FixedArray::make(8 * 8, 0)
@@ -105,20 +144,20 @@ pub fn av1_mc_warp_affine_8x8t(
 pub fn av1_mc_warp_predict_plane(
   src : FixedArray[Int32],
   stride : Int32,
-  ref_w : Int,
-  ref_h : Int,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
-  ss_h : Int,
-  ss_v : Int,
+  ref_w : Int32,
+  ref_h : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
+  ss_h : Int32,
+  ss_v : Int32,
   bitdepth : Int32,
   matrix : FixedArray[Int32],
-  alpha : Int,
-  beta : Int,
-  gamma : Int,
-  delta : Int,
+  alpha : Int32,
+  beta : Int32,
+  gamma : Int32,
+  delta : Int32,
 ) -> FixedArray[Int32] {
   let h_mul = 4 >> ss_h
   let v_mul = 4 >> ss_v
@@ -138,8 +177,10 @@ pub fn av1_mc_warp_predict_plane(
     let mut x = 0
     while x < w {
       let src_x = bx4 * 4 + ((x + 4) << ss_h)
-      let mvx : Int64 = (matrix[2].to_int64() * src_x.to_int64() + mat3_y) >> ss_h
-      let mvy : Int64 = (matrix[4].to_int64() * src_x.to_int64() + mat5_y) >> ss_v
+      let mvx : Int64 = (matrix[2].to_int64() * src_x.to_int64() + mat3_y) >>
+        ss_h
+      let mvy : Int64 = (matrix[4].to_int64() * src_x.to_int64() + mat5_y) >>
+        ss_v
       let dx = (mvx >> 16).to_int() - 4
       let mx = ((mvx & 0xffffL).to_int() - alpha * 4 - beta * 7) & -64
       let dy = (mvy >> 16).to_int() - 4
@@ -167,20 +208,20 @@ pub fn av1_mc_warp_predict_plane(
 pub fn av1_mc_warp_prepare_plane(
   src : FixedArray[Int32],
   stride : Int32,
-  ref_w : Int,
-  ref_h : Int,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
-  ss_h : Int,
-  ss_v : Int,
+  ref_w : Int32,
+  ref_h : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
+  ss_h : Int32,
+  ss_v : Int32,
   bitdepth : Int32,
   matrix : FixedArray[Int32],
-  alpha : Int,
-  beta : Int,
-  gamma : Int,
-  delta : Int,
+  alpha : Int32,
+  beta : Int32,
+  gamma : Int32,
+  delta : Int32,
 ) -> FixedArray[Int32] {
   let h_mul = 4 >> ss_h
   let v_mul = 4 >> ss_v
@@ -200,8 +241,10 @@ pub fn av1_mc_warp_prepare_plane(
     let mut x = 0
     while x < w {
       let src_x = bx4 * 4 + ((x + 4) << ss_h)
-      let mvx : Int64 = (matrix[2].to_int64() * src_x.to_int64() + mat3_y) >> ss_h
-      let mvy : Int64 = (matrix[4].to_int64() * src_x.to_int64() + mat5_y) >> ss_v
+      let mvx : Int64 = (matrix[2].to_int64() * src_x.to_int64() + mat3_y) >>
+        ss_h
+      let mvy : Int64 = (matrix[4].to_int64() * src_x.to_int64() + mat5_y) >>
+        ss_v
       let dx = (mvx >> 16).to_int() - 4
       let mx = ((mvx & 0xffffL).to_int() - alpha * 4 - beta * 7) & -64
       let dy = (mvy >> 16).to_int() - 4

@@ -22,7 +22,7 @@ pub fn mp4_av1_muxer_new(
   width : Int32,
   height : Int32,
   av1c : Bytes,
-  timescale? : Int32 = 90000,
+  timescale~ : Int32 = 90000,
 ) -> Result[Mp4Av1Muxer, String] {
   if width <= 0 || height <= 0 || timescale <= 0 || av1c.length() < 4 {
     return Err("EINVAL: invalid AV1 MP4 stream parameters")
@@ -43,8 +43,8 @@ pub fn mp4_av1_muxer_new(
 pub fn Mp4Av1Muxer::write_packet(
   self : Mp4Av1Muxer,
   packet : Bytes,
-  duration? : Int32 = 3000,
-  keyframe? : Bool = false,
+  duration~ : Int32 = 3000,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty AV1 packet or duration")

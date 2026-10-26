@@ -27,6 +27,7 @@ let hevc_intra_inv_angles : FixedArray[Int32] = [
 ]
 
 ///|
+
 ///|
 /// `av_clip_pixel`: clip a predicted sample to the coded bit depth. */
 fn hevc_clip_pixel(v : Int32, bd : Int32) -> Int32 {

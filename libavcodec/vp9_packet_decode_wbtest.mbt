@@ -8,7 +8,11 @@ fn vp9_display_md5(bytes : Bytes) -> String {
 ///|
 fn vp9_display_superframe(frames : Array[Bytes]) -> Bytes {
   let bytes : Array[Byte] = []
-  for frame in frames { for byte in frame { bytes.push(byte) } }
+  for frame in frames {
+    for byte in frame {
+      bytes.push(byte)
+    }
+  }
   let marker = (0xc8 | (frames.length() - 1)).to_byte()
   bytes.push(marker)
   for frame in frames {
@@ -41,7 +45,10 @@ test "vp9 display: hidden keyframe refreshes references without output" {
   let hidden = vp9_kf_qfull_frames[0].to_array()
   hidden[0] = (hidden[0].to_int() & 0xfd).to_byte()
   let decoder = vp9_decoder_new()
-  assert_eq(decoder.decode_packet(Bytes::from_array(hidden[:])).unwrap().length(), 0)
+  assert_eq(
+    decoder.decode_packet(Bytes::from_array(hidden[:])).unwrap().length(),
+    0,
+  )
   let frames = decoder.decode_packet(b"\x8f").unwrap()
   assert_eq(frames.length(), 1)
   assert_eq(vp9_display_md5(frames[0].data), vp9_kf_qfull_md5[0])
@@ -55,9 +62,15 @@ test "vp9 display: hidden keyframe refreshes references without output" {
 ///|
 test "vp9 display: superframe outputs retain their own resized pixels" {
   let decoder = vp9_decoder_new()
-  let frames = decoder.decode_packet(vp9_display_superframe([
-    vp9_kf_qfull_frames[0], vp9_kf_small_frames[0], b"\x8b",
-  ])).unwrap()
+  let frames = decoder
+    .decode_packet(
+      vp9_display_superframe([
+        vp9_kf_qfull_frames[0],
+        vp9_kf_small_frames[0],
+        b"\x8b",
+      ]),
+    )
+    .unwrap()
   assert_eq(frames.length(), 3)
   assert_eq((frames[0].width, frames[0].height), (64, 48))
   assert_eq(vp9_display_md5(frames[0].data), vp9_kf_qfull_md5[0])

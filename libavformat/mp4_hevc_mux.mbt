@@ -22,7 +22,7 @@ pub fn mp4_hevc_muxer_new(
   width : Int32,
   height : Int32,
   hvcc : Bytes,
-  timescale? : Int32 = 90000,
+  timescale~ : Int32 = 90000,
 ) -> Result[Mp4HevcMuxer, String] {
   if width <= 0 || height <= 0 || timescale <= 0 || hvcc.length() < 4 {
     return Err("EINVAL: invalid HEVC MP4 stream parameters")
@@ -43,8 +43,8 @@ pub fn mp4_hevc_muxer_new(
 pub fn Mp4HevcMuxer::write_packet(
   self : Mp4HevcMuxer,
   packet : Bytes,
-  duration? : Int32 = 3000,
-  keyframe? : Bool = false,
+  duration~ : Int32 = 3000,
+  keyframe~ : Bool = false,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty HEVC packet or duration")

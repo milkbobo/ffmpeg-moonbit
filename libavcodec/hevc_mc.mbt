@@ -87,23 +87,11 @@ fn hevc_fill_edge(
   let mut j = 0
   while j < h {
     let sy = src_y + j
-    let row = if sy < 0 {
-      0
-    } else if sy >= rh {
-      rh - 1
-    } else {
-      sy
-    }
+    let row = if sy < 0 { 0 } else if sy >= rh { rh - 1 } else { sy }
     let mut i = 0
     while i < w {
       let sx = src_x + i
-      let col = if sx < 0 {
-        0
-      } else if sx >= rw {
-        rw - 1
-      } else {
-        sx
-      }
+      let col = if sx < 0 { 0 } else if sx >= rw { rw - 1 } else { sx }
       buf[j * buf_stride + i] = plane[row * plane_stride + col]
       i = i + 1
     }
@@ -113,7 +101,11 @@ fn hevc_fill_edge(
 
 ///|
 /// Horizontal 8-tap filter of one row: `sum f[k] * row[i + k - 3]`. */
-fn hevc_qpel_h(row : FixedArray[Int32], i : Int32, f : FixedArray[Int32]) -> Int32 {
+fn hevc_qpel_h(
+  row : FixedArray[Int32],
+  i : Int32,
+  f : FixedArray[Int32],
+) -> Int32 {
   f[0] * row[i - 3] +
   f[1] * row[i - 2] +
   f[2] * row[i - 1] +
@@ -144,7 +136,11 @@ fn hevc_qpel_v(
 
 ///|
 /// Horizontal 4-tap filter: `sum f[k] * row[i + k - 1]`. */
-fn hevc_epel_h(row : FixedArray[Int32], i : Int32, f : FixedArray[Int32]) -> Int32 {
+fn hevc_epel_h(
+  row : FixedArray[Int32],
+  i : Int32,
+  f : FixedArray[Int32],
+) -> Int32 {
   f[0] * row[i - 1] + f[1] * row[i] + f[2] * row[i + 1] + f[3] * row[i + 2]
 }
 
@@ -189,20 +185,8 @@ fn hevc_luma_mc_uni(
     0,
   )
   hevc_fill_edge(
-    buf,
-    hevc_mc_luma_stride,
-    ref_plane,
-    ref_stride,
-    rw,
-    rh,
-    x_off,
-    y_off,
-    3,
-    3,
-    4,
-    4,
-    bw,
-    bh,
+    buf, hevc_mc_luma_stride, ref_plane, ref_stride, rw, rh, x_off, y_off, 3, 3,
+    4, 4, bw, bh,
   )
   let base = 3 + 3 * hevc_mc_luma_stride
   let norm = bd - 8
@@ -211,7 +195,9 @@ fn hevc_luma_mc_uni(
   if mx == 0 && my == 0 {
     for j in 0..<bh {
       for i in 0..<bw {
-        dst[(y0 + j) * dst_stride + x0 + i] = buf[base + j * hevc_mc_luma_stride + i]
+        dst[(y0 + j) * dst_stride + x0 + i] = buf[base +
+          j * hevc_mc_luma_stride +
+          i]
       }
     }
   } else if my == 0 {
@@ -227,7 +213,16 @@ fn hevc_luma_mc_uni(
     let f = hevc_qpel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, hevc_mc_luma_stride, f) >> norm) + offset
+        let v = (
+            hevc_qpel_v(
+              buf,
+              base + j * hevc_mc_luma_stride + i,
+              hevc_mc_luma_stride,
+              f,
+            ) >>
+            norm
+          ) +
+          offset
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v >> shift, bd)
       }
     }
@@ -247,7 +242,11 @@ fn hevc_luma_mc_uni(
     let tbase = 3 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hevc_qpel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6) + offset
+        let v = (
+            hevc_qpel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >>
+            6
+          ) +
+          offset
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v >> shift, bd)
       }
     }
@@ -288,20 +287,8 @@ fn hevc_luma_mc_bi(
   let x_off0 = x0 + (mv0x >> 2)
   let y_off0 = y0 + (mv0y >> 2)
   hevc_fill_edge(
-    buf,
-    hevc_mc_luma_stride,
-    ref0_plane,
-    ref0_stride,
-    rw,
-    rh,
-    x_off0,
-    y_off0,
-    3,
-    3,
-    4,
-    4,
-    bw,
-    bh,
+    buf, hevc_mc_luma_stride, ref0_plane, ref0_stride, rw, rh, x_off0, y_off0, 3,
+    3, 4, 4, bw, bh,
   )
   let mx0 = mv0x & 3
   let my0 = mv0y & 3
@@ -313,7 +300,8 @@ fn hevc_luma_mc_bi(
   if mx0 == 0 && my0 == 0 {
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = buf[base + j * hevc_mc_luma_stride + i] << (14 - bd)
+        tmp[j * hevc_mc_max_pb + i] = buf[base + j * hevc_mc_luma_stride + i] <<
+          (14 - bd)
       }
     }
   } else if my0 == 0 {
@@ -328,7 +316,13 @@ fn hevc_luma_mc_bi(
     let f = hevc_qpel_filters[my0]
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, hevc_mc_luma_stride, f) >> norm
+        tmp[j * hevc_mc_max_pb + i] = hevc_qpel_v(
+            buf,
+            base + j * hevc_mc_luma_stride + i,
+            hevc_mc_luma_stride,
+            f,
+          ) >>
+          norm
       }
     }
   } else {
@@ -347,37 +341,33 @@ fn hevc_luma_mc_bi(
     let tbase = 3 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = hevc_qpel_v(tmp2, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6
+        tmp[j * hevc_mc_max_pb + i] = hevc_qpel_v(
+            tmp2,
+            tbase + j * hevc_mc_max_pb + i,
+            hevc_mc_max_pb,
+            fv,
+          ) >>
+          6
       }
     }
   }
   let x_off1 = x0 + (mv1x >> 2)
   let y_off1 = y0 + (mv1y >> 2)
   hevc_fill_edge(
-    buf,
-    hevc_mc_luma_stride,
-    ref1_plane,
-    ref1_stride,
-    rw,
-    rh,
-    x_off1,
-    y_off1,
-    3,
-    3,
-    4,
-    4,
-    bw,
-    bh,
+    buf, hevc_mc_luma_stride, ref1_plane, ref1_stride, rw, rh, x_off1, y_off1, 3,
+    3, 4, 4, bw, bh,
   )
   let mx1 = mv1x & 3
   let my1 = mv1y & 3
   if mx1 == 0 && my1 == 0 {
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((buf[base + j * hevc_mc_luma_stride + i] << (14 - bd)) +
-        tmp[j * hevc_mc_max_pb + i] +
-        offset) >>
-        shift
+        let v = (
+            (buf[base + j * hevc_mc_luma_stride + i] << (14 - bd)) +
+            tmp[j * hevc_mc_max_pb + i] +
+            offset
+          ) >>
+          shift
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
       }
     }
@@ -386,10 +376,12 @@ fn hevc_luma_mc_bi(
     for j in 0..<bh {
       let row = base + j * hevc_mc_luma_stride
       for i in 0..<bw {
-        let v = ((hevc_qpel_h(buf, row + i, f) >> norm) +
-        tmp[j * hevc_mc_max_pb + i] +
-        offset) >>
-        shift
+        let v = (
+            (hevc_qpel_h(buf, row + i, f) >> norm) +
+            tmp[j * hevc_mc_max_pb + i] +
+            offset
+          ) >>
+          shift
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
       }
     }
@@ -397,10 +389,20 @@ fn hevc_luma_mc_bi(
     let f = hevc_qpel_filters[my1]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, hevc_mc_luma_stride, f) >> norm) +
-        tmp[j * hevc_mc_max_pb + i] +
-        offset) >>
-        shift
+        let v = (
+            (
+              hevc_qpel_v(
+                buf,
+                base + j * hevc_mc_luma_stride + i,
+                hevc_mc_luma_stride,
+                f,
+              ) >>
+              norm
+            ) +
+            tmp[j * hevc_mc_max_pb + i] +
+            offset
+          ) >>
+          shift
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
       }
     }
@@ -420,10 +422,20 @@ fn hevc_luma_mc_bi(
     let tbase = 3 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((hevc_qpel_v(tmp2, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6) +
-        tmp[j * hevc_mc_max_pb + i] +
-        offset) >>
-        shift
+        let v = (
+            (
+              hevc_qpel_v(
+                tmp2,
+                tbase + j * hevc_mc_max_pb + i,
+                hevc_mc_max_pb,
+                fv,
+              ) >>
+              6
+            ) +
+            tmp[j * hevc_mc_max_pb + i] +
+            offset
+          ) >>
+          shift
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
       }
     }
@@ -457,24 +469,15 @@ fn hevc_luma_mc_uni_w(
   let oxs = ox * (1 << (bd - 8))
   let scratch : FixedArray[Int32] = FixedArray::make(bw * bh, 0)
   hevc_luma_mc_raw(
-    ref_plane,
-    ref_stride,
-    rw,
-    rh,
-    scratch,
-    bw,
-    x0,
-    y0,
-    mvx,
-    mvy,
-    bw,
-    bh,
-    bd,
+    ref_plane, ref_stride, rw, rh, scratch, bw, x0, y0, mvx, mvy, bw, bh, bd,
   )
   for j in 0..<bh {
     for i in 0..<bw {
       let f = scratch[j * bw + i]
-      dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(((f * wx + offset) >> shift) + oxs, bd)
+      dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(
+        ((f * wx + offset) >> shift) + oxs,
+        bd,
+      )
     }
   }
 }
@@ -507,27 +510,16 @@ fn hevc_luma_mc_raw(
     0,
   )
   hevc_fill_edge(
-    buf,
-    hevc_mc_luma_stride,
-    ref_plane,
-    ref_stride,
-    rw,
-    rh,
-    x_off,
-    y_off,
-    3,
-    3,
-    4,
-    4,
-    bw,
-    bh,
+    buf, hevc_mc_luma_stride, ref_plane, ref_stride, rw, rh, x_off, y_off, 3, 3,
+    4, 4, bw, bh,
   )
   let base = 3 + 3 * hevc_mc_luma_stride
   let norm = bd - 8
   if mx == 0 && my == 0 {
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = buf[base + j * hevc_mc_luma_stride + i] << (14 - bd)
+        out[j * out_stride + i] = buf[base + j * hevc_mc_luma_stride + i] <<
+          (14 - bd)
       }
     }
   } else if my == 0 {
@@ -542,7 +534,13 @@ fn hevc_luma_mc_raw(
     let f = hevc_qpel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = hevc_qpel_v(buf, base + j * hevc_mc_luma_stride + i, hevc_mc_luma_stride, f) >> norm
+        out[j * out_stride + i] = hevc_qpel_v(
+            buf,
+            base + j * hevc_mc_luma_stride + i,
+            hevc_mc_luma_stride,
+            f,
+          ) >>
+          norm
       }
     }
   } else {
@@ -561,7 +559,13 @@ fn hevc_luma_mc_raw(
     let tbase = 3 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = hevc_qpel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6
+        out[j * out_stride + i] = hevc_qpel_v(
+            tmp,
+            tbase + j * hevc_mc_max_pb + i,
+            hevc_mc_max_pb,
+            fv,
+          ) >>
+          6
       }
     }
   }
@@ -601,41 +605,18 @@ fn hevc_luma_mc_bi_w(
   let ox1s = ox1 * (1 << (bd - 8))
   let scratch0 : FixedArray[Int32] = FixedArray::make(bw * bh, 0)
   hevc_luma_mc_raw(
-    ref0_plane,
-    ref0_stride,
-    rw,
-    rh,
-    scratch0,
-    bw,
-    x0,
-    y0,
-    mv0x,
-    mv0y,
-    bw,
-    bh,
-    bd,
+    ref0_plane, ref0_stride, rw, rh, scratch0, bw, x0, y0, mv0x, mv0y, bw, bh, bd,
   )
   let scratch1 : FixedArray[Int32] = FixedArray::make(bw * bh, 0)
   hevc_luma_mc_raw(
-    ref1_plane,
-    ref1_stride,
-    rw,
-    rh,
-    scratch1,
-    bw,
-    x0,
-    y0,
-    mv1x,
-    mv1y,
-    bw,
-    bh,
-    bd,
+    ref1_plane, ref1_stride, rw, rh, scratch1, bw, x0, y0, mv1x, mv1y, bw, bh, bd,
   )
   for j in 0..<bh {
     for i in 0..<bw {
       let s2 = scratch0[j * bw + i]
       let f1 = scratch1[j * bw + i]
-      let v = (f1 * wx1 + s2 * wx0 + (ox0s + ox1s + 1) * (1 << log2_wd)) >> wshift
+      let v = (f1 * wx1 + s2 * wx0 + (ox0s + ox1s + 1) * (1 << log2_wd)) >>
+        wshift
       dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
     }
   }
@@ -673,20 +654,8 @@ fn hevc_chroma_mc_uni(
     0,
   )
   hevc_fill_edge(
-    buf,
-    hevc_mc_chroma_stride,
-    ref_plane,
-    ref_stride,
-    rw,
-    rh,
-    x_off,
-    y_off,
-    1,
-    1,
-    2,
-    2,
-    bw,
-    bh,
+    buf, hevc_mc_chroma_stride, ref_plane, ref_stride, rw, rh, x_off, y_off, 1, 1,
+    2, 2, bw, bh,
   )
   let base = 1 + 1 * hevc_mc_chroma_stride
   let norm = bd - 8
@@ -695,7 +664,9 @@ fn hevc_chroma_mc_uni(
   if mx == 0 && my == 0 {
     for j in 0..<bh {
       for i in 0..<bw {
-        dst[(y0 + j) * dst_stride + x0 + i] = buf[base + j * hevc_mc_chroma_stride + i]
+        dst[(y0 + j) * dst_stride + x0 + i] = buf[base +
+          j * hevc_mc_chroma_stride +
+          i]
       }
     }
   } else if my == 0 {
@@ -711,7 +682,16 @@ fn hevc_chroma_mc_uni(
     let f = hevc_epel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, hevc_mc_chroma_stride, f) >> norm) + offset
+        let v = (
+            hevc_epel_v(
+              buf,
+              base + j * hevc_mc_chroma_stride + i,
+              hevc_mc_chroma_stride,
+              f,
+            ) >>
+            norm
+          ) +
+          offset
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v >> shift, bd)
       }
     }
@@ -731,7 +711,11 @@ fn hevc_chroma_mc_uni(
     let tbase = 1 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hevc_epel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6) + offset
+        let v = (
+            hevc_epel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >>
+            6
+          ) +
+          offset
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v >> shift, bd)
       }
     }
@@ -770,27 +754,16 @@ fn hevc_chroma_mc_raw(
     0,
   )
   hevc_fill_edge(
-    buf,
-    hevc_mc_chroma_stride,
-    ref_plane,
-    ref_stride,
-    rw,
-    rh,
-    x_off,
-    y_off,
-    1,
-    1,
-    2,
-    2,
-    bw,
-    bh,
+    buf, hevc_mc_chroma_stride, ref_plane, ref_stride, rw, rh, x_off, y_off, 1, 1,
+    2, 2, bw, bh,
   )
   let base = 1 + 1 * hevc_mc_chroma_stride
   let norm = bd - 8
   if mx == 0 && my == 0 {
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = buf[base + j * hevc_mc_chroma_stride + i] << (14 - bd)
+        out[j * out_stride + i] = buf[base + j * hevc_mc_chroma_stride + i] <<
+          (14 - bd)
       }
     }
   } else if my == 0 {
@@ -805,7 +778,13 @@ fn hevc_chroma_mc_raw(
     let f = hevc_epel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, hevc_mc_chroma_stride, f) >> norm
+        out[j * out_stride + i] = hevc_epel_v(
+            buf,
+            base + j * hevc_mc_chroma_stride + i,
+            hevc_mc_chroma_stride,
+            f,
+          ) >>
+          norm
       }
     }
   } else {
@@ -824,7 +803,13 @@ fn hevc_chroma_mc_raw(
     let tbase = 1 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        out[j * out_stride + i] = hevc_epel_v(tmp, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6
+        out[j * out_stride + i] = hevc_epel_v(
+            tmp,
+            tbase + j * hevc_mc_max_pb + i,
+            hevc_mc_max_pb,
+            fv,
+          ) >>
+          6
       }
     }
   }
@@ -861,26 +846,16 @@ fn hevc_chroma_mc_uni_w(
   let oxs = ox * (1 << (bd - 8))
   let scratch : FixedArray[Int32] = FixedArray::make(bw * bh, 0)
   hevc_chroma_mc_raw(
-    ref_plane,
-    ref_stride,
-    rw,
-    rh,
-    scratch,
-    bw,
-    x0,
-    y0,
-    mvx,
-    mvy,
-    bw,
-    bh,
-    bd,
-    hshift,
+    ref_plane, ref_stride, rw, rh, scratch, bw, x0, y0, mvx, mvy, bw, bh, bd, hshift,
     vshift,
   )
   for j in 0..<bh {
     for i in 0..<bw {
       let f = scratch[j * bw + i]
-      dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(((f * wx + offset) >> shift) + oxs, bd)
+      dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(
+        ((f * wx + offset) >> shift) + oxs,
+        bd,
+      )
     }
   }
 }
@@ -923,20 +898,8 @@ fn hevc_chroma_mc_bi(
   let x_off0 = x0 + (mv0x >> (2 + hshift))
   let y_off0 = y0 + (mv0y >> (2 + vshift))
   hevc_fill_edge(
-    buf,
-    hevc_mc_chroma_stride,
-    ref0_plane,
-    ref0_stride,
-    rw,
-    rh,
-    x_off0,
-    y_off0,
-    1,
-    1,
-    2,
-    2,
-    bw,
-    bh,
+    buf, hevc_mc_chroma_stride, ref0_plane, ref0_stride, rw, rh, x_off0, y_off0,
+    1, 1, 2, 2, bw, bh,
   )
   let mx0 = (mv0x & ((1 << (2 + hshift)) - 1)) << (1 - hshift)
   let my0 = (mv0y & ((1 << (2 + vshift)) - 1)) << (1 - vshift)
@@ -947,7 +910,8 @@ fn hevc_chroma_mc_bi(
   if mx0 == 0 && my0 == 0 {
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = buf[base + j * hevc_mc_chroma_stride + i] << (14 - bd)
+        tmp[j * hevc_mc_max_pb + i] = buf[base + j * hevc_mc_chroma_stride + i] <<
+          (14 - bd)
       }
     }
   } else if my0 == 0 {
@@ -962,7 +926,13 @@ fn hevc_chroma_mc_bi(
     let f = hevc_epel_filters[my0]
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, hevc_mc_chroma_stride, f) >> norm
+        tmp[j * hevc_mc_max_pb + i] = hevc_epel_v(
+            buf,
+            base + j * hevc_mc_chroma_stride + i,
+            hevc_mc_chroma_stride,
+            f,
+          ) >>
+          norm
       }
     }
   } else {
@@ -981,37 +951,33 @@ fn hevc_chroma_mc_bi(
     let tbase = 1 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        tmp[j * hevc_mc_max_pb + i] = hevc_epel_v(tmp2, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6
+        tmp[j * hevc_mc_max_pb + i] = hevc_epel_v(
+            tmp2,
+            tbase + j * hevc_mc_max_pb + i,
+            hevc_mc_max_pb,
+            fv,
+          ) >>
+          6
       }
     }
   }
   let x_off1 = x0 + (mv1x >> (2 + hshift))
   let y_off1 = y0 + (mv1y >> (2 + vshift))
   hevc_fill_edge(
-    buf,
-    hevc_mc_chroma_stride,
-    ref1_plane,
-    ref1_stride,
-    rw,
-    rh,
-    x_off1,
-    y_off1,
-    1,
-    1,
-    2,
-    2,
-    bw,
-    bh,
+    buf, hevc_mc_chroma_stride, ref1_plane, ref1_stride, rw, rh, x_off1, y_off1,
+    1, 1, 2, 2, bw, bh,
   )
   let mx1 = (mv1x & ((1 << (2 + hshift)) - 1)) << (1 - hshift)
   let my1 = (mv1y & ((1 << (2 + vshift)) - 1)) << (1 - vshift)
   if mx1 == 0 && my1 == 0 {
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((buf[base + j * hevc_mc_chroma_stride + i] << (14 - bd)) +
-        tmp[j * hevc_mc_max_pb + i] +
-        offset) >>
-        shift
+        let v = (
+            (buf[base + j * hevc_mc_chroma_stride + i] << (14 - bd)) +
+            tmp[j * hevc_mc_max_pb + i] +
+            offset
+          ) >>
+          shift
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
       }
     }
@@ -1020,10 +986,12 @@ fn hevc_chroma_mc_bi(
     for j in 0..<bh {
       let row = base + j * hevc_mc_chroma_stride
       for i in 0..<bw {
-        let v = ((hevc_epel_h(buf, row + i, f) >> norm) +
-        tmp[j * hevc_mc_max_pb + i] +
-        offset) >>
-        shift
+        let v = (
+            (hevc_epel_h(buf, row + i, f) >> norm) +
+            tmp[j * hevc_mc_max_pb + i] +
+            offset
+          ) >>
+          shift
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
       }
     }
@@ -1031,10 +999,20 @@ fn hevc_chroma_mc_bi(
     let f = hevc_epel_filters[my1]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((hevc_epel_v(buf, base + j * hevc_mc_chroma_stride + i, hevc_mc_chroma_stride, f) >> norm) +
-        tmp[j * hevc_mc_max_pb + i] +
-        offset) >>
-        shift
+        let v = (
+            (
+              hevc_epel_v(
+                buf,
+                base + j * hevc_mc_chroma_stride + i,
+                hevc_mc_chroma_stride,
+                f,
+              ) >>
+              norm
+            ) +
+            tmp[j * hevc_mc_max_pb + i] +
+            offset
+          ) >>
+          shift
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
       }
     }
@@ -1054,10 +1032,20 @@ fn hevc_chroma_mc_bi(
     let tbase = 1 * hevc_mc_max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = ((hevc_epel_v(tmp2, tbase + j * hevc_mc_max_pb + i, hevc_mc_max_pb, fv) >> 6) +
-        tmp[j * hevc_mc_max_pb + i] +
-        offset) >>
-        shift
+        let v = (
+            (
+              hevc_epel_v(
+                tmp2,
+                tbase + j * hevc_mc_max_pb + i,
+                hevc_mc_max_pb,
+                fv,
+              ) >>
+              6
+            ) +
+            tmp[j * hevc_mc_max_pb + i] +
+            offset
+          ) >>
+          shift
         dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
       }
     }
@@ -1102,45 +1090,20 @@ fn hevc_chroma_mc_bi_w(
   let ox1s = ox1 * (1 << (bd - 8))
   let scratch0 : FixedArray[Int32] = FixedArray::make(bw * bh, 0)
   hevc_chroma_mc_raw(
-    ref0_plane,
-    ref0_stride,
-    rw,
-    rh,
-    scratch0,
-    bw,
-    x0,
-    y0,
-    mv0x,
-    mv0y,
-    bw,
-    bh,
-    bd,
-    hshift,
-    vshift,
+    ref0_plane, ref0_stride, rw, rh, scratch0, bw, x0, y0, mv0x, mv0y, bw, bh, bd,
+    hshift, vshift,
   )
   let scratch1 : FixedArray[Int32] = FixedArray::make(bw * bh, 0)
   hevc_chroma_mc_raw(
-    ref1_plane,
-    ref1_stride,
-    rw,
-    rh,
-    scratch1,
-    bw,
-    x0,
-    y0,
-    mv1x,
-    mv1y,
-    bw,
-    bh,
-    bd,
-    hshift,
-    vshift,
+    ref1_plane, ref1_stride, rw, rh, scratch1, bw, x0, y0, mv1x, mv1y, bw, bh, bd,
+    hshift, vshift,
   )
   for j in 0..<bh {
     for i in 0..<bw {
       let s2 = scratch0[j * bw + i]
       let f1 = scratch1[j * bw + i]
-      let v = (f1 * wx1 + s2 * wx0 + (ox0s + ox1s + 1) * (1 << log2_wd)) >> wshift
+      let v = (f1 * wx1 + s2 * wx0 + (ox0s + ox1s + 1) * (1 << log2_wd)) >>
+        wshift
       dst[(y0 + j) * dst_stride + x0 + i] = hevc_mc_clip(v, bd)
     }
   }

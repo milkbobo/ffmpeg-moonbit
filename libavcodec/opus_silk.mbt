@@ -13,13 +13,13 @@
 /// never observable for mono).
 
 ///|
-let silk_history : Int = 322
+let silk_history : Int32 = 322
 
 ///|
-let silk_max_lag : Int = 288 + 5 / 2
+let silk_max_lag : Int32 = 288 + 5 / 2
 
 ///|
-let silk_ltp_order : Int = 5
+let silk_ltp_order : Int32 = 5
 
 ///|
 fn silk_clipf(value : Float, low : Float, high : Float) -> Float {
@@ -33,7 +33,7 @@ fn silk_clipf(value : Float, low : Float, high : Float) -> Float {
 }
 
 ///|
-fn silk_clip(value : Int, low : Int, high : Int) -> Int {
+fn silk_clip(value : Int32, low : Int32, high : Int32) -> Int32 {
   if value < low {
     low
   } else if value > high {
@@ -45,7 +45,7 @@ fn silk_clip(value : Int, low : Int, high : Int) -> Int {
 
 ///|
 /// `av_clip_uintp2(value, p)`: clip to [0, 2^p - 1].
-fn silk_clip_uintp2(value : Int, p : Int) -> Int {
+fn silk_clip_uintp2(value : Int32, p : Int32) -> Int32 {
   let limit = (1 << p) - 1
   if value < 0 {
     0
@@ -57,7 +57,7 @@ fn silk_clip_uintp2(value : Int, p : Int) -> Int {
 }
 
 ///|
-fn silk_sat_sub32(a : Int, b : Int) -> Int {
+fn silk_sat_sub32(a : Int32, b : Int32) -> Int32 {
   let r = a.to_int64() - b.to_int64()
   if r > 2147483647L {
     2147483647
@@ -70,18 +70,18 @@ fn silk_sat_sub32(a : Int, b : Int) -> Int {
 
 ///|
 /// `ROUND_MULL(a, b, s) = ((MUL64(a,b) >> (s-1)) + 1) >> 1` on Int64.
-fn silk_round_mull64(a : Int64, b : Int64, s : Int) -> Int64 {
+fn silk_round_mull64(a : Int64, b : Int64, s : Int32) -> Int64 {
   (((a * b) >> (s - 1)) + 1L) >> 1
 }
 
 ///|
-fn silk_round_mull(a : Int, b : Int, s : Int) -> Int {
+fn silk_round_mull(a : Int32, b : Int32, s : Int32) -> Int32 {
   silk_round_mull64(a.to_int64(), b.to_int64(), s).to_int()
 }
 
 ///|
 /// C `int16_t` assignment: truncate to 16 bits with wrap-around.
-fn wrap_i16(value : Int) -> Int {
+fn wrap_i16(value : Int32) -> Int32 {
   ((value + 32768) & 65535) - 32768
 }
 
@@ -89,12 +89,12 @@ fn wrap_i16(value : Int) -> Int {
 /// One SILK frame's (channel's) synthesis state.
 priv struct SilkFrame {
   mut coded : Bool
-  mut log_gain : Int
-  nlsf : FixedArray[Int]
+  mut log_gain : Int32
+  nlsf : FixedArray[Int32]
   lpc : FixedArray[Float]
   output : FixedArray[Float]
   lpc_history : FixedArray[Float]
-  mut primarylag : Int
+  mut primarylag : Int32
   mut prev_voiced : Bool
 }
 
@@ -115,23 +115,23 @@ fn SilkFrame::new() -> SilkFrame {
 ///|
 /// The SILK LP-layer decoder, one instance per logical Opus stream.
 pub struct OpusSilkDecoder {
-  priv output_channels : Int
-  priv mut midonly : Int
-  priv mut subframes : Int
-  priv mut sflength : Int
-  priv mut flength : Int
-  priv mut nlsf_interp_factor : Int
-  priv mut bandwidth : Int
+  priv output_channels : Int32
+  priv mut midonly : Int32
+  priv mut subframes : Int32
+  priv mut sflength : Int32
+  priv mut flength : Int32
+  priv mut nlsf_interp_factor : Int32
+  priv mut bandwidth : Int32
   priv mut wb : Bool
   priv frames : Array[SilkFrame]
   priv prev_stereo_weights : FixedArray[Float]
   priv stereo_weights : FixedArray[Float]
-  priv mut prev_coded_channels : Int
+  priv mut prev_coded_channels : Int32
 }
 
 ///|
 /// Create a mono or stereo SILK decoder with cleared history.
-pub fn OpusSilkDecoder::new(output_channels : Int) -> OpusSilkDecoder {
+pub fn OpusSilkDecoder::new(output_channels : Int32) -> OpusSilkDecoder {
   let decoder = {
     output_channels,
     midonly: 0,
@@ -178,7 +178,11 @@ fn silk_flush_frame(frame : SilkFrame) -> Unit {
 ///|
 /// NLSF stabilization (`silk_stabilize_lsf`): iterative minimum-distance
 /// repair, then the fall-back sort-and-push method.
-fn silk_stabilize_lsf(nlsf : FixedArray[Int], order : Int, min_delta : Array[Int32]) -> Unit {
+fn silk_stabilize_lsf(
+  nlsf : FixedArray[Int32],
+  order : Int32,
+  min_delta : Array[Int32],
+) -> Unit {
   for _pass in 0..<20 {
     let mut min_diff = 0
     let mut k = 0
@@ -252,8 +256,11 @@ fn silk_stabilize_lsf(nlsf : FixedArray[Int], order : Int, min_delta : Array[Int
 ///|
 /// RFC 8251 section 6 LPC stability check (`silk_is_lpc_stable`). Q24
 /// coefficients, Q31 reflection coefficients, exact C integer pipeline.
-fn silk_is_lpc_stable(lpc : FixedArray[Int], order : Int) -> Bool {
-  let lpc32 : Array[FixedArray[Int]] = [FixedArray::make(16, 0), FixedArray::make(16, 0)]
+fn silk_is_lpc_stable(lpc : FixedArray[Int32], order : Int32) -> Bool {
+  let lpc32 : Array[FixedArray[Int32]] = [
+    FixedArray::make(16, 0),
+    FixedArray::make(16, 0),
+  ]
   let mut totalinvgain = 1 << 30
   let mut row_idx = 0
   let mut dc_resp = 0
@@ -284,7 +291,10 @@ fn silk_is_lpc_stable(lpc : FixedArray[Int], order : Int) -> Bool {
     let prev_idx = row_idx
     row_idx = k & 1
     for j in 0..<k {
-      let x = silk_sat_sub32(lpc32[prev_idx][j], silk_round_mull(lpc32[prev_idx][k - j - 1], rc, 31))
+      let x = silk_sat_sub32(
+        lpc32[prev_idx][j],
+        silk_round_mull(lpc32[prev_idx][k - j - 1], rc, 31),
+      )
       let tmp = silk_round_mull64(x.to_int64(), gain.to_int64(), fbits)
       if tmp < -2147483648L || tmp > 2147483647L {
         return false
@@ -297,14 +307,21 @@ fn silk_is_lpc_stable(lpc : FixedArray[Int], order : Int) -> Bool {
 
 ///|
 /// `silk_lsp2poly`: LSP to polynomial conversion, Q16.
-fn silk_lsp2poly(lsp : FixedArray[Int], offset : Int, pol : FixedArray[Int], half_order : Int) -> Unit {
+fn silk_lsp2poly(
+  lsp : FixedArray[Int32],
+  offset : Int32,
+  pol : FixedArray[Int32],
+  half_order : Int32,
+) -> Unit {
   pol[0] = 65536
   pol[1] = -lsp[offset]
   for i in 1..<half_order {
-    pol[i + 1] = pol[i - 1] * 2 - silk_round_mull(lsp[offset + 2 * i], pol[i], 16)
+    pol[i + 1] = pol[i - 1] * 2 -
+      silk_round_mull(lsp[offset + 2 * i], pol[i], 16)
     let mut j = i
     while j > 1 {
-      pol[j] += pol[j - 2] - silk_round_mull(lsp[offset + 2 * i], pol[j - 1], 16)
+      pol[j] += pol[j - 2] -
+        silk_round_mull(lsp[offset + 2 * i], pol[j - 1], 16)
       j -= 1
     }
     pol[1] -= lsp[offset + 2 * i]
@@ -316,12 +333,16 @@ fn silk_lsp2poly(lsp : FixedArray[Int], offset : Int, pol : FixedArray[Int], hal
 /// (`silk_lsf2lpc`); the result is normalized to floats by /4096. The C's
 /// polynomial split takes even-indexed LSPs into `p` and odd-indexed into
 /// `q` of the k2-scattered array.
-fn silk_lsf2lpc(nlsf : FixedArray[Int], lpcf : FixedArray[Float], order : Int) -> Unit {
-  let lsp : FixedArray[Int] = FixedArray::make(16, 0)
-  let p : FixedArray[Int] = FixedArray::make(9, 0)
-  let q : FixedArray[Int] = FixedArray::make(9, 0)
-  let lpc32 : FixedArray[Int] = FixedArray::make(16, 0)
-  let lpc : FixedArray[Int] = FixedArray::make(16, 0)
+fn silk_lsf2lpc(
+  nlsf : FixedArray[Int32],
+  lpcf : FixedArray[Float],
+  order : Int32,
+) -> Unit {
+  let lsp : FixedArray[Int32] = FixedArray::make(16, 0)
+  let p : FixedArray[Int32] = FixedArray::make(9, 0)
+  let q : FixedArray[Int32] = FixedArray::make(9, 0)
+  let lpc32 : FixedArray[Int32] = FixedArray::make(16, 0)
+  let lpc : FixedArray[Int32] = FixedArray::make(16, 0)
   for k in 0..<order {
     let index = nlsf[k] >> 8
     let offset = nlsf[k] & 255
@@ -349,11 +370,15 @@ fn silk_lsf2lpc(nlsf : FixedArray[Int], lpcf : FixedArray[Float], order : Int) -
   let mut attempt = 0
   for _ in 0..<10 {
     attempt += 1
-    let mut maxabs : UInt = 0U
+    let mut maxabs : UInt32 = 0U
     let mut kbest = 0
     for j in 0..<order {
       let current = lpc32[kbest]
-      let x = if current < 0 { (-current).reinterpret_as_uint() } else { current.reinterpret_as_uint() }
+      let x = if current < 0 {
+        (-current).reinterpret_as_uint()
+      } else {
+        current.reinterpret_as_uint()
+      }
       if x > maxabs {
         maxabs = x
         kbest = j
@@ -366,8 +391,8 @@ fn silk_lsf2lpc(nlsf : FixedArray[Int], lpcf : FixedArray[Float], order : Int) -
       }
       let denom = ((maxabs * (kbest + 1).reinterpret_as_uint()) >> 2).reinterpret_as_int()
       let numer = ((maxabs - 32767U) << 14).reinterpret_as_int()
-      let chirp_base : UInt = 65470U - (numer / denom).reinterpret_as_uint()
-      let mut chirp : UInt = chirp_base
+      let chirp_base : UInt32 = 65470U - (numer / denom).reinterpret_as_uint()
+      let mut chirp : UInt32 = chirp_base
       for k in 0..<order {
         lpc32[k] = silk_round_mull(lpc32[k], chirp.reinterpret_as_int(), 16)
         chirp = (chirp_base * chirp + 32768U) >> 16
@@ -391,8 +416,8 @@ fn silk_lsf2lpc(nlsf : FixedArray[Int], lpcf : FixedArray[Float], order : Int) -
   // Further bandwidth expansion if the prediction gain is unstable.
   let mut i = 1
   while i <= 16 && !silk_is_lpc_stable(lpc, order) {
-    let chirp_base : UInt = 65536U - (1U << i)
-    let mut chirp : UInt = chirp_base
+    let chirp_base : UInt32 = 65536U - (1U << i)
+    let mut chirp : UInt32 = chirp_base
     for k in 0..<order {
       lpc32[k] = silk_round_mull(lpc32[k], chirp.reinterpret_as_int(), 16)
       lpc[k] = wrap_i16((lpc32[k] + 16) >> 5)
@@ -409,7 +434,10 @@ fn silk_lsf2lpc(nlsf : FixedArray[Int], lpcf : FixedArray[Float], order : Int) -
 /// Sub-table view into `silk_model_pulse_location`: the cdf for splitting
 /// `total` pulses between two children, laid out by the same triangular
 /// offset formula as the C. The scan stops at the terminating 256 bound.
-fn silk_pulse_cdf(model : Int, total : Int) -> Result[ArrayView[Int], String] {
+fn silk_pulse_cdf(
+  model : Int32,
+  total : Int32,
+) -> Result[ArrayView[Int32], String] {
   if total <= 0 {
     return Err("opus: pulse split with zero total")
   }
@@ -419,7 +447,8 @@ fn silk_pulse_cdf(model : Int, total : Int) -> Result[ArrayView[Int], String] {
     return Err("opus: pulse location table out of range")
   }
   let mut end = start + 1
-  while end < silk_model_pulse_location.length() && silk_model_pulse_location[end] != 256 {
+  while end < silk_model_pulse_location.length() &&
+        silk_model_pulse_location[end] != 256 {
     end += 1
   }
   if end >= silk_model_pulse_location.length() {
@@ -431,9 +460,9 @@ fn silk_pulse_cdf(model : Int, total : Int) -> Result[ArrayView[Int], String] {
 ///|
 fn silk_count_children(
   rc : OpusRangeDecoder,
-  model : Int,
-  total : Int,
-) -> Result[(Int, Int), String] {
+  model : Int32,
+  total : Int32,
+) -> Result[(Int32, Int32), String] {
   if total != 0 {
     let cdf = match silk_pulse_cdf(model, total) {
       Ok(view) => view
@@ -456,24 +485,26 @@ fn OpusSilkDecoder::decode_excitation(
   self : OpusSilkDecoder,
   rc : OpusRangeDecoder,
   excitationf : Array[Float],
-  qoffset_high : Int,
-  active : Int,
-  voiced : Int,
+  qoffset_high : Int32,
+  active : Int32,
+  voiced : Int32,
 ) -> Result[Unit, String] {
-  let excitation : FixedArray[Int] = FixedArray::make(320, 0)
-  let pulsecount : FixedArray[Int] = FixedArray::make(20, 0)
-  let lsbcount : FixedArray[Int] = FixedArray::make(20, 0)
-  let mut seed : UInt = match rc.decode_cdf(silk_model_lcg_seed[:]) {
+  let excitation : FixedArray[Int32] = FixedArray::make(320, 0)
+  let pulsecount : FixedArray[Int32] = FixedArray::make(20, 0)
+  let lsbcount : FixedArray[Int32] = FixedArray::make(20, 0)
+  let mut seed : UInt32 = match rc.decode_cdf(silk_model_lcg_seed[:]) {
     Ok(value) => value.reinterpret_as_uint()
     Err(error) => return Err(error)
   }
   let shellblocks = silk_shell_blocks[self.bandwidth * 2 + (self.subframes >> 2)]
-  let ratelevel = match rc.decode_cdf(silk_model_exc_rate[voiced * 10:voiced * 10 + 10]) {
+  let ratelevel = match
+    rc.decode_cdf(silk_model_exc_rate[voiced * 10:voiced * 10 + 10]) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
   for i in 0..<shellblocks {
-    let mut count = match rc.decode_cdf(silk_model_pulse_count[ratelevel * 19:ratelevel * 19 + 19]) {
+    let mut count = match
+      rc.decode_cdf(silk_model_pulse_count[ratelevel * 19:ratelevel * 19 + 19]) {
       Ok(value) => value
       Err(error) => return Err(error)
     }
@@ -503,9 +534,9 @@ fn OpusSilkDecoder::decode_excitation(
     if pulsecount[i] != 0 {
       let location_base = 16 * i
       let branch0 = pulsecount[i]
-      let b1 : FixedArray[Int] = FixedArray::make(2, 0)
-      let b2 : FixedArray[Int] = FixedArray::make(2, 0)
-      let b3 : FixedArray[Int] = FixedArray::make(2, 0)
+      let b1 : FixedArray[Int32] = FixedArray::make(2, 0)
+      let b2 : FixedArray[Int32] = FixedArray::make(2, 0)
+      let b3 : FixedArray[Int32] = FixedArray::make(2, 0)
       match silk_count_children(rc, 0, branch0) {
         Ok((c0, c1)) => {
           b1[0] = c0
@@ -557,11 +588,7 @@ fn OpusSilkDecoder::decode_excitation(
       let pc = if pulsecount[i >> 4] < 6 { pulsecount[i >> 4] } else { 6 }
       let base = ((active + voiced) * 2 + qoffset_high) * 21 + pc * 3
       match rc.decode_cdf(silk_model_excitation_sign[base:base + 3]) {
-        Ok(sign) => {
-          if sign == 0 {
-            excitation[i] = -excitation[i]
-          }
-        }
+        Ok(sign) => if sign == 0 { excitation[i] = -excitation[i] }
         Err(error) => return Err(error)
       }
     }
@@ -597,8 +624,8 @@ fn OpusSilkDecoder::decode_lpc(
   lpc_leadin : FixedArray[Float],
   lpc_body : FixedArray[Float],
   has_lpc_leadin : Ref[Bool],
-  order_out : Ref[Int],
-  voiced : Int,
+  order_out : Ref[Int32],
+  voiced : Int32,
 ) -> Result[Unit, String] {
   let order = if self.wb { 16 } else { 10 }
   order_out.val = order
@@ -607,16 +634,17 @@ fn OpusSilkDecoder::decode_lpc(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  let lsf_i2 : FixedArray[Int] = FixedArray::make(16, 0)
-  let lsf_res : FixedArray[Int] = FixedArray::make(16, 0)
-  let nlsf : FixedArray[Int] = FixedArray::make(16, 0)
+  let lsf_i2 : FixedArray[Int32] = FixedArray::make(16, 0)
+  let lsf_res : FixedArray[Int32] = FixedArray::make(16, 0)
+  let nlsf : FixedArray[Int32] = FixedArray::make(16, 0)
   for i in 0..<order {
     let index = if self.wb {
       silk_lsf_s2_model_sel_wb[lsf_i1 * 16 + i]
     } else {
       silk_lsf_s2_model_sel_nbmb[lsf_i1 * 10 + i]
     }
-    let mut value = match rc.decode_cdf(silk_model_lsf_s2[index * 10:index * 10 + 10]) {
+    let mut value = match
+      rc.decode_cdf(silk_model_lsf_s2[index * 10:index * 10 + 10]) {
       Ok(value) => value - 4
       Err(error) => return Err(error)
     }
@@ -646,9 +674,11 @@ fn OpusSilkDecoder::decode_lpc(
     res = (res * qstep) >> 16
     if i + 1 < order {
       let weight = if self.wb {
-        silk_lsf_pred_weights_wb[silk_lsf_weight_sel_wb[lsf_i1 * 15 + i] * 15 + i]
+        silk_lsf_pred_weights_wb[silk_lsf_weight_sel_wb[lsf_i1 * 15 + i] * 15 +
+        i]
       } else {
-        silk_lsf_pred_weights_nbmb[silk_lsf_weight_sel_nbmb[lsf_i1 * 9 + i] * 9 + i]
+        silk_lsf_pred_weights_nbmb[silk_lsf_weight_sel_nbmb[lsf_i1 * 9 + i] * 9 +
+        i]
       }
       res += (lsf_res[i + 1] * weight) >> 8
     }
@@ -667,24 +697,35 @@ fn OpusSilkDecoder::decode_lpc(
     } else {
       silk_model_lsf_weight_nbmb[lsf_i1 * 10 + i]
     }
-    let value = cur * 128 + (lsf_res[i] * 16384) / weight
+    let value = cur * 128 + lsf_res[i] * 16384 / weight
     nlsf[i] = silk_clip_uintp2(value, 15)
   }
-  silk_stabilize_lsf(nlsf, order, if self.wb { silk_lsf_min_spacing_wb } else { silk_lsf_min_spacing_nbmb })
+  silk_stabilize_lsf(
+    nlsf,
+    order,
+    if self.wb {
+      silk_lsf_min_spacing_wb
+    } else {
+      silk_lsf_min_spacing_nbmb
+    },
+  )
   // Produce an interpolation for the first 2 subframes, then convert both
   // NLSF sets to LPC coefficients.
   has_lpc_leadin.val = false
   if self.subframes == 4 {
-    let mut offset = match rc.decode_cdf(silk_model_lsf_interpolation_offset[:]) {
+    let mut offset = match
+      rc.decode_cdf(silk_model_lsf_interpolation_offset[:]) {
       Ok(value) => value
       Err(error) => return Err(error)
     }
     if offset != 4 && frame.coded {
       has_lpc_leadin.val = true
       if offset != 0 {
-        let nlsf_leadin : FixedArray[Int] = FixedArray::make(16, 0)
+        let nlsf_leadin : FixedArray[Int32] = FixedArray::make(16, 0)
         for i in 0..<order {
-          nlsf_leadin[i] = wrap_i16(frame.nlsf[i] + (((nlsf[i] - frame.nlsf[i]) * offset) >> 2))
+          nlsf_leadin[i] = wrap_i16(
+            frame.nlsf[i] + (((nlsf[i] - frame.nlsf[i]) * offset) >> 2),
+          )
         }
         silk_lsf2lpc(nlsf_leadin, lpc_leadin, order)
       } else {
@@ -715,16 +756,16 @@ fn OpusSilkDecoder::decode_lpc(
 fn OpusSilkDecoder::decode_frame(
   self : OpusSilkDecoder,
   rc : OpusRangeDecoder,
-  frame_num : Int,
-  channel : Int,
-  coded_channels : Int,
-  active : Int,
-  active1 : Int,
+  frame_num : Int32,
+  channel : Int32,
+  coded_channels : Int32,
+  active : Int32,
+  active1 : Int32,
   redundant : Bool,
 ) -> Result[Unit, String] {
   let frame = self.frames[channel]
   let sf_gain : FixedArray[Float] = FixedArray::make(4, 0.0)
-  let sf_pitchlag : FixedArray[Int] = FixedArray::make(4, 0)
+  let sf_pitchlag : FixedArray[Int32] = FixedArray::make(4, 0)
   let sf_ltptaps : Array[FixedArray[Float]] = [
     FixedArray::make(5, 0.0),
     FixedArray::make(5, 0.0),
@@ -737,8 +778,8 @@ fn OpusSilkDecoder::decode_frame(
       Ok(value) => value
       Err(error) => return Err(error)
     }
-    let wi : FixedArray[Int] = FixedArray::make(2, 0)
-    let ws : FixedArray[Int] = FixedArray::make(2, 0)
+    let wi : FixedArray[Int32] = FixedArray::make(2, 0)
+    let ws : FixedArray[Int32] = FixedArray::make(2, 0)
     match rc.decode_cdf(silk_model_stereo_s2[:]) {
       Ok(value) => wi[0] = value + 3 * (n / 5)
       Err(error) => return Err(error)
@@ -755,13 +796,15 @@ fn OpusSilkDecoder::decode_frame(
       Ok(value) => ws[1] = value
       Err(error) => return Err(error)
     }
-    let w : FixedArray[Int] = FixedArray::make(2, 0)
+    let w : FixedArray[Int32] = FixedArray::make(2, 0)
     for i in 0..<2 {
       let base = silk_stereo_weights[wi[i]]
       let next = silk_stereo_weights[wi[i] + 1]
       w[i] = base + (((next - base) * 6554) >> 16) * (ws[i] * 2 + 1)
     }
-    self.stereo_weights[0] = Float::from_double((w[0] - w[1]).to_double() / 8192.0)
+    self.stereo_weights[0] = Float::from_double(
+      (w[0] - w[1]).to_double() / 8192.0,
+    )
     self.stereo_weights[1] = Float::from_double(w[1].to_double() / 8192.0)
     self.midonly = if active1 != 0 {
       0
@@ -790,7 +833,11 @@ fn OpusSilkDecoder::decode_frame(
   // Obtain subframe quantization gains.
   for i in 0..<self.subframes {
     let log_gain = if i == 0 && (frame_num == 0 || !frame.coded) {
-      let x = match rc.decode_cdf(silk_model_gain_highbits[(active + voiced) * 9:(active + voiced) * 9 + 9]) {
+      let x = match
+        rc.decode_cdf(
+          silk_model_gain_highbits[(active + voiced) * 9:(active + voiced) * 9 +
+          9],
+        ) {
         Ok(value) => value
         Err(error) => return Err(error)
       }
@@ -819,7 +866,8 @@ fn OpusSilkDecoder::decode_frame(
     let scaled = ((log_gain * 1907825) >> 16) + 2090
     let ipart = scaled >> 7
     let fpart = scaled & 127
-    let lingain = (1 << ipart) + (((-174 * fpart * (128 - fpart)) >> 16) + fpart) * ((1 << ipart) >> 7)
+    let lingain = (1 << ipart) +
+      (((-174 * fpart * (128 - fpart)) >> 16) + fpart) * (1 << ipart >> 7)
     sf_gain[i] = Float::from_int(lingain) / 65536.0
   }
   // Obtain LPC filter coefficients.
@@ -827,7 +875,10 @@ fn OpusSilkDecoder::decode_frame(
   let lpc_body : FixedArray[Float] = FixedArray::make(16, 0.0)
   let has_lpc_leadin = Ref(false)
   let order = Ref(0)
-  match self.decode_lpc(frame, rc, lpc_leadin, lpc_body, has_lpc_leadin, order, voiced) {
+  match
+    self.decode_lpc(
+      frame, rc, lpc_leadin, lpc_body, has_lpc_leadin, order, voiced,
+    ) {
     Ok(_) => ()
     Err(error) => return Err(error)
   }
@@ -864,7 +915,8 @@ fn OpusSilkDecoder::decode_frame(
         Err(error) => return Err(error)
       }
       primarylag = silk_pitch_min_lag[self.bandwidth] +
-        highbits * silk_pitch_scale[self.bandwidth] + lowbits
+        highbits * silk_pitch_scale[self.bandwidth] +
+        lowbits
     }
     frame.primarylag = primarylag
     let offsets = if self.subframes == 2 {
@@ -891,17 +943,21 @@ fn OpusSilkDecoder::decode_frame(
       }
     }
     for i in 0..<self.subframes {
-      sf_pitchlag[i] = silk_clip(primarylag + offsets[i],
+      sf_pitchlag[i] = silk_clip(
+        primarylag + offsets[i],
         silk_pitch_min_lag[self.bandwidth],
-        silk_pitch_max_lag[self.bandwidth])
+        silk_pitch_max_lag[self.bandwidth],
+      )
     }
     // Obtain LTP filter coefficients.
     let ltpfilter = match rc.decode_cdf(silk_model_ltp_filter[:]) {
       Ok(value) => value
       Err(error) => return Err(error)
     }
-    let filter_sel : Array[ArrayView[Int]] = [
-      silk_model_ltp_filter0_sel[:], silk_model_ltp_filter1_sel[:], silk_model_ltp_filter2_sel[:],
+    let filter_sel : Array[ArrayView[Int32]] = [
+      silk_model_ltp_filter0_sel[:],
+      silk_model_ltp_filter1_sel[:],
+      silk_model_ltp_filter2_sel[:],
     ]
     let filter_taps : Array[Array[Int32]] = [
       silk_ltp_filter0_taps, silk_ltp_filter1_taps, silk_ltp_filter2_taps,
@@ -912,12 +968,16 @@ fn OpusSilkDecoder::decode_frame(
         Err(error) => return Err(error)
       }
       for j in 0..<5 {
-        sf_ltptaps[i][j] = Float::from_int(filter_taps[ltpfilter][index * 5 + j]) / 128.0
+        sf_ltptaps[i][j] = Float::from_int(
+            filter_taps[ltpfilter][index * 5 + j],
+          ) /
+          128.0
       }
     }
     if frame_num == 0 {
       match rc.decode_cdf(silk_model_ltp_scale_index[:]) {
-        Ok(value) => ltpscale = Float::from_int(silk_ltp_scale_factor[value]) / 16384.0
+        Ok(value) =>
+          ltpscale = Float::from_int(silk_ltp_scale_factor[value]) / 16384.0
         Err(error) => return Err(error)
       }
     }
@@ -934,7 +994,11 @@ fn OpusSilkDecoder::decode_frame(
   }
   // Generate the output signal.
   for i in 0..<self.subframes {
-    let lpc_coeff = if i < 2 && has_lpc_leadin.val { lpc_leadin } else { lpc_body }
+    let lpc_coeff = if i < 2 && has_lpc_leadin.val {
+      lpc_leadin
+    } else {
+      lpc_body
+    }
     let out_base = silk_history + i * self.sflength
     let res_base = silk_max_lag + i * self.sflength
     let lpc_base = silk_history + i * self.sflength
@@ -964,7 +1028,8 @@ fn OpusSilkDecoder::decode_frame(
       for j in 0..<self.sflength {
         let mut sum = residual[res_base + j]
         for k in 0..<silk_ltp_order {
-          sum += sf_ltptaps[i][k] * residual[res_base + j - sf_pitchlag[i] + silk_ltp_order / 2 - k]
+          sum += sf_ltptaps[i][k] *
+            residual[res_base + j - sf_pitchlag[i] + silk_ltp_order / 2 - k]
         }
         residual[res_base + j] = sum
       }
@@ -994,16 +1059,18 @@ fn OpusSilkDecoder::decode_frame(
 fn OpusSilkDecoder::unmix_ms(
   self : OpusSilkDecoder,
   l : Array[Float],
-  l_offset : Int,
+  l_offset : Int32,
   r : Array[Float],
-  r_offset : Int,
+  r_offset : Int32,
 ) -> Result[Unit, String] {
   let mid = self.frames[0]
   let side = self.frames[1]
   let mid_base = silk_history - self.flength
   let side_base = silk_history - self.flength
-  guard l.length() >= l_offset + self.flength && r.length() >= r_offset + self.flength
-    else { return Err("opus: stereo unmix buffer too small") }
+  guard l.length() >= l_offset + self.flength &&
+    r.length() >= r_offset + self.flength else {
+    return Err("opus: stereo unmix buffer too small")
+  }
   let w0_prev = self.prev_stereo_weights[0]
   let w1_prev = self.prev_stereo_weights[1]
   let w0 = self.stereo_weights[0]
@@ -1017,21 +1084,49 @@ fn OpusSilkDecoder::unmix_ms(
   while i < n1 {
     let interp0 = w0_prev + Float::from_int(i) * (w0 - w0_prev) / n1f
     let interp1 = w1_prev + Float::from_int(i) * (w1 - w1_prev) / n1f
-    let p0 = quarter * (mid.output[mid_base + i - 2] + f2 * mid.output[mid_base + i - 1] +
-      mid.output[mid_base + i])
-    l[l_offset + i] = silk_clipf((f1 + interp1) * mid.output[mid_base + i - 1] +
-      side.output[side_base + i - 1] + interp0 * p0, -1.0, 1.0)
-    r[r_offset + i] = silk_clipf((f1 - interp1) * mid.output[mid_base + i - 1] -
-      side.output[side_base + i - 1] - interp0 * p0, -1.0, 1.0)
+    let p0 = quarter *
+      (
+        mid.output[mid_base + i - 2] +
+        f2 * mid.output[mid_base + i - 1] +
+        mid.output[mid_base + i]
+      )
+    l[l_offset + i] = silk_clipf(
+      (f1 + interp1) * mid.output[mid_base + i - 1] +
+      side.output[side_base + i - 1] +
+      interp0 * p0,
+      -1.0,
+      1.0,
+    )
+    r[r_offset + i] = silk_clipf(
+      (f1 - interp1) * mid.output[mid_base + i - 1] -
+      side.output[side_base + i - 1] -
+      interp0 * p0,
+      -1.0,
+      1.0,
+    )
     i += 1
   }
   while i < self.flength {
-    let p0 = quarter * (mid.output[mid_base + i - 2] + f2 * mid.output[mid_base + i - 1] +
-      mid.output[mid_base + i])
-    l[l_offset + i] = silk_clipf((f1 + w1) * mid.output[mid_base + i - 1] +
-      side.output[side_base + i - 1] + w0 * p0, -1.0, 1.0)
-    r[r_offset + i] = silk_clipf((f1 - w1) * mid.output[mid_base + i - 1] -
-      side.output[side_base + i - 1] - w0 * p0, -1.0, 1.0)
+    let p0 = quarter *
+      (
+        mid.output[mid_base + i - 2] +
+        f2 * mid.output[mid_base + i - 1] +
+        mid.output[mid_base + i]
+      )
+    l[l_offset + i] = silk_clipf(
+      (f1 + w1) * mid.output[mid_base + i - 1] +
+      side.output[side_base + i - 1] +
+      w0 * p0,
+      -1.0,
+      1.0,
+    )
+    r[r_offset + i] = silk_clipf(
+      (f1 - w1) * mid.output[mid_base + i - 1] -
+      side.output[side_base + i - 1] -
+      w0 * p0,
+      -1.0,
+      1.0,
+    )
     i += 1
   }
   self.prev_stereo_weights[0] = self.stereo_weights[0]
@@ -1047,14 +1142,16 @@ pub fn OpusSilkDecoder::decode_superframe(
   self : OpusSilkDecoder,
   rc : OpusRangeDecoder,
   output : Array[Array[Float]],
-  bandwidth : Int,
-  coded_channels : Int,
-  duration_ms : Int,
-) -> Result[Int, String] {
+  bandwidth : Int32,
+  coded_channels : Int32,
+  duration_ms : Int32,
+) -> Result[Int32, String] {
   if bandwidth > 2 || coded_channels > 2 || duration_ms > 60 {
     return Err("opus: invalid parameters passed to the SILK decoder")
   }
-  let nb_frames = 1 + (if duration_ms > 20 { 1 } else { 0 }) + (if duration_ms > 40 { 1 } else { 0 })
+  let nb_frames = 1 +
+    (if duration_ms > 20 { 1 } else { 0 }) +
+    (if duration_ms > 40 { 1 } else { 0 })
   self.subframes = duration_ms / nb_frames / 5
   self.sflength = 20 * (bandwidth + 2)
   self.flength = self.sflength * self.subframes
@@ -1065,8 +1162,11 @@ pub fn OpusSilkDecoder::decode_superframe(
   }
   self.prev_coded_channels = coded_channels
   // Read the LP-layer header bits.
-  let active : Array[FixedArray[Int]] = [FixedArray::make(6, 0), FixedArray::make(6, 0)]
-  let redundancy : FixedArray[Int] = FixedArray::make(2, 0)
+  let active : Array[FixedArray[Int32]] = [
+    FixedArray::make(6, 0),
+    FixedArray::make(6, 0),
+  ]
+  let redundancy : FixedArray[Int32] = FixedArray::make(2, 0)
   for i in 0..<coded_channels {
     for j in 0..<nb_frames {
       match rc.decode_log(1) {
@@ -1082,7 +1182,11 @@ pub fn OpusSilkDecoder::decode_superframe(
   // Read the per-frame LBRR flags.
   for i in 0..<coded_channels {
     if redundancy[i] != 0 && duration_ms > 20 {
-      let model = if duration_ms == 40 { silk_model_lbrr_flags_40[:] } else { silk_model_lbrr_flags_60[:] }
+      let model = if duration_ms == 40 {
+        silk_model_lbrr_flags_40[:]
+      } else {
+        silk_model_lbrr_flags_60[:]
+      }
       match rc.decode_cdf(model) {
         Ok(value) => redundancy[i] = value
         Err(error) => return Err(error)
@@ -1093,7 +1197,11 @@ pub fn OpusSilkDecoder::decode_superframe(
   for i in 0..<nb_frames {
     for j in 0..<coded_channels {
       if (redundancy[j] & (1 << i)) != 0 {
-        let active1 = if j == 0 && (redundancy[1] & (1 << i)) == 0 { 0 } else { 1 }
+        let active1 = if j == 0 && (redundancy[1] & (1 << i)) == 0 {
+          0
+        } else {
+          1
+        }
         match self.decode_frame(rc, i, j, coded_channels, 1, active1, true) {
           Ok(_) => ()
           Err(error) => return Err(error)
@@ -1106,7 +1214,16 @@ pub fn OpusSilkDecoder::decode_superframe(
     let mut j = 0
     while j < coded_channels && self.midonly == 0 {
       let active1 = if coded_channels > 1 { active[1][i] } else { 0 }
-      match self.decode_frame(rc, i, j, coded_channels, active[j][i], active1, false) {
+      match
+        self.decode_frame(
+          rc,
+          i,
+          j,
+          coded_channels,
+          active[j][i],
+          active1,
+          false,
+        ) {
         Ok(_) => ()
         Err(error) => return Err(error)
       }
@@ -1123,7 +1240,8 @@ pub fn OpusSilkDecoder::decode_superframe(
         }
       }
     } else {
-      match self.unmix_ms(output[0], i * self.flength, output[1], i * self.flength) {
+      match
+        self.unmix_ms(output[0], i * self.flength, output[1], i * self.flength) {
         Ok(_) => ()
         Err(error) => return Err(error)
       }

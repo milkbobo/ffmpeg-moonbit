@@ -6,40 +6,43 @@ pub(all) struct Av1RefmvsTileState {
   rows : FixedArray[FixedArray[Av1Rb]]
   physical : FixedArray[FixedArray[Av1Rb]]
   rp_proj : FixedArray[Av1Rtb]
-  rp_stride : Int
-  iw8 : Int
-  ih8 : Int
-  sbsz : Int
+  rp_stride : Int32
+  iw8 : Int32
+  ih8 : Int32
+  sbsz : Int32
 }
 
 ///|
 pub fn av1_refmvs_tile_state_new(
-  rp_stride : Int,
-  iw8 : Int,
-  ih8 : Int,
-  sbsz : Int,
+  rp_stride : Int32,
+  iw8 : Int32,
+  ih8 : Int32,
+  sbsz : Int32,
 ) -> Av1RefmvsTileState {
   let blank : Av1Rb = {
-    ref0: 0, ref1: -1, bs: 17, mf: 0,
-    mv0: av1_rmv_invalid, mv1: av1_rmv_invalid,
+    ref0: 0,
+    ref1: -1,
+    bs: 17,
+    mf: 0,
+    mv0: av1_rmv_invalid,
+    mv1: av1_rmv_invalid,
   }
-  let physical = FixedArray::makei(
-    35,
-    _ => FixedArray::make(rp_stride * 2, blank),
-  )
+  let physical = FixedArray::makei(35, _ => {
+    FixedArray::make(rp_stride * 2, blank)
+  })
   let rows = FixedArray::makei(37, i => physical[i % 35])
-  let rp_proj = FixedArray::makei(
-    16 * rp_stride,
-    _ => { mv: av1_rmv_invalid, ref_: 0 },
-  )
-  { rows, physical, rp_proj, rp_stride, iw8, ih8, sbsz }
+  let rp_proj = FixedArray::makei(16 * rp_stride, _ => {
+    mv: av1_rmv_invalid,
+    ref_: 0,
+  })
+  { rows, physical, rp_proj, rp_stride, iw8, ih8, sbsz, }
 }
 
 ///|
 /// `dav1d_refmvs_tile_sbrow_init` for one tile and one frame thread.
 pub fn Av1RefmvsTileState::init_sbrow(
   self : Av1RefmvsTileState,
-  sby : Int,
+  sby : Int32,
 ) -> Unit {
   let off = (self.sbsz * sby) & 16
   for i in 0..<self.sbsz {
@@ -62,10 +65,10 @@ pub fn Av1RefmvsTileState::init_sbrow(
 pub fn Av1RefmvsTileState::splat_mv(
   self : Av1RefmvsTileState,
   block : Av1Rb,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
 ) -> Unit {
   let base = (by4 & 31) + 5
   for y in 0..<bh4 {
@@ -81,11 +84,11 @@ pub fn Av1RefmvsTileState::splat_mv(
 pub fn Av1RefmvsTileState::save_tmvs(
   self : Av1RefmvsTileState,
   rp : FixedArray[Av1Rtb],
-  mfmv_sign : FixedArray[Int],
-  col_start8 : Int,
-  col_end8 : Int,
-  row_start8 : Int,
-  row_end8 : Int,
+  mfmv_sign : FixedArray[Int32],
+  col_start8 : Int32,
+  col_end8 : Int32,
+  row_start8 : Int32,
+  row_end8 : Int32,
 ) -> Unit {
   let xend = if col_end8 < self.iw8 { col_end8 } else { self.iw8 }
   let yend = if row_end8 < self.ih8 { row_end8 } else { self.ih8 }
@@ -95,17 +98,17 @@ pub fn Av1RefmvsTileState::save_tmvs(
     while x < xend {
       let b = row[x * 2 + 1]
       let bw8 = (av1_block_dimensions[b.bs * 4].to_int() + 1) >> 1
-      let (mv, ref_) = if b.ref1 > 0 && mfmv_sign[b.ref1 - 1] != 0 &&
+      let (mv, ref_) = if b.ref1 > 0 &&
+        mfmv_sign[b.ref1 - 1] != 0 &&
         av1_rmv_small(b.mv1) {
         (b.mv1, b.ref1)
-      } else if b.ref0 > 0 && mfmv_sign[b.ref0 - 1] != 0 &&
-        av1_rmv_small(b.mv0) {
+      } else if b.ref0 > 0 && mfmv_sign[b.ref0 - 1] != 0 && av1_rmv_small(b.mv0) {
         (b.mv0, b.ref0)
       } else {
         ((0, 0), 0)
       }
       for _ in 0..<bw8 {
-        rp[y * self.rp_stride + x] = { mv, ref_ }
+        rp[y * self.rp_stride + x] = { mv, ref_, }
         x = x + 1
       }
     }
@@ -113,7 +116,7 @@ pub fn Av1RefmvsTileState::save_tmvs(
 }
 
 ///|
-fn av1_rmv_small(mv : (Int, Int)) -> Bool {
+fn av1_rmv_small(mv : (Int32, Int32)) -> Bool {
   let (y, x) = mv
   let ay = if y < 0 { -y } else { y }
   let ax = if x < 0 { -x } else { x }
@@ -126,10 +129,10 @@ pub fn Av1RefmvsTileState::load_tmvs(
   self : Av1RefmvsTileState,
   init : Av1RefmvsFrameInit,
   rp_ref : FixedArray[FixedArray[Av1Rtb]],
-  col_start8 : Int,
-  col_end8 : Int,
-  row_start8 : Int,
-  row_end8 : Int,
+  col_start8 : Int32,
+  col_end8 : Int32,
+  row_start8 : Int32,
+  row_end8 : Int32,
 ) -> Unit {
   let yend = if row_end8 < self.ih8 { row_end8 } else { self.ih8 }
   let xstart = if col_start8 > 8 { col_start8 - 8 } else { 0 }
@@ -138,7 +141,8 @@ pub fn Av1RefmvsTileState::load_tmvs(
     for x in col_start8..<col_end8 {
       let idx = (y & 15) * self.rp_stride + x
       self.rp_proj[(y & 15) * self.rp_stride + x] = {
-        mv: av1_rmv_invalid, ref_: self.rp_proj[idx].ref_,
+        mv: av1_rmv_invalid,
+        ref_: self.rp_proj[idx].ref_,
       }
     }
   }
@@ -152,7 +156,11 @@ pub fn Av1RefmvsTileState::load_tmvs(
     let src = rp_ref[ref_idx]
     for y in row_start8..<yend {
       let y_sb_align = y & -8
-      let y_proj_start = if y_sb_align > row_start8 { y_sb_align } else { row_start8 }
+      let y_proj_start = if y_sb_align > row_start8 {
+        y_sb_align
+      } else {
+        row_start8
+      }
       let y_proj_end = if y_sb_align + 8 < yend { y_sb_align + 8 } else { yend }
       let mut x = xstart
       while x < xend {
@@ -167,20 +175,35 @@ pub fn Av1RefmvsTileState::load_tmvs(
           continue
         }
         let (dy, dx) = av1_rmv_projection(b.mv, ref2cur, ref2ref)
-        let pos_y = y + av1_rmv_apply_sign(
-          (if dy < 0 { -dy } else { dy }) >> 6, dy ^ ref_sign,
-        )
-        let mut pos_x = x + av1_rmv_apply_sign(
-          (if dx < 0 { -dx } else { dx }) >> 6, dx ^ ref_sign,
-        )
+        let pos_y = y +
+          av1_rmv_apply_sign(
+            (if dy < 0 { -dy } else { dy }) >> 6,
+            dy ^ ref_sign,
+          )
+        let mut pos_x = x +
+          av1_rmv_apply_sign(
+            (if dx < 0 { -dx } else { dx }) >> 6,
+            dx ^ ref_sign,
+          )
         while true {
           let x_sb_align = x & -8
-          let lo = if x_sb_align - 8 > col_start8 { x_sb_align - 8 } else { col_start8 }
-          let hi = if x_sb_align + 16 < col_end8 { x_sb_align + 16 } else { col_end8 }
-          if pos_y >= y_proj_start && pos_y < y_proj_end &&
-            pos_x >= lo && pos_x < hi {
+          let lo = if x_sb_align - 8 > col_start8 {
+            x_sb_align - 8
+          } else {
+            col_start8
+          }
+          let hi = if x_sb_align + 16 < col_end8 {
+            x_sb_align + 16
+          } else {
+            col_end8
+          }
+          if pos_y >= y_proj_start &&
+            pos_y < y_proj_end &&
+            pos_x >= lo &&
+            pos_x < hi {
             self.rp_proj[(pos_y & 15) * self.rp_stride + pos_x] = {
-              mv: b.mv, ref_: ref2ref,
+              mv: b.mv,
+              ref_: ref2ref,
             }
           }
           x = x + 1
@@ -215,11 +238,11 @@ pub fn av1_refmvs_frame_state_new(
   rf : Av1Rf,
   init : Av1RefmvsFrameInit,
   rp_ref : FixedArray[FixedArray[Av1Rtb]],
-  rp_stride : Int,
-  iw8 : Int,
-  ih8 : Int,
-  sbsz : Int,
-  hdr_use_ref_frame_mvs? : Bool = rf.use_ref_frame_mvs,
+  rp_stride : Int32,
+  iw8 : Int32,
+  ih8 : Int32,
+  sbsz : Int32,
+  hdr_use_ref_frame_mvs~ : Bool = rf.use_ref_frame_mvs,
 ) -> Av1RefmvsFrameState {
   let frame_rf : Av1Rf = {
     iw4: rf.iw4,
@@ -237,10 +260,7 @@ pub fn av1_refmvs_frame_state_new(
     hdr_use_ref_frame_mvs,
     init,
     tile: av1_refmvs_tile_state_new(rp_stride, iw8, ih8, sbsz),
-    rp: FixedArray::makei(
-      rp_stride * ih8,
-      _ => { mv: (0, 0), ref_: 0 },
-    ),
+    rp: FixedArray::makei(rp_stride * ih8, _ => { mv: (0, 0), ref_: 0, }),
     rp_ref,
   }
 }
@@ -249,17 +269,21 @@ pub fn av1_refmvs_frame_state_new(
 /// Start one superblock row before entropy-decoding its blocks.
 pub fn Av1RefmvsFrameState::begin_sbrow(
   self : Av1RefmvsFrameState,
-  sby : Int,
-  col_start8 : Int,
-  col_end8 : Int,
-  row_start8 : Int,
-  row_end8 : Int,
+  sby : Int32,
+  col_start8 : Int32,
+  col_end8 : Int32,
+  row_start8 : Int32,
+  row_end8 : Int32,
 ) -> Unit {
   self.tile.init_sbrow(sby)
   if self.init.use_ref_frame_mvs {
     self.tile.load_tmvs(
-      self.init, self.rp_ref, col_start8, col_end8,
-      row_start8, row_end8,
+      self.init,
+      self.rp_ref,
+      col_start8,
+      col_end8,
+      row_start8,
+      row_end8,
     )
   }
 }
@@ -268,14 +292,18 @@ pub fn Av1RefmvsFrameState::begin_sbrow(
 /// Save one decoded superblock row into this frame's temporal MV map.
 pub fn Av1RefmvsFrameState::finish_sbrow(
   self : Av1RefmvsFrameState,
-  col_start8 : Int,
-  col_end8 : Int,
-  row_start8 : Int,
-  row_end8 : Int,
+  col_start8 : Int32,
+  col_end8 : Int32,
+  row_start8 : Int32,
+  row_end8 : Int32,
 ) -> Unit {
   self.tile.save_tmvs(
-    self.rp, self.init.mfmv_sign, col_start8, col_end8,
-    row_start8, row_end8,
+    self.rp,
+    self.init.mfmv_sign,
+    col_start8,
+    col_end8,
+    row_start8,
+    row_end8,
   )
 }
 
@@ -284,21 +312,32 @@ pub fn Av1RefmvsFrameState::finish_sbrow(
 /// row buffers. Reference indices here use dav1d's 1..7 convention.
 pub fn Av1RefmvsFrameState::find(
   self : Av1RefmvsFrameState,
-  tile_col_start4 : Int,
-  tile_col_end4 : Int,
-  tile_row_start4 : Int,
-  tile_row_end4 : Int,
-  ref0 : Int,
-  ref1 : Int,
-  bs : Int,
+  tile_col_start4 : Int32,
+  tile_col_end4 : Int32,
+  tile_row_start4 : Int32,
+  tile_row_end4 : Int32,
+  ref0 : Int32,
+  ref1 : Int32,
+  bs : Int32,
   top_has_right : Bool,
-  by4 : Int,
-  bx4 : Int,
+  by4 : Int32,
+  bx4 : Int32,
 ) -> Av1RefmvsResult {
   av1_refmvs_find(
-    self.rf, self.tile.rows, self.tile.rp_proj, self.tile.rp_stride,
-    tile_col_start4, tile_col_end4, tile_row_start4, tile_row_end4,
-    ref0, ref1, bs, top_has_right, by4, bx4,
+    self.rf,
+    self.tile.rows,
+    self.tile.rp_proj,
+    self.tile.rp_stride,
+    tile_col_start4,
+    tile_col_end4,
+    tile_row_start4,
+    tile_row_end4,
+    ref0,
+    ref1,
+    bs,
+    top_has_right,
+    by4,
+    bx4,
     initial_globalmv_ctx=if self.hdr_use_ref_frame_mvs { 1 } else { 0 },
   )
 }
@@ -308,10 +347,10 @@ pub fn Av1RefmvsFrameState::find(
 pub fn Av1RefmvsFrameState::splat(
   self : Av1RefmvsFrameState,
   block : Av1Rb,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
 ) -> Unit {
   self.tile.splat_mv(block, bx4, by4, bw4, bh4)
 }
@@ -320,18 +359,18 @@ pub fn Av1RefmvsFrameState::splat(
 /// Publish an intra block in an inter frame (`splat_intraref`).
 pub fn Av1RefmvsFrameState::splat_intra(
   self : Av1RefmvsFrameState,
-  bs : Int,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  bs : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
 ) -> Unit {
   self.splat(
-    {
-      ref0: 0, ref1: -1, bs, mf: 0,
-      mv0: av1_rmv_invalid, mv1: (0, 0),
-    },
-    bx4, by4, bw4, bh4,
+    { ref0: 0, ref1: -1, bs, mf: 0, mv0: av1_rmv_invalid, mv1: (0, 0), },
+    bx4,
+    by4,
+    bw4,
+    bh4,
   )
 }
 
@@ -340,24 +379,35 @@ pub fn Av1RefmvsFrameState::splat_intra(
 /// indices and mode use dav1d's 0..6 and NEAREST/NEAR/GLOBAL/NEW values.
 pub fn Av1RefmvsFrameState::splat_single(
   self : Av1RefmvsFrameState,
-  ref_idx : Int,
-  mode : Int,
-  mv : (Int, Int),
+  ref_idx : Int32,
+  mode : Int32,
+  mv : (Int32, Int32),
   interintra : Bool,
-  bs : Int,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  bs : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
 ) -> Unit {
   let global = if mode == 2 && bw4 >= 2 && bh4 >= 2 { 1 } else { 0 }
   let newmv = if mode == 3 { 2 } else { 0 }
   self.splat(
     {
-      ref0: ref_idx + 1, ref1: if interintra { 0 } else { -1 },
-      bs, mf: global | newmv, mv0: mv, mv1: (0, 0),
+      ref0: ref_idx + 1,
+      ref1: if interintra {
+        0
+      } else {
+        -1
+      },
+      bs,
+      mf: global | newmv,
+      mv0: mv,
+      mv1: (0, 0),
     },
-    bx4, by4, bw4, bh4,
+    bx4,
+    by4,
+    bw4,
+    bh4,
   )
 }
 
@@ -366,24 +416,31 @@ pub fn Av1RefmvsFrameState::splat_single(
 /// present in compound modes 2, 3, 4, 5 and 7.
 pub fn Av1RefmvsFrameState::splat_compound(
   self : Av1RefmvsFrameState,
-  ref_idx0 : Int,
-  ref_idx1 : Int,
-  mode : Int,
-  mv0 : (Int, Int),
-  mv1 : (Int, Int),
-  bs : Int,
-  bx4 : Int,
-  by4 : Int,
-  bw4 : Int,
-  bh4 : Int,
+  ref_idx0 : Int32,
+  ref_idx1 : Int32,
+  mode : Int32,
+  mv0 : (Int32, Int32),
+  mv1 : (Int32, Int32),
+  bs : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
 ) -> Unit {
   let global = if mode == 6 { 1 } else { 0 }
   let newmv = if ((1 << mode) & 0xbc) != 0 { 2 } else { 0 }
   self.splat(
     {
-      ref0: ref_idx0 + 1, ref1: ref_idx1 + 1,
-      bs, mf: global | newmv, mv0, mv1,
+      ref0: ref_idx0 + 1,
+      ref1: ref_idx1 + 1,
+      bs,
+      mf: global | newmv,
+      mv0,
+      mv1,
     },
-    bx4, by4, bw4, bh4,
+    bx4,
+    by4,
+    bw4,
+    bh4,
   )
 }

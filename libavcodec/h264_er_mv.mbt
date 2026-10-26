@@ -23,22 +23,55 @@ fn h264_er_put_inter(
   let cw = 16 >> ctx.chroma_hshift
   let ch = 16 >> ctx.chroma_vshift
   h264_mc_luma(
-    ctx.y, mb_y * 16 * ctx.ystride + mb_x * 16, ctx.ystride,
-    pic.y, mb_x * 16 + (mx >> 2), mb_y * 16 + (my >> 2),
-    pic.ystride, 16, 16, mx & 3, my & 3,
-    pic.width, pic.height, sbase=pic.base_y, bit_depth=ctx.bit_depth,
+    ctx.y,
+    mb_y * 16 * ctx.ystride + mb_x * 16,
+    ctx.ystride,
+    pic.y,
+    mb_x * 16 + (mx >> 2),
+    mb_y * 16 + (my >> 2),
+    pic.ystride,
+    16,
+    16,
+    mx & 3,
+    my & 3,
+    pic.width,
+    pic.height,
+    sbase=pic.base_y,
+    bit_depth=ctx.bit_depth,
   )
   h264_mc_chroma(
-    ctx.u, mb_y * ch * ctx.cstride + mb_x * cw, ctx.cstride,
-    pic.u, mb_x * cw, mb_y * ch, mx, my, pic.cstride,
-    cw, ch, pic.cwidth, pic.cheight,
-    sbase=pic.base_u, vshift=ctx.chroma_vshift,
+    ctx.u,
+    mb_y * ch * ctx.cstride + mb_x * cw,
+    ctx.cstride,
+    pic.u,
+    mb_x * cw,
+    mb_y * ch,
+    mx,
+    my,
+    pic.cstride,
+    cw,
+    ch,
+    pic.cwidth,
+    pic.cheight,
+    sbase=pic.base_u,
+    vshift=ctx.chroma_vshift,
   )
   h264_mc_chroma(
-    ctx.v, mb_y * ch * ctx.cstride + mb_x * cw, ctx.cstride,
-    pic.v, mb_x * cw, mb_y * ch, mx, my, pic.cstride,
-    cw, ch, pic.cwidth, pic.cheight,
-    sbase=pic.base_v, vshift=ctx.chroma_vshift,
+    ctx.v,
+    mb_y * ch * ctx.cstride + mb_x * cw,
+    ctx.cstride,
+    pic.v,
+    mb_x * cw,
+    mb_y * ch,
+    mx,
+    my,
+    pic.cstride,
+    cw,
+    ch,
+    pic.cwidth,
+    pic.cheight,
+    sbase=pic.base_v,
+    vshift=ctx.chroma_vshift,
   )
   // `h264_er_decode_mb` reconstructs through `ff_h264_hl_decode_mb`, whose
   // single-list path always runs `luma_weight_op` and, when
@@ -92,10 +125,18 @@ fn h264_er_neighbor_indices(ctx : H264DecCtx, idx : Int32) -> Array[Int32] {
   let x = idx % ctx.mb_width
   let y = idx / ctx.mb_width
   let out : Array[Int32] = []
-  if x > 0 { out.push(idx - 1) }
-  if x + 1 < ctx.mb_width { out.push(idx + 1) }
-  if y > 0 { out.push(idx - ctx.mb_width) }
-  if y + 1 < ctx.mb_height { out.push(idx + ctx.mb_width) }
+  if x > 0 {
+    out.push(idx - 1)
+  }
+  if x + 1 < ctx.mb_width {
+    out.push(idx + 1)
+  }
+  if y > 0 {
+    out.push(idx - ctx.mb_width)
+  }
+  if y + 1 < ctx.mb_height {
+    out.push(idx + ctx.mb_width)
+  }
   out
 }
 
@@ -181,7 +222,9 @@ fn h264_er_guess_mv_picture(
   }
   if available <= ctx.mb_width.max(ctx.mb_height) / 2 {
     for idx = 0; idx < count; idx = idx + 1 {
-      if fixed[idx] != 8 { h264_er_put_inter(ctx, idx, 0, 0, 0) }
+      if fixed[idx] != 8 {
+        h264_er_put_inter(ctx, idx, 0, 0, 0)
+      }
     }
     return
   }
@@ -199,11 +242,17 @@ fn h264_er_guess_mv_picture(
       for idx in blocklist {
         let x = idx % ctx.mb_width
         let y = idx / ctx.mb_width
-        if ((x ^ y ^ pass) & 1) != 0 { continue }
+        if ((x ^ y ^ pass) & 1) != 0 {
+          continue
+        }
         let neighbors = h264_er_neighbor_indices(ctx, idx)
         let mut flags = 0
-        for neighbor in neighbors { flags = flags | fixed[neighbor] }
-        if (flags & 4) == 0 && pass > 1 { continue }
+        for neighbor in neighbors {
+          flags = flags | fixed[neighbor]
+        }
+        if (flags & 4) == 0 && pass > 1 {
+          continue
+        }
         none_left = false
         let candidates : Array[(Int32, Int32, Int32)] = []
         for neighbor in neighbors {
@@ -212,7 +261,9 @@ fn h264_er_guess_mv_picture(
             candidates.push((info.mv[0], info.mv[1], info.ref_idx[0]))
           }
         }
-        if candidates.is_empty() { continue }
+        if candidates.is_empty() {
+          continue
+        }
         let original_count = candidates.length()
         if original_count > 1 {
           let mut same_reference = true
@@ -228,11 +279,13 @@ fn h264_er_guess_mv_picture(
             }
           }
           if same_reference {
-            candidates.push((
-              sum_x / original_count,
-              sum_y / original_count,
-              sum_ref / original_count,
-            ))
+            candidates.push(
+              (
+                sum_x / original_count,
+                sum_y / original_count,
+                sum_ref / original_count,
+              ),
+            )
             let mut min_x = if original_count >= 3 { 99999 } else { 0 }
             let mut min_y = min_x
             let mut min_ref = min_x
@@ -249,11 +302,13 @@ fn h264_er_guess_mv_picture(
               max_ref = max_ref.max(candidate.2)
             }
             let divisor = if original_count == 4 { 2 } else { 1 }
-            candidates.push((
-              (sum_x - max_x - min_x) / divisor,
-              (sum_y - max_y - min_y) / divisor,
-              (sum_ref - max_ref - min_ref) / divisor,
-            ))
+            candidates.push(
+              (
+                (sum_x - max_x - min_x) / divisor,
+                (sum_y - max_y - min_y) / divisor,
+                (sum_ref - max_ref - min_ref) / divisor,
+              ),
+            )
           }
         }
         candidates.push((0, 0, 0))
@@ -269,7 +324,9 @@ fn h264_er_guess_mv_picture(
         let mut best_score = 2147483647
         let mut best = (0, 0, 0)
         for candidate in candidates {
-          if candidate.2 < 0 { continue }
+          if candidate.2 < 0 {
+            continue
+          }
           h264_er_put_inter(ctx, idx, candidate.2, candidate.0, candidate.1)
           let score = h264_er_border_score(ctx, fixed, idx)
           if score <= best_score {
@@ -286,7 +343,9 @@ fn h264_er_guess_mv_picture(
         }
       }
     }
-    if none_left { return }
+    if none_left {
+      return
+    }
     let next : Array[Int32] = []
     for idx in blocklist {
       if fixed[idx] >= 2 {
@@ -298,6 +357,8 @@ fn h264_er_guess_mv_picture(
   }
   // Interior MBs with no reachable valid neighbour use zero MV.
   for idx = 0; idx < count; idx = idx + 1 {
-    if fixed[idx] == 0 { h264_er_put_inter(ctx, idx, 0, 0, 0) }
+    if fixed[idx] == 0 {
+      h264_er_put_inter(ctx, idx, 0, 0, 0)
+    }
   }
 }

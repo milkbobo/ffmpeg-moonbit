@@ -13,20 +13,38 @@ priv struct CeltSynthesisChannel {
 
 ///|
 fn CeltSynthesisChannel::new() -> CeltSynthesisChannel {
-  { buffer: Array::make(2048, 0.0), old_period: 0, period: 0,
-    old_gains: Array::make(3, 0.0), gains: Array::make(3, 0.0), emphasis: 0.0 }
+  {
+    buffer: Array::make(2048, 0.0),
+    old_period: 0,
+    period: 0,
+    old_gains: Array::make(3, 0.0),
+    gains: Array::make(3, 0.0),
+    emphasis: 0.0,
+  }
 }
 
 ///|
-fn CeltSynthesisChannel::copy(self : CeltSynthesisChannel) -> CeltSynthesisChannel {
-  { buffer: self.buffer.copy(), old_period: self.old_period, period: self.period,
-    old_gains: self.old_gains.copy(), gains: self.gains.copy(), emphasis: self.emphasis }
+fn CeltSynthesisChannel::copy(
+  self : CeltSynthesisChannel,
+) -> CeltSynthesisChannel {
+  {
+    buffer: self.buffer.copy(),
+    old_period: self.old_period,
+    period: self.period,
+    old_gains: self.old_gains.copy(),
+    gains: self.gains.copy(),
+    emphasis: self.emphasis,
+  }
 }
 
 ///|
 // FFmpeg's half inverse returns N samples for N coefficients, scale=-1/32768.
 // Transient input is interleaved by block; output is contiguous by block.
-fn opus_celt_imdct(input : Array[Float], block : Int32, blocks : Int32) -> Array[Float] {
+fn opus_celt_imdct(
+  input : Array[Float],
+  block : Int32,
+  blocks : Int32,
+) -> Array[Float] {
   let n = input.length() / blocks
   let half = n / 2
   let phase = 3.14159265358979323846 / (4.0 * n.to_double())
@@ -64,8 +82,13 @@ fn opus_celt_overlap(buffer : Array[Float], offset : Int32) -> Unit {
 }
 
 ///|
-fn opus_celt_filter_transition(state : CeltSynthesisChannel, offset : Int32) -> Unit {
-  if state.gains[0] == 0.0 && state.old_gains[0] == 0.0 { return }
+fn opus_celt_filter_transition(
+  state : CeltSynthesisChannel,
+  offset : Int32,
+) -> Unit {
+  if state.gains[0] == 0.0 && state.old_gains[0] == 0.0 {
+    return
+  }
   let data = state.buffer
   let t0 = state.old_period
   let t1 = state.period
@@ -85,17 +108,31 @@ fn opus_celt_filter_transition(state : CeltSynthesisChannel, offset : Int32) -> 
     // C's 1.0 literal promotes the entire transition sum to double.
     let old = 1.0 - w.to_double()
     let correction = old * g00.to_double() * data[offset + i - t0].to_double() +
-      old * g01.to_double() * (data[offset + i - t0 - 1] + data[offset + i - t0 + 1]).to_double() +
-      old * g02.to_double() * (data[offset + i - t0 - 2] + data[offset + i - t0 + 2]).to_double() +
-      (w * g10 * x2).to_double() + (w * g11 * (x1 + x3)).to_double() +
+      old *
+      g01.to_double() *
+      (data[offset + i - t0 - 1] + data[offset + i - t0 + 1]).to_double() +
+      old *
+      g02.to_double() *
+      (data[offset + i - t0 - 2] + data[offset + i - t0 + 2]).to_double() +
+      (w * g10 * x2).to_double() +
+      (w * g11 * (x1 + x3)).to_double() +
       (w * g12 * (x0 + x4)).to_double()
-    data[offset + i] = Float::from_double(data[offset + i].to_double() + correction)
-    x4 = x3; x3 = x2; x2 = x1; x1 = x0
+    data[offset + i] = Float::from_double(
+      data[offset + i].to_double() + correction,
+    )
+    x4 = x3
+    x3 = x2
+    x2 = x1
+    x1 = x0
   }
 }
 
 ///|
-fn opus_celt_filter_stationary(state : CeltSynthesisChannel, offset : Int32, length : Int32) -> Unit {
+fn opus_celt_filter_stationary(
+  state : CeltSynthesisChannel,
+  offset : Int32,
+  length : Int32,
+) -> Unit {
   let data = state.buffer
   let period = state.period
   let mut x4 = data[offset - period - 2]
@@ -104,20 +141,31 @@ fn opus_celt_filter_stationary(state : CeltSynthesisChannel, offset : Int32, len
   let mut x1 = data[offset - period + 1]
   for i in 0..<length {
     let x0 = data[offset + i - period + 2]
-    data[offset + i] += state.gains[0] * x2 + state.gains[1] * (x1 + x3) + state.gains[2] * (x0 + x4)
-    x4 = x3; x3 = x2; x2 = x1; x1 = x0
+    data[offset + i] += state.gains[0] * x2 +
+      state.gains[1] * (x1 + x3) +
+      state.gains[2] * (x0 + x4)
+    x4 = x3
+    x3 = x2
+    x2 = x1
+    x1 = x0
   }
 }
 
 ///|
-fn opus_celt_synthesize(state : CeltSynthesisChannel, frame : OpusCeltCoefficients, channel : Int32) -> Array[Float] {
+fn opus_celt_synthesize(
+  state : CeltSynthesisChannel,
+  frame : OpusCeltCoefficients,
+  channel : Int32,
+) -> Array[Float] {
   let coeff = frame.coefficients[channel]
   let length = coeff.length()
   let blocksize = length / frame.blocks
   for block in 0..<frame.blocks {
     let offset = 1024 + block * blocksize
     let transformed = opus_celt_imdct(coeff, block, frame.blocks)
-    for i, value in transformed { state.buffer[offset + 60 + i] = value }
+    for i, value in transformed {
+      state.buffer[offset + 60 + i] = value
+    }
     opus_celt_overlap(state.buffer, offset)
   }
   opus_celt_filter_transition(state, 1024)
@@ -133,7 +181,9 @@ fn opus_celt_synthesize(state : CeltSynthesisChannel, frame : OpusCeltCoefficien
     state.old_period = state.period
     state.old_gains = state.gains
   }
-  for i in 0..<1084 { state.buffer[i] = state.buffer[i + length] }
+  for i in 0..<1084 {
+    state.buffer[i] = state.buffer[i + length]
+  }
   let output : Array[Float] = Array::make(length, 0.0)
   let weight : Float = 0.8500061035
   for i in 0..<length {
@@ -141,7 +191,9 @@ fn opus_celt_synthesize(state : CeltSynthesisChannel, frame : OpusCeltCoefficien
     output[i] = state.emphasis
   }
   let magnitude = state.emphasis.to_double().abs()
-  if magnitude < 1.1754943508222875e-38 || magnitude >= 3.402823669209385e38 || magnitude != magnitude {
+  if magnitude < 1.1754943508222875e-38 ||
+    magnitude >= 3.402823669209385e38 ||
+    magnitude != magnitude {
     state.emphasis = 0.0
   }
   output

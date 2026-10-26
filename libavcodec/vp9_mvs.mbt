@@ -21,7 +21,11 @@ fn vp9_mv_is_invalid(x : Int32, y : Int32) -> Bool {
 
 ///|
 /// `clamp_mv`.
-fn Vp9Decoder::clamp_mv(self : Vp9Decoder, x : Int32, y : Int32) -> (Int32, Int32) {
+fn Vp9Decoder::clamp_mv(
+  self : Vp9Decoder,
+  x : Int32,
+  y : Int32,
+) -> (Int32, Int32) {
   (
     if x < self.min_mv_x {
       self.min_mv_x
@@ -128,17 +132,22 @@ fn Vp9Decoder::find_ref_mvs(
     }
   }
   let check_pair = (
-    (rx0 : Int32, ry0 : Int32, rx1 : Int32, ry1 : Int32, r0 : Int32, r1 : Int32) => {
-      if returned {
-        return
-      }
-      if r0 == refi {
-        return_mv(rx0, ry0)
-      } else if r1 == refi {
-        return_mv(rx1, ry1)
-      }
+    rx0 : Int32,
+    ry0 : Int32,
+    rx1 : Int32,
+    ry1 : Int32,
+    r0 : Int32,
+    r1 : Int32,
+  ) => {
+    if returned {
+      return
     }
-  )
+    if r0 == refi {
+      return_mv(rx0, ry0)
+    } else if r1 == refi {
+      return_mv(rx1, ry1)
+    }
+  }
   let mut i = 0
   if sb >= 0 {
     if sb == 2 || sb == 1 {
@@ -212,17 +221,21 @@ fn Vp9Decoder::find_ref_mvs(
         return_scale_mv(
           pair.x0,
           pair.y0,
-          self.header.ref_sign_biases[pair.ref0] != self.header.ref_sign_biases[refi],
+          self.header.ref_sign_biases[pair.ref0] !=
+          self.header.ref_sign_biases[refi],
         )
       }
-      if !returned && pair.ref1 != refi && pair.ref1 >= 0 &&
+      if !returned &&
+        pair.ref1 != refi &&
+        pair.ref1 >= 0 &&
         // BUG in upstream: this condition applies regardless of whether the
         // first ref MV was already used for pre-scaling
         (pair.x0 != pair.x1 || pair.y0 != pair.y1) {
         return_scale_mv(
           pair.x1,
           pair.y1,
-          self.header.ref_sign_biases[pair.ref1] != self.header.ref_sign_biases[refi],
+          self.header.ref_sign_biases[pair.ref1] !=
+          self.header.ref_sign_biases[refi],
         )
       }
     }
@@ -234,15 +247,19 @@ fn Vp9Decoder::find_ref_mvs(
       return_scale_mv(
         pair.x0,
         pair.y0,
-        self.header.ref_sign_biases[pair.ref0] != self.header.ref_sign_biases[refi],
+        self.header.ref_sign_biases[pair.ref0] !=
+        self.header.ref_sign_biases[refi],
       )
     }
-    if !returned && pair.ref1 != refi && pair.ref1 >= 0 &&
+    if !returned &&
+      pair.ref1 != refi &&
+      pair.ref1 >= 0 &&
       (pair.x0 != pair.x1 || pair.y0 != pair.y1) {
       return_scale_mv(
         pair.x1,
         pair.y1,
-        self.header.ref_sign_biases[pair.ref1] != self.header.ref_sign_biases[refi],
+        self.header.ref_sign_biases[pair.ref1] !=
+        self.header.ref_sign_biases[refi],
       )
     }
   }
@@ -255,7 +272,11 @@ fn Vp9Decoder::find_ref_mvs(
 
 ///|
 /// `read_mv_component` (vp9mvs.c): decode one MV component in 1/8-pel units.
-fn Vp9Decoder::read_mv_component(self : Vp9Decoder, idx : Int32, hp : Bool) -> Int32 {
+fn Vp9Decoder::read_mv_component(
+  self : Vp9Decoder,
+  idx : Int32,
+  hp : Bool,
+) -> Int32 {
   let c = self.rac
   let p = self.prob
   let base = VP9_PC_MV_COMP + idx * VP9_MV_COMP_SIZE
@@ -288,7 +309,12 @@ fn Vp9Decoder::read_mv_component(self : Vp9Decoder, idx : Int32, hp : Bool) -> I
   } else {
     let bit0 = vp9_rac_get_prob(c, p[base + 11])
     self.counts[cb + 13 + bit0] += 1
-    let bit = vp9_rac_get_tree_flat_ctx(c, vp9_mv_fp_tree, p, base + 22 + bit0 * 3)
+    let bit = vp9_rac_get_tree_flat_ctx(
+      c,
+      vp9_mv_fp_tree,
+      p,
+      base + 22 + bit0 * 3,
+    )
     self.counts[cb + 35 + bit0 * 4 + bit] += 1
     n = (bit0 << 3) | (bit << 1)
     if hp {
@@ -313,7 +339,12 @@ fn Vp9Decoder::read_mv_component(self : Vp9Decoder, idx : Int32, hp : Bool) -> I
 /// (into `b.mv`) given the inter mode.  `sb` follows the C: -1 for NEWMV at
 /// whole-block level, else the quadrant encoding (0..3), and for BS<=8x8 the
 /// caller passes -1.
-fn Vp9Decoder::fill_mv(self : Vp9Decoder, out : Int32, mode : Int32, sb : Int32) -> Unit {
+fn Vp9Decoder::fill_mv(
+  self : Vp9Decoder,
+  out : Int32,
+  mode : Int32,
+  sb : Int32,
+) -> Unit {
   if mode == 12 {
     // ZEROMV
     self.b.mvx[out * 2] = 0
@@ -324,15 +355,21 @@ fn Vp9Decoder::fill_mv(self : Vp9Decoder, out : Int32, mode : Int32, sb : Int32)
   }
   let b = self.b
   // first reference
-  self.find_ref_mvs(out * 2, b.refidx[0], 0, if mode == 11 {
-    1
-  } else {
-    0
-  }, if mode == 13 {
-    -1
-  } else {
-    sb
-  })
+  self.find_ref_mvs(
+    out * 2,
+    b.refidx[0],
+    0,
+    if mode == 11 {
+      1
+    } else {
+      0
+    },
+    if mode == 13 {
+      -1
+    } else {
+      sb
+    },
+  )
   let mut hp = self.rac_hp_candidate(self.b.mvx[out * 2], self.b.mvy[out * 2])
   if mode == 13 || sb == -1 {
     if !hp {
@@ -350,7 +387,12 @@ fn Vp9Decoder::fill_mv(self : Vp9Decoder, out : Int32, mode : Int32, sb : Int32)
   }
   if mode == 13 {
     // NEWMV: read the residual joint/components
-    let j = vp9_rac_get_tree_flat_ctx(self.rac, vp9_mv_joint_tree, self.prob, VP9_PC_MV_JOINT)
+    let j = vp9_rac_get_tree_flat_ctx(
+      self.rac,
+      vp9_mv_joint_tree,
+      self.prob,
+      VP9_PC_MV_JOINT,
+    )
     self.counts[VP9_CT_MV_JOINT + j] += 1
     if j >= 2 {
       self.b.mvy[out * 2] += self.read_mv_component(0, hp)
@@ -360,15 +402,21 @@ fn Vp9Decoder::fill_mv(self : Vp9Decoder, out : Int32, mode : Int32, sb : Int32)
     }
   }
   if b.comp != 0 {
-    self.find_ref_mvs(out * 2 + 1, b.refidx[1], 1, if mode == 11 {
-      1
-    } else {
-      0
-    }, if mode == 13 {
-      -1
-    } else {
-      sb
-    })
+    self.find_ref_mvs(
+      out * 2 + 1,
+      b.refidx[1],
+      1,
+      if mode == 11 {
+        1
+      } else {
+        0
+      },
+      if mode == 13 {
+        -1
+      } else {
+        sb
+      },
+    )
     hp = self.rac_hp_candidate(self.b.mvx[out * 2 + 1], self.b.mvy[out * 2 + 1])
     if mode == 13 || sb == -1 {
       if !hp {
@@ -405,6 +453,10 @@ fn Vp9Decoder::fill_mv(self : Vp9Decoder, out : Int32, mode : Int32, sb : Int32)
 ///|
 /// C: `s->s.h.highprecisionmvs && abs(mv.x) < 64 && abs(mv.y) < 64` — the hp
 /// flag used when decoding NEWMV residuals / rounding predictors.
-fn Vp9Decoder::rac_hp_candidate(self : Vp9Decoder, x : Int32, y : Int32) -> Bool {
+fn Vp9Decoder::rac_hp_candidate(
+  self : Vp9Decoder,
+  x : Int32,
+  y : Int32,
+) -> Bool {
   self.header.high_precision_mvs && x.abs() < 64 && y.abs() < 64
 }

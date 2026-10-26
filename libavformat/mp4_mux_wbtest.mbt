@@ -22,9 +22,7 @@ test "mp4 muxer: AAC samples round-trip through the demuxer" {
   assert_eq(track.samples.length(), 3)
   let sizes : Array[Int32] = [4, 6, 2]
   let payloads : Array[Bytes] = [
-    b"\x00\x01\x02\x03",
-    b"\x04\x05\x06\x07\x08\x09",
-    b"\x0A\x0B",
+    b"\x00\x01\x02\x03", b"\x04\x05\x06\x07\x08\x09", b"\x0A\x0B",
   ]
   for i in 0..<3 {
     let sample = track.samples[i]
@@ -32,7 +30,10 @@ test "mp4 muxer: AAC samples round-trip through the demuxer" {
     assert_eq(sample.dts, (i * 1024).to_int64())
     assert_eq(sample.duration, 1024U)
     let start = sample.offset.to_int()
-    assert_eq(bytes[start:start + sample.size.reinterpret_as_int()].to_owned(), payloads[i])
+    assert_eq(
+      bytes[start:start + sample.size.reinterpret_as_int()].to_owned(),
+      payloads[i],
+    )
   }
 }
 

@@ -26,8 +26,9 @@ fn vp9_12p_ivf_frames(ivf : Bytes) -> Array[Bytes] {
   let frames : Array[Bytes] = []
   let mut pos = 32
   while pos < ivf.length() {
-    let size = (ivf[pos].to_int() | (ivf[pos + 1].to_int() << 8) |
-      (ivf[pos + 2].to_int() << 16)) |
+    let size = ivf[pos].to_int() |
+      (ivf[pos + 1].to_int() << 8) |
+      (ivf[pos + 2].to_int() << 16) |
       (ivf[pos + 3].to_int() << 24)
     frames.push(ivf[pos + 12:pos + 12 + size].to_owned())
     pos = pos + 12 + size

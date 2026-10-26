@@ -7,11 +7,15 @@ test "vp9 dsp: DC scaling and coefficient scratch clearing" {
     let block = FixedArray::make(n * n, 0)
     block[0] = if tx == 3 { 128 } else { 32 << tx }
     vp9_itxfm_add(tx, 0, pixels, 0, n, block, 0, 1, 8, 255)
-    for value in pixels { assert_eq(value, 129) }
+    for value in pixels {
+      assert_eq(value, 129)
+    }
     assert_eq(block[0], 0)
     block[1] = 64
     vp9_itxfm_add(tx, 0, pixels, 0, n, block, 0, 2, 8, 255)
-    for value in block { assert_eq(value, 0) }
+    for value in block {
+      assert_eq(value, 0)
+    }
   }
 }
 
@@ -21,12 +25,11 @@ test "vp9 dsp: HOR_UP 4x4 fills every sample with the C coordinates" {
   let left : FixedArray[Int32] = [10, 20, 30, 40]
   vp9_pred_hor_up_4x4(pixels, 0, 4, left)
   let expected : FixedArray[Int32] = [
-    15, 20, 25, 30,
-    25, 30, 35, 38,
-    35, 38, 40, 40,
-    40, 40, 40, 40,
+    15, 20, 25, 30, 25, 30, 35, 38, 35, 38, 40, 40, 40, 40, 40, 40,
   ]
-  for i in 0..<16 { assert_eq(pixels[i], expected[i]) }
+  for i in 0..<16 {
+    assert_eq(pixels[i], expected[i])
+  }
 }
 
 ///|

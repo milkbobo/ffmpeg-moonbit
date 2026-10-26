@@ -33,7 +33,14 @@ fn vp9_min(a : Int32, b : Int32) -> Int32 {
 
 ///|
 /// `DST(x, y)` accessor. */
-fn vp9_dst_set(p : FixedArray[Int32], off : Int32, stride : Int32, x : Int32, y : Int32, v : Int32) -> Unit {
+fn vp9_dst_set(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  x : Int32,
+  y : Int32,
+  v : Int32,
+) -> Unit {
   p[off + x + y * stride] = v
 }
 
@@ -41,22 +48,54 @@ fn vp9_dst_set(p : FixedArray[Int32], off : Int32, stride : Int32, x : Int32, y 
 /// Intra mode numbers (`enum IntraPredMode`): the base ten modes 0..9 plus
 /// the availability-derived variants 10..14. */
 const VP9_VERT_PRED : Int32 = 0
+
+///|
 const VP9_HOR_PRED : Int32 = 1
+
+///|
 const VP9_DC_PRED : Int32 = 2
+
+///|
 const VP9_DIAG_DOWN_LEFT_PRED : Int32 = 3
+
+///|
 const VP9_DIAG_DOWN_RIGHT_PRED : Int32 = 4
+
+///|
 const VP9_VERT_RIGHT_PRED : Int32 = 5
+
+///|
 const VP9_HOR_DOWN_PRED : Int32 = 6
+
+///|
 const VP9_VERT_LEFT_PRED : Int32 = 7
+
+///|
 const VP9_HOR_UP_PRED : Int32 = 8
+
+///|
 const VP9_TM_VP8_PRED : Int32 = 9
+
+///|
 const VP9_LEFT_DC_PRED : Int32 = 10
+
+///|
 const VP9_TOP_DC_PRED : Int32 = 11
+
+///|
 const VP9_DC_128_PRED : Int32 = 12
+
+///|
 const VP9_DC_127_PRED : Int32 = 13
 
 ///|
-fn vp9_pred_vert(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_vert(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  top : FixedArray[Int32],
+) -> Unit {
   for y in 0..<n {
     for x in 0..<n {
       p[off + x + y * stride] = top[1 + x]
@@ -65,7 +104,13 @@ fn vp9_pred_vert(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, 
 }
 
 ///|
-fn vp9_pred_hor(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32]) -> Unit {
+fn vp9_pred_hor(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+) -> Unit {
   for y in 0..<n {
     let v = left[n - 1 - y]
     for x in 0..<n {
@@ -75,20 +120,20 @@ fn vp9_pred_hor(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, l
 }
 
 ///|
-fn vp9_pred_dc(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_dc(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+) -> Unit {
   let mut sum = n
   for i in 0..<n {
     sum += left[i] + top[1 + i]
   }
-  let dc = sum >> (if n == 16 {
-    5
-  } else if n == 32 {
-    6
-  } else if n == 8 {
-    4
-  } else {
-    3
-  })
+  let dc = sum >>
+    (if n == 16 { 5 } else if n == 32 { 6 } else if n == 8 { 4 } else { 3 })
   for y in 0..<n {
     for x in 0..<n {
       p[off + x + y * stride] = dc
@@ -97,20 +142,19 @@ fn vp9_pred_dc(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, le
 }
 
 ///|
-fn vp9_pred_dc_left(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32]) -> Unit {
+fn vp9_pred_dc_left(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+) -> Unit {
   let mut sum = n >> 1
   for i in 0..<n {
     sum += left[i]
   }
-  let dc = sum >> (if n == 16 {
-    4
-  } else if n == 32 {
-    5
-  } else if n == 8 {
-    3
-  } else {
-    2
-  })
+  let dc = sum >>
+    (if n == 16 { 4 } else if n == 32 { 5 } else if n == 8 { 3 } else { 2 })
   for y in 0..<n {
     for x in 0..<n {
       p[off + x + y * stride] = dc
@@ -119,20 +163,19 @@ fn vp9_pred_dc_left(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int3
 }
 
 ///|
-fn vp9_pred_dc_top(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_dc_top(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  top : FixedArray[Int32],
+) -> Unit {
   let mut sum = n >> 1
   for i in 0..<n {
     sum += top[1 + i]
   }
-  let dc = sum >> (if n == 16 {
-    4
-  } else if n == 32 {
-    5
-  } else if n == 8 {
-    3
-  } else {
-    2
-  })
+  let dc = sum >>
+    (if n == 16 { 4 } else if n == 32 { 5 } else if n == 8 { 3 } else { 2 })
   for y in 0..<n {
     for x in 0..<n {
       p[off + x + y * stride] = dc
@@ -141,7 +184,13 @@ fn vp9_pred_dc_top(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32
 }
 
 ///|
-fn vp9_pred_dc_const(val : Int32, n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32) -> Unit {
+fn vp9_pred_dc_const(
+  val : Int32,
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+) -> Unit {
   for y in 0..<n {
     for x in 0..<n {
       p[off + x + y * stride] = val
@@ -151,7 +200,13 @@ fn vp9_pred_dc_const(val : Int32, n : Int32, p : FixedArray[Int32], off : Int32,
 
 ///|
 /// `def_diag_downleft(size)`; the 4x4 form is separate in the C. */
-fn vp9_pred_diag_downleft(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_diag_downleft(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  top : FixedArray[Int32],
+) -> Unit {
   let v : FixedArray[Int32] = FixedArray::make(n, 0)
   for i in 0..<(n - 2) {
     v[i] = (top[1 + i] + top[2 + i] * 2 + top[3 + i] + 2) >> 2
@@ -168,7 +223,12 @@ fn vp9_pred_diag_downleft(n : Int32, p : FixedArray[Int32], off : Int32, stride 
 }
 
 ///|
-fn vp9_pred_diag_downleft_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_diag_downleft_4x4(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  top : FixedArray[Int32],
+) -> Unit {
   let a0 = top[1]
   let a1 = top[2]
   let a2 = top[3]
@@ -202,7 +262,14 @@ fn vp9_pred_diag_downleft_4x4(p : FixedArray[Int32], off : Int32, stride : Int32
 }
 
 ///|
-fn vp9_pred_diag_downright(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_diag_downright(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+) -> Unit {
   let v : FixedArray[Int32] = FixedArray::make(n + n - 1, 0)
   for i in 0..<(n - 2) {
     v[i] = (left[i] + left[i + 1] * 2 + left[i + 2] + 2) >> 2
@@ -219,7 +286,13 @@ fn vp9_pred_diag_downright(n : Int32, p : FixedArray[Int32], off : Int32, stride
 }
 
 ///|
-fn vp9_pred_diag_downright_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_diag_downright_4x4(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+) -> Unit {
   let tl = top[0]
   let a0 = top[1]
   let a1 = top[2]
@@ -253,7 +326,14 @@ fn vp9_pred_diag_downright_4x4(p : FixedArray[Int32], off : Int32, stride : Int3
 }
 
 ///|
-fn vp9_pred_vert_right(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_vert_right(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+) -> Unit {
   let ve : FixedArray[Int32] = FixedArray::make(n + n / 2 - 1, 0)
   let vo : FixedArray[Int32] = FixedArray::make(n + n / 2 - 1, 0)
   for i in 0..<(n / 2 - 2) {
@@ -270,14 +350,20 @@ fn vp9_pred_vert_right(n : Int32, p : FixedArray[Int32], off : Int32, stride : I
   }
   for j in 0..<(n / 2) {
     for i in 0..<n {
-      p[off + i + (j * 2) * stride] = ve[n / 2 - 1 - j + i]
+      p[off + i + j * 2 * stride] = ve[n / 2 - 1 - j + i]
       p[off + i + (j * 2 + 1) * stride] = vo[n / 2 - 1 - j + i]
     }
   }
 }
 
 ///|
-fn vp9_pred_vert_right_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_vert_right_4x4(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+) -> Unit {
   let tl = top[0]
   let a0 = top[1]
   let a1 = top[2]
@@ -311,7 +397,14 @@ fn vp9_pred_vert_right_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, l
 }
 
 ///|
-fn vp9_pred_hor_down(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_hor_down(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+) -> Unit {
   let v : FixedArray[Int32] = FixedArray::make(n * 3 - 2, 0)
   for i in 0..<(n - 2) {
     v[i * 2] = (left[i + 1] + left[i] + 1) >> 1
@@ -330,7 +423,13 @@ fn vp9_pred_hor_down(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int
 }
 
 ///|
-fn vp9_pred_hor_down_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_hor_down_4x4(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+) -> Unit {
   let l0 = left[3]
   let l1 = left[2]
   let l2 = left[1]
@@ -364,7 +463,13 @@ fn vp9_pred_hor_down_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, lef
 }
 
 ///|
-fn vp9_pred_vert_left(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_vert_left(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  top : FixedArray[Int32],
+) -> Unit {
   let ve : FixedArray[Int32] = FixedArray::make(n - 1, 0)
   let vo : FixedArray[Int32] = FixedArray::make(n - 1, 0)
   for i in 0..<(n - 2) {
@@ -375,18 +480,23 @@ fn vp9_pred_vert_left(n : Int32, p : FixedArray[Int32], off : Int32, stride : In
   vo[n - 2] = (top[n - 1] + top[n] * 3 + 2) >> 2
   for j in 0..<(n / 2) {
     for i in 0..<(n - j - 1) {
-      p[off + i + (j * 2) * stride] = ve[j + i]
+      p[off + i + j * 2 * stride] = ve[j + i]
       p[off + i + (j * 2 + 1) * stride] = vo[j + i]
     }
     for i in (n - j - 1)..<n {
-      p[off + i + (j * 2) * stride] = top[n]
+      p[off + i + j * 2 * stride] = top[n]
       p[off + i + (j * 2 + 1) * stride] = top[n]
     }
   }
 }
 
 ///|
-fn vp9_pred_vert_left_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, top : FixedArray[Int32]) -> Unit {
+fn vp9_pred_vert_left_4x4(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  top : FixedArray[Int32],
+) -> Unit {
   let a0 = top[1]
   let a1 = top[2]
   let a2 = top[3]
@@ -421,7 +531,13 @@ fn vp9_pred_vert_left_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, to
 }
 
 ///|
-fn vp9_pred_hor_up(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32]) -> Unit {
+fn vp9_pred_hor_up(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+) -> Unit {
   let v : FixedArray[Int32] = FixedArray::make(n * 2 - 2, 0)
   for i in 0..<(n - 2) {
     v[i * 2] = (left[i] + left[i + 1] + 1) >> 1
@@ -445,7 +561,12 @@ fn vp9_pred_hor_up(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32
 }
 
 ///|
-fn vp9_pred_hor_up_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32]) -> Unit {
+fn vp9_pred_hor_up_4x4(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+) -> Unit {
   let l0 = left[0]
   let l1 = left[1]
   let l2 = left[2]
@@ -474,28 +595,19 @@ fn vp9_pred_hor_up_4x4(p : FixedArray[Int32], off : Int32, stride : Int32, left 
 }
 
 ///|
-fn vp9_iwht4_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : FixedArray[Int32], obase : Int32, pass : Int32) -> Unit {
+fn vp9_iwht4_1d(
+  inp : FixedArray[Int32],
+  ibase : Int32,
+  istride : Int32,
+  out : FixedArray[Int32],
+  obase : Int32,
+  pass : Int32,
+) -> Unit {
   let g = (x : Int32) => inp[ibase + x * istride]
-  let mut t0 = if pass == 0 {
-    g(0) >> 2
-  } else {
-    g(0)
-  }
-  let mut t1 = if pass == 0 {
-    g(3) >> 2
-  } else {
-    g(3)
-  }
-  let mut t2 = if pass == 0 {
-    g(1) >> 2
-  } else {
-    g(1)
-  }
-  let mut t3 = if pass == 0 {
-    g(2) >> 2
-  } else {
-    g(2)
-  }
+  let mut t0 = if pass == 0 { g(0) >> 2 } else { g(0) }
+  let mut t1 = if pass == 0 { g(3) >> 2 } else { g(3) }
+  let mut t2 = if pass == 0 { g(1) >> 2 } else { g(1) }
+  let mut t3 = if pass == 0 { g(2) >> 2 } else { g(2) }
   t0 += t2
   t3 -= t1
   let t4 = (t0 - t3) >> 1
@@ -581,47 +693,271 @@ fn vp9_loop_filter_core(
         vp9_abs(q3 - q0) <= f
     }
     if wd >= 16 && flat8out && flat8in {
-      p[o + strideb * -7] = (p7 + p7 + p7 + p7 + p7 + p7 + p7 + p6 * 2 +
-      p5 + p4 + p3 + p2 + p1 + p0 + q0 + 8) >>
+      p[o + strideb * -7] = (
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p6 * 2 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          8
+        ) >>
         4
-      p[o + strideb * -6] = (p7 + p7 + p7 + p7 + p7 + p7 + p6 + p5 * 2 +
-      p4 + p3 + p2 + p1 + p0 + q0 + q1 + 8) >>
+      p[o + strideb * -6] = (
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p6 +
+          p5 * 2 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          8
+        ) >>
         4
-      p[o + strideb * -5] = (p7 + p7 + p7 + p7 + p7 + p6 + p5 + p4 * 2 +
-      p3 + p2 + p1 + p0 + q0 + q1 + q2 + 8) >>
+      p[o + strideb * -5] = (
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p6 +
+          p5 +
+          p4 * 2 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          8
+        ) >>
         4
-      p[o + strideb * -4] = (p7 + p7 + p7 + p7 + p6 + p5 + p4 + p3 * 2 +
-      p2 + p1 + p0 + q0 + q1 + q2 + q3 + 8) >>
+      p[o + strideb * -4] = (
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p6 +
+          p5 +
+          p4 +
+          p3 * 2 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          8
+        ) >>
         4
-      p[o + strideb * -3] = (p7 + p7 + p7 + p6 + p5 + p4 + p3 + p2 * 2 +
-      p1 + p0 + q0 + q1 + q2 + q3 + q4 + 8) >>
+      p[o + strideb * -3] = (
+          p7 +
+          p7 +
+          p7 +
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 * 2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          8
+        ) >>
         4
-      p[o + strideb * -2] = (p7 + p7 + p6 + p5 + p4 + p3 + p2 + p1 * 2 +
-      p0 + q0 + q1 + q2 + q3 + q4 + q5 + 8) >>
+      p[o + strideb * -2] = (
+          p7 +
+          p7 +
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 * 2 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          8
+        ) >>
         4
-      p[o + strideb * -1] = (p7 + p6 + p5 + p4 + p3 + p2 + p1 + p0 * 2 +
-      q0 + q1 + q2 + q3 + q4 + q5 + q6 + 8) >>
+      p[o + strideb * -1] = (
+          p7 +
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 * 2 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          8
+        ) >>
         4
-      p[o + strideb * 0] = (p6 + p5 + p4 + p3 + p2 + p1 + p0 + q0 * 2 +
-      q1 + q2 + q3 + q4 + q5 + q6 + q7 + 8) >>
+      p[o + strideb * 0] = (
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 * 2 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 1] = (p5 + p4 + p3 + p2 + p1 + p0 + q0 + q1 * 2 +
-      q2 + q3 + q4 + q5 + q6 + q7 + q7 + 8) >>
+      p[o + strideb * 1] = (
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 * 2 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 2] = (p4 + p3 + p2 + p1 + p0 + q0 + q1 + q2 * 2 +
-      q3 + q4 + q5 + q6 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 2] = (
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 * 2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 3] = (p3 + p2 + p1 + p0 + q0 + q1 + q2 + q3 * 2 +
-      q4 + q5 + q6 + q7 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 3] = (
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 * 2 +
+          q4 +
+          q5 +
+          q6 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 4] = (p2 + p1 + p0 + q0 + q1 + q2 + q3 + q4 * 2 +
-      q5 + q6 + q7 + q7 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 4] = (
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 * 2 +
+          q5 +
+          q6 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 5] = (p1 + p0 + q0 + q1 + q2 + q3 + q4 + q5 * 2 +
-      q6 + q7 + q7 + q7 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 5] = (
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 * 2 +
+          q6 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 6] = (p0 + q0 + q1 + q2 + q3 + q4 + q5 + q6 * 2 +
-      q7 + q7 + q7 + q7 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 6] = (
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 * 2 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
     } else if wd >= 8 && flat8in {
       p[o + strideb * -3] = (p3 + p3 + p3 + 2 * p2 + p1 + p0 + q0 + 4) >> 3
@@ -683,12 +1019,25 @@ fn vp9_clip_intp2(v : Int32, bits : Int32) -> Int32 {
 }
 
 ///|
-fn vp9_itxfm_add(tx_kind : Int32, txtp : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, block : FixedArray[Int32], boff : Int32, eob : Int32, bpp : Int32, pixel_max : Int32) -> Unit {
+fn vp9_itxfm_add(
+  tx_kind : Int32,
+  txtp : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  block : FixedArray[Int32],
+  boff : Int32,
+  eob : Int32,
+  bpp : Int32,
+  pixel_max : Int32,
+) -> Unit {
   let trunc = (v : Int32) => if bpp == 8 { vp9_i16(v) } else { v }
 
   if tx_kind < 4 && txtp == 0 && eob == 1 {
-    let t = (((block[boff].to_int64() * 11585L + (1L << 13)) >> 14) * 11585L +
-        (1L << 13)) >>
+    let t = (
+        ((block[boff].to_int64() * 11585L + (1L << 13)) >> 14) * 11585L +
+        (1L << 13)
+      ) >>
       14
     let shift = if tx_kind == 3 { 6 } else { tx_kind + 4 }
     block[boff] = 0
@@ -715,7 +1064,7 @@ fn vp9_itxfm_add(tx_kind : Int32, txtp : Int32, p : FixedArray[Int32], off : Int
   let tmp : FixedArray[Int32] = FixedArray::make(sz * sz, 0)
   let out : FixedArray[Int32] = FixedArray::make(sz, 0)
   let use_adst_a = (txtp & 1) != 0 && tx_kind < 3
-  let use_adst_b = (txtp >> 1) != 0 && tx_kind < 3
+  let use_adst_b = txtp >> 1 != 0 && tx_kind < 3
   for i in 0..<sz {
     match tx_kind {
       4 => vp9_iwht4_1d(block, boff + i, sz, tmp, i * sz, 0)
@@ -777,17 +1126,47 @@ fn vp9_itxfm_add(tx_kind : Int32, txtp : Int32, p : FixedArray[Int32], off : Int
 }
 
 ///|
-fn vp9_loop_filter_h(p : FixedArray[Int32], off : Int32, stride : Int32, e : Int32, i : Int32, h : Int32, wd : Int32, bpp : Int32, pixel_max : Int32) -> Unit {
+fn vp9_loop_filter_h(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  e : Int32,
+  i : Int32,
+  h : Int32,
+  wd : Int32,
+  bpp : Int32,
+  pixel_max : Int32,
+) -> Unit {
   vp9_loop_filter_core(p, off, e, i, h, stride, 1, wd, bpp, pixel_max)
 }
 
 ///|
-fn vp9_loop_filter_v(p : FixedArray[Int32], off : Int32, stride : Int32, e : Int32, i : Int32, h : Int32, wd : Int32, bpp : Int32, pixel_max : Int32) -> Unit {
+fn vp9_loop_filter_v(
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  e : Int32,
+  i : Int32,
+  h : Int32,
+  wd : Int32,
+  bpp : Int32,
+  pixel_max : Int32,
+) -> Unit {
   vp9_loop_filter_core(p, off, e, i, h, 1, stride, wd, bpp, pixel_max)
 }
 
 ///|
-fn vp9_loop_filter_16(dir : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, e : Int32, i : Int32, h : Int32, bpp : Int32, pixel_max : Int32) -> Unit {
+fn vp9_loop_filter_16(
+  dir : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  e : Int32,
+  i : Int32,
+  h : Int32,
+  bpp : Int32,
+  pixel_max : Int32,
+) -> Unit {
   if dir == 0 {
     vp9_loop_filter_h(p, off, stride, e, i, h, 16, bpp, pixel_max)
     vp9_loop_filter_h(p, off + 8 * stride, stride, e, i, h, 16, bpp, pixel_max)
@@ -798,7 +1177,19 @@ fn vp9_loop_filter_16(dir : Int32, p : FixedArray[Int32], off : Int32, stride : 
 }
 
 ///|
-fn vp9_loop_filter_mix2(dir : Int32, wd1 : Int32, wd2 : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, e : Int32, i : Int32, h : Int32, bpp : Int32, pixel_max : Int32) -> Unit {
+fn vp9_loop_filter_mix2(
+  dir : Int32,
+  wd1 : Int32,
+  wd2 : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  e : Int32,
+  i : Int32,
+  h : Int32,
+  bpp : Int32,
+  pixel_max : Int32,
+) -> Unit {
   let e1 = e & 0xFF
   let i1 = i & 0xFF
   let h1 = h & 0xFF
@@ -807,16 +1198,33 @@ fn vp9_loop_filter_mix2(dir : Int32, wd1 : Int32, wd2 : Int32, p : FixedArray[In
   let h2 = h >> 8
   if dir == 0 {
     vp9_loop_filter_h(p, off, stride, e1, i1, h1, 4 << wd1, bpp, pixel_max)
-    vp9_loop_filter_h(p, off + 8 * stride, stride, e2, i2, h2, 4 << wd2, bpp, pixel_max)
+    vp9_loop_filter_h(
+      p,
+      off + 8 * stride,
+      stride,
+      e2,
+      i2,
+      h2,
+      4 << wd2,
+      bpp,
+      pixel_max,
+    )
   } else {
     vp9_loop_filter_v(p, off, stride, e1, i1, h1, 4 << wd1, bpp, pixel_max)
     vp9_loop_filter_v(p, off + 8, stride, e2, i2, h2, 4 << wd2, bpp, pixel_max)
   }
 }
+
 ///|
 /// Reconstructed Int64 kernels (`dctint` semantics for 10/12 bpp; identical
 /// to the 8-bit Int32 forms for bounded inputs).
-fn vp9_idct4_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : FixedArray[Int32], obase : Int32) -> Unit {
+fn vp9_idct4_1d(
+  inp : FixedArray[Int32],
+  ibase : Int32,
+  istride : Int32,
+  out : FixedArray[Int32],
+  obase : Int32,
+) -> Unit {
   let i0 = inp[ibase].to_int64()
   let i1 = inp[ibase + istride].to_int64()
   let i2 = inp[ibase + istride * 2].to_int64()
@@ -832,7 +1240,13 @@ fn vp9_idct4_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : F
 }
 
 ///|
-fn vp9_iadst4_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : FixedArray[Int32], obase : Int32) -> Unit {
+fn vp9_iadst4_1d(
+  inp : FixedArray[Int32],
+  ibase : Int32,
+  istride : Int32,
+  out : FixedArray[Int32],
+  obase : Int32,
+) -> Unit {
   let i0 = inp[ibase].to_int64()
   let i1 = inp[ibase + istride].to_int64()
   let i2 = inp[ibase + istride * 2].to_int64()
@@ -848,7 +1262,13 @@ fn vp9_iadst4_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : 
 }
 
 ///|
-fn vp9_idct8_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : FixedArray[Int32], obase : Int32) -> Unit {
+fn vp9_idct8_1d(
+  inp : FixedArray[Int32],
+  ibase : Int32,
+  istride : Int32,
+  out : FixedArray[Int32],
+  obase : Int32,
+) -> Unit {
   let inp1 = (x : Int32) => inp[ibase + x * istride].to_int64()
   let t0a = ((inp1(0) + inp1(4)) * 11585L + (1L << 13)) >> 14
   let t1a = ((inp1(0) - inp1(4)) * 11585L + (1L << 13)) >> 14
@@ -879,7 +1299,13 @@ fn vp9_idct8_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : F
 }
 
 ///|
-fn vp9_iadst8_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : FixedArray[Int32], obase : Int32) -> Unit {
+fn vp9_iadst8_1d(
+  inp : FixedArray[Int32],
+  ibase : Int32,
+  istride : Int32,
+  out : FixedArray[Int32],
+  obase : Int32,
+) -> Unit {
   let inp1 = (x : Int32) => inp[ibase + x * istride].to_int64()
   let t0a = 16305L * inp1(7) + 1606L * inp1(0)
   let t1a = 1606L * inp1(7) - 16305L * inp1(0)
@@ -915,28 +1341,33 @@ fn vp9_iadst8_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : 
   out[obase + 5] = (-(((t6b - t7b) * 11585L + (1L << 13)) >> 14)).to_int()
 }
 
-
 ///|
-fn vp9_idct16_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : FixedArray[Int32], obase : Int32) -> Unit {
+fn vp9_idct16_1d(
+  inp : FixedArray[Int32],
+  ibase : Int32,
+  istride : Int32,
+  out : FixedArray[Int32],
+  obase : Int32,
+) -> Unit {
   let inp1 = (x : Int32) => inp[ibase + x * istride].to_int64()
   // (a + b) * k + (1 << 13) rounded via unsigned wrapping, then arithmetic
   // shift — exactly `(dctint)(expr * kU + (1 << 13)) >> 14`.
   let t0a = ((inp1(0) + inp1(8)) * 11585L + (1L << 13)) >> 14
   let t1a = ((inp1(0) - inp1(8)) * 11585L + (1L << 13)) >> 14
-  let t2a = ((inp1(4)) * 6270L - (inp1(12)) * 15137L + (1L << 13)) >> 14
-  let t3a = ((inp1(4)) * 15137L + (inp1(12)) * 6270L + (1L << 13)) >> 14
-  let t4a = ((inp1(2)) * 3196L - (inp1(14)) * 16069L + (1L << 13)) >> 14
-  let t7a = ((inp1(2)) * 16069L + (inp1(14)) * 3196L + (1L << 13)) >> 14
-  let t5a = ((inp1(10)) * 13623L - (inp1(6)) * 9102L + (1L << 13)) >> 14
-  let t6a = ((inp1(10)) * 9102L + (inp1(6)) * 13623L + (1L << 13)) >> 14
-  let t8a = ((inp1(1)) * 1606L - (inp1(15)) * 16305L + (1L << 13)) >> 14
-  let t15a = ((inp1(1)) * 16305L + (inp1(15)) * 1606L + (1L << 13)) >> 14
-  let t9a = ((inp1(9)) * 12665L - (inp1(7)) * 10394L + (1L << 13)) >> 14
-  let t14a = ((inp1(9)) * 10394L + (inp1(7)) * 12665L + (1L << 13)) >> 14
-  let t10a = ((inp1(5)) * 7723L - (inp1(11)) * 14449L + (1L << 13)) >> 14
-  let t13a = ((inp1(5)) * 14449L + (inp1(11)) * 7723L + (1L << 13)) >> 14
-  let t11a = ((inp1(13)) * 15679L - (inp1(3)) * 4756L + (1L << 13)) >> 14
-  let t12a = ((inp1(13)) * 4756L + (inp1(3)) * 15679L + (1L << 13)) >> 14
+  let t2a = (inp1(4) * 6270L - inp1(12) * 15137L + (1L << 13)) >> 14
+  let t3a = (inp1(4) * 15137L + inp1(12) * 6270L + (1L << 13)) >> 14
+  let t4a = (inp1(2) * 3196L - inp1(14) * 16069L + (1L << 13)) >> 14
+  let t7a = (inp1(2) * 16069L + inp1(14) * 3196L + (1L << 13)) >> 14
+  let t5a = (inp1(10) * 13623L - inp1(6) * 9102L + (1L << 13)) >> 14
+  let t6a = (inp1(10) * 9102L + inp1(6) * 13623L + (1L << 13)) >> 14
+  let t8a = (inp1(1) * 1606L - inp1(15) * 16305L + (1L << 13)) >> 14
+  let t15a = (inp1(1) * 16305L + inp1(15) * 1606L + (1L << 13)) >> 14
+  let t9a = (inp1(9) * 12665L - inp1(7) * 10394L + (1L << 13)) >> 14
+  let t14a = (inp1(9) * 10394L + inp1(7) * 12665L + (1L << 13)) >> 14
+  let t10a = (inp1(5) * 7723L - inp1(11) * 14449L + (1L << 13)) >> 14
+  let t13a = (inp1(5) * 14449L + inp1(11) * 7723L + (1L << 13)) >> 14
+  let t11a = (inp1(13) * 15679L - inp1(3) * 4756L + (1L << 13)) >> 14
+  let t12a = (inp1(13) * 4756L + inp1(3) * 15679L + (1L << 13)) >> 14
   let t0 = t0a + t3a
   let t1 = t1a + t2a
   let t2 = t1a - t2a
@@ -955,10 +1386,10 @@ fn vp9_idct16_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : 
   let t15 = t15a + t14a
   let t5a2 = ((t6 - t5) * 11585L + (1L << 13)) >> 14
   let t6a2 = ((t6 + t5) * 11585L + (1L << 13)) >> 14
-  let t9a2 = ((t14) * 6270L - (t9) * 15137L + (1L << 13)) >> 14
-  let t14a2 = ((t14) * 15137L + (t9) * 6270L + (1L << 13)) >> 14
+  let t9a2 = (t14 * 6270L - t9 * 15137L + (1L << 13)) >> 14
+  let t14a2 = (t14 * 15137L + t9 * 6270L + (1L << 13)) >> 14
   let t10a2 = (-(t13 * 15137L + t10 * 6270L) + (1L << 13)) >> 14
-  let t13a2 = ((t13) * 6270L - (t10) * 15137L + (1L << 13)) >> 14
+  let t13a2 = (t13 * 6270L - t10 * 15137L + (1L << 13)) >> 14
   let t0a2 = t0 + t7
   let t1a2 = t1 + t6a2
   let t2a2 = t2 + t5a2
@@ -998,7 +1429,13 @@ fn vp9_idct16_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : 
 }
 
 ///|
-fn vp9_iadst16_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : FixedArray[Int32], obase : Int32) -> Unit {
+fn vp9_iadst16_1d(
+  inp : FixedArray[Int32],
+  ibase : Int32,
+  istride : Int32,
+  out : FixedArray[Int32],
+  obase : Int32,
+) -> Unit {
   let inp1 = (x : Int32) => inp[ibase + x * istride].to_int64()
   let t0 = inp1(15) * 16364L + inp1(0) * 804L
   let t1 = inp1(15) * 804L - inp1(0) * 16364L
@@ -1092,40 +1529,46 @@ fn vp9_iadst16_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out :
 }
 
 ///|
-fn vp9_idct32_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : FixedArray[Int32], obase : Int32) -> Unit {
+fn vp9_idct32_1d(
+  inp : FixedArray[Int32],
+  ibase : Int32,
+  istride : Int32,
+  out : FixedArray[Int32],
+  obase : Int32,
+) -> Unit {
   let inp1 = (x : Int32) => inp[ibase + x * istride].to_int64()
   let t0a = ((inp1(0) + inp1(16)) * 11585L + (1L << 13)) >> 14
   let t1a = ((inp1(0) - inp1(16)) * 11585L + (1L << 13)) >> 14
-  let t2a = ((inp1(8)) * 6270L - (inp1(24)) * 15137L + (1L << 13)) >> 14
-  let t3a = ((inp1(8)) * 15137L + (inp1(24)) * 6270L + (1L << 13)) >> 14
-  let t4a = ((inp1(4)) * 3196L - (inp1(28)) * 16069L + (1L << 13)) >> 14
-  let t7a = ((inp1(4)) * 16069L + (inp1(28)) * 3196L + (1L << 13)) >> 14
-  let t5a = ((inp1(20)) * 13623L - (inp1(12)) * 9102L + (1L << 13)) >> 14
-  let t6a = ((inp1(20)) * 9102L + (inp1(12)) * 13623L + (1L << 13)) >> 14
-  let t8a = ((inp1(2)) * 1606L - (inp1(30)) * 16305L + (1L << 13)) >> 14
-  let t15a = ((inp1(2)) * 16305L + (inp1(30)) * 1606L + (1L << 13)) >> 14
-  let t9a = ((inp1(18)) * 12665L - (inp1(14)) * 10394L + (1L << 13)) >> 14
-  let t14a = ((inp1(18)) * 10394L + (inp1(14)) * 12665L + (1L << 13)) >> 14
-  let t10a = ((inp1(10)) * 7723L - (inp1(22)) * 14449L + (1L << 13)) >> 14
-  let t13a = ((inp1(10)) * 14449L + (inp1(22)) * 7723L + (1L << 13)) >> 14
-  let t11a = ((inp1(26)) * 15679L - (inp1(6)) * 4756L + (1L << 13)) >> 14
-  let t12a = ((inp1(26)) * 4756L + (inp1(6)) * 15679L + (1L << 13)) >> 14
-  let t16a = ((inp1(1)) * 804L - (inp1(31)) * 16364L + (1L << 13)) >> 14
-  let t31a = ((inp1(1)) * 16364L + (inp1(31)) * 804L + (1L << 13)) >> 14
-  let t17a = ((inp1(17)) * 12140L - (inp1(15)) * 11003L + (1L << 13)) >> 14
-  let t30a = ((inp1(17)) * 11003L + (inp1(15)) * 12140L + (1L << 13)) >> 14
-  let t18a = ((inp1(9)) * 7005L - (inp1(23)) * 14811L + (1L << 13)) >> 14
-  let t29a = ((inp1(9)) * 14811L + (inp1(23)) * 7005L + (1L << 13)) >> 14
-  let t19a = ((inp1(25)) * 15426L - (inp1(7)) * 5520L + (1L << 13)) >> 14
-  let t28a = ((inp1(25)) * 5520L + (inp1(7)) * 15426L + (1L << 13)) >> 14
-  let t20a = ((inp1(5)) * 3981L - (inp1(27)) * 15893L + (1L << 13)) >> 14
-  let t27a = ((inp1(5)) * 15893L + (inp1(27)) * 3981L + (1L << 13)) >> 14
-  let t21a = ((inp1(21)) * 14053L - (inp1(11)) * 8423L + (1L << 13)) >> 14
-  let t26a = ((inp1(21)) * 8423L + (inp1(11)) * 14053L + (1L << 13)) >> 14
-  let t22a = ((inp1(13)) * 9760L - (inp1(19)) * 13160L + (1L << 13)) >> 14
-  let t25a = ((inp1(13)) * 13160L + (inp1(19)) * 9760L + (1L << 13)) >> 14
-  let t23a = ((inp1(29)) * 16207L - (inp1(3)) * 2404L + (1L << 13)) >> 14
-  let t24a = ((inp1(29)) * 2404L + (inp1(3)) * 16207L + (1L << 13)) >> 14
+  let t2a = (inp1(8) * 6270L - inp1(24) * 15137L + (1L << 13)) >> 14
+  let t3a = (inp1(8) * 15137L + inp1(24) * 6270L + (1L << 13)) >> 14
+  let t4a = (inp1(4) * 3196L - inp1(28) * 16069L + (1L << 13)) >> 14
+  let t7a = (inp1(4) * 16069L + inp1(28) * 3196L + (1L << 13)) >> 14
+  let t5a = (inp1(20) * 13623L - inp1(12) * 9102L + (1L << 13)) >> 14
+  let t6a = (inp1(20) * 9102L + inp1(12) * 13623L + (1L << 13)) >> 14
+  let t8a = (inp1(2) * 1606L - inp1(30) * 16305L + (1L << 13)) >> 14
+  let t15a = (inp1(2) * 16305L + inp1(30) * 1606L + (1L << 13)) >> 14
+  let t9a = (inp1(18) * 12665L - inp1(14) * 10394L + (1L << 13)) >> 14
+  let t14a = (inp1(18) * 10394L + inp1(14) * 12665L + (1L << 13)) >> 14
+  let t10a = (inp1(10) * 7723L - inp1(22) * 14449L + (1L << 13)) >> 14
+  let t13a = (inp1(10) * 14449L + inp1(22) * 7723L + (1L << 13)) >> 14
+  let t11a = (inp1(26) * 15679L - inp1(6) * 4756L + (1L << 13)) >> 14
+  let t12a = (inp1(26) * 4756L + inp1(6) * 15679L + (1L << 13)) >> 14
+  let t16a = (inp1(1) * 804L - inp1(31) * 16364L + (1L << 13)) >> 14
+  let t31a = (inp1(1) * 16364L + inp1(31) * 804L + (1L << 13)) >> 14
+  let t17a = (inp1(17) * 12140L - inp1(15) * 11003L + (1L << 13)) >> 14
+  let t30a = (inp1(17) * 11003L + inp1(15) * 12140L + (1L << 13)) >> 14
+  let t18a = (inp1(9) * 7005L - inp1(23) * 14811L + (1L << 13)) >> 14
+  let t29a = (inp1(9) * 14811L + inp1(23) * 7005L + (1L << 13)) >> 14
+  let t19a = (inp1(25) * 15426L - inp1(7) * 5520L + (1L << 13)) >> 14
+  let t28a = (inp1(25) * 5520L + inp1(7) * 15426L + (1L << 13)) >> 14
+  let t20a = (inp1(5) * 3981L - inp1(27) * 15893L + (1L << 13)) >> 14
+  let t27a = (inp1(5) * 15893L + inp1(27) * 3981L + (1L << 13)) >> 14
+  let t21a = (inp1(21) * 14053L - inp1(11) * 8423L + (1L << 13)) >> 14
+  let t26a = (inp1(21) * 8423L + inp1(11) * 14053L + (1L << 13)) >> 14
+  let t22a = (inp1(13) * 9760L - inp1(19) * 13160L + (1L << 13)) >> 14
+  let t25a = (inp1(13) * 13160L + inp1(19) * 9760L + (1L << 13)) >> 14
+  let t23a = (inp1(29) * 16207L - inp1(3) * 2404L + (1L << 13)) >> 14
+  let t24a = (inp1(29) * 2404L + inp1(3) * 16207L + (1L << 13)) >> 14
   let t0 = t0a + t3a
   let t1 = t1a + t2a
   let t2 = t1a - t2a
@@ -1160,18 +1603,18 @@ fn vp9_idct32_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : 
   let t31 = t31a + t30a
   let t5a2 = ((t6 - t5) * 11585L + (1L << 13)) >> 14
   let t6a2 = ((t6 + t5) * 11585L + (1L << 13)) >> 14
-  let t9a2 = ((t14) * 6270L - (t9) * 15137L + (1L << 13)) >> 14
-  let t14a2 = ((t14) * 15137L + (t9) * 6270L + (1L << 13)) >> 14
+  let t9a2 = (t14 * 6270L - t9 * 15137L + (1L << 13)) >> 14
+  let t14a2 = (t14 * 15137L + t9 * 6270L + (1L << 13)) >> 14
   let t10a2 = (-(t13 * 15137L + t10 * 6270L) + (1L << 13)) >> 14
-  let t13a2 = ((t13) * 6270L - (t10) * 15137L + (1L << 13)) >> 14
-  let t17a2 = ((t30) * 3196L - (t17) * 16069L + (1L << 13)) >> 14
-  let t30a2 = ((t30) * 16069L + (t17) * 3196L + (1L << 13)) >> 14
+  let t13a2 = (t13 * 6270L - t10 * 15137L + (1L << 13)) >> 14
+  let t17a2 = (t30 * 3196L - t17 * 16069L + (1L << 13)) >> 14
+  let t30a2 = (t30 * 16069L + t17 * 3196L + (1L << 13)) >> 14
   let t18a2 = (-(t29 * 16069L + t18 * 3196L) + (1L << 13)) >> 14
-  let t29a2 = ((t29) * 3196L - (t18) * 16069L + (1L << 13)) >> 14
-  let t21a2 = ((t26) * 13623L - (t21) * 9102L + (1L << 13)) >> 14
-  let t26a2 = ((t26) * 9102L + (t21) * 13623L + (1L << 13)) >> 14
+  let t29a2 = (t29 * 3196L - t18 * 16069L + (1L << 13)) >> 14
+  let t21a2 = (t26 * 13623L - t21 * 9102L + (1L << 13)) >> 14
+  let t26a2 = (t26 * 9102L + t21 * 13623L + (1L << 13)) >> 14
   let t22a2 = (-(t25 * 9102L + t22 * 13623L) + (1L << 13)) >> 14
-  let t25a2 = ((t25) * 13623L - (t22) * 9102L + (1L << 13)) >> 14
+  let t25a2 = (t25 * 13623L - t22 * 9102L + (1L << 13)) >> 14
   let t0a2 = t0 + t7
   let t1a2 = t1 + t6a2
   let t2a2 = t2 + t5a2
@@ -1208,14 +1651,14 @@ fn vp9_idct32_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : 
   let t13a3 = ((t13b + t10b) * 11585L + (1L << 13)) >> 14
   let t11b = ((t12a2 - t11a2) * 11585L + (1L << 13)) >> 14
   let t12b = ((t12a2 + t11a2) * 11585L + (1L << 13)) >> 14
-  let t18a3 = ((t29b) * 6270L - (t18b) * 15137L + (1L << 13)) >> 14
-  let t29a3 = ((t29b) * 15137L + (t18b) * 6270L + (1L << 13)) >> 14
-  let t19b = ((t28a2) * 6270L - (t19a2) * 15137L + (1L << 13)) >> 14
-  let t28b = ((t28a2) * 15137L + (t19a2) * 6270L + (1L << 13)) >> 14
+  let t18a3 = (t29b * 6270L - t18b * 15137L + (1L << 13)) >> 14
+  let t29a3 = (t29b * 15137L + t18b * 6270L + (1L << 13)) >> 14
+  let t19b = (t28a2 * 6270L - t19a2 * 15137L + (1L << 13)) >> 14
+  let t28b = (t28a2 * 15137L + t19a2 * 6270L + (1L << 13)) >> 14
   let t20b = (-(t27a2 * 15137L + t20a2 * 6270L) + (1L << 13)) >> 14
-  let t27b = ((t27a2) * 6270L - (t20a2) * 15137L + (1L << 13)) >> 14
+  let t27b = (t27a2 * 6270L - t20a2 * 15137L + (1L << 13)) >> 14
   let t21a3 = (-(t26b * 15137L + t21b * 6270L) + (1L << 13)) >> 14
-  let t26a3 = ((t26b) * 6270L - (t21b) * 15137L + (1L << 13)) >> 14
+  let t26a3 = (t26b * 6270L - t21b * 15137L + (1L << 13)) >> 14
   let t0b = t0a2 + t15a2
   let t1b = t1a2 + t14b
   let t2b = t2a2 + t13a3
@@ -1289,8 +1732,17 @@ fn vp9_idct32_1d(inp : FixedArray[Int32], ibase : Int32, istride : Int32, out : 
   out[obase + 30] = (t1b - t30c).to_int()
   out[obase + 31] = (t0b - t31b).to_int()
 }
+
 ///|
-fn vp9_pred_tm(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32], pixel_max : Int32) -> Unit {
+fn vp9_pred_tm(
+  n : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+  pixel_max : Int32,
+) -> Unit {
   let tl = top[0]
   for y in 0..<n {
     let l_m_tl = left[n - 1 - y] - tl
@@ -1301,59 +1753,65 @@ fn vp9_pred_tm(n : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, le
 }
 
 ///|
-fn vp9_intra_pred(tx : Int32, mode : Int32, p : FixedArray[Int32], off : Int32, stride : Int32, left : FixedArray[Int32], top : FixedArray[Int32], pixel_mid : Int32, pixel_max : Int32) -> Unit {
+fn vp9_intra_pred(
+  tx : Int32,
+  mode : Int32,
+  p : FixedArray[Int32],
+  off : Int32,
+  stride : Int32,
+  left : FixedArray[Int32],
+  top : FixedArray[Int32],
+  pixel_mid : Int32,
+  pixel_max : Int32,
+) -> Unit {
   let n = 4 << tx
   match mode {
     m if m == VP9_VERT_PRED => vp9_pred_vert(n, p, off, stride, top)
     m if m == VP9_HOR_PRED => vp9_pred_hor(n, p, off, stride, left)
     m if m == VP9_DC_PRED => vp9_pred_dc(n, p, off, stride, left, top)
-    m if m == VP9_DIAG_DOWN_LEFT_PRED => {
+    m if m == VP9_DIAG_DOWN_LEFT_PRED =>
       if tx == 0 {
         vp9_pred_diag_downleft_4x4(p, off, stride, top)
       } else {
         vp9_pred_diag_downleft(n, p, off, stride, top)
       }
-    }
-    m if m == VP9_DIAG_DOWN_RIGHT_PRED => {
+    m if m == VP9_DIAG_DOWN_RIGHT_PRED =>
       if tx == 0 {
         vp9_pred_diag_downright_4x4(p, off, stride, left, top)
       } else {
         vp9_pred_diag_downright(n, p, off, stride, left, top)
       }
-    }
-    m if m == VP9_VERT_RIGHT_PRED => {
+    m if m == VP9_VERT_RIGHT_PRED =>
       if tx == 0 {
         vp9_pred_vert_right_4x4(p, off, stride, left, top)
       } else {
         vp9_pred_vert_right(n, p, off, stride, left, top)
       }
-    }
-    m if m == VP9_HOR_DOWN_PRED => {
+    m if m == VP9_HOR_DOWN_PRED =>
       if tx == 0 {
         vp9_pred_hor_down_4x4(p, off, stride, left, top)
       } else {
         vp9_pred_hor_down(n, p, off, stride, left, top)
       }
-    }
-    m if m == VP9_VERT_LEFT_PRED => {
+    m if m == VP9_VERT_LEFT_PRED =>
       if tx == 0 {
         vp9_pred_vert_left_4x4(p, off, stride, top)
       } else {
         vp9_pred_vert_left(n, p, off, stride, top)
       }
-    }
-    m if m == VP9_HOR_UP_PRED => {
+    m if m == VP9_HOR_UP_PRED =>
       if tx == 0 {
         vp9_pred_hor_up_4x4(p, off, stride, left)
       } else {
         vp9_pred_hor_up(n, p, off, stride, left)
       }
-    }
-    m if m == VP9_TM_VP8_PRED => vp9_pred_tm(n, p, off, stride, left, top, pixel_max)
+    m if m == VP9_TM_VP8_PRED =>
+      vp9_pred_tm(n, p, off, stride, left, top, pixel_max)
     m if m == VP9_LEFT_DC_PRED => vp9_pred_dc_left(n, p, off, stride, left)
     m if m == VP9_TOP_DC_PRED => vp9_pred_dc_top(n, p, off, stride, top)
     m if m == VP9_DC_128_PRED => vp9_pred_dc_const(pixel_mid, n, p, off, stride)
-    m if m == VP9_DC_127_PRED => vp9_pred_dc_const(pixel_mid - 1, n, p, off, stride)
+    m if m == VP9_DC_127_PRED =>
+      vp9_pred_dc_const(pixel_mid - 1, n, p, off, stride)
     _ => vp9_pred_dc_const(pixel_mid + 1, n, p, off, stride)
   }
 }

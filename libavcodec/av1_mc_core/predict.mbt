@@ -28,10 +28,18 @@ fn av1_mc_scale_position(origin : Int32, scale : Int32) -> Int32 {
 /// unscaled or scaled MC kernels. The current and reference dimensions are
 /// full-resolution luma dimensions; `ss_h`/`ss_v` describe this plane.
 pub fn av1_mc_plane_position(
-  cur_width : Int32, cur_height : Int32,
-  ref_width : Int32, ref_height : Int32,
-  bx4 : Int32, by4 : Int32, bw4 : Int32, bh4 : Int32,
-  mv_y : Int32, mv_x : Int32, ss_h : Int32, ss_v : Int32,
+  cur_width : Int32,
+  cur_height : Int32,
+  ref_width : Int32,
+  ref_height : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
+  mv_y : Int32,
+  mv_x : Int32,
+  ss_h : Int32,
+  ss_v : Int32,
 ) -> Av1McPlanePosition {
   let h_mul = 4 >> ss_h
   let v_mul = 4 >> ss_v
@@ -39,12 +47,15 @@ pub fn av1_mc_plane_position(
   let h = bh4 * v_mul
   if cur_width == ref_width && cur_height == ref_height {
     return {
-      w, h, scaled: false,
+      w,
+      h,
+      scaled: false,
       src_x: bx4 * h_mul + (mv_x >> (3 + ss_h)),
       src_y: by4 * v_mul + (mv_y >> (3 + ss_v)),
       mx: (mv_x & (15 >> (1 - ss_h))) << (1 - ss_h),
       my: (mv_y & (15 >> (1 - ss_v))) << (1 - ss_v),
-      step_x: 1024, step_y: 1024,
+      step_x: 1024,
+      step_y: 1024,
     }
   }
   let scale_x = ((ref_width << 14) + (cur_width >> 1)) / cur_width
@@ -52,8 +63,11 @@ pub fn av1_mc_plane_position(
   let orig_x = ((bx4 * h_mul) << 4) + mv_x * (1 << (1 - ss_h))
   let orig_y = ((by4 * v_mul) << 4) + mv_y * (1 << (1 - ss_v))
   {
-    w, h, scaled: true,
-    src_x: 0, src_y: 0,
+    w,
+    h,
+    scaled: true,
+    src_x: 0,
+    src_y: 0,
     mx: av1_mc_scale_position(orig_x, scale_x),
     my: av1_mc_scale_position(orig_y, scale_y),
     step_x: (scale_x + 8) >> 4,
@@ -65,28 +79,58 @@ pub fn av1_mc_plane_position(
 /// Predict a single plane from a decoded reference frame. Edge samples are
 /// repeated by the underlying kernels, matching dav1d's edge emulation.
 pub fn av1_mc_predict_plane(
-  src : FixedArray[Int32], stride : Int32,
-  ref_width : Int32, ref_height : Int32,
-  cur_width : Int32, cur_height : Int32,
-  bx4 : Int32, by4 : Int32, bw4 : Int32, bh4 : Int32,
-  mv_y : Int32, mv_x : Int32, ss_h : Int32, ss_v : Int32,
-  filter_type : Int32, bitdepth : Int32,
+  src : FixedArray[Int32],
+  stride : Int32,
+  ref_width : Int32,
+  ref_height : Int32,
+  cur_width : Int32,
+  cur_height : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
+  mv_y : Int32,
+  mv_x : Int32,
+  ss_h : Int32,
+  ss_v : Int32,
+  filter_type : Int32,
+  bitdepth : Int32,
 ) -> FixedArray[Int32] {
   let pos = av1_mc_plane_position(
-    cur_width, cur_height, ref_width, ref_height,
-    bx4, by4, bw4, bh4, mv_y, mv_x, ss_h, ss_v,
+    cur_width, cur_height, ref_width, ref_height, bx4, by4, bw4, bh4, mv_y, mv_x,
+    ss_h, ss_v,
   )
   let plane_w = (ref_width + ss_h) >> ss_h
   let plane_h = (ref_height + ss_v) >> ss_v
   if pos.scaled {
     av1_mc_put_scaled(
-      src, stride, plane_w, plane_h, pos.w, pos.h,
-      pos.mx, pos.my, pos.step_x, pos.step_y, filter_type, bitdepth,
+      src,
+      stride,
+      plane_w,
+      plane_h,
+      pos.w,
+      pos.h,
+      pos.mx,
+      pos.my,
+      pos.step_x,
+      pos.step_y,
+      filter_type,
+      bitdepth,
     )
   } else {
     av1_mc_put_unscaled(
-      src, stride, plane_w, plane_h, pos.src_x, pos.src_y,
-      pos.w, pos.h, pos.mx, pos.my, filter_type, bitdepth,
+      src,
+      stride,
+      plane_w,
+      plane_h,
+      pos.src_x,
+      pos.src_y,
+      pos.w,
+      pos.h,
+      pos.mx,
+      pos.my,
+      filter_type,
+      bitdepth,
     )
   }
 }
@@ -94,28 +138,58 @@ pub fn av1_mc_predict_plane(
 ///|
 /// Prepare one plane at compound-prediction precision for avg/mask blending.
 pub fn av1_mc_prepare_plane(
-  src : FixedArray[Int32], stride : Int32,
-  ref_width : Int32, ref_height : Int32,
-  cur_width : Int32, cur_height : Int32,
-  bx4 : Int32, by4 : Int32, bw4 : Int32, bh4 : Int32,
-  mv_y : Int32, mv_x : Int32, ss_h : Int32, ss_v : Int32,
-  filter_type : Int32, bitdepth : Int32,
+  src : FixedArray[Int32],
+  stride : Int32,
+  ref_width : Int32,
+  ref_height : Int32,
+  cur_width : Int32,
+  cur_height : Int32,
+  bx4 : Int32,
+  by4 : Int32,
+  bw4 : Int32,
+  bh4 : Int32,
+  mv_y : Int32,
+  mv_x : Int32,
+  ss_h : Int32,
+  ss_v : Int32,
+  filter_type : Int32,
+  bitdepth : Int32,
 ) -> FixedArray[Int32] {
   let pos = av1_mc_plane_position(
-    cur_width, cur_height, ref_width, ref_height,
-    bx4, by4, bw4, bh4, mv_y, mv_x, ss_h, ss_v,
+    cur_width, cur_height, ref_width, ref_height, bx4, by4, bw4, bh4, mv_y, mv_x,
+    ss_h, ss_v,
   )
   let plane_w = (ref_width + ss_h) >> ss_h
   let plane_h = (ref_height + ss_v) >> ss_v
   if pos.scaled {
     av1_mc_prep_scaled(
-      src, stride, plane_w, plane_h, pos.w, pos.h,
-      pos.mx, pos.my, pos.step_x, pos.step_y, filter_type, bitdepth,
+      src,
+      stride,
+      plane_w,
+      plane_h,
+      pos.w,
+      pos.h,
+      pos.mx,
+      pos.my,
+      pos.step_x,
+      pos.step_y,
+      filter_type,
+      bitdepth,
     )
   } else {
     av1_mc_prep_unscaled(
-      src, stride, plane_w, plane_h, pos.src_x, pos.src_y,
-      pos.w, pos.h, pos.mx, pos.my, filter_type, bitdepth,
+      src,
+      stride,
+      plane_w,
+      plane_h,
+      pos.src_x,
+      pos.src_y,
+      pos.w,
+      pos.h,
+      pos.mx,
+      pos.my,
+      filter_type,
+      bitdepth,
     )
   }
 }

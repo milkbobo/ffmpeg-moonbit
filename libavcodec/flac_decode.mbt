@@ -35,8 +35,7 @@ let flac_sample_rates : FixedArray[Int32] = [
 ///|
 /// `ff_flac_blocksize_table[16]`.
 let flac_blocksizes : FixedArray[Int32] = [
-  0, 192, 576, 1152, 2304, 4608, 0, 0, 256, 512, 1024, 2048, 4096, 8192, 16384,
-  32768,
+  0, 192, 576, 1152, 2304, 4608, 0, 0, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
 ]
 
 ///|
@@ -143,7 +142,7 @@ fn flac_decode_residuals(
     return Err("flac: illegal residual coding method")
   }
   let samples = blocksize >> rice_order
-  if (samples << rice_order) != blocksize {
+  if samples << rice_order != blocksize {
     return Err("flac: invalid rice order")
   }
   if pred_order > samples {
@@ -152,7 +151,7 @@ fn flac_decode_residuals(
   let rice_bits = 4 + method_type
   let rice_esc = (1 << rice_bits) - 1
   let mut wi = pred_order
-  for partition = 0; partition < (1 << rice_order); partition = partition + 1 {
+  for partition = 0; partition < 1 << rice_order; partition = partition + 1 {
     let count = if partition == 0 { samples - pred_order } else { samples }
     let param = gb.read(rice_bits).reinterpret_as_int()
     if param == rice_esc {
@@ -201,11 +200,13 @@ fn flac_decode_subframe_fixed(
     b = a - decoded[pred_order - 2].reinterpret_as_uint()
   }
   if pred_order > 2 {
-    c = b - decoded[pred_order - 2].reinterpret_as_uint() +
+    c = b -
+      decoded[pred_order - 2].reinterpret_as_uint() +
       decoded[pred_order - 3].reinterpret_as_uint()
   }
   if pred_order > 3 {
-    d = c - decoded[pred_order - 2].reinterpret_as_uint() +
+    d = c -
+      decoded[pred_order - 2].reinterpret_as_uint() +
       2 * decoded[pred_order - 3].reinterpret_as_uint() -
       decoded[pred_order - 4].reinterpret_as_uint()
   }
@@ -383,7 +384,10 @@ priv struct FlacFrame {
 ///|
 /// `ff_flac_decode_frame_header`, minus CRC verification. The reader is left
 /// at the start of the first subframe.
-fn flac_frame_header(gb : BitReader, stream_bps : Int32) -> Result[FlacFrame, String] {
+fn flac_frame_header(
+  gb : BitReader,
+  stream_bps : Int32,
+) -> Result[FlacFrame, String] {
   if (gb.read(15) & 0x7FFF) != 0x7FFC {
     return Err("flac: invalid frame sync")
   }
@@ -444,7 +448,7 @@ fn flac_frame_header(gb : BitReader, stream_bps : Int32) -> Result[FlacFrame, St
   } else if stream_bps != 0 && bps != stream_bps {
     return Err("flac: bit depth changes mid-stream")
   }
-  Ok({ blocksize, channels, ch_mode, bps })
+  Ok({ blocksize, channels, ch_mode, bps, })
 }
 
 ///|
@@ -514,15 +518,14 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
     }
     more_metadata = !last
   }
-  if !got_streaminfo || stream_bps <= 0 || stream_bps > 24 || stream_channels <= 0 {
+  if !got_streaminfo ||
+    stream_bps <= 0 ||
+    stream_bps > 24 ||
+    stream_channels <= 0 {
     return Err("flac: unsupported stream parameters")
   }
   let _ = max_blocksize
-  let shift = if stream_bps <= 16 {
-    16 - stream_bps
-  } else {
-    32 - stream_bps
-  }
+  let shift = if stream_bps <= 16 { 16 - stream_bps } else { 32 - stream_bps }
   let samples : Array[Int32] = []
   let mut decoded_total = 0L
   while true {
@@ -548,7 +551,12 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
     let decoded1 : Array[Int32] = Array::make(frame.blocksize, 0)
     match
       flac_decode_subframe(
-        gb, decoded0, 0, frame.ch_mode, frame.bps, frame.blocksize,
+        gb,
+        decoded0,
+        0,
+        frame.ch_mode,
+        frame.bps,
+        frame.blocksize,
       ) {
       Ok(_) => ()
       Err(e) => return Err(e)
@@ -556,7 +564,12 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
     if frame.channels == 2 {
       match
         flac_decode_subframe(
-          gb, decoded1, 1, frame.ch_mode, frame.bps, frame.blocksize,
+          gb,
+          decoded1,
+          1,
+          frame.ch_mode,
+          frame.bps,
+          frame.blocksize,
         ) {
         Ok(_) => ()
         Err(e) => return Err(e)
@@ -566,7 +579,9 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
     gb.skip(16) // frame CRC-16
     for i = 0; i < frame.blocksize; i = i + 1 {
       if frame.channels == 1 {
-        samples.push((decoded0[i].reinterpret_as_uint() << shift).reinterpret_as_int())
+        samples.push(
+          (decoded0[i].reinterpret_as_uint() << shift).reinterpret_as_int(),
+        )
       } else {
         let a = decoded0[i].reinterpret_as_uint()
         let b = decoded1[i].reinterpret_as_uint()

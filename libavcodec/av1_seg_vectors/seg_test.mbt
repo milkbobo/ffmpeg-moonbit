@@ -18,17 +18,17 @@ test "av1 rav1e segmentation and switchable restoration match libdav1d" {
   }
   let ivf = @libavutil.av_base64_decode(Bytes::from_array(encoded[:]), 1048576).unwrap()
   let want = [
-    "6d2e878462c1662a0d512bdfe777939f",
-    "409f3b3dba66f0ad7d11d913c562ed9d",
-    "4697af2a0fe6608f8d665fb11c1265a9",
+    "6d2e878462c1662a0d512bdfe777939f", "409f3b3dba66f0ad7d11d913c562ed9d", "4697af2a0fe6608f8d665fb11c1265a9",
     "82650ec88b7303f28d4d9e90bbfc5a56",
   ]
   let mut pos = 32
   let mut seq : @libavcodec.Av1SequenceParameters? = None
   let mut frame = 0
   while pos + 12 <= ivf.length() {
-    let size = ivf[pos].to_int() | (ivf[pos + 1].to_int() << 8) |
-      (ivf[pos + 2].to_int() << 16) | (ivf[pos + 3].to_int() << 24)
+    let size = ivf[pos].to_int() |
+      (ivf[pos + 1].to_int() << 8) |
+      (ivf[pos + 2].to_int() << 16) |
+      (ivf[pos + 3].to_int() << 24)
     let obus = ivf[pos + 12:pos + 12 + size].to_owned()
     pos = pos + 12 + size
     if seq is None {

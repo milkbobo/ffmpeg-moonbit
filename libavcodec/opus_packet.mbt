@@ -229,13 +229,17 @@ fn opus_parse_packet_view(
     } else {
       if self_delimiting {
         let size = opus_lacing_16bit(data, pos)
-        if size < 0 || padding > len - pos.val || size > (len - pos.val - padding) / frame_count {
+        if size < 0 ||
+          padding > len - pos.val ||
+          size > (len - pos.val - padding) / frame_count {
           return Err("opus: bad self-delimited frame length")
         }
         data_end = pos.val + size * frame_count + padding
       }
       let frame_bytes = data_end - pos.val - padding
-      if frame_bytes < 0 { return Err("opus: padding exceeds packet") }
+      if frame_bytes < 0 {
+        return Err("opus: padding exceeds packet")
+      }
       if frame_bytes % frame_count != 0 {
         return Err("opus: CBR payload not divisible by frame count")
       }
@@ -248,7 +252,9 @@ fn opus_parse_packet_view(
   let offsets : Array[Int32] = []
   let mut offset = pos.val
   for size in sizes {
-    if size < 0 || size > 1275 { return Err("opus: frame size exceeds 1275 bytes") }
+    if size < 0 || size > 1275 {
+      return Err("opus: frame size exceeds 1275 bytes")
+    }
     offsets.push(offset)
     offset += size
   }

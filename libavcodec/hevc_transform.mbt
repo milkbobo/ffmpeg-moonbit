@@ -305,7 +305,19 @@ pub fn hevc_idct(
   let vshift = 20 - bd
   let vadd = 1 << (vshift - 1)
   for row in 0..<h {
-    hevc_tr(h, coeffs, row * h, 1, coeffs, row * h, 1, limit, vadd, vshift, true)
+    hevc_tr(
+      h,
+      coeffs,
+      row * h,
+      1,
+      coeffs,
+      row * h,
+      1,
+      limit,
+      vadd,
+      vshift,
+      true,
+    )
   }
   Ok(())
 }

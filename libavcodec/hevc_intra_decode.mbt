@@ -176,7 +176,7 @@ fn HevcIntraDecoder::start_slice(
     for e in list.entries {
       entries.push(e)
     }
-    snap.push({ entries: entries })
+    snap.push({ entries, })
   }
   self.slice_rpls.push(snap)
   self.qp_y = slice_qp
@@ -923,7 +923,8 @@ fn HevcIntraDecoder::transform_tree(
       while j < size {
         let mut i = 0
         while i < size {
-          self.cbf_luma_tab[((y0 + j) >> sps.log2_min_tb_size) * sps.min_tb_width +
+          self.cbf_luma_tab[((y0 + j) >> sps.log2_min_tb_size) *
+          sps.min_tb_width +
           ((x0 + i) >> sps.log2_min_tb_size)] = 1
           i = i + min_tu
         }
@@ -967,16 +968,16 @@ fn HevcIntraDecoder::coding_unit(
   let mut skip = false
   if self.sh.slice_type != hevc_slice_i {
     skip = self.cabac.skip_flag(
-      self.skip_flag,
-      x0 & (ctb_size - 1),
-      y0 & (ctb_size - 1),
-      x_cb,
-      y_cb,
-      sps.min_cb_width,
-      self.ctb_left,
-      self.ctb_up,
-    ) !=
-    0
+        self.skip_flag,
+        x0 & (ctb_size - 1),
+        y0 & (ctb_size - 1),
+        x_cb,
+        y_cb,
+        sps.min_cb_width,
+        self.ctb_left,
+        self.ctb_up,
+      ) !=
+      0
     let v = if skip { 1 } else { 0 }
     for y in 0..<length {
       for x in 0..<length {
@@ -1017,34 +1018,122 @@ fn HevcIntraDecoder::coding_unit(
           self.prediction_unit(x0, y0, cb_size, cb_size, log2_cb_size, 0, false)
         p if p == hevc_part_2nxn => {
           self.prediction_unit(x0, y0, cb_size, half, log2_cb_size, 0, false)
-          self.prediction_unit(x0, y0 + half, cb_size, half, log2_cb_size, 1, false)
+          self.prediction_unit(
+            x0,
+            y0 + half,
+            cb_size,
+            half,
+            log2_cb_size,
+            1,
+            false,
+          )
         }
         p if p == hevc_part_nx2n => {
           self.prediction_unit(x0, y0, half, cb_size, log2_cb_size, 0, false)
-          self.prediction_unit(x0 + half, y0, half, cb_size, log2_cb_size, 1, false)
+          self.prediction_unit(
+            x0 + half,
+            y0,
+            half,
+            cb_size,
+            log2_cb_size,
+            1,
+            false,
+          )
         }
         p if p == hevc_part_2nxnu => {
           self.prediction_unit(x0, y0, cb_size, quarter, log2_cb_size, 0, false)
-          self.prediction_unit(x0, y0 + quarter, cb_size, cb_size - quarter, log2_cb_size, 1, false)
+          self.prediction_unit(
+            x0,
+            y0 + quarter,
+            cb_size,
+            cb_size - quarter,
+            log2_cb_size,
+            1,
+            false,
+          )
         }
         p if p == hevc_part_2nxnd => {
-          self.prediction_unit(x0, y0, cb_size, cb_size - quarter, log2_cb_size, 0, false)
-          self.prediction_unit(x0, y0 + cb_size - quarter, cb_size, quarter, log2_cb_size, 1, false)
+          self.prediction_unit(
+            x0,
+            y0,
+            cb_size,
+            cb_size - quarter,
+            log2_cb_size,
+            0,
+            false,
+          )
+          self.prediction_unit(
+            x0,
+            y0 + cb_size - quarter,
+            cb_size,
+            quarter,
+            log2_cb_size,
+            1,
+            false,
+          )
         }
         p if p == hevc_part_nlx2n => {
           self.prediction_unit(x0, y0, quarter, cb_size, log2_cb_size, 0, false)
-          self.prediction_unit(x0 + quarter, y0, cb_size - quarter, cb_size, log2_cb_size, 1, false)
+          self.prediction_unit(
+            x0 + quarter,
+            y0,
+            cb_size - quarter,
+            cb_size,
+            log2_cb_size,
+            1,
+            false,
+          )
         }
         p if p == hevc_part_nrx2n => {
-          self.prediction_unit(x0, y0, cb_size - quarter, cb_size, log2_cb_size, 0, false)
-          self.prediction_unit(x0 + cb_size - quarter, y0, quarter, cb_size, log2_cb_size, 1, false)
+          self.prediction_unit(
+            x0,
+            y0,
+            cb_size - quarter,
+            cb_size,
+            log2_cb_size,
+            0,
+            false,
+          )
+          self.prediction_unit(
+            x0 + cb_size - quarter,
+            y0,
+            quarter,
+            cb_size,
+            log2_cb_size,
+            1,
+            false,
+          )
         }
         _ => {
           // PART_NxN
           self.prediction_unit(x0, y0, half, half, log2_cb_size, 0, false)
-          self.prediction_unit(x0 + half, y0, half, half, log2_cb_size, 1, false)
-          self.prediction_unit(x0, y0 + half, half, half, log2_cb_size, 2, false)
-          self.prediction_unit(x0 + half, y0 + half, half, half, log2_cb_size, 3, false)
+          self.prediction_unit(
+            x0 + half,
+            y0,
+            half,
+            half,
+            log2_cb_size,
+            1,
+            false,
+          )
+          self.prediction_unit(
+            x0,
+            y0 + half,
+            half,
+            half,
+            log2_cb_size,
+            2,
+            false,
+          )
+          self.prediction_unit(
+            x0 + half,
+            y0 + half,
+            half,
+            half,
+            log2_cb_size,
+            3,
+            false,
+          )
         }
       }
     }
@@ -1252,7 +1341,9 @@ fn hevc_decode_intra_frame_impl(
   }
   if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
     sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 HEVC is supported")
+    return Err(
+      "PATCHWELCOME: only 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 HEVC is supported",
+    )
   }
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")
@@ -1293,8 +1384,16 @@ fn hevc_decode_intra_frame_impl(
     hevc_picture_new(
       sps.width,
       sps.height,
-      if sps.chroma_format_idc == 0 { 0 } else { sps.width >> sps.hshift[1] },
-      if sps.chroma_format_idc == 0 { 0 } else { sps.height >> sps.vshift[1] },
+      if sps.chroma_format_idc == 0 {
+        0
+      } else {
+        sps.width >> sps.hshift[1]
+      },
+      if sps.chroma_format_idc == 0 {
+        0
+      } else {
+        sps.height >> sps.vshift[1]
+      },
     ),
     tab_mvf,
     [],

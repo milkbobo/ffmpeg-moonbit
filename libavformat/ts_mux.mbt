@@ -24,12 +24,12 @@ pub struct TsMuxer {
 
 ///|
 pub fn ts_muxer_new(
-  video_pid? : Int32 = 0x100,
-  audio_pid? : Int32 = 0x101,
+  video_pid~ : Int32 = 0x100,
+  audio_pid~ : Int32 = 0x101,
   /// PMT stream type of the video ES (0x1B H.264, 0x24 HEVC, ...).
-  video_stream_type? : Int32 = 0x1B,
+  video_stream_type~ : Int32 = 0x1B,
   /// PMT stream type of the audio ES (0x0F AAC ADTS, 0x03 MP3, ...).
-  audio_stream_type? : Int32 = 0x0F,
+  audio_stream_type~ : Int32 = 0x0F,
 ) -> TsMuxer {
   {
     pmt_pid: 0x1000,
@@ -83,8 +83,10 @@ fn TsMuxer::emit(
     }
     let cc = self.next_cc(pid)
     self.out.push(b'\x47')
-    self.out.push((if pusi && pos == 0 { 0x40 } else { 0 }).to_byte() |
-      ((pid >> 8) & 0x1F).to_byte())
+    self.out.push(
+      (if pusi && pos == 0 { 0x40 } else { 0 }).to_byte() |
+      ((pid >> 8) & 0x1F).to_byte(),
+    )
     self.out.push((pid & 0xFF).to_byte())
     if n == 184 {
       self.out.push((0x10 | cc).to_byte())
@@ -182,9 +184,9 @@ fn TsMuxer::ensure_tables(self : TsMuxer) -> Unit {
 fn ts_mux_pts(dst : Array[Byte], pts : Int64) -> Unit {
   dst.push((0x20 | (((pts >> 30) & 0x07L).to_int() << 1) | 1).to_byte())
   dst.push(((pts >> 22) & 0xFFL).to_int().to_byte())
-  dst.push(((((pts >> 14) & 0xFEL).to_int()) | 1).to_byte())
+  dst.push((((pts >> 14) & 0xFEL).to_int() | 1).to_byte())
   dst.push(((pts >> 7) & 0xFFL).to_int().to_byte())
-  dst.push(((((pts << 1) & 0xFEL).to_int()) | 1).to_byte())
+  dst.push((((pts << 1) & 0xFEL).to_int() | 1).to_byte())
 }
 
 ///|
@@ -218,14 +220,22 @@ fn TsMuxer::pes(
 ///|
 /// Write one video access-unit payload (H.264/HEVC Annex B) with a PTS in
 /// 90 kHz units.
-pub fn TsMuxer::write_video(self : TsMuxer, pts : Int64, payload : Bytes) -> Unit {
+pub fn TsMuxer::write_video(
+  self : TsMuxer,
+  pts : Int64,
+  payload : Bytes,
+) -> Unit {
   self.ensure_tables()
   self.pes(self.video_pid, 0xE0, pts, payload, false, pts)
 }
 
 ///|
 /// Write one audio payload (AAC ADTS or MP3 frame) with a PTS in 90 kHz units.
-pub fn TsMuxer::write_audio(self : TsMuxer, pts : Int64, payload : Bytes) -> Unit {
+pub fn TsMuxer::write_audio(
+  self : TsMuxer,
+  pts : Int64,
+  payload : Bytes,
+) -> Unit {
   self.ensure_tables()
   self.pes(self.audio_pid, 0xC0, pts, payload, true, -1L)
 }

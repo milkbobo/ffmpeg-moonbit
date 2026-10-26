@@ -3,48 +3,45 @@
 /// `src/looprestoration_tmpl.c` (C reference) for the stripe-level filters.
 /// dav1d is BSD-2-Clause (Copyright © 2018, VideoLAN and dav1d authors);
 /// this port keeps the same algorithm with LGPL-2.1-or-later packaging.
+
 ///|
 /// Row buffers use a fixed stride of 400 Int32 (dav1d's BUF_STRIDE 384+16);
 /// `REST_UNIT_STRIDE` (390) is used for the Wiener horizontal rows and
 /// `FILTER_OUT_STRIDE` (384) for the SGR output rows.
 
 ///|
-let av1_rest_unit_stride : Int = 390
+let av1_rest_unit_stride : Int32 = 390
 
 ///|
-let av1_lr_filter_out_stride : Int = 384
+let av1_lr_filter_out_stride : Int32 = 384
 
 ///|
-let av1_lr_buf_stride : Int = 400
+let av1_lr_buf_stride : Int32 = 400
 
 ///|
-let av1_lr_have_left : Int = 1
+let av1_lr_have_left : Int32 = 1
 
 ///|
-let av1_lr_have_right : Int = 2
+let av1_lr_have_right : Int32 = 2
 
 ///|
-let av1_lr_have_top : Int = 4
+let av1_lr_have_top : Int32 = 4
 
 ///|
-let av1_lr_have_bottom : Int = 8
+let av1_lr_have_bottom : Int32 = 8
 
 ///|
 let av1_sgr_x_by_x : FixedArray[Int32] = [
-  255, 128, 85, 64, 51, 43, 37, 32, 28, 26, 23, 21, 20, 18, 17, 16, 15, 14, 13,
-  13, 12, 12, 11, 11, 10, 10, 9, 9, 9, 9, 8, 8, 8, 8, 7, 7, 7, 7,
-  7, 6, 6, 6, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4,
-  4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3,
-  3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-  3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 1, 1, 1, 1, 1, 0,
+  255, 128, 85, 64, 51, 43, 37, 32, 28, 26, 23, 21, 20, 18, 17, 16, 15, 14, 13, 13,
+  12, 12, 11, 11, 10, 10, 9, 9, 9, 9, 8, 8, 8, 8, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6,
+  6, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+  4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+  3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+  2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
 ]
 
 ///|
@@ -78,14 +75,14 @@ fn av1_lr_iclip(v : Int32, lo : Int32, hi : Int32) -> Int32 {
 /// width-specialised loops).
 fn av1_lr_wiener_h(
   hor : FixedArray[Int32],
-  dst_row : Int,
+  dst_row : Int32,
   left : FixedArray[Int32]?,
-  left_off : Int,
+  left_off : Int32,
   src : FixedArray[Int32],
-  src_off : Int,
+  src_off : Int32,
   fh : FixedArray[Int32],
-  w : Int,
-  edges : Int,
+  w : Int32,
+  edges : Int32,
   bd : Int32,
 ) -> Unit {
   let round_bits_h = if bd == 12 { 5 } else { 3 }
@@ -129,11 +126,11 @@ fn av1_lr_wiener_h(
 /// (`ptrs[5]` is duplicated as the 7th tap), then shift the window.
 fn av1_lr_wiener_v(
   plane : FixedArray[Int32],
-  p_off : Int,
+  p_off : Int32,
   hor : FixedArray[Int32],
-  ptrs : FixedArray[Int],
+  ptrs : FixedArray[Int32],
   fv : FixedArray[Int32],
-  w : Int,
+  w : Int32,
   bd : Int32,
 ) -> Unit {
   let round_bits_v = if bd == 12 { 9 } else { 11 }
@@ -160,17 +157,17 @@ fn av1_lr_wiener_v(
 /// `ptrs[6]`, combine with the six previous rows, then rotate.
 fn av1_lr_wiener_hv(
   plane : FixedArray[Int32],
-  p_off : Int,
+  p_off : Int32,
   hor : FixedArray[Int32],
-  ptrs : FixedArray[Int],
+  ptrs : FixedArray[Int32],
   left : FixedArray[Int32]?,
-  left_off : Int,
+  left_off : Int32,
   src : FixedArray[Int32],
-  src_off : Int,
+  src_off : Int32,
   fh : FixedArray[Int32],
   fv : FixedArray[Int32],
-  w : Int,
-  edges : Int,
+  w : Int32,
+  edges : Int32,
   bd : Int32,
 ) -> Unit {
   let tmp = FixedArray::make(av1_rest_unit_stride, 0)
@@ -202,21 +199,21 @@ fn av1_lr_wiener_hv(
 /// `wiener_c`: filter one restoration unit / stripe.
 fn av1_lr_wiener(
   plane : FixedArray[Int32],
-  p_off0 : Int,
-  stride : Int,
+  p_off0 : Int32,
+  stride : Int32,
   left : FixedArray[Int32]?,
-  left_off0 : Int,
+  left_off0 : Int32,
   lpf : FixedArray[Int32],
-  lpf_off0 : Int,
-  w : Int,
-  h : Int,
+  lpf_off0 : Int32,
+  w : Int32,
+  h : Int32,
   fh : FixedArray[Int32],
   fv : FixedArray[Int32],
-  edges : Int,
+  edges : Int32,
   bd : Int32,
 ) -> Unit {
   let hor = FixedArray::make(6 * av1_rest_unit_stride, 0)
-  let ptrs : FixedArray[Int] = FixedArray::make(7, 0)
+  let ptrs : FixedArray[Int32] = FixedArray::make(7, 0)
   let mut p_off = p_off0
   let mut src_off = p_off0
   let mut left_off = left_off0
@@ -256,7 +253,9 @@ fn av1_lr_wiener(
         done = true
       } else {
         ptrs[5] = 4
-        av1_lr_wiener_h(hor, 4, left, left_off, plane, src_off, fh, w, edges, bd)
+        av1_lr_wiener_h(
+          hor, 4, left, left_off, plane, src_off, fh, w, edges, bd,
+        )
         left_off = left_off + 4
         src_off = src_off + stride
         hh = hh - 1
@@ -289,7 +288,9 @@ fn av1_lr_wiener(
         done = true
       } else {
         ptrs[5] = 2
-        av1_lr_wiener_h(hor, 2, left, left_off, plane, src_off, fh, w, edges, bd)
+        av1_lr_wiener_h(
+          hor, 2, left, left_off, plane, src_off, fh, w, edges, bd,
+        )
         left_off = left_off + 4
         src_off = src_off + stride
         hh = hh - 1
@@ -299,18 +300,7 @@ fn av1_lr_wiener(
         } else {
           ptrs[6] = 3
           av1_lr_wiener_hv(
-            plane,
-            p_off,
-            hor,
-            ptrs,
-            left,
-            left_off,
-            plane,
-            src_off,
-            fh,
-            fv,
-            w,
-            edges,
+            plane, p_off, hor, ptrs, left, left_off, plane, src_off, fh, fv, w, edges,
             bd,
           )
           left_off = left_off + 4
@@ -323,19 +313,8 @@ fn av1_lr_wiener(
           } else {
             ptrs[6] = 4
             av1_lr_wiener_hv(
-              plane,
-              p_off,
-              hor,
-              ptrs,
-              left,
-              left_off,
-              plane,
-              src_off,
-              fh,
-              fv,
-              w,
-              edges,
-              bd,
+              plane, p_off, hor, ptrs, left, left_off, plane, src_off, fh, fv, w,
+              edges, bd,
             )
             left_off = left_off + 4
             src_off = src_off + stride
@@ -354,18 +333,7 @@ fn av1_lr_wiener(
     ptrs[6] = ptrs[5] + 1
     while hh > 0 {
       av1_lr_wiener_hv(
-        plane,
-        p_off,
-        hor,
-        ptrs,
-        left,
-        left_off,
-        plane,
-        src_off,
-        fh,
-        fv,
-        w,
-        edges,
+        plane, p_off, hor, ptrs, left, left_off, plane, src_off, fh, fv, w, edges,
         bd,
       )
       left_off = left_off + 4
@@ -422,7 +390,7 @@ fn av1_lr_wiener(
 // SGR (self-guided restoration)
 
 ///|
-fn av1_lr_rotate(ptrs : FixedArray[Int], n : Int) -> Unit {
+fn av1_lr_rotate(ptrs : FixedArray[Int32], n : Int32) -> Unit {
   let t = ptrs[0]
   for i in 0..<(n - 1) {
     ptrs[i] = ptrs[i + 1]
@@ -431,7 +399,7 @@ fn av1_lr_rotate(ptrs : FixedArray[Int], n : Int) -> Unit {
 }
 
 ///|
-fn av1_lr_rotate5_x2(ptrs : FixedArray[Int]) -> Unit {
+fn av1_lr_rotate5_x2(ptrs : FixedArray[Int32]) -> Unit {
   let t0 = ptrs[0]
   let t1 = ptrs[1]
   for i in 0..<3 {
@@ -444,15 +412,15 @@ fn av1_lr_rotate5_x2(ptrs : FixedArray[Int]) -> Unit {
 ///|
 fn av1_sgr_box3_row_h(
   sq : FixedArray[Int32],
-  sq_row : Int,
+  sq_row : Int32,
   sum : FixedArray[Int32],
-  s_row : Int,
+  s_row : Int32,
   left : FixedArray[Int32]?,
-  left_off : Int,
+  left_off : Int32,
   src : FixedArray[Int32],
-  src_off : Int,
-  w : Int,
-  edges : Int,
+  src_off : Int32,
+  w : Int32,
+  edges : Int32,
 ) -> Unit {
   let sqb = sq_row * av1_lr_buf_stride
   let sb = s_row * av1_lr_buf_stride
@@ -490,15 +458,15 @@ fn av1_sgr_box3_row_h(
 ///|
 fn av1_sgr_box5_row_h(
   sq : FixedArray[Int32],
-  sq_row : Int,
+  sq_row : Int32,
   sum : FixedArray[Int32],
-  s_row : Int,
+  s_row : Int32,
   left : FixedArray[Int32]?,
-  left_off : Int,
+  left_off : Int32,
   src : FixedArray[Int32],
-  src_off : Int,
-  w : Int,
-  edges : Int,
+  src_off : Int32,
+  w : Int32,
+  edges : Int32,
 ) -> Unit {
   let sqb = sq_row * av1_lr_buf_stride
   let sb = s_row * av1_lr_buf_stride
@@ -548,10 +516,10 @@ fn av1_sgr_box5_row_h(
 ///|
 fn av1_sgr_calc_row_ab(
   aa : FixedArray[Int32],
-  a_row : Int,
+  a_row : Int32,
   bb : FixedArray[Int32],
-  b_row : Int,
-  w : Int,
+  b_row : Int32,
+  w : Int32,
   s : Int32,
   bd : Int32,
   n : Int32,
@@ -561,10 +529,8 @@ fn av1_sgr_calc_row_ab(
   let ab = a_row * av1_lr_buf_stride
   let bbase = b_row * av1_lr_buf_stride
   for i in 0..<(w + 2) {
-    let a = (
-      aa[ab + i] + ((1 << (2 * bd_min_8)) >> 1)
-    ) >> (2 * bd_min_8)
-    let b = (bb[bbase + i] + ((1 << bd_min_8) >> 1)) >> bd_min_8
+    let a = (aa[ab + i] + (1 << (2 * bd_min_8) >> 1)) >> (2 * bd_min_8)
+    let b = (bb[bbase + i] + (1 << bd_min_8 >> 1)) >> bd_min_8
     let p0 = a * n - b * b
     let p = if p0 < 0 { 0 } else { p0 }
     // dav1d does this in unsigned arithmetic; the product can wrap 32 bits.
@@ -578,14 +544,14 @@ fn av1_sgr_calc_row_ab(
 ///|
 fn av1_sgr_box3_row_v(
   sq : FixedArray[Int32],
-  sqp : FixedArray[Int],
+  sqp : FixedArray[Int32],
   sq_out : FixedArray[Int32],
-  sq_out_row : Int,
+  sq_out_row : Int32,
   sum : FixedArray[Int32],
-  smp : FixedArray[Int],
+  smp : FixedArray[Int32],
   sum_out : FixedArray[Int32],
-  sum_out_row : Int,
-  w : Int,
+  sum_out_row : Int32,
+  w : Int32,
 ) -> Unit {
   let o1 = sq_out_row * av1_lr_buf_stride
   let o2 = sum_out_row * av1_lr_buf_stride
@@ -602,14 +568,14 @@ fn av1_sgr_box3_row_v(
 ///|
 fn av1_sgr_box5_row_v(
   sq : FixedArray[Int32],
-  sqp : FixedArray[Int],
+  sqp : FixedArray[Int32],
   sq_out : FixedArray[Int32],
-  sq_out_row : Int,
+  sq_out_row : Int32,
   sum : FixedArray[Int32],
-  smp : FixedArray[Int],
+  smp : FixedArray[Int32],
   sum_out : FixedArray[Int32],
-  sum_out_row : Int,
-  w : Int,
+  sum_out_row : Int32,
+  w : Int32,
 ) -> Unit {
   let o1 = sq_out_row * av1_lr_buf_stride
   let o2 = sum_out_row * av1_lr_buf_stride
@@ -630,14 +596,14 @@ fn av1_sgr_box5_row_v(
 ///|
 fn av1_sgr_box3_vert(
   sq : FixedArray[Int32],
-  sqp : FixedArray[Int],
+  sqp : FixedArray[Int32],
   sum : FixedArray[Int32],
-  smp : FixedArray[Int],
+  smp : FixedArray[Int32],
   aa : FixedArray[Int32],
-  a_row : Int,
+  a_row : Int32,
   bb : FixedArray[Int32],
-  b_row : Int,
-  w : Int,
+  b_row : Int32,
+  w : Int32,
   s : Int32,
   bd : Int32,
 ) -> Unit {
@@ -650,14 +616,14 @@ fn av1_sgr_box3_vert(
 ///|
 fn av1_sgr_box5_vert(
   sq : FixedArray[Int32],
-  sqp : FixedArray[Int],
+  sqp : FixedArray[Int32],
   sum : FixedArray[Int32],
-  smp : FixedArray[Int],
+  smp : FixedArray[Int32],
   aa : FixedArray[Int32],
-  a_row : Int,
+  a_row : Int32,
   bb : FixedArray[Int32],
-  b_row : Int,
-  w : Int,
+  b_row : Int32,
+  w : Int32,
   s : Int32,
   bd : Int32,
 ) -> Unit {
@@ -670,39 +636,49 @@ fn av1_sgr_box5_vert(
 ///|
 fn av1_sgr_box3_hv(
   sq : FixedArray[Int32],
-  sqp : FixedArray[Int],
+  sqp : FixedArray[Int32],
   sum : FixedArray[Int32],
-  smp : FixedArray[Int],
+  smp : FixedArray[Int32],
   aa : FixedArray[Int32],
-  a_row : Int,
+  a_row : Int32,
   bb : FixedArray[Int32],
-  b_row : Int,
+  b_row : Int32,
   left : FixedArray[Int32]?,
-  left_off : Int,
+  left_off : Int32,
   src : FixedArray[Int32],
-  src_off : Int,
-  w : Int,
+  src_off : Int32,
+  w : Int32,
   s : Int32,
-  edges : Int,
+  edges : Int32,
   bd : Int32,
 ) -> Unit {
-  av1_sgr_box3_row_h(sq, sqp[2], sum, smp[2], left, left_off, src, src_off, w,
-    edges)
+  av1_sgr_box3_row_h(
+    sq,
+    sqp[2],
+    sum,
+    smp[2],
+    left,
+    left_off,
+    src,
+    src_off,
+    w,
+    edges,
+  )
   av1_sgr_box3_vert(sq, sqp, sum, smp, aa, a_row, bb, b_row, w, s, bd)
 }
 
 ///|
 fn av1_sgr_finish_filter_row1(
   tmp : FixedArray[Int32],
-  tmp_off : Int,
+  tmp_off : Int32,
   src : FixedArray[Int32],
-  src_off : Int,
+  src_off : Int32,
   aa : FixedArray[Int32],
-  a_p : FixedArray[Int],
+  a_p : FixedArray[Int32],
   bb : FixedArray[Int32],
-  b_p : FixedArray[Int],
-  p_base : Int,
-  w : Int,
+  b_p : FixedArray[Int32],
+  p_base : Int32,
+  w : Int32,
 ) -> Unit {
   let pa0 = a_p[p_base] * av1_lr_buf_stride
   let pa1 = a_p[p_base + 1] * av1_lr_buf_stride
@@ -713,11 +689,23 @@ fn av1_sgr_finish_filter_row1(
   for i in 0..<w {
     // EIGHT_NEIGHBORS: quarter-weight cross of all three rows plus
     // three-weight diagonal corners.
-    let bv = (bb[pb1 + i + 1] + bb[pb1 + i] + bb[pb1 + i + 2] + bb[pb0 + i + 1] +
-      bb[pb2 + i + 1]) * 4 +
+    let bv = (
+        bb[pb1 + i + 1] +
+        bb[pb1 + i] +
+        bb[pb1 + i + 2] +
+        bb[pb0 + i + 1] +
+        bb[pb2 + i + 1]
+      ) *
+      4 +
       (bb[pb0 + i] + bb[pb2 + i] + bb[pb0 + i + 2] + bb[pb2 + i + 2]) * 3
-    let av = (aa[pa1 + i + 1] + aa[pa1 + i] + aa[pa1 + i + 2] + aa[pa0 + i + 1] +
-      aa[pa2 + i + 1]) * 4 +
+    let av = (
+        aa[pa1 + i + 1] +
+        aa[pa1 + i] +
+        aa[pa1 + i + 2] +
+        aa[pa0 + i + 1] +
+        aa[pa2 + i + 1]
+      ) *
+      4 +
       (aa[pa0 + i] + aa[pa2 + i] + aa[pa0 + i + 2] + aa[pa2 + i + 2]) * 3
     tmp[tmp_off + i] = (av - bv * src[src_off + i] + (1 << 8)) >> 9
   }
@@ -726,16 +714,16 @@ fn av1_sgr_finish_filter_row1(
 ///|
 fn av1_sgr_finish_filter2(
   tmp : FixedArray[Int32],
-  tmp_off : Int,
+  tmp_off : Int32,
   src : FixedArray[Int32],
-  src_off : Int,
-  src_stride : Int,
+  src_off : Int32,
+  src_stride : Int32,
   aa : FixedArray[Int32],
-  a_p : FixedArray[Int],
+  a_p : FixedArray[Int32],
   bb : FixedArray[Int32],
-  b_p : FixedArray[Int],
-  w : Int,
-  h : Int,
+  b_p : FixedArray[Int32],
+  w : Int32,
+  h : Int32,
 ) -> Unit {
   let pa0 = a_p[0] * av1_lr_buf_stride
   let pa1 = a_p[1] * av1_lr_buf_stride
@@ -763,10 +751,10 @@ fn av1_sgr_finish_filter2(
 ///|
 fn av1_sgr_weighted_row1(
   plane : FixedArray[Int32],
-  p_off : Int,
+  p_off : Int32,
   t1 : FixedArray[Int32],
-  t1_off : Int,
-  w : Int,
+  t1_off : Int32,
+  w : Int32,
   w1 : Int32,
   bd : Int32,
 ) -> Unit {
@@ -782,14 +770,14 @@ fn av1_sgr_weighted_row1(
 ///|
 fn av1_sgr_weighted2(
   plane : FixedArray[Int32],
-  p_off : Int,
-  stride : Int,
+  p_off : Int32,
+  stride : Int32,
   t1 : FixedArray[Int32],
-  t1_off : Int,
+  t1_off : Int32,
   t2 : FixedArray[Int32],
-  t2_off : Int,
-  w : Int,
-  h : Int,
+  t2_off : Int32,
+  w : Int32,
+  h : Int32,
   w0 : Int32,
   w1 : Int32,
   bd : Int32,
@@ -809,17 +797,17 @@ fn av1_sgr_weighted2(
 ///|
 fn av1_sgr_finish1(
   plane : FixedArray[Int32],
-  p_off : Int,
-  stride : Int,
+  p_off : Int32,
+  stride : Int32,
   aa : FixedArray[Int32],
-  a_p : FixedArray[Int],
+  a_p : FixedArray[Int32],
   bb : FixedArray[Int32],
-  b_p : FixedArray[Int],
+  b_p : FixedArray[Int32],
   tmp : FixedArray[Int32],
-  w : Int,
+  w : Int32,
   w1 : Int32,
   bd : Int32,
-) -> Int {
+) -> Int32 {
   av1_sgr_finish_filter_row1(tmp, 0, plane, p_off, aa, a_p, bb, b_p, 0, w)
   av1_sgr_weighted_row1(plane, p_off, tmp, 0, w, w1, bd)
   av1_lr_rotate(a_p, 3)
@@ -830,18 +818,18 @@ fn av1_sgr_finish1(
 ///|
 fn av1_sgr_finish2(
   plane : FixedArray[Int32],
-  p_off : Int,
-  stride : Int,
+  p_off : Int32,
+  stride : Int32,
   aa : FixedArray[Int32],
-  a_p : FixedArray[Int],
+  a_p : FixedArray[Int32],
   bb : FixedArray[Int32],
-  b_p : FixedArray[Int],
+  b_p : FixedArray[Int32],
   tmp : FixedArray[Int32],
-  w : Int,
-  h : Int,
+  w : Int32,
+  h : Int32,
   w1 : Int32,
   bd : Int32,
-) -> Int {
+) -> Int32 {
   av1_sgr_finish_filter2(tmp, 0, plane, p_off, stride, aa, a_p, bb, b_p, w, h)
   av1_sgr_weighted_row1(plane, p_off, tmp, 0, w, w1, bd)
   if h > 1 {
@@ -863,26 +851,27 @@ fn av1_sgr_finish2(
 ///|
 fn av1_sgr_finish_mix(
   plane : FixedArray[Int32],
-  p_off : Int,
-  stride : Int,
+  p_off : Int32,
+  stride : Int32,
   a5 : FixedArray[Int32],
-  a5_p : FixedArray[Int],
+  a5_p : FixedArray[Int32],
   b5 : FixedArray[Int32],
-  b5_p : FixedArray[Int],
+  b5_p : FixedArray[Int32],
   a3 : FixedArray[Int32],
-  a3_p : FixedArray[Int],
+  a3_p : FixedArray[Int32],
   b3 : FixedArray[Int32],
-  b3_p : FixedArray[Int],
+  b3_p : FixedArray[Int32],
   tmp5 : FixedArray[Int32],
   tmp3 : FixedArray[Int32],
-  w : Int,
-  h : Int,
+  w : Int32,
+  h : Int32,
   w0 : Int32,
   w1 : Int32,
   bd : Int32,
-) -> Int {
-  av1_sgr_finish_filter2(tmp5, 0, plane, p_off, stride, a5, a5_p, b5, b5_p, w,
-    h)
+) -> Int32 {
+  av1_sgr_finish_filter2(
+    tmp5, 0, plane, p_off, stride, a5, a5_p, b5, b5_p, w, h,
+  )
   av1_sgr_finish_filter_row1(tmp3, 0, plane, p_off, a3, a3_p, b3, b3_p, 0, w)
   if h > 1 {
     av1_sgr_finish_filter_row1(
@@ -898,20 +887,7 @@ fn av1_sgr_finish_mix(
       w,
     )
   }
-  av1_sgr_weighted2(
-    plane,
-    p_off,
-    stride,
-    tmp5,
-    0,
-    tmp3,
-    0,
-    w,
-    h,
-    w0,
-    w1,
-    bd,
-  )
+  av1_sgr_weighted2(plane, p_off, stride, tmp5, 0, tmp3, 0, w, h, w0, w1, bd)
   av1_lr_rotate(a5_p, 2)
   av1_lr_rotate(b5_p, 2)
   av1_lr_rotate(a3_p, 4)
@@ -922,49 +898,51 @@ fn av1_sgr_finish_mix(
 ///|
 fn av1_sgr_box35_row_h(
   sq3 : FixedArray[Int32],
-  sq3_row : Int,
+  sq3_row : Int32,
   sm3 : FixedArray[Int32],
   sq5 : FixedArray[Int32],
-  sq5_row : Int,
+  sq5_row : Int32,
   sm5 : FixedArray[Int32],
   left : FixedArray[Int32]?,
-  left_off : Int,
+  left_off : Int32,
   src : FixedArray[Int32],
-  src_off : Int,
-  w : Int,
-  edges : Int,
+  src_off : Int32,
+  w : Int32,
+  edges : Int32,
 ) -> Unit {
-  av1_sgr_box3_row_h(sq3, sq3_row, sm3, sq3_row, left, left_off, src, src_off,
-    w, edges)
-  av1_sgr_box5_row_h(sq5, sq5_row, sm5, sq5_row, left, left_off, src, src_off,
-    w, edges)
+  av1_sgr_box3_row_h(
+    sq3, sq3_row, sm3, sq3_row, left, left_off, src, src_off, w, edges,
+  )
+  av1_sgr_box5_row_h(
+    sq5, sq5_row, sm5, sq5_row, left, left_off, src, src_off, w, edges,
+  )
 }
 
 ///|
 /// `sgr_3x3_c`: filter one restoration unit / stripe.
 fn av1_lr_sgr3(
   plane : FixedArray[Int32],
-  p_off0 : Int,
-  stride : Int,
+  p_off0 : Int32,
+  stride : Int32,
   left : FixedArray[Int32]?,
-  left_off0 : Int,
+  left_off0 : Int32,
   lpf : FixedArray[Int32],
-  lpf_off0 : Int,
-  w : Int,
-  h : Int,
+  lpf_off0 : Int32,
+  w : Int32,
+  h : Int32,
   s1 : Int32,
   w1 : Int32,
-  edges : Int,
+  edges : Int32,
   bd : Int32,
 ) -> Unit {
   let sq = FixedArray::make(3 * av1_lr_buf_stride, 0)
   let sm = FixedArray::make(3 * av1_lr_buf_stride, 0)
   let aa = FixedArray::make(3 * av1_lr_buf_stride, 0)
   let bb = FixedArray::make(3 * av1_lr_buf_stride, 0)
-  let sqp : FixedArray[Int] = FixedArray::make(3, 0)
-  let smp : FixedArray[Int] = FixedArray::make(3, 0)
-  let ap : FixedArray[Int] = [0, 1, 2]
-  let bp : FixedArray[Int] = [0, 1, 2]
+  let sqp : FixedArray[Int32] = FixedArray::make(3, 0)
+  let smp : FixedArray[Int32] = FixedArray::make(3, 0)
+  let ap : FixedArray[Int32] = [0, 1, 2]
+  let bp : FixedArray[Int32] = [0, 1, 2]
   let tmp = FixedArray::make(av1_lr_filter_out_stride, 0)
   let mut p_off = p_off0
   let mut src_off = p_off0
@@ -985,8 +963,24 @@ fn av1_lr_sgr3(
     av1_sgr_box3_row_h(sq, 0, sm, 0, None, 0, lpf, lpf_off, w, edges)
     lpf_off = lpf_off + stride
     av1_sgr_box3_row_h(sq, 1, sm, 1, None, 0, lpf, lpf_off, w, edges)
-    av1_sgr_box3_hv(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], left, left_off, plane,
-      src_off, w, s1, edges, bd)
+    av1_sgr_box3_hv(
+      sq,
+      sqp,
+      sm,
+      smp,
+      aa,
+      ap[2],
+      bb,
+      bp[2],
+      left,
+      left_off,
+      plane,
+      src_off,
+      w,
+      s1,
+      edges,
+      bd,
+    )
     left_off = left_off + 4
     src_off = src_off + stride
     av1_lr_rotate(ap, 3)
@@ -996,8 +990,24 @@ fn av1_lr_sgr3(
       mode = 2
       done = true
     } else {
-      av1_sgr_box3_hv(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], left, left_off, plane,
-        src_off, w, s1, edges, bd)
+      av1_sgr_box3_hv(
+        sq,
+        sqp,
+        sm,
+        smp,
+        aa,
+        ap[2],
+        bb,
+        bp[2],
+        left,
+        left_off,
+        plane,
+        src_off,
+        w,
+        s1,
+        edges,
+        bd,
+      )
       left_off = left_off + 4
       src_off = src_off + stride
       av1_lr_rotate(ap, 3)
@@ -1028,8 +1038,24 @@ fn av1_lr_sgr3(
     } else {
       sqp[2] = 1
       smp[2] = 1
-      av1_sgr_box3_hv(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], left, left_off, plane,
-        src_off, w, s1, edges, bd)
+      av1_sgr_box3_hv(
+        sq,
+        sqp,
+        sm,
+        smp,
+        aa,
+        ap[2],
+        bb,
+        bp[2],
+        left,
+        left_off,
+        plane,
+        src_off,
+        w,
+        s1,
+        edges,
+        bd,
+      )
       left_off = left_off + 4
       src_off = src_off + stride
       av1_lr_rotate(ap, 3)
@@ -1046,26 +1072,77 @@ fn av1_lr_sgr3(
   }
   if !done {
     while hh > 0 {
-      av1_sgr_box3_hv(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], left, left_off, plane,
-        src_off, w, s1, edges, bd)
+      av1_sgr_box3_hv(
+        sq,
+        sqp,
+        sm,
+        smp,
+        aa,
+        ap[2],
+        bb,
+        bp[2],
+        left,
+        left_off,
+        plane,
+        src_off,
+        w,
+        s1,
+        edges,
+        bd,
+      )
       left_off = left_off + 4
       src_off = src_off + stride
-      p_off = av1_sgr_finish1(plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1,
-        bd)
+      p_off = av1_sgr_finish1(
+        plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1, bd,
+      )
       hh = hh - 1
     }
     if (edges & av1_lr_have_bottom) == 0 {
       mode = 1
     } else {
-      av1_sgr_box3_hv(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], None, 0, lpf, lpf_bottom,
-        w, s1, edges, bd)
+      av1_sgr_box3_hv(
+        sq,
+        sqp,
+        sm,
+        smp,
+        aa,
+        ap[2],
+        bb,
+        bp[2],
+        None,
+        0,
+        lpf,
+        lpf_bottom,
+        w,
+        s1,
+        edges,
+        bd,
+      )
       lpf_bottom = lpf_bottom + stride
-      p_off = av1_sgr_finish1(plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1,
-        bd)
-      av1_sgr_box3_hv(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], None, 0, lpf, lpf_bottom,
-        w, s1, edges, bd)
-      p_off = av1_sgr_finish1(plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1,
-        bd)
+      p_off = av1_sgr_finish1(
+        plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1, bd,
+      )
+      av1_sgr_box3_hv(
+        sq,
+        sqp,
+        sm,
+        smp,
+        aa,
+        ap[2],
+        bb,
+        bp[2],
+        None,
+        0,
+        lpf,
+        lpf_bottom,
+        w,
+        s1,
+        edges,
+        bd,
+      )
+      p_off = av1_sgr_finish1(
+        plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1, bd,
+      )
       return
     }
   }
@@ -1073,13 +1150,15 @@ fn av1_lr_sgr3(
     sqp[2] = sqp[1]
     smp[2] = smp[1]
     av1_sgr_box3_vert(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], w, s1, bd)
-    p_off = av1_sgr_finish1(plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1,
-      bd)
+    p_off = av1_sgr_finish1(
+      plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1, bd,
+    )
     sqp[2] = sqp[1]
     smp[2] = smp[1]
     av1_sgr_box3_vert(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], w, s1, bd)
-    p_off = av1_sgr_finish1(plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1,
-      bd)
+    p_off = av1_sgr_finish1(
+      plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1, bd,
+    )
   } else if mode == 2 {
     sqp[2] = sqp[1]
     smp[2] = smp[1]
@@ -1089,8 +1168,9 @@ fn av1_lr_sgr3(
     sqp[2] = sqp[1]
     smp[2] = smp[1]
     av1_sgr_box3_vert(sq, sqp, sm, smp, aa, ap[2], bb, bp[2], w, s1, bd)
-    p_off = av1_sgr_finish1(plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1,
-      bd)
+    p_off = av1_sgr_finish1(
+      plane, p_off, stride, aa, ap, bb, bp, tmp, w, w1, bd,
+    )
   }
 }
 
@@ -1098,27 +1178,27 @@ fn av1_lr_sgr3(
 /// `sgr_5x5_c`: filter one restoration unit / stripe.
 fn av1_lr_sgr5(
   plane : FixedArray[Int32],
-  p_off0 : Int,
-  stride : Int,
+  p_off0 : Int32,
+  stride : Int32,
   left : FixedArray[Int32]?,
-  left_off0 : Int,
+  left_off0 : Int32,
   lpf : FixedArray[Int32],
-  lpf_off0 : Int,
-  w : Int,
-  h : Int,
+  lpf_off0 : Int32,
+  w : Int32,
+  h : Int32,
   s0 : Int32,
   w0 : Int32,
-  edges : Int,
+  edges : Int32,
   bd : Int32,
 ) -> Unit {
   let sq = FixedArray::make(5 * av1_lr_buf_stride, 0)
   let sm = FixedArray::make(5 * av1_lr_buf_stride, 0)
   let aa = FixedArray::make(2 * av1_lr_buf_stride, 0)
   let bb = FixedArray::make(2 * av1_lr_buf_stride, 0)
-  let sqp : FixedArray[Int] = FixedArray::make(5, 0)
-  let smp : FixedArray[Int] = FixedArray::make(5, 0)
-  let ap : FixedArray[Int] = [0, 1]
-  let bp : FixedArray[Int] = [0, 1]
+  let sqp : FixedArray[Int32] = FixedArray::make(5, 0)
+  let smp : FixedArray[Int32] = FixedArray::make(5, 0)
+  let ap : FixedArray[Int32] = [0, 1]
+  let bp : FixedArray[Int32] = [0, 1]
   let tmp = FixedArray::make(2 * av1_lr_filter_out_stride, 0)
   let mut p_off = p_off0
   let mut src_off = p_off0
@@ -1196,8 +1276,9 @@ fn av1_lr_sgr5(
         sqp[4] = 3
         smp[3] = 2
         smp[4] = 3
-        av1_sgr_box5_row_h(sq, 2, sm, 2, left, left_off, plane, src_off, w,
-          edges)
+        av1_sgr_box5_row_h(
+          sq, 2, sm, 2, left, left_off, plane, src_off, w, edges,
+        )
         left_off = left_off + 4
         src_off = src_off + stride
         hh = hh - 1
@@ -1205,13 +1286,15 @@ fn av1_lr_sgr5(
           mode = 2
           done = true
         } else {
-          av1_sgr_box5_row_h(sq, 3, sm, 3, left, left_off, plane, src_off, w,
-            edges)
+          av1_sgr_box5_row_h(
+            sq, 3, sm, 3, left, left_off, plane, src_off, w, edges,
+          )
           left_off = left_off + 4
           src_off = src_off + stride
           av1_sgr_box5_vert(sq, sqp, sm, smp, aa, ap[1], bb, bp[1], w, s0, bd)
-          p_off = av1_sgr_finish2(plane, p_off, stride, aa, ap, bb, bp, tmp, w,
-            2, w0, bd)
+          p_off = av1_sgr_finish2(
+            plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2, w0, bd,
+          )
           hh = hh - 1
           if hh <= 0 {
             mode = 1
@@ -1226,8 +1309,18 @@ fn av1_lr_sgr5(
   }
   if !done {
     while hh > 0 {
-      av1_sgr_box5_row_h(sq, sqp[3], sm, smp[3], left, left_off, plane,
-        src_off, w, edges)
+      av1_sgr_box5_row_h(
+        sq,
+        sqp[3],
+        sm,
+        smp[3],
+        left,
+        left_off,
+        plane,
+        src_off,
+        w,
+        edges,
+      )
       left_off = left_off + 4
       src_off = src_off + stride
       hh = hh - 1
@@ -1235,13 +1328,24 @@ fn av1_lr_sgr5(
         mode = 2
         done = true
       } else {
-        av1_sgr_box5_row_h(sq, sqp[4], sm, smp[4], left, left_off, plane,
-          src_off, w, edges)
+        av1_sgr_box5_row_h(
+          sq,
+          sqp[4],
+          sm,
+          smp[4],
+          left,
+          left_off,
+          plane,
+          src_off,
+          w,
+          edges,
+        )
         left_off = left_off + 4
         src_off = src_off + stride
         av1_sgr_box5_vert(sq, sqp, sm, smp, aa, ap[1], bb, bp[1], w, s0, bd)
-        p_off = av1_sgr_finish2(plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2,
-          w0, bd)
+        p_off = av1_sgr_finish2(
+          plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2, w0, bd,
+        )
         hh = hh - 1
       }
     }
@@ -1249,15 +1353,36 @@ fn av1_lr_sgr5(
       if (edges & av1_lr_have_bottom) == 0 {
         mode = 1
       } else {
-        av1_sgr_box5_row_h(sq, sqp[3], sm, smp[3], None, 0, lpf, lpf_bottom, w,
-          edges)
+        av1_sgr_box5_row_h(
+          sq,
+          sqp[3],
+          sm,
+          smp[3],
+          None,
+          0,
+          lpf,
+          lpf_bottom,
+          w,
+          edges,
+        )
         lpf_bottom = lpf_bottom + stride
-        av1_sgr_box5_row_h(sq, sqp[4], sm, smp[4], None, 0, lpf, lpf_bottom, w,
-          edges)
+        av1_sgr_box5_row_h(
+          sq,
+          sqp[4],
+          sm,
+          smp[4],
+          None,
+          0,
+          lpf,
+          lpf_bottom,
+          w,
+          edges,
+        )
         // output_2
         av1_sgr_box5_vert(sq, sqp, sm, smp, aa, ap[1], bb, bp[1], w, s0, bd)
-        p_off = av1_sgr_finish2(plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2,
-          w0, bd)
+        p_off = av1_sgr_finish2(
+          plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2, w0, bd,
+        )
         return
       }
     }
@@ -1268,22 +1393,25 @@ fn av1_lr_sgr5(
     smp[3] = smp[2]
     smp[4] = smp[2]
     av1_sgr_box5_vert(sq, sqp, sm, smp, aa, ap[1], bb, bp[1], w, s0, bd)
-    p_off = av1_sgr_finish2(plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2, w0,
-      bd)
+    p_off = av1_sgr_finish2(
+      plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2, w0, bd,
+    )
   } else if mode == 2 {
     sqp[4] = sqp[3]
     smp[4] = smp[3]
     av1_sgr_box5_vert(sq, sqp, sm, smp, aa, ap[1], bb, bp[1], w, s0, bd)
-    p_off = av1_sgr_finish2(plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2, w0,
-      bd)
+    p_off = av1_sgr_finish2(
+      plane, p_off, stride, aa, ap, bb, bp, tmp, w, 2, w0, bd,
+    )
     // output_1
     sqp[3] = sqp[2]
     sqp[4] = sqp[2]
     smp[3] = smp[2]
     smp[4] = smp[2]
     av1_sgr_box5_vert(sq, sqp, sm, smp, aa, ap[1], bb, bp[1], w, s0, bd)
-    p_off = av1_sgr_finish2(plane, p_off, stride, aa, ap, bb, bp, tmp, w, 1, w0,
-      bd)
+    p_off = av1_sgr_finish2(
+      plane, p_off, stride, aa, ap, bb, bp, tmp, w, 1, w0, bd,
+    )
   } else if mode == 3 {
     sqp[4] = sqp[3]
     smp[4] = smp[3]
@@ -1296,8 +1424,9 @@ fn av1_lr_sgr5(
     smp[3] = smp[2]
     smp[4] = smp[2]
     av1_sgr_box5_vert(sq, sqp, sm, smp, aa, ap[1], bb, bp[1], w, s0, bd)
-    p_off = av1_sgr_finish2(plane, p_off, stride, aa, ap, bb, bp, tmp, w, 1, w0,
-      bd)
+    p_off = av1_sgr_finish2(
+      plane, p_off, stride, aa, ap, bb, bp, tmp, w, 1, w0, bd,
+    )
   }
 }
 
@@ -1305,19 +1434,19 @@ fn av1_lr_sgr5(
 /// `sgr_mix_c`: filter one restoration unit / stripe with both radii.
 fn av1_lr_sgr_mix(
   plane : FixedArray[Int32],
-  p_off0 : Int,
-  stride : Int,
+  p_off0 : Int32,
+  stride : Int32,
   left : FixedArray[Int32]?,
-  left_off0 : Int,
+  left_off0 : Int32,
   lpf : FixedArray[Int32],
-  lpf_off0 : Int,
-  w : Int,
-  h : Int,
+  lpf_off0 : Int32,
+  w : Int32,
+  h : Int32,
   s0 : Int32,
   s1 : Int32,
   w0 : Int32,
   w1 : Int32,
-  edges : Int,
+  edges : Int32,
   bd : Int32,
 ) -> Unit {
   let sq5 = FixedArray::make(5 * av1_lr_buf_stride, 0)
@@ -1328,14 +1457,14 @@ fn av1_lr_sgr_mix(
   let b5 = FixedArray::make(2 * av1_lr_buf_stride, 0)
   let a3 = FixedArray::make(4 * av1_lr_buf_stride, 0)
   let b3 = FixedArray::make(4 * av1_lr_buf_stride, 0)
-  let sq5p : FixedArray[Int] = FixedArray::make(5, 0)
-  let sm5p : FixedArray[Int] = FixedArray::make(5, 0)
-  let sq3p : FixedArray[Int] = FixedArray::make(3, 0)
-  let sm3p : FixedArray[Int] = FixedArray::make(3, 0)
-  let a5p : FixedArray[Int] = [0, 1]
-  let b5p : FixedArray[Int] = [0, 1]
-  let a3p : FixedArray[Int] = [0, 1, 2, 3]
-  let b3p : FixedArray[Int] = [0, 1, 2, 3]
+  let sq5p : FixedArray[Int32] = FixedArray::make(5, 0)
+  let sm5p : FixedArray[Int32] = FixedArray::make(5, 0)
+  let sq3p : FixedArray[Int32] = FixedArray::make(3, 0)
+  let sm3p : FixedArray[Int32] = FixedArray::make(3, 0)
+  let a5p : FixedArray[Int32] = [0, 1]
+  let b5p : FixedArray[Int32] = [0, 1]
+  let a3p : FixedArray[Int32] = [0, 1, 2, 3]
+  let b3p : FixedArray[Int32] = [0, 1, 2, 3]
   let tmp5 = FixedArray::make(2 * av1_lr_filter_out_stride, 0)
   let tmp3 = FixedArray::make(2 * av1_lr_filter_out_stride, 0)
   let mut p_off = p_off0
@@ -1364,10 +1493,38 @@ fn av1_lr_sgr_mix(
     sm3p[0] = 0
     sm3p[1] = 1
     sm3p[2] = 2
-    av1_sgr_box35_row_h(sq3, 0, sm3, sq5, 0, sm5, None, 0, lpf, lpf_off, w, edges)
+    av1_sgr_box35_row_h(
+      sq3,
+      0,
+      sm3,
+      sq5,
+      0,
+      sm5,
+      None,
+      0,
+      lpf,
+      lpf_off,
+      w,
+      edges,
+    )
     lpf_off = lpf_off + stride
-    av1_sgr_box35_row_h(sq3, 1, sm3, sq5, 1, sm5, None, 0, lpf, lpf_off, w, edges)
-    av1_sgr_box35_row_h(sq3, 2, sm3, sq5, 2, sm5, left, left_off, plane, src_off, w, edges)
+    av1_sgr_box35_row_h(
+      sq3,
+      1,
+      sm3,
+      sq5,
+      1,
+      sm5,
+      None,
+      0,
+      lpf,
+      lpf_off,
+      w,
+      edges,
+    )
+    av1_sgr_box35_row_h(
+      sq3, 2, sm3, sq5, 2, sm5, left, left_off, plane, src_off, w, edges,
+    )
     left_off = left_off + 4
     src_off = src_off + stride
     av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
@@ -1378,7 +1535,20 @@ fn av1_lr_sgr_mix(
       mode = 3
       done = true
     } else {
-      av1_sgr_box35_row_h(sq3, sq3p[2], sm3, sq5, 3, sm5, left, left_off, plane, src_off, w, edges)
+      av1_sgr_box35_row_h(
+        sq3,
+        sq3p[2],
+        sm3,
+        sq5,
+        3,
+        sm5,
+        left,
+        left_off,
+        plane,
+        src_off,
+        w,
+        edges,
+      )
       left_off = left_off + 4
       src_off = src_off + stride
       av1_sgr_box5_vert(sq5, sq5p, sm5, sm5p, a5, a5p[1], b5, b5p[1], w, s0, bd)
@@ -1405,7 +1575,9 @@ fn av1_lr_sgr_mix(
       sq3p[i] = 0
       sm3p[i] = 0
     }
-    av1_sgr_box35_row_h(sq3, 0, sm3, sq5, 0, sm5, left, left_off, plane, src_off, w, edges)
+    av1_sgr_box35_row_h(
+      sq3, 0, sm3, sq5, 0, sm5, left, left_off, plane, src_off, w, edges,
+    )
     left_off = left_off + 4
     src_off = src_off + stride
     av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
@@ -1420,7 +1592,9 @@ fn av1_lr_sgr_mix(
       sm5p[4] = 1
       sq3p[2] = 1
       sm3p[2] = 1
-      av1_sgr_box35_row_h(sq3, 1, sm3, sq5, 1, sm5, left, left_off, plane, src_off, w, edges)
+      av1_sgr_box35_row_h(
+        sq3, 1, sm3, sq5, 1, sm5, left, left_off, plane, src_off, w, edges,
+      )
       left_off = left_off + 4
       src_off = src_off + stride
       av1_sgr_box5_vert(sq5, sq5p, sm5, sm5p, a5, a5p[1], b5, b5p[1], w, s0, bd)
@@ -1440,10 +1614,24 @@ fn av1_lr_sgr_mix(
         sm5p[4] = 3
         sq3p[2] = 2
         sm3p[2] = 2
-        av1_sgr_box35_row_h(sq3, 2, sm3, sq5, 2, sm5, left, left_off, plane, src_off, w, edges)
+        av1_sgr_box35_row_h(
+          sq3, 2, sm3, sq5, 2, sm5, left, left_off, plane, src_off, w, edges,
+        )
         left_off = left_off + 4
         src_off = src_off + stride
-        av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
+        av1_sgr_box3_vert(
+          sq3,
+          sq3p,
+          sm3,
+          sm3p,
+          a3,
+          a3p[3],
+          b3,
+          b3p[3],
+          w,
+          s1,
+          bd,
+        )
         av1_lr_rotate(a3p, 4)
         av1_lr_rotate(b3p, 4)
         hh = hh - 1
@@ -1451,13 +1639,52 @@ fn av1_lr_sgr_mix(
           mode = 2
           done = true
         } else {
-          av1_sgr_box35_row_h(sq3, sq3p[2], sm3, sq5, 3, sm5, left, left_off, plane, src_off, w, edges)
+          av1_sgr_box35_row_h(
+            sq3,
+            sq3p[2],
+            sm3,
+            sq5,
+            3,
+            sm5,
+            left,
+            left_off,
+            plane,
+            src_off,
+            w,
+            edges,
+          )
           left_off = left_off + 4
           src_off = src_off + stride
-          av1_sgr_box5_vert(sq5, sq5p, sm5, sm5p, a5, a5p[1], b5, b5p[1], w, s0, bd)
-          av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
-          p_off = av1_sgr_finish_mix(plane, p_off, stride, a5, a5p, b5, b5p,
-            a3, a3p, b3, b3p, tmp5, tmp3, w, 2, w0, w1, bd)
+          av1_sgr_box5_vert(
+            sq5,
+            sq5p,
+            sm5,
+            sm5p,
+            a5,
+            a5p[1],
+            b5,
+            b5p[1],
+            w,
+            s0,
+            bd,
+          )
+          av1_sgr_box3_vert(
+            sq3,
+            sq3p,
+            sm3,
+            sm3p,
+            a3,
+            a3p[3],
+            b3,
+            b3p[3],
+            w,
+            s1,
+            bd,
+          )
+          p_off = av1_sgr_finish_mix(
+            plane, p_off, stride, a5, a5p, b5, b5p, a3, a3p, b3, b3p, tmp5, tmp3,
+            w, 2, w0, w1, bd,
+          )
           hh = hh - 1
           if hh <= 0 {
             mode = 1
@@ -1472,7 +1699,20 @@ fn av1_lr_sgr_mix(
   }
   if !done {
     while hh > 0 {
-      av1_sgr_box35_row_h(sq3, sq3p[2], sm3, sq5, sq5p[3], sm5, left, left_off, plane, src_off, w, edges)
+      av1_sgr_box35_row_h(
+        sq3,
+        sq3p[2],
+        sm3,
+        sq5,
+        sq5p[3],
+        sm5,
+        left,
+        left_off,
+        plane,
+        src_off,
+        w,
+        edges,
+      )
       left_off = left_off + 4
       src_off = src_off + stride
       av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
@@ -1483,13 +1723,52 @@ fn av1_lr_sgr_mix(
         mode = 2
         done = true
       } else {
-        av1_sgr_box35_row_h(sq3, sq3p[2], sm3, sq5, sq5p[4], sm5, left, left_off, plane, src_off, w, edges)
+        av1_sgr_box35_row_h(
+          sq3,
+          sq3p[2],
+          sm3,
+          sq5,
+          sq5p[4],
+          sm5,
+          left,
+          left_off,
+          plane,
+          src_off,
+          w,
+          edges,
+        )
         left_off = left_off + 4
         src_off = src_off + stride
-        av1_sgr_box5_vert(sq5, sq5p, sm5, sm5p, a5, a5p[1], b5, b5p[1], w, s0, bd)
-        av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
-        p_off = av1_sgr_finish_mix(plane, p_off, stride, a5, a5p, b5, b5p, a3,
-          a3p, b3, b3p, tmp5, tmp3, w, 2, w0, w1, bd)
+        av1_sgr_box5_vert(
+          sq5,
+          sq5p,
+          sm5,
+          sm5p,
+          a5,
+          a5p[1],
+          b5,
+          b5p[1],
+          w,
+          s0,
+          bd,
+        )
+        av1_sgr_box3_vert(
+          sq3,
+          sq3p,
+          sm3,
+          sm3p,
+          a3,
+          a3p[3],
+          b3,
+          b3p[3],
+          w,
+          s1,
+          bd,
+        )
+        p_off = av1_sgr_finish_mix(
+          plane, p_off, stride, a5, a5p, b5, b5p, a3, a3p, b3, b3p, tmp5, tmp3, w,
+          2, w0, w1, bd,
+        )
         hh = hh - 1
       }
     }
@@ -1497,17 +1776,81 @@ fn av1_lr_sgr_mix(
       if (edges & av1_lr_have_bottom) == 0 {
         mode = 1
       } else {
-        av1_sgr_box35_row_h(sq3, sq3p[2], sm3, sq5, sq5p[3], sm5, None, 0, lpf, lpf_bottom, w, edges)
+        av1_sgr_box35_row_h(
+          sq3,
+          sq3p[2],
+          sm3,
+          sq5,
+          sq5p[3],
+          sm5,
+          None,
+          0,
+          lpf,
+          lpf_bottom,
+          w,
+          edges,
+        )
         lpf_bottom = lpf_bottom + stride
-        av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
+        av1_sgr_box3_vert(
+          sq3,
+          sq3p,
+          sm3,
+          sm3p,
+          a3,
+          a3p[3],
+          b3,
+          b3p[3],
+          w,
+          s1,
+          bd,
+        )
         av1_lr_rotate(a3p, 4)
         av1_lr_rotate(b3p, 4)
-        av1_sgr_box35_row_h(sq3, sq3p[2], sm3, sq5, sq5p[4], sm5, None, 0, lpf, lpf_bottom, w, edges)
+        av1_sgr_box35_row_h(
+          sq3,
+          sq3p[2],
+          sm3,
+          sq5,
+          sq5p[4],
+          sm5,
+          None,
+          0,
+          lpf,
+          lpf_bottom,
+          w,
+          edges,
+        )
         // output_2
-        av1_sgr_box5_vert(sq5, sq5p, sm5, sm5p, a5, a5p[1], b5, b5p[1], w, s0, bd)
-        av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
-        p_off = av1_sgr_finish_mix(plane, p_off, stride, a5, a5p, b5, b5p, a3,
-          a3p, b3, b3p, tmp5, tmp3, w, 2, w0, w1, bd)
+        av1_sgr_box5_vert(
+          sq5,
+          sq5p,
+          sm5,
+          sm5p,
+          a5,
+          a5p[1],
+          b5,
+          b5p[1],
+          w,
+          s0,
+          bd,
+        )
+        av1_sgr_box3_vert(
+          sq3,
+          sq3p,
+          sm3,
+          sm3p,
+          a3,
+          a3p[3],
+          b3,
+          b3p[3],
+          w,
+          s1,
+          bd,
+        )
+        p_off = av1_sgr_finish_mix(
+          plane, p_off, stride, a5, a5p, b5, b5p, a3, a3p, b3, b3p, tmp5, tmp3, w,
+          2, w0, w1, bd,
+        )
         return
       }
     }
@@ -1527,8 +1870,10 @@ fn av1_lr_sgr_mix(
     // output_2
     av1_sgr_box5_vert(sq5, sq5p, sm5, sm5p, a5, a5p[1], b5, b5p[1], w, s0, bd)
     av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
-    p_off = av1_sgr_finish_mix(plane, p_off, stride, a5, a5p, b5, b5p, a3,
-      a3p, b3, b3p, tmp5, tmp3, w, 2, w0, w1, bd)
+    p_off = av1_sgr_finish_mix(
+      plane, p_off, stride, a5, a5p, b5, b5p, a3, a3p, b3, b3p, tmp5, tmp3, w, 2,
+      w0, w1, bd,
+    )
   } else if mode == 2 {
     sq5p[4] = sq5p[3]
     sm5p[4] = sm5p[3]
@@ -1536,8 +1881,10 @@ fn av1_lr_sgr_mix(
     sm3p[2] = sm3p[1]
     av1_sgr_box5_vert(sq5, sq5p, sm5, sm5p, a5, a5p[1], b5, b5p[1], w, s0, bd)
     av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
-    p_off = av1_sgr_finish_mix(plane, p_off, stride, a5, a5p, b5, b5p, a3,
-      a3p, b3, b3p, tmp5, tmp3, w, 2, w0, w1, bd)
+    p_off = av1_sgr_finish_mix(
+      plane, p_off, stride, a5, a5p, b5, b5p, a3, a3p, b3, b3p, tmp5, tmp3, w, 2,
+      w0, w1, bd,
+    )
     // output_1
     sq5p[3] = sq5p[2]
     sq5p[4] = sq5p[2]
@@ -1549,8 +1896,10 @@ fn av1_lr_sgr_mix(
     av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
     av1_lr_rotate(a3p, 4)
     av1_lr_rotate(b3p, 4)
-    p_off = av1_sgr_finish_mix(plane, p_off, stride, a5, a5p, b5, b5p, a3,
-      a3p, b3, b3p, tmp5, tmp3, w, 1, w0, w1, bd)
+    p_off = av1_sgr_finish_mix(
+      plane, p_off, stride, a5, a5p, b5, b5p, a3, a3p, b3, b3p, tmp5, tmp3, w, 1,
+      w0, w1, bd,
+    )
   } else if mode == 3 {
     sq5p[4] = sq5p[3]
     sm5p[4] = sm5p[3]
@@ -1573,8 +1922,10 @@ fn av1_lr_sgr_mix(
     av1_sgr_box3_vert(sq3, sq3p, sm3, sm3p, a3, a3p[3], b3, b3p[3], w, s1, bd)
     av1_lr_rotate(a3p, 4)
     av1_lr_rotate(b3p, 4)
-    p_off = av1_sgr_finish_mix(plane, p_off, stride, a5, a5p, b5, b5p, a3,
-      a3p, b3, b3p, tmp5, tmp3, w, 1, w0, w1, bd)
+    p_off = av1_sgr_finish_mix(
+      plane, p_off, stride, a5, a5p, b5, b5p, a3, a3p, b3, b3p, tmp5, tmp3, w, 1,
+      w0, w1, bd,
+    )
   }
 }
 
@@ -1582,10 +1933,10 @@ fn av1_lr_sgr_mix(
 /// Regression probe used by `libavcodec/lr_kernel`: run one LR kernel with
 /// explicit buffers, mirroring dav1d's C reference harness.
 pub fn av1_lr_filter_probe(
-  kind : Int,
-  w : Int,
-  h : Int,
-  edges : Int,
+  kind : Int32,
+  w : Int32,
+  h : Int32,
+  edges : Int32,
   p0 : Int32,
   p1 : Int32,
   p2 : Int32,
@@ -1594,10 +1945,10 @@ pub fn av1_lr_filter_probe(
   plane : FixedArray[Int32],
   left : FixedArray[Int32],
   lpf : FixedArray[Int32],
-  p_off : Int,
-  left_off : Int,
-  lpf_off : Int,
-  stride : Int,
+  p_off : Int32,
+  left_off : Int32,
+  lpf_off : Int32,
+  stride : Int32,
   bd : Int32,
 ) -> Unit {
   let left_opt : FixedArray[Int32]? = if (edges & av1_lr_have_left) != 0 {
@@ -1622,16 +1973,24 @@ pub fn av1_lr_filter_probe(
     fv[2] = p0
     fv[4] = p0
     fv[3] = 128 - (p1 + p2 + p0) * 2
-    av1_lr_wiener(plane, p_off, stride, left_opt, left_off, lpf, lpf_off, w, h,
-      fh, fv, edges, bd)
+    av1_lr_wiener(
+      plane, p_off, stride, left_opt, left_off, lpf, lpf_off, w, h, fh, fv, edges,
+      bd,
+    )
   } else if kind == 2 {
-    av1_lr_sgr3(plane, p_off, stride, left_opt, left_off, lpf, lpf_off, w, h,
-      p1, q1, edges, bd)
+    av1_lr_sgr3(
+      plane, p_off, stride, left_opt, left_off, lpf, lpf_off, w, h, p1, q1, edges,
+      bd,
+    )
   } else if kind == 3 {
-    av1_lr_sgr5(plane, p_off, stride, left_opt, left_off, lpf, lpf_off, w, h,
-      p0, q0, edges, bd)
+    av1_lr_sgr5(
+      plane, p_off, stride, left_opt, left_off, lpf, lpf_off, w, h, p0, q0, edges,
+      bd,
+    )
   } else {
-    av1_lr_sgr_mix(plane, p_off, stride, left_opt, left_off, lpf, lpf_off, w,
-      h, p0, p1, q0, q1, edges, bd)
+    av1_lr_sgr_mix(
+      plane, p_off, stride, left_opt, left_off, lpf, lpf_off, w, h, p0, p1, q0, q1,
+      edges, bd,
+    )
   }
 }

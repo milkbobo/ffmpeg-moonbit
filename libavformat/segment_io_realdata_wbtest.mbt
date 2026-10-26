@@ -24,15 +24,14 @@ let segments_ts_manifest : String =
 
 ///|
 let segments_ts_md5 : Array[String] = [
-  "f3936bd3d203e94846a56dd090f73e14",
-  "1cdb8c3ffeb87c4eedebcad5a0dabbae",
-  "43e0413870d26948d77c0fd34a613f16",
+  "f3936bd3d203e94846a56dd090f73e14", "1cdb8c3ffeb87c4eedebcad5a0dabbae", "43e0413870d26948d77c0fd34a613f16",
   "5ee9da99ed32035a1cccb1568890c0f9",
 ]
 
 ///|
 let segments_ts_files : Array[(String, Bytes)] = [
-  ("https://example.test/segments_ts/seg0.ts",
+  (
+    "https://example.test/segments_ts/seg0.ts",
     b"R0AREABC8CUAAcEAAP8B/wAB/IAUSBIBBkZGbXBlZwlTZXJ2aWNlMDF3fEPK////////////////////////////////////////////////////" +
     b"////////////////////////////////////////////////////////////////////////////////////////////////////////////////" +
     b"//////////////////////////9HQAAQAACwDQABwQAAAAHwACqxBLL/////////////////////////////////////////////////////////" +
@@ -71,8 +70,10 @@ let segments_ts_files : Array[(String, Bytes)] = [
     b"9hCjtTETM424AB9sb8TfYc0wIeL4OtH0Xo4Jf/cD0h/FxzsueHeNisSYWYguIKxqwABQoAdxFEWxrer5XwGUIHBMOTpHAQA9OwD/////////////" +
     b"////////////////////////////////////////////////////////////////BGVYiGwb8b7TW06ExFEmiSFaJOVLAmogFbAQNEgJeCGNeH/j" +
     b"4e0pbMQXEFSFtQFuAGgEiNiOKuL3rGQSTnGDVxLxLgQN89OyMxkZj/XDPCqg5WAg/V9H/gvu5CCwgxpBVIDgrggvP/PykYyML/h2qErWQgkIL3lF" +
-    b"I21/4A=="),
-  ("https://example.test/segments_ts/seg1.ts",
+    b"I21/4A==",
+  ),
+  (
+    "https://example.test/segments_ts/seg1.ts",
     b"R0AREQBC8CUAAcEAAP8B/wAB/IAUSBIBBkZGbXBlZwlTZXJ2aWNlMDF3fEPK////////////////////////////////////////////////////" +
     b"////////////////////////////////////////////////////////////////////////////////////////////////////////////////" +
     b"//////////////////////////9HQAARAACwDQABwQAAAAHwACqxBLL/////////////////////////////////////////////////////////" +
@@ -108,7 +109,8 @@ let segments_ts_files : Array[(String, Bytes)] = [
     b"K0txsWXABTVXtpbe8N8ETp8kNTX+8LbAFwMxyW0kZNfgnnXpNf3veDDiQYDfgOBfsmQEgKO4Ggut3IAEAway4+MwAFTICcCjsBYLrceAAIFuQAQD" +
     b"h7LDAANqABISYEEBtic9win/r4HMhubjsJVu0EIERoQVrgnX1OYmFa5pAdu0BdG7RwEAOqMA////////////////////////////////////////" +
     b"////////////////////////////////////////////////////////////////////////////////////////////////////////////////" +
-    b"////////////////////////////////////////////////////////////////0kjA3/b1AdytJhX9AUV5OEtvve4="),
+    b"////////////////////////////////////////////////////////////////0kjA3/b1AdytJhX9AUV5OEtvve4=",
+  ),
 ]
 
 ///|
@@ -128,15 +130,14 @@ let segments_mp4_manifest : String =
 
 ///|
 let segments_mp4_md5 : Array[String] = [
-  "f3936bd3d203e94846a56dd090f73e14",
-  "1cdb8c3ffeb87c4eedebcad5a0dabbae",
-  "43e0413870d26948d77c0fd34a613f16",
+  "f3936bd3d203e94846a56dd090f73e14", "1cdb8c3ffeb87c4eedebcad5a0dabbae", "43e0413870d26948d77c0fd34a613f16",
   "5ee9da99ed32035a1cccb1568890c0f9",
 ]
 
 ///|
 let segments_mp4_files : Array[(String, Bytes)] = [
-  ("https://example.test/segments_mp4/init.mp4",
+  (
+    "https://example.test/segments_mp4/init.mp4",
     b"AAAAHGZ0eXBpc281AAACAGlzbzVpc282bXA0MQAAAwltb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAAAAABAAABAAAAAAAAAAAAAAAAAQAA" +
     b"AAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAACDHRyYWsAAABcdGtoZAAAAAMAAAAA" +
     b"AAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAQAAAADAAAAAAACRlZHRz" +
@@ -146,8 +147,10 @@ let segments_mp4_files : Array[(String, Bytes)] = [
     b"TGF2YzYzLjEuMTAyIGxpYngyNjQAAAAAAAAAAAAAAAAY//8AAAAtYXZjQwFCwAr/4QAWZ0LACtoR7ARAAAADAEAAAAMBA8SJqAEABGjOD8gAAAAQ" +
     b"cGFzcAAAAAEAAAABAAAAEHN0dHMAAAAAAAAAAAAAABBzdHNjAAAAAAAAAAAAAAAUc3RzegAAAAAAAAAAAAAAAAAAABBzdGNvAAAAAAAAAAAAAAAo" +
     b"bXZleAAAACB0cmV4AAAAAAAAAAEAAAABAAAAAAAAAAAAAAAAAAAAYXVkdGEAAABZbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAA" +
-    b"AAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2My4xLjEwMg=="),
-  ("https://example.test/segments_mp4/seg0.m4s",
+    b"AAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2My4xLjEwMg==",
+  ),
+  (
+    "https://example.test/segments_mp4/seg0.m4s",
     b"AAAAGHN0eXBtc2RoAAAAAG1zZGhtc2l4AAAANHNpZHgBAAAAAAAAAQAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAACcMAAEAAgAAAAAAAAHBtb29m" +
     b"AAAAEG1maGQAAAAAAAAAAQAAAFh0cmFmAAAAHHRmaGQAAgA4AAAAAQAAIAAAAAgzAQEAAAAAABR0ZmR0AQAAAAAAAAAAAAAAAAAAIHRydW4AAAIF" +
     b"AAAAAgAAAHgCAAAAAAAIMwAAARgAAAlTbWRhdAAAAkMGBf//P9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2NC9NUEVHLTQg" +
@@ -178,8 +181,10 @@ let segments_mp4_files : Array[(String, Bytes)] = [
     b"uJinKoziBaeNkiAAIFCJZAAAgDAACAGAEXOAAAABFEGaICK8bAdSBcyUyZISA7Dh+AteGcNpaqbcUi6lqlgAJuoU0J5bCrK7+QIAAQLQABAlACwi" +
     b"EAAIBgAGBhYAB5CMIwbrjJVomLuTwimFmvMoMS4f7vYQo7UxEzONuAAfbG/E32HNMCHi+DrR9F6OCX/3A9Ifxcc7Lnh3jYrEmFmILiCsasAAUKAH" +
     b"cRRFsa3q+V8BlCBwTDk6BGVYiGwb8b7TW06ExFEmiSFaJOVLAmogFbAQNEgJeCGNeH/j4e0pbMQXEFSFtQFuAGgEiNiOKuL3rGQSTnGDVxLxLgQN" +
-    b"89OyMxkZj/XDPCqg5WAg/V9H/gvu5CCwgxpBVIDgrggvP/PykYyML/h2qErWQgkIL3lFI21/4A=="),
-  ("https://example.test/segments_mp4/seg1.m4s",
+    b"89OyMxkZj/XDPCqg5WAg/V9H/gvu5CCwgxpBVIDgrggvP/PykYyML/h2qErWQgkIL3lFI21/4A==",
+  ),
+  (
+    "https://example.test/segments_mp4/seg1.m4s",
     b"AAAAGHN0eXBtc2RoAAAAAG1zZGhtc2l4AAAANHNpZHgBAAAAAAAAAQAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAQAACFoAAEAAgAAAAAAAAHBtb29m" +
     b"AAAAEG1maGQAAAAAAAAAAgAAAFh0cmFmAAAAHHRmaGQAAgA4AAAAAQAAIAAAAAcyAQEAAAAAABR0ZmR0AQAAAAAAAAAAAEAAAAAAIHRydW4AAAIF" +
     b"AAAAAgAAAHgCAAAAAAAHMgAAALAAAAfqbWRhdAAABy5liIIHoMYACAxoMFdJQHiGPSc1IQAOQBULO4KccbahAAEAEMiAAIAIwAHCCfosig0Ss2gK" +
@@ -206,8 +211,10 @@ let segments_mp4_files : Array[(String, Bytes)] = [
     b"CkYoPAbEAUBdDAh4abassAIAOZBwAgA5mWAASAAEAFiDgAEgABABY+BgACi0IAAQLwABBoAAUAA+A0XgPbOoMPwQCITLIAIUy5gKZjDlvSccKNv+" +
     b"TGCAADAAUDJZAAAgQAACBSAAIBVzgAAAAKxBmiAivDngAufL0xo1/gmsBHgAcytLcbFlwAU1V7aW3vDfBE6fJDU1/vC2wBcDMcltJGTX4J516TX9" +
     b"73gw4kGA34DgX7JkBICjuBoLrdyABAMGsuPjMABUyAnAo7AWC63HgACBbkAEA4eywwADagASEmBBAbYnPcIp/6+BzIbm47CVbtBCBEaEFa4J19Tm" +
-    b"JhWuaQHbtAXRu9JIwN/29QHcrSYV/QFFeThLb73u"),
+    b"JhWuaQHbtAXRu9JIwN/29QHcrSYV/QFFeThLb73u",
+  ),
 ]
+
 ///|
 let segments_dash_manifest : String =
   #|<?xml version="1.0" encoding="utf-8"?>
@@ -240,16 +247,14 @@ let segments_dash_manifest : String =
 
 ///|
 let segments_dash_md5 : Array[String] = [
-  "f3936bd3d203e94846a56dd090f73e14",
-  "1cdb8c3ffeb87c4eedebcad5a0dabbae",
-  "43e0413870d26948d77c0fd34a613f16",
-  "5ee9da99ed32035a1cccb1568890c0f9",
-  "5ee9da99ed32035a1cccb1568890c0f9",
+  "f3936bd3d203e94846a56dd090f73e14", "1cdb8c3ffeb87c4eedebcad5a0dabbae", "43e0413870d26948d77c0fd34a613f16",
+  "5ee9da99ed32035a1cccb1568890c0f9", "5ee9da99ed32035a1cccb1568890c0f9",
 ]
 
 ///|
 let segments_dash_files : Array[(String, Bytes)] = [
-  ("https://example.test/segments_dash/init-stream0.m4s",
+  (
+    "https://example.test/segments_dash/init-stream0.m4s",
     b"AAAAHGZ0eXBpc281AAACAGlzbzVpc282bXA0MQAAAwltb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAAAAABAAABAAAAAAAAAAAAAAAAAQAA" +
     b"AAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAACDHRyYWsAAABcdGtoZAAAAAMAAAAA" +
     b"AAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAQAAAADAAAAAAACRlZHRz" +
@@ -259,8 +264,10 @@ let segments_dash_files : Array[(String, Bytes)] = [
     b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY//8AAAAtYXZjQwFCwAr/4QAWZ0LACtoR7ARAAAADAEAAAAMBA8SJqAEABGjOD8gAAAAQ" +
     b"cGFzcAAAAAEAAAABAAAAEHN0dHMAAAAAAAAAAAAAABBzdHNjAAAAAAAAAAAAAAAUc3RzegAAAAAAAAAAAAAAAAAAABBzdGNvAAAAAAAAAAAAAAAo" +
     b"bXZleAAAACB0cmV4AAAAAAAAAAEAAAABAAAAAAAAAAAAAAAAAAAAYXVkdGEAAABZbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAA" +
-    b"AAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2My4xLjEwMg=="),
-  ("https://example.test/segments_dash/chunk-stream0-00001.m4s",
+    b"AAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2My4xLjEwMg==",
+  ),
+  (
+    "https://example.test/segments_dash/chunk-stream0-00001.m4s",
     b"AAAAGHN0eXBtc2RoAAAAAG1zZGhtc2l4AAAANHNpZHgBAAAAAAAAAQAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAACcMAAEAAgAAAAAAAAHBtb29m" +
     b"AAAAEG1maGQAAAAAAAAAAQAAAFh0cmFmAAAAHHRmaGQAAgA4AAAAAQAAIAAAAAgzAQEAAAAAABR0ZmR0AQAAAAAAAAAAAAAAAAAAIHRydW4AAAIF" +
     b"AAAAAgAAAHgCAAAAAAAIMwAAARgAAAlTbWRhdAAAAkMGBf//P9xF6b3m2Ui3lizYINkj7u94MjY0IC0gY29yZSAxNjUgLSBILjI2NC9NUEVHLTQg" +
@@ -291,8 +298,10 @@ let segments_dash_files : Array[(String, Bytes)] = [
     b"uJinKoziBaeNkiAAIFCJZAAAgDAACAGAEXOAAAABFEGaICK8bAdSBcyUyZISA7Dh+AteGcNpaqbcUi6lqlgAJuoU0J5bCrK7+QIAAQLQABAlACwi" +
     b"EAAIBgAGBhYAB5CMIwbrjJVomLuTwimFmvMoMS4f7vYQo7UxEzONuAAfbG/E32HNMCHi+DrR9F6OCX/3A9Ifxcc7Lnh3jYrEmFmILiCsasAAUKAH" +
     b"cRRFsa3q+V8BlCBwTDk6BGVYiGwb8b7TW06ExFEmiSFaJOVLAmogFbAQNEgJeCGNeH/j4e0pbMQXEFSFtQFuAGgEiNiOKuL3rGQSTnGDVxLxLgQN" +
-    b"89OyMxkZj/XDPCqg5WAg/V9H/gvu5CCwgxpBVIDgrggvP/PykYyML/h2qErWQgkIL3lFI21/4A=="),
-  ("https://example.test/segments_dash/chunk-stream0-00002.m4s",
+    b"89OyMxkZj/XDPCqg5WAg/V9H/gvu5CCwgxpBVIDgrggvP/PykYyML/h2qErWQgkIL3lFI21/4A==",
+  ),
+  (
+    "https://example.test/segments_dash/chunk-stream0-00002.m4s",
     b"AAAAGHN0eXBtc2RoAAAAAG1zZGhtc2l4AAAANHNpZHgBAAAAAAAAAQAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAQAACFoAAEAAgAAAAAAAAHBtb29m" +
     b"AAAAEG1maGQAAAAAAAAAAgAAAFh0cmFmAAAAHHRmaGQAAgA4AAAAAQAAIAAAAAcyAQEAAAAAABR0ZmR0AQAAAAAAAAAAAEAAAAAAIHRydW4AAAIF" +
     b"AAAAAgAAAHgCAAAAAAAHMgAAALAAAAfqbWRhdAAABy5liIIHoMYACAxoMFdJQHiGPSc1IQAOQBULO4KccbahAAEAEMiAAIAIwAHCCfosig0Ss2gK" +
@@ -319,5 +328,6 @@ let segments_dash_files : Array[(String, Bytes)] = [
     b"CkYoPAbEAUBdDAh4abassAIAOZBwAgA5mWAASAAEAFiDgAEgABABY+BgACi0IAAQLwABBoAAUAA+A0XgPbOoMPwQCITLIAIUy5gKZjDlvSccKNv+" +
     b"TGCAADAAUDJZAAAgQAACBSAAIBVzgAAAAKxBmiAivDngAufL0xo1/gmsBHgAcytLcbFlwAU1V7aW3vDfBE6fJDU1/vC2wBcDMcltJGTX4J516TX9" +
     b"73gw4kGA34DgX7JkBICjuBoLrdyABAMGsuPjMABUyAnAo7AWC63HgACBbkAEA4eywwADagASEmBBAbYnPcIp/6+BzIbm47CVbtBCBEaEFa4J19Tm" +
-    b"JhWuaQHbtAXRu9JIwN/29QHcrSYV/QFFeThLb73u"),
+    b"JhWuaQHbtAXRu9JIwN/29QHcrSYV/QFFeThLb73u",
+  ),
 ]

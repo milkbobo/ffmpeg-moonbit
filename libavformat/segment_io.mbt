@@ -12,13 +12,19 @@ pub type MediaFetch = (String, Int64, Int64) -> Result[Bytes, String]
 
 ///|
 fn media_fetch_resource(
-  fetch : MediaFetch, uri : String, range : HlsByteRange?,
+  fetch : MediaFetch,
+  uri : String,
+  range : HlsByteRange?,
 ) -> Result[Bytes, String] {
-  if uri == "" { return Err("segment: empty resource URI") }
+  if uri == "" {
+    return Err("segment: empty resource URI")
+  }
   let (offset, length) = match range {
     None => (0L, -1L)
     Some(r) => {
-      if r.offset < 0L || r.length <= 0L || r.offset > 9223372036854775807L - r.length {
+      if r.offset < 0L ||
+        r.length <= 0L ||
+        r.offset > 9223372036854775807L - r.length {
         return Err("segment: invalid byte range")
       }
       (r.offset, r.length)
@@ -26,11 +32,12 @@ fn media_fetch_resource(
   }
   match fetch(uri, offset, length) {
     Err(e) => Err(e)
-    Ok(bytes) => {
+    Ok(bytes) =>
       if length >= 0L && bytes.length().to_int64() != length {
         Err("segment: response length does not match byte range")
-      } else { Ok(bytes) }
-    }
+      } else {
+        Ok(bytes)
+      }
   }
 }
 
@@ -47,10 +54,16 @@ pub struct MediaSegmentData {
 ///|
 /// Initialization followed by media bytes (TS segments usually have no init).
 pub fn MediaSegmentData::bytes(self : MediaSegmentData) -> Bytes {
-  if self.initialization.length() == 0 { return self.media }
+  if self.initialization.length() == 0 {
+    return self.media
+  }
   let out : Array[Byte] = []
-  for byte in self.initialization { out.push(byte) }
-  for byte in self.media { out.push(byte) }
+  for byte in self.initialization {
+    out.push(byte)
+  }
+  for byte in self.media {
+    out.push(byte)
+  }
   Bytes::from_array(out[:])
 }
 
@@ -73,23 +86,33 @@ pub struct HlsSegmentReader {
 /// ```mbt check
 /// test {
 ///   let playlist = @libavformat.av_hls_parse("#EXTM3U\n#EXT-X-ENDLIST").unwrap()
-///   let reader = @libavformat.hls_segment_reader_new(playlist, (_, _, _) => Err("no resources")).unwrap()
+///   let reader = @libavformat.hls_segment_reader_new(playlist, (_, _, _) => {
+///     Err("no resources")
+///   }).unwrap()
 ///   assert_true(reader.next().unwrap() is None)
 /// }
 /// ```
 pub fn hls_segment_reader_new(
-  playlist : HlsPlaylist, fetch : MediaFetch,
+  playlist : HlsPlaylist,
+  fetch : MediaFetch,
 ) -> Result[HlsSegmentReader, String] {
-  if playlist.is_master { return Err("hls: select a media playlist before reading") }
-  Ok({ playlist, fetch, keys: Map([]), maps: Map([]), next_index: 0 })
+  if playlist.is_master {
+    return Err("hls: select a media playlist before reading")
+  }
+  Ok({ playlist, fetch, keys: Map([]), maps: Map([]), next_index: 0, })
 }
 
 ///|
 fn HlsSegmentReader::decrypt(
-  self : HlsSegmentReader, data : Bytes, key_index : Int32,
-  sequence : Int64, is_map : Bool,
+  self : HlsSegmentReader,
+  data : Bytes,
+  key_index : Int32,
+  sequence : Int64,
+  is_map : Bool,
 ) -> Result[Bytes, String] {
-  if key_index < 0 { return Ok(data) }
+  if key_index < 0 {
+    return Ok(data)
+  }
   guard self.playlist.keys.get(key_index) is Some(key) else {
     return Err("hls: invalid key index")
   }
@@ -97,7 +120,9 @@ fn HlsSegmentReader::decrypt(
     return Err("hls: only identity AES-128 encryption is supported")
   }
   let iv = if key.iv == "" {
-    if is_map { return Err("hls: encrypted initialization requires an explicit IV") }
+    if is_map {
+      return Err("hls: encrypted initialization requires an explicit IV")
+    }
     hls_iv_from_sequence(sequence)
   } else {
     match hls_parse_iv(key.iv) {
@@ -112,7 +137,9 @@ fn HlsSegmentReader::decrypt(
         Ok(value) => value
         Err(e) => return Err(e)
       }
-      if value.length() != 16 { return Err("hls: AES-128 key must be 16 bytes") }
+      if value.length() != 16 {
+        return Err("hls: AES-128 key must be 16 bytes")
+      }
       self.keys[key_index] = value
       value
     }
@@ -129,7 +156,8 @@ pub fn HlsSegmentReader::next(
 ) -> Result[MediaSegmentData?, String] {
   let mut index = self.next_index
   let mut discontinuity = false
-  while index < self.playlist.segments.length() && self.playlist.segments[index].gap {
+  while index < self.playlist.segments.length() &&
+        self.playlist.segments[index].gap {
     discontinuity = discontinuity || self.playlist.segments[index].discontinuity
     index += 1
   }
@@ -138,7 +166,9 @@ pub fn HlsSegmentReader::next(
     return Ok(None)
   }
   let segment = self.playlist.segments[index]
-  let init = if segment.map_index < 0 { b"" } else {
+  let init = if segment.map_index < 0 {
+    b""
+  } else {
     match self.maps.get(segment.map_index) {
       Some(value) => value
       None => {
@@ -146,14 +176,15 @@ pub fn HlsSegmentReader::next(
           return Err("hls: invalid initialization index")
         }
         let range = match map.byterange {
-          Some(r) if r.offset < 0L => Some({ ..r, offset: 0L })
+          Some(r) if r.offset < 0L => Some({ ..r, offset: 0L, })
           other => other
         }
         let bytes = match media_fetch_resource(self.fetch, map.uri, range) {
           Ok(value) => value
           Err(e) => return Err(e)
         }
-        let bytes = match self.decrypt(bytes, map.key_index, segment.media_sequence, true) {
+        let bytes = match
+          self.decrypt(bytes, map.key_index, segment.media_sequence, true) {
           Ok(value) => value
           Err(e) => return Err(e)
         }
@@ -162,17 +193,25 @@ pub fn HlsSegmentReader::next(
       }
     }
   }
-  let data = match media_fetch_resource(self.fetch, segment.uri, segment.byterange) {
+  let data = match
+    media_fetch_resource(self.fetch, segment.uri, segment.byterange) {
     Ok(value) => value
     Err(e) => return Err(e)
   }
-  let media = match self.decrypt(data, segment.key_index, segment.media_sequence, false) {
+  let media = match
+    self.decrypt(data, segment.key_index, segment.media_sequence, false) {
     Ok(value) => value
     Err(e) => return Err(e)
   }
   self.next_index = index + 1
-  Ok(Some({ sequence: segment.media_sequence, initialization: init, media,
-    discontinuity: discontinuity || segment.discontinuity }))
+  Ok(
+    Some({
+      sequence: segment.media_sequence,
+      initialization: init,
+      media,
+      discontinuity: discontinuity || segment.discontinuity,
+    }),
+  )
 }
 
 ///|
@@ -187,9 +226,10 @@ pub struct DashSegmentReader {
 
 ///|
 pub fn dash_segment_reader_new(
-  representation : DashRepresentation, fetch : MediaFetch,
+  representation : DashRepresentation,
+  fetch : MediaFetch,
 ) -> DashSegmentReader {
-  { representation, fetch, initialization: None, next_index: 0 }
+  { representation, fetch, initialization: None, next_index: 0, }
 }
 
 ///|
@@ -206,7 +246,9 @@ pub fn DashSegmentReader::next(
   let init = match self.initialization {
     Some(bytes) => bytes
     None => {
-      let bytes = if rep.initialization == "" { b"" } else {
+      let bytes = if rep.initialization == "" {
+        b""
+      } else {
         let range = match dash_resource_range(rep.initialization_range) {
           Ok(value) => value
           Err(e) => return Err(e)
@@ -230,18 +272,33 @@ pub fn DashSegmentReader::next(
     Err(e) => return Err(e)
   }
   self.next_index += 1
-  Ok(Some({ sequence: segment.number, initialization: init, media, discontinuity: false }))
+  Ok(
+    Some({
+      sequence: segment.number,
+      initialization: init,
+      media,
+      discontinuity: false,
+    }),
+  )
 }
 
 ///|
 fn dash_resource_range(text : String) -> Result[HlsByteRange?, String] {
-  if text == "" { return Ok(None) }
+  if text == "" {
+    return Ok(None)
+  }
   let parts = text.split("-").collect()
-  if parts.length() != 2 { return Err("dash: invalid resource byte range") }
-  let start = @string.parse_int64(parts[0]) catch { _ => return Err("dash: invalid resource byte range") }
-  let end = @string.parse_int64(parts[1]) catch { _ => return Err("dash: invalid resource byte range") }
+  if parts.length() != 2 {
+    return Err("dash: invalid resource byte range")
+  }
+  let start = @string.parse_int64(parts[0]) catch {
+    _ => return Err("dash: invalid resource byte range")
+  }
+  let end = @string.parse_int64(parts[1]) catch {
+    _ => return Err("dash: invalid resource byte range")
+  }
   if start < 0L || end < start || end - start == 9223372036854775807L {
     return Err("dash: invalid resource byte range")
   }
-  Ok(Some({ offset: start, length: end - start + 1L }))
+  Ok(Some({ offset: start, length: end - start + 1L, }))
 }

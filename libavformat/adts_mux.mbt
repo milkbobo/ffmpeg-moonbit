@@ -17,17 +17,12 @@ pub struct AdtsMuxer {
 pub fn adts_muxer_new(
   sample_rate : Int32,
   channels : Int32,
-  object_type? : Int32 = 2,
+  object_type~ : Int32 = 2,
 ) -> Result[AdtsMuxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 7 {
     return Err("EINVAL: invalid ADTS stream parameters")
   }
-  Ok({
-    sample_rate,
-    channels,
-    object_type,
-    data: [],
-  })
+  Ok({ sample_rate, channels, object_type, data: [], })
 }
 
 ///|

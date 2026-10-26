@@ -25,9 +25,17 @@
 ///|
 /// `ProbContext` flat layout (311 entries) — offsets in C struct order. */
 const VP9_PC_TX32P : Int32 = 179 // [2][3]
+
+///|
 const VP9_PC_TX16P : Int32 = 185 // [2][2]
+
+///|
 const VP9_PC_TX8P : Int32 = 189 // [2]
+
+///|
 const VP9_PC_SKIP : Int32 = 191 // [3]
+
+///|
 const VP9_PC_SIZE : Int32 = 311
 
 ///|
@@ -42,6 +50,7 @@ fn vp9_ctx_coef_base(c : Int32, tx : Int32, pl : Int32, inter : Int32) -> Int32 
   c * 1728 + ((tx * 2 + pl) * 2 + inter) * 108
 }
 
+///|
 pub struct Vp9Decoder {
   /// Parsed header of the frame currently being decoded. */
   mut header : Vp9FrameHeader
@@ -228,10 +237,7 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     above_partition: FixedArray::make(1, 0),
     above_mode: FixedArray::make(1, 0),
     above_y_nnz: FixedArray::make(1, 0),
-    above_uv_nnz: [
-      FixedArray::make(1, 0),
-      FixedArray::make(1, 0),
-    ],
+    above_uv_nnz: [FixedArray::make(1, 0), FixedArray::make(1, 0)],
     above_skip: FixedArray::make(1, 0),
     above_txfm: FixedArray::make(1, 0),
     above_segpred: FixedArray::make(1, 0),
@@ -244,10 +250,7 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     left_partition: FixedArray::make(8, 0),
     left_mode: FixedArray::make(16, 0),
     left_y_nnz: FixedArray::make(16, 0),
-    left_uv_nnz: [
-      FixedArray::make(16, 0),
-      FixedArray::make(16, 0),
-    ],
+    left_uv_nnz: [FixedArray::make(16, 0), FixedArray::make(16, 0)],
     left_skip: FixedArray::make(8, 0),
     left_txfm: FixedArray::make(8, 0),
     left_segpred: FixedArray::make(8, 0),
@@ -301,8 +304,22 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     mvscale_y: FixedArray::make(3, 0),
     mvstep_x: FixedArray::make(3, 0),
     mvstep_y: FixedArray::make(3, 0),
-    mvmap: FixedArray::make(1, Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0 }),
-    prev_mvmap: FixedArray::make(1, Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0 }),
+    mvmap: FixedArray::make(1, Vp9MvRefPair::{
+      ref0: -1,
+      ref1: -1,
+      x0: 0,
+      y0: 0,
+      x1: 0,
+      y1: 0,
+    }),
+    prev_mvmap: FixedArray::make(1, Vp9MvRefPair::{
+      ref0: -1,
+      ref1: -1,
+      x0: 0,
+      y0: 0,
+      x1: 0,
+      y1: 0,
+    }),
     use_last_frame_mvs: false,
     ref_segmap: None,
     last_keyframe: false,
@@ -347,10 +364,15 @@ fn Vp9Decoder::filter_level(self : Vp9Decoder) -> Int32 {
 
 ///|
 
-
 ///|
 /// `update_size`: (re)allocate planes and per-frame contexts. */
-fn Vp9Decoder::update_size(self : Vp9Decoder, w : Int32, h : Int32, ss_h : Int32, ss_v : Int32) -> Unit {
+fn Vp9Decoder::update_size(
+  self : Vp9Decoder,
+  w : Int32,
+  h : Int32,
+  ss_h : Int32,
+  ss_v : Int32,
+) -> Unit {
   self.width = w
   self.height = h
   self.bpp = self.header.bit_depth
@@ -403,9 +425,16 @@ fn Vp9Decoder::update_size(self : Vp9Decoder, w : Int32, h : Int32, ss_h : Int32
   // layout: blocks overhanging the right/bottom frame edge still write
   // their full extent (C `VP9Frame.mv`)
   let n_pos = self.sb_cols * 8 * self.sb_rows * 8
-  let mvmap : FixedArray[Vp9MvRefPair] = FixedArray::make(n_pos, Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0 })
+  let mvmap : FixedArray[Vp9MvRefPair] = FixedArray::make(n_pos, Vp9MvRefPair::{
+    ref0: -1,
+    ref1: -1,
+    x0: 0,
+    y0: 0,
+    x1: 0,
+    y1: 0,
+  })
   for i in 0..<n_pos {
-    mvmap[i] = Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0 }
+    mvmap[i] = Vp9MvRefPair::{ ref0: -1, ref1: -1, x0: 0, y0: 0, x1: 0, y1: 0, }
   }
   self.mvmap = mvmap
 }
@@ -469,11 +498,7 @@ fn Vp9Decoder::init_filter_lut(self : Vp9Decoder, sharp : Int32) -> Unit {
 /// qmul[] and lflvl[][] per segmentation feature (C decode_frame_header). */
 fn Vp9Decoder::setup_segmentation(self : Vp9Decoder) -> Unit {
   let h = self.header
-  let n = if h.segmentation.enabled {
-    8
-  } else {
-    1
-  }
+  let n = if h.segmentation.enabled { 8 } else { 1 }
   for i in 0..<n {
     let feat = h.segmentation.features[i]
     let mut qyac = h.base_q_idx
@@ -494,11 +519,7 @@ fn Vp9Decoder::setup_segmentation(self : Vp9Decoder) -> Unit {
     self.seg_qmul[i * 4 + 1] = vp9_ac_qlookup[qrow + qyac]
     self.seg_qmul[i * 4 + 2] = vp9_dc_qlookup[qrow + quvdc]
     self.seg_qmul[i * 4 + 3] = vp9_ac_qlookup[qrow + quvac]
-    let sh = if h.filter_level >= 32 {
-      1
-    } else {
-      0
-    }
+    let sh = if h.filter_level >= 32 { 1 } else { 0 }
     let mut lflvl = h.filter_level
     if h.segmentation.enabled && feat.lf_enabled {
       if h.segmentation.absolute_vals {
@@ -508,14 +529,18 @@ fn Vp9Decoder::setup_segmentation(self : Vp9Decoder) -> Unit {
       }
     }
     if h.lf_delta_enabled {
-      self.seg_lflvl[i * 8 + 0] = vp9_clip_u6(lflvl + (h.lf_ref_deltas[0] * (1 << sh)))
-      self.seg_lflvl[i * 8 + 1] = vp9_clip_u6(lflvl + (h.lf_ref_deltas[0] * (1 << sh)))
+      self.seg_lflvl[i * 8 + 0] = vp9_clip_u6(
+        lflvl + h.lf_ref_deltas[0] * (1 << sh),
+      )
+      self.seg_lflvl[i * 8 + 1] = vp9_clip_u6(
+        lflvl + h.lf_ref_deltas[0] * (1 << sh),
+      )
       for j in 1..<4 {
         self.seg_lflvl[i * 8 + j * 2] = vp9_clip_u6(
-          lflvl + ((h.lf_ref_deltas[j] + h.lf_mode_deltas[0]) * (1 << sh)),
+          lflvl + (h.lf_ref_deltas[j] + h.lf_mode_deltas[0]) * (1 << sh),
         )
         self.seg_lflvl[i * 8 + j * 2 + 1] = vp9_clip_u6(
-          lflvl + ((h.lf_ref_deltas[j] + h.lf_mode_deltas[1]) * (1 << sh)),
+          lflvl + (h.lf_ref_deltas[j] + h.lf_mode_deltas[1]) * (1 << sh),
         )
       }
     } else {
@@ -532,9 +557,13 @@ fn Vp9Decoder::setup_segmentation(self : Vp9Decoder) -> Unit {
 /// (C `decode_frame_header` from the marker bit through the skip-prob
 /// updates; the inter-mode updates are consumed for keyframes only in so
 /// far as they exist — keyframes have none). */
-fn Vp9Decoder::apply_compressed_header(self : Vp9Decoder, data : Bytes) -> Result[Unit, String] {
+fn Vp9Decoder::apply_compressed_header(
+  self : Vp9Decoder,
+  data : Bytes,
+) -> Result[Unit, String] {
   let h = self.header
-  let c = match vp9_rac_init(data, h.uncompressed_header_size, h.compressed_header_size) {
+  let c = match
+    vp9_rac_init(data, h.uncompressed_header_size, h.compressed_header_size) {
     Ok(c) => c
     Err(e) => return Err(e)
   }
@@ -551,7 +580,10 @@ fn Vp9Decoder::apply_compressed_header(self : Vp9Decoder, data : Bytes) -> Resul
     if self.tx_mode == 4 {
       for i in 0..<2 {
         if vp9_rac_get_prob(c, 252) != 0 {
-          self.prob[VP9_PC_TX8P + i] = vp9_rac_update_prob(c, self.prob[VP9_PC_TX8P + i])
+          self.prob[VP9_PC_TX8P + i] = vp9_rac_update_prob(
+            c,
+            self.prob[VP9_PC_TX8P + i],
+          )
         }
       }
       for i in 0..<2 {
@@ -585,8 +617,7 @@ fn Vp9Decoder::apply_compressed_header(self : Vp9Decoder, data : Bytes) -> Resul
               }
               let pb = vp9_ctx_coef_base(ctx, tx, pl, inter) +
                 (band * 6 + ctxn) * 3
-              let pbase = vp9_coef_base(tx, pl, inter) +
-                (band * 6 + ctxn) * 11
+              let pbase = vp9_coef_base(tx, pl, inter) + (band * 6 + ctxn) * 11
               for n in 0..<3 {
                 if vp9_rac_get_prob(c, 252) != 0 {
                   self.prob_coef[pbase + n] = vp9_rac_update_prob(
@@ -615,8 +646,7 @@ fn Vp9Decoder::apply_compressed_header(self : Vp9Decoder, data : Bytes) -> Resul
               }
               let pb = vp9_ctx_coef_base(ctx, tx, pl, inter) +
                 (band * 6 + ctxn) * 3
-              let pbase = vp9_coef_base(tx, pl, inter) +
-                (band * 6 + ctxn) * 11
+              let pbase = vp9_coef_base(tx, pl, inter) + (band * 6 + ctxn) * 11
               for n in 0..<3 {
                 self.prob_coef[pbase + n] = self.prob_ctx_coef[pb + n]
               }
@@ -636,7 +666,10 @@ fn Vp9Decoder::apply_compressed_header(self : Vp9Decoder, data : Bytes) -> Resul
   // skip probs
   for i in 0..<3 {
     if vp9_rac_get_prob(c, 252) != 0 {
-      self.prob[VP9_PC_SKIP + i] = vp9_rac_update_prob(c, self.prob[VP9_PC_SKIP + i])
+      self.prob[VP9_PC_SKIP + i] = vp9_rac_update_prob(
+        c,
+        self.prob[VP9_PC_SKIP + i],
+      )
     }
   }
   if !h.keyframe && !h.intra_only {
@@ -779,7 +812,11 @@ fn Vp9Decoder::apply_compressed_header(self : Vp9Decoder, data : Bytes) -> Resul
 
 ///|
 /// `set_tile_offset`. */
-fn vp9_set_tile_offset(idx : Int32, log2_n : Int32, n : Int32) -> (Int32, Int32) {
+fn vp9_set_tile_offset(
+  idx : Int32,
+  log2_n : Int32,
+  n : Int32,
+) -> (Int32, Int32) {
   let sb_start = (idx * n) >> log2_n
   let sb_end = ((idx + 1) * n) >> log2_n
   (vp9_min(sb_start, n) << 3, vp9_min(sb_end, n) << 3)
@@ -788,7 +825,10 @@ fn vp9_set_tile_offset(idx : Int32, log2_n : Int32, n : Int32) -> (Int32, Int32)
 ///|
 /// Decode one VP9 frame (keyframe, intra-only or inter) or display an
 /// existing reference slot.
-pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit, String] {
+pub fn Vp9Decoder::decode_frame(
+  self : Vp9Decoder,
+  data : Bytes,
+) -> Result[Unit, String] {
   // reference dimensions for inter size inheritance
   let refw : Array[Int32] = []
   let refh : Array[Int32] = []
@@ -880,14 +920,13 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
     // scaled references are a later slice
     for i in 0..<3 {
       match self.references[h.ref_indices[i]] {
-        Some(r) => {
+        Some(r) =>
           if r.width == h.width && r.height == h.height {
             self.mvscale_x[i] = 0
             self.mvscale_y[i] = 0
           } else {
             return Err("vp9: scaled reference frames not supported")
           }
-        }
         None => return Err("vp9: not all references are available")
       }
     }
@@ -905,21 +944,27 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
     if !old_valid || old_w != h.width || old_h != h.height {
       self.ref_segmap = None
     }
-    self.use_last_frame_mvs = !h.error_resilient && !self.last_invisible &&
+    self.use_last_frame_mvs = !h.error_resilient &&
+      !self.last_invisible &&
       old_valid &&
       old_w == h.width &&
       old_h == h.height
     self.prev_mvmap = old_mvmap
   }
-  self.update_size(h.width, h.height, if h.chroma_subsampling_x {
-    1
-  } else {
-    0
-  }, if h.chroma_subsampling_y {
-    1
-  } else {
-    0
-  })
+  self.update_size(
+    h.width,
+    h.height,
+    if h.chroma_subsampling_x {
+      1
+    } else {
+      0
+    },
+    if h.chroma_subsampling_y {
+      1
+    } else {
+      0
+    },
+  )
   self.frame_ready = false
   self.init_filter_lut(h.filter_sharpness)
   self.setup_segmentation()
@@ -961,13 +1006,21 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
   }
   let mut tile_idx = 0
   for trow in 0..<h.tile_rows {
-    let (row_start, row_end) = vp9_set_tile_offset(trow, h.log2_tile_rows, self.sb_rows)
+    let (row_start, row_end) = vp9_set_tile_offset(
+      trow,
+      h.log2_tile_rows,
+      self.sb_rows,
+    )
     let mut row = row_start
     while row < row_end {
       let yoff = self.ybase + row * 8 * self.ystride
       let uvoff = self.uvbase + ((row * 8 * self.uvstride) >> self.ss_v)
       for tcol in 0..<h.tile_cols {
-        let (col_start, col_end) = vp9_set_tile_offset(tcol, h.log2_tile_cols, self.sb_cols)
+        let (col_start, col_end) = vp9_set_tile_offset(
+          tcol,
+          h.log2_tile_cols,
+          self.sb_cols,
+        )
         let rac = racs[tile_idx + tcol]
         self.rac = rac
         self.tile_col_start = col_start
@@ -1000,7 +1053,14 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
           if vp9_rac_is_end(self.rac) {
             return Err("vp9: tile ended prematurely")
           }
-          self.decode_sb(row, col, lflvl_idx, yoff + col * 8, uvoff + ((col * 8) >> self.ss_h), 0)
+          self.decode_sb(
+            row,
+            col,
+            lflvl_idx,
+            yoff + col * 8,
+            uvoff + ((col * 8) >> self.ss_h),
+            0,
+          )
           col += 8
         }
       }
@@ -1010,7 +1070,8 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
         for i in 0..<(self.cols * 8) {
           self.intra_pred[0][i] = self.y[src + i]
         }
-        let usrc = self.uvbase + ((row * 8 * self.uvstride) >> self.ss_v) +
+        let usrc = self.uvbase +
+          ((row * 8 * self.uvstride) >> self.ss_v) +
           ((64 >> self.ss_v) - 1) * self.uvstride
         for i in 0..<((self.cols * 8) >> self.ss_h) {
           self.intra_pred[1][i] = self.cb[usrc + i]
@@ -1022,7 +1083,11 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
         let mut col = 0
         while col < self.cols {
           let lflvl_idx = (row >> 3) * self.sb_cols + (col >> 3)
-          self.loopfilter_sb(lflvl_idx, yoff + col * 8, uvoff + ((col * 8) >> self.ss_h))
+          self.loopfilter_sb(
+            lflvl_idx,
+            yoff + col * 8,
+            uvoff + ((col * 8) >> self.ss_h),
+          )
           col += 8
         }
       }
@@ -1068,7 +1133,9 @@ pub fn Vp9Decoder::decode_frame(self : Vp9Decoder, data : Bytes) -> Result[Unit,
 /// the reference decoder.  Above 8 bpp each sample becomes a little-endian
 /// 16-bit word, matching the yuv420p10le/yuv444p12le output layout. */
 pub fn Vp9Decoder::frame_bytes(self : Vp9Decoder) -> Bytes {
-  if self.display_bytes is Some(bytes) { return bytes }
+  if self.display_bytes is Some(bytes) {
+    return bytes
+  }
   let w = self.width
   let h = self.height
   let cw = (w + self.ss_h) >> self.ss_h
@@ -1096,11 +1163,7 @@ pub fn Vp9Decoder::frame_bytes(self : Vp9Decoder) -> Bytes {
     }
   }
   for pl in 0..<2 {
-    let plane = if pl == 0 {
-      self.cb
-    } else {
-      self.cr
-    }
+    let plane = if pl == 0 { self.cb } else { self.cr }
     for y in 0..<ch {
       let src = self.uvbase + y * self.uvstride
       for x in 0..<cw {

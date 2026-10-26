@@ -19,10 +19,8 @@ test "av1 OBMC vertical and horizontal match dav1d C reference" {
     for y in 0..<h {
       for x in 0..<w {
         let i = y * w + x
-        dst[i] = (x * 37 + y * 61 + x * y * 11 + c * 17) &
-          ((1 << depth) - 1)
-        tmp[i] = (x * 83 + y * 19 + x * y * 7 + c * 31) &
-          ((1 << depth) - 1)
+        dst[i] = (x * 37 + y * 61 + x * y * 11 + c * 17) & ((1 << depth) - 1)
+        tmp[i] = (x * 83 + y * 19 + x * y * 7 + c * 31) & ((1 << depth) - 1)
       }
     }
     let v = @av1_mc_core.av1_mc_obmc_vertical(dst, tmp, w, h)
@@ -32,8 +30,11 @@ test "av1 OBMC vertical and horizontal match dav1d C reference" {
     for i in 0..<(w * h) {
       vd = (vd * 257 + v[i]) % 1000003
       hd = (hd * 257 + hor[i]) % 1000003
-      assert_eq(dst[i], (i % w * 37 + i / w * 61 +
-        (i % w) * (i / w) * 11 + c * 17) & ((1 << depth) - 1))
+      assert_eq(
+        dst[i],
+        (i % w * 37 + i / w * 61 + i % w * (i / w) * 11 + c * 17) &
+        ((1 << depth) - 1),
+      )
     }
     assert_eq(vd, p[3])
     assert_eq(hd, p[4])

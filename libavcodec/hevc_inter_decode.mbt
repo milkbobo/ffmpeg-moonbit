@@ -30,7 +30,7 @@ fn HevcIntraDecoder::intra_prediction_unit_default_value(
   let sps = self.sps
   let x_pu = x0 >> sps.log2_min_pu_size
   let y_pu = y0 >> sps.log2_min_pu_size
-  let mut size_in_pus = (1 << log2_cb_size) >> sps.log2_min_pu_size
+  let mut size_in_pus = 1 << log2_cb_size >> sps.log2_min_pu_size
   if size_in_pus < 1 {
     size_in_pus = 1
   }
@@ -66,15 +66,7 @@ fn HevcIntraDecoder::prediction_unit(
   ctx.cu_y = self.cur_cu_y
   let current_mv = hevc_mv_field_new()
   hevc_hls_prediction_unit(
-    ctx,
-    x0,
-    y0,
-    n_pb_w,
-    n_pb_h,
-    log2_cb_size,
-    part_idx,
-    skip,
-    current_mv,
+    ctx, x0, y0, n_pb_w, n_pb_h, log2_cb_size, part_idx, skip, current_mv,
   )
   self.pu_merge_flag = ctx.last_merge_flag
   let sps = self.sps
@@ -82,7 +74,9 @@ fn HevcIntraDecoder::prediction_unit(
   let y_pu = y0 >> sps.log2_min_pu_size
   for j in 0..<(n_pb_h >> sps.log2_min_pu_size) {
     for i in 0..<(n_pb_w >> sps.log2_min_pu_size) {
-      self.tab_mvf[(y_pu + j) * sps.min_pu_width + x_pu + i].copy_from(current_mv)
+      self.tab_mvf[(y_pu + j) * sps.min_pu_width + x_pu + i].copy_from(
+        current_mv,
+      )
     }
   }
   if self.rpl.length() < 2 {
@@ -100,7 +94,9 @@ fn HevcIntraDecoder::prediction_unit(
   let y0_c = y0 >> sps.vshift[1]
   let n_pb_w_c = n_pb_w >> sps.hshift[1]
   let n_pb_h_c = n_pb_h >> sps.vshift[1]
-  let weighted = (sh.slice_type == hevc_slice_p && self.pps.weighted_pred_flag != 0) ||
+  let weighted = (
+      sh.slice_type == hevc_slice_p && self.pps.weighted_pred_flag != 0
+    ) ||
     (sh.slice_type == hevc_slice_b && self.pps.weighted_bipred_flag != 0)
   let bd = sps.bit_depth
   let pw = sh.pw
@@ -469,14 +465,18 @@ fn hevc_boundary_strength(
     if curr_rpl[0].poc(curr.ref_idx0) == neigh_rpl[0].poc(neigh.ref_idx0) &&
       curr_rpl[0].poc(curr.ref_idx0) == curr_rpl[1].poc(curr.ref_idx1) &&
       neigh_rpl[0].poc(neigh.ref_idx0) == neigh_rpl[1].poc(neigh.ref_idx1) {
-      if ((neigh.mv0.x - curr.mv0.x).abs() >= 4 ||
-        (neigh.mv0.y - curr.mv0.y).abs() >= 4 ||
-        (neigh.mv1.x - curr.mv1.x).abs() >= 4 ||
-        (neigh.mv1.y - curr.mv1.y).abs() >= 4) &&
-        ((neigh.mv1.x - curr.mv0.x).abs() >= 4 ||
-        (neigh.mv1.y - curr.mv0.y).abs() >= 4 ||
-        (neigh.mv0.x - curr.mv1.x).abs() >= 4 ||
-        (neigh.mv0.y - curr.mv1.y).abs() >= 4) {
+      if (
+          (neigh.mv0.x - curr.mv0.x).abs() >= 4 ||
+          (neigh.mv0.y - curr.mv0.y).abs() >= 4 ||
+          (neigh.mv1.x - curr.mv1.x).abs() >= 4 ||
+          (neigh.mv1.y - curr.mv1.y).abs() >= 4
+        ) &&
+        (
+          (neigh.mv1.x - curr.mv0.x).abs() >= 4 ||
+          (neigh.mv1.y - curr.mv0.y).abs() >= 4 ||
+          (neigh.mv0.x - curr.mv1.x).abs() >= 4 ||
+          (neigh.mv0.y - curr.mv1.y).abs() >= 4
+        ) {
         return 1
       }
       return 0
@@ -548,7 +548,7 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
   let mut upper_slice_edge = false
   let mut upper_tile_edge = false
   let mut up_rs = curr_rs
-  if y0 > 0 && (y0 & 7) == 0 && (y0 % ctb_size) == 0 {
+  if y0 > 0 && (y0 & 7) == 0 && y0 % ctb_size == 0 {
     up_rs = curr_rs - sps.ctb_width
     upper_slice_edge = self.ctb_slice_idx[up_rs] != self.slice_idx
     if pps.tiles_enabled_flag != 0 {
@@ -558,15 +558,19 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
   }
   let mut boundary_upper = y0 > 0 && (y0 & 7) == 0
   if boundary_upper &&
-    ((upper_slice_edge &&
-    !self.sh.slice_loop_filter_across_slices_enabled_flag) ||
-    (upper_tile_edge && pps.loop_filter_across_tiles_enabled_flag == 0)) {
+    (
+      (
+        upper_slice_edge &&
+        !self.sh.slice_loop_filter_across_slices_enabled_flag
+      ) ||
+      (upper_tile_edge && pps.loop_filter_across_tiles_enabled_flag == 0)
+    ) {
     boundary_upper = false
   }
   let mut left_slice_edge = false
   let mut left_tile_edge = false
   let mut left_rs = curr_rs
-  if x0 > 0 && (x0 & 7) == 0 && (x0 % ctb_size) == 0 {
+  if x0 > 0 && (x0 & 7) == 0 && x0 % ctb_size == 0 {
     left_rs = curr_rs - 1
     left_slice_edge = self.ctb_slice_idx[left_rs] != self.slice_idx
     if pps.tiles_enabled_flag != 0 {
@@ -576,9 +580,10 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
   }
   let mut boundary_left = x0 > 0 && (x0 & 7) == 0
   if boundary_left &&
-    ((left_slice_edge &&
-    !self.sh.slice_loop_filter_across_slices_enabled_flag) ||
-    (left_tile_edge && pps.loop_filter_across_tiles_enabled_flag == 0)) {
+    (
+      (left_slice_edge && !self.sh.slice_loop_filter_across_slices_enabled_flag) ||
+      (left_tile_edge && pps.loop_filter_across_tiles_enabled_flag == 0)
+    ) {
     boundary_left = false
   }
   let top_rpl = if upper_slice_edge || upper_tile_edge {
@@ -597,14 +602,15 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
     let yp_tu = (y0 - 1) >> l2tu
     let yq_tu = y0 >> l2tu
     let mut i = 0
-    while i < (1 << log2_trafo_size) {
+    while i < 1 << log2_trafo_size {
       let x_pu = (x0 + i) >> l2pu
       let x_tu = (x0 + i) >> l2tu
       let top = tab_mvf[yp_pu * min_pu_width + x_pu]
       let curr = tab_mvf[yq_pu * min_pu_width + x_pu]
       let top_cbf = self.cbf_luma_tab[yp_tu * min_tu_width + x_tu]
       let curr_cbf = self.cbf_luma_tab[yq_tu * min_tu_width + x_tu]
-      let bs = if curr.pred_flag == hevc_pf_intra || top.pred_flag == hevc_pf_intra {
+      let bs = if curr.pred_flag == hevc_pf_intra ||
+        top.pred_flag == hevc_pf_intra {
         2
       } else if curr_cbf != 0 || top_cbf != 0 {
         1
@@ -613,7 +619,7 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
       } else {
         1
       }
-      self.horizontal_bs[((x0 + i) + y0 * self.bs_width) >> 2] = bs
+      self.horizontal_bs[(x0 + i + y0 * self.bs_width) >> 2] = bs
       i = i + 4
     }
   }
@@ -623,14 +629,15 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
     let xp_tu = (x0 - 1) >> l2tu
     let xq_tu = x0 >> l2tu
     let mut i = 0
-    while i < (1 << log2_trafo_size) {
+    while i < 1 << log2_trafo_size {
       let y_pu = (y0 + i) >> l2pu
       let y_tu = (y0 + i) >> l2tu
       let left = tab_mvf[y_pu * min_pu_width + xp_pu]
       let curr = tab_mvf[y_pu * min_pu_width + xq_pu]
       let left_cbf = self.cbf_luma_tab[y_tu * min_tu_width + xp_tu]
       let curr_cbf = self.cbf_luma_tab[y_tu * min_tu_width + xq_tu]
-      let bs = if curr.pred_flag == hevc_pf_intra || left.pred_flag == hevc_pf_intra {
+      let bs = if curr.pred_flag == hevc_pf_intra ||
+        left.pred_flag == hevc_pf_intra {
         2
       } else if curr_cbf != 0 || left_cbf != 0 {
         1
@@ -646,11 +653,11 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
   if log2_trafo_size > l2pu && !is_intra {
     // TU-internal PU boundaries.
     let mut j = 8
-    while j < (1 << log2_trafo_size) {
+    while j < 1 << log2_trafo_size {
       let yp_pu = (y0 + j - 1) >> l2pu
       let yq_pu = (y0 + j) >> l2pu
       let mut i = 0
-      while i < (1 << log2_trafo_size) {
+      while i < 1 << log2_trafo_size {
         let x_pu = (x0 + i) >> l2pu
         let top = tab_mvf[yp_pu * min_pu_width + x_pu]
         let curr = tab_mvf[yq_pu * min_pu_width + x_pu]
@@ -659,16 +666,16 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
         } else {
           1
         }
-        self.horizontal_bs[((x0 + i) + (y0 + j) * self.bs_width) >> 2] = bs
+        self.horizontal_bs[(x0 + i + (y0 + j) * self.bs_width) >> 2] = bs
         i = i + 4
       }
       j = j + 8
     }
     let mut j2 = 0
-    while j2 < (1 << log2_trafo_size) {
+    while j2 < 1 << log2_trafo_size {
       let y_pu = (y0 + j2) >> l2pu
       let mut i = 8
-      while i < (1 << log2_trafo_size) {
+      while i < 1 << log2_trafo_size {
         let xp_pu = (x0 + i - 1) >> l2pu
         let xq_pu = (x0 + i) >> l2pu
         let left = tab_mvf[y_pu * min_pu_width + xp_pu]
@@ -678,7 +685,7 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
         } else {
           1
         }
-        self.vertical_bs[((x0 + i) + (y0 + j2) * self.bs_width) >> 2] = bs
+        self.vertical_bs[(x0 + i + (y0 + j2) * self.bs_width) >> 2] = bs
         i = i + 8
       }
       j2 = j2 + 4
@@ -705,12 +712,7 @@ pub struct HevcDecoder {
 
 ///|
 pub fn hevc_decoder_new() -> HevcDecoder {
-  {
-    ps: new_hevc_param_sets(),
-    dpb: None,
-    poc_tid0: 0,
-    frames: [],
-  }
+  { ps: new_hevc_param_sets(), dpb: None, poc_tid0: 0, frames: [], }
 }
 
 ///|
@@ -768,7 +770,8 @@ fn hevc_slice_rpl(
       let e = rpl_tmp.entries[i]
       target.push(e.poc, e.is_long_term, e.frame)
     }
-    if sh.collocated_list == list_idx && sh.collocated_ref_idx < target.nb_refs() {
+    if sh.collocated_list == list_idx &&
+      sh.collocated_ref_idx < target.nb_refs() {
       dpb.collocated = target.entries[sh.collocated_ref_idx].frame
     }
   }
@@ -802,7 +805,15 @@ fn hevc_frame_rps(
     } else {
       hevc_rps_st_curr_aft
     }
-    dpb.add_candidate_ref(list, poc, true, false, true, log2_max_poc_lsb, dpb.cur.poc)
+    dpb.add_candidate_ref(
+      list,
+      poc,
+      true,
+      false,
+      true,
+      log2_max_poc_lsb,
+      dpb.cur.poc,
+    )
   }
   let lt = sh.lt_rps
   for i in 0..<lt.nb_refs {
@@ -858,7 +869,7 @@ pub fn ff_hevc_decode_frames_ex(
       if nal.nal_type == hevc_nal_vps ||
         nal.nal_type == hevc_nal_sps ||
         nal.nal_type == hevc_nal_pps {
-        let single : H2645Packet = { nals: [nal] }
+        let single : H2645Packet = { nals: [nal], }
         match hevc_decode_extradata_nals(single, dec.ps, true) {
           Ok(_) => ()
           Err(e) => return Err(e)
@@ -984,12 +995,14 @@ fn hevc_decode_ctb(
       upper_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs - sps.ctb_width]] !=
         curr_tile
       if x_ctb > 0 {
-        up_left_same_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs - sps.ctb_width -
+        up_left_same_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs -
+          sps.ctb_width -
           1]] ==
           curr_tile
       }
       if x_ctb + ctb_size < sps.width {
-        up_right_same_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs + 1 -
+        up_right_same_tile = pps.tile_id[pps.ctb_addr_rs_to_ts[rs +
+          1 -
           sps.ctb_width]] ==
           curr_tile
       } else {
@@ -1076,12 +1089,7 @@ fn hevc_decode_picture(
   let first_gb = BitReader::with_size(first_nal.data, first_nal.size_bits)
   first_gb.skip(16)
   let first_sh = match
-    ff_hevc_decode_slice_header(
-      first_gb,
-      first_nal.nal_type,
-      ps,
-      dec.poc_tid0,
-    ) {
+    ff_hevc_decode_slice_header(first_gb, first_nal.nal_type, ps, dec.poc_tid0) {
     Ok(h) => h
     Err(e) => return Err(e)
   }
@@ -1098,7 +1106,9 @@ fn hevc_decode_picture(
   }
   if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
     sps.separate_colour_plane != 0 {
-    return Err("PATCHWELCOME: only 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 HEVC is supported")
+    return Err(
+      "PATCHWELCOME: only 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 HEVC is supported",
+    )
   }
   if sps.pcm_enabled != 0 {
     return Err("PATCHWELCOME: HEVC PCM is not supported")
@@ -1116,7 +1126,9 @@ fn hevc_decode_picture(
     return Err("PATCHWELCOME: HEVC tiles with WPP are not supported")
   }
   if pps.pps_curr_pic_ref_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC current picture referencing is not supported")
+    return Err(
+      "PATCHWELCOME: HEVC current picture referencing is not supported",
+    )
   }
   // (Re)allocate the DPB when the picture geometry appears or changes.
   let cw = if sps.chroma_format_idc == 0 {
@@ -1279,7 +1291,9 @@ fn hevc_decode_picture(
         let mut more = true
         while more && col < sps.ctb_width && rs < sps.ctb_size {
           more = match
-            hevc_decode_ctb(dec_slice, sps, pps, sh, rs, rs, slice_start, ctb_size) {
+            hevc_decode_ctb(
+              dec_slice, sps, pps, sh, rs, rs, slice_start, ctb_size,
+            ) {
             Ok(v) => v
             Err(e) => return Err(e)
           }
@@ -1318,7 +1332,9 @@ fn hevc_decode_picture(
         }
         let rs = pps.ctb_addr_ts_to_rs[ts]
         more = match
-          hevc_decode_ctb(dec_slice, sps, pps, sh, rs, ts, slice_start, ctb_size) {
+          hevc_decode_ctb(
+            dec_slice, sps, pps, sh, rs, ts, slice_start, ctb_size,
+          ) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -1329,7 +1345,9 @@ fn hevc_decode_picture(
       let mut more = true
       while more && rs < sps.ctb_size {
         more = match
-          hevc_decode_ctb(dec_slice, sps, pps, sh, rs, rs, slice_start, ctb_size) {
+          hevc_decode_ctb(
+            dec_slice, sps, pps, sh, rs, rs, slice_start, ctb_size,
+          ) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -1358,10 +1376,6 @@ fn hevc_decode_picture(
       dec_slice.ctb_slice_idx,
     )
   }
-  dec.frames.push({
-    pic: cur.pic.clone(),
-    poc: cur.poc,
-    is_irap,
-  })
+  dec.frames.push({ pic: cur.pic.clone(), poc: cur.poc, is_irap, })
   Ok(())
 }

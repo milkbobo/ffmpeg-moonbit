@@ -9,9 +9,7 @@ let av1_hbd10_stream_b64 : Bytes = b"REtJRgAAIABBVjAxgABgAAoAAAABAAAAAwAAAAAAAAD
 
 ///|
 let av1_hbd10_md5 : Array[String] = [
-  "7dc7c5cc9a687d4366ef5afae40330bb",
-  "d4544f5e6cad72407560f56cde914453",
-  "ba5c9e7d247ec3b04f8a48674dbe6be1",
+  "7dc7c5cc9a687d4366ef5afae40330bb", "d4544f5e6cad72407560f56cde914453", "ba5c9e7d247ec3b04f8a48674dbe6be1",
 ]
 
 ///|
@@ -19,9 +17,7 @@ let av1_hbd12_stream_b64 : Bytes = b"REtJRgAAIABBVjAxgABgAAoAAAABAAAAAwAAAAAAAAB
 
 ///|
 let av1_hbd12_md5 : Array[String] = [
-  "5d9e385db8620fca047dfd9b05433e6c",
-  "d41201884cbe651024ddf8ea7a1007ba",
-  "0a085ec3bfaab9b5f32b76765033f1fc",
+  "5d9e385db8620fca047dfd9b05433e6c", "d41201884cbe651024ddf8ea7a1007ba", "0a085ec3bfaab9b5f32b76765033f1fc",
 ]
 
 ///|

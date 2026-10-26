@@ -16,12 +16,15 @@ pub struct Mp4OpusMuxer {
 
 ///|
 pub fn mp4_opus_muxer_new(
-  channels? : Int32 = 2,
-  pre_skip? : Int32 = 0,
-  input_sample_rate? : Int32 = 48000,
-  timescale? : Int32 = 48000,
+  channels~ : Int32 = 2,
+  pre_skip~ : Int32 = 0,
+  input_sample_rate~ : Int32 = 48000,
+  timescale~ : Int32 = 48000,
 ) -> Result[Mp4OpusMuxer, String] {
-  if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 ||
+  if channels < 1 ||
+    channels > 2 ||
+    pre_skip < 0 ||
+    input_sample_rate <= 0 ||
     timescale <= 0 {
     return Err("EINVAL: invalid Opus MP4 stream parameters")
   }

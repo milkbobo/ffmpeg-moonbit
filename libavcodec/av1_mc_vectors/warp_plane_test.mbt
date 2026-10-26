@@ -3,11 +3,8 @@
 /// and chroma subsampling phases follow dav1d `warp_affine`'s 8x8 loop.
 
 ///|
-fn warp_plane_pattern(w : Int, h : Int) -> FixedArray[Int32] {
-  FixedArray::makei(
-    w * h,
-    i => ((i % w) * 3 + (i / w) * 5 + 7) % 256,
-  )
+fn warp_plane_pattern(w : Int32, h : Int32) -> FixedArray[Int32] {
+  FixedArray::makei(w * h, i => (i % w * 3 + i / w * 5 + 7) % 256)
 }
 
 ///|
@@ -16,7 +13,7 @@ fn warp_plane_identity() -> FixedArray[Int32] {
 }
 
 ///|
-fn warp_plane_clamp(v : Int, lo : Int, hi : Int) -> Int {
+fn warp_plane_clamp(v : Int32, lo : Int32, hi : Int32) -> Int32 {
   if v < lo {
     lo
   } else if v > hi {
@@ -32,7 +29,22 @@ test "warp plane identity copies the luma block" {
   let h = 48
   let src = warp_plane_pattern(w, h)
   let dst = @av1_mc_core.av1_mc_warp_predict_plane(
-    src, w, w, h, 3, 2, 2, 2, 0, 0, 8, warp_plane_identity(), 0, 0, 0, 0,
+    src,
+    w,
+    w,
+    h,
+    3,
+    2,
+    2,
+    2,
+    0,
+    0,
+    8,
+    warp_plane_identity(),
+    0,
+    0,
+    0,
+    0,
   )
   for y in 0..<8 {
     for x in 0..<8 {
@@ -65,8 +77,22 @@ test "warp plane chroma uses subsampled phasing" {
   let ch = 24
   let src = warp_plane_pattern(cw, ch)
   let dst = @av1_mc_core.av1_mc_warp_predict_plane(
-    src, cw, cw * 2, ch * 2, 3, 2, 4, 4, 1, 1, 8, warp_plane_identity(), 0, 0,
-    0, 0,
+    src,
+    cw,
+    cw * 2,
+    ch * 2,
+    3,
+    2,
+    4,
+    4,
+    1,
+    1,
+    8,
+    warp_plane_identity(),
+    0,
+    0,
+    0,
+    0,
   )
   for y in 0..<8 {
     for x in 0..<8 {

@@ -37,7 +37,16 @@ fn sd_sei_nal(msgs : Array[(Int32, Bytes)]) -> H2645Nal {
 /// GA94 closed-caption container carrying `cc` (a multiple of 3 bytes).
 fn sd_ga94(cc : Bytes) -> Bytes {
   let out : Array[Byte] = [
-    0xB5, 0x00, 0x31, 0x47, 0x41, 0x39, 0x34, 0x03, (0x40 | (cc.length() / 3)).to_byte(), 0x00,
+    0xB5,
+    0x00,
+    0x31,
+    0x47,
+    0x41,
+    0x39,
+    0x34,
+    0x03,
+    (0x40 | (cc.length() / 3)).to_byte(),
+    0x00,
   ]
   for i = 0; i < cc.length(); i = i + 1 {
     out.push(cc[i])

@@ -27,12 +27,11 @@ test "adts muxer: headers and frames round-trip" {
 ///|
 test "adts muxer: unsupported rate and oversized payload fail" {
   match adts_muxer_new(12345, 2) {
-    Ok(m) => {
+    Ok(m) =>
       match m.write_frame(b"x") {
         Ok(_) => fail("unsupported sample rate must fail")
         Err(_) => ()
       }
-    }
     Err(_) => ()
   }
   let mux = adts_muxer_new(44100, 1).unwrap()

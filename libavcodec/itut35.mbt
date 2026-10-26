@@ -206,7 +206,10 @@ pub fn itut_t35_parse_buffer(
 /// when `cur` was null and the container carries no captions) together with
 /// the C's return value: 0 = ignore, `cc_count` = appended triples,
 /// `Err("EINVAL")` on invalid data. */
-fn parse_a53_cc(cur : Bytes?, payload : Bytes) -> Result[(Int32, Bytes?), String] {
+fn parse_a53_cc(
+  cur : Bytes?,
+  payload : Bytes,
+) -> Result[(Int32, Bytes?), String] {
   let size = payload.length()
   if size < 3 {
     return Err("EINVAL")
@@ -230,9 +233,10 @@ fn parse_a53_cc(cur : Bytes?, payload : Bytes) -> Result[(Int32, Bytes?), String
   }
   let out : Array[Byte] = []
   match cur {
-    Some(prev) => for i = 0; i < prev.length(); i = i + 1 {
-      out.push(prev[i])
-    }
+    Some(prev) =>
+      for i = 0; i < prev.length(); i = i + 1 {
+        out.push(prev[i])
+      }
     None => ()
   }
   for i = 0; i < cc_count * 3; i = i + 1 {
@@ -387,10 +391,22 @@ fn parse_hdr_vivid(s : HdrVivid, data : Bytes) -> Result[Int32, String] {
     }
     for w = 0; w < s.num_windows; w = w + 1 {
       let params = s.params[w]
-      params.minimum_maxrgb = @libavutil.av_make_q(gb.read(12).reinterpret_as_int(), maxrgb_den)
-      params.average_maxrgb = @libavutil.av_make_q(gb.read(12).reinterpret_as_int(), maxrgb_den)
-      params.variance_maxrgb = @libavutil.av_make_q(gb.read(12).reinterpret_as_int(), maxrgb_den)
-      params.maximum_maxrgb = @libavutil.av_make_q(gb.read(12).reinterpret_as_int(), maxrgb_den)
+      params.minimum_maxrgb = @libavutil.av_make_q(
+        gb.read(12).reinterpret_as_int(),
+        maxrgb_den,
+      )
+      params.average_maxrgb = @libavutil.av_make_q(
+        gb.read(12).reinterpret_as_int(),
+        maxrgb_den,
+      )
+      params.variance_maxrgb = @libavutil.av_make_q(
+        gb.read(12).reinterpret_as_int(),
+        maxrgb_den,
+      )
+      params.maximum_maxrgb = @libavutil.av_make_q(
+        gb.read(12).reinterpret_as_int(),
+        maxrgb_den,
+      )
     }
     if gb.bits_left() < 2 * s.num_windows {
       return Err("EINVAL")
@@ -408,31 +424,53 @@ fn parse_hdr_vivid(s : HdrVivid, data : Bytes) -> Result[Int32, String] {
           if gb.bits_left() < 13 {
             return Err("EINVAL")
           }
-          tm_params.targeted_system_display_maximum_luminance = @libavutil.av_make_q(gb.read(12).reinterpret_as_int(), maximum_luminance_den)
+          tm_params.targeted_system_display_maximum_luminance = @libavutil.av_make_q(
+            gb.read(12).reinterpret_as_int(),
+            maximum_luminance_den,
+          )
           tm_params.base_enable_flag = gb.read1().reinterpret_as_int()
           if tm_params.base_enable_flag != 0 {
             if gb.bits_left() < 14 + 6 + 10 + 10 + 6 + 8 + 10 {
               return Err("EINVAL")
             }
-            tm_params.base_param_m_p = @libavutil.av_make_q(gb.read(14).reinterpret_as_int(), base_param_m_p_den)
-            tm_params.base_param_m_m = @libavutil.av_make_q(gb.read(6).reinterpret_as_int(), base_param_m_m_den)
-            tm_params.base_param_m_a = @libavutil.av_make_q(gb.read(10).reinterpret_as_int(), base_param_m_a_den)
-            tm_params.base_param_m_b = @libavutil.av_make_q(gb.read(10).reinterpret_as_int(), base_param_m_b_den)
-            tm_params.base_param_m_n = @libavutil.av_make_q(gb.read(6).reinterpret_as_int(), base_param_m_n_den)
+            tm_params.base_param_m_p = @libavutil.av_make_q(
+              gb.read(14).reinterpret_as_int(),
+              base_param_m_p_den,
+            )
+            tm_params.base_param_m_m = @libavutil.av_make_q(
+              gb.read(6).reinterpret_as_int(),
+              base_param_m_m_den,
+            )
+            tm_params.base_param_m_a = @libavutil.av_make_q(
+              gb.read(10).reinterpret_as_int(),
+              base_param_m_a_den,
+            )
+            tm_params.base_param_m_b = @libavutil.av_make_q(
+              gb.read(10).reinterpret_as_int(),
+              base_param_m_b_den,
+            )
+            tm_params.base_param_m_n = @libavutil.av_make_q(
+              gb.read(6).reinterpret_as_int(),
+              base_param_m_n_den,
+            )
             tm_params.base_param_k1 = gb.read(2).reinterpret_as_int()
             tm_params.base_param_k2 = gb.read(2).reinterpret_as_int()
             tm_params.base_param_k3 = gb.read(4).reinterpret_as_int()
             tm_params.base_param_Delta_enable_mode = gb
               .read(3)
               .reinterpret_as_int()
-            tm_params.base_param_Delta = @libavutil.av_make_q(gb.read(7).reinterpret_as_int(), base_param_Delta_den)
+            tm_params.base_param_Delta = @libavutil.av_make_q(
+              gb.read(7).reinterpret_as_int(),
+              base_param_Delta_den,
+            )
           }
           if gb.bits_left() < 1 {
             return Err("EINVAL")
           }
           tm_params.three_Spline_enable_flag = gb.read1().reinterpret_as_int()
           if tm_params.three_Spline_enable_flag != 0 {
-            if gb.bits_left() < 1 + tm_params.three_Spline_num * (2 + 12 + 28 + 1) {
+            if gb.bits_left() <
+              1 + tm_params.three_Spline_num * (2 + 12 + 28 + 1) {
               return Err("EINVAL")
             }
             tm_params.three_Spline_num = gb.read1().reinterpret_as_int() + 1
@@ -446,12 +484,27 @@ fn parse_hdr_vivid(s : HdrVivid, data : Bytes) -> Result[Int32, String] {
                 if gb.bits_left() < 8 {
                   return Err("EINVAL")
                 }
-                three_spline.th_enable_mb = @libavutil.av_make_q(gb.read(8).reinterpret_as_int(), 255)
+                three_spline.th_enable_mb = @libavutil.av_make_q(
+                  gb.read(8).reinterpret_as_int(),
+                  255,
+                )
               }
-              three_spline.th_enable = @libavutil.av_make_q(gb.read(12).reinterpret_as_int(), 4095)
-              three_spline.th_delta1 = @libavutil.av_make_q(gb.read(10).reinterpret_as_int(), 1023)
-              three_spline.th_delta2 = @libavutil.av_make_q(gb.read(10).reinterpret_as_int(), 1023)
-              three_spline.enable_strength = @libavutil.av_make_q(gb.read(8).reinterpret_as_int(), 255)
+              three_spline.th_enable = @libavutil.av_make_q(
+                gb.read(12).reinterpret_as_int(),
+                4095,
+              )
+              three_spline.th_delta1 = @libavutil.av_make_q(
+                gb.read(10).reinterpret_as_int(),
+                1023,
+              )
+              three_spline.th_delta2 = @libavutil.av_make_q(
+                gb.read(10).reinterpret_as_int(),
+                1023,
+              )
+              three_spline.enable_strength = @libavutil.av_make_q(
+                gb.read(8).reinterpret_as_int(),
+                255,
+              )
             }
           }
         }
@@ -463,7 +516,10 @@ fn parse_hdr_vivid(s : HdrVivid, data : Bytes) -> Result[Int32, String] {
         }
         params.color_saturation_num = gb.read(3).reinterpret_as_int()
         for i = 0; i < params.color_saturation_num; i = i + 1 {
-          params.color_saturation_gain[i] = @libavutil.av_make_q(gb.read(8).reinterpret_as_int(), color_saturation_gain_den)
+          params.color_saturation_gain[i] = @libavutil.av_make_q(
+            gb.read(8).reinterpret_as_int(),
+            color_saturation_gain_den,
+          )
         }
       }
     }
@@ -568,7 +624,7 @@ pub fn new_aom_fgs1_params() -> AomFgs1Params {
   for _i = 0; _i < 8; _i = _i + 1 {
     sets.push(None)
   }
-  { enable: 0, sets }
+  { enable: 0, sets, }
 }
 
 ///|
@@ -609,7 +665,8 @@ pub fn parse_aom_film_grain_sets(
   for n = 0; n < num_sets; n = n + 1 {
     let start_position = gb.count()
     let payload_4byte = gb.read1().reinterpret_as_int()
-    let payload_size = gb.read(if payload_4byte != 0 { 2 } else { 8 })
+    let payload_size = gb
+      .read(if payload_4byte != 0 { 2 } else { 8 })
       .reinterpret_as_int()
     let set_idx = gb.read(3).reinterpret_as_int()
     if s.sets[set_idx] is Some(_) {
@@ -788,9 +845,9 @@ pub fn parse_aom_film_grain_sets(
                 return aom_fgs_error(s)
               }
               aom.uv_points[uv][i][0] = uv_value
-              aom.uv_points[uv][i][1] = (gb.read(bits_scaling)
-                  .reinterpret_as_int() +
-                uv_offset) &
+              aom.uv_points[uv][i][1] = (
+                  gb.read(bits_scaling).reinterpret_as_int() + uv_offset
+                ) &
                 0xFF
             }
           }
@@ -810,7 +867,8 @@ pub fn parse_aom_film_grain_sets(
     for uv = 0; uv < 2; uv = uv + 1 {
       if aom.chroma_scaling_from_luma != 0 || aom.num_uv_points[uv] != 0 {
         let ar_bits = gb.read(2).reinterpret_as_int() + 5
-        for i = 0; i < num_y_coeffs + (if aom.num_y_points != 0 { 1 } else { 0 })
+        for i = 0
+            i < num_y_coeffs + (if aom.num_y_points != 0 { 1 } else { 0 })
             i = i + 1 {
           aom.ar_coeffs_uv[uv][i] = gb.read(ar_bits).reinterpret_as_int() -
             (1 << (ar_bits - 1))
@@ -858,12 +916,14 @@ fn aom_fgs_error(s : AomFgs1Params) -> Result[Int32, String] {
 /// the Dolby provider is acknowledged and ignored exactly like the C).
 /// Returns `Err` on payload errors, which the SEI message loop treats as
 /// fatal for the NAL (`ff_h2645_sei_message_decode` semantics). */
-pub fn itut_t35_parse_payload(meta : ItutT35Meta, itut_t35 : ItutT35) -> Result[Int32, String] {
+pub fn itut_t35_parse_payload(
+  meta : ItutT35Meta,
+  itut_t35 : ItutT35,
+) -> Result[Int32, String] {
   if itut_t35.country_code == itut_t35_country_code_us {
     if itut_t35.provider_code == itut_t35_provider_code_aom {
       aom_fgs_uninit(meta.aom_film_grain)
-      match
-        parse_aom_film_grain_sets(meta.aom_film_grain, itut_t35.payload) {
+      match parse_aom_film_grain_sets(meta.aom_film_grain, itut_t35.payload) {
         Ok(_) => ()
         Err(e) => return Err(e)
       }

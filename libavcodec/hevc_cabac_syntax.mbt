@@ -285,7 +285,11 @@ fn HevcCabac::inter_pred_idc(
 
 ///|
 /// `ff_hevc_ref_idx_lx_decode`. */
-fn HevcCabac::ref_idx_lx(self : HevcCabac, num_ref_idx_lx : Int32, list : Int32) -> Int32 {
+fn HevcCabac::ref_idx_lx(
+  self : HevcCabac,
+  num_ref_idx_lx : Int32,
+  list : Int32,
+) -> Int32 {
   let max = num_ref_idx_lx - 1
   let max_ctx = if max < 2 { max } else { 2 }
   let base = if list == 0 {
@@ -476,7 +480,8 @@ fn HevcCabac::sao_band_position(self : HevcCabac) -> Int32 {
 ///|
 /// `hevc_transform_skip_flag_decode`: one context for luma, one for chroma. */
 fn HevcCabac::transform_skip_flag(self : HevcCabac, c_idx : Int32) -> Bool {
-  self.bin(hevc_cabac_transform_skip_flag + (if c_idx > 0 { 1 } else { 0 })) != 0
+  self.bin(hevc_cabac_transform_skip_flag + (if c_idx > 0 { 1 } else { 0 })) !=
+  0
 }
 
 ///|

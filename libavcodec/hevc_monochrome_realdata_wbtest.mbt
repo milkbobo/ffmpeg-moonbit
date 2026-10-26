@@ -160,4 +160,3 @@ let hevc_gray_idr_b64 : Bytes = bcat([
   b"GuXKTK8LPe2owvzMTfXE8twJhHwRHLyAAh1r1uorOfWJzCu04AB+nVaAE0aPJVhNev+KV2IbQLYarI61gjeZsKuIS+8RnP20mBaH",
   b"aw1p/w==",
 ])
-

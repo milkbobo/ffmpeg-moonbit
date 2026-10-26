@@ -347,18 +347,14 @@ fn vp9_read_tile_info(br : BitReader, h : Vp9FrameHeader) -> Unit {
   let sb_cols = (h.width + 63) >> 6
   let sb_rows = (h.height + 63) >> 6
   let mut log2_cols = 0
-  while sb_cols > (64 << log2_cols) {
+  while sb_cols > 64 << log2_cols {
     log2_cols = log2_cols + 1
   }
   let mut max = 0
-  while (sb_cols >> max) >= 4 {
+  while sb_cols >> max >= 4 {
     max = max + 1
   }
-  max = if max > 0 {
-    max - 1
-  } else {
-    0
-  }
+  max = if max > 0 { max - 1 } else { 0 }
   while max > log2_cols {
     if br.read1() != 0 {
       log2_cols = log2_cols + 1
@@ -555,22 +551,12 @@ fn vp9_parse_frame_header_impl(
   vp9_read_lf_delta(br, h)
 
   h.base_q_idx = br.read(8).reinterpret_as_int()
-  h.ydc_qdelta = if br.read1() != 0 {
-    vp9_read_sbits_inv(br, 4)
-  } else {
-    0
-  }
-  h.uvdc_qdelta = if br.read1() != 0 {
-    vp9_read_sbits_inv(br, 4)
-  } else {
-    0
-  }
-  h.uvac_qdelta = if br.read1() != 0 {
-    vp9_read_sbits_inv(br, 4)
-  } else {
-    0
-  }
-  h.lossless = h.base_q_idx == 0 && h.ydc_qdelta == 0 && h.uvdc_qdelta == 0 &&
+  h.ydc_qdelta = if br.read1() != 0 { vp9_read_sbits_inv(br, 4) } else { 0 }
+  h.uvdc_qdelta = if br.read1() != 0 { vp9_read_sbits_inv(br, 4) } else { 0 }
+  h.uvac_qdelta = if br.read1() != 0 { vp9_read_sbits_inv(br, 4) } else { 0 }
+  h.lossless = h.base_q_idx == 0 &&
+    h.ydc_qdelta == 0 &&
+    h.uvdc_qdelta == 0 &&
     h.uvac_qdelta == 0
 
   vp9_read_segmentation(br, h)
@@ -647,7 +633,10 @@ fn vp9_consume_coef_updates(c : Vp9RangeDecoder, h : Vp9FrameHeader) -> Unit {
 }
 
 ///|
-fn vp9_consume_inter_mode_updates(c : Vp9RangeDecoder, h : Vp9FrameHeader) -> Unit {
+fn vp9_consume_inter_mode_updates(
+  c : Vp9RangeDecoder,
+  h : Vp9FrameHeader,
+) -> Unit {
   for _i in 0..<7 {
     for _j in 0..<3 {
       vp9_consume_prob_update(c)
@@ -756,11 +745,8 @@ fn vp9_parse_compressed_header(
   data : Bytes,
   h : Vp9FrameHeader,
 ) -> Result[Unit, String] {
-  let c = match vp9_rac_init(
-    data,
-    h.uncompressed_header_size,
-    h.compressed_header_size,
-  ) {
+  let c = match
+    vp9_rac_init(data, h.uncompressed_header_size, h.compressed_header_size) {
     Ok(c) => c
     Err(e) => return Err(e)
   }
@@ -839,12 +825,7 @@ fn vp9_parse_packet_impl(
     Err(e) => return Err(e)
   }
   if h.show_existing_frame {
-    return Ok({
-      header: h,
-      tiles: [],
-      tile_data_offset: 0,
-      header_size: 0,
-    })
+    return Ok({ header: h, tiles: [], tile_data_offset: 0, header_size: 0, })
   }
   if !h.complete {
     return Err("vp9: inter frame size requires reference dimensions")
@@ -871,8 +852,10 @@ fn vp9_parse_packet_impl(
         if size < 4 {
           return Err("vp9: truncated tile size")
         }
-        let v = (data[pos].to_int() << 24) | (data[pos + 1].to_int() << 16) |
-          (data[pos + 2].to_int() << 8) | data[pos + 3].to_int()
+        let v = (data[pos].to_int() << 24) |
+          (data[pos + 1].to_int() << 16) |
+          (data[pos + 2].to_int() << 8) |
+          data[pos + 3].to_int()
         pos = pos + 4
         size = size - 4
         v

@@ -23,7 +23,9 @@ let vp9_444_vectors_b64 : Bytes = b"REtJRgAAIABWUDkwQAAwAB4AAAABAAAABgAAAAAAAAD5
 
 ///|
 /// IVF byte lengths of `vp9_444_vectors_b64`, in stream order. */
-let vp9_444_sizes : Array[Int] = [3808, 3085, 3749, 3805, 3046, 3068, 3055, 3013]
+let vp9_444_sizes : Array[Int32] = [
+  3808, 3085, 3749, 3805, 3046, 3068, 3055, 3013,
+]
 
 ///|
 fn vp9_444_vectors() -> Bytes {
@@ -49,8 +51,9 @@ fn vp9_444_ivf_frames(ivf : Bytes) -> Array[Bytes] {
   let frames : Array[Bytes] = []
   let mut pos = 32
   while pos < ivf.length() {
-    let size = (ivf[pos].to_int() | (ivf[pos + 1].to_int() << 8) |
-      (ivf[pos + 2].to_int() << 16)) |
+    let size = ivf[pos].to_int() |
+      (ivf[pos + 1].to_int() << 8) |
+      (ivf[pos + 2].to_int() << 16) |
       (ivf[pos + 3].to_int() << 24)
     frames.push(ivf[pos + 12:pos + 12 + size].to_owned())
     pos = pos + 12 + size
@@ -79,7 +82,7 @@ fn vp9_444_frame_md5(dec : @libavcodec.Vp9Decoder) -> String {
 }
 
 ///|
-fn vp9_444_decode(index : Int) -> (Array[Bytes], @libavcodec.Vp9Decoder) {
+fn vp9_444_decode(index : Int32) -> (Array[Bytes], @libavcodec.Vp9Decoder) {
   let streams = vp9_444_streams()
   (vp9_444_ivf_frames(streams[index]), @libavcodec.vp9_decoder_new())
 }

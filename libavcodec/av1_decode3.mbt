@@ -342,11 +342,7 @@ fn Av1TileCtx::decode_sb(
     let is_split = self.msac.decode_bool(
       av1_gather_top_partition_prob(self.cdf.partition, pc_base, bl),
     )
-    bp = if is_split != 0 {
-      av1_partition_split
-    } else {
-      av1_partition_h
-    }
+    bp = if is_split != 0 { av1_partition_split } else { av1_partition_h }
     if is_split != 0 {
       if self.decode_sb(bl + 1, node.split[0]) {
         return true
@@ -364,11 +360,7 @@ fn Av1TileCtx::decode_sb(
     let is_split = self.msac.decode_bool(
       av1_gather_left_partition_prob(self.cdf.partition, pc_base, bl),
     )
-    bp = if is_split != 0 {
-      av1_partition_split
-    } else {
-      av1_partition_v
-    }
+    bp = if is_split != 0 { av1_partition_split } else { av1_partition_v }
     if is_split != 0 {
       if self.decode_sb(bl + 1, node.split[0]) {
         return true
