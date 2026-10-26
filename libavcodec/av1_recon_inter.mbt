@@ -352,6 +352,134 @@ fn av1_recon_interintra_blend(
   @av1_mc_core.av1_mc_blend_pixels(inter, intra, mask)
 }
 
+
+///|
+/// Chroma sub8x8 derivation (dav1d `recon_b_inter`): 4x4/4x8/8x4 luma blocks
+/// take chroma motion from the left/top/top-left neighbours and combine
+/// 2x2 (or half-block) chroma predictions. Returns None when the block is
+/// not a sub8x8 shape or the required neighbour motion is missing.
+fn av1_recon_sub8x8_chroma(
+  b_ref0 : Int,
+  b_mv : (Int, Int),
+  b_filter2d : Int,
+  refs : FixedArray[Av1ReconRefPlane],
+  cur_w : Int,
+  cur_h : Int,
+  bx4 : Int,
+  by4 : Int,
+  bw4 : Int,
+  bh4 : Int,
+  ss_v : Int,
+  bitdepth : Int32,
+  neigh : Av1ReconObmc,
+) -> FixedArray[Int32]? {
+  let ss_h = 1
+  if bw4 != ss_h && bh4 != ss_v {
+    return None
+  }
+  let r = (by4 & 31) + 5
+  let has_left = neigh.have_left && bx4 > 0
+  let has_top = neigh.have_top && by4 > 0
+  let l_nb = if has_left { Some(neigh.rows[r][bx4 - 1]) } else { None }
+  let t_nb = if has_top { Some(neigh.rows[r - 1][bx4]) } else { None }
+  let tl_nb = if has_left && has_top {
+    Some(neigh.rows[r - 1][bx4 - 1])
+  } else {
+    None
+  }
+  let ok_left = match l_nb {
+    Some(n) => n.ref0 > 0
+    None => false
+  }
+  let ok_top = match t_nb {
+    Some(n) => n.ref0 > 0
+    None => false
+  }
+  let ok_tl = match tl_nb {
+    Some(n) => n.ref0 > 0
+    None => false
+  }
+  if (bw4 == ss_h && !ok_left) || (bh4 == ss_v && !ok_top) ||
+    (bw4 == ss_h && bh4 == ss_v && !ok_tl) {
+    return None
+  }
+  let h_mul = 2
+  let v_mul = 4 >> ss_v
+  // Sub8x8 chroma is predicted for the covering 8x8 luma unit: a 4-wide
+  // quadrant pair plus the other axis' full extent.
+  let cw = if bw4 == ss_h { 4 } else { bw4 * h_mul }
+  let ch = if bh4 == ss_v { 4 } else { bh4 * v_mul }
+  let dst = FixedArray::make(cw * ch, 0)
+  let mut h_off = 0
+  let mut v_off = 0
+  let place = (pred : FixedArray[Int32], ox : Int, oy : Int) => {
+    let pw = bw4 * h_mul
+    let ph = bh4 * v_mul
+    for yy in 0..<ph {
+      for xx in 0..<pw {
+        dst[(oy + yy) * cw + ox + xx] = pred[yy * pw + xx]
+      }
+    }
+  }
+  let predict_from = (
+    nb : Av1Rb,
+    px : Int,
+    py : Int,
+    filter2d : Int,
+  ) => {
+    let plane = refs[nb.ref0 - 1]
+    let (mvy, mvx) = nb.mv0
+    @av1_mc_core.av1_mc_predict_plane(
+      plane.src, plane.stride, plane.width, plane.height, cur_w, cur_h, px,
+      py, bw4, bh4, mvy, mvx, ss_h, ss_v, filter2d, bitdepth,
+    )
+  }
+  if bw4 == ss_h && bh4 == ss_v {
+    let nb = match tl_nb {
+      Some(n) => n
+      None => return None
+    }
+    let f = av1_inter_filter2d(
+      neigh.nstate.top[if bx4 > 0 { bx4 - 1 } else { 0 }].filter0,
+      neigh.nstate.top[if bx4 > 0 { bx4 - 1 } else { 0 }].filter1,
+    )
+    place(predict_from(nb, bx4 - 1, by4 - 1, f), 0, 0)
+    v_off = 2
+    h_off = 2
+  }
+  if bw4 == ss_h {
+    let nb = match l_nb {
+      Some(n) => n
+      None => return None
+    }
+    let f = av1_inter_filter2d(
+      neigh.nstate.left[by4].filter0, neigh.nstate.left[by4].filter1,
+    )
+    place(predict_from(nb, bx4 - 1, by4, f), 0, v_off)
+    h_off = 2
+  }
+  if bh4 == ss_v {
+    let nb = match t_nb {
+      Some(n) => n
+      None => return None
+    }
+    let f = av1_inter_filter2d(
+      neigh.nstate.top[bx4].filter0, neigh.nstate.top[bx4].filter1,
+    )
+    place(predict_from(nb, bx4, by4 - 1, f), h_off, 0)
+    v_off = 2
+  }
+  place({
+    let plane = refs[b_ref0]
+    let (mvy, mvx) = b_mv
+    @av1_mc_core.av1_mc_predict_plane(
+      plane.src, plane.stride, plane.width, plane.height, cur_w, cur_h, bx4,
+      by4, bw4, bh4, mvy, mvx, ss_h, ss_v, b_filter2d, bitdepth,
+    )
+  }, h_off, v_off)
+  Some(dst)
+}
+
 ///|
 /// Predict all planes for one inter block. Compound global-warp is not wired
 /// yet.
@@ -380,6 +508,10 @@ pub fn av1_recon_predict_block(
     return Err("av1 recon: OBMC needs neighbour state")
   }
   let single = b.ref1 < 0
+  let sub8x8 = single && ss_h == 1 && (bw4 == 1 || bh4 == ss_v)
+  if sub8x8 && obmc is None {
+    return Err("av1 recon: chroma sub8x8 needs neighbours")
+  }
   let w = bw4 * 4
   let h = bh4 * 4
   let cw = bw4 * (4 >> ss_h)
@@ -396,10 +528,22 @@ pub fn av1_recon_predict_block(
     )
   }
   let u0 = if single {
-    av1_recon_single_plane(
-      b, ref_u[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v,
-      bitdepth,
-    )
+    let sub = match obmc {
+      Some(o) if sub8x8 =>
+        av1_recon_sub8x8_chroma(
+          b.ref0, b.mv0, b.filter2d, ref_u, cur_w, cur_h, bx4, by4, bw4, bh4,
+          ss_v, bitdepth, o,
+        )
+      _ => None
+    }
+    match sub {
+      Some(p) => p
+      None =>
+        av1_recon_single_plane(
+          b, ref_u[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h,
+          ss_v, bitdepth,
+        )
+    }
   } else {
     av1_recon_compound_plane(
       b, ref_u[b.ref0], ref_u[b.ref1], cur_w, cur_h, bx4, by4, bw4, bh4,
@@ -408,10 +552,22 @@ pub fn av1_recon_predict_block(
     )
   }
   let v0 = if single {
-    av1_recon_single_plane(
-      b, ref_v[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h, ss_v,
-      bitdepth,
-    )
+    let sub = match obmc {
+      Some(o) if sub8x8 =>
+        av1_recon_sub8x8_chroma(
+          b.ref0, b.mv0, b.filter2d, ref_v, cur_w, cur_h, bx4, by4, bw4, bh4,
+          ss_v, bitdepth, o,
+        )
+      _ => None
+    }
+    match sub {
+      Some(p) => p
+      None =>
+        av1_recon_single_plane(
+          b, ref_v[b.ref0], b.mv0, cur_w, cur_h, bx4, by4, bw4, bh4, ss_h,
+          ss_v, bitdepth,
+        )
+    }
   } else {
     av1_recon_compound_plane(
       b, ref_v[b.ref0], ref_v[b.ref1], cur_w, cur_h, bx4, by4, bw4, bh4,
@@ -442,6 +598,16 @@ pub fn av1_recon_predict_block(
       )
     _ => v0
   }
+  let cw_out = if sub8x8 && single && bw4 == ss_h {
+    4
+  } else {
+    cw
+  }
+  let ch_out = if sub8x8 && single && bh4 == ss_v {
+    4
+  } else {
+    ch
+  }
   let layout = av1_recon_layout(ss_h, ss_v)
   let (y, u, v) = match intra {
     Some(ip) if b.interintra.kind != 0 =>
@@ -452,7 +618,7 @@ pub fn av1_recon_predict_block(
       )
     _ => (y1, u1, v1)
   }
-  { y, u, v, w, h, cw, ch } |> Ok
+  { y, u, v, w, h, cw: cw_out, ch: ch_out } |> Ok
 }
 
 ///|

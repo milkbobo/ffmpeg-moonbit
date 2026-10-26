@@ -282,3 +282,80 @@ test "OBMC blends the top neighbour overlap" {
   )
   assert_eq(r.u, u0)
 }
+
+///|
+fn sub8x8_neighbor(mv : (Int, Int), bs : Int) -> @libavcodec.Av1Rb {
+  { ref0: 1, ref1: -1, bs, mf: 0, mv0: mv, mv1: (0, 0) }
+}
+
+///|
+test "chroma sub8x8 splits a 4x4 block by neighbour motion" {
+  let refs_y : FixedArray[@libavcodec.Av1ReconRefPlane] = [
+    recon_ref(128, 96), recon_ref(128, 96), recon_ref(128, 96),
+    recon_ref(128, 96), recon_ref(128, 96), recon_ref(128, 96),
+    recon_ref(128, 96),
+  ]
+  let refs_u : FixedArray[@libavcodec.Av1ReconRefPlane] = [
+    recon_plane(64, 48, 21), recon_plane(64, 48, 21), recon_plane(64, 48, 21),
+    recon_plane(64, 48, 21), recon_plane(64, 48, 21), recon_plane(64, 48, 21),
+    recon_plane(64, 48, 21),
+  ]
+  let refs_v = refs_u
+  let state = recon_state()
+  state.begin_sbrow(0, 0, 16, 0, 8)
+  state.tile.rows[6][1] = sub8x8_neighbor((8, 0), 21)
+  state.tile.rows[6][2] = sub8x8_neighbor((0, 16), 21)
+  state.tile.rows[7][1] = sub8x8_neighbor((24, 8), 21)
+  let nstate = @libavcodec.av1_inter_tile_state_new(16, 16)
+  let obmc : @libavcodec.Av1ReconObmc = {
+    rows: state.tile.rows,
+    nstate,
+    w4: 1,
+    h4: 1,
+    have_top: true,
+    have_left: true,
+  }
+  let b : @libavcodec.Av1InterBlock = {
+    ..recon_block(0), bs: 21, mv0: (16, 8),
+  }
+  let r = @libavcodec.av1_recon_predict_block(
+    b, refs_y, refs_u, refs_v, 128, 96, 2, 2, 1, 1, 1, 1, 8, 0, None,
+    Some(obmc),
+  ).unwrap()
+  let tl = @av1_mc_core.av1_mc_predict_plane(
+    refs_u[0].src, 64, 128, 96, 128, 96, 1, 1, 1, 1, 8, 0, 1, 1, 0, 8,
+  )
+  let left = @av1_mc_core.av1_mc_predict_plane(
+    refs_u[0].src, 64, 128, 96, 128, 96, 1, 2, 1, 1, 24, 8, 1, 1, 0, 8,
+  )
+  let top = @av1_mc_core.av1_mc_predict_plane(
+    refs_u[0].src, 64, 128, 96, 128, 96, 2, 1, 1, 1, 0, 16, 1, 1, 0, 8,
+  )
+  let own = @av1_mc_core.av1_mc_predict_plane(
+    refs_u[0].src, 64, 128, 96, 128, 96, 2, 2, 1, 1, 16, 8, 1, 1, 0, 8,
+  )
+  let expected : FixedArray[Int32] = [
+    tl[0], tl[1], top[0], top[1],
+    tl[2], tl[3], top[2], top[3],
+    left[0], left[1], own[0], own[1],
+    left[2], left[3], own[2], own[3],
+  ]
+  assert_eq(r.u, expected)
+}
+
+///|
+test "chroma sub8x8 without neighbours is rejected" {
+  let refs : FixedArray[@libavcodec.Av1ReconRefPlane] = [
+    recon_ref(128, 96), recon_ref(128, 96), recon_ref(128, 96),
+    recon_ref(128, 96), recon_ref(128, 96), recon_ref(128, 96),
+    recon_ref(128, 96),
+  ]
+  let b : @libavcodec.Av1InterBlock = {
+    ..recon_block(0), bs: 21, mv0: (16, 8),
+  }
+  assert_true(
+    @libavcodec.av1_recon_predict_block(
+      b, refs, refs, refs, 128, 96, 2, 2, 1, 1, 1, 1, 8, 0, None, None,
+    ) is Err(_),
+  )
+}

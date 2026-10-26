@@ -3186,3 +3186,24 @@ WEIGHTED_AVG 使用传入权重且忽略 `mask_sign`；WEDGE 在 `mask_sign=0/1`
 
 `moon check --target wasm --deny-warn --no-render` 无警告，
 全量测试 **949/949**。
+
+## 89. 2026-10-26 AV1 色度 sub8x8 预测派生
+
+`av1_recon_inter.mbt` 新增 `av1_recon_sub8x8_chroma`：单参考下
+4x4/4x8/8x4 luma 块（`bw4==ss_h` 或 `bh4==ss_v`，且仅 4:2:0/4:2:2）
+的色度预测按 dav1d `recon_b_inter` 的 sub8x8 规则从邻块运动派生：
+- 检查左/上/左上邻块 `ref0>0`，缺任一所需邻居则回退普通块级色度预测；
+- 4x4 块由左上、左、上、自身 MV 各预测 2x2 象限拼成 4x4 色度单元；
+  4x8/8x4 分别由左/上邻块与自身各占一半；
+- 邻块滤波器由 `Av1InterTileState` 的 filter0/1 合成（左上取 `top[bx4-1]`，
+  左取 `left[by4]`，上取 `top[bx4]`）；
+- 输出为覆盖该 8x8 luma 单元的色度尺寸（4x4 或 4x8），
+  `Av1ReconPlanes.cw/ch` 同步修正；
+- 若需要 sub8x8 但调用方未提供邻域状态则返回错误（避免静默错像素）。
+
+测试（`av1_recon_vectors` 7/7）：4x4 块的四个象限逐像素等于
+左上/左/上/自身 MV 的直接色度预测；缺少邻域时返回错误；既有 II/OBMC
+与单/复合用例保持通过。
+
+`moon check --target wasm --deny-warn --no-render` 无警告，
+全量测试 **951/951**。
