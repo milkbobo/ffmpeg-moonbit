@@ -26,7 +26,9 @@ OBMC 水平/垂直重叠混合、wedge 掩码与 inter-intra 掩码表
 MC（8-tap/bilinear put+prep）、superres resize 与 warp 仿射
 8x8（put/prep），支持
 8/10/12-bit、边界复制和窄块滤波，并与 dav1d C 参考输出对拍。
-帧间块语法、参考帧管理和整帧解码入口仍待接入。
+refmvs 的候选查找、时域加载/保存、superblock 行环和单/双参考
+模式/MV 解码原语已加入；参考帧管理、帧间块重建和整帧解码入口
+仍待接入。
 
 ## 构建与测试
 
@@ -38,7 +40,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-10-25）：`moon check --deny-warn` 通过，Wasm 测试 **895/895** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-10-26）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **904/904** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

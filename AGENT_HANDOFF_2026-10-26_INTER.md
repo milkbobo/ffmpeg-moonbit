@@ -1,5 +1,11 @@
 # AV1 帧间帧解码交接报告（2026-10-26）
 
+> 后续进展：`PORTING_HISTORY.md` §74 已加入 refmvs 行状态与
+> 帧间参考上下文及参考/MV 模式语法原语，Wasm 全量测试
+> 904/904；帧间整帧解码仍未完成。
+> 本文 §3.1 对 `save_tmvs` 实参的描述有误；真实实参见
+> dav1d `src/refmvs.h`，为 `rt->r + 6`。
+
 > 交接对象：下一个接手本仓库的 AI/协作者。
 > 仓库：`D:\project\FFmpeg-n9.0.2\moonbit`（Windows 10 + Git Bash）。
 > 基线：提交 `67437fc` 已推送，`moon check --deny-warn` 0 警告，

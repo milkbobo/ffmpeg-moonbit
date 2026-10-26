@@ -2822,3 +2822,29 @@ ref_ref_poc（7-bit order hint 环绕），逐字段对拍 n_mfmvs、三组
 `moon test --target wasm --no-render` **895/895**。剩余：
 load/save_tmvs、splat_mv、sbrow_init（与 decode 接线）、帧间块
 语法主体与整帧解码入口。
+
+## 74. 2026-10-26 AV1 refmvs 行状态与帧间参考上下文
+
+新增 `av1_refmvs_state.mbt`：单线程路径的 37 槽行指针环（MoonBit
+用共享行数组表示）、`splat_mv_c`、`save_tmvs_c`、`load_tmvs_c`。
+保存遵循 dav1d 的第二参考优先级与 4096 MV 范围检查；加载按
+ref2cur/ref2ref 投影，并保持相邻相同 MV 块的 x 快进语义。
+`Av1RefmvsFrameState` 串联 sbrow begin/load、find/splat、end/save，
+并持有可供后续参考帧使用的 rp 时域图。
+另在 `av1_inter_ctx.mbt` 增加帧间参考树、复合方向、滤波器、
+mask、jnt 与 DRL 上下文；`av1_inter.mbt` 增加单/双参考索引的
+算术解码树，以及单/双参考模式、DRL 与 MV 解码原语。
+
+直接用 dav1d 1.5.1 `refmvs.c` 编译的 C 探针
+（`.scratch/av1/state_ref.c`，不入库）核对 64x64 superblock 的
+sby=0/1 行映射、双参考保存和时域投影。C 输出 `save -30 40 2
+11 22 1`、`load 0 0 1`，与 MoonBit 独立测试一致。
+参考树另用 `dump_mvres.c` 的真 MSAC/CDF 构建 C 探针，四种
+64 字节输入 × 单/双参考共 8 例，参考索引均与 MoonBit 相同。
+核对 `refmvs.h` 发现早期交接文档对 `save_tmvs` 实参的描述有误：
+真实调用传 `rt->r + 6`，函数内部再用 `(y & 15) * 2` 选行。
+
+**尚未完成**：状态与 `decode_b` 接线、inter 块语法和重建、参考帧
+生命周期、整帧入口、P/B 帧 framemd5 对拍。此阶段不能声称 AV1
+迁移完成。`moon check --target wasm --deny-warn --no-render` 无警告，
+`moon test --target wasm --no-render` **904/904**。

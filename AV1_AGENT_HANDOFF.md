@@ -6,9 +6,9 @@
 
 > **2026-10-26 帧间交接请先读
 > [AGENT_HANDOFF_2026-10-26_INTER.md](AGENT_HANDOFF_2026-10-26_INTER.md)**
-> （§67–§73 已推送：wedge/缩放/warp MC、帧间帧头、MV 残差原语、
-> refmvs find+init_frame，895/895；剩 load/save_tmvs 接线、
-> decode_b inter、整帧入口）。以下为 2026-10-25 的快照：
+> （§67–§73 已推送；§74 的 refmvs 状态与参考/MV 模式原语在工作树中，
+> 904/904；仍需接入 decode_b inter 与整帧入口）。以下为
+> 2026-10-25 的快照：
 
 > **2026-10-25 最新进展请先读
 > [AGENT_HANDOFF_2026-10-25_SEG.md](AGENT_HANDOFF_2026-10-25_SEG.md)**：
