@@ -130,6 +130,10 @@ C:\Users\milkb\.moon\bin\moon.exe test  --no-render   # 必须全绿
 
 - 加 `--no-render` 抑制刷屏；用 `Select-String -NotMatch "INFO"` 过滤日志后看结论。
 - **交付标准**：`moon check` 0 error / 0 warning，且 `moon test` 全通过。
+- **wasm 体积测量**：`python scripts/generate_wasm_size_probe.py`（重新生成探针 →
+  编译 `wasm`/`wasm-gc` release → 报告原始/gzip 体积并做字符串指纹验证）。
+  `wasm_probe/main/main.mbt` 是生成物，勿手改；**公共 API 变更后探针失配**
+  （`moon check` 报 unbound/参数不符），重跑脚本再提交。
 
 ---
 
@@ -316,6 +320,25 @@ $msg | git commit -F -
   `bcat`（`ebml_wbtest.mbt`）可被同包其它 `_wbtest.mbt` 直接使用，不必重复内嵌。
   H.264 的三个码流常量放在 `h264_decode_realdata_wbtest.mbt`，测试在
   `h264_decode_wbtest.mbt`，同包直接引用。
+- **纯库测 wasm 体积必须防 DCE**：链接期全程序死代码消除会删掉未被真实调用的函数——
+  `let _ = @pkg.fn` 裸引用、「函数引用数组 + `.length()`」都会被优化器折叠掉
+  （分别只剩 2.6 KB / 14.6 KB 空壳，库字符串指纹全缺失）。可靠做法是用发散表达式
+  `abort("p")` 作实参**调用**每个公开函数（调用点无法消除，函数体必须链入），见
+  `scripts/generate_wasm_size_probe.py`。验证库真链入要查 **UTF-16LE** 字符串指纹
+  （wasm 目标下 `String` 按 UTF-16 存储，ASCII `grep` 必漏判）。
+- **可执行包声明（TOML 版 moon.pkg，0.1.20261016 工具链）**：`pkgtype(kind: "executable")`；
+  `is_main` 键不存在（报 Unknown key）。moon.pkg 是 TOML 风格（`import { "…" }`、
+  `warnings = "…"`），写成 JSON 对象在包发现阶段直接解析失败。
+- **标签参数三处语法不一致**：`.mbti` 显示 `label~ : T`（必选）/`label? : T`（可选）；
+  **调用点**写 `label = expr`（不带 `~`，写 `label~=…` 报 E3016 提示正确语法）；
+  带标签参数的函数**不能作裸值引用**（"can only be applied directly"），自动化只能生成调用。
+- **顶层 `let _ = …` 不允许**（通配符只能局部绑定，顶层必须具名）；关键字是 `fn`
+  不是 `func`（写 `func main` 会在函数体里堆出大片级联解析假错误）。
+- **`Any` 在当前 core 不存在**：函数引用无法装箱进异构数组，按「同签名分组」也只能
+  组同构数组；`moonbitlang/core` 裸包**不能** import（Cannot find import），要用
+  `moonbitlang/core/builtin` 或具体子包（`core/math`、`core/v128`…）。
+- **wasm-gc 目标下 `core/v128` 不可用**：`*_v128`、`av_md5_sum_x4` 等目标受限函数
+  在 wasm-gc 编译报 "Value … not found"，测体积时需剔除（探针脚本自动迭代剔除）。
 
 ---
 
@@ -712,6 +735,7 @@ moonbit/                      # git 仓库根
 ├── COPYING.LGPLv3            # GNU LGPL 3.0 正文（同上）
 ├── README.md                 # 进度 / 模块表 / 验证来源 / 约定 / 踩坑（动态信息看这里）
 ├── agent.md                  # 本文件（稳定约定、命令、流程）
+├── wasm_probe/               # wasm 体积探针（scripts/generate_wasm_size_probe.py 生成，勿手改）
 ├── libavutil/                # 包 ffmpeg/moonbit/libavutil
 │   ├── moon.pkg              # 含 moonbitlang/core/v128 + warnings = "-alert_experimental"
 │   ├── *.mbt                 # 各纯算法模块

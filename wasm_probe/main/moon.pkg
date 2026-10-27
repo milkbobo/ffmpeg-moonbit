@@ -1,0 +1,10 @@
+import {
+  "ffmpeg/moonbit/libavutil",
+  "ffmpeg/moonbit/libavformat",
+  "ffmpeg/moonbit/libavcodec",
+  "ffmpeg/moonbit/libavcodec/av1_mc_core",
+}
+
+pkgtype(kind: "executable")
+
+warnings = "-alert_experimental"
