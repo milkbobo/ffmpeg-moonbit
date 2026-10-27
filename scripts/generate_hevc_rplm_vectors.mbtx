@@ -1,0 +1,230 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+  "moonbitlang/core/encoding/base64",
+}
+
+///|
+fn rplm_source(depth : Int32, chroma : Int32, frames : Int32) -> Bytes {
+  let out : Array[Byte] = []
+  let sw = if chroma == 400 {
+    64
+  } else if chroma == 420 || chroma == 422 {
+    64
+  } else {
+    64
+  }
+  for frame in 0..<frames {
+    for plane in 0..<(if chroma == 400 { 1 } else { 3 }) {
+      let hs = if plane != 0 && (chroma == 420 || chroma == 422) {
+        1
+      } else {
+        0
+      }
+      let vs = if plane != 0 && chroma == 420 { 1 } else { 0 }
+      // A square that shifts each frame forces genuinely different motion
+      // compensation for each reference, so a reordered list changes pixels.
+      let cx = 12 + frame * 5
+      let cy = 20
+      for y in 0..<(64 >> vs) {
+        for x in 0..<(sw >> hs) {
+          let xx = x << hs
+          let yy = y << vs
+          let inside = xx >= cx && xx < cx + 20 && yy >= cy && yy < cy + 20
+          let mut value = (xx * 3 + yy * 5 + plane * 37 + frame * 11) & 255
+          if inside {
+            value = 200 - (xx - cx) * 2 - (yy - cy)
+          }
+          let v = ((value & 255) << (depth - 8)) & ((1 << depth) - 1)
+          out.push((v & 255).to_byte())
+          if depth > 8 {
+            out.push((v >> 8).to_byte())
+          }
+        }
+      }
+    }
+  }
+  Bytes::from_array(out)
+}
+
+///|
+/// HM 16.8 never enables `lists_modification_present_flag`, and its encoder
+/// always writes unmodified lists. Apply an idempotent scratch-tree patch
+/// that (a) sets the PPS flag and (b) reverses every active list while
+/// recording the permutation in `list_entry_lx`, both gated on HM_RPLM.
+fn ensure_hm_rplm_patch(hm : String) -> Unit raise {
+  let top = hm + "/source/Lib/TLibEncoder/TEncTop.cpp"
+  let gop = hm + "/source/Lib/TLibEncoder/TEncGOP.cpp"
+  let top_src = @fs.read_file_to_string(top)
+  if !top_src.contains("HM_RPLM") {
+    let old = "  m_cPPS.setOutputFlagPresentFlag( false );"
+    let new = "  m_cPPS.setOutputFlagPresentFlag( false );\n  // RPLM test patch: HM never signals lists_modification_present_flag itself.\n  if (getenv(\"HM_RPLM\") != NULL)\n  {\n    m_cPPS.setListsModificationPresentFlag(true);\n  }"
+    guard top_src.contains(old) else { fail("unexpected TEncTop.cpp") }
+    @fs.write_string_to_file(
+      top,
+      top_src
+      .replace(old~, new~)
+      .replace(old="#include <list>", new="#include <cstdlib>\n#include <list>"),
+    )
+  }
+  let gop_src = @fs.read_file_to_string(gop)
+  if !gop_src.contains("HM_RPLM") {
+    let old = "    //  Set reference list\n    pcSlice->setRefPicList ( rcListPic );\n"
+    let new = "    //  Set reference list\n    pcSlice->setRefPicList ( rcListPic );\n\n    //  RPLM test patch: reverse every active list and signal the permutation.\n    if (getenv(\"HM_RPLM\") != NULL && pcSlice->getSliceType() != I_SLICE)\n    {\n      for (Int list = 0; list < (pcSlice->getSliceType() == B_SLICE ? 2 : 1); list++)\n      {\n        RefPicList e = (RefPicList)list;\n        Int n = pcSlice->getNumRefIdx(e);\n        if (n < 2)\n        {\n          continue;\n        }\n        TComPic* tmp[REF_PIC_LIST_NUM_IDX];\n        for (Int i = 0; i < n; i++)\n        {\n          tmp[i] = pcSlice->getRefPic(e, i);\n        }\n        for (Int i = 0; i < n; i++)\n        {\n          pcSlice->setRefPic(tmp[n - 1 - i], e, i);\n          if (list == 0)\n          {\n            refPicListModification->setRefPicSetIdxL0(i, n - 1 - i);\n          }\n          else\n          {\n            refPicListModification->setRefPicSetIdxL1(i, n - 1 - i);\n          }\n        }\n        if (list == 0)\n        {\n          refPicListModification->setRefPicListModificationFlagL0(1);\n        }\n        else\n        {\n          refPicListModification->setRefPicListModificationFlagL1(1);\n        }\n      }\n    }\n"
+    guard gop_src.contains(old) else { fail("unexpected TEncGOP.cpp") }
+    @fs.write_string_to_file(
+      gop,
+      gop_src
+      .replace(old~, new~)
+      .replace(old="#include <list>", new="#include <cstdlib>\n#include <list>"),
+    )
+  }
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 2 else {
+    fail("expected absolute .scratch/hevc_rplm directory")
+  }
+  let root = args[1]
+  let hm = "HM-382e0a040c7f0189670c4aad9716d45db977b319"
+  ensure_hm_rplm_patch(root + "/" + hm)
+  // Rebuild because the patch touches two translation units.
+  let built = @shell.Cmd("docker", [
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    "--entrypoint",
+    "make",
+    "-e",
+    "HM_RPLM=1",
+    "-v",
+    root + "/" + hm + ":/work/" + hm,
+    "vpxdev-img",
+    "-C",
+    "/work/" + hm + "/build/linux",
+    "-j8",
+    "release",
+  ]).each_line(line => println(line))
+  guard built == 0 else { fail("HM rebuild failed") }
+  let common = ["run", "--rm", "--network", "none", "-v", root + ":/work"]
+  // (stem, cfg, depth, chroma, frames, qp)
+  let cases = [
+    ("rplm_p8", "encoder_lowdelay_P_main.cfg", 8, 420, 6, 22),
+    ("rplm_b8", "encoder_randomaccess_main.cfg", 8, 420, 9, 22),
+    ("rplm_b444_10", "encoder_randomaccess_main_rext.cfg", 10, 444, 9, 20),
+    ("rplm_b422_12", "encoder_randomaccess_main_rext.cfg", 12, 422, 9, 20),
+  ]
+  for item in cases {
+    let (stem, cfg, depth, chroma, frames, qp) = item
+    println("Encoding " + stem)
+    @fs.write_bytes_to_file(
+      root + "/" + stem + ".yuv",
+      rplm_source(depth, chroma, frames),
+    )
+    let lines : Array[String] = []
+    let encoded = @shell.Cmd(
+      "docker",
+      common +
+      [
+        "-e",
+        "HM_RPLM=1",
+        "--entrypoint",
+        "/work/" + hm + "/bin/TAppEncoderStatic",
+        "vpxdev-img",
+        "-c",
+        "/work/" + hm + "/cfg/" + cfg,
+        "--InputFile=/work/" + stem + ".yuv",
+        "--BitstreamFile=/work/" + stem + ".265",
+        "--ReconFile=/work/" + stem + "_hm.yuv",
+        "--SourceWidth=64",
+        "--SourceHeight=64",
+        "--Level=3.1",
+        "--FrameRate=5",
+        "--FramesToBeEncoded=" + frames.to_string(),
+        "--InputBitDepth=" + depth.to_string(),
+        "--InternalBitDepth=" + depth.to_string(),
+        "--InputChromaFormat=" + chroma.to_string(),
+        "--ChromaFormatIDC=" + chroma.to_string(),
+        "--MaxCUWidth=32",
+        "--MaxCUHeight=32",
+        "--MaxPartitionDepth=3",
+        "--QP=" + qp.to_string(),
+        "--ScalingList=0",
+        // Persistent Rice adaptation is not ported yet; keep it out of the
+        // RPLM fixtures so the reference decodes exercise only supported tools.
+        "--GolombRiceParameterAdaptation=0",
+        "--CrossComponentPrediction=0",
+        "--ExtendedPrecision=0",
+        "--HighPrecisionPredictionWeighting=0",
+      ],
+    ).each_line(line => lines.push(line))
+    guard encoded == 0 else {
+      for line in lines {
+        println(line)
+      }
+      fail("HM encode failed: " + stem)
+    }
+    let output = StringBuilder()
+    output.write_string(
+      "///|\n// HM 16.8 pinned commit 382e0a040c7f0189670c4aad9716d45db977b319.\n// Generated by scripts/generate_hevc_rplm_vectors.mbtx. The scratch HM tree is\n// patched (idempotently, HM_RPLM=1) to signal lists_modification_present_flag\n// and reverse every active list; FFmpeg 9.0.2 single-thread references.\nlet \{stem}_b64 : Bytes = ",
+    )
+    let b64 = @base64.encode(@fs.read_file_to_bytes(root + "/" + stem + ".265"))
+    for i = 0; i < b64.length(); i = i + 40000 {
+      if i > 0 {
+        output.write_string(" +\n")
+      }
+      output.write_string(
+        "  b\"" + b64[i:(i + 40000).min(b64.length())].to_owned() + "\"",
+      )
+    }
+    output.write_string("\n")
+    for filtered in [true, false] {
+      let suffix = if filtered { "" } else { "_unfiltered" }
+      let status = @shell.Cmd(
+        "docker",
+        common +
+        [
+          "--entrypoint", "ffmpeg", "linuxserver/ffmpeg:9.0.2", "-hide_banner", "-loglevel",
+          "error", "-xerror", "-threads", "1",
+        ] +
+        (if filtered { [] } else { ["-skip_loop_filter", "all"] }) +
+        [
+          "-i",
+          "/work/" + stem + ".265",
+          "-fps_mode",
+          "passthrough",
+          "-f",
+          "framemd5",
+          "-y",
+          "/work/" + stem + suffix + ".md5",
+        ],
+      ).each_line(line => println(line))
+      guard status == 0 else { fail("reference decode failed") }
+      output.write_string(
+        "\n///|\nlet \{stem}\{suffix}_refs : Array[String] = [\n",
+      )
+      for
+        line in @fs.read_file_to_string(root + "/" + stem + suffix + ".md5").split(
+          "\n",
+        ) {
+        if line.trim().is_empty() || line.has_prefix("#") {
+          continue
+        }
+        let fields = line.split(",").collect()
+        guard fields.length() == 6 else { fail("bad framemd5") }
+        output.write_string("  \"" + fields[5].trim().to_owned() + "\",\n")
+      }
+      output.write_string("]\n")
+    }
+    @fs.write_string_to_file(
+      "libavcodec/hevc_" + stem + "_realdata_wbtest.mbt",
+      output.to_string(),
+    )
+  }
+}

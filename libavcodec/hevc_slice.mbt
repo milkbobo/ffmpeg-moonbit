@@ -83,6 +83,12 @@ pub struct HevcSliceHeader {
   slice_type : Int32
   num_ref_idx_l0_active : Int32
   num_ref_idx_l1_active : Int32
+  /// `sh->rpl_modification_flag[0/1]` and `list_entry_lx`; reorder the RPS
+  /// candidate list by explicit indices when the flag is set.
+  rpl_modification_flag_l0 : Bool
+  rpl_modification_flag_l1 : Bool
+  list_entry_l0 : Array[Int32]
+  list_entry_l1 : Array[Int32]
   mvd_l1_zero_flag : Bool
   cabac_init_flag : Bool
   collocated_ref_idx : Int32
@@ -154,6 +160,31 @@ fn hevc_ceil_log2(v : Int32) -> Int32 {
     n = n + 1
   }
   n
+}
+
+///|
+/// `ff_hevc_frame_nb_refs`: number of RPS candidates available to this
+/// picture. Inter-layer candidates are unused in this port.
+fn hevc_frame_nb_refs(
+  st : HevcStRps,
+  lt : HevcLongTermRps,
+  curr_pic_ref : Bool,
+) -> Int32 {
+  let mut ret = 0
+  for i in 0..<st.num_delta_pocs {
+    if (st.used & (1U << i)) != 0U {
+      ret = ret + 1
+    }
+  }
+  for i in 0..<lt.nb_refs {
+    if lt.used[i] {
+      ret = ret + 1
+    }
+  }
+  if curr_pic_ref {
+    ret = ret + 1
+  }
+  ret
 }
 
 ///|
@@ -474,6 +505,10 @@ pub fn ff_hevc_decode_slice_header(
   let mut collocated_ref_idx = 0
   let mut collocated_list = 0
   let mut max_merge_cand = 0
+  let mut rpl_mod_l0 = false
+  let mut rpl_mod_l1 = false
+  let list_entry_l0 : Array[Int32] = Array::make(16, 0)
+  let list_entry_l1 : Array[Int32] = Array::make(16, 0)
   let pw = new_hevc_pred_weight()
   if slice_type != hevc_slice_i {
     nb_l0 = pps.num_ref_idx_l0_default_active
@@ -489,9 +524,30 @@ pub fn ff_hevc_decode_slice_header(
     if nb_l0 < 1 || nb_l0 > 16 || nb_l1 < 0 || nb_l1 > 16 {
       return Err("hevc: invalid reference count")
     }
-    if pps.lists_modification_present_flag != 0 {
-      // Needs the RPS-derived frame reference count; not ported yet.
-      return Err("PATCHWELCOME: HEVC reference list modification")
+    let nb_cand = hevc_frame_nb_refs(
+      st_rps,
+      lt_rps,
+      pps.pps_curr_pic_ref_enabled_flag != 0,
+    )
+    if nb_cand == 0 {
+      return Err("hevc: zero refs in the frame RPS")
+    }
+    if pps.lists_modification_present_flag != 0 && nb_cand > 1 {
+      let entry_bits = hevc_ceil_log2(nb_cand)
+      rpl_mod_l0 = gb.read1() != 0
+      if rpl_mod_l0 {
+        for i in 0..<nb_l0 {
+          list_entry_l0[i] = gb.read(entry_bits).reinterpret_as_int()
+        }
+      }
+      if slice_type == hevc_slice_b {
+        rpl_mod_l1 = gb.read1() != 0
+        if rpl_mod_l1 {
+          for i in 0..<nb_l1 {
+            list_entry_l1[i] = gb.read(entry_bits).reinterpret_as_int()
+          }
+        }
+      }
     }
     if slice_type == hevc_slice_b {
       mvd_l1_zero = gb.read1() != 0
@@ -589,6 +645,10 @@ pub fn ff_hevc_decode_slice_header(
     slice_type,
     num_ref_idx_l0_active: nb_l0,
     num_ref_idx_l1_active: nb_l1,
+    rpl_modification_flag_l0: rpl_mod_l0,
+    rpl_modification_flag_l1: rpl_mod_l1,
+    list_entry_l0,
+    list_entry_l1,
     mvd_l1_zero_flag: mvd_l1_zero,
     cabac_init_flag: cabac_init,
     collocated_ref_idx,

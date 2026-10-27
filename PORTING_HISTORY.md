@@ -3633,3 +3633,29 @@ dependent 流单测峰值约 1.2 GB，整包累积越过 Wasm 线性内存上限
 新增七项回归（六组整流 + 一组 576 组内核对照）与六份嵌入码流；
 严格 Wasm check 零警告，全量 **1025/1025**。依赖补丁、再生脚本与
 后续范围见 `AGENT_HANDOFF_2026-10-27_HEVC_CCP.md`。
+
+## 104. HEVC 参考列表修改（ref_pic_list_modification）
+
+切片头按上游顺序解析：先由 short/long-term RPS 的 `used` 标志算出
+候选参考数 `nb_refs`（当前图片引用计入但本移植仍拒绝该工具），
+P/B 且 `nb_refs == 0` 报错；`lists_modification_present_flag` 且
+`nb_refs > 1` 时读 L0/L1 标志与 `ceil_log2(nb_refs)` 位条目。
+
+RPL 构造在 RPS 候选串接完成后按条目下标重排；越界下标返回错误，
+不修改标志时保持原截断行为。依赖 slice segment 继承独立段的列表。
+权重表仍按重排后的下标解释，语义与上游一致。
+
+参考码流由 HM 16.8（固定提交）生成：scratch 树在 `HM_RPLM=1` 下置位
+`lists_modification_present_flag`，反转每条活动列表并写入对应条目，
+编码器自身也按反转后的列表做预测。覆盖 P 低延迟 420 8-bit、层次 B
+420 8-bit、B 444 10-bit、B 422 12-bit 共 33 帧，默认/跳过滤波共 66
+份 MD5 对齐 FFmpeg 9.0.2 `-threads 1 -xerror`；`trace_headers`
+确认 L0/L1 标志与反转条目真实出现。新增五项回归，其中一项注入越界
+条目验证拒绝路径。
+
+RExt 随机接入配置默认启用 persistent Rice 参数自适应，本移植尚未
+实现；生成器显式关闭该工具，避免未覆盖工具污染 RPLM 参考。该缺口
+与 tiles+WPP、当前图片引用一并列入后续范围。
+
+严格 Wasm check 零警告，全量 **1030/1030**。再生与补丁细节见
+`AGENT_HANDOFF_2026-10-27_HEVC_RPLM.md`。

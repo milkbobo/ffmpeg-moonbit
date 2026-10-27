@@ -729,7 +729,8 @@ pub fn hevc_decoder_new() -> HevcDecoder {
 
 ///|
 /// `ff_hevc_slice_rpl` for a single-slice picture: concatenate the RPS
-/// candidate lists (ST_CURR_BEF/ST_CURR_AFT/LT, ordered per list) into L0/L1. */
+/// candidate lists (ST_CURR_BEF/ST_CURR_AFT/LT, ordered per list) into L0/L1,
+/// then apply `ref_pic_list_modification` entry indices when signaled. */
 fn hevc_slice_rpl(
   dpb : HevcDpb,
   cur : HevcRefFrame,
@@ -774,13 +775,34 @@ fn hevc_slice_rpl(
       }
     }
     let target = if list_idx == 0 { cur.rpl0 } else { cur.rpl1 }
+    let modified = if list_idx == 0 {
+      sh.rpl_modification_flag_l0
+    } else {
+      sh.rpl_modification_flag_l1
+    }
+    let entries = if list_idx == 0 {
+      sh.list_entry_l0
+    } else {
+      sh.list_entry_l1
+    }
     target.clear()
-    for i in 0..<nb_target {
-      if i >= rpl_tmp.nb_refs() {
-        break
+    if modified {
+      for i in 0..<nb_target {
+        let idx = entries[i]
+        if idx < 0 || idx >= rpl_tmp.nb_refs() {
+          return Err("hevc: invalid reference index")
+        }
+        let e = rpl_tmp.entries[idx]
+        target.push(e.poc, e.is_long_term, e.frame)
       }
-      let e = rpl_tmp.entries[i]
-      target.push(e.poc, e.is_long_term, e.frame)
+    } else {
+      for i in 0..<nb_target {
+        if i >= rpl_tmp.nb_refs() {
+          break
+        }
+        let e = rpl_tmp.entries[i]
+        target.push(e.poc, e.is_long_term, e.frame)
+      }
     }
     if sh.collocated_list == list_idx &&
       sh.collocated_ref_idx < target.nb_refs() {
