@@ -111,8 +111,8 @@ HEVC persistent Rice 参数自适应已接通：`stat_coeff[4]` 按帧内位置
 （luma/chroma × transform-skip-or-bypass）跨 TU 保持，独立 slice 与
 tile 起点清零，dependent 段与 WPP 行按上游规则继承/恢复，剩余系数
 阈值比较与增减完全对齐 C。HM 16.8 的 4:4:4 10-bit、4:2:2 12-bit WPP、
-4:2:0 8-bit 三组流共 24 帧在两种滤波模式下与 FFmpeg 9.0.2 **单线程**
-输出逐帧一致。同时修正切片头内联 short-term RPS 漏读
+4:2:0 8-bit 与 4:4:4 10-bit dependent segment 四组流共 29 帧在两种滤波
+模式下与 FFmpeg 9.0.2 **单线程**输出逐帧一致。同时修正切片头内联 short-term RPS 漏读
 `inter_ref_pic_set_prediction_flag` 的潜伏问题。详见
 [persistent Rice 交接](AGENT_HANDOFF_2026-10-27_HEVC_PERSISTENT_RICE.md)。
 

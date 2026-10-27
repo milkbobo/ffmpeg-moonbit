@@ -95,3 +95,19 @@ test "HEVC persistent rice: stat_coeff grows, shrinks and holds" {
   assert_eq(cabac.stat_coeff[3], 1)
   assert_eq(cabac.stat_coeff[0], 0)
 }
+
+///|
+test "HEVC persistent rice: dependent segments inherit stat_coeff" {
+  let data = @libavutil.av_base64_decode(rice_dep_444_10_b64, 1048576).unwrap()
+  let headers = ff_hevc_parse_slice_headers(data, false, 0).unwrap()
+  assert_true(
+    headers.any(h => h.dependent_slice_segment_flag),
+    msg="stream has no dependent slice segment",
+  )
+  hevc_check_persistent_rice(
+    rice_dep_444_10_b64,
+    rice_dep_444_10_refs,
+    rice_dep_444_10_unfiltered_refs,
+    bitdepth=10,
+  )
+}

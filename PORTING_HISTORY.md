@@ -3672,10 +3672,16 @@ luma/chroma ×（transform skip 或 transquant bypass）分四类，残差子集
 `hevc_cabac_syntax.mbt`（状态）、`hevc_residual.mbt`（取值与更新）、
 `hevc_inter_decode.mbt`（段/行/瓦片边界）。
 
-HM 16.8 生成三组流：4:4:4 10-bit 层次 B、4:2:2 12-bit 层次 B + WPP、
-4:2:0 8-bit，共 24 帧；默认/跳过环内滤波共 48 份 MD5 对齐 FFmpeg 9.0.2
-`-threads 1 -xerror`。`trace_headers` 确认 persistent rice 与 WPP 标志
+HM 16.8 生成四组流：4:4:4 10-bit 层次 B、4:2:2 12-bit 层次 B + WPP、
+4:2:0 8-bit，以及 4:4:4 10-bit dependent slice segment 组合，共 29 帧；
+默认/跳过环内滤波共 58 份 MD5 对齐 FFmpeg 9.0.2 `-threads 1 -xerror`。`trace_headers` 确认 persistent rice 与 WPP 标志
 真实置位。新增四项回归（三组整流 + stat_coeff 增减单元测试）。
+
+dependent segment 组合确认 `stat_coeff` 跨段继承（独立段清零、后续段沿用）
+与上游一致。另外验证了 tiles 与 WPP 同时启用的可行性：HM 在非 High
+Throughput profile 下直接拒绝该组合，FFmpeg 的 WPP 路径按入口点子流
+逐 CTB 行解码，需引入 skipped-bytes 感知的入口点偏移；本移植继续明确
+拒绝该组合，等待独立一轮实现。
 
 验证过程中发现并修正一个潜伏缺陷：切片头内联 short-term RPS 时，
 `inter_ref_pic_set_prediction_flag` 只在 `rps_index > 0` 时读取，而

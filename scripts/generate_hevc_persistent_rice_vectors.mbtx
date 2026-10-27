@@ -54,18 +54,27 @@ async fn main {
   // The HM scratch tree is built by scripts/generate_hevc_rplm_vectors.mbtx.
   // Without HM_RPLM its RPLM patch stays dormant.
   let common = ["run", "--rm", "--network", "none", "-v", root + ":/work"]
-  // (stem, cfg, depth, chroma, frames, qp, wpp)
+  // (stem, cfg, depth, chroma, frames, qp, wpp, dependent_segments)
   let cases = [
     (
       "rice_b444_10", "encoder_randomaccess_main_rext.cfg", 10, 444, 9, 20, false,
+      false,
     ),
     (
       "rice_b422_12_wpp", "encoder_randomaccess_main_rext.cfg", 12, 422, 9, 20, true,
+      false,
     ),
-    ("rice_p420_8", "encoder_randomaccess_main_rext.cfg", 8, 420, 6, 22, false),
+    (
+      "rice_p420_8", "encoder_randomaccess_main_rext.cfg", 8, 420, 6, 22, false,
+      false,
+    ),
+    (
+      "rice_dep_444_10", "encoder_lowdelay_main_rext.cfg", 10, 444, 5, 20, false,
+      true,
+    ),
   ]
   for item in cases {
-    let (stem, cfg, depth, chroma, frames, qp, wpp) = item
+    let (stem, cfg, depth, chroma, frames, qp, wpp, dep) = item
     println("Encoding " + stem)
     @fs.write_bytes_to_file(
       root + "/" + stem + ".yuv",
@@ -103,7 +112,12 @@ async fn main {
         "--ExtendedPrecision=0",
         "--HighPrecisionPredictionWeighting=0",
         "--WaveFrontSynchro=" + (if wpp { "1" } else { "0" }),
-      ],
+      ] +
+      (if dep {
+        ["--SliceSegmentMode=1", "--SliceSegmentArgument=1"]
+      } else {
+        []
+      }),
     ).each_line(line => lines.push(line))
     guard encoded == 0 else {
       for line in lines {

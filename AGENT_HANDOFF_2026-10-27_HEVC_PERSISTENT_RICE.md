@@ -42,8 +42,9 @@ HM 16.8，固定提交 `382e0a040c7f0189670c4aad9716d45db977b319`，scratch 树
 | rice_b444_10 | RExt RA，444 10-bit，9 帧 | 基础持久化 + 高位深 |
 | rice_b422_12_wpp | RExt RA，422 12-bit，WPP，9 帧 | WPP 行列状态保存/恢复 |
 | rice_p420_8 | RExt RA，420 8-bit，6 帧 | 8-bit + 切片内联预测 RPS（触发 RPS 修正） |
+| rice_dep_444_10 | RExt lowdelay，444 10-bit，5 帧 | dependent slice segment 跨段继承（SliceSegmentMode=1，每段 1 CTB） |
 
-24 帧 × 默认/跳过环内滤波 = 48 份 framemd5 对齐 FFmpeg 9.0.2
+29 帧 × 默认/跳过环内滤波 = 58 份 framemd5 对齐 FFmpeg 9.0.2
 `-threads 1 -xerror`。`trace_headers` 确认 `persistent_rice_adaptation_enabled=1`
 （WPP 流另有 `entropy_coding_sync_enabled_flag=1`）。
 
@@ -67,8 +68,11 @@ Docker 入口用 `--entrypoint make`。
 
 - tiles 与 WPP 同时启用、当前图片引用（CPR）仍未实现。
 - dependent segment 的 422/444 组合、CCP 与 dependent/PCM 组合待验证。
-- persistent rice 已在 WPP 下验证，但未与 dependent segment 组合验证；
-  其状态继承路径已在代码中按上游实现，缺独立夹具。
+- tiles 与 WPP 同时启用：HM 在非 High Throughput profile 下拒绝该组合；
+  FFmpeg 的 WPP 路径按入口点子流逐 CTB 行解码，需要 skipped-bytes 感知的
+  入口点偏移（现有实现用单流 + terminate/reinit，只能覆盖 WPP-only）。
+  建议独立一轮实现，并注意 FFmpeg `ff_hevc_cabac_init` 在 tiles+WPP 下
+  的 substream 语义。
 
 ## 后续
 
