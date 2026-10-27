@@ -2,6 +2,10 @@
 
 ## 2026-10-27 后续进展
 
+- 新增 `scripts/ps_dsp_harness.c`，直接设置六帧 PS 参数，覆盖 34/20 频带切换、HA/HB、IPD/OPD 开关和 1–4 包络；FFmpeg 9.0.2 与 MoonBit 的 7680 个 QMF 输出采样点最大差约 1.15e-6。该 harness 直接构造已解析的参数，尚未实现 payload 编码/解析、随机用例和完整分级缓冲对拍。
+- 再生参考（Docker 里独立构建未修改的 FFmpeg，结果为 `_build/ps_work/ps_dsp_reference.f32`）：
+  `docker run --rm --entrypoint bash -v "D:/project/FFmpeg-n9.0.2:/src:ro" -v "D:/project/FFmpeg-n9.0.2/moonbit:/work" vpxdev-img:latest -c 'mkdir /tmp/psbuild && cd /tmp/psbuild && /src/configure --disable-everything --disable-doc --disable-asm --disable-network --disable-autodetect --disable-programs --enable-decoder=aac && make -j4 libavcodec/libavcodec.a libavutil/libavutil.a && gcc -I. -I/src /work/scripts/ps_dsp_harness.c libavcodec/libavcodec.a libavutil/libavutil.a -lm -pthread -o /tmp/ps_harness && /tmp/ps_harness > /work/_build/ps_work/ps_dsp_reference.f32'`；随后运行 `python scripts/generate_aac_ps_tests.py`。
+
 - 修正同网格参数不应重映射、混合矩阵插值步长括号、右声道高频综合误读左缓冲、IPD/OPD 实部混合符号。
 - 两条完整流端到端 PCM：48 kHz 51 帧、44.1 kHz 47 帧，均最大差 1；PS 测试 13/13。生成器使用 60000 字符的 base64 分块以避开 wasm 局部变量和文本列限制。
 - 新增网格、双声道综合与 IPD/OPD 混合内核回归。真实流仍仅覆盖 20 频带，34 频带、IPD/OPD、HB、多包络组合仍需按下文建立独立 C harness 对拍；不要把这些路径视为已验证。

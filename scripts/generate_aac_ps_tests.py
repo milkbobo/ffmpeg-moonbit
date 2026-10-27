@@ -12,6 +12,7 @@ Outputs (both regenerated wholesale):
 Run after `_build/ps_work/run_trace.sh`.
 """
 import base64
+import struct
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -251,10 +252,84 @@ def gen_pcm(streams):
         "\n".join(out) + "\n", encoding="utf-8", newline="\n")
 
 
+def gen_dsp():
+    raw = (WORK / "ps_dsp_reference.f32").read_bytes()
+    values = struct.unpack("<%df" % (len(raw) // 4), raw)
+    assert len(values) == 6 * 2 * 2 * 5 * 64
+    widened = struct.pack("<%dd" % len(values), *values)
+    out = [HDR, "///| FFmpeg 9.0.2 ps_dsp_harness.c output, widened from float32.",
+           "let ps_dsp_reference : Array[Double] = ps_unpack_f64(%s)" % bytes_lit(b64(widened), 60000),
+           DSP_DRIVER]
+    (ROOT / "libavcodec" / "aac_ps_reference_wbtest.mbt").write_text(
+        "\n".join(out) + "\n", encoding="utf-8", newline="\n")
+
+
+DSP_DRIVER = r'''///| 34-band, HA/HB, phase, envelope and 20/34 transitions against C.
+test "PS DSP synthesized parameter sequences vs FFmpeg C" {
+  let ps = aac_ps_new()
+  let x = Array::make(2 * 2 * 38 * 64, 0.0)
+  let mut old34 = false
+  let mut index = 0
+  let mut worst = 0.0
+  for frame in 0..<6 {
+    let c = ps.common
+    let is34 = frame != 3
+    c.is34bands_old = old34
+    c.is34bands = is34
+    c.nr_iid_par = if is34 { 34 } else { 20 }
+    c.nr_icc_par = if is34 { 34 } else { 20 }
+    c.nr_ipdopd_par = if is34 { 17 } else { 11 }
+    c.icc_mode = if frame % 2 == 1 { 4 } else { 2 }
+    c.iid_quant = frame % 2
+    c.enable_ipdopd = frame != 4
+    c.num_env_old = c.num_env
+    c.num_env = frame % 4 + 1
+    c.border_position[0] = -1
+    for e in 0..<c.num_env {
+      c.border_position[e + 1] = 32 * (e + 1) / c.num_env - 1
+      for b in 0..<34 {
+        c.iid_par[e * 34 + b] = (b * 3 + e + frame) % 15 - 7
+        c.icc_par[e * 34 + b] = (b + 2 * e + frame) % 8
+        c.ipd_par[e * 34 + b] = (b + e + frame) % 8
+        c.opd_par[e * 34 + b] = (3 * b + 2 * e + frame) % 8
+      }
+    }
+    for p in 0..<2 {
+      for t in 0..<38 {
+        for k in 0..<64 {
+          x[p * 38 * 64 + t * 64 + k] = ((p * 17 + t * 13 + k * 7 + frame * 11) % 127 - 63).to_double() / 64.0
+        }
+      }
+    }
+    ps.apply(x, 64)
+    for ch in 0..<2 {
+      for p in 0..<2 {
+        for t in [0, 7, 14, 21, 28] {
+          for k in 0..<64 {
+            let got = x[(ch * 2 + p) * 38 * 64 + t * 64 + k]
+            let want = ps_dsp_reference[index]
+            let diff = (got - want).abs()
+            if diff > worst { worst = diff }
+            if diff > 0.00001 + want.abs() * 0.001 {
+              fail("frame=\{frame} ch=\{ch} p=\{p} t=\{t} k=\{k} got=\{got} want=\{want} diff=\{diff}")
+            }
+            index = index + 1
+          }
+        }
+      }
+    }
+    old34 = is34
+  }
+  println("PS synthesized DSP: \{index} samples, max diff=\{worst}")
+}'''
+
+
 def main():
     streams = ["hev2_48_32k", "hev2_44_24k"]
     gen_syntax(streams)
     gen_pcm(streams)
+    if (WORK / "ps_dsp_reference.f32").exists():
+        gen_dsp()
     print("wrote aac_ps_syntax_wbtest.mbt, aac_ps_pcm_wbtest.mbt")
 
 

@@ -3703,3 +3703,13 @@ Throughput profile 下直接拒绝该组合，FFmpeg 的 WPP 路径按入口点�
 新增三项回归（复用 dependent 校验助手并断言 SPS 色度格式/位深）。
 严格 Wasm check 零警告，全量 **1038/1038**。再生脚本
 `scripts/generate_hevc_dependent_rext_vectors.mbtx`。
+
+## 107. AAC 参数化立体声与 SBR 接线
+
+移植 FFmpeg 9.0.2 PS 语法、混合滤波、去相关和立体声矩阵，并接入 SBR。
+两条 libfdk_aac HE-AACv2 流的全部 51/47 帧与 FFmpeg s16 PCM 对拍，
+最大差均为 1。修正参数网格重映射、矩阵插值、右声道综合和相位混合符号。
+
+`scripts/ps_dsp_harness.c` 构造六帧参数，覆盖 34/20 频带切换、HA/HB、
+IPD/OPD 开关和 1–4 个包络；7680 个输出采样点与 C 的最大差约 1.15e-6。
+这些是直接构造的解码后参数，编码负载、更多随机组合和全部中间级仍待对拍。
