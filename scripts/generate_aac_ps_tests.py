@@ -12,7 +12,10 @@ Outputs (both regenerated wholesale):
 Run after `_build/ps_work/run_trace.sh`.
 """
 import base64
+import random
 import struct
+import sys
+import extract_ps_tables
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -256,16 +259,102 @@ def gen_dsp():
     raw = (WORK / "ps_dsp_reference.f32").read_bytes()
     values = struct.unpack("<%df" % (len(raw) // 4), raw)
     assert len(values) == 6 * 2 * 2 * 5 * 64
-    widened = struct.pack("<%dd" % len(values), *values)
-    out = [HDR, "///| FFmpeg 9.0.2 ps_dsp_harness.c output, widened from float32.",
-           "let ps_dsp_reference : Array[Double] = ps_unpack_f64(%s)" % bytes_lit(b64(widened), 60000),
+    out = [HDR, "///| FFmpeg 9.0.2 ps_dsp_harness.c float32 output.",
+           "let ps_dsp_reference : Bytes = @libavutil.av_base64_decode(%s, 1 << 20).unwrap()" % bytes_lit(b64(raw), 60000),
            DSP_DRIVER]
     (ROOT / "libavcodec" / "aac_ps_reference_wbtest.mbt").write_text(
         "\n".join(out) + "\n", encoding="utf-8", newline="\n")
 
 
+def payload_cases():
+    """Encode reproducible legal PS headers and delta-coded parameter rows."""
+    _, tabs, offsets, _, _ = extract_ps_tables.parse_psdata()
+    codes = []
+    for tab, offset in zip(tabs, offsets):
+        codewords = extract_ps_tables.canonical([length for _, length in tab])
+        codes.append({symbol + offset: format(code, "0%db" % length)
+                      for (symbol, length), code in zip(tab, codewords)})
+    rng = random.Random(20261027)
+    payloads = []
+    previous = {}
+    for frame in range(8):
+        is34 = frame not in (3, 6)
+        quant = frame % 2
+        iid_mode = (2 if is34 else 1) + 3 * quant
+        icc_mode = (2 if is34 else 1) + 3 * ((frame // 2) % 2)
+        count = 34 if is34 else 20
+        phase_count = 17 if is34 else 11
+        envs = frame % 4 + 1
+        header = "11" + format(iid_mode, "03b") + "1" + format(icc_mode, "03b") + "1"
+        header += "1" + format(envs - 1, "02b")
+        for e in range(envs):
+            header += format(32 * (e + 1) // envs - 1, "05b")
+
+        def rows(kind, bands):
+            prev = previous.get(kind, [0] * bands)
+            result = []
+            for e in range(envs):
+                dt = e % 2 if e else int(frame % 3 == 1 and len(prev) == bands)
+                vals = [rng.randrange(-3, 4) if kind == "iid" else rng.randrange(8)
+                        for _ in range(bands)]
+                table = ({"iid": (1 if quant else 3) if dt else (0 if quant else 2),
+                          "icc": 5 if dt else 4,
+                          "ipd": 7 if dt else 6,
+                          "opd": 9 if dt else 8})[kind]
+                encoded = str(dt)
+                last = 0
+                for b, value in enumerate(vals):
+                    delta = value - (prev[b] if dt else last)
+                    if kind in ("ipd", "opd"):
+                        delta &= 7
+                    encoded += codes[table][delta]
+                    last = value
+                prev = vals
+                result.append(encoded)
+            previous[kind] = prev
+            return result
+
+        header += "".join(rows("iid", count)) + "".join(rows("icc", count))
+        ipd = rows("ipd", phase_count)
+        opd = rows("opd", phase_count)
+        extension = "001" + "".join(a + b for a, b in zip(ipd, opd)) + "0"
+        extension += "0" * (-len(extension) % 8)
+        size = len(extension) // 8
+        header += format(min(size, 15), "04b")
+        if size >= 15:
+            header += format(size - 15, "08b")
+        payloads.append(header + extension)
+    return payloads
+
+
+def gen_payload_dsp(payloads):
+    raw = (WORK / "ps_payload_reference.f32").read_bytes()
+    values = struct.unpack("<%df" % (len(raw) // 4), raw)
+    assert len(values) == len(payloads) * 2 * 2 * 5 * 64
+    encoded_bits = ("\n".join(payloads) + "\n").encode("ascii")
+    payload_defs = "  let payload_data = @libavutil.av_base64_decode(%s, 1 << 20).unwrap()\n" % bytes_lit(b64(encoded_bits), 60000)
+    payload_defs += "  let reference = @libavutil.av_base64_decode(%s, 1 << 20).unwrap()\n" % bytes_lit(b64(raw), 60000)
+    stage_raw = bytearray()
+    for frame in range(len(payloads)):
+        for tag in ("LBUF", "DEC", "H11", "H12", "H21", "H22"):
+            data = (WORK / "payload_psbin" / ("%s_%03d.f32" % (tag, frame + 1))).read_bytes()
+            if tag in ("LBUF", "DEC"):
+                assert len(data) == 91 * 32 * 2 * 4
+                for band in range(91):
+                    for time in (0, 7, 14, 21, 28):
+                        pos = (band * 32 + time) * 8
+                        stage_raw.extend(data[pos:pos + 8])
+            else:
+                assert len(data) == 2 * 6 * 34 * 4
+                stage_raw.extend(data)
+    payload_defs += "  let stage_reference = @libavutil.av_base64_decode(%s, 1 << 20).unwrap()\n" % bytes_lit(b64(stage_raw), 60000)
+    out = [HDR, PAYLOAD_DRIVER.replace("  // GENERATED_PAYLOAD_DATA\n", payload_defs)]
+    (ROOT / "libavcodec" / "aac_ps_payload_wbtest.mbt").write_text(
+        "\n".join(out) + "\n", encoding="utf-8", newline="\n")
+
+
 DSP_DRIVER = r'''///| 34-band, HA/HB, phase, envelope and 20/34 transitions against C.
-test "PS DSP synthesized parameter sequences vs FFmpeg C" {
+fn ps_dsp_direct_reference_test() -> Unit raise {
   let ps = aac_ps_new()
   let x = Array::make(2 * 2 * 38 * 64, 0.0)
   let mut old34 = false
@@ -307,7 +396,9 @@ test "PS DSP synthesized parameter sequences vs FFmpeg C" {
         for t in [0, 7, 14, 21, 28] {
           for k in 0..<64 {
             let got = x[(ch * 2 + p) * 38 * 64 + t * 64 + k]
-            let want = ps_dsp_reference[index]
+            let pos = index * 4
+            let word = ps_dsp_reference[pos].to_uint() | (ps_dsp_reference[pos + 1].to_uint() << 8) | (ps_dsp_reference[pos + 2].to_uint() << 16) | (ps_dsp_reference[pos + 3].to_uint() << 24)
+            let want = Float::reinterpret_from_uint(word).to_double()
             let diff = (got - want).abs()
             if diff > worst { worst = diff }
             if diff > 0.00001 + want.abs() * 0.001 {
@@ -324,12 +415,138 @@ test "PS DSP synthesized parameter sequences vs FFmpeg C" {
 }'''
 
 
+PAYLOAD_DRIVER = r'''///| Compare float32 C stage dumps with the corresponding MoonBit buffer.
+fn ps_payload_check_stage(
+  got : Array[Double], reference : Bytes, offset : Int, frame : Int,
+  tag : String, hybrid : Bool, stats : Array[Double], slot : Int,
+) -> Int raise {
+  let mut pos = offset
+  for i in 0..<got.length() {
+    if !hybrid || (i / 2 % 32) % 7 == 0 {
+      let word = reference[pos].to_uint() | (reference[pos + 1].to_uint() << 8) | (reference[pos + 2].to_uint() << 16) | (reference[pos + 3].to_uint() << 24)
+      let want = Float::reinterpret_from_uint(word).to_double()
+      let diff = (got[i] - want).abs()
+      if diff > stats[slot * 2] { stats[slot * 2] = diff }
+      stats[slot * 2 + 1] = stats[slot * 2 + 1] + diff
+      if diff > 0.00001 + want.abs() * 0.001 {
+        fail("frame=\{frame} stage=\{tag} index=\{i} got=\{got[i]} want=\{want} diff=\{diff}")
+      }
+      pos = pos + 4
+    }
+  }
+  pos
+}
+
+///| Encoded parameter sequences, parsed and synthesized by both decoders.
+test "PS encoded payload DSP sequences vs FFmpeg C" {
+  // GENERATED_PAYLOAD_DATA
+  ps_dsp_direct_reference_test()
+  let ps = aac_ps_new()
+  let ps_apply = aac_ps_new()
+  let x = Array::make(2 * 2 * 38 * 64, 0.0)
+  let x_apply = Array::make(2 * 2 * 38 * 64, 0.0)
+  let mut index = 0
+  let mut worst = 0.0
+  let mut sum = 0.0
+  let mut stage_pos = 0
+  let stage_stats = Array::make(12, 0.0)
+  let mut start = 0
+  for frame in 0..<8 {
+    let mut end = start
+    while end < payload_data.length() && payload_data[end].to_int() != 10 {
+      end = end + 1
+    }
+    let bits_len = end - start
+    let buf = Array::make((bits_len + 7) / 8, (0).to_byte())
+    for k in 0..<bits_len {
+      if payload_data[start + k].to_int() == 49 {
+        buf[k / 8] = (buf[k / 8].to_int() | (1 << (7 - k % 8))).to_byte()
+      }
+    }
+    start = end + 1
+    let gb = BitReader::new(Bytes::from_array(buf))
+    let consumed = ps.common.read_data(gb, bits_len)
+    let gb_apply = BitReader::new(Bytes::from_array(buf))
+    assert_eq(ps_apply.common.read_data(gb_apply, bits_len), bits_len)
+    assert_true(ps_apply.common.start)
+    assert_eq(consumed, bits_len)
+    assert_true(ps.common.start)
+    assert_true(ps.common.enable_ipdopd)
+    assert_eq(ps.common.is34bands, frame != 3 && frame != 6)
+    assert_eq(ps.common.num_env, frame % 4 + 1)
+    for p in 0..<2 {
+      for t in 0..<38 {
+        for k in 0..<64 {
+          let value = ((p * 17 + t * 13 + k * 7 + frame * 11) % 127 - 63).to_double() / 64.0
+          x[p * 38 * 64 + t * 64 + k] = value
+          x_apply[p * 38 * 64 + t * 64 + k] = value
+        }
+      }
+    }
+    let top_qmf = 20 + frame * 6
+    ps_apply.apply(x_apply, top_qmf)
+    let grid = if ps.common.is34bands { 1 } else { 0 }
+    let top = top_qmf + ps_nr_bands[grid] - 64
+    for i in (top * 46 * 2)..<(ps_nr_bands[grid] * 46 * 2) { ps.delay[i] = 0.0 }
+    if top < ps_nr_allpass_bands[grid] {
+      for i in (top * 3 * 37 * 2)..<(ps_nr_allpass_bands[grid] * 3 * 37 * 2) { ps.ap_delay[i] = 0.0 }
+    }
+    ps.hybrid_analysis(x, ps.common.is34bands, 32)
+    stage_pos = ps_payload_check_stage(ps.lbuf, stage_reference, stage_pos, frame, "LBUF", true, stage_stats, 0)
+    ps.decorrelation(ps.common.is34bands)
+    stage_pos = ps_payload_check_stage(ps.rbuf, stage_reference, stage_pos, frame, "DEC", true, stage_stats, 1)
+    ps.stereo_processing(ps.common.is34bands)
+    stage_pos = ps_payload_check_stage(ps.h11, stage_reference, stage_pos, frame, "H11", false, stage_stats, 2)
+    stage_pos = ps_payload_check_stage(ps.h12, stage_reference, stage_pos, frame, "H12", false, stage_stats, 3)
+    stage_pos = ps_payload_check_stage(ps.h21, stage_reference, stage_pos, frame, "H21", false, stage_stats, 4)
+    stage_pos = ps_payload_check_stage(ps.h22, stage_reference, stage_pos, frame, "H22", false, stage_stats, 5)
+    ps_hybrid_synthesis(x, 0, ps.lbuf, ps.common.is34bands, 32)
+    ps_hybrid_synthesis(x, 2 * 38 * 64, ps.rbuf, ps.common.is34bands, 32)
+    for ch in 0..<2 {
+      for p in 0..<2 {
+        for t in [0, 7, 14, 21, 28] {
+          for k in 0..<64 {
+            let got = x[(ch * 2 + p) * 38 * 64 + t * 64 + k]
+            let actual_apply = x_apply[(ch * 2 + p) * 38 * 64 + t * 64 + k]
+            let pos = index * 4
+            let word = reference[pos].to_uint() | (reference[pos + 1].to_uint() << 8) | (reference[pos + 2].to_uint() << 16) | (reference[pos + 3].to_uint() << 24)
+            let want = Float::reinterpret_from_uint(word).to_double()
+            let diff = (got - want).abs()
+            if diff > worst { worst = diff }
+            sum = sum + diff
+            if diff > 0.00001 + want.abs() * 0.001 {
+              fail("frame=\{frame} ch=\{ch} p=\{p} t=\{t} k=\{k} got=\{got} want=\{want} diff=\{diff}")
+            }
+            if (actual_apply - want).abs() > 0.00001 + want.abs() * 0.001 {
+              fail("apply frame=\{frame} ch=\{ch} p=\{p} t=\{t} k=\{k} got=\{actual_apply} want=\{want}")
+            }
+            index = index + 1
+          }
+        }
+      }
+    }
+  }
+  assert_eq(stage_pos, stage_reference.length())
+  for i, name in ["LBUF", "DEC", "H11", "H12", "H21", "H22"] {
+    println("PS \{name}: max diff=\{stage_stats[i * 2]} sumAbs=\{stage_stats[i * 2 + 1]}")
+  }
+  println("PS encoded DSP: \{index} samples, max diff=\{worst} sumAbs=\{sum}")
+}'''
+
+
 def main():
+    payloads = payload_cases()
+    (WORK / "ps_payload_cases.txt").write_text("\n".join(payloads) + "\n", encoding="ascii", newline="\n")
+    if "--payloads-only" in sys.argv:
+        print("wrote %d encoded PS payloads" % len(payloads))
+        return
     streams = ["hev2_48_32k", "hev2_44_24k"]
     gen_syntax(streams)
     gen_pcm(streams)
     if (WORK / "ps_dsp_reference.f32").exists():
         gen_dsp()
+    if (WORK / "ps_payload_reference.f32").exists():
+        gen_payload_dsp(payloads)
     print("wrote aac_ps_syntax_wbtest.mbt, aac_ps_pcm_wbtest.mbt")
 
 

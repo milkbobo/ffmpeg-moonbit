@@ -2,7 +2,14 @@
 
 ## 2026-10-27 后续进展
 
-- 新增 `scripts/ps_dsp_harness.c`，直接设置六帧 PS 参数，覆盖 34/20 频带切换、HA/HB、IPD/OPD 开关和 1–4 包络；FFmpeg 9.0.2 与 MoonBit 的 7680 个 QMF 输出采样点最大差约 1.15e-6。该 harness 直接构造已解析的参数，尚未实现 payload 编码/解析、随机用例和完整分级缓冲对拍。
+- 增加编码负载对拍：`scripts/generate_aac_ps_tests.py --payloads-only` 用 FFmpeg 码表逆向编码固定种子八帧，`scripts/ps_payload_harness.c` 调用 C 解析与合成，`scripts/instrument_ps.py` 插桩产生分级参考。覆盖 34/20 切换、HA/HB、IPD/OPD、1–4 包络、帧内和跨帧 dt/df、不同 top；27616 个 LBUF/DEC 采样及完整 H 矩阵最大差 5.73e-7，10240 个输出采样最大差 1.50e-6。LBUF/DEC 每频带只取五个时隙，随机样本是一组固定种子，并非穷举。
+- 重新生成：先从 `../libavcodec/aacps.c` 和 `aacps_common.c` 复制新副本到 `_build/ps_work/aacps_instr.c` 和 `aacps_common_instr.c`，运行 `python scripts/instrument_ps.py _build/ps_work/aacps_instr.c _build/ps_work/aacps_common_instr.c`，再运行 `python scripts/generate_aac_ps_tests.py --payloads-only`。容器中可按下述命令在独立 build 目录编译插桩对象和 harness；最后运行 `python scripts/generate_aac_ps_tests.py`。
+
+```powershell
+docker run --rm --entrypoint bash -v "D:/project/FFmpeg-n9.0.2:/src:ro" -v "D:/project/FFmpeg-n9.0.2/moonbit:/work" vpxdev-img:latest -c 'mkdir /tmp/psbuild && cd /tmp/psbuild && /src/configure --disable-everything --disable-doc --disable-asm --disable-network --disable-autodetect --disable-programs --enable-decoder=aac && make -j4 libavcodec/libavcodec.a libavutil/libavutil.a && gcc -I. -I/src -I/src/libavcodec -c /work/_build/ps_work/aacps_instr.c -o /tmp/ps_instr.o && gcc -I. -I/src /work/scripts/ps_payload_harness.c /tmp/ps_instr.o libavcodec/libavcodec.a libavutil/libavutil.a -lm -pthread -o /tmp/ps_payload_harness && /tmp/ps_payload_harness < /work/_build/ps_work/ps_payload_cases.txt > /work/_build/ps_work/ps_payload_reference.f32 && mkdir -p /work/_build/ps_work/payload_psbin && cp /tmp/psbin/*.f32 /work/_build/ps_work/payload_psbin/'
+```
+
+- 新增 `scripts/ps_dsp_harness.c`，直接设置六帧 PS 参数，覆盖 34/20 频带切换、HA/HB、IPD/OPD 开关和 1–4 包络；FFmpeg 9.0.2 与 MoonBit 的 7680 个 QMF 输出采样点最大差约 1.15e-6。另有上面所述的编码负载及分级采样测试。
 - 再生参考（Docker 里独立构建未修改的 FFmpeg，结果为 `_build/ps_work/ps_dsp_reference.f32`）：
   `docker run --rm --entrypoint bash -v "D:/project/FFmpeg-n9.0.2:/src:ro" -v "D:/project/FFmpeg-n9.0.2/moonbit:/work" vpxdev-img:latest -c 'mkdir /tmp/psbuild && cd /tmp/psbuild && /src/configure --disable-everything --disable-doc --disable-asm --disable-network --disable-autodetect --disable-programs --enable-decoder=aac && make -j4 libavcodec/libavcodec.a libavutil/libavutil.a && gcc -I. -I/src /work/scripts/ps_dsp_harness.c libavcodec/libavcodec.a libavutil/libavutil.a -lm -pthread -o /tmp/ps_harness && /tmp/ps_harness > /work/_build/ps_work/ps_dsp_reference.f32'`；随后运行 `python scripts/generate_aac_ps_tests.py`。
 
@@ -17,7 +24,7 @@
 SBR 管线。**语法层已完成并位级对齐**；**DSP 层已全部写完但有转录错误，端到端 PCM
 未收敛**。本文件给出精确断点、验证基建与定位方法。
 
-## 当前状态（精确断点）
+## 历史状态（原交接断点，已被上面的后续进展更新）
 
 - `moon check --target wasm --no-render`：**0 error / 0 warning**。
 - `moon test libavcodec --filter "*PS*"`：**9/10 绿**。唯一红的是
