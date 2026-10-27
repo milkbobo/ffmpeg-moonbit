@@ -1,0 +1,228 @@
+///|
+import {
+  "moonbitlang/x/fs",
+}
+
+// Derive 10/12-bit decoding vectors from the original 8-bit DSLICE A/B/C
+// streams. VPS/SPS profiles, compatibility constraints, bit-depth Golomb
+// fields, emulation prevention and RBSP byte alignment are rewritten.
+// Slice/segment headers and coded coefficient bytes are unchanged. These
+// are derived test streams, not original high-bit-depth conformance vectors;
+// FFmpeg -xerror independently decodes each to produce reference pixels.
+
+///|
+struct Bits {
+  data : Array[Int32]
+  mut pos : Int32
+}
+
+///|
+fn Bits::read(self : Bits, n : Int32) -> Int32 raise {
+  guard self.pos + n <= self.data.length() else {
+    fail("truncated parameter set")
+  }
+  let mut value = 0
+  for _ in 0..<n {
+    value = (value << 1) | self.data[self.pos]
+    self.pos += 1
+  }
+  value
+}
+
+///|
+fn Bits::ue(self : Bits) -> Int32 raise {
+  let mut zeros = 0
+  while self.read(1) == 0 {
+    zeros += 1
+    guard zeros < 30 else { fail("invalid Golomb code") }
+  }
+  (1 << zeros) - 1 + self.read(zeros)
+}
+
+///|
+fn put(out : Array[Int32], value : Int32, n : Int32) -> Unit {
+  for i in 0..<n {
+    out.push((value >> (n - i - 1)) & 1)
+  }
+}
+
+///|
+fn put_ue(out : Array[Int32], value : Int32) -> Unit {
+  let mut n = 0
+  while 1 << n <= value + 1 {
+    n += 1
+  }
+  for _ in 0..<(n - 1) {
+    out.push(0)
+  }
+  put(out, value + 1, n)
+}
+
+///|
+fn patch_profile(bits : Array[Int32], start : Int32, depth : Int32) -> Unit {
+  let profile = if depth == 10 { 2 } else { 4 }
+  for i in 0..<5 {
+    bits[start + 3 + i] = (profile >> (4 - i)) & 1
+  }
+  // Compatibility and reserved/constraint bits are redefined for the new
+  // profile. Preserve the four general source/frame constraint flags.
+  for i in 8..<40 {
+    bits[start + i] = if i == 8 + profile { 1 } else { 0 }
+  }
+  for i in 44..<88 {
+    bits[start + i] = 0
+  }
+  if depth == 12 {
+    bits[start + 44] = 1
+  } // general_max_12bit_constraint_flag
+}
+
+///|
+fn Bits::ptl(self : Bits, sublayers : Int32, depth : Int32) -> Unit raise {
+  patch_profile(self.data, self.pos, depth)
+  self.pos += 96 // general profile and level
+  let profiles : Array[Int32] = []
+  let levels : Array[Int32] = []
+  for _ in 0..<sublayers {
+    profiles.push(self.read(1))
+    levels.push(self.read(1))
+  }
+  if sublayers > 0 {
+    self.pos += (8 - sublayers) * 2
+  }
+  for i in 0..<sublayers {
+    if profiles[i] != 0 {
+      patch_profile(self.data, self.pos, depth)
+      self.pos += 88
+    }
+    if levels[i] != 0 {
+      self.pos += 8
+    }
+  }
+}
+
+///|
+fn parameter_set(nal : Bytes, depth : Int32) -> Bytes raise {
+  let kind = (nal[0].to_int() >> 1) & 63
+  let raw : Array[Byte] = []
+  let mut zeros = 0
+  for b in nal {
+    if zeros == 2 && b == b'\x03' {
+      zeros = 0
+      continue
+    }
+    raw.push(b)
+    zeros = if b == b'\x00' { zeros + 1 } else { 0 }
+  }
+  let bits : Array[Int32] = []
+  for b in raw {
+    put(bits, b.to_int(), 8)
+  }
+  let br : Bits = { data: bits, pos: 16, }
+  let mut out = bits
+  if kind == 32 {
+    br.pos = 28
+    let sublayers = br.read(3)
+    br.pos = 48
+    br.ptl(sublayers, depth)
+  } else {
+    br.pos += 4
+    let sublayers = br.read(3)
+    br.pos += 1
+    br.ptl(sublayers, depth)
+    let _ = br.ue() // sps_seq_parameter_set_id
+    let chroma = br.ue()
+    if chroma == 3 {
+      br.pos += 1
+    }
+    let _ = br.ue() // width
+    let _ = br.ue() // height
+    if br.read(1) != 0 {
+      for _ in 0..<4 {
+        let _ = br.ue()
+      }
+    }
+    let start = br.pos
+    guard br.ue() == 0 && br.ue() == 0 else {
+      fail("expected 8-bit source SPS")
+    }
+    let end = br.pos
+    // Keep the RBSP stop bit, then regenerate byte alignment.
+    let mut stop = bits.length()
+    while stop > end && bits[stop - 1] == 0 {
+      stop -= 1
+    }
+    out = []
+    for i in 0..<start {
+      out.push(bits[i])
+    }
+    put_ue(out, depth - 8)
+    put_ue(out, depth - 8)
+    for i in end..<stop {
+      out.push(bits[i])
+    }
+    while out.length() % 8 != 0 {
+      out.push(0)
+    }
+  }
+  let escaped : Array[Byte] = []
+  zeros = 0
+  for i = 0; i < out.length(); i = i + 8 {
+    let mut value = 0
+    for j in 0..<8 {
+      value = (value << 1) | out[i + j]
+    }
+    if zeros == 2 && value <= 3 {
+      escaped.push(b'\x03')
+      zeros = 0
+    }
+    escaped.push(value.to_byte())
+    zeros = if value == 0 { zeros + 1 } else { 0 }
+  }
+  Bytes::from_array(escaped)
+}
+
+///|
+fn find_start(data : Bytes, start : Int32) -> Int32 {
+  for i in start..<(data.length() - 2) {
+    if data[i] == b'\x00' && data[i + 1] == b'\x00' && data[i + 2] == b'\x01' {
+      return i
+    }
+  }
+  data.length()
+}
+
+///|
+fn main raise {
+  for stem in ["dep_a", "dep_b", "dep_c"] {
+    let data = @fs.read_file_to_bytes(".scratch/hevc_dep/" + stem + ".265")
+    for depth in [10, 12] {
+      let result : Array[Byte] = []
+      let mut pos = find_start(data, 0)
+      let mut sets = 0
+      while pos < data.length() {
+        let next = find_start(data, pos + 3)
+        let nal = data[pos + 3:next].to_owned()
+        let kind = (nal[0].to_int() >> 1) & 63
+        let patched = if kind == 32 || kind == 33 {
+          sets += 1
+          parameter_set(nal, depth)
+        } else {
+          nal
+        }
+        for b in b"\x00\x00\x00\x01" {
+          result.push(b)
+        }
+        for b in patched {
+          result.push(b)
+        }
+        pos = next
+      }
+      guard sets >= 2 else { fail("missing VPS/SPS") }
+      @fs.write_bytes_to_file(
+        ".scratch/hevc_dep/" + stem + "_\{depth}.265",
+        Bytes::from_array(result),
+      )
+    }
+  }
+}

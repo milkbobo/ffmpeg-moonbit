@@ -1,0 +1,62 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 3 else {
+    fail("usage: emit_av1_qm_reference.mbtx path/to/qm.c absolute/scratch/av1")
+  }
+  let out = StringBuilder()
+  for line in @fs.read_file_to_string(args[1]).split("\n") {
+    if !line.has_prefix("#include") {
+      out.write_string(line.to_owned() + "\n")
+    }
+  }
+  @fs.write_string_to_file(
+    ".scratch/av1/qm_reference.c",
+    @fs.read_file_to_string("scripts/av1_qm_reference.c.in").replace(
+      old="//<<QM_SOURCE>>",
+      new=out.to_string(),
+    ),
+  )
+  let common = ["run", "--rm", "--network", "none", "-v", args[2] + ":/work"]
+  let compiled = @shell.Cmd(
+    "docker",
+    common +
+    [
+      "--entrypoint", "gcc", "vpxdev-img", "-std=c99", "-O2", "/work/qm_reference.c",
+      "-o", "/work/qm_reference",
+    ],
+  ).each_line(line => println(line))
+  guard compiled == 0 else { fail("C oracle compilation failed") }
+  let ran = @shell.Cmd(
+    "docker",
+    common + ["--entrypoint", "/work/qm_reference", "vpxdev-img"],
+  ).each_line(line => println(line))
+  guard ran == 0 else { fail("C oracle failed") }
+  let fixture = StringBuilder()
+  fixture.write_string(
+    "///|\n// FNV-1a hashes of every matrix initialized by upstream dav1d qm.c.\n// Order: [16 levels][2 planes][19 transforms], transposed coefficient order.\n// Regenerate with scripts/emit_av1_qm_reference.mbtx.\nlet av1_qm_reference : FixedArray[UInt] = [\n",
+  )
+  let mut count = 0
+  for
+    line in @fs.read_file_to_string(".scratch/av1/qm_reference.txt").split("\n") {
+    if line.trim().is_empty() {
+      continue
+    }
+    fixture.write_string("  " + line.trim().to_owned() + "U,\n")
+    count += 1
+  }
+  guard count == 16 * 2 * 19 else { fail("incomplete C oracle") }
+  fixture.write_string("]\n")
+  @fs.write_string_to_file(
+    "libavcodec/av1_qm_reference_wbtest.mbt",
+    fixture.to_string(),
+  )
+}

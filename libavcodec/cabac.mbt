@@ -114,6 +114,19 @@ pub fn ff_init_cabac_decoder(
 /// `skip_bytes(c, 0)` / `cabac_reinit`: rewind the pending guard bits and
 /// reinitialise the arithmetic decoder at the resulting byte position.
 fn CabacContext::reinit(self : CabacContext) -> Result[Unit, String] {
+  match self.skip_bytes(0) {
+    Ok(_) => Ok(())
+    Err(e) => Err(e)
+  }
+}
+
+///|
+/// FFmpeg skip_bytes: expose the byte-aligned PCM payload, then restart the
+/// arithmetic engine after it. Probability states belong to the caller.
+fn CabacContext::skip_bytes(
+  self : CabacContext,
+  n : Int32,
+) -> Result[Bytes, String] {
   let mut ptr = self.pos
   if (self.low & 1) != 0 {
     ptr = ptr - 1
@@ -121,12 +134,15 @@ fn CabacContext::reinit(self : CabacContext) -> Result[Unit, String] {
   if (self.low & 0x1FF) != 0 {
     ptr = ptr - 1
   }
-  match ff_init_cabac_decoder(self.bytes, ptr) {
+  if n < 0 || ptr < 0 || ptr > self.bytes.length() - n {
+    return Err("cabac: truncated raw payload")
+  }
+  match ff_init_cabac_decoder(self.bytes, ptr + n) {
     Ok(c) => {
       self.low = c.low
       self.range = c.range
       self.pos = c.pos
-      Ok(())
+      Ok(self.bytes[ptr:ptr + n].to_owned())
     }
     Err(e) => Err(e)
   }

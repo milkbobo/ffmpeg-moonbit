@@ -1,0 +1,128 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 2 else {
+    fail("usage: generate_av1_qm_vectors.mbtx absolute/scratch/av1")
+  }
+  let mount = args[1] + ":/work"
+  // All cases use the same moving test source. Matrix extremes, unequal
+  // identity matrices, bit depths and subsampling vary independently.
+  let cases = [
+    ("qm_inter", "yuv420p", "enable-qm=1:qm-min=5:qm-max=5", "30", "0"),
+    ("qm_kf", "yuv420p", "enable-qm=1:qm-min=0:qm-max=0", "1", "0"),
+    ("qm_10bit", "yuv420p10le", "enable-qm=1:qm-min=10:qm-max=10", "30", "0"),
+    ("qm_12bit", "yuv420p12le", "enable-qm=1:qm-min=0:qm-max=0", "30", "0"),
+    ("qm_422", "yuv422p", "enable-qm=1:qm-min=4:qm-max=4", "30", "0"),
+    ("qm_444", "yuv444p", "enable-qm=1:qm-min=8:qm-max=8", "30", "0"),
+    ("qm_mono", "gray", "enable-qm=1:qm-min=2:qm-max=2", "30", "0"),
+    ("qm_44410", "yuv444p10le", "enable-qm=1:qm-min=12:qm-max=12", "30", "0"),
+    (
+      "qm_separate", "yuv444p10le", "enable-qm=1:qm-min=3:qm-max=3:enable-chroma-deltaq=1",
+      "30", "0",
+    ),
+    ("qm_identity", "yuv420p", "enable-qm=1:qm-min=15:qm-max=15", "30", "0"),
+    ("qm_reorder", "yuv420p", "enable-qm=1:qm-min=6:qm-max=6", "30", "4"),
+  ]
+  for item in cases {
+    let (stem, format, options, gop, lag) = item
+    println("Generate " + stem)
+    let common = [
+      "run", "--rm", "--network", "none", "-v", mount, "--entrypoint", "ffmpeg",
+      "linuxserver/ffmpeg:9.0.2", "-hide_banner", "-loglevel", "error",
+    ]
+    let encoded = @shell.Cmd(
+      "docker",
+      common +
+      [
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=128x96:rate=5",
+        "-frames:v",
+        "5",
+        "-pix_fmt",
+        format,
+        "-c:v",
+        "libaom-av1",
+        "-cpu-used",
+        "6",
+        "-crf",
+        "32",
+        "-b:v",
+        "0",
+        "-g",
+        gop,
+        "-lag-in-frames",
+        lag,
+        "-threads",
+        "1",
+        "-aom-params",
+        options,
+        "-y",
+        "/work/" + stem + ".ivf",
+      ],
+    ).each_line(line => println(line))
+    guard encoded == 0 else { fail("encode failed: " + stem) }
+    let decoded = @shell.Cmd(
+      "docker",
+      common +
+      [
+        "-c:v",
+        "libdav1d",
+        "-i",
+        "/work/" + stem + ".ivf",
+        "-f",
+        "framemd5",
+        "-y",
+        "/work/" + stem + ".framemd5",
+      ],
+    ).each_line(line => println(line))
+    guard decoded == 0 else { fail("decode failed: " + stem) }
+    let emitted = @shell.Cmd("moon", [
+      "run", "scripts/emit_av1_session_vectors.mbtx", stem,
+    ]).each_line(line => println(line))
+    guard emitted == 0 else { fail("fixture failed: " + stem) }
+  }
+  let patched = @shell.Cmd("moon", ["run", "scripts/patch_av1_qm_planes.mbtx"]).each_line(line => {
+      println(line)
+    },
+  )
+  guard patched == 0 else { fail("independent plane fixture failed") }
+  for stem in ["qm_planes", "qm_plane_identity"] {
+    let decoded = @shell.Cmd("docker", [
+      "run",
+      "--rm",
+      "--network",
+      "none",
+      "-v",
+      mount,
+      "--entrypoint",
+      "ffmpeg",
+      "linuxserver/ffmpeg:9.0.2",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-c:v",
+      "libdav1d",
+      "-i",
+      "/work/" + stem + ".ivf",
+      "-f",
+      "framemd5",
+      "-y",
+      "/work/" + stem + ".framemd5",
+    ]).each_line(line => println(line))
+    guard decoded == 0 else { fail("plane reference failed: " + stem) }
+    let emitted = @shell.Cmd("moon", [
+      "run", "scripts/emit_av1_session_vectors.mbtx", stem,
+    ]).each_line(line => println(line))
+    guard emitted == 0 else { fail("plane fixture failed: " + stem) }
+  }
+}

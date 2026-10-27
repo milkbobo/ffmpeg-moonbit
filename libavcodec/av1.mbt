@@ -430,6 +430,10 @@ pub struct Av1FrameHeader {
   dq_v_dc : Int32
   dq_v_ac : Int32
   using_qmatrix : Bool
+  /// Per-plane quantization matrix levels; 15 means the identity matrix.
+  qm_y : Int32
+  qm_u : Int32
+  qm_v : Int32
   segmentation_enabled : Bool
   /// Map syntax inherited/updated independently of segment feature data.
   segmentation_update_map : Bool
@@ -740,6 +744,9 @@ pub fn av1_parse_frame_header(
           dq_v_dc: 0,
           dq_v_ac: 0,
           using_qmatrix: false,
+          qm_y: 15,
+          qm_u: 15,
+          qm_v: 15,
           segmentation_enabled: false,
           segmentation_update_map: false,
           segmentation_temporal_update: false,
@@ -1072,6 +1079,9 @@ pub fn av1_parse_frame_header(
       let mut dq_v_dc = 0
       let mut dq_v_ac = 0
       let mut using_qmatrix = false
+      let mut qm_y = 15
+      let mut qm_u = 15
+      let mut qm_v = 15
       let mut context_update_tile_id = 0
       let mut tile_size_minus1 = 0
       {
@@ -1184,9 +1194,12 @@ pub fn av1_parse_frame_header(
         }
         using_qmatrix = br.read1() != 0
         if using_qmatrix {
-          br.skip(8)
-          if seq.separate_uv_delta_q {
-            br.skip(4)
+          qm_y = br.read(4).reinterpret_as_int()
+          qm_u = br.read(4).reinterpret_as_int()
+          qm_v = if seq.separate_uv_delta_q {
+            br.read(4).reinterpret_as_int()
+          } else {
+            qm_u
           }
         }
       }
@@ -1795,6 +1808,9 @@ pub fn av1_parse_frame_header(
         dq_v_dc,
         dq_v_ac,
         using_qmatrix,
+        qm_y,
+        qm_u,
+        qm_v,
         segmentation_enabled,
         segmentation_update_map,
         segmentation_temporal_update,

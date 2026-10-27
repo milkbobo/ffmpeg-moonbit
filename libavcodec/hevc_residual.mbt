@@ -3,8 +3,9 @@
 /// `libavcodec/hevc/cabac.c` (`ff_hevc_hls_residual_coding`) for 8/10/12-bit
 /// monochrome/4:2:0/4:2:2/4:4:4 streams. Transform skip is supported (including the
 /// transform-skip significance contexts and rotation swap), as are scaling
-/// lists (SPS/PPS matrices and DC scales); RDPCM and cross-component
-/// prediction are not.
+/// lists (SPS/PPS matrices and DC scales) and transquant bypass (raw spatial
+/// residuals, without sign hiding or transform-skip syntax), RDPCM and
+/// cross-component prediction.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -108,7 +109,51 @@ pub fn hevc_hls_residual_coding(
   c_idx : Int32,
   qp_y : Int32,
   is_intra : Bool,
+  transquant_bypass~ : Bool = false,
+  intra_mode~ : Int32 = 1,
 ) -> Result[Unit, String] {
+  match
+    hevc_decode_residual(
+      cabac,
+      sps,
+      pps,
+      sh,
+      pic,
+      x0,
+      y0,
+      log2_trafo_size,
+      scan_idx,
+      c_idx,
+      qp_y,
+      is_intra,
+      transquant_bypass~,
+      intra_mode~,
+    ) {
+    Ok(_) => Ok(())
+    Err(e) => Err(e)
+  }
+}
+
+///|
+/// Internal TU path retains the spatial luma residual for chroma prediction.
+/// The public wrapper keeps its original signature and Unit result.
+fn hevc_decode_residual(
+  cabac : HevcCabac,
+  sps : HevcSps,
+  pps : HevcPps,
+  sh : HevcSliceHeader,
+  pic : HevcPicture,
+  x0 : Int32,
+  y0 : Int32,
+  log2_trafo_size : Int32,
+  scan_idx : Int32,
+  c_idx : Int32,
+  qp_y : Int32,
+  is_intra : Bool,
+  transquant_bypass~ : Bool = false,
+  intra_mode~ : Int32 = 1,
+  cross~ : (Array[Int32], Int32)? = None,
+) -> Result[Array[Int32], String] {
   let trafo_size = 1 << log2_trafo_size
   let coeffs : Array[Int32] = Array::make(trafo_size * trafo_size, 0)
   let mut last_x = 0
@@ -128,15 +173,28 @@ pub fn hevc_hls_residual_coding(
   let shift = sps.bit_depth + log2_trafo_size - 5
   let add = 1 << (shift - 1)
   let scale = hevc_level_scale[qp % 6] << (qp / 6)
-  let transform_skip = if pps.transform_skip_enabled_flag != 0 &&
+  let transform_skip = if !transquant_bypass &&
+    pps.transform_skip_enabled_flag != 0 &&
     log2_trafo_size <= pps.log2_max_transform_skip_block_size {
     cabac.transform_skip_flag(c_idx)
   } else {
     false
   }
-  let ts_ctx = sps.transform_skip_context_enabled != 0 && transform_skip
+  let ts_ctx = sps.transform_skip_context_enabled != 0 &&
+    (transform_skip || transquant_bypass)
+  let explicit_rdpcm = if !is_intra &&
+    sps.explicit_rdpcm_enabled != 0 &&
+    (transform_skip || transquant_bypass) {
+    cabac.explicit_rdpcm(c_idx)
+  } else {
+    -1
+  }
+  let implicit_rdpcm = is_intra &&
+    sps.implicit_rdpcm_enabled != 0 &&
+    (intra_mode == 10 || intra_mode == 26)
 
-  let use_scaling = sps.scaling_list_enabled != 0 &&
+  let use_scaling = !transquant_bypass &&
+    sps.scaling_list_enabled != 0 &&
     !(transform_skip && log2_trafo_size > 2)
   let scaling = if pps.scaling_list_data_present_flag != 0 {
     pps.scaling_list
@@ -341,7 +399,10 @@ pub fn hevc_hls_residual_coding(
           greater1_ctx = greater1_ctx + 1
         }
       }
-      let sign_hidden = pps.sign_data_hiding_flag != 0 &&
+      let sign_hidden = !transquant_bypass &&
+        explicit_rdpcm == -1 &&
+        !(implicit_rdpcm && transform_skip) &&
+        pps.sign_data_hiding_flag != 0 &&
         last_nz_pos - first_nz_pos >= 4
       if first_greater1 != -1 {
         greater1[first_greater1] = greater1[first_greater1] +
@@ -414,9 +475,15 @@ pub fn hevc_hls_residual_coding(
             scale_m = dc_scale
           }
         }
-        let mut dq = level.to_int64() * scale.to_int64() * scale_m.to_int64() +
-          add.to_int64()
-        dq = dq >> shift
+        let mut dq = if transquant_bypass {
+          level.to_int64()
+        } else {
+          (
+            level.to_int64() * scale.to_int64() * scale_m.to_int64() +
+            add.to_int64()
+          ) >>
+          shift
+        }
         if dq < -32768L {
           dq = -32768L
         } else if dq > 32767L {
@@ -430,7 +497,22 @@ pub fn hevc_hls_residual_coding(
 
   let max_xy = if last_x > last_y { last_x } else { last_y }
   let bd = sps.bit_depth
-  if transform_skip {
+  if transquant_bypass {
+    // Preserve FFmpeg's bypass-direction precedence when both SPS tools
+    // are enabled; TU mode is the luma/chroma mode supplied by the caller.
+    if explicit_rdpcm >= 0 ||
+      (
+        sps.implicit_rdpcm_enabled != 0 &&
+        (intra_mode == 10 || intra_mode == 26)
+      ) {
+      let vertical = if sps.implicit_rdpcm_enabled != 0 {
+        intra_mode == 26
+      } else {
+        explicit_rdpcm == 1
+      }
+      hevc_transform_rdpcm(coeffs, log2_trafo_size, vertical)
+    }
+  } else if transform_skip {
     if sps.transform_skip_rotation_enabled != 0 &&
       log2_trafo_size == 2 &&
       is_intra {
@@ -444,7 +526,15 @@ pub fn hevc_hls_residual_coding(
       Ok(_) => ()
       Err(e) => return Err(e)
     }
-  } else if c_idx == 0 && log2_trafo_size == 2 {
+    if explicit_rdpcm >= 0 || implicit_rdpcm {
+      let vertical = if explicit_rdpcm >= 0 {
+        explicit_rdpcm == 1
+      } else {
+        intra_mode == 26
+      }
+      hevc_transform_rdpcm(coeffs, log2_trafo_size, vertical)
+    }
+  } else if is_intra && c_idx == 0 && log2_trafo_size == 2 {
     hevc_transform_4x4_luma(coeffs, bd)
   } else if max_xy == 0 {
     match hevc_idct_dc(coeffs, log2_trafo_size, bd) {
@@ -465,6 +555,12 @@ pub fn hevc_hls_residual_coding(
       Err(e) => return Err(e)
     }
   }
+  if cross is Some((luma, scale)) {
+    if luma.length() < coeffs.length() {
+      return Err("hevc: cross-component luma residual is too small")
+    }
+    hevc_cross_component_residual(coeffs, luma, scale)
+  }
   let hshift = sps.hshift[c_idx]
   let vshift = sps.vshift[c_idx]
   hevc_add_residual_at(
@@ -476,5 +572,5 @@ pub fn hevc_hls_residual_coding(
     trafo_size,
     bd,
   )
-  Ok(())
+  Ok(coeffs)
 }

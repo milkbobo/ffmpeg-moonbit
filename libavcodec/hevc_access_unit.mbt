@@ -55,7 +55,18 @@ fn hevc_peek_slice_info(
   if !first_slice {
     if pps.dependent_slice_segments_enabled_flag != 0 {
       if gb.read1() != 0 {
-        return Err("PATCHWELCOME: dependent HEVC slice segment")
+        // Dependent headers carry neither slice type nor POC. The access
+        // unit retains those fields from its first independent segment.
+        return Ok(
+          (
+            false,
+            0,
+            0,
+            hevc_is_idr(nal_type),
+            hevc_is_irap(nal_type),
+            sps.log2_max_poc_lsb,
+          ),
+        )
       }
     }
     let bits = hevc_ceil_log2(sps.ctb_width * sps.ctb_height)

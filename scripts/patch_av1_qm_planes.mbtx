@@ -1,0 +1,94 @@
+///|
+import {
+  "moonbitlang/x/fs",
+}
+
+///|
+fn le32(data : Bytes, offset : Int32) -> Int32 {
+  data[offset].to_int() |
+  (data[offset + 1].to_int() << 8) |
+  (data[offset + 2].to_int() << 16) |
+  (data[offset + 3].to_int() << 24)
+}
+
+///|
+fn bit(data : Bytes, offset : Int32) -> Int32 {
+  (data[offset / 8].to_int() >> (7 - offset % 8)) & 1
+}
+
+///|
+fn main raise {
+  let ivf = @fs.read_file_to_bytes(".scratch/av1/qm_44410.ivf")
+  let packet = ivf[44:44 + le32(ivf, 32)].to_owned()
+  // Offsets independently verified with FFmpeg 9.0.2 trace_headers:
+  // TD (2 bytes), sequence OBU (12 bytes), frame OBU (3-byte prefix).
+  // Sequence bit 89 = separate_uv_delta_q. Frame bits (including OBU
+  // prefix): U dc-present 54, using_qmatrix 56, qm_y 57, qm_u 61,
+  // reduced_tx_set 119; tile data starts at frame bit 120.
+  guard packet[0] == b'\x12' &&
+    packet[2] == b'\x0a' &&
+    packet[14] == b'\x32' &&
+    packet[15] == b'\xba' &&
+    packet[16] == b'\x23' &&
+    bit(packet, 2 * 8 + 89) == 0 &&
+    bit(packet, 14 * 8 + 56) == 1 else {
+    fail("qm_44410 source layout changed; recheck trace_headers offsets")
+  }
+  let payload = packet[17:].to_owned()
+  for item in [("qm_planes", 3, 8, 12), ("qm_plane_identity", 0, 15, 7)] {
+    let (stem, y, u, v) = item
+    let bits : Array[Int32] = []
+    for i in 0..<30 {
+      bits.push(bit(payload, i))
+    }
+    bits.push(0) // diff_uv_delta = 0: V quantizer deltas inherit U.
+    for i in 30..<33 {
+      bits.push(bit(payload, i))
+    }
+    for level in [y, u, v] {
+      for i in 0..<4 {
+        bits.push((level >> (3 - i)) & 1)
+      }
+    }
+    for i in 41..<96 {
+      bits.push(bit(payload, i))
+    }
+    while bits.length() % 8 != 0 {
+      bits.push(0)
+    }
+    let patched : Array[Byte] = []
+    for b in packet[:17] {
+      patched.push(b)
+    }
+    patched[13] = (patched[13].to_int() | 0x40).to_byte()
+    patched[15] = b'\xbb' // OBU payload grew from 4538 to 4539 bytes.
+    for i = 0; i < bits.length(); i = i + 8 {
+      let mut b = 0
+      for j in 0..<8 {
+        b = (b << 1) | bits[i + j]
+      }
+      patched.push(b.to_byte())
+    }
+    for b in payload[12:] {
+      patched.push(b)
+    }
+    guard patched.length() == packet.length() + 1 else {
+      fail("bad frame header padding")
+    }
+    let output = ivf[:44].to_array()
+    output[24] = b'\x01' // IVF contains exactly one displayed key frame.
+    for i in 25..<28 {
+      output[i] = b'\x00'
+    }
+    for i in 0..<4 {
+      output[32 + i] = ((patched.length() >> (8 * i)) & 255).to_byte()
+    }
+    for b in patched {
+      output.push(b)
+    }
+    @fs.write_bytes_to_file(
+      ".scratch/av1/" + stem + ".ivf",
+      Bytes::from_array(output),
+    )
+  }
+}

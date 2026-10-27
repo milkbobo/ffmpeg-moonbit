@@ -1,0 +1,144 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+  "moonbitlang/core/encoding/base64",
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 2 || (args.length() == 3 && args[2] == "lossless") else {
+    fail(
+      "expected absolute .scratch/hevc_dep directory and optional 'lossless'",
+    )
+  }
+  let lossless = args.length() == 3
+  let common = [
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    "-v",
+    args[1] + ":/work",
+    "--entrypoint",
+    "ffmpeg",
+    "linuxserver/ffmpeg:9.0.2",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-xerror",
+  ]
+  let cases = if lossless {
+    [
+      ("lossless8", "yuv420p"),
+      ("lossless10", "yuv422p10le"),
+      ("lossless12", "yuv444p12le"),
+      ("lossless_mono", "gray"),
+    ]
+  } else {
+    [
+      ("pcm_a", "ipcm_A_NEC_3"),
+      ("pcm_b", "ipcm_B_NEC_3"),
+      ("pcm_c", "ipcm_C_NEC_3"),
+      ("pcm_d", "ipcm_D_NEC_3"),
+      ("pcm_e", "ipcm_E_NEC_2"),
+      ("pcm_42210", "IPCM_A_RExt_NEC"),
+      ("pcm_44412", "IPCM_B_RExt_NEC"),
+    ]
+  }
+  for item in cases {
+    let (name, source) = item
+    if lossless {
+      let status = @shell.Cmd(
+        "docker",
+        common +
+        [
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc2=size=96x64:rate=5",
+          "-frames:v",
+          "5",
+          "-pix_fmt",
+          source,
+          "-c:v",
+          "libx265",
+          "-preset",
+          "ultrafast",
+          "-x265-params",
+          "lossless=1:keyint=5:bframes=2:scenecut=0:repeat-headers=1:log-level=error:info=0:pools=none:frame-threads=1",
+          "-f",
+          "hevc",
+          "-y",
+          "/work/" + name + ".265",
+        ],
+      ).each_line(line => println(line))
+      guard status == 0 else { fail("lossless encoding failed") }
+    }
+    let input = if lossless { name + ".265" } else { source + ".bit" }
+    let out = StringBuilder()
+    let origin = if lossless {
+      "FFmpeg 9.0.2 libx265 lossless=1, " + source
+    } else {
+      "FFmpeg FATE https://fate-suite.ffmpeg.org/hevc-conformance/" +
+      source +
+      ".bit"
+    }
+    out.write_string(
+      "///|\n// \{origin}\n// FFmpeg 9.0.2 native decoder reference, default and unfiltered.\n// Regenerate: scripts/generate_hevc_pcm_vectors.mbtx.\nlet \{name}_b64 : Bytes =\n",
+    )
+    let encoded = @base64.encode(
+      @fs.read_file_to_bytes(".scratch/hevc_dep/" + input),
+    )
+    for i = 0; i < encoded.length(); i = i + 40000 {
+      if i > 0 {
+        out.write_string(" +\n")
+      }
+      out.write_string(
+        "  b\"" + encoded[i:(i + 40000).min(encoded.length())].to_owned() + "\"",
+      )
+    }
+    out.write_string("\n")
+    for filtered in [true, false] {
+      let suffix = if filtered { "" } else { "_unfiltered" }
+      let status = @shell.Cmd(
+        "docker",
+        common +
+        (if filtered { [] } else { ["-skip_loop_filter", "all"] }) +
+        [
+          "-i",
+          "/work/" + input,
+          "-fps_mode",
+          "passthrough",
+          "-f",
+          "framemd5",
+          "-y",
+          "/work/" + name + suffix + ".md5",
+        ],
+      ).each_line(line => println(line))
+      guard status == 0 else { fail("reference failed: " + name) }
+      out.write_string(
+        "\n///|\nlet \{name}\{suffix}_refs : Array[String] = [\n",
+      )
+      for
+        line in @fs.read_file_to_string(
+          ".scratch/hevc_dep/" + name + suffix + ".md5",
+        ).split("\n") {
+        if line.trim().is_empty() || line.has_prefix("#") {
+          continue
+        }
+        let fields = line.split(",").collect()
+        guard fields.length() == 6 else { fail("invalid framemd5") }
+        out.write_string("  \"" + fields[5].trim().to_owned() + "\",\n")
+      }
+      out.write_string("]\n")
+    }
+    @fs.write_string_to_file(
+      "libavcodec/hevc_" + name + "_realdata_wbtest.mbt",
+      out.to_string(),
+    )
+  }
+}

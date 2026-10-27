@@ -880,7 +880,7 @@ fn hevc_hls_prediction_unit(
     }
     if inter_pred_idc != 1 {
       if sh.num_ref_idx_l0_active > 1 {
-        current_mv.ref_idx0 = ctx.cabac.ref_idx_lx(sh.num_ref_idx_l0_active, 0)
+        current_mv.ref_idx0 = ctx.cabac.ref_idx_lx(sh.num_ref_idx_l0_active)
       }
       current_mv.pred_flag = hevc_pf_l0
       let (dx, dy) = ctx.cabac.mvd_coding()
@@ -893,7 +893,7 @@ fn hevc_hls_prediction_unit(
     }
     if inter_pred_idc != 0 {
       if sh.num_ref_idx_l1_active > 1 {
-        current_mv.ref_idx1 = ctx.cabac.ref_idx_lx(sh.num_ref_idx_l1_active, 1)
+        current_mv.ref_idx1 = ctx.cabac.ref_idx_lx(sh.num_ref_idx_l1_active)
       }
       let (dx, dy) = if sh.mvd_l1_zero_flag && inter_pred_idc == 2 {
         (0, 0)

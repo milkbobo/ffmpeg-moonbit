@@ -32,8 +32,9 @@
 /// the SPS/PPS RBSP is walked field-by-field,
 /// `pcm_enabled_flag` is set and the parameter set is
 /// re-serialized (all other fields keep their values, the SPS VUI is dropped).
-/// Decoding them must fail with the specific PATCHWELCOME error strings
-/// asserted in `hevc_inter_wbtest.mbt`.
+/// The historical `neg_pcm` fixture now verifies that a PCM-capable SPS can
+/// still carry ordinary coded blocks: FFmpeg 9.0.2 produces the same gray
+/// frame MD5s as the original stream, and the PCM rejection was removed.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 

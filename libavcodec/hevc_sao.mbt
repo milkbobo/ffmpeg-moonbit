@@ -184,6 +184,7 @@ fn hevc_sao_clip(v : Int32, bd : Int32) -> Int32 {
 
 ///|
 /// Apply SAO to the deblocked picture. */
+/// Nonzero entries in the optional per-min-PU `pcm` map preserve raw samples.
 pub fn hevc_sao_apply(
   pic : HevcPicture,
   sps : HevcSps,
@@ -191,6 +192,7 @@ pub fn hevc_sao_apply(
   sao : HevcSaoParams,
   filter_slice_edges : Array[Int32],
   ctb_slice_idx : Array[Int32],
+  pcm~ : Array[Int32] = [],
 ) -> Unit {
   if sps.sao_enabled == 0 {
     return
@@ -323,6 +325,29 @@ pub fn hevc_sao_apply(
           ctb_slice_idx,
           pps,
         )
+      }
+    }
+  }
+  // SAO reads an immutable pre-filter picture, so restoring protected PCM
+  // cells after all CTBs also preserves the samples used by their neighbours.
+  let cell = 1 << sps.log2_min_pu_size
+  for i, flag in pcm {
+    if flag == 0 {
+      continue
+    }
+    let x = i % sps.min_pu_width * cell
+    let y = i / sps.min_pu_width * cell
+    for c in 0..<num_comps {
+      let src = if c == 0 { py } else if c == 1 { pcb } else { pcr }
+      let dst = if c == 0 { pic.y } else if c == 1 { pic.cb } else { pic.cr }
+      let hs = sps.hshift[c]
+      let vs = sps.vshift[c]
+      let stride = pic.plane_stride(c)
+      for yy in 0..<(cell >> vs) {
+        for xx in 0..<(cell >> hs) {
+          let at = ((y >> vs) + yy) * stride + (x >> hs) + xx
+          dst[at] = src[at]
+        }
       }
     }
   }

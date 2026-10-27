@@ -1,0 +1,34 @@
+/* FFmpeg 9.0.2 hevc/cabac.c, LGPL-2.1-or-later.
+ * Copyright (C) 2012 - 2013 Guillaume Martres, Gildas Cocherel. */
+#include <stdint.h>
+#include <stdio.h>
+static void combine(int16_t *coeffs, int16_t *coeffs_y, int scale, int trafo_size) {
+    struct { struct { int res_scale_val; } tu; } context = {{scale}};
+    const typeof(context) *lc = &context;
+    int i;
+//<<CCP_SOURCE>>
+}
+int main(void) {
+    const int scales[] = {0, 1, -1, 2, -2, 4, -4, 8, -8};
+    for (int log2 = 2; log2 <= 5; log2++) {
+        for (int scale = 0; scale < 9; scale++) {
+            for (int seed = 0; seed < 16; seed++) {
+                int16_t c[1024], y[1024];
+                uint32_t rng = 1 + seed;
+                int count = 1 << (2 * log2);
+                for (int i = 0; i < count; i++) {
+                    rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                    y[i] = (int16_t)(rng & 65535);
+                    rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                    c[i] = (seed & 1) ? 0 : (int16_t)(rng & 65535);
+                }
+                combine(c, y, scales[scale], 1 << log2);
+                uint32_t hash = 2166136261U;
+                for (int i = 0; i < count; i++)
+                    hash = (hash ^ (uint16_t)c[i]) * 16777619U;
+                printf("%u\n", hash);
+            }
+        }
+    }
+    return 0;
+}

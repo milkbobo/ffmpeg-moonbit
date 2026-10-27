@@ -73,9 +73,10 @@ pub struct HevcRefFrame {
   /// DPB slot index, used as identity (MoonBit `==` on structs is structural).
   slot : Int32
   mut poc : Int32
-  pic : HevcPicture
+  /// Allocated only once the slot is claimed (C `alloc_frame`).
+  mut pic : HevcPicture
   /// Per-min-PU motion information (zeroed = `PF_INTRA`), C `tab_mvf`.
-  tab_mvf : Array[HevcMvField]
+  mut tab_mvf : Array[HevcMvField]
   /// Reference lists that were active while this picture was decoded
   /// (`ff_hevc_get_ref_list` for a single-slice picture).
   rpl0 : HevcRefPicList
@@ -203,15 +204,11 @@ fn hevc_dpb_new(
 ) -> HevcDpb {
   let slots : Array[HevcRefFrame] = []
   for i in 0..<40 {
-    let tab_mvf : Array[HevcMvField] = []
-    for _ in 0..<(min_pu_width * min_pu_height) {
-      tab_mvf.push(hevc_mv_field_new())
-    }
     slots.push({
       slot: i,
       poc: 0,
-      pic: hevc_picture_new(width, height, cw, ch),
-      tab_mvf,
+      pic: hevc_picture_new(0, 0, 0, 0),
+      tab_mvf: [],
       rpl0: hevc_ref_pic_list_new(),
       rpl1: hevc_ref_pic_list_new(),
       short_ref: false,
@@ -237,6 +234,23 @@ fn hevc_dpb_new(
     },
     cur: slots[0],
     collocated: slots[0],
+  }
+}
+
+///|
+/// Lazily give a claimed slot its picture buffer and motion field, mirroring
+/// C `alloc_frame`. Slots are reused with their existing buffers.
+fn HevcDpb::prepare_slot(self : HevcDpb, frame : HevcRefFrame) -> Unit {
+  if frame.pic.y.length() != self.width * self.height {
+    frame.pic = hevc_picture_new(self.width, self.height, self.cw, self.ch)
+  }
+  let mv_count = self.min_pu_width * self.min_pu_height
+  if frame.tab_mvf.length() != mv_count {
+    let tab_mvf : Array[HevcMvField] = []
+    for _ in 0..<mv_count {
+      tab_mvf.push(hevc_mv_field_new())
+    }
+    frame.tab_mvf = tab_mvf
   }
 }
 
@@ -283,6 +297,7 @@ fn HevcDpb::find_ref_idx(
 fn HevcDpb::generate_missing_ref(self : HevcDpb, poc : Int32) -> HevcRefFrame? {
   for frame in self.slots {
     if !frame.in_use {
+      self.prepare_slot(frame)
       let pic = frame.pic
       pic.y.fill(128)
       pic.cb.fill(128)
@@ -343,6 +358,7 @@ fn HevcDpb::set_new_ref(self : HevcDpb, poc : Int32) -> HevcRefFrame? {
   }
   for frame in self.slots {
     if !frame.in_use {
+      self.prepare_slot(frame)
       frame.pic.y.fill(0)
       frame.pic.cb.fill(0)
       frame.pic.cr.fill(0)

@@ -133,6 +133,8 @@ priv struct Av1FrameCtx {
   ipred_edge : FixedArray[FixedArray[Int32]]
   /// Dequant per segment: [seg*6 + plane*2 + (0 dc,1 ac)].
   dq : FixedArray[Int32]
+  /// Matrix levels shared by all coefficient walks in this frame.
+  qm_levels : FixedArray[Int32]
   /// Per-segment lossless flags (dav1d segmentation.lossless).
   seg_lossless : FixedArray[Bool]
   /// Per-segment qidx.

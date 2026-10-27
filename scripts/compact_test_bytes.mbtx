@@ -1,6 +1,7 @@
 ///|
 import {
   "moonbitlang/x/fs",
+  "moonbitlang/core/env",
 }
 
 // Adjacent generated base64 Bytes chunks are constant data. Keeping them
@@ -9,7 +10,12 @@ import {
 
 ///|
 fn main raise {
-  let path = "libavcodec/aac_height_realdata_wbtest.mbt"
+  let args = @env.args()
+  let path = if args.length() > 1 {
+    args[1]
+  } else {
+    "libavcodec/aac_height_realdata_wbtest.mbt"
+  }
   let source = @fs.read_file_to_string(path).replace_all(old="\r\n", new="\n")
   let compact = source.replace_all(old="\" +\n  b\"", new="")
   let out = StringBuilder()

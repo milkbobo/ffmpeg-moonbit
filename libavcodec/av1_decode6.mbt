@@ -212,9 +212,6 @@ fn av1_decode_frame_payloads(
   inter : Av1InterFrameCtx?,
   prev_segmap : FixedArray[Byte]?,
 ) -> Result[Av1DecodedPicture, String] {
-  if hdr.using_qmatrix {
-    return Err("av1: qmatrix unsupported")
-  }
   if seq.bitdepth != 8 && seq.bitdepth != 10 && seq.bitdepth != 12 {
     return Err("av1: unsupported bit depth")
   }
@@ -357,6 +354,11 @@ fn av1_decode_frame_payloads(
     l: av1_block_context_new(),
     ipred_edge,
     dq: FixedArray::make(8 * 6, 4),
+    qm_levels: if hdr.using_qmatrix {
+      [hdr.qm_y, hdr.qm_u, hdr.qm_v]
+    } else {
+      [15, 15, 15]
+    },
     seg_lossless: FixedArray::make(8, false),
     seg_qidx: FixedArray::make(8, 0),
     cur_segmap: if hdr.segmentation_enabled && !hdr.segmentation_update_map {

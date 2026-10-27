@@ -1,0 +1,137 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 3 else {
+    fail(
+      "expected absolute .scratch/hevc_dep and .scratch/hevc_ccp directories; existing diagnostic FFmpeg build required",
+    )
+  }
+  let path = ".scratch/hevc_dep/src/libavcodec/hevc/hevcdec.c"
+  let original = @fs.read_file_to_string(path)
+  // Replacing the call together with its closing brace makes this idempotent.
+  let mut source = original
+  for (idx, cbf) in [(0, "cbf_cb[0]"), (1, "cbf_cr[0]")] {
+    let call = "hls_cross_component_pred(lc, \{idx});\n            }"
+    let trace = "hls_cross_component_pred(lc, \{idx});\n                fprintf(stderr, \"CCP plane=%d scale=%d cbf=%d intra=%d raw=%d size=%d split=%d\\n\", \{idx} + 1, lc->tu.res_scale_val, \{cbf}, lc->cu.pred_mode == MODE_INTRA, lc->tu.chroma_mode_c, log2_trafo_size, lc->cu.intra_split_flag);\n            }"
+    source = source.replace(old=call, new=trace)
+  }
+  @fs.write_string_to_file(path, source)
+  let residual_path = ".scratch/hevc_dep/src/libavcodec/hevc/cabac.c"
+  let residual = @fs.read_file_to_string(residual_path)
+  @fs.write_string_to_file(
+    residual_path,
+    residual.replace(
+      old="    if (lc->tu.cross_pf) {\n        int16_t *coeffs_y",
+      new="    if (lc->tu.cross_pf) {\n        fprintf(stderr, \"CCPR plane=%d scale=%d skip=%d bypass=%d\\n\", c_idx, lc->tu.res_scale_val, transform_skip_flag, lc->cu.cu_transquant_bypass_flag);\n        int16_t *coeffs_y",
+    ),
+  )
+  let common = [
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    "-v",
+    args[1] + ":/oracle",
+    "-v",
+    args[1] + "/src:/refs",
+    "-v",
+    args[2] + ":/work",
+  ]
+  let built = @shell.Cmd(
+    "docker",
+    common +
+    [
+      "-w", "/oracle/build", "--entrypoint", "make", "vpxdev-img", "-j8", "ffmpeg",
+    ],
+  ).each_line(line => println(line))
+  guard built == 0 else { fail("trace decoder build failed") }
+  let report = StringBuilder()
+  for
+    stem in [
+      "ccp8", "ccp10_intra", "ccp12_skip", "ccp12_bypass", "ccp8_zero", "ccp10_split",
+    ] {
+    let status = @shell.Cmd(
+      "docker",
+      common +
+      [
+        "--entrypoint",
+        "sh",
+        "vpxdev-img",
+        "-c",
+        "/oracle/build/ffmpeg -hide_banner -loglevel error -threads 1 -i /work/" +
+        stem +
+        ".265 -c:v rawvideo -f rawvideo -y /work/" +
+        stem +
+        "_trace.yuv 2>/work/" +
+        stem +
+        "_trace.txt",
+      ],
+    ).each_line(line => println(line))
+    guard status == 0 else { fail("trace decode failed") }
+    let stock = @shell.Cmd(
+      "docker",
+      common +
+      [
+        "--entrypoint",
+        "ffmpeg",
+        "linuxserver/ffmpeg:9.0.2",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-xerror",
+        "-threads",
+        "1",
+        "-i",
+        "/work/" + stem + ".265",
+        "-c:v",
+        "rawvideo",
+        "-f",
+        "rawvideo",
+        "-y",
+        "/work/" + stem + "_stock.yuv",
+      ],
+    ).each_line(line => println(line))
+    guard stock == 0 else { fail("stock decode failed") }
+    guard @fs.read_file_to_bytes(".scratch/hevc_ccp/" + stem + "_trace.yuv") ==
+      @fs.read_file_to_bytes(".scratch/hevc_ccp/" + stem + "_stock.yuv") else {
+      fail("instrumented C output differs from stock: " + stem)
+    }
+    let counts : Map[String, Int32] = Map([])
+    let mut active = 0
+    for
+      line in @fs.read_file_to_string(
+        ".scratch/hevc_ccp/" + stem + "_trace.txt",
+      ).split("\n") {
+      if line.has_prefix("CCPR ") {
+        for field in line.split(" ") {
+          let key = "coded_" + field.to_owned()
+          counts[key] = counts.get(key).unwrap_or(0) + 1
+        }
+        continue
+      }
+      if !line.has_prefix("CCP ") {
+        continue
+      }
+      active += 1
+      for field in line.split(" ") {
+        counts[field.to_owned()] = counts.get(field.to_owned()).unwrap_or(0) + 1
+      }
+    }
+    guard active > 0 else {
+      fail("cross-component syntax never activated: " + stem)
+    }
+    report.write_string(stem + ": \{active} chroma blocks\n")
+    for (field, count) in counts {
+      report.write_string("  \{field}: \{count}\n")
+    }
+  }
+  @fs.write_string_to_file(".scratch/hevc_ccp/coverage.txt", report.to_string())
+}

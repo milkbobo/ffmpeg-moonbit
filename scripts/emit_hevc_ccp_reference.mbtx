@@ -1,0 +1,70 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 3 else {
+    fail("expected upstream cabac.c and absolute .scratch/hevc_ccp directory")
+  }
+  let out = StringBuilder()
+  let mut in_cross = false
+  let mut copying = false
+  for line in @fs.read_file_to_string(args[1]).split("\n") {
+    if line.has_prefix("    if (lc->tu.cross_pf)") {
+      in_cross = true
+    }
+    if in_cross && line.has_prefix("        for (i") {
+      copying = true
+    }
+    if copying && line.has_prefix("    }") {
+      break
+    }
+    if copying {
+      out.write_string(line.to_owned() + "\n")
+    }
+  }
+  guard !out.to_string().is_empty() else {
+    fail("upstream cross-component loop missing")
+  }
+  @fs.write_string_to_file(
+    ".scratch/hevc_ccp/ccp_reference.c",
+    @fs.read_file_to_string("scripts/hevc_ccp_reference.c.in").replace(
+      old="//<<CCP_SOURCE>>",
+      new=out.to_string(),
+    ),
+  )
+  let common = ["run", "--rm", "--network", "none", "-v", args[2] + ":/work"]
+  let compiled = @shell.Cmd(
+    "docker",
+    common +
+    [
+      "--entrypoint", "gcc", "vpxdev-img", "-std=gnu99", "-O2", "-Wall", "-Wextra",
+      "-Werror", "/work/ccp_reference.c", "-o", "/work/ccp_reference",
+    ],
+  ).each_line(line => println(line))
+  guard compiled == 0 else { fail("C oracle compilation failed") }
+  let fixture = StringBuilder()
+  fixture.write_string(
+    "///|\n// Original FFmpeg 9.0.2 cross-component loop: 4 sizes x 9 scales x 16 seeds.\n// Odd seeds use no coded chroma residual. Regenerate with emit_hevc_ccp_reference.mbtx.\nlet hevc_ccp_reference : FixedArray[UInt] = [\n",
+  )
+  let mut count = 0
+  let ran = @shell.Cmd(
+    "docker",
+    common + ["--entrypoint", "/work/ccp_reference", "vpxdev-img"],
+  ).each_line(line => {
+    fixture.write_string("  " + line.trim().to_owned() + "U,\n")
+    count += 1
+  })
+  guard ran == 0 && count == 576 else { fail("C oracle failed or incomplete") }
+  fixture.write_string("]\n")
+  @fs.write_string_to_file(
+    "libavcodec/hevc_ccp_reference_wbtest.mbt",
+    fixture.to_string(),
+  )
+}

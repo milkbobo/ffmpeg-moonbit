@@ -98,6 +98,8 @@ pub(all) struct Av1CoefState {
   cdf : Av1CdfCtx
   levels : FixedArray[Byte]
   dq_cur : FixedArray[Int32]
+  /// Y, U, V matrix levels in 0..=15; 15 disables matrix weighting.
+  qm_levels : FixedArray[Int32]
   seg_lossless : FixedArray[Bool]
   seg_qidx : FixedArray[Int32]
   reduced_tx_set : Bool
@@ -366,9 +368,16 @@ pub fn av1_decode_coefs(
     }
     rc = 0
   }
-  // residual and sign (non-qmatrix path)
+  // Matrix weighting precedes coefficient multiplication and dq_shift.
+  // IDTX and directional identity transforms bypass the matrix, as in dav1d.
+  let qm = if txtp < 9 { st.qm_levels[plane] } else { 15 }
+  let use_qm = qm < 15
   let dq_base = seg_id * 6 + plane * 2
-  let dq_tbl0 = st.dq_cur[dq_base + 0]
+  let dq_tbl0 = if use_qm {
+    (st.dq_cur[dq_base] * av1_qm_weight(qm, chroma, tx, 0) + 16) >> 5
+  } else {
+    st.dq_cur[dq_base]
+  }
   let dq_tbl1 = st.dq_cur[dq_base + 1]
   let dq_shift = av1_imax(0, t_dim_ctx - 2)
   // ~(~127U << bpc): 8->32767, 10->131071, 12->524287
@@ -388,15 +397,27 @@ pub fn av1_decode_coefs(
       let dq = ((dq_tbl0 * dkt) & 0xffffff) >> dq_shift
       (av1_imin(dq, cf_max + dc_sign.reinterpret_as_int()), dkt)
     } else {
-      ((dq_tbl0 * dc_tok) >> dq_shift, dc_tok)
+      let dq = (dq_tbl0 * dc_tok) >> dq_shift
+      (
+        if use_qm {
+          av1_imin(dq, cf_max + dc_sign.reinterpret_as_int())
+        } else {
+          dq
+        },
+        dc_tok,
+      )
     }
     cul_level.val = dcul
     cf[0] = if dc_sign != 0 { -dcv } else { dcv }
   }
   if rc != 0 {
     let mut r = rc
-    let ac_dq = dq_tbl1
     while r != 0 {
+      let ac_dq = if use_qm {
+        (dq_tbl1 * av1_qm_weight(qm, chroma, tx, r) + 16) >> 5
+      } else {
+        dq_tbl1
+      }
       let sign = st.msac.decode_bool_equi()
       let rc_tok = cf[r]
       let (tok, dq) = if rc_tok >= 15 << 11 {
@@ -423,6 +444,7 @@ fn Av1TileCtx::coef_state(self : Av1TileCtx) -> Av1CoefState {
     cdf: self.cdf,
     levels: self.levels,
     dq_cur: self.dq_cur,
+    qm_levels: self.f.qm_levels,
     seg_lossless: self.f.seg_lossless,
     seg_qidx: self.f.seg_qidx,
     reduced_tx_set: self.f.hdr.reduced_tx_set,

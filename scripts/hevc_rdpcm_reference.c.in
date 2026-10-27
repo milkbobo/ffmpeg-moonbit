@@ -1,0 +1,25 @@
+#include <stdint.h>
+#include <stdio.h>
+#define FUNC(x) x
+//<<RDPCM_SOURCE>>
+int main(void) {
+    for (int log2 = 2; log2 <= 5; log2++) {
+        for (int dir = 0; dir < 2; dir++) {
+            for (int seed = 0; seed < 16; seed++) {
+                int16_t c[1024];
+                uint32_t rng = 1 + seed;
+                int count = 1 << (2 * log2);
+                for (int i = 0; i < count; i++) {
+                    rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                    c[i] = (int16_t)(rng & 65535);
+                }
+                transform_rdpcm(c, log2, dir);
+                uint32_t hash = 2166136261U;
+                for (int i = 0; i < count; i++)
+                    hash = (hash ^ (uint16_t)c[i]) * 16777619U;
+                printf("%u\n", hash);
+            }
+        }
+    }
+    return 0;
+}

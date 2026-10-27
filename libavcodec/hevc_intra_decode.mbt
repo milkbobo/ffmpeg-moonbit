@@ -5,8 +5,8 @@
 /// `libavcodec/hevc/pred_template.c`.
 ///
 /// Supported: 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4, one slice per picture,
-/// all-intra deblocking and SAO, no PCM, no transform
-/// skip/RDPCM/cross-component prediction, no tiles or WPP. Scaling lists are
+/// all-intra deblocking and SAO, PCM, transquant bypass, transform skip and
+/// implicit RDPCM and cross-component prediction; no tiles or WPP. Scaling lists are
 /// applied during dequantization (default, SPS and PPS matrices).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
@@ -32,6 +32,7 @@ priv struct HevcIntraDecoder {
   horizontal_bs : Array[Int32]
   bs_width : Int32
   sao : HevcSaoParams
+  pcm : Array[Int32]
   mut na : HevcNeighbourAvail
   mut ctb_left : Bool
   mut ctb_up : Bool
@@ -44,8 +45,10 @@ priv struct HevcIntraDecoder {
   mut max_trafo_depth : Int32
   pu_mode : Array[Int32]
   pu_mode_c : Array[Int32]
+  pu_chroma_mode : Array[Int32]
   mut tu_mode : Int32
   mut tu_mode_c : Int32
+  mut tu_chroma_mode : Int32
   mut qp_y : Int32
   mut qpy_pred : Int32
   mut first_qp_group : Bool
@@ -57,6 +60,7 @@ priv struct HevcIntraDecoder {
   // --- inter slice state (I slices leave these at their defaults) ---
   /// 1 = MODE_INTRA, 0 = MODE_INTER/SKIP (`lc->cu.pred_mode`).
   mut cu_pred_mode : Int32
+  mut cu_transquant_bypass : Bool
   /// Merge flag of the most recent PU (`lc->pu.merge_flag`).
   mut pu_merge_flag : Bool
   /// Current frame's per-min-PU motion field.
@@ -113,6 +117,12 @@ fn hevc_intra_decoder_new(
     ),
     bs_width: (sps.width >> 2) + 1,
     sao: hevc_sao_params_new(sps.ctb_size, sps.ctb_width),
+    pcm: if (sps.pcm_enabled != 0 && sps.pcm_loop_filter_disabled != 0) ||
+      pps.transquant_bypass_enable_flag != 0 {
+      Array::make(sps.min_pu_width * sps.min_pu_height, 0)
+    } else {
+      []
+    },
     na: hevc_neighbour_avail(),
     ctb_left: false,
     ctb_up: false,
@@ -125,8 +135,10 @@ fn hevc_intra_decoder_new(
     max_trafo_depth: 0,
     pu_mode: Array::make(4, 1),
     pu_mode_c: Array::make(4, 1),
+    pu_chroma_mode: Array::make(4, 0),
     tu_mode: 1,
     tu_mode_c: 1,
+    tu_chroma_mode: 0,
     qp_y: slice_qp,
     qpy_pred: slice_qp,
     first_qp_group: true,
@@ -136,6 +148,7 @@ fn hevc_intra_decoder_new(
     cur_cu_x: 0,
     cur_cu_y: 0,
     cu_pred_mode: hevc_mode_intra,
+    cu_transquant_bypass: false,
     pu_merge_flag: false,
     tab_mvf,
     skip_flag: Array::make(sps.min_cb_width * sps.min_cb_height, 0),
@@ -154,8 +167,8 @@ fn hevc_intra_decoder_new(
 ///|
 /// Switch the decoder to a new slice segment of the same picture, keeping the
 /// shared picture tables. Mirrors the per-slice resets in C `decode_slice_data`
-/// (`first_qp_group = 1`, `qp_y = slice_qp`) plus a snapshot of the slice's
-/// reference lists for cross-slice boundary strengths.
+/// (dependent segments keep QP history and slice identity) plus a snapshot
+/// of each independent slice's reference lists for boundary strengths.
 fn HevcIntraDecoder::start_slice(
   self : HevcIntraDecoder,
   sh : HevcSliceHeader,
@@ -169,19 +182,23 @@ fn HevcIntraDecoder::start_slice(
   self.slice_qp = slice_qp
   self.rpl = rpl
   self.inter = inter
-  self.slice_idx = self.slice_rpls.length()
-  let snap : Array[HevcRefPicList] = []
-  for list in rpl {
-    let entries : Array[HevcRplEntry] = []
-    for e in list.entries {
-      entries.push(e)
+  if !sh.dependent_slice_segment_flag {
+    self.slice_idx = self.slice_rpls.length()
+    let snap : Array[HevcRefPicList] = []
+    for list in rpl {
+      let entries : Array[HevcRplEntry] = []
+      for e in list.entries {
+        entries.push(e)
+      }
+      snap.push({ entries, })
     }
-    snap.push({ entries, })
+    self.slice_rpls.push(snap)
+    self.qp_y = slice_qp
+    self.qpy_pred = slice_qp
+  } else if self.pps.cu_qp_delta_enabled_flag == 0 {
+    self.qp_y = slice_qp
   }
-  self.slice_rpls.push(snap)
-  self.qp_y = slice_qp
-  self.qpy_pred = slice_qp
-  self.first_qp_group = true
+  self.first_qp_group = !sh.dependent_slice_segment_flag
   self.cu_qp_delta = 0
   self.is_cu_qp_delta_coded = false
   self.cur_cu_x = 0
@@ -389,6 +406,7 @@ fn HevcIntraDecoder::intra_prediction_unit(
       for j in 0..<side {
         let idx = 2 * i + j
         let chroma_mode = self.cabac.intra_chroma_pred_mode()
+        self.pu_chroma_mode[idx] = chroma_mode
         if chroma_mode != 4 {
           if self.pu_mode[idx] == intra_chroma_table[chroma_mode] {
             self.pu_mode_c[idx] = 34
@@ -402,6 +420,7 @@ fn HevcIntraDecoder::intra_prediction_unit(
     }
   } else if self.sps.chroma_format_idc != 0 {
     let chroma_mode = self.cabac.intra_chroma_pred_mode()
+    self.pu_chroma_mode[0] = chroma_mode
     let mode_idx = if chroma_mode != 4 {
       if self.pu_mode[0] == intra_chroma_table[chroma_mode] {
         34
@@ -531,9 +550,9 @@ fn HevcIntraDecoder::transform_unit(
         scan_chroma = hevc_scan_horiz
       }
     }
-    if cbf_luma_in != 0 {
+    let luma_residual = if cbf_luma_in != 0 {
       match
-        hevc_hls_residual_coding(
+        hevc_decode_residual(
           self.cabac,
           sps,
           pps,
@@ -546,15 +565,27 @@ fn HevcIntraDecoder::transform_unit(
           0,
           self.qp_y,
           self.cu_pred_mode == hevc_mode_intra,
+          transquant_bypass=self.cu_transquant_bypass,
+          intra_mode=self.tu_mode,
         ) {
-        Ok(_) => ()
+        Ok(coeffs) => coeffs
         Err(e) => return Err(e)
       }
+    } else {
+      []
     }
     if sps.chroma_format_idc != 0 &&
       (log2_trafo_size > 2 || sps.chroma_format_idc == 3) {
       let trafo_size_h = 1 << (log2_trafo_size_c + sps.hshift[1])
       let trafo_size_v = 1 << (log2_trafo_size_c + sps.vshift[1])
+      let cross_enabled = pps.cross_component_prediction_enabled_flag != 0 &&
+        cbf_luma != 0 &&
+        (self.cu_pred_mode == hevc_mode_inter || self.tu_chroma_mode == 4)
+      let cb_scale = if cross_enabled {
+        self.cabac.cross_component_scale(0)
+      } else {
+        0
+      }
       for i in 0..<n_chroma_blocks {
         let y_c = y0 + (i << log2_trafo_size_c)
         self.set_neighbour_available(x0, y_c, trafo_size_h, trafo_size_v)
@@ -573,7 +604,7 @@ fn HevcIntraDecoder::transform_unit(
         }
         if cbf_cb[i] != 0 {
           match
-            hevc_hls_residual_coding(
+            hevc_decode_residual(
               self.cabac,
               sps,
               pps,
@@ -586,11 +617,36 @@ fn HevcIntraDecoder::transform_unit(
               1,
               self.qp_y,
               self.cu_pred_mode == hevc_mode_intra,
+              transquant_bypass=self.cu_transquant_bypass,
+              intra_mode=self.tu_mode_c,
+              cross=if cross_enabled {
+                Some((luma_residual, cb_scale))
+              } else {
+                None
+              },
             ) {
             Ok(_) => ()
             Err(e) => return Err(e)
           }
+        } else if cross_enabled {
+          let size = 1 << log2_trafo_size_c
+          let coeffs = Array::make(size * size, 0)
+          hevc_cross_component_residual(coeffs, luma_residual, cb_scale)
+          hevc_add_residual_at(
+            self.pic,
+            1,
+            x0 >> sps.hshift[1],
+            y_c >> sps.vshift[1],
+            coeffs,
+            size,
+            sps.bit_depth,
+          )
         }
+      }
+      let cr_scale = if cross_enabled {
+        self.cabac.cross_component_scale(1)
+      } else {
+        0
       }
       for i in 0..<n_chroma_blocks {
         let y_c = y0 + (i << log2_trafo_size_c)
@@ -610,7 +666,7 @@ fn HevcIntraDecoder::transform_unit(
         }
         if cbf_cr[i] != 0 {
           match
-            hevc_hls_residual_coding(
+            hevc_decode_residual(
               self.cabac,
               sps,
               pps,
@@ -623,10 +679,30 @@ fn HevcIntraDecoder::transform_unit(
               2,
               self.qp_y,
               self.cu_pred_mode == hevc_mode_intra,
+              transquant_bypass=self.cu_transquant_bypass,
+              intra_mode=self.tu_mode_c,
+              cross=if cross_enabled {
+                Some((luma_residual, cr_scale))
+              } else {
+                None
+              },
             ) {
             Ok(_) => ()
             Err(e) => return Err(e)
           }
+        } else if cross_enabled {
+          let size = 1 << log2_trafo_size_c
+          let coeffs = Array::make(size * size, 0)
+          hevc_cross_component_residual(coeffs, luma_residual, cr_scale)
+          hevc_add_residual_at(
+            self.pic,
+            2,
+            x0 >> sps.hshift[2],
+            y_c >> sps.vshift[2],
+            coeffs,
+            size,
+            sps.bit_depth,
+          )
         }
       }
     } else if sps.chroma_format_idc != 0 && blk_idx == 3 {
@@ -663,6 +739,8 @@ fn HevcIntraDecoder::transform_unit(
               1,
               self.qp_y,
               self.cu_pred_mode == hevc_mode_intra,
+              transquant_bypass=self.cu_transquant_bypass,
+              intra_mode=self.tu_mode_c,
             ) {
             Ok(_) => ()
             Err(e) => return Err(e)
@@ -700,6 +778,8 @@ fn HevcIntraDecoder::transform_unit(
               2,
               self.qp_y,
               self.cu_pred_mode == hevc_mode_intra,
+              transquant_bypass=self.cu_transquant_bypass,
+              intra_mode=self.tu_mode_c,
             ) {
             Ok(_) => ()
             Err(e) => return Err(e)
@@ -797,10 +877,16 @@ fn HevcIntraDecoder::transform_tree(
       } else {
         self.pu_mode_c[0]
       }
+      self.tu_chroma_mode = self.pu_chroma_mode[if sps.chroma_format_idc == 3 {
+          blk_idx
+        } else {
+          0
+        }]
     }
   } else {
     self.tu_mode = self.pu_mode[0]
     self.tu_mode_c = self.pu_mode_c[0]
+    self.tu_chroma_mode = self.pu_chroma_mode[0]
   }
   let split = if log2_trafo_size <= sps.log2_max_trafo_size &&
     log2_trafo_size > sps.log2_min_tb_size &&
@@ -955,7 +1041,16 @@ fn HevcIntraDecoder::coding_unit(
   self.intra_split = false
   self.cu_pred_mode = hevc_mode_intra
   self.pu_merge_flag = false
+  // Inter CUs use DC as the luma mode, including implicit RDPCM decisions.
+  for i in 0..<4 {
+    self.pu_mode[i] = 1
+  }
   let cb_size = 1 << log2_cb_size
+  self.cu_transquant_bypass = pps.transquant_bypass_enable_flag != 0 &&
+    self.cabac.bin(hevc_cabac_cu_transquant_bypass_flag) != 0
+  if self.cu_transquant_bypass {
+    self.protect_filter_region(x0, y0, cb_size)
+  }
   let length = cb_size >> sps.log2_min_cb_size
   let x_cb = x0 >> sps.log2_min_cb_size
   let y_cb = y0 >> sps.log2_min_cb_size
@@ -1007,7 +1102,19 @@ fn HevcIntraDecoder::coding_unit(
       self.intra_split = self.part_mode == hevc_part_nxn &&
         self.cu_pred_mode == hevc_mode_intra
     }
-    if self.cu_pred_mode == hevc_mode_intra {
+    let pcm_flag = self.cu_pred_mode == hevc_mode_intra &&
+      self.part_mode == hevc_part_2nx2n &&
+      sps.pcm_enabled != 0 &&
+      log2_cb_size >= sps.pcm_log2_min_cb_size &&
+      log2_cb_size <= sps.pcm_log2_max_cb_size &&
+      self.cabac.terminate()
+    if pcm_flag {
+      self.intra_prediction_unit_default_value(x0, y0, log2_cb_size)
+      match self.pcm_sample(x0, y0, log2_cb_size) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+    } else if self.cu_pred_mode == hevc_mode_intra {
       self.intra_prediction_unit(x0, y0, log2_cb_size)
     } else {
       self.intra_prediction_unit_default_value(x0, y0, log2_cb_size)
@@ -1137,7 +1244,7 @@ fn HevcIntraDecoder::coding_unit(
         }
       }
     }
-    let mut rqt_root_cbf = 1
+    let mut rqt_root_cbf = if pcm_flag { 0 } else { 1 }
     if self.cu_pred_mode != hevc_mode_intra &&
       !(self.part_mode == hevc_part_2nx2n && self.pu_merge_flag) {
       rqt_root_cbf = self.cabac.no_residual_flag()
@@ -1345,18 +1452,6 @@ fn hevc_decode_intra_frame_impl(
       "PATCHWELCOME: only 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 HEVC is supported",
     )
   }
-  if sps.pcm_enabled != 0 {
-    return Err("PATCHWELCOME: HEVC PCM is not supported")
-  }
-  if pps.transform_skip_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC transform skip is not supported")
-  }
-  if pps.transquant_bypass_enable_flag != 0 {
-    return Err("PATCHWELCOME: HEVC transquant bypass is not supported")
-  }
-  if pps.cross_component_prediction_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC cross-component prediction is not supported")
-  }
   if pps.tiles_enabled_flag != 0 || pps.entropy_coding_sync_enabled_flag != 0 {
     return Err("PATCHWELCOME: HEVC tiles/WPP are not supported")
   }
@@ -1456,6 +1551,7 @@ fn hevc_decode_intra_frame_impl(
       dec.vertical_bs,
       dec.horizontal_bs,
       dec.bs_width,
+      pcm=dec.pcm,
     )
     hevc_sao_apply(
       dec.pic,
@@ -1464,6 +1560,7 @@ fn hevc_decode_intra_frame_impl(
       dec.sao,
       dec.filter_slice_edges,
       dec.ctb_slice_idx,
+      pcm=dec.pcm,
     )
   }
   Ok(dec.pic)

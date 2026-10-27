@@ -12,8 +12,12 @@
 /// each CTB row is decoded as a substream whose CABAC is rewound after the
 /// terminate bin and seeded from the state saved after the previous row's
 /// second CTB. Tiles are decoded in tile-scan order with a fresh CABAC state
-/// at each tile boundary. Rejected upstream: dependent slices, reference-list
-/// modification, tiles combined with WPP, PCM, RDPCM,
+/// at each tile boundary. Dependent segments inherit their independent slice's
+/// header, context probabilities, QP history and prediction boundaries.
+/// PCM, transquant bypass, implicit/explicit RDPCM and cross-component prediction
+/// are supported.
+/// Rejected by this driver: reference-list
+/// modification, tiles combined with WPP,
 /// current-picture referencing.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
@@ -708,11 +712,19 @@ pub struct HevcDecoder {
   mut dpb : HevcDpb?
   mut poc_tid0 : Int32
   frames : Array[HevcDecodedFrame]
+  // The single-thread C local context retains chroma modes across pictures.
+  priv rdpcm_chroma_modes : Array[Int32]
 }
 
 ///|
 pub fn hevc_decoder_new() -> HevcDecoder {
-  { ps: new_hevc_param_sets(), dpb: None, poc_tid0: 0, frames: [], }
+  {
+    ps: new_hevc_param_sets(),
+    dpb: None,
+    poc_tid0: 0,
+    frames: [],
+    rdpcm_chroma_modes: Array::make(4, 0),
+  }
 }
 
 ///|
@@ -916,13 +928,14 @@ fn hevc_make_slice_state(
   pps : HevcPps,
   sh : HevcSliceHeader,
   nal : H2645Nal,
+  inherited_states? : Array[Int32],
 ) -> Result[(Int32, HevcCabac, Array[HevcRefPicList], HevcInterCtx?), String] {
   let slice_qp = 26 + pps.pic_init_qp_minus26 + sh.slice_qp_delta
-  let states = ff_hevc_init_cabac_states(
-    slice_qp,
-    sh.slice_type,
-    sh.cabac_init_flag,
-  )
+  let states = match inherited_states {
+    Some(states) => states
+    None =>
+      ff_hevc_init_cabac_states(slice_qp, sh.slice_type, sh.cabac_init_flag)
+  }
   let data_offset = (sh.header_bits + 7) >> 3
   let cabac = match hevc_cabac_new(nal.data, data_offset, states) {
     Ok(c) => c
@@ -981,6 +994,9 @@ fn hevc_decode_ctb(
   let x_ctb = (rs % sps.ctb_width) << sps.log2_ctb_size
   let y_ctb = (rs / sps.ctb_width) << sps.log2_ctb_size
   let ctb_addr_in_slice = rs - slice_start
+  if pps.entropy_coding_sync_enabled_flag != 0 && x_ctb == 0 {
+    dec_slice.first_qp_group = true
+  }
   let tiles = pps.tiles_enabled_flag != 0
   let mut left_tile = false
   let mut upper_tile = false
@@ -1110,18 +1126,6 @@ fn hevc_decode_picture(
       "PATCHWELCOME: only 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 HEVC is supported",
     )
   }
-  if sps.pcm_enabled != 0 {
-    return Err("PATCHWELCOME: HEVC PCM is not supported")
-  }
-  if sps.implicit_rdpcm_enabled != 0 || sps.explicit_rdpcm_enabled != 0 {
-    return Err("PATCHWELCOME: HEVC RDPCM is not supported")
-  }
-  if pps.transquant_bypass_enable_flag != 0 {
-    return Err("PATCHWELCOME: HEVC transquant bypass is not supported")
-  }
-  if pps.cross_component_prediction_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC cross-component prediction is not supported")
-  }
   if pps.tiles_enabled_flag != 0 && pps.entropy_coding_sync_enabled_flag != 0 {
     return Err("PATCHWELCOME: HEVC tiles with WPP are not supported")
   }
@@ -1220,7 +1224,13 @@ fn hevc_decode_picture(
     first_inter,
   )
   dec_slice.start_slice(first_sh, first_cabac, first_qp, first_rpl, first_inter)
+  for k in 0..<4 {
+    dec_slice.pu_mode_c[k] = dec.rdpcm_chroma_modes[k]
+  }
   let ctb_size = 1 << sps.log2_ctb_size
+  let mut previous_sh = first_sh
+  let mut independent_start = 0
+  let mut common_states = first_cabac.states.copy()
   for i in 0..<nals.length() {
     let nal = nals[i]
     let sh = if i == 0 {
@@ -1229,7 +1239,13 @@ fn hevc_decode_picture(
       let gb = BitReader::with_size(nal.data, nal.size_bits)
       gb.skip(16)
       let h = match
-        ff_hevc_decode_slice_header(gb, nal.nal_type, ps, dec.poc_tid0) {
+        ff_hevc_decode_slice_header(
+          gb,
+          nal.nal_type,
+          ps,
+          dec.poc_tid0,
+          previous=previous_sh,
+        ) {
         Ok(h) => h
         Err(e) => return Err(e)
       }
@@ -1238,122 +1254,102 @@ fn hevc_decode_picture(
       }
       // C ignores POC changes between slices of one picture.
       h.poc = first_sh.poc
-      if h.slice_type != hevc_slice_i {
+      if !h.dependent_slice_segment_flag && h.slice_type != hevc_slice_i {
         match hevc_slice_rpl(dpb, cur, h) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
       }
+      let start_ts = pps.ctb_addr_rs_to_ts[h.slice_segment_address]
+      let inherited_states : Array[Int32]? = if h.dependent_slice_segment_flag {
+        if start_ts == 0 ||
+          dec_slice.ctb_slice_idx[pps.ctb_addr_ts_to_rs[start_ts - 1]] !=
+          dec_slice.slice_idx {
+          return Err("hevc: previous slice segment missing")
+        }
+        let tile_start = pps.tiles_enabled_flag != 0 &&
+          pps.tile_id[start_ts] != pps.tile_id[start_ts - 1]
+        if tile_start ||
+          (pps.entropy_coding_sync_enabled_flag != 0 && sps.ctb_width == 1) {
+          None
+        } else if pps.entropy_coding_sync_enabled_flag != 0 &&
+          h.slice_segment_address % sps.ctb_width == 0 {
+          Some(common_states.copy())
+        } else {
+          Some(dec_slice.cabac.states.copy())
+        }
+      } else {
+        None
+      }
       let (slice_qp, cabac, rpl, inter_ctx) = match
-        hevc_make_slice_state(dpb, cur, sps, pps, h, nal) {
+        hevc_make_slice_state(dpb, cur, sps, pps, h, nal, inherited_states?) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
       dec_slice.start_slice(h, cabac, slice_qp, rpl, inter_ctx)
       h
     }
+    previous_sh = sh
     let slice_start = sh.slice_segment_address
-    let wpp = pps.entropy_coding_sync_enabled_flag != 0 &&
-      sh.num_entry_point_offsets > 0
-    if wpp {
-      if slice_start % sps.ctb_width != 0 {
-        return Err("PATCHWELCOME: WPP slice starting mid-row")
-      }
-      let mut common_states = dec_slice.cabac.states.copy()
-      let mut ended = false
-      let mut row = 0
-      let n_rows = sh.num_entry_point_offsets + 1
-      while row < n_rows && !ended {
-        if row > 0 {
-          // C `ff_hevc_cabac_init` non-WPP path: consume the row's terminate
-          // bin, rewind to the next byte, then load the saved context state.
+    if !sh.dependent_slice_segment_flag {
+      independent_start = slice_start
+    }
+    // Single-thread hls_decode_entry: segment boundaries restart the
+    // arithmetic engine, tile boundaries reset probabilities, and WPP
+    // rows load the state saved after the preceding row's second CTB.
+    // Tile scan also equals raster scan when tiles are disabled.
+    let start_ts = pps.ctb_addr_rs_to_ts[slice_start]
+    let mut ts = start_ts
+    let mut more = true
+    while more && ts < sps.ctb_size {
+      let rs = pps.ctb_addr_ts_to_rs[ts]
+      let tile_start = pps.tiles_enabled_flag != 0 &&
+        ts > 0 &&
+        pps.tile_id[ts] != pps.tile_id[ts - 1]
+      let row_start = pps.entropy_coding_sync_enabled_flag != 0 &&
+        rs % sps.ctb_width == 0
+      if ts > start_ts && (tile_start || row_start) {
+        if !tile_start {
           ignore(dec_slice.cabac.terminate())
-          match dec_slice.cabac.cc.reinit() {
-            Ok(_) => ()
-            Err(e) => return Err(e)
-          }
-          let states = if sps.ctb_width == 1 {
-            ff_hevc_init_cabac_states(
-              dec_slice.slice_qp,
-              sh.slice_type,
-              sh.cabac_init_flag,
-            )
-          } else {
-            common_states
-          }
-          for k in 0..<dec_slice.cabac.states.length() {
-            dec_slice.cabac.states[k] = states[k]
-          }
-          dec_slice.restart_wpp_row()
         }
-        let mut rs = slice_start + row * sps.ctb_width
-        let mut col = 0
-        let mut more = true
-        while more && col < sps.ctb_width && rs < sps.ctb_size {
-          more = match
-            hevc_decode_ctb(
-              dec_slice, sps, pps, sh, rs, rs, slice_start, ctb_size,
-            ) {
-            Ok(v) => v
-            Err(e) => return Err(e)
-          }
-          if col == 1 {
-            common_states = dec_slice.cabac.states.copy()
-          }
-          col = col + 1
-          rs = rs + 1
+        match dec_slice.cabac.cc.reinit() {
+          Ok(_) => ()
+          Err(e) => return Err(e)
         }
-        if !more {
-          ended = true
-        }
-        row = row + 1
-      }
-    } else if pps.tiles_enabled_flag != 0 {
-      let start_ts = pps.ctb_addr_rs_to_ts[slice_start]
-      let mut ts = start_ts
-      let mut more = true
-      while more && ts < sps.ctb_size {
-        if ts > start_ts && pps.tile_id[ts] != pps.tile_id[ts - 1] {
-          // C `ff_hevc_cabac_init` tile branch: align at the tile substream
-          // boundary and restart with fresh context states.
-          match dec_slice.cabac.cc.reinit() {
-            Ok(_) => ()
-            Err(e) => return Err(e)
-          }
-          let states = ff_hevc_init_cabac_states(
+        let states = if tile_start || sps.ctb_width == 1 {
+          ff_hevc_init_cabac_states(
             dec_slice.slice_qp,
             sh.slice_type,
             sh.cabac_init_flag,
           )
-          for k in 0..<dec_slice.cabac.states.length() {
-            dec_slice.cabac.states[k] = states[k]
-          }
+        } else {
+          common_states
+        }
+        for k in 0..<dec_slice.cabac.states.length() {
+          dec_slice.cabac.states[k] = states[k]
+        }
+        if row_start {
+          dec_slice.restart_wpp_row()
+        }
+        if tile_start {
           dec_slice.first_qp_group = true
         }
-        let rs = pps.ctb_addr_ts_to_rs[ts]
-        more = match
-          hevc_decode_ctb(
-            dec_slice, sps, pps, sh, rs, ts, slice_start, ctb_size,
-          ) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        }
-        ts = ts + 1
       }
-    } else {
-      let mut rs = slice_start
-      let mut more = true
-      while more && rs < sps.ctb_size {
-        more = match
-          hevc_decode_ctb(
-            dec_slice, sps, pps, sh, rs, rs, slice_start, ctb_size,
-          ) {
-          Ok(v) => v
-          Err(e) => return Err(e)
-        }
-        rs = rs + 1
+      more = match
+        hevc_decode_ctb(
+          dec_slice, sps, pps, sh, rs, ts, independent_start, ctb_size,
+        ) {
+        Ok(v) => v
+        Err(e) => return Err(e)
       }
+      if pps.entropy_coding_sync_enabled_flag != 0 && rs % sps.ctb_width == 1 {
+        common_states = dec_slice.cabac.states.copy()
+      }
+      ts += 1
     }
+  }
+  for k in 0..<4 {
+    dec.rdpcm_chroma_modes[k] = dec_slice.pu_mode_c[k]
   }
   if apply_filters {
     hevc_deblock_picture(
@@ -1366,6 +1362,7 @@ fn hevc_decode_picture(
       dec_slice.vertical_bs,
       dec_slice.horizontal_bs,
       dec_slice.bs_width,
+      pcm=dec_slice.pcm,
     )
     hevc_sao_apply(
       dec_slice.pic,
@@ -1374,6 +1371,7 @@ fn hevc_decode_picture(
       dec_slice.sao,
       dec_slice.filter_slice_edges,
       dec_slice.ctb_slice_idx,
+      pcm=dec_slice.pcm,
     )
   }
   dec.frames.push({ pic: cur.pic.clone(), poc: cur.poc, is_irap, })

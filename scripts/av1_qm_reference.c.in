@@ -1,0 +1,31 @@
+/* qm.c from dav1d 1.5.1 is inserted unchanged except for includes. */
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#define COLD
+enum {
+    TX_4X4, TX_8X8, TX_16X16, TX_32X32, TX_64X64,
+    RTX_4X8, RTX_8X4, RTX_8X16, RTX_16X8, RTX_16X32, RTX_32X16,
+    RTX_32X64, RTX_64X32, RTX_4X16, RTX_16X4, RTX_8X32, RTX_32X8,
+    RTX_16X64, RTX_64X16, N_RECT_TX_SIZES
+};
+//<<QM_SOURCE>>
+int main(void) {
+    static const unsigned sizes[] = {
+        16, 64, 256, 1024, 1024, 32, 32, 128, 128, 512,
+        512, 1024, 1024, 64, 64, 256, 256, 512, 512
+    };
+    FILE *out = fopen("/work/qm_reference.txt", "w");
+    if (!out) return 1;
+    dav1d_init_qm_tables();
+    for (int level = 0; level < 16; level++)
+        for (int chroma = 0; chroma < 2; chroma++)
+            for (int tx = 0; tx < N_RECT_TX_SIZES; tx++) {
+                const uint8_t *qm = dav1d_qm_tbl[level][chroma][tx];
+                uint32_t hash = 2166136261U;
+                for (unsigned rc = 0; rc < sizes[tx]; rc++)
+                    hash = (hash ^ (qm ? qm[rc] : 32)) * 16777619U;
+                fprintf(out, "%u\n", hash);
+            }
+    return fclose(out) != 0;
+}

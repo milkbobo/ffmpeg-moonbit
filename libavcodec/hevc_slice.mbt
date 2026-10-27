@@ -14,8 +14,8 @@
 /// slice header extension. `header_bits` gives the bit position where the
 /// CABAC payload starts.
 ///
-/// Out of scope: dependent slice segments (rejected), reference-list
-/// modification (rejected), CABAC, and the slice data itself.
+/// Dependent segments inherit the independent header through `previous`.
+/// Out of scope: reference-list modification (rejected), CABAC, and slice data.
 
 ///|
 /// The weight/offset tables of `pred_weight_table` (C `SliceHeader`). */
@@ -316,11 +316,14 @@ fn hevc_decode_lt_rps(
 /// Parse a slice segment header. `gb` is positioned after the 16-bit NAL
 /// header; `poc_tid0` is the decoder's most recent temporal-id-0 POC
 /// (`s->poc_tid0`).
+/// Dependent segments require `previous` from the same picture and PPS;
+/// only their address, entry points, extension and alignment are newly read.
 pub fn ff_hevc_decode_slice_header(
   gb : BitReader,
   nal_type : Int32,
   ps : HevcParamSets,
   poc_tid0 : Int32,
+  previous? : HevcSliceHeader,
 ) -> Result[HevcSliceHeader, String] {
   let first_slice = gb.read1() != 0
   let no_output = if hevc_is_irap(nal_type) { gb.read1() != 0 } else { false }
@@ -355,7 +358,29 @@ pub fn ff_hevc_decode_slice_header(
       return Err("hevc: invalid slice segment address")
     }
     if dependent {
-      return Err("PATCHWELCOME: dependent HEVC slice segment")
+      let prev = match previous {
+        Some(h) if h.pps_id == pps_id => h
+        _ => return Err("hevc: independent slice segment missing")
+      }
+      if slice_segment_address == 0 ||
+        pps.ctb_addr_rs_to_ts[slice_segment_address] == 0 {
+        return Err("hevc: impossible dependent slice segment")
+      }
+      let (num_entry_point_offsets, entry_point_offsets, header_bits) = match
+        hevc_slice_header_tail(gb, pps) {
+        Ok(t) => t
+        Err(e) => return Err(e)
+      }
+      return Ok({
+        ..prev,
+        first_slice_segment_in_pic_flag: false,
+        no_output_of_prior_pics_flag: no_output,
+        dependent_slice_segment_flag: true,
+        slice_segment_address,
+        num_entry_point_offsets,
+        entry_point_offsets,
+        header_bits,
+      })
     }
   }
   for _ in 0..<pps.num_extra_slice_header_bits {
@@ -550,36 +575,11 @@ pub fn ff_hevc_decode_slice_header(
     (sao_luma || sao_chroma || !disable_dbf) {
     loop_filter_across_slices = gb.read1() != 0
   }
-  let mut num_entry_point_offsets = 0
-  let entry_point_offsets : Array[Int32] = []
-  if pps.tiles_enabled_flag != 0 || pps.entropy_coding_sync_enabled_flag != 0 {
-    let n = gb.read_ue_long().to_int()
-    if n < 0 || n > 4096 {
-      return Err("hevc: invalid num_entry_point_offsets")
-    }
-    num_entry_point_offsets = n
-    if n > 0 {
-      let offset_len = gb.read_ue_long().to_int() + 1
-      if offset_len < 1 || offset_len > 24 {
-        return Err("hevc: invalid entry_point_offset length")
-      }
-      for _ in 0..<n {
-        entry_point_offsets.push(gb.read(offset_len).reinterpret_as_int() + 1)
-      }
-    }
+  let (num_entry_point_offsets, entry_point_offsets, header_bits) = match
+    hevc_slice_header_tail(gb, pps) {
+    Ok(t) => t
+    Err(e) => return Err(e)
   }
-  if pps.slice_header_extension_present_flag != 0 {
-    let ext_bits = gb.read_ue_long()
-    if ext_bits > 1024UL {
-      return Err("hevc: slice header extension too large")
-    }
-    gb.skip(ext_bits.to_int() * 8)
-  }
-  // `alignment_bit_equal_to_one` + byte alignment (C: `align_get_bits`).
-  if gb.read1() == 0 && gb.bits_left() >= 0 {
-    return Err("hevc: alignment_bit_equal_to_one=0")
-  }
-  gb.align()
   Ok({
     first_slice_segment_in_pic_flag: first_slice,
     no_output_of_prior_pics_flag: no_output,
@@ -617,8 +617,50 @@ pub fn ff_hevc_decode_slice_header(
     lt_rps,
     collocated_list,
     pw,
-    header_bits: gb.count(),
+    header_bits,
   })
+}
+
+///|
+/// Syntax present in both independent and dependent segment headers.
+fn hevc_slice_header_tail(
+  gb : BitReader,
+  pps : HevcPps,
+) -> Result[(Int32, Array[Int32], Int32), String] {
+  let mut num_entry_point_offsets = 0
+  let entry_point_offsets : Array[Int32] = []
+  if pps.tiles_enabled_flag != 0 || pps.entropy_coding_sync_enabled_flag != 0 {
+    let n = gb.read_ue_long().to_int()
+    if n < 0 || n > 4096 {
+      return Err("hevc: invalid num_entry_point_offsets")
+    }
+    num_entry_point_offsets = n
+    if n > 0 {
+      let offset_len = gb.read_ue_long().to_int() + 1
+      if offset_len < 1 || offset_len > 24 {
+        return Err("hevc: invalid entry_point_offset length")
+      }
+      for _ in 0..<n {
+        entry_point_offsets.push(gb.read(offset_len).reinterpret_as_int() + 1)
+      }
+    }
+  }
+  if pps.slice_header_extension_present_flag != 0 {
+    let ext_bits = gb.read_ue_long()
+    if ext_bits > 1024UL {
+      return Err("hevc: slice header extension too large")
+    }
+    gb.skip(ext_bits.to_int() * 8)
+  }
+  // `alignment_bit_equal_to_one` + byte alignment (C: `align_get_bits`).
+  if gb.read1() == 0 && gb.bits_left() >= 0 {
+    return Err("hevc: alignment_bit_equal_to_one=0")
+  }
+  gb.align()
+  if gb.bits_left() < 0 {
+    return Err("hevc: truncated slice header")
+  }
+  Ok((num_entry_point_offsets, entry_point_offsets, gb.count()))
 }
 
 ///|
@@ -639,12 +681,16 @@ pub fn ff_hevc_parse_slice_headers(
     Err(e) => return Err(e)
   }
   let out : Array[HevcSliceHeader] = []
+  let mut previous : HevcSliceHeader? = None
   for nal in pkt.nals {
     if nal.nal_type <= 31 {
       let gb = BitReader::with_size(nal.data, nal.size_bits)
       gb.skip(16)
-      match ff_hevc_decode_slice_header(gb, nal.nal_type, ps, 0) {
-        Ok(h) => out.push(h)
+      match ff_hevc_decode_slice_header(gb, nal.nal_type, ps, 0, previous?) {
+        Ok(h) => {
+          previous = Some(h)
+          out.push(h)
+        }
         Err(e) => return Err(e)
       }
     }

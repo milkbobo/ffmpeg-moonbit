@@ -1,0 +1,97 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 3 || args.length() == 4 else {
+    fail(
+      "usage: emit_hevc_rdpcm_reference.mbtx upstream/dsp_template.c absolute/scratch/hevc_rdpcm",
+    )
+  }
+  let source = @fs.read_file_to_string(args[1])
+  let out = StringBuilder()
+  let mut copying = false
+  for line in source.split("\n") {
+    if line.has_prefix("static void FUNC(transform_rdpcm)") {
+      copying = true
+    }
+    if copying && line.has_prefix("/**") {
+      break
+    }
+    if copying {
+      out.write_string(line.to_owned() + "\n")
+    }
+  }
+  guard !out.to_string().is_empty() else {
+    fail("upstream RDPCM function missing")
+  }
+  @fs.write_string_to_file(
+    ".scratch/hevc_rdpcm/rdpcm_reference.c",
+    @fs.read_file_to_string("scripts/hevc_rdpcm_reference.c.in").replace(
+      old="//<<RDPCM_SOURCE>>",
+      new=out.to_string(),
+    ),
+  )
+  let common = ["run", "--rm", "--network", "none", "-v", args[2] + ":/work"]
+  let compiled = @shell.Cmd(
+    "docker",
+    common +
+    [
+      "--entrypoint", "gcc", "vpxdev-img", "-std=c99", "-O2", "-Wall", "-Wextra",
+      "-Werror", "/work/rdpcm_reference.c", "-o", "/work/rdpcm_reference",
+    ],
+  ).each_line(line => println(line))
+  guard compiled == 0 else { fail("C oracle compilation failed") }
+  let fixture = StringBuilder()
+  fixture.write_string(
+    "///|\n// Upstream FFmpeg 9.0.2 transform_rdpcm, 4 sizes x 2 directions x 16 seeds.\n// Regenerate with scripts/emit_hevc_rdpcm_reference.mbtx.\nlet hevc_rdpcm_reference : FixedArray[UInt] = [\n",
+  )
+  let mut count = 0
+  let ran = @shell.Cmd(
+    "docker",
+    common + ["--entrypoint", "/work/rdpcm_reference", "vpxdev-img"],
+  ).each_line(line => {
+    fixture.write_string("  " + line.trim().to_owned() + "U,\n")
+    count += 1
+  })
+  guard ran == 0 && count == 128 else { fail("C oracle failed or incomplete") }
+  fixture.write_string("]\n")
+  @fs.write_string_to_file(
+    "libavcodec/hevc_rdpcm_reference_wbtest.mbt",
+    fixture.to_string(),
+  )
+  if args.length() != 4 {
+    return
+  }
+  // Validate branch activation independently of the MoonBit implementation.
+  let stems = [
+    "rdpcm_implicit8", "rdpcm_implicit10", "rdpcm_explicit8", "rdpcm_explicit12",
+    "rdpcm_both12", "rdpcm_mono10",
+  ]
+  for stem in stems {
+    let status = @shell.Cmd(
+      "docker",
+      common +
+      [
+        "-v",
+        args[2] + "/../hevc_dep:/oracle",
+        "--entrypoint",
+        "sh",
+        "vpxdev-img",
+        "-c",
+        "/oracle/build/ffmpeg -hide_banner -loglevel error -threads 1 -i /work/" +
+        stem +
+        ".265 -c:v rawvideo -f rawvideo -y /dev/null 2>/work/" +
+        stem +
+        "_trace.txt",
+      ],
+    ).each_line(line => println(line))
+    guard status == 0 else { fail("trace decoder failed") }
+  }
+}

@@ -1,0 +1,136 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+  "moonbitlang/core/encoding/base64",
+}
+
+///|
+async fn main {
+  let args = @env.args()
+  guard args.length() == 2 || (args.length() == 3 && args[2] == "depth") else {
+    fail("expected absolute .scratch/hevc_dep directory and optional 'depth'")
+  }
+  let depth_mode = args.length() == 3
+  if depth_mode {
+    let status = @shell.Cmd("moon", [
+      "run", "scripts/patch_hevc_dependent_depth.mbtx",
+    ]).each_line(line => println(line))
+    guard status == 0 else { fail("depth patch failed") }
+  }
+  let common = [
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    "-v",
+    args[1] + ":/work",
+    "--entrypoint",
+    "ffmpeg",
+    "linuxserver/ffmpeg:9.0.2",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-xerror",
+  ]
+  let variants : Array[(String, Int32)] = []
+  for name in ["A", "B", "C"] {
+    for depth in (if depth_mode { [10, 12] } else { [8] }) {
+      variants.push((name, depth))
+    }
+  }
+  for variant in variants {
+    let (name, depth) = variant
+    let stem = "DSLICE_" + name + "_HHI_5"
+    let depth_suffix = if depth == 8 { "" } else { "_\{depth}" }
+    let short = "dep_" + name.to_lower() + depth_suffix
+    let clipped = if depth == 8 {
+      @shell.Cmd(
+        "docker",
+        common +
+        [
+          "-i",
+          "/work/" + stem + ".bit",
+          "-frames:v",
+          "9",
+          "-c",
+          "copy",
+          "-f",
+          "hevc",
+          "-y",
+          "/work/" + short + ".265",
+        ],
+      ).each_line(line => println(line))
+    } else {
+      0
+    }
+    guard clipped == 0 else { fail("trim failed") }
+    let out = StringBuilder()
+    let note = if depth == 8 {
+      ""
+    } else {
+      "// Derived stream: VPS/SPS profile and bit depth rewritten by\n// scripts/patch_hevc_dependent_depth.mbtx; slice bytes are unchanged.\n"
+    }
+    out.write_string(
+      "///|\n// FFmpeg FATE hevc-conformance/\{stem}.bit, first nine packets.\n// https://fate-suite.ffmpeg.org/hevc-conformance/\{stem}.bit\n// Regenerate: scripts/generate_hevc_dependent_vectors.mbtx.\n\{note}let \{short}_b64 : Bytes =\n",
+    )
+    if depth != 8 {
+      println("Reference \{short}: VPS/SPS-derived \{depth}-bit stream")
+    }
+    let encoded = @base64.encode(
+      @fs.read_file_to_bytes(".scratch/hevc_dep/" + short + ".265"),
+    )
+    for i = 0; i < encoded.length(); i = i + 40000 {
+      if i > 0 {
+        out.write_string(" +\n")
+      }
+      out.write_string(
+        "  b\"" + encoded[i:(i + 40000).min(encoded.length())].to_owned() + "\"",
+      )
+    }
+    out.write_string("\n")
+    for filtered in [true, false] {
+      let suffix = if filtered { "" } else { "_unfiltered" }
+      let decoded = @shell.Cmd(
+        "docker",
+        common +
+        (if filtered { [] } else { ["-skip_loop_filter", "all"] }) +
+        [
+          "-i",
+          "/work/" + short + ".265",
+          "-fps_mode",
+          "passthrough",
+          "-f",
+          "framemd5",
+          "-y",
+          "/work/" + short + suffix + ".md5",
+        ],
+      ).each_line(line => println(line))
+      guard decoded == 0 else { fail("reference failed") }
+      out.write_string(
+        "\n///|\nlet \{short}\{suffix}_refs : Array[String] = [\n",
+      )
+      for
+        line in @fs.read_file_to_string(
+          ".scratch/hevc_dep/" + short + suffix + ".md5",
+        ).split("\n") {
+        if line.trim().is_empty() || line.has_prefix("#") {
+          continue
+        }
+        let fields = line.split(",").collect()
+        guard fields.length() == 6 else { fail("invalid framemd5") }
+        out.write_string("  \"" + fields[5].trim().to_owned() + "\",\n")
+      }
+      out.write_string("]\n")
+    }
+    @fs.write_string_to_file(
+      "libavcodec/hevc_dependent_" +
+      name.to_lower() +
+      depth_suffix +
+      "_realdata_wbtest.mbt",
+      out.to_string(),
+    )
+  }
+}

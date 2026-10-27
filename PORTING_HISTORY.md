@@ -3483,3 +3483,153 @@ PCM 由原生 `aac` 解码器输出。语法层 24+17 帧全字段位级一致�
 
 `moon check --target wasm --deny-warn --no-render` 零警告，Wasm 全量
 **976/976**；`moon fmt`/`moon info --target wasm` 已运行并检查新增接口。
+
+## 99. AV1 整帧 qmatrix 与更广 inter 格式回归
+
+保存帧头的 Y/U/V 矩阵级别，按 separate_uv_delta_q 解析/推断 V；
+普通反量化接通 dav1d 的 `(dq * weight + 16) >> 5`，保持 Golomb
+截断、乘积掩码和正负饱和边界。IDTX/方向 identity/WHT 不使用矩阵；
+级别 15 为 identity。关键帧与 inter 共用 coefficient state，帧级分配
+矩阵级别数组；移除整帧入口对 qmatrix 的拒绝。
+
+原始 dav1d 1.5.1 qm.c 的两张紧凑表共 31,200 字节，由 `.mbtx`
+脚本提取并保留 BSD 许可证。MoonBit 直接定位转置/降采样/三角矩阵，
+64 点变换复用 32 点权重；原始 C 的完整初始化代码独立产生 608 个矩阵
+摘要（16 级别 × 两平面类别 × 19 变换尺寸），全部与 MoonBit 一致。
+
+13 组码流共 57 个显示帧与 FFmpeg 9.0.2/libdav1d MD5 一致，涵盖
+key/inter/reorder、8/10/12-bit、420/422/444/mono、色度 delta-q、
+矩阵级别极值及独立的 (Y,U,V)=(3,8,12)/(0,15,7)。独立平面流由
+真实关键帧改写帧头生成，FFmpeg trace_headers 确认字段，libdav1d
+独立解码给出期望值。inter 首次加入 12-bit、422/444/mono 的代表性
+端到端验证；尺寸变化和更广组合仍待补。
+
+`Av1FrameHeader` 新增 qm_y/qm_u/qm_v；公开 `Av1CoefState` 新增
+qm_levels，手动构造时 `[15,15,15]` 保留原行为。另仅拆分两份超过
+编译器列限制的旧 AAC SBR base64 字面量，编码内容不变。
+
+`moon check --target wasm --deny-warn --no-render` 零警告；Wasm 全量
+**987/987**；`moon fmt`、脚本格式化和 `moon info --target wasm` 已运行。
+详细再生步骤及后续边界见 `AGENT_HANDOFF_2026-10-27_QMATRIX.md`。
+
+## 100. HEVC dependent slice segments 与 B 帧纠错
+
+依照 `hls_slice_header`/`decode_slice_data`/`ff_hevc_cabac_init` 接通依赖
+segment：帧头继承前段未编码的字段，重新解析 entry points/扩展和
+alignment；AU 探测不读取不存在的 slice type/POC。公共单头解析器新增
+可选 `previous` 参数，原独立 slice 的调用保持兼容。
+
+帧驱动区分 segment 起点与独立 slice 起点。依赖段重启算术解码器，
+继承 CABAC 概率与 QP 历史，不新增独立 slice ID 或重建 RPL；验证
+tile-scan 顺序的前一 CTB 已解码，缺段、零地址、截断头明确报错。
+WPP 的第二 CTB 状态跨段保存，行首装入；tile 首 CTB 初始化状态。
+统一 tile-scan CTB 循环取代三套分支，覆盖行中起始 segment。
+
+真实码流同时暴露并修复三个既有问题：L1 参考索引错误选择专用 CABAC
+contexts（FFmpeg 对两列表均使用 REF_IDX_L0）；inter 4×4 亮度误用
+intra DST；1080 行图像最后半个色度滤波块无条件读取图外 QP。
+原生 C 插桩的前三帧共 4341 个 prediction units 活跃 MV/参考索引
+与 MoonBit 一致；插桩 C 的 YUV 也与镜像默认实现一致。
+
+FFmpeg FATE `DSLICE_A/B/C_HHI_5.bit` 各前九个解码包，共 27 个显示帧，
+默认滤波及 `-skip_loop_filter all` 的 54 份逐帧 MD5 全部一致；覆盖
+8-bit 4:2:0、多个独立 slice 的依赖链、WPP、tiles 和 I/B 重排序。
+新增六个回归测试；生成脚本为 `.mbtx`，夹具不依赖外部文件。
+
+严格 Wasm check 零警告，全量 **993/993**；`moon fmt`、脚本格式化、
+`moon info --target wasm` 已完成。tiles 与 WPP 同时启用仍拒绝；
+dependent segment 的高位深/其他色度组合待补。详见
+`AGENT_HANDOFF_2026-10-27_HEVC_DEPENDENT.md`。
+
+## 101. HEVC PCM、transquant bypass 与高位深 dependent segment 回归
+
+PCM CU 按合法类型/尺寸读取 terminate bin，使用 CABAC skip_bytes 对齐、
+取原始负载、在末端重启算术解码器，保持上下文概率；Y/Cb/Cr 按独立
+PCM 精度读取并左移到输出位深。普通预测和变换树跳过，QP、深度和
+边界强度继续更新。原来的“PCM-capable SPS 必须拒绝”测试改为普通
+编码块正例，FFmpeg -xerror 证实其七帧灰色输出保持相同 MD5。
+
+新增 min-PU 保护图，PCM 禁用滤波及 transquant bypass CU 均标记。
+去块滤波只修改非保护侧：亮度每个四行组立即还原保护侧的三个样本，
+色度按侧门控，避免后续边读取被改写的 PCM。SAO 使用不可变源平面，
+因此最后还原保护单元。公开去块/SAO API 仅新增可选 pcm 参数。
+
+混合 PCM 流暴露 PPS transquant bypass：本轮实现 CU 标志与空间域
+原始残差，跳过量化矩阵/反量化/逆变换、transform_skip_flag 和 sign
+hiding。残差 API 新增可选 transquant_bypass 参数，默认行为兼容。
+RDPCM 继续拒绝（旧 intra 专用入口也增加对应门控）。
+
+七个原始 FATE PCM 流共七帧，覆盖 8-bit 420、10-bit 422、12-bit 444、
+6/6、6/8、8/8 PCM 精度、禁用滤波及混合 CU；四组 x265 lossless=1
+I/P/B 流共二十帧，覆盖上述位深/色度与单色。两种滤波模式合计 54
+份逐帧 MD5 均与 FFmpeg 9.0.2 一致，无损流默认/跳过滤波 MD5 相同。
+
+另外修改 DSLICE A/B/C 的 VPS/SPS profile、兼容/约束与位深 Golomb
+字段，保留 slice bytes，重建 RBSP 对齐及防竞争字节，派生六组
+10/12-bit 420 流。新增 54 帧双模式逐帧 MD5 对齐，参考解码开启
+-xerror；这些是派生测试流，不能当作原始高位深编码器一致性样本。
+
+新增十八项回归，含 PCM 原始负载越界与 CABAC 状态不变检查。
+严格 Wasm check 零警告，全量 **1011/1011**；fmt、脚本格式化、
+fmt --check 和 moon info 均完成。详细再生步骤与剩余边界见
+`AGENT_HANDOFF_2026-10-27_HEVC_PCM.md`。
+
+## 102. HEVC implicit / explicit RDPCM
+
+接通 explicit CABAC 标志/方向（亮度与色度独立上下文）及 implicit
+方向推导；空间累加逐项保持 int16 回绕。残差入口新增可选 intra_mode，
+亮度/色度 TU 分别传入实际方向；保留旋转、反量化、累加的执行顺序。
+修正 bypass 的 transform-skip significance 上下文，按上游规则关闭
+RDPCM 的 sign hiding；完整帧及旧 intra 入口移除 RDPCM 拒绝。
+
+每 CU 的亮度 PU 方向重置为 DC，色度方向按 C local context 保持跨帧
+状态。上游 bypass 分支对 implicit 的条件不限制 intra，且 implicit
+开启时方向优先取残留 mode；因此 FFmpeg 帧线程数影响这类流的结果。
+本轮保留上游**单线程**行为，参考解码固定 -threads 1 -xerror，不能
+据此声称输出等同于默认多线程或 HM 编码器重建。
+
+HM 16.8 including RExt 固定提交 382e0a040c7f0189670c4aad9716d45db977b319
+生成六组五帧流，覆盖 8/10/12-bit、420/422/444/mono、implicit/explicit、
+transform skip/bypass、rotation/sigmap。独立 C 插桩确认实际工具激活，
+包括 explicit skip 的水平 56 块、垂直 24 块，避免只测到 SPS 标志。
+30 帧两种滤波模式的 60 份 MD5 全部对齐 FFmpeg 单线程。原始 C 内核
+另产生 128 份随机输入摘要，覆盖 4/8/16/32 方块、两方向及有符号回绕。
+
+再生脚本、参考行为边界及后续范围见
+`AGENT_HANDOFF_2026-10-27_HEVC_RDPCM.md`。
+
+新增七项回归，严格 Wasm check 零警告，全量 **1018/1018**；
+`moon fmt`、脚本格式化、`moon fmt --check`、`moon info --target wasm`
+和 `git diff --check` 完成。全量日志为 `.scratch/hevc_rdpcm/full_tests.log`。
+
+## 103. HEVC 跨分量预测与 DPB 按需分配
+
+接通 HEVC cross-component prediction：Cb/Cr 各自解码四步截断一元
+绝对值（contexts 167..174）与符号（175..176），得到 0/±1/±2/±4/±8；
+色度残差按 `chroma += (scale * luma) >> 3` 逐项以 int16 回绕合成，
+之后才裁剪输出像素。亮度 TU 的空间域残差（裁剪前）由残差内核返回，
+供同 TU 的色度复用，不能用解码图片与预测图片之差替代。
+
+intra 侧新增原始 chroma syntax mode 表，NxN PU 与 TU 分裂时正确继承；
+只有原始模式为 DM（4）时才允许 CCP，避免与已映射的
+`pu_mode_c`/`tu_mode_c` 混淆。CU/TU 按 `PPS cross flag && cbf_luma &&
+(inter || 原始色度模式 == 4)` 门控；色度 CBF=0 的块仍按亮度预测生成
+残差。原 intra 入口与完整帧入口的 CCP 拒绝已移除。
+
+HM 16.8 including RExt 生成六组 64x64、五帧 4:4:4 流（8/10/12-bit、
+intra/inter、skip、bypass、零色度、NxN split）。30 帧在默认滤波与
+skip_loop_filter 两模式下共 60 份 MD5 全部对齐 FFmpeg 9.0.2
+`-threads 1 -xerror`；C 插桩确认各工具实际激活，插桩二进制的原始
+YUV 与未修改 FFmpeg 逐字节一致。原始 C 合成循环另生成 576 组
+4/8/16/32 方块 × 九种 scale × 16 seeds 的摘要。
+
+验证全量时发现 333 项 `moonbit.alloc_externref` trap。定位为 DPB 在
+建库时预留 40 个槽位、每槽都分配整帧画面与 min-PU 运动场；1080p
+dependent 流单测峰值约 1.2 GB，整包累积越过 Wasm 线性内存上限。
+改为槽位被真正占用时才分配画面与运动场（对齐上游 `alloc_frame`，
+复用槽位保留缓冲），dependent 单测峰值降至约 0.45 GB，全量峰值
+从约 3.5 GB 降到约 2.4 GB，全量恢复。
+
+新增七项回归（六组整流 + 一组 576 组内核对照）与六份嵌入码流；
+严格 Wasm check 零警告，全量 **1025/1025**。依赖补丁、再生脚本与
+后续范围见 `AGENT_HANDOFF_2026-10-27_HEVC_CCP.md`。

@@ -285,18 +285,11 @@ fn HevcCabac::inter_pred_idc(
 
 ///|
 /// `ff_hevc_ref_idx_lx_decode`. */
-fn HevcCabac::ref_idx_lx(
-  self : HevcCabac,
-  num_ref_idx_lx : Int32,
-  list : Int32,
-) -> Int32 {
+fn HevcCabac::ref_idx_lx(self : HevcCabac, num_ref_idx_lx : Int32) -> Int32 {
   let max = num_ref_idx_lx - 1
   let max_ctx = if max < 2 { max } else { 2 }
-  let base = if list == 0 {
-    hevc_cabac_ref_idx_l0
-  } else {
-    hevc_cabac_ref_idx_l1
-  }
+  // Both reference lists share REF_IDX_L0 contexts (FFmpeg cabac.c).
+  let base = hevc_cabac_ref_idx_l0
   let mut i = 0
   while i < max_ctx && self.bin(base + i) != 0 {
     i = i + 1

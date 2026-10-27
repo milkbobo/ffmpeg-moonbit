@@ -78,17 +78,6 @@ test "hevc pb: I/P/B stream (bframes=2) matches FFmpeg per-frame MD5" {
 }
 
 ///|
-/// The rejected paths must fail with their specific error strings (the
-/// streams are bit-patched from the ones above, see the data file header). */
-fn hevc_check_rejected(b64 : Bytes, expected : String) -> Unit raise {
-  let data = @libavutil.av_base64_decode(b64, 65536).unwrap()
-  match ff_hevc_decode_frames(data, false, 0) {
-    Ok(_) => fail("hevc pb: expected rejection but decode succeeded")
-    Err(e) => assert_eq(e, expected)
-  }
-}
-
-///|
 test "hevc pb: four-slice pictures match FFmpeg (deblock+SAO)" {
   hevc_check_stream(hevc_pb_slices_b64, hevc_pb_slices_refs)
 }
@@ -101,8 +90,8 @@ test "hevc pb: four-slice pictures match FFmpeg (unfiltered)" {
 }
 
 ///|
-test "hevc pb: PCM is rejected" {
-  hevc_check_rejected(
-    hevc_pb_neg_pcm_b64, "PATCHWELCOME: HEVC PCM is not supported",
-  )
+test "hevc pb: PCM-capable SPS still permits ordinary coded blocks" {
+  // FFmpeg 9.0.2 -xerror decodes this old SPS-patched fixture to the same
+  // seven gray frames; enabling PCM does not require every CU to use it.
+  hevc_check_stream(hevc_pb_neg_pcm_b64, hevc_pb_refs[0])
 }

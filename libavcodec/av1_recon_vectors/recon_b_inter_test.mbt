@@ -61,6 +61,7 @@ fn av1_rbi_coef(msac : @libavcodec.Av1Msac) -> @libavcodec.Av1CoefState {
     seg_lossless: lossless,
     seg_qidx: segq,
     reduced_tx_set: false,
+    qm_levels: [15, 15, 15],
     bpc: 8,
     ss_h: 1,
     ss_v: 1,

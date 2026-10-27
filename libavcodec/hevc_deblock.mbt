@@ -258,14 +258,28 @@ fn hevc_deblock_luma(
   tc0 : Int32,
   tc1 : Int32,
   max : Int32,
+  no_p0~ : Bool = false,
+  no_p1~ : Bool = false,
+  no_q0~ : Bool = false,
+  no_q1~ : Bool = false,
 ) -> Unit {
   let xp = if vertical { 1 } else { stride }
   let yp = if vertical { stride } else { 1 }
   if base < plane.length() {
-    hevc_luma_group(plane, base, xp, yp, beta, tc0, max)
+    hevc_luma_group_protected(plane, base, xp, yp, beta, tc0, max, no_p0, no_q0)
   }
   if base + 4 * yp < plane.length() {
-    hevc_luma_group(plane, base + 4 * yp, xp, yp, beta, tc1, max)
+    hevc_luma_group_protected(
+      plane,
+      base + 4 * yp,
+      xp,
+      yp,
+      beta,
+      tc1,
+      max,
+      no_p1,
+      no_q1,
+    )
   }
 }
 
@@ -279,6 +293,10 @@ fn hevc_deblock_chroma(
   tc0 : Int32,
   tc1 : Int32,
   max : Int32,
+  no_p0~ : Bool = false,
+  no_p1~ : Bool = false,
+  no_q0~ : Bool = false,
+  no_q1~ : Bool = false,
 ) -> Unit {
   let xp = if vertical { 1 } else { stride }
   let yp = if vertical { stride } else { 1 }
@@ -293,8 +311,12 @@ fn hevc_deblock_chroma(
         let q0 = plane[b]
         let q1 = plane[b + xp]
         let delta0 = hevc_clip_i(((q0 - p0) * 4 + p1 - q1 + 4) >> 3, -tc, tc)
-        plane[b - xp] = hevc_clip_i(p0 + delta0, 0, max)
-        plane[b] = hevc_clip_i(q0 - delta0, 0, max)
+        if !(if j == 0 { no_p0 } else { no_p1 }) {
+          plane[b - xp] = hevc_clip_i(p0 + delta0, 0, max)
+        }
+        if !(if j == 0 { no_q0 } else { no_q1 }) {
+          plane[b] = hevc_clip_i(q0 - delta0, 0, max)
+        }
       }
     }
   }
@@ -303,6 +325,8 @@ fn hevc_deblock_chroma(
 ///|
 /// `deblocking_filter_CTB` for a single- or multi-slice picture. Tiles use
 /// the same per-CTB offsets; bS already reflects tile boundaries.
+/// `pcm` optionally supplies one nonzero flag per min-PU to protect PCM or
+/// transquant-bypass samples. The other side of each edge is still filtered.
 pub fn hevc_deblock_picture(
   pic : HevcPicture,
   sps : HevcSps,
@@ -313,6 +337,7 @@ pub fn hevc_deblock_picture(
   vertical_bs : Array[Int32],
   horizontal_bs : Array[Int32],
   bs_width : Int32,
+  pcm~ : Array[Int32] = [],
 ) -> Unit {
   let ctb_size = 1 << sps.log2_ctb_size
   let max = (1 << sps.bit_depth) - 1
@@ -380,6 +405,10 @@ pub fn hevc_deblock_picture(
             tc0,
             tc1,
             max,
+            no_p0=hevc_pcm_at(sps, pcm, x - 1, y),
+            no_p1=hevc_pcm_at(sps, pcm, x - 1, y + 4),
+            no_q0=hevc_pcm_at(sps, pcm, x, y),
+            no_q1=hevc_pcm_at(sps, pcm, x, y + 4),
           )
         }
         x = x + 8
@@ -423,6 +452,10 @@ pub fn hevc_deblock_picture(
               tc0,
               tc1,
               max,
+              no_p0=hevc_pcm_at(sps, pcm, x, y - 1),
+              no_p1=hevc_pcm_at(sps, pcm, x + 4, y - 1),
+              no_q0=hevc_pcm_at(sps, pcm, x, y),
+              no_q1=hevc_pcm_at(sps, pcm, x + 4, y),
             )
           }
           x = x + 8
@@ -452,12 +485,18 @@ pub fn hevc_deblock_picture(
                 1
               ) >>
               1
-            let qp1 = (
+            // The second chroma half may lie beyond a partial bottom CTB.
+            // Its QP cannot affect tc1 when bs1 != 2, so skip that read.
+            let qp1 = if bs1 == 2 {
+              (
                 hevc_qp_at(sps, qp_y_tab, x - 1, y + 4 * v) +
                 hevc_qp_at(sps, qp_y_tab, x, y + 4 * v) +
                 1
               ) >>
               1
+            } else {
+              0
+            }
             let tc0 = if bs0 == 2 {
               hevc_chroma_tc(pps, sps, qp0, chroma, tc_offset) << bd_shift
             } else {
@@ -476,6 +515,10 @@ pub fn hevc_deblock_picture(
               tc0,
               tc1,
               max,
+              no_p0=hevc_pcm_at(sps, pcm, x - 1, y),
+              no_p1=hevc_pcm_at(sps, pcm, x - 1, y + 4 * v),
+              no_q0=hevc_pcm_at(sps, pcm, x, y),
+              no_q1=hevc_pcm_at(sps, pcm, x, y + 4 * v),
             )
           }
           x = x + 8 * h
@@ -529,6 +572,10 @@ pub fn hevc_deblock_picture(
                 tc0,
                 tc1,
                 max,
+                no_p0=hevc_pcm_at(sps, pcm, x, y - 1),
+                no_p1=hevc_pcm_at(sps, pcm, x + 4 * h, y - 1),
+                no_q0=hevc_pcm_at(sps, pcm, x, y),
+                no_q1=hevc_pcm_at(sps, pcm, x + 4 * h, y),
               )
             }
             x = x + 8 * h
