@@ -34,7 +34,7 @@ int main(void)
                 for (int k = 0; k < 64; k++)
                     left[p][t][k] = ((p * 17 + t * 13 + k * 7 + frame * 11) % 127 - 63) / 64.0f;
         memset(right, 0, sizeof(right));
-        ff_ps_apply(&ps, left, right, 20 + frame * 6);
+        ff_ps_apply(&ps, left, right, 20 + frame * 6 % 45);
         for (int ch = 0; ch < 2; ch++)
             for (int p = 0; p < 2; p++)
                 for (int t = 0; t < 32; t += 7)

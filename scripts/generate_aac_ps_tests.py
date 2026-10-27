@@ -278,23 +278,24 @@ def payload_cases():
     payloads = []
     previous = {}
     for frame in range(8):
-        is34 = frame not in (3, 6)
+        case = frame % 8
+        is34 = case not in (3, 6)
         quant = frame % 2
-        low_resolution_iid = frame in (2, 5, 6)
+        low_resolution_iid = case in (2, 5, 6)
         iid_mode = (0 if low_resolution_iid else (2 if is34 else 1)) + 3 * quant
-        icc_mode = (2 if is34 else 1) + 3 * ((frame // 2) % 2)
+        icc_mode = (2 if is34 and case != 1 else 1) + 3 * ((frame // 2) % 2)
         iid_count = 10 if low_resolution_iid else (34 if is34 else 20)
-        icc_count = 34 if is34 else 20
+        icc_count = 34 if is34 and case != 1 else 20
         phase_count = 5 if low_resolution_iid else (17 if is34 else 11)
         envs = frame % 4 + 1
         header = "11" + format(iid_mode, "03b") + "1" + format(icc_mode, "03b") + "1"
-        if frame == 4:
+        if case == 4:
             header += "0" + "01"  # fixed grid, one envelope
         else:
             header += "1" + format(envs - 1, "02b")
             for e in range(envs):
                 border = 32 * (e + 1) // envs - 1
-                if frame == 7 and e == envs - 1:
+                if case == 7 and e == envs - 1:
                     border = 29  # decoder appends a final envelope
                 header += format(border, "05b")
 
@@ -323,7 +324,7 @@ def payload_cases():
             return result
 
         header += "".join(rows("iid", iid_count)) + "".join(rows("icc", icc_count))
-        if frame == 4:
+        if case == 4:
             extension = "0000"  # extension id, disabled phase, reserved bit
             previous.pop("ipd", None)
             previous.pop("opd", None)
@@ -465,6 +466,7 @@ test "PS encoded payload DSP sequences vs FFmpeg C" {
   let stage_stats = Array::make(12, 0.0)
   let mut start = 0
   for frame in 0..<8 {
+    let case = frame % 8
     let mut end = start
     while end < payload_data.length() && payload_data[end].to_int() != 10 {
       end = end + 1
@@ -484,12 +486,16 @@ test "PS encoded payload DSP sequences vs FFmpeg C" {
     assert_true(ps_apply.common.start)
     assert_eq(consumed, bits_len)
     assert_true(ps.common.start)
-    assert_eq(ps.common.enable_ipdopd, frame != 4)
-    assert_eq(ps.common.is34bands, frame != 3 && frame != 6)
-    assert_eq(ps.common.num_env, frame % 4 + 1 + (if frame == 7 { 1 } else { 0 }))
-    if frame == 2 || frame == 5 || frame == 6 {
+    assert_eq(ps.common.enable_ipdopd, case != 4)
+    assert_eq(ps.common.is34bands, case != 3 && case != 6)
+    assert_eq(ps.common.num_env, frame % 4 + 1 + (if case == 7 { 1 } else { 0 }))
+    if case == 2 || case == 5 || case == 6 {
       assert_eq(ps.common.nr_iid_par, 10)
       assert_eq(ps.common.nr_ipdopd_par, 5)
+    }
+    if case == 1 {
+      assert_eq(ps.common.nr_iid_par, 34)
+      assert_eq(ps.common.nr_icc_par, 20)
     }
     for p in 0..<2 {
       for t in 0..<38 {
@@ -500,7 +506,7 @@ test "PS encoded payload DSP sequences vs FFmpeg C" {
         }
       }
     }
-    let top_qmf = 20 + frame * 6
+    let top_qmf = 20 + frame * 6 % 45
     ps_apply.apply(x_apply, top_qmf)
     let grid = if ps.common.is34bands { 1 } else { 0 }
     let top = top_qmf + ps_nr_bands[grid] - 64

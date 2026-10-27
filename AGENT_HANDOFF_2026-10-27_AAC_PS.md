@@ -2,7 +2,8 @@
 
 ## 2026-10-27 后续进展
 
-- 增加编码负载对拍：`scripts/generate_aac_ps_tests.py --payloads-only` 用 FFmpeg 码表逆向编码固定种子八帧，`scripts/ps_payload_harness.c` 调用 C 解析与合成，`scripts/instrument_ps.py` 插桩产生分级参考。覆盖 34/20 切换、10→20/34 映射、HA/HB、IPD/OPD 开关、1–4 包络及自动补包络、帧内和跨帧 dt/df、不同 top；完整 LBUF/DEC 和 H 矩阵共 106240 个值最大差 6.26e-7，全部 65536 个双声道 QMF 输出值最大差 1.74e-6。随机样本是一组固定种子，并非穷举。
+- 增加编码负载对拍：`scripts/generate_aac_ps_tests.py --payloads-only` 用 FFmpeg 码表逆向编码固定种子八帧，`scripts/ps_payload_harness.c` 调用 C 解析与合成，`scripts/instrument_ps.py` 插桩产生分级参考。覆盖 34/20 切换、10→20/34 与 ICC 20→34 映射、HA/HB、IPD/OPD 开关、1–4 包络及自动补包络、帧内和跨帧 dt/df、不同 top；完整 LBUF/DEC 和 H 矩阵共 106240 个值最大差 6.21e-7，全部 65536 个双声道 QMF 输出值最大差 9.00e-7。随机样本是一组固定种子，并非穷举。
+- 十六帧扩展单独对拍通过，但全量 wasm 测试中测试驱动的 `moonbit.alloc_externref` 对后续六个测试报 `RuntimeError: unreachable`；压缩夹具也未消除，具体原因尚未确定，故保留八帧。
 - 重新生成：先从 `../libavcodec/aacps.c` 和 `aacps_common.c` 复制新副本到 `_build/ps_work/aacps_instr.c` 和 `aacps_common_instr.c`，运行 `python scripts/instrument_ps.py _build/ps_work/aacps_instr.c _build/ps_work/aacps_common_instr.c`，再运行 `python scripts/generate_aac_ps_tests.py --payloads-only`。容器中可按下述命令在独立 build 目录编译插桩对象和 harness；最后运行 `python scripts/generate_aac_ps_tests.py`。
 
 ```powershell
