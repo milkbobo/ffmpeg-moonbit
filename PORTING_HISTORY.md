@@ -3690,3 +3690,16 @@ Throughput profile 下直接拒绝该组合，FFmpeg 的 WPP 路径按入口点�
 
 严格 Wasm check 零警告，全量 **1034/1034**。再生见
 `AGENT_HANDOFF_2026-10-27_HEVC_PERSISTENT_RICE.md`。
+
+## 106. HEVC dependent segment 的 RExt 色度组合验证
+
+此前 dependent slice segment 只在 4:2:0 上验证（高位深流由改写 VPS/SPS
+深度得到）。本轮用 HM 16.8 原生编码 `SliceSegmentMode=1`
+（`SliceSegmentArgument=1`，每 CTB 一个依赖段）生成 4:4:4 8-bit、
+4:2:2 10-bit、4:4:4 12-bit 三组 64×64 五帧流，共 15 帧；默认/跳过环内
+滤波共 30 份 MD5 对齐 FFmpeg 9.0.2 `-threads 1 -xerror`。
+`trace_headers` 确认 `dependent_slice_segment_flag=1` 与非零段地址。
+
+新增三项回归（复用 dependent 校验助手并断言 SPS 色度格式/位深）。
+严格 Wasm check 零警告，全量 **1038/1038**。再生脚本
+`scripts/generate_hevc_dependent_rext_vectors.mbtx`。
