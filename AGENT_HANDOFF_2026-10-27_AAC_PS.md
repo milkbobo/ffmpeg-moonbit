@@ -4,7 +4,8 @@
 
 - 增加编码负载对拍：`scripts/generate_aac_ps_tests.py --payloads-only` 用 FFmpeg 码表逆向编码固定种子八帧，`scripts/ps_payload_harness.c` 调用 C 解析与合成，`scripts/instrument_ps.py` 插桩产生分级参考。覆盖 34/20 切换、10→20/34 与 ICC 20→34 映射、HA/HB、IPD/OPD 开关、1–4 包络及自动补包络、帧内和跨帧 dt/df、不同 top；完整 LBUF/DEC 和 H 矩阵共 106240 个值最大差 6.21e-7，全部 65536 个双声道 QMF 输出值最大差 9.00e-7。随机样本是一组固定种子，并非穷举。
 - 十六帧扩展单独对拍通过，但全量 wasm 测试中测试驱动的 `moonbit.alloc_externref` 对后续六个测试报 `RuntimeError: unreachable`；压缩夹具也未消除，具体原因尚未确定，故保留八帧。
-- 后续隔离：16 帧 PS 与先前失败的 AAC 测试单独合跑 9/9；`--no-parallelize` 的全量测试仍为 1038/1044，说明并发不是必要条件。保留 16 帧静态参考但只执行前 8 帧时，`libavcodec` 测试仍有同样 6 项失败；按需读取 base64 也无改善。进一步将后 8 帧改为采样并以 zlib 压缩参考，单独对拍通过，但全量增加到 21 项 `alloc_externref` 失败。生成的 wasm 文本中该函数在 `table.grow` 返回负数后执行 `unreachable`；表扩容失败的根因尚未确认。以上实验均已回退，仓库保持全量测试可通过的 8 帧夹具。
+- 后续隔离：16 帧 PS 与先前失败的 AAC 测试单独合跑 9/9；`--no-parallelize` 的全量测试仍为 1038/1044，说明并发不是必要条件。保留 16 帧静态参考但只执行前 8 帧时，`libavcodec` 测试仍有同样 6 项失败；按需读取 base64 也无改善。进一步将后 8 帧改为采样并以 zlib 压缩参考，单独对拍通过，但全量增加到 21 项 `alloc_externref` 失败。生成的 wasm 文本中该函数在 `table.grow` 返回负数后执行 `unreachable`；根因见下一条。以上实验均已回退，仓库保持全量测试可通过的 8 帧夹具。
+- 根因定位（moonc v0.10.16+b1a0e846e）：对稳定的 8 帧夹具添加 600000 字节随机 base64 填充，也可复现完全相同的 6 项失败。对编译后的 wasm 临时插桩，失败时 externref 表为 8388608 项，空闲链表头为 `0x8faa0860`（无符号 2410285152），该地址可读取，首项索引为 4194305，线性内存为 37429 页。`alloc_externref` 的 `i32.lt_s 0` 将这一有效高地址误判为空，反复倍增表，直到扩容失败。对临时 wasm 将判断改成 `head == -1` 后重放白盒测试，548 项结果均无错误；未修改已安装工具链或提交生成的 wasm。
 - 重新生成：先从 `../libavcodec/aacps.c` 和 `aacps_common.c` 复制新副本到 `_build/ps_work/aacps_instr.c` 和 `aacps_common_instr.c`，运行 `python scripts/instrument_ps.py _build/ps_work/aacps_instr.c _build/ps_work/aacps_common_instr.c`，再运行 `python scripts/generate_aac_ps_tests.py --payloads-only`。容器中可按下述命令在独立 build 目录编译插桩对象和 harness；最后运行 `python scripts/generate_aac_ps_tests.py`。
 
 ```powershell
