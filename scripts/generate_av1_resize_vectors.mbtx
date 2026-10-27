@@ -1,0 +1,152 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+}
+
+///|
+/// Real-stream fixtures for AV1 frame size changes (aomenc resize modes).
+/// ffmpeg's libaom wrapper does not expose resize parameters, so encoding
+/// uses the aomenc CLI from ubuntu:24.04 aom-tools, mirroring the superres
+/// round. References are FFmpeg 9.0.2 libdav1d framemd5.
+async fn main {
+  let args = @env.args()
+  guard args.length() == 2 else {
+    fail("usage: generate_av1_resize_vectors.mbtx absolute/scratch/av1")
+  }
+  let mount = args[1] + ":/work"
+  // One ffmpeg pass builds the y4m sources (24 frames each).
+  let sources = [
+    ("src24_420.y4m", "testsrc2=size=192x128:rate=5", "yuv420p", "24"),
+    ("src24_420_10.y4m", "testsrc2=size=192x128:rate=5", "yuv420p10le", "24"),
+    ("src24_444.y4m", "testsrc2=size=192x128:rate=5", "yuv444p", "24"),
+    ("src24_mandel.y4m", "mandelbrot=size=192x128:rate=5", "yuv420p", "24"),
+  ]
+  for src in sources {
+    let (name, lavfi, pixfmt, frames) = src
+    let built = @shell.Cmd(
+      "docker",
+      [
+        "run", "--rm", "--network", "none", "-v", mount, "--entrypoint", "sh",
+        "linuxserver/ffmpeg:9.0.2",
+        "-c",
+        "ffmpeg -hide_banner -loglevel error -f lavfi -i " +
+        lavfi +
+        " -frames:v " +
+        frames +
+        " -pix_fmt " +
+        pixfmt +
+        " -f yuv4mpegpipe -strict -1 -y /work/" +
+        name,
+      ],
+    ).each_line(line => println(line))
+    guard built == 0 else { fail("source failed: " + name) }
+  }
+  // Each case: stem, source, extra aomenc flags. All use cpu-used=6 cq30
+  // single pass, one thread; kf-max-dist=5 alternates keyframe size against
+  // inter size so scaled MC runs in both directions.
+  let cases = [
+    (
+      "resize_down", "src24_420.y4m", "--kf-max-dist=5 --resize-mode=1 --resize-denominator=8",
+      "",
+    ),
+    (
+      "resize_up", "src24_mandel.y4m",
+      "--kf-max-dist=5 --resize-mode=1 --resize-denominator=16 --resize-kf-denominator=8",
+      "",
+    ),
+    (
+      "resize_10bit", "src24_420_10.y4m",
+      "--kf-max-dist=5 --resize-mode=1 --resize-denominator=12", "",
+    ),
+    (
+      "resize_444", "src24_444.y4m", "--kf-max-dist=5 --resize-mode=1 --resize-denominator=8",
+      "",
+    ),
+    (
+      "resize_random", "src24_mandel.y4m",
+      "--kf-max-dist=5 --resize-mode=2 --resize-denominator=8",
+      "",
+    ),
+    (
+      "resize_lag", "src24_420.y4m", "--kf-max-dist=10 --lag-in-frames=4 --resize-mode=1 --resize-denominator=8",
+      "",
+    ),
+    // resize + superres + qmatrix made dav1d 1.5.1 segfault after the first
+    // keyframe, so that combination has no usable reference and is skipped.
+    (
+      "resize_qm", "src24_420.y4m",
+      "--kf-max-dist=5 --resize-mode=1 --resize-denominator=16 --resize-kf-denominator=8 --enable-qm=1 --qm-min=8 --qm-max=8",
+      "",
+    ),
+  ]
+  // aom-tools is installed once and every case encoded in the same container.
+  // archive.ubuntu.com is unreachable from this Docker network, so apt is
+  // pointed at the TUNA mirror first.
+  let mut script = "sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; s|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/ubuntu.sources && apt-get update -qq >/dev/null && apt-get install -y -qq aom-tools >/dev/null"
+  for c in cases {
+    let (stem, source, flags, _unused) = c
+    script += " && aomenc --codec=av1 -o /work/" +
+      stem +
+      ".ivf /work/" +
+      source +
+      " --ivf --cpu-used=6 --end-usage=q --cq-level=30 --lag-in-frames=0 --passes=1 --threads=1 --quiet " +
+      flags +
+      " && echo encoded " +
+      stem
+  }
+  // No network restriction: aom-tools must be installed via apt each run,
+  // matching the superres-round aomenc invocation.
+  let encoded = @shell.Cmd(
+    "docker",
+    ["run", "--rm", "-v", mount, "ubuntu:24.04", "sh", "-c", script],
+  ).each_line(line => println(line))
+  guard encoded == 0 else { fail("aomenc failed") }
+  // References must be per-frame at the decoder's native output size:
+  // FFmpeg's framemd5 path auto-scales size-changing streams to the first
+  // frame's dimensions, so use the dav1d CLI md5 muxer with per-frame
+  // output files (%n) built from the same 1.5.1 sources the port follows.
+  // One container builds the CLI once, then decodes every stem and writes
+  // ffmpeg-style framemd5 lines (only field 5 and the line count matter to
+  // the emit script).
+  let trace = args[1] + "/trace_src:/src:ro"
+  let mut dscript = "sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; s|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/ubuntu.sources >/dev/null && apt-get update -qq >/dev/null && apt-get install -y -qq meson ninja-build nasm >/dev/null 2>&1 && cp -r /src /tmp/dav1d && cd /tmp/dav1d && meson setup build --buildtype release >/dev/null 2>&1 && ninja -C build tools/dav1d >/dev/null 2>&1 && echo dav1d-cli-ready"
+  for c in cases {
+    let (stem, _source, _flags, _unused) = c
+    dscript += " && mkdir -p /work/ref/" +
+      stem +
+      " && ./build/tools/dav1d --filmgrain 0 -i /work/" +
+      stem +
+      ".ivf -o /work/ref/" +
+      stem +
+      "/d%n_%w_%h.yuv --quiet >/dev/null 2>&1; n=0; : > /work/ref/" +
+      stem +
+      // A while/set loop re-globs per frame number: a for-loop word list
+      // would be expanded only once, and filename sorting is unsafe because
+      // stem names contain underscores.
+      "/md5sums.txt; while :; do set -- /work/ref/" +
+      stem +
+      "/d${n}_*.yuv; [ -e \"$1\" ] || break; printf '%d %s\\n' $n $(md5sum \"$1\" | cut -d' ' -f1) >> /work/ref/" +
+      stem +
+      "/md5sums.txt; n=$((n+1)); done; echo framed " +
+      stem +
+      " $n"
+  }
+  let decoded_all = @shell.Cmd(
+    "docker",
+    ["run", "--rm", "-v", trace, "-v", mount, "ubuntu:24.04", "sh", "-c", dscript],
+  ).each_line(line => println(line))
+  guard decoded_all == 0 else { fail("dav1d reference generation failed") }
+  for c in cases {
+    let (stem, _source, _flags, _unused) = c
+    let assembled = @shell.Cmd("moon", [
+      "run", "scripts/assemble_resize_md5.mbtx", stem,
+    ]).each_line(line => println(line))
+    guard assembled == 0 else { fail("md5 assembly failed: " + stem) }
+    let emitted = @shell.Cmd("moon", [
+      "run", "scripts/emit_av1_session_vectors.mbtx", stem,
+    ]).each_line(line => println(line))
+    guard emitted == 0 else { fail("fixture failed: " + stem) }
+  }
+}

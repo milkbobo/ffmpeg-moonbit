@@ -15,6 +15,8 @@ fn main raise {
   let out = StringBuilder()
   let handoff = if stem.has_prefix("qm_") {
     "scripts/generate_av1_qm_vectors.mbtx"
+  } else if stem.has_prefix("resize_") {
+    "scripts/generate_av1_resize_vectors.mbtx"
   } else {
     "AGENT_HANDOFF_2026-10-26_SUPERRES.md"
   }

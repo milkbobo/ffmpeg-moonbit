@@ -219,6 +219,10 @@ fn av1_decode_frame_payloads(
   if payloads.length() != num_tiles {
     return Err("av1: tile count does not match the frame header")
   }
+  if hdr.tile_col_start_sb.length() != hdr.tile_cols + 1 ||
+    hdr.tile_row_start_sb.length() != hdr.tile_rows + 1 {
+    return Err("av1: tile boundary arrays do not match the tile grid")
+  }
   let ss_h = if seq.chroma_subsampling_x { 1 } else { 0 }
   let ss_v = if seq.chroma_subsampling_y { 1 } else { 0 }
   let w = hdr.width
@@ -232,10 +236,6 @@ fn av1_decode_frame_payloads(
   let sb_step = 16 << sb128
   let sb_cols = (bw + sb_step - 1) / sb_step
   let sb_rows = (bh + sb_step - 1) / sb_step
-  let tile_width_sb = (sb_cols + (1 << hdr.tile_cols_log2) - 1) >>
-    hdr.tile_cols_log2
-  let tile_height_sb = (sb_rows + (1 << hdr.tile_rows_log2) - 1) >>
-    hdr.tile_rows_log2
   let aligned_w = (w + 127) & -128
   let y_stride = aligned_w
   let uv_stride = aligned_w >> ss_h
@@ -324,7 +324,7 @@ fn av1_decode_frame_payloads(
   let b4_stride = (bw + 31) & -32
   let tile_col_start4 : Array[Int32] = []
   for c in 0..<hdr.tile_cols {
-    let sb = av1_imin(c * tile_width_sb * sb_step, bw)
+    let sb = av1_imin(hdr.tile_col_start_sb[c] * sb_step, bw)
     tile_col_start4.push(sb)
   }
   let align_h = (bh + 31) & -32
@@ -392,10 +392,10 @@ fn av1_decode_frame_payloads(
     for tile_idx in 0..<num_tiles {
       let tile_row = tile_idx / hdr.tile_cols
       let tile_col = tile_idx % hdr.tile_cols
-      let col_start_sb = tile_col * tile_width_sb
-      let row_start_sb = tile_row * tile_height_sb
-      let col_end_sb = av1_imin(col_start_sb + tile_width_sb, sb_cols)
-      let row_end_sb = av1_imin(row_start_sb + tile_height_sb, sb_rows)
+      let col_start_sb = hdr.tile_col_start_sb[tile_col]
+      let row_start_sb = hdr.tile_row_start_sb[tile_row]
+      let col_end_sb = av1_imin(hdr.tile_col_start_sb[tile_col + 1], sb_cols)
+      let row_end_sb = av1_imin(hdr.tile_row_start_sb[tile_row + 1], sb_rows)
       let col_start = av1_imin(col_start_sb * sb_step, bw)
       let row_start = av1_imin(row_start_sb * sb_step, bh)
       let col_end = av1_imin(col_end_sb * sb_step, bw)

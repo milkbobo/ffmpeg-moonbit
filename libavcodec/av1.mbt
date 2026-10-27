@@ -30,6 +30,10 @@ pub struct Av1SequenceParameters {
   /// `max_frame_width_minus_1 + 1` (0 for `av1C` records).
   mut width : Int32
   mut height : Int32
+  /// `frame_width_bits_minus_1 + 1` / `frame_height_bits_minus_1 + 1`:
+  /// bit counts used by explicit per-frame sizes (0 for `av1C` records).
+  mut frame_width_bits : Int32
+  mut frame_height_bits : Int32
   mut reduced_still_picture_header : Bool
   mut frame_id_numbers_present : Bool
   mut delta_frame_id_length : Int32
@@ -238,6 +242,8 @@ fn av1_parse_sequence_payload(
   }
   let width_bits = br.read(4).reinterpret_as_int() + 1
   let height_bits = br.read(4).reinterpret_as_int() + 1
+  seq.frame_width_bits = width_bits
+  seq.frame_height_bits = height_bits
   seq.width = br.read(width_bits).reinterpret_as_int() + 1
   seq.height = br.read(height_bits).reinterpret_as_int() + 1
   if !reduced {
@@ -307,6 +313,8 @@ pub fn av1_parse_sequence_header(
     color_range: 0,
     width: 0,
     height: 0,
+    frame_width_bits: 0,
+    frame_height_bits: 0,
     reduced_still_picture_header: false,
     frame_id_numbers_present: false,
     delta_frame_id_length: 0,
@@ -418,6 +426,12 @@ pub struct Av1FrameHeader {
   tile_rows : Int32
   tile_cols_log2 : Int32
   tile_rows_log2 : Int32
+  /// Explicit tile boundaries in superblock units (dav1d `col_start_sb` /
+  /// `row_start_sb`): `tile_cols + 1` / `tile_rows + 1` entries, the last
+  /// equal to the SB grid size. Uniform spacing produces evenly spaced
+  /// entries; non-uniform spacing is read per tile.
+  tile_col_start_sb : Array[Int32]
+  tile_row_start_sb : Array[Int32]
   context_update_tile_id : Int32
   tile_size_bytes_minus1 : Int32
   header_bits : Int32
@@ -734,6 +748,8 @@ pub fn av1_parse_frame_header(
           tile_rows: 1,
           tile_cols_log2: 0,
           tile_rows_log2: 0,
+          tile_col_start_sb: [0, 0],
+          tile_row_start_sb: [0, 0],
           context_update_tile_id: 0,
           tile_size_bytes_minus1: 0,
           header_bits: 0,
@@ -1011,10 +1027,10 @@ pub fn av1_parse_frame_header(
           None => return Err("av1: frame_size_with_refs needs ref slot state")
         }
       } else if frame_size_override {
-        let wb = br.read(4).reinterpret_as_int() + 1
-        let hb = br.read(4).reinterpret_as_int() + 1
-        width = br.read(wb).reinterpret_as_int() + 1
-        height = br.read(hb).reinterpret_as_int() + 1
+        // Explicit sizes use the bit counts from the sequence header
+        // (dav1d read_frame_size), not per-frame 4-bit counts.
+        width = br.read(seq.frame_width_bits).reinterpret_as_int() + 1
+        height = br.read(seq.frame_height_bits).reinterpret_as_int() + 1
       }
       // superres_params() sits inside frame_size(), before render_size().
       let mut use_superres = false
@@ -1084,13 +1100,16 @@ pub fn av1_parse_frame_header(
       let mut qm_v = 15
       let mut context_update_tile_id = 0
       let mut tile_size_minus1 = 0
+      let tile_col_start_sb : Array[Int32] = []
+      let tile_row_start_sb : Array[Int32] = []
       {
         disable_frame_end = if !seq.reduced_still_picture_header {
           br.read(1) != 0
         } else {
           false
         }
-        // tile_info (uniform spacing; non-uniform tiles are not ported yet).
+        // tile_info: uniform spacing derives even boundaries; non-uniform
+        // spacing reads per-tile SB extents (dav1d parse_tile_info).
         let mi_cols = 2 * ((width + 7) >> 3)
         let mi_rows = 2 * ((height + 7) >> 3)
         let sb_cols = if seq.use_128x128_superblock {
@@ -1130,37 +1149,90 @@ pub fn av1_parse_frame_header(
           av1_tile_log2(max_tile_area_sb, sb_cols * sb_rows)
         }
         let uniform_tiles = br.read(1) != 0
-        if !uniform_tiles {
-          return Err("PATCHWELCOME: AV1 non-uniform tile spacing")
-        }
-        tile_cols_log2 = min_log2_cols
-        while tile_cols_log2 < max_log2_cols {
-          if br.read1() == 0 {
-            break
+        if uniform_tiles {
+          tile_cols_log2 = min_log2_cols
+          while tile_cols_log2 < max_log2_cols && br.read1() != 0 {
+            tile_cols_log2 = tile_cols_log2 + 1
           }
-          tile_cols_log2 = tile_cols_log2 + 1
-        }
-        let tile_width_sb = (sb_cols + (1 << tile_cols_log2) - 1) >>
-          tile_cols_log2
-        tile_cols = (sb_cols + tile_width_sb - 1) / tile_width_sb
-        let mut min_log2_rows = min_log2_tiles - tile_cols_log2
-        if min_log2_rows < 0 {
-          min_log2_rows = 0
-        }
-        tile_rows_log2 = min_log2_rows
-        while tile_rows_log2 < max_log2_rows {
-          if br.read1() == 0 {
-            break
+          let tile_width_sb = 1 + ((sb_cols - 1) >> tile_cols_log2)
+          let mut sbx = 0
+          tile_cols = 0
+          while sbx < sb_cols {
+            tile_col_start_sb.push(sbx)
+            sbx += tile_width_sb
+            tile_cols = tile_cols + 1
           }
-          tile_rows_log2 = tile_rows_log2 + 1
+          let mut min_log2_rows = min_log2_tiles - tile_cols_log2
+          if min_log2_rows < 0 {
+            min_log2_rows = 0
+          }
+          tile_rows_log2 = min_log2_rows
+          while tile_rows_log2 < max_log2_rows && br.read1() != 0 {
+            tile_rows_log2 = tile_rows_log2 + 1
+          }
+          let tile_height_sb = 1 + ((sb_rows - 1) >> tile_rows_log2)
+          let mut sby = 0
+          tile_rows = 0
+          while sby < sb_rows {
+            tile_row_start_sb.push(sby)
+            sby += tile_height_sb
+            tile_rows = tile_rows + 1
+          }
+        } else {
+          // Non-uniform spacing: each tile's width/height in SBs is read with
+          // an inverse-uniform code, capped by the spec tile limits (dav1d
+          // `parse_tile_info`).
+          let max_tile_cols = 64
+          let max_tile_rows = 64
+          let mut widest_tile = 0
+          let mut tile_area_sb = sb_cols * sb_rows
+          let mut sbx = 0
+          tile_cols = 0
+          while sbx < sb_cols && tile_cols < max_tile_cols {
+            let tile_width_sb = av1_imin(sb_cols - sbx, max_tile_width_sb)
+            let tile_w = if tile_width_sb > 1 {
+              1 + av1_br_read_uniform(br, tile_width_sb)
+            } else {
+              1
+            }
+            tile_col_start_sb.push(sbx)
+            sbx += tile_w
+            widest_tile = if tile_w > widest_tile {
+              tile_w
+            } else {
+              widest_tile
+            }
+            tile_cols = tile_cols + 1
+          }
+          tile_cols_log2 = av1_tile_log2(1, tile_cols)
+          if min_log2_tiles != 0 {
+            tile_area_sb = tile_area_sb >> (min_log2_tiles + 1)
+          }
+          let max_tile_height_sb = av1_imax(tile_area_sb / widest_tile, 1)
+          let mut sby = 0
+          tile_rows = 0
+          while sby < sb_rows && tile_rows < max_tile_rows {
+            let tile_height_sb = av1_imin(sb_rows - sby, max_tile_height_sb)
+            let tile_h = if tile_height_sb > 1 {
+              1 + av1_br_read_uniform(br, tile_height_sb)
+            } else {
+              1
+            }
+            tile_row_start_sb.push(sby)
+            sby += tile_h
+            tile_rows = tile_rows + 1
+          }
+          tile_rows_log2 = av1_tile_log2(1, tile_rows)
         }
-        let tile_height_sb = (sb_rows + (1 << tile_rows_log2) - 1) >>
-          tile_rows_log2
-        tile_rows = (sb_rows + tile_height_sb - 1) / tile_height_sb
+        tile_col_start_sb.push(sb_cols)
+        tile_row_start_sb.push(sb_rows)
         if tile_cols_log2 > 0 || tile_rows_log2 > 0 {
           context_update_tile_id = br
             .read(tile_cols_log2 + tile_rows_log2)
             .reinterpret_as_int()
+          if context_update_tile_id >= tile_cols * tile_rows {
+            return Err("av1: context update tile id out of range")
+          }
           tile_size_minus1 = br.read(2).reinterpret_as_int()
         }
         // quantization_params
@@ -1798,6 +1870,8 @@ pub fn av1_parse_frame_header(
         tile_rows,
         tile_cols_log2,
         tile_rows_log2,
+        tile_col_start_sb,
+        tile_row_start_sb,
         context_update_tile_id,
         tile_size_bytes_minus1: tile_size_minus1,
         header_bits: (br.count() + 7) / 8 * 8,

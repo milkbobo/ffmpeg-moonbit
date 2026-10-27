@@ -1,0 +1,51 @@
+///|
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+}
+
+///|
+/// Assemble an ffmpeg-style framemd5 file from a "<n> <md5>" listing of
+/// per-frame YUV dumps produced by dav1d CLI in the container, so that
+/// size-changing streams are hashed at their native decoded size; FFmpeg's
+/// own framemd5 auto-scales such streams to the first frame's dimensions.
+/// Only field 5 and the line count matter to the emit script.
+fn main raise {
+  let args = @env.args()
+  guard args.length() == 2 else {
+    fail("usage: assemble_resize_md5.mbtx stem (reads .scratch/av1/ref/<stem>/md5sums.txt)")
+  }
+  let stem = args[1]
+  let text = @fs.read_file_to_string(".scratch/av1/ref/" + stem + "/md5sums.txt")
+  let hashes : Array[String] = []
+  for line in text.split("\n") {
+    let s = line.trim()
+    if s.is_empty() {
+      continue
+    }
+    let fields = s.split(" ").filter(v => !v.is_empty()).collect()
+    guard fields.length() == 2 else { fail("bad md5 line: " + s.to_owned()) }
+    let index = fields[0].to_owned()
+    let hash = fields[1].to_owned()
+    let n = @string.parse_int(index)
+    guard n == hashes.length() else {
+      fail(
+        "frame order gap at " +
+        s.to_owned() +
+        ", expected \{hashes.length()}",
+      )
+    }
+    hashes.push(hash)
+  }
+  guard hashes.length() > 0 else { fail("no frames for " + stem) }
+  let out = StringBuilder()
+  for i, hash in hashes {
+    out.write_string("0, \{i}, \{i}, 1, 0, \{hash}\n")
+  }
+  @fs.write_string_to_file(
+    ".scratch/av1/" + stem + ".framemd5",
+    out.to_string(),
+  )
+  println("assembled \{hashes.length()} frames for \{stem}")
+}

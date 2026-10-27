@@ -3720,3 +3720,42 @@ C 插桩的完整混合分析、去相关缓冲和四组矩阵共 106240 个值�
 另以 native 目标对拍 16 帧完整中间缓冲和输出，共 212480 个中间值与
 131072 个输出值，最大差分别约 6.72e-7 和 9.74e-7；wasm 全量测试保留
 8 帧以避开当前工具链 externref 链表的 2 GiB 地址问题。
+
+## 108. AV1 帧尺寸变化（resize-mode）与非均匀 tile
+
+用 aomenc resize-mode 码流首次覆盖 AV1 帧级尺寸切换。此前所有真实流
+（inter/superres/qmatrix）参考帧与当前帧尺寸恒一致，尺寸切换语法与
+scaled MC 从未被真实码流触发；本轮连修三个由此暴露的缺口：
+
+- **非均匀 tile 间距**（`uniform_tile_spacing_flag=0`）：此前直接
+  `PATCHWELCOME` 拒绝。按 dav1d `parse_tile_info` 移植逐 tile 的
+  反均匀码宽度/高度读取与面积上限，`Av1FrameHeader` 新增
+  `tile_col_start_sb`/`tile_row_start_sb` 显式边界数组（长度
+  cols+1/rows+1，均匀分支同样填充），解码主循环、LF 的
+  `tile_col_start4` 与 tile 任务起点全部改为查表，不再假设等宽。
+- **显式帧尺寸位宽**：帧内显式宽高此前误读 4+4 位计数位——规范中
+  `frame_width_bits_minus_1` 在序列头，dav1d `read_frame_size` 直接用
+  `seq_hdr->frame_width_bits`。序列头结构新增两个字段，帧级按其读取。
+  该路径仅尺寸切换流首次触发。
+- **resize 流参考基准**：FFmpeg framemd5 对尺寸变化的流会自动缩放到
+  首帧尺寸（filter graph 协商固定输出尺寸），参考完全失真。改用
+  trace_src 的 dav1d 1.5.1 CLI（容器内 meson 构建）以 `--muxer` 扩展名
+  探测 + `%n`/`%w`/`%h` 逐帧文件输出原生尺寸 YUV，容器内 md5sum 后由
+  `scripts/assemble_resize_md5.mbtx` 组装成 framemd5 格式。注意 `%n`
+  替换仅在未强制 `--muxer` 时生效；逐帧循环需 `while set --`（dash 的
+  for 词表只展开一次）；帧序必须按帧号 glob 而非文件名排序。
+
+七组流（`scripts/generate_av1_resize_vectors.mbtx`，Ubuntu aom-tools
+的 aomenc，`--resize-mode=1/2`）逐帧 MD5 与 dav1d 1.5.1 一致：
+
+| stem | 覆盖 | 帧数 |
+| --- | --- | --- |
+| resize_up | KF 192x128 ↔ inter 96x64 交替（2× 缩放 MC、非均匀 tile、显式尺寸+render 补偿） | 24 |
+| resize_10bit | KF 192x128 ↔ inter 128x85（10-bit、2/3 缩放、奇数高度 85） | 24 |
+| resize_qm | 同 up 的尺寸切换 × qmatrix（qm 8） | 24 |
+| resize_random | mandelbrot 源 resize-mode=2 逐帧随机尺寸 96~192（升降双向 scaled MC、跨尺寸 refmvs 门控） | 24 |
+| resize_down / resize_444 / resize_lag | 固定模式单 denominator 未触发缩放的对照流（420/444/隐藏帧） | 24 |
+
+其余修复：tile 边界数组长度校验、非均匀分支 tile 计数器从 0 起（dash
+遗留错误曾致多计一个 tile）、`context_update_tile_id` 越界拒绝。
+resize×superres×qm 组合使 dav1d 1.5.1 首帧后段错误，无参考可用，不纳入。
