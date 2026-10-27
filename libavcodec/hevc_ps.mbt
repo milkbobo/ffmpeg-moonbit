@@ -1072,7 +1072,9 @@ pub fn ff_hevc_decode_short_term_rps(
 ) -> Result[Unit, String] {
   rps.used = 0U
   rps.rps_predict = 0
-  if rps_index > 0 && nb_st_rps > 0 {
+  // C: `rps != sps->st_rps && sps->nb_st_rps`; a slice-header RPS is never
+  // `&sps->st_rps[i]`, so the prediction flag is always present there.
+  if (is_slice_header || rps_index > 0) && nb_st_rps > 0 {
     rps.rps_predict = gb.read1().reinterpret_as_int()
   }
   if rps.rps_predict != 0 {

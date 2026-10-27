@@ -94,6 +94,22 @@ fn hevc_add_residual_at(
 }
 
 ///|
+/// C `lc->stat_coeff[sb_type]` update after the first remaining value of a
+/// subset: grow when it reached `3 << init`, shrink when it was very small.
+fn hevc_persistent_rice_update(
+  cabac : HevcCabac,
+  sb_type : Int32,
+  remaining : Int32,
+) -> Unit {
+  let init = cabac.stat_coeff[sb_type] / 4
+  if remaining >= 3 << init {
+    cabac.stat_coeff[sb_type] = cabac.stat_coeff[sb_type] + 1
+  } else if 2 * remaining < 1 << init && cabac.stat_coeff[sb_type] > 0 {
+    cabac.stat_coeff[sb_type] = cabac.stat_coeff[sb_type] - 1
+  }
+}
+
+///|
 /// `ff_hevc_hls_residual_coding`: decode, dequantize, inverse transform and add
 /// one transform block. `qp_y` is the luma QP of the current CU.
 pub fn hevc_hls_residual_coding(
@@ -418,7 +434,15 @@ fn hevc_decode_residual(
       } else {
         sign_flags = sign_flags << (16 - nb_sig)
       }
-      let mut rice_param = 0
+      let persistent = sps.persistent_rice_adaptation_enabled != 0
+      let sb_type = (if c_idx == 0 { 2 } else { 0 }) +
+        (if transform_skip || transquant_bypass { 1 } else { 0 })
+      let mut rice_param = if persistent {
+        cabac.stat_coeff[sb_type] / 4
+      } else {
+        0
+      }
+      let mut rice_init = false
       let mut sum_abs = 0
       for m in 0..<nb_sig {
         let n = sig_idx[m]
@@ -435,7 +459,15 @@ fn hevc_decode_residual(
             }
             level = level + remaining
             if level > 3 << rice_param {
-              rice_param = if rice_param < 4 { rice_param + 1 } else { 4 }
+              rice_param = if persistent || rice_param < 4 {
+                rice_param + 1
+              } else {
+                4
+              }
+            }
+            if persistent && !rice_init {
+              rice_init = true
+              hevc_persistent_rice_update(cabac, sb_type, remaining)
             }
           }
         } else {
@@ -445,7 +477,15 @@ fn hevc_decode_residual(
           }
           level = 1 + remaining
           if level > 3 << rice_param {
-            rice_param = if rice_param < 4 { rice_param + 1 } else { 4 }
+            rice_param = if persistent || rice_param < 4 {
+              rice_param + 1
+            } else {
+              4
+            }
+          }
+          if persistent && !rice_init {
+            rice_init = true
+            hevc_persistent_rice_update(cabac, sb_type, remaining)
           }
         }
         if sign_hidden {

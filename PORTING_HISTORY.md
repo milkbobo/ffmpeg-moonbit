@@ -3659,3 +3659,28 @@ RExt 随机接入配置默认启用 persistent Rice 参数自适应，本移植�
 
 严格 Wasm check 零警告，全量 **1030/1030**。再生与补丁细节见
 `AGENT_HANDOFF_2026-10-27_HEVC_RPLM.md`。
+
+## 105. HEVC persistent Rice 参数自适应与切片内联 RPS 修正
+
+接通 `persistent_rice_adaptation_enabled`：`stat_coeff[4]` 以
+luma/chroma ×（transform skip 或 transquant bypass）分四类，残差子集
+起始 `c_rice_param = stat_coeff[sb_type] / 4`，解码出首个 remaining
+后按 `remaining >= 3 << init` 增、`2 * remaining < 1 << init` 减（不小于
+0）。开启时 `c_rice_param` 的递增不再截断到 4。独立 slice 与 tile 起点
+清零；dependent 段沿用前段，WPP 行与列边界按上游 `save_states`/
+`load_states` 一并保存、恢复概率状态与 `stat_coeff`。实现位置
+`hevc_cabac_syntax.mbt`（状态）、`hevc_residual.mbt`（取值与更新）、
+`hevc_inter_decode.mbt`（段/行/瓦片边界）。
+
+HM 16.8 生成三组流：4:4:4 10-bit 层次 B、4:2:2 12-bit 层次 B + WPP、
+4:2:0 8-bit，共 24 帧；默认/跳过环内滤波共 48 份 MD5 对齐 FFmpeg 9.0.2
+`-threads 1 -xerror`。`trace_headers` 确认 persistent rice 与 WPP 标志
+真实置位。新增四项回归（三组整流 + stat_coeff 增减单元测试）。
+
+验证过程中发现并修正一个潜伏缺陷：切片头内联 short-term RPS 时，
+`inter_ref_pic_set_prediction_flag` 只在 `rps_index > 0` 时读取，而
+上游条件对切片头恒成立（`rps != sps->st_rps`），导致存在 SPS RPS 的
+码流解析错位。此前夹具都走 `short_term_ref_pic_set_sps_flag=1`，未覆盖。
+
+严格 Wasm check 零警告，全量 **1034/1034**。再生见
+`AGENT_HANDOFF_2026-10-27_HEVC_PERSISTENT_RICE.md`。

@@ -950,16 +950,19 @@ fn hevc_make_slice_state(
   pps : HevcPps,
   sh : HevcSliceHeader,
   nal : H2645Nal,
-  inherited_states? : Array[Int32],
+  inherited? : (Array[Int32], Array[Int32]),
 ) -> Result[(Int32, HevcCabac, Array[HevcRefPicList], HevcInterCtx?), String] {
   let slice_qp = 26 + pps.pic_init_qp_minus26 + sh.slice_qp_delta
-  let states = match inherited_states {
-    Some(states) => states
+  let (states, stat_coeff) = match inherited {
+    Some((states, stat_coeff)) => (states, stat_coeff)
     None =>
-      ff_hevc_init_cabac_states(slice_qp, sh.slice_type, sh.cabac_init_flag)
+      (
+        ff_hevc_init_cabac_states(slice_qp, sh.slice_type, sh.cabac_init_flag),
+        Array::make(4, 0),
+      )
   }
   let data_offset = (sh.header_bits + 7) >> 3
-  let cabac = match hevc_cabac_new(nal.data, data_offset, states) {
+  let cabac = match hevc_cabac_new(nal.data, data_offset, states, stat_coeff~) {
     Ok(c) => c
     Err(e) => return Err(e)
   }
@@ -1253,6 +1256,7 @@ fn hevc_decode_picture(
   let mut previous_sh = first_sh
   let mut independent_start = 0
   let mut common_states = first_cabac.states.copy()
+  let mut common_stat = first_cabac.stat_coeff.copy()
   for i in 0..<nals.length() {
     let nal = nals[i]
     let sh = if i == 0 {
@@ -1283,7 +1287,7 @@ fn hevc_decode_picture(
         }
       }
       let start_ts = pps.ctb_addr_rs_to_ts[h.slice_segment_address]
-      let inherited_states : Array[Int32]? = if h.dependent_slice_segment_flag {
+      let inherited : (Array[Int32], Array[Int32])? = if h.dependent_slice_segment_flag {
         if start_ts == 0 ||
           dec_slice.ctb_slice_idx[pps.ctb_addr_ts_to_rs[start_ts - 1]] !=
           dec_slice.slice_idx {
@@ -1296,15 +1300,17 @@ fn hevc_decode_picture(
           None
         } else if pps.entropy_coding_sync_enabled_flag != 0 &&
           h.slice_segment_address % sps.ctb_width == 0 {
-          Some(common_states.copy())
+          Some((common_states.copy(), common_stat.copy()))
         } else {
-          Some(dec_slice.cabac.states.copy())
+          Some(
+            (dec_slice.cabac.states.copy(), dec_slice.cabac.stat_coeff.copy()),
+          )
         }
       } else {
         None
       }
       let (slice_qp, cabac, rpl, inter_ctx) = match
-        hevc_make_slice_state(dpb, cur, sps, pps, h, nal, inherited_states?) {
+        hevc_make_slice_state(dpb, cur, sps, pps, h, nal, inherited?) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
@@ -1350,6 +1356,13 @@ fn hevc_decode_picture(
         for k in 0..<dec_slice.cabac.states.length() {
           dec_slice.cabac.states[k] = states[k]
         }
+        for k in 0..<4 {
+          dec_slice.cabac.stat_coeff[k] = if tile_start || sps.ctb_width == 1 {
+            0
+          } else {
+            common_stat[k]
+          }
+        }
         if row_start {
           dec_slice.restart_wpp_row()
         }
@@ -1366,6 +1379,7 @@ fn hevc_decode_picture(
       }
       if pps.entropy_coding_sync_enabled_flag != 0 && rs % sps.ctb_width == 1 {
         common_states = dec_slice.cabac.states.copy()
+        common_stat = dec_slice.cabac.stat_coeff.copy()
       }
       ts += 1
     }

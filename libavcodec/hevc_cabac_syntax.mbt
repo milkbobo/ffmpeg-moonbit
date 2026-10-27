@@ -104,6 +104,10 @@ pub let hevc_cabac_max_bin : Int32 = 31
 pub struct HevcCabac {
   cc : CabacContext
   states : Array[Int32]
+  /// C `lc->stat_coeff[4]`: persistent Rice adaptation per sb_type
+  /// (luma/chroma x transform-skip-or-bypass). Zeroed for independent
+  /// slices and tile starts; inherited across dependent/WPP boundaries.
+  stat_coeff : Array[Int32]
 }
 
 ///|
@@ -111,9 +115,10 @@ pub fn hevc_cabac_new(
   data : Bytes,
   offset : Int32,
   states : Array[Int32],
+  stat_coeff~ : Array[Int32] = Array::make(4, 0),
 ) -> Result[HevcCabac, String] {
   match ff_init_cabac_decoder(data, offset) {
-    Ok(cc) => Ok({ cc, states, })
+    Ok(cc) => Ok({ cc, states, stat_coeff, })
     Err(e) => Err(e)
   }
 }
