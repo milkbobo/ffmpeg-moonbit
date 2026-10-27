@@ -266,7 +266,7 @@ def gen_dsp():
         "\n".join(out) + "\n", encoding="utf-8", newline="\n")
 
 
-def payload_cases():
+def payload_cases(nframes=8):
     """Encode reproducible legal PS headers and delta-coded parameter rows."""
     _, tabs, offsets, _, _ = extract_ps_tables.parse_psdata()
     codes = []
@@ -277,7 +277,7 @@ def payload_cases():
     rng = random.Random(20261027)
     payloads = []
     previous = {}
-    for frame in range(8):
+    for frame in range(nframes):
         case = frame % 8
         is34 = case not in (3, 6)
         quant = frame % 2
@@ -341,7 +341,7 @@ def payload_cases():
     return payloads
 
 
-def gen_payload_dsp(payloads):
+def gen_payload_dsp(payloads, native_extended=False):
     raw = bytearray()
     for frame in range(len(payloads)):
         for tag in ("HOUT", "ROUT"):
@@ -364,8 +364,18 @@ def gen_payload_dsp(payloads):
                 assert len(data) == 2 * 6 * 34 * 4
             stage_raw.extend(data)
     payload_defs += "  let stage_reference = @libavutil.av_base64_decode(%s, 1 << 20).unwrap()\n" % bytes_lit(b64(stage_raw), 60000)
-    out = [HDR, PAYLOAD_DRIVER.replace("  // GENERATED_PAYLOAD_DATA\n", payload_defs)]
-    (ROOT / "libavcodec" / "aac_ps_payload_wbtest.mbt").write_text(
+    if native_extended:
+        driver = PAYLOAD_DRIVER[PAYLOAD_DRIVER.index('test "PS encoded'):]
+        driver = driver.replace('test "PS encoded payload DSP sequences vs FFmpeg C"',
+                                'test "PS native extended payload DSP vs FFmpeg C"')
+        driver = driver.replace("for frame in 0..<8", "for frame in 0..<16")
+        driver = "///| Extended reference vector, compiled for native only.\n#cfg(target=\"native\")\n" + driver
+        output = "aac_ps_payload_native_wbtest.mbt"
+    else:
+        driver = PAYLOAD_DRIVER
+        output = "aac_ps_payload_wbtest.mbt"
+    out = [HDR, driver.replace("  // GENERATED_PAYLOAD_DATA\n", payload_defs)]
+    (ROOT / "libavcodec" / output).write_text(
         "\n".join(out) + "\n", encoding="utf-8", newline="\n")
 
 
@@ -558,10 +568,15 @@ test "PS encoded payload DSP sequences vs FFmpeg C" {
 
 
 def main():
-    payloads = payload_cases()
+    native_extended = "--native-extended" in sys.argv
+    payloads = payload_cases(16 if native_extended else 8)
     (WORK / "ps_payload_cases.txt").write_text("\n".join(payloads) + "\n", encoding="ascii", newline="\n")
     if "--payloads-only" in sys.argv:
         print("wrote %d encoded PS payloads" % len(payloads))
+        return
+    if native_extended:
+        gen_payload_dsp(payloads, native_extended=True)
+        print("wrote native 16-frame PS reference test")
         return
     streams = ["hev2_48_32k", "hev2_44_24k"]
     gen_syntax(streams)

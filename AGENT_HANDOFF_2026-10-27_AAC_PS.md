@@ -2,6 +2,9 @@
 
 ## 2026-10-27 后续进展
 
+- 新增 native 专用 16 帧完整对拍 `aac_ps_payload_native_wbtest.mbt`，在 Linux 容器的 moonc v0.10.17+d971670cd 下通过：212480 个 LBUF/DEC/H 值最大差 6.72e-7，131072 个双声道 QMF 输出值最大差 9.74e-7。wasm 保留 8 帧，Windows 本机缺少 native 后端所需的 MSVC。v0.10.17 生成的 wasm 仍使用有符号空闲链表判断。
+- 16 帧再生：先 `python scripts/generate_aac_ps_tests.py --native-extended --payloads-only`，用下方容器命令编译并运行 `ps_payload_harness.c`（现接受 8 或 16 帧），然后 `python scripts/generate_aac_ps_tests.py --native-extended`；运行 `moon test libavcodec --target native --filter '*native extended payload*'`。
+
 - 增加编码负载对拍：`scripts/generate_aac_ps_tests.py --payloads-only` 用 FFmpeg 码表逆向编码固定种子八帧，`scripts/ps_payload_harness.c` 调用 C 解析与合成，`scripts/instrument_ps.py` 插桩产生分级参考。覆盖 34/20 切换、10→20/34 与 ICC 20→34 映射、HA/HB、IPD/OPD 开关、1–4 包络及自动补包络、帧内和跨帧 dt/df、不同 top；完整 LBUF/DEC 和 H 矩阵共 106240 个值最大差 6.21e-7，全部 65536 个双声道 QMF 输出值最大差 9.00e-7。随机样本是一组固定种子，并非穷举。
 - 十六帧扩展单独对拍通过，但全量 wasm 测试中测试驱动的 `moonbit.alloc_externref` 对后续六个测试报 `RuntimeError: unreachable`；压缩夹具也未消除，具体原因尚未确定，故保留八帧。
 - 后续隔离：16 帧 PS 与先前失败的 AAC 测试单独合跑 9/9；`--no-parallelize` 的全量测试仍为 1038/1044，说明并发不是必要条件。保留 16 帧静态参考但只执行前 8 帧时，`libavcodec` 测试仍有同样 6 项失败；按需读取 base64 也无改善。进一步将后 8 帧改为采样并以 zlib 压缩参考，单独对拍通过，但全量增加到 21 项 `alloc_externref` 失败。生成的 wasm 文本中该函数在 `table.grow` 返回负数后执行 `unreachable`；根因见下一条。以上实验均已回退，仓库保持全量测试可通过的 8 帧夹具。

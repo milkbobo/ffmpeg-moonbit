@@ -226,7 +226,8 @@ $msg | git commit -F -
 
 清一色来自本项目的真实踩坑，照做可少走弯路：
 
-- **wasm 运行时 externref 链表的 2 GiB 地址问题（moonc v0.10.16+b1a0e846e）**：
+- **wasm 运行时 externref 链表的 2 GiB 地址问题（moonc v0.10.16+b1a0e846e；
+  v0.10.17+d971670cd 生成的 wasm 仍使用相同判断）**：
   生成的 `moonbit.alloc_externref` 以 `i32.lt_s 0` 判断空闲链表为空；当有效链表指针
   越过 `0x80000000` 时会误判为空，反复扩张 externref 表，最终 `table.grow` 失败。
   本项目的 16 帧 PS 对拍夹具或额外 600 KB 测试数据可触发，8 帧夹具可全量通过。

@@ -44,5 +44,5 @@ int main(void)
                     }
         frame++;
     }
-    return frame == 8 ? 0 : 7;
+    return frame == 8 || frame == 16 ? 0 : 7;
 }
