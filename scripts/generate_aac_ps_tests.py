@@ -280,15 +280,23 @@ def payload_cases():
     for frame in range(8):
         is34 = frame not in (3, 6)
         quant = frame % 2
-        iid_mode = (2 if is34 else 1) + 3 * quant
+        low_resolution_iid = frame in (2, 5, 6)
+        iid_mode = (0 if low_resolution_iid else (2 if is34 else 1)) + 3 * quant
         icc_mode = (2 if is34 else 1) + 3 * ((frame // 2) % 2)
-        count = 34 if is34 else 20
-        phase_count = 17 if is34 else 11
+        iid_count = 10 if low_resolution_iid else (34 if is34 else 20)
+        icc_count = 34 if is34 else 20
+        phase_count = 5 if low_resolution_iid else (17 if is34 else 11)
         envs = frame % 4 + 1
         header = "11" + format(iid_mode, "03b") + "1" + format(icc_mode, "03b") + "1"
-        header += "1" + format(envs - 1, "02b")
-        for e in range(envs):
-            header += format(32 * (e + 1) // envs - 1, "05b")
+        if frame == 4:
+            header += "0" + "01"  # fixed grid, one envelope
+        else:
+            header += "1" + format(envs - 1, "02b")
+            for e in range(envs):
+                border = 32 * (e + 1) // envs - 1
+                if frame == 7 and e == envs - 1:
+                    border = 29  # decoder appends a final envelope
+                header += format(border, "05b")
 
         def rows(kind, bands):
             prev = previous.get(kind, [0] * bands)
@@ -314,10 +322,15 @@ def payload_cases():
             previous[kind] = prev
             return result
 
-        header += "".join(rows("iid", count)) + "".join(rows("icc", count))
-        ipd = rows("ipd", phase_count)
-        opd = rows("opd", phase_count)
-        extension = "001" + "".join(a + b for a, b in zip(ipd, opd)) + "0"
+        header += "".join(rows("iid", iid_count)) + "".join(rows("icc", icc_count))
+        if frame == 4:
+            extension = "0000"  # extension id, disabled phase, reserved bit
+            previous.pop("ipd", None)
+            previous.pop("opd", None)
+        else:
+            ipd = rows("ipd", phase_count)
+            opd = rows("opd", phase_count)
+            extension = "001" + "".join(a + b for a, b in zip(ipd, opd)) + "0"
         extension += "0" * (-len(extension) % 8)
         size = len(extension) // 8
         header += format(min(size, 15), "04b")
@@ -328,9 +341,15 @@ def payload_cases():
 
 
 def gen_payload_dsp(payloads):
-    raw = (WORK / "ps_payload_reference.f32").read_bytes()
-    values = struct.unpack("<%df" % (len(raw) // 4), raw)
-    assert len(values) == len(payloads) * 2 * 2 * 5 * 64
+    raw = bytearray()
+    for frame in range(len(payloads)):
+        for tag in ("HOUT", "ROUT"):
+            data = (WORK / "payload_psbin" / ("%s_%03d.f32" % (tag, frame + 1))).read_bytes()
+            assert len(data) == 2 * 38 * 64 * 4
+            for plane in range(2):
+                pos = plane * 38 * 64 * 4
+                raw.extend(data[pos:pos + 32 * 64 * 4])
+    assert len(raw) == len(payloads) * 2 * 2 * 32 * 64 * 4
     encoded_bits = ("\n".join(payloads) + "\n").encode("ascii")
     payload_defs = "  let payload_data = @libavutil.av_base64_decode(%s, 1 << 20).unwrap()\n" % bytes_lit(b64(encoded_bits), 60000)
     payload_defs += "  let reference = @libavutil.av_base64_decode(%s, 1 << 20).unwrap()\n" % bytes_lit(b64(raw), 60000)
@@ -340,13 +359,9 @@ def gen_payload_dsp(payloads):
             data = (WORK / "payload_psbin" / ("%s_%03d.f32" % (tag, frame + 1))).read_bytes()
             if tag in ("LBUF", "DEC"):
                 assert len(data) == 91 * 32 * 2 * 4
-                for band in range(91):
-                    for time in (0, 7, 14, 21, 28):
-                        pos = (band * 32 + time) * 8
-                        stage_raw.extend(data[pos:pos + 8])
             else:
                 assert len(data) == 2 * 6 * 34 * 4
-                stage_raw.extend(data)
+            stage_raw.extend(data)
     payload_defs += "  let stage_reference = @libavutil.av_base64_decode(%s, 1 << 20).unwrap()\n" % bytes_lit(b64(stage_raw), 60000)
     out = [HDR, PAYLOAD_DRIVER.replace("  // GENERATED_PAYLOAD_DATA\n", payload_defs)]
     (ROOT / "libavcodec" / "aac_ps_payload_wbtest.mbt").write_text(
@@ -418,21 +433,19 @@ fn ps_dsp_direct_reference_test() -> Unit raise {
 PAYLOAD_DRIVER = r'''///| Compare float32 C stage dumps with the corresponding MoonBit buffer.
 fn ps_payload_check_stage(
   got : Array[Double], reference : Bytes, offset : Int, frame : Int,
-  tag : String, hybrid : Bool, stats : Array[Double], slot : Int,
+  tag : String, stats : Array[Double], slot : Int,
 ) -> Int raise {
   let mut pos = offset
   for i in 0..<got.length() {
-    if !hybrid || (i / 2 % 32) % 7 == 0 {
-      let word = reference[pos].to_uint() | (reference[pos + 1].to_uint() << 8) | (reference[pos + 2].to_uint() << 16) | (reference[pos + 3].to_uint() << 24)
-      let want = Float::reinterpret_from_uint(word).to_double()
-      let diff = (got[i] - want).abs()
-      if diff > stats[slot * 2] { stats[slot * 2] = diff }
-      stats[slot * 2 + 1] = stats[slot * 2 + 1] + diff
-      if diff > 0.00001 + want.abs() * 0.001 {
-        fail("frame=\{frame} stage=\{tag} index=\{i} got=\{got[i]} want=\{want} diff=\{diff}")
-      }
-      pos = pos + 4
+    let word = reference[pos].to_uint() | (reference[pos + 1].to_uint() << 8) | (reference[pos + 2].to_uint() << 16) | (reference[pos + 3].to_uint() << 24)
+    let want = Float::reinterpret_from_uint(word).to_double()
+    let diff = (got[i] - want).abs()
+    if diff > stats[slot * 2] { stats[slot * 2] = diff }
+    stats[slot * 2 + 1] = stats[slot * 2 + 1] + diff
+    if diff > 0.00001 + want.abs() * 0.001 {
+      fail("frame=\{frame} stage=\{tag} index=\{i} got=\{got[i]} want=\{want} diff=\{diff}")
     }
+    pos = pos + 4
   }
   pos
 }
@@ -471,9 +484,13 @@ test "PS encoded payload DSP sequences vs FFmpeg C" {
     assert_true(ps_apply.common.start)
     assert_eq(consumed, bits_len)
     assert_true(ps.common.start)
-    assert_true(ps.common.enable_ipdopd)
+    assert_eq(ps.common.enable_ipdopd, frame != 4)
     assert_eq(ps.common.is34bands, frame != 3 && frame != 6)
-    assert_eq(ps.common.num_env, frame % 4 + 1)
+    assert_eq(ps.common.num_env, frame % 4 + 1 + (if frame == 7 { 1 } else { 0 }))
+    if frame == 2 || frame == 5 || frame == 6 {
+      assert_eq(ps.common.nr_iid_par, 10)
+      assert_eq(ps.common.nr_ipdopd_par, 5)
+    }
     for p in 0..<2 {
       for t in 0..<38 {
         for k in 0..<64 {
@@ -492,19 +509,19 @@ test "PS encoded payload DSP sequences vs FFmpeg C" {
       for i in (top * 3 * 37 * 2)..<(ps_nr_allpass_bands[grid] * 3 * 37 * 2) { ps.ap_delay[i] = 0.0 }
     }
     ps.hybrid_analysis(x, ps.common.is34bands, 32)
-    stage_pos = ps_payload_check_stage(ps.lbuf, stage_reference, stage_pos, frame, "LBUF", true, stage_stats, 0)
+    stage_pos = ps_payload_check_stage(ps.lbuf, stage_reference, stage_pos, frame, "LBUF", stage_stats, 0)
     ps.decorrelation(ps.common.is34bands)
-    stage_pos = ps_payload_check_stage(ps.rbuf, stage_reference, stage_pos, frame, "DEC", true, stage_stats, 1)
+    stage_pos = ps_payload_check_stage(ps.rbuf, stage_reference, stage_pos, frame, "DEC", stage_stats, 1)
     ps.stereo_processing(ps.common.is34bands)
-    stage_pos = ps_payload_check_stage(ps.h11, stage_reference, stage_pos, frame, "H11", false, stage_stats, 2)
-    stage_pos = ps_payload_check_stage(ps.h12, stage_reference, stage_pos, frame, "H12", false, stage_stats, 3)
-    stage_pos = ps_payload_check_stage(ps.h21, stage_reference, stage_pos, frame, "H21", false, stage_stats, 4)
-    stage_pos = ps_payload_check_stage(ps.h22, stage_reference, stage_pos, frame, "H22", false, stage_stats, 5)
+    stage_pos = ps_payload_check_stage(ps.h11, stage_reference, stage_pos, frame, "H11", stage_stats, 2)
+    stage_pos = ps_payload_check_stage(ps.h12, stage_reference, stage_pos, frame, "H12", stage_stats, 3)
+    stage_pos = ps_payload_check_stage(ps.h21, stage_reference, stage_pos, frame, "H21", stage_stats, 4)
+    stage_pos = ps_payload_check_stage(ps.h22, stage_reference, stage_pos, frame, "H22", stage_stats, 5)
     ps_hybrid_synthesis(x, 0, ps.lbuf, ps.common.is34bands, 32)
     ps_hybrid_synthesis(x, 2 * 38 * 64, ps.rbuf, ps.common.is34bands, 32)
     for ch in 0..<2 {
       for p in 0..<2 {
-        for t in [0, 7, 14, 21, 28] {
+        for t in 0..<32 {
           for k in 0..<64 {
             let got = x[(ch * 2 + p) * 38 * 64 + t * 64 + k]
             let actual_apply = x_apply[(ch * 2 + p) * 38 * 64 + t * 64 + k]
