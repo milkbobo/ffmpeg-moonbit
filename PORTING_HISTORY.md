@@ -3759,3 +3759,16 @@ scaled MC 从未被真实码流触发；本轮连修三个由此暴露的缺口�
 其余修复：tile 边界数组长度校验、非均匀分支 tile 计数器从 0 起（dash
 遗留错误曾致多计一个 tile）、`context_update_tile_id` 越界拒绝。
 resize×superres×qm 组合使 dav1d 1.5.1 首帧后段错误，无参考可用，不纳入。
+
+同日补根因：testsrc2 源 random 流（补回为 `resize_random_t2` 夹具）
+140x93 帧内恰差 1 像素，逐级对拍（MC 参数/预测块、系数、itx 输出、
+level 网格双侧 dump）收敛到帧对齐填充列：dav1d 的 `f->w4`/`f->h4`
+是**可见** 4x4 网格（`(dim+3)>>2`），level 缓存写入与去块边缘循环
+（cols/rows 及 tile 行修正）都以它为界，对齐填充列/行从不写入、
+从不滤波；本移植此前用 8 像素对齐的 `bw`/`bh`，帧缘 8x8 块的
+填充列参与去块并读到 stride 填充值，经 CDEF 方差改变传播到可见
+像素。修复后 `Av1FrameCtx` 新增 `w4`/`h4`，去块循环、level 缓存
+写入与 tile 行修正全部改用可见网格（CDEF/重建仍用对齐域，与
+dav1d 一致）。该差异自 inter 整帧接入以来即潜伏，此前所有流的
+可见区域恰好未被触及。8 组流（含两组 random）168+24 帧全绿，
+全量 wasm 1049/1049。

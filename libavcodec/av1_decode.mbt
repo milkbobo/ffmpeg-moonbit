@@ -101,6 +101,12 @@ priv struct Av1FrameCtx {
   hdr : Av1FrameHeader
   bw : Int32
   bh : Int32
+  /// Visible 4x4 grid extents (dav1d `f->w4`/`f->h4` = `(dim + 3) >> 2`),
+  /// unlike the 8-pixel-aligned `bw`/`bh`: deblock edge iteration and the
+  /// per-4x4 level cache stop here so alignment columns/rows outside the
+  /// visible frame are never written or filtered.
+  w4 : Int32
+  h4 : Int32
   sb128w : Int32
   /// LR-unit grid stride: `(upscaled_width + 127) >> 7`, >= `sb128w`; the
   /// grid LR units live on is the upscaled (post-superres-resize) width.

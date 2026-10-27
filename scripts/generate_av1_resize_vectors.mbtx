@@ -69,6 +69,14 @@ async fn main {
       "--kf-max-dist=5 --resize-mode=2 --resize-denominator=8",
       "",
     ),
+    // testsrc2 source for the same mode 2: its 140x93 frames carry the
+    // frame-edge 8x8 block whose padding columns once exposed the visible
+    // 4x4 grid (w4) vs aligned (bw) deblock mismatch.
+    (
+      "resize_random_t2", "src24_420.y4m",
+      "--kf-max-dist=5 --resize-mode=2 --resize-denominator=8",
+      "",
+    ),
     (
       "resize_lag", "src24_420.y4m", "--kf-max-dist=10 --lag-in-frames=4 --resize-mode=1 --resize-denominator=8",
       "",

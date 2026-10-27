@@ -11,6 +11,9 @@ test "AV1 resize-mode 10-bit matches libdav1d" {
 ///|
 test "AV1 resize-mode random per-frame sizes match libdav1d" {
   check_session(resize_random_ivf_b64, resize_random_md5, "resize-random")
+  check_session(
+    resize_random_t2_ivf_b64, resize_random_t2_md5, "resize-random-t2",
+  )
 }
 
 ///|

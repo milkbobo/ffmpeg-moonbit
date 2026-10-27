@@ -336,6 +336,8 @@ fn av1_decode_frame_payloads(
     hdr,
     bw,
     bh,
+    w4: (w + 3) >> 2,
+    h4: (h + 3) >> 2,
     sb128w,
     sr_sb128w,
     sb_shift,

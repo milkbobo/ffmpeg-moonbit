@@ -408,8 +408,8 @@ fn Av1FrameCtx::create_lf_mask_intra(
   lvl : FixedArray[Int32],
   seg : Int32,
 ) -> Unit {
-  let bw4 = av1_imin(self.bw - bx, av1_bdim(bs, 0))
-  let bh4 = av1_imin(self.bh - by, av1_bdim(bs, 1))
+  let bw4 = av1_imin(self.w4 - bx, av1_bdim(bs, 0))
+  let bh4 = av1_imin(self.h4 - by, av1_bdim(bs, 1))
   let bx4 = bx & 31
   let by4 = by & 31
   if bw4 > 0 && bh4 > 0 {
@@ -1468,7 +1468,7 @@ fn Av1FrameCtx::lf_sbrow_cols(self : Av1FrameCtx, sby : Int32) -> Unit {
   let starty4 = (sby & is_sb64) << 4
   let sbsz = 32 >> is_sb64
   let sbl2 = 5 - is_sb64
-  let endy4 = starty4 + av1_imin(self.bh - sby * sbsz, sbsz)
+  let endy4 = starty4 + av1_imin(self.h4 - sby * sbsz, sbsz)
   let uv_endy4 = (endy4 + self.ss_v) >> self.ss_v
   let mask_row = sby >> is_sb64
   let mono = self.seq.monochrome
@@ -1540,7 +1540,7 @@ fn Av1FrameCtx::lf_sbrow_cols(self : Av1FrameCtx, sby : Int32) -> Unit {
     for x in 0..<self.sb128w {
       let a = self.a[self.sb128w * (tile_row_above - 1) + x]
       let mask = self.lf_mask[mask_row * self.sb128w + x]
-      let w = av1_imin(32, self.bw - x * 32)
+      let w = av1_imin(32, self.w4 - x * 32)
       let mut bit = 1U
       for i in 0..<w {
         let sidx = if bit >= 0x10000U { 1 } else { 0 }
@@ -1586,7 +1586,7 @@ fn Av1FrameCtx::lf_sbrow_cols(self : Av1FrameCtx, sby : Int32) -> Unit {
   let chroma_lf = self.lf_u_active || self.lf_v_active
   for x in 0..<self.sb128w {
     let mask = self.lf_mask[mask_row * self.sb128w + x]
-    let w = av1_imin(32, self.bw - x * 32)
+    let w = av1_imin(32, self.w4 - x * 32)
     av1_lf_plane_cols_y(
       self,
       x > 0,
@@ -1632,7 +1632,7 @@ fn Av1FrameCtx::lf_sbrow_rows(self : Av1FrameCtx, sby : Int32) -> Unit {
   let chroma_lf = self.lf_u_active || self.lf_v_active
   for x in 0..<self.sb128w {
     let mask = self.lf_mask[mask_row * self.sb128w + x]
-    let w = av1_imin(32, self.bw - x * 32)
+    let w = av1_imin(32, self.w4 - x * 32)
     av1_lf_plane_rows_y(
       self,
       sby > 0,

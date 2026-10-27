@@ -39,18 +39,28 @@
 7. ffmpeg CLI 包装器不接受 resize 参数（`-aom-params` 报
    "Cannot find aom option"），必须用 apt 的 aom-tools（aomenc）。
 
-## 已知遗留：resize_random 的 1 像素偏差（testsrc2 源时）
+## 已解决：testsrc2 源 random 流的 1 像素偏差（原遗留）
 
-testsrc2 源的 random 流（已换 mandelbrot 源规避；若复现按下述继续）：
-140x93 帧内 (139,60) 恰差 1。逐级二分（临时给 deblock/CDEF/LR 加旁路
-门控对比 dav1d `--inloopfilters` 变体）结论：deblock 输出与 dav1d 完全
-一致；分叉在 CDEF 的 noskip 判定——8x8 单元 (bx4=34, by4=14)（帧右缘
-最后单元，含 padding 列）我们的 noskip 位置位（存在 !skip 块
-(136..143, 56..63)），dav1d 跳过了该单元（其插桩转储未触发）。该差异
-经 SGR/LR 传播到最后一列可见像素。矛盾点：两侧符号流与像素级均一致，
-唯此 noskip 决策不同——下一步应给 dav1d decode.c 的
-`if (!b->skip)` noskip 标记处（decode.c:1968）加帧号+坐标转储，与我们
-`av1_decode_inter.mbt` 的标记逐块对拍，定位是 skip 值还是标记范围差异。
+testsrc2 源 random 流 140x93 帧内 (139,60) 恰差 1，已定位并修复（该流
+现为 `resize_random_t2` 夹具，24 帧全绿）。逐级双侧对拍（MC 参数/预测
+块、反量化系数、itx 输出、level 网格）证明预测与残差链完全一致，差异
+在去块阶段：**dav1d 的 `f->w4`/`f->h4` 是可见 4x4 网格（`(dim+3)>>2`），
+level 缓存写入与去块边缘循环（cols/rows、tile 行修正）都以其为界，
+帧对齐填充列/行从不写入也从不滤波**；本移植此前用 8 像素对齐的
+`bw`/`bh`，帧缘 8x8 块（x136..143，可见宽 140）的填充列参与去块并
+读到 stride 填充值，CDEF 的方向/方差改变传播到可见像素。修复：
+`Av1FrameCtx` 新增 `w4`/`h4`，`lf_sbrow_cols/rows` 的边缘循环、
+`av1_create_lf_mask_inter/intra` 的 level 写入、tile 行修正循环全部
+改用可见网格；CDEF/重建/插入路径保持对齐域（与 dav1d 相同）。
+该 bug 自 inter 整帧接入即潜伏（此前所有流的帧宽都恰为 4x4 网格
+对齐，可见区域未被触及）。
+
+调试要点（复用价值）：排查此类"单像素差"时，双侧按**同一内容特征**
+匹配块后逐级 dump（MC 参数→预测块→系数→itx 输出→level 网格），
+每级确认 0 差异再进下一级；注意区分同一 test 内多个 check_session
+的打印（先跑的流会占满 head），且 `moon test` 输出与 stderr 混流时
+按内容特征而非行号对齐。dav1d CLI 默认多线程（n_tc>1 走 task 路径），
+单线程插桩需 `--threads 1` 才命中 `dav1d_filter_sbrow`。
 
 ## 再生
 
