@@ -3772,3 +3772,24 @@ level 网格双侧 dump）收敛到帧对齐填充列：dav1d 的 `f->w4`/`f->h4
 dav1d 一致）。该差异自 inter 整帧接入以来即潜伏，此前所有流的
 可见区域恰好未被触及。8 组流（含两组 random）168+24 帧全绿，
 全量 wasm 1049/1049。
+
+## 109. VP9 参考缩放（scaled reference MC）
+
+移植 FFmpeg 9.0.2 `vp9recon.c` 的 `mc_luma_scaled`/`mc_chroma_scaled` 与
+`vp9dsp_template.c` 的 `do_scaled_8tap_c`/`do_scaled_bilin_c`：帧间帧引用
+尺寸不同的参考缓冲时，按 14 位分数比例（`(ref_dim << 14) / cur_dim`，
+步长 `16 * scale >> 14`）采样，复刻 libvpx 的两个已知舍入怪癖——MV 两
+分量分别缩放、4:2:0 色度 MV 的 `webm/issues/820` 舍入
+（`scale_mv(x*16) & ~15 + scale_mv(x*32) & 15` 组合）。缩放系数在
+`mc_luma`/`mc_chroma` 分派时按参考尺寸现算，参考尺寸非法（超 2×/1⁄16×
+范围）沿用 C 的 REF_INVALID_SCALE 继续。
+
+验证两级：内核级以独立 C harness（`do_scaled_8tap_c`/`do_scaled_bilin_c`
+直编）12 个确定性用例 FNV-1a 逐像素一致；整帧级用 libvpx 官方
+`vp90-2-05-resize.ivf`（FFmpeg FATE `fate-vp9-05-resize` 的同一向量），
+10 帧 352x288 ↔ 282x173 交替，双向 scaled MC（inter 282 引 352 与
+inter 352 引 282）逐帧 MD5 与 vpxdec 原生输出一致。参考基准用
+`vpxdec --i420 -o 'f%2n_%w_%h.yuv'` 逐帧原生尺寸输出（FFmpeg framemd5
+对尺寸变化流会自动缩放到首帧尺寸，同 AV1 resize 轮的陷阱）。调试中
+顺带修正的中间错误：色度坐标域混淆（dispatcher 传入的已是色度坐标，
+内部不得再下采样）与 `& ~15` 掩码写反。

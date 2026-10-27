@@ -149,11 +149,11 @@ pub struct Vp9Decoder {
   mut min_mv_y : Int32
   mut max_mv_x : Int32
   mut max_mv_y : Int32
-  // per-reference scale factors ((refw << 14) / w, 0 = unscaled)
-  mvscale_x : FixedArray[Int32]
-  mvscale_y : FixedArray[Int32]
-  mvstep_x : FixedArray[Int32]
-  mvstep_y : FixedArray[Int32]
+  // scratch for the scaled-MC horizontal pass (`do_scaled_8tap_c`'s tmp)
+  mc_scaled_tmp : FixedArray[Int32]
+  // scaled-MC edge-emulation buffer, 288-wide like the C's
+  // `td->edge_emu_buffer` usage in `mc_luma_scaled`
+  mc_scaled_emu : FixedArray[Int32]
   // MV reference map of the current frame and the previous one
   mut mvmap : FixedArray[Vp9MvRefPair]
   mut prev_mvmap : FixedArray[Vp9MvRefPair]
@@ -286,6 +286,8 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     uveob1: FixedArray::make(256, 0),
     cache: FixedArray::make(1024, 0),
     mc_tmp: FixedArray::make(160 * 80, 0),
+    mc_scaled_tmp: FixedArray::make(64 * 135, 0),
+    mc_scaled_emu: FixedArray::make(288 * 135, 0),
     b: vp9_block_new(),
     rac: match vp9_rac_init(b"\x00\x00\x00", 0, 3) {
       Ok(c) => c
@@ -300,10 +302,6 @@ pub fn vp9_decoder_new() -> Vp9Decoder {
     min_mv_y: 0,
     max_mv_x: 0,
     max_mv_y: 0,
-    mvscale_x: FixedArray::make(3, 0),
-    mvscale_y: FixedArray::make(3, 0),
-    mvstep_x: FixedArray::make(3, 0),
-    mvstep_y: FixedArray::make(3, 0),
     mvmap: FixedArray::make(1, Vp9MvRefPair::{
       ref0: -1,
       ref1: -1,
@@ -917,17 +915,12 @@ pub fn Vp9Decoder::decode_frame(
   }
   // REF_FRAME_SEGMAP / REF_FRAME_MVPAIR bookkeeping (vp9_decode_frame)
   if !h.keyframe && !h.intra_only {
-    // scaled references are a later slice
+    // Scaled references are supported: mc_luma/mc_chroma dispatch on the
+    // reference dimensions and derive the 14-bit scale on the fly with the
+    // same formula as the C `s->mvscale[i]` (see vp9.c REF_FRAME_SCALE).
     for i in 0..<3 {
-      match self.references[h.ref_indices[i]] {
-        Some(r) =>
-          if r.width == h.width && r.height == h.height {
-            self.mvscale_x[i] = 0
-            self.mvscale_y[i] = 0
-          } else {
-            return Err("vp9: scaled reference frames not supported")
-          }
-        None => return Err("vp9: not all references are available")
+      guard self.references[h.ref_indices[i]] is Some(_) else {
+        return Err("vp9: not all references are available")
       }
     }
     let retain_segmap = self.ref_segmap is Some(_) &&

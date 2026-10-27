@@ -292,7 +292,7 @@ fn Vp9Decoder::mc_kernel(
 ///|
 /// `mc_luma_unscaled`: one luma prediction pass from `ref` at the luma pixel
 /// position (px_x, px_y) with MV components in 1/8 pel.
-fn Vp9Decoder::mc_luma(
+fn Vp9Decoder::mc_luma_unscaled(
   self : Vp9Decoder,
   ref_frame : Vp9RefFrame,
   dst : FixedArray[Int32],
@@ -358,7 +358,7 @@ fn Vp9Decoder::mc_luma(
 /// `mc_chroma_unscaled`: predicts both chroma planes.  With 4:2:0 the 1/8-pel
 /// luma MV already is a 1/16-pel chroma MV; with 4:2:2/4:4:4 it is scaled by
 /// `1 << (1 - ss_h)` / `1 << (1 - ss_v)` first, matching the C.
-fn Vp9Decoder::mc_chroma(
+fn Vp9Decoder::mc_chroma_unscaled(
   self : Vp9Decoder,
   ref_frame : Vp9RefFrame,
   dst_cb : FixedArray[Int32],
@@ -455,6 +455,109 @@ fn Vp9Decoder::mc_chroma(
   )
   self.mc_kernel(
     dst_cr, dst_off, dst_stride, src_cr, base, sstride, bw, bh, mx, my, filter, avg,
+  )
+}
+
+///|
+/// Luma MC dispatch: equal-dimension references take the unscaled path,
+/// otherwise the scaled kernel with the C's 14-bit scale formula
+/// (`(ref_dim << 14) / cur_dim`).
+fn Vp9Decoder::mc_luma(
+  self : Vp9Decoder,
+  ref_frame : Vp9RefFrame,
+  dst : FixedArray[Int32],
+  dst_off : Int32,
+  dst_stride : Int32,
+  px_x : Int32,
+  px_y : Int32,
+  mvx : Int32,
+  mvy : Int32,
+  bw : Int32,
+  bh : Int32,
+  filter : Int32,
+  avg : Bool,
+) -> Unit {
+  if ref_frame.width != self.width || ref_frame.height != self.height {
+    let scale_x = (ref_frame.width << 14) / self.width
+    let scale_y = (ref_frame.height << 14) / self.height
+    self.mc_luma_scaled(
+      ref_frame,
+      scale_x,
+      scale_y,
+      (16 * scale_x) >> 14,
+      (16 * scale_y) >> 14,
+      dst,
+      dst_off,
+      dst_stride,
+      px_x,
+      px_y,
+      0,
+      0,
+      bw,
+      bh,
+      mvx,
+      mvy,
+      bw,
+      bh,
+      filter,
+      avg,
+    )
+    return
+  }
+  self.mc_luma_unscaled(
+    ref_frame, dst, dst_off, dst_stride, px_x, px_y, mvx, mvy, bw, bh, filter, avg,
+  )
+}
+
+///|
+/// Chroma MC dispatch (see `mc_luma`).
+fn Vp9Decoder::mc_chroma(
+  self : Vp9Decoder,
+  ref_frame : Vp9RefFrame,
+  dst_cb : FixedArray[Int32],
+  dst_cr : FixedArray[Int32],
+  dst_off : Int32,
+  dst_stride : Int32,
+  px_x : Int32,
+  px_y : Int32,
+  mvx : Int32,
+  mvy : Int32,
+  bw : Int32,
+  bh : Int32,
+  filter : Int32,
+  avg : Bool,
+) -> Unit {
+  if ref_frame.width != self.width || ref_frame.height != self.height {
+    let scale_x = (ref_frame.width << 14) / self.width
+    let scale_y = (ref_frame.height << 14) / self.height
+    self.mc_chroma_scaled(
+      ref_frame,
+      scale_x,
+      scale_y,
+      (16 * scale_x) >> 14,
+      (16 * scale_y) >> 14,
+      dst_cb,
+      dst_cr,
+      dst_off,
+      dst_stride,
+      px_x,
+      px_y,
+      0,
+      0,
+      bw,
+      bh,
+      mvx,
+      mvy,
+      bw,
+      bh,
+      filter,
+      avg,
+    )
+    return
+  }
+  self.mc_chroma_unscaled(
+    ref_frame, dst_cb, dst_cr, dst_off, dst_stride, px_x, px_y, mvx, mvy, bw, bh,
+    filter, avg,
   )
 }
 
