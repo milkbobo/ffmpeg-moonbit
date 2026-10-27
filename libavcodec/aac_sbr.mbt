@@ -173,6 +173,8 @@ pub struct AacSbr {
   s_m : Array[Double]
   gain : Array[Double]
   qmf_filter_scratch : Array[Double]
+  /// Embedded Parametric Stereo context (`sbr->ps` of `SpectralBandReplication`).
+  ps : AacPs
   /// Whether a PS extension payload is legal in this stream (`m4ac.ps != 0`).
   mut ps_allowed : Bool
 }
@@ -231,6 +233,7 @@ pub fn aac_new_sbr(id_aac : Int32) -> AacSbr {
     s_m: Array::make(8 * 48, 0.0),
     gain: Array::make(8 * 48, 0.0),
     qmf_filter_scratch: Array::make(5 * 64, 0.0),
+    ps: aac_ps_new(),
     ps_allowed: false,
   }
   // `sbr_turnoff` half of ctx init: defaults for pure upsampling mode.
@@ -1255,8 +1258,8 @@ fn AacSbr::read_noise(
 }
 
 ///|
-/// `read_sbr_extension`: PS payloads are rejected until the PS module is
-/// ported; reserved ids consume the remaining bits as the C does.
+/// `read_sbr_extension`: EXTENSION_ID_PS feeds `ff_ps_read_data`; reserved
+/// ids consume the remaining bits as the C does.
 fn AacSbr::read_extension(
   self : AacSbr,
   gb : BitReader,
@@ -1264,7 +1267,6 @@ fn AacSbr::read_extension(
   num_bits_left : Ref[Int32],
   ps_allowed : Bool,
 ) -> Unit {
-  ignore(self)
   match bs_extension_id {
     2 =>
       // EXTENSION_ID_PS
@@ -1273,10 +1275,8 @@ fn AacSbr::read_extension(
         gb.skip(num_bits_left.val)
         num_bits_left.val = 0
       } else {
-        // ff_ps_read_data is not ported yet; consume and flag the frame.
-        gb.skip(num_bits_left.val)
-        num_bits_left.val = 0
-        aac_sbr_ps_seen.val = true
+        num_bits_left.val = num_bits_left.val -
+          self.ps.common.read_data(gb, num_bits_left.val)
       }
     _ => {
       gb.skip(num_bits_left.val)
@@ -1284,11 +1284,6 @@ fn AacSbr::read_extension(
     }
   }
 }
-
-///|
-/// Set when a PS extension payload was encountered and skipped; the frame
-/// entry reports this as an explicit error until PS is ported.
-let aac_sbr_ps_seen : Ref[Bool] = { val: false, }
 
 ///|
 /// `read_sbr_single_channel_element`.

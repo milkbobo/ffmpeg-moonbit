@@ -1071,9 +1071,6 @@ pub fn AacSbr::apply(
     self.dequant(id_aac)
     self.ready_for_dequant = false
   }
-  if aac_sbr_ps_seen.val {
-    return Err("Parametric Stereo payload is not implemented")
-  }
   let out_len = (num_time_slots * 128) >> div
   for ch in 0..<nch {
     let d = self.data[ch]
@@ -1104,10 +1101,14 @@ pub fn AacSbr::apply(
     self.x_gen(ch, num_time_slots)
   }
   if ps_enabled {
-    // PS payloads are rejected earlier; this is the mono implicit-PS
-    // duplication path (no PS data was read: duplicate the QMF signal).
-    for i in 0..<(2 * 38 * 64) {
-      self.x_qmf[1 * 2 * 38 * 64 + i] = self.x_qmf[0 * 2 * 38 * 64 + i]
+    // `if (ac->oc[1].m4ac.ps == 1)`: run PS synthesis once a PS header has
+    // been seen (`ps.common.start`), else duplicate the mono QMF signal.
+    if self.ps.common.start {
+      self.ps.apply(self.x_qmf, self.kx[1] + self.m[1])
+    } else {
+      for i in 0..<(2 * 38 * 64) {
+        self.x_qmf[1 * 2 * 38 * 64 + i] = self.x_qmf[0 * 2 * 38 * 64 + i]
+      }
     }
     nch = 2
   }

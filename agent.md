@@ -226,6 +226,20 @@ $msg | git commit -F -
 
 清一色来自本项目的真实踩坑，照做可少走弯路：
 
+- **绝对不能用 heredoc**（`python - <<'EOF'`、`cat <<EOF` 等）：在本机 Git Bash +
+  工具链的组合里，heredoc 内含 `\n`、`\\n`、引号或 NUL 转义的内容会被反复改写/截断，
+  已三次写入损坏文件（Python `SyntaxError: unterminated string literal`、源文件里出现
+  真实换行甚至 NUL 字节）。**生成或修改脚本一律用 Write/Edit 工具写完整文件**；必须在
+  shell 里内联 Python 时只允许无反斜杠转义的单行 `python -c`。
+- **wasm `__moonbit__init` 局部变量上限（约 5 万）**：包级大 `Array` 字面量每个元素都会
+  变成 init 的局部变量，libavcodec 白盒测试包已贴近上限——新增大表/大向量时**禁止**用
+  `Array[Double]`/`Array[Int32]` 字面量，改为 **base64 `Bytes` 字面量（数据段，不占局部）
+  + init 期解码**（参考 `aac_ps_tables.mbt` 的 `ps_unpack_f64/ps_unpack_huff` 与
+  `scripts/extract_ps_tables.py`）。注意 `av_base64_decode` 的 `out_size` 是**截断上限**，
+  传 `0` 会得到空数组，应传 `1 << 20` 之类的上界。另外：未被引用的顶层表会被 DCE 干掉，
+  "只加表不接线就能编译过"是假绿，接线后才见真章。
+- 错误标记函数用 `raise`（不是 `raises`）：`fn f() -> Unit raise { ... }`；
+  测试块内可直接用 `.unwrap()` / `fail(...)`。
 - 按位取反 `~` 不存在 → 用 `x.lnot()`。
 - 逻辑右移 `>>>` 不存在 → 改用 `UInt`/`UInt64`（其 `>>` 即逻辑右移）。
 - `to_int` / `to_uint` 已弃用 → `reinterpret_as_int` / `reinterpret_as_uint`；
