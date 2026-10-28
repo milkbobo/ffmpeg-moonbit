@@ -1,9 +1,9 @@
 ///|
 /// MoonBit port of dav1d 1.5.1 `src/decode.c` + `src/recon_tmpl.c` for the
 /// AV1 key-frame (intra) software decode path, single-threaded, 8-bit
-/// 4:2:0/4:2:2/4:4:4/monochrome. Inter frames, intrabc, film grain application and the in-loop
-/// filters (CDEF/loop filter/restoration) are not part of this file; the
-/// entry point rejects streams that need them.
+/// 4:2:0/4:2:2/4:4:4/monochrome. Inter frames, intrabc and film grain live
+/// in their own files; the in-loop filters (CDEF/loop filter/restoration)
+/// are wired here.
 
 ///|
 /// Block partition values (dav1d `enum BlockPartition`).

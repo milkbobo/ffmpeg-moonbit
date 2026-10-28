@@ -15,8 +15,8 @@ struct Av1ReferenceSlot {
 ///|
 /// A single AV1 coded-video sequence, with eight reference slots. Packets
 /// contain frame headers and tile groups, with at most one shown frame.
-/// Film grain is applied on output; grain reuse from a reference frame and
-/// intrabc are currently rejected explicitly; superres is supported
+/// Film grain is applied on output; grain reuse from a reference frame is
+/// currently rejected explicitly; intrabc and superres are supported
 /// (references are kept at their upscaled width).
 pub struct Av1Decoder {
   mut sequence : Av1SequenceParameters?
@@ -148,9 +148,6 @@ pub fn Av1Decoder::decode_packet(
         },
       ),
     )
-  }
-  if hdr.allow_intrabc {
-    return Err("PATCHWELCOME: AV1 intrabc")
   }
   let primary = if hdr.primary_ref_frame == 7 {
     None

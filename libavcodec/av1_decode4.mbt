@@ -163,7 +163,7 @@ fn Av1TileCtx::read_pal_indices(
 }
 
 ///|
-/// `decode_b` for intra blocks (key/intra-only frames; intrabc rejected).
+/// `decode_b` for key/intra-only and inter blocks, including intrabc.
 fn Av1TileCtx::decode_b(
   self : Av1TileCtx,
   _bl : Int32,
@@ -173,9 +173,6 @@ fn Av1TileCtx::decode_b(
 ) -> Unit raise Av1DecError {
   let f = self.f
   let hdr = f.hdr
-  if hdr.allow_intrabc {
-    raise Av1DecError::Unsupported("PATCHWELCOME: AV1 intrabc")
-  }
   let is_inter = hdr.frame_type == av1_frame_inter ||
     hdr.frame_type == av1_frame_switch
   let bx4 = self.bx & 31
@@ -379,7 +376,11 @@ fn Av1TileCtx::decode_b(
   }
   // Intra is read after delta-q/lf. Segment SKIP alone does not force it.
   let intra = if !is_inter {
-    true
+    if hdr.allow_intrabc {
+      self.msac.decode_bool_adapt(self.cdf.intrabc, 0) == 0
+    } else {
+      true
+    }
   } else if skip_mode {
     false
   } else if hdr.segmentation_enabled &&
@@ -402,6 +403,10 @@ fn Av1TileCtx::decode_b(
     self.msac.decode_bool_adapt(self.cdf.intra, ctx * 2) == 0
   }
   if !intra {
+    if !is_inter {
+      self.decode_intrabc_block(bs, intra_edge_flags, seg_id, seg_pred, skip)
+      return
+    }
     self.decode_inter_block(
       bs, intra_edge_flags, seg_id, seg_pred, skip_mode, skip,
     )
@@ -689,6 +694,11 @@ fn Av1TileCtx::decode_b(
     )
     guard self.rstate is Some(rstate) else {
       raise Av1DecError::Unsupported("av1: missing inter motion state")
+    }
+    rstate.splat_intra(bs, self.bx, self.by, bw4, bh4)
+  } else if hdr.allow_intrabc {
+    guard self.rstate is Some(rstate) else {
+      raise Av1DecError::Unsupported("av1: missing intrabc motion state")
     }
     rstate.splat_intra(bs, self.bx, self.by, bw4, bh4)
   }

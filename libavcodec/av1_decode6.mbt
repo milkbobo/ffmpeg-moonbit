@@ -414,7 +414,27 @@ fn av1_decode_frame_payloads(
               tile: { ..base.tile, rows: base.tile.rows.copy(), },
             })
           }
-          None => None
+          None => {
+            let mut state : Av1RefmvsFrameState? = None
+            if hdr.allow_intrabc {
+              match
+                av1_refmvs_intrabc_state(
+                  hdr.width,
+                  hdr.height,
+                  f.sb_step,
+                  hdr.allow_high_precision_mv,
+                  hdr.force_integer_mv,
+                ) {
+                Ok(v) =>
+                  state = Some({
+                    ..v,
+                    tile: { ..v.tile, rows: v.tile.rows.copy(), },
+                  })
+                Err(_) => ()
+              }
+            }
+            state
+          }
         },
         col_start,
         col_end,

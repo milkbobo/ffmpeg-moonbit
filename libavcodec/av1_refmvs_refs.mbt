@@ -231,3 +231,60 @@ pub fn Av1RefmvsReferenceStore::prepare_header(
     },
   )
 }
+
+///|
+/// Refmvs frame state for a key/intra-only frame that carries intrabc
+/// blocks: no temporal or reference MV candidates, only the intra-frame
+/// spatial stack fed by `splat_intrabc_mv` entries.
+pub fn av1_refmvs_intrabc_state(
+  coded_width : Int32,
+  height : Int32,
+  sbsz : Int32,
+  hp : Bool,
+  force_integer_mv : Bool,
+) -> Result[Av1RefmvsFrameState, String] {
+  if coded_width <= 0 || height <= 0 || (sbsz != 16 && sbsz != 32) {
+    return Err("av1 refmvs: invalid intrabc frame geometry")
+  }
+  let iw8 = (coded_width + 7) >> 3
+  let ih8 = (height + 7) >> 3
+  let rp_stride = (coded_width + 127) >> 7 << 4
+  let empty_map : FixedArray[Av1Rtb] = FixedArray::makei(rp_stride * ih8, _ => {
+    mv: (0, 0),
+    ref_: 0,
+  })
+  let rp_ref : FixedArray[FixedArray[Av1Rtb]] = FixedArray::make(7, empty_map)
+  let ref_poc = FixedArray::make(7, 0)
+  let has_tmvs = FixedArray::make(7, false)
+  let ref_ref_poc : FixedArray[FixedArray[Int32]] = FixedArray::makei(7, _ => {
+    FixedArray::make(7, 0)
+  })
+  let init = av1_refmvs_init_frame(0, 0, false, ref_poc, has_tmvs, ref_ref_poc)
+  let gm_types = FixedArray::make(7, 0)
+  let gm_matrices : FixedArray[FixedArray[Int32]] = FixedArray::makei(7, _ => {
+    FixedArray::make(6, 0)
+  })
+  let rf : Av1Rf = {
+    iw4: iw8 * 2,
+    ih4: ih8 * 2,
+    sign_bias: init.sign_bias,
+    pocdiff: init.pocdiff,
+    hp,
+    force_integer_mv,
+    use_ref_frame_mvs: init.use_ref_frame_mvs,
+    gm_types,
+    gm_matrices,
+  }
+  Ok(
+    av1_refmvs_frame_state_new(
+      rf,
+      init,
+      rp_ref,
+      rp_stride,
+      iw8,
+      ih8,
+      sbsz,
+      hdr_use_ref_frame_mvs=false,
+    ),
+  )
+}

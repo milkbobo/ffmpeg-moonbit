@@ -4507,3 +4507,26 @@ Period 内可输出多个 AdaptationSet/Representation。
   DASH CLI 的双读现象）。
 
 全量 wasm **1122/1122**。
+
+## 149. AV1 intra block copy（intrabc）
+
+补齐 AV1 intrabc（此前显式 PATCHWELCOME）：
+- 关键帧 `decode_b` 在 `allow_intrabc` 时按 CDF 读 intrabc 位；intrabc
+  块跳过普通帧内模式，改走新的 `decode_intrabc_block`：
+  refmvs 以 ref {INTRA,-1} 取空间 DV 候选（无候选时按 SB 行给默认
+  DV）、`av1_read_mv_residual(..., -1)` 整数残差，按 tile 边界/当前 SB
+  裁剪并重算像素 DV；随后 `read_vartx_tree` 读变换树。
+- 预测/残差复用 inter 重建：把当前帧 planes 包成 `Av1ReconRefPlane`
+  （参考=当前帧）、`filter2d=9`（bilinear）构造 `Av1InterBlock`，
+  调 `av1_recon_b_inter` 完成预测拷贝与残差/逆变换；随后按 dav1d
+  set_ctx 更新 a/l 上下文（DC_PRED、intra=0、pal=0、skip 等）并把
+  intrabc DV splat 进 refmvs；普通帧内块在 allow_intrabc 帧也会
+  splat INTRA 参考供 DV 预测。
+- 关键帧的 refmvs：新增 `av1_refmvs_intrabc_state`（无时域参考），
+  `av1_decode6` 在 `inter=None && allow_intrabc` 时为每个 tile 建立
+  refmvs 状态。
+- 验证：SVT-AV1 v4.2 `-svtav1-params enable-intrabc=1`（testsrc2/
+  smptebars，各含 screen-content-mode=2 变体）4 组 16 帧，端口解码
+  MD5 与 dav1d 1.5.1 framemd5 完全一致。
+
+新增 `libavcodec/av1_intrabc_realdata_test.mbt`。全量 wasm **1123/1123**。
