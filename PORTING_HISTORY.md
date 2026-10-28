@@ -4225,3 +4225,18 @@ docker ffmpeg 9.0.2 解码：
   “重封装后每个包字节与源相同”的断言（比解码一致更强）。
 
 本轮未发现写入器缺陷。全量 wasm **1091/1091**。
+
+## 132. MP4 单轨 H.264/HEVC 写入器的真实样本验证
+
+此前 `mp4_h264_muxer`/`mp4_hevc_muxer` 只用伪样本做回读测试。现复用
+fMP4 H.264 fixture（x264 64x48 High，5 帧 avcC + 长度前缀样本）与
+MKV HEVC fixture（64x64 Rext 4:4:4，5 个 AU + hvcC）：
+- 写入非分片 MP4 后由 `av_mov_open` 读回：avc1/hvc1、hvcC/avcC
+  extradata、5 个样本与时长均正确；H.264 转 Annex B 解码 5 帧 MD5
+  等于 `fmp4_h264_refs`，HEVC 直接解码（按 POC 排序）等于
+  `mkv_hevc_refs`。
+- 外部验证：docker ffmpeg 9.0.2 的 `-f framemd5` 输出 10 个帧 MD5
+  与上述两组参考完全一致（HEVC 报 yuv444p/Rext，符合 fixture）。
+
+新增测试并入 `mp4_video_mux_wbtest.mbt` / `mp4_hevc_mux_wbtest.mbt`。
+全量 wasm **1093/1093**。

@@ -51,3 +51,48 @@ test "mp4 muxer: invalid H.264 parameters are rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "mp4 muxer: real H.264 samples decode round-trip" {
+  let avcc = @libavutil.av_base64_decode(fmp4_h264_avcc_b64, 1024).unwrap()
+  let joined = @libavutil.av_base64_decode(fmp4_h264_samples_b64, 8192).unwrap()
+  let samples : Array[Bytes] = []
+  let mut off = 0
+  for size in fmp4_h264_sample_sizes {
+    samples.push(joined[off:off + size].to_owned())
+    off = off + size
+  }
+  assert_eq(off, joined.length())
+  let mux = mp4_h264_muxer_new(64, 48, avcc).unwrap()
+  for i, sample in samples {
+    mux.write_packet(sample, duration=3000, keyframe=i == 0).unwrap()
+  }
+  let bytes = mux.finish()
+  let movie = av_mov_open(bytes).unwrap()
+  assert_eq(movie.tracks.length(), 1)
+  let track = movie.tracks[0]
+  assert_eq(track.codec, "avc1")
+  assert_eq(track.extradata.unwrap(), avcc)
+  assert_eq(track.samples.length(), 5)
+  let payload : Array[Byte] = []
+  for sample in track.samples {
+    let start = sample.offset.to_int()
+    let end = start + sample.size.reinterpret_as_int()
+    for b in bytes[start:end] {
+      payload.push(b)
+    }
+  }
+  let annexb = fmp4_h264_annexb(avcc, [
+    fmp4_h264_avcc_params(avcc),
+    Bytes::from_array(payload),
+  ])
+  let dec = @libavcodec.new_h264_decoder()
+  let frames = match dec.decode_annexb(annexb, false) {
+    Ok(v) => @libavcodec.h264_display_order(v)
+    Err(e) => fail("h264 decode failed: \{e}")
+  }
+  assert_eq(frames.length(), 5)
+  for i = 0; i < frames.length(); i = i + 1 {
+    assert_eq(fmp4_h264_md5(frames[i]), fmp4_h264_refs[i])
+  }
+}
