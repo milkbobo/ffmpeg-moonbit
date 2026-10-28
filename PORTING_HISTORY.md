@@ -4266,3 +4266,17 @@ WebM AV1：回读 `V_AV1`、CodecPrivate、5 个包字节一致，端口 AV1 解
 framemd5，与同一组参考完全相同（av1/yuv420p）。
 
 新增测试并入 `webm_av1_mux_wbtest.mbt`。全量 wasm **1096/1096**。
+
+## 135. MP4 双轨 H.264+AAC 写入器真实样本验证
+
+`mp4_av_muxer` 此前只有伪包测试。现用真实数据（fMP4 x264 5 帧 +
+源 MKV 的 45 个 AAC-LC 44.1 kHz 单声道包）写入双轨非分片 MP4：
+- 回读两条轨的样本表与载荷：视频转 Annex B 解码 5 帧 MD5 等于
+  `fmp4_h264_refs`；AAC 45 包字节与源相同并逐帧解码成功。
+- 外部 ffmpeg 9.0.2：视频 framemd5 与参考一致；音频解码 PCM
+  MD5 `cfe6223331361877aef4f7e88a2a50bc` 与把同一组 AU 写成 ADTS
+  后 ffmpeg 解码结果完全一致（92160 字节）。源 MKV 因 CodecDelay 会
+  裁掉一帧 priming（90112 字节），本 MP4 写入器不建模初始 padding/
+  edit list，与既有 MP4 Opus pre-skip 说明一致，此项已记录。
+
+新增测试并入 `mp4_av_mux_wbtest.mbt`。全量 wasm **1097/1097**。
