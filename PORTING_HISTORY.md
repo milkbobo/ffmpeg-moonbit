@@ -4378,3 +4378,21 @@ grain-from-reference（inter 帧 update_grain=0）仍显式报错。
   `-f framemd5` 解码，5+5+5 帧 MD5 与上述参考完全一致。
 
 新增测试 `fmp4_video_realdata_wbtest.mbt`。全量 wasm **1112/1112**。
+
+## 142. AV1 film grain from reference（update_grain=0）
+
+补齐 AV1 帧头 `update_grain=0` 路径：inter 帧读取 3-bit `refidx`，
+校验其出现在当前帧 `ref_frame_idx` 列表中，并从 `Av1RefSlotState.header`
+（此前仅供 segmentation 继承的完整参考帧头）复制缩放点表/AR 系数/
+色度系数等 grain 参数，seed 保留当前帧读到的 16-bit 值，与 dav1d
+`obu.c` 的 `load_grain_params` 语义一致。
+
+验证矢量由 `grain.ivf` 手工构造：用 `trace_headers` 定位最后一帧的
+`update_grain` 位（payload 145）与 128 字节帧头边界，把该位改为 0、
+插入 refidx=2、按字节对齐后拼回原 tile 数据并重建 OBU/IVF 大小。因
+libaom 测试流的各帧 grain 参数相同，引用继承后的输出与原 update=1
+文件一致，但若未复制参数则会退化为无 grain 画面。dav1d 与端口在该
+变体上 5 帧 MD5 完全相同（2081ffab…b77fbad1…）。
+
+新增回归 `av1: film grain from reference matches dav1d`。全量 wasm
+**1113/1113**。

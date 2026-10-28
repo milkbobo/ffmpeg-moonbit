@@ -1333,12 +1333,12 @@ pub fn av1_parse_frame_header(
       let mut num_y_points = 0
       let mut num_cb_points = 0
       let mut num_cr_points = 0
-      let y_points : Array[Int32] = []
-      let cb_points : Array[Int32] = []
-      let cr_points : Array[Int32] = []
-      let ar_coeffs_y : Array[Int32] = []
-      let ar_coeffs_cb : Array[Int32] = []
-      let ar_coeffs_cr : Array[Int32] = []
+      let mut y_points : Array[Int32] = []
+      let mut cb_points : Array[Int32] = []
+      let mut cr_points : Array[Int32] = []
+      let mut ar_coeffs_y : Array[Int32] = []
+      let mut ar_coeffs_cb : Array[Int32] = []
+      let mut ar_coeffs_cr : Array[Int32] = []
       let mut chroma_scaling_from_luma = false
       let mut grain_scaling_minus_8 = 0
       let mut ar_coeff_lag = 0
@@ -1794,81 +1794,123 @@ pub fn av1_parse_frame_header(
               true
             }
             if !update {
-              return Err("PATCHWELCOME: AV1 grain from reference")
-            }
-            num_y_points = br.read(4).reinterpret_as_int()
-            if num_y_points > 14 {
-              return Err("av1: invalid grain points")
-            }
-            for _ in 0..<num_y_points {
-              y_points.push(br.read(8).reinterpret_as_int())
-              y_points.push(br.read(8).reinterpret_as_int())
-            }
-            if !seq.monochrome {
-              chroma_scaling_from_luma = br.read1() != 0
-            }
-            let skip_chroma = seq.monochrome ||
-              chroma_scaling_from_luma ||
-              (
-                seq.chroma_subsampling_x &&
-                seq.chroma_subsampling_y &&
-                num_y_points == 0
-              )
-            if !skip_chroma {
-              num_cb_points = br.read(4).reinterpret_as_int()
-              if num_cb_points > 10 {
-                return Err("av1: invalid cb grain points")
+              // dav1d: copy the grain params stored with the reference frame
+              // and keep the seed just parsed for this frame.
+              let refidx = br.read(3).reinterpret_as_int()
+              let mut in_refs = false
+              for r in refs {
+                if r == refidx {
+                  in_refs = true
+                }
               }
-              for _ in 0..<num_cb_points {
-                cb_points.push(br.read(8).reinterpret_as_int())
-                cb_points.push(br.read(8).reinterpret_as_int())
+              if !in_refs {
+                return Err("av1: grain ref not in ref list")
               }
-              num_cr_points = br.read(4).reinterpret_as_int()
-              if num_cr_points > 10 {
-                return Err("av1: invalid cr grain points")
+              let rh = match ref_state(refidx) {
+                Some(s) =>
+                  match s.header {
+                    Some(h) => h
+                    None => return Err("av1: grain reference missing")
+                  }
+                None => return Err("av1: grain reference missing")
               }
-              for _ in 0..<num_cr_points {
-                cr_points.push(br.read(8).reinterpret_as_int())
-                cr_points.push(br.read(8).reinterpret_as_int())
-              }
-            }
-            grain_scaling_minus_8 = br.read(2).reinterpret_as_int()
-            ar_coeff_lag = br.read(2).reinterpret_as_int()
-            let num_pos_luma = 2 * ar_coeff_lag * (ar_coeff_lag + 1)
-            if num_y_points > 0 {
-              for _ in 0..<num_pos_luma {
-                ar_coeffs_y.push(br.read(8).reinterpret_as_int() - 128)
-              }
-            }
-            let num_pos_chroma = if num_y_points > 0 {
-              num_pos_luma + 1
+              num_y_points = rh.num_y_points
+              y_points = rh.y_points
+              num_cb_points = rh.num_cb_points
+              cb_points = rh.cb_points
+              num_cr_points = rh.num_cr_points
+              cr_points = rh.cr_points
+              chroma_scaling_from_luma = rh.chroma_scaling_from_luma
+              grain_scaling_minus_8 = rh.grain_scaling_minus_8
+              ar_coeff_lag = rh.ar_coeff_lag
+              ar_coeffs_y = rh.ar_coeffs_y
+              ar_coeffs_cb = rh.ar_coeffs_cb
+              ar_coeffs_cr = rh.ar_coeffs_cr
+              ar_coeff_shift_minus_6 = rh.ar_coeff_shift_minus_6
+              grain_scale_shift = rh.grain_scale_shift
+              cb_mult = rh.cb_mult
+              cb_luma_mult = rh.cb_luma_mult
+              cb_offset = rh.cb_offset
+              cr_mult = rh.cr_mult
+              cr_luma_mult = rh.cr_luma_mult
+              cr_offset = rh.cr_offset
+              overlap_flag = rh.overlap_flag
+              clip_to_restricted = rh.clip_to_restricted_range
             } else {
-              num_pos_luma
-            }
-            if chroma_scaling_from_luma || num_cb_points > 0 {
-              for _ in 0..<num_pos_chroma {
-                ar_coeffs_cb.push(br.read(8).reinterpret_as_int() - 128)
+              num_y_points = br.read(4).reinterpret_as_int()
+              if num_y_points > 14 {
+                return Err("av1: invalid grain points")
               }
-            }
-            if chroma_scaling_from_luma || num_cr_points > 0 {
-              for _ in 0..<num_pos_chroma {
-                ar_coeffs_cr.push(br.read(8).reinterpret_as_int() - 128)
+              for _ in 0..<num_y_points {
+                y_points.push(br.read(8).reinterpret_as_int())
+                y_points.push(br.read(8).reinterpret_as_int())
               }
+              if !seq.monochrome {
+                chroma_scaling_from_luma = br.read1() != 0
+              }
+              let skip_chroma = seq.monochrome ||
+                chroma_scaling_from_luma ||
+                (
+                  seq.chroma_subsampling_x &&
+                  seq.chroma_subsampling_y &&
+                  num_y_points == 0
+                )
+              if !skip_chroma {
+                num_cb_points = br.read(4).reinterpret_as_int()
+                if num_cb_points > 10 {
+                  return Err("av1: invalid cb grain points")
+                }
+                for _ in 0..<num_cb_points {
+                  cb_points.push(br.read(8).reinterpret_as_int())
+                  cb_points.push(br.read(8).reinterpret_as_int())
+                }
+                num_cr_points = br.read(4).reinterpret_as_int()
+                if num_cr_points > 10 {
+                  return Err("av1: invalid cr grain points")
+                }
+                for _ in 0..<num_cr_points {
+                  cr_points.push(br.read(8).reinterpret_as_int())
+                  cr_points.push(br.read(8).reinterpret_as_int())
+                }
+              }
+              grain_scaling_minus_8 = br.read(2).reinterpret_as_int()
+              ar_coeff_lag = br.read(2).reinterpret_as_int()
+              let num_pos_luma = 2 * ar_coeff_lag * (ar_coeff_lag + 1)
+              if num_y_points > 0 {
+                for _ in 0..<num_pos_luma {
+                  ar_coeffs_y.push(br.read(8).reinterpret_as_int() - 128)
+                }
+              }
+              let num_pos_chroma = if num_y_points > 0 {
+                num_pos_luma + 1
+              } else {
+                num_pos_luma
+              }
+              if chroma_scaling_from_luma || num_cb_points > 0 {
+                for _ in 0..<num_pos_chroma {
+                  ar_coeffs_cb.push(br.read(8).reinterpret_as_int() - 128)
+                }
+              }
+              if chroma_scaling_from_luma || num_cr_points > 0 {
+                for _ in 0..<num_pos_chroma {
+                  ar_coeffs_cr.push(br.read(8).reinterpret_as_int() - 128)
+                }
+              }
+              ar_coeff_shift_minus_6 = br.read(2).reinterpret_as_int()
+              grain_scale_shift = br.read(2).reinterpret_as_int()
+              if num_cb_points > 0 {
+                cb_mult = br.read(8).reinterpret_as_int() - 128
+                cb_luma_mult = br.read(8).reinterpret_as_int() - 128
+                cb_offset = br.read(9).reinterpret_as_int() - 256
+              }
+              if num_cr_points > 0 {
+                cr_mult = br.read(8).reinterpret_as_int() - 128
+                cr_luma_mult = br.read(8).reinterpret_as_int() - 128
+                cr_offset = br.read(9).reinterpret_as_int() - 256
+              }
+              overlap_flag = br.read1() != 0
+              clip_to_restricted = br.read1() != 0
             }
-            ar_coeff_shift_minus_6 = br.read(2).reinterpret_as_int()
-            grain_scale_shift = br.read(2).reinterpret_as_int()
-            if num_cb_points > 0 {
-              cb_mult = br.read(8).reinterpret_as_int() - 128
-              cb_luma_mult = br.read(8).reinterpret_as_int() - 128
-              cb_offset = br.read(9).reinterpret_as_int() - 256
-            }
-            if num_cr_points > 0 {
-              cr_mult = br.read(8).reinterpret_as_int() - 128
-              cr_luma_mult = br.read(8).reinterpret_as_int() - 128
-              cr_offset = br.read(9).reinterpret_as_int() - 256
-            }
-            overlap_flag = br.read1() != 0
-            clip_to_restricted = br.read1() != 0
           }
         }
       }
