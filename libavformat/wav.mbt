@@ -156,6 +156,7 @@ pub fn ff_wav_codec_id(tag : Int32, bits : Int32) -> String {
     0x0011 => "adpcm_ima_wav"
     0x0020 => "adpcm_yamaha"
     0x0031 | 0x0032 => "gsm_ms"
+    0x028F => "adpcm_g722"
     0x0042 | 0x0111 => "g723_1"
     0x0045 | 0x0014 | 0x0040 | 0x0064 => "adpcm_g726"
     0x0050 => "mp2"

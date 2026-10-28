@@ -4808,3 +4808,32 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
 hybrid（有损）、float、DSD 与多声道多块流明确报错。
 
 全量 wasm **1148/1148**。
+
+## 163. G.711 / G.722 / G.726 电话编解码解码
+
+新增三个小解码器：
+- `g711.mbt`：A-law 与 µ-law 到 s16 的转换（`alaw2linear`/
+  `ulaw2linear` 公式），WAV 8-bit A/µ-law（tag 0x0006/0x0007）按字节
+  交织解码。
+- `g722.mbt`：移植 ITU-T G.722 子带 ADPCM 解码（g722dec.c/g722.c/
+  g722dsp.c）：64 kbit/s 两个高带比特 + 6 个低带比特、`s_zero`/
+  自适应二阶极点预测、对数量化因子、12 抽头 QMF、跨包状态。
+  解码端量化使用 64 项 `low_inv_quant6`，而预测更新使用 16 项
+  `low_inv_quant4`（两者不可混用）。
+- `g726.mbt`：移植 g726.c 自适应量化/六阶预测/11-bit 浮点乘法，
+  支持 2/3/4/5 bit 码字（16/24/32/40 kbit/s）与跨包状态；码字位数
+  取自 WAV fmt 的 bits_per_sample。
+- `wav.mbt` 增加 tag 0x028F → `adpcm_g722` 映射（ffmpeg 写出的
+  G.722 WAV 使用该 tag）。
+
+验证：ffmpeg 9.0.2 编码的 8 kHz/16 kHz 夹具（A-law/µ-law 单/双
+声道、G.722 16 kHz 单声道、G.726 16/24/32/40 kbit/s）经 WAV 块
+对齐解复用后解码，PCM MD5 与 ffmpeg s16le 参考一致
+（`defddc47…`、`cc1562a6…`、`4d9e1303…`、`ce3a9326…`、
+`fa866b54…`、`3c4dd4ef…`、`859fd29a…`、`a0536288…`、`75802c10…`）。
+
+排障要点：`av_clip_intp2(v, p)` 的有效范围是 `[-2^p, 2^p-1]`
+（不是 p 位有符号的 `[-2^(p-1), 2^(p-1)-1]`）；G.722 的 rlow/
+rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
+
+全量 wasm **1150/1150**。
