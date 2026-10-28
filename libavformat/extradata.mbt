@@ -168,6 +168,39 @@ fn parse_vpcc(st : MovState, r : AvioContext, size : Int64) -> Unit {
 /// `mov_read_glbl`: store the payload as the track's extradata. The
 /// legacy-broken `fiel`-wrapped variant is ported too (recursing into the
 /// payload as child boxes).
+
+///|
+/// `mov_read_dfla`: the FLAC-specific box is a FullBox whose payload starts
+/// with the STREAMINFO metadata block; only its 34-byte payload becomes
+/// extradata (FFmpeg warns and ignores later metadata blocks).
+fn parse_dfla(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
+  if !st.in_trak || size < 42 || size > 1073741824 {
+    let _ = r.avio_skip(size)
+    return
+  }
+  let _ = r.avio_rb32() // version + flags
+  let header0 = r.avio_r8().reinterpret_as_int()
+  let l1 = r.avio_r8().reinterpret_as_int()
+  let l2 = r.avio_r8().reinterpret_as_int()
+  let l3 = r.avio_r8().reinterpret_as_int()
+  let block_type = header0 & 0x7F
+  let block_size = (l1 << 16) | (l2 << 8) | l3
+  if block_type != 0 || block_size != 34 {
+    raise InvalidData("STREAMINFO must be first FLACMetadataBlock")
+  }
+  let bytes : Array[Byte] = []
+  for _ in 0..<34 {
+    bytes.push(r.avio_r8().to_byte())
+  }
+  st.cur.extradata = Some(Bytes::from_array(bytes[:]))
+  let _ = r.avio_skip(size - 42L)
+}
+
+///|
 fn parse_glbl(
   st : MovState,
   r : AvioContext,

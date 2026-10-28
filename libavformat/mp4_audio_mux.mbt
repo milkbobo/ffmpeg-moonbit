@@ -265,3 +265,105 @@ pub fn Mp4Mp3Muxer::finish(self : Mp4Mp3Muxer) -> Bytes {
     mp4_mp3_entry(self.sample_rate, self.channels, self.object_type),
   )
 }
+
+///|
+/// One FLAC-in-MP4 track: a `fLaC` audio sample entry whose `dfLa` box is a
+/// FullBox holding the STREAMINFO metadata block (plus optional later
+/// metadata blocks). Packets are FLAC frames.
+pub struct Mp4FlacMuxer {
+  streaminfo : Bytes
+  headers : Array[Bytes]
+  sample_rate : Int32
+  channels : Int32
+  bits : Int32
+  timescale : Int32
+  packets : Array[Bytes]
+  durations : Array[Int32]
+}
+
+///|
+pub fn mp4_flac_muxer_new(
+  streaminfo : Bytes,
+  headers~ : Array[Bytes] = [],
+  timescale~ : Int32 = 0,
+) -> Result[Mp4FlacMuxer, String] {
+  if streaminfo.length() != 34 {
+    return Err("EINVAL: invalid FLAC STREAMINFO")
+  }
+  let sample_rate = ogg_flac_bits(streaminfo, 80, 20).to_int()
+  let channels = ogg_flac_bits(streaminfo, 100, 3).to_int() + 1
+  let bits = ogg_flac_bits(streaminfo, 103, 5).to_int() + 1
+  if sample_rate <= 0 || channels < 1 || channels > 8 || timescale < 0 {
+    return Err("EINVAL: invalid FLAC MP4 stream parameters")
+  }
+  for block in headers {
+    if block.length() < 4 {
+      return Err("EINVAL: invalid FLAC metadata block")
+    }
+  }
+  Ok({
+    streaminfo,
+    headers,
+    sample_rate,
+    channels,
+    bits,
+    timescale: if timescale == 0 {
+      sample_rate
+    } else {
+      timescale
+    },
+    packets: [],
+    durations: [],
+  })
+}
+
+///|
+pub fn Mp4FlacMuxer::write_packet(
+  self : Mp4FlacMuxer,
+  packet : Bytes,
+  duration~ : Int32 = 4096,
+) -> Result[Unit, String] {
+  if packet.length() < 6 || duration <= 0 {
+    return Err("EINVAL: invalid FLAC frame")
+  }
+  self.packets.push(packet)
+  self.durations.push(duration)
+  Ok(())
+}
+
+///|
+fn Mp4FlacMuxer::entry(self : Mp4FlacMuxer) -> Array[Byte] {
+  let body : Array[Byte] = []
+  for _ in 0..<6 {
+    body.push(b'\x00')
+  }
+  mp4_u16(body, 1)
+  mp4_u16(body, 0)
+  mp4_u16(body, 0)
+  mp4_u32(body, 0U)
+  mp4_u16(body, self.channels)
+  mp4_u16(body, self.bits)
+  mp4_u16(body, 0)
+  mp4_u16(body, 0)
+  mp4_u32(body, (self.sample_rate << 16).reinterpret_as_uint())
+  let dfla : Array[Byte] = []
+  dfla.push(if self.headers.length() == 0 { b'\x80' } else { b'\x00' })
+  dfla.push(b'\x00')
+  dfla.push(b'\x00')
+  dfla.push(b'"')
+  for b in self.streaminfo {
+    dfla.push(b)
+  }
+  for block in self.headers {
+    for b in block {
+      dfla.push(b)
+    }
+  }
+  body.append(mp4_full_box("dfLa", 0, 0, dfla))
+  mp4_box("fLaC", body)
+}
+
+///|
+pub fn Mp4FlacMuxer::finish(self : Mp4FlacMuxer) -> Bytes {
+  mp4_audio_document(self.timescale, self.packets, self.durations, self.entry())
+}

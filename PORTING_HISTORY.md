@@ -4054,3 +4054,24 @@ FFmpeg **定点** `mp3` 解码器一致。注意 FFmpeg CLI 默认的 `mp3float`
 在首个非零样本即差 1 LSB（本仓库既有 MP3 白盒套件同样以定点解码器
 为基准）。外部验证：ffprobe 识别 mp3/44.1k/mono，ffmpeg `-c:a mp3`
 解码本 muxer 输出 MD5 与参考相同。全量 wasm **1077/1077**。
+
+## 121. MP4 FLAC 写入与 `fLaC`/`dfLa` 解复用
+
+补 FLAC-in-MP4 双向：
+
+- **写入**（`mp4_audio_mux.mbt` 新增 `Mp4FlacMuxer`）：`fLaC` 音频
+  采样条目 + `dfLa` FullBox（version 0 + STREAMINFO 元数据块，可带
+  后续元数据块）；STREAMINFO 解析复用 Ogg-FLAC 的位域读取，采样率/
+  声道/位深写入采样条目；样本表布局同 Opus/AAC 写入器。
+- **读取**（`mov.mbt`/`extradata.mbt`）：新增 `dfLa` 子 box 解析，
+  跳过 FullBox 头后要求首块为 type 0/长度 34 的 STREAMINFO，只把
+  34 字节 payload 存为 extradata（与 FFmpeg `mov_read_dfla` 一致，
+  后续元数据块忽略）；fourcc `fLaC` 经 `mov_codec_name` 解析为
+  `flac`。
+
+验证：Ogg-FLAC 夹具的 STREAMINFO/元数据/9 帧写入 MP4 后，
+`av_mov_open` 读回 `codec=fLaC`、extradata 与 STREAMINFO 逐字节相同、
+9 个样本、采样率/声道正确；样本按偏移拼回后与源帧总字节相等，组装
+原生 `fLaC` 流解码 PCM MD5 与参考一致。外部：ffprobe 识别
+flac/44.1k/mono，ffmpeg 解码本 muxer 输出 MD5 相同。全量 wasm
+**1078/1078**。
