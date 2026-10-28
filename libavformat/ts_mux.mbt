@@ -16,6 +16,9 @@ pub struct TsMuxer {
   audio_pid : Int32
   video_stream_type : Int32
   audio_stream_type : Int32
+  /// Emit the corresponding PMT entry (false for audio-only/video-only TS).
+  has_video : Bool
+  has_audio : Bool
   mut wrote_tables : Bool
   /// Non-zero enables automatic ADTS framing of AAC access units.
   mut adts_rate : Int32
@@ -34,6 +37,10 @@ pub fn ts_muxer_new(
   video_stream_type~ : Int32 = 0x1B,
   /// PMT stream type of the audio ES (0x0F AAC ADTS, 0x03 MP3, ...).
   audio_stream_type~ : Int32 = 0x0F,
+  /// Include a video entry in the PMT (false for audio-only renditions).
+  video~ : Bool = true,
+  /// Include an audio entry in the PMT (false for video-only renditions).
+  audio~ : Bool = true,
 ) -> TsMuxer {
   {
     pmt_pid: 0x1000,
@@ -41,6 +48,8 @@ pub fn ts_muxer_new(
     audio_pid,
     video_stream_type,
     audio_stream_type,
+    has_video: video,
+    has_audio: audio,
     wrote_tables: false,
     adts_rate: 0,
     adts_channels: 0,
@@ -158,19 +167,27 @@ fn TsMuxer::pat(self : TsMuxer) -> Unit {
 fn TsMuxer::pmt(self : TsMuxer) -> Unit {
   let section : Array[Byte] = []
   section.push(b'\x02')
-  ts_mux_u16(section, 0xB000 | (9 + 5 * 2 + 4))
+  let streams = (if self.has_video { 1 } else { 0 }) +
+    (if self.has_audio { 1 } else { 0 })
+  ts_mux_u16(section, 0xB000 | (9 + 5 * streams + 4))
   ts_mux_u16(section, 1) // program_number
   section.push(b'\xC1')
   section.push(b'\x00')
   section.push(b'\x00')
-  ts_mux_u16(section, 0xE000 | self.video_pid) // PCR_PID
+  // PCR rides on the first configured elementary stream.
+  let pcr_pid = if self.has_video { self.video_pid } else { self.audio_pid }
+  ts_mux_u16(section, 0xE000 | pcr_pid)
   ts_mux_u16(section, 0xF000) // program_info_length = 0
-  section.push(self.video_stream_type.to_byte())
-  ts_mux_u16(section, 0xE000 | self.video_pid)
-  ts_mux_u16(section, 0xF000)
-  section.push(self.audio_stream_type.to_byte())
-  ts_mux_u16(section, 0xE000 | self.audio_pid)
-  ts_mux_u16(section, 0xF000)
+  if self.has_video {
+    section.push(self.video_stream_type.to_byte())
+    ts_mux_u16(section, 0xE000 | self.video_pid)
+    ts_mux_u16(section, 0xF000)
+  }
+  if self.has_audio {
+    section.push(self.audio_stream_type.to_byte())
+    ts_mux_u16(section, 0xE000 | self.audio_pid)
+    ts_mux_u16(section, 0xF000)
+  }
   let crc = ts_mux_crc(section)
   for i in 0..<4 {
     section.push(((crc >> (24 - 8 * i)) & 0xFFU).to_byte())

@@ -33,9 +33,13 @@ test "hls muxer: empty playlist and explicit target duration" {
 
 ///|
 test "hls muxer: master playlist round-trips" {
-  let variants : Array[(String, Int32, Int32, Int32, String)] = [
-    ("720p.m3u8", 1500000, 1280, 720, "avc1.64001f,mp4a.40.2"),
-    ("360p.m3u8", 600000, 640, 360, "avc1.64001e,mp4a.40.2"),
+  let variants : Array[HlsMasterVariant] = [
+    HlsMasterVariant::new(
+      "720p.m3u8", 1500000, 1280, 720, "avc1.64001f,mp4a.40.2",
+    ),
+    HlsMasterVariant::new(
+      "360p.m3u8", 600000, 640, 360, "avc1.64001e,mp4a.40.2",
+    ),
   ]
   let text = hls_write_master_playlist(variants[:])
   let pl = av_hls_parse(text).unwrap()
@@ -48,6 +52,61 @@ test "hls muxer: master playlist round-trips" {
   assert_eq(pl.streams[0].codecs, "avc1.64001f,mp4a.40.2")
   assert_eq(pl.streams[0].uri, "720p.m3u8")
   assert_eq(pl.streams[1].uri, "360p.m3u8")
+}
+
+///|
+test "hls muxer: EXT-X-MEDIA audio rendition is written and parsed" {
+  let variant = HlsMasterVariant::new(
+    "video.m3u8",
+    800000,
+    64,
+    48,
+    "avc1.42c00a,mp4a.40.2",
+    audio_group="aud",
+  )
+  let rendition = HlsMasterRendition::new(
+    "AUDIO",
+    "aud",
+    "English",
+    "audio.m3u8",
+    language="en",
+    is_default=true,
+    channels="1",
+  )
+  let text = hls_write_master_playlist([variant], renditions=[rendition])
+  assert_true(
+    text.contains(
+      "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",LANGUAGE=\"en\",DEFAULT=YES,AUTOSELECT=YES,CHANNELS=\"1\",URI=\"audio.m3u8\"\n",
+    ),
+  )
+  assert_true(text.contains(",AUDIO=\"aud\"\n"))
+  let pl = av_hls_parse(text).unwrap()
+  assert_eq(pl.streams.length(), 1)
+  assert_eq(pl.streams[0].uri, "video.m3u8")
+  assert_eq(pl.renditions.length(), 1)
+  assert_eq(pl.renditions[0].type_, "AUDIO")
+  assert_eq(pl.renditions[0].group_id, "aud")
+  assert_eq(pl.renditions[0].name, "English")
+  assert_eq(pl.renditions[0].language, "en")
+  assert_true(pl.renditions[0].is_default)
+  assert_true(pl.renditions[0].autoselect)
+  assert_eq(pl.renditions[0].channels, "1")
+  assert_eq(pl.renditions[0].uri, "audio.m3u8")
+}
+
+///|
+test "hls muxer: audio-only and video-only TS PMT list one stream" {
+  let mux = ts_muxer_new(video=false, audio=true)
+  mux.enable_adts(44100, 1).unwrap()
+  mux.write_audio(0L, b"\x00\x01")
+  let ts = av_mpegts_open(mux.finish()).unwrap()
+  assert_eq(ts.streams.length(), 1)
+  assert_eq(ts.streams[0].pid, 0x101)
+  let video_only = ts_muxer_new(video=true, audio=false)
+  video_only.write_video(0L, b"\x00\x00\x00\x01\x65")
+  let ts2 = av_mpegts_open(video_only.finish()).unwrap()
+  assert_eq(ts2.streams.length(), 1)
+  assert_eq(ts2.streams[0].pid, 0x100)
 }
 
 ///|

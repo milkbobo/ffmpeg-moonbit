@@ -81,21 +81,91 @@ fn hls_mux_hex(data : Bytes) -> String {
 }
 
 ///|
-/// Write a master playlist. Each entry is
-/// `(uri, bandwidth, width, height, codecs)`.
+/// One `EXT-X-STREAM-INF` entry. `audio_group` empty omits the AUDIO
+/// attribute; otherwise it names an `EXT-X-MEDIA` audio group.
+pub struct HlsMasterVariant {
+  uri : String
+  bandwidth : Int32
+  width : Int32
+  height : Int32
+  codecs : String
+  audio_group : String
+}
+
+///|
+/// One `EXT-X-MEDIA` rendition (audio, subtitles, ...).
+pub struct HlsMasterRendition {
+  type_ : String
+  group_id : String
+  name : String
+  language : String
+  is_default : Bool
+  autoselect : Bool
+  channels : String
+  uri : String
+}
+
+///|
+pub fn HlsMasterVariant::new(
+  uri : String,
+  bandwidth : Int32,
+  width : Int32,
+  height : Int32,
+  codecs : String,
+  audio_group~ : String = "",
+) -> HlsMasterVariant {
+  { uri, bandwidth, width, height, codecs, audio_group, }
+}
+
+///|
+pub fn HlsMasterRendition::new(
+  type_ : String,
+  group_id : String,
+  name : String,
+  uri : String,
+  language~ : String = "",
+  is_default~ : Bool = false,
+  autoselect~ : Bool = true,
+  channels~ : String = "",
+) -> HlsMasterRendition {
+  { type_, group_id, name, language, is_default, autoselect, channels, uri, }
+}
+
+///|
+/// Write a master playlist with optional `EXT-X-MEDIA` renditions.
 pub fn hls_write_master_playlist(
-  variants : ArrayView[(String, Int32, Int32, Int32, String)],
+  variants : ArrayView[HlsMasterVariant],
+  renditions~ : ArrayView[HlsMasterRendition] = [],
   version~ : Int32 = 3,
 ) -> String {
   let sb = StringBuilder()
   sb.write_string("#EXTM3U\n")
   sb.write_string("#EXT-X-VERSION:\{version}\n")
-  for variant in variants {
-    let (uri, bandwidth, width, height, codecs) = variant
+  for r in renditions {
     sb.write_string(
-      "#EXT-X-STREAM-INF:BANDWIDTH=\{bandwidth},RESOLUTION=\{width}x\{height},CODECS=\"\{codecs}\"\n",
+      "#EXT-X-MEDIA:TYPE=\{r.type_},GROUP-ID=\"\{r.group_id}\",NAME=\"\{r.name}\"",
     )
-    sb.write_string(uri)
+    if r.language != "" {
+      sb.write_string(",LANGUAGE=\"" + r.language + "\"")
+    }
+    let default_attr = if r.is_default { "YES" } else { "NO" }
+    let autoselect_attr = if r.autoselect { "YES" } else { "NO" }
+    sb.write_string(",DEFAULT=" + default_attr)
+    sb.write_string(",AUTOSELECT=" + autoselect_attr)
+    if r.channels != "" {
+      sb.write_string(",CHANNELS=\"" + r.channels + "\"")
+    }
+    sb.write_string(",URI=\"" + r.uri + "\"\n")
+  }
+  for variant in variants {
+    sb.write_string(
+      "#EXT-X-STREAM-INF:BANDWIDTH=\{variant.bandwidth},RESOLUTION=\{variant.width}x\{variant.height},CODECS=\"\{variant.codecs}\"",
+    )
+    if variant.audio_group != "" {
+      sb.write_string(",AUDIO=\"" + variant.audio_group + "\"")
+    }
+    sb.write_string("\n")
+    sb.write_string(variant.uri)
     sb.write_string("\n")
   }
   sb.to_string()

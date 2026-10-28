@@ -4453,3 +4453,22 @@ LBUF/DEC/H 最大差 5.4e-7，65536 个 QMF 输出最大差 1.5e-6（与既有�
 同量级）。syntax/pcm 测试同步按生成器格式重排（数据不变）。
 
 全量 wasm **1117/1117**。
+
+## 146. HLS 多 rendition 主播放列表与单流 TS
+
+- `hls_write_master_playlist` 改为结构化 API：`HlsMasterVariant`
+  （uri/bandwidth/分辨率/codecs/可选 AUDIO 组）与 `HlsMasterRendition`
+  （EXT-X-MEDIA：TYPE/GROUP-ID/NAME/LANGUAGE/DEFAULT/AUTOSELECT/
+  CHANNELS/URI）。输出 `#EXT-X-MEDIA` 行与
+  `EXT-X-STREAM-INF...,AUDIO="group"`；`av_hls_parse` 可回读
+  renditions 全部属性。
+- `TsMuxer` 新增 `video~`/`audio~` 开关：PMT 只列出启用的 ES，
+  PCR_PID 取第一个启用的流（音频单轨 TS 的 PMT 只含 AAC 条目）。
+- 回归：主播放列表/rendition 文本与解析、音频单流与视频单流 TS 的
+  PMT 流数。
+- 外部：视频 TS + 音轨 rendition（audio-only TS，ADTS）+ 主播放列表，
+  ffmpeg 9.0.2 `-allowed_extensions ALL` 播放：识别 h264+aac，视频
+  framemd5 对齐 `fmp4_h264_refs`，音频 MD5 `0389e90a…` 与既有 ADTS
+  参考相同。
+
+全量 wasm **1119/1119**。
