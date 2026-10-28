@@ -4574,3 +4574,36 @@ refmvs 在 10-bit 下的 MV 精度与当前帧 bilinear 预测在色度/高位�
   ffmpeg 本地文件上不可播放（探测阻塞），由内部 reader 覆盖。
 
 全量 wasm **1125/1125**。
+
+## 152. ALAC 解码与 MP4 `alac` 读取
+
+新增 `libavcodec/alac.mbt`，移植 `alac.c` / `alac_data.c` / `alacdsp.c`：
+- magic cookie 为 36 字节 QuickTime atom（size/tag/version +
+  ALACSpecificConfig），解析 `max_samples_per_frame`、位深、Rice 参数、
+  声道数与采样率；位深限 16/20/24/32，声道数 1-8。
+- `decode_scalar`（最多 9 个 1 的 unary 前缀 + k 低位，或 bps 位逃逸）、
+  `rice_decompress`（自适应 history、零块游程、`sign_modifier`）、
+  `lpc_prediction`（自适应 FIR、prediction type 15 的 31 阶预处理、
+  int16 系数回绕）、stereo decorrelation 与 extra bits 拼接。
+- 元素按 SCE/CPE/LFE 解析；`ff_alac_channel_layout_offsets` 把 Apple
+  元素声道序映射到标准声道序。输出交织 S16/S32（20-bit <<12、
+  24-bit <<8），与 FFmpeg 默认输出一致。
+
+MOV 解复用：样本条目内的 `alac` 子 box 按 `mov_read_extradata` 语义
+重建完整 36 字节 atom（8 字节 box 头 + payload）作为 extradata，
+`mov_codec_name` 的 `alac` 映射直接生效。
+
+验证：
+- ffmpeg 9.0.2 从确定性 WAV（正弦/静音/噪声/冲激）编码的真实夹具：
+  16-bit 单声道、16-bit 双声道、24-bit 双声道（8 extra bits）、
+  5.1 16-bit，各 6 帧（4096×5+1570），解码 PCM MD5 与 ffmpeg
+  s16le/s32le 逐字节一致。`alac_realdata_test.mbt` 内嵌 cookie 与
+  原始包；`mp4_alac_demux_realdata_wbtest.mbt` 内嵌真实 m4a，经
+  `av_mov_open` 取包后解码结果相同。
+- 手工构造未压缩元素（SCE/CPE、显式/隐式帧长、20/32-bit 缩放、
+  无 END、通道越界、坏 cookie）覆盖参考编码器不产出的分支。
+
+FFmpeg 的 ALAC 编码器只产出 16/24-bit，20/32-bit 路径无外部参考；
+`extra_bits_bug` 非标准解码模式未复刻。
+
+全量 wasm **1131/1131**。

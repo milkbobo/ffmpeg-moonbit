@@ -257,6 +257,44 @@ fn parse_glbl(
 }
 
 ///|
+/// `mov_read_alac` via `mov_read_extradata`: the decoder receives the whole
+/// atom, 8-byte box header included (it skips size/tag/version itself).
+fn parse_alac(
+  st : MovState,
+  r : AvioContext,
+  size : Int64,
+) -> Unit raise MovError {
+  if !st.in_trak || st.cur.codec != "alac" {
+    let _ = r.avio_skip(size)
+    return
+  }
+  if size > 1073741824 {
+    raise InvalidData("alac atom too large")
+  }
+  let out : Array[Byte] = []
+  match st.cur.extradata {
+    Some(d) =>
+      for b in d {
+        out.push(b)
+      }
+    None => ()
+  }
+  let atom_size = (size + 8L).to_int()
+  out.push(((atom_size >> 24) & 0xFF).to_byte())
+  out.push(((atom_size >> 16) & 0xFF).to_byte())
+  out.push(((atom_size >> 8) & 0xFF).to_byte())
+  out.push((atom_size & 0xFF).to_byte())
+  out.push(b'a')
+  out.push(b'l')
+  out.push(b'a')
+  out.push(b'c')
+  for i = 0; i < size.to_int(); i = i + 1 {
+    out.push(r.avio_r8().to_byte())
+  }
+  st.cur.extradata = Some(Bytes::from_array(out))
+}
+
+///|
 /// `ff_mp4_read_descr_len`: up to four 7-bit length bytes. */
 fn mp4_read_descr_len(r : AvioContext) -> Int32 {
   let mut len = 0
