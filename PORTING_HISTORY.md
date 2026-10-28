@@ -3928,3 +3928,25 @@ tiles+WPP 流（128×128，每帧 8 slice，含 tile 内 WPP 行首起 slice）�
 生成器 `scripts/generate_hevc_dependent_rext_vectors.mbtx` 现在一次
 输出六组（前三组仍写各自白盒夹具，后三组汇总黑盒文件），并修正旧
 夹具头部误写的 "persistent_rice 生成器" 署名。全量 wasm **1070/1070**。
+
+## 115. MKV/Matroska HEVC 写入器
+
+补齐容器写入对称性：MP4/TS/fMP4 早已支持 HEVC，MKV 此前只有
+H.264/VP9/AV1/Opus/AAC 写入。新增 `libavformat/mkv_hevc_mux.mbt`
+（镜像 mkv_h264_mux）：CodecID `V_MPEGH/ISO/HEVC`，CodecPrivate 为
+调用方提供的 hvcC，单 Cluster SimpleBlock，DocType 固定 matroska
+（WebM 不允许 HEVC）。块负载按调用方提供的字节原样写入，约定为与
+hvcC `lengthSizeMinusOne` 一致的长度前缀 NAL。
+
+验证两层：
+
+- 白盒 `mkv_hevc_mux_wbtest.mbt`：HM 16.8 4:4:4 5 帧流按 access unit
+  切分并改写为 4 字节长度前缀作为块负载，hvcC 取自 ffmpeg 对该流的
+  MP4 封装；写出的 MKV 用本项目 `av_matroska_open` 读回，校验
+  codec/CodecPrivate/尺寸/PTS/keyframe 后，把块负载拼回 nalff 流用
+  `ff_hevc_decode_frames_ex` 解码，5 帧在两种滤波模式下 MD5 与原流
+  参考一致。
+- 外部验证：同一 muxer 输出交 `ffprobe`（hevc 64x64）与 ffmpeg 9.0.2
+  单线程解码，5 帧 MD5 与参考完全一致。
+
+全量 wasm **1071/1071**。
