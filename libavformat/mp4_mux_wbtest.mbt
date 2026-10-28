@@ -49,3 +49,30 @@ test "mp4 muxer: invalid AAC parameters are rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "mp4 muxer: AAC priming is signalled via elst" {
+  let mux = mp4_aac_muxer_new(44100, 1, priming=1024).unwrap()
+  for _ in 0..<3 {
+    mux.write_packet(b"\x00\x01").unwrap()
+  }
+  let bytes = mux.finish()
+  let movie = av_mov_open(bytes).unwrap()
+  assert_eq(movie.timescale, 44100U)
+  let track = movie.tracks[0]
+  assert_eq(track.samples.length(), 3)
+  // The edit starts one AAC frame into the media, so the demuxer trims the
+  // encoder delay exactly like a real `movenc` file.
+  assert_eq(track.skip_samples, 1024)
+  let zero = mp4_aac_muxer_new(44100, 1).unwrap()
+  zero.write_packet(b"\x00\x01").unwrap()
+  assert_eq(av_mov_open(zero.finish()).unwrap().tracks[0].skip_samples, 0)
+}
+
+///|
+test "mp4 muxer: negative AAC priming is rejected" {
+  match mp4_aac_muxer_new(44100, 1, priming=-1) {
+    Ok(_) => fail("negative priming must fail")
+    Err(_) => ()
+  }
+}

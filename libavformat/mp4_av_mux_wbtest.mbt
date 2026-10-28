@@ -145,3 +145,25 @@ test "mp4 muxer: real H.264 + AAC tracks decode round-trip" {
     }
   }
 }
+
+///|
+test "mp4 muxer: audio priming is signalled without touching video" {
+  let avcc = @libavutil.av_base64_decode(mp4_av_avcc_b64, 1024).unwrap()
+  let mux = mp4_av_muxer_new(64, 48, avcc, 44100, 1, aac_priming=1024).unwrap()
+  mux
+  .write_video(b"\x00\x00\x00\x02\x65\x88", duration=9000, keyframe=true)
+  .unwrap()
+  for _ in 0..<3 {
+    mux.write_audio(b"\xAA\x01").unwrap()
+  }
+  let movie = av_mov_open(mux.finish()).unwrap()
+  assert_eq(movie.tracks.length(), 2)
+  assert_eq(movie.tracks[0].skip_samples, 0)
+  assert_eq(movie.tracks[0].samples.length(), 1)
+  assert_eq(movie.tracks[1].skip_samples, 1024)
+  assert_eq(movie.tracks[1].samples.length(), 3)
+  match mp4_av_muxer_new(64, 48, avcc, 44100, 1, aac_priming=-1) {
+    Ok(_) => fail("negative priming must fail")
+    Err(_) => ()
+  }
+}

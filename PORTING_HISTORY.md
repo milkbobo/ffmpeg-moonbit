@@ -4295,3 +4295,18 @@ framemd5，与同一组参考完全相同（av1/yuv420p）。
 
 新增测试并入 `mkv_h264_mux_wbtest.mbt` / `mkv_av_mux_wbtest.mbt`。
 全量 wasm **1099/1099**。
+
+## 137. MP4 AAC priming 编辑列表（edts/elst）
+
+§135 记录的 priming 缺口补齐：`mp4_aac_muxer_new` 与 `mp4_av_muxer_new`
+新增可选 `priming`/`aac_priming`（采样数）。>0 时按 `movenc` 的方式写
+单条 `edts`/`elst`（media_time=priming，segment_duration 按电影时基
+向上取整），mvhd/tkhd 用显示时长、mdhd 保留完整媒体时长；普通
+WAVEFORMAT/样本表不变。
+- 回归：单轨 3 包与双轨（1 视频 + 3 音频）回读 `skip_samples` 分别为
+  1024，视频轨不受影响；负 priming 报错。
+- 外部：45 个 AAC 包 + priming=1024 的单轨/双轨 MP4 经 ffmpeg 9.0.2
+  解码为 90112 字节 s16le，MD5 `8cc619542aaa74e3769b295fb26c0866`
+  与源 MKV（CodecDelay 裁掉一帧后）解码完全一致。
+
+全量 wasm **1102/1102**。

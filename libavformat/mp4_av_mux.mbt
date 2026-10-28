@@ -15,6 +15,8 @@ pub struct Mp4AvMuxer {
   video_keyframes : Array[Bool]
   sample_rate : Int32
   channels : Int32
+  /// AAC encoder delay in media samples, expressed as an audio `elst` edit.
+  aac_priming : Int32
   audio_packets : Array[Bytes]
   audio_durations : Array[Int32]
 }
@@ -26,13 +28,16 @@ pub fn mp4_av_muxer_new(
   avcc : Bytes,
   sample_rate : Int32,
   channels : Int32,
+  /// Leading AAC samples to skip via `edts`/`elst`.
+  aac_priming~ : Int32 = 0,
 ) -> Result[Mp4AvMuxer, String] {
   if width <= 0 ||
     height <= 0 ||
     avcc.length() < 7 ||
     sample_rate <= 0 ||
     channels < 1 ||
-    channels > 7 {
+    channels > 7 ||
+    aac_priming < 0 {
     return Err("EINVAL: invalid MP4 A/V parameters")
   }
   let mut rate_ok = false
@@ -48,6 +53,7 @@ pub fn mp4_av_muxer_new(
     width,
     height,
     avcc,
+    aac_priming,
     video_packets: [],
     video_durations: [],
     video_keyframes: [],
@@ -225,6 +231,7 @@ fn mp4_av_trak(
   handler : String,
   media_header : Array[Byte],
   entry : Array[Byte],
+  edts : Array[Byte],
   packets : Array[Bytes],
   durations : Array[Int32],
   keyframes : Array[Bool],
@@ -284,7 +291,7 @@ fn mp4_av_trak(
   let stbl = mp4_av_stbl(entry, packets, durations, keyframes, chunk_offset)
   let minf = mp4_box("minf", mp4_cat([media_header, dinf, stbl]))
   let mdia = mp4_box("mdia", mp4_cat([mdhd, hdlr, minf]))
-  mp4_box("trak", mp4_cat([tkhd, mdia]))
+  mp4_box("trak", mp4_cat([tkhd, edts, mdia]))
 }
 
 ///|
@@ -323,9 +330,16 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
   for d in self.audio_durations {
     adur = adur + d
   }
+  let aprim = if self.aac_priming < adur { self.aac_priming } else { adur }
+  let a_display = adur - aprim
   let vms = vdur.to_int64() * 1000L / 90000L
-  let ams = adur.to_int64() * 1000L / self.sample_rate.to_int64()
+  let ams = a_display.to_int64() * 1000L / self.sample_rate.to_int64()
   let movie_ms = if vms > ams { vms.to_int() } else { ams.to_int() }
+  let aedts : Array[Byte] = if aprim > 0 {
+    mp4_edit_list(aprim, adur, 1000, self.sample_rate)
+  } else {
+    []
+  }
   let mvhd_body : Array[Byte] = []
   mp4_u32(mvhd_body, 0U)
   mp4_u32(mvhd_body, 0U)
@@ -364,10 +378,11 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     self.height,
     90000,
     vdur,
-    movie_ms,
+    vms.to_int(),
     "vide",
     vmhd,
     ventry,
+    [],
     self.video_packets,
     self.video_durations,
     self.video_keyframes,
@@ -390,10 +405,11 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     0,
     self.sample_rate,
     adur,
-    movie_ms,
+    ams.to_int(),
     "soun",
     smhd,
     aentry,
+    aedts,
     self.audio_packets,
     self.audio_durations,
     empty_keys,

@@ -9,6 +9,8 @@
 pub struct Mp4AacMuxer {
   sample_rate : Int32
   channels : Int32
+  /// Encoder delay in media samples, expressed as an `elst` edit.
+  priming : Int32
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -17,8 +19,10 @@ pub struct Mp4AacMuxer {
 pub fn mp4_aac_muxer_new(
   sample_rate : Int32,
   channels : Int32,
+  /// Leading samples (AAC encoder delay) to skip via `edts`/`elst`.
+  priming~ : Int32 = 0,
 ) -> Result[Mp4AacMuxer, String] {
-  if sample_rate <= 0 || channels < 1 || channels > 7 {
+  if sample_rate <= 0 || channels < 1 || channels > 7 || priming < 0 {
     return Err("EINVAL: invalid AAC MP4 stream parameters")
   }
   let mut rate_ok = false
@@ -30,7 +34,7 @@ pub fn mp4_aac_muxer_new(
   if !rate_ok {
     return Err("EINVAL: unsupported AAC sample rate")
   }
-  Ok({ sample_rate, channels, packets: [], durations: [], })
+  Ok({ sample_rate, channels, priming, packets: [], durations: [], })
 }
 
 ///|
@@ -104,6 +108,35 @@ fn mp4_cat(parts : Array[Array[Byte]]) -> Array[Byte] {
     out.append(p)
   }
   out
+}
+
+///|
+/// `edts`/`elst` with a single edit that skips `priming` leading media
+/// samples (AAC encoder delay), mirroring the edit list `movenc` writes for
+/// `initial_padding`. `movie_timescale` is the enclosing movie time base,
+/// `media_timescale` the track media one.
+fn mp4_edit_list(
+  priming : Int32,
+  media_duration : Int32,
+  movie_timescale : Int32,
+  media_timescale : Int32,
+) -> Array[Byte] {
+  let skip = if priming < media_duration { priming } else { media_duration }
+  let kept = media_duration - skip
+  // Round the edit duration up: a truncated movie-timescale duration would
+  // make demuxers trim the tail of the last kept frame.
+  let movie_duration = (
+      kept.to_int64() * movie_timescale.to_int64() +
+      media_timescale.to_int64() -
+      1L
+    ) /
+    media_timescale.to_int64()
+  let body : Array[Byte] = []
+  mp4_u32(body, 1U) // entry_count
+  mp4_u32(body, movie_duration.to_int().reinterpret_as_uint())
+  mp4_u32(body, skip.reinterpret_as_uint()) // media_time
+  mp4_u32(body, 0x00010000U) // media_rate 1.0
+  mp4_box("edts", mp4_full_box("elst", 0, 0, body))
 }
 
 ///|
@@ -215,12 +248,23 @@ pub fn Mp4AacMuxer::finish(self : Mp4AacMuxer) -> Bytes {
   let ftyp = mp4_box("ftyp", ftyp_body)
   let mdat = mp4_box("mdat", data)
   let chunk_offset = ftyp.length() + 8
+  let priming = if self.priming < total_duration {
+    self.priming
+  } else {
+    total_duration
+  }
+  let display_duration = total_duration - priming
+  let edts : Array[Byte] = if priming > 0 {
+    mp4_edit_list(priming, total_duration, self.sample_rate, self.sample_rate)
+  } else {
+    []
+  }
 
   let mvhd_body : Array[Byte] = []
   mp4_u32(mvhd_body, 0U)
   mp4_u32(mvhd_body, 0U)
   mp4_u32(mvhd_body, self.sample_rate.reinterpret_as_uint())
-  mp4_u32(mvhd_body, total_duration.reinterpret_as_uint())
+  mp4_u32(mvhd_body, display_duration.reinterpret_as_uint())
   mp4_u32(mvhd_body, 0x00010000U) // rate
   mp4_u16(mvhd_body, 0x0100) // volume
   mp4_u16(mvhd_body, 0)
@@ -239,7 +283,7 @@ pub fn Mp4AacMuxer::finish(self : Mp4AacMuxer) -> Bytes {
   mp4_u32(tkhd_body, 0U)
   mp4_u32(tkhd_body, 1U) // track_id
   mp4_u32(tkhd_body, 0U)
-  mp4_u32(tkhd_body, total_duration.reinterpret_as_uint())
+  mp4_u32(tkhd_body, display_duration.reinterpret_as_uint())
   for _ in 0..<2 {
     mp4_u32(tkhd_body, 0U)
   }
@@ -333,7 +377,7 @@ pub fn Mp4AacMuxer::finish(self : Mp4AacMuxer) -> Bytes {
   let stbl = mp4_box("stbl", mp4_cat([stsd, stts, stsc, stsz, stco]))
   let minf = mp4_box("minf", mp4_cat([smhd, dinf, stbl]))
   let mdia = mp4_box("mdia", mp4_cat([mdhd, hdlr, minf]))
-  let trak = mp4_box("trak", mp4_cat([tkhd, mdia]))
+  let trak = mp4_box("trak", mp4_cat([tkhd, edts, mdia]))
   let moov = mp4_box("moov", mp4_cat([mvhd, trak]))
   Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
 }
