@@ -237,6 +237,76 @@ pub fn av_adts_open(data : Bytes) -> Result[RawAudioTrack, String] {
 }
 
 // ---------------------------------------------------------------------------
+// AC-3
+// ---------------------------------------------------------------------------
+
+///|
+/// Parse a raw AC-3 stream (`libavformat/ac3dec.c`): frames are split on the
+/// header frame size, which varies per frame at 44.1 kHz.  Each frame yields
+/// `num_blocks * 256` samples (normally 1536).
+pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
+  let start = id3_skip(data)
+  let frames : Array[RawAudioFrame] = []
+  let mut pos = start
+  let mut pts : Int64 = 0
+  let mut sample_rate = 0
+  let mut channels = 0
+  let mut frame_size = 0
+  let mut bit_rate = 0
+  while pos + 8 <= data.length() {
+    if data[pos] != b'\x0B' || data[pos + 1] != b'\x77' {
+      // Resync one byte at a time, like the parser.
+      pos = pos + 1
+      continue
+    }
+    let hdr = match @libavcodec.ac3_parse_header(data[pos:].to_owned()) {
+      Ok(h) => h
+      Err(_) => {
+        pos = pos + 1
+        continue
+      }
+    }
+    let duration = hdr.num_blocks * 256
+    if hdr.frame_size <= 0 || pos + hdr.frame_size > data.length() {
+      break
+    }
+    if frames.length() == 0 {
+      sample_rate = hdr.sample_rate
+      channels = hdr.channels
+      frame_size = duration
+      bit_rate = hdr.bit_rate
+    } else if hdr.sample_rate != sample_rate || hdr.channels != channels {
+      // A format change mid-stream is not representable in one track.
+      break
+    }
+    frames.push({
+      pos: pos.to_int64(),
+      size: hdr.frame_size,
+      pts,
+      duration,
+      is_keyframe: true,
+    })
+    pts = pts + duration.to_int64()
+    pos = pos + hdr.frame_size
+  }
+  if frames.length() == 0 {
+    return Err("EINVAL")
+  }
+  Ok({
+    codec: "ac3",
+    profile: "",
+    sample_rate,
+    channels,
+    frame_size,
+    frames,
+    total_samples: pts,
+    bit_rate,
+    id3v2_size: start,
+    info_frame_size: 0,
+  })
+}
+
+// ---------------------------------------------------------------------------
 // MPEG audio
 // ---------------------------------------------------------------------------
 

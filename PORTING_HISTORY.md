@@ -4948,3 +4948,33 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   `cfe6223331361877aef4f7e88a2a50bc` 与同 AU 生成的 ADTS 解码完全一致。
 
 全量 wasm **1160/1160**。
+
+## 170. AC-3 解码（含裸流切分）
+
+- 新增 `ac3_tables.mbt`（由 `scripts/_gen_ac3_tables.py` 从 FFmpeg
+  9.0.2 `ac3.c`/`ac3tab.c`/`ac3dec_data.c` 提取：帧长/声道/采样率/
+  码率表、临界带与 logadd、听觉阈值、bap/量化表、mantissa 分组表等；
+  `ff_ac3_floor_tab` 按 `int16_t` 语义把 0xf800 转成 -2048）。
+- 新增 `ac3.mbt`：`ac3_parse_header`（同步/BSI，bsid≤10；E-AC-3 明确
+  报错）与 `Ac3Decoder`。覆盖双单声道、单声道、立体声（rematrixing）、
+  3F/2F1R/3F1R/2F2R/3F2R+LFE；耦合策略/坐标/相位标志、delta bit
+  allocation、零尾数抖动（MD5 种子的 LFG，与 C 的 `av_lfg_get` 一致）、
+  `dynrng` 动态范围（`drc_scale` 固定 1.0，同 ffmpeg 默认）、
+  比特分配三阶段（PSD/掩蔽曲线/bap）、Q24 尾数解码、KBD α=5 窗与
+  256/128 点 IMDCT（预计算余弦矩阵直接求值，等价
+  `ff_tx_mdct_naive_inv`）；输出按 SMPTE 声道顺序（`channel_map` 求逆）。
+- 新增 `av_ac3_open`（rawaudio.mbt）：按每帧头部 `frame_size` 切分，
+  覆盖 44.1 kHz 交替帧长；返回码率/采样率/声道/1536 样本帧。
+- 回归 `ac3_realdata_test.mbt`：ffmpeg 9.0.2 编码的 48 kHz 单声道/
+  立体声（含瞬态与 rematrixing）/5.1/强制耦合立体声、44.1 kHz 与
+  32 kHz 单声道共 6 组夹具，s16 量化输出与 ffmpeg 参考最大差 1 LSB
+  （单声道逐字节一致），另测同步搜索偏移、字节交换同步拒绝与
+  E-AC-3 拒绝。
+- 回归 `ac3_realdata_wbtest.mbt`：裸流切分的帧数/偏移/时长、
+  44.1 kHz 变长帧（416/418/418/418）与 5.1 帧长；单声道解码
+  s16 MD5 `0b4d53cb6c20a3642b1b06b01546afae` 与 ffmpeg 一致。
+- 外部：全部参考 PCM 由 ffmpeg 9.0.2 `-f s16le` 解码生成；5.1 声道
+  映射修正前 LFE/环绕声道错位，按 C 的 `outptr[channel_map[ch]]`
+  求逆后各声道一致。
+
+全量 wasm **1164/1164**。
