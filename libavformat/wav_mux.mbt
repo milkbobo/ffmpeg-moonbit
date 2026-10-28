@@ -114,15 +114,23 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
   let block_align = self.channels * (self.bits / 8)
   let byte_rate = self.sample_rate * block_align
   let fmt_size = if self.extensible { 40 } else { 16 }
-  let format_tag = if self.float_samples {
-    3
-  } else if self.extensible {
+  // `ff_put_wav_header` writes WAVE_FORMAT_EXTENSIBLE whenever the layout is
+  // non-mono/stereo; IEEE float is selected through the subformat GUID then.
+  let format_tag = if self.extensible {
     0xFFFE
+  } else if self.float_samples {
+    3
   } else {
     1
   }
+  // Non-PCM formats (`codec_tag != 1`) carry a `fact` chunk, as in
+  // `wav_write_header`; its payload is the frame count patched in the trailer.
+  let fact_size = if self.float_samples { 12 } else { 0 }
   wav_mux_tag(out, "RIFF")
-  wav_mux_u32(out, (20 + fmt_size + data_size + pad).reinterpret_as_uint())
+  wav_mux_u32(
+    out,
+    (20 + fmt_size + fact_size + data_size + pad).reinterpret_as_uint(),
+  )
   wav_mux_tag(out, "WAVE")
   wav_mux_tag(out, "fmt ")
   wav_mux_u32(out, fmt_size.reinterpret_as_uint())
@@ -145,6 +153,12 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
     for b in guid {
       out.push(b.to_byte())
     }
+  }
+  if fact_size != 0 {
+    wav_mux_tag(out, "fact")
+    wav_mux_u32(out, 4U)
+    // Sample frames, matching `number_of_samples` in `wav_write_trailer`.
+    wav_mux_u32(out, (data_size / block_align).reinterpret_as_uint())
   }
   wav_mux_tag(out, "data")
   wav_mux_u32(out, data_size.reinterpret_as_uint())

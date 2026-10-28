@@ -4189,3 +4189,23 @@ ADTS 同步头）。新增 `TsMuxer::enable_adts(sample_rate, channels)`，
 `ts_h264_aac_decode_wbtest.mbt`：demux 后视频解码对齐
 `fmp4_h264_refs`，音频剥 ADTS 头后 AAC 解码与 ADTS 参考最大差
 1 LSB。全量 wasm **1088/1088**。
+
+## 130. WAV 写入器 extensible float 修正与 ffmpeg 外部验证
+
+对照 FFmpeg 9.0.2 `riffenc.c`/`wavenc.c` 修正两处写入器语义：
+- 多声道（或显式 channel mask）float WAV 原先写 `format_tag=3` 且
+  fmt 块长 40，属于自相矛盾；现按 `ff_put_wav_header` 写
+  `WAVE_FORMAT_EXTENSIBLE`(0xFFFE)，IEEE float 由子格式 GUID 表达。
+- 非 PCM（`codec_tag != 1`）补 `fact` 块，负载为帧数（样本数/声道），
+  RIFF 大小同步计入，与 `wav_write_header`/`wav_write_trailer` 一致。
+
+外部验证：用写入器生成 8-bit mono 8 kHz、16-bit stereo 48/96 kHz、
+24-bit stereo 44.1 kHz、32-bit stereo、float32 stereo、16-bit 5.1、
+float32 5.1 共 8 个 WAV，经 docker ffmpeg 9.0.2 解码为对应原始
+PCM（u8/s16le/s24le/s32le/f32le），全部与源样本逐字节一致；
+ffprobe 正确识别 codec、采样率、声道数，5.1 输出报
+`channel_layout=5.1`（extensible float 修正前会丢失该信息）。
+
+新增回归测试：extensible float 头的 tag/cbSize/valid bits/mask/GUID
+与 fact 偏移、24/32-bit PCM 载荷字节、96 kHz 纯 WAVEFORMATEX。
+全量 wasm **1091/1091**。
