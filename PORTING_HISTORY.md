@@ -3893,6 +3893,10 @@ YUV 的 MD5 哈希工具。
 4. 邻域可用性沿用按 tile 的 `end_of_tiles_x`（`hls_decode_neighbour` 在
    WPP 分支把上限设成 picture 宽度是 FFmpeg 该组合失效的一部分，不复刻）。
 
+HT cfg 默认 `CrossComponentPrediction: 1`，本组团流内共命中 4262 次
+`cross_component_scale` 语法，CCP 与 tiles+WPP 的组合也随本组流覆盖
+（仅 intra；HT profile 要求全 intra，inter CCP 无法用该 profile 生成）。
+
 夹具为黑盒：`hevc_tiles_wpp_test.mbt` + 生成的
 `hevc_tiles_wpp_vectors_test.mbt`；再生脚本
 `scripts/generate_hevc_tiles_wpp_vectors.mbtx`（参数：`.scratch/hevc_ccp`

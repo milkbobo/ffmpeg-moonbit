@@ -152,7 +152,8 @@ HEVC tiles 与 WPP 同时启用已接通并验证：该组合仅 High Throughput
 EBSP 计数，经 `H2645Nal` 新记录的防竞争字节位置映射回 RBSP），每个
 tile 的每个 CTU 行独立重启 CABAC，并按上右 CTU 的同 slice/tile 可用性
 继承上下文；同时补上 RExt `cabac_bypass_alignment`（对齐后按原始字节
-读取符号与 escape 值）。**FFmpeg 9.0.2 无法解码该组合**（单线程
+读取符号与 escape 值）。HT 配置默认开启 CCP，流内命中 4262 次
+`cross_component_scale` 语法，故 CCP 与 tiles+WPP 的组合一并覆盖（intra）。**FFmpeg 9.0.2 无法解码该组合**（单线程
 `hls_decode_entry` 的 `cabac_init` 用 tile-scan 索引对 picture CTB 宽度
 取模，实测输出 PSNR 仅约 10 dB），因此本组夹具以 HM 解码输出为参考，
 FFmpeg 仅用于把原始 YUV 哈希成 framemd5。详见

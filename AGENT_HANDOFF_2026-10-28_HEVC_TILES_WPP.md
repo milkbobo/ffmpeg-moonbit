@@ -78,8 +78,10 @@ Git Bash 下需要 `MSYS_NO_PATHCONV=1`。
 
 ## 五、剩余缺口
 
-- HEVC：当前图片引用（CPR，需 SCC 编码器）；CCP 与 tiles/WPP 组合未验证
-  （本组未开 CCP）；dependent segment 与 tiles+WPP 组合未验证。
+- HEVC：当前图片引用（CPR，需 SCC 编码器）；dependent segment 与
+  tiles+WPP 组合未验证。HT cfg 默认开启 CCP，本轮流内命中 4262 次
+  `cross_component_scale` 语法（3 流 15 帧），即 CCP 与 tiles+WPP 已
+  一并覆盖（仅 intra）。
 - 其他见 README「主要边界」：VP9 复合预测（libvpx 不生成）、H.264 EC
   高位深/444/422（FFmpeg 硬编码）、AAC USAC、AV1 film grain/intrabc、
   统一播放 API（建议单独立项）。
