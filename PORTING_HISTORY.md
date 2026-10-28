@@ -4075,3 +4075,16 @@ FFmpeg **定点** `mp3` 解码器一致。注意 FFmpeg CLI 默认的 `mp3float`
 原生 `fLaC` 流解码 PCM MD5 与参考一致。外部：ffprobe 识别
 flac/44.1k/mono，ffmpeg 解码本 muxer 输出 MD5 相同。全量 wasm
 **1078/1078**。
+
+## 122. TS 写入器 HEVC/MP3 外部解码验证
+
+`ts_mux` 早已支持 PMT stream type 0x24（HEVC）与 0x03（MP3），但此前
+只有本项目 demux 的结构回环。本轮把 muxer 输出交给 ffmpeg 9.0.2：
+ffprobe 识别 hevc+mp3 两路，`-threads 1` 解码的 3 帧视频 MD5 与
+MP3 定点解码 PCM MD5 都与直接解码原始基本流完全一致（AUD 分隔的
+x265 HEVC AU 与 CBR MP3 帧）。
+
+新增白盒 `ts_mux_decode_wbtest.mbt`：把 muxer 输出经 `av_mpegts_open`
+取回 payload，拼接后分别用 `ff_hevc_decode_frames` 与
+`decode_mp3_stream` 解码，断言与 FFmpeg 参考 MD5 一致（视频三帧 +
+PCM），把外部验证固化为回归。全量 wasm **1079/1079**。
