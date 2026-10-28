@@ -4472,3 +4472,22 @@ LBUF/DEC/H 最大差 5.4e-7，65536 个 QMF 输出最大差 1.5e-6（与既有�
   参考相同。
 
 全量 wasm **1119/1119**。
+
+## 147. DASH 多 AdaptationSet（视频 + 音频）
+
+`dash_write_segment_template_mpd` 改为结构化 API：`DashAdaptation`
+（contentType/mimeType/codecs/id/bandwidth/timescale/duration/init/media
+模板，视频带 width/height，音频带 audioSamplingRate，可选 lang），一个
+Period 内可输出多个 AdaptationSet/Representation。
+- 回归：视频+音频 MPD 的文本与 `av_dash_parse` 结构（content_type、
+  lang、audio_sampling_rate、codec/segment 展开）。
+- 新增 `dash_audio_realdata_wbtest.mbt`：真实 AAC 5 帧写入 fMP4
+  init/media，作为音频 AdaptationSet；`DashSegmentReader` 取回拼接后
+  `av_mov_open` 解复用、AAC 解码与 ADTS 参考最大差 1。
+- 外部：双轨 MPD（H.264 视频 + AAC 音频）经 ffmpeg 9.0.2
+  `-allowed_extensions ALL` 播放；视频 framemd5 为参考序列（CLI 本地
+  DASH 的探测+播放双读已知行为，每帧出现两次）；音频前 10240 字节
+  （5 帧）MD5 `0389e90a…` 与 ADTS 参考一致。
+- wasm_probe 的 DASH 签名同步更新。
+
+全量 wasm **1121/1121**。

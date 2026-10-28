@@ -47,17 +47,21 @@ test "dash: real H.264 fMP4 segment template decodes round-trip" {
     fmp4_sample(samples[4], 9000, false),
   ]).unwrap()
   let mpd_text = dash_write_segment_template_mpd(
-    id="v1",
-    bandwidth=200000L,
-    codecs="avc1.42C01E",
-    width=64,
-    height=48,
-    timescale=90000L,
-    duration=45000L,
-    start_number=1L,
-    initialization="init.mp4",
-    media_template="seg-$Number$.m4s",
-    segment_count=1,
+    [
+      DashAdaptation::new(
+        "video",
+        "video/mp4",
+        "avc1.42C01E",
+        "v1",
+        200000L,
+        90000L,
+        45000L,
+        "init.mp4",
+        "seg-$Number$.m4s",
+        width=64,
+        height=48,
+      ),
+    ],
     media_duration_seconds=0.5,
   )
   let mpd = av_dash_parse(mpd_text).unwrap()

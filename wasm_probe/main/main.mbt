@@ -191,17 +191,7 @@ fn main {
   let _ = @libavformat.dash_parse_duration(abort("p"))
   let _ = @libavformat.dash_segment_reader_new(abort("p"), abort("p"))
   let _ = @libavformat.dash_write_segment_template_mpd(
-    id=abort("p"),
-    bandwidth=abort("p"),
-    codecs=abort("p"),
-    width=abort("p"),
-    height=abort("p"),
-    timescale=abort("p"),
-    duration=abort("p"),
-    start_number=abort("p"),
-    initialization=abort("p"),
-    media_template=abort("p"),
-    segment_count=abort("p"),
+    abort("p"),
     media_duration_seconds=abort("p"),
   )
   let _ = @libavformat.ebml_parse(abort("p"), abort("p"), abort("p"))
