@@ -52,3 +52,11 @@ moon test libavcodec --target wasm --no-render --filter '*HEVC dependent RExt*'
 3. 当前图片引用（CPR）：HM 16.8 无 SCC 支持，无法生成夹具；若要做，
    需要 SCC 编码器或手工构造合法码流并说明验证边界。
 4. 其他编解码器/容器缺口见 README。
+
+## 2026-10-28 补
+
+上述"CCP 与 dependent / PCM 组合、CCP 与 422 的组合"已由后续轮次覆盖：
+CCP×dependent/PCM 见 `AGENT_HANDOFF_2026-10-28_HEVC_CCP_COMBO.md`；
+dependent RExt 矩阵已补齐 4:4:4/4:2:2 × 8/10/12-bit 六组
+（`scripts/generate_hevc_dependent_rext_vectors.mbtx`，见
+PORTING_HISTORY §114）。

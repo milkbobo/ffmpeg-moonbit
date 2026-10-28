@@ -3537,8 +3537,8 @@ FFmpeg FATE `DSLICE_A/B/C_HHI_5.bit` 各前九个解码包，共 27 个显示帧
 新增六个回归测试；生成脚本为 `.mbtx`，夹具不依赖外部文件。
 
 严格 Wasm check 零警告，全量 **993/993**；`moon fmt`、脚本格式化、
-`moon info --target wasm` 已完成。tiles 与 WPP 同时启用仍拒绝；
-dependent segment 的高位深/其他色度组合待补。详见
+`moon info --target wasm` 已完成。tiles 与 WPP 同时启用、dependent
+segment 的高位深/其他色度组合已在后续轮次补齐（见 §113/§114）。详见
 `AGENT_HANDOFF_2026-10-27_HEVC_DEPENDENT.md`。
 
 ## 101. HEVC PCM、transquant bypass 与高位深 dependent segment 回归
@@ -3910,3 +3910,21 @@ tiles+WPP 流（128×128，每帧 8 slice，含 tile 内 WPP 行首起 slice）�
 `hevc_tiles_wpp_vectors_test.mbt`；再生脚本
 `scripts/generate_hevc_tiles_wpp_vectors.mbtx`（参数：`.scratch/hevc_ccp`
 与 HM 源码目录）。全量 wasm **1067/1067**。
+
+## 114. HEVC dependent RExt 色度/位深矩阵补全
+
+补齐 §100 遗留的 dependent segment 色度/位深组合：HM 16.8 在
+4:4:4/4:2:2 × 8/10/12-bit 六种组合下各生成 5 帧（64×64、CTU 32、
+`SliceSegmentMode=1/SliceSegmentArgument=1`，每 CTU 一个依赖段），
+默认滤波与 `-skip_loop_filter all` 两种模式下逐帧 MD5 均与 FFmpeg
+9.0.2 **单线程**一致（30 帧 × 2）。此前只有 444 8/12-bit 与 422
+10-bit 三组，README 的 "8/10/12-bit" 表述因此名不副实；本轮补齐后
+矩阵完整（6 组流）。
+
+夹具分配：444 8/12-bit 与 422 10-bit 保留原白盒
+`hevc_*_realdata_wbtest.mbt`；新增的 444 10-bit 与 422 8/12-bit 放
+黑盒 `hevc_dependent_rext_test.mbt` + 生成的
+`hevc_dependent_rext_vectors_test.mbt`（白盒包局部数已贴上限）。
+生成器 `scripts/generate_hevc_dependent_rext_vectors.mbtx` 现在一次
+输出六组（前三组仍写各自白盒夹具，后三组汇总黑盒文件），并修正旧
+夹具头部误写的 "persistent_rice 生成器" 署名。全量 wasm **1070/1070**。
