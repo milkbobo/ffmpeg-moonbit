@@ -4209,3 +4209,19 @@ ffprobe 正确识别 codec、采样率、声道数，5.1 输出报
 新增回归测试：extensible float 头的 tag/cbSize/valid bits/mask/GUID
 与 fact 偏移、24/32-bit PCM 载荷字节、96 kHz 纯 WAVEFORMATEX。
 全量 wasm **1091/1091**。
+
+## 131. 音频容器写入器的 ffmpeg 外部解码验证
+
+对已有音频写入器做外部互通抽查：用共享真实素材生成 MP4 MP3（13 帧
+CBR mono）、MP4 FLAC / MKV FLAC / Ogg FLAC（Ogg-FLAC fixture 9 帧
+重新封装）、MKV AAC（真实 MKV 的 45 个 AAC 包重封装），分别经
+docker ffmpeg 9.0.2 解码：
+- MP4 FLAC / MKV FLAC / Ogg FLAC 与源 Ogg 的 s32le PCM MD5 全部等于
+  `2d5bb7ccf66e68c7045c4032f947c881`（即本项目参考值），容器封装的
+  时间戳不同不影响音频内容。
+- MP4 MP3 用固定点 `mp3` 解码器输出 s16le MD5
+  `7399f7601b7f5f4652329db70d3ddbfb`，与写入器测试参考一致。
+- MKV AAC 输出与源 MKV 音轨解码 PCM 完全一致；在回归测试中补充
+  “重封装后每个包字节与源相同”的断言（比解码一致更强）。
+
+本轮未发现写入器缺陷。全量 wasm **1091/1091**。

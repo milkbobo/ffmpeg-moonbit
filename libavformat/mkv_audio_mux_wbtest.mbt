@@ -16,12 +16,14 @@ test "mkv muxer: AAC-only track round-trip" {
     codec_delay_ns=audio.codec_delay,
   ).unwrap()
   let mut count = 0
+  let src_packets : Array[Bytes] = []
   for p in src.packets {
     if p.stream_index != 1 {
       continue
     }
     let dur = if p.duration > 0UL { p.duration.to_int() } else { 23 }
     mux.write_packet(p.data, p.pts + 23L, dur).unwrap()
+    src_packets.push(p.data)
     count = count + 1
   }
   assert_eq(count, 45)
@@ -35,6 +37,11 @@ test "mkv muxer: AAC-only track round-trip" {
   assert_eq(mkv.packets.length(), 45)
   assert_eq(mkv.packets[0].pts, -23L)
   assert_eq(mkv.packets[1].pts, 0L)
+  // The remux is byte-transparent: FFmpeg decodes the muxed file to the same
+  // PCM as the source track.
+  for i, p in mkv.packets {
+    assert_eq(p.data, src_packets[i])
+  }
   let dec = @libavcodec.new_aac_decoder_from_asc(asc).unwrap()
   for p in mkv.packets {
     match dec.decode_frame(p.data) {
