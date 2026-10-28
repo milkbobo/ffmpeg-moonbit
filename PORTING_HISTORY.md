@@ -4698,3 +4698,27 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
   （本地 DASH CLI 双读的已知行为产生第 6 个重复/失参考帧）。
 
 全量 wasm **1138/1138**。
+
+## 158. ADPCM 解码（IMA WAV / MS / Yamaha）
+
+新增 `libavcodec/adpcm.mbt`，移植 `adpcm.c` 与 `adpcm_data.c` 中的
+三种块格式：
+- IMA WAV 4-bit：每声道 4 字节头（预测值 le16、step index、保留），
+  之后按 8 样本组读取 4 字节/声道；使用 `ff_adpcm_ima_qt_expand_nibble`
+  的逐位步长分解（与直接乘法的通用 IMA 公式在截断上不同）。
+- Microsoft ADPCM：1-2 声道交织布局（每块 predictor 索引 0..6、
+  idelta/sample1/sample2，自适应系数表，输出首 2 个样本来自块头）。
+- Yamaha ADPCM：无块头，步长/预测值状态跨块保持；低/高半字节分别
+  给第 0/1 声道（单声道则同一状态产生两个样本）。
+解码器按 `block_align` 切块并跨块保留状态，输出交织 S16。
+
+验证：ffmpeg 9.0.2 编码的 8 kHz 确定性 WAV 夹具（IMA/MS/Yamaha ×
+单/双声道，各 1 秒、8 个 1024 字节块）经 `av_wav_open` 解复用后逐块
+解码，PCM 与 ffmpeg s16le 参考逐字节一致（MD5 `f9bdd690…`、
+`5d822f73…`、`4bc43286…`、`e79bcc0e…`、`cbee695f…`、`c742c7fb…`）。
+构造测试拒绝非法 step index/预测器索引、过短块与不支持的参数。
+
+说明：MS/Yamaha 仅支持 1-2 声道交织布局；IMA 仅 4-bit（其余位深
+由 C 的位读取分支处理，当前夹具不可得）。
+
+全量 wasm **1141/1141**。
