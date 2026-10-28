@@ -2,8 +2,8 @@
 
 本轮在前一轮 CCP 组合验证之后，继续清理 README 的 HEVC 缺口：**tiles
 与 WPP 同时启用**。该组合仅 High Throughput Intra 4:4:4 profile 允许；
-实现后三组流共 15 帧与 HM 16.8 解码输出逐帧 MD5 一致，全量 wasm
-**1064/1064**，严格 check 零警告。
+实现后五组流共 25 帧与 HM 16.8 解码输出逐帧 MD5 一致，全量 wasm
+**1066/1066**，严格 check 零警告。
 
 ## 一、为什么参考不是 FFmpeg
 
@@ -28,6 +28,8 @@ YUV 哈希成 framemd5。README/PORTING_HISTORY 已明确记录该边界。
 | `htw8` | 8-bit 444，64×64，CTU 32，2×2 tiles，WPP，QP 22 | 5 |
 | `htw10` | 10-bit 444，同上，QP 20 | 5 |
 | `htw_wide8` | 8-bit 444，192×128，CTU 64，2×2 tiles（2+1 列 × 1+1 行非方形） | 5 |
+| `htw_dep8` | 8-bit 444，64×64，CTU 32，2×2 tiles，`SliceSegmentMode=1`（每帧 3 依赖段） | 5 |
+| `htw_dep_wide8` | 8-bit 444，128×128，CTU 32，2×2 tiles（每 tile 2×2 CTU），每帧 15 依赖段，含 tile 内 WPP 行首 | 5 |
 
 三组都来自 `encoder_intra_high_throughput_rext.cfg`，即
 `cabac_bypass_alignment_enabled_flag = 1`（HT profile 规范要求），
@@ -78,8 +80,9 @@ Git Bash 下需要 `MSYS_NO_PATHCONV=1`。
 
 ## 五、剩余缺口
 
-- HEVC：当前图片引用（CPR，需 SCC 编码器）；dependent segment 与
-  tiles+WPP 组合未验证。HT cfg 默认开启 CCP，本轮流内命中 4262 次
+- HEVC：当前图片引用（CPR，需 SCC 编码器）。dependent segment 与
+  tiles+WPP 组合已用两组 8-bit 流覆盖（依赖段 NAL 不带 entry point，
+  tile 起点重置、tile 内其余段沿用上一段结束状态）。HT cfg 默认开启 CCP，本轮流内命中 4262 次
   `cross_component_scale` 语法（3 流 15 帧），即 CCP 与 tiles+WPP 已
   一并覆盖（仅 intra）。
 - 其他见 README「主要边界」：VP9 复合预测（libvpx 不生成）、H.264 EC

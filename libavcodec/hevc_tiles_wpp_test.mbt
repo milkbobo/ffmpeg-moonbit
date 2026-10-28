@@ -62,3 +62,13 @@ test "HEVC tiles + WPP: 10-bit 4:4:4 2x2 tiles" {
 test "HEVC tiles + WPP: 8-bit wide 3x2 CTUs with non-square tiles" {
   hevc_tiles_wpp_check(htw_wide8_b64, htw_wide8_refs, 8)
 }
+
+///|
+test "HEVC tiles + WPP + dependent slice segments: 8-bit 64x64" {
+  hevc_tiles_wpp_check(htw_dep8_b64, htw_dep8_refs, 8)
+}
+
+///|
+test "HEVC tiles + WPP + dependent slice segments: 8-bit 128x128" {
+  hevc_tiles_wpp_check(htw_dep_wide8_b64, htw_dep_wide8_refs, 8)
+}

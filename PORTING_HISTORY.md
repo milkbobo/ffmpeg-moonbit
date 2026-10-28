@@ -3897,7 +3897,13 @@ HT cfg 默认 `CrossComponentPrediction: 1`，本组团流内共命中 4262 次
 `cross_component_scale` 语法，CCP 与 tiles+WPP 的组合也随本组流覆盖
 （仅 intra；HT profile 要求全 intra，inter CCP 无法用该 profile 生成）。
 
+另加两组 8-bit dependent 组合流（64×64 与 128×128；后者 2×2 tiles、
+每 tile 2×2 CTU，依赖段起点包含 tile 内 WPP 行首）：依赖段 NAL 不带
+entry point（`num_entry_point_offsets=0`），走已有的 slice-start
+继承逻辑——tile 起点重置、tile 内其余段沿用上一段结束状态，50 帧次
+仍与 HM 解码逐帧一致。
+
 夹具为黑盒：`hevc_tiles_wpp_test.mbt` + 生成的
 `hevc_tiles_wpp_vectors_test.mbt`；再生脚本
 `scripts/generate_hevc_tiles_wpp_vectors.mbtx`（参数：`.scratch/hevc_ccp`
-与 HM 源码目录）。全量 wasm **1064/1064**。
+与 HM 源码目录）。全量 wasm **1066/1066**。
