@@ -4174,3 +4174,18 @@ key 16 字节），走本项目完整读链路：`av_hls_parse` 解析 KEY →
 
 新增 `hls_aes_realdata_wbtest.mbt`（嵌入 playlist/key/加密分片）。
 全量 wasm **1087/1087**。
+
+## 129. TS 写入器 AAC ADTS 封装与 H.264/AAC 验证
+
+发现并修复 TS 写入器的 AAC 互操作缺口：stream type 0x0F 的 PES 直接
+携带原始 AAC AU 时，ffprobe 将其识别为 unknown（TS 里的 AAC 需要
+ADTS 同步头）。新增 `TsMuxer::enable_adts(sample_rate, channels)`，
+启用后 `write_audio` 自动为每个 AU 加 7 字节 ADTS 头（超 13-bit
+长度的帧回退为原始写入）。
+
+用真实 x264 AU（avcC 参数前置）与真实 AAC 帧（44.1 kHz 单声道）
+验证：ffprobe 识别 h264+aac，ffmpeg 解码视频 5 帧 framemd5 与源
+一致、音频 s16le MD5 与本项目 ADTS 输出参考完全一致。新增
+`ts_h264_aac_decode_wbtest.mbt`：demux 后视频解码对齐
+`fmp4_h264_refs`，音频剥 ADTS 头后 AAC 解码与 ADTS 参考最大差
+1 LSB。全量 wasm **1088/1088**。

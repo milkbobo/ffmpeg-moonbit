@@ -17,6 +17,10 @@ pub struct TsMuxer {
   video_stream_type : Int32
   audio_stream_type : Int32
   mut wrote_tables : Bool
+  /// Non-zero enables automatic ADTS framing of AAC access units.
+  mut adts_rate : Int32
+  mut adts_channels : Int32
+  mut adts_object_type : Int32
   /// Continuity counters indexed by PID (13-bit PID space).
   cc : FixedArray[Int32]
   out : Array[Byte]
@@ -38,6 +42,9 @@ pub fn ts_muxer_new(
     video_stream_type,
     audio_stream_type,
     wrote_tables: false,
+    adts_rate: 0,
+    adts_channels: 0,
+    adts_object_type: 2,
     cc: FixedArray::make(8192, 0),
     out: [],
   }
@@ -231,13 +238,64 @@ pub fn TsMuxer::write_video(
 
 ///|
 /// Write one audio payload (AAC ADTS or MP3 frame) with a PTS in 90 kHz units.
+
+///|
+/// Wrap AAC access units in ADTS headers (required for stream type 0x0F to
+/// be playable outside this port's demuxer). Frames that would exceed the
+/// 13-bit ADTS length are written raw, as before.
+pub fn TsMuxer::enable_adts(
+  self : TsMuxer,
+  sample_rate : Int32,
+  channels : Int32,
+  object_type~ : Int32 = 2,
+) -> Result[Unit, String] {
+  if self.audio_stream_type != 0x0F {
+    return Err("EINVAL: ADTS wrapping needs AAC stream type 0x0F")
+  }
+  match
+    @libavcodec.aac_adts_header_write(sample_rate, channels, object_type, 8) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  self.adts_rate = sample_rate
+  self.adts_channels = channels
+  self.adts_object_type = object_type
+  Ok(())
+}
+
+///|
+/// The muxer is minimal and infallible; the raw access unit is written for
+/// frames ADTS cannot express.
 pub fn TsMuxer::write_audio(
   self : TsMuxer,
   pts : Int64,
   payload : Bytes,
 ) -> Unit {
   self.ensure_tables()
-  self.pes(self.audio_pid, 0xC0, pts, payload, true, -1L)
+  let framed : Bytes = if self.adts_rate > 0 {
+    match
+      @libavcodec.aac_adts_header_write(
+        self.adts_rate,
+        self.adts_channels,
+        self.adts_object_type,
+        payload.length() + @libavcodec.av_aac_adts_header_size,
+      ) {
+      Ok(header) => {
+        let out : Array[Byte] = []
+        for b in header {
+          out.push(b)
+        }
+        for b in payload {
+          out.push(b)
+        }
+        Bytes::from_array(out)
+      }
+      Err(_) => payload
+    }
+  } else {
+    payload
+  }
+  self.pes(self.audio_pid, 0xC0, pts, framed, true, -1L)
 }
 
 ///|
