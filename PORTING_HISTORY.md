@@ -4744,3 +4744,26 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
 - 损坏的 FORM/RIFF 头被拒绝。
 
 全量 wasm **1143/1143**。
+
+## 160. CAF（Core Audio Format）ALAC/LPCM 读写
+
+新增 `caf.mbt`（解复用）与 `caf_mux.mbt`（写入）：
+- 读取 `caff` 的 `desc`/`kuki`/`pakt`/`data` 块；ALAC 支持旧式
+  `frma`+`alac` cookie 与 24 字节新式 cookie（补出 36 字节 atom）；
+  `pakt` 中包大小用 MPEG-4 descriptor varint，末包时长按
+  validFrames 截断；LPCM 支持 CAF 标志位（bit1 = 小端，与 MOV
+  相反）与 8/16/24/32-bit。
+- 写入 ALAC：`frma`+`alac` kuki、`pakt`（帧数/priming/remainder 与
+  包大小）、`data`；写入 LPCM：可选大小端（flag 2 = 小端）。
+- 修正点：CAF 的 LPCM 标志 bit1 表示小端（`(flags ^ 2)` 后才对应
+  MOV 的 big-endian 位），最初按大端解析导致 PCM 不匹配。
+
+验证：
+- ffmpeg 9.0.2 生成的 5 个 CAF 夹具（ALAC 单/双声道、LPCM
+  s16le/s16be/s24be）读取后解码/转换 PCM 与参考 MD5 一致
+  （`38fb3080…`、`509cc1b0…`、`c35b7be8…`、`998ae6d7…`、
+  `322c025b…`）；用端口的 ALAC/LPCM 写入器重封装后回读仍一致。
+- 外部：端口写出的 ALAC、s16le、s24be CAF 由 ffmpeg 识别并解码，
+  PCM MD5 与同源参考一致。
+
+全量 wasm **1145/1145**。
