@@ -140,6 +140,14 @@ fn HevcCabac::terminate(self : HevcCabac) -> Bool {
 }
 
 ///|
+/// `TDecBinCABAC::align`: restores range to 256 so the arithmetic coder
+/// degenerates into raw byte reads before bypass-coded signs
+/// (`cabac_bypass_alignment_enabled_flag`).
+fn HevcCabac::align(self : HevcCabac) -> Unit {
+  self.cc.range = 256
+}
+
+///|
 /// `ff_hevc_split_coding_unit_flag_decode`. */
 fn HevcCabac::split_coding_unit_flag(
   self : HevcCabac,

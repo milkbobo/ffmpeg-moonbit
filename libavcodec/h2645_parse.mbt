@@ -62,6 +62,9 @@ pub struct H2645Nal {
   size_bits : Int32
   /// Bytes of the escaped source consumed by this NAL.
   raw_size : Int32
+  /// RBSP positions of the removed emulation-prevention bytes (the index of
+  /// the second zero of each `00 00 03`, as in the C `skipped_bytes_pos`).
+  skipped_bytes_pos : Array[Int32]
   /// `nal_unit_type` / H.264's 5-bit type.
   nal_type : Int32
   /// H.264 `nal_ref_idc` (0 for HEVC).
@@ -86,6 +89,8 @@ pub struct RbspExtract {
   consumed : Int32
   /// Number of removed `emulation_prevention_three_byte`s.
   skipped : Int32
+  /// RBSP positions of the removed bytes (index of the second zero).
+  skipped_pos : Array[Int32]
 }
 
 ///|
@@ -108,13 +113,14 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
     i = i + 1
   }
   if first < 0 {
-    return { data: src, consumed: length, skipped: 0, }
+    return { data: src, consumed: length, skipped: 0, skipped_pos: [], }
   }
   if first_is_start_code {
     return {
       data: src.clamped_view(start=0, end=first).to_owned(),
       consumed: first,
       skipped: 0,
+      skipped_pos: [],
     }
   }
   // Unescape from the first 00 00 03; a later 00 00 01 ends the NAL (the C's
@@ -128,6 +134,7 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
     si = si + 1
   }
   let mut skipped = 0
+  let skipped_pos : Array[Int32] = []
   while si + 2 < length {
     if src[si + 2] > b'\x03' {
       out[di] = src[si]
@@ -143,10 +150,16 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
         di = di + 2
         si = si + 3
         skipped = skipped + 1
+        skipped_pos.push(di - 1)
         continue
       } else {
         // next start code
-        return { data: Bytes::from_array(out[:di]), consumed: si, skipped, }
+        return {
+          data: Bytes::from_array(out[:di]),
+          consumed: si,
+          skipped,
+          skipped_pos,
+        }
       }
     }
     out[di] = src[si]
@@ -158,7 +171,7 @@ pub fn ff_h2645_extract_rbsp(src : Bytes) -> RbspExtract {
     di = di + 1
     si = si + 1
   }
-  { data: Bytes::from_array(out[:di]), consumed: si, skipped, }
+  { data: Bytes::from_array(out[:di]), consumed: si, skipped, skipped_pos, }
 }
 
 ///|
@@ -209,6 +222,7 @@ fn parse_nal_header(
         data: b"",
         size_bits: 0,
         raw_size: 0,
+        skipped_bytes_pos: [],
         nal_type,
         ref_idc,
         temporal_id: 0,
@@ -229,6 +243,7 @@ fn parse_nal_header(
         data: b"",
         size_bits: 0,
         raw_size: 0,
+        skipped_bytes_pos: [],
         nal_type,
         ref_idc: 0,
         temporal_id,
@@ -250,7 +265,12 @@ fn h2645_is_hevc(codec : H2645Codec) -> Bool {
 ///|
 /// Turn one extracted RBSP into an `H2645Nal`, or `None` for an empty /
 /// unparsable NAL (the C skips such NALs without failing the packet).
-fn build_nal(data : Bytes, consumed : Int32, codec : H2645Codec) -> H2645Nal? {
+fn build_nal(
+  data : Bytes,
+  consumed : Int32,
+  skipped_pos : Array[Int32],
+  codec : H2645Codec,
+) -> H2645Nal? {
   let min_size = if h2645_is_hevc(codec) { 2 } else { 1 }
   let size_bits = get_bit_length(data, min_size, true)
   if data.length() <= 0 || size_bits <= 0 {
@@ -264,6 +284,7 @@ fn build_nal(data : Bytes, consumed : Int32, codec : H2645Codec) -> H2645Nal? {
         data,
         size_bits,
         raw_size: consumed,
+        skipped_bytes_pos: skipped_pos,
         nal_type: nal.nal_type,
         ref_idc: nal.ref_idc,
         temporal_id: nal.temporal_id,
@@ -320,7 +341,7 @@ fn packet_split_annexb(
     let src = buf.clamped_view(start=pos, end=buf.length()).to_owned()
     let r = ff_h2645_extract_rbsp(src)
     pos = pos + r.consumed
-    match build_nal(r.data, r.consumed, codec) {
+    match build_nal(r.data, r.consumed, r.skipped_pos, codec) {
       Some(nal) =>
         if h2645_is_hevc(codec) && nal.nuh_layer_id == 63 {
           () // C: continue, the layer is skipped
@@ -361,7 +382,7 @@ fn packet_split_nalff(
     let src = buf.clamped_view(start=pos, end=pos + nalsize).to_owned()
     let r = ff_h2645_extract_rbsp(src)
     pos = pos + r.consumed
-    match build_nal(r.data, r.consumed, codec) {
+    match build_nal(r.data, r.consumed, r.skipped_pos, codec) {
       Some(nal) =>
         if h2645_is_hevc(codec) && nal.nuh_layer_id == 63 {
           ()

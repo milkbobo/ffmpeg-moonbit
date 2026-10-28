@@ -402,11 +402,13 @@ fn hevc_decode_residual(
       let first_nz_pos = sig_idx[nb_sig - 1]
       let greater1 : Array[Int32] = Array::make(8, 0)
       let mut first_greater1 = -1
+      let mut greater1_hits = 0
       let limit = if nb_sig > 8 { 8 } else { nb_sig }
       for m in 0..<limit {
         let inc = (ctx_set << 2) + greater1_ctx
         greater1[m] = cabac.coeff_abs_greater1(c_idx, inc)
         if greater1[m] != 0 {
+          greater1_hits = greater1_hits + 1
           greater1_ctx = 0
           if first_greater1 == -1 {
             first_greater1 = m
@@ -420,9 +422,18 @@ fn hevc_decode_residual(
         !(implicit_rdpcm && transform_skip) &&
         pps.sign_data_hiding_flag != 0 &&
         last_nz_pos - first_nz_pos >= 4
+      let mut escape_present = nb_sig > 8 || greater1_hits > 1
       if first_greater1 != -1 {
-        greater1[first_greater1] = greater1[first_greater1] +
-          cabac.coeff_abs_greater2(c_idx, ctx_set)
+        let greater2 = cabac.coeff_abs_greater2(c_idx, ctx_set)
+        greater1[first_greater1] = greater1[first_greater1] + greater2
+        if greater2 != 0 {
+          escape_present = true
+        }
+      }
+      // RExt cabac_bypass_alignment: align the engine to raw byte reads
+      // before the bypass-coded signs and escape values.
+      if escape_present && sps.cabac_bypass_alignment_enabled != 0 {
+        cabac.align()
       }
       let mut sign_flags = if sign_hidden {
         cabac.coeff_sign_flags(nb_sig - 1)

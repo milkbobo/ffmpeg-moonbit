@@ -26,6 +26,7 @@ fn sd_sei_nal(msgs : Array[(Int32, Bytes)]) -> H2645Nal {
     data,
     size_bits: data.length() * 8,
     raw_size: data.length(),
+    skipped_bytes_pos: [],
     nal_type: 6,
     ref_idc: 0,
     temporal_id: 0,

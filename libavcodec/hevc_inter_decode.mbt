@@ -1146,6 +1146,21 @@ fn hevc_decode_ctb(
 }
 
 ///|
+/// Restart the arithmetic decoder at an absolute byte offset inside the NAL
+/// payload (entry-point substream start).
+fn hevc_cabac_seek(cabac : HevcCabac, offset : Int32) -> Result[Unit, String] {
+  match ff_init_cabac_decoder(cabac.cc.bytes, offset) {
+    Ok(c) => {
+      cabac.cc.low = c.low
+      cabac.cc.range = c.range
+      cabac.cc.pos = c.pos
+      Ok(())
+    }
+    Err(e) => Err(e)
+  }
+}
+
+///|
 fn hevc_decode_picture(
   dec : HevcDecoder,
   nals : Array[H2645Nal],
@@ -1176,9 +1191,6 @@ fn hevc_decode_picture(
     return Err(
       "PATCHWELCOME: only 8/10/12-bit monochrome/4:2:0/4:2:2/4:4:4 HEVC is supported",
     )
-  }
-  if pps.tiles_enabled_flag != 0 && pps.entropy_coding_sync_enabled_flag != 0 {
-    return Err("PATCHWELCOME: HEVC tiles with WPP are not supported")
   }
   if pps.pps_curr_pic_ref_enabled_flag != 0 {
     return Err(
@@ -1325,7 +1337,7 @@ fn hevc_decode_picture(
           (pps.entropy_coding_sync_enabled_flag != 0 && sps.ctb_width == 1) {
           None
         } else if pps.entropy_coding_sync_enabled_flag != 0 &&
-          h.slice_segment_address % sps.ctb_width == 0 {
+          start_ts % sps.ctb_width == 0 {
           Some((common_states.copy(), common_stat.copy()))
         } else {
           Some(
@@ -1348,49 +1360,87 @@ fn hevc_decode_picture(
     if !sh.dependent_slice_segment_flag {
       independent_start = slice_start
     }
-    // Single-thread hls_decode_entry: segment boundaries restart the
-    // arithmetic engine, tile boundaries reset probabilities, and WPP
-    // rows load the state saved after the preceding row's second CTB.
+    // HM TDecSlice: every CTU line of every tile is its own substream and
+    // is located through the slice header entry-point offsets, so no
+    // trailing-bit arithmetic is needed. A tile start resets the engine
+    // with fresh probabilities; a later CTU line of the same tile reloads
+    // the state saved after the second CTU of the previous line when the
+    // top-right CTU is in the same slice/tile.
+    // FFmpeg 9.0.2 cannot decode this combination (its single-thread path
+    // uses the tile-scan index modulo the picture CTB width), so tiles+WPP
+    // fixtures are validated against HM recon instead.
     // Tile scan also equals raster scan when tiles are disabled.
     let start_ts = pps.ctb_addr_rs_to_ts[slice_start]
+    // Entry-point sizes count escaped bytes; map them onto the unescaped
+    // RBSP the CABAC reader uses (ffmpeg hls_slice_data_wpp adjustment).
+    let data_offset = (sh.header_bits + 7) >> 3
+    let entry_prefix : Array[Int32] = [data_offset]
+    let mut entry_offset = data_offset
+    for i in 0..<sh.num_entry_point_offsets {
+      let mut startheader = entry_offset + sh.entry_point_offsets[i]
+      let mut cmpt = 0
+      for pos in nal.skipped_bytes_pos {
+        if pos >= entry_offset && pos < startheader {
+          startheader -= 1
+          cmpt += 1
+        }
+      }
+      entry_offset += sh.entry_point_offsets[i] - cmpt
+      entry_prefix.push(entry_offset)
+    }
+    let mut substream_idx = 0
     let mut ts = start_ts
     let mut more = true
     while more && ts < sps.ctb_size {
       let rs = pps.ctb_addr_ts_to_rs[ts]
+      let x_idx = rs % sps.ctb_width
+      let y_idx = rs / sps.ctb_width
       let tile_start = pps.tiles_enabled_flag != 0 &&
         ts > 0 &&
         pps.tile_id[ts] != pps.tile_id[ts - 1]
-      let row_start = pps.entropy_coding_sync_enabled_flag != 0 &&
-        rs % sps.ctb_width == 0
-      if ts > start_ts && (tile_start || row_start) {
-        if !tile_start {
-          ignore(dec_slice.cabac.terminate())
+      let tile_left = if pps.tiles_enabled_flag != 0 {
+        pps.col_bd[pps.col_idxX[x_idx]]
+      } else {
+        0
+      }
+      let line_start = pps.entropy_coding_sync_enabled_flag != 0 &&
+        x_idx == tile_left &&
+        !tile_start
+      if ts > start_ts && (tile_start || line_start) {
+        substream_idx += 1
+        if substream_idx >= entry_prefix.length() {
+          return Err("hevc: missing entry point offset")
         }
-        match dec_slice.cabac.cc.reinit() {
+        match hevc_cabac_seek(dec_slice.cabac, entry_prefix[substream_idx]) {
           Ok(_) => ()
           Err(e) => return Err(e)
         }
-        let states = if tile_start || sps.ctb_width == 1 {
-          ff_hevc_init_cabac_states(
-            dec_slice.slice_qp,
-            sh.slice_type,
-            sh.cabac_init_flag,
-          )
-        } else {
-          common_states
-        }
+        let states = ff_hevc_init_cabac_states(
+          dec_slice.slice_qp,
+          sh.slice_type,
+          sh.cabac_init_flag,
+        )
         for k in 0..<dec_slice.cabac.states.length() {
           dec_slice.cabac.states[k] = states[k]
         }
         for k in 0..<4 {
-          dec_slice.cabac.stat_coeff[k] = if tile_start || sps.ctb_width == 1 {
-            0
-          } else {
-            common_stat[k]
-          }
+          dec_slice.cabac.stat_coeff[k] = 0
         }
-        if row_start {
-          dec_slice.restart_wpp_row()
+        if line_start {
+          dec_slice.first_qp_group = true
+          let tr_rs = rs - sps.ctb_width + 1
+          let tr_same = y_idx > 0 &&
+            x_idx + 1 < sps.ctb_width &&
+            pps.tile_id[pps.ctb_addr_rs_to_ts[tr_rs]] == pps.tile_id[ts] &&
+            dec_slice.ctb_slice_idx[tr_rs] == dec_slice.slice_idx
+          if tr_same {
+            for k in 0..<dec_slice.cabac.states.length() {
+              dec_slice.cabac.states[k] = common_states[k]
+            }
+            for k in 0..<4 {
+              dec_slice.cabac.stat_coeff[k] = common_stat[k]
+            }
+          }
         }
         if tile_start {
           dec_slice.first_qp_group = true
@@ -1403,7 +1453,8 @@ fn hevc_decode_picture(
         Ok(v) => v
         Err(e) => return Err(e)
       }
-      if pps.entropy_coding_sync_enabled_flag != 0 && rs % sps.ctb_width == 1 {
+      // Store the probabilities of the second CTU in a tile CTU line.
+      if pps.entropy_coding_sync_enabled_flag != 0 && x_idx == tile_left + 1 {
         common_states = dec_slice.cabac.states.copy()
         common_stat = dec_slice.cabac.stat_coeff.copy()
       }

@@ -3855,3 +3855,45 @@ transquant bypass（无损），本组每帧 4 个 32×32 CTU 全部走 PCM；
 与 HM 源码目录）。为此新增 pub 访问器 `HevcDecodedFrame::poc` 与
 `HevcDecodedFrame::yuvp`（黑盒测试取 POC 排序与打包平面，先例
 `H264Frame::yuvp`）。全量 wasm **1061/1061**。
+
+## 113. HEVC tiles + WPP 同时启用与 cabac_bypass_alignment
+
+补齐 README 最后一个 HEVC 外部受阻项之外的缺口：tiles 与 WPP 同时启用。
+该组合仅 High Throughput（Intra 4:4:4）profile 允许，HM 16.8 三组流
+（64×64、CTU 32、2×2 tiles 8/10-bit；192×128、CTU 64、2×2 tiles
+得 2+1 列 × 1+1 行非方形 tile 8-bit）共 15 帧，与 HM 解码输出逐帧
+MD5 一致。
+
+**FFmpeg 9.0.2 无法解码该组合**：单线程 `hls_decode_entry` 的
+`ff_hevc_cabac_init` 用 tile-scan 索引对 picture CTB 宽度取模来决定
+WPP 行起点，tiles 下该条件与真实 tile 行边界无关；实测 FFmpeg 解码
+HM 重建 PSNR 约 41 dB 的流只得到约 10 dB 的垃圾。多线程 WPP 路径也
+只在 `num_tile_rows == 1 && num_tile_columns == 1` 时启用。因此本组夹具
+以 HM 解码输出为参考（先验证 HM 解码 == HM 重建），FFmpeg 仅作为原始
+YUV 的 MD5 哈希工具。
+
+实现要点：
+
+1. **子流定位**：按 `TDecSlice::decompressSlice` 用 slice header 的
+   entry point 偏移定位每个子流，不做 terminate/字节推算。entry point
+   长度按 EBSP 字节计数，而 `H2645NAL.data` 是去防竞争字节后的 RBSP；
+   `RbspExtract`/`H2645Nal` 新增 `skipped_pos`，照搬 FFmpeg
+   `hls_slice_data_wpp` 的 `cmpt` 调整把偏移映射回 RBSP 位置。此改动
+   同时把 WPP-only/tiles-only/dependent 的旧逐字节路径替换为偏移定位，
+   全量回归通过。
+2. **上下文**：每个 tile 起点重置概率与 persistent Rice 统计；tile 内
+   后续 CTU 行仅在上右 CTU 与当前 CTU 同 slice 且同 tile 时装载上一行
+   第二个 CTU 保存的上下文，否则保持新初始化（HM `TDecSlice` 同款条件）。
+   首行 CTU 行（`x == tile_left`）置 `first_qp_group`。
+3. **cabac_bypass_alignment**（RExt SPS 标志，HT profile 规范要求为 1）：
+   `TDecBinCABAC::align` 把 range 置 256，使符号与
+   `coeff_abs_level_remaining` 退化为原始字节读取；escape 判定按 HM
+   补齐为「第二个及以上 greater1 命中、gt2 为 1、nCoeff>8」三者之一。
+   FFmpeg 9.0.2 对该标志只打 "not yet implemented" 警告，未实现语义。
+4. 邻域可用性沿用按 tile 的 `end_of_tiles_x`（`hls_decode_neighbour` 在
+   WPP 分支把上限设成 picture 宽度是 FFmpeg 该组合失效的一部分，不复刻）。
+
+夹具为黑盒：`hevc_tiles_wpp_test.mbt` + 生成的
+`hevc_tiles_wpp_vectors_test.mbt`；再生脚本
+`scripts/generate_hevc_tiles_wpp_vectors.mbtx`（参数：`.scratch/hevc_ccp`
+与 HM 源码目录）。全量 wasm **1064/1064**。

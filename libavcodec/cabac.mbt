@@ -111,16 +111,6 @@ pub fn ff_init_cabac_decoder(
 }
 
 ///|
-/// `skip_bytes(c, 0)` / `cabac_reinit`: rewind the pending guard bits and
-/// reinitialise the arithmetic decoder at the resulting byte position.
-fn CabacContext::reinit(self : CabacContext) -> Result[Unit, String] {
-  match self.skip_bytes(0) {
-    Ok(_) => Ok(())
-    Err(e) => Err(e)
-  }
-}
-
-///|
 /// FFmpeg skip_bytes: expose the byte-aligned PCM payload, then restart the
 /// arithmetic engine after it. Probability states belong to the caller.
 fn CabacContext::skip_bytes(

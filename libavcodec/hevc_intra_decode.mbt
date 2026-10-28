@@ -214,19 +214,6 @@ fn HevcIntraDecoder::start_slice(
 }
 
 ///|
-/// Start a WPP CTB row: QP prediction restarts from the slice QP and the
-/// neighbour state is recomputed (C `ff_hevc_cabac_init` row reset). The
-/// CABAC context itself is rewound and reloaded by the caller.
-fn HevcIntraDecoder::restart_wpp_row(self : HevcIntraDecoder) -> Unit {
-  self.first_qp_group = true
-  self.qp_y = self.slice_qp
-  self.qpy_pred = self.slice_qp
-  self.cu_qp_delta = 0
-  self.is_cu_qp_delta_coded = false
-  self.na = hevc_neighbour_avail()
-}
-
-///|
 /// `ff_hevc_set_neighbour_available`. */
 fn HevcIntraDecoder::set_neighbour_available(
   self : HevcIntraDecoder,
