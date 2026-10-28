@@ -4530,3 +4530,14 @@ Period 内可输出多个 AdaptationSet/Representation。
   MD5 与 dav1d 1.5.1 framemd5 完全一致。
 
 新增 `libavcodec/av1_intrabc_realdata_test.mbt`。全量 wasm **1123/1123**。
+
+## 150. AV1 intrabc 的 10-bit 与多 tile 验证
+
+在 §149 基础上用 SVT-AV1 生成更多组合：10-bit 4:2:0（64x48）、
+128x96（4 SB、默认单 tile）、128x96 + `tile-columns=1:tile-rows=1`
+（2×2 tiles）、以及 10-bit + 2×2 tiles。端口解码 4 组 16 帧 MD5 与
+dav1d framemd5 全部一致，确认 DV 裁剪的 tile 边界处理、
+refmvs 在 10-bit 下的 MV 精度与当前帧 bilinear 预测在色度/高位深下
+均正确。永久回归扩展到 8 组 32 帧（8/10-bit、64x48/128x96、tiles）。
+
+全量 wasm **1123/1123**。
