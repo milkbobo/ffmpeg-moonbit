@@ -4257,3 +4257,12 @@ MKV HEVC fixture（64x64 Rext 4:4:4，5 个 AU + hvcC）：
 
 新增测试并入 `mp4_av1_mux_wbtest.mbt` / `mp4_vp9_mux_wbtest.mbt`。
 全量 wasm **1095/1095**。
+
+## 134. WebM/Matroska AV1 写入器的真实样本验证
+
+复用 §133 的 libaom-av1 夹具（av1C 16 字节 + 5 个 temporal unit）写入
+WebM AV1：回读 `V_AV1`、CodecPrivate、5 个包字节一致，端口 AV1 解码
+`packed()` MD5 与参考一致。外部 ffmpeg 9.0.2 解码该 WebM 得到 5 帧
+framemd5，与同一组参考完全相同（av1/yuv420p）。
+
+新增测试并入 `webm_av1_mux_wbtest.mbt`。全量 wasm **1096/1096**。

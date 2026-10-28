@@ -52,3 +52,35 @@ test "webm muxer: invalid DocType is rejected (AV1)" {
     Err(_) => ()
   }
 }
+
+///|
+test "webm muxer: real AV1 samples decode round-trip" {
+  let av1c = @libavutil.av_base64_decode(mp4_av1_real_av1c_b64, 256).unwrap()
+  let frames : Array[Bytes] = []
+  for f in mp4_av1_real_frames_b64 {
+    frames.push(@libavutil.av_base64_decode(f, 4096).unwrap())
+  }
+  assert_eq(frames.length(), 5)
+  let mux = webm_av1_muxer_new(64, 48, av1c).unwrap()
+  for i, frame in frames {
+    mux.write_packet(frame, duration=100, keyframe=i == 0).unwrap()
+  }
+  let bytes = mux.finish()
+  let mkv = av_matroska_open(bytes).unwrap()
+  assert_true(mkv.is_webm)
+  assert_eq(mkv.tracks.length(), 1)
+  let track = mkv.tracks[0]
+  assert_eq(track.codec_id.unwrap(), "V_AV1")
+  assert_eq(track.codec_priv.unwrap(), av1c)
+  assert_eq(mkv.packets.length(), 5)
+  let dec = @libavcodec.Av1Decoder::new()
+  for i, packet in mkv.packets {
+    assert_eq(packet.data, frames[i])
+    let frame = match dec.decode_packet(packet.data) {
+      Ok(Some(p)) => p
+      Ok(None) => fail("av1 frame \{i} not shown")
+      Err(e) => fail("av1 frame \{i}: \{e}")
+    }
+    assert_eq(mp4_av1_real_md5(frame.packed()), mp4_av1_real_refs[i])
+  }
+}
