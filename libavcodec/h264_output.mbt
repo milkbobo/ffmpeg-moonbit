@@ -1,7 +1,7 @@
 ///|
 /// Order a finite decoded sequence without mixing POC resets at IDR/MMCO5.
 /// The decode-order APIs remain useful for callers doing their own timing.
-fn h264_display_order(frames : Array[H264Frame]) -> Array[H264Frame] {
+fn h264_display_order_impl(frames : Array[H264Frame]) -> Array[H264Frame] {
   let out : Array[H264Frame] = []
   let pending : Array[H264Frame] = []
   let mut epoch = -1
@@ -27,6 +27,12 @@ fn h264_display_order(frames : Array[H264Frame]) -> Array[H264Frame] {
     out.push(delayed)
   }
   out
+}
+
+///|
+/// Re-exported for blackbox EC regression tests.
+pub fn h264_display_order(frames : Array[H264Frame]) -> Array[H264Frame] {
+  h264_display_order_impl(frames)
 }
 
 ///|
