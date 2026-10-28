@@ -4013,3 +4013,28 @@ demux 出的 STREAMINFO/元数据/帧再经本 muxer 写出，重新 demux 后�
 仍一致。外部验证：本 muxer 输出的 `.oga` 交 ffprobe（flac 24-bit/
 44.1 kHz/mono）与 ffmpeg 解码，PCM MD5 与参考完全相同。
 全量 wasm **1074/1074**。
+
+## 119. MKV 单轨 AAC / FLAC 写入器
+
+补齐 Matroska 音频写入：`libavformat/mkv_audio_mux.mbt` 提供
+`MkvAacMuxer`（`A_AAC`，CodecPrivate=AudioSpecificConfig）与
+`MkvFlacMuxer`（`A_FLAC`，CodecPrivate=`fLaC`+STREAMINFO/元数据），
+单 Cluster、时间戳毫秒。
+
+两个实现细节：
+
+- **Cluster Timecode 是 EBML_UINT**（FFmpeg `matroskadec` 同语义），
+  不能写负值；AAC priming 的负 PTS 用 **CodecDelay（0x56AA）** 表达：
+  remux 时容器时间戳整体 +delay，再把 `codec_delay_ns` 写进
+  TrackEntry，解复用端减回去。ffmpeg 解码本 muxer 的输出因此与源
+  PCM 完全一致（s16le MD5 相同）。
+- **EBML 多字节 id 必须写对 id 长度**：BitDepth 的 id `0x6264` 初版
+  按 1 字节写，尾部只剩 `0x64`，解析端把后续 size 字节并进 id 得到
+  `0x6481`，Audio 元素越界触发 EBML level-check EINVAL；段遍历 resync
+  后重读 Tracks，表现为“同一条轨出现两次”。修正为 2 字节 id。
+
+验证：真实 MKV（HEVC+AAC）的 45 个 AAC 包 remux 成单轨 MKV 后，
+解复用 PTS 恢复为 -23/0/23…，逐包解码成功，ffmpeg 解码 PCM 与源一致；
+Ogg-FLAC 夹具的 9 帧 remux 成 `A_FLAC` MKV 后，解复用 + 组装原生
+`fLaC` 解码 PCM MD5 与参考一致，ffprobe 识别 flac/44.1k/mono/24-bit，
+ffmpeg 解码 MD5 相同。全量 wasm **1076/1076**。
