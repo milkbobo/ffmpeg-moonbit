@@ -4106,3 +4106,18 @@ PCM），把外部验证固化为回归。全量 wasm **1079/1079**。
   播放，5 帧 framemd5 与参考完全一致。
 
 全量 wasm **1081/1081**。
+
+## 124. DASH 真实 fMP4 链路验证
+
+用与 HLS 轮相同的 x264 fMP4 夹具验证 DASH 全链路：本项目
+`dash_write_segment_template_mpd` 生成 SegmentTemplate MPD（timescale
+90000、duration 45000、startNumber 1、`seg-$Number$.m4s`），
+`av_dash_parse` 展开出 `init.mp4` + `seg-1.m4s`，`DashSegmentReader`
+经 `MediaFetch` 回调取回初始化+媒体段并拼接，`av_mov_open` 读回 5 个
+样本，再转 Annex B 用本移植 H.264 解码，5 帧 MD5 与 FFmpeg 单线程
+一致（`dash_h264_realdata_wbtest.mbt`）。
+
+外部验证：init/seg-1 与 MPD 交 ffmpeg 9.0.2 播放，5 个不同帧的
+framemd5 与参考完全一致。注意 ffmpeg CLI 对本地 DASH 会把探测与
+播放各读一遍（ffmpeg 自己 `-f dash` 生成的 MPD 同样解出 10 帧），
+比对时按去重后的 5 帧看。全量 wasm **1082/1082**。
