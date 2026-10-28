@@ -4434,3 +4434,22 @@ libaom 测试流的各帧 grain 参数相同，引用继承后的输出与原 up
   s32le MD5 与 ffmpeg 逐一相同（eac0717f…、8d5e77ce…、2883edaa…）。
 
 新增 `libavcodec/flac_33bps_test.mbt`。全量 wasm **1117/1117**。
+
+## 145. AAC PS 编码负载组合扩充
+
+重写 `scripts/generate_aac_ps_tests.py` 的 `payload_cases`（保持 8 帧，
+夹具体积不变），新增此前未覆盖的语法组合：
+- header 复用（payload 0 位），沿用上一帧的 IID/ICC/扩展开关；
+- `enable_iid=0` / `enable_icc=0`（FFmpeg 会清零对应参数数组）；
+- fixed grid 0/1/2/4 包络（含 0 包络 + 跨帧 fake envelope 补齐）；
+- 变量网格 4 包络且末边界 29 触发补包络；
+- 扩展块开关切换（header 关扩展、扩展 id 0 关闭 IPD/OPD、开启 IPD/OPD）；
+- 10/20/34 频带与量化/非量化 IID、ICC mode 交叉。
+
+用 docker `vpxdev-img` 重建插桩 aacps + payload harness，生成新的
+`payload_psbin` 与 HOUT/ROUT/LBUF/DEC/H 参考；驱动断言改为按 case
+表校验 num_env/is34bands/nr_* 频带数。端口无需改码即全部通过：
+LBUF/DEC/H 最大差 5.4e-7，65536 个 QMF 输出最大差 1.5e-6（与既有容差
+同量级）。syntax/pcm 测试同步按生成器格式重排（数据不变）。
+
+全量 wasm **1117/1117**。

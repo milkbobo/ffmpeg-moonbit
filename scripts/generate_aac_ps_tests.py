@@ -267,7 +267,8 @@ def gen_dsp():
 
 
 def payload_cases(nframes=8):
-    """Encode reproducible legal PS headers and delta-coded parameter rows."""
+    """Encode reproducible legal PS payloads covering header reuse, disabled
+    IID/ICC tools, fixed/variable grids and the extension switch."""
     _, tabs, offsets, _, _ = extract_ps_tables.parse_psdata()
     codes = []
     for tab, offset in zip(tabs, offsets):
@@ -277,36 +278,57 @@ def payload_cases(nframes=8):
     rng = random.Random(20261027)
     payloads = []
     previous = {}
+    # (header_present, enable_iid, iid_mode, enable_icc, icc_mode,
+    #  enable_ext, frame_class, num_env_or_fixed_index, last_border_29)
+    cases = [
+        (1, 1, 2, 0, 0, 0, 1, 2, False),  # full header, ICC disabled
+        (0, 0, 0, 0, 0, 0, 0, 4, False),  # header reuse, fixed grid, 4 envs
+        (1, 0, 0, 1, 5, 0, 1, 3, False),  # IID disabled, ICC 34 quantized
+        (0, 0, 0, 0, 0, 0, 0, 2, False),  # reuse, fixed grid, 2 envs
+        (1, 1, 3, 1, 4, 1, 1, 1, False),  # 10-band quantized IID, IPD/OPD
+        (0, 0, 0, 0, 0, 0, 1, 4, True),   # reuse, final-border envelope append
+        (1, 1, 2, 1, 2, 1, 0, 0, False),  # 34-band non-quantized, fixed 0 env
+        (1, 1, 4, 1, 5, 0, 1, 3, False),  # 20-band quantized, no extension
+    ]
+    state = {"eiid": 0, "iid_mode": 0, "iquant": False,
+             "eicc": 0, "icc_mode": 0, "eext": 0}
     for frame in range(nframes):
-        case = frame % 8
-        is34 = case not in (3, 6)
-        quant = frame % 2
-        low_resolution_iid = case in (2, 5, 6)
-        iid_mode = (0 if low_resolution_iid else (2 if is34 else 1)) + 3 * quant
-        icc_mode = (2 if is34 and case != 1 else 1) + 3 * ((frame // 2) % 2)
-        iid_count = 10 if low_resolution_iid else (34 if is34 else 20)
-        icc_count = 34 if is34 and case != 1 else 20
-        phase_count = 5 if low_resolution_iid else (17 if is34 else 11)
-        envs = frame % 4 + 1
-        header = "11" + format(iid_mode, "03b") + "1" + format(icc_mode, "03b") + "1"
-        if case == 4:
-            header += "0" + "01"  # fixed grid, one envelope
+        (present, eiid, iid_mode, eicc, icc_mode, eext, cls, env_arg,
+         last29) = cases[frame % 8]
+        if present:
+            state.update(eiid=eiid, iid_mode=iid_mode, iquant=iid_mode > 2,
+                         eicc=eicc, icc_mode=icc_mode, eext=eext)
+            header = "1"
+            header += ("1" + format(iid_mode, "03b")) if eiid else "0"
+            header += ("1" + format(icc_mode, "03b")) if eicc else "0"
+            header += "1" if eext else "0"
         else:
-            header += "1" + format(envs - 1, "02b")
-            for e in range(envs):
-                border = 32 * (e + 1) // envs - 1
-                if case == 7 and e == envs - 1:
+            header = "0"
+        iid_count = [10, 20, 34, 10, 20, 34][state["iid_mode"]] if state["eiid"] else 0
+        icc_count = [10, 20, 34, 10, 20, 34][state["icc_mode"]] if state["eicc"] else 0
+        phase_count = [5, 11, 17, 5, 11, 17][state["iid_mode"]] if state["eiid"] else 0
+        if cls == 0:
+            fixed_idx = [0, 1, 2, 4].index(env_arg)
+            header += "0" + format(fixed_idx, "02b")
+            num_env = [0, 1, 2, 4][fixed_idx]
+        else:
+            num_env = env_arg
+            header += "1" + format(num_env - 1, "02b")
+            for e in range(num_env):
+                border = 32 * (e + 1) // num_env - 1
+                if last29 and e == num_env - 1:
                     border = 29  # decoder appends a final envelope
                 header += format(border, "05b")
 
         def rows(kind, bands):
             prev = previous.get(kind, [0] * bands)
             result = []
-            for e in range(envs):
+            for e in range(num_env):
                 dt = e % 2 if e else int(frame % 3 == 1 and len(prev) == bands)
                 vals = [rng.randrange(-3, 4) if kind == "iid" else rng.randrange(8)
                         for _ in range(bands)]
-                table = ({"iid": (1 if quant else 3) if dt else (0 if quant else 2),
+                table = ({"iid": (1 if state["iquant"] else 3) if dt else
+                          (0 if state["iquant"] else 2),
                           "icc": 5 if dt else 4,
                           "ipd": 7 if dt else 6,
                           "opd": 9 if dt else 8})[kind]
@@ -323,21 +345,31 @@ def payload_cases(nframes=8):
             previous[kind] = prev
             return result
 
-        header += "".join(rows("iid", iid_count)) + "".join(rows("icc", icc_count))
-        if case == 4:
-            extension = "0000"  # extension id, disabled phase, reserved bit
-            previous.pop("ipd", None)
-            previous.pop("opd", None)
+        if state["eiid"]:
+            header += "".join(rows("iid", iid_count))
         else:
-            ipd = rows("ipd", phase_count)
-            opd = rows("opd", phase_count)
-            extension = "001" + "".join(a + b for a, b in zip(ipd, opd)) + "0"
-        extension += "0" * (-len(extension) % 8)
-        size = len(extension) // 8
-        header += format(min(size, 15), "04b")
-        if size >= 15:
-            header += format(size - 15, "08b")
-        payloads.append(header + extension)
+            previous["iid"] = [0] * 34
+        if state["eicc"]:
+            header += "".join(rows("icc", icc_count))
+        else:
+            previous["icc"] = [0] * 34
+        if state["eext"]:
+            if state["eiid"] and state["iquant"]:
+                ipd = rows("ipd", phase_count)
+                opd = rows("opd", phase_count)
+                extension = "001" + "".join(a + b for a, b in zip(ipd, opd)) + "0"
+            else:
+                extension = "0000"  # extension id, disabled phase, reserved bit
+                previous.pop("ipd", None)
+                previous.pop("opd", None)
+            extension += "0" * (-len(extension) % 8)
+            size = len(extension) // 8
+            header += format(min(size, 15), "04b")
+            if size >= 15:
+                header += format(size - 15, "08b")
+            payloads.append(header + extension)
+        else:
+            payloads.append(header)
     return payloads
 
 
@@ -496,17 +528,22 @@ test "PS encoded payload DSP sequences vs FFmpeg C" {
     assert_true(ps_apply.common.start)
     assert_eq(consumed, bits_len)
     assert_true(ps.common.start)
-    assert_eq(ps.common.enable_ipdopd, case != 4)
-    assert_eq(ps.common.is34bands, case != 3 && case != 6)
-    assert_eq(ps.common.num_env, frame % 4 + 1 + (if case == 7 { 1 } else { 0 }))
-    if case == 2 || case == 5 || case == 6 {
-      assert_eq(ps.common.nr_iid_par, 10)
-      assert_eq(ps.common.nr_ipdopd_par, 5)
-    }
-    if case == 1 {
-      assert_eq(ps.common.nr_iid_par, 34)
-      assert_eq(ps.common.nr_icc_par, 20)
-    }
+    // Expectations for payload_cases(): header reuse, tool switches and the
+    // fixed-grid/fake-envelope paths.
+    let exp_nenv : Array[Int32] = [2, 4, 3, 2, 1, 5, 1, 3]
+    let exp_iid : Array[Int32] = [34, 34, 34, 34, 10, 10, 34, 20]
+    let exp_icc : Array[Int32] = [0, 0, 34, 34, 20, 20, 34, 34]
+    let exp_ipdopd : Array[Int32] = [17, 17, 17, 17, 5, 5, 17, 11]
+    let exp_34 : Array[Bool] = [true, true, true, true, false, false, true, true]
+    let exp_ipdopd_on : Array[Bool] = [
+      false, false, false, false, true, true, false, false,
+    ]
+    assert_eq(ps.common.is34bands, exp_34[case])
+    assert_eq(ps.common.enable_ipdopd, exp_ipdopd_on[case])
+    assert_eq(ps.common.num_env, exp_nenv[case])
+    assert_eq(ps.common.nr_iid_par, exp_iid[case])
+    assert_eq(ps.common.nr_icc_par, exp_icc[case])
+    assert_eq(ps.common.nr_ipdopd_par, exp_ipdopd[case])
     for p in 0..<2 {
       for t in 0..<38 {
         for k in 0..<64 {
