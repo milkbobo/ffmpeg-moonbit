@@ -175,6 +175,7 @@ fn g726_mult(f1 : G726Float11, f2 : G726Float11) -> Int32 {
 /// G.726 decoder with persistent predictor/quantizer state.
 pub struct G726Decoder {
   code_size : Int32
+  little_endian : Bool
   iquant : FixedArray[Int32]
   quant : FixedArray[Int32]
   w : FixedArray[Int32]
@@ -198,7 +199,10 @@ pub struct G726Decoder {
 ///|
 /// Create a decoder for `code_size` bits per sample (2/3/4/5, i.e.
 /// 16/24/32/40 kbit/s at 8 kHz).
-pub fn g726_decoder_new(code_size : Int32) -> Result[G726Decoder, String] {
+pub fn g726_decoder_new(
+  code_size : Int32,
+  little_endian~ : Bool = false,
+) -> Result[G726Decoder, String] {
   if code_size < 2 || code_size > 5 {
     return Err("g726: invalid code size")
   }
@@ -227,6 +231,7 @@ pub fn g726_decoder_new(code_size : Int32) -> Result[G726Decoder, String] {
   }
   Ok({
     code_size,
+    little_endian,
     iquant,
     quant,
     w,
@@ -333,16 +338,25 @@ fn G726Decoder::step(self : G726Decoder, code : Int32) -> Int32 {
 }
 
 ///|
-/// Decode a packet of MSB-first packed G.726 codewords.
+/// Decode a packet of G.726 codewords. The default packing is MSB-first;
+/// `little_endian` selects the `g726le`/AU layout (first bit is the LSB).
 pub fn G726Decoder::decode(self : G726Decoder, data : Bytes) -> Array[Int32] {
   let out : Array[Int32] = []
   let total_bits = data.length() * 8
   let mut bitpos = 0
   while bitpos + self.code_size <= total_bits {
     let mut code = 0
-    for _ in 0..<self.code_size {
-      let bit = (data[bitpos / 8].to_int() >> (7 - bitpos % 8)) & 1
-      code = (code << 1) | bit
+    for i = 0; i < self.code_size; i = i + 1 {
+      let bit = if self.little_endian {
+        (data[bitpos / 8].to_int() >> (bitpos % 8)) & 1
+      } else {
+        (data[bitpos / 8].to_int() >> (7 - bitpos % 8)) & 1
+      }
+      if self.little_endian {
+        code = code | (bit << i)
+      } else {
+        code = (code << 1) | bit
+      }
       bitpos = bitpos + 1
     }
     out.push(self.step(code))

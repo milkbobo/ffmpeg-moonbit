@@ -4872,3 +4872,21 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   s16le 参考一致（`609afae1…`、`2db50b2d…`）。
 
 全量 wasm **1153/1153**。
+
+## 166. Sun AU 读写与 G.726LE 解码
+
+- 新增 `au.mbt`（解复用）与 `au_mux.mbt`（写入）：`.snd` 24 字节
+  头（header size/data size/codec tag/采样率/声道，未知大小 0xFFFFFFFF
+  按剩余长度处理、跳过 annotation），映射 µ-law(1)、s8(2)、
+  s16be(3)、s24be(4)、s32be(5)、f32be(6)、f64be(7)、G.726LE
+  (23/25/26/'7262' 分别 4/3/5/2-bit) 与 A-law(27)；写入 8/16/24/32-bit
+  大端 PCM。
+- `g726.mbt` 新增 `little_endian` 选项：AU/`g726le` 使用
+  `get_bits_le` 的 LSB-first 码字组装（WAV 仍为 MSB-first）。
+- 回归 `au_realdata_wbtest.mbt`：ffmpeg 生成的 s16/s32/µ-law/A-law/
+  G.726LE AU 夹具解码 PCM MD5 与参考一致（`998ae6d7…`、`b7fc09c5…`、
+  `ce3a9326…`、`4d9e1303…`、`a0536288…`）；PCM 写回后回读字节与
+  原数据一致。
+- 外部：端口写出的 s16/s32 AU 经 ffmpeg 9.0.2 解码，MD5 与参考一致。
+
+全量 wasm **1155/1155**。
