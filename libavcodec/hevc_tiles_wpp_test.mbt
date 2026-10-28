@@ -72,3 +72,8 @@ test "HEVC tiles + WPP + dependent slice segments: 8-bit 64x64" {
 test "HEVC tiles + WPP + dependent slice segments: 8-bit 128x128" {
   hevc_tiles_wpp_check(htw_dep_wide8_b64, htw_dep_wide8_refs, 8)
 }
+
+///|
+test "HEVC tiles + WPP + multiple independent slices: 8-bit 128x128" {
+  hevc_tiles_wpp_check(htw_slices8_b64, htw_slices8_refs, 8)
+}

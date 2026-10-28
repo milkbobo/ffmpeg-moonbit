@@ -2,8 +2,8 @@
 
 本轮在前一轮 CCP 组合验证之后，继续清理 README 的 HEVC 缺口：**tiles
 与 WPP 同时启用**。该组合仅 High Throughput Intra 4:4:4 profile 允许；
-实现后五组流共 25 帧与 HM 16.8 解码输出逐帧 MD5 一致，全量 wasm
-**1066/1066**，严格 check 零警告。
+实现后六组流共 30 帧与 HM 16.8 解码输出逐帧 MD5 一致，全量 wasm
+**1067/1067**，严格 check 零警告。
 
 ## 一、为什么参考不是 FFmpeg
 
@@ -30,6 +30,7 @@ YUV 哈希成 framemd5。README/PORTING_HISTORY 已明确记录该边界。
 | `htw_wide8` | 8-bit 444，192×128，CTU 64，2×2 tiles（2+1 列 × 1+1 行非方形） | 5 |
 | `htw_dep8` | 8-bit 444，64×64，CTU 32，2×2 tiles，`SliceSegmentMode=1`（每帧 3 依赖段） | 5 |
 | `htw_dep_wide8` | 8-bit 444，128×128，CTU 32，2×2 tiles（每 tile 2×2 CTU），每帧 15 依赖段，含 tile 内 WPP 行首 | 5 |
+| `htw_slices8` | 8-bit 444，128×128，同 tile 布局，`SliceMode=1 SliceArgument=2`（每帧 8 个独立 slice，含 tile 内 WPP 行首起 slice） | 5 |
 
 三组都来自 `encoder_intra_high_throughput_rext.cfg`，即
 `cabac_bypass_alignment_enabled_flag = 1`（HT profile 规范要求），

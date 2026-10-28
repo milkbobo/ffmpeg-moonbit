@@ -3901,9 +3901,12 @@ HT cfg 默认 `CrossComponentPrediction: 1`，本组团流内共命中 4262 次
 每 tile 2×2 CTU，依赖段起点包含 tile 内 WPP 行首）：依赖段 NAL 不带
 entry point（`num_entry_point_offsets=0`），走已有的 slice-start
 继承逻辑——tile 起点重置、tile 内其余段沿用上一段结束状态，50 帧次
-仍与 HM 解码逐帧一致。
+仍与 HM 解码逐帧一致。另加一组"每 2 CTU 一个独立 slice"的
+tiles+WPP 流（128×128，每帧 8 slice，含 tile 内 WPP 行首起 slice）：
+独立 slice 起点重置概率，slice 内 WPP 行首装载同步上下文，5 帧
+同样与 HM 一致。
 
 夹具为黑盒：`hevc_tiles_wpp_test.mbt` + 生成的
 `hevc_tiles_wpp_vectors_test.mbt`；再生脚本
 `scripts/generate_hevc_tiles_wpp_vectors.mbtx`（参数：`.scratch/hevc_ccp`
-与 HM 源码目录）。全量 wasm **1066/1066**。
+与 HM 源码目录）。全量 wasm **1067/1067**。

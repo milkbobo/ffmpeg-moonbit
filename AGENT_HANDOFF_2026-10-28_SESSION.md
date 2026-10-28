@@ -112,7 +112,9 @@ libopus 的功能），缺口定义不成立。
   VP9 参考缩放、H.264 P 帧 EC 第二源。
 - 剩余缺口全部为外部受阻，见 README"主要边界"列：
   - VP9 复合预测（B 帧）/ 变体：libvpx 编码器无法生成（alt-ref 探针证实）
-  - HEVC tiles+WPP 同时启用 / 当前图片引用（CPR）：HM 拒绝 / 需 SCC 编码器
+  - HEVC tiles+WPP 已在后续轮次接通（HT profile + HM 参考，见
+    AGENT_HANDOFF_2026-10-28_HEVC_TILES_WPP.md）；当前图片引用（SCC）
+    仍缺：FFmpeg 9.0.2 native 解码器对 SCC profile 报 PATCHWELCOME
   - H.264 EC 高位深/444/422：FFmpeg ER 硬编码 420+uint8（本文§三）
   - AAC USAC：项目边界明确不做
   - AV1 film grain / intrabc：项目边界明确不做
