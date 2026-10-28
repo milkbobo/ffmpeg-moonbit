@@ -108,3 +108,157 @@ pub fn dash_write_segment_template_mpd(
   sb.write_string("</MPD>\n")
   sb.to_string()
 }
+
+///|
+/// One `SegmentURL` of a SegmentList representation. Empty `media` means the
+/// segment lives in the Representation BaseURL (single-file layout).
+pub struct DashListSegment {
+  media : String
+  media_range : String
+}
+
+///|
+pub fn DashListSegment::new(
+  media~ : String = "",
+  media_range~ : String = "",
+) -> DashListSegment {
+  { media, media_range, }
+}
+
+///|
+/// `SegmentList` AdaptationSet/Representation pair. `initialization` is the
+/// `sourceURL` attribute; empty means the BaseURL (with
+/// `initialization_range` when set).
+pub struct DashListAdaptation {
+  content_type : String
+  mime_type : String
+  codecs : String
+  id : String
+  bandwidth : Int64
+  timescale : Int64
+  duration : Int64
+  start_number : Int64
+  base_url : String
+  initialization : String
+  initialization_range : String
+  segments : Array[DashListSegment]
+  width : Int32
+  height : Int32
+  sample_rate : Int32
+  lang : String
+}
+
+///|
+pub fn DashListAdaptation::new(
+  content_type : String,
+  mime_type : String,
+  codecs : String,
+  id : String,
+  bandwidth : Int64,
+  timescale : Int64,
+  duration : Int64,
+  segments : Array[DashListSegment],
+  base_url~ : String = "",
+  initialization~ : String = "",
+  initialization_range~ : String = "",
+  start_number~ : Int64 = 1L,
+  width~ : Int32 = 0,
+  height~ : Int32 = 0,
+  sample_rate~ : Int32 = 0,
+  lang~ : String = "",
+) -> DashListAdaptation {
+  {
+    content_type,
+    mime_type,
+    codecs,
+    id,
+    bandwidth,
+    timescale,
+    duration,
+    start_number,
+    base_url,
+    initialization,
+    initialization_range,
+    segments,
+    width,
+    height,
+    sample_rate,
+    lang,
+  }
+}
+
+///|
+/// Write a SegmentList MPD (one Representation per AdaptationSet). Supports
+/// separate media files and single-file representations typed by
+/// `BaseURL` + `mediaRange`.
+pub fn dash_write_segment_list_mpd(
+  adaptations : ArrayView[DashListAdaptation],
+  media_duration_seconds~ : Double,
+  period_id~ : String = "p0",
+) -> String {
+  let sb = StringBuilder()
+  sb.write_string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+  sb.write_string(
+    "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\"\n",
+  )
+  sb.write_string("     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\"\n")
+  sb.write_string(
+    "     mediaPresentationDuration=\"PT\{media_duration_seconds}S\" minBufferTime=\"PT1.5S\">\n",
+  )
+  sb.write_string("  <Period id=\"\{period_id}\" start=\"PT0S\">\n")
+  for a in adaptations {
+    sb.write_string(
+      "    <AdaptationSet contentType=\"\{a.content_type}\" mimeType=\"\{a.mime_type}\" codecs=\"\{a.codecs}\"",
+    )
+    if a.lang != "" {
+      sb.write_string(" lang=\"" + a.lang + "\"")
+    }
+    sb.write_string(">\n")
+    sb.write_string(
+      "      <Representation id=\"\{a.id}\" bandwidth=\"\{a.bandwidth}\"",
+    )
+    if a.width > 0 && a.height > 0 {
+      sb.write_string(" width=\"\{a.width}\" height=\"\{a.height}\"")
+    }
+    if a.sample_rate > 0 {
+      sb.write_string(" audioSamplingRate=\"\{a.sample_rate}\"")
+    }
+    sb.write_string(">\n")
+    if a.base_url != "" {
+      sb.write_string("        <BaseURL>\{a.base_url}</BaseURL>\n")
+    }
+    sb.write_string(
+      "        <SegmentList timescale=\"\{a.timescale}\" duration=\"\{a.duration}\"",
+    )
+    // DASH default startNumber is 1; FFmpeg's dashdec mis-indexes explicit
+    // SegmentURL lists when the attribute shifts cur_seq_no, so omit the default.
+    if a.start_number != 1L {
+      sb.write_string(" startNumber=\"\{a.start_number}\"")
+    }
+    sb.write_string(">\n")
+    sb.write_string("          <Initialization")
+    if a.initialization != "" {
+      sb.write_string(" sourceURL=\"" + a.initialization + "\"")
+    }
+    if a.initialization_range != "" {
+      sb.write_string(" range=\"" + a.initialization_range + "\"")
+    }
+    sb.write_string(" />\n")
+    for seg in a.segments {
+      sb.write_string("          <SegmentURL")
+      if seg.media != "" {
+        sb.write_string(" media=\"" + seg.media + "\"")
+      }
+      if seg.media_range != "" {
+        sb.write_string(" mediaRange=\"" + seg.media_range + "\"")
+      }
+      sb.write_string(" />\n")
+    }
+    sb.write_string("        </SegmentList>\n")
+    sb.write_string("      </Representation>\n")
+    sb.write_string("    </AdaptationSet>\n")
+  }
+  sb.write_string("  </Period>\n")
+  sb.write_string("</MPD>\n")
+  sb.to_string()
+}

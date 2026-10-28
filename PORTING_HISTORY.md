@@ -4541,3 +4541,36 @@ refmvs 在 10-bit 下的 MV 精度与当前帧 bilinear 预测在色度/高位�
 均正确。永久回归扩展到 8 组 32 帧（8/10-bit、64x48/128x96、tiles）。
 
 全量 wasm **1123/1123**。
+
+## 151. DASH SegmentList MPD 写入器
+
+在 §147 的 SegmentTemplate 之外补齐 SegmentList：新增
+`DashListSegment`/`DashListAdaptation` 与 `dash_write_segment_list_mpd`，
+每个 AdaptationSet 一个 Representation，支持两种布局：
+- 分离文件：`<Initialization sourceURL=.../>` +
+  `<SegmentURL media=.../>`；
+- 单文件：`BaseURL` + `Initialization range` + `SegmentURL
+  mediaRange`（reader 按偏移/长度抓取）。
+
+`startNumber` 仅在非默认值（≠1）时写出。FFmpeg 9.0.2 的 dashdec
+对显式 SegmentURL 列表按 `fragments[cur_seq_no]` 索引，而
+`cur_seq_no` 会被 `startNumber` 平移：写 `startNumber="1"` 时单分片
+列表 `1 < n_fragments` 为假，回退到模板路径并报
+"Cannot get fragment, missing template URL"。DASH 规范缺省即 1，
+省略后语义不变且 ffmpeg 可播放。
+
+- 回归 `dash_segment_list_realdata_wbtest.mbt`：
+  - 单文件布局：H.264 init+media 与 AAC init+media 拼成两个文件，
+    MPD 用 BaseURL+range 描述；`av_dash_parse` 回读后
+    `DashSegmentReader` 按范围取回、`av_mov_open` 解复用，H.264
+    5 帧 MD5 对齐 `fmp4_h264_refs`，AAC 5 帧解码成功；断言默认
+    `startNumber` 不写出。
+  - 非默认 `startNumber="5"` 写出并回读 SegmentURL。
+- 外部：分离文件 MPD 经 ffmpeg 9.0.2 播放（ffprobe 识别
+  h264+aac；视频 framemd5 前 5 帧与参考一致，CLI 本地 DASH 双读
+  已知行为导致随后重放；音频 s16le 整文件 MD5
+  `fce8e95d1489dd5c53b4b9a22adaa2c7`，前 10240 字节（5 帧）
+  `0389e90a…` 与 ADTS 参考一致）。单文件 mediaRange 变体在
+  ffmpeg 本地文件上不可播放（探测阻塞），由内部 reader 覆盖。
+
+全量 wasm **1125/1125**。
