@@ -4607,3 +4607,19 @@ FFmpeg 的 ALAC 编码器只产出 16/24-bit，20/32-bit 路径无外部参考�
 `extra_bits_bug` 非标准解码模式未复刻。
 
 全量 wasm **1131/1131**。
+
+## 153. MP4 ALAC 写入器
+
+`mp4_audio_mux.mbt` 新增 `Mp4AlacMuxer`：`alac` 音频样本条目，36 字节
+magic cookie 原样作为子 box（对应 movenc 的 `mov_write_extradata_tag`），
+样本条目写声道数、`sample_size = cookie 位深` 与采样率；复用
+`mp4_audio_document` 的 `ftyp`+`mdat`+`moov` 单轨布局。
+
+- 回归 `mp4_alac_mux_wbtest.mbt`：真实 m4a 经 `av_mov_open` 逐包解码
+  得到帧长后重封装；回读的 cookie、采样率、声道、样本数与源一致，
+  重解码 PCM 与源逐字节相同（MD5 `38fb3080…`）。
+- 外部：重封装文件经 ffmpeg 9.0.2 解码 s16le，MD5
+  `38fb308079b63baf40e49bd051d22bc8` 与源参考一致；ffprobe 识别
+  alac / 44100 / 2ch / 16-bit / 0.5s。
+
+全量 wasm **1132/1132**。

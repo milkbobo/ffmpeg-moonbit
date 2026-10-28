@@ -367,3 +367,107 @@ fn Mp4FlacMuxer::entry(self : Mp4FlacMuxer) -> Array[Byte] {
 pub fn Mp4FlacMuxer::finish(self : Mp4FlacMuxer) -> Bytes {
   mp4_audio_document(self.timescale, self.packets, self.durations, self.entry())
 }
+
+///|
+/// One ALAC-in-MP4 track: an `alac` audio sample entry whose child box is the
+/// 36-byte magic-cookie atom verbatim (`mov_write_extradata_tag`). Packets are
+/// raw ALAC frames; durations are their decoded sample counts.
+pub struct Mp4AlacMuxer {
+  cookie : Bytes
+  sample_rate : Int32
+  channels : Int32
+  bits : Int32
+  timescale : Int32
+  packets : Array[Bytes]
+  durations : Array[Int32]
+}
+
+///|
+fn mp4_alac_byte(data : Bytes, off : Int32) -> Int32 {
+  data[off].to_int()
+}
+
+///|
+fn mp4_alac_be32(data : Bytes, off : Int32) -> UInt32 {
+  (mp4_alac_byte(data, off).reinterpret_as_uint() << 24) |
+  (mp4_alac_byte(data, off + 1).reinterpret_as_uint() << 16) |
+  (mp4_alac_byte(data, off + 2).reinterpret_as_uint() << 8) |
+  mp4_alac_byte(data, off + 3).reinterpret_as_uint()
+}
+
+///|
+pub fn mp4_alac_muxer_new(
+  cookie : Bytes,
+  timescale~ : Int32 = 0,
+) -> Result[Mp4AlacMuxer, String] {
+  if cookie.length() < 36 ||
+    cookie[4] != b'a' ||
+    cookie[5] != b'l' ||
+    cookie[6] != b'a' ||
+    cookie[7] != b'c' {
+    return Err("EINVAL: invalid ALAC magic cookie")
+  }
+  let sample_rate = mp4_alac_be32(cookie, 32).reinterpret_as_int()
+  let channels = mp4_alac_byte(cookie, 21)
+  let bits = mp4_alac_byte(cookie, 17)
+  if sample_rate <= 0 ||
+    channels < 1 ||
+    channels > 8 ||
+    (bits != 16 && bits != 20 && bits != 24 && bits != 32) ||
+    timescale < 0 {
+    return Err("EINVAL: invalid ALAC MP4 stream parameters")
+  }
+  Ok({
+    cookie,
+    sample_rate,
+    channels,
+    bits,
+    timescale: if timescale == 0 {
+      sample_rate
+    } else {
+      timescale
+    },
+    packets: [],
+    durations: [],
+  })
+}
+
+///|
+pub fn Mp4AlacMuxer::write_packet(
+  self : Mp4AlacMuxer,
+  packet : Bytes,
+  duration~ : Int32 = 4096,
+) -> Result[Unit, String] {
+  if packet.length() == 0 || duration <= 0 {
+    return Err("EINVAL: invalid ALAC frame")
+  }
+  self.packets.push(packet)
+  self.durations.push(duration)
+  Ok(())
+}
+
+///|
+fn Mp4AlacMuxer::entry(self : Mp4AlacMuxer) -> Array[Byte] {
+  let body : Array[Byte] = []
+  for _ in 0..<6 {
+    body.push(b'\x00')
+  }
+  mp4_u16(body, 1)
+  mp4_u16(body, 0)
+  mp4_u16(body, 0)
+  mp4_u32(body, 0U)
+  mp4_u16(body, self.channels)
+  mp4_u16(body, self.bits)
+  mp4_u16(body, 0)
+  mp4_u16(body, 0)
+  mp4_u32(body, (self.sample_rate << 16).reinterpret_as_uint())
+  for b in self.cookie {
+    body.push(b)
+  }
+  mp4_box("alac", body)
+}
+
+///|
+pub fn Mp4AlacMuxer::finish(self : Mp4AlacMuxer) -> Bytes {
+  mp4_audio_document(self.timescale, self.packets, self.durations, self.entry())
+}
