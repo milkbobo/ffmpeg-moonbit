@@ -4837,3 +4837,24 @@ hybrid（有损）、float、DSD 与多声道多块流明确报错。
 rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
 
 全量 wasm **1150/1150**。
+
+## 164. aptX / aptX HD 解码
+
+新增 `libavcodec/aptx.mbt` 与自动提取的 `aptx_tables.mbt`（量化区间/
+反量化抖动因子/factor_select 偏移 × 经典与 HD × 4 子带，QMF 内外
+系数，`quantization_factors`）：
+- 每块经典 4 字节（2 声道 × 16-bit 码字）或 HD 6 字节（2 × 24-bit），
+  码字按大端读取后拆成 7/4/2/3（HD 9/6/4/5）位子带量化样本，并按
+  抖动奇偶校验修正最低位。
+- 两级 QMF 合成树（16 抽头内/外多相 FIR，`rshift64_clip24`）、
+  `invert_quantization`（dither + factor_select/quantization_factor
+  自适应）、二阶符号权重与 24/12/6 阶差值预测；输出 S32（`sample*256`）。
+- 修正点：预测器 `(MUL64+MUL64) >> 22` 必须先做 64 位右移再截断到
+  int32；码字拆包后须先写入新的 qs3 再计算抖动奇偶（奇偶本身使用
+  新 qs3）。
+
+验证：ffmpeg 9.0.2 编码的 aptX 与 aptX HD 原始流（由确定性立体声源
+编码），解码 PCM MD5 与 ffmpeg s32le 参考一致（`94f1435c…`、
+`a436a744…`）；构造测试覆盖不足一块的尾部字节被忽略。
+
+全量 wasm **1152/1152**。
