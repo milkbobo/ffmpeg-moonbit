@@ -4088,3 +4088,21 @@ x265 HEVC AU 与 CBR MP3 帧）。
 取回 payload，拼接后分别用 `ff_hevc_decode_frames` 与
 `decode_mp3_stream` 解码，断言与 FFmpeg 参考 MD5 一致（视频三帧 +
 PCM），把外部验证固化为回归。全量 wasm **1079/1079**。
+
+## 123. fMP4/HLS 真实码流互操作验证与 EXT-X-MAP 写入
+
+此前 fMP4 与 HLS 写入器只有合成负载回环。本轮用真实 x264 流
+（64×48、5 帧、avcC + 长度前缀样本取自 ffmpeg 的 MP4）验证：
+
+- `fmp4_h264_init_segment` + `fmp4_media_segment` 写出的初始化/媒体段
+  经 `av_mov_open` 读回（avcC 逐字节一致、5 个样本），把样本与 avcC
+  的 SPS/PPS 转回 Annex B 后用本移植的 H.264 解码器解码，5 帧 MD5
+  与 FFmpeg 9.0.2 单线程一致（新增
+  `fmp4_h264_realdata_wbtest.mbt`）。
+- HLS 媒体播放列表写入器此前不输出 `EXT-X-MAP`，fMP4 HLS 无法被播放；
+  为其增加 `map_uri` 参数并输出 `#EXT-X-MAP:URI="..."`，`av_hls_parse`
+  回读 `maps`/`map_index` 有测试覆盖。
+- 外部验证：init + seg + 本写入器生成的 `media.m3u8` 交 ffmpeg 9.0.2
+  播放，5 帧 framemd5 与参考完全一致。
+
+全量 wasm **1081/1081**。

@@ -14,6 +14,7 @@ pub fn hls_write_media_playlist(
   media_sequence~ : Int64 = 0L,
   version~ : Int32 = 3,
   endlist~ : Bool = true,
+  map_uri~ : String? = None,
 ) -> String {
   let mut max_duration = 0.0
   for entry in segments {
@@ -36,6 +37,10 @@ pub fn hls_write_media_playlist(
   sb.write_string("#EXT-X-VERSION:\{version}\n")
   sb.write_string("#EXT-X-TARGETDURATION:\{target}\n")
   sb.write_string("#EXT-X-MEDIA-SEQUENCE:\{media_sequence}\n")
+  match map_uri {
+    Some(uri) => sb.write_string("#EXT-X-MAP:URI=\"" + uri + "\"\n")
+    None => ()
+  }
   for entry in segments {
     sb.write_string("#EXTINF:\{entry.1},\n")
     sb.write_string(entry.0)

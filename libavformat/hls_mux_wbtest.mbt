@@ -49,3 +49,24 @@ test "hls muxer: master playlist round-trips" {
   assert_eq(pl.streams[0].uri, "720p.m3u8")
   assert_eq(pl.streams[1].uri, "360p.m3u8")
 }
+
+///|
+test "hls muxer: EXT-X-MAP for fMP4 is written and parsed" {
+  let segments : Array[(String, Double)] = [
+    ("seg0.m4s", 0.5),
+    ("seg1.m4s", 0.5),
+  ]
+  let text = hls_write_media_playlist(
+    segments[:],
+    media_sequence=0L,
+    version=7,
+    map_uri=Some("init.mp4"),
+  )
+  let pl = av_hls_parse(text).unwrap()
+  assert_eq(pl.version, 7)
+  assert_eq(pl.maps.length(), 1)
+  assert_eq(pl.maps[0].uri, "init.mp4")
+  assert_eq(pl.segments.length(), 2)
+  assert_eq(pl.segments[0].map_index, 0)
+  assert_eq(pl.segments[1].map_index, 0)
+}
