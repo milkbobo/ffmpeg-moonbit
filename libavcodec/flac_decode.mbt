@@ -10,7 +10,9 @@
 ///
 /// Scope: 8/16/20/24-bit, 1-8 channels, independent/left-side/right-side/
 /// mid-side stereo, constant/verbatim/fixed/LPC subframes, Rice partitions
-/// with escape codes, wasted bits. 32-bit (33 bps) subframes, foreign metadata
+/// with escape codes, wasted bits. 32-bit streams are decoded for subframes of
+/// at most 32 bps (independent channels and 33-bps-free decorrelation); the
+/// 33-bps side channel of 32-bit stereo decorrelation modes, foreign metadata
 /// and CRC verification are not handled.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
@@ -113,19 +115,24 @@ fn flac_unary(gb : BitReader) -> Int32 {
 /// Unsigned Rice code (`get_ur_golomb_jpegls` with a very large limit),
 /// returned as the zig-zag-decoded signed residual.
 fn flac_rice(gb : BitReader, k : Int32) -> Result[Int32, String] {
-  let mut q = 0
+  // C `get_sr_golomb_flac`: the folded value is unsigned, so 32-bit residuals
+  // whose zigzag code reaches 2^31 must not wrap before the sign mapping.
+  let mut q : UInt32 = 0U
   while gb.bits_left() > 0 && gb.read1() == 0 {
-    q = q + 1
-    if q > 1 << 24 {
+    q = q + 1U
+    if q > 1U << 24 {
       return Err("flac: invalid residual")
     }
   }
   if gb.bits_left() <= 0 {
     return Err("flac: residual overread")
   }
-  let r = if k > 0 { gb.read(k).reinterpret_as_int() } else { 0 }
-  let v = (q << k) + r
-  Ok((v >> 1) ^ -(v & 1))
+  let r : UInt32 = if k > 0 { gb.read(k) } else { 0U }
+  let v : UInt32 = (q << k) + r
+  if v == 0x80000000U {
+    return Err("flac: invalid residual")
+  }
+  Ok(((v >> 1) ^ (0U - (v & 1U))).reinterpret_as_int())
 }
 
 ///|
@@ -212,6 +219,33 @@ fn flac_decode_subframe_fixed(
   }
   if pred_order > 4 {
     return Err("flac: illegal fixed order")
+  }
+  if bps + pred_order > 32 {
+    // FFmpeg `DECODER_SUBFRAME_FIXED_WIDE`: combinational reconstruction in
+    // 64-bit two's complement, truncated back to 32-bit samples.
+    for i = pred_order; i < blocksize; i = i + 1 {
+      let r = decoded[i].to_int64()
+      let v = if pred_order == 0 {
+        r
+      } else if pred_order == 1 {
+        r + decoded[i - 1].to_int64()
+      } else if pred_order == 2 {
+        r + 2L * decoded[i - 1].to_int64() - decoded[i - 2].to_int64()
+      } else if pred_order == 3 {
+        r +
+        3L * decoded[i - 1].to_int64() -
+        3L * decoded[i - 2].to_int64() +
+        decoded[i - 3].to_int64()
+      } else {
+        r +
+        4L * decoded[i - 1].to_int64() -
+        6L * decoded[i - 2].to_int64() +
+        4L * decoded[i - 3].to_int64() -
+        decoded[i - 4].to_int64()
+      }
+      decoded[i] = v.to_int()
+    }
+    return Ok(())
   }
   for i = pred_order; i < blocksize; i = i + 1 {
     let r = decoded[i].reinterpret_as_uint()
@@ -334,6 +368,9 @@ fn flac_decode_subframe(
     }
     bps = bps - wasted
   }
+  if bps > 32 {
+    return Err("flac: 33-bit side channel is not supported")
+  }
   if stype == 0 {
     let tmp = flac_sbits(gb, bps)
     for i = 0; i < blocksize; i = i + 1 {
@@ -345,9 +382,6 @@ fn flac_decode_subframe(
     }
   } else if stype >= 8 && stype <= 12 {
     let order = stype & 7
-    if bps + order > 32 {
-      return Err("flac: wide fixed predictor not supported")
-    }
     match flac_decode_subframe_fixed(gb, decoded, order, bps, blocksize) {
       Ok(_) => ()
       Err(e) => return Err(e)
@@ -520,7 +554,7 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
   }
   if !got_streaminfo ||
     stream_bps <= 0 ||
-    stream_bps > 24 ||
+    stream_bps > 32 ||
     stream_channels <= 0 {
     return Err("flac: unsupported stream parameters")
   }

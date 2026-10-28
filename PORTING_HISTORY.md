@@ -3950,3 +3950,23 @@ hvcC `lengthSizeMinusOne` 一致的长度前缀 NAL。
   单线程解码，5 帧 MD5 与参考完全一致。
 
 全量 wasm **1071/1071**。
+
+## 116. FLAC 32-bit 流与宽定点预测
+
+解禁 32-bit FLAC：STREAMINFO bps 上限 24 → 32；`decode_subframe_fixed`
+按 FFmpeg `DECODER_SUBFRAME_FIXED_WIDE` 增加宽路径（bps+order>32 时用
+Int64 组合式重建，再截回 32 位样本）；33-bps side channel（32-bit
+stereo 的 left/right/mid-side 装饰模式）仍明确报错，独立声道与
+≤32 bps 子帧全部支持。
+
+顺带修掉一个真 bug：`flac_rice` 的 zigzag 折叠值原用 Int32 计算，
+32-bit 残差编码值 ≥ 2^31 时会先回绕（INT_MAX 的残差被解成 -1）；
+改为 UInt32 运算并补上 C 的 `0x80000000` 拒绝，命中后 24-bit 及更低位深
+行为不变（全量回归为证）。
+
+验证：libFLAC 1.4.3 `flac -0` 编码 44.1 kHz 单声道满幅近直流正弦
+（0.5 s，20 个 FIXED 子帧、bps=32）；FFmpeg 9.0.2 的 s32le 解码
+MD5 与源 raw 完全一致，本项目 `pcm_bytes` 亦逐字节一致。夹具
+`flac_32bit_vectors_test.mbt` + 黑盒 `flac_32bit_test.mbt`。LPC 在
+bps>16 时与既有 24-bit 路径相同（Int64 累加），无需新代码。
+全量 wasm **1072/1072**。
