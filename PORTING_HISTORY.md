@@ -4240,3 +4240,20 @@ MKV HEVC fixture（64x64 Rext 4:4:4，5 个 AU + hvcC）：
 
 新增测试并入 `mp4_video_mux_wbtest.mbt` / `mp4_hevc_mux_wbtest.mbt`。
 全量 wasm **1093/1093**。
+
+## 133. MP4 单轨 AV1/VP9 写入器的真实样本验证
+
+补齐 `mp4_av1_muxer`/`mp4_vp9_muxer` 的真实码流验证（此前只有伪样本）：
+- AV1：用 docker ffmpeg 9.0.2 `libaom-av1` 编码 64x48 5 帧（Main，
+  yuv420p）生成源 MP4；`av_mov_open` 读出 av1C（16 字节）与 5 个
+  temporal unit 作为夹具；写入我们的 MP4 后回读样本字节一致，端口
+  `Av1Decoder` 解码 `packed()` MD5 与源帧一致。
+- VP9：复用 WebM VP9 夹具（64x48 5 帧）写入 MP4（vpcC profile 0、
+  8-bit 4:2:0），回读样本字节一致，`vp9_decoder_new` 解码 MD5 对齐
+  `webm_av_vp9_refs`。
+- 外部验证：两个输出经 ffmpeg `-f framemd5` 解码，5+5 帧 MD5 与上述
+  参考全部一致（AV1 报 Main/yuv420p，VP9 报 Profile 0）。
+- 期间确认 `av_mov_open` 可直接解析 ffmpeg 的 av01 MP4 并恢复 av1C。
+
+新增测试并入 `mp4_av1_mux_wbtest.mbt` / `mp4_vp9_mux_wbtest.mbt`。
+全量 wasm **1095/1095**。
