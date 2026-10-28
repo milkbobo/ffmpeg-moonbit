@@ -70,3 +70,26 @@ test "hls muxer: EXT-X-MAP for fMP4 is written and parsed" {
   assert_eq(pl.segments[0].map_index, 0)
   assert_eq(pl.segments[1].map_index, 0)
 }
+
+///|
+test "hls muxer: EXT-X-KEY carries the AES-128 URI and IV" {
+  let iv : Array[Byte] = []
+  for i in 0..<16 {
+    iv.push(i.to_byte())
+  }
+  let text = hls_write_media_playlist(
+    [("seg0.ts", 2.0)],
+    key_uri=Some("key.bin"),
+    key_iv=Some(Bytes::from_array(iv)),
+  )
+  assert_true(
+    text.contains(
+      "#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\",IV=0x000102030405060708090A0B0C0D0E0F\n",
+    ),
+  )
+  let playlist = av_hls_parse(text).unwrap()
+  assert_eq(playlist.keys.length(), 1)
+  assert_eq(playlist.keys[0].method_, "AES-128")
+  assert_eq(playlist.keys[0].uri, "key.bin")
+  assert_eq(playlist.keys[0].iv, "0x000102030405060708090A0B0C0D0E0F")
+}

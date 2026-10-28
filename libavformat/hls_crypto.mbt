@@ -111,3 +111,38 @@ pub fn hls_decrypt_aes128(
   }
   Ok(plain)
 }
+
+///|
+/// Encrypt one AES-128-CBC HLS segment with PKCS#7 padding, matching the
+/// FFmpeg `crypto` protocol that `hlsenc.c` connects to the segment muxer.
+pub fn hls_encrypt_aes128(
+  key : Bytes,
+  iv : Bytes,
+  data : Bytes,
+) -> Result[Bytes, String] {
+  if key.length() != 16 {
+    return Err("hls: AES-128 key must be 16 bytes")
+  }
+  if iv.length() != 16 {
+    return Err("hls: IV must be 16 bytes")
+  }
+  let pad = 16 - data.length() % 16
+  let padded : Array[Byte] = []
+  for b in data {
+    padded.push(b)
+  }
+  for _ in 0..<pad {
+    padded.push(pad.to_byte())
+  }
+  let aes = @libavutil.av_aes_alloc()
+  match @libavutil.av_aes_init(aes, key, 128, false) {
+    Ok(_) => ()
+    Err(e) => return Err("hls: AES init failed: \{e}")
+  }
+  let chain : FixedArray[Byte] = FixedArray::make(16, b'\x00')
+  for i in 0..<16 {
+    chain[i] = iv[i]
+  }
+  let payload = Bytes::from_array(padded)
+  Ok(@libavutil.av_aes_crypt(aes, payload, payload.length() / 16, Some(chain)))
+}

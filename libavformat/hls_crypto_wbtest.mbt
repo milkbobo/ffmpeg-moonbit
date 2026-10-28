@@ -112,3 +112,28 @@ test "hls crypto: IV helpers" {
   assert_eq(seq[15], b'\x08')
   assert_true(hls_parse_iv("nope") is None)
 }
+
+///|
+test "hls crypto: AES-128 encrypt/decrypt round-trips with PKCS#7" {
+  let key = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f"
+  let iv : Bytes = Bytes::make(16, b'\x00')
+  for len in [0, 1, 15, 16, 17, 31, 32, 100] {
+    let data : Array[Byte] = []
+    for i in 0..<len {
+      data.push((i * 7).to_byte())
+    }
+    let plain = Bytes::from_array(data)
+    let encrypted = hls_encrypt_aes128(key, iv, plain).unwrap()
+    assert_eq(encrypted.length(), (len / 16 + 1) * 16)
+    assert_true(encrypted != plain)
+    assert_eq(hls_decrypt_aes128(key, iv, encrypted).unwrap(), plain)
+  }
+  match hls_encrypt_aes128(b"\x00", iv, b"x") {
+    Ok(_) => fail("short key must fail")
+    Err(_) => ()
+  }
+  match hls_encrypt_aes128(key, b"\x00", b"x") {
+    Ok(_) => fail("short IV must fail")
+    Err(_) => ()
+  }
+}

@@ -15,6 +15,8 @@ pub fn hls_write_media_playlist(
   version~ : Int32 = 3,
   endlist~ : Bool = true,
   map_uri~ : String? = None,
+  key_uri~ : String? = None,
+  key_iv~ : Bytes? = None,
 ) -> String {
   let mut max_duration = 0.0
   for entry in segments {
@@ -37,6 +39,20 @@ pub fn hls_write_media_playlist(
   sb.write_string("#EXT-X-VERSION:\{version}\n")
   sb.write_string("#EXT-X-TARGETDURATION:\{target}\n")
   sb.write_string("#EXT-X-MEDIA-SEQUENCE:\{media_sequence}\n")
+  match key_uri {
+    Some(uri) => {
+      sb.write_string("#EXT-X-KEY:METHOD=AES-128,URI=\"" + uri + "\"")
+      match key_iv {
+        Some(iv) =>
+          if iv.length() == 16 {
+            sb.write_string(",IV=0x" + hls_mux_hex(iv))
+          }
+        None => ()
+      }
+      sb.write_string("\n")
+    }
+    None => ()
+  }
   match map_uri {
     Some(uri) => sb.write_string("#EXT-X-MAP:URI=\"" + uri + "\"\n")
     None => ()
@@ -48,6 +64,18 @@ pub fn hls_write_media_playlist(
   }
   if endlist {
     sb.write_string("#EXT-X-ENDLIST\n")
+  }
+  sb.to_string()
+}
+
+///|
+/// Uppercase hex used by `EXT-X-KEY` IV attributes.
+fn hls_mux_hex(data : Bytes) -> String {
+  let hex = "0123456789ABCDEF"
+  let sb = StringBuilder()
+  for b in data {
+    sb.write_char(hex.get_char((b.to_int() >> 4) & 15).unwrap())
+    sb.write_char(hex.get_char(b.to_int() & 15).unwrap())
   }
   sb.to_string()
 }

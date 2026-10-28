@@ -4396,3 +4396,22 @@ libaom 测试流的各帧 grain 参数相同，引用继承后的输出与原 up
 
 新增回归 `av1: film grain from reference matches dav1d`。全量 wasm
 **1113/1113**。
+
+## 143. HLS AES-128 写入（EXT-X-KEY + 加密分片）
+
+补齐 HLS 写入侧加密：
+- `hls_encrypt_aes128(key, iv, data)`：AES-128-CBC + PKCS#7（与 FFmpeg
+  `crypto` 协议的 `crypto_write`/`close` 行为一致；整块时补 16 字节），
+  复用 `av_aes_crypt` 的加密方向。
+- `hls_write_media_playlist(..., key_uri=, key_iv=)` 在
+  MEDIA-SEQUENCE 后输出 `#EXT-X-KEY:METHOD=AES-128,URI="...",IV=0x`
+  大写十六进制。
+- 回归：0..100 字节各长度加密/解密往返、短 key/IV 报错；EXT-X-KEY
+  文本与 `av_hls_parse` 的 key/iv 解析；真实 H.264+AAC TS 分片加密后
+  经 `av_hls_parse`+`HlsSegmentReader` + 内存 fetch 解密、解复用并
+  解码，视频 5 帧 MD5 对齐 `fmp4_h264_refs`。
+- 外部：ffmpeg 9.0.2 以 `-allowed_extensions ALL` 播放本项目生成的
+  加密 HLS，ffprobe 识别 h264+aac，视频 framemd5 与参考一致，音频
+  s16le MD5 `0389e90a…` 与明文 HLS 完全相同。
+
+全量 wasm **1116/1116**。
