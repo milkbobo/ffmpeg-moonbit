@@ -4659,3 +4659,25 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
   framemd5 与参考逐帧一致。
 
 全量 wasm **1135/1135**。
+
+## 156. HLS EXT-X-BYTERANGE 写入与 MAP 范围
+
+- `hls_mux.mbt` 新增 `HlsMediaSegmentSpec` 与
+  `hls_write_media_playlist_byterange`：媒体播放列表条目可带
+  `EXT-X-BYTERANGE:<len>[@<off>]`，`offset < 0` 省略 `@offset`
+  （由解析端按前一子范围续接）；`EXT-X-MAP` 支持
+  `BYTERANGE="<len>[@<off>]"` 属性。版本自动不低于 4。原
+  `hls_write_media_playlist` 改为共享实现的薄包装，行为不变。
+- `hls.mbt` 新增公开构造 `HlsByteRange::new(length, offset~)`；
+  `EXT-X-MAP` 省略偏移时按 FFmpeg 语义取 0（此前会留下 -1 被
+  `MediaFetch` 拒绝）。
+- 回归 `hls_byterange_wbtest.mbt`：5 个真实 AAC 帧编码为 3 个
+  音频 TS 分片，拼成单文件 `media.ts`；列表仅首段写偏移、后两段
+  省略，解析后偏移按长度续接；`HlsSegmentReader` 按范围取回 3 段，
+  TS 解复用 + AAC 解码共 5 包/5120 样本。另有 MAP BYTERANGE
+  属性写读断言。
+- 外部：ffmpeg 9.0.2 `-allowed_extensions ALL` 播放该单文件
+  byterange 播放列表，输出 s16le MD5
+  `0389e90a81fbef4945c3bbe0b11c048c` 与 ADTS 参考一致。
+
+全量 wasm **1137/1137**。

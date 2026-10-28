@@ -25,6 +25,13 @@ pub struct HlsByteRange {
 }
 
 ///|
+/// `offset < 0` means "start after the previous sub-range" for segment tags;
+/// `EXT-X-MAP` treats it as 0, like FFmpeg's zero-initialized init section.
+pub fn HlsByteRange::new(length : Int64, offset~ : Int64 = -1L) -> HlsByteRange {
+  { length, offset, }
+}
+
+///|
 /// One media segment. */
 pub struct HlsSegment {
   uri : String
@@ -446,7 +453,18 @@ pub fn av_hls_parse(
         byterange: if br == "" {
           None
         } else {
-          hls_parse_byterange(br[:])
+          match hls_parse_byterange(br[:]) {
+            Some(r) =>
+              Some({
+                length: r.length,
+                offset: if r.offset < 0L {
+                  0L
+                } else {
+                  r.offset
+                },
+              })
+            None => None
+          }
         },
       })
       current_map = playlist.maps.length() - 1

@@ -6,17 +6,53 @@
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
 ///|
-/// Write a VOD-style media playlist. `target_duration` 0 means "use the
-/// ceiling of the largest segment duration".
-pub fn hls_write_media_playlist(
-  segments : ArrayView[(String, Double)],
-  target_duration~ : Int32 = 0,
-  media_sequence~ : Int64 = 0L,
-  version~ : Int32 = 3,
-  endlist~ : Bool = true,
-  map_uri~ : String? = None,
-  key_uri~ : String? = None,
-  key_iv~ : Bytes? = None,
+/// One media-playlist entry for `hls_write_media_playlist_byterange`: a URI,
+/// duration and optional `EXT-X-BYTERANGE`. `offset < 0` omits the offset
+/// (the range continues after the previous sub-range of the resource).
+pub struct HlsMediaSegmentSpec {
+  uri : String
+  duration : Double
+  byterange : HlsByteRange?
+}
+
+///|
+pub fn HlsMediaSegmentSpec::new(
+  uri : String,
+  duration : Double,
+  byterange~ : HlsByteRange? = None,
+) -> HlsMediaSegmentSpec {
+  { uri, duration, byterange, }
+}
+
+///|
+/// `<length>[@<offset>]` used by both `EXT-X-BYTERANGE` and the `BYTERANGE`
+/// attribute of `EXT-X-MAP`.
+fn hls_mux_byterange_value(range : HlsByteRange) -> String {
+  if range.offset >= 0L {
+    "\{range.length}@\{range.offset}"
+  } else {
+    "\{range.length}"
+  }
+}
+
+///|
+/// `EXT-X-BYTERANGE:<length>[@<offset>]`.
+fn hls_mux_byterange_tag(range : HlsByteRange) -> String {
+  "#EXT-X-BYTERANGE:" + hls_mux_byterange_value(range)
+}
+
+///|
+/// Shared media-playlist writer over pre-resolved `(uri, duration, range)`.
+fn hls_write_media_playlist_impl(
+  segments : ArrayView[(String, Double, HlsByteRange?)],
+  target_duration : Int32,
+  media_sequence : Int64,
+  version : Int32,
+  endlist : Bool,
+  map_uri : String?,
+  map_byterange : HlsByteRange?,
+  key_uri : String?,
+  key_iv : Bytes?,
 ) -> String {
   let mut max_duration = 0.0
   for entry in segments {
@@ -54,11 +90,29 @@ pub fn hls_write_media_playlist(
     None => ()
   }
   match map_uri {
-    Some(uri) => sb.write_string("#EXT-X-MAP:URI=\"" + uri + "\"\n")
+    Some(uri) => {
+      sb.write_string("#EXT-X-MAP:URI=\"" + uri + "\"")
+      match map_byterange {
+        Some(range) => {
+          sb.write_string(",BYTERANGE=\"")
+          sb.write_string(hls_mux_byterange_value(range))
+          sb.write_string("\"")
+        }
+        None => ()
+      }
+      sb.write_string("\n")
+    }
     None => ()
   }
   for entry in segments {
     sb.write_string("#EXTINF:\{entry.1},\n")
+    match entry.2 {
+      Some(range) => {
+        sb.write_string(hls_mux_byterange_tag(range))
+        sb.write_string("\n")
+      }
+      None => ()
+    }
     sb.write_string(entry.0)
     sb.write_string("\n")
   }
@@ -66,6 +120,72 @@ pub fn hls_write_media_playlist(
     sb.write_string("#EXT-X-ENDLIST\n")
   }
   sb.to_string()
+}
+
+///|
+/// Write a VOD-style media playlist. `target_duration` 0 means "use the
+/// ceiling of the largest segment duration".
+pub fn hls_write_media_playlist(
+  segments : ArrayView[(String, Double)],
+  target_duration~ : Int32 = 0,
+  media_sequence~ : Int64 = 0L,
+  version~ : Int32 = 3,
+  endlist~ : Bool = true,
+  map_uri~ : String? = None,
+  key_uri~ : String? = None,
+  key_iv~ : Bytes? = None,
+) -> String {
+  let entries : Array[(String, Double, HlsByteRange?)] = []
+  for entry in segments {
+    entries.push((entry.0, entry.1, None))
+  }
+  hls_write_media_playlist_impl(
+    entries,
+    target_duration,
+    media_sequence,
+    version,
+    endlist,
+    map_uri,
+    None,
+    key_uri,
+    key_iv,
+  )
+}
+
+///|
+/// Write a VOD media playlist whose segments are byte ranges, optionally all
+/// inside one resource. `EXT-X-BYTERANGE` requires version 4, so a lower
+/// requested version is raised to 4.
+pub fn hls_write_media_playlist_byterange(
+  segments : ArrayView[HlsMediaSegmentSpec],
+  target_duration~ : Int32 = 0,
+  media_sequence~ : Int64 = 0L,
+  version~ : Int32 = 4,
+  endlist~ : Bool = true,
+  map_uri~ : String? = None,
+  map_byterange~ : HlsByteRange? = None,
+  key_uri~ : String? = None,
+  key_iv~ : Bytes? = None,
+) -> String {
+  let entries : Array[(String, Double, HlsByteRange?)] = []
+  for spec in segments {
+    entries.push((spec.uri, spec.duration, spec.byterange))
+  }
+  hls_write_media_playlist_impl(
+    entries,
+    target_duration,
+    media_sequence,
+    if version < 4 {
+      4
+    } else {
+      version
+    },
+    endlist,
+    map_uri,
+    map_byterange,
+    key_uri,
+    key_iv,
+  )
 }
 
 ///|
