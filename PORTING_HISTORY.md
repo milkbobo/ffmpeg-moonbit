@@ -3992,3 +3992,24 @@ bps>16 时与既有 24-bit 路径相同（Int64 累加），无需新代码。
 顺带确认了 MKV 解复用的时间基/负 PTS（音频首包 -23 ms）与
 CodecPrivate 大 hvcC（x265 写入了完整参数集数组）都能正确读出。
 全量 wasm **1073/1073**。
+
+## 118. Ogg FLAC（RFC 5334）读写
+
+补齐 Ogg 容器除 Opus 外的 FLAC 映射：
+
+- **demux**（`libavformat/ogg_flac.mbt`）：校验 `0x7F "FLAC"` 映射头
+  （版本 1.0、big-endian 头部包计数、`fLaC`+STREAMINFO），按计数分离
+  元数据包与音频包，解析 STREAMINFO 的采样率/声道/位深/总样本数
+  （总数为 0 时取末页 granule），并组装出一个可直接交给
+  `ff_flac_decode` 的原生 `fLaC` 流。
+- **mux**：按映射头 + 元数据页 + 单音频页（granule = 总样本数）输出；
+  头计数按 big-endian 写入（Ogg 页字段是 little-endian，容易写错）。
+- 页工具复用 `ogg_mux_page_multi`（新增多包页，把 Opus 写入器的单包页
+  改为其包装），Ogg CRC/页解析/续页处理沿用既有实现。
+
+验证：ffmpeg `-f ogg` 的 24-bit 44.1 kHz 单声道 FLAC（9 帧、总样本
+8820）嵌入白盒测试，demux → 解码 PCM 与 ffmpeg s32le 参考 MD5 一致；
+demux 出的 STREAMINFO/元数据/帧再经本 muxer 写出，重新 demux 后解码
+仍一致。外部验证：本 muxer 输出的 `.oga` 交 ffprobe（flac 24-bit/
+44.1 kHz/mono）与 ffmpeg 解码，PCM MD5 与参考完全相同。
+全量 wasm **1074/1074**。

@@ -73,21 +73,25 @@ fn ogg_mux_crc(page : Array[Byte]) -> UInt32 {
 }
 
 ///|
-fn ogg_mux_page(
+/// Emit one page carrying several packets; the caller keeps the total lacing
+/// count within 255.
+fn ogg_mux_page_multi(
   out : Array[Byte],
   serial : Int32,
   seq : Int32,
   header_type : Int32,
   granule : Int64,
-  packet : Bytes,
+  packets : Array[Bytes],
 ) -> Unit {
   let lacing : Array[Int32] = []
-  let mut rem = packet.length()
-  while rem >= 255 {
-    lacing.push(255)
-    rem = rem - 255
+  for packet in packets {
+    let mut rem = packet.length()
+    while rem >= 255 {
+      lacing.push(255)
+      rem = rem - 255
+    }
+    lacing.push(rem)
   }
-  lacing.push(rem)
   let page : Array[Byte] = []
   page.push(b'O')
   page.push(b'g')
@@ -103,8 +107,10 @@ fn ogg_mux_page(
   for lace in lacing {
     page.push(lace.to_byte())
   }
-  for b in packet {
-    page.push(b)
+  for packet in packets {
+    for b in packet {
+      page.push(b)
+    }
   }
   let crc = ogg_mux_crc(page)
   page[22] = (crc & 0xFFU).to_byte()
@@ -112,6 +118,18 @@ fn ogg_mux_page(
   page[24] = ((crc >> 16) & 0xFFU).to_byte()
   page[25] = ((crc >> 24) & 0xFFU).to_byte()
   out.append(page)
+}
+
+///|
+fn ogg_mux_page(
+  out : Array[Byte],
+  serial : Int32,
+  seq : Int32,
+  header_type : Int32,
+  granule : Int64,
+  packet : Bytes,
+) -> Unit {
+  ogg_mux_page_multi(out, serial, seq, header_type, granule, [packet])
 }
 
 ///|
