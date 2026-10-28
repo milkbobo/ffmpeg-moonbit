@@ -693,6 +693,7 @@ pub fn av_matroska_open(buf : Bytes) -> Result[MatroskaHeader, String] {
     Ok(_) => {
       // unknown doctype stays a warning in the C; surface it via is_webm
       ignore(notes)
+      matroska_fixup_codec_priv(mh)
       Ok(mh)
     }
   }

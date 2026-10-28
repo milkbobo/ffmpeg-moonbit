@@ -4767,3 +4767,18 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
   PCM MD5 与同源参考一致。
 
 全量 wasm **1145/1145**。
+
+## 161. Matroska ALAC 读写
+
+- `mkv_alac_mux.mbt` 新增 `MkvAlacMuxer`：`A_ALAC` 轨、CodecPrivate
+  只写 cookie 的 24 字节 ALACSpecificConfig（与 matroskaenc 一致），
+  音频设置写采样率/声道/位深，复用 `mkv_audio_document`。
+- `matroska_track.mbt` 在打开文件后对 `A_ALAC` 的 CodecPrivate 补出
+  12 字节 atom 头（size/tag/version），复刻 matroskadec 的兼容逻辑。
+- 回归 `mkv_alac_wbtest.mbt`：ffmpeg 生成的 `alac.mka` 读取解码
+  PCM MD5 `38fb3080…` 与参考一致；用 `MkvAlacMuxer` 重封装后回读
+  CodecPrivate（36 字节）与包字节透明，重解码仍一致。
+- 外部：端口写出的 mka 经 ffmpeg 9.0.2 解码为 s16le，MD5 与参考
+  相同。
+
+全量 wasm **1146/1146**。

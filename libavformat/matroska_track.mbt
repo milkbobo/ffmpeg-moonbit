@@ -776,6 +776,29 @@ fn matroska_track_table(t : MkvTrack) -> Array[EbmlSyntax] {
 }
 
 ///|
+/// ALAC's Matroska CodecPrivate holds only the 24-byte ALACSpecificConfig;
+/// the decoder expects the 36-byte QuickTime atom (matroskadec.c fabricates
+/// the size/tag/version header).
+fn matroska_fixup_codec_priv(mh : MatroskaHeader) -> Unit {
+  for track in mh.tracks {
+    if track.codec_id == Some("A_ALAC") {
+      match track.codec_priv {
+        Some(cp) => {
+          let out : Array[Byte] = [
+            b' ', b' ', b' ', b'$', b'a', b'l', b'a', b'c', b' ', b' ', b' ', b' ',
+          ]
+          for b in cp {
+            out.push(b)
+          }
+          track.codec_priv = Some(Bytes::from_array(out))
+        }
+        None => ()
+      }
+    }
+  }
+}
+
+///|
 /// `matroska_tracks[]`: one TrackEntry per TrackElement append. */
 fn matroska_tracks_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
   [
