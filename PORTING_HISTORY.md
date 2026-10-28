@@ -4623,3 +4623,23 @@ magic cookie 原样作为子 box（对应 movenc 的 `mov_write_extradata_tag`�
   alac / 44100 / 2ch / 16-bit / 0.5s。
 
 全量 wasm **1132/1132**。
+
+## 154. TTA（The Lossless True Audio）解码
+
+新增 `libavcodec/tta.mbt`：解析完整 native `.tta` 文件（`TTA1` 头、
+seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）、
+自适应 Rice（k0/k1、sum0/sum1 与 shift 表）、8 阶混合滤波器
+（qm/dx/dl/error 自适应）、固定 4/5 阶预测与多声道反相关；输出
+8/16/24-bit PCM（24-bit 左移 8 位，8-bit 为 U8 偏置形式）。
+
+- 夹具：ffmpeg 9.0.2 编码自 8 kHz 确定性 WAV（正弦/静音/噪声/冲激）。
+  16-bit 单/双声道、24-bit 双声道、8-bit 双声道各 2.5 s（两整帧 +
+  残帧），单声道恰为两整帧（残帧长度 0 路径）。解码 PCM 与 ffmpeg
+  s16le/s32le/u8 逐字节一致（MD5 `a7e2b296…`、`793c16db…`、
+  `322c025b…`、`b53c7498…`）。
+- 构造测试拒绝坏 magic、加密格式、非法位深/采样率与截断 seek 表。
+
+说明：header/seek/帧 CRC 不校验（与 FLAC 端口一致）；加密格式 2
+明确拒绝。
+
+全量 wasm **1134/1134**。
