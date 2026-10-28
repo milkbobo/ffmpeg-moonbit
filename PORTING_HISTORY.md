@@ -4145,3 +4145,19 @@ framemd5 与参考完全一致。注意 ffmpeg CLI 对本地 DASH 会把探测�
 外部验证：ffprobe 识别 vp9 64×48 + opus mono，ffmpeg 解码的视频
 framemd5 与 IVF 参考完全一致，音频 s16le MD5 与 MP4 Opus 参考完全
 相同。新增 `webm_av_realdata_wbtest.mbt`。全量 wasm **1084/1084**。
+
+## 127. ADTS AAC 与 Ogg Opus 写入真实数据验证
+
+两条音频写入器此前只有本项目 demux 回环：
+
+- **ADTS**：取真实 MKV 前 5 个 AAC 访问单元（44.1 kHz 单声道），
+  `adts_muxer` 写出后 `av_adts_open` 读回 5 帧，按 7 字节头剥离后用
+  `new_aac_decoder_from_asc`（LC 44100/mono 的 ASC `12 08`）解码，
+  5120 个样本与 FFmpeg 解码本 ADTS 的 s16le 参考最大差 1 LSB。
+  ffprobe 识别 aac/44100/mono。
+- **Ogg Opus**：3 个真实 Opus 包（pre-skip 312）写入 Ogg，
+  `av_ogg_opus_open` 读回、OpusHead→`OpusDecoder` 解码，裁 312 后与
+  MP4 Opus 轮同一 FFmpeg 参考 PCM 最大差 1 LSB。外部 ffmpeg 解码
+  本 Ogg 的 s16le MD5 与 MP4 参考完全相同。
+
+新增 `adts_ogg_realdata_wbtest.mbt`。全量 wasm **1086/1086**。
