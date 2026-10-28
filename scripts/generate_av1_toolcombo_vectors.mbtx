@@ -1,0 +1,103 @@
+///|
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+  "moonbitlang/core/env",
+}
+
+///|
+/// Real-stream fixtures for AV1 inter-tool combinations: interintra
+/// (wedge/smooth variants), masked compound (wedge/diffwtd), OBMC +
+/// local warp, dual filter + ref-frame-mvs, and all together.  ffmpeg's libaom wrapper does not expose these, so encoding
+/// uses the aomenc CLI (aom-tools, TUNA mirror); references are the dav1d
+/// 1.5.1 CLI per-frame native-size md5 (FFmpeg framemd5 auto-scales).
+async fn main {
+  let args = @env.args()
+  guard args.length() == 2 else {
+    fail("usage: generate_av1_toolcombo_vectors.mbtx absolute/scratch/av1")
+  }
+  let mount = args[1] + ":/work"
+  let built = @shell.Cmd(
+    "docker",
+    [
+      "run", "--rm", "-v", mount, "--entrypoint", "sh",
+      "linuxserver/ffmpeg:9.0.2",
+      "-c",
+      "ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=192x128:rate=5 -frames:v 14 -pix_fmt yuv420p -f yuv4mpegpipe -strict -1 -y /work/toolcombo.y4m && echo y4m-ok",
+    ],
+  ).each_line(line => println(line))
+  guard built == 0 else { fail("y4m source failed") }
+  // aomenc enables all of these by default, so `=1` alone yields five
+  // identical encodes; each case instead isolates one tool family (and
+  // tool_all enables everything with distinct rate decisions disabled).
+  let cases = [
+    (
+      "tool_iic",
+      "--enable-interintra-comp=1 --enable-interintra-wedge=1 --enable-smooth-interintra=1 --enable-masked-comp=0 --enable-obmc=0 --enable-warped-motion=0 --enable-dual-filter=0",
+    ),
+    (
+      "tool_masked",
+      "--enable-masked-comp=1 --enable-interintra-comp=0 --enable-obmc=0 --enable-warped-motion=0 --enable-dual-filter=0",
+    ),
+    (
+      "tool_obmc",
+      "--enable-obmc=1 --enable-warped-motion=1 --enable-interintra-comp=0 --enable-masked-comp=0 --enable-dual-filter=0",
+    ),
+    (
+      "tool_rf_mvs",
+      "--enable-ref-frame-mvs=1 --enable-dual-filter=1 --enable-interintra-comp=0 --enable-masked-comp=0 --enable-obmc=0 --enable-warped-motion=0 --enable-smooth-interintra=0",
+    ),
+    (
+      "tool_all",
+      "--enable-interintra-comp=1 --enable-interintra-wedge=1 --enable-smooth-interintra=1 --enable-masked-comp=1 --enable-obmc=1 --enable-warped-motion=1 --enable-dual-filter=1 --enable-ref-frame-mvs=1",
+    ),
+  ]
+  // One container installs aom-tools and builds the dav1d CLI from the
+  // same 1.5.1 sources the port follows; then encodes every case and
+  // produces per-frame native-size md5 sums.
+  let mut script = "sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; s|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/ubuntu.sources && apt-get update -qq >/dev/null && apt-get install -y -qq aom-tools meson ninja-build nasm >/dev/null 2>&1 && cp -r /src /tmp/dav1d && cd /tmp/dav1d && meson setup build --buildtype release >/dev/null 2>&1 && ninja -C build tools/dav1d >/dev/null 2>&1 && echo toolchain-ready"
+  for c in cases {
+    let (stem, flags) = c
+    script += " && aomenc --codec=av1 -o /work/" +
+      stem +
+      ".ivf /work/toolcombo.y4m --ivf --cpu-used=6 --end-usage=q --cq-level=30 --lag-in-frames=0 --passes=1 --threads=1 --kf-max-dist=14 --quiet " +
+      flags +
+      " && echo encoded " +
+      stem
+  }
+  for c in cases {
+    let (stem, _flags) = c
+    script += " && mkdir -p /work/ref/" +
+      stem +
+      " && ./build/tools/dav1d --filmgrain 0 -i /work/" +
+      stem +
+      ".ivf -o /work/ref/" +
+      stem +
+      "/d%n_%w_%h.yuv --quiet >/dev/null 2>&1; n=0; : > /work/ref/" +
+      stem +
+      "/md5sums.txt; while :; do set -- /work/ref/" +
+      stem +
+      "/d${n}_*.yuv; [ -e \"$1\" ] || break; printf '%d %s\\n' $n $(md5sum \"$1\" | cut -d' ' -f1) >> /work/ref/" +
+      stem +
+      "/md5sums.txt; n=$((n+1)); done; echo framed " +
+      stem +
+      " $n"
+  }
+  let trace = args[1] + "/trace_src:/src:ro"
+  let decoded_all = @shell.Cmd(
+    "docker",
+    ["run", "--rm", "-v", trace, "-v", mount, "ubuntu:24.04", "sh", "-c", script],
+  ).each_line(line => println(line))
+  guard decoded_all == 0 else { fail("toolcombo generation failed") }
+  for c in cases {
+    let (stem, _flags) = c
+    let assembled = @shell.Cmd("moon", [
+      "run", "scripts/assemble_resize_md5.mbtx", stem,
+    ]).each_line(line => println(line))
+    guard assembled == 0 else { fail("md5 assembly failed: " + stem) }
+    let emitted = @shell.Cmd("moon", [
+      "run", "scripts/emit_av1_session_vectors.mbtx", stem,
+    ]).each_line(line => println(line))
+    guard emitted == 0 else { fail("fixture failed: " + stem) }
+  }
+}

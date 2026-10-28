@@ -17,6 +17,8 @@ fn main raise {
     "scripts/generate_av1_qm_vectors.mbtx"
   } else if stem.has_prefix("resize_") {
     "scripts/generate_av1_resize_vectors.mbtx"
+  } else if stem.has_prefix("tool_") {
+    "scripts/generate_av1_toolcombo_vectors.mbtx"
   } else {
     "AGENT_HANDOFF_2026-10-26_SUPERRES.md"
   }

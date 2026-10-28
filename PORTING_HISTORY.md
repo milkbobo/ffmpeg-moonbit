@@ -3793,3 +3793,17 @@ inter 352 引 282）逐帧 MD5 与 vpxdec 原生输出一致。参考基准用
 对尺寸变化流会自动缩放到首帧尺寸，同 AV1 resize 轮的陷阱）。调试中
 顺带修正的中间错误：色度坐标域混淆（dispatcher 传入的已是色度坐标，
 内部不得再下采样）与 `& ~15` 掩码写反。
+
+## 110. AV1 inter 工具组合真实流验证
+
+用 aomenc 的工具开关（`--enable-interintra-comp/-wedge/-smooth`、
+`--enable-masked-comp`、`--enable-obmc`、`--enable-warped-motion`、
+`--enable-dual-filter`、`--enable-ref-frame-mvs`）生成五组 14 帧
+192x128 真实码流：interintra 家族、masked compound、OBMC+local warp、
+dual filter+ref-frame-mvs 各自隔离（其余工具显式关闭以强制差异化
+编码决策）与全开组合，逐帧 MD5 与 dav1d 1.5.1 CLI 原生输出一致
+（`scripts/generate_av1_toolcombo_vectors.mbtx`，参考链同 resize 轮）。
+回应 README 中"更广工具组合待验证"：§83-96 逐工具移植的 inter
+路径在组合开启的真实码流上全部收敛。注意 aomenc 默认全开这些工具，
+`=1` 单独开启不改变编码决策（五流同大小），需互斥关闭其他工具才
+能隔离验证。
