@@ -4491,3 +4491,19 @@ Period 内可输出多个 AdaptationSet/Representation。
 - wasm_probe 的 DASH 签名同步更新。
 
 全量 wasm **1121/1121**。
+
+## 148. HLS fMP4 分离音轨 rendition 验证
+
+在 §146 的 rendition 主播放列表与 §141 的 fMP4 写入器基础上补齐组合
+验证：视频/音频各自 fMP4 init+media（H.264 5 帧、AAC 5 帧），媒体
+播放列表带 `EXT-X-MAP`（version=6），主播放列表用 `EXT-X-MEDIA`
+音频组关联。
+- 回归 `hls_fmp4_renditions_wbtest.mbt`：解析主/媒体播放列表的
+  rendition 与 map，`HlsSegmentReader` 取回 init+media，`av_mov_open`
+  解复用后 H.264 5 帧 MD5 对齐 `fmp4_h264_refs`，AAC 5 帧解码成功。
+- 外部：ffmpeg 9.0.2 `-allowed_extensions ALL` 播放主播放列表，识别
+  h264+aac，视频 framemd5 与参考一致，音频 s16le MD5
+  `0389e90a81fbef4945c3bbe0b11c048c` 与 ADTS 参考相同（fMP4 HLS 无
+  DASH CLI 的双读现象）。
+
+全量 wasm **1122/1122**。
