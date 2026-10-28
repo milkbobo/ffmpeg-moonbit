@@ -177,6 +177,26 @@ pub fn ff_wav_codec_id(tag : Int32, bits : Int32) -> String {
 }
 
 ///|
+/// `ff_get_wav_header` reads RIFX fields big-endian but keeps the little-endian
+/// codec id, so FFmpeg reports e.g. `pcm_s16le` and decodes the BE payload
+/// byte-swapped. The port maps the ids to their BE variants instead, making
+/// `pcm_*be` the codec name for the (spec-correct) big-endian payload.
+fn wav_codec_be(codec : String) -> String {
+  match codec {
+    "pcm_s16le" => "pcm_s16be"
+    "pcm_s24le" => "pcm_s24be"
+    "pcm_s32le" => "pcm_s32be"
+    "pcm_s64le" => "pcm_s64be"
+    "pcm_u16le" => "pcm_u16be"
+    "pcm_u24le" => "pcm_u24be"
+    "pcm_u32le" => "pcm_u32be"
+    "pcm_f32le" => "pcm_f32be"
+    "pcm_f64le" => "pcm_f64be"
+    _ => codec
+  }
+}
+
+///|
 /// `av_get_bits_per_sample` for the PCM/ADPCM codecs this demuxer names. */
 pub fn wav_bits_per_sample(codec : String) -> Int32 {
   match codec {
@@ -223,7 +243,9 @@ fn wav_expected_bitrate(
     | "pcm_s32be"
     | "pcm_s64le"
     | "pcm_f32le"
+    | "pcm_f32be"
     | "pcm_f64le"
+    | "pcm_f64be"
     | "pcm_alaw"
     | "pcm_mulaw" => {
       let align = (bits_per_coded_sample + 7) / 8 * channels
@@ -394,6 +416,7 @@ fn wav_parse_fmt(
   if sample_rate <= 0 {
     return Err("EINVAL: invalid sample rate")
   }
+  let codec = if big_endian { wav_codec_be(codec) } else { codec }
   let mut bit_rate = byte_rate * 8L
   let expected = wav_expected_bitrate(
     codec, sample_rate, channels, block_align, bits,

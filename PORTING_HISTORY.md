@@ -4323,3 +4323,21 @@ WAVEFORMAT/样本表不变。
   与源逐字节一致。
 
 全量 wasm **1104/1104**。
+
+## 139. WAV 写入器 RIFX（大端）支持与读端 BE 映射
+
+`wav_muxer_new` 新增 `big_endian` 开关：写 `RIFX` 容器，块大小/格式
+字段与 16/24/32-bit/float 载荷均为大端，8-bit 载荷不变；RIFX 与
+RF64/extensible 组合在构造时报错（FFmpeg 的 RIFX 读端同样拒绝
+WAVEFORMATEX）。
+- 读端补充 `ff_get_wav_header` 的 BE 映射：RIFX 的 `pcm_s16/s24/s32/
+  f32/f64` 映射为对应 `pcm_*be`。注意这是**有意偏离 FFmpeg 9.0.2**：
+  其 wavdemux 对 RIFX 仍报 LE codec id，会把 BE 载荷按 LE 解码（实测
+  ffmpeg 的 16-bit RIFX 输出恰为源样本逐字字节交换）。
+- 回归：16-bit stereo / 24-bit mono / float32 stereo / 8-bit mono 的
+  RIFX 头字段、载荷字节与回读（BE codec 名、data offset/size）断言。
+- 外部：ffprobe 可解析四种 RIFX；8-bit（字节序无关）经 ffmpeg 解码
+  与源逐字节一致；16-bit 解码结果等于源字节交换，印证上述 ffmpeg
+  限制而非写入错误。
+
+全量 wasm **1108/1108**。

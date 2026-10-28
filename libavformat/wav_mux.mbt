@@ -17,6 +17,8 @@ pub struct WavMuxer {
   float_samples : Bool
   /// Emit a `RF64`/`ds64` header for files beyond the 4 GiB RIFF limit.
   rf64 : Bool
+  /// Emit a big-endian `RIFX` container (payload bytes swapped accordingly).
+  big_endian : Bool
   data : Array[Byte]
 }
 
@@ -24,7 +26,8 @@ pub struct WavMuxer {
 /// Create a PCM WAV writer. 8-bit samples are unsigned (WAV convention);
 /// 16/24/32-bit samples are signed. A non-zero `channel_mask` or more than two
 /// channels selects WAVE_FORMAT_EXTENSIBLE. `rf64=true` switches the container
-/// header to RF64 (the payload layout is unchanged).
+/// header to RF64 (the payload layout is unchanged); `big_endian=true` writes
+/// a `RIFX` file (only plain 16-byte WAVEFORMAT, so no extensible layout).
 pub fn wav_muxer_new(
   sample_rate : Int32,
   channels : Int32,
@@ -32,6 +35,7 @@ pub fn wav_muxer_new(
   channel_mask~ : UInt32 = 0U,
   float~ : Bool = false,
   rf64~ : Bool = false,
+  big_endian~ : Bool = false,
 ) -> Result[WavMuxer, String] {
   if sample_rate <= 0 || channels <= 0 {
     return Err("EINVAL: invalid WAV sample rate or channel count")
@@ -42,6 +46,9 @@ pub fn wav_muxer_new(
   if bits != 8 && bits != 16 && bits != 24 && bits != 32 {
     return Err("EINVAL: WAV muxer supports 8/16/24/32-bit PCM")
   }
+  if big_endian && (rf64 || channels > 2 || channel_mask != 0U) {
+    return Err("EINVAL: RIFX supports only plain WAVEFORMAT without RF64")
+  }
   Ok({
     sample_rate,
     channels,
@@ -50,6 +57,7 @@ pub fn wav_muxer_new(
     extensible: channels > 2 || channel_mask != 0U,
     float_samples: float,
     rf64,
+    big_endian,
     data: [],
   })
 }
@@ -61,9 +69,30 @@ fn wav_mux_u16(dst : Array[Byte], v : Int32) -> Unit {
 }
 
 ///|
+fn wav_mux_w16(dst : Array[Byte], v : Int32, big_endian : Bool) -> Unit {
+  if big_endian {
+    dst.push(((v >> 8) & 0xFF).to_byte())
+    dst.push((v & 0xFF).to_byte())
+  } else {
+    wav_mux_u16(dst, v)
+  }
+}
+
+///|
 fn wav_mux_u32(dst : Array[Byte], v : UInt32) -> Unit {
   for i in 0..<4 {
     dst.push(((v >> (8 * i)) & 0xFFU).to_byte())
+  }
+}
+
+///|
+fn wav_mux_w32(dst : Array[Byte], v : UInt32, big_endian : Bool) -> Unit {
+  if big_endian {
+    for i in 0..<4 {
+      dst.push(((v >> (8 * (3 - i))) & 0xFFU).to_byte())
+    }
+  } else {
+    wav_mux_u32(dst, v)
   }
 }
 
@@ -82,9 +111,10 @@ fn wav_mux_tag(dst : Array[Byte], tag : String) -> Unit {
 }
 
 ///|
-/// Append interleaved samples. Values are written little-endian in the low
-/// `bits` bits; callers provide signed samples already in the PCM range.
-/// 8-bit output is offset to the unsigned range.
+/// Append interleaved samples. Values are written in the low `bits` bits,
+/// little-endian for RIFF/RF64 and big-endian for RIFX; callers provide
+/// signed samples already in the PCM range. 8-bit output is offset to the
+/// unsigned range.
 pub fn WavMuxer::write_samples(
   self : WavMuxer,
   samples : ArrayView[Int32],
@@ -97,7 +127,8 @@ pub fn WavMuxer::write_samples(
       sample.reinterpret_as_uint()
     }
     for i in 0..<bytes {
-      self.data.push(((v >> (8 * i)) & 0xFFU).to_byte())
+      let shift = if self.big_endian { 8 * (bytes - 1 - i) } else { 8 * i }
+      self.data.push(((v >> shift) & 0xFFU).to_byte())
     }
   }
 }
@@ -112,7 +143,8 @@ pub fn WavMuxer::write_float_samples(
   for sample in samples {
     let v = sample.reinterpret_as_uint()
     for i in 0..<4 {
-      self.data.push(((v >> (8 * i)) & 0xFFU).to_byte())
+      let shift = if self.big_endian { 8 * (3 - i) } else { 8 * i }
+      self.data.push(((v >> shift) & 0xFFU).to_byte())
     }
   }
 }
@@ -144,6 +176,9 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
   if self.rf64 {
     wav_mux_tag(out, "RF64")
     wav_mux_u32(out, 0xFFFFFFFFU)
+  } else if self.big_endian {
+    wav_mux_tag(out, "RIFX")
+    wav_mux_w32(out, riff_size.reinterpret_as_uint(), true)
   } else {
     wav_mux_tag(out, "RIFF")
     wav_mux_u32(out, riff_size.reinterpret_as_uint())
@@ -158,13 +193,13 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
     wav_mux_u32(out, 0U) // table entries
   }
   wav_mux_tag(out, "fmt ")
-  wav_mux_u32(out, fmt_size.reinterpret_as_uint())
-  wav_mux_u16(out, format_tag)
-  wav_mux_u16(out, self.channels)
-  wav_mux_u32(out, self.sample_rate.reinterpret_as_uint())
-  wav_mux_u32(out, byte_rate.reinterpret_as_uint())
-  wav_mux_u16(out, block_align)
-  wav_mux_u16(out, self.bits)
+  wav_mux_w32(out, fmt_size.reinterpret_as_uint(), self.big_endian)
+  wav_mux_w16(out, format_tag, self.big_endian)
+  wav_mux_w16(out, self.channels, self.big_endian)
+  wav_mux_w32(out, self.sample_rate.reinterpret_as_uint(), self.big_endian)
+  wav_mux_w32(out, byte_rate.reinterpret_as_uint(), self.big_endian)
+  wav_mux_w16(out, block_align, self.big_endian)
+  wav_mux_w16(out, self.bits, self.big_endian)
   if self.extensible {
     wav_mux_u16(out, 22) // cbSize
     wav_mux_u16(out, self.bits) // valid bits
@@ -181,18 +216,23 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
   }
   if fact_size != 0 {
     wav_mux_tag(out, "fact")
-    wav_mux_u32(out, 4U)
+    wav_mux_w32(out, 4U, self.big_endian)
     // Sample frames, matching `number_of_samples` in `wav_write_trailer`.
-    wav_mux_u32(out, (data_size / block_align).reinterpret_as_uint())
+    wav_mux_w32(
+      out,
+      (data_size / block_align).reinterpret_as_uint(),
+      self.big_endian,
+    )
   }
   wav_mux_tag(out, "data")
-  wav_mux_u32(
+  wav_mux_w32(
     out,
     if self.rf64 {
       0xFFFFFFFFU
     } else {
       data_size.reinterpret_as_uint()
     },
+    self.big_endian,
   )
   out.append(self.data)
   if pad != 0 {

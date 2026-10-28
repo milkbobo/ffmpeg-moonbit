@@ -228,3 +228,80 @@ test "wav muxer: RF64 combines with float and extensible" {
   assert_eq(demux.sample_count, 1L)
   assert_eq(demux.data_offset, 116L) // 48 ds64 header + 48 fmt + 12 fact + 8 data
 }
+
+///|
+test "wav muxer: RIFX writes big-endian header and samples" {
+  let mux = wav_muxer_new(44100, 2, 16, big_endian=true).unwrap()
+  mux.write_samples([1, -1, 0x1234, -0x1234][:])
+  let bytes = mux.finish()
+  assert_eq(bytes[0:4], b"RIFX"[:])
+  assert_eq(bytes[4:8], b"\x00\x00\x00\x2c"[:]) // RIFF size, big endian
+  assert_eq(bytes[8:12], b"WAVE"[:])
+  assert_eq(bytes[16:20], b"\x00\x00\x00\x10"[:]) // fmt size
+  assert_eq(bytes[20:22], b"\x00\x01"[:]) // PCM tag
+  assert_eq(bytes[22:24], b"\x00\x02"[:]) // channels
+  assert_eq(bytes[24:28], b"\x00\x00\xac\x44"[:]) // 44100
+  assert_eq(bytes[32:34], b"\x00\x04"[:]) // block align
+  assert_eq(bytes[34:36], b"\x00\x10"[:]) // bits
+  assert_eq(bytes[36:40], b"data"[:])
+  assert_eq(bytes[40:44], b"\x00\x00\x00\x08"[:])
+  assert_eq(
+    bytes[44:52].to_owned(),
+    Bytes::from_array([0x00, 0x01, 0xFF, 0xFF, 0x12, 0x34, 0xED, 0xCC]),
+  )
+  let demux = av_wav_open(bytes).unwrap()
+  assert_eq(demux.format.codec, "pcm_s16be")
+  assert_eq(demux.format.channels, 2)
+  assert_eq(demux.format.sample_rate, 44100)
+  assert_eq(demux.data_offset, 44L)
+  assert_eq(demux.data_size, 8L)
+  assert_eq(demux.sample_count, 2L)
+}
+
+///|
+test "wav muxer: RIFX float uses big-endian fact and payload" {
+  let mux = wav_muxer_new(48000, 1, 32, float=true, big_endian=true).unwrap()
+  let samples : Array[Float] = [0.5, -0.5]
+  mux.write_float_samples(samples[:])
+  let bytes = mux.finish()
+  assert_eq(bytes[0:4], b"RIFX"[:])
+  assert_eq(bytes[36:40], b"fact"[:])
+  assert_eq(bytes[40:44], b"\x00\x00\x00\x04"[:])
+  assert_eq(bytes[44:48], b"\x00\x00\x00\x02"[:]) // 2 frames
+  assert_eq(
+    bytes[56:64].to_owned(),
+    Bytes::from_array([0x3F, 0x00, 0x00, 0x00, 0xBF, 0x00, 0x00, 0x00]),
+  )
+  let demux = av_wav_open(bytes).unwrap()
+  assert_eq(demux.format.codec, "pcm_f32be")
+  assert_eq(demux.data_size, 8L)
+  assert_eq(demux.sample_count, 2L)
+}
+
+///|
+test "wav muxer: RIFX rejects extensible and RF64 combinations" {
+  match wav_muxer_new(48000, 6, 16, big_endian=true) {
+    Ok(_) => fail("RIFX multichannel must fail")
+    Err(_) => ()
+  }
+  match wav_muxer_new(48000, 2, 16, channel_mask=3U, big_endian=true) {
+    Ok(_) => fail("RIFX channel mask must fail")
+    Err(_) => ()
+  }
+  match wav_muxer_new(48000, 2, 16, rf64=true, big_endian=true) {
+    Ok(_) => fail("RIFX RF64 must fail")
+    Err(_) => ()
+  }
+}
+
+///|
+test "wav muxer: RIFX 8-bit payload stays endian-neutral" {
+  let mux = wav_muxer_new(8000, 1, 8, big_endian=true).unwrap()
+  mux.write_samples([0, 127, -128][:])
+  let bytes = mux.finish()
+  assert_eq(bytes[0:4], b"RIFX"[:])
+  assert_eq(bytes[44:47].to_owned(), Bytes::from_array([0x80, 0xFF, 0x00]))
+  let demux = av_wav_open(bytes).unwrap()
+  assert_eq(demux.format.codec, "pcm_u8")
+  assert_eq(demux.data_size, 3L)
+}
