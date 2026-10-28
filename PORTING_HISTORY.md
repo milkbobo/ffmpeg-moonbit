@@ -4038,3 +4038,19 @@ demux 出的 STREAMINFO/元数据/帧再经本 muxer 写出，重新 demux 后�
 Ogg-FLAC 夹具的 9 帧 remux 成 `A_FLAC` MKV 后，解复用 + 组装原生
 `fLaC` 解码 PCM MD5 与参考一致，ffprobe 识别 flac/44.1k/mono/24-bit，
 ffmpeg 解码 MD5 相同。全量 wasm **1076/1076**。
+
+## 120. MP4 单轨 MP3 写入器
+
+`libavformat/mp4_audio_mux.mbt` 新增 `Mp4Mp3Muxer`：`mp4a` 采样条目 +
+`esds`（objectTypeIndication 0x6B MPEG-1 / 0x69 MPEG-2，无
+DecoderSpecificInfo），复用 Opus/AAC 写入器的非分片样本表布局
+（`ftyp`/`mdat`/`moov`、单 `trak`、`stts/stsc/stsz/stco`）。
+`libavcodec` 侧为 `Mp3Pcm` 增加 `pcm_bytes()`（s16le）。
+
+验证：ffmpeg libmp3lame 的 13 帧 CBR 44.1 kHz 单声道 MP3 逐帧喂入，
+`av_mov_open` 读回 `codec_id=mp3`、13 个样本、`sample_rate=44100`、
+`channels=1`，样本按偏移拼回的字节与原帧流完全一致；解码 PCM 与
+FFmpeg **定点** `mp3` 解码器一致。注意 FFmpeg CLI 默认的 `mp3float`
+在首个非零样本即差 1 LSB（本仓库既有 MP3 白盒套件同样以定点解码器
+为基准）。外部验证：ffprobe 识别 mp3/44.1k/mono，ffmpeg `-c:a mp3`
+解码本 muxer 输出 MD5 与参考相同。全量 wasm **1077/1077**。

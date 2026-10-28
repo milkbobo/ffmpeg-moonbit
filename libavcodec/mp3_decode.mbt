@@ -194,6 +194,17 @@ pub struct Mp3Pcm {
 }
 
 ///|
+/// Interleaved s16le PCM, matching FFmpeg's default MP3 output format.
+pub fn Mp3Pcm::pcm_bytes(self : Mp3Pcm) -> Bytes {
+  let out : Array[Byte] = []
+  for v in self.samples {
+    out.push((v & 0xFF).to_byte())
+    out.push(((v >> 8) & 0xFF).to_byte())
+  }
+  Bytes::from_array(out)
+}
+
+///|
 /// Persistent MPEG-audio decoder state: synthesis windows, Layer III MDCT
 /// overlap and the bit-reservoir main-data stream. Layer I/II only use the
 /// synthesis half plus `sb_samples`.
