@@ -4280,3 +4280,18 @@ framemd5，与同一组参考完全相同（av1/yuv420p）。
   edit list，与既有 MP4 Opus pre-skip 说明一致，此项已记录。
 
 新增测试并入 `mp4_av_mux_wbtest.mbt`。全量 wasm **1097/1097**。
+
+## 136. MKV/Matroska H.264 与 H.264+AAC 写入器的真实样本验证
+
+`mkv_h264_muxer` 与 `mkv_av_muxer` 此前只有伪包测试。现用真实数据
+（x264 5 帧 + 源 MKV 的 45 个 AAC-LC 44.1 kHz 单声道包）：
+- 单轨写 5 帧、双轨交错写 5 视频帧 + 45 音频包；回读视频包字节一致、
+  双轨音频包与源逐包相同；视频转 Annex B 解码 5 帧 MD5 等于
+  `fmp4_h264_refs`，AAC 45 帧逐帧解码成功。
+- 外部 ffmpeg 9.0.2：单轨/双轨视频 framemd5（需 `-fps_mode
+  passthrough`，否则 CLI 默认 CFR 会按时间戳丢帧）5+5 帧与参考一致；
+  双轨音频 s16le MD5 `cfe6223331361877aef4f7e88a2a50bc` 与同 AU 的
+  ADTS 解码逐字节一致。
+
+新增测试并入 `mkv_h264_mux_wbtest.mbt` / `mkv_av_mux_wbtest.mbt`。
+全量 wasm **1099/1099**。
