@@ -12,8 +12,9 @@
 /// `r="-1"`), and duration-driven segment enumeration. The C's HTTP layer and
 /// lazy per-representation download contexts stay at the platform boundary.
 ///
-/// SegmentList initialization/media ranges are consumed by segment_io.mbt.
-/// Out of scope: SegmentBase index-range playback, xlink remote elements, UTCTiming clock
+/// SegmentList initialization/media ranges and SegmentBase `indexRange`
+/// (parsed from the representation's `sidx` by segment_io.mbt) are consumed by
+/// segment_io.mbt. Out of scope: xlink remote elements, UTCTiming clock
 /// synchronisation, multi-period overlap checks, and DRM (`ContentProtection`).
 
 ///|
@@ -461,7 +462,21 @@ fn dash_parse_representation(
     None => {
       // SegmentBase / SegmentList style: expose the BaseURL as a single URI.
       match dash_segment_node(period, adapt, rep, "SegmentBase") {
-        Some(sb) => index_range = sb.attr_or("indexRange", "")
+        Some(sb) => {
+          index_range = sb.attr_or("indexRange", "")
+          match sb.child("Initialization") {
+            Some(init) => {
+              initialization_range = init.attr_or("range", "")
+              let src = init.attr_or("sourceURL", "")
+              if src != "" {
+                initialization = hls_resolve_uri(rep_base, src)
+              } else if initialization_range != "" {
+                initialization = rep_base
+              }
+            }
+            None => ()
+          }
+        }
         None => ()
       }
       match dash_segment_node(period, adapt, rep, "SegmentList") {

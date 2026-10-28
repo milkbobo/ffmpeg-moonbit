@@ -222,6 +222,8 @@ pub struct DashSegmentReader {
   fetch : MediaFetch
   mut initialization : Bytes?
   mut next_index : Int32
+  mut index_loaded : Bool
+  index_offsets : Array[(Int64, Int64)]
 }
 
 ///|
@@ -229,7 +231,14 @@ pub fn dash_segment_reader_new(
   representation : DashRepresentation,
   fetch : MediaFetch,
 ) -> DashSegmentReader {
-  { representation, fetch, initialization: None, next_index: 0, }
+  {
+    representation,
+    fetch,
+    initialization: None,
+    next_index: 0,
+    index_loaded: false,
+    index_offsets: [],
+  }
 }
 
 ///|
@@ -237,10 +246,8 @@ pub fn DashSegmentReader::next(
   self : DashSegmentReader,
 ) -> Result[MediaSegmentData?, String] {
   let rep = self.representation
-  if self.next_index >= rep.segments.length() {
-    if self.next_index == 0 && rep.index_range != "" {
-      return Err("dash: SegmentBase index-range playback is not supported")
-    }
+  let using_index = rep.segments.length() == 0 && rep.index_range != ""
+  if !using_index && self.next_index >= rep.segments.length() {
     return Ok(None)
   }
   let init = match self.initialization {
@@ -262,6 +269,48 @@ pub fn DashSegmentReader::next(
       bytes
     }
   }
+  if using_index {
+    if !self.index_loaded {
+      let range = match dash_resource_range(rep.index_range) {
+        Ok(Some(value)) => value
+        Ok(None) => return Err("dash: missing SegmentBase index range")
+        Err(e) => return Err(e)
+      }
+      let index_bytes = match
+        media_fetch_resource(self.fetch, rep.base_url, Some(range)) {
+        Ok(value) => value
+        Err(e) => return Err(e)
+      }
+      let sidx = match dash_parse_sidx(index_bytes, range.offset) {
+        Ok(value) => value
+        Err(e) => return Err(e)
+      }
+      let mut offset = sidx.media_start
+      for size in sidx.sizes {
+        self.index_offsets.push((offset, size))
+        offset = offset + size
+      }
+      self.index_loaded = true
+    }
+    if self.next_index >= self.index_offsets.length() {
+      return Ok(None)
+    }
+    let (offset, size) = self.index_offsets[self.next_index]
+    let media = match
+      media_fetch_resource(
+        self.fetch,
+        rep.base_url,
+        Some({ offset, length: size, }),
+      ) {
+      Ok(value) => value
+      Err(e) => return Err(e)
+    }
+    let sequence = self.next_index.to_int64()
+    self.next_index += 1
+    return Ok(
+      Some({ sequence, initialization: init, media, discontinuity: false, }),
+    )
+  }
   let segment = rep.segments[self.next_index]
   let range = match dash_resource_range(segment.media_range) {
     Ok(value) => value
@@ -280,6 +329,73 @@ pub fn DashSegmentReader::next(
       discontinuity: false,
     }),
   )
+}
+
+///|
+/// Parsed `sidx` (segment index) for a single-file SegmentBase
+/// representation. `media_start` is the absolute offset of the first
+/// referenced subsegment; `sizes` are the subsegment byte lengths.
+priv struct DashSidx {
+  media_start : Int64
+  sizes : Array[Int64]
+}
+
+///|
+fn dash_sidx_u32(data : Bytes, off : Int32) -> Int64 {
+  (data[off].to_int64() << 24) |
+  (data[off + 1].to_int64() << 16) |
+  (data[off + 2].to_int64() << 8) |
+  data[off + 3].to_int64()
+}
+
+///|
+fn dash_sidx_u64(data : Bytes, off : Int32) -> Int64 {
+  (dash_sidx_u32(data, off) << 32) | dash_sidx_u32(data, off + 4)
+}
+
+///|
+/// Parse a `sidx` box fetched from `[index_start, ...)`.
+fn dash_parse_sidx(
+  data : Bytes,
+  index_start : Int64,
+) -> Result[DashSidx, String] {
+  if data.length() < 8 ||
+    data[4] != b's' ||
+    data[5] != b'i' ||
+    data[6] != b'd' ||
+    data[7] != b'x' {
+    return Err("dash: SegmentBase index does not start with sidx")
+  }
+  let box_size = dash_sidx_u32(data, 0)
+  if box_size < 24L || box_size > data.length().to_int64() {
+    return Err("dash: invalid sidx size")
+  }
+  let version = data[8].to_int()
+  let mut first_offset = 0L
+  let mut count_off = 0
+  let mut entries_off = 0
+  if version == 0 {
+    first_offset = dash_sidx_u32(data, 24)
+    count_off = 30
+    entries_off = 32
+  } else if version == 1 {
+    first_offset = dash_sidx_u64(data, 28)
+    count_off = 38
+    entries_off = 40
+  } else {
+    return Err("dash: unsupported sidx version")
+  }
+  let count = (data[count_off].to_int() << 8) | data[count_off + 1].to_int()
+  if entries_off + count * 12 > box_size.to_int() {
+    return Err("dash: sidx references out of bounds")
+  }
+  let sizes : Array[Int64] = []
+  for i = 0; i < count; i = i + 1 {
+    let off = entries_off + 12 * i
+    let word = dash_sidx_u32(data, off)
+    sizes.push(word & 0x7FFFFFFFL)
+  }
+  Ok({ media_start: index_start + box_size + first_offset, sizes, })
 }
 
 ///|

@@ -4904,3 +4904,24 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   ffmpeg 自身编码后解码一致（`ce3a9326…`、`4d9e1303…`）。
 
 全量 wasm **1156/1156**。
+
+## 168. DASH SegmentBase 单文件（indexRange/sidx）读取
+
+- `dash.mbt` 在 `SegmentBase` 下解析 `<Initialization>` 的
+  `range`/`sourceURL`：无 sourceURL 时初始化段就是同一 BaseURL 的
+  字节范围。
+- `segment_io.mbt` 的 `DashSegmentReader` 支持 `indexRange` 播放：
+  按范围抓取 `sidx`（支持 version 0/1、first_offset 与引用列表），
+  计算 `media_start = index_end + 1 + first_offset`，随后按每个
+  reference 的 size 逐个抓取子分片；初始化段仍只抓取一次。
+- 新增 `sidx` 解析（box size、version、reference_count、第 31 位
+  引用类型与 31 位 size）。
+- 回归 `dash_segment_base_realdata_wbtest.mbt`：ffmpeg
+  `-global_sidx 1 -single_file 1` 生成的 64x48 H.264 MP4（init 0-816、
+  global sidx 817-880、两个媒体范围），MPD 改写成 SegmentBase；
+  内部解析 MPD、按 sidx 抓取两段并解码 10 帧，MD5 与 ffmpeg
+  framemd5 一致。
+- 外部：同一 SegmentBase MPD 由 ffmpeg 9.0.2 播放，framemd5 前 10
+  帧与整文件解码参考一致（本地 DASH CLI 双读的已知重复行为除外）。
+
+全量 wasm **1157/1157**。
