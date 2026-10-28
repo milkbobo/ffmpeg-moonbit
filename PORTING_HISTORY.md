@@ -4722,3 +4722,25 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
 由 C 的位读取分支处理，当前夹具不可得）。
 
 全量 wasm **1141/1141**。
+
+## 159. AIFF/AIFC PCM 读写
+
+新增 `aiff.mbt`（解复用）与 `aiff_mux.mbt`（写入）：
+- 读取 `FORM`/`AIFF|AIFC`、`COMM`、`SSND`，解析 80-bit IEEE 扩展
+  采样率，按块对齐切分 PCM 包；支持 AIFF 大端 PCM 8/16/24/32-bit
+  与 AIFC `NONE`/`sowt`（小端 PCM）。压缩 AIFC 拒绝。
+- 写入 `FORM`/`AIFF` + `COMM` + `SSND`，大端交错有符号 PCM
+  （AIFF 的 8-bit 是有符号，与 WAV 不同），采样率编码为 80-bit
+  扩展浮点，chunk/FORM 长度与偶数字节填充由 `finish` 计算。
+
+验证：
+- ffmpeg 9.0.2 生成的 8 kHz 夹具（s16 单/双声道、s8、s24、s32
+  双声道）经端口读取并转换为参考布局后，PCM MD5 与 ffmpeg
+  s8le/s16le/s32le 参考一致；这些夹具再用 `aiff_muxer` 重写，
+  本地回读与参考一致。
+- 外部：端口写出的 s16/s24/s32 AIFF 由 ffmpeg 识别为
+  pcm_s16be/pcm_s24be/pcm_s32be、8000 Hz、2 声道，解码 PCM MD5
+  与参考相同（`c35b7be8…`、`322c025b…`）。
+- 损坏的 FORM/RIFF 头被拒绝。
+
+全量 wasm **1143/1143**。
