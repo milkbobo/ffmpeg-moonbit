@@ -90,6 +90,7 @@ pub fn mov_codec_name(codec : String, codec_id : String) -> String {
     "Opus" => "opus"
     "fLaC" => "flac"
     "alac" => "alac"
+    "ima4" => "adpcm_ima_qt"
     "twos" => "pcm_s16be"
     "sowt" => "pcm_s16le"
     "raw " => "pcm_u8"

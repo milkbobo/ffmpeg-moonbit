@@ -4858,3 +4858,17 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
 `a436a744…`）；构造测试覆盖不足一块的尾部字节被忽略。
 
 全量 wasm **1152/1152**。
+
+## 165. IMA QuickTime（MOV `ima4`）解码
+
+- `adpcm.mbt` 新增 `AdpcmImaQtDecoder`：每声道 34 字节块（大端 16-bit
+  头：9-bit 预测值 + 7-bit step index，随后 64 个 4-bit nibble），
+  复用 IMA QT nibble 展开；头中 step 相同且预测值变化 ≤0x7F 时保留
+  旧预测状态（与 adpcm.c 的 IMA_QT 分支一致），状态跨块保持。
+- `codec_tags.mbt` 增加 `ima4` → `adpcm_ima_qt` 映射；MOV 解复用器
+  已有 ima4 的 64 样本/34×声道字节默认打包，无需其它改动。
+- 回归 `ima_qt_realdata_wbtest.mbt`：ffmpeg 9.0.2 编码的 8 kHz
+  IMA QT 单/双声道 MOV，经 `av_mov_open` 逐块解码，PCM MD5 与 ffmpeg
+  s16le 参考一致（`609afae1…`、`2db50b2d…`）。
+
+全量 wasm **1153/1153**。

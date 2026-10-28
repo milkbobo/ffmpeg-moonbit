@@ -88,6 +88,15 @@ fn adpcm_clip(v : Int32, lo : Int32, hi : Int32) -> Int32 {
 }
 
 ///|
+fn adpcm_sign16(v : Int32) -> Int32 {
+  if v >= 0x8000 {
+    v - 0x10000
+  } else {
+    v
+  }
+}
+
+///|
 fn adpcm_le16(data : Bytes, off : Int32) -> Int32 {
   let v = data[off].to_int() | (data[off + 1].to_int() << 8)
   if v >= 0x8000 {
@@ -411,4 +420,77 @@ pub fn AdpcmAudio::pcm_bytes(self : AdpcmAudio) -> Bytes {
     out.push(((v >> 8) & 0xFF).to_byte())
   }
   Bytes::from_array(out)
+}
+
+///|
+/// IMA QuickTime (`ima4`) decoder: each 34-byte chunk holds a big-endian
+/// 16-bit header (9-bit predictor with the low 7 bits cleared, 7-bit step
+/// index) followed by 64 nibbles. Predictor/step state carries across blocks
+/// when the step index is unchanged and the predictor moved by at most 0x7f.
+pub struct AdpcmImaQtDecoder {
+  channels : Int32
+  status : Array[AdpcmChannel]
+}
+
+///|
+pub fn adpcm_ima_qt_decoder_new(
+  channels : Int32,
+) -> Result[AdpcmImaQtDecoder, String] {
+  if channels < 1 || channels > 8 {
+    return Err("adpcm: invalid IMA QuickTime channel count")
+  }
+  let status : Array[AdpcmChannel] = []
+  for ch = 0; ch < channels; ch = ch + 1 {
+    status.push(adpcm_channel_new())
+  }
+  Ok({ channels, status, })
+}
+
+///|
+pub fn AdpcmImaQtDecoder::decode_block(
+  self : AdpcmImaQtDecoder,
+  packet : Bytes,
+) -> Result[Array[Int32], String] {
+  if packet.length() < 34 * self.channels {
+    return Err("adpcm: truncated IMA QuickTime block")
+  }
+  let planes : Array[Array[Int32]] = []
+  for ch = 0; ch < self.channels; ch = ch + 1 {
+    planes.push(Array::make(64, 0))
+  }
+  let mut pos = 0
+  for ch = 0; ch < self.channels; ch = ch + 1 {
+    let cs = self.status[ch]
+    let header = (packet[pos].to_int() << 8) | packet[pos + 1].to_int()
+    pos = pos + 2
+    let predictor = adpcm_sign16(header) & -128
+    let step_index = header & 0x7F
+    if cs.step_index != step_index {
+      cs.step_index = step_index
+      cs.predictor = predictor
+    } else {
+      let diff = predictor - cs.predictor
+      let abs_diff = if diff < 0 { -diff } else { diff }
+      if abs_diff > 0x7F {
+        cs.step_index = step_index
+        cs.predictor = predictor
+      }
+    }
+    if cs.step_index > 88 {
+      return Err("adpcm: invalid IMA QuickTime step index")
+    }
+    for m = 0; m < 32; m = m + 1 {
+      let byte = packet[pos].to_int()
+      pos = pos + 1
+      planes[ch][m * 2] = adpcm_ima_expand(cs, byte & 0x0F)
+      planes[ch][m * 2 + 1] = adpcm_ima_expand(cs, byte >> 4)
+    }
+  }
+  let samples : Array[Int32] = []
+  for i = 0; i < 64; i = i + 1 {
+    for ch = 0; ch < self.channels; ch = ch + 1 {
+      samples.push(planes[ch][i])
+    }
+  }
+  Ok(samples)
 }
