@@ -522,9 +522,17 @@ pub struct Av1FrameHeader {
   num_y_points : Int32
   num_cb_points : Int32
   num_cr_points : Int32
+  /// Flat (value, scaling) pairs for the luma/Cb/Cr scaling points.
+  y_points : Array[Int32]
+  cb_points : Array[Int32]
+  cr_points : Array[Int32]
   chroma_scaling_from_luma : Bool
   grain_scaling_minus_8 : Int32
   ar_coeff_lag : Int32
+  /// AR coefficients as parsed (`raw - 128`), luma then per chroma plane.
+  ar_coeffs_y : Array[Int32]
+  ar_coeffs_cb : Array[Int32]
+  ar_coeffs_cr : Array[Int32]
   ar_coeff_shift_minus_6 : Int32
   grain_scale_shift : Int32
   cb_mult : Int32
@@ -816,9 +824,15 @@ pub fn av1_parse_frame_header(
           num_y_points: 0,
           num_cb_points: 0,
           num_cr_points: 0,
+          y_points: [],
+          cb_points: [],
+          cr_points: [],
           chroma_scaling_from_luma: false,
           grain_scaling_minus_8: 0,
           ar_coeff_lag: 0,
+          ar_coeffs_y: [],
+          ar_coeffs_cb: [],
+          ar_coeffs_cr: [],
           ar_coeff_shift_minus_6: 0,
           grain_scale_shift: 0,
           cb_mult: 0,
@@ -1319,6 +1333,12 @@ pub fn av1_parse_frame_header(
       let mut num_y_points = 0
       let mut num_cb_points = 0
       let mut num_cr_points = 0
+      let y_points : Array[Int32] = []
+      let cb_points : Array[Int32] = []
+      let cr_points : Array[Int32] = []
+      let ar_coeffs_y : Array[Int32] = []
+      let ar_coeffs_cb : Array[Int32] = []
+      let ar_coeffs_cr : Array[Int32] = []
       let mut chroma_scaling_from_luma = false
       let mut grain_scaling_minus_8 = 0
       let mut ar_coeff_lag = 0
@@ -1781,7 +1801,8 @@ pub fn av1_parse_frame_header(
               return Err("av1: invalid grain points")
             }
             for _ in 0..<num_y_points {
-              br.skip(16) // point_y_value + point_y_scaling
+              y_points.push(br.read(8).reinterpret_as_int())
+              y_points.push(br.read(8).reinterpret_as_int())
             }
             if !seq.monochrome {
               chroma_scaling_from_luma = br.read1() != 0
@@ -1799,42 +1820,52 @@ pub fn av1_parse_frame_header(
                 return Err("av1: invalid cb grain points")
               }
               for _ in 0..<num_cb_points {
-                br.skip(16)
+                cb_points.push(br.read(8).reinterpret_as_int())
+                cb_points.push(br.read(8).reinterpret_as_int())
               }
               num_cr_points = br.read(4).reinterpret_as_int()
               if num_cr_points > 10 {
                 return Err("av1: invalid cr grain points")
               }
               for _ in 0..<num_cr_points {
-                br.skip(16)
+                cr_points.push(br.read(8).reinterpret_as_int())
+                cr_points.push(br.read(8).reinterpret_as_int())
               }
             }
             grain_scaling_minus_8 = br.read(2).reinterpret_as_int()
             ar_coeff_lag = br.read(2).reinterpret_as_int()
             let num_pos_luma = 2 * ar_coeff_lag * (ar_coeff_lag + 1)
+            if num_y_points > 0 {
+              for _ in 0..<num_pos_luma {
+                ar_coeffs_y.push(br.read(8).reinterpret_as_int() - 128)
+              }
+            }
             let num_pos_chroma = if num_y_points > 0 {
-              br.skip(8 * num_pos_luma)
               num_pos_luma + 1
             } else {
               num_pos_luma
             }
             if chroma_scaling_from_luma || num_cb_points > 0 {
-              br.skip(8 * num_pos_chroma)
+              for _ in 0..<num_pos_chroma {
+                ar_coeffs_cb.push(br.read(8).reinterpret_as_int() - 128)
+              }
             }
             if chroma_scaling_from_luma || num_cr_points > 0 {
-              br.skip(8 * num_pos_chroma)
+              for _ in 0..<num_pos_chroma {
+                ar_coeffs_cr.push(br.read(8).reinterpret_as_int() - 128)
+              }
             }
             ar_coeff_shift_minus_6 = br.read(2).reinterpret_as_int()
             grain_scale_shift = br.read(2).reinterpret_as_int()
             if num_cb_points > 0 {
-              cb_mult = br.read(8).reinterpret_as_int()
-              cb_luma_mult = br.read(8).reinterpret_as_int()
-              cb_offset = br.read(9).reinterpret_as_int()
+              cb_mult = br.read(8).reinterpret_as_int() - 128
+              cb_luma_mult = br.read(8).reinterpret_as_int() - 128
+              cb_offset = br.read(9).reinterpret_as_int() - 256
             }
             if num_cr_points > 0 {
-              cr_mult = br.read(8).reinterpret_as_int()
-              cr_luma_mult = br.read(8).reinterpret_as_int()
-              cr_offset = br.read(9).reinterpret_as_int()
+              cr_mult = br.read(8).reinterpret_as_int() - 128
+              cr_luma_mult = br.read(8).reinterpret_as_int() - 128
+              cr_offset = br.read(9).reinterpret_as_int() - 256
             }
             overlap_flag = br.read1() != 0
             clip_to_restricted = br.read1() != 0
@@ -1946,9 +1977,15 @@ pub fn av1_parse_frame_header(
         num_y_points,
         num_cb_points,
         num_cr_points,
+        y_points,
+        cb_points,
+        cr_points,
         chroma_scaling_from_luma,
         grain_scaling_minus_8,
         ar_coeff_lag,
+        ar_coeffs_y,
+        ar_coeffs_cb,
+        ar_coeffs_cr,
         ar_coeff_shift_minus_6,
         grain_scale_shift,
         cb_mult,

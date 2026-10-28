@@ -7,13 +7,17 @@ struct Av1ReferenceSlot {
   cdf : Av1CdfCtx
   segmap : FixedArray[Byte]?
   coded_width : Int32
+  /// Film grain parameters this picture is output with (pre-grain samples are
+  /// kept in `picture` so references stay clean).
+  grain_hdr : Av1FrameHeader?
 }
 
 ///|
 /// A single AV1 coded-video sequence, with eight reference slots. Packets
 /// contain frame headers and tile groups, with at most one shown frame.
-/// Film grain and intrabc are currently rejected explicitly; superres is
-/// supported (references are kept at their upscaled width).
+/// Film grain is applied on output; grain reuse from a reference frame and
+/// intrabc are currently rejected explicitly; superres is supported
+/// (references are kept at their upscaled width).
 pub struct Av1Decoder {
   mut sequence : Av1SequenceParameters?
   mut sequence_payload : Bytes?
@@ -136,10 +140,14 @@ pub fn Av1Decoder::decode_packet(
         self.motion.slots[i] = motion
       }
     }
-    return Ok(Some(slot.picture))
-  }
-  if hdr.apply_grain {
-    return Err("PATCHWELCOME: AV1 film grain")
+    return Ok(
+      Some(
+        match slot.grain_hdr {
+          Some(g) if g.apply_grain => av1_apply_grain(slot.picture, g, seq)
+          _ => slot.picture
+        },
+      ),
+    )
   }
   if hdr.allow_intrabc {
     return Err("PATCHWELCOME: AV1 intrabc")
@@ -262,6 +270,11 @@ pub fn Av1Decoder::decode_packet(
       None
     },
     coded_width: hdr.width,
+    grain_hdr: if hdr.apply_grain {
+      Some(hdr)
+    } else {
+      None
+    },
   }
   for i in 0..<8 {
     if (hdr.refresh_frame_flags & (1 << i)) != 0 {
@@ -278,5 +291,15 @@ pub fn Av1Decoder::decode_packet(
         hdr.refresh_frame_flags,
       )
   }
-  Ok(if hdr.show_frame { Some(decoded.picture) } else { None })
+  Ok(
+    if hdr.show_frame {
+      if hdr.apply_grain {
+        Some(av1_apply_grain(decoded.picture, hdr, seq))
+      } else {
+        Some(decoded.picture)
+      }
+    } else {
+      None
+    },
+  )
 }

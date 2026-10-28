@@ -4341,3 +4341,26 @@ WAVEFORMATEX）。
   限制而非写入错误。
 
 全量 wasm **1108/1108**。
+
+## 140. AV1 film grain 合成（show-existing 输出）
+
+按 dav1d 1.5.1 `src/fg_apply_tmpl.c`、`src/filmgrain_tmpl.c` 与
+`src/tables.c`（BSD-2-Clause）把 AV1 film grain 合成移植到纯 MoonBit：
+- 帧头解析由 `br.skip` 改为完整读取：缩放的 (value, scaling) 点表、
+  AR 系数（`raw-128`）、uv mult/luma_mult（`raw-128`）、uv offset
+  （9-bit `raw-256`），与 dav1d 的符号语义一致。
+- 新增 `libavcodec/av1_grain.mbt`：缩放 LUT 线性插值（8/10/12-bit）、
+  LFSR + 高斯序列 grain 模板、AR 滤波、32×32 块 offset/overlap 混合、
+  色度 luma 混合与 clip_to_restricted；输出为 grain 后副本，参考帧保持
+  未加 grain 的样本。
+- show-existing 输出按其参考帧保存的 grain 参数与 seed 应用。
+- 调试过程：用独立 C harness（dav1d 同款生成/应用函数）逐级对拍，
+  发现色度按 luma 32×32 块行偏移写到了 `row*32` 而非
+  `(row*32)>>ss_y`，修正后 Y/U 平面与 C 逐像素一致。
+- 验证：libaom `-aom-params film-grain-test=1` 64x48 5 帧流（含
+  show-existing 帧），端口输出 5 帧 MD5 与 dav1d 加 grain 的
+  framemd5 完全一致（2081ffab…、4777434c…、3a2f0e8a…、10f104e4…、
+  b77fbad1…）。libavformat 的 grain 参数测试同步改为有符号期望值。
+
+grain-from-reference（inter 帧 update_grain=0）仍显式报错。
+全量 wasm **1109/1109**。
