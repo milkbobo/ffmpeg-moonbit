@@ -4132,3 +4132,16 @@ framemd5 与参考完全一致。注意 ffmpeg CLI 对本地 DASH 会把探测�
 后与 ffmpeg 的 s16le 逐样本比较，2568 个样本中仅 4 个差 1 LSB
 （浮点/定点舍入差异），其余完全一致。新增
 `mp4_opus_realdata_wbtest.mbt` 固化该对比。全量 wasm **1083/1083**。
+
+## 126. WebM VP9+Opus 真实写入验证
+
+`webm_av_muxer` 用真实码流验证：libvpx 编码的 5 帧 VP9（64×48，首帧
+关键帧，IVF 抽取）+ 3 个真实单声道 Opus 包（pre-skip 312），
+`av_matroska_open` 读回 `V_VP9`/`A_OPUS` 两轨、5+3 个包；视频包喂给
+本移植 `Vp9Decoder`，5 帧 YUV MD5 与 FFmpeg 解码源 IVF 一致；
+`OpusHead`（来自 CodecPrivate）构造 `OpusDecoder`，裁掉 312 pre-skip
+后与 FFmpeg 参考 PCM 最大差 1 LSB（与 MP4 Opus 轮同一参考）。
+
+外部验证：ffprobe 识别 vp9 64×48 + opus mono，ffmpeg 解码的视频
+framemd5 与 IVF 参考完全一致，音频 s16le MD5 与 MP4 Opus 参考完全
+相同。新增 `webm_av_realdata_wbtest.mbt`。全量 wasm **1084/1084**。
