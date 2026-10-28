@@ -4364,3 +4364,17 @@ WAVEFORMATEX）。
 
 grain-from-reference（inter 帧 update_grain=0）仍显式报错。
 全量 wasm **1109/1109**。
+
+## 141. fMP4 HEVC/AV1/VP9 写入器的真实样本验证
+
+`fmp4_hevc_init_segment` / `fmp4_av1_init_segment` / `fmp4_vp9_init_segment`
++ `fmp4_media_segment` 此前只有伪样本回读测试。现用真实夹具（MKV HEVC
+5 AU、libaom AV1 5 TU、WebM VP9 5 帧）生成 fMP4：
+- 回读 `av_mov_open` 校验 hvc1/av01/vp09、extradata、5 个样本；HEVC
+  载荷等于按 AU 重打包后的长度前缀流，AV1/VP9 载荷与输入帧逐字节一致；
+  本地解码 MD5 分别对齐 `mkv_hevc_refs`（POC 排序）、
+  `mp4_av1_real_refs`、`webm_av_vp9_refs`。
+- 外部：三个 init+media 文件经 ffmpeg 9.0.2 `-fps_mode passthrough`
+  `-f framemd5` 解码，5+5+5 帧 MD5 与上述参考完全一致。
+
+新增测试 `fmp4_video_realdata_wbtest.mbt`。全量 wasm **1112/1112**。
