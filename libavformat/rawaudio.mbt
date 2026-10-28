@@ -237,6 +237,83 @@ pub fn av_adts_open(data : Bytes) -> Result[RawAudioTrack, String] {
 }
 
 // ---------------------------------------------------------------------------
+// AMR-NB
+// ---------------------------------------------------------------------------
+
+///|
+/// `#!AMR\n` / `#!AMR-WB\n` file signature (`libavformat/amr.c`). */
+fn amr_header_len(data : Bytes) -> Int32 {
+  if data.length() >= 6 &&
+    data[0] == b'#' &&
+    data[1] == b'!' &&
+    data[2] == b'A' &&
+    data[3] == b'M' &&
+    data[4] == b'R' &&
+    data[5] == b'\n' {
+    return 6
+  }
+  if data.length() >= 9 &&
+    data[0] == b'#' &&
+    data[1] == b'!' &&
+    data[2] == b'A' &&
+    data[3] == b'M' &&
+    data[4] == b'R' &&
+    data[5] == b'-' &&
+    data[6] == b'W' &&
+    data[7] == b'B' &&
+    data[8] == b'\n' {
+    return 9
+  }
+  0
+}
+
+///|
+/// Parse a raw AMR-NB stream: the optional `#!AMR\n` magic followed by RFC
+/// 4867 frames (a table-of-contents byte plus speech payload).  Each packet
+/// includes its TOC byte, as in the C demuxer; `frame_size` is 160 samples.
+pub fn av_amr_open(data : Bytes) -> Result[RawAudioTrack, String] {
+  let magic_len = amr_header_len(data)
+  if magic_len >= 9 {
+    return Err("unsupported AMR-WB stream")
+  }
+  let start = if magic_len == 6 { magic_len } else { 0 }
+  let frames : Array[RawAudioFrame] = []
+  let mut pos = start
+  let mut pts : Int64 = 0
+  while pos < data.length() {
+    let frame = data[pos:].to_owned()
+    let size = @libavcodec.amrnb_frame_size(frame)
+    if size <= 0 || pos + size > data.length() {
+      break
+    }
+    frames.push({
+      pos: pos.to_int64(),
+      size,
+      pts,
+      duration: 160,
+      is_keyframe: true,
+    })
+    pts = pts + 160L
+    pos = pos + size
+  }
+  if frames.length() == 0 {
+    return Err("EINVAL")
+  }
+  Ok({
+    codec: "amr_nb",
+    profile: "",
+    sample_rate: 8000,
+    channels: 1,
+    frame_size: 160,
+    frames,
+    total_samples: pts,
+    bit_rate: 0,
+    id3v2_size: start,
+    info_frame_size: 0,
+  })
+}
+
+// ---------------------------------------------------------------------------
 // AC-3
 // ---------------------------------------------------------------------------
 

@@ -4978,3 +4978,27 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   求逆后各声道一致。
 
 全量 wasm **1164/1164**。
+
+## 171. AMR-NB 解码与裸流切分
+
+- 新增 `amr_tables.mbt`（`scripts/_gen_amr_tables.py` 从 FFmpeg 9.0.2
+  `amrnbdata.h`/`acelp_vectors.c` 提取：8 种模式的 RFC 4867 位重排表、
+  LSF 码本（3/5 分裂）、增益码本、IR 滤波、b60 sinc、pow 表、高通系数；
+  重排表中的 `AMR_BIT`/`AMR_OF` 宏先展开成字节偏移再取数）。
+- 新增 `amr.mbt`：移植 `amrnbdec.c` 浮点路径及 `acelp_filters.c`/
+  `acelp_vectors.c`/`acelp_pitch_delay.c`/`celp_filters.c`/`lsp.c`
+  所需函数——位重排、LSF→LSP→LPC（12.2k 5 分裂与其余模式 3 分裂、
+  最小间距约束）、1/3 与 1/6 基音滞后、基音矢量 b60 插值、10 位/8 位/
+  4 位代数码本、固定增益平滑、抗稀疏 IR 滤波、LPC 合成、倾斜/AGC
+  后滤波与二阶高通；输出 8 kHz 单声道 160 样本。DTX/no-data 明确报错。
+- 新增 `av_amr_open`（rawaudio.mbt）：识别 `#!AMR\n`（AMR-WB 报错），
+  按 TOC 帧类型切分（4.75k 13 字节 … 12.2k 32 字节）。
+- 回归 `amr_realdata_test.mbt`：libopencore_amrnb 编码的 8 种模式
+  （`-b:a 4750…12200`）各 21 帧，s16 输出与 ffmpeg 参考最大差 1 LSB；
+  另测 DTX、no-data 与保留模式拒绝。
+- 回归 `amr_realdata_wbtest.mbt`：`#!AMR` 头/TOC 切分的帧数、偏移、
+  PTS 与 13/32 字节帧长，4.75k 解码逐样本对比；AMR-WB 头拒绝。
+- 外部：全部参考 PCM 由 ffmpeg 9.0.2 `-f s16le` 解码生成。FFmpeg 自身
+  文档说明该浮点解码器与 3GPP 定点参考不逐位一致，故按 1 LSB 容差验证。
+
+全量 wasm **1168/1168**。
