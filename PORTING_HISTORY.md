@@ -4782,3 +4782,29 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
   相同。
 
 全量 wasm **1146/1146**。
+
+## 162. WavPack 无损解码
+
+新增 `libavcodec/wavpack.mbt`，移植 `wavpack.c` / `wavpackdata.c` /
+`wavpack.h` 的无损整数路径：
+- 小端熵位流（`BITSTREAM_READER_LE`）、`get_unary_0_33`/`get_tail`、
+  三阶自适应中值（GET/DEC/INC_MED）、zero/one/zeroes 游程状态。
+- 元数据块：DECTERMS、DECWEIGHTS、DECSAMPLES（`wp_exp2`）、ENTROPY、
+  INT32INFO、DATA、EXTRABITS、SAMPLE_RATE；16-bit 输出使用 32 位
+  模算术反相关权重路径，24/32-bit 使用 64 位乘积路径；joint stereo
+  与 `wv_get_value_integer`（extra bits、and/or/shift、post_shift）。
+- 输出：16-bit S16；24-bit 左移 8 位写入 S32（`post_shift`）；
+  32-bit 原样。整文件按 `wvpk` 块拼接解码，校验块数与总采样数。
+
+验证：
+- ffmpeg 9.0.2 编码的 8 kHz 夹具（16-bit 单/双声道、24-bit 源被
+  编码器提升为 32-bit 的 32-bit 流）与 44.1 kHz 32-bit 流，解码
+  PCM MD5 与 ffmpeg s16le/s32le 参考一致（`a7e2b296…`、
+  `793c16db…`、`322c025b…`、`4f632c4c…`）。
+- 构造测试拒绝 hybrid/float/DSD、多块（>2 声道）、8-bit、无元数据
+  与截断文件。
+
+范围：无损整数 16/24/32-bit、1-2 声道、单块包；CRC 不校验。
+hybrid（有损）、float、DSD 与多声道多块流明确报错。
+
+全量 wasm **1148/1148**。
