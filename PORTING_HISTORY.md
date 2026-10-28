@@ -4161,3 +4161,16 @@ framemd5 与 IVF 参考完全一致，音频 s16le MD5 与 MP4 Opus 参考完全
   本 Ogg 的 s16le MD5 与 MP4 参考完全相同。
 
 新增 `adts_ogg_realdata_wbtest.mbt`。全量 wasm **1086/1086**。
+
+## 128. HLS AES-128 真实加密流验证
+
+用 ffmpeg 9.0.2 `-f hls -hls_key_info_file` 生成真实 AES-128 加密的
+HLS 集（单 TS 分片、`EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x0`、
+key 16 字节），走本项目完整读链路：`av_hls_parse` 解析 KEY →
+`HlsSegmentReader` 经 `MediaFetch` 取 key/分片 → AES-128 解密 →
+`av_mpegts_open` 解复用 → H.264 解码，5 帧 MD5 与 ffmpeg 解码同一
+加密 HLS 集一致（外部参考需 `-allowed_extensions ALL`，ffmpeg 默认
+拦截 .bin 扩展名）。
+
+新增 `hls_aes_realdata_wbtest.mbt`（嵌入 playlist/key/加密分片）。
+全量 wasm **1087/1087**。
