@@ -4121,3 +4121,14 @@ PCM），把外部验证固化为回归。全量 wasm **1079/1079**。
 framemd5 与参考完全一致。注意 ffmpeg CLI 对本地 DASH 会把探测与
 播放各读一遍（ffmpeg 自己 `-f dash` 生成的 MPD 同样解出 10 帧），
 比对时按去重后的 5 帧看。全量 wasm **1082/1082**。
+
+## 125. MP4 Opus 写入端到端验证
+
+`mp4_opus_muxer` 用真实 Opus 包（307 字节，单声道、pre-skip 312）写
+三帧 MP4：ffprobe 识别 `opus/48000/mono`，ffmpeg 9.0.2 解码输出
+2568 个样本（3×960 减去首个 pre-skip）。`av_mov_open` 读回的
+`dOps` 经 `parse_dops` 转成 OpusHead，喂给本移植的
+`OpusDecoder`，同样得到 2880 个样本；按容器 pre-skip 去掉前 312 个
+后与 ffmpeg 的 s16le 逐样本比较，2568 个样本中仅 4 个差 1 LSB
+（浮点/定点舍入差异），其余完全一致。新增
+`mp4_opus_realdata_wbtest.mbt` 固化该对比。全量 wasm **1083/1083**。
