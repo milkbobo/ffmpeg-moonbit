@@ -4415,3 +4415,22 @@ libaom 测试流的各帧 grain 参数相同，引用继承后的输出与原 up
   s16le MD5 `0389e90a…` 与明文 HLS 完全相同。
 
 全量 wasm **1116/1116**。
+
+## 144. FLAC 32-bit stereo 的 33-bps side channel
+
+此前 32-bit 立体声的 decorrelation 模式直接报错。现按 FFmpeg
+`flacdec.c` 的 `decoded_33bps` 路径补齐：
+- 新增 `flac_sbits64`（33-bit 有符号读取）与
+  `flac_decode_subframe_{fixed,lpc}_33`：33-bit warm-up 写 Int64 缓冲，
+  32-bit Rice 残差经 `DECODER_SUBFRAME_FIXED_WIDE` 的 64 位组合式重建；
+  constant/verbatim 33-bit 同样支持。
+- wasted bits：原 bps 为 33 且 `bps - wasted <= 32` 时按 FFmpeg
+  `flac_wasted_33_c` 左移到 Int64 缓冲。
+- decorrelate：left/right/mid-side 的 side 取 Int64 缓冲，按 FFmpeg
+  `decorrelate_33bps` 的 64 位补码运算后截断为 32-bit 输出。
+- 验证：ffmpeg 9.0.2 以 `-sample_fmt s32 -bits_per_raw_sample 32
+  -strict experimental` 生成 4 个 0.05 s 32-bit stereo FLAC（噪声 LPC、
+  相关 mid-side、单边强 side、compression_level 0 fixed），端口解码
+  s32le MD5 与 ffmpeg 逐一相同（eac0717f…、8d5e77ce…、2883edaa…）。
+
+新增 `libavcodec/flac_33bps_test.mbt`。全量 wasm **1117/1117**。

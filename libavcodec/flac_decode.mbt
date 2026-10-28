@@ -8,12 +8,11 @@
 /// into interleaved samples in FFmpeg's default output format: S16 for
 /// streams up to 16 bits per sample, S32 (left-justified) for wider streams.
 ///
-/// Scope: 8/16/20/24-bit, 1-8 channels, independent/left-side/right-side/
+/// Scope: 8/16/20/24/32-bit, 1-8 channels, independent/left-side/right-side/
 /// mid-side stereo, constant/verbatim/fixed/LPC subframes, Rice partitions
-/// with escape codes, wasted bits. 32-bit streams are decoded for subframes of
-/// at most 32 bps (independent channels and 33-bps-free decorrelation); the
-/// 33-bps side channel of 32-bit stereo decorrelation modes, foreign metadata
-/// and CRC verification are not handled.
+/// with escape codes, wasted bits. The 33-bps side channel of 32-bit stereo
+/// decorrelation modes is decoded through a 64-bit buffer (FFmpeg
+/// `decoded_33bps`); foreign metadata and CRC verification are not handled.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -55,6 +54,26 @@ fn flac_sbits(gb : BitReader, n : Int32) -> Int32 {
     return v
   }
   let sign = 1 << (n - 1)
+  if v >= sign {
+    v - (sign << 1)
+  } else {
+    v
+  }
+}
+
+///|
+/// `get_sbits64`: signed read for the 33-bit side channel.
+fn flac_sbits64(gb : BitReader, n : Int32) -> Int64 {
+  if n <= 0 {
+    return 0L
+  }
+  if n <= 32 {
+    return flac_sbits(gb, n).to_int64()
+  }
+  let hi = gb.read(n - 32).to_int64()
+  let lo = gb.read(32).to_int64()
+  let v = (hi << 32) | lo
+  let sign = 1L << (n - 1)
   if v >= sign {
     v - (sign << 1)
   } else {
@@ -340,6 +359,86 @@ fn flac_decode_subframe_lpc(
 }
 
 ///|
+/// `decode_subframe_fixed_33bps`: 33-bit warm-up samples and 32-bit residuals
+/// combined in 64-bit two's complement (FFmpeg `DECODER_SUBFRAME_FIXED_WIDE`).
+fn flac_decode_subframe_fixed_33(
+  gb : BitReader,
+  decoded : Array[Int64],
+  pred_order : Int32,
+  blocksize : Int32,
+) -> Result[Unit, String] {
+  for i = 0; i < pred_order; i = i + 1 {
+    decoded[i] = flac_sbits64(gb, 33)
+  }
+  if pred_order > 4 {
+    return Err("flac: illegal fixed order")
+  }
+  let residual : Array[Int32] = Array::make(blocksize, 0)
+  match flac_decode_residuals(gb, residual, pred_order, blocksize) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  for i = pred_order; i < blocksize; i = i + 1 {
+    let r = residual[i].to_int64()
+    let v = if pred_order == 0 {
+      r
+    } else if pred_order == 1 {
+      r + decoded[i - 1]
+    } else if pred_order == 2 {
+      r + 2L * decoded[i - 1] - decoded[i - 2]
+    } else if pred_order == 3 {
+      r + 3L * decoded[i - 1] - 3L * decoded[i - 2] + decoded[i - 3]
+    } else {
+      r +
+      4L * decoded[i - 1] -
+      6L * decoded[i - 2] +
+      4L * decoded[i - 3] -
+      decoded[i - 4]
+    }
+    decoded[i] = v
+  }
+  Ok(())
+}
+
+///|
+/// `decode_subframe_lpc_33bps` (FFmpeg `flac_lpc_33_c`).
+fn flac_decode_subframe_lpc_33(
+  gb : BitReader,
+  decoded : Array[Int64],
+  pred_order : Int32,
+  blocksize : Int32,
+) -> Result[Unit, String] {
+  for i = 0; i < pred_order; i = i + 1 {
+    decoded[i] = flac_sbits64(gb, 33)
+  }
+  let coeff_prec = gb.read(4).reinterpret_as_int() + 1
+  if coeff_prec == 16 {
+    return Err("flac: invalid coefficient precision")
+  }
+  let qlevel = flac_sbits(gb, 5)
+  if qlevel < 0 {
+    return Err("flac: negative qlevel")
+  }
+  let coeffs : Array[Int32] = Array::make(32, 0)
+  for i = 0; i < pred_order; i = i + 1 {
+    coeffs[pred_order - i - 1] = flac_sbits(gb, coeff_prec)
+  }
+  let residual : Array[Int32] = Array::make(blocksize, 0)
+  match flac_decode_residuals(gb, residual, pred_order, blocksize) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  for i = pred_order; i < blocksize; i = i + 1 {
+    let mut sum : Int64 = 0L
+    for j = 0; j < pred_order; j = j + 1 {
+      sum = sum + coeffs[j].to_int64() * decoded[i - pred_order + j]
+    }
+    decoded[i] = residual[i].to_int64() + (sum >> qlevel)
+  }
+  Ok(())
+}
+
+///|
 /// `decode_subframe` for one channel; returns the (possibly reduced) bps
 /// through `bps_out` after wasted bits.
 fn flac_decode_subframe(
@@ -349,6 +448,7 @@ fn flac_decode_subframe(
   ch_mode : Int32,
   stream_bps : Int32,
   blocksize : Int32,
+  wide : Array[Int64]?,
 ) -> Result[Unit, String] {
   let mut bps = stream_bps
   if channel == 0 && ch_mode == 2 {
@@ -369,7 +469,33 @@ fn flac_decode_subframe(
     bps = bps - wasted
   }
   if bps > 32 {
-    return Err("flac: 33-bit side channel is not supported")
+    let out = match wide {
+      Some(v) => v
+      None => return Err("flac: 33-bit subframe without a wide buffer")
+    }
+    if stype == 0 {
+      let tmp = flac_sbits64(gb, bps)
+      for i = 0; i < blocksize; i = i + 1 {
+        out[i] = tmp
+      }
+    } else if stype == 1 {
+      for i = 0; i < blocksize; i = i + 1 {
+        out[i] = flac_sbits64(gb, bps)
+      }
+    } else if stype >= 8 && stype <= 12 {
+      match flac_decode_subframe_fixed_33(gb, out, stype & 7, blocksize) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+    } else if stype >= 32 {
+      match flac_decode_subframe_lpc_33(gb, out, (stype & 31) + 1, blocksize) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+    } else {
+      return Err("flac: invalid subframe type")
+    }
+    return Ok(())
   }
   if stype == 0 {
     let tmp = flac_sbits(gb, bps)
@@ -395,13 +521,20 @@ fn flac_decode_subframe(
   } else {
     return Err("flac: invalid subframe type")
   }
-  if wasted > 0 {
-    if wasted >= 32 {
-      return Err("flac: excessive wasted bits")
-    }
-    for i = 0; i < blocksize; i = i + 1 {
-      decoded[i] = (decoded[i].reinterpret_as_uint() << wasted).reinterpret_as_int()
-    }
+  match wide {
+    Some(out) =>
+      for i = 0; i < blocksize; i = i + 1 {
+        out[i] = decoded[i].to_int64() << wasted
+      }
+    None =>
+      if wasted > 0 {
+        if wasted >= 32 {
+          return Err("flac: excessive wasted bits")
+        }
+        for i = 0; i < blocksize; i = i + 1 {
+          decoded[i] = (decoded[i].reinterpret_as_uint() << wasted).reinterpret_as_int()
+        }
+      }
   }
   Ok(())
 }
@@ -583,6 +716,16 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
     }
     let decoded0 : Array[Int32] = Array::make(frame.blocksize, 0)
     let decoded1 : Array[Int32] = Array::make(frame.blocksize, 0)
+    // 32-bit stereo decorrelation keeps the side channel (33 bps) in a
+    // 64-bit buffer, as FFmpeg's `decoded_33bps`.
+    let side64 : Array[Int64]? = if frame.channels == 2 &&
+      frame.bps == 32 &&
+      frame.ch_mode > 0 {
+      Some(Array::make(frame.blocksize, 0L))
+    } else {
+      None
+    }
+    let wide0 = if frame.ch_mode == 2 { side64 } else { None }
     match
       flac_decode_subframe(
         gb,
@@ -591,11 +734,17 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
         frame.ch_mode,
         frame.bps,
         frame.blocksize,
+        wide0,
       ) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
     if frame.channels == 2 {
+      let wide1 = if frame.ch_mode == 1 || frame.ch_mode == 3 {
+        side64
+      } else {
+        None
+      }
       match
         flac_decode_subframe(
           gb,
@@ -604,6 +753,7 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
           frame.ch_mode,
           frame.bps,
           frame.blocksize,
+          wide1,
         ) {
         Ok(_) => ()
         Err(e) => return Err(e)
@@ -616,6 +766,23 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
         samples.push(
           (decoded0[i].reinterpret_as_uint() << shift).reinterpret_as_int(),
         )
+      } else if frame.bps == 32 && frame.ch_mode > 0 {
+        let side = match side64 {
+          Some(v) => v
+          None => return Err("flac: missing 33-bit side channel buffer")
+        }
+        let s = side[i]
+        let (l, r) = if frame.ch_mode == 1 {
+          (decoded0[i], (decoded0[i].to_int64() - s).to_int())
+        } else if frame.ch_mode == 2 {
+          ((decoded1[i].to_int64() + s).to_int(), decoded1[i])
+        } else {
+          let mid = decoded0[i].to_int64()
+          let a = mid - (s >> 1)
+          ((a + s).to_int(), a.to_int())
+        }
+        samples.push(l)
+        samples.push(r)
       } else {
         let a = decoded0[i].reinterpret_as_uint()
         let b = decoded1[i].reinterpret_as_uint()
