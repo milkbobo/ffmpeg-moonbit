@@ -4681,3 +4681,20 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
   `0389e90a81fbef4945c3bbe0b11c048c` 与 ADTS 参考一致。
 
 全量 wasm **1137/1137**。
+
+## 157. DASH SegmentTimeline 写入器
+
+新增 `dash_timeline_mux.mbt`：`DashTimelineSegment`（`d`/可选 `t`/`r`）
+与 `DashTimelineAdaptation`，`dash_write_timeline_mpd` 输出带
+`<SegmentTimeline>` 的 `SegmentTemplate`，媒体模板可含 `$Time$`
+或 `$Number$`（与解析端 `dash_segments_from_timeline` 对齐）。
+
+- 回归 `dash_timeline_realdata_wbtest.mbt`：真实 H.264 5 帧各写为
+  一个单样本 fMP4 媒体分片（`video-<time>.m4s`），MPD 用
+  `$Time$` + 5 个 `<S>`（仅首个带 t）；解析出的 time 为
+  0/9000/.../36000，`DashSegmentReader` 取回后重组 Annex B 解码，
+  5 帧 MD5 与 `fmp4_h264_refs` 一致。
+- 外部：ffmpeg 9.0.2 播放该 MPD，视频 framemd5 前 5 帧与参考一致
+  （本地 DASH CLI 双读的已知行为产生第 6 个重复/失参考帧）。
+
+全量 wasm **1138/1138**。
