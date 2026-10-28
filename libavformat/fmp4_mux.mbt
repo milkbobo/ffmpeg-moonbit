@@ -1,5 +1,6 @@
 ///|
-/// Minimal fragmented-MP4 (fMP4) segment writer for one track per segment.
+/// Minimal fragmented-MP4 (fMP4) segment writer, one track per segment plus a
+/// muxed H.264+AAC pair with one `traf` per track in a shared `moof`.
 /// Emits a DASH/HLS-style initialization segment (`ftyp`+`moov` with
 /// `mvex`/`trex`) and media segments (`styp`+`moof`+`mdat`) that the existing
 /// MOV demuxer and FFmpeg's `mov` demuxer both accept.  Tracks cover H.264
@@ -68,42 +69,48 @@ fn fmp4_stbl(entry : Array[Byte]) -> Array[Byte] {
 }
 
 ///|
-/// Build the initialization segment.  `handler` is `"vide"` or `"soun"`,
-/// `entry` the sample description built by the H.264/AAC helpers.
-fn fmp4_init_segment(
+fn fmp4_ftyp() -> Array[Byte] {
+  let body : Array[Byte] = []
+  mp4_tag(body, "isom")
+  mp4_u32(body, 0x200U)
+  for brand in ["isom", "iso6", "mp41", "dash"] {
+    mp4_tag(body, brand)
+  }
+  mp4_box("ftyp", body)
+}
+
+///|
+fn fmp4_mvhd(timescale : Int32, next_track_id : Int32) -> Array[Byte] {
+  let body : Array[Byte] = []
+  mp4_u32(body, 0U)
+  mp4_u32(body, 0U)
+  mp4_u32(body, timescale.reinterpret_as_uint())
+  mp4_u32(body, 0U) // duration: fragments carry it
+  mp4_u32(body, 0x00010000U)
+  mp4_u16(body, 0x0100)
+  mp4_u16(body, 0)
+  for _ in 0..<2 {
+    mp4_u32(body, 0U)
+  }
+  mp4_matrix(body)
+  for _ in 0..<6 {
+    mp4_u32(body, 0U)
+  }
+  mp4_u32(body, next_track_id.reinterpret_as_uint())
+  mp4_full_box("mvhd", 0, 0, body)
+}
+
+///|
+/// One `trak` for an initialization segment.  `handler` is `"vide"` or
+/// `"soun"`, `entry` the sample description built by the codec helpers.
+fn fmp4_trak(
   track_id : Int32,
   timescale : Int32,
   handler : String,
   entry : Array[Byte],
   width : Int32,
   height : Int32,
-) -> Bytes {
-  let ftyp_body : Array[Byte] = []
-  mp4_tag(ftyp_body, "isom")
-  mp4_u32(ftyp_body, 0x200U)
-  for brand in ["isom", "iso6", "mp41", "dash"] {
-    mp4_tag(ftyp_body, brand)
-  }
-  let ftyp = mp4_box("ftyp", ftyp_body)
-
-  let mvhd_body : Array[Byte] = []
-  mp4_u32(mvhd_body, 0U)
-  mp4_u32(mvhd_body, 0U)
-  mp4_u32(mvhd_body, timescale.reinterpret_as_uint())
-  mp4_u32(mvhd_body, 0U) // duration: fragments carry it
-  mp4_u32(mvhd_body, 0x00010000U)
-  mp4_u16(mvhd_body, 0x0100)
-  mp4_u16(mvhd_body, 0)
-  for _ in 0..<2 {
-    mp4_u32(mvhd_body, 0U)
-  }
-  mp4_matrix(mvhd_body)
-  for _ in 0..<6 {
-    mp4_u32(mvhd_body, 0U)
-  }
-  mp4_u32(mvhd_body, (track_id + 1).reinterpret_as_uint())
-  let mvhd = mp4_full_box("mvhd", 0, 0, mvhd_body)
-
+) -> Array[Byte] {
   let tkhd_body : Array[Byte] = []
   mp4_u32(tkhd_body, 0U)
   mp4_u32(tkhd_body, 0U)
@@ -166,17 +173,39 @@ fn fmp4_init_segment(
     mp4_cat([media_header, fmp4_dinf(), fmp4_stbl(entry)]),
   )
   let mdia = mp4_box("mdia", mp4_cat([mdhd, hdlr, minf]))
-  let trak = mp4_box("trak", mp4_cat([tkhd, mdia]))
+  mp4_box("trak", mp4_cat([tkhd, mdia]))
+}
 
-  let trex_body : Array[Byte] = []
-  mp4_u32(trex_body, track_id.reinterpret_as_uint())
-  mp4_u32(trex_body, 1U) // default_sample_description_index
-  mp4_u32(trex_body, 0U) // default_sample_duration
-  mp4_u32(trex_body, 0U) // default_sample_size
-  mp4_u32(trex_body, 0U) // default_sample_flags
-  let trex = mp4_full_box("trex", 0, 0, trex_body)
-  let moov = mp4_box("moov", mp4_cat([mvhd, trak, mp4_box("mvex", trex)]))
-  Bytes::from_array(mp4_cat([ftyp, moov]))
+///|
+fn fmp4_trex(track_id : Int32) -> Array[Byte] {
+  let body : Array[Byte] = []
+  mp4_u32(body, track_id.reinterpret_as_uint())
+  mp4_u32(body, 1U) // default_sample_description_index
+  mp4_u32(body, 0U) // default_sample_duration
+  mp4_u32(body, 0U) // default_sample_size
+  mp4_u32(body, 0U) // default_sample_flags
+  mp4_full_box("trex", 0, 0, body)
+}
+
+///|
+/// Build the initialization segment for one track.
+fn fmp4_init_segment(
+  track_id : Int32,
+  timescale : Int32,
+  handler : String,
+  entry : Array[Byte],
+  width : Int32,
+  height : Int32,
+) -> Bytes {
+  let moov = mp4_box(
+    "moov",
+    mp4_cat([
+      fmp4_mvhd(timescale, track_id + 1),
+      fmp4_trak(track_id, timescale, handler, entry, width, height),
+      mp4_box("mvex", fmp4_trex(track_id)),
+    ]),
+  )
+  Bytes::from_array(mp4_cat([fmp4_ftyp(), moov]))
 }
 
 ///|
@@ -354,6 +383,135 @@ pub fn fmp4_opus_init_segment(
 }
 
 ///|
+/// Initialization segment carrying one H.264 and one AAC track in the same
+/// `moov` (progressive A/V fMP4 or a DASH Representation with muxed A/V).
+/// The video track keeps `video_timescale`; the audio timescale is the AAC
+/// sample rate, as in the single-track writer.
+pub fn fmp4_av_init_segment(
+  width : Int32,
+  height : Int32,
+  video_timescale : Int32,
+  avcc : Bytes,
+  sample_rate : Int32,
+  channels : Int32,
+  video_track_id~ : Int32 = 1,
+  audio_track_id~ : Int32 = 2,
+) -> Result[Bytes, String] {
+  if width <= 0 ||
+    height <= 0 ||
+    video_timescale <= 0 ||
+    video_track_id <= 0 ||
+    audio_track_id <= 0 ||
+    video_track_id == audio_track_id ||
+    avcc.length() < 7 {
+    return Err("EINVAL: invalid A/V fMP4 stream parameters")
+  }
+  if sample_rate <= 0 || channels < 1 || channels > 7 {
+    return Err("EINVAL: invalid A/V fMP4 stream parameters")
+  }
+  let mut rate_ok = false
+  for rate in mp4_mux_rates() {
+    if rate == sample_rate {
+      rate_ok = true
+    }
+  }
+  if !rate_ok {
+    return Err("EINVAL: unsupported AAC sample rate")
+  }
+  let next_track_id = if video_track_id > audio_track_id {
+    video_track_id + 1
+  } else {
+    audio_track_id + 1
+  }
+  let moov = mp4_box(
+    "moov",
+    mp4_cat([
+      fmp4_mvhd(video_timescale, next_track_id),
+      fmp4_trak(
+        video_track_id,
+        video_timescale,
+        "vide",
+        mp4_h264_entry(width, height, avcc),
+        width,
+        height,
+      ),
+      fmp4_trak(
+        audio_track_id,
+        sample_rate,
+        "soun",
+        mp4_aac_entry(sample_rate, channels),
+        0,
+        0,
+      ),
+      mp4_box(
+        "mvex",
+        mp4_cat([fmp4_trex(video_track_id), fmp4_trex(audio_track_id)]),
+      ),
+    ]),
+  )
+  Ok(Bytes::from_array(mp4_cat([fmp4_ftyp(), moov])))
+}
+
+///|
+fn fmp4_styp() -> Array[Byte] {
+  let body : Array[Byte] = []
+  mp4_tag(body, "msdh")
+  mp4_u32(body, 0U)
+  for brand in ["msdh", "msix", "cmfs"] {
+    mp4_tag(body, brand)
+  }
+  mp4_box("styp", body)
+}
+
+///|
+fn fmp4_mfhd(sequence_number : Int32) -> Array[Byte] {
+  let body : Array[Byte] = []
+  mp4_u32(body, sequence_number.reinterpret_as_uint())
+  mp4_full_box("mfhd", 0, 0, body)
+}
+
+///|
+/// One `traf` with an explicit `trun` data offset.  `data_offset` is relative
+/// to the enclosing `moof` start (`default-base-is-moof`) and points past the
+/// 8-byte `mdat` header.
+fn fmp4_traf(
+  track_id : Int32,
+  base_decode_time : Int64,
+  samples : Array[Fmp4Sample],
+  data_offset : UInt32,
+) -> Array[Byte] {
+  let tfhd_body : Array[Byte] = []
+  mp4_u32(tfhd_body, track_id.reinterpret_as_uint())
+  let tfhd = mp4_full_box("tfhd", 0, 0x020000, tfhd_body)
+
+  let tfdt_body : Array[Byte] = []
+  fmp4_u64(tfdt_body, base_decode_time)
+  let tfdt = mp4_full_box("tfdt", 1, 0, tfdt_body)
+
+  let trun_body : Array[Byte] = []
+  mp4_u32(trun_body, samples.length().reinterpret_as_uint())
+  mp4_u32(trun_body, data_offset)
+  for sample in samples {
+    mp4_u32(trun_body, sample.duration.reinterpret_as_uint())
+    mp4_u32(trun_body, sample.data.length().reinterpret_as_uint())
+    mp4_u32(trun_body, if sample.keyframe { 0x02000000U } else { 0x01010000U })
+  }
+  let trun = mp4_full_box("trun", 0, 0x0701, trun_body)
+  mp4_box("traf", mp4_cat([tfhd, tfdt, trun]))
+}
+
+///|
+fn fmp4_payload(samples : Array[Fmp4Sample]) -> Array[Byte] {
+  let data : Array[Byte] = []
+  for sample in samples {
+    for b in sample.data {
+      data.push(b)
+    }
+  }
+  data
+}
+
+///|
 /// Build one media segment (`styp`+`moof`+`mdat`).  `base_decode_time` is the
 /// decode time of the first sample in the track timescale; `sequence_number`
 /// goes into `mfhd`.
@@ -374,53 +532,96 @@ pub fn fmp4_media_segment(
       return Err("EINVAL: empty fMP4 sample or duration")
     }
   }
-  let styp_body : Array[Byte] = []
-  mp4_tag(styp_body, "msdh")
-  mp4_u32(styp_body, 0U)
-  for brand in ["msdh", "msix", "cmfs"] {
-    mp4_tag(styp_body, brand)
-  }
-  let styp = mp4_box("styp", styp_body)
-
-  let mfhd_body : Array[Byte] = []
-  mp4_u32(mfhd_body, sequence_number.reinterpret_as_uint())
-  let mfhd = mp4_full_box("mfhd", 0, 0, mfhd_body)
-
-  let tfhd_body : Array[Byte] = []
-  mp4_u32(tfhd_body, track_id.reinterpret_as_uint())
-  let tfhd = mp4_full_box("tfhd", 0, 0x020000, tfhd_body)
-
-  let tfdt_body : Array[Byte] = []
-  fmp4_u64(tfdt_body, base_decode_time)
-  let tfdt = mp4_full_box("tfdt", 1, 0, tfdt_body)
-
-  let trun = fn(offset : UInt32) -> Array[Byte] {
-    let body : Array[Byte] = []
-    mp4_u32(body, samples.length().reinterpret_as_uint())
-    mp4_u32(body, offset) // data_offset
-    for sample in samples {
-      mp4_u32(body, sample.duration.reinterpret_as_uint())
-      mp4_u32(body, sample.data.length().reinterpret_as_uint())
-      mp4_u32(body, if sample.keyframe { 0x02000000U } else { 0x01010000U })
-    }
-    mp4_full_box("trun", 0, 0x0701, body)
-  }
-  // The offset is relative to the `moof` start and points past the 8-byte
-  // `mdat` header; the field width does not change, so sizing with 0 first
-  // gives the final `moof` length.
-  let traf_ph = mp4_box("traf", mp4_cat([tfhd, tfdt, trun(0U)]))
+  let mfhd = fmp4_mfhd(sequence_number)
+  // The field width does not change with the value, so sizing the `moof`
+  // with a zero offset first gives the final offset for every sample.
+  let traf_ph = fmp4_traf(track_id, base_decode_time, samples, 0U)
   let moof_ph = mp4_box("moof", mp4_cat([mfhd, traf_ph]))
   let data_offset = moof_ph.length() + 8
-  let traf = mp4_box(
-    "traf",
-    mp4_cat([tfhd, tfdt, trun(data_offset.reinterpret_as_uint())]),
+  let moof = mp4_box(
+    "moof",
+    mp4_cat([
+      mfhd,
+      fmp4_traf(
+        track_id,
+        base_decode_time,
+        samples,
+        data_offset.reinterpret_as_uint(),
+      ),
+    ]),
   )
-  let moof = mp4_box("moof", mp4_cat([mfhd, traf]))
-  let data : Array[Byte] = []
-  for sample in samples {
+  Ok(
+    Bytes::from_array(
+      mp4_cat([fmp4_styp(), moof, mp4_box("mdat", fmp4_payload(samples))]),
+    ),
+  )
+}
+
+///|
+/// Build one media segment carrying both a video and an audio fragment in a
+/// single `moof`.  The `mdat` holds the video payloads followed by the audio
+/// payloads; each `traf` points at its own run.
+pub fn fmp4_av_media_segment(
+  sequence_number : Int32,
+  video_samples : Array[Fmp4Sample],
+  audio_samples : Array[Fmp4Sample],
+  video_track_id~ : Int32 = 1,
+  audio_track_id~ : Int32 = 2,
+  video_base_decode_time~ : Int64 = 0L,
+  audio_base_decode_time~ : Int64 = 0L,
+) -> Result[Bytes, String] {
+  if video_track_id <= 0 ||
+    audio_track_id <= 0 ||
+    video_track_id == audio_track_id ||
+    sequence_number < 0 ||
+    video_base_decode_time < 0L ||
+    audio_base_decode_time < 0L {
+    return Err("EINVAL: invalid A/V fMP4 media segment parameters")
+  }
+  if video_samples.length() == 0 || audio_samples.length() == 0 {
+    return Err("EINVAL: empty fMP4 media segment")
+  }
+  for samples in [video_samples, audio_samples] {
+    for sample in samples {
+      if sample.data.length() == 0 || sample.duration <= 0 {
+        return Err("EINVAL: empty fMP4 sample or duration")
+      }
+    }
+  }
+  let mfhd = fmp4_mfhd(sequence_number)
+  let video_ph = fmp4_traf(
+    video_track_id, video_base_decode_time, video_samples, 0U,
+  )
+  let audio_ph = fmp4_traf(
+    audio_track_id, audio_base_decode_time, audio_samples, 0U,
+  )
+  let moof_ph = mp4_box("moof", mp4_cat([mfhd, video_ph, audio_ph]))
+  let video_offset = moof_ph.length() + 8
+  let video_payload = fmp4_payload(video_samples)
+  let audio_offset = video_offset + video_payload.length()
+  let moof = mp4_box(
+    "moof",
+    mp4_cat([
+      mfhd,
+      fmp4_traf(
+        video_track_id,
+        video_base_decode_time,
+        video_samples,
+        video_offset.reinterpret_as_uint(),
+      ),
+      fmp4_traf(
+        audio_track_id,
+        audio_base_decode_time,
+        audio_samples,
+        audio_offset.reinterpret_as_uint(),
+      ),
+    ]),
+  )
+  let data = video_payload
+  for sample in audio_samples {
     for b in sample.data {
       data.push(b)
     }
   }
-  Ok(Bytes::from_array(mp4_cat([styp, moof, mp4_box("mdat", data)])))
+  Ok(Bytes::from_array(mp4_cat([fmp4_styp(), moof, mp4_box("mdat", data)])))
 }

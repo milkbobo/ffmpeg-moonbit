@@ -4925,3 +4925,26 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   帧与整文件解码参考一致（本地 DASH CLI 双读的已知重复行为除外）。
 
 全量 wasm **1157/1157**。
+
+## 169. 双轨 H.264+AAC fMP4 写入
+
+- `fmp4_mux.mbt` 抽出 `fmp4_ftyp`/`fmp4_mvhd`/`fmp4_trak`/`fmp4_trex`、
+  `fmp4_styp`/`fmp4_mfhd`/`fmp4_traf`/`fmp4_payload` 复用初始化段与媒体段
+  构件；单轨输出字节不变。
+- 新增 `fmp4_av_init_segment`：同一 `moov` 内 video（`avc1`/`avcC`，视频
+  timescale）与 audio（`mp4a`/`esds`，timescale=采样率）两个 `trak`，
+  `mvex` 带两个 `trex`；track id 可自定义且必须互异。
+- 新增 `fmp4_av_media_segment`：一个 `moof` 内两个 `traf`（各自
+  `tfhd`/`tfdt`/`trun`），`mdat` 先放视频样本再放音频样本；两个
+  `trun` 的 data_offset 按 `moof` 长度 +8、再累加视频负载计算。
+- 回归 `fmp4_av_realdata_wbtest.mbt`：真实 64x48 x264 5 帧与
+  `mkv_av_b64` 的 45 个 AAC-LC 44.1 kHz 单声道包，按 3+2 视频帧、
+  23+22 音频包写成两个媒体段（第二段 `tfdt`=27000/23552）；
+  `av_mov_open` 回读两轨样本数/DTS/时长/负载逐一匹配，视频帧 MD5 等于
+  ffmpeg 参考（`67209b5b…` 等 5 帧），AAC 45 帧解码共 46080 样本；
+  另测自定义 track id（3/7）与非法参数拒绝。
+- 外部：init+两段拼接为 `av.mp4`，ffmpeg 9.0.2 识别为 10 fps H.264
+  + AAC 1.04 s；视频 framemd5 与参考逐帧一致，音频 s16le PCM MD5
+  `cfe6223331361877aef4f7e88a2a50bc` 与同 AU 生成的 ADTS 解码完全一致。
+
+全量 wasm **1160/1160**。
