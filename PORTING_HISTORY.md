@@ -4890,3 +4890,17 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
 - 外部：端口写出的 s16/s32 AU 经 ffmpeg 9.0.2 解码，MD5 与参考一致。
 
 全量 wasm **1155/1155**。
+
+## 167. G.711 编码与 AU µ-law/A-law 写入
+
+- `g711.mbt` 增加 `pcm_alaw_encode`/`pcm_mulaw_encode`：按
+  `build_xlaw_table` 构造 16384 项 `linear_to_xlaw` 表（mask 0xd5 /
+  0xff，`(sample + 32768) >> 2` 索引），编码结果与 ffmpeg 逐字节一致。
+- `au_mux.mbt` 的 `au_muxer_new` 增加 `codec~` 选项（`pcm` /
+  `pcm_alaw` / `pcm_mulaw`），G.711 编码后写 tag 27/1；解码端已有。
+- 回归：用 AU s16 夹具的样本重编码 µ-law/A-law，与 ffmpeg 生成的 AU
+  夹具**数据区逐字节相同**，端口回读解码 MD5 与参考一致。
+- 外部：端口写出的 µ-law/A-law AU 经 ffmpeg 9.0.2 解码，MD5 与
+  ffmpeg 自身编码后解码一致（`ce3a9326…`、`4d9e1303…`）。
+
+全量 wasm **1156/1156**。

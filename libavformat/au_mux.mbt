@@ -9,6 +9,7 @@ pub struct AuMuxer {
   sample_rate : Int32
   channels : Int32
   bits : Int32
+  codec : String
   data : Array[Byte]
 }
 
@@ -25,14 +26,21 @@ pub fn au_muxer_new(
   sample_rate : Int32,
   channels : Int32,
   bits~ : Int32 = 16,
+  codec~ : String = "pcm",
 ) -> Result[AuMuxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 64 {
     return Err("EINVAL: invalid AU stream parameters")
   }
+  if codec == "pcm_alaw" || codec == "pcm_mulaw" {
+    return Ok({ sample_rate, channels, bits: 8, codec, data: [], })
+  }
+  if codec != "pcm" {
+    return Err("EINVAL: unsupported AU codec \{codec}")
+  }
   if bits != 8 && bits != 16 && bits != 24 && bits != 32 {
     return Err("EINVAL: AU muxer supports 8/16/24/32-bit PCM")
   }
-  Ok({ sample_rate, channels, bits, data: [], })
+  Ok({ sample_rate, channels, bits, codec, data: [], })
 }
 
 ///|
@@ -40,6 +48,18 @@ pub fn AuMuxer::write_samples(
   self : AuMuxer,
   samples : ArrayView[Int32],
 ) -> Unit {
+  if self.codec == "pcm_alaw" {
+    for b in @libavcodec.pcm_alaw_encode(samples) {
+      self.data.push(b)
+    }
+    return
+  }
+  if self.codec == "pcm_mulaw" {
+    for b in @libavcodec.pcm_mulaw_encode(samples) {
+      self.data.push(b)
+    }
+    return
+  }
   let bytes = self.bits / 8
   for sample in samples {
     let v = sample.reinterpret_as_uint()
@@ -54,7 +74,11 @@ pub fn AuMuxer::finish(self : AuMuxer) -> Bytes {
   let out : Array[Byte] = [b'.', b's', b'n', b'd']
   au_mux_u32be(out, 24U) // header size
   au_mux_u32be(out, self.data.length().reinterpret_as_uint())
-  let tag : UInt32 = if self.bits == 8 {
+  let tag : UInt32 = if self.codec == "pcm_alaw" {
+    27U
+  } else if self.codec == "pcm_mulaw" {
+    1U
+  } else if self.bits == 8 {
     2U
   } else if self.bits == 16 {
     3U

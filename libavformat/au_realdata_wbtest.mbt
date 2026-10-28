@@ -161,3 +161,52 @@ test "au: PCM writer round-trip" {
     }
   }
 }
+
+///|
+test "au: G.711 writer matches FFmpeg encoding" {
+  let s16_data = @libavutil.av_base64_decode(au_fixtures[0].1, 100000).unwrap()
+  let s16 = av_au_open(s16_data).unwrap()
+  let samples : Array[Int32] = []
+  for packet in s16.packets {
+    let start = packet.pos.to_int()
+    let end = start + packet.size
+    let mut off = start
+    while off + 2 <= end {
+      let v = (s16_data[off].to_int() << 8) | s16_data[off + 1].to_int()
+      off = off + 2
+      samples.push(v << 16 >> 16)
+    }
+  }
+  assert_eq(samples.length(), 8000)
+  for pair in [(2, "pcm_mulaw"), (3, "pcm_alaw")] {
+    let (idx, codec) = pair
+    let (_name, b64, _codec, _tag, _ch, _bits, _count, want_md5) = au_fixtures[idx]
+    let expected = @libavutil.av_base64_decode(b64, 100000).unwrap()
+    let eau = av_au_open(expected).unwrap()
+    let mux = au_muxer_new(8000, 1, codec~).unwrap()
+    mux.write_samples(samples)
+    let out = mux.finish()
+    let opayload = out[24:out.length()]
+    let epayload = expected[eau.data_offset.to_int():expected.length()]
+    assert_eq(opayload.length(), epayload.length(), msg=codec)
+    for i = 0; i < opayload.length(); i = i + 1 {
+      assert_eq(opayload[i], epayload[i], msg=codec)
+    }
+    let au = av_au_open(out).unwrap()
+    assert_eq(au.format.codec, codec, msg=codec)
+    let pcm : Array[Byte] = []
+    for packet in au.packets {
+      let start = packet.pos.to_int()
+      let bytes = out[start:start + packet.size].to_owned()
+      let decoded = if codec == "pcm_mulaw" {
+        @libavcodec.pcm_mulaw_decode(bytes)
+      } else {
+        @libavcodec.pcm_alaw_decode(bytes)
+      }
+      for v in decoded {
+        au_push16(pcm, v)
+      }
+    }
+    assert_eq(au_md5(Bytes::from_array(pcm)), want_md5, msg=codec)
+  }
+}
