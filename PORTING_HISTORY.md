@@ -4643,3 +4643,19 @@ seek 表与帧），实现 C 的小端位流读取器（`BITSTREAM_READER_LE`）
 明确拒绝。
 
 全量 wasm **1134/1134**。
+
+## 155. MP4 faststart 重排
+
+新增 `mp4_faststart.mbt`：对非分片写入器产出的 `ftyp`+`mdat`+`moov`
+文件，重排为 `ftyp`+`moov`+`mdat`，并把 `moov` 内 `stco`/`co64`
+的每个 chunk 偏移加上 `moov` 大小（对应 ffmpeg 的
+`-movflags +faststart`）。仅接受恰好这三个顶层 box；分片
+（`moof`/`mdat`）文件、非法 box 大小与 stco 溢出均报错。
+
+- 回归 `mp4_faststart_wbtest.mbt`：真实 H.264 5 帧经
+  `mp4_h264_muxer` 写出后重排，断言 ftyp/moov/mdat 顺序、mdat
+  字节不变、长度不变，回读解码 5 帧 MD5 与 `fmp4_h264_refs` 一致。
+- 外部：重排文件经 ffmpeg 9.0.2 `ffprobe` 识别 h264 64x48/5 帧，
+  framemd5 与参考逐帧一致。
+
+全量 wasm **1135/1135**。
