@@ -7,7 +7,7 @@
 | 范围 | 已可用 | 主要边界 |
 | --- | --- | --- |
 | H.264 | I/P/B 帧；CAVLC/CABAC；8/9/10/12/14 bit、单色及 4:2:0/4:2:2/4:4:4；多 slice、MBAFF/PAFF、参考帧管理、SEI、去块滤波；Annex B 与 MP4 `avcC` 入口；渐进帧与 MBAFF 帧缺失或截断 slice 的宏块补偿；两条独立 4:2:0 源的 P 帧损坏矩阵（丢 IDR/P 首 slice、丢多个 P slice、截断尾 slice，逐帧 MD5 对齐 FFmpeg） | 错误恢复的色度几何复刻 FFmpeg 的 4:2:0 硬编码（`put_dc` 固定 8x8 chroma/MB、uint8 语义），高位深/4:4:4/4:2:2 流的恢复输出因此与 FFmpeg 的未定义行为区域耦合，明确不在对齐范围；场图片按上游边界明确报错；SP/SI 明确不做。FMO、separate colour plane 和数据分区不在 FFmpeg 9.0.2 的可解码范围内 |
-| HEVC | I/P/B 帧；8/10/12 bit、多种色度格式及单色；多 slice、WPP、tiles、去块滤波与 SAO；dependent slice segments 的帧头/CABAC/QP/邻域继承（含 WPP 或 tiles，8/10/12-bit 420 共 81 帧双滤波模式对齐，含 54 帧派生高位深流；另有原生 4:4:4/4:2:2 8/10/12-bit dependent 共 15 帧）；PCM（独立 Y/C 精度、CABAC 重启与滤波保护）；transquant bypass 无损残差；implicit/explicit RDPCM（8/10/12-bit、420/422/444/单色，30 帧双滤波模式对齐 FFmpeg 单线程）；跨分量预测（CCP，含 CBF=0 的纯亮度预测色度块、intra/inter 与 skip/bypass 组合）；参考列表修改（ref_pic_list_modification，L0/L1 重排与越界拒绝）；persistent Rice 参数自适应（按 luma/chroma × skip/bypass 四类状态跨 TU 保持，WPP 行状态保存/恢复） | tiles 与 WPP 同时启用、当前图片引用仍缺（前者仅 High Throughput profile 允许，HM 拒绝生成；后者需 SCC 编码器）；CCP 与 dependent/PCM 组合待验证；RDPCM bypass 保留 FFmpeg 单线程残留模式语义 |
+| HEVC | I/P/B 帧；8/10/12 bit、多种色度格式及单色；多 slice、WPP、tiles、去块滤波与 SAO；dependent slice segments 的帧头/CABAC/QP/邻域继承（含 WPP 或 tiles，8/10/12-bit 420 共 81 帧双滤波模式对齐，含 54 帧派生高位深流；另有原生 4:4:4/4:2:2 8/10/12-bit dependent 共 15 帧）；PCM（独立 Y/C 精度、CABAC 重启与滤波保护）；transquant bypass 无损残差；implicit/explicit RDPCM（8/10/12-bit、420/422/444/单色，30 帧双滤波模式对齐 FFmpeg 单线程）；跨分量预测（CCP，含 CBF=0 的纯亮度预测色度块、intra/inter 与 skip/bypass 组合，及与 dependent slice segments/PCM 的 4 组 4:4:4 组合验证）；参考列表修改（ref_pic_list_modification，L0/L1 重排与越界拒绝）；persistent Rice 参数自适应（按 luma/chroma × skip/bypass 四类状态跨 TU 保持，WPP 行状态保存/恢复） | tiles 与 WPP 同时启用、当前图片引用仍缺（前者仅 High Throughput profile 允许，HM 拒绝生成；后者需 SCC 编码器）；RDPCM bypass 保留 FFmpeg 单线程残留模式语义 |
 | AAC / MPEG 音频 / FLAC | AAC-LC PCM；AAC SBR（HE-AAC：显式与 ADTS 隐式信令，SBR 头/网格/包络/噪声全语法位级对拍 C 插桩 dump，QMF 分析/合成、HF 生成/调整/limit、双缓冲 Y 与 f_indexnoise/f_indexsine 跨帧状态，8/10/12 kHz 核心率全表）；AAC PS 合成（HE-AACv2 两条真实流完整 PCM 对拍最大差 1；10/20/34 频带、IPD/OPD、HB 和编码负载逐缓冲对拍 C，wasm 8 帧、native 16 帧）；MPEG 音频 Layer I/II/III 定点 PCM；FLAC 无损 PCM | PS 更多随机组合仍可扩充；USAC 等未覆盖 |
 | 其他视频 / 音频 | VP9 profile 0/1/2/3：关键帧与帧间帧（P 帧四种 MV 模式、三路参考、可切换/固定插值滤波、并行提交与计数驱动概率自适应；`comp_inter_blocks` 诊断计数器；参考缩放——scaled MC 双向（libvpx 官方 vp90-2-05-resize 向量 10 帧 MD5 对齐 vpxdec 原生输出，缩放系数 14 位分数步进与 `webm/issues/820` 舍入复刻）、8/10/12-bit、4:2:0/4:2:2/4:4:0/4:4:4；AV1 8/10/12-bit 4:2:0/4:2:2/4:4:4/单色 多 tile 无损关键帧、有损关键帧（8/10/12-bit，DCT/ADST/IDTX 全变换、环路去块滤波、CDEF、环路恢复 Wiener/SGR 与 SWITCHABLE（4:2:0/4:2:2/4:4:4 全布局）、逐 SB delta-q/delta-lf、关键帧 segmentation 的 ALT_Q/ALT_LF/SKIP 与 seg_id 空间预测，多 tile 含 64/128 SB 与 tile 边界强度修正）；AV1 inter 会话入口（含 2×2 tiles、GM warp、隐藏帧/show-existing，5 组真实流 35 帧 MD5 对齐）；AV1 整帧 superres（coded 解码 + resize 上采样 + LR 上采样网格 + scaled 参考 MC，4 组 aomenc 流 34 帧 MD5 对齐）；AV1 整帧 qmatrix（16 级别、Y/U/V 独立级别，13 组 57 帧 MD5 对齐，包含 12-bit 及 4:2:2/4:4:4/单色 inter）；AV1 帧尺寸变化（aomenc resize-mode：KF↔inter 2×/2⁄3 缩放与逐帧随机尺寸的升降双向 scaled MC、非均匀 tile 间距、显式帧尺寸，7 组 168 帧 MD5 对齐 dav1d 原生输出）；AV1 inter 工具组合验证（interintra 含 wedge/smooth、masked compound、OBMC、local warp、dual filter、ref-frame-mvs 的隔离与全开组合共 5 组 70 帧 MD5 对齐 dav1d）；MJPEG、PNG/APNG；Opus SILK/混合/CELT 全模式与多流包级解码 | VP9 复合预测（B 帧，libvpx 编码器无法生成，已用 alt-ref 码流计数探针证实）；AV1 film grain/intrabc 不做；resize×superres 组合会使 dav1d 1.5.1 段错误（无参考，不纳入）；Opus 包丢失隐藏（PLC）未实现 |
 | 容器与分片 | MP4/MOV（含 AAC/H.264/HEVC/AV1/VP9/Opus 及 H.264+AAC 双轨写入器）、Matroska/WebM（含 H.264/VP9/AV1/Opus、VP9+Opus 与 H.264+AAC 多轨写入器；VP9/AV1/Opus 写入器可选 webm/matroska DocType）、MPEG-TS（含 H.264+AAC 写入器，PMT stream type 可选 HEVC/MP3 等）、WAV（含 PCM 8/16/24/32-bit、IEEE float32 与 extensible 写入器）、Ogg/Opus（读写）、裸 AAC/MP3（含 ADTS AAC 写入器）；HLS/DASH 通过回调读取 TS/fMP4，含 H.264/HEVC/AV1/VP9/AAC/Opus 单轨 fMP4 初始化段/媒体段写入器、HLS 主/媒体播放列表与 DASH SegmentTemplate MPD 写入器 | 尚无统一播放 API、完整网络协议层或完整 muxer 集合 |
@@ -62,8 +62,9 @@ MV 投影，完整执行 deblock/CDEF/LR。5 组 libaom 真实码流共 35 个�
 关键帧/帧间帧、重排序、8/10/12-bit、4:2:0/4:2:2/4:4:4/单色、色度
 delta-q、矩阵级别 0/15，以及 Y/U/V 独立级别与单平面 identity。
 矩阵权重的全部 16×2×19 个组合也与原始 dav1d C 初始化结果一致。
-inter 的代表性验证已扩大到 12-bit、4:2:2/4:4:4 和单色；尺寸变化与
-更广工具组合仍待补。实现和再生步骤见 [qmatrix 交接](AGENT_HANDOFF_2026-10-27_QMATRIX.md)。
+inter 的代表性验证已扩大到 12-bit、4:2:2/4:4:4 和单色；帧尺寸变化与
+更广 inter 工具组合已在后续轮次接通，见下文。qmatrix 实现和再生步骤见
+[qmatrix 交接](AGENT_HANDOFF_2026-10-27_QMATRIX.md)。
 
 AV1 帧级尺寸变化已接通：帧头保存显式 tile 边界数组（均匀与非均匀
 `uniform_tile_spacing_flag=0` 间距都按 dav1d `parse_tile_info` 解析，
@@ -121,8 +122,9 @@ HEVC 参考列表修改（ref_pic_list_modification）已接通：按 slice 的
 slice segment 沿用独立段的列表。HM 16.8 的 scratch 构建补丁在
 `HM_RPLM=1` 下反转每条活动列表并如实写入语法；P 低延迟、层次 B 与
 8/10/12-bit 420/422/444 共 33 帧在两种滤波模式下与 FFmpeg 9.0.2
-**单线程**输出逐帧一致。persistent Rice 参数自适应仍未实现，本轮
-夹具显式关闭该工具，避免把未覆盖工具混入 RPLM 结论。详见
+**单线程**输出逐帧一致。persistent Rice 参数自适应在当轮尚未覆盖，夹具
+显式关闭该工具，避免把它混入 RPLM 结论；该工具已在后续轮次接通
+（见下文）。详见
 [RPLM 交接](AGENT_HANDOFF_2026-10-27_HEVC_RPLM.md)。
 
 HEVC persistent Rice 参数自适应已接通：`stat_coeff[4]` 按帧内位置
@@ -134,6 +136,15 @@ tile 起点清零，dependent 段与 WPP 行按上游规则继承/恢复，剩�
 `inter_ref_pic_set_prediction_flag` 的潜伏问题。详见
 [persistent Rice 交接](AGENT_HANDOFF_2026-10-27_HEVC_PERSISTENT_RICE.md)。
 
+HEVC CCP 与 dependent slice segments/PCM 的组合已单独验证：HM 16.8 的
+四组 4:4:4 流分别覆盖 CCP×dependent（8/10-bit 各一）、CCP×PCM（强制
+transquant bypass 的噪声源）与三者全开，共 20 帧在默认滤波与
+`-skip_loop_filter all` 两种模式下与 FFmpeg 9.0.2 **单线程**输出逐帧
+一致。流内 `dependent_slice_segments_enabled_flag`、`pcm_enabled_flag`
+与 `cross_component_prediction_enabled_flag` 已用 FFmpeg `trace_headers`
+核对，PCM 路径经插桩确认每流 20 个 PCM CU。详见
+[CCP 组合交接](AGENT_HANDOFF_2026-10-28_HEVC_CCP_COMBO.md)。
+
 ## 构建与测试
 
 在本目录运行：
@@ -144,7 +155,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-10-27）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **1018/1018** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-10-28）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **1061/1061** 通过。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

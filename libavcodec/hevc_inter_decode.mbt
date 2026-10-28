@@ -706,6 +706,32 @@ pub struct HevcDecodedFrame {
 }
 
 ///|
+/// Presentation-order key; sort by it to obtain display order. */
+pub fn HevcDecodedFrame::poc(self : HevcDecodedFrame) -> Int32 {
+  self.poc
+}
+
+///|
+/// Pack the visible planes as planar YUV of the picture's chroma format,
+/// matching FFmpeg rawvideo output (8-bit, or 16-bit little-endian when
+/// `bit_depth` > 8). */
+pub fn HevcDecodedFrame::yuvp(
+  self : HevcDecodedFrame,
+  bit_depth : Int32,
+) -> Bytes {
+  let out : Array[Byte] = []
+  for plane in [self.pic.y, self.pic.cb, self.pic.cr] {
+    for sample in plane {
+      out.push(sample.to_byte())
+      if bit_depth > 8 {
+        out.push((sample >> 8).to_byte())
+      }
+    }
+  }
+  Bytes::from_array(out)
+}
+
+///|
 /// Frame-level HEVC decoder state (DPB + POC tracking across pictures). */
 pub struct HevcDecoder {
   ps : HevcParamSets

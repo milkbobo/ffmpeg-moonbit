@@ -3824,3 +3824,34 @@ FFmpeg 的 `error_resilience.c` 对色度恢复硬编码 4:2:0 几何
 MoonBit 侧 conceal 的色度 DC 网格应为 MB 几何（此前每 8x8 块），
 该修正仅影响非 4:2:0 格式的恢复输出（4:2:0 下两种网格重合），
 故不在主线提交。
+
+## 112. HEVC 跨分量预测与 dependent/PCM 组合验证
+
+回应 README 中"CCP 与 dependent/PCM 组合待验证"：用 HM 16.8（同一
+pinned commit `382e0a0`）在 4:4:4、`CrossComponentPrediction=1` 下生成
+四组组合流，逐帧 MD5 与 FFmpeg 9.0.2 **单线程**在默认滤波与
+`-skip_loop_filter all` 两种模式下均一致（每组 5 帧，共 20 帧次 × 2）：
+
+| 流 | 组合 | 配置 | 验证点 |
+| --- | --- | --- | --- |
+| `ccp_dep8` | CCP × dependent slice segments | 8-bit 444，低延迟 GOP，QP 22 | 每帧 1 独立 + 3 依赖段 |
+| `ccp_dep10` | 同上 | 10-bit 444，QP 20 | 同上 |
+| `ccp_pcm8` | CCP × PCM | 8-bit 444，QP 4，强制 transquant bypass | 每流 20 个 PCM CU |
+| `ccp_dep_pcm10` | CCP × PCM × dependent | 10-bit 444，QP 4，强制 bypass | 20 个 PCM CU 与每帧 3 依赖段同时出现 |
+
+两条再生陷阱：HM 的 PCM 只在 `uiBestBits > uiRawBits` 时进入候选，
+普通 QP 的结构化源不会选中，必须用确定性满量程噪声源并强制
+transquant bypass（无损），本组每帧 4 个 32×32 CTU 全部走 PCM；
+`SliceMode` 生成的是独立 slice，依赖段要用 `SliceSegmentMode`
+（HM 在 `sliceSegmentMode != NO_SLICES` 时置 PPS 的
+`dependent_slice_segments_enabled_flag`）。流内标志已用 FFmpeg
+`trace_headers` 核对：`ccp_dep8/10` 为 dependent=1 + PCM=0，
+`ccp_pcm8` 为 dependent=0 + PCM=1，`ccp_dep_pcm10` 全开，四组 PPS
+的 `cross_component_prediction_enabled_flag` 均为 1。
+
+夹具为黑盒（`hevc_ccp_combo_test.mbt` 与生成的
+`hevc_ccp_combo_vectors_test.mbt`，规避白盒局部数上限），再生脚本
+`scripts/generate_hevc_ccp_combo_vectors.mbtx`（参数：`.scratch/hevc_ccp`
+与 HM 源码目录）。为此新增 pub 访问器 `HevcDecodedFrame::poc` 与
+`HevcDecodedFrame::yuvp`（黑盒测试取 POC 排序与打包平面，先例
+`H264Frame::yuvp`）。全量 wasm **1061/1061**。
