@@ -4310,3 +4310,16 @@ WAVEFORMAT/样本表不变。
   与源 MKV（CodecDelay 裁掉一帧后）解码完全一致。
 
 全量 wasm **1102/1102**。
+
+## 138. WAV 写入器 RF64 大文件头
+
+`wav_muxer_new` 新增 `rf64` 开关：置位后按 `wavenc.c` 的 RF64 布局写
+`RF64`/`0xFFFFFFFF`/`WAVE`/`ds64`（riffSize、dataSize、sampleCount、
+0 表项），`data` 块大小同样写 0xFFFFFFFF；PCM/float/extensible 载荷
+不变，可与既有选项组合。
+- 回归：16-bit stereo 与 extensible float 5.1 两种 RF64 文件回读
+  codec/data_size/sample_count/data_offset 与载荷正确。
+- 外部：ffmpeg 9.0.2 正确识别（含 5.1 布局）并解码，两个文件样本
+  与源逐字节一致。
+
+全量 wasm **1104/1104**。

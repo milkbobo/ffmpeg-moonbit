@@ -15,19 +15,23 @@ pub struct WavMuxer {
   channel_mask : UInt32
   extensible : Bool
   float_samples : Bool
+  /// Emit a `RF64`/`ds64` header for files beyond the 4 GiB RIFF limit.
+  rf64 : Bool
   data : Array[Byte]
 }
 
 ///|
 /// Create a PCM WAV writer. 8-bit samples are unsigned (WAV convention);
 /// 16/24/32-bit samples are signed. A non-zero `channel_mask` or more than two
-/// channels selects WAVE_FORMAT_EXTENSIBLE.
+/// channels selects WAVE_FORMAT_EXTENSIBLE. `rf64=true` switches the container
+/// header to RF64 (the payload layout is unchanged).
 pub fn wav_muxer_new(
   sample_rate : Int32,
   channels : Int32,
   bits : Int32,
   channel_mask~ : UInt32 = 0U,
   float~ : Bool = false,
+  rf64~ : Bool = false,
 ) -> Result[WavMuxer, String] {
   if sample_rate <= 0 || channels <= 0 {
     return Err("EINVAL: invalid WAV sample rate or channel count")
@@ -45,6 +49,7 @@ pub fn wav_muxer_new(
     channel_mask,
     extensible: channels > 2 || channel_mask != 0U,
     float_samples: float,
+    rf64,
     data: [],
   })
 }
@@ -59,6 +64,13 @@ fn wav_mux_u16(dst : Array[Byte], v : Int32) -> Unit {
 fn wav_mux_u32(dst : Array[Byte], v : UInt32) -> Unit {
   for i in 0..<4 {
     dst.push(((v >> (8 * i)) & 0xFFU).to_byte())
+  }
+}
+
+///|
+fn wav_mux_u64(dst : Array[Byte], v : Int64) -> Unit {
+  for i in 0..<8 {
+    dst.push(((v >> (8 * i)) & 0xFFL).to_int().to_byte())
   }
 }
 
@@ -126,12 +138,25 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
   // Non-PCM formats (`codec_tag != 1`) carry a `fact` chunk, as in
   // `wav_write_header`; its payload is the frame count patched in the trailer.
   let fact_size = if self.float_samples { 12 } else { 0 }
-  wav_mux_tag(out, "RIFF")
-  wav_mux_u32(
-    out,
-    (20 + fmt_size + fact_size + data_size + pad).reinterpret_as_uint(),
-  )
+  // Size of everything after the 8-byte RIFF/RF64 header.
+  let riff_size = 20 + fmt_size + fact_size + data_size + pad
+  let ds64_size = if self.rf64 { 36 } else { 0 }
+  if self.rf64 {
+    wav_mux_tag(out, "RF64")
+    wav_mux_u32(out, 0xFFFFFFFFU)
+  } else {
+    wav_mux_tag(out, "RIFF")
+    wav_mux_u32(out, riff_size.reinterpret_as_uint())
+  }
   wav_mux_tag(out, "WAVE")
+  if self.rf64 {
+    wav_mux_tag(out, "ds64")
+    wav_mux_u32(out, 28U)
+    wav_mux_u64(out, (riff_size + ds64_size).to_int64())
+    wav_mux_u64(out, data_size.to_int64())
+    wav_mux_u64(out, (data_size / block_align).to_int64())
+    wav_mux_u32(out, 0U) // table entries
+  }
   wav_mux_tag(out, "fmt ")
   wav_mux_u32(out, fmt_size.reinterpret_as_uint())
   wav_mux_u16(out, format_tag)
@@ -161,7 +186,14 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
     wav_mux_u32(out, (data_size / block_align).reinterpret_as_uint())
   }
   wav_mux_tag(out, "data")
-  wav_mux_u32(out, data_size.reinterpret_as_uint())
+  wav_mux_u32(
+    out,
+    if self.rf64 {
+      0xFFFFFFFFU
+    } else {
+      data_size.reinterpret_as_uint()
+    },
+  )
   out.append(self.data)
   if pad != 0 {
     out.push(b'\x00')

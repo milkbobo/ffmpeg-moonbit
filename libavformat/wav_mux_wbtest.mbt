@@ -171,3 +171,60 @@ test "wav muxer: extensible float uses WAVE_FORMAT_EXTENSIBLE subformat" {
   assert_eq(demux.data_size, 48L)
   assert_eq(demux.sample_count, 2L)
 }
+
+///|
+test "wav muxer: RF64 header carries ds64 sizes" {
+  let mux = wav_muxer_new(48000, 2, 16, rf64=true).unwrap()
+  mux.write_samples([1, -1, 2, -2][:])
+  let bytes = mux.finish()
+  assert_eq(bytes[0:4], b"RF64"[:])
+  assert_eq(bytes[4:8], b"\xff\xff\xff\xff"[:])
+  assert_eq(bytes[8:12], b"WAVE"[:])
+  assert_eq(bytes[12:16], b"ds64"[:])
+  let riff_size = bytes[20].to_int() |
+    (bytes[21].to_int() << 8) |
+    (bytes[22].to_int() << 16) |
+    (bytes[23].to_int() << 24)
+  assert_eq(riff_size, bytes.length() - 8)
+  let data_size = bytes[28].to_int() |
+    (bytes[29].to_int() << 8) |
+    (bytes[30].to_int() << 16) |
+    (bytes[31].to_int() << 24)
+  assert_eq(data_size, 8)
+  assert_eq(bytes[36], b'\x02') // sample count, 2 frames
+  assert_eq(bytes[72:76], b"data"[:])
+  assert_eq(bytes[76:80], b"\xff\xff\xff\xff"[:])
+  let demux = av_wav_open(bytes).unwrap()
+  assert_eq(demux.format.codec, "pcm_s16le")
+  assert_eq(demux.format.channels, 2)
+  assert_eq(demux.data_offset, 80L)
+  assert_eq(demux.data_size, 8L)
+  assert_eq(demux.sample_count, 2L)
+  assert_eq(
+    bytes[80:88].to_owned(),
+    Bytes::from_array([1, 0, 0xFF, 0xFF, 2, 0, 0xFE, 0xFF]),
+  )
+}
+
+///|
+test "wav muxer: RF64 combines with float and extensible" {
+  let mux = wav_muxer_new(
+    48000,
+    6,
+    32,
+    channel_mask=0x3FU,
+    float=true,
+    rf64=true,
+  ).unwrap()
+  let samples : Array[Float] = [0.5, -0.5, 0.25, -0.25, 0.125, -0.125]
+  mux.write_float_samples(samples[:])
+  let bytes = mux.finish()
+  assert_eq(bytes[0:4], b"RF64"[:])
+  let demux = av_wav_open(bytes).unwrap()
+  assert_eq(demux.format.codec, "pcm_f32le")
+  assert_eq(demux.format.channels, 6)
+  assert_eq(demux.format.channel_mask, 0x3FU)
+  assert_eq(demux.data_size, 24L)
+  assert_eq(demux.sample_count, 1L)
+  assert_eq(demux.data_offset, 116L) // 48 ds64 header + 48 fmt + 12 fact + 8 data
+}
