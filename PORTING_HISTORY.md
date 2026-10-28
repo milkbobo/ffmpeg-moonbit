@@ -3970,3 +3970,25 @@ MD5 与源 raw 完全一致，本项目 `pcm_bytes` 亦逐字节一致。夹具
 `flac_32bit_vectors_test.mbt` + 黑盒 `flac_32bit_test.mbt`。LPC 在
 bps>16 时与既有 24-bit 路径相同（Int64 累加），无需新代码。
 全量 wasm **1072/1072**。
+
+## 117. MKV HEVC + AAC 真实读取验证
+
+补一条容器读取的真实验证：ffmpeg（x265 + native AAC）生成的
+64×64/5 帧 HEVC + 44.1 kHz 单声道 AAC 的 MKV（14,860 字节）嵌入
+白盒测试，`av_matroska_open` 读出两条轨：
+
+- 视频：`V_MPEGH/ISO/HEVC`，64×64，CodecPrivate 为 2408 字节 hvcC
+  （`lengthSizeMinusOne=3`），5 个包、PTS 0/200/400/600/800 ms、
+  首包 keyframe；
+- 音频：`A_AAC`，44.1 kHz 单声道，CodecPrivate 为 5 字节
+  AudioSpecificConfig，45 个包。
+
+解码侧：把 hvcC 的 VPS/SPS/PPS 数组改写成 4 字节长度前缀拼到视频包
+之前，`ff_hevc_decode_frames_ex(nalff=4)` 在两种滤波模式下解出 5 帧，
+逐帧 MD5 与 ffmpeg 对该 MKV 的 framemd5 一致；AAC 的 45 个解复用包
+逐个喂给 `new_aac_decoder_from_asc` + `decode_frame` 均成功（单声道
+单元素；AAC 内容精度已由 libavcodec 既有套件覆盖）。
+
+顺带确认了 MKV 解复用的时间基/负 PTS（音频首包 -23 ms）与
+CodecPrivate 大 hvcC（x265 写入了完整参数集数组）都能正确读出。
+全量 wasm **1073/1073**。
