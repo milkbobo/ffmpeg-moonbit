@@ -5530,3 +5530,22 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：改写后的 WAV 经 ffprobe 读到 title/artist/track，
   ffmpeg 解码 PCM 与源 data 块逐字节一致（`b359e7ed…`）。
 - 全量 wasm **1249/1249**。
+
+## 201. ID3v2 标签读写
+
+- 读：`id3v2_read_tags` 解析 ID3v2.3/2.4 头（synchsafe 尺寸、
+  unsynchronisation 还原、扩展头跳过），遍历帧：`T***` 文本帧
+  （Latin-1/UTF-16 BOM/UTF-16BE/UTF-8）、`TXXX`（description\0value）
+  与 `COMM`（语言+描述+文本），按 `ff_id3v2_metadata_conv` 映射
+  TIT2/TPE1/TPE2/TALB/TDRC/TCON/TRCK/TCOM/TSSE/TCOP/TPOS；无标签
+  返回空列表。
+- 写：`id3v2_write_tag` 生成 ID3v2.4（UTF-8 编码字节 3、synchsafe
+  帧长），已知键写原生帧、其余写 `TXXX`；`id3v2_add_tags` 替换文件
+  开头的旧标签（空列表即删除、含 footer 时一并跳过），音频字节原样
+  保留。
+- 回归 `id3v2_tags_realdata_test.mbt`：ffmpeg 生成的 ID3v2.4 MP3
+  读回 7 个标签（含 TXXX comment/TSSE encoder）；替换为 4 个标签后
+  旧标签消失、音频负载逐字节不变；删除标签得到裸 MP3 且读回空。
+- 外部验证：改写后的 MP3 经 ffprobe 读到 title/artist/comment/
+  custom key，ffmpeg 解码 PCM 与源文件一致。
+- 全量 wasm **1251/1251**。
