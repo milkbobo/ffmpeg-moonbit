@@ -5420,3 +5420,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   一致。（带章节文本轨的文件里 FFmpeg 读取时以文本轨为准，chpl
   仅为兼容副本。）
 - 全量 wasm **1230/1230**。
+
+## 194. Matroska 字幕（S_TEXT/UTF8）
+
+- 读取：现有轨道/块解析已按 TrackType 17 与 CodecID 收包；新增回归
+  锁定 ffmpeg 9.0.2 生成的 SRT-in-MKV（BlockGroup + BlockDuration）
+  读回 2 条字幕（pts 0/1200、时长 1000/1300）与原文。
+- 写入：新增 `mkv_subtitle_mux.mbt`（`MkvSubtitleMuxer` /
+  `mkv_subtitle_cue_new` / `write_cue` / `finish`）：单 `S_TEXT/UTF8`
+  轨（TrackType 17、FlagLacing 0、Language und），每簇 BlockGroup
+  （Block + BlockDuration），相对时间码超过 16 位范围时自动开新簇。
+- 边界：解复用器的层结束弹出逻辑会在「簇的最后一个子元素是嵌套
+  master 且与簇同界」时连带弹出簇层，从而吞掉后一簇；FFmpeg 自身
+  布局（以 SimpleBlock 结尾）不会触发，本字幕写入器因此在簇尾追加
+  零长 Void 规避，并在文件内注明。
+- 验证：三簇（0/1.2/40 s）文件经 ffmpeg 提取 SRT 与源文本/时间
+  逐条一致，ffprobe 识别为 subrip 字幕轨；全量 wasm **1233/1233**。
