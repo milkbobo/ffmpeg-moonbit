@@ -1,7 +1,8 @@
 ///|
-/// Minimal H.264 + AAC MP4 writer with two tracks sharing one `mdat`.
-/// Video and audio samples occupy separate chunks; each track has its own
-/// sample table and chunk offset.  Non-fragmented `moov` layout only.
+/// Minimal H.264 + AAC MP4 writer with two tracks and an optional mov-text
+/// (`tx3g`) subtitle track sharing one `mdat`. Video, audio and subtitle
+/// samples occupy separate chunks; each track has its own sample table and
+/// chunk offset.  Non-fragmented `moov` layout only.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -21,6 +22,7 @@ pub struct Mp4AvMuxer {
   audio_entry : Array[Byte]?
   audio_packets : Array[Bytes]
   audio_durations : Array[Int32]
+  cues : Array[Mp4SubtitleCue]
 }
 
 ///|
@@ -74,6 +76,7 @@ pub fn mp4_av_muxer_new(
     channels,
     audio_packets: [],
     audio_durations: [],
+    cues: [],
   })
 }
 
@@ -287,8 +290,10 @@ fn mp4_av_trak(
     hdlr_body,
     if handler == "vide" {
       "VideoHandler"
-    } else {
+    } else if handler == "soun" {
       "SoundHandler"
+    } else {
+      "SubtitleHandler"
     },
   )
   hdlr_body.push(b'\x00')
@@ -305,6 +310,29 @@ fn mp4_av_trak(
   let minf = mp4_box("minf", mp4_cat([media_header, dinf, stbl]))
   let mdia = mp4_box("mdia", mp4_cat([mdhd, hdlr, minf]))
   mp4_box("trak", mp4_cat([tkhd, edts, mdia]))
+}
+
+///|
+/// Add a mov-text cue; the subtitle track is written only when at least one
+/// cue exists. Cues must not overlap (MP4 sample timing is duration-based).
+pub fn Mp4AvMuxer::write_subtitle(
+  self : Mp4AvMuxer,
+  start_ms : Int64,
+  end_ms : Int64,
+  text : String,
+) -> Result[Unit, String] {
+  if start_ms < 0L || end_ms < start_ms || text == "" {
+    return Err("EINVAL: invalid subtitle cue")
+  }
+  if utf8_from_string(text).length() > 65535 {
+    return Err("EINVAL: subtitle cue text exceeds 65535 bytes")
+  }
+  if self.cues.length() > 0 &&
+    start_ms < self.cues[self.cues.length() - 1].end_ms {
+    return Err("EINVAL: overlapping subtitle cues")
+  }
+  self.cues.push(({ start_ms, end_ms, text, } : Mp4SubtitleCue))
+  Ok(())
 }
 
 ///|
@@ -328,12 +356,26 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
       adata.push(b)
     }
   }
+  let has_subs = self.cues.length() > 0
+  let (sub_samples, sub_us) = if has_subs {
+    mp4_subtitle_samples(self.cues)
+  } else {
+    ([], [])
+  }
+  let sdata : Array[Byte] = []
+  for p in sub_samples {
+    for b in p {
+      sdata.push(b)
+    }
+  }
   let mdat_body : Array[Byte] = []
   mdat_body.append(vdata)
   mdat_body.append(adata)
+  mdat_body.append(sdata)
   let mdat = mp4_box("mdat", mdat_body)
   let video_offset = ftyp.length() + 8
   let audio_offset = video_offset + vdata.length()
+  let sub_offset = audio_offset + adata.length()
 
   let mut vdur = 0
   for d in self.video_durations {
@@ -347,7 +389,18 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
   let a_display = adur - aprim
   let vms = vdur.to_int64() * 1000L / 90000L
   let ams = a_display.to_int64() * 1000L / self.sample_rate.to_int64()
-  let movie_ms = if vms > ams { vms.to_int() } else { ams.to_int() }
+  let mut sub_ms = 0L
+  let sub_durations : Array[Int32] = []
+  for d in sub_us {
+    // Cue millisecond grid: the microsecond durations divide exactly.
+    sub_ms = sub_ms + d / 1000L
+    sub_durations.push((d / 1000L).to_int())
+  }
+  let mut movie_ms = if vms > ams { vms } else { ams }
+  if sub_ms > movie_ms {
+    movie_ms = sub_ms
+  }
+  let movie_ms = movie_ms.to_int()
   let aedts : Array[Byte] = if aprim > 0 {
     mp4_edit_list(aprim, adur, 1000, self.sample_rate)
   } else {
@@ -368,7 +421,7 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
   for _ in 0..<6 {
     mp4_u32(mvhd_body, 0U)
   }
-  mp4_u32(mvhd_body, 3U)
+  mp4_u32(mvhd_body, if has_subs { 4U } else { 3U })
   let mvhd = mp4_full_box("mvhd", 0, 0, mvhd_body)
 
   let h264 = mp4_h264_muxer_new(
@@ -431,7 +484,37 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     empty_keys,
     audio_offset,
   )
-  let moov = mp4_box("moov", mp4_cat([mvhd, vtrack, atrack]))
+  let nmhd = mp4_full_box("nmhd", 0, 0, [])
+  let empty_sub_keys : Array[Bool] = []
+  for _ in 0..<sub_samples.length() {
+    empty_sub_keys.push(false)
+  }
+  let strack = if has_subs {
+    mp4_av_trak(
+      3,
+      0,
+      0,
+      0,
+      1000,
+      sub_ms.to_int(),
+      sub_ms.to_int(),
+      "sbtl",
+      nmhd,
+      mp4_tx3g_sample_entry(),
+      [],
+      sub_samples,
+      sub_durations,
+      empty_sub_keys,
+      sub_offset,
+    )
+  } else {
+    []
+  }
+  let moov = if has_subs {
+    mp4_box("moov", mp4_cat([mvhd, vtrack, atrack, strack]))
+  } else {
+    mp4_box("moov", mp4_cat([mvhd, vtrack, atrack]))
+  }
   Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
 }
 

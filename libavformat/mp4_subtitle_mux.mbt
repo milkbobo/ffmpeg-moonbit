@@ -246,16 +246,17 @@ fn mp4_subtitle_document(
 }
 
 ///|
-/// Build the complete MP4: cue samples with gap/flush empty samples, timed in
-/// microseconds (the mov-text track timescale).
-pub fn Mp4SubtitleMuxer::finish(
-  self : Mp4SubtitleMuxer,
-) -> Result[Bytes, String] {
+/// mov-text samples and their durations in microseconds: a text sample per
+/// cue, an empty sample for each gap and a zero-duration flush sample at the
+/// end (FFmpeg's movenc layout).
+pub fn mp4_subtitle_samples(
+  cues : Array[Mp4SubtitleCue],
+) -> (Array[Bytes], Array[Int64]) {
   let samples : Array[Bytes] = []
   let durations : Array[Int64] = []
   let empty = mp4_tx3g_sample("")
   let mut cur : Int64 = 0L
-  for cue in self.cues {
+  for cue in cues {
     let start_us = cue.start_ms * 1000L
     let end_us = cue.end_ms * 1000L
     if start_us > cur {
@@ -269,6 +270,22 @@ pub fn Mp4SubtitleMuxer::finish(
   }
   samples.push(Bytes::from_array(empty))
   durations.push(0L)
+  (samples, durations)
+}
+
+///|
+/// `tx3g` sample entry used by the standalone and the A/V subtitle tracks.
+pub fn mp4_tx3g_sample_entry() -> Array[Byte] {
+  mp4_tx3g_entry()
+}
+
+///|
+/// Build the complete MP4: cue samples with gap/flush empty samples, timed in
+/// microseconds (the mov-text track timescale).
+pub fn Mp4SubtitleMuxer::finish(
+  self : Mp4SubtitleMuxer,
+) -> Result[Bytes, String] {
+  let (samples, durations) = mp4_subtitle_samples(self.cues)
   let mut total = 0L
   for d in durations {
     total = total + d

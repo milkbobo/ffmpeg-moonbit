@@ -5482,3 +5482,18 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffprobe 识别 h264/ac3/subrip 三轨，ffmpeg 提取 SRT 与
   源逐行一致，视频 framemd5 与音频 PCM MD5 与无字幕版本相同。
 - 全量 wasm **1241/1241**。
+
+## 198. MP4 A/V 写入器：mov_text 字幕轨
+
+- `Mp4AvMuxer`（H.264 + AAC/AC-3/E-AC-3）新增
+  `write_subtitle(start_ms, end_ms, text)`：有 cue 时在 `mdat` 追加
+  mov-text 样本并写出第三条 `tx3g` 轨（`sbtl` handler、Arial ftab、
+  nmhd、1000 timescale、TrackID 3）；间隙/起始空样本与零时长收尾
+  样本复用抽出的 `mp4_subtitle_samples`（微秒），单轨字幕写入器同步
+  复用该 helper。mvhd next_track_id 与 movie duration 计入字幕。
+- 回归：真实 H.264 + AC-3 样本加两条字幕 → 3 轨、tx3g 轨道
+  5 个样本（起始空/文本/间隙空/文本/收尾空）时长与文本正确，
+  音视频样本与无字幕版本逐字节相同。
+- 外部验证：ffprobe 识别 h264/ac3/mov_text，ffmpeg 提取 SRT 与源
+  逐行一致，视频 framemd5 与音频 PCM 与无字幕版本完全相同。
+- 全量 wasm **1242/1242**。

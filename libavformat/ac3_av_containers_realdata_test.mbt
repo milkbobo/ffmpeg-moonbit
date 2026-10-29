@@ -433,3 +433,70 @@ test "A/V Matroska: H.264 + AC-3 + SRT subtitles" {
   assert_eq(subs[1].duration, 200UL)
   av_check_video(video)
 }
+
+///|
+test "A/V MP4: H.264 + AC-3 + mov_text subtitles" {
+  let avcc = @libavutil.av_base64_decode(av_h264_avcc_b64, 1024).unwrap()
+  let video = av_split_h264()
+  let audio = av_split_ac3()
+  let mux = @libavformat.mp4_av_ac3_muxer_new(64, 48, avcc, audio[0]).unwrap()
+  for i, p in video {
+    mux.write_video(p, duration=9000, keyframe=i == 0).unwrap()
+  }
+  for p in audio {
+    mux.write_audio(p, duration=1536).unwrap()
+  }
+  mux.write_subtitle(50L, 150L, "First cue").unwrap()
+  mux.write_subtitle(200L, 400L, "Second cue").unwrap()
+  let bytes = mux.finish()
+  let movie = @libavformat.av_mov_open(bytes).unwrap()
+  assert_eq(movie.tracks.length(), 3)
+  let st = movie.tracks[2]
+  assert_eq(st.codec, "tx3g")
+  assert_eq(st.timescale, 1000)
+  // leading gap, cue, gap, cue, flush
+  assert_eq(st.samples.length(), 5)
+  assert_eq(st.samples[0].duration, 50U)
+  assert_eq(st.samples[1].duration, 100U)
+  assert_eq(st.samples[2].duration, 50U)
+  assert_eq(st.samples[3].duration, 200U)
+  assert_eq(st.samples[4].duration, 0U)
+  let texts : Array[String] = []
+  for i = 0; i < st.samples.length(); i = i + 1 {
+    let sample = st.samples[i]
+    let start = sample.offset.to_int()
+    let size = sample.size.reinterpret_as_int()
+    texts.push(
+      @libavformat.mp4_tx3g_text(bytes[start:start + size].to_owned()).unwrap(),
+    )
+  }
+  assert_eq(texts[0], "")
+  assert_eq(texts[1], "First cue")
+  assert_eq(texts[2], "")
+  assert_eq(texts[3], "Second cue")
+  // Video and audio payloads are byte-identical to a subtitle-less file.
+  let plain = @libavformat.mp4_av_ac3_muxer_new(64, 48, avcc, audio[0]).unwrap()
+  for i, p in video {
+    plain.write_video(p, duration=9000, keyframe=i == 0).unwrap()
+  }
+  for p in audio {
+    plain.write_audio(p, duration=1536).unwrap()
+  }
+  let pbytes = plain.finish()
+  let pmovie = @libavformat.av_mov_open(pbytes).unwrap()
+  for t = 0; t < 2; t = t + 1 {
+    let a = movie.tracks[t]
+    let b = pmovie.tracks[t]
+    assert_eq(a.samples.length(), b.samples.length())
+    for i = 0; i < a.samples.length(); i = i + 1 {
+      let sa = a.samples[i]
+      let sb = b.samples[i]
+      let a0 = sa.offset.to_int()
+      let a1 = a0 + sa.size.reinterpret_as_int()
+      let b0 = sb.offset.to_int()
+      let b1 = b0 + sb.size.reinterpret_as_int()
+      assert_eq(bytes[a0:a1].to_owned(), pbytes[b0:b1].to_owned())
+    }
+  }
+  av_check_video(video)
+}
