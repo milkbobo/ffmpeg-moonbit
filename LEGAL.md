@@ -1,138 +1,196 @@
-# 许可与法律注意事项
+# 许可、源码分发与专利 / Licensing, source distribution, and patents
 
-> 参照 FFmpeg 官方 [legal 页面](https://ffmpeg.org/legal.html)（[中文翻译镜像](https://ffmpeg.cpp.org.cn/legal.html)，非官方站点）为本项目定制。
-> **本文不是法律意见。** 商业决策请咨询律师，并以许可证原文为准。LGPL 全文本目录已附副本
-> （`COPYING.LGPLv2.1`、`COPYING.LGPLv3`），本项目许可声明见 `LICENSE.md`；`../COPYING.GPLv2`、
-> `../LICENSE.md` 指外层 FFmpeg n9.0.2 源码树中的原文（该树不在本 git 仓库内，单独分发本仓库时
-> 可对照 <https://github.com/FFmpeg/FFmpeg/blob/n9.0.2/LICENSE.md>）。
+本文说明项目分发政策和合规注意事项，不是法律意见，不替代或修改许可证。
+中英文说明与适用许可证冲突时，以许可证正文为准。
 
----
+This document describes the project's distribution policy and compliance considerations.
+It is not legal advice and does not replace or amend any license. Applicable license
+texts govern if either language version conflicts with them.
 
-## 1. 本项目的许可证
+## 1. 项目许可与分发政策 / License and distribution policy
 
-**本项目是 FFmpeg n9.0.2 的 MoonBit 翻译/移植，法律上属于 FFmpeg 的衍生作品（derivative work），因此继承上游许可证：LGPL-2.1-or-later。**
+本项目将 FFmpeg 的部分代码翻译、移植为 MoonBit，许可为 **LGPL-2.1-or-later**，
+与 `moon.mod` 一致。各文件及第三方组件的特定许可、版权和署名通知仍须保留。
+换用编程语言不解除上游义务；移植贡献的版权也不替代原作者的权利。
+许可说明见 [LICENSE.md](LICENSE.md)，正文见 [LGPL 2.1](COPYING.LGPLv2.1)
+和 [LGPL 3](COPYING.LGPLv3)。选择 LGPL 3 时，还须遵守其纳入的 GPL 3 条款，
+并随适用的再分发附上所需许可证全文。
 
-- `moon.mod` 已声明 `license = "LGPL-2.1-or-later"`；本目录附带 `LICENSE.md`（本项目许可声明）、
-  `COPYING.LGPLv2.1` 与 `COPYING.LGPLv3` 全文，仓库自成一体。
-- 每个 `.mbt` 文件头部标注了对应的 C 源文件（如 `libavcodec/hevc/hevcdec.c`）及其许可证。
-- 移植是逐行翻译，"换语言"不产生新版权，也不能解除上游许可：原版权头（作者与年份）同时保留在
-  `.mbt` 文件头与外层 FFmpeg 源码树对应的 C 文件中，二者一一对应。**裁剪仓库对外发布时，必须连同
-  各文件版权头、本目录 `LICENSE.md` 与 `COPYING.*` 一起保留，不可剥离。**
-- FFmpeg 不提供任何其他许可（包括付费的专有/商业授权），本项目同样无法绕开这一点——想以别的条款发布，只能做净室重写（见 §5）。
+**维护者仅以源代码形式开源发布本项目，不对外提供或分发以下制品：**
 
-### 目前移植范围的许可证归属（已对照 n9.0.2 `LICENSE.md` 核对）
+- WebAssembly（WASM）编译产物；
+- 二进制文件、可执行程序、目标文件、静态库或动态库；
+- `bin/` 目录中的编译产物、预编译包及其他预构建制品。
 
-| 移植内容 | 上游对应 | 许可证 |
-|---|---|---|
-| libavutil 纯算法（md5、aes、base64、定点/数学等） | `libavutil/*` | LGPL-2.1+ |
-| 封装/解封装（MPEG-TS、Matroska/EBML、MP4 头、PNG/APNG/MJPEG、VP9/AV1 头解析） | `libavformat/*`、`libavcodec/png*` 等 | LGPL-2.1+ |
-| H.264/HEVC/AAC 解码（CABAC、残差、去块、SAO、MC、DPB 等） | `libavcodec/h264*`、`libavcodec/hevc/*`、`libavcodec/aac*` | LGPL-2.1+ |
-| `scripts/_hevc_ref_harness*.c`（插桩 C 参考解码器） | 修改自 FFmpeg 源码 | LGPL-2.1+ |
+本政策适用于维护者管理的仓库、发布附件、软件包渠道、公开 CI 构建产物及网页演示。
+目录名称或扩展名不改变产物性质；网页向浏览器交付 WASM 也属于本政策不提供的情形。
+构建脚本、源码示例和测试说明供使用者自行本地构建，并不表示提供预编译下载。
+测试码流和参考数据不是可执行编译产物，其权利问题另见 §4、§6。
 
-**注意**：上游把 HEVC 解码器放在 `libavcodec/hevc/` 子目录，这些文件均不在 GPL 清单内；GPL-only 的
-`tests/checkasm/*`、`tests/tiny_ssim.c`、GPL 滤镜（`vf_fspp`/`vf_pp7`/`vf_spp` 等 34 个）与
-`x86/flac_dsp_gpl.asm`、`x86/idct_mmx.c` **均未被移植**，将来也不要移植（见 §4）。
+仅分发源码可减少与预编译产物分发相关的合规负担，但**不免除源码分发义务，不消除
+专利或其他法律风险，也不撤销既有分发行为可能产生的义务**。本政策约束维护者的
+发布方式，不禁止使用者按适用许可证自行编译、修改或再分发，不构成附加许可限制。
 
----
+This project ports parts of FFmpeg to MoonBit under **LGPL-2.1-or-later**, as
+specified in `moon.mod`. File-specific and third-party notices remain applicable.
+Changing languages does not remove upstream obligations, and translation copyrights
+do not replace the original authors' rights. See [LICENSE.md](LICENSE.md),
+[LGPL 2.1](COPYING.LGPLv2.1), and [LGPL 3](COPYING.LGPLv3). Choosing LGPL 3 also
+requires compliance with the GPL 3 terms it incorporates and inclusion of required
+license texts when redistributing.
 
-## 2. LGPL-2.1 合规清单（把本库用进你的产品时）
+**The maintainers release source code only. They do not publicly provide or distribute
+WASM build artifacts, binaries, executables, object files, static or shared libraries,
+compiled artifacts under `bin/`, precompiled packages, or other prebuilt artifacts.**
+This policy covers maintainer-controlled repositories, release attachments, package
+channels, public CI artifacts, and web demos. Names and extensions do not change an
+artifact's nature; delivering WASM to a browser is also excluded by this policy.
+Build scripts, source examples, and testing instructions enable local builds; they
+are not offers of precompiled downloads. Test bitstreams and reference data are not
+executable build artifacts; see §§4 and 6 for their rights considerations.
 
-以下是对官方 checklist 的本项目版本。凡分发包含本 MoonBit 移植（源码或编译产物）的产品：
+Source-only distribution can reduce compliance burdens associated with prebuilt
+artifacts. It does **not** remove source-distribution obligations, eliminate patent
+or other legal risks, or discharge obligations arising from earlier distributions.
+This is a maintainer publishing policy, not an additional restriction on recipients'
+rights to compile, modify, or redistribute under applicable licenses.
 
-1. **不启用 GPL/nonfree 内容** —— 不移植/链接 §4 列出的 GPL 文件与 GPL 外部库，本库即保持 LGPL。
-2. **提供对应源码** —— 分发二进制时，随附（或书面承诺提供）本库完整对应源码。以源码形式随应用发布最简单，天然合规；可用 `git diff <上游基线>` 说明改动。
-3. **保持库的可替换性** —— LGPL 是围绕"用户可替换的库"设计的。最干净是动态链接/独立 `.wasm` 模块；
-   若静态编进应用，LGPLv2.1 §4 要求提供目标文件或等价手段让用户能重新链接替换本库。
-4. **声明与署名** —— 在下载页、"关于"对话框、EULA 中注明：包含依 LGPLv2.1+ 授权的 FFmpeg（MoonBit 移植），
-   并正确拼写 **FFmpeg**（两个 F 大写）。
-5. **EULA 不得与 LGPL 冲突** —— 删除禁止反向工程的条款（LGPLv2.1 §6 允许为调试而逆向）；
-   不得声称对本库拥有所有权或施加额外限制。
-6. **模块命名** —— 引用 FFmpeg 之名的模块/产物不得混淆来源（官方例子：`avcodec.dll` 不许改叫
-   `MyProgDec.dll`，`avcodec-MyProg.dll` 可以）。本项目模块名 `ffmpeg/moonbit` 保持来源清晰，符合要求。
-7. **对依赖重复此流程** —— 若本库将来引入其他 LGPL 外部库，同样逐一合规；不引入 GPL 库。
+## 2. 源码与下游分发义务 / Source and downstream distribution
 
----
+源码发布仍应符合 LGPL 2.1 §§1–2：保留适用版权、许可及无担保通知，附上许可证，
+并为修改的文件提供显著的修改说明及修改日期；衍生代码须按适用条款分发。
+仅放置许可证链接或声称“已开源”不能替代这些要求。
 
-## 3. 商标
+下游若分发编译后的库或与其链接的应用，应按实际情况评估 LGPL 2.1 §§4–6，
+包括完整对应源码、必要的构建材料，以及适用时供用户修改库并重新链接的应用目标文件、
+源码或符合条款的共享库机制。**重新链接要求见 §6，不是 §4。**
+独立 `.wasm` 文件或动态链接形式本身不保证合规。书面源码提供承诺仅能在相应条款
+允许且满足期限、范围等条件时使用。应用条款不得与 LGPL 授予的权利冲突，包括
+§6 所述为自身使用而修改及为调试这些修改而逆向工程。
 
-**FFmpeg 是 Fabrice Bellard 的商标。** 本项目是独立的重构工作，与 FFmpeg 项目无附属或背书关系：
-项目名、README、发布页不得暗示官方背书；使用 FFmpeg 名称时保持"FFmpeg 的 MoonBit 移植"这类描述性用法。
-（你给过的 `ffmpeg.cpp.org.cn` 是第三方翻译站，与官方无关——法律表述请以 `ffmpeg.org` 为准。）
+Source releases remain subject to LGPL 2.1 §§1–2: preserve applicable copyright,
+license, and warranty notices, include the license, and prominently identify modified
+files and modification dates. Distribute derivative code under applicable terms.
+A license link or an "open source" label alone does not fulfill these requirements.
 
----
+Downstream distributors of compiled libraries or linked applications must assess
+LGPL 2.1 §§4–6 as applicable, including complete corresponding source, necessary
+build materials, and, where required, application object code, source, or a compliant
+shared-library mechanism enabling modification of the library and relinking.
+**The relinking provisions are in §6, not §4.** A separate `.wasm` file or dynamic
+linking alone does not establish compliance. Written source offers are available only
+where the relevant provisions permit them and their conditions are met. Application
+terms must respect LGPL rights, including modification for the customer's own use
+and reverse engineering for debugging those modifications under §6.
 
-## 4. 会"改变许可证"的雷区（红线清单）
+## 3. 商标与项目关系 / Trademark and affiliation
 
-以下任何一项都会把整个组合升级为 **GPL-2.0+** 甚至**不可再分发**，移植前必须查上游 LICENSE 清单
-（外层 `../LICENSE.md`；不在手边时对照 <https://github.com/FFmpeg/FFmpeg/blob/n9.0.2/LICENSE.md>）：
+FFmpeg 是 Fabrice Bellard 的商标。本项目是独立的 MoonBit 移植，不代表 FFmpeg 官方，
+也不暗示得到其认可或背书。项目名、文档及下游产品应清楚说明来源。
 
-- **移植上游 GPL-only 文件**：34 个 `vf_*` 滤镜、`tests/checkasm/*`、`tests/tiny_ssim.c`、
-  `doc/texi2pod.pl`、`x86/flac_dsp_gpl.asm`、`x86/idct_mmx.c` 等。特别提醒：README 约定用
-  "FFmpeg 自己的测试"做校验——**FATE 参考输出数据可以随便用，但 checkasm/tiny_ssim 的代码不能移植**。
-- **移植/绑定 GPL 外部库**：libx264、libx265、libvidstab、frei0r、librubberband、avisynth、
-  libcdio、libdavs2、libxavs(2)、libxvid 共 12 个。
-- **LGPLv3-only 依赖**（gmp、libaribb24、liblensfun）会把许可证升级到 v3；Apache-2.0 依赖
-  （VMAF、mbedTLS 等）与 v2.1 不兼容，同样要求 `--enable-version3` 档位。
-- **nonfree（fdk-aac、OpenSSL）**：组合结果**不可再分发**，绝对不能进本库。
-- **三个 IJG 特殊条款文件**（`jfdctfst.c`、`jfdctint_template.c`、`jrevdct.c`）：将来移植 IDCT 时
-  有额外署名与变更说明义务（见 `../LICENSE.md` 末段）。
+FFmpeg is a trademark of Fabrice Bellard. This is an independent MoonBit port,
+not an official FFmpeg project or an assertion of endorsement. Names,
+documentation, and downstream products should identify their origin clearly.
 
-**不受影响（常见误解澄清）**：
-- 用 `linuxserver/ffmpeg`（含 libx264/libx265 的 GPL 构建）**生成**的测试码流、参考输出、MD5 ——
-  GPL 只覆盖程序文本，不覆盖程序的输出数据；测试向量可自由嵌入（内容本身的版权另计，见 §6 末条）。
-- 分发 FFmpeg CLI（GPL 构建）二进制属于"分发 GPL 软件"，那一份按 GPL 办即可，不传染本库。
+## 4. 第三方代码与测试数据 / Third-party code and test data
 
----
+本项目以维持 LGPL-2.1-or-later 许可为目标。新增代码或依赖前，应核对具体文件、
+版本及组合方式；本说明不是对所有文件的完整许可审计。
 
-## 5. 想摆脱 LGPL 的唯一路径：净室重写
+- GPL-only 代码（如上游 `tests/checkasm/*`、`tests/tiny_ssim.c` 和部分滤镜）或
+  GPL 库的组合可能要求适用 GPL，不能直接沿用本项目的 LGPL 声明。
+- LGPLv3、Apache-2.0 或其他条款的依赖可能要求调整适用版本或分发方式。
+  不应仅凭库名推断兼容性，也不应把所有组合一律称为 GPL-2.0+ 或不可分发。
+- 特殊署名要求（如 IJG 相关文件）、第三方版权和修改记录必须单独保留。
+- 使用 FFmpeg、x264、x265 等工具生成输出，不会仅因使用该工具就使输出受其程序许可证
+  约束；但素材内容、嵌入的受保护内容、来源许可和专利问题仍需另行检查。
+  不能把“测试用途”理解为任意素材均可自由再分发。
 
-逐行翻译永远是衍生作品。若将来需要以宽松许可（MIT/Apache-2 等）发布某模块，唯一合规路径是
-**净室流程**：一组成员读规范（ITU-T H.265/H.264 规范可自由下载）或产出到 C 参考解码器的对拍报告，
-另一组从未接触 FFmpeg 源码的成员仅凭规范文本实现。本项目当前的"对照 C 源逐行移植"**不满足**净室要求，
-因此本库整体必须保持 LGPL-2.1+。
+The project aims to retain LGPL-2.1-or-later licensing. Review specific files,
+versions, and combinations before adding ports or dependencies; this document is
+not a complete license audit. GPL-only code or GPL library combinations may require
+the applicable GPL. LGPLv3, Apache-2.0, or other dependencies may affect license
+version or distribution options. Do not infer compatibility from a library name or
+classify every combination as GPL-2.0+ or non-redistributable. Preserve special
+attribution requirements, third-party notices, and modification records.
 
----
+Generating output using FFmpeg, x264, or x265 does not by itself subject the output
+to the tool's program license. Content rights, embedded protected material, provenance,
+and patents must still be considered. Testing does not automatically permit redistribution.
 
-## 6. 专利迷你 FAQ（HEVC/H.265 重点）
+## 5. 独立实现与重新许可 / Independent implementations and relicensing
 
-**问：本项目的解码器用了专利算法吗？**
-FFmpeg 官方的回答同样适用于此：开发者没有为实现而阅读过任何专利，无法回答；但 H.264 与 HEVC
-规范文本自身都声明"符合本规范可能需要使用一项或多项专利"。HEVC 相关的主要专利池有 Via-LA
-（原 MPEG LA）、HEVC Advance、Velos Media，另有池外持有者——**解码**同样落在多数许可主张范围内。
+对照上游代码翻译或移植不能仅因换用语言而改为 MIT、Apache 或专有许可。
+若考虑其他许可，应确认全部相关权利人的授权或独立实现的权利基础。
+净室开发可帮助记录独立实现过程，但不是自动获得许可的保证，也不解决专利问题。
 
-**问：在中国大陆使用安全吗？**
-取决于司法管辖区。算法/软件专利在多数国家（包括中国和欧盟大部分情形）可专利性受限或难以执行，
-但在美国等法域有效。仅在本地开发、研究、教学使用，实际风险很低。
+Translating upstream code into another language does not authorize relicensing it
+under MIT, Apache, or proprietary terms. Alternative licensing requires an adequate
+rights basis, such as authorization from all relevant rights holders or an independent
+implementation. Clean-room development may help document independence; it does
+not automatically establish licensing rights or resolve patent issues.
 
-**问：个人使用需要担心吗？**
-几乎不需要。私人使用历来没有被追讨的先例。
+## 6. 解码器专利特别声明 / Special decoder patent notice
 
-**问：做成商业产品呢？**
-有公司在产品中使用 FFmpeg 后被专利持有者（如 MPEG LA）追讨许可费的公开先例。**商业化分发
-（尤其是面向美国市场或上架应用商店）之前，必须做专利评估。** 本项目当前定位是研究性移植验证，
-风险可控；发布含 HEVC/H.264 解码能力的二进制前请重读本条。
+**本项目包含 H.264/AVC、HEVC/H.265、AAC 等解码器实现，所实现的部分编解码技术
+可能受第三方专利保护。** 此处提示专利风险，不宣称维护者拥有这些专利，也不认定
+任何特定专利有效、必要或已被本项目侵犯。所列格式不是完整的专利风险清单。
 
-**测试素材**：x265/x264 编码的测试流内容若无额外授权，仅限内部测试，不要再分发内容本身。
+源码公开、采用 LGPL、仅提供解码功能或不提供预编译包，均不代表已取得相关专利许可，
+也不保证免许可、免版税或不侵权。除适用许可证明确授予的专利权利外，本声明不授予
+额外专利许可，也不削减适用许可证已经授予的权利。
 
----
+专利评估取决于具体权利要求、有效性、期限、司法辖区、实施方式及使用场景。
+不能仅凭个人、研究、教学、非商业用途或某个国家/地区认定没有风险或当然豁免。
+使用者在编译、使用、集成、部署或再分发前，应根据这些因素评估许可需求，必要时
+取得相关权利人的授权。商业产品及跨境发布应进行适合其具体情况的专业评估。
+本声明不把维护者依法承担的责任转移给使用者，也不承诺所有相关专利均已识别。
 
-## 7. 本仓库的额外义务与建议
+**This project includes decoder implementations such as H.264/AVC, HEVC/H.265,
+and AAC. Some of the codec technologies implemented may be covered by third-party
+patents.** This notice identifies a risk; it does not claim maintainer ownership of
+those patents or determine that any particular patent is valid, essential, or infringed.
+The listed formats are not an exhaustive patent-risk inventory.
 
-- 开发工作区外层是**完整未修改的 FFmpeg 源码树**（不在本 git 仓库内，仅作对照参考）：本仓库发布时
-  保留各文件版权头、`LICENSE.md` 与 `COPYING.*` 即可，不要剥离。
-- `scripts/_*.py`、`_hevc_ref_harness*.c` 是开发工具，若随产品分发同样受 LGPL 约束（保留基于 FFmpeg
-  修改的文件头与来源说明）。
-- 新增 `.mbt` 文件务必延续现有文件头约定：注明对应 C 源文件 + "Original FFmpeg code is
-  LGPL-2.1-or-later; this port keeps the same license."
-- 新增第三方依赖（包括 MoonBit 包）时，先核对其许可证与 LGPL-2.1 的兼容性，再进 `moon.mod`。
+Source availability, LGPL licensing, decoding-only functionality, and the absence
+of precompiled packages do not establish patent clearance or guarantee license-free,
+royalty-free, or non-infringing use. Except for patent rights expressly granted under
+applicable licenses, this notice grants no additional patent license and does not
+reduce any rights already granted by those licenses.
 
-## 参考
+Patent assessment depends on specific claims, validity, term, jurisdiction,
+implementation, and activities. Personal, research, educational, or noncommercial
+use, or a particular location, does not alone establish an exemption or absence of
+risk. Before compiling, using, integrating, deploying, or redistributing, users should
+assess licensing needs in light of these factors and obtain authorization where
+required. Commercial products and cross-border distribution warrant assessment
+appropriate to their circumstances. This notice does not transfer the maintainers'
+legal responsibilities to users or represent that all relevant patents have been identified.
 
-- 官方原文：<https://ffmpeg.org/legal.html>、<https://ffmpeg.org/legal.html#license>（License 章节）
-- 许可证文本：本目录 `LICENSE.md` / `COPYING.LGPLv2.1` / `COPYING.LGPLv3`；上游原文在外层 FFmpeg
-  源码树 `../COPYING.LGPLv2.1`、`../COPYING.GPLv2`、`../LICENSE.md`（GPL 文件与外部库清单的权威
-  来源，亦可对照 <https://github.com/FFmpeg/FFmpeg/blob/n9.0.2/LICENSE.md>）
-- GPL FAQ：<https://www.gnu.org/licenses/gpl-faq.html>
+## 7. 发布维护与无担保 / Release maintenance and warranty
 
----
-*2026-10-21 依据 FFmpeg n9.0.2 源码树核对编写。*
+发布源码前应检查实际发布内容，包括仓库跟踪文件、压缩包、软件包、CI 附件和网页资源，
+确保符合 §1 的分发政策；声明和忽略规则本身不能阻止误发布。
+新增源文件应记录真实来源、适用许可证、原作者版权及修改说明，不能把不同来源一律标为 FFmpeg LGPL。
+本软件的无担保和责任限制以适用许可证及法律为准；本说明不提供适销性、特定用途适用性或不侵权保证。
+
+Before releasing source, inspect the actual tracked files, archives, packages, CI
+attachments, and web assets for compliance with §1. Notices and ignore rules alone
+do not prevent accidental publication. New source files should record their actual
+origin, license, original copyrights, and modifications; do not label every source
+as FFmpeg LGPL regardless of provenance. Warranty exclusions and liability limits
+are governed by applicable licenses and law. This document offers no warranty of
+merchantability, fitness for a particular purpose, or non-infringement.
+
+## 参考 / References
+
+- [本项目许可说明 / Project license notice](LICENSE.md)
+- [LGPL 2.1 正文 / License text](COPYING.LGPLv2.1)；[LGPL 3](COPYING.LGPLv3)
+- [GNU 官方 LGPL 2.1 / Official GNU text](https://www.gnu.org/licenses/old-licenses/lgpl-2.1.en.html)
+- [FFmpeg 官方法律说明 / Official legal information](https://ffmpeg.org/legal.html)
+- [FFmpeg 许可说明 / Upstream license information](https://ffmpeg.org/doxygen/trunk/md_LICENSE.html)
+  （当前上游说明；具体移植须以对应版本和文件头为准 / current upstream summary;
+  use the relevant version and file headers for each port）
+- [GNU 许可证常见问题 / GNU license FAQ](https://www.gnu.org/licenses/gpl-faq.html)
+
+更新于 / Updated: 2026-10-29.
