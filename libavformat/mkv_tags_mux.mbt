@@ -201,19 +201,16 @@ fn mkv_rewrite_cues(
 }
 
 ///|
-/// Append a `Tags` element carrying `tags` to a finished Matroska/WebM file.
-/// The element is inserted before the first Cluster (where FFmpeg's demuxer
-/// reads it), and all `SeekHead`/`Cues` positions that refer to the shifted
-/// clusters are rewritten. Existing `Tags` elements are kept (Matroska tags
-/// are additive), so appended strings win in readers that keep the last
-/// value of a key.
-pub fn mkv_add_tags(
+/// Insert an EBML level-1 element before the first Cluster of a finished
+/// Matroska/WebM file (where FFmpeg's demuxer reads metadata), rewriting the
+/// `SeekHead`/`Cues` positions that refer to the shifted clusters. With a
+/// non-zero `replace_id` an existing element of that id (before the first
+/// Cluster) is replaced in place instead of adding a duplicate.
+fn mkv_write_level1(
   file : Bytes,
-  tags : Array[(String, String)],
+  elem : Array[Byte],
+  replace_id : UInt32,
 ) -> Result[Bytes, String] {
-  if tags.length() == 0 {
-    return Ok(file)
-  }
   if file.length() < 12 {
     return Err("EINVAL: truncated Matroska")
   }
@@ -242,12 +239,14 @@ pub fn mkv_add_tags(
     return Err("EINVAL: Segment is not the last element")
   }
   let body = file[body_start:file.length()].to_owned()
-  let elem = mkv_tags_element(tags)
-  // Locate the first Cluster (the insertion point) and the index elements.
-  let insert_pos : Array[Int64] = [body.length().to_int64()]
+  // Locate the first Cluster, the index elements and (optionally) the element
+  // to replace.
+  let cluster_pos : Array[Int32] = [body.length()]
   let has_cluster : Array[Bool] = [false]
   let seekheads : Array[(Int32, Int32)] = []
   let cues : Array[(Int32, Int32)] = []
+  let old_pos : Array[Int32] = [-1]
+  let old_total : Array[Int32] = [0]
   let mut pos = 0
   while pos + 2 <= body.length() {
     let (id_len, id) = mkv_read_id(body, pos)
@@ -265,7 +264,7 @@ pub fn mkv_add_tags(
     }
     if id == 0x1F43B675U && !has_cluster[0] {
       has_cluster[0] = true
-      insert_pos[0] = pos.to_int64()
+      cluster_pos[0] = pos
     }
     if id == 0x114D9B74U {
       seekheads.push((b_start, b_end))
@@ -273,11 +272,24 @@ pub fn mkv_add_tags(
     if id == 0x1C53BB6BU {
       cues.push((b_start, b_end))
     }
+    if id == replace_id && replace_id != 0U && old_pos[0] < 0 {
+      old_pos[0] = pos
+      old_total[0] = b_end - pos
+    }
     pos = b_end
   }
-  // Iterate the shift: rewriting index uints can widen them, which moves the
-  // clusters again.
-  let base = elem.length().to_int64()
+  let replacing = old_pos[0] >= 0 && old_pos[0] < cluster_pos[0]
+  if old_pos[0] >= 0 && !replacing {
+    return Err("EINVAL: element after the Clusters cannot be replaced")
+  }
+  if replace_id != 0U && old_pos[0] < 0 && !has_cluster[0] {
+    // Nothing to replace and nothing to insert before: append at the end.
+  }
+  // Positions that move start at the change point: the replaced element's
+  // slot (its own SeekHead entry stays valid) or the first Cluster.
+  let threshold = if replacing { old_pos[0] + 1 } else { cluster_pos[0] }
+  let base = elem.length().to_int64() -
+    (if replacing { old_total[0].to_int64() } else { 0L })
   let mut delta = base
   let mut rounds = 0
   while rounds < 4 {
@@ -286,16 +298,16 @@ pub fn mkv_add_tags(
       let _ = mkv_rewrite_seekhead(
         body[span.0:span.1].to_owned(),
         delta,
-        insert_pos[0],
+        threshold.to_int64(),
         growth,
       )
     }
     for span in cues {
-      if span.0.to_int64() < insert_pos[0] {
+      if span.0 < cluster_pos[0] {
         let _ = mkv_rewrite_cues(
           body[span.0:span.1].to_owned(),
           delta,
-          insert_pos[0],
+          threshold.to_int64(),
           growth,
         )
       }
@@ -306,8 +318,9 @@ pub fn mkv_add_tags(
     delta = base + growth[0]
     rounds = rounds + 1
   }
-  // Assemble: children in order, index bodies rewritten, Tags before the
-  // first Cluster.
+  // Assemble: children in order, index bodies and the replaced element
+  // rewritten, the new element before the first Cluster when nothing was
+  // replaced.
   let out_body : Array[Byte] = []
   let inserted : Array[Bool] = [false]
   pos = 0
@@ -325,7 +338,7 @@ pub fn mkv_add_tags(
     if b_end > body.length() {
       break
     }
-    if id == 0x1F43B675U && !inserted[0] {
+    if id == 0x1F43B675U && !inserted[0] && !replacing {
       for b in elem {
         out_body.push(b)
       }
@@ -336,7 +349,7 @@ pub fn mkv_add_tags(
       let inner = mkv_rewrite_seekhead(
         body[b_start:b_end].to_owned(),
         delta,
-        insert_pos[0],
+        threshold.to_int64(),
         growth,
       )
       for b in mkv_elem_bytes(id, inner) {
@@ -347,11 +360,18 @@ pub fn mkv_add_tags(
       let inner = mkv_rewrite_cues(
         body[b_start:b_end].to_owned(),
         delta,
-        insert_pos[0],
+        threshold.to_int64(),
         growth,
       )
       for b in mkv_elem_bytes(id, inner) {
         out_body.push(b)
+      }
+    } else if id == replace_id && replace_id != 0U {
+      if !inserted[0] {
+        for b in elem {
+          out_body.push(b)
+        }
+        inserted[0] = true
       }
     } else {
       for i = pos; i < b_end; i = i + 1 {
@@ -372,6 +392,74 @@ pub fn mkv_add_tags(
   webm_size(out, out_body.length())
   out.append(out_body)
   Ok(Bytes::from_array(out))
+}
+
+///|
+/// Append a `Tags` element carrying `tags` to a finished Matroska/WebM file.
+/// Existing `Tags` elements are kept (Matroska tags are additive), so
+/// appended strings win in readers that keep the last value of a key.
+pub fn mkv_add_tags(
+  file : Bytes,
+  tags : Array[(String, String)],
+) -> Result[Bytes, String] {
+  if tags.length() == 0 {
+    return Ok(file)
+  }
+  mkv_write_level1(file, mkv_tags_element(tags), 0U)
+}
+
+///|
+/// Minimal-width big-endian EBML uint (at least one byte).
+fn mkv_uint_min(value : Int64) -> Array[Byte] {
+  let v = if value < 0L { 0L } else { value }
+  let mut width = 1
+  while width < 8 && v >= 1L << (8 * width) {
+    width = width + 1
+  }
+  mkv_uint_bytes(v, width)
+}
+
+///|
+/// A `Chapters` element with one `EditionEntry` holding every chapter as a
+/// `ChapterAtom` (uid, nanosecond start/end, `ChapterDisplay` title with the
+/// default `und` language).
+pub fn mkv_chapters_element(chapters : Array[MkvChapter]) -> Array[Byte] {
+  let edition_body : Array[Byte] = []
+  for i = 0; i < chapters.length(); i = i + 1 {
+    let ch = chapters[i]
+    let atom : Array[Byte] = []
+    webm_elem(atom, 0x73C4, 2, mkv_uint_min((i + 1).to_int64())) // ChapterUID
+    webm_elem(atom, 0x91, 1, mkv_uint_min(ch.start_ns)) // ChapterTimeStart
+    match ch.end_ns {
+      Some(end) => webm_elem(atom, 0x92, 1, mkv_uint_min(end))
+      None => ()
+    }
+    let display : Array[Byte] = []
+    webm_elem(display, 0x85, 1, utf8_from_string(ch.title).to_array())
+    webm_elem(display, 0x437C, 2, b"und".to_array())
+    webm_elem(atom, 0x80, 1, display)
+    webm_elem(edition_body, 0xB6, 1, atom)
+  }
+  let chapters_body : Array[Byte] = []
+  webm_elem(chapters_body, 0x45B9, 2, edition_body)
+  let out : Array[Byte] = []
+  webm_elem(out, 0x1043A770, 4, chapters_body)
+  out
+}
+
+///|
+/// Replace the `Chapters` of a finished Matroska/WebM file (an existing
+/// `Chapters` element before the first Cluster is rewritten in place, so it
+/// does not duplicate editions; otherwise the element is inserted before the
+/// first Cluster) with the same index fixup as `mkv_add_tags`.
+pub fn mkv_add_chapters(
+  file : Bytes,
+  chapters : Array[MkvChapter],
+) -> Result[Bytes, String] {
+  if chapters.length() == 0 {
+    return Ok(file)
+  }
+  mkv_write_level1(file, mkv_chapters_element(chapters), 0x1043A770U)
 }
 
 ///|
@@ -473,13 +561,46 @@ fn mkv_collect_tags(body : Bytes, out : Array[(String, String)]) -> Unit {
 }
 
 ///|
-/// Byte-level `Tags` scan of a whole Matroska file: the streaming parse stops
-/// at the first Cluster, so a `Tags` element placed after the Clusters (a
+/// Collect one `Chapters` payload's `ChapterAtom`s (nanosecond times, first
+/// `ChapterDisplay` title) in edition order.
+fn mkv_collect_chapters(body : Bytes, out : Array[MkvChapter]) -> Unit {
+  mkv_walk_elements(body, (id, edition) => {
+    if id != 0x45B9 {
+      return
+    }
+    mkv_walk_elements(edition, (cid, atom) => {
+      if cid != 0xB6 {
+        return
+      }
+      let start : Array[Int64] = [0L]
+      let end : Array[Int64?] = [None]
+      let title : Array[String] = [""]
+      mkv_walk_elements(atom, (aid, child) => {
+        if aid == 0x91 {
+          start[0] = mkv_uint_value(child)
+        } else if aid == 0x92 {
+          end[0] = Some(mkv_uint_value(child))
+        } else if aid == 0x80 {
+          mkv_walk_elements(child, (did, disp) => {
+            if did == 0x85 {
+              title[0] = utf8_to_string(disp.to_array())
+            }
+          })
+        }
+      })
+      out.push({ start_ns: start[0], end_ns: end[0], title: title[0], })
+    })
+  })
+}
+
+///|
+/// Byte-level `Tags`/`Chapters` scan of a whole Matroska file: the streaming
+/// parse stops at the first Cluster, so elements placed after the Clusters (a
 /// legal position that the muxers here do not produce) would otherwise be
-/// missed. Replaces `mh.metadata` when at least one `Tags` element is found;
-/// leaves the streaming result alone when the Segment cannot be walked
-/// (unknown sizes).
-pub fn matroska_scan_tags(file : Bytes, mh : MatroskaHeader) -> Unit {
+/// missed. Replaces `mh.metadata` / `mh.chapters` when at least one such
+/// element is found; leaves the streaming results alone when the Segment
+/// cannot be walked (unknown sizes).
+pub fn matroska_scan_metadata(file : Bytes, mh : MatroskaHeader) -> Unit {
   if file.length() < 12 {
     return
   }
@@ -503,16 +624,27 @@ pub fn matroska_scan_tags(file : Bytes, mh : MatroskaHeader) -> Unit {
   let body = file[body_start:body_start + size.to_int()].to_owned()
   let found : Array[(String, String)] = []
   let seen : Array[Bool] = [false]
+  let chapters : Array[MkvChapter] = []
+  let seen_chapters : Array[Bool] = [false]
   mkv_walk_elements(body, (id, el) => {
     if id == 0x1254C367 {
       seen[0] = true
       mkv_collect_tags(el, found)
+    } else if id == 0x1043A770 {
+      seen_chapters[0] = true
+      mkv_collect_chapters(el, chapters)
     }
   })
   if seen[0] {
     mh.metadata.clear()
     for pair in found {
       mh.metadata.push(pair)
+    }
+  }
+  if seen_chapters[0] {
+    mh.chapters.clear()
+    for ch in chapters {
+      mh.chapters.push(ch)
     }
   }
 }

@@ -5381,3 +5381,22 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   等全部标签；`ffmpeg -ss 0.05` 解码输出与原始 ffmpeg 文件逐字节
   一致（Cues 位移正确）。
 - 全量 wasm **1223/1223**。
+
+## 192. Matroska Chapters 章节读写
+
+- 读取：`MatroskaHeader.chapters`（`MkvChapter`：纳秒起点、可选终点、
+  首个 `ChapterDisplay` 标题），字节级扫描解析
+  `Chapters/EditionEntry/ChapterAtom`，簇后章节同样覆盖；`mkv_chapter_new`
+  供包外构造。
+- 写入：`mkv_chapters_element` 生成单 EditionEntry 的 ChapterAtom 列表
+  （UID 递增、`und` 语言）；`mkv_add_chapters` 走共享的
+  `mkv_write_level1`：已存在 Chapters 时在原位置整体替换（避免 FFmpeg
+  对重复 Chapters 元素的告警与合并），否则插到首个 Cluster 前；两种
+  情况都按尺寸差重写 SeekHead/Cues 位置。
+- 回归 `mkv_chapters_realdata_test.mbt`：ffmpeg 9.0.2 生成的三章节
+  Opus MKV 读回 Intro/Middle/Outro 及 0/40/80 ms 起止；写入两章后
+  旧章节被替换、包数不变；无章节文件插入一章后包数不变、
+  标签不受影响；非 EBML 输入拒绝。
+- 外部验证：替换与插入两种结果经 ffprobe 读到正确章节（无重复元素
+  告警），`ffmpeg -ss` 输出与源逐字节一致。
+- 全量 wasm **1227/1227**。

@@ -252,6 +252,26 @@ pub struct MkvSeekhead {
 }
 
 ///|
+/// One Matroska chapter (`ChapterAtom`): nanosecond timestamps and the first
+/// `ChapterDisplay` title.
+pub struct MkvChapter {
+  start_ns : Int64
+  end_ns : Int64?
+  title : String
+}
+
+///|
+/// Construct a chapter for `mkv_add_chapters` (struct literals are not
+/// available outside the package).
+pub fn mkv_chapter_new(
+  start_ns : Int64,
+  end_ns : Int64?,
+  title : String,
+) -> MkvChapter {
+  { start_ns, end_ns, title, }
+}
+
+///|
 /// The segment-level state this slice produces (a slice of
 /// `MatroskaDemuxContext`): Info fields, the SeekHead list, and where the
 /// first Cluster starts.
@@ -269,6 +289,8 @@ pub struct MatroskaHeader {
   /// Container-level `Tags` (SimpleTag name/value pairs, FFmpeg's
   /// `matroska_convert_tag` with the MKV name conversion applied).
   metadata : Array[(String, String)]
+  /// `Chapters` atoms in edition order (`matroska_parse_chapters`).
+  chapters : Array[MkvChapter]
   /// `matroska->seekhead[]`.
   seekhead : Array[MkvSeekhead]
   /// `matroska->segment_start`.
@@ -293,6 +315,7 @@ fn new_matroska_header() -> MatroskaHeader {
     muxingapp: None,
     date_utc: None,
     metadata: [],
+    chapters: [],
     seekhead: [],
     segment_start: 0,
     first_cluster_pos: -1L,
@@ -862,8 +885,9 @@ pub fn av_matroska_open(buf : Bytes) -> Result[MatroskaHeader, String] {
       // unknown doctype stays a warning in the C; surface it via is_webm
       ignore(notes)
       matroska_fixup_codec_priv(mh)
-      // Tags may follow the Clusters (where the streaming parse stops).
-      matroska_scan_tags(buf, mh)
+      // Tags and Chapters may follow the Clusters (where the streaming parse
+      // stops); the byte scan also fills chapters.
+      matroska_scan_metadata(buf, mh)
       Ok(mh)
     }
   }
