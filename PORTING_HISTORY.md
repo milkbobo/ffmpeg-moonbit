@@ -5002,3 +5002,26 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   文档说明该浮点解码器与 3GPP 定点参考不逐位一致，故按 1 LSB 容差验证。
 
 全量 wasm **1168/1168**。
+
+## 172. E-AC-3 基线解码
+
+- `ac3_parse_header` 支持 bsid 11–16：解析 stream type/substream、11 位
+  帧长、2/3/6 块码、缩减采样率拒绝、音量控制、依赖流声道映射、mixing/
+  informational metadata、转换器同步位与附加比特流信息。
+- `ac3.mbt` 新增 `parse_eac3_frame_header`：帧头语法标志（AC-3 式/LUT
+  指数策略、block switch/dither/比特分配/fast gain/DBA/skip 语法开关）、
+  每块耦合策略标志、AHT 检测（有 AHT 即报错）、每帧 SNR 偏移、瞬态
+  预处理/SPX 衰减码跳过与 block-start 信息；`decode_audio_block` 按
+  E-AC-3 分支读取耦合/rematrix/指数/快速增益/转换器 SNR 位，并维护
+  跨块耦合帯结构；SPX、增强耦合、AHT、依赖帧与缩减采样率均明确报错。
+- `av_ac3_open` 按 bsid 返回 `ac3`/`eac3`，支持 2/3/6 块帧长与 44.1 kHz
+  变长 AC-3 帧。
+- 回归 `ac3_eac3_realdata_test.mbt`：ffmpeg 9.0.2 原生 eac3 编码的
+  48 kHz 单/立体声/5.1、44.1/32 kHz 单声道及 1.5M/3M 高码率 3 块/2 块
+  夹具，s16 输出与 ffmpeg（`-f eac3` 强制解复用）参考最大差 1 LSB。
+- 回归 `eac3_realdata_wbtest.mbt`：码率/帧长/块数切分（384、4096 字节
+  帧；512/1536 样本）与单声道 PCM 对拍。
+- 已知限制：FFmpeg 9.0.2 的 eac3 编码器不产出 SPX/AHT/增强耦合，故这些
+  路径未实现并以错误返回；依赖帧（多子流）暂不支持。
+
+全量 wasm **1171/1171**。

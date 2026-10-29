@@ -107,6 +107,7 @@ def symmetric_dequant(code, levels):
 ac3_c = read("ac3.c")
 ac3tab_c = read("ac3tab.c")
 ac3dec_data_c = read("ac3dec_data.c")
+eac3_data_c = read("eac3_data.c")
 
 band_start = one_d(extract_block(ac3_c, "ff_ac3_band_start_tab"))
 bin_to_band = one_d(extract_block(ac3_c, "ff_ac3_bin_to_band_tab"))
@@ -228,6 +229,15 @@ parts.append(emit_1d("ac3_bap3_mantissas", bap3, "`ff_ac3_bap3_mantissas`."))
 parts.append(emit_1d("ac3_bap5_mantissas", bap5, "`ff_ac3_bap5_mantissas`."))
 parts.append(emit_1d("ac3_quantization_tab", quantization,
                      "`ff_ac3_quantization_tab`."))
+def eac3_expstr_rows(text):
+    block = extract_block(text, "ff_eac3_frm_expstr")
+    block = block.replace("EXP_REUSE", "0").replace("EXP_D15", "1")
+    block = block.replace("EXP_D25", "2").replace("EXP_D45", "3")
+    return rows(block)
+
+
+parts.append(emit_2d("eac3_frm_expstr", eac3_expstr_rows(eac3_data_c),
+                     "`ff_eac3_frm_expstr`: 5-bit frame exponent strategy code."))
 parts.append(emit_2d("ac3_ungroup_3_in_7_bits_tab", ungroup7,
                      "`ff_ac3_ungroup_3_in_7_bits_tab`."))
 

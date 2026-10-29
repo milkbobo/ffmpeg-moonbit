@@ -318,9 +318,10 @@ pub fn av_amr_open(data : Bytes) -> Result[RawAudioTrack, String] {
 // ---------------------------------------------------------------------------
 
 ///|
-/// Parse a raw AC-3 stream (`libavformat/ac3dec.c`): frames are split on the
-/// header frame size, which varies per frame at 44.1 kHz.  Each frame yields
-/// `num_blocks * 256` samples (normally 1536).
+/// Parse a raw (E-)AC-3 stream (`libavformat/ac3dec.c`): frames are split on
+/// the header frame size, which varies per frame at 44.1 kHz AC-3.  Each
+/// frame yields `num_blocks * 256` samples (normally 1536).  Both plain AC-3
+/// (`bsid <= 10`) and E-AC-3 produce a track; `codec` distinguishes them.
 pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
   let start = id3_skip(data)
   let frames : Array[RawAudioFrame] = []
@@ -330,6 +331,7 @@ pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
   let mut channels = 0
   let mut frame_size = 0
   let mut bit_rate = 0
+  let mut codec = "ac3"
   while pos + 8 <= data.length() {
     if data[pos] != b'\x0B' || data[pos + 1] != b'\x77' {
       // Resync one byte at a time, like the parser.
@@ -352,6 +354,7 @@ pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
       channels = hdr.channels
       frame_size = duration
       bit_rate = hdr.bit_rate
+      codec = if hdr.bitstream_id > 10 { "eac3" } else { "ac3" }
     } else if hdr.sample_rate != sample_rate || hdr.channels != channels {
       // A format change mid-stream is not representable in one track.
       break
@@ -370,7 +373,7 @@ pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
     return Err("EINVAL")
   }
   Ok({
-    codec: "ac3",
+    codec,
     profile: "",
     sample_rate,
     channels,

@@ -214,7 +214,7 @@ test "AC-3: real streams match FFmpeg PCM" {
 }
 
 ///|
-test "AC-3: sync search, E-AC-3 rejection and invalid headers" {
+test "AC-3: sync search and invalid headers" {
   let data = @libavutil.av_base64_decode(ac3_mono48_b64, 1000000).unwrap()
   let hdr = @libavcodec.ac3_parse_header(data).unwrap()
   assert_eq(hdr.bitstream_id, 8)
@@ -231,16 +231,6 @@ test "AC-3: sync search, E-AC-3 rejection and invalid headers" {
   // Byte-swapped / broken sync is rejected.
   match @libavcodec.ac3_parse_header(b"\x77\x0B\x00\x00\x00\x00\x00\x00") {
     Ok(_) => fail("byte-swapped sync must fail")
-    Err(_) => ()
-  }
-  // bsid 16 flags E-AC-3, which this decoder does not implement.
-  let eac3 : Array[Byte] = []
-  for i = 0; i < 8; i = i + 1 {
-    eac3.push(data[i])
-  }
-  eac3[5] = ((16 << 3) | (eac3[5].to_int() & 7)).to_byte()
-  match @libavcodec.ac3_parse_header(Bytes::from_array(eac3)) {
-    Ok(_) => fail("E-AC-3 must be rejected")
     Err(_) => ()
   }
 }

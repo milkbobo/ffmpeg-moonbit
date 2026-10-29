@@ -62,6 +62,9 @@ let ac3_chmode_mono : Int32 = 1
 let ac3_chmode_stereo : Int32 = 2
 
 ///|
+let ac3_chmode_2f2r : Int32 = 6
+
+///|
 /// `1.0 / 4194304`: the Q24 mantissa scale applied before the IMDCT. */
 let ac3_coef_scale : Double = 1.0 / 4194304.0
 
@@ -95,6 +98,18 @@ fn ac3_clip(v : Int32, lo : Int32, hi : Int32) -> Int32 {
 /// `MULH(a, b)`: high 32 bits of the 64-bit product. */
 fn ac3_mulh(a : Int32, b : Int32) -> Int32 {
   ((a.to_int64() * b.to_int64()) >> 32).to_int()
+}
+
+///|
+/// `av_log2`: floor(log2(v)) for `v > 0`.
+fn ac3_av_log2(v : Int32) -> Int32 {
+  let mut n = 0
+  let mut x = v
+  while x > 1 {
+    x = x >> 1
+    n = n + 1
+  }
+  n
 }
 
 ///|
@@ -282,12 +297,29 @@ pub struct Ac3Header {
   sr_shift : Int32
   bitstream_mode : Int32
   num_blocks : Int32
+  frame_type : Int32
+  substreamid : Int32
+  channel_map_present : Bool
+  channel_map : Int32
   center_mix_level : Int32
   surround_mix_level : Int32
+  center_mix_level_ltrt : Int32
+  surround_mix_level_ltrt : Int32
+  preferred_downmix : Int32
+  lfe_mix_level_exists : Bool
+  lfe_mix_level : Int32
+  dolby_surround_mode : Int32
+  dolby_surround_ex_mode : Int32
+  dolby_headphone_mode : Int32
+  eac3_extension_type_a : Int32
   dialog_normalization : FixedArray[Int32]
   compression_exists : FixedArray[Bool]
   heavy_dynamic_range : FixedArray[Int32]
 }
+
+///|
+/// `eac3_blocks`: number of audio blocks for the two-bit E-AC-3 code. */
+let ac3_eac3_blocks_tab : FixedArray[Int32] = [1, 2, 3, 6]
 
 ///|
 /// `center_levels` / `surround_levels` mix-level code tables. */
@@ -332,43 +364,161 @@ fn ac3_parse_header_bits(gb : BitReader) -> Result[Ac3Header, String] {
   if bitstream_id > 16 {
     return Err("ac3: invalid bitstream id")
   }
-  if bitstream_id > 10 {
-    return Err("ac3: E-AC-3 is not supported")
-  }
-  let _crc1 = gb.read(16)
-  let sr_code = gb.read(2).reinterpret_as_int()
-  if sr_code == 3 {
-    return Err("ac3: invalid sample rate")
-  }
-  let frame_size_code = gb.read(6).reinterpret_as_int()
-  if frame_size_code > 37 {
-    return Err("ac3: invalid frame size")
-  }
-  let _ = gb.read(5) // bsid, already read ahead
-  let bitstream_mode = gb.read(3).reinterpret_as_int()
-  let channel_mode = gb.read(3).reinterpret_as_int()
-  let mut center_mix_level = 5
-  let mut surround_mix_level = 6
-  if channel_mode == ac3_chmode_stereo {
-    let _ = gb.read(2) // dsurmod
-  } else {
-    if (channel_mode & 1) != 0 && channel_mode != ac3_chmode_mono {
-      center_mix_level = ac3_center_levels[gb.read(2).reinterpret_as_int()]
-    }
-    if (channel_mode & 4) != 0 {
-      surround_mix_level = ac3_surround_levels[gb.read(2).reinterpret_as_int()]
-    }
-  }
-  let lfe_on = gb.read1() != 0
-  let sr_shift = if bitstream_id > 8 { bitstream_id - 8 } else { 0 }
-  let sample_rate = ac3_sample_rate_tab[sr_code] >> sr_shift
-  let bit_rate = (ac3_bitrate_tab[frame_size_code >> 1] * 1000) >> sr_shift
-  let channels = ac3_channels_tab[channel_mode] + (if lfe_on { 1 } else { 0 })
-  let frame_size = ac3_frame_size_tab[frame_size_code][sr_code] * 2
   let dialog_normalization = FixedArray::make(2, 0)
   let compression_exists = FixedArray::make(2, false)
   let heavy_dynamic_range = FixedArray::make(2, 0)
-  // ac3_parse_header: the dual-mono BSI block is read twice.
+  if bitstream_id <= 10 {
+    let _crc1 = gb.read(16)
+    let sr_code = gb.read(2).reinterpret_as_int()
+    if sr_code == 3 {
+      return Err("ac3: invalid sample rate")
+    }
+    let frame_size_code = gb.read(6).reinterpret_as_int()
+    if frame_size_code > 37 {
+      return Err("ac3: invalid frame size")
+    }
+    let _ = gb.read(5) // bsid, already read ahead
+    let bitstream_mode = gb.read(3).reinterpret_as_int()
+    let channel_mode = gb.read(3).reinterpret_as_int()
+    let mut center_mix_level = 5
+    let mut surround_mix_level = 6
+    let mut dolby_surround_mode = 0
+    if channel_mode == ac3_chmode_stereo {
+      dolby_surround_mode = gb.read(2).reinterpret_as_int()
+    } else {
+      if (channel_mode & 1) != 0 && channel_mode != ac3_chmode_mono {
+        center_mix_level = ac3_center_levels[gb.read(2).reinterpret_as_int()]
+      }
+      if (channel_mode & 4) != 0 {
+        surround_mix_level = ac3_surround_levels[gb.read(2).reinterpret_as_int()]
+      }
+    }
+    let lfe_on = gb.read1() != 0
+    let sr_shift = if bitstream_id > 8 { bitstream_id - 8 } else { 0 }
+    let sample_rate = ac3_sample_rate_tab[sr_code] >> sr_shift
+    let bit_rate = (ac3_bitrate_tab[frame_size_code >> 1] * 1000) >> sr_shift
+    let channels = ac3_channels_tab[channel_mode] + (if lfe_on { 1 } else { 0 })
+    let frame_size = ac3_frame_size_tab[frame_size_code][sr_code] * 2
+    // ac3_parse_header: the dual-mono BSI block is read twice.
+    let n_bsi = if channel_mode != 0 { 1 } else { 2 }
+    for i = 0; i < n_bsi; i = i + 1 {
+      dialog_normalization[i] = -gb.read(5).reinterpret_as_int()
+      compression_exists[i] = gb.read1() != 0
+      if compression_exists[i] {
+        heavy_dynamic_range[i] = gb.read(8).reinterpret_as_int()
+      }
+      if gb.read1() != 0 {
+        let _ = gb.read(8) // language code
+      }
+      if gb.read1() != 0 {
+        let _ = gb.read(7) // audio production info
+      }
+    }
+    let _ = gb.read(2) // copyright / original bitstream
+    if bitstream_id != 6 {
+      if gb.read1() != 0 {
+        let _ = gb.read(14) // timecode 1
+      }
+      if gb.read1() != 0 {
+        let _ = gb.read(14) // timecode 2
+      }
+    } else {
+      // Alternate Bit Stream Syntax.
+      if gb.read1() != 0 {
+        let _ = gb.read(2) // preferred downmix
+        let _ = gb.read(3) // Lt/Rt center mix level
+        let _ = ac3_clip(gb.read(3).reinterpret_as_int(), 3, 7)
+        center_mix_level = gb.read(3).reinterpret_as_int()
+        surround_mix_level = ac3_clip(gb.read(3).reinterpret_as_int(), 3, 7)
+      }
+      if gb.read1() != 0 {
+        let _ = gb.read(2) // Dolby Surround EX mode
+        let _ = gb.read(2) // Dolby Headphone mode
+        let _ = gb.read(10)
+      }
+    }
+    if gb.read1() != 0 {
+      let i = gb.read(6).reinterpret_as_int()
+      for k = 0; k <= i; k = k + 1 {
+        let _ = gb.read(8)
+      }
+    }
+    return Ok({
+      sample_rate,
+      bit_rate,
+      channels,
+      frame_size,
+      channel_mode,
+      lfe_on,
+      bitstream_id,
+      sr_code,
+      sr_shift,
+      bitstream_mode,
+      num_blocks: 6,
+      frame_type: 2,
+      substreamid: 0,
+      channel_map_present: false,
+      channel_map: 0,
+      center_mix_level,
+      surround_mix_level,
+      center_mix_level_ltrt: 4,
+      surround_mix_level_ltrt: 4,
+      preferred_downmix: 0,
+      lfe_mix_level_exists: false,
+      lfe_mix_level: 0,
+      dolby_surround_mode,
+      dolby_surround_ex_mode: 0,
+      dolby_headphone_mode: 0,
+      eac3_extension_type_a: 0,
+      dialog_normalization,
+      compression_exists,
+      heavy_dynamic_range,
+    })
+  }
+  // Enhanced AC-3 (eac3_parse_header in ac3_parser.c).
+  let frame_type = gb.read(2).reinterpret_as_int()
+  if frame_type == 3 {
+    return Err("eac3: reserved frame type")
+  }
+  let substreamid = gb.read(3).reinterpret_as_int()
+  let frame_size = (gb.read(11).reinterpret_as_int() + 1) << 1
+  if frame_size < 7 {
+    return Err("eac3: invalid frame size")
+  }
+  let sr_code = gb.read(2).reinterpret_as_int()
+  let mut sample_rate = 0
+  let mut sr_shift = 0
+  let mut num_blocks = 6
+  if sr_code == 3 {
+    let sr_code2 = gb.read(2).reinterpret_as_int()
+    if sr_code2 == 3 {
+      return Err("eac3: invalid sample rate")
+    }
+    sample_rate = ac3_sample_rate_tab[sr_code2] / 2
+    sr_shift = 1
+  } else {
+    num_blocks = ac3_eac3_blocks_tab[gb.read(2).reinterpret_as_int()]
+    sample_rate = ac3_sample_rate_tab[sr_code]
+  }
+  let channel_mode = gb.read(3).reinterpret_as_int()
+  let lfe_on = gb.read1() != 0
+  let bit_rate = 8 * frame_size * sample_rate / (num_blocks * 256)
+  let channels = ac3_channels_tab[channel_mode] + (if lfe_on { 1 } else { 0 })
+  let _ = gb.read(5) // bsid, already read ahead
+  let mut bitstream_mode = 0
+  let mut center_mix_level = 5
+  let mut surround_mix_level = 6
+  let mut center_mix_level_ltrt = 0
+  let mut surround_mix_level_ltrt = 0
+  let mut preferred_downmix = 0
+  let mut lfe_mix_level_exists = false
+  let mut lfe_mix_level = 0
+  let mut dolby_surround_mode = 0
+  let mut dolby_surround_ex_mode = 0
+  let mut dolby_headphone_mode = 0
+  let mut channel_map_present = false
+  let mut channel_map = 0
+  let mut eac3_extension_type_a = 0
   let n_bsi = if channel_mode != 0 { 1 } else { 2 }
   for i = 0; i < n_bsi; i = i + 1 {
     dialog_normalization[i] = -gb.read(5).reinterpret_as_int()
@@ -376,40 +526,112 @@ fn ac3_parse_header_bits(gb : BitReader) -> Result[Ac3Header, String] {
     if compression_exists[i] {
       heavy_dynamic_range[i] = gb.read(8).reinterpret_as_int()
     }
-    if gb.read1() != 0 {
-      let _ = gb.read(8) // language code
-    }
-    if gb.read1() != 0 {
-      let _ = gb.read(7) // audio production info
-    }
   }
-  let _ = gb.read(2) // copyright / original bitstream
-  if bitstream_id != 6 {
-    if gb.read1() != 0 {
-      let _ = gb.read(14) // timecode 1
-    }
-    if gb.read1() != 0 {
-      let _ = gb.read(14) // timecode 2
-    }
-  } else {
-    // Alternate Bit Stream Syntax.
-    if gb.read1() != 0 {
-      let _ = gb.read(2) // preferred downmix
-      let _ = gb.read(3) // Lt/Rt center mix level
-      let _ = ac3_clip(gb.read(3).reinterpret_as_int(), 3, 7)
-      center_mix_level = gb.read(3).reinterpret_as_int()
-      surround_mix_level = ac3_clip(gb.read(3).reinterpret_as_int(), 3, 7)
-    }
-    if gb.read1() != 0 {
-      let _ = gb.read(2) // Dolby Surround EX mode
-      let _ = gb.read(2) // Dolby Headphone mode
-      let _ = gb.read(10)
+  if frame_type == 1 {
+    channel_map_present = gb.read1() != 0
+    if channel_map_present {
+      channel_map = gb.read(16).reinterpret_as_int()
     }
   }
   if gb.read1() != 0 {
-    let i = gb.read(6).reinterpret_as_int()
-    for k = 0; k <= i; k = k + 1 {
-      let _ = gb.read(8)
+    // mixing metadata
+    if channel_mode > ac3_chmode_stereo {
+      preferred_downmix = gb.read(2).reinterpret_as_int()
+      if (channel_mode & 1) != 0 {
+        center_mix_level_ltrt = gb.read(3).reinterpret_as_int()
+        center_mix_level = gb.read(3).reinterpret_as_int()
+      }
+      if (channel_mode & 4) != 0 {
+        surround_mix_level_ltrt = ac3_clip(
+          gb.read(3).reinterpret_as_int(),
+          3,
+          7,
+        )
+        surround_mix_level = ac3_clip(gb.read(3).reinterpret_as_int(), 3, 7)
+      }
+    }
+    if lfe_on {
+      lfe_mix_level_exists = gb.read1() != 0
+      if lfe_mix_level_exists {
+        lfe_mix_level = gb.read(5).reinterpret_as_int()
+      }
+    }
+    if frame_type == 0 {
+      for _i = 0; _i < n_bsi; _i = _i + 1 {
+        if gb.read1() != 0 {
+          let _ = gb.read(6) // program scale factor
+        }
+      }
+      if gb.read1() != 0 {
+        let _ = gb.read(6) // external program scale factor
+      }
+      let mix = gb.read(2).reinterpret_as_int()
+      if mix == 1 {
+        let _ = gb.read(5)
+      } else if mix == 2 {
+        let _ = gb.read(12)
+      } else if mix == 3 {
+        let n = (gb.read(5).reinterpret_as_int() + 2) << 3
+        gb.skip(n)
+      }
+      if channel_mode < ac3_chmode_stereo {
+        for _i = 0; _i < n_bsi; _i = _i + 1 {
+          if gb.read1() != 0 {
+            let _ = gb.read(8) // pan mean direction
+            let _ = gb.read(6) // pan info
+          }
+        }
+      }
+      if gb.read1() != 0 {
+        for _i = 0; _i < num_blocks; _i = _i + 1 {
+          if num_blocks == 1 || gb.read1() != 0 {
+            let _ = gb.read(5)
+          }
+        }
+      }
+    }
+  }
+  if gb.read1() != 0 {
+    // informational metadata
+    bitstream_mode = gb.read(3).reinterpret_as_int()
+    let _ = gb.read(2) // copyright / original
+    if channel_mode == ac3_chmode_stereo {
+      dolby_surround_mode = gb.read(2).reinterpret_as_int()
+      dolby_headphone_mode = gb.read(2).reinterpret_as_int()
+    }
+    if channel_mode >= ac3_chmode_2f2r {
+      dolby_surround_ex_mode = gb.read(2).reinterpret_as_int()
+    }
+    for _i = 0; _i < n_bsi; _i = _i + 1 {
+      if gb.read1() != 0 {
+        let _ = gb.read(8) // mix level / room type / A/D converter
+      }
+    }
+    if sr_code != 3 {
+      let _ = gb.read1() // source sample rate code
+    }
+  }
+  if frame_type == 0 && num_blocks != 6 {
+    let _ = gb.read1() // converter synchronization flag
+  }
+  if frame_type == 2 && (num_blocks == 6 || gb.read1() != 0) {
+    let _ = gb.read(6) // original frame size code
+  }
+  if gb.read1() != 0 {
+    let addbsil = gb.read(6).reinterpret_as_int()
+    let mut i = 0
+    while i < addbsil + 1 {
+      if i == 0 {
+        let _ = gb.read(7)
+        eac3_extension_type_a = gb.read1().reinterpret_as_int()
+        if eac3_extension_type_a != 0 {
+          let _ = gb.read(8) // complexity index type A
+          i = i + 1
+        }
+      } else {
+        let _ = gb.read(8)
+      }
+      i = i + 1
     }
   }
   Ok({
@@ -423,9 +645,22 @@ fn ac3_parse_header_bits(gb : BitReader) -> Result[Ac3Header, String] {
     sr_code,
     sr_shift,
     bitstream_mode,
-    num_blocks: 6,
+    num_blocks,
+    frame_type,
+    substreamid,
+    channel_map_present,
+    channel_map,
     center_mix_level,
     surround_mix_level,
+    center_mix_level_ltrt,
+    surround_mix_level_ltrt,
+    preferred_downmix,
+    lfe_mix_level_exists,
+    lfe_mix_level,
+    dolby_surround_mode,
+    dolby_surround_ex_mode,
+    dolby_headphone_mode,
+    eac3_extension_type_a,
     dialog_normalization,
     compression_exists,
     heavy_dynamic_range,
@@ -452,6 +687,7 @@ pub struct Ac3Frame {
   channels : Int32
   channel_mode : Int32
   lfe_on : Bool
+  num_blocks : Int32
   samples : Array[Array[Double]]
 }
 
@@ -461,6 +697,19 @@ pub struct Ac3Frame {
 pub struct Ac3Decoder {
   mut bitstream_id : Int32
   mut bitstream_mode : Int32
+  mut eac3 : Bool
+  mut frame_type : Int32
+  mut substreamid : Int32
+  mut snr_offset_strategy : Int32
+  mut block_switch_syntax : Bool
+  mut dither_flag_syntax : Bool
+  mut bit_allocation_syntax : Bool
+  mut fast_gain_syntax : Bool
+  mut dba_syntax : Bool
+  mut skip_syntax : Bool
+  cpl_strategy_exists : FixedArray[Bool]
+  cpl_band_struct : FixedArray[Bool]
+  channel_uses_aht : FixedArray[Bool]
   mut sample_rate : Int32
   mut bit_rate : Int32
   mut channels : Int32
@@ -543,6 +792,19 @@ pub fn ac3_decoder_new() -> Ac3Decoder {
   {
     bitstream_id: 0,
     bitstream_mode: 0,
+    eac3: false,
+    frame_type: 2,
+    substreamid: 0,
+    snr_offset_strategy: 2,
+    block_switch_syntax: true,
+    dither_flag_syntax: true,
+    bit_allocation_syntax: true,
+    fast_gain_syntax: false,
+    dba_syntax: true,
+    skip_syntax: true,
+    cpl_strategy_exists: FixedArray::make(ac3_max_blocks, false),
+    cpl_band_struct: FixedArray::make(ac3_max_cpl_bands, false),
+    channel_uses_aht: FixedArray::make(ac3_max_channels, false),
     sample_rate: 0,
     bit_rate: 0,
     channels: 0,
@@ -889,20 +1151,26 @@ fn ac3_decode_exponents(
 fn ac3_decode_band_structure(
   gb : BitReader,
   blk : Int32,
+  eac3 : Bool,
   start_subband : Int32,
   end_subband : Int32,
+  band_struct : FixedArray[Bool],
   num_bands : Ref[Int32],
   band_sizes : FixedArray[Int32],
 ) -> Unit {
   let n_subbands = end_subband - start_subband
-  let band_struct = FixedArray::make(ac3_max_cpl_bands, false)
   if blk == 0 {
     for i = 0; i < ac3_max_cpl_bands; i = i + 1 {
       band_struct[i] = ac3_default_cpl_band_struct[i] != 0
     }
   }
-  for subbnd = 0; subbnd < n_subbands - 1; subbnd = subbnd + 1 {
-    band_struct[start_subband + 1 + subbnd] = gb.read1() != 0
+  // E-AC-3 writes a "new structure" bit; 0 keeps the previous (or default)
+  // layout.
+  let explicit = if eac3 { gb.read1() != 0 } else { true }
+  if explicit {
+    for subbnd = 0; subbnd < n_subbands - 1; subbnd = subbnd + 1 {
+      band_struct[start_subband + 1 + subbnd] = gb.read1() != 0
+    }
   }
   let bnd_sz = FixedArray::make(22, 0)
   let mut n_bands = n_subbands
@@ -934,14 +1202,24 @@ fn Ac3Decoder::coupling_strategy(
   for ch = 0; ch < ac3_max_channels; ch = ch + 1 {
     bit_alloc_stages[ch] = 3
   }
-  self.cpl_in_use[blk] = gb.read1() != 0
+  if !self.eac3 {
+    self.cpl_in_use[blk] = gb.read1() != 0
+  }
   let cpl_in_use = self.cpl_in_use[blk]
   if cpl_in_use {
     if self.channel_mode < ac3_chmode_stereo {
       return Err("ac3: coupling not allowed in mono or dual mono")
     }
-    for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
-      self.channel_in_cpl[ch] = gb.read1() != 0
+    if self.eac3 && gb.read1() != 0 {
+      return Err("eac3: enhanced coupling is not supported")
+    }
+    if self.eac3 && self.channel_mode == ac3_chmode_stereo {
+      self.channel_in_cpl[1] = true
+      self.channel_in_cpl[2] = true
+    } else {
+      for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
+        self.channel_in_cpl[ch] = gb.read1() != 0
+      }
     }
     if self.channel_mode == ac3_chmode_stereo {
       self.phase_flags_in_use = gb.read1() != 0
@@ -957,8 +1235,10 @@ fn Ac3Decoder::coupling_strategy(
     ac3_decode_band_structure(
       gb,
       blk,
+      self.eac3,
       cpl_start_subband,
       cpl_end_subband,
+      self.cpl_band_struct,
       num_bands,
       self.cpl_band_sizes,
     )
@@ -968,7 +1248,7 @@ fn Ac3Decoder::coupling_strategy(
       self.channel_in_cpl[ch] = false
       self.first_cpl_coords[ch] = true
     }
-    self.first_cpl_leak = false
+    self.first_cpl_leak = self.eac3
     self.phase_flags_in_use = false
   }
   Ok(())
@@ -984,7 +1264,7 @@ fn Ac3Decoder::coupling_coordinates(
   let mut cpl_coords_exist = false
   for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
     if self.channel_in_cpl[ch] {
-      if self.first_cpl_coords[ch] || gb.read1() != 0 {
+      if (self.eac3 && self.first_cpl_coords[ch]) || gb.read1() != 0 {
         self.first_cpl_coords[ch] = false
         cpl_coords_exist = true
         let master_cpl_coord = 3 * gb.read(2).reinterpret_as_int()
@@ -1264,12 +1544,17 @@ fn Ac3Decoder::decode_audio_block(
   let fbw_channels = self.fbw_channels
   let channel_mode = self.channel_mode
   let bit_alloc_stages = FixedArray::make(ac3_max_channels, 0)
-  // Block switch and dither flags.
-  for ch = 1; ch <= fbw_channels; ch = ch + 1 {
-    self.block_switch[ch] = gb.read1() != 0
+  // Block switch and dither flags (E-AC-3 signals their presence in the
+  // frame header instead of in every block).
+  if self.block_switch_syntax {
+    for ch = 1; ch <= fbw_channels; ch = ch + 1 {
+      self.block_switch[ch] = gb.read1() != 0
+    }
   }
-  for ch = 1; ch <= fbw_channels; ch = ch + 1 {
-    self.dither_flag[ch] = gb.read1() != 0
+  if self.dither_flag_syntax {
+    for ch = 1; ch <= fbw_channels; ch = ch + 1 {
+      self.dither_flag[ch] = gb.read1() != 0
+    }
   }
   // Dynamic range (`drc_scale` is fixed at 1.0, so AC3_DYNAMIC_RANGE is the
   // table value).
@@ -1286,15 +1571,28 @@ fn Ac3Decoder::decode_audio_block(
     }
     i = i - 1
   }
+  // Spectral extension strategy (E-AC-3).  SPX is not implemented, so a
+  // stream that enables it is rejected instead of decoded incorrectly.
+  if self.eac3 {
+    let parse_spx = if blk == 0 { true } else { gb.read1() != 0 }
+    if parse_spx && gb.read1() != 0 {
+      return Err("eac3: spectral extension is not supported")
+    }
+  }
   // Coupling strategy.
-  if gb.read1() != 0 {
+  let cpl_strategy = if self.eac3 {
+    self.cpl_strategy_exists[blk]
+  } else {
+    gb.read1() != 0
+  }
+  if cpl_strategy {
     match self.coupling_strategy(gb, blk, bit_alloc_stages) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
-  } else if blk == 0 {
+  } else if blk == 0 && !self.eac3 {
     return Err("ac3: new coupling strategy must be present in block 0")
-  } else {
+  } else if blk > 0 {
     self.cpl_in_use[blk] = self.cpl_in_use[blk - 1]
   }
   let cpl_in_use = self.cpl_in_use[blk]
@@ -1306,7 +1604,12 @@ fn Ac3Decoder::decode_audio_block(
   }
   // Stereo rematrixing strategy and band structure.
   if channel_mode == ac3_chmode_stereo {
-    if gb.read1() != 0 {
+    let new_rematrix = if self.eac3 && blk == 0 {
+      true
+    } else {
+      gb.read1() != 0
+    }
+    if new_rematrix {
       self.num_rematrixing_bands = 4
       if cpl_in_use && self.start_freq[0] <= 61 {
         self.num_rematrixing_bands = self.num_rematrixing_bands -
@@ -1321,8 +1624,10 @@ fn Ac3Decoder::decode_audio_block(
   }
   // Exponent strategies.
   for ch = (if cpl_in_use { 0 } else { 1 }); ch <= self.channels; ch = ch + 1 {
-    let bits = if ch == self.lfe_ch { 1 } else { 2 }
-    self.exp_strategy[blk][ch] = gb.read(bits).reinterpret_as_int()
+    if !self.eac3 {
+      let bits = if ch == self.lfe_ch { 1 } else { 2 }
+      self.exp_strategy[blk][ch] = gb.read(bits).reinterpret_as_int()
+    }
     if self.exp_strategy[blk][ch] != ac3_exp_reuse {
       bit_alloc_stages[ch] = 3
     }
@@ -1379,48 +1684,80 @@ fn Ac3Decoder::decode_audio_block(
     }
   }
   // Bit allocation information.
-  if gb.read1() != 0 {
-    self.slow_decay = ac3_slow_decay_tab[gb.read(2).reinterpret_as_int()] >>
-      self.sr_shift
-    self.fast_decay = ac3_fast_decay_tab[gb.read(2).reinterpret_as_int()] >>
-      self.sr_shift
-    self.slow_gain = ac3_slow_gain_tab[gb.read(2).reinterpret_as_int()]
-    self.db_per_bit = ac3_db_per_bit_tab[gb.read(2).reinterpret_as_int()]
-    self.floor = ac3_floor_tab[gb.read(3).reinterpret_as_int()]
-    for ch = (if cpl_in_use { 0 } else { 1 }); ch <= self.channels; ch = ch + 1 {
-      if bit_alloc_stages[ch] < 2 {
-        bit_alloc_stages[ch] = 2
-      }
-    }
-  } else if blk == 0 {
-    return Err("ac3: new bit allocation info must be present in block 0")
-  }
-  // Signal-to-noise ratio offsets and fast gains.
-  if gb.read1() != 0 {
-    let csnr = (gb.read(6).reinterpret_as_int() - 15) << 4
-    let mut snr = 0
-    let first = if cpl_in_use { 0 } else { 1 }
-    for ch = first; ch <= self.channels; ch = ch + 1 {
-      if ch == first || true {
-        // snr_offset_strategy == 2 for plain AC-3
-        snr = (csnr + gb.read(4).reinterpret_as_int()) << 2
-      }
-      if blk > 0 && self.snr_offset[ch] != snr {
-        if bit_alloc_stages[ch] < 1 {
-          bit_alloc_stages[ch] = 1
-        }
-      }
-      self.snr_offset[ch] = snr
-      let prev = self.fast_gain[ch]
-      self.fast_gain[ch] = ac3_fast_gain_tab[gb.read(3).reinterpret_as_int()]
-      if blk > 0 && prev != self.fast_gain[ch] {
+  if self.bit_allocation_syntax {
+    if gb.read1() != 0 {
+      self.slow_decay = ac3_slow_decay_tab[gb.read(2).reinterpret_as_int()] >>
+        self.sr_shift
+      self.fast_decay = ac3_fast_decay_tab[gb.read(2).reinterpret_as_int()] >>
+        self.sr_shift
+      self.slow_gain = ac3_slow_gain_tab[gb.read(2).reinterpret_as_int()]
+      self.db_per_bit = ac3_db_per_bit_tab[gb.read(2).reinterpret_as_int()]
+      self.floor = ac3_floor_tab[gb.read(3).reinterpret_as_int()]
+      for ch = (if cpl_in_use { 0 } else { 1 })
+          ch <= self.channels
+          ch = ch + 1 {
         if bit_alloc_stages[ch] < 2 {
           bit_alloc_stages[ch] = 2
         }
       }
+    } else if blk == 0 {
+      return Err("ac3: new bit allocation info must be present in block 0")
     }
-  } else if blk == 0 {
-    return Err("ac3: new snr offsets must be present in block 0")
+  }
+  // Signal-to-noise ratio offsets and fast gains.  E-AC-3 carries these only
+  // in block 0 (and its fast gains in a separate syntax element).
+  if !self.eac3 || blk == 0 {
+    if self.snr_offset_strategy != 0 && gb.read1() != 0 {
+      let csnr = (gb.read(6).reinterpret_as_int() - 15) << 4
+      let mut snr = 0
+      let first = if cpl_in_use { 0 } else { 1 }
+      for ch = first; ch <= self.channels; ch = ch + 1 {
+        if ch == first || self.snr_offset_strategy == 2 {
+          snr = (csnr + gb.read(4).reinterpret_as_int()) << 2
+        }
+        if blk > 0 && self.snr_offset[ch] != snr {
+          if bit_alloc_stages[ch] < 1 {
+            bit_alloc_stages[ch] = 1
+          }
+        }
+        self.snr_offset[ch] = snr
+        if !self.eac3 {
+          let prev = self.fast_gain[ch]
+          self.fast_gain[ch] = ac3_fast_gain_tab[gb.read(3).reinterpret_as_int()]
+          if blk > 0 && prev != self.fast_gain[ch] {
+            if bit_alloc_stages[ch] < 2 {
+              bit_alloc_stages[ch] = 2
+            }
+          }
+        }
+      }
+    } else if !self.eac3 && blk == 0 {
+      return Err("ac3: new snr offsets must be present in block 0")
+    }
+  }
+  // E-AC-3 fast gain codes.
+  if self.fast_gain_syntax {
+    if gb.read1() != 0 {
+      for ch = (if cpl_in_use { 0 } else { 1 })
+          ch <= self.channels
+          ch = ch + 1 {
+        let prev = self.fast_gain[ch]
+        self.fast_gain[ch] = ac3_fast_gain_tab[gb.read(3).reinterpret_as_int()]
+        if blk > 0 && prev != self.fast_gain[ch] {
+          if bit_alloc_stages[ch] < 2 {
+            bit_alloc_stages[ch] = 2
+          }
+        }
+      }
+    }
+  } else if self.eac3 && blk == 0 {
+    for ch = (if cpl_in_use { 0 } else { 1 }); ch <= self.channels; ch = ch + 1 {
+      self.fast_gain[ch] = ac3_fast_gain_tab[4]
+    }
+  }
+  // E-AC-3 to AC-3 converter SNR offset.
+  if self.frame_type == 0 && gb.read1() != 0 {
+    gb.skip(10)
   }
   // Coupling leak information.
   if cpl_in_use {
@@ -1440,7 +1777,7 @@ fn Ac3Decoder::decode_audio_block(
     self.first_cpl_leak = false
   }
   // Delta bit allocation information.
-  if gb.read1() != 0 {
+  if self.dba_syntax && gb.read1() != 0 {
     for ch = (if cpl_in_use { 0 } else { 1 }); ch <= fbw_channels; ch = ch + 1 {
       self.dba_mode[ch] = gb.read(2).reinterpret_as_int()
       if self.dba_mode[ch] == ac3_dba_reserved {
@@ -1512,7 +1849,7 @@ fn Ac3Decoder::decode_audio_block(
     }
   }
   // Unused dummy data.
-  if gb.read1() != 0 {
+  if self.skip_syntax && gb.read1() != 0 {
     let skipl = gb.read(9).reinterpret_as_int()
     gb.skip(8 * skipl)
   }
@@ -1543,7 +1880,11 @@ fn Ac3Decoder::decode_audio_block(
 
 ///|
 /// `parse_frame_header` from ac3dec.c for plain AC-3. */
-fn Ac3Decoder::parse_frame_header(self : Ac3Decoder, hdr : Ac3Header) -> Unit {
+fn Ac3Decoder::parse_frame_header(
+  self : Ac3Decoder,
+  gb : BitReader,
+  hdr : Ac3Header,
+) -> Result[Unit, String] {
   self.sr_code = hdr.sr_code
   self.bitstream_id = hdr.bitstream_id
   self.bitstream_mode = hdr.bitstream_mode
@@ -1557,15 +1898,202 @@ fn Ac3Decoder::parse_frame_header(self : Ac3Decoder, hdr : Ac3Header) -> Unit {
   self.lfe_ch = self.fbw_channels + 1
   self.frame_size = hdr.frame_size
   self.num_blocks = hdr.num_blocks
+  self.frame_type = hdr.frame_type
+  self.substreamid = hdr.substreamid
+  self.eac3 = hdr.bitstream_id > 10
   if self.lfe_on {
     self.start_freq[self.lfe_ch] = 0
     self.end_freq[self.lfe_ch] = 7
     self.num_exp_groups[self.lfe_ch] = 2
     self.channel_in_cpl[self.lfe_ch] = false
   }
-  self.first_cpl_leak = false
   self.dynamic_range[0] = 1.0
   self.dynamic_range[1] = 1.0
+  if !self.eac3 {
+    self.snr_offset_strategy = 2
+    self.block_switch_syntax = true
+    self.dither_flag_syntax = true
+    self.bit_allocation_syntax = true
+    self.fast_gain_syntax = false
+    self.dba_syntax = true
+    self.skip_syntax = true
+    for ch = 0; ch < ac3_max_channels; ch = ch + 1 {
+      self.channel_uses_aht[ch] = false
+    }
+    self.first_cpl_leak = false
+    return Ok(())
+  }
+  self.parse_eac3_frame_header(gb, hdr)
+}
+
+///|
+/// `ff_eac3_parse_header`: the audio frame syntax flags, exponent strategy
+/// data and per-frame values that follow the E-AC-3 bit stream information.
+fn Ac3Decoder::parse_eac3_frame_header(
+  self : Ac3Decoder,
+  gb : BitReader,
+  hdr : Ac3Header,
+) -> Result[Unit, String] {
+  if self.frame_type == 3 {
+    return Err("eac3: reserved frame type")
+  }
+  if self.substreamid != 0 {
+    return Err("eac3: additional substreams are not supported")
+  }
+  if hdr.sr_code == 3 {
+    return Err("eac3: reduced sampling rate is not supported")
+  }
+  if hdr.channel_map_present {
+    return Err("eac3: dependent channel maps are not supported")
+  }
+  let ac3_exponent_strategy = if self.num_blocks == 6 {
+    gb.read1() != 0
+  } else {
+    true
+  }
+  let parse_aht_info = if self.num_blocks == 6 {
+    gb.read1() != 0
+  } else {
+    false
+  }
+  self.snr_offset_strategy = gb.read(2).reinterpret_as_int()
+  let parse_transient = gb.read1() != 0
+  self.block_switch_syntax = gb.read1() != 0
+  if !self.block_switch_syntax {
+    for ch = 0; ch < ac3_max_channels; ch = ch + 1 {
+      self.block_switch[ch] = false
+    }
+  }
+  self.dither_flag_syntax = gb.read1() != 0
+  if !self.dither_flag_syntax {
+    for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
+      self.dither_flag[ch] = true
+    }
+  }
+  self.dither_flag[0] = false
+  self.dither_flag[self.lfe_ch] = false
+  self.bit_allocation_syntax = gb.read1() != 0
+  if !self.bit_allocation_syntax {
+    self.slow_decay = ac3_slow_decay_tab[2]
+    self.fast_decay = ac3_fast_decay_tab[1]
+    self.slow_gain = ac3_slow_gain_tab[1]
+    self.db_per_bit = ac3_db_per_bit_tab[2]
+    self.floor = ac3_floor_tab[7]
+  }
+  self.fast_gain_syntax = gb.read1() != 0
+  self.dba_syntax = gb.read1() != 0
+  self.skip_syntax = gb.read1() != 0
+  let parse_spx_atten = gb.read1() != 0
+  // Coupling strategy occurrence and coupling use per block.
+  let mut num_cpl_blocks = 0
+  if self.channel_mode > 1 {
+    for blk = 0; blk < self.num_blocks; blk = blk + 1 {
+      self.cpl_strategy_exists[blk] = if blk == 0 {
+        true
+      } else {
+        gb.read1() != 0
+      }
+      if self.cpl_strategy_exists[blk] {
+        self.cpl_in_use[blk] = gb.read1() != 0
+      } else {
+        self.cpl_in_use[blk] = self.cpl_in_use[blk - 1]
+      }
+      if self.cpl_in_use[blk] {
+        num_cpl_blocks = num_cpl_blocks + 1
+      }
+    }
+  } else {
+    for blk = 0; blk < ac3_max_blocks; blk = blk + 1 {
+      self.cpl_in_use[blk] = false
+    }
+  }
+  // Exponent strategy data.
+  if ac3_exponent_strategy {
+    for blk = 0; blk < self.num_blocks; blk = blk + 1 {
+      for ch = (if self.cpl_in_use[blk] { 0 } else { 1 })
+          ch <= self.fbw_channels
+          ch = ch + 1 {
+        self.exp_strategy[blk][ch] = gb.read(2).reinterpret_as_int()
+      }
+    }
+  } else {
+    let start_ch = if self.channel_mode > 1 && num_cpl_blocks > 0 {
+      0
+    } else {
+      1
+    }
+    for ch = start_ch; ch <= self.fbw_channels; ch = ch + 1 {
+      let frmchexpstr = gb.read(5).reinterpret_as_int()
+      for blk = 0; blk < 6; blk = blk + 1 {
+        self.exp_strategy[blk][ch] = eac3_frm_expstr[frmchexpstr][blk]
+      }
+    }
+  }
+  if self.lfe_on {
+    for blk = 0; blk < self.num_blocks; blk = blk + 1 {
+      self.exp_strategy[blk][self.lfe_ch] = gb.read1().reinterpret_as_int()
+    }
+  }
+  if self.frame_type == 0 && (self.num_blocks == 6 || gb.read1() != 0) {
+    gb.skip(5 * self.fbw_channels) // converter channel exponent strategy
+  }
+  // Determine which channels use AHT; the port does not decode AHT.
+  let mut any_aht = false
+  if parse_aht_info {
+    self.channel_uses_aht[0] = false
+    let start_ch = if num_cpl_blocks != self.num_blocks { 0 } else { 1 }
+    for ch = start_ch; ch <= self.channels; ch = ch + 1 {
+      let mut use_aht = true
+      for blk = 1; blk < 6; blk = blk + 1 {
+        if self.exp_strategy[blk][ch] != ac3_exp_reuse ||
+          (ch == 0 && self.cpl_strategy_exists[blk]) {
+          use_aht = false
+        }
+      }
+      self.channel_uses_aht[ch] = use_aht && gb.read1() != 0
+      if self.channel_uses_aht[ch] {
+        any_aht = true
+      }
+    }
+  } else {
+    for ch = 0; ch < ac3_max_channels; ch = ch + 1 {
+      self.channel_uses_aht[ch] = false
+    }
+  }
+  if any_aht {
+    return Err("eac3: adaptive hybrid transform is not supported")
+  }
+  // Per-frame SNR offset.
+  if self.snr_offset_strategy == 0 {
+    let csnroffst = (gb.read(6).reinterpret_as_int() - 15) << 4
+    let snroffst = (csnroffst + gb.read(4).reinterpret_as_int()) << 2
+    for ch = 0; ch <= self.channels; ch = ch + 1 {
+      self.snr_offset[ch] = snroffst
+    }
+  }
+  if parse_transient {
+    for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
+      if gb.read1() != 0 {
+        gb.skip(10) // transient processing location
+        gb.skip(8) // transient processing length
+      }
+    }
+  }
+  for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
+    if parse_spx_atten && gb.read1() != 0 {
+      let _ = gb.read(5) // spx attenuation code
+    }
+  }
+  if self.num_blocks > 1 && gb.read1() != 0 {
+    let block_start_bits = (self.num_blocks - 1) *
+      (4 + ac3_av_log2(self.frame_size - 2))
+    gb.skip(block_start_bits)
+  }
+  for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
+    self.first_cpl_coords[ch] = true
+  }
+  self.first_cpl_leak = true
+  Ok(())
 }
 
 ///|
@@ -1593,10 +2121,19 @@ pub fn Ac3Decoder::decode_frame(
   if hdr.frame_size > buf.length() {
     return Err("ac3: incomplete frame")
   }
-  self.parse_frame_header(hdr)
+  match self.parse_frame_header(gb, hdr) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  if self.frame_type == 1 {
+    return Err("ac3: dependent frames are not supported")
+  }
+  if self.channels > 6 {
+    return Err("ac3: too many channels")
+  }
   let out : Array[Array[Double]] = []
   for ch = 0; ch < self.channels; ch = ch + 1 {
-    out.push(Array::make(ac3_max_blocks * ac3_block_size, 0.0))
+    out.push(Array::make(self.num_blocks * ac3_block_size, 0.0))
   }
   let map_base = (self.channel_mode * 2 + (if self.lfe_on { 1 } else { 0 })) * 6
   // The C directs each decoded channel through `outptr[channel_map[ch]]` into
@@ -1618,6 +2155,7 @@ pub fn Ac3Decoder::decode_frame(
     channels: self.channels,
     channel_mode: self.channel_mode,
     lfe_on: self.lfe_on,
+    num_blocks: self.num_blocks,
     samples: out,
   })
 }
