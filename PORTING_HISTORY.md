@@ -5208,3 +5208,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `4cbccb31…`）；9-bit 与 1x1 三分量变体被拒绝。原白盒用例中的
   SOF3“不支持”断言改为 SOF5，并补 SOF3 无 scan 用例。
 - 全量 wasm **1203/1203**。
+
+## 182. HLS/DASH × HEVC/AV1/VP9 fMP4 验证
+
+- HLS 媒体播放列表（`EXT-X-MAP`）与 DASH SegmentTemplate MPD 本身与编码
+  格式无关；本轮用现有 `fmp4_hevc/av1/vp9_init_segment` + 媒体段构造
+  清单，经 `hls_segment_reader_new` / `dash_segment_reader_new` 取回
+  初始化段与分片，`av_mov_open` 解复用后分别用 HEVC、AV1、VP9 解码器
+  与既有帧 MD5 对拍。
+- 新增 `hls_dash_video_codecs_realdata_wbtest.mbt`（3 个用例，复用
+  fMP4 真实样本与参考 MD5）。外部 ffmpeg 可播放同构 HLS/DASH 清单
+  （此前 H.264/AAC 已做过文件级播放验证）。
+- 全量 wasm **1203/1203**。
