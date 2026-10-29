@@ -5096,3 +5096,25 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
 - 已知限制：仅音频流；视频/扩展流属性/DRM/负载扩展系统跳过。
 
 全量 wasm **1180/1180**。
+
+## 177. AC-3/E-AC-3 双轨 A/V 容器
+
+- MP4：`mp4_av_muxer_new` 增加 `audio_entry`（自定义 sample entry）与
+  `aac_priming`；新增 `mp4_av_ac3_muxer_new`/`mp4_av_eac3_muxer_new`，
+  由首帧 AC-3/E-AC-3 头生成 `ac-3`+`dac3` / `ec-3`+`dec3` 条目，
+  音轨 timescale 取采样率。
+- Matroska：`MkvAvMuxer` 的音轨改为可配置 `audio_codec`/CodecPrivate；
+  新增 `mkv_av_ac3_muxer_new`/`mkv_av_eac3_muxer_new`（A_AC3/A_EAC3）。
+- MPEG-TS 修复：PAT/PMT 的 CRC 需按 `mpegtsenc.c` 写
+  `av_bswap32(av_crc(...))`，此前直接写大端值导致 FFmpeg 丢弃整张表并
+  退回按 PES 负载探测（H.264 被误判为 mp3）。回归测试锁定 PAT/PMT 的
+  CRC 字节；视频 PES 仍要求 Annex B，用例把 AVCC 样本转换为 Annex B
+  并在首帧前置 SPS/PPS。
+- 回归 `ac3_av_containers_realdata_test.mbt`：真实 5 帧 H.264 与 4 帧
+  AC-3/E-AC-3 分别写 MP4、TS（0x81/0x87）与 Matroska，本地解复用
+  codec/负载/帧 MD5 一致；外部 ffmpeg 9.0.2 解码六种输出，视频
+  framemd5 五项与 `67209b5b…`/`4c68e9b9…`/`bb1a50b7…`/`0b3917a8…`/
+  `5f67aea8…` 完全相同，AC-3 音频 PCM MD5 为 `0b4d53cb…`、E-AC-3 为
+  `4f289b44…`，均与裸流参考一致。
+
+全量 wasm **1186/1186**。

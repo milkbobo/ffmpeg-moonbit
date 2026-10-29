@@ -68,7 +68,12 @@ fn ts_mux_u16(dst : Array[Byte], v : Int32) -> Unit {
 ///|
 fn ts_mux_crc(section : Array[Byte]) -> UInt32 {
   let table = @libavutil.av_crc_init(false, 32, 0x04C11DB7U).unwrap()
-  @libavutil.av_crc(table, 0xFFFFFFFFU, Bytes::from_array(section))
+  let crc = @libavutil.av_crc(table, 0xFFFFFFFFU, Bytes::from_array(section))
+  // mpegtsenc stores av_bswap32() of the CRC in the section.
+  ((crc & 0xFFU) << 24) |
+  (((crc >> 8) & 0xFFU) << 16) |
+  (((crc >> 16) & 0xFFU) << 8) |
+  (crc >> 24)
 }
 
 ///|

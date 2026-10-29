@@ -20,6 +20,9 @@ pub struct MkvAvMuxer {
   avcc : Bytes
   sample_rate : Int32
   channels : Int32
+  /// Audio CodecID ("A_AAC", "A_AC3", "A_EAC3") and optional CodecPrivate.
+  audio_codec_id : String
+  audio_private : Bytes
   events : Array[MkvAvEvent]
 }
 
@@ -30,6 +33,8 @@ pub fn mkv_av_muxer_new(
   avcc : Bytes,
   sample_rate : Int32,
   channels~ : Int32 = 2,
+  audio_codec~ : String = "A_AAC",
+  audio_private~ : Bytes = b"",
 ) -> Result[MkvAvMuxer, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -39,7 +44,16 @@ pub fn mkv_av_muxer_new(
     channels > 7 {
     return Err("EINVAL: invalid MKV A/V parameters")
   }
-  Ok({ width, height, avcc, sample_rate, channels, events: [], })
+  Ok({
+    width,
+    height,
+    avcc,
+    sample_rate,
+    channels,
+    audio_codec_id: audio_codec,
+    audio_private,
+    events: [],
+  })
 }
 
 ///|
@@ -178,13 +192,19 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
   webm_uint_elem(atrack, 0xD7, 1, 2UL)
   webm_uint_elem(atrack, 0x73C5, 2, 2UL)
   webm_uint_elem(atrack, 0x83, 1, 2UL)
-  webm_string_elem(atrack, 0x86, 1, "A_AAC")
-  let private = mkv_av_aac_private(self)
-  let private_body : Array[Byte] = []
-  for b in private {
-    private_body.push(b)
+  webm_string_elem(atrack, 0x86, 1, self.audio_codec_id)
+  let private = if self.audio_private.length() > 0 {
+    self.audio_private
+  } else {
+    mkv_av_aac_private(self)
   }
-  webm_elem(atrack, 0x63A2, 2, private_body)
+  if private.length() > 0 {
+    let private_body : Array[Byte] = []
+    for b in private {
+      private_body.push(b)
+    }
+    webm_elem(atrack, 0x63A2, 2, private_body)
+  }
   webm_elem(atrack, 0xE1, 1, audio)
   webm_elem(atrack, 0xEC, 1, [])
 
@@ -207,4 +227,42 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
     out.push(b)
   }
   Bytes::from_array(out)
+}
+
+///|
+/// H.264 + AC-3 A/V Matroska muxer.
+pub fn mkv_av_ac3_muxer_new(
+  width : Int32,
+  height : Int32,
+  avcc : Bytes,
+  sample_rate : Int32,
+  channels : Int32,
+) -> Result[MkvAvMuxer, String] {
+  mkv_av_muxer_new(
+    width,
+    height,
+    avcc,
+    sample_rate,
+    channels~,
+    audio_codec="A_AC3",
+  )
+}
+
+///|
+/// H.264 + E-AC-3 A/V Matroska muxer.
+pub fn mkv_av_eac3_muxer_new(
+  width : Int32,
+  height : Int32,
+  avcc : Bytes,
+  sample_rate : Int32,
+  channels : Int32,
+) -> Result[MkvAvMuxer, String] {
+  mkv_av_muxer_new(
+    width,
+    height,
+    avcc,
+    sample_rate,
+    channels~,
+    audio_codec="A_EAC3",
+  )
 }

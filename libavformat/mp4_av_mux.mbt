@@ -17,6 +17,8 @@ pub struct Mp4AvMuxer {
   channels : Int32
   /// AAC encoder delay in media samples, expressed as an audio `elst` edit.
   aac_priming : Int32
+  /// Explicit audio sample entry (AC-3/E-AC-3); AAC builds its own `esds`.
+  audio_entry : Array[Byte]?
   audio_packets : Array[Bytes]
   audio_durations : Array[Int32]
 }
@@ -30,6 +32,8 @@ pub fn mp4_av_muxer_new(
   channels : Int32,
   /// Leading AAC samples to skip via `edts`/`elst`.
   aac_priming~ : Int32 = 0,
+  /// Explicit audio sample entry (e.g. `mp4_ac3_entry`); AAC when None.
+  audio_entry~ : Array[Byte]? = None,
 ) -> Result[Mp4AvMuxer, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -40,20 +44,29 @@ pub fn mp4_av_muxer_new(
     aac_priming < 0 {
     return Err("EINVAL: invalid MP4 A/V parameters")
   }
-  let mut rate_ok = false
-  for rate in mp4_mux_rates() {
-    if rate == sample_rate {
-      rate_ok = true
+  match audio_entry {
+    None => {
+      let mut rate_ok = false
+      for rate in mp4_mux_rates() {
+        if rate == sample_rate {
+          rate_ok = true
+        }
+      }
+      if !rate_ok {
+        return Err("EINVAL: unsupported AAC sample rate")
+      }
     }
-  }
-  if !rate_ok {
-    return Err("EINVAL: unsupported AAC sample rate")
+    Some(entry) =>
+      if entry.length() == 0 || aac_priming != 0 {
+        return Err("EINVAL: invalid MP4 audio entry")
+      }
   }
   Ok({
     width,
     height,
     avcc,
     aac_priming,
+    audio_entry,
     video_packets: [],
     video_durations: [],
     video_keyframes: [],
@@ -389,7 +402,10 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     video_offset,
   )
 
-  let aentry = mp4_av_aac_entry(self.sample_rate, self.channels)
+  let aentry = match self.audio_entry {
+    Some(entry) => entry
+    None => mp4_av_aac_entry(self.sample_rate, self.channels)
+  }
   let smhd_body : Array[Byte] = []
   mp4_u16(smhd_body, 0)
   mp4_u16(smhd_body, 0)
@@ -417,4 +433,55 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
   )
   let moov = mp4_box("moov", mp4_cat([mvhd, vtrack, atrack]))
   Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
+}
+
+///|
+/// H.264 + AC-3 A/V MP4 muxer.  `first_audio_frame` supplies the `dac3`
+/// fields and the audio sample rate/channel count.
+pub fn mp4_av_ac3_muxer_new(
+  width : Int32,
+  height : Int32,
+  avcc : Bytes,
+  first_audio_frame : Bytes,
+) -> Result[Mp4AvMuxer, String] {
+  let hdr = match @libavcodec.ac3_parse_header(first_audio_frame) {
+    Ok(h) => h
+    Err(e) => return Err("EINVAL: \{e}")
+  }
+  if hdr.bitstream_id > 10 {
+    return Err("EINVAL: E-AC-3 frame in an AC-3 muxer")
+  }
+  mp4_av_muxer_new(
+    width,
+    height,
+    avcc,
+    hdr.sample_rate,
+    hdr.channels,
+    audio_entry=Some(mp4_ac3_entry(hdr)),
+  )
+}
+
+///|
+/// H.264 + E-AC-3 A/V MP4 muxer.
+pub fn mp4_av_eac3_muxer_new(
+  width : Int32,
+  height : Int32,
+  avcc : Bytes,
+  first_audio_frame : Bytes,
+) -> Result[Mp4AvMuxer, String] {
+  let hdr = match @libavcodec.ac3_parse_header(first_audio_frame) {
+    Ok(h) => h
+    Err(e) => return Err("EINVAL: \{e}")
+  }
+  if hdr.bitstream_id <= 10 || hdr.frame_type == 1 {
+    return Err("EINVAL: frame is not an independent E-AC-3 frame")
+  }
+  mp4_av_muxer_new(
+    width,
+    height,
+    avcc,
+    hdr.sample_rate,
+    hdr.channels,
+    audio_entry=Some(mp4_eac3_entry(hdr)),
+  )
 }
