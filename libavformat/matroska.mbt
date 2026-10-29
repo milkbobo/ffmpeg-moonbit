@@ -266,6 +266,9 @@ pub struct MatroskaHeader {
   mut muxingapp : String?
   /// `matroska->date_utc` (raw 8-byte payload).
   mut date_utc : Bytes?
+  /// Container-level `Tags` (SimpleTag name/value pairs, FFmpeg's
+  /// `matroska_convert_tag` with the MKV name conversion applied).
+  metadata : Array[(String, String)]
   /// `matroska->seekhead[]`.
   seekhead : Array[MkvSeekhead]
   /// `matroska->segment_start`.
@@ -289,6 +292,7 @@ fn new_matroska_header() -> MatroskaHeader {
     title: None,
     muxingapp: None,
     date_utc: None,
+    metadata: [],
     seekhead: [],
     segment_start: 0,
     first_cluster_pos: -1L,
@@ -455,7 +459,171 @@ fn matroska_segment_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
     { id: matroska_id_attachments, kind: Skip, sink: None, },
     { id: matroska_id_chapters, kind: Skip, sink: None, },
     { id: matroska_id_cues, kind: Skip, sink: None, },
-    { id: matroska_id_tags, kind: Skip, sink: None, },
+    {
+      id: matroska_id_tags,
+      kind: Level1(() => matroska_tags_table(mh)),
+      sink: None,
+    },
+  ]
+}
+
+///|
+/// FFmpeg's `ff_mkv_metadata_conv` mapping applied to tag names read from
+/// `Tags` (only these two entries exist in the C table).
+fn matroska_metadata_key(name : String) -> String {
+  if name == "LEAD_PERFORMER" {
+    "performer"
+  } else if name == "PART_NUMBER" {
+    "track"
+  } else {
+    name
+  }
+}
+
+///|
+/// `matroska_simpletag[]`: Name and String are delivered in either order, so
+/// a pair is flushed as soon as both halves are present.
+fn matroska_simpletag_table(
+  mh : MatroskaHeader,
+  targeted : Array[Bool],
+  state : Array[String?],
+) -> Array[EbmlSyntax] {
+  let set_name = (v : EbmlValue, _pos : Int64) => {
+    match v {
+      S(str) => {
+        state[0] = Some(str)
+        matroska_tag_flush(mh, targeted, state)
+        Ok(())
+      }
+      _ => Err("EINVAL")
+    }
+  }
+  let set_string = (v : EbmlValue, _pos : Int64) => {
+    match v {
+      S(str) => {
+        state[1] = Some(str)
+        matroska_tag_flush(mh, targeted, state)
+        Ok(())
+      }
+      _ => Err("EINVAL")
+    }
+  }
+  [
+    { id: matroska_id_tagname, kind: Str(None), sink: Some(set_name), },
+    { id: matroska_id_tagstring, kind: Str(None), sink: Some(set_string), },
+    { id: matroska_id_taglang, kind: Skip, sink: None, },
+    { id: matroska_id_tagdefault, kind: Skip, sink: None, },
+    {
+      id: matroska_id_simpletag,
+      kind: Nest(() => matroska_simpletag_table(mh, targeted, [None, None])),
+      sink: None,
+    },
+  ]
+}
+
+///|
+/// Store a completed SimpleTag pair; track/chapter/attachment-targeted tags
+/// would belong to that stream in FFmpeg, so only container-level tags land in
+/// `mh.metadata`.
+fn matroska_tag_flush(
+  mh : MatroskaHeader,
+  targeted : Array[Bool],
+  state : Array[String?],
+) -> Unit {
+  match (state[0], state[1]) {
+    (Some(name), Some(value)) => {
+      if !targeted[0] {
+        mh.metadata.push((matroska_metadata_key(name), value))
+      }
+      state[0] = None
+      state[1] = None
+    }
+    _ => ()
+  }
+}
+
+///|
+/// `matroska_tag[]`: `Targets` marks the tag as belonging to a track, chapter
+/// or attachment (those are skipped), `SimpleTag` carries the values.
+fn matroska_tag_table(
+  mh : MatroskaHeader,
+  targeted : Array[Bool],
+) -> Array[EbmlSyntax] {
+  [
+    {
+      id: matroska_id_tagtargets,
+      kind: Nest(() => {
+        let rows : Array[EbmlSyntax] = [
+          {
+            id: matroska_id_tagtargets_trackuid,
+            kind: Uint(0UL),
+            sink: Some((v, _) => {
+              match v {
+                U(u) => {
+                  if u != 0UL {
+                    targeted[0] = true
+                  }
+                  Ok(())
+                }
+                _ => Err("EINVAL")
+              }
+            }),
+          },
+          {
+            id: matroska_id_tagtargets_chapteruid,
+            kind: Uint(0UL),
+            sink: Some((v, _) => {
+              match v {
+                U(u) => {
+                  if u != 0UL {
+                    targeted[0] = true
+                  }
+                  Ok(())
+                }
+                _ => Err("EINVAL")
+              }
+            }),
+          },
+          {
+            id: matroska_id_tagtargets_attachuid,
+            kind: Uint(0UL),
+            sink: Some((v, _) => {
+              match v {
+                U(u) => {
+                  if u != 0UL {
+                    targeted[0] = true
+                  }
+                  Ok(())
+                }
+                _ => Err("EINVAL")
+              }
+            }),
+          },
+          { id: matroska_id_tagtargets_type, kind: Skip, sink: None, },
+          { id: matroska_id_tagtargets_typevalue, kind: Skip, sink: None, },
+        ]
+        rows
+      }),
+      sink: None,
+    },
+    {
+      id: matroska_id_simpletag,
+      kind: Nest(() => matroska_simpletag_table(mh, targeted, [None, None])),
+      sink: None,
+    },
+  ]
+}
+
+///|
+/// `matroska_tags[]`: each `Tag` gets fresh target and value state.
+fn matroska_tags_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
+  [
+    {
+      id: matroska_id_tag,
+      kind: Nest(() => matroska_tag_table(mh, [false])),
+      sink: None,
+    },
+    { id: 0xBF, kind: Skip, sink: None, },
   ]
 }
 
@@ -694,6 +862,8 @@ pub fn av_matroska_open(buf : Bytes) -> Result[MatroskaHeader, String] {
       // unknown doctype stays a warning in the C; surface it via is_webm
       ignore(notes)
       matroska_fixup_codec_priv(mh)
+      // Tags may follow the Clusters (where the streaming parse stops).
+      matroska_scan_tags(buf, mh)
       Ok(mh)
     }
   }

@@ -90,6 +90,54 @@ pub let matroska_id_cues : UInt32 = 0x1C53BB6B
 pub let matroska_id_tags : UInt32 = 0x1254C367
 
 ///|
+/// `MATROSKA_ID_TAG`. */
+pub let matroska_id_tag : UInt32 = 0x7373
+
+///|
+/// `MATROSKA_ID_TAGTARGETS`. */
+pub let matroska_id_tagtargets : UInt32 = 0x63C0
+
+///|
+/// `MATROSKA_ID_TAGTARGETS_TRACKUID`. */
+pub let matroska_id_tagtargets_trackuid : UInt32 = 0x63C5
+
+///|
+/// `MATROSKA_ID_TAGTARGETS_CHAPTERUID`. */
+pub let matroska_id_tagtargets_chapteruid : UInt32 = 0x63C4
+
+///|
+/// `MATROSKA_ID_TAGTARGETS_ATTACHUID`. */
+pub let matroska_id_tagtargets_attachuid : UInt32 = 0x63C6
+
+///|
+/// `MATROSKA_ID_TAGTARGETS_TYPE`. */
+pub let matroska_id_tagtargets_type : UInt32 = 0x63CA
+
+///|
+/// `MATROSKA_ID_TAGTARGETS_TYPEVALUE`. */
+pub let matroska_id_tagtargets_typevalue : UInt32 = 0x68CA
+
+///|
+/// `MATROSKA_ID_SIMPLETAG`. */
+pub let matroska_id_simpletag : UInt32 = 0x67C8
+
+///|
+/// `MATROSKA_ID_TAGNAME`. */
+pub let matroska_id_tagname : UInt32 = 0x45A3
+
+///|
+/// `MATROSKA_ID_TAGSTRING`. */
+pub let matroska_id_tagstring : UInt32 = 0x4487
+
+///|
+/// `MATROSKA_ID_TAGLANG`. */
+pub let matroska_id_taglang : UInt32 = 0x447A
+
+///|
+/// `MATROSKA_ID_TAGDEFAULT` / `MATROSKA_ID_TAGDEFAULT_BUG`. */
+pub let matroska_id_tagdefault : UInt32 = 0x4484
+
+///|
 /// `MATROSKA_ID_SEEKHEAD`. */
 pub let matroska_id_seekhead : UInt32 = 0x114D9B74
 

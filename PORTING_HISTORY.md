@@ -5358,3 +5358,26 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：改写后的文件经 ffprobe 读到 title/artist/copyright/
   genre，音频解码无错误。
 - 全量 wasm **1220/1220**。
+
+## 191. Matroska Tags 元数据读写
+
+- 解复用：`MatroskaHeader.metadata` 解析 `Tags/Tag/SimpleTag` 的
+  TagName/TagString（两种出现顺序都能配对），按
+  `matroska_convert_tags` 只收容器级（`Targets` 无
+  TrackUID/ChapterUID/AttachmentUID）的标签，并应用
+  `ff_mkv_metadata_conv`（LEAD_PERFORMER→performer、PART_NUMBER→track）。
+- 追加字节级 `Tags` 扫描（`matroska_scan_tags`）：流式解析在首个
+  Cluster 处停止，簇之后的 `Tags`（合法位置）也能读到；扫描失败时保留
+  流式结果。
+- 写入：`mkv_tags_element` 按 `matroskaenc` 规则把键名大写、
+  空格转下划线；`mkv_add_tags` 把 `Tags` 插入首个 Cluster 之前，并把
+  `SeekHead` 的 SeekPosition 与 `Cues` 的 CueClusterPosition 按插入
+  位移重写（uint 宽度按需加宽，循环到稳定）。
+- 回归 `mkv_tags_realdata_test.mbt`：ffmpeg 9.0.2 生成带
+  容器级/轨道级 Tags 的 Opus MKV（2706 字节）读回 6 个容器标签、
+  Info Title 与轨道标签过滤；`mkv_add_tags` 追加 3 个标签后标签数
+  +3、音视频包数不变、旧标签保留。
+- 外部验证：改写后的 MKV 经 ffprobe 读到 TITLE/ARTIST/CUSTOM_KEY
+  等全部标签；`ffmpeg -ss 0.05` 解码输出与原始 ffmpeg 文件逐字节
+  一致（Cues 位移正确）。
+- 全量 wasm **1223/1223**。
