@@ -5233,3 +5233,21 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   的 WAV AAC 用例改为整段切帧解码（10 帧）。0.1 s 夹具被确认是 ffmpeg
   WAV AAC muxer 的截断产物（解码报 “Input buffer exhausted”），未使用。
 - 全量 wasm **1204/1204**。
+
+## 184. FLAC 编码器
+
+- 新增 `flac_encode.mbt`：固定预测 0..4 阶逐声道选优、Rice/Rice2
+  残差（分区阶 0，参数穷举最小化位数）、常量/verbatim 回退；
+  帧头（固定块策略、UTF-8 帧号、显式块长、CRC-8）与帧尾 CRC-16，
+  STREAMINFO（块长/帧长/采样率/声道/位深/总样本/MD5）。
+- API：`flac_encode(samples, channels, sample_rate, bits, block_size~)`
+  返回 `FlacEncoded { streaminfo, frames, file() }`，支持 8/12/16/20/24-bit、
+  1-8 声道（独立声道）。
+- 回归 `flac_encode_realdata_test.mbt`：16-bit stereo（8820 样本/3 帧）、
+  24-bit mono（7200/2 帧）、8-bit mono（1600/1 帧）三组 PCM WAV 夹具，
+  经 `ff_flac_decode` 回转逐样本一致；外部 ffmpeg 9.0.2 解码 PCM 与源
+  WAV 逐字节一致（`f3acc310…`、`741aa137…`、`a440ba76…`）。非法参数
+  拒绝用例同时覆盖。
+- 已知限制：未实现 LPC、分区阶 >0、stereo decorrelation、wasted bits
+  与 32-bit 样本；压缩率低于 ffmpeg 的默认编码器，但输出为标准 FLAC。
+- 全量 wasm **1208/1208**。
