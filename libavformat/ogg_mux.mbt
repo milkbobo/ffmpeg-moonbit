@@ -11,6 +11,7 @@ pub struct OggOpusMuxer {
   channels : Int32
   pre_skip : Int32
   input_sample_rate : Int32
+  tags : Array[(String, String)]
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -21,6 +22,7 @@ pub fn ogg_opus_muxer_new(
   pre_skip~ : Int32 = 0,
   input_sample_rate~ : Int32 = 48000,
   serial~ : Int32 = 0x12345678,
+  tags~ : Array[(String, String)] = [],
 ) -> Result[OggOpusMuxer, String] {
   if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 {
     return Err("EINVAL: invalid Ogg/Opus stream parameters")
@@ -30,6 +32,7 @@ pub fn ogg_opus_muxer_new(
     channels,
     pre_skip,
     input_sample_rate,
+    tags,
     packets: [],
     durations: [],
   })
@@ -148,16 +151,14 @@ fn OggOpusMuxer::opus_head(self : OggOpusMuxer) -> Bytes {
 }
 
 ///|
-fn ogg_mux_opus_tags() -> Bytes {
+fn ogg_mux_opus_tags(comments : Array[(String, String)]) -> Bytes {
   let tags : Array[Byte] = []
   for b in b"OpusTags" {
     tags.push(b)
   }
-  ogg_mux_u32(tags, 7U) // vendor string length
-  for b in b"moonbit" {
+  for b in vorbis_comment_body("moonbit", comments) {
     tags.push(b)
   }
-  ogg_mux_u32(tags, 0U) // user comment count
   Bytes::from_array(tags)
 }
 
@@ -189,7 +190,7 @@ pub fn OggOpusMuxer::finish(self : OggOpusMuxer) -> Bytes {
   let head = self.opus_head()
   ogg_mux_page(out, self.serial, seq, 2, 0L, head)
   seq = seq + 1
-  let tags = ogg_mux_opus_tags()
+  let tags = ogg_mux_opus_tags(self.tags)
   ogg_mux_page(out, self.serial, seq, 0, 0L, tags)
   seq = seq + 1
   let mut granule = 0L

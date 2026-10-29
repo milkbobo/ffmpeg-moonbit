@@ -24,6 +24,8 @@ pub struct OggOpusDemux {
   pre_skip : Int32
   input_sample_rate : Int32
   extradata : Bytes
+  /// OpusTags user comments (generic keys).
+  tags : Array[(String, String)]
   packets : Array[OggOpusPacket]
 }
 
@@ -77,6 +79,7 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
   let mut extradata : Bytes? = None
   let mut got_head = false
   let mut got_tags = false
+  let mut tags : Array[(String, String)] = []
   let mut pending : Array[Byte] = []
   let mut cumulative = 0L
   let packets : Array[OggOpusPacket] = []
@@ -143,6 +146,10 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
           if packet.length() < 8 || packet[0:8].to_owned() != b"OpusTags" {
             return Err("ogg: second packet is not OpusTags")
           }
+          match vorbis_comment_read(packet, 8, packet.length()) {
+            Ok((t, _)) => tags = t
+            Err(e) => return Err(e)
+          }
           got_tags = true
         } else {
           let parsed = match @libavcodec.opus_parse_packet(packet) {
@@ -186,6 +193,7 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
     pre_skip,
     input_sample_rate,
     extradata: extradata.unwrap(),
+    tags,
     packets,
   })
 }

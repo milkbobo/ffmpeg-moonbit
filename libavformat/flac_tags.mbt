@@ -13,30 +13,6 @@ fn flac_tags_be24(data : Bytes, pos : Int32) -> Int32 {
 }
 
 ///|
-fn flac_tags_le32(data : Bytes, pos : Int32) -> Int32 {
-  data[pos].to_int() |
-  (data[pos + 1].to_int() << 8) |
-  (data[pos + 2].to_int() << 16) |
-  (data[pos + 3].to_int() << 24)
-}
-
-///|
-/// FFmpeg's `ff_vorbiscomment_metadata_conv` (native name -> generic key).
-fn flac_vorbis_key(name : String) -> String {
-  if name == "ALBUMARTIST" {
-    "album_artist"
-  } else if name == "TRACKNUMBER" {
-    "track"
-  } else if name == "DISCNUMBER" {
-    "disc"
-  } else if name == "DESCRIPTION" {
-    "comment"
-  } else {
-    name
-  }
-}
-
-///|
 /// Read the `VORBIS_COMMENT` block of a FLAC file as (key, value) pairs.
 /// Keys keep their on-disk case; `ff_vorbiscomment_metadata_conv` names are
 /// mapped to FFmpeg's generic keys.
@@ -57,40 +33,12 @@ pub fn flac_read_tags(file : Bytes) -> Result[Array[(String, String)], String] {
       return Err("EINVAL: truncated FLAC metadata block")
     }
     if kind == 4 {
-      if size < 8 {
-        return Err("EINVAL: truncated VORBIS_COMMENT block")
-      }
-      let vendor_len = flac_tags_le32(file, body_start)
-      if vendor_len < 0 || body_start + 4 + vendor_len + 4 > body_end {
-        return Err("EINVAL: invalid VORBIS_COMMENT block")
-      }
-      let mut p = body_start + 4 + vendor_len
-      let count = flac_tags_le32(file, p)
-      p = p + 4
-      if count < 0 {
-        return Err("EINVAL: invalid VORBIS_COMMENT count")
-      }
-      for _i = 0; _i < count; _i = _i + 1 {
-        if p + 4 > body_end {
-          return Err("EINVAL: truncated VORBIS_COMMENT entry")
-        }
-        let len = flac_tags_le32(file, p)
-        p = p + 4
-        if len < 0 || p + len > body_end {
-          return Err("EINVAL: truncated VORBIS_COMMENT entry")
-        }
-        let entry = utf8_to_string(file[p:p + len].to_array())
-        p = p + len
-        // Split "KEY=value" at the first '='; entries without one are
-        // dropped like FFmpeg's vorbis comment parser.
-        let eq = flac_entry_split(entry)
-        match eq {
-          Some((key, value)) =>
-            if key != "" {
-              out.push((flac_vorbis_key(key), value))
-            }
-          None => ()
-        }
+      match vorbis_comment_read(file, body_start, body_end) {
+        Ok((tags, _)) =>
+          for pair in tags {
+            out.push(pair)
+          }
+        Err(e) => return Err(e)
       }
     }
     pos = body_end
@@ -102,53 +50,10 @@ pub fn flac_read_tags(file : Bytes) -> Result[Array[(String, String)], String] {
 }
 
 ///|
-/// Split a Vorbis comment entry at its first '='.
-fn flac_entry_split(entry : String) -> (String, String)? {
-  let chars = entry.to_array()
-  for i = 0; i < chars.length(); i = i + 1 {
-    if chars[i] == '=' {
-      return Some(
-        (String::from_array(chars[:i]), String::from_array(chars[i + 1:])),
-      )
-    }
-  }
-  None
-}
-
-///|
 /// A metadata block: type and payload.
 priv struct FlacMetaBlock {
   kind : Int32
   body : Bytes
-}
-
-///|
-fn flac_tags_le32_bytes(out : Array[Byte], v : Int32) -> Unit {
-  out.push((v & 0xFF).to_byte())
-  out.push(((v >> 8) & 0xFF).to_byte())
-  out.push(((v >> 16) & 0xFF).to_byte())
-  out.push(((v >> 24) & 0xFF).to_byte())
-}
-
-///|
-/// Body of a `VORBIS_COMMENT` block: vendor "moonbit", then `KEY=value`
-/// entries with little-endian length prefixes.
-fn flac_vorbis_comment_body(tags : Array[(String, String)]) -> Array[Byte] {
-  let out : Array[Byte] = []
-  let vendor = utf8_from_string("moonbit")
-  flac_tags_le32_bytes(out, vendor.length())
-  for b in vendor {
-    out.push(b)
-  }
-  flac_tags_le32_bytes(out, tags.length())
-  for pair in tags {
-    let entry = utf8_from_string(pair.0 + "=" + pair.1)
-    flac_tags_le32_bytes(out, entry.length())
-    for b in entry {
-      out.push(b)
-    }
-  }
-  out
 }
 
 ///|
@@ -198,7 +103,7 @@ pub fn flac_add_tags(
       if tags.length() > 0 {
         inserted.push({
           kind: 4,
-          body: Bytes::from_array(flac_vorbis_comment_body(tags)),
+          body: Bytes::from_array(vorbis_comment_body("moonbit", tags)),
         })
       }
       done = true
@@ -207,7 +112,10 @@ pub fn flac_add_tags(
   if !done && tags.length() > 0 {
     // Malformed (no STREAMINFO): still keep the comments at the front.
     let with_comment : Array[FlacMetaBlock] = [
-      { kind: 4, body: Bytes::from_array(flac_vorbis_comment_body(tags)), },
+      {
+        kind: 4,
+        body: Bytes::from_array(vorbis_comment_body("moonbit", tags)),
+      },
     ]
     for block in inserted {
       with_comment.push(block)

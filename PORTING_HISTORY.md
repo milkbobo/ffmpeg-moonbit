@@ -5549,3 +5549,20 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：改写后的 MP3 经 ffprobe 读到 title/artist/comment/
   custom key，ffmpeg 解码 PCM 与源文件一致。
 - 全量 wasm **1251/1251**。
+
+## 202. Ogg Vorbis comment 标签
+
+- 抽出共享的 `vorbis_comment.mbt`（vendor/entry 解析、`KEY=value`
+  切分、ALBUMARTIST/TRACKNUMBER/DISCNUMBER/DESCRIPTION 映射、payload
+  序列化），FLAC 标签模块改为复用之。
+- 读取：Opus 解复用解析 OpusTags（偏移 8）、Vorbis 解复用解析
+  comment 头（偏移 7）、Ogg FLAC 解复用解析 type-4 元数据块，三者
+  都新增 `tags` 字段。
+- 写入：`ogg_opus_muxer_new(tags~)` 把自定义注释写进 OpusTags，
+  vendor 仍为 "moonbit"。
+- 回归 `ogg_tags_realdata_test.mbt`：ffmpeg 生成的 libvorbis 与
+  Ogg FLAC 夹具读回 title/artist/encoder；Opus 写入器带 3 个标签
+  回转正确（TRACKNUMBER→track）、无标签时为空。
+- 外部验证：自写带标签 Opus 经 ffprobe 读到 title/artist/track，
+  ffmpeg 解码 PCM 与无标签版本一致。
+- 全量 wasm **1254/1254**。

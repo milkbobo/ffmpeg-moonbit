@@ -29,6 +29,8 @@ pub struct OggFlacDemux {
   streaminfo : Bytes
   /// Metadata block packets following STREAMINFO (raw block bytes).
   headers : Array[Bytes]
+  /// Vorbis comments found in the metadata blocks (generic keys).
+  tags : Array[(String, String)]
   frames : Array[OggFlacFrame]
   /// Assembled native FLAC file (`fLaC` + metadata + frames).
   stream : Bytes
@@ -159,6 +161,24 @@ pub fn av_ogg_flac_open(data : Bytes) -> Result[OggFlacDemux, String] {
   if total_samples == 0L && frames.length() > 0 {
     total_samples = frames[frames.length() - 1].granule
   }
+  let tags : Array[(String, String)] = []
+  for block in headers {
+    if block.length() >= 4 && (block[0].to_int() & 0x7F) == 4 {
+      let size = (block[1].to_int() << 16) |
+        (block[2].to_int() << 8) |
+        block[3].to_int()
+      if 4 + size > block.length() {
+        return Err("EINVAL: truncated Ogg FLAC comment block")
+      }
+      match vorbis_comment_read(block, 4, 4 + size) {
+        Ok((t, _)) =>
+          for pair in t {
+            tags.push(pair)
+          }
+        Err(e) => return Err(e)
+      }
+    }
+  }
   let joined : Array[Byte] = []
   for b in first_stream {
     joined.push(b)
@@ -181,6 +201,7 @@ pub fn av_ogg_flac_open(data : Bytes) -> Result[OggFlacDemux, String] {
     total_samples,
     streaminfo,
     headers,
+    tags,
     frames,
     stream: Bytes::from_array(joined),
   })

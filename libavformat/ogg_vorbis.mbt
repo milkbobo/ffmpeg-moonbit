@@ -27,6 +27,8 @@ pub struct OggVorbisDemux {
   id_header : Bytes
   comment_header : Bytes
   setup_header : Bytes
+  /// User comments of the comment header (generic keys).
+  tags : Array[(String, String)]
   packets : Array[OggVorbisPacket]
   /// Last granule of the stream (total PCM samples).
   total_samples : Int64
@@ -180,6 +182,10 @@ pub fn av_ogg_vorbis_open(data : Bytes) -> Result[OggVorbisDemux, String] {
     Some(h) => h
     None => return Err("ogg: no Vorbis setup header")
   }
+  let (tags, _) = match vorbis_comment_read(comment, 7, comment.length()) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
   // Bytes 11..15 of the id header: channels and sample rate.
   let channels = id[11].to_int()
   let sample_rate = (id[12].to_uint() |
@@ -193,6 +199,7 @@ pub fn av_ogg_vorbis_open(data : Bytes) -> Result[OggVorbisDemux, String] {
     id_header: id,
     comment_header: comment,
     setup_header: setup,
+    tags,
     packets,
     total_samples,
   })
