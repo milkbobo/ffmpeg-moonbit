@@ -316,6 +316,8 @@ pub struct Mp4Movie {
   mfra : Array[MovTfra]
   /// `udta/meta/ilst` string tags as (FFmpeg metadata key, UTF-8 value).
   metadata : Array[(String, String)]
+  /// `udta/chpl` chapters (Nero style, 1/10,000,000 s units).
+  chapters : Array[Mp4Chapter]
   tracks : Array[Mp4Track]
 }
 
@@ -391,6 +393,23 @@ fn new_track() -> Mp4Track {
 }
 
 ///|
+
+///|
+/// One QuickTime/Nero chapter (`chpl` atom): start in 1/10,000,000 s units
+/// and a display title.
+pub struct Mp4Chapter {
+  start_100ns : Int64
+  title : String
+}
+
+///|
+/// Construct a chapter for `mp4_add_chapters` (struct literals are not
+/// available outside the package).
+pub fn mp4_chapter_new(start_100ns : Int64, title : String) -> Mp4Chapter {
+  { start_100ns, title, }
+}
+
+///|
 fn new_movie() -> Mp4Movie {
   {
     advanced_editlist: true,
@@ -402,6 +421,7 @@ fn new_movie() -> Mp4Movie {
     sidx_refs: [],
     mfra: [],
     metadata: [],
+    chapters: [],
     tracks: [],
   }
 }
@@ -740,6 +760,40 @@ fn mov_meta_payload(body : Bytes) -> Bytes {
 }
 
 ///|
+/// `mov_read_chpl`: Nero chapters, `version(1) flags(3)`, an unknown word when
+/// the version is non-zero, the count, then per chapter an 8-byte start in
+/// 1/10,000,000 s units, a length byte and the title.
+fn mov_parse_chpl(body : Bytes, movie : Mp4Movie) -> Unit {
+  if body.length() < 5 {
+    return
+  }
+  let version = body[0].to_int()
+  let mut pos = if version != 0 { 8 } else { 4 }
+  if pos >= body.length() {
+    return
+  }
+  let count = body[pos].to_int()
+  pos = pos + 1
+  for _i = 0; _i < count; _i = _i + 1 {
+    if pos + 9 > body.length() {
+      return
+    }
+    let mut start = 0L
+    for k = 0; k < 8; k = k + 1 {
+      start = (start << 8) | body[pos + k].to_int().to_int64()
+    }
+    let len = body[pos + 8].to_int()
+    pos = pos + 9
+    if pos + len > body.length() {
+      return
+    }
+    let title = utf8_to_string(body[pos:pos + len].to_array())
+    movie.chapters.push({ start_100ns: start, title, })
+    pos = pos + len
+  }
+}
+
+///|
 /// Walk `udta`/`meta`/`ilst` payload bytes and collect the string tags.
 /// `key` is non-empty while inside an iTunes item box, where a `data` child
 /// holds the value (`mov_read_udta_string`'s data-box branch).
@@ -752,7 +806,9 @@ fn mov_walk_metadata(payload : Bytes, movie : Mp4Movie, key : String) -> Unit {
     }
     let name = mov_meta_fourcc(payload, pos + 4)
     let body = payload[pos + 8:pos + size].to_owned()
-    if name == "data" {
+    if name == "chpl" {
+      mov_parse_chpl(body, movie)
+    } else if name == "data" {
       if key != "" && body.length() >= 8 {
         let data_type = mov_meta_u32(body, 0) & 0xFFFFFF
         let value_bytes = body[8:].to_owned()

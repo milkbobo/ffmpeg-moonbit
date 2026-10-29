@@ -62,42 +62,89 @@ fn mp4_metadata_data(value : String) -> Array[Byte] {
 }
 
 ///|
-/// `udta` box holding `meta` (a FullBox with an `mdir` handler) around
-/// `ilst`; tags without an iTunes atom are skipped.
-pub fn mp4_metadata_udta(tags : Array[(String, String)]) -> Array[Byte] {
-  let ilst_body : Array[Byte] = []
-  for pair in tags {
-    let atom = mp4_metadata_atom(pair.0)
-    if atom != "" {
-      let item = mp4_box(atom, mp4_metadata_data(pair.1))
-      for b in item {
-        ilst_body.push(b)
-      }
+/// `chpl` box (Nero chapters): version 1, an unknown zero word, the count, and
+/// per chapter an 8-byte start in 1/10,000,000 s units plus a length-prefixed
+/// title (`mov_write_chpl_tag`).
+fn mp4_chpl_box(chapters : Array[Mp4Chapter]) -> Array[Byte] {
+  let body : Array[Byte] = []
+  mp4_u32(body, 0x01000000U) // version 1, flags 0
+  mp4_u32(body, 0U) // unknown
+  let count = if chapters.length() > 255 { 255 } else { chapters.length() }
+  body.push(count.to_byte())
+  for i = 0; i < count; i = i + 1 {
+    let ch = chapters[i]
+    for k = 0; k < 8; k = k + 1 {
+      body.push(((ch.start_100ns >> (8 * (7 - k))) & 0xFFL).to_int().to_byte())
+    }
+    let title = utf8_from_string(ch.title)
+    let len = if title.length() > 255 { 255 } else { title.length() }
+    body.push(len.to_byte())
+    for j = 0; j < len; j = j + 1 {
+      body.push(title[j])
     }
   }
-  let ilst = mp4_box("ilst", ilst_body)
-  let hdlr_body : Array[Byte] = []
-  mp4_u32(hdlr_body, 0U) // pre_defined
-  mp4_tag(hdlr_body, "mdir")
-  mp4_tag(hdlr_body, "appl")
-  for _ in 0..<3 {
-    mp4_u32(hdlr_body, 0U)
-  }
-  hdlr_body.push(b'\x00') // empty handler name
-  let hdlr = mp4_full_box("hdlr", 0, 0, hdlr_body)
-  let meta = mp4_full_box("meta", 0, 0, mp4_cat([hdlr, ilst]))
-  mp4_box("udta", meta)
+  mp4_box("chpl", body)
 }
 
 ///|
-/// Replace the file-level `udta/meta/ilst` tags of a finished MP4 file with
-/// `tags` (existing `udta` boxes are dropped, like FFmpeg's `-metadata`
-/// replacement). The `moov` box must not precede any `mdat` box (the muxers
-/// here write it last, and `mp4_faststart` should run afterwards), so the
-/// existing chunk offsets stay valid; boxes after `moov` simply shift.
-pub fn mp4_add_metadata(
-  file : Bytes,
+/// `udta` box holding an iTunes `meta` (FullBox with an `mdir` handler around
+/// `ilst`) and/or a `chpl` chapter box; tags without an iTunes atom are
+/// skipped.
+fn mp4_udta_box(
   tags : Array[(String, String)],
+  chapters : Array[Mp4Chapter],
+) -> Array[Byte] {
+  let body : Array[Byte] = []
+  if tags.length() > 0 {
+    let ilst_body : Array[Byte] = []
+    for pair in tags {
+      let atom = mp4_metadata_atom(pair.0)
+      if atom != "" {
+        let item = mp4_box(atom, mp4_metadata_data(pair.1))
+        for b in item {
+          ilst_body.push(b)
+        }
+      }
+    }
+    let ilst = mp4_box("ilst", ilst_body)
+    let hdlr_body : Array[Byte] = []
+    mp4_u32(hdlr_body, 0U) // pre_defined
+    mp4_tag(hdlr_body, "mdir")
+    mp4_tag(hdlr_body, "appl")
+    for _ in 0..<3 {
+      mp4_u32(hdlr_body, 0U)
+    }
+    hdlr_body.push(b'\x00') // empty handler name
+    let hdlr = mp4_full_box("hdlr", 0, 0, hdlr_body)
+    let meta = mp4_full_box("meta", 0, 0, mp4_cat([hdlr, ilst]))
+    for b in meta {
+      body.push(b)
+    }
+  }
+  if chapters.length() > 0 {
+    for b in mp4_chpl_box(chapters) {
+      body.push(b)
+    }
+  }
+  mp4_box("udta", body)
+}
+
+///|
+/// `udta` box carrying iTunes `tags` (no chapters).
+pub fn mp4_metadata_udta(tags : Array[(String, String)]) -> Array[Byte] {
+  mp4_udta_box(tags, [])
+}
+
+///|
+/// Rewrite the file-level `udta` box of a finished MP4 with the given `tags`
+/// and `chapters`; `None` keeps the values already in the file. The `moov`
+/// box must not precede any `mdat` box (the muxers here write it last, and
+/// `mp4_faststart` should run afterwards), so the existing chunk offsets stay
+/// valid; boxes after `moov` simply shift.
+fn mp4_rewrite_udta(
+  file : Bytes,
+  tags : Array[(String, String)]?,
+  chapters : Array[Mp4Chapter]?,
 ) -> Result[Bytes, String] {
   if file.length() < 8 {
     return Err("EINVAL: truncated MP4")
@@ -132,21 +179,36 @@ pub fn mp4_add_metadata(
   }
   let body : Array[Byte] = []
   let moov_end = moov_start + moov_size
+  let existing = new_movie()
   let mut p = moov_start + 8
   while p + 8 <= moov_end {
     let size = mov_meta_u32(file, p)
     if size < 8 || p + size > moov_end {
       return Err("EINVAL: truncated moov box")
     }
-    if mov_meta_fourcc(file, p + 4) != "udta" {
+    if mov_meta_fourcc(file, p + 4) == "udta" {
+      let udta : Array[Byte] = []
+      for i = p + 8; i < p + size; i = i + 1 {
+        udta.push(file[i])
+      }
+      mov_walk_metadata(Bytes::from_array(udta), existing, "")
+    } else {
       for i = p; i < p + size; i = i + 1 {
         body.push(file[i])
       }
     }
     p = p + size
   }
-  if tags.length() > 0 {
-    for b in mp4_metadata_udta(tags) {
+  let final_tags = match tags {
+    Some(t) => t
+    None => existing.metadata
+  }
+  let final_chapters = match chapters {
+    Some(c) => c
+    None => existing.chapters
+  }
+  if final_tags.length() > 0 || final_chapters.length() > 0 {
+    for b in mp4_udta_box(final_tags, final_chapters) {
       body.push(b)
     }
   }
@@ -157,4 +219,27 @@ pub fn mp4_add_metadata(
     out.push(file[i])
   }
   Ok(Bytes::from_array(out))
+}
+
+///|
+/// Replace the file-level iTunes tags of a finished MP4 file with `tags`
+/// (existing tags are dropped, like FFmpeg's `-metadata` replacement);
+/// chapters already present are preserved.
+pub fn mp4_add_metadata(
+  file : Bytes,
+  tags : Array[(String, String)],
+) -> Result[Bytes, String] {
+  mp4_rewrite_udta(file, Some(tags), None)
+}
+
+///|
+/// Replace the `chpl` chapters of a finished MP4 file with `chapters`;
+/// existing tags are preserved. FFmpeg's reader prefers chapters from a
+/// QuickTime chapter track when the file carries one, so the rewritten
+/// `chpl` atom is authoritative for files written by the muxers here.
+pub fn mp4_add_chapters(
+  file : Bytes,
+  chapters : Array[Mp4Chapter],
+) -> Result[Bytes, String] {
+  mp4_rewrite_udta(file, None, Some(chapters))
 }

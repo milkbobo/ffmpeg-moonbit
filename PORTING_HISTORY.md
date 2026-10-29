@@ -5400,3 +5400,23 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：替换与插入两种结果经 ffprobe 读到正确章节（无重复元素
   告警），`ffmpeg -ss` 输出与源逐字节一致。
 - 全量 wasm **1227/1227**。
+
+## 193. MP4 章节：chpl 读写
+
+- 读取：`Mp4Movie.chapters`（`Mp4Chapter`：1/10,000,000 s 起点 +
+  标题），`mov_parse_chpl` 解析 udta 下的 Nero `chpl` 盒（version 1
+  时跳过未知字，逐章 8 字节起点 + 1 字节标题长 + UTF-8 标题）；
+  `mp4_chapter_new` 供包外构造。
+- 写入：`mp4_chpl_box` 按 `mov_write_chpl_tag` 生成；`udta` 构建改为
+  `meta/ilst` + `chpl` 组合，`mp4_add_metadata` / `mp4_add_chapters`
+  共用 `mp4_rewrite_udta`——传入的那一部分被替换、另一部分保留
+  （读回现有 udta 后再拼装）。
+- 回归 `mp4_chapters_realdata_test.mbt`：ffmpeg 生成的带标签 + 章节
+  （音频轨 + 章节文本轨）MP4 读回 2 章与 3 个标签；`mp4_add_chapters`
+  替换为 3 章且标签/样本数不变；`mp4_add_metadata` 改写标签且章节
+  保留。
+- 外部验证：对无章节轨的 ffmpeg MP4 添加 3 章后，ffprobe 读到
+  Intro/Middle/Outro 与正确起点，解码无错误，`-ss` 输出与源逐字节
+  一致。（带章节文本轨的文件里 FFmpeg 读取时以文本轨为准，chpl
+  仅为兼容副本。）
+- 全量 wasm **1230/1230**。
