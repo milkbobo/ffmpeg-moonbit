@@ -502,6 +502,21 @@ pub fn AacDecoder::decode_frame(
   self : AacDecoder,
   data : Bytes,
 ) -> Result[Array[AacPcm], String] {
+  match self.decode_frame_with_consumed(data) {
+    Ok((frames, _)) => Ok(frames)
+    Err(e) => Err(e)
+  }
+}
+
+///|
+/// Like `decode_frame`, but also reports the bytes belonging to this
+/// raw_data_block (`buf_consumed` in FFmpeg's AAC decoder).  A packet may
+/// contain several concatenated raw AAC frames; callers advance by the
+/// returned length (trailing zero padding is folded into the last frame).
+pub fn AacDecoder::decode_frame_with_consumed(
+  self : AacDecoder,
+  data : Bytes,
+) -> Result[(Array[AacPcm], Int32), String] {
   let random_state = self.noise.random_state
   match self.decode_raw_block(data) {
     Ok(v) => Ok(v)
@@ -516,7 +531,7 @@ pub fn AacDecoder::decode_frame(
 fn AacDecoder::decode_raw_block(
   self : AacDecoder,
   data : Bytes,
-) -> Result[Array[AacPcm], String] {
+) -> Result[(Array[AacPcm], Int32), String] {
   if self.config.chan_config < 0 ||
     self.config.chan_config > 14 ||
     (self.config.chan_config > 7 && self.config.chan_config < 11) {
@@ -852,5 +867,14 @@ fn AacDecoder::decode_raw_block(
     Err(e) => return Err(e)
   }
   self.frames_decoded = self.frames_decoded + 1
-  Ok(out)
+  let mut consumed = (gb.count() + 7) >> 3
+  if consumed > data.length() {
+    consumed = data.length()
+  }
+  let mut offset = consumed
+  while offset < data.length() && data[offset] == b' ' {
+    offset = offset + 1
+  }
+  let used = if data.length() > offset { consumed } else { data.length() }
+  Ok((out, used))
 }

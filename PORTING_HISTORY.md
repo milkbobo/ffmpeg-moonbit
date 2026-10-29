@@ -5220,3 +5220,16 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   fMP4 真实样本与参考 MD5）。外部 ffmpeg 可播放同构 HLS/DASH 清单
   （此前 H.264/AAC 已做过文件级播放验证）。
 - 全量 wasm **1203/1203**。
+
+## 183. 原始 AAC 帧切分（WAV `WAVE_FORMAT_AAC`）
+
+- `AacDecoder::decode_frame_with_consumed` 返回本帧消费的字节数，规则与
+  FFmpeg `aac_decode_frame` 一致（`(bits+7)>>3`，尾部全零时吞到包尾）。
+- 新增 `aac_raw.mbt` 的 `aac_decode_raw_stream(asc, data)`：按消费字节
+  循环解码拼接的 raw_data_block，返回每帧数据与 PCM，解决 WAV AAC 数据块
+  按 `block_align` 切分、不落在帧边界的问题。
+- 回归 `aac_raw_realdata_test.mbt`：0.2 s WAV AAC 夹具切出 10 帧 ×1024
+  样本，PCM 与 ffmpeg 9.0.2 解码最大差 1 LSB；`container_codec_matrix`
+  的 WAV AAC 用例改为整段切帧解码（10 帧）。0.1 s 夹具被确认是 ffmpeg
+  WAV AAC muxer 的截断产物（解码报 “Input buffer exhausted”），未使用。
+- 全量 wasm **1204/1204**。

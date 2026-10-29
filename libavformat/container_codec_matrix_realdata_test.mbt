@@ -206,17 +206,19 @@ test "WAV MP3 and AAC payloads demux and decode" {
   assert_eq(awav.format.sample_rate, 44100)
   assert_eq(awav.format.extradata.length(), 5)
   assert_eq(awav.packets.length(), 3)
-  // WAV raw AAC is stored in fixed-size chunks (block_align), so only the
-  // first packet starts on a frame boundary; splitting the remaining chunks
-  // needs the AAC parser, which this port does not implement.
-  let adec = @libavcodec.new_aac_decoder_from_asc(awav.format.extradata).unwrap()
-  let first = awav.packets[0]
-  let begin = first.pos.to_int()
-  let frames = adec
-    .decode_frame(aac_wav[begin:begin + first.size].to_owned())
-    .unwrap()
-  assert_eq(frames.length(), 1)
-  assert_eq(frames[0].samples.length(), 1024)
+  // WAV raw AAC chunks are not frame aligned; split by the bytes each decoded
+  // raw_data_block consumes (the same loop FFmpeg's decoder runs per packet).
+  let data_start = awav.data_offset.to_int()
+  let aac_data = aac_wav[data_start:data_start + awav.data_size.to_int()].to_owned()
+  let aac_frames = @libavcodec.aac_decode_raw_stream(
+    awav.format.extradata,
+    aac_data,
+  ).unwrap()
+  assert_eq(aac_frames.length(), 10)
+  for frame in aac_frames {
+    assert_eq(frame.pcm.length(), 1)
+    assert_eq(frame.pcm[0].samples.length(), 1024)
+  }
 }
 
 ///|
