@@ -389,3 +389,47 @@ test "A/V Matroska: H.264 + E-AC-3 tracks round-trip" {
   }
   assert_eq(acount, 4)
 }
+
+///|
+test "A/V Matroska: H.264 + AC-3 + SRT subtitles" {
+  let avcc = @libavutil.av_base64_decode(av_h264_avcc_b64, 1024).unwrap()
+  let video = av_split_h264()
+  let audio = av_split_ac3()
+  let mux = @libavformat.mkv_av_ac3_muxer_new(64, 48, avcc, 48000, 1).unwrap()
+  for i, p in video {
+    mux.write_video(p, (i * 100).to_int64(), 100, keyframe=i == 0).unwrap()
+  }
+  for i, p in audio {
+    mux.write_audio(p, (i * 32).to_int64(), 32).unwrap()
+  }
+  mux.write_subtitle(50L, 150L, "First cue").unwrap()
+  mux.write_subtitle(200L, 400L, "Second cue").unwrap()
+  let mkv = @libavformat.av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.tracks.length(), 3)
+  assert_eq(mkv.tracks[2].track_type, 17UL)
+  assert_eq(mkv.tracks[2].codec_id.unwrap(), "S_TEXT/UTF8")
+  let subs : Array[@libavformat.MkvPacket] = []
+  let mut vcount = 0
+  let mut acount = 0
+  for packet in mkv.packets {
+    if packet.stream_index == 0 {
+      assert_eq(packet.data, video[vcount])
+      vcount = vcount + 1
+    } else if packet.stream_index == 1 {
+      assert_eq(packet.data, audio[acount])
+      acount = acount + 1
+    } else {
+      subs.push(packet)
+    }
+  }
+  assert_eq(vcount, 5)
+  assert_eq(acount, 4)
+  assert_eq(subs.length(), 2)
+  assert_eq(subs[0].data, b"First cue")
+  assert_eq(subs[0].pts, 50L)
+  assert_eq(subs[0].duration, 100UL)
+  assert_eq(subs[1].data, b"Second cue")
+  assert_eq(subs[1].pts, 200L)
+  assert_eq(subs[1].duration, 200UL)
+  av_check_video(video)
+}

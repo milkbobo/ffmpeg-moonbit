@@ -1,6 +1,8 @@
 ///|
-/// Minimal Matroska writer with one H.264 video track and one AAC audio track.
-/// Packets are interleaved by millisecond timestamp in a single Cluster.
+/// Minimal Matroska writer with one H.264 video track, one AAC audio track and
+/// an optional `S_TEXT/UTF8` subtitle track. Packets are interleaved by
+/// millisecond timestamp in a single Cluster (16-bit relative timecodes, so all
+/// timestamps must stay below 32768 ms).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -24,6 +26,7 @@ pub struct MkvAvMuxer {
   audio_codec_id : String
   audio_private : Bytes
   events : Array[MkvAvEvent]
+  cues : Array[MkvSubtitleCue]
 }
 
 ///|
@@ -53,6 +56,7 @@ pub fn mkv_av_muxer_new(
     audio_codec_id: audio_codec,
     audio_private,
     events: [],
+    cues: [],
   })
 }
 
@@ -97,9 +101,58 @@ fn mkv_av_aac_private(mux : MkvAvMuxer) -> Bytes {
 }
 
 ///|
-fn mkv_av_sorted(events : Array[MkvAvEvent]) -> Array[MkvAvEvent] {
-  let out = events.copy()
-  for i in 1..<out.length() {
+/// Add an `S_TEXT/UTF8` cue; the subtitle track is written only when at least
+/// one cue exists.
+pub fn MkvAvMuxer::write_subtitle(
+  self : MkvAvMuxer,
+  start_ms : Int64,
+  end_ms : Int64,
+  text : String,
+) -> Result[Unit, String] {
+  if start_ms < 0L || end_ms < start_ms || text == "" {
+    return Err("EINVAL: invalid subtitle cue")
+  }
+  self.cues.push(({ start_ms, end_ms, text, } : MkvSubtitleCue))
+  Ok(())
+}
+
+///|
+/// One cluster block: a SimpleBlock for video/audio, a BlockGroup for
+/// subtitles (BlockDuration carries the cue length).
+priv struct MkvAvBlock {
+  pts_ms : Int64
+  track : Int32
+  data : Bytes
+  duration_ms : Int64
+  keyframe : Bool
+  group : Bool
+}
+
+///|
+/// All blocks of the single Cluster, stably ordered by timestamp.
+fn mkv_av_blocks(mux : MkvAvMuxer) -> Array[MkvAvBlock] {
+  let out : Array[MkvAvBlock] = []
+  for e in mux.events {
+    out.push({
+      pts_ms: e.pts_ms,
+      track: e.track,
+      data: e.data,
+      duration_ms: e.duration_ms.to_int64(),
+      keyframe: e.keyframe,
+      group: false,
+    })
+  }
+  for cue in mkv_subtitle_sorted(mux.cues) {
+    out.push({
+      pts_ms: cue.start_ms,
+      track: 3,
+      data: utf8_from_string(cue.text),
+      duration_ms: cue.end_ms - cue.start_ms,
+      keyframe: false,
+      group: true,
+    })
+  }
+  for i = 1; i < out.length(); i = i + 1 {
     let item = out[i]
     let mut j = i
     while j > 0 && out[j - 1].pts_ms > item.pts_ms {
@@ -115,12 +168,14 @@ fn mkv_av_sorted(events : Array[MkvAvEvent]) -> Array[MkvAvEvent] {
 fn MkvAvMuxer::cluster(self : MkvAvMuxer) -> Array[Byte] {
   let cluster : Array[Byte] = []
   webm_uint_elem(cluster, 0xE7, 1, 0UL)
-  for e in mkv_av_sorted(self.events) {
+  for e in mkv_av_blocks(self) {
     let block : Array[Byte] = [
       if e.track == 1 {
         b'\x81'
-      } else {
+      } else if e.track == 2 {
         b'\x82'
+      } else {
+        b'\x83'
       },
       ((e.pts_ms >> 8) & 0xFF).to_int().to_byte(),
       (e.pts_ms & 0xFF).to_int().to_byte(),
@@ -133,8 +188,19 @@ fn MkvAvMuxer::cluster(self : MkvAvMuxer) -> Array[Byte] {
     for b in e.data {
       block.push(b)
     }
-    webm_elem(cluster, 0xA3, 1, block)
+    if e.group {
+      let group : Array[Byte] = []
+      webm_elem(group, 0xA1, 1, block) // Block
+      webm_uint_elem(group, 0x9B, 1, e.duration_ms.reinterpret_as_uint64())
+      webm_elem(cluster, 0xA0, 1, group) // BlockGroup
+    } else {
+      webm_elem(cluster, 0xA3, 1, block)
+    }
   }
+  // Keep the last child a leaf so a level ending exactly at the Cluster end
+  // does not swallow a following Cluster (same workaround as the subtitle
+  // writer).
+  webm_elem(cluster, 0xEC, 1, [])
   cluster
 }
 
@@ -160,6 +226,11 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
     let end = e.pts_ms + e.duration_ms.to_int64()
     if end > duration {
       duration = end
+    }
+  }
+  for cue in self.cues {
+    if cue.end_ms > duration {
+      duration = cue.end_ms
     }
   }
   webm_float_elem(info, 0x4489, 2, duration.to_double())
@@ -211,6 +282,16 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
   let tracks : Array[Byte] = []
   webm_elem(tracks, 0xAE, 1, vtrack)
   webm_elem(tracks, 0xAE, 1, atrack)
+  if self.cues.length() > 0 {
+    let strack : Array[Byte] = []
+    webm_uint_elem(strack, 0xD7, 1, 3UL) // TrackNumber
+    webm_uint_elem(strack, 0x73C5, 2, 3UL) // TrackUID
+    webm_uint_elem(strack, 0x83, 1, 17UL) // TrackType: subtitle
+    webm_uint_elem(strack, 0x9C, 1, 0UL) // FlagLacing
+    webm_string_elem(strack, 0x22B59C, 3, "und") // Language
+    webm_string_elem(strack, 0x86, 1, "S_TEXT/UTF8")
+    webm_elem(tracks, 0xAE, 1, strack)
+  }
   webm_elem(tracks, 0xEC, 1, [])
 
   let segment_body : Array[Byte] = []

@@ -5468,3 +5468,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：三组 32-bit 文件经 ffmpeg 9.0.2 解码 s32le 与源 PCM
   逐字节一致，ffprobe 报告 flac/s32/32-bit。
 - 全量 wasm **1239/1239**。
+
+## 197. Matroska A/V 写入器：字幕轨
+
+- `MkvAvMuxer`（H.264 + AAC/AC-3/E-AC-3）新增
+  `write_subtitle(start_ms, end_ms, text)`：有 cue 时追加一条
+  `S_TEXT/UTF8` 轨（TrackType 17、FlagLacing 0、und），簇内按时间戳
+  把字幕 BlockGroup（Block + BlockDuration）与音视频 SimpleBlock
+  合并排序，簇尾补 Void 规避层结束问题；Info Duration 计入字幕结尾。
+- 回归：白盒夹具验证 3 条轨、字幕包时间/时长/文本与错误拒绝；
+  真实 H.264 + AC-3 样本加两条字幕，读回视频/音频包与无字幕版本
+  逐字节相同，字幕包正确。
+- 外部验证：ffprobe 识别 h264/ac3/subrip 三轨，ffmpeg 提取 SRT 与
+  源逐行一致，视频 framemd5 与音频 PCM MD5 与无字幕版本相同。
+- 全量 wasm **1241/1241**。

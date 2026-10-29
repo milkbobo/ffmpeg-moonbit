@@ -122,3 +122,36 @@ test "mkv muxer: real H.264 + AAC tracks decode round-trip" {
     }
   }
 }
+
+///|
+test "mkv muxer: subtitle track joins A/V blocks" {
+  let avcc = @libavutil.av_base64_decode(mkv_av_avcc_b64, 1024).unwrap()
+  let mux = mkv_av_muxer_new(64, 48, avcc, 48000).unwrap()
+  mux.write_video(b"V0", 0L, 33, keyframe=true).unwrap()
+  mux.write_video(b"V1", 33L, 33).unwrap()
+  mux.write_audio(b"A0", 0L, 21).unwrap()
+  mux.write_subtitle(10L, 60L, "Hi").unwrap()
+  mux.write_subtitle(5L, 8L, "Early").unwrap()
+  let bytes = mux.finish()
+  let mkv = av_matroska_open(bytes).unwrap()
+  assert_eq(mkv.tracks.length(), 3)
+  assert_eq(mkv.tracks[2].track_type, 17UL)
+  assert_eq(mkv.tracks[2].codec_id.unwrap(), "S_TEXT/UTF8")
+  assert_eq(mkv.packets.length(), 5)
+  // Timestamp order: V0(0), A0(0), Early(5), Hi(10), V1(33).
+  let sub0 = mkv.packets[2]
+  assert_eq(sub0.stream_index, 2)
+  assert_eq(sub0.data, b"Early")
+  assert_eq(sub0.pts, 5L)
+  assert_eq(sub0.duration, 3UL)
+  let sub1 = mkv.packets[3]
+  assert_eq(sub1.stream_index, 2)
+  assert_eq(sub1.data, b"Hi")
+  assert_eq(sub1.pts, 10L)
+  assert_eq(sub1.duration, 50UL)
+  assert_eq(mkv.packets[4].data, b"V1")
+  match mux.write_subtitle(100L, 50L, "bad") {
+    Ok(_) => fail("expected end before start to be rejected")
+    Err(_) => ()
+  }
+}
