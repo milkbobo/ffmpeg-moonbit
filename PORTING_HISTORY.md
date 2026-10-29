@@ -5337,3 +5337,24 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   24-bit stereo 编码成 MP4 后经 ffmpeg 9.0.2 解码，PCM 与源逐字节
   一致（`f3acc310…`、`ef9ca189…`、`3c32cd35…`、`52bc0b75…`）。
 - 全量 wasm **1217/1217**。
+
+## 190. MP4 元数据：udta/meta/ilst 读写
+
+- 解复用：`Mp4Movie` 新增 `metadata : Array[(String, String)]`，
+  按 `mov_read_udta_string` 的映射解析 `udta/meta/ilst` 的
+  `data` 子盒（UTF-8/UTF-16BE，index 表覆盖 title/artist/album/
+  album_artist/composer/date/encoder/comment/genre/copyright/
+  grouping/lyrics/description/synopsis/show/episode_id/network/
+  keywords 等）；`meta` 的 FullBox 版本/标志字按是否紧跟 `hdlr`
+  判断。
+- 写入：新增 `mp4_metadata_udta`（`mov_write_ilst_tag` 的 iTunes
+  映射 + `mdir` handler）与 `mp4_add_metadata(file, tags)`，对已完成
+  的 MP4 重建 moov：删除旧 `udta`（等价 ffmpeg `-metadata` 替换语义）
+  并追加新 udta；要求 moov 不在 mdat 之前（本仓库 muxer 均如此，
+  faststart 在之后调用），chunk 偏移因此保持有效。
+- 回归 `mp4_metadata_realdata_test.mbt`：ffmpeg 9.0.2 生成的带标签
+  AAC MP4（3261 字节）读回 7 个标签；`mp4_add_metadata` 改写后
+  旧标签被替换、AAC 轨样本数不变；无 moov 文件拒绝。
+- 外部验证：改写后的文件经 ffprobe 读到 title/artist/copyright/
+  genre，音频解码无错误。
+- 全量 wasm **1220/1220**。

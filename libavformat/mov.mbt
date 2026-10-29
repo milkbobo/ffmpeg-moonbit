@@ -314,6 +314,8 @@ pub struct Mp4Movie {
   sidx_refs : Array[MovSidxRef]
   /// `mfra`/`tfra` random-access tables when the file ends with an `mfra`. */
   mfra : Array[MovTfra]
+  /// `udta/meta/ilst` string tags as (FFmpeg metadata key, UTF-8 value).
+  metadata : Array[(String, String)]
   tracks : Array[Mp4Track]
 }
 
@@ -399,6 +401,7 @@ fn new_movie() -> Mp4Movie {
     compatible_brands: "",
     sidx_refs: [],
     mfra: [],
+    metadata: [],
     tracks: [],
   }
 }
@@ -630,6 +633,155 @@ priv struct MovState {
 }
 
 ///|
+/// Big-endian `u32` at `pos` (metadata box sizes; valid only after a bounds
+/// check).
+fn mov_meta_u32(data : Bytes, pos : Int32) -> Int32 {
+  (data[pos].to_int() << 24) |
+  (data[pos + 1].to_int() << 16) |
+  (data[pos + 2].to_int() << 8) |
+  data[pos + 3].to_int()
+}
+
+///|
+/// FourCC at `pos` as a string of its four byte values.
+fn mov_meta_fourcc(data : Bytes, pos : Int32) -> String {
+  let chars : Array[Char] = []
+  for i = 0; i < 4; i = i + 1 {
+    chars.push(data[pos + i].to_char())
+  }
+  String::from_array(chars[:])
+}
+
+///|
+/// FFmpeg's reader-side metadata key for an iTunes atom
+/// (`mov_read_udta_string`); empty for atoms it does not map.
+fn mov_metadata_key(name : String) -> String {
+  if name == tag('\u{00A9}', 'n', 'a', 'm') {
+    "title"
+  } else if name == tag('\u{00A9}', 'A', 'R', 'T') {
+    "artist"
+  } else if name == "aART" {
+    "album_artist"
+  } else if name == tag('\u{00A9}', 'w', 'r', 't') {
+    "composer"
+  } else if name == tag('\u{00A9}', 'a', 'l', 'b') {
+    "album"
+  } else if name == tag('\u{00A9}', 'd', 'a', 'y') {
+    "date"
+  } else if name == tag('\u{00A9}', 't', 'o', 'o') ||
+    name == tag('\u{00A9}', 's', 'w', 'r') {
+    "encoder"
+  } else if name == tag('\u{00A9}', 'c', 'm', 't') {
+    "comment"
+  } else if name == tag('\u{00A9}', 'g', 'e', 'n') {
+    "genre"
+  } else if name == "cprt" {
+    "copyright"
+  } else if name == tag('\u{00A9}', 'g', 'r', 'p') {
+    "grouping"
+  } else if name == tag('\u{00A9}', 'l', 'y', 'r') {
+    "lyrics"
+  } else if name == tag('\u{00A9}', 'o', 'p', 'e') {
+    "original_artist"
+  } else if name == tag('\u{00A9}', 'p', 'r', 'd') {
+    "producer"
+  } else if name == tag('\u{00A9}', 's', 'r', 'c') {
+    "original_source"
+  } else if name == "desc" {
+    "description"
+  } else if name == "ldes" {
+    "synopsis"
+  } else if name == "tvsh" {
+    "show"
+  } else if name == "tven" {
+    "episode_id"
+  } else if name == "tvnn" {
+    "network"
+  } else if name == "keyw" {
+    "keywords"
+  } else if name == "catg" {
+    "category"
+  } else if name == "purd" {
+    "purchase_date"
+  } else if name == "name" {
+    "name"
+  } else if name == "manu" {
+    "make"
+  } else if name == "modl" {
+    "model"
+  } else {
+    ""
+  }
+}
+
+///|
+/// Decode UTF-16BE text (iTunes `data` type 2).
+fn mov_meta_utf16be(data : Bytes) -> String {
+  let chars : Array[Char] = []
+  let mut i = 0
+  while i + 1 < data.length() {
+    let v = (data[i].to_int() << 8) | data[i + 1].to_int()
+    chars.push(v.unsafe_to_char())
+    i = i + 2
+  }
+  String::from_array(chars[:])
+}
+
+///|
+/// Body of a `meta` box: a FullBox version/flags word precedes the `hdlr`
+/// box in ISO files, while QuickTime omits it (`mov_read_meta` scans for
+/// `hdlr` either way).
+fn mov_meta_payload(body : Bytes) -> Bytes {
+  if body.length() >= 8 && mov_meta_fourcc(body, 4) != "hdlr" {
+    body[4:].to_owned()
+  } else {
+    body
+  }
+}
+
+///|
+/// Walk `udta`/`meta`/`ilst` payload bytes and collect the string tags.
+/// `key` is non-empty while inside an iTunes item box, where a `data` child
+/// holds the value (`mov_read_udta_string`'s data-box branch).
+fn mov_walk_metadata(payload : Bytes, movie : Mp4Movie, key : String) -> Unit {
+  let mut pos = 0
+  while pos + 8 <= payload.length() {
+    let size = mov_meta_u32(payload, pos)
+    if size < 8 || pos + size > payload.length() {
+      return
+    }
+    let name = mov_meta_fourcc(payload, pos + 4)
+    let body = payload[pos + 8:pos + size].to_owned()
+    if name == "data" {
+      if key != "" && body.length() >= 8 {
+        let data_type = mov_meta_u32(body, 0) & 0xFFFFFF
+        let value_bytes = body[8:].to_owned()
+        let value = if data_type == 2 {
+          mov_meta_utf16be(value_bytes)
+        } else if data_type == 0 || data_type == 1 {
+          utf8_to_string(value_bytes.to_array())
+        } else {
+          ""
+        }
+        if value != "" {
+          movie.metadata.push((key, value))
+        }
+      }
+    } else if name == "udta" || name == "ilst" {
+      mov_walk_metadata(body, movie, "")
+    } else if name == "meta" {
+      mov_walk_metadata(mov_meta_payload(body), movie, "")
+    } else if key == "" {
+      let mapped = mov_metadata_key(name)
+      if mapped != "" {
+        mov_walk_metadata(body, movie, mapped)
+      }
+    }
+    pos = pos + size
+  }
+}
+
+///|
 /// Dispatch one box to its parser, mirroring the `mov_default_parse_table`
 /// lookup in `mov_read_default`. Unknown boxes are skipped, like the C
 /// fall-through that skips unregistered leaf atoms.
@@ -720,6 +872,22 @@ fn parse_box(
     parse_vpcc(st, r, size)
   } else if kind == "alac" {
     parse_alac(st, r, size)
+  } else if kind == "udta" || kind == "ilst" {
+    match r.avio_read(size.to_int()) {
+      Ok(body) => mov_walk_metadata(body, st.movie, "")
+      Err(_) => ()
+    }
+  } else if kind == "meta" {
+    match r.avio_read(size.to_int()) {
+      Ok(body) => mov_walk_metadata(mov_meta_payload(body), st.movie, "")
+      Err(_) => ()
+    }
+  } else if mov_metadata_key(kind) != "" {
+    // iTunes item box: its `data` child carries the value.
+    match r.avio_read(size.to_int()) {
+      Ok(body) => mov_walk_metadata(body, st.movie, mov_metadata_key(kind))
+      Err(_) => ()
+    }
   } else if kind == "avcC" ||
     kind == "hvcC" ||
     kind == "av1C" ||
