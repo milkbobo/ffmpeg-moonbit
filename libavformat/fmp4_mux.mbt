@@ -512,6 +512,59 @@ fn fmp4_payload(samples : Array[Fmp4Sample]) -> Array[Byte] {
 }
 
 ///|
+/// Initialization segment for an AC-3 track (`ac-3`/`dac3`).  `first_frame`
+/// supplies the sample rate, channel count and `dac3` fields; media samples
+/// are whole AC-3 frames with 1536-sample durations.
+pub fn fmp4_ac3_init_segment(
+  first_frame : Bytes,
+  track_id~ : Int32 = 1,
+) -> Result[Bytes, String] {
+  let hdr = match @libavcodec.ac3_parse_header(first_frame) {
+    Ok(h) => h
+    Err(e) => return Err("EINVAL: \{e}")
+  }
+  if hdr.bitstream_id > 10 || track_id <= 0 {
+    return Err("EINVAL: invalid AC-3 fMP4 stream parameters")
+  }
+  Ok(
+    fmp4_init_segment(
+      track_id,
+      hdr.sample_rate,
+      "soun",
+      mp4_ac3_entry(hdr),
+      0,
+      0,
+    ),
+  )
+}
+
+///|
+/// Initialization segment for an E-AC-3 track (`ec-3`/`dec3`).  Media
+/// samples are independent E-AC-3 frames (one substream).
+pub fn fmp4_eac3_init_segment(
+  first_frame : Bytes,
+  track_id~ : Int32 = 1,
+) -> Result[Bytes, String] {
+  let hdr = match @libavcodec.ac3_parse_header(first_frame) {
+    Ok(h) => h
+    Err(e) => return Err("EINVAL: \{e}")
+  }
+  if hdr.bitstream_id <= 10 || hdr.frame_type == 1 || track_id <= 0 {
+    return Err("EINVAL: invalid E-AC-3 fMP4 stream parameters")
+  }
+  Ok(
+    fmp4_init_segment(
+      track_id,
+      hdr.sample_rate,
+      "soun",
+      mp4_eac3_entry(hdr),
+      0,
+      0,
+    ),
+  )
+}
+
+///|
 /// Build one media segment (`styp`+`moof`+`mdat`).  `base_decode_time` is the
 /// decode time of the first sample in the track timescale; `sequence_number`
 /// goes into `mfhd`.

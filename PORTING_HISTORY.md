@@ -5045,3 +5045,15 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   （`0b4d53cb…`、`596feb82…`）。
 
 全量 wasm **1174/1174**。
+
+## 174. AC-3/E-AC-3 fMP4 分片
+
+- `fmp4_mux.mbt` 新增 `fmp4_ac3_init_segment`/`fmp4_eac3_init_segment`：
+  由首帧头生成 `ac-3`+`dac3` / `ec-3`+`dec3` 初始化段，媒体 timescale
+  取采样率；媒体段沿用通用 `fmp4_media_segment`（整帧 1536 样本）。
+- 回归 `fmp4_ac3_realdata_wbtest.mbt`：真实 AC-3 单声道与 E-AC-3 立体声
+  各写 init + 两段媒体段（第二段 `tfdt`=3072），`av_mov_open` 回读
+  codec/采样率/时长/负载一致；外部 ffmpeg 9.0.2 解码两个分片序列与
+  裸流参考 PCM MD5 完全相同。
+
+全量 wasm **1175/1175**。
