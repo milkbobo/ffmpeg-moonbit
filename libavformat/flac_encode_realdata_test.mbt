@@ -177,3 +177,62 @@ test "flac encoder: invalid parameters are rejected" {
   flacenc_expect_reject(@libavcodec.flac_encode([0, 1], 1, 44100, 32))
   flacenc_expect_reject(@libavcodec.flac_encode([0, 1, 2], 2, 44100, 16))
 }
+
+///|
+/// Deterministic AR(2) signal: a resonant predictor with pseudo-random
+/// excitation. Fixed predictors cannot match the adaptive coefficients, so a
+/// working LPC search must pick it and the residual must stay small.
+fn flacenc_ar2(n : Int32, seed : Int32, amp : Double) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(n, 0)
+  let mut s0 = 0.0
+  let mut s1 = 0.0
+  let mut state = seed
+  for i = 0; i < n; i = i + 1 {
+    state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+    let noise = ((state % 2001).to_double() - 1000.0) * amp / 1000.0
+    let v = 1.62 * s0 - 0.81 * s1 + noise
+    s1 = s0
+    s0 = v
+    out[i] = v.to_int()
+  }
+  out
+}
+
+///|
+test "flac encoder: LPC subframe is chosen for a resonant signal" {
+  let n = 4096
+  let samples = flacenc_ar2(n, 7, 4000.0)
+  let enc = @libavcodec.flac_encode(samples, 1, 44100, 16).unwrap()
+  // Frame 0 of a 4096-sample block: 6-byte header (no extra block-size
+  // bytes), then the subframe header. LPC types are 32 | (order - 1).
+  let sub_type = (enc.frames[0][6].to_int() >> 1) & 0x3F
+  assert_true(sub_type >= 32, msg="expected an LPC subframe")
+  assert_true(sub_type <= 43, msg="LPC order exceeds the search range")
+  let dec = @libavcodec.ff_flac_decode(enc.file()).unwrap()
+  assert_eq(dec.channels, 1)
+  assert_eq(dec.bits, 16)
+  assert_eq(dec.samples.length(), n)
+  for i = 0; i < n; i = i + 1 {
+    assert_eq(dec.samples[i], samples[i])
+  }
+}
+
+///|
+test "flac encoder: 24-bit stereo LPC round-trips through decorrelation" {
+  let n = 3000
+  let left = flacenc_ar2(n, 11, 500000.0)
+  let right = flacenc_ar2(n, 13, 400000.0)
+  let samples : Array[Int32] = []
+  for i = 0; i < n; i = i + 1 {
+    samples.push(left[i])
+    samples.push(right[i])
+  }
+  let enc = @libavcodec.flac_encode(samples, 2, 48000, 24).unwrap()
+  let dec = @libavcodec.ff_flac_decode(enc.file()).unwrap()
+  assert_eq(dec.channels, 2)
+  assert_eq(dec.bits, 24)
+  assert_eq(dec.samples.length(), samples.length())
+  for i = 0; i < samples.length(); i = i + 1 {
+    assert_eq(dec.samples[i] >> 8, samples[i])
+  }
+}

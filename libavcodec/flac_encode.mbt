@@ -1,11 +1,13 @@
 ///|
-/// Minimal FLAC encoder: fixed predictors (orders 0..4), Rice-coded residuals
-/// with partition order 0, optional Rice2 for >16-bit samples, independent
-/// channels, and a complete `fLaC` stream (STREAMINFO + frames + MD5).
+/// Minimal FLAC encoder: constant/verbatim/fixed/LPC subframes, Rice-coded
+/// residuals with partition order 0, optional Rice2 for >16-bit samples,
+/// stereo decorrelation, and a complete `fLaC` stream (STREAMINFO + frames +
+/// MD5).
 ///
 /// The layout follows FFmpeg 9.0.2 `flacenc.c` (frame header, subframe types,
-/// `set_sr_golomb_flac`, CRC-8/CRC-16 and STREAMINFO), but the predictor choice
-/// is limited to fixed orders and a single Rice partition.
+/// `set_sr_golomb_flac`, CRC-8/CRC-16 and STREAMINFO) and `lpc.c` (Welch
+/// window, Levinson-Durbin recursion, 15-bit error-feedback coefficient
+/// quantization), but the predictor choice uses a single Rice partition.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -201,13 +203,148 @@ fn flac_fixed_residual(
 }
 
 ///|
+/// Welch-windowed autocorrelation of `samples[0..n]`
+/// (`lpc_apply_welch_window_c` + `lpc_compute_autocorr_c`). The `+1.0` seeds
+/// match the C so that a silent block still yields a solvable system.
+fn flac_lpc_autocorr(
+  samples : Array[Int32],
+  n : Int32,
+  lag : Int32,
+) -> Array[Double] {
+  let windowed : Array[Double] = Array::make(n, 0.0)
+  let c = 2.0 / (n - 1).to_double()
+  for i = 0; i < n; i = i + 1 {
+    let t = c * i.to_double() - 1.0
+    windowed[i] = samples[i].to_double() * (1.0 - t * t)
+  }
+  let autoc : Array[Double] = Array::make(lag + 1, 1.0)
+  for j = 0; j <= lag; j = j + 1 {
+    let mut sum = 1.0
+    for i = j; i < n; i = i + 1 {
+      sum = sum + windowed[i] * windowed[i - j]
+    }
+    autoc[j] = sum
+  }
+  autoc
+}
+
+///|
+/// Levinson-Durbin recursion (`compute_lpc_coefs` with `LPC_TYPE` = double).
+/// Returns the predictor coefficients of orders 1..max_order in the decoder's
+/// `sum_j coef[j] * x[i-1-j]` order.
+fn flac_lpc_levinson(
+  autoc : Array[Double],
+  max_order : Int32,
+) -> Array[Array[Double]] {
+  let orders : Array[Array[Double]] = []
+  let mut err = autoc[0]
+  let mut last : Array[Double] = []
+  for i = 0; i < max_order; i = i + 1 {
+    let mut r = -autoc[i + 1]
+    for j = 0; j < i; j = j + 1 {
+      r = r - last[j] * autoc[i - j]
+    }
+    if err != 0.0 {
+      r = r / err
+    }
+    let cur : Array[Double] = Array::make(i + 1, 0.0)
+    for j = 0; j < i; j = j + 1 {
+      cur[j] = last[j] + r * last[i - 1 - j]
+    }
+    cur[i] = r
+    err = err * (1.0 - r * r)
+    orders.push(cur)
+    last = cur
+  }
+  orders
+}
+
+///|
+/// `quantize_lpc_coefs`: 15-bit coefficients with an error-feedback quantizer
+/// and a level shift of at most 15 bits.
+fn flac_quantize_lpc(
+  coefs : Array[Double],
+  order : Int32,
+  precision : Int32,
+  max_shift : Int32,
+) -> (Array[Int32], Int32) {
+  let qmax = (1 << (precision - 1)) - 1
+  let mut cmax = 0.0
+  for i = 0; i < order; i = i + 1 {
+    let a = if coefs[i] < 0.0 { -coefs[i] } else { coefs[i] }
+    if a > cmax {
+      cmax = a
+    }
+  }
+  if cmax * (1 << max_shift).to_double() < 1.0 {
+    return (Array::make(order, 0), 0)
+  }
+  let mut sh = max_shift
+  while sh > 0 && cmax * (1 << sh).to_double() > qmax.to_double() {
+    sh = sh - 1
+  }
+  // Negative shifts do not exist in the bitstream: scale the coefficients
+  // down instead so `shift` stays 0.
+  let scale = if sh == 0 && cmax > qmax.to_double() {
+    qmax.to_double() / cmax
+  } else {
+    1.0
+  }
+  let out : Array[Int32] = Array::make(order, 0)
+  let unit = (1 << sh).to_double()
+  let mut error = 0.0
+  for i = 0; i < order; i = i + 1 {
+    error = error - coefs[i] * scale * unit
+    let mut q = @math.floor(error + 0.5).to_int()
+    if q > qmax {
+      q = qmax
+    } else if q < -qmax {
+      q = -qmax
+    }
+    out[i] = q
+    error = error - q.to_double()
+  }
+  (out, sh)
+}
+
+///|
+/// LPC residual `x[i] - (sum_j coef[j] * x[i-1-j] >> shift)`; `None` when a
+/// residual falls outside the 32-bit range the bitstream can carry.
+fn flac_lpc_residual(
+  samples : Array[Int32],
+  n : Int32,
+  order : Int32,
+  coefs : Array[Int32],
+  shift : Int32,
+) -> Array[Int32]? {
+  let res : Array[Int32] = Array::make(n, 0)
+  for i = 0; i < order; i = i + 1 {
+    res[i] = samples[i]
+  }
+  for i = order; i < n; i = i + 1 {
+    let mut sum = 0L
+    for j = 0; j < order; j = j + 1 {
+      sum = sum + coefs[j].to_int64() * samples[i - 1 - j].to_int64()
+    }
+    let r = samples[i].to_int64() - (sum >> shift)
+    if r < -2147483648L || r > 2147483647L {
+      return None
+    }
+    res[i] = r.to_int()
+  }
+  Some(res)
+}
+
+///|
 /// One encoded subframe choice.
 priv struct FlacSubframePlan {
-  kind : Int32 // 0 constant, 1 verbatim, 2 fixed
+  kind : Int32 // 0 constant, 1 verbatim, 2 fixed, 3 LPC
   order : Int32
   rice_k : Int32
   residual : Array[Int32]
   wasted : Int32
+  lpc_shift : Int32
+  lpc_coeffs : Array[Int32]
   bits : Int64
 }
 
@@ -264,6 +401,8 @@ fn flac_plan_subframe(
       rice_k: 0,
       residual: [],
       wasted,
+      lpc_shift: 0,
+      lpc_coeffs: [],
       bits: 8L + eff_bits.to_int64() + wasted_cost,
     }
   }
@@ -277,6 +416,8 @@ fn flac_plan_subframe(
     rice_k: 0,
     residual: [],
     wasted,
+    lpc_shift: 0,
+    lpc_coeffs: [],
     bits: verbatim_bits,
   }
   let max_order = if n - 1 < 4 { n - 1 } else { 4 }
@@ -291,7 +432,53 @@ fn flac_plan_subframe(
       wasted_cost
     let total = header + rice_bits
     if total < best.bits {
-      best = { kind: 2, order, rice_k: k, residual, wasted, bits: total, }
+      best = {
+        kind: 2,
+        order,
+        rice_k: k,
+        residual,
+        wasted,
+        lpc_shift: 0,
+        lpc_coeffs: [],
+        bits: total,
+      }
+    }
+  }
+  // LPC: Levinson-Durbin coefficients quantized to 15 bits. Every order is
+  // costed exactly (subframe header + warm-ups + coefficients + Rice), so LPC
+  // only wins when it beats the fixed predictors on the real bit count.
+  if n >= 32 {
+    let max_lpc = if n - 1 < 12 { n - 1 } else { 12 }
+    let autoc = flac_lpc_autocorr(work, n, max_lpc)
+    let orders = flac_lpc_levinson(autoc, max_lpc)
+    for order = 1; order <= max_lpc; order = order + 1 {
+      let (coefs, shift) = flac_quantize_lpc(orders[order - 1], order, 15, 15)
+      match flac_lpc_residual(work, n, order, coefs, shift) {
+        None => ()
+        Some(residual) => {
+          let (k, rice_bits) = flac_choose_rice(residual, order, max_k)
+          let header = 8L +
+            (order * eff_bits).to_int64() +
+            2L +
+            param_bits.to_int64() +
+            wasted_cost +
+            9L +
+            15L * order.to_int64()
+          let total = header + rice_bits
+          if total < best.bits {
+            best = {
+              kind: 3,
+              order,
+              rice_k: k,
+              residual,
+              wasted,
+              lpc_shift: shift,
+              lpc_coeffs: coefs,
+              bits: total,
+            }
+          }
+        }
+      }
     }
   }
   best
@@ -312,8 +499,10 @@ fn flac_write_subframe(
     0U
   } else if plan.kind == 1 {
     1U
-  } else {
+  } else if plan.kind == 2 {
     (8U | plan.order.reinterpret_as_uint()) & 0x3FU
+  } else {
+    (32U | (plan.order - 1).reinterpret_as_uint()) & 0x3FU
   }
   w.write(0U, 1)
   w.write(type_code, 6)
@@ -331,6 +520,14 @@ fn flac_write_subframe(
   } else {
     for i = 0; i < plan.order; i = i + 1 {
       w.write_signed(samples[i] >> shift, eff_bits)
+    }
+    if plan.kind == 3 {
+      // coefficient precision - 1 (15 bits) and the signed quantizer shift
+      w.write(14U, 4)
+      w.write_signed(plan.lpc_shift, 5)
+      for i = 0; i < plan.order; i = i + 1 {
+        w.write_signed(plan.lpc_coeffs[i], 15)
+      }
     }
     let rice2 = eff_bits > 16
     // 2-bit coding mode (0 = Rice, 1 = Rice2), partition order = 0

@@ -5283,3 +5283,22 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   通道码 8..10），输出 1646 字节且 ffmpeg 解码 PCM MD5
   `ef9ca189…` 与源 WAV 一致。
 - 全量 wasm **1212/1212**。
+
+## 187. FLAC 编码器：LPC 子帧
+
+- 按 FFmpeg 9.0.2 `lpc.c` 移植 LPC 分析：Welch 窗加权的自相关
+  （含 C 实现的 +1.0 种子）、Levinson-Durbin 递推（1..12 阶）、
+  15-bit 误差反馈量化（shift 0..15，系数超界时缩放而非负移位）。
+- 子帧选择扩展为 constant / verbatim / fixed 0..4 / LPC 1..12 全量
+  位数比较（含 4+5+15*order 系数开销）；写 LPC 子帧类型码
+  `32|(order-1)`、精度-1、5-bit shift 与 15-bit 系数，残差仍走
+  Rice/Rice2 分区阶 0。编码器用 64 位计算预测，与解码器
+  `bps+15+log2(order) > 32` 时的 64 位路径一致（16-bit 及以下
+  不溢出场景下 32 位路径等价）。
+- 回归：新增 AR(2) 共振信号用例，断言首子帧类型为 LPC 且
+  16-bit mono / 24-bit stereo（经去相关）回转逐样本一致；原三组
+  真实夹具 MD5 不变。
+- 外部验证：同一 AR 信号与真实夹具（16-bit stereo、24-bit mono、
+  8-bit mono）编码后经 ffmpeg 9.0.2 解码，PCM 与源逐字节一致；
+  16-bit stereo 夹具由 7361 字节降到 4903 字节（首帧 LPC 10 阶）。
+- 全量 wasm **1214/1214**。
