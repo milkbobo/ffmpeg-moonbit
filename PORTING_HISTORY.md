@@ -5513,3 +5513,20 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：自编码 FLAC 写标签后 ffprobe 读到 title/ARTIST/album/
   track，ffmpeg 解码 PCM 与源逐字节一致（`f3acc310…`）。
 - 全量 wasm **1245/1245**。
+
+## 200. WAV LIST/INFO 标签读写
+
+- 读：`wav_read_tags` 遍历 RIFF/RF64 块，解析 `LIST`/`INFO`
+  子块（NUL 结尾、偶数对齐），按 `ff_riff_info_conv` 把
+  IART/ICMT/ICOP/ICRD/IGNR/ILNG/INAM/IPRD/IPRT/ITRK/ISFT/ISMP/ITCH
+  映射为通用键。
+- 写：`wav_add_tags(file, tags)` 删除旧 INFO 列表、在 `fmt ` 后插入
+  新 `LIST`（ffmpeg 的 IPRT 轨道号、NUL 结尾、偶数填充），保留
+  fmt/data 等全部块；RIFF 尺寸重算，RF64 则回填 `ds64` 的 riffSize
+  并保持 data 的 0xFFFFFFFF 哨兵（读取时用 ds64 dataSize）。
+- 回归 `wav_tags_realdata_test.mbt`：ffmpeg 生成的带标签 WAV 读回
+  5 个标签；替换后旧标签消失、data 块逐字节不变；删除/再加标签、
+  自写 WAV 与 RF64 变体均可读写且数据不变；非 RIFF 输入拒绝。
+- 外部验证：改写后的 WAV 经 ffprobe 读到 title/artist/track，
+  ffmpeg 解码 PCM 与源 data 块逐字节一致（`b359e7ed…`）。
+- 全量 wasm **1249/1249**。
