@@ -5497,3 +5497,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffprobe 识别 h264/ac3/mov_text，ffmpeg 提取 SRT 与源
   逐行一致，视频 framemd5 与音频 PCM 与无字幕版本完全相同。
 - 全量 wasm **1242/1242**。
+
+## 199. FLAC Vorbis comment 标签读写
+
+- 读：`flac_read_tags` 遍历 metadata block（按 last 标志停止），解析
+  type 4 的 vendor/entry 列表，`KEY=value` 在首个 `=` 处切分，并按
+  `ff_vorbiscomment_metadata_conv` 把 ALBUMARTIST/TRACKNUMBER/
+  DISCNUMBER/DESCRIPTION 映射为 album_artist/track/disc/comment。
+- 写：`flac_add_tags(file, tags)` 删除已有 type 4 块、在 STREAMINFO
+  之后插入新块（vendor "moonbit"），其余元数据块与全部帧原样保留，
+  重写 last 标志；空列表即删除注释块；键含 `=` 或 NUL 拒绝。
+- 回归 `flac_tags_realdata_test.mbt`：ffmpeg 生成的带标签/ PADDING
+  FLAC（9941 字节）读回 4 个标签；替换为 3 个标签后旧标签消失、
+  PCM MD5 不变；删除标签后仍可解码；非 FLAC/非法键拒绝。
+- 外部验证：自编码 FLAC 写标签后 ffprobe 读到 title/ARTIST/album/
+  track，ffmpeg 解码 PCM 与源逐字节一致（`f3acc310…`）。
+- 全量 wasm **1245/1245**。
