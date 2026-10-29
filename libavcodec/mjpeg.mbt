@@ -9,8 +9,10 @@
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 ///
-/// Scope: 8-bit sequential DCT (SOF0/SOF1) and progressive DCT (SOF2),
-/// interleaved and single-component scans, multi-scan sequential files,
+/// Scope: 8-bit sequential DCT (SOF0/SOF1), progressive DCT (SOF2) and
+/// lossless JPEG (SOF3, planar predictors 0..7, point transform, restart
+/// intervals; 3-component 1x1 "lossless RGB" and >8-bit samples are
+/// rejected), interleaved and single-component scans, multi-scan sequential files,
 /// progressive DC first/refinement, AC first/refinement and EOB runs, arbitrary
 /// 1..4 h/v sampling, DQT (8/16-bit entries), DHT, DRI restart markers and the
 /// native `yuvj420p`/`yuvj422p`/`yuvj444p`/`yuvj440p`/`gray` output formats
@@ -282,10 +284,12 @@ priv struct JpegComponent {
   coeffs : Array[Int32]
   /// Progressive AC end-of-band position for each block.
   last_nnz : Array[Int32]
+  /// Lossless JPEG samples at component resolution (empty otherwise).
+  samples : Array[Int32]
 }
 
 ///|
-/// Decode an 8-bit baseline or progressive JPEG. */
+/// Decode an 8-bit baseline, progressive or lossless JPEG. */
 pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
   if data.length() < 4 || data[0] != b'\xff' || data[1] != b'\xd8' {
     return Err("mjpeg: missing SOI")
@@ -302,6 +306,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
   let mut saw_sof = false
   let mut saw_scan = false
   let mut progressive = false
+  let mut lossless = false
   let mut pos = 2
   while pos + 1 < data.length() {
     if data[pos] != b'\xff' {
@@ -399,8 +404,11 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
           ac_tables[th] = Some(h)
         }
       }
-    } else if marker == 0xC0 || marker == 0xC1 || marker == 0xC2 {
-      // SOF0/SOF1/SOF2
+    } else if marker == 0xC0 ||
+      marker == 0xC1 ||
+      marker == 0xC2 ||
+      marker == 0xC3 {
+      // SOF0/SOF1/SOF2/SOF3
       if saw_sof {
         return Err("mjpeg: duplicate SOF")
       }
@@ -408,6 +416,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         return Err("mjpeg: short SOF")
       }
       let precision = seg[0].to_int()
+      lossless = marker == 0xC3
       if precision != 8 {
         return Err("PATCHWELCOME: mjpeg sample precision")
       }
@@ -421,6 +430,9 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         return Err("mjpeg: truncated SOF components")
       }
       progressive = marker == 0xC2
+      if lossless && ncomp != 1 && ncomp != 3 {
+        return Err("PATCHWELCOME: lossless JPEG component count")
+      }
       for i in 0..<ncomp {
         let base = 6 + i * 3
         let id = seg[base].to_int()
@@ -448,18 +460,28 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
           blocks_h: 0,
           coeffs: [],
           last_nnz: [],
+          samples: [],
         })
+      }
+      if lossless && ncomp == 3 && max_h == 1 && max_v == 1 {
+        return Err("PATCHWELCOME: lossless RGB JPEG")
       }
       for comp in components {
         let cw = (width * comp.h + max_h - 1) / max_h
         let ch = (height * comp.v + max_v - 1) / max_v
-        comp.blocks_w = (cw + 7) / 8
-        comp.blocks_h = (ch + 7) / 8
-        let nblocks = comp.blocks_w * comp.blocks_h
-        for _ in 0..<nblocks {
-          comp.last_nnz.push(0)
-          for _ in 0..<64 {
-            comp.coeffs.push(0)
+        if lossless {
+          for _ in 0..<(cw * ch) {
+            comp.samples.push(0)
+          }
+        } else {
+          comp.blocks_w = (cw + 7) / 8
+          comp.blocks_h = (ch + 7) / 8
+          let nblocks = comp.blocks_w * comp.blocks_h
+          for _ in 0..<nblocks {
+            comp.last_nnz.push(0)
+            for _ in 0..<64 {
+              comp.coeffs.push(0)
+            }
           }
         }
       }
@@ -510,7 +532,15 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         count: 0,
         at_end: false,
       }
-      let scan_result = if progressive {
+      let scan_result = if lossless {
+        if se != 0 || ah != 0 {
+          return Err("mjpeg: invalid lossless scan parameters")
+        }
+        mjpeg_decode_scan_lossless(
+          bits, components, scan_components, dc_tables, width, height, max_h, max_v,
+          restart_interval, ss, al,
+        )
+      } else if progressive {
         mjpeg_decode_scan_progressive(
           bits, components, scan_components, quant, dc_tables, ac_tables, width,
           height, max_h, max_v, restart_interval, ss, se, ah, al,
@@ -534,7 +564,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
       if bits.at_end && pos >= data.length() {
         break
       }
-    } else if marker == 0xC3 ||
+    } else if marker == 0xC5 ||
       marker == 0xC6 ||
       marker == 0xC7 ||
       marker == 0xC9 ||
@@ -552,5 +582,9 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
   if !saw_scan {
     return Err("mjpeg: no scan found")
   }
-  mjpeg_finalize_image(components, width, height, max_h, max_v)
+  if lossless {
+    mjpeg_finalize_lossless(components, width, height, max_h, max_v)
+  } else {
+    mjpeg_finalize_image(components, width, height, max_h, max_v)
+  }
 }

@@ -629,3 +629,209 @@ fn jpeg_marker_start(data : Bytes, pos : Int32) -> Int32 {
   }
   p
 }
+
+///|
+/// `PREDICT` from `mjpeg.h`: lossless JPEG spatial predictors 0..7. */
+fn jpeg_predict(
+  topleft : Int32,
+  top : Int32,
+  left : Int32,
+  predictor : Int32,
+) -> Int32 {
+  match predictor {
+    0 => 0
+    1 => left
+    2 => top
+    3 => topleft
+    4 => left + top - topleft
+    5 => left + ((top - topleft) >> 1)
+    6 => top + ((left - topleft) >> 1)
+    _ => (left + top) >> 1
+  }
+}
+
+///|
+/// `ljpeg_decode_yuv_scan`: lossless JPEG samples are coded directly in the
+/// component planes with a spatial predictor, so no IDCT is involved.  Only
+/// the 8-bit planar paths are supported (the 3-component 1x1 "lossless RGB"
+/// path is rejected by the parser).
+fn mjpeg_decode_scan_lossless(
+  bits : JpegEntropy,
+  components : Array[JpegComponent],
+  scan_components : Array[Int32],
+  dc_tables : Array[JpegHuffman?],
+  width : Int32,
+  height : Int32,
+  max_h : Int32,
+  max_v : Int32,
+  restart_interval : Int32,
+  predictor : Int32,
+  al : Int32,
+) -> Result[Unit, String] {
+  let ns = scan_components.length()
+  if ns < 1 || ns > 4 {
+    return Err("mjpeg: invalid lossless scan component count")
+  }
+  let interleaved = ns > 1
+  let mb_width = if interleaved {
+    (width + max_h - 1) / max_h
+  } else {
+    let first = components[scan_components[0]]
+    let hdiv = max_h / first.h
+    (width + hdiv - 1) / hdiv
+  }
+  let mb_height = if interleaved {
+    (height + max_v - 1) / max_v
+  } else {
+    let first = components[scan_components[0]]
+    let vdiv = max_v / first.v
+    (height + vdiv - 1) / vdiv
+  }
+  // Per-scan component step and block count, mirroring ff_mjpeg_decode_sos.
+  let steps_h : Array[Int32] = Array::make(ns, 1)
+  let steps_v : Array[Int32] = Array::make(ns, 1)
+  let blocks : Array[Int32] = Array::make(ns, 1)
+  for i = 0; i < ns; i = i + 1 {
+    let comp = components[scan_components[i]]
+    if interleaved {
+      steps_h[i] = comp.h
+      steps_v[i] = comp.v
+      blocks[i] = comp.h * comp.v
+    }
+  }
+  let mask = 0xFF << al
+  let mut resync_mb_x = 0
+  let mut resync_mb_y = 0
+  let mut restart_count = -1
+  for mb_y = 0; mb_y < mb_height; mb_y = mb_y + 1 {
+    for mb_x = 0; mb_x < mb_width; mb_x = mb_x + 1 {
+      let mut restart = false
+      if restart_interval != 0 {
+        if restart_count <= 0 {
+          restart_count = restart_interval
+          restart = true
+        }
+        restart_count = restart_count - 1
+      } else if restart_count < 0 {
+        restart_count = 0
+        restart = true
+      }
+      if restart {
+        je_restart(bits)
+        resync_mb_x = mb_x
+        resync_mb_y = mb_y
+      }
+      if (bits.data.length() - bits.pos) * 8 + bits.count < 1 {
+        return Err("mjpeg: bitstream end in lossless scan")
+      }
+      let toprow = mb_y == resync_mb_y ||
+        (mb_y == resync_mb_y + 1 && mb_x < resync_mb_x)
+      let leftcol = mb_x == 0 || (mb_y == resync_mb_y && mb_x == resync_mb_x)
+      for i = 0; i < ns; i = i + 1 {
+        let ci = scan_components[i]
+        let comp = components[ci]
+        let dc = match jpeg_huff_get(dc_tables, comp.dc_table, "DC") {
+          Ok(h) => h
+          Err(e) => return Err(e)
+        }
+        let stride = (width * comp.h + max_h - 1) / max_h
+        let plane = comp.samples
+        let mut x = 0
+        let mut y = 0
+        for _j = 0; _j < blocks[i]; _j = _j + 1 {
+          let category = match jpeg_huffman_decode(bits, dc) {
+            Ok(v) => v
+            Err(e) => return Err(e)
+          }
+          if category > 16 {
+            return Err("mjpeg: invalid lossless DC category")
+          }
+          let diff = if category == 0 {
+            0
+          } else {
+            jpeg_extend(je_read(bits, category), category)
+          }
+          let px = steps_h[i] * mb_x + x
+          let py = steps_v[i] * mb_y + y
+          if px < width && py < height {
+            let pred = if y == 0 && toprow {
+              if x == 0 && leftcol {
+                1 << 7
+              } else {
+                plane[py * stride + px - 1]
+              }
+            } else if x == 0 && leftcol {
+              plane[(py - 1) * stride + px]
+            } else {
+              jpeg_predict(
+                plane[(py - 1) * stride + px - 1],
+                plane[(py - 1) * stride + px],
+                plane[py * stride + px - 1],
+                predictor,
+              )
+            }
+            plane[py * stride + px] = ((pred & mask) + (diff << al)) & 0xFF
+          }
+          x = x + 1
+          if x == steps_h[i] {
+            x = 0
+            y = y + 1
+          }
+        }
+      }
+    }
+  }
+  Ok(())
+}
+
+///|
+/// Build a planar 8-bit image from the lossless component planes.  The
+/// pixel-format choice mirrors `mjpeg_finalize_image`.
+fn mjpeg_finalize_lossless(
+  components : Array[JpegComponent],
+  width : Int32,
+  height : Int32,
+  max_h : Int32,
+  max_v : Int32,
+) -> Result[JpegImage, String] {
+  let ncomp = components.length()
+  if ncomp != 1 && ncomp != 3 {
+    return Err("PATCHWELCOME: lossless JPEG component layout")
+  }
+  let out_planes : Array[Bytes] = []
+  let plane_widths : Array[Int32] = []
+  let plane_heights : Array[Int32] = []
+  for ci = 0; ci < ncomp; ci = ci + 1 {
+    let comp = components[ci]
+    let pw = (width * comp.h + max_h - 1) / max_h
+    let ph = (height * comp.v + max_v - 1) / max_v
+    let out : Array[Byte] = []
+    for y = 0; y < ph; y = y + 1 {
+      for x = 0; x < pw; x = x + 1 {
+        out.push(comp.samples[y * pw + x].to_byte())
+      }
+    }
+    out_planes.push(Bytes::from_array(out))
+    plane_widths.push(pw)
+    plane_heights.push(ph)
+  }
+  let pix_fmt = if ncomp == 1 {
+    "gray"
+  } else if plane_widths[1] >= width && plane_heights[1] >= height {
+    "yuvj444p"
+  } else if plane_heights[1] >= height {
+    "yuvj422p"
+  } else if plane_widths[1] >= width {
+    "yuvj440p"
+  } else {
+    "yuvj420p"
+  }
+  Ok({
+    width,
+    height,
+    pix_fmt,
+    planes: out_planes,
+    plane_widths,
+    plane_heights,
+  })
+}

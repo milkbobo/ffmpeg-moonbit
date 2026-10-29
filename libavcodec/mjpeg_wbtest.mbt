@@ -187,11 +187,17 @@ test "mjpeg: rejects non-JPEG and unsupported processes" {
     Ok(_) => fail("expected SOI error")
     Err(e) => assert_true(e.contains("SOI"))
   }
-  // SOI + SOF3 (lossless) with a minimal segment.
+  // SOI + SOF5 (differential sequential) is not supported.
+  let sof5 : Bytes = b"\xff\xd8\xff\xc5\x00\x0b\x08\x00\x10\x00\x10\x01\x01\x11\x00"
+  match av_mjpeg_decode(sof5) {
+    Ok(_) => fail("expected unsupported process error")
+    Err(e) => assert_true(e.contains("JPEG process"))
+  }
+  // Lossless (SOF3) without any scan is incomplete.
   let sof3 : Bytes = b"\xff\xd8\xff\xc3\x00\x0b\x08\x00\x10\x00\x10\x01\x01\x11\x00"
   match av_mjpeg_decode(sof3) {
-    Ok(_) => fail("expected lossless error")
-    Err(e) => assert_true(e.contains("JPEG process"))
+    Ok(_) => fail("expected missing scan error")
+    Err(e) => assert_true(e.contains("scan"))
   }
   // A progressive frame without any scan is incomplete.
   let sof2 : Bytes = b"\xff\xd8\xff\xc2\x00\x0b\x08\x00\x10\x00\x10\x01\x01\x11\x00"

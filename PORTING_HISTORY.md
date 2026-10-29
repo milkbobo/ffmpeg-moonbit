@@ -5191,3 +5191,20 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   两帧 framemd5 与源一致（`165c0e08…`/`9cc1f45c…`、`84cf7e4f…`/`87a8e6c7…`）。
 
 全量 wasm **1197/1197**。
+
+## 181. MJPEG 无损 JPEG（SOF3）解码
+
+- `mjpeg.mbt` 接受 SOF3，8-bit 平面路径；解析 SOS 的 Ss（预测器 0..7）、
+  Al（point transform），按 `ljpeg_decode_yuv_scan` 逐样本解码：
+  MCU 尺寸 `ceil(width/h_max) × ceil(height/v_max)`，每分量
+  `h_count*v_count` 个样本，左/上/左上邻域 + PREDICT，重启间隔按
+  `ff_mjpeg_should_restart` 语义复位 resync 坐标。
+- 新增 `mjpeg_finalize_lossless`：按分量采样平面裁出 yuvj420p/422p/
+  440p/444p/gray（1 分量），跳过 IDCT；1x1 三分量“无损 RGB”和
+  8-bit 以上精度明确 PATCHWELCOME。
+- 回归 `mjpeg_lossless_realdata_test.mbt`：FFmpeg 9.0.2 `ljpeg` 夹具
+  （yuvj420p 预测器 1/2、yuvj422p、yuvj444p），解码平面与
+  `ffmpeg -f rawvideo` 字节一致（MD5 `ef117420…`／`7e9feadf…`／
+  `4cbccb31…`）；9-bit 与 1x1 三分量变体被拒绝。原白盒用例中的
+  SOF3“不支持”断言改为 SOF5，并补 SOF3 无 scan 用例。
+- 全量 wasm **1203/1203**。
