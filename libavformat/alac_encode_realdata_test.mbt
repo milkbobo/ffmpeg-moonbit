@@ -156,3 +156,95 @@ test "alac encoder: invalid parameters are rejected" {
   alacenc_expect_reject(@libavcodec.alac_encode([0, 1], 1, 0, 16))
   alacenc_expect_reject(@libavcodec.alac_encode([0, 1, 2], 2, 44100, 16))
 }
+
+///|
+/// Read `count` bits (MSB first) starting at absolute `bitpos`.
+fn alacenc_bits(data : Bytes, bitpos : Int32, count : Int32) -> Int32 {
+  let mut v = 0
+  for i = 0; i < count; i = i + 1 {
+    let p = bitpos + i
+    let bit = (data[p / 8].to_int() >> (7 - p % 8)) & 1
+    v = (v << 1) | bit
+  }
+  v
+}
+
+///|
+/// First frame's `[interlacing shift, interlacing leftweight, lpc order 0,
+/// lpc quant 0]`.
+fn alacenc_frame_params(frame : Bytes) -> Array[Int32] {
+  let encode_fs = alacenc_bits(frame, 19, 1)
+  let pos = if encode_fs != 0 { 55 } else { 23 }
+  let shift = alacenc_bits(frame, pos, 8)
+  let weight = alacenc_bits(frame, pos + 8, 8)
+  let quant = alacenc_bits(frame, pos + 16 + 4, 4)
+  let order = alacenc_bits(frame, pos + 16 + 11, 5)
+  [shift, weight, order, quant]
+}
+
+///|
+test "alac encoder: LPC and stereo decorrelation are selected" {
+  let bytes = @libavutil.av_base64_decode(alacenc_s16_b64, 100000).unwrap()
+  let wav = @libavformat.av_wav_open(bytes).unwrap()
+  let samples = alacenc_pcm_i32(wav, bytes)
+  let enc = @libavcodec.alac_encode(
+    samples,
+    wav.format.channels,
+    wav.format.sample_rate,
+    wav.format.bits_per_sample,
+  ).unwrap()
+  let p = alacenc_frame_params(enc.frames[0])
+  assert_eq(p[2], 6)
+  assert_true(p[3] > 0, msg="expected a non-zero lpc quant")
+  // Identical channels: decorrelation must kick in.
+  let cbytes = @libavutil.av_base64_decode(flacenc_corr_b64, 100000).unwrap()
+  let cwav = @libavformat.av_wav_open(cbytes).unwrap()
+  let csamples = alacenc_pcm_i32(cwav, cbytes)
+  let cenc = @libavcodec.alac_encode(
+    csamples,
+    cwav.format.channels,
+    cwav.format.sample_rate,
+    cwav.format.bits_per_sample,
+  ).unwrap()
+  let cp = alacenc_frame_params(cenc.frames[0])
+  assert_true(cp[1] != 0, msg="expected stereo decorrelation")
+  let dec = @libavcodec.alac_decoder_new(cenc.cookie).unwrap()
+  let decoded : Array[Int32] = []
+  for frame in cenc.frames {
+    let f = dec.decode_frame(frame).unwrap()
+    for v in f.samples {
+      decoded.push(v)
+    }
+  }
+  assert_eq(decoded.length(), csamples.length())
+  for i = 0; i < csamples.length(); i = i + 1 {
+    assert_eq(decoded[i], csamples[i])
+  }
+}
+
+///|
+test "alac encoder: 24-bit stereo round-trips" {
+  let bytes = @libavutil.av_base64_decode(alacenc_s24_b64, 100000).unwrap()
+  let wav = @libavformat.av_wav_open(bytes).unwrap()
+  let mono = alacenc_pcm_i32(wav, bytes)
+  let stereo : Array[Int32] = []
+  for v in mono {
+    stereo.push(v)
+    stereo.push(v - v / 64)
+  }
+  let enc = @libavcodec.alac_encode(stereo, 2, 48000, 24).unwrap()
+  let p = alacenc_frame_params(enc.frames[0])
+  assert_true(p[1] != 0, msg="expected stereo decorrelation")
+  let dec = @libavcodec.alac_decoder_new(enc.cookie).unwrap()
+  let decoded : Array[Int32] = []
+  for frame in enc.frames {
+    let f = dec.decode_frame(frame).unwrap()
+    for v in f.samples {
+      decoded.push(v)
+    }
+  }
+  assert_eq(decoded.length(), stereo.length())
+  for i = 0; i < stereo.length(); i = i + 1 {
+    assert_eq(decoded[i] >> 8, stereo[i])
+  }
+}

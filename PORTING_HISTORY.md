@@ -5318,3 +5318,22 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   相关立体声夹具经 ffmpeg 9.0.2 解码，PCM 与源逐字节一致
   （非平稳文件为分区阶 1 的真实码流）。
 - 全量 wasm **1215/1215**。
+
+## 189. ALAC 编码器：自适应 LPC 与立体声去相关
+
+- 按 FFmpeg 9.0.2 `alacenc.c` 移植：`estimate_stereo_mode` 用二阶残差
+  绝对值之和在 left/right、left/side、right/side、mid/side 四种模式中
+  选优并写 interlacing shift/leftweight；`calc_predictor_params` 复用
+  FLAC 的 Welch 自相关/Levinson-Durbin，按估计阶（反射系数 > 0.1，
+  4..6 阶）取 9-bit 系数与 shift 0..9（shift 为 0 时退回无预测，
+  解码器拒绝 lpc_quant 0）。
+- `alac_linear_predictor` 逐样本自适应 FIR（含解码端一致的系数
+  更新与 16-bit 符号扩展），残差写 prediction type 0 + 系数表 +
+  Rice 熵编码；24-bit 的 extra bits 在去相关前拆分、头部之后写入。
+- 回归：新增 16-bit stereo 断言 LPC 6 阶与 24-bit stereo（相关
+  声道，right/side 模式）回转逐样本一致；相关立体声夹具断言
+  leftweight != 0。原 16/24-bit 夹具 MD5 不变。
+- 外部验证：16-bit stereo、相关立体声、24-bit mono 与构造的
+  24-bit stereo 编码成 MP4 后经 ffmpeg 9.0.2 解码，PCM 与源逐字节
+  一致（`f3acc310…`、`ef9ca189…`、`3c32cd35…`、`52bc0b75…`）。
+- 全量 wasm **1217/1217**。
