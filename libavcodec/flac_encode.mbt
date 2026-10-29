@@ -207,7 +207,34 @@ priv struct FlacSubframePlan {
   order : Int32
   rice_k : Int32
   residual : Array[Int32]
+  wasted : Int32
   bits : Int64
+}
+
+///|
+/// `remove_wasted_bits`: common trailing zero bits in a subframe (0 when none). */
+fn flac_wasted_bits(samples : Array[Int32], n : Int32, bits : Int32) -> Int32 {
+  let mut v = 0
+  for i = 0; i < n; i = i + 1 {
+    v = v | samples[i]
+    if (v & 1) != 0 {
+      return 0
+    }
+  }
+  if v == 0 {
+    return 0
+  }
+  let mut wasted = 0
+  let mut x = v
+  while (x & 1) == 0 {
+    x = x >> 1
+    wasted = wasted + 1
+  }
+  if wasted >= bits {
+    bits - 1
+  } else {
+    wasted
+  }
 }
 
 ///|
@@ -216,9 +243,16 @@ fn flac_plan_subframe(
   n : Int32,
   bits : Int32,
 ) -> FlacSubframePlan {
+  let wasted = flac_wasted_bits(samples, n, bits)
+  let eff_bits = bits - wasted
+  let work : Array[Int32] = Array::make(n, 0)
+  for i = 0; i < n; i = i + 1 {
+    work[i] = if wasted > 0 { samples[i] >> wasted } else { samples[i] }
+  }
+  let wasted_cost = if wasted > 0 { wasted.to_int64() } else { 0L }
   let mut constant = true
   for i = 1; i < n; i = i + 1 {
-    if samples[i] != samples[0] {
+    if work[i] != work[0] {
       constant = false
       break
     }
@@ -229,11 +263,12 @@ fn flac_plan_subframe(
       order: 0,
       rice_k: 0,
       residual: [],
-      bits: 8L + bits.to_int64(),
+      wasted,
+      bits: 8L + eff_bits.to_int64() + wasted_cost,
     }
   }
-  let verbatim_bits = 8L + (n * bits).to_int64()
-  let rice2 = bits > 16
+  let verbatim_bits = 8L + (n * eff_bits).to_int64() + wasted_cost
+  let rice2 = eff_bits > 16
   let max_k = if rice2 { 30 } else { 14 }
   let param_bits = if rice2 { 5 } else { 4 }
   let mut best : FlacSubframePlan = {
@@ -241,20 +276,22 @@ fn flac_plan_subframe(
     order: 0,
     rice_k: 0,
     residual: [],
+    wasted,
     bits: verbatim_bits,
   }
   let max_order = if n - 1 < 4 { n - 1 } else { 4 }
   for order = 0; order <= max_order; order = order + 1 {
-    let residual = flac_fixed_residual(samples, n, order)
+    let residual = flac_fixed_residual(work, n, order)
     let (k, rice_bits) = flac_choose_rice(residual, order, max_k)
     let header = 8L +
-      (order * bits).to_int64() +
+      (order * eff_bits).to_int64() +
       2L +
       4L +
-      param_bits.to_int64()
+      param_bits.to_int64() +
+      wasted_cost
     let total = header + rice_bits
     if total < best.bits {
-      best = { kind: 2, order, rice_k: k, residual, bits: total, }
+      best = { kind: 2, order, rice_k: k, residual, wasted, bits: total, }
     }
   }
   best
@@ -268,27 +305,34 @@ fn flac_write_subframe(
   bits : Int32,
   plan : FlacSubframePlan,
 ) -> Unit {
+  let shift = plan.wasted
+  let eff_bits = bits - shift
   // subframe header: zero bit, 6-bit type, wasted-bits flag
-  if plan.kind == 0 {
-    w.write(0U, 1)
-    w.write(0U, 6)
-    w.write(0U, 1)
-    w.write_signed(samples[0], bits)
+  let type_code = if plan.kind == 0 {
+    0U
   } else if plan.kind == 1 {
-    w.write(0U, 1)
-    w.write(1U, 6)
-    w.write(0U, 1)
+    1U
+  } else {
+    (8U | plan.order.reinterpret_as_uint()) & 0x3FU
+  }
+  w.write(0U, 1)
+  w.write(type_code, 6)
+  w.write(if shift > 0 { 1U } else { 0U }, 1)
+  if shift > 0 {
+    // unary: wasted-1 zero bits followed by one
+    w.write(1U, shift)
+  }
+  if plan.kind == 0 {
+    w.write_signed(samples[0] >> shift, eff_bits)
+  } else if plan.kind == 1 {
     for i = 0; i < n; i = i + 1 {
-      w.write_signed(samples[i], bits)
+      w.write_signed(samples[i] >> shift, eff_bits)
     }
   } else {
-    w.write(0U, 1)
-    w.write((8U | plan.order.reinterpret_as_uint()) & 0x3FU, 6)
-    w.write(0U, 1)
     for i = 0; i < plan.order; i = i + 1 {
-      w.write_signed(samples[i], bits)
+      w.write_signed(samples[i] >> shift, eff_bits)
     }
-    let rice2 = bits > 16
+    let rice2 = eff_bits > 16
     // 2-bit coding mode (0 = Rice, 1 = Rice2), partition order = 0
     w.write(if rice2 { 1U } else { 0U }, 2)
     w.write(0U, 4)
@@ -415,13 +459,83 @@ pub fn flac_encode(
     let n = if total - pos < block_size { total - pos } else { block_size }
     let is_full = n == block_size
     let w = flac_bits_new()
+    // Gather the source channels for this block.
+    let chans : Array[Array[Int32]] = []
+    for ch = 0; ch < channels; ch = ch + 1 {
+      let ch_samples : Array[Int32] = Array::make(n, 0)
+      for i in 0..<n {
+        ch_samples[i] = samples[(pos + i) * channels + ch]
+      }
+      chans.push(ch_samples)
+    }
+    // Stereo decorrelation: try independent, left-side, right-side and
+    // mid-side, keeping the smallest estimated subframe cost.
+    let mut channel_code = channels - 1
+    let mut sel0 = chans[0]
+    let mut sel1 = if channels == 2 { chans[1] } else { chans[0] }
+    let mut out_bits0 = bits
+    let mut out_bits1 = bits
+    let plan0 = flac_plan_subframe(sel0, n, out_bits0)
+    let mut best_plan0 = plan0
+    let mut best_plan1 = plan0
+    let mut best_total = plan0.bits
+    if channels == 2 {
+      let side : Array[Int32] = Array::make(n, 0)
+      let mid : Array[Int32] = Array::make(n, 0)
+      for i in 0..<n {
+        side[i] = chans[0][i] - chans[1][i]
+        mid[i] = (chans[0][i] + chans[1][i]) >> 1
+      }
+      let plan_r = flac_plan_subframe(chans[1], n, bits)
+      best_plan1 = plan_r
+      best_total = best_plan0.bits + plan_r.bits
+      // left-side: L + (L-R)
+      let p0 = flac_plan_subframe(chans[0], n, bits)
+      let p1 = flac_plan_subframe(side, n, bits + 1)
+      if p0.bits + p1.bits < best_total {
+        best_total = p0.bits + p1.bits
+        best_plan0 = p0
+        best_plan1 = p1
+        sel0 = chans[0]
+        sel1 = side
+        out_bits0 = bits
+        out_bits1 = bits + 1
+        channel_code = 8
+      }
+      // right-side: (L-R) + R
+      let p0r = flac_plan_subframe(side, n, bits + 1)
+      let p1r = flac_plan_subframe(chans[1], n, bits)
+      if p0r.bits + p1r.bits < best_total {
+        best_total = p0r.bits + p1r.bits
+        best_plan0 = p0r
+        best_plan1 = p1r
+        sel0 = side
+        sel1 = chans[1]
+        out_bits0 = bits + 1
+        out_bits1 = bits
+        channel_code = 9
+      }
+      // mid-side: (L+R)>>1 + (L-R)
+      let p0m = flac_plan_subframe(mid, n, bits)
+      let p1m = flac_plan_subframe(side, n, bits + 1)
+      if p0m.bits + p1m.bits < best_total {
+        best_total = p0m.bits + p1m.bits
+        best_plan0 = p0m
+        best_plan1 = p1m
+        sel0 = mid
+        sel1 = side
+        out_bits0 = bits
+        out_bits1 = bits + 1
+        channel_code = 10
+      }
+    }
     // frame header
     w.write(0xFFF8U, 16)
     let bs_extra : Array[Byte] = []
     let bs_code = flac_blocksize_code(n, is_full, bs_extra)
     w.write(bs_code.reinterpret_as_uint(), 4)
     w.write(0U, 4) // sample rate: from STREAMINFO
-    w.write((channels - 1).reinterpret_as_uint(), 4)
+    w.write(channel_code.reinterpret_as_uint(), 4)
     w.write(bps_code.reinterpret_as_uint(), 3)
     w.write(0U, 1)
     flac_write_utf8(w, frame_number)
@@ -433,17 +547,9 @@ pub fn flac_encode(
       @libavutil.av_crc(table, 0U, Bytes::from_array(w.out))
     }
     w.write(header_crc & 0xFFU, 8)
-    let chans : Array[Array[Int32]] = []
-    for ch = 0; ch < channels; ch = ch + 1 {
-      let ch_samples : Array[Int32] = Array::make(n, 0)
-      for i in 0..<n {
-        ch_samples[i] = samples[(pos + i) * channels + ch]
-      }
-      chans.push(ch_samples)
-    }
-    for ch = 0; ch < channels; ch = ch + 1 {
-      let plan = flac_plan_subframe(chans[ch], n, bits)
-      flac_write_subframe(w, chans[ch], n, bits, plan)
+    flac_write_subframe(w, sel0, n, out_bits0, best_plan0)
+    if channels == 2 {
+      flac_write_subframe(w, sel1, n, out_bits1, best_plan1)
     }
     w.align()
     let frame_crc = {

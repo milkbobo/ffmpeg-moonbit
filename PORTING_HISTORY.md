@@ -5269,3 +5269,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 已知限制：无 LPC、stereo decorrelation、20/32-bit 与 >2 声道；压缩率
   低于 ffmpeg 默认编码器，但输出为标准 ALAC。
 - 全量 wasm **1211/1211**。
+
+## 186. FLAC 编码器：立体声去相关与 wasted bits
+
+- `flac_encode` 对双声道逐帧比较 independent / left-side / right-side /
+  mid-side 四种模式的子帧估计位数，选择最小者；side 声道位深 +1，
+  帧头写 8/9/10 通道分配码（解码器已有对应重建路径）。
+- 每个子帧检测公共尾零（`remove_wasted_bits` 语义），写 wasted flag +
+  unary，按缩减后的位深编码；Rice 参数由求和公式取近似最优并比较
+  邻近 k，避免逐 k 扫描。
+- 回归：原有 16-bit stereo / 24-bit mono / 8-bit mono 用例不变；新增
+  相关立体声夹具（左右完全相同）断言去相关生效（帧长 < 3000，
+  通道码 8..10），输出 1646 字节且 ffmpeg 解码 PCM MD5
+  `ef9ca189…` 与源 WAV 一致。
+- 全量 wasm **1212/1212**。
