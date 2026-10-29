@@ -5025,3 +5025,23 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   路径未实现并以错误返回；依赖帧（多子流）暂不支持。
 
 全量 wasm **1171/1171**。
+
+## 173. AC-3/E-AC-3 写入 MP4、MPEG-TS 与 Matroska
+
+- `mp4_mux.mbt` 抽出通用 `mp4_audio_muxer_new(entry, ...)`（原 AAC 写入器
+  改为构造 `mp4_aac_entry` 后复用），新增 `mp4_ac3_entry`
+  （`ac-3` + `dac3`：fscod/bsid/bsmod/acmod/lfeon/bit_rate_code）与
+  `mp4_eac3_entry`（`ec-3` + `dec3`：data_rate/单独立子流/无依赖子流）；
+  `mp4_ac3_muxer_new`/`mp4_eac3_muxer_new` 由首帧头自动填参数。
+  MOV 读取端已有 `ac-3`/`ec-3` → `ac3`/`eac3` 映射，无需改动。
+- `mkv_audio_mux.mbt` 新增 `MkvAc3Muxer`（`mkv_ac3_muxer_new`/
+  `mkv_eac3_muxer_new`，CodecID `A_AC3`/`A_EAC3`，无 CodecPrivate；
+  `mkv_audio_document` 现在仅在 CodecPrivate 非空时写该元素）。
+- MPEG-TS 写入器本就支持任意 audio stream type；新增 0x81/0x87 用例
+  （解复用端映射已存在）。
+- 回归 `ac3_containers_realdata_wbtest.mbt`：同一组真实 AC-3 单声道与
+  E-AC-3 立体声帧分别写 MP4/TS/MKV，回读校验 codec/采样率/时长/负载；
+  外部 ffmpeg 9.0.2 解码六种输出与裸流参考 PCM 的 MD5 完全一致
+  （`0b4d53cb…`、`596feb82…`）。
+
+全量 wasm **1174/1174**。

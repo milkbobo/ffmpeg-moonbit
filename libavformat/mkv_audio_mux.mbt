@@ -84,11 +84,13 @@ fn mkv_audio_document(
   webm_uint_elem(track, 0x73C5, 2, 1UL)
   webm_uint_elem(track, 0x83, 1, 2UL) // audio
   webm_string_elem(track, 0x86, 1, codec_id)
-  let private_body : Array[Byte] = []
-  for b in codec_private {
-    private_body.push(b)
+  if codec_private.length() > 0 {
+    let private_body : Array[Byte] = []
+    for b in codec_private {
+      private_body.push(b)
+    }
+    webm_elem(track, 0x63A2, 2, private_body)
   }
-  webm_elem(track, 0x63A2, 2, private_body)
   if codec_delay > 0UL {
     webm_uint_elem(track, 0x56AA, 2, codec_delay)
   }
@@ -268,4 +270,63 @@ pub fn MkvFlacMuxer::finish(self : MkvFlacMuxer) -> Bytes {
   )
   webm_uint_elem(audio, 0x6264, 2, self.bits.reinterpret_as_uint().to_uint64())
   mkv_audio_document("A_FLAC", self.codec_private(), audio, self.events)
+}
+
+///|
+/// One AC-3 or E-AC-3 track in Matroska (`A_AC3` / `A_EAC3`).  The codec
+/// state is fully in-band, so no CodecPrivate is written.
+pub struct MkvAc3Muxer {
+  codec_id : String
+  sample_rate : Int32
+  channels : Int32
+  events : Array[MkvAudioEvent]
+}
+
+///|
+pub fn mkv_ac3_muxer_new(
+  sample_rate : Int32,
+  channels : Int32,
+) -> Result[MkvAc3Muxer, String] {
+  if sample_rate <= 0 || channels < 1 || channels > 6 {
+    return Err("EINVAL: invalid MKV/AC-3 stream parameters")
+  }
+  Ok({ codec_id: "A_AC3", sample_rate, channels, events: [], })
+}
+
+///|
+pub fn mkv_eac3_muxer_new(
+  sample_rate : Int32,
+  channels : Int32,
+) -> Result[MkvAc3Muxer, String] {
+  if sample_rate <= 0 || channels < 1 || channels > 6 {
+    return Err("EINVAL: invalid MKV/E-AC-3 stream parameters")
+  }
+  Ok({ codec_id: "A_EAC3", sample_rate, channels, events: [], })
+}
+
+///|
+pub fn MkvAc3Muxer::write_packet(
+  self : MkvAc3Muxer,
+  packet : Bytes,
+  pts_ms : Int64,
+  duration_ms : Int32,
+) -> Result[Unit, String] {
+  if packet.length() < 2 || duration_ms <= 0 || pts_ms < 0L {
+    return Err("EINVAL: invalid MKV/AC-3 packet")
+  }
+  self.events.push({ pts_ms, data: packet, duration_ms, })
+  Ok(())
+}
+
+///|
+pub fn MkvAc3Muxer::finish(self : MkvAc3Muxer) -> Bytes {
+  let audio : Array[Byte] = []
+  webm_float_elem(audio, 0xB5, 1, self.sample_rate.to_double())
+  webm_uint_elem(
+    audio,
+    0x9F,
+    1,
+    self.channels.reinterpret_as_uint().to_uint64(),
+  )
+  mkv_audio_document(self.codec_id, b"", audio, self.events)
 }

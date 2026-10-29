@@ -11,6 +11,8 @@ pub struct Mp4AacMuxer {
   channels : Int32
   /// Encoder delay in media samples, expressed as an `elst` edit.
   priming : Int32
+  /// The `stsd` sample entry (AAC, AC-3, E-AC-3, ...).
+  entry : Array[Byte]
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -34,7 +36,27 @@ pub fn mp4_aac_muxer_new(
   if !rate_ok {
     return Err("EINVAL: unsupported AAC sample rate")
   }
-  Ok({ sample_rate, channels, priming, packets: [], durations: [], })
+  mp4_audio_muxer_new(
+    mp4_aac_entry(sample_rate, channels),
+    sample_rate,
+    channels,
+    priming~,
+  )
+}
+
+///|
+/// Generic one-track MP4 audio muxer: `entry` is a complete sample entry
+/// (built by `mp4_aac_entry`, `mp4_ac3_entry`, `mp4_eac3_entry`, ...).
+pub fn mp4_audio_muxer_new(
+  entry : Array[Byte],
+  sample_rate : Int32,
+  channels : Int32,
+  priming~ : Int32 = 0,
+) -> Result[Mp4AacMuxer, String] {
+  if sample_rate <= 0 || channels < 1 || entry.length() == 0 || priming < 0 {
+    return Err("EINVAL: invalid MP4 audio stream parameters")
+  }
+  Ok({ sample_rate, channels, priming, entry, packets: [], durations: [], })
 }
 
 ///|
@@ -218,7 +240,7 @@ pub fn Mp4AacMuxer::write_packet(
   duration~ : Int32 = 1024,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
-    return Err("EINVAL: empty AAC packet or duration")
+    return Err("EINVAL: empty audio packet or duration")
   }
   self.packets.push(packet)
   self.durations.push(duration)
@@ -331,7 +353,7 @@ pub fn Mp4AacMuxer::finish(self : Mp4AacMuxer) -> Bytes {
 
   let stsd_body : Array[Byte] = []
   mp4_u32(stsd_body, 1U)
-  stsd_body.append(mp4_aac_entry(self.sample_rate, self.channels))
+  stsd_body.append(self.entry)
   let stsd = mp4_full_box("stsd", 0, 0, stsd_body)
 
   let stts_body : Array[Byte] = []
@@ -380,4 +402,142 @@ pub fn Mp4AacMuxer::finish(self : Mp4AacMuxer) -> Bytes {
   let trak = mp4_box("trak", mp4_cat([tkhd, edts, mdia]))
   let moov = mp4_box("moov", mp4_cat([mvhd, trak]))
   Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
+}
+
+///|
+/// `ff_ac3_bitrate_tab` in kbit/s, for the `dac3` bit_rate_code.
+let mp4_ac3_bitrates : FixedArray[Int32] = [
+  32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576,
+  640,
+]
+
+///|
+fn mp4_bits_push(bits : Array[Int32], value : Int32, count : Int32) -> Unit {
+  for i = 0; i < count; i = i + 1 {
+    bits.push((value >> (count - 1 - i)) & 1)
+  }
+}
+
+///|
+fn mp4_bits_to_bytes(bits : Array[Int32]) -> Array[Byte] {
+  let out : Array[Byte] = []
+  let mut acc = 0
+  let mut n = 0
+  for bit in bits {
+    acc = (acc << 1) | bit
+    n = n + 1
+    if n == 8 {
+      out.push(acc.to_byte())
+      acc = 0
+      n = 0
+    }
+  }
+  if n > 0 {
+    out.push((acc << (8 - n)).to_byte())
+  }
+  out
+}
+
+///|
+/// `dac3` (AC3SpecificBox) from the parsed frame header. */
+fn mp4_dac3(hdr : @libavcodec.Ac3Header) -> Array[Byte] {
+  let mut bit_rate_code = 0
+  for i = 0; i < mp4_ac3_bitrates.length(); i = i + 1 {
+    if mp4_ac3_bitrates[i] * 1000 == hdr.bit_rate {
+      bit_rate_code = i
+    }
+  }
+  let bits : Array[Int32] = []
+  mp4_bits_push(bits, hdr.sr_code, 2)
+  mp4_bits_push(bits, hdr.bitstream_id, 5)
+  mp4_bits_push(bits, hdr.bitstream_mode, 3)
+  mp4_bits_push(bits, hdr.channel_mode, 3)
+  mp4_bits_push(bits, if hdr.lfe_on { 1 } else { 0 }, 1)
+  mp4_bits_push(bits, bit_rate_code, 5)
+  mp4_bits_push(bits, 0, 5)
+  mp4_box("dac3", mp4_bits_to_bytes(bits))
+}
+
+///|
+/// `dec3` (EC3SpecificBox) for one independent substream, no dependent
+/// substreams and no type-A extension.
+fn mp4_dec3(hdr : @libavcodec.Ac3Header) -> Array[Byte] {
+  let bits : Array[Int32] = []
+  mp4_bits_push(bits, hdr.bit_rate / 1000, 13)
+  mp4_bits_push(bits, 0, 3) // num_ind_sub - 1
+  mp4_bits_push(bits, hdr.sr_code, 2)
+  mp4_bits_push(bits, hdr.bitstream_id, 5)
+  mp4_bits_push(bits, 0, 1) // reserved
+  mp4_bits_push(bits, 0, 1) // asvc
+  mp4_bits_push(bits, hdr.bitstream_mode, 3)
+  mp4_bits_push(bits, hdr.channel_mode, 3)
+  mp4_bits_push(bits, if hdr.lfe_on { 1 } else { 0 }, 1)
+  mp4_bits_push(bits, 0, 3) // reserved
+  mp4_bits_push(bits, 0, 4) // num_dep_sub
+  mp4_bits_push(bits, 0, 1) // reserved
+  mp4_box("dec3", mp4_bits_to_bytes(bits))
+}
+
+///|
+fn mp4_audio_sample_entry(
+  fourcc : String,
+  sample_rate : Int32,
+  channels : Int32,
+  child : Array[Byte],
+) -> Array[Byte] {
+  let body : Array[Byte] = []
+  for i = 0; i < 6; i = i + 1 {
+    body.push(b'\x00')
+  }
+  mp4_u16(body, 1) // data_reference_index
+  mp4_u16(body, 0) // version
+  mp4_u16(body, 0) // revision
+  mp4_u32(body, 0U) // vendor
+  mp4_u16(body, channels)
+  mp4_u16(body, 16) // sample size
+  mp4_u16(body, 0) // compression id
+  mp4_u16(body, 0) // packet size
+  mp4_u32(body, (sample_rate << 16).reinterpret_as_uint())
+  body.append(child)
+  mp4_box(fourcc, body)
+}
+
+///|
+/// `ac-3` sample entry with a `dac3` child. */
+pub fn mp4_ac3_entry(hdr : @libavcodec.Ac3Header) -> Array[Byte] {
+  mp4_audio_sample_entry("ac-3", hdr.sample_rate, hdr.channels, mp4_dac3(hdr))
+}
+
+///|
+/// `ec-3` sample entry with a `dec3` child. */
+pub fn mp4_eac3_entry(hdr : @libavcodec.Ac3Header) -> Array[Byte] {
+  mp4_audio_sample_entry("ec-3", hdr.sample_rate, hdr.channels, mp4_dec3(hdr))
+}
+
+///|
+/// One-track AC-3-in-MP4 muxer.  `first_frame` supplies the sample rate,
+/// channel count and `dac3` fields; the caller writes every frame (including
+/// this one) with a 1536-sample duration.
+pub fn mp4_ac3_muxer_new(first_frame : Bytes) -> Result[Mp4AacMuxer, String] {
+  let hdr = match @libavcodec.ac3_parse_header(first_frame) {
+    Ok(h) => h
+    Err(e) => return Err("EINVAL: \{e}")
+  }
+  if hdr.bitstream_id > 10 {
+    return Err("EINVAL: E-AC-3 frame in an AC-3 muxer")
+  }
+  mp4_audio_muxer_new(mp4_ac3_entry(hdr), hdr.sample_rate, hdr.channels)
+}
+
+///|
+/// One-track E-AC-3-in-MP4 muxer (independent frames, one substream). */
+pub fn mp4_eac3_muxer_new(first_frame : Bytes) -> Result[Mp4AacMuxer, String] {
+  let hdr = match @libavcodec.ac3_parse_header(first_frame) {
+    Ok(h) => h
+    Err(e) => return Err("EINVAL: \{e}")
+  }
+  if hdr.bitstream_id <= 10 || hdr.frame_type == 1 {
+    return Err("EINVAL: frame is not an independent E-AC-3 frame")
+  }
+  mp4_audio_muxer_new(mp4_eac3_entry(hdr), hdr.sample_rate, hdr.channels)
 }
