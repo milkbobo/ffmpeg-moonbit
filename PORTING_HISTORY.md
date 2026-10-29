@@ -5436,3 +5436,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   零长 Void 规避，并在文件内注明。
 - 验证：三簇（0/1.2/40 s）文件经 ffmpeg 提取 SRT 与源文本/时间
   逐条一致，ffprobe 识别为 subrip 字幕轨；全量 wasm **1233/1233**。
+
+## 195. MP4 mov_text（tx3g）字幕
+
+- 读取：容器层已按 `tx3g` 样本条目收轨（timescale 1,000,000）；
+  新增 `mp4_tx3g_text`（u16 长度 + UTF-8，忽略后续样式盒）与
+  ffmpeg 9.0.2 生成的字幕 MP4 夹具回归：3 个有效样本
+  （"Hello"/空/"Second line"，时长 1e6/2e5/1.3e6）；FFmpeg 追加的
+  零时长收尾样本被 edit list 裁剪。
+- 写入：新增 `mp4_subtitle_mux.mbt`（`Mp4SubtitleMuxer` /
+  `mp4_subtitle_cue_new` / `write_cue` / `finish`）：单 `tx3g` 轨
+  （`sbtl` handler、Arial ftab 样本条目、nmhd/dinf/stbl），每个 cue
+  一个文本样本，间隙写空样本，结尾补零时长空样本；movie/track
+  timescale 均为 1,000,000，重叠 cue 与 >65535 字节文本拒绝。
+- 外部验证：两 cue 文件经 ffmpeg 识别为 mov_text 字幕轨，提取 SRT
+  与源逐行一致；本地回转样本数/时长/文本一致。
+- 全量 wasm **1236/1236**。

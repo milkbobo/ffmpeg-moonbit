@@ -760,6 +760,20 @@ fn mov_meta_payload(body : Bytes) -> Bytes {
 }
 
 ///|
+/// Text payload of a `tx3g` (mov_text) sample: a big-endian 16-bit length
+/// followed by UTF-8 bytes (optional style boxes follow and are ignored).
+pub fn mp4_tx3g_text(sample : Bytes) -> Result[String, String] {
+  if sample.length() < 2 {
+    return Err("EINVAL: truncated mov_text sample")
+  }
+  let len = (sample[0].to_int() << 8) | sample[1].to_int()
+  if 2 + len > sample.length() {
+    return Err("EINVAL: truncated mov_text sample")
+  }
+  Ok(utf8_to_string(sample[2:2 + len].to_array()))
+}
+
+///|
 /// `mov_read_chpl`: Nero chapters, `version(1) flags(3)`, an unknown word when
 /// the version is non-zero, the count, then per chapter an 8-byte start in
 /// 1/10,000,000 s units, a length byte and the title.
