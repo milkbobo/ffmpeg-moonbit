@@ -5118,3 +5118,32 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   `4f289b44…`，均与裸流参考一致。
 
 全量 wasm **1186/1186**。
+
+## 178. Vorbis I 解码与 Ogg 解复用
+
+- 新增 `libavcodec/vorbis_tables.mbt`（`scripts/_gen_vorbis_tables.py`
+  从 `vorbis_data.c` 提取 8 组窗口斜率与 floor1 逆 dB 表）与
+  `libavcodec/vorbis.mbt`：LSB-first 位读器、`ff_vorbis_len2vlc`
+  规范 Huffman、码本（VQ lookup type 1、稀疏/有序长度码）、floor 0/1
+  （`ff_vorbis_floor1_render_list` 整数光栅化）、residue 0/1/2
+  （含 libvorbis 尾包兼容）、平方极坐标耦合、submap/mux、全部模式与
+  重叠相加；输出按 FFmpeg 的 Vorbis→native 声道偏移表重排。
+- IMDCT：C 侧用 `AV_TX_FLOAT_MDCT` 半逆变换（scale=-1）；本移植实测
+  其基函数为 `out[k]=Σ c[j]·(-1)^(j+1)·sin(π/(4n)(2k+1)(2j+1))`
+  （用 gcc 探针逐点核对 L=8/16/32），以正弦递推 O(N²) 求值。
+  `vector_fmul_window` 的索引按 C 语义使用 `win[k]/win[2len-1-k]` 与
+  `dst[k]/dst[2len-1-k]`（与 AAC 的窗口布局不同）。
+- 新增 `libavformat/ogg_vorbis.mbt`：Ogg 页/CRC/lacing 解析、三头校验、
+  音频包与 granule 收集；`decode_stream` 跳过首帧（对齐解码器
+  `skip_samples`），`decode_stream_trimmed` 再按 granule 裁尾
+  （等价 oggparsevorbis 的 `end_trimming`；granule 短于末块的流按
+  FFmpeg 行为保留整帧，测试用未裁剪路径）。
+- 回归 `vorbis_realdata_test.mbt`：FFmpeg 9.0.2 libvorbis 编码的
+  mono/stereo（44.1 kHz，耦合+residue 2）、5.1（48 kHz，2 submap、
+  4 耦合步、residue 2/2/1）与 pink 噪声（短块切换）四组真实流，
+  解复用参数、包数、granule 校验后 s16 输出与 FFmpeg 参考最大差
+  1 LSB 且长度一致；另测 CRC 损坏与错误容器被拒绝。
+- 已知限制：floor 0 与码本 lookup type 2 未由 libvorbis 产出，floor 0
+  仅按 C 实现、无真实夹具；解码为 O(N²) IMDCT（测试规模可接受）。
+
+全量 wasm **1191/1191**。
