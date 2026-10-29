@@ -288,3 +288,52 @@ test "MKV MJPEG and PNG muxers round-trip and decode" {
     cmx_check_png_frame(packet.data, cmx_png_refs[i])
   }
 }
+
+///|
+test "MP4 MJPEG and PNG muxers round-trip and decode" {
+  let mjpeg_mov = @libavutil.av_base64_decode(cmx_mjpeg_mov, 200000).unwrap()
+  let mj = cmx_mov_samples(mjpeg_mov, "mjpeg")
+  let mj_mux = @libavformat.mp4_mjpeg_muxer_new(64, 48).unwrap()
+  for frame in mj {
+    mj_mux.write_packet(frame, duration=3000).unwrap()
+  }
+  let mj_bytes = mj_mux.finish()
+  let mj_movie = @libavformat.av_mov_open(mj_bytes).unwrap()
+  assert_eq(mj_movie.tracks.length(), 1)
+  let mj_track = mj_movie.tracks[0]
+  assert_eq(
+    @libavformat.mov_codec_name(mj_track.codec, mj_track.codec_id),
+    "mjpeg",
+  )
+  assert_eq(mj_track.width, 64)
+  assert_eq(mj_track.height, 48)
+  assert_eq(mj_track.sample_count, 2)
+  for i, sample in mj_track.samples {
+    let start = sample.offset.to_int()
+    let frame = mj_bytes[start:start + sample.size.reinterpret_as_int()].to_owned()
+    assert_eq(frame, mj[i])
+    cmx_check_mjpeg_frame(frame, cmx_mjpeg_refs[i])
+  }
+  let png_mov = @libavutil.av_base64_decode(cmx_png_mov, 200000).unwrap()
+  let pn = cmx_mov_samples(png_mov, "png")
+  let pn_mux = @libavformat.mp4_png_muxer_new(64, 48).unwrap()
+  for frame in pn {
+    pn_mux.write_packet(frame, duration=3000).unwrap()
+  }
+  let pn_bytes = pn_mux.finish()
+  let pn_movie = @libavformat.av_mov_open(pn_bytes).unwrap()
+  let pn_track = pn_movie.tracks[0]
+  assert_eq(
+    @libavformat.mov_codec_name(pn_track.codec, pn_track.codec_id),
+    "png",
+  )
+  assert_eq(pn_track.width, 64)
+  assert_eq(pn_track.height, 48)
+  assert_eq(pn_track.sample_count, 2)
+  for i, sample in pn_track.samples {
+    let start = sample.offset.to_int()
+    let frame = pn_bytes[start:start + sample.size.reinterpret_as_int()].to_owned()
+    assert_eq(frame, pn[i])
+    cmx_check_png_frame(frame, cmx_png_refs[i])
+  }
+}

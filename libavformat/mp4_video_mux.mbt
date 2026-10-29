@@ -86,11 +86,13 @@ fn mp4_visual_entry(
   }
   mp4_u16(body, 0x0018) // depth
   mp4_u16(body, 0xFFFF) // pre_defined = -1
-  let config_body : Array[Byte] = []
-  for b in config {
-    config_body.push(b)
+  if config_tag != "" {
+    let config_body : Array[Byte] = []
+    for b in config {
+      config_body.push(b)
+    }
+    body.append(mp4_box(config_tag, config_body))
   }
-  body.append(mp4_box(config_tag, config_body))
   mp4_box(tag, body)
 }
 
@@ -120,14 +122,22 @@ fn Mp4H264Muxer::video_entry(self : Mp4H264Muxer) -> Array[Byte] {
 }
 
 ///|
-pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
-  let sample_count = self.packets.length()
+fn mp4_video_document(
+  width : Int32,
+  height : Int32,
+  timescale : Int32,
+  entry : Array[Byte],
+  packets : Array[Bytes],
+  durations : Array[Int32],
+  keyframes : Array[Bool],
+) -> Bytes {
+  let sample_count = packets.length()
   let mut total_duration = 0
-  for d in self.durations {
+  for d in durations {
     total_duration = total_duration + d
   }
   let data : Array[Byte] = []
-  for packet in self.packets {
+  for packet in packets {
     for b in packet {
       data.push(b)
     }
@@ -145,7 +155,7 @@ pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
   let mvhd_body : Array[Byte] = []
   mp4_u32(mvhd_body, 0U)
   mp4_u32(mvhd_body, 0U)
-  mp4_u32(mvhd_body, self.timescale.reinterpret_as_uint())
+  mp4_u32(mvhd_body, timescale.reinterpret_as_uint())
   mp4_u32(mvhd_body, total_duration.reinterpret_as_uint())
   mp4_u32(mvhd_body, 0x00010000U)
   mp4_u16(mvhd_body, 0x0100)
@@ -174,14 +184,14 @@ pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
   mp4_u16(tkhd_body, 0)
   mp4_u16(tkhd_body, 0)
   mp4_matrix(tkhd_body)
-  mp4_u32(tkhd_body, (self.width << 16).reinterpret_as_uint())
-  mp4_u32(tkhd_body, (self.height << 16).reinterpret_as_uint())
+  mp4_u32(tkhd_body, (width << 16).reinterpret_as_uint())
+  mp4_u32(tkhd_body, (height << 16).reinterpret_as_uint())
   let tkhd = mp4_full_box("tkhd", 0, 7, tkhd_body)
 
   let mdhd_body : Array[Byte] = []
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, 0U)
-  mp4_u32(mdhd_body, self.timescale.reinterpret_as_uint())
+  mp4_u32(mdhd_body, timescale.reinterpret_as_uint())
   mp4_u32(mdhd_body, total_duration.reinterpret_as_uint())
   mp4_u16(mdhd_body, 0x55C4)
   mp4_u16(mdhd_body, 0)
@@ -215,11 +225,11 @@ pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
 
   let stsd_body : Array[Byte] = []
   mp4_u32(stsd_body, 1U)
-  stsd_body.append(self.video_entry())
+  stsd_body.append(entry)
   let stsd = mp4_full_box("stsd", 0, 0, stsd_body)
 
   let runs : Array[(Int32, Int32)] = []
-  for d in self.durations {
+  for d in durations {
     if runs.length() > 0 && runs[runs.length() - 1].1 == d {
       runs[runs.length() - 1] = (runs[runs.length() - 1].0 + 1, d)
     } else {
@@ -235,8 +245,8 @@ pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
   let stts = mp4_full_box("stts", 0, 0, stts_body)
 
   let sync : Array[Int32] = []
-  for i in 0..<self.keyframes.length() {
-    if self.keyframes[i] {
+  for i in 0..<keyframes.length() {
+    if keyframes[i] {
       sync.push(i + 1)
     }
   }
@@ -263,7 +273,7 @@ pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
   let stsz_body : Array[Byte] = []
   mp4_u32(stsz_body, 0U)
   mp4_u32(stsz_body, sample_count.reinterpret_as_uint())
-  for packet in self.packets {
+  for packet in packets {
     mp4_u32(stsz_body, packet.length().reinterpret_as_uint())
   }
   let stsz = mp4_full_box("stsz", 0, 0, stsz_body)
@@ -289,4 +299,17 @@ pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
   let trak = mp4_box("trak", mp4_cat([tkhd, mdia]))
   let moov = mp4_box("moov", mp4_cat([mvhd, trak]))
   Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
+}
+
+///|
+pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
+  mp4_video_document(
+    self.width,
+    self.height,
+    self.timescale,
+    self.video_entry(),
+    self.packets,
+    self.durations,
+    self.keyframes,
+  )
 }

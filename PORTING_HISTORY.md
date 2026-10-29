@@ -5176,3 +5176,18 @@ MOV/MKV 的 MJPEG/PNG 帧 MD5 与 `ffmpeg -f framemd5` 完全一致
 与 MP3 写入器回读一致，外部 ffmpeg 解码我们写出的三个 MKV：静像
 framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 （`5910ef2b…`）。全量 wasm **1196/1196**。
+
+## 180. MP4/MOV MJPEG/PNG 静像写入
+
+- `mp4_video_mux.mbt` 将 `finish` 的文档构建抽成 `mp4_video_document`
+  （H.264 写入器保留薄包装，行为不变），`mp4_visual_entry` 支持无解码
+  配置子盒的样本条目（`config_tag == ""` 时省略）。
+- 新增 `mp4_still_mux.mbt`：`mp4_mjpeg_muxer_new`（`jpeg` 样本条目）与
+  `mp4_png_muxer_new`（`png ` 样本条目），单视频轨、单 chunk、stts/
+  stsc/stsz/stco/stss，与 MOV 解复用器和 FFmpeg 的 MOV muxer 四字码一致。
+- 回归 `container_codec_matrix_realdata_test.mbt` 新增 MP4/MOV 静像写入
+  用例：回读样本逐字节一致、帧 MD5 与 `ffmpeg -f framemd5` 相同；外部
+  ffmpeg 9.0.2 可直接解码我们写出的 MP4，codec_tag 分别为 `jpeg`/`png `，
+  两帧 framemd5 与源一致（`165c0e08…`/`9cc1f45c…`、`84cf7e4f…`/`87a8e6c7…`）。
+
+全量 wasm **1197/1197**。
