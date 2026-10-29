@@ -776,11 +776,43 @@ fn matroska_track_table(t : MkvTrack) -> Array[EbmlSyntax] {
 }
 
 ///|
+/// `ff_codec_bmp_tags` subset for `V_MS/VFW/FOURCC` tracks: FFmpeg resolves
+/// the BITMAPINFOHEADER `biCompression` fourcc through the RIFF table.
+fn matroska_vfw_codec(fourcc : UInt32) -> String {
+  match fourcc {
+    0x474E504DU => "png" // "MPNG"
+    0x31474E50U => "png" // "PNG1"
+    0x20676E70U => "png" // "png "
+    0x47504A4DU => "mjpeg" // "MJPG"
+    0x6765706AU => "mjpeg" // "jpeg"
+    0x67706A6DU => "mjpeg" // "mjpg"
+    _ => ""
+  }
+}
+
+///|
 /// ALAC's Matroska CodecPrivate holds only the 24-byte ALACSpecificConfig;
 /// the decoder expects the 36-byte QuickTime atom (matroskadec.c fabricates
-/// the size/tag/version header).
+/// the size/tag/version header). `V_MS/VFW/FOURCC` tracks are resolved
+/// through the embedded BITMAPINFOHEADER fourcc, as matroskadec.c does.
 fn matroska_fixup_codec_priv(mh : MatroskaHeader) -> Unit {
   for track in mh.tracks {
+    if track.codec_id == Some("V_MS/VFW/FOURCC") {
+      match track.codec_priv {
+        Some(cp) =>
+          if cp.length() >= 20 {
+            let fourcc = cp[16].to_uint() |
+              (cp[17].to_uint() << 8) |
+              (cp[18].to_uint() << 16) |
+              (cp[19].to_uint() << 24)
+            let codec = matroska_vfw_codec(fourcc)
+            if codec != "" {
+              track.codec_id = Some(codec)
+            }
+          }
+        None => ()
+      }
+    }
     if track.codec_id == Some("A_ALAC") {
       match track.codec_priv {
         Some(cp) => {

@@ -305,6 +305,19 @@ pub fn mkv_eac3_muxer_new(
 }
 
 ///|
+/// One MP3 track in Matroska (`A_MPEG/L3`).  MP3 frames are self-describing,
+/// so no CodecPrivate is written.
+pub fn mkv_mp3_muxer_new(
+  sample_rate : Int32,
+  channels : Int32,
+) -> Result[MkvAc3Muxer, String] {
+  if sample_rate <= 0 || channels < 1 || channels > 2 {
+    return Err("EINVAL: invalid MKV/MP3 stream parameters")
+  }
+  Ok({ codec_id: "A_MPEG/L3", sample_rate, channels, events: [], })
+}
+
+///|
 pub fn MkvAc3Muxer::write_packet(
   self : MkvAc3Muxer,
   packet : Bytes,

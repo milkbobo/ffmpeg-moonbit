@@ -83,6 +83,9 @@ pub fn mov_codec_name(codec : String, codec_id : String) -> String {
     "vp08" => "vp8"
     "vp09" => "vp9"
     "mp4v" => "mpeg4"
+    "jpeg" | "mjpa" | "mjpg" => "mjpeg"
+    "mjpb" => "mjpegb"
+    "png " => "png"
     "mp4a" => if codec_id != "" { codec_id } else { "aac" }
     ".mp3" | "mp3 " | "0x6D730055" => "mp3"
     "ac-3" => "ac3"

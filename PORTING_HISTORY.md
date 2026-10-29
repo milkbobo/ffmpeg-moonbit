@@ -5147,3 +5147,32 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   仅按 C 实现、无真实夹具；解码为 O(N²) IMDCT（测试规模可接受）。
 
 全量 wasm **1191/1191**。
+
+## 179. 清单内编解码 x 容器交叉补齐
+
+本轮核对：用户列出的解码器（H.264/HEVC/AV1/VP9/MJPEG/PNG/AAC/MP3/Opus）与容器
+（MP4/MKV/TS/HLS/DASH/WebM/WAV）此前均已落地；本轮实际做交叉矩阵检查
+后补齐 4 个集成缺口：
+
+- MOV 静像：`mov_codec_name` 增加 `jpeg`/`mjpa`/`mjpg`→`mjpeg`、
+  `mjpb`→`mjpegb`、`png `→`png`，MOV 内的 MJPEG/PNG 样本可直接交给
+  现有解码器。
+- Matroska 静像：`V_MS/VFW/FOURCC` 轨按 FFmpeg `matroskadec.c` 读取
+  BITMAPINFOHEADER 的 `biCompression`（偏移 16），`MPNG`/`PNG1`/`png `
+  →`png`，`MJPG`/`jpeg`/`mjpg`→`mjpeg`；FFmpeg 自身 Matroska muxer
+  写 PNG 用的正是 VFW+MPNG（它没有 `V_PNG` 标签）。
+- 新增 `mkv_mp3_muxer_new`（`A_MPEG/L3`，无 CodecPrivate）与
+  `mkv_still_mux.mbt`：`mkv_mjpeg_muxer_new`（`V_MJPEG`）、
+  `mkv_png_muxer_new`（`V_MS/VFW/FOURCC` + 40 字节 BITMAPINFOHEADER
+  `MPNG`/24bpp），单 Cluster SimpleBlocks。
+- WAV：实测 0x0055 MP3 与 0x00FF/0x1610 AAC 载荷均可解复用；MP3 用
+  `av_mp3_open` 切帧后逐帧解码；AAC 原始块按 `block_align` 分块而非
+  按帧，只有首块落在帧边界，剩余块需要 AAC parser（未移植，已在测试
+  注释与 README 标注）。
+
+新回归 `container_codec_matrix_realdata_test.mbt`（FFmpeg 9.0.2 夹具）：
+MOV/MKV 的 MJPEG/PNG 帧 MD5 与 `ffmpeg -f framemd5` 完全一致
+（`165c0e08…`/`9cc1f45c…`、`84cf7e4f…`/`87a8e6c7…`）；MKV MJPEG/PNG
+与 MP3 写入器回读一致，外部 ffmpeg 解码我们写出的三个 MKV：静像
+framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
+（`5910ef2b…`）。全量 wasm **1196/1196**。
