@@ -5057,3 +5057,24 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   裸流参考 PCM MD5 完全相同。
 
 全量 wasm **1175/1175**。
+
+## 175. WMA v1/v2 解码
+
+- 新增 `wma_tables.mbt`（`scripts/_gen_wma_tables.py` 从 `wmadata.h`/
+  `wma_freqs.c` 提取：六张系数 VLC 表（huffcodes/huffbits/levels）、
+  LSP 码本、hgain 码表、指数带表与临界频率）。
+- 新增 `wma.mbt`/`wma_decode.mbt`：移植 `wma.c` 的 `ff_wma_init`
+  （frame_len/噪声编码判定/指数带与高频带划分/噪声表/系数表选择/LSP
+  pow 表）与 `wmadec.c`（指数 VLC/LSP 解码、run-level 系数、噪声编码、
+  MS stereo、正弦窗与全 IMDCT、比特储备/可变块语法、EOF 冲刷帧）。
+  C 的 float FFT MDCT 改为按行余弦递推的直接全 IMDCT（等价
+  `ff_tx_mdct_inv_full`，含 1/32768 缩放）。
+- 回归 `wma_realdata_test.mbt`：ffmpeg 9.0.2 wmav1/wmav2 编码后以
+  `-c copy -f data` 提取的包（44.1 kHz 单声道 96/32 kb/s、立体声
+  128 kb/s、32 kHz 单声道 64 kb/s、WMA v1），按 API 语义跳过 2 帧
+  解码延迟并附 EOF 重叠帧，s16 输出与 ffmpeg 参考最大差 1 LSB；
+  另测非法版本/声道/block_align 拒绝。
+- 已知限制：ASF 解复用尚未实现（夹具以包级 API 提供），比特储备/
+  可变块路径已移植但无编码器可产出真实夹具。
+
+全量 wasm **1177/1177**。
