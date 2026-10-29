@@ -116,29 +116,102 @@ fn flac_zigzag(v : Int32) -> Int64 {
 }
 
 ///|
-fn flac_rice_bits(v : Int64, k : Int32) -> Int64 {
-  (v >> k) + 1L + k.to_int64()
-}
-
-///|
+/// Best Rice parameter for `res[from..<to]` and its total bit cost.
 fn flac_choose_rice(
   res : Array[Int32],
   from : Int32,
+  to : Int32,
   max_k : Int32,
 ) -> (Int32, Int64) {
+  let count = to - from
+  if count <= 0 {
+    return (0, 0L)
+  }
+  let folded : Array[Int64] = Array::make(count, 0L)
+  for i = 0; i < count; i = i + 1 {
+    folded[i] = flac_zigzag(res[from + i])
+  }
   let mut best_k = 0
   let mut best_bits = -1L
   for k = 0; k <= max_k; k = k + 1 {
-    let mut bits = 0L
-    for i in from..<res.length() {
-      bits = bits + flac_rice_bits(flac_zigzag(res[i]), k)
+    let mut sum = 0L
+    for i = 0; i < count; i = i + 1 {
+      sum = sum + (folded[i] >> k)
     }
+    let bits = sum + count.to_int64() * (1 + k).to_int64()
     if best_bits < 0L || bits < best_bits {
       best_bits = bits
       best_k = k
     }
   }
   (best_k, best_bits)
+}
+
+///|
+/// `get_max_p_order`: a partition order needs `blocksize % 2^p == 0` (the
+/// trailing-zero count, `av_log2(n ^ (n-1))`) and, for a predictor, enough
+/// samples per partition (`av_log2(blocksize / pred_order)`); capped at the
+/// eight partitions `MAX_PARTITION_ORDER` allows.
+fn flac_max_partition_order(n : Int32, pred_order : Int32) -> Int32 {
+  let mut p = 0
+  let mut m = n
+  while p < 8 && (m & 1) == 0 {
+    m = m >> 1
+    p = p + 1
+  }
+  if pred_order > 0 {
+    let mut q = 0
+    let mut d = n / pred_order
+    while d > 1 {
+      d = d >> 1
+      q = q + 1
+    }
+    if q < p {
+      p = q
+    }
+  }
+  p
+}
+
+///|
+/// `calc_rice_params`: try every partition order and keep the cheapest total,
+/// counting the 4-bit partition order plus one parameter per partition.
+fn flac_choose_partitioned_rice(
+  res : Array[Int32],
+  n : Int32,
+  pred_order : Int32,
+  max_k : Int32,
+  param_bits : Int32,
+) -> (Int32, Array[Int32], Int64) {
+  let max_p = flac_max_partition_order(n, pred_order)
+  let mut best_p = 0
+  let mut best_ks : Array[Int32] = []
+  let mut best_bits = -1L
+  for porder = 0; porder <= max_p; porder = porder + 1 {
+    let psize = n >> porder
+    let parts = 1 << porder
+    let ks : Array[Int32] = Array::make(parts, 0)
+    let mut bits = 4L + (parts * param_bits).to_int64()
+    let mut ok = true
+    for part = 0; part < parts; part = part + 1 {
+      // The first partition also carries the warmed-up samples' slot.
+      let from = if part == 0 { pred_order } else { part * psize }
+      let to = (part + 1) * psize
+      if from > to {
+        ok = false
+        break
+      }
+      let (k, kb) = flac_choose_rice(res, from, to, max_k)
+      ks[part] = k
+      bits = bits + kb
+    }
+    if ok && (best_bits < 0L || bits < best_bits) {
+      best_bits = bits
+      best_p = porder
+      best_ks = ks
+    }
+  }
+  (best_p, best_ks, if best_bits < 0L { 0L } else { best_bits })
 }
 
 ///|
@@ -340,7 +413,8 @@ fn flac_lpc_residual(
 priv struct FlacSubframePlan {
   kind : Int32 // 0 constant, 1 verbatim, 2 fixed, 3 LPC
   order : Int32
-  rice_k : Int32
+  porder : Int32
+  rice_ks : Array[Int32]
   residual : Array[Int32]
   wasted : Int32
   lpc_shift : Int32
@@ -398,7 +472,8 @@ fn flac_plan_subframe(
     return {
       kind: 0,
       order: 0,
-      rice_k: 0,
+      porder: 0,
+      rice_ks: [],
       residual: [],
       wasted,
       lpc_shift: 0,
@@ -413,35 +488,38 @@ fn flac_plan_subframe(
   let mut best : FlacSubframePlan = {
     kind: 1,
     order: 0,
-    rice_k: 0,
+    porder: 0,
+    rice_ks: [],
     residual: [],
     wasted,
     lpc_shift: 0,
     lpc_coeffs: [],
     bits: verbatim_bits,
   }
+  // Predictors are ranked by their single-partition cost; the cheapest one
+  // then gets the full partition-order search, since running it for every
+  // candidate order multiplies the Rice search by the number of orders.
+  let mut pred : FlacSubframePlan? = None
+  let mut pred_bits = -1L
+  let header_base = 8L + 2L + wasted_cost + 4L + param_bits.to_int64()
   let max_order = if n - 1 < 4 { n - 1 } else { 4 }
   for order = 0; order <= max_order; order = order + 1 {
     let residual = flac_fixed_residual(work, n, order)
-    let (k, rice_bits) = flac_choose_rice(residual, order, max_k)
-    let header = 8L +
-      (order * eff_bits).to_int64() +
-      2L +
-      4L +
-      param_bits.to_int64() +
-      wasted_cost
-    let total = header + rice_bits
-    if total < best.bits {
-      best = {
+    let (k, rice_bits) = flac_choose_rice(residual, order, n, max_k)
+    let total = header_base + (order * eff_bits).to_int64() + rice_bits
+    if pred_bits < 0L || total < pred_bits {
+      pred_bits = total
+      pred = Some({
         kind: 2,
         order,
-        rice_k: k,
+        porder: 0,
+        rice_ks: [k],
         residual,
         wasted,
         lpc_shift: 0,
         lpc_coeffs: [],
         bits: total,
-      }
+      })
     }
   }
   // LPC: Levinson-Durbin coefficients quantized to 15 bits. Every order is
@@ -456,27 +534,57 @@ fn flac_plan_subframe(
       match flac_lpc_residual(work, n, order, coefs, shift) {
         None => ()
         Some(residual) => {
-          let (k, rice_bits) = flac_choose_rice(residual, order, max_k)
-          let header = 8L +
+          let (k, rice_bits) = flac_choose_rice(residual, order, n, max_k)
+          let total = header_base +
             (order * eff_bits).to_int64() +
-            2L +
-            param_bits.to_int64() +
-            wasted_cost +
             9L +
-            15L * order.to_int64()
-          let total = header + rice_bits
-          if total < best.bits {
-            best = {
+            15L * order.to_int64() +
+            rice_bits
+          if pred_bits < 0L || total < pred_bits {
+            pred_bits = total
+            pred = Some({
               kind: 3,
               order,
-              rice_k: k,
+              porder: 0,
+              rice_ks: [k],
               residual,
               wasted,
               lpc_shift: shift,
               lpc_coeffs: coefs,
               bits: total,
-            }
+            })
           }
+        }
+      }
+    }
+  }
+  match pred {
+    None => ()
+    Some(p) => {
+      let header = 8L +
+        (p.order * eff_bits).to_int64() +
+        2L +
+        wasted_cost +
+        (if p.kind == 3 { 9L + 15L * p.order.to_int64() } else { 0L })
+      let (porder, ks, rice_total) = flac_choose_partitioned_rice(
+        p.residual,
+        n,
+        p.order,
+        max_k,
+        param_bits,
+      )
+      let total = header + rice_total
+      if total < best.bits {
+        best = {
+          kind: p.kind,
+          order: p.order,
+          porder,
+          rice_ks: ks,
+          residual: p.residual,
+          wasted,
+          lpc_shift: p.lpc_shift,
+          lpc_coeffs: p.lpc_coeffs,
+          bits: total,
         }
       }
     }
@@ -530,12 +638,20 @@ fn flac_write_subframe(
       }
     }
     let rice2 = eff_bits > 16
-    // 2-bit coding mode (0 = Rice, 1 = Rice2), partition order = 0
+    // 2-bit coding mode (0 = Rice, 1 = Rice2) and the partition order
     w.write(if rice2 { 1U } else { 0U }, 2)
-    w.write(0U, 4)
-    w.write(plan.rice_k.reinterpret_as_uint(), if rice2 { 5 } else { 4 })
-    for i = plan.order; i < n; i = i + 1 {
-      flac_write_rice(w, plan.residual[i], plan.rice_k)
+    w.write(plan.porder.reinterpret_as_uint(), 4)
+    let psize = n >> plan.porder
+    let parts = 1 << plan.porder
+    let mut wi = plan.order
+    for part = 0; part < parts; part = part + 1 {
+      let k = plan.rice_ks[part]
+      w.write(k.reinterpret_as_uint(), if rice2 { 5 } else { 4 })
+      let count = if part == 0 { psize - plan.order } else { psize }
+      for c = 0; c < count; c = c + 1 {
+        flac_write_rice(w, plan.residual[wi], k)
+        wi = wi + 1
+      }
     }
   }
 }

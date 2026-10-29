@@ -236,3 +236,52 @@ test "flac encoder: 24-bit stereo LPC round-trips through decorrelation" {
     assert_eq(dec.samples[i] >> 8, samples[i])
   }
 }
+
+///|
+/// Read `count` bits (MSB first) starting at the frame's absolute `bitpos`.
+fn flacenc_bits(data : Bytes, bitpos : Int32, count : Int32) -> Int32 {
+  let mut v = 0
+  for i = 0; i < count; i = i + 1 {
+    let p = bitpos + i
+    let bit = (data[p / 8].to_int() >> (7 - p % 8)) & 1
+    v = (v << 1) | bit
+  }
+  v
+}
+
+///|
+/// Partition order of the first subframe of a full 16-bit mono frame: the
+/// frame header is 6 bytes (fixed 4096 block, frame number 0, CRC-8) and the
+/// subframe starts there with a fixed or LPC type.
+fn flacenc_first_porder(frame : Bytes) -> Int32 raise {
+  let hdr = frame[6].to_int()
+  let kind = (hdr >> 1) & 0x3F
+  assert_true(kind >= 8, msg="expected a fixed or LPC subframe")
+  let order = if kind >= 32 { kind - 31 } else { kind - 8 }
+  let pos = 48 + 8 + order * 16
+  assert_eq(flacenc_bits(frame, pos, 2), 0)
+  flacenc_bits(frame, pos + 2, 4)
+}
+
+///|
+test "flac encoder: partition search splits nonstationary blocks" {
+  let n = 4096
+  let sig : Array[Int32] = Array::make(n, 0)
+  let mut state : Int32 = 12345
+  for i = 0; i < n; i = i + 1 {
+    state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+    let noise = state % 2001 - 1000
+    let amp = if i < n / 2 { 100 } else { 12000 }
+    sig[i] = noise * amp / 1000
+  }
+  let enc = @libavcodec.flac_encode(sig, 1, 44100, 16).unwrap()
+  assert_true(
+    flacenc_first_porder(enc.frames[0]) > 0,
+    msg="expected a partition order > 0 for a nonstationary block",
+  )
+  let dec = @libavcodec.ff_flac_decode(enc.file()).unwrap()
+  assert_eq(dec.samples.length(), n)
+  for i = 0; i < n; i = i + 1 {
+    assert_eq(dec.samples[i], sig[i])
+  }
+}
