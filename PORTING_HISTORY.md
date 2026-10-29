@@ -5078,3 +5078,21 @@ rhigh 依赖这一点，最初实现导致样本 20 起出现 ±1 漂移。
   可变块路径已移植但无编码器可产出真实夹具。
 
 全量 wasm **1177/1177**。
+
+## 176. ASF/WMA 解复用
+
+- 新增 `asf.mbt`：解析 ASF Header Object 的 File Properties（packet size、
+  preroll）与音频 Stream Properties（WAVEFORMATEX：0x160 WMAv1 /
+  0x161 WMAv2、采样率、声道、avg bytes、block_align、CodecPrivate），
+  并在 Header Object 之后定位 Data Object；按
+  `asf_get_packet`/`asf_read_frame_header`/`asf_parse_packet` 解析包级
+  ECC、PPI/填充/时间戳、每负载的 stream/property 字段、replicated data
+  （媒体对象大小与时间戳）及分片，拼装为每帧一个 `AsfPacket`；
+  另支持 bit-reservoir 的多子负载包。
+- 回归 `asf_realdata_wbtest.mbt`：ffmpeg wmav2 生成的 44.1 kHz 单/立体声
+  ASF，校验 packet size 3200、preroll 3100、流参数、6 个 557 字节负载及
+  PTS（0/46/92/139/185/232 ms）；`wma_decoder_new` + 包级解码（跳过
+  2 帧延迟 + EOF 冲刷）与 ffmpeg 参考 PCM 最大差 1 LSB。
+- 已知限制：仅音频流；视频/扩展流属性/DRM/负载扩展系统跳过。
+
+全量 wasm **1180/1180**。
