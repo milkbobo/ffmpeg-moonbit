@@ -5251,3 +5251,21 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 已知限制：未实现 LPC、分区阶 >0、stereo decorrelation、wasted bits
   与 32-bit 样本；压缩率低于 ffmpeg 的默认编码器，但输出为标准 FLAC。
 - 全量 wasm **1208/1208**。
+
+## 185. ALAC 编码器
+
+- 新增 `alac_encode.mbt`：单声道 SCE / 立体声 CPE，预测类型 0（无 LPC）、
+  Rice 熵编码（history_mult 40 / initial_history 10 / k_modifier 14 /
+  rice_modifier 4）、24-bit 的 extra bits 交织、TYPE_END 与字节对齐；
+  36 字节 ALACSpecificConfig cookie（帧长、位深、声道、Rice 参数、
+  最大帧长、平均码率、采样率）。
+- API：`alac_encode(samples, channels, sample_rate, bits, frame_size~=4096)`
+  返回 `AlacEncoded { cookie, frames }`；支持 16/24-bit、1-2 声道。
+- 回归 `alac_encode_realdata_test.mbt`：16-bit stereo（8820 样本/3 帧）与
+  24-bit mono（7200/2 帧）WAV 夹具；`alac_decoder_new` 回转逐样本一致；
+  MP4 ALAC 写入回读帧一致；外部 ffmpeg 9.0.2 解码 MP4 的 PCM 与源 WAV
+  逐字节一致（`f3acc310…`、`741aa137…`）。非法参数（3 声道、8/20-bit、
+  0 采样率、非交织）拒绝。
+- 已知限制：无 LPC、stereo decorrelation、20/32-bit 与 >2 声道；压缩率
+  低于 ffmpeg 默认编码器，但输出为标准 ALAC。
+- 全量 wasm **1211/1211**。
