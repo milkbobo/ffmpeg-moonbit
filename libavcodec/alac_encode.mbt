@@ -236,7 +236,11 @@ fn alac_enc_lpc_params(
     return (0, 1, [])
   }
   let max_o = if n - 1 < max_order { n - 1 } else { max_order }
-  let autoc = flac_lpc_autocorr(samples, n, max_o)
+  let wide : Array[Int64] = Array::make(n, 0L)
+  for i = 0; i < n; i = i + 1 {
+    wide[i] = samples[i].to_int64()
+  }
+  let autoc = flac_lpc_autocorr(wide, n, max_o)
   let lpc = flac_lpc_levinson(autoc, max_o)
   let mut est = min_order
   let mut i = max_o - 1

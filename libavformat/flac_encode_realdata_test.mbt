@@ -174,7 +174,7 @@ test "flac encoder: stereo decorrelation compresses correlated channels" {
 test "flac encoder: invalid parameters are rejected" {
   flacenc_expect_reject(@libavcodec.flac_encode([0, 1], 0, 44100, 16))
   flacenc_expect_reject(@libavcodec.flac_encode([0, 1], 2, 0, 16))
-  flacenc_expect_reject(@libavcodec.flac_encode([0, 1], 1, 44100, 32))
+  flacenc_expect_reject(@libavcodec.flac_encode([0, 1], 1, 44100, 28))
   flacenc_expect_reject(@libavcodec.flac_encode([0, 1, 2], 2, 44100, 16))
 }
 
@@ -283,5 +283,75 @@ test "flac encoder: partition search splits nonstationary blocks" {
   assert_eq(dec.samples.length(), n)
   for i = 0; i < n; i = i + 1 {
     assert_eq(dec.samples[i], sig[i])
+  }
+}
+
+///|
+/// 32-bit signal with a wide dynamic range: high bits from a slow sweep plus
+/// low-bit noise, which forces the 64-bit predictor path and the 33-bit side
+/// channel for stereo.
+fn flacenc_pcm32(n : Int32, seed : Int32, mono : Bool) -> Array[Int32] {
+  let out : Array[Int32] = []
+  let mut state : Int32 = seed
+  for i = 0; i < n; i = i + 1 {
+    state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+    let noise = state % 4097 - 2048
+    let base = (i * 1000000) & 0x3FFFFFF
+    let l = (base << 5) + noise
+    out.push(l)
+    if !mono {
+      // Highly correlated right channel: the difference stays 32-bit safe.
+      out.push(l - noise / 2)
+    }
+  }
+  out
+}
+
+///|
+test "flac encoder: 32-bit mono round-trips" {
+  let n = 4096
+  let samples = flacenc_pcm32(n, 7, true)
+  let enc = @libavcodec.flac_encode(samples, 1, 48000, 32).unwrap()
+  assert_eq(enc.frames.length(), 1)
+  let dec = @libavcodec.ff_flac_decode(enc.file()).unwrap()
+  assert_eq(dec.bits, 32)
+  assert_eq(dec.samples.length(), n)
+  for i = 0; i < n; i = i + 1 {
+    assert_eq(dec.samples[i], samples[i])
+  }
+}
+
+///|
+test "flac encoder: 32-bit stereo round-trips (33-bit side channel)" {
+  let n = 4096
+  let samples = flacenc_pcm32(n, 11, false)
+  let enc = @libavcodec.flac_encode(samples, 2, 48000, 32).unwrap()
+  let ch_code = enc.frames[0][3].to_int() >> 4
+  assert_true(ch_code >= 8 && ch_code <= 10, msg="expected a side channel mode")
+  let dec = @libavcodec.ff_flac_decode(enc.file()).unwrap()
+  assert_eq(dec.bits, 32)
+  assert_eq(dec.samples.length(), samples.length())
+  for i = 0; i < samples.length(); i = i + 1 {
+    assert_eq(dec.samples[i], samples[i])
+  }
+}
+
+///|
+test "flac encoder: 32-bit extreme side channel round-trips" {
+  let n = 4096
+  let minv : Int32 = -2147483647 - 1
+  let maxv : Int32 = 2147483647
+  let samples : Array[Int32] = []
+  for i = 0; i < n; i = i + 1 {
+    // The L-R difference spans the full 33 bits.
+    samples.push(if (i & 1) == 0 { maxv } else { minv })
+    samples.push(minv)
+  }
+  let enc = @libavcodec.flac_encode(samples, 2, 48000, 32).unwrap()
+  let dec = @libavcodec.ff_flac_decode(enc.file()).unwrap()
+  assert_eq(dec.bits, 32)
+  assert_eq(dec.samples.length(), samples.length())
+  for i = 0; i < samples.length(); i = i + 1 {
+    assert_eq(dec.samples[i], samples[i])
   }
 }

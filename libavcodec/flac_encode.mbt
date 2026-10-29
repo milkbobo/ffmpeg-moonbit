@@ -47,6 +47,25 @@ fn FlacBits::write_signed(self : FlacBits, v : Int32, bits : Int32) -> Unit {
 }
 
 ///|
+/// Signed write of up to 33 bits (warm-up samples of 32-bit stereo side
+/// channels need 33).
+fn FlacBits::write_signed_wide(
+  self : FlacBits,
+  v : Int64,
+  bits : Int32,
+) -> Unit {
+  let mut left = bits
+  while left > 0 {
+    let take = if left > 24 { 24 } else { left }
+    left = left - take
+    let chunk = ((v >> left) & ((1L << take) - 1L))
+      .to_int()
+      .reinterpret_as_uint()
+    self.write(chunk, take)
+  }
+}
+
+///|
 fn FlacBits::align(self : FlacBits) -> Unit {
   if self.nbits != 0 {
     let pad = 8 - self.nbits
@@ -233,46 +252,44 @@ fn flac_write_rice(w : FlacBits, v : Int32, k : Int32) -> Unit {
 }
 
 ///|
-/// Fixed-predictor residual of `samples[0..n]` for `order` in 0..4. */
+/// Fixed-predictor residual of `samples[0..n]` for `order` in 0..4. The
+/// predictor runs in 64 bits (32-bit input can overflow an int32 difference);
+/// `None` when a residual does not fit the 32-bit Rice range, which makes the
+/// caller fall back to another order or verbatim.
 fn flac_fixed_residual(
-  samples : Array[Int32],
+  samples : Array[Int64],
   n : Int32,
   order : Int32,
-) -> Array[Int32] {
+) -> Array[Int32]? {
   let res : Array[Int32] = Array::make(n, 0)
-  for i = 0; i < order; i = i + 1 {
-    res[i] = samples[i]
+  if order == 0 {
+    for i = 0; i < n; i = i + 1 {
+      if samples[i] < -2147483648L || samples[i] > 2147483647L {
+        return None
+      }
+      res[i] = samples[i].to_int()
+    }
+    return Some(res)
   }
-  match order {
-    0 =>
-      for i = 0; i < n; i = i + 1 {
-        res[i] = samples[i]
-      }
-    1 =>
-      for i = 1; i < n; i = i + 1 {
-        res[i] = samples[i] - samples[i - 1]
-      }
-    2 =>
-      for i = 2; i < n; i = i + 1 {
-        res[i] = samples[i] - 2 * samples[i - 1] + samples[i - 2]
-      }
-    3 =>
-      for i = 3; i < n; i = i + 1 {
-        res[i] = samples[i] -
-          3 * samples[i - 1] +
-          3 * samples[i - 2] -
-          samples[i - 3]
-      }
-    _ =>
-      for i = 4; i < n; i = i + 1 {
-        res[i] = samples[i] -
-          4 * samples[i - 1] +
-          6 * samples[i - 2] -
-          4 * samples[i - 3] +
-          samples[i - 4]
-      }
+  for i = order; i < n; i = i + 1 {
+    let r = match order {
+      1 => samples[i] - samples[i - 1]
+      2 => samples[i] - 2L * samples[i - 1] + samples[i - 2]
+      3 =>
+        samples[i] - 3L * samples[i - 1] + 3L * samples[i - 2] - samples[i - 3]
+      _ =>
+        samples[i] -
+        4L * samples[i - 1] +
+        6L * samples[i - 2] -
+        4L * samples[i - 3] +
+        samples[i - 4]
+    }
+    if r < -2147483648L || r > 2147483647L {
+      return None
+    }
+    res[i] = r.to_int()
   }
-  res
+  Some(res)
 }
 
 ///|
@@ -280,7 +297,7 @@ fn flac_fixed_residual(
 /// (`lpc_apply_welch_window_c` + `lpc_compute_autocorr_c`). The `+1.0` seeds
 /// match the C so that a silent block still yields a solvable system.
 fn flac_lpc_autocorr(
-  samples : Array[Int32],
+  samples : Array[Int64],
   n : Int32,
   lag : Int32,
 ) -> Array[Double] {
@@ -384,22 +401,19 @@ fn flac_quantize_lpc(
 /// LPC residual `x[i] - (sum_j coef[j] * x[i-1-j] >> shift)`; `None` when a
 /// residual falls outside the 32-bit range the bitstream can carry.
 fn flac_lpc_residual(
-  samples : Array[Int32],
+  samples : Array[Int64],
   n : Int32,
   order : Int32,
   coefs : Array[Int32],
   shift : Int32,
 ) -> Array[Int32]? {
   let res : Array[Int32] = Array::make(n, 0)
-  for i = 0; i < order; i = i + 1 {
-    res[i] = samples[i]
-  }
   for i = order; i < n; i = i + 1 {
     let mut sum = 0L
     for j = 0; j < order; j = j + 1 {
-      sum = sum + coefs[j].to_int64() * samples[i - 1 - j].to_int64()
+      sum = sum + coefs[j].to_int64() * samples[i - 1 - j]
     }
-    let r = samples[i].to_int64() - (sum >> shift)
+    let r = samples[i] - (sum >> shift)
     if r < -2147483648L || r > 2147483647L {
       return None
     }
@@ -424,20 +438,20 @@ priv struct FlacSubframePlan {
 
 ///|
 /// `remove_wasted_bits`: common trailing zero bits in a subframe (0 when none). */
-fn flac_wasted_bits(samples : Array[Int32], n : Int32, bits : Int32) -> Int32 {
-  let mut v = 0
+fn flac_wasted_bits(samples : Array[Int64], n : Int32, bits : Int32) -> Int32 {
+  let mut v = 0L
   for i = 0; i < n; i = i + 1 {
     v = v | samples[i]
-    if (v & 1) != 0 {
+    if (v & 1L) != 0 {
       return 0
     }
   }
-  if v == 0 {
+  if v == 0L {
     return 0
   }
   let mut wasted = 0
   let mut x = v
-  while (x & 1) == 0 {
+  while (x & 1L) == 0L {
     x = x >> 1
     wasted = wasted + 1
   }
@@ -450,13 +464,13 @@ fn flac_wasted_bits(samples : Array[Int32], n : Int32, bits : Int32) -> Int32 {
 
 ///|
 fn flac_plan_subframe(
-  samples : Array[Int32],
+  samples : Array[Int64],
   n : Int32,
   bits : Int32,
 ) -> FlacSubframePlan {
   let wasted = flac_wasted_bits(samples, n, bits)
   let eff_bits = bits - wasted
-  let work : Array[Int32] = Array::make(n, 0)
+  let work : Array[Int64] = Array::make(n, 0L)
   for i = 0; i < n; i = i + 1 {
     work[i] = if wasted > 0 { samples[i] >> wasted } else { samples[i] }
   }
@@ -504,22 +518,26 @@ fn flac_plan_subframe(
   let header_base = 8L + 2L + wasted_cost + 4L + param_bits.to_int64()
   let max_order = if n - 1 < 4 { n - 1 } else { 4 }
   for order = 0; order <= max_order; order = order + 1 {
-    let residual = flac_fixed_residual(work, n, order)
-    let (k, rice_bits) = flac_choose_rice(residual, order, n, max_k)
-    let total = header_base + (order * eff_bits).to_int64() + rice_bits
-    if pred_bits < 0L || total < pred_bits {
-      pred_bits = total
-      pred = Some({
-        kind: 2,
-        order,
-        porder: 0,
-        rice_ks: [k],
-        residual,
-        wasted,
-        lpc_shift: 0,
-        lpc_coeffs: [],
-        bits: total,
-      })
+    match flac_fixed_residual(work, n, order) {
+      None => ()
+      Some(residual) => {
+        let (k, rice_bits) = flac_choose_rice(residual, order, n, max_k)
+        let total = header_base + (order * eff_bits).to_int64() + rice_bits
+        if pred_bits < 0L || total < pred_bits {
+          pred_bits = total
+          pred = Some({
+            kind: 2,
+            order,
+            porder: 0,
+            rice_ks: [k],
+            residual,
+            wasted,
+            lpc_shift: 0,
+            lpc_coeffs: [],
+            bits: total,
+          })
+        }
+      }
     }
   }
   // LPC: Levinson-Durbin coefficients quantized to 15 bits. Every order is
@@ -595,7 +613,7 @@ fn flac_plan_subframe(
 ///|
 fn flac_write_subframe(
   w : FlacBits,
-  samples : Array[Int32],
+  samples : Array[Int64],
   n : Int32,
   bits : Int32,
   plan : FlacSubframePlan,
@@ -620,14 +638,14 @@ fn flac_write_subframe(
     w.write(1U, shift)
   }
   if plan.kind == 0 {
-    w.write_signed(samples[0] >> shift, eff_bits)
+    w.write_signed_wide(samples[0] >> shift, eff_bits)
   } else if plan.kind == 1 {
     for i = 0; i < n; i = i + 1 {
-      w.write_signed(samples[i] >> shift, eff_bits)
+      w.write_signed_wide(samples[i] >> shift, eff_bits)
     }
   } else {
     for i = 0; i < plan.order; i = i + 1 {
-      w.write_signed(samples[i] >> shift, eff_bits)
+      w.write_signed_wide(samples[i] >> shift, eff_bits)
     }
     if plan.kind == 3 {
       // coefficient precision - 1 (15 bits) and the signed quantizer shift
@@ -677,7 +695,8 @@ fn flac_bps_code(bits : Int32) -> Result[Int32, String] {
     16 => Ok(4)
     20 => Ok(5)
     24 => Ok(6)
-    _ => Err("EINVAL: FLAC encoder supports 8/12/16/20/24-bit samples")
+    32 => Ok(7)
+    _ => Err("EINVAL: FLAC encoder supports 8/12/16/20/24/32-bit samples")
   }
 }
 
@@ -757,10 +776,15 @@ pub fn flac_encode(
       } else if bytes_per == 2 {
         pcm_bytes.push((v & 0xFF).to_byte())
         pcm_bytes.push(((v >> 8) & 0xFF).to_byte())
+      } else if bytes_per == 3 {
+        pcm_bytes.push((v & 0xFF).to_byte())
+        pcm_bytes.push(((v >> 8) & 0xFF).to_byte())
+        pcm_bytes.push(((v >> 16) & 0xFF).to_byte())
       } else {
         pcm_bytes.push((v & 0xFF).to_byte())
         pcm_bytes.push(((v >> 8) & 0xFF).to_byte())
         pcm_bytes.push(((v >> 16) & 0xFF).to_byte())
+        pcm_bytes.push(((v >> 24) & 0xFF).to_byte())
       }
     }
   }
@@ -772,12 +796,13 @@ pub fn flac_encode(
     let n = if total - pos < block_size { total - pos } else { block_size }
     let is_full = n == block_size
     let w = flac_bits_new()
-    // Gather the source channels for this block.
-    let chans : Array[Array[Int32]] = []
+    // Gather the source channels for this block (64-bit: 32-bit stereo side
+    // channels need 33 bits).
+    let chans : Array[Array[Int64]] = []
     for ch = 0; ch < channels; ch = ch + 1 {
-      let ch_samples : Array[Int32] = Array::make(n, 0)
+      let ch_samples : Array[Int64] = Array::make(n, 0L)
       for i in 0..<n {
-        ch_samples[i] = samples[(pos + i) * channels + ch]
+        ch_samples[i] = samples[(pos + i) * channels + ch].to_int64()
       }
       chans.push(ch_samples)
     }
@@ -793,8 +818,8 @@ pub fn flac_encode(
     let mut best_plan1 = plan0
     let mut best_total = plan0.bits
     if channels == 2 {
-      let side : Array[Int32] = Array::make(n, 0)
-      let mid : Array[Int32] = Array::make(n, 0)
+      let side : Array[Int64] = Array::make(n, 0L)
+      let mid : Array[Int64] = Array::make(n, 0L)
       for i in 0..<n {
         side[i] = chans[0][i] - chans[1][i]
         mid[i] = (chans[0][i] + chans[1][i]) >> 1

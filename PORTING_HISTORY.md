@@ -5452,3 +5452,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：两 cue 文件经 ffmpeg 识别为 mov_text 字幕轨，提取 SRT
   与源逐行一致；本地回转样本数/时长/文本一致。
 - 全量 wasm **1236/1236**。
+
+## 196. FLAC 编码器：32-bit 样本与 33-bit 侧声道
+
+- 编码器内部样本/预测改为 64 位：`flac_fixed_residual` / `flac_lpc_residual`
+  在 64 位计算并检查 32 位残差范围（超界返回 None，回退其它阶或
+  verbatim），`flac_wasted_bits`、立体声 side/mid 与声道收集全部用
+  Int64；双层 Rice 选择与子帧成本不变。
+- `FlacBits::write_signed_wide` 支持最多 33 位的常数/verbatim/warm-up
+  写入（分块，避免 UInt32 左移 32）；帧头 bps 码新增 32→7；
+  STREAMINFO 位深 32（bits-1=31）与 PCM MD5 的 4 字节打包同步补齐。
+- 回归：32-bit mono、32-bit stereo（相关声道走 side 模式）与
+  L/R 极值（L-R 达 33 位，侧声道只能 verbatim）三组回转逐样本一致；
+  16-bit stereo / 相关立体声夹具编码尺寸保持 4903 / 1266 字节。
+- 外部验证：三组 32-bit 文件经 ffmpeg 9.0.2 解码 s32le 与源 PCM
+  逐字节一致，ffprobe 报告 flac/s32/32-bit。
+- 全量 wasm **1239/1239**。
