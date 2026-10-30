@@ -1,6 +1,6 @@
 ///|
-/// Minimal H.264 + AAC MP4 writer with two tracks and an optional mov-text
-/// (`tx3g`) subtitle track sharing one `mdat`. Video, audio and subtitle
+/// Minimal H.264/HEVC + AAC MP4 writer with two tracks and an optional
+/// mov-text (`tx3g`) subtitle track sharing one `mdat`. Video, audio and subtitle
 /// samples occupy separate chunks; each track has its own sample table and
 /// chunk offset.  Non-fragmented `moov` layout only.
 ///
@@ -11,6 +11,8 @@ pub struct Mp4AvMuxer {
   width : Int32
   height : Int32
   avcc : Bytes
+  /// Write an `hvc1`/`hvcC` video entry instead of `avc1`/`avcC`.
+  hevc : Bool
   video_packets : Array[Bytes]
   video_durations : Array[Int32]
   video_keyframes : Array[Bool]
@@ -40,6 +42,8 @@ pub fn mp4_av_muxer_new(
   aac_priming~ : Int32 = 0,
   /// Explicit audio sample entry (e.g. `mp4_ac3_entry`); AAC when None.
   audio_entry~ : Array[Byte]? = None,
+  /// Interpret `avcc` as an `hvcC` and write an `hvc1` entry.
+  hevc~ : Bool = false,
 ) -> Result[Mp4AvMuxer, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -71,6 +75,7 @@ pub fn mp4_av_muxer_new(
     width,
     height,
     avcc,
+    hevc,
     aac_priming,
     audio_entry,
     video_packets: [],
@@ -465,13 +470,17 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
   mp4_u32(mvhd_body, if has_subs { 4U } else { 3U })
   let mvhd = mp4_full_box("mvhd", 0, 0, mvhd_body)
 
-  let h264 = mp4_h264_muxer_new(
-    self.width,
-    self.height,
-    self.avcc,
-    timescale=90000,
-  ).unwrap()
-  let ventry = h264.video_entry()
+  let ventry = if self.hevc {
+    mp4_hevc_entry(self.width, self.height, self.avcc)
+  } else {
+    let h264 = mp4_h264_muxer_new(
+      self.width,
+      self.height,
+      self.avcc,
+      timescale=90000,
+    ).unwrap()
+    h264.video_entry()
+  }
   let vmhd_body : Array[Byte] = []
   mp4_u16(vmhd_body, 0)
   for _ in 0..<3 {

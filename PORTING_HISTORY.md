@@ -5834,3 +5834,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   framemd5 8/8 与源一致，`-c copy -f framecrc` 的 DTS/PTS（含负
   DTS）逐行相同。
 - 全量 wasm **1282/1282**。
+
+## 221. MP4 HEVC+AAC 双轨写入
+
+- `Mp4AvMuxer::new` 新增 `hevc~=false`：为 true 时把 avcc 参数解释为
+  hvcC 并写 `hvc1`/`hvcC`（复用 `mp4_hevc_entry`），否则维持
+  `avc1`/`avcC`；视频轨 ctts/DTS 与音频 elst priming 逻辑不变。
+- 回归 `mp4_av_hevc_wbtest.mbt`：真实 x265 B 帧 + AAC-LC MP4
+  解复用→重封装→再解复用，视频 CTS/DTS（timescale 换算后）逐样本
+  一致、HEVC 解码帧 MD5 一致，音频样本数/时长一致。
+- 外部验证：ffmpeg 9.0.2 识别 hvc1+AAC，video framemd5 5/5 与源
+  一致，AAC 解码 PCM 88200 字节逐字节一致。
+- 全量 wasm **1283/1283**。
