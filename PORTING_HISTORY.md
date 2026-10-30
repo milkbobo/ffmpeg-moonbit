@@ -5819,3 +5819,18 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffmpeg 9.0.2 对自写 TS 的 framemd5 6/6 一致，
   `-c copy -f framecrc` 的 DTS/PTS（含负 DTS）逐行与源相同。
 - 全量 wasm **1281/1281**。
+
+## 220. fMP4 trun composition time offset（B 帧）
+
+- `Fmp4Sample` 新增 `cts`（PTS-DTS，默认 0）；`fmp4_sample` 增加
+  可选参数；`fmp4_traf` 在任一样本 cts 非 0 时给 trun 加 0x0800
+  标志并逐样本写 composition offset，负值用 trun version 1（否则 0）。
+- 现有 H.264/HEVC/AV1/VP9/AAC/Opus 初始化段与 HLS/DASH 分片写入器
+  自动受益；MOV 解复用器已有 trun CTS 解析，无需改动。
+- 回归 `fmp4_bframes_wbtest.mbt`：真实 x264 B 帧 MP4 解复用后拆成
+  两段 fMP4（init+2 media），`av_mov_open` 回读逐样本 CTS/DTS 相对
+  值一致，解码帧 MD5 一致。
+- 外部验证：自写 fMP4（init+2 moof）经 ffmpeg 9.0.2 解码
+  framemd5 8/8 与源一致，`-c copy -f framecrc` 的 DTS/PTS（含负
+  DTS）逐行相同。
+- 全量 wasm **1282/1282**。

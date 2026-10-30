@@ -16,6 +16,8 @@ pub struct Fmp4Sample {
   data : Bytes
   duration : Int32
   keyframe : Bool
+  /// Presentation offset (PTS - DTS) in the track timescale.
+  cts : Int32
 }
 
 ///|
@@ -23,8 +25,9 @@ pub fn fmp4_sample(
   data : Bytes,
   duration : Int32,
   keyframe : Bool,
+  cts~ : Int32 = 0,
 ) -> Fmp4Sample {
-  { data, duration, keyframe, }
+  { data, duration, keyframe, cts, }
 }
 
 ///|
@@ -488,6 +491,16 @@ fn fmp4_traf(
   fmp4_u64(tfdt_body, base_decode_time)
   let tfdt = mp4_full_box("tfdt", 1, 0, tfdt_body)
 
+  let mut has_cts = false
+  let mut cts_version = 0
+  for sample in samples {
+    if sample.cts != 0 {
+      has_cts = true
+    }
+    if sample.cts < 0 {
+      cts_version = 1
+    }
+  }
   let trun_body : Array[Byte] = []
   mp4_u32(trun_body, samples.length().reinterpret_as_uint())
   mp4_u32(trun_body, data_offset)
@@ -495,8 +508,12 @@ fn fmp4_traf(
     mp4_u32(trun_body, sample.duration.reinterpret_as_uint())
     mp4_u32(trun_body, sample.data.length().reinterpret_as_uint())
     mp4_u32(trun_body, if sample.keyframe { 0x02000000U } else { 0x01010000U })
+    if has_cts {
+      mp4_u32(trun_body, sample.cts.reinterpret_as_uint())
+    }
   }
-  let trun = mp4_full_box("trun", 0, 0x0701, trun_body)
+  let trun_flags = if has_cts { 0x0F01 } else { 0x0701 }
+  let trun = mp4_full_box("trun", cts_version, trun_flags, trun_body)
   mp4_box("traf", mp4_cat([tfhd, tfdt, trun]))
 }
 
