@@ -33,8 +33,14 @@ pub fn mkv_tags_element(tags : Array[(String, String)]) -> Array[Byte] {
     webm_elem(simple, 0x4487, 2, utf8_from_string(pair.1).to_array()) // TagString
     webm_elem(tag_body, 0x67C8, 2, simple) // SimpleTag
   }
+  // The demuxer's level-end pop removes a nested master together with any
+  // parent ending at the same offset; leaf Void children keep the Tag and Tags
+  // boundaries unambiguous for the streaming parse (a Tag ending exactly at
+  // the Tags end otherwise makes the walk run past the element).
+  webm_elem(tag_body, 0xEC, 1, []) // Void inside Tag
   let tags_body : Array[Byte] = []
   webm_elem(tags_body, 0x7373, 2, tag_body) // Tag
+  webm_elem(tags_body, 0xEC, 1, []) // Void inside Tags
   let out : Array[Byte] = []
   webm_elem(out, 0x1254C367, 4, tags_body)
   out

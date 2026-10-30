@@ -5566,3 +5566,22 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：自写带标签 Opus 经 ffprobe 读到 title/artist/track，
   ffmpeg 解码 PCM 与无标签版本一致。
 - 全量 wasm **1254/1254**。
+
+## 203. A/V 写入器：标签与章节
+
+- `Mp4AvMuxer` 新增 `set_tags` / `set_chapters`（`Mp4Chapter`），
+  `finish()` 把 `udta`（meta/ilst + chpl）挂到 moov 末尾，与可选
+  mov_text 轨并存。
+- `MkvAvMuxer` 新增 `set_tags` / `set_chapters`（`MkvChapter`），
+  `finish()` 在 Tracks 之后、Cluster 之前写 Chapters 与 Tags 元素。
+- 修复：`mkv_tags_element` 在 Tag/Tags 末尾各补一个零长 Void。解复用
+  器的层结束弹出会把「与父层同界」的内层 master 连同父层一起弹出，
+  导致 Tag 恰好结束于 Tags 结尾时流式解析越过元素、触发重同步并
+  重复解析 Tracks（表现为轨道数翻倍）。Void 使各层边界唯一；带标签
+  的 A/V MKV 现能正确读出 3 轨 + 标签 + 章节。
+- 回归：真实 H.264 + AC-3 的 MP4/MKV 同时带字幕、标签与章节，读回
+  轨道/标签/章节计数正确，音视频样本与无附加轨版本逐字节相同。
+- 外部验证：ffprobe 两个文件均显示 h264/ac3/字幕（mov_text 或
+  subrip）、TAG 与章节（含结束时间），ffmpeg 全量解码无错误并正确
+  提取 SRT。
+- 全量 wasm **1254/1254**。

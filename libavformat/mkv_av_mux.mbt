@@ -27,6 +27,8 @@ pub struct MkvAvMuxer {
   audio_private : Bytes
   events : Array[MkvAvEvent]
   cues : Array[MkvSubtitleCue]
+  tags : Array[(String, String)]
+  chapters : Array[MkvChapter]
 }
 
 ///|
@@ -57,6 +59,8 @@ pub fn mkv_av_muxer_new(
     audio_private,
     events: [],
     cues: [],
+    tags: [],
+    chapters: [],
   })
 }
 
@@ -98,6 +102,30 @@ pub fn MkvAvMuxer::write_audio(
 ///|
 fn mkv_av_aac_private(mux : MkvAvMuxer) -> Bytes {
   Bytes::from_array(mp4_av_asc(mux.sample_rate, mux.channels))
+}
+
+///|
+/// Set the container-level `Tags` (SimpleTag name/value pairs).
+pub fn MkvAvMuxer::set_tags(
+  self : MkvAvMuxer,
+  tags : Array[(String, String)],
+) -> Unit {
+  self.tags.clear()
+  for pair in tags {
+    self.tags.push(pair)
+  }
+}
+
+///|
+/// Set the container `Chapters`.
+pub fn MkvAvMuxer::set_chapters(
+  self : MkvAvMuxer,
+  chapters : Array[MkvChapter],
+) -> Unit {
+  self.chapters.clear()
+  for chapter in chapters {
+    self.chapters.push(chapter)
+  }
 }
 
 ///|
@@ -297,6 +325,17 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
   let segment_body : Array[Byte] = []
   webm_elem(segment_body, 0x1549A966, 4, info)
   webm_elem(segment_body, 0x1654AE6B, 4, tracks)
+  if self.chapters.length() > 0 {
+    // The helpers return complete level-1 elements.
+    for b in mkv_chapters_element(self.chapters) {
+      segment_body.push(b)
+    }
+  }
+  if self.tags.length() > 0 {
+    for b in mkv_tags_element(self.tags) {
+      segment_body.push(b)
+    }
+  }
   webm_elem(segment_body, 0x1F43B675, 4, self.cluster())
   let segment : Array[Byte] = []
   webm_elem(segment, 0x18538067, 4, segment_body)

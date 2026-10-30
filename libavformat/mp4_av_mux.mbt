@@ -23,6 +23,8 @@ pub struct Mp4AvMuxer {
   audio_packets : Array[Bytes]
   audio_durations : Array[Int32]
   cues : Array[Mp4SubtitleCue]
+  tags : Array[(String, String)]
+  chapters : Array[Mp4Chapter]
 }
 
 ///|
@@ -77,6 +79,8 @@ pub fn mp4_av_muxer_new(
     audio_packets: [],
     audio_durations: [],
     cues: [],
+    tags: [],
+    chapters: [],
   })
 }
 
@@ -313,6 +317,30 @@ fn mp4_av_trak(
 }
 
 ///|
+/// Set the file-level iTunes tags (`udta/meta/ilst`).
+pub fn Mp4AvMuxer::set_tags(
+  self : Mp4AvMuxer,
+  tags : Array[(String, String)],
+) -> Unit {
+  self.tags.clear()
+  for pair in tags {
+    self.tags.push(pair)
+  }
+}
+
+///|
+/// Set the file-level `chpl` chapters.
+pub fn Mp4AvMuxer::set_chapters(
+  self : Mp4AvMuxer,
+  chapters : Array[Mp4Chapter],
+) -> Unit {
+  self.chapters.clear()
+  for chapter in chapters {
+    self.chapters.push(chapter)
+  }
+}
+
+///|
 /// Add a mov-text cue; the subtitle track is written only when at least one
 /// cue exists. Cues must not overlap (MP4 sample timing is duration-based).
 pub fn Mp4AvMuxer::write_subtitle(
@@ -510,11 +538,17 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
   } else {
     []
   }
-  let moov = if has_subs {
-    mp4_box("moov", mp4_cat([mvhd, vtrack, atrack, strack]))
+  let udta = if self.tags.length() > 0 || self.chapters.length() > 0 {
+    mp4_udta_box(self.tags, self.chapters)
   } else {
-    mp4_box("moov", mp4_cat([mvhd, vtrack, atrack]))
+    []
   }
+  let children = if has_subs {
+    mp4_cat([mvhd, vtrack, atrack, strack, udta])
+  } else {
+    mp4_cat([mvhd, vtrack, atrack, udta])
+  }
+  let moov = mp4_box("moov", children)
   Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
 }
 

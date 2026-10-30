@@ -404,8 +404,17 @@ test "A/V Matroska: H.264 + AC-3 + SRT subtitles" {
   }
   mux.write_subtitle(50L, 150L, "First cue").unwrap()
   mux.write_subtitle(200L, 400L, "Second cue").unwrap()
+  mux.set_tags([("TITLE", "Av Title"), ("ARTIST", "Av Artist")])
+  mux.set_chapters([
+    @libavformat.mkv_chapter_new(0L, Some(100000000L), "One"),
+    @libavformat.mkv_chapter_new(100000000L, None, "Two"),
+  ])
   let mkv = @libavformat.av_matroska_open(mux.finish()).unwrap()
   assert_eq(mkv.tracks.length(), 3)
+  assert_eq(mkv.metadata.length(), 2)
+  assert_eq(mkv.chapters.length(), 2)
+  assert_eq(mkv.chapters[1].title, "Two")
+  assert_eq(mkv.chapters[1].start_ns, 100000000L)
   assert_eq(mkv.tracks[2].track_type, 17UL)
   assert_eq(mkv.tracks[2].codec_id.unwrap(), "S_TEXT/UTF8")
   let subs : Array[@libavformat.MkvPacket] = []
@@ -448,9 +457,18 @@ test "A/V MP4: H.264 + AC-3 + mov_text subtitles" {
   }
   mux.write_subtitle(50L, 150L, "First cue").unwrap()
   mux.write_subtitle(200L, 400L, "Second cue").unwrap()
+  mux.set_tags([("title", "Av Title"), ("artist", "Av Artist")])
+  mux.set_chapters([
+    @libavformat.mp4_chapter_new(0L, "One"),
+    @libavformat.mp4_chapter_new(5000000L, "Two"),
+  ])
   let bytes = mux.finish()
   let movie = @libavformat.av_mov_open(bytes).unwrap()
   assert_eq(movie.tracks.length(), 3)
+  assert_eq(movie.metadata.length(), 2)
+  assert_eq(movie.chapters.length(), 2)
+  assert_eq(movie.chapters[1].title, "Two")
+  assert_eq(movie.chapters[1].start_100ns, 5000000L)
   let st = movie.tracks[2]
   assert_eq(st.codec, "tx3g")
   assert_eq(st.timescale, 1000)
