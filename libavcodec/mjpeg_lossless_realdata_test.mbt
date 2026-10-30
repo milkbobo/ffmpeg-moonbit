@@ -88,15 +88,18 @@ let ljpeg_gray9_b64 : Bytes = ljpeg_b64_concat([
 ])
 
 ///|
-test "lossless JPEG unsupported variants are rejected" {
-  let rgb = @libavutil.av_base64_decode(ljpeg_rgb3_b64, 100000).unwrap()
-  match @libavcodec.av_mjpeg_decode(rgb) {
-    Ok(_) => fail("1x1 3-component lossless JPEG must be rejected")
-    Err(e) => assert_true(e.has_prefix("PATCHWELCOME"), msg=e)
-  }
-  let gray = @libavutil.av_base64_decode(ljpeg_gray9_b64, 100000).unwrap()
-  match @libavcodec.av_mjpeg_decode(gray) {
-    Ok(_) => fail("9-bit lossless JPEG must be rejected")
-    Err(e) => assert_true(e.has_prefix("PATCHWELCOME"), msg=e)
-  }
+test "lossless JPEG 8-bit and 9-bit RGB" {
+  let rgb8 = @libavutil.av_base64_decode(ljpeg_rgb3_b64, 100000).unwrap()
+  let img8 = @libavcodec.av_mjpeg_decode(rgb8).unwrap()
+  assert_eq(img8.pix_fmt, "bgr24")
+  assert_eq(img8.width, 64)
+  assert_eq(img8.height, 48)
+  assert_eq(img8.planes.length(), 1)
+  assert_eq(ljpeg_md5(img8.planes[0]), "6d80f6da4b663ff65be2824fb5d4aa9e")
+  let rgb9 = @libavutil.av_base64_decode(ljpeg_gray9_b64, 100000).unwrap()
+  let img9 = @libavcodec.av_mjpeg_decode(rgb9).unwrap()
+  assert_eq(img9.pix_fmt, "bgr24")
+  assert_eq(img9.width, 64)
+  assert_eq(img9.height, 48)
+  assert_eq(ljpeg_md5(img9.planes[0]), "845a03c393fbcffa82eee95ca4f1a650")
 }

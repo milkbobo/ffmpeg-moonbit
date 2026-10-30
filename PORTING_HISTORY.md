@@ -5681,3 +5681,18 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   逐帧一致（尾部重复帧为 dashdec 对官方 SegmentBase 夹具同样存在的
   行为）。
 - 全量 wasm **1266/1266**。
+
+## 210. MJPEG 无损 RGB（1x1 三分量，8/9-bit）
+
+- 新增 `mjpeg_decode_scan_rgb`（`ljpeg_decode_rgb_scan` 移植）：
+  逐像素三分量 DC + 空间预测，支持单/多 scan 与 restart interval；
+  `mjpeg_finalize_rgb` 输出 FFmpeg 原生 `bgr24`（8-bit 直接映射，
+  9-bit 走 BGR 编码器的可逆颜色变换 `rct`）。
+- SOF3 解析允许 3 分量 1x1 的 9-bit 精度；其他 >8-bit 仍报
+  PATCHWELCOME。无损 YUV 平面路径不变。
+- `jpeg_marker_start` 按 FFmpeg `find_marker` 语义向后扫描未消费的
+  scan 尾部数据（部分编码器会留下填充字节），避免误报 marker 错误。
+- 回归：原有 64x48 夹具（8-bit 与 9-bit 各一）按 ffmpeg rawvideo
+  bgr24 MD5 断言；新增 17x13 / 预测器 1、2 的 libjpeg 夹具，BGR24
+  MD5 与 ffmpeg 一致。失效的“RGB/9-bit 必须拒绝”旧断言已改为正向。
+- 全量 wasm **1268/1268**。

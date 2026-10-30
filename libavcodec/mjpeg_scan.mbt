@@ -620,14 +620,30 @@ fn mjpeg_finalize_image(
 /// consumes the 0xFF of a marker but leaves its second byte in place, so back
 /// up over any fill bytes to the marker prefix.
 fn jpeg_marker_start(data : Bytes, pos : Int32) -> Int32 {
+  let len = data.length()
   let mut p = pos
-  if p > data.length() {
-    p = data.length()
+  if p > len {
+    p = len
   }
   while p > 0 && data[p - 1].to_int() == 0xFF {
     p = p - 1
   }
-  p
+  if p + 1 < len && data[p].to_int() == 0xFF && data[p + 1].to_int() != 0 {
+    return p
+  }
+  // FFmpeg's find_marker scans forward past unread entropy bytes (some
+  // encoders pad the scan), treating stuffed 0xFF00 pairs as data.
+  while p + 1 < len {
+    if data[p].to_int() == 0xFF {
+      if data[p + 1].to_int() != 0 {
+        return p
+      }
+      p = p + 2
+    } else {
+      p = p + 1
+    }
+  }
+  len
 }
 
 ///|
@@ -833,5 +849,153 @@ fn mjpeg_finalize_lossless(
     planes: out_planes,
     plane_widths,
     plane_heights,
+  })
+}
+
+///|
+/// `ljpeg_decode_rgb_scan`: 3-component 1x1 lossless RGB. Each component is
+/// coded directly at pixel resolution; the first row (and the first pixel of
+/// each row or restart interval) forces the left predictor. Samples stay in
+/// the component planes until `mjpeg_finalize_rgb` packs them.
+fn mjpeg_decode_scan_rgb(
+  bits : JpegEntropy,
+  components : Array[JpegComponent],
+  scan_components : Array[Int32],
+  dc_tables : Array[JpegHuffman?],
+  width : Int32,
+  height : Int32,
+  restart_interval : Int32,
+  predictor : Int32,
+  al : Int32,
+  sample_bits : Int32,
+) -> Result[Unit, String] {
+  let ns = scan_components.length()
+  if ns < 1 || ns > 3 {
+    return Err("mjpeg: invalid lossless RGB scan component count")
+  }
+  let mask = ((1 << sample_bits) - 1) << al
+  let init = 1 << (sample_bits - 1)
+  let top : Array[Int32] = Array::make(ns, init)
+  let left : Array[Int32] = Array::make(ns, init)
+  let topleft : Array[Int32] = Array::make(ns, init)
+  // Previous row's samples for each scan slot (the C's `ljpeg_buffer`).
+  let prev : Array[Int32] = []
+  for _ in 0..<(ns * width) {
+    prev.push(init)
+  }
+  let mut resync_mb_x = 0
+  let mut resync_mb_y = 0
+  let mut restart_count = -1
+  for mb_y = 0; mb_y < height; mb_y = mb_y + 1 {
+    for i = 0; i < ns; i = i + 1 {
+      top[i] = prev[i * width]
+      left[i] = top[i]
+      topleft[i] = top[i]
+    }
+    for mb_x = 0; mb_x < width; mb_x = mb_x + 1 {
+      let mut restart = false
+      if restart_interval != 0 {
+        if restart_count <= 0 {
+          restart_count = restart_interval
+          restart = true
+        }
+        restart_count = restart_count - 1
+      } else if restart_count < 0 {
+        restart_count = 0
+        restart = true
+      }
+      if restart {
+        je_restart(bits)
+        resync_mb_x = mb_x
+        resync_mb_y = mb_y
+        for i = 0; i < ns; i = i + 1 {
+          top[i] = init
+          left[i] = init
+          topleft[i] = init
+        }
+      }
+      if (bits.data.length() - bits.pos) * 8 + bits.count < 1 {
+        return Err("mjpeg: bitstream end in lossless RGB scan")
+      }
+      let modified_predictor = if mb_y == resync_mb_y ||
+        (mb_y == resync_mb_y + 1 && mb_x < resync_mb_x) ||
+        mb_x == 0 {
+        1
+      } else {
+        predictor
+      }
+      for i = 0; i < ns; i = i + 1 {
+        let ci = scan_components[i]
+        let comp = components[ci]
+        let dc = match jpeg_huff_get(dc_tables, comp.dc_table, "DC") {
+          Ok(h) => h
+          Err(e) => return Err(e)
+        }
+        topleft[i] = top[i]
+        top[i] = prev[i * width + mb_x]
+        let pred = jpeg_predict(topleft[i], top[i], left[i], modified_predictor)
+        let category = match jpeg_huffman_decode(bits, dc) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        if category > 16 {
+          return Err("mjpeg: invalid lossless DC category")
+        }
+        let diff = if category == 0 {
+          0
+        } else {
+          jpeg_extend(je_read(bits, category), category)
+        }
+        let value = mask & (pred + (diff << al))
+        left[i] = value
+        prev[i * width + mb_x] = value
+        comp.samples[mb_y * width + mb_x] = value
+      }
+    }
+  }
+  Ok(())
+}
+
+///|
+/// Pack lossless RGB samples into FFmpeg's native BGR24 output. With 9-bit
+/// samples FFmpeg applies the reversible colour transform used by its
+/// `ljpeg` BGR encoder (`s->rct` is set for 9-bit lossless); 8-bit samples
+/// are copied directly.
+fn mjpeg_finalize_rgb(
+  components : Array[JpegComponent],
+  width : Int32,
+  height : Int32,
+  sample_bits : Int32,
+) -> Result[JpegImage, String] {
+  if components.length() != 3 {
+    return Err("mjpeg: lossless RGB needs 3 components")
+  }
+  let rct = sample_bits == 9
+  let out : Array[Byte] = []
+  for y = 0; y < height; y = y + 1 {
+    for x = 0; x < width; x = x + 1 {
+      let i = y * width + x
+      let c0 = components[0].samples[i]
+      let c1 = components[1].samples[i]
+      let c2 = components[2].samples[i]
+      if rct {
+        let g = c0 - ((c1 + c2 - 0x200) >> 2)
+        out.push((c1 + g).to_byte())
+        out.push(g.to_byte())
+        out.push((c2 + g).to_byte())
+      } else {
+        out.push(c2.to_byte())
+        out.push(c1.to_byte())
+        out.push(c0.to_byte())
+      }
+    }
+  }
+  Ok({
+    width,
+    height,
+    pix_fmt: "bgr24",
+    planes: [Bytes::from_array(out)],
+    plane_widths: [width * 3],
+    plane_heights: [height],
   })
 }

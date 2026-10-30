@@ -11,15 +11,16 @@
 ///
 /// Scope: 8-bit sequential DCT (SOF0/SOF1), progressive DCT (SOF2) and
 /// lossless JPEG (SOF3, planar predictors 0..7, point transform, restart
-/// intervals; 3-component 1x1 "lossless RGB" and >8-bit samples are
-/// rejected), interleaved and single-component scans, multi-scan sequential files,
+/// intervals; 1-component planar and 3-component 1x1 lossless RGB with
+/// 8/9-bit samples, the latter packed as BGR24 with the 9-bit reversible
+/// colour transform), interleaved and single-component scans, multi-scan sequential files,
 /// progressive DC first/refinement, AC first/refinement and EOB runs, arbitrary
 /// 1..4 h/v sampling, DQT (8/16-bit entries), DHT, DRI restart markers and the
 /// native `yuvj420p`/`yuvj422p`/`yuvj444p`/`yuvj440p`/`gray` output formats
 /// FFmpeg selects. Planes are cropped to the visible size.
 ///
-/// Out of scope: arithmetic coding, lossless JPEG (SOF3), 12-bit samples,
-/// CMYK/YCCK (4 components), Adobe APP14 transforms, and EXIF orientation.
+/// Out of scope: arithmetic coding, 12-bit samples, CMYK/YCCK
+/// (4 components), Adobe APP14 transforms, and EXIF orientation.
 
 ///|
 pub struct JpegImage {
@@ -307,6 +308,8 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
   let mut saw_scan = false
   let mut progressive = false
   let mut lossless = false
+  let mut rgb_mode = false
+  let mut sample_bits = 8
   let mut pos = 2
   while pos + 1 < data.length() {
     if data[pos] != b'\xff' {
@@ -417,7 +420,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
       }
       let precision = seg[0].to_int()
       lossless = marker == 0xC3
-      if precision != 8 {
+      if precision != 8 && precision != 9 {
         return Err("PATCHWELCOME: mjpeg sample precision")
       }
       height = jpeg_be16(seg, 1)
@@ -463,9 +466,13 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
           samples: [],
         })
       }
-      if lossless && ncomp == 3 && max_h == 1 && max_v == 1 {
-        return Err("PATCHWELCOME: lossless RGB JPEG")
+      // 9-bit lossless is only produced for 3-component 1x1 RGB, which is
+      // stored 16-bit internally then packed to BGR24.
+      if precision != 8 && !(lossless && ncomp == 3 && max_h == 1 && max_v == 1) {
+        return Err("PATCHWELCOME: mjpeg sample precision")
       }
+      rgb_mode = lossless && ncomp == 3 && max_h == 1 && max_v == 1
+      sample_bits = precision
       for comp in components {
         let cw = (width * comp.h + max_h - 1) / max_h
         let ch = (height * comp.v + max_v - 1) / max_v
@@ -536,10 +543,17 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         if se != 0 || ah != 0 {
           return Err("mjpeg: invalid lossless scan parameters")
         }
-        mjpeg_decode_scan_lossless(
-          bits, components, scan_components, dc_tables, width, height, max_h, max_v,
-          restart_interval, ss, al,
-        )
+        if rgb_mode {
+          mjpeg_decode_scan_rgb(
+            bits, components, scan_components, dc_tables, width, height, restart_interval,
+            ss, al, sample_bits,
+          )
+        } else {
+          mjpeg_decode_scan_lossless(
+            bits, components, scan_components, dc_tables, width, height, max_h, max_v,
+            restart_interval, ss, al,
+          )
+        }
       } else if progressive {
         mjpeg_decode_scan_progressive(
           bits, components, scan_components, quant, dc_tables, ac_tables, width,
@@ -583,7 +597,11 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
     return Err("mjpeg: no scan found")
   }
   if lossless {
-    mjpeg_finalize_lossless(components, width, height, max_h, max_v)
+    if rgb_mode {
+      mjpeg_finalize_rgb(components, width, height, sample_bits)
+    } else {
+      mjpeg_finalize_lossless(components, width, height, max_h, max_v)
+    }
   } else {
     mjpeg_finalize_image(components, width, height, max_h, max_v)
   }
