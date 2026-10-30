@@ -5883,3 +5883,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   完全一致。
 - 代码无改动（覆盖已有实现）。
 - 全量 wasm **1284/1284**。
+
+## 225. MP4 双轨 AV1/VP9 视频
+
+- `Mp4AvMuxer::new` 的 `hevc~` 替换为 `video_codec~`（h264/hevc/
+  av1/vp9）：按 codec 选择 avc1/hvc1/av01/vp09 采样条目；avcC 仍
+  要求 ≥7 字节，hvcC/av1C/vpcC 要求 ≥4 字节。
+- 回归 `mp4_av_av1_wbtest.mbt`：真实 AV1+AAC MP4 重封装后 av01
+  条目/extradata、逐样本 payload、CTS/DTS（timescale 换算后）、
+  音频时长一致；VP9 vpcC 条目与 AAC 合成 round-trip。
+- 外部验证：ffmpeg 9.0.2 识别 av01+AAC，video framemd5 5/5 与源
+  一致，AAC PCM 88200 字节逐字节一致。
+- 全量 wasm **1286/1286**。

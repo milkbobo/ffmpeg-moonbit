@@ -1,6 +1,6 @@
 ///|
 /// HEVC + AAC MP4 with B-frames (x265 bf=3) remuxed through
-/// `Mp4AvMuxer` with `hevc=true`: the video keeps its CTS via `ctts`,
+/// `Mp4AvMuxer` with `video_codec="hevc"`: the video keeps its CTS via `ctts`,
 /// the hvc1 entry round-trips, and both tracks decode like the source.
 
 ///|
@@ -23,7 +23,7 @@ test "mp4 A/V: HEVC B-frames and AAC round-trip" {
     at.sample_rate.reinterpret_as_int(),
     at.channels.reinterpret_as_int(),
     aac_priming=at.skip_samples,
-    hevc=true,
+    video_codec="hevc",
   ).unwrap()
   let src_payloads : Array[Bytes] = []
   let mut reordered = false

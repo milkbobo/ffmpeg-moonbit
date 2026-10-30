@@ -11,8 +11,8 @@ pub struct Mp4AvMuxer {
   width : Int32
   height : Int32
   avcc : Bytes
-  /// Write an `hvc1`/`hvcC` video entry instead of `avc1`/`avcC`.
-  hevc : Bool
+  /// "h264" (avc1), "hevc" (hvc1), "av1" (av01) or "vp9" (vp09).
+  video_codec : String
   video_packets : Array[Bytes]
   video_durations : Array[Int32]
   video_keyframes : Array[Bool]
@@ -42,12 +42,19 @@ pub fn mp4_av_muxer_new(
   aac_priming~ : Int32 = 0,
   /// Explicit audio sample entry (e.g. `mp4_ac3_entry`); AAC when None.
   audio_entry~ : Array[Byte]? = None,
-  /// Interpret `avcc` as an `hvcC` and write an `hvc1` entry.
-  hevc~ : Bool = false,
+  /// Video sample entry: "h264", "hevc", "av1" or "vp9".
+  video_codec~ : String = "h264",
 ) -> Result[Mp4AvMuxer, String] {
+  let known_video = video_codec == "h264" ||
+    video_codec == "hevc" ||
+    video_codec == "av1" ||
+    video_codec == "vp9"
+  // avcC needs at least 7 bytes; hvcC/av1C/vpcC can be shorter.
+  let min_config = if video_codec == "h264" { 7 } else { 4 }
   if width <= 0 ||
     height <= 0 ||
-    avcc.length() < 7 ||
+    !known_video ||
+    avcc.length() < min_config ||
     sample_rate <= 0 ||
     channels < 1 ||
     channels > 7 ||
@@ -75,7 +82,7 @@ pub fn mp4_av_muxer_new(
     width,
     height,
     avcc,
-    hevc,
+    video_codec,
     aac_priming,
     audio_entry,
     video_packets: [],
@@ -496,16 +503,19 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
   mp4_u32(mvhd_body, if has_subs { 4U } else { 3U })
   let mvhd = mp4_full_box("mvhd", 0, 0, mvhd_body)
 
-  let ventry = if self.hevc {
-    mp4_hevc_entry(self.width, self.height, self.avcc)
-  } else {
-    let h264 = mp4_h264_muxer_new(
-      self.width,
-      self.height,
-      self.avcc,
-      timescale=90000,
-    ).unwrap()
-    h264.video_entry()
+  let ventry = match self.video_codec {
+    "hevc" => mp4_hevc_entry(self.width, self.height, self.avcc)
+    "av1" => mp4_av1_entry(self.width, self.height, self.avcc)
+    "vp9" => mp4_vp9_entry(self.width, self.height, self.avcc)
+    _ => {
+      let h264 = mp4_h264_muxer_new(
+        self.width,
+        self.height,
+        self.avcc,
+        timescale=90000,
+      ).unwrap()
+      h264.video_entry()
+    }
   }
   let vmhd_body : Array[Byte] = []
   mp4_u16(vmhd_body, 0)
