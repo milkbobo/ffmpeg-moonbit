@@ -5781,3 +5781,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   9.0.2 的 framemd5 8/8 与源一致，`-c copy -f framecrc` 的 packet
   DTS/PTS 逐行与源相同（含负 DTS）。
 - 全量 wasm **1278/1278**。
+
+## 217. MP4 A/V 写入器 B 帧 ctts
+
+- `Mp4AvMuxer::write_video` 新增 `cts`；`mp4_av_stbl` 在 `stts` 后写
+  `ctts`（run 合并、全 0 省略、负偏移 version 1），音频/字幕轨传空。
+- 回归 `mp4_av_bframes_wbtest.mbt`：真实 H.264 B 帧 + AAC-LC MP4
+  （5 视频帧 + 音频包）解复用→重封装→再解复用，视频 CTS/DTS 按
+  90000 timescale 换算后逐样本一致、帧 MD5 序列一致；音频样本数与
+  时长一致；`skip_samples` 作为 `aac_priming` 写入 elst。
+- 外部验证：ffmpeg 9.0.2 对自写 A/V 文件 video framemd5 与源一致，
+  AAC 解码 PCM 88200 字节逐字节一致（priming 生效）。
+- 全量 wasm **1279/1279**。

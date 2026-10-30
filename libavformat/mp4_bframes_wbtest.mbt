@@ -21,10 +21,7 @@ fn mp4_bframes_md5(frame : @libavcodec.H264Frame) -> String {
 }
 
 ///|
-fn mp4_bframes_decode(
-  avcc : Bytes,
-  payloads : Array[Bytes],
-) -> Array[String] raise {
+fn mp4_bframes_decode(avcc : Bytes, payloads : Array[Bytes]) -> Array[String] {
   let samples : Array[Bytes] = [fmp4_h264_avcc_params(avcc)]
   for p in payloads {
     samples.push(p)

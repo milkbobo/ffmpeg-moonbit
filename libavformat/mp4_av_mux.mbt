@@ -14,6 +14,8 @@ pub struct Mp4AvMuxer {
   video_packets : Array[Bytes]
   video_durations : Array[Int32]
   video_keyframes : Array[Bool]
+  /// Presentation offsets (PTS - DTS) per video sample.
+  video_cts : Array[Int32]
   sample_rate : Int32
   channels : Int32
   /// AAC encoder delay in media samples, expressed as an audio `elst` edit.
@@ -74,6 +76,7 @@ pub fn mp4_av_muxer_new(
     video_packets: [],
     video_durations: [],
     video_keyframes: [],
+    video_cts: [],
     sample_rate,
     channels,
     audio_packets: [],
@@ -90,6 +93,7 @@ pub fn Mp4AvMuxer::write_video(
   packet : Bytes,
   duration~ : Int32 = 3000,
   keyframe~ : Bool = false,
+  cts~ : Int32 = 0,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: invalid MP4 video packet")
@@ -97,6 +101,7 @@ pub fn Mp4AvMuxer::write_video(
   self.video_packets.push(packet)
   self.video_durations.push(duration)
   self.video_keyframes.push(keyframe)
+  self.video_cts.push(cts)
   Ok(())
 }
 
@@ -179,6 +184,7 @@ fn mp4_av_stbl(
   packets : Array[Bytes],
   durations : Array[Int32],
   keyframes : Array[Bool],
+  cts : Array[Int32],
   chunk_offset : Int32,
 ) -> Array[Byte] {
   let stsd_body : Array[Byte] = []
@@ -200,6 +206,38 @@ fn mp4_av_stbl(
     mp4_u32(stts_body, run.1.reinterpret_as_uint())
   }
   let parts : Array[Array[Byte]] = [stsd, mp4_full_box("stts", 0, 0, stts_body)]
+  let mut has_cts = false
+  for c in cts {
+    if c != 0 {
+      has_cts = true
+    }
+  }
+  if has_cts {
+    let mut version = 0
+    for c in cts {
+      if c < 0 {
+        version = 1
+      }
+    }
+    let cts_runs : Array[(Int32, Int32)] = []
+    for c in cts {
+      if cts_runs.length() > 0 && cts_runs[cts_runs.length() - 1].1 == c {
+        cts_runs[cts_runs.length() - 1] = (
+          cts_runs[cts_runs.length() - 1].0 + 1,
+          c,
+        )
+      } else {
+        cts_runs.push((1, c))
+      }
+    }
+    let body : Array[Byte] = []
+    mp4_u32(body, cts_runs.length().reinterpret_as_uint())
+    for run in cts_runs {
+      mp4_u32(body, run.0.reinterpret_as_uint())
+      mp4_u32(body, run.1.reinterpret_as_uint())
+    }
+    parts.push(mp4_full_box("ctts", version, 0, body))
+  }
   let sync : Array[Int32] = []
   for i in 0..<keyframes.length() {
     if keyframes[i] {
@@ -255,6 +293,7 @@ fn mp4_av_trak(
   packets : Array[Bytes],
   durations : Array[Int32],
   keyframes : Array[Bool],
+  cts : Array[Int32],
   chunk_offset : Int32,
 ) -> Array[Byte] {
   let tkhd_body : Array[Byte] = []
@@ -310,7 +349,9 @@ fn mp4_av_trak(
   mp4_u32(dref_body, 1U)
   dref_body.append(url)
   let dinf = mp4_box("dinf", mp4_full_box("dref", 0, 0, dref_body))
-  let stbl = mp4_av_stbl(entry, packets, durations, keyframes, chunk_offset)
+  let stbl = mp4_av_stbl(
+    entry, packets, durations, keyframes, cts, chunk_offset,
+  )
   let minf = mp4_box("minf", mp4_cat([media_header, dinf, stbl]))
   let mdia = mp4_box("mdia", mp4_cat([mdhd, hdlr, minf]))
   mp4_box("trak", mp4_cat([tkhd, edts, mdia]))
@@ -480,6 +521,7 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     self.video_packets,
     self.video_durations,
     self.video_keyframes,
+    self.video_cts,
     video_offset,
   )
 
@@ -510,6 +552,7 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     self.audio_packets,
     self.audio_durations,
     empty_keys,
+    [],
     audio_offset,
   )
   let nmhd = mp4_full_box("nmhd", 0, 0, [])
@@ -533,6 +576,7 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
       sub_samples,
       sub_durations,
       empty_sub_keys,
+      [],
       sub_offset,
     )
   } else {
