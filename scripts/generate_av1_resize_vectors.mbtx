@@ -81,11 +81,17 @@ async fn main {
       "resize_lag", "src24_420.y4m", "--kf-max-dist=10 --lag-in-frames=4 --resize-mode=1 --resize-denominator=8",
       "",
     ),
-    // resize + superres + qmatrix made dav1d 1.5.1 segfault after the first
-    // keyframe, so that combination has no usable reference and is skipped.
     (
       "resize_qm", "src24_420.y4m",
       "--kf-max-dist=5 --resize-mode=1 --resize-denominator=16 --resize-kf-denominator=8 --enable-qm=1 --qm-min=8 --qm-max=8",
+      "",
+    ),
+    // resize + superres: fixed resize (KF full/inter half) with random
+    // superres denominators. dav1d 1.5.1 segfaults on this combination, so
+    // the reference is libaom aomdec's per-frame raw I420 output instead.
+    (
+      "resize_sr", "src24_420.y4m",
+      "--kf-max-dist=5 --resize-mode=1 --resize-denominator=16 --resize-kf-denominator=8 --superres-mode=2 --superres-denominator=13",
       "",
     ),
   ]
@@ -119,16 +125,27 @@ async fn main {
   // ffmpeg-style framemd5 lines (only field 5 and the line count matter to
   // the emit script).
   let trace = args[1] + "/trace_src:/src:ro"
-  let mut dscript = "sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; s|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/ubuntu.sources >/dev/null && apt-get update -qq >/dev/null && apt-get install -y -qq meson ninja-build nasm >/dev/null 2>&1 && cp -r /src /tmp/dav1d && cd /tmp/dav1d && meson setup build --buildtype release >/dev/null 2>&1 && ninja -C build tools/dav1d >/dev/null 2>&1 && echo dav1d-cli-ready"
+  let mut dscript = "sed -i 's|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g; s|security.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/ubuntu.sources >/dev/null && apt-get update -qq >/dev/null && apt-get install -y -qq meson ninja-build nasm aom-tools >/dev/null 2>&1 && cp -r /src /tmp/dav1d && cd /tmp/dav1d && meson setup build --buildtype release >/dev/null 2>&1 && ninja -C build tools/dav1d >/dev/null 2>&1 && echo dav1d-cli-ready"
   for c in cases {
     let (stem, _source, _flags, _unused) = c
-    dscript += " && mkdir -p /work/ref/" +
+    let decode = if stem == "resize_sr" {
+      "aomdec --i420 -o /work/ref/" +
       stem +
-      " && ./build/tools/dav1d --filmgrain 0 -i /work/" +
+      "/d%1_%wx%h.yuv /work/" +
+      stem +
+      ".ivf"
+    } else {
+      "./build/tools/dav1d --filmgrain 0 -i /work/" +
       stem +
       ".ivf -o /work/ref/" +
       stem +
-      "/d%n_%w_%h.yuv --quiet >/dev/null 2>&1; n=0; : > /work/ref/" +
+      "/d%n_%w_%h.yuv --quiet >/dev/null 2>&1"
+    }
+    dscript += " && mkdir -p /work/ref/" +
+      stem +
+      " && " +
+      decode +
+      "; n=0; : > /work/ref/" +
       stem +
       // A while/set loop re-globs per frame number: a for-loop word list
       // would be expanded only once, and filename sorting is unsafe because

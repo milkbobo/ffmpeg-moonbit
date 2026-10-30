@@ -30,3 +30,8 @@ test "AV1 resize-mode constant-size controls match libdav1d" {
   check_session(resize_444_ivf_b64, resize_444_md5, "resize-constant-444")
   check_session(resize_lag_ivf_b64, resize_lag_md5, "resize-constant-lag")
 }
+
+///|
+test "AV1 resize-mode with superres matches libaom" {
+  check_session(resize_sr_ivf_b64, resize_sr_md5, "resize-sr")
+}

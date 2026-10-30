@@ -75,3 +75,19 @@ meson 构建）逐帧 md5 → assemble → emit 夹具。之后跑：
 ```sh
 moon test libavcodec/av1_inter_realdata_vectors --target wasm --no-render
 ```
+
+## 2026-10-30 更新：resize×superres 解除阻塞
+
+dav1d 1.5.1 在 resize×superres 组合上段错误，但 **libaom 的 `aomdec`
+可以正常解码**。验证方式：`aomdec --i420 -o out/%1_%wx%h.yuv` 逐帧输出
+原生 I420，其 MD5 在已有 superres_inter 流上与 dav1d 参考完全一致，
+因此可作为替代参考。
+
+- 新增流 `resize_sr`：`src24_420.y4m`，fixed resize（denom 16 / kf 8）
+  + superres mode 2（denom 13），24 帧原生尺寸在 192x128 与 96x64 间
+  切换；本移植逐帧 MD5 与 aomdec 输出 24/24 一致。
+- 生成脚本 `scripts/generate_av1_resize_vectors.mbtx` 已加入该 case，
+  参考步骤对 `resize_sr` 改用 `aomdec`（其余仍用 dav1d CLI）。
+- 夹具 `resize_sr_fixture_test.mbt` + `resize_test.mbt` 新 session。
+- 顺带验证了 `.scratch/av1/resize_sr_qm.ivf`（resize×superres×qm）
+  24 帧也与 aomdec 一致，但该流缺少可复现的编码命令，未固化夹具。

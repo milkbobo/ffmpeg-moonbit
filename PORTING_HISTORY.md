@@ -5696,3 +5696,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   bgr24 MD5 断言；新增 17x13 / 预测器 1、2 的 libjpeg 夹具，BGR24
   MD5 与 ffmpeg 一致。失效的“RGB/9-bit 必须拒绝”旧断言已改为正向。
 - 全量 wasm **1268/1268**。
+
+## 211. AV1 resize×superres 组合（libaom 参考）
+
+- dav1d 1.5.1 在 resize×superres 流上段错误；改用 libaom `aomdec`
+  逐帧原生 I420 参考（已先在 superres_inter 上与 dav1d MD5 对齐验证
+  方法本身）。
+- 新增 aomenc 流 `resize_sr`：fixed resize（denom 16 / kf 8）+
+  superres mode 2（denom 13），24 帧、输出尺寸 192x128/96x64 交替；
+  本移植逐帧 MD5 24/24 与 aomdec 一致。
+- 生成脚本加入该 case，`resize_sr` 的参考步骤改用 aomdec；夹具
+  `resize_sr_fixture_test.mbt` 与 `resize_test.mbt` session 入库。
+- 另外手工验证 resize×superres×qm 流同样 24/24 一致（该流无编码
+  命令记录，未固化）。
+- 全量 wasm **1269/1269**。
