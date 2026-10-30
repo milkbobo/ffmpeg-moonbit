@@ -140,9 +140,6 @@ fn mjpeg_decode_scan_sequential(
           for hx in 0..<comp.h {
             let bx = mcu_x * comp.h + hx
             let by = mcu_y * comp.v + vy
-            if bx >= comp.blocks_w || by >= comp.blocks_h {
-              return Err("mjpeg: MCU block outside component")
-            }
             let block : Array[Int32] = []
             for _ in 0..<64 {
               block.push(0)
@@ -151,7 +148,12 @@ fn mjpeg_decode_scan_sequential(
               Ok(_) => ()
               Err(e) => return Err(e)
             }
-            jpeg_store_block(comp.coeffs, block, by * comp.blocks_w + bx)
+            // MCU padding blocks at the right/bottom edge are coded but lie
+            // outside the component grid; decode them for the bitstream and
+            // DC predictor, then discard.
+            if bx < comp.blocks_w && by < comp.blocks_h {
+              jpeg_store_block(comp.coeffs, block, by * comp.blocks_w + bx)
+            }
           }
         }
       }
@@ -189,7 +191,9 @@ fn jpeg_decode_dc_first(
   let diff = jpeg_extend(je_read(bits, category), category)
   let value = diff * (quant[0] << al) + comp.dc_pred
   comp.dc_pred = value
-  comp.coeffs[block_index * 64] = jpeg_i16(value)
+  if block_index >= 0 {
+    comp.coeffs[block_index * 64] = jpeg_i16(value)
+  }
   Ok(())
 }
 
@@ -202,7 +206,7 @@ fn jpeg_decode_dc_refine(
   quant : Array[Int32],
   al : Int32,
 ) -> Result[Unit, String] {
-  if je_read(bits, 1) != 0 {
+  if je_read(bits, 1) != 0 && block_index >= 0 {
     let base = block_index * 64
     comp.coeffs[base] = jpeg_i16(comp.coeffs[base] + (quant[0] << al))
   }
@@ -447,10 +451,11 @@ fn mjpeg_decode_scan_progressive(
             for hx in 0..<comp.h {
               let bx = mcu_x * comp.h + hx
               let by = mcu_y * comp.v + vy
-              if bx >= comp.blocks_w || by >= comp.blocks_h {
-                return Err("mjpeg: MCU block outside component")
+              let bi = if bx < comp.blocks_w && by < comp.blocks_h {
+                by * comp.blocks_w + bx
+              } else {
+                -1
               }
-              let bi = by * comp.blocks_w + bx
               if ah == 0 {
                 match jpeg_decode_dc_first(bits, comp, bi, qt, dct, al) {
                   Ok(_) => ()
@@ -598,10 +603,29 @@ fn mjpeg_finalize_image(
     plane_arrays.push(out)
   }
   if components.length() == 4 {
-    // FFmpeg only supports these with 1x1 sampling; subsampled 4-component
-    // files would need the chroma upscaler.
     if max_h != 1 || max_v != 1 {
-      return Err("PATCHWELCOME: subsampled 4-component JPEG")
+      // FFmpeg upsamples the half-resolution chroma planes (1/2) to 4:4:4
+      // for the common YCCK layout with a full-resolution K plane.
+      let supported = max_h == 2 &&
+        max_v == 2 &&
+        components[0].h == 2 &&
+        components[0].v == 2 &&
+        components[1].h == 1 &&
+        components[1].v == 1 &&
+        components[2].h == 1 &&
+        components[2].v == 1 &&
+        components[3].h == 2 &&
+        components[3].v == 2 &&
+        (adobe_transform == 0 || adobe_transform == 2)
+      if !supported {
+        return Err("PATCHWELCOME: subsampled 4-component JPEG")
+      }
+      for i in [1, 2] {
+        let comp = components[i]
+        let cw = (width * comp.h + max_h - 1) / max_h
+        let ch = (height * comp.v + max_v - 1) / max_v
+        plane_arrays[i] = mjpeg_upscale2(plane_arrays[i], cw, ch, width, height)
+      }
     }
     let p0 = plane_arrays[0]
     let p1 = plane_arrays[1]
@@ -636,7 +660,14 @@ fn mjpeg_finalize_image(
       planes.push(Bytes::from_array(p))
     }
     let pix_fmt = if adobe_transform == 0 { "gbrap" } else { "yuva444p" }
-    return Ok({ width, height, pix_fmt, planes, plane_widths, plane_heights, })
+    return Ok({
+      width,
+      height,
+      pix_fmt,
+      planes,
+      plane_widths: [width, width, width, width],
+      plane_heights: [height, height, height, height],
+    })
   }
   if components.length() == 3 &&
     (
@@ -685,6 +716,49 @@ fn mjpeg_finalize_image(
     plane_widths,
     plane_heights,
   })
+}
+
+///|
+/// FFmpeg's factor-2 chroma upscale (`upscale_h/v == 1`): a half-width row
+/// is expanded with `(src[x/2] + src[(x+1)/2]) >> 1` (index 0 kept) and a
+/// half-height column pair is averaged bottom-up, edge rows copied.
+fn mjpeg_upscale2(
+  plane : Array[Byte],
+  cw : Int32,
+  ch : Int32,
+  w : Int32,
+  h : Int32,
+) -> Array[Byte] {
+  let out = Array::make(w * h, b' ')
+  for y in 0..<ch {
+    let src = y * cw
+    let dst = y * w
+    out[dst + w - 1] = plane[src + (w - 1) / 2]
+    for x = w - 2; x > 0; x = x - 1 {
+      out[dst + x] = ((
+        plane[src + x / 2].to_int() + plane[src + (x + 1) / 2].to_int()
+      ) >>
+      1).to_byte()
+    }
+    out[dst] = plane[src]
+  }
+  for i = h - 1; i > 0; i = i - 1 {
+    let src1 = i / 2
+    let src2 = (i + 1) / 2
+    let dst = i * w
+    let s1 = src1 * w
+    if src1 == src2 || i == h - 1 {
+      for x in 0..<w {
+        out[dst + x] = out[s1 + x]
+      }
+    } else {
+      let s2 = src2 * w
+      for x in 0..<w {
+        out[dst + x] = ((out[s1 + x].to_int() + out[s2 + x].to_int()) >> 1).to_byte()
+      }
+    }
+  }
+  out
 }
 
 ///|

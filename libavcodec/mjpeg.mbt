@@ -17,13 +17,15 @@
 /// progressive DC first/refinement, AC first/refinement and EOB runs, arbitrary
 /// 1..4 h/v sampling, DQT (8/16-bit entries), DHT, DRI restart markers, the
 /// native `yuvj420p`/`yuvj422p`/`yuvj444p`/`yuvj440p`/`gray` output formats
-/// FFmpeg selects, 4-component 1x1 CMYK/YCCK with the Adobe APP14
-/// transform (transform 0 -> `gbrap`, 2 -> `yuva444p`), and 3-component 1x1
-/// Adobe transform 0 / R,G,B component IDs -> `gbrp`. Planes are cropped
-/// to the visible size.
+/// FFmpeg selects, 4-component CMYK/YCCK with the Adobe APP14 transform
+/// (transform 0 -> `gbrap`, 2 -> `yuva444p`; the 2x2-Y/full-K layout is
+/// chroma-upscaled to 4:4:4 like FFmpeg), and 3-component 1x1 Adobe
+/// transform 0 / R,G,B component IDs -> `gbrp`. Planes are cropped to the
+/// visible size.
 ///
-/// Out of scope: arithmetic coding, 12-bit samples, subsampled 4-component
-/// JPEG, subsampled 3-component Adobe transforms, and EXIF orientation.
+/// Out of scope: arithmetic coding, 12-bit samples, other 4-component
+/// sampling layouts, subsampled 3-component Adobe transforms, and EXIF
+/// orientation.
 
 ///|
 pub struct JpegImage {

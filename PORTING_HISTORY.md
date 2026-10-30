@@ -5749,3 +5749,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   同步）和只保留 RGB ID（transform 改为 1）；三者 GBRP 三平面拼接后
   与 `ffmpeg -f rawvideo -pix_fmt gbrp` MD5 一致。
 - 全量 wasm **1275/1275**。
+
+## 215. MJPEG 子采样 YCCK 上采样
+
+- 新增 `mjpeg_upscale2`：复刻 FFmpeg 的 2× chroma 上采样（水平
+  `(src[x/2]+src[(x+1)/2])>>1`、垂直半行平均/边缘复制、底向上原地
+  等价）。
+- 4 分量分支支持 `2x2 Y + 1x1 Cb/Cr + 2x2 K` 布局：transform 0/2
+  时先把 chroma 两平面升到全分辨率，再走原有 gbrap/yuva444p 转换；
+  其他子采样布局仍 PATCHWELCOME。
+- 顺带修复奇数尺寸子采样 JPEG 的 MCU 边界：右/下填充 MCU 块照常
+  解码以维持熵流与 DC 预测，但不写入组件块表（此前会报
+  “MCU block outside component”）。
+- 夹具：ImageMagick `-sampling-factor 2x2,1x1,1x1,2x2` 生成的 17x13
+  CMYK JPEG（transform 2）与 APP14 改为 0 的变体；四平面与 ffmpeg
+  rawvideo（yuva444p/gbrap）MD5 一致。
+- 全量 wasm **1276/1276**。
