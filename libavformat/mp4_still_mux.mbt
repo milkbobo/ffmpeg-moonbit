@@ -85,5 +85,6 @@ pub fn Mp4StillMuxer::finish(self : Mp4StillMuxer) -> Bytes {
     self.packets,
     self.durations,
     self.keyframes,
+    [],
   )
 }

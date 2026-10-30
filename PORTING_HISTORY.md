@@ -5765,3 +5765,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   CMYK JPEG（transform 2）与 APP14 改为 0 的变体；四平面与 ffmpeg
   rawvideo（yuva444p/gbrap）MD5 一致。
 - 全量 wasm **1276/1276**。
+
+## 216. MP4 H.264 B 帧（ctts）
+
+- `Mp4H264Muxer::write_packet` 新增 `cts`（PTS-DTS），finish 在
+  `stts` 后写 `ctts`：连续相同偏移合并为 run，全 0 时省略；存在负
+  偏移时用 version 1（signed），否则 version 0。
+- `mp4_video_document` 增加 cts 参数（静态图写入器传空数组），样本
+  表顺序 stsd/stts/ctts/stss/stsc/stsz/stco。
+- 回归 `mp4_bframes_wbtest.mbt`：真实 x264 B 帧 MP4（bf=3，8 帧）
+  经解复用→重封装→再解复用，逐样本 cts 与 DTS 相对差值、时长、
+  关键帧标志一致，解码帧 MD5 序列一致；另测负 ctts 走 version 1
+  且 PTS/DTS 正确。
+- 外部验证：宿主机生成的 B 帧 MP4 用本写入器重封装后，ffmpeg
+  9.0.2 的 framemd5 8/8 与源一致，`-c copy -f framecrc` 的 packet
+  DTS/PTS 逐行与源相同（含负 DTS）。
+- 全量 wasm **1278/1278**。

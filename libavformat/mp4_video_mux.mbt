@@ -15,6 +15,8 @@ pub struct Mp4H264Muxer {
   packets : Array[Bytes]
   durations : Array[Int32]
   keyframes : Array[Bool]
+  /// Presentation offsets (PTS - DTS) per sample; empty ctts when all zero.
+  cts : Array[Int32]
 }
 
 ///|
@@ -35,6 +37,7 @@ pub fn mp4_h264_muxer_new(
     packets: [],
     durations: [],
     keyframes: [],
+    cts: [],
   })
 }
 
@@ -45,6 +48,7 @@ pub fn Mp4H264Muxer::write_packet(
   packet : Bytes,
   duration~ : Int32 = 3000,
   keyframe~ : Bool = false,
+  cts~ : Int32 = 0,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty H.264 packet or duration")
@@ -52,6 +56,7 @@ pub fn Mp4H264Muxer::write_packet(
   self.packets.push(packet)
   self.durations.push(duration)
   self.keyframes.push(keyframe)
+  self.cts.push(cts)
   Ok(())
 }
 
@@ -130,6 +135,7 @@ fn mp4_video_document(
   packets : Array[Bytes],
   durations : Array[Int32],
   keyframes : Array[Bool],
+  cts : Array[Int32],
 ) -> Bytes {
   let sample_count = packets.length()
   let mut total_duration = 0
@@ -244,6 +250,41 @@ fn mp4_video_document(
   }
   let stts = mp4_full_box("stts", 0, 0, stts_body)
 
+  let mut has_cts = false
+  for c in cts {
+    if c != 0 {
+      has_cts = true
+    }
+  }
+  let ctts = if has_cts {
+    let mut version = 0
+    for c in cts {
+      if c < 0 {
+        version = 1
+      }
+    }
+    let cts_runs : Array[(Int32, Int32)] = []
+    for c in cts {
+      if cts_runs.length() > 0 && cts_runs[cts_runs.length() - 1].1 == c {
+        cts_runs[cts_runs.length() - 1] = (
+          cts_runs[cts_runs.length() - 1].0 + 1,
+          c,
+        )
+      } else {
+        cts_runs.push((1, c))
+      }
+    }
+    let body : Array[Byte] = []
+    mp4_u32(body, cts_runs.length().reinterpret_as_uint())
+    for run in cts_runs {
+      mp4_u32(body, run.0.reinterpret_as_uint())
+      mp4_u32(body, run.1.reinterpret_as_uint())
+    }
+    Some(mp4_full_box("ctts", version, 0, body))
+  } else {
+    None
+  }
+
   let sync : Array[Int32] = []
   for i in 0..<keyframes.length() {
     if keyframes[i] {
@@ -286,6 +327,10 @@ fn mp4_video_document(
   let stco = mp4_full_box("stco", 0, 0, stco_body)
 
   let stbl_parts : Array[Array[Byte]] = [stsd, stts]
+  match ctts {
+    Some(box) => stbl_parts.push(box)
+    None => ()
+  }
   match stss {
     Some(box) => stbl_parts.push(box)
     None => ()
@@ -311,5 +356,6 @@ pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
     self.packets,
     self.durations,
     self.keyframes,
+    self.cts,
   )
 }
