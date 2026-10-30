@@ -678,3 +678,52 @@ pub fn fmp4_av_media_segment(
   }
   Ok(Bytes::from_array(mp4_cat([fmp4_styp(), moof, mp4_box("mdat", data)])))
 }
+
+///|
+/// One `sidx` reference: a media subsegment (`moof`+`mdat`) and its duration
+/// in the track timescale.
+pub struct Fmp4SidxRef {
+  size : Int32
+  duration : Int64
+}
+
+///|
+pub fn Fmp4SidxRef::new(size : Int32, duration : Int64) -> Fmp4SidxRef {
+  { size, duration, }
+}
+
+///|
+/// A global `sidx` box (version 1, as `movenc.c` writes for fragmented
+/// output) indexing consecutive media subsegments that start right after the
+/// box. `earliest_presentation_time` is in `timescale` units.
+pub fn fmp4_sidx(
+  track_id : Int32,
+  timescale : Int32,
+  earliest_presentation_time : Int64,
+  refs : ArrayView[Fmp4SidxRef],
+) -> Result[Bytes, String] {
+  if track_id <= 0 || timescale <= 0 || earliest_presentation_time < 0L {
+    return Err("EINVAL: invalid sidx parameters")
+  }
+  if refs.length() > 65535 {
+    return Err("EINVAL: too many sidx references")
+  }
+  for r in refs {
+    if r.size < 0 || r.duration < 0L || r.duration > 0xFFFFFFFFL {
+      return Err("EINVAL: invalid sidx reference")
+    }
+  }
+  let body : Array[Byte] = []
+  mp4_u32(body, track_id.reinterpret_as_uint()) // reference_ID
+  mp4_u32(body, timescale.reinterpret_as_uint())
+  fmp4_u64(body, earliest_presentation_time)
+  fmp4_u64(body, 0L) // first_offset: first moof follows the sidx
+  mp4_u16(body, 0) // reserved
+  mp4_u16(body, refs.length())
+  for r in refs {
+    mp4_u32(body, r.size.reinterpret_as_uint() & 0x7FFFFFFFU) // media ref
+    mp4_u32(body, r.duration.to_int().reinterpret_as_uint())
+    mp4_u32(body, 0x80000000U) // starts_with_SAP, SAP_type 0
+  }
+  Ok(Bytes::from_array(mp4_full_box("sidx", 1, 0, body)))
+}

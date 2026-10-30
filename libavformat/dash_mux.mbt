@@ -277,3 +277,117 @@ pub fn dash_write_segment_list_mpd(
   sb.write_string("</MPD>\n")
   sb.to_string()
 }
+
+///|
+/// `SegmentBase` AdaptationSet/Representation pair: a single-file track
+/// addressed by `BaseURL` plus an `indexRange`/`Initialization` byte range.
+pub struct DashBaseAdaptation {
+  content_type : String
+  mime_type : String
+  codecs : String
+  id : String
+  bandwidth : Int64
+  base_url : String
+  initialization_range : String
+  index_range : String
+  width : Int32
+  height : Int32
+  sample_rate : Int32
+  lang : String
+}
+
+///|
+pub fn DashBaseAdaptation::new(
+  content_type : String,
+  mime_type : String,
+  codecs : String,
+  id : String,
+  bandwidth : Int64,
+  base_url : String,
+  initialization_range : String,
+  index_range : String,
+  width~ : Int32 = 0,
+  height~ : Int32 = 0,
+  sample_rate~ : Int32 = 0,
+  lang~ : String = "",
+) -> DashBaseAdaptation {
+  {
+    content_type,
+    mime_type,
+    codecs,
+    id,
+    bandwidth,
+    base_url,
+    initialization_range,
+    index_range,
+    width,
+    height,
+    sample_rate,
+    lang,
+  }
+}
+
+///|
+/// Write a `SegmentBase` MPD (one single-file Representation per
+/// AdaptationSet). `index_range` must cover the file's global `sidx`, and
+/// `initialization_range` the `ftyp`+`moov` prefix.
+pub fn dash_write_segment_base_mpd(
+  adaptations : ArrayView[DashBaseAdaptation],
+  media_duration_seconds~ : Double,
+  period_id~ : String = "p0",
+) -> String {
+  let sb = StringBuilder()
+  sb.write_string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+  sb.write_string(
+    "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\"\n",
+  )
+  sb.write_string("     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\"\n")
+  sb.write_string(
+    "     mediaPresentationDuration=\"PT\{media_duration_seconds}S\" minBufferTime=\"PT1.5S\">\n",
+  )
+  sb.write_string("  <Period id=\"\{period_id}\" start=\"PT0S\">\n")
+  for a in adaptations {
+    sb.write_string(
+      "    <AdaptationSet contentType=\"\{a.content_type}\" mimeType=\"\{a.mime_type}\"",
+    )
+    if a.codecs != "" {
+      sb.write_string(" codecs=\"" + a.codecs + "\"")
+    }
+    if a.lang != "" {
+      sb.write_string(" lang=\"" + a.lang + "\"")
+    }
+    sb.write_string(">\n")
+    sb.write_string("      <Representation id=\"" + a.id + "\"")
+    if a.bandwidth > 0L {
+      sb.write_string(" bandwidth=\"\{a.bandwidth}\"")
+    }
+    if a.width > 0 && a.height > 0 {
+      sb.write_string(" width=\"\{a.width}\" height=\"\{a.height}\"")
+    }
+    if a.sample_rate > 0 {
+      sb.write_string(" audioSamplingRate=\"\{a.sample_rate}\"")
+    }
+    sb.write_string(">\n")
+    sb.write_string("        <BaseURL>\{a.base_url}</BaseURL>\n")
+    sb.write_string("        <SegmentBase")
+    if a.index_range != "" {
+      sb.write_string(" indexRange=\"" + a.index_range + "\"")
+    }
+    if a.initialization_range != "" {
+      sb.write_string(">\n")
+      sb.write_string(
+        "          <Initialization range=\"" +
+        a.initialization_range +
+        "\" />\n",
+      )
+      sb.write_string("        </SegmentBase>\n")
+    } else {
+      sb.write_string(" />\n")
+    }
+    sb.write_string("      </Representation>\n")
+    sb.write_string("    </AdaptationSet>\n")
+  }
+  sb.write_string("  </Period>\n")
+  sb.write_string("</MPD>\n")
+  sb.to_string()
+}

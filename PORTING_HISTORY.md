@@ -5663,3 +5663,21 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   cue）经 ffmpeg 9.0.2 `-allowed_extensions ALL` 识别为 webvtt 字幕流，
   提取 SRT 的时间与文本与源一致。
 - 全量 wasm **1264/1264**。
+
+## 209. DASH SegmentBase 单文件写入
+
+- 新增 `fmp4_sidx`：version 1 全局 `sidx`（reference_ID/timescale/
+  earliest_presentation_time/first_offset=0、每条 media 引用 12 字节），
+  与 `movenc.c` 的 fragmented 输出布局一致；非法参数返回 EINVAL。
+- 新增 `dash_write_segment_base_mpd`/`DashBaseAdaptation`：
+  `BaseURL` + `SegmentBase indexRange` + `Initialization range`，
+  文本/音频/视频属性按空值省略。
+- 回归：用现有 ffmpeg 夹具的 `sidx`（文件 817-880）逐字节比对通过；
+  自建 init+sidx+两段 media 的单文件经 `av_dash_parse` 与
+  `DashSegmentReader` 回读，5 帧 H.264 MD5 与参考一致。
+- 外部验证：ffmpeg 9.0.2 生成 64x48/25fps/10 帧 H.264 MKV，经
+  Matroska 解复用→fMP4 写入→sidx/MPD 生成自写单文件，HTTP 服务下
+  ffmpeg `-allowed_extensions ALL` 解码 MPD 的 framemd5 与源 MKV
+  逐帧一致（尾部重复帧为 dashdec 对官方 SegmentBase 夹具同样存在的
+  行为）。
+- 全量 wasm **1266/1266**。
