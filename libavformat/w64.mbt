@@ -126,6 +126,7 @@ pub struct W64Muxer {
   bits : Int32
   float_samples : Bool
   data : Array[Byte]
+  tags : Array[(String, String)]
 }
 
 ///|
@@ -144,7 +145,20 @@ pub fn w64_muxer_new(
   if float && bits != 32 {
     return Err("EINVAL: IEEE float Wave64 requires 32-bit samples")
   }
-  Ok({ sample_rate, channels, bits, float_samples: float, data: [], })
+  Ok({ sample_rate, channels, bits, float_samples: float, data: [], tags: [], })
+}
+
+///|
+/// Set the `summarylist` tags written by `finish` (RIFF INFO keys such as
+/// `title`/`artist`; unknown keys are skipped).
+pub fn W64Muxer::set_tags(
+  self : W64Muxer,
+  tags : Array[(String, String)],
+) -> Unit {
+  self.tags.clear()
+  for pair in tags {
+    self.tags.push(pair)
+  }
 }
 
 ///|
@@ -199,7 +213,13 @@ pub fn W64Muxer::finish(self : W64Muxer) -> Bytes {
   let fmt_size = w64_align8(24L + fmt_payload.length().to_int64())
   let fact_size = if self.float_samples { 32L } else { 0L }
   let data_size = w64_align8(24L + self.data.length().to_int64())
-  let total = 40L + fmt_size + fact_size + data_size
+  let summary = w64_summary_payload(self.tags)
+  let summary_size = if summary.length() > 0 {
+    w64_align8(24L + summary.length().to_int64())
+  } else {
+    0L
+  }
+  let total = 40L + fmt_size + fact_size + data_size + summary_size
   let out : Array[Byte] = []
   for b in w64_guid_riff {
     out.push(b)
@@ -237,6 +257,18 @@ pub fn W64Muxer::finish(self : W64Muxer) -> Bytes {
   }
   while out.length() % 8 != 0 {
     out.push(b'\x00')
+  }
+  if summary_size > 0L {
+    for b in w64_summary_guid() {
+      out.push(b)
+    }
+    w64_le64(out, summary_size)
+    for b in summary {
+      out.push(b)
+    }
+    while out.length() % 8 != 0 {
+      out.push(b'\x00')
+    }
   }
   Bytes::from_array(out)
 }

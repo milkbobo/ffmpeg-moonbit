@@ -154,3 +154,38 @@ test "w64: writer round-trips PCM and float" {
   assert_eq(fdemux.sample_count, 8L)
   assert_eq(w64fixture_pcm(fdemux, fbytes).length(), 32)
 }
+
+///|
+test "w64: summarylist tags round-trip" {
+  let mux = @libavformat.w64_muxer_new(8000, 1, 16).unwrap()
+  let samples : Array[Int32] = [1, -2, 3, -4]
+  mux.write_samples(samples)
+  mux.set_tags([
+    ("title", "W64 标题"),
+    ("artist", "Artist"),
+    ("track", "7"),
+    ("custom", "ignored"),
+  ])
+  let bytes = mux.finish()
+  let tags = @libavformat.w64_read_tags(bytes).unwrap()
+  assert_eq(tags.length(), 3)
+  let mut title = ""
+  let mut track = ""
+  for pair in tags {
+    if pair.0 == "title" {
+      title = pair.1
+    } else if pair.0 == "track" {
+      track = pair.1
+    }
+  }
+  assert_eq(title, "W64 标题")
+  assert_eq(track, "7")
+  // The audio payload is untouched by the summary list.
+  let demux = @libavformat.av_w64_open(bytes).unwrap()
+  assert_eq(demux.sample_count, 4L)
+  assert_eq(w64fixture_pcm(demux, bytes).length(), 8)
+  // A file without tags reads as an empty list.
+  let plain = @libavformat.w64_muxer_new(8000, 1, 16).unwrap()
+  plain.write_samples(samples)
+  assert_eq(@libavformat.w64_read_tags(plain.finish()).unwrap().length(), 0)
+}

@@ -5634,3 +5634,16 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：自写 16-bit 与 float32 W64 经 ffmpeg 解码 s16le/f32le
   与源字节完全一致。
 - 全量 wasm **1259/1259**。
+
+## 207. Wave64 summarylist 标签
+
+- 读：`w64_read_tags` 解析 `summarylist` 块（u32 条目数，每条
+  4CC + u32 字节长 + UTF-16LE 字符串），按 `ff_riff_info_conv`
+  映射为通用键。
+- 写：`W64Muxer::set_tags` 在 data 之后追加 summarylist 块
+  （UTF-16LE + NUL、8 字节对齐、riff 总长同步）；未知键与空值跳过。
+- 回归：带 title/artist/track（含中文标题）与无标签两组回转断言，
+  audio 载荷不变。
+- 外部验证：自写带标签 W64 经 ffprobe 读到 title/artist，ffmpeg
+  解码 PCM 与无标签版本完全相同。
+- 全量 wasm **1260/1260**。
