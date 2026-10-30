@@ -5723,3 +5723,18 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   同文件 APP14 字节改为 transform 0 的变体；两者 concat 四平面后
   与 `ffmpeg -f rawvideo`（yuva444p/gbrap）MD5 逐字节一致。
 - 全量 wasm **1270/1270**。
+
+## 213. WAV A-law/µ-law 写入
+
+- `wav_muxer_new` 新增 `companding="alaw"|"mulaw"`：调用现有
+  `pcm_alaw_encode`/`pcm_mulaw_encode` 写每样本 1 字节；仅允许
+  8-bit 小端，float/RIFX/16-bit 组合报错。
+- 头部按 `ff_put_wav_header`：非 extensible 用 WAVEFORMATEX
+  （fmt 18 字节、cbSize=0、tag 6/7）、`fact` 帧数、byte rate=采样率×
+  声道；>2 声道或 mask 走 0xFFFE，valid bits=8，子格式 6/7。
+- 回归 `wav_companding_wbtest.mbt`：A-law/µ-law 74 字节文件逐字段
+  断言（与 ffmpeg 输出去掉 LIST/INFO 后逐字节一致）、WAV 解复用
+  回读、6 声道 extensible 子格式与 round-trip、非法参数拒绝。
+- 外部验证：ffmpeg 9.0.2 将自写单声道与 5.1 文件识别为
+  pcm_alaw/pcm_mulaw 并解码为与 ffmpeg 自产文件相同的 PCM。
+- 全量 wasm **1274/1274**。

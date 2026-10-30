@@ -15,6 +15,8 @@ pub struct WavMuxer {
   channel_mask : UInt32
   extensible : Bool
   float_samples : Bool
+  /// "" for linear PCM, "alaw"/"mulaw" for ITU G.711 companding.
+  companding : String
   /// Emit a `RF64`/`ds64` header for files beyond the 4 GiB RIFF limit.
   rf64 : Bool
   /// Emit a big-endian `RIFX` container (payload bytes swapped accordingly).
@@ -36,9 +38,16 @@ pub fn wav_muxer_new(
   float~ : Bool = false,
   rf64~ : Bool = false,
   big_endian~ : Bool = false,
+  companding~ : String = "",
 ) -> Result[WavMuxer, String] {
   if sample_rate <= 0 || channels <= 0 {
     return Err("EINVAL: invalid WAV sample rate or channel count")
+  }
+  if companding != "" && companding != "alaw" && companding != "mulaw" {
+    return Err("EINVAL: WAV companding must be alaw or mulaw")
+  }
+  if companding != "" && (float || bits != 8 || big_endian) {
+    return Err("EINVAL: A-law/mu-law requires 8-bit little-endian PCM")
   }
   if float && bits != 32 {
     return Err("EINVAL: IEEE float WAV requires 32-bit samples")
@@ -56,6 +65,7 @@ pub fn wav_muxer_new(
     channel_mask,
     extensible: channels > 2 || channel_mask != 0U,
     float_samples: float,
+    companding,
     rf64,
     big_endian,
     data: [],
@@ -114,11 +124,23 @@ fn wav_mux_tag(dst : Array[Byte], tag : String) -> Unit {
 /// Append interleaved samples. Values are written in the low `bits` bits,
 /// little-endian for RIFF/RF64 and big-endian for RIFX; callers provide
 /// signed samples already in the PCM range. 8-bit output is offset to the
-/// unsigned range.
+/// unsigned range. With `companding` set the values are G.711-encoded to one
+/// byte per sample instead.
 pub fn WavMuxer::write_samples(
   self : WavMuxer,
   samples : ArrayView[Int32],
 ) -> Unit {
+  if self.companding != "" {
+    let encoded = if self.companding == "alaw" {
+      @libavcodec.pcm_alaw_encode(samples)
+    } else {
+      @libavcodec.pcm_mulaw_encode(samples)
+    }
+    for b in encoded {
+      self.data.push(b)
+    }
+    return
+  }
   let bytes = self.bits / 8
   for sample in samples {
     let v = if self.bits == 8 {
@@ -157,11 +179,22 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
   let out : Array[Byte] = []
   let block_align = self.channels * (self.bits / 8)
   let byte_rate = self.sample_rate * block_align
-  let fmt_size = if self.extensible { 40 } else { 16 }
+  let fmt_size = if self.extensible {
+    40
+  } else if self.companding != "" {
+    // WAVEFORMATEX with cbSize=0, as ff_put_wav_header writes for G.711.
+    18
+  } else {
+    16
+  }
   // `ff_put_wav_header` writes WAVE_FORMAT_EXTENSIBLE whenever the layout is
-  // non-mono/stereo; IEEE float is selected through the subformat GUID then.
+  // non-mono/stereo; IEEE float and G.711 are selected through the subformat.
   let format_tag = if self.extensible {
     0xFFFE
+  } else if self.companding == "alaw" {
+    6
+  } else if self.companding == "mulaw" {
+    7
   } else if self.float_samples {
     3
   } else {
@@ -169,7 +202,11 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
   }
   // Non-PCM formats (`codec_tag != 1`) carry a `fact` chunk, as in
   // `wav_write_header`; its payload is the frame count patched in the trailer.
-  let fact_size = if self.float_samples { 12 } else { 0 }
+  let fact_size = if self.float_samples || self.companding != "" {
+    12
+  } else {
+    0
+  }
   // Size of everything after the 8-byte RIFF/RF64 header.
   let riff_size = 20 + fmt_size + fact_size + data_size + pad
   let ds64_size = if self.rf64 { 36 } else { 0 }
@@ -204,8 +241,16 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
     wav_mux_u16(out, 22) // cbSize
     wav_mux_u16(out, self.bits) // valid bits
     wav_mux_u32(out, self.channel_mask)
-    // KSDATAFORMAT_SUBTYPE_PCM / IEEE_FLOAT
-    let subformat = if self.float_samples { 3 } else { 1 }
+    // KSDATAFORMAT_SUBTYPE_PCM / IEEE_FLOAT / ALAW / MULAW
+    let subformat = if self.companding == "alaw" {
+      6
+    } else if self.companding == "mulaw" {
+      7
+    } else if self.float_samples {
+      3
+    } else {
+      1
+    }
     let guid : Array[Int32] = [
       subformat, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA,
       0x00, 0x38, 0x9B, 0x71,
@@ -213,6 +258,8 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
     for b in guid {
       out.push(b.to_byte())
     }
+  } else if self.companding != "" {
+    wav_mux_w16(out, 0, self.big_endian) // cbSize, WAVEFORMATEX
   }
   if fact_size != 0 {
     wav_mux_tag(out, "fact")
