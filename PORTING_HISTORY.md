@@ -5806,3 +5806,16 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffmpeg 9.0.2 对自写 HEVC 文件 framemd5 6/6 一致，
   `-c copy -f framecrc` 的 packet DTS/PTS 逐行与源相同。
 - 全量 wasm **1280/1280**。
+
+## 219. MPEG-TS PES PTS+DTS（B 帧）
+
+- `TsMuxer::write_video` 新增可选 `dts`：PES 头部 flags 0xC0、
+  header_length 10，按规范先写 PTS 再写 DTS；PCR 使用 DTS（未给
+  时仍用 PTS）。音频 PES 保持 PTS-only。
+- 路由/有界 PES 的长度计算同步使用 13 字节头（PTS+DTS）。
+- 回归 `ts_bframes_wbtest.mbt`：真实 x264 B 帧 TS（6 帧）解复用→
+  重封装→再解复用，逐包 CTS/DTS 相对值与 payload 完全一致，解码帧
+  MD5 一致。
+- 外部验证：ffmpeg 9.0.2 对自写 TS 的 framemd5 6/6 一致，
+  `-c copy -f framecrc` 的 DTS/PTS（含负 DTS）逐行与源相同。
+- 全量 wasm **1281/1281**。

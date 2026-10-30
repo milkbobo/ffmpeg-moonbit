@@ -1,7 +1,7 @@
 ///|
 /// Minimal in-memory MPEG-TS writer for one video and one audio elementary
 /// stream.  It mirrors the table/PES layout used by FFmpeg 9.0.2
-/// `mpegtsenc.c` (PAT, PMT, PES with PTS-only headers) without the transport
+/// `mpegtsenc.c` (PAT, PMT, PES with optional PTS+DTS headers) without the transport
 /// buffering and PCR scheduling.  The PMT stream types default to H.264
 /// (0x1B) + AAC ADTS (0x0F) and can be overridden per constructor call
 /// (HEVC 0x24, MP3 0x03/0x04, ... as written by FFmpeg `mpegtsenc.c`).
@@ -227,9 +227,12 @@ fn TsMuxer::pes(
   payload : Bytes,
   bounded : Bool,
   pcr : Int64,
+  dts : Int64?,
 ) -> Unit {
   let pes : Array[Byte] = [0, 0, 1, stream_id.to_byte()]
-  let header_data = 8 // flags(2) + header_length(1) + PTS(5)
+  let has_dts = dts is Some(_)
+  // flags(2) + header_length(1) + PTS(5) [+ DTS(5)]
+  let header_data = if has_dts { 13 } else { 8 }
   let packet_len = if bounded && payload.length() + header_data <= 0xFFFF {
     payload.length() + header_data
   } else {
@@ -237,9 +240,13 @@ fn TsMuxer::pes(
   }
   ts_mux_u16(pes, packet_len)
   pes.push(b'\x84') // marker '10', PES header data present
-  pes.push(b'\x80') // PTS only
-  pes.push(5)
+  pes.push(if has_dts { b'\xc0' } else { b'\x80' })
+  pes.push(if has_dts { 10 } else { 5 })
   ts_mux_pts(pes, pts)
+  match dts {
+    Some(value) => ts_mux_pts(pes, value)
+    None => ()
+  }
   for b in payload {
     pes.push(b)
   }
@@ -248,14 +255,20 @@ fn TsMuxer::pes(
 
 ///|
 /// Write one video access-unit payload (H.264/HEVC Annex B) with a PTS in
-/// 90 kHz units.
+/// 90 kHz units. `dts`, when given, is written alongside the PTS (PES header
+/// flags 0xC0) and also drives the PCR.
 pub fn TsMuxer::write_video(
   self : TsMuxer,
   pts : Int64,
   payload : Bytes,
+  dts? : Int64,
 ) -> Unit {
   self.ensure_tables()
-  self.pes(self.video_pid, 0xE0, pts, payload, false, pts)
+  let pcr = match dts {
+    Some(value) => value
+    None => pts
+  }
+  self.pes(self.video_pid, 0xE0, pts, payload, false, pcr, dts)
 }
 
 ///|
@@ -317,7 +330,7 @@ pub fn TsMuxer::write_audio(
   } else {
     payload
   }
-  self.pes(self.audio_pid, 0xC0, pts, framed, true, -1L)
+  self.pes(self.audio_pid, 0xC0, pts, framed, true, -1L, None)
 }
 
 ///|
