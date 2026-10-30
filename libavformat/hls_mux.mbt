@@ -210,6 +210,8 @@ pub struct HlsMasterVariant {
   height : Int32
   codecs : String
   audio_group : String
+  /// `SUBTITLES` attribute naming an `EXT-X-MEDIA` subtitle group.
+  subtitle_group : String
 }
 
 ///|
@@ -233,8 +235,9 @@ pub fn HlsMasterVariant::new(
   height : Int32,
   codecs : String,
   audio_group~ : String = "",
+  subtitle_group~ : String = "",
 ) -> HlsMasterVariant {
-  { uri, bandwidth, width, height, codecs, audio_group, }
+  { uri, bandwidth, width, height, codecs, audio_group, subtitle_group, }
 }
 
 ///|
@@ -283,6 +286,9 @@ pub fn hls_write_master_playlist(
     )
     if variant.audio_group != "" {
       sb.write_string(",AUDIO=\"" + variant.audio_group + "\"")
+    }
+    if variant.subtitle_group != "" {
+      sb.write_string(",SUBTITLES=\"" + variant.subtitle_group + "\"")
     }
     sb.write_string("\n")
     sb.write_string(variant.uri)

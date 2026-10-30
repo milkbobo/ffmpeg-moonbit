@@ -5585,3 +5585,20 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   subrip）、TAG 与章节（含结束时间），ffmpeg 全量解码无错误并正确
   提取 SRT。
 - 全量 wasm **1254/1254**。
+
+## 204. HLS 字幕 rendition 与 WebVTT 分片
+
+- `HlsMasterVariant` 新增 `subtitle_group`，`hls_write_master_playlist`
+  输出 `SUBTITLES="group"` 属性；`HlsMasterRendition` 已有 TYPE 字段
+  可写 `EXT-X-MEDIA:TYPE=SUBTITLES`。
+- 新增 `hls_subtitles.mbt`：`HlsVttCue`（绝对毫秒）与
+  `hls_write_vtt_segment`，按 FFmpeg `webvttenc.c` 输出 `WEBVTT` 头 +
+  绝对时间戳 cue（`HH:MM:SS.mmm`），不写 X-TIMESTAMP-MAP（FFmpeg 的
+  HLS demuxer 以 playlist 时间轴读取 cue）。字幕媒体播放列表复用
+  `hls_write_media_playlist`。
+- 回归：VTT 文本逐字节断言（含多行 cue 与时间格式）、master 播放列表
+  含 TYPE/GROUP-ID/URI/SUBTITLES/LANGUAGE 属性。
+- 外部验证：生成的 sub0.vtt + subs.m3u8 + master.m3u8 经 ffprobe
+  识别 webvtt 字幕流，ffmpeg 从裸 VTT 与 master 均提取出时间/文本
+  完全一致的 SRT。
+- 全量 wasm **1256/1256**。
