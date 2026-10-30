@@ -5872,3 +5872,14 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   AV1/VP9 合成 cts 测试不受影响。外部 ffmpeg framecrc 首包恢复
   PTS 0 / DTS −4096，framemd5 8/8（H.264）与 6/6（HEVC）与源一致。
 - 全量 wasm **1283/1283**。
+
+## 224. TS 多节目解复用回归
+
+- 解复用器本身已支持 PAT/PMT 多节目；新增真实双节目 TS 夹具
+  （两个独立 H.264 视频，PAT 中 program 1/2，PMT/PID 0x100/0x101）。
+- 回归 `ts_multiprogram_wbtest.mbt`：programs=2、streams=2，
+  各流 4 个 PES、PID 映射正确、PCR 存在；两路 Annex-B 拼接后分别
+  解码 4 帧，MD5 与 ffmpeg 9.0.2 按节目 `-map 0:p:N` 的 framemd5
+  完全一致。
+- 代码无改动（覆盖已有实现）。
+- 全量 wasm **1284/1284**。
