@@ -5860,3 +5860,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   一致、AAC PCM 逐字节一致，`framecrc` 视频首包恢复为
   PTS 0 / DTS −36000（90000 timescale），与源音视频起点对齐。
 - 全量 wasm **1283/1283**。
+
+## 223. MP4 单轨视频 edit list
+
+- 新增共享 `mp4_video_edts`：由 durations+cts 求最小 PTS，正偏移时
+  用 `mp4_edit_list_at` 生成 edts（单轨写入器的 movie/media
+  timescale 相同）。
+- `mp4_video_document`（H.264/静像）与 HEVC/AV1/VP9 finish 在 trak
+  中按需插入 edts；无 cts 或首帧 PTS=0 时行为不变。
+- 回归：H.264 与 HEVC B 帧重封装测试断言首样本 PTS=0、DTS<0；
+  AV1/VP9 合成 cts 测试不受影响。外部 ffmpeg framecrc 首包恢复
+  PTS 0 / DTS −4096，framemd5 8/8（H.264）与 6/6（HEVC）与源一致。
+- 全量 wasm **1283/1283**。

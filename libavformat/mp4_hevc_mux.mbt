@@ -237,7 +237,13 @@ pub fn Mp4HevcMuxer::finish(self : Mp4HevcMuxer) -> Bytes {
   let stbl = mp4_box("stbl", mp4_cat(stbl_parts))
   let minf = mp4_box("minf", mp4_cat([vmhd, dinf, stbl]))
   let mdia = mp4_box("mdia", mp4_cat([mdhd, hdlr, minf]))
-  let trak = mp4_box("trak", mp4_cat([tkhd, mdia]))
+  let edts = mp4_video_edts(self.durations, self.cts, total_duration)
+  let trak_parts : Array[Array[Byte]] = [tkhd]
+  if edts.length() > 0 {
+    trak_parts.push(edts)
+  }
+  trak_parts.push(mdia)
+  let trak = mp4_box("trak", mp4_cat(trak_parts))
   let moov = mp4_box("moov", mp4_cat([mvhd, trak]))
   Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
 }

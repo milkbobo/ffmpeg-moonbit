@@ -590,3 +590,29 @@ fn mp4_ctts_box(cts : Array[Int32]) -> Array[Byte]? {
   }
   Some(mp4_full_box("ctts", version, 0, body))
 }
+
+///|
+/// Video `edts` for a sample list with composition offsets: when the first
+/// displayed PTS is positive (B-frame reorder delay), trim it so presentation
+/// starts at 0. `total_duration` is the full media duration in the track
+/// timescale (single-track writers use it as the movie timescale too).
+fn mp4_video_edts(
+  durations : Array[Int32],
+  cts : Array[Int32],
+  total_duration : Int32,
+) -> Array[Byte] {
+  let mut first_pts = 0L
+  let mut dts = 0L
+  for i in 0..<durations.length() {
+    let c = if i < cts.length() { cts[i].to_int64() } else { 0L }
+    let pts = dts + c
+    if i == 0 || pts < first_pts {
+      first_pts = pts
+    }
+    dts = dts + durations[i].to_int64()
+  }
+  if first_pts <= 0L || first_pts >= total_duration.to_int64() {
+    return []
+  }
+  mp4_edit_list_at(first_pts.to_int(), total_duration)
+}

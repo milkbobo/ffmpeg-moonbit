@@ -44,6 +44,9 @@ test "mp4: HEVC B-frames round-trip PTS through ctts" {
   let remux = av_mov_open(out).unwrap()
   let rt = remux.tracks[0]
   assert_eq(rt.samples.length(), track.samples.length())
+  // The video edit list trims the reorder delay: presentation starts at 0.
+  assert_eq(rt.samples[0].pts, 0L)
+  assert_true(rt.samples[0].dts < 0L)
   let src_base = track.samples[0].dts
   let out_base = rt.samples[0].dts
   for i in 0..<track.samples.length() {
