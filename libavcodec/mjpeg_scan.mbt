@@ -560,8 +560,10 @@ fn mjpeg_finalize_image(
   height : Int32,
   max_h : Int32,
   max_v : Int32,
+  adobe_transform : Int32,
 ) -> Result[JpegImage, String] {
   let out_planes : Array[Bytes] = []
+  let plane_arrays : Array[Array[Byte]] = []
   let plane_widths : Array[Int32] = []
   let plane_heights : Array[Int32] = []
   for ci in 0..<components.length() {
@@ -593,6 +595,48 @@ fn mjpeg_finalize_image(
       }
     }
     out_planes.push(Bytes::from_array(out[:]))
+    plane_arrays.push(out)
+  }
+  if components.length() == 4 {
+    // FFmpeg only supports these with 1x1 sampling; subsampled 4-component
+    // files would need the chroma upscaler.
+    if max_h != 1 || max_v != 1 {
+      return Err("PATCHWELCOME: subsampled 4-component JPEG")
+    }
+    let p0 = plane_arrays[0]
+    let p1 = plane_arrays[1]
+    let p2 = plane_arrays[2]
+    let p3 = plane_arrays[3]
+    let count = width * height
+    if adobe_transform == 0 {
+      for j in 0..<count {
+        let k = p3[j].to_int()
+        let r = p0[j].to_int() * k
+        let g = p1[j].to_int() * k
+        let b = p2[j].to_int() * k
+        p0[j] = ((g * 257) >> 16).to_byte()
+        p1[j] = ((b * 257) >> 16).to_byte()
+        p2[j] = ((r * 257) >> 16).to_byte()
+        p3[j] = b'\xff'
+      }
+    } else if adobe_transform == 2 {
+      for j in 0..<count {
+        let k = p3[j].to_int()
+        let r = (255 - p0[j].to_int()) * k
+        let g = (128 - p1[j].to_int()) * k
+        let b = (128 - p2[j].to_int()) * k
+        p0[j] = ((r * 257) >> 16).to_byte()
+        p1[j] = (((g * 257) >> 16) + 128).to_byte()
+        p2[j] = (((b * 257) >> 16) + 128).to_byte()
+        p3[j] = b'\xff'
+      }
+    }
+    let planes : Array[Bytes] = []
+    for p in plane_arrays {
+      planes.push(Bytes::from_array(p))
+    }
+    let pix_fmt = if adobe_transform == 0 { "gbrap" } else { "yuva444p" }
+    return Ok({ width, height, pix_fmt, planes, plane_widths, plane_heights, })
   }
   let pix_fmt = if components.length() == 1 {
     "gray"

@@ -5710,3 +5710,16 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 另外手工验证 resize×superres×qm 流同样 24/24 一致（该流无编码
   命令记录，未固化）。
 - 全量 wasm **1269/1269**。
+
+## 212. MJPEG 4 分量 CMYK/YCCK（1x1）
+
+- 解析 Adobe APP14，`transform` 0 = CMYK、2 = YCCK；4 分量且组件
+  ID 为 C/M/Y/K 时按 FFmpeg 强制 transform 0。
+- `mjpeg_finalize_image` 增加 4 分量 1x1 分支：按 FFmpeg 的
+  `adobe_transform == 0 -> gbrap`、否则 `yuva444p`，并逐像素应用
+  原位转换（GBRAP 的 `C*K/M*K/Y*K` 与 YUVA 的 YCCK 反变换，
+  alpha 置 255）。子采样 4 分量返回 PATCHWELCOME。
+- 夹具：ImageMagick 生成的 17x13 CMYK JPEG（APP14 transform 2）及
+  同文件 APP14 字节改为 transform 0 的变体；两者 concat 四平面后
+  与 `ffmpeg -f rawvideo`（yuva444p/gbrap）MD5 逐字节一致。
+- 全量 wasm **1270/1270**。

@@ -15,12 +15,14 @@
 /// 8/9-bit samples, the latter packed as BGR24 with the 9-bit reversible
 /// colour transform), interleaved and single-component scans, multi-scan sequential files,
 /// progressive DC first/refinement, AC first/refinement and EOB runs, arbitrary
-/// 1..4 h/v sampling, DQT (8/16-bit entries), DHT, DRI restart markers and the
+/// 1..4 h/v sampling, DQT (8/16-bit entries), DHT, DRI restart markers, the
 /// native `yuvj420p`/`yuvj422p`/`yuvj444p`/`yuvj440p`/`gray` output formats
-/// FFmpeg selects. Planes are cropped to the visible size.
+/// FFmpeg selects, and 4-component 1x1 CMYK/YCCK with the Adobe APP14
+/// transform (transform 0 -> `gbrap`, 2 -> `yuva444p`). Planes are cropped
+/// to the visible size.
 ///
-/// Out of scope: arithmetic coding, 12-bit samples, CMYK/YCCK
-/// (4 components), Adobe APP14 transforms, and EXIF orientation.
+/// Out of scope: arithmetic coding, 12-bit samples, subsampled 4-component
+/// JPEG, 3-component Adobe transforms, and EXIF orientation.
 
 ///|
 pub struct JpegImage {
@@ -310,6 +312,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
   let mut lossless = false
   let mut rgb_mode = false
   let mut sample_bits = 8
+  let mut adobe_transform = -1
   let mut pos = 2
   while pos + 1 < data.length() {
     if data[pos] != b'\xff' {
@@ -407,6 +410,16 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
           ac_tables[th] = Some(h)
         }
       }
+    } else if marker == 0xEE {
+      // Adobe APP14: transform 0 = CMYK, 2 = YCCK.
+      if seg.length() >= 12 &&
+        seg[0] == b'A' &&
+        seg[1] == b'd' &&
+        seg[2] == b'o' &&
+        seg[3] == b'b' &&
+        seg[4] == b'e' {
+        adobe_transform = seg[11].to_int()
+      }
     } else if marker == 0xC0 ||
       marker == 0xC1 ||
       marker == 0xC2 ||
@@ -465,6 +478,14 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
           last_nnz: [],
           samples: [],
         })
+      }
+      // FFmpeg forces the CMYK transform when the 4 component IDs spell it.
+      if ncomp == 4 &&
+        components[0].id == 'C' &&
+        components[1].id == 'M' &&
+        components[2].id == 'Y' &&
+        components[3].id == 'K' {
+        adobe_transform = 0
       }
       // 9-bit lossless is only produced for 3-component 1x1 RGB, which is
       // stored 16-bit internally then packed to BGR24.
@@ -603,6 +624,8 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
       mjpeg_finalize_lossless(components, width, height, max_h, max_v)
     }
   } else {
-    mjpeg_finalize_image(components, width, height, max_h, max_v)
+    mjpeg_finalize_image(
+      components, width, height, max_h, max_v, adobe_transform,
+    )
   }
 }
