@@ -206,37 +206,9 @@ fn mp4_av_stbl(
     mp4_u32(stts_body, run.1.reinterpret_as_uint())
   }
   let parts : Array[Array[Byte]] = [stsd, mp4_full_box("stts", 0, 0, stts_body)]
-  let mut has_cts = false
-  for c in cts {
-    if c != 0 {
-      has_cts = true
-    }
-  }
-  if has_cts {
-    let mut version = 0
-    for c in cts {
-      if c < 0 {
-        version = 1
-      }
-    }
-    let cts_runs : Array[(Int32, Int32)] = []
-    for c in cts {
-      if cts_runs.length() > 0 && cts_runs[cts_runs.length() - 1].1 == c {
-        cts_runs[cts_runs.length() - 1] = (
-          cts_runs[cts_runs.length() - 1].0 + 1,
-          c,
-        )
-      } else {
-        cts_runs.push((1, c))
-      }
-    }
-    let body : Array[Byte] = []
-    mp4_u32(body, cts_runs.length().reinterpret_as_uint())
-    for run in cts_runs {
-      mp4_u32(body, run.0.reinterpret_as_uint())
-      mp4_u32(body, run.1.reinterpret_as_uint())
-    }
-    parts.push(mp4_full_box("ctts", version, 0, body))
+  match mp4_ctts_box(cts) {
+    Some(box) => parts.push(box)
+    None => ()
   }
   let sync : Array[Int32] = []
   for i in 0..<keyframes.length() {

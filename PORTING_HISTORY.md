@@ -5793,3 +5793,16 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffmpeg 9.0.2 对自写 A/V 文件 video framemd5 与源一致，
   AAC 解码 PCM 88200 字节逐字节一致（priming 生效）。
 - 全量 wasm **1279/1279**。
+
+## 218. MP4 HEVC/AV1/VP9 ctts
+
+- 抽出共享 `mp4_ctts_box`（run 合并、全 0 返回 None、负偏移
+  version 1），H.264 单轨与 A/V 写入器改用该 helper。
+- `Mp4HevcMuxer`/`Mp4Av1Muxer`/`Mp4Vp9Muxer::write_packet` 新增
+  `cts`，stbl 在 `stts` 后按需插入 `ctts`。
+- 回归：三个写入器的合成样本加入正/负 cts，PTS 经解复用回读正确；
+  另加真实 x265 B 帧 HEVC MP4（6 帧）重封装测试，CTS/DTS 与解码
+  帧 MD5 一致。
+- 外部验证：ffmpeg 9.0.2 对自写 HEVC 文件 framemd5 6/6 一致，
+  `-c copy -f framecrc` 的 packet DTS/PTS 逐行与源相同。
+- 全量 wasm **1280/1280**。

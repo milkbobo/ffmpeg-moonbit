@@ -15,6 +15,8 @@ pub struct Mp4Av1Muxer {
   packets : Array[Bytes]
   durations : Array[Int32]
   keyframes : Array[Bool]
+  /// Presentation offsets (PTS - DTS) per sample.
+  cts : Array[Int32]
 }
 
 ///|
@@ -35,6 +37,7 @@ pub fn mp4_av1_muxer_new(
     packets: [],
     durations: [],
     keyframes: [],
+    cts: [],
   })
 }
 
@@ -45,6 +48,7 @@ pub fn Mp4Av1Muxer::write_packet(
   packet : Bytes,
   duration~ : Int32 = 3000,
   keyframe~ : Bool = false,
+  cts~ : Int32 = 0,
 ) -> Result[Unit, String] {
   if packet.length() == 0 || duration <= 0 {
     return Err("EINVAL: empty AV1 packet or duration")
@@ -52,6 +56,7 @@ pub fn Mp4Av1Muxer::write_packet(
   self.packets.push(packet)
   self.durations.push(duration)
   self.keyframes.push(keyframe)
+  self.cts.push(cts)
   Ok(())
 }
 
@@ -174,6 +179,7 @@ pub fn Mp4Av1Muxer::finish(self : Mp4Av1Muxer) -> Bytes {
     mp4_u32(stts_body, run.1.reinterpret_as_uint())
   }
   let stts = mp4_full_box("stts", 0, 0, stts_body)
+  let ctts = mp4_ctts_box(self.cts)
 
   let sync : Array[Int32] = []
   for i in 0..<self.keyframes.length() {
@@ -217,6 +223,10 @@ pub fn Mp4Av1Muxer::finish(self : Mp4Av1Muxer) -> Bytes {
   let stco = mp4_full_box("stco", 0, 0, stco_body)
 
   let stbl_parts : Array[Array[Byte]] = [stsd, stts]
+  match ctts {
+    Some(box) => stbl_parts.push(box)
+    None => ()
+  }
   match stss {
     Some(box) => stbl_parts.push(box)
     None => ()

@@ -541,3 +541,40 @@ pub fn mp4_eac3_muxer_new(first_frame : Bytes) -> Result[Mp4AacMuxer, String] {
   }
   mp4_audio_muxer_new(mp4_eac3_entry(hdr), hdr.sample_rate, hdr.channels)
 }
+
+///|
+/// `ctts` box for per-sample PTS-DTS offsets: consecutive equal offsets are
+/// run-length merged, version 1 is used when any offset is negative, and
+/// `None` means every offset is zero (box omitted).
+fn mp4_ctts_box(cts : Array[Int32]) -> Array[Byte]? {
+  let mut has_cts = false
+  for c in cts {
+    if c != 0 {
+      has_cts = true
+    }
+  }
+  if !has_cts {
+    return None
+  }
+  let mut version = 0
+  for c in cts {
+    if c < 0 {
+      version = 1
+    }
+  }
+  let runs : Array[(Int32, Int32)] = []
+  for c in cts {
+    if runs.length() > 0 && runs[runs.length() - 1].1 == c {
+      runs[runs.length() - 1] = (runs[runs.length() - 1].0 + 1, c)
+    } else {
+      runs.push((1, c))
+    }
+  }
+  let body : Array[Byte] = []
+  mp4_u32(body, runs.length().reinterpret_as_uint())
+  for run in runs {
+    mp4_u32(body, run.0.reinterpret_as_uint())
+    mp4_u32(body, run.1.reinterpret_as_uint())
+  }
+  Some(mp4_full_box("ctts", version, 0, body))
+}

@@ -9,17 +9,24 @@ test "mp4 muxer: HEVC samples and hvcC round-trip" {
   let hvcc = @libavutil.av_base64_decode(mp4_hevc_hvcc_b64, 1024).unwrap()
   let mux = mp4_hevc_muxer_new(64, 48, hvcc, timescale=90000).unwrap()
   mux.write_packet(b"\x00\x00\x01\x02", duration=3000, keyframe=true).unwrap()
-  mux.write_packet(b"\x00\x00\x01\x03", duration=3000, keyframe=false).unwrap()
+  mux
+  .write_packet(b"\x00\x00\x01\x03", duration=3000, keyframe=false, cts=3000)
+  .unwrap()
+  mux
+  .write_packet(b"\x00\x00\x01\x04", duration=3000, keyframe=false, cts=-1000)
+  .unwrap()
   let bytes = mux.finish()
   let track = av_mov_open(bytes).unwrap().tracks[0]
   assert_eq(track.codec, "hvc1")
   assert_eq(track.width, 64)
   assert_eq(track.height, 48)
   assert_eq(track.extradata.unwrap(), hvcc)
-  assert_eq(track.samples.length(), 2)
-  for i in 0..<2 {
+  assert_eq(track.samples.length(), 3)
+  let expected_pts : Array[Int64] = [0L, 6000L, 5000L]
+  for i in 0..<3 {
     let sample = track.samples[i]
     assert_eq(sample.dts, (i * 3000).to_int64())
+    assert_eq(sample.pts, expected_pts[i])
     assert_eq(sample.duration, 3000U)
     assert_eq(sample.keyframe, i == 0)
   }
