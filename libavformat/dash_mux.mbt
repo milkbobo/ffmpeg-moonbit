@@ -215,15 +215,20 @@ pub fn dash_write_segment_list_mpd(
   sb.write_string("  <Period id=\"\{period_id}\" start=\"PT0S\">\n")
   for a in adaptations {
     sb.write_string(
-      "    <AdaptationSet contentType=\"\{a.content_type}\" mimeType=\"\{a.mime_type}\" codecs=\"\{a.codecs}\"",
+      "    <AdaptationSet contentType=\"\{a.content_type}\" mimeType=\"\{a.mime_type}\"",
     )
+    // Text AdaptationSets (WebVTT) carry no codecs string.
+    if a.codecs != "" {
+      sb.write_string(" codecs=\"" + a.codecs + "\"")
+    }
     if a.lang != "" {
       sb.write_string(" lang=\"" + a.lang + "\"")
     }
     sb.write_string(">\n")
-    sb.write_string(
-      "      <Representation id=\"\{a.id}\" bandwidth=\"\{a.bandwidth}\"",
-    )
+    sb.write_string("      <Representation id=\"" + a.id + "\"")
+    if a.bandwidth > 0L {
+      sb.write_string(" bandwidth=\"\{a.bandwidth}\"")
+    }
     if a.width > 0 && a.height > 0 {
       sb.write_string(" width=\"\{a.width}\" height=\"\{a.height}\"")
     }
@@ -243,14 +248,17 @@ pub fn dash_write_segment_list_mpd(
       sb.write_string(" startNumber=\"\{a.start_number}\"")
     }
     sb.write_string(">\n")
-    sb.write_string("          <Initialization")
-    if a.initialization != "" {
-      sb.write_string(" sourceURL=\"" + a.initialization + "\"")
+    // WebVTT segments are self-contained: no initialization section.
+    if a.initialization != "" || a.initialization_range != "" {
+      sb.write_string("          <Initialization")
+      if a.initialization != "" {
+        sb.write_string(" sourceURL=\"" + a.initialization + "\"")
+      }
+      if a.initialization_range != "" {
+        sb.write_string(" range=\"" + a.initialization_range + "\"")
+      }
+      sb.write_string(" />\n")
     }
-    if a.initialization_range != "" {
-      sb.write_string(" range=\"" + a.initialization_range + "\"")
-    }
-    sb.write_string(" />\n")
     for seg in a.segments {
       sb.write_string("          <SegmentURL")
       if seg.media != "" {

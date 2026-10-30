@@ -5647,3 +5647,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：自写带标签 W64 经 ffprobe 读到 title/artist，ffmpeg
   解码 PCM 与无标签版本完全相同。
 - 全量 wasm **1260/1260**。
+
+## 208. DASH 字幕 SegmentList/SegmentTimeline
+
+- `dash_write_segment_list_mpd` 与 `dash_write_timeline_mpd` 适配文本轨：
+  `codecs` 为空时省略属性、`bandwidth<=0` 时省略、SegmentList 的
+  `<Initialization>` 仅在 sourceURL/range 非空时输出、SegmentTimeline
+  的 `initialization` 属性为空时省略，其余输出不变。
+- 回归：两种 MPD 的 `text/vtt` AdaptationSet 均断言无 codecs/
+  initialization/bandwidth，解析回读得到正确分片 URI。
+- 回读：WebVTT 分片经 `dash_segment_reader_new` 逐段取出，字节与
+  `hls_write_vtt_segment` 输出完全一致，且 initialization 为空；
+  SegmentList 与 `$Time$` 时间线各一组。
+- 外部验证：自写 list.mpd / timeline.mpd（各两个 VTT 分片，含中文
+  cue）经 ffmpeg 9.0.2 `-allowed_extensions ALL` 识别为 webvtt 字幕流，
+  提取 SRT 的时间与文本与源一致。
+- 全量 wasm **1264/1264**。
