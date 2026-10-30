@@ -88,3 +88,31 @@ test "dash muxer: video and audio AdaptationSets are written and parsed" {
   assert_eq(audio.representations[0].initialization, "audio-init.mp4")
   assert_eq(audio.representations[0].segments[0].uri, "audio-1.m4s")
 }
+
+///|
+test "dash muxer: WebVTT AdaptationSet omits codecs and initialization" {
+  let text = dash_write_segment_template_mpd(
+    [
+      DashAdaptation::new(
+        "text",
+        "text/vtt",
+        "",
+        "subs",
+        256L,
+        1000L,
+        10000L,
+        "",
+        "sub$Number$.vtt",
+        lang="en",
+      ),
+    ],
+    media_duration_seconds=10.0,
+  )
+  assert_true(text.contains("contentType=\"text\""))
+  assert_true(text.contains("mimeType=\"text/vtt\""))
+  assert_true(text.contains("lang=\"en\""))
+  assert_true(text.contains("media=\"sub$Number$.vtt\""))
+  assert_false(text.contains("codecs="))
+  assert_false(text.contains("initialization="))
+  assert_true(text.contains("<Representation id=\"subs\" bandwidth=\"256\""))
+}

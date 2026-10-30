@@ -80,8 +80,12 @@ pub fn dash_write_segment_template_mpd(
   sb.write_string("  <Period id=\"\{period_id}\" start=\"PT0S\">\n")
   for a in adaptations {
     sb.write_string(
-      "    <AdaptationSet contentType=\"\{a.content_type}\" mimeType=\"\{a.mime_type}\" codecs=\"\{a.codecs}\"",
+      "    <AdaptationSet contentType=\"\{a.content_type}\" mimeType=\"\{a.mime_type}\"",
     )
+    // Text AdaptationSets (WebVTT) carry no codecs string.
+    if a.codecs != "" {
+      sb.write_string(" codecs=\"" + a.codecs + "\"")
+    }
     if a.lang != "" {
       sb.write_string(" lang=\"" + a.lang + "\"")
     }
@@ -89,12 +93,15 @@ pub fn dash_write_segment_template_mpd(
     sb.write_string(
       "      <SegmentTemplate timescale=\"\{a.timescale}\" duration=\"\{a.duration}\" startNumber=\"\{a.start_number}\"\n",
     )
-    sb.write_string(
-      "        initialization=\"\{a.initialization}\" media=\"\{a.media_template}\" />\n",
-    )
-    sb.write_string(
-      "      <Representation id=\"\{a.id}\" bandwidth=\"\{a.bandwidth}\"",
-    )
+    // WebVTT segments are self-contained: no initialization segment.
+    if a.initialization != "" {
+      sb.write_string("        initialization=\"" + a.initialization + "\"\n")
+    }
+    sb.write_string("        media=\"" + a.media_template + "\" />\n")
+    sb.write_string("      <Representation id=\"" + a.id + "\"")
+    if a.bandwidth > 0L {
+      sb.write_string(" bandwidth=\"\{a.bandwidth}\"")
+    }
     if a.width > 0 && a.height > 0 {
       sb.write_string(" width=\"\{a.width}\" height=\"\{a.height}\"")
     }

@@ -5602,3 +5602,20 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   识别 webvtt 字幕流，ffmpeg 从裸 VTT 与 master 均提取出时间/文本
   完全一致的 SRT。
 - 全量 wasm **1256/1256**。
+
+## 205. DASH 字幕 AdaptationSet（WebVTT）
+
+- `dash_write_segment_template_mpd` 适配文本轨：`codecs` 为空时省略
+  属性、`initialization` 为空时省略（WebVTT 分片自包含）、
+  `bandwidth<=0` 时省略；其余属性不变，字幕分片复用
+  `hls_write_vtt_segment`（同格式 WebVTT）。
+- 回归：`text` AdaptationSet 输出 `contentType="text"`、
+  `mimeType="text/vtt"`、`lang`、`media="sub$Number$.vtt"`，且不含
+  codecs/initialization。
+- 外部验证：自写 manifest.mpd + sub1/sub2.vtt 经 `ffprobe
+  -allowed_extensions ALL` 识别 webvtt 字幕流，ffmpeg 提取两段 cue
+  的时间/文本与源一致。
+- 边界：空的 WebVTT 分片（仅 `WEBVTT` 头）会让 ffmpeg dashdec 报
+  “Error when loading first fragment”，属其空片段处理限制；有 cue
+  的分片无告警。
+- 全量 wasm **1257/1257**。
