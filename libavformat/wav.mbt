@@ -530,6 +530,21 @@ pub fn av_wav_open(data : Bytes) -> Result[WavDemux, String] {
   if data_ofs < 0L {
     return Err("EINVAL: no 'data' tag found")
   }
+  wav_build_demux(data, fmt, data_ofs, data_size, sample_count)
+}
+
+///|
+/// Packetize PCM payload at `data_ofs..data_ofs+data_size` for the parsed
+/// `fmt` (shared by the RIFF/RF64 and Wave64 readers).
+fn wav_build_demux(
+  data : Bytes,
+  fmt : WavFormat,
+  data_ofs : Int64,
+  data_size_in : Int64,
+  sample_count_in : Int64,
+) -> Result[WavDemux, String] {
+  let mut data_size = data_size_in
+  let mut sample_count = sample_count_in
   let remaining = data.length().to_int64() - data_ofs
   if data_size <= 0L || data_size > remaining {
     data_size = remaining

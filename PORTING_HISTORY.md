@@ -5619,3 +5619,18 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   “Error when loading first fragment”，属其空片段处理限制；有 cue
   的分片无告警。
 - 全量 wasm **1257/1257**。
+
+## 206. Sony Wave64（.w64）读写
+
+- 读取：`av_w64_open` 按 GUID 分块遍历（块长 24 字节头 + 8 字节
+  对齐），支持 `fmt `（WAVEFORMATEX）、`fact`（采样数）与 `data`；
+  复用抽出的 `wav_build_demux` 完成 PCM 封包（WAV/RF64 路径不变）。
+- 写入：`w64_muxer_new`/`write_samples`/`finish`：riff/wave GUID、
+  对齐后的 fmt/data 块、非 PCM（IEEE float32）追加 fact 块；采样
+  打包与 WAV 写入器一致。
+- 回归 `w64_realdata_test.mbt`：ffmpeg 生成的 16-bit mono 与
+  24-bit stereo W64 与其等源 WAV 的 PCM 载荷逐字节一致（格式/声道/
+  采样率/采样数断言）；自写 PCM 与 float（tag 3 + fact）回转正确。
+- 外部验证：自写 16-bit 与 float32 W64 经 ffmpeg 解码 s16le/f32le
+  与源字节完全一致。
+- 全量 wasm **1259/1259**。
