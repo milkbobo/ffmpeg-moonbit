@@ -5738,3 +5738,14 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffmpeg 9.0.2 将自写单声道与 5.1 文件识别为
   pcm_alaw/pcm_mulaw 并解码为与 ffmpeg 自产文件相同的 PCM。
 - 全量 wasm **1274/1274**。
+
+## 214. MJPEG 3 分量 Adobe 变换（GBRP）
+
+- `mjpeg_finalize_image` 3 分量分支：Adobe APP14 transform 0 或组件
+  ID 为 R/G/B 时按 FFmpeg 选择 `gbrp`，并将解码后的 R,G,B 平面交换为
+  G,B,R；子采样组合返回 PATCHWELCOME，其余仍走 yuvj 选择。
+- 夹具：`cjpeg -rgb` 生成的真实 17x13 RGB JPEG（transform 0 + RGB
+  ID），另造两个变体分别只保留 transform 0（ID 改为 1/2/3，SOF/SOS
+  同步）和只保留 RGB ID（transform 改为 1）；三者 GBRP 三平面拼接后
+  与 `ffmpeg -f rawvideo -pix_fmt gbrp` MD5 一致。
+- 全量 wasm **1275/1275**。

@@ -638,6 +638,34 @@ fn mjpeg_finalize_image(
     let pix_fmt = if adobe_transform == 0 { "gbrap" } else { "yuva444p" }
     return Ok({ width, height, pix_fmt, planes, plane_widths, plane_heights, })
   }
+  if components.length() == 3 &&
+    (
+      adobe_transform == 0 ||
+      (
+        components[0].id == 'R' &&
+        components[1].id == 'G' &&
+        components[2].id == 'B'
+      )
+    ) {
+    // FFmpeg maps Adobe transform 0 / RGB component IDs to GBRP and swaps
+    // the decoded R,G,B planes into G,B,R order.
+    if max_h != 1 || max_v != 1 {
+      return Err("PATCHWELCOME: subsampled 3-component Adobe transform")
+    }
+    let planes : Array[Bytes] = [
+      Bytes::from_array(plane_arrays[1]),
+      Bytes::from_array(plane_arrays[2]),
+      Bytes::from_array(plane_arrays[0]),
+    ]
+    return Ok({
+      width,
+      height,
+      pix_fmt: "gbrp",
+      planes,
+      plane_widths: [width, width, width],
+      plane_heights: [height, height, height],
+    })
+  }
   let pix_fmt = if components.length() == 1 {
     "gray"
   } else if plane_widths[1] >= width && plane_heights[1] >= height {
