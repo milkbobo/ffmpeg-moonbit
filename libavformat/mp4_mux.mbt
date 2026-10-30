@@ -162,6 +162,18 @@ fn mp4_edit_list(
 }
 
 ///|
+/// One-edit `edts` that starts playback at `media_time` (media timescale) and
+/// presents `movie_duration` (movie timescale) units.
+fn mp4_edit_list_at(media_time : Int32, movie_duration : Int32) -> Array[Byte] {
+  let body : Array[Byte] = []
+  mp4_u32(body, 1U) // entry_count
+  mp4_u32(body, movie_duration.reinterpret_as_uint())
+  mp4_u32(body, media_time.reinterpret_as_uint())
+  mp4_u32(body, 0x00010000U)
+  mp4_box("edts", mp4_full_box("elst", 0, 0, body))
+}
+
+///|
 fn mp4_matrix(dst : Array[Byte]) -> Unit {
   let matrix : Array[UInt32] = [
     0x00010000U, 0U, 0U, 0U, 0x00010000U, 0U, 0U, 0U, 0x40000000U,

@@ -427,6 +427,25 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
   for d in self.video_durations {
     vdur = vdur + d
   }
+  // First displayed frame: trims the B-frame reorder delay with an edit
+  // list so the video presentation starts at 0 like the decoded source.
+  let mut vfirst_pts = 0L
+  let mut dts_acc = 0L
+  for i in 0..<self.video_durations.length() {
+    let c = if i < self.video_cts.length() {
+      self.video_cts[i].to_int64()
+    } else {
+      0L
+    }
+    let pts = dts_acc + c
+    if i == 0 || pts < vfirst_pts {
+      vfirst_pts = pts
+    }
+    dts_acc = dts_acc + self.video_durations[i].to_int64()
+  }
+  if vfirst_pts < 0L {
+    vfirst_pts = 0L
+  }
   let mut adur = 0
   for d in self.audio_durations {
     adur = adur + d
@@ -447,6 +466,13 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     movie_ms = sub_ms
   }
   let movie_ms = movie_ms.to_int()
+  // Trim the B-frame reorder delay while keeping the full presentation
+  // length, matching the edit list FFmpeg writes for such sources.
+  let vedts : Array[Byte] = if vfirst_pts > 0L && vfirst_pts < vdur.to_int64() {
+    mp4_edit_list_at(vfirst_pts.to_int(), movie_ms)
+  } else {
+    []
+  }
   let aedts : Array[Byte] = if aprim > 0 {
     mp4_edit_list(aprim, adur, 1000, self.sample_rate)
   } else {
@@ -498,7 +524,7 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     "vide",
     vmhd,
     ventry,
-    [],
+    vedts,
     self.video_packets,
     self.video_durations,
     self.video_keyframes,

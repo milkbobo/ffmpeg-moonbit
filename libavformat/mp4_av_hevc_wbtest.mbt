@@ -66,6 +66,10 @@ test "mp4 A/V: HEVC B-frames and AAC round-trip" {
   assert_eq(rv.codec, "hvc1")
   assert_eq(rv.extradata.unwrap(), hvcc)
   assert_eq(rv.samples.length(), vt.samples.length())
+  // The video edit list trims the reorder delay: presentation starts at 0
+  // while the first DTS is negative, matching the source timeline.
+  assert_eq(rv.samples[0].pts, 0L)
+  assert_true(rv.samples[0].dts < 0L)
   let src_base = vt.samples[0].dts
   let out_base = rv.samples[0].dts
   let scale : Int64 = 90000L

@@ -5846,3 +5846,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffmpeg 9.0.2 识别 hvc1+AAC，video framemd5 5/5 与源
   一致，AAC 解码 PCM 88200 字节逐字节一致。
 - 全量 wasm **1283/1283**。
+
+## 222. MP4 双轨视频 edit list（B 帧起点对齐）
+
+- 新增 `mp4_edit_list_at(media_time, movie_duration)`：单条 elst，
+  duration 为完整影片时长、media_time 为首帧呈现时间。
+- `Mp4AvMuxer::finish` 计算视频最小 PTS（累计 DTS + cts）；大于 0
+  时写视频 `edts`，把 B 帧重排延迟从呈现时间轴裁掉。此前重封装
+  x264 B 帧文件会出现视频比音频晚 0.4s 的 A/V 偏移。
+- 回归：H.264+AAC 与 HEVC+AAC 重封装测试新增断言——视频首样本
+  PTS=0、DTS<0（edit list 生效），原有 CTS/DTS 与解码帧校验不变。
+- 外部验证：ffmpeg 9.0.2 对两个自写文件的 video framemd5 5/5 与源
+  一致、AAC PCM 逐字节一致，`framecrc` 视频首包恢复为
+  PTS 0 / DTS −36000（90000 timescale），与源音视频起点对齐。
+- 全量 wasm **1283/1283**。

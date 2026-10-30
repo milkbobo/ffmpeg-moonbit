@@ -73,6 +73,10 @@ test "mp4 A/V: B-frame video ctts and AAC audio round-trip" {
   let rv = remux.tracks[rvi]
   let ra = remux.tracks[rai]
   assert_eq(rv.samples.length(), vt.samples.length())
+  // The video edit list trims the reorder delay: presentation starts at 0
+  // while the first DTS is negative, matching the source timeline.
+  assert_eq(rv.samples[0].pts, 0L)
+  assert_true(rv.samples[0].dts < 0L)
   let src_base = vt.samples[0].dts
   let out_base = rv.samples[0].dts
   let scale : Int64 = 90000L
