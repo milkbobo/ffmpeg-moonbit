@@ -19,6 +19,8 @@ pub struct WebmAvMuxer {
   height : Int32
   channels : Int32
   pre_skip : Int32
+  /// Samples to discard from the end of the last Opus block.
+  audio_discard_padding : Int32
   events : Array[WebmAvEvent]
 }
 
@@ -28,11 +30,17 @@ pub fn webm_av_muxer_new(
   height : Int32,
   channels~ : Int32 = 2,
   pre_skip~ : Int32 = 0,
+  audio_discard_padding~ : Int32 = 0,
 ) -> Result[WebmAvMuxer, String] {
-  if width <= 0 || height <= 0 || channels < 1 || channels > 2 || pre_skip < 0 {
+  if width <= 0 ||
+    height <= 0 ||
+    channels < 1 ||
+    channels > 2 ||
+    pre_skip < 0 ||
+    audio_discard_padding < 0 {
     return Err("EINVAL: invalid WebM A/V parameters")
   }
-  Ok({ width, height, channels, pre_skip, events: [], })
+  Ok({ width, height, channels, pre_skip, audio_discard_padding, events: [], })
 }
 
 ///|
@@ -57,7 +65,8 @@ pub fn WebmAvMuxer::write_audio(
   pts_ms : Int64,
   duration_ms : Int32,
 ) -> Result[Unit, String] {
-  if packet.length() == 0 || duration_ms <= 0 || pts_ms < 0L {
+  let min_pts = -self.audio_offset_ms()
+  if packet.length() == 0 || duration_ms <= 0 || pts_ms < min_pts {
     return Err("EINVAL: invalid WebM audio packet")
   }
   self.events.push({
@@ -68,6 +77,17 @@ pub fn WebmAvMuxer::write_audio(
     keyframe: true,
   })
   Ok(())
+}
+
+///|
+/// Opus pre-skip rescaled to the millisecond cluster timescale (48 kHz),
+/// rounded half away from zero like the Opus-only writer.
+fn WebmAvMuxer::audio_offset_ms(self : WebmAvMuxer) -> Int64 {
+  if self.pre_skip <= 0 {
+    0L
+  } else {
+    (self.pre_skip.to_int64() * 1000L + 24000L) / 48000L
+  }
 }
 
 ///|
@@ -108,15 +128,24 @@ fn webm_av_sorted(events : Array[WebmAvEvent]) -> Array[WebmAvEvent] {
 fn WebmAvMuxer::cluster(self : WebmAvMuxer) -> Array[Byte] {
   let cluster : Array[Byte] = []
   webm_uint_elem(cluster, 0xE7, 1, 0UL)
-  for e in webm_av_sorted(self.events) {
+  let audio_offset = self.audio_offset_ms()
+  let sorted = webm_av_sorted(self.events)
+  let mut audio_left = 0
+  for e in sorted {
+    if e.track == 2 {
+      audio_left = audio_left + 1
+    }
+  }
+  for e in sorted {
+    let pts = if e.track == 2 { e.pts_ms + audio_offset } else { e.pts_ms }
     let block : Array[Byte] = [
       if e.track == 1 {
         b'\x81'
       } else {
         b'\x82'
       },
-      ((e.pts_ms >> 8) & 0xFF).to_int().to_byte(),
-      (e.pts_ms & 0xFF).to_int().to_byte(),
+      ((pts >> 8) & 0xFF).to_int().to_byte(),
+      (pts & 0xFF).to_int().to_byte(),
       if e.keyframe {
         b'\x80'
       } else {
@@ -126,7 +155,21 @@ fn WebmAvMuxer::cluster(self : WebmAvMuxer) -> Array[Byte] {
     for b in e.data {
       block.push(b)
     }
-    webm_elem(cluster, 0xA3, 1, block)
+    if e.track == 2 {
+      audio_left = audio_left - 1
+    }
+    if e.track == 2 && audio_left == 0 && self.audio_discard_padding > 0 {
+      let group : Array[Byte] = []
+      webm_elem(group, 0xA1, 1, block)
+      let pad_ns = (
+          self.audio_discard_padding.to_int64() * 1000000000L + 24000L
+        ) /
+        48000L
+      mkv_sint_elem(group, 0x75A2, 2, pad_ns)
+      webm_elem(cluster, 0xA0, 1, group)
+    } else {
+      webm_elem(cluster, 0xA3, 1, block)
+    }
   }
   cluster
 }
@@ -187,6 +230,11 @@ pub fn WebmAvMuxer::finish(self : WebmAvMuxer) -> Bytes {
     head_body.push(b)
   }
   webm_elem(atrack, 0x63A2, 2, head_body)
+  if self.pre_skip > 0 {
+    let delay_ns = (self.pre_skip.to_int64() * 1000000000L + 24000L) / 48000L
+    webm_uint_elem(atrack, 0x56AA, 2, delay_ns.reinterpret_as_uint64())
+  }
+  webm_uint_elem(atrack, 0x56BB, 2, 80000000UL) // SeekPreRoll (80 ms)
   webm_elem(atrack, 0xE1, 1, audio)
   webm_elem(atrack, 0xEC, 1, [])
 

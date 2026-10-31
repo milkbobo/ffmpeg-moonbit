@@ -5990,3 +5990,16 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：真实 x264 B 帧 + AAC MP4 重封装为 MKV 后，ffmpeg 解码
   AAC PCM 88200 字节与源逐字节一致（初版尾块符号/舍入错误已修正）。
 - 全量 wasm **1299/1299**。
+
+## 234. WebM A/V Opus delay/padding
+
+- `WebmAvMuxer` 新增 `audio_discard_padding`（采样数）；音频轨写
+  TrackEntry CodecDelay（pre-skip，48 kHz 四舍五入）与 SeekPreRoll
+  80 ms；音频块时间码前移 offset（ms），最后一个音频块用
+  BlockGroup + DiscardPadding（正值）表达尾丢弃。
+- 回归：codec_delay/seek_preroll 字段、首音频 PTS=0、尾块
+  discard_padding 非 0，Cues 仍为视频关键帧。
+- 外部验证：真实 libvpx VP9 + libopus WebM 重封装后视频 framemd5
+  5/5 与源一致，Opus PCM 96000 字节逐字节一致，`-ss 0.4` 输出序列
+  与源相同。
+- 全量 wasm **1300/1300**。

@@ -47,3 +47,30 @@ test "webm muxer: invalid packets are rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "webm muxer: Opus pre-skip/discard padding fields" {
+  let mux = webm_av_muxer_new(
+    64,
+    48,
+    channels=1,
+    pre_skip=312,
+    audio_discard_padding=648,
+  ).unwrap()
+  mux.write_video(b"V0", 0L, 33, keyframe=true).unwrap()
+  mux.write_audio(b"A0", 0L, 20).unwrap()
+  mux.write_audio(b"A1", 20L, 20).unwrap()
+  mux.write_audio(b"A2", 40L, 20).unwrap()
+  let bytes = mux.finish()
+  let mkv = av_matroska_open(bytes).unwrap()
+  let atrack = mkv.tracks[1]
+  assert_true(atrack.codec_delay > 0UL)
+  assert_eq(atrack.seek_preroll, 80000000UL)
+  let audio_packets = mkv.packets.filter(p => p.stream_index == 1)
+  assert_eq(audio_packets.length(), 3)
+  assert_eq(audio_packets[0].pts, 0L)
+  assert_true(audio_packets[2].discard_padding != 0L)
+  let cues = av_matroska_parse_cues(bytes).unwrap()
+  assert_eq(cues.cues.length(), 1)
+  assert_eq(cues.cues[0].time, 0L)
+}
