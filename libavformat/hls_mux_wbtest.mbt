@@ -311,3 +311,43 @@ test "hls muxer: average bandwidth, closed captions and forced subtitles" {
   ])
   assert_false(bare.contains("CODECS="))
 }
+
+///|
+test "hls muxer: EXT-X-START, FRAME-RATE and VIDEO attributes" {
+  let text = hls_write_media_playlist(
+    [("s0.ts", 2.0)],
+    playlist_type="EVENT",
+    start="TIME-OFFSET=6.0",
+    endlist=false,
+  )
+  assert_true(text.contains("#EXT-X-START:TIME-OFFSET=6.0\n"))
+  let media = av_hls_parse(text).unwrap()
+  assert_eq(media.start, "TIME-OFFSET=6.0")
+  assert_eq(media.playlist_type, "EVENT")
+  let variant = HlsMasterVariant::new(
+    "v.m3u8",
+    900000,
+    1280,
+    720,
+    "avc1.64001f",
+    frame_rate="29.97",
+    video_group="vid",
+  )
+  let master = hls_write_master_playlist([variant])
+  assert_true(
+    master.contains(
+      "#EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=1280x720,FRAME-RATE=29.97,CODECS=\"avc1.64001f\",VIDEO=\"vid\"\n",
+    ),
+  )
+  let pl = av_hls_parse(master).unwrap()
+  assert_eq(pl.streams[0].frame_rate, "29.97")
+  assert_eq(pl.streams[0].video, "vid")
+  // Defaults omit both tags.
+  let plain = hls_write_media_playlist([("s0.ts", 2.0)])
+  assert_false(plain.contains("#EXT-X-START"))
+  let no_attrs = hls_write_master_playlist([
+    HlsMasterVariant::new("a.m3u8", 1000, 0, 0, ""),
+  ])
+  assert_false(no_attrs.contains("FRAME-RATE"))
+  assert_false(no_attrs.contains("VIDEO="))
+}

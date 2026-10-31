@@ -60,6 +60,7 @@ fn hls_write_media_playlist_impl(
   version : Int32,
   allow_cache : Int32,
   playlist_type : String,
+  start : String,
   i_frames_only : Bool,
   independent_segments : Bool,
   endlist : Bool,
@@ -99,6 +100,9 @@ fn hls_write_media_playlist_impl(
   sb.write_string("#EXT-X-MEDIA-SEQUENCE:\{media_sequence}\n")
   if playlist_type != "" {
     sb.write_string("#EXT-X-PLAYLIST-TYPE:" + playlist_type + "\n")
+  }
+  if start != "" {
+    sb.write_string("#EXT-X-START:" + start + "\n")
   }
   if i_frames_only {
     sb.write_string("#EXT-X-I-FRAMES-ONLY\n")
@@ -175,6 +179,7 @@ pub fn hls_write_media_playlist(
   version~ : Int32 = 3,
   allow_cache~ : Int32 = -1,
   playlist_type~ : String = "",
+  start~ : String = "",
   i_frames_only~ : Bool = false,
   independent_segments~ : Bool = false,
   endlist~ : Bool = true,
@@ -194,6 +199,7 @@ pub fn hls_write_media_playlist(
     version,
     allow_cache,
     playlist_type,
+    start,
     i_frames_only,
     independent_segments,
     endlist,
@@ -218,6 +224,7 @@ pub fn hls_write_media_playlist_specs(
   version~ : Int32 = 3,
   allow_cache~ : Int32 = -1,
   playlist_type~ : String = "",
+  start~ : String = "",
   i_frames_only~ : Bool = false,
   independent_segments~ : Bool = false,
   endlist~ : Bool = true,
@@ -228,8 +235,8 @@ pub fn hls_write_media_playlist_specs(
 ) -> String {
   hls_write_media_playlist_impl(
     segments, target_duration, media_sequence, discontinuity_sequence, version, allow_cache,
-    playlist_type, i_frames_only, independent_segments, endlist, map_uri, map_byterange,
-    key_uri, key_iv,
+    playlist_type, start, i_frames_only, independent_segments, endlist, map_uri,
+    map_byterange, key_uri, key_iv,
   )
 }
 
@@ -245,6 +252,7 @@ pub fn hls_write_media_playlist_byterange(
   version~ : Int32 = 4,
   allow_cache~ : Int32 = -1,
   playlist_type~ : String = "",
+  start~ : String = "",
   i_frames_only~ : Bool = false,
   independent_segments~ : Bool = false,
   endlist~ : Bool = true,
@@ -261,6 +269,7 @@ pub fn hls_write_media_playlist_byterange(
     version=if version < 4 { 4 } else { version },
     allow_cache~,
     playlist_type~,
+    start~,
     i_frames_only~,
     independent_segments~,
     endlist~,
@@ -293,8 +302,12 @@ pub struct HlsMasterVariant {
   average_bandwidth : Int32
   width : Int32
   height : Int32
+  /// `FRAME-RATE` value; empty omits the attribute.
+  frame_rate : String
   codecs : String
   audio_group : String
+  /// `VIDEO` attribute naming an `EXT-X-MEDIA` video group.
+  video_group : String
   /// `CLOSED-CAPTIONS` attribute naming an `EXT-X-MEDIA` captions group.
   closed_captions_group : String
   /// `SUBTITLES` attribute naming an `EXT-X-MEDIA` subtitle group.
@@ -329,6 +342,8 @@ pub fn HlsMasterVariant::new(
   subtitle_group~ : String = "",
   average_bandwidth~ : Int32 = 0,
   closed_captions_group~ : String = "",
+  frame_rate~ : String = "",
+  video_group~ : String = "",
 ) -> HlsMasterVariant {
   {
     uri,
@@ -336,8 +351,10 @@ pub fn HlsMasterVariant::new(
     average_bandwidth,
     width,
     height,
+    frame_rate,
     codecs,
     audio_group,
+    video_group,
     closed_captions_group,
     subtitle_group,
   }
@@ -415,11 +432,17 @@ pub fn hls_write_master_playlist(
     if variant.width > 0 && variant.height > 0 {
       sb.write_string(",RESOLUTION=\{variant.width}x\{variant.height}")
     }
+    if variant.frame_rate != "" {
+      sb.write_string(",FRAME-RATE=" + variant.frame_rate)
+    }
     if variant.codecs != "" {
       sb.write_string(",CODECS=\"\{variant.codecs}\"")
     }
     if variant.audio_group != "" {
       sb.write_string(",AUDIO=\"" + variant.audio_group + "\"")
+    }
+    if variant.video_group != "" {
+      sb.write_string(",VIDEO=\"" + variant.video_group + "\"")
     }
     if variant.closed_captions_group != "" {
       sb.write_string(

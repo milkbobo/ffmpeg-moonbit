@@ -6160,3 +6160,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   本写入器逐字节一致；解复用回读 `streams[1].language == "eng"`、
   `streams[0].registration == "HEVC"`；未设语言时仍为旧 23 字节 PMT。
 - 全量 wasm **1310/1310**。
+
+## 244. HLS EXT-X-START 与 FRAME-RATE/VIDEO 属性
+
+- 媒体播放列表三个写入器新增 `start`：非空时在 PLAYLIST-TYPE 之后写
+  `#EXT-X-START:<原样值>`（如 `TIME-OFFSET=6.0`），解析器回读
+  `HlsPlaylist.start`。
+- `HlsMasterVariant` 新增 `frame_rate`/`video_group`：
+  `#EXT-X-STREAM-INF` 在 RESOLUTION 之后写 `FRAME-RATE=`，在 AUDIO
+  之后写 `VIDEO="..."`；两者为空时省略。
+- 回归：文本属性 + `av_hls_parse` 回读 `start`/`frame_rate`/`video`；
+  默认值不产生多余标签。
+- 全量 wasm **1311/1311**。
