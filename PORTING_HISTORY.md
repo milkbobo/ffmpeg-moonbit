@@ -6041,3 +6041,21 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   本写入器输出的播放列表经 ffmpeg 解码 framemd5 与 ffmpeg 自身播放
   列表完全相同。
 - 全量 wasm **1302/1302**。
+
+## 237. FLAC 编码器 Rice escape 分区
+
+- `flac_choose_rice` 增加 escape 候选：分区阶 > 0 时可选用全 1 Rice
+  参数，把分区存成定宽有符号样本（5 位位宽字段）；RFC 9639 限定
+  escape 仅用于分区阶 > 0，单分区选择器传 false。
+  `flac_escape_width` 按分区内二补码所需位宽计算，超过 31 位不可
+  escape。仅当 escape 比特数低于 Rice 时才采用。
+- 写入端在参数等于 `(1<<rice_bits)-1` 时写 5 位位宽和原始样本
+  （Rice 参数 15、Rice2 参数 31）。
+- 回归：24-bit 密集噪声（值域 ±2^15，4096 样本）帧长 8205 字节
+  （<8500；Rice2 约 8700、verbatim 约 12290），`ff_flac_decode`
+  回读 PCM 逐样本一致（解码器把 24-bit 左对齐到 32 位）。
+- 外部验证：ffmpeg 9.0.2 解码该 FLAC 的 s32le 输出 MD5 与独立计算
+  的移位 PCM MD5 相同，证明含 escape 分区的码流符合规范。
+- 注：ffmpeg 的 flacenc 本身不产出 escape 分区（无 escape 代码），
+  故无法做编码字节对拍；其 flacdec 的 `decode_residuals` 支持 escape。
+- 全量 wasm **1303/1303**。

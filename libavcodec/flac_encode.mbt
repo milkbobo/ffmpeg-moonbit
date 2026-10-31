@@ -135,12 +135,48 @@ fn flac_zigzag(v : Int32) -> Int64 {
 }
 
 ///|
-/// Best Rice parameter for `res[from..<to]` and its total bit cost.
+/// Signed bit width needed for `v` (two's complement, at least 1).
+fn flac_signed_width(v : Int32) -> Int32 {
+  let magnitude = if v >= 0 { v } else { v ^ -1 }
+  let mut x = magnitude.reinterpret_as_uint()
+  let mut bits = 1
+  while x != 0U {
+    x = x >> 1
+    bits = bits + 1
+  }
+  bits
+}
+
+///|
+/// Fixed width for an escaped partition: enough signed bits for the largest
+/// magnitude in `res[from..<to]`; 0 when the 5-bit depth field cannot hold it.
+fn flac_escape_width(res : Array[Int32], from : Int32, to : Int32) -> Int32 {
+  let mut width = 1
+  for i = from; i < to; i = i + 1 {
+    let w = flac_signed_width(res[i])
+    if w > width {
+      width = w
+    }
+  }
+  if width > 31 {
+    0
+  } else {
+    width
+  }
+}
+
+///|
+/// Best Rice parameter for `res[from..<to]` and its total bit cost. With
+/// `allow_escape`, the partition may instead use the all-ones escape
+/// parameter (returned as `max_k + 1`), which stores the samples as
+/// `5 + count * width` raw bits. RFC 9639 only allows escape for partition
+/// orders above zero, so the single-partition callers pass false.
 fn flac_choose_rice(
   res : Array[Int32],
   from : Int32,
   to : Int32,
   max_k : Int32,
+  allow_escape : Bool,
 ) -> (Int32, Int64) {
   let count = to - from
   if count <= 0 {
@@ -161,6 +197,15 @@ fn flac_choose_rice(
     if best_bits < 0L || bits < best_bits {
       best_bits = bits
       best_k = k
+    }
+  }
+  if allow_escape {
+    let width = flac_escape_width(res, from, to)
+    if width > 0 {
+      let bits = count.to_int64() * width.to_int64() + 5L
+      if bits < best_bits {
+        return (max_k + 1, bits)
+      }
     }
   }
   (best_k, best_bits)
@@ -220,7 +265,7 @@ fn flac_choose_partitioned_rice(
         ok = false
         break
       }
-      let (k, kb) = flac_choose_rice(res, from, to, max_k)
+      let (k, kb) = flac_choose_rice(res, from, to, max_k, porder > 0)
       ks[part] = k
       bits = bits + kb
     }
@@ -521,7 +566,7 @@ fn flac_plan_subframe(
     match flac_fixed_residual(work, n, order) {
       None => ()
       Some(residual) => {
-        let (k, rice_bits) = flac_choose_rice(residual, order, n, max_k)
+        let (k, rice_bits) = flac_choose_rice(residual, order, n, max_k, false)
         let total = header_base + (order * eff_bits).to_int64() + rice_bits
         if pred_bits < 0L || total < pred_bits {
           pred_bits = total
@@ -552,7 +597,9 @@ fn flac_plan_subframe(
       match flac_lpc_residual(work, n, order, coefs, shift) {
         None => ()
         Some(residual) => {
-          let (k, rice_bits) = flac_choose_rice(residual, order, n, max_k)
+          let (k, rice_bits) = flac_choose_rice(
+            residual, order, n, max_k, false,
+          )
           let total = header_base +
             (order * eff_bits).to_int64() +
             9L +
@@ -661,14 +708,25 @@ fn flac_write_subframe(
     w.write(plan.porder.reinterpret_as_uint(), 4)
     let psize = n >> plan.porder
     let parts = 1 << plan.porder
+    let rice_bits = if rice2 { 5 } else { 4 }
+    let escape_param = (1 << rice_bits) - 1
     let mut wi = plan.order
     for part = 0; part < parts; part = part + 1 {
       let k = plan.rice_ks[part]
-      w.write(k.reinterpret_as_uint(), if rice2 { 5 } else { 4 })
+      w.write(k.reinterpret_as_uint(), rice_bits)
       let count = if part == 0 { psize - plan.order } else { psize }
-      for c = 0; c < count; c = c + 1 {
-        flac_write_rice(w, plan.residual[wi], k)
-        wi = wi + 1
+      if k == escape_param {
+        let width = flac_escape_width(plan.residual, wi, wi + count)
+        w.write(width.reinterpret_as_uint(), 5)
+        for c = 0; c < count; c = c + 1 {
+          w.write_signed(plan.residual[wi], width)
+          wi = wi + 1
+        }
+      } else {
+        for c = 0; c < count; c = c + 1 {
+          flac_write_rice(w, plan.residual[wi], k)
+          wi = wi + 1
+        }
       }
     }
   }
