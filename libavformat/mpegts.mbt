@@ -45,6 +45,10 @@ pub struct TsProgram {
   pmt_pid : Int32
   mut pcr_pid : Int32
   stream_indices : Array[Int32]
+  /// SDT service_descriptor fields; "" / 0 when no SDT was seen.
+  mut service_name : String
+  mut service_provider : String
+  mut service_type : Int32
 }
 
 ///|
@@ -291,9 +295,85 @@ fn ts_parse_pat(section : BytesView, demux : TsDemux) -> Unit {
         pmt_pid: pid,
         pcr_pid: -1,
         stream_indices: [],
+        service_name: "",
+        service_provider: "",
+        service_type: 0,
       })
     }
     p = p + 4
+  }
+}
+
+///|
+/// Apply the SDT (`table_id == 0x42`) service_descriptor to matching programs
+/// (`service_id == program_number`). Called after the packet loop so an SDT
+/// placed before the PAT still lands.
+fn ts_parse_sdt(section : BytesView, demux : TsDemux) -> Unit {
+  if section.length() < 12 || section[0].to_int() != 0x42 {
+    return
+  }
+  let sec_len = ((section[1].to_int() & 0x0F) << 8) | section[2].to_int()
+  let end = 3 + sec_len - 4
+  if end > section.length() || end < 11 {
+    return
+  }
+  let mut p = 11
+  while p + 5 <= end {
+    let service_id = ts_rb16(section, p)
+    let desc_len = ((section[p + 3].to_int() & 0x0F) << 8) |
+      section[p + 4].to_int()
+    let dstart = p + 5
+    let dend = dstart + desc_len
+    if dend > end {
+      return
+    }
+    let mut q = dstart
+    while q + 2 <= dend {
+      let tag = section[q].to_int()
+      let len = section[q + 1].to_int()
+      let payload_end = q + 2 + len
+      if payload_end > dend {
+        return
+      }
+      if tag == 0x48 && len >= 3 {
+        let service_type = section[q + 2].to_int()
+        let mut r = q + 3
+        let provider_len = section[r].to_int()
+        r = r + 1
+        if r + provider_len > payload_end {
+          return
+        }
+        let provider_bytes : Array[Byte] = []
+        for i = 0; i < provider_len; i = i + 1 {
+          provider_bytes.push(section[r + i])
+        }
+        let service_provider = utf8_to_string(provider_bytes)
+        r = r + provider_len
+        if r >= payload_end {
+          return
+        }
+        let name_len = section[r].to_int()
+        r = r + 1
+        if r + name_len > payload_end {
+          return
+        }
+        let name_bytes : Array[Byte] = []
+        for i = 0; i < name_len; i = i + 1 {
+          name_bytes.push(section[r + i])
+        }
+        let service_name = utf8_to_string(name_bytes)
+        match ts_find_program(demux, service_id) {
+          Some(index) => {
+            demux.programs[index].service_name = service_name
+            demux.programs[index].service_provider = service_provider
+            demux.programs[index].service_type = service_type
+          }
+          None => ()
+        }
+      }
+      q = payload_end
+    }
+    p = dend
   }
 }
 
@@ -335,6 +415,9 @@ fn ts_parse_pmt(section : BytesView, demux : TsDemux, pmt_pid : Int32) -> Unit {
         pmt_pid,
         pcr_pid,
         stream_indices: [],
+        service_name: "",
+        service_provider: "",
+        service_type: 0,
       })
       demux.programs.length() - 1
     }
@@ -568,6 +651,7 @@ pub fn av_mpegts_open(data : Bytes) -> Result[TsDemux, String] {
   }
   let pes_states : Map[Int32, TsPesState] = Map([])
   let section_buffers : Map[Int32, Array[Byte]] = Map([])
+  let sdt_sections : Array[Bytes] = []
   let mut raw_pos = 0
   while raw_pos + packet_size <= data.length() {
     let base = raw_pos + sync_offset
@@ -612,36 +696,40 @@ pub fn av_mpegts_open(data : Bytes) -> Result[TsDemux, String] {
     let payload = packet[p:188]
     if pid == 0 || pid == 0x11 {
       // PAT / SDT: PSI section with a pointer field on start packets.
-      if pid == 0 {
-        let buf = match section_buffers.get(pid) {
-          Some(b) => b
-          None => {
-            let b : Array[Byte] = []
-            section_buffers[pid] = b
-            b
-          }
+      let buf = match section_buffers.get(pid) {
+        Some(b) => b
+        None => {
+          let b : Array[Byte] = []
+          section_buffers[pid] = b
+          b
         }
-        if is_start {
-          buf.clear()
-          if payload.length() > 0 {
-            let pointer = payload[0].to_int()
-            if 1 + pointer <= payload.length() {
-              for i in (1 + pointer)..<payload.length() {
-                buf.push(payload[i])
-              }
+      }
+      if is_start {
+        buf.clear()
+        if payload.length() > 0 {
+          let pointer = payload[0].to_int()
+          if 1 + pointer <= payload.length() {
+            for i in (1 + pointer)..<payload.length() {
+              buf.push(payload[i])
             }
           }
-        } else {
-          for i in 0..<payload.length() {
-            buf.push(payload[i])
-          }
         }
-        if buf.length() >= 3 {
-          let sec_len = ((buf[1].to_int() & 0x0F) << 8) | buf[2].to_int()
-          if buf.length() >= 3 + sec_len {
-            ts_parse_pat(Bytes::from_array(buf[0:3 + sec_len]), demux)
-            buf.clear()
+      } else {
+        for i in 0..<payload.length() {
+          buf.push(payload[i])
+        }
+      }
+      if buf.length() >= 3 {
+        let sec_len = ((buf[1].to_int() & 0x0F) << 8) | buf[2].to_int()
+        if buf.length() >= 3 + sec_len {
+          let section = Bytes::from_array(buf[0:3 + sec_len])
+          if pid == 0 {
+            ts_parse_pat(section, demux)
+          } else {
+            // Programs may not exist yet (ffmpeg writes the SDT first).
+            sdt_sections.push(section)
           }
+          buf.clear()
         }
       }
       continue
@@ -711,6 +799,9 @@ pub fn av_mpegts_open(data : Bytes) -> Result[TsDemux, String] {
       Some(stream_index) => ts_emit_pes(demux, state, stream_index, pid)
       None => ()
     }
+  }
+  for section in sdt_sections {
+    ts_parse_sdt(section, demux)
   }
   Ok(demux)
 }

@@ -6094,3 +6094,23 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   类型、负载仍是 ADTS，必须转码生成，测试因此用 lavfi 正弦 + 原生
   AAC 编码器。
 - 全量 wasm **1306/1306**。
+
+## 240. MPEG-TS SDT 服务描述
+
+- `ts_muxer_new` 新增 `service_name`/`service_provider`（空串用
+  mpegtsenc 默认 Service01/FFmpeg）、`service_type`（默认 0x01）、
+  `transport_stream_id`（默认 1）与 `original_network_id`
+  （默认 0xFF01）；PAT 的 tsid 改用该字段。
+- 表输出顺序对齐 mpegtsenc：SDT(0x11) → PAT → PMT → PES；SDT 含
+  表头、原始网络 ID、service_id=program_number、0xFC 标志、
+  service_descriptor(0x48：service_type + 长度前缀 provider/name)
+  与字节交换 CRC。
+- 解复用：PID 0x11 的 PSI 段先缓存，包循环结束后应用到 program
+  （service_id == program_number），因此 ffmpeg 那种 SDT 先于 PAT
+  的顺序也能回读；`TsProgram` 新增 `service_name`/`service_provider`/
+  `service_type`。
+- 回归：`-metadata service_name=TestSvc -metadata
+  service_provider=TestProv` 的 ffmpeg TS 中 SDT 段作为期望字节，
+  本写入器输出逐字节一致；回读服务字段；默认值路径 Service01/FFmpeg。
+  另修正 AC-3 A/V 测试里 PAT/PMT CRC 的绝对偏移（SDT 占首包）。
+- 全量 wasm **1307/1307**。

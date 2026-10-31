@@ -19,6 +19,12 @@ pub struct TsMuxer {
   /// Emit the corresponding PMT entry (false for audio-only/video-only TS).
   has_video : Bool
   has_audio : Bool
+  /// SDT fields (`mpegtsenc.c` defaults: Service01 / FFmpeg / digital TV).
+  service_name : String
+  service_provider : String
+  service_type : Int32
+  transport_stream_id : Int32
+  original_network_id : Int32
   mut wrote_tables : Bool
   /// Non-zero enables automatic ADTS framing of AAC access units.
   mut adts_rate : Int32
@@ -41,6 +47,14 @@ pub fn ts_muxer_new(
   video~ : Bool = true,
   /// Include an audio entry in the PMT (false for video-only renditions).
   audio~ : Bool = true,
+  /// SDT service name; empty uses FFmpeg's "Service01".
+  service_name~ : String = "",
+  /// SDT service provider; empty uses FFmpeg's "FFmpeg".
+  service_provider~ : String = "",
+  /// DVB service type (0x01 digital TV, 0x02 digital radio, ...).
+  service_type~ : Int32 = 0x01,
+  transport_stream_id~ : Int32 = 1,
+  original_network_id~ : Int32 = 0xFF01,
 ) -> TsMuxer {
   {
     pmt_pid: 0x1000,
@@ -50,6 +64,19 @@ pub fn ts_muxer_new(
     audio_stream_type,
     has_video: video,
     has_audio: audio,
+    service_name: if service_name == "" {
+      "Service01"
+    } else {
+      service_name
+    },
+    service_provider: if service_provider == "" {
+      "FFmpeg"
+    } else {
+      service_provider
+    },
+    service_type,
+    transport_stream_id,
+    original_network_id,
     wrote_tables: false,
     adts_rate: 0,
     adts_channels: 0,
@@ -155,7 +182,7 @@ fn TsMuxer::pat(self : TsMuxer) -> Unit {
   let section : Array[Byte] = []
   section.push(b'\x00')
   ts_mux_u16(section, 0xB000 | 13)
-  ts_mux_u16(section, 1) // transport_stream_id
+  ts_mux_u16(section, self.transport_stream_id)
   section.push(b'\xC1') // version 0, current_next=1
   section.push(b'\x00')
   section.push(b'\x00')
@@ -166,6 +193,57 @@ fn TsMuxer::pat(self : TsMuxer) -> Unit {
     section.push(((crc >> (24 - 8 * i)) & 0xFFU).to_byte())
   }
   self.section(0, section)
+}
+
+///|
+/// `service_name`/`service_provider` UTF-8 bytes clamped to the 8-bit
+/// descriptor length field.
+fn ts_mux_service_bytes(value : String) -> Array[Byte] {
+  let bytes = utf8_from_string(value)
+  let n = if bytes.length() > 255 { 255 } else { bytes.length() }
+  let out : Array[Byte] = []
+  for i = 0; i < n; i = i + 1 {
+    out.push(bytes[i])
+  }
+  out
+}
+
+///|
+/// SDT (table_id 0x42) with one service descriptor (DVB tag 0x48), laid out
+/// like `mpegtsenc.c::mpegts_write_sdt`.
+fn TsMuxer::sdt(self : TsMuxer) -> Unit {
+  let provider = ts_mux_service_bytes(self.service_provider)
+  let name = ts_mux_service_bytes(self.service_name)
+  let section : Array[Byte] = []
+  section.push(b'\x42')
+  // 5 header bytes + original_network_id(2) + reserved(1) + service entry
+  // (5 + descriptors) + CRC(4).
+  ts_mux_u16(section, 0xF000 | (22 + provider.length() + name.length()))
+  ts_mux_u16(section, self.transport_stream_id)
+  section.push(b'\xC1')
+  section.push(b'\x00')
+  section.push(b'\x00')
+  ts_mux_u16(section, self.original_network_id)
+  section.push(b'\xFF')
+  ts_mux_u16(section, 1) // service_id == program_number
+  section.push(b'\xFC') // EIT schedule/present-following flags clear
+  ts_mux_u16(section, 0x8000 | (5 + provider.length() + name.length()))
+  section.push(b'\x48') // service_descriptor
+  section.push((3 + provider.length() + name.length()).to_byte())
+  section.push(self.service_type.to_byte())
+  section.push(provider.length().to_byte())
+  for b in provider {
+    section.push(b)
+  }
+  section.push(name.length().to_byte())
+  for b in name {
+    section.push(b)
+  }
+  let crc = ts_mux_crc(section)
+  for i in 0..<4 {
+    section.push(((crc >> (24 - 8 * i)) & 0xFFU).to_byte())
+  }
+  self.section(0x11, section)
 }
 
 ///|
@@ -204,6 +282,7 @@ fn TsMuxer::pmt(self : TsMuxer) -> Unit {
 fn TsMuxer::ensure_tables(self : TsMuxer) -> Unit {
   if !self.wrote_tables {
     self.wrote_tables = true
+    self.sdt()
     self.pat()
     self.pmt()
   }

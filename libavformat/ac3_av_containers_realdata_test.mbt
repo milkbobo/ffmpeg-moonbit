@@ -209,9 +209,10 @@ test "A/V MPEG-TS: H.264 + AC-3 stream types" {
   }
   let bytes = ts.finish()
   // PAT/PMT carry the byte-swapped MPEG-2 CRC used by mpegtsenc (FFmpeg
-  // rejects the tables and falls back to payload probing otherwise).
-  assert_eq(bytes[17:21].to_owned(), b"\x2a\xb1\x04\xb2")
-  assert_eq(bytes[215:219].to_owned(), b"\xd1\xd7\xf4\xb8")
+  // rejects the tables and falls back to payload probing otherwise). The SDT
+  // occupies the first packet, so PAT/PMT start at 188/376.
+  assert_eq(bytes[205:209].to_owned(), b"\x2a\xb1\x04\xb2")
+  assert_eq(bytes[403:407].to_owned(), b"\xd1\xd7\xf4\xb8")
   let demux = @libavformat.av_mpegts_open(bytes).unwrap()
   assert_eq(demux.streams.length(), 2)
   let mut have_video = false

@@ -136,3 +136,44 @@ test "ts muxer: HEVC and MP3 stream types round-trip" {
   assert_eq(demux.pcrs[0].pid, 0x100)
   assert_eq(demux.pcrs[0].base, 0L)
 }
+
+///|
+/// The SDT section is byte-identical to ffmpeg 9.0.2 mpegtsenc for the same
+/// service metadata (`-metadata service_name=TestSvc
+/// -metadata service_provider=TestProv`), and the demuxer reads it back.
+test "ts muxer: SDT service descriptor matches mpegtsenc and round-trips" {
+  let mux = ts_muxer_new(service_name="TestSvc", service_provider="TestProv")
+  mux.write_video(90000L, b"hello")
+  let bytes = mux.finish()
+  assert_eq(bytes[0], b'\x47')
+  assert_eq(
+    (bytes[1].to_int() & 0x1F) * 256 + bytes[2].to_int(),
+    0x11,
+    msg="SDT is the first table packet",
+  )
+  let start = 5 // TS header + PSI pointer field
+  let sec_len = ((bytes[start + 1].to_int() & 0x0F) << 8) |
+    bytes[start + 2].to_int()
+  assert_eq(sec_len, 37)
+  let expected : Array[Byte] = [
+    b'\x42', b'\xf0', b'\x25', b'\x00', b'\x01', b'\xc1', b'\x00', b'\x00', b'\xff',
+    b'\x01', b'\xff', b'\x00', b'\x01', b'\xfc', b'\x80', b'\x14', b'\x48', b'\x12',
+    b'\x01', b'\x08', b'\x54', b'\x65', b'\x73', b'\x74', b'\x50', b'\x72', b'\x6f',
+    b'\x76', b'\x07', b'\x54', b'\x65', b'\x73', b'\x74', b'\x53', b'\x76', b'\x63',
+    b'\xfc', b'\xab', b'\xed', b'\xd5',
+  ]
+  for i in 0..<expected.length() {
+    assert_eq(bytes[start + i], expected[i], msg="SDT byte " + i.to_string())
+  }
+  let demux = av_mpegts_open(bytes).unwrap()
+  assert_eq(demux.programs.length(), 1)
+  assert_eq(demux.programs[0].service_name, "TestSvc")
+  assert_eq(demux.programs[0].service_provider, "TestProv")
+  assert_eq(demux.programs[0].service_type, 1)
+  // Defaults mirror mpegtsenc: Service01 / FFmpeg.
+  let plain = ts_muxer_new()
+  plain.write_video(0L, b"x")
+  let defaults = av_mpegts_open(plain.finish()).unwrap()
+  assert_eq(defaults.programs[0].service_name, "Service01")
+  assert_eq(defaults.programs[0].service_provider, "FFmpeg")
+}
