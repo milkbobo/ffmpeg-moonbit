@@ -155,3 +155,27 @@ test "mkv muxer: subtitle track joins A/V blocks" {
     Err(_) => ()
   }
 }
+
+///|
+test "mkv muxer: A/V/subtitle track languages and forced flag" {
+  let avcc = @libavutil.av_base64_decode(mkv_av_avcc_b64, 1024).unwrap()
+  let mux = mkv_av_muxer_new(
+    64,
+    48,
+    avcc,
+    48000,
+    video_language="und",
+    audio_language="eng",
+    subtitle_language="fre",
+    subtitle_forced=true,
+  ).unwrap()
+  mux.write_video(b"V0", 0L, 33, keyframe=true).unwrap()
+  mux.write_audio(b"A0", 0L, 21).unwrap()
+  mux.write_subtitle(10L, 60L, "Hi").unwrap()
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.tracks.length(), 3)
+  assert_eq(mkv.tracks[0].language, "und")
+  assert_eq(mkv.tracks[1].language, "eng")
+  assert_eq(mkv.tracks[2].language, "fre")
+  assert_eq(mkv.tracks[2].flag_forced, 1UL)
+}

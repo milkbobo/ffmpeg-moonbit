@@ -6197,3 +6197,14 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   为 `55 C4` / `15 C7`（与 ffmpeg movenc 生成的 MP4 一致）；非法码
   回落 "und"。
 - 全量 wasm **1313/1313**。
+
+## 247. Matroska A/V 轨道语言
+
+- `mkv_av_muxer_new` 新增 `video_language`/`audio_language`/
+  `subtitle_language`（默认 "und"）与 `subtitle_forced`；TrackEntry
+  按 matroskaenc 为三条轨都写 Language(0x22B59C)，字幕轨在
+  `subtitle_forced` 时写 FlagForced(0x55AA, 1)。
+- 回归：`video_language="und" audio_language="eng"
+  subtitle_language="fre" subtitle_forced=true` 写入后
+  `av_matroska_open` 回读三条轨语言与字幕 flag_forced=1。
+- 全量 wasm **1314/1314**。

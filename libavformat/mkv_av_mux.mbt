@@ -29,6 +29,12 @@ pub struct MkvAvMuxer {
   audio_priming : Int32
   /// Samples to discard from the end of the last audio block.
   audio_discard_padding : Int32
+  /// TrackLanguage of the video/audio/subtitle tracks ("und" default).
+  video_language : String
+  audio_language : String
+  subtitle_language : String
+  /// TrackFlagForced on the subtitle track.
+  subtitle_forced : Bool
   events : Array[MkvAvEvent]
   cues : Array[MkvSubtitleCue]
   tags : Array[(String, String)]
@@ -46,6 +52,10 @@ pub fn mkv_av_muxer_new(
   audio_private~ : Bytes = b"",
   audio_priming~ : Int32 = 0,
   audio_discard_padding~ : Int32 = 0,
+  video_language~ : String = "und",
+  audio_language~ : String = "und",
+  subtitle_language~ : String = "und",
+  subtitle_forced~ : Bool = false,
 ) -> Result[MkvAvMuxer, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -67,6 +77,22 @@ pub fn mkv_av_muxer_new(
     audio_private,
     audio_priming,
     audio_discard_padding,
+    video_language: if video_language == "" {
+      "und"
+    } else {
+      video_language
+    },
+    audio_language: if audio_language == "" {
+      "und"
+    } else {
+      audio_language
+    },
+    subtitle_language: if subtitle_language == "" {
+      "und"
+    } else {
+      subtitle_language
+    },
+    subtitle_forced,
     events: [],
     cues: [],
     tags: [],
@@ -367,6 +393,7 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
   webm_uint_elem(vtrack, 0xD7, 1, 1UL)
   webm_uint_elem(vtrack, 0x73C5, 2, 1UL)
   webm_uint_elem(vtrack, 0x83, 1, 1UL)
+  webm_string_elem(vtrack, 0x22B59C, 3, self.video_language)
   webm_string_elem(vtrack, 0x86, 1, "V_MPEG4/ISO/AVC")
   let avcc_body : Array[Byte] = []
   for b in self.avcc {
@@ -388,6 +415,7 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
   webm_uint_elem(atrack, 0xD7, 1, 2UL)
   webm_uint_elem(atrack, 0x73C5, 2, 2UL)
   webm_uint_elem(atrack, 0x83, 1, 2UL)
+  webm_string_elem(atrack, 0x22B59C, 3, self.audio_language)
   webm_string_elem(atrack, 0x86, 1, self.audio_codec_id)
   if self.audio_priming > 0 {
     let delay_ns = (
@@ -421,7 +449,10 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
     webm_uint_elem(strack, 0x73C5, 2, 3UL) // TrackUID
     webm_uint_elem(strack, 0x83, 1, 17UL) // TrackType: subtitle
     webm_uint_elem(strack, 0x9C, 1, 0UL) // FlagLacing
-    webm_string_elem(strack, 0x22B59C, 3, "und") // Language
+    webm_string_elem(strack, 0x22B59C, 3, self.subtitle_language)
+    if self.subtitle_forced {
+      webm_uint_elem(strack, 0x55AA, 2, 1UL) // FlagForced
+    }
     webm_string_elem(strack, 0x86, 1, "S_TEXT/UTF8")
     webm_elem(tracks, 0xAE, 1, strack)
   }
