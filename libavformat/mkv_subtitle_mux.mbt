@@ -27,12 +27,35 @@ pub fn mkv_subtitle_cue_new(
 /// One `S_TEXT/UTF8` subtitle track.
 pub struct MkvSubtitleMuxer {
   cues : Array[MkvSubtitleCue]
+  /// TrackLanguage (default "und", like matroskaenc).
+  language : String
+  /// TrackName; empty omits the element.
+  name : String
+  /// TrackFlagDefault: Matroska's default is 1, so only `false` is written.
+  is_default : Bool
+  /// TrackFlagForced: only `true` is written.
+  forced : Bool
 }
 
 ///|
 /// New subtitle writer with an empty cue list.
-pub fn mkv_subtitle_muxer_new() -> MkvSubtitleMuxer {
-  { cues: [], }
+pub fn mkv_subtitle_muxer_new(
+  language~ : String = "und",
+  name~ : String = "",
+  default~ : Bool = true,
+  forced~ : Bool = false,
+) -> MkvSubtitleMuxer {
+  {
+    cues: [],
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
+    name,
+    is_default: default,
+    forced,
+  }
 }
 
 ///|
@@ -137,7 +160,16 @@ pub fn MkvSubtitleMuxer::finish(self : MkvSubtitleMuxer) -> Bytes {
   webm_uint_elem(track, 0x73C5, 2, 1UL) // TrackUID
   webm_uint_elem(track, 0x83, 1, 17UL) // TrackType: subtitle
   webm_uint_elem(track, 0x9C, 1, 0UL) // FlagLacing
-  webm_string_elem(track, 0x22B59C, 3, "und") // Language
+  if self.name != "" {
+    webm_string_elem(track, 0x536E, 2, self.name) // Name
+  }
+  webm_string_elem(track, 0x22B59C, 3, self.language) // Language
+  if !self.is_default {
+    webm_uint_elem(track, 0x88, 1, 0UL) // FlagDefault (default 1)
+  }
+  if self.forced {
+    webm_uint_elem(track, 0x55AA, 2, 1UL) // FlagForced
+  }
   webm_string_elem(track, 0x86, 1, "S_TEXT/UTF8") // CodecID
   let tracks : Array[Byte] = []
   webm_elem(tracks, 0xAE, 1, track)

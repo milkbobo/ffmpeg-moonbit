@@ -6172,3 +6172,14 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：文本属性 + `av_hls_parse` 回读 `start`/`frame_rate`/`video`；
   默认值不产生多余标签。
 - 全量 wasm **1311/1311**。
+
+## 245. Matroska 字幕轨道元数据
+
+- `mkv_subtitle_muxer_new` 新增 `language`（默认 "und"）、`name`、
+  `default`、`forced`；TrackEntry 按 matroskaenc 写 Name(0x536E)、
+  Language(0x22B59C)、FlagDefault(0x88，仅在 false 时写 0)、
+  FlagForced(0x55AA，仅在 true 时写 1)。
+- 回归：写入 `language="ger" name="Forced signs" default=false
+  forced=true` 后由 `av_matroska_open` 回读四个字段；默认路径回到
+  "und"/无 Name/FlagDefault=1/FlagForced=0。
+- 全量 wasm **1312/1312**。

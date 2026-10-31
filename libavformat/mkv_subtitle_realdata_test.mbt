@@ -79,3 +79,29 @@ test "mkv subtitle: invalid cues are rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "mkv subtitle: track language, name, default and forced flags" {
+  let mux = @libavformat.mkv_subtitle_muxer_new(
+    language="ger",
+    name="Forced signs",
+    default=false,
+    forced=true,
+  )
+  mux.write_cue(0L, 1000L, "Forced").unwrap()
+  let mh = @libavformat.av_matroska_open(mux.finish()).unwrap()
+  let t = mh.tracks[0]
+  assert_eq(t.language, "ger")
+  assert_eq(t.name, Some("Forced signs"))
+  assert_eq(t.flag_default, 0UL)
+  assert_eq(t.flag_forced, 1UL)
+  // Defaults: und, no Name, FlagDefault stays 1 and no FlagForced element.
+  let plain = @libavformat.mkv_subtitle_muxer_new()
+  plain.write_cue(0L, 1000L, "x").unwrap()
+  let ph = @libavformat.av_matroska_open(plain.finish()).unwrap()
+  let pt = ph.tracks[0]
+  assert_eq(pt.language, "und")
+  assert_eq(pt.name, None)
+  assert_eq(pt.flag_default, 1UL)
+  assert_eq(pt.flag_forced, 0UL)
+}
