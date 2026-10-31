@@ -227,3 +227,61 @@ test "ts muxer: NIT network name matches mpegtsenc and round-trips" {
   }
   assert_false(has_nit)
 }
+
+///|
+/// PMT ES descriptors match ffmpeg 9.0.2 mpegtsenc: an ISO 639 language
+/// descriptor on the AAC track (`-metadata:s:a:0 language=eng`) and the HEVC
+/// registration descriptor for stream type 0x24. Both PMTs are the third
+/// table packet (SDT, PAT, PMT).
+test "ts muxer: PMT language and HEVC registration descriptors" {
+  let av = ts_muxer_new(audio_language="eng")
+  av.write_video(0L, b"v")
+  av.write_audio(0L, b"a")
+  let bytes = av.finish()
+  let start = 188 * 2 + 5
+  let sec_len = ((bytes[start + 1].to_int() & 0x0F) << 8) |
+    bytes[start + 2].to_int()
+  assert_eq(sec_len, 29)
+  let expected : Array[Byte] = [
+    b'\x02', b'\xb0', b'\x1d', b'\x00', b'\x01', b'\xc1', b'\x00', b'\x00', b'\xe1',
+    b'\x00', b'\xf0', b'\x00', b'\x1b', b'\xe1', b'\x00', b'\xf0', b'\x00', b'\x0f',
+    b'\xe1', b'\x01', b'\xf0', b'\x06', b'\x0a', b'\x04', b'\x65', b'\x6e', b'\x67',
+    b'\x00', b'\x8d', b'\x82', b'\x9a', b'\x07',
+  ]
+  for i in 0..<expected.length() {
+    assert_eq(bytes[start + i], expected[i], msg="PMT byte " + i.to_string())
+  }
+  let demux = av_mpegts_open(bytes).unwrap()
+  assert_eq(demux.streams[1].language, "eng")
+  let hevc = ts_muxer_new(video_stream_type=0x24, audio=false)
+  hevc.write_video(0L, b"v")
+  let hbytes = hevc.finish()
+  let hstart = 188 * 2 + 5
+  let hlen = ((hbytes[hstart + 1].to_int() & 0x0F) << 8) |
+    hbytes[hstart + 2].to_int()
+  assert_eq(hlen, 24)
+  let hexpected : Array[Byte] = [
+    b'\x02', b'\xb0', b'\x18', b'\x00', b'\x01', b'\xc1', b'\x00', b'\x00', b'\xe1',
+    b'\x00', b'\xf0', b'\x00', b'\x24', b'\xe1', b'\x00', b'\xf0', b'\x06', b'\x05',
+    b'\x04', b'\x48', b'\x45', b'\x56', b'\x43', b'\xcb', b'\x9e', b'\x00', b'\x52',
+  ]
+  for i in 0..<hexpected.length() {
+    assert_eq(
+      hbytes[hstart + i],
+      hexpected[i],
+      msg="HEVC PMT byte " + i.to_string(),
+    )
+  }
+  let hdemux = av_mpegts_open(hbytes).unwrap()
+  assert_eq(hdemux.streams[0].registration, "HEVC")
+  // The default (empty) language writes no audio descriptor.
+  let plain = ts_muxer_new()
+  plain.write_video(0L, b"v")
+  plain.write_audio(0L, b"a")
+  let pbytes = plain.finish()
+  let pstart = 188 * 2 + 5
+  assert_eq(
+    ((pbytes[pstart + 1].to_int() & 0x0F) << 8) | pbytes[pstart + 2].to_int(),
+    23,
+  )
+}

@@ -28,6 +28,8 @@ pub struct TsMuxer {
   /// Emit a NIT (`-mpegts_flags nit`): provider as network name plus a
   /// one-entry service list.
   nit : Bool
+  /// ISO 639 language for the audio ES; empty omits the descriptor.
+  audio_language : String
   mut wrote_tables : Bool
   /// Non-zero enables automatic ADTS framing of AAC access units.
   mut adts_rate : Int32
@@ -60,6 +62,8 @@ pub fn ts_muxer_new(
   original_network_id~ : Int32 = 0xFF01,
   /// Emit a NIT on PID 0x10 (`-mpegts_flags nit`).
   nit~ : Bool = false,
+  /// ISO 639 language written as a PMT language descriptor for the audio ES.
+  audio_language~ : String = "",
 ) -> TsMuxer {
   {
     pmt_pid: 0x1000,
@@ -83,6 +87,7 @@ pub fn ts_muxer_new(
     transport_stream_id,
     original_network_id,
     nit,
+    audio_language,
     wrote_tables: false,
     adts_rate: 0,
     adts_channels: 0,
@@ -253,12 +258,54 @@ fn TsMuxer::sdt(self : TsMuxer) -> Unit {
 }
 
 ///|
+/// `ISO_639_LANGUAGE_DESCRIPTOR` for a single 3-letter code (audio_type
+/// undefined), or empty when the code is not three characters.
+fn ts_mux_language_descriptor(language : String) -> Array[Byte] {
+  let out : Array[Byte] = []
+  if language.length() == 3 {
+    out.push(b'\x0A')
+    out.push(b'\x04')
+    for i in 0..<3 {
+      out.push((language[i].to_int() & 0xFF).to_byte())
+    }
+    out.push(b'\x00')
+  }
+  out
+}
+
+///|
+/// Video ES descriptors: mpegtsenc registers HEVC with a 0x05 descriptor
+/// when strict compliance is normal (the default).
+fn ts_mux_video_descriptors(stream_type : Int32) -> Array[Byte] {
+  let out : Array[Byte] = []
+  if stream_type == 0x24 {
+    out.push(b'\x05')
+    out.push(b'\x04')
+    out.push(b'H')
+    out.push(b'E')
+    out.push(b'V')
+    out.push(b'C')
+  }
+  out
+}
+
+///|
 fn TsMuxer::pmt(self : TsMuxer) -> Unit {
   let section : Array[Byte] = []
   section.push(b'\x02')
-  let streams = (if self.has_video { 1 } else { 0 }) +
-    (if self.has_audio { 1 } else { 0 })
-  ts_mux_u16(section, 0xB000 | (9 + 5 * streams + 4))
+  let video_desc : Array[Byte] = if self.has_video {
+    ts_mux_video_descriptors(self.video_stream_type)
+  } else {
+    []
+  }
+  let audio_desc : Array[Byte] = if self.has_audio {
+    ts_mux_language_descriptor(self.audio_language)
+  } else {
+    []
+  }
+  let es_len = (if self.has_video { 5 + video_desc.length() } else { 0 }) +
+    (if self.has_audio { 5 + audio_desc.length() } else { 0 })
+  ts_mux_u16(section, 0xB000 | (9 + es_len + 4))
   ts_mux_u16(section, 1) // program_number
   section.push(b'\xC1')
   section.push(b'\x00')
@@ -270,12 +317,18 @@ fn TsMuxer::pmt(self : TsMuxer) -> Unit {
   if self.has_video {
     section.push(self.video_stream_type.to_byte())
     ts_mux_u16(section, 0xE000 | self.video_pid)
-    ts_mux_u16(section, 0xF000)
+    ts_mux_u16(section, 0xF000 | video_desc.length())
+    for b in video_desc {
+      section.push(b)
+    }
   }
   if self.has_audio {
     section.push(self.audio_stream_type.to_byte())
     ts_mux_u16(section, 0xE000 | self.audio_pid)
-    ts_mux_u16(section, 0xF000)
+    ts_mux_u16(section, 0xF000 | audio_desc.length())
+    for b in audio_desc {
+      section.push(b)
+    }
   }
   let crc = ts_mux_crc(section)
   for i in 0..<4 {

@@ -6146,3 +6146,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   产生的 37 字节 NIT 段作为期望字节，本写入器逐字节一致；回读
   `network_name` 与服务字段；未开 `nit` 时不存在 PID 0x10 包。
 - 全量 wasm **1309/1309**。
+
+## 243. MPEG-TS PMT 语言/HEVC registration 描述符
+
+- `ts_muxer_new` 新增 `audio_language`（3 字母 ISO 639，非 3 字母或空
+  不写）：音频 ES 写 ISO_639_LANGUAGE_DESCRIPTOR（0x0A，len 4，
+  语言 + audio_type 0），PMT section_length/ES_info_length 动态计算。
+- 视频流类型 0x24 时自动写 registration_descriptor（0x05 len 4
+  "HEVC"），对应 mpegtsenc 在默认 strict compliance 下的行为。
+- 回归：ffmpeg 9.0.2 用
+  `-c:v libx264 -c:a aac -metadata:s:a:0 language=eng` 生成的 PMT
+  （32 字节）和 libx265 单轨 TS 的 PMT（27 字节）作为期望字节，
+  本写入器逐字节一致；解复用回读 `streams[1].language == "eng"`、
+  `streams[0].registration == "HEVC"`；未设语言时仍为旧 23 字节 PMT。
+- 全量 wasm **1310/1310**。
