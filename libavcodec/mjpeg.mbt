@@ -512,7 +512,21 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         } else {
           precision == 10 || precision == 12
         })
-      if precision != 8 && !(rgb_mode || hbd_gray) {
+      // 10/12-bit YCbCr with 4:2:0/4:2:2/4:4:0/4:4:4 sampling needs no
+      // chroma upscaling and maps to ffmpeg's yuv*16le formats.
+      let hbd_yuv = ncomp == 3 &&
+        !lossless &&
+        (precision == 10 || precision == 12) &&
+        adobe_transform <= 0 &&
+        max_h <= 2 &&
+        max_v <= 2 &&
+        components[0].h == max_h &&
+        components[0].v == max_v &&
+        components[1].h == 1 &&
+        components[1].v == 1 &&
+        components[2].h == 1 &&
+        components[2].v == 1
+      if precision != 8 && !(rgb_mode || hbd_gray || hbd_yuv) {
         return Err("PATCHWELCOME: mjpeg sample precision")
       }
       sample_bits = precision

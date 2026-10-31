@@ -711,6 +711,16 @@ fn mjpeg_finalize_image(
     } else {
       "gray"
     }
+  } else if components.length() == 3 && bits > 8 {
+    if plane_widths[1] >= width && plane_heights[1] >= height {
+      "yuv444p16le"
+    } else if plane_heights[1] >= height {
+      "yuv422p16le"
+    } else if plane_widths[1] >= width {
+      "yuv440p16le"
+    } else {
+      "yuv420p16le"
+    }
   } else if plane_widths[1] >= width && plane_heights[1] >= height {
     "yuvj444p"
   } else if plane_heights[1] >= height {

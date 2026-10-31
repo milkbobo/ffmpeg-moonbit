@@ -6366,3 +6366,16 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   DC 表 + 仅 EOB 的 AC 表），ffmpeg `-pix_fmt gray16le` 的 256 字节
   为参考，本解码器逐字节一致。
 - 全量 wasm **1330/1330**。
+
+## 261. MJPEG 10/12-bit YCbCr
+
+- 基线/渐进 3 分量在 10/12-bit、无 Adobe RGB 变换、且采样为
+  4:2:0/4:2:2/4:4:0/4:4:4（亮度取 max_h/max_v、两路色度 1x1，无需
+  上采样）时放行；finalize 输出 MSB 对齐 16-bit LE 平面，pix_fmt 为
+  yuv420p16le/yuv422p16le/yuv440p16le/yuv444p16le。
+- 夹具：手工 12-bit SOF0 4:2:0 JPEG（16x16、一个 MCU、Y 四块偏移
+  0/8/4/12、色度中性），ffmpeg `-pix_fmt yuv420p16le` 的 768 字节
+  参考；Y/Cb/Cr 三平面逐字节一致。
+- 不支持：需要色度上采样的 4:2:2/4:1:1 变体、4 分量 >8-bit、
+  Adobe RGB（transform 0）10/12-bit。
+- 全量 wasm **1331/1331**。
