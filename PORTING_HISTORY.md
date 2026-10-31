@@ -5927,3 +5927,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 尝试渐进 3 分量 RGB ID 夹具时 FFmpeg 自身报
   `decode_sos: index(3) out of components`，不纳入。
 - 全量 wasm **1290/1290**。
+
+## 229. TS H.264 B 帧 + AAC 双轨回归
+
+- 真实 x264 B 帧 + AAC MPEG-TS（5 视频 PES + 多个 ADTS PES）经
+  `TsMuxer` 解复用→重封装→再解复用：按 PID 比较每个 PES 的
+  PTS/DTS/payload 完全一致，视频解码帧 MD5 一致。
+- 外部验证：ffmpeg 9.0.2 对源与自写 TS 的 video framemd5 5/5、
+  AAC PCM 92160 字节一致，`-c copy -f framecrc` 逐包相同。
+- 覆盖 PES 完成顺序与文件顺序不同的情况：测试按 PID 分组比较。
+- 全量 wasm **1291/1291**。
