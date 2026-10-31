@@ -28,12 +28,13 @@ pub fn mp4_subtitle_cue_new(
 /// One `tx3g` subtitle track.
 pub struct Mp4SubtitleMuxer {
   cues : Array[Mp4SubtitleCue]
+  language : Int32
 }
 
 ///|
 /// New subtitle writer with an empty cue list.
-pub fn mp4_subtitle_muxer_new() -> Mp4SubtitleMuxer {
-  { cues: [], }
+pub fn mp4_subtitle_muxer_new(language~ : String = "und") -> Mp4SubtitleMuxer {
+  { cues: [], language: mp4_language_code(language), }
 }
 
 ///|
@@ -112,6 +113,7 @@ fn mp4_tx3g_entry() -> Array[Byte] {
 fn mp4_subtitle_document(
   samples : Array[Bytes],
   durations : Array[Int64],
+  language : Int32,
 ) -> Bytes {
   let sample_count = samples.length()
   let mut total_duration = 0L
@@ -175,7 +177,7 @@ fn mp4_subtitle_document(
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, 1000000U)
   mp4_u32(mdhd_body, total_duration.to_int().reinterpret_as_uint())
-  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 
@@ -293,5 +295,5 @@ pub fn Mp4SubtitleMuxer::finish(
   if total > 4294967295L {
     return Err("EINVAL: subtitle duration exceeds the MP4 version-0 range")
   }
-  Ok(mp4_subtitle_document(samples, durations))
+  Ok(mp4_subtitle_document(samples, durations, self.language))
 }

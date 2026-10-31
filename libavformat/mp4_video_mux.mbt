@@ -17,6 +17,7 @@ pub struct Mp4H264Muxer {
   keyframes : Array[Bool]
   /// Presentation offsets (PTS - DTS) per sample; empty ctts when all zero.
   cts : Array[Int32]
+  language : Int32
 }
 
 ///|
@@ -25,6 +26,7 @@ pub fn mp4_h264_muxer_new(
   height : Int32,
   avcc : Bytes,
   timescale~ : Int32 = 90000,
+  language~ : String = "und",
 ) -> Result[Mp4H264Muxer, String] {
   if width <= 0 || height <= 0 || timescale <= 0 || avcc.length() < 7 {
     return Err("EINVAL: invalid H.264 MP4 stream parameters")
@@ -33,6 +35,7 @@ pub fn mp4_h264_muxer_new(
     width,
     height,
     timescale,
+    language: mp4_language_code(language),
     avcc,
     packets: [],
     durations: [],
@@ -136,6 +139,7 @@ fn mp4_video_document(
   durations : Array[Int32],
   keyframes : Array[Bool],
   cts : Array[Int32],
+  language : Int32,
 ) -> Bytes {
   let sample_count = packets.length()
   let mut total_duration = 0
@@ -199,7 +203,7 @@ fn mp4_video_document(
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, timescale.reinterpret_as_uint())
   mp4_u32(mdhd_body, total_duration.reinterpret_as_uint())
-  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 
@@ -363,5 +367,6 @@ pub fn Mp4H264Muxer::finish(self : Mp4H264Muxer) -> Bytes {
     self.durations,
     self.keyframes,
     self.cts,
+    self.language,
   )
 }

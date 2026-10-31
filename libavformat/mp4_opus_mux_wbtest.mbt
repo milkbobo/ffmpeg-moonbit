@@ -29,3 +29,12 @@ test "mp4 muxer: Opus samples and dOps round-trip" {
     assert_eq(bytes[start:start + 307].to_owned(), packet)
   }
 }
+
+///|
+test "mp4 muxer: Opus mdhd language" {
+  let packet = @libavutil.av_base64_decode(mp4_opus_packet_b64, 10000).unwrap()
+  let mux = mp4_opus_muxer_new(channels=1, pre_skip=312, language="deu").unwrap()
+  mux.write_packet(packet).unwrap()
+  let movie = av_mov_open(mux.finish()).unwrap()
+  assert_eq(movie.tracks[0].language, "deu")
+}

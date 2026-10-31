@@ -137,3 +137,14 @@ test "mp4: negative ctts offsets use version 1" {
   assert_eq(samples[1].dts, 3000L)
   assert_eq(samples[2].dts, 6000L)
 }
+
+///|
+test "mp4 muxer: H.264 mdhd language" {
+  let src = @libavutil.av_base64_decode(mp4_bframes_src_b64, 100000).unwrap()
+  let src_movie = av_mov_open(src).unwrap()
+  let avcc = src_movie.tracks[0].extradata.unwrap()
+  let mux = mp4_h264_muxer_new(64, 48, avcc, language="jpn").unwrap()
+  mux.write_packet(b"\x00\x00\x00\x02\x65\x88", keyframe=true).unwrap()
+  let movie = av_mov_open(mux.finish()).unwrap()
+  assert_eq(movie.tracks[0].language, "jpn")
+}

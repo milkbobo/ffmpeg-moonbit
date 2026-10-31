@@ -6275,3 +6275,18 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：H.264 init `language="eng"` 经 `av_mov_open` 回读 "eng"；
   A/V init（und + spa）回读两轨语言。
 - 全量 wasm **1320/1320**。
+
+## 254. 单轨 MP4 写入器轨道语言
+
+- `mp4_audio_muxer_new`（AAC/AC-3/E-AC-3 共用）、
+  `mp4_aac_muxer_new`、`mp4_mp3_muxer_new`、`mp4_flac_muxer_new`、
+  `mp4_alac_muxer_new`、`mp4_opus_muxer_new`、
+  `mp4_h264_muxer_new`/`mp4_hevc_muxer_new`/`mp4_av1_muxer_new`/
+  `mp4_vp9_muxer_new`、`mp4_subtitle_muxer_new` 均新增
+  `language~ : String = "und"`，经 `mp4_language_code` 写入 mdhd；
+  共享的 `mp4_audio_document`/`mp4_video_document`/
+  `mp4_subtitle_document` 增加 language 参数（仍在 mp4_still_mux 中固定
+  0x55C4）。
+- 回归：AAC/MP3/Opus/mov_text/H.264 单轨写入 eng/fra/deu/spa/jpn 后
+  `av_mov_open` 回读正确。
+- 全量 wasm **1325/1325**。

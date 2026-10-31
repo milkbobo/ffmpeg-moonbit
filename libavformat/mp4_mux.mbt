@@ -13,6 +13,7 @@ pub struct Mp4AacMuxer {
   priming : Int32
   /// The `stsd` sample entry (AAC, AC-3, E-AC-3, ...).
   entry : Array[Byte]
+  language : Int32
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -23,6 +24,7 @@ pub fn mp4_aac_muxer_new(
   channels : Int32,
   /// Leading samples (AAC encoder delay) to skip via `edts`/`elst`.
   priming~ : Int32 = 0,
+  language~ : String = "und",
 ) -> Result[Mp4AacMuxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 7 || priming < 0 {
     return Err("EINVAL: invalid AAC MP4 stream parameters")
@@ -41,6 +43,7 @@ pub fn mp4_aac_muxer_new(
     sample_rate,
     channels,
     priming~,
+    language~,
   )
 }
 
@@ -52,11 +55,20 @@ pub fn mp4_audio_muxer_new(
   sample_rate : Int32,
   channels : Int32,
   priming~ : Int32 = 0,
+  language~ : String = "und",
 ) -> Result[Mp4AacMuxer, String] {
   if sample_rate <= 0 || channels < 1 || entry.length() == 0 || priming < 0 {
     return Err("EINVAL: invalid MP4 audio stream parameters")
   }
-  Ok({ sample_rate, channels, priming, entry, packets: [], durations: [], })
+  Ok({
+    sample_rate,
+    channels,
+    priming,
+    entry,
+    language: mp4_language_code(language),
+    packets: [],
+    durations: [],
+  })
 }
 
 ///|
@@ -353,7 +365,7 @@ pub fn Mp4AacMuxer::finish(self : Mp4AacMuxer) -> Bytes {
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, self.sample_rate.reinterpret_as_uint())
   mp4_u32(mdhd_body, total_duration.reinterpret_as_uint())
-  mp4_u16(mdhd_body, 0x55C4) // "und"
+  mp4_u16(mdhd_body, self.language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 
@@ -548,7 +560,10 @@ pub fn mp4_eac3_entry(hdr : @libavcodec.Ac3Header) -> Array[Byte] {
 /// One-track AC-3-in-MP4 muxer.  `first_frame` supplies the sample rate,
 /// channel count and `dac3` fields; the caller writes every frame (including
 /// this one) with a 1536-sample duration.
-pub fn mp4_ac3_muxer_new(first_frame : Bytes) -> Result[Mp4AacMuxer, String] {
+pub fn mp4_ac3_muxer_new(
+  first_frame : Bytes,
+  language~ : String = "und",
+) -> Result[Mp4AacMuxer, String] {
   let hdr = match @libavcodec.ac3_parse_header(first_frame) {
     Ok(h) => h
     Err(e) => return Err("EINVAL: \{e}")
@@ -556,12 +571,20 @@ pub fn mp4_ac3_muxer_new(first_frame : Bytes) -> Result[Mp4AacMuxer, String] {
   if hdr.bitstream_id > 10 {
     return Err("EINVAL: E-AC-3 frame in an AC-3 muxer")
   }
-  mp4_audio_muxer_new(mp4_ac3_entry(hdr), hdr.sample_rate, hdr.channels)
+  mp4_audio_muxer_new(
+    mp4_ac3_entry(hdr),
+    hdr.sample_rate,
+    hdr.channels,
+    language~,
+  )
 }
 
 ///|
 /// One-track E-AC-3-in-MP4 muxer (independent frames, one substream). */
-pub fn mp4_eac3_muxer_new(first_frame : Bytes) -> Result[Mp4AacMuxer, String] {
+pub fn mp4_eac3_muxer_new(
+  first_frame : Bytes,
+  language~ : String = "und",
+) -> Result[Mp4AacMuxer, String] {
   let hdr = match @libavcodec.ac3_parse_header(first_frame) {
     Ok(h) => h
     Err(e) => return Err("EINVAL: \{e}")
@@ -569,7 +592,12 @@ pub fn mp4_eac3_muxer_new(first_frame : Bytes) -> Result[Mp4AacMuxer, String] {
   if hdr.bitstream_id <= 10 || hdr.frame_type == 1 {
     return Err("EINVAL: frame is not an independent E-AC-3 frame")
   }
-  mp4_audio_muxer_new(mp4_eac3_entry(hdr), hdr.sample_rate, hdr.channels)
+  mp4_audio_muxer_new(
+    mp4_eac3_entry(hdr),
+    hdr.sample_rate,
+    hdr.channels,
+    language~,
+  )
 }
 
 ///|

@@ -10,6 +10,7 @@ pub struct Mp4OpusMuxer {
   pre_skip : Int32
   input_sample_rate : Int32
   timescale : Int32
+  language : Int32
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -20,6 +21,7 @@ pub fn mp4_opus_muxer_new(
   pre_skip~ : Int32 = 0,
   input_sample_rate~ : Int32 = 48000,
   timescale~ : Int32 = 48000,
+  language~ : String = "und",
 ) -> Result[Mp4OpusMuxer, String] {
   if channels < 1 ||
     channels > 2 ||
@@ -33,6 +35,7 @@ pub fn mp4_opus_muxer_new(
     pre_skip,
     input_sample_rate,
     timescale,
+    language: mp4_language_code(language),
     packets: [],
     durations: [],
   })
@@ -170,7 +173,7 @@ pub fn Mp4OpusMuxer::finish(self : Mp4OpusMuxer) -> Bytes {
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, self.timescale.reinterpret_as_uint())
   mp4_u32(mdhd_body, total_duration.reinterpret_as_uint())
-  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, self.language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 

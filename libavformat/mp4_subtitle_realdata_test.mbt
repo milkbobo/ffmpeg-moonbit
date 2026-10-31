@@ -94,3 +94,11 @@ test "mp4 subtitle: invalid cues are rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "mp4 subtitle: track language" {
+  let mux = @libavformat.mp4_subtitle_muxer_new(language="spa")
+  mux.write_cue(0L, 1000L, "Hola").unwrap()
+  let movie = @libavformat.av_mov_open(mux.finish().unwrap()).unwrap()
+  assert_eq(movie.tracks[0].language, "spa")
+}

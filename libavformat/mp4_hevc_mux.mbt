@@ -17,6 +17,7 @@ pub struct Mp4HevcMuxer {
   keyframes : Array[Bool]
   /// Presentation offsets (PTS - DTS) per sample.
   cts : Array[Int32]
+  language : Int32
 }
 
 ///|
@@ -25,6 +26,7 @@ pub fn mp4_hevc_muxer_new(
   height : Int32,
   hvcc : Bytes,
   timescale~ : Int32 = 90000,
+  language~ : String = "und",
 ) -> Result[Mp4HevcMuxer, String] {
   if width <= 0 || height <= 0 || timescale <= 0 || hvcc.length() < 4 {
     return Err("EINVAL: invalid HEVC MP4 stream parameters")
@@ -33,6 +35,7 @@ pub fn mp4_hevc_muxer_new(
     width,
     height,
     timescale,
+    language: mp4_language_code(language),
     hvcc,
     packets: [],
     durations: [],
@@ -129,7 +132,7 @@ pub fn Mp4HevcMuxer::finish(self : Mp4HevcMuxer) -> Bytes {
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, self.timescale.reinterpret_as_uint())
   mp4_u32(mdhd_body, total_duration.reinterpret_as_uint())
-  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, self.language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 

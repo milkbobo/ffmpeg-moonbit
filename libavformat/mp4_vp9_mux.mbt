@@ -17,6 +17,7 @@ pub struct Mp4Vp9Muxer {
   keyframes : Array[Bool]
   /// Presentation offsets (PTS - DTS) per sample.
   cts : Array[Int32]
+  language : Int32
 }
 
 ///|
@@ -25,6 +26,7 @@ pub fn mp4_vp9_muxer_new(
   height : Int32,
   vpcc : Bytes,
   timescale~ : Int32 = 90000,
+  language~ : String = "und",
 ) -> Result[Mp4Vp9Muxer, String] {
   if width <= 0 || height <= 0 || timescale <= 0 || vpcc.length() < 4 {
     return Err("EINVAL: invalid VP9 MP4 stream parameters")
@@ -33,6 +35,7 @@ pub fn mp4_vp9_muxer_new(
     width,
     height,
     timescale,
+    language: mp4_language_code(language),
     vpcc,
     packets: [],
     durations: [],
@@ -129,7 +132,7 @@ pub fn Mp4Vp9Muxer::finish(self : Mp4Vp9Muxer) -> Bytes {
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, self.timescale.reinterpret_as_uint())
   mp4_u32(mdhd_body, total_duration.reinterpret_as_uint())
-  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, self.language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 

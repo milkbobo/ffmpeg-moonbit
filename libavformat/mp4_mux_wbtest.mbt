@@ -76,3 +76,12 @@ test "mp4 muxer: negative AAC priming is rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "mp4 muxer: AAC mdhd language" {
+  let mux = mp4_aac_muxer_new(48000, 2, language="eng").unwrap()
+  mux.write_packet(b"\x00\x01").unwrap()
+  let movie = av_mov_open(mux.finish()).unwrap()
+  assert_eq(movie.tracks.length(), 1)
+  assert_eq(movie.tracks[0].language, "eng")
+}

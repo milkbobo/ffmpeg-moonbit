@@ -12,6 +12,7 @@ pub struct Mp4Mp3Muxer {
   channels : Int32
   object_type : Int32
   timescale : Int32
+  language : Int32
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -22,6 +23,7 @@ pub fn mp4_mp3_muxer_new(
   channels~ : Int32 = 2,
   object_type~ : Int32 = 0x6B,
   timescale~ : Int32 = 0,
+  language~ : String = "und",
 ) -> Result[Mp4Mp3Muxer, String] {
   if sample_rate <= 0 ||
     channels < 1 ||
@@ -39,6 +41,7 @@ pub fn mp4_mp3_muxer_new(
     } else {
       timescale
     },
+    language: mp4_language_code(language),
     packets: [],
     durations: [],
   })
@@ -112,6 +115,7 @@ fn mp4_audio_document(
   packets : Array[Bytes],
   durations : Array[Int32],
   entry : Array[Byte],
+  language : Int32,
 ) -> Bytes {
   let sample_count = packets.length()
   let mut total_duration = 0
@@ -175,7 +179,7 @@ fn mp4_audio_document(
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, timescale.reinterpret_as_uint())
   mp4_u32(mdhd_body, total_duration.reinterpret_as_uint())
-  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 
@@ -263,6 +267,7 @@ pub fn Mp4Mp3Muxer::finish(self : Mp4Mp3Muxer) -> Bytes {
     self.packets,
     self.durations,
     mp4_mp3_entry(self.sample_rate, self.channels, self.object_type),
+    self.language,
   )
 }
 
@@ -277,6 +282,7 @@ pub struct Mp4FlacMuxer {
   channels : Int32
   bits : Int32
   timescale : Int32
+  language : Int32
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -286,6 +292,7 @@ pub fn mp4_flac_muxer_new(
   streaminfo : Bytes,
   headers~ : Array[Bytes] = [],
   timescale~ : Int32 = 0,
+  language~ : String = "und",
 ) -> Result[Mp4FlacMuxer, String] {
   if streaminfo.length() != 34 {
     return Err("EINVAL: invalid FLAC STREAMINFO")
@@ -312,6 +319,7 @@ pub fn mp4_flac_muxer_new(
     } else {
       timescale
     },
+    language: mp4_language_code(language),
     packets: [],
     durations: [],
   })
@@ -365,7 +373,13 @@ fn Mp4FlacMuxer::entry(self : Mp4FlacMuxer) -> Array[Byte] {
 
 ///|
 pub fn Mp4FlacMuxer::finish(self : Mp4FlacMuxer) -> Bytes {
-  mp4_audio_document(self.timescale, self.packets, self.durations, self.entry())
+  mp4_audio_document(
+    self.timescale,
+    self.packets,
+    self.durations,
+    self.entry(),
+    self.language,
+  )
 }
 
 ///|
@@ -378,6 +392,7 @@ pub struct Mp4AlacMuxer {
   channels : Int32
   bits : Int32
   timescale : Int32
+  language : Int32
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -399,6 +414,7 @@ fn mp4_alac_be32(data : Bytes, off : Int32) -> UInt32 {
 pub fn mp4_alac_muxer_new(
   cookie : Bytes,
   timescale~ : Int32 = 0,
+  language~ : String = "und",
 ) -> Result[Mp4AlacMuxer, String] {
   if cookie.length() < 36 ||
     cookie[4] != b'a' ||
@@ -427,6 +443,7 @@ pub fn mp4_alac_muxer_new(
     } else {
       timescale
     },
+    language: mp4_language_code(language),
     packets: [],
     durations: [],
   })
@@ -469,5 +486,11 @@ fn Mp4AlacMuxer::entry(self : Mp4AlacMuxer) -> Array[Byte] {
 
 ///|
 pub fn Mp4AlacMuxer::finish(self : Mp4AlacMuxer) -> Bytes {
-  mp4_audio_document(self.timescale, self.packets, self.durations, self.entry())
+  mp4_audio_document(
+    self.timescale,
+    self.packets,
+    self.durations,
+    self.entry(),
+    self.language,
+  )
 }
