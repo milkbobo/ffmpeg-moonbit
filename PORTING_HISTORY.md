@@ -6339,3 +6339,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   期望，本写入器输出逐字节一致；`wav_read_bext` 回读全部字段；无 bext
   文件返回 None。
 - 全量 wasm **1328/1328**。
+
+## 259. HLS 分段级 EXT-X-KEY 轮换
+
+- `HlsMediaSegmentSpec` 新增 `key_uri`/`key_iv`/`key_none`：
+  分段可切换 AES-128 密钥（IV 变化也会触发），或用 `key_none` 写
+  `#EXT-X-KEY:METHOD=NONE` 清空当前密钥；与当前生效密钥比较后去重。
+  全局密钥仍由 `key_uri`/`key_iv` 参数提供。
+- 抽取 `hls_mux_key_tag`/`hls_mux_same_iv`，全局与分段共用。
+- 回归：全局 key0 → 分段切 key1（带 IV）→ 继承 → METHOD=NONE →
+  重新选 key0；`av_hls_parse` 得到 keys.length=3、segment.key_index
+  [0,1,1,-1,2]。
+- 全量 wasm **1329/1329**。

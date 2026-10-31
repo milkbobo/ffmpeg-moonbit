@@ -423,3 +423,48 @@ test "hls muxer: per-segment EXT-X-MAP override" {
   assert_eq(range.length, 20L)
   assert_eq(range.offset, 0L)
 }
+
+///|
+test "hls muxer: per-segment EXT-X-KEY rotation and METHOD=NONE" {
+  let iv0 : Array[Byte] = []
+  let iv1 : Array[Byte] = []
+  for i in 0..<16 {
+    iv0.push(0)
+    iv1.push(i.to_byte())
+  }
+  let segments : Array[HlsMediaSegmentSpec] = [
+    HlsMediaSegmentSpec::new("s0.ts", 1.0),
+    HlsMediaSegmentSpec::new(
+      "s1.ts",
+      1.0,
+      key_uri=Some("key1.bin"),
+      key_iv=Some(Bytes::from_array(iv1)),
+    ),
+    HlsMediaSegmentSpec::new("s2.ts", 1.0),
+    HlsMediaSegmentSpec::new("s3.ts", 1.0, key_none=true),
+    HlsMediaSegmentSpec::new("s4.ts", 1.0, key_uri=Some("key0.bin")),
+  ]
+  let text = hls_write_media_playlist_specs(
+    segments[:],
+    key_uri=Some("key0.bin"),
+    key_iv=Some(Bytes::from_array(iv0)),
+  )
+  assert_true(text.contains("#EXT-X-KEY:METHOD=NONE\n"))
+  assert_true(
+    text.contains(
+      "#EXT-X-KEY:METHOD=AES-128,URI=\"key1.bin\",IV=0x000102030405060708090A0B0C0D0E0F\n",
+    ),
+  )
+  // Global key0 plus the re-selected key0 after METHOD=NONE.
+  assert_true(text.contains("#EXT-X-KEY:METHOD=AES-128,URI=\"key0.bin\""))
+  let pl = av_hls_parse(text).unwrap()
+  assert_eq(pl.keys.length(), 3)
+  assert_eq(pl.keys[0].uri, "key0.bin")
+  assert_eq(pl.keys[1].uri, "key1.bin")
+  assert_eq(pl.keys[1].iv, "0x000102030405060708090A0B0C0D0E0F")
+  assert_eq(pl.keys[2].uri, "key0.bin")
+  let expected : Array[Int32] = [0, 1, 1, -1, 2]
+  for i in 0..<5 {
+    assert_eq(pl.segments[i].key_index, expected[i], msg="segment \{i}")
+  }
+}

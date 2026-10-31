@@ -23,6 +23,12 @@ pub struct HlsMediaSegmentSpec {
   /// discontinuity); None keeps the playlist/global map.
   map_uri : String?
   map_byterange : HlsByteRange?
+  /// Per-segment AES-128 key override; None keeps the current key.
+  key_uri : String?
+  /// IV for `key_uri` (16 bytes; None uses the segment sequence number).
+  key_iv : Bytes?
+  /// Emit `EXT-X-KEY:METHOD=NONE` before this segment.
+  key_none : Bool
 }
 
 ///|
@@ -35,6 +41,9 @@ pub fn HlsMediaSegmentSpec::new(
   program_date_time~ : String = "",
   map_uri~ : String? = None,
   map_byterange~ : HlsByteRange? = None,
+  key_uri~ : String? = None,
+  key_iv~ : Bytes? = None,
+  key_none~ : Bool = false,
 ) -> HlsMediaSegmentSpec {
   {
     uri,
@@ -45,6 +54,9 @@ pub fn HlsMediaSegmentSpec::new(
     program_date_time,
     map_uri,
     map_byterange,
+    key_uri,
+    key_iv,
+    key_none,
   }
 }
 
@@ -92,6 +104,46 @@ fn hls_mux_same_range(a : HlsByteRange?, b : HlsByteRange?) -> Bool {
   match (a, b) {
     (None, None) => true
     (Some(x), Some(y)) => x.length == y.length && x.offset == y.offset
+    _ => false
+  }
+}
+
+///|
+/// `EXT-X-KEY:METHOD=AES-128,URI="...",IV=0x...` line, or "" for no key.
+fn hls_mux_key_tag(key_uri : String?, key_iv : Bytes?) -> String {
+  match key_uri {
+    Some(uri) => {
+      let sb = StringBuilder()
+      sb.write_string("#EXT-X-KEY:METHOD=AES-128,URI=\"" + uri + "\"")
+      match key_iv {
+        Some(iv) =>
+          if iv.length() == 16 {
+            sb.write_string(",IV=0x" + hls_mux_hex(iv))
+          }
+        None => ()
+      }
+      sb.write_string("\n")
+      sb.to_string()
+    }
+    None => ""
+  }
+}
+
+///|
+fn hls_mux_same_iv(a : Bytes?, b : Bytes?) -> Bool {
+  match (a, b) {
+    (None, None) => true
+    (Some(x), Some(y)) => {
+      if x.length() != y.length() {
+        return false
+      }
+      for i in 0..<x.length() {
+        if x[i] != y[i] {
+          return false
+        }
+      }
+      true
+    }
     _ => false
   }
 }
@@ -156,20 +208,9 @@ fn hls_write_media_playlist_impl(
   if independent_segments {
     sb.write_string("#EXT-X-INDEPENDENT-SEGMENTS\n")
   }
-  match key_uri {
-    Some(uri) => {
-      sb.write_string("#EXT-X-KEY:METHOD=AES-128,URI=\"" + uri + "\"")
-      match key_iv {
-        Some(iv) =>
-          if iv.length() == 16 {
-            sb.write_string(",IV=0x" + hls_mux_hex(iv))
-          }
-        None => ()
-      }
-      sb.write_string("\n")
-    }
-    None => ()
-  }
+  sb.write_string(hls_mux_key_tag(key_uri, key_iv))
+  let mut current_key_uri = key_uri
+  let mut current_key_iv = key_iv
   sb.write_string(hls_mux_map_tag(map_uri, map_byterange))
   let mut current_map_uri = map_uri
   let mut current_map_range = map_byterange
@@ -179,6 +220,24 @@ fn hls_write_media_playlist_impl(
     }
     if entry.gap {
       sb.write_string("#EXT-X-GAP\n")
+    }
+    if entry.key_none {
+      if current_key_uri is Some(_) {
+        sb.write_string("#EXT-X-KEY:METHOD=NONE\n")
+        current_key_uri = None
+        current_key_iv = None
+      }
+    } else {
+      match entry.key_uri {
+        Some(uri) =>
+          if current_key_uri != Some(uri) ||
+            !hls_mux_same_iv(current_key_iv, entry.key_iv) {
+            sb.write_string(hls_mux_key_tag(entry.key_uri, entry.key_iv))
+            current_key_uri = entry.key_uri
+            current_key_iv = entry.key_iv
+          }
+        None => ()
+      }
     }
     match entry.map_uri {
       Some(uri) =>
