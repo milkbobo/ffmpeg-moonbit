@@ -5951,3 +5951,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：真实 libvpx VP9 WebM 经重封装后 ffmpeg 全片 framemd5
   5/5 与源一致，`-ss 0.4` 输出的帧哈希与源相同。
 - 全量 wasm **1293/1293**。
+
+## 231. MKV 单轨 PTS + SeekHead/Cues
+
+- `MkvH264Muxer`/`MkvHevcMuxer::write_packet` 新增可选 `pts_ms`
+  （-1 表示沿用累计时长），SimpleBlock 时间码与 Cues 的 CueTime 使用
+  该 PTS，从而支持 B 帧解码顺序 ≠ 呈现顺序。
+- 两个写入器接入共享 `mkv_seekhead_cues`（Info/Tracks/Cues +
+  关键帧 CuePoint）。
+- 回归 `mkv_index_wbtest.mbt`：CueTime/CueClusterPosition 与
+  Cluster 偏移一致，显式 PTS 0/200/100 经解复用按序保留。
+- 外部验证：真实 x264 B 帧 MP4 重封装为 MKV 后，ffmpeg 全片
+  framemd5 8/8 与源一致，`-c copy -f framecrc` 的 PTS 重排序列
+  相同，`-ss 0.4` 定位帧哈希与源一致。
+- 全量 wasm **1296/1296**。

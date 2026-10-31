@@ -13,6 +13,8 @@ pub struct MkvH264Muxer {
   packets : Array[Bytes]
   durations : Array[Int32]
   keyframes : Array[Bool]
+  /// Optional presentation timestamp in ms per packet (-1 = cumulative).
+  pts : Array[Int64]
 }
 
 ///|
@@ -24,7 +26,15 @@ pub fn mkv_h264_muxer_new(
   if width <= 0 || height <= 0 || avcc.length() < 7 {
     return Err("EINVAL: invalid MKV/H.264 parameters")
   }
-  Ok({ width, height, avcc, packets: [], durations: [], keyframes: [], })
+  Ok({
+    width,
+    height,
+    avcc,
+    packets: [],
+    durations: [],
+    keyframes: [],
+    pts: [],
+  })
 }
 
 ///|
@@ -33,13 +43,15 @@ pub fn MkvH264Muxer::write_packet(
   packet : Bytes,
   duration~ : Int32 = 33,
   keyframe~ : Bool = false,
+  pts_ms~ : Int64 = -1L,
 ) -> Result[Unit, String] {
-  if packet.length() == 0 || duration <= 0 {
+  if packet.length() == 0 || duration <= 0 || (pts_ms < 0L && pts_ms != -1L) {
     return Err("EINVAL: empty H.264 packet or duration")
   }
   self.packets.push(packet)
   self.durations.push(duration)
   self.keyframes.push(keyframe)
+  self.pts.push(pts_ms)
   Ok(())
 }
 
@@ -50,10 +62,11 @@ fn MkvH264Muxer::cluster(self : MkvH264Muxer) -> Array[Byte] {
   let mut ms = 0
   for i in 0..<self.packets.length() {
     let packet = self.packets[i]
+    let t = if self.pts[i] >= 0L { self.pts[i].to_int() } else { ms }
     let block : Array[Byte] = [
       b'\x81',
-      ((ms >> 8) & 0xFF).to_byte(),
-      (ms & 0xFF).to_byte(),
+      ((t >> 8) & 0xFF).to_byte(),
+      (t & 0xFF).to_byte(),
       if self.keyframes[i] {
         b'\x80'
       } else {
@@ -113,10 +126,31 @@ pub fn MkvH264Muxer::finish(self : MkvH264Muxer) -> Bytes {
   webm_elem(tracks, 0xAE, 1, track)
   webm_elem(tracks, 0xEC, 1, [])
 
+  let info_elem : Array[Byte] = []
+  webm_elem(info_elem, 0x1549A966, 4, info)
+  let tracks_elem : Array[Byte] = []
+  webm_elem(tracks_elem, 0x1654AE6B, 4, tracks)
+  let cluster_body = self.cluster()
+  let cluster_elem : Array[Byte] = []
+  webm_elem(cluster_elem, 0x1F43B675, 4, cluster_body)
+  let key_times : Array[Int64] = []
+  let mut key_ms = 0L
+  for i in 0..<self.packets.length() {
+    let t = if self.pts[i] >= 0L { self.pts[i] } else { key_ms }
+    if self.keyframes[i] {
+      key_times.push(t)
+    }
+    key_ms = key_ms + self.durations[i].to_int64()
+  }
+  let (seekhead, cues) = mkv_seekhead_cues(
+    info_elem, tracks_elem, cluster_elem, key_times,
+  )
   let segment_body : Array[Byte] = []
-  webm_elem(segment_body, 0x1549A966, 4, info)
-  webm_elem(segment_body, 0x1654AE6B, 4, tracks)
-  webm_elem(segment_body, 0x1F43B675, 4, self.cluster())
+  for part in [seekhead, info_elem, tracks_elem, cluster_elem, cues] {
+    for b in part {
+      segment_body.push(b)
+    }
+  }
   let segment : Array[Byte] = []
   webm_elem(segment, 0x18538067, 4, segment_body)
   let out : Array[Byte] = []
