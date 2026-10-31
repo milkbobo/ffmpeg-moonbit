@@ -6351,3 +6351,18 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   重新选 key0；`av_hls_parse` 得到 keys.length=3、segment.key_index
   [0,1,1,-1,2]。
 - 全量 wasm **1329/1329**。
+
+## 260. MJPEG 12-bit 基线/渐进灰度
+
+- SOF0/1/2 单分量允许 10/12-bit（多分量 >9-bit 仍拒绝；9-bit 仅限
+  lossless RGB）。`mjpeg_idct_put` 按精度选择已有的
+  `ff_simple_idct_put_int16_{8,10,12}bit`；`mjpeg_finalize_image`
+  >8-bit 时输出 MSB 对齐 16-bit 小端平面（gray16le），并据此选择
+  pix_fmt。
+- DC 预测初值改为按精度 `4 << bits`（存为 `dc_init`，restart 复位
+  也用它）；之前硬编码 `4 << 8` 会让 12-bit 图像整体偏移
+  (2048-128)<<4。
+- 夹具：手工构造 12-bit SOF0 单分量灰度 JPEG（16x8，DQT 全 1、标准
+  DC 表 + 仅 EOB 的 AC 表），ffmpeg `-pix_fmt gray16le` 的 256 字节
+  为参考，本解码器逐字节一致。
+- 全量 wasm **1330/1330**。

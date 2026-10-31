@@ -261,12 +261,19 @@ fn mjpeg_idct_put(
   block : Array[Int32],
   x : Int32,
   y : Int32,
+  bits : Int32,
 ) -> Unit {
   let tmp : Array[Int32] = []
   for _ in 0..<64 {
     tmp.push(0)
   }
-  ff_simple_idct_put_int16_8bit(tmp, 8, block)
+  if bits == 12 {
+    ff_simple_idct_put_int16_12bit(tmp, 8, block)
+  } else if bits == 10 {
+    ff_simple_idct_put_int16_10bit(tmp, 8, block)
+  } else {
+    ff_simple_idct_put_int16_8bit(tmp, 8, block)
+  }
   for r in 0..<8 {
     for c in 0..<8 {
       dest[(y + r) * stride + x + c] = tmp[r * 8 + c]
@@ -282,6 +289,8 @@ priv struct JpegComponent {
   tq : Int32
   mut dc_table : Int32
   mut ac_table : Int32
+  /// Initial DC predictor (`4 << bits`), also used at restart markers.
+  dc_init : Int32
   mut dc_pred : Int32
   /// Uncropped component dimensions in 8x8 blocks.
   mut blocks_w : Int32
@@ -436,9 +445,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
       }
       let precision = seg[0].to_int()
       lossless = marker == 0xC3
-      if precision != 8 &&
-        precision != 9 &&
-        !(lossless && precision >= 10 && precision <= 16) {
+      if precision < 8 || precision > 16 {
         return Err("PATCHWELCOME: mjpeg sample precision")
       }
       height = jpeg_be16(seg, 1)
@@ -476,7 +483,8 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
           tq: seg[base + 2].to_int(),
           dc_table: 0,
           ac_table: 0,
-          dc_pred: 4 << 8,
+          dc_init: 4 << precision,
+          dc_pred: 4 << precision,
           blocks_w: 0,
           blocks_h: 0,
           coeffs: [],
@@ -493,11 +501,18 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         adobe_transform = 0
       }
       rgb_mode = lossless && ncomp == 3 && max_h == 1 && max_v == 1
-      // Lossless 9-bit RGB packs to BGR24; single-component lossless keeps
-      // 10..16-bit precision and finalizes to gray16le (MSB-aligned).
-      if precision != 8 &&
-        !(lossless &&
-        (rgb_mode || (ncomp == 1 && precision >= 10 && precision <= 16))) {
+      // Lossless 9-bit RGB packs to BGR24. Single-component images keep
+      // 10/12-bit baseline/progressive or 10..16-bit lossless precision and
+      // finalize to gray16le (MSB-aligned).
+      let hbd_gray = ncomp == 1 &&
+        max_h == 1 &&
+        max_v == 1 &&
+        (if lossless {
+          precision >= 10 && precision <= 16
+        } else {
+          precision == 10 || precision == 12
+        })
+      if precision != 8 && !(rgb_mode || hbd_gray) {
         return Err("PATCHWELCOME: mjpeg sample precision")
       }
       sample_bits = precision
@@ -634,7 +649,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
     }
   } else {
     mjpeg_finalize_image(
-      components, width, height, max_h, max_v, adobe_transform,
+      components, width, height, max_h, max_v, adobe_transform, sample_bits,
     )
   }
 }

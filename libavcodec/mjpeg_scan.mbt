@@ -109,7 +109,7 @@ fn mjpeg_decode_scan_sequential(
           index < total {
           je_restart(bits)
           for c in components {
-            c.dc_pred = 4 << 8
+            c.dc_pred = c.dc_init
           }
         }
       }
@@ -163,7 +163,7 @@ fn mjpeg_decode_scan_sequential(
         mcu_index < total {
         je_restart(bits)
         for c in components {
-          c.dc_pred = 4 << 8
+          c.dc_pred = c.dc_init
         }
       }
     }
@@ -477,7 +477,7 @@ fn mjpeg_decode_scan_progressive(
           je_restart(bits)
           eobrun.val = 0
           for c in components {
-            c.dc_pred = 4 << 8
+            c.dc_pred = c.dc_init
           }
         }
       }
@@ -518,7 +518,7 @@ fn mjpeg_decode_scan_progressive(
           je_restart(bits)
           eobrun.val = 0
           for c in components {
-            c.dc_pred = 4 << 8
+            c.dc_pred = c.dc_init
           }
         }
       }
@@ -566,6 +566,7 @@ fn mjpeg_finalize_image(
   max_h : Int32,
   max_v : Int32,
   adobe_transform : Int32,
+  bits : Int32,
 ) -> Result[JpegImage, String] {
   let out_planes : Array[Bytes] = []
   let plane_arrays : Array[Array[Byte]] = []
@@ -586,7 +587,7 @@ fn mjpeg_finalize_image(
         for i in 0..<64 {
           block.push(comp.coeffs[base + i])
         }
-        mjpeg_idct_put(plane, stride, block, bx * 8, by * 8)
+        mjpeg_idct_put(plane, stride, block, bx * 8, by * 8, bits)
       }
     }
     let pw = (width * comp.h + max_h - 1) / max_h
@@ -596,7 +597,14 @@ fn mjpeg_finalize_image(
     let out : Array[Byte] = []
     for y in 0..<phv {
       for x in 0..<pw {
-        out.push(plane[y * stride + x].to_byte())
+        let v = plane[y * stride + x]
+        if bits > 8 {
+          let wide = (v << (16 - bits)) & 0xFFFF
+          out.push((wide & 0xFF).to_byte())
+          out.push(((wide >> 8) & 0xFF).to_byte())
+        } else {
+          out.push(v.to_byte())
+        }
       }
     }
     out_planes.push(Bytes::from_array(out[:]))
@@ -698,7 +706,11 @@ fn mjpeg_finalize_image(
     })
   }
   let pix_fmt = if components.length() == 1 {
-    "gray"
+    if bits > 8 {
+      "gray16le"
+    } else {
+      "gray"
+    }
   } else if plane_widths[1] >= width && plane_heights[1] >= height {
     "yuvj444p"
   } else if plane_heights[1] >= height {
