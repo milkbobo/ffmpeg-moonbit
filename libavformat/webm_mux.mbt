@@ -13,6 +13,7 @@ pub struct WebmOpusMuxer {
   pre_skip : Int32
   input_sample_rate : Int32
   doctype : String
+  language : String
   packets : Array[Bytes]
   durations : Array[Int32]
 }
@@ -23,6 +24,7 @@ pub fn webm_opus_muxer_new(
   pre_skip~ : Int32 = 0,
   input_sample_rate~ : Int32 = 48000,
   doctype~ : String = "webm",
+  language~ : String = "und",
 ) -> Result[WebmOpusMuxer, String] {
   if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 {
     return Err("EINVAL: invalid WebM/Opus stream parameters")
@@ -35,6 +37,11 @@ pub fn webm_opus_muxer_new(
     pre_skip,
     input_sample_rate,
     doctype,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
     packets: [],
     durations: [],
   })
@@ -229,6 +236,7 @@ pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
   webm_uint_elem(track, 0xD7, 1, 1UL) // TrackNumber
   webm_uint_elem(track, 0x73C5, 2, 1UL) // TrackUID
   webm_uint_elem(track, 0x83, 1, 2UL) // TrackType audio
+  webm_string_elem(track, 0x22B59C, 3, self.language)
   webm_string_elem(track, 0x86, 1, "A_OPUS")
   let head_body : Array[Byte] = []
   for b in self.opus_head() {

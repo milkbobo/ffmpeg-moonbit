@@ -12,6 +12,7 @@ pub struct WebmVp9Muxer {
   width : Int32
   height : Int32
   doctype : String
+  language : String
   packets : Array[Bytes]
   durations : Array[Int32]
   keyframes : Array[Bool]
@@ -22,6 +23,7 @@ pub fn webm_vp9_muxer_new(
   width : Int32,
   height : Int32,
   doctype~ : String = "webm",
+  language~ : String = "und",
 ) -> Result[WebmVp9Muxer, String] {
   if width <= 0 || height <= 0 {
     return Err("EINVAL: invalid WebM/VP9 dimensions")
@@ -29,7 +31,19 @@ pub fn webm_vp9_muxer_new(
   if doctype != "webm" && doctype != "matroska" {
     return Err("EINVAL: DocType must be webm or matroska")
   }
-  Ok({ width, height, doctype, packets: [], durations: [], keyframes: [], })
+  Ok({
+    width,
+    height,
+    doctype,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
+    packets: [],
+    durations: [],
+    keyframes: [],
+  })
 }
 
 ///|
@@ -105,6 +119,7 @@ pub fn WebmVp9Muxer::finish(self : WebmVp9Muxer) -> Bytes {
   webm_uint_elem(track, 0xD7, 1, 1UL)
   webm_uint_elem(track, 0x73C5, 2, 1UL)
   webm_uint_elem(track, 0x83, 1, 1UL) // video
+  webm_string_elem(track, 0x22B59C, 3, self.language)
   webm_string_elem(track, 0x86, 1, "V_VP9")
   webm_elem(track, 0xE0, 1, video)
   webm_elem(track, 0xEC, 1, [])

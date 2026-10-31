@@ -6379,3 +6379,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 不支持：需要色度上采样的 4:2:2/4:1:1 变体、4 分量 >8-bit、
   Adobe RGB（transform 0）10/12-bit。
 - 全量 wasm **1331/1331**。
+
+## 262. 单轨 Matroska/WebM 轨道语言
+
+- `webm_vp9_muxer_new`、`webm_av1_muxer_new`、`webm_opus_muxer_new`、
+  `mkv_h264_muxer_new`、`mkv_hevc_muxer_new` 新增
+  `language~ : String = "und"`（空串回落 und），TrackEntry 在
+  TrackType 后写 Language(0x22B59C)。
+- 回归：VP9/AV1/Opus/H.264/HEVC 单轨分别写 spa/fra/deu/jpn/ita 后
+  `av_matroska_open` 回读正确；未指定时为 "und"。
+- 全量 wasm **1336/1336**。

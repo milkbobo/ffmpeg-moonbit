@@ -10,6 +10,7 @@ pub struct MkvH264Muxer {
   width : Int32
   height : Int32
   avcc : Bytes
+  language : String
   packets : Array[Bytes]
   durations : Array[Int32]
   keyframes : Array[Bool]
@@ -22,6 +23,7 @@ pub fn mkv_h264_muxer_new(
   width : Int32,
   height : Int32,
   avcc : Bytes,
+  language~ : String = "und",
 ) -> Result[MkvH264Muxer, String] {
   if width <= 0 || height <= 0 || avcc.length() < 7 {
     return Err("EINVAL: invalid MKV/H.264 parameters")
@@ -30,6 +32,11 @@ pub fn mkv_h264_muxer_new(
     width,
     height,
     avcc,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
     packets: [],
     durations: [],
     keyframes: [],
@@ -113,6 +120,7 @@ pub fn MkvH264Muxer::finish(self : MkvH264Muxer) -> Bytes {
   webm_uint_elem(track, 0xD7, 1, 1UL)
   webm_uint_elem(track, 0x73C5, 2, 1UL)
   webm_uint_elem(track, 0x83, 1, 1UL) // video
+  webm_string_elem(track, 0x22B59C, 3, self.language)
   webm_string_elem(track, 0x86, 1, "V_MPEG4/ISO/AVC")
   let avcc_body : Array[Byte] = []
   for b in self.avcc {

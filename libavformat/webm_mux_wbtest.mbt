@@ -78,3 +78,12 @@ test "webm muxer: invalid DocType is rejected (Opus)" {
     Err(_) => ()
   }
 }
+
+///|
+test "webm muxer: Opus track language" {
+  let packet = @libavutil.av_base64_decode(webm_opus_packet_b64, 10000).unwrap()
+  let mux = webm_opus_muxer_new(channels=1, language="deu").unwrap()
+  mux.write_packet(packet).unwrap()
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.tracks[0].language, "deu")
+}

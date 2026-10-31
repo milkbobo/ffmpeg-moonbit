@@ -13,6 +13,7 @@ pub struct WebmAv1Muxer {
   height : Int32
   doctype : String
   av1c : Bytes
+  language : String
   packets : Array[Bytes]
   durations : Array[Int32]
   keyframes : Array[Bool]
@@ -24,6 +25,7 @@ pub fn webm_av1_muxer_new(
   height : Int32,
   av1c : Bytes,
   doctype~ : String = "webm",
+  language~ : String = "und",
 ) -> Result[WebmAv1Muxer, String] {
   if width <= 0 || height <= 0 || av1c.length() < 4 {
     return Err("EINVAL: invalid WebM/AV1 parameters")
@@ -36,6 +38,11 @@ pub fn webm_av1_muxer_new(
     height,
     doctype,
     av1c,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
     packets: [],
     durations: [],
     keyframes: [],
@@ -115,6 +122,7 @@ pub fn WebmAv1Muxer::finish(self : WebmAv1Muxer) -> Bytes {
   webm_uint_elem(track, 0xD7, 1, 1UL)
   webm_uint_elem(track, 0x73C5, 2, 1UL)
   webm_uint_elem(track, 0x83, 1, 1UL) // video
+  webm_string_elem(track, 0x22B59C, 3, self.language)
   webm_string_elem(track, 0x86, 1, "V_AV1")
   let av1c_body : Array[Byte] = []
   for b in self.av1c {

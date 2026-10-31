@@ -71,3 +71,14 @@ test "webm muxer: invalid DocType is rejected (VP9)" {
     Err(_) => ()
   }
 }
+
+///|
+test "webm muxer: VP9 track language" {
+  let mux = webm_vp9_muxer_new(64, 48, language="spa").unwrap()
+  mux.write_packet(b"\x82\x00\x01", duration=33, keyframe=true).unwrap()
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.tracks[0].language, "spa")
+  let plain = webm_vp9_muxer_new(64, 48).unwrap()
+  plain.write_packet(b"\x82\x00\x01", duration=33, keyframe=true).unwrap()
+  assert_eq(av_matroska_open(plain.finish()).unwrap().tracks[0].language, "und")
+}

@@ -70,3 +70,12 @@ test "mkv muxer: real H.264 samples decode round-trip" {
     assert_eq(fmp4_h264_md5(frames[i]), fmp4_h264_refs[i])
   }
 }
+
+///|
+test "mkv muxer: H.264 track language" {
+  let avcc = @libavutil.av_base64_decode(mkv_h264_avcc_b64, 1024).unwrap()
+  let mux = mkv_h264_muxer_new(64, 48, avcc, language="jpn").unwrap()
+  mux.write_packet(b"\x00\x00\x01\x02", duration=33, keyframe=true).unwrap()
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.tracks[0].language, "jpn")
+}

@@ -154,3 +154,12 @@ test "mkv muxer: HEVC hvcC and decode round-trip" {
     }
   }
 }
+
+///|
+test "mkv muxer: HEVC track language" {
+  let hvcc = @libavutil.av_base64_decode(mkv_hevc_hvcc_b64, 1024).unwrap()
+  let mux = mkv_hevc_muxer_new(64, 48, hvcc, language="ita").unwrap()
+  mux.write_packet(b"\x00\x00\x01\x02", duration=33, keyframe=true).unwrap()
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.tracks[0].language, "ita")
+}

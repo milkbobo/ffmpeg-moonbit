@@ -84,3 +84,11 @@ test "webm muxer: real AV1 samples decode round-trip" {
     assert_eq(mp4_av1_real_md5(frame.packed()), mp4_av1_real_refs[i])
   }
 }
+
+///|
+test "webm muxer: AV1 track language" {
+  let mux = webm_av1_muxer_new(64, 48, b"\x81\x08\x4c\x00", language="fra").unwrap()
+  mux.write_packet(b"\x0A\x00", duration=33, keyframe=true).unwrap()
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.tracks[0].language, "fra")
+}
