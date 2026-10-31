@@ -35,7 +35,7 @@ test "mkv: ALAC read and write round-trip" {
   }
   assert_eq(packets.length(), 6)
   assert_eq(mkv_alac_md5(Bytes::from_array(pcm)), want_md5)
-  let mux = mkv_alac_muxer_new(cookie).unwrap()
+  let mux = mkv_alac_muxer_new(cookie, language="deu").unwrap()
   let mut pts = 0L
   for p in src.packets {
     if p.stream_index == 0 {
@@ -49,6 +49,7 @@ test "mkv: ALAC read and write round-trip" {
   assert_eq(mkv.tracks.length(), 1)
   assert_eq(mkv.tracks[0].codec_id.unwrap(), "A_ALAC")
   assert_eq(mkv.tracks[0].codec_priv.unwrap(), cookie)
+  assert_eq(mkv.tracks[0].language, "deu")
   assert_eq(mkv.packets.length(), 6)
   for i, p in mkv.packets {
     assert_eq(p.data, packets[i])

@@ -6389,3 +6389,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：VP9/AV1/Opus/H.264/HEVC 单轨分别写 spa/fra/deu/jpn/ita 后
   `av_matroska_open` 回读正确；未指定时为 "und"。
 - 全量 wasm **1336/1336**。
+
+## 263. MKV 音频单轨轨道语言
+
+- `mkv_audio_document` 增加 `language` 参数；`mkv_aac_muxer_new`、
+  `mkv_flac_muxer_new`、`mkv_ac3_muxer_new`/`mkv_eac3_muxer_new`/
+  `mkv_mp3_muxer_new` 与 `mkv_alac_muxer_new` 新增
+  `language~ : String = "und"`，TrackEntry 写 Language(0x22B59C)。
+- 回归：AAC/FLAC/ALAC 既有回读测试分别用 eng/fra/deu 并断言
+  `track.language`（AC-3/E-AC-3/MP3 走同一 document 路径）。
+- 全量 wasm **1336/1336**。

@@ -14,6 +14,7 @@ test "mkv muxer: AAC-only track round-trip" {
     channels=audio.audio.channels.to_int(),
     asc=Some(asc),
     codec_delay_ns=audio.codec_delay,
+    language="eng",
   ).unwrap()
   let mut count = 0
   let src_packets : Array[Bytes] = []
@@ -33,6 +34,7 @@ test "mkv muxer: AAC-only track round-trip" {
   let track = mkv.tracks[0]
   assert_eq(track.codec_id.unwrap(), "A_AAC")
   assert_eq(track.codec_priv.unwrap(), asc)
+  assert_eq(track.language, "eng")
   assert_eq(track.audio.channels, 1UL)
   assert_eq(mkv.packets.length(), 45)
   assert_eq(mkv.packets[0].pts, -23L)
@@ -55,7 +57,11 @@ test "mkv muxer: AAC-only track round-trip" {
 test "mkv muxer: FLAC-only track round-trip and decode" {
   let ogg = @libavutil.av_base64_decode(ogg_flac_b64, 1000000).unwrap()
   let src = av_ogg_flac_open(ogg).unwrap()
-  let mux = mkv_flac_muxer_new(src.streaminfo, headers=src.headers).unwrap()
+  let mux = mkv_flac_muxer_new(
+    src.streaminfo,
+    headers=src.headers,
+    language="fra",
+  ).unwrap()
   for i, frame in src.frames {
     mux.write_packet(frame.data, i.to_int64() * 20L, 20).unwrap()
   }
@@ -64,6 +70,7 @@ test "mkv muxer: FLAC-only track round-trip and decode" {
   assert_eq(mkv.tracks.length(), 1)
   let track = mkv.tracks[0]
   assert_eq(track.codec_id.unwrap(), "A_FLAC")
+  assert_eq(track.language, "fra")
   assert_eq(track.audio.channels, 1UL)
   assert_eq(track.audio.bitdepth, 24UL)
   assert_eq(mkv.packets.length(), 9)

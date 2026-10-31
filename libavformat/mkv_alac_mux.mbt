@@ -10,11 +10,15 @@ pub struct MkvAlacMuxer {
   sample_rate : Int32
   channels : Int32
   bits : Int32
+  language : String
   events : Array[MkvAudioEvent]
 }
 
 ///|
-pub fn mkv_alac_muxer_new(cookie : Bytes) -> Result[MkvAlacMuxer, String] {
+pub fn mkv_alac_muxer_new(
+  cookie : Bytes,
+  language~ : String = "und",
+) -> Result[MkvAlacMuxer, String] {
   if cookie.length() < 36 ||
     cookie[4] != b'a' ||
     cookie[5] != b'l' ||
@@ -28,7 +32,18 @@ pub fn mkv_alac_muxer_new(cookie : Bytes) -> Result[MkvAlacMuxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 8 {
     return Err("EINVAL: invalid Matroska ALAC parameters")
   }
-  Ok({ cookie, sample_rate, channels, bits, events: [], })
+  Ok({
+    cookie,
+    sample_rate,
+    channels,
+    bits,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
+    events: [],
+  })
 }
 
 ///|
@@ -62,5 +77,6 @@ pub fn MkvAlacMuxer::finish(self : MkvAlacMuxer) -> Bytes {
     self.cookie[12:36].to_owned(),
     audio,
     self.events,
+    language=self.language,
   )
 }

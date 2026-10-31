@@ -54,6 +54,7 @@ fn mkv_audio_document(
   audio_body : Array[Byte],
   events : Array[MkvAudioEvent],
   codec_delay~ : UInt64 = 0UL,
+  language~ : String = "und",
 ) -> Bytes {
   let header_body : Array[Byte] = []
   webm_uint_elem(header_body, 0x4286, 2, 1UL)
@@ -83,6 +84,7 @@ fn mkv_audio_document(
   webm_uint_elem(track, 0xD7, 1, 1UL)
   webm_uint_elem(track, 0x73C5, 2, 1UL)
   webm_uint_elem(track, 0x83, 1, 2UL) // audio
+  webm_string_elem(track, 0x22B59C, 3, language)
   webm_string_elem(track, 0x86, 1, codec_id)
   if codec_private.length() > 0 {
     let private_body : Array[Byte] = []
@@ -125,6 +127,7 @@ pub struct MkvAacMuxer {
   channels : Int32
   asc : Bytes
   codec_delay : UInt64
+  language : String
   events : Array[MkvAudioEvent]
 }
 
@@ -134,6 +137,7 @@ pub fn mkv_aac_muxer_new(
   channels~ : Int32 = 2,
   asc~ : Bytes? = None,
   codec_delay_ns~ : UInt64 = 0UL,
+  language~ : String = "und",
 ) -> Result[MkvAacMuxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 7 {
     return Err("EINVAL: invalid MKV/AAC stream parameters")
@@ -152,6 +156,11 @@ pub fn mkv_aac_muxer_new(
     channels,
     asc: asc_bytes,
     codec_delay: codec_delay_ns,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
     events: [],
   })
 }
@@ -186,6 +195,7 @@ pub fn MkvAacMuxer::finish(self : MkvAacMuxer) -> Bytes {
     audio,
     self.events,
     codec_delay=self.codec_delay,
+    language=self.language,
   )
 }
 
@@ -198,6 +208,7 @@ pub struct MkvFlacMuxer {
   sample_rate : Int32
   channels : Int32
   bits : Int32
+  language : String
   events : Array[MkvAudioEvent]
 }
 
@@ -205,6 +216,7 @@ pub struct MkvFlacMuxer {
 pub fn mkv_flac_muxer_new(
   streaminfo : Bytes,
   headers~ : Array[Bytes] = [],
+  language~ : String = "und",
 ) -> Result[MkvFlacMuxer, String] {
   if streaminfo.length() != 34 {
     return Err("EINVAL: invalid FLAC STREAMINFO")
@@ -220,7 +232,19 @@ pub fn mkv_flac_muxer_new(
       return Err("EINVAL: invalid FLAC metadata block")
     }
   }
-  Ok({ streaminfo, headers, sample_rate, channels, bits, events: [], })
+  Ok({
+    streaminfo,
+    headers,
+    sample_rate,
+    channels,
+    bits,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
+    events: [],
+  })
 }
 
 ///|
@@ -269,7 +293,13 @@ pub fn MkvFlacMuxer::finish(self : MkvFlacMuxer) -> Bytes {
     self.channels.reinterpret_as_uint().to_uint64(),
   )
   webm_uint_elem(audio, 0x6264, 2, self.bits.reinterpret_as_uint().to_uint64())
-  mkv_audio_document("A_FLAC", self.codec_private(), audio, self.events)
+  mkv_audio_document(
+    "A_FLAC",
+    self.codec_private(),
+    audio,
+    self.events,
+    language=self.language,
+  )
 }
 
 ///|
@@ -279,6 +309,7 @@ pub struct MkvAc3Muxer {
   codec_id : String
   sample_rate : Int32
   channels : Int32
+  language : String
   events : Array[MkvAudioEvent]
 }
 
@@ -286,22 +317,44 @@ pub struct MkvAc3Muxer {
 pub fn mkv_ac3_muxer_new(
   sample_rate : Int32,
   channels : Int32,
+  language~ : String = "und",
 ) -> Result[MkvAc3Muxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 6 {
     return Err("EINVAL: invalid MKV/AC-3 stream parameters")
   }
-  Ok({ codec_id: "A_AC3", sample_rate, channels, events: [], })
+  Ok({
+    codec_id: "A_AC3",
+    sample_rate,
+    channels,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
+    events: [],
+  })
 }
 
 ///|
 pub fn mkv_eac3_muxer_new(
   sample_rate : Int32,
   channels : Int32,
+  language~ : String = "und",
 ) -> Result[MkvAc3Muxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 6 {
     return Err("EINVAL: invalid MKV/E-AC-3 stream parameters")
   }
-  Ok({ codec_id: "A_EAC3", sample_rate, channels, events: [], })
+  Ok({
+    codec_id: "A_EAC3",
+    sample_rate,
+    channels,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
+    events: [],
+  })
 }
 
 ///|
@@ -310,11 +363,22 @@ pub fn mkv_eac3_muxer_new(
 pub fn mkv_mp3_muxer_new(
   sample_rate : Int32,
   channels : Int32,
+  language~ : String = "und",
 ) -> Result[MkvAc3Muxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 2 {
     return Err("EINVAL: invalid MKV/MP3 stream parameters")
   }
-  Ok({ codec_id: "A_MPEG/L3", sample_rate, channels, events: [], })
+  Ok({
+    codec_id: "A_MPEG/L3",
+    sample_rate,
+    channels,
+    language: if language == "" {
+      "und"
+    } else {
+      language
+    },
+    events: [],
+  })
 }
 
 ///|
@@ -341,5 +405,11 @@ pub fn MkvAc3Muxer::finish(self : MkvAc3Muxer) -> Bytes {
     1,
     self.channels.reinterpret_as_uint().to_uint64(),
   )
-  mkv_audio_document(self.codec_id, b"", audio, self.events)
+  mkv_audio_document(
+    self.codec_id,
+    b"",
+    audio,
+    self.events,
+    language=self.language,
+  )
 }
