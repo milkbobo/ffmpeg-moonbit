@@ -5937,3 +5937,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   AAC PCM 92160 字节一致，`-c copy -f framecrc` 逐包相同。
 - 覆盖 PES 完成顺序与文件顺序不同的情况：测试按 PID 分组比较。
 - 全量 wasm **1291/1291**。
+
+## 230. WebM SeekHead/Cues 写入
+
+- 新增共享 `matroska_index_mux.mbt`：固定 8 字节 SeekPosition 的
+  SeekHead（Info/Tracks/Cues）与单簇 Cues（每个视频关键帧一条
+  CuePoint，CueClusterPosition 指向 Cluster 元素）。
+- 接入 WebM VP9/AV1 单轨、VP9+Opus 双轨写入器（音频轨不进 Cues）；
+  Opus 单轨写入 SeekHead（无 Cues）。
+- 回归 `webm_cues_wbtest.mbt`：CueTime 0/200（A/V 0/200），
+  CueClusterPosition 与文件内实际 Cluster 偏移一致，
+  `mkv_seek_cue` 返回正确条目。
+- 外部验证：真实 libvpx VP9 WebM 经重封装后 ffmpeg 全片 framemd5
+  5/5 与源一致，`-ss 0.4` 输出的帧哈希与源相同。
+- 全量 wasm **1293/1293**。

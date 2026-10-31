@@ -113,10 +113,30 @@ pub fn WebmVp9Muxer::finish(self : WebmVp9Muxer) -> Bytes {
   webm_elem(tracks, 0xAE, 1, track)
   webm_elem(tracks, 0xEC, 1, [])
 
+  let info_elem : Array[Byte] = []
+  webm_elem(info_elem, 0x1549A966, 4, info)
+  let tracks_elem : Array[Byte] = []
+  webm_elem(tracks_elem, 0x1654AE6B, 4, tracks)
+  let cluster_body = self.cluster()
+  let cluster_elem : Array[Byte] = []
+  webm_elem(cluster_elem, 0x1F43B675, 4, cluster_body)
+  let key_times : Array[Int64] = []
+  let mut key_ms = 0L
+  for i in 0..<self.packets.length() {
+    if self.keyframes[i] {
+      key_times.push(key_ms)
+    }
+    key_ms = key_ms + self.durations[i].to_int64()
+  }
+  let (seekhead, cues) = mkv_seekhead_cues(
+    info_elem, tracks_elem, cluster_elem, key_times,
+  )
   let segment_body : Array[Byte] = []
-  webm_elem(segment_body, 0x1549A966, 4, info)
-  webm_elem(segment_body, 0x1654AE6B, 4, tracks)
-  webm_elem(segment_body, 0x1F43B675, 4, self.cluster())
+  for part in [seekhead, info_elem, tracks_elem, cluster_elem, cues] {
+    for b in part {
+      segment_body.push(b)
+    }
+  }
   let segment : Array[Byte] = []
   webm_elem(segment, 0x18538067, 4, segment_body)
   let out : Array[Byte] = []
