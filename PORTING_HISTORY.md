@@ -6013,7 +6013,8 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 标签顺序对齐 FFmpeg：`#EXT-X-DISCONTINUITY`/`#EXT-X-GAP` 在
   `#EXTINF` 前，`#EXT-X-PROGRAM-DATE-TIME` 在 EXTINF/BYTERANGE 之后、
   URI 之前（hlsplaylist.c `ff_hls_write_file_entry`）；
-  `#EXT-X-DISCONTINUITY-SEQUENCE` 紧跟 VERSION（hlsenc 播放列表头）。
+  `#EXT-X-DISCONTINUITY-SEQUENCE` 紧跟 VERSION、位于首个分段之前
+  （按 RFC 8216；ffmpeg 9.0.2 hlsenc 实际不写该标签，属本移植扩展）。
 - 回归：写出文本的标签顺序 + `av_hls_parse` 回读
   `discontinuity`/`gap`/`program_date_time`/`discontinuity_sequence`；
   无标签分段不产生多余行。
@@ -6021,3 +6022,22 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   确认 PDT 位于 EXTINF 之后；该版本 HLS demuxer 源码不解析
   DISCONTINUITY/GAP/PDT，故标签语义以本项目解析器回读为准。
 - 全量 wasm **1301/1301**。
+
+## 236. HLS 播放列表头标签
+
+- 媒体播放列表写入器新增 `allow_cache`（0/1 写
+  `#EXT-X-ALLOW-CACHE:NO/YES`，其余省略）、`playlist_type`（非空时
+  原样写 `#EXT-X-PLAYLIST-TYPE`，如 VOD/EVENT）、`i_frames_only`
+  （`#EXT-X-I-FRAMES-ONLY`）与 `independent_segments`
+  （`#EXT-X-INDEPENDENT-SEGMENTS`）；三个公开写入器均透传。
+- 顺序对齐 hlsplaylist.c：VERSION → ALLOW-CACHE → TARGETDURATION →
+  MEDIA-SEQUENCE → PLAYLIST-TYPE → I-FRAMES-ONLY；hlsenc 在头部之后、
+  分段之前写 INDEPENDENT-SEGMENTS。
+- 回归：标签文本与顺序、`av_hls_parse` 回读 `playlist_type`/
+  `i_frames_only`/`independent_segments`、默认值不产生任何头标签。
+- 外部验证：ffmpeg 9.0.2 hlsenc
+  `-hls_playlist_type vod -hls_flags independent_segments -hls_allow_cache 0`
+  生成的播放列表顺序与本写入器一致；用 ffmpeg 生成的真实 TS 分片，
+  本写入器输出的播放列表经 ffmpeg 解码 framemd5 与 ffmpeg 自身播放
+  列表完全相同。
+- 全量 wasm **1302/1302**。

@@ -58,6 +58,10 @@ fn hls_write_media_playlist_impl(
   media_sequence : Int64,
   discontinuity_sequence : Int64,
   version : Int32,
+  allow_cache : Int32,
+  playlist_type : String,
+  i_frames_only : Bool,
+  independent_segments : Bool,
   endlist : Bool,
   map_uri : String?,
   map_byterange : HlsByteRange?,
@@ -83,11 +87,25 @@ fn hls_write_media_playlist_impl(
   let sb = StringBuilder()
   sb.write_string("#EXTM3U\n")
   sb.write_string("#EXT-X-VERSION:\{version}\n")
+  if allow_cache == 0 {
+    sb.write_string("#EXT-X-ALLOW-CACHE:NO\n")
+  } else if allow_cache == 1 {
+    sb.write_string("#EXT-X-ALLOW-CACHE:YES\n")
+  }
   if discontinuity_sequence != 0L {
     sb.write_string("#EXT-X-DISCONTINUITY-SEQUENCE:\{discontinuity_sequence}\n")
   }
   sb.write_string("#EXT-X-TARGETDURATION:\{target}\n")
   sb.write_string("#EXT-X-MEDIA-SEQUENCE:\{media_sequence}\n")
+  if playlist_type != "" {
+    sb.write_string("#EXT-X-PLAYLIST-TYPE:" + playlist_type + "\n")
+  }
+  if i_frames_only {
+    sb.write_string("#EXT-X-I-FRAMES-ONLY\n")
+  }
+  if independent_segments {
+    sb.write_string("#EXT-X-INDEPENDENT-SEGMENTS\n")
+  }
   match key_uri {
     Some(uri) => {
       sb.write_string("#EXT-X-KEY:METHOD=AES-128,URI=\"" + uri + "\"")
@@ -155,6 +173,10 @@ pub fn hls_write_media_playlist(
   target_duration~ : Int32 = 0,
   media_sequence~ : Int64 = 0L,
   version~ : Int32 = 3,
+  allow_cache~ : Int32 = -1,
+  playlist_type~ : String = "",
+  i_frames_only~ : Bool = false,
+  independent_segments~ : Bool = false,
   endlist~ : Bool = true,
   map_uri~ : String? = None,
   key_uri~ : String? = None,
@@ -170,6 +192,10 @@ pub fn hls_write_media_playlist(
     media_sequence,
     0L,
     version,
+    allow_cache,
+    playlist_type,
+    i_frames_only,
+    independent_segments,
     endlist,
     map_uri,
     None,
@@ -182,12 +208,18 @@ pub fn hls_write_media_playlist(
 /// Write a VOD media playlist from full segment specs. `EXT-X-BYTERANGE` is
 /// emitted for entries that carry a range, and each entry may add
 /// `EXT-X-DISCONTINUITY`, `EXT-X-GAP` and `EXT-X-PROGRAM-DATE-TIME`.
+/// `allow_cache` 0/1 write `EXT-X-ALLOW-CACHE:NO/YES`, other values omit it;
+/// `playlist_type` is written verbatim ("VOD"/"EVENT") when non-empty.
 pub fn hls_write_media_playlist_specs(
   segments : ArrayView[HlsMediaSegmentSpec],
   target_duration~ : Int32 = 0,
   media_sequence~ : Int64 = 0L,
   discontinuity_sequence~ : Int64 = 0L,
   version~ : Int32 = 3,
+  allow_cache~ : Int32 = -1,
+  playlist_type~ : String = "",
+  i_frames_only~ : Bool = false,
+  independent_segments~ : Bool = false,
   endlist~ : Bool = true,
   map_uri~ : String? = None,
   map_byterange~ : HlsByteRange? = None,
@@ -195,8 +227,9 @@ pub fn hls_write_media_playlist_specs(
   key_iv~ : Bytes? = None,
 ) -> String {
   hls_write_media_playlist_impl(
-    segments, target_duration, media_sequence, discontinuity_sequence, version, endlist,
-    map_uri, map_byterange, key_uri, key_iv,
+    segments, target_duration, media_sequence, discontinuity_sequence, version, allow_cache,
+    playlist_type, i_frames_only, independent_segments, endlist, map_uri, map_byterange,
+    key_uri, key_iv,
   )
 }
 
@@ -210,6 +243,10 @@ pub fn hls_write_media_playlist_byterange(
   media_sequence~ : Int64 = 0L,
   discontinuity_sequence~ : Int64 = 0L,
   version~ : Int32 = 4,
+  allow_cache~ : Int32 = -1,
+  playlist_type~ : String = "",
+  i_frames_only~ : Bool = false,
+  independent_segments~ : Bool = false,
   endlist~ : Bool = true,
   map_uri~ : String? = None,
   map_byterange~ : HlsByteRange? = None,
@@ -222,6 +259,10 @@ pub fn hls_write_media_playlist_byterange(
     media_sequence~,
     discontinuity_sequence~,
     version=if version < 4 { 4 } else { version },
+    allow_cache~,
+    playlist_type~,
+    i_frames_only~,
+    independent_segments~,
     endlist~,
     map_uri~,
     map_byterange~,

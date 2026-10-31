@@ -154,6 +154,45 @@ test "hls muxer: EXT-X-KEY carries the AES-128 URI and IV" {
 }
 
 ///|
+test "hls muxer: header tags (playlist type, cache, iframe, independent)" {
+  let text = hls_write_media_playlist(
+    [("seg0.ts", 2.0)],
+    allow_cache=0,
+    playlist_type="VOD",
+    i_frames_only=true,
+    independent_segments=true,
+  )
+  assert_true(text.contains("#EXT-X-ALLOW-CACHE:NO\n"))
+  assert_true(text.contains("#EXT-X-PLAYLIST-TYPE:VOD\n"))
+  assert_true(text.contains("#EXT-X-I-FRAMES-ONLY\n"))
+  assert_true(text.contains("#EXT-X-INDEPENDENT-SEGMENTS\n"))
+  // hlsplaylist.c order: allow-cache before target duration; playlist type
+  // after the media sequence, then I-FRAMES-ONLY. hlsenc emits
+  // INDEPENDENT-SEGMENTS after the header, before any segment.
+  let ver = text.find("#EXT-X-VERSION:").unwrap()
+  let cache = text.find("#EXT-X-ALLOW-CACHE:").unwrap()
+  let target = text.find("#EXT-X-TARGETDURATION:").unwrap()
+  let seq = text.find("#EXT-X-MEDIA-SEQUENCE:").unwrap()
+  let ptype = text.find("#EXT-X-PLAYLIST-TYPE:").unwrap()
+  let iframe = text.find("#EXT-X-I-FRAMES-ONLY").unwrap()
+  let indep = text.find("#EXT-X-INDEPENDENT-SEGMENTS").unwrap()
+  assert_true(ver < cache && cache < target && target < seq)
+  assert_true(seq < ptype && ptype < iframe && iframe < indep)
+  let playlist = av_hls_parse(text).unwrap()
+  assert_eq(playlist.playlist_type, "VOD")
+  assert_true(playlist.i_frames_only)
+  assert_true(playlist.independent_segments)
+  // Defaults omit every header tag; allow_cache=1 flips the value.
+  let plain = hls_write_media_playlist([("seg0.ts", 2.0)])
+  assert_false(plain.contains("#EXT-X-ALLOW-CACHE"))
+  assert_false(plain.contains("#EXT-X-PLAYLIST-TYPE"))
+  assert_false(plain.contains("#EXT-X-I-FRAMES-ONLY"))
+  assert_false(plain.contains("#EXT-X-INDEPENDENT-SEGMENTS"))
+  let yes = hls_write_media_playlist([("seg0.ts", 2.0)], allow_cache=1)
+  assert_true(yes.contains("#EXT-X-ALLOW-CACHE:YES\n"))
+}
+
+///|
 test "hls muxer: discontinuity, gap and program date-time round-trip" {
   let segments : Array[HlsMediaSegmentSpec] = [
     HlsMediaSegmentSpec::new(
