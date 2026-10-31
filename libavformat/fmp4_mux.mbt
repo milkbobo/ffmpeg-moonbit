@@ -113,6 +113,7 @@ fn fmp4_trak(
   entry : Array[Byte],
   width : Int32,
   height : Int32,
+  language : Int32,
 ) -> Array[Byte] {
   let tkhd_body : Array[Byte] = []
   mp4_u32(tkhd_body, 0U)
@@ -137,7 +138,7 @@ fn fmp4_trak(
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, timescale.reinterpret_as_uint())
   mp4_u32(mdhd_body, 0U) // duration
-  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 
@@ -199,12 +200,13 @@ fn fmp4_init_segment(
   entry : Array[Byte],
   width : Int32,
   height : Int32,
+  language : Int32,
 ) -> Bytes {
   let moov = mp4_box(
     "moov",
     mp4_cat([
       fmp4_mvhd(timescale, track_id + 1),
-      fmp4_trak(track_id, timescale, handler, entry, width, height),
+      fmp4_trak(track_id, timescale, handler, entry, width, height, language),
       mp4_box("mvex", fmp4_trex(track_id)),
     ]),
   )
@@ -219,6 +221,7 @@ pub fn fmp4_h264_init_segment(
   timescale : Int32,
   avcc : Bytes,
   track_id~ : Int32 = 1,
+  language~ : String = "und",
 ) -> Result[Bytes, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -235,6 +238,7 @@ pub fn fmp4_h264_init_segment(
       mp4_h264_entry(width, height, avcc),
       width,
       height,
+      mp4_language_code(language),
     ),
   )
 }
@@ -246,6 +250,7 @@ pub fn fmp4_aac_init_segment(
   sample_rate : Int32,
   channels : Int32,
   track_id~ : Int32 = 1,
+  language~ : String = "und",
 ) -> Result[Bytes, String] {
   if sample_rate <= 0 || channels < 1 || channels > 7 || track_id <= 0 {
     return Err("EINVAL: invalid AAC fMP4 stream parameters")
@@ -267,6 +272,7 @@ pub fn fmp4_aac_init_segment(
       mp4_aac_entry(sample_rate, channels),
       0,
       0,
+      mp4_language_code(language),
     ),
   )
 }
@@ -279,6 +285,7 @@ pub fn fmp4_hevc_init_segment(
   timescale : Int32,
   hvcc : Bytes,
   track_id~ : Int32 = 1,
+  language~ : String = "und",
 ) -> Result[Bytes, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -295,6 +302,7 @@ pub fn fmp4_hevc_init_segment(
       mp4_hevc_entry(width, height, hvcc),
       width,
       height,
+      mp4_language_code(language),
     ),
   )
 }
@@ -307,6 +315,7 @@ pub fn fmp4_av1_init_segment(
   timescale : Int32,
   av1c : Bytes,
   track_id~ : Int32 = 1,
+  language~ : String = "und",
 ) -> Result[Bytes, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -323,6 +332,7 @@ pub fn fmp4_av1_init_segment(
       mp4_av1_entry(width, height, av1c),
       width,
       height,
+      mp4_language_code(language),
     ),
   )
 }
@@ -335,6 +345,7 @@ pub fn fmp4_vp9_init_segment(
   timescale : Int32,
   vpcc : Bytes,
   track_id~ : Int32 = 1,
+  language~ : String = "und",
 ) -> Result[Bytes, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -351,6 +362,7 @@ pub fn fmp4_vp9_init_segment(
       mp4_vp9_entry(width, height, vpcc),
       width,
       height,
+      mp4_language_code(language),
     ),
   )
 }
@@ -364,6 +376,7 @@ pub fn fmp4_opus_init_segment(
   input_sample_rate : Int32,
   timescale : Int32,
   track_id~ : Int32 = 1,
+  language~ : String = "und",
 ) -> Result[Bytes, String] {
   if channels < 1 ||
     channels > 2 ||
@@ -381,6 +394,7 @@ pub fn fmp4_opus_init_segment(
       mp4_opus_entry(channels, pre_skip, input_sample_rate),
       0,
       0,
+      mp4_language_code(language),
     ),
   )
 }
@@ -399,6 +413,8 @@ pub fn fmp4_av_init_segment(
   channels : Int32,
   video_track_id~ : Int32 = 1,
   audio_track_id~ : Int32 = 2,
+  video_language~ : String = "und",
+  audio_language~ : String = "und",
 ) -> Result[Bytes, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -437,6 +453,7 @@ pub fn fmp4_av_init_segment(
         mp4_h264_entry(width, height, avcc),
         width,
         height,
+        mp4_language_code(video_language),
       ),
       fmp4_trak(
         audio_track_id,
@@ -445,6 +462,7 @@ pub fn fmp4_av_init_segment(
         mp4_aac_entry(sample_rate, channels),
         0,
         0,
+        mp4_language_code(audio_language),
       ),
       mp4_box(
         "mvex",
@@ -535,6 +553,7 @@ fn fmp4_payload(samples : Array[Fmp4Sample]) -> Array[Byte] {
 pub fn fmp4_ac3_init_segment(
   first_frame : Bytes,
   track_id~ : Int32 = 1,
+  language~ : String = "und",
 ) -> Result[Bytes, String] {
   let hdr = match @libavcodec.ac3_parse_header(first_frame) {
     Ok(h) => h
@@ -551,6 +570,7 @@ pub fn fmp4_ac3_init_segment(
       mp4_ac3_entry(hdr),
       0,
       0,
+      mp4_language_code(language),
     ),
   )
 }
@@ -561,6 +581,7 @@ pub fn fmp4_ac3_init_segment(
 pub fn fmp4_eac3_init_segment(
   first_frame : Bytes,
   track_id~ : Int32 = 1,
+  language~ : String = "und",
 ) -> Result[Bytes, String] {
   let hdr = match @libavcodec.ac3_parse_header(first_frame) {
     Ok(h) => h
@@ -577,6 +598,7 @@ pub fn fmp4_eac3_init_segment(
       mp4_eac3_entry(hdr),
       0,
       0,
+      mp4_language_code(language),
     ),
   )
 }

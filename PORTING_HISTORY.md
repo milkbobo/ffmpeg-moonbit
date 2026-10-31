@@ -6265,3 +6265,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：audio-only TS 的 `demux.pcrs` 两条记录分别对应 90000/
   90930，PID 为音频 0x101；A/V 路径的 PCR 行为不变。
 - 全量 wasm **1319/1319**。
+
+## 253. fMP4 初始化段轨道语言
+
+- `fmp4_trak`/`fmp4_init_segment` 增加 language 参数；
+  8 个单轨 `fmp4_*_init_segment` 新增 `language~`（默认 "und"），
+  `fmp4_av_init_segment` 新增 `video_language`/`audio_language`，
+  均经 `mp4_language_code` 打包进 mdhd。
+- 回归：H.264 init `language="eng"` 经 `av_mov_open` 回读 "eng"；
+  A/V init（und + spa）回读两轨语言。
+- 全量 wasm **1320/1320**。

@@ -211,3 +211,46 @@ test "fmp4 muxer: invalid HEVC/AV1/VP9/Opus parameters are rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "fmp4 muxer: init segment track language" {
+  let avcc = @libavutil.av_base64_decode(mp4_h264_avcc_b64, 1024).unwrap()
+  let init = fmp4_h264_init_segment(64, 48, 90000, avcc, language="eng").unwrap()
+  let seg = fmp4_media_segment(1, 1, 0L, [
+    {
+      data: b"\x00\x00\x00\x02\x65\x88",
+      duration: 3000,
+      keyframe: true,
+      cts: 0,
+    },
+  ]).unwrap()
+  let movie = av_mov_open(fmp4_join([init, seg])).unwrap()
+  assert_eq(movie.tracks.length(), 1)
+  assert_eq(movie.tracks[0].language, "eng")
+  let avinit = fmp4_av_init_segment(
+    64,
+    48,
+    90000,
+    avcc,
+    48000,
+    2,
+    video_language="und",
+    audio_language="spa",
+  ).unwrap()
+  let avseg = fmp4_av_media_segment(
+    1,
+    [
+      {
+        data: b"\x00\x00\x00\x02\x65\x88",
+        duration: 3000,
+        keyframe: true,
+        cts: 0,
+      },
+    ],
+    [{ data: b"\x01\x02", duration: 1024, keyframe: true, cts: 0, }],
+  ).unwrap()
+  let avmovie = av_mov_open(fmp4_join([avinit, avseg])).unwrap()
+  assert_eq(avmovie.tracks.length(), 2)
+  assert_eq(avmovie.tracks[0].language, "und")
+  assert_eq(avmovie.tracks[1].language, "spa")
+}
