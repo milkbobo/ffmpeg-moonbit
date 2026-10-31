@@ -555,39 +555,40 @@ fn flac_plan_subframe(
     lpc_coeffs: [],
     bits: verbatim_bits,
   }
-  // Predictors are ranked by their single-partition cost; the cheapest one
-  // then gets the full partition-order search, since running it for every
-  // candidate order multiplies the Rice search by the number of orders.
-  let mut pred : FlacSubframePlan? = None
-  let mut pred_bits = -1L
-  let header_base = 8L + 2L + wasted_cost + 4L + param_bits.to_int64()
+  // Cost every candidate order with the full partition-order search, so the
+  // winner is the smallest real bit count (FFmpeg's flacenc does the same for
+  // the fixed-predictor sweep).
   let max_order = if n - 1 < 4 { n - 1 } else { 4 }
   for order = 0; order <= max_order; order = order + 1 {
     match flac_fixed_residual(work, n, order) {
       None => ()
       Some(residual) => {
-        let (k, rice_bits) = flac_choose_rice(residual, order, n, max_k, false)
-        let total = header_base + (order * eff_bits).to_int64() + rice_bits
-        if pred_bits < 0L || total < pred_bits {
-          pred_bits = total
-          pred = Some({
+        let (porder, ks, rice_total) = flac_choose_partitioned_rice(
+          residual, n, order, max_k, param_bits,
+        )
+        let total = 8L +
+          (order * eff_bits).to_int64() +
+          2L +
+          wasted_cost +
+          rice_total
+        if total < best.bits {
+          best = {
             kind: 2,
             order,
-            porder: 0,
-            rice_ks: [k],
+            porder,
+            rice_ks: ks,
             residual,
             wasted,
             lpc_shift: 0,
             lpc_coeffs: [],
             bits: total,
-          })
+          }
         }
       }
     }
   }
-  // LPC: Levinson-Durbin coefficients quantized to 15 bits. Every order is
-  // costed exactly (subframe header + warm-ups + coefficients + Rice), so LPC
-  // only wins when it beats the fixed predictors on the real bit count.
+  // LPC: Levinson-Durbin coefficients quantized to 15 bits; each order is
+  // costed with the same full partition search.
   if n >= 32 {
     let max_lpc = if n - 1 < 12 { n - 1 } else { 12 }
     let autoc = flac_lpc_autocorr(work, n, max_lpc)
@@ -597,59 +598,29 @@ fn flac_plan_subframe(
       match flac_lpc_residual(work, n, order, coefs, shift) {
         None => ()
         Some(residual) => {
-          let (k, rice_bits) = flac_choose_rice(
-            residual, order, n, max_k, false,
+          let (porder, ks, rice_total) = flac_choose_partitioned_rice(
+            residual, n, order, max_k, param_bits,
           )
-          let total = header_base +
+          let total = 8L +
             (order * eff_bits).to_int64() +
+            2L +
+            wasted_cost +
             9L +
             15L * order.to_int64() +
-            rice_bits
-          if pred_bits < 0L || total < pred_bits {
-            pred_bits = total
-            pred = Some({
+            rice_total
+          if total < best.bits {
+            best = {
               kind: 3,
               order,
-              porder: 0,
-              rice_ks: [k],
+              porder,
+              rice_ks: ks,
               residual,
               wasted,
               lpc_shift: shift,
               lpc_coeffs: coefs,
               bits: total,
-            })
+            }
           }
-        }
-      }
-    }
-  }
-  match pred {
-    None => ()
-    Some(p) => {
-      let header = 8L +
-        (p.order * eff_bits).to_int64() +
-        2L +
-        wasted_cost +
-        (if p.kind == 3 { 9L + 15L * p.order.to_int64() } else { 0L })
-      let (porder, ks, rice_total) = flac_choose_partitioned_rice(
-        p.residual,
-        n,
-        p.order,
-        max_k,
-        param_bits,
-      )
-      let total = header + rice_total
-      if total < best.bits {
-        best = {
-          kind: p.kind,
-          order: p.order,
-          porder,
-          rice_ks: ks,
-          residual: p.residual,
-          wasted,
-          lpc_shift: p.lpc_shift,
-          lpc_coeffs: p.lpc_coeffs,
-          bits: total,
         }
       }
     }

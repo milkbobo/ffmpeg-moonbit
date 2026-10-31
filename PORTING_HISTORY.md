@@ -6302,3 +6302,14 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `av_dash_parse` 得到 2 个 period、duration 2/2、每 period 两个
   分段，第二 period URI 从 p1-00003 递增。
 - 全量 wasm **1326/1326**。
+
+## 256. FLAC 编码器按真实位数选阶
+
+- `flac_plan_subframe` 不再"单分区代价预选 + 仅对胜者做分区搜索"：
+  固定预测 0-4 阶与 LPC 1-12 阶的每个候选都用
+  `flac_choose_partitioned_rice`（分区阶 0-8 + escape）计算真实子帧
+  位数，与 verbatim 一起取最小。
+- 全部既有 FLAC 编码回归（8/12/16/20/24/32-bit、1-8 声道、33-bit
+  侧声道、分区非平稳夹具、Rice escape）解码逐字节一致；非平稳夹具
+  的首分区阶仍 >0。
+- 全量 wasm **1326/1326**。
