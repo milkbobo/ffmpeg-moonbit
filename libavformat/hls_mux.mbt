@@ -13,6 +13,12 @@ pub struct HlsMediaSegmentSpec {
   uri : String
   duration : Double
   byterange : HlsByteRange?
+  /// `EXT-X-DISCONTINUITY` before this segment.
+  discontinuity : Bool
+  /// `EXT-X-GAP`: the segment is advertised but its resource is absent.
+  gap : Bool
+  /// Raw `EXT-X-PROGRAM-DATE-TIME` value; empty omits the tag.
+  program_date_time : String
 }
 
 ///|
@@ -20,8 +26,11 @@ pub fn HlsMediaSegmentSpec::new(
   uri : String,
   duration : Double,
   byterange~ : HlsByteRange? = None,
+  discontinuity~ : Bool = false,
+  gap~ : Bool = false,
+  program_date_time~ : String = "",
 ) -> HlsMediaSegmentSpec {
-  { uri, duration, byterange, }
+  { uri, duration, byterange, discontinuity, gap, program_date_time, }
 }
 
 ///|
@@ -42,11 +51,12 @@ fn hls_mux_byterange_tag(range : HlsByteRange) -> String {
 }
 
 ///|
-/// Shared media-playlist writer over pre-resolved `(uri, duration, range)`.
+/// Shared media-playlist writer over pre-resolved segment specs.
 fn hls_write_media_playlist_impl(
-  segments : ArrayView[(String, Double, HlsByteRange?)],
+  segments : ArrayView[HlsMediaSegmentSpec],
   target_duration : Int32,
   media_sequence : Int64,
+  discontinuity_sequence : Int64,
   version : Int32,
   endlist : Bool,
   map_uri : String?,
@@ -56,8 +66,8 @@ fn hls_write_media_playlist_impl(
 ) -> String {
   let mut max_duration = 0.0
   for entry in segments {
-    if entry.1 > max_duration {
-      max_duration = entry.1
+    if entry.duration > max_duration {
+      max_duration = entry.duration
     }
   }
   let target = if target_duration > 0 {
@@ -73,6 +83,9 @@ fn hls_write_media_playlist_impl(
   let sb = StringBuilder()
   sb.write_string("#EXTM3U\n")
   sb.write_string("#EXT-X-VERSION:\{version}\n")
+  if discontinuity_sequence != 0L {
+    sb.write_string("#EXT-X-DISCONTINUITY-SEQUENCE:\{discontinuity_sequence}\n")
+  }
   sb.write_string("#EXT-X-TARGETDURATION:\{target}\n")
   sb.write_string("#EXT-X-MEDIA-SEQUENCE:\{media_sequence}\n")
   match key_uri {
@@ -105,15 +118,27 @@ fn hls_write_media_playlist_impl(
     None => ()
   }
   for entry in segments {
-    sb.write_string("#EXTINF:\{entry.1},\n")
-    match entry.2 {
+    if entry.discontinuity {
+      sb.write_string("#EXT-X-DISCONTINUITY\n")
+    }
+    if entry.gap {
+      sb.write_string("#EXT-X-GAP\n")
+    }
+    sb.write_string("#EXTINF:\{entry.duration},\n")
+    match entry.byterange {
       Some(range) => {
         sb.write_string(hls_mux_byterange_tag(range))
         sb.write_string("\n")
       }
       None => ()
     }
-    sb.write_string(entry.0)
+    // hlsplaylist.c writes the date after EXTINF/BYTERANGE.
+    if entry.program_date_time != "" {
+      sb.write_string("#EXT-X-PROGRAM-DATE-TIME:")
+      sb.write_string(entry.program_date_time)
+      sb.write_string("\n")
+    }
+    sb.write_string(entry.uri)
     sb.write_string("\n")
   }
   if endlist {
@@ -135,20 +160,43 @@ pub fn hls_write_media_playlist(
   key_uri~ : String? = None,
   key_iv~ : Bytes? = None,
 ) -> String {
-  let entries : Array[(String, Double, HlsByteRange?)] = []
+  let entries : Array[HlsMediaSegmentSpec] = []
   for entry in segments {
-    entries.push((entry.0, entry.1, None))
+    entries.push(HlsMediaSegmentSpec::new(entry.0, entry.1))
   }
   hls_write_media_playlist_impl(
     entries,
     target_duration,
     media_sequence,
+    0L,
     version,
     endlist,
     map_uri,
     None,
     key_uri,
     key_iv,
+  )
+}
+
+///|
+/// Write a VOD media playlist from full segment specs. `EXT-X-BYTERANGE` is
+/// emitted for entries that carry a range, and each entry may add
+/// `EXT-X-DISCONTINUITY`, `EXT-X-GAP` and `EXT-X-PROGRAM-DATE-TIME`.
+pub fn hls_write_media_playlist_specs(
+  segments : ArrayView[HlsMediaSegmentSpec],
+  target_duration~ : Int32 = 0,
+  media_sequence~ : Int64 = 0L,
+  discontinuity_sequence~ : Int64 = 0L,
+  version~ : Int32 = 3,
+  endlist~ : Bool = true,
+  map_uri~ : String? = None,
+  map_byterange~ : HlsByteRange? = None,
+  key_uri~ : String? = None,
+  key_iv~ : Bytes? = None,
+) -> String {
+  hls_write_media_playlist_impl(
+    segments, target_duration, media_sequence, discontinuity_sequence, version, endlist,
+    map_uri, map_byterange, key_uri, key_iv,
   )
 }
 
@@ -160,6 +208,7 @@ pub fn hls_write_media_playlist_byterange(
   segments : ArrayView[HlsMediaSegmentSpec],
   target_duration~ : Int32 = 0,
   media_sequence~ : Int64 = 0L,
+  discontinuity_sequence~ : Int64 = 0L,
   version~ : Int32 = 4,
   endlist~ : Bool = true,
   map_uri~ : String? = None,
@@ -167,24 +216,17 @@ pub fn hls_write_media_playlist_byterange(
   key_uri~ : String? = None,
   key_iv~ : Bytes? = None,
 ) -> String {
-  let entries : Array[(String, Double, HlsByteRange?)] = []
-  for spec in segments {
-    entries.push((spec.uri, spec.duration, spec.byterange))
-  }
-  hls_write_media_playlist_impl(
-    entries,
-    target_duration,
-    media_sequence,
-    if version < 4 {
-      4
-    } else {
-      version
-    },
-    endlist,
-    map_uri,
-    map_byterange,
-    key_uri,
-    key_iv,
+  hls_write_media_playlist_specs(
+    segments,
+    target_duration~,
+    media_sequence~,
+    discontinuity_sequence~,
+    version=if version < 4 { 4 } else { version },
+    endlist~,
+    map_uri~,
+    map_byterange~,
+    key_uri~,
+    key_iv~,
   )
 }
 

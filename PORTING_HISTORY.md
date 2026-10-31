@@ -6003,3 +6003,21 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   5/5 与源一致，Opus PCM 96000 字节逐字节一致，`-ss 0.4` 输出序列
   与源相同。
 - 全量 wasm **1300/1300**。
+
+## 235. HLS 分段级 DISCONTINUITY/GAP/PDT 标签
+
+- `HlsMediaSegmentSpec` 增加 `discontinuity`、`gap`、
+  `program_date_time`；新增 `hls_write_media_playlist_specs`（按请求
+  version 输出），`hls_write_media_playlist_byterange` 改为其薄包装
+  （BYTERANGE 仍自动抬到 version 4）。
+- 标签顺序对齐 FFmpeg：`#EXT-X-DISCONTINUITY`/`#EXT-X-GAP` 在
+  `#EXTINF` 前，`#EXT-X-PROGRAM-DATE-TIME` 在 EXTINF/BYTERANGE 之后、
+  URI 之前（hlsplaylist.c `ff_hls_write_file_entry`）；
+  `#EXT-X-DISCONTINUITY-SEQUENCE` 紧跟 VERSION（hlsenc 播放列表头）。
+- 回归：写出文本的标签顺序 + `av_hls_parse` 回读
+  `discontinuity`/`gap`/`program_date_time`/`discontinuity_sequence`；
+  无标签分段不产生多余行。
+- 外部验证：ffmpeg 9.0.2 hlsenc `-hls_flags program_date_time` 的输出
+  确认 PDT 位于 EXTINF 之后；该版本 HLS demuxer 源码不解析
+  DISCONTINUITY/GAP/PDT，故标签语义以本项目解析器回读为准。
+- 全量 wasm **1301/1301**。

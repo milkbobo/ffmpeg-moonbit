@@ -152,3 +152,60 @@ test "hls muxer: EXT-X-KEY carries the AES-128 URI and IV" {
   assert_eq(playlist.keys[0].uri, "key.bin")
   assert_eq(playlist.keys[0].iv, "0x000102030405060708090A0B0C0D0E0F")
 }
+
+///|
+test "hls muxer: discontinuity, gap and program date-time round-trip" {
+  let segments : Array[HlsMediaSegmentSpec] = [
+    HlsMediaSegmentSpec::new(
+      "seg0.ts",
+      2.0,
+      program_date_time="2026-10-31T00:00:00.000Z",
+    ),
+    HlsMediaSegmentSpec::new("seg1.ts", 2.0, discontinuity=true),
+    HlsMediaSegmentSpec::new("seg2.ts", 1.5, gap=true),
+  ]
+  let text = hls_write_media_playlist_specs(
+    segments[:],
+    discontinuity_sequence=2L,
+  )
+  assert_true(text.contains("#EXT-X-DISCONTINUITY-SEQUENCE:2\n"))
+  assert_true(
+    text.contains("#EXT-X-PROGRAM-DATE-TIME:2026-10-31T00:00:00.000Z\n"),
+  )
+  assert_true(text.contains("#EXT-X-DISCONTINUITY\n"))
+  assert_true(text.contains("#EXT-X-GAP\n"))
+  // Each tag precedes the segment entry it annotates; the date follows
+  // EXTINF as in hlsplaylist.c.
+  let pdt_pos = text.find("#EXT-X-PROGRAM-DATE-TIME:").unwrap()
+  let first_inf = text.find("#EXTINF:").unwrap()
+  let seg0_pos = text.find("seg0.ts").unwrap()
+  let disc_pos = text.find("#EXT-X-DISCONTINUITY\n").unwrap()
+  let seg1_pos = text.find("seg1.ts").unwrap()
+  let gap_pos = text.find("#EXT-X-GAP\n").unwrap()
+  let seg2_pos = text.find("seg2.ts").unwrap()
+  assert_true(first_inf < pdt_pos && pdt_pos < seg0_pos)
+  assert_true(seg0_pos < disc_pos && disc_pos < seg1_pos)
+  assert_true(seg1_pos < gap_pos && gap_pos < seg2_pos)
+  // The discontinuity sequence precedes the target duration, as in hlsenc.c.
+  let seq_pos = text.find("#EXT-X-DISCONTINUITY-SEQUENCE:2")
+  let target_pos = text.find("#EXT-X-TARGETDURATION:")
+  assert_true(seq_pos.unwrap() < target_pos.unwrap())
+  let playlist = av_hls_parse(text).unwrap()
+  assert_eq(playlist.discontinuity_sequence, 2L)
+  assert_eq(playlist.segments.length(), 3)
+  assert_eq(playlist.segments[0].program_date_time, "2026-10-31T00:00:00.000Z")
+  assert_false(playlist.segments[0].discontinuity)
+  assert_false(playlist.segments[0].gap)
+  assert_true(playlist.segments[1].discontinuity)
+  assert_false(playlist.segments[1].gap)
+  assert_eq(playlist.segments[1].program_date_time, "")
+  assert_false(playlist.segments[2].discontinuity)
+  assert_true(playlist.segments[2].gap)
+  // Segments without flags stay tag-free.
+  let plain = hls_write_media_playlist_specs([
+    HlsMediaSegmentSpec::new("seg0.ts", 2.0),
+  ])
+  assert_false(plain.contains("#EXT-X-DISCONTINUITY"))
+  assert_false(plain.contains("#EXT-X-GAP"))
+  assert_false(plain.contains("#EXT-X-PROGRAM-DATE-TIME"))
+}
