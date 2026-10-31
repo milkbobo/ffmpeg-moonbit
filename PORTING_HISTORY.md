@@ -6208,3 +6208,12 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   subtitle_language="fre" subtitle_forced=true` 写入后
   `av_matroska_open` 回读三条轨语言与字幕 flag_forced=1。
 - 全量 wasm **1314/1314**。
+
+## 248. WebM A/V 轨道语言
+
+- `webm_av_muxer_new` 新增 `video_language`/`audio_language`
+  （空串回落 "und"）；VP9/Opus 两条 TrackEntry 在 TrackType 之后写
+  Language(0x22B59C)，与 ffmpeg matroskaenc 一致。
+- 回归：`audio_language="spa"` 写入后 `av_matroska_open` 回读
+  und/spa；空串回落 "und"。
+- 全量 wasm **1315/1315**。

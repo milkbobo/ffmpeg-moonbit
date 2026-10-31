@@ -21,6 +21,9 @@ pub struct WebmAvMuxer {
   pre_skip : Int32
   /// Samples to discard from the end of the last Opus block.
   audio_discard_padding : Int32
+  /// TrackLanguage of the video/audio tracks ("und" default).
+  video_language : String
+  audio_language : String
   events : Array[WebmAvEvent]
 }
 
@@ -31,6 +34,8 @@ pub fn webm_av_muxer_new(
   channels~ : Int32 = 2,
   pre_skip~ : Int32 = 0,
   audio_discard_padding~ : Int32 = 0,
+  video_language~ : String = "und",
+  audio_language~ : String = "und",
 ) -> Result[WebmAvMuxer, String] {
   if width <= 0 ||
     height <= 0 ||
@@ -40,7 +45,24 @@ pub fn webm_av_muxer_new(
     audio_discard_padding < 0 {
     return Err("EINVAL: invalid WebM A/V parameters")
   }
-  Ok({ width, height, channels, pre_skip, audio_discard_padding, events: [], })
+  Ok({
+    width,
+    height,
+    channels,
+    pre_skip,
+    audio_discard_padding,
+    video_language: if video_language == "" {
+      "und"
+    } else {
+      video_language
+    },
+    audio_language: if audio_language == "" {
+      "und"
+    } else {
+      audio_language
+    },
+    events: [],
+  })
 }
 
 ///|
@@ -207,6 +229,7 @@ pub fn WebmAvMuxer::finish(self : WebmAvMuxer) -> Bytes {
   webm_uint_elem(vtrack, 0xD7, 1, 1UL)
   webm_uint_elem(vtrack, 0x73C5, 2, 1UL)
   webm_uint_elem(vtrack, 0x83, 1, 1UL)
+  webm_string_elem(vtrack, 0x22B59C, 3, self.video_language)
   webm_string_elem(vtrack, 0x86, 1, "V_VP9")
   webm_elem(vtrack, 0xE0, 1, video)
   webm_elem(vtrack, 0xEC, 1, [])
@@ -223,6 +246,7 @@ pub fn WebmAvMuxer::finish(self : WebmAvMuxer) -> Bytes {
   webm_uint_elem(atrack, 0xD7, 1, 2UL)
   webm_uint_elem(atrack, 0x73C5, 2, 2UL)
   webm_uint_elem(atrack, 0x83, 1, 2UL)
+  webm_string_elem(atrack, 0x22B59C, 3, self.audio_language)
   webm_string_elem(atrack, 0x86, 1, "A_OPUS")
   let head = webm_av_opus_head(self)
   let head_body : Array[Byte] = []

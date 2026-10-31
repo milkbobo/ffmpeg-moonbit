@@ -74,3 +74,25 @@ test "webm muxer: Opus pre-skip/discard padding fields" {
   assert_eq(cues.cues.length(), 1)
   assert_eq(cues.cues[0].time, 0L)
 }
+
+///|
+test "webm muxer: track languages round-trip" {
+  let mux = webm_av_muxer_new(
+    64,
+    48,
+    channels=1,
+    video_language="und",
+    audio_language="spa",
+  ).unwrap()
+  mux.write_video(b"V0", 0L, 33, keyframe=true).unwrap()
+  mux.write_audio(b"A0", 0L, 20).unwrap()
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.tracks[0].language, "und")
+  assert_eq(mkv.tracks[1].language, "spa")
+  // Empty strings fall back to "und".
+  let plain = webm_av_muxer_new(64, 48, channels=1, audio_language="").unwrap()
+  plain.write_video(b"V0", 0L, 33, keyframe=true).unwrap()
+  plain.write_audio(b"A0", 0L, 20).unwrap()
+  let pm = av_matroska_open(plain.finish()).unwrap()
+  assert_eq(pm.tracks[1].language, "und")
+}
