@@ -6290,3 +6290,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：AAC/MP3/Opus/mov_text/H.264 单轨写入 eng/fra/deu/spa/jpn 后
   `av_mov_open` 回读正确。
 - 全量 wasm **1325/1325**。
+
+## 255. DASH 多 Period SegmentTemplate
+
+- 抽取 `dash_write_template_adaptations` 复用 AdaptationSet 输出；
+  新增 `DashPeriodSpec { id, start_seconds, duration_seconds, adaptations }`
+  与 `dash_write_segment_template_mpd_periods`：每个 Period 输出
+  `<Period id start [duration]>`（duration>0 时显式写），
+  SegmentTemplate 各 Period 独立展开。
+- 回归：两个各 2 s 的 Period（第二个 startNumber=3），
+  `av_dash_parse` 得到 2 个 period、duration 2/2、每 period 两个
+  分段，第二 period URI 从 p1-00003 递增。
+- 全量 wasm **1326/1326**。

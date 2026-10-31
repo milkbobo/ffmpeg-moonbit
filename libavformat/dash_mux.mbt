@@ -67,21 +67,14 @@ pub fn DashAdaptation::new(
 }
 
 ///|
-pub fn dash_write_segment_template_mpd(
+
+///|
+/// Emit the SegmentTemplate AdaptationSets of one Period (shared by the
+/// single- and multi-period writers).
+fn dash_write_template_adaptations(
+  sb : StringBuilder,
   adaptations : ArrayView[DashAdaptation],
-  media_duration_seconds~ : Double,
-  period_id~ : String = "p0",
-) -> String {
-  let sb = StringBuilder()
-  sb.write_string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-  sb.write_string(
-    "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\"\n",
-  )
-  sb.write_string("     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\"\n")
-  sb.write_string(
-    "     mediaPresentationDuration=\"PT\{media_duration_seconds}S\" minBufferTime=\"PT1.5S\">\n",
-  )
-  sb.write_string("  <Period id=\"\{period_id}\" start=\"PT0S\">\n")
+) -> Unit {
   for a in adaptations {
     sb.write_string(
       "    <AdaptationSet contentType=\"\{a.content_type}\" mimeType=\"\{a.mime_type}\"",
@@ -123,7 +116,79 @@ pub fn dash_write_segment_template_mpd(
     }
     sb.write_string("    </AdaptationSet>\n")
   }
+}
+
+///|
+pub fn dash_write_segment_template_mpd(
+  adaptations : ArrayView[DashAdaptation],
+  media_duration_seconds~ : Double,
+  period_id~ : String = "p0",
+) -> String {
+  let sb = StringBuilder()
+  sb.write_string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+  sb.write_string(
+    "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\"\n",
+  )
+  sb.write_string("     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\"\n")
+  sb.write_string(
+    "     mediaPresentationDuration=\"PT\{media_duration_seconds}S\" minBufferTime=\"PT1.5S\">\n",
+  )
+  sb.write_string("  <Period id=\"\{period_id}\" start=\"PT0S\">\n")
+  dash_write_template_adaptations(sb, adaptations)
   sb.write_string("  </Period>\n")
+  sb.write_string("</MPD>\n")
+  sb.to_string()
+}
+
+///|
+/// One `<Period>` of a multi-period SegmentTemplate MPD.
+pub struct DashPeriodSpec {
+  id : String
+  start_seconds : Double
+  /// Explicit Period duration; 0 omits the attribute (the parser then uses
+  /// the rest of the presentation for this Period).
+  duration_seconds : Double
+  adaptations : Array[DashAdaptation]
+}
+
+///|
+pub fn DashPeriodSpec::new(
+  id : String,
+  start_seconds : Double,
+  adaptations : Array[DashAdaptation],
+  duration_seconds~ : Double = 0.0,
+) -> DashPeriodSpec {
+  { id, start_seconds, duration_seconds, adaptations, }
+}
+
+///|
+/// Write a multi-period SegmentTemplate MPD. Each Period carries its own
+/// AdaptationSets and, when non-zero, an explicit `duration` attribute that
+/// the DASH parser uses to expand per-period segment counts.
+pub fn dash_write_segment_template_mpd_periods(
+  periods : ArrayView[DashPeriodSpec],
+  media_duration_seconds~ : Double,
+) -> String {
+  let sb = StringBuilder()
+  sb.write_string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+  sb.write_string(
+    "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\"\n",
+  )
+  sb.write_string("     profiles=\"urn:mpeg:dash:profile:isoff-live:2011\"\n")
+  sb.write_string(
+    "     mediaPresentationDuration=\"PT\{media_duration_seconds}S\" minBufferTime=\"PT1.5S\">\n",
+  )
+  for period in periods {
+    sb.write_string(
+      "  <Period id=\"" + period.id + "\" start=\"PT\{period.start_seconds}S\"",
+    )
+    if period.duration_seconds > 0.0 {
+      sb.write_string(" duration=\"PT\{period.duration_seconds}S\"")
+    }
+    sb.write_string(">\n")
+    dash_write_template_adaptations(sb, period.adaptations)
+    sb.write_string("  </Period>\n")
+  }
   sb.write_string("</MPD>\n")
   sb.to_string()
 }

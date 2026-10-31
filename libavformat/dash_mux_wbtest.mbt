@@ -198,3 +198,68 @@ test "dash muxer: audio AudioChannelConfiguration matches ffmpeg" {
   let mpd = av_dash_parse(t).unwrap()
   assert_eq(mpd.periods[0].adaptation_sets.length(), 1)
 }
+
+///|
+test "dash muxer: multi-period SegmentTemplate" {
+  let p0 = DashPeriodSpec::new(
+    "p0",
+    0.0,
+    [
+      DashAdaptation::new(
+        "video",
+        "video/mp4",
+        "avc1.64001f",
+        "v0",
+        500000L,
+        1000L,
+        1000L,
+        "init-p0.mp4",
+        "p0-$Number%05d$.m4s",
+        width=64,
+        height=48,
+      ),
+    ],
+    duration_seconds=2.0,
+  )
+  let p1 = DashPeriodSpec::new(
+    "p1",
+    2.0,
+    [
+      DashAdaptation::new(
+        "video",
+        "video/mp4",
+        "avc1.64001f",
+        "v1",
+        500000L,
+        1000L,
+        1000L,
+        "init-p1.mp4",
+        "p1-$Number%05d$.m4s",
+        width=64,
+        height=48,
+        start_number=3L,
+      ),
+    ],
+    duration_seconds=2.0,
+  )
+  let text = dash_write_segment_template_mpd_periods(
+    [p0, p1],
+    media_duration_seconds=4.0,
+  )
+  let first = text.find("<Period id=\"p0\"").unwrap()
+  let second = text.find("<Period id=\"p1\"").unwrap()
+  assert_true(first < second)
+  let mpd = av_dash_parse(text).unwrap()
+  assert_eq(mpd.periods.length(), 2)
+  assert_eq(mpd.periods[0].start, 0.0)
+  assert_eq(mpd.periods[1].start, 2.0)
+  assert_eq(mpd.periods[0].duration, 2.0)
+  assert_eq(mpd.periods[1].duration, 2.0)
+  let r0 = mpd.periods[0].adaptation_sets[0].representations[0]
+  let r1 = mpd.periods[1].adaptation_sets[0].representations[0]
+  assert_eq(r0.segments.length(), 2)
+  assert_eq(r1.segments.length(), 2)
+  assert_eq(r0.segments[0].uri, "p0-00001.m4s")
+  assert_eq(r1.segments[0].uri, "p1-00003.m4s")
+  assert_eq(r1.segments[1].number, 4L)
+}
