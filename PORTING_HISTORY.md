@@ -6183,3 +6183,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   forced=true` 后由 `av_matroska_open` 回读四个字段；默认路径回到
   "und"/无 Name/FlagDefault=1/FlagForced=0。
 - 全量 wasm **1312/1312**。
+
+## 246. MP4 mdhd 轨道语言
+
+- 读取端解析 `mdhd` 的 16 位 language（3×5-bit ISO 639-2/T，bit15 为
+  pad，0 组回落 "und"），写入 `Mp4Track.language`（默认 "und"）。
+- `mp4_av_muxer_new` 新增 `video_language`/`audio_language`：
+  `mp4_language_code` 按 movenc 方式打包（"eng" → 0x15C7），
+  非 3 字母/非 a-z 回落 "und"（0x55C4）；`mp4_av_trak` 新增 language
+  参数，字幕轨固定 0x55C4。
+- 回归：双轨写入 `video_language="und" audio_language="eng"` 后
+  `av_mov_open` 回读 und/eng，并直接检查两个 `mdhd` 的 language 字节
+  为 `55 C4` / `15 C7`（与 ffmpeg movenc 生成的 MP4 一致）；非法码
+  回落 "und"。
+- 全量 wasm **1313/1313**。

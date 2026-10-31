@@ -206,6 +206,8 @@ pub struct Mp4Track {
   /// `st->codecpar->bit_rate` from the `esds` DecoderConfigDescriptor. */
   mut bit_rate : UInt32
   mut encoder : String
+  /// ISO 639-2/T language from `mdhd` (default "und").
+  mut language : String
   /// Audio sample entry v1/v2 packing (`sc->samples_per_frame`). */
   mut samples_per_frame : UInt32
   /// Audio sample entry v1/v2 packing (`sc->bytes_per_frame`). */
@@ -344,6 +346,7 @@ fn new_track() -> Mp4Track {
     frame_length: 0,
     bit_rate: 0,
     encoder: "",
+    language: "und",
     samples_per_frame: 0,
     bytes_per_frame: 0,
     audio_cid: 0,
@@ -1121,6 +1124,23 @@ fn parse_mvhd(st : MovState, r : AvioContext) -> Unit {
 }
 
 ///|
+/// Unpack `mdhd`'s language field: three 5-bit letters at bits 14..0 with a
+/// pad bit at bit 15; zero groups mean "und".
+fn mov_language_string(v : UInt32) -> String {
+  let c0 = ((v >> 10) & 0x1FU).reinterpret_as_int()
+  let c1 = ((v >> 5) & 0x1FU).reinterpret_as_int()
+  let c2 = (v & 0x1FU).reinterpret_as_int()
+  if c0 < 1 || c1 < 1 || c2 < 1 {
+    return "und"
+  }
+  let sb = StringBuilder()
+  sb.write_char(Int32::unsafe_to_char(0x60 + c0))
+  sb.write_char(Int32::unsafe_to_char(0x60 + c1))
+  sb.write_char(Int32::unsafe_to_char(0x60 + c2))
+  sb.to_string()
+}
+
+///|
 /// `mov_read_mdhd`. */
 fn parse_mdhd(st : MovState, r : AvioContext) -> Unit raise MovError {
   if !st.in_trak {
@@ -1147,7 +1167,8 @@ fn parse_mdhd(st : MovState, r : AvioContext) -> Unit raise MovError {
   let dur = if version == 1 { r.avio_rb64() } else { r.avio_rb32().to_uint64() }
   let unknown = if version == 1 { u64_max } else { u32_max_u64 }
   st.cur.duration = if dur == unknown { 0 } else { dur }
-  let _ = r.avio_rb16() // language
+  let language = r.avio_rb16()
+  st.cur.language = mov_language_string(language)
   let _ = r.avio_rb16() // quality
 }
 

@@ -167,3 +167,58 @@ test "mp4 muxer: audio priming is signalled without touching video" {
     Err(_) => ()
   }
 }
+
+///|
+test "mp4 muxer: mdhd language codes match ffmpeg and round-trip" {
+  let avcc = @libavutil.av_base64_decode(mp4_av_avcc_b64, 1024).unwrap()
+  let mux = mp4_av_muxer_new(
+    64,
+    48,
+    avcc,
+    48000,
+    2,
+    video_language="und",
+    audio_language="eng",
+  ).unwrap()
+  mux.write_video(b"\x00\x00\x01\x02", keyframe=true).unwrap()
+  mux.write_audio(b"\xAA\x01").unwrap()
+  let bytes = mux.finish()
+  let movie = av_mov_open(bytes).unwrap()
+  assert_eq(movie.tracks[0].language, "und")
+  assert_eq(movie.tracks[1].language, "eng")
+  // Byte-level check against ffmpeg movenc: video 0x55C4, audio 0x15C7.
+  let positions : Array[Int32] = []
+  let mut i = 0
+  while i + 4 <= bytes.length() {
+    if bytes[i] == b'm' &&
+      bytes[i + 1] == b'd' &&
+      bytes[i + 2] == b'h' &&
+      bytes[i + 3] == b'd' {
+      positions.push(i)
+    }
+    i = i + 1
+  }
+  assert_eq(positions.length(), 2)
+  let langs : Array[Bytes] = []
+  for pos in positions {
+    let start = pos - 4
+    let version = bytes[start + 8].to_int()
+    let off = start +
+      12 +
+      (if version == 1 { 16 } else { 8 }) +
+      4 +
+      (if version == 1 { 8 } else { 4 })
+    let pair : Array[Byte] = []
+    pair.push(bytes[off])
+    pair.push(bytes[off + 1])
+    langs.push(Bytes::from_array(pair))
+  }
+  assert_eq(langs[0], b"\x55\xC4")
+  assert_eq(langs[1], b"\x15\xC7")
+  // Codes that are not three letters fall back to "und".
+  let mux2 = mp4_av_muxer_new(64, 48, avcc, 48000, 2, audio_language="zz").unwrap()
+  mux2.write_video(b"\x00\x00\x01\x02", keyframe=true).unwrap()
+  mux2.write_audio(b"\xAA\x01").unwrap()
+  let m2 = av_mov_open(mux2.finish()).unwrap()
+  assert_eq(m2.tracks[1].language, "und")
+}

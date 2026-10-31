@@ -92,6 +92,24 @@ fn mp4_u32(dst : Array[Byte], v : UInt32) -> Unit {
 }
 
 ///|
+/// Pack a 3-letter ISO 639-2/T code into the `mdhd` language field (pad bit
+/// clear). Anything unrecognised becomes "und" (0x55C4), like movenc.
+fn mp4_language_code(lang : String) -> Int32 {
+  if lang.length() != 3 {
+    return 0x55C4
+  }
+  let mut v = 0
+  for i in 0..<3 {
+    let c = lang[i].to_int() - 0x60
+    if c < 1 || c > 26 {
+      return 0x55C4
+    }
+    v = (v << 5) | c
+  }
+  v
+}
+
+///|
 fn mp4_tag(dst : Array[Byte], tag : String) -> Unit {
   for c in tag {
     dst.push(c.to_int().to_byte())

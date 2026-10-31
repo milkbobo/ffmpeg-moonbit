@@ -26,6 +26,9 @@ pub struct Mp4AvMuxer {
   aac_priming : Int32
   /// Explicit audio sample entry (AC-3/E-AC-3); AAC builds its own `esds`.
   audio_entry : Array[Byte]?
+  /// Packed `mdhd` language codes for the video and audio tracks.
+  video_language : Int32
+  audio_language : Int32
   audio_packets : Array[Bytes]
   audio_durations : Array[Int32]
   cues : Array[Mp4SubtitleCue]
@@ -49,6 +52,9 @@ pub fn mp4_av_muxer_new(
   audio_codec~ : String = "aac",
   /// Video sample entry: "h264", "hevc", "av1" or "vp9".
   video_codec~ : String = "h264",
+  /// ISO 639-2/T language codes for the `mdhd` boxes (unknown → "und").
+  video_language~ : String = "und",
+  audio_language~ : String = "und",
 ) -> Result[Mp4AvMuxer, String] {
   let known_video = video_codec == "h264" ||
     video_codec == "hevc" ||
@@ -97,6 +103,8 @@ pub fn mp4_av_muxer_new(
     audio_codec,
     aac_priming,
     audio_entry,
+    video_language: mp4_language_code(video_language),
+    audio_language: mp4_language_code(audio_language),
     video_packets: [],
     video_durations: [],
     video_keyframes: [],
@@ -283,6 +291,7 @@ fn mp4_av_trak(
   media_duration : Int32,
   movie_duration : Int32,
   handler : String,
+  language : Int32,
   media_header : Array[Byte],
   entry : Array[Byte],
   edts : Array[Byte],
@@ -315,7 +324,7 @@ fn mp4_av_trak(
   mp4_u32(mdhd_body, 0U)
   mp4_u32(mdhd_body, media_timescale.reinterpret_as_uint())
   mp4_u32(mdhd_body, media_duration.reinterpret_as_uint())
-  mp4_u16(mdhd_body, 0x55C4)
+  mp4_u16(mdhd_body, language)
   mp4_u16(mdhd_body, 0)
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 
@@ -544,6 +553,7 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     vdur,
     vms.to_int(),
     "vide",
+    self.video_language,
     vmhd,
     ventry,
     vedts,
@@ -580,6 +590,7 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
     adur,
     ams.to_int(),
     "soun",
+    self.audio_language,
     smhd,
     aentry,
     aedts,
@@ -604,6 +615,7 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
       sub_ms.to_int(),
       sub_ms.to_int(),
       "sbtl",
+      0x55C4,
       nmhd,
       mp4_tx3g_sample_entry(),
       [],
