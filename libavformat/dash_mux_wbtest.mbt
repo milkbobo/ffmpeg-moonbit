@@ -116,3 +116,85 @@ test "dash muxer: WebVTT AdaptationSet omits codecs and initialization" {
   assert_false(text.contains("initialization="))
   assert_true(text.contains("<Representation id=\"subs\" bandwidth=\"256\""))
 }
+
+///|
+test "dash muxer: audio AudioChannelConfiguration matches ffmpeg" {
+  let expected = "<AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"6\" />"
+  let t = dash_write_segment_template_mpd(
+    [
+      DashAdaptation::new(
+        "audio",
+        "audio/mp4",
+        "mp4a.40.2",
+        "a1",
+        192000L,
+        48000L,
+        48000L,
+        "init.mp4",
+        "seg-$Number%05d$.m4s",
+        sample_rate=48000,
+        channels=6,
+      ),
+    ],
+    media_duration_seconds=1.0,
+  )
+  assert_true(t.contains(expected))
+  let l = dash_write_segment_list_mpd(
+    [
+      DashListAdaptation::new(
+        "audio",
+        "audio/mp4",
+        "mp4a.40.2",
+        "a1",
+        192000L,
+        48000L,
+        48000L,
+        [DashListSegment::new(media="a.m4s")],
+        initialization="init.mp4",
+        sample_rate=48000,
+        channels=6,
+      ),
+    ],
+    media_duration_seconds=1.0,
+  )
+  assert_true(l.contains(expected))
+  let b = dash_write_segment_base_mpd(
+    [
+      DashBaseAdaptation::new(
+        "audio",
+        "audio/mp4",
+        "mp4a.40.2",
+        "a1",
+        192000L,
+        "a.mp4",
+        "0-99",
+        "100-199",
+        sample_rate=48000,
+        channels=6,
+      ),
+    ],
+    media_duration_seconds=1.0,
+  )
+  assert_true(b.contains(expected))
+  // Unknown channel count (default 0) omits the element.
+  let plain = dash_write_segment_template_mpd(
+    [
+      DashAdaptation::new(
+        "audio",
+        "audio/mp4",
+        "mp4a.40.2",
+        "a1",
+        64000L,
+        44100L,
+        44100L,
+        "init.mp4",
+        "seg-$Number%05d$.m4s",
+        sample_rate=44100,
+      ),
+    ],
+    media_duration_seconds=1.0,
+  )
+  assert_false(plain.contains("AudioChannelConfiguration"))
+  let mpd = av_dash_parse(t).unwrap()
+  assert_eq(mpd.periods[0].adaptation_sets.length(), 1)
+}

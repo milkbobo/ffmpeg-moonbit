@@ -6217,3 +6217,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：`audio_language="spa"` 写入后 `av_matroska_open` 回读
   und/spa；空串回落 "und"。
 - 全量 wasm **1315/1315**。
+
+## 249. DASH AudioChannelConfiguration
+
+- 三种 MPD 写入器（SegmentTemplate/SegmentList/SegmentBase）的
+  Adaptation 新增 `channels`；音频且 channels>0 时在 Representation
+  内写
+  `<AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="N" />`
+  （scheme 与 ffmpeg dashenc 一致；SegmentTemplate 的 Representation
+  由自闭合改为带子元素）。
+- 回归：6 声道音频在三种写入器中都产出该元素，默认 0 时省略；
+  MPD 仍可被 `av_dash_parse` 解析。
+- 全量 wasm **1316/1316**。

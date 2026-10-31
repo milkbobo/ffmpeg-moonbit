@@ -23,6 +23,8 @@ pub struct DashAdaptation {
   width : Int32
   height : Int32
   sample_rate : Int32
+  /// Audio channel count for the AudioChannelConfiguration element (0 omits).
+  channels : Int32
   start_number : Int64
   lang : String
 }
@@ -41,6 +43,7 @@ pub fn DashAdaptation::new(
   width~ : Int32 = 0,
   height~ : Int32 = 0,
   sample_rate~ : Int32 = 0,
+  channels~ : Int32 = 0,
   start_number~ : Int64 = 1L,
   lang~ : String = "",
 ) -> DashAdaptation {
@@ -57,6 +60,7 @@ pub fn DashAdaptation::new(
     width,
     height,
     sample_rate,
+    channels,
     start_number,
     lang,
   }
@@ -108,7 +112,15 @@ pub fn dash_write_segment_template_mpd(
     if a.sample_rate > 0 {
       sb.write_string(" audioSamplingRate=\"\{a.sample_rate}\"")
     }
-    sb.write_string(" />\n")
+    if a.content_type == "audio" && a.channels > 0 {
+      sb.write_string(">\n")
+      sb.write_string(
+        "        <AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"\{a.channels}\" />\n",
+      )
+      sb.write_string("      </Representation>\n")
+    } else {
+      sb.write_string(" />\n")
+    }
     sb.write_string("    </AdaptationSet>\n")
   }
   sb.write_string("  </Period>\n")
@@ -152,6 +164,8 @@ pub struct DashListAdaptation {
   width : Int32
   height : Int32
   sample_rate : Int32
+  /// Audio channel count for the AudioChannelConfiguration element (0 omits).
+  channels : Int32
   lang : String
 }
 
@@ -172,6 +186,7 @@ pub fn DashListAdaptation::new(
   width~ : Int32 = 0,
   height~ : Int32 = 0,
   sample_rate~ : Int32 = 0,
+  channels~ : Int32 = 0,
   lang~ : String = "",
 ) -> DashListAdaptation {
   {
@@ -190,6 +205,7 @@ pub fn DashListAdaptation::new(
     width,
     height,
     sample_rate,
+    channels,
     lang,
   }
 }
@@ -236,6 +252,11 @@ pub fn dash_write_segment_list_mpd(
       sb.write_string(" audioSamplingRate=\"\{a.sample_rate}\"")
     }
     sb.write_string(">\n")
+    if a.content_type == "audio" && a.channels > 0 {
+      sb.write_string(
+        "        <AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"\{a.channels}\" />\n",
+      )
+    }
     if a.base_url != "" {
       sb.write_string("        <BaseURL>\{a.base_url}</BaseURL>\n")
     }
@@ -293,6 +314,8 @@ pub struct DashBaseAdaptation {
   width : Int32
   height : Int32
   sample_rate : Int32
+  /// Audio channel count for the AudioChannelConfiguration element (0 omits).
+  channels : Int32
   lang : String
 }
 
@@ -309,6 +332,7 @@ pub fn DashBaseAdaptation::new(
   width~ : Int32 = 0,
   height~ : Int32 = 0,
   sample_rate~ : Int32 = 0,
+  channels~ : Int32 = 0,
   lang~ : String = "",
 ) -> DashBaseAdaptation {
   {
@@ -323,6 +347,7 @@ pub fn DashBaseAdaptation::new(
     width,
     height,
     sample_rate,
+    channels,
     lang,
   }
 }
@@ -368,6 +393,11 @@ pub fn dash_write_segment_base_mpd(
       sb.write_string(" audioSamplingRate=\"\{a.sample_rate}\"")
     }
     sb.write_string(">\n")
+    if a.content_type == "audio" && a.channels > 0 {
+      sb.write_string(
+        "        <AudioChannelConfiguration schemeIdUri=\"urn:mpeg:dash:23003:3:audio_channel_configuration:2011\" value=\"\{a.channels}\" />\n",
+      )
+    }
     sb.write_string("        <BaseURL>\{a.base_url}</BaseURL>\n")
     sb.write_string("        <SegmentBase")
     if a.index_range != "" {
