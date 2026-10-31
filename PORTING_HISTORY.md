@@ -6313,3 +6313,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   侧声道、分区非平稳夹具、Rice escape）解码逐字节一致；非平稳夹具
   的首分区阶仍 >0。
 - 全量 wasm **1326/1326**。
+
+## 257. HLS 分段级 EXT-X-MAP 覆盖
+
+- `HlsMediaSegmentSpec` 新增 `map_uri`/`map_byterange`：分段可指定新的
+  初始化段；写入器在 discontinuity/gap 之后、EXTINF 之前按需插入
+  `EXT-X-MAP`，并与当前生效的 map（URI+BYTERANGE）比较，相同则只写
+  一次。全局 map 由 `map_uri`/`map_byterange` 参数提供。
+- 解析器本就把 MAP 作为 maps 数组并记录 segment.map_index；回归验证
+  两个 init 段、后两分段共享第二个 map、BYTERANGE 20@0 回读。
+- 全量 wasm **1327/1327**。

@@ -19,6 +19,10 @@ pub struct HlsMediaSegmentSpec {
   gap : Bool
   /// Raw `EXT-X-PROGRAM-DATE-TIME` value; empty omits the tag.
   program_date_time : String
+  /// Per-segment `EXT-X-MAP` override (e.g. a new init section after a
+  /// discontinuity); None keeps the playlist/global map.
+  map_uri : String?
+  map_byterange : HlsByteRange?
 }
 
 ///|
@@ -29,8 +33,19 @@ pub fn HlsMediaSegmentSpec::new(
   discontinuity~ : Bool = false,
   gap~ : Bool = false,
   program_date_time~ : String = "",
+  map_uri~ : String? = None,
+  map_byterange~ : HlsByteRange? = None,
 ) -> HlsMediaSegmentSpec {
-  { uri, duration, byterange, discontinuity, gap, program_date_time, }
+  {
+    uri,
+    duration,
+    byterange,
+    discontinuity,
+    gap,
+    program_date_time,
+    map_uri,
+    map_byterange,
+  }
 }
 
 ///|
@@ -48,6 +63,37 @@ fn hls_mux_byterange_value(range : HlsByteRange) -> String {
 /// `EXT-X-BYTERANGE:<length>[@<offset>]`.
 fn hls_mux_byterange_tag(range : HlsByteRange) -> String {
   "#EXT-X-BYTERANGE:" + hls_mux_byterange_value(range)
+}
+
+///|
+/// `EXT-X-MAP:URI="..."[,BYTERANGE="..."]`, or "" when `uri` is None.
+fn hls_mux_map_tag(map_uri : String?, map_byterange : HlsByteRange?) -> String {
+  match map_uri {
+    Some(uri) => {
+      let sb = StringBuilder()
+      sb.write_string("#EXT-X-MAP:URI=\"" + uri + "\"")
+      match map_byterange {
+        Some(range) => {
+          sb.write_string(",BYTERANGE=\"")
+          sb.write_string(hls_mux_byterange_value(range))
+          sb.write_string("\"")
+        }
+        None => ()
+      }
+      sb.write_string("\n")
+      sb.to_string()
+    }
+    None => ""
+  }
+}
+
+///|
+fn hls_mux_same_range(a : HlsByteRange?, b : HlsByteRange?) -> Bool {
+  match (a, b) {
+    (None, None) => true
+    (Some(x), Some(y)) => x.length == y.length && x.offset == y.offset
+    _ => false
+  }
 }
 
 ///|
@@ -124,27 +170,25 @@ fn hls_write_media_playlist_impl(
     }
     None => ()
   }
-  match map_uri {
-    Some(uri) => {
-      sb.write_string("#EXT-X-MAP:URI=\"" + uri + "\"")
-      match map_byterange {
-        Some(range) => {
-          sb.write_string(",BYTERANGE=\"")
-          sb.write_string(hls_mux_byterange_value(range))
-          sb.write_string("\"")
-        }
-        None => ()
-      }
-      sb.write_string("\n")
-    }
-    None => ()
-  }
+  sb.write_string(hls_mux_map_tag(map_uri, map_byterange))
+  let mut current_map_uri = map_uri
+  let mut current_map_range = map_byterange
   for entry in segments {
     if entry.discontinuity {
       sb.write_string("#EXT-X-DISCONTINUITY\n")
     }
     if entry.gap {
       sb.write_string("#EXT-X-GAP\n")
+    }
+    match entry.map_uri {
+      Some(uri) =>
+        if current_map_uri != Some(uri) ||
+          !hls_mux_same_range(current_map_range, entry.map_byterange) {
+          sb.write_string(hls_mux_map_tag(entry.map_uri, entry.map_byterange))
+          current_map_uri = entry.map_uri
+          current_map_range = entry.map_byterange
+        }
+      None => ()
     }
     sb.write_string("#EXTINF:\{entry.duration},\n")
     match entry.byterange {

@@ -382,3 +382,44 @@ test "hls muxer: I-FRAME-STREAM-INF variants" {
   ])
   assert_false(normal.contains("#EXT-X-I-FRAME-STREAM-INF"))
 }
+
+///|
+test "hls muxer: per-segment EXT-X-MAP override" {
+  let segments : Array[HlsMediaSegmentSpec] = [
+    HlsMediaSegmentSpec::new("s0.m4s", 1.0),
+    HlsMediaSegmentSpec::new(
+      "s1.m4s",
+      1.0,
+      map_uri=Some("init1.mp4"),
+      map_byterange=Some(HlsByteRange::new(20L, offset=0L)),
+    ),
+    HlsMediaSegmentSpec::new(
+      "s2.m4s",
+      1.0,
+      map_uri=Some("init1.mp4"),
+      map_byterange=Some(HlsByteRange::new(20L, offset=0L)),
+    ),
+  ]
+  let text = hls_write_media_playlist_specs(
+    segments[:],
+    map_uri=Some("init0.mp4"),
+  )
+  assert_true(text.contains("#EXT-X-MAP:URI=\"init0.mp4\"\n"))
+  assert_true(
+    text.contains("#EXT-X-MAP:URI=\"init1.mp4\",BYTERANGE=\"20@0\"\n"),
+  )
+  // The shared init1 map is written once for the last two segments.
+  let first = text.find("#EXT-X-MAP:URI=\"init1.mp4\"").unwrap()
+  let rest = text[first + 1:]
+  assert_false(rest.contains("#EXT-X-MAP:URI=\"init1.mp4\""))
+  let pl = av_hls_parse(text).unwrap()
+  assert_eq(pl.maps.length(), 2)
+  assert_eq(pl.maps[0].uri, "init0.mp4")
+  assert_eq(pl.maps[1].uri, "init1.mp4")
+  assert_eq(pl.segments[0].map_index, 0)
+  assert_eq(pl.segments[1].map_index, 1)
+  assert_eq(pl.segments[2].map_index, 1)
+  let range = pl.maps[1].byterange.unwrap()
+  assert_eq(range.length, 20L)
+  assert_eq(range.offset, 0L)
+}
