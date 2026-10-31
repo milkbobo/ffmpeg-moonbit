@@ -5917,3 +5917,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffmpeg 9.0.2 识别 av01+Opus，video framemd5 5/5 与源
   一致，Opus 解码 PCM 97296 字节逐字节一致。
 - 全量 wasm **1289/1289**。
+
+## 228. MJPEG 渐进 4 分量 CMYK 回归
+
+- ImageMagick `-interlace JPEG` 生成 17x13 渐进 CMYK（SOF2，
+  transform 2）及 APP14 改为 0 的变体；解码后四平面与 ffmpeg
+  rawvideo（yuva444p/gbrap）MD5 与同源顺序式文件一致。
+- 覆盖现有渐进扫描 + 4 分量 finalize 组合，代码无改动。
+- 尝试渐进 3 分量 RGB ID 夹具时 FFmpeg 自身报
+  `decode_sos: index(3) out of components`，不纳入。
+- 全量 wasm **1290/1290**。
