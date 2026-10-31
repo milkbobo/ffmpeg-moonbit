@@ -5977,3 +5977,16 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：真实 x264 B 帧 + AAC MP4 重封装为 MKV 后，视频
   framemd5 5/5 与源一致。
 - 全量 wasm **1298/1298**。
+
+## 233. MKV A/V AAC priming（CodecDelay/DiscardPadding）
+
+- `MkvAvMuxer::new` 新增 `audio_priming` 与 `audio_discard_padding`
+  （采样数）：前者写 TrackEntry CodecDelay（ns，独立四舍五入）并把
+  音频块时间码前移 offset（ms），后者把最后一个音频块写成
+  BlockGroup + DiscardPadding（正值表示尾丢弃，与 FFmpeg 一致）。
+- 音频 PTS 允许到 -offset；`mkv_sint_elem` 输出最小宽度有符号 EBML。
+- 回归：CodecDelay>0、首音频包 PTS 回到 0、尾块 DiscardPadding
+  非 0。
+- 外部验证：真实 x264 B 帧 + AAC MP4 重封装为 MKV 后，ffmpeg 解码
+  AAC PCM 88200 字节与源逐字节一致（初版尾块符号/舍入错误已修正）。
+- 全量 wasm **1299/1299**。

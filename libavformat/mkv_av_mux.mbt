@@ -25,6 +25,10 @@ pub struct MkvAvMuxer {
   /// Audio CodecID ("A_AAC", "A_AC3", "A_EAC3") and optional CodecPrivate.
   audio_codec_id : String
   audio_private : Bytes
+  /// Encoder delay/pre-skip in samples, written as TrackEntry CodecDelay.
+  audio_priming : Int32
+  /// Samples to discard from the end of the last audio block.
+  audio_discard_padding : Int32
   events : Array[MkvAvEvent]
   cues : Array[MkvSubtitleCue]
   tags : Array[(String, String)]
@@ -40,13 +44,17 @@ pub fn mkv_av_muxer_new(
   channels~ : Int32 = 2,
   audio_codec~ : String = "A_AAC",
   audio_private~ : Bytes = b"",
+  audio_priming~ : Int32 = 0,
+  audio_discard_padding~ : Int32 = 0,
 ) -> Result[MkvAvMuxer, String] {
   if width <= 0 ||
     height <= 0 ||
     avcc.length() < 7 ||
     sample_rate <= 0 ||
     channels < 1 ||
-    channels > 7 {
+    channels > 7 ||
+    audio_priming < 0 ||
+    audio_discard_padding < 0 {
     return Err("EINVAL: invalid MKV A/V parameters")
   }
   Ok({
@@ -57,6 +65,8 @@ pub fn mkv_av_muxer_new(
     channels,
     audio_codec_id: audio_codec,
     audio_private,
+    audio_priming,
+    audio_discard_padding,
     events: [],
     cues: [],
     tags: [],
@@ -86,7 +96,8 @@ pub fn MkvAvMuxer::write_audio(
   pts_ms : Int64,
   duration_ms : Int32,
 ) -> Result[Unit, String] {
-  if packet.length() == 0 || duration_ms <= 0 || pts_ms < 0L {
+  let min_pts = -self.audio_offset_ms()
+  if packet.length() == 0 || duration_ms <= 0 || pts_ms < min_pts {
     return Err("EINVAL: invalid WebM audio packet")
   }
   self.events.push({
@@ -155,6 +166,43 @@ priv struct MkvAvBlock {
   duration_ms : Int64
   keyframe : Bool
   group : Bool
+  discard_padding_ns : Int64
+}
+
+///|
+/// Minimal-width two's-complement EBML signed integer.
+fn mkv_sint_elem(
+  dst : Array[Byte],
+  id : UInt32,
+  id_len : Int32,
+  value : Int64,
+) -> Unit {
+  let mut width = 1
+  while width < 8 {
+    let min = -(1L << (8 * width - 1))
+    let max = (1L << (8 * width - 1)) - 1L
+    if value >= min && value <= max {
+      break
+    }
+    width = width + 1
+  }
+  let body : Array[Byte] = []
+  for i in 0..<width {
+    body.push(((value >> (8 * (width - 1 - i))) & 0xFFL).to_int().to_byte())
+  }
+  webm_elem(dst, id, id_len, body)
+}
+
+///|
+/// Audio codec delay expressed in the millisecond cluster timescale, rounded
+/// like av_rescale_q (AV_ROUND_NEAR_INF).
+fn MkvAvMuxer::audio_offset_ms(self : MkvAvMuxer) -> Int64 {
+  if self.audio_priming <= 0 || self.sample_rate <= 0 {
+    0L
+  } else {
+    (self.audio_priming.to_int64() * 1000L + self.sample_rate.to_int64() / 2L) /
+    self.sample_rate.to_int64()
+  }
 }
 
 ///|
@@ -164,8 +212,32 @@ fn mkv_av_blocks(mux : MkvAvMuxer) -> Array[MkvAvBlock] {
   // Per-track decode order is preserved: blocks interleave by accumulated
   // DTS, while the SimpleBlock timecode keeps the presentation timestamp.
   let mut video_dts = 0L
-  let mut audio_dts = 0L
+  let audio_offset = mux.audio_offset_ms()
+  let mut audio_dts = audio_offset
+  let mut audio_total = 0
   for e in mux.events {
+    if e.track == 2 {
+      audio_total = audio_total + 1
+    }
+  }
+  let mut audio_index = 0
+  for e in mux.events {
+    let pts = if e.track == 2 { e.pts_ms + audio_offset } else { e.pts_ms }
+    let discard_ns = if e.track == 2 {
+      let last = audio_index == audio_total - 1
+      audio_index = audio_index + 1
+      if last && mux.audio_discard_padding > 0 {
+        (
+          mux.audio_discard_padding.to_int64() * 1000000000L +
+          mux.sample_rate.to_int64() / 2L
+        ) /
+        mux.sample_rate.to_int64()
+      } else {
+        0L
+      }
+    } else {
+      0L
+    }
     let dts = if e.track == 1 {
       let d = video_dts
       video_dts = video_dts + e.duration_ms.to_int64()
@@ -175,16 +247,17 @@ fn mkv_av_blocks(mux : MkvAvMuxer) -> Array[MkvAvBlock] {
       audio_dts = audio_dts + e.duration_ms.to_int64()
       d
     } else {
-      e.pts_ms
+      pts
     }
     out.push({
-      pts_ms: e.pts_ms,
+      pts_ms: pts,
       dts_ms: dts,
       track: e.track,
       data: e.data,
       duration_ms: e.duration_ms.to_int64(),
       keyframe: e.keyframe,
       group: false,
+      discard_padding_ns: discard_ns,
     })
   }
   for cue in mkv_subtitle_sorted(mux.cues) {
@@ -196,6 +269,7 @@ fn mkv_av_blocks(mux : MkvAvMuxer) -> Array[MkvAvBlock] {
       duration_ms: cue.end_ms - cue.start_ms,
       keyframe: false,
       group: true,
+      discard_padding_ns: 0L,
     })
   }
   for i = 1; i < out.length(); i = i + 1 {
@@ -234,10 +308,15 @@ fn MkvAvMuxer::cluster(self : MkvAvMuxer) -> Array[Byte] {
     for b in e.data {
       block.push(b)
     }
-    if e.group {
+    if e.group || e.discard_padding_ns != 0L {
       let group : Array[Byte] = []
       webm_elem(group, 0xA1, 1, block) // Block
-      webm_uint_elem(group, 0x9B, 1, e.duration_ms.reinterpret_as_uint64())
+      if e.group {
+        webm_uint_elem(group, 0x9B, 1, e.duration_ms.reinterpret_as_uint64())
+      }
+      if e.discard_padding_ns != 0L {
+        mkv_sint_elem(group, 0x75A2, 2, e.discard_padding_ns)
+      }
       webm_elem(cluster, 0xA0, 1, group) // BlockGroup
     } else {
       webm_elem(cluster, 0xA3, 1, block)
@@ -310,6 +389,14 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
   webm_uint_elem(atrack, 0x73C5, 2, 2UL)
   webm_uint_elem(atrack, 0x83, 1, 2UL)
   webm_string_elem(atrack, 0x86, 1, self.audio_codec_id)
+  if self.audio_priming > 0 {
+    let delay_ns = (
+        self.audio_priming.to_int64() * 1000000000L +
+        self.sample_rate.to_int64() / 2L
+      ) /
+      self.sample_rate.to_int64()
+    webm_uint_elem(atrack, 0x56AA, 2, delay_ns.reinterpret_as_uint64())
+  }
   let private = if self.audio_private.length() > 0 {
     self.audio_private
   } else {

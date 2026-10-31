@@ -143,3 +143,28 @@ test "mkv A/V: video blocks keep decode order with reordered PTS" {
   assert_eq(video_pts[1], 200L)
   assert_eq(video_pts[2], 100L)
 }
+
+///|
+test "mkv A/V: audio priming writes CodecDelay and DiscardPadding" {
+  let avcc = @libavutil.av_base64_decode(fmp4_h264_avcc_b64, 1024).unwrap()
+  let mux = mkv_av_muxer_new(
+    64,
+    48,
+    avcc,
+    44100,
+    channels=1,
+    audio_private=b"\x12\x08",
+    audio_priming=1024,
+    audio_discard_padding=956,
+  ).unwrap()
+  mux.write_video(b"V0", 0L, 200, keyframe=true).unwrap()
+  mux.write_audio(b"A0", 0L, 23).unwrap()
+  mux.write_audio(b"A1", 23L, 23).unwrap()
+  let mkv_out = av_matroska_open(mux.finish()).unwrap()
+  let audio_track = mkv_out.tracks[1]
+  assert_true(audio_track.codec_delay > 0UL)
+  let audio_packets = mkv_out.packets.filter(p => p.stream_index == 1)
+  assert_eq(audio_packets.length(), 2)
+  assert_eq(audio_packets[0].pts, 0L)
+  assert_true(audio_packets[1].discard_padding != 0L)
+}
