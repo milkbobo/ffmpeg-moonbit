@@ -85,6 +85,8 @@ pub struct TsDemux {
   streams : Array[TsStream]
   packets : Array[TsPacket]
   pcrs : Array[TsPcr]
+  /// NIT `network_name_descriptor` text; "" when no NIT was seen.
+  mut network_name : String
 }
 
 ///|
@@ -378,6 +380,42 @@ fn ts_parse_sdt(section : BytesView, demux : TsDemux) -> Unit {
 }
 
 ///|
+/// Read the NIT (`table_id == 0x40`) network_name_descriptor into
+/// `demux.network_name`; transport-stream/service loops are not needed here.
+fn ts_parse_nit(section : BytesView, demux : TsDemux) -> Unit {
+  if section.length() < 12 || section[0].to_int() != 0x40 {
+    return
+  }
+  let sec_len = ((section[1].to_int() & 0x0F) << 8) | section[2].to_int()
+  let end = 3 + sec_len - 4
+  if end > section.length() || end < 12 {
+    return
+  }
+  let nd_len = ts_rb16(section, 8) & 0x0FFF
+  let dstart = 10
+  let dend = dstart + nd_len
+  if dend > end {
+    return
+  }
+  let mut q = dstart
+  while q + 2 <= dend {
+    let tag = section[q].to_int()
+    let dlen = section[q + 1].to_int()
+    if q + 2 + dlen > dend {
+      return
+    }
+    if tag == 0x40 {
+      let bytes : Array[Byte] = []
+      for i = 0; i < dlen; i = i + 1 {
+        bytes.push(section[q + 2 + i])
+      }
+      demux.network_name = utf8_to_string(bytes)
+    }
+    q = q + 2 + dlen
+  }
+}
+
+///|
 /// Parse a complete PMT section (`table_id == 0x02`). Repeated PMTs are merged:
 /// streams keep their first-seen index, matching the C's stable stream list.
 fn ts_parse_pmt(section : BytesView, demux : TsDemux, pmt_pid : Int32) -> Unit {
@@ -648,6 +686,7 @@ pub fn av_mpegts_open(data : Bytes) -> Result[TsDemux, String] {
     streams: [],
     packets: [],
     pcrs: [],
+    network_name: "",
   }
   let pes_states : Map[Int32, TsPesState] = Map([])
   let section_buffers : Map[Int32, Array[Byte]] = Map([])
@@ -694,8 +733,8 @@ pub fn av_mpegts_open(data : Bytes) -> Result[TsDemux, String] {
       continue
     }
     let payload = packet[p:188]
-    if pid == 0 || pid == 0x11 {
-      // PAT / SDT: PSI section with a pointer field on start packets.
+    if pid == 0 || pid == 0x11 || pid == 0x10 {
+      // PAT / SDT / NIT: PSI section with a pointer field on start packets.
       let buf = match section_buffers.get(pid) {
         Some(b) => b
         None => {
@@ -725,9 +764,11 @@ pub fn av_mpegts_open(data : Bytes) -> Result[TsDemux, String] {
           let section = Bytes::from_array(buf[0:3 + sec_len])
           if pid == 0 {
             ts_parse_pat(section, demux)
-          } else {
+          } else if pid == 0x11 {
             // Programs may not exist yet (ffmpeg writes the SDT first).
             sdt_sections.push(section)
+          } else {
+            ts_parse_nit(section, demux)
           }
           buf.clear()
         }

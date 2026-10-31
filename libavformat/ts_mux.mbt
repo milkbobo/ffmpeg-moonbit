@@ -25,6 +25,9 @@ pub struct TsMuxer {
   service_type : Int32
   transport_stream_id : Int32
   original_network_id : Int32
+  /// Emit a NIT (`-mpegts_flags nit`): provider as network name plus a
+  /// one-entry service list.
+  nit : Bool
   mut wrote_tables : Bool
   /// Non-zero enables automatic ADTS framing of AAC access units.
   mut adts_rate : Int32
@@ -55,6 +58,8 @@ pub fn ts_muxer_new(
   service_type~ : Int32 = 0x01,
   transport_stream_id~ : Int32 = 1,
   original_network_id~ : Int32 = 0xFF01,
+  /// Emit a NIT on PID 0x10 (`-mpegts_flags nit`).
+  nit~ : Bool = false,
 ) -> TsMuxer {
   {
     pmt_pid: 0x1000,
@@ -77,6 +82,7 @@ pub fn ts_muxer_new(
     service_type,
     transport_stream_id,
     original_network_id,
+    nit,
     wrote_tables: false,
     adts_rate: 0,
     adts_channels: 0,
@@ -279,12 +285,50 @@ fn TsMuxer::pmt(self : TsMuxer) -> Unit {
 }
 
 ///|
+/// NIT (table_id 0x40) on PID 0x10: network_name_descriptor with the
+/// provider name plus a service_list_descriptor, as
+/// `mpegtsenc.c::mpegts_write_nit` lays it out.
+fn TsMuxer::write_nit(self : TsMuxer) -> Unit {
+  let network = ts_mux_service_bytes(self.service_provider)
+  let section : Array[Byte] = []
+  section.push(b'\x40')
+  // 5 header bytes + data (network descriptors, loop) + CRC(4).
+  ts_mux_u16(section, 0xF000 | (5 + 17 + network.length() + 4))
+  ts_mux_u16(section, self.original_network_id) // network_id
+  section.push(b'\xC1')
+  section.push(b'\x00')
+  section.push(b'\x00')
+  ts_mux_u16(section, 0xF000 | (2 + network.length()))
+  section.push(b'\x40') // network_name_descriptor
+  section.push(network.length().to_byte())
+  for b in network {
+    section.push(b)
+  }
+  ts_mux_u16(section, 0xF000 | 11)
+  ts_mux_u16(section, self.transport_stream_id)
+  ts_mux_u16(section, self.original_network_id)
+  ts_mux_u16(section, 0xF000 | 5)
+  section.push(b'\x41') // service_list_descriptor
+  section.push(b'\x03')
+  ts_mux_u16(section, 1) // service_id == program_number
+  section.push(self.service_type.to_byte())
+  let crc = ts_mux_crc(section)
+  for i in 0..<4 {
+    section.push(((crc >> (24 - 8 * i)) & 0xFFU).to_byte())
+  }
+  self.section(0x10, section)
+}
+
+///|
 fn TsMuxer::ensure_tables(self : TsMuxer) -> Unit {
   if !self.wrote_tables {
     self.wrote_tables = true
     self.sdt()
     self.pat()
     self.pmt()
+    if self.nit {
+      self.write_nit()
+    }
   }
 }
 

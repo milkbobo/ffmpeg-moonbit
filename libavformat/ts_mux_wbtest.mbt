@@ -177,3 +177,53 @@ test "ts muxer: SDT service descriptor matches mpegtsenc and round-trips" {
   assert_eq(defaults.programs[0].service_name, "Service01")
   assert_eq(defaults.programs[0].service_provider, "FFmpeg")
 }
+
+///|
+/// NIT bytes match ffmpeg 9.0.2 mpegtsenc (`-mpegts_flags +nit` with the same
+/// service metadata), and the demuxer reads the network name back.
+test "ts muxer: NIT network name matches mpegtsenc and round-trips" {
+  let mux = ts_muxer_new(
+    service_name="TestSvc",
+    service_provider="TestProv",
+    nit=true,
+  )
+  mux.write_video(0L, b"x")
+  let bytes = mux.finish()
+  // Table order: SDT, PAT, PMT, NIT; NIT rides PID 0x10 in the fourth packet.
+  let packet = 188 * 3
+  assert_eq(bytes[packet], b'\x47')
+  assert_eq(
+    (bytes[packet + 1].to_int() & 0x1F) * 256 + bytes[packet + 2].to_int(),
+    0x10,
+    msg="NIT is the fourth table packet",
+  )
+  let start = packet + 5
+  let sec_len = ((bytes[start + 1].to_int() & 0x0F) << 8) |
+    bytes[start + 2].to_int()
+  assert_eq(sec_len, 34)
+  let expected : Array[Byte] = [
+    b'\x40', b'\xf0', b'\x22', b'\xff', b'\x01', b'\xc1', b'\x00', b'\x00', b'\xf0',
+    b'\x0a', b'\x40', b'\x08', b'\x54', b'\x65', b'\x73', b'\x74', b'\x50', b'\x72',
+    b'\x6f', b'\x76', b'\xf0', b'\x0b', b'\x00', b'\x01', b'\xff', b'\x01', b'\xf0',
+    b'\x05', b'\x41', b'\x03', b'\x00', b'\x01', b'\x01', b'\x47', b'\xcf', b'\x3a',
+    b'\x73',
+  ]
+  for i in 0..<expected.length() {
+    assert_eq(bytes[start + i], expected[i], msg="NIT byte " + i.to_string())
+  }
+  let demux = av_mpegts_open(bytes).unwrap()
+  assert_eq(demux.network_name, "TestProv")
+  assert_eq(demux.programs[0].service_name, "TestSvc")
+  // Without the flag no NIT packet is written.
+  let plain = ts_muxer_new()
+  plain.write_video(0L, b"x")
+  let bare = plain.finish()
+  let mut has_nit = false
+  for p in 0..<(bare.length() / 188) {
+    let base = p * 188
+    if (bare[base + 1].to_int() & 0x1F) * 256 + bare[base + 2].to_int() == 0x10 {
+      has_nit = true
+    }
+  }
+  assert_false(has_nit)
+}

@@ -6132,3 +6132,17 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `BANDWIDTH=...,AVERAGE-BANDWIDTH=...,RESOLUTION=...`，属性顺序与
   本写入器一致。
 - 全量 wasm **1308/1308**。
+
+## 242. MPEG-TS NIT 网络描述
+
+- `ts_muxer_new` 新增 `nit`（默认关闭，对应 ffmpeg
+  `-mpegts_flags +nit`）：表顺序变为 SDT → PAT → PMT → NIT；NIT
+  （table_id 0x40）在 PID 0x10，network_name_descriptor(0x40) 用
+  provider 名，transport_stream_loop 内 service_list_descriptor(0x41)
+  列出 service_id=program_number 与 service_type，CRC 与 PAT/SDT 相同。
+- 解复用：PID 0x10 的 PSI 段解析 network_name_descriptor 到
+  `TsDemux.network_name`；SDT/PAT/NIT 共用段缓冲。
+- 回归：ffmpeg `-mpegts_flags +nit -metadata service_provider=TestProv`
+  产生的 37 字节 NIT 段作为期望字节，本写入器逐字节一致；回读
+  `network_name` 与服务字段；未开 `nit` 时不存在 PID 0x10 包。
+- 全量 wasm **1309/1309**。
