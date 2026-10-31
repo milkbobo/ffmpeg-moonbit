@@ -351,3 +351,34 @@ test "hls muxer: EXT-X-START, FRAME-RATE and VIDEO attributes" {
   assert_false(no_attrs.contains("FRAME-RATE"))
   assert_false(no_attrs.contains("VIDEO="))
 }
+
+///|
+test "hls muxer: I-FRAME-STREAM-INF variants" {
+  let variant = HlsMasterVariant::new(
+    "iframes.m3u8",
+    200000,
+    1280,
+    720,
+    "avc1.64001f",
+    frame_rate="29.97",
+    is_i_frame=true,
+  )
+  let text = hls_write_master_playlist([variant])
+  assert_true(
+    text.contains(
+      "#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=200000,RESOLUTION=1280x720,FRAME-RATE=29.97,CODECS=\"avc1.64001f\",URI=\"iframes.m3u8\"\n",
+    ),
+  )
+  let pl = av_hls_parse(text).unwrap()
+  assert_true(pl.is_master)
+  assert_eq(pl.streams.length(), 1)
+  assert_true(pl.streams[0].is_i_frame)
+  assert_eq(pl.streams[0].bandwidth, 200000L)
+  assert_eq(pl.streams[0].uri, "iframes.m3u8")
+  assert_eq(pl.streams[0].frame_rate, "29.97")
+  // Regular variants keep the two-line form.
+  let normal = hls_write_master_playlist([
+    HlsMasterVariant::new("v.m3u8", 1000, 64, 48, "avc1.42c00a"),
+  ])
+  assert_false(normal.contains("#EXT-X-I-FRAME-STREAM-INF"))
+}

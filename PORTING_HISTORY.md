@@ -6245,3 +6245,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   按位深缩放的 IDCT 与不同的输出格式），residual 的 9-bit 单分量路径
   也仍按旧行为拒绝（已有测试锁定）。
 - 全量 wasm **1317/1317**。
+
+## 251. HLS EXT-X-I-FRAME-STREAM-INF
+
+- `HlsMasterVariant` 新增 `is_i_frame`：为 true 时写单行
+  `#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=...,[AVERAGE-BANDWIDTH,]
+  [RESOLUTION,][FRAME-RATE,][CODECS,][VIDEO,]URI="..."`，不写
+  AUDIO/SUBTITLES/CLOSED-CAPTIONS，也不再输出 URI 单独一行。
+- 回归：文本单行 + `av_hls_parse` 回读 `is_i_frame`/bandwidth/uri/
+  frame_rate；普通变体仍走两行 `EXT-X-STREAM-INF`。
+- 全量 wasm **1318/1318**。

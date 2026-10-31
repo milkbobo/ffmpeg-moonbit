@@ -312,6 +312,8 @@ pub struct HlsMasterVariant {
   closed_captions_group : String
   /// `SUBTITLES` attribute naming an `EXT-X-MEDIA` subtitle group.
   subtitle_group : String
+  /// Emit an `EXT-X-I-FRAME-STREAM-INF` line instead of a media variant.
+  is_i_frame : Bool
 }
 
 ///|
@@ -344,6 +346,7 @@ pub fn HlsMasterVariant::new(
   closed_captions_group~ : String = "",
   frame_rate~ : String = "",
   video_group~ : String = "",
+  is_i_frame~ : Bool = false,
 ) -> HlsMasterVariant {
   {
     uri,
@@ -357,6 +360,7 @@ pub fn HlsMasterVariant::new(
     video_group,
     closed_captions_group,
     subtitle_group,
+    is_i_frame,
   }
 }
 
@@ -425,6 +429,28 @@ pub fn hls_write_master_playlist(
     sb.write_string(",URI=\"" + r.uri + "\"\n")
   }
   for variant in variants {
+    if variant.is_i_frame {
+      sb.write_string(
+        "#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=\{variant.bandwidth}",
+      )
+      if variant.average_bandwidth > 0 {
+        sb.write_string(",AVERAGE-BANDWIDTH=\{variant.average_bandwidth}")
+      }
+      if variant.width > 0 && variant.height > 0 {
+        sb.write_string(",RESOLUTION=\{variant.width}x\{variant.height}")
+      }
+      if variant.frame_rate != "" {
+        sb.write_string(",FRAME-RATE=" + variant.frame_rate)
+      }
+      if variant.codecs != "" {
+        sb.write_string(",CODECS=\"\{variant.codecs}\"")
+      }
+      if variant.video_group != "" {
+        sb.write_string(",VIDEO=\"" + variant.video_group + "\"")
+      }
+      sb.write_string(",URI=\"" + variant.uri + "\"\n")
+      continue
+    }
     sb.write_string("#EXT-X-STREAM-INF:BANDWIDTH=\{variant.bandwidth}")
     if variant.average_bandwidth > 0 {
       sb.write_string(",AVERAGE-BANDWIDTH=\{variant.average_bandwidth}")
