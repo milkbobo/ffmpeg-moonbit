@@ -6059,3 +6059,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 注：ffmpeg 的 flacenc 本身不产出 escape 分区（无 escape 代码），
   故无法做编码字节对拍；其 flacdec 的 `decode_residuals` 支持 escape。
 - 全量 wasm **1303/1303**。
+
+## 238. Opus output_gain 增益验证
+
+- 新增 `libavcodec/opus_gain_test.mbt`：同一段 libopus CELT 码流分别用
+  `output_gain` 0、+5 dB（1280）、-5 dB（-1280）的 OpusHead 解码，
+  断言增益流的每个样本恰为无增益样本乘 FFmpeg 的 float 增益常量
+  （`ff_exp10(gain_i/(20*256))` = `exp2(M_LOG2_10 * x)`，glibc 结果
+  转 float：+5 dB = 1071881897、-5 dB = 1058010522）。
+- 增益常量对比：在 -10..+16 dB 的 18 个取值上，MoonBit 的
+  `pow(10, x)`、`pow(2, M_LOG2_10*x)`、`exp(M_LN2 * M_LOG2_10*x)`
+  转 float 后与 glibc `exp2` 的 float 位完全相同，因此解码器的
+  `pow(10, x)` 实现无需改动；注释已更新。
+- 注：ffmpeg 的 opusdec 用 `vector_fmul_scalar(..., FFALIGN(n,8))`
+  逐样本乘同一 float，对齐部分不影响有效样本。白盒测试会触发
+  wasm `__init` 局部变量上限，故测试放在 blackbox 二进制。
+- 全量 wasm **1304/1304**。

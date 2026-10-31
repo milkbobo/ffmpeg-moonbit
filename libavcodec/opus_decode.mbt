@@ -10,8 +10,10 @@
 /// cross-faded over the 120-sample window, and multistream packets keep
 /// streams aligned through per-stream sync FIFOs. Decoding errors conceal to
 /// silence for the frame duration, matching the default (non-EXPLODE) C
-/// behavior. The output-gain path uses `pow(10, x)`; FFmpeg's `ff_exp10` may
-/// differ by a ulp, so gain-free streams are the validated configuration.
+/// behavior. The output-gain path uses `pow(10, x)`; FFmpeg's `ff_exp10` is
+/// `exp2(M_LOG2_10 * x)`, which rounds to the same float over the validated
+/// ±16 dB range (`opus_gain_test` checks ±5 dB sample scaling against the
+/// glibc constants).
 
 ///|
 let opus_celt_band_end : Array[Int32] = [13, 17, 17, 19, 21]
