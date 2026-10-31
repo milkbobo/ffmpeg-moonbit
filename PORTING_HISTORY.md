@@ -6114,3 +6114,21 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   本写入器输出逐字节一致；回读服务字段；默认值路径 Service01/FFmpeg。
   另修正 AC-3 A/V 测试里 PAT/PMT CRC 的绝对偏移（SDT 占首包）。
 - 全量 wasm **1307/1307**。
+
+## 241. HLS 主播放列表属性扩充
+
+- `HlsMasterVariant` 新增 `average_bandwidth`、`closed_captions_group`：
+  `#EXT-X-STREAM-INF` 按 mpegtsenc/hlsplaylist.c 顺序输出
+  BANDWIDTH、AVERAGE-BANDWIDTH、RESOLUTION、CODECS、AUDIO、
+  CLOSED-CAPTIONS、SUBTITLES；RESOLUTION 在宽高任一为 0 时省略，
+  CODECS 为空时省略（与 `ff_hls_write_stream_info` 一致）。
+- `HlsMasterRendition` 新增 `forced`/`instream_id`：SUBTITLES 渲染可写
+  `FORCED=YES`；`TYPE=CLOSED-CAPTIONS` 按 hlsenc 写 GROUP-ID/NAME/
+  LANGUAGE/INSTREAM-ID 且不带 URI（也不写 DEFAULT/AUTOSELECT）。
+- 回归：文本属性顺序 + `av_hls_parse` 回读 `average_bandwidth`/
+  `closed_captions`/`instream_id`/`forced`；0x0 分辨率与空 CODECS 的
+  省略路径。
+- 外部对照：ffmpeg 9.0.2 hlsenc 的双路 master 播放列表为
+  `BANDWIDTH=...,AVERAGE-BANDWIDTH=...,RESOLUTION=...`，属性顺序与
+  本写入器一致。
+- 全量 wasm **1308/1308**。

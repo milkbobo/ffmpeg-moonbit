@@ -289,16 +289,20 @@ fn hls_mux_hex(data : Bytes) -> String {
 pub struct HlsMasterVariant {
   uri : String
   bandwidth : Int32
+  /// `AVERAGE-BANDWIDTH`; 0 omits the attribute.
+  average_bandwidth : Int32
   width : Int32
   height : Int32
   codecs : String
   audio_group : String
+  /// `CLOSED-CAPTIONS` attribute naming an `EXT-X-MEDIA` captions group.
+  closed_captions_group : String
   /// `SUBTITLES` attribute naming an `EXT-X-MEDIA` subtitle group.
   subtitle_group : String
 }
 
 ///|
-/// One `EXT-X-MEDIA` rendition (audio, subtitles, ...).
+/// One `EXT-X-MEDIA` rendition (audio, subtitles, closed captions, ...).
 pub struct HlsMasterRendition {
   type_ : String
   group_id : String
@@ -306,7 +310,11 @@ pub struct HlsMasterRendition {
   language : String
   is_default : Bool
   autoselect : Bool
+  /// `FORCED=YES` on subtitle renditions; false omits the attribute.
+  forced : Bool
   channels : String
+  /// `INSTREAM-ID` for `TYPE=CLOSED-CAPTIONS` (in-band stream, no URI).
+  instream_id : String
   uri : String
 }
 
@@ -319,8 +327,20 @@ pub fn HlsMasterVariant::new(
   codecs : String,
   audio_group~ : String = "",
   subtitle_group~ : String = "",
+  average_bandwidth~ : Int32 = 0,
+  closed_captions_group~ : String = "",
 ) -> HlsMasterVariant {
-  { uri, bandwidth, width, height, codecs, audio_group, subtitle_group, }
+  {
+    uri,
+    bandwidth,
+    average_bandwidth,
+    width,
+    height,
+    codecs,
+    audio_group,
+    closed_captions_group,
+    subtitle_group,
+  }
 }
 
 ///|
@@ -333,8 +353,21 @@ pub fn HlsMasterRendition::new(
   is_default~ : Bool = false,
   autoselect~ : Bool = true,
   channels~ : String = "",
+  forced~ : Bool = false,
+  instream_id~ : String = "",
 ) -> HlsMasterRendition {
-  { type_, group_id, name, language, is_default, autoselect, channels, uri, }
+  {
+    type_,
+    group_id,
+    name,
+    language,
+    is_default,
+    autoselect,
+    forced,
+    channels,
+    instream_id,
+    uri,
+  }
 }
 
 ///|
@@ -354,21 +387,44 @@ pub fn hls_write_master_playlist(
     if r.language != "" {
       sb.write_string(",LANGUAGE=\"" + r.language + "\"")
     }
+    if r.type_ == "CLOSED-CAPTIONS" {
+      // In-band captions carry INSTREAM-ID and no URI, as hlsenc writes them.
+      if r.instream_id != "" {
+        sb.write_string(",INSTREAM-ID=\"" + r.instream_id + "\"")
+      }
+      sb.write_string("\n")
+      continue
+    }
     let default_attr = if r.is_default { "YES" } else { "NO" }
     let autoselect_attr = if r.autoselect { "YES" } else { "NO" }
     sb.write_string(",DEFAULT=" + default_attr)
     sb.write_string(",AUTOSELECT=" + autoselect_attr)
+    if r.forced {
+      sb.write_string(",FORCED=YES")
+    }
     if r.channels != "" {
       sb.write_string(",CHANNELS=\"" + r.channels + "\"")
     }
     sb.write_string(",URI=\"" + r.uri + "\"\n")
   }
   for variant in variants {
-    sb.write_string(
-      "#EXT-X-STREAM-INF:BANDWIDTH=\{variant.bandwidth},RESOLUTION=\{variant.width}x\{variant.height},CODECS=\"\{variant.codecs}\"",
-    )
+    sb.write_string("#EXT-X-STREAM-INF:BANDWIDTH=\{variant.bandwidth}")
+    if variant.average_bandwidth > 0 {
+      sb.write_string(",AVERAGE-BANDWIDTH=\{variant.average_bandwidth}")
+    }
+    if variant.width > 0 && variant.height > 0 {
+      sb.write_string(",RESOLUTION=\{variant.width}x\{variant.height}")
+    }
+    if variant.codecs != "" {
+      sb.write_string(",CODECS=\"\{variant.codecs}\"")
+    }
     if variant.audio_group != "" {
       sb.write_string(",AUDIO=\"" + variant.audio_group + "\"")
+    }
+    if variant.closed_captions_group != "" {
+      sb.write_string(
+        ",CLOSED-CAPTIONS=\"" + variant.closed_captions_group + "\"",
+      )
     }
     if variant.subtitle_group != "" {
       sb.write_string(",SUBTITLES=\"" + variant.subtitle_group + "\"")

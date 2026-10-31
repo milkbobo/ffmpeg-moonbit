@@ -248,3 +248,66 @@ test "hls muxer: discontinuity, gap and program date-time round-trip" {
   assert_false(plain.contains("#EXT-X-GAP"))
   assert_false(plain.contains("#EXT-X-PROGRAM-DATE-TIME"))
 }
+
+///|
+test "hls muxer: average bandwidth, closed captions and forced subtitles" {
+  let variant = HlsMasterVariant::new(
+    "v.m3u8",
+    800000,
+    640,
+    360,
+    "avc1.42c01e,mp4a.40.2",
+    audio_group="aud",
+    subtitle_group="subs",
+    average_bandwidth=750000,
+    closed_captions_group="cc",
+  )
+  let cc = HlsMasterRendition::new(
+    "CLOSED-CAPTIONS",
+    "cc",
+    "CC1",
+    "",
+    language="en",
+    instream_id="CC1",
+  )
+  let subs = HlsMasterRendition::new(
+    "SUBTITLES",
+    "subs",
+    "English",
+    "subs.m3u8",
+    forced=true,
+  )
+  let text = hls_write_master_playlist([variant], renditions=[cc, subs])
+  assert_true(
+    text.contains(
+      "#EXT-X-STREAM-INF:BANDWIDTH=800000,AVERAGE-BANDWIDTH=750000,RESOLUTION=640x360,CODECS=\"avc1.42c01e,mp4a.40.2\",AUDIO=\"aud\",CLOSED-CAPTIONS=\"cc\",SUBTITLES=\"subs\"\n",
+    ),
+  )
+  assert_true(
+    text.contains(
+      "#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID=\"cc\",NAME=\"CC1\",LANGUAGE=\"en\",INSTREAM-ID=\"CC1\"\n",
+    ),
+  )
+  assert_true(
+    text.contains(",DEFAULT=NO,AUTOSELECT=YES,FORCED=YES,URI=\"subs.m3u8\"\n"),
+  )
+  let pl = av_hls_parse(text).unwrap()
+  assert_eq(pl.streams.length(), 1)
+  assert_eq(pl.streams[0].average_bandwidth, 750000L)
+  assert_eq(pl.streams[0].closed_captions, "cc")
+  assert_eq(pl.renditions.length(), 2)
+  assert_eq(pl.renditions[0].type_, "CLOSED-CAPTIONS")
+  assert_eq(pl.renditions[0].instream_id, "CC1")
+  assert_eq(pl.renditions[0].uri, "")
+  assert_true(pl.renditions[1].forced)
+  // Zero dimensions omit RESOLUTION, as ff_hls_write_stream_info does.
+  let no_res = hls_write_master_playlist([
+    HlsMasterVariant::new("a.m3u8", 64000, 0, 0, "mp4a.40.2"),
+  ])
+  assert_false(no_res.contains("RESOLUTION="))
+  // Empty CODECS is omitted too.
+  let bare = hls_write_master_playlist([
+    HlsMasterVariant::new("b.m3u8", 1000, 0, 0, ""),
+  ])
+  assert_false(bare.contains("CODECS="))
+}
