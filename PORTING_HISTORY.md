@@ -6255,3 +6255,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：文本单行 + `av_hls_parse` 回读 `is_i_frame`/bandwidth/uri/
   frame_rate；普通变体仍走两行 `EXT-X-STREAM-INF`。
 - 全量 wasm **1318/1318**。
+
+## 252. MPEG-TS 纯音频 PCR
+
+- `write_audio` 在 `has_video == false` 时把该 PES 的 PTS 作为 PCR
+  写入音频 PID（有视频时仍只在视频 PES 写 PCR，对应 mpegtsenc 的
+  单一 PCR PID）；每个音频 PES 都带 PCR，远高于每 100 ms 一次的
+  最低要求。
+- 回归：audio-only TS 的 `demux.pcrs` 两条记录分别对应 90000/
+  90930，PID 为音频 0x101；A/V 路径的 PCR 行为不变。
+- 全量 wasm **1319/1319**。

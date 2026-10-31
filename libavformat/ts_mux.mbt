@@ -506,7 +506,10 @@ pub fn TsMuxer::write_audio(
   } else {
     payload
   }
-  self.pes(self.audio_pid, 0xC0, pts, framed, true, -1L, None)
+  // Audio-only streams carry the PCR on the audio PID (video provides it
+  // otherwise, matching mpegtsenc's single PCR PID).
+  let pcr = if self.has_video { -1L } else { pts }
+  self.pes(self.audio_pid, 0xC0, pts, framed, true, pcr, None)
 }
 
 ///|

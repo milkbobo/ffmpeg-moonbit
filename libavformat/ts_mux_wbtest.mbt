@@ -285,3 +285,18 @@ test "ts muxer: PMT language and HEVC registration descriptors" {
     23,
   )
 }
+
+///|
+test "ts muxer: audio-only TS carries PCR on the audio PID" {
+  let mux = ts_muxer_new(video=false, audio=true)
+  mux.enable_adts(44100, 1).unwrap()
+  mux.write_audio(90000L, b"\x00\x01")
+  mux.write_audio(90930L, b"\x00\x02")
+  let demux = av_mpegts_open(mux.finish()).unwrap()
+  assert_eq(demux.streams.length(), 1)
+  assert_eq(demux.streams[0].pid, 0x101)
+  assert_eq(demux.pcrs.length(), 2)
+  assert_eq(demux.pcrs[0].pid, 0x101)
+  assert_eq(demux.pcrs[0].base, 90000L)
+  assert_eq(demux.pcrs[1].base, 90930L)
+}
