@@ -6075,3 +6075,22 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   逐样本乘同一 float，对齐部分不影响有效样本。白盒测试会触发
   wasm `__init` 局部变量上限，故测试放在 blackbox 二进制。
 - 全量 wasm **1304/1304**。
+
+## 239. LOAS/LATM AAC 读取
+
+- 新增 `libavcodec/latm.mbt` 的 `latm_parse_stream`：按 0x2B7/13-bit
+  长度切 LOAS 帧，解析 AudioMuxElement/StreamMuxConfig（audioMuxVersion
+  0/1、单 program/单 layer、frameLengthType 0/1），用
+  `aac_parse_audio_specific_config` 求出内嵌 ASC 的比特长度并取出 ASC，
+  PayloadLengthInfo 之后按比特重打包为字节对齐的原始 AAC AU。
+  `audioMuxVersionA`、多 program/layer 与 AAC-LC 以外的 ASC 明确报错。
+- 回归：`libavcodec/latm_test.mbt` 用 ffmpeg 把 AAC-LC 转封装为 LATM
+  （`-c copy -f latm`），解析得到 2 字节 ASC（0x15 0x88）与 3 个 AU，
+  解码 PCM 与 ffmpeg `-f loas` 解码差 ≤1 LSB。
+- 集成：`libavformat/ts_latm_test.mbt` 用 `-c:a aac -f mpegts
+  -mpegts_flags +latm` 生成真实 TS（stream type 0x11），把该 PID 的
+  PES 负载拼接后交给 `latm_parse_stream`，解码 PCM 与 ffmpeg 解码 TS
+  差 ≤1 LSB。注意：`-c copy` 从 ADTS 转 TS 即使带 +latm 也只改 PMT
+  类型、负载仍是 ADTS，必须转码生成，测试因此用 lavfi 正弦 + 原生
+  AAC 编码器。
+- 全量 wasm **1306/1306**。
