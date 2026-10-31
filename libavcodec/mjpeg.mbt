@@ -436,7 +436,9 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
       }
       let precision = seg[0].to_int()
       lossless = marker == 0xC3
-      if precision != 8 && precision != 9 {
+      if precision != 8 &&
+        precision != 9 &&
+        !(lossless && precision >= 10 && precision <= 16) {
         return Err("PATCHWELCOME: mjpeg sample precision")
       }
       height = jpeg_be16(seg, 1)
@@ -490,12 +492,14 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         components[3].id == 'K' {
         adobe_transform = 0
       }
-      // 9-bit lossless is only produced for 3-component 1x1 RGB, which is
-      // stored 16-bit internally then packed to BGR24.
-      if precision != 8 && !(lossless && ncomp == 3 && max_h == 1 && max_v == 1) {
+      rgb_mode = lossless && ncomp == 3 && max_h == 1 && max_v == 1
+      // Lossless 9-bit RGB packs to BGR24; single-component lossless keeps
+      // 10..16-bit precision and finalizes to gray16le (MSB-aligned).
+      if precision != 8 &&
+        !(lossless &&
+        (rgb_mode || (ncomp == 1 && precision >= 10 && precision <= 16))) {
         return Err("PATCHWELCOME: mjpeg sample precision")
       }
-      rgb_mode = lossless && ncomp == 3 && max_h == 1 && max_v == 1
       sample_bits = precision
       for comp in components {
         let cw = (width * comp.h + max_h - 1) / max_h
@@ -575,7 +579,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         } else {
           mjpeg_decode_scan_lossless(
             bits, components, scan_components, dc_tables, width, height, max_h, max_v,
-            restart_interval, ss, al,
+            restart_interval, ss, al, sample_bits,
           )
         }
       } else if progressive {
@@ -624,7 +628,9 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
     if rgb_mode {
       mjpeg_finalize_rgb(components, width, height, sample_bits)
     } else {
-      mjpeg_finalize_lossless(components, width, height, max_h, max_v)
+      mjpeg_finalize_lossless(
+        components, width, height, max_h, max_v, sample_bits,
+      )
     }
   } else {
     mjpeg_finalize_image(

@@ -6229,3 +6229,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：6 声道音频在三种写入器中都产出该元素，默认 0 时省略；
   MPD 仍可被 `av_dash_parse` 解析。
 - 全量 wasm **1316/1316**。
+
+## 250. MJPEG 12-bit 无损灰度
+
+- SOF3 单分量允许 10..16-bit 精度（9-bit 仍仅限 1x1 RGB→bgr24）。
+  `mjpeg_decode_scan_lossless` 增加 `bits_per_sample`：初始预测改为
+  `1 << (bits-1)`（JPEG 无损规范的首样本预测 2^(P-1)），掩码/回写
+  使用 `((1<<P)-1)`；`mjpeg_finalize_lossless` 在 >8-bit 时输出
+  MSB 对齐的 16-bit 小端平面，pix_fmt 为 gray16le。
+- 夹具：手工构造 12-bit SOF3 单分量灰度 JPEG（16x8，categories 0..12
+  的 4-bit DC 表，predictor 1），ffmpeg 9.0.2 `-pix_fmt gray16le`
+  解出的 256 字节作为参考；本解码器输出逐字节一致。
+- 回归：`libavcodec/mjpeg_gray12_realdata_test.mbt`。
+- 说明：12-bit 的基线/渐进（SOF0/2）与多分量无损仍不支持（前者需要
+  按位深缩放的 IDCT 与不同的输出格式），residual 的 9-bit 单分量路径
+  也仍按旧行为拒绝（已有测试锁定）。
+- 全量 wasm **1317/1317**。

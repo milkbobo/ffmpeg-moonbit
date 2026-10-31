@@ -829,6 +829,7 @@ fn mjpeg_decode_scan_lossless(
   restart_interval : Int32,
   predictor : Int32,
   al : Int32,
+  bits_per_sample : Int32,
 ) -> Result[Unit, String] {
   let ns = scan_components.length()
   if ns < 1 || ns > 4 {
@@ -861,7 +862,8 @@ fn mjpeg_decode_scan_lossless(
       blocks[i] = comp.h * comp.v
     }
   }
-  let mask = 0xFF << al
+  let max_val = (1 << bits_per_sample) - 1
+  let mask = max_val << al
   let mut resync_mb_x = 0
   let mut resync_mb_y = 0
   let mut restart_count = -1
@@ -918,7 +920,7 @@ fn mjpeg_decode_scan_lossless(
           if px < width && py < height {
             let pred = if y == 0 && toprow {
               if x == 0 && leftcol {
-                1 << 7
+                1 << (bits_per_sample - 1)
               } else {
                 plane[py * stride + px - 1]
               }
@@ -932,7 +934,7 @@ fn mjpeg_decode_scan_lossless(
                 predictor,
               )
             }
-            plane[py * stride + px] = ((pred & mask) + (diff << al)) & 0xFF
+            plane[py * stride + px] = ((pred & mask) + (diff << al)) & max_val
           }
           x = x + 1
           if x == steps_h[i] {
@@ -955,6 +957,7 @@ fn mjpeg_finalize_lossless(
   height : Int32,
   max_h : Int32,
   max_v : Int32,
+  bits : Int32,
 ) -> Result[JpegImage, String] {
   let ncomp = components.length()
   if ncomp != 1 && ncomp != 3 {
@@ -970,7 +973,15 @@ fn mjpeg_finalize_lossless(
     let out : Array[Byte] = []
     for y = 0; y < ph; y = y + 1 {
       for x = 0; x < pw; x = x + 1 {
-        out.push(comp.samples[y * pw + x].to_byte())
+        let v = comp.samples[y * pw + x]
+        if bits > 8 {
+          // MSB-aligned 16-bit output, like ffmpeg's gray16le for 12-bit JPEG.
+          let wide = (v << (16 - bits)) & 0xFFFF
+          out.push((wide & 0xFF).to_byte())
+          out.push(((wide >> 8) & 0xFF).to_byte())
+        } else {
+          out.push(v.to_byte())
+        }
       }
     }
     out_planes.push(Bytes::from_array(out))
@@ -978,7 +989,11 @@ fn mjpeg_finalize_lossless(
     plane_heights.push(ph)
   }
   let pix_fmt = if ncomp == 1 {
-    "gray"
+    if bits > 8 {
+      "gray16le"
+    } else {
+      "gray"
+    }
   } else if plane_widths[1] >= width && plane_heights[1] >= height {
     "yuvj444p"
   } else if plane_heights[1] >= height {
