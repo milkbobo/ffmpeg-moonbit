@@ -21,6 +21,8 @@ pub struct WavMuxer {
   rf64 : Bool
   /// Emit a big-endian `RIFX` container (payload bytes swapped accordingly).
   big_endian : Bool
+  /// Optional Broadcast Wave `bext` chunk.
+  bext : WavBext?
   data : Array[Byte]
 }
 
@@ -39,6 +41,7 @@ pub fn wav_muxer_new(
   rf64~ : Bool = false,
   big_endian~ : Bool = false,
   companding~ : String = "",
+  bext~ : WavBext? = None,
 ) -> Result[WavMuxer, String] {
   if sample_rate <= 0 || channels <= 0 {
     return Err("EINVAL: invalid WAV sample rate or channel count")
@@ -58,6 +61,9 @@ pub fn wav_muxer_new(
   if big_endian && (rf64 || channels > 2 || channel_mask != 0U) {
     return Err("EINVAL: RIFX supports only plain WAVEFORMAT without RF64")
   }
+  if big_endian && bext is Some(_) {
+    return Err("EINVAL: RIFX cannot carry a little-endian bext chunk")
+  }
   Ok({
     sample_rate,
     channels,
@@ -68,6 +74,7 @@ pub fn wav_muxer_new(
     companding,
     rf64,
     big_endian,
+    bext,
     data: [],
   })
 }
@@ -207,8 +214,13 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
   } else {
     0
   }
+  let bext_chunk = match self.bext {
+    Some(bext) => wav_bext_chunk(bext)
+    None => []
+  }
+  let bext_size = bext_chunk.length()
   // Size of everything after the 8-byte RIFF/RF64 header.
-  let riff_size = 20 + fmt_size + fact_size + data_size + pad
+  let riff_size = 20 + fmt_size + bext_size + fact_size + data_size + pad
   let ds64_size = if self.rf64 { 36 } else { 0 }
   if self.rf64 {
     wav_mux_tag(out, "RF64")
@@ -260,6 +272,9 @@ pub fn WavMuxer::finish(self : WavMuxer) -> Bytes {
     }
   } else if self.companding != "" {
     wav_mux_w16(out, 0, self.big_endian) // cbSize, WAVEFORMATEX
+  }
+  for b in bext_chunk {
+    out.push(b)
   }
   if fact_size != 0 {
     wav_mux_tag(out, "fact")

@@ -6323,3 +6323,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 解析器本就把 MAP 作为 maps 数组并记录 segment.map_index；回归验证
   两个 init 段、后两分段共享第二个 map、BYTERANGE 20@0 回读。
 - 全量 wasm **1327/1327**。
+
+## 258. WAV Broadcast Wave `bext` 读写
+
+- 新增 `libavformat/wav_bext.mbt`：`WavBext`（description/originator/
+  originator_reference/origination_date/origination_time/
+  time_reference/umid/coding_history）、`wav_read_bext` 扫描
+  RIFF/RF64 块，以及按 `bwf_write_bext_chunk` 生成 chunk（version 1、
+  UMID 64 字节、190 保留字节、coding history 以 NUL 结尾）。
+- `wav_muxer_new` 新增 `bext` 参数，chunk 插在 fmt 之后并计入 RIFF/
+  RF64 尺寸；RIFX 与 bext 互斥（bext 为小端）。
+- 回归：以 ffmpeg 9.0.2 `-write_bext 1` + 同一组元数据（description/
+  originator/originator_reference/origination_date/origination_time/
+  time_reference=123456789/coding_history）写出的 636 字节 bext 段为
+  期望，本写入器输出逐字节一致；`wav_read_bext` 回读全部字段；无 bext
+  文件返回 None。
+- 全量 wasm **1328/1328**。
