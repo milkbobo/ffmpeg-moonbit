@@ -5905,3 +5905,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   与源一致，解码帧 MD5 序列一致。
 - 无代码改动（覆盖已有 fMP4 CTS + HLS/DASH reader 组合）。
 - 全量 wasm **1288/1288**。
+
+## 227. MP4 双轨 Opus 音频
+
+- `Mp4AvMuxer::new` 新增 `audio_codec~`（aac/opus）：opus 时用
+  `mp4_opus_entry` 写 `Opus`/`dOps`（pre-skip 取 `aac_priming`），
+  elst priming 逻辑复用；Opus 限制 1/2 声道。
+- 回归 `mp4_av_opus_wbtest.mbt`：真实 AV1+Opus MP4 重封装后
+  av01/Opus 条目与 extradata、视频 payload、音频包数/时长、
+  `skip_samples` 均与源一致。
+- 外部验证：ffmpeg 9.0.2 识别 av01+Opus，video framemd5 5/5 与源
+  一致，Opus 解码 PCM 97296 字节逐字节一致。
+- 全量 wasm **1289/1289**。

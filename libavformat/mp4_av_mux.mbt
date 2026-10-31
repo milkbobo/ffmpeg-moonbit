@@ -20,7 +20,9 @@ pub struct Mp4AvMuxer {
   video_cts : Array[Int32]
   sample_rate : Int32
   channels : Int32
-  /// AAC encoder delay in media samples, expressed as an audio `elst` edit.
+  /// Audio codec: "aac" (esds) or "opus" (dOps).
+  audio_codec : String
+  /// Encoder delay/pre-skip in media samples, expressed as an audio `elst`.
   aac_priming : Int32
   /// Explicit audio sample entry (AC-3/E-AC-3); AAC builds its own `esds`.
   audio_entry : Array[Byte]?
@@ -38,10 +40,13 @@ pub fn mp4_av_muxer_new(
   avcc : Bytes,
   sample_rate : Int32,
   channels : Int32,
-  /// Leading AAC samples to skip via `edts`/`elst`.
+  /// Leading AAC/Opus samples to skip via `edts`/`elst` (also dOps pre-skip).
   aac_priming~ : Int32 = 0,
-  /// Explicit audio sample entry (e.g. `mp4_ac3_entry`); AAC when None.
+  /// Explicit audio sample entry (e.g. `mp4_ac3_entry`); built from
+  /// `audio_codec` when None.
   audio_entry~ : Array[Byte]? = None,
+  /// Audio codec when `audio_entry` is None: "aac" or "opus".
+  audio_codec~ : String = "aac",
   /// Video sample entry: "h264", "hevc", "av1" or "vp9".
   video_codec~ : String = "h264",
 ) -> Result[Mp4AvMuxer, String] {
@@ -49,11 +54,16 @@ pub fn mp4_av_muxer_new(
     video_codec == "hevc" ||
     video_codec == "av1" ||
     video_codec == "vp9"
+  let known_audio = audio_codec == "aac" || audio_codec == "opus"
+  if audio_codec == "opus" && channels > 2 {
+    return Err("EINVAL: MP4 Opus supports 1 or 2 channels")
+  }
   // avcC needs at least 7 bytes; hvcC/av1C/vpcC can be shorter.
   let min_config = if video_codec == "h264" { 7 } else { 4 }
   if width <= 0 ||
     height <= 0 ||
     !known_video ||
+    !known_audio ||
     avcc.length() < min_config ||
     sample_rate <= 0 ||
     channels < 1 ||
@@ -62,17 +72,18 @@ pub fn mp4_av_muxer_new(
     return Err("EINVAL: invalid MP4 A/V parameters")
   }
   match audio_entry {
-    None => {
-      let mut rate_ok = false
-      for rate in mp4_mux_rates() {
-        if rate == sample_rate {
-          rate_ok = true
+    None =>
+      if audio_codec == "aac" {
+        let mut rate_ok = false
+        for rate in mp4_mux_rates() {
+          if rate == sample_rate {
+            rate_ok = true
+          }
+        }
+        if !rate_ok {
+          return Err("EINVAL: unsupported AAC sample rate")
         }
       }
-      if !rate_ok {
-        return Err("EINVAL: unsupported AAC sample rate")
-      }
-    }
     Some(entry) =>
       if entry.length() == 0 || aac_priming != 0 {
         return Err("EINVAL: invalid MP4 audio entry")
@@ -83,6 +94,7 @@ pub fn mp4_av_muxer_new(
     height,
     avcc,
     video_codec,
+    audio_codec,
     aac_priming,
     audio_entry,
     video_packets: [],
@@ -544,7 +556,12 @@ pub fn Mp4AvMuxer::finish(self : Mp4AvMuxer) -> Bytes {
 
   let aentry = match self.audio_entry {
     Some(entry) => entry
-    None => mp4_av_aac_entry(self.sample_rate, self.channels)
+    None =>
+      if self.audio_codec == "opus" {
+        mp4_opus_entry(self.channels, self.aac_priming, self.sample_rate)
+      } else {
+        mp4_av_aac_entry(self.sample_rate, self.channels)
+      }
   }
   let smhd_body : Array[Byte] = []
   mp4_u16(smhd_body, 0)
