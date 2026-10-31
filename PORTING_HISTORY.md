@@ -5965,3 +5965,15 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   framemd5 8/8 与源一致，`-c copy -f framecrc` 的 PTS 重排序列
   相同，`-ss 0.4` 定位帧哈希与源一致。
 - 全量 wasm **1296/1296**。
+
+## 232. MKV A/V SeekHead/Cues 与 B 帧解码顺序
+
+- `mkv_seekhead_cues_mid` 支持 Tags/Chapters 位于 Tracks 与 Cluster
+  之间；MKV A/V 写入器输出 SeekHead/Cues（关键帧 CueTime）。
+- 修复 A/V 事件按 PTS 全排序导致 B 帧块被重排、破坏解码顺序的问题：
+  现在先按各轨累计 DTS 稳定排序交错，SimpleBlock 时间码仍写 PTS。
+- 回归：A/V Cues 时间与 Cluster 偏移；`mkv_add_tags` 插入后 Cues
+  位置前移且可解析；显式乱序 PTS（0/200/100）经解复用保持解码顺序。
+- 外部验证：真实 x264 B 帧 + AAC MP4 重封装为 MKV 后，视频
+  framemd5 5/5 与源一致。
+- 全量 wasm **1298/1298**。

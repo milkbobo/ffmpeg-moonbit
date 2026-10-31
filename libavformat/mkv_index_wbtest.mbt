@@ -81,3 +81,65 @@ test "mkv H.264: explicit PTS encodes B-frame reorder" {
   assert_eq(cues.cues.length(), 1)
   assert_eq(cues.cues[0].time, 0L)
 }
+
+///|
+test "mkv A/V: Cues survive tag insertion" {
+  let avcc = @libavutil.av_base64_decode(fmp4_h264_avcc_b64, 1024).unwrap()
+  let mux = mkv_av_muxer_new(
+    64,
+    48,
+    avcc,
+    44100,
+    channels=1,
+    audio_private=b"\x12\x08",
+  ).unwrap()
+  mux.write_video(b"V0", 0L, 200, keyframe=true).unwrap()
+  mux.write_audio(b"A0", 0L, 100).unwrap()
+  mux.write_video(b"V1", 200L, 200, keyframe=true).unwrap()
+  mux.write_audio(b"A1", 100L, 100).unwrap()
+  let bytes = mux.finish()
+  let cues = av_matroska_parse_cues(bytes).unwrap()
+  assert_eq(cues.cues.length(), 2)
+  assert_eq(cues.cues[0].time, 0L)
+  assert_eq(cues.cues[1].time, 200L)
+  let tagged = mkv_add_tags(bytes, [("title", "indexed")]).unwrap()
+  let cues2 = av_matroska_parse_cues(tagged).unwrap()
+  assert_eq(cues2.cues.length(), 2)
+  assert_eq(cues2.cues[1].time, 200L)
+  assert_true(
+    cues2.cues[0].cluster_position > cues.cues[0].cluster_position,
+    msg="tags must shift the cluster forward",
+  )
+  let mkv = av_matroska_open(tagged).unwrap()
+  assert_eq(mkv.tracks.length(), 2)
+  assert_eq(mkv.packets.length(), 4)
+}
+
+///|
+test "mkv A/V: video blocks keep decode order with reordered PTS" {
+  let avcc = @libavutil.av_base64_decode(fmp4_h264_avcc_b64, 1024).unwrap()
+  let mux = mkv_av_muxer_new(
+    64,
+    48,
+    avcc,
+    44100,
+    channels=1,
+    audio_private=b"\x12\x08",
+  ).unwrap()
+  mux.write_video(b"V0", 0L, 100, keyframe=true).unwrap()
+  mux.write_video(b"V1", 200L, 100).unwrap()
+  mux.write_video(b"V2", 100L, 100).unwrap()
+  mux.write_audio(b"A0", 0L, 100).unwrap()
+  mux.write_audio(b"A1", 100L, 100).unwrap()
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  let video_pts : Array[Int64] = []
+  for packet in mkv.packets {
+    if packet.stream_index == 0 {
+      video_pts.push(packet.pts)
+    }
+  }
+  assert_eq(video_pts.length(), 3)
+  assert_eq(video_pts[0], 0L)
+  assert_eq(video_pts[1], 200L)
+  assert_eq(video_pts[2], 100L)
+}

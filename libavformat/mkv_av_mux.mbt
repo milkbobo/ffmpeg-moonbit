@@ -149,6 +149,7 @@ pub fn MkvAvMuxer::write_subtitle(
 /// subtitles (BlockDuration carries the cue length).
 priv struct MkvAvBlock {
   pts_ms : Int64
+  dts_ms : Int64
   track : Int32
   data : Bytes
   duration_ms : Int64
@@ -160,9 +161,25 @@ priv struct MkvAvBlock {
 /// All blocks of the single Cluster, stably ordered by timestamp.
 fn mkv_av_blocks(mux : MkvAvMuxer) -> Array[MkvAvBlock] {
   let out : Array[MkvAvBlock] = []
+  // Per-track decode order is preserved: blocks interleave by accumulated
+  // DTS, while the SimpleBlock timecode keeps the presentation timestamp.
+  let mut video_dts = 0L
+  let mut audio_dts = 0L
   for e in mux.events {
+    let dts = if e.track == 1 {
+      let d = video_dts
+      video_dts = video_dts + e.duration_ms.to_int64()
+      d
+    } else if e.track == 2 {
+      let d = audio_dts
+      audio_dts = audio_dts + e.duration_ms.to_int64()
+      d
+    } else {
+      e.pts_ms
+    }
     out.push({
       pts_ms: e.pts_ms,
+      dts_ms: dts,
       track: e.track,
       data: e.data,
       duration_ms: e.duration_ms.to_int64(),
@@ -173,6 +190,7 @@ fn mkv_av_blocks(mux : MkvAvMuxer) -> Array[MkvAvBlock] {
   for cue in mkv_subtitle_sorted(mux.cues) {
     out.push({
       pts_ms: cue.start_ms,
+      dts_ms: cue.start_ms,
       track: 3,
       data: utf8_from_string(cue.text),
       duration_ms: cue.end_ms - cue.start_ms,
@@ -183,7 +201,7 @@ fn mkv_av_blocks(mux : MkvAvMuxer) -> Array[MkvAvBlock] {
   for i = 1; i < out.length(); i = i + 1 {
     let item = out[i]
     let mut j = i
-    while j > 0 && out[j - 1].pts_ms > item.pts_ms {
+    while j > 0 && out[j - 1].dts_ms > item.dts_ms {
       out[j] = out[j - 1]
       j = j - 1
     }
@@ -322,21 +340,46 @@ pub fn MkvAvMuxer::finish(self : MkvAvMuxer) -> Bytes {
   }
   webm_elem(tracks, 0xEC, 1, [])
 
-  let segment_body : Array[Byte] = []
-  webm_elem(segment_body, 0x1549A966, 4, info)
-  webm_elem(segment_body, 0x1654AE6B, 4, tracks)
+  let info_elem : Array[Byte] = []
+  webm_elem(info_elem, 0x1549A966, 4, info)
+  let tracks_elem : Array[Byte] = []
+  webm_elem(tracks_elem, 0x1654AE6B, 4, tracks)
+  let mid : Array[Array[Byte]] = []
   if self.chapters.length() > 0 {
     // The helpers return complete level-1 elements.
-    for b in mkv_chapters_element(self.chapters) {
-      segment_body.push(b)
-    }
+    mid.push(mkv_chapters_element(self.chapters))
   }
   if self.tags.length() > 0 {
-    for b in mkv_tags_element(self.tags) {
+    mid.push(mkv_tags_element(self.tags))
+  }
+  let cluster_body = self.cluster()
+  let cluster_elem : Array[Byte] = []
+  webm_elem(cluster_elem, 0x1F43B675, 4, cluster_body)
+  let key_times : Array[Int64] = []
+  for e in self.events {
+    if e.track == 1 && e.keyframe {
+      key_times.push(e.pts_ms)
+    }
+  }
+  let (seekhead, cues) = mkv_seekhead_cues_mid(
+    info_elem, tracks_elem, mid, cluster_elem, key_times,
+  )
+  let segment_body : Array[Byte] = []
+  for part in [seekhead, info_elem, tracks_elem] {
+    for b in part {
       segment_body.push(b)
     }
   }
-  webm_elem(segment_body, 0x1F43B675, 4, self.cluster())
+  for part in mid {
+    for b in part {
+      segment_body.push(b)
+    }
+  }
+  for part in [cluster_elem, cues] {
+    for b in part {
+      segment_body.push(b)
+    }
+  }
   let segment : Array[Byte] = []
   webm_elem(segment, 0x18538067, 4, segment_body)
   let out : Array[Byte] = []

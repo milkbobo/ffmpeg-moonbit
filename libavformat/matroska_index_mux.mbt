@@ -40,6 +40,21 @@ fn mkv_seekhead_cues(
   cluster : Array[Byte],
   key_times_ms : Array[Int64],
 ) -> (Array[Byte], Array[Byte]) {
+  let empty : Array[Array[Byte]] = []
+  mkv_seekhead_cues_mid(info, tracks, empty, cluster, key_times_ms)
+}
+
+///|
+/// Same as `mkv_seekhead_cues` with additional level-1 elements (Tags,
+/// Chapters) placed between Tracks and the Cluster; SeekHead entries only
+/// cover Info/Tracks/Cues.
+fn mkv_seekhead_cues_mid(
+  info : Array[Byte],
+  tracks : Array[Byte],
+  mid : Array[Array[Byte]],
+  cluster : Array[Byte],
+  key_times_ms : Array[Int64],
+) -> (Array[Byte], Array[Byte]) {
   let has_cues = key_times_ms.length() > 0
   // Measure the SeekHead with the final number of entries (fixed widths).
   let dummy : Array[Byte] = []
@@ -53,7 +68,11 @@ fn mkv_seekhead_cues(
   let seekhead_len = probe.length()
   let info_pos = seekhead_len.to_int64()
   let tracks_pos = info_pos + info.length().to_int64()
-  let cluster_pos = tracks_pos + tracks.length().to_int64()
+  let mut mid_len = 0L
+  for e in mid {
+    mid_len = mid_len + e.length().to_int64()
+  }
+  let cluster_pos = tracks_pos + tracks.length().to_int64() + mid_len
   let cues_pos = cluster_pos + cluster.length().to_int64()
   let seekhead_body : Array[Byte] = []
   mkv_seek_entry(seekhead_body, 0x1549A966U, info_pos)
