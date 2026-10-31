@@ -5895,3 +5895,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 外部验证：ffmpeg 9.0.2 识别 av01+AAC，video framemd5 5/5 与源
   一致，AAC PCM 88200 字节逐字节一致。
 - 全量 wasm **1286/1286**。
+
+## 226. HLS/DASH B 帧分片回归
+
+- 新增 HLS 与 DASH 端到端测试：真实 x264 B 帧 MP4 拆成两段带
+  trun CTS 的 fMP4 分片；HLS 用 `EXT-X-MAP` 媒体列表、DASH 用
+  SegmentTemplate MPD。
+- 两个 reader 回读 init+media 后逐样本 payload、CTS/DTS（相对值）
+  与源一致，解码帧 MD5 序列一致。
+- 无代码改动（覆盖已有 fMP4 CTS + HLS/DASH reader 组合）。
+- 全量 wasm **1288/1288**。
