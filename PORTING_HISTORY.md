@@ -6399,3 +6399,13 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 回归：AAC/FLAC/ALAC 既有回读测试分别用 eng/fra/deu 并断言
   `track.language`（AC-3/E-AC-3/MP3 走同一 document 路径）。
 - 全量 wasm **1336/1336**。
+
+## 264. MJPEG 9-bit 基线灰度
+
+- 基线/渐进单分量精度放宽到 9-bit；9 与 10-bit 都使用已有的
+  `ff_simple_idct_put_int16_10bit`（FFmpeg 的 idctdsp 对 9/10-bit
+  做同样选择），输出仍为 MSB 对齐 gray16le（shift 7）。
+- 夹具：手工 9-bit SOF0 灰度 JPEG（16x16、DQT 全 1、DC-only 块），
+  ffmpeg `-pix_fmt gray16le` 的 512 字节参考逐字节一致。
+- 9-bit lossless 单分量仍按旧测试拒绝（仅 9-bit 1x1 RGB 无损支持）。
+- 全量 wasm **1337/1337**。

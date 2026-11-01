@@ -269,7 +269,7 @@ fn mjpeg_idct_put(
   }
   if bits == 12 {
     ff_simple_idct_put_int16_12bit(tmp, 8, block)
-  } else if bits == 10 {
+  } else if bits == 9 || bits == 10 {
     ff_simple_idct_put_int16_10bit(tmp, 8, block)
   } else {
     ff_simple_idct_put_int16_8bit(tmp, 8, block)
@@ -510,13 +510,13 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         (if lossless {
           precision >= 10 && precision <= 16
         } else {
-          precision == 10 || precision == 12
+          precision == 9 || precision == 10 || precision == 12
         })
       // 10/12-bit YCbCr with 4:2:0/4:2:2/4:4:0/4:4:4 sampling needs no
       // chroma upscaling and maps to ffmpeg's yuv*16le formats.
       let hbd_yuv = ncomp == 3 &&
         !lossless &&
-        (precision == 10 || precision == 12) &&
+        (precision == 9 || precision == 10 || precision == 12) &&
         adobe_transform <= 0 &&
         max_h <= 2 &&
         max_v <= 2 &&
