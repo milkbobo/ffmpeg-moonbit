@@ -6431,3 +6431,23 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   （vp9.c:1792 门控 `refreshctx && !parallelmode`），errorres=1 会把
   sign_bias 强制清零（vp9.c:601-605）导致 compound 不可用。
 - 全量 wasm **1341/1341**（含新增 4 个测试）。
+
+## 266. Opus hybrid 端到端 PCM 容差对拍
+
+- 此前 hybrid 只有 CELT 系数 MD5（语法/能量/分配/PVQ/反归一化），
+  最终 PCM 缺端到端证据。CELT 合成按 `opus_celt_pcm_reference.c`
+  约定只保证 3e-6 容差，因此不能用 framemd5 逐位对拍。
+- 用 `--disable-asm` 的 FFmpeg 9.0.2 解码 hyb_fb20 / hyb_st20，导出
+  f32le 参考帧（含 312 样本 pre-skip、Ogg 末端裁剪与 resampler
+  drain），重建后的 framemd5 与仓库既有 `hyb_*.md5` 逐行一致（151/151、
+  101/101），确认参考同源。
+- 新增 `libavcodec/opus_hybrid_pcm_vectors/` 独立子包（规避 libavcodec
+  主包 wasm `__init` 局部变量上限）：保存两条流、OpusHead 与所选参考
+  帧，黑盒测试 `OpusDecoder`→`decode_packet`→drain→末端裁剪后逐样本
+  比较。实测最大误差 hyb_fb20 1.49e-8、hyb_st20 7.45e-9，均在 3e-6
+  容差内。
+- `scripts/emit_opus_silk_vectors.py` 增加 assembly-free 参考目录参数与
+  hybrid PCM 输出；新增数据为 `pub let`，重新生成后既有
+  `opus_silk_realdata_wbtest.mbt` 零 diff。
+- 清理 `opus_decode.mbt` 遗留的 hybrid CELT PCM `println` 调试输出。
+- 全量 wasm **1342/1342**。

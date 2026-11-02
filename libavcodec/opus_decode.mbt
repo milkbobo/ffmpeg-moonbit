@@ -476,16 +476,6 @@ fn OpusStream::decode_frame(
       Err(error) => return Err(error)
     }
     if hybrid {
-      let dbg = StringBuilder()
-      dbg.write_string("CELT \{packet.frame_duration}")
-      for i in 0..<packet.frame_duration {
-        for c in 0..<self.output_channels {
-          dbg.write_string(" \{pcm[c][i].reinterpret_as_uint()}")
-        }
-      }
-      println(dbg)
-    }
-    if hybrid {
       for ch in 0..<self.output_channels {
         let dst = self.out_buf.chans[ch]
         let src = pcm[ch]
