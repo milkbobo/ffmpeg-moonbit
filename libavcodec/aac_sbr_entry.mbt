@@ -113,11 +113,16 @@ fn AacDecoder::apply_sbr(
     let elem_key = layout[i].key() & -2
     let is_cpe = layout[i].element_type == 1
     let elem_ch = if is_cpe { 2 } else { 1 }
+    // `ff_aac_sbr_ctx_alloc_init` gives every configured channel element an
+    // SBR context, so elements that never carry SBR data (such as the LFE in
+    // HE-AAC 5.1) still run the pure-upsampling QMF path once SBR is active.
     let sbr = match self.sbr_states.get(elem_key) {
       Some(v) => v
       None => {
-        i = i + elem_ch
-        continue
+        let v = aac_new_sbr(layout[i].element_type)
+        v.core_sample_rate = self.config.sample_rate
+        self.sbr_states[elem_key] = v
+        v
       }
     }
     if sbr.id_aac != layout[i].element_type {

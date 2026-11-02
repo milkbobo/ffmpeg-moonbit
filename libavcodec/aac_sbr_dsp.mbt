@@ -556,21 +556,26 @@ fn AacSbr::qmf_synthesis(
 /// `sbr_lf_gen`.
 fn AacSbr::lf_gen(
   self : AacSbr,
+  ch : Int32,
   buf_idx : Int32,
   num_time_slots : Int32,
 ) -> Unit {
   let t_hf_gen = 8
   let i_f = num_time_slots * 2
+  // The C calls sbr_lf_gen once per channel with that channel's own W
+  // (`sbr->data[ch].W`); hardcoding channel 0 here gave a CPE's right
+  // channel the left channel's low band.
+  let w_buf = self.data[ch].w_buf
   for k in 0..<(32 * 40 * 2) {
     self.x_low[k] = 0.0
   }
   for k in 0..<self.kx[1] {
     for i in t_hf_gen..<(i_f + t_hf_gen) {
-      self.x_low[(k * 40 + i) * 2] = self.data[0].w_buf[(
+      self.x_low[(k * 40 + i) * 2] = w_buf[(
           (buf_idx * 32 + (i - t_hf_gen)) * 32 + k
         ) *
         2]
-      self.x_low[(k * 40 + i) * 2 + 1] = self.data[0].w_buf[(
+      self.x_low[(k * 40 + i) * 2 + 1] = w_buf[(
           (buf_idx * 32 + (i - t_hf_gen)) * 32 + k
         ) *
         2 +
@@ -580,11 +585,11 @@ fn AacSbr::lf_gen(
   let other = 1 - buf_idx
   for k in 0..<self.kx[0] {
     for i in 0..<t_hf_gen {
-      self.x_low[(k * 40 + i) * 2] = self.data[0].w_buf[(
+      self.x_low[(k * 40 + i) * 2] = w_buf[(
           (other * 32 + (i + i_f - t_hf_gen)) * 32 + k
         ) *
         2]
-      self.x_low[(k * 40 + i) * 2 + 1] = self.data[0].w_buf[(
+      self.x_low[(k * 40 + i) * 2 + 1] = w_buf[(
           (other * 32 + (i + i_f - t_hf_gen)) * 32 + k
         ) *
         2 +
@@ -1075,7 +1080,7 @@ pub fn AacSbr::apply(
   for ch in 0..<nch {
     let d = self.data[ch]
     self.qmf_analysis(channels[ch], 0, ch, num_time_slots)
-    self.lf_gen(d.ypos, num_time_slots)
+    self.lf_gen(ch, d.ypos, num_time_slots)
     d.ypos = 1 - d.ypos
     if self.start {
       self.hf_inverse_filter()

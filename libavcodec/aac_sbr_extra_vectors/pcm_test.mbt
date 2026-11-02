@@ -73,7 +73,7 @@ fn sbr_extra_check(
   assert_true(max_diff <= 1)
   assert_true(exact * 1000 >= samples * nch * 999 / 1000)
   println(
-    "\{name}: frames=\{frames} samples=\{samples} ch=\{nch} max_diff=\{max_diff} exact=\{exact * 100 / (samples * nch)}%",
+    "\{name}: frames=\{frames} samples=\{samples} ch=\{nch} max_diff=\{max_diff} exact=\{exact.to_double() * 100.0 / (samples * nch).to_double()}%",
   )
 }
 

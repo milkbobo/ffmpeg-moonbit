@@ -6499,3 +6499,37 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 验证：`moon test --target wasm --no-render -q` 全量 **1350/1350** 通过；
   新增用例覆盖 `libavformat` 的 HLS×2、DASH×3、fMP4×1、WAV×2，以及
   `aac_sbr_extra_vectors`×1（内含 3 条流）。
+
+## 268. 多声道 HE-AAC：每个元素的 SBR 上下文与逐声道低带
+
+- **根因（两个叠加）**：
+  1. `aacdec.c` 的 `che_configure` 会为**每个** channel element
+     （SCE/CPE/LFE）调用 `ff_aac_sbr_ctx_alloc_init`，此后
+     `ff_aac_sbr_apply` 对所有元素执行 QMF 分析/合成；即使 LFE 在 HE-AAC
+     里没有 SBR 负载（`start == 0`），也会被纯上采样到 2048。本移植的
+     `apply_sbr` 只对“已有 SBR payload”的元素建 state，缺 state 的元素
+     直接 `continue`，于是 5.1/7.1 的 LFE 停留在 1024 样本。
+  2. `sbr_lf_gen` 在 C 里按声道传入 `sbr->data[ch].W`；本移植的
+     `AacSbr::lf_gen` 硬编码 `data[0].w_buf`，导致 CPE 右声道的低带
+     `X_low` 取自左声道。单声道与 PS 流看不出问题，多声道下右声道几乎
+     退化为左声道（左/右差异被压到 ~1e-4 均方量级）。
+- **修复**：
+  - `aac_sbr_entry.mbt` 的 `apply_sbr`：缺失 state 时按
+    `aac_new_sbr(layout[i].element_type)` 建立上下文（`kx=32, m=0`），
+    LFE 因此走 `AacSbr::apply` 的 `start == false` 纯上采样路径。
+  - `aac_sbr_dsp.mbt`：`lf_gen` 增加 `ch` 参数并使用
+    `self.data[ch].w_buf`，`apply` 按 `self.lf_gen(ch, d.ypos, ...)` 调用，
+    与 C 的逐声道 `W` 语义一致。
+- **验证**：新增 `aac_sbr_extra_vectors/multichannel_vectors.mbt` 与
+  `multichannel_test.mbt`，三组 libfdk_aac（`-profile:a aac_he`，48 kHz）
+  真实 ADTS 流各 3 帧，参考为 FFmpeg 9.0.2 解码的 s16le：
+  - 5.1（6ch，含 LFE）：frames=3，6144 样本/声道，`max_diff=1`，
+    逐位相等 99.9485%；
+  - 5.0（5ch，无 LFE）：frames=3，6144 样本/声道，`max_diff=1`，
+    99.9544%；
+  - 7.1 wide（8ch）：frames=3，6144 样本/声道，`max_diff=1`，
+    99.9878%。
+  libfdk_aac 不支持 2.1 布局（支持列表为 mono/stereo/3.0/4.0/5.0/5.1/
+  6.1(back)/7.1(wide)/7.1/5.1.2(back)），因此 2.1 无法生成真实流；6.1 与
+  5.1.2 未加用例。修复按 element 类型与 `data[ch]` 通用，不依赖声道数。
+- 验证：`moon test --target wasm --no-render -q` 全量 **1351/1351** 通过。
