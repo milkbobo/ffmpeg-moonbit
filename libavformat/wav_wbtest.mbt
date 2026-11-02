@@ -400,3 +400,59 @@ test "wav: errors for missing fmt/data and bad headers" {
   }
   assert_false(av_wav_probe(b"RIFFxxxxWAVE"))
 }
+
+///|
+/// WAV boundary: a zero-length unknown chunk between the header and `fmt `
+/// occupies exactly its 8-byte chunk header (no pad byte, no body) and must
+/// not shift `data_offset` or confuse packetization.
+test "wav: zero-length unknown chunk before fmt is skipped" {
+  let data = Bytes::make(8, b'\x00')
+  let base = wav_build_pcm(1, 1, 8000, 8, data)
+  let head = base[0:12].to_owned()
+  let rest = base[12:].to_owned()
+  let junk = b"JUNK\x00\x00\x00\x00"
+  let bytes = head + junk + rest
+  let wav = av_wav_open(bytes).unwrap()
+  assert_eq(wav.format.codec, "pcm_u8")
+  assert_eq(wav.data_offset, 12L + 8L + 8L + 16L + 8L)
+  assert_eq(wav.data_size, 8L)
+  assert_eq(wav.packets.length(), 1)
+  assert_eq(wav.packets[0].pos, 52L)
+  assert_eq(wav.packets[0].size, 8)
+}
+
+///|
+/// WAV boundary: a zero-length `data` chunk is "unknown length", not "empty".
+/// FFmpeg stops chunk walking there and reads to EOF, so a following `data`
+/// chunk is part of the payload, not a second stream.
+test "wav: zero-size data chunk reads to EOF and stops chunk walking" {
+  let data = b"\x01\x02\x03\x04\x05\x06\x07\x08"
+  let fmt_body = wav_bytes([
+    wav_u16le(1),
+    wav_u16le(1),
+    wav_u32le(8000L),
+    wav_u32le(8000L),
+    wav_u16le(1),
+    wav_u16le(8),
+  ])
+  let bytes = wav_bytes([
+    b"RIFF".to_array(),
+    wav_u32le(48L),
+    b"WAVE".to_array(),
+    b"fmt ".to_array(),
+    wav_u32le(16L),
+    fmt_body.to_array(),
+    b"data".to_array(),
+    wav_u32le(0L),
+    b"data".to_array(),
+    wav_u32le(8L),
+    data.to_array(),
+  ])
+  let wav = av_wav_open(bytes).unwrap()
+  assert_eq(wav.data_offset, 44L)
+  // Everything after the first `data` header: the second header (8) plus its
+  // 8 bytes = 16 bytes, because the first declared size is unknown.
+  assert_eq(wav.data_size, 16L)
+  assert_eq(wav.packets.length(), 1)
+  assert_eq(wav.packets[0].size, 16)
+}

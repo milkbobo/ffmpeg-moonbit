@@ -6451,3 +6451,51 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `opus_silk_realdata_wbtest.mbt` 零 diff。
 - 清理 `opus_decode.mbt` 遗留的 hybrid CELT PCM `println` 调试输出。
 - 全量 wasm **1342/1342**。
+
+## 267. 2026-11-02 剩余缺口收尾：Opus PLC 判定、AAC SBR 边界、HEVC 交叉验证、容器边界
+
+- **Opus PLC：判定不做，与上游一致**。FFmpeg 9.0.2 的原生 Opus 解码器
+  `libavcodec/opus/dec.c` 不包含包丢失隐藏：NULL packet 只在
+  `flush_needed` 时刷新 resampler，否则直接 `return 0`，不生成补偿帧；
+  PLC 仅存在于 `libavcodec/libopusdec.c` 的 libopus 封装路径，不属于本移植
+  范围。因此本移植的丢包行为与原生 FFmpeg 对齐（不合成 fade-in 补偿帧），
+  不另造 PLC 实现。README 已同步更新该判定。
+- **AAC SBR/PS 边界**：新增 `libavcodec/aac_sbr_extra_vectors/` 独立子包
+  （规避 libavcodec 主包 wasm `__init` 局部变量上限），由
+  `_build/gen_sbr_extra.py`（临时脚本，未提交）用 libfdk_aac 生成三条真实
+  ADTS 流：32 kHz stereo HE-AAC、44.1 kHz stereo HE-AAC、44.1 kHz
+  HE-AACv2（PS）。黑盒测试经新增的
+  `new_aac_decoder_from_adts` 逐帧解码，与 FFmpeg 9.0.2 `s16le` 参考比较，
+  判据 `max_diff ≤ 1`、逐位相等样本 ≥99.9%，3/3 通过。
+  SBR 的 `bs_sbr_crc_bits` 与上游 `aacsbr_template.c` 的 TODO 一致地跳过
+  校验，已在 README 标注，不额外实现 CRC。发现并记录 5.1 HE-AAC（6 声道）
+  的 SBR 未生效（每帧 1024 而非 2048 样本），本轮未硬造参考、不列为通过项。
+- **HEVC tiles+WPP 第二参考源**：libde265 1.1.3（master 构建，
+  `/tmp/libde265-master/build/dec265/dec265`）独立解码 6 组夹具。
+  `htw_slices8` 的 5 帧 MD5 与 HM 参考逐帧完全一致（5/5，如首帧
+  `edd6e2b9b0a84018a188cbb0b167bd92`），可作为该组合的第二参考；
+  其余 5 组 libde265 不报错但输出与 HM 不同（htw8 首帧
+  `1797123e6242face9761ac21b0d78e92` vs HM
+  `017ebde8e1d4351a4edaffa083ccfbec`），说明其 HT 扩展解码路径与 HM
+  不一致。FFmpeg 9.0.2 对这些流同样不报错，htw8 首帧为
+  `82f46e8be06b529e60fb805c01a65d3c`，属静默错误解码；因此这 5 组仍只能
+  以 HM 输出为准。结论与命令已写入 README。
+- **容器读取层边界**：
+  - HLS：两条 `EXT-X-KEY` 的 AES-128 密钥轮换（首段隐式 IV 由
+    `EXT-X-MEDIA-SEQUENCE` 推出、次段显式 `IV`，密钥各取一次并缓存）；
+    无 `EXT-X-ENDLIST` 的活动列表首次 fetch 失败后游标不回退、重试返回
+    同一段，耗尽返回 `None`。两个用例在 `segment_io_wbtest.mbt`。
+  - DASH：多 Period（各自 BaseURL、`start`/`duration`、`startNumber` 编号）；
+    `SegmentBase indexRange` 的 `index_range`/`initialization_range` 解析；
+    显式重叠 Period 只解析不拒绝（与文件头声明的范围一致）。
+  - fMP4：单 `traf` 多 `trun`。修复 `mov.mbt` 缺失的
+    `frag_stream_info->next_trun_dts` 语义（每个 `tfhd` 重置，上一 `trun` 结束
+    后 `next_trun_dts = dts + time_offset`），第二 `trun` 的 DTS 从上一段续接
+    而不是重启于 `tfdt`；用例同时校验按 `trun` 串联的显式数据偏移。
+  - WAV：零长度未知 chunk（`JUNK` size=0，无 pad）不移动 `data_offset`；
+    声明长度为 0 的 `data` chunk 按上游语义视为“未知长度”，修复 `wav.mbt`
+    在此处停止 chunk 扫描（对应 `wavdec.c` 的 `goto break_loop`），后续
+    `data` 头并入 payload。
+- 验证：`moon test --target wasm --no-render -q` 全量 **1350/1350** 通过；
+  新增用例覆盖 `libavformat` 的 HLS×2、DASH×3、fMP4×1、WAV×2，以及
+  `aac_sbr_extra_vectors`×1（内含 3 条流）。

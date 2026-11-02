@@ -80,6 +80,31 @@ pub fn aac_parse_audio_specific_config(
 }
 
 ///|
+/// Initialize from a raw ADTS frame header plus the desired output channel
+/// count. Implicit SBR/PS is left to the decoder (`sbr`/`ps` = -1), matching
+/// the `ffmpeg` native decoder's auto-detection; `output_channels` selects the
+/// post-PS channel count (use 2 for HE-AACv2 mono-core streams).
+pub fn new_aac_decoder_from_adts(
+  data : Bytes,
+  output_channels : Int32,
+) -> Result[AacDecoder, String] {
+  let header = match ff_adts_header_parse_buf(data) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let config = new_mpeg4_audio_config()
+  config.object_type = header.object_type
+  config.sampling_index = header.sampling_index
+  config.sample_rate = header.sample_rate
+  config.chan_config = header.chan_config
+  config.channels = header.chan_config
+  config.frame_length = 1024
+  config.sbr = -1
+  config.ps = -1
+  Ok(new_aac_decoder(config, output_channels))
+}
+
+///|
 /// Initialize directly from MP4/MKV AAC-LC extradata; raw packets do not
 /// need to repeat the PCE that established the layout in ASC.
 pub fn new_aac_decoder_from_asc(data : Bytes) -> Result[AacDecoder, String] {

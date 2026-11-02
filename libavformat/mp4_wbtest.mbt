@@ -480,6 +480,56 @@ fn frag_moof(
   box(b"moof", traf)
 }
 
+///|
+/// One `trun` with an explicit data offset and per-sample
+/// `(duration, size, flags)` tuples.
+fn trun_box_offsets(
+  data_offset : UInt32,
+  samples : Array[(UInt32, UInt32, UInt32)],
+) -> Array[Byte] {
+  let trun_flags : UInt32 = 0x1 | 0x100 | 0x200 | 0x400
+  let body : Array[Byte] = []
+  push_all(body, be32(samples.length().reinterpret_as_uint()))
+  push_all(body, be32(data_offset))
+  for i = 0; i < samples.length(); i = i + 1 {
+    push_all(body, be32(samples[i].0))
+    push_all(body, be32(samples[i].1))
+    push_all(body, be32(samples[i].2))
+  }
+  fbox(b"trun", 0, trun_flags, body)
+}
+
+///|
+/// One `moof` with a single `traf` carrying several `trun` boxes. Data offsets
+/// are chained from the `mdat` payload that follows the moof, as segmenters
+/// that split one fragment into multiple runs write them.
+fn frag_moof_multi_trun(
+  track_id : UInt32,
+  tfdt : UInt32?,
+  truns : Array[Array[(UInt32, UInt32, UInt32)]],
+) -> Array[Byte] {
+  let tfdt_part = match tfdt {
+    None => zbytes(0)
+    Some(v) => tfdt_box_v0(v)
+  }
+  let build = fn(base : UInt32) -> Array[Byte] {
+    let trun_boxes : Array[Array[Byte]] = []
+    let mut offset = base
+    for samples in truns {
+      trun_boxes.push(trun_box_offsets(offset, samples))
+      for sample in samples {
+        offset = offset + sample.1
+      }
+    }
+    box(
+      b"moof",
+      box(b"traf", cat([tfhd_box_dbm(track_id), tfdt_part, cat(trun_boxes)])),
+    )
+  }
+  let probe = build(0)
+  build(probe.length().reinterpret_as_uint() + 8)
+}
+
 // ---------------------------------------------------------------------------
 // cenc (encrypted MP4) builders
 // ---------------------------------------------------------------------------
@@ -1163,6 +1213,62 @@ test "mp4: fragmented mp4 (moof/trun) sample index" {
   assert_eq(t.samples[4].keyframe, false)
   assert_eq(t.samples[1].min_distance, 1)
   assert_eq(t.samples[4].min_distance, 1)
+}
+
+///|
+/// Fragmented MP4 boundary: a single `traf` with two `trun` boxes. The second
+/// `trun` continues from `frag_stream_info->next_trun_dts` instead of restarting
+/// at the `tfdt`, and its data offset addresses the bytes after the first run.
+test "mp4: single traf with multiple trun boxes continues dts" {
+  let stbl = build_stbl(
+    stsd_box(video_entry_isom(b"avc1", 320, 240)),
+    stts_box([]),
+    [],
+    stsc_box([]),
+    stsz_box(0, 0),
+    stco_box([]),
+    [],
+  )
+  let trak = build_trak(
+    tkhd_box(1, 0, 320, 240),
+    mdhd_box(1000, 0),
+    hdlr_box(b"vide"),
+    stbl,
+    [],
+  )
+  let ftyp = ftyp_box(b"isom")
+  let moov = box(b"moov", cat([mvhd_box(1000, 0), trak, mvex_box(1)]))
+  let run1 : Array[(UInt32, UInt32, UInt32)] = [
+    (100, 10, 0),
+    (100, 20, 0x10000),
+  ]
+  let run2 : Array[(UInt32, UInt32, UInt32)] = [(100, 15, 0)]
+  let moof = frag_moof_multi_trun(1, Some(0), [run1, run2])
+  let mdat = box(b"mdat", zbytes(45))
+  let prefix = ftyp.length() + moov.length()
+  let payload = prefix + moof.length() + 8
+  let data = cat([ftyp, moov, moof, mdat])
+  let t = av_mov_open(Bytes::from_array(data)).unwrap().tracks[0]
+
+  assert_eq(t.samples.length(), 3)
+  assert_eq(t.samples[0].offset, payload.to_int64())
+  assert_eq(t.samples[1].offset, (payload + 10).to_int64())
+  assert_eq(t.samples[2].offset, (payload + 30).to_int64())
+  assert_eq(t.samples[0].dts, 0)
+  assert_eq(t.samples[1].dts, 100)
+  // Restarting at tfdt would repeat 0; next_trun_dts makes it 200.
+  assert_eq(t.samples[2].dts, 200)
+  let sz : Array[UInt32] = [10, 20, 15]
+  for i = 0; i < 3; i = i + 1 {
+    assert_eq(t.samples[i].size, sz[i])
+    assert_eq(t.samples[i].duration, 100)
+    assert_eq(t.samples[i].pts, t.samples[i].dts)
+  }
+  assert_eq(t.samples[0].keyframe, true)
+  assert_eq(t.samples[1].keyframe, false)
+  assert_eq(t.samples[2].keyframe, true)
+  assert_eq(t.samples[1].discard, false)
+  assert_eq(t.samples[2].discard, false)
 }
 
 ///|

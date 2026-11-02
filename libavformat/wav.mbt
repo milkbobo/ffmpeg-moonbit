@@ -512,7 +512,13 @@ pub fn av_wav_open(data : Bytes) -> Result[WavDemux, String] {
         sample_count = rf64_sample_count
       }
       if size == 0L {
-        data_size = data.length().to_int64() - data_ofs
+        // A zero (or 0xFFFFFFFF) `data` size means "unknown/rest of file".
+        // FFmpeg stops chunk walking here (`goto break_loop`), because there
+        // is no telltale boundary before the payload ends.
+        if !rf64 {
+          data_size = data.length().to_int64() - data_ofs
+        }
+        break
       }
     }
     if next_ofs <= pos.to_int64() {

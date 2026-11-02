@@ -110,6 +110,127 @@ test "HLS callback -> fMP4 init+fragment -> H264: four real frames match FFmpeg 
 }
 
 ///|
+fn segment_test_raw_fetch(files : Array[(String, Bytes)]) -> MediaFetch {
+  (uri, offset, length) => {
+    for (name, data) in files {
+      if uri == name {
+        if offset < 0L || offset > data.length().to_int64() {
+          return Err("bad fixture range")
+        }
+        let end = if length < 0L {
+          data.length().to_int64()
+        } else {
+          offset + length
+        }
+        if end > data.length().to_int64() {
+          return Err("bad fixture range")
+        }
+        return Ok(data[offset.to_int():end.to_int()].to_owned())
+      }
+    }
+    Err("missing resource: " + uri)
+  }
+}
+
+///|
+/// HLS boundary: two `EXT-X-KEY` tags rotate the AES-128 key. The first
+/// segment has no `IV` (implicit IV from `EXT-X-MEDIA-SEQUENCE`), the second
+/// carries an explicit `IV` attribute. Each key is fetched once and cached.
+test "HLS: AES-128 key rotation with implicit and explicit IVs" {
+  let plain0 = b"first-segment-plain"
+  let plain1 = b"second-segment-plain"
+  let key1 = b"0123456789abcdef"
+  let key2 = b"fedcba9876543210"
+  let iv1 = hls_iv_from_sequence(7L)
+  let iv2 = hls_parse_iv("0x000102030405060708090a0b0c0d0e0f").unwrap()
+  let enc0 = hls_encrypt_aes128(key1, iv1, plain0).unwrap()
+  let enc1 = hls_encrypt_aes128(key2, iv2, plain1).unwrap()
+  let playlist_text =
+    #|#EXTM3U
+    #|#EXT-X-VERSION:3
+    #|#EXT-X-TARGETDURATION:1
+    #|#EXT-X-MEDIA-SEQUENCE:7
+    #|#EXT-X-KEY:METHOD=AES-128,URI="key1.bin"
+    #|#EXTINF:1.0,
+    #|seg0.ts
+    #|#EXT-X-KEY:METHOD=AES-128,URI="key2.bin",IV=0x000102030405060708090a0b0c0d0e0f
+    #|#EXTINF:1.0,
+    #|seg1.ts
+    #|#EXT-X-ENDLIST
+  let playlist = av_hls_parse(playlist_text).unwrap()
+  assert_eq(playlist.keys.length(), 2)
+  assert_eq(playlist.segments[0].key_index, 0)
+  assert_eq(playlist.segments[1].key_index, 1)
+  assert_eq(playlist.segments[0].media_sequence, 7L)
+  assert_eq(playlist.segments[1].media_sequence, 8L)
+  let reader = hls_segment_reader_new(
+    playlist,
+    segment_test_raw_fetch([
+      ("key1.bin", key1),
+      ("key2.bin", key2),
+      ("seg0.ts", enc0),
+      ("seg1.ts", enc1),
+    ]),
+  ).unwrap()
+  let s0 = reader.next().unwrap().unwrap()
+  assert_eq(s0.sequence, 7L)
+  assert_eq(s0.media, plain0)
+  let s1 = reader.next().unwrap().unwrap()
+  assert_eq(s1.sequence, 8L)
+  assert_eq(s1.media, plain1)
+  assert_true(reader.next().unwrap() is None)
+}
+
+///|
+/// HLS boundary: a live playlist has no `EXT-X-ENDLIST`. A transient fetch
+/// failure leaves the cursor untouched, so the retry returns the same segment;
+/// exhaustion then yields `None` rather than an error.
+test "HLS: live playlist retries a failed segment and keeps the cursor" {
+  let playlist_text =
+    #|#EXTM3U
+    #|#EXT-X-VERSION:3
+    #|#EXT-X-TARGETDURATION:1
+    #|#EXT-X-MEDIA-SEQUENCE:0
+    #|#EXTINF:1.0,
+    #|seg0.ts
+    #|#EXTINF:1.0,
+    #|seg1.ts
+  let playlist = av_hls_parse(playlist_text).unwrap()
+  assert_eq(playlist.endlist, false)
+  let seg0 = b"seg-zero-bytes"
+  let seg1 = b"seg-one-bytes"
+  let calls : Array[Int32] = [0]
+  let fetch : MediaFetch = (uri, offset, length) => {
+    calls[0] += 1
+    if calls[0] == 1 {
+      return Err("transient network error")
+    }
+    if offset != 0L || length >= 0L {
+      return Err("bad fixture range")
+    }
+    if uri == "seg0.ts" {
+      return Ok(seg0)
+    } else if uri == "seg1.ts" {
+      return Ok(seg1)
+    }
+    Err("missing resource: " + uri)
+  }
+  let reader = hls_segment_reader_new(playlist, fetch).unwrap()
+  match reader.next() {
+    Err(e) => assert_true(e.contains("transient"))
+    Ok(_) => fail("first read must fail")
+  }
+  let s0 = reader.next().unwrap().unwrap()
+  assert_eq(s0.sequence, 0L)
+  assert_eq(s0.media, seg0)
+  let s1 = reader.next().unwrap().unwrap()
+  assert_eq(s1.sequence, 1L)
+  assert_eq(s1.media, seg1)
+  assert_true(reader.next().unwrap() is None)
+  assert_eq(calls[0], 3)
+}
+
+///|
 test "DASH callback -> fMP4 init+fragment -> H264: four real frames match FFmpeg MD5" {
   let mpd = av_dash_parse(
     segments_dash_manifest,

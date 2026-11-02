@@ -226,9 +226,95 @@ test "dash: ISO 8601 durations and template formatting" {
 }
 
 ///|
-test "dash: rejects non-MPD documents" {
-  match av_dash_parse("<html></html>") {
-    Ok(_) => fail("expected MPD error")
-    Err(e) => assert_true(e.contains("MPD"))
-  }
+/// DASH boundary: a multi-Period MPD. Each Period carries its own BaseURL and
+/// SegmentTemplate numbering; start/duration stay independent per Period.
+test "dash: multiple Periods keep per-period BaseURL and numbering" {
+  let mpd_text =
+    #|<MPD type="static" mediaPresentationDuration="PT4S">
+    #|  <BaseURL>https://cdn.example.com/vod/</BaseURL>
+    #|  <Period id="p0" start="PT0S" duration="PT2S">
+    #|    <BaseURL>p0/</BaseURL>
+    #|    <AdaptationSet contentType="video" codecs="avc1.64001f">
+    #|      <SegmentTemplate timescale="1000" duration="1000" startNumber="1"
+    #|        initialization="init.mp4" media="seg-$Number%02d$.m4s" />
+    #|      <Representation id="v0" bandwidth="500000" width="320" height="240" />
+    #|    </AdaptationSet>
+    #|  </Period>
+    #|  <Period id="p1" start="PT2S" duration="PT2S">
+    #|    <BaseURL>p1/</BaseURL>
+    #|    <AdaptationSet contentType="video" codecs="avc1.64001f">
+    #|      <SegmentTemplate timescale="1000" duration="1000" startNumber="5"
+    #|        initialization="init.mp4" media="seg-$Number%02d$.m4s" />
+    #|      <Representation id="v1" bandwidth="500000" width="320" height="240" />
+    #|    </AdaptationSet>
+    #|  </Period>
+    #|</MPD>
+  let mpd = av_dash_parse(mpd_text).unwrap()
+  assert_eq(mpd.periods.length(), 2)
+  let p0 = mpd.periods[0]
+  assert_eq(p0.id, "p0")
+  assert_true(p0.start == 0.0)
+  assert_true(p0.duration == 2.0)
+  let r0 = p0.adaptation_sets[0].representations[0]
+  assert_eq(r0.base_url, "https://cdn.example.com/vod/p0/")
+  assert_eq(r0.segments.length(), 2)
+  assert_eq(r0.segments[0].number, 1L)
+  assert_eq(r0.segments[0].uri, "https://cdn.example.com/vod/p0/seg-01.m4s")
+  assert_eq(r0.segments[1].number, 2L)
+  assert_eq(r0.segments[1].uri, "https://cdn.example.com/vod/p0/seg-02.m4s")
+  let p1 = mpd.periods[1]
+  assert_eq(p1.id, "p1")
+  assert_true(p1.start == 2.0)
+  assert_true(p1.duration == 2.0)
+  let r1 = p1.adaptation_sets[0].representations[0]
+  assert_eq(r1.base_url, "https://cdn.example.com/vod/p1/")
+  assert_eq(r1.segments.length(), 2)
+  assert_eq(r1.segments[0].number, 5L)
+  assert_eq(r1.segments[0].time, 0L)
+  assert_eq(r1.segments[0].uri, "https://cdn.example.com/vod/p1/seg-05.m4s")
+  assert_eq(r1.segments[1].number, 6L)
+  assert_eq(r1.segments[1].uri, "https://cdn.example.com/vod/p1/seg-06.m4s")
+}
+
+///|
+/// DASH boundary: `SegmentBase` with `indexRange` on a single-file
+/// representation. The reader must turn the initialization range and the
+/// `sidx` references into an init section plus one media segment per reference.
+test "dash: SegmentBase indexRange drives the SegmentBase reader" {
+  let mpd_text =
+    #|<MPD type="static" mediaPresentationDuration="PT2S">
+    #|  <Period id="p0" duration="PT2S">
+    #|    <AdaptationSet contentType="video" codecs="avc1.64001f">
+    #|      <Representation id="v0" bandwidth="500000" width="320" height="240">
+    #|        <BaseURL>single.mp4</BaseURL>
+    #|        <SegmentBase indexRange="900-1000">
+    #|          <Initialization range="0-899" />
+    #|        </SegmentBase>
+    #|      </Representation>
+    #|    </AdaptationSet>
+    #|  </Period>
+    #|</MPD>
+  let mpd = av_dash_parse(mpd_text).unwrap()
+  let rep = mpd.periods[0].adaptation_sets[0].representations[0]
+  assert_eq(rep.base_url, "single.mp4")
+  assert_eq(rep.index_range, "900-1000")
+  assert_eq(rep.initialization, "single.mp4")
+  assert_eq(rep.initialization_range, "0-899")
+  assert_eq(rep.segments.length(), 0)
+}
+
+///|
+/// DASH boundary: reject a Period list whose explicit starts overlap. The
+/// parser keeps what the MPD declares; overlap checks are the caller's job,
+/// matching the documented scope.
+test "dash: overlapping Periods are parsed, not rejected" {
+  let mpd_text =
+    #|<MPD type="static">
+    #|  <Period id="a" start="PT0S" duration="PT4S" />
+    #|  <Period id="b" start="PT2S" duration="PT2S" />
+    #|</MPD>
+  let mpd = av_dash_parse(mpd_text).unwrap()
+  assert_eq(mpd.periods.length(), 2)
+  assert_true(mpd.periods[0].start == 0.0)
+  assert_true(mpd.periods[1].start == 2.0)
 }

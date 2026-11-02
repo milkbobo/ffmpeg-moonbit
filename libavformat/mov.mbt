@@ -551,6 +551,9 @@ priv struct MovFrag {
   mut flags : UInt32
   mut tfdt : Int64
   mut has_tfdt : Bool
+  /// `frag_stream_info->next_trun_dts`: the DTS that follows the previous
+  /// `trun` of this track fragment, reset by every `tfhd` (None = AV_NOPTS).
+  mut next_trun_dts : Int64?
 }
 
 ///|
@@ -568,6 +571,7 @@ fn new_frag() -> MovFrag {
     flags: 0,
     tfdt: 0,
     has_tfdt: false,
+    next_trun_dts: None,
   }
 }
 
@@ -2035,6 +2039,7 @@ fn parse_tfhd(st : MovState, r : AvioContext) -> Unit {
     Some(trex) => {
       st.frag.found_tfhd = true
       st.frag.track_id = track_id
+      st.frag.next_trun_dts = None
       st.frag.base_data_offset = if (flags & tfhd_base_data_offset) != 0 {
         r.avio_rb64().reinterpret_as_int64()
       } else if (flags & tfhd_default_base_is_moof) != 0 {
@@ -2150,16 +2155,21 @@ fn parse_trun(
         track.has_ctts = true
       }
       let has_ctts = track.has_ctts
-      // DTS base: tfdt when present, else the fragment's sidx earliest
-      // presentation time (used raw, without the time_offset shift, exactly
-      // as the C FIXME documents), else the accumulated track end.
-      let base_dts = if st.frag.has_tfdt {
-        st.frag.tfdt - track.time_offset
-      } else {
-        match mov_sidx_lookup(st, st.frag.moof_offset, st.frag.track_id) {
-          Some(sidx_pts) => sidx_pts
-          None => track.track_end - track.time_offset
-        }
+      // DTS base: the DTS that follows the previous `trun` of this traf, else
+      // tfdt when present, else the fragment's sidx earliest presentation time
+      // (used raw, without the time_offset shift, exactly as the C FIXME
+      // documents), else the accumulated track end.
+      let base_dts = match st.frag.next_trun_dts {
+        Some(next) => next - track.time_offset
+        None =>
+          if st.frag.has_tfdt {
+            st.frag.tfdt - track.time_offset
+          } else {
+            match mov_sidx_lookup(st, st.frag.moof_offset, st.frag.track_id) {
+              Some(sidx_pts) => sidx_pts
+              None => track.track_end - track.time_offset
+            }
+          }
       }
       let mut dts = base_dts
       // `prev_dts`: the DTS of the last sample before this trun; samples at
@@ -2230,6 +2240,7 @@ fn parse_trun(
           raise InvalidData("zero sample size in trun")
         }
       }
+      st.frag.next_trun_dts = Some(dts + track.time_offset)
       st.frag.implicit_offset = offset
       track.track_end = dts + track.time_offset
       if track.track_end >= 0 &&
