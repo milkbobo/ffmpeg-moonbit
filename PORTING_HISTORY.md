@@ -6409,3 +6409,25 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   ffmpeg `-pix_fmt gray16le` 的 512 字节参考逐字节一致。
 - 9-bit lossless 单分量仍按旧测试拒绝（仅 9-bit 1x1 RGB 无损支持）。
 - 全量 wasm **1337/1337**。
+
+## 265. VP9 复合预测确定性对拍
+
+- 解码器代码无改动（复合预测 fix/var 双参考选择、comp 上下文树与计数
+  此前已实现）；本轮为上次遗留的「P 帧像素不一致」定位根因，结果在
+  最小确定性样本上不复现，偏差为测试向量构造错误而非实现缺陷。
+- 新增 `libavcodec/vp9_realdata_vectors/`（独立子包，规避 libavcodec
+  主包 wasm `__init` 局部变量上限）：手工构造 3 帧 64x64 确定性流
+  （f0 全 128 关键帧；f1 四个 32x32 intra，V 无上→DC_127、H 无左→
+  DC_129，刷新 GOLD；f2 64x64 ZEROMV compound，fix=LAST=f0、
+  var=GOLD=f1，输出上 (128+127+1)>>1=128、下 129，与任一单参考拷贝
+  均不同）逐帧 MD5 对齐 ffmpeg 9.0.2；另固化 libvpx 真实三会话
+  （128x96 crf30 / 64x48 crf8 / 96x64 crf40+alt-ref 隐藏帧，共 34
+  显示帧，含非 frame-parallel 反向适配）framemd5 逐帧一致。向量由
+  `scripts/emit_vp9_realdata_vectors.py` 生成。
+- 构造流的两个根因（记录供后续向量参考）：compressed header 的
+  comp_pred_mode 两位必须紧跟 intra 4 个 update flag 之后（FFmpeg
+  vp9.c:1013-1016 读取顺序），写在全部 252-prob flag 之后会被当作
+  single-ref；禁用概率反向适配须用 refreshctx=0 + parallelmode=1
+  （vp9.c:1792 门控 `refreshctx && !parallelmode`），errorres=1 会把
+  sign_bias 强制清零（vp9.c:601-605）导致 compound 不可用。
+- 全量 wasm **1341/1341**（含新增 4 个测试）。
