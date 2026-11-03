@@ -1,0 +1,3 @@
+import {
+  "ffmpeg/moonbit/libavcodec",
+} for "test"
