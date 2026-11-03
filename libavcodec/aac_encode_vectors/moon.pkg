@@ -1,0 +1,4 @@
+import {
+  "ffmpeg/moonbit/libavcodec",
+  "moonbitlang/core/math",
+} for "test"
