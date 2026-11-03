@@ -246,7 +246,7 @@ test "aac_lc_spectral_syntax" {
     println(
       "mono frame \{f}: bytes=\{stream[f].length()} max_sfb=\{ics.info.max_sfb} spectral_snr=\{snr}",
     )
-    assert_true(snr > 18.0)
+    assert_true(snr > 32.0)
   }
 }
 
@@ -302,7 +302,7 @@ test "aac_lc_stereo_syntax" {
       if f > 0 && f <= frames {
         // The flush frame reconstructs a window whose second half is silent,
         // so its worst channel sits a little lower than the steady-state ones.
-        assert_true(snr > 17.0)
+        assert_true(snr > 22.0)
       }
     }
   }
@@ -313,10 +313,10 @@ test "aac_lc_stereo_syntax" {
 ///
 /// The in-tree AAC decoder is a faithful port of FFmpeg's, so this stands in
 /// for the external decode. Cross-checked against `linuxserver/ffmpeg:9.0.2`
-/// on this exact stream: FFmpeg reports "aac (LC), 44100 Hz, stereo, 37 kb/s"
-/// and decodes without warnings; its s16 output differs from this decoder's
-/// by 0.77 MSE (sub-LSB rounding), so the SNR/PSNR measured here is the same
-/// 23.36 dB / 33.2 dB one gets from the real FFmpeg decode.
+/// on this exact stream: FFmpeg reports "aac (LC), 44100 Hz, stereo, 119 kb/s"
+/// and decodes without errors or warnings; its s16 output differs from this
+/// decoder's by 0.0008 MSE (sub-LSB rounding), and against the original PCM it
+/// measures the same 29.97 dB SNR / 39.8 dB PSNR (full-scale) reported here.
 test "aac_lc_encoder_round_trip" {
   let channels = 2
   let rate = 44100
@@ -344,8 +344,14 @@ test "aac_lc_encoder_round_trip" {
       noise = noise + (got - want) * (got - want)
     }
   }
+  let samples = frames * 1024 * channels
   let snr = 10.0 * @math.log10(energy / noise)
-  println("round trip: snr=\{snr}")
-  assert_true(snr > 20.0)
+  let psnr = 10.0 * @math.log10(1.0 / (noise / samples.to_double()))
+  println("round trip: snr=\{snr} psnr=\{psnr}")
+  assert_true(snr > 28.0)
+  assert_true(psnr > 38.0)
+  // The rate control fills the per-frame budget rather than dropping spare
+  // bits, so the stream sits just under the requested average bit rate.
   assert_true(total / stream.length() <= target)
+  assert_true(4 * (total / stream.length()) >= 3 * target)
 }

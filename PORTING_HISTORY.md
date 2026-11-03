@@ -6611,7 +6611,7 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 验证：`moon check --target wasm --deny-warn` 通过；全量
   `moon test --target wasm --no-render -q` **1352/1352** 通过。
 
-## 270. 音频编码第一步：可行性盘点与 AAC-LC 最小闭环
+## 270. 音频编码第一步：可行性盘点与 AAC-LC 编码（第 2 阶段）
 
 - **盘点结论**（C 侧规模 / MoonBit 依赖 / 可复用度）：
   - AAC-LC：`libavcodec/aacenc.c` 1201 行、`aacenc_tns.c` 521、
@@ -6632,39 +6632,50 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `aac_swb_tables` / `aac_spectrum` 码本表 / ADTS 头；`aac_mdct.mbt` 的
   正反变换；MP4/ADTS/TS 容器写入器可直接承载输出码流。QMF 仅有解码侧
   （SBR），Opus 的 CELT 另需 480/960 点 MDCT 与 PVQ。
-- **本轮实现**（`libavcodec/aac_encode.mbt`，约 470 行）：
+- **第 1 阶段实现**（`libavcodec/aac_encode.mbt`）：
   - 仅 AAC-LC（object type 2），1024 点长窗 + sine 窗（ONLY_LONG），
     1/2 声道（SCE / 独立双 ICS 的 CPE），无 TNS/PNS/预测/M-S。
   - 与 FFmpeg `aacenc` 相同的约定：分析系数
     `X[j] = Σ x[t]·cos(π/1024·(t+512.5)·(j+0.5))`，编码器系数
     `c = 65536·X`；量化
-    `q = floor((|c|·2^(-(sf-100)/4))^(3/4) + 0.405)`，上限 15（codebook 11，
-    无 escape）。
-  - 码率控制：整帧单一标度因子（由谱峰值解出
-    `sf = ceil(100 + 4·log2(peak/35.66))`）+ 全局 delta 二分，使 ADTS 帧长
-    不超过 `bit_rate·1024/sample_rate/8`。当前是“质量优先、封顶”的 VBR，
-    delta=0 装得下就不再花比特，因此实测码率低于目标。
+    `q = floor((|c|·2^(-(sf-100)/4))^(3/4) + 0.405)`。
   - ADTS：7 字节头 + raw_data_block + ID_END(3 bit) + 字节对齐。
+- **第 2 阶段实现**（本轮）：
+  - **codebook 11 escape**：取消 `q ≤ 15` 上限，量化幅度上限 8191；
+    幅度 ≥ 16 时按上游 `aaccoder.c` 写 `len-4` 个 1 + 终止 0 +
+    `len` 位余数（`len = floor(log2(v))`），符号位在 escape 序列之前
+    写完（与解码端 `VMUL4S` 的读取顺序一致）。
+  - **逐带码本选择**：对带内每个 2/4 元组，按码本 1..11 的真实 Huffman
+    位耗（cb11 计入 escape 位）取最小；反向查表以
+    `codebook_vector02/4/6/8/10_idx` 的打包键（低 8 位数值 + bits 8..15
+    的符号槽位/nnz）索引，避免线性搜索。
+  - **码率填满**：以 `sf = ceil(100 + 4·log2(peak/35.66))` 为搜索中心，
+    在整数 delta ∈ [-255, 255] 上二分，取仍装得下
+    `bit_rate·1024/sample_rate/8` 的最小 delta（可为负，最细量化）；
+    量化先夹紧再转 Int，避免极粗 sf 时 `a^(3/4)` 溢出。
+  - 声道内仍共享一个标度因子：在“每系数约 log(q) 比特”的代价模型下，
+    均匀量化步长对 MSE 已最优，逐带 sf 只对感知掩蔽有益。
 - **量化指标**（`libavcodec/aac_encode_vectors/`，44.1 kHz 立体声、8 帧
-  多音 + LCG 抖动、目标 128 kbps）：
-  - 9 帧（含 1 个 flush 帧）ADTS 共 976 字节，平均 108.4 字节/帧，实测
-    **37.4 kbps**（每帧 ≤ 371 字节上限）。
-  - 谱域往返 SNR：mono 19.4–24.6 dB；stereo 17.8–24.6 dB。
-  - 时域往返（本仓库解码器，延迟 1024 样本）：**SNR 23.36 dB**、
-    PSNR（峰值 32768）**33.2 dB**、MSE 513840。
+  多音 + LCG 抖动、目标 128 kbps，帧预算 371 字节）：
+  - 9 帧（含 1 个 flush 帧）ADTS 共 3128 字节，平均 347 字节/帧，实测
+    **119.7 kbps**（目标的 93.5%）。
+  - 谱域往返 SNR：mono 33.81–41.30 dB；stereo 23.70–31.35 dB。
+  - 时域往返（本仓库解码器，延迟 1024 样本）：**SNR 29.97 dB**、
+    PSNR（峰值 32768）**39.8 dB**、MSE 112317。
   - 外部验证：`linuxserver/ffmpeg:9.0.2` 解码该 ADTS 流输出
-    `aac (LC), 44100 Hz, stereo, 37 kb/s`、9 帧、无告警；其 s16 输出与本
-    仓库解码器输出差 0.77 MSE（亚 LSB 舍入），故上述 SNR/PSNR 与真实
+    `aac (LC), 44100 Hz, stereo, 119 kb/s`、9 帧、无告警；其 s16 输出与本
+    仓库解码器输出差 0.0008 MSE（亚 LSB 舍入），故上述 SNR/PSNR 与真实
     ffmpeg 解码一致。
-  - 断言已写入测试：理想分析/合成 SNR≈254 dB 且 gain=1；mono/stereo 谱
-    SNR > 18/17 dB；往返 SNR > 20 dB 且平均帧长 ≤ 目标字节数。
+  - 断言已写入测试：理想分析/合成 SNR≈254 dB 且 gain=1；mono 谱 SNR >
+    32 dB；stereo 谱 SNR > 22 dB；往返 SNR > 28 dB、PSNR > 38 dB，
+    平均帧长 ≤ 目标字节数且 ≥ 目标的 75%。
 - **验证**：`moon check --target wasm --deny-warn` 通过；全量
-  `moon test --target wasm --no-render` **1356/1356** 通过。
-- **下一阶段**：AAC 补 codebook escape 与多码本选择（真正拉近目标码率并
-  提升 SNR），再加 TNS 与简化心理声学模型；MP3 走原生 mpegaudioenc 的
-  32 点滤波器组；Opus 最后做，重点是 CELT/PVQ 编码搜索。
-- **风险**：无心理声学时 33 dB PSNR 只代表波形相似，不代表听感；码率控制
-  目前只封顶不填满；MP3 子带滤波器组与 Opus PVQ 搜索是本仓库尚无的算法
-  模块，周期与调试成本最高。
+  `moon test --target wasm --no-render` **1368/1368** 通过。
+- **下一阶段**：AAC 补短窗/窗口切换、TNS 与简化心理声学模型（届时才引入
+  逐带标度因子）；MP3 走原生 mpegaudioenc 的 32 点滤波器组；Opus 最后做，
+  重点是 CELT/PVQ 编码搜索。
+- **风险**：无心理声学时 39.8 dB PSNR 只代表波形相似，不代表听感；flush
+  帧仍按预算填满，纯零输入也会花掉整帧比特；MP3 子带滤波器组与 Opus PVQ
+  搜索是本仓库尚无的算法模块，周期与调试成本最高。
 
 
