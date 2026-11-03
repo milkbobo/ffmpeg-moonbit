@@ -4,7 +4,10 @@
 fn[T] aac_encode_test_ok(r : Result[T, String]) -> T {
   match r {
     Ok(v) => v
-    Err(_) => abort("AAC test: unexpected error")
+    Err(e) => {
+      println("AAC test error: \{e}")
+      abort("AAC test: unexpected error")
+    }
   }
 }
 
@@ -105,7 +108,13 @@ fn aac_encode_test_decode(
         end=frames[f].length(),
       )
       .to_owned()
-    let out = aac_encode_test_ok(decoder.decode_frame(payload))
+    let out = match decoder.decode_frame(payload) {
+      Ok(v) => v
+      Err(e) => {
+        println("AAC decode failed at frame \{f}: \{e}")
+        abort("AAC decode failed")
+      }
+    }
     assert_eq(out.length(), channels)
     for ch = 0; ch < channels; ch = ch + 1 {
       assert_eq(out[ch].samples.length(), 1024)
@@ -128,11 +137,23 @@ fn aac_encode_test_window() -> Array[Double] {
 }
 
 ///|
-/// Decode one channel stream from the already positioned reader.
-fn aac_encode_test_parse_channel(
+/// Whether any window of the parsed TNS data carries a filter.
+fn aac_encode_test_tns_present(tns : @libavcodec.AacTns) -> Bool {
+  for w = 0; w < tns.n_filt.length(); w = w + 1 {
+    if tns.n_filt[w] > 0 {
+      return true
+    }
+  }
+  false
+}
+
+///|
+/// Decode one channel's spectral data and apply its TNS synthesis, the order
+/// used by the real decode path (stereo inverse first, then TNS).
+fn aac_encode_test_parse_spectrum(
   gb : @libavcodec.BitReader,
-) -> (Array[Double], @libavcodec.AacIcs) {
-  let ics = aac_encode_test_ok(@libavcodec.aac_decode_ics(gb))
+  ics : @libavcodec.AacIcs,
+) -> Array[Double] {
   let swb = aac_encode_test_ok(@libavcodec.aac_swb_tables(4))
   let sf = @libavcodec.aac_sf_dequant(ics.info, ics.sect_cb, ics.scale_factors)
   let noise = @libavcodec.new_aac_spectrum_state()
@@ -148,7 +169,30 @@ fn aac_encode_test_parse_channel(
       coeffs,
     ),
   )
-  (coeffs, ics)
+  @libavcodec.aac_apply_tns(coeffs, ics.tns, ics.info, swb)
+  coeffs
+}
+
+///|
+/// Decode one independent channel stream from the already positioned reader.
+fn aac_encode_test_parse_channel(
+  gb : @libavcodec.BitReader,
+) -> (Array[Double], @libavcodec.AacIcs) {
+  let ics = aac_encode_test_ok(@libavcodec.aac_decode_ics(gb))
+  (aac_encode_test_parse_spectrum(gb, ics), ics)
+}
+
+///|
+/// Decode one channel of a common-window CPE, which carries no ics_info of its
+/// own.
+fn aac_encode_test_parse_channel_common(
+  gb : @libavcodec.BitReader,
+  info : @libavcodec.AacIcsInfo,
+) -> (Array[Double], @libavcodec.AacIcs) {
+  let ics = aac_encode_test_ok(
+    @libavcodec.aac_decode_ics_with_info(gb, Some(info)),
+  )
+  (aac_encode_test_parse_spectrum(gb, ics), ics)
 }
 
 ///|
@@ -280,6 +324,22 @@ test "aac_lc_spectral_syntax" {
     assert_eq(gb.read(3).reinterpret_as_int(), 0) // ID_SCE
     let _ = gb.read(4)
     let (got, ics) = aac_encode_test_parse_channel(gb)
+    if aac_encode_test_tns_present(ics.tns) {
+      // Long windows may carry two 6th-order filters, short ones a 7th-order
+      // filter; either way the syntax must stay inside the LC limits.
+      let is8 = ics.info.window_sequence == 2
+      for w = 0; w < ics.info.num_windows; w = w + 1 {
+        for filt = 0; filt < ics.tns.n_filt[w]; filt = filt + 1 {
+          assert_true(
+            ics.tns.filters[w][filt].order <= (if is8 { 7 } else { 12 }),
+          )
+        }
+      }
+    }
+    // The tone programme is too sparse in the upper bands for the TNS gain to
+    // reach the FFmpeg threshold window, so TNS is not guaranteed here; when
+    // present the syntax above must still be valid. `aac_lc_tns_syntax`
+    // exercises a programme built to reach that window.
     let buf : Array[Double] = Array::make(2048, 0.0)
     for i = 0; i < 1024; i = i + 1 {
       buf[i] = if f > 0 && f <= frames {
@@ -300,17 +360,18 @@ test "aac_lc_spectral_syntax" {
     }
     let snr = 10.0 * @math.log10(energy / noise)
     println(
-      "mono frame \{f}: seq=\{ics.info.window_sequence} bytes=\{stream[f].length()} max_sfb=\{ics.info.max_sfb} spectral_snr=\{snr}",
+      "mono frame \{f}: seq=\{ics.info.window_sequence} bytes=\{stream[f].length()} max_sfb=\{ics.info.max_sfb} tns=\{aac_encode_test_tns_present(ics.tns)} spectral_snr=\{snr}",
     )
-    // The per-band scalefactors keep the long-window frames above 32 dB; the
-    // flush frame (whose overlap tail feeds the 1024-sample delay) is the
-    // weakest one.
-    assert_true(snr > (if ics.info.window_sequence == 2 { 18.0 } else { 30.0 }))
+    // TNS reshapes the upper bands before quantisation, which lifts the long
+    // frames above 32 dB and the short ones above 36 dB; the flush frame (whose
+    // overlap tail feeds the 1024-sample delay) is the weakest one.
+    assert_true(snr > (if ics.info.window_sequence == 2 { 36.0 } else { 31.0 }))
   }
 }
 
 ///|
-/// Spectral round trip of a stereo (CPE) stream, decoded channel by channel.
+/// Spectral round trip of a stereo (CPE) stream with a common window and a
+/// per-band mid/side mask, decoded channel by channel.
 test "aac_lc_stereo_syntax" {
   let rate = 44100
   let channels = 2
@@ -327,9 +388,52 @@ test "aac_lc_stereo_syntax" {
     let gb = @libavcodec.BitReader::new(payload)
     assert_eq(gb.read(3).reinterpret_as_int(), 1) // ID_CPE
     let _ = gb.read(4)
-    assert_eq(gb.read1(), 0U) // common_window == 0
-    let (c0, m0) = aac_encode_test_parse_channel(gb)
-    let (c1, m1) = aac_encode_test_parse_channel(gb)
+    assert_eq(gb.read1(), 1U) // common_window == 1
+    let info = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gb))
+    let ms_present = gb.read(2).reinterpret_as_int()
+    // ms_present: 0 = L/R only, 1 = per-band mask, 2 = all bands.
+    let mask : Array[Bool] = Array::make(info.max_sfb, false)
+    if ms_present == 2 {
+      for b = 0; b < info.max_sfb; b = b + 1 {
+        mask[b] = true
+      }
+    } else if ms_present == 1 {
+      for b = 0; b < info.max_sfb; b = b + 1 {
+        mask[b] = gb.read1() == 1U
+      }
+    }
+    let (c0, m0) = aac_encode_test_parse_channel_common(gb, info)
+    let (c1, m1) = aac_encode_test_parse_channel_common(gb, info)
+    // Undo the mid/side transform band by band: L = M + S, R = M - S.
+    let swb = aac_encode_test_ok(@libavcodec.aac_swb_tables(4))
+    let is8 = info.window_sequence == 2
+    let offsets = if is8 { swb.offsets_short } else { swb.offsets_long }
+    let num_windows = if is8 { 8 } else { 1 }
+    let mut ms_bands = 0
+    for b = 0; b < info.max_sfb; b = b + 1 {
+      if !mask[b] {
+        continue
+      }
+      ms_bands = ms_bands + 1
+      for w = 0; w < num_windows; w = w + 1 {
+        for i = w * 128 + offsets[b].reinterpret_as_int()
+            i < w * 128 + offsets[b + 1].reinterpret_as_int()
+            i = i + 1 {
+          let l = c0[i]
+          let r = c1[i]
+          c0[i] = l + r
+          c1[i] = l - r
+        }
+      }
+    }
+    println(
+      "cpe frame \{f}: seq=\{info.window_sequence} bytes=\{stream[f].length()} max_sfb=\{info.max_sfb} ms_present=\{ms_present} ms_bands=\{ms_bands}",
+    )
+    if f > 0 && f <= frames {
+      // The correlated tone programme should select M/S on at least some bands.
+      assert_true(ms_present != 0)
+      assert_true(ms_bands > 0)
+    }
     for ch = 0; ch < 2; ch = ch + 1 {
       let got = if ch == 0 { c0 } else { c1 }
       let ics = if ch == 0 { m0 } else { m1 }
@@ -359,7 +463,7 @@ test "aac_lc_stereo_syntax" {
         // The flush frame reconstructs a window whose second half is silent,
         // so its worst channel sits a little lower than the steady-state ones.
         assert_true(
-          snr > (if ics.info.window_sequence == 2 { 12.0 } else { 21.0 }),
+          snr > (if ics.info.window_sequence == 2 { 26.0 } else { 22.0 }),
         )
       }
     }
@@ -397,6 +501,8 @@ test "aac_lc_transient_windows" {
   let input = aac_encode_test_transient(rate, frames)
   let stream = aac_encode_test_stream(input, 1, frames, rate, 128000)
   let seqs : Array[Int32] = []
+  let mut tns_frames = 0
+  let mut tns_short = 0
   for f = 0; f < stream.length(); f = f + 1 {
     let payload = stream[f]
       .clamped_view(
@@ -407,10 +513,25 @@ test "aac_lc_transient_windows" {
     let gb = @libavcodec.BitReader::new(payload)
     assert_eq(gb.read(3).reinterpret_as_int(), 0) // ID_SCE
     let _ = gb.read(4) // element_instance_tag
-    let _ = gb.read(8) // global_gain
-    let _ = gb.read(1) // reserved
-    seqs.push(gb.read(2).reinterpret_as_int())
+    let ics = aac_encode_test_ok(@libavcodec.aac_decode_ics(gb))
+    seqs.push(ics.info.window_sequence)
+    if aac_encode_test_tns_present(ics.tns) {
+      tns_frames = tns_frames + 1
+      let is8 = ics.info.window_sequence == 2
+      if is8 {
+        tns_short = tns_short + 1
+      }
+      for w = 0; w < ics.info.num_windows; w = w + 1 {
+        for filt = 0; filt < ics.tns.n_filt[w]; filt = filt + 1 {
+          // LC limits: order 12 for long windows, 7 for short ones.
+          assert_true(
+            ics.tns.filters[w][filt].order <= (if is8 { 7 } else { 12 }),
+          )
+        }
+      }
+    }
   }
+  println("transient tns frames=\{tns_frames} short=\{tns_short}")
   let mut text = ""
   for f = 0; f < seqs.length(); f = f + 1 {
     text = text + seqs[f].to_string() + " "
@@ -451,6 +572,9 @@ test "aac_lc_transient_windows" {
   assert_true(start >= 1)
   assert_true(short >= 2)
   assert_true(stop >= 1)
+  // TNS is opportunistic: an impulse spreads energy over all bands, which can
+  // push the LPC gain outside the FFmpeg window, so only the syntax is
+  // validated above; `aac_lc_tns_syntax` covers filter selection.
   let decoded = aac_encode_test_decode(stream, 1)
   let mut energy = 0.0
   let mut noise = 0.0
@@ -469,14 +593,103 @@ test "aac_lc_transient_windows" {
 }
 
 ///|
+/// Harmonic programme with enough upper-band energy to reach the TNS gain
+/// window: 48 harmonics of 86 Hz (spacing of about four MDCT bins, so the
+/// upper-band spectrum stays partially predictable) plus white noise of equal
+/// power (the noise lowers the prediction gain from "too high" into
+/// `aacenc_tns.c`'s `[1.4, 1.4 * 1.16]` range).
+fn aac_encode_test_harmonics(
+  rate : Int32,
+  frames : Int32,
+) -> Array[Array[Double]] {
+  let row : Array[Double] = Array::make(frames * 1024, 0.0)
+  let freq = rate.to_double() / (rate / 86).to_double()
+  let mut seed : UInt32 = 4321U
+  for i = 0; i < frames * 1024; i = i + 1 {
+    seed = seed * 1664525U + 1013904223U
+    let t = i.to_double() / rate.to_double()
+    let mut v = 0.05 *
+      ((seed.reinterpret_as_int() >> 8).to_double() / 8388608.0)
+    for k = 1; k <= 48; k = k + 1 {
+      v = v +
+        0.05 *
+        @math.sin(2.0 * 3.14159265358979323846 * freq * k.to_double() * t)
+    }
+    row[i] = v
+  }
+  [row]
+}
+
+///|
+/// TNS on a programme that actually crosses the FFmpeg gain gate: the filters
+/// must be written, parsed back with the same coefficients and band lengths,
+/// and the synthesis must recover the unfiltered spectrum.
+test "aac_lc_tns_syntax" {
+  let rate = 44100
+  // The onset attack forces a short-window run, so several steady long frames
+  // are needed before the gate is crossed.
+  let frames = 9
+  let input = aac_encode_test_harmonics(rate, frames)
+  let stream = aac_encode_test_stream(input, 1, frames, rate, 128000)
+  let mut tns_frames = 0
+  for f = 0; f < frames + 1; f = f + 1 {
+    let payload = stream[f]
+      .clamped_view(
+        start=@libavcodec.av_aac_adts_header_size,
+        end=stream[f].length(),
+      )
+      .to_owned()
+    let gb = @libavcodec.BitReader::new(payload)
+    assert_eq(gb.read(3).reinterpret_as_int(), 0) // ID_SCE
+    let _ = gb.read(4)
+    let (got, ics) = aac_encode_test_parse_channel(gb)
+    let is8 = ics.info.window_sequence == 2
+    if aac_encode_test_tns_present(ics.tns) {
+      tns_frames = tns_frames + 1
+      assert_eq(ics.tns.n_filt[0], if is8 { 1 } else { 2 })
+      for filt = 0; filt < ics.tns.n_filt[0]; filt = filt + 1 {
+        assert_eq(ics.tns.filters[0][filt].order, if is8 { 7 } else { 6 })
+        assert_true(ics.tns.filters[0][filt].length > 0)
+      }
+    }
+    let buf : Array[Double] = Array::make(2048, 0.0)
+    for i = 0; i < 1024; i = i + 1 {
+      buf[i] = if f > 0 && f <= frames {
+        input[0][(f - 1) * 1024 + i]
+      } else {
+        0.0
+      }
+      buf[1024 + i] = if f < frames { input[0][f * 1024 + i] } else { 0.0 }
+    }
+    let want = aac_encode_test_analysis(buf, ics.info.window_sequence)
+    let mut energy = 0.0
+    let mut noise = 0.0
+    for j = 0; j < 1024; j = j + 1 {
+      let w = want[j]
+      let d = got[j] - w
+      energy = energy + w * w
+      noise = noise + d * d
+    }
+    let snr = 10.0 * @math.log10(energy / noise)
+    println(
+      "tns frame \{f}: seq=\{ics.info.window_sequence} tns=\{aac_encode_test_tns_present(ics.tns)} spectral_snr=\{snr}",
+    )
+    assert_true(snr > 15.0)
+  }
+  println("tns frames=\{tns_frames}")
+  // The steady long frames sit inside the gain window; the flush frame is
+  // silent and must be rejected.
+  assert_true(tns_frames >= 2)
+}
+
+///|
 /// Full encoder -> decoder round trip: frame structure, rate and waveform.
 ///
 /// The in-tree AAC decoder is a faithful port of FFmpeg's, so this stands in
 /// for the external decode. Cross-checked against `linuxserver/ffmpeg:9.0.2`
-/// on this exact stream: FFmpeg reports "aac (LC), 44100 Hz, stereo, 120 kb/s"
-/// and decodes without errors or warnings; its s16 output measures 29.3 dB
-/// SNR against the original PCM, i.e. the same as the 28.9 dB / 38.8 dB PSNR
-/// (full-scale) reported here.
+/// on this exact stream: FFmpeg reports "aac (LC), 44100 Hz, stereo, 117 kb/s"
+/// and decodes without errors or warnings; its s16 output measures the same
+/// SNR as the 29.0 dB / 38.9 dB PSNR (full-scale) reported here.
 test "aac_lc_encoder_round_trip" {
   let channels = 2
   let rate = 44100

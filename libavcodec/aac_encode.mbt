@@ -1,10 +1,19 @@
 ///|
 /// MoonBit port of a minimal AAC-LC encoder, shipped as ADTS frames.
 ///
-/// Scope: AAC-LC object type 2, sine windows, no TNS / PNS / prediction / M/S,
-/// one SCE for mono or one CPE with independent channels for stereo, and
-/// codebook 11 spectral Huffman with escape sequences (quantised magnitudes up
-/// to 8191). Each band gets its own scalefactor from a simplified psychoacoustic
+/// Scope: AAC-LC object type 2, sine windows, no PNS / prediction, one SCE for
+/// mono or one CPE with a common window for stereo, and codebook 11 spectral
+/// Huffman with escape sequences (quantised magnitudes up to 8191).
+///
+/// Stereo uses mid/side coding per scalefactor band: M = (L + R) / 2 and
+/// S = (L - R) / 2, chosen band by band when the companded alphabet of the
+/// pair is smaller than that of L/R (the encoder-side twin of FFmpeg's
+/// `search_for_ms`), with the CPE carrying one shared `ics_info` and a per-band
+/// `ms_used` mask. Temporal noise shaping follows `aacenc_tns.c`: a 12th-order
+/// (7th for short windows) LPC analysis of the upper scalefactor bands, gated
+/// on the LPC gain, quantised to `ff_tns_tmp2_map_1_4` and applied as an
+/// all-zero filter before quantisation. Each band gets its own scalefactor
+/// from a simplified psychoacoustic
 /// model (upward spreading of band energy plus a frequency-dependent SNR aim),
 /// then one frame-wide offset shifts every band's scalefactor and is
 /// binary-searched so each ADTS frame fills the requested average bit rate.
@@ -373,6 +382,496 @@ let aac_encode_max_q : Int32 = 8191
 let aac_encode_ath_energy : Double = 143900.0
 
 ///|
+/// `tns_min_sfb_long/short` (`aacenctab.h`): the first scalefactor band the
+/// TNS analysis may use, per sampling index.
+let aac_encode_tns_min_sfb_long : Array[Int32] = [
+  12, 13, 15, 16, 17, 20, 25, 26, 24, 28, 30, 31, 31, 31, 31, 31,
+]
+
+///|
+let aac_encode_tns_min_sfb_short : Array[Int32] = [
+  2, 2, 2, 3, 3, 4, 6, 6, 8, 10, 10, 12, 12, 12, 12, 12,
+]
+
+///|
+/// `ff_tns_max_bands_1024/128` (`aactab.c`): the highest band TNS may reach.
+let aac_encode_tns_max_bands_long : Array[Int32] = [
+  31, 31, 34, 40, 42, 51, 46, 46, 42, 42, 42, 39, 39,
+]
+
+///|
+let aac_encode_tns_max_bands_short : Array[Int32] = [
+  9, 9, 10, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+]
+
+///|
+/// `ff_tns_tmp2_map_1_4` (`aactab.c`): the 4-bit quantisation alphabet of TNS
+/// reflection coefficients. `aacenc_tns.c` quantises every coefficient to the
+/// nearest member; the decoder dequantises through the same table.
+let aac_encode_tns_quant : Array[Double] = [
+  0.00000000, -0.20791170, -0.40673664, -0.58778524, -0.74314481, -0.86602539, -0.95105654,
+  -0.99452192, 0.99573416, 0.96182561, 0.89516330, 0.79801720, 0.67369562, 0.52643216,
+  0.36124167, 0.18374951,
+]
+
+///|
+/// `ff_lpc_calc_ref_coefs_f` (`lpc.c`): Welch-window a run of `len`
+/// coefficients, take its autocorrelation, and return
+/// `(reflection coefficients, LPC gain = signal / average prediction error)`.
+/// `aacenc_tns.c` only keeps the filter when this gain sits inside
+/// `[1.4, 1.16 * 1.4]`, i.e. when the predictor explains a real amount of the
+/// signal but not so much that the residual is already tiny.
+fn aac_encode_tns_gain(
+  coef : Array[Double],
+  start : Int32,
+  len : Int32,
+  order : Int32,
+) -> (Array[Double], Double) {
+  let refc : Array[Double] = Array::make(order, 0.0)
+  if len < 2 {
+    return (refc, 0.0)
+  }
+  // Weight = 0.5 - 0.5 cos(2 pi i / (len - 1)): a Welch window, mirrored about
+  // the centre exactly as the C loop writes the two halves.
+  let w : Array[Double] = Array::make(len, 0.0)
+  for i = 0; i <= len / 2; i = i + 1 {
+    let weight = 0.5 -
+      0.5 *
+      @math.cos(
+        2.0 * 3.14159265358979323846 * i.to_double() / (len - 1).to_double(),
+      )
+    w[i] = weight * coef[start + i]
+    w[len - 1 - i] = weight * coef[start + len - 1 - i]
+  }
+  let autoc : Array[Double] = Array::make(order + 1, 0.0)
+  for k = 0; k <= order; k = k + 1 {
+    // The C autocorrelator seeds every lag with 1.0.
+    let mut sum = 1.0
+    for i = k; i < len; i = i + 1 {
+      sum = sum + w[i] * w[i - k]
+    }
+    autoc[k] = sum
+  }
+  let (reflection, error) = aac_encode_ref_coefs(autoc, order)
+  let mut avg_err = 0.0
+  for i = 0; i < order; i = i + 1 {
+    avg_err = (avg_err + error[i]) / 2.0
+  }
+  let gain = if avg_err != 0.0 { autoc[0] / avg_err } else { 0.0 }
+  (reflection, gain)
+}
+
+///|
+/// `compute_ref_coefs` (`lpc.c`): Schur recursion producing reflection
+/// coefficients and the residual error of every order from autocorrelation
+/// data.
+fn aac_encode_ref_coefs(
+  autoc : Array[Double],
+  order : Int32,
+) -> (Array[Double], Array[Double]) {
+  let gen0 : Array[Double] = Array::make(order, 0.0)
+  let gen1 : Array[Double] = Array::make(order, 0.0)
+  for i = 0; i < order; i = i + 1 {
+    gen0[i] = autoc[i + 1]
+    gen1[i] = autoc[i + 1]
+  }
+  let refc : Array[Double] = Array::make(order, 0.0)
+  let errs : Array[Double] = Array::make(order, 0.0)
+  let mut err = autoc[0]
+  refc[0] = -gen1[0] / (if err != 0.0 { err } else { 1.0 })
+  err = err + gen1[0] * refc[0]
+  errs[0] = err
+  for i = 1; i < order; i = i + 1 {
+    for j = 0; j < order - i; j = j + 1 {
+      let next = gen1[j + 1]
+      gen1[j] = next + refc[i - 1] * gen0[j]
+      gen0[j] = next * refc[i - 1] + gen0[j]
+    }
+    refc[i] = -gen1[0] / (if err != 0.0 { err } else { 1.0 })
+    err = err + gen1[0] * refc[i]
+    errs[i] = err
+  }
+  (refc, errs)
+}
+
+///|
+/// Levinson-Durbin recursion from quantised reflection coefficients to the
+/// predictor coefficients the all-zero filter uses; identical arithmetic to
+/// the decoder's `aac_tns_lpc`.
+fn aac_encode_tns_lpc(coef : Array[Double], order : Int32) -> Array[Double] {
+  let lpc : Array[Double] = Array::make(order, 0.0)
+  for i = 0; i < order; i = i + 1 {
+    let r = -coef[i]
+    lpc[i] = r
+    for j = 0; j < (i + 1) / 2; j = j + 1 {
+      let f = lpc[j]
+      let b = lpc[i - 1 - j]
+      lpc[j] = f + r * b
+      lpc[i - 1 - j] = b + r * f
+    }
+  }
+  lpc
+}
+
+///|
+/// One TNS filter of one window (spec 4.6.2.5).
+priv struct AacEncTnsFilter {
+  length : Int32
+  order : Int32
+  direction : Int32
+  coef_idx : Array[Int32]
+  coef : Array[Double]
+}
+
+///|
+/// Per-channel TNS data. `mmm` is `min(tns_max_bands, max_sfb)` — the band
+/// limit both the encoder filter and the decoder's `aac_apply_tns` derive from
+/// the bitstream, so it is kept here to make the encoder's filter cover
+/// exactly the decoder's band range.
+priv struct AacEncTns {
+  present : Bool
+  mmm : Int32
+  n_filt : Array[Int32]
+  filters : Array[Array[AacEncTnsFilter]]
+}
+
+///|
+/// `search_for_pns`-style empty TNS data (no filters on any window).
+fn aac_encode_tns_none(num_windows : Int32) -> AacEncTns {
+  let n_filt : Array[Int32] = Array::make(num_windows, 0)
+  let empty : Array[AacEncTnsFilter] = []
+  let filters : Array[Array[AacEncTnsFilter]] = []
+  for _w = 0; _w < num_windows; _w = _w + 1 {
+    filters.push(empty)
+  }
+  { present: false, mmm: 0, n_filt, filters, }
+}
+
+///|
+/// `ff_aac_search_for_tns`: per window, LPC-analyse the upper bands
+/// `[sfb_start, sfb_end)` and keep the filter only when the prediction gain
+/// falls inside the FFmpeg margins. A long frame uses two filters of order 6
+/// (12th order overall), a short frame one filter of order 7; the filters
+/// split the band range and run from the top band downwards, which is how
+/// `aacenc_tns.c` and the decoder both derive their range from `length`.
+fn AacEncoder::search_tns(
+  self : AacEncoder,
+  coef : Array[Double],
+  planned_max_sfb : Int32,
+  seq : Int32,
+) -> AacEncTns {
+  let is8 = seq == aac_eight_short
+  let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
+  let offsets = if is8 { self.short_offsets } else { self.swb_offsets }
+  let num_windows = if is8 { 8 } else { 1 }
+  let si = self.sampling_index
+  let max_bands = if is8 {
+    aac_encode_tns_max_bands_short[si]
+  } else {
+    aac_encode_tns_max_bands_long[si]
+  }
+  let mut mmm = planned_max_sfb
+  if mmm > max_bands {
+    mmm = max_bands
+  }
+  let mut sfb_start = if is8 {
+    aac_encode_tns_min_sfb_short[si]
+  } else {
+    aac_encode_tns_min_sfb_long[si]
+  }
+  if sfb_start > mmm {
+    sfb_start = mmm
+  }
+  let mut sfb_end = num_swb
+  if sfb_end > mmm {
+    sfb_end = mmm
+  }
+  let sfb_len = sfb_end - sfb_start
+  let coef_len = offsets[sfb_end] - offsets[sfb_start]
+  if coef_len <= 0 || sfb_len <= 0 {
+    return aac_encode_tns_none(num_windows)
+  }
+  // Long: 12th order split over two filters; short: one 7th-order filter.
+  let n_filt = if is8 { 1 } else { 2 }
+  let order = if is8 { 7 } else { 12 }
+  let filt_order = order / n_filt
+  // LONG_START slants the filter forwards, LONG_STOP backwards; the steady
+  // sequences pick the direction from the energy of the band halves.
+  let slant = if seq == aac_long_stop {
+    1
+  } else if seq == aac_long_start {
+    0
+  } else {
+    2
+  }
+  let nfilts : Array[Int32] = Array::make(num_windows, 0)
+  let filters : Array[Array[AacEncTnsFilter]] = []
+  let mut count = 0
+  for w = 0; w < num_windows; w = w + 1 {
+    // Energy of the start / middle / end slices of the band range.
+    let en : Array[Double] = Array::make(4, 0.0)
+    for g = sfb_start; g < sfb_end; g = g + 1 {
+      let mut e = 0.0
+      for i = w * 128 + offsets[g]; i < w * 128 + offsets[g + 1]; i = i + 1 {
+        e = e + coef[i] * coef[i]
+      }
+      if n_filt == 2 {
+        if g > sfb_start + sfb_len / 2 {
+          en[1] = en[1] + e
+        } else {
+          en[0] = en[0] + e
+        }
+      } else if g > sfb_start + sfb_len / 2 + sfb_len / 4 {
+        en[2] = en[2] + e
+      } else if g > sfb_start + sfb_len / 2 - sfb_len / 4 {
+        en[1] = en[1] + e
+      } else {
+        en[0] = en[0] + e
+      }
+    }
+    if n_filt == 2 {
+      en[2] = en[0]
+    } else {
+      en[3] = en[0]
+    }
+    let (refc, gain) = aac_encode_tns_gain(
+      coef,
+      w * 128 + offsets[sfb_start],
+      coef_len,
+      order,
+    )
+    if gain < 1.4 || gain > 1.4 * 1.16 {
+      filters.push(aac_encode_tns_none(1).filters[0])
+      continue
+    }
+    let list : Array[AacEncTnsFilter] = []
+    let mut oc = 0
+    for g = 0; g < n_filt; g = g + 1 {
+      let direction = if slant != 2 {
+        slant
+      } else if en[g] < en[g + 1] {
+        1
+      } else {
+        0
+      }
+      let idx : Array[Int32] = Array::make(filt_order, 0)
+      let qcoef : Array[Double] = Array::make(filt_order, 0.0)
+      for k = 0; k < filt_order; k = k + 1 {
+        let mut best = 0
+        let mut best_err = 1.0e30
+        for q = 0; q < 16; q = q + 1 {
+          let d = refc[oc + k] - aac_encode_tns_quant[q]
+          if d * d < best_err {
+            best_err = d * d
+            best = q
+          }
+        }
+        idx[k] = best
+        qcoef[k] = aac_encode_tns_quant[best]
+      }
+      oc = oc + filt_order
+      list.push({
+        length: sfb_len / n_filt,
+        order: filt_order,
+        direction,
+        coef_idx: idx,
+        coef: qcoef,
+      })
+    }
+    nfilts[w] = n_filt
+    filters.push(list)
+    count = count + 1
+  }
+  { present: count > 0, mmm, n_filt: nfilts, filters, }
+}
+
+///|
+/// `ff_aac_apply_tns`: the encoder-side all-zero filter, `c[m] += lpc[i] *
+/// c_orig[m - i]` applied causally toward `direction` over the range derived
+/// from the filter lengths and `mmm`. The original coefficients are read from
+/// a copy, so the input to the filter is the unfiltered spectrum — exactly the
+/// inverse of the decoder's AR synthesis (`c[m] -= lpc[i] * c[m - i]`).
+fn aac_encode_apply_tns(
+  coef : Array[Double],
+  tns : AacEncTns,
+  offsets : Array[Int32],
+  num_swb : Int32,
+  num_windows : Int32,
+) -> Unit {
+  if !tns.present {
+    return
+  }
+  let orig = coef.copy()
+  for w = 0; w < num_windows; w = w + 1 {
+    let mut bottom = num_swb
+    for filt = 0; filt < tns.n_filt[w]; filt = filt + 1 {
+      let top = bottom
+      bottom = top - tns.filters[w][filt].length
+      if bottom < 0 {
+        bottom = 0
+      }
+      let order = tns.filters[w][filt].order
+      if order == 0 {
+        continue
+      }
+      let lpc = aac_encode_tns_lpc(tns.filters[w][filt].coef, order)
+      let b = if bottom < tns.mmm { bottom } else { tns.mmm }
+      let t = if top < tns.mmm { top } else { tns.mmm }
+      let size = offsets[t] - offsets[b]
+      if size <= 0 {
+        continue
+      }
+      let inc = if tns.filters[w][filt].direction != 0 { -1 } else { 1 }
+      let mut st = if inc < 0 {
+        w * 128 + offsets[t] - 1
+      } else {
+        w * 128 + offsets[b]
+      }
+      for m = 0; m < size; m = m + 1 {
+        let lim = if m < order { m } else { order }
+        for i = 1; i <= lim; i = i + 1 {
+          coef[st] = coef[st] + lpc[i - 1] * orig[st - i * inc]
+        }
+        st = st + inc
+      }
+    }
+  }
+}
+
+///|
+/// `compress_coeffs` (`aacenc_tns.c`): the quantised indices can be written in
+/// one bit less when none of them falls in `[4, 11]`; the two ends of the
+/// alphabet then pack into 6 instead of 7 bits.
+fn aac_encode_tns_compress(idx : Array[Int32], order : Int32) -> Int32 {
+  for i = 0; i < order; i = i + 1 {
+    if idx[i] >= 4 && idx[i] <= 11 {
+      return 0
+    }
+  }
+  1
+}
+
+///|
+/// `ff_aac_encode_tns_info`: n_filt per window, then per filter its band
+/// `length`, `order`, `direction`, coefficient compression flag and the
+/// quantised coefficients.
+fn aac_encode_write_tns(
+  bw : BitWriter,
+  tns : AacEncTns,
+  is8 : Bool,
+  num_windows : Int32,
+) -> Unit {
+  let short = if is8 { 1 } else { 0 }
+  for w = 0; w < num_windows; w = w + 1 {
+    bw.put(tns.n_filt[w].reinterpret_as_uint(), 2 - short)
+    if tns.n_filt[w] == 0 {
+      continue
+    }
+    bw.put(1, 1) // coef_res: 4-bit coefficients
+    for filt = 0; filt < tns.n_filt[w]; filt = filt + 1 {
+      let f = tns.filters[w][filt]
+      bw.put(f.length.reinterpret_as_uint(), 6 - 2 * short)
+      bw.put(f.order.reinterpret_as_uint(), 5 - 2 * short)
+      if f.order == 0 {
+        continue
+      }
+      bw.put(f.direction.reinterpret_as_uint(), 1)
+      let compress = aac_encode_tns_compress(f.coef_idx, f.order)
+      bw.put(compress.reinterpret_as_uint(), 1)
+      // `c_bits` is the 1-bit "4-bit resolution" flag, so the coefficient
+      // width is `c_bits + 3 - compress`: four or three bits.
+      let coef_len = 1 + 3 - compress
+      for k = 0; k < f.order; k = k + 1 {
+        let mut v = f.coef_idx[k]
+        if compress == 1 && v > 11 {
+          v = v - 8
+        }
+        bw.put(v.reinterpret_as_uint(), coef_len)
+      }
+    }
+  }
+}
+
+///|
+/// `sum sqrt(|c|)` of band `b` across the windows, the companded-code cost
+/// measure of `aac_encode_band_stats`.
+fn aac_encode_band_root(
+  coef : Array[Double],
+  offsets : Array[Int32],
+  b : Int32,
+  num_windows : Int32,
+) -> Double {
+  let mut root = 0.0
+  for w = 0; w < num_windows; w = w + 1 {
+    for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
+      root = root + coef[i].abs().sqrt()
+    }
+  }
+  root
+}
+
+///|
+/// Simplified `search_for_ms`: a band switches to mid/side when the
+/// companded alphabet of `M = (L + R) / 2` and `S = (L - R) / 2` is smaller
+/// than that of `L` and `R` (the quantiser then spends fewer bits for the same
+/// error), which is the band-level form of FFmpeg's MS cost test.
+fn aac_encode_ms_mask(
+  left : Array[Double],
+  right : Array[Double],
+  offsets : Array[Int32],
+  num_swb : Int32,
+  num_windows : Int32,
+) -> Array[Bool] {
+  let mask : Array[Bool] = Array::make(num_swb, false)
+  for b = 0; b < num_swb; b = b + 1 {
+    let rl = aac_encode_band_root(left, offsets, b, num_windows)
+    let rr = aac_encode_band_root(right, offsets, b, num_windows)
+    if rl + rr <= 0.0 {
+      continue
+    }
+    let mut rm = 0.0
+    let mut rs = 0.0
+    for w = 0; w < num_windows; w = w + 1 {
+      for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
+        rm = rm + ((left[i] + right[i]) * 0.5).abs().sqrt()
+        rs = rs + ((left[i] - right[i]) * 0.5).abs().sqrt()
+      }
+    }
+    // Require a clear win, not a tie: switching bands with almost equal cost
+    // only spreads quantisation noise of the pair across both channels.
+    mask[b] = rm + rs < 0.9 * (rl + rr)
+  }
+  mask
+}
+
+///|
+/// `apply_mid_side_stereo`: on the masked bands replace `(L, R)` by
+/// `(M, S) = ((L+R)/2, (L-R)/2)`; the decoder's inverse is `L = M + S`,
+/// `R = M - S`, so the factor 0.5 is what makes the pair an isometry.
+fn aac_encode_apply_ms(
+  left : Array[Double],
+  right : Array[Double],
+  offsets : Array[Int32],
+  num_swb : Int32,
+  mask : Array[Bool],
+  num_windows : Int32,
+) -> Unit {
+  for b = 0; b < num_swb; b = b + 1 {
+    if !mask[b] {
+      continue
+    }
+    for w = 0; w < num_windows; w = w + 1 {
+      for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
+        let l = left[i]
+        let r = right[i]
+        left[i] = (l + r) * 0.5
+        right[i] = (l - r) * 0.5
+      }
+    }
+  }
+}
+
+///|
 /// Per-band power and `sum sqrt(|c|)` of a channel's spectrum.
 ///
 /// With the companded AAC quantiser a coefficient of magnitude `c` quantised
@@ -715,6 +1214,7 @@ fn AacEncoder::channel_data(
   target : Array[Int32],
   delta : Int32,
   seq : Int32,
+  min_max_sfb : Int32,
 ) -> AacEncChannel {
   let is8 = seq == aac_eight_short
   let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
@@ -762,6 +1262,12 @@ fn AacEncoder::channel_data(
       max_sfb = b + 1
       cb[b] = self.select_band_cb(q, start, end, magnitude, num_windows)
     }
+  }
+  // A common-window CPE shares `max_sfb` between both channels and TNS derives
+  // its band range from it; pad with zero bands up to the planned value so the
+  // decoder's `aac_apply_tns` sees exactly the encoder's region.
+  if max_sfb < min_max_sfb {
+    max_sfb = min_max_sfb
   }
   { sf, cb, q, max_sfb, window_sequence: seq, num_windows, }
 }
@@ -899,21 +1405,11 @@ fn aac_encode_write_spectral(
 }
 
 ///|
-/// individual_channel_stream for one channel of the raw_data_block.
-fn aac_encode_write_channel(
-  bw : BitWriter,
-  ch : AacEncChannel,
-  long_offsets : Array[Int32],
-  short_offsets : Array[Int32],
-  codes : Array[Array[UInt32]],
-  bits : Array[Array[Int32]],
-  revs : Array[Array[Int32]],
-) -> Unit {
+/// ics_info (spec 4.6.2.2) for one channel, written once for a common-window
+/// CPE and therefore separated from the rest of the channel stream.
+fn aac_encode_write_ics_info(bw : BitWriter, ch : AacEncChannel) -> Unit {
   let is8 = ch.window_sequence == aac_eight_short
-  let offsets = if is8 { short_offsets } else { long_offsets }
-  let global_gain = aac_encode_global_gain(ch)
-  bw.put(global_gain.reinterpret_as_uint(), 8)
-  // ics_info: reserved bit, window_sequence, sine window.
+  // reserved bit, window_sequence, sine window.
   bw.put(0, 1)
   bw.put(ch.window_sequence.reinterpret_as_uint(), 2)
   bw.put(0, 1)
@@ -925,35 +1421,80 @@ fn aac_encode_write_channel(
     bw.put(ch.max_sfb.reinterpret_as_uint(), 6)
     bw.put(0, 1) // predictor_data_present
   }
+}
+
+///|
+/// The `individual_channel_stream` body after global_gain and ics_info:
+/// section data, scalefactors, pulse, TNS, gain control and spectral data.
+fn aac_encode_write_channel_body(
+  bw : BitWriter,
+  ch : AacEncChannel,
+  tns : AacEncTns,
+  long_offsets : Array[Int32],
+  short_offsets : Array[Int32],
+  codes : Array[Array[UInt32]],
+  bits : Array[Array[Int32]],
+  revs : Array[Array[Int32]],
+) -> Unit {
+  let is8 = ch.window_sequence == aac_eight_short
+  let offsets = if is8 { short_offsets } else { long_offsets }
+  let global_gain = aac_encode_global_gain(ch)
   aac_encode_write_sections(bw, ch)
   aac_encode_write_scalefactors(bw, ch, global_gain)
   bw.put(0, 1) // pulse_data_present
-  bw.put(0, 1) // tns_data_present
+  bw.put(if tns.present { 1 } else { 0 }, 1)
+  if tns.present {
+    aac_encode_write_tns(bw, tns, is8, ch.num_windows)
+  }
   bw.put(0, 1) // gain_control_data_present
   aac_encode_write_spectral(bw, ch, offsets, codes, bits, revs)
 }
 
 ///|
-/// Assemble one ADTS frame for the given coefficients, per-band target
-/// scalefactors, window sequences and frame-wide scalefactor offset.
+/// One frame's fixed inputs, prepared once before the rate-control search:
+/// the spectra after M/S and TNS, their per-band model targets, the shared
+/// window sequence, the shared `max_sfb` and the M/S mask.
+priv struct AacEncFrame {
+  coefs : Array[Array[Double]]
+  targets : Array[Array[Int32]]
+  sequences : Array[Int32]
+  max_sfb : Int32
+  tns : Array[AacEncTns]
+  ms_present : Int32
+  ms_mask : Array[Bool]
+}
+
+///|
+/// Assemble one ADTS frame for a prepared frame and frame-wide scalefactor
+/// offset `delta`.
 fn AacEncoder::build_frame(
   self : AacEncoder,
-  coefs : Array[Array[Double]],
-  targets : Array[Array[Int32]],
+  frame : AacEncFrame,
   delta : Int32,
-  sequences : Array[Int32],
 ) -> Result[Bytes, String] {
   let chans : Array[AacEncChannel] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    chans.push(self.channel_data(coefs[ch], targets[ch], delta, sequences[ch]))
+    chans.push(
+      self.channel_data(
+        frame.coefs[ch],
+        frame.targets[ch],
+        delta,
+        frame.sequences[ch],
+        frame.max_sfb,
+      ),
+    )
   }
   let bw = BitWriter::new()
   if self.config.channels == 1 {
     bw.put(0, 3) // ID_SCE
     bw.put(0, 4) // element_instance_tag
-    aac_encode_write_channel(
+    // individual_channel_stream: global_gain, then ics_info.
+    bw.put(aac_encode_global_gain(chans[0]).reinterpret_as_uint(), 8)
+    aac_encode_write_ics_info(bw, chans[0])
+    aac_encode_write_channel_body(
       bw,
       chans[0],
+      frame.tns[0],
       self.swb_offsets,
       self.short_offsets,
       self.spectral_codes,
@@ -963,11 +1504,20 @@ fn AacEncoder::build_frame(
   } else {
     bw.put(1, 3) // ID_CPE
     bw.put(0, 4) // element_instance_tag
-    bw.put(0, 1) // common_window = 0: independent channel streams
+    bw.put(1, 1) // common_window = 1: one shared ics_info for both channels
+    aac_encode_write_ics_info(bw, chans[0])
+    bw.put(frame.ms_present.reinterpret_as_uint(), 2)
+    if frame.ms_present == 1 {
+      for b = 0; b < frame.max_sfb; b = b + 1 {
+        bw.put(if frame.ms_mask[b] { 1 } else { 0 }, 1)
+      }
+    }
     for ch = 0; ch < 2; ch = ch + 1 {
-      aac_encode_write_channel(
+      bw.put(aac_encode_global_gain(chans[ch]).reinterpret_as_uint(), 8)
+      aac_encode_write_channel_body(
         bw,
         chans[ch],
+        frame.tns[ch],
         self.swb_offsets,
         self.short_offsets,
         self.spectral_codes,
@@ -1016,8 +1566,11 @@ pub fn AacEncoder::encode_frame(
       return Err("AAC encoder expects 1024 samples per channel")
     }
   }
-  let coefs : Array[Array[Double]] = []
-  let sequences : Array[Int32] = []
+  // A common-window CPE shares one window sequence, so the attack decision is
+  // taken over both channels: either channel attacking starts a short run for
+  // the pair.
+  let mut attack = false
+  let late : Array[Bool] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     let (attack_early, attack_late) = self.detect_attack(ch, pcm[ch])
     // A late attack falls in the current frame's second half, which the eight
@@ -1025,26 +1578,32 @@ pub fn AacEncoder::encode_frame(
     // the flag carries over one frame. A pending attack keeps a short run
     // alive even when the new frame itself is quiet, which is what gives the
     // attack's samples their short blocks.
-    let attack = attack_early || attack_late || self.attack_pending[ch]
-    let prev = self.prev_sequence[ch]
-    // LONG_START must be followed by short blocks, and short blocks return to
-    // the long transform through LONG_STOP; anything else is a steady-state
-    // long frame (or a fresh start when the current frame attacks).
-    let seq = if prev == aac_eight_short {
-      if attack {
-        aac_eight_short
-      } else {
-        aac_long_stop
-      }
-    } else if prev == aac_long_start {
-      aac_eight_short
-    } else if attack {
-      aac_long_start
-    } else {
-      aac_only_long
+    late.push(attack_late)
+    if attack_early || attack_late || self.attack_pending[ch] {
+      attack = true
     }
+  }
+  let prev = self.prev_sequence[0]
+  // LONG_START must be followed by short blocks, and short blocks return to
+  // the long transform through LONG_STOP; anything else is a steady-state
+  // long frame (or a fresh start when the current frame attacks).
+  let seq = if prev == aac_eight_short {
+    if attack {
+      aac_eight_short
+    } else {
+      aac_long_stop
+    }
+  } else if prev == aac_long_start {
+    aac_eight_short
+  } else if attack {
+    aac_long_start
+  } else {
+    aac_only_long
+  }
+  let sequences : Array[Int32] = []
+  let coefs : Array[Array[Double]] = []
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
     sequences.push(seq)
-    self.attack_pending[ch] = attack_late
     let buf : Array[Double] = Array::make(2048, 0.0)
     let hist = self.history[ch]
     for i = 0; i < 1024; i = i + 1 {
@@ -1054,11 +1613,65 @@ pub fn AacEncoder::encode_frame(
     }
     coefs.push(self.frame_coefficients(buf, seq))
   }
-  // The perceptual model is absolute, so it is evaluated once per channel;
-  // the rate-control search then only shifts every band by the same offset.
+  let is8 = seq == aac_eight_short
+  let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
+  let offsets = if is8 { self.short_offsets } else { self.swb_offsets }
+  let num_windows = if is8 { 8 } else { 1 }
+  // M/S is decided on the time-to-frequency spectra before any filtering; the
+  // transform is linear, so applying it here and TNS afterwards is the same as
+  // the decoder's order (stereo inverse first, then TNS synthesis).
+  let ms_mask : Array[Bool] = Array::make(num_swb, false)
+  if self.config.channels == 2 {
+    let mask = aac_encode_ms_mask(
+      coefs[0],
+      coefs[1],
+      offsets,
+      num_swb,
+      num_windows,
+    )
+    for b = 0; b < num_swb; b = b + 1 {
+      ms_mask[b] = mask[b]
+    }
+    aac_encode_apply_ms(coefs[0], coefs[1], offsets, num_swb, mask, num_windows)
+  }
+  // The perceptual model is absolute, so it is evaluated once per channel on
+  // the spectra actually coded; the rate-control search then only shifts every
+  // band by the same offset.
   let targets : Array[Array[Int32]] = []
+  let mut planned_max_sfb = 0
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    targets.push(self.band_targets(coefs[ch], sequences[ch]))
+    let t = self.band_targets(coefs[ch], seq)
+    for b = 0; b < num_swb; b = b + 1 {
+      if t[b] >= 0 && b + 1 > planned_max_sfb {
+        planned_max_sfb = b + 1
+      }
+    }
+    targets.push(t)
+  }
+  // TNS: analyse and filter each channel's upper bands, exactly the range the
+  // decoder reconstructs from the shared max_sfb.
+  let tns : Array[AacEncTns] = []
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    let data = self.search_tns(coefs[ch], planned_max_sfb, seq)
+    aac_encode_apply_tns(coefs[ch], data, offsets, num_swb, num_windows)
+    tns.push(data)
+  }
+  let mut ms_present = 0
+  if self.config.channels == 2 {
+    for b = 0; b < planned_max_sfb; b = b + 1 {
+      if ms_mask[b] {
+        ms_present = 1
+      }
+    }
+  }
+  let frame : AacEncFrame = {
+    coefs,
+    targets,
+    sequences,
+    max_sfb: planned_max_sfb,
+    tns,
+    ms_present,
+    ms_mask,
   }
   // Average bits per frame from the requested bit rate, minus the ADTS header
   // (which is not part of the payload budget).
@@ -1077,12 +1690,12 @@ pub fn AacEncoder::encode_frame(
   let mut found = false
   while lo <= hi {
     let mid = (lo + hi) / 2
-    let frame = match self.build_frame(coefs, targets, mid, sequences) {
+    let built = match self.build_frame(frame, mid) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
-    if frame.length() <= target_bytes {
-      best = frame
+    if built.length() <= target_bytes {
+      best = built
       found = true
       hi = mid - 1
     } else {
@@ -1094,6 +1707,7 @@ pub fn AacEncoder::encode_frame(
   }
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     self.prev_sequence[ch] = sequences[ch]
+    self.attack_pending[ch] = late[ch]
   }
   Ok(best)
 }

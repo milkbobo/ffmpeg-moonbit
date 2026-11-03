@@ -310,7 +310,7 @@ pub fn aac_decode_ics(gb : BitReader) -> Result[AacIcs, String] {
 ///|
 /// `common_window` CPE channels share ICS info but retain independent
 /// global gain, sections, scalefactors, pulse and TNS syntax.
-fn aac_decode_ics_with_info(
+pub fn aac_decode_ics_with_info(
   gb : BitReader,
   common : AacIcsInfo?,
 ) -> Result[AacIcs, String] {
