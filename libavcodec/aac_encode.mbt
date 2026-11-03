@@ -4,12 +4,12 @@
 /// Scope: AAC-LC object type 2, sine windows, no TNS / PNS / prediction / M/S,
 /// one SCE for mono or one CPE with independent channels for stereo, and
 /// codebook 11 spectral Huffman with escape sequences (quantised magnitudes up
-/// to 8191). All coded bands of a channel share one scalefactor; a frame-wide
-/// offset around a reference scalefactor (the one that puts the spectral peak
-/// at a quantised magnitude of about 15) is binary-searched so each ADTS frame
-/// fills the requested average bit rate. This is a CBR-style rate control: when
-/// a frame has bit head-room the quantiser is refined instead of the spare bits
-/// being dropped.
+/// to 8191). Each band gets its own scalefactor from a simplified psychoacoustic
+/// model (upward spreading of band energy plus a frequency-dependent SNR aim),
+/// then one frame-wide offset shifts every band's scalefactor and is
+/// binary-searched so each ADTS frame fills the requested average bit rate.
+/// This is a CBR-style rate control: when a frame has bit head-room the
+/// quantiser is refined instead of the spare bits being dropped.
 ///
 /// Window switching follows the LAME/3GPP attack detector of FFmpeg's
 /// `aacpsy.c`: the high-passed energy of each 128-sample subblock is compared
@@ -360,67 +360,172 @@ fn AacEncoder::detect_attack(
 }
 
 ///|
-/// Reference scalefactor of a channel: the smallest `sf` that keeps the
-/// frame's largest coefficient's quantised magnitude at or below 15. The
-/// escape-capable quantiser of `aac_encode_quantize_all` may go finer than
-/// this, so the reference only centres the rate-control search. `-1` marks an
-/// all-zero frame.
-fn aac_encode_reference_sf(coef : Array[Double]) -> Int32 {
-  let mut peak = 0.0
-  for i = 0; i < coef.length(); i = i + 1 {
-    let a = coef[i].abs()
-    if a > peak {
-      peak = a
-    }
-  }
-  if peak <= 0.0 {
-    return -1
-  }
-  // (peak * 2^(-(sf-100)/4))^(3/4) + 0.405 <= 15
-  let target = 100.0 + 4.0 * @math.log2(peak / 35.66)
-  let g = @math.ceil(target).to_int()
-  if g > 255 || g < 0 {
-    return -1
-  }
-  g
-}
-
-///|
 /// Largest quantised magnitude codebook 11 can carry: escape sequences allow
 /// up to 8 leading one bits, i.e. a mantissa length of 12, i.e. 8191.
 let aac_encode_max_q : Int32 = 8191
 
 ///|
-/// Quantise the whole spectrum at one scalefactor:
-/// `q = sign(c) * floor((|c| * 2^(-(s-100)/4))^(3/4) + 0.405)`, clamped to
-/// `aac_encode_max_q` (the escape limit of codebook 11). `s < 0` zeroes the
-/// spectrum.
-fn aac_encode_quantize_all(
-  q : Array[Int32],
+/// Absolute threshold of hearing, expressed as the energy of one MDCT
+/// coefficient: a full-scale sine peaks near 1.2e7 in the encoder's
+/// `65536 * MDCT` scale, a 0 dBFS programme sits around 90 dB SPL, and the
+/// threshold in quiet is about 0 dB SPL, so `(1.2e7 * 10^(-90/20))^2`, i.e.
+/// -90 dB re full scale.
+let aac_encode_ath_energy : Double = 143900.0
+
+///|
+/// Per-band power and `sum sqrt(|c|)` of a channel's spectrum.
+///
+/// With the companded AAC quantiser a coefficient of magnitude `c` quantised
+/// at `step = 2^((sf-100)/4)` has an amplitude error of about
+/// `(4/3) u c^(1/4) step^(3/4)` with `u` uniform in `[0,1)`, i.e. an expected
+/// error energy of `(16/27) step^(3/2) sqrt(c)`. The band's total error is
+/// therefore proportional to `sum sqrt(|c|)`, which is what the model below
+/// turns into a scalefactor.
+fn aac_encode_band_stats(
   coef : Array[Double],
-  s : Int32,
-) -> Unit {
-  if s < 0 {
-    for i = 0; i < q.length(); i = i + 1 {
-      q[i] = 0
-    }
-    return
-  }
-  let step = @math.pow(2.0, -(s - 100).to_double() / 4.0)
-  for i = 0; i < coef.length(); i = i + 1 {
-    let a = coef[i].abs() * step
-    // Clamp in the real domain before converting: coarse scalefactors can push
-    // `a^(3/4)` far past Int's range (the rate-control search visits them).
-    let mut n = 0
-    if a > 0.0 {
-      let p = @math.pow(a, 0.75) + 0.405
-      n = if p >= aac_encode_max_q.to_double() {
-        aac_encode_max_q
-      } else {
-        p.to_int()
+  offsets : Array[Int32],
+  num_swb : Int32,
+  num_windows : Int32,
+) -> (Array[Double], Array[Double]) {
+  let energy : Array[Double] = Array::make(num_swb, 0.0)
+  let root : Array[Double] = Array::make(num_swb, 0.0)
+  for b = 0; b < num_swb; b = b + 1 {
+    for w = 0; w < num_windows; w = w + 1 {
+      for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
+        let c = coef[i].abs()
+        energy[b] = energy[b] + c * c
+        root[b] = root[b] + c.sqrt()
       }
     }
-    q[i] = if coef[i] < 0.0 && n > 0 { -n } else { n }
+  }
+  (energy, root)
+}
+
+///|
+/// Simplified psychoacoustic model: one target scalefactor per band, or `-1`
+/// for a silent or all-zero spectrum.
+///
+/// The masking threshold of band `b` is its own power plus the upspread
+/// contribution of the two bands below it; the 0.3 / 0.09 factors approximate
+/// the 15 dB/Bark threshold spreading of 3GPP TS 26.403 for one-third-octave
+/// bands (and deliberately ignore the weaker downward spread). The quantiser
+/// noise is aimed a frequency-dependent SNR below that threshold: 18 dB up to
+/// 3 kHz, falling 10 dB per decade towards a 6 dB floor, which buys coarse
+/// high bands where the ear is less sensitive.
+///
+/// Two more floors model the threshold in quiet:
+///   * an absolute one at -90 dB re a full-scale sine (`aac_encode_ath_energy`
+///     per coefficient), and
+///   * a programme-relative one 20 dB below the loudest band, so bands that
+///     contribute nothing to the programme are quantised away instead of
+///     eating the frame budget.
+///
+/// Scalefactors are absolute (not yet shifted by the frame-wide rate-control
+/// offset), so a frame can compute them once and then only offset them.
+fn AacEncoder::band_targets(
+  self : AacEncoder,
+  coef : Array[Double],
+  seq : Int32,
+) -> Array[Int32] {
+  let is8 = seq == aac_eight_short
+  let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
+  let offsets = if is8 { self.short_offsets } else { self.swb_offsets }
+  let num_windows = if is8 { 8 } else { 1 }
+  let (energy, root) = aac_encode_band_stats(
+    coef, offsets, num_swb, num_windows,
+  )
+  let sf : Array[Int32] = Array::make(num_swb, -1)
+  let mut peak = 0.0
+  for b = 0; b < num_swb; b = b + 1 {
+    if energy[b] > peak {
+      peak = energy[b]
+    }
+  }
+  if peak <= 0.0 {
+    return sf
+  }
+  let relative_floor = peak * 1.0e-2 // -20 dB
+  // Spectral width of one window of the current sequence: the short swb
+  // offsets span 128 bins, the long ones 1024.
+  let block = if is8 { 128.0 } else { 1024.0 }
+  for b = 0; b < num_swb; b = b + 1 {
+    let mut mask = energy[b]
+    if b > 0 {
+      mask = mask + 0.3 * energy[b - 1]
+    }
+    if b > 1 {
+      mask = mask + 0.09 * energy[b - 2]
+    }
+    let centre = (offsets[b] + offsets[b + 1]).to_double() / 2.0
+    let freq = centre / block * self.config.sample_rate.to_double()
+    let mut snr = 18.0
+    if freq > 3000.0 {
+      snr = 18.0 - 10.0 * @math.log10(freq / 3000.0)
+    }
+    if snr < 6.0 {
+      snr = 6.0
+    }
+    let mut allowed = mask * @math.pow(10.0, -snr / 10.0)
+    let quiet = aac_encode_ath_energy *
+      (offsets[b + 1] - offsets[b]).to_double() *
+      num_windows.to_double()
+    if allowed < quiet {
+      allowed = quiet
+    }
+    if allowed < relative_floor {
+      allowed = relative_floor
+    }
+    if root[b] > 0.0 && allowed > 0.0 {
+      let step = @math.pow(allowed * 27.0 / (16.0 * root[b]), 2.0 / 3.0)
+      let mut v = @math.floor(100.0 + 4.0 * @math.log2(step) + 0.5).to_int()
+      if v < 0 {
+        v = 0
+      } else if v > 255 {
+        v = 255
+      }
+      sf[b] = v
+    }
+  }
+  sf
+}
+
+///|
+/// Quantise one scalefactor band (of `num_windows` 128-bin segments):
+/// `q = sign(c) * floor((|c| * 2^(-(s-100)/4))^(3/4) + 0.405)`, clamped to
+/// `aac_encode_max_q` (the escape limit of codebook 11). `s < 0` zeroes the
+/// band.
+fn aac_encode_quantize_band(
+  q : Array[Int32],
+  coef : Array[Double],
+  start : Int32,
+  end : Int32,
+  num_windows : Int32,
+  s : Int32,
+) -> Unit {
+  let step = if s < 0 {
+    0.0
+  } else {
+    @math.pow(2.0, -(s - 100).to_double() / 4.0)
+  }
+  for w = 0; w < num_windows; w = w + 1 {
+    for i = w * 128 + start; i < w * 128 + end; i = i + 1 {
+      let mut n = 0
+      if s >= 0 {
+        let a = coef[i].abs() * step
+        // Clamp in the real domain before converting: coarse scalefactors can
+        // push `a^(3/4)` far past Int's range (the rate-control search visits
+        // them).
+        if a > 0.0 {
+          let p = @math.pow(a, 0.75) + 0.405
+          n = if p >= aac_encode_max_q.to_double() {
+            aac_encode_max_q
+          } else {
+            p.to_int()
+          }
+        }
+      }
+      q[i] = if coef[i] < 0.0 && n > 0 { -n } else { n }
+    }
   }
 }
 
@@ -592,16 +697,22 @@ fn AacEncoder::select_band_cb(
 }
 
 ///|
-/// Build one channel's quantised spectrum at the frame-wide scalefactor
-/// `reference_sf + delta` (clamped to the legal 0..255 range). Bands whose
-/// quantised coefficients are all zero get scalefactor `-1` and codebook 0;
-/// the remaining bands use the cheapest codebook that can represent them.
-/// A short frame's 8 windows form one scale-factor group: each band's
-/// scalefactor and codebook are chosen over all eight windows.
+/// Build one channel's quantised spectrum from the model's per-band
+/// scalefactors shifted by the frame-wide rate-control offset `delta`.
+///
+/// A band is quantised at `target[b] + delta`, clamped to 0..255 and to
+/// ±60 around the previous *coded* band's scalefactor: the differential
+/// scalefactor syntax cannot express a larger step, and the clamp has to
+/// happen before quantisation so the decoder's dequantiser reproduces the
+/// encoder's spectrum. Bands whose quantisation yields all zeros are coded
+/// with codebook 0 (no scalefactor, no data), so they do not advance the
+/// differential chain. The remaining bands use the cheapest codebook that
+/// can represent them. A short frame's 8 windows form one scale-factor group:
+/// each band's scalefactor and codebook are chosen over all eight windows.
 fn AacEncoder::channel_data(
   self : AacEncoder,
   coef : Array[Double],
-  reference_sf : Int32,
+  target : Array[Int32],
   delta : Int32,
   seq : Int32,
 ) -> AacEncChannel {
@@ -613,32 +724,43 @@ fn AacEncoder::channel_data(
   let cb : Array[Int32] = Array::make(num_swb, 0)
   let q : Array[Int32] = Array::make(1024, 0)
   let mut max_sfb = 0
-  if reference_sf >= 0 {
-    let mut v = reference_sf + delta
+  // Scalefactor of the last coded band; the first coded band's value becomes
+  // `global_gain` and the ±60 window only applies from the second one on.
+  let mut prev = -1000
+  for b = 0; b < num_swb; b = b + 1 {
+    if target[b] < 0 {
+      continue
+    }
+    let mut v = target[b] + delta
     if v < 0 {
       v = 0
-    }
-    if v > 255 {
+    } else if v > 255 {
       v = 255
     }
-    aac_encode_quantize_all(q, coef, v)
-    for b = 0; b < num_swb; b = b + 1 {
-      let start = offsets[b]
-      let end = offsets[b + 1]
-      let mut magnitude = 0
-      for w = 0; w < num_windows; w = w + 1 {
-        for i = w * 128 + start; i < w * 128 + end; i = i + 1 {
-          let a = aac_encode_abs(q[i])
-          if a > magnitude {
-            magnitude = a
-          }
+    if prev > -1000 {
+      if v < prev - 60 {
+        v = prev - 60
+      } else if v > prev + 60 {
+        v = prev + 60
+      }
+    }
+    let start = offsets[b]
+    let end = offsets[b + 1]
+    aac_encode_quantize_band(q, coef, start, end, num_windows, v)
+    let mut magnitude = 0
+    for w = 0; w < num_windows; w = w + 1 {
+      for i = w * 128 + start; i < w * 128 + end; i = i + 1 {
+        let a = aac_encode_abs(q[i])
+        if a > magnitude {
+          magnitude = a
         }
       }
-      if magnitude > 0 {
-        sf[b] = v
-        max_sfb = b + 1
-        cb[b] = self.select_band_cb(q, start, end, magnitude, num_windows)
-      }
+    }
+    if magnitude > 0 {
+      sf[b] = v
+      prev = v
+      max_sfb = b + 1
+      cb[b] = self.select_band_cb(q, start, end, magnitude, num_windows)
     }
   }
   { sf, cb, q, max_sfb, window_sequence: seq, num_windows, }
@@ -812,20 +934,18 @@ fn aac_encode_write_channel(
 }
 
 ///|
-/// Assemble one ADTS frame for the given coefficients, window sequences and
-/// frame-wide scalefactor offset.
+/// Assemble one ADTS frame for the given coefficients, per-band target
+/// scalefactors, window sequences and frame-wide scalefactor offset.
 fn AacEncoder::build_frame(
   self : AacEncoder,
   coefs : Array[Array[Double]],
-  reference_sf : Array[Int32],
+  targets : Array[Array[Int32]],
   delta : Int32,
   sequences : Array[Int32],
 ) -> Result[Bytes, String] {
   let chans : Array[AacEncChannel] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    chans.push(
-      self.channel_data(coefs[ch], reference_sf[ch], delta, sequences[ch]),
-    )
+    chans.push(self.channel_data(coefs[ch], targets[ch], delta, sequences[ch]))
   }
   let bw = BitWriter::new()
   if self.config.channels == 1 {
@@ -934,9 +1054,11 @@ pub fn AacEncoder::encode_frame(
     }
     coefs.push(self.frame_coefficients(buf, seq))
   }
-  let reference_sf : Array[Int32] = []
+  // The perceptual model is absolute, so it is evaluated once per channel;
+  // the rate-control search then only shifts every band by the same offset.
+  let targets : Array[Array[Int32]] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    reference_sf.push(aac_encode_reference_sf(coefs[ch]))
+    targets.push(self.band_targets(coefs[ch], sequences[ch]))
   }
   // Average bits per frame from the requested bit rate, minus the ADTS header
   // (which is not part of the payload budget).
@@ -955,7 +1077,7 @@ pub fn AacEncoder::encode_frame(
   let mut found = false
   while lo <= hi {
     let mid = (lo + hi) / 2
-    let frame = match self.build_frame(coefs, reference_sf, mid, sequences) {
+    let frame = match self.build_frame(coefs, targets, mid, sequences) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
