@@ -6799,3 +6799,71 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 
 
 
+
+## 275. MP3 编码：移植 shine 3.1.1 的 Layer III 定点编码器
+
+- **范围决定**：FFmpeg 9.0.2 没有 Layer III 编码器（`mpegaudioenc.c` 只有
+  Layer I/II），官方支持路径是外部库（`libmp3lame` / `libshine`）。按仓库
+  "纯移植、无外部 C 依赖"的约定，本阶段移植 FFmpeg `libshine.c` 所封装的
+  shine 3.1.1（ISO 11172 dist10 血统的定点 Layer III 编码器，LGPL-2.1），
+  交付真正的 MP3 编码：`libavcodec/mp3_encode.mbt`（layer3.c + reservoir.c
+  的编排与码率储备）+ `mp3_enc_subband.mbt`（32 带多相分析滤波器组）+
+  `mp3_enc_mdct.mbt`（36 点 MDCT + 混叠蝶形）+ `mp3_enc_loop.mbt`（量化、
+  内外迭代循环、Huffman 表选择、位计数）+ `mp3_enc_bitstream.mbt`（32 位
+  缓存的 MSB-first 位写入器 + 帧封装）。
+- **数值语义**：shine 的 `mul` 家族按 noarch 路径复刻——`mul(a,b) =
+  (a*b)>>32`、`mulr(a,b) = (a*b+0x80000000)>>32`、`mulsr(a,a) =
+  (a*a+0x40000000)>>31`，全部 Int64 中转后截断 Int32；乘积逐项截断后整数
+  求和（模 2^32 与顺序无关）。`steptab`（libm `pow` 的产物）以 IEEE-754
+  位模式零转录嵌入；`subband.fl`、`mdct.cos_l`、`enwindow`、34 张
+  Huffman 码表/码长表与 `int2idx` 由 `scripts/gen_mp3_enc_tables.sh` 的
+  C dumper 从编译后的参考二进制直接 dump（`scripts/extract_mp3_enc_tables.py`
+  转成 `mp3_enc_tables.mbt`），无手工转录。
+- **关键坑**：
+  1. **子带缓冲是倒序填充**：C 的 `for (i=32;i--;)` 是后缀自减，第一个
+     PCM 样本写入 `x[off+31]`（整个 32 样本块反转）；写成正序会让所有
+     频谱错位、量化循环跑偏（首帧 mdct_in 哈希即分歧）。
+  2. **位流缓存跨帧连续**：`shine_putbits` 只在缓存填满 32 位时落盘，
+     `shine_encode_buffer_internal` 每帧只把 `data_position` 归零——
+     帧尾不足一个字的位留在 cache 里，成为下一帧第一个字的高位。逐帧
+     输出拼接后才是连续码流；若每帧清缓存会丢尾部填充位。
+  3. **`calc_scfsi` 的 libm log 不可跨平台**：`en = log(x)/LN2` 截断成
+     Int 时，MSVCRT `log` 与 wasm `Math.log2` 的 ulp 差会在整数边界翻转
+     scfsi 判定（实测 v1 第 5 帧带 0 翻转）。双端（C harness 与 MoonBit）
+     改用同一个纯 IEEE 运算的确定性 `ln`（`mp3enc_ln` / `shine_ref_log`：
+     精确 2 的幂归一化 + 25 项 `2·atanh((m-1)/(m+1))` 级数 + `e·ln2`），
+     除这一点外其余全部上游一致；对拍素材上该值与 libm 截断结果一致。
+  4. **MPEG-2/2.5 每帧只消费 576 样本**（`granules_per_frame×576`），
+     参考 harness 最初按 1152 跳帧喂样本导致 v3 分歧——MoonBit 侧按
+     `shine_samples_per_pass` 消费是正确的。
+  5. `shine_huffman_table` 的元数据提取最初只写了 code/hlen 偏移、漏掉
+     `xlen/ylen/linbits/linmax`，导致 `new_choose_table` 读表越界；
+     `huff_desc` 每项 6 个字段（4 元数据 + 2 偏移）。
+- **对拍方法**：`_ref/shine/harness.c` 复刻 `shine_encode_buffer_internal`
+  的三段流水（`shine_mdct_sub` → `shine_iteration_loop` →
+  `shine_format_bitstream`），每帧 dump `l3_sb_sample`（含逐槽位）、
+  `mdct_freq`/`l3_enc` FNV-1a 哈希与全部 granule 侧信息、scfsi、ResvSize
+  与输出字节哈希；MoonBit 侧用临时 debug 钩子输出同格式逐项 diff。收敛
+  后删掉 debug 钩子，只留端到端字节级断言。harness 输出与未改动
+  `shineenc`（同一 WAV）MD5 一致，确保参考本身成立。
+- **验证**（`libavcodec/mp3_encode_vectors/`，夹具由
+  `scripts/gen_mp3_enc_vectors.py` 生成）：
+  - **三组向量与 C 参考逐字节一致**：v1 = 44.1 kHz 立体声 128 kbps
+    （MPEG-1 双 granule、scfsi、padding 序列）、v2 = 48 kHz 单声道
+    192 kbps、v3 = 22050 Hz 单声道 64 kbps（MPEG-2 LSF 单 granule）。
+  - `linuxserver/ffmpeg:9.0.2` ffprobe 识别三组输出为 `mp3`（码率/声道/
+    采样率正确），`ffmpeg -v error` 解码零告警，PCM 长度精确匹配。
+  - 本仓库 `decode_mp3_stream` 往返（对齐 lag 1057 后）SNR：v1 17.4 dB、
+    v2 18.1 dB、v3 18.1 dB（与外部解码一致；shine 的固定 SMR 心理声学
+    + 零 scalefactor 决定了这个量级，与 LAME 不可比）。
+  - 配置校验：非法采样率/码率/声道数/样本数均拒绝。
+- **检查**：`moon check --target wasm --deny-warn` 通过；全量
+  `moon test --target wasm --no-render` **1376/1376** 通过（上一阶段为
+  1372，新增 4 个 MP3 用例）。
+- **边界**：只覆盖 shine 支持的模式（STEREO/MONO，无 joint stereo、无
+  短窗/窗口切换——shine 本身不做 blocksplit）；`scalefac_compress` 恒 0
+  （不写 scalefactor 位），reservoir 恒空（`ResvMax=0`、`main_data_begin=0`），
+  这是上游 shine 的行为而非移植缺口；native 目标未验证（本机无 MSVC，
+  与仓库 wasm-first 约定一致）。至此"音频编码：AAC + MP3 + Opus"清单中
+  AAC（§270-273）与 MP3（本节）已交付，剩 Opus。
+- **下一阶段**：Opus（FFmpeg 原生 `opus/enc.c` 的 CELT/PVQ 编码路径）。

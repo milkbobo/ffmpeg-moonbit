@@ -15,3 +15,4 @@ target
 # Scratch vectors / trace dumps (generation commands live in the test file headers)
 _tmp_sei/
 .scratch/
+_ref/
