@@ -6860,3 +6860,64 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   搜索；M/S 用固定 0.9 裕量而非掩蔽模型；PNS 不启用使低码率下噪声带
   仍走普通码本，效率低于参考编码器；双声道攻击检测取并集后共用单一窗口
   序列，两个声道瞬态位置差异大时会牺牲其中一路的预回声控制。
+
+## 274. MP2 编码：移植 mpegaudioenc 的定点分析滤波器组
+
+- **范围决定**：FFmpeg 9.0.2 只有 Layer I/II 编码器（`mpegaudioenc.c`，float
+  `mp2` 与定点 `mp2fixed` 两条路径），没有 Layer III 编码器；上一节设想的
+  “MP3 走原生 mpegaudioenc 的 32 点滤波器组”实际可交付的是 **MP2**。本阶段
+  新增 `libavcodec/mpa_encode.mbt`，按 `USE_FLOATS=0` 的 `mp2fixed` 路径移植，
+  Layer III 编码需从零实现，明确不在本阶段。
+- **分析滤波器组**：每声道 4096 样本历史缓冲（`samples_offset` 从 0 起，每
+  块写 `offset + (31-i)` 后 `offset -= 32`，降到 0 以下时把前 480 样本搬
+  到 `4096-480` 并令 `offset = 3584`）；64 点窗化用
+  `ff_mpa_enwindow` 的 `WFRAC_BITS=14` 缩放 `(v+2)>>2` 生成 512 项
+  `filter_bank`（`(i & 63) != 0` 时取反后写入 `filter_bank[512-i]`）；8 段
+  `p[k*64+i]·q[k*64+i]` 求和后按 `WSHIFT=14` 折叠成 32 点 `tmp1`，再过
+  `idct32`（`costab32[30]`、`bitinv32[32]`、`FRAC_BITS=15` 的
+  `MUL(a,b)=((int64)a*b)>>15`，四段蝶形 + 负号段 + 4/2 分组 + 16 级旋转）。
+- **帧长与填充**：`a=(float)(bitrate*1000*1152)/(freq*8.0)`，
+  `frame_size=((int)a)*8`，`frame_frac_incr=(int)((a-floor(a))*65536.0)`；
+  每帧 `frame_frac += incr`，`>= 65536` 时减回、`do_padding=1`、位预算 `+8`。
+  44.1 kHz/128 kbps 得 417 字节基准帧、每 12 帧有 11 帧填充。
+- **Layer II 语法**：位分配表由 `mpa_l2_select_table` 选（44.1 kHz 立体声
+  128 kbps → table 0、`sblimit=27`）；逐带 3 个标度因子用
+  `scale_factor_table`（`exp2((3-i)/3)*2^20`）做上界搜索，再按
+  `scale_diff_table` 的 `d1*5+d2` 落到 25 种合并分支的 4 种 scale code；
+  位分配用固定 `fixed_smr*10` 表与 `quant_snr[17]`、`total_quant_bits[17]`
+  的贪心填充，状态机 `NOTALLOCATED/ALLOCATED/NOMORE` 与上游一致。
+- **量化与写位**：`shift<0` 时左移、否则右移；`(q1*mult)>>15`（Int64 中转）
+  后 `+2^15`、钳零，再 `(q1*steps)>>16` 并钳到 `steps-1`；`bits<0` 时把
+  3 个样本打成一个码字，否则逐样本写。
+- **关键修正**：标度因子码与标度因子必须**分成两趟**写：C 先写所有带宽的
+  2-bit `scale_code`，再写所有标度因子；此前把两者按“带内 ch0/ch1”交错
+  写出，导致整帧从标度因子码起点（bit 208）开始错位，解码得到噪声。
+- **定位方法**：用本机 gcc 编一个独立的 C harness（原样复制
+  `idct32`/`filter`/`compute_scale_factors`/位分配/写帧，并链接上游
+  `ff_mpa_enwindow` 与 `alloc_table_1`），其输出与 ffmpeg `mp2fixed`
+  **逐字节一致**；再把 MoonBit 侧逐帧的 `sb_samples`（32 项 + 多项式哈希）、
+  `scale_code`、`scale_factors` dump 出来对拍，确认滤波器组与标度因子完全
+  一致后，把差异收敛到写位顺序。
+- **验证**：
+  - 与 ffmpeg 同素材（12 帧 44.1 kHz 立体声 128 kbps）输出 **5015 字节**
+    （417 + 11×418），与 `ffmpeg -c:a mp2fixed` 的同名输出 MD5 完全相同
+    （`049A748995807E25F624AA0268049C2E`），即逐字节一致。
+  - `linuxserver/ffmpeg:9.0.2` 的 ffprobe 识别 `mp2, 44100 Hz, stereo,
+    128 kb/s`；解码无 codec 告警（仅在 `-v warning` 下有 mp3 demuxer 的
+    duration 估算提示）。补偿 962 样本（481 编码器 + 481 合成滤波器组）
+    延迟后对源 **SNR 21.77 dB / PSNR 29.66 dB**（信号 RMS 9401.3、
+    噪声 RMS 766.7）。
+  - 单元测试 `libavcodec/mpa_encode_vectors`：
+    `mp2_stereo_header_and_frame_size`（头 `FF FD`、mode stereo、总长
+    5015、往返 SNR 24.26 dB、延迟 481）与
+    `mp2_mono_lsf_header_and_round_trip`（22050 Hz mono 64 kbps、
+    头 `FF F5`、mode mono、往返 SNR 24.85 dB）。
+- **检查**：`moon check --target wasm --deny-warn --no-render` 通过；全量
+  `moon test --target wasm --no-render` **1372/1372** 通过（上一阶段为
+  1370，新增 2 个 MP2 用例）。
+- **边界**：只覆盖 `mp2fixed` 的定点路径，float `mp2` 编码器不移植；编码器
+  不做 flush（上游同样不带 flush，末帧之后无补偿帧）；心理声学模型就是
+  上游的固定 SMR 表，不是自适应掩蔽模型；Layer III（MP3）编码器不存在于
+  FFmpeg 9.0.2，未交付。
+- **下一阶段**：Opus（CELT/PVQ）。
+
