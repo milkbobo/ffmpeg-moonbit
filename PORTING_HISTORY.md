@@ -6611,7 +6611,66 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - 验证：`moon check --target wasm --deny-warn` 通过；全量
   `moon test --target wasm --no-render -q` **1352/1352** 通过。
 
-## 270. 音频编码第一步：可行性盘点与 AAC-LC 编码（第 2 阶段）
+## 270. 统一格式探测层（format.c 的 av_probe_input_format）
+
+- **缺口**：清单里的 MP4/MKV/TS/HLS/DASH/WebM/WAV 与裸 ADTS/MP3/Ogg/FLAC/
+  AIFF/AU/CAF/ASF/W64/AC-3 此前各有独立入口（`av_mov_open`、
+  `av_matroska_open`、`av_mpegts_open` …），调用方必须自己判断字节是什么
+  格式。README 的“容器统一播放 API”因此列为待立项项。本轮补上它的第一层：
+  FFmpeg `libavformat/format.c` 的探测入口。
+- **移植内容**（新文件 `probe.mbt` / `probe_container.mbt` /
+  `probe_elementary.mbt`）：
+  - `av_probe_input_format3` 的完整语义：ID3v2 跳过与 `nodat` 四态、
+    `read_probe` 打分、扩展名提分（`1` / `EXTENSION/2-1` / `EXTENSION`）、
+    MIME bonus（+30 封顶 100）、同分时清空结果（`fmt = NULL`）。
+  - `av_probe_input_format2`（`score <= AVPROBE_SCORE_RETRY` 丢弃）与
+    `av_probe_input_buffer2`（从 `PROBE_BUF_MIN`=2048 倍增到
+    `PROBE_BUF_MAX`=1 MB，EOF 时不报错、探测后回退游标）。
+  - 20 个 `read_probe`：`mov_probe`（含 moov→mhlr/MPEG 的 MPEG-PS 降级）、
+    `matroska_probe`（DocType 表 + 未知长度头）、`analyze` +
+    `mpegts_probe`（188/192/204 三种布局与 `CHECK_COUNT` 组合公式）、
+    `wav_probe`/`w64_probe`、`hls_probe`（MIME/扩展名/URL query 三重门）、
+    `dash_probe`、`adts_aac_probe`、`ac3_eac3_probe`、`aiff_probe`、
+    `amr_probe`、`png_probe`、`asf_probe`、`au_probe`、`caf_probe`、
+    `flac_probe` + `raw_flac_probe`、`mjpeg_probe`、`mp3_read_probe`、
+    `ogg_probe`。
+  - 注册表顺序按 `allformats.c` 的声明顺序（aac→ac3→aiff→amr→png→asf→au→
+    caf→dash→eac3→flac→hls→matroska→mjpeg→mov→mp3→mpegts→ogg→w64→wav）。
+- **关键坑**：
+  1. **AC-3 的 CRC 是 `AV_CRC_16_ANSI` = (le=0, poly=0x8005)**，不是
+     `AV_CRC_16_ANSI_LE`（le=1, 0xA001）。用后者算出的 CRC 永不为 0，
+     `ac3_eac3_probe` 恒返回 0，raw AC-3 只能靠扩展名认出来。
+  2. **`mp3_read_probe` 的 free-format 帧 `frame_size == 0`**：C 用
+     `avpriv_mpegaudio_decode_header` 的返回值 `!= 0` 直接 break；本移植的
+     `Ok(free_format: true, frame_size: 0)` 若不判断，`buf2 += 0` 会让探测
+     死循环（实测 wasm 测试卡死 5 分钟无输出）。
+  3. **AIFF 的 `FORM` 是 `AV_RL32`**：直接比 `0x4D524F46`（M,R,O,F 的 LE
+     拼法），写成 `0x4D46524F` 会永不匹配；用 `pb_match(buf, 0, "FORM")`
+     更不容易错。
+  4. **单个 JPEG 文件 ffprobe 报的是 `jpeg_pipe` 而不是 `mjpeg`**：两个
+     demuxer 共用 `mjpeg_probe`，实测胜出的是 `jpeg_pipe`，`FormatId::name`
+     按实测结果命名。
+  5. **ID3 超过探测窗时 C 不移动 `buf`**：`av_probe_input_format3` 在
+     `ID3_GREATER_PROBE` 分支只 break、不前进指针，所以 `mp3_read_probe`
+     仍然看到 ID3 头，返回 `EXTENSION/4`=12（不是 0），扩展名再抬到 24。
+  6. **越界读按 0**：C 依赖 `AVPROBE_PADDING_SIZE` 的零填充，本移植的
+     `pb_u8`/`pb_byte` 对越界下标返回 0，语义等价且不会越界。
+  7. **注册表是 FFmpeg 的子集**：仅在 FFmpeg 有、本移植没有的 demuxer 参与
+     同分时结果才会不同；已实现的格式两两之间没有观察到的分歧（17 组真实
+     文件实测）。
+- **验证**：`scripts/gen_probe_fixtures.sh` 用 `linuxserver/ffmpeg:9.0.2`
+  生成 17 个真实文件（mp4/mkv/webm/ts/wav/flac/mp3/adts/ogg/ac3/aiff/au/
+  caf/asf/w64/png/mjpeg），期望值取 `ffprobe -show_entries
+  format=format_name`；`scripts/gen_probe_vectors.py` 把它们截成探测窗口并
+  写成 `libavformat/probe_vectors/fixtures.mbt` 的 base64 常量。测试 12 项：
+  17 组格式名、常量路径分数（mp4 100 / wav 99 / png 99 / ogg 100 …）、
+  帧计数分数（aac 51 / mp3 52 / ac3 52 / mjpeg 12 / ts 100）、HLS 三重门、
+  DASH profile、ID3 降级、MIME bonus、空/随机/扩展名单项、以及
+  `av_probe_input_buffer` 的正常、短源（EOF）、空源三种路径。
+- 验证：`moon check --target wasm --deny-warn` 通过；全量
+  `moon test --target wasm --no-render -q` **1364/1364** 通过。
+
+## 271. 音频编码第一步：可行性盘点与 AAC-LC 编码（第 2 阶段）
 
 - **盘点结论**（C 侧规模 / MoonBit 依赖 / 可复用度）：
   - AAC-LC：`libavcodec/aacenc.c` 1201 行、`aacenc_tns.c` 521、
@@ -6678,189 +6737,6 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   帧仍按预算填满，纯零输入也会花掉整帧比特；MP3 子带滤波器组与 Opus PVQ
   搜索是本仓库尚无的算法模块，周期与调试成本最高。
 
-## 271. AAC 编码第 3 阶段：短窗、窗口切换与瞬态检测
-
-- **实现**（`libavcodec/aac_encode.mbt`）：
-  - 四种窗口序列：ONLY_LONG、LONG_START、EIGHT_SHORT、LONG_STOP。短窗为
-    256 点 sine 窗、128 样本 hop，8 块锚定在重叠缓冲偏移 448，覆盖
-    `buf[448]..buf[1600)`（前一帧后半 + 当前帧前 576 样本）。
-  - 自然序过渡窗：LONG_START 为长升半 1024 + 平直 448 + 短降半 128 +
-    零 448；LONG_STOP 为零 448 + 短升半 128 + 平直 448 + 长降半 1024。
-    平直段让相邻长帧与短块之间保持 TDAC。
-  - 攻击检测沿用 `aacpsy.c` 的 LAME/3GPP 高通能量法：按 128 样本子块把
-    差分能量与通道滑动均值比较，比值 >10 判为攻击（均值在比较后更新，
-    静音起步必然触发）。检测结果分「前半」（本帧短窗即可覆盖）与
-    「后半」（只有下一帧短窗能覆盖，`buf[448..1600)` 的起点在上一帧）；
-    后半攻击延迟一帧生效，使连续瞬态期间状态机不会提前落回 LONG_STOP。
-    这是本轮修掉的主要质量缺陷：初版把三个脉冲中的后两个都留给
-    LONG_STOP 的长窗平坦区编码，往返 SNR 只有 10 dB；延迟标志加上后
-    脉冲全部落入短窗，SNR 升到 32 dB。
-  - 窗口序列状态机：ONLY_LONG → LONG_START → EIGHT_SHORT（可连续）→
-    LONG_STOP → ONLY_LONG/LONG_START。短帧语法为 3-bit section 长度
-    （escape 7）、4-bit max_sfb、`scale_factor_grouping = 0x7f`（8 个窗口
-    共用一组 sf/cb）、频谱按 band → window 顺序写出；长帧仍为 5-bit
-    section 与 6-bit max_sfb。
-  - 量化、码本 1..11 选择与全局 delta 码率控制沿用第 2 阶段；短帧的
-    逐带代价与频谱写入按 8 个 128 系数窗口展开，带内幅值跨窗口取最大。
-- **验证**（`libavcodec/aac_encode_vectors/`）：
-  - 新测试 `aac_lc_transient_windows`：44.1 kHz mono、128 kbps，660 Hz
-    0.05 正弦叠加 ±1.0 脉冲（`700 + k*2048`，k=0,1,2），6 帧 + 1 个
-    flush 帧。逐帧解析 ADTS 负载中的 window_sequence 得到
-    `LONG_START → EIGHT_SHORT×5 → LONG_STOP`；断言只允许合法转移、
-    至少 1 个 LONG_START、≥2 个短帧、至少 1 个 LONG_STOP，并检查
-    三个脉冲的重建结果（往返 SNR 32.09 dB，阈值 18 dB）。
-  - 谱域语法测试用的多音输入不触发攻击，仍保持 ONLY_LONG；其
-    `ics.info.window_sequence` 判断逻辑可解析短窗帧，mono/stereo 短帧
-    谱域 SNR 约 35.8/26.8 dB（阈值 18/12 dB）。
-  - 外部验证：`linuxserver/ffmpeg:9.0.2` 解码瞬态 ADTS（7 帧、2295 字节、
-    112.9 kbps），`-v warning` 无 codec 告警；补偿 1024 样本解码延迟后
-    对本仓库解码器与原始信号一致，**SNR 32.10 dB / PSNR 59.7 dB**
-    （s16，峰值 32768），最大样本误差 0.014。
-- **验证**：`moon check --target wasm --deny-warn` 通过；全量
-  `moon test --target wasm --no-render` **1369/1369** 通过。
-- **下一阶段**：AAC 补 TNS 与简化心理声学模型（届时引入逐带标度因子）；
-  MP3 走原生 mpegaudioenc 的 32 点滤波器组；Opus 最后做，重点是
-  CELT/PVQ 编码搜索。
-- **风险**：仍无心理声学模型与 TNS，单帧单标度因子使强瞬态的预回声只能
-  靠短窗规避，SNR 不代表听感；短帧频域分辨率较粗（44.1 kHz 下 14 个
-  swb 对长帧 49 个），低频密集谱在短帧下的量化误差明显高于长帧；攻击
-  检测仍是能量启发式，未做 ATH/掩蔽，阈值对素材电平敏感。
-
-## 272. AAC 编码第 4 阶段：逐带标度因子与简化心理声学模型
-
-- **实现**（`libavcodec/aac_encode.mbt`）：
-  - **逐带量化**：新增 `aac_encode_quantize_band`，每个 swb 带按自身标度因子
-    `q = sign(c)·floor((|c|·2^(-(sf-100)/4))^(3/4)+0.405)`，上限仍为 8191；
-    短帧保持 8 窗单分组、带内跨窗口共用 sf/cb。
-  - **简化心理声学模型** `band_targets`：
-    - 先算每带 `E[b]=Σc²` 与 `R[b]=Σ√|c|`。AAC companded 量化器对幅度 `c`
-      的误差能量约为 `(16/27)·step^(3/2)·√c`，因此给定容许噪声能量 `A`
-      可直接解出 `step = (A·27/(16·R))^(2/3)`、`sf = 100 + 4·log2(step)`。
-    - 掩蔽阈值 = `E[b] + 0.3·E[b-1] + 0.09·E[b-2]`（上行扩散；对应 3GPP
-      TS 26.403 的 15 dB/Bark 阈值扩散在 1/3 倍频程带上的一阶近似，忽略
-      更弱的下行扩散）。
-    - 噪声目标相对掩蔽阈值留 18 dB（≤3 kHz），随后按 10 dB/decade 下降、
-      6 dB 封底：高频带允许更粗。
-    - 绝对听阈按 -90 dB re 满幅正弦折算到系数域（本移植满幅 MDCT 峰值约
-      1.2e7，`(1.2e7·10^(-90/20))² ≈ 1.44e5`）。
-    - 另加 20 dB 的节目相对阈（最响带下方）：更弱的分量直接量化掉，避免在
-      CBR 128 kbps 下把比特花在听不见的带上。
-  - **码率控制**：模型输出每带绝对目标 sf，帧级 `delta` 只对所有带整体平移，
-    仍二分取“装得下目标字节数的最小 delta”；模型每声道每帧只算一次。
-  - **差分链**：非零带 sf 用 codebook 0 的 Huffman（`aac_scalefactor_code` /
-    `aac_scalefactor_bits`，索引 `delta+60`）。语法只允许 ±60 的步长，因此
-    编码器在量化之前把每带 sf 夹到上一个**实际编码带**的 ±60 内；全零带用
-    cb=0、不写 sf、不推进差分链，所以夹取基准必须是“上一个已编码带”而不是
-    相邻带（跳过中间零带会把两级差分合并成一级）。
-  - 首个非零带 sf 直接作 8-bit `global_gain`，后续带写差值。
-- **验证**（`libavcodec/aac_encode_vectors/`）：
-  - 谱域往返（对照编码器未量化 MDCT）：mono 长帧 35.85 / 36.86 / 32.01 dB
-    （末帧为 flush），短帧 36.82 dB；stereo 长帧 25.4–28.5 dB、短帧
-    27.2/27.7 dB、flush 22.6/23.3 dB。断言阈值相应改为 mono 长帧 >30、
-    短帧 >18，stereo 长帧 >21、短帧 >12。
-  - 时域往返（立体声 8 帧 + flush、128 kbps）：平均 349 B/帧（目标 371），
-    **120.4 kbps**，**SNR 28.94 dB / PSNR 38.78 dB**。
-  - 瞬态用例（第 3 阶段同一组脉冲）往返 SNR **33.87 dB**（阈值 18）。
-  - 外部验证：`linuxserver/ffmpeg:9.0.2` 解码本阶段立体声 ADTS（9 帧、
-    3144 字节、`aac (LC), 44100 Hz, stereo, 120 kb/s`）无 codec 告警，解码
-    PCM 对原始信号 **SNR 29.33 dB**；瞬态 ADTS（7 帧 mono、124.0 kbps）无
-    告警，**SNR 33.45 dB**。作为参照，FFmpeg 自带 AAC 编码器对同一立体声
-    信号 128 kbps 编码的 s16 SNR 为 18.3 dB。
-  - 客观 SNR 比第 3 阶段单 sf 方案低约 1 dB（29.97 → 28.94 dB）：逐带掩蔽
-    把比特分给弱带，而单 sf 实际上把弱带量化成 0；谱域 stereo SNR 与新方案
-    的逐带结构一致（25–28.5 dB）。SNR 并非唯一目标，下一阶段的 TNS 与
-    M/S 才是补足编码工具的下一步。
-- **检查**：`moon check --target wasm --deny-warn` 通过；全量
-  `moon test --target wasm --no-render` **1369/1369** 通过。
-- **下一阶段**：AAC 补 TNS、M/S stereo 与 PNS；再走 MP3（原生 mpegaudioenc
-  的 32 点滤波器组），最后 Opus（CELT/PVQ）。
-- **风险**：模型仍是能量启发式——固定扩散系数、无 tonality/预回声掩蔽、
-  无精确 Bark 带宽；20 dB 节目相对阈是为 128 kbps CBR 定的简化值，高码率下
-  会丢掉本可保真的弱成分（应随码率放宽）；±60 差分夹取只在 sf 跳变 >60 时
-  牺牲质量；无 TNS 使强瞬态仍靠短窗规避；短帧 14 带对长帧 49 带的频域
-  分辨率差距仍在。
-
-
-
-## 273. AAC 编码第 5 阶段：M/S 立体声、TNS 与 PNS 决策
-
-- **实现**（`libavcodec/aac_encode.mbt`）：
-  - **立体声 CPE**：改用 `common_window=1`，双声道共享一份 `ics_info`
-    （窗口序列、`max_sfb`、section 分组一致），随后写 `ms_present`(2 bit)
-    与 `ms_used` 掩码，再按声道写 `global_gain` 与声道主体。语法顺序是
-    `global_gain`(8 bit) → `ics_info` → sections → 标度因子 → TNS；早期把
-    `global_gain` 写在 `ics_info` 之后会导致解码端整体错位。
-  - **M/S 判据** `aac_encode_ms_mask`：编码侧先构造
-    `M=(L+R)/2`、`S=(L-R)/2`，逐带比较 companded 代价
-    `rm + rs < 0.9·(rl + rr)`（`r = Σ√|c|`，与量化器误差模型一致）才置位；
-    0.9 的裕量避免弱声道谱 SNR 被过激的 M/S 拉低。实测掩码带数由
-    37/8/38/42 降到 31/5/29/33，弱声道谱域 SNR 回升到 22.8–26.4 dB。
-  - **TNS**（对齐 `libavcodec/aacenc_tns.c`）：
-    - 取带范围 `sfb_start = tns_min_sfb[num_swb][is8]`、
-      `mmm = min(tns_max_bands, planned_max_sfb)`、
-      `sfb_end = min(num_swb, mmm)`；长窗拆 2 个 6 阶滤波器（各占一半带），
-      短窗 1 个 7 阶滤波器。
-    - 增益估计：Welch 窗 + 自相关（每个 lag 的种子 1.0）+ Schur 求反射
-      系数，`gain = autoc[0]/avg_err`；只有落在
-      `[1.4, 1.4·1.16]` 才启用，否则写 order=0 的空滤波器占位。
-    - 系数量化到 `ff_tns_tmp2_map` 的 4-bit 表（16 值）；当所有索引都不在
-      `[4,11]` 时置 `coef_compress=1`，改用 3-bit 表并按上游规则对 >11 的
-      索引减 8。压缩判定必须基于原始索引，不能在二分/写位过程中原地改。
-    - 语法位：`tns_data_present`；每窗 `n_filt`（长 2 bit / 短 1 bit）、
-      `coef_res`（1 bit，写 1 表示 4 bit）、每滤波器 `length`（长 6 / 短 4
-      bit，单位为 swb 带）、`order`（长 5 / 短 3 bit）、`direction`(1)、
-      `coef_compress`(1)，系数 `coef_len = 1 + 3 - coef_compress`（4 或 3 bit）。
-    - 编码端以 all-zero 滤波 `c[m] += lpc[i]·orig[m-i]` 应用（`orig` 为滤波
-      前的系数），与解码端 AR 合成 `c[m] -= c[m-i]·lpc[i-1]` 互逆；
-      `direction` 只决定滤波从高带还是低带开始。
-  - **应用顺序**：逐声道先 M/S 再 TNS（与解码端先逆立体声、再 TNS 合成的
-    顺序一致；两者都是带内线性运算，可交换）。
-  - **max_sfb 对齐**：`planned_max_sfb`（两声道目标带最高非零带 +1）同时
-    作为共享 `ics_info.max_sfb` 与 TNS `mmm` 的依据，较窄的声道用 cb=0
-    补齐空带，避免两声道 `max_sfb` 不同导致 `common_window` 非法。
-  - **PNS 决策：编码端不启用**。解码端（cb 13）保持可用，但本编码器的
-    简化心理声学模型没有 tonality/掩蔽判据，等能量白噪替换仅能改善听觉
-    质感，在客观 SNR/PSNR 上必然净损失；因此不写 cb 13，待接入完整掩蔽
-    模型后再评估。
-- **验证**（`libavcodec/aac_encode_vectors/aac_encode_vectors_test.mbt`）：
-  - 新增 `aac_lc_tns_syntax`：48 个 86 Hz 谐波（相邻约 4 个 MDCT bin）
-    + 等功率白噪，9 帧 mono；该谱的部分可预测性把 LPC 增益稳定压进
-    `[1.4, 1.624]`，实测 **3 帧** 触发 TNS。逐帧解析断言
-    `n_filt[0] == 1/2`（短/长）、`order == 7/6`、`length > 0`，并断言谱域
-    SNR > 15 dB（实测 20–22.3 dB）。
-  - 稳态白噪/平滑谱的增益约 1.02–1.05，谐波与静音边缘可达数百，音调约
-    2.2–3.5——TNS 在 FFmpeg 的窄窗口下本就是 opportunistic 工具，因此
-    mono/瞬态用例只校验“出现时语法合法”，不再强制断言必现。
-  - 时域往返（立体声 9 帧 + flush、128 kbps）：平均 339 B/帧（目标 371），
-    117.1 kbps，**SNR 29.05 dB / PSNR 38.88 dB**；瞬态用例往返
-    **SNR 33.87 dB**；mono 谱域 SNR 35.85/36.82/36.86/32.01 dB。
-  - 外部验证（`linuxserver/ffmpeg:9.0.2`）：
-    - 立体声 ADTS（10 帧、3470 字节）经 ffprobe 识别为
-      `aac (LC), 44100 Hz, stereo`，解码无 codec 告警；补偿 1024 样本
-      延迟后对源 **SNR 29.41 dB / PSNR 39.24 dB**，码率 **119.6 kbps**。
-    - TNS 谐波流（mono 10 帧、3987 字节）解码无告警，**SNR 23.41 dB /
-      PSNR 44.69 dB**，**124.9 kbps**；该值与本地解码逐位一致，说明 TNS
-      位流语义与 FFmpeg 解码器对齐。
-    - 瞬态流（660 Hz 0.05 + ±0.9 脉冲，7 帧 mono）无告警，
-      **SNR 33.91 dB**、**123.5 kbps**；窗口序列
-      LONG_START→EIGHT_SHORT×5→LONG_STOP，脉冲均被短窗覆盖。
-    - 稳态白噪对照（9 帧、3207 字节、122.8 kbps）外部 SNR 11.96 dB，与
-      本地解码一致，用于排除高频/escape 路径的差异。
-- **检查**：`moon check --target wasm --deny-warn` 通过；全量
-  `moon test --target wasm --no-render` **1370/1370** 通过（第 4 阶段为
-  1369，新增 `aac_lc_tns_syntax`）。
-- **工程约束**：`libavcodec` 的 wasm 白盒测试桩已触及编译器局部变量上限
-  （`__moonbit__init` 报 `local count too large`），再加任何
-  `*_wbtest.mbt` 都会让整个包无法编译；TNS 的验证因此改为黑盒素材方案，
-  不再引入白盒测试文件。
-- **下一阶段**：MP3（原生 mpegaudioenc 的 32 点滤波器组），之后再走
-  Opus（CELT/PVQ）。
-- **风险**：TNS 只在 FFmpeg 的窄增益窗口内触发，稳态音乐素材很少命中，
-  实际收益小于上游；`direction` 只按低/高带能量选择，未做真正的最优方向
-  搜索；M/S 用固定 0.9 裕量而非掩蔽模型；PNS 不启用使低码率下噪声带
-  仍走普通码本，效率低于参考编码器；双声道攻击检测取并集后共用单一窗口
-  序列，两个声道瞬态位置差异大时会牺牲其中一路的预回声控制。
-
 ## 274. MP2 编码：移植 mpegaudioenc 的定点分析滤波器组
 
 - **范围决定**：FFmpeg 9.0.2 只有 Layer I/II 编码器（`mpegaudioenc.c`，float
@@ -6920,4 +6796,6 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   上游的固定 SMR 表，不是自适应掩蔽模型；Layer III（MP3）编码器不存在于
   FFmpeg 9.0.2，未交付。
 - **下一阶段**：Opus（CELT/PVQ）。
+
+
 

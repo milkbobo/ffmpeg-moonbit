@@ -95,7 +95,10 @@
     scalefactor/组量化）；`decode_frame` 按帧头 `layer` 分派
 - **libavformat（码流层接入）**：`rawaudio.mbt`（裸 ADTS/MP3 分帧，ID3v2/v1 +
   Xing/Info/VBRI）、`codec_tags.mbt`（MKV CodecID / MP4 fourcc 映射）、
-  `codec_parameters.mbt`（容器 + extradata → 统一 `CodecParameters`）
+  `codec_parameters.mbt`（容器 + extradata → 统一 `CodecParameters`）、
+  `probe.mbt`（统一格式探测：`format.c` 的 `av_probe_input_format3` /
+  `av_probe_input_format2` / `av_probe_input_buffer2`，20 个 `read_probe`
+  覆盖全部已移植容器与裸流；17 组真实夹具对齐 `ffprobe format_name`）
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的
@@ -781,6 +784,10 @@ moonbit/                      # git 仓库根
 │   ├── rawaudio.mbt          # 裸 ADTS AAC / MPEG 音频分帧（ID3/Xing/Info/VBRI）
 │   ├── codec_tags.mbt        # Matroska CodecID / MP4 fourcc 映射
 │   ├── codec_parameters.mbt  # 容器 + extradata → CodecParameters
+│   ├── probe.mbt             # 统一格式探测（format.c: probe3/format2/buffer2）
+│   ├── probe_container.mbt   # 容器 read_probe（mov/matroska/mpegts/wav/w64/hls/dash）
+│   ├── probe_elementary.mbt  # 裸流/图片 read_probe（aac/ac3/flac/mp3/ogg/png/mjpeg…）
+│   ├── probe_vectors/        # 探测夹具（base64）+ 黑盒测试（12 项）
 │   ├── ebml_wbtest.mbt       # EBML 白盒测试（VINT 规范向量 + 游走器路径）
 │   ├── ebml_real_wbtest.mbt  # 真实 webm/mkv 头（docker，base64 内嵌）
 │   ├── mkv_segment_wbtest.mbt # Segment 切片测试（合成布局 + 真实 1024 字节前缀）

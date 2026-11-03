@@ -1,0 +1,4 @@
+import {
+  "ffmpeg/moonbit/libavformat",
+  "ffmpeg/moonbit/libavutil",
+} for "test"
