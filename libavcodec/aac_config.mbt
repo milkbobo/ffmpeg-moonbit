@@ -105,6 +105,35 @@ pub fn new_aac_decoder_from_adts(
 }
 
 ///|
+/// Initialize from raw AAC access units (no ADTS header) using the AudioSpecificConfig
+/// channel configuration. ADTS can only carry 3 bits, so configurations 11 (6.1)
+/// and 14 (5.1.2) are unreachable through `new_aac_decoder_from_adts`; this entry
+/// point accepts the full 4-bit ASC values. Implicit SBR/PS detection is left to
+/// the decoder, as for ADTS.
+pub fn new_aac_decoder_from_asc_channels(
+  chan_config : Int32,
+  sampling_index : Int32,
+  sample_rate : Int32,
+  output_channels : Int32,
+) -> Result[AacDecoder, String] {
+  if chan_config < 1 ||
+    (chan_config > 7 && chan_config < 11) ||
+    chan_config > 14 {
+    return Err("unsupported AAC channel configuration")
+  }
+  let config = new_mpeg4_audio_config()
+  config.object_type = 2
+  config.sampling_index = sampling_index
+  config.sample_rate = sample_rate
+  config.chan_config = chan_config
+  config.channels = output_channels
+  config.frame_length = 1024
+  config.sbr = -1
+  config.ps = -1
+  Ok(new_aac_decoder(config, output_channels))
+}
+
+///|
 /// Initialize directly from MP4/MKV AAC-LC extradata; raw packets do not
 /// need to repeat the PCE that established the layout in ASC.
 pub fn new_aac_decoder_from_asc(data : Bytes) -> Result[AacDecoder, String] {

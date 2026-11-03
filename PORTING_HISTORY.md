@@ -6533,3 +6533,81 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   6.1(back)/7.1(wide)/7.1/5.1.2(back)），因此 2.1 无法生成真实流；6.1 与
   5.1.2 未加用例。修复按 element 类型与 `data[ch]` 通用，不依赖声道数。
 - 验证：`moon test --target wasm --no-render -q` 全量 **1351/1351** 通过。
+
+## 269. 6.1(back)/5.1.2(back) HE-AAC 用例与全清单残余扫描
+
+### 6.1(back)/5.1.2(back)：ADTS 不可达，改用 MP4 ASC + 原始 AU
+
+- libfdk_aac 本身能编码这两种布局（`aformat=channel_layouts=6.1(back)`
+  / `5.1.2(back)`、`-profile:a aac_he`、48 kHz，编码成功），但 **ADTS 无法
+  表达**：
+  - ADTS 固定头只有 3 bit `channel_configuration`，而 ASC 里是 4 bit；
+    `libavformat/adtsenc.c` 用 `put_bits(&pb, 3, ctx->channel_conf)` 写头，
+    ASC 的 11/14 被截断成 3/6，且仅当 `channel_conf == 0` 才写 PCE。
+  - 实测 `ffprobe -f aac` 把 6.1(back) 报成 `3.0`、5.1.2(back) 报成
+    `5.1`，并报 `channel element 1.1/1.2 is not allocated`；FFmpeg 解码
+    该 ADTS 输出 0 字节（`Could not open encoder before EOF`）。原生
+    `aac` 编码器与 `-flags +global_header` 同样失败。
+- 替代验证：以 MP4 封装（ASC 保留 4-bit 11/14）编码同源流，用
+  `ffmpeg -map 0:a -c copy -f data` 抽出原始 AU，按 ffprobe 包大小切成
+  3 帧；参考 PCM 用 FFmpeg 原生解码器 `-ignore_editlist 1` 输出 s16le
+  的前 3 帧（该模式输出正好是逐帧 2048 样本的拼接，不含 priming 裁剪）。
+- 解码端新增 `libavcodec/aac_config.mbt` 的
+  `new_aac_decoder_from_asc_channels`：接受完整 4-bit ASC 通道配置
+  （1–7、11–14），核心采样率/索引由调用方给出，SBR/PS 仍走隐式检测，
+  与 ADTS 路径语义一致。
+- 新增 `aac_sbr_extra_vectors/multichannel_asc_vectors.mbt` 与
+  `multichannel_asc_test.mbt`（沿用 `sbr_extra_match` 的 `max_diff ≤ 1`、
+  逐位相等 ≥99.9%、每帧每声道 2048 样本口径）：
+  - 6.1(back)：7ch，3 帧 597/846/671 字节，6144 样本/声道，
+    `max_diff=1`，逐位相等 **99.99535%**；
+  - 5.1.2(back)：8ch，3 帧 682/899/721 字节，6144 样本/声道，
+    `max_diff=1`，逐位相等 **99.99797%**。
+- libfdk_aac 不支持 2.1（其布局列表为 mono/stereo/3.0/4.0/5.0/5.1/
+  6.1(back)/7.1(wide)/7.1/5.1.2(back)），2.1 仍无真实夹具。
+
+### 全清单残余扫描：无同类“缺 ctx 元素 / 按声道硬编码”残留
+
+- 扫描模式（非测试源码全量 grep）：`data[0]`、`layout[0]`、
+  `channels[0]`、`ch_layout[0]`、`ch == 0`、`element_channel == 0`，
+  并复核 `stub`/`TODO`/`FIXME`/`unimplemented`/`panic`/`abort`/
+  `identity`/`placeholder`/`ignore(...)`。
+- 音频：
+  - AAC SBR（`aac_sbr.mbt`/`aac_sbr_dsp.mbt`/`aac_sbr_entry.mbt`）：
+    余下的 `data[0]` 仅用于 CPE 共享元数据（grid、`bs_amp_res`、
+    coupling、`bs_num_env` 等），与 `aacsbr_template.c` 一致；逐声道
+    路径均用 `data[ch]` 或显式处理 `data[0]/data[1]`。`dequant` 同时写
+    `data[0]` 与 `data[1]` 的 `env_facs_q/hi`。
+  - `aac_mdct.mbt` 的 `layout[0].element_type == 1` 是 dual-mono SCE
+    判定的上游语义；`aac_layout.mbt` 的 `element_channel == 0` 是元素
+    内声道掩码排序；`aac_ps.mbt`/`aac_coupling.mbt` 无声道 0 硬编码。
+  - MPEG Layer I/II：`mpa_layer12.mbt` 按 `ch` 循环，未假设单声道。
+  - Opus：CELT 的 1/2 声道守卫对应 C 的 per-stream 限制；多流由
+    `opus_head` 拆分后逐流解码，无 `channels[0]` 假设。
+  - FLAC/ALAC/AC-3/E-AC-3/TTA/WavPack/G.71x/aptX/WMA/Vorbis：声道循环
+    均按 `frame.channels`/`nb_channels`；AC-3 的 `ch == 0` 是耦合通道
+    内部槽位，与 `ac3dec.c` 一致；aptX 的 `channels[0/1]` 是其规范固定
+    双声道；未发现单声道或单元素硬编码。
+- 视频：
+  - H.264 的 `plane_count` 仅 4:4:4 用 3 平面，`h264_deblock` 的
+    `ignore(bit_depth)` 与上游一致（阈值已含位深）；多 slice 由
+    `h264_decode_picture_ex` 的 `slices` 循环处理，`first_mb_in_slice`
+    检查仅用于“首 slice 非 0 且未开错误掩盖”的场景。
+  - HEVC 的 `hevc_intra_decoder_new` 是逐 slice 子解码器，tiles/WPP/
+    dependent slice 在 `hevc_inter_decode.mbt` 的 `HevcDecoder` 路径处理；
+    子解码器自身对多 slice/非 I slice 的 PATCHWELCOME 是刻意边界。
+  - AV1/VP9 的关键帧/帧间路径无 `data[0]`/`layout[0]`/`ch == 0` 硬编码；
+    `av1_decode.mbt` 的 `ignore(av1_ymode_size_context[0])` 只是表引用，
+    该表在 `av1_decode4.mbt`/`av1_inter_syntax.mbt` 中使用。
+  - MJPEG/PNG 按组件数生成平面（灰度 1 平面、CMYK 4 平面），
+    `png_apng.mbt` 的 `ignore(previous)` 只是丢弃已用完的变量。
+- 容器：`codec_parameters.mbt`/`extradata.mbt` 的 AAC 通道配置走 4-bit
+  ASC（11/12/13/14 已在 `aac_height_realdata_wbtest.mbt` 覆盖）；
+  `wav.mbt` 从 fmt 的 `channels` 读取，无固定 2 声道假设；
+  MP4/MKV/TS/HLS/DASH/WebM 仅转发 codecpar，无声道硬编码。
+- 结论：除已修复的两个 SBR 缺陷外，未发现同类“缺失 ctx 元素”或
+  “按声道/元素 0 硬编码”的残留；扫描中出现的 `panic`/`abort` 均为
+  初始化不变量，`TODO` 仅为与上游一致的 SBR CRC 跳过。
+- 验证：`moon check --target wasm --deny-warn` 通过；全量
+  `moon test --target wasm --no-render -q` **1352/1352** 通过。
+
