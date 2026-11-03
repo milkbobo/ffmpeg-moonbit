@@ -6678,4 +6678,52 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   帧仍按预算填满，纯零输入也会花掉整帧比特；MP3 子带滤波器组与 Opus PVQ
   搜索是本仓库尚无的算法模块，周期与调试成本最高。
 
+## 271. AAC 编码第 3 阶段：短窗、窗口切换与瞬态检测
+
+- **实现**（`libavcodec/aac_encode.mbt`）：
+  - 四种窗口序列：ONLY_LONG、LONG_START、EIGHT_SHORT、LONG_STOP。短窗为
+    256 点 sine 窗、128 样本 hop，8 块锚定在重叠缓冲偏移 448，覆盖
+    `buf[448]..buf[1600)`（前一帧后半 + 当前帧前 576 样本）。
+  - 自然序过渡窗：LONG_START 为长升半 1024 + 平直 448 + 短降半 128 +
+    零 448；LONG_STOP 为零 448 + 短升半 128 + 平直 448 + 长降半 1024。
+    平直段让相邻长帧与短块之间保持 TDAC。
+  - 攻击检测沿用 `aacpsy.c` 的 LAME/3GPP 高通能量法：按 128 样本子块把
+    差分能量与通道滑动均值比较，比值 >10 判为攻击（均值在比较后更新，
+    静音起步必然触发）。检测结果分「前半」（本帧短窗即可覆盖）与
+    「后半」（只有下一帧短窗能覆盖，`buf[448..1600)` 的起点在上一帧）；
+    后半攻击延迟一帧生效，使连续瞬态期间状态机不会提前落回 LONG_STOP。
+    这是本轮修掉的主要质量缺陷：初版把三个脉冲中的后两个都留给
+    LONG_STOP 的长窗平坦区编码，往返 SNR 只有 10 dB；延迟标志加上后
+    脉冲全部落入短窗，SNR 升到 32 dB。
+  - 窗口序列状态机：ONLY_LONG → LONG_START → EIGHT_SHORT（可连续）→
+    LONG_STOP → ONLY_LONG/LONG_START。短帧语法为 3-bit section 长度
+    （escape 7）、4-bit max_sfb、`scale_factor_grouping = 0x7f`（8 个窗口
+    共用一组 sf/cb）、频谱按 band → window 顺序写出；长帧仍为 5-bit
+    section 与 6-bit max_sfb。
+  - 量化、码本 1..11 选择与全局 delta 码率控制沿用第 2 阶段；短帧的
+    逐带代价与频谱写入按 8 个 128 系数窗口展开，带内幅值跨窗口取最大。
+- **验证**（`libavcodec/aac_encode_vectors/`）：
+  - 新测试 `aac_lc_transient_windows`：44.1 kHz mono、128 kbps，660 Hz
+    0.05 正弦叠加 ±1.0 脉冲（`700 + k*2048`，k=0,1,2），6 帧 + 1 个
+    flush 帧。逐帧解析 ADTS 负载中的 window_sequence 得到
+    `LONG_START → EIGHT_SHORT×5 → LONG_STOP`；断言只允许合法转移、
+    至少 1 个 LONG_START、≥2 个短帧、至少 1 个 LONG_STOP，并检查
+    三个脉冲的重建结果（往返 SNR 32.09 dB，阈值 18 dB）。
+  - 谱域语法测试用的多音输入不触发攻击，仍保持 ONLY_LONG；其
+    `ics.info.window_sequence` 判断逻辑可解析短窗帧，mono/stereo 短帧
+    谱域 SNR 约 35.8/26.8 dB（阈值 18/12 dB）。
+  - 外部验证：`linuxserver/ffmpeg:9.0.2` 解码瞬态 ADTS（7 帧、2295 字节、
+    112.9 kbps），`-v warning` 无 codec 告警；补偿 1024 样本解码延迟后
+    对本仓库解码器与原始信号一致，**SNR 32.10 dB / PSNR 59.7 dB**
+    （s16，峰值 32768），最大样本误差 0.014。
+- **验证**：`moon check --target wasm --deny-warn` 通过；全量
+  `moon test --target wasm --no-render` **1369/1369** 通过。
+- **下一阶段**：AAC 补 TNS 与简化心理声学模型（届时引入逐带标度因子）；
+  MP3 走原生 mpegaudioenc 的 32 点滤波器组；Opus 最后做，重点是
+  CELT/PVQ 编码搜索。
+- **风险**：仍无心理声学模型与 TNS，单帧单标度因子使强瞬态的预回声只能
+  靠短窗规避，SNR 不代表听感；短帧频域分辨率较粗（44.1 kHz 下 14 个
+  swb 对长帧 49 个），低频密集谱在短帧下的量化误差明显高于长帧；攻击
+  检测仍是能量启发式，未做 ATH/掩蔽，阈值对素材电平敏感。
+
 

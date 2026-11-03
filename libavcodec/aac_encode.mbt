@@ -1,15 +1,21 @@
 ///|
 /// MoonBit port of a minimal AAC-LC encoder, shipped as ADTS frames.
 ///
-/// Scope: AAC-LC object type 2, one long window (ONLY_LONG) per frame, sine
-/// window, no TNS / PNS / prediction / M/S, one SCE for mono or one CPE with
-/// independent channels for stereo, and codebook 11 spectral Huffman with
-/// escape sequences (quantised magnitudes up to 8191). All coded bands of a
-/// channel share one scalefactor; a frame-wide offset around a reference
-/// scalefactor (the one that puts the spectral peak at a quantised magnitude
-/// of about 15) is binary-searched so each ADTS frame fills the requested
-/// average bit rate. This is a CBR-style rate control: when a frame has bit
-/// head-room the quantiser is refined instead of the spare bits being dropped.
+/// Scope: AAC-LC object type 2, sine windows, no TNS / PNS / prediction / M/S,
+/// one SCE for mono or one CPE with independent channels for stereo, and
+/// codebook 11 spectral Huffman with escape sequences (quantised magnitudes up
+/// to 8191). All coded bands of a channel share one scalefactor; a frame-wide
+/// offset around a reference scalefactor (the one that puts the spectral peak
+/// at a quantised magnitude of about 15) is binary-searched so each ADTS frame
+/// fills the requested average bit rate. This is a CBR-style rate control: when
+/// a frame has bit head-room the quantiser is refined instead of the spare bits
+/// being dropped.
+///
+/// Window switching follows the LAME/3GPP attack detector of FFmpeg's
+/// `aacpsy.c`: the high-passed energy of each 128-sample subblock is compared
+/// against a sliding average, and the four window sequences are chained
+/// ONLY_LONG -> LONG_START -> EIGHT_SHORT -> LONG_STOP -> ONLY_LONG so the
+/// long/short transition windows always meet a matching short block.
 ///
 /// The quantiser/demultiplexing conventions follow FFmpeg 9.0.2
 /// `libavcodec/aacenc.c` / `aacenc_quantization.h`:
@@ -39,11 +45,17 @@ pub struct AacEncoder {
   sampling_index : Int32
   swb_offsets : Array[Int32]
   num_swb : Int32
+  short_offsets : Array[Int32]
+  num_short_swb : Int32
   history : Array[Array[Double]]
   cos_table : Array[Double]
+  short_window : Array[Double]
   spectral_codes : Array[Array[UInt32]]
   spectral_bits : Array[Array[Int32]]
   spectral_rev : Array[Array[Int32]]
+  prev_sequence : Array[Int32]
+  attack_pending : Array[Bool]
+  win_energy : Array[Double]
 }
 
 ///|
@@ -80,6 +92,18 @@ fn aac_encode_cos_table() -> Array[Double] {
     for t = 0; t < 2048; t = t + 1 {
       out[j * 2048 + t] = @math.cos(base * (t.to_double() + 512.5) * jf)
     }
+  }
+  out
+}
+
+///|
+/// Full sine analysis window of a 128-hop short block (256 samples):
+/// `sin(pi/256 * (i + 0.5))` — the rising half is `aac_sine_short`, the falling
+/// half its mirror.
+fn aac_encode_short_window() -> Array[Double] {
+  let out : Array[Double] = Array::make(256, 0.0)
+  for i = 0; i < 256; i = i + 1 {
+    out[i] = @math.sin(3.14159265358979323846 / 256.0 * (i.to_double() + 0.5))
   }
   out
 }
@@ -174,9 +198,24 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
   for i = 0; i < table.length(); i = i + 1 {
     swb_offsets.push(table[i].reinterpret_as_int())
   }
+  let num_short_swb = aac_num_swb_128[sampling_index]
+  let short_table = aac_swb_offset_128[sampling_index]
+  if short_table.length() != num_short_swb + 1 {
+    return Err("AAC short swb table length mismatch")
+  }
+  let short_offsets : Array[Int32] = []
+  for i = 0; i < short_table.length(); i = i + 1 {
+    short_offsets.push(short_table[i].reinterpret_as_int())
+  }
   let history : Array[Array[Double]] = []
+  let prev_sequence : Array[Int32] = []
+  let attack_pending : Array[Bool] = []
+  let win_energy : Array[Double] = []
   for _ch = 0; _ch < config.channels; _ch = _ch + 1 {
     history.push(Array::make(1024, 0.0))
+    prev_sequence.push(aac_only_long)
+    attack_pending.push(false)
+    win_energy.push(0.0)
   }
   let (spectral_codes, spectral_bits) = aac_encode_code_tables()
   Ok({
@@ -184,28 +223,90 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     sampling_index,
     swb_offsets,
     num_swb,
+    short_offsets,
+    num_short_swb,
     history,
     cos_table: aac_encode_cos_table(),
+    short_window: aac_encode_short_window(),
     spectral_codes,
     spectral_bits,
     spectral_rev: aac_encode_reverse_tables(),
+    prev_sequence,
+    attack_pending,
+    win_energy,
   })
 }
 
 ///|
-/// Forward MDCT of the 2048-sample windowed buffer, scaled into the encoder's
-/// coefficient domain (`65536 * textbook MDCT`).
-fn AacEncoder::forward_mdct(
+/// Apply the analysis window of `seq` to the 2048-sample overlap buffer.
+///
+/// Natural time order: ONLY_LONG is a full 2048-point sine window; LONG_START
+/// is the long rising half, 448 samples at unit gain, the falling short half
+/// and 448 zeros; LONG_STOP is its mirror (the short rising half and the long
+/// falling half). The flat 448-sample stretches are what the neighbouring long
+/// frame and the eight short blocks overlap, so the transition is TDAC-safe.
+fn aac_encode_window(seq : Int32, buf : Array[Double]) -> Array[Double] {
+  let win = aac_sine_long
+  let swin = aac_sine_short
+  let d : Array[Double] = Array::make(2048, 0.0)
+  if seq == aac_long_start {
+    for i = 0; i < 1024; i = i + 1 {
+      d[i] = buf[i] * win[i]
+    }
+    for i = 0; i < 448; i = i + 1 {
+      d[1024 + i] = buf[1024 + i]
+    }
+    for i = 0; i < 128; i = i + 1 {
+      d[1472 + i] = buf[1472 + i] * swin[127 - i]
+    }
+  } else if seq == aac_long_stop {
+    for i = 0; i < 128; i = i + 1 {
+      d[448 + i] = buf[448 + i] * swin[i]
+    }
+    for i = 0; i < 448; i = i + 1 {
+      d[576 + i] = buf[576 + i]
+    }
+    for i = 0; i < 1024; i = i + 1 {
+      d[1024 + i] = buf[1024 + i] * win[1023 - i]
+    }
+  } else {
+    for i = 0; i < 1024; i = i + 1 {
+      d[i] = buf[i] * win[i]
+      d[1024 + i] = buf[1024 + i] * win[1023 - i]
+    }
+  }
+  d
+}
+
+///|
+/// Analysis coefficients of a frame in the requested window sequence, scaled
+/// into the encoder's coefficient domain (`65536 * textbook MDCT`).
+///
+/// The eight short blocks are 256-sample sine-windowed chunks on a 128-sample
+/// hop, anchored 448 samples before the current frame (the `flat` of the
+/// decoder's overlap-add), so the last blocks reach 576 samples into the
+/// look-ahead part of the overlap buffer.
+fn AacEncoder::frame_coefficients(
   self : AacEncoder,
   buf : Array[Double],
+  seq : Int32,
 ) -> Array[Double] {
-  let win = aac_sine_long
-  let d : Array[Double] = Array::make(2048, 0.0)
-  for i = 0; i < 1024; i = i + 1 {
-    d[i] = buf[i] * win[i]
-    d[1024 + i] = buf[1024 + i] * win[1023 - i]
-  }
   let out : Array[Double] = Array::make(1024, 0.0)
+  if seq == aac_eight_short {
+    let swin = self.short_window
+    for w = 0; w < 8; w = w + 1 {
+      let slot : Array[Double] = Array::make(256, 0.0)
+      for i = 0; i < 256; i = i + 1 {
+        slot[i] = buf[448 + w * 128 + i] * swin[i]
+      }
+      let part = aac_mdct_forward(slot, 256)
+      for j = 0; j < 128; j = j + 1 {
+        out[w * 128 + j] = part[j] * 65536.0
+      }
+    }
+    return out
+  }
+  let d = aac_encode_window(seq, buf)
   for j = 0; j < 1024; j = j + 1 {
     let row = j * 2048
     let mut acc = 0.0
@@ -215,6 +316,47 @@ fn AacEncoder::forward_mdct(
     out[j] = acc * 65536.0
   }
   out
+}
+
+///|
+/// Attack detector of FFmpeg's `aacpsy.c` `psy_lame_window`: the high-passed
+/// energy of each 128-sample subblock is compared with the channel's sliding
+/// energy average (`sum2 / 64`, i.e. one eighth of the frame mean, so the
+/// ratio 10 corresponds to 1.25x the mean subblock energy). The average is
+/// updated after the comparison, so an onset from silence always attacks.
+///
+/// Returns `(early, late)`: `early` covers the first four subblocks, whose
+/// samples a short block of this frame can code, while `late` covers the
+/// second half, which only the next frame's short blocks reach (the eight
+/// short windows span `buf[448]..buf[1600)`, i.e. the previous frame's second
+/// half and the current frame's first 576 samples).
+fn AacEncoder::detect_attack(
+  self : AacEncoder,
+  ch : Int32,
+  pcm : Array[Double],
+) -> (Bool, Bool) {
+  let s : Array[Double] = Array::make(8, 0.0)
+  let mut prev = 0.0
+  for i = 0; i < 1024; i = i + 1 {
+    let v = pcm[i] - prev
+    prev = pcm[i]
+    s[i / 128] = s[i / 128] + v * v
+  }
+  let mut sum2 = 0.0
+  let mut early = false
+  let mut late = false
+  for i = 0; i < 8; i = i + 1 {
+    sum2 = sum2 + s[i]
+    if s[i] > self.win_energy[ch] * 10.0 {
+      if i < 4 {
+        early = true
+      } else {
+        late = true
+      }
+    }
+  }
+  self.win_energy[ch] = self.win_energy[ch] * 7.0 / 8.0 + sum2 / 64.0
+  (early, late)
 }
 
 ///|
@@ -290,6 +432,8 @@ priv struct AacEncChannel {
   cb : Array[Int32]
   q : Array[Int32]
   max_sfb : Int32
+  window_sequence : Int32
+  num_windows : Int32
 }
 
 ///|
@@ -367,8 +511,11 @@ fn aac_encode_escape_bits(v : Int32) -> Int32 {
 }
 
 ///|
-/// Bits needed to code `[start, end)` with codebook `cb`, or `-1` when the
-/// codebook cannot represent the band (tuple size or magnitude limit).
+/// Bits needed to code `[start, end)` of each of the `num_windows` windows
+/// with codebook `cb`, or `-1` when the codebook cannot represent the band
+/// (tuple size or magnitude limit). For EIGHT_SHORT the band's segment is
+/// coded once per window of the (single) scale-factor group, at a 128-sample
+/// window stride.
 fn aac_encode_band_cost(
   cb : Int32,
   q : Array[Int32],
@@ -376,30 +523,35 @@ fn aac_encode_band_cost(
   end : Int32,
   rev : Array[Int32],
   bits : Array[Int32],
+  num_windows : Int32,
 ) -> Int32 {
   let dim = if cb <= 4 { 4 } else { 2 }
   if (end - start) % dim != 0 {
     return -1
   }
   let mut cost = 0
-  let mut i = start
-  while i < end {
-    let row = rev[aac_encode_tuple_key(cb, q, i)]
-    if row < 0 {
-      return -1
-    }
-    cost = cost + bits[row] + aac_encode_tuple_signs(cb, q, i)
-    if cb == 11 {
-      let a0 = aac_encode_abs(q[i])
-      let a1 = aac_encode_abs(q[i + 1])
-      if a0 >= 16 {
-        cost = cost + aac_encode_escape_bits(a0)
+  for w = 0; w < num_windows; w = w + 1 {
+    let base = w * 128
+    let mut i = base + start
+    let stop = base + end
+    while i < stop {
+      let row = rev[aac_encode_tuple_key(cb, q, i)]
+      if row < 0 {
+        return -1
       }
-      if a1 >= 16 {
-        cost = cost + aac_encode_escape_bits(a1)
+      cost = cost + bits[row] + aac_encode_tuple_signs(cb, q, i)
+      if cb == 11 {
+        let a0 = aac_encode_abs(q[i])
+        let a1 = aac_encode_abs(q[i + 1])
+        if a0 >= 16 {
+          cost = cost + aac_encode_escape_bits(a0)
+        }
+        if a1 >= 16 {
+          cost = cost + aac_encode_escape_bits(a1)
+        }
       }
+      i = i + dim
     }
-    i = i + dim
   }
   cost
 }
@@ -414,6 +566,7 @@ fn AacEncoder::select_band_cb(
   start : Int32,
   end : Int32,
   magnitude : Int32,
+  num_windows : Int32,
 ) -> Int32 {
   let limits : Array[Int32] = [1, 1, 2, 2, 4, 4, 7, 7, 12, 12, aac_encode_max_q]
   let mut best = 11
@@ -427,6 +580,7 @@ fn AacEncoder::select_band_cb(
         end,
         self.spectral_rev[cb - 1],
         self.spectral_bits[cb - 1],
+        num_windows,
       )
       if cost >= 0 && cost < best_cost {
         best_cost = cost
@@ -442,14 +596,21 @@ fn AacEncoder::select_band_cb(
 /// `reference_sf + delta` (clamped to the legal 0..255 range). Bands whose
 /// quantised coefficients are all zero get scalefactor `-1` and codebook 0;
 /// the remaining bands use the cheapest codebook that can represent them.
+/// A short frame's 8 windows form one scale-factor group: each band's
+/// scalefactor and codebook are chosen over all eight windows.
 fn AacEncoder::channel_data(
   self : AacEncoder,
   coef : Array[Double],
   reference_sf : Int32,
   delta : Int32,
+  seq : Int32,
 ) -> AacEncChannel {
-  let sf : Array[Int32] = Array::make(self.num_swb, -1)
-  let cb : Array[Int32] = Array::make(self.num_swb, 0)
+  let is8 = seq == aac_eight_short
+  let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
+  let offsets = if is8 { self.short_offsets } else { self.swb_offsets }
+  let num_windows = if is8 { 8 } else { 1 }
+  let sf : Array[Int32] = Array::make(num_swb, -1)
+  let cb : Array[Int32] = Array::make(num_swb, 0)
   let q : Array[Int32] = Array::make(1024, 0)
   let mut max_sfb = 0
   if reference_sf >= 0 {
@@ -461,24 +622,26 @@ fn AacEncoder::channel_data(
       v = 255
     }
     aac_encode_quantize_all(q, coef, v)
-    for b = 0; b < self.num_swb; b = b + 1 {
-      let start = self.swb_offsets[b]
-      let end = self.swb_offsets[b + 1]
+    for b = 0; b < num_swb; b = b + 1 {
+      let start = offsets[b]
+      let end = offsets[b + 1]
       let mut magnitude = 0
-      for i = start; i < end; i = i + 1 {
-        let a = aac_encode_abs(q[i])
-        if a > magnitude {
-          magnitude = a
+      for w = 0; w < num_windows; w = w + 1 {
+        for i = w * 128 + start; i < w * 128 + end; i = i + 1 {
+          let a = aac_encode_abs(q[i])
+          if a > magnitude {
+            magnitude = a
+          }
         }
       }
       if magnitude > 0 {
         sf[b] = v
         max_sfb = b + 1
-        cb[b] = self.select_band_cb(q, start, end, magnitude)
+        cb[b] = self.select_band_cb(q, start, end, magnitude, num_windows)
       }
     }
   }
-  { sf, cb, q, max_sfb, }
+  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, }
 }
 
 ///|
@@ -493,8 +656,12 @@ fn aac_encode_global_gain(ch : AacEncChannel) -> Int32 {
 }
 
 ///|
-/// section_data: group runs of equal band type (0 = zero band).
+/// section_data: group runs of equal band type (0 = zero band). Short frames
+/// use 3-bit section lengths with a 7-value escape instead of the long frames'
+/// 5-bit lengths (35.3 in ISO/IEC 14496-3).
 fn aac_encode_write_sections(bw : BitWriter, ch : AacEncChannel) -> Unit {
+  let bits = if ch.window_sequence == aac_eight_short { 3 } else { 5 }
+  let escape = (1 << bits) - 1
   let mut b = 0
   while b < ch.max_sfb {
     let cb = ch.cb[b]
@@ -504,11 +671,11 @@ fn aac_encode_write_sections(bw : BitWriter, ch : AacEncChannel) -> Unit {
     }
     bw.put(cb.reinterpret_as_uint(), 4)
     let mut len = e - b
-    while len >= 31 {
-      bw.put(31, 5)
-      len = len - 31
+    while len >= escape {
+      bw.put(escape.reinterpret_as_uint(), bits)
+      len = len - escape
     }
-    bw.put(len.reinterpret_as_uint(), 5)
+    bw.put(len.reinterpret_as_uint(), bits)
     b = e
   }
 }
@@ -560,7 +727,8 @@ fn aac_encode_write_escape(bw : BitWriter, v : Int32) -> Unit {
 
 ///|
 /// spectral_data: the per-band Huffman codebook, its sign bits and (for
-/// codebook 11) the escape sequences.
+/// codebook 11) the escape sequences. A short frame's eight windows form one
+/// group, so a band's segment is emitted once per window, in window order.
 fn aac_encode_write_spectral(
   bw : BitWriter,
   ch : AacEncChannel,
@@ -576,32 +744,34 @@ fn aac_encode_write_spectral(
     }
     let dim = if cb <= 4 { 4 } else { 2 }
     let table = cb - 1
-    let mut i = offsets[b]
-    let end = offsets[b + 1]
-    while i < end {
-      let row = revs[table][aac_encode_tuple_key(cb, ch.q, i)]
-      bw.put(codes[table][row], bits[table][row])
-      // Codebooks 3/4 and 7..11 carry one sign bit per non-zero magnitude;
-      // codebooks 1/2 and 5/6 embed the sign in the Huffman symbol.
-      let mut j = 0
-      while j < dim {
-        let v = ch.q[i + j]
-        if v != 0 && (cb == 3 || cb == 4 || cb >= 7) {
-          bw.put_bit(if v < 0 { 1 } else { 0 })
+    for w = 0; w < ch.num_windows; w = w + 1 {
+      let mut i = w * 128 + offsets[b]
+      let end = w * 128 + offsets[b + 1]
+      while i < end {
+        let row = revs[table][aac_encode_tuple_key(cb, ch.q, i)]
+        bw.put(codes[table][row], bits[table][row])
+        // Codebooks 3/4 and 7..11 carry one sign bit per non-zero magnitude;
+        // codebooks 1/2 and 5/6 embed the sign in the Huffman symbol.
+        let mut j = 0
+        while j < dim {
+          let v = ch.q[i + j]
+          if v != 0 && (cb == 3 || cb == 4 || cb >= 7) {
+            bw.put_bit(if v < 0 { 1 } else { 0 })
+          }
+          j = j + 1
         }
-        j = j + 1
+        if cb == 11 {
+          let a0 = aac_encode_abs(ch.q[i])
+          let a1 = aac_encode_abs(ch.q[i + 1])
+          if a0 >= 16 {
+            aac_encode_write_escape(bw, a0)
+          }
+          if a1 >= 16 {
+            aac_encode_write_escape(bw, a1)
+          }
+        }
+        i = i + dim
       }
-      if cb == 11 {
-        let a0 = aac_encode_abs(ch.q[i])
-        let a1 = aac_encode_abs(ch.q[i + 1])
-        if a0 >= 16 {
-          aac_encode_write_escape(bw, a0)
-        }
-        if a1 >= 16 {
-          aac_encode_write_escape(bw, a1)
-        }
-      }
-      i = i + dim
     }
   }
 }
@@ -611,19 +781,28 @@ fn aac_encode_write_spectral(
 fn aac_encode_write_channel(
   bw : BitWriter,
   ch : AacEncChannel,
-  offsets : Array[Int32],
+  long_offsets : Array[Int32],
+  short_offsets : Array[Int32],
   codes : Array[Array[UInt32]],
   bits : Array[Array[Int32]],
   revs : Array[Array[Int32]],
 ) -> Unit {
+  let is8 = ch.window_sequence == aac_eight_short
+  let offsets = if is8 { short_offsets } else { long_offsets }
   let global_gain = aac_encode_global_gain(ch)
   bw.put(global_gain.reinterpret_as_uint(), 8)
-  // ics_info: reserved bit, ONLY_LONG, sine window, max_sfb, no prediction.
+  // ics_info: reserved bit, window_sequence, sine window.
   bw.put(0, 1)
-  bw.put(0, 2)
+  bw.put(ch.window_sequence.reinterpret_as_uint(), 2)
   bw.put(0, 1)
-  bw.put(ch.max_sfb.reinterpret_as_uint(), 6)
-  bw.put(0, 1)
+  if is8 {
+    bw.put(ch.max_sfb.reinterpret_as_uint(), 4)
+    // scale_factor_grouping: all seven bits set -> one group of eight windows.
+    bw.put(0x7f, 7)
+  } else {
+    bw.put(ch.max_sfb.reinterpret_as_uint(), 6)
+    bw.put(0, 1) // predictor_data_present
+  }
   aac_encode_write_sections(bw, ch)
   aac_encode_write_scalefactors(bw, ch, global_gain)
   bw.put(0, 1) // pulse_data_present
@@ -633,17 +812,20 @@ fn aac_encode_write_channel(
 }
 
 ///|
-/// Assemble one ADTS frame for the given coefficients and frame-wide
-/// scalefactor offset.
+/// Assemble one ADTS frame for the given coefficients, window sequences and
+/// frame-wide scalefactor offset.
 fn AacEncoder::build_frame(
   self : AacEncoder,
   coefs : Array[Array[Double]],
   reference_sf : Array[Int32],
   delta : Int32,
+  sequences : Array[Int32],
 ) -> Result[Bytes, String] {
   let chans : Array[AacEncChannel] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    chans.push(self.channel_data(coefs[ch], reference_sf[ch], delta))
+    chans.push(
+      self.channel_data(coefs[ch], reference_sf[ch], delta, sequences[ch]),
+    )
   }
   let bw = BitWriter::new()
   if self.config.channels == 1 {
@@ -653,6 +835,7 @@ fn AacEncoder::build_frame(
       bw,
       chans[0],
       self.swb_offsets,
+      self.short_offsets,
       self.spectral_codes,
       self.spectral_bits,
       self.spectral_rev,
@@ -666,6 +849,7 @@ fn AacEncoder::build_frame(
         bw,
         chans[ch],
         self.swb_offsets,
+        self.short_offsets,
         self.spectral_codes,
         self.spectral_bits,
         self.spectral_rev,
@@ -713,7 +897,34 @@ pub fn AacEncoder::encode_frame(
     }
   }
   let coefs : Array[Array[Double]] = []
+  let sequences : Array[Int32] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    let (attack_early, attack_late) = self.detect_attack(ch, pcm[ch])
+    // A late attack falls in the current frame's second half, which the eight
+    // short windows do not reach; the next frame's short blocks cover it, so
+    // the flag carries over one frame. A pending attack keeps a short run
+    // alive even when the new frame itself is quiet, which is what gives the
+    // attack's samples their short blocks.
+    let attack = attack_early || attack_late || self.attack_pending[ch]
+    let prev = self.prev_sequence[ch]
+    // LONG_START must be followed by short blocks, and short blocks return to
+    // the long transform through LONG_STOP; anything else is a steady-state
+    // long frame (or a fresh start when the current frame attacks).
+    let seq = if prev == aac_eight_short {
+      if attack {
+        aac_eight_short
+      } else {
+        aac_long_stop
+      }
+    } else if prev == aac_long_start {
+      aac_eight_short
+    } else if attack {
+      aac_long_start
+    } else {
+      aac_only_long
+    }
+    sequences.push(seq)
+    self.attack_pending[ch] = attack_late
     let buf : Array[Double] = Array::make(2048, 0.0)
     let hist = self.history[ch]
     for i = 0; i < 1024; i = i + 1 {
@@ -721,7 +932,7 @@ pub fn AacEncoder::encode_frame(
       buf[1024 + i] = pcm[ch][i]
       hist[i] = pcm[ch][i]
     }
-    coefs.push(self.forward_mdct(buf))
+    coefs.push(self.frame_coefficients(buf, seq))
   }
   let reference_sf : Array[Int32] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
@@ -744,7 +955,7 @@ pub fn AacEncoder::encode_frame(
   let mut found = false
   while lo <= hi {
     let mid = (lo + hi) / 2
-    let frame = match self.build_frame(coefs, reference_sf, mid) {
+    let frame = match self.build_frame(coefs, reference_sf, mid, sequences) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
@@ -758,6 +969,9 @@ pub fn AacEncoder::encode_frame(
   }
   if !found {
     return Err("AAC frame exceeds the requested bit rate")
+  }
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    self.prev_sequence[ch] = sequences[ch]
   }
   Ok(best)
 }

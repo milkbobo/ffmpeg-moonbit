@@ -152,6 +152,65 @@ fn aac_encode_test_parse_channel(
 }
 
 ///|
+/// Encoder-side analysis reproduced for the syntax tests: the analysis window
+/// of `seq` (0 ONLY_LONG, 1 LONG_START, 2 EIGHT_SHORT, 3 LONG_STOP) over the
+/// un-windowed overlap buffer, the forward MDCT and the decoder's sign
+/// convention (`-65536 * MDCT`).
+fn aac_encode_test_analysis(buf : Array[Double], seq : Int32) -> Array[Double] {
+  let win = aac_encode_test_window()
+  let swin : Array[Double] = Array::make(256, 0.0)
+  for i = 0; i < 256; i = i + 1 {
+    swin[i] = @math.sin(3.14159265358979323846 / 256.0 * (i.to_double() + 0.5))
+  }
+  let out : Array[Double] = Array::make(1024, 0.0)
+  if seq == 2 {
+    for w = 0; w < 8; w = w + 1 {
+      let slot : Array[Double] = Array::make(256, 0.0)
+      for i = 0; i < 256; i = i + 1 {
+        slot[i] = buf[448 + w * 128 + i] * swin[i]
+      }
+      let part = @libavcodec.aac_mdct_forward(slot, 256)
+      for j = 0; j < 128; j = j + 1 {
+        out[w * 128 + j] = -65536.0 * part[j]
+      }
+    }
+    return out
+  }
+  let d : Array[Double] = Array::make(2048, 0.0)
+  if seq == 1 {
+    for i = 0; i < 1024; i = i + 1 {
+      d[i] = buf[i] * win[i]
+    }
+    for i = 0; i < 448; i = i + 1 {
+      d[1024 + i] = buf[1024 + i]
+    }
+    for i = 0; i < 128; i = i + 1 {
+      d[1472 + i] = buf[1472 + i] * swin[127 - i]
+    }
+  } else if seq == 3 {
+    for i = 0; i < 128; i = i + 1 {
+      d[448 + i] = buf[448 + i] * swin[i]
+    }
+    for i = 0; i < 448; i = i + 1 {
+      d[576 + i] = buf[576 + i]
+    }
+    for i = 0; i < 1024; i = i + 1 {
+      d[1024 + i] = buf[1024 + i] * win[1023 - i]
+    }
+  } else {
+    for i = 0; i < 1024; i = i + 1 {
+      d[i] = buf[i] * win[i]
+      d[1024 + i] = buf[1024 + i] * win[1023 - i]
+    }
+  }
+  let x = @libavcodec.aac_mdct_forward(d, 2048)
+  for j = 0; j < 1024; j = j + 1 {
+    out[j] = -65536.0 * x[j]
+  }
+  out
+}
+
+///|
 /// Ideal analysis/synthesis identity: the decoder's windowing stage must
 /// reconstruct the input from the unquantised forward MDCT, one 1024-sample
 /// frame late, at unit gain.
@@ -210,7 +269,6 @@ test "aac_lc_spectral_syntax" {
   let frames = 3
   let input = aac_encode_test_tone(rate, 1, frames)
   let stream = aac_encode_test_stream(input, 1, frames, rate, 128000)
-  let win = aac_encode_test_window()
   for f = 0; f < frames + 1; f = f + 1 {
     let payload = stream[f]
       .clamped_view(
@@ -224,29 +282,29 @@ test "aac_lc_spectral_syntax" {
     let (got, ics) = aac_encode_test_parse_channel(gb)
     let buf : Array[Double] = Array::make(2048, 0.0)
     for i = 0; i < 1024; i = i + 1 {
-      let prev = if f > 0 && f <= frames {
+      buf[i] = if f > 0 && f <= frames {
         input[0][(f - 1) * 1024 + i]
       } else {
         0.0
       }
-      let cur = if f < frames { input[0][f * 1024 + i] } else { 0.0 }
-      buf[i] = prev * win[i]
-      buf[1024 + i] = cur * win[1023 - i]
+      buf[1024 + i] = if f < frames { input[0][f * 1024 + i] } else { 0.0 }
     }
-    let want = @libavcodec.aac_mdct_forward(buf, 2048)
+    let want = aac_encode_test_analysis(buf, ics.info.window_sequence)
     let mut energy = 0.0
     let mut noise = 0.0
     for j = 0; j < 1024; j = j + 1 {
-      let w = -65536.0 * want[j]
+      let w = want[j]
       let d = got[j] - w
       energy = energy + w * w
       noise = noise + d * d
     }
     let snr = 10.0 * @math.log10(energy / noise)
     println(
-      "mono frame \{f}: bytes=\{stream[f].length()} max_sfb=\{ics.info.max_sfb} spectral_snr=\{snr}",
+      "mono frame \{f}: seq=\{ics.info.window_sequence} bytes=\{stream[f].length()} max_sfb=\{ics.info.max_sfb} spectral_snr=\{snr}",
     )
-    assert_true(snr > 32.0)
+    // The short blocks carry a coarser frequency resolution, so their
+    // quantisation noise sits a few dB above the long-window frames.
+    assert_true(snr > (if ics.info.window_sequence == 2 { 18.0 } else { 32.0 }))
   }
 }
 
@@ -258,7 +316,6 @@ test "aac_lc_stereo_syntax" {
   let frames = 3
   let input = aac_encode_test_tone(rate, channels, frames)
   let stream = aac_encode_test_stream(input, channels, frames, rate, 128000)
-  let win = aac_encode_test_window()
   for f = 0; f < frames + 1; f = f + 1 {
     let payload = stream[f]
       .clamped_view(
@@ -277,35 +334,137 @@ test "aac_lc_stereo_syntax" {
       let ics = if ch == 0 { m0 } else { m1 }
       let buf : Array[Double] = Array::make(2048, 0.0)
       for i = 0; i < 1024; i = i + 1 {
-        let prev = if f > 0 && f <= frames {
+        buf[i] = if f > 0 && f <= frames {
           input[ch][(f - 1) * 1024 + i]
         } else {
           0.0
         }
-        let cur = if f < frames { input[ch][f * 1024 + i] } else { 0.0 }
-        buf[i] = prev * win[i]
-        buf[1024 + i] = cur * win[1023 - i]
+        buf[1024 + i] = if f < frames { input[ch][f * 1024 + i] } else { 0.0 }
       }
-      let want = @libavcodec.aac_mdct_forward(buf, 2048)
+      let want = aac_encode_test_analysis(buf, ics.info.window_sequence)
       let mut energy = 0.0
       let mut noise = 0.0
       for j = 0; j < 1024; j = j + 1 {
-        let w = -65536.0 * want[j]
+        let w = want[j]
         let d = got[j] - w
         energy = energy + w * w
         noise = noise + d * d
       }
       let snr = 10.0 * @math.log10(energy / noise)
       println(
-        "cpe frame \{f} ch \{ch}: bytes=\{stream[f].length()} max_sfb=\{ics.info.max_sfb} spectral_snr=\{snr}",
+        "cpe frame \{f} ch \{ch}: seq=\{ics.info.window_sequence} bytes=\{stream[f].length()} max_sfb=\{ics.info.max_sfb} spectral_snr=\{snr}",
       )
       if f > 0 && f <= frames {
         // The flush frame reconstructs a window whose second half is silent,
         // so its worst channel sits a little lower than the steady-state ones.
-        assert_true(snr > 22.0)
+        assert_true(
+          snr > (if ics.info.window_sequence == 2 { 12.0 } else { 22.0 }),
+        )
       }
     }
   }
+}
+
+///|
+/// A quiet tone with three isolated full-scale impulses, the stimulus the
+/// attack detector must switch on.
+fn aac_encode_test_transient(
+  rate : Int32,
+  frames : Int32,
+) -> Array[Array[Double]] {
+  let row : Array[Double] = Array::make(frames * 1024, 0.0)
+  for i = 0; i < frames * 1024; i = i + 1 {
+    let t = i.to_double() / rate.to_double()
+    row[i] = 0.05 * @math.sin(2.0 * 3.14159265358979323846 * 660.0 * t)
+  }
+  for k = 0; k < 3; k = k + 1 {
+    let pos = 700 + k * 2048
+    if pos < frames * 1024 {
+      row[pos] = if k % 2 == 0 { 1.0 } else { -1.0 }
+    }
+  }
+  [row]
+}
+
+///|
+/// Window switching: the attack detector must drive the
+/// ONLY_LONG -> LONG_START -> EIGHT_SHORT -> LONG_STOP chain, and the stream
+/// must still decode with a good waveform SNR.
+test "aac_lc_transient_windows" {
+  let rate = 44100
+  let frames = 6
+  let input = aac_encode_test_transient(rate, frames)
+  let stream = aac_encode_test_stream(input, 1, frames, rate, 128000)
+  let seqs : Array[Int32] = []
+  for f = 0; f < stream.length(); f = f + 1 {
+    let payload = stream[f]
+      .clamped_view(
+        start=@libavcodec.av_aac_adts_header_size,
+        end=stream[f].length(),
+      )
+      .to_owned()
+    let gb = @libavcodec.BitReader::new(payload)
+    assert_eq(gb.read(3).reinterpret_as_int(), 0) // ID_SCE
+    let _ = gb.read(4) // element_instance_tag
+    let _ = gb.read(8) // global_gain
+    let _ = gb.read(1) // reserved
+    seqs.push(gb.read(2).reinterpret_as_int())
+  }
+  let mut text = ""
+  for f = 0; f < seqs.length(); f = f + 1 {
+    text = text + seqs[f].to_string() + " "
+  }
+  println("transient sequences=\{text}")
+  let mut start = 0
+  let mut short = 0
+  let mut stop = 0
+  for f = 0; f < seqs.length(); f = f + 1 {
+    let seq = seqs[f]
+    if seq == 1 {
+      start = start + 1
+    } else if seq == 2 {
+      short = short + 1
+    } else if seq == 3 {
+      stop = stop + 1
+    }
+    // Only the legal window-sequence transitions may appear: a LONG_START
+    // must hand over to short blocks, and short blocks must leave through
+    // LONG_STOP.
+    if f > 0 {
+      let prev = seqs[f - 1]
+      let ok = if prev == 0 {
+        seq == 0 || seq == 1
+      } else if prev == 1 {
+        seq == 2
+      } else if prev == 2 {
+        seq == 2 || seq == 3
+      } else {
+        seq == 0 || seq == 1
+      }
+      if !ok {
+        println("bad transition \{prev} -> \{seq} at frame \{f}")
+      }
+      assert_true(ok)
+    }
+  }
+  assert_true(start >= 1)
+  assert_true(short >= 2)
+  assert_true(stop >= 1)
+  let decoded = aac_encode_test_decode(stream, 1)
+  let mut energy = 0.0
+  let mut noise = 0.0
+  for i = 0; i < frames * 1024; i = i + 1 {
+    let want = input[0][i]
+    let got = decoded[0][1024 + i]
+    energy = energy + want * want
+    noise = noise + (got - want) * (got - want)
+  }
+  let snr = 10.0 * @math.log10(energy / noise)
+  println("transient round trip: snr=\{snr}")
+  // The decoder emits one 1024-sample priming frame; the impulses must survive
+  // the whole chain (they are only covered by the short blocks of the frames
+  // that follow their detection).
+  assert_true(snr > 18.0)
 }
 
 ///|
