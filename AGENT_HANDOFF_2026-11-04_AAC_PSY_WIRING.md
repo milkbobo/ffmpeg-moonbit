@@ -172,3 +172,18 @@ twoloop 拿 L/R 的阈值去量化 M/S 谱，是 FFmpeg 没有的新偏差。要
   `git commit -F`。
 - 其余照旧：`moon fmt` 禁跑、heredoc 禁用、清理走 `.trash/<日期>/`、
   bash 每条命令显式 `cd`、探针循环变量不复用 `i`/`j`。
+- 内联 `python -c` 里别放反引号（会被 bash 当命令替换执行），带反引号的文本
+  一律改用脚本文件。
+
+---
+
+## 5. 后续工作（按建议顺序）
+
+1. ~~psy 元素级状态~~：§281 已完成。
+2. ~~过渡窗覆盖~~：§282 已完成（只剩 8 短窗走简化模型）。
+3. **PNS**：勘察完毕，结论写在 `PORTING_HISTORY.md` §283——四个子系统联动
+   （mark_pns / twoloop 三处 / search_for_pns / 码流的独立标度因子链），且有反直觉
+   语义（噪声带电平来自 `sf_idx` 而非 `pns_ener`）。建议按 §283 的六步清单推进，
+   第一步就能逐位对拍。
+4. **短窗 psy**：8×128 band 计划 + grouping + `PSY_3GPP_AH_THR_SHORT`，比重构大一档。
+5. **强度立体声**（`aacenc_is.c`，169 行）：与 PNS 同类的联动改造。

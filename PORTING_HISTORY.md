@@ -7221,5 +7221,52 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `aac_twoloop_vectors` 3/3、`aac_encode_vectors` 9/9；全量
   `moon test --target wasm` **1391/1391** 通过。
 
+## 283. AAC PNS：可行性勘察（**未实现**，代码零改动）
+
+- **为什么单独记一条**：PNS 看起来只是"再加一个 aaccoder 函数"，实际是四个子系统
+  联动，而且有一处反直觉的语义（下面第 1 条）。先把勘察结果写下来，避免下一轮重新
+  踩一遍；本条目**不代表任何代码已经落地**。
+- **三个非显然的事实**（都读过 C 源确认）：
+  1. **噪声带的电平不来自 `pns_ener`，而来自 twoloop 选出的 `sf_idx`。**
+     `search_for_pns`（`aaccoder.c:489`）只写 `sce->pns_ener[]` 和 `band_type`，从不
+     改 `sf_idx`；真正进码流的是 `encode_scale_factors`（`aacenc.c`）里按 `sf_idx`
+     写出的标度因子。所以那段 `energy_ratio` 补偿只影响"要不要用噪声"的判定，
+     不影响最终电平——照搬这段逻辑时不要以为它在设定噪声能量。
+  2. **噪声带在码流里有独立的标度因子链。** `encode_scale_factors` 用
+     `off_pns = sf_idx[0] - NOISE_OFFSET(90)` 起算，第一个噪声带写 **9 位前导**
+     （`NOISE_PRE_BITS=9`, `NOISE_PRE=256`），之后才回到常规 Huffman 差分；这条链
+     与普通带的 `off_sf` 并行维护。我们的 `aac_encode_write_scalefactors` 只有
+     `off_sf` 一条链，需要加第二条 + 前导。
+  3. **`can_pns` 会反向改 twoloop 的行为，共三处**（`aaccoder_twoloop.h`）：
+     - `ff_pns_bits()`（:57）：噪声带占 9 位、紧随噪声带只需 5 位，这个计数进
+       `tbits`（:387 与 :468 两处零带分支）；
+     - :190：`if (pns || intensity_stereo) frame_bit_rate *= 1.15` → 改 **cutoff**，
+       进而改哪些带被置零；
+     - :500-536：`its > maxits/2 && tbits > toofewbits` 时的 spread 排序置零块
+       （`pns_start_pos`、`euplims`、`overdist`），我们移植时整块删掉了。
+- **依赖**：
+  - `search_for_pns` 用 `s->fdsp->scalarproduct_float` / `vector_fmul_scalar`；C 侧
+    对拍要在 harness 里补 `avpriv_float_dsp_alloc`（`libavutil.a` 里有）。
+  - `lcg_random` 的序列会穿过 `energy_ratio` 影响判定，语义是
+    `PNS[i] = (float)s->random_state`（整数转浮点，**不是**位模式重解释）；要逐位
+    对拍必须同种子同序。
+  - 常量：`NOISE_LOW_LIMIT=4000`、`NOISE_SPREAD_THRESHOLD=0.9`、
+    `NOISE_LAMBDA_REPLACE=1.948`、`NOISE_BT=13`；解码侧的 `NOISE_OFFSET/PRE/PRE_BITS`
+    已存在（`aac_spectrum.mbt:106-113`），解码噪声带没问题。
+- **集成清单**（每步的验收标准）：
+  1. `mark_pns`（`aaccoder.c:631`）→ 产出 `can_pns`/`pns_ener`。**可逐位对拍**
+     （不碰 fdsp）。harness 已支持 `--in`，加个 `--pns` 打印 `can_pns` 即可。
+  2. twoloop 三处耦合（上面第 3 条）→ 现有 245 条黄金向量必须保持逐位一致
+     （它们 `can_pns=0`，走不到新分支）。
+  3. `search_for_pns` → `band_alt` 快照（twoloop 的 `band_type` 副本）要先加进
+     通道数据结构。
+  4. 码流：`off_pns` 链 + 9 位前导 + 噪声带跳过谱数据（`cb == 13`）。
+  5. 端到端：解码 SNR 不塌、帧长下降。
+  6. 夹具：现有夹具是纯音/脉冲，`spread` 阈值（0.9）几乎过不了，**必须新增带限
+     噪声突发**才能让 PNS 真正触发；否则测试等于没测。
+- **结论**：这是一整轮的量（≈300 行 + 一处码流改动 + 新夹具 + 两套对拍）。本轮
+  只做勘察，没有动代码。
+
+
 
 
