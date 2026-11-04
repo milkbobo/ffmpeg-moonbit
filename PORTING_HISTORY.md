@@ -7224,8 +7224,8 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 ## 283. AAC PNS：可行性勘察（第 1 步已落地，见 §284；其余未实现）
 
 - **⚠ 状态**：本条的六步清单里，**第 1 步（`mark_pns`）已在 §284 完成**；
-  第 2 步先做过拆解试验并回退（§285），随后一次性全搬完成，见 §286。
-  第 3-6 步仍未实现。
+  第 2 步先拆解（§285）后一次性全搬完成（§286），第 3 步 search_for_pns
+  已完成（§287）。第 4-6 步仍未实现。
 
 - **为什么单独记一条**：PNS 看起来只是"再加一个 aaccoder 函数"，实际是四个子系统
   联动，而且有一处反直觉的语义（下面第 1 条）。先把勘察结果写下来，避免下一轮重新
@@ -7378,6 +7378,44 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - **检查**：`moon check --target wasm --deny-warn` 干净；`aac_psy_vectors` 3/3、
   `aac_twoloop_vectors` 3/3、`aac_pns_vectors` 2/2、`aac_encode_vectors` 9/9
   （合计 17/17）；全量 `moon test --target wasm` **1393/1393** 通过。
+
+## 287. PNS 第 3 步：`search_for_pns` 移植 + 逐带向量（0 / 245 差异）
+
+- **C 侧准备**：`_ref/aacenc/harness.c` 的 `--pns` 模式现在在 twoloop 之后调用
+  `ff_aac_coders[TWOLOOP].search_for_pns`，并打印 `PNSFINAL g band_type sf_idx
+  zeroes pns_ener`。`search_for_pns` 需要 `s->fdsp`，用
+  `avpriv_float_dsp_alloc(0)`（`libavutil/float_dsp.h`，已在 libavutil.a 里）补上；
+  `s->random_state` 由 calloc 置 0 且跨帧累积。默认模式输出**零 diff**。
+- **交付**：`libavcodec/aac_pns_search.mbt`，`aac_pns_search` 即
+  `aaccoder.c:489` 的 `search_for_pns`（单长窗）。六道门限：
+  1. 4 kHz 以上且在带宽 cutoff 内（带宽同样按 `frame_bit_rate × 1.15` 算）；
+  2. `ff_sfdelta_can_remove_band` 允许摘掉该带；
+  3. 能量既不低于 `threshold·sqrt(1/freq_boost)`，也不高于
+     `threshold·thr_mult·freq_boost`（`thr_mult = 1.948·100/λ`）；
+  4. psy `spread ≥ spread_threshold`（λ=120 时 0.75）；
+  5. `noise_sfi` 与上一个噪声带的差落在 `±SCALE_MAX_DIFF` 内；
+  6. 生成噪声的 `energy_ratio ∈ (0.85, 1.25)` 且估算 RD 代价更优。
+  命中则 `band_type = NOISE_BT(13)`、`zeroes = 0`。
+- **数值细节**（对拍一次就过的关键）：
+  - `lcg_random` 的语义是 `PNS[i] = (float)state`——**整数转浮点，不是位模式重解释**；
+    且 state 跨帧携带，测试里逐帧回灌。
+  - `noise_amp = -pow2sf_tab[noise_sfi + 200]`；`roundf` 是 half-away-from-zero，
+    不能用 `to_int` 直接截断（可能为负）。
+  - `dist1` 的量纲与判定依赖传入的 `lambda`，`scalarproduct` 用 f32 逐次累加，
+    不是 f64 求和。
+  - **`sf_idx` 不受此函数影响**——噪声电平来自它（§283 第 1 条），`pns_ener`
+    只喂代价估计；输出结构因此不返回 `sf`。
+- **验收**：C `--pns` 的 `PNSFINAL` 5 帧 × 49 带，
+  `band_type / sf_idx / zeroes` **0 差异**，其中 **50 带被判为 NOISE_BT**。
+  夹具由 `scripts/gen_aac_pns_vectors.py` 一并生成
+  （`aac_pns_ref_final_bt / _sf / _zero / _ener`），默认模式向量零 diff。
+  §278 的 245 带、§286 的 245 带仍然全部逐位一致。
+- **仍未做**（§283 第 4–6 步）：`band_alt` 快照接进编码器通道结构、码流的
+  `off_pns` 独立标度因子链 + 9 位前导、噪声带跳过谱数据、带限噪声夹具端到端。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_pns_vectors` 3/3、
+  `aac_psy_vectors` 3/3、`aac_twoloop_vectors` 3/3、`aac_encode_vectors` 9/9；
+  全量 `moon test --target wasm` **1394/1394** 通过。
+
 
 
 

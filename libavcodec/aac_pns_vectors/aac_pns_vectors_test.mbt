@@ -112,3 +112,75 @@ test "PNS-aware twoloop matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
   println("PNS twoloop mismatching bands: \{bad} / 245")
   assert_true(bad == 0)
 }
+
+///|
+/// Step 3 of §283: `search_for_pns` (`aaccoder.c:489`). The C harness runs it
+/// after `mark_pns` and the PNS-aware twoloop and dumps `PNSFINAL` — the final
+/// band type (13 = NOISE_BT), scalefactor, zero flag and noise energy. The LCG
+/// state is carried across frames, so this test threads it through too.
+test "PNS search_for_pns matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
+  let ctx = @libavcodec.aac_psy_new(4, 44100, 128000, 2)
+  let sizes = ctx.band_sizes()
+  let offsets : Array[Int32] = []
+  let mut acc = 0
+  offsets.push(0)
+  for g in 0..<sizes.length() {
+    acc = acc + sizes[g]
+    offsets.push(acc)
+  }
+  let num_swb = sizes.length()
+  let mut random_state : Int32 = 0
+  let mut bad = 0
+  let mut noise_bands = 0
+  for f in 0..<5 {
+    let spec = @aac_pns_vectors.aac_pns_spec[f]
+    let r = ctx.analyze(0, spec, 0, 0, 0)
+    let mark = @libavcodec.aac_pns_mark(
+      r.bands, offsets, num_swb, 44100, 128000, 2, 120.0,
+    )
+    let two = @libavcodec.aac_twoloop_search_pns(
+      spec,
+      sizes,
+      r.bands,
+      r.alloc,
+      128000,
+      44100,
+      2,
+      120.0,
+      @libavcodec.aac_twoloop_pns(mark.can_pns, true),
+    )
+    let out = @libavcodec.aac_pns_search(
+      @libavcodec.aac_pns_search_in(
+        spec, sizes, offsets, r.bands, two.sf, two.cb, two.zeroes,
+        mark.can_pns, mark.pns_ener, random_state,
+      ),
+      44100,
+      128000,
+      2,
+      120.0,
+    )
+    random_state = out.random_state
+    ctx.set_cutoff(mark.bandwidth)
+    for g in 0..<num_swb {
+      let wbt = @aac_pns_vectors.aac_pns_ref_final_bt[f][g]
+      let wsf = @aac_pns_vectors.aac_pns_ref_final_sf[f][g]
+      let wzero = @aac_pns_vectors.aac_pns_ref_final_zero[f][g]
+      if out.cb[g] != wbt || two.sf[g] != wsf || out.zeroes[g] != wzero {
+        bad = bad + 1
+        if bad <= 8 {
+          println(
+            "frame \{f} band \{g}: got \{out.cb[g]}/\{two.sf[g]}/\{out.zeroes[g]} want \{wbt}/\{wsf}/\{wzero}",
+          )
+        }
+      }
+      if wbt == 13 {
+        noise_bands = noise_bands + 1
+      }
+    }
+  }
+  println(
+    "PNS search_for_pns mismatching bands: \{bad} / 245 (noise bands \{noise_bands})",
+  )
+  assert_true(noise_bands > 0)
+  assert_true(bad == 0)
+}
