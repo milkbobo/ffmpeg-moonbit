@@ -1244,13 +1244,27 @@ test "aac_lc_is_config" {
 /// stream: `NOISE_BT` (13) in each channel and the right channel's intensity
 /// bands (14/15). Both opt-in tools mark their bands in `section_data` only, so
 /// this is what "the tool actually fired" means on the wire.
+///
+/// The mid/side mask is read rather than skipped, because `search_for_ms` leaves
+/// a signature on the wire that nothing else can produce: a band it claims is
+/// re-scaled to `(mididx, sididx) = (clip(minidx), clip(minidx - 3*boost))`, so
+/// the two channels' scalefactors on that band differ by exactly 0, 3 or 6
+/// steps. The fifth count is how many marked bands break that rule.
+///
+/// Only the mid/side counts are limited to `ONLY_LONG` frames: `search_for_ms`
+/// runs on the perceptual path, which is single-window by construction, while an
+/// eight-short-window frame keeps the energy mask, whose bands carry no such
+/// signature. Counting both together is how the first draft of this check
+/// reported ten "violations" that were really ten transition frames.
 fn aac_encode_test_tool_bands(
   stream : Array[Bytes],
   frames : Int32,
-) -> (Int32, Int32, Int32) {
+) -> (Int32, Int32, Int32, Int32, Int32) {
   let mut left_noise = 0
   let mut right_noise = 0
   let mut right_is = 0
+  let mut ms_bands = 0
+  let mut ms_bad_pair = 0
   for f = 0; f < frames; f = f + 1 {
     let payload = stream[f]
       .clamped_view(
@@ -1267,13 +1281,18 @@ fn aac_encode_test_tool_bands(
       abort("tool bands test: expected a common window")
     }
     let info = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gb))
-    if gb.read(2).reinterpret_as_int() == 1 {
+    let ms_mode = gb.read(2).reinterpret_as_int()
+    let ms_bits : Array[Bool] = Array::make(info.max_sfb, false)
+    if ms_mode != 0 {
       for b = 0; b < info.max_sfb; b = b + 1 {
-        let _ = gb.read1()
+        ms_bits[b] = gb.read1() == 1U
       }
     }
     let (_, m0) = aac_encode_test_parse_channel_common(gb, info)
     let (_, m1) = aac_encode_test_parse_channel_common(gb, info)
+    // See the note above: the energy mask of a short-window frame is not
+    // `search_for_ms` and has no scalefactor signature.
+    let long_window = info.window_sequence == 0
     for b = 0; b < info.max_sfb; b = b + 1 {
       if m0.sect_cb[0][b] == 13 {
         left_noise = left_noise + 1
@@ -1284,9 +1303,22 @@ fn aac_encode_test_tool_bands(
       } else if cb1 == 14 || cb1 == 15 {
         right_is = right_is + 1
       }
+      if ms_bits[b] && long_window {
+        ms_bands = ms_bands + 1
+        // Only a band both channels still code tells anything about the
+        // mid/side scalefactor rewrite: a noise band keeps `noise_sfi` and an
+        // intensity band keeps the position, both in their own chains.
+        let cb0 = m0.sect_cb[0][b]
+        if cb0 >= 1 && cb0 <= 11 && cb1 >= 1 && cb1 <= 11 {
+          let d = m0.scale_factors[0][b] - m1.scale_factors[0][b]
+          if d != 0 && d != 3 && d != 6 {
+            ms_bad_pair = ms_bad_pair + 1
+          }
+        }
+      }
     }
   }
-  (left_noise, right_noise, right_is)
+  (left_noise, right_noise, right_is, ms_bands, ms_bad_pair)
 }
 
 ///|
@@ -1315,11 +1347,9 @@ test "aac_lc_pns_with_intensity_stereo" {
   let both = aac_encode_test_stream_config(input, channels, frames, both_cfg)
   assert_true(both_cfg.pns)
   assert_true(both_cfg.is_stereo)
-  let (left_noise, right_noise, right_is) = aac_encode_test_tool_bands(
-    both,
-    frames,
-  )
-  let (pns_left, pns_right, pns_is) = aac_encode_test_tool_bands(
+  let (left_noise, right_noise, right_is, ms_both, _) =
+    aac_encode_test_tool_bands(both, frames)
+  let (pns_left, pns_right, pns_is, ms_pns, _) = aac_encode_test_tool_bands(
     pns_only,
     frames,
   )
@@ -1346,7 +1376,7 @@ test "aac_lc_pns_with_intensity_stereo" {
   }
   let snr = 10.0 * @math.log10(energy / noise)
   println(
-    "PNS + intensity stereo: noise bands \{pns_left}/\{pns_right} -> \{left_noise}/\{right_noise}, intensity bands \{pns_is} -> \{right_is}, bytes=\{pns_bytes}>\{both_bytes} snr=\{snr} peak=\{peak}",
+    "PNS + intensity stereo: noise bands \{pns_left}/\{pns_right} -> \{left_noise}/\{right_noise}, intensity bands \{pns_is} -> \{right_is}, mid/side bands \{ms_pns} -> \{ms_both}, bytes=\{pns_bytes}>\{both_bytes} snr=\{snr} peak=\{peak}",
   )
   // Both tools still fire, and the noise counts may only move through the
   // frame getting cheaper - never onto a band that is also an intensity band.
@@ -1356,6 +1386,50 @@ test "aac_lc_pns_with_intensity_stereo" {
   assert_true(both_bytes <= pns_bytes)
   assert_true(peak > 0.0 && peak < 2.0)
   assert_true(snr > -5.0)
+}
+
+///|
+/// §295: the perceptual path's mid/side mask now comes from FFmpeg's
+/// `search_for_ms`, which - unlike the energy mask it replaces - *rewrites* the
+/// pair's scalefactors: a claimed band is coded at
+/// `(mididx, sididx) = (clip(minidx, 0, 219), clip(minidx - 3*boost, 0, 219))`,
+/// so its two channels' scalefactors differ by 0, 3 or 6 steps and nothing else.
+/// That is checkable straight off the wire, and no other decision in the encoder
+/// can produce it, which makes it a better guard on the rewrite than any
+/// aggregate metric. The intensity variant of the same stream also has to carry
+/// the flip markers: `search_for_ms` leaves `ms_mask` alone on the bands
+/// intensity claimed, and the decoder reads exactly those bits to negate a
+/// reconstructed right channel.
+test "aac_lc_mid_side_search_rewrites_scalefactor_pairs" {
+  let rate = 44100
+  let channels = 2
+  let frames = 4
+  let bit_rate = 128000
+  let input = aac_encode_test_shared_high(rate, frames, true)
+  let base = @libavcodec.aac_encode_config_perceptual(rate, channels, bit_rate)
+  let plain = aac_encode_test_stream_config(input, channels, frames, base)
+  let iso = aac_encode_test_stream_config(
+    input,
+    channels,
+    frames,
+    @libavcodec.aac_encode_config_with_is(base),
+  )
+  let (_, _, _, ms_plain, ms_plain_bad) = aac_encode_test_tool_bands(
+    plain,
+    frames,
+  )
+  let (_, _, right_is, ms_iso, ms_iso_bad) = aac_encode_test_tool_bands(
+    iso,
+    frames,
+  )
+  println(
+    "mid/side search: bands \{ms_plain} (mid/side only) / \{ms_iso} (with intensity, \{right_is} intensity bands), scalefactor pairs off the 0/3/6 rule: \{ms_plain_bad}/\{ms_iso_bad}",
+  )
+  assert_true(ms_plain > 0)
+  assert_true(ms_iso > 0)
+  assert_true(right_is > 0)
+  assert_true(ms_plain_bad == 0)
+  assert_true(ms_iso_bad == 0)
 }
 
 ///|

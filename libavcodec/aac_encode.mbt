@@ -1076,38 +1076,6 @@ fn aac_encode_is_search(
 }
 
 ///|
-/// `apply_intensity_stereo`: the band's left channel keeps the phase-summed,
-/// energy-matched intensity signal and its right channel is emptied, because
-/// the decoder rebuilds that half by scaling the left one by
-/// `2^(-position / 4)` (`aac_apply_stereo`).
-fn aac_encode_apply_is(
-  left : Array[Double],
-  right : Array[Double],
-  offsets : Array[Int32],
-  num_swb : Int32,
-  num_windows : Int32,
-  bt : Array[Int32],
-  flip : Array[Bool],
-  scale : Array[Double],
-) -> Unit {
-  for b = 0; b < num_swb; b = b + 1 {
-    if bt[b] == 0 {
-      continue
-    }
-    let base = if bt[b] == aac_intensity_bt { 1.0 } else { -1.0 }
-    let p = if flip[b] { -base } else { base }
-    let s = scale[b]
-    for w = 0; w < num_windows; w = w + 1 {
-      for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
-        let sum = (left[i] + p * right[i]) * s
-        left[i] = sum
-        right[i] = 0.0
-      }
-    }
-  }
-}
-
-///|
 /// Mark the right channel's intensity bands after quantisation: their codebook
 /// becomes 14/15 and their scalefactor becomes the intensity position, which
 /// takes them out of the regular differential chain, out of `section_data`'s
@@ -1126,10 +1094,13 @@ fn aac_encode_mark_is(
 }
 
 ///|
-/// Simplified `search_for_ms`: a band switches to mid/side when the
-/// companded alphabet of `M = (L + R) / 2` and `S = (L - R) / 2` is smaller
-/// than that of `L` and `R` (the quantiser then spends fewer bits for the same
-/// error), which is the band-level form of FFmpeg's MS cost test.
+/// The simplified path's mid/side mask, standing in for `search_for_ms`: a band
+/// switches when the companded alphabet of `M = (L + R) / 2` and
+/// `S = (L - R) / 2` is smaller than that of `L` and `R` (the quantiser then
+/// spends fewer bits for the same error). It cannot be the real search on this
+/// path: `aac_ms_search` prices a band with twoloop's `sf_idx`/`band_type` and
+/// the psy thresholds, and the simplified model derives its scalefactor from the
+/// spectrum after the mix, so at decision time it has neither.
 fn aac_encode_ms_mask(
   left : Array[Double],
   right : Array[Double],
@@ -1161,8 +1132,11 @@ fn aac_encode_ms_mask(
 
 ///|
 /// `apply_mid_side_stereo`: on the masked bands replace `(L, R)` by
-/// `(M, S) = ((L+R)/2, (L-R)/2)`; the decoder's inverse is `L = M + S`,
-/// `R = M - S`, so the factor 0.5 is what makes the pair an isometry.
+/// `M = (L + R) * 0.5`, `S = M - R`; the decoder's inverse is `L = M + S`,
+/// `R = M - S`, so the factor 0.5 is what makes the pair an isometry. The side
+/// is written as `M - R` rather than `(L - R) * 0.5` because that is the
+/// expression upstream evaluates - the two differ in the last bit, and the
+/// mid/side search priced the band with `M - R`.
 fn aac_encode_apply_ms(
   left : Array[Double],
   right : Array[Double],
@@ -1177,10 +1151,9 @@ fn aac_encode_apply_ms(
     }
     for w = 0; w < num_windows; w = w + 1 {
       for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
-        let l = left[i]
-        let r = right[i]
-        left[i] = (l + r) * 0.5
-        right[i] = (l - r) * 0.5
+        let m = (left[i] + right[i]) * 0.5
+        right[i] = m - right[i]
+        left[i] = m
       }
     }
   }
@@ -1211,9 +1184,11 @@ fn aac_encode_stereo_none(num_swb : Int32) -> AacEncStereo {
 }
 
 ///|
-/// The stereo tools of a channel pair, in `aacenc.c`'s order: intensity first
-/// (`apply_intensity_stereo`), then mid/side (`apply_mid_side_stereo`). Two
-/// exclusions are copied from upstream: a band coded as intensity leaves the
+/// The simplified path's stereo tools, in `aacenc.c`'s order: intensity first
+/// (`apply_intensity_stereo`), then mid/side (`apply_mid_side_stereo`); the
+/// perceptual path uses `aac_encode_stereo_psy`, whose mid/side decision is the
+/// ported `search_for_ms`. Two exclusions are copied from upstream: a band
+/// coded as intensity leaves the
 /// mid/side mask (`search_for_ms` does that with `if (!is_mask) ms_mask = 0`),
 /// and so does a band either channel codes as `NOISE_BT` - which is what
 /// `apply_mid_side_stereo`'s own `band_type >= NOISE_BT` guard is for, because
@@ -1254,7 +1229,7 @@ fn aac_encode_stereo(
     ms_mask[b] = mask[b] && bt[b] == 0 && noise[b] == 0
   }
   if use_is {
-    aac_encode_apply_is(
+    aac_is_apply(
       left,
       right,
       offsets,
@@ -1270,13 +1245,18 @@ fn aac_encode_stereo(
 }
 
 ///|
-/// The perceptual path's stereo stage: FFmpeg's cost-based
-/// `ff_aac_search_for_is` over the analysed pair, then the energy mid/side mask
-/// on the bands intensity left alone. A flip band - the case
-/// `search_for_is` answers by setting `ms_mask` and picking the other band
-/// type - keeps its mid/side bit in the bitstream so the decoder can negate
-/// that band's reconstructed right channel, but is still not mixed:
-/// `apply_mid_side_stereo` skips every band with `is_mask` set, flips included.
+/// The perceptual path's stereo stage, in `aacenc.c:983-995`'s order:
+/// `search_for_is` (only when intensity stereo is on) and its mix, then
+/// `search_for_ms` on the mixed pair, then `apply_mid_side_stereo`. The
+/// mid/side search *rewrites* both channels' scalefactor and band type on the
+/// bands it picks, so the caller must quantise and write what it returns, not
+/// what twoloop left behind - which is also why it runs on every rate-control
+/// iteration.
+/// A flip band - the case `search_for_is` answers by setting `ms_mask` and
+/// picking the other band type - keeps its mid/side bit in the bitstream so the
+/// decoder can negate that band's reconstructed right channel, but is still not
+/// mixed: `apply_mid_side_stereo` skips every band with `is_mask` set, flips
+/// included, and every band either channel codes as `NOISE_BT`.
 fn aac_encode_stereo_psy(
   work : Array[Array[Double]],
   band_sizes : Array[Int32],
@@ -1289,10 +1269,61 @@ fn aac_encode_stereo_psy(
   num_windows : Int32,
   sample_rate : Int32,
   lambda : Double,
-  noise : Array[Int32],
-) -> AacEncStereo {
-  let isr = aac_is_search(
-    aac_is_in(
+  use_is : Bool,
+) -> (AacEncStereo, AacMsOut) {
+  let no_mask : Array[Int32] = Array::make(num_swb, 0)
+  let (is_mask, bt, pos, scale, flip_in) = if use_is {
+    let isr = aac_is_search(
+      aac_is_in(
+        work[0],
+        work[1],
+        band_sizes,
+        thr[0],
+        thr[1],
+        twos[0].sf,
+        twos[1].sf,
+        cbs[0],
+        cbs[1],
+        zeros[0],
+        zeros[1],
+        num_swb,
+      ),
+      sample_rate,
+      lambda,
+    )
+    let pos : Array[Int32] = Array::make(num_swb, 0)
+    let mut prev = 0
+    for b = 0; b < num_swb; b = b + 1 {
+      if isr.is_mask[b] == 1 {
+        pos[b] = aac_encode_is_position(isr.is_ener1[b], prev)
+        prev = pos[b]
+      }
+    }
+    (isr.is_mask, isr.band_type1, pos, isr.is_ener0, isr.ms_mask)
+  } else {
+    (
+      no_mask.copy(),
+      no_mask.copy(),
+      no_mask.copy(),
+      Array::make(num_swb, 0.0),
+      no_mask.copy(),
+    )
+  }
+  let flip : Array[Bool] = Array::make(num_swb, false)
+  for b = 0; b < num_swb; b = b + 1 {
+    flip[b] = flip_in[b] == 1
+  }
+  aac_is_apply(work[0], work[1], offsets, num_swb, num_windows, bt, flip, scale)
+  // The right channel's band type already reads 14/15 on the intensity bands,
+  // and `search_for_ms` must see that: `ff_init_nextband_map` skips those
+  // entries, which is what keeps the scalefactor-delta chain it tests
+  // consistent with the one the bitstream will carry.
+  let cb1 : Array[Int32] = Array::make(num_swb, 0)
+  for b = 0; b < num_swb; b = b + 1 {
+    cb1[b] = if is_mask[b] == 1 { bt[b] } else { cbs[1][b] }
+  }
+  let ms = aac_ms_search(
+    aac_ms_in(
       work[0],
       work[1],
       band_sizes,
@@ -1301,48 +1332,24 @@ fn aac_encode_stereo_psy(
       twos[0].sf,
       twos[1].sf,
       cbs[0],
-      cbs[1],
+      cb1,
       zeros[0],
       zeros[1],
+      is_mask,
+      flip_in,
       num_swb,
     ),
-    sample_rate,
     lambda,
   )
-  let mask = aac_encode_ms_mask(work[0], work[1], offsets, num_swb, num_windows)
   let ms_mask : Array[Bool] = Array::make(num_swb, false)
-  let flip : Array[Bool] = Array::make(num_swb, false)
-  let bt : Array[Int32] = Array::make(num_swb, 0)
-  let pos : Array[Int32] = Array::make(num_swb, 0)
-  let mut prev = 0
-  for b = 0; b < num_swb; b = b + 1 {
-    if isr.is_mask[b] == 1 {
-      bt[b] = isr.band_type1[b]
-      flip[b] = isr.ms_mask[b] == 1
-      pos[b] = aac_encode_is_position(isr.is_ener1[b], prev)
-      prev = pos[b]
-    } else {
-      ms_mask[b] = mask[b] && noise[b] == 0
-    }
-  }
-  aac_encode_apply_is(
-    work[0],
-    work[1],
-    offsets,
-    num_swb,
-    num_windows,
-    bt,
-    flip,
-    isr.is_ener0,
-  )
-  for b = 0; b < num_swb; b = b + 1 {
-    if flip[b] {
-      ms_mask[b] = true
-    }
-  }
   let apply_mask : Array[Bool] = Array::make(num_swb, false)
   for b = 0; b < num_swb; b = b + 1 {
-    apply_mask[b] = ms_mask[b] && bt[b] == 0
+    ms_mask[b] = ms.ms_mask[b] == 1
+    apply_mask[b] =
+      ms_mask[b] &&
+        is_mask[b] == 0 &&
+        ms.cb0[b] < 13 &&
+        ms.cb1[b] < 13
   }
   aac_encode_apply_ms(
     work[0],
@@ -1352,7 +1359,10 @@ fn aac_encode_stereo_psy(
     apply_mask,
     num_windows,
   )
-  { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos }
+  (
+    { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos },
+    ms,
+  )
 }
 
 ///|
@@ -1774,19 +1784,25 @@ fn AacEncoder::channel_data(
 fn AacEncoder::channel_data_psy(
   self : AacEncoder,
   coef : Array[Double],
-  two : AacTwoResult,
+  final_sf : Array[Int32],
   seq : Int32,
   max_sfb : Int32,
   final_cb : Array[Int32],
   final_zeroes : Array[Int32],
   noise_sfi : Array[Int32],
 ) -> AacEncChannel {
-  let num_swb = two.sf.length()
+  let num_swb = final_sf.length()
   let sf : Array[Int32] = Array::make(num_swb, -1)
   let cb : Array[Int32] = Array::make(num_swb, 0)
   let q : Array[Int32] = Array::make(1024, 0)
   for b = 0; b < num_swb && b < max_sfb; b = b + 1 {
-    if final_zeroes[b] != 0 || two.sf[b] < 0 || final_cb[b] <= 0 {
+    // A band reaches here only if it is coded at all: codebooks 1..11 carry
+    // spectral data and `NOISE_BT` carries a scalefactor for the noise the
+    // decoder synthesises. The intensity band types (14/15), which
+    // `search_for_ms` leaves in the right channel's band type where intensity
+    // claimed the band, carry neither.
+    let coded = aac_encode_band_has_data(final_cb[b]) || final_cb[b] == 13
+    if final_zeroes[b] != 0 || final_sf[b] < 0 || !coded {
       continue
     }
     let start = self.swb_offsets[b]
@@ -1794,7 +1810,7 @@ fn AacEncoder::channel_data_psy(
     let noise = final_cb[b] == 13
     if !noise {
       let band = aac_twoloop_quantize_band(
-        coef, start, size, two.sf[b], final_cb[b],
+        coef, start, size, final_sf[b], final_cb[b],
       )
       for i = 0; i < size; i = i + 1 {
         q[start + i] = band[i]
@@ -1805,8 +1821,8 @@ fn AacEncoder::channel_data_psy(
     // already computed the scalefactor whose entry equals the generated
     // noise amplitude (`noise_amp = -pow2sf_tab[sfi + POW_SF2_ZERO]`), so
     // write that `sfi` into the independent noise chain. The regular chain
-    // instead uses `two.sf - 4`, whose decoded `sfo` is 100 lower.
-    sf[b] = if noise { noise_sfi[b] } else { two.sf[b] - 4 }
+    // instead uses `final_sf - 4`, whose decoded `sfo` is 100 lower.
+    sf[b] = if noise { noise_sfi[b] } else { final_sf[b] - 4 }
     cb[b] = final_cb[b]
   }
   { sf, cb, q, max_sfb, window_sequence: seq, num_windows: 1 }
@@ -2429,39 +2445,35 @@ pub fn AacEncoder::encode_frame(
         )
       }
       let mut st = stereo
+      // What the quantiser and the bitstream use per band: twoloop's
+      // scalefactors and band types, except where the mid/side search replaced
+      // them with the ones its chosen `(M, S)` pair was priced with.
+      let sf_ch : Array[Array[Int32]] = []
+      let cb_ch : Array[Array[Int32]] = []
+      for ch in 0..<self.config.channels {
+        sf_ch.push(twos[ch].sf)
+        cb_ch.push(cbs[ch])
+      }
       if self.config.channels == 2 {
-        let noise : Array[Int32] = Array::make(num_swb, 0)
-        for b = 0; b < num_swb; b = b + 1 {
-          noise[b] = if cbs[0][b] == 13 || cbs[1][b] == 13 { 1 } else { 0 }
-        }
-        st = if use_is {
-          aac_encode_stereo_psy(
-            work,
-            sizes,
-            thr,
-            twos,
-            cbs,
-            zeros,
-            offsets,
-            num_swb,
-            num_windows,
-            self.config.sample_rate,
-            self.lambda,
-            noise,
-          )
-        } else {
-          aac_encode_stereo(
-            work[0],
-            work[1],
-            offsets,
-            num_swb,
-            num_windows,
-            self.config.sample_rate,
-            self.lambda,
-            false,
-            noise,
-          )
-        }
+        let (psy_st, ms) = aac_encode_stereo_psy(
+          work,
+          sizes,
+          thr,
+          twos,
+          cbs,
+          zeros,
+          offsets,
+          num_swb,
+          num_windows,
+          self.config.sample_rate,
+          self.lambda,
+          use_is,
+        )
+        st = psy_st
+        sf_ch[0] = ms.sf0
+        cb_ch[0] = ms.cb0
+        sf_ch[1] = ms.sf1
+        cb_ch[1] = ms.cb1
         for b = 0; b < planned_max_sfb; b = b + 1 {
           if st.ms_mask[b] {
             st.ms_present = 1
@@ -2471,7 +2483,13 @@ pub fn AacEncoder::encode_frame(
       let chans : Array[AacEncChannel] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let one = self.channel_data_psy(
-          work[ch], twos[ch], seq, planned_max_sfb, cbs[ch], zeros[ch], sfi[ch],
+          work[ch],
+          sf_ch[ch],
+          seq,
+          planned_max_sfb,
+          cb_ch[ch],
+          zeros[ch],
+          sfi[ch],
         )
         if ch == 1 {
           aac_encode_mark_is(one, st.is_bt, st.is_pos)

@@ -1,8 +1,9 @@
-# AGENT HANDOFF — 2026-11-05 AAC 强度立体声（§290）
+# AGENT HANDOFF — 2026-11-05 AAC 强度立体声与 M/S（§290 → §295）
 
-本轮把 `aacenc_is.c` 的强度立体声接进了 `aac_encode.mbt`，码流侧由 ffmpeg 9.0.2
-外部解码验证通过；紧接着的 §291 已经把感知路径的顺序改成与 FFmpeg 同序，
-所以下一步的大件只剩**用真成本判据替换简化判据**。以下把"已经落地的"和
+这条线到这里，感知路径的三个工具（twoloop/PNS、`search_for_is`、`search_for_ms`）
+都已经与 FFmpeg 9.0.2 **逐位对拍**并接进了编码器：顺序、判据、成本量值、以及
+M/S 改写后的标度因子与带类型终值。默认（简化）路径保持原样，只在它自己的
+频率门 + 能量掩码上跑。剩下的事列在 §2b。以下把"已经落地的"和
 "下一次要怎么做的"分清楚。
 
 ## 1. 本轮交付了什么
@@ -93,17 +94,32 @@ if self.config.channels == 2 && its == 0 && use_is {
    强度带、再省 3.3% 码；混合流经 ffmpeg 9.0.2 解码 0 errors，PCM 与本解码器最大差
    4.47e-8。回归在 `aac_lc_pns_with_intensity_stereo`，配置叠加两个方向都测
    （`aac_lc_is_config`）。§288 那条结论仍然成立：噪声带写的是 `noise_sfi`。
-3. **`search_for_ms` 的完整形态**（`aaccoder.c:702` 的 `sid_sf_boost` 四轮尝试 +
-   `ff_sfdelta_can_replace`）——本移植的 M/S 掩码仍是能量版，等价于上游
-   `mid_side=1` 那条不重新定标的分支。IS 已经用掉了同一个 `ms_mask`（flip 带），
-   做这步时别把两条路径写歪。
-4. 短窗 IS：`num_windows` 与每窗带内偏移都参数化了，结构上走得通，但没有专门的
-   8 短窗 IS 夹具。
+3. ~~**`search_for_ms` 的完整形态**~~ —— **§295 已做完并逐位对拍**
+   （`libavcodec/aac_ms.mbt`，向量在 `aac_is_vectors/` 第二支）。踩到的两条已经
+   写进 §295 与 `agent.md`：C 的 `float` 字面量要按 f32 值存（`bmax` 差 1 ulp
+   就是这么来的），以及 `ms_mask` 是**读改写**——`search_for_is` 把 flip 位寄生
+   在那里，上游只对 `!is_mask` 的带写 0，重算整个掩码会清掉它。
+   简化路径仍用能量掩码（没有 twoloop 的 `sf/cb/阈值` 可定价）。
 
-另外两条小的：短窗 IS 结构上已经支持（`num_windows` 与每窗带内偏移都参数化了），
-但没有专门的 8 短窗夹具；`set_special_band_scalefactors` 上游是一轮里同时管
-IS 位置和噪声 `3+ceil(log2(pns_ener)*2)`，我们的噪声仍取 `search_for_pns` 的
-`noise_sfi`（§288 的结论，别说改回去）。
+## 2b. §295 之后剩下什么（按建议顺序）
+
+1. **短窗感知路径**：8×128 带计划 + `scale_factor_grouping` + 多窗 twoloop。
+   `aac_ms_search` 与 `aac_is_search` 都只写了单长窗形态（C 的 `w`/`w2` 外层循环
+   还在，接进去时是纯结构性工作），`search_for_ms` 里 mid/side 的 `Mmax/Smax`
+   是**整窗组**共用的，多窗时 `find_max_val(group_len, ...)` 的 `w2*128 + i` 步长
+   已经在 `aac_two_find_max_val` 里参数化好了。
+2. **短窗 IS 夹具**：结构上 `num_windows` 与每窗带内偏移都参数化了，缺的只是一组
+   8 短窗的真夹具。
+3. **f32 字面量的同类残留**（§295 列全了）：`aac_two_c_quant` 应为
+   `0.40539998626708984`；`aac_pns_search.mbt` 的 `1.948/0.9/0.7/1.15/0.88/0.85`
+   与 `aac_twoloop.mbt` 的 `1.15/0.00125/0.0125`、`aac_psy.mbt` 里那些从 C 源码
+   抄来的十进制常量，都要按 f32 值重存。现有夹具一个都没在翻转点上撞上，所以这
+   是"已知未清"的欠账而不是在跑的 bug；改完必须重跑 `aac_twoloop_vectors` /
+   `aac_pns_vectors` / `aac_psy_vectors` 并重新量一次端到端指标。
+4. **§289 偏差 2**：λ 重试里上游会重新 `analyze`（本移植每帧只分析一次）。
+5. `set_special_band_scalefactors` 上游是一轮里同时管 IS 位置和噪声
+   `3+ceil(log2(pns_ener)*2)`，我们的噪声仍取 `search_for_pns` 的 `noise_sfi`
+   （§288 的结论，别说改回去）。
 
 ## 3. 本轮踩到的坑（下一轮直接用）
 
@@ -131,6 +147,25 @@ IS 位置和噪声 `3+ceil(log2(pns_ener)*2)`，我们的噪声仍取 `search_fo
   被 `moon test --target wasm` 一起编译；本轮在测试运行中途把它 `mv` 走，构建图
   立刻报 `input ...\zz_is_pns\main.mbt missing`，那一次全量测试等于白跑。顺序要
   改成「先清 scratch，再起全量测试」，或者等测试跑完再清。
+- **`MSYS_NO_PATHCONV=1` 必须是 shell 前缀**，写成 `docker run -e MSYS_NO_PATHCONV=1`
+  对 Git Bash 的路径转换没有任何作用——本轮 `-v "$PWD":/w` 被转成
+  `.../ms_dump;W:\`，docker 直接报 `destination can't be '/'`。正确写法：
+  `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/w --entrypoint ffmpeg ...`。
+- **要"改了判据之后指标怎么动"的诚实对照，就把同一套测试在 HEAD 上重跑一次**：
+  `git worktree add --detach .scratch/head_wt HEAD` → 在那个工作树里跑
+  `moon test --target wasm libavcodec/aac_encode_vectors` → `git worktree remove
+  .scratch/head_wt --force`。比翻文档里的旧数字可靠（§291/§292 的打印口径并不
+  完全一致）。工作树放在 `.scratch/` 里就不会污染 `git status`，也不会被 moon
+  当成包（点目录被跳过）。
+- **给码流写"只有这个工具能造出来"的签名断言**，比再加一条聚合指标有用：
+  M/S 命中后两声道的标度因子只差 `3*boost`（0/3/6 步），于是
+  `aac_encode_test_tool_bands` 把掩码位读进来就能直接验。注意它只对
+  `ONLY_LONG` 帧成立——短窗帧走简化路径的能量掩码，第一版没加这个限定，
+  报了 10 个"违例"，其实那 10 个是 10 个过渡帧。
+- **改测试辅助函数的统计口径会重画既有结论**：同一支 helper 里加
+  `if window_sequence != 0 { continue }` 会让 §294 那条"噪声带数开不开 IS 都是
+  81/78"变成 51/46。限定要贴在真正需要它的那几行上（这里只有 M/S 计数），
+  别一把盖住整个循环。
 - 其余照旧：`moon fmt` 禁跑、heredoc 禁用（往 C 源里写含 `"\n"` 的行会被 Python
   吃一层转义，写完必须 `grep` 验证）、清理走 `.trash/<日期>/`、
   每条 bash 显式 `cd`、`libavcodec` 包**不要再加白盒测试**（wasm init 的

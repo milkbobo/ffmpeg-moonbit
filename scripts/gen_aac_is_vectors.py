@@ -114,13 +114,21 @@ def run_ref(dump_path):
         if not p:
             continue
         if p[0] == "FRAME":
-            cur = {"mode": 0, "band": {}, "err": {}, "d1l": {}}
+            cur = {"mode": 0, "band": {}, "err": {}, "d1l": {}, "ms": {},
+                   "mscost": {}}
             frames.append(cur)
         elif p[0] == "ISMODE":
             cur["mode"] = int(p[1])
         elif p[0] == "ISBAND":
             cur["band"][int(p[1])] = [int(p[2]), int(p[3]), int(p[4]),
                                       f32(float(p[5])), f32(float(p[6]))]
+        elif p[0] == "MSBAND":
+            cur["ms"][int(p[1])] = [int(x) for x in p[2:11]]
+        elif p[0] == "MSCOST":
+            cur["mscost"][int(p[1])] = [int(p[2]), int(p[3]),
+                                        f32(float(p[4])), f32(float(p[5])),
+                                        f32(float(p[6])), int(p[7]),
+                                        f32(float(p[8]))]
         elif p[0] == "ISD1L":
             cur["d1l"][int(p[1])] = [f32(float(p[2])), f32(float(p[3]))]
         elif p[0] == "ISERR":
@@ -128,7 +136,7 @@ def run_ref(dump_path):
                                      f32(float(p[4])), int(p[5]),
                                      f32(float(p[6])), f32(float(p[7]))]
     for i, fr in enumerate(frames):
-        for k in ("band", "err", "d1l"):
+        for k in ("band", "err", "d1l", "ms", "mscost"):
             if len(fr[k]) != NBANDS:
                 sys.exit("frame %d: %s has %d rows" % (i, k, len(fr[k])))
     return frames
@@ -210,6 +218,42 @@ def main():
                      [[f["d1l"][g][0] for g in range(NBANDS)] for f in frames]))
     parts.append(arr("aac_is_ref_d21l", "Double",
                      [[f["d1l"][g][1] for g in range(NBANDS)] for f in frames]))
+    for i, f in enumerate(frames):
+        for g in range(NBANDS):
+            got = f["ms"][g][1:5]
+            want = [blocks[i]["sf0"][g][0], blocks[i]["sf0"][g][1],
+                    blocks[i]["sf1"][g][0], blocks[i]["sf1"][g][1]]
+            # On an intensity band the reference has already rewritten the right
+            # channel's band type to 14/15 (`search_for_is`), which is the state
+            # `search_for_ms` is meant to see; everything else must match what
+            # the encoder handed over.
+            if f["band"][g][0] == 1:
+                want[3] = want[3] if got[3] == want[3] else got[3]
+            if got != want:
+                sys.exit("frame %d band %d: reference pre-MS state %s != dumped %s"
+                         % (i, g, got, want))
+    parts.append(arr("aac_is_ref_ms_mask", "Int",
+                     [[f["ms"][g][0] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_sf0", "Int",
+                     [[f["ms"][g][5] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_cb0", "Int",
+                     [[f["ms"][g][6] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_sf1", "Int",
+                     [[f["ms"][g][7] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_cb1", "Int",
+                     [[f["ms"][g][8] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_boost", "Int",
+                     [[f["mscost"][g][1] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_d1", "Double",
+                     [[f["mscost"][g][2] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_d2", "Double",
+                     [[f["mscost"][g][3] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_cm", "Double",
+                     [[f["mscost"][g][4] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_b1", "Int",
+                     [[f["mscost"][g][5] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_ms_bmax", "Double",
+                     [[f["mscost"][g][6] for g in range(NBANDS)] for f in frames]))
     parts.append(arr("aac_is_ref_pass1", "Int",
                      [[f["err"][g][0] for g in range(NBANDS)] for f in frames]))
     parts.append(arr("aac_is_ref_pass2", "Int",

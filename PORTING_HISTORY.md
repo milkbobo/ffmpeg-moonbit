@@ -7838,6 +7838,103 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   3/3；IS 与 PNS 各自单开的指标与 §293 一致（PNS 344/332 B、0.947 dB；
   IS 55 带、23.26 dB）；全量 **1401/1401** 通过。
 
+## 295. `search_for_ms` 完整形态：四轮 boost + 标度因子链守卫 + 逐位向量
+
+- **交付**：新模块 [libavcodec/aac_ms.mbt](file:///D:/project/FFmpeg-n9.0.2/moonbit/libavcodec/aac_ms.mbt)
+  搬 `aaccoder.c:702` 的 `search_for_ms`（本移植的感知路径只跑单长窗，就是那个
+  形态）：每带四轮 `sid_sf_boost`（side 的标度因子每轮再降 3 步）、
+  `ff_sfdelta_can_replace` 的 ±60 链守卫（左右各一条，配 `ff_init_nextband_map`
+  的 nextband）、`bmax = bval2bmax(g*17/num_swb)/0.0045` 的 side lambda 折扣、
+  `mslambda = min(1, λ/120)`，判据 `dist2 <= dist1 && B1 < B0`，命中就**改写两个
+  声道的 `sf_idx`/`band_type`**——mid/side 对是在 `min(sf_L, sf_R)` 上一起量化的。
+  - 接线：感知路径的立体声阶段变成
+    `search_for_is → apply_intensity_stereo → search_for_ms → apply_mid_side_stereo`，
+    与 `aacenc.c:983-995` 同序。`aac_encode_stereo_psy` 不再要求 IS 开着才走，
+    `use_is` 降成它的一个参数——上游 `mid_side` 默认 -1（自动）与
+    `intensity_stereo` 无关。能量版 `aac_encode_ms_mask` 只留在简化路径。
+  - 因为 M/S 会改写标度因子，`channel_data_psy` 改为吃**终值**：入参
+    `two : AacTwoResult` 换成 `final_sf : Array[Int32]`，调用方手里是
+    `sf_ch[ch]`/`cb_ch[ch]`（默认取 twoloop 的，感知 + 双声道时取
+    `aac_ms_search` 的）。
+- **逐位结果**：`aac_is_vectors` 2/2，第二支就是 M/S。`_ref/aacenc --is` 现在把
+  `aacenc.c` 剩下两步也重放：先调 harness 自带的 `ref_apply_intensity_stereo`
+  （那份函数在 `aacenc.c` 里是 `static`），再调真实的 `s->coder->search_for_ms`，
+  打印 `MSBAND`（搜索前/后各自的 `sf`/`cb`）与
+  `MSCOST <g> <mask> <boost> <dist1> <dist2> <mid_cost> <B1> <bmax>`。
+  4 帧 × 49 带里 `ms_mask`、`boost`、两条 `sf`、两条 `cb`、`dist1`、`dist2`、
+  mid 带成本、`B1`、`bmax` **全部逐位相等**（67 个 M/S 带）。
+- **二分抓出来的两个是真 bug，不是"浮点差一点"**：
+  1. **C 的 `float` 字面量必须按 f32 值存**。`dist2` 差 2 ulp 拆到
+     `mid_cost / B1 / bmax` 三层后，责任在 `bmax` 自己差 1 ulp：`bval2bmax` 里的
+     `0.001f`、`0.0035f` 和调用点的 `0.0045f` 被我用十进制原值写进了 f32 链，
+     而 `0.0035f` 的真实值是 `0.0035000001080334187`——拿 f64 常量去乘一个 f32
+     值，结果就差 1 ulp。模块里现在存 f32 值本身
+     （`aac_ms_b_offset/numerator/divisor`）。**同类残留**（本轮没动，已列全）：
+     `aac_two_c_quant` 存 `0.4054`，而 `C_QUANT = 0.4054f = 0.40539998626708984`；
+     `aac_pns_search.mbt` 的 `1.948 / 0.9 / 0.7 / 1.15 / 0.88 / 0.85` 与
+     `aac_twoloop.mbt` 的 `1.15 / 0.00125 / 0.0125` 同理。现有夹具都没在翻转点上
+     撞上它们，所以是本报告里唯一一处"已知但仍未清"的建模欠账。
+  2. **`ms_mask` 是读改写，不是重建**。能量版把掩码整个重算，于是把
+     `search_for_is` 存在那里的 **flip 位**清了；上游只在 `!is_mask` 时写 0，
+     IS 带（含 flip）原样保留。解码侧 `aac_apply_stereo` 正是读那一位决定强度
+     重建要不要取负号，所以这是行为差异而不是记账差异——向量的
+     `frame 0 band 28: ms_mask 0 != 1` 就是它。`AacMsIn` 因此多一个 `ms_mask` 入参。
+- **顺带补的三条**（都在这条接线的必经路上）：
+  - `aac_two_band_cost` 原来只对 `cb == 0` 走"能量×λ、0 位"分支。C 的分派表
+    （`aaccoder.c:229-245`）把 `NOISE_BT`/`INTENSITY_BT*` 也路由到
+    `BT_ZERO || BT_NOISE || BT_STEREO` 那条，而 `search_for_ms` 的守卫只看
+    `zeroes`/`is_mask`，**PNS 帧的噪声带一定以 `cb = 13` 撞进去**（表现为数组越界）。
+    条件改成 `cb == 0 || cb >= 13`。
+  - `apply_mid_side_stereo` 的 side 写成 `M - R` 而不是 `(L - R) * 0.5`：两者浮点
+    不等价，而 M/S 定价用的正是前者。
+  - `channel_data_psy` 的跳过条件从 `cb <= 0` 改成"可写码本 1..11 或 13"——M/S
+    之后右声道里 IS 带的 `cb` 已经是 14/15，按旧条件会被送去量化（越界）。
+- **实测对照**（44.1 kHz / 128 kbps / 2ch；"§294"一列不是记忆，是把同一套测试用
+  `git worktree add --detach .scratch/head_wt HEAD` 在 §294 那次提交上重跑取的）：
+
+  | 夹具 | §294 | §295 |
+  |---|---|---|
+  | 默认（简化）路径往返 | 339 B/帧、29.045006773915283 dB | **逐字符不变** |
+  | 感知四音往返 | 364 B/帧（最大 375）、21.30931496598712 dB | 366 B/帧（最大 377）、20.9957997118289 dB |
+  | 感知 NMR | 13.363791153781687 dB（谱 SNR 21.34233730385606） | 12.836482758794325 dB（谱 SNR 21.493286343967412） |
+  | PNS 白噪声 | 344 / 332 B、0.9469831016493362 dB | 345 / 342 B、0.9319619143497199 dB |
+  | PNS + IS | 81/78 噪声带、14 强度带、2994>2894 B、0.778484345306794 dB | 81/78、14、3078>2980 B、0.8124461374728804 dB |
+  | IS 共享高音 | 55 带、1744>1583 B、电平 −0.0886 dB、22.922868 → 23.256901 dB | 55 带、1756>1599 B、电平 −0.0887 dB、22.923309 → **23.361290** dB |
+  | IS 去相关 | 43 带、1773>1726 B、23.719339 → 25.267532 dB、本道 −0.1274 / 串道 −53.5549 dB | 43 带、1787>1720 B、22.122193 → 25.141611 dB、本道 −0.1031 / 串道 −51.8016 dB |
+
+  读法：
+  - 简化路径那一行**一个字符都没变**：它继续用能量掩码，`M - R` 的重写在 f64 下
+    没有挪动任何打印位。
+  - 感知路径的往返 SNR 降 0.31 dB、NMR 降 0.53 dB、码长 +2 B/帧。判据换人是原因，
+    不是缺陷：能量掩码要 `rm + rs < 0.9*(rl + rr)`（我们的发明），上游是
+    `dist2 <= dist1 && B1 < B0` 加"位数必须真减少"，并且命中后按
+    `min(sf_L, sf_R)` 重写标度因子。它的目标函数是 λ 下的率失真，不是 PCM 信噪比。
+  - 代价在噪声夹具上最明显（M/S 带 75 个、+84 B）：一旦有带被标记，整帧要付
+    `max_sfb` 位掩码数组，且 mid/side 对共享一个较粗的标度因子。
+  - IS 的两个夹具没有变差：共享高音 23.256901 → 23.361290 dB；去相关夹具里
+    开 IS 相对不开 IS 的增益从 +1.55 dB 涨到 +3.02 dB。
+- **外部对拍**：两条流交 docker `linuxserver/ffmpeg:9.0.2`——A = 感知 + M/S
+  的音序夹具（3166 B），B = 噪声 + PNS + IS（2980 B）——两次都是
+  `9 packets read; 9 frames decoded; 0 decode errors (9216 samples)`，`-v debug`
+  里没有 `invalid scalefactor code`，也没有 `Clipped intensity stereo position`。
+  ffmpeg 的 PCM 与本解码器：A 最大差 **1.49011612e-7**、RMS 2.41503e-8、
+  相对参考 SNR **138.963 dB**；B 最大差 **4.47034836e-8**、RMS 9.05029e-9、
+  SNR **138.404 dB**。即 M/S 改写后的标度因子链、噪声带上的掩码位、IS 的 flip 位
+  这三种新行为，都被 FFmpeg 自己的解码器原样接受。
+- **测试**：`aac_encode_vectors` 新增
+  `aac_lc_mid_side_search_rewrites_scalefactor_pairs`——M/S 带在码流上有别的工具
+  造不出来的签名：被改写的带两声道标度因子只差 **0 / 3 / 6** 步
+  （`mididx - sididx = 3*boost`）。为此 `aac_encode_test_tool_bands` 现在把掩码位
+  读进来而不是跳过，返回五元组（多 M/S 带数与违例数），实测 33（不开 IS）/ 15
+  （开 IS）带、违例 0。第一版把这条性质套到所有帧上报了 10 个"违例"，其实是
+  10 个**过渡帧**：短窗帧走简化路径的能量掩码，本来就没有这个签名。
+- **仍未做**：短窗 IS 夹具；短窗感知路径（8×128 带计划 + grouping + 多窗 twoloop，
+  `search_for_ms` 的 `w2` 外层循环也因此还没被多窗形态验证过）；§289 偏差 2
+  （λ 重试里上游会重新 `analyze`）；上面列出的 f32 字面量残留。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_is_vectors` 2/2
+  （新增 M/S 逐位向量）、`aac_encode_vectors` 16/16、`aac_twoloop_vectors` 3/3、
+  `aac_pns_vectors` 3/3；全量 **1403/1403** 通过。
+
 
 
 

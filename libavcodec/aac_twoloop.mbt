@@ -336,7 +336,12 @@ fn aac_two_quantize_bands(
 /// Codebook flags (`aaccoder.c:217-228`): 1/2 signed quads, 3/4 unsigned
 /// quads, 5/6 signed pairs, 7..10 unsigned pairs, 11 unsigned pairs with
 /// escape. Codebook 0 codes nothing and returns the band energy as
-/// distortion.
+/// distortion, and so do the band types from `NOISE_BT` on (13 = PNS, 14/15 =
+/// intensity): the dispatch table (`aaccoder.c:229-245`) routes them to the
+/// `BT_ZERO || BT_NOISE || BT_STEREO` branch of the template, which is the same
+/// energy-shaped cost and no bits. `search_for_ms` reaches that branch on the
+/// noise bands of a PNS frame, because its own guard excludes only zeroed and
+/// intensity bands.
 fn aac_two_band_cost(
   input : Array[Double],
   in_off : Int32,
@@ -348,7 +353,7 @@ fn aac_two_band_cost(
   cb : Int32,
   lambda : Double,
 ) -> AacTwoCost {
-  if cb == 0 {
+  if cb == 0 || cb >= 13 {
     let mut acc = 0.0
     for i in 0..<size {
       acc = aac_two_add(acc, aac_two_mul(input[in_off + i], input[in_off + i]))

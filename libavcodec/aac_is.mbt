@@ -261,6 +261,38 @@ fn aac_is_spec_err(
 }
 
 ///|
+/// `apply_intensity_stereo`: the band's left channel keeps the phase-summed,
+/// energy-matched intensity signal and its right channel is emptied, because
+/// the decoder rebuilds that half by scaling the left one by
+/// `2^(-position / 4)` (`aac_apply_stereo`).
+pub fn aac_is_apply(
+  left : Array[Double],
+  right : Array[Double],
+  offsets : Array[Int32],
+  num_swb : Int32,
+  num_windows : Int32,
+  bt : Array[Int32],
+  flip : Array[Bool],
+  scale : Array[Double],
+) -> Unit {
+  for b = 0; b < num_swb; b = b + 1 {
+    if bt[b] == 0 {
+      continue
+    }
+    let base = if bt[b] == aac_intensity_bt { 1.0 } else { -1.0 }
+    let p = if flip[b] { -base } else { base }
+    let s = scale[b]
+    for w = 0; w < num_windows; w = w + 1 {
+      for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
+        let sum = (left[i] + p * right[i]) * s
+        left[i] = sum
+        right[i] = 0.0
+      }
+    }
+  }
+}
+
+///|
 /// `ff_aac_search_for_is` (`aacenc_is.c:109`), one long window.
 pub fn aac_is_search(
   d : AacIsIn,

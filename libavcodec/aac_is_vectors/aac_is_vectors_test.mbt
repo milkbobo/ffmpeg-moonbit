@@ -18,16 +18,15 @@
 /// `dist1`/`dist2` magnitudes instead of comparing them, because the escape
 /// codebook's `c*cbrtf(c)` was being recomputed with a double `cbrt`; §293
 /// traces that to 2196 one-ulp disagreements with the encoder's own
-/// single-precision `cbrtf` and fixes it with a transcribed table.
+/// single-precision `cbrtf` and fixes it with a transcribed table, and §295
+/// closed the last gap of the same kind (C's `float` literals have to be stored
+/// as f32 values) in the mid/side search below.
 ///
 /// What the encoder consumes - `is_mask`, the resulting `ms_mask`, the
 /// right channel's band type, the two `is_ener` values, the per-phase `pass`
-/// flags and `cpe->is_mode` - is asserted **exactly**. The `dist1`/`dist2`
-/// magnitudes are measured instead: they only matter through the comparison
-/// that the `pass` flags already pin, and one of them currently lands a few
-/// float ulps off (`PORTING_HISTORY.md` §292 records the gap: §278 only ever
-/// asserted the search's per-band *decisions*, never a cost magnitude at a
-/// non-unit lambda, so the accumulation gap shows up here first).
+/// flags and `cpe->is_mode` - is asserted exactly, and so are the magnitudes:
+/// one test per tool, both pinning the comparison itself rather than only its
+/// outcome.
 
 test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands)" {
   let swb = match @libavcodec.aac_swb_tables(4) {
@@ -141,4 +140,157 @@ test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands
   // per-band equality asserted above is what pins it.
   println("IS vectors: \{is_bands} intensity bands over \{frames} frames")
   assert_true(is_bands > 0)
+}
+
+///|
+/// Black-box regression for the ported mid/side search: `_ref/aacenc/aac_ref.exe
+/// --is` keeps going after the intensity stage - it mixes the intensity bands in
+/// (`apply_intensity_stereo`) and then runs `search_for_ms`, which decides
+/// mid/side per band and *rewrites* both channels' scalefactor and band type.
+/// The fixture therefore carries, per band, the mask, the boost round that
+/// settled it, the two distortion sums and the outgoing `sf_idx`/`band_type`;
+/// everything is compared exactly, on the state our own (bit-exact) intensity
+/// stage produced.
+test "AAC mid/side search matches FFmpeg 9.0.2 aaccoder.c (4 frames x 49 bands)" {
+  let swb = match @libavcodec.aac_swb_tables(4) {
+    Ok(v) => v
+    Err(e) => {
+      println("AAC ms test error: \{e}")
+      abort("AAC ms test: no swb table")
+    }
+  }
+  let n = swb.num_long
+  let offsets : Array[Int32] = []
+  let sizes : Array[Int32] = []
+  for g in 0..<n {
+    let a = swb.offsets_long[g].reinterpret_as_int()
+    let b = swb.offsets_long[g + 1].reinterpret_as_int()
+    offsets.push(a)
+    sizes.push(b - a)
+  }
+  offsets.push(swb.offsets_long[n].reinterpret_as_int())
+  let frames = @aac_is_vectors.aac_is_spec0.length()
+  let mut ms_bands = 0
+  for f in 0..<frames {
+    let isr = @libavcodec.aac_is_search(
+      @libavcodec.aac_is_in(
+        @aac_is_vectors.aac_is_spec0[f],
+        @aac_is_vectors.aac_is_spec1[f],
+        sizes,
+        @aac_is_vectors.aac_is_thr0[f],
+        @aac_is_vectors.aac_is_thr1[f],
+        @aac_is_vectors.aac_is_sf0[f],
+        @aac_is_vectors.aac_is_sf1[f],
+        @aac_is_vectors.aac_is_cb0[f],
+        @aac_is_vectors.aac_is_cb1[f],
+        @aac_is_vectors.aac_is_zero0[f],
+        @aac_is_vectors.aac_is_zero1[f],
+        n,
+      ),
+      44100,
+      120.0,
+    )
+    // The reference's mid/side search reads the spectra *after* the intensity
+    // mix, so mix them the same way before comparing its decisions.
+    let flip : Array[Bool] = []
+    for g in 0..<n {
+      flip.push(isr.ms_mask[g] == 1)
+    }
+    let left = @aac_is_vectors.aac_is_spec0[f].copy()
+    let right = @aac_is_vectors.aac_is_spec1[f].copy()
+    @libavcodec.aac_is_apply(
+      left, right, offsets, n, 1, isr.band_type1, flip, isr.is_ener0,
+    )
+    // On an intensity band the right channel's type has already become 14/15.
+    let cb1 : Array[Int32] = []
+    for g in 0..<n {
+      cb1.push(if isr.is_mask[g] == 1 { isr.band_type1[g] } else {
+        @aac_is_vectors.aac_is_cb1[f][g]
+      })
+    }
+    let ms = @libavcodec.aac_ms_search(
+      @libavcodec.aac_ms_in(
+        left,
+        right,
+        sizes,
+        @aac_is_vectors.aac_is_thr0[f],
+        @aac_is_vectors.aac_is_thr1[f],
+        @aac_is_vectors.aac_is_sf0[f],
+        @aac_is_vectors.aac_is_sf1[f],
+        @aac_is_vectors.aac_is_cb0[f],
+        cb1,
+        @aac_is_vectors.aac_is_zero0[f],
+        @aac_is_vectors.aac_is_zero1[f],
+        isr.is_mask,
+        // The flip markers the intensity search left in `ms_mask`; the
+        // mid/side search must carry them through untouched.
+        isr.ms_mask,
+        n,
+      ),
+      120.0,
+    )
+    for g in 0..<n {
+      let want_mask = @aac_is_vectors.aac_is_ref_ms_mask[f][g]
+      if ms.ms_mask[g] != want_mask {
+        fail(
+          "frame \{f} band \{g}: ms_mask \{ms.ms_mask[g]} != \{want_mask} (boost \{ms.boost[g]}, dists \{ms.dist1[g]} / \{ms.dist2[g]}, reference \{@aac_is_vectors.aac_is_ref_ms_d1[f][g]} / \{@aac_is_vectors.aac_is_ref_ms_d2[f][g]}, sf \{ms.sf0[g]}/\{ms.sf1[g]} vs \{@aac_is_vectors.aac_is_ref_ms_sf0[f][g]}/\{@aac_is_vectors.aac_is_ref_ms_sf1[f][g]})",
+        )
+      }
+      if ms.boost[g] != @aac_is_vectors.aac_is_ref_ms_boost[f][g] {
+        fail(
+          "frame \{f} band \{g}: boost \{ms.boost[g]} != \{@aac_is_vectors.aac_is_ref_ms_boost[f][g]}",
+        )
+      }
+      if ms.sf0[g] != @aac_is_vectors.aac_is_ref_ms_sf0[f][g] {
+        fail(
+          "frame \{f} band \{g}: sf0 \{ms.sf0[g]} != \{@aac_is_vectors.aac_is_ref_ms_sf0[f][g]}",
+        )
+      }
+      if ms.cb0[g] != @aac_is_vectors.aac_is_ref_ms_cb0[f][g] {
+        fail(
+          "frame \{f} band \{g}: cb0 \{ms.cb0[g]} != \{@aac_is_vectors.aac_is_ref_ms_cb0[f][g]}",
+        )
+      }
+      if ms.sf1[g] != @aac_is_vectors.aac_is_ref_ms_sf1[f][g] {
+        fail(
+          "frame \{f} band \{g}: sf1 \{ms.sf1[g]} != \{@aac_is_vectors.aac_is_ref_ms_sf1[f][g]}",
+        )
+      }
+      if ms.cb1[g] != @aac_is_vectors.aac_is_ref_ms_cb1[f][g] {
+        fail(
+          "frame \{f} band \{g}: cb1 \{ms.cb1[g]} != \{@aac_is_vectors.aac_is_ref_ms_cb1[f][g]}",
+        )
+      }
+      if ms.dist1[g] != @aac_is_vectors.aac_is_ref_ms_d1[f][g] {
+        fail(
+          "frame \{f} band \{g}: dist1 \{ms.dist1[g]} != \{@aac_is_vectors.aac_is_ref_ms_d1[f][g]}",
+        )
+      }
+      if ms.dist2[g] != @aac_is_vectors.aac_is_ref_ms_d2[f][g] {
+        fail(
+          "frame \{f} band \{g}: dist2 \{ms.dist2[g]} != \{@aac_is_vectors.aac_is_ref_ms_d2[f][g]} (mid \{ms.mid_cost[g]} vs \{@aac_is_vectors.aac_is_ref_ms_cm[f][g]}, bits \{ms.bits1[g]} vs \{@aac_is_vectors.aac_is_ref_ms_b1[f][g]}, bmax \{ms.bmax[g]} vs \{@aac_is_vectors.aac_is_ref_ms_bmax[f][g]})",
+        )
+      }
+      if ms.mid_cost[g] != @aac_is_vectors.aac_is_ref_ms_cm[f][g] {
+        fail(
+          "frame \{f} band \{g}: mid cost \{ms.mid_cost[g]} != \{@aac_is_vectors.aac_is_ref_ms_cm[f][g]}",
+        )
+      }
+      if ms.bits1[g] != @aac_is_vectors.aac_is_ref_ms_b1[f][g] {
+        fail(
+          "frame \{f} band \{g}: side bits \{ms.bits1[g]} != \{@aac_is_vectors.aac_is_ref_ms_b1[f][g]}",
+        )
+      }
+      if ms.bmax[g] != @aac_is_vectors.aac_is_ref_ms_bmax[f][g] {
+        fail(
+          "frame \{f} band \{g}: bmax \{ms.bmax[g]} != \{@aac_is_vectors.aac_is_ref_ms_bmax[f][g]}",
+        )
+      }
+      if want_mask == 1 {
+        ms_bands = ms_bands + 1
+      }
+    }
+  }
+  println("MS vectors: \{ms_bands} mid/side bands over \{frames} frames")
+  assert_true(ms_bands > 0)
 }

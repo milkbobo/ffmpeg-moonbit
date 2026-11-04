@@ -142,7 +142,13 @@
   IS 判据在感知路径上已经是 FFmpeg 的 `aac_is_encoding_err` 成本比较（§292，
   `libavcodec/aac_is.mbt`，逐位对拍见 `libavcodec/aac_is_vectors/`）；只有默认
   （简化）路径还留着 §290 的频率门 + `|rho| >= 0.95`，因为那条路径没有
-  twoloop 的 `sf/band_type/阈值` 可定价。三条硬知识：
+  twoloop 的 `sf/band_type/阈值` 可定价。M/S 掩码同理：感知路径已经是 FFmpeg 的
+  `search_for_ms`（§295，`libavcodec/aac_ms.mbt`，逐位对拍在同一个
+  `aac_is_vectors/` 里——harness 的 `--is` 模式把 IS 之后的两步一起重放），
+  简化路径仍用能量掩码（`rm + rs < 0.9*(rl + rr)`，我们的发明，没有 twoloop 的
+  成本可定价）。感知路径换判据后的实测：往返 SNR 让出 0.31 dB、码长 +2 B/帧，
+  但 IS 夹具上开 IS 的增益从 +1.55 dB 涨到 +3.02 dB——它的目标函数是 λ 下的
+  率失真，不是 PCM 信噪比。硬知识：
   ① C 的 `IS[i] = (L + phase*R) * sqrt(ener0/ener01)` 里开方是 **double**
   （除法才是 float），只在存回数组时舍一次 float，照抄才不会差 ulp；
   ② `_ref/aacenc` 的 `--is` 模式要把 `ff_psy_init` 的 `group_map[0]` 写成
@@ -153,6 +159,22 @@
   `quantized = c*cbrtf(c)*IQ` **不能**按「double `cbrt` 再舍 f32」建模——
   本机工具链的 `cbrtf` 在 `c = 0..8191` 里有 2196 个值与它差 1 ulp（§293），
   所以 `aac_twoloop_cbrt_prod` 是从 `dump_tables.c` 的 `CBRT` 记录零转录来的。
+  ⑤ **C 的 `float` 字面量必须按 f32 值存**：`0.0035f` 的真值是
+  `0.0035000001080334187`，把十进制原值当 f64 喂进 `aac_two_mul` 会差 1 ulp——
+  §295 的 `dist2` 差 2 ulp 就是这么来的（拆到 `bmax` 那层才看见）。同类残留还没清：
+  `aac_two_c_quant` 存 `0.4054` 而 `C_QUANT = 0.4054f = 0.40539998626708984`，
+  `aac_pns_search.mbt` 的 `1.948/0.9/0.7/1.15/0.88/0.85` 与 `aac_twoloop.mbt` 的
+  `1.15/0.00125/0.0125` 同理（现有夹具都没在翻转点上撞上）。
+  ⑥ `quantize_and_encode_band_cost` 的分派表把 `cb` 13/14/15 也送到
+  `BT_ZERO || BT_NOISE || BT_STEREO` 那条（成本 = 带能量×λ、0 位），
+  所以 `aac_two_band_cost` 的条件是 `cb == 0 || cb >= 13`；`search_for_ms`
+  的守卫只看 `zeroes`/`is_mask`，PNS 帧的噪声带**一定**以 `cb = 13` 撞进去。
+  ⑦ `apply_mid_side_stereo` 的 side 是 `M - R`，不是 `(L - R) * 0.5`；
+  浮点不等价，而 M/S 定价用的就是前者。
+  ⑧ M/S 命中会改写两声道的 `sf_idx`/`band_type`（成对量化在
+  `min(sf_L, sf_R)`），所以量化与写码流必须吃终值——`channel_data_psy` 收
+  `final_sf`/`final_cb` 而不是 `AacTwoResult`。代价是右声道 IS 带的 `cb` 这时
+  已经是 14/15，跳过量化的条件不能再写 `cb <= 0`。
   flip 带只写 `ms_mask` 位、不做 M/S 混合（上游 `apply_mid_side_stereo` 跳过
   所有 `is_mask` 带，符号翻转由解码器完成）。另有两条硬约束：IS 带写进
   码流的是**强度位置**（范围 `[-155,100]`，正负一样常见），所以
@@ -163,9 +185,14 @@
   `aac_is_search` 拿到的就是 PNS 终值 `cb`/`zeroes`，噪声带与空带都被它自己的
   门排除（与上游 `band_type != NOISE_BT && !zeroes` 同一条），实测同一条噪声夹具
   的噪声带数在开不开 IS 时完全相同（81/78），IS 另加 14 个强度带、再省 3.3% 码。
-  IS 带一律从 `ms_mask` 清掉（对齐上游 `search_for_ms` +
-  `apply_mid_side_stereo` 的双重排除；解码侧 `aac_apply_stereo` 用
-  `sect_cb < 13` 做同一件事）。
+  IS 带一律**不被 M/S 改写**，但它们的 `ms_mask` 位是**读改写** surviving 的：
+  `search_for_is` 把 out-of-phase（flip）标记寄存在 `ms_mask` 里，上游
+  `search_for_ms` 只对 `!is_mask` 的带写 0（`aaccoder.c:727`），IS 带原样保留，
+  解码侧 `aac_apply_stereo` 正是读那一位决定强度重建要不要取负号。把掩码整个
+  重算（能量版的写法）会清掉 flip 位，是行为差异不是记账差异（§295 的向量
+  `frame 0 band 28` 抓的就是它）。两个声道都是 `NOISE_BT` 的带可以留着掩码位
+  ——`apply_mid_side_stereo` 与解码侧 `aac_apply_stereo` 都用
+  `band_type/sect_cb < 13` 跳过混合，只写位不混谱。
   MP3 的表来自编译后 C 参考的零转录 dump（`scripts/gen_mp3_enc_tables.sh`
   可重建 dumper/harness 并再生成表与夹具）；`calc_scfsi` 的 `mp3enc_ln`
   与 C 侧 `shine_ref_log` 必须保持同一段 IEEE 运算（libm log 跨平台位级
