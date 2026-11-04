@@ -7221,7 +7221,10 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `aac_twoloop_vectors` 3/3、`aac_encode_vectors` 9/9；全量
   `moon test --target wasm` **1391/1391** 通过。
 
-## 283. AAC PNS：可行性勘察（**未实现**，代码零改动）
+## 283. AAC PNS：可行性勘察（第 1 步已落地，见 §284；其余未实现）
+
+- **⚠ 状态**：本条的六步清单里，**第 1 步（`mark_pns`）已在 §284 完成**，其余
+  （twoloop 三处、`search_for_pns`、码流、端到端、新夹具）仍未实现。
 
 - **为什么单独记一条**：PNS 看起来只是"再加一个 aaccoder 函数"，实际是四个子系统
   联动，而且有一处反直觉的语义（下面第 1 条）。先把勘察结果写下来，避免下一轮重新
@@ -7266,6 +7269,38 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
      噪声突发**才能让 PNS 真正触发；否则测试等于没测。
 - **结论**：这是一整轮的量（≈300 行 + 一处码流改动 + 新夹具 + 两套对拍）。本轮
   只做勘察，没有动代码。
+
+## 284. AAC PNS 第 1 步：`mark_pns` 移植 + 逐带向量
+
+- **交付**：
+  - `libavcodec/aac_pns.mbt`：`aac_pns_mark(bands, offsets, num_swb, sample_rate,
+    bit_rate, channels, lambda)`，即 `aaccoder.c:631` 的 `mark_pns`（单长窗）。
+    三道门限：4 kHz 以上且低于带宽 cutoff；能量不低于
+    `threshold·sqrt(1.5/freq_boost)`；`spread ≥ spread_threshold`（λ=120 时 0.75）。
+  - `libavcodec/aac_pns_vectors/`：5 帧 × 49 带向量（`can_pns` 精确、`pns_ener`
+    相对 1e-6），由 `scripts/gen_aac_pns_vectors.py` 从
+    `_ref/aacenc/aac_ref.exe --pns` 生成。
+  - `_ref/aacenc/harness.c`：新增 `--pns` 模式——用 LCG 噪声谱（纯音谱的
+    spread 到不了 0.9，PNS 永不触发）+ `options.pns=1` + `s->lambda=120`，在
+    twoloop 之前调 `mark_pns` 并打印 `PSNMARK`。默认模式输出**零 diff**。
+- **结果**：5 帧共 **245 带 `can_pns` 全等**（其中 99 带为 1，全部落在 4 kHz
+  与 cutoff 之间），`pns_ener` 相对误差 < 1e-6。
+- **两个新踩的坑**（都值得记住）：
+  1. **psy 的 cutoff 是粘性的**。C 的 twoloop 每帧把 `bandwidth` 写回
+     `s->psy.cutoff`；PNS 打开时它先给 per-channel 码率乘 1.15，于是第 1 帧起 psy
+     用 16600 Hz（不乘是 16000）。我们的移植每帧重算，结果第 1 帧第 43 带的
+     energy 被算成 0（C 是 4.04e7），`can_pns` 直接判错。已给 `AacPsyContext` 加
+     `mut cutoff`（0 = 自动）+ `cutoff()` / `set_cutoff()`，`analyze` 优先用它；
+     既有测试不设置，所以 §277 3/3、§278 3/3、§281 的编码器 9/9 **逐位不变**。
+  2. `cutoff = bandwidth * 2 * wlen / sample_rate`，第一版漏了 `2`，从 band 32
+     起全线判错（0 对 1）。
+- **下一步**：§283 清单的第 2 步（twoloop 三处耦合：`ff_pns_bits` 进 `tbits`、
+  `frame_bit_rate ×= 1.15` 影响 cutoff、`its > maxits/2` 的 spread 置零块）。
+  现有 245 条 twoloop 黄金向量必须保持逐位一致（它们 `can_pns=0`）。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_pns_vectors` 1/1、
+  `aac_psy_vectors` 3/3、`aac_twoloop_vectors` 3/3、`aac_encode_vectors` 9/9；
+  全量见下一条提交时的记录。
+
 
 
 

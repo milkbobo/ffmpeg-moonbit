@@ -223,6 +223,10 @@ pub struct AacPsyContext {
   prev_band : Array[Array[AacPsyBandState]]
   /// Per-channel perceptual entropy of the last analysed frame.
   entropy : Array[Double]
+  /// Bandwidth the quantiser settled on (Hz), 0 = derive from the bit rate.
+  /// Written back by the caller once the quantiser has run, exactly like
+  /// `s->psy.cutoff = bandwidth` in the C encoder.
+  mut cutoff : Int32
   /// Element-level allocation (`bitres.alloc`), shared by the channels of one
   /// element exactly like `FFPsyContext.bitres` is.
   mut alloc : Int32
@@ -566,11 +570,35 @@ pub fn aac_psy_new(
     bands,
     entropy,
     alloc: -1,
+    cutoff: 0,
   }
   aac_psy_init_coeffs(ctx, sampling_index, bandwidth)
   ctx
 }
 
+///|
+/// Bandwidth the model analyses with (Hz). 0 means "derive from the bit rate".
+pub fn AacPsyContext::cutoff(self : AacPsyContext) -> Int32 {
+  self.cutoff
+}
+
+///|
+/// Set the sticky bandwidth the next analyses use (0 restores the derivation).
+/// The C encoder does this from the quantiser (`s->psy.cutoff = bandwidth`),
+/// which is why the value carries over to later frames.
+pub fn AacPsyContext::set_cutoff(self : AacPsyContext, bandwidth : Int32) -> Unit {
+  self.cutoff = bandwidth
+}
+
+///|
+/// Bandwidth the model analyses with when it has to derive it from the bitrate.
+pub fn aac_psy_model_bandwidth(
+  bit_rate : Int32,
+  channels : Int32,
+  sample_rate : Int32,
+) -> Int32 {
+  aac_psy_cutoff(bit_rate, channels, sample_rate)
+}
 ///|
 /// Scalefactor band sizes of the long window, exactly as `psy_3gpp_init`
 /// derived them from the swb offset table. The twoloop quantizer needs the
@@ -611,11 +639,15 @@ pub fn AacPsyContext::analyze(
   // the first window after LONG_START (w == 0, which is always here).
   let skip_preecho = window_type == aac_long_stop ||
     prev_window_type == aac_long_start
-  let bandwidth = aac_psy_cutoff(
-    self.bit_rate,
-    self.channels,
-    self.sample_rate,
-  )
+  // `FFPsyContext.cutoff` is sticky: the quantiser writes the bandwidth it
+  // settled on back into the model, so from the second frame on the analysis
+  // uses that value instead of recomputing it (with PNS enabled the quantiser
+  // scales the bitrate by 1.15 first, which widens the band).
+  let bandwidth = if self.cutoff > 0 {
+    self.cutoff
+  } else {
+    aac_psy_cutoff(self.bit_rate, self.channels, self.sample_rate)
+  }
   let cutoff = bandwidth * 2048 / self.sample_rate
   let avoid_hole_thr = psy_ah_thr_long
   // 5.4.2 threshold calculation
