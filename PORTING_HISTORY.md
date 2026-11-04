@@ -7224,8 +7224,8 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 ## 283. AAC PNS：可行性勘察（第 1 步已落地，见 §284；其余未实现）
 
 - **⚠ 状态**：本条的六步清单里，**第 1 步（`mark_pns`）已在 §284 完成**；
-  第 2 步做过拆解试验并回退，结论见 §285（twoloop 的 PNS 关联比这里列的三处
-  更多，必须一次性全搬）。其余仍未实现。
+  第 2 步先做过拆解试验并回退（§285），随后一次性全搬完成，见 §286。
+  第 3-6 步仍未实现。
 
 - **为什么单独记一条**：PNS 看起来只是"再加一个 aaccoder 函数"，实际是四个子系统
   联动，而且有一处反直觉的语义（下面第 1 条）。先把勘察结果写下来，避免下一轮重新
@@ -7341,6 +7341,44 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   --deny-warn` 干净。本条只改文档、生成器与夹具数据，**代码与 §284 提交时
   逐字节相同**，全量沿用该次 **1392/1392** 结果（本轮两次全量都撞上已知的
   编译期挂死，日志停在 56 KB 不再增长，已按工具坑记录杀掉）。
+
+## 286. PNS 第 2 步完成：twoloop 的 PNS 关联一次性全搬，245 带逐位一致
+
+- **做法**：按 §285 的结论不再拆分，把 `can_pns` 影响到的**所有**块补进
+  `aac_twoloop.mbt`，由同一个 `aac_twoloop_search_pns(..., pns : AacTwoPns)`
+  承载；老的 `aac_twoloop_search` 变成薄封装（全 0 `can_pns` + `on=false`），
+  保证 §278 的黄金向量路径逐位不变。具体六块：
+  1. **初始 band 设置**（`aaccoder_twoloop.h:248`）：累加 psy 的 `spread`，
+     算出 `spread_thr_r[g] = energy*nz / (uplim*spread)`，并维护
+     `min_spread_thr_r` / `max_spread_thr_r`。
+  2. **`pns_start_pos`**（:201）= `NOISE_LOW_LIMIT * 2 * wlen / sample_rate`。
+  3. **`ff_pns_bits`**（:57）：零带分支里 9 位 / 5 位（紧随噪声带）计入
+     `tbits`；`AacTwoLoop.collect()` 共用，两处 collect 都自动生效。
+  4. **1.15 带宽系数**（:190）：`frame_bit_rate *= 1.15` 后用
+     `aac_psy_cutoff(fbr, 1, sample_rate)` 重算，cutoff 从 743 → 770。
+  5. **`overdist` 循环重构**（:448）：恢复 C 的
+     `for (i = 0; i < 2 && (overdist || recomprd); ++i)`，不再用
+     "PNS 关所以只 collect 两次"的简化。
+  6. **排序置零块**（:500-570）：`ovrfactor`、`zspread`（含 `FFMIN3` 与
+     bit-starvation 插值）、`maxzeroed`、两遍 `zloop`（第一遍只挑超失真带、
+     第二遍放宽 `loopminsf`），命中即 `zeroes=1 / cb=0`，
+     `zeroed != 0` 时 `recomprd = fflag = 1`。
+- **验收（两批黄金数据）**：
+  - §278 的 **245 带 `sf/cb/zeroes` 逐位不变**（3/3 测试）。
+  - §284/§285 夹具里 C `--pns` 的 **245 带 `sf/cb/zeroes` 0 差异**
+    （上一轮只搬两处时是 177 差异）。编码器四个相关包合计 17/17，
+    往返 SNR / NMR / 帧长全部不变（`aac_twoloop_search` 走的仍是无 PNS 路径）。
+- **结论**：§285 的"不可拆"判断得到证实，且一次性全搬确实可行——关键是
+  把 `spread_thr_r` 的初始化和 `overdist` 循环一起恢复，而不是只补位计数。
+  现在 §283 清单的第 2 步已完成；`AacTwoPns` 与 `search_pns` 入口都有逐位
+  黄金数据，不是半成品接口。
+- **仍未做**（§283 第 3–6 步）：`search_for_pns`（需要 `avpriv_float_dsp_alloc`
+  才能做 C 侧对拍）、`band_alt` 快照、码流的 `off_pns` 链 + 9 位前导、
+  `can_pns` 接进编码器、带限噪声夹具端到端。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_psy_vectors` 3/3、
+  `aac_twoloop_vectors` 3/3、`aac_pns_vectors` 2/2、`aac_encode_vectors` 9/9
+  （合计 17/17）；全量 `moon test --target wasm` **1393/1393** 通过。
+
 
 
 

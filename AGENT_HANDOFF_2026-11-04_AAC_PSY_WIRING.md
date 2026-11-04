@@ -181,9 +181,11 @@ twoloop 拿 L/R 的阈值去量化 M/S 谱，是 FFmpeg 没有的新偏差。要
 
 1. ~~psy 元素级状态~~：§281 已完成。
 2. ~~过渡窗覆盖~~：§282 已完成（只剩 8 短窗走简化模型）。
-3. **PNS**：勘察完毕，结论写在 `PORTING_HISTORY.md` §283——四个子系统联动
-   （mark_pns / twoloop 三处 / search_for_pns / 码流的独立标度因子链），且有反直觉
-   语义（噪声带电平来自 `sf_idx` 而非 `pns_ener`）。建议按 §283 的六步清单推进，
-   第一步就能逐位对拍。
+3. **PNS**：§284 完成 `mark_pns`（245 带逐位对拍），§285 证明第 2 步不可拆，
+   **§286 已把 twoloop 的 PNS 关联一次性全搬完成**（`aac_twoloop_search_pns` +
+   `AacTwoPns`，两批 245 带黄金数据都 0 差异）。`PORTING_HISTORY.md` §283 有
+   完整勘察结论，§286 有六块改动的逐块清单。剩下的是 §283 的第 3–6 步：
+   `search_for_pns`（C 侧对拍需 `avpriv_float_dsp_alloc`）、`band_alt` 快照、
+   码流的 `off_pns` 链 + 9 位前导、接进编码器、带限噪声夹具端到端。
 4. **短窗 psy**：8×128 band 计划 + grouping + `PSY_3GPP_AH_THR_SHORT`，比重构大一档。
 5. **强度立体声**（`aacenc_is.c`，169 行）：与 PNS 同类的联动改造。

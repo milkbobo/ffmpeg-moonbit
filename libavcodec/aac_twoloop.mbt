@@ -11,8 +11,13 @@
 /// Scope (identical to `_ref/aacenc/` so the vectors are directly
 /// comparable): one long window (`num_windows = 1`, `group_len[w] = 1`,
 /// 49 scalefactor bands at 44.1 kHz), ABR (`lambda = 120`, no QSCALE), and
-/// PNS / intensity / M-S / TNS disabled.  With `sce->can_pns[]` all zero the
-/// noise-substitution block is dead code and is omitted here.
+/// intensity / M-S / TNS disabled.
+///
+/// PNS is opt-in through `aac_twoloop_search_pns` / `AacTwoPns`: with `on =
+/// false` and `can_pns[]` all zero it reproduces §278's 245 golden bands
+/// bit-for-bit, with `on = true` it reproduces the C `--pns` run's 245 bands
+/// (§286). Both paths run in the same function, so the PNS-only blocks are
+/// guarded by `pns.on` rather than being a separate implementation.
 ///
 /// Numerics: FFmpeg runs the encoder in `float`.  Every arithmetic step C
 /// performs on a `float` is reproduced through `aac_two_f32`, which rounds to
@@ -482,6 +487,24 @@ priv struct AacTwoLoop {
   zeroes : Array[Int32]
   dists : Array[Double]
   qenergies : Array[Double]
+  /// `can_pns` from `aac_pns_mark`: a zeroed band that may become noise
+  /// still costs a few bits (`ff_pns_bits`).
+  can_pns : Array[Int32]
+}
+
+///|
+/// `ff_pns_bits`, `aaccoder_twoloop.h:57`: 9 bits for a noise band, 5 when it
+/// follows another noise band (they share the preamble).
+fn aac_two_pns_bits(
+  zeroes : Array[Int32],
+  can_pns : Array[Int32],
+  g : Int32,
+) -> Int32 {
+  if g > 0 && zeroes[g - 1] != 0 && can_pns[g - 1] != 0 {
+    5
+  } else {
+    9
+  }
 }
 
 ///|
@@ -496,6 +519,9 @@ fn AacTwoLoop::collect(self : AacTwoLoop) -> Int32 {
   for g in 0..<self.num_swb {
     if self.zeroes[g] != 0 || self.sf[g] >= 218 {
       start = start + self.band_sizes[g]
+      if g < self.can_pns.length() && self.can_pns[g] != 0 {
+        tbits = tbits + aac_two_pns_bits(self.zeroes, self.can_pns, g)
+      }
       continue
     }
     let cb = aac_two_find_min_book(self.maxvals[g], self.sf[g])
@@ -539,6 +565,24 @@ pub struct AacTwoResult {
 /// `AacPsyContext::analyze`; `alloc` is its `bitres.alloc`; the reference
 /// configuration uses `bit_rate = 128000`, `sample_rate = 44100`,
 /// `channels = 2`, `lambda = 120`.
+///|
+/// PNS inputs for the twoloop search. `can_pns` comes from `aac_pns_mark`;
+/// `on` is the encoder's `options.pns` flag, which also scales the nominal
+/// per-channel bitrate by 1.15 before the bandwidth lookup.
+pub struct AacTwoPns {
+  can_pns : Array[Int32]
+  on : Bool
+}
+
+///|
+/// Build the PNS inputs (the struct's fields are private to the package).
+pub fn aac_twoloop_pns(can_pns : Array[Int32], on : Bool) -> AacTwoPns {
+  { can_pns, on }
+}
+
+///|
+/// The configuration §278's 245 golden vectors were produced in: no PNS, so
+/// `can_pns` is all zero and the bandwidth factor stays 1.0.
 pub fn aac_twoloop_search(
   coefs : Array[Double],
   band_sizes : Array[Int32],
@@ -548,6 +592,27 @@ pub fn aac_twoloop_search(
   sample_rate : Int32,
   channels : Int32,
   lambda : Double,
+) -> AacTwoResult {
+  aac_twoloop_search_pns(
+    coefs, band_sizes, bands, alloc, bit_rate, sample_rate, channels, lambda,
+    aac_twoloop_pns(Array::make(band_sizes.length(), 0), false),
+  )
+}
+
+///|
+/// `search_for_quantizers_twoloop`, `aaccoder_twoloop.h:65`, restricted to
+/// one long window with intensity / M-S / TNS off. `bands` are the `FFPsyBand`
+/// values from `AacPsyContext::analyze`; `alloc` is its `bitres.alloc`.
+pub fn aac_twoloop_search_pns(
+  coefs : Array[Double],
+  band_sizes : Array[Int32],
+  bands : Array[AacPsyBandInfo],
+  alloc : Int32,
+  bit_rate : Int32,
+  sample_rate : Int32,
+  channels : Int32,
+  lambda : Double,
+  pns : AacTwoPns,
 ) -> AacTwoResult {
   let num_swb = band_sizes.length()
   // One long window: w = 0, group_len[w] = 1.
@@ -574,12 +639,30 @@ pub fn aac_twoloop_search(
   let mut toofewbits = destbits - destbits / 8
   sfoffs = 0.0
   rdlambda = aac_two_sqrtf(rdlambda)
-  let bandwidth = if aac_psy_cutoff(bit_rate, channels, sample_rate) < 3000 {
-    3000
+  let bandwidth = if pns.on {
+    // `aaccoder_twoloop.h:190`: PNS or intensity stereo scales the nominal
+    // per-channel bitrate by 1.15 before the bandwidth lookup.
+    let fbr = (bit_rate.to_double() / channels.to_double() * 1.15).to_int()
+    let bw = aac_psy_cutoff(fbr, 1, sample_rate)
+    if bw < 3000 { 3000 } else { bw }
   } else {
-    aac_psy_cutoff(bit_rate, channels, sample_rate)
+    let bw = aac_psy_cutoff(bit_rate, channels, sample_rate)
+    if bw < 3000 { 3000 } else { bw }
   }
   let cutoff = bandwidth * 2 * wlen / sample_rate
+  // `pns_start_pos` (`aaccoder_twoloop.h:201`), in spectra-bin units.
+  let pns_start_pos = 4000 * 2 * wlen / sample_rate
+  let offsets : Array[Int32] = Array::make(num_swb + 1, 0)
+  let mut off_acc = 0
+  for g in 0..<num_swb {
+    offsets[g] = off_acc
+    off_acc = off_acc + band_sizes[g]
+  }
+  offsets[num_swb] = off_acc
+  let can_pns = pns.can_pns
+  let spread_thr_r : Array[Double] = Array::make(128, 0.0)
+  let mut min_spread_thr_r = -1.0
+  let mut max_spread_thr_r = -1.0
   destbits = if destbits > 5800 { 5800 } else { destbits }
   toomanybits = if toomanybits > 5800 { 5800 } else { toomanybits }
   toofewbits = if toofewbits > 5800 { 5800 } else { toofewbits }
@@ -610,6 +693,7 @@ pub fn aac_twoloop_search(
     }
     let mut uplim = 0.0
     let mut energy = 0.0
+    let mut spread = 0.0
     if nz != 0 {
       nz = 0
       if not(
@@ -618,6 +702,7 @@ pub fn aac_twoloop_search(
       ) {
         uplim = aac_two_add(uplim, band.threshold)
         energy = aac_two_add(energy, band.energy)
+        spread = aac_two_add(spread, band.spread)
         nz = nz + 1
       }
     }
@@ -626,6 +711,28 @@ pub fn aac_twoloop_search(
     nzs[g] = nz
     zeroes[g] = if nz != 0 { 0 } else { 1 }
     allz = allz | nz
+    // `aaccoder_twoloop.h:248`: the spread-energy / threshold ranking that
+    // the later overdistortion-driven PNS zeroing uses.
+    if nz != 0 && g < can_pns.length() && can_pns[g] != 0 {
+      let denom = aac_two_mul(uplim, spread)
+      let r = if denom > 0.0 {
+        aac_two_div(aac_two_mul(energy, nz.to_double()), denom)
+      } else {
+        0.0
+      }
+      spread_thr_r[g] = r
+      if min_spread_thr_r < 0.0 {
+        min_spread_thr_r = r
+        max_spread_thr_r = r
+      } else {
+        if r < min_spread_thr_r {
+          min_spread_thr_r = r
+        }
+        if r > max_spread_thr_r {
+          max_spread_thr_r = r
+        }
+      }
+    }
     start = start + band_sizes[g]
   }
   // Initial scalefactors.
@@ -718,6 +825,7 @@ pub fn aac_twoloop_search(
     zeroes,
     dists,
     qenergies,
+    can_pns,
   }
   let maxits = 30
   let mut its = 0
@@ -775,13 +883,98 @@ pub fn aac_twoloop_search(
       }
     }
     fflag = tbits < toofewbits
-    // The `overdist` trade-off is PNS-only, so with PNS off the loop C runs
-    // twice (`overdist` starts at 1) only re-runs the distortion collection
-    // when scalefactors changed.
-    for _ in 0..<2 {
+    // `aaccoder_twoloop.h:448-570`: C runs at most two distortion passes,
+    // and the first one may trade overdistorted bands for noise (PNS). With
+    // PNS off this reduces to the old "collect twice when recomputed" loop.
+    let mut overdist = 1
+    let mut twopass = 0
+    while twopass < 2 && (overdist != 0 || recomprd) {
       if recomprd {
         tbits = st.collect()
       }
+      if twopass == 0 && pns.on && its > maxits / 2 && tbits > toofewbits {
+        let ovrfactor = 1.0 +
+          (maxits - its).to_double() * 16.0 / maxits.to_double()
+        overdist = 0
+        recomprd = false
+        for g in 0..<num_swb {
+          if zeroes[g] == 0 && sf[g] > aac_two_scale_one_pos &&
+            dists[g] > aac_two_mul(uplims[g], ovrfactor) {
+            overdist = overdist + 1
+          }
+        }
+        if overdist != 0 {
+          let mut minspread = max_spread_thr_r
+          let mut maxspread = min_spread_thr_r
+          let mut zeroable = 0
+          for g in 0..<num_swb {
+            if offsets[g] >= pns_start_pos && zeroes[g] == 0 &&
+              g < can_pns.length() && can_pns[g] != 0 {
+              if spread_thr_r[g] < minspread {
+                minspread = spread_thr_r[g]
+              }
+              if spread_thr_r[g] > maxspread {
+                maxspread = spread_thr_r[g]
+              }
+              zeroable = zeroable + 1
+            }
+          }
+          let mut zspread = (maxspread - minspread) * 0.0125 + minspread
+          let third = aac_two_div(
+            ((toomanybits - tbits).to_double() * min_spread_thr_r) +
+            ((tbits - toofewbits).to_double() * max_spread_thr_r),
+            (toomanybits - toofewbits + 1).to_double(),
+          )
+          let cap1 = min_spread_thr_r * 8.0
+          if zspread > cap1 {
+            zspread = cap1
+          }
+          if zspread > third {
+            zspread = third
+          }
+          let maxzeroed = if zeroable <
+            (zeroable * its + maxits - 1) / (2 * maxits) {
+            zeroable
+          } else {
+            (zeroable * its + maxits - 1) / (2 * maxits)
+          }
+          let mut zeroed = 0
+          for zloop in 0..<2 {
+            let loopovrfactor = if zloop != 0 { 1.0 } else { ovrfactor }
+            let loopminsf = if zloop != 0 {
+              aac_two_scale_one_pos - aac_two_scale_div_512
+            } else {
+              aac_two_scale_one_pos
+            }
+            let mut g = num_swb - 1
+            while g > 0 && zeroed < maxzeroed {
+              if offsets[g] >= pns_start_pos {
+                let mcb = aac_two_find_min_book(maxvals[g], sf[g])
+                let minul = if uplims[g] < euplims[g] {
+                  uplims[g]
+                } else {
+                  euplims[g]
+                }
+                let overd = dists[g] > aac_two_mul(loopovrfactor, uplims[g]) ||
+                  mcb <= 0 || (mcb <= 1 && dists[g] > minul)
+                if zeroes[g] == 0 && g < can_pns.length() &&
+                  can_pns[g] != 0 && spread_thr_r[g] <= zspread &&
+                  sf[g] > loopminsf && overd {
+                  zeroes[g] = 1
+                  cb[g] = 0
+                  zeroed = zeroed + 1
+                }
+              }
+              g = g - 1
+            }
+          }
+          if zeroed != 0 {
+            recomprd = true
+            fflag = true
+          }
+        }
+      }
+      twopass = twopass + 1
     }
     // Smallest scalefactor in use.
     let mut mins = aac_two_scale_max_pos

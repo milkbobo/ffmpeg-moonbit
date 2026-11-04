@@ -56,3 +56,59 @@ test "PNS mark_pns matches FFmpeg 9.0.2 aaccoder.c (5 frames x 49 bands)" {
   // bands are marked in the reference, all of them between 4 kHz and cutoff.
   assert_true(can_pns == 99)
 }
+
+///|
+/// Step 2 of §283, done in one pass (§285 showed it cannot be split): every
+/// PNS coupling in the twoloop rate loop — the `spread_thr_r` ranking computed
+/// with the initial distortion limits, `ff_pns_bits` in the bit count, the
+/// 1.15 bandwidth factor, and the `overdist`-driven zeroing block. The C
+/// reference `--pns` run calls `mark_pns` and then the unmodified twoloop, so
+/// its `TWOBAND` lines are the golden `sf/cb/zeroes`.
+test "PNS-aware twoloop matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
+  let ctx = @libavcodec.aac_psy_new(4, 44100, 128000, 2)
+  let sizes = ctx.band_sizes()
+  let offsets : Array[Int32] = []
+  let mut acc = 0
+  offsets.push(0)
+  for g in 0..<sizes.length() {
+    acc = acc + sizes[g]
+    offsets.push(acc)
+  }
+  let num_swb = sizes.length()
+  let mut bad = 0
+  for f in 0..<5 {
+    let r = ctx.analyze(0, @aac_pns_vectors.aac_pns_spec[f], 0, 0, 0)
+    let mark = @libavcodec.aac_pns_mark(
+      r.bands, offsets, num_swb, 44100, 128000, 2, 120.0,
+    )
+    let two = @libavcodec.aac_twoloop_search_pns(
+      @aac_pns_vectors.aac_pns_spec[f],
+      sizes,
+      r.bands,
+      r.alloc,
+      128000,
+      44100,
+      2,
+      120.0,
+      @libavcodec.aac_twoloop_pns(mark.can_pns, true),
+    )
+    // The C reference writes the quantiser's bandwidth back into the psy
+    // context, where it sticks for later frames (§284).
+    ctx.set_cutoff(mark.bandwidth)
+    for g in 0..<num_swb {
+      let wsf = @aac_pns_vectors.aac_pns_ref_sf[f][g]
+      let wcb = @aac_pns_vectors.aac_pns_ref_cb[f][g]
+      let wzero = @aac_pns_vectors.aac_pns_ref_zero[f][g]
+      if two.sf[g] != wsf || two.cb[g] != wcb || two.zeroes[g] != wzero {
+        bad = bad + 1
+        if bad <= 8 {
+          println(
+            "frame \{f} band \{g}: got \{two.sf[g]}/\{two.cb[g]}/\{two.zeroes[g]} want \{wsf}/\{wcb}/\{wzero}",
+          )
+        }
+      }
+    }
+  }
+  println("PNS twoloop mismatching bands: \{bad} / 245")
+  assert_true(bad == 0)
+}
