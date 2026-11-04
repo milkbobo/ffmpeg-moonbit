@@ -17,9 +17,9 @@
 | ② heredoc 命令永久挂起、直到超时 | shell 从 stdin 读脚本 + 结束符失配 + stdin 不给 EOF | **否**（`moon` CLI 已用实验排除） |
 | ③ `moon test` 全量偶发卡在 `moonc` 编译（仅 1 次） | 未定位 | **待确认**，见 §6 |
 
-**一句话**：前两类都发生在 shell 解析 / 命令传输阶段，`moon` 进程根本还没启动，不是 MoonBit 编译器或 CLI 的缺陷。之所以来问 MoonBit 侧，是因为症状常表现为「跑 `moon fmt` / `moon test` 时卡住」，容易被误判成工具链问题，且我们想确认 `moon` 的 stdin 行为是否有已知约定。
+**一句话**：前两类都发生在 shell 解析 / 命令传输阶段，`moon` 进程根本还没启动，**不是 MoonBit 编译器或 CLI 的缺陷**。决定性证据：把 `moon` 从 PATH 中完全剔除（`env -i PATH=/usr/bin:/bin`，`command -v moon` 返回 `NOT_FOUND`）后，挂起照样复现（`exit=124`），正常对照组仍 `exit=0`，见 §3.2 的 N1/N2。之所以来问 MoonBit 侧，是因为症状常表现为「跑 `moon fmt` / `moon test` 时卡住」，容易被误判成工具链问题，且我们想确认 `moon` 的 stdin 行为是否有已知约定。
 
-**最希望得到回答的是 §5 的 4 个问题**，尤其是第 1 条（命令到底是 `bash -c` 还是 `bash -s`）。
+**最希望得到回答的是 §5 的 5 个问题**，尤其是第 1 条（命令到底是 `bash -c` 还是 `bash -s`）。另外 §11 附了两条**真正属于 MoonBit 工具链侧**、证据完整的问题（wasm `externref` 2 GiB 地址误判、`__moonbit__init` 局部变量上限），若只想看与 MoonBit 相关的内容，可直接跳到 §11。
 
 ---
 
@@ -84,6 +84,10 @@ EOF
 | J | 前带 2 空格 | `bash -c` | 保持打开 6s | `exit=0`，仅 warning |
 | K | — | `moon version` | 保持打开 6s | `exit=0`，正常输出版本 |
 | L | — | `moon check --target wasm --deny-warn` | 保持打开 6s | `exit=0`，`no work to do` |
+| N1 | 正确（末尾有 `exit`） | `bash -s`，**PATH 中无 `moon`** | 保持打开 6s | `exit=0` |
+| **N2** | **前带 2 空格（末尾有 `exit`）** | **`bash -s`，PATH 中无 `moon`** | **保持打开 6s** | **`exit=124`，照样挂死** |
+
+N1/N2 用 `env -i PATH=/usr/bin:/bin` 启动，`command -v moon` 返回 `NOT_FOUND`，环境中只有 bash + coreutils、**完全没有 MoonBit**。N2 仍挂起，说明现象②与 MoonBit 工具链无关，是 bash 自身行为。
 
 ### 3.3 根因：三个条件必须同时成立
 
@@ -118,6 +122,7 @@ bash 读 heredoc 匹配不到结束符时，会把后面所有行都当成正文
 | `moon` / `moonc` / `moonrun` 是否从 stdin 读取或等待 | K/L 实测：`moon version`、`moon check` 在 stdin 打开时立即返回，**不等待** |
 | 挂起时 `moon` 是否已启动 | 否。挂起在 shell 读 heredoc 阶段，`moon` 尚未 exec |
 | 是否需要 MoonBit 编译器 / CLI 改动 | **不需要**。我们判断这是命令执行层（IDE 内 Agent 的 Bash 工具，非交互、无 TTY）的行为 |
+| 完全无 MoonBit 时能否复现 | **能**（N1/N2：`moon` = NOT_FOUND，H 型命令仍 `exit=124`）。这是排除 MoonBit 归因的决定性证据 |
 
 **为什么还是要问 MoonBit 侧**：当出问题的 heredoc 里包的是 `moon fmt` / `moon test` 这类命令时，用户看到的是「跑 moon 卡住」，很容易归因到工具链。我们希望把这个误判排除掉，并确认 `moon` 对 stdin 没有隐含约定（例如未来版本是否会从 stdin 读配置 / 交互式确认）。另外 §6 有一个**真正可能属于 MoonBit 侧**的独立现象，想请一并看一下。
 
@@ -130,6 +135,7 @@ bash 读 heredoc 匹配不到结束符时，会把后面所有行都当成正文
 2. **转义处理层**：命令字符串在传给 shell 之前，是否经过模板 / 转义处理（`\n` → 真换行、引号规范化、NUL）？发生在哪一层？有没有 raw 透传模式（例如按字节传命令、或提供"上传脚本文件再执行"的官方通道）？
 3. **超时与非交互保证**：命令执行是否有默认超时、以及 stdin 为 `/dev/null` 或立即 EOF 的保证？我们能否依赖，还是必须在每条可能出问题的命令外自己套 `timeout`？
 4. **反馈渠道**：若确认属于 IDE 执行层而非 MoonBit 工具链，请帮忙指到正确的反馈对象；若属于 MoonBit 侧，我们可补一份带 `moonc` 日志的最小仓库。
+5. **另附两条工具链侧问题**：§11 列了本项目确实遇到的 wasm `externref` 空闲链表 2 GiB 地址误判（证据完整）与 `__moonbit__init` 局部变量上限，想请一并看一下是否已知、是否有修复计划。这两条与 heredoc 无关。
 
 ---
 
@@ -217,3 +223,33 @@ printf '%-4s exit=%s  (不等 stdin)\n' K "$?"
 | `AGENT_HANDOFF_2026-11-04_AAC_PSY.md` | §4（本轮已把含糊的「会挂死」改写为精确条件） |
 
 > 说明：上表路径均为本项目仓库内文件，供内部追溯；§3 的最小复现与 §9 的脚本不依赖本仓库即可运行（§9 的 K 行另需 `moon` CLI）。
+
+---
+
+## 11. 附：本项目确实遇到的 MoonBit 工具链侧问题（与 heredoc 无关）
+
+报告主体的结论是「heredoc 两类现象不是 MoonBit 的问题」。为避免这次沟通只得到一句「不是我们的问题」，另列两条**真正属于工具链侧**且证据完整的观察，按优先级；这两条才是我们更希望 MoonBit 侧评估的内容。
+
+### 11.1 wasm 运行时 `externref` 空闲链表的 2 GiB 地址误判（证据完整，建议优先看）
+
+- **现象**：大夹具下全量 wasm 测试报 `RuntimeError: unreachable`。16 帧 AAC PS 对拍夹具、或给稳定的 8 帧夹具加 600000 字节随机 base64 填充，可稳定复现 6 项失败；8 帧夹具全量通过。`--no-parallelize` 不影响，说明与并发无关。
+- **根因**：生成的 `moonbit.alloc_externref` 以 `i32.lt_s 0` 判断空闲链表为空。链表头越过 `0x80000000` 时（实测 `0x8faa0860`，无符号 2410285152，地址可读）被误判为空 → 反复倍增 externref 表（实测 8388608 项）→ `table.grow` 失败 → `unreachable`。线性内存当时为 37429 页。
+- **验证**：把生成的 wasm 里该判断临时改成 `head == -1` 后重放 548 项白盒测试，全部通过。**未**修改已安装工具链，也**未**提交生成的 wasm。
+- **版本**：`moonc v0.10.16+b1a0e846e`；`v0.10.17+d971670cd` 生成的 wasm 仍使用相同判断。
+- **现状 / 想问**：项目把 wasm 夹具限制在 8 帧规避，native（Linux 容器）下 16 帧对拍通过。请问这是已知问题吗？`i32.lt_s 0` → `head == -1` 的修法是否可接受，后续版本会改吗？
+- **出处**：`agent.md` §6；`AGENT_HANDOFF_2026-10-27_AAC_PS.md` 开头（含完整插桩数据）。
+
+### 11.2 wasm `__moonbit__init` 局部变量上限约 5 万
+
+- **现象**：包级大 `Array` 字面量每个元素都会变成 init 的局部变量，`libavcodec` 白盒测试包已贴近上限。
+- **规避**：改用 base64 `Bytes` 字面量（数据段，不占局部）+ init 期解码，参考 `aac_ps_tables.mbt` 的 `ps_unpack_f64` / `ps_unpack_huff`。另注意未被引用的顶层表会被 DCE 掉，「只加表不接线」会假绿。
+- **想问**：这是有意的设计约束，还是可优化项？有没有官方推荐的大表 / 大向量写法？
+- **出处**：`agent.md` §6；`AGENT_HANDOFF_2026-10-28_SESSION.md`。
+
+### 11.3 `moonc build-package` 偶发挂起（见 §6）
+
+进程属于 MoonBit 工具链，但仅出现 1 次、未抓堆栈，**不作为 bug 报告**；若复现会补 `moonc` 日志与进程栈。
+
+### 11.4 语义变化（非缺陷，仅记录）
+
+新版 MoonBit 中 `_test.mbt` 是黑盒测试（外部符号需 `@包名.x` 全限定），要访问私有实现须命名 `_wbtest.mbt`。属设计变更，项目已适配。
