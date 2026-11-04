@@ -1,0 +1,4 @@
+import {
+  "ffmpeg/moonbit/libavcodec",
+  "ffmpeg/moonbit/libavcodec/aac_psy_vectors",
+} for "test"

@@ -555,6 +555,14 @@ pub fn aac_psy_new(
 }
 
 ///|
+/// Scalefactor band sizes of the long window, exactly as `psy_3gpp_init`
+/// derived them from the swb offset table. The twoloop quantizer needs the
+/// same plan, so it takes it from the model instead of re-deriving it.
+pub fn AacPsyContext::band_sizes(self : AacPsyContext) -> Array[Int32] {
+  self.band_sizes
+}
+
+///|
 /// Run one frame of 3GPP analysis on `coefs` (1024 f32 MDCT coefficients in
 /// the encoder's coefficient domain). `prev_bits` is `bitres.bits` (bits
 /// consumed by the previous frame); the reference harness uses 0.

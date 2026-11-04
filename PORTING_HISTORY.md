@@ -6981,3 +6981,76 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   maxval）是下一片的对拍目标。
 - **检查**：`moon check --target wasm --deny-warn` 干净；全量
   `moon test --target wasm` **1385/1385** 通过。
+
+## 278. AAC 编码器：twoloop 量化器（`aaccoder_twoloop.h`）
+
+- **动机**：§271 的 AAC-LC 编码器仍是"逐带在码本 1..11 中选最小位耗 + 整帧
+  单标度因子 + 全局 delta 二分"；§277 交付了 3GPP 心理声学模型，同时把
+  `aaccoder.c` 的 `search_for_quantizers_twoloop` 参考向量（245 条 `TWOBAND`）
+  留作下一片的对拍目标。本片把 twoloop（FFmpeg 的两遍码率控制：内层按帧
+  预算收敛标度因子、外层逐带按失真/比特代价调整）原样移植并独立对拍，
+  让"psy 分析 → 两遍码率控制 → 逐带量化"链路的两段都可验证。
+  仍不改动 `aac_encode.mbt` 的任何输出。
+- **C 参考工具链** `_ref/aacenc/`（纯参考，gitignored）：在 §277 的基础上新增
+  独立的 `dump_tables.c`（链接时不带 `harness.o`，避免 `main()` 冲突；内含
+  `aac_tableinit()` 的逐字复制，用于生成运行期构造的
+  `ff_aac_pow2sf_tab` / `ff_aac_pow34sf_tab`），`build.sh` 追加
+  `dump_tables.o` 与 `== 5/5 link table dumper ==` 段。dump 标签：
+  `POW2SF` / `POW34SF` / `CBRANGE` / `CBMAXVAL` / `MAXVALCB` / `VEC <k>` /
+  `BITS <k>`。`patch.py` 追加 6 段 stderr 阶段探针（`TWOPARM`、`TWOINIT`、
+  `TWOWEIGHT`、`TWOLOOP`、`TWODIST`、`TWOOUT`），因为 stdout 与 stderr 分离，
+  探针不影响 `vectors.txt`；重建后重新生成 §277 的夹具零 diff，证明参考输出
+  未被污染。夹具由 `scripts/gen_aac_twoloop_tables.py` 转成
+  `aac_twoloop_tables.mbt`（生成期断言：`vecs[10][-2:] == [64.0, 64.0]` 的
+  BT_ESC 哨兵、`vecs[0][:4] == [-1.0]*4`、`bits[10][0] == 4`）。
+- **MoonBit 侧**：
+  - `libavcodec/aac_twoloop_tables.mbt`（761 行，自动生成）：`pow2sf` /
+    `pow34sf`、`cb_range`（`ff_aac_spectral_bits` 的区间起点）、`cb_maxval`、
+    `maxval_cb`、`vec1..vec11` 与 `bits1..bits11` 逐码本码字表，另有汇总
+    `aac_twoloop_vectors` / `aac_twoloop_spectral_bits`。索引顺序与 C 一致。
+  - `libavcodec/aac_twoloop.mbt`（973 行）：f32 助手族
+    （`add/sub/mul/div/sqrtf/log2f/expf/logf/cbrtf/powf/fast_powf` 与
+    `clipf`/`av_log2`）、`aac_two_abs_pow34`、`find_max_val`、`coef2minsf`、
+    `find_min_book`、`find_form_factor`、`quant`、`band_cost`
+    （`quantize_and_encode_band_cost_template`，含 codebook 0 的零带短路与
+    codebook 11 的 escape 计数）、`init_nextband_map` / `can_remove_band`，
+    以及 `priv struct AacTwoLoop`（`collect()` 复刻 C 里重复写了两遍的量化
+    循环，填 `sf`/`zeroes`/`dists`/`maxvals`/`qenergies`）。
+    对外只暴露 `aac_twoloop_search(coefs, band_sizes, bands, alloc,
+    bit_rate, sample_rate, channels, lambda) -> AacTwoResult`，
+    `AacTwoResult { sf, cb, zeroes, maxvals, tbits, iters }`。
+  - 带计划不重复推导：`aac_psy.mbt` 追加 `AacPsyContext::band_sizes()` 访问器，
+    twoloop 直接取 `psy_3gpp_init` 得到的长窗 49 带尺寸，保证两者同源。
+- **验证**（`libavcodec/aac_twoloop_vectors/`，黑盒 3 项）：44100 Hz / 128 kbps /
+  2 声道、ONLY_LONG 49 带、5 帧连续谱，与 `vectors.txt` 的 245 条 `TWOBAND`
+  逐带比对——`sf_idx` / `band_type` / `zeroes` **逐位一致**，`maxval` 相对误差
+  ≤1e-5；5 帧 `alloc` = 2229 / 1966 / 1943 / 1910 / 1971，最终 `tbits` =
+  2352 / 1929 / 2052 / 2009 / 1957（帧 0/2/3/4 高于 `alloc`，是上游 twoloop
+  外层逐带调整后**不做全局回退**的原样行为，移植逐位复现），`iters` 恒 30。
+  另两项：全零谱返回全零带 + `sf == 140` + `tbits == 0`；结构不变量
+  （`cb ∈ 1..11`、`sf ∈ 60..219`、相邻非零带 delta ≤60）。
+- **关键坑**：
+  1. `quantize_band_cost_cached(..., 1.0f, INFINITY, ...)` 里这个 **1.0f 是固定的
+     成本 lambda，不是搜索用的 `lambda=120`**。最初把 120 传进成本函数，
+     `dists` 整体放大 120 倍 → 逐带 `sf` 立刻分叉
+     （`TWODIST its=0 g=0`：C 6663840 / MB 799660800），而 `sf`/`maxval` 的
+     前半段看起来还算"接近"，很容易误判成量化器精度问题。定位靠
+     `TWOOUT` 显示 `its=0` 的**前 4 带**就已不同（C 136/153/153/153 vs
+     MB 136/152/147/147）——分歧在内层循环之后、逐带调整之前，即 `dists` 本身。
+  2. `vecs[10][0]` 不是 `(64,64)`：codebook 11（BT_ESC）的哨兵在表的**末尾**，
+     首项是 `(0,0)`；codebook 0 的前 4 项是 `-1.0`（不是 `-1,0,1`）；
+     `bits[10][0] == 4`。生成器最初的这三条断言全错，是表读取方向问题而非
+     表导出问题。
+  3. 内层循环的 `iters` 上限 30 是**必须跑满**的语义：参考侧 5 帧都恰好用满
+     30 次，`sf0` 在 127/131/132/136/137 之间来回振荡不收敛。任何"提前收敛
+     就跳出"的优化都会让结果偏离。
+  4. 调试期教训沿用 §277 的约定：新增 stderr 探针的循环变量一律用独立命名
+     （`aac_dbg_pg`），绝不复用 `i`/`j`/`g`/`w`，否则会把参考实现自身改坏。
+- **边界**：只覆盖单长窗（`num_windows = 1`、`ONLY_LONG_SEQUENCE`、49 带）、
+  ABR（`AV_CODEC_FLAG_QSCALE` 分支不走）、PNS/TNS/IS/M-S 全关、无块切换、
+  无 `-q:a` 直通；合成谱输入，未跑 PCM→MDCT。
+  **本片与 §277 同样是独立可验证层，尚未接入 `aac_encode.mbt`**；
+  下一步是把 `aac_psy.mbt` + `aac_twoloop.mbt` 一起接进编码器主线，
+  替换 §271 的简化模型与全局 delta 二分。
+- **检查**：`moon check --target wasm --deny-warn` 干净；全量
+  `moon test --target wasm` **1388/1388** 通过。

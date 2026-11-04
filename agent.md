@@ -98,14 +98,23 @@
   `mp3_enc_subband/mdct/loop/bitstream.mbt`，shine 3.1.1 移植，§275）、
   Opus（`opus_encode.mbt` + `opus_enc_rc/math/tables/celt/bands/alloc/psy/psy2.mbt`，
   FFmpeg 原生 CELT-only 路径，§276）、AAC 3GPP 心理声学模型
-  （`aac_psy.mbt` + `aac_psy_vectors/`，§277：独立可验证层，未接入 `aac_encode.mbt`）。
+  （`aac_psy.mbt` + `aac_psy_vectors/`，§277）与 AAC twoloop 量化器
+  （`aac_twoloop.mbt` + `aac_twoloop_tables.mbt` + `aac_twoloop_vectors/`，§278：
+  两者都是独立可验证层，未接入 `aac_encode.mbt`）。
   AAC psy 的 C 参考是 `_ref/aacenc/`（`bash build.sh && ./aac_ref.exe > vectors.txt`
   → `python scripts/gen_aac_psy_vectors.py`）；`psy_3gpp_init` 的
   `coeffs[g+1].barks - coeffs->barks` 减的是 `coeffs[0].barks`（累积宽度），
   写成相邻带差会让 min_snr 全掉到 -25 dB 下限；`calc_reduced_thr` 是
   `(sqrt(sqrt(thr)) + reduction)^4`；参考 harness 的 `bitres.bits=0` 使
   `fill_level` 恒 4656，真正跨帧演化的是 alloc/entropy/pe.min-max/prev_band。
-  `TWOBAND` 的 245 条向量已在夹具里，是 twoloop 量化器下一片的对拍目标。
+  `TWOBAND` 的 245 条向量已在夹具里，§278 的 twoloop 移植即消费它们。
+  twoloop 的表同源于 `_ref/aacenc/tables.txt`
+  （`python scripts/gen_aac_twoloop_tables.py` 重新生成）；`quantize_band_cost`
+  在 `search_for_quantizers_twoloop` 里固定传 **lambda=1.0**（不是搜索用的
+  120.0），传错会让 `dists` 整体放大 120 倍、逐带 sf 立刻分叉；codebook 0
+  走零带短路（不进量化）、codebook 11 的 escape 用 `165140.0*IQ` 截断而非
+  `CLIPPED_ESCAPE` 的 8191；内层循环的 `iters` 上限是 30 且必须跑满语义
+  （参考侧 30 次全用完），外层对 `sf0` 的振荡不做收敛判断。
   MP3 的表来自编译后 C 参考的零转录 dump（`scripts/gen_mp3_enc_tables.sh`
   可重建 dumper/harness 并再生成表与夹具）；`calc_scfsi` 的 `mp3enc_ln`
   与 C 侧 `shine_ref_log` 必须保持同一段 IEEE 运算（libm log 跨平台位级
