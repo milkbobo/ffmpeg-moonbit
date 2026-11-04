@@ -181,12 +181,14 @@ twoloop 拿 L/R 的阈值去量化 M/S 谱，是 FFmpeg 没有的新偏差。要
 
 1. ~~psy 元素级状态~~：§281 已完成。
 2. ~~过渡窗覆盖~~：§282 已完成（只剩 8 短窗走简化模型）。
-3. **PNS**：§284 `mark_pns`、§286 twoloop 全部 PNS 关联、§287
-   `search_for_pns` 都已完成，各有一批 245 带逐位黄金数据（合计 3/3 测试全绿）。
-   `PORTING_HISTORY.md` §283 有完整勘察结论，§284/§286/§287 有逐块清单。
-   剩下的是 §283 的第 4–6 步：`band_alt` 快照接进编码器通道结构、码流的
-   `off_pns` 独立标度因子链 + 9 位前导（`NOISE_PRE=256`）、噪声带跳过谱数据、
-   带限噪声夹具端到端。`_ref/aacenc/harness.c --pns` 已能跑完整 C 链
-   （mark → twoloop → search_for_pns），是后续对拍的现成工具。
+3. **PNS：§283 的六步清单已全部完成**（§284 / §286 / §287 / §288），
+   三批 245 带逐位黄金数据 + 一个端到端往返测试。`aac_encode_config_with_pns`
+   才开启（默认关，保住 §279/§280 基线）。最容易踩的一条：噪声带的**
+   码流 scalefactor 必须写 `search_for_pns` 的 `noise_sfi`**，不是 twoloop 的
+   `sf_idx`——否则解码噪声幅度会爆 5 个数量级（§288 有实测对照）。
+   另一个工具坑：`libavcodec` 包的 wasm init 已接近 `local count` 上限，
+   **不要再往这个包加白盒测试**，用 `aac_encode_vectors` 等黑盒包。
+   AAC 编码器侧剩下的大件只剩短窗 psy（8×128 band 计划 + grouping +
+   `PSY_3GPP_AH_THR_SHORT`）与强度立体声（`aacenc_is.c`）。
 4. **短窗 psy**：8×128 band 计划 + grouping + `PSY_3GPP_AH_THR_SHORT`，比重构大一档。
 5. **强度立体声**（`aacenc_is.c`，169 行）：与 PNS 同类的联动改造。

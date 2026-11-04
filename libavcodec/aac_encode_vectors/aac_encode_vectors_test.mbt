@@ -977,3 +977,79 @@ test "aac_lc_noise_to_mask" {
   // climbs back above the simplified model's.
   assert_true(nmr_perceptual < nmr_plain)
 }
+
+///|
+/// Broadband LCG noise. The tonal fixtures never reach the psy model's spread
+/// threshold, so PNS can only be exercised end-to-end on noise-like material.
+fn aac_encode_test_noise(
+  channels : Int32,
+  frames : Int32,
+) -> Array[Array[Double]] {
+  let pcm : Array[Array[Double]] = []
+  let mut seed : UInt32 = 987654321U
+  for _ch = 0; _ch < channels; _ch = _ch + 1 {
+    let row : Array[Double] = Array::make(frames * 1024, 0.0)
+    for i = 0; i < frames * 1024; i = i + 1 {
+      seed = seed * 1664525U + 1013904223U
+      row[i] = (seed.reinterpret_as_int() >> 9).to_double() / 4194304.0 * 0.15
+    }
+    pcm.push(row)
+  }
+  pcm
+}
+
+///|
+/// PNS end-to-end (§283 step 6): the same noise, encoded with and without
+/// `aac_encode_config_with_pns`. A NOISE_BT band carries no spectral data, so
+/// the stream must still decode through our (ffmpeg-matched) decoder, stay
+/// finite, and spend fewer bytes than the all-coded version.
+test "aac_lc_pns_round_trip" {
+  let rate = 44100
+  let channels = 2
+  let frames = 8
+  let bit_rate = 128000
+  let input = aac_encode_test_noise(channels, frames)
+  let base = @libavcodec.aac_encode_config_perceptual(
+    rate, channels, bit_rate,
+  )
+  let plain = aac_encode_test_stream_config(input, channels, frames, base)
+  let pns = aac_encode_test_stream_config(
+    input,
+    channels,
+    frames,
+    @libavcodec.aac_encode_config_with_pns(base),
+  )
+  let mut plain_bytes = 0
+  let mut pns_bytes = 0
+  for f = 0; f < plain.length(); f = f + 1 {
+    plain_bytes = plain_bytes + plain[f].length()
+    pns_bytes = pns_bytes + pns[f].length()
+  }
+  let decoded = aac_encode_test_decode(pns, channels)
+  let mut energy = 0.0
+  let mut noise = 0.0
+  let mut peak = 0.0
+  for ch = 0; ch < channels; ch = ch + 1 {
+    for i = 0; i < frames * 1024; i = i + 1 {
+      let want = input[ch][i]
+      let got = decoded[ch][i + 1024]
+      energy = energy + want * want
+      noise = noise + (got - want) * (got - want)
+      if got.abs() > peak {
+        peak = got.abs()
+      }
+    }
+  }
+  let snr = 10.0 * @math.log10(energy / noise)
+  println(
+    "PNS round trip: plain_bytes=\{plain_bytes / plain.length()} pns_bytes=\{pns_bytes / pns.length()} snr=\{snr} peak=\{peak}",
+  )
+  assert_true(pns.length() == frames + 1)
+  assert_true(peak < 2.0)
+  assert_true(peak > 0.0)
+  // PNS is waveform-inexact by design: the decoder synthesises fresh noise,
+  // so a broadband-noise fixture lands near 0 dB SNR. The guard is that the
+  // stream decodes cleanly at a finite level, not that it is transparent.
+  assert_true(snr > -5.0)
+  assert_true(pns_bytes < plain_bytes)
+}

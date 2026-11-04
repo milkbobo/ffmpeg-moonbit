@@ -46,6 +46,10 @@ pub struct AacEncodeConfig {
   /// search (`aac_encode_config_perceptual`) instead of the simplified
   /// perceptual model plus the frame-wide offset search.
   perceptual : Bool
+  /// Enable perceptual noise substitution on those frames (FFmpeg's default
+  /// `options.pns = 1`). Off by default so the §279/§280 measurements stay
+  /// reproducible; use `aac_encode_config_with_pns` to turn it on.
+  pns : Bool
 }
 
 ///|
@@ -77,6 +81,8 @@ pub struct AacEncoder {
   /// is scaled down by `min(0.9, rate/frame)` while the quantised frame
   /// overflows (`aac_encode_frame`'s strict bit-rate control).
   mut lambda : Double
+  /// LCG state carried across frames by `search_for_pns` (`s->random_state`).
+  mut pns_random_state : Int32
 }
 
 ///|
@@ -86,7 +92,7 @@ pub fn aac_encode_config(
   channels : Int32,
   bit_rate : Int32,
 ) -> AacEncodeConfig {
-  { sample_rate, channels, bit_rate, perceptual: false }
+  { sample_rate, channels, bit_rate, perceptual: false, pns: false }
 }
 
 ///|
@@ -106,7 +112,21 @@ pub fn aac_encode_config_perceptual(
   channels : Int32,
   bit_rate : Int32,
 ) -> AacEncodeConfig {
-  { sample_rate, channels, bit_rate, perceptual: true }
+  { sample_rate, channels, bit_rate, perceptual: true, pns: false }
+}
+
+///|
+/// Enable PNS on a configuration (normally a perceptual one). This is opt-in:
+/// noise bands change both the bitstream layout and the SNR/NMR measurements,
+/// so the existing round-trip baselines stay on the PNS-off path.
+pub fn aac_encode_config_with_pns(config : AacEncodeConfig) -> AacEncodeConfig {
+  {
+    sample_rate: config.sample_rate,
+    channels: config.channels,
+    bit_rate: config.bit_rate,
+    perceptual: config.perceptual,
+    pns: true,
+  }
 }
 
 ///|
@@ -286,6 +306,7 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     psy,
     last_frame_bits: 0,
     lambda: 120.0,
+    pns_random_state: 0,
   })
 }
 
@@ -1350,23 +1371,37 @@ fn AacEncoder::channel_data_psy(
   two : AacTwoResult,
   seq : Int32,
   max_sfb : Int32,
+  final_cb : Array[Int32],
+  final_zeroes : Array[Int32],
+  noise_sfi : Array[Int32],
 ) -> AacEncChannel {
   let num_swb = two.sf.length()
   let sf : Array[Int32] = Array::make(num_swb, -1)
   let cb : Array[Int32] = Array::make(num_swb, 0)
   let q : Array[Int32] = Array::make(1024, 0)
   for b = 0; b < num_swb && b < max_sfb; b = b + 1 {
-    if two.zeroes[b] != 0 || two.sf[b] < 0 || two.cb[b] <= 0 {
+    if final_zeroes[b] != 0 || two.sf[b] < 0 || final_cb[b] <= 0 {
       continue
     }
     let start = self.swb_offsets[b]
     let size = self.swb_offsets[b + 1] - start
-    let band = aac_twoloop_quantize_band(coef, start, size, two.sf[b], two.cb[b])
-    for i = 0; i < size; i = i + 1 {
-      q[start + i] = band[i]
+    let noise = final_cb[b] == 13
+    if !noise {
+      let band = aac_twoloop_quantize_band(
+        coef, start, size, two.sf[b], final_cb[b],
+      )
+      for i = 0; i < size; i = i + 1 {
+        q[start + i] = band[i]
+      }
     }
-    sf[b] = two.sf[b] - 4
-    cb[b] = two.cb[b]
+    // A NOISE_BT band carries no spectral data: the decoder synthesises it
+    // and scales it with `pow2sf_tab[sfo + POW_SF2_ZERO]`. `search_for_pns`
+    // already computed the scalefactor whose entry equals the generated
+    // noise amplitude (`noise_amp = -pow2sf_tab[sfi + POW_SF2_ZERO]`), so
+    // write that `sfi` into the independent noise chain. The regular chain
+    // instead uses `two.sf - 4`, whose decoded `sfo` is 100 lower.
+    sf[b] = if noise { noise_sfi[b] } else { two.sf[b] - 4 }
+    cb[b] = final_cb[b]
   }
   { sf, cb, q, max_sfb, window_sequence: seq, num_windows: 1 }
 }
@@ -1414,18 +1449,35 @@ fn aac_encode_write_scalefactors(
   ch : AacEncChannel,
   global_gain : Int32,
 ) -> Unit {
-  let mut prev = global_gain
+  // `encode_scale_factors` (`aacenc.c`): regular bands and noise bands run on
+  // two independent differential chains. The noise chain starts 90 below the
+  // global gain and its first band carries a raw 9-bit preamble instead of a
+  // Huffman delta (`NOISE_PRE = 256`). Intensity bands are not produced here.
+  let mut off_sf = global_gain
+  let mut off_pns = global_gain - aac_noise_offset
+  let mut noise_flag = true
   for b = 0; b < ch.max_sfb; b = b + 1 {
     if ch.sf[b] >= 0 {
-      let mut diff = ch.sf[b] - prev + 60
-      if diff < 0 {
-        diff = 0
+      let noise = ch.cb[b] == 13
+      let diff = ch.sf[b] - (if noise { off_pns } else { off_sf })
+      if noise {
+        off_pns = ch.sf[b]
+        if noise_flag {
+          noise_flag = false
+          bw.put((diff + aac_noise_pre).reinterpret_as_uint(), aac_noise_pre_bits)
+          continue
+        }
+      } else {
+        off_sf = ch.sf[b]
       }
-      if diff > 120 {
-        diff = 120
+      let mut d = diff + 60
+      if d < 0 {
+        d = 0
       }
-      bw.put(aac_scalefactor_code[diff], aac_scalefactor_bits[diff])
-      prev = ch.sf[b]
+      if d > 120 {
+        d = 120
+      }
+      bw.put(aac_scalefactor_code[d], aac_scalefactor_bits[d])
     }
   }
 }
@@ -1466,7 +1518,9 @@ fn aac_encode_write_spectral(
 ) -> Unit {
   for b = 0; b < ch.max_sfb; b = b + 1 {
     let cb = ch.cb[b]
-    if cb == 0 {
+    // NOISE_BT carries no spectral data: the decoder synthesises it from the
+    // scalefactor and its own LCG state.
+    if cb == 0 || cb == 13 {
       continue
     }
     let dim = if cb <= 4 { 4 } else { 2 }
@@ -1854,18 +1908,61 @@ pub fn AacEncoder::encode_frame(
     let mut built : Bytes = b""
     while true {
       let chans : Array[AacEncChannel] = []
+      let sizes = self.psy.band_sizes()
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
-        let two = aac_twoloop_search(
+        let r = psy_results[ch]
+        // PNS runs around the search: mark noise-like bands, let the twoloop
+        // rate loop price them, then decide which ones actually become noise.
+        let mark = aac_pns_mark(
+          r.bands, self.swb_offsets, self.num_swb,
+          self.config.sample_rate, self.config.bit_rate,
+          self.config.channels, self.lambda,
+        )
+        let can_pns = if self.config.pns {
+          mark.can_pns
+        } else {
+          Array::make(self.num_swb, 0)
+        }
+        let two = aac_twoloop_search_pns(
           coefs[ch],
-          self.psy.band_sizes(),
-          psy_results[ch].bands,
+          sizes,
+          r.bands,
           alloc,
           self.config.bit_rate,
           self.config.sample_rate,
           self.config.channels,
           self.lambda,
+          aac_twoloop_pns(can_pns, self.config.pns),
         )
-        chans.push(self.channel_data_psy(coefs[ch], two, seq, planned_max_sfb))
+        let final_cb = two.cb
+        let final_zeroes = two.zeroes
+        if self.config.pns {
+          let out = aac_pns_search(
+            aac_pns_search_in(
+              coefs[ch], sizes, self.swb_offsets, r.bands, two.sf,
+              final_cb, final_zeroes, can_pns, mark.pns_ener,
+              self.pns_random_state,
+            ),
+            self.config.sample_rate,
+            self.config.bit_rate,
+            self.config.channels,
+            self.lambda,
+          )
+          self.pns_random_state = out.random_state
+          chans.push(
+            self.channel_data_psy(
+              coefs[ch], two, seq, planned_max_sfb, out.cb, out.zeroes,
+              out.noise_sfi,
+            ),
+          )
+        } else {
+          chans.push(
+            self.channel_data_psy(
+              coefs[ch], two, seq, planned_max_sfb, final_cb, final_zeroes,
+              Array::make(self.num_swb, 0),
+            ),
+          )
+        }
       }
       let frame_bytes = match self.assemble_frame(frame, chans) {
         Ok(v) => v

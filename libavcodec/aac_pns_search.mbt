@@ -79,6 +79,12 @@ pub struct AacPnsSearchOut {
   zeroes : Array[Int32]
   pns_ener : Array[Double]
   random_state : Int32
+  /// `noise_sfi` for the bands turned into NOISE_BT: the scalefactor whose
+  /// `pow2sf_tab` entry is the generated noise's amplitude
+  /// (`noise_amp = -pow2sf_tab[sfi + POW_SF2_ZERO]`). The bitstream writes
+  /// this into the independent noise scalefactor chain, so the decoder's
+  /// `sfo` reproduces `noise_amp` without any offset fudging.
+  noise_sfi : Array[Int32]
 }
 
 ///|
@@ -105,9 +111,21 @@ pub fn aac_pns_search(
   let offsets = input.offsets
   let bands = input.bands
   let sf = input.sf
-  let cb = input.cb
-  let zeroes = input.zeroes
-  let pns_ener = input.pns_ener
+  // Work on copies: the caller's twoloop result is still used to quantise
+  // the surviving spectral bands, so a band turned into NOISE_BT here must
+  // not overwrite its original codebook there.
+  let cb : Array[Int32] = Array::make(input.cb.length(), 0)
+  for i = 0; i < input.cb.length(); i = i + 1 {
+    cb[i] = input.cb[i]
+  }
+  let zeroes : Array[Int32] = Array::make(input.zeroes.length(), 0)
+  for i = 0; i < input.zeroes.length(); i = i + 1 {
+    zeroes[i] = input.zeroes[i]
+  }
+  let pns_ener : Array[Double] = Array::make(input.pns_ener.length(), 0.0)
+  for i = 0; i < input.pns_ener.length(); i = i + 1 {
+    pns_ener[i] = input.pns_ener[i]
+  }
   let num_swb = band_sizes.length()
   let wlen = 1024
   let freq_mult = sample_rate.to_double() * 0.5 / wlen.to_double()
@@ -132,6 +150,7 @@ pub fn aac_pns_search(
   let mut random_state = input.random_state
   let mut prev = -1000
   let mut prev_sf = -1
+  let noise_sfi_out : Array[Int32] = Array::make(num_swb, 0)
   let pns : Array[Double] = Array::make(128, 0.0)
   for g = 0; g < num_swb; g = g + 1 {
     let start = offsets[g]
@@ -172,12 +191,12 @@ pub fn aac_pns_search(
     let spread_sq = aac_two_mul(spread, spread)
     let pns_tgt_energy = aac_two_mul(sfb_energy,
       if spread_sq < 1.0 { spread_sq } else { 1.0 })
-    let noise_sfi = aac_two_clip(
+    let sfi = aac_two_clip(
       aac_pns_roundf(aac_two_log2f(pns_tgt_energy) * 2.0), -100, 155,
     )
-    let noise_amp = -aac_twoloop_pow2sf[noise_sfi + aac_two_pow_sf2_zero]
+    let noise_amp = -aac_twoloop_pow2sf[sfi + aac_two_pow_sf2_zero]
     if prev != -1000 {
-      let noise_sfdiff = noise_sfi - prev + aac_two_scale_diff_zero
+      let noise_sfdiff = sfi - prev + aac_two_scale_diff_zero
       if noise_sfdiff < 0 || noise_sfdiff > 2 * aac_two_scale_max_diff {
         if zeroes[g] == 0 {
           prev_sf = sf[g]
@@ -230,10 +249,11 @@ pub fn aac_pns_search(
       (energy_ratio > 0.85 && energy_ratio < 1.25 && dist2 < dist1) {
       cb[g] = aac_pns_noise_bt
       zeroes[g] = 0
-      prev = noise_sfi
+      noise_sfi_out[g] = sfi
+      prev = sfi
     } else if zeroes[g] == 0 {
       prev_sf = sf[g]
     }
   }
-  { cb, zeroes, pns_ener, random_state }
+  { cb, zeroes, pns_ener, random_state, noise_sfi: noise_sfi_out }
 }

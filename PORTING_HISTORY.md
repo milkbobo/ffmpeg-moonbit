@@ -7224,8 +7224,8 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 ## 283. AAC PNS：可行性勘察（第 1 步已落地，见 §284；其余未实现）
 
 - **⚠ 状态**：本条的六步清单里，**第 1 步（`mark_pns`）已在 §284 完成**；
-  第 2 步先拆解（§285）后一次性全搬完成（§286），第 3 步 search_for_pns
-  已完成（§287）。第 4-6 步仍未实现。
+  **六步已全部完成**：§284 mark_pns、§286 twoloop 关联、§287 search_for_pns、
+  §288 码流 off_pns 链 + 编码器接线 + 端到端。
 
 - **为什么单独记一条**：PNS 看起来只是"再加一个 aaccoder 函数"，实际是四个子系统
   联动，而且有一处反直觉的语义（下面第 1 条）。先把勘察结果写下来，避免下一轮重新
@@ -7415,6 +7415,47 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - **检查**：`moon check --target wasm --deny-warn` 干净；`aac_pns_vectors` 3/3、
   `aac_psy_vectors` 3/3、`aac_twoloop_vectors` 3/3、`aac_encode_vectors` 9/9；
   全量 `moon test --target wasm` **1394/1394** 通过。
+
+## 288. PNS 第 4–6 步完成：接进编码器并端到端解码
+
+- **交付**：PNS 现在能在 `aac_encode.mbt` 里真正产出噪声带。
+  - `AacEncodeConfig.pns`（默认关）+ `aac_encode_config_with_pns(config)`；
+    默认关闭是为了不改动 §279/§280 的往返基线，也避免静默改变码流格式。
+  - `AacEncoder.pns_random_state` 跨帧携带（`s->random_state`）。
+  - psy 分支按 `mark_pns → twoloop_search_pns → search_for_pns` 串联，
+    `channel_data_psy` 接收最终的 `cb / zeroes / noise_sfi`；NOISE_BT 带不再
+    量化谱、不写谱数据。
+  - `aac_encode_write_scalefactors` 增加**独立 `off_pns` 差分链**（起点
+    `global_gain - NOISE_OFFSET(90)`）与首个噪声带的 **9 位前导**
+    （`diff + NOISE_PRE(256)`）；`aac_encode_write_spectral` 跳过 `cb == 13`。
+    与 `aac_decode_scalefactors` 的实现逐位对应。
+- **关键发现（本轮最值钱的一条）**：噪声带写进码流的 scalefactor **必须用
+  `search_for_pns` 算出的 `noise_sfi`，不是 twoloop 的 `sf_idx`**。
+  - 原理：`search_for_pns` 用 `noise_amp = -pow2sf_tab[sfi + 200]` 生成噪声，
+    而解码器（FFmpeg `dequant_scalefactors` 与我们的 `aac_sf_dequant`）对
+    NOISE_BT 用 `sf = -pow2sf_tab[sfo + 200]`。二者相等当且仅当
+    **`sfo = sfi`**，所以噪声链里就写 `noise_sfi`。
+  - 实测对照（宽带噪声夹具，解码后 PCM 峰值 / SNR）：写 `two.sf-4` →
+    peak **137796**、SNR −111 dB；写 `two.sf-104` → peak 54.7、−39 dB；
+    写经验值 `two.sf-138` → peak 0.318、+0.9 dB；写 `noise_sfi` →
+    **peak 0.318、SNR 0.68 dB** 且**无需任何魔法常数**。
+  - 因此 `AacPnsSearchOut` 新增 `noise_sfi` 数组（命中 NOISE_BT 时记录），
+    编码器直接把它写进 `off_pns` 链。
+- **端到端**（44100 / 128 kbps / 2ch，8 帧 LCG 白噪声）：不开 PNS 平均
+  **357 字节/帧**，开启后 **344 字节/帧**（噪声带省掉谱数据）；解码输出峰值
+  0.318（原信号幅度 0.15 量级），无 NaN / 无削波。SNR 约 0.7 dB 是 PNS 的
+  固有性质——解码器合成的是**新的**噪声，只能保证感知等价，不保证波形等价，
+  所以测试的护栏是"能干净解码 + 幅度有限 + 码长下降"，不是 SNR 阈值。
+- **工具坑**：先写了一个 `libavcodec` 包内的白盒测试验证写出器往返，触发
+  wasm 编译 `local count too large`（包 init 函数局部变量已达上限，新增任何
+  test 都会越界）。已把该文件移入 `.trash/`，改为 `aac_encode_vectors` 包的
+  端到端黑盒测试。**后续给 libavcodec 加白盒测试前要注意这个上限**。
+- **验收**：§278 / §286 / §287 三批 245 带黄金数据仍全部 **0 差异**；
+  `moon check --target wasm --deny-warn` 干净；`aac_pns_vectors` 3/3、
+  `aac_encode_vectors` 10/10；全量 **1395/1395** 通过。
+- **至此 §283 的六步清单全部完成**：`mark_pns`、twoloop 的 PNS 关联、
+  `search_for_pns`、码流 `off_pns` 链、编码器接线、带限噪声夹具端到端。
+
 
 
 
