@@ -834,7 +834,7 @@ fn aac_encode_test_nmr(
       }
       let want = enc.spectrum(orig)
       let got = enc.spectrum(recon)
-      let bands = psy.analyze(want, 0).bands
+      let bands = psy.analyze(0, want, 0).bands
       for g = 0; g < num_swb; g = g + 1 {
         let thr = bands[g].threshold
         if thr <= 0.0 {

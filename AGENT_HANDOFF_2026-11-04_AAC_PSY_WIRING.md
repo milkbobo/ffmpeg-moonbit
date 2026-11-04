@@ -66,11 +66,13 @@ moon test --target wasm < /dev/null > .scratch/full.log 2>&1   # 全量 1389/138
 
 ### 已知偏差（相对 `aacenc.c`）
 
-1. psy 分析的是 **M/S 之后**的谱；FFmpeg 分析 L/R，量化之后才做 M/S。
-2. psy ctx **每声道一份**，`fill_level` / `pe.min/max` 不共享；FFmpeg 是单 ctx +
-   声道数组（`s->psy.ch[]`）。
+1. psy 分析的是 **M/S 之后**的谱；FFmpeg 分析 L/R，量化之后才做 M/S。（实测无差别，
+   见 §3，保留现状。）
+2. ~~psy ctx 每声道一份~~ —— **§281 已修**：单 ctx + 每声道 band 状态，
+   `fill_level` / `pe.min/max` 恢复元素级共享；顺带立体声 SNR +0.44 dB。
+   注意 `analyze` 现在多一个 `channel` 参数。
 3. psy **每帧只分析一次**；FFmpeg 的 λ 重试循环里每次迭代都重新 `analyze`
-   （所以它的 `fill_level` 一帧内会被更新多次）。
+   （所以它的 `fill_level` 一帧内会被更新多次）。有意不复刻这个上游怪癖。
 4. `planned_max_sfb` 取 psy `bits > 0` 的最后一带（帧级固定）；FFmpeg 由 twoloop
    的 `max_sfb` 决定。固定是为了让 TNS 的 `mmm` 与解码端 `aac_apply_tns` 一致
    （`AacEncTns.mmm = min(tns_max_bands, max_sfb)` 两边必须同值）。

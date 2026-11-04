@@ -69,7 +69,7 @@ pub struct AacEncoder {
   prev_sequence : Array[Int32]
   attack_pending : Array[Bool]
   win_energy : Array[Double]
-  psy : Array[AacPsyContext]
+  psy : AacPsyContext
   /// Bit count of the previous frame's AAC payload, per channel, fed back to
   /// the psy model as `bitres.bits` (`libavcodec` `last_frame_pb_count`).
   mut last_frame_bits : Int32
@@ -252,24 +252,20 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
   let prev_sequence : Array[Int32] = []
   let attack_pending : Array[Bool] = []
   let win_energy : Array[Double] = []
-  // The 3GPP model keeps per-channel state (`prev_band`, entropy, attack
-  // threshold) that this port stores in one context per channel; FFmpeg keeps
-  // a single context with a channel array. See `channel_data_psy`.
-  let psy : Array[AacPsyContext] = []
   for _ch = 0; _ch < config.channels; _ch = _ch + 1 {
     history.push(Array::make(1024, 0.0))
     prev_sequence.push(aac_only_long)
     attack_pending.push(false)
     win_energy.push(0.0)
-    psy.push(
-      aac_psy_new(
-        sampling_index,
-        config.sample_rate,
-        config.bit_rate,
-        config.channels,
-      ),
-    )
   }
+  // One model per element, like `FFPsyContext`: the bit reservoir and the PE
+  // range are shared by the channels, only the band records are per channel.
+  let psy = aac_psy_new(
+    sampling_index,
+    config.sample_rate,
+    config.bit_rate,
+    config.channels,
+  )
   let (spectral_codes, spectral_bits) = aac_encode_code_tables()
   Ok({
     config,
@@ -1780,7 +1776,7 @@ pub fn AacEncoder::encode_frame(
       0
     }
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
-      psy_results.push(self.psy[ch].analyze(coefs[ch], prev_bits))
+      psy_results.push(self.psy.analyze(ch, coefs[ch], prev_bits))
     }
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       let bands = psy_results[ch].bands
@@ -1859,7 +1855,7 @@ pub fn AacEncoder::encode_frame(
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let two = aac_twoloop_search(
           coefs[ch],
-          self.psy[ch].band_sizes(),
+          self.psy.band_sizes(),
           psy_results[ch].bands,
           alloc,
           self.config.bit_rate,

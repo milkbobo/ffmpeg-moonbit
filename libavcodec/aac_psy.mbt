@@ -216,10 +216,16 @@ pub struct AacPsyContext {
   coeffs_short : Array[AacPsyCoeffs]
   band_sizes : Array[Int32]
   band_sizes_short : Array[Int32]
-  prev_band : Array[AacPsyBandState]
-  bands : Array[AacPsyBandState]
+  /// Per-channel state, one entry per channel (`AacPsyChannel` in
+  /// `aacpsy.c`): the band records of the frame being analysed and the copy of
+  /// the previous frame's that pre-echo control reads.
+  bands : Array[Array[AacPsyBandState]]
+  prev_band : Array[Array[AacPsyBandState]]
+  /// Per-channel perceptual entropy of the last analysed frame.
+  entropy : Array[Double]
+  /// Element-level allocation (`bitres.alloc`), shared by the channels of one
+  /// element exactly like `FFPsyContext.bitres` is.
   mut alloc : Int32
-  mut entropy : Double
 }
 
 ///|
@@ -463,13 +469,14 @@ fn aac_psy_calc_reduced_thr(
 /// needed here; `cutoff` is a coefficient index, not a frequency.
 fn AacPsyContext::calc_thr(
   self : AacPsyContext,
+  bands : Array[AacPsyBandState],
   coefs : Array[Double],
   cutoff : Int32,
 ) -> Unit {
   let mut start = 0
   let mut wstart = 0
   for g in 0..<self.band_sizes.length() {
-    let band = self.bands[g]
+    let band = bands[g]
     let mut energy = 0.0
     let mut form_factor = 0.0
     if wstart < cutoff {
@@ -511,13 +518,23 @@ pub fn aac_psy_new(
   )
   let coeffs_long : Array[AacPsyCoeffs] = []
   let coeffs_short : Array[AacPsyCoeffs] = []
-  let prev_band : Array[AacPsyBandState] = []
-  let bands : Array[AacPsyBandState] = []
   for _ in 0..<128 {
     coeffs_long.push(aac_psy_new_coeffs())
     coeffs_short.push(aac_psy_new_coeffs())
-    prev_band.push(aac_psy_new_band())
-    bands.push(aac_psy_new_band())
+  }
+  let prev_band : Array[Array[AacPsyBandState]] = []
+  let bands : Array[Array[AacPsyBandState]] = []
+  let entropy : Array[Double] = []
+  for _ch in 0..<channels {
+    let sc : Array[AacPsyBandState] = []
+    let pc : Array[AacPsyBandState] = []
+    for _ in 0..<128 {
+      sc.push(aac_psy_new_band())
+      pc.push(aac_psy_new_band())
+    }
+    bands.push(sc)
+    prev_band.push(pc)
+    entropy.push(0.0)
   }
   let chan_bitrate = bit_rate / channels
   let frame_bits = if chan_bitrate * 1024 / sample_rate < 2560 {
@@ -547,8 +564,8 @@ pub fn aac_psy_new(
     band_sizes_short: sizes_short,
     prev_band,
     bands,
+    entropy,
     alloc: -1,
-    entropy: 0.0,
   }
   aac_psy_init_coeffs(ctx, sampling_index, bandwidth)
   ctx
@@ -563,20 +580,28 @@ pub fn AacPsyContext::band_sizes(self : AacPsyContext) -> Array[Int32] {
 }
 
 ///|
-/// Run one frame of 3GPP analysis on `coefs` (1024 f32 MDCT coefficients in
-/// the encoder's coefficient domain). `prev_bits` is `bitres.bits` (bits
-/// consumed by the previous frame); the reference harness uses 0.
+/// Run one frame of 3GPP analysis for `channel` on `coefs` (1024 f32 MDCT
+/// coefficients in the encoder's coefficient domain). `prev_bits` is
+/// `bitres.bits` (bits consumed by the previous frame); the reference harness
+/// uses 0.
 ///
 /// This is `psy_3gpp_analyze_channel`, `aacpsy.c:646`, restricted to one
 /// long window. The returned bands are the `FFPsyBand` array that the
-/// twoloop quantizer consumes.
+/// twoloop quantizer consumes. The band records and the perceptual entropy
+/// are per channel, while `bitres` (`fill_level`) and the PE range
+/// (`pe.min` / `pe.max` / `pe.previous`) are shared by every channel of the
+/// element — analysing channel 0 already moves the element's reservoir
+/// position, exactly like upstream.
 pub fn AacPsyContext::analyze(
   self : AacPsyContext,
+  channel : Int32,
   coefs : Array[Double],
   prev_bits : Int32,
 ) -> AacPsyResult {
   let num_bands = self.band_sizes.length()
   let coeffs = self.coeffs_long
+  let bands = self.bands[channel]
+  let prev_band = self.prev_band[channel]
   let bandwidth = aac_psy_cutoff(
     self.bit_rate,
     self.channels,
@@ -585,13 +610,13 @@ pub fn AacPsyContext::analyze(
   let cutoff = bandwidth * 2048 / self.sample_rate
   let avoid_hole_thr = psy_ah_thr_long
   // 5.4.2 threshold calculation
-  self.calc_thr(coefs, cutoff)
+  self.calc_thr(bands, coefs, cutoff)
   // 5.4.2.3 spreading + 5.4.3 spread energy (one window, w = 0)
   let spread_en : Array[Double] = Array::make(128, 0.0)
-  spread_en[0] = self.bands[0].energy
+  spread_en[0] = bands[0].energy
   for g in 1..<num_bands {
-    let b = self.bands[g]
-    let bm = self.bands[g - 1]
+    let b = bands[g]
+    let bm = bands[g - 1]
     let t = aac_psy_maxf(b.thr, bm.thr * coeffs[g].spread_hi_thr)
     b.thr = t
     spread_en[g] = aac_psy_maxf(
@@ -600,8 +625,8 @@ pub fn AacPsyContext::analyze(
     )
   }
   for g = num_bands - 2; g >= 0; g = g - 1 {
-    let b = self.bands[g]
-    let bp = self.bands[g + 1]
+    let b = bands[g]
+    let bp = bands[g + 1]
     b.thr = aac_psy_maxf(b.thr, bp.thr * coeffs[g].spread_low_thr)
     spread_en[g] = aac_psy_maxf(
       spread_en[g],
@@ -616,12 +641,12 @@ pub fn AacPsyContext::analyze(
   let mut a = 0.0
   let mut active_lines = 0.0
   for g in 0..<num_bands {
-    let b = self.bands[g]
+    let b = bands[g]
     b.thr = aac_psy_maxf(b.thr, coeffs[g].ath)
     b.thr_quiet = b.thr
     // 5.4.2.5 pre-echo control. With ONLY_LONG / w=0 the guard is false,
     // so the reduction is applied using the previous frame's quiet threshold.
-    let prevq = self.prev_band[g].thr_quiet
+    let prevq = prev_band[g].thr_quiet
     b.thr = aac_psy_maxf(
       psy_rpemin * b.thr,
       aac_psy_minf(b.thr, psy_rpelev * prevq),
@@ -637,7 +662,7 @@ pub fn AacPsyContext::analyze(
       psy_ah_inactive
     }
   }
-  self.entropy = pe
+  self.entropy[channel] = pe
   let desired_bits = self.bit_demand(pe, prev_bits, false)
   let mut desired_pe = desired_bits.to_double() * psy_bits_to_pe
   if prev_bits > 0 {
@@ -657,7 +682,7 @@ pub fn AacPsyContext::analyze(
     a = 0.0
     active_lines = 0.0
     for g in 0..<num_bands {
-      let b = self.bands[g]
+      let b = bands[g]
       b.thr = aac_psy_calc_reduced_thr(b, coeffs[g].min_snr, reduction)
       pe += aac_psy_calc_pe(b)
       a += b.pe_const
@@ -671,7 +696,7 @@ pub fn AacPsyContext::analyze(
       let mut a2 = 0.0
       let mut al2 = 0.0
       for g in 0..<num_bands {
-        let b = self.bands[g]
+        let b = bands[g]
         if b.avoid_holes != psy_ah_active {
           pe_no_ah += b.pe
           a2 += b.pe_const
@@ -684,7 +709,7 @@ pub fn AacPsyContext::analyze(
       }
       pe = 0.0
       for g in 0..<num_bands {
-        let b = self.bands[g]
+        let b = bands[g]
         if al2 > 0.0 {
           b.thr = aac_psy_calc_reduced_thr(b, coeffs[g].min_snr, reduction)
         }
@@ -709,7 +734,7 @@ pub fn AacPsyContext::analyze(
         0.0
       }
       for g in 0..<num_bands {
-        let b = self.bands[g]
+        let b = bands[g]
         if b.active_lines > 0.5 {
           let delta_sfb_pe = b.norm_fac * inv * delta_pe
           let mut thr = b.thr *
@@ -724,7 +749,7 @@ pub fn AacPsyContext::analyze(
     } else {
       // 5.6.1.3.7 further PE reduction: raise min_snr from the top band down
       for g = num_bands - 1; g >= 0 && pe > desired_pe; g = g - 1 {
-        let b = self.bands[g]
+        let b = bands[g]
         if b.avoid_holes != psy_ah_none && coeffs[g].min_snr < psy_snr_1db {
           coeffs[g].min_snr = psy_snr_1db
           b.thr = b.energy * psy_snr_1db
@@ -736,8 +761,8 @@ pub fn AacPsyContext::analyze(
   // publish FFPsyBand + commit prev_band (aacpsy.c:827-839)
   let out : Array[AacPsyBandInfo] = []
   for g in 0..<num_bands {
-    let b = self.bands[g]
-    let pb = self.prev_band[g]
+    let b = bands[g]
+    let pb = prev_band[g]
     out.push({
       energy: b.energy,
       threshold: b.thr,
@@ -757,7 +782,7 @@ pub fn AacPsyContext::analyze(
   {
     bands: out,
     alloc: self.alloc,
-    entropy: self.entropy,
+    entropy: self.entropy[channel],
     fill_level: self.fill_level,
   }
 }

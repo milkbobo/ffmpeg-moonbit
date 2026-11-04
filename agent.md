@@ -98,7 +98,9 @@
   `mp3_enc_subband/mdct/loop/bitstream.mbt`，shine 3.1.1 移植，§275）、
   Opus（`opus_encode.mbt` + `opus_enc_rc/math/tables/celt/bands/alloc/psy/psy2.mbt`，
   FFmpeg 原生 CELT-only 路径，§276）、AAC 3GPP 心理声学模型
-  （`aac_psy.mbt` + `aac_psy_vectors/`，§277）与 AAC twoloop 量化器
+  （`aac_psy.mbt` + `aac_psy_vectors/`，§277；§281 已把状态结构对齐
+  `FFPsyContext`——单 ctx + 每声道 band 状态，`analyze(channel, coefs, prev_bits)`，
+  `fill_level`/`pe.min/max` 元素级共享，做 PNS 前必须先有这个前提）与 AAC twoloop 量化器
   （`aac_twoloop.mbt` + `aac_twoloop_tables.mbt` + `aac_twoloop_vectors/`，§278）、
   以及二者组合的可选码率控制链（`aac_encode_config_perceptual`，§279：`ONLY_LONG`
   帧走 psy→twoloop→λ 严格重试，过渡/短窗仍走简化模型；**默认不启用**，因为感知

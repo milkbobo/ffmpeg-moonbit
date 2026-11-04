@@ -7105,10 +7105,10 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
      字节），没有差别，因此保留"看 M/S"的顺序——它自洽（sf 按实际编码的谱选），
      而且单独前移只会让 twoloop 拿 L/R 的阈值去量化 M/S 谱，制造 FFmpeg 没有的
      新偏差。要真正复刻必须连"量化完成后再做 M/S"一起改。
-  2. psy ctx 每声道一份，`fill_level` / `pe.min/max` 不共享；FFmpeg 是单 ctx +
-     声道数组。
-  3. psy 每帧只分析一次；FFmpeg 的 λ 重试循环每次迭代都重新 `analyze`
-     （`fill_level` 因此一帧内被更新多次）。
+  2. ~~psy ctx 每声道一份，`fill_level` / `pe.min/max` 不共享~~ —— §281 已改成单
+     ctx + 每声道 band 状态，水位与 PE 范围恢复元素级共享，与 `FFPsyContext` 一致。
+  3. psy 每帧只分析一次；FFmpeg 的 λ 重试循环里每次迭代都重新 `analyze`
+     （`fill_level` 因此一帧内被更新多次）——有意不复刻这个上游怪癖。
   4. `planned_max_sfb` 取 psy `bits > 0` 的最后一带（帧级固定）；FFmpeg 由 twoloop
      的 `max_sfb` 决定。这里固定是为了让 TNS 的 `mmm` 与解码端
      `aac_apply_tns` 一致。
@@ -7153,4 +7153,37 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   才能把噪声和阈值放在同一把尺子上，重新实现一遍窗与 MDCT 只会引入偏差。
 - **检查**：`moon check --target wasm --deny-warn` 干净；`libavcodec/aac_encode_vectors`
   **8/8**；全量 `moon test --target wasm` **1390/1390** 通过。
+
+## 281. AAC psy：改成元素级上下文 + 每声道状态（对齐 `FFPsyContext`）
+
+- **动机**：§277 的移植把模型写成了"单声道状态 + `channels` 参数"，§279 接入时只能
+  每声道建一个 ctx，于是 `fill_level`（比特储备）和 `pe.min/max/previous` 被复制成
+  两份，而 `aacpsy.c` 里它们是**元素级共享**的（`FFPsyContext.bitres` / `pctx->pe`，
+  只有 `AacPsyChannel ch[]` 里的 band 记录、`entropy`、attack 状态是每声道）。这既是
+  §279 记录的偏差 2，也是将来做 PNS 的障碍（`mark_pns` / `search_for_pns` 都按
+  `s->psy.ch[cur_channel].psy_bands` 读，同时依赖共享的 `lambda`/水位）。
+- **改动**（`aac_psy.mbt`）：
+  - `AacPsyContext` 的 `bands` / `prev_band` / `entropy` 改为按声道索引
+    （`Array[Array[AacPsyBandState]]` / `Array[Double]`），`fill_level`、`pe_*`、
+    `alloc` 保持元素级单份。
+  - `analyze(channel, coefs, prev_bits)` 增加声道号；内部把该声道的两个 band 数组
+    取成局部别名，`calc_thr` 改为接收 `bands` 参数（原来是读 `self.bands`）。
+  - `aac_psy_new` 按 `channels` 分配每声道状态；`sampling_index` 等参数不变。
+  - 编码器侧 `AacEncoder.psy` 从 `Array[AacPsyContext]` 变成**单个**
+    `AacPsyContext`，每声道调 `psy.analyze(ch, coefs[ch], prev_bits)`。语义随之
+    变成"分析声道 1 时已经看到声道 0 动过的水位"——这正是上游的行为。
+- **验证**：
+  - §277 的 3 项黄金测试、§278 的 3 项全部**逐位不变**（单声道用例只碰 channel 0，
+    共享量在单声道下与原来等价）——这条是本次重构的安全网。
+  - 编码器（44100/128k/2ch，同一夹具）：感知路径往返 SNR **21.48 → 21.92 dB**，
+    噪声-掩蔽比 12.88 → 12.90 dB（持平），帧长 356 → 355 字节；简化路径 29.05 dB /
+    NMR 14.45 dB 完全未变（它不经过 psy）。
+  - 即：更忠实的结构顺带把立体声的水位算对了，多出 0.44 dB。
+- **仍未复刻**（有意）：FFmpeg 的 λ 重试循环里每次迭代都重新 `analyze`，因此
+  `fill_level` 一帧内会被更新多次；本移植每帧只分析一次（`bitres.bits` 只喂上一次
+  的真实帧长）。这条留在 §279 的偏差清单里，属于"上游自身的怪癖"，不跟着抄。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_psy_vectors` 3/3、
+  `aac_twoloop_vectors` 3/3、`aac_encode_vectors` 8/8；全量
+  `moon test --target wasm` **1390/1390** 通过。
+
 
