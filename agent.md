@@ -267,6 +267,12 @@ $msg | git commit -F -
   已三次写入损坏文件（Python `SyntaxError: unterminated string literal`、源文件里出现
   真实换行甚至 NUL 字节）。**生成或修改脚本一律用 Write/Edit 工具写完整文件**；必须在
   shell 里内联 Python 时只允许无反斜杠转义的单行 `python -c`。
+  另一类症状是**进程挂死**：工具以 stdin 喂脚本（`bash -s` 语义）时，heredoc
+  结束符一旦因缩进/转义改写而不匹配，bash 会一直读 stdin 找结束符，连后面的
+  `exit` 也被当成正文吞掉；工具持有的 stdin 不给 EOF，进程便永不返回（实测
+  结束符正确 `exit=0`，带缩进 `timeout 3` 得 124）。`bash -c` 把正文放在命令
+  字符串里、不从 stdin 取，结束符错只报 warning 后退出，不会挂。CRLF 的 `\r`
+  在 Git Bash 文本模式下会被吃掉，不是这里的元凶。
 - **wasm `__moonbit__init` 局部变量上限（约 5 万）**：包级大 `Array` 字面量每个元素都会
   变成 init 的局部变量，libavcodec 白盒测试包已贴近上限——新增大表/大向量时**禁止**用
   `Array[Double]`/`Array[Int32]` 字面量，改为 **base64 `Bytes` 字面量（数据段，不占局部）

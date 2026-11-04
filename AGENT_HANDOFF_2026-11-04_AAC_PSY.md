@@ -154,4 +154,8 @@ twoloop 对齐后再把 `aac_psy.mbt` + twoloop 接入 `aac_encode.mbt`，替换
 - `README.md` 工作区是 CRLF（git blob 是 LF，`core.autocrlf` 规范化），
   Edit 单行替换不会破坏；但还是建议改完看一眼 `git diff --stat` 是否只有 1 行。
 - 清理一律 `mv` 到项目根 `.trash/<YYYY-MM-DD>/<原相对路径>`，不删。
-- `moon fmt` 禁止跑；heredoc 会挂死（写 .py 用 Write 工具）。
+- `moon fmt` 禁止跑；**heredoc 禁用**（`agent.md` §6 有完整说明）。两类症状别混：
+  ① 转义层把 `\n`/引号/NUL 改写 → 写坏文件；② 工具以 stdin 喂脚本（`bash -s`
+  语义）时结束符因缩进/改写失配，bash 一直读 stdin 找结束符、连 `exit` 都吞掉，
+  而工具 stdin 不给 EOF → 永久挂起（实测正确结束符 `exit=0`、带缩进 `timeout 3`
+  得 124）。`bash -c` 模式只报 warning，不会挂。写脚本一律用 Write/Edit 工具。
