@@ -61,6 +61,18 @@ fn aac_encode_test_stream(
   let config : @libavcodec.AacEncodeConfig = @libavcodec.aac_encode_config(
     rate, channels, bit_rate,
   )
+  aac_encode_test_stream_config(pcm, channels, frames, config)
+}
+
+///|
+/// Encode `frames` input frames plus one silent flush frame with an explicit
+/// configuration (so a test can pick the perceptual rate control).
+fn aac_encode_test_stream_config(
+  pcm : Array[Array[Double]],
+  channels : Int32,
+  frames : Int32,
+  config : @libavcodec.AacEncodeConfig,
+) -> Array[Bytes] {
   let enc = aac_encode_test_ok(@libavcodec.aac_encoder_new(config))
   let out : Array[Bytes] = []
   for f = 0; f < frames + 1; f = f + 1 {
@@ -727,4 +739,59 @@ test "aac_lc_encoder_round_trip" {
   // bits, so the stream sits just under the requested average bit rate.
   assert_true(total / stream.length() <= target)
   assert_true(4 * (total / stream.length()) >= 3 * target)
+}
+
+///|
+/// The opt-in perceptual rate control (`PORTING_HISTORY.md` §279): the same
+/// programme as `aac_lc_encoder_round_trip`, but steady-state long frames are
+/// quantised by the ported 3GPP model + twoloop search instead of the
+/// simplified model and the frame-wide offset search.
+///
+/// Its SNR floor is deliberately lower than the default path's: the psy model
+/// shapes noise under the masking threshold instead of minimising squared
+/// error, and this port's allocation is not yet as good as FFmpeg's (see
+/// §279). The assertions guard the parts that must hold: the stream decodes,
+/// every frame stays inside the ADTS frame limit, the average lands under the
+/// nominal rate, and the round trip keeps a sane error level.
+test "aac_lc_perceptual_rate_control" {
+  let channels = 2
+  let rate = 44100
+  let frames = 8
+  let bit_rate = 128000
+  let input = aac_encode_test_tone(rate, channels, frames)
+  let config = @libavcodec.aac_encode_config_perceptual(
+    rate, channels, bit_rate,
+  )
+  let stream = aac_encode_test_stream_config(input, channels, frames, config)
+  let decoded = aac_encode_test_decode(stream, channels)
+  let mut total = 0
+  let mut largest = 0
+  for f = 0; f < stream.length(); f = f + 1 {
+    total = total + stream[f].length()
+    if stream[f].length() > largest {
+      largest = stream[f].length()
+    }
+  }
+  let target = bit_rate * 1024 / rate / 8
+  let mut energy = 0.0
+  let mut noise = 0.0
+  for ch = 0; ch < channels; ch = ch + 1 {
+    for i = 0; i < frames * 1024; i = i + 1 {
+      let want = input[ch][i]
+      let got = decoded[ch][i + 1024]
+      energy = energy + want * want
+      noise = noise + (got - want) * (got - want)
+    }
+  }
+  let snr = 10.0 * @math.log10(energy / noise)
+  println(
+    "perceptual round trip: frames=\{stream.length()} avg_bytes=\{total / stream.length()} target_bytes=\{target} largest=\{largest} snr=\{snr}",
+  )
+  assert_true(stream.length() == frames + 1)
+  // An ADTS frame carries at most 8191 bytes; 6144*channels-3 bits is the
+  // limit `aac_encode_frame` itself enforces.
+  assert_true(largest * 8 <= 6144 * channels)
+  assert_true(total / stream.length() <= target)
+  assert_true(4 * (total / stream.length()) >= 3 * target)
+  assert_true(snr > 18.0)
 }

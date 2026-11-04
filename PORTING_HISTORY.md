@@ -7054,3 +7054,56 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   替换 §271 的简化模型与全局 delta 二分。
 - **检查**：`moon check --target wasm --deny-warn` 干净；全量
   `moon test --target wasm` **1388/1388** 通过。
+
+## 279. AAC 编码器：接入 3GPP 模型 + twoloop（可选码率控制）
+
+- **动机**：§277（`aacpsy.c`）与 §278（`aaccoder_twoloop.h`）两层都独立对拍过，
+  本片把它们接进 `aac_encode.mbt`，替换 §271 的简化心理声学与 ±255 全局 delta
+  二分。接通后量化噪声仍未落到模型自身阈值以内（见"测量"），所以**默认不启用**：
+  新增 `aac_encode_config_perceptual`，默认的 `aac_encode_config` 仍走 §271 的
+  路径，编码质量不回退。
+- **接线**（`aac_encode.mbt`）：
+  - `AacEncoder` 新增 `psy : Array[AacPsyContext]`、`mut last_frame_bits`、
+    `mut lambda`。
+  - 每帧顺序：M/S → `psy.analyze`（每声道一次，`prev_bits =
+    last_frame_bits / channels`）→ TNS → twoloop → 写帧。psy 看的是**实际被编码
+    的谱**（M/S 之后、TNS 之前）。
+  - 只对 `aac_only_long` 生效；LONG_START / EIGHT_SHORT / LONG_STOP 仍走简化模型
+    + delta 二分（psy 移植只做长窗，twoloop 只做单窗）。
+  - 预算：`alloc = psy.alloc / channels`（`aacenc.c` 在累加 `target_bits` 之后就是
+    这个除法）。
+  - 标度因子映射：twoloop 内部 `Q = 2^((104-sf)/4)`，本模块 bitstream 侧
+    `q = floor((|c|·2^(-(s-100)/4))^(3/4)+0.405)`，两者相等当且仅当 **`s = sf-4`**。
+  - `aac_twoloop_quantize_band`（`aac_twoloop.mbt` 新增）：按 twoloop 的 f32 路径
+    重新量化（`abs_pow34` + `quantize_bands`，cb 11 的 escape 走 `quant()` 并 clip
+    到 8191），使写进码流的系数就是被成本函数定价的那批。逐带核对过：成本与写入
+    位数一致（个别 escape 带差 2–6 位，来源是 C 用 `av_log2(c)*2-4+1` 估算）。
+  - 码率控制：`aac_encode_frame` 的**严格分支**（`bit_rate_tolerance == 0`）——
+    帧超出 `bit_rate*1024/sample_rate` 位就把 λ 乘 `min(0.9, rate/frame)` 重来，
+    装得下就把 λ 复位 120；迭代上限 10 次（上游靠 λ 收敛，这里加了保险）。
+- **测量**（44100 Hz / 128 kbps / 2 声道，8 帧四音 + LCG 抖动 + 静音 flush）：
+  - 默认路径（不变）：117.1 kbps、往返 SNR 29.05 dB、PSNR 38.88 dB。
+  - 感知路径：122.7 kbps、SNR 21.48 dB、PSNR 31.31 dB；逐 1024 样本块
+    27.9 / 28.3 / 28.4 / 23.0 / 23.1 / 20.4 / 18.7 / 17.0 dB（前 3 块是过渡帧，
+    仍走旧路径）。
+  - 单声道长帧基本持平（33.50 vs 33.53 dB，546 vs 560 字节），差距集中在立体声。
+  - **未解决**：稳定长帧上逐带量化噪声是 psy 自身阈值的 **5–20 倍**（头几帧只有
+    0.6–1.3 倍）。所以这不只是"psy 拿 SNR 换掩蔽"——分配没达到模型目标。
+- **已知偏差**（相对 `aacenc.c`，即使修好阈值也要记）：
+  1. psy 分析的是 M/S 之后的谱；FFmpeg 分析 L/R，量化之后才做 M/S。
+  2. psy ctx 每声道一份，`fill_level` / `pe.min/max` 不共享；FFmpeg 是单 ctx +
+     声道数组。
+  3. psy 每帧只分析一次；FFmpeg 的 λ 重试循环每次迭代都重新 `analyze`
+     （`fill_level` 因此一帧内被更新多次）。
+  4. `planned_max_sfb` 取 psy `bits > 0` 的最后一带（帧级固定）；FFmpeg 由 twoloop
+     的 `max_sfb` 决定。这里固定是为了让 TNS 的 `mmm` 与解码端
+     `aac_apply_tns` 一致。
+- **下一步**（具体到可执行）：给 `_ref/aacenc/harness.c` 加一个"喂外部谱"的入口，
+  把编码器这一帧的谱与 `alloc` 打进 C 的 `search_for_quantizers_twoloop`，逐带比
+  `sf/cb/zeroes`。若 C 在 `alloc≈1114` 时同样越过阈值，说明是模型在低码率、纯音
+  输入下的固有行为；若 C 明显更好，差异就在接线，优先查 psy 输入顺序
+  （M/S 前 vs 后）与 per-channel ctx 两条。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`libavcodec/aac_encode_vectors`
+  **7/7**（新增 `aac_lc_perceptual_rate_control` 覆盖感知路径：解码、单帧
+  ≤6144×声道、均值不超名义码率、SNR>18 dB）；全量 `moon test --target wasm`
+  **1389/1389** 通过。

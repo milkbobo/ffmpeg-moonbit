@@ -99,8 +99,11 @@
   Opus（`opus_encode.mbt` + `opus_enc_rc/math/tables/celt/bands/alloc/psy/psy2.mbt`，
   FFmpeg 原生 CELT-only 路径，§276）、AAC 3GPP 心理声学模型
   （`aac_psy.mbt` + `aac_psy_vectors/`，§277）与 AAC twoloop 量化器
-  （`aac_twoloop.mbt` + `aac_twoloop_tables.mbt` + `aac_twoloop_vectors/`，§278：
-  两者都是独立可验证层，未接入 `aac_encode.mbt`）。
+  （`aac_twoloop.mbt` + `aac_twoloop_tables.mbt` + `aac_twoloop_vectors/`，§278）、
+  以及二者组合的可选码率控制链（`aac_encode_config_perceptual`，§279：`ONLY_LONG`
+  帧走 psy→twoloop→λ 严格重试，过渡/短窗仍走简化模型；**默认不启用**，因为感知
+  路径在本仓库的音调夹具上比默认路径低约 8 dB SNR，量化噪声仍高于 psy 自身阈值
+  5–20 倍）。
   AAC psy 的 C 参考是 `_ref/aacenc/`（`bash build.sh && ./aac_ref.exe > vectors.txt`
   → `python scripts/gen_aac_psy_vectors.py`）；`psy_3gpp_init` 的
   `coeffs[g+1].barks - coeffs->barks` 减的是 `coeffs[0].barks`（累积宽度），
@@ -115,6 +118,14 @@
   走零带短路（不进量化）、codebook 11 的 escape 用 `165140.0*IQ` 截断而非
   `CLIPPED_ESCAPE` 的 8191；内层循环的 `iters` 上限是 30 且必须跑满语义
   （参考侧 30 次全用完），外层对 `sf0` 的振荡不做收敛判断。
+  接进编码器时（§279）有两条硬约束：twoloop 的 `sf` 是内部标度（`Q =
+  2^((104-sf)/4)`），写码流要减 4（本模块 `q = floor((|c|·2^(-(s-100)/4))^(3/4)
+  +0.405)`），写错 4 就是 6 dB 电平错；写出的系数必须用
+  `aac_twoloop_quantize_band` 按同一条 f32 路径重量化，否则成本函数定价的位数
+  和实际写出的位数对不上（逐带核对过，正常时误差 ≤6 位，只在 escape 带）。
+  码率控制用 `aac_encode_frame` 的严格分支：帧超了就 λ *= min(0.9, rate/frame)
+  重来，装得下复位 120——不要用 ABR 容差带那套，容差带会让 `fill_level` 持续
+  失血、alloc 逐帧下降。
   MP3 的表来自编译后 C 参考的零转录 dump（`scripts/gen_mp3_enc_tables.sh`
   可重建 dumper/harness 并再生成表与夹具）；`calc_scfsi` 的 `mp3enc_ln`
   与 C 侧 `shine_ref_log` 必须保持同一段 IEEE 运算（libm log 跨平台位级

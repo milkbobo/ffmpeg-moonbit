@@ -971,3 +971,49 @@ pub fn aac_twoloop_search(
   }
   { sf, cb, zeroes, maxvals, tbits, iters: its }
 }
+
+///|
+/// Quantise one band with the scalefactor and codebook the search settled on.
+/// This repeats `quantize_bands` with the same f32 pipeline the cost function
+/// used (`aacencdsp.c:30`), so the coefficients a caller writes to the
+/// bitstream are exactly the ones that were costed.
+///
+/// Magnitudes are capped at `aac_cb_maxval[cb]`; codebook 11 keeps its escape
+/// path, where a sample whose capped value hit 16 is re-quantised with the
+/// wider `quant()` (`aacenc_utils.h:50`) and clipped to 8191. The sign is
+/// carried in the returned values: `aac_encode_write_spectral` emits the
+/// separate sign bits of the unsigned books from them.
+pub fn aac_twoloop_quantize_band(
+  coefs : Array[Double],
+  start : Int32,
+  size : Int32,
+  sf : Int32,
+  cb : Int32,
+) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(size, 0)
+  if cb <= 0 {
+    return out
+  }
+  let q_idx = aac_two_pow_sf2_zero - sf + aac_two_scale_one_pos -
+    aac_two_scale_div_512
+  let q34 = aac_twoloop_pow34sf[q_idx]
+  let q = aac_twoloop_pow2sf[q_idx]
+  let cap = aac_twoloop_cb_maxval[cb]
+  let is_esc = cb == 11
+  for i in 0..<size {
+    let c = coefs[start + i]
+    let a = aac_two_f32(c.abs())
+    let scaled = aac_two_sqrtf(aac_two_mul(a, aac_two_sqrtf(a)))
+    let capped = aac_two_add(aac_two_mul(scaled, q34), aac_two_c_quant)
+    let mut v = if capped >= cap.to_double() {
+      cap
+    } else {
+      capped.to_int()
+    }
+    if is_esc && v == cap {
+      v = aac_two_clip(aac_two_quant(a, q, aac_two_c_quant), 0, 8191)
+    }
+    out[i] = if c < 0.0 { -v } else { v }
+  }
+  out
+}

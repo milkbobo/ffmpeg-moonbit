@@ -42,6 +42,10 @@ pub struct AacEncodeConfig {
   sample_rate : Int32
   channels : Int32
   bit_rate : Int32
+  /// Quantise steady-state long frames with the 3GPP model and the twoloop
+  /// search (`aac_encode_config_perceptual`) instead of the simplified
+  /// perceptual model plus the frame-wide offset search.
+  perceptual : Bool
 }
 
 ///|
@@ -65,6 +69,14 @@ pub struct AacEncoder {
   prev_sequence : Array[Int32]
   attack_pending : Array[Bool]
   win_energy : Array[Double]
+  psy : Array[AacPsyContext]
+  /// Bit count of the previous frame's AAC payload, per channel, fed back to
+  /// the psy model as `bitres.bits` (`libavcodec` `last_frame_pb_count`).
+  mut last_frame_bits : Int32
+  /// Rate-control lambda of the perceptual path: starts each frame at 120 and
+  /// is scaled down by `min(0.9, rate/frame)` while the quantised frame
+  /// overflows (`aac_encode_frame`'s strict bit-rate control).
+  mut lambda : Double
 }
 
 ///|
@@ -74,7 +86,27 @@ pub fn aac_encode_config(
   channels : Int32,
   bit_rate : Int32,
 ) -> AacEncodeConfig {
-  { sample_rate, channels, bit_rate, }
+  { sample_rate, channels, bit_rate, perceptual: false }
+}
+
+///|
+/// Build a configuration whose steady-state long frames are quantised by the
+/// ported FFmpeg rate control: the 3GPP model (`aac_psy.mbt`, §277) publishes
+/// per-band thresholds and the frame's bit allocation, the twoloop search
+/// (`aac_twoloop.mbt`, §278) turns them into per-band scalefactors, and lambda
+/// is retried until the real frame fits the nominal size.
+///
+/// This path is **opt-in**. On this project's tonal fixtures it lands several
+/// dB below the simplified model in SNR at the same bit rate, and the
+/// quantisation noise still exceeds the model's own thresholds on steady
+/// frames, so the default stays the path with the measured 30 dB round trip.
+/// `PORTING_HISTORY.md` §279 records the measurements and what is still open.
+pub fn aac_encode_config_perceptual(
+  sample_rate : Int32,
+  channels : Int32,
+  bit_rate : Int32,
+) -> AacEncodeConfig {
+  { sample_rate, channels, bit_rate, perceptual: true }
 }
 
 ///|
@@ -220,11 +252,23 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
   let prev_sequence : Array[Int32] = []
   let attack_pending : Array[Bool] = []
   let win_energy : Array[Double] = []
+  // The 3GPP model keeps per-channel state (`prev_band`, entropy, attack
+  // threshold) that this port stores in one context per channel; FFmpeg keeps
+  // a single context with a channel array. See `channel_data_psy`.
+  let psy : Array[AacPsyContext] = []
   for _ch = 0; _ch < config.channels; _ch = _ch + 1 {
     history.push(Array::make(1024, 0.0))
     prev_sequence.push(aac_only_long)
     attack_pending.push(false)
     win_energy.push(0.0)
+    psy.push(
+      aac_psy_new(
+        sampling_index,
+        config.sample_rate,
+        config.bit_rate,
+        config.channels,
+      ),
+    )
   }
   let (spectral_codes, spectral_bits) = aac_encode_code_tables()
   Ok({
@@ -243,6 +287,9 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     prev_sequence,
     attack_pending,
     win_energy,
+    psy,
+    last_frame_bits: 0,
+    lambda: 120.0,
   })
 }
 
@@ -1273,6 +1320,48 @@ fn AacEncoder::channel_data(
 }
 
 ///|
+/// One channel of a steady-state long frame, quantised by the twoloop search.
+///
+/// The search reports `sf` in FFmpeg's internal scale, where the quantiser
+/// step is `Q = 2^((104-sf)/4)` (`aaccoder.c:83`), while this module writes
+/// the bitstream scale `q = floor((|c| * 2^(-(s-100)/4))^(3/4) + 0.405)` that
+/// `aac_encode_quantize_band` and the decoder share. The two agree for
+/// `s = sf - 4`.
+///
+/// The spectrum is re-quantised band by band with the exact f32 path the cost
+/// function used (`aac_twoloop_quantize_band`), so the coefficients written
+/// are the ones the search priced. `max_sfb` is the frame's planned value: a
+/// common-window CPE shares it and TNS derives its band range from it, so both
+/// the transmitted value and the decoder's `aac_apply_tns` must see the same
+/// number.
+fn AacEncoder::channel_data_psy(
+  self : AacEncoder,
+  coef : Array[Double],
+  two : AacTwoResult,
+  seq : Int32,
+  max_sfb : Int32,
+) -> AacEncChannel {
+  let num_swb = two.sf.length()
+  let sf : Array[Int32] = Array::make(num_swb, -1)
+  let cb : Array[Int32] = Array::make(num_swb, 0)
+  let q : Array[Int32] = Array::make(1024, 0)
+  for b = 0; b < num_swb && b < max_sfb; b = b + 1 {
+    if two.zeroes[b] != 0 || two.sf[b] < 0 || two.cb[b] <= 0 {
+      continue
+    }
+    let start = self.swb_offsets[b]
+    let size = self.swb_offsets[b + 1] - start
+    let band = aac_twoloop_quantize_band(coef, start, size, two.sf[b], two.cb[b])
+    for i = 0; i < size; i = i + 1 {
+      q[start + i] = band[i]
+    }
+    sf[b] = two.sf[b] - 4
+    cb[b] = two.cb[b]
+  }
+  { sf, cb, q, max_sfb, window_sequence: seq, num_windows: 1 }
+}
+
+///|
 /// Global gain: the first coded band's scalefactor (or 100 when silent).
 fn aac_encode_global_gain(ch : AacEncChannel) -> Int32 {
   for b = 0; b < ch.max_sfb; b = b + 1 {
@@ -1466,7 +1555,8 @@ priv struct AacEncFrame {
 
 ///|
 /// Assemble one ADTS frame for a prepared frame and frame-wide scalefactor
-/// offset `delta`.
+/// offset `delta` (the transition/short-frame path, which keeps the simplified
+/// perceptual model).
 fn AacEncoder::build_frame(
   self : AacEncoder,
   frame : AacEncFrame,
@@ -1484,6 +1574,29 @@ fn AacEncoder::build_frame(
       ),
     )
   }
+  self.assemble_frame(frame, chans)
+}
+
+///|
+/// `aac_encode_frame`'s `rate_bits`: the nominal bits of one frame, capped at
+/// what an ADTS header can describe (`6144 * channels - 3`).
+fn AacEncoder::aac_encode_rate_bits(self : AacEncoder) -> Int32 {
+  let mut rate_bits = self.config.bit_rate * 1024 / self.config.sample_rate
+  let limit = 6144 * self.config.channels - 3
+  if rate_bits > limit {
+    rate_bits = limit
+  }
+  rate_bits
+}
+
+///|
+/// Write the element(s), ics_info, section data, scalefactors, TNS and spectral
+/// data of an already-quantised channel pair, then prefix the ADTS header.
+fn AacEncoder::assemble_frame(
+  self : AacEncoder,
+  frame : AacEncFrame,
+  chans : Array[AacEncChannel],
+) -> Result[Bytes, String] {
   let bw = BitWriter::new()
   if self.config.channels == 1 {
     bw.put(0, 3) // ID_SCE
@@ -1634,19 +1747,50 @@ pub fn AacEncoder::encode_frame(
     }
     aac_encode_apply_ms(coefs[0], coefs[1], offsets, num_swb, mask, num_windows)
   }
-  // The perceptual model is absolute, so it is evaluated once per channel on
-  // the spectra actually coded; the rate-control search then only shifts every
-  // band by the same offset.
+  // Perceptual targets, evaluated once per channel on the spectra actually
+  // coded (after M/S, before TNS). Steady-state long frames can go through
+  // FFmpeg's rate control: the 3GPP model publishes per-band thresholds and
+  // the frame's bit allocation, and the twoloop quantiser turns them into
+  // per-band scalefactors. Both are only defined for one long window (the psy
+  // port is long-only, the search is single-window), so LONG_START /
+  // EIGHT_SHORT / LONG_STOP frames always keep the simplified model with the
+  // frame-wide offset search below.
+  let use_psy = self.config.perceptual && seq == aac_only_long
+  let psy_results : Array[AacPsyResult] = []
   let targets : Array[Array[Int32]] = []
   let mut planned_max_sfb = 0
-  for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    let t = self.band_targets(coefs[ch], seq)
-    for b = 0; b < num_swb; b = b + 1 {
-      if t[b] >= 0 && b + 1 > planned_max_sfb {
-        planned_max_sfb = b + 1
+  if use_psy {
+    let prev_bits = if self.config.channels > 0 {
+      self.last_frame_bits / self.config.channels
+    } else {
+      0
+    }
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      psy_results.push(self.psy[ch].analyze(coefs[ch], prev_bits))
+    }
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let bands = psy_results[ch].bands
+      for b = 0; b < bands.length() && b < num_swb; b = b + 1 {
+        if bands[b].bits > 0 && b + 1 > planned_max_sfb {
+          planned_max_sfb = b + 1
+        }
       }
     }
-    targets.push(t)
+    // TNS derives its band range from `max_sfb` on both sides, so a frame
+    // that transmits no band at all still needs a non-zero value.
+    if planned_max_sfb < 1 {
+      planned_max_sfb = 1
+    }
+  } else {
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let t = self.band_targets(coefs[ch], seq)
+      for b = 0; b < num_swb; b = b + 1 {
+        if t[b] >= 0 && b + 1 > planned_max_sfb {
+          planned_max_sfb = b + 1
+        }
+      }
+      targets.push(t)
+    }
   }
   // TNS: analyse and filter each channel's upper bands, exactly the range the
   // decoder reconstructs from the shared max_sfb.
@@ -1680,34 +1824,96 @@ pub fn AacEncoder::encode_frame(
   if target_bytes < av_aac_adts_header_size + 1 {
     target_bytes = av_aac_adts_header_size + 1
   }
-  // Finer quantisation costs more bits, so the smallest offset whose frame
-  // still fits the budget is the highest quality this frame can afford. The
-  // offset may be negative: escape coding lets the scalefactor go below the
-  // reference value that a 15-step codebook would require.
-  let mut lo = -255
-  let mut hi = 255
-  let mut best : Bytes = b""
-  let mut found = false
-  while lo <= hi {
-    let mid = (lo + hi) / 2
-    let built = match self.build_frame(frame, mid) {
-      Ok(v) => v
-      Err(e) => return Err(e)
+  let result = if use_psy {
+    // FFmpeg hands the element budget to the search from the last channel's
+    // analyse (`bitres` is per element, and `aacenc.c` divides by the channel
+    // count before `search_for_quantizers`).
+    let last = psy_results.length() - 1
+    let psy_alloc = if last >= 0 { psy_results[last].alloc } else { 0 }
+    let alloc = psy_alloc / self.config.channels
+    // `aac_encode_frame`'s strict bit-rate control (`bit_rate_tolerance == 0`):
+    // quantise, measure the *real* frame, and while it overflows the nominal
+    // frame size scale lambda down by `min(0.9, rate/frame)` and quantise
+    // again. A frame that fits resets lambda to 120. This keeps the psy bit
+    // reservoir from draining: frames never exceed the nominal size, so
+    // `fill_level` stays positive and the model keeps asking for detail.
+    let rate_bits = self.aac_encode_rate_bits()
+    let mut its = 0
+    let mut built : Bytes = b""
+    while true {
+      let chans : Array[AacEncChannel] = []
+      for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        let two = aac_twoloop_search(
+          coefs[ch],
+          self.psy[ch].band_sizes(),
+          psy_results[ch].bands,
+          alloc,
+          self.config.bit_rate,
+          self.config.sample_rate,
+          self.config.channels,
+          self.lambda,
+        )
+        chans.push(self.channel_data_psy(coefs[ch], two, seq, planned_max_sfb))
+      }
+      let frame_bytes = match self.assemble_frame(frame, chans) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+      built = frame_bytes
+      let frame_bits = (frame_bytes.length() - av_aac_adts_header_size) * 8
+      if frame_bits <= rate_bits {
+        self.lambda = 120.0
+        break
+      }
+      let ratio = rate_bits.to_double() / frame_bits.to_double()
+      let step = if ratio < 0.9 { ratio } else { 0.9 }
+      self.lambda = self.lambda * step
+      its = its + 1
+      // Upstream keeps shrinking lambda until the frame fits; the cap only
+      // guards against a pathological input that cannot be made to fit.
+      if its >= 10 {
+        break
+      }
     }
-    if built.length() <= target_bytes {
-      best = built
-      found = true
-      hi = mid - 1
-    } else {
-      lo = mid + 1
+    Ok(built)
+  } else {
+    // Finer quantisation costs more bits, so the smallest offset whose frame
+    // still fits the budget is the highest quality this frame can afford. The
+    // offset may be negative: escape coding lets the scalefactor go below the
+    // reference value that a 15-step codebook would require.
+    let mut lo = -255
+    let mut hi = 255
+    let mut best : Bytes = b""
+    let mut found = false
+    while lo <= hi {
+      let mid = (lo + hi) / 2
+      let built = match self.build_frame(frame, mid) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+      if built.length() <= target_bytes {
+        best = built
+        found = true
+        hi = mid - 1
+      } else {
+        lo = mid + 1
+      }
     }
+    if !found {
+      return Err("AAC frame exceeds the requested bit rate")
+    }
+    Ok(best)
   }
-  if !found {
-    return Err("AAC frame exceeds the requested bit rate")
+  let built = match result {
+    Ok(v) => v
+    Err(e) => return Err(e)
   }
+  // Feed the psy model the payload bits actually produced: FFmpeg's
+  // `last_frame_pb_count` is the AAC frame without the ADTS header.
+  self.last_frame_bits = (built.length() - av_aac_adts_header_size) * 8
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     self.prev_sequence[ch] = sequences[ch]
     self.attack_pending[ch] = late[ch]
   }
-  Ok(best)
+  Ok(built)
 }
