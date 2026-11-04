@@ -586,22 +586,31 @@ pub fn AacPsyContext::band_sizes(self : AacPsyContext) -> Array[Int32] {
 /// uses 0.
 ///
 /// This is `psy_3gpp_analyze_channel`, `aacpsy.c:646`, restricted to one
-/// long window. The returned bands are the `FFPsyBand` array that the
-/// twoloop quantizer consumes. The band records and the perceptual entropy
-/// are per channel, while `bitres` (`fill_level`) and the PE range
-/// (`pe.min` / `pe.max` / `pe.previous`) are shared by every channel of the
-/// element — analysing channel 0 already moves the element's reservoir
-/// position, exactly like upstream.
+/// window. `window_type` / `prev_window_type` are the frame's
+/// `window_sequence` and the previous frame's (`wi->window_type[0]` and
+/// `[1]`); all three long sequences are supported, EIGHT_SHORT is not. The
+/// returned bands are the `FFPsyBand` array that the twoloop quantizer
+/// consumes. The band records and the perceptual entropy are per channel,
+/// while `bitres` (`fill_level`) and the PE range (`pe.min` / `pe.max` /
+/// `pe.previous`) are shared by every channel of the element — analysing
+/// channel 0 already moves the element's reservoir position, exactly like
+/// upstream.
 pub fn AacPsyContext::analyze(
   self : AacPsyContext,
   channel : Int32,
   coefs : Array[Double],
   prev_bits : Int32,
+  window_type : Int32,
+  prev_window_type : Int32,
 ) -> AacPsyResult {
   let num_bands = self.band_sizes.length()
   let coeffs = self.coeffs_long
   let bands = self.bands[channel]
   let prev_band = self.prev_band[channel]
+  // `aacpsy.c:672`: the pre-echo reduction is skipped for LONG_STOP, and for
+  // the first window after LONG_START (w == 0, which is always here).
+  let skip_preecho = window_type == aac_long_stop ||
+    prev_window_type == aac_long_start
   let bandwidth = aac_psy_cutoff(
     self.bit_rate,
     self.channels,
@@ -644,13 +653,17 @@ pub fn AacPsyContext::analyze(
     let b = bands[g]
     b.thr = aac_psy_maxf(b.thr, coeffs[g].ath)
     b.thr_quiet = b.thr
-    // 5.4.2.5 pre-echo control. With ONLY_LONG / w=0 the guard is false,
-    // so the reduction is applied using the previous frame's quiet threshold.
-    let prevq = prev_band[g].thr_quiet
-    b.thr = aac_psy_maxf(
-      psy_rpemin * b.thr,
-      aac_psy_minf(b.thr, psy_rpelev * prevq),
-    )
+    // 5.4.2.5 pre-echo control. `psy_3gpp_analyze_channel` skips the reduction
+    // for a LONG_STOP window and for a window that follows LONG_START: those
+    // transition windows already carry the attack in their own spectrum, so
+    // damping the threshold against the previous frame would be wrong.
+    if !skip_preecho {
+      let prevq = prev_band[g].thr_quiet
+      b.thr = aac_psy_maxf(
+        psy_rpemin * b.thr,
+        aac_psy_minf(b.thr, psy_rpelev * prevq),
+      )
+    }
     pe += aac_psy_calc_pe(b)
     a += b.pe_const
     active_lines += b.active_lines

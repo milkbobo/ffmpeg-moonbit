@@ -31,7 +31,7 @@ fn aac_psy_close(
 test "3GPP psy matches FFmpeg 9.0.2 aacpsy.c (5 frames x 49 bands)" {
   let ctx = @libavcodec.aac_psy_new(4, 44100, 128000, 2)
   for f in 0..<5 {
-    let r = ctx.analyze(0, @aac_psy_vectors.aac_psy_spec[f], 0)
+    let r = ctx.analyze(0, @aac_psy_vectors.aac_psy_spec[f], 0, 0, 0)
     if r.alloc != @aac_psy_vectors.aac_psy_ref_alloc[f] {
       fail(
         "frame \{f}: alloc \{r.alloc} != \{@aac_psy_vectors.aac_psy_ref_alloc[f]}",
@@ -86,8 +86,8 @@ test "3GPP psy matches FFmpeg 9.0.2 aacpsy.c (5 frames x 49 bands)" {
 test "3GPP psy keeps cross-frame pre-echo state" {
   let ctx = @libavcodec.aac_psy_new(4, 44100, 128000, 2)
   let spec = @aac_psy_vectors.aac_psy_spec[0]
-  let first = ctx.analyze(0, spec, 0)
-  let second = ctx.analyze(0, spec, 0)
+  let first = ctx.analyze(0, spec, 0, 0, 0)
+  let second = ctx.analyze(0, spec, 0, 0, 0)
   let mut changed = 0
   for g in 0..<49 {
     let d = first.bands[g].threshold - second.bands[g].threshold
@@ -106,7 +106,7 @@ test "3GPP psy keeps cross-frame pre-echo state" {
 /// non-finite thresholds.
 test "3GPP psy band plan and finite thresholds" {
   let ctx = @libavcodec.aac_psy_new(4, 44100, 128000, 2)
-  let r = ctx.analyze(0, @aac_psy_vectors.aac_psy_spec[2], 0)
+  let r = ctx.analyze(0, @aac_psy_vectors.aac_psy_spec[2], 0, 0, 0)
   if r.bands.length() != 49 {
     fail("44100 Hz long window must have 49 bands")
   }

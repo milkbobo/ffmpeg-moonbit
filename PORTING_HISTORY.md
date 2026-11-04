@@ -7186,4 +7186,40 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `aac_twoloop_vectors` 3/3、`aac_encode_vectors` 8/8；全量
   `moon test --target wasm` **1390/1390** 通过。
 
+## 282. AAC 感知路径覆盖 LONG_START / LONG_STOP
+
+- **动机**：§279 把感知路径限制在 `ONLY_LONG` 上，理由是"psy 只做长窗"。但
+  LONG_START / LONG_STOP **同样是单个 1024 点变换**，psy 对它们的唯一区别是
+  `aacpsy.c:672` 的 pre-echo 判断：
+
+  ```c
+  if (!(wi->window_type[0] == LONG_STOP_SEQUENCE || (!w && wi->window_type[1] == LONG_START_SEQUENCE)))
+      thr = FFMAX(RPEMIN*thr, FFMIN(thr, RPELEV*prev_quiet));
+  ```
+
+  即 LONG_STOP 帧、以及紧跟 LONG_START 的那一帧**不做** pre-echo 阻尼（过渡窗自身
+  已经把攻击包进去了）。所以这不是"短窗不支持"，只是少传两个窗型。
+- **改动**：
+  - `AacPsyContext::analyze(channel, coefs, prev_bits, window_type, prev_window_type)`
+    增加两个窗型参数，按上面的条件跳过 pre-echo 阻尼；`skip_preecho` 只在这两种
+    情况为真。
+  - 编码器 `use_psy` 从 `seq == aac_only_long` 放宽到 `seq != aac_eight_short`，
+    过渡帧不再回退到简化模型；psy 拿到的是 `seq` 与 `self.prev_sequence[ch]`。
+  - 新增测试 `aac_lc_perceptual_transient`：瞬态夹具走感知路径，断言 LAME 窗链
+    （LONG_START → EIGHT_SHORT×5 → LONG_STOP）仍然成立且往返 SNR > 25 dB。
+- **验证**（44100/128k，同一夹具）：
+  - §277 的 3 项黄金测试**逐位不变**（夹具只喂 `ONLY_LONG, ONLY_LONG`，
+    `skip_preecho` 为假，与改动前等价）。
+  - 瞬态夹具走感知路径：start=1 / short=5 / stop=1，往返 SNR **31.84 dB**。
+  - 四音夹具：往返 SNR **21.92 → 20.14 dB**，噪声-掩蔽比 12.90 → **12.96**（持平），
+    帧长 356 字节不变。少掉的 SNR 落在过渡帧上，而过渡帧正是掩蔽阈值最高的地方，
+    所以模型自己的度量没有变差——这与 §280 的结论一致：SNR 不是这条路径的目标。
+  - 剩下的回退范围只有 EIGHT_SHORT（短窗 psy 是另一片工作：8×128 的 band 计划、
+    grouping、`PSY_3GPP_AH_THR_SHORT`）。注意短窗帧在 LAME 链里总是被
+    LONG_START/LONG_STOP 夹着，所以现在"回退"只影响真正的攻击帧本身。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_psy_vectors` 3/3、
+  `aac_twoloop_vectors` 3/3、`aac_encode_vectors` 9/9；全量
+  `moon test --target wasm` **1391/1391** 通过。
+
+
 

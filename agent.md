@@ -103,7 +103,7 @@
   `fill_level`/`pe.min/max` 元素级共享，做 PNS 前必须先有这个前提）与 AAC twoloop 量化器
   （`aac_twoloop.mbt` + `aac_twoloop_tables.mbt` + `aac_twoloop_vectors/`，§278）、
   以及二者组合的可选码率控制链（`aac_encode_config_perceptual`，§279：`ONLY_LONG`
-  帧走 psy→twoloop→λ 严格重试，过渡/短窗仍走简化模型；**默认不启用**，因为感知
+  长窗帧（ONLY_LONG 与两个过渡窗）走 psy→twoloop→λ 严格重试，只有 8 短窗帧仍走简化模型；**默认不启用**，因为感知
   路径在本仓库的音调夹具上比默认路径低约 8 dB SNR——该差距已用
   `_ref/aacenc/aac_ref.exe --in` 交叉验证：同一份输入下 C 与本移植 98/98 带逐位
   一致，属 3GPP 模型在该码率下的固有行为，不是移植问题）。§280 用模型自身的

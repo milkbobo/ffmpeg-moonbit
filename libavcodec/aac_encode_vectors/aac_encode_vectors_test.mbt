@@ -834,7 +834,7 @@ fn aac_encode_test_nmr(
       }
       let want = enc.spectrum(orig)
       let got = enc.spectrum(recon)
-      let bands = psy.analyze(0, want, 0).bands
+      let bands = psy.analyze(0, want, 0, 0, 0).bands
       for g = 0; g < num_swb; g = g + 1 {
         let thr = bands[g].threshold
         if thr <= 0.0 {
@@ -854,6 +854,64 @@ fn aac_encode_test_nmr(
   }
   let snr = 10.0 * @math.log10(energy / noise)
   (nmr_sum / nmr_n.to_double(), snr)
+}
+
+///|
+/// The perceptual path covers every long window, not just ONLY_LONG: LONG_START
+/// and LONG_STOP differ only in the psy model's pre-echo guard
+/// (`aacpsy.c:672` skips the reduction for LONG_STOP and for the frame after
+/// LONG_START), because they are still one 1024-coefficient transform. This
+/// runs the transient fixture through it and checks the window chain still
+/// forms and the round trip stays sane.
+test "aac_lc_perceptual_transient" {
+  let rate = 44100
+  let frames = 6
+  let input = aac_encode_test_transient(rate, frames)
+  let config = @libavcodec.aac_encode_config_perceptual(rate, 1, 128000)
+  let stream = aac_encode_test_stream_config(input, 1, frames, config)
+  let decoded = aac_encode_test_decode(stream, 1)
+  let mut start = 0
+  let mut short = 0
+  let mut stop = 0
+  for f = 0; f < stream.length(); f = f + 1 {
+    let payload = stream[f]
+      .clamped_view(
+        start=@libavcodec.av_aac_adts_header_size,
+        end=stream[f].length(),
+      )
+      .to_owned()
+    let gb = @libavcodec.BitReader::new(payload)
+    assert_eq(gb.read(3).reinterpret_as_int(), 0) // ID_SCE
+    let _ = gb.read(4) // element_instance_tag
+    let ics = aac_encode_test_ok(@libavcodec.aac_decode_ics(gb))
+    let seq = ics.info.window_sequence
+    if seq == 1 {
+      start = start + 1
+    } else if seq == 2 {
+      short = short + 1
+    } else if seq == 3 {
+      stop = stop + 1
+    }
+  }
+  let mut energy = 0.0
+  let mut noise = 0.0
+  for i = 0; i < frames * 1024; i = i + 1 {
+    let want = input[0][i]
+    let got = decoded[0][i + 1024]
+    energy = energy + want * want
+    noise = noise + (got - want) * (got - want)
+  }
+  let snr = 10.0 * @math.log10(energy / noise)
+  println(
+    "perceptual transient: start=\{start} short=\{short} stop=\{stop} snr=\{snr}",
+  )
+  // The attack detector must still produce the LAME chain, and the transition
+  // frames are now quantised by the twoloop search rather than the offset
+  // search, so they have to decode as well as the steady ones.
+  assert_true(start >= 1)
+  assert_true(short >= 1)
+  assert_true(stop >= 1)
+  assert_true(snr > 25.0)
 }
 
 ///|

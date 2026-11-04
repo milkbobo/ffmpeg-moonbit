@@ -1765,7 +1765,7 @@ pub fn AacEncoder::encode_frame(
   // port is long-only, the search is single-window), so LONG_START /
   // EIGHT_SHORT / LONG_STOP frames always keep the simplified model with the
   // frame-wide offset search below.
-  let use_psy = self.config.perceptual && seq == aac_only_long
+  let use_psy = self.config.perceptual && seq != aac_eight_short
   let psy_results : Array[AacPsyResult] = []
   let targets : Array[Array[Int32]] = []
   let mut planned_max_sfb = 0
@@ -1776,7 +1776,9 @@ pub fn AacEncoder::encode_frame(
       0
     }
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
-      psy_results.push(self.psy.analyze(ch, coefs[ch], prev_bits))
+      psy_results.push(
+        self.psy.analyze(ch, coefs[ch], prev_bits, seq, self.prev_sequence[ch]),
+      )
     }
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       let bands = psy_results[ch].bands
