@@ -1,17 +1,19 @@
-# AGENT HANDOFF — 2026-11-05 AAC 强度立体声与 M/S（§290 → §296）
+# AGENT HANDOFF — 2026-11-05 AAC 强度立体声与 M/S（§290 → §299）
 
 这条线到这里，感知路径的三个工具（twoloop/PNS、`search_for_is`、`search_for_ms`）
 都已经与 FFmpeg 9.0.2 **逐位对拍**并接进了编码器：顺序、判据、成本量值、以及
-M/S 改写后的标度因子与带类型终值。默认（简化）路径保持原样，只在它自己的
+M/S 改写后的标度因子与带类型终值。§297–§299 又把码率重试循环的四处顺序/状态偏差
+（`analyze`、TNS、`adjust_frame_information`、以及首帧 TNS 的零初始化）全部对齐，
+所以感知路径现在与 `aacenc.c` 同构。默认（简化）路径保持原样，只在它自己的
 频率门 + 能量掩码上跑。剩下的事列在 §2b。以下把"已经落地的"和
 "下一次要怎么做的"分清楚。
 
 ## 1. 本轮交付了什么
 
 - 配置：`AacEncodeConfig.is_stereo`（默认 false）+
-  `aac_encode_config_with_is(config)`。它与 `pns` 互斥（两侧配置函数互相清
-  对方），与 `perceptual` 无依赖——简化判据只需要带能量，所以默认路径也吃这个
-  开关。
+  `aac_encode_config_with_is(config)`。它与 `perceptual` 无依赖——简化判据只需要
+  带能量，所以默认路径也吃这个开关。（§290 当时还让 `is_stereo` 与 `pns` 互斥、
+  两侧配置函数互相清对方，**§294 已拆掉这条**，现在两者可同时开。）
 - 决策：`aac_encode_is_search`（`libavcodec/aac_encode.mbt:994`）——
   FFmpeg 频率门 + 带内互相关 `|rho| >= 0.95` + 相位取互相关符号 +
   强度位置 `round(2*log2(ener0/ener1))`，先裁到 `[-155,100]` 再裁到相对上一条
@@ -101,7 +103,7 @@ if self.config.channels == 2 && its == 0 && use_is {
    在那里，上游只对 `!is_mask` 的带写 0，重算整个掩码会清掉它。
    简化路径仍用能量掩码（没有 twoloop 的 `sf/cb/阈值` 可定价）。
 
-## 2b. §295 之后剩下什么（按建议顺序）
+## 2b. §299 之后剩下什么（按建议顺序）
 
 1. **短窗感知路径**：8×128 带计划 + `scale_factor_grouping` + 多窗 twoloop。
    `aac_ms_search` 与 `aac_is_search` 都只写了单长窗形态（C 的 `w`/`w2` 外层循环
@@ -136,9 +138,9 @@ if self.config.channels == 2 && its == 0 && use_is {
    §289 的四条顺序/状态偏差 1-4 至此全部关掉，感知路径与 `aacenc.c` 的 element
    循环同构。三条规则在现有夹具上都不改输出（三个码率的 `max_sfb` 与 §298 相同：
    19/33/43），所以回归写成了**性质断言**而不是指标：`highest <= max_sfb`、
-   `ms_mode == 2` 时不读掩码位、帧 0 无 TNS 而后续帧有。
-   做它的时候 TNS 的带范围会一起对齐，因为上游 `search_for_tns` 用的是
-   **上一轮**的 `ics.max_sfb`（帧首只 clamp 到 `num_swb`）。
+   `ms_mode == 2` 时不读掩码位、帧 0 无 TNS 而后续帧有。短窗进来时这两条要跟着
+   走：窗口组 zeroes 归并只有多窗才不是恒等，`msc == max_sfb * num_windows` 的
+   `num_windows` 也会第一次变成大于 1。
 5. `set_special_band_scalefactors` 上游是一轮里同时管 IS 位置和噪声
    `3+ceil(log2(pns_ener)*2)`，我们的噪声仍取 `search_for_pns` 的 `noise_sfi`
    （§288 的结论，别说改回去）。
