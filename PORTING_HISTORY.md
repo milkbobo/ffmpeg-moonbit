@@ -8061,6 +8061,62 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   （新夹具：72 强度带 + 79 M/S 带逐位）、`aac_encode_vectors` 16/16、
   `aac_twoloop_vectors` 3/3、`aac_pns_vectors` 3/3；全量 **1403/1403** 通过。
 
+## 298. TNS 挪进 λ 重试循环（§289 偏差 4 闭环）
+
+- **交付**：`aacenc.c:971-985` 的 `search_for_tns` + `apply_tns_filt` 在码率重试
+  循环**内部**、`search_for_quantizers` **之后**、`search_for_pns` **之前**，而 ABR
+  分支每轮先从 `pcoeffs` 恢复系数（`aacenc.c:1075-1077`）——所以滤波器既不跨重试
+  叠加，也不参与量化的定价。本移植原先在帧首一次做完，而且**直接滤进 `coefs`**：
+  twoloop 于是给「已经滤过的谱」定价，重试轮还复用同一份滤波结果（等于叠加滤波）。
+  - [libavcodec/aac_encode.mbt](file:///D:/project/FFmpeg-n9.0.2/moonbit/libavcodec/aac_encode.mbt)：
+    感知路径每轮逐声道在 twoloop 之后 `search_tns(coefs[ch], ...)`（读未滤波谱，
+    与上游同），把滤波写进 `work[ch] = coefs[ch].copy()`，PNS 定价、IS/M-S 混合与
+    `channel_data_psy` 都吃这份滤波后的谱；`coefs` 本身不再被污染，于是 §297 的
+    「每一轮重新分析」读的也总是不滤波谱。简化/短窗路径保持帧首一次
+    （§279/§280 的基线不动）。
+  - `AacEncFrame` 的 `tns` 字段取消，改成 `build_frame`/`assemble_frame` 的显式
+    入参（每轮一份 `tns_iter`），免得「帧首算的滤波器」和「本轮写进码流的位」
+    成为两个真相。
+  - **偏差 3 还留着，但现在看得更清楚**：上游 `search_for_tns` 的带范围用
+    `ics.max_sfb`，那是**上一轮** `adjust_frame_information` 算出来、帧首再 clamp
+    到 `num_swb` 的值；本移植仍传帧级 `planned_max_sfb`。下一轮把 max_sfb 改成每轮
+    从 `zeroes` 反推时，TNS 的范围会一起对齐。
+- **实测：只有一帧变**（8+1 帧共享高音夹具，感知路径、不开 IS；「§297」一列在
+  `8743b8b` 的工作树里用同一个临时测试取的）：
+
+  | | §297 | §298 |
+  |---|---|---|
+  | 逐帧码长 | 350 342 332 355 345 359 **366** 349 365 | 350 342 332 355 345 359 **369** 349 365 |
+  | 合计 | 3163 B | 3166 B |
+  | 往返 SNR | 22.146897668422 dB | 21.01332985515624 dB |
+
+  变的就是 TNS 点火的那一帧（流里带 TNS 的帧 = 1/8），其余八帧逐字节相同。
+  SNR 让出 1.13 dB 是 TNS 的固有交换：它把误差搬进谱 shaping 掩盖得住的地方，
+  代价就是 PCM 距离；本轮改成「量化在滤波之前定价」之后，被滤波拿到的增益
+  不再反映进标度因子，这正是上游的行为。其余夹具（四音、PNS 白噪声、IS 两条、
+  NMR）逐字符不变——那些内容上 TNS 不点火，改动在它们身上本来就是 no-op。
+- **回归**：新增 `aac_lc_perceptual_path_emits_tns`，断言感知路径的码流里
+  **真的出现 TNS 滤波器**（`aac_encode_test_tool_bands` 多带一个从解码 `AacTns`
+  读出的帧计数，只数 `ONLY_LONG` 帧）并且往返 SNR > 15 dB；把搜索从循环里摘掉，
+  计数就归零。`aac_encode_vectors` 17/17。
+- **夹具**：按 §297 的流程把 IS/M-S 向量重新生成一次，结果 `git diff` **为空**——
+  选中的四帧（块 `[7, 8, 10, 14]`）都是 TNS 不点火的早期帧，谱与 `sf/cb` 一字不变，
+  72 强度带 + 79 M-S 带仍逐位相等。既说明本轮不触及那三条逐位链，也说明
+  数据驱动的 `choose()` 暂时不会因这个顺序改动而漂移。
+- **外部对拍**：A（感知 + M/S，**3166 B**）与 B（噪声 + PNS + IS，2980 B）交
+  docker `linuxserver/ffmpeg:9.0.2`，两次都是 `9 packets read; 9 frames decoded;
+  0 decode errors (9216 samples)`，`-v debug` 里没有 `invalid scalefactor code`
+  也没有 `Clipped intensity stereo position`；PCM 与本解码器 A 最大差
+  **1.49011612e-7**（RMS 2.39967e-8，**138.994 dB**）、B 最大差
+  **4.47034836e-8**（RMS 9.05029e-9，**138.404 dB**）。B 与 §297 完全一致 ✓
+  噪声夹具不受影响；A 变了 3 字节仍被参考解码器原样接受。
+- **仍未做**：偏差 3（每轮 `adjust_frame_information`：max_sfb 从 `zeroes` 反推 +
+  窗口组 zeroes 归并 + `ms_mode = msc < max_sfb * num_windows ? 1 : 2`，我们现在
+  只写 0/1）；短窗感知路径；`aac_psy.mbt` 的 f32 字面量。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_is_vectors` 2/2、
+  `aac_encode_vectors` 17/17、`aac_twoloop_vectors` 3/3、`aac_pns_vectors` 3/3；
+  全量 **1404/1404** 通过。
+
 
 
 

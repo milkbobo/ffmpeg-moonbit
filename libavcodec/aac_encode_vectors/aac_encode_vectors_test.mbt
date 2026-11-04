@@ -1053,14 +1053,10 @@ test "aac_lc_pns_round_trip" {
     }
   }
   let snr = 10.0 * @math.log10(energy / noise)
-  let (pns_left, pns_right, pns_is, _, _) = aac_encode_test_tool_bands(
-    pns,
-    frames,
-  )
-  let (plain_left, plain_right, _, _, _) = aac_encode_test_tool_bands(
-    plain,
-    frames,
-  )
+  let (pns_left, pns_right, pns_is, _, _, _) =
+    aac_encode_test_tool_bands(pns, frames)
+  let (plain_left, plain_right, _, _, _, _) =
+    aac_encode_test_tool_bands(plain, frames)
   let mut per_frame = ""
   for f = 0; f < plain.length(); f = f + 1 {
     per_frame = per_frame + " \{plain[f].length()}/\{pns[f].length()}"
@@ -1283,15 +1279,20 @@ test "aac_lc_is_config" {
 /// eight-short-window frame keeps the energy mask, whose bands carry no such
 /// signature. Counting both together is how the first draft of this check
 /// reported ten "violations" that were really ten transition frames.
+///
+/// The sixth count is how many frames carry at least one TNS filter, read off
+/// the decoded `AacTns` - §298 moved the search behind the quantiser, and this
+/// is what shows the filter is still actually emitted.
 fn aac_encode_test_tool_bands(
   stream : Array[Bytes],
   frames : Int32,
-) -> (Int32, Int32, Int32, Int32, Int32) {
+) -> (Int32, Int32, Int32, Int32, Int32, Int32) {
   let mut left_noise = 0
   let mut right_noise = 0
   let mut right_is = 0
   let mut ms_bands = 0
   let mut ms_bad_pair = 0
+  let mut tns_frames = 0
   for f = 0; f < frames; f = f + 1 {
     let payload = stream[f]
       .clamped_view(
@@ -1320,6 +1321,10 @@ fn aac_encode_test_tool_bands(
     // See the note above: the energy mask of a short-window frame is not
     // `search_for_ms` and has no scalefactor signature.
     let long_window = info.window_sequence == 0
+    if long_window && (aac_encode_test_tns_present(m0.tns) ||
+      aac_encode_test_tns_present(m1.tns)) {
+      tns_frames = tns_frames + 1
+    }
     for b = 0; b < info.max_sfb; b = b + 1 {
       if m0.sect_cb[0][b] == 13 {
         left_noise = left_noise + 1
@@ -1345,7 +1350,7 @@ fn aac_encode_test_tool_bands(
       }
     }
   }
-  (left_noise, right_noise, right_is, ms_bands, ms_bad_pair)
+  (left_noise, right_noise, right_is, ms_bands, ms_bad_pair, tns_frames)
 }
 
 ///|
@@ -1374,9 +1379,9 @@ test "aac_lc_pns_with_intensity_stereo" {
   let both = aac_encode_test_stream_config(input, channels, frames, both_cfg)
   assert_true(both_cfg.pns)
   assert_true(both_cfg.is_stereo)
-  let (left_noise, right_noise, right_is, ms_both, _) =
+  let (left_noise, right_noise, right_is, ms_both, _, _) =
     aac_encode_test_tool_bands(both, frames)
-  let (pns_left, pns_right, pns_is, ms_pns, _) = aac_encode_test_tool_bands(
+  let (pns_left, pns_right, pns_is, ms_pns, _, _) = aac_encode_test_tool_bands(
     pns_only,
     frames,
   )
@@ -1441,11 +1446,11 @@ test "aac_lc_mid_side_search_rewrites_scalefactor_pairs" {
     frames,
     @libavcodec.aac_encode_config_with_is(base),
   )
-  let (_, _, _, ms_plain, ms_plain_bad) = aac_encode_test_tool_bands(
+  let (_, _, _, ms_plain, ms_plain_bad, _) = aac_encode_test_tool_bands(
     plain,
     frames,
   )
-  let (_, _, right_is, ms_iso, ms_iso_bad) = aac_encode_test_tool_bands(
+  let (_, _, right_is, ms_iso, ms_iso_bad, _) = aac_encode_test_tool_bands(
     iso,
     frames,
   )
@@ -1457,6 +1462,45 @@ test "aac_lc_mid_side_search_rewrites_scalefactor_pairs" {
   assert_true(right_is > 0)
   assert_true(ms_plain_bad == 0)
   assert_true(ms_iso_bad == 0)
+}
+
+///|
+/// §298: `aacenc.c:971-985` searches and applies TNS *inside* the rate-control
+/// loop - after the quantiser has priced the bands, before `search_for_pns`, on
+/// coefficients the ABR branch has restored from `pcoeffs` (`aacenc.c:1075`).
+/// The port used to filter once per frame before the analysis, which meant the
+/// quantiser priced an already-filtered spectrum and every retried attempt
+/// reused the same filter. What a test can see is that the perceptual path still
+/// emits filters at all on tonal material (drop the search out of the loop and
+/// this count goes to zero), that the stream round-trips cleanly, and how the
+/// bytes sit - the ordering itself shows up as a changed frame, not a changed
+/// average, which is why the count is asserted rather than a metric.
+test "aac_lc_perceptual_path_emits_tns" {
+  let rate = 44100
+  let channels = 2
+  let frames = 8
+  let bit_rate = 128000
+  let input = aac_encode_test_shared_high(rate, frames, true)
+  let config = @libavcodec.aac_encode_config_perceptual(
+    rate,
+    channels,
+    bit_rate,
+  )
+  let stream = aac_encode_test_stream_config(input, channels, frames, config)
+  let (_, _, _, _, _, tns_frames) = aac_encode_test_tool_bands(stream, frames)
+  let decoded = aac_encode_test_decode(stream, channels)
+  let snr = aac_encode_test_pcm_snr(input, decoded, channels, frames)
+  let mut bytes = 0
+  let mut per = ""
+  for f = 0; f < stream.length(); f = f + 1 {
+    bytes = bytes + stream[f].length()
+    per = per + " \{stream[f].length()}"
+  }
+  println(
+    "perceptual TNS: frames=\{tns_frames}/\{frames} bytes=\{bytes} snr=\{snr} per=\{per}",
+  )
+  assert_true(tns_frames > 0)
+  assert_true(snr > 15.0)
 }
 
 ///|

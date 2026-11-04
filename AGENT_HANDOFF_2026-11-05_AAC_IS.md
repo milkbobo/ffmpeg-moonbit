@@ -125,10 +125,15 @@ if self.config.channels == 2 && its == 0 && use_is {
    帧首那次）。口径是**ABR 分支的恢复语义 + 严格分支的 λ 规则**——C 的严格分支
    `continue` 前不 `memcpy(coeffs, pcoeffs)`，字面照搬会把 IS/MS 混合每重试一次
    就再乘一遍，这条取舍写在 §297 里，别改回去。
-   **接着要做的是偏差 3 + 4，它们互相咬着**：`planned_max_sfb` 目前帧级固定，上游
-   每轮由 `adjust_frame_information` 从量化结果算；而要让 max_sfb 进循环，TNS
-   （偏差 4：现在在 twoloop/PNS 之前、每帧一次）也必须进循环，还要一份 `pcoeffs`
-   簿记。单独一轮做，顺序是先 TNS 进循环、再把 max_sfb 改成每轮算。
+   ~~偏差 4~~ 由 **§298** 闭环：`search_for_tns` 现在在 twoloop 之后、PNS 之前，
+   每轮在 `coefs[ch].copy()` 上滤波，`coefs` 不再被污染（`AacEncFrame.tns` 字段
+   取消，改成 `build_frame`/`assemble_frame` 的入参）。
+   **只剩偏差 3**：`planned_max_sfb` 仍帧级固定，上游每轮由
+   `adjust_frame_information` 从量化结果反推（`cmaxsfb` = 最后一个 `!zeroes` 的带；
+   再做窗口组 zeroes 归并；CPE 两声道取 max；顺带算
+   `ms_mode = msc < max_sfb * num_windows ? 1 : 2`——我们现在只写 0/1）。
+   做它的时候 TNS 的带范围会一起对齐，因为上游 `search_for_tns` 用的是
+   **上一轮**的 `ics.max_sfb`（帧首只 clamp 到 `num_swb`）。
 5. `set_special_band_scalefactors` 上游是一轮里同时管 IS 位置和噪声
    `3+ceil(log2(pns_ener)*2)`，我们的噪声仍取 `search_for_pns` 的 `noise_sfi`
    （§288 的结论，别说改回去）。
@@ -196,6 +201,21 @@ if self.config.channels == 2 && its == 0 && use_is {
   `grep -c ISDUMP libavcodec/aac_encode.mbt` **必须归零**；再加一条硬度：
   把 scratch dump 程序在摘探针前后各跑一次，`cmp` 两条 ADTS 必须相同，
   这样外部对拍结论才落在要提交的实现上。
+- **顺序类改动要先确认"这个夹具上到底会不会触发它"**：§298 把 TNS 挪进循环之后，
+  四音/PNS/IS 四条夹具的打印指标**逐字符不变**——不是改动没生效，而是那些内容上
+  TNS 根本不点火（长音 + 高码率下预测增益判据不过）。有效证据是换个夹具：8 帧
+  共享高音只有一帧变（366 → 369 B、SNR 22.147 → 21.013），而那正是码流里
+  带 TNS 的唯一一帧。所以这类改动的回归应该是**"工具是否还发出来"的断言**
+  （新测试 `aac_lc_perceptual_path_emits_tns` 数解码侧的 `AacTns`），不是平均值。
+- **给旧提交补一个临时测试来取基线**很便宜：`git worktree add --detach
+  .scratch/head_297 8743b8b` → 用 Python 往那棵树里的测试文件**追加**一个只打印
+  的测试（`assert s.count(anchor) == 1` 再替换）→ 在那棵树跑 → 拿到
+  `bytes/per-frame/snr`。注意旧树的 helper 元数可能不同（§297 的
+  `tool_bands` 只回 5 个值），临时测试里就别用新字段。
+- **Windows 上 `git worktree remove --force` 可能只注销不删目录**：报
+  `Permission denied`（moon 的构建缓存还握着文件句柄），但工作树其实已经注销，
+  `git worktree list` 干净。别以为没清就去重跑 remove（第二次会报
+  `not a working tree`），直接 `rm -rf .scratch/head_xxx` 收尾即可。
 - 其余照旧：`moon fmt` 禁跑、heredoc 禁用（往 C 源里写含 `"\n"` 的行会被 Python
   吃一层转义，写完必须 `grep` 验证）、清理走 `.trash/<日期>/`、
   每条 bash 显式 `cd`、`libavcodec` 包**不要再加白盒测试**（wasm init 的

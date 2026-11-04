@@ -2061,7 +2061,6 @@ priv struct AacEncFrame {
   targets : Array[Array[Int32]]
   sequences : Array[Int32]
   max_sfb : Int32
-  tns : Array[AacEncTns]
 }
 
 ///|
@@ -2072,6 +2071,7 @@ fn AacEncoder::build_frame(
   self : AacEncoder,
   frame : AacEncFrame,
   stereo : AacEncStereo,
+  tns : Array[AacEncTns],
   delta : Int32,
 ) -> Result[Bytes, String] {
   let chans : Array[AacEncChannel] = []
@@ -2088,7 +2088,7 @@ fn AacEncoder::build_frame(
     }
     chans.push(one)
   }
-  self.assemble_frame(frame, stereo, chans)
+  self.assemble_frame(frame, stereo, tns, chans)
 }
 
 ///|
@@ -2110,6 +2110,7 @@ fn AacEncoder::assemble_frame(
   self : AacEncoder,
   frame : AacEncFrame,
   stereo : AacEncStereo,
+  tns : Array[AacEncTns],
   chans : Array[AacEncChannel],
 ) -> Result[Bytes, String] {
   let bw = BitWriter::new()
@@ -2122,7 +2123,7 @@ fn AacEncoder::assemble_frame(
     aac_encode_write_channel_body(
       bw,
       chans[0],
-      frame.tns[0],
+      tns[0],
       self.swb_offsets,
       self.short_offsets,
       self.spectral_codes,
@@ -2145,7 +2146,7 @@ fn AacEncoder::assemble_frame(
       aac_encode_write_channel_body(
         bw,
         chans[ch],
-        frame.tns[ch],
+        tns[ch],
         self.swb_offsets,
         self.short_offsets,
         self.spectral_codes,
@@ -2325,12 +2326,21 @@ pub fn AacEncoder::encode_frame(
     }
   }
   // TNS: analyse and filter each channel's upper bands, exactly the range the
-  // decoder reconstructs from the shared max_sfb.
+  // decoder reconstructs from the shared max_sfb. Only the simplified path does
+  // this once per frame: `aacenc.c:971-985` runs `search_for_tns` +
+  // `apply_tns_filt` inside the rate-control loop, after the quantiser has
+  // priced the band and before `search_for_pns`, on coefficients that the ABR
+  // branch restores from `pcoeffs` first (`aacenc.c:1075`). The perceptual path
+  // therefore does it per attempt below (§298), which also keeps `coefs`
+  // pristine - so the analysis of every attempt, the first included, reads the
+  // unfiltered spectrum, exactly like the reference.
   let tns : Array[AacEncTns] = []
-  for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    let data = self.search_tns(coefs[ch], planned_max_sfb, seq)
-    aac_encode_apply_tns(coefs[ch], data, offsets, num_swb, num_windows)
-    tns.push(data)
+  if !use_psy {
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let data = self.search_tns(coefs[ch], planned_max_sfb, seq)
+      aac_encode_apply_tns(coefs[ch], data, offsets, num_swb, num_windows)
+      tns.push(data)
+    }
   }
   if self.config.channels == 2 && !use_psy {
     for b = 0; b < planned_max_sfb; b = b + 1 {
@@ -2344,7 +2354,6 @@ pub fn AacEncoder::encode_frame(
     targets,
     sequences,
     max_sfb: planned_max_sfb,
-    tns,
   }
   // Average bits per frame from the requested bit rate, minus the ADTS header
   // (which is not part of the payload budget).
@@ -2413,6 +2422,12 @@ pub fn AacEncoder::encode_frame(
       let cbs : Array[Array[Int32]] = []
       let zeros : Array[Array[Int32]] = []
       let sfi : Array[Array[Int32]] = []
+      // The spectrum the bitstream codes, built per attempt: PNS, the stereo
+      // tools and `channel_data_psy` all read the TNS-filtered copy, while
+      // `coefs` stays the pristine MDCT output that the next attempt's analysis
+      // and the next band's pricing look at (§298).
+      let work : Array[Array[Double]] = []
+      let tns_iter : Array[AacEncTns] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let r = psy_iter[ch]
         // PNS runs around the search: mark noise-like bands, let the twoloop
@@ -2439,10 +2454,20 @@ pub fn AacEncoder::encode_frame(
           aac_twoloop_pns(can_pns, self.config.pns, use_is),
         )
         twos.push(two)
+        // `aacenc.c:971-985`: `search_for_tns` + `apply_tns_filt` run *after*
+        // the quantiser has priced the band and before `search_for_pns`, on
+        // coefficients the ABR branch has restored from `pcoeffs`
+        // (`aacenc.c:1075-1077`) - so the filter never compounds across
+        // attempts and the analysis above always saw the unfiltered spectrum.
+        let tns_data = self.search_tns(coefs[ch], planned_max_sfb, seq)
+        tns_iter.push(tns_data)
+        let w = coefs[ch].copy()
+        aac_encode_apply_tns(w, tns_data, offsets, num_swb, num_windows)
+        work.push(w)
         if self.config.pns {
           let out = aac_pns_search(
             aac_pns_search_in(
-              coefs[ch], sizes, self.swb_offsets, r.bands, two.sf,
+              w, sizes, self.swb_offsets, r.bands, two.sf,
               two.cb, two.zeroes, can_pns, mark.pns_ener,
               self.pns_random_state,
             ),
@@ -2460,14 +2485,6 @@ pub fn AacEncoder::encode_frame(
           zeros.push(two.zeroes)
           sfi.push(Array::make(self.num_swb, 0))
         }
-      }
-      // The mix works on a copy: the analysis above has to keep reading the
-      // un-mixed pair, and the next lambda iteration starts from it again.
-      let work : Array[Array[Double]] = []
-      for ch = 0; ch < self.config.channels; ch = ch + 1 {
-        work.push(
-          if self.config.channels == 2 { coefs[ch].copy() } else { coefs[ch] },
-        )
       }
       let mut st = stereo
       // What the quantiser and the bitstream use per band: twoloop's
@@ -2521,7 +2538,7 @@ pub fn AacEncoder::encode_frame(
         }
         chans.push(one)
       }
-      let frame_bytes = match self.assemble_frame(frame, st, chans) {
+      let frame_bytes = match self.assemble_frame(frame, st, tns_iter, chans) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
@@ -2553,7 +2570,7 @@ pub fn AacEncoder::encode_frame(
     let mut found = false
     while lo <= hi {
       let mid = (lo + hi) / 2
-      let built = match self.build_frame(frame, stereo, mid) {
+      let built = match self.build_frame(frame, stereo, tns, mid) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
