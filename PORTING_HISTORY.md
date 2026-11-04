@@ -7456,6 +7456,169 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - **至此 §283 的六步清单全部完成**：`mark_pns`、twoloop 的 PNS 关联、
   `search_for_pns`、码流 `off_pns` 链、编码器接线、带限噪声夹具端到端。
 
+## 289. AAC 编码器能力总览与配置矩阵（阶段性收口）
+
+> 本节把 §271–§288 分散在各条里的接线、黄金数据与实测值汇总成一张表，
+> 供后续接手的人按图索骥。**代码上只做了一处 API 加固**（见末尾）。
+
+- **三个配置入口**（`libavcodec/aac_encode.mbt`）：
+
+  | 入口 | `perceptual` | `pns` | 稳态长窗 / 过渡长窗 | 8 短窗帧 |
+  |---|---|---|---|---|
+  | `aac_encode_config`（默认） | false | false | 简化模型 + 全局 delta 二分 | 同左 |
+  | `aac_encode_config_perceptual` | true | false | psy → twoloop → λ 严格重试 | 简化模型 + 二分 |
+  | `aac_encode_config_with_pns(...)` | true | true | 上述 + `mark_pns` → `search_for_pns` → `off_pns` 码流 | 简化模型 + 二分 |
+
+  过渡长窗（LONG_START / LONG_STOP）从 §282 起也走感知路径；只有
+  EIGHT_SHORT 仍回退，因为 psy 移植只做单窗口、twoloop 只做 `num_windows=1`。
+- **本轮 API 加固**：`aac_encode_config_with_pns` 现在强制 `perceptual = true`。
+  此前若对默认配置调用它，`pns = true` 会因为 `use_psy` 为假而**静默失效**；
+  新增 `aac_lc_pns_config_enables_perceptual` 断言这个组合。
+- **每层算法的 C 源与黄金数据**：
+
+  | 层 | C 源 | 黄金数据 | 验收 |
+  |---|---|---|---|
+  | 3GPP psy | `aacpsy.c:646` | 5 帧 × 49 带（§277） | 3/3，逐位 |
+  | twoloop | `aaccoder_twoloop.h:65` | 245 带（§278） | 3/3，逐位 |
+  | `mark_pns` | `aaccoder.c:631` | 245 带（§284） | 0 差异 |
+  | twoloop 的 PNS 关联 | `aaccoder_twoloop.h:190/248/387/468/500` | 245 带（§286） | 0 差异 |
+  | `search_for_pns` | `aaccoder.c:489` | 245 带（§287） | 0 差异，50 带为 NOISE_BT |
+  | 码流 `off_pns` 链 | `aacenc.c encode_scale_factors` | 端到端（§288） | 解码干净、码长下降 |
+
+  参考工具链：`_ref/aacenc/`（`bash build.sh`；`./aac_ref.exe` 默认向量模式，
+  `--pns` 跑完整 PNS 链，`--in <dump>` 喂外部谱）。
+- **实测**（44100 Hz / 128 kbps / 2ch，8 帧四音 + 静音 flush）：
+
+  | 路径 | 码率 | 往返 SNR | 平均 NMR |
+  |---|---|---|---|
+  | 默认（简化模型） | 117.1 kbps | 29.05 dB | 14.45 dB |
+  | perceptual（无 PNS） | 122.7 kbps | 20.14 dB | 12.96 dB |
+
+  PNS 端到端用的是**另一套白噪声夹具**（纯音的 spread 到不了 0.75，PNS 不会
+  触发）：344 B/帧 vs 不开启的 357 B/帧，解码峰值 0.318、SNR ≈ 0.7 dB。
+  SNR 低是 PNS 的固有性质（解码器合成新噪声，只保感知等价），不能与上表直接比。
+- **已知偏差（相对 `aacenc.c`，仍有意为之）**：
+  1. psy 分析的是 M/S 之后的谱；FFmpeg 分析 L/R、量化后才做 M/S（§3 的
+     A/B 实测无差别，保留自洽版本）。
+  2. psy 每帧只分析一次；FFmpeg 的 λ 重试循环里每轮都重新 `analyze`。
+  3. `planned_max_sfb` 取 psy `bits > 0` 的最后一带，帧级固定。
+  4. TNS 在 twoloop/PNS 之前作用于谱；FFmpeg 在量化之后做 M/S/TNS。
+  5. 噪声带的码流 scalefactor 写 `noise_sfi` 而非 twoloop 的 `sf_idx`
+     （§288 有原理与实测对照——这是本移植标度体系下的正确值）。
+- **剩余缺口**（按建议顺序）：短窗 psy（8×128 band 计划 + grouping +
+  `PSY_3GPP_AH_THR_SHORT`，需同时扩展 twoloop 到多窗口）；强度立体声
+  （`aacenc_is.c`，码流的 `off_is` 链我们解码器已支持）；是否把 PNS 设为默认
+  （目前 opt-in，为保住上表基线）。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_encode_vectors`
+  11/11、`aac_pns_vectors` 3/3；全量 **1396/1396** 通过。
+
+## 290. AAC 强度立体声（IS）：off_is 码流链 + 简化判据 + ffmpeg 外部解码对拍
+
+- **交付**：`aacenc_is.c` 的强度立体声现在能在 `aac_encode.mbt` 里真正产出
+  14/15 带。
+  - `AacEncodeConfig.is_stereo`（默认关，保住 §279/§280/§288 的基线）+
+    `aac_encode_config_with_is(config)`。
+  - `aac_encode_is_search`：照搬 FFmpeg 的频率门
+    `start * freq_mult > INT_STEREO_LOW_LIMIT * (lambda / 170)`
+    （`INT_STEREO_LOW_LIMIT = 6100`，λ=120 时 44.1 kHz 下约 4306 Hz），
+    带内互相关定相位（同相 `INTENSITY_BT=15`、反相 `INTENSITY_BT2=14`），
+    左声道换成 `(L + p·R) · sqrt(ener0/ener01)`，与 `apply_intensity_stereo`
+    逐式一致（能量对齐回原左声道）。
+  - `aac_encode_mark_is` + `aac_encode_write_scalefactors` 的**第三条独立差分链
+    `off_is`**（起点 0、逐带 ±60 裁剪；等价于上游
+    `set_special_band_scalefactors` 的 `prevscaler_i` 链套上
+    `encode_scale_factors` 的 `off_is`），`aac_encode_write_spectral` 跳过
+    14/15——对齐 `quantize_and_encode_band_cost_STEREO`：`aaccoder.c:94` 的
+    `if (BT_ZERO || BT_NOISE || BT_STEREO)` 分支一个谱位都不写。
+- **带类型表（`aac.h:74`，最容易记反的一条）**：`RESERVED_BT = 12`、
+  `NOISE_BT = 13`、**`INTENSITY_BT2 = 14` 是反相**、**`INTENSITY_BT = 15`
+  是同相**；编码侧 `apply_intensity_stereo` 与解码侧
+  `aacdec_dsp_template.c:131` 用的是同一个式子 `p = -1 + 2 * (bt - 14)`，
+  本移植的 `aac_encode_apply_is` 与 `aac_apply_stereo` 也必须同式。
+- **本轮最值钱的坑**：IS 带写进码流的不是标度因子，而是**强度位置**，
+  范围 `[-155, 100]`，**正负一样常见**，于是本移植原先「`sf[b] >= 0` 表示该带
+  被编码」的哨兵在 IS 带上直接失效。
+  - `aac_encode_write_scalefactors` 必须**先用 `cb` 认出 14/15 带**再谈 `sf`，
+    否则位置为负的 IS 带会被当成零带整体跳过，解码器读到的 section 与
+    标度因子链从那条带起全部错位。
+  - `aac_encode_global_gain` 同理必须跳过 IS 带，否则某条强度位置会变成整帧的
+    全局增益，把常规链的起点带偏；顺带也跳过了噪声带（§288 的
+    357→344 B/帧与 0.676 dB 指标实测不变）。
+  - `off_is` 的 ±60 链裁剪保证 diff 落在 `[0,120]`，正好是标度因子 VLC 的
+    定义域，所以写侧不需要再兜底（上游是 `av_assert0(diff >= 0 && diff <= 120)`）。
+- **与 M/S 的关系——为什么这一版是"简化判据"**：FFmpeg 的顺序是
+  `psy → mark_pns → twoloop → TNS → search_for_pns → search_for_is →
+  search_for_ms → adjust_frame_information → 写码流`，即 IS 是在**左右声道各自
+  的谱已被 twoloop 定过标度因子**之后跑的，`aac_is_encoding_err` 才能拿
+  `quantize_band_cost(..., lambda / threshold)` 分别给 L、R 和 IS 和定价。
+  本移植是 §289 偏差 1（先 M/S 再 psy/twoloop），那一刻已经没有"左右声道"可评，
+  所以 IS 只能与 `aac_encode_ms_mask` 同级：先用带能量与互相关
+  （`|rho| >= 0.95`）选带与相位，再把这些带从 `ms_mask` 里清掉——等价于上游
+  `search_for_ms` 的 `if (!cpe->is_mask[g]) cpe->ms_mask[g] = 0` 加上
+  `apply_mid_side_stereo` 的 `is_mask || band_type >= NOISE_BT` 双重排除
+  （解码侧 `aac_apply_stereo` 用 `sect_cb < 13` 做同一排除）。
+  取舍式子写在 `aac_encode_is_search` 的注释里：右带被重建为
+  `(p·L + R) · m`，`m = sqrt(ener1 / ener01)`，误差能量
+  `2·ener1 - 2m(|cross| + ener1)`，等能量双声道下即
+  `ener1 · (2 - sqrt(2(1 + |rho|)))`——`|rho| = 0.95` 时是右带能量的 2.5%，
+  `|rho| = 1` 时为 0。
+- **与 PNS 互斥**：本移植的 IS 决策在 twoloop / `search_for_pns` **之前**，
+  无法预知哪些带最终会变成 NOISE_BT（上游在那之后跑 IS 并显式排除），
+  因此配置层双向挡死：`aac_encode_config_with_is` 清 `pns`，
+  `aac_encode_config_with_pns` 清 `is_stereo`（`aac_lc_is_config` 断言）。
+- **实测**（44100 / 128 kbps / 2ch，感知路径，4 帧 + 1 收尾帧）：
+
+  | 夹具 | IS 带 | 越门 IS 带 | 左声道 IS 带 | 码长 | R 的 9 kHz 电平 | 往返 SNR |
+  |---|---|---|---|---|---|---|
+  | 共享 9 kHz（低音 L 440 / R 550 不同） | 10 | 0 | 0 | 1831 → 1802 B | **+0.38 dB** | 18.60 → 18.54 dB |
+  | 高音不共享（L 9 kHz / R 11.7 kHz） | 0 | 0 | 0 | 1783 = 1783 B | — | — |
+
+  - IS 只在"确实共享了高音"的带触发；去相关时**码流逐字节不变**，说明这个
+    工具在没有把握时完全惰性（`aac_lc_intensity_stereo_skips_uncorrelated`
+    断言的是相等而不是近似）。
+  - 共享夹具 5 帧省 29 字节（-1.6%），SNR 只动 0.06 dB：IS 牺牲的是右声道
+    该带的独立性，不是精度。音调电平 +0.38 dB 是 `off_is` 位置链的直接验证——
+    位置错一步就是 6 dB。
+- **外部对拍（本移植第一次让 ffmpeg 解我们自己写的 IS 码流）**：临时 main 包
+  把 8 帧 IS 流与本解码器的 PCM 打到 stdout，交 docker
+  `linuxserver/ffmpeg:9.0.2` 解码：
+  - `9 packets read (3279 bytes); 9 frames decoded; **0 decode errors**
+    (9216 samples)`，`-v info` 零告警（既没有 `Clipped intensity stereo
+    position`，也没有 `invalid scalefactor code`）。
+  - 本解码器 vs ffmpeg 的 PCM：**最大差 1.192e-7、RMS 差 2.49e-8、
+    相对参考 SNR 138.76 dB**，即逐样本亚 LSB 一致。这说明 `off_is` 链的
+    写法与上游 `dequant_scalefactors` / `apply_intensity_stereo` 的语义
+    确实对得上，而不只是自洽。
+- **工具坑**：
+  - 临时 main 包不能放 `.scratch/` 下——moon 的包扫描跳过点目录，
+    `moon run .scratch/xxx` 直接报 `does not match any known package`。
+    本轮放在 `zz_is_dump/`，用完移入 `.trash/2026-11-05/`。
+  - 原生目标在这台 Windows 上要求 MSVC（`cl.exe`/`clang-cl.exe`），本机没有，
+    所以 `moon run` 只能走默认的 wasm 目标；写不了文件就 `println` 出来交给
+    Python 解析（`Byte::to_string()` 打的是 `b'\xFF'`，Python 侧
+    `ast.literal_eval` 可直接还原成字节）。
+  - 包依赖只写在 `moon.pkg` 的 `import {}` 里；源码文件里再写一遍会报
+    `[3001] Invalid import declaration here. Move this declaration to moon.pkg`。
+    用 `@math` 也要在 `moon.pkg` 里 `import "moonbitlang/core/math"`。
+  - MoonBit 不把 `a = x\n + y` 当续行（多行算术要写成独立 `let` 或加括号）。
+- **仍未做**：
+  1. 真正的 `aac_is_encoding_err` 成本判据。前置条件是把 M/S 挪到
+     psy/twoloop 之后（顺带消掉 §289 偏差 1/4），那是一次要有度量、要有黄金
+     数据的重构；`_ref/aacenc` 还需把 `aacenc_is.c` 纳入 harness
+     （依赖 `find_max_val`/`find_min_book`/`quantize_band_cost`/
+     `ff_init_nextband_map`/`ff_sfdelta_can_remove_band`，这些本移植在
+     `aac_twoloop.mbt` / `aac_pns_search.mbt` 里都已有对应实现）。
+  2. 短窗 IS：代码按 `num_windows` 分组求能量、门限用每窗带内偏移，结构上
+     走得通，但没有专门的 8 短窗 IS 夹具验证过。
+  3. `set_special_band_scalefactors` 的完整形态（上游一轮里同时管 IS 位置
+     `round(log2(is_ener)*2)` 和噪声 `3 + ceil(log2(pns_ener)*2)`）——本移植的
+     噪声值仍取 `search_for_pns` 的 `noise_sfi`（§288 的结论）。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_encode_vectors`
+  14/14（新增 `aac_lc_is_config`、`aac_lc_intensity_stereo_round_trip`、
+  `aac_lc_intensity_stereo_skips_uncorrelated`）、`aac_pns_vectors` 3/3、
+  §278/§286/§287 的三批 245 带仍逐位一致；全量 **1399/1399** 通过。
+
+
 
 
 

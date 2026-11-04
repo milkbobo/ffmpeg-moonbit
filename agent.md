@@ -132,6 +132,19 @@
   码率控制用 `aac_encode_frame` 的严格分支：帧超了就 λ *= min(0.9, rate/frame)
   重来，装得下复位 120——不要用 ABR 容差带那套，容差带会让 `fill_level` 持续
   失血、alloc 逐帧下降。
+  AAC 强度立体声（§290，`aac_encode_config_with_is`）接在 M/S 之前、psy 之上，
+  这个顺序是本移植决定的：FFmpeg 的 `search_for_is` 跑在 twoloop 与
+  `search_for_pns` **之后**，才能用 `aac_is_encoding_err` 给 L、R 和 IS 和分别
+  定价；本移植先做 M/S，那一刻已经没有左右声道可评，所以判据退化成
+  频率门（`6100 * λ/170`）+ 带内互相关 `|rho| >= 0.95`。两条硬约束：IS 带写进
+  码流的是**强度位置**（范围 `[-155,100]`，正负一样常见），所以
+  ①写标度因子必须先用 `cb` 认出 14/15，不能再用 `sf >= 0` 这个"该带被编码"的
+  哨兵（否则位置为负的带被整体跳过，section 与标度因子链从那条带起错位）；
+  ②`global_gain` 同样要跳过 14/15，否则一条位置会变成整帧的全局增益。
+  IS 与 PNS 在配置层互斥（顺序决定 IS 无法避开最终会变成噪声带的带），
+  IS 带一律从 `ms_mask` 清掉（对齐上游 `search_for_ms` +
+  `apply_mid_side_stereo` 的双重排除；解码侧 `aac_apply_stereo` 用
+  `sect_cb < 13` 做同一件事）。
   MP3 的表来自编译后 C 参考的零转录 dump（`scripts/gen_mp3_enc_tables.sh`
   可重建 dumper/harness 并再生成表与夹具）；`calc_scfsi` 的 `mp3enc_ln`
   与 C 侧 `shine_ref_log` 必须保持同一段 IEEE 运算（libm log 跨平台位级

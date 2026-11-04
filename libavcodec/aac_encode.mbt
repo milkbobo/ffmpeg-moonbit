@@ -50,6 +50,11 @@ pub struct AacEncodeConfig {
   /// `options.pns = 1`). Off by default so the §279/§280 measurements stay
   /// reproducible; use `aac_encode_config_with_pns` to turn it on.
   pns : Bool
+  /// Enable intensity stereo (`aacenc_is.c`) on channel pairs. Off by default
+  /// for the same reason as `pns`: bands switch to codebooks 14/15, so both
+  /// the bitstream layout and the round-trip measurements change.
+  /// `aac_encode_config_with_is` turns it on.
+  is_stereo : Bool
 }
 
 ///|
@@ -92,7 +97,14 @@ pub fn aac_encode_config(
   channels : Int32,
   bit_rate : Int32,
 ) -> AacEncodeConfig {
-  { sample_rate, channels, bit_rate, perceptual: false, pns: false }
+  {
+    sample_rate,
+    channels,
+    bit_rate,
+    perceptual: false,
+    pns: false,
+    is_stereo: false,
+  }
 }
 
 ///|
@@ -112,20 +124,60 @@ pub fn aac_encode_config_perceptual(
   channels : Int32,
   bit_rate : Int32,
 ) -> AacEncodeConfig {
-  { sample_rate, channels, bit_rate, perceptual: true, pns: false }
+  {
+    sample_rate,
+    channels,
+    bit_rate,
+    perceptual: true,
+    pns: false,
+    is_stereo: false,
+  }
 }
 
 ///|
-/// Enable PNS on a configuration (normally a perceptual one). This is opt-in:
-/// noise bands change both the bitstream layout and the SNR/NMR measurements,
-/// so the existing round-trip baselines stay on the PNS-off path.
+/// Enable PNS on a configuration. PNS needs the psy bands and the twoloop
+/// search, so it also switches the perceptual rate control on: leaving
+/// `perceptual = false` would make `pns = true` a silent no-op.
+///
+/// This is opt-in: noise bands change both the bitstream layout and the
+/// SNR/NMR measurements, so the existing round-trip baselines stay on the
+/// PNS-off path.
 pub fn aac_encode_config_with_pns(config : AacEncodeConfig) -> AacEncodeConfig {
   {
     sample_rate: config.sample_rate,
     channels: config.channels,
     bit_rate: config.bit_rate,
-    perceptual: config.perceptual,
+    perceptual: true,
     pns: true,
+    // `search_for_pns` and `ff_aac_search_for_is` both rewrite the bands they
+    // pick, and upstream runs the IS search *after* the noise decision so it
+    // can skip those bands. This port decides IS before the analysis (see
+    // `aac_encode_is_search`), so it cannot know which bands become noise and
+    // the two tools stay mutually exclusive.
+    is_stereo: false,
+  }
+}
+
+///|
+/// Enable intensity stereo on a configuration: the high bands of a channel
+/// pair whose left and right spectra are strongly correlated are coded as
+/// codebook 14/15 bands, whose only payload is an intensity position in the
+/// `off_is` differential chain (`encode_scale_factors`), and the decoder
+/// rebuilds the right channel by scaling the left one
+/// (`apply_intensity_stereo`).
+///
+/// Like PNS, this is opt-in: it rewrites bands of the right channel, so both
+/// the bitstream layout and the round-trip measurements differ from the
+/// IS-off baselines. It combines with either rate-control path (the decision
+/// needs only band energies), but not with `pns`.
+pub fn aac_encode_config_with_is(config : AacEncodeConfig) -> AacEncodeConfig {
+  {
+    sample_rate: config.sample_rate,
+    channels: config.channels,
+    bit_rate: config.bit_rate,
+    perceptual: config.perceptual,
+    pns: false,
+    is_stereo: true,
   }
 }
 
@@ -889,6 +941,166 @@ fn aac_encode_band_root(
 }
 
 ///|
+/// `INTENSITY_BT2` / `INTENSITY_BT` (`aac.h:74`): the band types whose
+/// scalefactors carry intensity stereo positions (14 out of phase, 15 in
+/// phase) and which transmit no spectral data at all.
+let aac_intensity_bt2 : Int32 = 14
+
+let aac_intensity_bt : Int32 = 15
+
+///|
+/// `INT_STEREO_LOW_LIMIT` (`aacenc_is.c:34`): the frequency in Hz below which
+/// a band is never coded as intensity, at `lambda == 170`.
+let aac_is_low_limit : Double = 6100.0
+
+///|
+/// Correlation floor of the simplified intensity decision (see
+/// `aac_encode_is_search`).
+let aac_is_corr_min : Double = 0.95
+
+///|
+/// Round half away from zero, which is what C's `roundf` does.
+fn aac_encode_roundf(v : Double) -> Int32 {
+  if v >= 0.0 {
+    @math.floor(v + 0.5).to_int()
+  } else {
+    -@math.floor(-v + 0.5).to_int()
+  }
+}
+
+///|
+/// Simplified `ff_aac_search_for_is`, folded together with the intensity part
+/// of `set_special_band_scalefactors`. For every band above the frequency gate
+/// `start * freq_mult > INT_STEREO_LOW_LIMIT * (lambda / 170)` whose left and
+/// right spectra are strongly correlated, it picks the phase whose sum carries
+/// more energy, prices the intensity position
+/// `round(2 * log2(ener0 / ener1))` - clipped to `[-155, 100]` and to +/-60 of
+/// the previous position, exactly the chain the `off_is` bitstream replays -
+/// and reports `sqrt(ener0 / ener01)`, the scale that makes the intensity sum
+/// energy-matched to the left channel.
+///
+/// FFmpeg instead runs `aac_is_encoding_err`, which quantises `L`, `R` and the
+/// IS'd sum through the twoloop cost function under each band's masking
+/// threshold and keeps the cheaper phase. That needs both spectra analysed
+/// *before* mid/side; this port applies mid/side first (deviation 1 of §289),
+/// so the cost comparison would be pricing mid/side bands rather than
+/// left/right ones. The correlation floor stands in for it: the right band is
+/// rebuilt as `(p*L + R) * m` with `m = sqrt(ener1 / ener01)`, so its error
+/// energy is `2*ener1 - 2*m*(|cross| + ener1)`, which for two equally strong
+/// channels is `ener1 * (2 - sqrt(2 * (1 + |rho|)))` - 2.5% of the right
+/// channel's energy at `|rho| = 0.95` and zero at `|rho| = 1` - and the
+/// frequency gate keeps intensity out of the bands where stereo imaging is
+/// audible.
+fn aac_encode_is_search(
+  left : Array[Double],
+  right : Array[Double],
+  offsets : Array[Int32],
+  num_swb : Int32,
+  num_windows : Int32,
+  sample_rate : Int32,
+  lambda : Double,
+) -> (Array[Int32], Array[Int32], Array[Double]) {
+  let bt : Array[Int32] = Array::make(num_swb, 0)
+  let pos : Array[Int32] = Array::make(num_swb, 0)
+  let scale : Array[Double] = Array::make(num_swb, 0.0)
+  // One bin of a 1024/num_windows-point spectrum, in Hz.
+  let freq_mult =
+    sample_rate.to_double() / (1024.0 / num_windows.to_double()) / 2.0
+  let limit = aac_is_low_limit * (lambda / 170.0)
+  let mut prev = 0
+  for b = 0; b < num_swb; b = b + 1 {
+    let start = offsets[b]
+    let end = offsets[b + 1]
+    if end <= start || start.to_double() * freq_mult <= limit {
+      continue
+    }
+    let mut ener0 = 0.0
+    let mut ener1 = 0.0
+    let mut cross = 0.0
+    for w = 0; w < num_windows; w = w + 1 {
+      for i = w * 128 + start; i < w * 128 + end; i = i + 1 {
+        ener0 = ener0 + left[i] * left[i]
+        ener1 = ener1 + right[i] * right[i]
+        cross = cross + left[i] * right[i]
+      }
+    }
+    if ener0 <= 0.0 || ener1 <= 0.0 {
+      continue
+    }
+    if cross.abs() < aac_is_corr_min * (ener0 * ener1).sqrt() {
+      continue
+    }
+    // `ener01` of the phase that was picked: `L + R` when the channels agree,
+    // `L - R` when they are inverted.
+    let sum = ener0 + ener1 + 2.0 * cross.abs()
+    let mut v = aac_encode_roundf(2.0 * @math.log2(ener0 / ener1))
+    if v < -155 {
+      v = -155
+    } else if v > 100 {
+      v = 100
+    }
+    if v < prev - 60 {
+      v = prev - 60
+    } else if v > prev + 60 {
+      v = prev + 60
+    }
+    bt[b] = if cross >= 0.0 { aac_intensity_bt } else { aac_intensity_bt2 }
+    pos[b] = v
+    scale[b] = (ener0 / sum).sqrt()
+    prev = v
+  }
+  (bt, pos, scale)
+}
+
+///|
+/// `apply_intensity_stereo`: the band's left channel keeps the phase-summed,
+/// energy-matched intensity signal and its right channel is emptied, because
+/// the decoder rebuilds that half by scaling the left one by
+/// `2^(-position / 4)` (`aac_apply_stereo`).
+fn aac_encode_apply_is(
+  left : Array[Double],
+  right : Array[Double],
+  offsets : Array[Int32],
+  num_swb : Int32,
+  num_windows : Int32,
+  bt : Array[Int32],
+  scale : Array[Double],
+) -> Unit {
+  for b = 0; b < num_swb; b = b + 1 {
+    if bt[b] == 0 {
+      continue
+    }
+    let p = if bt[b] == aac_intensity_bt { 1.0 } else { -1.0 }
+    let s = scale[b]
+    for w = 0; w < num_windows; w = w + 1 {
+      for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
+        let sum = (left[i] + p * right[i]) * s
+        left[i] = sum
+        right[i] = 0.0
+      }
+    }
+  }
+}
+
+///|
+/// Mark the right channel's intensity bands after quantisation: their codebook
+/// becomes 14/15 and their scalefactor becomes the intensity position, which
+/// takes them out of the regular differential chain, out of `section_data`'s
+/// spectral coding, and into the `off_is` chain.
+fn aac_encode_mark_is(
+  ch : AacEncChannel,
+  bt : Array[Int32],
+  pos : Array[Int32],
+) -> Unit {
+  for b = 0; b < ch.max_sfb && b < bt.length(); b = b + 1 {
+    if bt[b] != 0 {
+      ch.cb[b] = bt[b]
+      ch.sf[b] = pos[b]
+    }
+  }
+}
+
+///|
 /// Simplified `search_for_ms`: a band switches to mid/side when the
 /// companded alphabet of `M = (L + R) / 2` and `S = (L - R) / 2` is smaller
 /// than that of `L` and `R` (the quantiser then spends fewer bits for the same
@@ -1407,10 +1619,21 @@ fn AacEncoder::channel_data_psy(
 }
 
 ///|
-/// Global gain: the first coded band's scalefactor (or 100 when silent).
+/// Band types that transmit neither a scalefactor delta nor spectral data:
+/// ZERO_BT (0) bands are not coded at all, NOISE_BT (13) bands are synthesised
+/// by the decoder, and the intensity bands (14/15) are rebuilt from the other
+/// channel. Only 1..11 reach the Huffman writer.
+fn aac_encode_band_has_data(cb : Int32) -> Bool {
+  cb >= 1 && cb <= 11
+}
+
+///|
+/// Global gain: the first band with real spectral content's scalefactor (or
+/// 100 when silent). Intensity bands are skipped: their `sf` is an `off_is`
+/// position, not a scalefactor.
 fn aac_encode_global_gain(ch : AacEncChannel) -> Int32 {
   for b = 0; b < ch.max_sfb; b = b + 1 {
-    if ch.sf[b] >= 0 {
+    if aac_encode_band_has_data(ch.cb[b]) {
       return ch.sf[b]
     }
   }
@@ -1449,36 +1672,48 @@ fn aac_encode_write_scalefactors(
   ch : AacEncChannel,
   global_gain : Int32,
 ) -> Unit {
-  // `encode_scale_factors` (`aacenc.c`): regular bands and noise bands run on
-  // two independent differential chains. The noise chain starts 90 below the
-  // global gain and its first band carries a raw 9-bit preamble instead of a
-  // Huffman delta (`NOISE_PRE = 256`). Intensity bands are not produced here.
+  // `encode_scale_factors` (`aacenc.c`): regular, noise and intensity bands
+  // run on three independent differential chains. The noise chain starts 90
+  // below the global gain and its first band carries a raw 9-bit preamble
+  // instead of a Huffman delta (`NOISE_PRE = 256`). The intensity chain starts
+  // at 0, advances only on bands coded as 14/15, and its value is an
+  // `off_is` position rather than a scalefactor, so it must be told apart by
+  // codebook: a position is negative as often as not.
   let mut off_sf = global_gain
   let mut off_pns = global_gain - aac_noise_offset
+  let mut off_is = 0
   let mut noise_flag = true
   for b = 0; b < ch.max_sfb; b = b + 1 {
-    if ch.sf[b] >= 0 {
-      let noise = ch.cb[b] == 13
-      let diff = ch.sf[b] - (if noise { off_pns } else { off_sf })
-      if noise {
-        off_pns = ch.sf[b]
-        if noise_flag {
-          noise_flag = false
-          bw.put((diff + aac_noise_pre).reinterpret_as_uint(), aac_noise_pre_bits)
-          continue
-        }
-      } else {
-        off_sf = ch.sf[b]
-      }
-      let mut d = diff + 60
-      if d < 0 {
-        d = 0
-      }
-      if d > 120 {
-        d = 120
-      }
+    let cb = ch.cb[b]
+    if cb == aac_intensity_bt2 || cb == aac_intensity_bt {
+      let d = ch.sf[b] - off_is + 60
+      off_is = ch.sf[b]
       bw.put(aac_scalefactor_code[d], aac_scalefactor_bits[d])
+      continue
     }
+    if ch.sf[b] < 0 {
+      continue
+    }
+    let noise = cb == 13
+    let diff = ch.sf[b] - (if noise { off_pns } else { off_sf })
+    if noise {
+      off_pns = ch.sf[b]
+      if noise_flag {
+        noise_flag = false
+        bw.put((diff + aac_noise_pre).reinterpret_as_uint(), aac_noise_pre_bits)
+        continue
+      }
+    } else {
+      off_sf = ch.sf[b]
+    }
+    let mut d = diff + 60
+    if d < 0 {
+      d = 0
+    }
+    if d > 120 {
+      d = 120
+    }
+    bw.put(aac_scalefactor_code[d], aac_scalefactor_bits[d])
   }
 }
 
@@ -1519,8 +1754,10 @@ fn aac_encode_write_spectral(
   for b = 0; b < ch.max_sfb; b = b + 1 {
     let cb = ch.cb[b]
     // NOISE_BT carries no spectral data: the decoder synthesises it from the
-    // scalefactor and its own LCG state.
-    if cb == 0 || cb == 13 {
+    // scalefactor and its own LCG state. INTENSITY_BT/INTENSITY_BT2 carry none
+    // either: `quantize_and_encode_band_cost_STEREO` writes nothing, and the
+    // decoder rebuilds the band by scaling the left channel's.
+    if !aac_encode_band_has_data(cb) {
       continue
     }
     let dim = if cb <= 4 { 4 } else { 2 }
@@ -1615,6 +1852,10 @@ priv struct AacEncFrame {
   tns : Array[AacEncTns]
   ms_present : Int32
   ms_mask : Array[Bool]
+  /// Intensity band type (0, 14 or 15) and `off_is` position per band of a
+  /// channel pair; both empty for mono and for IS-off frames.
+  is_bt : Array[Int32]
+  is_pos : Array[Int32]
 }
 
 ///|
@@ -1628,15 +1869,17 @@ fn AacEncoder::build_frame(
 ) -> Result[Bytes, String] {
   let chans : Array[AacEncChannel] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    chans.push(
-      self.channel_data(
-        frame.coefs[ch],
-        frame.targets[ch],
-        delta,
-        frame.sequences[ch],
-        frame.max_sfb,
-      ),
+    let one = self.channel_data(
+      frame.coefs[ch],
+      frame.targets[ch],
+      delta,
+      frame.sequences[ch],
+      frame.max_sfb,
     )
+    if ch == 1 {
+      aac_encode_mark_is(one, frame.is_bt, frame.is_pos)
+    }
+    chans.push(one)
   }
   self.assemble_frame(frame, chans)
 }
@@ -1798,7 +2041,30 @@ pub fn AacEncoder::encode_frame(
   // transform is linear, so applying it here and TNS afterwards is the same as
   // the decoder's order (stereo inverse first, then TNS synthesis).
   let ms_mask : Array[Bool] = Array::make(num_swb, false)
+  let mut is_bt : Array[Int32] = Array::make(num_swb, 0)
+  let mut is_pos : Array[Int32] = Array::make(num_swb, 0)
   if self.config.channels == 2 {
+    // Intensity is decided on the genuine left/right spectra, which only exist
+    // before mid/side mixes the pair; a band coded as intensity is then taken
+    // out of the mid/side mask, the same exclusion `search_for_ms` makes.
+    let use_is = self.config.is_stereo && !self.config.pns
+    let (bt, pos, is_scale) = if use_is {
+      aac_encode_is_search(
+        coefs[0],
+        coefs[1],
+        offsets,
+        num_swb,
+        num_windows,
+        self.config.sample_rate,
+        self.lambda,
+      )
+    } else {
+      (
+        Array::make(num_swb, 0),
+        Array::make(num_swb, 0),
+        Array::make(num_swb, 0.0),
+      )
+    }
     let mask = aac_encode_ms_mask(
       coefs[0],
       coefs[1],
@@ -1807,9 +2073,22 @@ pub fn AacEncoder::encode_frame(
       num_windows,
     )
     for b = 0; b < num_swb; b = b + 1 {
-      ms_mask[b] = mask[b]
+      ms_mask[b] = mask[b] && bt[b] == 0
     }
-    aac_encode_apply_ms(coefs[0], coefs[1], offsets, num_swb, mask, num_windows)
+    aac_encode_apply_ms(coefs[0], coefs[1], offsets, num_swb, ms_mask, num_windows)
+    if use_is {
+      aac_encode_apply_is(
+        coefs[0],
+        coefs[1],
+        offsets,
+        num_swb,
+        num_windows,
+        bt,
+        is_scale,
+      )
+      is_bt = bt
+      is_pos = pos
+    }
   }
   // Perceptual targets, evaluated once per channel on the spectra actually
   // coded (after M/S, before TNS). Steady-state long frames can go through
@@ -1882,6 +2161,8 @@ pub fn AacEncoder::encode_frame(
     tns,
     ms_present,
     ms_mask,
+    is_bt,
+    is_pos,
   }
   // Average bits per frame from the requested bit rate, minus the ADTS header
   // (which is not part of the payload budget).
@@ -1949,19 +2230,23 @@ pub fn AacEncoder::encode_frame(
             self.lambda,
           )
           self.pns_random_state = out.random_state
-          chans.push(
-            self.channel_data_psy(
-              coefs[ch], two, seq, planned_max_sfb, out.cb, out.zeroes,
-              out.noise_sfi,
-            ),
+          let one = self.channel_data_psy(
+            coefs[ch], two, seq, planned_max_sfb, out.cb, out.zeroes,
+            out.noise_sfi,
           )
+          if ch == 1 {
+            aac_encode_mark_is(one, frame.is_bt, frame.is_pos)
+          }
+          chans.push(one)
         } else {
-          chans.push(
-            self.channel_data_psy(
-              coefs[ch], two, seq, planned_max_sfb, final_cb, final_zeroes,
-              Array::make(self.num_swb, 0),
-            ),
+          let one = self.channel_data_psy(
+            coefs[ch], two, seq, planned_max_sfb, final_cb, final_zeroes,
+            Array::make(self.num_swb, 0),
           )
+          if ch == 1 {
+            aac_encode_mark_is(one, frame.is_bt, frame.is_pos)
+          }
+          chans.push(one)
         }
       }
       let frame_bytes = match self.assemble_frame(frame, chans) {

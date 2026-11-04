@@ -999,6 +999,18 @@ fn aac_encode_test_noise(
 }
 
 ///|
+/// `with_pns` must not be a silent no-op: PNS only runs inside the perceptual
+/// rate-control path, so enabling it has to enable that path too.
+test "aac_lc_pns_config_enables_perceptual" {
+  let c = @libavcodec.aac_encode_config(44100, 2, 128000)
+  let p = @libavcodec.aac_encode_config_with_pns(c)
+  assert_true(p.perceptual)
+  assert_true(p.pns)
+  assert_true(c.perceptual == false)
+  assert_true(c.pns == false)
+}
+
+///|
 /// PNS end-to-end (§283 step 6): the same noise, encoded with and without
 /// `aac_encode_config_with_pns`. A NOISE_BT band carries no spectral data, so
 /// the stream must still decode through our (ffmpeg-matched) decoder, stay
@@ -1052,4 +1064,275 @@ test "aac_lc_pns_round_trip" {
   // stream decodes cleanly at a finite level, not that it is transparent.
   assert_true(snr > -5.0)
   assert_true(pns_bytes < plain_bytes)
+}
+
+///|
+/// Stereo programme whose high band is genuinely mono: both channels carry the
+/// same 9 kHz tone, sample for sample, while their low content (440 Hz against
+/// 550 Hz) is unrelated and each channel gets its own LCG dither, so the bands
+/// that do not share the tone cannot correlate. With `shared` false the right
+/// channel gets an 11.7 kHz tone of its own instead, and no band above the
+/// intensity gate correlates.
+fn aac_encode_test_shared_high(
+  rate : Int32,
+  frames : Int32,
+  shared : Bool,
+) -> Array[Array[Double]] {
+  let pcm : Array[Array[Double]] = []
+  let seeds : Array[UInt32] = [20261105U, 555000111U]
+  let two_pi = 2.0 * 3.14159265358979323846
+  for ch = 0; ch < 2; ch = ch + 1 {
+    let row : Array[Double] = Array::make(frames * 1024, 0.0)
+    let low_freq = if ch == 0 { 440.0 } else { 550.0 }
+    let high_freq = if ch == 0 || shared { 9000.0 } else { 11700.0 }
+    let mut seed = seeds[ch]
+    for i = 0; i < frames * 1024; i = i + 1 {
+      let t = i.to_double() / rate.to_double()
+      seed = seed * 1664525U + 1013904223U
+      let dither = (seed.reinterpret_as_int() >> 10).to_double() / 4194304.0
+      let low = 0.30 * @math.sin(two_pi * low_freq * t)
+      let high = 0.12 * @math.sin(two_pi * high_freq * t)
+      row[i] = low + high + 0.008 * dither
+    }
+    pcm.push(row)
+  }
+  pcm
+}
+
+///|
+/// Energy of one frequency in a real signal, by direct projection onto the
+/// sine and cosine over `n` samples from `start`. Only ratios between two
+/// measurements of the same frequency are read, so no normalisation matters;
+/// shifting the window by a whole number of samples only rotates the result.
+fn aac_encode_test_bin_energy(
+  x : Array[Double],
+  start : Int32,
+  n : Int32,
+  freq : Double,
+  rate : Int32,
+) -> Double {
+  let mut re = 0.0
+  let mut im = 0.0
+  let two_pi = 2.0 * 3.14159265358979323846
+  for i = 0; i < n; i = i + 1 {
+    let t = (start + i).to_double() / rate.to_double()
+    let phase = two_pi * freq * t
+    re = re + x[start + i] * @math.cos(phase)
+    im = im + x[start + i] * @math.sin(phase)
+  }
+  re * re + im * im
+}
+
+///|
+/// Parse the `frames` steady-state channel pairs of a stream and report the
+/// right channel's intensity bands: how many there are, how many of them sit
+/// below the frequency gate, and how many landed on the left channel (which
+/// must be none - intensity is coded as band types of the second channel).
+fn aac_encode_test_is_bands(
+  stream : Array[Bytes],
+  frames : Int32,
+  rate : Int32,
+) -> (Int32, Int32, Int32) {
+  let swb = aac_encode_test_ok(@libavcodec.aac_swb_tables(4))
+  let mut total = 0
+  let mut below_gate = 0
+  let mut on_left = 0
+  for f = 0; f < frames; f = f + 1 {
+    let payload = stream[f]
+      .clamped_view(
+        start=@libavcodec.av_aac_adts_header_size,
+        end=stream[f].length(),
+      )
+      .to_owned()
+    let gb = @libavcodec.BitReader::new(payload)
+    if gb.read(3).reinterpret_as_int() != 1 {
+      abort("IS test: expected a channel pair")
+    }
+    let _ = gb.read(4)
+    if gb.read1() != 1U {
+      abort("IS test: expected a common window")
+    }
+    let info = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gb))
+    let ms_present = gb.read(2).reinterpret_as_int()
+    if ms_present == 1 {
+      for b = 0; b < info.max_sfb; b = b + 1 {
+        let _ = gb.read1()
+      }
+    }
+    let (_, m0) = aac_encode_test_parse_channel_common(gb, info)
+    let (_, m1) = aac_encode_test_parse_channel_common(gb, info)
+    let is8 = info.window_sequence == 2
+    let offsets = if is8 { swb.offsets_short } else { swb.offsets_long }
+    let win = if is8 { 8.0 } else { 1.0 }
+    let freq_mult = rate.to_double() / (1024.0 / win) / 2.0
+    // `INT_STEREO_LOW_LIMIT * (lambda / 170)` at the reference lambda of 120.
+    let limit = 6100.0 * (120.0 / 170.0)
+    for b = 0; b < info.max_sfb; b = b + 1 {
+      let cb1 = m1.sect_cb[0][b]
+      if cb1 == 14 || cb1 == 15 {
+        total = total + 1
+        if offsets[b].reinterpret_as_int().to_double() * freq_mult <= limit {
+          below_gate = below_gate + 1
+        }
+      }
+      let cb0 = m0.sect_cb[0][b]
+      if cb0 == 14 || cb0 == 15 {
+        on_left = on_left + 1
+      }
+    }
+  }
+  (total, below_gate, on_left)
+}
+
+///|
+/// Round-trip SNR of a stream against its input, skipping the decoder's one
+/// frame of priming delay.
+fn aac_encode_test_pcm_snr(
+  input : Array[Array[Double]],
+  decoded : Array[Array[Double]],
+  channels : Int32,
+  frames : Int32,
+) -> Double {
+  let mut energy = 0.0
+  let mut noise = 0.0
+  for ch = 0; ch < channels; ch = ch + 1 {
+    for i = 0; i < frames * 1024; i = i + 1 {
+      let w = input[ch][i]
+      let d = decoded[ch][i + 1024] - w
+      energy = energy + w * w
+      noise = noise + d * d
+    }
+  }
+  10.0 * @math.log10(energy / noise)
+}
+
+///|
+/// `aac_encode_config_with_is` turns intensity stereo on and nothing else. It
+/// works on either rate-control path - the decision needs only band energies.
+/// PNS clears it and it clears PNS, because both rewrite the bands they pick
+/// and this port decides intensity before the noise search has run.
+test "aac_lc_is_config" {
+  let plain = @libavcodec.aac_encode_config(44100, 2, 128000)
+  assert_true(!plain.is_stereo)
+  let perceptual = @libavcodec.aac_encode_config_perceptual(44100, 2, 128000)
+  let is_on = @libavcodec.aac_encode_config_with_is(perceptual)
+  assert_true(is_on.is_stereo)
+  assert_true(is_on.perceptual)
+  assert_true(!is_on.pns)
+  let is_simple = @libavcodec.aac_encode_config_with_is(plain)
+  assert_true(is_simple.is_stereo)
+  assert_true(!is_simple.perceptual)
+  let both = @libavcodec.aac_encode_config_with_pns(
+    @libavcodec.aac_encode_config_with_is(plain),
+  )
+  assert_true(both.pns)
+  assert_true(!both.is_stereo)
+}
+
+///|
+/// Intensity stereo end to end (§290): the shared 9 kHz tone is coded as
+/// codebook 14/15 bands of the right channel, above the frequency gate and
+/// never on the left; the frame spends fewer bytes; and our decoder, which
+/// follows FFmpeg's `apply_intensity_stereo`, puts the tone back in the right
+/// channel at the right level - the `off_is` chain is what sets that level, at
+/// 6 dB a step.
+test "aac_lc_intensity_stereo_round_trip" {
+  let rate = 44100
+  let channels = 2
+  let frames = 4
+  let bit_rate = 128000
+  let input = aac_encode_test_shared_high(rate, frames, true)
+  let base = @libavcodec.aac_encode_config_perceptual(rate, channels, bit_rate)
+  let plain = aac_encode_test_stream_config(input, channels, frames, base)
+  let iso = aac_encode_test_stream_config(
+    input,
+    channels,
+    frames,
+    @libavcodec.aac_encode_config_with_is(base),
+  )
+  let (is_bands, below_gate, on_left) = aac_encode_test_is_bands(
+    iso,
+    frames,
+    rate,
+  )
+  let mut plain_bytes = 0
+  let mut iso_bytes = 0
+  for f = 0; f < plain.length(); f = f + 1 {
+    plain_bytes = plain_bytes + plain[f].length()
+    iso_bytes = iso_bytes + iso[f].length()
+  }
+  let decoded = aac_encode_test_decode(iso, channels)
+  let plain_decoded = aac_encode_test_decode(plain, channels)
+  let want = aac_encode_test_bin_energy(input[1], 0, frames * 1024, 9000.0, rate)
+  let got = aac_encode_test_bin_energy(
+    decoded[1],
+    1024,
+    frames * 1024,
+    9000.0,
+    rate,
+  )
+  let level = 10.0 * @math.log10(got / want)
+  let plain_snr = aac_encode_test_pcm_snr(input, plain_decoded, channels, frames)
+  let snr = aac_encode_test_pcm_snr(input, decoded, channels, frames)
+  let mut peak = 0.0
+  for ch = 0; ch < channels; ch = ch + 1 {
+    for i = 0; i < frames * 1024; i = i + 1 {
+      if decoded[ch][i + 1024].abs() > peak {
+        peak = decoded[ch][i + 1024].abs()
+      }
+    }
+  }
+  println(
+    "intensity stereo: bands=\{is_bands} below_gate=\{below_gate} on_left=\{on_left} bytes=\{plain_bytes}>\{iso_bytes} tone_level=\{level} snr=\{plain_snr}>\{snr} peak=\{peak}",
+  )
+  assert_true(is_bands > 0)
+  assert_true(below_gate == 0)
+  assert_true(on_left == 0)
+  assert_true(iso_bytes < plain_bytes)
+  assert_true(level > -3.0 && level < 3.0)
+  // Intensity throws away the decorrelated half of the right channel's band,
+  // and this fixture's shared tone has none of that to lose, so the two
+  // streams have to land within a dB or two of each other while the intensity
+  // one spends fewer bytes.
+  assert_true(snr > plain_snr - 2.0)
+  assert_true(snr > 15.0)
+  assert_true(peak > 0.1 && peak < 2.0)
+}
+
+///|
+/// The same encoder on a programme whose high bands do not correlate: no band
+/// may switch to intensity, and because intensity touches nothing else the
+/// stream has to come out exactly the size it would be with the tool off.
+test "aac_lc_intensity_stereo_skips_uncorrelated" {
+  let rate = 44100
+  let channels = 2
+  let frames = 4
+  let bit_rate = 128000
+  let input = aac_encode_test_shared_high(rate, frames, false)
+  let base = @libavcodec.aac_encode_config_perceptual(rate, channels, bit_rate)
+  let plain = aac_encode_test_stream_config(input, channels, frames, base)
+  let iso = aac_encode_test_stream_config(
+    input,
+    channels,
+    frames,
+    @libavcodec.aac_encode_config_with_is(base),
+  )
+  let (is_bands, below_gate, on_left) = aac_encode_test_is_bands(
+    iso,
+    frames,
+    rate,
+  )
+  let mut plain_bytes = 0
+  let mut iso_bytes = 0
+  for f = 0; f < plain.length(); f = f + 1 {
+    plain_bytes = plain_bytes + plain[f].length()
+    iso_bytes = iso_bytes + iso[f].length()
+  }
+  println(
+    "intensity stereo off-band: bands=\{is_bands} bytes=\{plain_bytes}/\{iso_bytes}",
+  )
+  assert_true(is_bands == 0)
+  assert_true(below_gate == 0)
+  assert_true(on_left == 0)
+  assert_true(iso_bytes == plain_bytes)
 }
