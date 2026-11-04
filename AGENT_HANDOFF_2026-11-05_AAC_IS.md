@@ -1,8 +1,9 @@
 # AGENT HANDOFF — 2026-11-05 AAC 强度立体声（§290）
 
 本轮把 `aacenc_is.c` 的强度立体声接进了 `aac_encode.mbt`，码流侧由 ffmpeg 9.0.2
-外部解码验证通过。下一步的大件是**用真成本判据替换简化判据**，那需要先做一次
-顺序重构。以下把"已经落地的"和"下一次要怎么做的"分清楚。
+外部解码验证通过；紧接着的 §291 已经把感知路径的顺序改成与 FFmpeg 同序，
+所以下一步的大件只剩**用真成本判据替换简化判据**。以下把"已经落地的"和
+"下一次要怎么做的"分清楚。
 
 ## 1. 本轮交付了什么
 
@@ -23,18 +24,22 @@
   （`aac_lc_is_config` / `aac_lc_intensity_stereo_round_trip` /
   `aac_lc_intensity_stereo_skips_uncorrelated`）。全量 1399/1399。
 
-实测数字（44.1 kHz / 128 kbps / 2ch，感知路径，4 帧 + 1 收尾帧）：
+实测数字（44.1 kHz / 128 kbps / 2ch，感知路径，4 帧 + 1 收尾帧；§291 换了顺序之后
+重测）：
 
 | 夹具 | IS 带 | 码长 | R 的 9 kHz 电平 | 往返 SNR |
 |---|---|---|---|---|
-| 高音共享（L 440 + R 550 低音不同） | 10 | 1831 → 1802 B | +0.38 dB | 18.60 → 18.54 dB |
-| 高音不共享（L 9 kHz / R 11.7 kHz） | 0 | 1783 = 1783 B | — | — |
+| 高音共享（L 440 + R 550 低音不同） | 10 | 1744 → 1711 B | −0.03 dB | 22.92 → 22.35 dB |
+| 高音不共享（L 9 kHz / R 11.7 kHz） | 0 | 1773 = 1773 B | — | — |
 
-外部对拍：同一条 8 帧 IS 流，`linuxserver/ffmpeg:9.0.2` 报
+（§290 当时的数是 1831 → 1802 B、+0.38 dB、18.60 → 18.54 dB；顺序改成与
+FFmpeg 同序后 SNR 涨了 4 dB 多、音调重建电平几乎无偏。）
+
+外部对拍：同一条 8 帧 IS 流（3102 字节），`linuxserver/ffmpeg:9.0.2` 报
 `9 frames decoded; 0 decode errors`；ffmpeg 的 PCM 与本解码器的 PCM
-最大差 `1.192e-7`、RMS `2.49e-8`、相对 SNR `138.76 dB`。
+最大差 `1.49e-7`、RMS `2.43e-8`、相对 SNR `138.92 dB`。
 
-## 2. 下一步：真成本判据（需要先重构）
+## 2. 下一步：真成本判据（前置的顺序重构已在 §291 完成）
 
 FFmpeg 的顺序是
 `psy → mark_pns → search_for_quantizers(twoloop) → common_window → TNS →
@@ -47,22 +52,15 @@ search_for_ms → apply_mid_side_stereo → adjust_frame_information → 写`。
 `quantize_band_cost(s, in, scaled, size, sf_idx, band_type, s->lambda /
 threshold, INFINITY, NULL, NULL)`，两个相位各跑一次取 `dist2 <= dist1` 的那个。
 
-本移植的顺序是 `M/S → psy → TNS → twoloop → PNS`（§289 偏差 1），M/S 先混掉了
-左右声道，所以真成本判据落不了地。要做的事按顺序：
+**§291 已经把顺序改完了**：感知路径现在是
+`psy → TNS →（每轮 λ：twoloop → PNS → 强度 → M/S → 量化 → 写）`，分析读左右谱、
+量化读混合后的谱，与 `aacenc.c` 同序；简化路径保持先混合（它的每带标度因子
+来自真正要编码的那份谱，§279/§280 的 29.045 dB 基线逐字节不变）。顺带补上了
+`apply_mid_side_stereo` 对噪声带的排除。指标全线改善：感知 SNR 20.14 → 21.31 dB、
+IS 夹具 18.60 → 22.92 dB、音调重建电平 +0.38 → −0.03 dB。所以真成本判据的
+前置条件已经满足，下面按顺序做：
 
-1. **把 M/S 挪到 twoloop/PNS 之后**（`aac_encode.mbt` 的 `encode_frame`：
-   `aac_encode_ms_mask`/`aac_encode_apply_ms` 现在在 2068–2078 行，psy 与
-   twoloop 在 2101 行的 `use_psy` 之后）。挪完 psy 与 twoloop 就消费真正的 L/R，
-   与 FFmpeg 同序，§289 偏差 1 自动消失；TNS 也该跟着挪到 twoloop 之后
-   （上游就在那儿）。
-   - 这一步会改动默认路径与感知路径的**全部**码流，因此 §279/§280 的
-     117.1 kbps / 29.05 dB 与 122.7 kbps / 20.14 dB 两组指标必须重新量一遍，
-     `aac_encode_vectors` 里所有 SNR 断言都可能要按实测改（不许为了变绿放宽）。
-   - M/S 的 sf 处理：上游 `mid_side=1` 直接用 L/R 各自的 sf（我们的
-     `aac_encode_ms_mask` 等价于它的按带掩码版）；若要搬到 `search_for_ms`
-     的完整形态，还需要 `ff_sfdelta_can_replace` 与 `sid_sf_boost` 四轮尝试
-     （`aaccoder.c:702`），那是再一步的事。
-2. **给 `_ref/aacenc` 加 IS harness**：把 `aacenc_is.c` 编进
+1. **给 `_ref/aacenc` 加 IS harness**：把 `aacenc_is.c` 编进
    `libavcodec_ref.a`（依赖 `find_max_val`/`find_min_book`/
    `quantize_band_cost`/`pos_pow34`/`ff_init_nextband_map`/
    `ff_sfdelta_can_remove_band`——这些在本移植里都已经有对应实现，见
@@ -71,8 +69,13 @@ threshold, INFINITY, NULL, NULL)`，两个相位各跑一次取 `dist2 <= dist1`
    照 §284/§286/§287 的做法做逐位向量。
    注意 `--in <dump>` 那条外部谱通道（`aac_pns_vectors` 已经用过），
    可以直接复用 §278 的 245 带夹具。
-3. 换上真判据后，把 IS 与 PNS 的互斥打开（上游是 `search_for_pns` 先跑，
-   IS 靠 `band_type != NOISE_BT && !zeroes` 排除噪声带）。
+2. 用 `aac_is_encoding_err` 替掉 `aac_encode_is_search` 里的频率门 +
+   `|rho| >= 0.95`（误差式子与推导留在它的 docstring 里，别丢）。
+3. 打开 IS 与 PNS 的组合：两个配置入口目前互相清对方；顺序已经允许像上游那样
+   靠 `band_type != NOISE_BT && !zeroes` 排除噪声带，改完要补一组 IS+PNS 夹具。
+4. `search_for_ms` 的完整形态（`aaccoder.c:702` 的 `sid_sf_boost` 四轮尝试 +
+   `ff_sfdelta_can_replace`）——本移植的 M/S 掩码仍是能量版，等价于上游
+   `mid_side=1` 那条不重新定标的分支。
 
 另外两条小的：短窗 IS 结构上已经支持（`num_windows` 与每窗带内偏移都参数化了），
 但没有专门的 8 短窗夹具；`set_special_band_scalefactors` 上游是一轮里同时管

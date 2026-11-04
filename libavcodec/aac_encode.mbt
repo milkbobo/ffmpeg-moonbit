@@ -9,7 +9,9 @@
 /// S = (L - R) / 2, chosen band by band when the companded alphabet of the
 /// pair is smaller than that of L/R (the encoder-side twin of FFmpeg's
 /// `search_for_ms`), with the CPE carrying one shared `ics_info` and a per-band
-/// `ms_used` mask. Temporal noise shaping follows `aacenc_tns.c`: a 12th-order
+/// `ms_used` mask. On top of that, `aac_encode_config_with_is` lets a
+/// correlated band above the intensity gate be coded as an `off_is` position of
+/// the right channel with no spectral data at all (§290). Temporal noise shaping follows `aacenc_tns.c`: a 12th-order
 /// (7th for short windows) LPC analysis of the upper scalefactor bands, gated
 /// on the LPC gain, quantised to `ff_tns_tmp2_map_1_4` and applied as an
 /// all-zero filter before quantisation. Each band gets its own scalefactor
@@ -981,10 +983,14 @@ fn aac_encode_roundf(v : Double) -> Int32 {
 ///
 /// FFmpeg instead runs `aac_is_encoding_err`, which quantises `L`, `R` and the
 /// IS'd sum through the twoloop cost function under each band's masking
-/// threshold and keeps the cheaper phase. That needs both spectra analysed
-/// *before* mid/side; this port applies mid/side first (deviation 1 of §289),
-/// so the cost comparison would be pricing mid/side bands rather than
-/// left/right ones. The correlation floor stands in for it: the right band is
+/// threshold and keeps the cheaper phase. Since §291 the perceptual path has
+/// that order - analyse and price the left/right spectra, then mix - so the
+/// cost test is within reach; this version still uses the correlation floor,
+/// and the simplified path analyses the already-mixed pair (deviation 1 of
+/// §289, kept because its per-band scalefactor is derived from the spectrum
+/// that actually gets coded).
+///
+/// The correlation floor stands in for that cost test: the right band is
 /// rebuilt as `(p*L + R) * m` with `m = sqrt(ener1 / ener01)`, so its error
 /// energy is `2*ener1 - 2*m*(|cross| + ener1)`, which for two equally strong
 /// channels is `ener1 * (2 - sqrt(2 * (1 + |rho|)))` - 2.5% of the right
@@ -1159,6 +1165,88 @@ fn aac_encode_apply_ms(
       }
     }
   }
+}
+
+///|
+/// The stereo tools of one frame: the `ms_present`/`ms_mask` pair that
+/// `assemble_frame` writes and the intensity bands that
+/// `aac_encode_mark_is` stamps onto the right channel. Both are re-decided on
+/// every rate-control iteration, because which bands end up as noise depends
+/// on lambda and a noise band must not be mid/side mixed.
+priv struct AacEncStereo {
+  mut ms_present : Int32
+  ms_mask : Array[Bool]
+  is_bt : Array[Int32]
+  is_pos : Array[Int32]
+}
+
+///|
+/// A mono (or tool-free) frame: nothing mixed, no intensity bands.
+fn aac_encode_stereo_none(num_swb : Int32) -> AacEncStereo {
+  {
+    ms_present: 0,
+    ms_mask: Array::make(num_swb, false),
+    is_bt: Array::make(num_swb, 0),
+    is_pos: Array::make(num_swb, 0),
+  }
+}
+
+///|
+/// The stereo tools of a channel pair, in `aacenc.c`'s order: intensity first
+/// (`apply_intensity_stereo`), then mid/side (`apply_mid_side_stereo`). Two
+/// exclusions are copied from upstream: a band coded as intensity leaves the
+/// mid/side mask (`search_for_ms` does that with `if (!is_mask) ms_mask = 0`),
+/// and so does a band either channel codes as `NOISE_BT` - which is what
+/// `apply_mid_side_stereo`'s own `band_type >= NOISE_BT` guard is for, because
+/// the decoder's `aac_apply_stereo` skips both kinds when it undoes the mix.
+/// `left` and `right` are rewritten in place, so the caller hands the spectra
+/// the *quantiser* is to code, not the ones the analysis is reading.
+fn aac_encode_stereo(
+  left : Array[Double],
+  right : Array[Double],
+  offsets : Array[Int32],
+  num_swb : Int32,
+  num_windows : Int32,
+  sample_rate : Int32,
+  lambda : Double,
+  use_is : Bool,
+  noise : Array[Int32],
+) -> AacEncStereo {
+  let (bt, pos, scale) = if use_is {
+    aac_encode_is_search(
+      left,
+      right,
+      offsets,
+      num_swb,
+      num_windows,
+      sample_rate,
+      lambda,
+    )
+  } else {
+    (
+      Array::make(num_swb, 0),
+      Array::make(num_swb, 0),
+      Array::make(num_swb, 0.0),
+    )
+  }
+  let mask = aac_encode_ms_mask(left, right, offsets, num_swb, num_windows)
+  let ms_mask : Array[Bool] = Array::make(num_swb, false)
+  for b = 0; b < num_swb; b = b + 1 {
+    ms_mask[b] = mask[b] && bt[b] == 0 && noise[b] == 0
+  }
+  if use_is {
+    aac_encode_apply_is(
+      left,
+      right,
+      offsets,
+      num_swb,
+      num_windows,
+      bt,
+      scale,
+    )
+  }
+  aac_encode_apply_ms(left, right, offsets, num_swb, ms_mask, num_windows)
+  { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos }
 }
 
 ///|
@@ -1841,21 +1929,17 @@ fn aac_encode_write_channel_body(
 }
 
 ///|
-/// One frame's fixed inputs, prepared once before the rate-control search:
-/// the spectra after M/S and TNS, their per-band model targets, the shared
-/// window sequence, the shared `max_sfb` and the M/S mask.
+/// One frame's inputs that a rate-control attempt does not change: the spectra
+/// the analysis reads (already TNS-filtered; mid/side and intensity are mixed
+/// in only per attempt, and on the simplified path they were mixed here
+/// already), the per-band model targets, the shared window sequence and the
+/// shared `max_sfb`.
 priv struct AacEncFrame {
   coefs : Array[Array[Double]]
   targets : Array[Array[Int32]]
   sequences : Array[Int32]
   max_sfb : Int32
   tns : Array[AacEncTns]
-  ms_present : Int32
-  ms_mask : Array[Bool]
-  /// Intensity band type (0, 14 or 15) and `off_is` position per band of a
-  /// channel pair; both empty for mono and for IS-off frames.
-  is_bt : Array[Int32]
-  is_pos : Array[Int32]
 }
 
 ///|
@@ -1865,6 +1949,7 @@ priv struct AacEncFrame {
 fn AacEncoder::build_frame(
   self : AacEncoder,
   frame : AacEncFrame,
+  stereo : AacEncStereo,
   delta : Int32,
 ) -> Result[Bytes, String] {
   let chans : Array[AacEncChannel] = []
@@ -1877,11 +1962,11 @@ fn AacEncoder::build_frame(
       frame.max_sfb,
     )
     if ch == 1 {
-      aac_encode_mark_is(one, frame.is_bt, frame.is_pos)
+      aac_encode_mark_is(one, stereo.is_bt, stereo.is_pos)
     }
     chans.push(one)
   }
-  self.assemble_frame(frame, chans)
+  self.assemble_frame(frame, stereo, chans)
 }
 
 ///|
@@ -1902,6 +1987,7 @@ fn AacEncoder::aac_encode_rate_bits(self : AacEncoder) -> Int32 {
 fn AacEncoder::assemble_frame(
   self : AacEncoder,
   frame : AacEncFrame,
+  stereo : AacEncStereo,
   chans : Array[AacEncChannel],
 ) -> Result[Bytes, String] {
   let bw = BitWriter::new()
@@ -1926,10 +2012,10 @@ fn AacEncoder::assemble_frame(
     bw.put(0, 4) // element_instance_tag
     bw.put(1, 1) // common_window = 1: one shared ics_info for both channels
     aac_encode_write_ics_info(bw, chans[0])
-    bw.put(frame.ms_present.reinterpret_as_uint(), 2)
-    if frame.ms_present == 1 {
+    bw.put(stereo.ms_present.reinterpret_as_uint(), 2)
+    if stereo.ms_present == 1 {
       for b = 0; b < frame.max_sfb; b = b + 1 {
-        bw.put(if frame.ms_mask[b] { 1 } else { 0 }, 1)
+        bw.put(if stereo.ms_mask[b] { 1 } else { 0 }, 1)
       }
     }
     for ch = 0; ch < 2; ch = ch + 1 {
@@ -2037,68 +2123,42 @@ pub fn AacEncoder::encode_frame(
   let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
   let offsets = if is8 { self.short_offsets } else { self.swb_offsets }
   let num_windows = if is8 { 8 } else { 1 }
-  // M/S is decided on the time-to-frequency spectra before any filtering; the
-  // transform is linear, so applying it here and TNS afterwards is the same as
-  // the decoder's order (stereo inverse first, then TNS synthesis).
-  let ms_mask : Array[Bool] = Array::make(num_swb, false)
-  let mut is_bt : Array[Int32] = Array::make(num_swb, 0)
-  let mut is_pos : Array[Int32] = Array::make(num_swb, 0)
-  if self.config.channels == 2 {
-    // Intensity is decided on the genuine left/right spectra, which only exist
-    // before mid/side mixes the pair; a band coded as intensity is then taken
-    // out of the mid/side mask, the same exclusion `search_for_ms` makes.
-    let use_is = self.config.is_stereo && !self.config.pns
-    let (bt, pos, is_scale) = if use_is {
-      aac_encode_is_search(
-        coefs[0],
-        coefs[1],
-        offsets,
-        num_swb,
-        num_windows,
-        self.config.sample_rate,
-        self.lambda,
-      )
-    } else {
-      (
-        Array::make(num_swb, 0),
-        Array::make(num_swb, 0),
-        Array::make(num_swb, 0.0),
-      )
-    }
-    let mask = aac_encode_ms_mask(
+  // Two orders, because the two models need different spectra.
+  //
+  // The perceptual path follows `aacenc.c`: analyse, quantise and decide noise
+  // on the *left/right* spectra, then mix - intensity and mid/side are re-run
+  // on every rate-control iteration, because which bands end up as noise
+  // depends on lambda and a noise band must not be mid/side mixed.
+  //
+  // The simplified path has no such dependency: its per-band scalefactor is
+  // derived from the spectrum that actually gets coded, so it still mixes
+  // first and models afterwards. That is safe because M/S and TNS commute
+  // (mid/side mixes each coefficient index across the two channels, TNS
+  // filters along the index axis within one channel), and the decoder undoes
+  // stereo before TNS either way.
+  let use_psy = self.config.perceptual && seq != aac_eight_short
+  let use_is = self.config.is_stereo && !self.config.pns
+  let mut stereo = aac_encode_stereo_none(num_swb)
+  if self.config.channels == 2 && !use_psy {
+    stereo = aac_encode_stereo(
       coefs[0],
       coefs[1],
       offsets,
       num_swb,
       num_windows,
+      self.config.sample_rate,
+      self.lambda,
+      use_is,
+      Array::make(num_swb, 0),
     )
-    for b = 0; b < num_swb; b = b + 1 {
-      ms_mask[b] = mask[b] && bt[b] == 0
-    }
-    aac_encode_apply_ms(coefs[0], coefs[1], offsets, num_swb, ms_mask, num_windows)
-    if use_is {
-      aac_encode_apply_is(
-        coefs[0],
-        coefs[1],
-        offsets,
-        num_swb,
-        num_windows,
-        bt,
-        is_scale,
-      )
-      is_bt = bt
-      is_pos = pos
-    }
   }
-  // Perceptual targets, evaluated once per channel on the spectra actually
-  // coded (after M/S, before TNS). Steady-state long frames can go through
-  // FFmpeg's rate control: the 3GPP model publishes per-band thresholds and
-  // the frame's bit allocation, and the twoloop quantiser turns them into
-  // per-band scalefactors. Both are only defined for one long window (the psy
-  // port is long-only, the search is single-window), so LONG_START /
-  // EIGHT_SHORT / LONG_STOP frames always keep the simplified model with the
-  // frame-wide offset search below.
-  let use_psy = self.config.perceptual && seq != aac_eight_short
+  // Perceptual targets, evaluated once per channel. Steady-state long frames
+  // can go through FFmpeg's rate control: the 3GPP model publishes per-band
+  // thresholds and the frame's bit allocation, and the twoloop quantiser turns
+  // them into per-band scalefactors. Both are only defined for one long window
+  // (the psy port is long-only, the search is single-window), so EIGHT_SHORT
+  // frames always keep the simplified model with the frame-wide offset search
+  // below.
   let psy_results : Array[AacPsyResult] = []
   let targets : Array[Array[Int32]] = []
   let mut planned_max_sfb = 0
@@ -2145,11 +2205,10 @@ pub fn AacEncoder::encode_frame(
     aac_encode_apply_tns(coefs[ch], data, offsets, num_swb, num_windows)
     tns.push(data)
   }
-  let mut ms_present = 0
-  if self.config.channels == 2 {
+  if self.config.channels == 2 && !use_psy {
     for b = 0; b < planned_max_sfb; b = b + 1 {
-      if ms_mask[b] {
-        ms_present = 1
+      if stereo.ms_mask[b] {
+        stereo.ms_present = 1
       }
     }
   }
@@ -2159,10 +2218,6 @@ pub fn AacEncoder::encode_frame(
     sequences,
     max_sfb: planned_max_sfb,
     tns,
-    ms_present,
-    ms_mask,
-    is_bt,
-    is_pos,
   }
   // Average bits per frame from the requested bit rate, minus the ADTS header
   // (which is not part of the payload budget).
@@ -2188,8 +2243,13 @@ pub fn AacEncoder::encode_frame(
     let mut its = 0
     let mut built : Bytes = b""
     while true {
-      let chans : Array[AacEncChannel] = []
       let sizes = self.psy.band_sizes()
+      // One channel pair, one rate-control attempt: analyse, price and decide
+      // noise on the left/right spectra first (`aacenc.c`'s order), then mix.
+      let twos : Array[AacTwoResult] = []
+      let cbs : Array[Array[Int32]] = []
+      let zeros : Array[Array[Int32]] = []
+      let sfi : Array[Array[Int32]] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let r = psy_results[ch]
         // PNS runs around the search: mark noise-like bands, let the twoloop
@@ -2215,13 +2275,12 @@ pub fn AacEncoder::encode_frame(
           self.lambda,
           aac_twoloop_pns(can_pns, self.config.pns),
         )
-        let final_cb = two.cb
-        let final_zeroes = two.zeroes
+        twos.push(two)
         if self.config.pns {
           let out = aac_pns_search(
             aac_pns_search_in(
               coefs[ch], sizes, self.swb_offsets, r.bands, two.sf,
-              final_cb, final_zeroes, can_pns, mark.pns_ener,
+              two.cb, two.zeroes, can_pns, mark.pns_ener,
               self.pns_random_state,
             ),
             self.config.sample_rate,
@@ -2230,26 +2289,57 @@ pub fn AacEncoder::encode_frame(
             self.lambda,
           )
           self.pns_random_state = out.random_state
-          let one = self.channel_data_psy(
-            coefs[ch], two, seq, planned_max_sfb, out.cb, out.zeroes,
-            out.noise_sfi,
-          )
-          if ch == 1 {
-            aac_encode_mark_is(one, frame.is_bt, frame.is_pos)
-          }
-          chans.push(one)
+          cbs.push(out.cb)
+          zeros.push(out.zeroes)
+          sfi.push(out.noise_sfi)
         } else {
-          let one = self.channel_data_psy(
-            coefs[ch], two, seq, planned_max_sfb, final_cb, final_zeroes,
-            Array::make(self.num_swb, 0),
-          )
-          if ch == 1 {
-            aac_encode_mark_is(one, frame.is_bt, frame.is_pos)
-          }
-          chans.push(one)
+          cbs.push(two.cb)
+          zeros.push(two.zeroes)
+          sfi.push(Array::make(self.num_swb, 0))
         }
       }
-      let frame_bytes = match self.assemble_frame(frame, chans) {
+      // The mix works on a copy: the analysis above has to keep reading the
+      // un-mixed pair, and the next lambda iteration starts from it again.
+      let work : Array[Array[Double]] = []
+      for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        work.push(
+          if self.config.channels == 2 { coefs[ch].copy() } else { coefs[ch] },
+        )
+      }
+      let mut st = stereo
+      if self.config.channels == 2 {
+        let noise : Array[Int32] = Array::make(num_swb, 0)
+        for b = 0; b < num_swb; b = b + 1 {
+          noise[b] = if cbs[0][b] == 13 || cbs[1][b] == 13 { 1 } else { 0 }
+        }
+        st = aac_encode_stereo(
+          work[0],
+          work[1],
+          offsets,
+          num_swb,
+          num_windows,
+          self.config.sample_rate,
+          self.lambda,
+          use_is,
+          noise,
+        )
+        for b = 0; b < planned_max_sfb; b = b + 1 {
+          if st.ms_mask[b] {
+            st.ms_present = 1
+          }
+        }
+      }
+      let chans : Array[AacEncChannel] = []
+      for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        let one = self.channel_data_psy(
+          work[ch], twos[ch], seq, planned_max_sfb, cbs[ch], zeros[ch], sfi[ch],
+        )
+        if ch == 1 {
+          aac_encode_mark_is(one, st.is_bt, st.is_pos)
+        }
+        chans.push(one)
+      }
+      let frame_bytes = match self.assemble_frame(frame, st, chans) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
@@ -2281,7 +2371,7 @@ pub fn AacEncoder::encode_frame(
     let mut found = false
     while lo <= hi {
       let mid = (lo + hi) / 2
-      let built = match self.build_frame(frame, mid) {
+      let built = match self.build_frame(frame, stereo, mid) {
         Ok(v) => v
         Err(e) => return Err(e)
       }

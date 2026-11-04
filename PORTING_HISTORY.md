@@ -7618,6 +7618,62 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `aac_lc_intensity_stereo_skips_uncorrelated`）、`aac_pns_vectors` 3/3、
   §278/§286/§287 的三批 245 带仍逐位一致；全量 **1399/1399** 通过。
 
+## 291. 感知路径改为 FFmpeg 的顺序：分析读左右谱，量化读混合后的谱
+
+- **交付**：§290 留下的前置条件做掉了，`aacenc.c` 的立体声工具顺序在感知路径上
+  对齐。
+  - 之前（§289 偏差 1 与 4）：`M/S → psy → TNS → twoloop → PNS → 量化`。
+  - 现在：`psy → TNS →（每轮 λ 重试：twoloop → PNS → 强度 → M/S → 量化 → 写）`。
+    分析与定价消费**左右谱**，写码流的量化消费**混合后的谱**——这正是 FFmpeg 的
+    做法：`search_for_quantizers` 跑在 `apply_mid_side_stereo` 之前，而码流阶段的
+    `encode_spectral_coeffs` 拿最终的 `sce->coeffs` 重新量化一次。
+  - 默认（简化）路径**顺序不动**：它的每带标度因子本来就是从"真正要编码的那份谱"
+    上算出来的，先混合更准；也因此 §279/§280 的 117.064 kbps / 29.045 dB 基线
+    逐字节不变（实测到小数点后 14 位一致）。两条路径的分歧只剩"标度因子从谁的谱
+    算出来"，各自自洽。
+  - 新增 `AacEncStereo`（`ms_present` / `ms_mask` / `is_bt` / `is_pos`）与
+    `aac_encode_stereo`：按 FFmpeg 的顺序先 `apply_intensity_stereo`、后
+    `apply_mid_side_stereo`，并复制上游的两条排除——强度带不进 M/S 掩码
+    （`search_for_ms` 的 `if (!cpe->is_mask) cpe->ms_mask = 0`），**任一声道判成
+    `NOISE_BT` 的带也不进**（`apply_mid_side_stereo` 自己的
+    `band_type >= NOISE_BT` 守卫）。第二条是本移植先前缺的一块：解码侧
+    `aac_apply_stereo` 对 `sect_cb >= 13` 的带根本不做 M/S 逆变换，编码侧若仍
+    混合，两边就会对不上。
+  - 噪声带随 λ 变，所以混合必须**每轮重试重做**：`coefs` 保持左右谱不被污染，
+    每轮在 `coefs[ch].copy()` 上混合再量化。这顺手解开了 §290 里"IS 与 PNS 谁
+    先谁后"的死结——两次重试之间噪声决策变了，掩码就得跟着变。
+- **实测对照**（44.1 kHz / 128 kbps / 2ch，感知路径；默认路径与 §289 完全一致）：
+
+  | 指标 | §289 | §291 |
+  |---|---|---|
+  | 感知往返 SNR（四音夹具） | 20.14 dB | **21.31 dB** |
+  | 感知平均帧长 / 码率 | 356 B / 122.7 kbps | 364 B / 125.4 kbps（目标 371 B） |
+  | 感知 NMR（噪声-掩蔽比） | 12.96 dB | 13.36 dB（默认路径 14.45，优势 1.49 → 1.09 dB） |
+  | NMR 夹具的谱 SNR | 20.12 dB | 21.34 dB |
+  | PNS 白噪声夹具 | 357 → 344 B/帧，SNR 0.68 dB | 344 → 332 B/帧，SNR 0.95 dB |
+  | IS 共享高音夹具 | 10 带，1831 → 1802 B，电平 +0.38 dB，SNR 18.60 → 18.54 | 10 带，1744 → 1711 B，电平 **−0.03 dB**，SNR 22.92 → 22.35 |
+
+- **读法**：分析改读左右谱以后，感知路径在三个夹具上分别拿到 **+1.17 dB**
+  （四音）、**+0.27 dB**（PNS 白噪声）与 **+4.32 / +3.81 dB**（IS 夹具的
+  不开/开 IS 两侧）的往返 SNR，且平均帧长仍落在预算内。IS 的音调重建电平从
+  +0.38 dB 收到 −0.03 dB 是同一件事的另一面：标度因子现在是从该带**真实的左右
+  能量**定出来的，不再是混合后的能量。§280 的取舍结论方向不变（感知路径 NMR 仍低于默认路径，
+  `aac_lc_encoder_round_trip_noise_to_mask` 的断言原样通过），但优势从 1.49 dB
+  缩到 1.09 dB——因为 SNR 追上来了，两条路径在靠近，这正是 §280 想看到的收敛。
+- **外部对拍**（§290 那条链路重跑一遍）：8 帧 IS 流现在是 **3102 字节**（§290 时
+  3279 字节），ffmpeg 9.0.2 报 `9 frames decoded; 0 decode errors (9216 samples)`
+  且 `-v info` 零告警；ffmpeg 的 PCM 与本解码器的 PCM **最大差 1.49e-7、
+  RMS 差 2.43e-8、相对参考 SNR 138.92 dB**——换了顺序、加了噪声带排除之后，
+  码流仍然逐样本对得上参考解码器。
+- **仍未做**：`aac_is_encoding_err` 的真成本判据（前置条件现已满足：左右谱的
+  `sf_idx` / `band_type` / `zeroes` 与每带掩蔽阈值在 IS 决策时都拿得到）；
+  IS 与 PNS 的组合仍保持互斥，虽然顺序已经允许打开，这一步要单独验证；
+  `search_for_ms` 的完整形态（`sid_sf_boost` 四轮 + `ff_sfdelta_can_replace`）。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_encode_vectors`
+  14/14、`aac_pns_vectors` 3/3、§278/§286/§287 的三批 245 带仍逐位一致；
+  默认路径的每条打印指标与 §289 的日志逐字符相同（两次全量日志 diff 只有
+  感知路径的 5 行变化）；全量 **1399/1399** 通过。
+
 
 
 
