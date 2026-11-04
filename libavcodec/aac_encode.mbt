@@ -151,34 +151,40 @@ pub fn aac_encode_config_with_pns(config : AacEncodeConfig) -> AacEncodeConfig {
     bit_rate: config.bit_rate,
     perceptual: true,
     pns: true,
-    // `search_for_pns` and `ff_aac_search_for_is` both rewrite the bands they
-    // pick, and upstream runs the IS search *after* the noise decision so it
-    // can skip those bands. This port decides IS before the analysis (see
-    // `aac_encode_is_search`), so it cannot know which bands become noise and
-    // the two tools stay mutually exclusive.
-    is_stereo: false,
+    // Since §294 this also keeps intensity stereo on when the caller had
+    // enabled it: `aacenc.c` runs `ff_aac_search_for_is` *after*
+    // `search_for_pns` and skips the bands that ended up as `NOISE_BT`, which
+    // is exactly what `aac_is_search` does with the post-PNS `cb`/`zeroes` it
+    // is handed.
+    is_stereo: config.is_stereo,
   }
 }
 
 ///|
 /// Enable intensity stereo on a configuration: the high bands of a channel
-/// pair whose left and right spectra are strongly correlated are coded as
-/// codebook 14/15 bands, whose only payload is an intensity position in the
-/// `off_is` differential chain (`encode_scale_factors`), and the decoder
-/// rebuilds the right channel by scaling the left one
-/// (`apply_intensity_stereo`).
+/// pair are coded as codebook 14/15 bands, whose only payload is an intensity
+/// position in the `off_is` differential chain
+/// (`encode_scale_factors`), and the decoder rebuilds the right channel by
+/// scaling the left one (`apply_intensity_stereo`).
+///
+/// Which search picks those bands depends on the rate-control path: the
+/// perceptual one runs FFmpeg's cost comparison
+/// (`aac_is_encoding_err`, §292), the simplified one the correlation gate of
+/// §290. On the perceptual path this composes with `pns` (§294), because the
+/// cost search already excludes noise and empty bands; on the simplified path
+/// PNS never runs at all (it needs the psy bands), so the two cannot collide
+/// there either.
 ///
 /// Like PNS, this is opt-in: it rewrites bands of the right channel, so both
 /// the bitstream layout and the round-trip measurements differ from the
-/// IS-off baselines. It combines with either rate-control path (the decision
-/// needs only band energies), but not with `pns`.
+/// IS-off baselines.
 pub fn aac_encode_config_with_is(config : AacEncodeConfig) -> AacEncodeConfig {
   {
     sample_rate: config.sample_rate,
     channels: config.channels,
     bit_rate: config.bit_rate,
     perceptual: config.perceptual,
-    pns: false,
+    pns: config.pns,
     is_stereo: true,
   }
 }
@@ -2236,8 +2242,13 @@ pub fn AacEncoder::encode_frame(
   // (mid/side mixes each coefficient index across the two channels, TNS
   // filters along the index axis within one channel), and the decoder undoes
   // stereo before TNS either way.
+  // The intensity search on the perceptual path reads the post-PNS `cb` and
+  // `zeroes`, so it skips noise bands exactly like `ff_aac_search_for_is` does
+  // upstream and the two tools compose (§294). On the simplified path PNS never
+  // runs at all - it needs the psy bands - so its correlation-gated search
+  // cannot meet a noise band either.
   let use_psy = self.config.perceptual && seq != aac_eight_short
-  let use_is = self.config.is_stereo && !self.config.pns
+  let use_is = self.config.is_stereo
   let mut stereo = aac_encode_stereo_none(num_swb)
   if self.config.channels == 2 && !use_psy {
     stereo = aac_encode_stereo(

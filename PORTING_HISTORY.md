@@ -7796,6 +7796,48 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   （量值已改为精确相等）、`aac_twoloop_vectors` 3/3、`aac_encode_vectors`
   14/14、`aac_pns_vectors` 3/3；全量 **1400/1400** 通过。
 
+## 294. IS 与 PNS 可以同时开：混合流的回归与外部对拍
+
+- **交付**：拆掉 §290 留在配置层的互斥。`aac_encode_config_with_is` 与
+  `aac_encode_config_with_pns` 都不再清对方的标志，`use_is` 也不再要求
+  `!pns`。之所以现在能拆：§291 把立体声工具挪到了量化决策之后，
+  `aac_encode_stereo_psy` 交给 `aac_is_search` 的 `cb`/`zeroes` 已经是
+  **PNS 的终值**，而 `ff_aac_search_for_is` 的门本来就要求两个声道都
+  `band_type != NOISE_BT && !zeroes`——排除规则是判据自带的，不是另外加的。
+  默认（简化）路径不用担心：PNS 只在感知路径里跑（`with_pns` 强制
+  `perceptual`），那里根本不会出现噪声带。
+- **实测**（44.1 kHz / 128 kbps / 2ch，8 帧 LCG 白噪声 + 1 收尾帧）：
+
+  | | 只开 PNS | PNS + IS |
+  |---|---|---|
+  | `NOISE_BT` 带（左 / 右） | 81 / 78 | **81 / 78**（一字不差） |
+  | 右声道强度带 | 0 | **14** |
+  | 码长（9 帧合计） | 2994 B | **2894 B**（−3.3%） |
+  | 解码峰值 / 往返 SNR | 0.3182 / 0.947 dB | 0.3182 / 0.778 dB |
+
+  噪声带数完全不动，说明两个工具确实正交：IS 只在「两声道都不是噪声带且非空」
+  的带里选，PNS 的判定在 IS 之前完成且不回看。
+- **外部对拍**：这种混合流（噪声带 + 强度带 + M/S 位）交 docker
+  `linuxserver/ffmpeg:9.0.2`：`9 packets read (2894 bytes); 9 frames decoded;
+  0 decode errors (9216 samples)`；ffmpeg 的 PCM 与本解码器
+  **最大差 4.47e-8、RMS 9.11e-9、相对参考 SNR 138.41 dB**。
+- **测试**：`aac_encode_vectors` 新增 `aac_encode_test_tool_bands`（按
+  `section_data` 数三种工具带型）与 `aac_lc_pns_with_intensity_stereo`
+  （两个工具的带同时出现、PNS-only 流 0 个强度带、码长不回增、解码干净有限）；
+  `aac_lc_is_config` 改成断言**两个方向都能叠加**：
+  `with_pns(with_is(x))` 与 `with_is(with_pns(x))` 都得到 `pns + is_stereo +
+  perceptual`。
+- **工具坑**：临时 main 包会被整模块的 `moon test` 构建图收进去——本轮在测试
+  运行期间把 `zz_is_pns/` 搬走，构建图就报
+  `input ...\zz_is_pns\main.mbt missing`，整轮测试白跑。要么先跑测试再清 scratch，
+  要么先清 scratch 再起测试，别中途动。
+- **仍未做**：`search_for_ms` 的完整形态；短窗 IS 夹具；§289 偏差 2
+  （λ 重试里上游会重新 `analyze`，本移植每帧只分析一次）。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_encode_vectors`
+  15/15、`aac_is_vectors` 1/1、`aac_twoloop_vectors` 3/3、`aac_pns_vectors`
+  3/3；IS 与 PNS 各自单开的指标与 §293 一致（PNS 344/332 B、0.947 dB；
+  IS 55 带、23.26 dB）；全量 **1401/1401** 通过。
+
 
 
 

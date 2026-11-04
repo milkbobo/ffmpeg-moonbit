@@ -1207,10 +1207,12 @@ fn aac_encode_test_pcm_snr(
 }
 
 ///|
-/// `aac_encode_config_with_is` turns intensity stereo on and nothing else. It
-/// works on either rate-control path - the decision needs only band energies.
-/// PNS clears it and it clears PNS, because both rewrite the bands they pick
-/// and this port decides intensity before the noise search has run.
+/// `aac_encode_config_with_is` turns intensity stereo on and changes nothing
+/// else: it works on either rate-control path, and since §294 it composes with
+/// PNS - the perceptual search reads the post-PNS band types, so a noise band
+/// is never also an intensity band, exactly like upstream's
+/// `band_type != NOISE_BT && !zeroes` gate. `with_pns` likewise keeps intensity
+/// stereo (it only adds what PNS needs: the perceptual path).
 test "aac_lc_is_config" {
   let plain = @libavcodec.aac_encode_config(44100, 2, 128000)
   assert_true(!plain.is_stereo)
@@ -1226,7 +1228,134 @@ test "aac_lc_is_config" {
     @libavcodec.aac_encode_config_with_is(plain),
   )
   assert_true(both.pns)
-  assert_true(!both.is_stereo)
+  assert_true(both.is_stereo)
+  // PNS implies the perceptual path, whichever order the two switches are set.
+  assert_true(both.perceptual)
+  let reversed = @libavcodec.aac_encode_config_with_is(
+    @libavcodec.aac_encode_config_with_pns(plain),
+  )
+  assert_true(reversed.pns)
+  assert_true(reversed.is_stereo)
+  assert_true(reversed.perceptual)
+}
+
+///|
+/// Count the tool-written band types over the steady-state frames of a stereo
+/// stream: `NOISE_BT` (13) in each channel and the right channel's intensity
+/// bands (14/15). Both opt-in tools mark their bands in `section_data` only, so
+/// this is what "the tool actually fired" means on the wire.
+fn aac_encode_test_tool_bands(
+  stream : Array[Bytes],
+  frames : Int32,
+) -> (Int32, Int32, Int32) {
+  let mut left_noise = 0
+  let mut right_noise = 0
+  let mut right_is = 0
+  for f = 0; f < frames; f = f + 1 {
+    let payload = stream[f]
+      .clamped_view(
+        start=@libavcodec.av_aac_adts_header_size,
+        end=stream[f].length(),
+      )
+      .to_owned()
+    let gb = @libavcodec.BitReader::new(payload)
+    if gb.read(3).reinterpret_as_int() != 1 {
+      abort("tool bands test: expected a channel pair")
+    }
+    let _ = gb.read(4)
+    if gb.read1() != 1U {
+      abort("tool bands test: expected a common window")
+    }
+    let info = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gb))
+    if gb.read(2).reinterpret_as_int() == 1 {
+      for b = 0; b < info.max_sfb; b = b + 1 {
+        let _ = gb.read1()
+      }
+    }
+    let (_, m0) = aac_encode_test_parse_channel_common(gb, info)
+    let (_, m1) = aac_encode_test_parse_channel_common(gb, info)
+    for b = 0; b < info.max_sfb; b = b + 1 {
+      if m0.sect_cb[0][b] == 13 {
+        left_noise = left_noise + 1
+      }
+      let cb1 = m1.sect_cb[0][b]
+      if cb1 == 13 {
+        right_noise = right_noise + 1
+      } else if cb1 == 14 || cb1 == 15 {
+        right_is = right_is + 1
+      }
+    }
+  }
+  (left_noise, right_noise, right_is)
+}
+
+///|
+/// §294: intensity stereo and PNS on the same channel pair. The noise decision
+/// is already made when `aac_is_search` runs, so a band that became
+/// `NOISE_BT` in either channel is never switched to an intensity band - the
+/// same gate `ff_aac_search_for_is` reads - and the two tools' bands have to
+/// show up side by side in one stream. PNS is waveform-inexact by design, so
+/// the guard stays what it has been: it decodes, at a finite level, cheaper.
+test "aac_lc_pns_with_intensity_stereo" {
+  let rate = 44100
+  let channels = 2
+  let frames = 8
+  let bit_rate = 128000
+  let input = aac_encode_test_noise(channels, frames)
+  let base = @libavcodec.aac_encode_config_perceptual(rate, channels, bit_rate)
+  let pns_only = aac_encode_test_stream_config(
+    input,
+    channels,
+    frames,
+    @libavcodec.aac_encode_config_with_pns(base),
+  )
+  let both_cfg = @libavcodec.aac_encode_config_with_is(
+    @libavcodec.aac_encode_config_with_pns(base),
+  )
+  let both = aac_encode_test_stream_config(input, channels, frames, both_cfg)
+  assert_true(both_cfg.pns)
+  assert_true(both_cfg.is_stereo)
+  let (left_noise, right_noise, right_is) = aac_encode_test_tool_bands(
+    both,
+    frames,
+  )
+  let (pns_left, pns_right, pns_is) = aac_encode_test_tool_bands(
+    pns_only,
+    frames,
+  )
+  let mut pns_bytes = 0
+  let mut both_bytes = 0
+  for f = 0; f < pns_only.length(); f = f + 1 {
+    pns_bytes = pns_bytes + pns_only[f].length()
+    both_bytes = both_bytes + both[f].length()
+  }
+  let decoded = aac_encode_test_decode(both, channels)
+  let mut energy = 0.0
+  let mut noise = 0.0
+  let mut peak = 0.0
+  for ch = 0; ch < channels; ch = ch + 1 {
+    for i = 0; i < frames * 1024; i = i + 1 {
+      let w = input[ch][i]
+      let d = decoded[ch][i + 1024] - w
+      energy = energy + w * w
+      noise = noise + d * d
+      if decoded[ch][i + 1024].abs() > peak {
+        peak = decoded[ch][i + 1024].abs()
+      }
+    }
+  }
+  let snr = 10.0 * @math.log10(energy / noise)
+  println(
+    "PNS + intensity stereo: noise bands \{pns_left}/\{pns_right} -> \{left_noise}/\{right_noise}, intensity bands \{pns_is} -> \{right_is}, bytes=\{pns_bytes}>\{both_bytes} snr=\{snr} peak=\{peak}",
+  )
+  // Both tools still fire, and the noise counts may only move through the
+  // frame getting cheaper - never onto a band that is also an intensity band.
+  assert_true(left_noise + right_noise > 0)
+  assert_true(right_is > 0)
+  assert_true(pns_is == 0)
+  assert_true(both_bytes <= pns_bytes)
+  assert_true(peak > 0.0 && peak < 2.0)
+  assert_true(snr > -5.0)
 }
 
 ///|

@@ -86,11 +86,13 @@ if self.config.channels == 2 && its == 0 && use_is {
    **精确相等**（`worst cost gap = 0`）。二分用的探针留在 harness 里：
    `ISD1L` 行 = 只加完**左带**成本的 `dist1`。以后遇到「决策逐位对、量值差一点」
    的成本类对拍，先照这个拆法按调用边界二分，别去怀疑求和顺序。
-2. **打开 IS 与 PNS 的组合**。两个配置入口目前互相清 `pns`/`is_stereo`。
-   顺序上已经允许（`aac_encode_stereo_psy` 拿到的 `cbs/zeros` 就是 PNS 的最终
-   判定，正好对应上游 `search_for_is` 的 `band_type != NOISE_BT && !zeroes`
-   排除），缺的只是一组 IS+PNS 夹具与逐位数据；注意 §288 那条结论仍然成立：
-   噪声带写的是 `noise_sfi`，不是 twoloop 的 `sf_idx`。
+2. ~~**打开 IS 与 PNS 的组合**~~ —— **§294 已做完**，而且是白捡的：
+   `aac_encode_stereo_psy` 交给 `aac_is_search` 的 `cb`/`zeroes` 就是 PNS 终值，
+   上游 `search_for_is` 的门（两声道 `band_type != NOISE_BT && !zeroes`）本来就把
+   噪声带排除在外。实测同一噪声夹具的噪声带数开不开 IS 都是 81/78，IS 另加 14 个
+   强度带、再省 3.3% 码；混合流经 ffmpeg 9.0.2 解码 0 errors，PCM 与本解码器最大差
+   4.47e-8。回归在 `aac_lc_pns_with_intensity_stereo`，配置叠加两个方向都测
+   （`aac_lc_is_config`）。§288 那条结论仍然成立：噪声带写的是 `noise_sfi`。
 3. **`search_for_ms` 的完整形态**（`aaccoder.c:702` 的 `sid_sf_boost` 四轮尝试 +
    `ff_sfdelta_can_replace`）——本移植的 M/S 掩码仍是能量版，等价于上游
    `mid_side=1` 那条不重新定标的分支。IS 已经用掉了同一个 `ms_mask`（flip 带），
@@ -125,7 +127,12 @@ IS 位置和噪声 `3+ceil(log2(pns_ener)*2)`，我们的噪声仍取 `search_fo
   `INTENSITY_BT = 15` 是**同相**（`libavcodec/aac.h:74`）；编解码两侧的
   `p = -1 + 2*(bt - 14)` 必须同式。
 - MoonBit 不把 `a = x` 换行 `+ y` 当续行（多行算术要拆 `let` 或加括号）。
-- 其余照旧：`moon fmt` 禁跑、heredoc 禁用、清理走 `.trash/<日期>/`、
+- **临时 main 包会被整模块测试图收进去**：`zz_*` 这种放在模块根的 scratch 包会
+  被 `moon test --target wasm` 一起编译；本轮在测试运行中途把它 `mv` 走，构建图
+  立刻报 `input ...\zz_is_pns\main.mbt missing`，那一次全量测试等于白跑。顺序要
+  改成「先清 scratch，再起全量测试」，或者等测试跑完再清。
+- 其余照旧：`moon fmt` 禁跑、heredoc 禁用（往 C 源里写含 `"\n"` 的行会被 Python
+  吃一层转义，写完必须 `grep` 验证）、清理走 `.trash/<日期>/`、
   每条 bash 显式 `cd`、`libavcodec` 包**不要再加白盒测试**（wasm init 的
-  local count 已接近上限，§288 记过），提交消息含 `remove`/`rm` 子串会被钩子
+  local count 已接近上限，§288 记过）、提交消息里含 `remove`/`rm` 子串会被钩子
   拦，用 `git commit -F <file>`。
