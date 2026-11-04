@@ -10,7 +10,8 @@
 `aac_encode.mbt` 现在能把 §277 的 3GPP 模型和 §278 的 twoloop 串成 FFmpeg 式的
 "psy 分析 → 两遍码率控制 → 逐带量化"，但**只能通过
 `aac_encode_config_perceptual` 开启**：在仓库自己的音调夹具上它比默认路径低约
-8 dB SNR，而且量化噪声仍在稳定帧上超过 psy 自身阈值 5–20 倍。默认路径
+8 dB SNR。**这个差距已查清**：把编码器的同一份输入喂回未修改的 C，98/98 带逐位
+一致（§3），所以是 3GPP 模型在该码率下的固有行为，不是移植或接线问题。默认路径
 （`aac_encode_config`）代码一行未改，全量 **1389/1389** 绿，已提交 `b72c046`。
 
 ---
@@ -22,6 +23,8 @@
 | `aac_encode.mbt` | `AacEncodeConfig.perceptual`、`aac_encode_config_perceptual`；`AacEncoder` 的 `psy[]` / `last_frame_bits` / `lambda`；`channel_data_psy`、`assemble_frame`（从 `build_frame` 拆出）、`aac_encode_rate_bits`；`encode_frame` 里的两条路 |
 | `aac_twoloop.mbt` | `aac_twoloop_quantize_band`：按成本函数同一条 f32 路径重量化 + cb 11 escape |
 | `aac_encode_vectors/` | 新增 `aac_lc_perceptual_rate_control`（解码、单帧 ≤6144×声道、均值 ≤ 名义码率、SNR > 18 dB） |
+| `_ref/aacenc/harness.c` | 新增 `--in <dump>` 模式：把外部谱 + `FFPsyBand` + `alloc` 喂给未修改的 twoloop（矢量模式行为不变，`vectors.txt` 零 diff） |
+| `_ref/aacenc/compare_encoder_input.py` | A/B 脚本：解析 dump → 跑 C → 逐带比 `sf/cb/zeroes` + 两套解的谱 SNR（0 差异退出码 0） |
 | 文档 | `PORTING_HISTORY.md` §279、`README.md` 音频行、`agent.md` |
 
 ### 复现
@@ -74,38 +77,74 @@ moon test --target wasm < /dev/null > .scratch/full.log 2>&1   # 全量 1389/138
 
 ---
 
-## 3. 下一片：把"为什么噪声超阈值 5–20 倍"定位掉
+## 3. 已定位：不是移植问题，是模型本身（2026-11-04 补记）
 
-**目前的证据链**：成本函数与写入器位数一致；`sf/cb/zeroes` 在 §278 的 245 条
-向量上与 C 逐位一致；但编码器实际输出在稳定帧上 `err/threshold` 达到 5–20
-（头几帧 0.6–1.3）。三条都可能：模型在低码率/纯音下本来就做不到；接线顺序
-（M/S、per-channel ctx）改变了输入；或 twoloop 在我们的 `alloc` 下走到了 C
-没覆盖的路径。
+**做完的交叉验证**：给 `_ref/aacenc/harness.c` 加了 `--in <dump>` 模式，把编码器交给
+`aac_twoloop_search` 的**同一份输入**（M/S + TNS 之后的 1024 点谱、49 条 `FFPsyBand`、
+`alloc`）喂回**未修改**的 C `search_for_quantizers_twoloop`。结果：
 
-### 建议顺序（成本从低到高）
+```
+frame 5: bands=49 mismatching=0   spectral SNR: mine 18.586 dB  ref 18.586 dB
+frame 7: bands=49 mismatching=0   spectral SNR: mine 19.254 dB  ref 19.254 dB
+total mismatching bands: 0 / 98
+```
 
-1. **先排除"模型本身做不到"**：给 `_ref/aacenc/harness.c` 加一个入口，把编码器
-   这一帧的输入（1024 点谱、`band_sizes`、psy 的 49 个 `FFPsyBand`、`alloc`、
-   `lambda`）dump 成文本（放 `.scratch/`），再由一个 C 小程序喂给**未修改**的
-   `search_for_quantizers_twoloop`，输出 `sf/cb/zeroes`。
-   - 若 C 的结果与本移植逐位一致 → 移植没问题，问题在"这套输入本身"：接着做 2。
-   - 若 C 不同 → 差异在 `alloc` 触发的新路径（例如 `zeroscale`、`toofewbits`
-     分支、`spread_thr_r`），逐带定位。
-2. **换 psy 输入顺序**：把 psy 改到 M/S 之前（分析 L/R），量化仍对 M/S 谱做，
-   即复刻 FFmpeg"选 sf/cb 用 L/R、写码流用 M/S"的不一致行为。这是一处结构性
-   改动，先只在 `perceptual` 分支里试，量出 SNR/阈值比再决定。
-3. **psy ctx 改单 ctx + 声道数组**：`fill_level`、`pe.min/max`、`pe.previous`
-   共享，`prev_band` / `entropy` / `attack_threshold` 每声道。这是
-   `AacPsyContext` 的结构改动（它现在是单声道状态 + `channels` 参数），会牵动
-   §277 的 3 项夹具测试，需要保持它们不变（单声道用例天然兼容）。
-4. 只有在 1–3 都排除后，才考虑"这就是 3GPP 模型在纯音 + 低码率下的行为"，
-   届时把 `perceptual` 设成默认并重新定基准（并在 §279 写清楚容差理由）。
+即：**移植与接线都是对的**。3GPP 模型在这个码率上给出的 `alloc` 只支撑约 19 dB 谱
+SNR，`threshold` 是理想目标而非可达约束；§271 的启发式把整个字节预算烧在更细的
+量化上，所以 SNR 更高。之前"噪声超阈值 5–20 倍"的观察是模型的常态，不是 bug。
+
+一个必须记住的坑：这个结论第一次跑出来是"31/98 带不一致"，原因是 dump 里的
+`SPEC 1024` 让 C 侧的 `fscanf` 把 `1024` 当成了第一个样本，整帧谱错开一位。**C 侧
+看到的谱错一位时，仍然能产出一份"S 看起来合理"的 sf/cb**（只是 maxval 小一个数量级），
+所以要养成"先验 maxval / 谱峰值对得上"的习惯。
+
+### 要把 `perceptual` 转正，只剩两个决定
+
+1. **是否复刻 FFmpeg 的 psy 输入顺序**：FFmpeg 分析 L/R，量化之后才做 M/S（也就是
+   用 L/R 的 psy 结论去量化 M/S 谱）；我们分析 M/S，sf 与谱自洽。要复刻就动
+   `encode_frame` 的顺序，且会丢掉"sf 按实际编码谱选"这个性质。
+2. **是否接受 SNR 下降换掩蔽整形**：仓库只有 SNR/PSNR，没有感知指标。要么引入一个
+   客观感知指标（PEAQ/ODG/SSIM-for-audio 之类）来定论，要么就保持 opt-in 并在
+   README 里写清"感知路径 SNR 更低是设计使然"。
+
+在此之前维持 opt-in，不要改默认。
+
+### 复现 A/B 的方法（需要时按这个重做）
+
+1. 在 `aac_encode.mbt` 的 psy 分支里临时加 dump（约 20 行）：
+
+   ```moonbit
+   // 在 search 之前，for ch 循环内
+   if ch == 0 && its == 0 {
+     println("===INPUT \{n}===")      // n = 帧号，需自加计数器
+     println("FRAME \{n}")
+     println("SPEC")                   // 千万别写 "SPEC 1024"
+     for i = 0; i < 1024; i = i + 1 { println("\{coefs[ch][i]}") }
+     println("PSYALLOC \{alloc}")
+     for b = 0; b < 49; b = b + 1 {
+       println("PSYBAND \{b} \{bands[b].energy} \{bands[b].threshold} \{bands[b].spread} \{bands[b].bits}")
+     }
+     println("END")
+     println("===ENDINPUT===")
+   }
+   // search 之后，同一个 ch 分支里
+   if ch == 0 && its == 0 {
+     println("===OURS \{n}===")
+     for b = 0; b < 49; b = b + 1 { println("TWOBAND \{b} \{two.sf[b]} \{two.cb[b]} \{two.zeroes[b]}") }
+     println("===ENDOURS===")
+   }
+   ```
+
+2. `moon test --target wasm libavcodec/aac_encode_vectors > .scratch/dump_run.log 2>&1`
+3. `python _ref/aacenc/compare_encoder_input.py`（退出码 0 = 全一致）
+4. 用完把探针删干净（`grep -c "===INPUT" libavcodec/aac_encode.mbt` 归零）。
 
 ### 不要做的事
 
 - 不要为了让测试变绿去放宽 §278 的 245 条向量（它们是逐位黄金数据）。
-- 不要把 `alloc` 直接除以声道数之外的花样（试过不除，SNR 从 21.5 掉到 17.4）。
-- 不要把 `perceptual` 设成默认——它会静默拉低默认路径的往返指标。
+- 不要把 `alloc` 除声道数之外再玩花样（试过不除，SNR 从 21.5 掉到 17.4）。
+- 不要在没引入感知指标前把 `perceptual` 设成默认。
+- 不要把 dump 探针提交进去（每帧 1024 行输出，会淹掉测试日志）。
 
 ---
 

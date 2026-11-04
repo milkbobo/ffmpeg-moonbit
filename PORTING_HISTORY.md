@@ -7087,9 +7087,19 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
     27.9 / 28.3 / 28.4 / 23.0 / 23.1 / 20.4 / 18.7 / 17.0 dB（前 3 块是过渡帧，
     仍走旧路径）。
   - 单声道长帧基本持平（33.50 vs 33.53 dB，546 vs 560 字节），差距集中在立体声。
-  - **未解决**：稳定长帧上逐带量化噪声是 psy 自身阈值的 **5–20 倍**（头几帧只有
-    0.6–1.3 倍）。所以这不只是"psy 拿 SNR 换掩蔽"——分配没达到模型目标。
-- **已知偏差**（相对 `aacenc.c`，即使修好阈值也要记）：
+  - 观察：稳定长帧上逐带量化噪声是 psy 自身阈值的 5–20 倍（头几帧只有 0.6–1.3
+    倍）。**已交叉验证这不是移植或接线问题**，见下一条。
+- **交叉验证（决定性）**：`_ref/aacenc/harness.c` 新增 `--in <dump>` 模式，把编码器
+  交给 `aac_twoloop_search` 的**同一份输入**（M/S 与 TNS 之后的 1024 点谱、49 条
+  `FFPsyBand`、`alloc`）喂回**未修改**的 C `search_for_quantizers_twoloop`，只让它
+  输出 `sf/cb/zeroes`。结果：第 5/7 帧共 **98 带逐位一致（0 差异）**，两套解的谱
+  SNR 也完全相同（18.586 / 19.254 dB）。也就是说 §271 路径与本路径 8 dB 的 SNR
+  差距**与移植无关**：3GPP 模型在这个码率上给出的 alloc 本身就只支撑到约 19 dB 谱
+  SNR，阈值是理想目标而不是可达约束；§271 的启发式把整个字节预算烧在"更细的
+  量化"上，SNR 自然更高。
+  复现：给 `aac_encode.mbt` 加 dump 探针（见交接文档 §4）后
+  `python _ref/aacenc/compare_encoder_input.py`（退出码 0 = 全一致）。
+- **已知偏差**（相对 `aacenc.c`，按影响排序）：
   1. psy 分析的是 M/S 之后的谱；FFmpeg 分析 L/R，量化之后才做 M/S。
   2. psy ctx 每声道一份，`fill_level` / `pe.min/max` 不共享；FFmpeg 是单 ctx +
      声道数组。
@@ -7098,11 +7108,11 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   4. `planned_max_sfb` 取 psy `bits > 0` 的最后一带（帧级固定）；FFmpeg 由 twoloop
      的 `max_sfb` 决定。这里固定是为了让 TNS 的 `mmm` 与解码端
      `aac_apply_tns` 一致。
-- **下一步**（具体到可执行）：给 `_ref/aacenc/harness.c` 加一个"喂外部谱"的入口，
-  把编码器这一帧的谱与 `alloc` 打进 C 的 `search_for_quantizers_twoloop`，逐带比
-  `sf/cb/zeroes`。若 C 在 `alloc≈1114` 时同样越过阈值，说明是模型在低码率、纯音
-  输入下的固有行为；若 C 明显更好，差异就在接线，优先查 psy 输入顺序
-  （M/S 前 vs 后）与 per-channel ctx 两条。
+- **要把感知路径转正，只剩两个决定**（都不是 bug）：
+  1. 是否复刻 FFmpeg 的 psy 输入顺序（L/R 分析 + 量化后才 M/S），代价是丢掉
+     "sf 按实际编码的谱选"这个更自洽的性质。
+  2. 是否接受 SNR 指标下降换掩蔽整形。仓库目前没有感知指标（PEAQ/ODG 之类），
+     只有 SNR/PSNR，而这两个指标天然偏向 §271 的"填满预算"策略。
 - **检查**：`moon check --target wasm --deny-warn` 干净；`libavcodec/aac_encode_vectors`
   **7/7**（新增 `aac_lc_perceptual_rate_control` 覆盖感知路径：解码、单帧
   ≤6144×声道、均值不超名义码率、SNR>18 dB）；全量 `moon test --target wasm`
