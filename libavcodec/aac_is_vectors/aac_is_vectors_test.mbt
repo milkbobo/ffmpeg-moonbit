@@ -14,7 +14,13 @@
 /// exactly what the reference was handed, so any difference here is a
 /// difference in the cost comparison, the phase choice or the exclusions.
 ///
-/// Everything the encoder consumes - `is_mask`, the resulting `ms_mask`, the
+/// Everything is asserted **exactly**. Earlier drafts of this file measured the
+/// `dist1`/`dist2` magnitudes instead of comparing them, because the escape
+/// codebook's `c*cbrtf(c)` was being recomputed with a double `cbrt`; §293
+/// traces that to 2196 one-ulp disagreements with the encoder's own
+/// single-precision `cbrtf` and fixes it with a transcribed table.
+///
+/// What the encoder consumes - `is_mask`, the resulting `ms_mask`, the
 /// right channel's band type, the two `is_ener` values, the per-phase `pass`
 /// flags and `cpe->is_mode` - is asserted **exactly**. The `dist1`/`dist2`
 /// magnitudes are measured instead: they only matter through the comparison
@@ -40,8 +46,6 @@ test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands
   }
   let frames = @aac_is_vectors.aac_is_spec0.length()
   let mut is_bands = 0
-  let mut max_gap = 0.0
-  let mut max_label = ""
   for f in 0..<frames {
     let d = @libavcodec.aac_is_in(
       @aac_is_vectors.aac_is_spec0[f],
@@ -105,13 +109,20 @@ test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands
         (out.dist12[g], @aac_is_vectors.aac_is_ref_d12[f][g], "phase-1 dist2"),
         (out.dist21[g], @aac_is_vectors.aac_is_ref_d21[f][g], "phase+1 dist1"),
         (out.dist22[g], @aac_is_vectors.aac_is_ref_d22[f][g], "phase+1 dist2"),
+        (
+          out.dist11_left[g],
+          @aac_is_vectors.aac_is_ref_d11l[f][g],
+          "phase-1 dist1 left half",
+        ),
+        (
+          out.dist21_left[g],
+          @aac_is_vectors.aac_is_ref_d21l[f][g],
+          "phase+1 dist1 left half",
+        ),
       ]
       for (got, want, name) in costs {
-        let base = if want.abs() > 1.0 { want.abs() } else { 1.0 }
-        let rel = (got - want).abs() / base
-        if rel > max_gap {
-          max_gap = rel
-          max_label = "frame \{f} band \{g} \{name}: \{got} vs \{want}"
+        if got != want {
+          fail("frame \{f} band \{g}: \{name} \{got} != \{want}")
         }
       }
     }
@@ -128,9 +139,6 @@ test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands
   // intensity position costs ~7 bits while the two coded bands cost more. That
   // is precisely the difference from §290's correlation gate, and the exact
   // per-band equality asserted above is what pins it.
-  println(
-    "IS vectors: \{is_bands} intensity bands over \{frames} frames; worst cost gap = \{max_gap} (\{max_label})",
-  )
+  println("IS vectors: \{is_bands} intensity bands over \{frames} frames")
   assert_true(is_bands > 0)
-  assert_true(max_gap < 1.0e-5)
 }

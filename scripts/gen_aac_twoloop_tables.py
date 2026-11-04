@@ -59,6 +59,10 @@ def parse():
                 assert n == VEC_COUNTS[k], (k, n)
                 bits.append([int(x) for x in parts[3:]])
                 assert len(bits[-1]) == n
+            elif tag == "CBRT":
+                assert int(parts[1]) == 8192
+                tables["cbrt_prod"] = [float(x) for x in parts[2:]]
+                assert len(tables["cbrt_prod"]) == 8192
             else:
                 raise SystemExit("unknown tag: " + tag)
     assert len(vecs) == 11 and len(bits) == 11
@@ -188,6 +192,19 @@ def main():
         lines.append("  aac_twoloop_bits{},".format(k + 1))
     lines.append("]")
     lines.append("")
+
+    lines += emit_float_array(
+        "aac_twoloop_cbrt_prod",
+        t["cbrt_prod"],
+        [
+            "`c*cbrtf(c)` for c in 0..8191, printed as f32 with %.9e.",
+            "The escape branch of `quantize_and_encode_band_cost_ESC` computes",
+            "that product with the single-precision `cbrtf`, which is *not*",
+            "`float(c*cbrt((double)c))` - on this toolchain 2196 of the 8192",
+            "values differ by one ulp - so the encoder's own values are",
+            "transcribed here instead of being recomputed.",
+        ],
+    )
 
     # Sanity markers. Codebook 11 starts at (0, 0) and ends at the
     # escape/escape pair (64, 64) - `64.0f` is the BT_ESC sentinel that

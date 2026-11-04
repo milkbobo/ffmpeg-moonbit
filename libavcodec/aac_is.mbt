@@ -105,8 +105,10 @@ pub struct AacIsOut {
   pass1 : Array[Int32]
   pass2 : Array[Int32]
   dist11 : Array[Double]
-  dist12 : Array[Double]
+  dist11_left : Array[Double]
   dist21 : Array[Double]
+  dist21_left : Array[Double]
+  dist12 : Array[Double]
   dist22 : Array[Double]
   count : Int32
 }
@@ -118,6 +120,9 @@ priv struct AacIsError {
   phase : Double
   error : Double
   dist1 : Double
+  /// `dist1` after the left band's cost only - the same split the reference
+  /// harness exports, so a magnitude difference can be pinned to one call.
+  dist1_left : Double
   dist2 : Double
   ener01 : Double
 }
@@ -150,6 +155,7 @@ fn aac_is_encoding_err(
     phase,
     error: 0.0,
     dist1: 0.0,
+    dist1_left: 0.0,
     dist2: 0.0,
     ener01,
   }
@@ -180,7 +186,7 @@ fn aac_is_encoding_err(
   let maxval = aac_two_find_max_val(1, size, i34, 0)
   let is_bt = aac_two_find_min_book(maxval, is_sf_idx)
   let qc : Array[Int32] = Array::make(size, 0)
-  let mut dist1 = aac_two_band_cost(
+  let dist1_left = aac_two_band_cost(
     l,
     0,
     l34,
@@ -191,8 +197,8 @@ fn aac_is_encoding_err(
     d.cb0[g],
     aac_two_div(lambda, t0),
   ).cost
-  dist1 = aac_two_add(
-    dist1,
+  let dist1 = aac_two_add(
+    dist1_left,
     aac_two_band_cost(
       r,
       0,
@@ -226,6 +232,7 @@ fn aac_is_encoding_err(
     phase,
     error: aac_two_sub(dist2, dist1),
     dist1,
+    dist1_left,
     dist2,
     ener01,
   }
@@ -269,8 +276,10 @@ pub fn aac_is_search(
   let pass1 : Array[Int32] = Array::make(n, 0)
   let pass2 : Array[Int32] = Array::make(n, 0)
   let d11 : Array[Double] = Array::make(n, 0.0)
+  let d11l : Array[Double] = Array::make(n, 0.0)
   let d12 : Array[Double] = Array::make(n, 0.0)
   let d21 : Array[Double] = Array::make(n, 0.0)
+  let d21l : Array[Double] = Array::make(n, 0.0)
   let d22 : Array[Double] = Array::make(n, 0.0)
   // `freq_mult = sample_rate/(1024.0f/num_windows)/2.0f` and the gate is
   // `start*freq_mult > INT_STEREO_LOW_LIMIT*(lambda/170)`.
@@ -316,8 +325,10 @@ pub fn aac_is_search(
       pass1[g] = err1.pass
       pass2[g] = err2.pass
       d11[g] = err1.dist1
+      d11l[g] = err1.dist1_left
       d12[g] = err1.dist2
       d21[g] = err2.dist1
+      d21l[g] = err2.dist1_left
       d22[g] = err2.dist2
       let best = if err1.pass == 1 && err1.error < err2.error {
         err1
@@ -363,8 +374,10 @@ pub fn aac_is_search(
     pass1,
     pass2,
     dist11: d11,
+    dist11_left: d11l,
     dist12: d12,
     dist21: d21,
+    dist21_left: d21l,
     dist22: d22,
     count,
   }

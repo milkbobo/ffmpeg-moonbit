@@ -149,8 +149,12 @@
   **1**（`psymodel.c:52` 是 `num_ch = group_map[i] + 1`），否则
   `psy.ch[1]` 不是 CPE 的第二声道；
   ③ 夹具里的浮点必须按 C 实际消费的 **float** 存（`%.9e` 足够往返 float），
-  否则"完全相等"的断言会假失败。另外 flip 带只写 `ms_mask` 位、不做 M/S 混合
-  （上游 `apply_mid_side_stereo` 跳过所有 `is_mask` 带，符号翻转由解码器完成）。两条硬约束：IS 带写进
+  否则"完全相等"的断言会假失败；④ escape 码本（cb 11）的
+  `quantized = c*cbrtf(c)*IQ` **不能**按「double `cbrt` 再舍 f32」建模——
+  本机工具链的 `cbrtf` 在 `c = 0..8191` 里有 2196 个值与它差 1 ulp（§293），
+  所以 `aac_twoloop_cbrt_prod` 是从 `dump_tables.c` 的 `CBRT` 记录零转录来的。
+  flip 带只写 `ms_mask` 位、不做 M/S 混合（上游 `apply_mid_side_stereo` 跳过
+  所有 `is_mask` 带，符号翻转由解码器完成）。另有两条硬约束：IS 带写进
   码流的是**强度位置**（范围 `[-155,100]`，正负一样常见），所以
   ①写标度因子必须先用 `cb` 认出 14/15，不能再用 `sf >= 0` 这个"该带被编码"的
   哨兵（否则位置为负的带被整体跳过，section 与标度因子链从那条带起错位）；

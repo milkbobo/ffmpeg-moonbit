@@ -114,19 +114,21 @@ def run_ref(dump_path):
         if not p:
             continue
         if p[0] == "FRAME":
-            cur = {"mode": 0, "band": {}, "err": {}}
+            cur = {"mode": 0, "band": {}, "err": {}, "d1l": {}}
             frames.append(cur)
         elif p[0] == "ISMODE":
             cur["mode"] = int(p[1])
         elif p[0] == "ISBAND":
             cur["band"][int(p[1])] = [int(p[2]), int(p[3]), int(p[4]),
                                       f32(float(p[5])), f32(float(p[6]))]
+        elif p[0] == "ISD1L":
+            cur["d1l"][int(p[1])] = [f32(float(p[2])), f32(float(p[3]))]
         elif p[0] == "ISERR":
             cur["err"][int(p[1])] = [int(p[2]), f32(float(p[3])),
                                      f32(float(p[4])), int(p[5]),
                                      f32(float(p[6])), f32(float(p[7]))]
     for i, fr in enumerate(frames):
-        for k in ("band", "err"):
+        for k in ("band", "err", "d1l"):
             if len(fr[k]) != NBANDS:
                 sys.exit("frame %d: %s has %d rows" % (i, k, len(fr[k])))
     return frames
@@ -204,6 +206,10 @@ def main():
                      [[f["band"][g][3] for g in range(NBANDS)] for f in frames]))
     parts.append(arr("aac_is_ref_ener1", "Double",
                      [[f["band"][g][4] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_d11l", "Double",
+                     [[f["d1l"][g][0] for g in range(NBANDS)] for f in frames]))
+    parts.append(arr("aac_is_ref_d21l", "Double",
+                     [[f["d1l"][g][1] for g in range(NBANDS)] for f in frames]))
     parts.append(arr("aac_is_ref_pass1", "Int",
                      [[f["err"][g][0] for g in range(NBANDS)] for f in frames]))
     parts.append(arr("aac_is_ref_pass2", "Int",

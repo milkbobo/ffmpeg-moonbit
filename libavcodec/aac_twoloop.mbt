@@ -100,12 +100,6 @@ fn aac_two_logf(x : Double) -> Double {
 }
 
 ///|
-/// `cbrtf`.
-fn aac_two_cbrtf(x : Double) -> Double {
-  aac_two_f32(@math.cbrt(x))
-}
-
-///|
 /// `powf`.
 fn aac_two_powf(x : Double, y : Double) -> Double {
   aac_two_f32(@math.pow(x, y))
@@ -402,10 +396,12 @@ fn aac_two_band_cost(
             curbits = curbits + 21
           } else {
             let c = aac_two_clip(aac_two_quant(t, q, aac_two_c_quant), 0, 8191)
-            quantized = aac_two_mul(
-              aac_two_mul(c.to_double(), aac_two_cbrtf(c.to_double())),
-              iq,
-            )
+            // `c*cbrtf(c)` is the dumped product, not a recomputed cbrt:
+            // the encoder's single-precision `cbrtf` disagrees with
+            // `float(c*cbrt((double)c))` by one ulp on 2196 of the 8192
+            // integer inputs, and this is the only place the quantiser
+            // touches `cbrtf`.
+            quantized = aac_two_mul(aac_twoloop_cbrt_prod[c], iq)
             curbits = curbits + aac_two_av_log2(c) * 2 - 4 + 1
           }
         } else {

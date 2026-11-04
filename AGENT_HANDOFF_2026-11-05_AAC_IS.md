@@ -77,15 +77,15 @@ if self.config.channels == 2 && its == 0 && use_is {
 
 ### 剩下的事（按建议顺序）
 
-1. **`dist1/dist2` 量值的 ulp 二分**。决策字段已逐位相等，但成本量值最大相对差
-   1.24e-6（`frame 2 band 35 phase-1 dist1`：1082.73486328125 vs
-   1082.7335205078125）。这是 §278 从没覆盖过的区域：twoloop 里
-   `quantize_band_cost` 固定传 lambda=1.0，IS 传的是 `s->lambda / threshold`。
-   拆法：在 `patch.py` 里把 `dist_spec_err`（`aacenc_is.c` 那一段纯谱误差项）
-   单独导成一个全局，与 `aac_is_encoding_err` 的 `band_cost` 部分分别比对，
-   就能判断差在 `quantize_and_encode_band_cost` 的累加里，还是在
-   `dist_spec_err` 的 `pow34` 域求和上。测试目前把量值界在 1e-5，二分完成后
-   应该改成逐位相等。
+1. ~~**`dist1/dist2` 量值的 ulp 二分**~~ —— **§293 已闭环**，而且根因不在 IS：
+   escape 码本（cb 11）的 `quantized = c*cbrtf(c)*IQ` 原先按「double `cbrt`
+   再舍到 f32」建模，而本机工具链的单精度 `cbrtf` 在 `c = 0..8191` 里有
+   **2196 个值与它差 1 ulp**（c=11：C 2.223979949951172 对 2.223980188369751）。
+   修法是 `dump_tables.c` 新增 `CBRT` 记录 → `aac_twoloop_cbrt_prod` 零转录 →
+   `aac_two_band_cost` 查表；`aac_is_vectors` 现在把 6 个成本量值也断言成
+   **精确相等**（`worst cost gap = 0`）。二分用的探针留在 harness 里：
+   `ISD1L` 行 = 只加完**左带**成本的 `dist1`。以后遇到「决策逐位对、量值差一点」
+   的成本类对拍，先照这个拆法按调用边界二分，别去怀疑求和顺序。
 2. **打开 IS 与 PNS 的组合**。两个配置入口目前互相清 `pns`/`is_stereo`。
    顺序上已经允许（`aac_encode_stereo_psy` 拿到的 `cbs/zeros` 就是 PNS 的最终
    判定，正好对应上游 `search_for_is` 的 `band_type != NOISE_BT && !zeroes`

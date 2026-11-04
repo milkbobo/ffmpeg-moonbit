@@ -7752,6 +7752,50 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `ref/aacenc` 的默认与 `--pns` 模式输出在加入 IS 对象后逐字节不变；
   全量 **1400/1400** 通过。
 
+## 293. escape 码本的 `c*cbrtf(c)` 改为零转录表，IS 成本量值升到逐位相等
+
+- **交付**：§292 留下的「`dist1/dist2` 量值最大相对差 1.24e-6」闭环，而且根因
+  不在 IS，在共享的 escape 码本成本路径上。
+  `quantize_and_encode_band_cost_ESC`（`aaccoder.c:137`）算的是
+  `quantized = c*cbrtf(c)*IQ`，用的是**单精度** `cbrtf`；本移植原先按
+  「double `cbrt` 再舍到 f32」建模。实测本机工具链的整数域 `c = 0..8191`
+  里有 **2196 个值两者差 1 ulp**（例如 c=11：C 是 2.223979949951172，
+  原建模是 2.223980188369751）。escape 带一旦参与成本求和，这点 ulp 误差就
+  通过 `rd = (t - quantized)^2` 放大成 ~1.3e-3 的绝对差。
+- **二分怎么做的**（值得记下来复用）：给 `aacenc_is.c` 再加一个探针，把
+  `dist1` 在「只加了左带成本」的那一刻也导出来（harness 的 `ISD1L` 行）。
+  一次就跑出结论：出问题那带（frame 2 band 35）的**左半逐位相同**、右半差
+  1.3e-3，而两带唯一的差别就是 `cb0 = 1` 对 `cb1 = 11`——正是 escape 码本。
+  以后遇到「决策对、量值差一点」的成本类对拍，先按调用边界拆开，别一上来
+  就怀疑求和顺序。
+- **修法**：`_ref/aacenc/dump_tables.c` 新增 `CBRT` 记录（`c*cbrtf(c)` 的 8192
+  个 f32，`%.9e` 足以无损往返 binary32），`scripts/gen_aac_twoloop_tables.py`
+  把它写成 `aac_twoloop_cbrt_prod`，`aac_two_band_cost` 的 escape 分支改成
+  查表 + 一次乘法；`aac_two_cbrtf` 随之删掉（全仓库只有这一处在用）。
+  `aac_twoloop_tables.mbt` 从 51 KB 长到 160 KB，**纯追加**（既有表 0 行改动：
+  `git diff --stat` = 1366 insertions / 0 deletions）。
+- **验证**：
+  - `aac_is_vectors` 把 6 个成本量值（两相位的 `dist1`/`dist2` 加上 `dist1`
+    的两个左半）从「测量并界住 1e-5」**改成精确相等**，连同本来就精确的决策
+    字段，4 帧 × 49 带全部与 FFmpeg 9.0.2 逐位一致。§292 的开放项清零。
+  - §278 的 245 带 twoloop 向量仍逐位一致；顺带解释并修掉了 §278 当年记下的
+    那条残余（「成本误差 ≤6 位，只在 escape 带」）——那 6 位的来源就是这里。
+  - 编码器侧指标**逐字节不变**：感知 21.309 dB / 364 B 均帧、IS 共享夹具 55 带
+    22.92 → 23.26 dB、去相关夹具 43 带 23.72 → 25.27 dB、PNS 344/332 B 与
+    0.947 dB。改的是量值而不是决策，所以行为一致——这正是 §292 那句
+    「决策既然逐位一致，编码器的行为就一致」的实证。
+- **工具坑**：
+  - `dump_tables.c` 用 `cbrtf` 要补 `#include <math.h>`。
+  - `gen_aac_twoloop_tables.py` 的 `parse()` 对未知 tag 直接 `raise`，
+    加记录必须同时加分支，否则 `tables.txt` 一变就全红。
+  - 用 `python - <<'PYEOF'` 往 C 源里写含 `"\n"` 的行时反斜杠会被 Python 吃掉
+    一层（这次把 `printf("ISD1L %d %.9e %.9e\n", ...)` 的格式串写断行，gcc 报
+    `missing terminating " character`）。这类改动要么用 Edit 工具，要么写完
+    立刻 `grep` 验证生成的那一行。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_is_vectors` 1/1
+  （量值已改为精确相等）、`aac_twoloop_vectors` 3/3、`aac_encode_vectors`
+  14/14、`aac_pns_vectors` 3/3；全量 **1400/1400** 通过。
+
 
 
 
