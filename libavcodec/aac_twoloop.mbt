@@ -42,7 +42,26 @@ let aac_two_pow_sf2_zero : Int32 = 200
 /// `C_QUANT`, `aacenc_utils.h:38`, which is also `ROUND_STANDARD` (`:36`).
 /// The twoloop search always passes `rtz = 0`, so `ROUND_TO_ZERO` is not
 /// reachable from here.
-let aac_two_c_quant : Double = 0.4054
+///
+/// Stored as the binary32 value of `0.4054f`, not the decimal: this constant
+/// enters `qmaxval = maxval * Q34 + C_QUANT` and `quant(a, Q, ROUNDING)` - both
+/// of which the reference immediately truncates to an `int` - so an f64 literal
+/// that differs from `0.4054f` by 1.4e-8 relative can move a value across the
+/// integer boundary and change the codebook or the quantised level (§295 closed
+/// the same class of bug in the mid/side search's `bmax`).
+let aac_two_c_quant : Double = 0.40540000796318054
+
+///|
+/// `0.00125f` (`aaccoder_twoloop.h:277`, the floor under `uplims` before the
+/// `log2f`) and `0.0125f` (`:532`, the spread interpolation), again as the
+/// binary32 values the reference actually multiplies with.
+let aac_two_uplim_floor : Double = 0.0012499999720603228
+let aac_two_spread_scale : Double = 0.012500000186264515
+
+///|
+/// `1.15f` (`aaccoder_twoloop.h:191`, `aaccoder.c:516/652`): the per-channel
+/// bitrate compensation for extensions that buy efficiency.
+let aac_two_tool_bitrate_boost : Double = 1.149999976158142
 
 ///|
 /// `RESERVED_BT`, `aac.h:74`: band types from here on are not spectral.
@@ -573,12 +592,20 @@ pub struct AacTwoResult {
 pub struct AacTwoPns {
   can_pns : Array[Int32]
   on : Bool
+  is_stereo : Bool
 }
 
 ///|
 /// Build the PNS inputs (the struct's fields are private to the package).
-pub fn aac_twoloop_pns(can_pns : Array[Int32], on : Bool) -> AacTwoPns {
-  { can_pns, on }
+/// `is_stereo` is not a PNS switch: twoloop's bandwidth rule reads
+/// `options.pns || options.intensity_stereo`, because both tools buy back
+/// efficiency, so the pair of switches has to travel together here.
+pub fn aac_twoloop_pns(
+  can_pns : Array[Int32],
+  on : Bool,
+  is_stereo : Bool,
+) -> AacTwoPns {
+  { can_pns, on, is_stereo }
 }
 
 ///|
@@ -596,7 +623,11 @@ pub fn aac_twoloop_search(
 ) -> AacTwoResult {
   aac_twoloop_search_pns(
     coefs, band_sizes, bands, alloc, bit_rate, sample_rate, channels, lambda,
-    aac_twoloop_pns(Array::make(band_sizes.length(), 0), false),
+    aac_twoloop_pns(
+      Array::make(band_sizes.length(), 0),
+      false,
+      false,
+    ),
   )
 }
 
@@ -640,16 +671,20 @@ pub fn aac_twoloop_search_pns(
   let mut toofewbits = destbits - destbits / 8
   sfoffs = 0.0
   rdlambda = aac_two_sqrtf(rdlambda)
-  let bandwidth = if pns.on {
-    // `aaccoder_twoloop.h:190`: PNS or intensity stereo scales the nominal
-    // per-channel bitrate by 1.15 before the bandwidth lookup.
-    let fbr = (bit_rate.to_double() / channels.to_double() * 1.15).to_int()
-    let bw = aac_psy_cutoff(fbr, 1, sample_rate)
-    if bw < 3000 { 3000 } else { bw }
+  // ABR branch: `avctx->flags & AV_CODEC_FLAG_QSCALE == 0`, so
+  // `frame_bit_rate = avctx->bit_rate / nb_channels` is an *integer* division,
+  // and the compensation for extensions that buy efficiency
+  // (`aaccoder_twoloop.h:189-191`) multiplies it by `1.15f` in single
+  // precision and truncates back - at 96 kbps / 2 ch that is 55200 for C where
+  // an f64 multiply truncates to 55199, one bandwidth step away.
+  let fbr0 = bit_rate / channels
+  let fbr = if pns.on || pns.is_stereo {
+    aac_two_mul(fbr0.to_double(), aac_two_tool_bitrate_boost).to_int()
   } else {
-    let bw = aac_psy_cutoff(bit_rate, channels, sample_rate)
-    if bw < 3000 { 3000 } else { bw }
+    fbr0
   }
+  let bw = aac_psy_cutoff(fbr, 1, sample_rate)
+  let bandwidth = if bw < 3000 { 3000 } else { bw }
   let cutoff = bandwidth * 2 * wlen / sample_rate
   // `pns_start_pos` (`aaccoder_twoloop.h:201`), in spectra-bin units.
   let pns_start_pos = 4000 * 2 * wlen / sample_rate
@@ -743,7 +778,11 @@ pub fn aac_twoloop_search_pns(
       sf[g] = aac_two_scale_one_pos
     } else {
       let denom = band_sizes[g].to_double()
-      let peak = if uplims[g] > 0.00125 { uplims[g] } else { 0.00125 }
+      let peak = if uplims[g] > aac_two_uplim_floor {
+        uplims[g]
+      } else {
+        aac_two_uplim_floor
+      }
       let v = aac_two_scale_one_pos.to_double() +
         1.75 * aac_two_log2f(aac_two_div(peak, denom)) + sfoffs
       sf[g] = aac_two_clip(v.to_int(), 60, aac_two_scale_max_pos)
@@ -920,13 +959,28 @@ pub fn aac_twoloop_search_pns(
               zeroable = zeroable + 1
             }
           }
-          let mut zspread = (maxspread - minspread) * 0.0125 + minspread
+          // `aaccoder_twoloop.h:532-537`, every step in f32: the spread
+          // interpolation, its `min_spread_thr_r * 8.f` cap, and the
+          // starvation-weighted third term that caps it further.
+          let spread_span = aac_two_sub(maxspread, minspread)
+          let mut zspread = aac_two_add(
+            aac_two_mul(spread_span, aac_two_spread_scale),
+            minspread,
+          )
+          let starve_left = aac_two_mul(
+            (toomanybits - tbits).to_double(),
+            min_spread_thr_r,
+          )
+          let starve_right = aac_two_mul(
+            (tbits - toofewbits).to_double(),
+            max_spread_thr_r,
+          )
+          let starve_sum = aac_two_add(starve_left, starve_right)
           let third = aac_two_div(
-            ((toomanybits - tbits).to_double() * min_spread_thr_r) +
-            ((tbits - toofewbits).to_double() * max_spread_thr_r),
+            starve_sum,
             (toomanybits - toofewbits + 1).to_double(),
           )
-          let cap1 = min_spread_thr_r * 8.0
+          let cap1 = aac_two_mul(min_spread_thr_r, 8.0)
           if zspread > cap1 {
             zspread = cap1
           }

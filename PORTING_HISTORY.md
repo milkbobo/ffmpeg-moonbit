@@ -7870,7 +7870,8 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
      而 `0.0035f` 的真实值是 `0.0035000001080334187`——拿 f64 常量去乘一个 f32
      值，结果就差 1 ulp。模块里现在存 f32 值本身
      （`aac_ms_b_offset/numerator/divisor`）。**同类残留**（本轮没动，已列全）：
-     `aac_two_c_quant` 存 `0.4054`，而 `C_QUANT = 0.4054f = 0.40539998626708984`；
+     `aac_two_c_quant` 存 `0.4054`，而 `C_QUANT = 0.4054f = 0.40540000796318054`
+     （§296 已清，且实测不改变任何输出）；
      `aac_pns_search.mbt` 的 `1.948 / 0.9 / 0.7 / 1.15 / 0.88 / 0.85` 与
      `aac_twoloop.mbt` 的 `1.15 / 0.00125 / 0.0125` 同理。现有夹具都没在翻转点上
      撞上它们，所以是本报告里唯一一处"已知但仍未清"的建模欠账。
@@ -7934,6 +7935,59 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - **检查**：`moon check --target wasm --deny-warn` 干净；`aac_is_vectors` 2/2
   （新增 M/S 逐位向量）、`aac_encode_vectors` 16/16、`aac_twoloop_vectors` 3/3、
   `aac_pns_vectors` 3/3；全量 **1403/1403** 通过。
+
+## 296. 单精度保真清扫：量化器与 PNS 链上的 C `float` 常量与整型截断
+
+- **交付**：把 §295 记下那笔"已知但仍未清"的建模欠账一次扫掉。规则很直白：
+  **C 源码里的 `float` 字面量本身是单精度值**，按十进制原值（f64）喂进 f32 链就
+  不是同一个操作数；同理 C 的 `int *= float` 是「整数 → 单精度乘 → 截回整数」。
+  范围只圈在**有逐位向量把关**的链上（twoloop 量化器、`search_for_pns`、带宽规则）；
+  psy 模块不在这一次里，它的口径本来就是「整数决策逐位、浮点相对误差 ≤5e-4」
+  （§282/§283），要动得先决定要不要把整条 psy 做成逐位模型。
+  - `aac_two_c_quant`：`C_QUANT = ROUND_STANDARD = 0.4054f` =
+    `0.40540000796318054`。它进的是 `qmaxval = (int)(maxval*Q34 + C_QUANT)`
+    与 `quant()` 的舍入项，两处后面立刻截成整数——每个带的码本选择与量化电平都过它。
+  - 新常量 `aac_two_uplim_floor`（`0.00125f`，`aaccoder_twoloop.h:277`）、
+    `aac_two_spread_scale`（`0.0125f`，`:532`）、`aac_two_tool_bitrate_boost`
+    （`1.15f`）。`zspread` 整段改成逐步 f32：C 是
+    `(maxspread-minspread)*0.0125f + minspread`，上限 `min_spread_thr_r*8.f`，
+    饥饿项里两次乘、一次加、一次除**全是 float**，本移植先前只在最后一步舍。
+  - **带宽规则两处**（`aaccoder_twoloop.h:186-197`、`aaccoder.c:512-520`）：
+    `int frame_bit_rate = bit_rate / nb_channels` 是**整数除**，
+    `frame_bit_rate *= 1.15f` 是单精度乘再截回 int。旧模型全程 f64，
+    96 kbps / 2ch 上给 **55199** 而 C 给 **55200**（→ psy bandwidth 11039 vs
+    11040）。同时补上条件：C 读的是 `options.pns || options.intensity_stereo`
+    （"给效率工具多算一点带宽"），本移植原先只看 PNS——为此 `AacTwoPns` 多带
+    `is_stereo`，构造器与三处调用跟着改，`search_for_pns` 里那条则是无条件补偿。
+  - PNS 侧：`1.948f`/`0.9f`/`0.7f`/`0.88f`/`0.85f` 换成 f32 值，并把
+    `thr_mult`、`spread_threshold` 内层、`freq = start*freq_mult`、
+    `freq_boost = 0.88f*freq/6100.f`、`threshold*thr_mult*freq_boost`、
+    `sqrtf(1.0f/freq_boost)`、`lambda/band->threshold`，以及
+    `dist2 = energy/(spread*spread)*lambda*dist_thresh/threshold + 5|9`
+    全按 C 的运算顺序逐位舍；`cutoff` 明确写成整数除法（C 三个操作数都是 int）。
+- **实测：一条码都没变**，而且这是可证明的，不是"看起来没变"：
+  - `aac_twoloop_vectors` 3/3、`aac_pns_vectors` 3/3（PNS-aware twoloop 与
+    `search_for_pns` 各 **0 / 245** 带不一致）、`aac_is_vectors` 2/2
+    （64 个强度带 + 67 个 M/S 带逐位）、`aac_encode_vectors` 16/16，
+    每条打印指标与 §295 **逐字符相同**（14 位小数）。
+  - 更硬的一条：把 §295 那个 scratch 程序在 `ae6937a` 和本提交上各跑一遍，
+    产出的两条 ADTS（感知 + M/S 的 3166 B、噪声 + PNS + IS 的 2980 B）
+    **`cmp` 逐字节相同**。所以 §295 的 ffmpeg 外部对拍结论（0 errors 零告警、
+    最大差 1.49e-7 / 4.47e-8、SNR 138.96 / 138.40 dB）原样适用于本轮。
+  - 为什么撞不上：`0.4054f` 与 `0.4054` 差 **7.96e-9**，而 1 附近的 f32 ulp 是
+    1.19e-7——差口的宽度不到 ulp 的 1/15，`(int)(x + C_QUANT)` 要给出不同整数，
+    需要 `x` 恰好落进那个 8e-9 的窗口。我在 200 个 `Q34` 表值 × 8192 个整数边界 ×
+    maxval 上下游走 ±4 ulp，没有发现任何可达的分歧点。**会真打到的那一类是整型
+    截断**：`1.15` 那次差 1（96 kbps），以及带宽条件补齐后 IS-only 的
+    bandwidth 从 16000 走到 16600（`cutoff` 741 → 769）——我们的夹具里恰好没有
+    带的边界落进这 28 行，所以输出仍未变；换码率/换夹具就不一定了。
+- **仍未做**：`aac_psy.mbt` 那批从 C 抄来的十进制常量（`1.3219281`、
+  `-0.46666667`、`0.00076`、`3.64`…），前提是先决定要不要把 psy 做成逐位模型；
+  `aac_encode.mbt` 里 TNS 与简化路径的 `1.4/1.16/0.405/0.95` 不是 C 的操作数，
+  是简化模型自己的常量，不参与逐位对拍。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_twoloop_vectors`
+  3/3、`aac_pns_vectors` 3/3、`aac_is_vectors` 2/2、`aac_encode_vectors` 16/16；
+  全量 **1403/1403** 通过。
 
 
 

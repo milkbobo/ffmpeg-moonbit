@@ -21,9 +21,24 @@
 
 ///|
 /// `NOISE_LAMBDA_REPLACE` / `NOISE_SPREAD_THRESHOLD` / `NOISE_LOW_LIMIT`,
-/// `aaccoder.c:55-59` and `aaccoder_twoloop.h:54`.
-let aac_pns_lambda_replace : Double = 1.948
-let aac_pns_spread_thr : Double = 0.9
+/// `aaccoder.c:55-59` and `aaccoder_twoloop.h:54`, plus the acceptance window
+/// `0.85f .. 1.25f` (`aaccoder.c:619`). Everything except `NOISE_LOW_LIMIT` is
+/// stored as the binary32 value the reference multiplies with: these constants
+/// sit on the far side of a comparison against a float sum
+/// (`spread < spread_threshold`, `sfb_energy > threshold*thr_mult*freq_boost`,
+/// `energy_ratio > 0.85f`), so the decimal in the source is not the operand.
+let aac_pns_lambda_replace : Double = 1.9479999542236328
+let aac_pns_spread_thr : Double = 0.8999999761581421
+let aac_pns_energy_ratio_lo : Double = 0.8500000238418579
+let aac_pns_energy_ratio_hi : Double = 1.25
+
+///|
+/// `0.88f` in `freq_boost = FFMAX(0.88f*freq/NOISE_LOW_LIMIT, 1.0f)`
+/// (`aaccoder.c:538`).
+let aac_pns_freq_boost_scale : Double = 0.8799999952316284
+
+///|
+/// `NOISE_BT` (`aac.h:75`): the band type a PNS band becomes.
 let aac_pns_noise_bt : Int32 = 13
 
 ///|
@@ -128,19 +143,33 @@ pub fn aac_pns_search(
   }
   let num_swb = band_sizes.length()
   let wlen = 1024
-  let freq_mult = sample_rate.to_double() * 0.5 / wlen.to_double()
-  let thr_mult = aac_pns_lambda_replace * (100.0 / lambda)
+  // The frame-wide factors of `search_for_pns` (`aaccoder.c:499-522`), each in
+  // the precision the reference evaluates it in.
+  let freq_mult = aac_two_div(aac_two_mul(sample_rate.to_double(), 0.5),
+    wlen.to_double())
+  let thr_mult = aac_two_mul(
+    aac_pns_lambda_replace,
+    aac_two_div(100.0, lambda),
+  )
+  let spread_boost = aac_psy_maxf(0.5, aac_two_div(lambda, 100.0))
   let spread_threshold = aac_psy_minf(
     0.75,
-    aac_pns_spread_thr * aac_psy_maxf(0.5, lambda / 100.0),
+    aac_two_mul(aac_pns_spread_thr, spread_boost),
   )
-  let dist_bias = aac_two_clipf(4.0 * 120.0 / lambda, 0.25, 4.0)
-  let pns_transient_energy_r = aac_psy_minf(0.7, lambda / 140.0)
-  let fbr = (bit_rate.to_double() / channels.to_double() * 1.15).to_int()
+  let dist_bias = aac_two_clipf(aac_two_div(480.0, lambda), 0.25, 4.0)
+  let pns_transient_energy_r = aac_psy_minf(0.7, aac_two_div(lambda, 140.0))
+  // `frame_bit_rate *= 1.15f` on an `int`: integer division first, then a
+  // single-precision multiply truncated back (`aaccoder.c:512-516`).
+  let fbr_boost = aac_two_mul(
+    (bit_rate / channels).to_double(),
+    aac_two_tool_bitrate_boost,
+  )
+  let fbr = fbr_boost.to_int()
   let bw = aac_psy_cutoff(fbr, 1, sample_rate)
   let bandwidth = if bw > 3000 { bw } else { 3000 }
-  let cutoff = (bandwidth.to_double() * 2.0 * wlen.to_double() /
-    sample_rate.to_double()).to_int()
+  // `cutoff = bandwidth * 2 * wlen / avctx->sample_rate` with every operand an
+  // `int` (`aaccoder.c:523`), so this is integer division, not a float one.
+  let cutoff = bandwidth * 2 * wlen / sample_rate
   // `band_alt` is a snapshot of the twoloop band types.
   let band_alt : Array[Int32] = Array::make(cb.length(), 0)
   for g = 0; g < cb.length(); g = g + 1 {
@@ -154,7 +183,8 @@ pub fn aac_pns_search(
   let pns : Array[Double] = Array::make(128, 0.0)
   for g = 0; g < num_swb; g = g + 1 {
     let start = offsets[g]
-    let freq = start.to_double() * freq_mult
+    // `freq = (start-wstart)*freq_mult` is a float multiply (`aaccoder.c:535`).
+    let freq = aac_two_mul(start.to_double(), freq_mult)
     if freq < aac_pns_low_limit || start >= cutoff {
       if zeroes[g] == 0 {
         prev_sf = sf[g]
@@ -167,7 +197,10 @@ pub fn aac_pns_search(
     let spread = band.spread
     let min_energy = sfb_energy
     let max_energy = sfb_energy
-    let freq_boost = aac_psy_maxf(0.88 * freq / aac_pns_low_limit, 1.0)
+    let freq_boost = aac_psy_maxf(
+      aac_two_div(aac_two_mul(aac_pns_freq_boost_scale, freq), aac_pns_low_limit),
+      1.0,
+    )
     let dist_thresh = aac_two_mul(
       aac_two_clipf(
         aac_two_div(2.5 * aac_pns_low_limit, freq), 0.5, 2.5,
@@ -177,10 +210,15 @@ pub fn aac_pns_search(
     let removable = zeroes[g] == 0 &&
       !aac_two_can_remove_band(sf, nextband, prev_sf, g)
     let quiet = (zeroes[g] != 0 || band_alt[g] == 0) &&
-      sfb_energy < aac_two_mul(threshold, aac_two_sqrtf(1.0 / freq_boost))
+      sfb_energy < aac_two_mul(
+        threshold,
+        aac_two_sqrtf(aac_two_div(1.0, freq_boost)),
+      )
+    let loud_boost = aac_two_mul(threshold, thr_mult)
     let loud = zeroes[g] == 0 && band_alt[g] != 0 &&
-      sfb_energy > threshold * thr_mult * freq_boost
-    let transient = min_energy < pns_transient_energy_r * max_energy
+      sfb_energy > aac_two_mul(loud_boost, freq_boost)
+    let transient =
+      min_energy < aac_two_mul(pns_transient_energy_r, max_energy)
     if removable || quiet || spread < spread_threshold || loud || transient {
       pns_ener[g] = sfb_energy
       if zeroes[g] == 0 {
@@ -229,16 +267,32 @@ pub fn aac_pns_search(
     }
     let qcoefs : Array[Int32] = Array::make(size, 0)
     let d1 = aac_two_band_cost(
-      coefs, start, scaled, 0, qcoefs, size, sf[g], band_alt[g],
-      lambda / threshold,
+      coefs,
+      start,
+      scaled,
+      0,
+      qcoefs,
+      size,
+      sf[g],
+      band_alt[g],
+      aac_two_div(lambda, threshold),
     )
     let dist1 = d1.cost
-    let dist2 = band.energy / aac_two_mul(spread, spread) * lambda *
-      dist_thresh / threshold + (if g > 0 && cb[g - 1] == aac_pns_noise_bt {
+    // `dist2 += band->energy/(band->spread*band->spread)*lambda*dist_thresh/
+    // band->threshold` (`aaccoder.c:608`) is one single-precision expression,
+    // and the 5 or 9 bits of scalefactor/codebook overhead are added *after*
+    // it, as a separate float add.
+    let dist2_spread_sq = aac_two_mul(spread, spread)
+    let dist2_e = aac_two_div(band.energy, dist2_spread_sq)
+    let dist2_l = aac_two_mul(dist2_e, lambda)
+    let dist2_t = aac_two_mul(dist2_l, dist_thresh)
+    let dist2_b = aac_two_div(dist2_t, threshold)
+    let overhead = if g > 0 && cb[g - 1] == aac_pns_noise_bt {
       5.0
     } else {
       9.0
-    })
+    }
+    let dist2 = aac_two_add(dist2_b, overhead)
     let energy_ratio = if pns_energy > 0.0 {
       aac_two_div(pns_tgt_energy, pns_energy)
     } else {
@@ -246,7 +300,8 @@ pub fn aac_pns_search(
     }
     pns_ener[g] = aac_two_mul(energy_ratio, pns_tgt_energy)
     if zeroes[g] != 0 || band_alt[g] == 0 ||
-      (energy_ratio > 0.85 && energy_ratio < 1.25 && dist2 < dist1) {
+      (energy_ratio > aac_pns_energy_ratio_lo &&
+        energy_ratio < aac_pns_energy_ratio_hi && dist2 < dist1) {
       cb[g] = aac_pns_noise_bt
       zeroes[g] = 0
       noise_sfi_out[g] = sfi

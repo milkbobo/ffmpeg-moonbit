@@ -90,7 +90,9 @@ test "PNS-aware twoloop matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
       44100,
       2,
       120.0,
-      @libavcodec.aac_twoloop_pns(mark.can_pns, true),
+      // The reference harness runs `pns = 1, intensity_stereo = 0`, and twoloop's
+      // bandwidth compensation reads the *pair* of switches (§296).
+      @libavcodec.aac_twoloop_pns(mark.can_pns, true, false),
     )
     // The C reference writes the quantiser's bandwidth back into the psy
     // context, where it sticks for later frames (§284).
@@ -147,7 +149,9 @@ test "PNS search_for_pns matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
       44100,
       2,
       120.0,
-      @libavcodec.aac_twoloop_pns(mark.can_pns, true),
+      // The reference harness runs `pns = 1, intensity_stereo = 0`, and twoloop's
+      // bandwidth compensation reads the *pair* of switches (§296).
+      @libavcodec.aac_twoloop_pns(mark.can_pns, true, false),
     )
     let out = @libavcodec.aac_pns_search(
       @libavcodec.aac_pns_search_in(

@@ -2411,7 +2411,7 @@ pub fn AacEncoder::encode_frame(
           self.config.sample_rate,
           self.config.channels,
           self.lambda,
-          aac_twoloop_pns(can_pns, self.config.pns),
+          aac_twoloop_pns(can_pns, self.config.pns, use_is),
         )
         twos.push(two)
         if self.config.pns {

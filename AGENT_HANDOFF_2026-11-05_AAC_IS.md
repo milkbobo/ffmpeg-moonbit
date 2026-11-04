@@ -1,4 +1,4 @@
-# AGENT HANDOFF — 2026-11-05 AAC 强度立体声与 M/S（§290 → §295）
+# AGENT HANDOFF — 2026-11-05 AAC 强度立体声与 M/S（§290 → §296）
 
 这条线到这里，感知路径的三个工具（twoloop/PNS、`search_for_is`、`search_for_ms`）
 都已经与 FFmpeg 9.0.2 **逐位对拍**并接进了编码器：顺序、判据、成本量值、以及
@@ -110,12 +110,17 @@ if self.config.channels == 2 && its == 0 && use_is {
    已经在 `aac_two_find_max_val` 里参数化好了。
 2. **短窗 IS 夹具**：结构上 `num_windows` 与每窗带内偏移都参数化了，缺的只是一组
    8 短窗的真夹具。
-3. **f32 字面量的同类残留**（§295 列全了）：`aac_two_c_quant` 应为
-   `0.40539998626708984`；`aac_pns_search.mbt` 的 `1.948/0.9/0.7/1.15/0.88/0.85`
-   与 `aac_twoloop.mbt` 的 `1.15/0.00125/0.0125`、`aac_psy.mbt` 里那些从 C 源码
-   抄来的十进制常量，都要按 f32 值重存。现有夹具一个都没在翻转点上撞上，所以这
-   是"已知未清"的欠账而不是在跑的 bug；改完必须重跑 `aac_twoloop_vectors` /
-   `aac_pns_vectors` / `aac_psy_vectors` 并重新量一次端到端指标。
+3. ~~**f32 字面量的同类残留**~~ —— **§296 已清**（量化器 / `zspread` / PNS 三条
+   链，外加 `frame_bit_rate *= 1.15f` 的整数→单精度→截回整数，和
+   `options.pns || options.intensity_stereo` 这条带宽条件），而且实测
+   **一条码都没变**：`qmaxval = (int)(maxval*Q34 + 0.4054f)` 这类分歧的窗口只有
+   8e-9 宽（≈1/15 个 f32 ulp），现有与构造的采样点都进不去。**唯一剩下的同类
+   欠账是 `aac_psy.mbt`**：那批从 C 抄来的十进制常量（`1.3219281`、
+   `-0.46666667`、`0.00076`、`3.64`…）确实该按 f32 重存，但那个模块的口径本来
+   就是「整数决策逐位、浮点相对误差 ≤5e-4」，动它之前要先决定要不要把 psy 也
+   做成逐位模型（那会重写 energy/threshold/PE 整条链，并移动所有感知指标）。
+   `aac_encode.mbt` 里 TNS 与简化路径的 `1.4/1.16/0.405/0.95` 不是 C 的操作数，
+   是简化模型自己的常量，不用管。
 4. **§289 偏差 2**：λ 重试里上游会重新 `analyze`（本移植每帧只分析一次）。
 5. `set_special_band_scalefactors` 上游是一轮里同时管 IS 位置和噪声
    `3+ceil(log2(pns_ener)*2)`，我们的噪声仍取 `search_for_pns` 的 `noise_sfi`
@@ -156,7 +161,10 @@ if self.config.channels == 2 && its == 0 && use_is {
   `moon test --target wasm libavcodec/aac_encode_vectors` → `git worktree remove
   .scratch/head_wt --force`。比翻文档里的旧数字可靠（§291/§292 的打印口径并不
   完全一致）。工作树放在 `.scratch/` 里就不会污染 `git status`，也不会被 moon
-  当成包（点目录被跳过）。
+  当成包（点目录被跳过）。更硬的一档：把 scratch 的 dump 程序在两个提交上各跑
+  一遍，直接 `cmp` 两条 ADTS——§296 就是这样证明"保真清扫一条码都没变"的，
+  上一轮的 ffmpeg 外部对拍结论也因此原样适用、不必重跑（scratch 包要 `cp`
+  进工作树，`moon run` 不吃点目录）。
 - **给码流写"只有这个工具能造出来"的签名断言**，比再加一条聚合指标有用：
   M/S 命中后两声道的标度因子只差 `3*boost`（0/3/6 步），于是
   `aac_encode_test_tool_bands` 把掩码位读进来就能直接验。注意它只对

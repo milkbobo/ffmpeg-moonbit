@@ -161,10 +161,17 @@
   所以 `aac_twoloop_cbrt_prod` 是从 `dump_tables.c` 的 `CBRT` 记录零转录来的。
   ⑤ **C 的 `float` 字面量必须按 f32 值存**：`0.0035f` 的真值是
   `0.0035000001080334187`，把十进制原值当 f64 喂进 `aac_two_mul` 会差 1 ulp——
-  §295 的 `dist2` 差 2 ulp 就是这么来的（拆到 `bmax` 那层才看见）。同类残留还没清：
-  `aac_two_c_quant` 存 `0.4054` 而 `C_QUANT = 0.4054f = 0.40539998626708984`，
-  `aac_pns_search.mbt` 的 `1.948/0.9/0.7/1.15/0.88/0.85` 与 `aac_twoloop.mbt` 的
-  `1.15/0.00125/0.0125` 同理（现有夹具都没在翻转点上撞上）。
+  §295 的 `dist2` 差 2 ulp 就是这么来的（拆到 `bmax` 那层才看见）。
+  **§296 已把有逐位向量把关的那批清掉**（`C_QUANT`/`ROUND_STANDARD`、`0.00125f`、
+  `0.0125f` 与整条 `zspread`、PNS 的 `1.948f/0.9f/0.7f/0.88f/0.85f`、
+  `frame_bit_rate *= 1.15f` 的「整数除 → 单精度乘 → 截回 int」，以及
+  `options.pns || options.intensity_stereo` 这条带宽条件），而且**没有改变任何
+  输出**：三条链的逐位向量全绿，两个端到端夹具的 ADTS 与 §295 逐字节相同。
+  原因是这类分歧的窗口只有 8e-9（≈ 1/15 个 f32 ulp），可达分歧需要 `x` 正好落进
+  那个窗口。**还在欠账里的**：`aac_psy.mbt` 那批从 C 抄来的十进制常量——但该模块
+  的口径本来就是「整数决策逐位、浮点相对误差 ≤5e-4」，要动它得先把 psy 的
+  energy/threshold 逐位化，是单独一步；`aac_encode.mbt` 里 TNS 与简化路径的
+  `1.4/1.16/0.405/0.95` 是简化模型自己的常量，不参与逐位对拍。
   ⑥ `quantize_and_encode_band_cost` 的分派表把 `cb` 13/14/15 也送到
   `BT_ZERO || BT_NOISE || BT_STEREO` 那条（成本 = 带能量×λ、0 位），
   所以 `aac_two_band_cost` 的条件是 `cb == 0 || cb >= 13`；`search_for_ms`
