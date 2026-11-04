@@ -90,6 +90,12 @@ pub struct AacEncoder {
   mut lambda : Double
   /// LCG state carried across frames by `search_for_pns` (`s->random_state`).
   mut pns_random_state : Int32
+  /// `ics.max_sfb` as the last rate-control attempt left it (`aacenc.c:517`).
+  /// The next attempt's TNS search reads it as its band limit, clamped to
+  /// `num_swb` at frame start (`aacenc.c:864`) - which is why FFmpeg's very
+  /// first frame carries no TNS filter at all: the context is zero-initialized,
+  /// so `mmm` is 0 and `search_for_tns` bails out on an empty range.
+  mut last_max_sfb : Int32
 }
 
 ///|
@@ -367,6 +373,7 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     last_frame_bits: 0,
     lambda: 120.0,
     pns_random_state: 0,
+    last_max_sfb: 0,
   })
 }
 
@@ -2060,7 +2067,6 @@ priv struct AacEncFrame {
   coefs : Array[Array[Double]]
   targets : Array[Array[Int32]]
   sequences : Array[Int32]
-  max_sfb : Int32
 }
 
 ///|
@@ -2072,6 +2078,7 @@ fn AacEncoder::build_frame(
   frame : AacEncFrame,
   stereo : AacEncStereo,
   tns : Array[AacEncTns],
+  max_sfb : Int32,
   delta : Int32,
 ) -> Result[Bytes, String] {
   let chans : Array[AacEncChannel] = []
@@ -2081,14 +2088,14 @@ fn AacEncoder::build_frame(
       frame.targets[ch],
       delta,
       frame.sequences[ch],
-      frame.max_sfb,
+      max_sfb,
     )
     if ch == 1 {
       aac_encode_mark_is(one, stereo.is_bt, stereo.is_pos)
     }
     chans.push(one)
   }
-  self.assemble_frame(frame, stereo, tns, chans)
+  self.assemble_frame(stereo, tns, max_sfb, chans)
 }
 
 ///|
@@ -2108,9 +2115,9 @@ fn AacEncoder::aac_encode_rate_bits(self : AacEncoder) -> Int32 {
 /// data of an already-quantised channel pair, then prefix the ADTS header.
 fn AacEncoder::assemble_frame(
   self : AacEncoder,
-  frame : AacEncFrame,
   stereo : AacEncStereo,
   tns : Array[AacEncTns],
+  max_sfb : Int32,
   chans : Array[AacEncChannel],
 ) -> Result[Bytes, String] {
   let bw = BitWriter::new()
@@ -2136,8 +2143,10 @@ fn AacEncoder::assemble_frame(
     bw.put(1, 1) // common_window = 1: one shared ics_info for both channels
     aac_encode_write_ics_info(bw, chans[0])
     bw.put(stereo.ms_present.reinterpret_as_uint(), 2)
+    // `encode_ms_info` (`aacenc.c:489-498`): mode 2 means every band is
+    // mid/side, so the mask itself is not transmitted.
     if stereo.ms_present == 1 {
-      for b = 0; b < frame.max_sfb; b = b + 1 {
+      for b = 0; b < max_sfb; b = b + 1 {
         bw.put(if stereo.ms_mask[b] { 1 } else { 0 }, 1)
       }
     }
@@ -2353,7 +2362,6 @@ pub fn AacEncoder::encode_frame(
     coefs,
     targets,
     sequences,
-    max_sfb: planned_max_sfb,
   }
   // Average bits per frame from the requested bit rate, minus the ADTS header
   // (which is not part of the payload budget).
@@ -2428,6 +2436,15 @@ pub fn AacEncoder::encode_frame(
       // and the next band's pricing look at (§298).
       let work : Array[Array[Double]] = []
       let tns_iter : Array[AacEncTns] = []
+      // `aacenc.c:864` clamps `ics.max_sfb` to `num_swb` at frame start, and
+      // that carried-over value - not this attempt's plan - is what bounds the
+      // TNS search (`mmm` in `aacenc_tns.c`). Zero at the very start of a
+      // stream, which is why FFmpeg's first frame never carries a filter.
+      let tns_mmm = if self.last_max_sfb < num_swb {
+        self.last_max_sfb
+      } else {
+        num_swb
+      }
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let r = psy_iter[ch]
         // PNS runs around the search: mark noise-like bands, let the twoloop
@@ -2459,7 +2476,7 @@ pub fn AacEncoder::encode_frame(
         // coefficients the ABR branch has restored from `pcoeffs`
         // (`aacenc.c:1075-1077`) - so the filter never compounds across
         // attempts and the analysis above always saw the unfiltered spectrum.
-        let tns_data = self.search_tns(coefs[ch], planned_max_sfb, seq)
+        let tns_data = self.search_tns(coefs[ch], tns_mmm, seq)
         tns_iter.push(tns_data)
         let w = coefs[ch].copy()
         aac_encode_apply_tns(w, tns_data, offsets, num_swb, num_windows)
@@ -2516,19 +2533,51 @@ pub fn AacEncoder::encode_frame(
         cb_ch[0] = ms.cb0
         sf_ch[1] = ms.sf1
         cb_ch[1] = ms.cb1
-        for b = 0; b < planned_max_sfb; b = b + 1 {
+      }
+      // `adjust_frame_information` (`aacenc.c:503-547`), once per attempt: the
+      // highest band that still carries data, shared across the pair. The
+      // window-group merge it also performs is the identity for one long
+      // window, so only the trailing-zero trim matters here.
+      let mut iter_max_sfb = 0
+      for ch in 0..<self.config.channels {
+        let mut cmaxsfb = 0
+        for b = 0; b < num_swb; b = b + 1 {
+          if zeros[ch][b] == 0 {
+            cmaxsfb = b + 1
+          }
+        }
+        if cmaxsfb > iter_max_sfb {
+          iter_max_sfb = cmaxsfb
+        }
+      }
+      // `ms_mode` (`aacenc.c:544-547`): 0 with no marked band, 2 when every
+      // band of every window is marked - and then the mask itself is not
+      // transmitted at all. Only a channel pair has a mask to count.
+      let mut msc = 0
+      if self.config.channels == 2 {
+        for b = 0; b < iter_max_sfb; b = b + 1 {
           if st.ms_mask[b] {
-            st.ms_present = 1
+            msc = msc + 1
           }
         }
       }
+      st.ms_present = if msc == 0 || iter_max_sfb == 0 {
+        0
+      } else if msc < iter_max_sfb * num_windows {
+        1
+      } else {
+        2
+      }
+      // The next attempt's TNS search reads this value (`aacenc.c:864`), and so
+      // does the next frame's.
+      self.last_max_sfb = iter_max_sfb
       let chans : Array[AacEncChannel] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let one = self.channel_data_psy(
           work[ch],
           sf_ch[ch],
           seq,
-          planned_max_sfb,
+          iter_max_sfb,
           cb_ch[ch],
           zeros[ch],
           sfi[ch],
@@ -2538,7 +2587,12 @@ pub fn AacEncoder::encode_frame(
         }
         chans.push(one)
       }
-      let frame_bytes = match self.assemble_frame(frame, st, tns_iter, chans) {
+      let frame_bytes = match self.assemble_frame(
+        st,
+        tns_iter,
+        iter_max_sfb,
+        chans,
+      ) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
@@ -2570,7 +2624,13 @@ pub fn AacEncoder::encode_frame(
     let mut found = false
     while lo <= hi {
       let mid = (lo + hi) / 2
-      let built = match self.build_frame(frame, stereo, tns, mid) {
+      let built = match self.build_frame(
+        frame,
+        stereo,
+        tns,
+        planned_max_sfb,
+        mid,
+      ) {
         Ok(v) => v
         Err(e) => return Err(e)
       }

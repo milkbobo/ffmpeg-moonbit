@@ -128,10 +128,15 @@ if self.config.channels == 2 && its == 0 && use_is {
    ~~偏差 4~~ 由 **§298** 闭环：`search_for_tns` 现在在 twoloop 之后、PNS 之前，
    每轮在 `coefs[ch].copy()` 上滤波，`coefs` 不再被污染（`AacEncFrame.tns` 字段
    取消，改成 `build_frame`/`assemble_frame` 的入参）。
-   **只剩偏差 3**：`planned_max_sfb` 仍帧级固定，上游每轮由
-   `adjust_frame_information` 从量化结果反推（`cmaxsfb` = 最后一个 `!zeroes` 的带；
-   再做窗口组 zeroes 归并；CPE 两声道取 max；顺带算
-   `ms_mode = msc < max_sfb * num_windows ? 1 : 2`——我们现在只写 0/1）。
+   **偏差 3 由 §299 闭环**：`max_sfb` 现在每轮由 `adjust_frame_information` 从量化
+   结果反推（`cmaxsfb` = 最后一个 `!zeroes` 的带；窗口组 zeroes 归并在单长窗是
+   恒等所以没搬；CPE 两声道取 max），`ms_mode` 补上第三种取值 **2**（全带标记，
+   此时 `encode_ms_info` 不写掩码位），TNS 的带范围改读上一轮/上一帧的
+   `ics.max_sfb`（新增 `AacEncoder.last_max_sfb`，零初始化 → 首帧不发滤波器）。
+   §289 的四条顺序/状态偏差 1-4 至此全部关掉，感知路径与 `aacenc.c` 的 element
+   循环同构。三条规则在现有夹具上都不改输出（三个码率的 `max_sfb` 与 §298 相同：
+   19/33/43），所以回归写成了**性质断言**而不是指标：`highest <= max_sfb`、
+   `ms_mode == 2` 时不读掩码位、帧 0 无 TNS 而后续帧有。
    做它的时候 TNS 的带范围会一起对齐，因为上游 `search_for_tns` 用的是
    **上一轮**的 `ics.max_sfb`（帧首只 clamp 到 `num_swb`）。
 5. `set_special_band_scalefactors` 上游是一轮里同时管 IS 位置和噪声

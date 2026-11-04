@@ -134,10 +134,11 @@
   失血、alloc 逐帧下降。
   AAC 强度立体声（§290，`aac_encode_config_with_is`）与 M/S 一起挪到了量化决策
   之后（§291）：感知路径现在是
-  `（每轮 λ：analyze → twoloop → TNS → PNS → 强度 → M/S → 量化 → 写）`
+  `（每轮 λ：analyze → twoloop → TNS → PNS → 强度 → M/S → adjust → 量化 → 写）`
   （§297 把 analyze 挪进循环、§298 把 TNS 也挪进去：上游的 element 循环整个在
   `do { } while` 里，TNS 搜索读未滤波谱、滤波写进本轮副本，PNS 定价与码流都吃
-  滤波后的谱，`coefs` 永远保持干净的左右谱），分析读**左右谱**、量化读**混合后的谱**，与 `aacenc.c` 同序；
+  滤波后的谱，`coefs` 永远保持干净的左右谱；§299 补上每轮的 `adjust_frame_information`），
+  分析读**左右谱**、量化读**混合后的谱**，与 `aacenc.c` 同序；
   简化路径仍先混合（它的每带标度因子就是从真正要编码的那份谱算出来的，
   §279/§280 的 29.045 dB 基线因此逐字节不变）。混合之所以必须**每轮重做**：
   噪声带随 λ 变，而 `apply_mid_side_stereo` 不能碰任一声道判成 `NOISE_BT` 的带
@@ -198,6 +199,15 @@
   ⑩ 回归集的取帧别用手工下标：`gen_aac_is_vectors.py` 的 `TAKE = (0,1,4,5)` 在
   §295 插入新测试后悄悄指到了别的帧，同一条生成命令的强度带覆盖从 64 掉到 9，
   而测试全绿。现在 `choose()` 按参考侧答出来的工具活跃度选帧。
+  ⑪ §299 的三条 `adjust_frame_information` 规则：`max_sfb` 剪的是
+  **`zeroes[]`**（最后一个 `!zeroes` 的带，窗口组与 CPE 两声道取 max），不是
+  「哪一带还有码本」——所以解码侧看到 `max_sfb` 之内**可以**有空带（断言只能写
+  `highest <= max_sfb`；写相等会在 24 kbps 上被 5 帧 slack 假失败）；
+  `ms_mode` 还有第三种取值 **2**（每一窗每一带都被标记），而 mode 2 **不写掩码位**
+  （`encode_ms_info`）；TNS 的带范围读**上一轮/上一帧**的 `ics.max_sfb`
+  （`AacEncoder.last_max_sfb`，零初始化 → 流的第一帧必然不发滤波器）。
+  这三条在现有夹具上都不改变输出，属于结构闭环：感知路径至此与
+  `aacenc.c` 的 element 循环同构。
   flip 带只写 `ms_mask` 位、不做 M/S 混合（上游 `apply_mid_side_stereo` 跳过
   所有 `is_mask` 带，符号翻转由解码器完成）。另有两条硬约束：IS 带写进
   码流的是**强度位置**（范围 `[-155,100]`，正负一样常见），所以

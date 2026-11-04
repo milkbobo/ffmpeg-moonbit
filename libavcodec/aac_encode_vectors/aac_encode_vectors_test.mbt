@@ -1504,6 +1504,123 @@ test "aac_lc_perceptual_path_emits_tns" {
 }
 
 ///|
+/// §299: `aacenc.c:503-547` derives `max_sfb` from the quantiser's own
+/// `zeroes[]` on every rate-control attempt (trailing zero bands are trimmed,
+/// the pair shares the result), and `aacenc.c:864` makes the TNS search use the
+/// value the *previous* attempt or frame left behind - which starts at zero, so
+/// a stream's first frame can never carry a TNS filter. Both rules are checked
+/// off the decoded syntax: `max_sfb` must not leave a run of empty bands at the
+/// top of the pair, and frame 0 must be TNS-free while a later frame is not.
+fn aac_encode_test_frame_syntax(
+  stream : Array[Bytes],
+  f : Int32,
+) -> (Int32, Int32, Int32, Bool) {
+  let payload = stream[f]
+    .clamped_view(
+      start=@libavcodec.av_aac_adts_header_size,
+      end=stream[f].length(),
+    )
+    .to_owned()
+  let gb = @libavcodec.BitReader::new(payload)
+  let _ = gb.read(3)
+  let _ = gb.read(4)
+  if gb.read1() != 1U {
+    abort("frame syntax: expected a common window")
+  }
+  let info = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gb))
+  let ms_mode = gb.read(2).reinterpret_as_int()
+  if ms_mode == 1 {
+    for b = 0; b < info.max_sfb; b = b + 1 {
+      let _ = gb.read1()
+    }
+  }
+  let (_, m0) = aac_encode_test_parse_channel_common(gb, info)
+  let (_, m1) = aac_encode_test_parse_channel_common(gb, info)
+  // Highest band that still transmits a codebook, over the pair.
+  let mut highest = 0
+  for b = 0; b < info.max_sfb; b = b + 1 {
+    if m0.sect_cb[0][b] != 0 || m1.sect_cb[0][b] != 0 {
+      highest = b + 1
+    }
+  }
+  let tns = aac_encode_test_tns_present(m0.tns) ||
+    aac_encode_test_tns_present(m1.tns)
+  (info.max_sfb, highest, ms_mode, tns)
+}
+
+///|
+/// §299, see `aac_encode_test_frame_syntax`.
+test "aac_lc_perceptual_max_sfb_and_tns_carryover" {
+  let rate = 44100
+  let channels = 2
+  let frames = 8
+  let num_swb = match @libavcodec.aac_swb_tables(4) {
+    Ok(v) => v.num_long
+    Err(e) => {
+      println("max_sfb syntax test error: \{e}")
+      abort("no swb table")
+    }
+  }
+  let mut checked = 0
+  for bit_rate in [24000, 64000, 128000] {
+    let input = aac_encode_test_shared_high(rate, frames, true)
+    let config = @libavcodec.aac_encode_config_perceptual(
+      rate,
+      channels,
+      bit_rate,
+    )
+    let stream = aac_encode_test_stream_config(input, channels, frames, config)
+    let mut max_sfb_last = 0
+    let mut tns_first = false
+    let mut tns_later = 0
+    let mut slack = 0
+    let mut overshoot = 0
+    let mut ms2 = 0
+    for f = 0; f < frames; f = f + 1 {
+      let (max_sfb, highest, ms_mode, tns) = aac_encode_test_frame_syntax(
+        stream,
+        f,
+      )
+      // `max_sfb` is trimmed by `zeroes[]`, not by "which band transmits a
+      // codebook", so a band can sit inside it and still carry nothing - but
+      // nothing may ever sit outside it.
+      if highest > max_sfb {
+        overshoot = overshoot + 1
+      } else {
+        slack = slack + max_sfb - highest
+      }
+      if ms_mode == 2 {
+        ms2 = ms2 + 1
+      }
+      if f == 0 {
+        tns_first = tns
+      } else if tns {
+        tns_later = tns_later + 1
+      }
+      max_sfb_last = max_sfb
+    }
+    println(
+      "perceptual syntax \{bit_rate} bps: max_sfb(last)=\{max_sfb_last}/\{num_swb} slack=\{slack} ms_mode2=\{ms2} tns_frame0=\{tns_first} tns_later=\{tns_later}",
+    )
+    assert_true(overshoot == 0)
+    assert_true(max_sfb_last > 0)
+    assert_true(max_sfb_last <= num_swb)
+    // `ics.max_sfb` starts at zero for a fresh encoder, so the first frame's
+    // TNS range is empty (`aacenc_tns.c`: `coef_len <= 0` -> no filter), while
+    // the later frames inherit a real one.
+    assert_true(!tns_first)
+    assert_true(tns_later > 0)
+    if bit_rate == 24000 {
+      // The quantiser's own trailing-zero trim, not the psy band plan, is what
+      // sets `max_sfb` at a bitrate where the top bands are all dropped.
+      assert_true(max_sfb_last < num_swb / 2)
+    }
+    checked = checked + 1
+  }
+  assert_true(checked == 3)
+}
+
+///|
 /// Intensity stereo end to end (§290): the shared 9 kHz tone is coded as
 /// codebook 14/15 bands of the right channel, above the frequency gate and
 /// never on the left; the frame spends fewer bytes; and our decoder, which

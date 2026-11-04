@@ -8117,6 +8117,55 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `aac_encode_vectors` 17/17、`aac_twoloop_vectors` 3/3、`aac_pns_vectors` 3/3；
   全量 **1404/1404** 通过。
 
+## 299. 每轮 `adjust_frame_information`：max_sfb 由量化结果反推 + `ms_mode = 2`（§289 偏差 3 闭环）
+
+- **交付**：把 §289 最后一条顺序/状态偏差关掉。`aacenc.c:503-547` 在**每轮**码率
+  重试里做三件事，本移植原先是"帧首按 psy `bits > 0` 定一个帧级计划值"：
+  - `max_sfb` = 最后一个 `!zeroes` 的带（从 `num_swb` 往下退），窗口组之间取
+    max，CPE 两声道再取 max；
+  - `ms_mode`（`aacenc.c:544-547`）：`msc == 0 || max_sfb == 0` → 0，
+    `msc < max_sfb * num_windows` → 1，否则 **2**，而 mode 2 **不写掩码位**
+    （`encode_ms_info`，`aacenc.c:489-498`）——我们以前只写 0/1；
+  - TNS 的带范围是**上一轮/上一帧**留下的 `ics.max_sfb`（帧首只 clamp 到
+    `num_swb`，`aacenc.c:864`），于是 `aacenc_tns.c` 在流的第一帧拿到 `mmm = 0` →
+    `coef_len <= 0` → **首帧永远不发滤波器**。为此新增 `AacEncoder.last_max_sfb`
+    （初值 0，与 C 的零初始化上下文同源）。
+  - 窗口组 zeroes 归并（`aacenc.c:520-534`）在单长窗下是恒等，所以没搬，注释里
+    写明了这一点。
+  - 顺带把 `AacEncFrame` 瘦成 `{coefs, targets, sequences}`：`max_sfb` 与 `tns`
+    都成为 `assemble_frame` 的显式入参（每轮各一份），`build_frame` 传帧级计划值；
+    `assemble_frame` 不再需要 `frame` 参数。
+- **实测：三条逐位链与所有端到端指标一字不变**（`aac_twoloop_vectors` 3/3、
+  `aac_pns_vectors` 3/3 的 0 / 245、`aac_is_vectors` 2/2 的 72 强度带 + 79 M/S 带；
+  四音 21.48 dB / 365 B、PNS 338/339、IS 1748 > 1599、perceptual TNS
+  3166 B / 21.01 dB 全部与 §298 相同）。而且把同一支新测试注入 `9d08672`
+  的工作树重跑，三个码率的 `max_sfb` 与 §299 **完全相同**（24 k → 19/49、
+  64 k → 33/49、128 k → 43/49）：psy 的 `bits > 0` 计划在本移植的内容上恰好等于
+  量化器的 trailing-zero 剪枝。所以这一轮是**保真闭环**，不是改行为；新暴露的两条
+  规则在现有夹具上都够不到——TNS 从不在帧 0 点火，也没有哪一帧把全部带标记成
+  M/S（`ms_mode2=0`）。
+- **新增回归** `aac_lc_perceptual_max_sfb_and_tns_carryover`（3 个码率 × 8 帧，
+  从解码侧语法读）：
+  - `highest <= max_sfb`——任何带都不能落在声明的 `max_sfb` 之外（反向的
+    `slack` 是允许的：`max_sfb` 剪的是 `zeroes[]`，不是"这一带有码本"，第一版
+    断言 `slack == 0` 就是在 24 kbps 上被 5 帧的 slack 打回来的）；
+  - `0 < max_sfb <= num_swb`，且 24 kbps 时 `max_sfb < num_swb / 2`（确实剪到 19）；
+  - 帧 0 没有 TNS 而后续帧有（`tns_later = 5 / 2 / 2`）——首帧空范围这条规则的守卫。
+- **外部对拍**：A（感知 + M/S，3166 B）与 B（噪声 + PNS + IS，2980 B）与 §298
+  **逐字节相同**（`cmp` 通过），所以上一轮的对拍结论原样成立；新增 C = 24 kbps
+  同内容（`max_sfb = 19` 的小帧，9 帧共 727 B），docker `linuxserver/ffmpeg:9.0.2`
+  报 `9 frames decoded; 0 decode errors (9216 samples)`，无 `invalid scalefactor
+  code` / `Clipped intensity stereo position`，与本解码器 PCM 最大差
+  **1.1920929e-7**（RMS 2.37693e-8，**139.338 dB**）；A/B 复核 138.994 /
+  138.404 dB。
+- **意义**：到这里感知路径与 `aacenc.c` 的 element 循环**结构同构**——
+  `analyze → mark_pns + twoloop → TNS → PNS → IS → M/S → adjust_frame_information
+  → 写`，§289 的四条顺序/状态偏差 1-4 全部闭环。剩下的都是扩展而不是对齐：
+  短窗（多窗 twoloop、`scale_factor_grouping`、多窗 IS/M-S）与 psy 的 f32 逐位化。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_is_vectors` 2/2、
+  `aac_encode_vectors` 18/18、`aac_twoloop_vectors` 3/3、`aac_pns_vectors` 3/3；
+  全量 **1405/1405** 通过。
+
 
 
 
