@@ -39,43 +39,64 @@ FFmpeg 同序后 SNR 涨了 4 dB 多、音调重建电平几乎无偏。）
 `9 frames decoded; 0 decode errors`；ffmpeg 的 PCM 与本解码器的 PCM
 最大差 `1.49e-7`、RMS `2.43e-8`、相对 SNR `138.92 dB`。
 
-## 2. 下一步：真成本判据（前置的顺序重构已在 §291 完成）
+## 2. §292 已完成：真成本判据逐位对拍并接线
 
-FFmpeg 的顺序是
-`psy → mark_pns → search_for_quantizers(twoloop) → common_window → TNS →
-search_for_pns → search_for_is → apply_intensity_stereo →
-search_for_ms → apply_mid_side_stereo → adjust_frame_information → 写`。
+顺序（§291）和判据（§292）都到位了。感知路径现在跑的是 FFmpeg 的
+`aac_is_encoding_err` 成本比较，`libavcodec/aac_is.mbt`，逐位对拍在
+`libavcodec/aac_is_vectors/`：4 帧 × 49 带的 `is_mask` / `ms_mask` /
+右声道 `band_type` / `is_ener0` / `is_ener1` / 两相位 `pass` / `is_mode`
+**完全相等**（64 个强度带）。默认路径仍用 §290 的频率门 + `|rho| >= 0.95`
+（它没有 twoloop 的 `sf/band_type/阈值` 可定价），那条门的误差式子仍写在
+`aac_encode_is_search` 的 docstring 里。
 
-也就是说 IS 是在**左右声道各自的谱已经被 twoloop 定过 sf/band_type/zeroes**
-之后才跑的，`aac_is_encoding_err`（`libavcodec/aacenc_is.c:45`）才能给三样东西
-分别定价：L 带、R 带、以及 IS 和带，代价式是
-`quantize_band_cost(s, in, scaled, size, sf_idx, band_type, s->lambda /
-threshold, INFINITY, NULL, NULL)`，两个相位各跑一次取 `dist2 <= dist1` 的那个。
+参考链路（全部可复现）：
 
-**§291 已经把顺序改完了**：感知路径现在是
-`psy → TNS →（每轮 λ：twoloop → PNS → 强度 → M/S → 量化 → 写）`，分析读左右谱、
-量化读混合后的谱，与 `aacenc.c` 同序；简化路径保持先混合（它的每带标度因子
-来自真正要编码的那份谱，§279/§280 的 29.045 dB 基线逐字节不变）。顺带补上了
-`apply_mid_side_stereo` 对噪声带的排除。指标全线改善：感知 SNR 20.14 → 21.31 dB、
-IS 夹具 18.60 → 22.92 dB、音调重建电平 +0.38 → −0.03 dB。所以真成本判据的
-前置条件已经满足，下面按顺序做：
+```
+bash _ref/aacenc/build.sh                 # 现在会编译 aacenc_is_patched.c
+moon test --target wasm libavcodec/aac_is_vectors   # 1/1
+python scripts/gen_aac_is_vectors.py .scratch/is_dump/enc.log   # 再生成夹具
+```
 
-1. **给 `_ref/aacenc` 加 IS harness**：把 `aacenc_is.c` 编进
-   `libavcodec_ref.a`（依赖 `find_max_val`/`find_min_book`/
-   `quantize_band_cost`/`pos_pow34`/`ff_init_nextband_map`/
-   `ff_sfdelta_can_remove_band`——这些在本移植里都已经有对应实现，见
-   `aac_twoloop.mbt` 与 `aac_pns_search.mbt`，所以 C 侧也不缺）；
-   参考侧输出每条带的 `is_mask / ms_mask / ch[1].band_type / is_ener`，
-   照 §284/§286/§287 的做法做逐位向量。
-   注意 `--in <dump>` 那条外部谱通道（`aac_pns_vectors` 已经用过），
-   可以直接复用 §278 的 245 带夹具。
-2. 用 `aac_is_encoding_err` 替掉 `aac_encode_is_search` 里的频率门 +
-   `|rho| >= 0.95`（误差式子与推导留在它的 docstring 里，别丢）。
-3. 打开 IS 与 PNS 的组合：两个配置入口目前互相清对方；顺序已经允许像上游那样
-   靠 `band_type != NOISE_BT && !zeroes` 排除噪声带，改完要补一组 IS+PNS 夹具。
-4. `search_for_ms` 的完整形态（`aaccoder.c:702` 的 `sid_sf_boost` 四轮尝试 +
+**再生成夹具需要临时把探针加回来**（本轮已摘干净）。做法：在 `AacEncoder` 上加
+`mut dbg_frame_no : Int32`（并在 `aac_encoder_new` 里初始化），在感知路径 λ 循环里
+`st = ...` 之前插一段
+
+```
+if self.config.channels == 2 && its == 0 && use_is {
+  打印 "ISDUMP-FRAME <n>"、每个声道一行 "ISDUMP-SPEC0/1" 后跟 1024 行
+  "ISDUMP-V <值>"、"ISDUMP-ALLOC <alloc>"、49 行
+  "ISDUMP-PSYBAND0/1 <g> <energy> <threshold> <spread> <bits>"、49 行
+  "ISDUMP-SF0/1 <g> <twos[ch].sf[g]> <cbs[ch][g]> <zeros[ch][g]>"、最后 "ISDUMP-END"
+}
+```
+
+然后 `moon test --target wasm libavcodec/aac_encode_vectors > .scratch/is_dump/enc.log`，
+跑上面的生成脚本，最后 `grep -c ISDUMP libavcodec/aac_encode.mbt` 必须归零。
+脚本会把值按 C 实际消费的 **float** 存（`%.9e` 足以无损往返 float）——这一点必须
+保持，否则"完全相等"的断言会假失败。
+
+### 剩下的事（按建议顺序）
+
+1. **`dist1/dist2` 量值的 ulp 二分**。决策字段已逐位相等，但成本量值最大相对差
+   1.24e-6（`frame 2 band 35 phase-1 dist1`：1082.73486328125 vs
+   1082.7335205078125）。这是 §278 从没覆盖过的区域：twoloop 里
+   `quantize_band_cost` 固定传 lambda=1.0，IS 传的是 `s->lambda / threshold`。
+   拆法：在 `patch.py` 里把 `dist_spec_err`（`aacenc_is.c` 那一段纯谱误差项）
+   单独导成一个全局，与 `aac_is_encoding_err` 的 `band_cost` 部分分别比对，
+   就能判断差在 `quantize_and_encode_band_cost` 的累加里，还是在
+   `dist_spec_err` 的 `pow34` 域求和上。测试目前把量值界在 1e-5，二分完成后
+   应该改成逐位相等。
+2. **打开 IS 与 PNS 的组合**。两个配置入口目前互相清 `pns`/`is_stereo`。
+   顺序上已经允许（`aac_encode_stereo_psy` 拿到的 `cbs/zeros` 就是 PNS 的最终
+   判定，正好对应上游 `search_for_is` 的 `band_type != NOISE_BT && !zeroes`
+   排除），缺的只是一组 IS+PNS 夹具与逐位数据；注意 §288 那条结论仍然成立：
+   噪声带写的是 `noise_sfi`，不是 twoloop 的 `sf_idx`。
+3. **`search_for_ms` 的完整形态**（`aaccoder.c:702` 的 `sid_sf_boost` 四轮尝试 +
    `ff_sfdelta_can_replace`）——本移植的 M/S 掩码仍是能量版，等价于上游
-   `mid_side=1` 那条不重新定标的分支。
+   `mid_side=1` 那条不重新定标的分支。IS 已经用掉了同一个 `ms_mask`（flip 带），
+   做这步时别把两条路径写歪。
+4. 短窗 IS：`num_windows` 与每窗带内偏移都参数化了，结构上走得通，但没有专门的
+   8 短窗 IS 夹具。
 
 另外两条小的：短窗 IS 结构上已经支持（`num_windows` 与每窗带内偏移都参数化了），
 但没有专门的 8 短窗夹具；`set_special_band_scalefactors` 上游是一轮里同时管

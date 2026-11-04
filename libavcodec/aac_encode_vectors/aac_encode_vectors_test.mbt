@@ -1300,10 +1300,15 @@ test "aac_lc_intensity_stereo_round_trip" {
 }
 
 ///|
-/// The same encoder on a programme whose high bands do not correlate: no band
-/// may switch to intensity, and because intensity touches nothing else the
-/// stream has to come out exactly the size it would be with the tool off.
-test "aac_lc_intensity_stereo_skips_uncorrelated" {
+/// The same encoder on a programme whose two channels carry *different* high
+/// tones. A cost-based search still switches bands here - a quiet, well-masked
+/// band is cheaper as an intensity position than as two coded bands, correlated
+/// or not - so what this checks is the property that actually has to hold: the
+/// switched bands stay above the frequency gate and on the right channel, and
+/// the loud decorrelated tone each channel owns is not traded away. If the cost
+/// test mispriced a real tone, the tone level below would collapse by the
+/// 6 dB-per-step of the `off_is` chain rather than by fractions of a dB.
+test "aac_lc_intensity_stereo_decorrelated_stays_transparent" {
   let rate = 44100
   let channels = 2
   let frames = 4
@@ -1328,11 +1333,54 @@ test "aac_lc_intensity_stereo_skips_uncorrelated" {
     plain_bytes = plain_bytes + plain[f].length()
     iso_bytes = iso_bytes + iso[f].length()
   }
-  println(
-    "intensity stereo off-band: bands=\{is_bands} bytes=\{plain_bytes}/\{iso_bytes}",
+  let decoded = aac_encode_test_decode(iso, channels)
+  let plain_snr = aac_encode_test_pcm_snr(
+    input,
+    aac_encode_test_decode(plain, channels),
+    channels,
+    frames,
   )
-  assert_true(is_bands == 0)
+  let snr = aac_encode_test_pcm_snr(input, decoded, channels, frames)
+  // Left owns 9 kHz, right owns 11.7 kHz: each channel's own tone has to come
+  // back, in the channel that carries it and not in the other one.
+  let r_own = aac_encode_test_bin_energy(
+    decoded[1],
+    1024,
+    frames * 1024,
+    11700.0,
+    rate,
+  ) / aac_encode_test_bin_energy(
+    input[1],
+    0,
+    frames * 1024,
+    11700.0,
+    rate,
+  )
+  let r_other = aac_encode_test_bin_energy(
+    decoded[1],
+    1024,
+    frames * 1024,
+    9000.0,
+    rate,
+  ) / aac_encode_test_bin_energy(
+    input[0],
+    0,
+    frames * 1024,
+    9000.0,
+    rate,
+  )
+  let r_own_db = 10.0 * @math.log10(r_own)
+  let r_other_db = 10.0 * @math.log10(r_other)
+  println(
+    "intensity stereo decorrelated: bands=\{is_bands} below_gate=\{below_gate} on_left=\{on_left} bytes=\{plain_bytes}>\{iso_bytes} snr=\{plain_snr}>\{snr} own_tone=\{r_own_db} foreign_tone=\{r_other_db}",
+  )
+  assert_true(is_bands > 0)
   assert_true(below_gate == 0)
   assert_true(on_left == 0)
-  assert_true(iso_bytes == plain_bytes)
+  assert_true(iso_bytes < plain_bytes)
+  assert_true(snr > plain_snr - 1.0)
+  // The channel's own tone survives within a dB; the other channel's tone must
+  // not be reconstructed into it (intensity would put it there).
+  assert_true(r_own_db > -1.0 && r_own_db < 1.0)
+  assert_true(r_other_db < -25.0)
 }

@@ -7674,6 +7674,84 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   默认路径的每条打印指标与 §289 的日志逐字符相同（两次全量日志 diff 只有
   感知路径的 5 行变化）；全量 **1399/1399** 通过。
 
+## 292. 强度立体声换上 FFmpeg 的真成本判据（harness `--is` + 逐位向量）
+
+- **交付**：§290 的简化门（频率门 + `|rho| >= 0.95`）在感知路径上被 FFmpeg 的
+  成本比较替掉，而且这条比较是**逐位对拍**过的。
+  - **C 侧**：`_ref/aacenc` 新增 `--is <dump>` 模式（`harness.c` 的
+    `run_is_input`），编译真实的 `aacenc_is.c`（原先在 harness 里只是个空桩，
+    现在 `build.sh` 产出 `aacenc_is_patched.o` 并链进去）；`patch.py` 把
+    `aac_is_encoding_err` 的 `pass/dist1/dist2` 按带号与相位导出成全局，
+    harness 打 `ISBAND`（决策）与 `ISERR`（两相位成本）两类行。踩到的一处关键：
+    `ff_psy_init` 的 `group_map[0]` 要写 **1** 才得到"一个 2 声道的 group"
+    （`psymodel.c:52` 是 `num_ch = group_map[i] + 1`），否则
+    `s->psy.ch[1].psy_bands` 根本不是 CPE 的第二声道。默认模式与 `--pns`
+    模式的输出在改动后逐字节不变（510 行向量 diff 为空）。
+  - **MoonBit 侧**：`libavcodec/aac_is.mbt` 是 `ff_aac_search_for_is` +
+    `aac_is_encoding_err` 的逐式移植，f32 建模沿用 `aac_two_*` 一族
+    （`abs_pow34`/`find_max_val`/`find_min_book`/`quantize_band_cost`/
+    `ff_init_nextband_map`/`ff_sfdelta_can_remove_band` 全部复用 §278/§287
+    已对拍过的实现）。公共入口 `aac_is_in(...) -> aac_is_search(in, sample_rate,
+    lambda)`。C 里唯一故意离开 `float` 的一步是
+    `IS[i] = (L + phase*R) * sqrt(ener0/ener01)`：除法在 float，开方是 double
+    的，乘积只在**存进数组**时才舍回 float——照抄这条才不会差 ulp。
+  - **夹具链路**：`scripts/gen_aac_is_vectors.py` 把两端拉通——编码器先用临时
+    `ISDUMP-` 探针打印它到达立体声阶段时的**真实状态**（左右谱、两声道掩蔽阈值、
+    两声道 twoloop 的 `sf/cb/zeroes`），脚本落成 C 的 `--is` 输入、跑参考、
+    再把两侧一起写进 `libavcodec/aac_is_vectors/fixtures.mbt`（4 帧 × 49 带）。
+    探针用完已摘干净（`grep -c ISDUMP` 归零），重新生成的步骤写在
+    `AGENT_HANDOFF_2026-11-05_AAC_IS.md`。夹具里的浮点都按 C 实际消费的
+    **float** 存（`%.9e` 足以无损往返 float），否则"完全相等"的断言会假失败。
+  - **接线**：感知路径走 `aac_encode_stereo_psy`（真判据 + 能量 M/S 掩码），
+    默认路径仍用 §290 的简化门——它没有 twoloop 的 `sf/band_type/阈值`，
+    成本判据无从算起。flip 带（`search_for_is` 翻相位那条规则）只写
+    `ms_mask` 位、**不做 M/S 混合**，因为上游 `apply_mid_side_stereo` 对
+    `is_mask` 带一律跳过，符号翻转是由解码器 `aac_apply_stereo` 读那个位来做的。
+- **逐位结果**：`aac_is_vectors` 1/1。4 帧 × 49 带里 `is_mask`、`ms_mask`、
+  右声道 `band_type`、`is_ener0`、`is_ener1`、两个相位的 `pass` 以及
+  `cpe->is_mode` **全部与 FFmpeg 9.0.2 完全相等**（共 64 个强度带）。
+  唯一有差的是 `dist1/dist2` 的**量值**：最大相对差 1.24e-6
+  （`frame 2 band 35 phase-1 dist1`，1082.73486328125 vs 1082.7335205078125）。
+  - 这条差距是**新暴露**而非新引入：§278 的对拍只断言过 twoloop 的逐带*决策*
+    （`sf/cb/zeroes`）与 `maxval` 的相对误差 ≤1e-5，从没在**非单位 lambda**
+    下断言过 `quantize_band_cost` 的量值——IS 是第一个传
+    `s->lambda / band->threshold` 进去的调用方。两相位 `pass` 既然逐位一致，
+    编码器的行为就一致；量值差距留作下一轮的二分项（把 `dist_spec_err` 与
+    `band_cost` 两段拆开即可定位）。测试因此把决策字段设为**精确相等**、
+    把量值设为**测量并界住 1e-5**，并在注释里写清为什么这么分。
+- **实测对照**（44.1 kHz / 128 kbps / 2ch，感知路径，4 帧 + 1 收尾帧）：
+
+  | 夹具 | IS 带（§290 门 → 真判据） | 码长 | 音调重建 | 往返 SNR |
+  |---|---|---|---|---|
+  | 高音共享（L 440 / R 550 低音不同） | 10 → **55** | 1744 → 1583 B（−9.2%） | R 的 9 kHz −0.089 dB | 22.92 → **23.26 dB** |
+  | 高音不共享（L 9 kHz / R 11.7 kHz） | 0 → **43** | 1773 → 1726 B | 本道音 −0.13 dB；串到另一道 −53.6 dB | 23.72 → **25.27 dB** |
+
+  - 真判据比相关性门**激进得多**：它会把去相关但"安静且被掩蔽"的带也换成强度
+    位置——一个位置只花约 7 bit，两条编码带贵得多。这正是 §290 那条"去相关夹具
+    必须 0 带、码流逐字节不变"的断言不再成立的原因。
+  - 该断言换成成本判据下真正该成立的性质
+    （`aac_lc_intensity_stereo_decorrelated_stays_transparent`）：切换只发生在
+    频率门之上、只发生在右声道；帧必须变小；往返 SNR 不低于不开 IS 的 −1 dB；
+    并且**每个声道自己的强音必须原样回来**（−0.13 dB）而**不串进另一声道**
+    （−53.6 dB）。IS 位置错一步就是 6 dB，所以这条比"带数为 0"更有鉴别力。
+  - 两个夹具的 SNR 都比不开 IS **更高**（+0.34 / +1.55 dB）：省下的位被 λ
+    重试花回质量。§290 的简化门做不到这点——它只省位，位却花不出去。
+- **外部对拍**：同一套 `--is` 流（8 帧 IS，**2726 字节**；§290 简化门 3102、
+  §291 前 3279）交 docker `linuxserver/ffmpeg:9.0.2`：
+  `9 frames decoded; 0 decode errors (9216 samples)`、`-v debug` 里既没有
+  `Clipped intensity stereo position` 也没有 `invalid scalefactor code`；
+  ffmpeg 的 PCM 与本解码器的 PCM **最大差 1.49e-7、RMS 2.50e-8、
+  相对参考 SNR 138.61 dB**。也就是说 FFmpeg 自己的 IS 判据写出的码流，
+  被 FFmpeg 自己的解码器原样接受。
+- **仍未做**：`dist1/dist2` 量值的 ulp 二分（见上）；IS 与 PNS 的组合仍互斥
+  （顺序已经允许，缺的只是一组 IS+PNS 夹具与逐位数据）；`search_for_ms` 的
+  完整形态（`sid_sf_boost` 四轮 + `ff_sfdelta_can_replace`）；短窗 IS 的专门夹具。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_is_vectors` 1/1、
+  `aac_encode_vectors` 14/14、`aac_pns_vectors` 3/3，§278/§286/§287 三批 245 带
+  与 §290 之后的 PNS 指标（344/332 B、0.947 dB、峰值 0.3182）均不变；
+  `ref/aacenc` 的默认与 `--pns` 模式输出在加入 IS 对象后逐字节不变；
+  全量 **1400/1400** 通过。
+
 
 
 

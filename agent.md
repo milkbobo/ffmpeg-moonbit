@@ -139,8 +139,18 @@
   §279/§280 的 29.045 dB 基线因此逐字节不变）。混合之所以必须**每轮重做**：
   噪声带随 λ 变，而 `apply_mid_side_stereo` 不能碰任一声道判成 `NOISE_BT` 的带
   （解码侧 `aac_apply_stereo` 对 `sect_cb >= 13` 的带根本不做逆变换）。
-  IS 判据仍是简化的频率门（`6100 * λ/170`）+ 带内互相关 `|rho| >= 0.95`，
-  不是 `aac_is_encoding_err` 的成本判据——前置条件已经满足，那是下一步。两条硬约束：IS 带写进
+  IS 判据在感知路径上已经是 FFmpeg 的 `aac_is_encoding_err` 成本比较（§292，
+  `libavcodec/aac_is.mbt`，逐位对拍见 `libavcodec/aac_is_vectors/`）；只有默认
+  （简化）路径还留着 §290 的频率门 + `|rho| >= 0.95`，因为那条路径没有
+  twoloop 的 `sf/band_type/阈值` 可定价。三条硬知识：
+  ① C 的 `IS[i] = (L + phase*R) * sqrt(ener0/ener01)` 里开方是 **double**
+  （除法才是 float），只在存回数组时舍一次 float，照抄才不会差 ulp；
+  ② `_ref/aacenc` 的 `--is` 模式要把 `ff_psy_init` 的 `group_map[0]` 写成
+  **1**（`psymodel.c:52` 是 `num_ch = group_map[i] + 1`），否则
+  `psy.ch[1]` 不是 CPE 的第二声道；
+  ③ 夹具里的浮点必须按 C 实际消费的 **float** 存（`%.9e` 足够往返 float），
+  否则"完全相等"的断言会假失败。另外 flip 带只写 `ms_mask` 位、不做 M/S 混合
+  （上游 `apply_mid_side_stereo` 跳过所有 `is_mask` 带，符号翻转由解码器完成）。两条硬约束：IS 带写进
   码流的是**强度位置**（范围 `[-155,100]`，正负一样常见），所以
   ①写标度因子必须先用 `cb` 认出 14/15，不能再用 `sf >= 0` 这个"该带被编码"的
   哨兵（否则位置为负的带被整体跳过，section 与标度因子链从那条带起错位）；

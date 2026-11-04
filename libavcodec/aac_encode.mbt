@@ -971,6 +971,27 @@ fn aac_encode_roundf(v : Double) -> Int32 {
 }
 
 ///|
+/// `set_special_band_scalefactors`' intensity branch: the position written to
+/// the `off_is` chain is `round(log2(is_ener) * 2)`, clipped to the decoder's
+/// `[-155, 100]` and to +/-60 of the previous position so the delta stays in
+/// the scalefactor VLC's domain.
+fn aac_encode_is_position(ener_ratio : Double, prev : Int32) -> Int32 {
+  let raw = aac_encode_roundf(2.0 * @math.log2(ener_ratio))
+  let mut v = raw
+  if v < -155 {
+    v = -155
+  } else if v > 100 {
+    v = 100
+  }
+  if v < prev - 60 {
+    v = prev - 60
+  } else if v > prev + 60 {
+    v = prev + 60
+  }
+  v
+}
+
+///|
 /// Simplified `ff_aac_search_for_is`, folded together with the intensity part
 /// of `set_special_band_scalefactors`. For every band above the frequency gate
 /// `start * freq_mult > INT_STEREO_LOW_LIMIT * (lambda / 170)` whose left and
@@ -1039,17 +1060,7 @@ fn aac_encode_is_search(
     // `ener01` of the phase that was picked: `L + R` when the channels agree,
     // `L - R` when they are inverted.
     let sum = ener0 + ener1 + 2.0 * cross.abs()
-    let mut v = aac_encode_roundf(2.0 * @math.log2(ener0 / ener1))
-    if v < -155 {
-      v = -155
-    } else if v > 100 {
-      v = 100
-    }
-    if v < prev - 60 {
-      v = prev - 60
-    } else if v > prev + 60 {
-      v = prev + 60
-    }
+    let v = aac_encode_is_position(ener0 / ener1, prev)
     bt[b] = if cross >= 0.0 { aac_intensity_bt } else { aac_intensity_bt2 }
     pos[b] = v
     scale[b] = (ener0 / sum).sqrt()
@@ -1070,13 +1081,15 @@ fn aac_encode_apply_is(
   num_swb : Int32,
   num_windows : Int32,
   bt : Array[Int32],
+  flip : Array[Bool],
   scale : Array[Double],
 ) -> Unit {
   for b = 0; b < num_swb; b = b + 1 {
     if bt[b] == 0 {
       continue
     }
-    let p = if bt[b] == aac_intensity_bt { 1.0 } else { -1.0 }
+    let base = if bt[b] == aac_intensity_bt { 1.0 } else { -1.0 }
+    let p = if flip[b] { -base } else { base }
     let s = scale[b]
     for w = 0; w < num_windows; w = w + 1 {
       for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
@@ -1242,10 +1255,97 @@ fn aac_encode_stereo(
       num_swb,
       num_windows,
       bt,
+      Array::make(num_swb, false),
       scale,
     )
   }
   aac_encode_apply_ms(left, right, offsets, num_swb, ms_mask, num_windows)
+  { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos }
+}
+
+///|
+/// The perceptual path's stereo stage: FFmpeg's cost-based
+/// `ff_aac_search_for_is` over the analysed pair, then the energy mid/side mask
+/// on the bands intensity left alone. A flip band - the case
+/// `search_for_is` answers by setting `ms_mask` and picking the other band
+/// type - keeps its mid/side bit in the bitstream so the decoder can negate
+/// that band's reconstructed right channel, but is still not mixed:
+/// `apply_mid_side_stereo` skips every band with `is_mask` set, flips included.
+fn aac_encode_stereo_psy(
+  work : Array[Array[Double]],
+  band_sizes : Array[Int32],
+  thr : Array[Array[Double]],
+  twos : Array[AacTwoResult],
+  cbs : Array[Array[Int32]],
+  zeros : Array[Array[Int32]],
+  offsets : Array[Int32],
+  num_swb : Int32,
+  num_windows : Int32,
+  sample_rate : Int32,
+  lambda : Double,
+  noise : Array[Int32],
+) -> AacEncStereo {
+  let isr = aac_is_search(
+    aac_is_in(
+      work[0],
+      work[1],
+      band_sizes,
+      thr[0],
+      thr[1],
+      twos[0].sf,
+      twos[1].sf,
+      cbs[0],
+      cbs[1],
+      zeros[0],
+      zeros[1],
+      num_swb,
+    ),
+    sample_rate,
+    lambda,
+  )
+  let mask = aac_encode_ms_mask(work[0], work[1], offsets, num_swb, num_windows)
+  let ms_mask : Array[Bool] = Array::make(num_swb, false)
+  let flip : Array[Bool] = Array::make(num_swb, false)
+  let bt : Array[Int32] = Array::make(num_swb, 0)
+  let pos : Array[Int32] = Array::make(num_swb, 0)
+  let mut prev = 0
+  for b = 0; b < num_swb; b = b + 1 {
+    if isr.is_mask[b] == 1 {
+      bt[b] = isr.band_type1[b]
+      flip[b] = isr.ms_mask[b] == 1
+      pos[b] = aac_encode_is_position(isr.is_ener1[b], prev)
+      prev = pos[b]
+    } else {
+      ms_mask[b] = mask[b] && noise[b] == 0
+    }
+  }
+  aac_encode_apply_is(
+    work[0],
+    work[1],
+    offsets,
+    num_swb,
+    num_windows,
+    bt,
+    flip,
+    isr.is_ener0,
+  )
+  for b = 0; b < num_swb; b = b + 1 {
+    if flip[b] {
+      ms_mask[b] = true
+    }
+  }
+  let apply_mask : Array[Bool] = Array::make(num_swb, false)
+  for b = 0; b < num_swb; b = b + 1 {
+    apply_mask[b] = ms_mask[b] && bt[b] == 0
+  }
+  aac_encode_apply_ms(
+    work[0],
+    work[1],
+    offsets,
+    num_swb,
+    apply_mask,
+    num_windows,
+  )
   { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos }
 }
 
@@ -2239,6 +2339,17 @@ pub fn AacEncoder::encode_frame(
     // again. A frame that fits resets lambda to 120. This keeps the psy bit
     // reservoir from draining: frames never exceed the nominal size, so
     // `fill_level` stays positive and the model keeps asking for detail.
+    // The masking thresholds the intensity cost test compares against, one row
+    // per channel (`aac_is_encoding_err` reads `band0->threshold` and
+    // `band1->threshold`).
+    let thr : Array[Array[Double]] = []
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let row : Array[Double] = Array::make(num_swb, 0.0)
+      for b = 0; b < num_swb; b = b + 1 {
+        row[b] = psy_results[ch].bands[b].threshold
+      }
+      thr.push(row)
+    }
     let rate_bits = self.aac_encode_rate_bits()
     let mut its = 0
     let mut built : Bytes = b""
@@ -2312,17 +2423,34 @@ pub fn AacEncoder::encode_frame(
         for b = 0; b < num_swb; b = b + 1 {
           noise[b] = if cbs[0][b] == 13 || cbs[1][b] == 13 { 1 } else { 0 }
         }
-        st = aac_encode_stereo(
-          work[0],
-          work[1],
-          offsets,
-          num_swb,
-          num_windows,
-          self.config.sample_rate,
-          self.lambda,
-          use_is,
-          noise,
-        )
+        st = if use_is {
+          aac_encode_stereo_psy(
+            work,
+            sizes,
+            thr,
+            twos,
+            cbs,
+            zeros,
+            offsets,
+            num_swb,
+            num_windows,
+            self.config.sample_rate,
+            self.lambda,
+            noise,
+          )
+        } else {
+          aac_encode_stereo(
+            work[0],
+            work[1],
+            offsets,
+            num_swb,
+            num_windows,
+            self.config.sample_rate,
+            self.lambda,
+            false,
+            noise,
+          )
+        }
         for b = 0; b < planned_max_sfb; b = b + 1 {
           if st.ms_mask[b] {
             st.ms_present = 1
