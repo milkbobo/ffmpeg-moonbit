@@ -32,7 +32,13 @@ REF = os.path.join(REPO, "_ref", "aacenc", "aac_ref.exe")
 OUT_DIR = os.path.join(REPO, "libavcodec", "aac_is_vectors")
 NSPEC = 1024
 NBANDS = 49
-TAKE = (0, 1, 4, 5)  # two correlated frames + two uncorrelated ones
+# The fixture carries four frames. Which four is decided from the reference's
+# own answer (§297): the two frames where intensity stereo fires most, plus the
+# two richest mid/side frames, so the vectors always cover both tools at full
+# strength. Hand-picked block indices used to do this and silently drifted when
+# a new IS-using test was added to the encoder suite - the four frames then
+# covered 9 intensity bands instead of 64.
+N_TAKE = 4
 
 
 def f32(v):
@@ -78,9 +84,34 @@ def read_blocks(path):
         for k in ("bands0", "bands1", "sf0", "sf1"):
             if len(b[k]) != NBANDS:
                 sys.exit("block %d: %s has %d bands" % (i, k, len(b[k])))
-    if len(blocks) < max(TAKE) + 1:
-        sys.exit("expected at least %d blocks, got %d" % (max(TAKE) + 1, len(blocks)))
-    return [blocks[i] for i in TAKE]
+    if len(blocks) < N_TAKE:
+        sys.exit("expected at least %d blocks, got %d" % (N_TAKE, len(blocks)))
+    return blocks
+
+
+def choose(frames):
+    """Pick the four frames the vectors are worth pinning.
+
+    Two with the most intensity bands, then the two richest mid/side frames,
+    preferring frames that also carry intensity. Indices come back ascending and
+    deduplicated so the fixture stays reproducible for one encoder log.
+    """
+    def is_count(f):
+        return sum(1 for g in range(NBANDS) if f["band"][g][0] == 1)
+
+    def ms_count(f):
+        return sum(1 for g in range(NBANDS) if f["ms"][g][0] == 1)
+
+    by_is = sorted(range(len(frames)), key=lambda i: (-is_count(frames[i]), i))
+    picked = by_is[:2]
+    by_ms = sorted(range(len(frames)), key=lambda i: (-ms_count(frames[i]), i))
+    for pool in (by_ms, by_is):
+        for i in pool:
+            if len(picked) >= N_TAKE:
+                break
+            if i not in picked:
+                picked.append(i)
+    return sorted(picked[:N_TAKE])
 
 
 def write_dump(blocks, path):
@@ -172,6 +203,15 @@ def main():
     frames = run_ref(dump)
     if len(frames) != len(blocks):
         sys.exit("harness answered %d frames, dumped %d" % (len(frames), len(blocks)))
+    take = choose(frames)
+    print("chose blocks %s of %d: intensity %s, mid/side %s"
+          % (take, len(blocks),
+             [sum(1 for g in range(NBANDS) if frames[i]["band"][g][0] == 1)
+              for i in take],
+             [sum(1 for g in range(NBANDS) if frames[i]["ms"][g][0] == 1)
+              for i in take]))
+    blocks = [blocks[i] for i in take]
+    frames = [frames[i] for i in take]
 
     header = (
         "///|\n"

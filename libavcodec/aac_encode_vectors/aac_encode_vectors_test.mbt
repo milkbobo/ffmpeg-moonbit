@@ -1053,9 +1053,22 @@ test "aac_lc_pns_round_trip" {
     }
   }
   let snr = 10.0 * @math.log10(energy / noise)
-  println(
-    "PNS round trip: plain_bytes=\{plain_bytes / plain.length()} pns_bytes=\{pns_bytes / pns.length()} snr=\{snr} peak=\{peak}",
+  let (pns_left, pns_right, pns_is, _, _) = aac_encode_test_tool_bands(
+    pns,
+    frames,
   )
+  let (plain_left, plain_right, _, _, _) = aac_encode_test_tool_bands(
+    plain,
+    frames,
+  )
+  let mut per_frame = ""
+  for f = 0; f < plain.length(); f = f + 1 {
+    per_frame = per_frame + " \{plain[f].length()}/\{pns[f].length()}"
+  }
+  println(
+    "PNS round trip: plain_bytes=\{plain_bytes / plain.length()} pns_bytes=\{pns_bytes / pns.length()} noise bands \{plain_left}/\{plain_right} -> \{pns_left}/\{pns_right} snr=\{snr} peak=\{peak}",
+  )
+  println("PNS per-frame plain/pns:\{per_frame}")
   assert_true(pns.length() == frames + 1)
   assert_true(peak < 2.0)
   assert_true(peak > 0.0)
@@ -1063,7 +1076,21 @@ test "aac_lc_pns_round_trip" {
   // so a broadband-noise fixture lands near 0 dB SNR. The guard is that the
   // stream decodes cleanly at a finite level, not that it is transparent.
   assert_true(snr > -5.0)
-  assert_true(pns_bytes < plain_bytes)
+  // The tool has to actually fire, and only as itself: no intensity bands, and
+  // none in the run that did not ask for PNS.
+  assert_true(pns_left + pns_right > 0)
+  assert_true(pns_is == 0)
+  assert_true(plain_left + plain_right == 0)
+  // What PNS owes this fixture on the wire is that it does not blow the budget -
+  // not that it is cheaper. §297 put `analyze` back inside `aacenc.c`'s rate
+  // control loop, and a retry then reads the reservoir its own first pass
+  // consumed, so the frame that retried comes out smaller in *whichever* run
+  // retried: at 128 kbps the plain run retries on frame 0 (371 -> 307 bytes)
+  // and the PNS run retries on frame 5 (343 -> 318), and the aggregate flips
+  // from 345/342 to 338/339. The per-band economics themselves are pinned
+  // bit-exactly against FFmpeg in `aac_pns_vectors` (0 / 245 bands), which is
+  // where "PNS saves the bits it says it saves" actually has a reference.
+  assert_true(pns_bytes <= plain_bytes + plain_bytes / 16)
 }
 
 ///|

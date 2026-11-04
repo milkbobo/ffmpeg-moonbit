@@ -2279,13 +2279,13 @@ pub fn AacEncoder::encode_frame(
       Array::make(num_swb, 0),
     )
   }
-  // Perceptual targets, evaluated once per channel. Steady-state long frames
-  // can go through FFmpeg's rate control: the 3GPP model publishes per-band
-  // thresholds and the frame's bit allocation, and the twoloop quantiser turns
-  // them into per-band scalefactors. Both are only defined for one long window
-  // (the psy port is long-only, the search is single-window), so EIGHT_SHORT
-  // frames always keep the simplified model with the frame-wide offset search
-  // below.
+  // Perceptual analysis, one pass per channel: the 3GPP model publishes the
+  // per-band thresholds and the frame's bit allocation, and the twoloop
+  // quantiser turns them into per-band scalefactors. Both are only defined for
+  // one long window (the psy port is long-only, the search is single-window),
+  // so EIGHT_SHORT frames always keep the simplified model with the frame-wide
+  // offset search below. A rate-control retry re-runs this analysis - see the
+  // loop below (§289 deviation 2, closed in §297).
   let psy_results : Array[AacPsyResult] = []
   let targets : Array[Array[Int32]] = []
   let mut planned_max_sfb = 0
@@ -2354,33 +2354,58 @@ pub fn AacEncoder::encode_frame(
     target_bytes = av_aac_adts_header_size + 1
   }
   let result = if use_psy {
-    // FFmpeg hands the element budget to the search from the last channel's
-    // analyse (`bitres` is per element, and `aacenc.c` divides by the channel
-    // count before `search_for_quantizers`).
-    let last = psy_results.length() - 1
-    let psy_alloc = if last >= 0 { psy_results[last].alloc } else { 0 }
-    let alloc = psy_alloc / self.config.channels
-    // `aac_encode_frame`'s strict bit-rate control (`bit_rate_tolerance == 0`):
-    // quantise, measure the *real* frame, and while it overflows the nominal
-    // frame size scale lambda down by `min(0.9, rate/frame)` and quantise
-    // again. A frame that fits resets lambda to 120. This keeps the psy bit
-    // reservoir from draining: frames never exceed the nominal size, so
-    // `fill_level` stays positive and the model keeps asking for detail.
-    // The masking thresholds the intensity cost test compares against, one row
-    // per channel (`aac_is_encoding_err` reads `band0->threshold` and
-    // `band1->threshold`).
-    let thr : Array[Array[Double]] = []
-    for ch = 0; ch < self.config.channels; ch = ch + 1 {
-      let row : Array[Double] = Array::make(num_swb, 0.0)
-      for b = 0; b < num_swb; b = b + 1 {
-        row[b] = psy_results[ch].bands[b].threshold
-      }
-      thr.push(row)
+    // `aacenc.c:916-945`: the whole element loop - `analyze` included - runs
+    // inside the rate-control retry, with `bitres.alloc = -1` and
+    // `bitres.bits = last_frame_pb_count / channels` re-set before each call.
+    // So a frame that needs a second attempt is analysed *twice*, and the
+    // second pass sees the model state the first pass wrote (`fill_level`,
+    // `prev_sfb_microphone`, the stored `linpow`). Attempt 0 reuses the
+    // frame-start analysis above - that one is the pass C also runs first -
+    // and every later attempt re-analyses in place.
+    let prev_bits = if self.config.channels > 0 {
+      self.last_frame_bits / self.config.channels
+    } else {
+      0
     }
+    let psy_iter : Array[AacPsyResult] = psy_results
     let rate_bits = self.aac_encode_rate_bits()
     let mut its = 0
     let mut built : Bytes = b""
     while true {
+      if its > 0 {
+        for ch = 0; ch < self.config.channels; ch = ch + 1 {
+          psy_iter[ch] = self.psy.analyze(
+            ch,
+            coefs[ch],
+            prev_bits,
+            seq,
+            self.prev_sequence[ch],
+          )
+        }
+      }
+      // FFmpeg hands the element budget to the search from the last channel's
+      // analyse (`bitres` is per element, and `aacenc.c` divides by the channel
+      // count before `search_for_quantizers`).
+      let last = psy_iter.length() - 1
+      let psy_alloc = if last >= 0 { psy_iter[last].alloc } else { 0 }
+      let alloc = psy_alloc / self.config.channels
+      // `aac_encode_frame`'s strict bit-rate control (`bit_rate_tolerance == 0`):
+      // quantise, measure the *real* frame, and while it overflows the nominal
+      // frame size scale lambda down by `min(0.9, rate/frame)` and quantise
+      // again. A frame that fits resets lambda to 120. This keeps the psy bit
+      // reservoir from draining: frames never exceed the nominal size, so
+      // `fill_level` stays positive and the model keeps asking for detail.
+      // The masking thresholds the intensity cost test compares against, one row
+      // per channel (`aac_is_encoding_err` reads `band0->threshold` and
+      // `band1->threshold`).
+      let thr : Array[Array[Double]] = []
+      for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        let row : Array[Double] = Array::make(num_swb, 0.0)
+        for b = 0; b < num_swb; b = b + 1 {
+          row[b] = psy_iter[ch].bands[b].threshold
+        }
+        thr.push(row)
+      }
       let sizes = self.psy.band_sizes()
       // One channel pair, one rate-control attempt: analyse, price and decide
       // noise on the left/right spectra first (`aacenc.c`'s order), then mix.
@@ -2389,7 +2414,7 @@ pub fn AacEncoder::encode_frame(
       let zeros : Array[Array[Int32]] = []
       let sfi : Array[Array[Int32]] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
-        let r = psy_results[ch]
+        let r = psy_iter[ch]
         // PNS runs around the search: mark noise-like bands, let the twoloop
         // rate loop price them, then decide which ones actually become noise.
         let mark = aac_pns_mark(

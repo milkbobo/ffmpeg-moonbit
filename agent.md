@@ -133,8 +133,8 @@
   重来，装得下复位 120——不要用 ABR 容差带那套，容差带会让 `fill_level` 持续
   失血、alloc 逐帧下降。
   AAC 强度立体声（§290，`aac_encode_config_with_is`）与 M/S 一起挪到了量化决策
-  之后（§291）：感知路径现在是 `psy → TNS →（每轮 λ：twoloop → PNS → 强度 →
-  M/S → 量化 → 写）`，分析读**左右谱**、量化读**混合后的谱**，与 `aacenc.c` 同序；
+  之后（§291）：感知路径现在是 `psy → TNS →（每轮 λ：analyze → twoloop → PNS →
+  强度 → M/S → 量化 → 写）`，分析读**左右谱**、量化读**混合后的谱**，与 `aacenc.c` 同序；
   简化路径仍先混合（它的每带标度因子就是从真正要编码的那份谱算出来的，
   §279/§280 的 29.045 dB 基线因此逐字节不变）。混合之所以必须**每轮重做**：
   噪声带随 λ 变，而 `apply_mid_side_stereo` 不能碰任一声道判成 `NOISE_BT` 的带
@@ -182,6 +182,19 @@
   `min(sf_L, sf_R)`），所以量化与写码流必须吃终值——`channel_data_psy` 收
   `final_sf`/`final_cb` 而不是 `AacTwoResult`。代价是右声道 IS 带的 `cb` 这时
   已经是 14/15，跳过量化的条件不能再写 `cb <= 0`。
+  ⑨ §297：`aacenc.c:916-945` 把整个 element 循环（**含 `analyze`**）放在码率重试的
+  `do { } while` 里，每轮还先重置 `bitres.alloc = -1` /
+  `bitres.bits = last_frame_pb_count / channels`，所以上游对需要重试的帧会分析两次，
+  第二次读到第一次写过的 `fill_level`/`linpow`。照搬要小心一件事：**严格分支
+  （`bit_rate_tolerance == 0`）在 `continue` 前不恢复 `sce->coeffs`**
+  （`memcpy(coeffs, pcoeffs, …)` 只在 ABR 分支里，`aacenc.c:1075-1089`），字面搬过去
+  等于每重试一次就把 IS/MS 混合再乘一遍。本移植的口径是
+  **ABR 的恢复语义 + 严格的 λ 规则**（`coefs` 保持干净左右谱，混合写在副本上），
+  只把「每轮重新分析」搬实——这是有意取舍，别当 bug 改回去。效果只有重试过的帧
+  看得到（per-frame 打印是唯一证据），感知路径 +0.49 dB。
+  ⑩ 回归集的取帧别用手工下标：`gen_aac_is_vectors.py` 的 `TAKE = (0,1,4,5)` 在
+  §295 插入新测试后悄悄指到了别的帧，同一条生成命令的强度带覆盖从 64 掉到 9，
+  而测试全绿。现在 `choose()` 按参考侧答出来的工具活跃度选帧。
   flip 带只写 `ms_mask` 位、不做 M/S 混合（上游 `apply_mid_side_stereo` 跳过
   所有 `is_mask` 带，符号翻转由解码器完成）。另有两条硬约束：IS 带写进
   码流的是**强度位置**（范围 `[-155,100]`，正负一样常见），所以

@@ -121,7 +121,14 @@ if self.config.channels == 2 && its == 0 && use_is {
    做成逐位模型（那会重写 energy/threshold/PE 整条链，并移动所有感知指标）。
    `aac_encode.mbt` 里 TNS 与简化路径的 `1.4/1.16/0.405/0.95` 不是 C 的操作数，
    是简化模型自己的常量，不用管。
-4. **§289 偏差 2**：λ 重试里上游会重新 `analyze`（本移植每帧只分析一次）。
+4. ~~**§289 偏差 2**~~ —— **§297 已闭环**：λ 重试每一轮重跑 `analyze`（第 0 轮沿用
+   帧首那次）。口径是**ABR 分支的恢复语义 + 严格分支的 λ 规则**——C 的严格分支
+   `continue` 前不 `memcpy(coeffs, pcoeffs)`，字面照搬会把 IS/MS 混合每重试一次
+   就再乘一遍，这条取舍写在 §297 里，别改回去。
+   **接着要做的是偏差 3 + 4，它们互相咬着**：`planned_max_sfb` 目前帧级固定，上游
+   每轮由 `adjust_frame_information` 从量化结果算；而要让 max_sfb 进循环，TNS
+   （偏差 4：现在在 twoloop/PNS 之前、每帧一次）也必须进循环，还要一份 `pcoeffs`
+   簿记。单独一轮做，顺序是先 TNS 进循环、再把 max_sfb 改成每轮算。
 5. `set_special_band_scalefactors` 上游是一轮里同时管 IS 位置和噪声
    `3+ceil(log2(pns_ener)*2)`，我们的噪声仍取 `search_for_pns` 的 `noise_sfi`
    （§288 的结论，别说改回去）。
@@ -174,6 +181,21 @@ if self.config.channels == 2 && its == 0 && use_is {
   `if window_sequence != 0 { continue }` 会让 §294 那条"噪声带数开不开 IS 都是
   81/78"变成 51/46。限定要贴在真正需要它的那几行上（这里只有 M/S 计数），
   别一把盖住整个循环。
+- **docker ffmpeg 不会覆盖已有输出**：`-f f32le /w/a_ref.f32` 撞到旧文件时它会问
+  `Overwrite? [y/N]`，非交互下直接**不写并退出**，而 docker 的退出码仍是 0 ——
+  于是你拿旧参考去比对新流，看到「差 0.07」还以为解码错了。`-y` 要放在
+  **ffmpeg 那一侧**（`docker run … --entrypoint ffmpeg … -y -i …`），写成
+  `docker run --rm -y …` 是非法 flag。同理：比对前先 `ls -la *_ref.f32` 看时间戳。
+- **回归夹具的选帧要用数据，不要用手工下标**：`gen_aac_is_vectors.py` 里
+  `TAKE = (0, 1, 4, 5)` 在 §295 加了新测试之后指到了别的帧，强度带覆盖从 64 掉到
+  9，**而所有测试仍然全绿**——指标被无声稀释。现在 `choose()` 读参考侧的
+  `ISBAND`/`MSBAND` 计数，挑「强度带最多 + M/S 最富」的四帧，并把选中的块号印出来。
+- **临时探针的收尾三步**（§297 又走了一遍）：`moon test --target wasm
+  libavcodec/aac_encode_vectors > .scratch/is_dump/enc.log` →
+  `python scripts/gen_aac_is_vectors.py <log>` → 摘探针后
+  `grep -c ISDUMP libavcodec/aac_encode.mbt` **必须归零**；再加一条硬度：
+  把 scratch dump 程序在摘探针前后各跑一次，`cmp` 两条 ADTS 必须相同，
+  这样外部对拍结论才落在要提交的实现上。
 - 其余照旧：`moon fmt` 禁跑、heredoc 禁用（往 C 源里写含 `"\n"` 的行会被 Python
   吃一层转义，写完必须 `grep` 验证）、清理走 `.trash/<日期>/`、
   每条 bash 显式 `cd`、`libavcodec` 包**不要再加白盒测试**（wasm init 的
