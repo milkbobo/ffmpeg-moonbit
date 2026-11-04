@@ -95,13 +95,21 @@
     scalefactor/组量化）；`decode_frame` 按帧头 `layer` 分派
 - **libavcodec（音频编码器，2026-11 新增）**：AAC-LC（`aac_encode.mbt`，
   §270-273）、MP2（`mpa_encode.mbt`，§274）、MP3（`mp3_encode.mbt` +
-  `mp3_enc_subband/mdct/loop/bitstream.mbt`，shine 3.1.1 移植，§275）。
+  `mp3_enc_subband/mdct/loop/bitstream.mbt`，shine 3.1.1 移植，§275）、
+  Opus（`opus_encode.mbt` + `opus_enc_rc/math/tables/celt/bands/alloc/psy/psy2.mbt`，
+  FFmpeg 原生 CELT-only 路径，§276）。
   MP3 的表来自编译后 C 参考的零转录 dump（`scripts/gen_mp3_enc_tables.sh`
   可重建 dumper/harness 并再生成表与夹具）；`calc_scfsi` 的 `mp3enc_ln`
   与 C 侧 `shine_ref_log` 必须保持同一段 IEEE 运算（libm log 跨平台位级
   不一致，截断后翻转 scfsi 判定）；子带缓冲按 C 的倒序填充（`for (i=32;i--;)`
   后缀自减——首个样本写入 x[off+31]）；位流 32 位缓存跨帧连续（帧尾不足
   一字的位是下一帧第一个字的高位）。
+  Opus 参考链路是 `_ref/opus/build_ref.sh`（给 `enc.c`/`enc_psy.c`/`pvq.c`/
+  `celt.c`/`rc.c` 打探针后链接静态库，`OPUS_DBG=1` 逐阶段 dump）；argv 的
+  帧数必须与夹具一致（1/12 帧的 psy 状态不同）；C 的 `bands_dist` 用
+  `int tdist` 逐带截断、`alloc_boost` 也是截断而非四舍五入——照抄上游，
+  不要"修正"成浮点/round；`ff_opus_rc_enc_end` 的 `end >> 23` 必须无符号
+  移位（有符号会在 bit31 置位时把 carry 减一）。
 - **libavformat（码流层接入）**：`rawaudio.mbt`（裸 ADTS/MP3 分帧，ID3v2/v1 +
   Xing/Info/VBRI）、`codec_tags.mbt`（MKV CodecID / MP4 fourcc 映射）、
   `codec_parameters.mbt`（容器 + extradata → 统一 `CodecParameters`）、

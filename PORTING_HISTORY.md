@@ -6867,3 +6867,63 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   与仓库 wasm-first 约定一致）。至此"音频编码：AAC + MP3 + Opus"清单中
   AAC（§270-273）与 MP3（本节）已交付，剩 Opus。
 - **下一阶段**：Opus（FFmpeg 原生 `opus/enc.c` 的 CELT/PVQ 编码路径）。
+
+## 276. Opus 编码：移植 FFmpeg 原生 `opus/enc.c` 的 CELT/PVQ 编码路径
+
+- **范围决定**：FFmpeg 9.0.2 的原生 Opus 编码器只有 CELT（`enc.c` +
+  `enc_psy.c` + `pvq.c` + `celt.c`），SILK/hybrid 不在编码侧范围内。
+  按仓库"纯移植、无外部 C 依赖"的约定，交付 CELT-only 编码器：
+  `libavcodec/opus_enc_rc.mbt`（range coder：前向 range 字节 + 反向
+  raw-bit 区、`tell/tell_frac`、checkpoint/rollback）+ `opus_enc_math.mbt`
+  （确定性 `ln/log2f/expf/atan2f/sinf/cosf`）+ `opus_enc_tables.mbt`
+  （band 表、窗、Bessel 系数、静态 caps 等）+ `opus_enc_celt.mbt`
+  （CeltFrame/Block、preemph、frame MDCT、coarse/fine/final 能量量化、tf）+
+  `opus_enc_bands.mbt`（`quant_band` 全模板：split/折叠/LCG、`alg_quant`
+  PVQ 搜索、`exp_rotation`、Haar/Hadamard、collapse mask）+
+  `opus_enc_alloc.mbt`（`ff_celt_bitalloc` + `ff_celt_quant_bands`）+
+  `opus_enc_psy.mbt`/`opus_enc_psy2.mbt`（step 采集、bessel 激励、
+  gauge/强度/双声道/tf 搜索、帧预算分配、postencode）+ `opus_encode.mbt`
+  （`OpusEncoder` 编排、lookahead 缓冲、TOC/包组装、OpusHead extradata）。
+- **验证**（`libavcodec/opus_encode_vectors/`，夹具由
+  `scripts/gen_opus_enc_vectors.py` 从 C 参考重新生成）：
+  - **v1 = 48 kHz 立体声 96 kbps，v2 = 48 kHz 单声道 48 kbps，各 12 帧
+    （13 个包，含尾部 1 字节静音包）与 C 参考逐字节一致（26/26 包）**。
+    参考链路见 `_ref/opus/build_ref.sh`：给 `enc.c`/`enc_psy.c`/`pvq.c`/
+    `celt.c`/`rc.c` 打探针后从静态库摘掉原对象重新链接，`OPUS_DBG=1`
+    输出逐阶段 dump（precoarse/coarse/tf/alloc/bands/bq/sp/aq/rx/pv/nf/
+    gauge/isearch/bc/tf/pr/end 等），`scripts/make_ogg_opus.py` 把包流
+    封装成 Ogg Opus 供外部解码验证。
+  - `linuxserver/ffmpeg:9.0.2` 对 Ogg Opus 输出 `-v error` 解码零告警；
+    同流参考解码器对源 SNR 16.6 dB（v1）/13.5 dB（v2），本仓库 Opus
+    解码器往返 15.7/13.0 dB（差 <1 dB）。
+  - 正式测试：byte-exact v1/v2、配置校验（声道数/样本不足拒绝）、
+    19 字节 OpusHead、两组解码往返 SNR 阈值 14.0/11.5 dB。
+- **关键坑**（全部为 C 语义与直译的偏差，均已双端验证）：
+  1. **`ff_opus_rc_enc_end` 的末位舍入必须无符号右移**：`end >> 23` 若先
+     `reinterpret_as_int()` 再做算术移位，`end` 的 bit31 置位时得到 -256
+     而不是 +256，carry 少 1（包内单个字节 0x44→0x42）。这个位在整帧
+     末尾，且不改变 `tell`/`end` 状态，最难从阶段 dump 上看出来。
+  2. **`bands_dist` 的 `tdist` 在 C 里是 `int`**（`int tdist = 0.0f;`）：
+     每条带的 float 距离先截断再加总。改成 Float 累加会让强度搜索的
+     距离曲线整体偏移 ~10，`is` 选择从第 6 帧起分叉。
+  3. **`alloc_boost` 是截断不是四舍五入**：`(int)((score/max)*3.0f)`，
+     用 `rintf` 会让部分带多 1 个 boost，直接改分配。
+  4. **非立体声 split 的 collapse mask 合并**：C 是
+     `cm |= cmt << ((B0 >> 1) & (stereo - 1))`，`stereo=0` 时
+     `stereo-1 == -1` 表示"不移位掩码"；写成 `& 1` 只移 0/1 位。
+  5. **level 0 收尾的 `av_zero_extend(cm, blocks)` 用的是时间分割后的
+     `B0 << recombine`**，不是 split 折半后的 `blocks`；否则高块被裁掉。
+  6. **折叠路径的 `effective_lowband` 必须按 C 的赋值条件填写**
+     （`lowband_offset != 0 && (spread != AGGRESSIVE || blocks > 1 ||
+     tf_change < 0)`），写死 -1 会让整条 folding 退化成 LCG 噪声。
+  7. **观测者效应**：探针循环变量一律用独立名字（`qi/gi/fj`），
+     复用 `i` 会改掉 C 后续循环的起点（曾让 fine 循环整个不执行）。
+- **边界**：只支持 FFmpeg 原生编码器默认配置——48 kHz、CELT-only、
+  `frame_size=960`（20 ms）、MONO/STEREO、FULLBAND；SILK/hybrid 不在
+  FFmpeg 原生编码器范围。与上游的显式偏差（双端一致）：确定性 libm
+  替换、直通 MDCT 替代 `av_tx` FFT（与真 `av_tx` 有 ~1 ulp 差异）、
+  Bessel 系数用 dump 而非 `tanf` 重算。native 目标未验证（本机无 MSVC，
+  与仓库 wasm-first 约定一致）。
+- **检查**：`moon check --target wasm --deny-warn` 干净；全量
+  `moon test --target wasm` **1382/1382** 通过（临时 dump/dev 测试已删除）。
+  至此"音频编码：AAC + MP2 + MP3 + Opus"清单全部交付。

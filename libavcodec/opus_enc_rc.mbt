@@ -67,9 +67,11 @@ pub fn OpusRangeEncoder::new() -> OpusRangeEncoder {
 }
 
 ///|
-/// `opus_rc_tell` (`rc.h`): `total_bits - log2(range) - 1`.
+/// `opus_rc_tell` (`rc.h`): `total_bits - av_log2(range) - 1`, and
+/// `av_log2(x) == opus_rc_ilog(x) - 1` for `x > 0`, hence the plain
+/// subtraction below.
 pub fn OpusRangeEncoder::tell(self : OpusRangeEncoder) -> Int32 {
-  self.total_bits - opus_rc_ilog(self.range) - 1
+  self.total_bits - opus_rc_ilog(self.range)
 }
 
 ///|
@@ -308,7 +310,7 @@ pub fn OpusRangeEncoder::end(
     end = (self.value + mask) & (mask ^ 0xFFFFFFFFU)
   }
   while bits > 0 {
-    self.carryout(end.reinterpret_as_int() >> 23)
+    self.carryout((end >> 23).reinterpret_as_int())
     end = (end << 8) & 0x7FFFFFFFU
     bits -= 8
   }
@@ -352,4 +354,71 @@ pub fn OpusRangeEncoder::end(
 /// Number of range-coded bytes currently in the buffer (for tests).
 pub fn OpusRangeEncoder::rng_bytes(self : OpusRangeEncoder) -> Int {
   self.rng_pos
+}
+
+///|
+/// `OPUS_RC_CHECKPOINT_SPAWN` / `ROLLBACK`: full encoder state snapshot.
+pub struct OpusEncRcSnapshot {
+  tell_frac : Int
+  value : UInt32
+  range : UInt32
+  total_bits : Int32
+  rem : Int32
+  ext : Int32
+  rng_pos : Int
+  raw_len : Int
+  rb_bytes : Int32
+  rb_cachelen : Int32
+  rb_cacheval : UInt32
+}
+
+///|
+pub fn OpusRangeEncoder::snapshot(self : OpusRangeEncoder) -> OpusEncRcSnapshot {
+  {
+    tell_frac: self.tell_frac(),
+    value: self.value,
+    range: self.range,
+    total_bits: self.total_bits,
+    rem: self.rem,
+    ext: self.ext,
+    rng_pos: self.rng_pos,
+    raw_len: self.raw.length(),
+    rb_bytes: self.rb_bytes,
+    rb_cachelen: self.rb_cachelen,
+    rb_cacheval: self.rb_cacheval,
+  }
+}
+
+///|
+pub fn OpusRangeEncoder::rollback(
+  self : OpusRangeEncoder,
+  s : OpusEncRcSnapshot,
+) -> Unit {
+  self.value = s.value
+  self.range = s.range
+  self.total_bits = s.total_bits
+  self.rem = s.rem
+  self.ext = s.ext
+  self.rng_pos = s.rng_pos
+  self.raw.truncate(s.raw_len)
+  self.rb_bytes = s.rb_bytes
+  self.rb_cachelen = s.rb_cachelen
+  self.rb_cacheval = s.rb_cacheval
+}
+
+///|
+/// `ff_opus_rc_enc_end` variant writing into `out[off..off+size]` for frame
+/// slot `slot` of a multi-frame packet.
+pub fn OpusRangeEncoder::end_frame(
+  self : OpusRangeEncoder,
+  _slot : Int,
+  out : Array[Byte],
+  off : Int,
+  size : Int,
+) -> Unit {
+  let dst : FixedArray[Byte] = FixedArray::make(size, b'\x00')
+  self.end(dst, 0, size)
+  for i in 0..<size {
+    out[off + i] = dst[i]
+  }
 }
