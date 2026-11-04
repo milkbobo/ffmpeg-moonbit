@@ -21,6 +21,18 @@
 
 **最希望得到回答的是 §5 的 5 个问题**，尤其是第 1 条（命令到底是 `bash -c` 还是 `bash -s`）。另外 §11 附了两条**真正属于 MoonBit 工具链侧**、证据完整的问题（wasm `externref` 2 GiB 地址误判、`__moonbit__init` 局部变量上限），若只想看与 MoonBit 相关的内容，可直接跳到 §11。
 
+**归因速览**（直接回答「是 Windows 的问题，还是写命令的人的问题」）：
+
+| 环节 | 归因 | 证据 |
+|---|---|---|
+| `\n` 变真换行、写坏文件 | **写脚本时字符串转义层数算错**（AI / 人都容易踩） | Python 字面量 `"printf(\"\n\")"` 生成 2 行文本（非法 C 字符串），`"printf(\"\\n\")"` 或 `chr(92)` 生成 1 行；而 bash 的 `<<'EOF'` / `<<EOF` 都**原样**传递 `\n`，不改写反斜杠 |
+| 结束符失配 | 同上：缩进、或上一层把内容改写 | 实测 H / C |
+| 从「报错」升级成「挂死」 | **非交互执行层不给 stdin 发 EOF** | G/H 对照；Linux 容器同样 124（§3.2 的 U1/U2） |
+| Windows / CRLF | **基本无关** | `EOF\r` 在 MSYS 文本模式下 `\r` 被吃掉（I `exit=0`）；Ubuntu 24.04 + bash 5.2.21 同样挂 |
+| MoonBit | **无关** | 无 `moon` 环境照样挂（N2） |
+
+所以这不是 Windows 缺陷，也不该简单归成「AI 模型写错了」：本质是**命令文本要穿过 JSON → shell → Python → C 字符串共 N 层解析**，每层的反斜杠语义不同，人写同样会错，AI 只是因为一次生成整条多层命令而更容易踩。用编辑工具（Write / Edit）写文件之所以根治，不是因为 heredoc 有毒，而是它把解析层数降到了 **0**——字节级原样落盘。项目里已有的 `chr(92)` 约定（`AGENT_HANDOFF_2026-10-27_AAC_SBR.md`）正是同一结论的另一种绕法。
+
 ---
 
 ## 1. 背景
@@ -50,7 +62,17 @@ EOF
 
 **典型症状**：C 源码里的 `printf("\n")` 变成跨两行的字符串字面量；Python 脚本报 `unterminated string literal`；文件里出现 NUL 字节。
 
-**诚实说明**：本轮**没有主动复现**这一类（项目已全面改用编辑工具写文件，不再走 heredoc）。上表是历史记录，不是本次实跑结果。我们想确认的是：转义处理发生在哪一层、能否提供 raw 透传模式（§5 第 2 条）。
+**本轮补充的机制复现**：我们没有再用 heredoc 跑完整的「写坏文件」链路（项目已全面改用编辑工具），但定位到了改写发生在哪一层：
+
+```python
+wrong = "printf(\"\n\")"                 # -> 'printf("\n")'，落盘 2 行 = 非法 C 字符串
+right = "printf(\"\\n\")"                # -> 'printf("\\n")'，落盘 1 行
+built = 'printf("' + chr(92) + 'n")'     # 同 right，完全绕开反斜杠字面量
+```
+
+而 bash 侧实测：`cat <<'Q'` 输出 `$X \n`（原样），`cat <<Q` 输出 `expanded \n`（只展开变量，`\n` 仍是字面两个字符）；Linux bash 同样原样。也就是说 **shell 和 Windows 都不改写 `\n`**，改写发生在**字符串字面量解析层**（Python / 命令传输的转义层数）。heredoc 只是恰好承载了这段脚本，因此背了锅。
+
+上表仍是历史记录而非本次全流程复现；我们想确认的是：命令传输层是否还会额外解一层转义、能否提供 raw 透传模式（§5 第 2 条）。
 
 ---
 
@@ -86,8 +108,12 @@ EOF
 | L | — | `moon check --target wasm --deny-warn` | 保持打开 6s | `exit=0`，`no work to do` |
 | N1 | 正确（末尾有 `exit`） | `bash -s`，**PATH 中无 `moon`** | 保持打开 6s | `exit=0` |
 | **N2** | **前带 2 空格（末尾有 `exit`）** | **`bash -s`，PATH 中无 `moon`** | **保持打开 6s** | **`exit=124`，照样挂死** |
+| U1 | 正确（末尾有 `exit`） | `bash -s`，**Linux / Ubuntu 24.04** | 保持打开 6s | `exit=0` |
+| **U2** | **前带 2 空格（末尾有 `exit`）** | **`bash -s`，Linux / Ubuntu 24.04** | **保持打开 6s** | **`exit=124`，同样挂死** |
 
 N1/N2 用 `env -i PATH=/usr/bin:/bin` 启动，`command -v moon` 返回 `NOT_FOUND`，环境中只有 bash + coreutils、**完全没有 MoonBit**。N2 仍挂起，说明现象②与 MoonBit 工具链无关，是 bash 自身行为。
+
+U1/U2 在 Docker `ubuntu:24.04`（Linux、GNU bash 5.2.21）里跑同一组命令，U2 同样 `exit=124`、U1 `exit=0`——**挂起是 POSIX shell 语义，不是 Windows / MSYS 特有**。同一容器里 `cat <<'Q'` 输出 `printf("\n") $HOME` 原样，Linux bash 也不改写反斜杠。
 
 ### 3.3 根因：三个条件必须同时成立
 
@@ -105,7 +131,7 @@ bash 读 heredoc 匹配不到结束符时，会把后面所有行都当成正文
 
 ### 3.4 几个反直觉的点
 
-- **CRLF 不是元凶**：`EOF\r` 在本机 Git Bash（cygwin 文本模式）下 `\r` 被吃掉，照常匹配（I）。真正容易失配的是缩进或内容被转义层改写。
+- **CRLF / Windows 不是元凶**：`EOF\r` 在本机 Git Bash（cygwin 文本模式）下 `\r` 被吃掉，照常匹配（I）；在 Linux Ubuntu 24.04 容器里 U2 同样 `exit=124`（§3.2），说明这是 POSIX shell 语义而非 Windows 特有。真正容易失配的是缩进或内容被上一层转义改写。
 - **`bash -s` 本身就会读到 stdin EOF**：第一版实验里连「结束符正确」也超时了，因为 `bash -s` 执行完脚本还会等下一条命令。必须在脚本末尾加 `exit` 才能把变量隔离开。这一点很容易把「shell 固有行为」误记成「heredoc bug」。
 - **`moon` CLI 不背这个锅**：K/L 显示 `moon version` 与 `moon check` 在 stdin 保持打开时都立即返回，不读 stdin、不因此挂起。挂起发生在 shell 解析阶段，此时 `moon` 进程尚未启动。
 
