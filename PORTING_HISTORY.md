@@ -7223,8 +7223,9 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 
 ## 283. AAC PNS：可行性勘察（第 1 步已落地，见 §284；其余未实现）
 
-- **⚠ 状态**：本条的六步清单里，**第 1 步（`mark_pns`）已在 §284 完成**，其余
-  （twoloop 三处、`search_for_pns`、码流、端到端、新夹具）仍未实现。
+- **⚠ 状态**：本条的六步清单里，**第 1 步（`mark_pns`）已在 §284 完成**；
+  第 2 步做过拆解试验并回退，结论见 §285（twoloop 的 PNS 关联比这里列的三处
+  更多，必须一次性全搬）。其余仍未实现。
 
 - **为什么单独记一条**：PNS 看起来只是"再加一个 aaccoder 函数"，实际是四个子系统
   联动，而且有一处反直觉的语义（下面第 1 条）。先把勘察结果写下来，避免下一轮重新
@@ -7299,7 +7300,48 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   现有 245 条 twoloop 黄金向量必须保持逐位一致（它们 `can_pns=0`）。
 - **检查**：`moon check --target wasm --deny-warn` 干净；`aac_pns_vectors` 1/1、
   `aac_psy_vectors` 3/3、`aac_twoloop_vectors` 3/3、`aac_encode_vectors` 9/9；
-  全量见下一条提交时的记录。
+  全量 **1392/1392** 通过。
+
+## 285. PNS 第 2 步的拆解试验（**代码已回退**，结论：不可拆）
+
+- **动机**：§283 把 twoloop 的 PNS 关联列成三处，想先搬"便宜"的两处
+  （`ff_pns_bits` 的 9/5 位进 `tbits`、`frame_bit_rate *= 1.15` 改 cutoff），
+  把 `its > maxits/2` 的 spread 排序置零块留到后面。
+- **做法**：给 `aac_twoloop_search_pns` 加 `AacTwoPns { can_pns, on }`（老入口
+  `aac_twoloop_search` 变薄封装，`can_pns` 全 0、`on=false`，保证 §278 的 245 条
+  黄金向量不受影响）；用 §284 的噪声夹具跑 `mark_pns → twoloop`，与 C 的
+  `--pns` 输出逐带比 `sf/cb/zeroes`。
+- **结果**：**177 / 245 带不一致**，集中在 scalefactor 差 1–2（码本大多相同），
+  说明只搬两处不够——预算轨迹从一开始就被 PNS 改变了。**已按惯例整体回退**
+  （`git checkout -- libavcodec/aac_twoloop.mbt` 与对应测试），避免留下一个
+  "接口在、结果不对"的半成品。
+- **原因（把 C 源码重新扫了一遍）**：`can_pns` 不止影响那三处，还进入**初始
+  band 设置**（`aaccoder_twoloop.h:248`）：
+
+  ```c
+  if (nz && sce->can_pns[w*16+g]) {
+      spread_thr_r[w*16+g] = energy * nz / (uplim * spread);
+      /* 同时维护 min_spread_thr_r / max_spread_thr_r */
+  }
+  ```
+
+  这两个全局量后面喂给 `uplmax`（:590）和排序置零块（:500-590），
+  还有 `pns_start_pos`（:201）与 `euplims`。换句话说：**PNS 从"算初始失真上界"
+  那一刻起就在改 twoloop 的轨迹**，不是最后才介入。所以第 2 步必须一次性把
+  初始设置 + 两处位计数 + 排序置零块全搬，然后一起对拍；分批搬必然得到
+  "差 1 个 sf"这种最难定位的偏差。
+- **保留下来的东西**（代码没白写）：
+  - `scripts/gen_aac_pns_vectors.py` 现在会一并生成 `--pns` 模式的
+    `TWOBAND` 结果（fixtures 里 `aac_pns_ref_sf` / `_cb` / `_zero`，
+    5 帧 × 49 带）——下一轮实现完直接照着写断言即可。
+  - `--pns` 模式下 C 的 `TWOPARM` 证实 cutoff 从 743 变 **770**（1.15 系数生效），
+    与 §284 的 psy 粘性 cutoff 结论对上了。
+- **检查**：回退后 `aac_pns_vectors` 1/1 + `aac_twoloop_vectors` 3/3 +
+  `aac_psy_vectors` 3/3 复验绿（合计 7/7）；`moon check --target wasm
+  --deny-warn` 干净。本条只改文档、生成器与夹具数据，**代码与 §284 提交时
+  逐字节相同**，全量沿用该次 **1392/1392** 结果（本轮两次全量都撞上已知的
+  编译期挂死，日志停在 56 KB 不再增长，已按工具坑记录杀掉）。
+
 
 
 

@@ -36,9 +36,11 @@ def run():
 
 def parse(lines):
     specs, cans, eners = [], [], []
+    sfs, cbs, zeros = [], [], []
     cur_spec = None
     cur_can = None
     cur_ener = None
+    cur_sf, cur_cb, cur_zero = None, None, None
     for line in lines:
         parts = line.split()
         if not parts:
@@ -52,19 +54,30 @@ def parse(lines):
                 cur_can, cur_ener = [], []
             cur_can.append(int(parts[2]))
             cur_ener.append(float(parts[3]))
+        elif parts[0] == "TWOBAND":
+            if cur_sf is None:
+                cur_sf, cur_cb, cur_zero = [], [], []
+            cur_sf.append(int(parts[2]))
+            cur_cb.append(int(parts[3]))
+            cur_zero.append(int(parts[4]))
         elif parts[0] == "END":
-            if cur_spec is None or cur_can is None:
+            if cur_spec is None or cur_can is None or cur_sf is None:
                 sys.exit("incomplete frame")
             specs.append(cur_spec)
             cans.append(cur_can)
             eners.append(cur_ener)
+            sfs.append(cur_sf)
+            cbs.append(cur_cb)
+            zeros.append(cur_zero)
             cur_spec = cur_can = cur_ener = None
+            cur_sf, cur_cb, cur_zero = None, None, None
     if len(specs) != NFRAMES:
         sys.exit("expected %d frames, got %d" % (NFRAMES, len(specs)))
-    for c in cans:
-        if len(c) != NBANDS:
-            sys.exit("expected %d bands, got %d" % (NBANDS, len(c)))
-    return specs, cans, eners
+    for rows, name in ((cans, "can"), (sfs, "sf"), (cbs, "cb"), (zeros, "zero")):
+        for row in rows:
+            if len(row) != NBANDS:
+                sys.exit("%s: expected %d bands, got %d" % (name, NBANDS, len(row)))
+    return specs, cans, eners, sfs, cbs, zeros
 
 
 def fmt_double(v):
@@ -80,7 +93,7 @@ def fmt_array(rows, conv):
 
 def main():
     lines = run()
-    specs, cans, eners = parse(lines)
+    specs, cans, eners, sfs, cbs, zeros = parse(lines)
     os.makedirs(OUT_DIR, exist_ok=True)
 
     header = (
@@ -115,6 +128,16 @@ def main():
     body.append(fmt_array(eners, fmt_double))
     body.append("]")
     body.append("")
+    for name, rows, typ in (
+        ("aac_pns_ref_sf", sfs, "Int"),
+        ("aac_pns_ref_cb", cbs, "Int"),
+        ("aac_pns_ref_zero", zeros, "Int"),
+    ):
+        body.append("///|")
+        body.append("pub let %s : Array[Array[%s]] = [" % (name, typ))
+        body.append(fmt_array(rows, lambda v: str(int(v))))
+        body.append("]")
+        body.append("")
 
     with open(os.path.join(OUT_DIR, "fixtures.mbt"), "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(body))
