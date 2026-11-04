@@ -7101,6 +7101,10 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `python _ref/aacenc/compare_encoder_input.py`（退出码 0 = 全一致）。
 - **已知偏差**（相对 `aacenc.c`，按影响排序）：
   1. psy 分析的是 M/S 之后的谱；FFmpeg 分析 L/R，量化之后才做 M/S。
+     **已实测过**把分析挪到 M/S 之前：21.42 dB vs 21.48 dB（帧长 353 vs 356
+     字节），没有差别，因此保留"看 M/S"的顺序——它自洽（sf 按实际编码的谱选），
+     而且单独前移只会让 twoloop 拿 L/R 的阈值去量化 M/S 谱，制造 FFmpeg 没有的
+     新偏差。要真正复刻必须连"量化完成后再做 M/S"一起改。
   2. psy ctx 每声道一份，`fill_level` / `pe.min/max` 不共享；FFmpeg 是单 ctx +
      声道数组。
   3. psy 每帧只分析一次；FFmpeg 的 λ 重试循环每次迭代都重新 `analyze`
@@ -7108,12 +7112,45 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   4. `planned_max_sfb` 取 psy `bits > 0` 的最后一带（帧级固定）；FFmpeg 由 twoloop
      的 `max_sfb` 决定。这里固定是为了让 TNS 的 `mmm` 与解码端
      `aac_apply_tns` 一致。
-- **要把感知路径转正，只剩两个决定**（都不是 bug）：
-  1. 是否复刻 FFmpeg 的 psy 输入顺序（L/R 分析 + 量化后才 M/S），代价是丢掉
-     "sf 按实际编码的谱选"这个更自洽的性质。
-  2. 是否接受 SNR 指标下降换掩蔽整形。仓库目前没有感知指标（PEAQ/ODG 之类），
-     只有 SNR/PSNR，而这两个指标天然偏向 §271 的"填满预算"策略。
+- **要把感知路径转正，只剩一个决定**：是否接受 SNR 指标下降换掩蔽整形。仓库目前
+  没有感知指标（PEAQ/ODG 之类），只有 SNR/PSNR，而这两个指标天然偏向 §271 的
+  "填满预算"策略。要么引入客观感知指标来定论，要么就维持 opt-in 并在 README 写清
+  "感知路径 SNR 更低是设计使然"。
 - **检查**：`moon check --target wasm --deny-warn` 干净；`libavcodec/aac_encode_vectors`
   **7/7**（新增 `aac_lc_perceptual_rate_control` 覆盖感知路径：解码、单帧
   ≤6144×声道、均值不超名义码率、SNR>18 dB）；全量 `moon test --target wasm`
   **1389/1389** 通过。
+
+## 280. AAC 编码器：用噪声-掩蔽比对两条码率控制做取舍
+
+- **动机**：§279 留下一个悬而未决的问题——感知路径 SNR 低约 10 dB，但这未必意味着
+  更差，因为 3GPP 模型的目标是"把噪声压到掩蔽阈值以下"，不是最小化平方误差。
+  仓库里只有 SNR/PSNR，两者都天然偏向"把预算烧完"的 §271 策略，需要一个模型自己
+  的度量来判。
+- **做法**（`libavcodec/aac_encode_vectors/`，新测试 `aac_lc_noise_to_mask`）：
+  - 同一段夹具（8 帧四音 + 抖动 + 静音 flush）分别用两条路径编码、解码；
+  - 对每个稳态帧取 2048 点重叠窗（原始 / 解码后各一份），用
+    `AacEncoder::spectrum`（本次新增的公开访问器：正弦窗 + 65536 缩放 MDCT，
+    与编码器内部完全同一条路径）得到两套谱；
+  - 用 `aac_psy_new(...).analyze(原始谱)` 取每带 `threshold`；
+  - 每带噪声 = Σ(解码谱 − 原始谱)²，NMR = 10·log10(噪声 / 阈值)，对所有带取均值。
+    负值表示噪声压到掩蔽以下。
+- **结果**（44100 Hz / 128 kbps / 2 声道，帧 2–7、两声道）：
+
+  | 路径 | 码率 | 谱 SNR | 平均 NMR |
+  |---|---|---|---|
+  | 简化模型（§271，默认） | 117.1 kbps | 31.58 dB | **14.45 dB** |
+  | 3GPP + twoloop（§279，可选） | 122.7 kbps | 21.56 dB | **12.88 dB** |
+
+  即：感知路径用多约 5% 的码率换来 **1.6 dB 更低的噪声-掩蔽比**，代价是 10 dB 的
+  谱 SNR。两条路径的 NMR 都是正值（噪声仍在阈值之上 12–14 dB），说明在 128 kbps
+  这个码率、这种极度音调化的输入下，两条路径都做不到透明——差别只在"离掩蔽多近"。
+- **结论**：取舍是真实的但幅度不大（1.6 dB），不足以支撑把默认路径换掉；维持
+  opt-in 是正确的。若将来引入真正的感知指标（PEAQ/ODG），这条测试就是现成的
+  回归护栏：`assert_true(nmr_perceptual < nmr_plain)` 会挡住任何把 psy 分配的
+  优势做没了的改动。
+- **副产品**：`AacEncoder::spectrum` 现在是公开 API——测试要用"与量化器同一域"的谱
+  才能把噪声和阈值放在同一把尺子上，重新实现一遍窗与 MDCT 只会引入偏差。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`libavcodec/aac_encode_vectors`
+  **8/8**；全量 `moon test --target wasm` **1390/1390** 通过。
+

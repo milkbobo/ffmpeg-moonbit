@@ -795,3 +795,127 @@ test "aac_lc_perceptual_rate_control" {
   assert_true(4 * (total / stream.length()) >= 3 * target)
   assert_true(snr > 18.0)
 }
+
+///|
+/// Per-band noise-to-mask ratio of a decoded stream against the 3GPP model's
+/// own thresholds: for each steady frame, take the 2048-sample overlap window
+/// of the original and of the decoded signal, put both through the encoder's
+/// long-window spectrum, and compare the per-band error with the threshold the
+/// model computes for the original. Negative means the quantisation noise sits
+/// below the masking threshold (inaudible by the model's own yardstick).
+///
+/// Returns `(mean nmr in dB, whole-frame spectral snr in dB)`.
+fn aac_encode_test_nmr(
+  enc : @libavcodec.AacEncoder,
+  input : Array[Array[Double]],
+  decoded : Array[Array[Double]],
+  channels : Int32,
+  frames : Int32,
+  offsets : Array[Int32],
+  num_swb : Int32,
+  rate : Int32,
+  bit_rate : Int32,
+) -> (Double, Double) {
+  let mut nmr_sum = 0.0
+  let mut nmr_n = 0
+  let mut energy = 0.0
+  let mut noise = 0.0
+  for ch = 0; ch < channels; ch = ch + 1 {
+    let psy = @libavcodec.aac_psy_new(4, rate, bit_rate, channels)
+    for f = 2; f < frames; f = f + 1 {
+      let orig : Array[Double] = Array::make(2048, 0.0)
+      let recon : Array[Double] = Array::make(2048, 0.0)
+      for i = 0; i < 1024; i = i + 1 {
+        orig[i] = input[ch][(f - 1) * 1024 + i]
+        orig[1024 + i] = input[ch][f * 1024 + i]
+        // The decoder emits one priming frame, so tone frame f is block f+1.
+        recon[i] = decoded[ch][f * 1024 + i]
+        recon[1024 + i] = decoded[ch][(f + 1) * 1024 + i]
+      }
+      let want = enc.spectrum(orig)
+      let got = enc.spectrum(recon)
+      let bands = psy.analyze(want, 0).bands
+      for g = 0; g < num_swb; g = g + 1 {
+        let thr = bands[g].threshold
+        if thr <= 0.0 {
+          continue
+        }
+        let mut band_noise = 0.0
+        for i = offsets[g]; i < offsets[g + 1]; i = i + 1 {
+          let d = got[i] - want[i]
+          band_noise = band_noise + d * d
+          energy = energy + want[i] * want[i]
+          noise = noise + d * d
+        }
+        nmr_sum = nmr_sum + 10.0 * @math.log10(band_noise / thr)
+        nmr_n = nmr_n + 1
+      }
+    }
+  }
+  let snr = 10.0 * @math.log10(energy / noise)
+  (nmr_sum / nmr_n.to_double(), snr)
+}
+
+///|
+/// Which of the two rate controls puts the quantisation noise closer to the
+/// model's masking thresholds. The simplified model maximises SNR (it spends
+/// the whole frame budget on finer quantisation), the 3GPP path spreads the
+/// noise under the mask — so the two trade off, and a plain SNR comparison
+/// cannot tell which is perceptually better. This measures the yardstick the
+/// model itself optimises.
+test "aac_lc_noise_to_mask" {
+  let channels = 2
+  let rate = 44100
+  let frames = 8
+  let bit_rate = 128000
+  // ff_swb_offset_1024[4]: the 49 long bands of 44.1 kHz.
+  let offsets : Array[Int32] = [
+    0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 108,
+    120, 132, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336,
+    352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 528, 544, 560, 576,
+    592, 608,
+  ]
+  let num_swb = 49
+  let input = aac_encode_test_tone(rate, channels, frames)
+  let plain = aac_encode_test_stream(input, channels, frames, rate, bit_rate)
+  let perceptual = aac_encode_test_stream_config(
+    input,
+    channels,
+    frames,
+    @libavcodec.aac_encode_config_perceptual(rate, channels, bit_rate),
+  )
+  let dec_plain = aac_encode_test_decode(plain, channels)
+  let dec_perceptual = aac_encode_test_decode(perceptual, channels)
+  let enc = aac_encode_test_ok(
+    @libavcodec.aac_encoder_new(
+      @libavcodec.aac_encode_config(rate, channels, bit_rate),
+    ),
+  )
+  let (nmr_plain, snr_plain) = aac_encode_test_nmr(
+    enc, input, dec_plain, channels, frames, offsets, num_swb, rate, bit_rate,
+  )
+  let (nmr_perceptual, snr_perceptual) = aac_encode_test_nmr(
+    enc,
+    input,
+    dec_perceptual,
+    channels,
+    frames,
+    offsets,
+    num_swb,
+    rate,
+    bit_rate,
+  )
+  println(
+    "noise-to-mask: simplified mean=\{nmr_plain} dB (spectral snr \{snr_plain}); perceptual mean=\{nmr_perceptual} dB (spectral snr \{snr_perceptual})",
+  )
+  // Both streams decode and both keep the noise within a sane distance of the
+  // mask. (A NaN fails both bounds, so these also guard the measurement.)
+  assert_true(nmr_plain > -100.0 && nmr_plain < 40.0)
+  assert_true(nmr_perceptual > -100.0 && nmr_perceptual < 40.0)
+  // The finding §280 records: the 3GPP path trades ~10 dB of SNR (->
+  // 21.6 vs 31.6 dB) for ~1.6 dB lower noise-to-mask (12.9 vs 14.5 dB). The
+  // margin is small but it is the metric the model optimises, so it is the
+  // right regression guard: if a change breaks the psy allocation the noise
+  // climbs back above the simplified model's.
+  assert_true(nmr_perceptual < nmr_plain)
+}

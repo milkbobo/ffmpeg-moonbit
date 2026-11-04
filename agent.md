@@ -104,7 +104,10 @@
   帧走 psy→twoloop→λ 严格重试，过渡/短窗仍走简化模型；**默认不启用**，因为感知
   路径在本仓库的音调夹具上比默认路径低约 8 dB SNR——该差距已用
   `_ref/aacenc/aac_ref.exe --in` 交叉验证：同一份输入下 C 与本移植 98/98 带逐位
-  一致，属 3GPP 模型在该码率下的固有行为，不是移植问题）。
+  一致，属 3GPP 模型在该码率下的固有行为，不是移植问题）。§280 用模型自身的
+  噪声-掩蔽比把取舍量化了：感知路径 12.88 dB vs 默认 14.45 dB（谱 SNR 21.6 vs
+  31.6 dB），即用 10 dB SNR 换 1.6 dB 掩蔽余量——所以维持 opt-in。
+  `AacEncoder::spectrum` 是为此新增的公开访问器（与编码器内部同一条窗 + MDCT）。
   AAC psy 的 C 参考是 `_ref/aacenc/`（`bash build.sh && ./aac_ref.exe > vectors.txt`
   → `python scripts/gen_aac_psy_vectors.py`）；`psy_3gpp_init` 的
   `coeffs[g+1].barks - coeffs->barks` 减的是 `coeffs[0].barks`（累积宽度），

@@ -375,6 +375,20 @@ fn AacEncoder::frame_coefficients(
 }
 
 ///|
+/// The spectrum of one 2048-sample overlap buffer exactly as the encoder forms
+/// it for a steady long frame (sine window plus the 65536-scaled MDCT kernel).
+///
+/// Exposed so tests can measure a decoded frame's error in the same domain the
+/// psy model and the quantiser use — a noise-to-mask comparison is only
+/// meaningful against the thresholds of the original spectrum.
+pub fn AacEncoder::spectrum(
+  self : AacEncoder,
+  buf : Array[Double],
+) -> Array[Double] {
+  self.frame_coefficients(buf, aac_only_long)
+}
+
+///|
 /// Attack detector of FFmpeg's `aacpsy.c` `psy_lame_window`: the high-passed
 /// energy of each 128-sample subblock is compared with the channel's sliding
 /// energy average (`sum2 / 64`, i.e. one eighth of the frame mean, so the
