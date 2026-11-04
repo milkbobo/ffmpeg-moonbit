@@ -97,7 +97,15 @@
   §270-273）、MP2（`mpa_encode.mbt`，§274）、MP3（`mp3_encode.mbt` +
   `mp3_enc_subband/mdct/loop/bitstream.mbt`，shine 3.1.1 移植，§275）、
   Opus（`opus_encode.mbt` + `opus_enc_rc/math/tables/celt/bands/alloc/psy/psy2.mbt`，
-  FFmpeg 原生 CELT-only 路径，§276）。
+  FFmpeg 原生 CELT-only 路径，§276）、AAC 3GPP 心理声学模型
+  （`aac_psy.mbt` + `aac_psy_vectors/`，§277：独立可验证层，未接入 `aac_encode.mbt`）。
+  AAC psy 的 C 参考是 `_ref/aacenc/`（`bash build.sh && ./aac_ref.exe > vectors.txt`
+  → `python scripts/gen_aac_psy_vectors.py`）；`psy_3gpp_init` 的
+  `coeffs[g+1].barks - coeffs->barks` 减的是 `coeffs[0].barks`（累积宽度），
+  写成相邻带差会让 min_snr 全掉到 -25 dB 下限；`calc_reduced_thr` 是
+  `(sqrt(sqrt(thr)) + reduction)^4`；参考 harness 的 `bitres.bits=0` 使
+  `fill_level` 恒 4656，真正跨帧演化的是 alloc/entropy/pe.min-max/prev_band。
+  `TWOBAND` 的 245 条向量已在夹具里，是 twoloop 量化器下一片的对拍目标。
   MP3 的表来自编译后 C 参考的零转录 dump（`scripts/gen_mp3_enc_tables.sh`
   可重建 dumper/harness 并再生成表与夹具）；`calc_scfsi` 的 `mp3enc_ln`
   与 C 侧 `shine_ref_log` 必须保持同一段 IEEE 运算（libm log 跨平台位级

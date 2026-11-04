@@ -6927,3 +6927,57 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - **检查**：`moon check --target wasm --deny-warn` 干净；全量
   `moon test --target wasm` **1382/1382** 通过（临时 dump/dev 测试已删除）。
   至此"音频编码：AAC + MP2 + MP3 + Opus"清单全部交付。
+
+## 277. AAC 编码器：3GPP 心理声学模型（`aacpsy.c`）与算法参考工具链
+
+- **动机**：§271 的 AAC-LC 编码器用的是简化心理声学（带能量 + 上扩 + 固定 SNR aim）
+  与"整帧单标度因子 + 全局 delta 二分"，和 FFmpeg `aacenc` 的
+  `psy_3gpp_analyze` + `search_for_quantizers_twoloop` 两遍码率控制差距最大。
+  本片先把 `aacpsy.c` 的 3GPP 模型原样移植、独立对拍，作为后续接入的可验证层；
+  不改动 `aac_encode.mbt` 的任何输出。
+- **C 参考工具链** `_ref/aacenc/`（纯参考，gitignored）：不经过 avcodec 公共 API，
+  直接以 MinGW-W64 gcc `-O1` 编译 FFmpeg 9.0.2 的 `aacpsy.c` / `aaccoder.c` /
+  `aaccoder_twoloop.h` / `aactab.c`（`patch.py` 用精确字符串替换 + assert 锚点
+  注入导出变量，`build.sh` 摘除可能冲突的静态库对象后链接），`aac_ref.exe`
+  对 5 帧 × 1024 点确定性合成谱输出 510 行 `vectors.txt`：
+  `PSYALLOC` / 49 行 `PSYBAND` / 49 行 `TWOBAND`。复现：
+  `bash _ref/aacenc/build.sh && ./aac_ref.exe > vectors.txt`。
+  夹具由 `scripts/gen_aac_psy_vectors.py` 转成 `fixtures.mbt`。
+  工具链的简化与字段出处逐条记在 `_ref/aacenc/README.md`。
+- **MoonBit 侧** `libavcodec/aac_psy.mbt`：`psy_3gpp_init` 的长/短窗静态系数
+  （Bark、spread 系数、min_snr、ATH）、`calc_thr_3gpp`（能量 / form factor /
+  nz_lines）、双向阈值与能量扩散、预回声控制（`prev_band.thr_quiet`）、
+  `calc_bit_demand`（比特池 + 自适应的 `pe.min/max`）、`calc_pe_3gpp`、
+  reduction 两轮估计、`calc_reduced_thr_3gpp`、avoid-holes 选择、
+  linearization 与高频 PE 削减，最后发布 `FFPsyBand` 并提交跨帧状态。
+  上下文由 `aac_psy_new(sampling_index, sample_rate, bit_rate, channels)` 构造，
+  每帧调 `analyze(coefs, prev_bits)`；`prev_bits` 对应 `bitres.bits`，
+  显式留参以便日后接比特流写入器。
+- **验证**（`libavcodec/aac_psy_vectors/`，黑盒 3 项）：44100 Hz / 128 kbps /
+  2 声道、ONLY_LONG 49 带、5 帧连续分析，`alloc` / `fill_level` / 每带 `bits`
+  **逐位一致**，energy / spread / entropy 相对误差 ≤1e-5，threshold ≤5e-4；
+  另有跨帧预回声状态与有限阈值测试。C 全程 `float`、本移植用 `Double` +
+  libm 边界 f32 舍入，frame 4 band 0 恰好落在 reduction/linearization 边界，
+  1 ulp 被放大到约 1e-4 相对，故 threshold 单独放宽到 5e-4。
+- **关键坑**（都是 C 语义与直译的偏差）：
+  1. `psy_3gpp_init` 的 `coeffs[g+1].barks - coeffs->barks` 里 `coeffs` 是
+     **数组指针**，减的是 `coeffs[0].barks`（从 0 号带起的累积 Bark 宽度），
+     不是相邻带差。写成相邻差会让所有 `min_snr` 掉到 -25 dB 下限，
+     reduction 整段失效。
+  2. `calc_reduced_thr_3gpp` 是 `(sqrt(sqrt(thr)) + reduction)^4`
+     （C 连做两次 `sqrtf`、两次自乘），不是混合根相乘。
+  3. `en_spread_hi` 的上游判据把 bits/s 的 `chan_bitrate` 与 `22`（kbps）比较，
+     对任何真实 ABR 码率恒选 `HI_L1`；照抄上游，不"修正"单位。
+  4. 谱输入必须用 f64 的 `sin/cos` 算完再**强转 f32**；psy 内部每个
+     `log2f/exp2f/exp10f` 结果都存进 `float`，移植侧须在 libm 边界舍入一次。
+  5. 参考 harness 的 `bitres.bits = 0`（每帧），`fill_level` 被
+     `av_clip(..., 0, bitres.size)` 钳成恒 4656；真正演化的跨帧状态是
+     `bitres.alloc`、`entropy`、`pe.min/max` 与 `prev_band`。
+- **边界**：只覆盖单长窗（`num_windows = 1`、`ONLY_LONG_SEQUENCE`、49 带）、
+  ABR（无 QSCALE）、PNS/TNS/IS/M-S 全关、无块切换；短窗系数表虽在 `init`
+  里构建，但 `analyze` 不走。合成谱输入，未跑 PCM→MDCT。
+  **本片是独立可验证层，尚未接入 `aac_encode.mbt`**；夹具里已备好的
+  245 条 `TWOBAND` 参考（twoloop 量化器的 sf_idx / band_type / zeroes /
+  maxval）是下一片的对拍目标。
+- **检查**：`moon check --target wasm --deny-warn` 干净；全量
+  `moon test --target wasm` **1385/1385** 通过。
