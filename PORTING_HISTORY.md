@@ -8610,3 +8610,35 @@ FFmpeg 真正注册的窗型决策——`psy_lame_window` 的 `uselongblock` 判
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1421/1421**。
   §304 的三条文档化偏差收口其一（①窗型状态机）；剩余：②CPE `common_window=0`
   分叉、④`la==NULL` flush 路径。
+
+## 308. 短窗 NMR 悬案的第三方裁决：真实 ffmpeg 原生编码器对拍（opt-in 定案）
+
+§303 以来的悬案：短窗感知臂 NMR 恒劣于简化臂（14.03 vs 12.74 dB @128k），无法区分
+「移植缺陷」与「FFmpeg 短窗路径固有行为」。本轮引入第三方裁判——用 docker
+`linuxserver/ffmpeg:9.0.2` 的**原生 AAC 编码器**编同一 transient 夹具（int16 WAV，
+128k/64k 两组），解码回 f64 后在**同一把尺**（本仓库 psy 模型的逐带噪声-掩蔽比）
+上三方对拍，并把结论固化为正式回归测试。
+
+- **裁决数据**：128k——简化臂 12.74 / 感知臂 14.03 / **FFmpeg 原生 14.41**；
+  64k——18.18 / 20.19 / **18.56**。逐带（128k）：FFmpeg low 12.96 / mid 17.63 /
+  high 12.19，与感知臂（13.67/17.43/10.24）互有胜负、均值差 <0.4 dB（128k 感知臂
+  还略好）；64k 差 1.63 dB（位预算紧时 trellis 层 §271 简化、noise-sf 公式 §288
+  等文档化偏差的残差量级）。
+- **结论**：①「感知短窗臂劣于简化臂」是 **FFmpeg psy+twoloop 短窗路径的固有行为**
+  ——连原生编码器在这把尺上也劣于「八窗当一个 1024 线帧、每带独立 sf」的简化模型
+  （后者完全不做感知决策，NMR/SNR 双赢但语义与 FFmpeg 无关）。`perceptual_short`
+  的 opt-in 由此**定案**：它选的是「FFmpeg 语义」（窗型/分组/工具逐位对齐、可对拍
+  可复现），不是「更优 NMR」——该取舍已写进测试注释与 §289 能力总览的口径。
+  ②本移植感知臂与原生编码器同量级（两码率差 <1.7 dB、128k 反超），短窗感知路径
+  的移植质量获得第三方背书。
+- **正式测试**（`aac_encode_vectors/aac_ffmpeg_ref_test.mbt` +
+  `fixtures_ff_ref.mbt`）：内嵌 ffmpeg 的 ADTS 流与 f64 解码（各 9 帧），断言
+  (a) 原生流可被本仓库解码器逐帧解码（1024 样本/帧）；(b) |感知臂 − ffmpeg| < 2.0 dB
+  （两码率）；(c) ffmpeg 也劣于简化臂 ±2 dB（固有序。全确定性：夹具/流/解码全内嵌，
+  尺子是 f32 确定性 psy）。
+- **踩坑**（写进了测试注释）：①FIL 元素**没有** element_instance_tag——规范是
+  id(3)+count(4)+esc+payload，套用 SCE 的 tag(4) 会错位 4 位（ffmpeg 首帧带
+  `put_bitstream_info` 的版本字符串 fill，count=namelen=14）；②本仓库 ffmpeg.exe
+  是无 file 协议的定制构建，外部对拍一律走 docker。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1422/1422**（新增
+  裁决测试 1 条）。§304 交接清单三项（工具多组化、窗型对拍、NMR 分析）全部收口。

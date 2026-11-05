@@ -312,6 +312,13 @@
   口径；两通道一致时与 C per-channel 机逐位同），`AacEncoder.lame_pair_seq` 承载；
   其余路径保留旧机。steady 夹具因 10.0 初始峰值开跑即一次短窗运行（与 FFmpeg
   同输入一致）。NMR 复测仍劣（12.07/17.28 vs 9.75/15.62），opt-in 不变。
+  ⑱ §308 NMR 悬案第三方裁决：docker ffmpeg 9.0.2 原生编码器编同夹具
+  （fixtures_ff_ref.mbt 内嵌流+解码），同一把 psy 逐带尺上三方对拍——128k
+  简化 12.74/感知 14.03/原生 14.41，64k 18.18/20.19/18.56。「感知臂劣于简化臂」
+  是 FFmpeg 短窗固有行为（原生也劣），opt-in 定案（选 FFmpeg 语义而非更优
+  NMR）；感知臂与原生差 <1.7 dB（128k 反超）= 移植质量背书。
+  `aac_ffmpeg_ref_test.mbt` 固化断言。FIL 元素无 element_instance_tag
+  （id+count 直连，首帧 count=14 版本串）。
   ⑰ §306 立体声对八短窗形态（短窗工具链收口）：`aac_is_search`/`aac_ms_search`
   按 `w += group_len[w]` 分组——IS 的能量门组内求和、逐窗按各自 psy band 定价但
   sf/cb 取组起点槽，`freq_mult` 分母是 `1024/num_windows`；MS 的 Mmax/Smax 取全组
