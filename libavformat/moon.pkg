@@ -4,3 +4,8 @@ import {
   "moonbitlang/core/double",
   "moonbitlang/core/string",
 }
+
+import {
+  "ffmpeg/moonbit/libavformat/probe_vectors",
+  "moonbitlang/core/math",
+} for "test"

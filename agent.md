@@ -319,6 +319,15 @@
   NMR）；感知臂与原生差 <1.7 dB（128k 反超）= 移植质量背书。
   `aac_ffmpeg_ref_test.mbt` 固化断言。FIL 元素无 element_instance_tag
   （id+count 直连，首帧 count=14 版本串）。
+  ⑳ §310 统一播放 API 骨架（申报书①第一期，音频线）：`libavformat/playback.mbt`——
+  `MediaFile::open`（probe→分发 MP4/MKV/WebM/Ogg/WAV 四适配器，MP4 样本按 stco 切片
+  跨轨 DTS K 路归并）→ `StreamInfo` 表（codec_id 统一 FFmpeg 名）→ `next_packet`
+  → `AudioDecoder::open/decode`（aac=from_asc、opus=head、pcm_s16 直解释），
+  `MediaError` 闭合分类 + `message()`，failable API 用 raise 风格。黑盒 5 测：
+  WebM/Opus、Ogg/Opus、WAV/PCM（解出 PCM 与 data 块逐字节同）、MKV/AAC（本仓
+  编码器现做→mux→facade→解码 60.3 dB）、FormatNotFound。坑：probe 夹具是 base64
+  且多为截断探针样例（demux 测试用 muxer 现做）；probe_fixture_aac 首帧带 LFE，
+  ASC 声明布局严格报错是设计语义。下一步：视频流接入/seek/CLI ③。
   ⑲ §309 CPE common_window=0 分叉（§304 偏差②收口）：窗决策彻底 per-channel——
   `AacEncPlan` 每通道（seq/带计划/分组/窗数），attempt 循环全部吃自己的 plan，
   `lame_seq` 数组替代合流机（判定一致时逐位同），`last_max_sfb` per-channel。

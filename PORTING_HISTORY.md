@@ -8677,3 +8677,36 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1423/1423**（新增
   forked CPE 流测试 1 条）。§304 偏差②收口；剩 la==NULL flush 一条（需编码器
   flush API，本移植无此入口，保持文档化）。
+
+## 310. 统一播放 API 骨架（申报书交付①第一期：MediaFile/StreamInfo/MediaPacket/AudioDecoder）
+
+申报书「本期拟实现」①的第一期（音频线）：在 §270 探测层之上提供统一入口
+`MediaFile::open(bytes)`——probe 定格式、开对应 demuxer、建 `StreamInfo` 表；
+`next_packet` 按流序吐 `MediaPacket`；`AudioDecoder::open(StreamInfo)` 按编解码名
+分发到已移植解码器，`decode` 产 `AudioFrame`。错误为闭合分类 `MediaError`
+（FormatNotFound/UnsupportedFormat/DemuxError/UnsupportedCodec/DecodeError，
+`message()` 渲染），failable API 走 MoonBit 的 `raise` 风格。
+
+- **四容器适配器**：MP4（`av_mov_open`，样本按 stco 从原文件切片，跨轨按 DTS
+  K 路归并 = C 的 `AVPacket.stream_index` 乱序交错）、Matroska/WebM
+  （`av_matroska_open`，直接吃 `mh.packets` 队列）、Ogg Opus（`av_ogg_opus_open`）、
+  WAV（`av_wav_open`，data 块切分包）。流表从各容器轨道参数建（codec_id 统一成
+  FFmpeg 名：esds/CodecID/`ff_wav_codec_id`）。
+- **解码分发**："aac" → `new_aac_decoder_from_asc(extradata)`（AacPcm 每元素一个
+  平坦声道数组，按元素序铺进 `AudioFrame.samples`）；"opus" → `opus_parse_head` +
+  `OpusDecoder`；"pcm_s16le/be" → facade 内直接解释（逐样本 s16→double）。其余编
+  解码名抛 `UnsupportedCodec`。
+- **端到端（黑盒 5 测）**：WebM/Opus 与 Ogg/Opus（经验证 muxer 现做 + 真实 Opus
+  包）、WAV/PCM（§270 探针夹具，解出 PCM 与 data 块逐字节一致）、MKV/AAC
+  （**本仓 AAC 编码器现做**：编码→剥 ADTS 头→mkv_aac_muxer→facade 打开→解码，
+  与直连路径逐样本全等 + 对源正弦 SNR 60.3 dB——编码↔复用↔解码全链展示）、
+  未知字节 → `FormatNotFound`。
+- **过程坑**：①`av_probe_input_format` 的夹具是 base64，直接喂文本得分 0；
+  ②probe 夹具是探测样例（512 B 截断页），demux 级测试要用 muxer 现做或完整夹具；
+  ③`probe_fixture_aac` 的首帧 AU 携带 LFE（id 3）——ASC 声明布局（mono）与流不符
+  时 `decode_frame` 严格报错，而 ADTS 路径因布局为空而放行——这正是布局检查的设
+  计语义，测试改用布局一致的编码器现做流；④python 写 MoonBit 转义字节字面量时
+  JSON/heredoc 双层转义会产出裸控制字节（`chr(92)` 绕开）。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1428/1428**
+  （新增 5 条 playback 测试）。下一期：视频流解码头接入、时间戳/时长口径、
+  seek、JSON CLI 的 `decode-audio` 命令（③）与 libswresample。
