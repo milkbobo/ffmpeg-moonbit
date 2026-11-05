@@ -1,5 +1,9 @@
 # AGENT HANDOFF — 2026-11-05 AAC 强度立体声与 M/S（§290 → §300）
 
+> 更新（同日）：§2b 第 1 项的「编码器接线」已由 §302 闭环，并做成 opt-in
+> （`AacEncodeConfig.perceptual_short`）。实测数据与下一步见
+> `AGENT_HANDOFF_2026-11-05_AAC_SHORT_WINDOW.md`。以下 §2b 是 §301 时点的快照。
+
 这条线到这里，感知路径的三个工具（twoloop/PNS、`search_for_is`、`search_for_ms`）
 都已经与 FFmpeg 9.0.2 **逐位对拍**并接进了编码器：顺序、判据、成本量值、以及
 M/S 改写后的标度因子与带类型终值。§297–§299 又把码率重试循环的四处顺序/状态偏差
