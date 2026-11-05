@@ -319,6 +319,14 @@
   NMR）；感知臂与原生差 <1.7 dB（128k 反超）= 移植质量背书。
   `aac_ffmpeg_ref_test.mbt` 固化断言。FIL 元素无 element_instance_tag
   （id+count 直连，首帧 count=14 版本串）。
+  ⑲ §309 CPE common_window=0 分叉（§304 偏差②收口）：窗决策彻底 per-channel——
+  `AacEncPlan` 每通道（seq/带计划/分组/窗数），attempt 循环全部吃自己的 plan，
+  `lame_seq` 数组替代合流机（判定一致时逐位同），`last_max_sfb` per-channel。
+  common_window 判定 = 类型相等 &&（非短窗 || 分组展开相等）；forked 时写侧
+  `assemble_frame` 走双独立 gg+ics_info+body 分支（无 ms），stereo 工具/ms 计数/
+  max_sfb 合并/mark_is 全部加 common_window 门。非对称瞬态 8/11 帧 forked，
+  docker ffmpeg 解码 0 errors、双解码器 140.2 dB；四条长窗基线字节不变。剩
+  la==NULL flush（需 flush API，文档化保留）。
   ⑰ §306 立体声对八短窗形态（短窗工具链收口）：`aac_is_search`/`aac_ms_search`
   按 `w += group_len[w]` 分组——IS 的能量门组内求和、逐窗按各自 psy band 定价但
   sf/cb 取组起点槽，`freq_mult` 分母是 `1024/num_windows`；MS 的 Mmax/Smax 取全组

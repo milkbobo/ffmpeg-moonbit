@@ -686,28 +686,38 @@ test "aac_lc_perceptual_short_is_ms_stream" {
       if id != 1 {
         abort("short is/ms test: expected a channel pair")
       }
-      if gb.read1() != 1U {
-        abort("short is/ms test: expected a common window")
-      }
-      let info = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gb))
-      let ms_mode = gb.read(2).reinterpret_as_int()
-      if ms_mode == 1 {
-        // ms_used: one bit per group-start band, group by group - so on an
-        // eight-short frame that is every window group's max_sfb bits.
-        let mut b = 0
-        let bits = info.num_window_groups * info.max_sfb
-        while b < bits {
-          let _ = gb.read1()
-          b = b + 1
+      // §309: a forked pair (channels' window types or groupings disagree)
+      // writes common_window = 0 and each channel carries its own ics_info,
+      // with no mid/side data at all.
+      let common_window = gb.read1() == 1U
+      let mut frame_short = false
+      let info = if common_window {
+        let v = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gb))
+        let ms_mode = gb.read(2).reinterpret_as_int()
+        if ms_mode == 1 {
+          // ms_used: one bit per group-start band, group by group - so on an
+          // eight-short frame that is every window group's max_sfb bits.
+          let mut b = 0
+          let bits = v.num_window_groups * v.max_sfb
+          while b < bits {
+            let _ = gb.read1()
+            b = b + 1
+          }
         }
+        Some(v)
+      } else {
+        // A forked pair carries each channel's global_gain + ics_info inside
+        // its body; `decode_ics_with_info(gb, None)` parses exactly that.
+        None
       }
-      if info.window_sequence == 2 {
+      if info is Some(v) && v.window_sequence == 2 {
         short_frames = short_frames + 1
       }
       for ch = 0; ch < 2; ch = ch + 1 {
         let ics = aac_encode_test_ok(
-          @libavcodec.aac_decode_ics_with_info(gb, Some(info)),
+          @libavcodec.aac_decode_ics_with_info(gb, info),
         )
+        frame_short = frame_short || ics.info.window_sequence == 2
         // Consume the spectral data too, or the next channel starts
         // mid-spectrum.
         let _ = aac_encode_test_parse_spectrum(gb, ics)
@@ -723,7 +733,11 @@ test "aac_lc_perceptual_short_is_ms_stream" {
           }
         }
       }
+      if frame_short {
+        short_frames = short_frames + 1
+      }
     }
+
     (is_bands, noise_bands, short_frames)
   }
   let (plain_is, plain_noise, plain_short) = census(plain_stream)
@@ -746,4 +760,89 @@ test "aac_lc_perceptual_short_is_ms_stream" {
   assert_true(tools_is > 0)
   assert_true(plain_is == 0)
   assert_true(peak < 4.0)
+}
+
+///|
+/// §309: the last §304 deviation closes. Each channel now runs its own LAME
+/// block-type machine, and when the two channels' window types or groupings
+/// disagree the pair is written as `common_window = 0` - two independent
+/// global_gain + ics_info + body blocks, no mid/side data - exactly
+/// `aacenc.c`'s element layout. The asymmetric transient (clicks at
+/// different offsets per channel) must actually fork, every forked frame
+/// must round-trip through this port's own decoder (which parses both
+/// layouts), and the fork must not disturb the common-window frames'
+/// byte-level stability (the long baselines are pinned elsewhere).
+test "aac_lc_perceptual_short_forked_cpe_stream" {
+  let rate = 44100
+  let frames = 10
+  let left : Array[Double] = Array::make(frames * 1024, 0.0)
+  let right : Array[Double] = Array::make(frames * 1024, 0.0)
+  for i = 0; i < frames * 1024; i = i + 1 {
+    let t = i.to_double() / rate.to_double()
+    left[i] = 0.05 * @math.sin(2.0 * 3.14159265358979323846 * 660.0 * t)
+    right[i] = 0.05 * @math.sin(2.0 * 3.14159265358979323846 * 880.0 * t)
+  }
+  for k = 0; k < 4; k = k + 1 {
+    let pos0 = 700 + k * 1536
+    let pos1 = 700 + k * 1536 + 512
+    if pos0 < frames * 1024 {
+      left[pos0] = if k % 2 == 0 { 1.0 } else { -1.0 }
+    }
+    if pos1 < frames * 1024 {
+      right[pos1] = if k % 2 == 0 { -1.0 } else { 1.0 }
+    }
+  }
+  let input = [left, right]
+  let stream = aac_encode_test_stream_config(
+    input,
+    2,
+    frames,
+    @libavcodec.aac_encode_config_with_pns(
+      @libavcodec.aac_encode_config_with_perceptual_short(
+        @libavcodec.aac_encode_config_perceptual(rate, 2, 128000),
+      ),
+    ),
+  )
+  // Census: common_window per frame from the element header.
+  let mut forked = 0
+  for f = 0; f < stream.length(); f = f + 1 {
+    let payload = stream[f]
+      .clamped_view(
+        start=@libavcodec.av_aac_adts_header_size,
+        end=stream[f].length(),
+      )
+      .to_owned()
+    let gb = @libavcodec.BitReader::new(payload)
+    let id = gb.read(3).reinterpret_as_int()
+    let _ = gb.read(4)
+    if id != 1 {
+      abort("forked test: expected a channel pair")
+    }
+    if gb.read1() != 1U {
+      forked = forked + 1
+    }
+  }
+  let decoded = aac_encode_test_decode(stream, 2)
+  let mut peak = 0.0
+  for ch = 0; ch < 2; ch = ch + 1 {
+    for f = 0; f < decoded[ch].length(); f = f + 1 {
+      let v = decoded[ch][f]
+      assert_true(v == v)
+      if v.abs() > peak {
+        peak = v.abs()
+      }
+    }
+  }
+  let snr = aac_encode_test_pcm_snr(input, decoded, 2, frames)
+  println(
+    "forked CPE: frames=\{stream.length()} forked=\{forked} peak=\{peak} snr=\{snr}",
+  )
+  // The fixture's per-channel clicks land in different sub-blocks, so the
+  // two LAME machines must disagree somewhere - and the stream must still
+  // decode to a bounded waveform.  PNS is waveform-inexact by design (the
+  // decoder synthesises fresh noise), so the SNR floor is generous.
+  assert_true(forked > 0)
+  assert_true(forked < stream.length())
+  assert_true(peak < 4.0)
+  assert_true(snr > 5.0)
 }

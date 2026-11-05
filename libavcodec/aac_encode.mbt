@@ -103,15 +103,13 @@ pub struct AacEncoder {
   mut lambda : Double
   /// LCG state carried across frames by `search_for_pns` (`s->random_state`).
   mut pns_random_state : Int32
-  /// The pair-level block-type state (`lame_apply_block_type`'s carry) for
-  /// the perceptual short path. FFmpeg keeps one per channel and drops
-  /// `common_window` when the two channels' window types disagree; this
-  /// encoder always codes one CPE, so the pair runs a single merged
-  /// machine - a frame goes short when *any* channel's analyser says so,
-  /// the same "either channel attacks" merge the grouping uses (§304's
-  /// documented deviation). With both analysers agreeing the merged machine
-  /// is bit-identical to FFmpeg's per-channel ones.
-  mut lame_pair_seq : Int32
+  /// The per-channel block-type state (`lame_apply_block_type`'s carry) for
+  /// the perceptual short path - FFmpeg runs one machine per channel and
+  /// drops `common_window` when the two channels' window types (or
+  /// groupings) disagree (§309 ports that fork; the merged pair machine of
+  /// §307 is gone). With both analysers agreeing, the per-channel machines
+  /// emit exactly what the merged one did.
+  lame_seq : Array[Int32]
   /// C's per-`SingleChannelElement` sticky slot arrays (`sf_idx` / `band_type`
   /// / `zeroes`, 128 slots of `w * 16 + g`). The coder only ever writes
   /// group-start slots, so on a short frame the inner-window slots keep what
@@ -124,12 +122,14 @@ pub struct AacEncoder {
   sticky_sf : Array[Array[Int32]]
   sticky_cb : Array[Array[Int32]]
   sticky_zeroes : Array[Array[Int32]]
-  /// `ics.max_sfb` as the last rate-control attempt left it (`aacenc.c:517`).
-  /// The next attempt's TNS search reads it as its band limit, clamped to
-  /// `num_swb` at frame start (`aacenc.c:864`) - which is why FFmpeg's very
-  /// first frame carries no TNS filter at all: the context is zero-initialized,
-  /// so `mmm` is 0 and `search_for_tns` bails out on an empty range.
-  mut last_max_sfb : Int32
+  /// `ics.max_sfb` as the last rate-control attempt left it (`aacenc.c:517`),
+  /// per channel - a `common_window = 0` pair carries two independent
+  /// values. The next attempt's TNS search reads it as its band limit,
+  /// clamped to `num_swb` at frame start (`aacenc.c:864`) - which is why
+  /// FFmpeg's very first frame carries no TNS filter at all: the context is
+  /// zero-initialized, so `mmm` is 0 and `search_for_tns` bails out on an
+  /// empty range.
+  last_max_sfb : Array[Int32]
 }
 
 ///|
@@ -455,8 +455,8 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     last_frame_bits: 0,
     lambda: 120.0,
     pns_random_state: 0,
-    last_max_sfb: 0,
-    lame_pair_seq: 0,
+    last_max_sfb: Array::make(2, 0),
+    lame_seq: Array::make(2, 0),
     sticky_sf,
     sticky_cb,
     sticky_zeroes,
@@ -2283,6 +2283,21 @@ fn aac_encode_write_channel_body(
 }
 
 ///|
+/// One channel's window plan for a frame: the sequence its own machine (or
+/// the pair's shared one) emitted and everything the coder derives from it.
+/// A `common_window` pair has two identical plans; when they differ the pair
+/// is written as two independent ICS (`common_window = 0`, §309).
+priv struct AacEncPlan {
+  seq : Int32
+  is8 : Bool
+  num_swb : Int32
+  offsets : Array[Int32]
+  num_windows : Int32
+  group_len : Array[Int32]
+  use_psy : Bool
+}
+
+///|
 /// One frame's inputs that a rate-control attempt does not change: the spectra
 /// the analysis reads (already TNS-filtered; mid/side and intensity are mixed
 /// in only per attempt, and on the simplified path they were mixed here
@@ -2320,7 +2335,7 @@ fn AacEncoder::build_frame(
     }
     chans.push(one)
   }
-  self.assemble_frame(stereo, tns, max_sfb, chans)
+  self.assemble_frame(stereo, tns, [max_sfb, max_sfb], true, chans)
 }
 
 ///|
@@ -2338,11 +2353,16 @@ fn AacEncoder::aac_encode_rate_bits(self : AacEncoder) -> Int32 {
 ///|
 /// Write the element(s), ics_info, section data, scalefactors, TNS and spectral
 /// data of an already-quantised channel pair, then prefix the ADTS header.
+/// `max_sfb` is per channel (a `common_window = 0` pair carries two
+/// independent values); `plans` is the frame's per-channel window plans when
+/// the caller has them (`None` on the simplified path, whose channels always
+/// share one plan).
 fn AacEncoder::assemble_frame(
   self : AacEncoder,
   stereo : AacEncStereo,
   tns : Array[AacEncTns],
-  max_sfb : Int32,
+  max_sfb : Array[Int32],
+  common_window : Bool,
   chans : Array[AacEncChannel],
 ) -> Result[Bytes, String] {
   let bw = BitWriter::new()
@@ -2365,23 +2385,32 @@ fn AacEncoder::assemble_frame(
   } else {
     bw.put(1, 3) // ID_CPE
     bw.put(0, 4) // element_instance_tag
-    bw.put(1, 1) // common_window = 1: one shared ics_info for both channels
-    aac_encode_write_ics_info(bw, chans[0])
-    bw.put(stereo.ms_present.reinterpret_as_uint(), 2)
-    // `encode_ms_info` (`aacenc.c:489-498`): mode 2 means every band is
-    // mid/side, so the mask itself is not transmitted. Mode 1 writes one bit
-    // per group-start slot, group by group.
-    if stereo.ms_present == 1 {
-      let mut w = 0
-      while w < chans[0].num_windows {
-        for b = 0; b < max_sfb; b = b + 1 {
-          bw.put(if stereo.ms_mask[w * 16 + b] { 1 } else { 0 }, 1)
+    bw.put(if common_window { 1 } else { 0 }, 1)
+    if common_window {
+      // One shared ics_info (ch0's) plus the mid/side mask; each channel
+      // then writes global_gain and its body (`aacenc.c:999-1006`).
+      aac_encode_write_ics_info(bw, chans[0])
+      bw.put(stereo.ms_present.reinterpret_as_uint(), 2)
+      // `encode_ms_info` (`aacenc.c:489-498`): mode 2 means every band is
+      // mid/side, so the mask itself is not transmitted. Mode 1 writes one
+      // bit per group-start slot, group by group.
+      if stereo.ms_present == 1 {
+        let mut w = 0
+        while w < chans[0].num_windows {
+          for b = 0; b < max_sfb[0]; b = b + 1 {
+            bw.put(if stereo.ms_mask[w * 16 + b] { 1 } else { 0 }, 1)
+          }
+          w = w + chans[0].group_len[w]
         }
-        w = w + chans[0].group_len[w]
       }
     }
     for ch = 0; ch < 2; ch = ch + 1 {
       bw.put(aac_encode_global_gain(chans[ch]).reinterpret_as_uint(), 8)
+      // `encode_individual_channel` (`aacenc.c:732`): a forked pair writes
+      // each channel's own ics_info after its global gain.
+      if not(common_window) {
+        aac_encode_write_ics_info(bw, chans[ch])
+      }
       aac_encode_write_channel_body(
         bw,
         chans[ch],
@@ -2452,11 +2481,12 @@ pub fn AacEncoder::encode_frame(
     }
   }
   let prev = self.prev_sequence[0]
-  // First-attack index and long/short verdict of the LAME analyser per
-  // channel, when it runs. The synchronous rewrite analyses this frame's
-  // own MDCT input buffer (`buf[523..1568)` is exactly the region FFmpeg's
-  // one-packet-ahead lookahead covered), so both the grouping and the block
-  // type are decided for the frame being encoded - see `AacLameWindow`.
+  // First-attack index, long/short verdict and emitted window type of the
+  // LAME analyser per channel, when it runs. The synchronous rewrite
+  // analyses this frame's own MDCT input buffer (`buf[523..1568)` is exactly
+  // the region FFmpeg's one-packet-ahead lookahead covered), so the
+  // grouping and the block type are decided for the frame being encoded -
+  // see `AacLameWindow`.
   let lame_grp : Array[Int32] = []
   let lame_uselong : Array[Bool] = []
   let bufs : Array[Array[Double]] = []
@@ -2479,83 +2509,116 @@ pub fn AacEncoder::encode_frame(
     }
     bufs.push(buf)
   }
-  // The window sequence. On the perceptual short path it is FFmpeg's own
-  // block-type machine (§307): emit the stored state, patched on the short
-  // path, and carry the computed block type - which among other things
-  // keeps a short run alive for one extra quiet frame before LONG_STOP, and
-  // an attack out of LONG_STOP goes straight to short blocks. Every other
-  // path keeps the early/late+pending machine: LONG_START must be followed
-  // by short blocks, short blocks return through LONG_STOP, a late attack
-  // carries over one frame.
-  let seq = if self.config.perceptual && self.config.perceptual_short {
-    // A common-window CPE runs one merged machine: a frame goes short when
-    // *any* channel's analyser says so - the same "either channel attacks"
-    // merge the grouping uses (FFmpeg would instead drop common_window and
-    // code two SCEs; that fork stays a documented §304 deviation).
-    let mut uselong = true
-    for ch = 0; ch < lame_uselong.length(); ch = ch + 1 {
-      uselong = uselong && lame_uselong[ch]
-    }
-    let (emit, next) = aac_lame_apply_block_type(self.lame_pair_seq, uselong)
-    self.lame_pair_seq = next
-    emit
-  } else if prev == aac_eight_short {
-    if attack {
-      aac_eight_short
-    } else {
-      aac_long_stop
-    }
-  } else if prev == aac_long_start {
-    aac_eight_short
-  } else if attack {
-    aac_long_start
-  } else {
-    aac_only_long
-  }
+  // The window sequence, per channel. On the perceptual short path it is
+  // FFmpeg's own block-type machine (§307/§309): one machine per channel -
+  // emit the stored state, patched on the short path, and carry the
+  // computed block type - which among other things keeps a short run alive
+  // for one extra quiet frame before LONG_STOP, and an attack out of
+  // LONG_STOP goes straight to short blocks. Every other path keeps the
+  // early/late+pending machine shared by the pair: LONG_START must be
+  // followed by short blocks, short blocks return through LONG_STOP, a late
+  // attack carries over one frame.
+  let use_lame = self.config.perceptual && self.config.perceptual_short
   let sequences : Array[Int32] = []
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    let seq = if use_lame {
+      let (emit, next) = aac_lame_apply_block_type(
+        self.lame_seq[ch],
+        if ch < lame_uselong.length() {
+          lame_uselong[ch]
+        } else {
+          true
+        },
+      )
+      self.lame_seq[ch] = next
+      emit
+    } else if prev == aac_eight_short {
+      if attack {
+        aac_eight_short
+      } else {
+        aac_long_stop
+      }
+    } else if prev == aac_long_start {
+      aac_eight_short
+    } else if attack {
+      aac_long_start
+    } else {
+      aac_only_long
+    }
+    sequences.push(seq)
+  }
   let coefs : Array[Array[Double]] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    sequences.push(seq)
-    coefs.push(self.frame_coefficients(bufs[ch], seq))
+    coefs.push(self.frame_coefficients(bufs[ch], sequences[ch]))
   }
-  let is8 = seq == aac_eight_short
-  let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
-  let offsets = if is8 { self.short_offsets } else { self.swb_offsets }
-  let num_windows = if is8 { 8 } else { 1 }
-  // Window grouping (§304): on the perceptual short path the LAME analyser's
-  // first-attack index selects the `window_grouping` byte. A common-window
-  // CPE takes the *earlier* first attack, mirroring the "either channel
-  // attacks" gate of the sequence state machine (FFmpeg analyses each channel
-  // independently and would drop common_window when they disagree; that fork
-  // is not ported - documented §304 deviation). Every other path keeps the
-  // single group of eight windows, `0b1111111`.
-  let use_psy = self.config.perceptual && (!is8 || self.config.perceptual_short)
-  let group_len : Array[Int32] = if is8 {
-    if use_psy && lame_grp.length() == self.config.channels {
-      let mut first = lame_grp[0]
-      for ch = 1; ch < lame_grp.length(); ch = ch + 1 {
-        if lame_grp[ch] < first {
-          first = lame_grp[ch]
-        }
+  // The frame's window plans, one per channel (§309): sequence, band plan
+  // and window grouping. FFmpeg drops `common_window` unless the two
+  // channels' window types, shapes and groupings all match; the shape bit
+  // this writer emits is a constant (C's `use_kb_window` is never set), so
+  // the equality reduces to type + grouping. Every non-LAME path shares one
+  // decision across the pair, so they always come out common-window.
+  let plans : Array[AacEncPlan] = []
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    let seq = sequences[ch]
+    let is8 = seq == aac_eight_short
+    let use_psy = self.config.perceptual &&
+      (!is8 || self.config.perceptual_short)
+    let group_len : Array[Int32] = if is8 {
+      if use_lame && ch < lame_grp.length() {
+        // The channel's own first-attack byte - FFmpeg stores it per
+        // channel and the common-window check compares the expansions.
+        aac_window_grouping_expand(aac_window_grouping[lame_grp[ch]])
+      } else {
+        [8, 0, 0, 0, 0, 0, 0, 0]
       }
-      // The same expansion as `aac_window_grouping_expand`, in Int32 so the
-      // result drops straight into `AacTwoShape`/`AacEncChannel`.
-      let byte = aac_window_grouping[first]
-      let gl : Array[Int32] = Array::make(8, 0)
-      let mut lastgrp = 0
-      for w = 0; w < 8; w = w + 1 {
-        if ((byte >> w) & 1) == 0 {
-          lastgrp = w
-        }
-        gl[lastgrp] = gl[lastgrp] + 1
-      }
-      gl
     } else {
-      [8, 0, 0, 0, 0, 0, 0, 0]
+      [1, 0, 0, 0, 0, 0, 0, 0]
     }
-  } else {
-    [1, 0, 0, 0, 0, 0, 0, 0]
+    plans.push({
+      seq,
+      is8,
+      num_swb: if is8 {
+        self.num_short_swb
+      } else {
+        self.num_swb
+      },
+      offsets: if is8 {
+        self.short_offsets
+      } else {
+        self.swb_offsets
+      },
+      num_windows: if is8 {
+        8
+      } else {
+        1
+      },
+      group_len,
+      use_psy,
+    })
   }
+  let common_window = if self.config.channels == 1 {
+    true
+  } else {
+    plans[0].seq == plans[1].seq &&
+    (
+      plans[0].seq != aac_eight_short ||
+      (
+        plans[0].group_len[1] == plans[1].group_len[1] &&
+        plans[0].group_len[2] == plans[1].group_len[2] &&
+        plans[0].group_len[3] == plans[1].group_len[3] &&
+        plans[0].group_len[4] == plans[1].group_len[4] &&
+        plans[0].group_len[5] == plans[1].group_len[5] &&
+        plans[0].group_len[6] == plans[1].group_len[6] &&
+        plans[0].group_len[7] == plans[1].group_len[7]
+      )
+    )
+  }
+  // The shared-plan aliases every non-LAME path keeps using.
+  let is8 = plans[0].is8
+  let num_swb = plans[0].num_swb
+  let offsets = plans[0].offsets
+  let num_windows = plans[0].num_windows
+  let use_psy = plans[0].use_psy
   // Two orders, because the two models need different spectra.
   //
   // The perceptual path follows `aacenc.c`: analyse, quantise and decide noise
@@ -2585,8 +2648,10 @@ pub fn AacEncoder::encode_frame(
   // frame keeps the simplified model and every long-window baseline stream is
   // byte-for-byte what §301 produced.
   let use_is = self.config.is_stereo
-  let use_pns = self.config.pns && (!is8 || use_psy)
-  let use_stereo_psy = self.config.channels == 2 && use_psy
+  // The stereo pair of tools only exists on a common-window pair: both
+  // searches early-return on `!cpe->common_window` upstream, and a forked
+  // pair has no shared `ms_mask` to talk about (§309).
+  let use_stereo_psy = self.config.channels == 2 && common_window && use_psy
   let mut stereo = aac_encode_stereo_none(num_swb)
   if self.config.channels == 2 && !use_psy {
     stereo = aac_encode_stereo(
@@ -2617,7 +2682,13 @@ pub fn AacEncoder::encode_frame(
     }
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       psy_results.push(
-        self.psy.analyze(ch, coefs[ch], prev_bits, seq, self.prev_sequence[ch]),
+        self.psy.analyze(
+          ch,
+          coefs[ch],
+          prev_bits,
+          plans[ch].seq,
+          self.prev_sequence[ch],
+        ),
       )
     }
     // The plan only seeds TNS and the fallback bit-search: since §299 the
@@ -2648,7 +2719,7 @@ pub fn AacEncoder::encode_frame(
     }
   } else {
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
-      let t = self.band_targets(coefs[ch], seq)
+      let t = self.band_targets(coefs[ch], plans[ch].seq)
       for b = 0; b < num_swb; b = b + 1 {
         if t[b] >= 0 && b + 1 > planned_max_sfb {
           planned_max_sfb = b + 1
@@ -2669,7 +2740,7 @@ pub fn AacEncoder::encode_frame(
   let tns : Array[AacEncTns] = []
   if !use_psy {
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
-      let data = self.search_tns(coefs[ch], planned_max_sfb, seq)
+      let data = self.search_tns(coefs[ch], planned_max_sfb, plans[ch].seq)
       aac_encode_apply_tns(coefs[ch], data, offsets, num_swb, num_windows)
       tns.push(data)
     }
@@ -2714,7 +2785,7 @@ pub fn AacEncoder::encode_frame(
             ch,
             coefs[ch],
             prev_bits,
-            seq,
+            plans[ch].seq,
             self.prev_sequence[ch],
           )
         }
@@ -2736,30 +2807,37 @@ pub fn AacEncoder::encode_frame(
       // `band1->threshold`), in slot layout (`w * 16 + g` on a short frame).
       let thr : Array[Array[Double]] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
-        let row : Array[Double] = if is8 {
+        let plan = plans[ch]
+        let row : Array[Double] = if plan.is8 {
           Array::make(128, 0.0)
         } else {
-          Array::make(num_swb, 0.0)
+          Array::make(plan.num_swb, 0.0)
         }
-        for w = 0; w < num_windows; w = w + 1 {
-          for b = 0; b < num_swb; b = b + 1 {
+        for w = 0; w < plan.num_windows; w = w + 1 {
+          for b = 0; b < plan.num_swb; b = b + 1 {
             row[w * 16 + b] = psy_iter[ch].bands[w * 16 + b].threshold
           }
         }
         thr.push(row)
       }
-      let sizes = if is8 {
-        self.psy.band_sizes_short()
-      } else {
-        self.psy.band_sizes()
-      }
-      // The perceptual short path codes the LAME analyser's grouping (§304);
-      // every other short frame is one group of eight windows, the grouping
-      // byte `0b1111111` writes (`group_len[0] = 8`, the rest unused).
-      let two_shape = if is8 {
-        aac_two_shape_short(group_len)
-      } else {
-        aac_two_shape_long()
+      let sizes : Array[Array[Int32]] = []
+      let two_shapes : Array[AacTwoShape] = []
+      for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        let plan = plans[ch]
+        sizes.push(
+          if plan.is8 {
+            self.psy.band_sizes_short()
+          } else {
+            self.psy.band_sizes()
+          },
+        )
+        two_shapes.push(
+          if plan.is8 {
+            aac_two_shape_short(plan.group_len)
+          } else {
+            aac_two_shape_long()
+          },
+        )
       }
       // One channel pair, one rate-control attempt: analyse, price and decide
       // noise on the left/right spectra first (`aacenc.c`'s order), then mix.
@@ -2777,13 +2855,21 @@ pub fn AacEncoder::encode_frame(
       // that carried-over value - not this attempt's plan - is what bounds the
       // TNS search (`mmm` in `aacenc_tns.c`). Zero at the very start of a
       // stream, which is why FFmpeg's first frame never carries a filter.
-      let tns_mmm = if self.last_max_sfb < num_swb {
-        self.last_max_sfb
-      } else {
-        num_swb
+      let tns_mmm : Array[Int32] = []
+      for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        let cap = self.last_max_sfb[ch]
+        tns_mmm.push(
+          if cap < plans[ch].num_swb {
+            cap
+          } else {
+            plans[ch].num_swb
+          },
+        )
       }
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let r = psy_iter[ch]
+        let plan = plans[ch]
+        let use_pns_ch = self.config.pns && (!plan.is8 || plan.use_psy)
         // `aacenc.c:931-933`: the element start drops the intensity band
         // types; `sf_idx`/`zeroes` (and the regular band types) stay sticky
         // across frames *and* rate-control attempts - the inner-window slots
@@ -2801,18 +2887,22 @@ pub fn AacEncoder::encode_frame(
         // rate loop price them, then decide which ones actually become noise.
         let mark = aac_pns_mark(
           r.bands,
-          offsets,
-          num_swb,
-          two_shape,
+          plan.offsets,
+          plan.num_swb,
+          two_shapes[ch],
           self.config.sample_rate,
           self.config.bit_rate,
           self.config.channels,
           self.lambda,
         )
-        let can_pns = if use_pns { mark.can_pns } else { Array::make(128, 0) }
+        let can_pns = if use_pns_ch {
+          mark.can_pns
+        } else {
+          Array::make(128, 0)
+        }
         let two = aac_twoloop_search_pns(
           coefs[ch],
-          sizes,
+          sizes[ch],
           r.bands,
           alloc,
           self.config.bit_rate,
@@ -2824,7 +2914,7 @@ pub fn AacEncoder::encode_frame(
           // depend on the window shape, even though this frame cannot use the
           // tool itself (§304 gives `search_for_pns` its group loop).
           aac_twoloop_pns(can_pns, self.config.pns, use_is),
-          two_shape,
+          two_shapes[ch],
           // The search runs on the element's sticky slot arrays in C - its
           // rate loop scales every slot, so the inner-window slots it leaves
           // feed the next frame's `search_for_pns` pricing.
@@ -2836,20 +2926,26 @@ pub fn AacEncoder::encode_frame(
         // coefficients the ABR branch has restored from `pcoeffs`
         // (`aacenc.c:1075-1077`) - so the filter never compounds across
         // attempts and the analysis above always saw the unfiltered spectrum.
-        let tns_data = self.search_tns(coefs[ch], tns_mmm, seq)
+        let tns_data = self.search_tns(coefs[ch], tns_mmm[ch], plan.seq)
         tns_iter.push(tns_data)
         let w = coefs[ch].copy()
-        aac_encode_apply_tns(w, tns_data, offsets, num_swb, num_windows)
+        aac_encode_apply_tns(
+          w,
+          tns_data,
+          plan.offsets,
+          plan.num_swb,
+          plan.num_windows,
+        )
         work.push(w)
         let mut noise_sfi : Array[Int32] = Array::make(128, 0)
-        if use_pns {
+        if use_pns_ch {
           let out = aac_pns_search(
             aac_pns_search_in(
               w,
-              sizes,
-              offsets,
+              sizes[ch],
+              plan.offsets,
               r.bands,
-              two_shape,
+              two_shapes[ch],
               st_sf,
               st_cb,
               st_z,
@@ -2888,15 +2984,15 @@ pub fn AacEncoder::encode_frame(
       if use_stereo_psy {
         let (psy_st, ms) = aac_encode_stereo_psy(
           work,
-          sizes,
+          sizes[0],
           thr,
           twos,
           cbs,
           zeros,
-          offsets,
-          num_swb,
-          num_windows,
-          group_len,
+          plans[0].offsets,
+          plans[0].num_swb,
+          plans[0].num_windows,
+          plans[0].group_len,
           self.config.sample_rate,
           self.lambda,
           use_is,
@@ -2930,27 +3026,29 @@ pub fn AacEncoder::encode_frame(
       // from this frame's twoloop cutoff path, so the merged group-start
       // slot equals twoloop's own decision; FFmpeg's sticky-array variant is
       // a documented §304 deviation) - it still runs, so `zeros` carries the
-      // group-image `channel_data_psy` reads. A channel pair then shares the
-      // larger `max_sfb`.
-      let mut iter_max_sfb = 0
+      // group-image `channel_data_psy` reads. A common-window pair then
+      // shares the larger `max_sfb`; a forked one keeps two independent
+      // values (§309).
+      let iter_max_sfb : Array[Int32] = Array::make(self.config.channels, 0)
       for ch in 0..<self.config.channels {
+        let plan = plans[ch]
         let mut cmaxsfb = 0
         let mut w = 0
-        while w < num_windows {
-          let mut group_max = num_swb
+        while w < plan.num_windows {
+          let mut group_max = plan.num_swb
           while group_max > 0 && zeros[ch][w * 16 + group_max - 1] != 0 {
             group_max = group_max - 1
           }
           if group_max > cmaxsfb {
             cmaxsfb = group_max
           }
-          w = w + group_len[w]
+          w = w + plan.group_len[w]
         }
         let mut wg = 0
-        while wg < num_windows {
+        while wg < plan.num_windows {
           for b = 0; b < cmaxsfb; b = b + 1 {
             let mut allzero = 1
-            let w2_stop = wg + group_len[wg]
+            let w2_stop = wg + plan.group_len[wg]
             let mut w2 = wg
             while w2 < w2_stop {
               if zeros[ch][w2 * 16 + b] == 0 {
@@ -2961,58 +3059,69 @@ pub fn AacEncoder::encode_frame(
             }
             zeros[ch][wg * 16 + b] = allzero
           }
-          wg = wg + group_len[wg]
+          wg = wg + plan.group_len[wg]
         }
-        if cmaxsfb > iter_max_sfb {
-          iter_max_sfb = cmaxsfb
+        iter_max_sfb[ch] = cmaxsfb
+      }
+      if common_window && self.config.channels == 2 {
+        // A common-window pair shares `ics.max_sfb` (`aacenc.c:537-539`);
+        // a forked one keeps two independent values.
+        if iter_max_sfb[1] > iter_max_sfb[0] {
+          iter_max_sfb[0] = iter_max_sfb[1]
+        }
+        if iter_max_sfb[0] > iter_max_sfb[1] {
+          iter_max_sfb[1] = iter_max_sfb[0]
         }
       }
       // `ms_mode` (`aacenc.c:544-547`): 0 with no marked band, 2 when every
       // band of every window is marked - and then the mask itself is not
       // transmitted at all. The count walks every window's slots (not the
       // groups), because that is the total the comparison divides by; only a
-      // channel pair has a mask to count.
+      // common-window pair has a mask to count.
       let mut msc = 0
-      if self.config.channels == 2 {
-        for w = 0; w < num_windows; w = w + 1 {
-          for b = 0; b < iter_max_sfb; b = b + 1 {
+      if common_window && self.config.channels == 2 {
+        for w = 0; w < plans[0].num_windows; w = w + 1 {
+          for b = 0; b < iter_max_sfb[0]; b = b + 1 {
             if st.ms_mask[w * 16 + b] {
               msc = msc + 1
             }
           }
         }
       }
-      st.ms_present = if msc == 0 || iter_max_sfb == 0 {
+      st.ms_present = if msc == 0 || iter_max_sfb[0] == 0 {
         0
-      } else if msc < iter_max_sfb * num_windows {
+      } else if msc < iter_max_sfb[0] * plans[0].num_windows {
         1
       } else {
         2
       }
-      // The next attempt's TNS search reads this value (`aacenc.c:864`), and so
-      // does the next frame's.
-      self.last_max_sfb = iter_max_sfb
+      // The next attempt's TNS search reads this value (`aacenc.c:864`), and
+      // so does the next frame's - per channel now.
+      for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        self.last_max_sfb[ch] = iter_max_sfb[ch]
+      }
       let chans : Array[AacEncChannel] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        let plan = plans[ch]
         let one = aac_encode_channel_data_psy(
           work[ch],
           sf_ch[ch],
-          seq,
-          iter_max_sfb,
+          plan.seq,
+          iter_max_sfb[ch],
           cb_ch[ch],
           zeros[ch],
           sfi[ch],
-          offsets,
-          num_windows,
-          group_len,
+          plan.offsets,
+          plan.num_windows,
+          plan.group_len,
         )
-        if ch == 1 {
+        if ch == 1 && common_window {
           aac_encode_mark_is(one, st.is_bt, st.is_pos)
         }
         chans.push(one)
       }
       let frame_bytes = match
-        self.assemble_frame(st, tns_iter, iter_max_sfb, chans) {
+        self.assemble_frame(st, tns_iter, iter_max_sfb, common_window, chans) {
         Ok(v) => v
         Err(e) => return Err(e)
       }

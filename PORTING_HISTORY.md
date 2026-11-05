@@ -8642,3 +8642,38 @@ FFmpeg 真正注册的窗型决策——`psy_lame_window` 的 `uselongblock` 判
   是无 file 协议的定制构建，外部对拍一律走 docker。
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1422/1422**（新增
   裁决测试 1 条）。§304 交接清单三项（工具多组化、窗型对拍、NMR 分析）全部收口。
+
+## 309. CPE common_window=0 分叉：per-channel 窗计划 + 双独立 ICS 写侧（§304 偏差②收口）
+
+§304 偏差清单的最后一项实质分叉：FFmpeg 在两通道的窗类型/形状/分组不完全一致时把
+CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + body，无 M/S。
+此前本移植把 pair 合并成一台状态机 + 一份分组（§307 的合流机），流合法但与 FFmpeg
+语义不同。本轮把窗决策彻底 per-channel 化。
+
+- **`AacEncPlan` per-channel 化**：序列/带计划/分组/窗数/`use_psy` 每通道一份
+  （`plans[ch]`），attempt 循环全部吃自己的 plan——psy analyze（含重试）、thr 行、
+  sizes/two_shapes、tns_mmm（`last_max_sfb` 改 per-channel 数组）、PNS mark/search、
+  twoloop sticky、apply_tns、adjust 的逐组扫描、`channel_data_psy`。合流只发生在
+  `common_window = 1` 时（max_sfb 取大者、共享 ics_info/ms），判定 = 类型相等 &&
+  （非短窗 || 分组展开相等；形状位恒 0 因为 C 的 `use_kb_window` 永不置位）。
+- **每通道窗型机**：`lame_seq` 数组替代 §307 的 `lame_pair_seq`，感知短窗路径每通道
+  跑自己的 `aac_lame_apply_block_type`（两通道判定一致时与合流机逐位相同，§307 的
+  26×2 向量原样全绿即证）；其余路径共享决策 → 恒 common_window。
+- **写侧**：`assemble_frame` 增 `common_window` 参数与 forked 分支——每通道
+  gg + 自己的 ics_info + body（`encode_individual_channel` 布局），无 ms_used；
+  `max_sfb` 参数改 per-channel 数组。解码器早已支持（`decode_pair` 的
+  `common=None` 路径各读各的 ics），无需改。
+- **门控修正**：stereo 对（IS/MS）只在 common_window 跑（C 的两个 search 本就
+  early-return）；`ms_mode` 计数、`mark_is`、max_sfb 合并全部加 common_window 门
+  （期间修了三个 mono/forked 越界：msc 计数、iter_max_sfb 合并、census 的
+  `infos[0]`）。
+- **端到端**：非对称瞬态（点击按通道错位 512 样本）→ **8/11 帧 forked**，
+  本仓解码器逐帧解码 + docker ffmpeg 9.0.2 解码 0 errors，双解码器 PCM 对拍
+  **max_diff 4.4e-8（140.2 dB）**——双独立 ics_info 布局被真实解码器认可。
+  正式测试 `aac_lc_perceptual_short_forked_cpe_stream`（forked > 0 且 < 全部、
+  峰值有界、PNS 容差下 SNR > 5 dB）。
+- **基线（硬验收）**：四条长窗 noise 流（default/perceptual/+pns/+pns+is）stash
+  前后字节与 FNV **完全不变**（无攻击 → 恒 ONLY_LONG → 恒 common_window）。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1423/1423**（新增
+  forked CPE 流测试 1 条）。§304 偏差②收口；剩 la==NULL flush 一条（需编码器
+  flush API，本移植无此入口，保持文档化）。
