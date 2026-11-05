@@ -1,0 +1,7 @@
+import {
+  "ffmpeg/moonbit/libavformat" @avf,
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+}
+
+pkgtype(kind: "executable")

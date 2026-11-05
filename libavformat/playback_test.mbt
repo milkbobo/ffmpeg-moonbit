@@ -608,3 +608,71 @@ test "playback: HEVC/AV1 dispatch wiring" {
     _ => fail("expected audio decoder to reject a video stream")
   }
 }
+
+///|
+/// §314: `probe_json` renders the ffprobe-style structure. The JSON is
+/// validated by parsing it back through `@json.parse` and asserting key
+/// fields (so a broken shape fails structurally, not textually), plus a
+/// direct escape check on a codec name containing JSON metacharacters.
+test "playback: probe_json renders ffprobe-style JSON" {
+  // WAV fixture: one audio stream. `@json.parse` proves the render is
+  // well-formed JSON (it raises on anything malformed); the layout is
+  // deterministic and ffprobe-style, so the field checks pin the content.
+  let wav = @libavutil.av_base64_decode(
+    @probe_vectors.probe_fixture_wav,
+    1 << 20,
+  ).unwrap()
+  let mf = @libavformat.MediaFile::open(wav)
+  let text = mf.probe_json()
+  ignore(@json.parse(text))
+  assert_true(text.contains("\"format_name\": \"wav\""))
+  assert_true(text.contains("\"nb_streams\": 1"))
+  assert_true(text.contains("\"codec_type\": \"audio\""))
+  assert_true(text.contains("\"codec_name\": \"pcm_s16le\""))
+  assert_true(text.contains("\"sample_rate\": 8000"))
+  assert_true(text.contains("\"channels\": 1"))
+  assert_true(text.contains("\"duration\": 0."))
+  // The H.264+AAC MKV: both streams, video with width/height.
+  let mkv = @libavutil.av_base64_decode(playback_real_mkv_b64, 1 << 20).unwrap()
+  let text2 = @libavformat.MediaFile::open(mkv).probe_json()
+  ignore(@json.parse(text2))
+  assert_true(text2.contains("\"nb_streams\": 2"))
+  assert_true(text2.contains("\"codec_name\": \"h264\""))
+  assert_true(text2.contains("\"codec_name\": \"aac\""))
+  assert_true(text2.contains("\"width\": 32"))
+  assert_true(text2.contains("\"height\": 32"))
+  println(
+    "probe_json: wav=\\{text.length()} chars mkv=\\{text2.length()} chars",
+  )
+}
+
+///|
+/// The escape path: quotes, backslashes and C0 controls round-trip through
+/// `probe_json`'s string escaping.
+test "playback: probe_json escapes metacharacters" {
+  // input: a"b\c<LF>d  ->  a\"b\\c\u000ad
+  fn cp(code : Int32) -> Char {
+    code.unsafe_to_char()
+  }
+  let input = StringBuilder()
+  input.write_string("a")
+  input.write_char(cp(34))
+  input.write_string("b")
+  input.write_char(cp(92))
+  input.write_string("c")
+  input.write_char(cp(10))
+  input.write_string("d")
+  let want = StringBuilder()
+  want.write_string("a")
+  want.write_char(cp(92))
+  want.write_char(cp(34))
+  want.write_string("b")
+  want.write_char(cp(92))
+  want.write_char(cp(92))
+  want.write_string("c")
+  want.write_char(cp(92))
+  want.write_string("u000a")
+  want.write_string("d")
+  let escaped = @libavformat.probe_json_escape_for_test(input.to_string())
+  assert_eq(escaped, want.to_string())
+}

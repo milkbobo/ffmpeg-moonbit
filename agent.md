@@ -340,7 +340,12 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。下一步：seek/CLI probe/HEVC·AV1 e2e。
+  lengthSize 从偏移 21）。全量 1434/1434。⑳e §314 播放 API 第五期 + CLI ①：`MediaFile::probe_json()`（ffprobe 风格
+  format+streams JSON，自带 RFC 8259 转义）与 `cmd/probe`（x/fs 读文件→JSON 打印，
+  错误 `MediaError::message` + 非零退出，moon.mod 加 moonbitlang/x）。命令实跑：
+  WAV/MKV 双流/垃圾字节三路径全对。转义字面量坑：含反斜杠的 MoonBit 源码一律
+  码点比较 + `\` 取反斜杠，不走 heredoc/python 转义链。全量 1436/1436。
+  下一步：dump-packets/decode-audio 命令（引擎已就绪）/seek/HEVC·AV1 e2e。
   ⑲ §309 CPE common_window=0 分叉（§304 偏差②收口）：窗决策彻底 per-channel——
   `AacEncPlan` 每通道（seq/带计划/分组/窗数），attempt 循环全部吃自己的 plan，
   `lame_seq` 数组替代合流机（判定一致时逐位同），`last_max_sfb` per-channel。

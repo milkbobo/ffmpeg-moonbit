@@ -8765,3 +8765,30 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1434/1434**
   （playback 累计 11 条）。四家视频解码分发全部接通；下一期：seek、
   CLI ② probe 命令、HEVC/AV1 真实流 e2e。
+
+## 314. 播放 API 第五期 + CLI ①：probe_json 渲染与 probe 命令（申报书②首命令）
+
+- **`MediaFile::probe_json()`**：ffprobe `-show_format -show_streams` 风格的
+  JSON 渲染——`format`（format_name/nb_streams/duration）+ 每流一项（index/
+  codec_type/codec_name + 音频 sample_rate/channels 或视频 width/height +
+  has_extradata）。自带 RFC 8259 字符串转义（`"`/`\`/C0 控制字符 →
+  `\u00XX`，经 `"\u005C"` 码点常量取反斜杠避开源码转义层）。
+- **`cmd/probe`**（申报书②五命令之首）：`moon run cmd/probe -- <file>...`——
+  逐文件读取（`moonbitlang/x/fs`）、facade 打开、打印 JSON；错误打
+  `probe: <file>: <message>`（`MediaError::message`）并整体以非零退出，
+  与 ffprobe 一致地继续处理其余参数。`moon.mod` 新增 `moonbitlang/x` 依赖。
+- **测试**（黑盒 +2，playback 累计 13）：`@json.parse` 证明渲染是合法 JSON +
+  逐字段文本断言（WAV：单音频流全部字段；MKV：双流 + h264 宽高 + aac）；
+  转义单测（引号/反斜杠/LF 混合输入的逐字符期望）。
+- **命令实跑**（真实字节落盘）：WAV → 完整 JSON（duration 0.027125）；
+  MKV（H264+AAC）→ 双流 JSON（duration 1.023 与 §311 断言一致）；
+  垃圾字节 → `probe: ...: Format not found` + 非零退出。
+- **本轮坑**（写进记忆）：heredoc/python 补丁链写含反斜杠的 MoonBit 字面量
+  会被逐层转义吞噬（`\` → `\` → 空），最终一律改码点比较（`code == 34/92`）
+  + `"\u005C"` 取反斜杠；`Int.to_char` 字面量直连 `.to_char()` 是语法错误
+  （需括号）且 `92.to_char()` 返回 `Char?`（用 `unsafe_to_char`/`Char::from_int`）；
+  core `Json` 枚举非 `pub(all)` 不可外部模式匹配（测试改 `@json.parse` 合法性
+  + 文本断言）。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1436/1436**。
+  CLI ② 剩余四命令（dump-packets/decode-audio/extract-frame/extract-cover）
+  的引擎已全部就绪（§311 decode_audio_file + to_wav_s16、§313 yuv_bytes）。

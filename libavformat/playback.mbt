@@ -1049,3 +1049,86 @@ pub fn VideoDecoder::finish_video(
     _ => []
   }
 }
+
+///|
+/// JSON string escaping for the probe renderer (RFC 8259 `"` / `\` and the
+/// C0 range; everything else passes through as UTF-8).
+pub fn probe_json_escape_for_test(s : String) -> String {
+  let bs = "\u005C".get_char(0).unwrap()
+  let out = StringBuilder()
+  for ch in s {
+    let code = ch.to_int()
+    if code == 34 {
+      out.write_char(bs)
+      out.write_char(ch)
+    } else if code == 92 {
+      out.write_char(bs)
+      out.write_char(bs)
+    } else if code < 0x20 {
+      out.write_char(bs)
+      out.write_char('u')
+      let hexdigits = "0123456789abcdef"
+      out.write_char(hexdigits.get_char((code >> 12) & 15).unwrap())
+      out.write_char(hexdigits.get_char((code >> 8) & 15).unwrap())
+      out.write_char(hexdigits.get_char((code >> 4) & 15).unwrap())
+      out.write_char(hexdigits.get_char(code & 15).unwrap())
+    } else {
+      out.write_char(ch)
+    }
+  }
+  out.to_string()
+}
+
+///|
+/// Render the opened file the way `ffprobe -show_format -show_streams`
+/// structures its JSON (the CLI `probe` command's payload): a `format`
+/// object with the probed name and duration, and one `streams` entry per
+/// stream carrying the facade's parameters. Numbers are plain; everything
+/// else is escaped.
+pub fn MediaFile::probe_json(self : MediaFile) -> String {
+  let out = StringBuilder()
+  out.write_string("{\n  \"format\": {\n    \"format_name\": \"")
+  out.write_string(probe_json_escape_for_test(self.format_name()))
+  out.write_string("\",\n    \"nb_streams\": ")
+  out.write_string("\{self.streams().length()}")
+  let dur = match self.duration_seconds() {
+    Some(v) => v.to_string()
+    None => "null"
+  }
+  out.write_string(",\n    \"duration\": ")
+  out.write_string(dur)
+  out.write_string("\n  },\n  \"streams\": [")
+  for i = 0; i < self.streams().length(); i = i + 1 {
+    let info = self.streams()[i]
+    out.write_string(if i == 0 { "\n    " } else { ",\n    " })
+    out.write_string(
+      "{\n      \"index\": \{info.index},\n      \"codec_type\": \"",
+    )
+    let kind = match info.media_type {
+      Audio => "audio"
+      Video => "video"
+      Subtitle => "subtitle"
+    }
+    out.write_string(kind)
+    out.write_string("\",\n      \"codec_name\": \"")
+    out.write_string(probe_json_escape_for_test(info.codec_id))
+    out.write_string("\"")
+    if info.media_type == Audio {
+      out.write_string(
+        ",\n      \"sample_rate\": \{info.sample_rate},\n      \"channels\": \{info.channels}",
+      )
+    } else {
+      out.write_string(
+        ",\n      \"width\": \{info.width},\n      \"height\": \{info.height}",
+      )
+    }
+    out.write_string(",\n      \"has_extradata\": ")
+    out.write_string(if info.extradata is Some(_) { "true" } else { "false" })
+    out.write_string("\n    }")
+  }
+  if self.streams().length() > 0 {
+    out.write_string("\n  ")
+  }
+  out.write_string("]\n}")
+  out.to_string()
+}

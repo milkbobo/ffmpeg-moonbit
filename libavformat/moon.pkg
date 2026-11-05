@@ -9,4 +9,5 @@ import {
 import {
   "ffmpeg/moonbit/libavformat/probe_vectors",
   "moonbitlang/core/math",
+  "moonbitlang/core/json",
 } for "test"
