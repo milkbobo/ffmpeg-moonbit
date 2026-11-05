@@ -208,6 +208,18 @@
   （`AacEncoder.last_max_sfb`，零初始化 → 流的第一帧必然不发滤波器）。
   这三条在现有夹具上都不改变输出，属于结构闭环：感知路径至此与
   `aacenc.c` 的 element 循环同构。
+  ⑫ §300 的八短窗 psy 有四处一写歪就查不出来：形状是**从序列推导**的
+  （`window_type == aac_eight_short` ⇒ 8 窗），不要给 `analyze` 加 `num_windows`
+  参数，上游两个 block switcher 也正是这么设 `wi->num_windows` 的；
+  `aacpsy.c:670` 把本窗首带能量写进 `spread_en[0]` 而**不是** `spread_en[w]`，
+  于是窗口 1..7 的扩散链从数组初始的 0.0 起跳（照抄，别"顺手修好"）；
+  5.6.1.3.4 的 `pe/a/active_lines` 重置在**窗循环内部**，交给第二估计的"全帧"量
+  其实只是最后一个窗的；发布布局是 C 的 `psy_bands[w * 16 + g]` 槽位数组——长窗
+  恰好是头 49 个连续槽位，所以换布局不动老向量，而 `prev_band` 必须整表抄 128 槽
+  （`memcpy` 语义），否则长短帧交替时预回声读到错值。给短窗做黄金向量时，harness
+  是**强制** `EIGHT_SHORT`（真实编码器由 psy 的 `window()` 决定），谱要用逐窗
+  攻击斜坡，八个窗能量一致的话逐窗链路整条都是平的、测不出东西。短窗目前只到
+  psy：量化器/`scale_factor_grouping`/IS/M-S 仍只吃长窗。
   flip 带只写 `ms_mask` 位、不做 M/S 混合（上游 `apply_mid_side_stereo` 跳过
   所有 `is_mask` 带，符号翻转由解码器完成）。另有两条硬约束：IS 带写进
   码流的是**强度位置**（范围 `[-155,100]`，正负一样常见），所以

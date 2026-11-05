@@ -7,13 +7,15 @@
 /// band/context plumbing of `psymodel.c`.  It replaces the simplified
 /// "band energy + upward spreading + SNR aim" model in `aac_encode.mbt`.
 ///
-/// Scope of this first slice (matches `_ref/aacenc/vectors.txt`): one long
-/// window (`num_windows = 1`, `ONLY_LONG_SEQUENCE`), ABR (no QSCALE), PNS /
-/// TNS / IS / M-S off, no block switching.  Short-window coefficient tables
-/// are still built by `init` because `psy_3gpp_init` computes both sets, but
-/// `analyze` only exercises the long set.  `bitres.bits` (bits consumed by
-/// the previous frame) is an explicit parameter so a real bitstream writer can
-/// feed it later.
+/// Scope: ABR (no QSCALE), PNS / TNS / IS / M-S off. Both window shapes of
+/// `psy_3gpp_analyze_channel` are transcribed — one long window
+/// (`ONLY_LONG`/`LONG_START`/`LONG_STOP`, 49 bands at 44.1 kHz) and eight short
+/// windows (`EIGHT_SHORT`, 14 bands of 128 lines each, the `w += 16` per-window
+/// chains) — with `psy_3gpp_init`'s two coefficient sets and two band plans.
+/// `bitres.bits` (bits consumed by the previous frame) is an explicit parameter
+/// so a real bitstream writer can feed it later. The encoder still routes only
+/// long frames through this model; the multi-window quantiser search is what
+/// consumes a short frame's bands.
 ///
 /// Numerics: FFmpeg runs this model in `float` (f32).  All state below is
 /// `Float`, with f32 libm twins for `log2f` / `exp2f` / `exp10f`.  The
@@ -51,6 +53,7 @@ let psy_spend_add_s : Double = -0.26111111
 let psy_clip_lo_s : Double = 0.2
 let psy_clip_hi_s : Double = 0.75
 let psy_ah_thr_long : Double = 0.5
+let psy_ah_thr_short : Double = 0.6299999952316284
 let psy_pe_forget_slope : Double = 511.0
 let psy_ath_add : Double = 4.0
 let psy_rpe_thr_coeff : Double = 0.001258925
@@ -189,9 +192,13 @@ pub struct AacPsyBandInfo {
 }
 
 ///|
-/// Result of one frame of analysis.
+/// Result of one frame of analysis. `bands` is C's `psy_bands` slot array: the
+/// record of window `w`, band `g` sits at `w * 16 + g`, so `num_windows` says
+/// how far the stride goes and `num_bands` how many bands each window has.
 pub struct AacPsyResult {
   bands : Array[AacPsyBandInfo]
+  num_windows : Int32
+  num_bands : Int32
   alloc : Int32
   entropy : Double
   fill_level : Int32
@@ -469,37 +476,47 @@ fn aac_psy_calc_reduced_thr(
 }
 
 ///|
-/// `calc_thr_3gpp`, `aacpsy.c:597`. Only the `num_windows = 1` case is
-/// needed here; `cutoff` is a coefficient index, not a frequency.
-fn AacPsyContext::calc_thr(
-  self : AacPsyContext,
+/// `calc_thr_3gpp`, `aacpsy.c:597`. `cutoff` is a coefficient index, not a
+/// frequency. Band records live in a flat 128-slot array with the stride the
+/// whole encoder uses (`band[w * 16 + g]`), while `start` walks the spectrum
+/// contiguously: eight short windows read the same 1024 coefficients, each
+/// window's band cursor restarting at zero so `wstart < cutoff` gates every
+/// window on its own 128-sample span.
+fn aac_psy_calc_thr(
   bands : Array[AacPsyBandState],
   coefs : Array[Double],
   cutoff : Int32,
+  sizes : Array[Int32],
+  num_windows : Int32,
 ) -> Unit {
+  let num_bands = sizes.length()
   let mut start = 0
-  let mut wstart = 0
-  for g in 0..<self.band_sizes.length() {
-    let band = bands[g]
-    let mut energy = 0.0
-    let mut form_factor = 0.0
-    if wstart < cutoff {
-      for i in 0..<self.band_sizes[g] {
-        let c = coefs[start + i]
-        energy += c * c
-        form_factor += c.abs().sqrt()
+  let mut w = 0
+  while w < num_windows * 16 {
+    let mut wstart = 0
+    for g in 0..<num_bands {
+      let band = bands[w + g]
+      let mut energy = 0.0
+      let mut form_factor = 0.0
+      if wstart < cutoff {
+        for i in 0..<sizes[g] {
+          let c = coefs[start + i]
+          energy += c * c
+          form_factor += c.abs().sqrt()
+        }
       }
+      let temp = if energy > 0.0 {
+        (sizes[g].to_double() / energy).sqrt()
+      } else {
+        0.0
+      }
+      band.energy = energy
+      band.thr = energy * psy_rpe_thr_coeff
+      band.nz_lines = form_factor * temp.sqrt()
+      start += sizes[g]
+      wstart += sizes[g]
     }
-    let temp = if energy > 0.0 {
-      (self.band_sizes[g].to_double() / energy).sqrt()
-    } else {
-      0.0
-    }
-    band.energy = energy
-    band.thr = energy * psy_rpe_thr_coeff
-    band.nz_lines = form_factor * temp.sqrt()
-    start += self.band_sizes[g]
-    wstart += self.band_sizes[g]
+    w = w + 16
   }
 }
 
@@ -613,16 +630,30 @@ pub fn AacPsyContext::band_sizes(self : AacPsyContext) -> Array[Int32] {
 /// `bitres.bits` (bits consumed by the previous frame); the reference harness
 /// uses 0.
 ///
-/// This is `psy_3gpp_analyze_channel`, `aacpsy.c:646`, restricted to one
-/// window. `window_type` / `prev_window_type` are the frame's
-/// `window_sequence` and the previous frame's (`wi->window_type[0]` and
-/// `[1]`); all three long sequences are supported, EIGHT_SHORT is not. The
-/// returned bands are the `FFPsyBand` array that the twoloop quantizer
-/// consumes. The band records and the perceptual entropy are per channel,
-/// while `bitres` (`fill_level`) and the PE range (`pe.min` / `pe.max` /
-/// `pe.previous`) are shared by every channel of the element — analysing
-/// channel 0 already moves the element's reservoir position, exactly like
-/// upstream.
+/// This is `psy_3gpp_analyze_channel`, `aacpsy.c:646`. `window_type` /
+/// `prev_window_type` are the frame's `window_sequence` and the previous
+/// frame's (`wi->window_type[0]` and `[1]`), and they select the window shape:
+/// `aac_eight_short` means eight 128-sample windows, every other sequence is
+/// one long window. Upstream reads that from `wi->num_windows`, which both of
+/// FFmpeg's block-switchers set from exactly this test
+/// (`psy_3gpp_window`, `aacpsy.c:475-486`), so it is derived here instead of
+/// passed in — an eight-short frame with one window is then unrepresentable.
+/// The short shape changes four things: the band plan (`ctx->bands[1]`, 14
+/// bands of 8x128 at 44.1 kHz instead of 49), the coefficient tables
+/// (`psy_coef[1]`, whose spreading factors come from the short slope
+/// constants), `PSY_3GPP_AH_THR_SHORT` for hole avoidance, and the
+/// `calc_bit_demand` short-window slope set; the analysed span also halves, so
+/// `cutoff` divides by the window count.
+///
+/// The returned bands are the `FFPsyBand` array that the twoloop quantizer
+/// consumes, in the slot layout every consumer indexes with
+/// (`psy_bands[w * 16 + g]`, `aaccoder.c:366`): for one long window that is the
+/// contiguous `num_bands` records, for eight short windows a 128-slot array
+/// whose `w * 16 + g` entries carry window `w`. The band records and the
+/// perceptual entropy are per channel, while `bitres` (`fill_level`) and the PE
+/// range (`pe.min` / `pe.max` / `pe.previous`) are shared by every channel of
+/// the element — analysing channel 0 already moves the element's reservoir
+/// position, exactly like upstream.
 pub fn AacPsyContext::analyze(
   self : AacPsyContext,
   channel : Int32,
@@ -631,14 +662,22 @@ pub fn AacPsyContext::analyze(
   window_type : Int32,
   prev_window_type : Int32,
 ) -> AacPsyResult {
-  let num_bands = self.band_sizes.length()
-  let coeffs = self.coeffs_long
+  let is_short = window_type == aac_eight_short
+  let num_windows = if is_short { 8 } else { 1 }
+  let sizes = if is_short {
+    self.band_sizes_short
+  } else {
+    self.band_sizes
+  }
+  let num_bands = sizes.length()
+  let coeffs = if is_short { self.coeffs_short } else { self.coeffs_long }
+  let slots = if is_short { num_windows * 16 } else { num_bands }
   let bands = self.bands[channel]
   let prev_band = self.prev_band[channel]
-  // `aacpsy.c:672`: the pre-echo reduction is skipped for LONG_STOP, and for
-  // the first window after LONG_START (w == 0, which is always here).
-  let skip_preecho = window_type == aac_long_stop ||
-    prev_window_type == aac_long_start
+  // `aacpsy.c:685`: the pre-echo reduction is skipped for the whole frame when
+  // this is a LONG_STOP window, and for `w == 0` only when the frame before it
+  // started with a LONG_START (the `!w` in the C condition).
+  let skip_preecho_all = window_type == aac_long_stop
   // `FFPsyContext.cutoff` is sticky: the quantiser writes the bandwidth it
   // settled on back into the model, so from the second frame on the analysis
   // uses that value instead of recomputing it (with PNS enabled the quantiser
@@ -648,32 +687,16 @@ pub fn AacPsyContext::analyze(
   } else {
     aac_psy_cutoff(self.bit_rate, self.channels, self.sample_rate)
   }
-  let cutoff = bandwidth * 2048 / self.sample_rate
-  let avoid_hole_thr = psy_ah_thr_long
+  let cutoff = bandwidth * 2048 / num_windows / self.sample_rate
+  let avoid_hole_thr = if is_short {
+    psy_ah_thr_short
+  } else {
+    psy_ah_thr_long
+  }
   // 5.4.2 threshold calculation
-  self.calc_thr(bands, coefs, cutoff)
-  // 5.4.2.3 spreading + 5.4.3 spread energy (one window, w = 0)
+  aac_psy_calc_thr(bands, coefs, cutoff, sizes, num_windows)
+  // 5.4.2.3 spreading + 5.4.3 spread energy, one pass per window.
   let spread_en : Array[Double] = Array::make(128, 0.0)
-  spread_en[0] = bands[0].energy
-  for g in 1..<num_bands {
-    let b = bands[g]
-    let bm = bands[g - 1]
-    let t = aac_psy_maxf(b.thr, bm.thr * coeffs[g].spread_hi_thr)
-    b.thr = t
-    spread_en[g] = aac_psy_maxf(
-      b.energy,
-      spread_en[g - 1] * coeffs[g].spread_hi_en,
-    )
-  }
-  for g = num_bands - 2; g >= 0; g = g - 1 {
-    let b = bands[g]
-    let bp = bands[g + 1]
-    b.thr = aac_psy_maxf(b.thr, bp.thr * coeffs[g].spread_low_thr)
-    spread_en[g] = aac_psy_maxf(
-      spread_en[g],
-      spread_en[g + 1] * coeffs[g].spread_low_en,
-    )
-  }
   let mut pe = if self.chan_bitrate > 32000 {
     0.0
   } else {
@@ -681,34 +704,68 @@ pub fn AacPsyContext::analyze(
   }
   let mut a = 0.0
   let mut active_lines = 0.0
-  for g in 0..<num_bands {
-    let b = bands[g]
-    b.thr = aac_psy_maxf(b.thr, coeffs[g].ath)
-    b.thr_quiet = b.thr
-    // 5.4.2.5 pre-echo control. `psy_3gpp_analyze_channel` skips the reduction
-    // for a LONG_STOP window and for a window that follows LONG_START: those
-    // transition windows already carry the attack in their own spectrum, so
-    // damping the threshold against the previous frame would be wrong.
-    if !skip_preecho {
-      let prevq = prev_band[g].thr_quiet
-      b.thr = aac_psy_maxf(
-        psy_rpemin * b.thr,
-        aac_psy_minf(b.thr, psy_rpelev * prevq),
+  let mut w = 0
+  while w < num_windows * 16 {
+    // `aacpsy.c:670` writes this window's first band energy to `spread_en[0]`
+    // - not to `spread_en[w]` - so for every window after the first the
+    // spreading chain starts from the zero the array was initialised with, and
+    // band `w + 0` never gets its own energy into the hole-avoidance test.
+    // Upstream quirk, transcribed verbatim; with one window it is the
+    // assignment it was meant to be.
+    spread_en[0] = bands[w].energy
+    for g in 1..<num_bands {
+      let b = bands[w + g]
+      let bm = bands[w + g - 1]
+      let t = aac_psy_maxf(b.thr, bm.thr * coeffs[g].spread_hi_thr)
+      b.thr = t
+      spread_en[w + g] = aac_psy_maxf(
+        b.energy,
+        spread_en[w + g - 1] * coeffs[g].spread_hi_en,
       )
     }
-    pe += aac_psy_calc_pe(b)
-    a += b.pe_const
-    active_lines += b.active_lines
-    // 5.6.1.3.3 selection of bands for avoidance of holes
-    b.avoid_holes = if spread_en[g] * avoid_hole_thr > b.energy ||
-      coeffs[g].min_snr > 1.0 {
-      psy_ah_none
-    } else {
-      psy_ah_inactive
+    for g = num_bands - 2; g >= 0; g = g - 1 {
+      let b = bands[w + g]
+      let bp = bands[w + g + 1]
+      b.thr = aac_psy_maxf(b.thr, bp.thr * coeffs[g].spread_low_thr)
+      spread_en[w + g] = aac_psy_maxf(
+        spread_en[w + g],
+        spread_en[w + g + 1] * coeffs[g].spread_low_en,
+      )
     }
+    let skip_preecho = skip_preecho_all ||
+      (w == 0 && prev_window_type == aac_long_start)
+    // 5.4.2.4 "Threshold in quiet" + 5.4.2.5 pre-echo + 5.6.1.3 PE/hole choice
+    for g in 0..<num_bands {
+      let b = bands[w + g]
+      b.thr = aac_psy_maxf(b.thr, coeffs[g].ath)
+      b.thr_quiet = b.thr
+      // `psy_3gpp_analyze_channel` skips the reduction for a LONG_STOP window
+      // and for a window that follows LONG_START: those transition windows
+      // already carry the attack in their own spectrum, so damping the
+      // threshold against the previous frame would be wrong. For a short frame
+      // only the first window sees the previous frame.
+      if !skip_preecho {
+        let prevq = prev_band[w + g].thr_quiet
+        b.thr = aac_psy_maxf(
+          psy_rpemin * b.thr,
+          aac_psy_minf(b.thr, psy_rpelev * prevq),
+        )
+      }
+      pe += aac_psy_calc_pe(b)
+      a += b.pe_const
+      active_lines += b.active_lines
+      // 5.6.1.3.3 selection of bands for avoidance of holes
+      b.avoid_holes = if spread_en[w + g] * avoid_hole_thr > b.energy ||
+        coeffs[g].min_snr > 1.0 {
+        psy_ah_none
+      } else {
+        psy_ah_inactive
+      }
+    }
+    w = w + 16
   }
   self.entropy[channel] = pe
-  let desired_bits = self.bit_demand(pe, prev_bits, false)
+  let desired_bits = self.bit_demand(pe, prev_bits, is_short)
   let mut desired_pe = desired_bits.to_double() * psy_bits_to_pe
   if prev_bits > 0 {
     let ratio = aac_psy_clipf(
@@ -721,17 +778,25 @@ pub fn AacPsyContext::analyze(
   self.pe_previous = desired_bits.to_double() * psy_bits_to_pe
   self.alloc = desired_bits
   if desired_pe < pe {
-    // 5.6.1.3.4 first estimation of the reduction value
-    let mut reduction = aac_psy_calc_reduction(a, desired_pe, pe, active_lines)
-    pe = 0.0
-    a = 0.0
-    active_lines = 0.0
-    for g in 0..<num_bands {
-      let b = bands[g]
-      b.thr = aac_psy_calc_reduced_thr(b, coeffs[g].min_snr, reduction)
-      pe += aac_psy_calc_pe(b)
-      a += b.pe_const
-      active_lines += b.active_lines
+    // 5.6.1.3.4 first estimation of the reduction value. Like C, the running
+    // totals are reset *inside* the per-window loop, so when this stage is
+    // done `pe` / `a` / `active_lines` describe only the last window - and the
+    // second estimation below reads those frame-wide-looking variables.
+    let mut reduction = 0.0
+    let mut w_first = 0
+    while w_first < num_windows * 16 {
+      reduction = aac_psy_calc_reduction(a, desired_pe, pe, active_lines)
+      pe = 0.0
+      a = 0.0
+      active_lines = 0.0
+      for g in 0..<num_bands {
+        let b = bands[w_first + g]
+        b.thr = aac_psy_calc_reduced_thr(b, coeffs[g].min_snr, reduction)
+        pe += aac_psy_calc_pe(b)
+        a += b.pe_const
+        active_lines += b.active_lines
+      }
+      w_first = w_first + 16
     }
     // 5.6.1.3.5 second estimation (two passes)
     let mut delta_pe = 0.0
@@ -740,31 +805,39 @@ pub fn AacPsyContext::analyze(
       let mut pe_no_ah = 0.0
       let mut a2 = 0.0
       let mut al2 = 0.0
-      for g in 0..<num_bands {
-        let b = bands[g]
-        if b.avoid_holes != psy_ah_active {
-          pe_no_ah += b.pe
-          a2 += b.pe_const
-          al2 += b.active_lines
+      let mut w_sum = 0
+      while w_sum < num_windows * 16 {
+        for g in 0..<num_bands {
+          let b = bands[w_sum + g]
+          if b.avoid_holes != psy_ah_active {
+            pe_no_ah += b.pe
+            a2 += b.pe_const
+            al2 += b.active_lines
+          }
         }
+        w_sum = w_sum + 16
       }
       let desired_pe_no_ah = aac_psy_maxf(desired_pe - (pe - pe_no_ah), 0.0)
       if al2 > 0.0 {
         reduction = aac_psy_calc_reduction(a2, desired_pe_no_ah, pe_no_ah, al2)
       }
       pe = 0.0
-      for g in 0..<num_bands {
-        let b = bands[g]
-        if al2 > 0.0 {
-          b.thr = aac_psy_calc_reduced_thr(b, coeffs[g].min_snr, reduction)
+      let mut w_thr = 0
+      while w_thr < num_windows * 16 {
+        for g in 0..<num_bands {
+          let b = bands[w_thr + g]
+          if al2 > 0.0 {
+            b.thr = aac_psy_calc_reduced_thr(b, coeffs[g].min_snr, reduction)
+          }
+          pe += aac_psy_calc_pe(b)
+          b.norm_fac = if b.thr > 0.0 {
+            b.active_lines / b.thr
+          } else {
+            0.0
+          }
+          norm_fac_total += b.norm_fac
         }
-        pe += aac_psy_calc_pe(b)
-        b.norm_fac = if b.thr > 0.0 {
-          b.active_lines / b.thr
-        } else {
-          0.0
-        }
-        norm_fac_total += b.norm_fac
+        w_thr = w_thr + 16
       }
       delta_pe = desired_pe - pe
       if (delta_pe.abs() > 0.05 * desired_pe) {
@@ -778,42 +851,70 @@ pub fn AacPsyContext::analyze(
       } else {
         0.0
       }
-      for g in 0..<num_bands {
-        let b = bands[g]
-        if b.active_lines > 0.5 {
-          let delta_sfb_pe = b.norm_fac * inv * delta_pe
-          let mut thr = b.thr *
-            aac_psy_exp2f(delta_sfb_pe / b.active_lines)
-          if thr > coeffs[g].min_snr * b.energy &&
-            b.avoid_holes == psy_ah_inactive {
-            thr = aac_psy_maxf(b.thr, coeffs[g].min_snr * b.energy)
+      let mut w_lin = 0
+      while w_lin < num_windows * 16 {
+        for g in 0..<num_bands {
+          let b = bands[w_lin + g]
+          if b.active_lines > 0.5 {
+            let delta_sfb_pe = b.norm_fac * inv * delta_pe
+            let mut thr = b.thr *
+              aac_psy_exp2f(delta_sfb_pe / b.active_lines)
+            if thr > coeffs[g].min_snr * b.energy &&
+              b.avoid_holes == psy_ah_inactive {
+              thr = aac_psy_maxf(b.thr, coeffs[g].min_snr * b.energy)
+            }
+            b.thr = thr
           }
-          b.thr = thr
         }
+        w_lin = w_lin + 16
       }
     } else {
-      // 5.6.1.3.7 further PE reduction: raise min_snr from the top band down
-      for g = num_bands - 1; g >= 0 && pe > desired_pe; g = g - 1 {
-        let b = bands[g]
-        if b.avoid_holes != psy_ah_none && coeffs[g].min_snr < psy_snr_1db {
-          coeffs[g].min_snr = psy_snr_1db
-          b.thr = b.energy * psy_snr_1db
-          pe += b.active_lines * 1.5 - b.pe
+      // 5.6.1.3.7 further PE reduction: raise min_snr from the top band down,
+      // all windows of one band together (`aacpsy.c:812-822`).
+      let mut g = num_bands - 1
+      while g >= 0 && pe > desired_pe {
+        let mut w_pe = 0
+        while w_pe < num_windows * 16 {
+          let b = bands[w_pe + g]
+          if b.avoid_holes != psy_ah_none &&
+            coeffs[g].min_snr < psy_snr_1db {
+            coeffs[g].min_snr = psy_snr_1db
+            b.thr = b.energy * psy_snr_1db
+            pe += b.active_lines * 1.5 - b.pe
+          }
+          w_pe = w_pe + 16
         }
+        g = g - 1
       }
     }
   }
-  // publish FFPsyBand + commit prev_band (aacpsy.c:827-839)
+  // publish FFPsyBand + commit prev_band (aacpsy.c:827-839). The published
+  // array keeps C's slot layout, so a short frame's window `w` starts at
+  // `w * 16` and the padding slots between bands stay empty.
   let out : Array[AacPsyBandInfo] = []
-  for g in 0..<num_bands {
-    let b = bands[g]
-    let pb = prev_band[g]
-    out.push({
-      energy: b.energy,
-      threshold: b.thr,
-      spread: b.active_lines * 2.0 / self.band_sizes[g].to_double(),
-      bits: (b.pe / psy_bits_to_pe).to_int(),
-    })
+  for _ in 0..<slots {
+    out.push({ energy: 0.0, threshold: 0.0, spread: 0.0, bits: 0 })
+  }
+  let mut w_pub = 0
+  while w_pub < num_windows * 16 {
+    for g in 0..<num_bands {
+      let b = bands[w_pub + g]
+      out[w_pub + g] = {
+        energy: b.energy,
+        threshold: b.thr,
+        spread: b.active_lines * 2.0 / sizes[g].to_double(),
+        bits: (b.pe / psy_bits_to_pe).to_int(),
+      }
+    }
+    w_pub = w_pub + 16
+  }
+  // `memcpy(pch->prev_band, pch->band, sizeof(pch->band))`: the whole 128-slot
+  // array, including the slots this frame did not touch, so a frame that
+  // switches between the long and the short slot layout still finds the values
+  // the last frame of that layout wrote.
+  for s in 0..<128 {
+    let b = bands[s]
+    let pb = prev_band[s]
     pb.thr = b.thr
     pb.thr_quiet = b.thr_quiet
     pb.energy = b.energy
@@ -826,6 +927,8 @@ pub fn AacPsyContext::analyze(
   }
   {
     bands: out,
+    num_windows,
+    num_bands,
     alloc: self.alloc,
     entropy: self.entropy[channel],
     fill_level: self.fill_level,

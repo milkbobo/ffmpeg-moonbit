@@ -8166,6 +8166,62 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   `aac_encode_vectors` 18/18、`aac_twoloop_vectors` 3/3、`aac_pns_vectors` 3/3；
   全量 **1405/1405** 通过。
 
+## 300. psy 的八短窗形态：8×128 带计划 + 逐窗阈值链
+
+- **交付**：`aac_psy.mbt` 从"只跑 `num_windows = 1`"扩成
+  `psy_3gpp_analyze_channel`（`aacpsy.c:646-840`）的两条形态。短窗形状牵动的
+  六件事全部照抄：
+  - `calc_thr_3gpp` 的 `w += 16` 外层——`start` 连续走完 1024 个系数，
+    `wstart` 每窗归零，所以 `wstart < cutoff` 是**逐窗**判的（一个窗超出截止频率
+    不连累下一个）；
+  - 带计划与系数表按 `num_windows == 8` 切换（44.1 kHz 下 14 带 × 8 窗，
+    `psy_coef[1]` 用的是短窗扩散常量 `en_spread_low_s` / `en_spread_hi_s`）；
+  - `cutoff = bandwidth * 2048 / num_windows / sample_rate`（同一个 16 kHz 截止
+    在短窗里只剩 92 条谱线）；
+  - 孔避免阈值换 `PSY_3GPP_AH_THR_SHORT = 0.63f`，按 f32 存
+    0.6299999952316284（§296 那条"C 的 `float` 字面量本身就是单精度值"）；
+  - `calc_bit_demand` 换短窗那组斜率（`SAVE_SLOPE_S` / `SPEND_SLOPE_S` /
+    `CLIP_HI_S`），同一份谱的 `bitres.alloc` 因此和长窗不同；
+  - 预回声条件里的 `!w`：短窗帧只有**窗口 0** 读上一帧的 `prev_band.thr_quiet`。
+- **两条上游怪癖**（都逐字抄，注释里点名）：①`aacpsy.c:670` 把本窗第一个带的
+  能量写到 `spread_en[0]` 而不是 `spread_en[w]`，所以窗口 1..7 的扩散链是从数组
+  初始的 0.0 起跳、band `w + 0` 自己的能量永远进不了孔避免判据；②5.6.1.3.4 把
+  `pe` / `a` / `active_lines` 的重置放在**外层窗循环内部**，于是交给第二估计阶段的
+  "全帧"量其实只是最后一个窗的。
+- **形状从序列推导**：`analyze` 没有新增 `num_windows` 参数，短窗由
+  `window_type == aac_eight_short` 推出来。上游两个 block switcher 都是按这个
+  测试设 `wi->num_windows` 的（`aacpsy.c:475-486` 与 lame 版同一写法），
+  "八个短窗但只分析一个窗"这种状态在移植里因此不可表示。
+- **发布布局**：`AacPsyResult.bands` 换成 C 的槽位数组
+  （`psy_bands[w * 16 + g]`，`aaccoder.c:366` 就是这么指的）——长窗仍是开头 49 个
+  连续槽位，所以所有旧向量一字没动；短窗给 128 槽，结果里带上
+  `num_windows` / `num_bands`。`prev_band` 按 `memcpy(pch->prev_band,
+  pch->band, sizeof(pch->band))` 的语义整表抄 128 槽，长/短帧交替时读到的仍是
+  上一个同形状帧的值。
+- **C 侧**：`_ref/aacenc/harness.c` 加 `--short`——`wi.num_windows = 8` +
+  `EIGHT_SHORT_SEQUENCE`，`window_type[1]` 逐帧在 only_long / long_start 之间交替
+  把两条预回声分支都打到，谱用按帧轮转的 8 段攻击斜坡（相邻窗能量差一个数量级，
+  不然逐窗链路分不出来）。**不带该开关时 harness 的输出与旧 `vectors.txt`
+  逐字节相同**（`cmp` 通过），所以长窗 psy、twoloop、PNS、IS/M-S 四批向量都不受
+  影响。
+- **新向量**：`libavcodec/aac_psy_vectors/fixtures_short.mbt`（5 帧 × 8 窗 × 14 带
+  = 560 条，含每条的槽位下标）由 `scripts/gen_aac_psy_short_vectors.py` 生成。
+  `bits` / `alloc` / `fill_level` **逐位一致**（560 条 0 处失配）；实测最坏相对误差
+  energy 1.73e-7、threshold 4.87e-6、spread 2.16e-7，比长窗那批（约 1e-4）还紧。
+- **新增三条回归**（`aac_psy_short_test.mbt`）：560 条对拍并断言槽位就是
+  `w * 16 + g`（布局是核对出来的，不是假设的）；未写过的槽位必须保持空（先跑一个
+  长窗帧再跑短窗，防旧值渗进 padding）；同一份谱在两种形状下带数量、带计划与
+  `alloc` 都必须不同（防形状塌陷）。
+- **意义 / 仍未做**：编码器仍只把长窗帧交给感知路径
+  （`use_psy = perceptual && seq != aac_eight_short`），而且**三条端到端流与 §299
+  逐字节相同**（A 3166 B / B 2980 B / C 727 B，`cmp` 通过）——这一轮是纯地基。
+  短窗真正接上还缺：多窗 twoloop（`psy_bands[(w+w2)*16+g]` 的消费者、
+  `scale_factor_grouping` 的写入与 `group_len` 的带归并）、窗口组 zeroes 归并和
+  `msc == max_sfb * num_windows`（§299 那条 `num_windows` 第一次真的等于 8）、
+  多窗 IS/M-S，以及一组短窗夹具。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_psy_vectors` 6/6；
+  全量 **1408/1408** 通过。
+
 
 
 

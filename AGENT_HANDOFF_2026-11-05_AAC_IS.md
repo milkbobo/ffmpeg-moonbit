@@ -1,10 +1,10 @@
-# AGENT HANDOFF — 2026-11-05 AAC 强度立体声与 M/S（§290 → §299）
+# AGENT HANDOFF — 2026-11-05 AAC 强度立体声与 M/S（§290 → §300）
 
 这条线到这里，感知路径的三个工具（twoloop/PNS、`search_for_is`、`search_for_ms`）
 都已经与 FFmpeg 9.0.2 **逐位对拍**并接进了编码器：顺序、判据、成本量值、以及
 M/S 改写后的标度因子与带类型终值。§297–§299 又把码率重试循环的四处顺序/状态偏差
 （`analyze`、TNS、`adjust_frame_information`、以及首帧 TNS 的零初始化）全部对齐，
-所以感知路径现在与 `aacenc.c` 同构。默认（简化）路径保持原样，只在它自己的
+所以感知路径现在与 `aacenc.c` 同构；§300 又把 3GPP psy 的八短窗形态补齐（编码器还没接）。默认（简化）路径保持原样，只在它自己的
 频率门 + 能量掩码上跑。剩下的事列在 §2b。以下把"已经落地的"和
 "下一次要怎么做的"分清楚。
 
@@ -103,13 +103,24 @@ if self.config.channels == 2 && its == 0 && use_is {
    在那里，上游只对 `!is_mask` 的带写 0，重算整个掩码会清掉它。
    简化路径仍用能量掩码（没有 twoloop 的 `sf/cb/阈值` 可定价）。
 
-## 2b. §299 之后剩下什么（按建议顺序）
+## 2b. §300 之后剩下什么（按建议顺序）
 
-1. **短窗感知路径**：8×128 带计划 + `scale_factor_grouping` + 多窗 twoloop。
-   `aac_ms_search` 与 `aac_is_search` 都只写了单长窗形态（C 的 `w`/`w2` 外层循环
-   还在，接进去时是纯结构性工作），`search_for_ms` 里 mid/side 的 `Mmax/Smax`
-   是**整窗组**共用的，多窗时 `find_max_val(group_len, ...)` 的 `w2*128 + i` 步长
-   已经在 `aac_two_find_max_val` 里参数化好了。
+1. **短窗感知路径的剩下两层**（第一层 **§300 已闭环**：3GPP psy 的八短窗形态
+   ——8×128 带计划、逐窗 `calc_thr` / 扩散 / 预回声、短窗 `bit_demand` 与
+   `PSY_3GPP_AH_THR_SHORT`，560 条 `psy_bands[w*16+g]` 黄金记录逐位对上
+   `bits`/`alloc`/`fill_level`；harness 的 `--short` 开关负责产出它们，长窗输出
+   一字未变）。还缺的是消费这些带的两层：
+   - **多窗 twoloop**：`search_for_quantizers_twoloop` 的 `for (w2 = 0; w2 < 8;
+     w2++)` 外层 + `psy_bands[(w+w2)*16+g]` 索引 + 逐窗组的
+     `find_max_val(group_len, ...)`（`aac_two_find_max_val` 的 `w2*128 + i` 步长
+     已经参数化好了），以及 `scale_factor_grouping` 的写入；
+   - **多窗工具与 adjust**：`aac_ms_search` 与 `aac_is_search` 都只写了单长窗形态
+     （C 的 `w`/`w2` 外层循环还在，接进去是纯结构性工作），`search_for_ms` 里
+     mid/side 的 `Mmax/Smax` 是**整窗组**共用的；§299 那三条里，窗口组 zeroes 归并
+     只有多窗才不是恒等、`msc == max_sfb * num_windows` 的 `num_windows` 也第一次
+     真的等于 8。
+   注意 §300 没动编码器：`use_psy = perceptual && seq != aac_eight_short` 这条门
+   还在，短窗帧仍走简化模型，所以接上多窗 twoloop 才会第一次改变端到端码流。
 2. **短窗 IS 夹具**：结构上 `num_windows` 与每窗带内偏移都参数化了，缺的只是一组
    8 短窗的真夹具。
 3. ~~**f32 字面量的同类残留**~~ —— **§296 已清**（量化器 / `zspread` / PNS 三条
