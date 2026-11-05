@@ -1,5 +1,11 @@
 # AGENT HANDOFF — 2026-11-05 AAC 短窗感知路径（§302）
 
+> 【2026-11-05 更新】§5 第 1 项已由 **§303** 闭环：短窗 NMR 夹具落地
+> （`aac_encode_test_nmr_short`），实测两码率、八个窗全线劣化 → **保持 opt-in
+> 不转正**（README 已写死结论）。后续编号顺移：窗分组 = **§304**、多窗
+> 工具 = **§305**。§4 增补一条坑：`assert_eq`/`assert_true` 用在非 test
+> 函数里必须给该函数签名加 `raise`（错误码 [4122]）。
+
 接上一轮留下的半成品：`libavcodec/aac_encode.mbt` 里 `use_psy` 的短窗门已经拆掉、
 `channel_data_psy` 已按窗量化，但没有提交、没有回归、外部解码也没验，工作树里还
 躺着一个探针测试和一个 `zz_short_ab/` main 包。本轮把这条线收尾：**验证 → 加开关 →

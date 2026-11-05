@@ -220,6 +220,207 @@ test "aac_lc_perceptual_short_window_stream" {
 }
 
 ///|
+/// Per-band noise-to-mask ratio of the eight-short-window frames - the §303
+/// yardstick that decides whether `perceptual_short` can become the default.
+/// The long-window helper (`aac_encode_test_nmr`) measures a 1024-line
+/// spectrum against long-window thresholds, which says nothing about a short
+/// frame: the model itself switches to the 14-band short plan and the short
+/// slope constants, so the noise of a short frame is only comparable against
+/// thresholds computed in the same shape.
+///
+/// Every frame of the stream is replayed through a fresh model - long frames
+/// included, because the pre-echo reduction reads the previous frame's
+/// thresholds and `prev_band` carries them across window-shape changes - and
+/// for every EIGHT_SHORT frame the original and the decoded signal go through
+/// the same 8 x 128 analysis, so each window's each band's error lands on the
+/// very threshold (`bands[w * 16 + g]`) the model computed for the original.
+/// The thresholds therefore depend on the input and the window plan only, and
+/// two streams that share a window plan are measured with the same yardstick.
+///
+/// Frame 0 is analysed to establish the pre-echo history but not measured:
+/// its overlap buffer's first half is the encoder's silent start-up history,
+/// which the priming frame only approximately reconstructs. Returns
+/// `(mean nmr in dB over windows x bands, spectral snr in dB over the short
+/// frames' coefficients)`.
+fn aac_encode_test_nmr_short(
+  input : Array[Array[Double]],
+  decoded : Array[Array[Double]],
+  channels : Int32,
+  seqs : Array[Int32],
+  rate : Int32,
+  bit_rate : Int32,
+) -> (Double, Double) raise {
+  let frames = seqs.length() - 1 // the last stream frame is the flush frame
+  let psy = @libavcodec.aac_psy_new(4, rate, bit_rate, channels)
+  let sizes = psy.band_sizes_short() // 14 bands, 128 lines per window
+  let num_bands = sizes.length()
+  let offsets : Array[Int32] = Array::make(num_bands + 1, 0)
+  for g = 0; g < num_bands; g = g + 1 {
+    offsets[g + 1] = offsets[g] + sizes[g]
+  }
+  // The short plan must tile all eight windows' 128 lines exactly.
+  assert_eq(offsets[num_bands], 128)
+  let mut nmr_sum = 0.0
+  let mut nmr_n = 0
+  let mut energy = 0.0
+  let mut noise = 0.0
+  for ch = 0; ch < channels; ch = ch + 1 {
+    for f = 0; f < frames; f = f + 1 {
+      let seq = seqs[f]
+      let orig : Array[Double] = Array::make(2048, 0.0)
+      for i = 0; i < 1024; i = i + 1 {
+        // The decoder emits one priming frame, so input block f is decoded
+        // block f+1; the encoder's overlap buffer for frame f is [block f-1,
+        // block f], which for f == 0 starts from its silent history.
+        if f > 0 {
+          orig[i] = input[ch][(f - 1) * 1024 + i]
+        }
+        orig[1024 + i] = input[ch][f * 1024 + i]
+      }
+      let want = aac_encode_test_analysis(orig, seq)
+      let prev = (if f > 0 { seqs[f - 1] } else { 0 })
+      let bands = psy.analyze(ch, want, 0, seq, prev).bands
+      if seq != 2 || f == 0 {
+        continue
+      }
+      let recon : Array[Double] = Array::make(2048, 0.0)
+      for i = 0; i < 1024; i = i + 1 {
+        recon[i] = decoded[ch][f * 1024 + i]
+        recon[1024 + i] = decoded[ch][(f + 1) * 1024 + i]
+      }
+      let got = aac_encode_test_analysis(recon, seq)
+      for w = 0; w < 8; w = w + 1 {
+        for g = 0; g < num_bands; g = g + 1 {
+          let thr = bands[w * 16 + g].threshold
+          if thr <= 0.0 {
+            continue
+          }
+          let base = w * 128
+          let mut band_noise = 0.0
+          for i = offsets[g]; i < offsets[g + 1]; i = i + 1 {
+            let d = got[base + i] - want[base + i]
+            band_noise = band_noise + d * d
+            energy = energy + want[base + i] * want[base + i]
+            noise = noise + d * d
+          }
+          nmr_sum = nmr_sum + 10.0 * @math.log10(band_noise / thr)
+          nmr_n = nmr_n + 1
+        }
+      }
+    }
+  }
+  // A fixture without short frames measures nothing; NaN fails every caller.
+  assert_true(nmr_n > 0)
+  let snr = 10.0 * @math.log10(energy / noise)
+  (nmr_sum / nmr_n.to_double(), snr)
+}
+
+///|
+/// The window sequence each coded frame of a mono stream carries, in stream
+/// order. The plan comes from the attack detector, which reads the input PCM
+/// only, so two rate controls fed the same input must produce the same plan -
+/// that identity is what lets the NMR helper compare them on one yardstick.
+fn aac_encode_test_window_plan(stream : Array[Bytes]) -> Array[Int32] {
+  let seqs : Array[Int32] = []
+  for f = 0; f < stream.length(); f = f + 1 {
+    seqs.push(aac_encode_test_short_ics(stream, f).window_sequence)
+  }
+  seqs
+}
+
+///|
+/// Which of the two short-frame rate controls puts the quantisation noise
+/// closer to the model's masking thresholds - the §303 question that decides
+/// whether `perceptual_short` stays opt-in. The simplified model treats all
+/// eight windows as one 1024-line frame; the perceptual arm quantises each
+/// window against its own threshold but shares one scalefactor per band
+/// across the group (§302), so whether the noise really lands under the mask
+/// is an empirical question, and this is the measurement.
+test "aac_lc_perceptual_short_noise_to_mask" {
+  let rate = 44100
+  let frames = 8
+  let input = aac_encode_test_transient(rate, frames)
+  let base = @libavcodec.aac_encode_config_perceptual(rate, 1, 128000)
+  let on = @libavcodec.aac_encode_config_with_perceptual_short(base)
+  let stream_off = aac_encode_test_stream_config(input, 1, frames, base)
+  let stream_on = aac_encode_test_stream_config(input, 1, frames, on)
+  let plan_off = aac_encode_test_window_plan(stream_off)
+  let plan_on = aac_encode_test_window_plan(stream_on)
+  // The plan is PCM-driven, so both streams must carry the same windows.
+  assert_eq(plan_off.length(), plan_on.length())
+  for f = 0; f < plan_off.length(); f = f + 1 {
+    assert_eq(plan_off[f], plan_on[f])
+  }
+  let (nmr_off, snr_off) = aac_encode_test_nmr_short(
+    input,
+    aac_encode_test_decode(stream_off, 1),
+    1,
+    plan_off,
+    rate,
+    128000,
+  )
+  let (nmr_on, snr_on) = aac_encode_test_nmr_short(
+    input,
+    aac_encode_test_decode(stream_on, 1),
+    1,
+    plan_on,
+    rate,
+    128000,
+  )
+  println(
+    "short noise-to-mask: simplified mean=\{nmr_off} dB (spectral snr \{snr_off}); perceptual mean=\{nmr_on} dB (spectral snr \{snr_on})",
+  )
+  // Both measurements are finite and within a sane distance of the mask (a
+  // NaN fails both bounds).
+  assert_true(nmr_off > -100.0 && nmr_off < 60.0)
+  assert_true(nmr_on > -100.0 && nmr_on < 60.0)
+  // The §303 finding, and the reason `perceptual_short` stays opt-in: with
+  // the group plan still one group of eight windows, the perceptual arm
+  // shares one scalefactor per band across windows whose energies differ by
+  // an order of magnitude, so it loses on the model's own yardstick too -
+  // 14.2 vs 9.7 dB here, worse in every one of the eight windows, worst in
+  // the low bands. The long-window trade (10 dB of SNR for 1.6 dB of NMR,
+  // §280) does not exist yet on short frames; window grouping (the real
+  // `scale_factor_grouping`) is what can flip this ordering.
+  assert_true(nmr_on > nmr_off)
+  // The same holds where the two allocations part hardest: at 64 kbps the
+  // shared scalefactor starves every quiet window (18.7 vs 15.6 dB, with
+  // waveform SNR already known to collapse, §302).
+  let base64 = @libavcodec.aac_encode_config_perceptual(rate, 1, 64000)
+  let on64 = @libavcodec.aac_encode_config_with_perceptual_short(base64)
+  let s64_off = aac_encode_test_stream_config(input, 1, frames, base64)
+  let s64_on = aac_encode_test_stream_config(input, 1, frames, on64)
+  let p64_off = aac_encode_test_window_plan(s64_off)
+  let p64_on = aac_encode_test_window_plan(s64_on)
+  assert_eq(p64_off.length(), p64_on.length())
+  for f = 0; f < p64_off.length(); f = f + 1 {
+    assert_eq(p64_off[f], p64_on[f])
+  }
+  let (n64_off, snr64_off) = aac_encode_test_nmr_short(
+    input,
+    aac_encode_test_decode(s64_off, 1),
+    1,
+    p64_off,
+    rate,
+    64000,
+  )
+  let (n64_on, snr64_on) = aac_encode_test_nmr_short(
+    input,
+    aac_encode_test_decode(s64_on, 1),
+    1,
+    p64_on,
+    rate,
+    64000,
+  )
+  println(
+    "short nmr 64k: simplified mean=\{n64_off} dB (spectral snr \{snr64_off}); perceptual mean=\{n64_on} dB (spectral snr \{snr64_on})",
+  )
+  assert_true(n64_off > -100.0 && n64_off < 60.0)
+  assert_true(n64_on > -100.0 && n64_on < 60.0)
+  assert_true(n64_on > n64_off)
+}
+
+///|
 /// Stereo short frames take the same arm with the single-window IS/M-S tools
 /// switched off; the pair must still decode cleanly (the external FFmpeg 9.0.2
 /// cross-check covers the CPE case at 64 kbps / 2ch).

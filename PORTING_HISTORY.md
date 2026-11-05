@@ -8342,7 +8342,52 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   的窗口组 zeroes 归并（`msc == max_sfb * num_windows` 里 `num_windows` 第一次
   真的等于 8）；一组**短窗 NMR** 夹具来回答这轮 opt-in 该不该转正。
 
+## 303. 短窗 NMR 夹具：`perceptual_short` 的转正裁决（不转正）
 
+§302 留下的问题：短窗的噪声-掩蔽比没有尺子可量，`aac_encode_test_nmr` 是
+1024 长窗 spectrum + 长窗阈值。本轮补上这把尺子并给出裁决：**保持 opt-in**。
+
+- **夹具**（`aac_encode_test_nmr_short`，加在 §302 的
+  `aac_encode_short_window_test.mbt`）：
+  - 原始与解码信号各过一遍 `aac_encode_test_analysis(buf, seq=2)` 的
+    **8×128 短窗谱**，阈值取 `psy.analyze(..., aac_eight_short, ...)` 发布的
+    `psy_bands[w*16+g]`——模型自己在短窗形态下算出的逐窗逐带掩蔽，与量化
+    噪声同域同尺。短窗带计划（14 带）由 `psy.band_sizes_short()` 累计成
+    offsets，断言恰好铺满 128 线。
+  - **重放整条流的每一帧**（长窗帧也喂 analyze）：预回声折减读的是上一帧的
+    `thr_quiet`，而 `prev_band` 是整 128 槽跨形状拷贝的，漏喂中间帧会让阈值
+    偏离编码器当时看到的值。`prev_bits` 按长窗夹具先例恒 0。
+  - 帧 0 只喂 analyze 建立 pre-echo 历史、**不测量**：它的 overlap 前半是编码
+    器的静音起步历史，priming 帧只是近似重建它。flush 帧不测（它的后半是
+    补零，输入侧无对应样本）。
+  - **窗计划恒等**是两路可比的前提：`aac_encode_test_window_plan` 逐帧读回
+    每条流自己的 `window_sequence`，断言开关开/关两条流逐帧相同——攻击检测
+    只读 PCM，这本来就该成立，测出来也确实成立。
+- **数据（mono 瞬态 8 帧，5 个短窗帧 × 8 窗 × 14 带 = 560 条/流）**：
+
+  | 码率 | 简化路径 mean NMR | 感知路径 mean NMR | 谱 SNR（简/感） |
+  |---|---|---|---|
+  | 128 kbps | **9.75 dB** | 14.21 dB | 33.35 / 25.49 dB |
+  | 64 kbps | **15.62 dB** | 18.69 dB | 22.75 / 8.79 dB |
+
+  逐窗拆开看没有例外：128 kbps 下八个窗的均值 5.5/9.0/7.1/11.8/10.8/11.3/
+  11.1/11.4 dB（简化）对 10.1/14.0/11.5/15.9/15.3/15.7/15.5/15.7 dB（感知），
+  **每个窗都更差**；逐带看差距集中在低频带（g0：-20.4 → +7.3 dB）——一组
+  八窗共享一个标度因子，而夹具故意让相邻窗能量差一个数量级，安静窗被 loud
+  窗的 sf 饿死，低频带首当其冲。64 kbps 同构（above-threshold 带数 462 →
+  490/559）。
+- **裁决**：长窗的「10 dB SNR 换 1.6 dB NMR」交易（§280）在短窗**不存在**——
+  感知臂在模型自己的尺子上也输（两码率、八个窗全线），所以
+  `perceptual_short` **保持 opt-in 不转正**。这不是 psy/twoloop 移植的错
+  （§300/§301 已逐位对拍），是单组八窗的分配结构问题；§304 窗分组（真正的
+  `scale_factor_grouping`，按攻击检测的 `group_len` 分组、逐组标度因子）才是
+  能翻转这个排序的改动——到时把断言反过来即可。
+- **回归**：`aac_lc_perceptual_short_noise_to_mask` 固化窗计划恒等 + 两码率的
+  `nmr_on > nmr_off` + 有限性界（NaN 双向失败）；数字见 println。
+- **坑**：`assert_eq`/`assert_true` 在**非 test 函数**里用要把该函数签名加
+  `raise`（helper 里那两条断言各报一次 [4122]）。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量
+  **1415/1415**（§302 是 1414，正好新增 1 条）。
 
 
 
