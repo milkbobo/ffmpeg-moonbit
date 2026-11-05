@@ -174,15 +174,42 @@ test "aac_lc_perceptual_short_window_stream" {
   let mut short_frames = 0
   let mut changed = 0
   let mut bytes_short = 0
+  let mut grouped_frames = 0
   for f = 0; f < short_stream.length(); f = f + 1 {
     let info = aac_encode_test_short_ics(short_stream, f)
     if info.window_sequence == 2 {
       short_frames = short_frames + 1
       bytes_short = bytes_short + short_stream[f].length()
-      // `scale_factor_grouping = 0b1111111`: one group covering all eight
-      // windows, which is the plan this arm codes (§302).
-      assert_eq(info.scale_factor_grouping, 0x7f)
       assert_eq(info.num_windows, 8)
+      // §304: the short frames carry the LAME analyser's grouping.  The
+      // 7-bit `scale_factor_grouping` holds `!group_len[w]`, w = 1..7, first
+      // bit first; a valid byte partitions the eight windows, and this
+      // transient fixture must produce a non-trivial partition at least once
+      // (`0b1111111` would mean the grouping never left the §302 single
+      // group).
+      let gl : Array[Int] = Array::make(8, 0)
+      let mut lastgrp = 0
+      for w = 0; w < 8; w = w + 1 {
+        if w == 0 || ((info.scale_factor_grouping >> (7 - w)) & 1) == 0 {
+          lastgrp = w
+        }
+        gl[lastgrp] = gl[lastgrp] + 1
+      }
+      let mut cover = 0
+      for w = 0; w < 8; w = w + 1 {
+        cover = cover + gl[w]
+        // a group length is positive at its start and 0 inside
+        let expect = if w == 0 || ((info.scale_factor_grouping >> (7 - w)) & 1) == 0 {
+          gl[w] > 0
+        } else {
+          gl[w] == 0
+        }
+        assert_true(expect)
+      }
+      assert_eq(cover, 8)
+      if info.scale_factor_grouping != 0x7f {
+        grouped_frames = grouped_frames + 1
+      }
       // 44100 Hz has 14 short scalefactor bands; `max_sfb` is written in 4
       // bits on short frames, so an overrun would silently corrupt the ICS.
       assert_true(info.max_sfb <= 14)
@@ -190,12 +217,21 @@ test "aac_lc_perceptual_short_window_stream" {
       if !aac_encode_test_stream_equal([plain_stream[f]], [short_stream[f]]) {
         changed = changed + 1
       }
+    } else {
+      // The plain arm (perceptual, `perceptual_short` off) keeps the §302
+      // single group on its own short frames.
+      let plain_info = aac_encode_test_short_ics(plain_stream, f)
+      if plain_info.window_sequence == 2 {
+        assert_eq(plain_info.scale_factor_grouping, 0x7f)
+      }
     }
   }
-  // The LAME attack detector must still produce the short-window run, and
-  // every one of those frames must actually be quantised by the new arm.
+  // The LAME attack detector must still produce the short-window run, every
+  // one of those frames must actually be quantised by the new arm, and the
+  // analyser's grouping must have reached the bitstream.
   assert_true(short_frames >= 3)
   assert_eq(changed, short_frames)
+  assert_true(grouped_frames > 0)
   let decoded = aac_encode_test_decode(short_stream, 1)
   let mut peak = 0.0
   for f = 0; f < short_stream.length(); f = f + 1 {
@@ -216,7 +252,10 @@ test "aac_lc_perceptual_short_window_stream" {
   // One group of eight windows sharing a scalefactor is measurably coarser
   // than the simplified model here (31.84 -> 25.21 dB on the 6-frame variant);
   // the guard is that it still reconstructs the waveform, not that it wins.
-  assert_true(snr > 18.0)
+  // §304's real grouping re-priced these frames again (17.83 dB, five short
+  // frames, non-trivial partitions) while cutting the noise-to-mask ratio
+  // from 9.75 to 13.40 dB - see the NMR test below.
+  assert_true(snr > 17.0)
 }
 
 ///|

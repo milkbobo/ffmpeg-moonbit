@@ -87,6 +87,12 @@ pub struct AacEncoder {
   prev_sequence : Array[Int32]
   attack_pending : Array[Bool]
   win_energy : Array[Double]
+  /// LAME window/grouping analyser state per channel (`AacPsyChannel`'s LAME
+  /// members, §304).  Consulted only on `perceptual_short` frames, but run
+  /// every frame while that path is enabled, so the peak history and the
+  /// `prev_attack`/`next_attack0_zero` chains stay on FFmpeg's cadence (the
+  /// window vectors in `aac_win_vectors` pin that cadence).
+  lame : Array[AacLameWindow]
   psy : AacPsyContext
   /// Bit count of the previous frame's AAC payload, per channel, fed back to
   /// the psy model as `bitres.bits` (`libavcodec` `last_frame_pb_count`).
@@ -212,12 +218,13 @@ pub fn aac_encode_config_with_is(config : AacEncodeConfig) -> AacEncodeConfig {
 /// already walks window groups (§301); this switch is what finally lets the
 /// encoder hand short frames to that chain instead of the simplified model.
 ///
-/// Like PNS and intensity stereo this is opt-in, and for a harder reason: the
-/// group plan here is still one group of eight windows (`scale_factor_grouping
-/// = 0x7f`), so the multi-window forms of PNS / IS / M-S stay off and the
-/// transient fixture measures 25.21 dB against 31.84 dB on the simplified
-/// path. `PORTING_HISTORY.md` §302 records the external decode check and the
-/// open noise-to-mask question; §303/§304 add the multi-window tools.
+/// Like PNS and intensity stereo this is opt-in: since §304 the short frames
+/// carry the LAME analyser's real `scale_factor_grouping`, which cut the
+/// short-frame noise-to-mask deficit on the §303 fixture (14.21 -> 13.40 dB
+/// at 128 kbps) but did not flip it below the simplified arm (9.75 dB), so
+/// the default stays the measured path. The multi-window forms of PNS / IS /
+/// M-S remain future work and stay off on short frames.
+/// `PORTING_HISTORY.md` §303/§304 record the measurements.
 ///
 /// It also turns `perceptual` on, like `aac_encode_config_with_pns` does:
 /// otherwise the flag would be a silent no-op.
@@ -378,11 +385,17 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
   let prev_sequence : Array[Int32] = []
   let attack_pending : Array[Bool] = []
   let win_energy : Array[Double] = []
+  // `lame_window_init`: the attack threshold comes from the per-channel
+  // bitrate (`bit_rate / nb_channels / 1000`, integer division), the peak
+  // history starts at 10.0f.
+  let lame_kbps = config.bit_rate / config.channels / 1000
+  let lame : Array[AacLameWindow] = []
   for _ch = 0; _ch < config.channels; _ch = _ch + 1 {
     history.push(Array::make(1024, 0.0))
     prev_sequence.push(aac_only_long)
     attack_pending.push(false)
     win_energy.push(0.0)
+    lame.push(AacLameWindow::new(lame_kbps))
   }
   // One model per element, like `FFPsyContext`: the bit reservoir and the PE
   // range are shared by the channels, only the band records are per channel.
@@ -409,6 +422,7 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     prev_sequence,
     attack_pending,
     win_energy,
+    lame,
     psy,
     last_frame_bits: 0,
     lambda: 120.0,
@@ -1572,6 +1586,13 @@ fn aac_encode_quantize_band(
 ///|
 /// One channel's quantised spectrum, its per-band scalefactors and the
 /// codebook chosen for each band (0 for a zero band).
+///
+/// Short frames carry their per-group scalefactors/codebooks in the
+/// `w * 16 + b` slot layout every encoder-side consumer uses
+/// (`sce->sf_idx[w*16+g]`); a long frame has a single window, so its slots
+/// are plain band indices.  `group_len` is `ics.group_len` - only group-start
+/// entries are meaningful, and `scale_factor_grouping` is its `!group_len[w]`
+/// bit image.
 priv struct AacEncChannel {
   sf : Array[Int32]
   cb : Array[Int32]
@@ -1579,6 +1600,7 @@ priv struct AacEncChannel {
   max_sfb : Int32
   window_sequence : Int32
   num_windows : Int32
+  group_len : Array[Int32]
 }
 
 ///|
@@ -1810,7 +1832,14 @@ fn AacEncoder::channel_data(
   if max_sfb < min_max_sfb {
     max_sfb = min_max_sfb
   }
-  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, }
+  // The simplified path always codes a short frame as one group of eight
+  // windows (§302's shape); a long frame is a single window.
+  let group_len : Array[Int32] = if is8 {
+    [8, 0, 0, 0, 0, 0, 0, 0]
+  } else {
+    [1, 0, 0, 0, 0, 0, 0, 0]
+  }
+  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, group_len }
 }
 
 ///|
@@ -1829,9 +1858,12 @@ fn AacEncoder::channel_data(
 /// the transmitted value and the decoder's `aac_apply_tns` must see the same
 /// number.
 ///
-/// On a short frame the window group shares one scalefactor and codebook, so
-/// the same `(sf, cb)` applies to the band's line range in every window of the
-/// group - each window is still quantised from its *own* coefficients.
+/// On a short frame every window group carries its own scalefactor and
+/// codebook per band, read from the group-start slot (`w * 16 + b`) of the
+/// quantiser's 128-slot arrays; the same `(sf, cb)` then applies to the band's
+/// line range in every window of the group - each window is still quantised
+/// from its *own* coefficients (`aacenc.c:684-709` walks the same
+/// group -> band -> group-window order).
 fn aac_encode_channel_data_psy(
   coef : Array[Double],
   final_sf : Array[Int32],
@@ -1842,45 +1874,59 @@ fn aac_encode_channel_data_psy(
   noise_sfi : Array[Int32],
   offsets : Array[Int32],
   num_windows : Int32,
+  group_len : Array[Int32],
 ) -> AacEncChannel {
-  let num_swb = final_sf.length()
-  let sf : Array[Int32] = Array::make(num_swb, -1)
-  let cb : Array[Int32] = Array::make(num_swb, 0)
+  let is8 = seq == aac_eight_short
+  let num_swb = offsets.length() - 1
+  // Short frames keep the full `w * 16 + b` slot space (group starts live at
+  // w*16, b=0..13); a long frame only has band slots.
+  let slots = if is8 { 128 } else { num_swb }
+  let sf : Array[Int32] = Array::make(slots, -1)
+  let cb : Array[Int32] = Array::make(slots, 0)
   let q : Array[Int32] = Array::make(1024, 0)
-  for b = 0; b < num_swb && b < max_sfb; b = b + 1 {
-    // A band reaches here only if it is coded at all: codebooks 1..11 carry
-    // spectral data and `NOISE_BT` carries a scalefactor for the noise the
-    // decoder synthesises. The intensity band types (14/15), which
-    // `search_for_ms` leaves in the right channel's band type where intensity
-    // claimed the band, carry neither.
-    let coded = aac_encode_band_has_data(final_cb[b]) || final_cb[b] == 13
-    if final_zeroes[b] != 0 || final_sf[b] < 0 || !coded {
-      continue
-    }
-    let start = offsets[b]
-    let size = offsets[b + 1] - start
-    let noise = final_cb[b] == 13
-    if !noise {
-      for w = 0; w < num_windows; w = w + 1 {
-        let base = w * 128 + start
-        let band = aac_twoloop_quantize_band(
-          coef, base, size, final_sf[b], final_cb[b],
-        )
-        for i = 0; i < size; i = i + 1 {
-          q[base + i] = band[i]
+  let mut w = 0
+  while w < num_windows {
+    let gl = group_len[w]
+    for b = 0; b < num_swb && b < max_sfb; b = b + 1 {
+      let slot = w * 16 + b
+      // A band reaches here only if it is coded at all: codebooks 1..11 carry
+      // spectral data and `NOISE_BT` carries a scalefactor for the noise the
+      // decoder synthesises. The intensity band types (14/15), which
+      // `search_for_ms` leaves in the right channel's band type where intensity
+      // claimed the band, carry neither.
+      let coded = aac_encode_band_has_data(final_cb[slot]) ||
+        final_cb[slot] == 13
+      if final_zeroes[slot] != 0 || final_sf[slot] < 0 || !coded {
+        continue
+      }
+      let start = offsets[b]
+      let size = offsets[b + 1] - start
+      let noise = final_cb[slot] == 13
+      if !noise {
+        for w2 = 0; w2 < gl; w2 = w2 + 1 {
+          let base = (w + w2) * 128 + start
+          let band = aac_twoloop_quantize_band(
+            coef, base, size, final_sf[slot], final_cb[slot],
+          )
+          for i = 0; i < size; i = i + 1 {
+            q[base + i] = band[i]
+          }
         }
       }
+      // A NOISE_BT band carries no spectral data: the decoder synthesises it
+      // and scales it with `pow2sf_tab[sfo + POW_SF2_ZERO]`. `search_for_pns`
+      // already computed the scalefactor whose entry equals the generated
+      // noise amplitude (`noise_amp = -pow2sf_tab[sfi + POW_SF2_ZERO]`), so
+      // write that `sfi` into the independent noise chain. The regular chain
+      // instead uses `final_sf - 4`, whose decoded `sfo` is 100 lower.
+      // Noise never reaches a short frame (`use_pns` is gated on `!is8`),
+      // so `noise_sfi` stays a plain band-indexed array.
+      sf[slot] = if noise { noise_sfi[b] } else { final_sf[slot] - 4 }
+      cb[slot] = final_cb[slot]
     }
-    // A NOISE_BT band carries no spectral data: the decoder synthesises it
-    // and scales it with `pow2sf_tab[sfo + POW_SF2_ZERO]`. `search_for_pns`
-    // already computed the scalefactor whose entry equals the generated
-    // noise amplitude (`noise_amp = -pow2sf_tab[sfi + POW_SF2_ZERO]`), so
-    // write that `sfi` into the independent noise chain. The regular chain
-    // instead uses `final_sf - 4`, whose decoded `sfo` is 100 lower.
-    sf[b] = if noise { noise_sfi[b] } else { final_sf[b] - 4 }
-    cb[b] = final_cb[b]
+    w = w + gl
   }
-  { sf, cb, q, max_sfb, window_sequence: seq, num_windows }
+  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, group_len }
 }
 
 ///|
@@ -1894,44 +1940,62 @@ fn aac_encode_band_has_data(cb : Int32) -> Bool {
 
 ///|
 /// Global gain: the first band with real spectral content's scalefactor (or
-/// 100 when silent). Intensity bands are skipped: their `sf` is an `off_is`
+/// 100 when silent), scanned in emission order - group by group, bands within
+/// each group. Intensity bands are skipped: their `sf` is an `off_is`
 /// position, not a scalefactor.
 fn aac_encode_global_gain(ch : AacEncChannel) -> Int32 {
-  for b = 0; b < ch.max_sfb; b = b + 1 {
-    if aac_encode_band_has_data(ch.cb[b]) {
-      return ch.sf[b]
+  let is8 = ch.window_sequence == aac_eight_short
+  let mut w = 0
+  while w < ch.num_windows {
+    for b = 0; b < ch.max_sfb; b = b + 1 {
+      let slot = if is8 { w * 16 + b } else { b }
+      if aac_encode_band_has_data(ch.cb[slot]) {
+        return ch.sf[slot]
+      }
     }
+    w = w + ch.group_len[w]
   }
   100
 }
 
 ///|
-/// section_data: group runs of equal band type (0 = zero band). Short frames
-/// use 3-bit section lengths with a 7-value escape instead of the long frames'
+/// section_data: group runs of equal band type (0 = zero band), one run-length
+/// pass per window group over that group's slots (`aacenc.c:615-627` emits
+/// one `codebook_trellis_rate` section chain per group). Short frames use
+/// 3-bit section lengths with a 7-value escape instead of the long frames'
 /// 5-bit lengths (35.3 in ISO/IEC 14496-3).
 fn aac_encode_write_sections(bw : BitWriter, ch : AacEncChannel) -> Unit {
-  let bits = if ch.window_sequence == aac_eight_short { 3 } else { 5 }
+  let is8 = ch.window_sequence == aac_eight_short
+  let bits = if is8 { 3 } else { 5 }
   let escape = (1 << bits) - 1
-  let mut b = 0
-  while b < ch.max_sfb {
-    let cb = ch.cb[b]
-    let mut e = b + 1
-    while e < ch.max_sfb && ch.cb[e] == cb {
-      e = e + 1
+  let mut w = 0
+  while w < ch.num_windows {
+    let slotbase = if is8 { w * 16 } else { 0 }
+    let mut b = 0
+    while b < ch.max_sfb {
+      let cb = ch.cb[slotbase + b]
+      let mut e = b + 1
+      while e < ch.max_sfb && ch.cb[slotbase + e] == cb {
+        e = e + 1
+      }
+      bw.put(cb.reinterpret_as_uint(), 4)
+      let mut len = e - b
+      while len >= escape {
+        bw.put(escape.reinterpret_as_uint(), bits)
+        len = len - escape
+      }
+      bw.put(len.reinterpret_as_uint(), bits)
+      b = e
     }
-    bw.put(cb.reinterpret_as_uint(), 4)
-    let mut len = e - b
-    while len >= escape {
-      bw.put(escape.reinterpret_as_uint(), bits)
-      len = len - escape
-    }
-    bw.put(len.reinterpret_as_uint(), bits)
-    b = e
+    w = w + ch.group_len[w]
   }
 }
 
 ///|
-/// scale_factor_data: differential Huffman coding (60 = zero delta).
+/// scale_factor_data: differential Huffman coding (60 = zero delta), walked
+/// group by group with the three differential chains continuing across group
+/// boundaries (`aacenc.c:629-661` steps `w += group_len[w]` and never resets
+/// `off_sf`/`off_pns`/`off_is` between groups).
 fn aac_encode_write_scalefactors(
   bw : BitWriter,
   ch : AacEncChannel,
@@ -1944,41 +2008,51 @@ fn aac_encode_write_scalefactors(
   // at 0, advances only on bands coded as 14/15, and its value is an
   // `off_is` position rather than a scalefactor, so it must be told apart by
   // codebook: a position is negative as often as not.
+  let is8 = ch.window_sequence == aac_eight_short
   let mut off_sf = global_gain
   let mut off_pns = global_gain - aac_noise_offset
   let mut off_is = 0
   let mut noise_flag = true
-  for b = 0; b < ch.max_sfb; b = b + 1 {
-    let cb = ch.cb[b]
-    if cb == aac_intensity_bt2 || cb == aac_intensity_bt {
-      let d = ch.sf[b] - off_is + 60
-      off_is = ch.sf[b]
-      bw.put(aac_scalefactor_code[d], aac_scalefactor_bits[d])
-      continue
-    }
-    if ch.sf[b] < 0 {
-      continue
-    }
-    let noise = cb == 13
-    let diff = ch.sf[b] - (if noise { off_pns } else { off_sf })
-    if noise {
-      off_pns = ch.sf[b]
-      if noise_flag {
-        noise_flag = false
-        bw.put((diff + aac_noise_pre).reinterpret_as_uint(), aac_noise_pre_bits)
+  let mut w = 0
+  while w < ch.num_windows {
+    let slotbase = if is8 { w * 16 } else { 0 }
+    for b = 0; b < ch.max_sfb; b = b + 1 {
+      let slot = slotbase + b
+      let cb = ch.cb[slot]
+      if cb == aac_intensity_bt2 || cb == aac_intensity_bt {
+        let d = ch.sf[slot] - off_is + 60
+        off_is = ch.sf[slot]
+        bw.put(aac_scalefactor_code[d], aac_scalefactor_bits[d])
         continue
       }
-    } else {
-      off_sf = ch.sf[b]
+      if ch.sf[slot] < 0 {
+        continue
+      }
+      let noise = cb == 13
+      let diff = ch.sf[slot] - (if noise { off_pns } else { off_sf })
+      if noise {
+        off_pns = ch.sf[slot]
+        if noise_flag {
+          noise_flag = false
+          bw.put(
+            (diff + aac_noise_pre).reinterpret_as_uint(),
+            aac_noise_pre_bits,
+          )
+          continue
+        }
+      } else {
+        off_sf = ch.sf[slot]
+      }
+      let mut d = diff + 60
+      if d < 0 {
+        d = 0
+      }
+      if d > 120 {
+        d = 120
+      }
+      bw.put(aac_scalefactor_code[d], aac_scalefactor_bits[d])
     }
-    let mut d = diff + 60
-    if d < 0 {
-      d = 0
-    }
-    if d > 120 {
-      d = 120
-    }
-    bw.put(aac_scalefactor_code[d], aac_scalefactor_bits[d])
+    w = w + ch.group_len[w]
   }
 }
 
@@ -2006,8 +2080,10 @@ fn aac_encode_write_escape(bw : BitWriter, v : Int32) -> Unit {
 
 ///|
 /// spectral_data: the per-band Huffman codebook, its sign bits and (for
-/// codebook 11) the escape sequences. A short frame's eight windows form one
-/// group, so a band's segment is emitted once per window, in window order.
+/// codebook 11) the escape sequences, in the decoder's read order - window
+/// group, then band, then every window of the group (`aacenc.c:684-709`). With
+/// one group of eight windows that is the band-major order this writer always
+/// used, so single-group streams are unchanged bit for bit.
 fn aac_encode_write_spectral(
   bw : BitWriter,
   ch : AacEncChannel,
@@ -2016,46 +2092,54 @@ fn aac_encode_write_spectral(
   bits : Array[Array[Int32]],
   revs : Array[Array[Int32]],
 ) -> Unit {
-  for b = 0; b < ch.max_sfb; b = b + 1 {
-    let cb = ch.cb[b]
-    // NOISE_BT carries no spectral data: the decoder synthesises it from the
-    // scalefactor and its own LCG state. INTENSITY_BT/INTENSITY_BT2 carry none
-    // either: `quantize_and_encode_band_cost_STEREO` writes nothing, and the
-    // decoder rebuilds the band by scaling the left channel's.
-    if !aac_encode_band_has_data(cb) {
-      continue
-    }
-    let dim = if cb <= 4 { 4 } else { 2 }
-    let table = cb - 1
-    for w = 0; w < ch.num_windows; w = w + 1 {
-      let mut i = w * 128 + offsets[b]
-      let end = w * 128 + offsets[b + 1]
-      while i < end {
-        let row = revs[table][aac_encode_tuple_key(cb, ch.q, i)]
-        bw.put(codes[table][row], bits[table][row])
-        // Codebooks 3/4 and 7..11 carry one sign bit per non-zero magnitude;
-        // codebooks 1/2 and 5/6 embed the sign in the Huffman symbol.
-        let mut j = 0
-        while j < dim {
-          let v = ch.q[i + j]
-          if v != 0 && (cb == 3 || cb == 4 || cb >= 7) {
-            bw.put_bit(if v < 0 { 1 } else { 0 })
+  let is8 = ch.window_sequence == aac_eight_short
+  let mut w = 0
+  while w < ch.num_windows {
+    let gl = ch.group_len[w]
+    let slotbase = if is8 { w * 16 } else { 0 }
+    for b = 0; b < ch.max_sfb; b = b + 1 {
+      let cb = ch.cb[slotbase + b]
+      // NOISE_BT carries no spectral data: the decoder synthesises it from the
+      // scalefactor and its own LCG state. INTENSITY_BT/INTENSITY_BT2 carry none
+      // either: `quantize_and_encode_band_cost_STEREO` writes nothing, and the
+      // decoder rebuilds the band by scaling the left channel's.
+      if !aac_encode_band_has_data(cb) {
+        continue
+      }
+      let dim = if cb <= 4 { 4 } else { 2 }
+      let table = cb - 1
+      for w2 = 0; w2 < gl; w2 = w2 + 1 {
+        let win = w + w2
+        let mut i = win * 128 + offsets[b]
+        let end = win * 128 + offsets[b + 1]
+        while i < end {
+          let row = revs[table][aac_encode_tuple_key(cb, ch.q, i)]
+          bw.put(codes[table][row], bits[table][row])
+          // Codebooks 3/4 and 7..11 carry one sign bit per non-zero magnitude;
+          // codebooks 1/2 and 5/6 embed the sign in the Huffman symbol.
+          let mut j = 0
+          while j < dim {
+            let v = ch.q[i + j]
+            if v != 0 && (cb == 3 || cb == 4 || cb >= 7) {
+              bw.put_bit(if v < 0 { 1 } else { 0 })
+            }
+            j = j + 1
           }
-          j = j + 1
+          if cb == 11 {
+            let a0 = aac_encode_abs(ch.q[i])
+            let a1 = aac_encode_abs(ch.q[i + 1])
+            if a0 >= 16 {
+              aac_encode_write_escape(bw, a0)
+            }
+            if a1 >= 16 {
+              aac_encode_write_escape(bw, a1)
+            }
+          }
+          i = i + dim
         }
-        if cb == 11 {
-          let a0 = aac_encode_abs(ch.q[i])
-          let a1 = aac_encode_abs(ch.q[i + 1])
-          if a0 >= 16 {
-            aac_encode_write_escape(bw, a0)
-          }
-          if a1 >= 16 {
-            aac_encode_write_escape(bw, a1)
-          }
-        }
-        i = i + dim
       }
     }
+    w = w + gl
   }
 }
 
@@ -2070,8 +2154,15 @@ fn aac_encode_write_ics_info(bw : BitWriter, ch : AacEncChannel) -> Unit {
   bw.put(0, 1)
   if is8 {
     bw.put(ch.max_sfb.reinterpret_as_uint(), 4)
-    // scale_factor_grouping: all seven bits set -> one group of eight windows.
-    bw.put(0x7f, 7)
+    // scale_factor_grouping (`put_ics_info`): bit w-1 set means window w
+    // continues its group (`!group_len[w]`). One group of eight windows is
+    // all ones, the `0x7f` this writer always emitted before §304.
+    for w = 1; w < 8; w = w + 1 {
+      bw.put(
+        (if ch.group_len[w] == 0 { 1 } else { 0 }).reinterpret_as_uint(),
+        1,
+      )
+    }
   } else {
     bw.put(ch.max_sfb.reinterpret_as_uint(), 6)
     bw.put(0, 1) // predictor_data_present
@@ -2288,6 +2379,12 @@ pub fn AacEncoder::encode_frame(
   }
   let sequences : Array[Int32] = []
   let coefs : Array[Array[Double]] = []
+  // First-attack index of the LAME analyser per channel, when it runs. The
+  // synchronous rewrite analyses this frame's own MDCT input buffer
+  // (`buf[523..1568)` is exactly the region FFmpeg's one-packet-ahead
+  // lookahead covered), so the grouping is decided for the frame being
+  // encoded - see `AacLameWindow`.
+  let lame_grp : Array[Int] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     sequences.push(seq)
     let buf : Array[Double] = Array::make(2048, 0.0)
@@ -2297,12 +2394,53 @@ pub fn AacEncoder::encode_frame(
       buf[1024 + i] = pcm[ch][i]
       hist[i] = pcm[ch][i]
     }
+    // Every frame while the short-window perceptual path is enabled - the
+    // analyser's peak history must stay on FFmpeg's per-frame cadence for the
+    // grouping chain to match the reference (`aac_win_vectors` pins it).
+    if self.config.perceptual && self.config.perceptual_short {
+      lame_grp.push(self.lame[ch].analyze(buf, 523).grp_first)
+    }
     coefs.push(self.frame_coefficients(buf, seq))
   }
   let is8 = seq == aac_eight_short
   let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
   let offsets = if is8 { self.short_offsets } else { self.swb_offsets }
   let num_windows = if is8 { 8 } else { 1 }
+  // Window grouping (§304): on the perceptual short path the LAME analyser's
+  // first-attack index selects the `window_grouping` byte. A common-window
+  // CPE takes the *earlier* first attack, mirroring the "either channel
+  // attacks" gate of the sequence state machine (FFmpeg analyses each channel
+  // independently and would drop common_window when they disagree; that fork
+  // is not ported - documented §304 deviation). Every other path keeps the
+  // single group of eight windows, `0b1111111`.
+  let use_psy = self.config.perceptual &&
+    (!is8 || self.config.perceptual_short)
+  let group_len : Array[Int32] = if is8 {
+    if use_psy && lame_grp.length() == self.config.channels {
+      let mut first = lame_grp[0]
+      for ch = 1; ch < lame_grp.length(); ch = ch + 1 {
+        if lame_grp[ch] < first {
+          first = lame_grp[ch]
+        }
+      }
+      // The same expansion as `aac_window_grouping_expand`, in Int32 so the
+      // result drops straight into `AacTwoShape`/`AacEncChannel`.
+      let byte = aac_window_grouping[first]
+      let gl : Array[Int32] = Array::make(8, 0)
+      let mut lastgrp = 0
+      for w = 0; w < 8; w = w + 1 {
+        if ((byte >> w) & 1) == 0 {
+          lastgrp = w
+        }
+        gl[lastgrp] = gl[lastgrp] + 1
+      }
+      gl
+    } else {
+      [8, 0, 0, 0, 0, 0, 0, 0]
+    }
+  } else {
+    [1, 0, 0, 0, 0, 0, 0, 0]
+  }
   // Two orders, because the two models need different spectra.
   //
   // The perceptual path follows `aacenc.c`: analyse, quantise and decide noise
@@ -2324,17 +2462,15 @@ pub fn AacEncoder::encode_frame(
   //
   // Since §302 the perceptual path can take both window shapes: `aac_psy.mbt`
   // analyses eight short windows (§300) and the quantiser search walks window
-  // groups (§301). Three tools are still single-window ports -
+  // groups (§301); since §304 the short frames carry the LAME analyser's real
+  // `scale_factor_grouping`. Three tools are still single-window ports -
   // `mark_pns`/`search_for_pns`, `aac_is_search` and `aac_ms_search`, all of
   // which upstream loop over `w += group_len[w]` - so on a short frame they
-  // stay off and the frame is coded as one group of eight windows with TNS
-  // alone (§303/§304 give them the multi-window form).
+  // stay off and the frame is coded with its window groups and TNS alone.
   //
   // The short-window half is opt-in (`perceptual_short`): with it off, a short
   // frame keeps the simplified model and every long-window baseline stream is
   // byte-for-byte what §301 produced.
-  let use_psy = self.config.perceptual &&
-    (!is8 || self.config.perceptual_short)
   let use_is = self.config.is_stereo
   let use_pns = self.config.pns && !is8
   let use_stereo_psy = self.config.channels == 2 && !is8
@@ -2502,10 +2638,11 @@ pub fn AacEncoder::encode_frame(
       } else {
         self.psy.band_sizes()
       }
-      // Eight short windows coded as one group is exactly the grouping byte
-      // `0b1111111` writes: `group_len[0] = 8`, the remaining entries unused.
+      // The perceptual short path codes the LAME analyser's grouping (§304);
+      // every other short frame is one group of eight windows, the grouping
+      // byte `0b1111111` writes (`group_len[0] = 8`, the rest unused).
       let two_shape = if is8 {
-        aac_two_shape_short([8, 0, 0, 0, 0, 0, 0, 0])
+        aac_two_shape_short(group_len)
       } else {
         aac_two_shape_long()
       }
@@ -2624,18 +2761,46 @@ pub fn AacEncoder::encode_frame(
         sf_ch[1] = ms.sf1
         cb_ch[1] = ms.cb1
       }
-      // `adjust_frame_information` (`aacenc.c:503-547`), once per attempt: the
-      // highest band that still carries data, shared across the pair. The
-      // window-group merge it also performs is the identity here - one long
-      // window, or eight short ones coded as a single group (§302) - so only
-      // the trailing-zero trim matters.
+      // `adjust_frame_information` (`aacenc.c:503-547`), once per attempt:
+      // per channel, each group's trailing-zero trim over its start slots
+      // (max over groups), then the in-group zeroes merge - a band stays
+      // coded for the group when any of its windows is non-zero. On fresh
+      // twoloop arrays the merge is the identity (an inner 1 only ever comes
+      // from this frame's twoloop cutoff path, so the merged group-start
+      // slot equals twoloop's own decision; FFmpeg's sticky-array variant is
+      // a documented §304 deviation) - it still runs, so `zeros` carries the
+      // group-image `channel_data_psy` reads. A channel pair then shares the
+      // larger `max_sfb`.
       let mut iter_max_sfb = 0
       for ch in 0..<self.config.channels {
         let mut cmaxsfb = 0
-        for b = 0; b < num_swb; b = b + 1 {
-          if zeros[ch][b] == 0 {
-            cmaxsfb = b + 1
+        let mut w = 0
+        while w < num_windows {
+          let mut group_max = num_swb
+          while group_max > 0 && zeros[ch][w * 16 + group_max - 1] != 0 {
+            group_max = group_max - 1
           }
+          if group_max > cmaxsfb {
+            cmaxsfb = group_max
+          }
+          w = w + group_len[w]
+        }
+        let mut wg = 0
+        while wg < num_windows {
+          for b = 0; b < cmaxsfb; b = b + 1 {
+            let mut allzero = 1
+            let w2_stop = wg + group_len[wg]
+            let mut w2 = wg
+            while w2 < w2_stop {
+              if zeros[ch][w2 * 16 + b] == 0 {
+                allzero = 0
+                break
+              }
+              w2 = w2 + 1
+            }
+            zeros[ch][wg * 16 + b] = allzero
+          }
+          wg = wg + group_len[wg]
         }
         if cmaxsfb > iter_max_sfb {
           iter_max_sfb = cmaxsfb
@@ -2674,6 +2839,7 @@ pub fn AacEncoder::encode_frame(
           sfi[ch],
           offsets,
           num_windows,
+          group_len,
         )
         if ch == 1 {
           aac_encode_mark_is(one, st.is_bt, st.is_pos)

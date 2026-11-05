@@ -279,6 +279,20 @@
   对齐，扫过 960..1089 的最优延时仍是 1024）。外部 ffmpeg 9.0.2 解这两条
   短窗流与本解码器 PCM 差 3.5e-9 / 140.5 dB，说明码流语法没问题，差的是
   量化取舍。临时 main 包先移进 `.trash/<日期>/` 再跑全量测试。
+  ⑮ §304 短窗分组闭环：FFmpeg 注册的窗回调是 `psy_lame_window`（`psy_3gpp_window`
+  是 `av_unused` 死代码且签名不匹配，别移植那个）。移植体在
+  `libavcodec/aac_enc_window.mbt`（`AacLameWindow`，每通道状态：16 个子块峰值/
+  `prev_attack`/`next_attack0_zero`/`next_grouping`），编码器在 buf 构造时逐帧
+  调（`buf[523..1568)` 就是 C 前瞻覆盖的同一块样本——同步改写口径），CPE 取
+  较早首攻块；**每帧都跑**（节奏必须与 C 一致，向量的 next_grouping 链才对得上），
+  但只在 `use_psy && is8` 消费（`window_grouping[i]` 展开），其余路径单组不变
+  （stash 前后 default/perceptual 流字节级一致已证）。写侧短帧 sf/cb 平铺 128
+  槽（`w*16+b`）、sections/scalefactor/spectral 全部按组主序、sf 差分链跨组连续、
+  `scale_factor_grouping` 按 `!group_len[w]` 写。黄金向量在
+  `aac_win_vectors/`（26 帧×2 通道整数决策逐帧全等，`_ref/aacenc` `--win` 模式
+  再生）；外部 ffmpeg 9.0.2 解分组流 138.5 dB。NMR 复测：分组改善 0.8 dB 但
+  未翻过简化臂，`perceptual_short` 仍 opt-in。测试侧 fixtures 必须 `pub let` 且
+  引用带 `@包名.` 前缀；Int→Int32 无转换方法，直接 Int32 算术。
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的

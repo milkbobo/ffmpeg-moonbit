@@ -8389,10 +8389,71 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量
   **1415/1415**（§302 是 1414，正好新增 1 条）。
 
+## 304. 短窗窗分组：LAME 分析器 + 真实 scale_factor_grouping（perceptual_short 仍 opt-in）
 
+§302/§303 的遗留：感知短帧永远单组（`0x7f`），一组八窗共享一条 sf 链，安静窗被
+loud 窗的标度因子饿死。本轮把 FFmpeg 真正注册的窗回调 `psy_lame_window`
+（`aacpsy.c`，注意 `psy_3gpp_window` 是 `av_unused` 死代码）整体移植并接进
+感知短帧，分组字节随首攻块落码流。
 
-
-
-
-
+- **侦察**（上轮交接 `AGENT_HANDOFF_2026-11-05_AAC_WINDOW_GROUPING.md`）：C 侧
+  真值行号地图 + MoonBit 侧触点清单 + 时序结构结论——C 的窗判决超前谱一个包
+  （la 前瞻 544+12），本移植同步改写：判定 is8 的那一帧对本帧 MDCT 输入
+  buf（`[prev|pcm]`）的 `buf[523..1568)` 跑 LAME 分析，该区域恰是 C 上一包
+  前瞻覆盖的同一块样本（C 3072 布局 `firbuf = overlap+1547` ⇔ MB `buf+523`），
+  攻击定位与生效谱自洽。
+- **C 黄金向量（s1）**：`patch.py` 加探针导出 `psy_lame_window` 整数决策
+  （级联后 `attacks[0..8]`、`att_sum`、`uselongblock`、首攻块、改写前
+  `next_grouping`、`prev_attack`、init 时的 attack_threshold）；harness 新
+  `--win [frames]` 模式复刻 `aacenc.c` 3072 滑窗几何逐帧逐通道调模型指针。
+  PCM 是整数精确的：安静交替符号噪声（20..27，邻峰比远低于阈值 7.40）+
+  5000 样本周期（非 64 整数倍，攻击位置漂移）的四段 burst，ch1 的 700/764
+  背靠背双 burst 喂级联。26 帧 × 2 通道：首攻块覆盖 0..8 全表、uselong 两态、
+  `att_sum` 大于终值和的帧证明级联/喇叭抑制都开过。64 kbps/ch 的阈值实测
+  7.40（精确命中表项，非插值——`lame_calc_attack_threshold` 取较近端点）。
+- **MoonBit 分析器（s2，`libavcodec/aac_enc_window.mbt`，纯新增）**：
+  `AacLameWindow` 每通道一份跨帧状态（`prev_energy_subshort[16]` init 10.0、
+  `prev_attack`、`next_attack0_zero`、`next_grouping`），`analyze(buf, start)`
+  全链按 C float 语义逐运算 f32 化（`aac_two_*` 家族；FIR 系数/2.3f/阈值表按
+  精确 f32 十进制转录）。**不移植** `lame_apply_block_type` 窗型状态机——编码器
+  保留既有 early/late+pending 机（§302 已端到端验证过），分析器只出
+  `uselongblock` 供向量对拍。la==NULL flush 路径不建模（文档化偏差：测试流以
+  静音帧收尾）。
+- **向量测试（s3，`libavcodec/aac_win_vectors/`）**：黑盒包回放同一整数 LCG
+  PCM（掩码 Int 乘法模拟 UInt32，vp9 探针惯例），26 帧 × 2 通道逐帧整数断言
+  全等（含 `next_grouping` 链与 `attacks[7]==prev_attack` 交叉验证）；外加
+  ABR 阈值选端点测试（96 恰好命中表项 6.60、72 平手取上端 7.00 等 8 例）。
+  **首跑即绿**。
+- **接线（s4/s5）**：`AacEncoder` 挂 `lame[2]`（`perceptual && perceptual_short`
+  时每帧跑，保持 C 的逐帧节奏）；buf 构造循环里取每通道首攻块，CPE 取
+  **较早**首攻（与 seq 机“任一通道攻击”同口径；C 的 common_window=0 分叉不
+  移植，文档化偏差）。消费门 `use_psy && is8`，其余路径（简化路径短帧、全部
+  长帧）保持 `[8,0..]/[1,0..]` 单组。写侧多组化：`AacEncChannel` 加
+  `group_len`，短帧 sf/cb 平铺 128 槽（`w*16+b`，组起点槽携带决策）；
+  `channel_data_psy` 组→带→组内窗量化；sections 按组 run-length（3 位长度）、
+  scalefactor 三条差分链**跨组连续**（off 初值=global_gain=首个 coded 槽）、
+  spectral 组主序（组→带→组内窗）发射、`write_ics_info` 按 `!group_len[w]`
+  写真实 7 位、`adjust` 等价块按 C `aacenc.c:503-547` 逐组尾零扫描 + 组内
+  归并（新鲜数组下归并=恒等，C 的跨帧粘性 zeroes 是文档化偏差）。单组形状下
+  所有写器路径与旧码逐位等价。
+- **基线证明（硬验收）**：临时 `zz_win_probe` 黑盒包（stash 前后对拍，已入
+  .trash）：default 与 perceptual 两条 12+1 帧流的字节计数+双校验和**完全一致**，
+  psy_short 流按预期变化（4572→4554 字节）。
+- **端到端（s7，§302 同款流程）**：`zz_win_ab` main 导出分组 ADTS（4554 字节
+  13 帧）+ 本解码器 PCM；docker `linuxserver/ffmpeg:9.0.2` 解码 **0 errors**，
+  双声道 13312 样本逐样本对拍 **max_diff = 1.19e-7（≈1 f32 ULP @1.0，138.5 dB）**，
+  最优延时 0。分组语法（sections/sf 链/组主序 spectral）与两个解码器全部吻合。
+- **NMR 复测（§303 尺子）与裁决**：分组把感知臂 NMR 从 14.21→**13.40 dB**
+  （128k）/18.69→**18.26 dB**（64k），改善了 0.8/0.4 dB 但**没有翻转**对简化臂
+  （9.75/15.62 dB）的劣势——§303 的 `nmr_on > nmr_off` 断言原样保持，`perceptual_short`
+  **继续 opt-in**。波形 SNR 方面感知短帧 17.83 dB（守卫按数据下调 18.0→17.0）。
+- **测试更新（s6）**：`aac_lc_perceptual_short_window_stream` 的 `0x7f` 断言改为
+  “分组字节展开恰好铺满 8 窗 + 至少一帧非平凡分组 + plain 臂短帧仍 0x7f”。
+- **本轮坑**：fixtures 顶层 `let` 在 test 视图**不可见**（须 `pub let`，且测试内
+  引用要带 `@包名.` 前缀）；Int→Int32 没有转换方法（`to_int32`/`from_int` 皆无），
+  直接用 Int32 算术内联展开；libavcodec 白盒 wasm 仍有 init local 上限（探针必须
+  放独立黑盒包）；UInt 字面量后缀 `U` 是 UInt32（大常数写 hex）；`>>`/`&` 混用
+  必须加括号（deny-warn）。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1417/1417**
+  （§303 是 1415，新增 aac_win_vectors 2 条）。
 
