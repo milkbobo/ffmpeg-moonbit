@@ -331,7 +331,11 @@
   Matroska Duration×scale、Ogg granule−pre_skip、WAV 计数）；`decode_audio_file` →
   `DecodedAudio`（decode-audio 命令引擎）+ `to_wav_s16`（WavMuxer 限幅交错导出）。
   黑盒 3 测：WAV to_wav data 块逐字节恒等、Ogg 时长精确到毫秒、四适配器时长断言。
-  下一步：视频流接入（H264 decode_avc_sample 入口已侦察）/seek/CLI probe 命令。
+  ⑳c §312 播放 API 第三期（视频线首条）：`VideoDecoder::open/decode`——h264 经
+  `ff_h264_decode_extradata`（avcC/Annex B 双形态）装参数集，is_avc 走
+  `decode_avc_sample`（None=重排缓冲未出帧）否则 `decode_annexb`；`VideoFrame`
+  包 H264Frame 不复制。真实 MKV（H264+AAC）facade 解帧与直连像素级全等。
+  下一步：hevc/vp9/av1 分发/seek/CLI probe。
   ⑲ §309 CPE common_window=0 分叉（§304 偏差②收口）：窗决策彻底 per-channel——
   `AacEncPlan` 每通道（seq/带计划/分组/窗数），attempt 循环全部吃自己的 plan，
   `lame_seq` 数组替代合流机（判定一致时逐位同），`last_max_sfb` per-channel。

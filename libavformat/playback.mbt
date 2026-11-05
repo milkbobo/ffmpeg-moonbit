@@ -684,3 +684,158 @@ pub fn DecodedAudio::to_wav_s16(self : DecodedAudio) -> Bytes raise MediaError {
   mux.write_samples(inter[:])
   mux.finish()
 }
+
+///|
+/// One decoded video picture: the H.264 decoder's own plane layout
+/// (`y`/`u`/`v` macroblock-aligned planes with strides and crop offsets),
+/// wrapped without copying.
+pub struct VideoFrame {
+  priv frame : @libavcodec.H264Frame
+}
+
+///|
+/// The visible (cropped) width.
+pub fn VideoFrame::width(self : VideoFrame) -> Int32 {
+  self.frame.width
+}
+
+///|
+/// The visible (cropped) height.
+pub fn VideoFrame::height(self : VideoFrame) -> Int32 {
+  self.frame.height
+}
+
+///|
+/// The luma plane (`ystride` x `pheight` int samples); visible pixels start
+/// at `crop_top * ystride + crop_left`.
+pub fn VideoFrame::y(self : VideoFrame) -> Array[Int32] {
+  self.frame.y
+}
+
+///|
+/// The blue-difference chroma plane.
+pub fn VideoFrame::u(self : VideoFrame) -> Array[Int32] {
+  self.frame.u
+}
+
+///|
+/// The red-difference chroma plane.
+pub fn VideoFrame::v(self : VideoFrame) -> Array[Int32] {
+  self.frame.v
+}
+
+///|
+pub fn VideoFrame::ystride(self : VideoFrame) -> Int32 {
+  self.frame.ystride
+}
+
+///|
+pub fn VideoFrame::cstride(self : VideoFrame) -> Int32 {
+  self.frame.cstride
+}
+
+///|
+pub fn VideoFrame::crop_left(self : VideoFrame) -> Int32 {
+  self.frame.crop_left
+}
+
+///|
+pub fn VideoFrame::crop_top(self : VideoFrame) -> Int32 {
+  self.frame.crop_top
+}
+
+///|
+/// The picture order count (decode order output, batch semantics).
+pub fn VideoFrame::poc(self : VideoFrame) -> Int32 {
+  self.frame.poc
+}
+
+///|
+/// The video codec dispatch behind a `VideoDecoder`.
+pub(all) enum VideoDec {
+  H264(@libavcodec.H264Decoder, Bool, Int32)
+}
+
+///|
+/// A codec dispatch for video streams, on top of the ported decoders. The
+/// H.264 entry consumes the container's packets (Matroska/MP4 hand
+/// `avcC`-length-prefixed samples; Annex B sources go through the same
+/// decoder's stream entry) and outputs pictures in decode order.
+pub struct VideoDecoder {
+  dec : VideoDec
+  width : Int32
+  height : Int32
+}
+
+///|
+/// The coded width from the stream parameters.
+pub fn VideoDecoder::width(self : VideoDecoder) -> Int32 {
+  self.width
+}
+
+///|
+/// The coded height from the stream parameters.
+pub fn VideoDecoder::height(self : VideoDecoder) -> Int32 {
+  self.height
+}
+
+///|
+/// Build the decoder for one video stream. Codecs without a ported decoder
+/// raise `UnsupportedCodec`.
+pub fn VideoDecoder::open(info : StreamInfo) -> VideoDecoder raise MediaError {
+  if info.media_type != MediaType::Video {
+    raise UnsupportedCodec(info.codec_id)
+  }
+  match info.codec_id {
+    "h264" => {
+      let extradata = match info.extradata {
+        Some(v) => v
+        None => raise UnsupportedCodec("h264 without extradata")
+      }
+      let dec = @libavcodec.new_h264_decoder()
+      let parsed = match
+        @libavcodec.ff_h264_decode_extradata(extradata, dec.ps) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      {
+        dec: H264(dec, parsed.is_avc, parsed.nal_length_size),
+        width: 0,
+        height: 0,
+      }
+    }
+    other => raise UnsupportedCodec(other)
+  }
+}
+
+///|
+/// Decode one packet into zero or more pictures (`None`-free list: the H.264
+/// decoder buffers reordering pictures and may emit several at once).
+pub fn VideoDecoder::decode(
+  self : VideoDecoder,
+  pkt : MediaPacket,
+) -> Array[VideoFrame] raise MediaError {
+  match self.dec {
+    H264(dec, is_avc, nal_length_size) => {
+      // `decode_avc_sample` yields at most one buffered picture per sample
+      // (None while the decoder reorders); the stream entry yields a batch.
+      let out : Array[@libavcodec.H264Frame] = if is_avc {
+        match dec.decode_avc_sample(pkt.data, nal_length_size, false) {
+          Ok(Some(frame)) => [frame]
+          Ok(None) => []
+          Err(e) => raise DecodeError(e)
+        }
+      } else {
+        match dec.decode_annexb(pkt.data, false) {
+          Ok(v) => v
+          Err(e) => raise DecodeError(e)
+        }
+      }
+      let frames : Array[VideoFrame] = []
+      for frame in out {
+        frames.push({ frame, })
+      }
+      frames
+    }
+  }
+}

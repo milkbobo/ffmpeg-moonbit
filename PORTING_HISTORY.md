@@ -8728,3 +8728,18 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1431/1431**。
   下一期：视频流解码头接入（H264 `decode_avc_sample` 入口已侦察）、seek、
   CLI ② 的 probe/dump-packets 命令。
+
+## 312. 播放 API 第三期：视频流接入（H264 经 VideoDecoder 分发，像素级对拍）
+
+- **`VideoDecoder::open(StreamInfo)` / `decode(pkt) -> Array[VideoFrame]`**："h264"
+  分发到 `new_h264_decoder` + `ff_h264_decode_extradata`（吃 avcC 或 Annex B
+  extradata，顺带把 SPS/PPS 装进参数集）；`is_avc` 时逐包走 `decode_avc_sample`
+  （长度前缀样本，`None` = 重排缓冲未出帧），否则 `decode_annexb`。`VideoFrame`
+  包装 `H264Frame`（y/u/v 平面 + stride/crop/poc）不复制像素。
+- **端到端**：真实 ffmpeg MKV（H.264+AAC，`cluster_real_mkv_b64` 转正进黑盒）——
+  facade 打开两流（h264 + aac），H.264 轨经 `VideoDecoder` 解出的帧与直连路径
+  （Matroska demuxer + avcC + `decode_avc_sample`）**帧数/poc/尺寸/luma 平面逐帧
+  逐像素全等**（32×32 帧）。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1432/1432**。
+  播放 API 音频线 + 视频线首条路径就绪；下一期：hevc/vp9/av1 视频分发（入口
+  形态同 H264）、seek、CLI ② probe 命令。
