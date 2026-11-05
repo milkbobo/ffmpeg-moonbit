@@ -8743,3 +8743,25 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1432/1432**。
   播放 API 音频线 + 视频线首条路径就绪；下一期：hevc/vp9/av1 视频分发（入口
   形态同 H264）、seek、CLI ② probe 命令。
+
+## 313. 播放 API 第四期：视频分发补齐（VP9 真实流 MD5 对拍 + HEVC 批式 + AV1）
+
+- **`VideoFrame` 重构为 tagged union**（H264/Hevc/Vp9/Av1）+ 统一访问器：
+  width/height/poc（VP9/AV1 输出序即显示序，返回 -1）/bit_depth 与
+  `yuv_bytes()`——各家打包成 planar YUV（H264 现场拼可见区含 crop/stride、
+  HEVC `yuvp`、VP9 `frame_bytes`、AV1 FixedArray 拼接含 >8bit LE16），
+  `extract-frame` 的统一出口。`StreamInfo` 补 width/height（MP4 tkhd、
+  MKV PixelWidth/Height）。
+- **三家分发**：VP9 = `vp9_decoder_new` + `decode_packet`（superframe 拆分
+  内建，`Vp9Frame{width,height,data}` 每包 0..n 帧）；AV1 = `Av1Decoder::new`
+  + `decode_packet`（OBU 解析内建，`Av1FrameOutput` 平面）；HEVC = 批式——
+  移植入口 `ff_hevc_decode_frames_ex` 每调用新会话（跨包 DPB 不保留），facade
+  缓冲包到 `finish_video` 拼接一次喂（与上游批式语义一致），hvcC 的
+  lengthSizeMinusOne 从固定偏移 21 取。
+- **端到端**：VP9——真实 libvpx 五帧（64×48，首关键帧）经 webm_av_muxer 现做
+  → facade `VideoDecoder` 逐帧 `yuv_bytes` 的 MD5 **与 FFmpeg 解码源 IVF 的
+  五个参考 MD5 逐帧一致**；HEVC/AV1 分发接线测试（批式缓冲/错误面/
+  音视频互斥拒绝）；像素级 e2e 留待轻量真实位流（AV1 向量数十 KB）。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1434/1434**
+  （playback 累计 11 条）。四家视频解码分发全部接通；下一期：seek、
+  CLI ② probe 命令、HEVC/AV1 真实流 e2e。

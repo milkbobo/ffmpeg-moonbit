@@ -10,6 +10,21 @@ let playback_opus_packet_b64 : Bytes = b"+HJJRycQ5MhbeCeLhxdBOBKisePsNuYR8hAn2ia
 let playback_real_mkv_b64 : Bytes = b"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"
 
 ///|
+/// Five real libvpx VP9 frames (64x48, first keyframe) and the FFmpeg
+/// decode MD5s, embedded for the facade's VP9-path test.
+let webm_av_vp9_frames_b64 : Array[Bytes] = [
+  b"gkmDQgAD8AL2BDgkHBhCAAMQfLF6f02Juker9g9Z6j0Xr+n9G0Xdj380C/f8/5H59H+m6buv02jPV+m3T6e7HvsAAH/Dmc5Ywiozez4rJK/koYcpfSJ2NT6cU8llQVPf8goJRqzP3MdyefOlT/0WlAMcXBh1/nM7yeMm9hjV1VC4SM5ED+cuiKxbip0JUpppKXuNR/3d+888FB0lBBS4UhUwmOsZCWSFPylu4vn2akF+6Z3hmdbttmQLMSkuXKHVtHVHTGR1naA6s+/q0RPTFVROAaY4mFuyXi58rAVFX+E9yf0e/qDIHCen8h//MuvCNsYSii4f//brrZcyTrM0cLLTeaWcKmy+8+0SQ1I0sEv54lw2GAl8a8kSyyrJ9AgO572+IpMB1RCrDlH8P8ouRxqk46pNslBZfkGwCNYStGHoQas2lzPb804vsQhJvEG4+SnZKSVEa27WP++FxlXv9Epz0nVOMDXlHHX5+FNcG+YCdyUlfmDgRyu+c+s00Ogys4q2QJ0SrAwIV1rYWuR/P/cf0lL2yCmIkleDE0pCuIyu2e/AN0HX/bbebxAuj5gxg0SngHdtP6Gi+EbR4J2FjM7lUehmrHT7lUiPhG0PiZLU80t4Otd7WgdklIkbl4Fcvu/d+83atwGcmqZ/48DOCy/5HniOf+/KKsR5wLBDnTg7gNeaksZlSCEj+s1YrC33aLMZ3KeAXmGmbt/5mwUax2hrVnMfWpslp/QJl3uGMHgi4/u2I6Qh1xJKBBxnBTRMp6pJr8/irPSq6d8ZEJSg281+R667I/syc6iJKQVYmqL5at3v//rmL/+Tb/aZav9ca/x9//moUeO7IN7d6f//6ZhzI3+iVpT/Toz//7bLbAukVI8HfgShbMMmHxMZm/wAsouwskg4mS2zEtAwgPhiAjHfPlcvcWtfWhBjD0mwmP01fqt0av7KGtWaChxI6nzPb7iUYSRBTImjZpNM84alRKjtVDuYex0GHahXCAkSvGVo37i0NDp6Uvo/G4azbIf75/Itcr664ZqOHfIabC65eFEQ0qsY7XawaEQc3UdVkN2JtPaJ5nmN0aOY5a3INtIjFCGieY7r98wvMgUX/iLMgTE5OUg58Im+MN2U9pzPs0UJBz49nlgP9g//DK5r6LVgytqOHr/C9ZHEjX9+6vH7Ewd2eu1Izp9jPyoDKL6oZNM8QV/+YsP+wf8bs/0w/3A/+WKo3/JY3mx///VmIqz6WF0PXZlD+B0M2wF8hOXByGlDMLGroaatXeYnIKT8Wcyixg//7Fq/8ADszqd4GgtRblsKBe6reN7EOwawIkNbUKtiIhoYZIkDl5wtJfaYxep5NVycsIeTXZa+qYuby4nD06f2cePDVWdBi/sTLIPUhYRdUkz11DkNe41NHc41v76WR/KJEoes/5jCXJ6sloefh3m6T7lpNKg5WnWCzVNwtHGCl6Y3mLi1GZYKtb0gpgMRRumewS2GmoMjxPndV9X6fld/eQHwzPMtOikVg6rcVHz4hK32ZSyY8nYle9tgqUGyapiSHv/H2NPFuuJnWDhCUjIo0OlL4QRsW8Eq6ODWQpeptIyFSjUsAA==",
+  b"hgBAkpwYSUAAAwAAAH4MtzrMQfjn///hLYqmEjf2K5fq4ZrkKA//4BX2cVjxpY2547S/eDRA", b"hgBAkpwYSsAAA3AAAH9A3qoFu2//9t0/ZYKalJ0pazITZsP/yUx7SHQBwD0q1+p5SLU7GI4Bct1SeicSts0C",
+  b"hgBAkpwYScAAA2AAAH24/6OWDxijk9CjR66t33HJ2pDJAxCsvd3SUdpNkHKmpeUrJpEOAA==", b"hgBAkpwYSKAAAyAAAH4LN+PWUgEPsXOUCxIe0uNSK8Atx1/VAxKgrXiK/vO8B+ug",
+]
+
+///|
+let webm_av_vp9_refs : Array[String] = [
+  "04c4ea2388cb0b6161e1f72c3d8a4a23", "4f1b5a5bf5fc5f2c86f64d887daf3692", "8a3d31bb7ae00daf29c7bc7a9c77bbe9",
+  "788ae41da6e0ead2179148b9d8b30793", "6ffd20a77964a07ca2084114a0ea90d4",
+]
+
+///|
 /// End-to-end tests of the unified playback API on the real ffmpeg-produced
 /// container fixtures the §270 probe layer shipped with: probe → open →
 /// stream table → packet iteration → decode, each audio path compared
@@ -472,4 +487,124 @@ test "playback: MKV/H264 video decodes through the facade like the direct path" 
   println(
     "MKV/H264 facade: frames=\{facade_frames.length()} first=\{facade_frames[0].width()}x\{facade_frames[0].height()}",
   )
+}
+
+///|
+/// §313: the VP9 dispatch. A real libvpx VP9 stream (five frames, first
+/// keyframe) muxed into WebM decodes through the facade's `VideoDecoder`
+/// with YUV MD5s matching FFmpeg's decode of the source IVF.
+test "playback: MKV/VP9 facade decodes real frames to the FFmpeg MD5s" {
+  let mux = @libavformat.webm_av_muxer_new(64, 48, channels=1, pre_skip=312).unwrap()
+  for i, f in webm_av_vp9_frames_b64 {
+    let frame = @libavutil.av_base64_decode(f, 4096).unwrap()
+    mux.write_video(frame, i.to_int64() * 100L, 100, keyframe=i == 0).unwrap()
+  }
+  let data = mux.finish()
+  let mf = @libavformat.MediaFile::open(data)
+  let infos = mf.streams()
+  assert_eq(infos.length(), 2)
+  assert_eq(infos[0].codec_id, "vp9")
+  assert_eq(infos[0].width, 64)
+  assert_eq(infos[0].height, 48)
+  let vdec = @libavformat.VideoDecoder::open(infos[0])
+  let mut emitted = 0
+  while true {
+    let pkt = mf.next_packet()
+    if pkt is None {
+      break
+    }
+    let p = pkt.unwrap()
+    if p.stream_index != 0 {
+      continue
+    }
+    for frame in vdec.decode(p) {
+      assert_eq(frame.width(), 64)
+      assert_eq(frame.height(), 48)
+      let yuv = frame.yuv_bytes()
+      let digest : FixedArray[Byte] = FixedArray::make(16, b'\x00')
+      @libavutil.av_md5_sum(digest, yuv, yuv.length())
+      let hexdigits = "0123456789abcdef"
+      let text = StringBuilder()
+      for byte in digest {
+        text.write_char(hexdigits.get_char((byte.to_int() >> 4) & 15).unwrap())
+        text.write_char(hexdigits.get_char(byte.to_int() & 15).unwrap())
+      }
+      assert_eq(text.to_string(), webm_av_vp9_refs[emitted])
+      emitted = emitted + 1
+    }
+  }
+  assert_eq(emitted, webm_av_vp9_refs.length())
+}
+
+///|
+/// §313: the remaining two video dispatches construct correctly and reject
+/// what they must. The HEVC batch model buffers packets until
+/// `finish_video`; AV1 emits per packet. (Pixel-level e2e for both codecs
+/// waits on lightweight real bitstreams - the AV1 vectors are tens of KB.)
+test "playback: HEVC/AV1 dispatch wiring" {
+  // HEVC: open from an avcC-style private blob with a valid hvcC length size.
+  let hvc_info : @libavformat.StreamInfo = {
+    index: 0,
+    media_type: @libavformat.MediaType::Video,
+    codec_id: "hevc",
+    sample_rate: 0,
+    channels: 0,
+    width: 64,
+    height: 48,
+    extradata: Some(
+      Bytes::from_array([
+        1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFC,
+      ]),
+    ),
+  }
+  let hevc = @libavformat.VideoDecoder::open(hvc_info)
+  // A packet buffers (batch model): no frames until finish.
+  let pkt : @libavformat.MediaPacket = {
+    stream_index: 0,
+    data: Bytes::from_array([0, 0, 0, 1, 0x46, 1, 1, 1]),
+    pts: 0,
+    keyframe: true,
+  }
+  assert_eq(hevc.decode(pkt).length(), 0)
+  // finish_video on a garbage payload surfaces a decode error, proving the
+  // batch reached the decoder.
+  try hevc.finish_video() catch {
+    @libavformat.MediaError::DecodeError(_) => ()
+    e => fail("expected DecodeError, got \{Repr(e)}")
+  } noraise {
+    _ => fail("expected finish_video to raise")
+  }
+  // AV1: open wires the session; a garbage packet surfaces its own error.
+  let av1_info : @libavformat.StreamInfo = {
+    index: 1,
+    media_type: @libavformat.MediaType::Video,
+    codec_id: "av1",
+    sample_rate: 0,
+    channels: 0,
+    width: 16,
+    height: 16,
+    extradata: None,
+  }
+  let av1 = @libavformat.VideoDecoder::open(av1_info)
+  let bad : @libavformat.MediaPacket = {
+    stream_index: 1,
+    data: Bytes::from_array([0xFF, 0x00]),
+    pts: 0,
+    keyframe: true,
+  }
+  try av1.decode(bad) catch {
+    @libavformat.MediaError::DecodeError(_) => ()
+    e => fail("expected DecodeError, got \{Repr(e)}")
+  } noraise {
+    _ => fail("expected av1 decode to raise")
+  }
+  // Video streams reject the audio decoder, and vice versa.
+  try
+    @libavformat.AudioDecoder::open(if true { hvc_info } else { hvc_info })
+  catch {
+    @libavformat.MediaError::UnsupportedCodec(_) => ()
+    e => fail("expected UnsupportedCodec, got \{Repr(e)}")
+  } noraise {
+    _ => fail("expected audio decoder to reject a video stream")
+  }
 }

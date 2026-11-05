@@ -29,7 +29,10 @@ pub(all) suberror MediaError {
   UnsupportedCodec(String)
   /// A packet failed to decode.
   DecodeError(String)
-}
+} derive(Debug)
+
+///|
+pub extend MediaError with @moonbitlang/core/debug.Debug::{to_repr}
 
 ///|
 /// Render the error the way a CLI would print it.
@@ -57,7 +60,7 @@ pub extend MediaType with Eq::{not_equal, equal}
 ///|
 /// One elementary stream's parameters, the subset the facade's consumers
 /// need (the per-codec decoders read the rest from `extradata`).
-pub struct StreamInfo {
+pub(all) struct StreamInfo {
   index : Int32
   media_type : MediaType
   /// FFmpeg codec name ("aac", "opus", "pcm_s16le", "h264", ...).
@@ -65,6 +68,9 @@ pub struct StreamInfo {
   /// Audio only (0 on other streams).
   sample_rate : Int32
   channels : Int32
+  /// Video only (0 on other streams).
+  width : Int32
+  height : Int32
   extradata : Bytes?
 } derive(Eq)
 
@@ -73,7 +79,7 @@ pub extend StreamInfo with Eq::{not_equal, equal}
 
 ///|
 /// One compressed packet as the container delivered it.
-pub struct MediaPacket {
+pub(all) struct MediaPacket {
   stream_index : Int32
   data : Bytes
   pts : Int64
@@ -145,15 +151,17 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
       let streams : Array[StreamInfo] = []
       for i = 0; i < movie.tracks.length(); i = i + 1 {
         let t = movie.tracks[i]
-        let (mt, rate, ch) = match t.media_type {
+        let (mt, rate, ch, w, h) = match t.media_type {
           Mp4MediaType::Audio =>
             (
               MediaType::Audio,
               t.sample_rate.reinterpret_as_int(),
               t.channels.reinterpret_as_int(),
+              0,
+              0,
             )
-          Mp4MediaType::Video => (MediaType::Video, 0, 0)
-          _ => (MediaType::Subtitle, 0, 0)
+          Mp4MediaType::Video => (MediaType::Video, 0, 0, t.width, t.height)
+          _ => (MediaType::Subtitle, 0, 0, 0, 0)
         }
         streams.push({
           index: i,
@@ -165,6 +173,8 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
           },
           sample_rate: rate,
           channels: ch,
+          width: w,
+          height: h,
           extradata: t.extradata,
         })
       }
@@ -197,6 +207,8 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
           codec_id: params.codec,
           sample_rate: params.sample_rate,
           channels: params.channels,
+          width: t.video.pixel_width.to_int(),
+          height: t.video.pixel_height.to_int(),
           extradata: t.codec_priv,
         })
       }
@@ -214,6 +226,8 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
           codec_id: "opus",
           sample_rate: demux.input_sample_rate,
           channels: demux.channels,
+          width: 0,
+          height: 0,
           extradata: Some(demux.extradata),
         },
       ]
@@ -236,6 +250,8 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
           codec_id: demux.format.codec,
           sample_rate: demux.format.sample_rate,
           channels: demux.format.channels,
+          width: 0,
+          height: 0,
           extradata: if demux.format.extradata.length() > 0 {
             Some(demux.format.extradata)
           } else {
@@ -686,85 +702,184 @@ pub fn DecodedAudio::to_wav_s16(self : DecodedAudio) -> Bytes raise MediaError {
 }
 
 ///|
-/// One decoded video picture: the H.264 decoder's own plane layout
-/// (`y`/`u`/`v` macroblock-aligned planes with strides and crop offsets),
-/// wrapped without copying.
+/// One decoded video picture, wrapped without copying. `yuv_bytes` renders
+/// the visible planes as planar YUV (8-bit samples, little-endian words above
+/// 8 bits) - the layout FFmpeg's rawvideo output and the CLI's
+/// `extract-frame` use.
+pub(all) enum VideoFrameData {
+  H264(@libavcodec.H264Frame)
+  Hevc(@libavcodec.HevcDecodedFrame)
+  Vp9(@libavcodec.Vp9Frame)
+  Av1(@libavcodec.Av1FrameOutput)
+}
+
+///|
 pub struct VideoFrame {
-  priv frame : @libavcodec.H264Frame
+  data : VideoFrameData
 }
 
 ///|
 /// The visible (cropped) width.
 pub fn VideoFrame::width(self : VideoFrame) -> Int32 {
-  self.frame.width
+  match self.data {
+    H264(f) => f.width
+    Hevc(f) => f.pic.width
+    Vp9(f) => f.width
+    Av1(f) => f.width
+  }
 }
 
 ///|
 /// The visible (cropped) height.
 pub fn VideoFrame::height(self : VideoFrame) -> Int32 {
-  self.frame.height
+  match self.data {
+    H264(f) => f.height
+    Hevc(f) => f.pic.height
+    Vp9(f) => f.height
+    Av1(f) => f.height
+  }
 }
 
 ///|
-/// The luma plane (`ystride` x `pheight` int samples); visible pixels start
-/// at `crop_top * ystride + crop_left`.
+/// The H.264 picture's luma plane (only meaningful when the frame came from
+/// the H.264 dispatch; other codecs panic — match on `data` first).
 pub fn VideoFrame::y(self : VideoFrame) -> Array[Int32] {
-  self.frame.y
+  match self.data {
+    H264(f) => f.y
+    _ => abort("VideoFrame::y on a non-H264 frame")
+  }
 }
 
 ///|
-/// The blue-difference chroma plane.
-pub fn VideoFrame::u(self : VideoFrame) -> Array[Int32] {
-  self.frame.u
-}
-
-///|
-/// The red-difference chroma plane.
-pub fn VideoFrame::v(self : VideoFrame) -> Array[Int32] {
-  self.frame.v
-}
-
-///|
+/// The H.264 luma stride.
 pub fn VideoFrame::ystride(self : VideoFrame) -> Int32 {
-  self.frame.ystride
+  match self.data {
+    H264(f) => f.ystride
+    _ => abort("VideoFrame::ystride on a non-H264 frame")
+  }
 }
 
 ///|
-pub fn VideoFrame::cstride(self : VideoFrame) -> Int32 {
-  self.frame.cstride
-}
-
-///|
-pub fn VideoFrame::crop_left(self : VideoFrame) -> Int32 {
-  self.frame.crop_left
-}
-
-///|
-pub fn VideoFrame::crop_top(self : VideoFrame) -> Int32 {
-  self.frame.crop_top
-}
-
-///|
-/// The picture order count (decode order output, batch semantics).
+/// The presentation-order count where the codec defines one (H.264/HEVC);
+/// `-1` for codecs whose output order is the display order (VP9/AV1).
 pub fn VideoFrame::poc(self : VideoFrame) -> Int32 {
-  self.frame.poc
+  match self.data {
+    H264(f) => f.poc
+    Hevc(f) => f.poc
+    _ => -1
+  }
+}
+
+///|
+/// The bit depth the planes are rendered at (8 for 8-bit codecs).
+pub fn VideoFrame::bit_depth(self : VideoFrame) -> Int32 {
+  match self.data {
+    H264(_) => 8
+    Hevc(_) => 8
+    Vp9(_) => 8
+    Av1(f) => f.bitdepth
+  }
+}
+
+///|
+/// Pack the visible planes as planar YUV.
+pub fn VideoFrame::yuv_bytes(self : VideoFrame) -> Bytes {
+  match self.data {
+    H264(f) => {
+      // The H.264 planes are macroblock-aligned with strides; the visible
+      // region starts at (crop_top, crop_left) and spans width x height
+      // (chroma subsampled by the frame's shifts).
+      let w = f.width
+      let h = f.height
+      let cw = w >> f.chroma_hshift
+      let ch = h >> f.chroma_vshift
+      let out : Array[Byte] = []
+      let ytop = f.crop_top
+      let ctop = f.crop_top >> f.chroma_vshift
+      let cleft = f.crop_left >> f.chroma_hshift
+      for row = ytop; row < ytop + h; row = row + 1 {
+        let base = row * f.ystride + f.crop_left
+        for i = 0; i < w; i = i + 1 {
+          out.push(f.y[base + i].to_byte())
+        }
+      }
+      for row = ctop; row < ctop + ch; row = row + 1 {
+        let base = row * f.cstride + cleft
+        for i = 0; i < cw; i = i + 1 {
+          out.push(f.u[base + i].to_byte())
+        }
+      }
+      for row = ctop; row < ctop + ch; row = row + 1 {
+        let base = row * f.cstride + cleft
+        for i = 0; i < cw; i = i + 1 {
+          out.push(f.v[base + i].to_byte())
+        }
+      }
+      Bytes::from_array(out)
+    }
+    Hevc(f) => f.yuvp(8)
+    Vp9(f) => f.data
+    Av1(f) => {
+      let out : Array[Byte] = []
+      let cw = (f.width + f.ss_h) >> f.ss_h
+      let ch = (f.height + f.ss_v) >> f.ss_v
+      for row = 0; row < f.height; row = row + 1 {
+        let base = row * f.y_stride
+        for i = 0; i < f.width; i = i + 1 {
+          let sample = f.y[base + i]
+          out.push(sample.to_byte())
+          if f.bitdepth > 8 {
+            out.push((sample >> 8).to_byte())
+          }
+        }
+      }
+      if !f.mono {
+        for row = 0; row < ch; row = row + 1 {
+          let base = row * f.uv_stride
+          for i = 0; i < cw; i = i + 1 {
+            let sample = f.u[base + i]
+            out.push(sample.to_byte())
+            if f.bitdepth > 8 {
+              out.push((sample >> 8).to_byte())
+            }
+          }
+        }
+        for row = 0; row < ch; row = row + 1 {
+          let base = row * f.uv_stride
+          for i = 0; i < cw; i = i + 1 {
+            let sample = f.v[base + i]
+            out.push(sample.to_byte())
+            if f.bitdepth > 8 {
+              out.push((sample >> 8).to_byte())
+            }
+          }
+        }
+      }
+      Bytes::from_array(out)
+    }
+  }
 }
 
 ///|
 /// The video codec dispatch behind a `VideoDecoder`.
 pub(all) enum VideoDec {
   H264(@libavcodec.H264Decoder, Bool, Int32)
+  /// HEVC's ported entry is batch-shaped (a fresh session per call), so the
+  /// facade buffers the stream's packets and decodes them in one pass at
+  /// `finish_video`.
+  Hevc(Int32)
+  Vp9(@libavcodec.Vp9Decoder)
+  Av1(@libavcodec.Av1Decoder)
 }
 
 ///|
-/// A codec dispatch for video streams, on top of the ported decoders. The
-/// H.264 entry consumes the container's packets (Matroska/MP4 hand
-/// `avcC`-length-prefixed samples; Annex B sources go through the same
-/// decoder's stream entry) and outputs pictures in decode order.
+/// A codec dispatch for video streams, on top of the ported decoders.
 pub struct VideoDecoder {
   dec : VideoDec
   width : Int32
   height : Int32
+  /// The HEVC batch's pending packets.
+  pending : Array[Bytes]
 }
 
 ///|
@@ -800,17 +915,53 @@ pub fn VideoDecoder::open(info : StreamInfo) -> VideoDecoder raise MediaError {
       }
       {
         dec: H264(dec, parsed.is_avc, parsed.nal_length_size),
-        width: 0,
-        height: 0,
+        width: info.width,
+        height: info.height,
+        pending: [],
       }
     }
+    "hevc" => {
+      let extradata = match info.extradata {
+        Some(v) => v
+        None => raise UnsupportedCodec("hevc without extradata")
+      }
+      // hvcC's lengthSizeMinusOne lives at a fixed offset (byte 21, low two
+      // bits) + 1; Annex B private data passes 0 (unused in the batch call).
+      let nal_length_size = if extradata.length() > 21 &&
+        extradata[0].to_int() == 1 {
+        (extradata[21].to_int() & 0x03) + 1
+      } else {
+        0
+      }
+      {
+        dec: Hevc(nal_length_size),
+        width: info.width,
+        height: info.height,
+        pending: [],
+      }
+    }
+    "vp9" =>
+      {
+        dec: Vp9(@libavcodec.vp9_decoder_new()),
+        width: info.width,
+        height: info.height,
+        pending: [],
+      }
+    "av1" =>
+      {
+        dec: Av1(@libavcodec.Av1Decoder::new()),
+        width: info.width,
+        height: info.height,
+        pending: [],
+      }
     other => raise UnsupportedCodec(other)
   }
 }
 
 ///|
-/// Decode one packet into zero or more pictures (`None`-free list: the H.264
-/// decoder buffers reordering pictures and may emit several at once).
+/// Decode one packet into zero or more pictures. VP9/AV1 emit at most one
+/// picture per packet; H.264 may emit a reorder batch; HEVC buffers until
+/// `finish_video`.
 pub fn VideoDecoder::decode(
   self : VideoDecoder,
   pkt : MediaPacket,
@@ -833,9 +984,68 @@ pub fn VideoDecoder::decode(
       }
       let frames : Array[VideoFrame] = []
       for frame in out {
-        frames.push({ frame, })
+        frames.push({ data: H264(frame), })
       }
       frames
     }
+    Hevc(_) => {
+      self.pending.push(pkt.data)
+      []
+    }
+    Vp9(dec) =>
+      match dec.decode_packet(pkt.data) {
+        Ok(frames) => {
+          let out : Array[VideoFrame] = []
+          for f in frames {
+            out.push({ data: Vp9(f), })
+          }
+          out
+        }
+        Err(e) => raise DecodeError(e)
+      }
+    Av1(dec) =>
+      match dec.decode_packet(pkt.data) {
+        Ok(Some(out)) => [{ data: Av1(out), }]
+        Ok(None) => []
+        Err(e) => raise DecodeError(e)
+      }
+  }
+}
+
+///|
+/// Flush the pending HEVC batch (a no-op for the other codecs): join the
+/// buffered packets and decode them in one session, the shape the ported
+/// entry point is built for.
+pub fn VideoDecoder::finish_video(
+  self : VideoDecoder,
+) -> Array[VideoFrame] raise MediaError {
+  match self.dec {
+    Hevc(nal_length_size) => {
+      if self.pending.length() == 0 {
+        return []
+      }
+      let joined : Array[Byte] = []
+      for p in self.pending {
+        for i = 0; i < p.length(); i = i + 1 {
+          joined.push(p[i])
+        }
+      }
+      let out = match
+        @libavcodec.ff_hevc_decode_frames_ex(
+          Bytes::from_array(joined[:]),
+          nal_length_size > 0,
+          nal_length_size,
+          true,
+        ) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      let frames : Array[VideoFrame] = []
+      for frame in out {
+        frames.push({ data: Hevc(frame), })
+      }
+      frames
+    }
+    _ => []
   }
 }

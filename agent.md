@@ -335,7 +335,12 @@
   `ff_h264_decode_extradata`（avcC/Annex B 双形态）装参数集，is_avc 走
   `decode_avc_sample`（None=重排缓冲未出帧）否则 `decode_annexb`；`VideoFrame`
   包 H264Frame 不复制。真实 MKV（H264+AAC）facade 解帧与直连像素级全等。
-  下一步：hevc/vp9/av1 分发/seek/CLI probe。
+  ⑳d §313 播放 API 第四期：`VideoFrame` 重构 tagged union（H264/Hevc/Vp9/Av1）
+  + 统一 `yuv_bytes()`（planar YUV，extract-frame 出口）+ StreamInfo 补宽高
+  （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
+  真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
+  HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
+  lengthSize 从偏移 21）。全量 1434/1434。下一步：seek/CLI probe/HEVC·AV1 e2e。
   ⑲ §309 CPE common_window=0 分叉（§304 偏差②收口）：窗决策彻底 per-channel——
   `AacEncPlan` 每通道（seq/带计划/分组/窗数），attempt 循环全部吃自己的 plan，
   `lame_seq` 数组替代合流机（判定一致时逐位同），`last_max_sfb` per-channel。

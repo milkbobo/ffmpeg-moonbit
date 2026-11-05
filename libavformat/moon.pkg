@@ -3,6 +3,7 @@ import {
   "ffmpeg/moonbit/libavcodec",
   "moonbitlang/core/double",
   "moonbitlang/core/string",
+  "moonbitlang/core/debug",
 }
 
 import {
