@@ -220,6 +220,17 @@
   是**强制** `EIGHT_SHORT`（真实编码器由 psy 的 `window()` 决定），谱要用逐窗
   攻击斜坡，八个窗能量一致的话逐窗链路整条都是平的、测不出东西。短窗目前只到
   psy：量化器/`scale_factor_grouping`/IS/M-S 仍只吃长窗。
+  ⑬ §301 把 twoloop 也做成按窗分组（`AacTwoShape = {num_windows, group_len}`，
+  `w += group_len[w]` 一共 15 处外层），四条只能这样抄：一个窗组**共享**一条
+  `sf_idx` 与一个码本，所以带成本要把组内 `group_len` 个窗的 `cost/bits/qenergy`
+  分别累加再 `dist = cost - bits`；标度因子差链 `prev` 与「平地扫 128 槽升/降 sf」
+  的两个循环都**不按窗重置**，分组之间的差约束是连着的；`minsf` 写给组内每个窗的
+  槽位（`(w+w2)*16+g`），而 `maxvals/zeroes/sf` 只写在组首槽；
+  `ff_pns_bits(sce, w, g)` 的回看是 `(w<<4)+g-1`（同组上一条带），长窗下 `g-1`
+  才恰好等价。形态因子那一趟有两条只在短窗露面的上游怪癖（分母把**窗号当带号索引**
+  的 `swb_sizes[w]`、守卫 `nzs[g]` 只看第一个窗组），再算上 DC 带保护与
+  `de_psy_factor = 8/group_len` 的瞬态降权——当成 bug 改掉就会分歧（把
+  `de_psy_factor` 换成常量 1.0 做变异，向量立刻报 `frame 0 slot 96: sf 115 != 116`）。
   flip 带只写 `ms_mask` 位、不做 M/S 混合（上游 `apply_mid_side_stereo` 跳过
   所有 `is_mask` 带，符号翻转由解码器完成）。另有两条硬约束：IS 带写进
   码流的是**强度位置**（范围 `[-155,100]`，正负一样常见），所以

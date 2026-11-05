@@ -175,7 +175,7 @@ pub fn aac_pns_search(
   for g = 0; g < cb.length(); g = g + 1 {
     band_alt[g] = cb[g]
   }
-  let nextband = aac_two_init_nextband_map(zeroes, cb, num_swb)
+  let nextband = aac_two_init_nextband_map(zeroes, cb, num_swb, aac_two_shape_long())
   let mut random_state = input.random_state
   let mut prev = -1000
   let mut prev_sf = -1

@@ -105,22 +105,27 @@ if self.config.channels == 2 && its == 0 && use_is {
 
 ## 2b. §300 之后剩下什么（按建议顺序）
 
-1. **短窗感知路径的剩下两层**（第一层 **§300 已闭环**：3GPP psy 的八短窗形态
-   ——8×128 带计划、逐窗 `calc_thr` / 扩散 / 预回声、短窗 `bit_demand` 与
-   `PSY_3GPP_AH_THR_SHORT`，560 条 `psy_bands[w*16+g]` 黄金记录逐位对上
-   `bits`/`alloc`/`fill_level`；harness 的 `--short` 开关负责产出它们，长窗输出
-   一字未变）。还缺的是消费这些带的两层：
-   - **多窗 twoloop**：`search_for_quantizers_twoloop` 的 `for (w2 = 0; w2 < 8;
-     w2++)` 外层 + `psy_bands[(w+w2)*16+g]` 索引 + 逐窗组的
-     `find_max_val(group_len, ...)`（`aac_two_find_max_val` 的 `w2*128 + i` 步长
-     已经参数化好了），以及 `scale_factor_grouping` 的写入；
-   - **多窗工具与 adjust**：`aac_ms_search` 与 `aac_is_search` 都只写了单长窗形态
-     （C 的 `w`/`w2` 外层循环还在，接进去是纯结构性工作），`search_for_ms` 里
-     mid/side 的 `Mmax/Smax` 是**整窗组**共用的；§299 那三条里，窗口组 zeroes 归并
-     只有多窗才不是恒等、`msc == max_sfb * num_windows` 的 `num_windows` 也第一次
-     真的等于 8。
-   注意 §300 没动编码器：`use_psy = perceptual && seq != aac_eight_short` 这条门
-   还在，短窗帧仍走简化模型，所以接上多窗 twoloop 才会第一次改变端到端码流。
+1. **短窗感知路径的剩下两层**。前两层已闭环：**§300** 给出 3GPP psy 的八短窗形态
+   （8×128 带计划、逐窗阈值链、短窗 `bit_demand` / 孔避免阈值，560 条
+   `psy_bands[w*16+g]` 逐位对上 `bits`/`alloc`/`fill_level`），**§301** 把 twoloop
+   量化器做成按窗分组（`AacTwoShape`、15 处 `w += group_len[w]` 外层、组内共享一条
+   `sf_idx` 与码本、`minsf` 写组内每窗槽位、`ff_pns_bits` 按 `(w<<4)+g-1` 回看，
+   266 条 `sf/cb/zeroes` 逐位一致）。还缺的是把这条链**接进编码器**：
+   - **窗分组计划与码流**：`window_grouping[]`（`aacpsy.c:398`）的展开——移植自己的
+     攻击检测要产出 `group_len[8]`，`scale_factor_grouping` 的 `bs_packet_loss_free`
+     之后的 7 位分组字段按 `group_len` 写（写侧现在只在 `window_sequence == 2`
+     时写死一组），`channel_data_psy` / `write_scalefactors` 要吃逐窗组的
+     `sf_idx`/`band_type`/`zeroes`；
+   - **多窗工具与 adjust**：`aac_ms_search` / `aac_is_search` 仍只有单长窗形态
+     （C 的 `w`/`w2` 外层还在，接进去是纯结构性工作；`search_for_ms` 里 mid/side 的
+     `Mmax/Smax` 是整窗组共用的）；§299 那三条里，窗口组 zeroes 归并只有多窗才不是
+     恒等、`msc == max_sfb * num_windows` 的 `num_windows` 也第一次真的等于 8；
+     TNS 的多窗形态（`aac_encode.mbt` 的 `search_tns` 已按 `num_windows` 出
+     `n_filt`，但带范围与 `tns_max_bands_128` 还没接）。
+   两条都在 §301 的向量里有参照：`_ref/aacenc/aac_ref.exe --short` 已经能跑 psy +
+   twoloop 并打印 `SHORTGRP`，加开关就是多窗 IS/M-S 的黄金数据。注意 §300/§301 都
+   没动编码器：`use_psy = perceptual && seq != aac_eight_short` 这条门还在，短窗帧
+   仍走简化模型，所以接上编码器的窗分组才会第一次改变端到端码流。
 2. **短窗 IS 夹具**：结构上 `num_windows` 与每窗带内偏移都参数化了，缺的只是一组
    8 短窗的真夹具。
 3. ~~**f32 字面量的同类残留**~~ —— **§296 已清**（量化器 / `zspread` / PNS 三条

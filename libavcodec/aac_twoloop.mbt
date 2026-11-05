@@ -9,9 +9,13 @@
 /// `quantize_and_encode_band_cost_template` in `aaccoder.c`.
 ///
 /// Scope (identical to `_ref/aacenc/` so the vectors are directly
-/// comparable): one long window (`num_windows = 1`, `group_len[w] = 1`,
-/// 49 scalefactor bands at 44.1 kHz), ABR (`lambda = 120`, no QSCALE), and
-/// intensity / M-S / TNS disabled.
+/// comparable): ABR (`lambda = 120`, no QSCALE), intensity / M-S / TNS
+/// disabled, and both window shapes of the C search — one long window
+/// (`num_windows = 1`, 49 scalefactor bands at 44.1 kHz) and eight short
+/// windows walked by group (`w += group_len[w]`, 14 bands of 128 lines each,
+/// one shared scalefactor and codebook per group). `AacTwoShape` carries the
+/// choice; see `aac_psy.mbt` for the analysis that fills the `w * 16 + g`
+/// slots the search reads.
 ///
 /// PNS is opt-in through `aac_twoloop_search_pns` / `AacTwoPns`: with `on =
 /// false` and `can_pns[]` all zero it reproduces §278's 245 golden bands
@@ -464,17 +468,25 @@ fn aac_two_init_nextband_map(
   zeroes : Array[Int32],
   cb : Array[Int32],
   num_swb : Int32,
+  shape : AacTwoShape,
 ) -> Array[Int32] {
+  let num_windows = shape.num_windows
+  let group_len = shape.group_len
   let nextband : Array[Int32] = Array::make(128, 0)
   for g in 0..<128 {
     nextband[g] = g
   }
   let mut prevband = 0
-  for g in 0..<num_swb {
-    if zeroes[g] == 0 && cb[g] < aac_two_reserved_bt {
-      nextband[prevband] = g
-      prevband = g
+  let mut w = 0
+  while w < num_windows {
+    let base = w * 16
+    for g in 0..<num_swb {
+      if zeroes[base + g] == 0 && cb[base + g] < aac_two_reserved_bt {
+        nextband[prevband] = base + g
+        prevband = base + g
+      }
     }
+    w = w + group_len[w]
   }
   nextband[prevband] = prevband
   nextband
@@ -494,14 +506,33 @@ fn aac_two_can_remove_band(
 }
 
 ///|
+/// `ff_pns_bits`, `aaccoder_twoloop.h:57`: 9 bits for a noise band, 5 when it
+/// follows another noise band (they share the preamble). `slot` is the band's
+/// C slot `w * 16 + g`, and the lookbehind is the previous band of the same
+/// window group - `sce->zeroes[(w<<4)+g-1]`, not a wrapped band index.
+fn aac_two_pns_bits(
+  zeroes : Array[Int32],
+  can_pns : Array[Int32],
+  slot : Int32,
+) -> Int32 {
+  if slot % 16 > 0 && zeroes[slot - 1] != 0 && can_pns[slot - 1] != 0 {
+    5
+  } else {
+    9
+  }
+}
+
+///|
 /// Quantizer state shared by the inner rate loop and the outer distortion
 /// loop: the arrays `search_for_quantizers_twoloop` keeps on its stack, all
-/// sized 128 like C.
+/// sized 128 like C, plus the window shape it walks.
 priv struct AacTwoLoop {
   coefs : Array[Double]
   scoefs : Array[Double]
   band_sizes : Array[Int32]
   num_swb : Int32
+  num_windows : Int32
+  group_len : Array[Int32]
   maxvals : Array[Double]
   sf : Array[Int32]
   zeroes : Array[Int32]
@@ -513,62 +544,72 @@ priv struct AacTwoLoop {
 }
 
 ///|
-/// `ff_pns_bits`, `aaccoder_twoloop.h:57`: 9 bits for a noise band, 5 when it
-/// follows another noise band (they share the preamble).
-fn aac_two_pns_bits(
-  zeroes : Array[Int32],
-  can_pns : Array[Int32],
-  g : Int32,
-) -> Int32 {
-  if g > 0 && zeroes[g - 1] != 0 && can_pns[g - 1] != 0 {
-    5
-  } else {
-    9
-  }
-}
-
-///|
 /// The body C duplicates for the inner loop and for the `recomprd` re-run:
 /// quantise every band at the current scalefactors, store `dists` /
-/// `qenergies` and return the total bit count (`tbits`).
+/// `qenergies` and return the total bit count (`tbits`). A scalefactor is
+/// shared by the whole window group, so the band cost is summed over
+/// `group_len[w]` windows and the bit total counted once, and the scalefactor
+/// delta chain runs across window groups without restarting (`prev` is outside
+/// the `w` loop).
 fn AacTwoLoop::collect(self : AacTwoLoop) -> Int32 {
   let mut tbits = 0
   let mut prev = -1
-  let mut start = 0
-  let qcoefs : Array[Int32] = Array::make(1024, 0)
-  for g in 0..<self.num_swb {
-    if self.zeroes[g] != 0 || self.sf[g] >= 218 {
-      start = start + self.band_sizes[g]
-      if g < self.can_pns.length() && self.can_pns[g] != 0 {
-        tbits = tbits + aac_two_pns_bits(self.zeroes, self.can_pns, g)
+  let qcoefs : Array[Int32] = Array::make(128, 0)
+  let mut w = 0
+  while w < self.num_windows {
+    let gl = self.group_len[w]
+    let base = w * 16
+    let mut start = w * 128
+    for g in 0..<self.num_swb {
+      if self.zeroes[base + g] != 0 || self.sf[base + g] >= 218 {
+        start = start + self.band_sizes[g]
+        if base + g < self.can_pns.length() &&
+          self.can_pns[base + g] != 0 {
+          tbits = tbits + aac_two_pns_bits(
+            self.zeroes, self.can_pns, base + g,
+          )
+        }
+        continue
       }
-      continue
+      let cb = aac_two_find_min_book(self.maxvals[base + g], self.sf[base + g])
+      let mut cost = 0.0
+      let mut bits = 0
+      let mut qenergy = 0.0
+      for w2 in 0..<gl {
+        let off = start + w2 * 128
+        let r = aac_two_band_cost(
+          self.coefs, off, self.scoefs, off, qcoefs, self.band_sizes[g],
+          self.sf[base + g], cb, 1.0,
+        )
+        cost = aac_two_add(cost, r.cost)
+        bits = bits + r.bits
+        qenergy = aac_two_add(qenergy, r.energy)
+      }
+      self.dists[base + g] = aac_two_sub(cost, bits.to_double())
+      self.qenergies[base + g] = qenergy
+      if prev != -1 {
+        let sfdiff = aac_two_clip(
+          self.sf[base + g] - prev + aac_two_scale_diff_zero, 0,
+          2 * aac_two_scale_max_diff,
+        )
+        bits = bits + aac_scalefactor_bits[sfdiff]
+      }
+      tbits = tbits + bits
+      start = start + self.band_sizes[g]
+      prev = self.sf[base + g]
     }
-    let cb = aac_two_find_min_book(self.maxvals[g], self.sf[g])
-    let r = aac_two_band_cost(
-      self.coefs, start, self.scoefs, start, qcoefs, self.band_sizes[g],
-      self.sf[g], cb, 1.0,
-    )
-    let mut bits = r.bits
-    self.dists[g] = aac_two_sub(r.cost, r.bits.to_double())
-    self.qenergies[g] = r.energy
-    if prev != -1 {
-      let sfdiff = aac_two_clip(
-        self.sf[g] - prev + aac_two_scale_diff_zero, 0,
-        2 * aac_two_scale_max_diff,
-      )
-      bits = bits + aac_scalefactor_bits[sfdiff]
-    }
-    tbits = tbits + bits
-    start = start + self.band_sizes[g]
-    prev = self.sf[g]
+    w = w + gl
   }
   tbits
 }
 
 ///|
-/// Outcome of `aac_twoloop_search`, in C's `w*16 + g` slot layout. With one
-/// long window only the first `num_swb` slots carry real bands.
+/// Outcome of `aac_twoloop_search`, in C's `w*16 + g` slot layout. Only the
+/// slots at a window-group start carry a decision: with one long window those
+/// are the first `num_swb` slots, with eight short windows they are
+/// `group_len`-spaced blocks of `num_swb` slots each, and the slots a group
+/// covers from its second window onward keep whatever the flat 128-entry
+/// passes left in them (C touches them too, so they are part of the state).
 pub struct AacTwoResult {
   sf : Array[Int32]
   cb : Array[Int32]
@@ -609,6 +650,48 @@ pub fn aac_twoloop_pns(
 }
 
 ///|
+/// The window shape the search runs on: `num_windows` (1 for a long frame, 8
+/// for an eight-short frame) and `sce->ics.group_len` — one entry per window,
+/// of which only the ones at a window-group start are read, because C walks
+/// groups with `w += group_len[w]` (`aaccoder_twoloop.h:217`). A group shares
+/// one scalefactor and one codebook across its windows, and its slots are at
+/// `w * 16 + g` for the group's first window `w`.
+pub struct AacTwoShape {
+  num_windows : Int32
+  group_len : Array[Int32]
+}
+
+///|
+/// `ONLY_LONG`/`LONG_START`/`LONG_STOP`: one window, one group.
+pub fn aac_two_shape_long() -> AacTwoShape {
+  { num_windows: 1, group_len: [1, 0, 0, 0, 0, 0, 0, 0] }
+}
+
+///|
+/// `EIGHT_SHORT` with the given grouping. `group_len` must be the eight
+/// entries C would have built from a `window_grouping` byte
+/// (`aacpsy.c:398`) - it is validated against `num_windows = 8` here because a
+/// wrong walk would silently skip whole windows.
+pub fn aac_two_shape_short(group_len : Array[Int32]) -> AacTwoShape {
+  if group_len.length() != 8 {
+    abort("aac_two_shape_short: group_len must have 8 entries")
+  }
+  let mut total = 0
+  let mut w = 0
+  while w < 8 {
+    if group_len[w] <= 0 {
+      abort("aac_two_shape_short: non-positive group_len[\{w}]")
+    }
+    total = total + group_len[w]
+    w = w + group_len[w]
+  }
+  if total != 8 {
+    abort("aac_two_shape_short: groups cover \{total} windows, want 8")
+  }
+  { num_windows: 8, group_len }
+}
+
+///|
 /// The configuration §278's 245 golden vectors were produced in: no PNS, so
 /// `can_pns` is all zero and the bandwidth factor stays 1.0.
 pub fn aac_twoloop_search(
@@ -620,21 +703,24 @@ pub fn aac_twoloop_search(
   sample_rate : Int32,
   channels : Int32,
   lambda : Double,
+  shape : AacTwoShape,
 ) -> AacTwoResult {
   aac_twoloop_search_pns(
     coefs, band_sizes, bands, alloc, bit_rate, sample_rate, channels, lambda,
     aac_twoloop_pns(
-      Array::make(band_sizes.length(), 0),
+      Array::make(bands.length(), 0),
       false,
       false,
     ),
+    shape,
   )
 }
 
 ///|
-/// `search_for_quantizers_twoloop`, `aaccoder_twoloop.h:65`, restricted to
-/// one long window with intensity / M-S / TNS off. `bands` are the `FFPsyBand`
-/// values from `AacPsyContext::analyze`; `alloc` is its `bitres.alloc`.
+/// `search_for_quantizers_twoloop`, `aaccoder_twoloop.h:65`, with intensity /
+/// M-S / TNS off. `bands` are the `FFPsyBand` slots from
+/// `AacPsyContext::analyze` (window `w`, band `g` at `w * 16 + g`); `alloc` is
+/// its `bitres.alloc`.
 pub fn aac_twoloop_search_pns(
   coefs : Array[Double],
   band_sizes : Array[Int32],
@@ -645,11 +731,11 @@ pub fn aac_twoloop_search_pns(
   channels : Int32,
   lambda : Double,
   pns : AacTwoPns,
+  shape : AacTwoShape,
 ) -> AacTwoResult {
   let num_swb = band_sizes.length()
-  // One long window: w = 0, group_len[w] = 1.
-  let group_len = 1
-  let wlen = 1024
+  let num_windows = shape.num_windows
+  let wlen = 1024 / num_windows
   let mut destbits = (bit_rate.to_double() * 1024.0 / sample_rate.to_double() /
     channels.to_double() * (lambda / 120.0)).to_int()
   let mut rdlambda = aac_two_clipf(2.0 * 120.0 / lambda, 0.0625, 16.0)
@@ -714,152 +800,220 @@ pub fn aac_twoloop_search_pns(
   let zeroes : Array[Int32] = Array::make(128, 0)
   let minsf : Array[Int32] = Array::make(128, 0)
   let maxsf : Array[Int32] = Array::make(128, aac_two_scale_max_pos)
-  // Zero bands and upper distortion limits.
+  // Zero bands and upper distortion limits. `start` is the band's position
+  // *within a window*, so it restarts for every window group, while the psy
+  // records are read at the slot of each window in the group.
   let mut allz = 0
-  let mut start = 0
-  for g in 0..<num_swb {
-    let band = bands[g]
-    let mut nz = 0
-    if start >= cutoff ||
-      band.energy <= aac_two_mul(band.threshold, zeroscale) ||
-      band.threshold == 0.0 {
-      zeroes[g] = 1
-    } else {
-      nz = 1
-    }
-    let mut uplim = 0.0
-    let mut energy = 0.0
-    let mut spread = 0.0
-    if nz != 0 {
-      nz = 0
-      if not(
-        band.energy <= aac_two_mul(band.threshold, zeroscale) ||
-        band.threshold == 0.0
-      ) {
-        uplim = aac_two_add(uplim, band.threshold)
-        energy = aac_two_add(energy, band.energy)
-        spread = aac_two_add(spread, band.spread)
-        nz = nz + 1
+  let mut wz = 0
+  while wz < num_windows {
+    let gl = shape.group_len[wz]
+    let base = wz * 16
+    let mut start = 0
+    for g in 0..<num_swb {
+      let mut nz = 0
+      for w2 in 0..<gl {
+        let band = bands[(wz + w2) * 16 + g]
+        if start >= cutoff ||
+          band.energy <= aac_two_mul(band.threshold, zeroscale) ||
+          band.threshold == 0.0 {
+          zeroes[(wz + w2) * 16 + g] = 1
+        } else {
+          nz = 1
+        }
       }
-    }
-    uplims[g] = uplim
-    energies[g] = energy
-    nzs[g] = nz
-    zeroes[g] = if nz != 0 { 0 } else { 1 }
-    allz = allz | nz
-    // `aaccoder_twoloop.h:248`: the spread-energy / threshold ranking that
-    // the later overdistortion-driven PNS zeroing uses.
-    if nz != 0 && g < can_pns.length() && can_pns[g] != 0 {
-      let denom = aac_two_mul(uplim, spread)
-      let r = if denom > 0.0 {
-        aac_two_div(aac_two_mul(energy, nz.to_double()), denom)
-      } else {
-        0.0
+      let mut uplim = 0.0
+      let mut energy = 0.0
+      let mut spread = 0.0
+      if nz != 0 {
+        nz = 0
+        for w2 in 0..<gl {
+          let band = bands[(wz + w2) * 16 + g]
+          if not(
+            band.energy <= aac_two_mul(band.threshold, zeroscale) ||
+            band.threshold == 0.0
+          ) {
+            uplim = aac_two_add(uplim, band.threshold)
+            energy = aac_two_add(energy, band.energy)
+            spread = aac_two_add(spread, band.spread)
+            nz = nz + 1
+          }
+        }
       }
-      spread_thr_r[g] = r
-      if min_spread_thr_r < 0.0 {
-        min_spread_thr_r = r
-        max_spread_thr_r = r
-      } else {
-        if r < min_spread_thr_r {
+      uplims[base + g] = uplim
+      energies[base + g] = energy
+      nzs[base + g] = nz
+      zeroes[base + g] = if nz != 0 { 0 } else { 1 }
+      allz = allz | nz
+      // `aaccoder_twoloop.h:248`: the spread-energy / threshold ranking that
+      // the later overdistortion-driven PNS zeroing uses.
+      if nz != 0 && base + g < can_pns.length() && can_pns[base + g] != 0 {
+        let denom = aac_two_mul(uplim, spread)
+        let r = if denom > 0.0 {
+          aac_two_div(aac_two_mul(energy, nz.to_double()), denom)
+        } else {
+          0.0
+        }
+        spread_thr_r[base + g] = r
+        if min_spread_thr_r < 0.0 {
           min_spread_thr_r = r
-        }
-        if r > max_spread_thr_r {
           max_spread_thr_r = r
+        } else {
+          if r < min_spread_thr_r {
+            min_spread_thr_r = r
+          }
+          if r > max_spread_thr_r {
+            max_spread_thr_r = r
+          }
         }
       }
+      start = start + band_sizes[g]
     }
-    start = start + band_sizes[g]
+    wz = wz + gl
   }
   // Initial scalefactors.
   let mut minscaler = 65535
-  for g in 0..<num_swb {
-    if zeroes[g] != 0 {
-      sf[g] = aac_two_scale_one_pos
-    } else {
-      let denom = band_sizes[g].to_double()
-      let peak = if uplims[g] > aac_two_uplim_floor {
-        uplims[g]
+  let mut wsf = 0
+  while wsf < num_windows {
+    let gl_ssf = shape.group_len[wsf]
+    let bsf = wsf * 16
+    for g in 0..<num_swb {
+      if zeroes[bsf + g] != 0 {
+        sf[bsf + g] = aac_two_scale_one_pos
       } else {
-        aac_two_uplim_floor
-      }
-      let v = aac_two_scale_one_pos.to_double() +
-        1.75 * aac_two_log2f(aac_two_div(peak, denom)) + sfoffs
-      sf[g] = aac_two_clip(v.to_int(), 60, aac_two_scale_max_pos)
-      if sf[g] < minscaler {
-        minscaler = sf[g]
+        let denom = band_sizes[g].to_double()
+        let peak = if uplims[bsf + g] > aac_two_uplim_floor {
+          uplims[bsf + g]
+        } else {
+          aac_two_uplim_floor
+        }
+        let v = aac_two_scale_one_pos.to_double() +
+          1.75 * aac_two_log2f(aac_two_div(peak, denom)) + sfoffs
+        sf[bsf + g] = aac_two_clip(v.to_int(), 60, aac_two_scale_max_pos)
+        if sf[bsf + g] < minscaler {
+          minscaler = sf[bsf + g]
+        }
       }
     }
+    wsf = wsf + gl_ssf
   }
   minscaler = aac_two_clip(
     minscaler, aac_two_scale_one_pos - aac_two_scale_div_512,
     aac_two_scale_max_pos - aac_two_scale_div_512,
   )
-  for g in 0..<num_swb {
-    if zeroes[g] == 0 {
-      sf[g] = aac_two_clip(
-        sf[g], minscaler, minscaler + aac_two_scale_max_diff - 1,
-      )
+  let mut wcl = 0
+  while wcl < num_windows {
+    let gl_scl = shape.group_len[wcl]
+    let bcl = wcl * 16
+    for g in 0..<num_swb {
+      if zeroes[bcl + g] == 0 {
+        sf[bcl + g] = aac_two_clip(
+          sf[bcl + g], minscaler, minscaler + aac_two_scale_max_diff - 1,
+        )
+      }
     }
+    wcl = wcl + gl_scl
   }
   if allz == 0 {
     return { sf, cb, zeroes, maxvals, tbits: 0, iters: 0 }
   }
   let scoefs = aac_two_abs_pow34(coefs, 1024)
-  // Per-band peak and the smallest legal scalefactor.
-  let mut peak_start = 0
-  for g in 0..<num_swb {
-    maxvals[g] = aac_two_find_max_val(group_len, band_sizes[g], scoefs, peak_start)
-    if maxvals[g] > 0.0 {
-      minsf[g] = aac_two_coef2minsf(maxvals[g])
+  // Per-band peak and the smallest legal scalefactor, per window group.
+  let mut wpk = 0
+  while wpk < num_windows {
+    let gl_spk = shape.group_len[wpk]
+    let bpk = wpk * 16
+    let mut peak_start = wpk * 128
+    for g in 0..<num_swb {
+      maxvals[bpk + g] = aac_two_find_max_val(
+        gl_spk, band_sizes[g], scoefs, peak_start,
+      )
+      if maxvals[bpk + g] > 0.0 {
+        let minsfidx = aac_two_coef2minsf(maxvals[bpk + g])
+        for w2 in 0..<gl_spk {
+          minsf[(wpk + w2) * 16 + g] = minsfidx
+        }
+      }
+      peak_start = peak_start + band_sizes[g]
     }
-    peak_start = peak_start + band_sizes[g]
+    wpk = wpk + gl_spk
   }
   // Rescale the upward limits by tonality: noisy bands may be quantised
   // harder, tonal bands are protected.
   for g in 0..<128 {
     euplims[g] = uplims[g]
   }
-  // C divides by `sce->ics.swb_sizes[w]` here (w = 0), not `swb_sizes[g]`.
-  let swb0 = band_sizes[0].to_double()
-  let mut ff_start = 0
-  for g in 0..<num_swb {
-    if nzs[g] > 0 {
-      let cfrac = aac_two_clipf(
-        aac_two_div(ff_start.to_double(), aac_two_mul(cutoff.to_double(), 0.75)),
-        1.0, 2.0,
-      )
-      let cleanup_factor = aac_two_mul(cfrac, cfrac)
-      let thresh = aac_two_div(uplims[g], aac_two_mul(nzs[g].to_double(), swb0))
-      let mut e2u = aac_two_find_form_factor(
-        group_len, band_sizes[g], thresh, coefs, ff_start,
-        aac_two_mul(nzslope, cleanup_factor),
-      )
-      e2u = aac_two_sqrtf(e2u)
-      e2u = aac_two_clipf(e2u, 0.015625, 1.0)
-      uplims[g] = aac_two_mul(
-        uplims[g],
-        aac_two_clipf(aac_two_mul(rdlambda, e2u), rdmin, rdmax),
-      )
-      let thresh2 = aac_two_div(
-        uplims[g], aac_two_mul(nzs[g].to_double(), swb0),
-      )
-      let mut e2u2 = aac_two_find_form_factor(
-        group_len, band_sizes[g], thresh2, coefs, ff_start, 2.0,
-      )
-      e2u2 = aac_two_sqrtf(e2u2)
-      e2u2 = aac_two_clipf(e2u2, 0.015625, 1.0)
-      euplims[g] = aac_two_mul(
-        euplims[g], aac_two_clipf(aac_two_mul(rdlambda, e2u2), 0.5, 1.0),
-      )
+  // Two upstream quirks live here: C divides by `sce->ics.swb_sizes[w]` - the
+  // *window index* used as a band-size index, not `swb_sizes[g]` - and tests
+  // `nzs[g]`, the count of the first window group, for every group. Both are
+  // identity-shaped with one window, so they only start to bite on short
+  // frames; they are transcribed as they are.
+  let mut wff = 0
+  while wff < num_windows {
+    let gl_sff = shape.group_len[wff]
+    let bff = wff * 16
+    // `aaccoder_twoloop.h:322`: short frames de-prioritise transients by the
+    // share of the window group in the frame.
+    let de_psy_factor = if num_windows > 1 {
+      aac_two_div(8.0, gl_sff.to_double())
+    } else {
+      1.0
     }
-    ff_start = ff_start + band_sizes[g]
+    let swbw = band_sizes[wff].to_double()
+    let mut ff_start = wff * 128
+    for g in 0..<num_swb {
+      if nzs[g] > 0 {
+        let cfrac = aac_two_clipf(
+          aac_two_div(ff_start.to_double(), aac_two_mul(cutoff.to_double(), 0.75)),
+          1.0, 2.0,
+        )
+        let cleanup_factor = aac_two_mul(cfrac, cfrac)
+        let thresh = aac_two_div(
+          uplims[bff + g],
+          aac_two_mul(nzs[g].to_double(), swbw),
+        )
+        let mut e2u = aac_two_find_form_factor(
+          gl_sff, band_sizes[g], thresh, coefs, ff_start,
+          aac_two_mul(nzslope, cleanup_factor),
+        )
+        e2u = aac_two_mul(e2u, de_psy_factor)
+        e2u = aac_two_sqrtf(e2u)
+        e2u = aac_two_clipf(e2u, 0.015625, 1.0)
+        uplims[bff + g] = aac_two_mul(
+          uplims[bff + g],
+          aac_two_mul(
+            aac_two_clipf(aac_two_mul(rdlambda, e2u), rdmin, rdmax),
+            gl_sff.to_double(),
+          ),
+        )
+        let thresh2 = aac_two_div(
+          uplims[bff + g], aac_two_mul(nzs[g].to_double(), swbw),
+        )
+        let mut e2u2 = aac_two_find_form_factor(
+          gl_sff, band_sizes[g], thresh2, coefs, ff_start, 2.0,
+        )
+        e2u2 = aac_two_mul(e2u2, de_psy_factor)
+        e2u2 = aac_two_sqrtf(e2u2)
+        e2u2 = aac_two_clipf(e2u2, 0.015625, 1.0)
+        euplims[bff + g] = aac_two_mul(
+          euplims[bff + g],
+          aac_two_clipf(
+            aac_two_mul(aac_two_mul(rdlambda, e2u2), gl_sff.to_double()),
+            0.5,
+            1.0,
+          ),
+        )
+      }
+      ff_start = ff_start + band_sizes[g]
+    }
+    wff = wff + gl_sff
   }
   let st : AacTwoLoop = {
     coefs,
     scoefs,
     band_sizes,
     num_swb,
+    num_windows,
+    group_len: shape.group_len,
     maxvals,
     sf,
     zeroes,
@@ -867,6 +1021,9 @@ pub fn aac_twoloop_search_pns(
     qenergies,
     can_pns,
   }
+  // Scratch for `quantize_bands` inside the RD loop: only ever written
+  // before being read, so one 128-slot buffer serves every band and window.
+  let qcoefs_rd : Array[Int32] = Array::make(128, 0)
   let maxits = 30
   let mut its = 0
   let mut fflag = false
@@ -937,27 +1094,39 @@ pub fn aac_twoloop_search_pns(
           (maxits - its).to_double() * 16.0 / maxits.to_double()
         overdist = 0
         recomprd = false
-        for g in 0..<num_swb {
-          if zeroes[g] == 0 && sf[g] > aac_two_scale_one_pos &&
-            dists[g] > aac_two_mul(uplims[g], ovrfactor) {
-            overdist = overdist + 1
+        let mut wo = 0
+        while wo < num_windows {
+          let glo = shape.group_len[wo]
+          let bo = wo * 16
+          for g in 0..<num_swb {
+            if zeroes[bo + g] == 0 && sf[bo + g] > aac_two_scale_one_pos &&
+              dists[bo + g] > aac_two_mul(uplims[bo + g], ovrfactor) {
+              overdist = overdist + 1
+            }
           }
+          wo = wo + glo
         }
         if overdist != 0 {
           let mut minspread = max_spread_thr_r
           let mut maxspread = min_spread_thr_r
           let mut zeroable = 0
-          for g in 0..<num_swb {
-            if offsets[g] >= pns_start_pos && zeroes[g] == 0 &&
-              g < can_pns.length() && can_pns[g] != 0 {
-              if spread_thr_r[g] < minspread {
-                minspread = spread_thr_r[g]
+          let mut wz = 0
+          while wz < num_windows {
+            let glz = shape.group_len[wz]
+            let bz = wz * 16
+            for g in 0..<num_swb {
+              if offsets[g] >= pns_start_pos && zeroes[bz + g] == 0 &&
+                bz + g < can_pns.length() && can_pns[bz + g] != 0 {
+                if spread_thr_r[bz + g] < minspread {
+                  minspread = spread_thr_r[bz + g]
+                }
+                if spread_thr_r[bz + g] > maxspread {
+                  maxspread = spread_thr_r[bz + g]
+                }
+                zeroable = zeroable + 1
               }
-              if spread_thr_r[g] > maxspread {
-                maxspread = spread_thr_r[g]
-              }
-              zeroable = zeroable + 1
             }
+            wz = wz + glz
           }
           // `aaccoder_twoloop.h:532-537`, every step in f32: the spread
           // interpolation, its `min_spread_thr_r * 8.f` cap, and the
@@ -1004,20 +1173,30 @@ pub fn aac_twoloop_search_pns(
             let mut g = num_swb - 1
             while g > 0 && zeroed < maxzeroed {
               if offsets[g] >= pns_start_pos {
-                let mcb = aac_two_find_min_book(maxvals[g], sf[g])
-                let minul = if uplims[g] < euplims[g] {
-                  uplims[g]
-                } else {
-                  euplims[g]
-                }
-                let overd = dists[g] > aac_two_mul(loopovrfactor, uplims[g]) ||
-                  mcb <= 0 || (mcb <= 1 && dists[g] > minul)
-                if zeroes[g] == 0 && g < can_pns.length() &&
-                  can_pns[g] != 0 && spread_thr_r[g] <= zspread &&
-                  sf[g] > loopminsf && overd {
-                  zeroes[g] = 1
-                  cb[g] = 0
-                  zeroed = zeroed + 1
+                // C walks the window groups for *this* band; the
+                // `zeroed < maxzeroed` cap is only tested between bands, so a
+                // group of several windows can overshoot it.
+                let mut wz2 = 0
+                while wz2 < num_windows {
+                  let glz2 = shape.group_len[wz2]
+                  let slot = wz2 * 16 + g
+                  let mcb = aac_two_find_min_book(maxvals[slot], sf[slot])
+                  let minul = if uplims[slot] < euplims[slot] {
+                    uplims[slot]
+                  } else {
+                    euplims[slot]
+                  }
+                  let overd = dists[slot] >
+                    aac_two_mul(loopovrfactor, uplims[slot]) ||
+                    mcb <= 0 || (mcb <= 1 && dists[slot] > minul)
+                  if zeroes[slot] == 0 && slot < can_pns.length() &&
+                    can_pns[slot] != 0 && spread_thr_r[slot] <= zspread &&
+                    sf[slot] > loopminsf && overd {
+                    zeroes[slot] = 1
+                    cb[slot] = 0
+                    zeroed = zeroed + 1
+                  }
+                  wz2 = wz2 + glz2
                 }
               }
               g = g - 1
@@ -1033,10 +1212,16 @@ pub fn aac_twoloop_search_pns(
     }
     // Smallest scalefactor in use.
     let mut mins = aac_two_scale_max_pos
-    for g in 0..<num_swb {
-      if zeroes[g] == 0 && sf[g] < mins {
-        mins = sf[g]
+    let mut wm = 0
+    while wm < num_windows {
+      let glm = shape.group_len[wm]
+      let bm = wm * 16
+      for g in 0..<num_swb {
+        if zeroes[bm + g] == 0 && sf[bm + g] < mins {
+          mins = sf[bm + g]
+        }
       }
+      wm = wm + glm
     }
     mins = aac_two_clip(
       mins, aac_two_scale_one_pos - aac_two_scale_div_512,
@@ -1070,122 +1255,164 @@ pub fn aac_twoloop_search_pns(
       },
     )
     let mut prev = -1
-    let mut start = 0
-    for g in 0..<num_swb {
-      let prevsc = sf[g]
-      if prev < 0 && zeroes[g] == 0 {
-        prev = sf[0]
-      }
-      if zeroes[g] == 0 {
-        let cmb = aac_two_find_min_book(maxvals[g], sf[g])
-        let mut mindeltasf = prev - aac_two_scale_max_diff
-        if mindeltasf < 0 {
-          mindeltasf = 0
+    let mut wr = 0
+    while wr < num_windows {
+      let glr = shape.group_len[wr]
+      let br = wr * 16
+      let mut start = wr * 128
+      for g in 0..<num_swb {
+        let s = br + g
+        let prevsc = sf[s]
+        if prev < 0 && zeroes[s] == 0 {
+          prev = sf[0]
         }
-        let mut maxdeltasf = prev + aac_two_scale_max_diff
-        if maxdeltasf > aac_two_scale_max_pos - aac_two_scale_div_512 {
-          maxdeltasf = aac_two_scale_max_pos - aac_two_scale_div_512
-        }
-        let floor = if mindeltasf > minsf[g] { mindeltasf } else { minsf[g] }
-        if (cmb == 0 || dists[g] > uplims[g]) && sf[g] > floor {
-          // Push down (finer) until the band carries energy or meets the
-          // distortion target.
-          let mut stop = false
-          let mut i = 0
-          while i < edepth && sf[g] > mindeltasf {
-            let mb = aac_two_find_min_book(maxvals[g], sf[g] - 1)
-            let band_cb = aac_two_find_min_book(maxvals[g], sf[g])
-            if band_cb == 0 {
-              let lim = sf[g] - 1
-              maxsf[g] = if lim < maxsf[g] { lim } else { maxsf[g] }
-            } else if i >= depth && dists[g] < euplims[g] {
-              stop = true
-            }
-            if stop {
-              break
-            }
-            let r = aac_two_band_cost(
-              coefs, start, scoefs, start, Array::make(band_sizes[g], 0),
-              band_sizes[g], sf[g] - 1, band_cb, 1.0,
-            )
-            sf[g] = sf[g] - 1
-            dists[g] = aac_two_sub(r.cost, r.bits.to_double())
-            qenergies[g] = r.energy
-            let target = aac_two_mul(uplmax, uplims[g])
-            let bound = if target < euplims[g] { target } else { euplims[g] }
-            let ediff = aac_two_f32((qenergies[g] - energies[g]).abs())
-            if mb != 0 &&
-              (sf[g] < mindeltasf || (dists[g] < bound && ediff < euplims[g])) {
-              break
-            }
-            i = i + 1
+        if zeroes[s] == 0 {
+          let cmb = aac_two_find_min_book(maxvals[s], sf[s])
+          let mut mindeltasf = prev - aac_two_scale_max_diff
+          if mindeltasf < 0 {
+            mindeltasf = 0
           }
-        } else {
-          let maxsf_lim = if maxdeltasf < maxsf[g] {
-            maxdeltasf
-          } else {
-            maxsf[g]
+          let mut maxdeltasf = prev + aac_two_scale_max_diff
+          if maxdeltasf > aac_two_scale_max_pos - aac_two_scale_div_512 {
+            maxdeltasf = aac_two_scale_max_pos - aac_two_scale_div_512
           }
-          let elo = if euplims[g] < uplims[g] { euplims[g] } else { uplims[g] }
-          let ediff = aac_two_f32((qenergies[g] - energies[g]).abs())
-          if tbits > toofewbits && sf[g] < maxsf_lim && dists[g] < elo &&
-            ediff < euplims[g] {
-            // We are over target: spend fewer bits on this band.
+          let floor = if mindeltasf > minsf[s] { mindeltasf } else { minsf[s] }
+          if (cmb == 0 || dists[s] > uplims[s]) && sf[s] > floor {
+            // Push down (finer) until the band carries energy or meets the
+            // distortion target.
+            let mut stop = false
             let mut i = 0
-            while i < depth && sf[g] < maxdeltasf {
-              let band_cb = aac_two_find_min_book(maxvals[g], sf[g] + 1)
-              if band_cb > 0 {
+            while i < edepth && sf[s] > mindeltasf {
+              let mb = aac_two_find_min_book(maxvals[s], sf[s] - 1)
+              let band_cb = aac_two_find_min_book(maxvals[s], sf[s])
+              if band_cb == 0 {
+                let lim = sf[s] - 1
+                maxsf[s] = if lim < maxsf[s] { lim } else { maxsf[s] }
+              } else if i >= depth && dists[s] < euplims[s] {
+                stop = true
+              }
+              // !g is the DC band: on a short frame its error is guarded even
+              // when the push continues (`aaccoder_twoloop.h:625`).
+              if g == 0 && num_windows > 1 && dists[s] >= euplims[s] {
+                maxsf[s] = if sf[s] < maxsf[s] { sf[s] } else { maxsf[s] }
+              }
+              if stop {
+                break
+              }
+              let mut cost = 0.0
+              let mut bits = 0
+              let mut qenergy = 0.0
+              for w2 in 0..<glr {
+                let off = start + w2 * 128
                 let r = aac_two_band_cost(
-                  coefs, start, scoefs, start, Array::make(band_sizes[g], 0),
-                  band_sizes[g], sf[g] + 1, band_cb, 1.0,
+                  coefs, off, scoefs, off, qcoefs_rd, band_sizes[g],
+                  sf[s] - 1, band_cb, 1.0,
                 )
-                let dist = aac_two_sub(r.cost, r.bits.to_double())
-                let lim = if euplims[g] < uplims[g] {
-                  euplims[g]
-                } else {
-                  uplims[g]
-                }
-                if dist < lim {
-                  sf[g] = sf[g] + 1
-                  dists[g] = dist
-                  qenergies[g] = r.energy
-                } else {
-                  break
-                }
-              } else {
-                maxsf[g] = if sf[g] < maxsf[g] { sf[g] } else { maxsf[g] }
+                cost = aac_two_add(cost, r.cost)
+                bits = bits + r.bits
+                qenergy = aac_two_add(qenergy, r.energy)
+              }
+              sf[s] = sf[s] - 1
+              dists[s] = aac_two_sub(cost, bits.to_double())
+              qenergies[s] = qenergy
+              let target = aac_two_mul(uplmax, uplims[s])
+              let bound = if target < euplims[s] { target } else { euplims[s] }
+              let ediff = aac_two_f32((qenergies[s] - energies[s]).abs())
+              if mb != 0 &&
+                (sf[s] < mindeltasf || (dists[s] < bound && ediff < euplims[s])) {
                 break
               }
               i = i + 1
             }
+          } else {
+            let maxsf_lim = if maxdeltasf < maxsf[s] {
+              maxdeltasf
+            } else {
+              maxsf[s]
+            }
+            let elo = if euplims[s] < uplims[s] {
+              euplims[s]
+            } else {
+              uplims[s]
+            }
+            let ediff = aac_two_f32((qenergies[s] - energies[s]).abs())
+            if tbits > toofewbits && sf[s] < maxsf_lim && dists[s] < elo &&
+              ediff < euplims[s] {
+              // We are over target: spend fewer bits on this band.
+              let mut i = 0
+              while i < depth && sf[s] < maxdeltasf {
+                let band_cb = aac_two_find_min_book(maxvals[s], sf[s] + 1)
+                if band_cb > 0 {
+                  let mut cost = 0.0
+                  let mut bits = 0
+                  let mut qenergy = 0.0
+                  for w2 in 0..<glr {
+                    let off = start + w2 * 128
+                    let r = aac_two_band_cost(
+                      coefs, off, scoefs, off, qcoefs_rd, band_sizes[g],
+                      sf[s] + 1, band_cb, 1.0,
+                    )
+                    cost = aac_two_add(cost, r.cost)
+                    bits = bits + r.bits
+                    qenergy = aac_two_add(qenergy, r.energy)
+                  }
+                  let dist = aac_two_sub(cost, bits.to_double())
+                  let lim = if euplims[s] < uplims[s] {
+                    euplims[s]
+                  } else {
+                    uplims[s]
+                  }
+                  if dist < lim {
+                    sf[s] = sf[s] + 1
+                    dists[s] = dist
+                    qenergies[s] = qenergy
+                  } else {
+                    break
+                  }
+                } else {
+                  maxsf[s] = if sf[s] < maxsf[s] { sf[s] } else { maxsf[s] }
+                  break
+                }
+                i = i + 1
+              }
+            }
+          }
+          sf[s] = aac_two_clip(sf[s], mindeltasf, maxdeltasf)
+          if sf[s] != prevsc {
+            fflag = true
+          }
+          cb[s] = aac_two_find_min_book(maxvals[s], sf[s])
+          prev = sf[s]
+        }
+        start = start + band_sizes[g]
+      }
+      wr = wr + glr
+    }
+    // SF delta limit violation risk: re-clamp. `prev` is not restarted per
+    // window group, so the delta chain runs through the whole frame.
+    let mut prev2 = -1
+    let mut wc = 0
+    while wc < num_windows {
+      let glc = shape.group_len[wc]
+      let bc = wc * 16
+      for g in 0..<num_swb {
+        if zeroes[bc + g] == 0 {
+          let prevsf = sf[bc + g]
+          if prev2 < 0 {
+            prev2 = prevsf
+          }
+          sf[bc + g] = aac_two_clip(
+            sf[bc + g], prev2 - aac_two_scale_max_diff,
+            prev2 + aac_two_scale_max_diff,
+          )
+          cb[bc + g] = aac_two_find_min_book(maxvals[bc + g], sf[bc + g])
+          prev2 = sf[bc + g]
+          if !fflag && prevsf != sf[bc + g] {
+            fflag = true
           }
         }
-        sf[g] = aac_two_clip(sf[g], mindeltasf, maxdeltasf)
-        if sf[g] != prevsc {
-          fflag = true
-        }
-        cb[g] = aac_two_find_min_book(maxvals[g], sf[g])
-        prev = sf[g]
       }
-      start = start + band_sizes[g]
-    }
-    // SF delta limit violation risk: re-clamp.
-    let mut prev2 = -1
-    for g in 0..<num_swb {
-      if zeroes[g] == 0 {
-        let prevsf = sf[g]
-        if prev2 < 0 {
-          prev2 = prevsf
-        }
-        sf[g] = aac_two_clip(
-          sf[g], prev2 - aac_two_scale_max_diff, prev2 + aac_two_scale_max_diff,
-        )
-        cb[g] = aac_two_find_min_book(maxvals[g], sf[g])
-        prev2 = sf[g]
-        if !fflag && prevsf != sf[g] {
-          fflag = true
-        }
-      }
+      wc = wc + glc
     }
     its = its + 1
     if !(fflag && its < maxits) {
@@ -1194,28 +1421,35 @@ pub fn aac_twoloop_search_pns(
   }
   // Give every non-zero band a legal codebook; a band its scalefactor no
   // longer codes is zeroed unless that would break the delta chain.
-  let nextband = aac_two_init_nextband_map(zeroes, cb, num_swb)
+  let nextband = aac_two_init_nextband_map(zeroes, cb, num_swb, shape)
   let mut prev3 = -1
-  for g in 0..<num_swb {
-    if zeroes[g] == 0 {
-      cb[g] = aac_two_find_min_book(maxvals[g], sf[g])
-      if cb[g] <= 0 {
-        if !aac_two_can_remove_band(sf, nextband, prev3, g) {
-          cb[g] = 1
-        } else {
-          zeroes[g] = 1
-          cb[g] = 0
+  let mut wf = 0
+  while wf < num_windows {
+    let glf = shape.group_len[wf]
+    let bf = wf * 16
+    for g in 0..<num_swb {
+      let s = bf + g
+      if zeroes[s] == 0 {
+        cb[s] = aac_two_find_min_book(maxvals[s], sf[s])
+        if cb[s] <= 0 {
+          if !aac_two_can_remove_band(sf, nextband, prev3, s) {
+            cb[s] = 1
+          } else {
+            zeroes[s] = 1
+            cb[s] = 0
+          }
         }
+      } else {
+        cb[s] = 0
       }
-    } else {
-      cb[g] = 0
-    }
-    if zeroes[g] == 0 {
-      if prev3 == -1 && zeroes[0] != 0 {
-        sf[0] = sf[g]
+      if zeroes[s] == 0 {
+        if prev3 == -1 && zeroes[0] != 0 {
+          sf[0] = sf[s]
+        }
+        prev3 = sf[s]
       }
-      prev3 = sf[g]
     }
+    wf = wf + glf
   }
   { sf, cb, zeroes, maxvals, tbits, iters: its }
 }

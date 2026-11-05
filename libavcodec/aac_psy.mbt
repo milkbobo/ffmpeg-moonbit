@@ -625,6 +625,15 @@ pub fn AacPsyContext::band_sizes(self : AacPsyContext) -> Array[Int32] {
 }
 
 ///|
+/// The eight-window plan (`ctx->bands[1]`, 14 bands of 128 lines at 44.1 kHz),
+/// the same table `psy_3gpp_analyze_channel` switches to when the frame is
+/// `EIGHT_SHORT`. A multi-window quantiser search needs the identical plan the
+/// analysis used, so it comes from the model rather than being re-derived.
+pub fn AacPsyContext::band_sizes_short(self : AacPsyContext) -> Array[Int32] {
+  self.band_sizes_short
+}
+
+///|
 /// Run one frame of 3GPP analysis for `channel` on `coefs` (1024 f32 MDCT
 /// coefficients in the encoder's coefficient domain). `prev_bits` is
 /// `bitres.bits` (bits consumed by the previous frame); the reference harness

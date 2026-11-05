@@ -204,8 +204,8 @@ pub fn aac_ms_search(d : AacMsIn, lambda : Double) -> AacMsOut {
   let mid_cost_out : Array[Double] = Array::make(n, 0.0)
   let bits1_out : Array[Int32] = Array::make(n, 0)
   let bmax_out : Array[Double] = Array::make(n, 0.0)
-  let nextband0 = aac_two_init_nextband_map(d.zeroes0, d.cb0, n)
-  let nextband1 = aac_two_init_nextband_map(d.zeroes1, d.cb1, n)
+  let nextband0 = aac_two_init_nextband_map(d.zeroes0, d.cb0, n, aac_two_shape_long())
+  let nextband1 = aac_two_init_nextband_map(d.zeroes1, d.cb1, n, aac_two_shape_long())
   // `mslambda` is the side channel's own discount, capped at 1.
   let boost_lambda = aac_two_div(lambda, 120.0)
   let msl = if boost_lambda < 1.0 { boost_lambda } else { 1.0 }

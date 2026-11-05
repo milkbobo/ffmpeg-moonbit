@@ -8222,6 +8222,57 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
 - **检查**：`moon check --target wasm --deny-warn` 干净；`aac_psy_vectors` 6/6；
   全量 **1408/1408** 通过。
 
+## 301. twoloop 量化器的八短窗形态：按窗分组搜索
+
+- **交付**：`aac_twoloop_search_pns` 从"钉死 `group_len = 1`"扩成
+  `search_for_quantizers_twoloop`（`aaccoder_twoloop.h:65-757`）的两条形态。新入口
+  `AacTwoShape = { num_windows, group_len }`（`aac_two_shape_long()` /
+  `aac_two_shape_short(group_len)`，后者会检查各组窗数加起来正好 8，因为走错一步
+  就整窗整窗地漏掉）。C 里 15 处 `for (w = 0; w < num_windows; w +=
+  group_len[w])` 外层全部补上，配套的槽位/谱位偏移一起换成
+  `w * 16 + g` 与 `w * 128 + w2 * 128`：
+  - 零带/上界那一趟逐窗组跑两遍 `w2` 内循环（C 就是两遍：第一遍只判零，第二遍
+    才累加 `uplim/energy/spread/nz`，且第二遍**不再看** `start >= cutoff`）；
+  - `find_max_val` / `coef2minsf` 按组算一次，`minsf` 写给组内**每一个**窗的槽位
+    （`(w+w2)*16+g`），后面按 128 槽平地扫的升/降 sf 循环会读到它们；
+  - 带成本改成把组内 `group_len` 个窗的 `cost/bits/qenergy` 分别累加再
+    `dist = cost - bits`，标度因子差链（`prev`）跨窗组**不重置**；
+  - `ff_pns_bits(sce, w, g)` 的回看是 `(w<<4)+g-1`，即同组内上一条带，移植原来的
+    `g-1` 在长窗下恰好没错，现在按槽位算；
+  - `ff_init_nextband_map` 也吃同一个 shape（`aac_is.mbt` / `aac_ms.mbt` /
+    `aac_pns_search.mbt` 三处长窗消费者显式传 `aac_two_shape_long()`）。
+- **两条只有短窗才会露面的上游怪癖**（照抄并留注释）：形态因子那一趟里
+  `find_form_factor(..., uplims[w*16+g] / (nzs[g] * sce->ics.swb_sizes[w]), ...)`
+  ——分母用**窗号当带号索引** `swb_sizes[w]`，而守卫条件 `nzs[g] > 0` 只看第一个
+  窗组的计数；长窗下 `w` 恒为 0，所以这两处此前都是恒等的。短窗另外还多一条
+  DC 带保护（`aaccoder_twoloop.h:625`：`!g && num_windows > 1 && dists >= euplims`
+  时收紧 `maxsf`）与 `de_psy_factor = 8 / group_len[w]` 的瞬态降权，二者以前都
+  不可能触发。
+- **C 侧**：`--short` 模式在 psy 之后接着跑真实的 `search_for_quantizers`，并逐帧
+  轮转 `window_grouping[]` 的前五个字节（`aacpsy.c:398`）当窗分组，于是组大小为
+  1/2/3 都被踩到；新增 `SHORTGRP <8 个 group_len>` 行与每帧 3~4 组 × 14 带
+  = 266 条 `TWOBAND <slot> <sf> <cb> <zeroes> <maxval>`。**不带 `--short` 时
+  harness 输出仍与旧 `vectors.txt` 逐字节相同**（`cmp` 通过）。
+- **新向量**：`libavcodec/aac_twoloop_vectors/fixtures_short.mbt`（含 5 条谱、
+  5 组 group_len、266 条带决定与其槽位下标）由
+  `scripts/gen_aac_twoloop_short_vectors.py` 生成。`sf_idx` / `band_type` /
+  `zeroes` **逐位一致**（266/266），`maxvals` 相对误差 ≤1e-5。
+- **新增两条回归**（`aac_twoloop_short_test.mbt`）：把 §300 已钉住的
+  `AacPsyContext::analyze`（短窗）输出直接喂给搜索并顺带断言 `alloc` 交接；再用
+  同一帧分别按"真实分组"和"八窗各自一组"跑一遍，断言标度因子确实不同——防止
+  `group_len` 被某处默默忽略而让分组变成 no-op。**咬合验证**：把
+  `de_psy_factor` 临时改成常量 1.0，第一条立刻报
+  `frame 0 slot 96: sf 115 != 116`，改回即全绿。
+- **意义 / 仍未做**：搜索本身已经能吃短窗了，但编码器仍把短窗帧挡在感知路径外
+  （`use_psy = perceptual && seq != aac_eight_short`），所以三条端到端流与 §300
+  **逐字节相同**（3166 / 2980 / 727 B，`cmp` 通过）——本轮仍是地基。接上还缺：
+  编码器侧的窗分组计划（`window_grouping[]` 的展开与 `scale_factor_grouping`
+  写入）、逐窗组的 `zeroes` 归并与 `msc == max_sfb * num_windows`（§299 那条
+  `num_windows` 第一次真的等于 8）、多窗 IS/M-S 与逐窗组量化的 `channel_data`。
+- **检查**：`moon check --target wasm --deny-warn` 干净；`aac_twoloop_vectors`
+  5/5、`aac_pns_vectors` 3/3（245 带 0 处失配）、`aac_is_vectors` 2/2、
+  `aac_psy_vectors` 6/6；全量 **1410/1410** 通过。
+
 
 
 

@@ -317,7 +317,7 @@ pub fn aac_is_search(
   // `start*freq_mult > INT_STEREO_LOW_LIMIT*(lambda/170)`.
   let freq_mult = aac_two_div(aac_two_div(sample_rate.to_double(), 1024.0), 2.0)
   let limit = aac_two_mul(aac_is_low_limit_hz, aac_two_div(lambda, 170.0))
-  let nextband1 = aac_two_init_nextband_map(d.zeroes1, d.cb1, n)
+  let nextband1 = aac_two_init_nextband_map(d.zeroes1, d.cb1, n, aac_two_shape_long())
   let mut prev_sf1 = -1
   let mut prev_bt = -1
   let mut prev_is = 0

@@ -2469,6 +2469,7 @@ pub fn AacEncoder::encode_frame(
           self.config.channels,
           self.lambda,
           aac_twoloop_pns(can_pns, self.config.pns, use_is),
+          aac_two_shape_long(),
         )
         twos.push(two)
         // `aacenc.c:971-985`: `search_for_tns` + `apply_tns_filt` run *after*
