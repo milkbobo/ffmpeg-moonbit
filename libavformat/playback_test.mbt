@@ -263,3 +263,137 @@ test "playback: unknown bytes raise FormatNotFound" {
     _ => fail("expected FormatNotFound")
   }
 }
+
+///|
+/// §311: the `decode-audio` engine. `decode_audio_file` on the WAV fixture
+/// must reproduce the data chunk exactly (PCM decode is identity), report the
+/// container's duration, and `to_wav_s16` must emit a file whose data chunk
+/// is byte-identical to the source's.
+test "playback: decode_audio_file + to_wav_s16 round-trips the WAV fixture" {
+  let data = @libavutil.av_base64_decode(
+    @probe_vectors.probe_fixture_wav,
+    1 << 20,
+  ).unwrap()
+  let audio = @libavformat.decode_audio_file(data)
+  assert_eq(audio.sample_rate(), 8000)
+  assert_eq(audio.channels(), 1)
+  assert_true(audio.codec_id() == "pcm_s16le")
+  assert_true(audio.format_name().contains("wav"))
+  let dur = audio.duration_seconds()
+  assert_true(dur is Some(_))
+  // The declared duration equals samples / rate.
+  let d = match dur {
+    Some(v) => v
+    None => 0.0
+  }
+  assert_eq(
+    (d * audio.sample_rate().to_double()).to_int(),
+    audio.samples()[0].length(),
+  )
+  // Round trip: the re-muxed WAV's data chunk must be byte-identical.
+  let wav = @libavformat.av_wav_open(data).unwrap()
+  let out = audio.to_wav_s16()
+  let out_demux = @libavformat.av_wav_open(out).unwrap()
+  assert_eq(out_demux.data_size, wav.data_size)
+  let src_start = wav.data_offset.to_int()
+  let src = data[src_start:src_start + wav.data_size.to_int()].to_owned()
+  let dst_start = out_demux.data_offset.to_int()
+  let dst = out[dst_start:dst_start + out_demux.data_size.to_int()].to_owned()
+  assert_eq(dst.length(), src.length())
+  for i = 0; i < src.length(); i = i + 1 {
+    assert_eq(dst[i], src[i])
+  }
+}
+
+///|
+test "playback: decode_audio_file matches the drain on Opus containers" {
+  let packet = @libavutil.av_base64_decode(playback_opus_packet_b64, 10000).unwrap()
+  let mux = @libavformat.ogg_opus_muxer_new(
+    channels=1,
+    pre_skip=312,
+    input_sample_rate=48000,
+    serial=0x12345678,
+  ).unwrap()
+  mux.write_packet(packet).unwrap()
+  mux.write_packet(packet).unwrap()
+  mux.write_packet(packet).unwrap()
+  let data = mux.finish()
+  let audio = @libavformat.decode_audio_file(data)
+  assert_eq(audio.sample_rate(), 48000)
+  assert_eq(audio.channels(), 1)
+  assert_eq(audio.samples()[0].length(), 2880)
+  // Duration: last granule (3 packets x 960) minus pre-skip 312.
+  let dur = audio.duration_seconds()
+  let d = match dur {
+    Some(v) => v
+    None => 0.0
+  }
+  assert_eq((d * 1000.0).to_int(), 2568 * 1000 / 48000)
+  // And the WAV export carries the samples verbatim.
+  let out = audio.to_wav_s16()
+  let demux = @libavformat.av_wav_open(out).unwrap()
+  assert_eq(demux.sample_count, 2880L)
+}
+
+///|
+test "playback: durations on all four adapters" {
+  // WAV: sample count / rate.
+  let wav_data = @libavutil.av_base64_decode(
+    @probe_vectors.probe_fixture_wav,
+    1 << 20,
+  ).unwrap()
+  let mf = @libavformat.MediaFile::open(wav_data)
+  let wav_dur = match mf.duration_seconds() {
+    Some(v) => v
+    None => fail("wav has no duration")
+  }
+  assert_true(wav_dur > 0.0)
+  // MKV/AAC: Info Duration (3 frames x 23 ms).
+  let pcm : Array[Double] = Array::make(3 * 1024, 0.0)
+  for i = 0; i < 3 * 1024; i = i + 1 {
+    pcm[i] = 0.3 * @math.sin(0.05 * i.to_double())
+  }
+  let enc = @libavcodec.aac_encoder_new(
+    @libavcodec.aac_encode_config(44100, 1, 96000),
+  ).unwrap()
+  let mux = @libavformat.mkv_aac_muxer_new(44100, channels=1).unwrap()
+  for f = 0; f < 3; f = f + 1 {
+    let adts = enc
+      .encode_frame([pcm[f * 1024:f * 1024 + 1024].to_owned()])
+      .unwrap()
+    mux
+    .write_packet(
+      adts
+      .clamped_view(
+        start=@libavcodec.av_aac_adts_header_size,
+        end=adts.length(),
+      )
+      .to_owned(),
+      (f * 23).to_int64(),
+      23,
+    )
+    .unwrap()
+  }
+  let mkv = @libavformat.MediaFile::open(mux.finish())
+  let mkv_dur = match mkv.duration_seconds() {
+    Some(v) => v
+    None => fail("mkv has no duration")
+  }
+  assert_true(mkv_dur > 0.05 && mkv_dur < 0.2)
+  // Ogg: granule chain.
+  let packet = @libavutil.av_base64_decode(playback_opus_packet_b64, 10000).unwrap()
+  let ogg_mux = @libavformat.ogg_opus_muxer_new(
+    channels=1,
+    pre_skip=312,
+    input_sample_rate=48000,
+    serial=1,
+  ).unwrap()
+  ogg_mux.write_packet(packet).unwrap()
+  ogg_mux.write_packet(packet).unwrap()
+  let ogg = @libavformat.MediaFile::open(ogg_mux.finish())
+  let ogg_dur = match ogg.duration_seconds() {
+    Some(v) => v
+    None => fail("ogg has no duration")
+  }
+  assert_eq((ogg_dur * 48000.0).to_int(), 2 * 960 - 312)
+}

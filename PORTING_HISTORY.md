@@ -8710,3 +8710,21 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1428/1428**
   （新增 5 条 playback 测试）。下一期：视频流解码头接入、时间戳/时长口径、
   seek、JSON CLI 的 `decode-audio` 命令（③）与 libswresample。
+
+## 311. 播放 API 第二期：容器时长口径 + decode_audio_file 引擎 + WAV 导出（申报书③地基）
+
+- **`MediaFile::duration_seconds() -> Double?`**：四适配器各自的时长口径——MP4
+  `mvhd duration / timescale`；Matroska Info Duration × TimecodeScale / 1e9；
+  Ogg Opus 末包 granule − pre_skip（÷48000）；WAV sample_count / rate。容器没带
+  时长则 None。
+- **`decode_audio_file(bytes) -> DecodedAudio`**：`decode-audio` 命令（申报书②）
+  的引擎——open → 选第一条音频流 → 全量解码 → 按声道铺平，附 format/codec/时长。
+  **`DecodedAudio::to_wav_s16`**：限幅、交错、经 `WavMuxer` 产出 16-bit LE WAV
+  （CLI ③ 的输出格式）。
+- **黑盒 3 测（累计 9 条 playback）**：WAV 夹具 `decode_audio_file` → `to_wav_s16`
+  的 data 块与源**逐字节一致**（PCM 恒等路径）且时长 = 样本数/率；Ogg/Opus 三包
+  2880 样本、时长 = (granule−pre_skip)/48000 精确到毫秒、WAV 导出样本数一致；
+  四适配器时长各自断言（MKV/AAC 3×23 ms 落窗、Ogg granule 链、WAV 计数）。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1431/1431**。
+  下一期：视频流解码头接入（H264 `decode_avc_sample` 入口已侦察）、seek、
+  CLI ② 的 probe/dump-packets 命令。

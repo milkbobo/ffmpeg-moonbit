@@ -327,7 +327,11 @@
   WebM/Opus、Ogg/Opus、WAV/PCM（解出 PCM 与 data 块逐字节同）、MKV/AAC（本仓
   编码器现做→mux→facade→解码 60.3 dB）、FormatNotFound。坑：probe 夹具是 base64
   且多为截断探针样例（demux 测试用 muxer 现做）；probe_fixture_aac 首帧带 LFE，
-  ASC 声明布局严格报错是设计语义。下一步：视频流接入/seek/CLI ③。
+  ASC 声明布局严格报错是设计语义。⑳b §311 播放 API 第二期：`MediaFile::duration_seconds`（四容器各自口径：mvhd/timescale、
+  Matroska Duration×scale、Ogg granule−pre_skip、WAV 计数）；`decode_audio_file` →
+  `DecodedAudio`（decode-audio 命令引擎）+ `to_wav_s16`（WavMuxer 限幅交错导出）。
+  黑盒 3 测：WAV to_wav data 块逐字节恒等、Ogg 时长精确到毫秒、四适配器时长断言。
+  下一步：视频流接入（H264 decode_avc_sample 入口已侦察）/seek/CLI probe 命令。
   ⑲ §309 CPE common_window=0 分叉（§304 偏差②收口）：窗决策彻底 per-channel——
   `AacEncPlan` 每通道（seq/带计划/分组/窗数），attempt 循环全部吃自己的 plan，
   `lame_seq` 数组替代合流机（判定一致时逐位同），`last_max_sfb` per-channel。

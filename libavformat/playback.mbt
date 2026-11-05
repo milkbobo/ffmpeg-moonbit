@@ -512,3 +512,175 @@ pub fn AudioDecoder::decode(
     }
   }
 }
+
+///|
+/// The container's total duration in seconds, when it declares one:
+/// MP4 `mdhd`/`mvhd` rescaled through the movie timescale, Matroska's Info
+/// Duration in time-scale units, Ogg Opus's last granule minus pre-skip over
+/// 48 kHz, WAV's sample count over the rate. `None` when the container
+/// carries no duration.
+pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
+  match self.source {
+    Mov(movie, _) =>
+      if movie.timescale != 0U && movie.duration > 0UL {
+        Some(movie.duration.to_double() / movie.timescale.to_double())
+      } else {
+        None
+      }
+    Mkv(mh) =>
+      if mh.duration > 0.0 && mh.time_scale > 0UL {
+        // Info Duration is in time-scale units (ns at the default 1e6).
+        Some(mh.duration * mh.time_scale.to_double() / 1.0e9)
+      } else {
+        None
+      }
+    OggOpus(demux) => {
+      let last = if demux.packets.length() > 0 {
+        demux.packets[demux.packets.length() - 1].granule
+      } else {
+        -1L
+      }
+      if last >= 0L {
+        let samples = last - demux.pre_skip.to_int64()
+        if samples > 0L {
+          Some(samples.to_double() / 48000.0)
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    }
+    Wav(demux, _) =>
+      if demux.format.sample_rate > 0 && demux.sample_count > 0L {
+        Some(
+          demux.sample_count.to_double() / demux.format.sample_rate.to_double(),
+        )
+      } else {
+        None
+      }
+  }
+}
+
+///|
+/// A fully decoded audio stream: one flat sample row per channel in
+/// `[-1, 1)`, plus everything a consumer needs to label it.
+pub struct DecodedAudio {
+  samples : Array[Array[Double]]
+  sample_rate : Int32
+  channels : Int32
+  format_name : String
+  codec_id : String
+  duration_seconds : Double?
+}
+
+///|
+/// Decode the first audio stream of a container to PCM - the engine the JSON
+/// CLI's `decode-audio` command and the libswresample slice build on. Files
+/// without an audio stream raise `UnsupportedCodec` with the format name.
+pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
+  let mf = MediaFile::open(data)
+  let mut audio = -1
+  for i = 0; i < mf.streams().length(); i = i + 1 {
+    if audio < 0 && mf.streams()[i].media_type == MediaType::Audio {
+      audio = i
+    }
+  }
+  if audio < 0 {
+    raise UnsupportedCodec("no audio stream in \{mf.format_name()}")
+  }
+  let dec = AudioDecoder::open(mf.streams()[audio])
+  let rows : Array[Array[Double]] = []
+  for _ch = 0; _ch < dec.channels(); _ch = _ch + 1 {
+    rows.push([])
+  }
+  while true {
+    let pkt = mf.next_packet()
+    if pkt is None {
+      break
+    }
+    let p = pkt.unwrap()
+    if p.stream_index != audio {
+      continue
+    }
+    let frame = dec.decode(p)
+    if frame is Some(f) {
+      for ch = 0; ch < dec.channels(); ch = ch + 1 {
+        for i = 0; i < f.nb_samples; i = i + 1 {
+          rows[ch].push(f.samples[ch][i])
+        }
+      }
+    }
+  }
+  {
+    samples: rows,
+    sample_rate: dec.sample_rate(),
+    channels: dec.channels(),
+    format_name: mf.format_name(),
+    codec_id: mf.streams()[audio].codec_id,
+    duration_seconds: mf.duration_seconds(),
+  }
+}
+
+///|
+/// The frame's channel count.
+pub fn DecodedAudio::channels(self : DecodedAudio) -> Int32 {
+  self.channels
+}
+
+///|
+/// The decoded PCM's sample rate.
+pub fn DecodedAudio::sample_rate(self : DecodedAudio) -> Int32 {
+  self.sample_rate
+}
+
+///|
+/// Per-channel sample rows.
+pub fn DecodedAudio::samples(self : DecodedAudio) -> Array[Array[Double]] {
+  self.samples
+}
+
+///|
+/// The container's declared duration in seconds (when present).
+pub fn DecodedAudio::duration_seconds(self : DecodedAudio) -> Double? {
+  self.duration_seconds
+}
+
+///|
+/// The probed format's name.
+pub fn DecodedAudio::format_name(self : DecodedAudio) -> String {
+  self.format_name
+}
+
+///|
+/// The audio stream's codec name.
+pub fn DecodedAudio::codec_id(self : DecodedAudio) -> String {
+  self.codec_id
+}
+
+///|
+/// Render the decoded PCM as a 16-bit little-endian WAV file (the output
+/// format of the CLI's `decode-audio`): samples are clipped into the s16
+/// range and interleaved.
+pub fn DecodedAudio::to_wav_s16(self : DecodedAudio) -> Bytes raise MediaError {
+  let mux = match wav_muxer_new(self.sample_rate, self.channels, 16) {
+    Ok(v) => v
+    Err(e) => raise DemuxError(e)
+  }
+  let nb = if self.samples.length() > 0 { self.samples[0].length() } else { 0 }
+  let inter : Array[Int32] = Array::make(nb * self.channels, 0)
+  for i = 0; i < nb; i = i + 1 {
+    for ch = 0; ch < self.channels; ch = ch + 1 {
+      let v = (self.samples[ch][i] * 32768.0).to_int()
+      inter[i * self.channels + ch] = if v < -32768 {
+        -32768
+      } else if v > 32767 {
+        32767
+      } else {
+        v
+      }
+    }
+  }
+  mux.write_samples(inter[:])
+  mux.finish()
+}
