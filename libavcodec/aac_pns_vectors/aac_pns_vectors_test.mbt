@@ -26,7 +26,14 @@ test "PNS mark_pns matches FFmpeg 9.0.2 aaccoder.c (5 frames x 49 bands)" {
   for f in 0..<5 {
     let r = ctx.analyze(0, @aac_pns_vectors.aac_pns_spec[f], 0, 0, 0)
     let mark = @libavcodec.aac_pns_mark(
-      r.bands, offsets, num_swb, 44100, 128000, 2, 120.0,
+      r.bands,
+      offsets,
+      num_swb,
+      @libavcodec.aac_two_shape_long(),
+      44100,
+      128000,
+      2,
+      120.0,
     )
     // The reference harness runs the quantiser after `mark_pns`, and the
     // quantiser writes its bandwidth back into the psy context (sticky, with
@@ -79,7 +86,14 @@ test "PNS-aware twoloop matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
   for f in 0..<5 {
     let r = ctx.analyze(0, @aac_pns_vectors.aac_pns_spec[f], 0, 0, 0)
     let mark = @libavcodec.aac_pns_mark(
-      r.bands, offsets, num_swb, 44100, 128000, 2, 120.0,
+      r.bands,
+      offsets,
+      num_swb,
+      @libavcodec.aac_two_shape_long(),
+      44100,
+      128000,
+      2,
+      120.0,
     )
     let two = @libavcodec.aac_twoloop_search_pns(
       @aac_pns_vectors.aac_pns_spec[f],
@@ -140,7 +154,14 @@ test "PNS search_for_pns matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
     let spec = @aac_pns_vectors.aac_pns_spec[f]
     let r = ctx.analyze(0, spec, 0, 0, 0)
     let mark = @libavcodec.aac_pns_mark(
-      r.bands, offsets, num_swb, 44100, 128000, 2, 120.0,
+      r.bands,
+      offsets,
+      num_swb,
+      @libavcodec.aac_two_shape_long(),
+      44100,
+      128000,
+      2,
+      120.0,
     )
     let two = @libavcodec.aac_twoloop_search_pns(
       spec,
@@ -159,8 +180,17 @@ test "PNS search_for_pns matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
     )
     let out = @libavcodec.aac_pns_search(
       @libavcodec.aac_pns_search_in(
-        spec, sizes, offsets, r.bands, two.sf, two.cb, two.zeroes,
-        mark.can_pns, mark.pns_ener, random_state,
+        spec,
+        sizes,
+        offsets,
+        r.bands,
+        @libavcodec.aac_two_shape_long(),
+        two.sf,
+        two.cb,
+        two.zeroes,
+        mark.can_pns,
+        mark.pns_ener,
+        random_state,
       ),
       44100,
       128000,

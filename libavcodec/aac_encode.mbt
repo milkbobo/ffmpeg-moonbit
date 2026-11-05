@@ -103,6 +103,18 @@ pub struct AacEncoder {
   mut lambda : Double
   /// LCG state carried across frames by `search_for_pns` (`s->random_state`).
   mut pns_random_state : Int32
+  /// C's per-`SingleChannelElement` sticky slot arrays (`sf_idx` / `band_type`
+  /// / `zeroes`, 128 slots of `w * 16 + g`). The coder only ever writes
+  /// group-start slots, so on a short frame the inner-window slots keep what
+  /// earlier frames left there - and `search_for_pns`'s per-window pricing
+  /// reads them (`aaccoder.c:597-599`), which is why they persist on the
+  /// element in FFmpeg. `sf_idx`/`zeroes` are never reset; `band_type` drops
+  /// its intensity entries at every attempt's element start
+  /// (`aacenc.c:931-933`). Long frames rewrite every slot they read, so the
+  /// stickiness is invisible on them.
+  sticky_sf : Array[Array[Int32]]
+  sticky_cb : Array[Array[Int32]]
+  sticky_zeroes : Array[Array[Int32]]
   /// `ics.max_sfb` as the last rate-control attempt left it (`aacenc.c:517`).
   /// The next attempt's TNS search reads it as its band limit, clamped to
   /// `num_swb` at frame start (`aacenc.c:864`) - which is why FFmpeg's very
@@ -390,12 +402,19 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
   // history starts at 10.0f.
   let lame_kbps = config.bit_rate / config.channels / 1000
   let lame : Array[AacLameWindow] = []
+  // Sticky slot arrays, zeroed like FFmpeg's calloc'd `SingleChannelElement`.
+  let sticky_sf : Array[Array[Int32]] = []
+  let sticky_cb : Array[Array[Int32]] = []
+  let sticky_zeroes : Array[Array[Int32]] = []
   for _ch = 0; _ch < config.channels; _ch = _ch + 1 {
     history.push(Array::make(1024, 0.0))
     prev_sequence.push(aac_only_long)
     attack_pending.push(false)
     win_energy.push(0.0)
     lame.push(AacLameWindow::new(lame_kbps))
+    sticky_sf.push(Array::make(128, 0))
+    sticky_cb.push(Array::make(128, 0))
+    sticky_zeroes.push(Array::make(128, 0))
   }
   // One model per element, like `FFPsyContext`: the bit reservoir and the PE
   // range are shared by the channels, only the band records are per channel.
@@ -428,6 +447,9 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     lambda: 120.0,
     pns_random_state: 0,
     last_max_sfb: 0,
+    sticky_sf,
+    sticky_cb,
+    sticky_zeroes,
   })
 }
 
@@ -1015,6 +1037,7 @@ fn aac_encode_band_root(
 /// phase) and which transmit no spectral data at all.
 let aac_intensity_bt2 : Int32 = 14
 
+///|
 let aac_intensity_bt : Int32 = 15
 
 ///|
@@ -1098,8 +1121,9 @@ fn aac_encode_is_search(
   let pos : Array[Int32] = Array::make(num_swb, 0)
   let scale : Array[Double] = Array::make(num_swb, 0.0)
   // One bin of a 1024/num_windows-point spectrum, in Hz.
-  let freq_mult =
-    sample_rate.to_double() / (1024.0 / num_windows.to_double()) / 2.0
+  let freq_mult = sample_rate.to_double() /
+    (1024.0 / num_windows.to_double()) /
+    2.0
   let limit = aac_is_low_limit * (lambda / 170.0)
   let mut prev = 0
   for b = 0; b < num_swb; b = b + 1 {
@@ -1269,13 +1293,7 @@ fn aac_encode_stereo(
 ) -> AacEncStereo {
   let (bt, pos, scale) = if use_is {
     aac_encode_is_search(
-      left,
-      right,
-      offsets,
-      num_swb,
-      num_windows,
-      sample_rate,
-      lambda,
+      left, right, offsets, num_swb, num_windows, sample_rate, lambda,
     )
   } else {
     (
@@ -1302,7 +1320,7 @@ fn aac_encode_stereo(
     )
   }
   aac_encode_apply_ms(left, right, offsets, num_swb, ms_mask, num_windows)
-  { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos }
+  { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos, }
 }
 
 ///|
@@ -1406,11 +1424,10 @@ fn aac_encode_stereo_psy(
   let apply_mask : Array[Bool] = Array::make(num_swb, false)
   for b = 0; b < num_swb; b = b + 1 {
     ms_mask[b] = ms.ms_mask[b] == 1
-    apply_mask[b] =
-      ms_mask[b] &&
-        is_mask[b] == 0 &&
-        ms.cb0[b] < 13 &&
-        ms.cb1[b] < 13
+    apply_mask[b] = ms_mask[b] &&
+      is_mask[b] == 0 &&
+      ms.cb0[b] < 13 &&
+      ms.cb1[b] < 13
   }
   aac_encode_apply_ms(
     work[0],
@@ -1420,10 +1437,7 @@ fn aac_encode_stereo_psy(
     apply_mask,
     num_windows,
   )
-  (
-    { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos },
-    ms,
-  )
+  ({ ms_present: 0, ms_mask, is_bt: bt, is_pos: pos, }, ms)
 }
 
 ///|
@@ -1839,7 +1853,7 @@ fn AacEncoder::channel_data(
   } else {
     [1, 0, 0, 0, 0, 0, 0, 0]
   }
-  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, group_len }
+  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, group_len, }
 }
 
 ///|
@@ -1906,7 +1920,11 @@ fn aac_encode_channel_data_psy(
         for w2 = 0; w2 < gl; w2 = w2 + 1 {
           let base = (w + w2) * 128 + start
           let band = aac_twoloop_quantize_band(
-            coef, base, size, final_sf[slot], final_cb[slot],
+            coef,
+            base,
+            size,
+            final_sf[slot],
+            final_cb[slot],
           )
           for i = 0; i < size; i = i + 1 {
             q[base + i] = band[i]
@@ -1919,14 +1937,13 @@ fn aac_encode_channel_data_psy(
       // noise amplitude (`noise_amp = -pow2sf_tab[sfi + POW_SF2_ZERO]`), so
       // write that `sfi` into the independent noise chain. The regular chain
       // instead uses `final_sf - 4`, whose decoded `sfo` is 100 lower.
-      // Noise never reaches a short frame (`use_pns` is gated on `!is8`),
-      // so `noise_sfi` stays a plain band-indexed array.
-      sf[slot] = if noise { noise_sfi[b] } else { final_sf[slot] - 4 }
+      // `noise_sfi` is slot-indexed like everything else this reads.
+      sf[slot] = if noise { noise_sfi[slot] } else { final_sf[slot] - 4 }
       cb[slot] = final_cb[slot]
     }
     w = w + gl
   }
-  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, group_len }
+  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, group_len, }
 }
 
 ///|
@@ -2384,7 +2401,7 @@ pub fn AacEncoder::encode_frame(
   // (`buf[523..1568)` is exactly the region FFmpeg's one-packet-ahead
   // lookahead covered), so the grouping is decided for the frame being
   // encoded - see `AacLameWindow`.
-  let lame_grp : Array[Int] = []
+  let lame_grp : Array[Int32] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     sequences.push(seq)
     let buf : Array[Double] = Array::make(2048, 0.0)
@@ -2413,8 +2430,7 @@ pub fn AacEncoder::encode_frame(
   // independently and would drop common_window when they disagree; that fork
   // is not ported - documented §304 deviation). Every other path keeps the
   // single group of eight windows, `0b1111111`.
-  let use_psy = self.config.perceptual &&
-    (!is8 || self.config.perceptual_short)
+  let use_psy = self.config.perceptual && (!is8 || self.config.perceptual_short)
   let group_len : Array[Int32] = if is8 {
     if use_psy && lame_grp.length() == self.config.channels {
       let mut first = lame_grp[0]
@@ -2472,7 +2488,11 @@ pub fn AacEncoder::encode_frame(
   // frame keeps the simplified model and every long-window baseline stream is
   // byte-for-byte what §301 produced.
   let use_is = self.config.is_stereo
-  let use_pns = self.config.pns && !is8
+  // §305: the PNS pair of tools now walk window groups, so a short frame may
+  // use them on the perceptual short path (`use_psy` there means
+  // `perceptual && perceptual_short`); the stereo pair is still long-only
+  // until their group forms land.
+  let use_pns = self.config.pns && (!is8 || use_psy)
   let use_stereo_psy = self.config.channels == 2 && !is8
   let mut stereo = aac_encode_stereo_none(num_swb)
   if self.config.channels == 2 && !use_psy {
@@ -2568,11 +2588,7 @@ pub fn AacEncoder::encode_frame(
       }
     }
   }
-  let frame : AacEncFrame = {
-    coefs,
-    targets,
-    sequences,
-  }
+  let frame : AacEncFrame = { coefs, targets, sequences, }
   // Average bits per frame from the requested bit rate, minus the ADTS header
   // (which is not part of the payload budget).
   let mut target_bytes = self.config.bit_rate * 1024 / self.config.sample_rate
@@ -2669,18 +2685,32 @@ pub fn AacEncoder::encode_frame(
       }
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let r = psy_iter[ch]
+        // `aacenc.c:931-933`: the element start drops the intensity band
+        // types; `sf_idx`/`zeroes` (and the regular band types) stay sticky
+        // across frames *and* rate-control attempts - the inner-window slots
+        // of a short frame's groups keep what earlier frames left there, and
+        // `search_for_pns` prices its per-window `dist1` against them.
+        let st_sf = self.sticky_sf[ch]
+        let st_cb = self.sticky_cb[ch]
+        let st_z = self.sticky_zeroes[ch]
+        for slot = 0; slot < 128; slot = slot + 1 {
+          if st_cb[slot] > 12 {
+            st_cb[slot] = 0
+          }
+        }
         // PNS runs around the search: mark noise-like bands, let the twoloop
         // rate loop price them, then decide which ones actually become noise.
         let mark = aac_pns_mark(
-          r.bands, offsets, num_swb,
-          self.config.sample_rate, self.config.bit_rate,
-          self.config.channels, self.lambda,
+          r.bands,
+          offsets,
+          num_swb,
+          two_shape,
+          self.config.sample_rate,
+          self.config.bit_rate,
+          self.config.channels,
+          self.lambda,
         )
-        let can_pns = if use_pns {
-          mark.can_pns
-        } else {
-          Array::make(num_swb, 0)
-        }
+        let can_pns = if use_pns { mark.can_pns } else { Array::make(128, 0) }
         let two = aac_twoloop_search_pns(
           coefs[ch],
           sizes,
@@ -2696,6 +2726,10 @@ pub fn AacEncoder::encode_frame(
           // tool itself (§304 gives `search_for_pns` its group loop).
           aac_twoloop_pns(can_pns, self.config.pns, use_is),
           two_shape,
+          // The search runs on the element's sticky slot arrays in C - its
+          // rate loop scales every slot, so the inner-window slots it leaves
+          // feed the next frame's `search_for_pns` pricing.
+          sticky=aac_two_sticky(st_sf, st_cb, st_z),
         )
         twos.push(two)
         // `aacenc.c:971-985`: `search_for_tns` + `apply_tns_filt` run *after*
@@ -2708,11 +2742,20 @@ pub fn AacEncoder::encode_frame(
         let w = coefs[ch].copy()
         aac_encode_apply_tns(w, tns_data, offsets, num_swb, num_windows)
         work.push(w)
+        let mut noise_sfi : Array[Int32] = Array::make(128, 0)
         if use_pns {
           let out = aac_pns_search(
             aac_pns_search_in(
-              w, sizes, offsets, r.bands, two.sf,
-              two.cb, two.zeroes, can_pns, mark.pns_ener,
+              w,
+              sizes,
+              offsets,
+              r.bands,
+              two_shape,
+              st_sf,
+              st_cb,
+              st_z,
+              can_pns,
+              mark.pns_ener,
               self.pns_random_state,
             ),
             self.config.sample_rate,
@@ -2721,14 +2764,17 @@ pub fn AacEncoder::encode_frame(
             self.lambda,
           )
           self.pns_random_state = out.random_state
-          cbs.push(out.cb)
-          zeros.push(out.zeroes)
-          sfi.push(out.noise_sfi)
-        } else {
-          cbs.push(two.cb)
-          zeros.push(two.zeroes)
-          sfi.push(Array::make(num_swb, 0))
+          // The decisions land back on the element's arrays (C mutates
+          // `sce->band_type`/`sce->zeroes` in place).
+          for slot = 0; slot < 128; slot = slot + 1 {
+            st_cb[slot] = out.cb[slot]
+            st_z[slot] = out.zeroes[slot]
+          }
+          noise_sfi = out.noise_sfi
         }
+        cbs.push(st_cb)
+        zeros.push(st_z)
+        sfi.push(noise_sfi)
       }
       let mut st = stereo
       // What the quantiser and the bitstream use per band: twoloop's
@@ -2846,12 +2892,8 @@ pub fn AacEncoder::encode_frame(
         }
         chans.push(one)
       }
-      let frame_bytes = match self.assemble_frame(
-        st,
-        tns_iter,
-        iter_max_sfb,
-        chans,
-      ) {
+      let frame_bytes = match
+        self.assemble_frame(st, tns_iter, iter_max_sfb, chans) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
@@ -2883,13 +2925,8 @@ pub fn AacEncoder::encode_frame(
     let mut found = false
     while lo <= hi {
       let mid = (lo + hi) / 2
-      let built = match self.build_frame(
-        frame,
-        stereo,
-        tns,
-        planned_max_sfb,
-        mid,
-      ) {
+      let built = match
+        self.build_frame(frame, stereo, tns, planned_max_sfb, mid) {
         Ok(v) => v
         Err(e) => return Err(e)
       }

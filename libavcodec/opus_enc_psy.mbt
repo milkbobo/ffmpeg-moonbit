@@ -8,7 +8,7 @@
 ///|
 /// One analysis step (`OpusPsyStep`).
 priv struct OpusEncPsyStep {
-  mut silence : Int
+  mut silence : Int32
   energy : Array[Float]
   tone : Array[Float]
   stereo : Array[Float]
@@ -53,7 +53,7 @@ priv struct OpusEncBessel {
 ///|
 /// Build the hi-pass filter for (ch, band) from the flat dumped table.
 /// Layout: (ch*21 + band)*10 + [hi a0 a1 a2 b0 b1 | lo a0 a1 a2 b0 b1].
-fn opus_enc_bessel_hi(ch : Int, band : Int) -> OpusEncBessel {
+fn opus_enc_bessel_hi(ch : Int32, band : Int32) -> OpusEncBessel {
   let o = (ch * 21 + band) * 10
   {
     a: [
@@ -68,7 +68,7 @@ fn opus_enc_bessel_hi(ch : Int, band : Int) -> OpusEncBessel {
 }
 
 ///|
-fn opus_enc_bessel_lo(ch : Int, band : Int) -> OpusEncBessel {
+fn opus_enc_bessel_lo(ch : Int32, band : Int32) -> OpusEncBessel {
   let o = (ch * 21 + band) * 10 + 5
   {
     a: [
@@ -106,19 +106,19 @@ fn OpusEncBessel::filter(self : OpusEncBessel, x0 : Float) -> Float {
 /// decides one packet.
 struct OpusEncPsy {
   steps : Array[OpusEncPsyStep]
-  mut buffered_steps : Int
-  mut steps_to_process : Int
-  mut eof : Int
-  max_steps : Int
+  mut buffered_steps : Int32
+  mut steps_to_process : Int32
+  mut eof : Int32
+  max_steps : Int32
   ex : Array[OpusEncExcitation]
   bfilter_lo : Array[OpusEncBessel]
   bfilter_hi : Array[OpusEncBessel]
   scratch : Array[Float]
   mut lambda : Float
-  inflection_points : Array[Int]
-  mut inflection_points_count : Int
-  mut p_frames : Int
-  mut p_framesize : Int
+  inflection_points : Array[Int32]
+  mut inflection_points_count : Int32
+  mut p_frames : Int32
+  mut p_framesize : Int32
   mut avg_is_band : Float
   mut bit_rate_f : Float
 }
@@ -128,10 +128,12 @@ struct OpusEncPsy {
 let opus_enc_max_lookahead : Float = 360.0
 
 ///|
-fn OpusEncPsy::new(channels : Int) -> OpusEncPsy {
+fn OpusEncPsy::new(channels : Int32) -> OpusEncPsy {
   // ceilf(max_delay_ms * sample_rate / (1000 * frame_size)), the C defaults
-  let max_steps = ((opus_enc_max_lookahead * 48000.0) / (1000.0 * 960.0))
-    .to_double().ceil().to_int()
+  let max_steps = (opus_enc_max_lookahead * 48000.0 / (1000.0 * 960.0))
+    .to_double()
+    .ceil()
+    .to_int()
   let steps : Array[OpusEncPsyStep] = []
   for _i in 0..<max_steps {
     steps.push(OpusEncPsyStep::new())
@@ -141,7 +143,7 @@ fn OpusEncPsy::new(channels : Int) -> OpusEncPsy {
   let hi : Array[OpusEncBessel] = []
   for ch in 0..<channels {
     for band in 0..<21 {
-      ex.push({ excitation: 0.0, excitation_dist: 0.0, excitation_init: 0.0 })
+      ex.push({ excitation: 0.0, excitation_dist: 0.0, excitation_init: 0.0, })
       lo.push(opus_enc_bessel_lo(ch, band))
       hi.push(opus_enc_bessel_hi(ch, band))
     }
@@ -171,9 +173,9 @@ fn OpusEncPsy::new(channels : Int) -> OpusEncPsy {
 /// means one bufqueue entry fills the whole analysis window).
 fn OpusEncPsy::collect_step(
   self : OpusEncPsy,
-  index : Int,
+  index : Int32,
   bufqueue : Array[OpusEncPcmFrame],
-  channels : Int,
+  channels : Int32,
 ) -> Unit {
   let st = self.steps[index]
   let half = 960
@@ -289,10 +291,10 @@ fn OpusEncPsy::collect_step(
 fn OpusEncPsy::search_change_points(
   self : OpusEncPsy,
   tgt_change : Float,
-  offset_s : Int,
-  offset_e : Int,
-  resolution : Int,
-  level : Int,
+  offset_s : Int32,
+  offset_e : Int32,
+  resolution : Int32,
+  level : Int32,
 ) -> Unit {
   if offset_e - offset_s <= resolution {
     return
@@ -309,10 +311,22 @@ fn OpusEncPsy::search_change_points(
   if i == offset_e {
     return
   }
-  self.search_change_points(tgt_change / 2.0, offset_s, i, resolution, level + 1)
+  self.search_change_points(
+    tgt_change / 2.0,
+    offset_s,
+    i,
+    resolution,
+    level + 1,
+  )
   self.inflection_points[self.inflection_points_count] = i
   self.inflection_points_count += 1
-  self.search_change_points(tgt_change / 2.0, i + 1, offset_e, resolution, level + 1)
+  self.search_change_points(
+    tgt_change / 2.0,
+    i + 1,
+    offset_e,
+    resolution,
+    level + 1,
+  )
 }
 
 ///|
@@ -353,7 +367,7 @@ fn OpusEncPsy::output_groups(self : OpusEncPsy) -> Unit {
 fn OpusEncPsy::process(
   self : OpusEncPsy,
   bufqueue : Array[OpusEncPcmFrame],
-  channels : Int,
+  channels : Int32,
 ) -> Bool {
   if self.buffered_steps < self.max_steps && self.eof == 0 {
     // awin = OPUS_BLOCK_SIZE(bsize_analysis) / frame_size = 960/960 = 1:

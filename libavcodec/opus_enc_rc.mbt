@@ -13,7 +13,7 @@
 
 ///|
 /// `OPUS_MAX_FRAME_SIZE + 12` (`opus.h` + `rc.h`), the size of `rc->buf`.
-let opus_enc_rc_buf_size : Int = 1275 + 12
+let opus_enc_rc_buf_size : Int32 = 1275 + 12
 
 ///|
 /// Encoder-side range coder (`OpusRangeCoder`, encoder fields).
@@ -27,7 +27,7 @@ pub struct OpusRangeEncoder {
   mut total_bits : Int32
   mut rem : Int32
   mut ext : Int32
-  mut rng_pos : Int
+  mut rng_pos : Int32
   mut rb_bytes : Int32
   mut rb_cachelen : Int32
   mut rb_cacheval : UInt32
@@ -90,7 +90,7 @@ pub fn OpusRangeEncoder::tell_frac(self : OpusRangeEncoder) -> Int32 {
 
 ///|
 /// `opus_rc_enc_carryout`.
-fn OpusRangeEncoder::carryout(self : OpusRangeEncoder, cbuf : Int) -> Unit {
+fn OpusRangeEncoder::carryout(self : OpusRangeEncoder, cbuf : Int32) -> Unit {
   let cb = cbuf >> 8
   let mb = (255 + cb) & 255
   if cbuf == 255 {
@@ -147,23 +147,33 @@ fn OpusRangeEncoder::update(
 /// `ff_opus_rc_enc_cdf`: `cdf` is total followed by upper bounds.
 pub fn OpusRangeEncoder::encode_cdf(
   self : OpusRangeEncoder,
-  val : Int,
+  val : Int32,
   cdf : Array[Int32],
 ) -> Unit {
   let b : UInt32 = if val != 0 { cdf[val].reinterpret_as_uint() } else { 0U }
-  self.update(b, cdf[val + 1].reinterpret_as_uint(), cdf[0].reinterpret_as_uint(), true)
+  self.update(
+    b,
+    cdf[val + 1].reinterpret_as_uint(),
+    cdf[0].reinterpret_as_uint(),
+    true,
+  )
 }
 
 ///|
 /// `ff_opus_rc_enc_log`.
 pub fn OpusRangeEncoder::encode_log(
   self : OpusRangeEncoder,
-  val : Int,
-  bits : Int,
+  val : Int32,
+  bits : Int32,
 ) -> Unit {
   let b = (1 << bits) - 1
   let vb : UInt32 = if val != 0 { b.reinterpret_as_uint() } else { 0U }
-  self.update(vb, (b + (if val != 0 { 1 } else { 0 })).reinterpret_as_uint(), (b + 1).reinterpret_as_uint(), true)
+  self.update(
+    vb,
+    (b + (if val != 0 { 1 } else { 0 })).reinterpret_as_uint(),
+    (b + 1).reinterpret_as_uint(),
+    true,
+  )
 }
 
 ///|
@@ -171,7 +181,7 @@ pub fn OpusRangeEncoder::encode_log(
 pub fn OpusRangeEncoder::put_raw(
   self : OpusRangeEncoder,
   val : UInt32,
-  count : Int,
+  count : Int32,
 ) -> Unit {
   let to_write = (32 - self.rb_cachelen).min(count)
   self.total_bits += count
@@ -206,12 +216,7 @@ pub fn OpusRangeEncoder::encode_uint(
 ) -> Unit {
   // C: opus_ilog(size-1) == opus_rc_ilog
   let ps = (opus_rc_ilog(size - 1U) - 8).max(0)
-  self.update(
-    val >> ps,
-    (val >> ps) + 1U,
-    ((size - 1U) >> ps) + 1U,
-    false,
-  )
+  self.update(val >> ps, (val >> ps) + 1U, ((size - 1U) >> ps) + 1U, false)
   self.put_raw(val, ps)
 }
 
@@ -220,7 +225,7 @@ pub fn OpusRangeEncoder::encode_uint(
 pub fn OpusRangeEncoder::encode_uint_step(
   self : OpusRangeEncoder,
   val : UInt32,
-  k0 : Int,
+  k0 : Int32,
 ) -> Unit {
   let a : UInt32 = if val <= k0.reinterpret_as_uint() { 1U } else { 0U }
   let b = 2U * a + 1U
@@ -234,13 +239,20 @@ pub fn OpusRangeEncoder::encode_uint_step(
 pub fn OpusRangeEncoder::encode_uint_tri(
   self : OpusRangeEncoder,
   k : UInt32,
-  qn : Int,
+  qn : Int32,
 ) -> Unit {
   let total = (((qn >> 1) + 1) * ((qn >> 1) + 1)).reinterpret_as_uint()
   let low : UInt32 = if k <= (qn >> 1).reinterpret_as_uint() {
     (k * (k + 1U)) >> 1
   } else {
-    total - ((((qn + 1).reinterpret_as_uint() - k) * ((qn + 2).reinterpret_as_uint() - k)) >> 1)
+    total -
+    (
+      (
+        ((qn + 1).reinterpret_as_uint() - k) *
+        ((qn + 2).reinterpret_as_uint() - k)
+      ) >>
+      1
+    )
   }
   let symbol : UInt32 = if k <= (qn >> 1).reinterpret_as_uint() {
     k + 1U
@@ -254,10 +266,10 @@ pub fn OpusRangeEncoder::encode_uint_tri(
 /// `ff_opus_rc_enc_laplace`.
 pub fn OpusRangeEncoder::encode_laplace(
   self : OpusRangeEncoder,
-  value : Int,
+  value : Int32,
   symbol : UInt32,
-  decay : Int,
-) -> (UInt32, Int) {
+  decay : Int32,
+) -> (UInt32, Int32) {
   let mut symbol = symbol
   let mut low = symbol
   let mut i = 1
@@ -267,7 +279,8 @@ pub fn OpusRangeEncoder::encode_laplace(
     self.update(0U, symbol, 1U << 15, true)
     return (symbol, value)
   }
-  symbol = (((32768U - 32U - symbol) * (16384U - decay.reinterpret_as_uint())) >> 15)
+  symbol = ((32768U - 32U - symbol) * (16384U - decay.reinterpret_as_uint())) >>
+    15
   while i < val && symbol != 0U {
     low += (symbol << 1) + 2U
     symbol = (symbol * decay.reinterpret_as_uint()) >> 14
@@ -279,7 +292,8 @@ pub fn OpusRangeEncoder::encode_laplace(
     low += symbol * pos.reinterpret_as_uint()
   } else {
     let distance = (val - i).min(
-      ((((32768 - low.reinterpret_as_int()) - (if pos != 0 { 0 } else { 1 })) >> 1) - 1),
+      ((32768 - low.reinterpret_as_int() - (if pos != 0 { 0 } else { 1 })) >> 1) -
+      1,
     )
     low += (pos + (distance << 1)).reinterpret_as_uint()
     symbol = (1).min(32768 - low.reinterpret_as_int()).reinterpret_as_uint()
@@ -296,8 +310,8 @@ pub fn OpusRangeEncoder::encode_laplace(
 pub fn OpusRangeEncoder::end(
   self : OpusRangeEncoder,
   dst : FixedArray[Byte],
-  dst_off : Int,
-  size : Int,
+  dst_off : Int32,
+  size : Int32,
 ) -> Unit {
   // C: opus_ilog(range) == opus_rc_ilog(range)
   let mut bits = 32 - opus_rc_ilog(self.range)
@@ -336,7 +350,7 @@ pub fn OpusRangeEncoder::end(
       src.push((v & 0xFFU).to_byte())
     }
     let dst_start = dst_off + (size - n).max(0)
-    let lap = (dst_off + rng_bytes) - dst_start
+    let lap = dst_off + rng_bytes - dst_start
     for i in 0..<lap {
       if dst_start + i < dst.length() {
         dst[dst_start + i] = (dst[dst_start + i].to_int() | src[i].to_int()).to_byte()
@@ -352,21 +366,21 @@ pub fn OpusRangeEncoder::end(
 
 ///|
 /// Number of range-coded bytes currently in the buffer (for tests).
-pub fn OpusRangeEncoder::rng_bytes(self : OpusRangeEncoder) -> Int {
+pub fn OpusRangeEncoder::rng_bytes(self : OpusRangeEncoder) -> Int32 {
   self.rng_pos
 }
 
 ///|
 /// `OPUS_RC_CHECKPOINT_SPAWN` / `ROLLBACK`: full encoder state snapshot.
 pub struct OpusEncRcSnapshot {
-  tell_frac : Int
+  tell_frac : Int32
   value : UInt32
   range : UInt32
   total_bits : Int32
   rem : Int32
   ext : Int32
-  rng_pos : Int
-  raw_len : Int
+  rng_pos : Int32
+  raw_len : Int32
   rb_bytes : Int32
   rb_cachelen : Int32
   rb_cacheval : UInt32
@@ -411,10 +425,10 @@ pub fn OpusRangeEncoder::rollback(
 /// slot `slot` of a multi-frame packet.
 pub fn OpusRangeEncoder::end_frame(
   self : OpusRangeEncoder,
-  _slot : Int,
+  _slot : Int32,
   out : Array[Byte],
-  off : Int,
-  size : Int,
+  off : Int32,
+  size : Int32,
 ) -> Unit {
   let dst : FixedArray[Byte] = FixedArray::make(size, b'\x00')
   self.end(dst, 0, size)

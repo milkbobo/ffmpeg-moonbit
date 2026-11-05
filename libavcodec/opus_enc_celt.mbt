@@ -14,13 +14,13 @@
 
 ///|
 /// `CELT_OVERLAP` / `CELT_MAX_BANDS` / `CELT_MAX_FRAME_SIZE`.
-let opus_enc_overlap : Int = 120
+let opus_enc_overlap : Int32 = 120
 
 ///|
-let opus_enc_max_bands : Int = 21
+let opus_enc_max_bands : Int32 = 21
 
 ///|
-let opus_enc_max_frame_size : Int = 960
+let opus_enc_max_frame_size : Int32 = 960
 
 ///|
 /// `CELT_ENERGY_SILENCE`.
@@ -63,7 +63,7 @@ fn OpusEncCeltBlock::new() -> OpusEncCeltBlock {
 ///|
 /// One queued PCM frame (planar float).
 struct OpusEncPcmFrame {
-  nb_samples : Int
+  nb_samples : Int32
   data : Array[Array[Float]]
 }
 
@@ -71,45 +71,48 @@ struct OpusEncPcmFrame {
 /// CELT frame under encoding (`CeltFrame`, encoder fields).
 struct OpusEncCeltFrame {
   block : Array[OpusEncCeltBlock]
-  mut channels : Int
+  mut channels : Int32
   /// block size index 0..3 (120..960).
-  mut size : Int
-  mut start_band : Int
-  mut end_band : Int
-  mut coded_bands : Int
-  mut transient : Int
-  mut pfilter : Int
-  mut skip_band_floor : Int
-  mut tf_select : Int
-  mut alloc_trim : Int
-  alloc_boost : Array[Int]
-  mut blocks : Int
-  mut silence : Int
-  mut anticollapse_needed : Int
-  mut anticollapse : Int
-  mut intensity_stereo : Int
+  mut size : Int32
+  mut start_band : Int32
+  mut end_band : Int32
+  mut coded_bands : Int32
+  mut transient : Int32
+  mut pfilter : Int32
+  mut skip_band_floor : Int32
+  mut tf_select : Int32
+  mut alloc_trim : Int32
+  alloc_boost : Array[Int32]
+  mut blocks : Int32
+  mut silence : Int32
+  mut anticollapse_needed : Int32
+  mut anticollapse : Int32
+  mut intensity_stereo : Int32
   mut dual_stereo : Bool
   mut seed : UInt32
-  mut spread : Int
-  mut pf_octave : Int
-  mut pf_period : Int
-  mut pf_tapset : Int
+  mut spread : Int32
+  mut pf_octave : Int32
+  mut pf_period : Int32
+  mut pf_tapset : Int32
   mut pf_gain : Float
-  mut framebits : Int
-  mut remaining : Int
-  mut remaining2 : Int
-  caps : Array[Int]
-  fine_bits : Array[Int]
-  fine_priority : Array[Int]
-  pulses : Array[Int]
-  tf_change : Array[Int]
+  mut framebits : Int32
+  mut remaining : Int32
+  mut remaining2 : Int32
+  caps : Array[Int32]
+  fine_bits : Array[Int32]
+  fine_priority : Array[Int32]
+  pulses : Array[Int32]
+  tf_change : Array[Int32]
   apply_phase_inv : Bool
   /// PVQ pulse scratch (`pvq->qcoeff`).
-  pulse_scratch : Array[Int]
+  pulse_scratch : Array[Int32]
 }
 
 ///|
-fn OpusEncCeltFrame::new(channels : Int, apply_phase_inv : Bool) -> OpusEncCeltFrame {
+fn OpusEncCeltFrame::new(
+  channels : Int32,
+  apply_phase_inv : Bool,
+) -> OpusEncCeltFrame {
   {
     block: [OpusEncCeltBlock::new(), OpusEncCeltBlock::new()],
     channels,
@@ -154,11 +157,11 @@ fn OpusEncCeltFrame::new(channels : Int, apply_phase_inv : Bool) -> OpusEncCeltF
 /// `dst[i*stride] = scale * sum_j src[j]*cos(pi/(4N)*(2j+1+N)*(2i+1))`.
 fn opus_enc_mdct_fwd(
   dst : Array[Float],
-  dst_off : Int,
+  dst_off : Int32,
   src : Array[Float],
-  n : Int,
+  n : Int32,
   scale : Float,
-  stride_out : Int,
+  stride_out : Int32,
 ) -> Unit {
   for i in 0..<n {
     let mi = 2 * i + 1
@@ -175,12 +178,13 @@ fn opus_enc_mdct_fwd(
 
 ///|
 /// cos of `m * pi / (4*den)` with the angle folded modulo one turn.
-fn opus_enc_cos_multiple(m : Int, den : Int) -> Double {
+fn opus_enc_cos_multiple(m : Int32, den : Int32) -> Double {
   let mut mm = m % (8 * den)
   if mm < 0 {
     mm += 8 * den
   }
-  let mut a = mm.to_double() * (3.14159265358979323846 / (4.0 * den.to_double()))
+  let mut a = mm.to_double() *
+    (3.14159265358979323846 / (4.0 * den.to_double()))
   let mut neg = false
   if a > 3.14159265358979323846 {
     a = 6.28318530717958647693 - a
@@ -203,9 +207,8 @@ fn opus_enc_cos_multiple(m : Int, den : Int) -> Double {
 fn opus_enc_sin_half(x : Double) -> Double {
   if x <= 0.78539816339744830962 {
     let inv_fact : Array[Double] = [
-      1.0, 0.16666666666666666, 0.008333333333333333, 0.0001984126984126984,
-      2.7557319223985893e-06, 2.505210838544172e-08, 1.6059043836821613e-10,
-      7.647163731819816e-13, 2.8114572543455206e-15,
+      1.0, 0.16666666666666666, 0.008333333333333333, 0.0001984126984126984, 2.7557319223985893e-06,
+      2.505210838544172e-08, 1.6059043836821613e-10, 7.647163731819816e-13, 2.8114572543455206e-15,
     ]
     let t2 = x * x
     let mut tp = x
@@ -227,9 +230,8 @@ fn opus_enc_sin_half(x : Double) -> Double {
 fn opus_enc_cos_half(x : Double) -> Double {
   if x <= 0.78539816339744830962 {
     let inv_fact : Array[Double] = [
-      1.0, 0.5, 0.041666666666666664, 0.001388888888888889,
-      2.48015873015873e-05, 2.755731922398589e-07, 2.08767569878681e-09,
-      1.1470745597729725e-11,
+      1.0, 0.5, 0.041666666666666664, 0.001388888888888889, 2.48015873015873e-05,
+      2.755731922398589e-07, 2.08767569878681e-09, 1.1470745597729725e-11,
     ]
     let t2 = x * x
     let mut tp = 1.0
@@ -303,9 +305,17 @@ fn opus_enc_frame_mdct(f : OpusEncCeltFrame) -> Unit {
         // vector_fmul_reverse(&win[120], src2, ff_celt_window_padded, 128)
         // dst[i] = src0[i] * src1[len-1-i]: the WINDOW is the reversed operand
         for i in 0..<128 {
-          win[opus_enc_overlap + i] = b.samples[src2_off + i] * opus_enc_celt_window_padded[127 - i]
+          win[opus_enc_overlap + i] = b.samples[src2_off + i] *
+            opus_enc_celt_window_padded[127 - i]
         }
-        opus_enc_mdct_fwd(b.coeffs, t, win, 120, Float::from_int(68 << 3), f.blocks)
+        opus_enc_mdct_fwd(
+          b.coeffs,
+          t,
+          win,
+          120,
+          Float::from_int(68 << 3),
+          f.blocks,
+        )
       }
     }
   } else {
@@ -356,7 +366,8 @@ fn opus_enc_frame_mdct(f : OpusEncCeltFrame) -> Unit {
         let c = block.coeffs[band_offset + j]
         ener += c * c
       }
-      let lin = Float::from_double(ener.to_double().sqrt()) + 1.1920928955078125e-7
+      let lin = Float::from_double(ener.to_double().sqrt()) +
+        1.1920928955078125e-7
       block.lin_energy[i] = lin
       let scale : Float = 1.0 / lin
       for j in 0..<band_size {
@@ -409,7 +420,7 @@ fn opus_enc_exp_quant_coarse(
   rc : OpusRangeEncoder,
   f : OpusEncCeltFrame,
   last_energy : Array[Array[Float]],
-  intra : Int,
+  intra : Int32,
 ) -> Unit {
   let prev : Array[Float] = [0.0, 0.0]
   let mut eff_intra = intra
@@ -418,11 +429,7 @@ fn opus_enc_exp_quant_coarse(
   } else {
     eff_intra = 0
   }
-  let alpha : Float = if eff_intra != 0 {
-    0.0
-  } else {
-    opus_celt_alpha[f.size]
-  }
+  let alpha : Float = if eff_intra != 0 { 0.0 } else { opus_celt_alpha[f.size] }
   let beta : Float = if eff_intra != 0 {
     1.0 - Float::from_double(4915.0) / Float::from_double(32768.0)
   } else {
@@ -481,7 +488,10 @@ fn opus_enc_celt_quant_coarse(
 
 ///|
 /// `celt_quant_fine`.
-fn opus_enc_celt_quant_fine(f : OpusEncCeltFrame, rc : OpusRangeEncoder) -> Unit {
+fn opus_enc_celt_quant_fine(
+  f : OpusEncCeltFrame,
+  rc : OpusRangeEncoder,
+) -> Unit {
   for i in f.start_band..<f.end_band {
     if f.fine_bits[i] == 0 {
       continue
@@ -503,7 +513,10 @@ fn opus_enc_celt_quant_fine(f : OpusEncCeltFrame, rc : OpusRangeEncoder) -> Unit
 
 ///|
 /// `celt_quant_final`.
-fn opus_enc_celt_quant_final(f : OpusEncCeltFrame, rc : OpusRangeEncoder) -> Unit {
+fn opus_enc_celt_quant_final(
+  f : OpusEncCeltFrame,
+  rc : OpusRangeEncoder,
+) -> Unit {
   for priority in 0..<2 {
     for i in f.start_band..<f.end_band {
       if f.framebits - rc.tell() < f.channels {
@@ -516,12 +529,18 @@ fn opus_enc_celt_quant_final(f : OpusEncCeltFrame, rc : OpusRangeEncoder) -> Uni
         let block = f.block[ch]
         let err = block.error_energy[i]
         let half : Float = 0.5
-        let offset = half * Float::from_int(1 << (14 - f.fine_bits[i] - 1)) / 16384.0
-        let sign = if (err + offset).abs() < (err - offset).abs() { 1 } else { 0 }
+        let offset = half *
+          Float::from_int(1 << (14 - f.fine_bits[i] - 1)) /
+          16384.0
+        let sign = if (err + offset).abs() < (err - offset).abs() {
+          1
+        } else {
+          0
+        }
         rc.put_raw(sign.reinterpret_as_uint(), 1)
-        block.error_energy[i] = block.error_energy[i] - offset * Float::from_int(1 - 2 * sign)
+        block.error_energy[i] = block.error_energy[i] -
+          offset * Float::from_int(1 - 2 * sign)
       }
     }
   }
 }
-

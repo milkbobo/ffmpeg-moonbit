@@ -26,10 +26,13 @@ let aac_is_low_limit_hz : Double = 6100.0
 /// (`aac.h:74-77`), as this module needs them.
 let aac_is_noise_bt : Int32 = 13
 
+///|
 let aac_is_reserved_bt : Int32 = 12
 
+///|
 let aac_is_intensity_bt2 : Int32 = 14
 
+///|
 let aac_is_intensity_bt : Int32 = 15
 
 ///|
@@ -165,10 +168,7 @@ fn aac_is_encoding_err(
   let size = d.band_sizes[g]
   // `is_sf_idx = FFMAX(1, sce0->sf_idx[w*16+g] - 4)`.
   let is_sf_idx = if d.sf0[g] - 4 > 1 { d.sf0[g] - 4 } else { 1 }
-  let e01_34 = aac_two_mul(
-    phase,
-    aac_is_pos_pow34(aac_two_div(ener1, ener0)),
-  )
+  let e01_34 = aac_two_mul(phase, aac_is_pos_pow34(aac_two_div(ener1, ener0)))
   let t0 = d.thr0[g]
   let t1 = d.thr1[g]
   let minthr = if t0 < t1 { t0 } else { t1 }
@@ -187,16 +187,16 @@ fn aac_is_encoding_err(
   let is_bt = aac_two_find_min_book(maxval, is_sf_idx)
   let qc : Array[Int32] = Array::make(size, 0)
   let dist1_left = aac_two_band_cost(
-    l,
-    0,
-    l34,
-    0,
-    qc,
-    size,
-    d.sf0[g],
-    d.cb0[g],
-    aac_two_div(lambda, t0),
-  ).cost
+      l,
+      0,
+      l34,
+      0,
+      qc,
+      size,
+      d.sf0[g],
+      d.cb0[g],
+      aac_two_div(lambda, t0),
+    ).cost
   let dist1 = aac_two_add(
     dist1_left,
     aac_two_band_cost(
@@ -216,19 +216,23 @@ fn aac_is_encoding_err(
     aac_is_spec_err(l34, r34, i34, size, e01_34),
   )
   let mut dist2 = aac_two_band_cost(
-    isd,
-    0,
-    i34,
-    0,
-    qc,
-    size,
-    is_sf_idx,
-    is_bt,
-    aac_two_div(lambda, minthr),
-  ).cost
+      isd,
+      0,
+      i34,
+      0,
+      qc,
+      size,
+      is_sf_idx,
+      is_bt,
+      aac_two_div(lambda, minthr),
+    ).cost
   dist2 = aac_two_add(dist2, dist_spec_err)
   {
-    pass: if dist2 <= dist1 { 1 } else { 0 },
+    pass: if dist2 <= dist1 {
+      1
+    } else {
+      0
+    },
     phase,
     error: aac_two_sub(dist2, dist1),
     dist1,
@@ -317,7 +321,12 @@ pub fn aac_is_search(
   // `start*freq_mult > INT_STEREO_LOW_LIMIT*(lambda/170)`.
   let freq_mult = aac_two_div(aac_two_div(sample_rate.to_double(), 1024.0), 2.0)
   let limit = aac_two_mul(aac_is_low_limit_hz, aac_two_div(lambda, 170.0))
-  let nextband1 = aac_two_init_nextband_map(d.zeroes1, d.cb1, n, aac_two_shape_long())
+  let nextband1 = aac_two_init_nextband_map(
+    d.zeroes1,
+    d.cb1,
+    n,
+    aac_two_shape_long(),
+  )
   let mut prev_sf1 = -1
   let mut prev_bt = -1
   let mut prev_is = 0
@@ -326,9 +335,11 @@ pub fn aac_is_search(
   for g in 0..<n {
     let size = d.band_sizes[g]
     if aac_two_mul(start.to_double(), freq_mult) > limit &&
-        d.cb0[g] != aac_is_noise_bt && d.zeroes0[g] == 0 &&
-        d.cb1[g] != aac_is_noise_bt && d.zeroes1[g] == 0 &&
-        aac_two_can_remove_band(d.sf1, nextband1, prev_sf1, g) {
+      d.cb0[g] != aac_is_noise_bt &&
+      d.zeroes0[g] == 0 &&
+      d.cb1[g] != aac_is_noise_bt &&
+      d.zeroes1[g] == 0 &&
+      aac_two_can_remove_band(d.sf1, nextband1, prev_sf1, g) {
       // `ener01` is the sum for phase +1, `ener01p` for phase -1.
       let mut ener0 = 0.0
       let mut ener1 = 0.0

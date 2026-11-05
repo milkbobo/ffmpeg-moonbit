@@ -31,7 +31,11 @@ fn aac_two_short_close(
 /// FFmpeg's `window_sequence` enum: 0 `ONLY_LONG`, 1 `LONG_START`,
 /// 2 `EIGHT_SHORT`, 3 `LONG_STOP`.
 let aac_two_seq_only_long : Int32 = 0
+
+///|
 let aac_two_seq_long_start : Int32 = 1
+
+///|
 let aac_two_seq_eight_short : Int32 = 2
 
 ///|
@@ -117,13 +121,29 @@ test "twoloop short search depends on the window grouping" {
   let sizes = ctx.band_sizes_short()
   let spec = @aac_twoloop_vectors.aac_two_short_spec[0]
   let gl = @aac_twoloop_vectors.aac_two_short_group_len[0]
-  let r = ctx.analyze(0, spec, 0, aac_two_seq_eight_short, aac_two_seq_only_long)
+  let r = ctx.analyze(
+    0, spec, 0, aac_two_seq_eight_short, aac_two_seq_only_long,
+  )
   let grouped = @libavcodec.aac_twoloop_search(
-    spec, sizes, r.bands, r.alloc, 128000, 44100, 2, 120.0,
+    spec,
+    sizes,
+    r.bands,
+    r.alloc,
+    128000,
+    44100,
+    2,
+    120.0,
     @libavcodec.aac_two_shape_short(gl),
   )
   let flat = @libavcodec.aac_twoloop_search(
-    spec, sizes, r.bands, r.alloc, 128000, 44100, 2, 120.0,
+    spec,
+    sizes,
+    r.bands,
+    r.alloc,
+    128000,
+    44100,
+    2,
+    120.0,
     @libavcodec.aac_two_shape_short([1, 1, 1, 1, 1, 1, 1, 1]),
   )
   let mut differ = 0

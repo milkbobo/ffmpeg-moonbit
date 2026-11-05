@@ -32,7 +32,11 @@ fn aac_psy_short_close(
 /// long_start = 1, eight_short = 2, long_stop = 3), which is what
 /// `AacPsyContext::analyze` keys the window shape on.
 let aac_psy_short_seq : Int32 = 2
+
+///|
 let aac_psy_only_long_seq : Int32 = 0
+
+///|
 let aac_psy_long_start_seq : Int32 = 1
 
 ///|
@@ -80,11 +84,9 @@ test "3GPP psy eight short windows matches FFmpeg 9.0.2 aacpsy.c (5 frames x 8 x
     for i in 0..<112 {
       // Window `i / 14`, band `i % 14` at slot `w * 16 + g` - the stride every
       // C consumer indexes with.
-      let want_slot = (i / 14) * 16 + (i % 14)
+      let want_slot = i / 14 * 16 + i % 14
       if slots[i] != want_slot {
-        fail(
-          "frame \{f} record \{i}: fixture slot \{slots[i]} != \{want_slot}",
-        )
+        fail("frame \{f} record \{i}: fixture slot \{slots[i]} != \{want_slot}")
       }
       let b = r.bands[slots[i]]
       if b.bits != @aac_psy_vectors.aac_psy_short_bits[f][i] {
@@ -154,18 +156,10 @@ test "3GPP psy short plan differs from the long plan" {
   let ctx = @libavcodec.aac_psy_new(4, 44100, 128000, 2)
   let spec = @aac_psy_vectors.aac_psy_short_spec[3]
   let long_r = ctx.analyze(
-    0,
-    spec,
-    0,
-    aac_psy_only_long_seq,
-    aac_psy_only_long_seq,
+    0, spec, 0, aac_psy_only_long_seq, aac_psy_only_long_seq,
   )
   let short_r = ctx.analyze(
-    0,
-    spec,
-    0,
-    aac_psy_short_seq,
-    aac_psy_only_long_seq,
+    0, spec, 0, aac_psy_short_seq, aac_psy_only_long_seq,
   )
   if long_r.num_windows != 1 || long_r.num_bands != 49 {
     fail("only_long must analyse 49 bands in one window")
@@ -174,7 +168,9 @@ test "3GPP psy short plan differs from the long plan" {
     fail("eight_short must analyse 14 bands in each of 8 windows")
   }
   if long_r.alloc == short_r.alloc {
-    fail("short frames use PSY_3GPP_SAVE/SPEND slopes; the bit demand cannot match")
+    fail(
+      "short frames use PSY_3GPP_SAVE/SPEND slopes; the bit demand cannot match",
+    )
   }
   let mut differ = 0
   for g in 0..<14 {

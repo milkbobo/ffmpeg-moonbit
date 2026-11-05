@@ -35,25 +35,23 @@
 /// `psy_fir_coeffs` (`aacpsy.c`): LAME's fs/4 high-pass FIR, the ten
 /// half-length taps FFmpeg already doubled.  Exact f32 values.
 let aac_lame_fir_coeffs : Array[Double] = [
-  -1.7303260184043527e-17, -0.017031719908118248, -1.3495279640235235e-17,
-  0.04180720075964928, -6.732779685849225e-17, -0.08763240277767181,
-  -3.0835000291318875e-17, 0.1863476037979126, -1.1044240253100168e-16,
-  -0.6276379823684692,
+  -1.7303260184043527e-17, -0.017031719908118248, -1.3495279640235235e-17, 0.04180720075964928,
+  -6.732779685849225e-17, -0.08763240277767181, -3.0835000291318875e-17, 0.1863476037979126,
+  -1.1044240253100168e-16, -0.6276379823684692,
 ]
 
 ///|
 /// `psy_abr_map`'s `st_lrm` column (`aacpsy.c`), exact f32 values, indexed
 /// like `aac_lame_abr_kbps`.
 let aac_lame_abr_st_lrm : Array[Double] = [
-  7.599999904632568, 7.599999904632568, 7.599999904632568, 7.599999904632568,
-  7.599999904632568, 7.599999904632568, 7.599999904632568, 7.400000095367432,
-  7.0, 6.599999904632568, 6.199999809265137, 6.199999809265137,
-  6.199999809265137,
+  7.599999904632568, 7.599999904632568, 7.599999904632568, 7.599999904632568, 7.599999904632568,
+  7.599999904632568, 7.599999904632568, 7.400000095367432, 7.0, 6.599999904632568,
+  6.199999809265137, 6.199999809265137, 6.199999809265137,
 ]
 
 ///|
 /// `psy_abr_map`'s `quality` (kbps per channel) column.
-let aac_lame_abr_kbps : Array[Int] = [
+let aac_lame_abr_kbps : Array[Int32] = [
   8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160,
 ]
 
@@ -63,7 +61,7 @@ let aac_lame_abr_kbps : Array[Int] = [
 /// (nearest endpoint, never interpolated); at or above 160 kbps/channel the
 /// initial clamp keeps both ranges at the last entry.  FFmpeg passes
 /// `bit_rate / nb_channels / 1000` (integer division).
-fn aac_lame_attack_threshold(bitrate_kbps : Int) -> Double {
+fn aac_lame_attack_threshold(bitrate_kbps : Int32) -> Double {
   let mut lower = 12
   let mut upper = 12
   for i = 1; i < 13; i = i + 1 {
@@ -73,8 +71,8 @@ fn aac_lame_attack_threshold(bitrate_kbps : Int) -> Double {
       break
     }
   }
-  if aac_lame_abr_kbps[upper] - bitrate_kbps > bitrate_kbps -
-      aac_lame_abr_kbps[lower] {
+  if aac_lame_abr_kbps[upper] - bitrate_kbps >
+    bitrate_kbps - aac_lame_abr_kbps[lower] {
     aac_lame_abr_st_lrm[lower]
   } else {
     aac_lame_abr_st_lrm[upper]
@@ -86,7 +84,7 @@ fn aac_lame_attack_threshold(bitrate_kbps : Int) -> Double {
 /// block.  Bit i set means window i continues its group, clear means it
 /// starts a new one; attack positions later in the frame leave more (and
 /// shorter) groups in front.
-let aac_window_grouping : Array[Int] = [
+let aac_window_grouping : Array[Int32] = [
   0xB6, 0x6C, 0xD8, 0xB2, 0x66, 0xC6, 0x96, 0x36, 0x36,
 ]
 
@@ -96,8 +94,8 @@ let aac_window_grouping : Array[Int] = [
 /// window increments its group's length (so a set bit extends the current
 /// group).  This is also the expansion behind `scale_factor_grouping`
 /// (`!group_len[w]`, w = 1..7, `put_ics_info`).
-pub fn aac_window_grouping_expand(grouping : Int) -> Array[Int] {
-  let group_len : Array[Int] = Array::make(8, 0)
+pub fn aac_window_grouping_expand(grouping : Int32) -> Array[Int32] {
+  let group_len : Array[Int32] = Array::make(8, 0)
   let mut lastgrp = 0
   for i = 0; i < 8; i = i + 1 {
     if ((grouping >> i) & 1) == 0 {
@@ -120,7 +118,7 @@ pub struct AacLameWindow {
   /// reference, so the field itself is immutable.
   prev_energy_subshort : Array[Double]
   /// `pch->prev_attack`: `attacks[7]` as the previous call left it.
-  mut prev_attack : Int
+  mut prev_attack : Int32
   /// `pch->next_attack0_zero`: suppresses `attacks[0]` when the previous
   /// frame's last block showed no attack.
   mut next_attack0_zero : Bool
@@ -128,13 +126,13 @@ pub struct AacLameWindow {
   /// frame.  Kept for reference parity (and cross-checked by the window
   /// vectors); the synchronous consumer reads this call's `group_byte`
   /// instead.
-  mut next_grouping : Int
+  mut next_grouping : Int32
 }
 
 ///|
 /// Build the per-channel switcher state as `lame_window_init` does: the
 /// ABR attack threshold from the bitrate and sixteen `10.0f` seed peaks.
-pub fn AacLameWindow::new(bitrate_kbps_per_ch : Int) -> AacLameWindow {
+pub fn AacLameWindow::new(bitrate_kbps_per_ch : Int32) -> AacLameWindow {
   {
     attack_threshold: aac_lame_attack_threshold(bitrate_kbps_per_ch),
     prev_energy_subshort: Array::make(16, 10.0),
@@ -154,26 +152,26 @@ pub fn AacLameWindow::new(bitrate_kbps_per_ch : Int) -> AacLameWindow {
 pub struct AacLameDecision {
   /// `attacks[0..8]`, final values (after the cross-frame flags and the
   /// cascade): `0`, or `(i % 2) + 1` for the sub-block that fired.
-  attacks : Array[Int]
+  attacks : Array[Int32]
   /// `att_sum` including the restored `attacks[0]` - what the block-type
   /// decision reads; larger than `sum(attacks)` when the cascade (which
   /// runs after) suppressed further attacks.
-  att_sum : Int
+  att_sum : Int32
   /// `uselongblock`: false iff `prev_attack == 2 || att_sum`.
   uselong : Bool
   /// Index of the first non-zero attack block (0 when all are zero), i.e.
   /// the `window_grouping` selector.
-  grp_first : Int
+  grp_first : Int32
   /// `pch->next_grouping` as it was *before* this call stored its result:
   /// the byte FFmpeg's next short frame would expand (`wi` fill reads it
   /// before the tail overwrites it).
-  wi_grp_pre : Int
+  wi_grp_pre : Int32
   /// `window_grouping[grp_first]`: the byte this call stores as
   /// `next_grouping`; in the synchronous rewrite it is also this frame's
   /// grouping.
-  group_byte : Int
+  group_byte : Int32
   /// `group_len[8]` expanded from `group_byte`: this frame's window groups.
-  group_len : Array[Int]
+  group_len : Array[Int32]
 }
 
 ///|
@@ -189,7 +187,7 @@ pub struct AacLameDecision {
 pub fn AacLameWindow::analyze(
   self : AacLameWindow,
   buf : Array[Double],
-  start : Int,
+  start : Int32,
 ) -> AacLameDecision {
   // 1) high-pass FIR (`psy_hp_filter`): 1024 outputs over 1045 inputs,
   //    taps at +/-10 around each centre, `sum1` on the even taps and the
@@ -265,7 +263,7 @@ pub fn AacLameWindow::analyze(
   // 3) attacks: first sub-block of each short block whose intensity beats
   //    the threshold (later sub-blocks only fill in if the block is still
   //    unset).  Block 0 is the restored previous-frame tail.
-  let attacks : Array[Int] = Array::make(9, 0)
+  let attacks : Array[Int32] = Array::make(9, 0)
   for i = 0; i < 18; i = i + 1 {
     if attacks[i / 2] == 0 && attack_intensity[i] > self.attack_threshold {
       attacks[i / 2] = i % 2 + 1
@@ -281,8 +279,8 @@ pub fn AacLameWindow::analyze(
     let v = energy_short[i]
     let m = if u > v { u } else { v }
     if m < 40000.0 &&
-        u < aac_two_mul(ratio_2p3, v) &&
-        v < aac_two_mul(ratio_2p3, u) {
+      u < aac_two_mul(ratio_2p3, v) &&
+      v < aac_two_mul(ratio_2p3, u) {
       if i == 1 && attacks[0] < attacks[1] {
         attacks[0] = 0
       }

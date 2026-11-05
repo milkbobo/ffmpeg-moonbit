@@ -18,27 +18,27 @@
 
 ///|
 /// `AVPROBE_SCORE_RETRY` (`avformat.h`). */
-pub let probe_score_retry : Int = 25
+pub let probe_score_retry : Int32 = 25
 
 ///|
 /// `AVPROBE_SCORE_EXTENSION` (`avformat.h`). */
-pub let probe_score_extension : Int = 50
+pub let probe_score_extension : Int32 = 50
 
 ///|
 /// `AVPROBE_SCORE_MIME_BONUS` (`avformat.h`). */
-pub let probe_score_mime_bonus : Int = 30
+pub let probe_score_mime_bonus : Int32 = 30
 
 ///|
 /// `AVPROBE_SCORE_MAX` (`avformat.h`). */
-pub let probe_score_max : Int = 100
+pub let probe_score_max : Int32 = 100
 
 ///|
 /// `PROBE_BUF_MIN` (`internal.h`). */
-pub let probe_buf_min : Int = 2048
+pub let probe_buf_min : Int32 = 2048
 
 ///|
 /// `PROBE_BUF_MAX` (`internal.h`). */
-pub let probe_buf_max : Int = 1048576
+pub let probe_buf_max : Int32 = 1048576
 
 ///|
 /// The input formats this port can actually open, named after FFmpeg's
@@ -164,10 +164,10 @@ pub struct ProbeData {
 /// Build a `ProbeData`. `filename` / `mime_type` default to "" (NULL in C). */
 pub fn ProbeData::new(
   buf : Bytes,
-  filename? : String = "",
-  mime_type? : String = "",
+  filename~ : String = "",
+  mime_type~ : String = "",
 ) -> ProbeData {
-  { buf, filename, mime_type }
+  { buf, filename, mime_type, }
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ pub fn ProbeData::new(
 // ---------------------------------------------------------------------------
 
 ///|
-fn pb_u8(b : Bytes, i : Int) -> UInt {
+fn pb_u8(b : Bytes, i : Int32) -> UInt32 {
   if i < 0 || i >= b.length() {
     0U
   } else {
@@ -184,13 +184,13 @@ fn pb_u8(b : Bytes, i : Int) -> UInt {
 }
 
 ///|
-fn pb_be16(b : Bytes, i : Int) -> UInt {
+fn pb_be16(b : Bytes, i : Int32) -> UInt32 {
   (pb_u8(b, i) << 8) | pb_u8(b, i + 1)
 }
 
 ///|
 /// One byte, zero outside the buffer (the C reads padding there). */
-fn pb_byte(b : Bytes, i : Int) -> Byte {
+fn pb_byte(b : Bytes, i : Int32) -> Byte {
   if i < 0 || i >= b.length() {
     b'\x00'
   } else {
@@ -199,12 +199,12 @@ fn pb_byte(b : Bytes, i : Int) -> Byte {
 }
 
 ///|
-fn pb_be24(b : Bytes, i : Int) -> UInt {
+fn pb_be24(b : Bytes, i : Int32) -> UInt32 {
   (pb_u8(b, i) << 16) | (pb_u8(b, i + 1) << 8) | pb_u8(b, i + 2)
 }
 
 ///|
-fn pb_be32(b : Bytes, i : Int) -> UInt {
+fn pb_be32(b : Bytes, i : Int32) -> UInt32 {
   (pb_u8(b, i) << 24) |
   (pb_u8(b, i + 1) << 16) |
   (pb_u8(b, i + 2) << 8) |
@@ -212,7 +212,7 @@ fn pb_be32(b : Bytes, i : Int) -> UInt {
 }
 
 ///|
-fn pb_le32(b : Bytes, i : Int) -> UInt {
+fn pb_le32(b : Bytes, i : Int32) -> UInt32 {
   pb_u8(b, i) |
   (pb_u8(b, i + 1) << 8) |
   (pb_u8(b, i + 2) << 16) |
@@ -220,14 +220,14 @@ fn pb_le32(b : Bytes, i : Int) -> UInt {
 }
 
 ///|
-fn pb_be64(b : Bytes, i : Int) -> UInt64 {
+fn pb_be64(b : Bytes, i : Int32) -> UInt64 {
   (pb_be32(b, i).to_uint64() << 32) | pb_be32(b, i + 4).to_uint64()
 }
 
 ///|
 /// Compare `n` bytes at `pos` against an ASCII tag; out-of-range is false so a
 /// short probe window never matches. */
-fn pb_match(b : Bytes, pos : Int, tag : String) -> Bool {
+fn pb_match(b : Bytes, pos : Int32, tag : String) -> Bool {
   let n = tag.length()
   if pos < 0 || pos + n > b.length() {
     return false
@@ -308,7 +308,7 @@ fn probe_stristr(buf : Bytes, needle : String) -> Bool {
 
 ///|
 /// `ff_id3v2_match` at a byte offset. */
-fn probe_id3v2_match_at(buf : Bytes, off : Int) -> Bool {
+fn probe_id3v2_match_at(buf : Bytes, off : Int32) -> Bool {
   if buf.length() - off < 10 {
     return false
   }
@@ -323,7 +323,7 @@ fn probe_id3v2_match_at(buf : Bytes, off : Int) -> Bool {
 
 ///|
 /// `ff_id3v2_tag_len` at a byte offset. */
-fn probe_id3v2_tag_len_at(buf : Bytes, off : Int) -> Int {
+fn probe_id3v2_tag_len_at(buf : Bytes, off : Int32) -> Int32 {
   if buf.length() - off < 10 {
     return 0
   }
@@ -387,7 +387,7 @@ fn probe_skip_id3(buf : Bytes) -> (Bytes, ProbeNoData) {
 /// scoring loop needs, plus the `read_probe` callback. */
 priv struct ProbeEntry {
   id : FormatId
-  probe : (ProbeData) -> Int
+  probe : (ProbeData) -> Int32
 }
 
 ///|
@@ -395,26 +395,26 @@ priv struct ProbeEntry {
 /// restricted to the demuxers this port implements. */
 fn probe_registry() -> Array[ProbeEntry] {
   [
-    { id: Aac, probe: probe_adts_aac },
-    { id: Ac3, probe: probe_ac3 },
-    { id: Aiff, probe: probe_aiff },
-    { id: Amr, probe: probe_amr },
-    { id: Png, probe: probe_png },
-    { id: Asf, probe: probe_asf },
-    { id: Au, probe: probe_au },
-    { id: Caf, probe: probe_caf },
-    { id: Dash, probe: probe_dash },
-    { id: Eac3, probe: probe_eac3 },
-    { id: Flac, probe: probe_flac },
-    { id: Hls, probe: probe_hls },
-    { id: Matroska, probe: probe_matroska },
-    { id: Mjpeg, probe: probe_mjpeg },
-    { id: Mov, probe: probe_mov },
-    { id: Mp3, probe: probe_mp3 },
-    { id: MpegTs, probe: probe_mpegts },
-    { id: Ogg, probe: probe_ogg },
-    { id: W64, probe: probe_w64 },
-    { id: Wav, probe: probe_wav },
+    { id: Aac, probe: probe_adts_aac, },
+    { id: Ac3, probe: probe_ac3, },
+    { id: Aiff, probe: probe_aiff, },
+    { id: Amr, probe: probe_amr, },
+    { id: Png, probe: probe_png, },
+    { id: Asf, probe: probe_asf, },
+    { id: Au, probe: probe_au, },
+    { id: Caf, probe: probe_caf, },
+    { id: Dash, probe: probe_dash, },
+    { id: Eac3, probe: probe_eac3, },
+    { id: Flac, probe: probe_flac, },
+    { id: Hls, probe: probe_hls, },
+    { id: Matroska, probe: probe_matroska, },
+    { id: Mjpeg, probe: probe_mjpeg, },
+    { id: Mov, probe: probe_mov, },
+    { id: Mp3, probe: probe_mp3, },
+    { id: MpegTs, probe: probe_mpegts, },
+    { id: Ogg, probe: probe_ogg, },
+    { id: W64, probe: probe_w64, },
+    { id: Wav, probe: probe_wav, },
   ]
 }
 
@@ -426,7 +426,7 @@ fn probe_registry() -> Array[ProbeEntry] {
 ///
 /// Scores are the raw `read_probe` values in `0..=100`, optionally lifted by
 /// the filename extension and the MIME bonus exactly as in `format.c`.
-pub fn av_probe_input_format(pd : ProbeData) -> (FormatId?, Int) {
+pub fn av_probe_input_format(pd : ProbeData) -> (FormatId?, Int32) {
   let (view, nodat) = probe_skip_id3(pd.buf)
   let lpd : ProbeData = {
     buf: view,
@@ -466,7 +466,7 @@ pub fn av_probe_input_format(pd : ProbeData) -> (FormatId?, Int) {
 /// `av_probe_input_format2`: the same probe, additionally refusing a winner
 /// whose score is at most `score_max` (FFmpeg's `av_probe_input_format2` drops
 /// low-confidence matches).
-pub fn av_probe_input_format2(pd : ProbeData) -> (FormatId?, Int) {
+pub fn av_probe_input_format2(pd : ProbeData) -> (FormatId?, Int32) {
   let (fmt, score) = av_probe_input_format(pd)
   if score <= probe_score_retry {
     (None, score)
@@ -491,10 +491,10 @@ pub fn av_probe_input_format2(pd : ProbeData) -> (FormatId?, Int) {
 /// already have them in their own source.
 pub fn av_probe_input_buffer(
   pb : AvioContext,
-  filename? : String = "",
-  mime_type? : String = "",
-  max_probe_size? : Int = probe_buf_max,
-) -> Result[(FormatId?, Int), String] {
+  filename~ : String = "",
+  mime_type~ : String = "",
+  max_probe_size~ : Int32 = probe_buf_max,
+) -> Result[(FormatId?, Int32), String] {
   let max_probe_size = if max_probe_size == 0 {
     probe_buf_max
   } else {
@@ -506,7 +506,7 @@ pub fn av_probe_input_buffer(
   let start = pb.avio_tell()
   let mut probe_size = probe_buf_min
   let mut collected = Bytes::new(0)
-  let mut result : (FormatId?, Int) = (None, 0)
+  let mut result : (FormatId?, Int32) = (None, 0)
   let mut done = false
   while !done && probe_size <= max_probe_size {
     let want = probe_size - collected.length()
@@ -527,11 +527,7 @@ pub fn av_probe_input_buffer(
     // Re-probe the accumulated bytes with the current retry floor.
     let pd = ProbeData::new(collected, filename~, mime_type~)
     let (fmt, score) = av_probe_input_format(pd)
-    let floor = if probe_size < max_probe_size {
-      probe_score_retry
-    } else {
-      0
-    }
+    let floor = if probe_size < max_probe_size { probe_score_retry } else { 0 }
     if fmt is Some(_) && score > floor {
       result = (fmt, score)
       done = true

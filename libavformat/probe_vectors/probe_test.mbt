@@ -14,14 +14,10 @@ fn probe_decode(b64 : Bytes) -> Bytes {
 /// Probe `data` and return (format name, score); "" means no match. */
 fn probe_of(
   data : BytesView,
-  filename? : String = "",
-  mime_type? : String = "",
-) -> (String, Int) {
-  let pd = @libavformat.ProbeData::new(
-    data.to_owned(),
-    filename~,
-    mime_type~,
-  )
+  filename~ : String = "",
+  mime_type~ : String = "",
+) -> (String, Int32) {
+  let pd = @libavformat.ProbeData::new(data.to_owned(), filename~, mime_type~)
   match @libavformat.av_probe_input_format(pd) {
     (Some(id), score) => (id.name(), score)
     (None, score) => ("", score)
@@ -31,7 +27,11 @@ fn probe_of(
 ///|
 test "probe: real fixtures resolve to the ffprobe format name" {
   let cases : Array[(String, String, Bytes)] = [
-    ("mp4", "mov,mp4,m4a,3gp,3g2,mj2", probe_decode(@probe_vectors.probe_fixture_mp4)),
+    (
+      "mp4",
+      "mov,mp4,m4a,3gp,3g2,mj2",
+      probe_decode(@probe_vectors.probe_fixture_mp4),
+    ),
     ("mkv", "matroska,webm", probe_decode(@probe_vectors.probe_fixture_mkv)),
     ("webm", "matroska,webm", probe_decode(@probe_vectors.probe_fixture_webm)),
     ("ts", "mpegts", probe_decode(@probe_vectors.probe_fixture_ts)),
@@ -62,18 +62,46 @@ test "probe: real fixtures resolve to the ffprobe format name" {
 /// Scores that come straight from a `return <constant>` path in the C, so
 /// they are derivable without re-deriving frame counts.
 test "probe: constant-path scores" {
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_mp4)), (
-    "mov,mp4,m4a,3gp,3g2,mj2", 100,
-  ))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_mkv)), ("matroska,webm", 100))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_wav)), ("wav", 99))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_w64)), ("w64", 100))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_png)), ("png_pipe", 99))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_ogg)), ("ogg", 100))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_caf)), ("caf", 100))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_asf)), ("asf", 100))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_aiff)), ("aiff", 100))
-  assert_eq(probe_of(probe_decode(@probe_vectors.probe_fixture_au)), ("au", 100))
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_mp4)),
+    ("mov,mp4,m4a,3gp,3g2,mj2", 100),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_mkv)),
+    ("matroska,webm", 100),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_wav)),
+    ("wav", 99),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_w64)),
+    ("w64", 100),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_png)),
+    ("png_pipe", 99),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_ogg)),
+    ("ogg", 100),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_caf)),
+    ("caf", 100),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_asf)),
+    ("asf", 100),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_aiff)),
+    ("aiff", 100),
+  )
+  assert_eq(
+    probe_of(probe_decode(@probe_vectors.probe_fixture_au)),
+    ("au", 100),
+  )
 }
 
 ///|
@@ -93,20 +121,19 @@ test "probe: frame-count scores stay in their C band" {
 
 ///|
 test "probe: HLS needs the playlist extension or MIME type" {
-  let playlist =
-    b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10.0,\nseg0.ts\n#EXT-X-ENDLIST\n"
+  let playlist = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10.0,\nseg0.ts\n#EXT-X-ENDLIST\n"
   // Without a hint the C probe refuses the match (a bare #EXTM3U is not enough).
   assert_eq(probe_of(playlist), ("", 0))
   assert_eq(probe_of(playlist, filename="live.m3u8"), ("hls", 100))
-  assert_eq(probe_of(playlist, mime_type="application/vnd.apple.mpegurl"), (
-    "hls", 100,
-  ))
+  assert_eq(
+    probe_of(playlist, mime_type="application/vnd.apple.mpegurl"),
+    ("hls", 100),
+  )
 }
 
 ///|
 test "probe: DASH MPD profiles" {
-  let mpd =
-    b"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" profiles=\"urn:mpeg:dash:profile:isoff-live:2011\" type=\"static\"></MPD>\n"
+  let mpd = b"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" profiles=\"urn:mpeg:dash:profile:isoff-live:2011\" type=\"static\"></MPD>\n"
   assert_eq(probe_of(mpd), ("dash", 100))
 }
 
@@ -165,9 +192,10 @@ test "probe: extension alone scores 1 and is rejected by format2" {
   // score to 1 (FFMAX(score, 1)); av_probe_input_format2 rejects that as
   // below AVPROBE_SCORE_RETRY.
   let junk = b"\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10"
-  assert_eq(probe_of(junk, filename="movie.mp4"), (
-    "mov,mp4,m4a,3gp,3g2,mj2", 1,
-  ))
+  assert_eq(
+    probe_of(junk, filename="movie.mp4"),
+    ("mov,mp4,m4a,3gp,3g2,mj2", 1),
+  )
   let pd = @libavformat.ProbeData::new(junk, filename="movie.mp4")
   match @libavformat.av_probe_input_format2(pd) {
     (None, score) => assert_eq(score, 1)

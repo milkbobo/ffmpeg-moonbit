@@ -16,23 +16,22 @@ fn opus_enc_celt_rng(f : OpusEncCeltFrame) -> UInt32 {
 
 ///|
 /// PVQ table access: `CELT_PVQ_U(n, k)` and `CELT_PVQ_V(n, k)`.
-fn opus_enc_pvq_u(n : Int, k : Int) -> UInt32 {
+fn opus_enc_pvq_u(n : Int32, k : Int32) -> UInt32 {
   opus_pvq_get(n, k)
 }
 
 ///|
-fn opus_enc_pvq_v(n : Int, k : Int) -> UInt32 {
+fn opus_enc_pvq_v(n : Int32, k : Int32) -> UInt32 {
   opus_enc_pvq_u(n, k) + opus_enc_pvq_u(n, k + 1)
 }
-
 
 ///|
 /// `celt_exp_rotation_impl`.
 fn opus_enc_exp_rotation_impl(
   x : Array[Float],
-  off : Int,
-  len : Int,
-  stride : Int,
+  off : Int32,
+  len : Int32,
+  stride : Int32,
   c : Float,
   s : Float,
 ) -> Unit {
@@ -56,12 +55,14 @@ fn opus_enc_exp_rotation_impl(
   }
 }
 
-
-
-
 ///|
 /// `celt_icwrsi` + `celt_encode_pulses`.
-fn opus_enc_encode_pulses(rc : OpusRangeEncoder, y : Array[Int], n : Int, k : Int) -> Unit {
+fn opus_enc_encode_pulses(
+  rc : OpusRangeEncoder,
+  y : Array[Int32],
+  n : Int32,
+  k : Int32,
+) -> Unit {
   let mut idx : UInt32 = 0U
   let mut sum = 0
   for i in 0..<n {
@@ -79,13 +80,13 @@ fn opus_enc_encode_pulses(rc : OpusRangeEncoder, y : Array[Int], n : Int, k : In
 fn opus_enc_alg_quant(
   rc : OpusRangeEncoder,
   x : Array[Float],
-  x_off : Int,
-  n : Int,
-  k : Int,
-  spread : Int,
-  blocks : Int,
+  x_off : Int32,
+  n : Int32,
+  k : Int32,
+  spread : Int32,
+  blocks : Int32,
   gain : Float,
-  y : Array[Int],
+  y : Array[Int32],
 ) -> UInt32 {
   opus_enc_exp_rotation2(x, x_off, n, blocks, k, spread, true)
   let norm = opus_enc_pvq_search2(x, x_off, y, k, n)
@@ -99,14 +100,20 @@ fn opus_enc_alg_quant(
 ///|
 /// offset variants of the helpers above (the band operates on a slice of the
 /// coefficient arrays).
-fn opus_enc_pvq_search2(x : Array[Float], x_off : Int, y : Array[Int], k0 : Int, n : Int) -> Float {
+fn opus_enc_pvq_search2(
+  x : Array[Float],
+  x_off : Int32,
+  y : Array[Int32],
+  k0 : Int32,
+  n : Int32,
+) -> Float {
   let mut k = k0
   let mut res : Float = 0.0
   for i in 0..<n {
     res += x[x_off + i].abs()
   }
   let scale : Float = Float::from_int(k) / (res + 1.1920928955078125e-7)
-  let mut y_norm : Int = 0
+  let mut y_norm : Int32 = 0
   let mut xy_norm : Float = 0.0
   for i in 0..<n {
     y[i] = opus_enc_rintf(scale * x[x_off + i])
@@ -121,9 +128,11 @@ fn opus_enc_pvq_search2(x : Array[Float], x_off : Int, y : Array[Int], k0 : Int,
     let mut max_den : Float = 1.0
     y_norm += 1
     for i in 0..<n {
-      let ca = 1 ^ ((if y[i] == 0 { 1 } else { 0 }) & (if phase < 0 { 1 } else { 0 }))
+      let ca = 1 ^
+        ((if y[i] == 0 { 1 } else { 0 }) & (if phase < 0 { 1 } else { 0 }))
       let y_new = y_norm + 2 * phase * y[i].abs()
-      let mut xy_new : Float = xy_norm + Float::from_int(phase) * x[x_off + i].abs()
+      let mut xy_new : Float = xy_norm +
+        Float::from_int(phase) * x[x_off + i].abs()
       xy_new = xy_new * xy_new
       if ca != 0 && max_den * xy_new > Float::from_int(y_new) * max_num {
         max_den = Float::from_int(y_new)
@@ -150,11 +159,11 @@ fn opus_enc_pvq_search2(x : Array[Float], x_off : Int, y : Array[Int], k0 : Int,
 ///|
 fn opus_enc_exp_rotation2(
   x : Array[Float],
-  x_off : Int,
-  len0 : Int,
-  stride0 : Int,
-  k : Int,
-  spread : Int,
+  x_off : Int32,
+  len0 : Int32,
+  stride0 : Int32,
+  k : Int32,
+  spread : Int32,
   encode : Bool,
 ) -> Unit {
   if 2 * k >= len0 || spread == 0 {
@@ -195,10 +204,10 @@ fn opus_enc_exp_rotation2(
 
 ///|
 fn opus_enc_normalize_residual2(
-  iy : Array[Int],
+  iy : Array[Int32],
   x : Array[Float],
-  x_off : Int,
-  n : Int,
+  x_off : Int32,
+  n : Int32,
   g : Float,
 ) -> Unit {
   for i in 0..<n {
@@ -207,7 +216,11 @@ fn opus_enc_normalize_residual2(
 }
 
 ///|
-fn opus_enc_extract_collapse_mask2(iy : Array[Int], n : Int, b : Int) -> UInt32 {
+fn opus_enc_extract_collapse_mask2(
+  iy : Array[Int32],
+  n : Int32,
+  b : Int32,
+) -> UInt32 {
   if b <= 1 {
     return 1U
   }
@@ -227,12 +240,12 @@ fn opus_enc_extract_collapse_mask2(iy : Array[Int], n : Int, b : Int) -> UInt32 
 /// `celt_calc_theta`.
 fn opus_enc_calc_theta(
   x : Array[Float],
-  x_off : Int,
+  x_off : Int32,
   y : Array[Float],
-  y_off : Int,
+  y_off : Int32,
   coupling : Bool,
-  n : Int,
-) -> Int {
+  n : Int32,
+) -> Int32 {
   let mut e0 : Float = 0.0
   let mut e1 : Float = 0.0
   if coupling {
@@ -259,12 +272,12 @@ fn opus_enc_calc_theta(
 /// `celt_stereo_is_decouple` with offsets.
 fn opus_enc_stereo_is_decouple(
   x : Array[Float],
-  x_off : Int,
+  x_off : Int32,
   y : Array[Float],
-  y_off : Int,
+  y_off : Int32,
   e_l : Float,
   e_r : Float,
-  n : Int,
+  n : Int32,
 ) -> Unit {
   // `energy_n = 1/(sqrt(e_l^2 + e_r^2) + FLT_EPSILON)`: the epsilon is inside
   // the denominator (upstream), not added to the reciprocal.
@@ -281,15 +294,19 @@ fn opus_enc_stereo_is_decouple(
 /// `celt_stereo_ms_decouple` with offsets.
 fn opus_enc_stereo_ms_decouple(
   x : Array[Float],
-  x_off : Int,
+  x_off : Int32,
   y : Array[Float],
-  y_off : Int,
-  n : Int,
+  y_off : Int32,
+  n : Int32,
 ) -> Unit {
   for i in 0..<n {
     let xret = x[x_off + i]
-    x[x_off + i] = Float::from_double((x[x_off + i] + y[y_off + i]).to_double() * 0.70710678118654752440)
-    y[y_off + i] = Float::from_double((y[y_off + i] - xret).to_double() * 0.70710678118654752440)
+    x[x_off + i] = Float::from_double(
+      (x[x_off + i] + y[y_off + i]).to_double() * 0.70710678118654752440,
+    )
+    y[y_off + i] = Float::from_double(
+      (y[y_off + i] - xret).to_double() * 0.70710678118654752440,
+    )
   }
 }
 
@@ -297,11 +314,11 @@ fn opus_enc_stereo_ms_decouple(
 /// `celt_stereo_merge` with offsets.
 fn opus_enc_stereo_merge2(
   x : Array[Float],
-  x_off : Int,
+  x_off : Int32,
   y : Array[Float],
-  y_off : Int,
+  y_off : Int32,
   mid : Float,
-  n : Int,
+  n : Int32,
 ) -> Unit {
   let mut xp : Float = 0.0
   let mut side : Float = 0.0
@@ -335,21 +352,21 @@ fn opus_enc_stereo_merge2(
 fn opus_enc_quant_band(
   f : OpusEncCeltFrame,
   rc : OpusRangeEncoder,
-  band : Int,
+  band : Int32,
   x : Array[Float],
-  x_off : Int,
+  x_off : Int32,
   y : Array[Float]?,
-  y_off0 : Int,
-  n0 : Int,
-  bits0 : Int,
-  blocks0 : Int,
-  lowband0 : (Array[Float], Int)?,
-  duration0 : Int,
-  lowband_out0 : (Array[Float], Int)?,
-  level : Int,
+  y_off0 : Int32,
+  n0 : Int32,
+  bits0 : Int32,
+  blocks0 : Int32,
+  lowband0 : (Array[Float], Int32)?,
+  duration0 : Int32,
+  lowband_out0 : (Array[Float], Int32)?,
+  level : Int32,
   gain : Float,
   lowband_scratch : Array[Float],
-  fill0 : Int,
+  fill0 : Int32,
   hadamard_tmp : Array[Float],
 ) -> UInt32 {
   let stereo = y is Some(_)
@@ -406,7 +423,7 @@ fn opus_enc_quant_band(
     }
     let mut lowband_is_scratch = false
     match lowband {
-      Some((lb, lb_off)) => {
+      Some((lb, lb_off)) =>
         if recombine != 0 || ((n_b & 1) == 0 && tf_change < 0) || b0 > 1 {
           for i in 0..<n {
             lowband_scratch[i] = lb[lb_off + i]
@@ -414,19 +431,18 @@ fn opus_enc_quant_band(
           lowband = Some((lowband_scratch, 0))
           lowband_is_scratch = true
         }
-      }
       None => ()
     }
     let _ = lowband_is_scratch
     for k in 0..<recombine {
-      opus_celt_haar({ data: x, offset: x_off }, n >> k, 1 << k)
-      fill = opus_celt_bit_interleave[fill & 0xF]
-        | (opus_celt_bit_interleave[(fill >> 4) & 0xF] << 2)
+      opus_celt_haar({ data: x, offset: x_off, }, n >> k, 1 << k)
+      fill = opus_celt_bit_interleave[fill & 0xF] |
+        (opus_celt_bit_interleave[(fill >> 4) & 0xF] << 2)
     }
     blocks = blocks >> recombine
     n_b = n_b << recombine
     while (n_b & 1) == 0 && tf_change < 0 {
-      opus_celt_haar({ data: x, offset: x_off }, n_b, blocks)
+      opus_celt_haar({ data: x, offset: x_off, }, n_b, blocks)
       fill = fill | (fill << blocks)
       blocks = blocks << 1
       n_b = n_b >> 1
@@ -437,7 +453,7 @@ fn opus_enc_quant_band(
     if b0 > 1 {
       if lowband_is_scratch {
         opus_celt_hadamard(
-          { data: lowband_scratch, offset: 0 },
+          { data: lowband_scratch, offset: 0, },
           n_b >> recombine,
           b0 << recombine,
           longblocks,
@@ -445,7 +461,7 @@ fn opus_enc_quant_band(
         )
       }
       opus_celt_hadamard(
-        { data: x, offset: x_off },
+        { data: x, offset: x_off, },
         n_b >> recombine,
         b0 << recombine,
         longblocks,
@@ -454,10 +470,14 @@ fn opus_enc_quant_band(
     }
   }
   // Split decision
-  let cache_idx = opus_celt_cache_index[(duration + 1) * opus_enc_max_bands + band]
+  let cache_idx = opus_celt_cache_index[(duration + 1) * opus_enc_max_bands +
+    band]
   let cache0 = opus_celt_cache_bits[cache_idx]
   let mut split = stereo
-  if !stereo && duration >= 0 && bits > opus_celt_cache_bits[cache_idx + cache0] + 12 && n > 2 {
+  if !stereo &&
+    duration >= 0 &&
+    bits > opus_celt_cache_bits[cache_idx + cache0] + 12 &&
+    n > 2 {
     n = n >> 1
     y_arr = Some(x)
     y_off = x_off + n
@@ -490,7 +510,10 @@ fn opus_enc_quant_band(
       if stereo && n > 2 {
         rc.encode_uint_step(itheta.reinterpret_as_uint(), qn / 2)
       } else if stereo || b0 > 1 {
-        rc.encode_uint(itheta.reinterpret_as_uint(), (qn + 1).reinterpret_as_uint())
+        rc.encode_uint(
+          itheta.reinterpret_as_uint(),
+          (qn + 1).reinterpret_as_uint(),
+        )
       } else {
         rc.encode_uint_tri(itheta.reinterpret_as_uint(), qn)
       }
@@ -571,7 +594,8 @@ fn opus_enc_quant_band(
       }
       let mut sign = 0
       if sbits != 0 {
-        sign = if x2[x2_off] * y2[y2_off + 1] - x2[x2_off + 1] * y2[y2_off] < 0.0 {
+        sign = if x2[x2_off] * y2[y2_off + 1] - x2[x2_off + 1] * y2[y2_off] <
+          0.0 {
           1
         } else {
           0
@@ -613,8 +637,8 @@ fn opus_enc_quant_band(
       ya[y_off + 1] = t1 + ya[y_off + 1]
     } else {
       // "Normal" split code
-      let mut next_lowband2 : (Array[Float], Int)? = None
-      let mut next_lowband_out1 : (Array[Float], Int)? = None
+      let mut next_lowband2 : (Array[Float], Int32)? = None
+      let mut next_lowband_out1 : (Array[Float], Int32)? = None
       let mut next_level = 0
       if b0 > 1 && !stereo && (itheta & 0x3fff) != 0 {
         if itheta > 8192 {
@@ -712,8 +736,8 @@ fn opus_enc_quant_band(
         if rebalance > 3 << 3 && itheta != 16384 {
           mbits += rebalance - (3 << 3)
         }
-        cm = cm
-          | opus_enc_quant_band(
+        cm = cm |
+          opus_enc_quant_band(
             f,
             rc,
             band,
@@ -778,13 +802,17 @@ fn opus_enc_quant_band(
             // Folded spectrum
             for i in 0..<n {
               let r = opus_enc_celt_rng(f)
-              let d : Float = if (r & 0x8000U) != 0U { 1.0 / 256.0 } else { -1.0 / 256.0 }
+              let d : Float = if (r & 0x8000U) != 0U {
+                1.0 / 256.0
+              } else {
+                -1.0 / 256.0
+              }
               x[x_off + i] = lb[lb_off + i] + d
             }
             cm = fill.reinterpret_as_uint()
           }
         }
-        opus_celt_renormalize({ data: x, offset: x_off }, n, gain)
+        opus_celt_renormalize({ data: x, offset: x_off, }, n, gain)
       } else {
         for i in 0..<n {
           x[x_off + i] = 0.0
@@ -798,18 +826,17 @@ fn opus_enc_quant_band(
     }
     if inv {
       match y_arr {
-        Some(ya) => {
+        Some(ya) =>
           for i in 0..<n {
             ya[y_off + i] = -ya[y_off + i]
           }
-        }
         None => ()
       }
     }
   } else if level == 0 {
     if b0 > 1 {
       opus_celt_hadamard(
-        { data: x, offset: x_off },
+        { data: x, offset: x_off, },
         n_b >> recombine,
         b0 << recombine,
         longblocks,
@@ -822,11 +849,11 @@ fn opus_enc_quant_band(
       bl = bl >> 1
       nb = nb << 1
       cm = cm | (cm >> bl)
-      opus_celt_haar({ data: x, offset: x_off }, nb, bl)
+      opus_celt_haar({ data: x, offset: x_off, }, nb, bl)
     }
     for k in 0..<recombine {
       cm = opus_celt_bit_deinterleave[cm.reinterpret_as_int() & 0xFF].reinterpret_as_uint()
-      opus_celt_haar({ data: x, offset: x_off }, n_orig >> k, 1 << k)
+      opus_celt_haar({ data: x, offset: x_off, }, n_orig >> k, 1 << k)
     }
     bl = bl << recombine
     match lowband_out {

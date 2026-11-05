@@ -30,9 +30,9 @@ fn[T] opus_test_ok(r : Result[T, String]) -> T {
 /// Encode the whole fixture and return (frames, concatenated packets).
 fn opus_test_encode(
   planes : Array[Array[Float]],
-  channels : Int,
-  bit_rate : Int,
-) -> (Int, Bytes) {
+  channels : Int32,
+  bit_rate : Int32,
+) -> (Int32, Bytes) {
   let config = @libavcodec.opus_encode_config(channels, bit_rate)
   let enc = opus_test_ok(@libavcodec.opus_encoder_new(config))
   let per_frame = 960
@@ -66,7 +66,10 @@ fn opus_test_encode(
 
 ///|
 /// Decimal-string PCM fixture -> per-channel Float planes (ch0 then ch1).
-fn opus_test_planes(fixture : Array[Array[String]], channels : Int) -> Array[Array[Float]] raise {
+fn opus_test_planes(
+  fixture : Array[Array[String]],
+  channels : Int32,
+) -> Array[Array[Float]] raise {
   let samples = fixture[0].length()
   let planes : Array[Array[Float]] = []
   for ch in 0..<channels {
@@ -93,7 +96,7 @@ fn opus_test_hex_bytes(hex : String) -> Bytes {
 }
 
 ///|
-fn opus_test_hexval(c : UInt16) -> Int {
+fn opus_test_hexval(c : UInt16) -> Int32 {
   let zero = 48
   let nine = 57
   let la = 97
@@ -118,8 +121,8 @@ fn opus_test_vector(
   name : String,
   pcm : Array[Array[String]],
   expected_hex : String,
-  channels : Int,
-  bit_rate : Int,
+  channels : Int32,
+  bit_rate : Int32,
 ) -> Unit raise {
   let planes = opus_test_planes(pcm, channels)
   let want_raw = opus_test_hex_bytes(expected_hex)
@@ -142,22 +145,16 @@ fn opus_test_vector(
 ///|
 test "opus_encode_byte_exact_v1" {
   opus_test_vector(
-    "v1",
-    @opus_encode_vectors.opus_vec1_pcm,
-    @opus_encode_vectors.opus_vec1_pkt,
-    2,
-    96000,
+    "v1", @opus_encode_vectors.opus_vec1_pcm, @opus_encode_vectors.opus_vec1_pkt,
+    2, 96000,
   )
 }
 
 ///|
 test "opus_encode_byte_exact_v2" {
   opus_test_vector(
-    "v2",
-    @opus_encode_vectors.opus_vec2_pcm,
-    @opus_encode_vectors.opus_vec2_pkt,
-    1,
-    48000,
+    "v2", @opus_encode_vectors.opus_vec2_pcm, @opus_encode_vectors.opus_vec2_pkt,
+    1, 48000,
   )
 }
 
@@ -166,8 +163,8 @@ test "opus_encode_byte_exact_v2" {
 /// 19-byte OpusHead extradata needed by the local decoder.
 fn opus_test_encode_packets(
   planes : Array[Array[Float]],
-  channels : Int,
-  bit_rate : Int,
+  channels : Int32,
+  bit_rate : Int32,
 ) -> (Array[Bytes], Bytes) {
   let config = @libavcodec.opus_encode_config(channels, bit_rate)
   let enc = opus_test_ok(@libavcodec.opus_encoder_new(config))
@@ -201,8 +198,8 @@ fn opus_test_encode_packets(
 fn opus_test_delay_snr(
   want : Array[Float],
   got : Array[Float],
-  max_lag : Int,
-) -> (Int, Double) {
+  max_lag : Int32,
+) -> (Int32, Double) {
   let mut best_lag = 0
   let mut best_err = 1.0e30
   for lag in -max_lag..<max_lag {
@@ -210,8 +207,7 @@ fn opus_test_delay_snr(
     let mut n = 0
     let start = if lag < 0 { -lag } else { 0 }
     let gstart = if lag < 0 { 0 } else { lag }
-    while start + n < want.length() && gstart + n < got.length() &&
-      n < 60 * 960 {
+    while start + n < want.length() && gstart + n < got.length() && n < 60 * 960 {
       let d = got[gstart + n].to_double() - want[start + n].to_double()
       err += d * d
       n += 1
@@ -244,15 +240,17 @@ fn opus_test_delay_snr(
 fn opus_test_roundtrip(
   name : String,
   pcm : Array[Array[String]],
-  channels : Int,
-  bit_rate : Int,
+  channels : Int32,
+  bit_rate : Int32,
   min_snr : Double,
 ) -> Unit raise {
   let planes = opus_test_planes(pcm, channels)
-  let (packets, extradata) = opus_test_encode_packets(planes, channels, bit_rate)
+  let (packets, extradata) = opus_test_encode_packets(
+    planes, channels, bit_rate,
+  )
   let head = opus_test_ok(@libavcodec.opus_parse_head(extradata))
   let decoder = opus_test_ok(@libavcodec.OpusDecoder::new(head))
-  let acc : Array[Array[Float]] = [for _ in 0..<channels => []]
+  let acc : Array[Array[Float]] = [ for _ in 0..<channels => [] ]
   for pkt in packets {
     let (pcm_out, samples) = opus_test_ok(decoder.decode_packet(Some(pkt)))
     for ch in 0..<channels {
@@ -268,7 +266,9 @@ fn opus_test_roundtrip(
     }
   }
   let (lag, snr) = opus_test_delay_snr(planes[0], acc[0], 480)
-  println("\{name}: decoded \{acc[0].length()} samples, lag \{lag}, SNR \{snr} dB")
+  println(
+    "\{name}: decoded \{acc[0].length()} samples, lag \{lag}, SNR \{snr} dB",
+  )
   if snr < min_snr {
     fail("\{name}: round-trip SNR \{snr} dB below \{min_snr} dB")
   }
@@ -276,24 +276,12 @@ fn opus_test_roundtrip(
 
 ///|
 test "opus_encode_decode_roundtrip_v1" {
-  opus_test_roundtrip(
-    "v1",
-    @opus_encode_vectors.opus_vec1_pcm,
-    2,
-    96000,
-    14.0,
-  )
+  opus_test_roundtrip("v1", @opus_encode_vectors.opus_vec1_pcm, 2, 96000, 14.0)
 }
 
 ///|
 test "opus_encode_decode_roundtrip_v2" {
-  opus_test_roundtrip(
-    "v2",
-    @opus_encode_vectors.opus_vec2_pcm,
-    1,
-    48000,
-    11.5,
-  )
+  opus_test_roundtrip("v2", @opus_encode_vectors.opus_vec2_pcm, 1, 48000, 11.5)
 }
 
 ///|
@@ -311,8 +299,5 @@ test "opus_encode_config_validation" {
   }
   // extradata: OpusHead, 19 bytes
   inspect(enc.extradata().length(), content="19")
-  inspect(
-    enc.extradata()[0].to_int() & 0xFF,
-    content="79",
-  )
+  inspect(enc.extradata()[0].to_int() & 0xFF, content="79")
 }

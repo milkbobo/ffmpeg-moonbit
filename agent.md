@@ -293,6 +293,16 @@
   再生）；外部 ffmpeg 9.0.2 解分组流 138.5 dB。NMR 复测：分组改善 0.8 dB 但
   未翻过简化臂，`perceptual_short` 仍 opt-in。测试侧 fixtures 必须 `pub let` 且
   引用带 `@包名.` 前缀；Int→Int32 无转换方法，直接 Int32 算术。
+  ⑯ §305 PNS 八短窗形态：`mark_pns`/`search_for_pns` 按 `w += group_len[w]`
+  分组（mark 的门组内求和/取 min + 瞬态门；search 的噪声逐窗拉 LCG、逐窗按该窗
+  psy band 与该窗槽 `sf_idx/band_alt` 定价，决策写组起点）。关键是**元素 sticky
+  槽状态**：C 的 `sce` 把 `sf_idx/band_type/zeroes`（128 槽）跨帧保留，twoloop
+  只写组起点但速率循环缩放全部槽、zero-band 段写被置零的内窗槽，而
+  `search_for_pns` 恰恰读这些遗留内窗槽定价——`AacEncoder` 挂三条 sticky 数组、
+  每轮 `>12→0` 清理、`aac_twoloop_search_pns` 加 `sticky?` 参数原地写回。
+  向量 `aac_pns_vectors/fixtures_short.mbt` 连每帧末的 STICKY 128×3 都逐槽钉死；
+  短窗+PNS 流 ffmpeg 9.0.2 解码 0 errors、双解码器一致 140 dB；IS/M-S 的
+  多组化是续篇（§306）。
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的

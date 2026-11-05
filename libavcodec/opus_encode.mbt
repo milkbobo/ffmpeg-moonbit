@@ -11,43 +11,48 @@
 ///|
 /// Encoder configuration.
 pub struct OpusEncodeConfig {
-  channels : Int
-  bit_rate : Int
+  channels : Int32
+  bit_rate : Int32
 }
 
 ///|
-pub fn opus_encode_config(channels : Int, bit_rate : Int) -> OpusEncodeConfig {
-  { channels, bit_rate }
+pub fn opus_encode_config(
+  channels : Int32,
+  bit_rate : Int32,
+) -> OpusEncodeConfig {
+  { channels, bit_rate, }
 }
 
 ///|
 /// The native Opus encoder (`OpusEncContext`).
 pub struct OpusEncoder {
-  channels : Int
-  frame_size : Int
-  bit_rate : Int
-  sample_rate : Int
+  channels : Int32
+  frame_size : Int32
+  bit_rate : Int32
+  sample_rate : Int32
   frames : Array[OpusEncCeltFrame]
   rc : OpusRangeEncoder
   last_quantized_energy : Array[Array[Float]]
   psy : OpusEncPsy
   bufqueue : Array[OpusEncPcmFrame]
-  mut packet_frames : Int
-  mut packet_framesize : Int
-  eof : Int
-  initial_padding : Int
+  mut packet_frames : Int32
+  mut packet_framesize : Int32
+  eof : Int32
+  initial_padding : Int32
   /// `ff_af_queue` accounting: remaining starts at initial_padding (120)
   /// and each add appends the frame's samples; the FIRST add also appends
   /// the padding to the frame's duration (the drained packet count depends
   /// on this), and removals cap at what the frame queue holds.
-  mut afq_remaining : Int
-  mut afq_queued : Int
-  mut afq_first : Int
+  mut afq_remaining : Int32
+  mut afq_queued : Int32
+  mut afq_first : Int32
 }
 
 ///|
 /// `opus_encode_init`: validate and set up the encoder state.
-pub fn opus_encoder_new(config : OpusEncodeConfig) -> Result[OpusEncoder, String] {
+pub fn opus_encoder_new(
+  config : OpusEncodeConfig,
+) -> Result[OpusEncoder, String] {
   let channels = config.channels
   if channels != 1 && channels != 2 {
     return Err("Opus encoder supports 1 or 2 channels")
@@ -93,12 +98,15 @@ pub fn opus_encoder_new(config : OpusEncodeConfig) -> Result[OpusEncoder, String
 }
 
 ///|
-fn OpusEncoder::empty_frame(samples : Int, channels : Int) -> OpusEncPcmFrame {
+fn OpusEncoder::empty_frame(
+  samples : Int32,
+  channels : Int32,
+) -> OpusEncPcmFrame {
   let data : Array[Array[Float]] = []
   for _c in 0..<channels {
     data.push(Array::make(samples, 0.0))
   }
-  { nb_samples: samples, data }
+  { nb_samples: samples, data, }
 }
 
 ///|
@@ -128,7 +136,10 @@ pub fn OpusEncoder::extradata(self : OpusEncoder) -> Bytes {
 ///|
 /// `celt_frame_setup_input`: pop one frame for the overlap and stage the
 /// packet's samples per channel (frame_size 960: one entry).
-fn OpusEncoder::frame_setup_input(self : OpusEncoder, f : OpusEncCeltFrame) -> Unit {
+fn OpusEncoder::frame_setup_input(
+  self : OpusEncoder,
+  f : OpusEncCeltFrame,
+) -> Unit {
   let cur = self.bufqueue[0]
   let n = cur.nb_samples.min(opus_enc_overlap)
   for ch in 0..<f.channels {
@@ -168,9 +179,9 @@ fn OpusEncoder::frame_setup_input(self : OpusEncoder, f : OpusEncCeltFrame) -> U
 ///|
 /// `opus_gen_toc` for the CELT-only encoder. Returns (toc_byte,
 /// fsize_needed); the config table entry for CELT 20 ms fullband is 32.
-fn OpusEncoder::gen_toc(self : OpusEncoder) -> (Int, Bool) {
+fn OpusEncoder::gen_toc(self : OpusEncoder) -> (Int32, Bool) {
   // toc_cfg[framesize][CELT][FB]: 17,18,19,20 for 2.5/5/10/20 ms at FB
-  let celt_cfg : Array[Int] = [29, 30, 31, 32]
+  let celt_cfg : Array[Int32] = [29, 30, 31, 32]
   let cfg = if self.packet_framesize < celt_cfg.length() {
     celt_cfg[self.packet_framesize]
   } else {
@@ -199,7 +210,7 @@ fn OpusEncoder::gen_toc(self : OpusEncoder) -> (Int, Bool) {
 
 ///|
 /// `write_opuslacing`.
-fn opus_enc_write_lacing(dst : Array[Byte], off : Int, v : Int) -> Int {
+fn opus_enc_write_lacing(dst : Array[Byte], off : Int32, v : Int32) -> Int32 {
   let first = (v - ((v - 255 + 3) & 0xFFFFFFFC)).min(v)
   dst[off] = first.to_byte()
   dst[off + 1] = ((v - first) >> 2).to_byte()
@@ -212,7 +223,10 @@ fn opus_enc_write_lacing(dst : Array[Byte], off : Int, v : Int) -> Int {
 
 ///|
 /// `opus_packet_assembler`.
-fn OpusEncoder::packet_assembler(self : OpusEncoder, out : Array[Byte]) -> Int {
+fn OpusEncoder::packet_assembler(
+  self : OpusEncoder,
+  out : Array[Byte],
+) -> Int32 {
   let (toc, fsize_needed) = self.gen_toc()
   let mut offset = 0
   if toc == 0 {
@@ -236,7 +250,11 @@ fn OpusEncoder::packet_assembler(self : OpusEncoder, out : Array[Byte]) -> Int {
   }
   if fsize_needed2 {
     for i in 0..<(self.packet_frames - 1) {
-      offset += opus_enc_write_lacing(out, offset, self.frames[i].framebits >> 3)
+      offset += opus_enc_write_lacing(
+        out,
+        offset,
+        self.frames[i].framebits >> 3,
+      )
     }
   }
   for i in 0..<self.packet_frames {
@@ -255,7 +273,7 @@ fn OpusEncoder::packet_assembler(self : OpusEncoder, out : Array[Byte]) -> Int {
 pub fn OpusEncoder::encode(
   self : OpusEncoder,
   planes : Array[Array[Float]],
-) -> Result[Option[Bytes], String] {
+) -> Result[Bytes?, String] {
   if planes.length() < self.channels || planes[0].length() < self.frame_size {
     return Err("Opus encoder needs \{self.frame_size} samples per channel")
   }
@@ -267,7 +285,7 @@ pub fn OpusEncoder::encode(
     }
     data.push(plane)
   }
-  self.bufqueue.push({ nb_samples: self.frame_size, data })
+  self.bufqueue.push({ nb_samples: self.frame_size, data, })
   // ff_af_queue_add: first frame's duration absorbs the initial padding
   let pad = if self.afq_first != 0 { 120 } else { 0 }
   self.afq_first = 0
@@ -287,9 +305,7 @@ pub fn OpusEncoder::encode(
 
 ///|
 /// The body of C's `opus_encode_frame` after the psy decision succeeds.
-fn OpusEncoder::encode_decision(
-  self : OpusEncoder,
-) -> Result[Bytes, String] {
+fn OpusEncoder::encode_decision(self : OpusEncoder) -> Result[Bytes, String] {
   self.packet_frames = self.psy.p_frames
   self.packet_framesize = self.psy.p_framesize
   // pad with empty frames if the queue is short (flush path)
@@ -345,7 +361,7 @@ fn OpusEncoder::celt_encode_frame(
   self : OpusEncoder,
   rc : OpusRangeEncoder,
   f : OpusEncCeltFrame,
-  index : Int,
+  index : Int32,
 ) -> Unit {
   rc.init()
   self.psy_celt_frame_init(f, index)
@@ -397,7 +413,8 @@ fn OpusEncoder::celt_encode_frame(
   for ch in 0..<f.channels {
     let block = f.block[ch]
     for i in 0..<21 {
-      self.last_quantized_energy[ch][i] = block.energy[i] + block.error_energy[i]
+      self.last_quantized_energy[ch][i] = block.energy[i] +
+        block.error_energy[i]
     }
   }
 }

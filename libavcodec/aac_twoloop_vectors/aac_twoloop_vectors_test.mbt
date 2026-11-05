@@ -21,7 +21,14 @@ test "twoloop matches FFmpeg 9.0.2 for 5 frames x 49 bands" {
     let spec = @aac_psy_vectors.aac_psy_spec[f]
     let psy = ctx.analyze(0, spec, 0, 0, 0)
     let r = @libavcodec.aac_twoloop_search(
-      spec, sizes, psy.bands, psy.alloc, 128000, 44100, 2, 120.0,
+      spec,
+      sizes,
+      psy.bands,
+      psy.alloc,
+      128000,
+      44100,
+      2,
+      120.0,
       @libavcodec.aac_two_shape_long(),
     )
     // The reference oscillates between two scalefactor sets and always runs
@@ -65,7 +72,14 @@ test "twoloop zeroes a silent spectrum" {
   let spec : Array[Double] = Array::make(1024, 0.0)
   let psy = ctx.analyze(0, spec, 0, 0, 0)
   let r = @libavcodec.aac_twoloop_search(
-    spec, sizes, psy.bands, psy.alloc, 128000, 44100, 2, 120.0,
+    spec,
+    sizes,
+    psy.bands,
+    psy.alloc,
+    128000,
+    44100,
+    2,
+    120.0,
     @libavcodec.aac_two_shape_long(),
   )
   for g in 0..<49 {
@@ -98,7 +112,14 @@ test "twoloop keeps codebooks and scalefactor deltas legal" {
     let spec = @aac_psy_vectors.aac_psy_spec[f]
     let psy = ctx.analyze(0, spec, 0, 0, 0)
     let r = @libavcodec.aac_twoloop_search(
-      spec, sizes, psy.bands, psy.alloc, 128000, 44100, 2, 120.0,
+      spec,
+      sizes,
+      psy.bands,
+      psy.alloc,
+      128000,
+      44100,
+      2,
+      120.0,
       @libavcodec.aac_two_shape_long(),
     )
     let mut prev = -1

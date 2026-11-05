@@ -34,6 +34,7 @@ let aac_ms_flt_min : Double = 1.1754943508222875e-38
 /// `NOISE_BT` / `RESERVED_BT` (`aac.h:74-75`) as this module needs them.
 let aac_ms_noise_bt : Int32 = 13
 
+///|
 let aac_ms_reserved_bt : Int32 = 12
 
 ///|
@@ -44,7 +45,11 @@ let aac_ms_reserved_bt : Int32 = 12
 /// the result by one ulp of the constant, which is one ulp of `bmax` here and
 /// therefore one ulp of the side channel's lambda.
 let aac_ms_b_offset : Double = 0.0010000000474974513
+
+///|
 let aac_ms_b_numerator : Double = 0.0035000001080334187
+
+///|
 let aac_ms_b_divisor : Double = 0.0044999998062849045
 
 ///|
@@ -155,9 +160,9 @@ fn aac_ms_can_replace(
   band : Int32,
 ) -> Bool {
   new_sf >= prev_sf - 60 &&
-    new_sf <= prev_sf + 60 &&
-    sf[nextband[band]] >= new_sf - 60 &&
-    sf[nextband[band]] <= new_sf + 60
+  new_sf <= prev_sf + 60 &&
+  sf[nextband[band]] >= new_sf - 60 &&
+  sf[nextband[band]] <= new_sf + 60
 }
 
 ///|
@@ -169,6 +174,7 @@ priv struct AacMsCost {
   bits : Int32
 }
 
+///|
 fn aac_ms_band_cost(
   coef : Array[Double],
   scaled : Array[Double],
@@ -179,14 +185,18 @@ fn aac_ms_band_cost(
   lambda : Double,
 ) -> AacMsCost {
   let out = aac_two_band_cost(coef, 0, scaled, 0, qc, size, sf, cb, lambda)
-  { cost: out.cost, bits: out.bits }
+  { cost: out.cost, bits: out.bits, }
 }
 
 ///|
 /// `FFMAX(1, x)`: `search_for_ms` never lets a codebook be zero, since a zero
 /// band type would tell the decoder to skip the band's spectral data.
 fn aac_ms_max1(x : Int32) -> Int32 {
-  if x < 1 { 1 } else { x }
+  if x < 1 {
+    1
+  } else {
+    x
+  }
 }
 
 ///|
@@ -204,8 +214,18 @@ pub fn aac_ms_search(d : AacMsIn, lambda : Double) -> AacMsOut {
   let mid_cost_out : Array[Double] = Array::make(n, 0.0)
   let bits1_out : Array[Int32] = Array::make(n, 0)
   let bmax_out : Array[Double] = Array::make(n, 0.0)
-  let nextband0 = aac_two_init_nextband_map(d.zeroes0, d.cb0, n, aac_two_shape_long())
-  let nextband1 = aac_two_init_nextband_map(d.zeroes1, d.cb1, n, aac_two_shape_long())
+  let nextband0 = aac_two_init_nextband_map(
+    d.zeroes0,
+    d.cb0,
+    n,
+    aac_two_shape_long(),
+  )
+  let nextband1 = aac_two_init_nextband_map(
+    d.zeroes1,
+    d.cb1,
+    n,
+    aac_two_shape_long(),
+  )
   // `mslambda` is the side channel's own discount, capped at 1.
   let boost_lambda = aac_two_div(lambda, 120.0)
   let msl = if boost_lambda < 1.0 { boost_lambda } else { 1.0 }
@@ -214,10 +234,7 @@ pub fn aac_ms_search(d : AacMsIn, lambda : Double) -> AacMsOut {
   let mut start = 0
   for g = 0; g < n; g = g + 1 {
     let size = d.band_sizes[g]
-    let gdouble = aac_two_div(
-      aac_two_mul(g.to_double(), 17.0),
-      n.to_double(),
-    )
+    let gdouble = aac_two_div(aac_two_mul(g.to_double(), 17.0), n.to_double())
     let bmax = aac_two_div(aac_ms_bval2bmax(gdouble), aac_ms_b_divisor)
     // `search_for_ms` claims the whole mask for its own use everywhere except
     // where intensity stereo already put something: an out-of-phase band's flip
@@ -251,11 +268,9 @@ pub fn aac_ms_search(d : AacMsIn, lambda : Double) -> AacMsOut {
         let mididx = aac_two_clip(minidx, 0, aac_ms_scale_top)
         let sididx = aac_two_clip(minidx - b * 3, 0, aac_ms_scale_top)
         if cb0[g] != aac_ms_noise_bt &&
-            cb1[g] != aac_ms_noise_bt &&
-            !(
-              aac_ms_can_replace(sf0, nextband0, prev_mid, mididx, g) &&
-                aac_ms_can_replace(sf1, nextband1, prev_side, sididx, g)
-            ) {
+          cb1[g] != aac_ms_noise_bt &&
+          !(aac_ms_can_replace(sf0, nextband0, prev_mid, mididx, g) &&
+          aac_ms_can_replace(sf1, nextband1, prev_side, sididx, g)) {
           // Upstream: "scalefactor range violation, bad stuff, will decrease
           // quality unacceptably".
           continue
@@ -268,21 +283,37 @@ pub fn aac_ms_search(d : AacMsIn, lambda : Double) -> AacMsOut {
         let minthr = if thr0 < thr1 { thr0 } else { thr1 }
         let minthr_eps = aac_two_add(minthr, aac_ms_flt_min)
         let cl = aac_ms_band_cost(
-          l, l34, qc, size, sf0[g], cb0[g], aac_two_div(lambda, thr0),
+          l,
+          l34,
+          qc,
+          size,
+          sf0[g],
+          cb0[g],
+          aac_two_div(lambda, thr0),
         )
         let cr = aac_ms_band_cost(
-          r, r34, qc, size, sf1[g], cb1[g], aac_two_div(lambda, thr1),
+          r,
+          r34,
+          qc,
+          size,
+          sf1[g],
+          cb1[g],
+          aac_two_div(lambda, thr1),
         )
         let cm = aac_ms_band_cost(
-          m, m34, qc, size, mididx, midcb, aac_two_div(lambda, minthr_eps),
+          m,
+          m34,
+          qc,
+          size,
+          mididx,
+          midcb,
+          aac_two_div(lambda, minthr_eps),
         )
         let side_lambda = aac_two_div(
           msl,
           aac_two_add(aac_two_mul(minthr, bmax), aac_ms_flt_min),
         )
-        let cs = aac_ms_band_cost(
-          s, s34, qc, size, sididx, sidcb, side_lambda,
-        )
+        let cs = aac_ms_band_cost(s, s34, qc, size, sididx, sidcb, side_lambda)
         // `dist1`/`dist2` are built up over the window group first and then
         // have the group's bit counts subtracted, so the comparison is a pure
         // distortion one while `B0`/`B1` still carry the bits.

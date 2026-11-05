@@ -6,9 +6,9 @@
 /// `celt_gauge_psy_weight`.
 fn OpusEncPsy::gauge_weight(
   _self : OpusEncPsy,
-  start : Int,
-  steps_per_frame : Int,
-  channels : Int,
+  start : Int32,
+  steps_per_frame : Int32,
+  channels : Int32,
   f : OpusEncCeltFrame,
 ) -> Unit {
   let band_score : Array[Float] = Array::make(21, 0.0)
@@ -21,7 +21,9 @@ fn OpusEncPsy::gauge_weight(
       let st = _self.steps[start + j]
       weight += st.stereo[i]
       for ch in 0..<channels {
-        weight += st.change_amp[ch * 21 + i] + st.tone[ch * 21 + i] + st.energy[ch * 21 + i]
+        weight += st.change_amp[ch * 21 + i] +
+          st.tone[ch * 21 + i] +
+          st.energy[ch * 21 + i]
         tonal_contrib += st.tone[ch * 21 + i]
       }
     }
@@ -60,7 +62,7 @@ fn OpusEncPsy::gauge_weight(
 fn opus_enc_pvq_band_cost(
   f : OpusEncCeltFrame,
   rc : OpusRangeEncoder,
-  band : Int,
+  band : Int32,
   bits : Array[Float],
   lambda : Float,
   lowband_scratch : Array[Float],
@@ -86,7 +88,11 @@ fn opus_enc_pvq_band_cost(
   let mut b = 0
   if band <= f.coded_bands - 1 {
     let curr_balance = f.remaining / (f.coded_bands - band).min(3)
-    b = opus_enc_clip_i((f.remaining2 + 1).min(f.pulses[band] + curr_balance), 0, (1 << 14) - 1)
+    b = opus_enc_clip_i(
+      (f.remaining2 + 1).min(f.pulses[band] + curr_balance),
+      0,
+      (1 << 14) - 1,
+    )
   }
   let combined = cm0 | cm0
   if f.dual_stereo {
@@ -184,19 +190,25 @@ fn opus_enc_bands_dist(
   run_bitalloc(f, dump)
   // C: `int tdist = 0.0f; tdist += dist;` — each band's cost is truncated
   // toward zero before accumulation, and the total is returned as float.
-  let mut tdist : Int = 0
+  let mut tdist : Int32 = 0
   let lowband_scratch : Array[Float] = Array::make(8 * 22, 0.0)
   let hadamard_tmp : Array[Float] = Array::make(176, 0.0)
   for i in 0..<21 {
     let bits : Array[Float] = [0.0]
-    tdist += opus_enc_pvq_band_cost(f, dump, i, bits, lambda, lowband_scratch, hadamard_tmp).to_int()
+    tdist += opus_enc_pvq_band_cost(
+      f, dump, i, bits, lambda, lowband_scratch, hadamard_tmp,
+    ).to_int()
   }
   Float::from_int(tdist)
 }
 
 ///|
 /// `ff_opus_psy_celt_frame_init`.
-fn OpusEncoder::psy_celt_frame_init(self : OpusEncoder, f : OpusEncCeltFrame, index : Int) -> Unit {
+fn OpusEncoder::psy_celt_frame_init(
+  self : OpusEncoder,
+  f : OpusEncCeltFrame,
+  index : Int32,
+) -> Unit {
   let steps_per_frame = 960 / self.frame_size
   let step_offset = steps_per_frame * index
   let mut silence = 1
@@ -227,7 +239,9 @@ fn OpusEncoder::psy_celt_frame_init(self : OpusEncoder, f : OpusEncCeltFrame, in
       break
     }
   }
-  let upper = steps_per_frame.min(self.psy.inflection_points_count - start_offset)
+  let upper = steps_per_frame.min(
+    self.psy.inflection_points_count - start_offset,
+  )
   for i in start_offset..<upper {
     if self.psy.inflection_points[i] < step_offset + steps_per_frame {
       neighbouring_points += 1
@@ -257,7 +271,11 @@ fn OpusEncoder::psy_celt_frame_init(self : OpusEncoder, f : OpusEncCeltFrame, in
 
 ///|
 /// `celt_enc_quant_pfilter` (enc.c).
-fn OpusEncoder::quant_pfilter(_self : OpusEncoder, rc : OpusRangeEncoder, f : OpusEncCeltFrame) -> Unit {
+fn OpusEncoder::quant_pfilter(
+  _self : OpusEncoder,
+  rc : OpusRangeEncoder,
+  f : OpusEncCeltFrame,
+) -> Unit {
   let gain0 = f.pf_gain
   let octave0 = f.pf_octave
   let period0 = f.pf_period
@@ -272,7 +290,11 @@ fn OpusEncoder::quant_pfilter(_self : OpusEncoder, rc : OpusRangeEncoder, f : Op
   let octave = txval_oct
   // Period
   rc.put_raw(period0.reinterpret_as_uint(), 4 + octave)
-  let txval_period = opus_enc_clip_i(period0 - (16 << octave) + 1, 0, (1 << (4 + octave)) - 1)
+  let txval_period = opus_enc_clip_i(
+    period0 - (16 << octave) + 1,
+    0,
+    (1 << (4 + octave)) - 1,
+  )
   let period = txval_period + (16 << octave) - 1
   // Gain
   let txval_gain = (opus_enc_rintf(gain0 / 0.09375) - 1).min(7)
@@ -297,7 +319,11 @@ fn OpusEncoder::quant_pfilter(_self : OpusEncoder, rc : OpusRangeEncoder, f : Op
 
 ///|
 /// `ff_opus_psy_celt_frame_process`.
-fn OpusEncoder::psy_celt_frame_process(self : OpusEncoder, f : OpusEncCeltFrame, index : Int) -> Bool {
+fn OpusEncoder::psy_celt_frame_process(
+  self : OpusEncoder,
+  f : OpusEncCeltFrame,
+  index : Int32,
+) -> Bool {
   let start_transient_flag = f.transient
   let steps_per_frame = 960 / self.frame_size
   let start = index * steps_per_frame
@@ -321,7 +347,10 @@ fn OpusEncoder::psy_celt_frame_process(self : OpusEncoder, f : OpusEncCeltFrame,
       i -= 1
     }
     f.intensity_stereo = best_band
-    self.psy.avg_is_band = (self.psy.avg_is_band + Float::from_int(f.intensity_stereo)) / 2.0
+    self.psy.avg_is_band = (
+        self.psy.avg_is_band + Float::from_int(f.intensity_stereo)
+      ) /
+      2.0
     // dual stereo search
     f.dual_stereo = false
     let td1 = self.psy_search_dist(f)
@@ -330,11 +359,11 @@ fn OpusEncoder::psy_celt_frame_process(self : OpusEncoder, f : OpusEncCeltFrame,
     f.dual_stereo = td2 < td1
   }
   // tf search
-  let config : Array[Array[Int]] = [Array::make(21, 0), Array::make(21, 0)]
+  let config : Array[Array[Int32]] = [Array::make(21, 0), Array::make(21, 0)]
   let score : Array[Float] = [0.0, 0.0]
   for cway in 0..<2 {
     let base = if f.transient != 0 { 120 } else { 960 }
-    let mag : Array[Int] = [0, 0]
+    let mag : Array[Int32] = [0, 0]
     for i in 0..<2 {
       let c = opus_celt_tf_select[f.size * 8 + f.transient * 4 + cway * 2 + i]
       mag[i] = if c < 0 { base >> c.abs() } else { base << c.abs() }
@@ -350,7 +379,11 @@ fn OpusEncoder::psy_celt_frame_process(self : OpusEncoder, f : OpusEncCeltFrame,
           iscore1 += t / Float::from_int(mag[1])
         }
       }
-      config[cway][i] = if (iscore0 - 1.0).abs() < (iscore1 - 1.0).abs() { 1 } else { 0 }
+      config[cway][i] = if (iscore0 - 1.0).abs() < (iscore1 - 1.0).abs() {
+        1
+      } else {
+        0
+      }
       score[cway] += if config[cway][i] != 0 { iscore1 } else { iscore0 }
     }
   }
@@ -367,7 +400,10 @@ fn OpusEncoder::psy_celt_frame_process(self : OpusEncoder, f : OpusEncCeltFrame,
 
 ///|
 /// `bands_dist` through the encoder.
-fn OpusEncoder::psy_search_dist(_self : OpusEncoder, f : OpusEncCeltFrame) -> Float {
+fn OpusEncoder::psy_search_dist(
+  _self : OpusEncoder,
+  f : OpusEncCeltFrame,
+) -> Float {
   let saved_framebits = f.framebits
   let lambda = _self.psy.lambda
   let dist = opus_enc_bands_dist(f, lambda, (ff, rcc) => {
@@ -391,7 +427,11 @@ fn OpusEncoder::psy_postencode_update(self : OpusEncoder) -> Unit {
   }
   for i in 0..<self.psy.steps.length() {
     let i_new = i - steps_out
-    self.psy.steps[if i_new < 0 { self.psy.steps.length() + i_new } else { i_new }] = tmp[i]
+    self.psy.steps[if i_new < 0 {
+      self.psy.steps.length() + i_new
+    } else {
+      i_new
+    }] = tmp[i]
   }
   let ideal_fbits = Float::from_int(self.bit_rate / (48000 / 960))
   for i in 0..<self.packet_frames {
@@ -401,7 +441,8 @@ fn OpusEncoder::psy_postencode_update(self : OpusEncoder) -> Unit {
       self.psy.lambda = scaled / Float::from_int(self.frames[i].framebits)
     }
   }
-  self.psy.avg_is_band = self.psy.avg_is_band / Float::from_int(self.packet_frames + 1)
+  self.psy.avg_is_band = self.psy.avg_is_band /
+    Float::from_int(self.packet_frames + 1)
   self.psy.buffered_steps -= steps_out
   self.psy.inflection_points_count = 0
 }

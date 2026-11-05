@@ -27,7 +27,6 @@
 /// flags and `cpe->is_mode` - is asserted exactly, and so are the magnitudes:
 /// one test per tool, both pinning the comparison itself rather than only its
 /// outcome.
-
 test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands)" {
   let swb = match @libavcodec.aac_swb_tables(4) {
     Ok(v) => v
@@ -199,14 +198,25 @@ test "AAC mid/side search matches FFmpeg 9.0.2 aaccoder.c (4 frames x 49 bands)"
     let left = @aac_is_vectors.aac_is_spec0[f].copy()
     let right = @aac_is_vectors.aac_is_spec1[f].copy()
     @libavcodec.aac_is_apply(
-      left, right, offsets, n, 1, isr.band_type1, flip, isr.is_ener0,
+      left,
+      right,
+      offsets,
+      n,
+      1,
+      isr.band_type1,
+      flip,
+      isr.is_ener0,
     )
     // On an intensity band the right channel's type has already become 14/15.
     let cb1 : Array[Int32] = []
     for g in 0..<n {
-      cb1.push(if isr.is_mask[g] == 1 { isr.band_type1[g] } else {
-        @aac_is_vectors.aac_is_cb1[f][g]
-      })
+      cb1.push(
+        if isr.is_mask[g] == 1 {
+          isr.band_type1[g]
+        } else {
+          @aac_is_vectors.aac_is_cb1[f][g]
+        },
+      )
     }
     let ms = @libavcodec.aac_ms_search(
       @libavcodec.aac_ms_in(

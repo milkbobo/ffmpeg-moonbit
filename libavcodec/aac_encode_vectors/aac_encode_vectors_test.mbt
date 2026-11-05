@@ -928,10 +928,9 @@ test "aac_lc_noise_to_mask" {
   let bit_rate = 128000
   // ff_swb_offset_1024[4]: the 49 long bands of 44.1 kHz.
   let offsets : Array[Int32] = [
-    0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 108,
-    120, 132, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336,
-    352, 368, 384, 400, 416, 432, 448, 464, 480, 496, 512, 528, 544, 560, 576,
-    592, 608,
+    0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 108, 120,
+    132, 144, 160, 176, 192, 208, 224, 240, 256, 272, 288, 304, 320, 336, 352, 368,
+    384, 400, 416, 432, 448, 464, 480, 496, 512, 528, 544, 560, 576, 592, 608,
   ]
   let num_swb = 49
   let input = aac_encode_test_tone(rate, channels, frames)
@@ -953,15 +952,7 @@ test "aac_lc_noise_to_mask" {
     enc, input, dec_plain, channels, frames, offsets, num_swb, rate, bit_rate,
   )
   let (nmr_perceptual, snr_perceptual) = aac_encode_test_nmr(
-    enc,
-    input,
-    dec_perceptual,
-    channels,
-    frames,
-    offsets,
-    num_swb,
-    rate,
-    bit_rate,
+    enc, input, dec_perceptual, channels, frames, offsets, num_swb, rate, bit_rate,
   )
   println(
     "noise-to-mask: simplified mean=\{nmr_plain} dB (spectral snr \{snr_plain}); perceptual mean=\{nmr_perceptual} dB (spectral snr \{snr_perceptual})",
@@ -1021,9 +1012,7 @@ test "aac_lc_pns_round_trip" {
   let frames = 8
   let bit_rate = 128000
   let input = aac_encode_test_noise(channels, frames)
-  let base = @libavcodec.aac_encode_config_perceptual(
-    rate, channels, bit_rate,
-  )
+  let base = @libavcodec.aac_encode_config_perceptual(rate, channels, bit_rate)
   let plain = aac_encode_test_stream_config(input, channels, frames, base)
   let pns = aac_encode_test_stream_config(
     input,
@@ -1053,10 +1042,12 @@ test "aac_lc_pns_round_trip" {
     }
   }
   let snr = 10.0 * @math.log10(energy / noise)
-  let (pns_left, pns_right, pns_is, _, _, _) =
-    aac_encode_test_tool_bands(pns, frames)
-  let (plain_left, plain_right, _, _, _, _) =
-    aac_encode_test_tool_bands(plain, frames)
+  let (pns_left, pns_right, pns_is, _, _, _) = aac_encode_test_tool_bands(
+    pns, frames,
+  )
+  let (plain_left, plain_right, _, _, _, _) = aac_encode_test_tool_bands(
+    plain, frames,
+  )
   let mut per_frame = ""
   for f = 0; f < plain.length(); f = f + 1 {
     per_frame = per_frame + " \{plain[f].length()}/\{pns[f].length()}"
@@ -1321,8 +1312,11 @@ fn aac_encode_test_tool_bands(
     // See the note above: the energy mask of a short-window frame is not
     // `search_for_ms` and has no scalefactor signature.
     let long_window = info.window_sequence == 0
-    if long_window && (aac_encode_test_tns_present(m0.tns) ||
-      aac_encode_test_tns_present(m1.tns)) {
+    if long_window &&
+      (
+        aac_encode_test_tns_present(m0.tns) ||
+        aac_encode_test_tns_present(m1.tns)
+      ) {
       tns_frames = tns_frames + 1
     }
     for b = 0; b < info.max_sfb; b = b + 1 {
@@ -1379,11 +1373,11 @@ test "aac_lc_pns_with_intensity_stereo" {
   let both = aac_encode_test_stream_config(input, channels, frames, both_cfg)
   assert_true(both_cfg.pns)
   assert_true(both_cfg.is_stereo)
-  let (left_noise, right_noise, right_is, ms_both, _, _) =
-    aac_encode_test_tool_bands(both, frames)
+  let (left_noise, right_noise, right_is, ms_both, _, _) = aac_encode_test_tool_bands(
+    both, frames,
+  )
   let (pns_left, pns_right, pns_is, ms_pns, _, _) = aac_encode_test_tool_bands(
-    pns_only,
-    frames,
+    pns_only, frames,
   )
   let mut pns_bytes = 0
   let mut both_bytes = 0
@@ -1447,12 +1441,10 @@ test "aac_lc_mid_side_search_rewrites_scalefactor_pairs" {
     @libavcodec.aac_encode_config_with_is(base),
   )
   let (_, _, _, ms_plain, ms_plain_bad, _) = aac_encode_test_tool_bands(
-    plain,
-    frames,
+    plain, frames,
   )
   let (_, _, right_is, ms_iso, ms_iso_bad, _) = aac_encode_test_tool_bands(
-    iso,
-    frames,
+    iso, frames,
   )
   println(
     "mid/side search: bands \{ms_plain} (mid/side only) / \{ms_iso} (with intensity, \{right_is} intensity bands), scalefactor pairs off the 0/3/6 rule: \{ms_plain_bad}/\{ms_iso_bad}",
@@ -1482,9 +1474,7 @@ test "aac_lc_perceptual_path_emits_tns" {
   let bit_rate = 128000
   let input = aac_encode_test_shared_high(rate, frames, true)
   let config = @libavcodec.aac_encode_config_perceptual(
-    rate,
-    channels,
-    bit_rate,
+    rate, channels, bit_rate,
   )
   let stream = aac_encode_test_stream_config(input, channels, frames, config)
   let (_, _, _, _, _, tns_frames) = aac_encode_test_tool_bands(stream, frames)
@@ -1565,9 +1555,7 @@ test "aac_lc_perceptual_max_sfb_and_tns_carryover" {
   for bit_rate in [24000, 64000, 128000] {
     let input = aac_encode_test_shared_high(rate, frames, true)
     let config = @libavcodec.aac_encode_config_perceptual(
-      rate,
-      channels,
-      bit_rate,
+      rate, channels, bit_rate,
     )
     let stream = aac_encode_test_stream_config(input, channels, frames, config)
     let mut max_sfb_last = 0
@@ -1578,8 +1566,7 @@ test "aac_lc_perceptual_max_sfb_and_tns_carryover" {
     let mut ms2 = 0
     for f = 0; f < frames; f = f + 1 {
       let (max_sfb, highest, ms_mode, tns) = aac_encode_test_frame_syntax(
-        stream,
-        f,
+        stream, f,
       )
       // `max_sfb` is trimmed by `zeroes[]`, not by "which band transmits a
       // codebook", so a band can sit inside it and still carry nothing - but
@@ -1642,9 +1629,7 @@ test "aac_lc_intensity_stereo_round_trip" {
     @libavcodec.aac_encode_config_with_is(base),
   )
   let (is_bands, below_gate, on_left) = aac_encode_test_is_bands(
-    iso,
-    frames,
-    rate,
+    iso, frames, rate,
   )
   let mut plain_bytes = 0
   let mut iso_bytes = 0
@@ -1654,7 +1639,13 @@ test "aac_lc_intensity_stereo_round_trip" {
   }
   let decoded = aac_encode_test_decode(iso, channels)
   let plain_decoded = aac_encode_test_decode(plain, channels)
-  let want = aac_encode_test_bin_energy(input[1], 0, frames * 1024, 9000.0, rate)
+  let want = aac_encode_test_bin_energy(
+    input[1],
+    0,
+    frames * 1024,
+    9000.0,
+    rate,
+  )
   let got = aac_encode_test_bin_energy(
     decoded[1],
     1024,
@@ -1663,7 +1654,9 @@ test "aac_lc_intensity_stereo_round_trip" {
     rate,
   )
   let level = 10.0 * @math.log10(got / want)
-  let plain_snr = aac_encode_test_pcm_snr(input, plain_decoded, channels, frames)
+  let plain_snr = aac_encode_test_pcm_snr(
+    input, plain_decoded, channels, frames,
+  )
   let snr = aac_encode_test_pcm_snr(input, decoded, channels, frames)
   let mut peak = 0.0
   for ch = 0; ch < channels; ch = ch + 1 {
@@ -1714,9 +1707,7 @@ test "aac_lc_intensity_stereo_decorrelated_stays_transparent" {
     @libavcodec.aac_encode_config_with_is(base),
   )
   let (is_bands, below_gate, on_left) = aac_encode_test_is_bands(
-    iso,
-    frames,
-    rate,
+    iso, frames, rate,
   )
   let mut plain_bytes = 0
   let mut iso_bytes = 0
@@ -1735,31 +1726,21 @@ test "aac_lc_intensity_stereo_decorrelated_stays_transparent" {
   // Left owns 9 kHz, right owns 11.7 kHz: each channel's own tone has to come
   // back, in the channel that carries it and not in the other one.
   let r_own = aac_encode_test_bin_energy(
-    decoded[1],
-    1024,
-    frames * 1024,
-    11700.0,
-    rate,
-  ) / aac_encode_test_bin_energy(
-    input[1],
-    0,
-    frames * 1024,
-    11700.0,
-    rate,
-  )
+      decoded[1],
+      1024,
+      frames * 1024,
+      11700.0,
+      rate,
+    ) /
+    aac_encode_test_bin_energy(input[1], 0, frames * 1024, 11700.0, rate)
   let r_other = aac_encode_test_bin_energy(
-    decoded[1],
-    1024,
-    frames * 1024,
-    9000.0,
-    rate,
-  ) / aac_encode_test_bin_energy(
-    input[0],
-    0,
-    frames * 1024,
-    9000.0,
-    rate,
-  )
+      decoded[1],
+      1024,
+      frames * 1024,
+      9000.0,
+      rate,
+    ) /
+    aac_encode_test_bin_energy(input[0], 0, frames * 1024, 9000.0, rate)
   let r_own_db = 10.0 * @math.log10(r_own)
   let r_other_db = 10.0 * @math.log10(r_other)
   println(

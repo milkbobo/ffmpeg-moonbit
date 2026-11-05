@@ -28,38 +28,104 @@
 ///|
 /// `PSY_3GPP_*` constants, `aacpsy.c:45-93`.
 let psy_thr_spread_hi : Double = 1.5
+
+///|
 let psy_thr_spread_low : Double = 3.0
+
+///|
 let psy_en_spread_hi_l1 : Double = 2.0
+
+///|
 let psy_en_spread_hi_s : Double = 1.5
+
+///|
 let psy_en_spread_low_l : Double = 3.0
+
+///|
 let psy_en_spread_low_s : Double = 2.0
+
+///|
 let psy_rpemin : Double = 0.01
+
+///|
 let psy_rpelev : Double = 2.0
+
+///|
 let psy_c1 : Double = 3.0
+
+///|
 let psy_c2 : Double = 1.3219281
+
+///|
 let psy_c3 : Double = 0.55935729
+
+///|
 let psy_snr_1db : Double = 7.9432821e-1
+
+///|
 let psy_snr_25db : Double = 3.1622776e-3
+
+///|
 let psy_save_slope_l : Double = -0.46666667
+
+///|
 let psy_save_add_l : Double = -0.84285712
+
+///|
 let psy_spend_slope_l : Double = 0.66666669
+
+///|
 let psy_spend_add_l : Double = -0.35
+
+///|
 let psy_clip_lo_l : Double = 0.2
+
+///|
 let psy_clip_hi_l : Double = 0.95
+
+///|
 let psy_save_slope_s : Double = -0.36363637
+
+///|
 let psy_save_add_s : Double = -0.75
+
+///|
 let psy_spend_slope_s : Double = 0.81818181
+
+///|
 let psy_spend_add_s : Double = -0.26111111
+
+///|
 let psy_clip_lo_s : Double = 0.2
+
+///|
 let psy_clip_hi_s : Double = 0.75
+
+///|
 let psy_ah_thr_long : Double = 0.5
+
+///|
 let psy_ah_thr_short : Double = 0.6299999952316284
+
+///|
 let psy_pe_forget_slope : Double = 511.0
+
+///|
 let psy_ath_add : Double = 4.0
+
+///|
 let psy_rpe_thr_coeff : Double = 0.001258925
+
+///|
 let psy_bits_to_pe : Double = 1.18
+
+///|
 let psy_ah_none : Int32 = 0
+
+///|
 let psy_ah_inactive : Int32 = 1
+
+///|
 let psy_ah_active : Int32 = 2
 
 ///|
@@ -98,20 +164,27 @@ fn aac_psy_clipf(x : Double, lo : Double, hi : Double) -> Double {
 
 ///|
 fn aac_psy_maxf(a : Double, b : Double) -> Double {
-  if a > b { a } else { b }
+  if a > b {
+    a
+  } else {
+    b
+  }
 }
 
 ///|
 fn aac_psy_minf(a : Double, b : Double) -> Double {
-  if a < b { a } else { b }
+  if a < b {
+    a
+  } else {
+    b
+  }
 }
 
 ///|
 /// `calc_bark`, `aacpsy.c:280`.
 fn aac_psy_calc_bark(f : Double) -> Double {
   aac_psy_f32(
-    13.3 * @math.atan(0.00076 * f) +
-    3.5 * @math.atan((f / 7500.0) * (f / 7500.0)),
+    13.3 * @math.atan(0.00076 * f) + 3.5 * @math.atan(f / 7500.0 * (f / 7500.0)),
   )
 }
 
@@ -242,7 +315,11 @@ pub struct AacPsyContext {
 ///|
 /// `AAC_CUTOFF_FROM_BITRATE` / `AAC_CUTOFF`, `psymodel.h:35-45`. Only the
 /// ABR branch is needed here (the reference harness uses `flags = 0`).
-fn aac_psy_cutoff(bit_rate : Int32, channels : Int32, sample_rate : Int32) -> Int32 {
+fn aac_psy_cutoff(
+  bit_rate : Int32,
+  channels : Int32,
+  sample_rate : Int32,
+) -> Int32 {
   let per_chan = bit_rate / channels
   let a = if per_chan / 5 > per_chan * 15 / 32 - 5500 {
     per_chan / 5
@@ -252,10 +329,18 @@ fn aac_psy_cutoff(bit_rate : Int32, channels : Int32, sample_rate : Int32) -> In
   let b = 3000 + per_chan / 4
   let c = 12000 + per_chan / 16
   let mut m = a
-  if b < m { m = b }
-  if c < m { m = c }
-  if 22000 < m { m = 22000 }
-  if sample_rate / 2 < m { m = sample_rate / 2 }
+  if b < m {
+    m = b
+  }
+  if c < m {
+    m = c
+  }
+  if 22000 < m {
+    m = 22000
+  }
+  if sample_rate / 2 < m {
+    m = sample_rate / 2
+  }
   m
 }
 
@@ -289,7 +374,8 @@ fn aac_psy_init_coeffs(
     let coeffs = if j == 0 { ctx.coeffs_long } else { ctx.coeffs_short }
     let line_to_frequency = sr / (if j == 1 { 256.0 } else { 2048.0 })
     let avg_chan_bits = ctx.chan_bitrate.to_double() *
-      (if j == 1 { 128.0 } else { 1024.0 }) / sr
+      (if j == 1 { 128.0 } else { 1024.0 }) /
+      sr
     let bark_pe = 0.024 * (avg_chan_bits * psy_bits_to_pe) / num_bark
     let en_spread_low = if j == 1 {
       psy_en_spread_low_s
@@ -321,18 +407,12 @@ fn aac_psy_init_coeffs(
       coeffs[g].spread_low_thr = aac_psy_exp10f(
         -bark_width * psy_thr_spread_low,
       )
-      coeffs[g].spread_hi_thr = aac_psy_exp10f(
-        -bark_width * psy_thr_spread_hi,
-      )
+      coeffs[g].spread_hi_thr = aac_psy_exp10f(-bark_width * psy_thr_spread_hi)
       coeffs[g].spread_low_en = aac_psy_exp10f(-bark_width * en_spread_low)
       coeffs[g].spread_hi_en = aac_psy_exp10f(-bark_width * en_spread_hi)
       let pe_min = bark_pe * bark_width
       let minsnr = aac_psy_exp2f(pe_min / sizes[g].to_double()) - 1.5
-      coeffs[g].min_snr = aac_psy_clipf(
-        1.0 / minsnr,
-        psy_snr_25db,
-        psy_snr_1db,
-      )
+      coeffs[g].min_snr = aac_psy_clipf(1.0 / minsnr, psy_snr_25db, psy_snr_1db)
     }
     let mut start = 0
     for g in 0..<sizes.length() {
@@ -345,7 +425,9 @@ fn aac_psy_init_coeffs(
           (start + k).to_double() * line_to_frequency,
           psy_ath_add,
         )
-        if v < minscale { minscale = v }
+        if v < minscale {
+          minscale = v
+        }
       }
       coeffs[g].ath = minscale - minath
       start += sizes[g]
@@ -374,17 +456,17 @@ fn AacPsyContext::bit_demand(
   } else {
     psy_spend_slope_l
   }
-  let spend_add = if short_window {
-    psy_spend_add_s
-  } else {
-    psy_spend_add_l
-  }
+  let spend_add = if short_window { psy_spend_add_s } else { psy_spend_add_l }
   let clip_lo = if short_window { psy_clip_lo_s } else { psy_clip_lo_l }
   let clip_hi = if short_window { psy_clip_hi_s } else { psy_clip_hi_l }
   self.fill_level += self.frame_bits - bits
   let mut fl = self.fill_level
-  if fl < 0 { fl = 0 }
-  if fl > self.bitres_size { fl = self.bitres_size }
+  if fl < 0 {
+    fl = 0
+  }
+  if fl > self.bitres_size {
+    fl = self.bitres_size
+  }
   self.fill_level = fl
   let fill_level = aac_psy_clipf(
     fl.to_double() / self.bitres_size.to_double(),
@@ -394,12 +476,18 @@ fn AacPsyContext::bit_demand(
   let clipped_pe = aac_psy_clipf(pe, self.pe_min, self.pe_max)
   let bit_save = (fill_level + save_add) * save_slope
   let bit_spend = (fill_level + spend_add) * spend_slope
-  let bit_factor = 1.0 - bit_save +
-    ((bit_spend - bit_save) / (self.pe_max - self.pe_min)) *
-      (clipped_pe - self.pe_min)
-  if pe > self.pe_max { self.pe_max = pe }
-  let forgetful_min_pe = (self.pe_min * psy_pe_forget_slope +
-    aac_psy_maxf(self.pe_min, pe * (pe / self.pe_max))) /
+  let bit_factor = 1.0 -
+    bit_save +
+    (bit_spend - bit_save) /
+    (self.pe_max - self.pe_min) *
+    (clipped_pe - self.pe_min)
+  if pe > self.pe_max {
+    self.pe_max = pe
+  }
+  let forgetful_min_pe = (
+      self.pe_min * psy_pe_forget_slope +
+      aac_psy_maxf(self.pe_min, pe * (pe / self.pe_max))
+    ) /
     (psy_pe_forget_slope + 1.0)
   self.pe_min = aac_psy_minf(pe, forgetful_min_pe)
   let want = self.frame_bits.to_double() * bit_factor
@@ -446,9 +534,8 @@ fn aac_psy_calc_reduction(
     return 0.0
   }
   let thr_avg = aac_psy_exp2f((a - pe) / (4.0 * active_lines))
-  let reduction = aac_psy_exp2f(
-      (a - desired_pe) / (4.0 * active_lines),
-    ) - thr_avg
+  let reduction = aac_psy_exp2f((a - desired_pe) / (4.0 * active_lines)) -
+    thr_avg
   aac_psy_maxf(reduction, 0.0)
 }
 
@@ -574,10 +661,14 @@ pub fn aac_psy_new(
     frame_bits,
     bitres_size,
     fill_level: bitres_size,
-    pe_min: 8.0 * 1024.0 * bandwidth.to_double() /
-      (sample_rate.to_double() * 2.0),
-    pe_max: 12.0 * 1024.0 * bandwidth.to_double() /
-      (sample_rate.to_double() * 2.0),
+    pe_min: 8.0 *
+    1024.0 *
+    bandwidth.to_double() /
+    (sample_rate.to_double() * 2.0),
+    pe_max: 12.0 *
+    1024.0 *
+    bandwidth.to_double() /
+    (sample_rate.to_double() * 2.0),
     pe_previous: 0.0,
     coeffs_long,
     coeffs_short,
@@ -603,7 +694,10 @@ pub fn AacPsyContext::cutoff(self : AacPsyContext) -> Int32 {
 /// Set the sticky bandwidth the next analyses use (0 restores the derivation).
 /// The C encoder does this from the quantiser (`s->psy.cutoff = bandwidth`),
 /// which is why the value carries over to later frames.
-pub fn AacPsyContext::set_cutoff(self : AacPsyContext, bandwidth : Int32) -> Unit {
+pub fn AacPsyContext::set_cutoff(
+  self : AacPsyContext,
+  bandwidth : Int32,
+) -> Unit {
   self.cutoff = bandwidth
 }
 
@@ -616,6 +710,7 @@ pub fn aac_psy_model_bandwidth(
 ) -> Int32 {
   aac_psy_cutoff(bit_rate, channels, sample_rate)
 }
+
 ///|
 /// Scalefactor band sizes of the long window, exactly as `psy_3gpp_init`
 /// derived them from the swb offset table. The twoloop quantizer needs the
@@ -673,11 +768,7 @@ pub fn AacPsyContext::analyze(
 ) -> AacPsyResult {
   let is_short = window_type == aac_eight_short
   let num_windows = if is_short { 8 } else { 1 }
-  let sizes = if is_short {
-    self.band_sizes_short
-  } else {
-    self.band_sizes
-  }
+  let sizes = if is_short { self.band_sizes_short } else { self.band_sizes }
   let num_bands = sizes.length()
   let coeffs = if is_short { self.coeffs_short } else { self.coeffs_long }
   let slots = if is_short { num_windows * 16 } else { num_bands }
@@ -697,11 +788,7 @@ pub fn AacPsyContext::analyze(
     aac_psy_cutoff(self.bit_rate, self.channels, self.sample_rate)
   }
   let cutoff = bandwidth * 2048 / num_windows / self.sample_rate
-  let avoid_hole_thr = if is_short {
-    psy_ah_thr_short
-  } else {
-    psy_ah_thr_long
-  }
+  let avoid_hole_thr = if is_short { psy_ah_thr_short } else { psy_ah_thr_long }
   // 5.4.2 threshold calculation
   aac_psy_calc_thr(bands, coefs, cutoff, sizes, num_windows)
   // 5.4.2.3 spreading + 5.4.3 spread energy, one pass per window.
@@ -839,35 +926,26 @@ pub fn AacPsyContext::analyze(
             b.thr = aac_psy_calc_reduced_thr(b, coeffs[g].min_snr, reduction)
           }
           pe += aac_psy_calc_pe(b)
-          b.norm_fac = if b.thr > 0.0 {
-            b.active_lines / b.thr
-          } else {
-            0.0
-          }
+          b.norm_fac = if b.thr > 0.0 { b.active_lines / b.thr } else { 0.0 }
           norm_fac_total += b.norm_fac
         }
         w_thr = w_thr + 16
       }
       delta_pe = desired_pe - pe
-      if (delta_pe.abs() > 0.05 * desired_pe) {
+      if delta_pe.abs() > 0.05 * desired_pe {
         break
       }
     }
     if pe < 1.15 * desired_pe {
       // 5.6.1.3.6 final threshold modification by linearization
-      let inv = if norm_fac_total > 0.0 {
-        1.0 / norm_fac_total
-      } else {
-        0.0
-      }
+      let inv = if norm_fac_total > 0.0 { 1.0 / norm_fac_total } else { 0.0 }
       let mut w_lin = 0
       while w_lin < num_windows * 16 {
         for g in 0..<num_bands {
           let b = bands[w_lin + g]
           if b.active_lines > 0.5 {
             let delta_sfb_pe = b.norm_fac * inv * delta_pe
-            let mut thr = b.thr *
-              aac_psy_exp2f(delta_sfb_pe / b.active_lines)
+            let mut thr = b.thr * aac_psy_exp2f(delta_sfb_pe / b.active_lines)
             if thr > coeffs[g].min_snr * b.energy &&
               b.avoid_holes == psy_ah_inactive {
               thr = aac_psy_maxf(b.thr, coeffs[g].min_snr * b.energy)
@@ -885,8 +963,7 @@ pub fn AacPsyContext::analyze(
         let mut w_pe = 0
         while w_pe < num_windows * 16 {
           let b = bands[w_pe + g]
-          if b.avoid_holes != psy_ah_none &&
-            coeffs[g].min_snr < psy_snr_1db {
+          if b.avoid_holes != psy_ah_none && coeffs[g].min_snr < psy_snr_1db {
             coeffs[g].min_snr = psy_snr_1db
             b.thr = b.energy * psy_snr_1db
             pe += b.active_lines * 1.5 - b.pe
@@ -902,7 +979,7 @@ pub fn AacPsyContext::analyze(
   // `w * 16` and the padding slots between bands stay empty.
   let out : Array[AacPsyBandInfo] = []
   for _ in 0..<slots {
-    out.push({ energy: 0.0, threshold: 0.0, spread: 0.0, bits: 0 })
+    out.push({ energy: 0.0, threshold: 0.0, spread: 0.0, bits: 0, })
   }
   let mut w_pub = 0
   while w_pub < num_windows * 16 {

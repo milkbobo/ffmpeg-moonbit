@@ -15,7 +15,7 @@
 /// tags `mov_read_header` would also accept. A `moov` header additionally gets
 /// checked for a `mhlr`/`MPEG` handler, which means this is a MOV-packed
 /// MPEG-PS and must be probed again with a larger window (score 5).
-fn probe_mov(pd : ProbeData) -> Int {
+fn probe_mov(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   let buf_size = buf.length()
   let mut offset = 0L
@@ -49,9 +49,11 @@ fn probe_mov(pd : ProbeData) -> Int {
       // `ftyp` with a JPEG-2000 brand only rates 5; everything else is a
       // confident container hit.
       if pb_match(buf, tag_off, "ftyp") &&
-        (pb_le32(buf, off + 8) == 0x20_32_70_6AU ||
+        (
+          pb_le32(buf, off + 8) == 0x20_32_70_6AU ||
           pb_le32(buf, off + 8) == 0x20_78_70_6AU ||
-          pb_le32(buf, off + 8) == 0x20_6C_78_6AU) {
+          pb_le32(buf, off + 8) == 0x20_6C_78_6AU
+        ) {
         score = imax(score, 5)
       } else {
         score = imax(score, probe_score_max)
@@ -98,12 +100,12 @@ fn probe_mov(pd : ProbeData) -> Int {
 ///|
 /// `EBML_ID_HEADER` (`0x1A45DFA3`), as a local name to avoid clashing with
 /// `ebml.mbt`'s constant. */
-let probe_ebml_id_header : UInt = 0x1A45DFA3U
+let probe_ebml_id_header : UInt32 = 0x1A45DFA3U
 
 ///|
 /// `matroska_probe`: validate the EBML header, then look for a known DocType
 /// inside it. A valid EBML header without `matroska`/`webm` still rates 50.
-fn probe_matroska(pd : ProbeData) -> Int {
+fn probe_matroska(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   let buf_size = buf.length()
   if pb_be32(buf, 0) != probe_ebml_id_header {
@@ -128,7 +130,8 @@ fn probe_matroska(pd : ProbeData) -> Int {
   let unknown = total + 1UL == 1UL << (7 * size)
   if unknown {
     total = (buf_size - 4 - size).to_uint64()
-  } else if buf_size.to_int64() < 4L + size.to_int64() + total.reinterpret_as_int64() {
+  } else if buf_size.to_int64() <
+    4L + size.to_int64() + total.reinterpret_as_int64() {
     return 0
   }
   let doctypes : Array[String] = ["matroska", "webm"]
@@ -138,7 +141,7 @@ fn probe_matroska(pd : ProbeData) -> Int {
       continue
     }
     let last = 4 + size + (total.to_int() - probelen)
-    for start in (4 + size)..=last {
+    for start in (4 + size)..<=last {
       if pb_match(buf, start, doctype) {
         return probe_score_max
       }
@@ -154,9 +157,13 @@ fn probe_matroska(pd : ProbeData) -> Int {
 
 ///|
 /// `TS_PACKET_SIZE` / `TS_DVHS_PACKET_SIZE` / `TS_FEC_PACKET_SIZE`. */
-let ts_packet_size : Int = 188
-let ts_dvhs_packet_size : Int = 192
-let ts_fec_packet_size : Int = 204
+let ts_packet_size : Int32 = 188
+
+///|
+let ts_dvhs_packet_size : Int32 = 192
+
+///|
+let ts_fec_packet_size : Int32 = 204
 
 ///|
 /// `analyze`: histogram the byte offsets of sync bytes inside a window of
@@ -164,12 +171,12 @@ let ts_fec_packet_size : Int = 204
 /// penalised by sync bytes that land on other offsets.
 fn probe_ts_analyze(
   buf : Bytes,
-  base : Int,
-  size : Int,
-  packet_size : Int,
+  base : Int32,
+  size : Int32,
+  packet_size : Int32,
   probe : Bool,
-) -> Int {
-  let stat : Array[Int] = Array::make(packet_size, 0)
+) -> Int32 {
+  let stat : Array[Int32] = Array::make(packet_size, 0)
   let mut stat_all = 0
   let mut best_score = 0
   let mut i = 0
@@ -194,7 +201,7 @@ fn probe_ts_analyze(
 ///|
 /// `mpegts_probe`: score 188/192/204-byte layouts over up to ten 204-byte
 /// blocks, then combine the per-block sum and maximum as the C does. */
-fn probe_mpegts(pd : ProbeData) -> Int {
+fn probe_mpegts(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   let size = buf.length()
   let check_count = size / ts_fec_packet_size
@@ -259,7 +266,7 @@ fn probe_mpegts(pd : ProbeData) -> Int {
 /// `wav_probe`: `RIFF`/`RIFX` + `WAVE`, or `RF64`/`BW64` + `ds64`. The
 /// `AVPROBE_SCORE_MAX - 1` for plain RIFF is deliberate: the ACT demuxer
 /// embeds a WAV header and must win the tie.
-fn probe_wav(pd : ProbeData) -> Int {
+fn probe_wav(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if buf.length() <= 32 {
     return 0
@@ -277,7 +284,7 @@ fn probe_wav(pd : ProbeData) -> Int {
 
 ///|
 /// `w64_probe`: Sony Wave64 `riff` + `wave` GUIDs. */
-fn probe_w64(pd : ProbeData) -> Int {
+fn probe_w64(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if buf.length() <= 40 {
     return 0
@@ -352,7 +359,7 @@ fn probe_match_url_ext(url : String, extensions : String) -> Bool {
 ///|
 /// `hls_probe`: `#EXTM3U` at the start plus one of the three HLS tags, and the
 /// file must look like a playlist by MIME type or extension.
-fn probe_hls(pd : ProbeData) -> Int {
+fn probe_hls(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if !pb_prefix(buf, "#EXTM3U") {
     return 0
@@ -363,11 +370,15 @@ fn probe_hls(pd : ProbeData) -> Int {
     @libavutil.av_stristr(text, "#EXT-X-MEDIA-SEQUENCE:") is Some(_) {
     let mime = pd.mime_type
     let mime_ok = mime != "" &&
-      (probe_mime_eq(mime, "application/vnd.apple.mpegurl") ||
-        probe_mime_eq(mime, "audio/mpegurl"))
+      (
+        probe_mime_eq(mime, "application/vnd.apple.mpegurl") ||
+        probe_mime_eq(mime, "audio/mpegurl")
+      )
     let mime_x = mime != "" &&
-      (probe_mime_eq(mime, "audio/x-mpegurl") ||
-        probe_mime_eq(mime, "application/x-mpegurl"))
+      (
+        probe_mime_eq(mime, "audio/x-mpegurl") ||
+        probe_mime_eq(mime, "application/x-mpegurl")
+      )
     if !mime_ok &&
       !mime_x &&
       !probe_match_ext(pd.filename, "m3u8,m3u") &&
@@ -381,7 +392,7 @@ fn probe_hls(pd : ProbeData) -> Int {
 
 ///|
 /// `dash_probe`: an MPD root element with a recognised profile string. */
-fn probe_dash(pd : ProbeData) -> Int {
+fn probe_dash(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if !probe_stristr(buf, "<MPD") {
     return 0

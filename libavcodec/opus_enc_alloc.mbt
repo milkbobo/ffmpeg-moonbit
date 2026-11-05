@@ -5,17 +5,21 @@
 
 ///|
 /// `ff_celt_bitalloc` (encode = true) as an `OpusEncoder` method.
-fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : OpusRangeEncoder) -> Unit {
+fn OpusEncoder::celt_bitalloc(
+  _self : OpusEncoder,
+  f : OpusEncCeltFrame,
+  rc : OpusRangeEncoder,
+) -> Unit {
   let mut skip_bit = 0
   let mut intensitystereo_bit = 0
   let mut dualstereo_bit = 0
   let mut dynalloc = 6
   let mut extrabits = 0
-  let boost : Array[Int] = Array::make(21, 0)
-  let trim_offset : Array[Int] = Array::make(21, 0)
-  let threshold : Array[Int] = Array::make(21, 0)
-  let bits1 : Array[Int] = Array::make(21, 0)
-  let bits2 : Array[Int] = Array::make(21, 0)
+  let boost : Array[Int32] = Array::make(21, 0)
+  let trim_offset : Array[Int32] = Array::make(21, 0)
+  let threshold : Array[Int32] = Array::make(21, 0)
+  let bits1 : Array[Int32] = Array::make(21, 0)
+  let bits2 : Array[Int32] = Array::make(21, 0)
   let mut skip_startband = f.start_band
   // Spread
   if rc.tell() + 4 <= f.framebits {
@@ -26,8 +30,9 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
   // Initialize static allocation caps
   for i in 0..<21 {
     let caps_base = f.size * 42 + (f.channels - 1) * 21 + i
-    let normc = (opus_celt_static_caps[caps_base] + 64) * opus_celt_freq_range[i]
-    f.caps[i] = (((normc) * (1 << (f.channels - 1))) << f.size) >> 2
+    let normc = (opus_celt_static_caps[caps_base] + 64) *
+      opus_celt_freq_range[i]
+    f.caps[i] = (normc * (1 << (f.channels - 1))) << f.size >> 2
   }
   // Band boosts
   let mut tbits_8ths = f.framebits << 3
@@ -36,7 +41,8 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
     let quanta = (quanta0 << 3).min((6 << 3).max(quanta0))
     let mut b_dynalloc = dynalloc
     let mut remaining_boost = f.alloc_boost[i]
-    while rc.tell_frac() + (b_dynalloc << 3) < tbits_8ths && boost[i] < f.caps[i] {
+    while rc.tell_frac() + (b_dynalloc << 3) < tbits_8ths &&
+          boost[i] < f.caps[i] {
       let is_boost = remaining_boost
       remaining_boost -= 1
       rc.encode_log(if is_boost != 0 { 1 } else { 0 }, b_dynalloc)
@@ -53,7 +59,9 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
   }
   // Allocation trim
   if rc.tell_frac() + (6 << 3) <= tbits_8ths {
-    rc.encode_cdf(f.alloc_trim, [128, 2, 4, 9, 19, 41, 87, 109, 119, 124, 126, 128])
+    rc.encode_cdf(f.alloc_trim, [
+      128, 2, 4, 9, 19, 41, 87, 109, 119, 124, 126, 128,
+    ])
   }
   // Anti-collapse bit reservation
   tbits_8ths = (f.framebits << 3) - rc.tell_frac() - 1
@@ -86,7 +94,9 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
     let band = opus_celt_freq_range[i] * (f.end_band - i - 1)
     let duration = f.size + 3
     let scale = duration + f.channels - 1
-    threshold[i] = (((3 * opus_celt_freq_range[i]) << duration) >> 4).max(f.channels << 3)
+    threshold[i] = ((3 * opus_celt_freq_range[i]) << duration >> 4).max(
+      f.channels << 3,
+    )
     trim_offset[i] = (trim * (band << scale)) >> 6
     if opus_celt_freq_range[i] << f.size == 1 {
       trim_offset[i] -= f.channels << 3
@@ -101,8 +111,9 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
     let mut total = 0
     let mut i = f.end_band - 1
     while i >= f.start_band {
-      let normc = opus_celt_freq_range[i] * opus_celt_static_alloc[center * 21 + i]
-      let mut bandbits = ((normc * (1 << (f.channels - 1))) << f.size) >> 2
+      let normc = opus_celt_freq_range[i] *
+        opus_celt_static_alloc[center * 21 + i]
+      let mut bandbits = (normc * (1 << (f.channels - 1))) << f.size >> 2
       if bandbits != 0 {
         bandbits = (bandbits + trim_offset[i]).max(0)
       }
@@ -126,12 +137,12 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
   // Bisection 2: per-band bit ranges around the chosen vectors
   for i in f.start_band..<f.end_band {
     let n1 = opus_celt_freq_range[i] * opus_celt_static_alloc[low * 21 + i]
-    bits1[i] = ((n1 * (1 << (f.channels - 1))) << f.size) >> 2
+    bits1[i] = (n1 * (1 << (f.channels - 1))) << f.size >> 2
     if high >= 11 {
       bits2[i] = f.caps[i]
     } else {
       let n2 = opus_celt_freq_range[i] * opus_celt_static_alloc[high * 21 + i]
-      bits2[i] = ((n2 * (1 << (f.channels - 1))) << f.size) >> 2
+      bits2[i] = (n2 * (1 << (f.channels - 1))) << f.size >> 2
     }
     if bits1[i] != 0 {
       bits1[i] = (bits1[i] + trim_offset[i]).max(0)
@@ -198,11 +209,14 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
       break
     }
     let mut remaining = tbits_8ths - total
-    let denom_j = opus_celt_freq_bands[j + 1] - opus_celt_freq_bands[f.start_band]
+    let denom_j = opus_celt_freq_bands[j + 1] -
+      opus_celt_freq_bands[f.start_band]
     let bandbits = remaining / denom_j
-    remaining -= bandbits * (opus_celt_freq_bands[j + 1] - opus_celt_freq_bands[f.start_band])
+    remaining -= bandbits *
+      (opus_celt_freq_bands[j + 1] - opus_celt_freq_bands[f.start_band])
     let mut allocation = f.pulses[j] + bandbits * opus_celt_freq_range[j]
-    allocation += (remaining - (opus_celt_freq_bands[j] - opus_celt_freq_bands[f.start_band])).max(0)
+    allocation += (remaining -
+    (opus_celt_freq_bands[j] - opus_celt_freq_bands[f.start_band])).max(0)
     if allocation >= threshold[j].max((f.channels + 1) << 3) {
       let do_not_skip = f.coded_bands <= f.skip_band_floor
       rc.encode_log(if do_not_skip { 1 } else { 0 }, 1)
@@ -241,9 +255,11 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
   }
   // Supply the remaining bits to lower bands
   let mut remaining = tbits_8ths - total
-  let denom_c = opus_celt_freq_bands[f.coded_bands] - opus_celt_freq_bands[f.start_band]
+  let denom_c = opus_celt_freq_bands[f.coded_bands] -
+    opus_celt_freq_bands[f.start_band]
   let bandbits = remaining / denom_c
-  remaining -= bandbits * (opus_celt_freq_bands[f.coded_bands] - opus_celt_freq_bands[f.start_band])
+  remaining -= bandbits *
+    (opus_celt_freq_bands[f.coded_bands] - opus_celt_freq_bands[f.start_band])
   for i in f.start_band..<f.coded_bands {
     let bits = remaining.min(opus_celt_freq_range[i])
     f.pulses[i] += bits + bandbits * opus_celt_freq_range[i]
@@ -257,7 +273,10 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
     if n > 1 {
       extrabits = (f.pulses[i] - f.caps[i]).max(0)
       f.pulses[i] -= extrabits
-      let extra_dof = if f.channels == 2 && n > 2 && !f.dual_stereo && i < f.intensity_stereo {
+      let extra_dof = if f.channels == 2 &&
+        n > 2 &&
+        !f.dual_stereo &&
+        i < f.intensity_stereo {
         1
       } else {
         0
@@ -274,10 +293,11 @@ fn OpusEncoder::celt_bitalloc(_self : OpusEncoder, f : OpusEncCeltFrame, rc : Op
         offset += temp >> 3
       }
       let fine_bits = (f.pulses[i] + offset + (dof << 2)) / (dof << 3)
-      let mut max_bits = ((f.pulses[i] >> 3) >> (f.channels - 1)).min(8)
+      let mut max_bits = (f.pulses[i] >> 3 >> (f.channels - 1)).min(8)
       max_bits = max_bits.max(0)
       f.fine_bits[i] = opus_enc_clip_i(fine_bits, 0, max_bits)
-      f.fine_priority[i] = if f.fine_bits[i] * (dof << 3) >= f.pulses[i] + offset {
+      f.fine_priority[i] = if f.fine_bits[i] * (dof << 3) >=
+        f.pulses[i] + offset {
         1
       } else {
         0
@@ -337,7 +357,11 @@ fn OpusEncoder::celt_quant_bands(
     f.remaining2 = totalbits - consumed - 1
     if i <= f.coded_bands - 1 {
       let curr_balance = f.remaining / (f.coded_bands - i).min(3)
-      b = opus_enc_clip_i((f.remaining2 + 1).min(f.pulses[i] + curr_balance), 0, (1 << 14) - 1)
+      b = opus_enc_clip_i(
+        (f.remaining2 + 1).min(f.pulses[i] + curr_balance),
+        0,
+        (1 << 14) - 1,
+      )
     }
     let lower = opus_celt_freq_bands[i] - opus_celt_freq_range[i]
     if lower >= opus_celt_freq_bands[f.start_band] || i == f.start_band + 1 {
@@ -347,15 +371,21 @@ fn OpusEncoder::celt_quant_bands(
     }
     if i == f.start_band + 1 {
       // Special Hybrid Folding (RFC 8251 section 9)
-      let count = (opus_celt_freq_range[i] - opus_celt_freq_range[i - 1]) << f.size
+      let count = (opus_celt_freq_range[i] - opus_celt_freq_range[i - 1]) <<
+        f.size
       for k in 0..<count {
         norm1[band_offset + k] = norm1[band_offset - count + k]
-        norm1[norm2_off + band_offset + k] = norm1[norm2_off + band_offset - count + k]
+        norm1[norm2_off + band_offset + k] = norm1[norm2_off +
+          band_offset -
+          count +
+          k]
       }
     }
-    if lowband_offset != 0 && (f.spread != 3 || f.blocks > 1 || f.tf_change[i] < 0) {
-      let effective = opus_celt_freq_bands[f.start_band]
-        .max(opus_celt_freq_bands[lowband_offset] - opus_celt_freq_range[i])
+    if lowband_offset != 0 &&
+      (f.spread != 3 || f.blocks > 1 || f.tf_change[i] < 0) {
+      let effective = opus_celt_freq_bands[f.start_band].max(
+        opus_celt_freq_bands[lowband_offset] - opus_celt_freq_range[i],
+      )
       effective_lowband = effective
       // C uses a do-while: `while (ff_celt_freq_bands[--foldstart] > effective_lowband);`
       // and keeps the index where it stopped (no extra +1).
@@ -365,7 +395,8 @@ fn OpusEncoder::celt_quant_bands(
       }
       let mut foldend = lowband_offset - 1
       foldend += 1
-      while foldend < i && opus_celt_freq_bands[foldend] < effective + opus_celt_freq_range[i] {
+      while foldend < i &&
+            opus_celt_freq_bands[foldend] < effective + opus_celt_freq_range[i] {
         foldend += 1
       }
       cm0 = 0U
@@ -382,12 +413,12 @@ fn OpusEncoder::celt_quant_bands(
         norm1[j] = (norm1[j] + norm1[norm2_off + j]) / 2
       }
     }
-    let norm_loc1 : (Array[Float], Int)? = if effective_lowband != -1 {
+    let norm_loc1 : (Array[Float], Int32)? = if effective_lowband != -1 {
       Some((norm1, effective_lowband << f.size))
     } else {
       None
     }
-    let norm_loc2 : (Array[Float], Int)? = if effective_lowband != -1 {
+    let norm_loc2 : (Array[Float], Int32)? = if effective_lowband != -1 {
       Some((norm1, norm2_off + (effective_lowband << f.size)))
     } else {
       None
@@ -442,7 +473,11 @@ fn OpusEncoder::celt_quant_bands(
         i,
         f.block[0].coeffs,
         band_offset,
-        if has_y { Some(f.block[1].coeffs) } else { None },
+        if has_y {
+          Some(f.block[1].coeffs)
+        } else {
+          None
+        },
         band_offset,
         band_size,
         b,

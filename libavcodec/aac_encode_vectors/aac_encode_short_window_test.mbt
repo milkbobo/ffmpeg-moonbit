@@ -118,8 +118,12 @@ test "aac_lc_perceptual_short_keeps_long_window_baseline" {
   let input = aac_encode_test_steady(rate, channels, frames)
   let plain = @libavcodec.aac_encode_config_perceptual(rate, channels, 128000)
   let short = @libavcodec.aac_encode_config_with_perceptual_short(plain)
-  let plain_stream = aac_encode_test_stream_config(input, channels, frames, plain)
-  let short_stream = aac_encode_test_stream_config(input, channels, frames, short)
+  let plain_stream = aac_encode_test_stream_config(
+    input, channels, frames, plain,
+  )
+  let short_stream = aac_encode_test_stream_config(
+    input, channels, frames, short,
+  )
   assert_eq(plain_stream.length(), short_stream.length())
   let mut long_frames = 0
   let mut short_frames = 0
@@ -187,7 +191,7 @@ test "aac_lc_perceptual_short_window_stream" {
       // transient fixture must produce a non-trivial partition at least once
       // (`0b1111111` would mean the grouping never left the §302 single
       // group).
-      let gl : Array[Int] = Array::make(8, 0)
+      let gl : Array[Int32] = Array::make(8, 0)
       let mut lastgrp = 0
       for w = 0; w < 8; w = w + 1 {
         if w == 0 || ((info.scale_factor_grouping >> (7 - w)) & 1) == 0 {
@@ -199,7 +203,8 @@ test "aac_lc_perceptual_short_window_stream" {
       for w = 0; w < 8; w = w + 1 {
         cover = cover + gl[w]
         // a group length is positive at its start and 0 inside
-        let expect = if w == 0 || ((info.scale_factor_grouping >> (7 - w)) & 1) == 0 {
+        let expect = if w == 0 ||
+          ((info.scale_factor_grouping >> (7 - w)) & 1) == 0 {
           gl[w] > 0
         } else {
           gl[w] == 0
@@ -317,7 +322,7 @@ fn aac_encode_test_nmr_short(
         orig[1024 + i] = input[ch][f * 1024 + i]
       }
       let want = aac_encode_test_analysis(orig, seq)
-      let prev = (if f > 0 { seqs[f - 1] } else { 0 })
+      let prev = if f > 0 { seqs[f - 1] } else { 0 }
       let bands = psy.analyze(ch, want, 0, seq, prev).bands
       if seq != 2 || f == 0 {
         continue
@@ -492,5 +497,93 @@ test "aac_lc_perceptual_short_window_stereo_decodes" {
   }
   assert_true(peak < 4.0)
   let snr = aac_encode_test_pcm_snr(input, decoded, 2, frames)
-  println("perceptual short window stereo: frames=\{stream.length()} peak=\{peak} snr=\{snr}")
+  println(
+    "perceptual short window stereo: frames=\{stream.length()} peak=\{peak} snr=\{snr}",
+  )
+}
+
+///|
+/// §305: PNS on the short-window frames. The sticky slot arrays, `mark_pns`'s
+/// group gates and `search_for_pns`'s per-window noise pricing now run on
+/// EIGHT_SHORT frames, so a transient stream must carry real NOISE_BT bands on
+/// its short frames (every window group, not just the first), the run without
+/// the tool must carry none, and the stream must still decode at a finite
+/// level. PNS is waveform-inexact by design - the decoder synthesises fresh
+/// noise - so the guard on the reconstruction is that it stays a waveform, not
+/// that it is transparent.
+test "aac_lc_perceptual_short_pns_stream" {
+  let rate = 44100
+  let frames = 8
+  let input = aac_encode_test_transient(rate, frames)
+  let short = @libavcodec.aac_encode_config_with_perceptual_short(
+    @libavcodec.aac_encode_config_perceptual(rate, 1, 128000),
+  )
+  let plain_stream = aac_encode_test_stream_config(input, 1, frames, short)
+  let pns_stream = aac_encode_test_stream_config(
+    input,
+    1,
+    frames,
+    @libavcodec.aac_encode_config_with_pns(short),
+  )
+  // Noise bands per frame from the SCE's sections, over every window group.
+  let plain_noise : Array[Int32] = Array::make(plain_stream.length(), 0)
+  let pns_noise : Array[Int32] = Array::make(pns_stream.length(), 0)
+  for f = 0; f < pns_stream.length(); f = f + 1 {
+    for pass = 0; pass < 2; pass = pass + 1 {
+      let stream = if pass == 0 { plain_stream } else { pns_stream }
+      let payload = stream[f]
+        .clamped_view(
+          start=@libavcodec.av_aac_adts_header_size,
+          end=stream[f].length(),
+        )
+        .to_owned()
+      let gb = @libavcodec.BitReader::new(payload)
+      let id = gb.read(3).reinterpret_as_int()
+      let _ = gb.read(4)
+      if id != 0 {
+        abort("short pns test: expected a single channel element")
+      }
+      let ics = aac_encode_test_ok(@libavcodec.aac_decode_ics(gb))
+      for g = 0; g < ics.sect_cb.length(); g = g + 1 {
+        for b = 0; b < ics.sect_cb[g].length(); b = b + 1 {
+          if ics.sect_cb[g][b] == 13 {
+            if pass == 0 {
+              plain_noise[f] = plain_noise[f] + 1
+            } else {
+              pns_noise[f] = pns_noise[f] + 1
+            }
+          }
+        }
+      }
+    }
+  }
+  let mut short_noise_frames = 0
+  let mut noise_bands = 0
+  let mut plain_bands = 0
+  for f = 0; f < pns_stream.length(); f = f + 1 {
+    plain_bands = plain_bands + plain_noise[f]
+    noise_bands = noise_bands + pns_noise[f]
+    if pns_noise[f] > 0 {
+      short_noise_frames = short_noise_frames + 1
+    }
+  }
+  let decoded = aac_encode_test_decode(pns_stream, 1)
+  let mut peak = 0.0
+  for f = 0; f < decoded[0].length(); f = f + 1 {
+    let v = decoded[0][f]
+    assert_true(v == v)
+    if v.abs() > peak {
+      peak = v.abs()
+    }
+  }
+  let snr = aac_encode_test_pcm_snr(input, decoded, 1, frames)
+  println(
+    "perceptual short PNS: noise frames=\{short_noise_frames} bands=\{noise_bands} (plain \{plain_bands}) peak=\{peak} snr=\{snr}",
+  )
+  // The tool fires on the short frames, only when asked for, and the stream
+  // decodes to a bounded, finite waveform.
+  assert_true(noise_bands > 0)
+  assert_true(plain_bands == 0)
+  assert_true(peak < 4.0)
+  assert_true(snr > 8.0)
 }

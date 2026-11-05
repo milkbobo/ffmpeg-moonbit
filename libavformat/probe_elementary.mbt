@@ -16,7 +16,7 @@
 /// `adts_aac_probe`: count consecutive ADTS headers from every candidate
 /// start, keeping the best run. Anything that does not chain from the buffer
 /// start is scored only by the longest run found anywhere.
-fn probe_adts_aac(pd : ProbeData) -> Int {
+fn probe_adts_aac(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   let end = buf.length() - 7
   let mut max_frames = 0
@@ -69,7 +69,7 @@ fn probe_adts_aac(pd : ProbeData) -> Int {
 /// `ac3_eac3_probe`: walk AC-3 sync words, validating each frame header and
 /// its AV_CRC_16_ANSI trailer (MSB-first, poly 0x8005). `bitstream_id > 10` marks the stream as E-AC-3, so
 /// the AC-3 and E-AC-3 demuxers score the same bytes differently.
-fn probe_ac3_eac3(pd : ProbeData, expect_eac3 : Bool) -> Int {
+fn probe_ac3_eac3(pd : ProbeData, expect_eac3 : Bool) -> Int32 {
   let buf = pd.buf
   let end = buf.length()
   let crc_ctx = match @libavutil.av_crc_init(false, 16, 0x8005) {
@@ -174,13 +174,13 @@ fn probe_ac3_eac3(pd : ProbeData, expect_eac3 : Bool) -> Int {
 
 ///|
 /// `ac3_probe`. */
-fn probe_ac3(pd : ProbeData) -> Int {
+fn probe_ac3(pd : ProbeData) -> Int32 {
   probe_ac3_eac3(pd, false)
 }
 
 ///|
 /// `eac3_probe`. */
-fn probe_eac3(pd : ProbeData) -> Int {
+fn probe_eac3(pd : ProbeData) -> Int32 {
   probe_ac3_eac3(pd, true)
 }
 
@@ -190,7 +190,7 @@ fn probe_eac3(pd : ProbeData) -> Int {
 
 ///|
 /// `aiff_probe`: `FORM` + size ≥ 4 + `AIFF` or `AIFC`. */
-fn probe_aiff(pd : ProbeData) -> Int {
+fn probe_aiff(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if pb_match(buf, 0, "FORM") &&
     pb_be32(buf, 4) >= 4U &&
@@ -208,7 +208,7 @@ fn probe_aiff(pd : ProbeData) -> Int {
 /// `au_probe`: `.snd` magic plus five non-zero u32 header fields (data offset,
 /// data size, encoding, sample rate, channels) so a stray `.snd` in payload
 /// does not match. */
-fn probe_au(pd : ProbeData) -> Int {
+fn probe_au(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if buf.length() < 24 ||
     pb_le32(buf, 0) != 0x64_6E_73_2EU ||
@@ -224,7 +224,7 @@ fn probe_au(pd : ProbeData) -> Int {
 
 ///|
 /// `probe` in cafdec.c: `caff` v1 with a 32-byte `desc` chunk. */
-fn probe_caf(pd : ProbeData) -> Int {
+fn probe_caf(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if pb_be32(buf, 0) != 0x63_61_66_66U {
     return 0
@@ -243,9 +243,9 @@ fn probe_caf(pd : ProbeData) -> Int {
 
 ///|
 /// `asf_probe`: the ASF header GUID. */
-fn probe_asf(pd : ProbeData) -> Int {
+fn probe_asf(pd : ProbeData) -> Int32 {
   let buf = pd.buf
-  let guid : Array[Int] = [
+  let guid : Array[Int32] = [
     0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00,
     0x62, 0xCE, 0x6C,
   ]
@@ -259,7 +259,7 @@ fn probe_asf(pd : ProbeData) -> Int {
 
 ///|
 /// `amr_probe`: `#!AMR` (covers AMR-NB, AMR-WB and the multichannel headers). */
-fn probe_amr(pd : ProbeData) -> Int {
+fn probe_amr(pd : ProbeData) -> Int32 {
   if pb_prefix(pd.buf, "#!AMR") {
     probe_score_max
   } else {
@@ -273,7 +273,7 @@ fn probe_amr(pd : ProbeData) -> Int {
 
 ///|
 /// `png_probe`: the 8-byte PNG signature. */
-fn probe_png(pd : ProbeData) -> Int {
+fn probe_png(pd : ProbeData) -> Int32 {
   if pb_be64(pd.buf, 0) == 0x89_50_4E_47_0D_0A_1A_0AUL {
     probe_score_max - 1
   } else {
@@ -284,7 +284,7 @@ fn probe_png(pd : ProbeData) -> Int {
 ///|
 /// `mjpeg_probe`: walk JPEG markers and count well-formed
 /// SOI→SOF→SOS→EOI sequences, penalising markers that appear out of order.
-fn probe_mjpeg(pd : ProbeData) -> Int {
+fn probe_mjpeg(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   let n = buf.length()
   let mut state = -1
@@ -353,7 +353,7 @@ fn probe_mjpeg(pd : ProbeData) -> Int {
 
 ///|
 /// `raw_flac_probe`: validate the four bytes after the 14-bit sync word. */
-fn probe_raw_flac(pd : ProbeData) -> Int {
+fn probe_raw_flac(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if (pb_u8(buf, 2) & 0xF0_U) == 0U {
     return 0
@@ -377,7 +377,7 @@ fn probe_raw_flac(pd : ProbeData) -> Int {
 ///|
 /// `flac_probe`: either a raw FLAC frame header, or `fLaC` with a valid
 /// STREAMINFO metadata block. */
-fn probe_flac(pd : ProbeData) -> Int {
+fn probe_flac(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if (pb_be16(buf, 0) & 0xFFFE_U) == 0xFFF8_U {
     return probe_raw_flac(pd)
@@ -410,13 +410,13 @@ fn probe_flac(pd : ProbeData) -> Int {
 
 ///|
 /// `MP3_MASK` (`mpegaudiodecheader.h`). */
-let mp3_mask : UInt = 0xFFFE0CCFU
+let mp3_mask : UInt32 = 0xFFFE0CCFU
 
 ///|
 /// `mp3_read_probe`: chain MPEG audio frames from every candidate start and
 /// reject runs whose payload contains the same header signature more than
 /// twice (an embedded-header false positive).
-fn probe_mp3(pd : ProbeData) -> Int {
+fn probe_mp3(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   let end = buf.length() - 4
   let mut start = 0
@@ -480,7 +480,7 @@ fn probe_mp3(pd : ProbeData) -> Int {
   } else if max_frames >= 4 && buf.length() < 2 * max_framesizes {
     probe_score_extension / 2
   } else if probe_id3v2_match_at(buf, 0) &&
-    (2 * probe_id3v2_tag_len_at(buf, 0)) >= buf.length() {
+    2 * probe_id3v2_tag_len_at(buf, 0) >= buf.length() {
     if buf.length() < probe_buf_max {
       probe_score_extension / 4
     } else {
@@ -502,7 +502,7 @@ fn probe_mp3(pd : ProbeData) -> Int {
 ///|
 /// `ogg_probe`: `"OggS"` including its NUL terminator (a five-byte compare in
 /// C) plus a version byte of at most 7. */
-fn probe_ogg(pd : ProbeData) -> Int {
+fn probe_ogg(pd : ProbeData) -> Int32 {
   let buf = pd.buf
   if pb_match(buf, 0, "OggS") && pb_u8(buf, 4) == 0U && pb_u8(buf, 5) <= 7U {
     probe_score_max

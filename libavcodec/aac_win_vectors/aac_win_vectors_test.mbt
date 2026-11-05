@@ -26,19 +26,19 @@
 ///|
 /// Burst events per channel: `[start, start + len)` within each 5000-sample
 /// period, at the given amplitude.  Mirror of the harness `win_ev_*`.
-let aac_win_ev_off : Array[Array[Int]] = [
+let aac_win_ev_off : Array[Array[Int32]] = [
   [300, 1500, 3200, 4400],
   [700, 764, 2600, 4200],
 ]
 
 ///|
-let aac_win_ev_len : Array[Array[Int]] = [
+let aac_win_ev_len : Array[Array[Int32]] = [
   [90, 40, 130, 50],
   [60, 60, 200, 30],
 ]
 
 ///|
-let aac_win_ev_amp : Array[Array[Int]] = [
+let aac_win_ev_amp : Array[Array[Int32]] = [
   [22000, 18000, 24000, 15000],
   [20000, 21000, 23000, 16000],
 ]
@@ -53,7 +53,7 @@ let aac_win_ev_amp : Array[Array[Int]] = [
 /// (Nyquist passes the high-pass FIR; neighbouring peaks stay far below the
 /// 7.40 attack threshold), burst samples are scaled LCG noise; the final
 /// `v / 32768` is an exact float.
-fn aac_win_pcm(ch : Int, n : Int) -> Double {
+fn aac_win_pcm(ch : Int32, n : Int32) -> Double {
   // 0x85ebca77 == 2246822519U (the decimal literal leaves the Int range).
   let st0 = (12345 + 0x85ebca77 * (2 * n + ch)) & 0xFFFFFFFF
   let base = 20 + ((st0 >> 13) & 7)
@@ -91,7 +91,7 @@ test "lame window grouping matches FFmpeg 9.0.2 (26 frames x 2 channels)" {
   let frames = @aac_win_vectors.aac_win_att_sum.length() / 2
   // The grouping byte one call stores must surface as the next same-channel
   // call's pre-overwrite value (FFmpeg's next_grouping chain).
-  let prev_group_byte : Array[Int] = [0, 0]
+  let prev_group_byte : Array[Int32] = [0, 0]
   for m = 0; m < frames; m = m + 1 {
     for ch = 0; ch < 2; ch = ch + 1 {
       let buf = buf_ch[ch]
@@ -160,7 +160,7 @@ test "lame attack threshold picks the nearer ABR endpoint" {
   // exactly on entries; 72 is equidistant between 64 and 80 and the tie
   // takes the upper (7.00); 130 is closer to 128; 4 clamps low; 200 clamps
   // at the last entry.
-  let cases : Array[(Int, Double)] = [
+  let cases : Array[(Int32, Double)] = [
     (64, 7.400000095367432),
     (96, 6.599999904632568),
     (130, 6.199999809265137),
@@ -173,9 +173,7 @@ test "lame attack threshold picks the nearer ABR endpoint" {
   for pair in cases {
     let w = @libavcodec.AacLameWindow::new(pair.0)
     if w.attack_threshold != pair.1 {
-      fail(
-        "\{pair.0} kbps/ch: threshold \{w.attack_threshold} != \{pair.1}",
-      )
+      fail("\{pair.0} kbps/ch: threshold \{w.attack_threshold} != \{pair.1}")
     }
   }
 }

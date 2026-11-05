@@ -479,7 +479,7 @@ pub let probe_fixture_mjpeg : Bytes = b"/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYz
 
 ///|
 /// (fixture key, ffprobe `format_name`, window length).
-pub let probe_fixture_cases : Array[(String, String, Int)] = [
+pub let probe_fixture_cases : Array[(String, String, Int32)] = [
   ("mp4", "mov,mp4,m4a,3gp,3g2,mj2", 4216),
   ("mkv", "matroska,webm", 512),
   ("webm", "matroska,webm", 512),

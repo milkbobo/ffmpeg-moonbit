@@ -8457,3 +8457,55 @@ loud 窗的标度因子饿死。本轮把 FFmpeg 真正注册的窗回调 `psy_l
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1417/1417**
   （§303 是 1415，新增 aac_win_vectors 2 条）。
 
+
+## 305. PNS 的八短窗形态：mark/search 按窗分组 + 元素 sticky 槽状态（§304 续篇一）
+
+§304 交接的首选下一步：`mark_pns`/`search_for_pns` 上游都是 `w += group_len[w]`
+外层，分组真正进码流后把多窗形态补上，短帧才能开 PNS（IS/M-S 的多组化是续篇二）。
+
+- **组形态移植（s1，`aac_pns.mbt`/`aac_pns_search.mbt`）**：两函数统一吃
+  `AacTwoShape`（num_windows+group_len）。`mark_pns` 的门按组算——能量/阈值组内求和、
+  spread 取最小、新增瞬态门 `min_energy < FFMIN(0.7, λ/140) * max_energy`（单窗下
+  min==max 恒假，长窗行为逐位不变）；`cutoff = bandwidth*2*wlen/sr` 全整型除法。
+  `search_for_pns` 的噪声**逐窗**生成与定价：每个 `w2` 独立拉 LCG、算
+  `pns_energy` 贡献，`dist1` 按该窗 psy band 的阈值与该窗槽的
+  `sf_idx[(w+w2)*16+g]`/`band_alt` 计价，`dist2` 逐窗累加
+  `energy/spread²·λ·dist_thresh/threshold`，±5/9 开销每组一次；决策写组起点槽。
+- **sticky 槽状态（s2）**：C 的 `SingleChannelElement` 把 `sf_idx/band_type/zeroes`
+  三条 128 槽数组跨帧保留（`aacenc.c:929-933` 每轮元素循环只清 `>RESERVED_BT` 的
+  band_type）。twoloop 只写组起点，但它的速率循环 `for i<128` 会缩放**全部**槽、
+  zero-band 段会写组内被置零的内窗槽——而 `search_for_pns` 的逐窗定价恰恰读这些
+  "twoloop 本帧没写过"的内窗槽（`aaccoder.c:597-599`，读的是前几帧的遗留值）。
+  落地：`AacEncoder` 挂三条 per-channel sticky 数组（calloc 语义）；每轮先做
+  `>12 → 0` 清理；`aac_twoloop_search_pns` 加 `sticky?` 可选参数（缺省全新零数组=
+  §278/§301 向量的 plain-reset 状态，既有调用点零改动），原地写回；
+  `search_for_pns` 直接吃 sticky 数组并把噪声决策写回。长帧每帧重写所有会读到的
+  槽，sticky 不可见（§304 的「zeroes 跨帧粘性不复刻」偏差就此收口）。
+- **harness 修正（s3，两处真偏差）**：`--short --pns` 模式的帧首清理写成
+  `> 13`（漏 NOISE_BT，C 是 `> RESERVED_BT`=12）；且 §301 时代的 `g<num_bands`
+  （49 槽）全复位循环还在跑，与「全 sticky」矛盾——slot<49 被清零、49..127 粘，
+  恰好污染 `search_for_pns` 读得最多的窗 0-2 内窗槽。两处都修成 `aacenc.c` 语义，
+  向量重新生成（`vectors_pns_short.txt`，`PNS`/`TWOBAND`/`STICKY` 行）。
+- **黄金向量（s4，`aac_pns_vectors/fixtures_short.mbt` +
+  `aac_pns_short_test.mbt`）**：5 帧 LCG 噪声谱 × 前五种 `window_grouping` 分组
+  （1/2/3 窗组都有），复放整条元素循环（清理→mark→twoloop→search）并断言：
+  twoloop 组起点 sf/cb/zeroes、mark 的 can_pns、search 的 band_type/zeroes/pns_ener
+  （f32 容差）逐槽相等，**外加每帧末 128×3 的 STICKY 全等**（sticky 模型本身被
+  向量钉住，不是假设）。266 槽决策全等（19 噪声带、71 个 can_pns 槽）。
+- **接线与写侧（s5）**：`use_pns = pns && (!is8 || use_psy)`——短帧在感知短窗
+  路径（perceptual_short 仍 opt-in）上开 PNS；`channel_data_psy` 的 `noise_sfi`
+  改槽索引。立体声对（IS/M-S）仍长窗限定，多组化留给 §306。
+- **端到端（s6）**：新增 `aac_lc_perceptual_short_pns_stream`——transient 流上
+  短帧真实携带 NOISE_BT（7 帧 70 带，逐组解析 sections；plain 臂 0），本解码器
+  SNR 16.8 dB、峰值有界。临时 `zz_pns_ab` 导出 mono 128k / stereo 64k 两条
+  短窗+PNS ADTS：docker ffmpeg 9.0.2 解码 **0 errors**，与 MB 解码器 PCM 对拍
+  max_diff 5.6e-8（≈1 f32 ULP，一致性 140 dB）。
+- **基线（硬验收）**：临时 `zz_pns_base`（stash 前后对拍）——default / perceptual /
+  perceptual+pns 三条长窗流的字节计数与 FNV 双校验和**完全一致**。
+- **本轮坑**：MoonBit `Byte` 的 `to_string` 打印 `b'\xFF'` 字面量（探针输出解析
+  要按字面量解）；UInt32 后缀必须大写 `U`；Git Bash 下 docker `-v` 挂载要
+  `MSYS_NO_PATHCONV=1` + `D:/...` 绝对路径。`moon fmt` 顺带把全仓
+  （Opus/探针等 30+ 文件）归一到当前 formatter（`///|` 补齐、`Int`→`Int32` 别名
+  打印、短调用并行），行为无关，全量回归覆盖。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1419/1419**
+  （§304 是 1417，新增短窗 PNS 向量 1 条 + 短窗 PNS 流 1 条）。
