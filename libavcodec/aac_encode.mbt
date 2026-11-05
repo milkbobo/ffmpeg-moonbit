@@ -57,6 +57,13 @@ pub struct AacEncodeConfig {
   /// the bitstream layout and the round-trip measurements change.
   /// `aac_encode_config_with_is` turns it on.
   is_stereo : Bool
+  /// Let the perceptual path also quantise EIGHT_SHORT frames (§302). Off by
+  /// default: eight short windows are coded as one group here, so a single
+  /// scalefactor covers spectra whose energies differ by an order of magnitude,
+  /// and the transient fixture loses ~6 dB of waveform SNR with no measured
+  /// noise-to-mask gain yet (§303). `aac_encode_config_with_perceptual_short`
+  /// turns it on; the steady long-window baselines are unaffected either way.
+  perceptual_short : Bool
 }
 
 ///|
@@ -112,6 +119,7 @@ pub fn aac_encode_config(
     perceptual: false,
     pns: false,
     is_stereo: false,
+    perceptual_short: false,
   }
 }
 
@@ -139,6 +147,7 @@ pub fn aac_encode_config_perceptual(
     perceptual: true,
     pns: false,
     is_stereo: false,
+    perceptual_short: false,
   }
 }
 
@@ -163,6 +172,7 @@ pub fn aac_encode_config_with_pns(config : AacEncodeConfig) -> AacEncodeConfig {
     // is exactly what `aac_is_search` does with the post-PNS `cb`/`zeroes` it
     // is handed.
     is_stereo: config.is_stereo,
+    perceptual_short: config.perceptual_short,
   }
 }
 
@@ -192,6 +202,36 @@ pub fn aac_encode_config_with_is(config : AacEncodeConfig) -> AacEncodeConfig {
     perceptual: config.perceptual,
     pns: config.pns,
     is_stereo: true,
+    perceptual_short: config.perceptual_short,
+  }
+}
+
+///|
+/// Extend the perceptual rate control to EIGHT_SHORT frames (§302). The 3GPP
+/// model already publishes 8 x 128 band records (§300) and the twoloop search
+/// already walks window groups (§301); this switch is what finally lets the
+/// encoder hand short frames to that chain instead of the simplified model.
+///
+/// Like PNS and intensity stereo this is opt-in, and for a harder reason: the
+/// group plan here is still one group of eight windows (`scale_factor_grouping
+/// = 0x7f`), so the multi-window forms of PNS / IS / M-S stay off and the
+/// transient fixture measures 25.21 dB against 31.84 dB on the simplified
+/// path. `PORTING_HISTORY.md` §302 records the external decode check and the
+/// open noise-to-mask question; §303/§304 add the multi-window tools.
+///
+/// It also turns `perceptual` on, like `aac_encode_config_with_pns` does:
+/// otherwise the flag would be a silent no-op.
+pub fn aac_encode_config_with_perceptual_short(
+  config : AacEncodeConfig,
+) -> AacEncodeConfig {
+  {
+    sample_rate: config.sample_rate,
+    channels: config.channels,
+    bit_rate: config.bit_rate,
+    perceptual: true,
+    pns: config.pns,
+    is_stereo: config.is_stereo,
+    perceptual_short: true,
   }
 }
 
@@ -1788,8 +1828,11 @@ fn AacEncoder::channel_data(
 /// common-window CPE shares it and TNS derives its band range from it, so both
 /// the transmitted value and the decoder's `aac_apply_tns` must see the same
 /// number.
-fn AacEncoder::channel_data_psy(
-  self : AacEncoder,
+///
+/// On a short frame the window group shares one scalefactor and codebook, so
+/// the same `(sf, cb)` applies to the band's line range in every window of the
+/// group - each window is still quantised from its *own* coefficients.
+fn aac_encode_channel_data_psy(
   coef : Array[Double],
   final_sf : Array[Int32],
   seq : Int32,
@@ -1797,6 +1840,8 @@ fn AacEncoder::channel_data_psy(
   final_cb : Array[Int32],
   final_zeroes : Array[Int32],
   noise_sfi : Array[Int32],
+  offsets : Array[Int32],
+  num_windows : Int32,
 ) -> AacEncChannel {
   let num_swb = final_sf.length()
   let sf : Array[Int32] = Array::make(num_swb, -1)
@@ -1812,15 +1857,18 @@ fn AacEncoder::channel_data_psy(
     if final_zeroes[b] != 0 || final_sf[b] < 0 || !coded {
       continue
     }
-    let start = self.swb_offsets[b]
-    let size = self.swb_offsets[b + 1] - start
+    let start = offsets[b]
+    let size = offsets[b + 1] - start
     let noise = final_cb[b] == 13
     if !noise {
-      let band = aac_twoloop_quantize_band(
-        coef, start, size, final_sf[b], final_cb[b],
-      )
-      for i = 0; i < size; i = i + 1 {
-        q[start + i] = band[i]
+      for w = 0; w < num_windows; w = w + 1 {
+        let base = w * 128 + start
+        let band = aac_twoloop_quantize_band(
+          coef, base, size, final_sf[b], final_cb[b],
+        )
+        for i = 0; i < size; i = i + 1 {
+          q[base + i] = band[i]
+        }
       }
     }
     // A NOISE_BT band carries no spectral data: the decoder synthesises it
@@ -1832,7 +1880,7 @@ fn AacEncoder::channel_data_psy(
     sf[b] = if noise { noise_sfi[b] } else { final_sf[b] - 4 }
     cb[b] = final_cb[b]
   }
-  { sf, cb, q, max_sfb, window_sequence: seq, num_windows: 1 }
+  { sf, cb, q, max_sfb, window_sequence: seq, num_windows }
 }
 
 ///|
@@ -2273,8 +2321,23 @@ pub fn AacEncoder::encode_frame(
   // upstream and the two tools compose (§294). On the simplified path PNS never
   // runs at all - it needs the psy bands - so its correlation-gated search
   // cannot meet a noise band either.
-  let use_psy = self.config.perceptual && seq != aac_eight_short
+  //
+  // Since §302 the perceptual path can take both window shapes: `aac_psy.mbt`
+  // analyses eight short windows (§300) and the quantiser search walks window
+  // groups (§301). Three tools are still single-window ports -
+  // `mark_pns`/`search_for_pns`, `aac_is_search` and `aac_ms_search`, all of
+  // which upstream loop over `w += group_len[w]` - so on a short frame they
+  // stay off and the frame is coded as one group of eight windows with TNS
+  // alone (§303/§304 give them the multi-window form).
+  //
+  // The short-window half is opt-in (`perceptual_short`): with it off, a short
+  // frame keeps the simplified model and every long-window baseline stream is
+  // byte-for-byte what §301 produced.
+  let use_psy = self.config.perceptual &&
+    (!is8 || self.config.perceptual_short)
   let use_is = self.config.is_stereo
+  let use_pns = self.config.pns && !is8
+  let use_stereo_psy = self.config.channels == 2 && !is8
   let mut stereo = aac_encode_stereo_none(num_swb)
   if self.config.channels == 2 && !use_psy {
     stereo = aac_encode_stereo(
@@ -2291,11 +2354,9 @@ pub fn AacEncoder::encode_frame(
   }
   // Perceptual analysis, one pass per channel: the 3GPP model publishes the
   // per-band thresholds and the frame's bit allocation, and the twoloop
-  // quantiser turns them into per-band scalefactors. Both are only defined for
-  // one long window (the psy port is long-only, the search is single-window),
-  // so EIGHT_SHORT frames always keep the simplified model with the frame-wide
-  // offset search below. A rate-control retry re-runs this analysis - see the
-  // loop below (§289 deviation 2, closed in §297).
+  // quantiser turns them into per-band scalefactors. Both window shapes run
+  // here (§300's analysis, §301's grouped search); a rate-control retry re-runs
+  // the analysis - see the loop below (§289 deviation 2, closed in §297).
   let psy_results : Array[AacPsyResult] = []
   let targets : Array[Array[Int32]] = []
   let mut planned_max_sfb = 0
@@ -2310,10 +2371,23 @@ pub fn AacEncoder::encode_frame(
         self.psy.analyze(ch, coefs[ch], prev_bits, seq, self.prev_sequence[ch]),
       )
     }
+    // The plan only seeds TNS and the fallback bit-search: since §299 the
+    // transmitted `max_sfb` comes from the quantiser's own `zeroes`. A short
+    // frame's records live at `w * 16 + g`, so a band counts as planned if any
+    // of its eight windows asked for bits.
+    let slot_stride = if is8 { 16 } else { 1 }
+    let slot_windows = if is8 { 8 } else { 1 }
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       let bands = psy_results[ch].bands
-      for b = 0; b < bands.length() && b < num_swb; b = b + 1 {
-        if bands[b].bits > 0 && b + 1 > planned_max_sfb {
+      for b = 0; b < num_swb; b = b + 1 {
+        let mut wanted = false
+        for wi in 0..<slot_windows {
+          let slot = wi * slot_stride + b
+          if slot < bands.length() && bands[slot].bits > 0 {
+            wanted = true
+          }
+        }
+        if wanted && b + 1 > planned_max_sfb {
           planned_max_sfb = b + 1
         }
       }
@@ -2423,7 +2497,18 @@ pub fn AacEncoder::encode_frame(
         }
         thr.push(row)
       }
-      let sizes = self.psy.band_sizes()
+      let sizes = if is8 {
+        self.psy.band_sizes_short()
+      } else {
+        self.psy.band_sizes()
+      }
+      // Eight short windows coded as one group is exactly the grouping byte
+      // `0b1111111` writes: `group_len[0] = 8`, the remaining entries unused.
+      let two_shape = if is8 {
+        aac_two_shape_short([8, 0, 0, 0, 0, 0, 0, 0])
+      } else {
+        aac_two_shape_long()
+      }
       // One channel pair, one rate-control attempt: analyse, price and decide
       // noise on the left/right spectra first (`aacenc.c`'s order), then mix.
       let twos : Array[AacTwoResult] = []
@@ -2450,14 +2535,14 @@ pub fn AacEncoder::encode_frame(
         // PNS runs around the search: mark noise-like bands, let the twoloop
         // rate loop price them, then decide which ones actually become noise.
         let mark = aac_pns_mark(
-          r.bands, self.swb_offsets, self.num_swb,
+          r.bands, offsets, num_swb,
           self.config.sample_rate, self.config.bit_rate,
           self.config.channels, self.lambda,
         )
-        let can_pns = if self.config.pns {
+        let can_pns = if use_pns {
           mark.can_pns
         } else {
-          Array::make(self.num_swb, 0)
+          Array::make(num_swb, 0)
         }
         let two = aac_twoloop_search_pns(
           coefs[ch],
@@ -2468,8 +2553,12 @@ pub fn AacEncoder::encode_frame(
           self.config.sample_rate,
           self.config.channels,
           self.lambda,
+          // `on` stays the *configuration* flag: C's bandwidth compensation
+          // reads `options.pns || options.intensity_stereo`, which does not
+          // depend on the window shape, even though this frame cannot use the
+          // tool itself (§304 gives `search_for_pns` its group loop).
           aac_twoloop_pns(can_pns, self.config.pns, use_is),
-          aac_two_shape_long(),
+          two_shape,
         )
         twos.push(two)
         // `aacenc.c:971-985`: `search_for_tns` + `apply_tns_filt` run *after*
@@ -2482,10 +2571,10 @@ pub fn AacEncoder::encode_frame(
         let w = coefs[ch].copy()
         aac_encode_apply_tns(w, tns_data, offsets, num_swb, num_windows)
         work.push(w)
-        if self.config.pns {
+        if use_pns {
           let out = aac_pns_search(
             aac_pns_search_in(
-              w, sizes, self.swb_offsets, r.bands, two.sf,
+              w, sizes, offsets, r.bands, two.sf,
               two.cb, two.zeroes, can_pns, mark.pns_ener,
               self.pns_random_state,
             ),
@@ -2501,7 +2590,7 @@ pub fn AacEncoder::encode_frame(
         } else {
           cbs.push(two.cb)
           zeros.push(two.zeroes)
-          sfi.push(Array::make(self.num_swb, 0))
+          sfi.push(Array::make(num_swb, 0))
         }
       }
       let mut st = stereo
@@ -2514,7 +2603,7 @@ pub fn AacEncoder::encode_frame(
         sf_ch.push(twos[ch].sf)
         cb_ch.push(cbs[ch])
       }
-      if self.config.channels == 2 {
+      if use_stereo_psy {
         let (psy_st, ms) = aac_encode_stereo_psy(
           work,
           sizes,
@@ -2537,8 +2626,9 @@ pub fn AacEncoder::encode_frame(
       }
       // `adjust_frame_information` (`aacenc.c:503-547`), once per attempt: the
       // highest band that still carries data, shared across the pair. The
-      // window-group merge it also performs is the identity for one long
-      // window, so only the trailing-zero trim matters here.
+      // window-group merge it also performs is the identity here - one long
+      // window, or eight short ones coded as a single group (§302) - so only
+      // the trailing-zero trim matters.
       let mut iter_max_sfb = 0
       for ch in 0..<self.config.channels {
         let mut cmaxsfb = 0
@@ -2574,7 +2664,7 @@ pub fn AacEncoder::encode_frame(
       self.last_max_sfb = iter_max_sfb
       let chans : Array[AacEncChannel] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
-        let one = self.channel_data_psy(
+        let one = aac_encode_channel_data_psy(
           work[ch],
           sf_ch[ch],
           seq,
@@ -2582,6 +2672,8 @@ pub fn AacEncoder::encode_frame(
           cb_ch[ch],
           zeros[ch],
           sfi[ch],
+          offsets,
+          num_windows,
         )
         if ch == 1 {
           aac_encode_mark_is(one, st.is_bt, st.is_pos)

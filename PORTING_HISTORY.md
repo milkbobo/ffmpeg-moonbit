@@ -8273,6 +8273,75 @@ framemd5 与源帧一致，MP3 PCM 与 ffmpeg 重封装参考一致
   5/5、`aac_pns_vectors` 3/3（245 带 0 处失配）、`aac_is_vectors` 2/2、
   `aac_psy_vectors` 6/6；全量 **1410/1410** 通过。
 
+## 302. 短窗感知路径接入编码器（opt-in）
+
+§300 给了 3GPP psy 的八短窗形态、§301 给了 twoloop 的按窗分组搜索，但两轮都是
+地基：编码器的门仍是 `use_psy = perceptual && seq != aac_eight_short`，短窗帧一直
+走简化模型。本轮把这条链真正接到 `encode_frame`，并**做成显式开关**而不是改掉
+既有 `perceptual` 的语义。
+
+- **交付**
+  - `AacEncodeConfig.perceptual_short`（默认 `false`）+
+    `aac_encode_config_with_perceptual_short(config)`（像 `with_pns` 一样顺带把
+    `perceptual` 打开，并保留 `pns` / `is_stereo`）。`use_psy` 变成
+    `perceptual && (!is8 || perceptual_short)`：开关关闭时表达式与 §301 的门
+    **逻辑等价**，短窗帧仍走简化模型。
+  - `channel_data_psy` 由方法改成自由函数 `aac_encode_channel_data_psy`，新增
+    `offsets` / `num_windows`。短窗按 `w * 128 + offsets[b]` 逐窗量化——**每个窗
+    用自己的系数，共享组内的 `(sf, cb)`**；`AacEncChannel.num_windows = 8`，
+    写侧 `write_spectral` 本来就按窗数展开，`write_ics_info` 本来就写
+    `scale_factor_grouping = 0x7f`（一组八窗），两条路径复用同一套码流语法。
+  - 感知循环里 `planned_max_sfb` 改按 C 的槽位布局扫描（`w * 16 + g`，
+    长窗 stride 1 / 短窗 stride 16、8 窗）；`band_sizes_short()`、短窗
+    `offsets`、`AacTwoShape = short([8,0,...])` 一起喂给 `mark_pns` /
+    `twoloop_search_pns` / `search_for_pns` / TNS。
+  - 短窗上显式关掉三件仍是**单窗移植**的工具：`use_pns = pns && !is8`、
+    `use_stereo_psy = channels == 2 && !is8`。但 `aac_twoloop_pns(..., on)`
+    里的 `on` 仍传 `config.pns`：C 的带宽补偿读
+    `options.pns || options.intensity_stereo`，与窗形状无关，按窗形状改会引入
+    上游没有的偏差（§296 记过这条）。
+- **为什么是 opt-in**：一组八窗共用一个标度因子，而瞬态夹具故意让相邻窗能量差
+  一个数量级。实测 `aac_lc_perceptual_transient`（6 帧）从 §282 的 31.84 dB 掉到
+  **25.21 dB**；8 帧 mono 128 kbps 探针 23.31 dB、64 kbps 9.44 dB（简化路径
+  12.35 dB）；stereo 128 kbps 10.83 dB。同时 §280 那把"用 SNR 换掩蔽余量"的尺子
+  （`aac_encode_test_nmr`）是**长窗 spectrum**，短窗还没有对应的 NMR 评估，所以
+  目前没有证据表明这 6~10 dB 换到了感知收益。按 PNS / IS 的先例设成 opt-in，
+  基线不动，§303 拿短窗 NMR 再决定是否设为默认。
+- **验证**
+  - **长窗基线逐字节不变**：无 dither 的稳态 stereo 夹具 9 帧里，只有 1 个
+    `EIGHT_SHORT` 帧变化，其余 8 个长窗帧（含短窗之后的帧，证明 psy 状态没有
+    跨形状串扰）逐字节相同。三条端到端流仍是 §301 的 3166 B / 2980 B / 727 B。
+  - **外部解码对拍**：临时 main 包导出两条开了开关的 ADTS —— mono 128 kbps
+    瞬态夹具 3042 B、stereo 64 kbps 1626 B —— 交给 `linuxserver/ffmpeg:9.0.2`
+    解成 f32 PCM，与本移植解码器逐样本比：RMS **3.537e-9 / 3.689e-9**、峰值
+    7.648e-8 / 4.554e-8、相对 SNR **140.50 / 140.77 dB**，最佳延时偏移 **0**，
+    ffmpeg 退出码 0 且 stderr 为空。即码流语法与 FFmpeg 解码器语义完全一致，
+    SNR 低是量化取舍而非接线错误。开关打开后的两条流与本轮未提交时的半成品
+    **逐字节相同**（3042 / 1626 B、同样的 RMS）。
+  - **新增 4 条回归**（`aac_encode_vectors/aac_encode_short_window_test.mbt`）：
+    配置组合（含与 PNS / IS 的三种顺序）、长窗逐字节基线、短窗 ICS 语法
+    （`max_sfb <= 14`、`num_windows == 8`、`grouping == 0x7f`、5 个短窗帧全部
+    与简化路径不同）+ 解码 PCM 有限有界、stereo CPE 解码。
+  - `moon check --target wasm --deny-warn` 干净；包级 `aac_encode_vectors`
+    **23/23**；全量 **1414/1414** 通过。
+- **本轮踩到的坑**
+  - `AacTwoResult.sf/cb/zeroes` 是 **128 槽**数组，只有窗组起始槽携带决策；
+    单组八窗时前 14 个槽就是共享决定，`final_sf[b]`（b < max_sfb）拿来量化
+    8 个窗是对的，`adjust_frame_information` 的窗口组归并在单组下确为恒等。
+  - `aac_encode_test_tone` 带 LCG dither，**会触发 EIGHT_SHORT**，不能拿来做
+    "纯长窗基线"；改用无 dither 的稳态夹具。更根本的是：编码器从静音历史起步，
+    任何从零开始的夹具头三帧都是 `LONG_START → EIGHT_SHORT → LONG_STOP`，
+    所以基线断言必须按窗口形状分帧，不能要求整条流相等。
+  - 探针里的低 SNR **不是延时错位**：`aac_encode_test_pcm_snr` 已做 1024 样本
+    对齐，额外扫过 960..1089 的所有延时，最佳仍是 `@1024`。
+  - 临时 main 包会被整模块测试图收进去；全量测试前先把它和探针移进
+    `.trash/<日期>/`（§294 记过同一条）。
+- **仍未做（§303 / §304）**：`window_grouping[]` 展开成真正的多组计划并按
+  `group_len` 写 `scale_factor_grouping`；多窗形态的 `mark_pns` /
+  `search_for_pns` / `aac_is_search` / `aac_ms_search`；`adjust_frame_information`
+  的窗口组 zeroes 归并（`msc == max_sfb * num_windows` 里 `num_windows` 第一次
+  真的等于 8）；一组**短窗 NMR** 夹具来回答这轮 opt-in 该不该转正。
+
 
 
 

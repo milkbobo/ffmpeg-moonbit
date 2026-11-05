@@ -267,6 +267,18 @@
   `probe.mbt`（统一格式探测：`format.c` 的 `av_probe_input_format3` /
   `av_probe_input_format2` / `av_probe_input_buffer2`，20 个 `read_probe`
   覆盖全部已移植容器与裸流；17 组真实夹具对齐 `ffprobe format_name`）
+  ⑭ §302 把短窗接进感知路径，但**默认关**（`AacEncodeConfig.perceptual_short` +
+  `aac_encode_config_with_perceptual_short`）：一组八窗共享一条 `sf_idx`，瞬态
+  夹具掉 6~10 dB 波形 SNR，而短窗的 NMR 还没尺子量，按 PNS / IS 的先例做成
+  opt-in，开关关闭时 `use_psy` 与 §301 的门逻辑等价、长窗基线逐字节不变。
+  三条硬事实：`AacTwoResult.sf/cb/zeroes` 是 **128 槽**数组、只有窗组起始槽
+  携带决策，单组八窗时前 14 槽就是共享决定；`aac_encode_test_tone` 带 LCG
+  dither 会触发 EIGHT_SHORT，且从静音历史起步的任何夹具头三帧都是
+  `LONG_START → EIGHT_SHORT → LONG_STOP`，所以基线断言必须按窗口形状分帧
+  比，不能要求整条流相等；探针里的低 SNR 不是延时错位（helper 已做 1024
+  对齐，扫过 960..1089 的最优延时仍是 1024）。外部 ffmpeg 9.0.2 解这两条
+  短窗流与本解码器 PCM 差 3.5e-9 / 140.5 dB，说明码流语法没问题，差的是
+  量化取舍。临时 main 包先移进 `.trash/<日期>/` 再跑全量测试。
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的
