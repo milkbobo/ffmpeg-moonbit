@@ -8509,3 +8509,56 @@ loud 窗的标度因子饿死。本轮把 FFmpeg 真正注册的窗回调 `psy_l
   打印、短调用并行），行为无关，全量回归覆盖。
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1419/1419**
   （§304 是 1417，新增短窗 PNS 向量 1 条 + 短窗 PNS 流 1 条）。
+
+## 306. 立体声对的八短窗形态：search_for_is / search_for_ms 按窗分组 + MS 重写回流 sticky（§304 续篇二，短窗工具链收口）
+
+§304 交接清单最后一项：`ff_aac_search_for_is`（`aacenc_is.c`）与 `search_for_ms`
+（`aaccoder.c:702`）上游都是 `w += group_len[w]` 外层——本轮移植后短帧三件套
+（PNS §305 + IS/MS 本轮）全部就位，`perceptual_short` 路径的短帧可以开全部工具。
+
+- **`aac_is_search` 组形态**：能量门按组算（ener0/1/01/01p 组内逐窗累加）；
+  `aac_is_encoding_err` 逐窗定价——每窗自己的 psy band 阈值、自己的
+  `IS/I34/maxval/is_band_type`，而 `is_sf_idx` 与两侧 `sf_idx/band_type` 取**组起点槽**
+  （twoloop 只写组起点）；`dist_spec_err` 逐窗累加并按该窗 `lambda/minthr` 缩放。
+  `freq_mult = sr/(1024/num_windows)/2`（短窗分母是 128，不是 1024——长窗形态里写死的
+  除法只在 num_windows=1 时等价）。`prev_sf1` 链的条件读**被 IS 改写后**的
+  band_type（14/15 ≥ RESERVED_BT 被跳过）——搜索内部维护 `bt1_view` 视图（长窗下
+  这是相对 §292 形态的一处向 C 的修正）。全部数组槽化（`w*16+g`，长窗 slot==g）。
+- **`aac_ms_search` 组形态**：Mmax/Smax 取全组 companded 峰（mid/side 的 sf/cb 对整组
+  固定）；boost 循环里 dist1/dist2 逐窗累加、**bits 逐窗扣除**（C 在 w2 循环内减，
+  组>1 时 f32 舍入与"最后一次减"不同）；决策与 sf/cb 重写落组起点槽。
+  输出四条重写数组规整到槽空间长度（`aac_ms_fit`）——sf 源恒 128 而 ch1 的 cb 视图
+  长度随窗形变（长 49/短 128），调用方写回 sticky 时不再有长度错配。
+- **MS 重写回流 sticky（本轮关键语义发现）**：`search_for_ms` 只写组起点，但**下一帧
+  的分组会变**——上一帧的组起点可能变成这帧的内窗槽，其速率循环就从 MS 重写值起步
+  缩放（向量帧 1 slot 53 实证：帧 0 的 MS 把它写成 156/3，帧 1 分组变后它是内窗，
+  C 的 STICKY 停在 219/3 而"不回流"版本从 twoloop 旧值起步发散）。编码器在每次
+  attempt 的 stereo 段后把 `ms.sf*/cb*` 写回 sticky（zeroes 不动——两工具都不碰）。
+- **写侧组化**：`assemble_frame` 的 `ms_used` 按 `encode_ms_info` 组走（每组每带 1 位，
+  简化路径单组下与旧平铺逐位相同）；`mark_is` 组走盖章；`ms_present` 计数按 C 的
+  **逐窗**槽走（`w < num_windows*16; w += 16`，总数 max_sfb×num_windows——组内窗的
+  槽恒 0，所以多组帧取不到 mode 2，这是 C 的原样行为）。
+- **harness `--isms` 模式**：立体声对 + 前五种 `window_grouping` 循环 + 相位混合谱
+  （ch1 = corr[w]·ch0 + ±300 独立噪声，corr 窗 2/3/6 为负→两个相位 + flip 候选），
+  复放 `aacenc.c:946-1000` 元素循环（清理→per-channel mark/twoloop/pns→IS→mix→MS，
+  `group_map[0]=1` 走 ff_psy_init 的 +1 技巧让对共享一次 analyze；补了
+  `bitres.alloc /= chans`）。修了三处 harness 自身 bug：PSYALLOC 打印在 analyze 前、
+  生成器 slot 列表在 PRE0/PRE1 各追加一次（84≠42）、ISDUMP 的 bt1 在未认领槽打印的是
+  PNS 后码本（断言范围相应收窄）。
+- **黄金向量（`aac_is_vectors/fixtures_short.mbt`，532 槽决策）**：PRE（两通道组起点
+  sf/bt/z）+ STICKY（两通道 128×3）+ ISDUMP（is_mask/ms_mask/bt1/两 ener）+ MSDUMP
+  （ms_mask + 双通道 sf/cb 重写）逐槽全等；夹具真实触发 is=77（flip 21）ms=140。
+  MB 复放含 MS 回流 sticky。
+- **端到端**：新增 `aac_lc_perceptual_short_is_ms_stream`（反相窗高频 tonal 夹具：
+  短帧真实携带 34 个 IS 带、plain 臂 0、双解码峰值有界）；探针导出 128k/64k 两条
+  pns+is+short 全开流：docker ffmpeg 9.0.2 解码 **0 errors**，与 MB 解码器 PCM 对拍
+  max_diff 4.8e-8（一致性 139.7/140.0 dB）——分组 ms_used/IS sf 链/off_is 组主序全部
+  被真实解码器认可。
+- **基线（硬验收）**：stash 前后 default/perceptual/perceptual+pns/perceptual+pns+is
+  四条长窗流字节计数与 FNV **完全一致**（MS 回流对长窗无行为差异——长窗全部槽数都是
+  组起点，下一帧 twoloop 必然重写，回流值永不被读到）。
+- **本轮坑**：`aac_decode_ics_with_info` 自读 global_gain 且不含 spectral——手工 CPE
+  解析别多读 8 位、必须跟 `parse_spectrum`；`AacIcsInfo` 无 ms_mode 字段（读原始
+  2 位）；moon fmt 会把 lambda 签名重排，脚本化替换要按 fmt 后形态锚定。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1421/1421**（§305 是
+  1419，新增 isms 向量 1 条 + 短窗 IS/MS 流 1 条）。短窗工具链（PNS/IS/MS）就此收口。

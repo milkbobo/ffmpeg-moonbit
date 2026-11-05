@@ -303,6 +303,17 @@
   向量 `aac_pns_vectors/fixtures_short.mbt` 连每帧末的 STICKY 128×3 都逐槽钉死；
   短窗+PNS 流 ffmpeg 9.0.2 解码 0 errors、双解码器一致 140 dB；IS/M-S 的
   多组化是续篇（§306）。
+  ⑰ §306 立体声对八短窗形态（短窗工具链收口）：`aac_is_search`/`aac_ms_search`
+  按 `w += group_len[w]` 分组——IS 的能量门组内求和、逐窗按各自 psy band 定价但
+  sf/cb 取组起点槽，`freq_mult` 分母是 `1024/num_windows`；MS 的 Mmax/Smax 取全组
+  峰、bits 逐窗扣除、输出规整到槽长（`aac_ms_fit`，sf 源恒 128 而 cb1 视图长度随
+  窗形变）。**MS 重写必须回流 sticky**：分组会跨帧变化，上一帧的组起点可能变成
+  下一帧的内窗（向量帧 1 slot 53 实证）；长窗全部槽都是组起点、回流无行为差异
+  （四条长窗基线字节不变已证）。写侧 `ms_used`/`mark_is` 组走、`ms_present` 计数
+  按 C 逐窗槽走（多组帧取不到 mode 2 是 C 原样）。harness `--isms` 模式
+  （`group_map[0]=1` 共享 analyze + `alloc /= chans`）；向量
+  `aac_is_vectors/fixtures_short.mbt`（532 槽 + STICKY 全等，is=77/flip 21/ms=140）；
+  pns+is+short 全开流 ffmpeg 解码 0 errors、双解码器 140 dB。全量 1421/1421。
 
 策略：**垂直切片**，从自包含、可独立验证的纯算法入手。**向量化（SIMD）内核用 MoonBit
 `@v128`（`moonbitlang/core/v128`，Wasm SIMD128 / native SIMD）重写** —— FFmpeg 的

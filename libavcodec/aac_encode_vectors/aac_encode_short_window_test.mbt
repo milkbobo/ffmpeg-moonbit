@@ -587,3 +587,129 @@ test "aac_lc_perceptual_short_pns_stream" {
   assert_true(peak < 4.0)
   assert_true(snr > 8.0)
 }
+
+///|
+/// §306: the stereo pair of tools on the short-window frames. The intensity
+/// and mid/side searches now walk window groups, so a transient stereo stream
+/// with both tools on must carry real `INTENSITY_BT` bands and a per-group
+/// `ms_used` bit layout in its short frames, the run without them must carry
+/// neither, and both must decode to a finite waveform. Intensity is
+/// waveform-inexact by design on its bands (the decoder rebuilds the right
+/// half from the left), so the reconstruction guard is finiteness plus a
+/// bounded peak, not transparency.
+test "aac_lc_perceptual_short_is_ms_stream" {
+  let rate = 44100
+  let frames = 8
+  // A stereo transient: correlated tonal base (so mid/side has real work) with
+  // per-channel clicks at different offsets and inverted high-frequency
+  // windows in the second channel (so intensity, both phases and the flip
+  // variant all get candidates).
+  let mono = aac_encode_test_transient(rate, frames)
+  let other : Array[Double] = Array::make(frames * 1024, 0.0)
+  for i = 0; i < frames * 1024; i = i + 1 {
+    let t = i.to_double() / rate.to_double()
+    // A correlated low tone for mid/side and a strong high component (well
+    // above the intensity gate) for the intensity search.
+    let v = 0.05 * @math.sin(2.0 * 3.14159265358979323846 * 880.0 * t) +
+      0.04 * @math.sin(2.0 * 3.14159265358979323846 * 7700.0 * t)
+    // Invert the correlation in windows 2, 3 and 6.
+    let w = i / 128 % 8
+    let s = if w == 2 || w == 3 || w == 6 { -0.9 } else { 0.95 }
+    other[i] = v * s
+  }
+  for k = 0; k < 3; k = k + 1 {
+    let pos = 700 + k * 2048 + 96
+    if pos < frames * 1024 {
+      other[pos] = if k % 2 == 0 { -1.0 } else { 1.0 }
+    }
+  }
+  let input = [mono[0], other]
+  let short = @libavcodec.aac_encode_config_with_perceptual_short(
+    @libavcodec.aac_encode_config_perceptual(rate, 2, 128000),
+  )
+  let plain_stream = aac_encode_test_stream_config(input, 2, frames, short)
+  let tools_stream = aac_encode_test_stream_config(
+    input,
+    2,
+    frames,
+    @libavcodec.aac_encode_config_with_is(short),
+  )
+  // Section-derived tool census over every short frame, both channels.
+  let census : (Array[Bytes]) -> (Int32, Int32, Int32) = fn(stream) {
+    let mut is_bands = 0
+    let mut noise_bands = 0
+    let mut short_frames = 0
+    for f = 0; f < stream.length(); f = f + 1 {
+      let payload = stream[f]
+        .clamped_view(
+          start=@libavcodec.av_aac_adts_header_size,
+          end=stream[f].length(),
+        )
+        .to_owned()
+      let gb = @libavcodec.BitReader::new(payload)
+      let id = gb.read(3).reinterpret_as_int()
+      let _ = gb.read(4)
+      if id != 1 {
+        abort("short is/ms test: expected a channel pair")
+      }
+      if gb.read1() != 1U {
+        abort("short is/ms test: expected a common window")
+      }
+      let info = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gb))
+      let ms_mode = gb.read(2).reinterpret_as_int()
+      if ms_mode == 1 {
+        // ms_used: one bit per group-start band, group by group - so on an
+        // eight-short frame that is every window group's max_sfb bits.
+        let mut b = 0
+        let bits = info.num_window_groups * info.max_sfb
+        while b < bits {
+          let _ = gb.read1()
+          b = b + 1
+        }
+      }
+      if info.window_sequence == 2 {
+        short_frames = short_frames + 1
+      }
+      for ch = 0; ch < 2; ch = ch + 1 {
+        let ics = aac_encode_test_ok(
+          @libavcodec.aac_decode_ics_with_info(gb, Some(info)),
+        )
+        // Consume the spectral data too, or the next channel starts
+        // mid-spectrum.
+        let _ = aac_encode_test_parse_spectrum(gb, ics)
+        for g = 0; g < ics.sect_cb.length(); g = g + 1 {
+          for b = 0; b < ics.sect_cb[g].length(); b = b + 1 {
+            let cb = ics.sect_cb[g][b]
+            if cb == 14 || cb == 15 {
+              is_bands = is_bands + 1
+            }
+            if cb == 13 {
+              noise_bands = noise_bands + 1
+            }
+          }
+        }
+      }
+    }
+    (is_bands, noise_bands, short_frames)
+  }
+  let (plain_is, plain_noise, plain_short) = census(plain_stream)
+  let (tools_is, tools_noise, tools_short) = census(tools_stream)
+  let decoded = aac_encode_test_decode(tools_stream, 2)
+  let mut peak = 0.0
+  for ch = 0; ch < 2; ch = ch + 1 {
+    for f = 0; f < decoded[ch].length(); f = f + 1 {
+      let v = decoded[ch][f]
+      assert_true(v == v)
+      if v.abs() > peak {
+        peak = v.abs()
+      }
+    }
+  }
+  println(
+    "perceptual short IS/MS: is bands \{plain_is} -> \{tools_is}, noise \{plain_noise} -> \{tools_noise}, short frames \{plain_short}/\{tools_short}, peak=\{peak}",
+  )
+  assert_true(plain_short > 0)
+  assert_true(tools_is > 0)
+  assert_true(plain_is == 0)
+  assert_true(peak < 4.0)
+}

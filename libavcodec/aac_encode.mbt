@@ -1170,11 +1170,19 @@ fn aac_encode_mark_is(
   bt : Array[Int32],
   pos : Array[Int32],
 ) -> Unit {
-  for b = 0; b < ch.max_sfb && b < bt.length(); b = b + 1 {
-    if bt[b] != 0 {
-      ch.cb[b] = bt[b]
-      ch.sf[b] = pos[b]
+  // The window-group walk of `encode_ms_info`'s siblings: on a short frame the
+  // decisions live on the group-start slots `w * 16 + b`; on a long frame the
+  // single group makes the slot of band `b` be `b` itself.
+  let mut w = 0
+  while w < ch.num_windows {
+    for b = 0; b < ch.max_sfb && b < bt.length(); b = b + 1 {
+      let slot = w * 16 + b
+      if bt[slot] != 0 && slot < ch.cb.length() && slot < ch.sf.length() {
+        ch.cb[slot] = bt[slot]
+        ch.sf[slot] = pos[slot]
+      }
     }
+    w = w + ch.group_len[w]
   }
 }
 
@@ -1229,18 +1237,24 @@ fn aac_encode_apply_ms(
   num_swb : Int32,
   mask : Array[Bool],
   num_windows : Int32,
+  group_len : Array[Int32],
 ) -> Unit {
-  for b = 0; b < num_swb; b = b + 1 {
-    if !mask[b] {
-      continue
-    }
-    for w = 0; w < num_windows; w = w + 1 {
-      for i = w * 128 + offsets[b]; i < w * 128 + offsets[b + 1]; i = i + 1 {
-        let m = (left[i] + right[i]) * 0.5
-        right[i] = m - right[i]
-        left[i] = m
+  let mut w = 0
+  while w < num_windows {
+    for b = 0; b < num_swb; b = b + 1 {
+      if !mask[w * 16 + b] {
+        continue
+      }
+      for w2 = 0; w2 < group_len[w]; w2 = w2 + 1 {
+        let base = (w + w2) * 128
+        for i = base + offsets[b]; i < base + offsets[b + 1]; i = i + 1 {
+          let m = (left[i] + right[i]) * 0.5
+          right[i] = m - right[i]
+          left[i] = m
+        }
       }
     }
+    w = w + group_len[w]
   }
 }
 
@@ -1307,6 +1321,13 @@ fn aac_encode_stereo(
   for b = 0; b < num_swb; b = b + 1 {
     ms_mask[b] = mask[b] && bt[b] == 0 && noise[b] == 0
   }
+  // The simplified path codes a short frame as one group of eight windows
+  // (§302's shape), so its band-indexed arrays slot trivially.
+  let simple_group : Array[Int32] = if num_windows == 8 {
+    [8, 0, 0, 0, 0, 0, 0, 0]
+  } else {
+    [1, 0, 0, 0, 0, 0, 0, 0]
+  }
   if use_is {
     aac_is_apply(
       left,
@@ -1314,12 +1335,15 @@ fn aac_encode_stereo(
       offsets,
       num_swb,
       num_windows,
+      simple_group,
       bt,
       Array::make(num_swb, false),
       scale,
     )
   }
-  aac_encode_apply_ms(left, right, offsets, num_swb, ms_mask, num_windows)
+  aac_encode_apply_ms(
+    left, right, offsets, num_swb, ms_mask, num_windows, simple_group,
+  )
   { ms_present: 0, ms_mask, is_bt: bt, is_pos: pos, }
 }
 
@@ -1346,17 +1370,27 @@ fn aac_encode_stereo_psy(
   offsets : Array[Int32],
   num_swb : Int32,
   num_windows : Int32,
+  group_len : Array[Int32],
   sample_rate : Int32,
   lambda : Double,
   use_is : Bool,
 ) -> (AacEncStereo, AacMsOut) {
-  let no_mask : Array[Int32] = Array::make(num_swb, 0)
+  let shape = if num_windows == 8 {
+    aac_two_shape_short(group_len)
+  } else {
+    aac_two_shape_long()
+  }
+  // Slot-space size: the full `w * 16 + g` range on a short frame, plain band
+  // indices on a long one (where the slot of band `g` is `g`).
+  let slots = if num_windows == 8 { 128 } else { num_swb }
+  let no_mask : Array[Int32] = Array::make(slots, 0)
   let (is_mask, bt, pos, scale, flip_in) = if use_is {
     let isr = aac_is_search(
       aac_is_in(
         work[0],
         work[1],
         band_sizes,
+        shape,
         thr[0],
         thr[1],
         twos[0].sf,
@@ -1370,13 +1404,20 @@ fn aac_encode_stereo_psy(
       sample_rate,
       lambda,
     )
-    let pos : Array[Int32] = Array::make(num_swb, 0)
+    // `set_special_band_scalefactors`' position chain: the ±60 window runs in
+    // emission order - group by group, bands within each group.
+    let pos : Array[Int32] = Array::make(slots, 0)
     let mut prev = 0
-    for b = 0; b < num_swb; b = b + 1 {
-      if isr.is_mask[b] == 1 {
-        pos[b] = aac_encode_is_position(isr.is_ener1[b], prev)
-        prev = pos[b]
+    let mut wg = 0
+    while wg < num_windows {
+      for g = 0; g < num_swb; g = g + 1 {
+        let slot = wg * 16 + g
+        if isr.is_mask[slot] == 1 {
+          pos[slot] = aac_encode_is_position(isr.is_ener1[slot], prev)
+          prev = pos[slot]
+        }
       }
+      wg = wg + group_len[wg]
     }
     (isr.is_mask, isr.band_type1, pos, isr.is_ener0, isr.ms_mask)
   } else {
@@ -1384,28 +1425,42 @@ fn aac_encode_stereo_psy(
       no_mask.copy(),
       no_mask.copy(),
       no_mask.copy(),
-      Array::make(num_swb, 0.0),
+      Array::make(slots, 0.0),
       no_mask.copy(),
     )
   }
-  let flip : Array[Bool] = Array::make(num_swb, false)
-  for b = 0; b < num_swb; b = b + 1 {
+  let flip : Array[Bool] = Array::make(slots, false)
+  for b = 0; b < slots; b = b + 1 {
     flip[b] = flip_in[b] == 1
   }
-  aac_is_apply(work[0], work[1], offsets, num_swb, num_windows, bt, flip, scale)
+  aac_is_apply(
+    work[0],
+    work[1],
+    offsets,
+    num_swb,
+    num_windows,
+    group_len,
+    bt,
+    flip,
+    scale,
+  )
   // The right channel's band type already reads 14/15 on the intensity bands,
   // and `search_for_ms` must see that: `ff_init_nextband_map` skips those
   // entries, which is what keeps the scalefactor-delta chain it tests
   // consistent with the one the bitstream will carry.
-  let cb1 : Array[Int32] = Array::make(num_swb, 0)
-  for b = 0; b < num_swb; b = b + 1 {
-    cb1[b] = if is_mask[b] == 1 { bt[b] } else { cbs[1][b] }
+  let cb1 : Array[Int32] = Array::make(slots, 0)
+  for w = 0; w < num_windows; w = w + 1 {
+    for b = 0; b < num_swb; b = b + 1 {
+      let slot = w * 16 + b
+      cb1[slot] = if is_mask[slot] == 1 { bt[slot] } else { cbs[1][slot] }
+    }
   }
   let ms = aac_ms_search(
     aac_ms_in(
       work[0],
       work[1],
       band_sizes,
+      shape,
       thr[0],
       thr[1],
       twos[0].sf,
@@ -1420,14 +1475,17 @@ fn aac_encode_stereo_psy(
     ),
     lambda,
   )
-  let ms_mask : Array[Bool] = Array::make(num_swb, false)
-  let apply_mask : Array[Bool] = Array::make(num_swb, false)
-  for b = 0; b < num_swb; b = b + 1 {
-    ms_mask[b] = ms.ms_mask[b] == 1
-    apply_mask[b] = ms_mask[b] &&
-      is_mask[b] == 0 &&
-      ms.cb0[b] < 13 &&
-      ms.cb1[b] < 13
+  let ms_mask : Array[Bool] = Array::make(slots, false)
+  let apply_mask : Array[Bool] = Array::make(slots, false)
+  for w = 0; w < num_windows; w = w + 1 {
+    for b = 0; b < num_swb; b = b + 1 {
+      let slot = w * 16 + b
+      ms_mask[slot] = ms.ms_mask[slot] == 1
+      apply_mask[slot] = ms_mask[slot] &&
+        is_mask[slot] == 0 &&
+        ms.cb0[slot] < 13 &&
+        ms.cb1[slot] < 13
+    }
   }
   aac_encode_apply_ms(
     work[0],
@@ -1436,6 +1494,7 @@ fn aac_encode_stereo_psy(
     num_swb,
     apply_mask,
     num_windows,
+    group_len,
   )
   ({ ms_present: 0, ms_mask, is_bt: bt, is_pos: pos, }, ms)
 }
@@ -2300,10 +2359,15 @@ fn AacEncoder::assemble_frame(
     aac_encode_write_ics_info(bw, chans[0])
     bw.put(stereo.ms_present.reinterpret_as_uint(), 2)
     // `encode_ms_info` (`aacenc.c:489-498`): mode 2 means every band is
-    // mid/side, so the mask itself is not transmitted.
+    // mid/side, so the mask itself is not transmitted. Mode 1 writes one bit
+    // per group-start slot, group by group.
     if stereo.ms_present == 1 {
-      for b = 0; b < max_sfb; b = b + 1 {
-        bw.put(if stereo.ms_mask[b] { 1 } else { 0 }, 1)
+      let mut w = 0
+      while w < chans[0].num_windows {
+        for b = 0; b < max_sfb; b = b + 1 {
+          bw.put(if stereo.ms_mask[w * 16 + b] { 1 } else { 0 }, 1)
+        }
+        w = w + chans[0].group_len[w]
       }
     }
     for ch = 0; ch < 2; ch = ch + 1 {
@@ -2479,21 +2543,15 @@ pub fn AacEncoder::encode_frame(
   // Since §302 the perceptual path can take both window shapes: `aac_psy.mbt`
   // analyses eight short windows (§300) and the quantiser search walks window
   // groups (§301); since §304 the short frames carry the LAME analyser's real
-  // `scale_factor_grouping`. Three tools are still single-window ports -
-  // `mark_pns`/`search_for_pns`, `aac_is_search` and `aac_ms_search`, all of
-  // which upstream loop over `w += group_len[w]` - so on a short frame they
-  // stay off and the frame is coded with its window groups and TNS alone.
+  // `scale_factor_grouping`; since §305 PNS runs on them, and since §306 so do
+  // the stereo pair of tools - all of them walk `w += group_len[w]` upstream.
   //
   // The short-window half is opt-in (`perceptual_short`): with it off, a short
   // frame keeps the simplified model and every long-window baseline stream is
   // byte-for-byte what §301 produced.
   let use_is = self.config.is_stereo
-  // §305: the PNS pair of tools now walk window groups, so a short frame may
-  // use them on the perceptual short path (`use_psy` there means
-  // `perceptual && perceptual_short`); the stereo pair is still long-only
-  // until their group forms land.
   let use_pns = self.config.pns && (!is8 || use_psy)
-  let use_stereo_psy = self.config.channels == 2 && !is8
+  let use_stereo_psy = self.config.channels == 2 && use_psy
   let mut stereo = aac_encode_stereo_none(num_swb)
   if self.config.channels == 2 && !use_psy {
     stereo = aac_encode_stereo(
@@ -2638,14 +2696,20 @@ pub fn AacEncoder::encode_frame(
       // again. A frame that fits resets lambda to 120. This keeps the psy bit
       // reservoir from draining: frames never exceed the nominal size, so
       // `fill_level` stays positive and the model keeps asking for detail.
-      // The masking thresholds the intensity cost test compares against, one row
-      // per channel (`aac_is_encoding_err` reads `band0->threshold` and
-      // `band1->threshold`).
+      // The masking thresholds the intensity cost test compares against, one
+      // row per channel (`aac_is_encoding_err` reads `band0->threshold` and
+      // `band1->threshold`), in slot layout (`w * 16 + g` on a short frame).
       let thr : Array[Array[Double]] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
-        let row : Array[Double] = Array::make(num_swb, 0.0)
-        for b = 0; b < num_swb; b = b + 1 {
-          row[b] = psy_iter[ch].bands[b].threshold
+        let row : Array[Double] = if is8 {
+          Array::make(128, 0.0)
+        } else {
+          Array::make(num_swb, 0.0)
+        }
+        for w = 0; w < num_windows; w = w + 1 {
+          for b = 0; b < num_swb; b = b + 1 {
+            row[w * 16 + b] = psy_iter[ch].bands[w * 16 + b].threshold
+          }
         }
         thr.push(row)
       }
@@ -2797,6 +2861,7 @@ pub fn AacEncoder::encode_frame(
           offsets,
           num_swb,
           num_windows,
+          group_len,
           self.config.sample_rate,
           self.lambda,
           use_is,
@@ -2806,6 +2871,21 @@ pub fn AacEncoder::encode_frame(
         cb_ch[0] = ms.cb0
         sf_ch[1] = ms.sf1
         cb_ch[1] = ms.cb1
+        // The element carries the stereo rewrites into the next frame: the
+        // search writes group-start slots only, but the next frame's grouping
+        // can turn one of them into an inner window, whose twoloop rate loop
+        // then scales from the rewritten value.  Zeroes are untouched by both
+        // tools, so only sf/band_type flow back into the sticky arrays.
+        // The arrays are slot-length on a short frame and band-length on a
+        // long one, so each write is bounded by its own array.
+        for slot = 0; slot < ms.sf0.length(); slot = slot + 1 {
+          self.sticky_sf[0][slot] = ms.sf0[slot]
+          self.sticky_cb[0][slot] = ms.cb0[slot]
+        }
+        for slot = 0; slot < ms.sf1.length(); slot = slot + 1 {
+          self.sticky_sf[1][slot] = ms.sf1[slot]
+          self.sticky_cb[1][slot] = ms.cb1[slot]
+        }
       }
       // `adjust_frame_information` (`aacenc.c:503-547`), once per attempt:
       // per channel, each group's trailing-zero trim over its start slots
@@ -2854,12 +2934,16 @@ pub fn AacEncoder::encode_frame(
       }
       // `ms_mode` (`aacenc.c:544-547`): 0 with no marked band, 2 when every
       // band of every window is marked - and then the mask itself is not
-      // transmitted at all. Only a channel pair has a mask to count.
+      // transmitted at all. The count walks every window's slots (not the
+      // groups), because that is the total the comparison divides by; only a
+      // channel pair has a mask to count.
       let mut msc = 0
       if self.config.channels == 2 {
-        for b = 0; b < iter_max_sfb; b = b + 1 {
-          if st.ms_mask[b] {
-            msc = msc + 1
+        for w = 0; w < num_windows; w = w + 1 {
+          for b = 0; b < iter_max_sfb; b = b + 1 {
+            if st.ms_mask[w * 16 + b] {
+              msc = msc + 1
+            }
           }
         }
       }

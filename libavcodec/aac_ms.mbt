@@ -1,12 +1,21 @@
 ///|
-/// `search_for_ms`, FFmpeg 9.0.2 `libavcodec/aaccoder.c:702`, restricted to one
-/// long window (the only shape this project's perceptual path runs). It runs
-/// after intensity stereo has been mixed in, and for every band that neither
-/// tool has already claimed it prices `(L, R)` against `(M, S)` with the same
-/// rate-distortion function the quantiser uses - `M = (L + R) * 0.5`,
-/// `S = M - R` - and on a win it *rewrites* both channels' scalefactor and
-/// band type, because the mid/side pair is quantised together at
-/// `min(sf_L, sf_R)`.
+/// `search_for_ms`, FFmpeg 9.0.2 `libavcodec/aaccoder.c:702`, both window
+/// shapes: one long window, or the eight short windows walked in their
+/// `w += group_len[w]` groups. It runs after intensity stereo has been mixed
+/// in, and for every band that neither tool has already claimed it prices
+/// `(L, R)` against `(M, S)` with the same rate-distortion function the
+/// quantiser uses - `M = (L + R) * 0.5`, `S = M - R` - and on a win it
+/// *rewrites* both channels' scalefactor and band type, because the mid/side
+/// pair is quantised together at `min(sf_L, sf_R)`.
+///
+/// On a short frame the mid/side scalefactors and codebooks are fixed for
+/// the whole window group from the companded peak of `M` and `S` over all
+/// its windows, while the distortion sums price every window against its own
+/// psy band record - and the bit counts are subtracted per window, inside the
+/// window loop, so the group's comparison is rounded exactly like C's
+/// (`aaccoder.c:745-790`). Every array is slot-indexed; the decision lands on
+/// the group-start slot `w * 16 + g` (for a long frame the slot of band `g`
+/// is `g` itself).
 ///
 /// Four attempts per band, indexed by `sid_sf_boost`: each lowers the side
 /// channel's scalefactor by three more steps (a coarser side, which is what
@@ -54,15 +63,18 @@ let aac_ms_b_divisor : Double = 0.0044999998062849045
 
 ///|
 /// Everything `search_for_ms` reads: the pair's spectra as they stand after
-/// intensity stereo has been mixed in, both channels' masking thresholds and
-/// their twoloop/PNS outcome, plus the intensity mask it must leave alone.
-/// `ms_mask` is the *incoming* mask: the intensity search records an out-of-phase
-/// band there (it has no other place to say "flip the sign at decode time"), and
-/// `search_for_ms` only rewrites the entries that intensity did not claim.
+/// intensity stereo has been mixed in, both channels' masking thresholds (in
+/// C's slot layout, `g` for a long frame and `w * 16 + g` for a short one),
+/// the window grouping, their twoloop/PNS outcome, plus the intensity mask it
+/// must leave alone. `ms_mask` is the *incoming* mask: the intensity search
+/// records an out-of-phase band there (it has no other place to say "flip the
+/// sign at decode time"), and `search_for_ms` only rewrites the entries that
+/// intensity did not claim.
 pub struct AacMsIn {
   coefs0 : Array[Double]
   coefs1 : Array[Double]
   band_sizes : Array[Int32]
+  shape : AacTwoShape
   thr0 : Array[Double]
   thr1 : Array[Double]
   sf0 : Array[Int32]
@@ -82,6 +94,7 @@ pub fn aac_ms_in(
   coefs0 : Array[Double],
   coefs1 : Array[Double],
   band_sizes : Array[Int32],
+  shape : AacTwoShape,
   thr0 : Array[Double],
   thr1 : Array[Double],
   sf0 : Array[Int32],
@@ -98,6 +111,7 @@ pub fn aac_ms_in(
     coefs0,
     coefs1,
     band_sizes,
+    shape,
     thr0,
     thr1,
     sf0,
@@ -113,7 +127,7 @@ pub fn aac_ms_in(
 }
 
 ///|
-/// The mask plus the *rewritten* per-band scalefactor and band type of both
+/// The mask plus the *rewritten* per-slot scalefactor and band type of both
 /// channels - the quantiser and the bitstream write these, not the twoloop
 /// values. `boost`/`dist1`/`dist2` are the last attempt's bookkeeping, exported
 /// so a vector test can pin the comparison itself and not only its outcome.
@@ -189,6 +203,17 @@ fn aac_ms_band_cost(
 }
 
 ///|
+/// Copy `src` into a fresh `len`-long array (the inputs' lengths differ by
+/// window shape; the outputs must not).
+fn aac_ms_fit(src : Array[Int32], len : Int32) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(len, 0)
+  for i in 0..<len {
+    out[i] = src[i]
+  }
+  out
+}
+
+///|
 /// `FFMAX(1, x)`: `search_for_ms` never lets a codebook be zero, since a zero
 /// band type would tell the decoder to skip the band's spectral data.
 fn aac_ms_max1(x : Int32) -> Int32 {
@@ -200,165 +225,208 @@ fn aac_ms_max1(x : Int32) -> Int32 {
 }
 
 ///|
-/// `search_for_ms` (`aaccoder.c:702`), one long window.
+/// `search_for_ms` (`aaccoder.c:702`), both window shapes. Every array is
+/// slot-indexed; on a long frame the slot of band `g` is `g`.
 pub fn aac_ms_search(d : AacMsIn, lambda : Double) -> AacMsOut {
   let n = d.num_swb
-  let ms_mask = d.ms_mask.copy()
-  let sf0 = d.sf0.copy()
-  let sf1 = d.sf1.copy()
-  let cb0 = d.cb0.copy()
-  let cb1 = d.cb1.copy()
-  let boost : Array[Int32] = Array::make(n, -1)
-  let dist1_out : Array[Double] = Array::make(n, 0.0)
-  let dist2_out : Array[Double] = Array::make(n, 0.0)
-  let mid_cost_out : Array[Double] = Array::make(n, 0.0)
-  let bits1_out : Array[Int32] = Array::make(n, 0)
-  let bmax_out : Array[Double] = Array::make(n, 0.0)
-  let nextband0 = aac_two_init_nextband_map(
-    d.zeroes0,
-    d.cb0,
-    n,
-    aac_two_shape_long(),
-  )
-  let nextband1 = aac_two_init_nextband_map(
-    d.zeroes1,
-    d.cb1,
-    n,
-    aac_two_shape_long(),
-  )
+  let num_windows = d.shape.num_windows
+  let group_len = d.shape.group_len
+  // Output arrays live in slot space: the full `w * 16 + g` range on a short
+  // frame, plain band indices on a long one.
+  let out_len = if num_windows == 1 { n } else { 128 }
+  let ms_mask = aac_ms_fit(d.ms_mask, out_len)
+  // All four rewrites are normalised to the slot-space length: the scalefactor
+  // arrays arrive twoloop-length (always 128) while the right channel's band
+  // type arrives view-length (band-long or slot-short), and the caller writes
+  // the result back onto the element's sticky arrays of exactly `out_len`.
+  let sf0 = aac_ms_fit(d.sf0, out_len)
+  let sf1 = aac_ms_fit(d.sf1, out_len)
+  let cb0 = aac_ms_fit(d.cb0, out_len)
+  let cb1 = aac_ms_fit(d.cb1, out_len)
+  let boost : Array[Int32] = Array::make(out_len, -1)
+  let dist1_out : Array[Double] = Array::make(out_len, 0.0)
+  let dist2_out : Array[Double] = Array::make(out_len, 0.0)
+  let mid_cost_out : Array[Double] = Array::make(out_len, 0.0)
+  let bits1_out : Array[Int32] = Array::make(out_len, 0)
+  let bmax_out : Array[Double] = Array::make(out_len, 0.0)
+  let nextband0 = aac_two_init_nextband_map(d.zeroes0, d.cb0, n, d.shape)
+  let nextband1 = aac_two_init_nextband_map(d.zeroes1, d.cb1, n, d.shape)
   // `mslambda` is the side channel's own discount, capped at 1.
   let boost_lambda = aac_two_div(lambda, 120.0)
   let msl = if boost_lambda < 1.0 { boost_lambda } else { 1.0 }
   let mut prev_mid = sf0[0]
   let mut prev_side = sf1[0]
-  let mut start = 0
-  for g = 0; g < n; g = g + 1 {
-    let size = d.band_sizes[g]
-    let gdouble = aac_two_div(aac_two_mul(g.to_double(), 17.0), n.to_double())
-    let bmax = aac_two_div(aac_ms_bval2bmax(gdouble), aac_ms_b_divisor)
-    // `search_for_ms` claims the whole mask for its own use everywhere except
-    // where intensity stereo already put something: an out-of-phase band's flip
-    // marker lives in `ms_mask` and survives this search untouched.
-    if d.is_mask[g] == 0 {
-      ms_mask[g] = 0
-    }
-    if d.zeroes0[g] == 0 && d.zeroes1[g] == 0 && d.is_mask[g] == 0 {
-      // Mid/side's scalefactor and codebook are fixed for the whole window
-      // group from the companded peak of `M` and `S`, so compute them first.
-      let m : Array[Double] = Array::make(size, 0.0)
-      let s : Array[Double] = Array::make(size, 0.0)
-      let l : Array[Double] = Array::make(size, 0.0)
-      let r : Array[Double] = Array::make(size, 0.0)
-      for i in 0..<size {
-        let c0 = aac_two_f32(d.coefs0[start + i])
-        let c1 = aac_two_f32(d.coefs1[start + i])
-        l[i] = c0
-        r[i] = c1
-        m[i] = aac_two_mul(aac_two_add(c0, c1), 0.5)
-        s[i] = aac_two_sub(m[i], c1)
+  let m : Array[Double] = Array::make(128, 0.0)
+  let s : Array[Double] = Array::make(128, 0.0)
+  let l : Array[Double] = Array::make(128, 0.0)
+  let r : Array[Double] = Array::make(128, 0.0)
+  let qc : Array[Int32] = Array::make(128, 0)
+  let mut w = 0
+  while w < num_windows {
+    let gl = group_len[w]
+    let mut start = 0
+    for g in 0..<n {
+      let size = d.band_sizes[g]
+      let slot = w * 16 + g
+      let gdouble = aac_two_div(aac_two_mul(g.to_double(), 17.0), n.to_double())
+      let bmax = aac_two_div(aac_ms_bval2bmax(gdouble), aac_ms_b_divisor)
+      // `search_for_ms` claims the whole mask for its own use everywhere except
+      // where intensity stereo already put something: an out-of-phase band's
+      // flip marker lives in `ms_mask` and survives this search untouched.
+      if d.is_mask[slot] == 0 {
+        ms_mask[slot] = 0
       }
-      let m34 = aac_two_abs_pow34(m, size)
-      let s34 = aac_two_abs_pow34(s, size)
-      let mmax = aac_two_find_max_val(1, size, m34, 0)
-      let smax = aac_two_find_max_val(1, size, s34, 0)
-      let l34 = aac_two_abs_pow34(l, size)
-      let r34 = aac_two_abs_pow34(r, size)
-      let minidx = if sf0[g] < sf1[g] { sf0[g] } else { sf1[g] }
-      for b = 0; b < 4; b = b + 1 {
-        let mididx = aac_two_clip(minidx, 0, aac_ms_scale_top)
-        let sididx = aac_two_clip(minidx - b * 3, 0, aac_ms_scale_top)
-        if cb0[g] != aac_ms_noise_bt &&
-          cb1[g] != aac_ms_noise_bt &&
-          !(aac_ms_can_replace(sf0, nextband0, prev_mid, mididx, g) &&
-          aac_ms_can_replace(sf1, nextband1, prev_side, sididx, g)) {
-          // Upstream: "scalefactor range violation, bad stuff, will decrease
-          // quality unacceptably".
-          continue
-        }
-        let midcb = aac_ms_max1(aac_two_find_min_book(mmax, mididx))
-        let sidcb = aac_ms_max1(aac_two_find_min_book(smax, sididx))
-        let qc : Array[Int32] = Array::make(size, 0)
-        let thr0 = aac_two_add(d.thr0[g], aac_ms_flt_min)
-        let thr1 = aac_two_add(d.thr1[g], aac_ms_flt_min)
-        let minthr = if thr0 < thr1 { thr0 } else { thr1 }
-        let minthr_eps = aac_two_add(minthr, aac_ms_flt_min)
-        let cl = aac_ms_band_cost(
-          l,
-          l34,
-          qc,
-          size,
-          sf0[g],
-          cb0[g],
-          aac_two_div(lambda, thr0),
-        )
-        let cr = aac_ms_band_cost(
-          r,
-          r34,
-          qc,
-          size,
-          sf1[g],
-          cb1[g],
-          aac_two_div(lambda, thr1),
-        )
-        let cm = aac_ms_band_cost(
-          m,
-          m34,
-          qc,
-          size,
-          mididx,
-          midcb,
-          aac_two_div(lambda, minthr_eps),
-        )
-        let side_lambda = aac_two_div(
-          msl,
-          aac_two_add(aac_two_mul(minthr, bmax), aac_ms_flt_min),
-        )
-        let cs = aac_ms_band_cost(s, s34, qc, size, sididx, sidcb, side_lambda)
-        // `dist1`/`dist2` are built up over the window group first and then
-        // have the group's bit counts subtracted, so the comparison is a pure
-        // distortion one while `B0`/`B1` still carry the bits.
-        let mut dist1 = 0.0
-        let mut dist2 = 0.0
-        dist1 = aac_two_add(dist1, cl.cost)
-        dist2 = aac_two_add(dist2, cm.cost)
-        dist1 = aac_two_add(dist1, cr.cost)
-        dist2 = aac_two_add(dist2, cs.cost)
-        let b0 = cl.bits + cr.bits
-        let b1_bits = cm.bits + cs.bits
-        dist1 = aac_two_sub(dist1, b0.to_double())
-        dist2 = aac_two_sub(dist2, b1_bits.to_double())
-        boost[g] = b
-        dist1_out[g] = dist1
-        dist2_out[g] = dist2
-        mid_cost_out[g] = cm.cost
-        bits1_out[g] = b1_bits
-        bmax_out[g] = bmax
-        ms_mask[g] = if dist2 <= dist1 && b1_bits < b0 { 1 } else { 0 }
-        if ms_mask[g] == 1 {
-          if cb0[g] != aac_ms_noise_bt && cb1[g] != aac_ms_noise_bt {
-            sf0[g] = mididx
-            sf1[g] = sididx
-            cb0[g] = midcb
-            cb1[g] = sidcb
-          } else if (cb0[g] != aac_ms_noise_bt) != (cb1[g] != aac_ms_noise_bt) {
-            // `ms_mask` would be ignored by the mix anyway, and upstream notes
-            // that it confuses some decoders.
-            ms_mask[g] = 0
+      if d.zeroes0[slot] == 0 && d.zeroes1[slot] == 0 && d.is_mask[slot] == 0 {
+        // Mid/side's scalefactor and codebook are fixed for the whole window
+        // group from the companded peak of `M` and `S` over its windows, so
+        // compute them first (`aaccoder.c:726-740`).
+        let mut mmax = 0.0
+        let mut smax = 0.0
+        for w2 in 0..<gl {
+          let base = (w + w2) * 128 + start
+          for i in 0..<size {
+            let c0 = aac_two_f32(d.coefs0[base + i])
+            let c1 = aac_two_f32(d.coefs1[base + i])
+            m[i] = aac_two_mul(aac_two_add(c0, c1), 0.5)
+            s[i] = aac_two_sub(m[i], c1)
           }
-          break
-        } else if b1_bits > b0 {
-          // More boost cannot fix this.
-          break
+          let m34 = aac_two_abs_pow34(m, size)
+          let s34 = aac_two_abs_pow34(s, size)
+          for i in 0..<size {
+            if m34[i] > mmax {
+              mmax = m34[i]
+            }
+            if s34[i] > smax {
+              smax = s34[i]
+            }
+          }
+        }
+        let minidx = if sf0[slot] < sf1[slot] { sf0[slot] } else { sf1[slot] }
+        for b in 0..<4 {
+          let mididx = aac_two_clip(minidx, 0, aac_ms_scale_top)
+          let sididx = aac_two_clip(minidx - b * 3, 0, aac_ms_scale_top)
+          if cb0[slot] != aac_ms_noise_bt &&
+            cb1[slot] != aac_ms_noise_bt &&
+            !(aac_ms_can_replace(sf0, nextband0, prev_mid, mididx, slot) &&
+            aac_ms_can_replace(sf1, nextband1, prev_side, sididx, slot)) {
+            // Upstream: "scalefactor range violation, bad stuff, will decrease
+            // quality unacceptably".
+            continue
+          }
+          let midcb = aac_ms_max1(aac_two_find_min_book(mmax, mididx))
+          let sidcb = aac_ms_max1(aac_two_find_min_book(smax, sididx))
+          // `dist1`/`dist2` are built up over the window group with each
+          // window's bit count subtracted as it joins, so the comparison is a
+          // pure distortion one while `B0`/`B1` still carry the bits.
+          let mut dist1 = 0.0
+          let mut dist2 = 0.0
+          let mut b0 = 0
+          let mut b1_bits = 0
+          let mut mid_cost_total = 0.0
+          for w2 in 0..<gl {
+            let base = (w + w2) * 128 + start
+            for i in 0..<size {
+              let c0 = aac_two_f32(d.coefs0[base + i])
+              let c1 = aac_two_f32(d.coefs1[base + i])
+              l[i] = c0
+              r[i] = c1
+              m[i] = aac_two_mul(aac_two_add(c0, c1), 0.5)
+              s[i] = aac_two_sub(m[i], c1)
+            }
+            let t0 = aac_two_add(d.thr0[(w + w2) * 16 + g], aac_ms_flt_min)
+            let t1 = aac_two_add(d.thr1[(w + w2) * 16 + g], aac_ms_flt_min)
+            let minthr = if t0 < t1 { t0 } else { t1 }
+            let l34 = aac_two_abs_pow34(l, size)
+            let r34 = aac_two_abs_pow34(r, size)
+            let m34 = aac_two_abs_pow34(m, size)
+            let s34 = aac_two_abs_pow34(s, size)
+            let cl = aac_ms_band_cost(
+              l,
+              l34,
+              qc,
+              size,
+              sf0[slot],
+              cb0[slot],
+              aac_two_div(lambda, t0),
+            )
+            let cr = aac_ms_band_cost(
+              r,
+              r34,
+              qc,
+              size,
+              sf1[slot],
+              cb1[slot],
+              aac_two_div(lambda, t1),
+            )
+            let cm = aac_ms_band_cost(
+              m,
+              m34,
+              qc,
+              size,
+              mididx,
+              midcb,
+              aac_two_div(lambda, minthr),
+            )
+            // C computes `minthr` for the mid cost *before* the `+ FLT_MIN`
+            // the lambdas add it to, and the side's divisor is
+            // `minthr * bmax + FLT_MIN` with the same pre-epsilon `minthr`.
+            let side_lambda = aac_two_div(
+              msl,
+              aac_two_add(
+                aac_two_mul(aac_two_sub(minthr, aac_ms_flt_min), bmax),
+                aac_ms_flt_min,
+              ),
+            )
+            let cs = aac_ms_band_cost(
+              s, s34, qc, size, sididx, sidcb, side_lambda,
+            )
+            dist1 = aac_two_add(dist1, cl.cost)
+            dist2 = aac_two_add(dist2, cm.cost)
+            dist1 = aac_two_add(dist1, cr.cost)
+            dist2 = aac_two_add(dist2, cs.cost)
+            b0 = b0 + cl.bits + cr.bits
+            b1_bits = b1_bits + cm.bits + cs.bits
+            dist1 = aac_two_sub(dist1, (cl.bits + cr.bits).to_double())
+            dist2 = aac_two_sub(dist2, (cm.bits + cs.bits).to_double())
+            mid_cost_total = aac_two_add(mid_cost_total, cm.cost)
+          }
+          boost[slot] = b
+          dist1_out[slot] = dist1
+          dist2_out[slot] = dist2
+          mid_cost_out[slot] = mid_cost_total
+          bits1_out[slot] = b1_bits
+          bmax_out[slot] = bmax
+          ms_mask[slot] = if dist2 <= dist1 && b1_bits < b0 { 1 } else { 0 }
+          if ms_mask[slot] == 1 {
+            if cb0[slot] != aac_ms_noise_bt && cb1[slot] != aac_ms_noise_bt {
+              sf0[slot] = mididx
+              sf1[slot] = sididx
+              cb0[slot] = midcb
+              cb1[slot] = sidcb
+            } else if (cb0[slot] != aac_ms_noise_bt) !=
+              (cb1[slot] != aac_ms_noise_bt) {
+              // `ms_mask` would be ignored by the mix anyway, and upstream
+              // notes that it confuses some decoders.
+              ms_mask[slot] = 0
+            }
+            break
+          } else if b1_bits > b0 {
+            // More boost cannot fix this.
+            break
+          }
         }
       }
+      if d.zeroes0[slot] == 0 && cb0[slot] < aac_ms_reserved_bt {
+        prev_mid = sf0[slot]
+      }
+      if d.zeroes1[slot] == 0 &&
+        d.is_mask[slot] == 0 &&
+        cb1[slot] < aac_ms_reserved_bt {
+        prev_side = sf1[slot]
+      }
+      start = start + size
     }
-    if d.zeroes0[g] == 0 && cb0[g] < aac_ms_reserved_bt {
-      prev_mid = sf0[g]
-    }
-    if d.zeroes1[g] == 0 && d.is_mask[g] == 0 && cb1[g] < aac_ms_reserved_bt {
-      prev_side = sf1[g]
-    }
-    start = start + size
+    w = w + gl
   }
   {
     ms_mask,
