@@ -8562,3 +8562,51 @@ loud 窗的标度因子饿死。本轮把 FFmpeg 真正注册的窗回调 `psy_l
   2 位）；moon fmt 会把 lambda 签名重排，脚本化替换要按 fmt 后形态锚定。
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1421/1421**（§305 是
   1419，新增 isms 向量 1 条 + 短窗 IS/MS 流 1 条）。短窗工具链（PNS/IS/MS）就此收口。
+
+## 307. 窗型状态机换 FFmpeg 语义：lame_apply_block_type 移植 + WI 向量（§304 续篇三，偏差①收口）
+
+§304 留下的最后一条文档化偏差是「seq 状态机不换」（自制的 early/late+pending 机，
+转移图与 C 不同：短窗后立即 LONG_STOP、LONG_STOP 后攻击仍走 LONG_START）。本轮把
+FFmpeg 真正注册的窗型决策——`psy_lame_window` 的 `uselongblock` 判定 +
+`lame_apply_block_type` 状态机（`aacpsy.c:860-875`）——移植进 `AacLameWindow` 并接
+进编码器感知短窗路径，窗型序列逐帧对拍收口。
+
+- **状态机移植（s1）**：`aac_lame_apply_block_type(state, uselong)` 纯函数——发射
+  的是存储态（短窗路径先打补丁：`ONLY_LONG→LONG_START`、`LONG_STOP→EIGHT_SHORT`，
+  即 STOP 后攻击直进短窗），存 computed block type（长路径下 `EIGHT_SHORT→LONG_STOP`，
+  其余→`ONLY_LONG`——**短窗运行必多一帧安静的 EIGHT_SHORT 再经 LONG_STOP 回长窗**）。
+  `AacLameWindow` 加 `mut next_window_seq`（初始 ONLY_LONG），`analyze` 末尾跑状态机、
+  输出加 `window_type`。顺带确认 §304 的 `prev_attack == 2` 正确
+  （`PSY_LAME_NUM_SUBBLOCKS == 2`，C 的 `== 8` 是 `AAC_NUM_BLOCKS_SHORT`——两常量易混）。
+- **夹具重造（s2）**：§304 的 `--win` 夹具 5000 样本周期几乎逐帧有 burst，短窗运行
+  永不收尾（wt 全是 1/2）。改为 **8000 样本周期、burst 只在前半**：安静的后半
+  （≈3.9 帧）让每个周期完整走一遍 `EIGHT_SHORT 尾帧→LONG_STOP→ONLY_LONG→（下周期）
+  LONG_START`——wt0 四态全覆盖（2:27 / 0:11 / 1:8 / 3:6），首攻块仍覆盖
+  `window_grouping` 全表 0..8。harness `win_pcm`/事件表与 MB 测试镜像同步。
+- **WI 向量转正（s3）**：生成器解析 `WI` 行的 `window_type[0]` →
+  `aac_win_window_type`；复放测试逐帧断言（26×2 全等，首跑即绿）+ 新增四态/全表
+  覆盖守卫。
+- **编码器接线（s4）**：循环重排为 buf→analyze→seq（analyze 输入是 `[prev|pcm]` 拼
+  接，不依赖 seq，重排无副作用）；`perceptual && perceptual_short` 时 seq =
+  pair 合流机的发射值：`uselong = 所有通道 uselong 的 AND`（「任一通道短则短」，
+  与分组取较早首攻同一合流口径——C 在两通道不一致时拆成两个 SCE，该分叉仍是
+  §304 文档化偏差；两通道判定一致的帧上合流机与 C 的 per-channel 机逐位相同）。
+  `AacEncoder.lame_pair_seq` 承载状态。其余路径（简化、长窗感知）保留旧机。
+- **流测试更新（s5）**：`keeps_long_window_baseline` 改为「窗型相同的帧字节必须
+  相同」（换机后过渡窗位置不同是预期，steady 夹具因分析器 10.0 初始峰值开跑即有
+  一次短窗运行——与 FFmpeg 同输入的首帧行为一致）；NMR 测试删「两臂计划逐帧相等」
+  （两臂是两台机器），改为两臂各自计划的**转移律合法性**检查（LONG_START→
+  EIGHT_SHORT、EIGHT_SHORT→{EIGHT_SHORT,LONG_STOP} 等）+ 各自算 NMR。
+  NMR 复测：12.07 vs 9.75（128k）/ 17.28 vs 15.62（64k）——perceptual 臂仍劣，
+  `nmr_on > nmr_off` 裁决原样保持（opt-in 不变）。
+- **基线（硬验收）**：四条长窗 noise 流（default/perceptual/+pns/+pns+is）字节与
+  FNV **完全不变**（noise 无攻击 → 恒 ONLY_LONG，新机不触发）。
+- **端到端（s6）**：transient 立体声三臂（short / +pns / +pns+is）经 docker
+  ffmpeg 9.0.2 解码 **0 errors**，与 MB 解码器 PCM 对拍 **140.2/140.0/139.9 dB**
+  （max_diff ≈ 7e-8）——含 LONG_STOP 后直进短窗、短运行尾帧等新转移的全部位流
+  （ics_info 窗型字段、窗形状、短窗 sf 链）被真实解码器认可。
+- **本轮坑**：CRLF 文件里多行 python 替换要 `newline=''` 双形态匹配；`AacIcsInfo`
+  无 ms_mode 字段（读原始 2 位）；立体声流不能用 SCE 解析 helper。
+- **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1421/1421**。
+  §304 的三条文档化偏差收口其一（①窗型状态机）；剩余：②CPE `common_window=0`
+  分叉、④`la==NULL` flush 路径。

@@ -20,21 +20,27 @@
 /// `att_sum` exceeds the sum of the final attacks).
 ///
 /// Channel 1's burst pair at offsets 700/764 fires attacks in consecutive
-/// blocks; the 5000-sample period is not a multiple of the 64-sample
-/// sub-block, so attack positions drift through the run.
+/// blocks; the 8000-sample period is not a multiple of the 64-sample
+/// sub-block, so attack positions drift through the run.  Since §307 the
+/// bursts live only in the first half of each period: the quiet second half
+/// ends every short-window run (EIGHT_SHORT tail -> LONG_STOP ->
+/// ONLY_LONG) and the next burst starts one afresh (LONG_START), so the
+/// block-type machine's every transition is pinned and not just its short
+/// path.
 
 ///|
-/// Burst events per channel: `[start, start + len)` within each 5000-sample
-/// period, at the given amplitude.  Mirror of the harness `win_ev_*`.
+/// Burst events per channel: `[start, start + len)` within each 8000-sample
+/// period, at the given amplitude, and only while `pos < 4000` (the second
+/// half of the period is quiet).  Mirror of the harness `win_ev_*`.
 let aac_win_ev_off : Array[Array[Int32]] = [
-  [300, 1500, 3200, 4400],
-  [700, 764, 2600, 4200],
+  [300, 1500, 3200, 3600],
+  [700, 764, 2600, 3400],
 ]
 
 ///|
 let aac_win_ev_len : Array[Array[Int32]] = [
-  [90, 40, 130, 50],
-  [60, 60, 200, 30],
+  [90, 40, 130, 90],
+  [60, 60, 200, 90],
 ]
 
 ///|
@@ -58,8 +64,8 @@ fn aac_win_pcm(ch : Int32, n : Int32) -> Double {
   let st0 = (12345 + 0x85ebca77 * (2 * n + ch)) & 0xFFFFFFFF
   let base = 20 + ((st0 >> 13) & 7)
   let mut v = if n % 2 == 1 { base } else { -base }
-  let pos = n % 5000
-  for ev = 0; ev < 4; ev = ev + 1 {
+  let pos = n % 8000
+  for ev = 0; ev < 4 && pos < 4000; ev = ev + 1 {
     let off = aac_win_ev_off[ch][ev]
     if pos >= off && pos < off + aac_win_ev_len[ch][ev] {
       let st = (st0 * 1664525 + 1013904223) & 0xFFFFFFFF
@@ -119,6 +125,13 @@ test "lame window grouping matches FFmpeg 9.0.2 (26 frames x 2 channels)" {
           "frame \{m} ch \{ch}: uselong \{d.uselong} != \{@aac_win_vectors.aac_win_uselong[idx]}",
         )
       }
+      // §307: `lame_apply_block_type`'s emitted window type, state machine
+      // and all - the quantity the encoder consumes as the frame's sequence.
+      if d.window_type != @aac_win_vectors.aac_win_window_type[idx] {
+        fail(
+          "frame \{m} ch \{ch}: window_type \{d.window_type} != \{@aac_win_vectors.aac_win_window_type[idx]}",
+        )
+      }
       if d.grp_first != @aac_win_vectors.aac_win_grp_first[idx] {
         fail(
           "frame \{m} ch \{ch}: grp_first \{d.grp_first} != \{@aac_win_vectors.aac_win_grp_first[idx]}",
@@ -150,6 +163,27 @@ test "lame window grouping matches FFmpeg 9.0.2 (26 frames x 2 channels)" {
         }
       }
       prev_group_byte[ch] = d.group_byte
+    }
+  }
+  // The fixture has to pin every transition of the block-type machine: with
+  // the quiet half-period the run reaches ONLY_LONG after LONG_STOP, so all
+  // four window types appear (0 ONLY_LONG, 1 LONG_START, 2 EIGHT_SHORT,
+  // 3 LONG_STOP) - and the first-attack selector still covers the whole
+  // `window_grouping` table (0..8).
+  let seen_type : Array[Bool] = Array::make(4, false)
+  let seen_grp : Array[Bool] = Array::make(9, false)
+  for i in 0..<@aac_win_vectors.aac_win_window_type.length() {
+    seen_type[@aac_win_vectors.aac_win_window_type[i]] = true
+    seen_grp[@aac_win_vectors.aac_win_grp_first[i]] = true
+  }
+  for t in 0..<4 {
+    if !seen_type[t] {
+      fail("fixture never emits window type \{t}")
+    }
+  }
+  for g in 0..<9 {
+    if !seen_grp[g] {
+      fail("fixture never selects window_grouping[\{g}]")
     }
   }
 }

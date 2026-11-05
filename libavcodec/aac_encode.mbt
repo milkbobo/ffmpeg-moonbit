@@ -103,6 +103,15 @@ pub struct AacEncoder {
   mut lambda : Double
   /// LCG state carried across frames by `search_for_pns` (`s->random_state`).
   mut pns_random_state : Int32
+  /// The pair-level block-type state (`lame_apply_block_type`'s carry) for
+  /// the perceptual short path. FFmpeg keeps one per channel and drops
+  /// `common_window` when the two channels' window types disagree; this
+  /// encoder always codes one CPE, so the pair runs a single merged
+  /// machine - a frame goes short when *any* channel's analyser says so,
+  /// the same "either channel attacks" merge the grouping uses (§304's
+  /// documented deviation). With both analysers agreeing the merged machine
+  /// is bit-identical to FFmpeg's per-channel ones.
+  mut lame_pair_seq : Int32
   /// C's per-`SingleChannelElement` sticky slot arrays (`sf_idx` / `band_type`
   /// / `zeroes`, 128 slots of `w * 16 + g`). The coder only ever writes
   /// group-start slots, so on a short frame the inner-window slots keep what
@@ -447,6 +456,7 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     lambda: 120.0,
     pns_random_state: 0,
     last_max_sfb: 0,
+    lame_pair_seq: 0,
     sticky_sf,
     sticky_cb,
     sticky_zeroes,
@@ -2442,10 +2452,54 @@ pub fn AacEncoder::encode_frame(
     }
   }
   let prev = self.prev_sequence[0]
-  // LONG_START must be followed by short blocks, and short blocks return to
-  // the long transform through LONG_STOP; anything else is a steady-state
-  // long frame (or a fresh start when the current frame attacks).
-  let seq = if prev == aac_eight_short {
+  // First-attack index and long/short verdict of the LAME analyser per
+  // channel, when it runs. The synchronous rewrite analyses this frame's
+  // own MDCT input buffer (`buf[523..1568)` is exactly the region FFmpeg's
+  // one-packet-ahead lookahead covered), so both the grouping and the block
+  // type are decided for the frame being encoded - see `AacLameWindow`.
+  let lame_grp : Array[Int32] = []
+  let lame_uselong : Array[Bool] = []
+  let bufs : Array[Array[Double]] = []
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    let buf : Array[Double] = Array::make(2048, 0.0)
+    let hist = self.history[ch]
+    for i = 0; i < 1024; i = i + 1 {
+      buf[i] = hist[i]
+      buf[1024 + i] = pcm[ch][i]
+      hist[i] = pcm[ch][i]
+    }
+    // Every frame while the short-window perceptual path is enabled - the
+    // analyser's peak history must stay on FFmpeg's per-frame cadence for the
+    // grouping and block-type chains to match the reference
+    // (`aac_win_vectors` pins both).
+    if self.config.perceptual && self.config.perceptual_short {
+      let d = self.lame[ch].analyze(buf, 523)
+      lame_grp.push(d.grp_first)
+      lame_uselong.push(d.uselong)
+    }
+    bufs.push(buf)
+  }
+  // The window sequence. On the perceptual short path it is FFmpeg's own
+  // block-type machine (§307): emit the stored state, patched on the short
+  // path, and carry the computed block type - which among other things
+  // keeps a short run alive for one extra quiet frame before LONG_STOP, and
+  // an attack out of LONG_STOP goes straight to short blocks. Every other
+  // path keeps the early/late+pending machine: LONG_START must be followed
+  // by short blocks, short blocks return through LONG_STOP, a late attack
+  // carries over one frame.
+  let seq = if self.config.perceptual && self.config.perceptual_short {
+    // A common-window CPE runs one merged machine: a frame goes short when
+    // *any* channel's analyser says so - the same "either channel attacks"
+    // merge the grouping uses (FFmpeg would instead drop common_window and
+    // code two SCEs; that fork stays a documented §304 deviation).
+    let mut uselong = true
+    for ch = 0; ch < lame_uselong.length(); ch = ch + 1 {
+      uselong = uselong && lame_uselong[ch]
+    }
+    let (emit, next) = aac_lame_apply_block_type(self.lame_pair_seq, uselong)
+    self.lame_pair_seq = next
+    emit
+  } else if prev == aac_eight_short {
     if attack {
       aac_eight_short
     } else {
@@ -2460,28 +2514,9 @@ pub fn AacEncoder::encode_frame(
   }
   let sequences : Array[Int32] = []
   let coefs : Array[Array[Double]] = []
-  // First-attack index of the LAME analyser per channel, when it runs. The
-  // synchronous rewrite analyses this frame's own MDCT input buffer
-  // (`buf[523..1568)` is exactly the region FFmpeg's one-packet-ahead
-  // lookahead covered), so the grouping is decided for the frame being
-  // encoded - see `AacLameWindow`.
-  let lame_grp : Array[Int32] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     sequences.push(seq)
-    let buf : Array[Double] = Array::make(2048, 0.0)
-    let hist = self.history[ch]
-    for i = 0; i < 1024; i = i + 1 {
-      buf[i] = hist[i]
-      buf[1024 + i] = pcm[ch][i]
-      hist[i] = pcm[ch][i]
-    }
-    // Every frame while the short-window perceptual path is enabled - the
-    // analyser's peak history must stay on FFmpeg's per-frame cadence for the
-    // grouping chain to match the reference (`aac_win_vectors` pins it).
-    if self.config.perceptual && self.config.perceptual_short {
-      lame_grp.push(self.lame[ch].analyze(buf, 523).grp_first)
-    }
-    coefs.push(self.frame_coefficients(buf, seq))
+    coefs.push(self.frame_coefficients(bufs[ch], seq))
   }
   let is8 = seq == aac_eight_short
   let num_swb = if is8 { self.num_short_swb } else { self.num_swb }

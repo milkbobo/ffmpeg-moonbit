@@ -128,6 +128,7 @@ test "aac_lc_perceptual_short_keeps_long_window_baseline" {
   let mut long_frames = 0
   let mut short_frames = 0
   let mut changed_short = 0
+  let mut changed_long = 0
   for f = 0; f < plain_stream.length(); f = f + 1 {
     let payload = plain_stream[f]
       .clamped_view(
@@ -150,14 +151,36 @@ test "aac_lc_perceptual_short_keeps_long_window_baseline" {
       }
     } else {
       long_frames = long_frames + 1
-      assert_true(same)
+      // §307: the switch swaps the whole block-type machine, not just the
+      // short frames, so a long frame differs exactly when the two machines
+      // chose different sequences around it; when they agree the payload
+      // must still be byte-identical.
+      let sp = short_stream[f]
+        .clamped_view(
+          start=@libavcodec.av_aac_adts_header_size,
+          end=short_stream[f].length(),
+        )
+        .to_owned()
+      let gs = @libavcodec.BitReader::new(sp)
+      let _ = gs.read(3)
+      let _ = gs.read(4)
+      let _ = gs.read1()
+      let short_info = aac_encode_test_ok(@libavcodec.aac_decode_ics_info(gs))
+      if short_info.window_sequence == info.window_sequence {
+        assert_true(same)
+      } else {
+        changed_long = changed_long + 1
+      }
     }
   }
-  // The chain always opens with LONG_START -> EIGHT_SHORT -> LONG_STOP, so a
-  // steady fixture still exercises exactly one short frame and six long ones.
+  // The LAME analyser starts with 10.0 peak seeds, so even a steady fixture
+  // opens with a short run (LONG_START -> EIGHT_SHORT[-> EIGHT_SHORT] ->
+  // LONG_STOP) before settling into long frames - exactly what FFmpeg's own
+  // first frames on such an input do.
   assert_true(short_frames > 0)
   assert_true(long_frames > 0)
   assert_eq(changed_short, short_frames)
+  assert_true(changed_long <= 4)
   println(
     "perceptual short baseline: long=\{long_frames} unchanged short=\{short_frames} changed=\{changed_short}",
   )
@@ -390,10 +413,22 @@ test "aac_lc_perceptual_short_noise_to_mask" {
   let stream_on = aac_encode_test_stream_config(input, 1, frames, on)
   let plan_off = aac_encode_test_window_plan(stream_off)
   let plan_on = aac_encode_test_window_plan(stream_on)
-  // The plan is PCM-driven, so both streams must carry the same windows.
-  assert_eq(plan_off.length(), plan_on.length())
-  for f = 0; f < plan_off.length(); f = f + 1 {
-    assert_eq(plan_off[f], plan_on[f])
+  // §307: the on-arm runs FFmpeg's own block-type machine, so its plan can
+  // legitimately differ from the off-arm's (a short run now lasts one extra
+  // quiet frame before LONG_STOP).  What must hold is the machine's own
+  // transition law, on both arms: LONG_START is followed by short blocks,
+  // and short blocks end through LONG_STOP before ONLY_LONG returns.
+  for plan in [plan_off, plan_on] {
+    for f in 1..<plan.length() {
+      let (prev, cur) = (plan[f - 1], plan[f])
+      let ok = match prev {
+        1 => cur == 2 // LONG_START -> EIGHT_SHORT
+        2 => cur == 2 || cur == 3 // EIGHT_SHORT stays or exits
+        3 => cur == 0 || cur == 1 || cur == 2 // LONG_STOP -> anything but itself
+        _ => cur == 0 || cur == 1 // ONLY_LONG stays or attacks
+      }
+      assert_true(ok)
+    }
   }
   let (nmr_off, snr_off) = aac_encode_test_nmr_short(
     input,
@@ -436,10 +471,9 @@ test "aac_lc_perceptual_short_noise_to_mask" {
   let s64_on = aac_encode_test_stream_config(input, 1, frames, on64)
   let p64_off = aac_encode_test_window_plan(s64_off)
   let p64_on = aac_encode_test_window_plan(s64_on)
-  assert_eq(p64_off.length(), p64_on.length())
-  for f = 0; f < p64_off.length(); f = f + 1 {
-    assert_eq(p64_off[f], p64_on[f])
-  }
+  // §307: the arms run different block-type machines, so their plans may
+  // differ (the transition law above covers legality); the NMR comparison
+  // below runs each plan against its own stream.
   let (n64_off, snr64_off) = aac_encode_test_nmr_short(
     input,
     aac_encode_test_decode(s64_off, 1),

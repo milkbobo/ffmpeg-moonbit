@@ -301,8 +301,17 @@
   `search_for_pns` 恰恰读这些遗留内窗槽定价——`AacEncoder` 挂三条 sticky 数组、
   每轮 `>12→0` 清理、`aac_twoloop_search_pns` 加 `sticky?` 参数原地写回。
   向量 `aac_pns_vectors/fixtures_short.mbt` 连每帧末的 STICKY 128×3 都逐槽钉死；
-  短窗+PNS 流 ffmpeg 9.0.2 解码 0 errors、双解码器一致 140 dB；IS/M-S 的
-  多组化是续篇（§306）。
+  短窗+PNS 流 ffmpeg 9.0.2 解码 0 errors、双解码器一致 140 dB。
+  ⑰b §307 窗型状态机换 FFmpeg 语义（§304 偏差①收口）：
+  `aac_lame_apply_block_type(state, uselong)` 纯函数——发射存储态（短窗路径先
+  补丁 ONLY_LONG→LONG_START、LONG_STOP→EIGHT_SHORT），存 computed block type
+  （短窗运行必多一帧安静 EIGHT_SHORT 再 LONG_STOP 回长窗）。`AacLameWindow.
+  next_window_seq` + 输出 `window_type`；`--win` 夹具改 8000 样本周期（burst 只在
+  前半）后 wt0 四态全覆盖 + 首攻块全表，26×2 向量含 window_type 逐帧全等。编码器
+  感知短窗路径 seq = pair 合流机（uselong=各通道 AND，「任一短则短」，与分组同
+  口径；两通道一致时与 C per-channel 机逐位同），`AacEncoder.lame_pair_seq` 承载；
+  其余路径保留旧机。steady 夹具因 10.0 初始峰值开跑即一次短窗运行（与 FFmpeg
+  同输入一致）。NMR 复测仍劣（12.07/17.28 vs 9.75/15.62），opt-in 不变。
   ⑰ §306 立体声对八短窗形态（短窗工具链收口）：`aac_is_search`/`aac_ms_search`
   按 `w += group_len[w]` 分组——IS 的能量门组内求和、逐窗按各自 psy band 定价但
   sf/cb 取组起点槽，`freq_mult` 分母是 `1024/num_windows`；MS 的 Mmax/Smax 取全组

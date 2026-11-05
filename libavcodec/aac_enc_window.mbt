@@ -127,6 +127,47 @@ pub struct AacLameWindow {
   /// vectors); the synchronous consumer reads this call's `group_byte`
   /// instead.
   mut next_grouping : Int32
+  /// `pch->next_window_seq`: the window type the *next* call emits
+  /// (`lame_apply_block_type`'s carry, `aacpsy.c:131`).  This is the block
+  /// type state machine §307 ports: the emitted type is the stored state,
+  /// patched on the short-block path, and the state then becomes the
+  /// computed block type.
+  mut next_window_seq : Int32
+}
+
+///|
+/// `lame_apply_block_type` (`aacpsy.c:860`), as a pure transition: given the
+/// stored sequence state and the long/short decision, return the window type
+/// this call emits and the state the next call starts from.  On the short
+/// path the state itself is patched *before* it is emitted - an attack
+/// starting from `ONLY_LONG` emits `LONG_START` (the transition window), and
+/// an attack out of `LONG_STOP` skips the rest window and emits
+/// `EIGHT_SHORT` directly.  On the long path a following `EIGHT_SHORT`
+/// state emits once more (the short run is at least two frames long) and
+/// stores `LONG_STOP`; everything else stores `ONLY_LONG`.
+fn aac_lame_apply_block_type(
+  state : Int32,
+  uselongblock : Bool,
+) -> (Int32, Int32) {
+  let blocktype = 0 // ONLY_LONG_SEQUENCE
+  if uselongblock {
+    if state == aac_eight_short {
+      // The short run returns to the long transform through LONG_STOP, but
+      // only after this one extra short frame.
+      return (state, 3)
+    }
+    return (state, blocktype)
+  }
+  // Short path: patch the state, emit the patched value, store EIGHT_SHORT.
+  let mut st = state
+  if st == aac_only_long {
+    st = 1 // LONG_START_SEQUENCE
+  }
+  if st == 3 {
+    // LONG_STOP_SEQUENCE
+    st = aac_eight_short
+  }
+  (st, aac_eight_short)
 }
 
 ///|
@@ -139,6 +180,7 @@ pub fn AacLameWindow::new(bitrate_kbps_per_ch : Int32) -> AacLameWindow {
     prev_attack: 0,
     next_attack0_zero: false,
     next_grouping: 0,
+    next_window_seq: 0,
   }
 }
 
@@ -172,6 +214,9 @@ pub struct AacLameDecision {
   group_byte : Int32
   /// `group_len[8]` expanded from `group_byte`: this frame's window groups.
   group_len : Array[Int32]
+  /// `wi.window_type[0]`: what `lame_apply_block_type` emits this call -
+  /// the state machine's answer for this frame's window sequence.
+  window_type : Int32
 }
 
 ///|
@@ -322,6 +367,13 @@ pub fn AacLameWindow::analyze(
   let group_byte = aac_window_grouping[grp_first]
   self.next_grouping = group_byte
   self.prev_attack = attacks[7]
+  // 8) `lame_apply_block_type`: emit the stored window-sequence state
+  //    (patched on the short path) and carry the computed block type.
+  let (window_type, next_seq) = aac_lame_apply_block_type(
+    self.next_window_seq,
+    uselong,
+  )
+  self.next_window_seq = next_seq
   {
     attacks,
     att_sum,
@@ -330,5 +382,6 @@ pub fn AacLameWindow::analyze(
     wi_grp_pre,
     group_byte,
     group_len: aac_window_grouping_expand(group_byte),
+    window_type,
   }
 }

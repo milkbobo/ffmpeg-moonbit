@@ -9,8 +9,9 @@ probes around `psy_lame_window`):
   WINCFG <frames> <kbps_per_ch> <threshold>
   FRAME <m> CH <c>
   WI <wt0> <wt1> <num_windows> <shape> <grp0..grp7>       (C's own window
-                                                          state machine - not
-                                                          ported, not emitted)
+                                                          state machine; wt0
+                                                          is emitted since
+                                                          §307 ports it)
   RAW <att0..att8> <att_sum> <uselong> <grp_first> <wi_grp_pre> <prev_attack>
 
 Only the integer decisions of the detector are transcribed: `attacks` after
@@ -35,7 +36,7 @@ def main():
     kbps = None
     threshold = None
     cur = None
-    rows = []  # (frame, ch, raw[14])
+    rows = []  # (frame, ch, raw[14], wt0)
     with open(SRC, "r", encoding="utf-8") as f:
         for line in f:
             parts = line.split()
@@ -45,10 +46,12 @@ def main():
                 frames, kbps, threshold = int(parts[1]), int(parts[2]), parts[3]
             elif parts[0] == "FRAME":
                 cur = [int(parts[1]), int(parts[3])]
+            elif parts[0] == "WI":
+                cur.append(int(parts[1]))  # wi.window_type[0]
             elif parts[0] == "RAW":
                 raw = [int(x) for x in parts[1:]]
                 assert len(raw) == 14, raw
-                rows.append((cur[0], cur[1], raw))
+                rows.append((cur[0], cur[1], raw, cur[2]))
                 cur = None
     assert frames is not None and len(rows) == frames * 2, (frames, len(rows))
     # stable order: frame-major, channel-minor
@@ -95,6 +98,12 @@ def main():
     lines += arr("aac_win_wi_grp_pre", [r[2][12] for r in rows], "Int")
     lines.append("")
     lines += arr("aac_win_prev_attack", [r[2][13] for r in rows], "Int")
+    lines.append("")
+    lines += arr(
+        "aac_win_window_type",
+        [r[3] for r in rows],
+        "Int",
+    )
     lines.append("")
     with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
