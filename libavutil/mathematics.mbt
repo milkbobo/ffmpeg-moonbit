@@ -6,7 +6,7 @@
 /// Michael Niedermayer <michaelni@gmx.at>. This port keeps the same license.
 ///
 /// Out of scope for this slice (not ported): `av_rescale_delta`,
-/// `av_add_stable`, `av_bessel_i0`, `av_sat_add64`/`av_clip64` helpers.
+/// `av_clip64` helpers.
 
 ///|
 /// Rounding modes, mirroring `enum AVRounding` in libavutil/mathematics.h.
@@ -189,6 +189,52 @@ pub fn av_rescale_q_rnd(
 /// `av_rescale_q`: `av_rescale_q_rnd` with `AV_ROUND_NEAR_INF`. */
 pub fn av_rescale_q(a : Int64, bq : AVRational, cq : AVRational) -> Int64 {
   av_rescale_q_rnd(a, bq, cq, av_round_near_inf)
+}
+
+///|
+/// `av_sat_add64`: 64-bit addition that saturates instead of wrapping.
+pub fn av_sat_add64(a : Int64, b : Int64) -> Int64 {
+  let s = a + b
+  if ((a ^ s) & (b ^ s)) < 0L {
+    if a < 0L {
+      int64_min
+    } else {
+      int64_max
+    }
+  } else {
+    s
+  }
+}
+
+///|
+/// `av_add_stable`: add `inc` steps of `inc_tb` to the timestamp `ts`, so a
+/// run of additions never accumulates rounding error even when one step is
+/// not an exact number of `ts_tb` ticks. The increment must be positive.
+pub fn av_add_stable(
+  ts_tb : AVRational,
+  ts : Int64,
+  inc_tb : AVRational,
+  inc : Int64,
+) -> Int64 {
+  let inc_tb = if inc != 1L {
+    av_mul_q(inc_tb, av_make_q(inc.to_int(), 1))
+  } else {
+    inc_tb
+  }
+  let m = inc_tb.num.to_int64() * ts_tb.den.to_int64()
+  let d = inc_tb.den.to_int64() * ts_tb.num.to_int64()
+  if m % d == 0L && ts <= int64_max - m / d {
+    return ts + m / d
+  }
+  if m < d {
+    return ts
+  }
+  let old = av_rescale_q(ts, ts_tb, inc_tb)
+  let old_ts = av_rescale_q(old, inc_tb, ts_tb)
+  if old == int64_max || old == int64_min || old_ts == int64_min {
+    return ts
+  }
+  av_sat_add64(av_rescale_q(old + 1L, inc_tb, ts_tb), ts - old_ts)
 }
 
 ///|

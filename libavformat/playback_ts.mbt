@@ -3,8 +3,9 @@
 /// `av_mpegts_open` demuxer (PES-level packets, 90 kHz timestamps). Video
 /// payloads are Annex B NAL streams; AAC payloads are continuous ADTS
 /// frame runs, which the adapter splits into per-frame packets like the
-/// C's AAC demuxer does, and whose first header also yields the
-/// AudioSpecificConfig the AAC decoder needs as extradata.
+/// C's AAC parser does (header kept, frame timestamps interpolated), and
+/// whose first header also yields the AudioSpecificConfig the AAC decoder
+/// needs as extradata.
 
 ///|
 /// Build the 2-byte AudioSpecificConfig from an ADTS header's raw fields:
@@ -16,40 +17,35 @@ pub fn ts_adts_to_asc(object_type : Int32, sampling_index : Int32, chan_config :
 }
 
 ///|
-/// True when an Annex B payload starts with an IDR slice (nal_unit_type 5),
-/// scanning past the first start code. H.264-in-TS keyframes surface here
-/// because the TS layer itself does not mark them.
+/// True when an Annex B access unit holds an IDR slice (nal_unit_type 5) -
+/// what the C's h264 parser turns into AV_PKT_FLAG_KEY, since the TS layer
+/// itself does not mark keyframes. Every NAL is inspected: an IDR normally
+/// follows an AUD, SPS, PPS or SEI inside the PES. (The parser also keys on
+/// recovery-point SEIs, which open-GOP streams rely on; that case is not
+/// covered here.)
 fn ts_h264_is_idr(payload : Bytes) -> Bool {
   let n = payload.length()
   let mut i = 0
-  // Locate the first start code (3- or 4-byte).
   while i + 3 < n {
     if payload[i].to_int() == 0 &&
       payload[i + 1].to_int() == 0 &&
       payload[i + 2].to_int() == 1 {
+      if (payload[i + 3].to_int() & 0x1F) == 5 {
+        return true
+      }
       i = i + 3
-      break
+    } else {
+      i = i + 1
     }
-    if i + 4 <= n &&
-      payload[i].to_int() == 0 &&
-      payload[i + 1].to_int() == 0 &&
-      payload[i + 2].to_int() == 0 &&
-      payload[i + 3].to_int() == 1 {
-      i = i + 4
-      break
-    }
-    i = i + 1
   }
-  if i >= n {
-    return false
-  }
-  (payload[i].to_int() & 0x1F) == 5
+  false
 }
 
 ///|
 /// Split a PES payload that carries a continuous ADTS frame run into the
-/// individual frames (byte ranges of `payload`), using the ported ADTS
-/// header parser for framing.
+/// individual frames (byte ranges of `payload`, ADTS header included, as in
+/// the packets the C's AAC parser emits), using the ported ADTS header
+/// parser for framing.
 fn ts_split_adts(payload : Bytes) -> Array[(Int, Int)] raise MediaError {
   let frames : Array[(Int, Int)] = []
   let mut pos = 0
@@ -69,7 +65,7 @@ fn ts_split_adts(payload : Bytes) -> Array[(Int, Int)] raise MediaError {
     if len <= hdr_size || pos + len > n {
       break
     }
-    frames.push((pos + hdr_size, len - hdr_size))
+    frames.push((pos, len))
     pos = pos + len
   }
   if frames.length() == 0 {
@@ -157,18 +153,40 @@ fn playback_ts_build(data : Bytes) -> MediaFile raise MediaError {
   {
     format_name: "mpegts",
     streams,
-    source: Ts(demux),
+    source: Ts(demux, Array::make(demux.streams.length(), ts_nopts)),
     cursor: [0],
   }
 }
 
 ///|
 /// TS packet walk: video payloads yield one packet per PES; AAC payloads
-/// are split into their ADTS frames (the frame body, header stripped),
-/// each carrying the PES's PTS.
-fn MediaFile::playback_ts_next(self : MediaFile, demux : TsDemux) -> MediaPacket? raise MediaError {
+/// are split into their ADTS frames. Only the first frame of a PES carries
+/// the PES timestamp; the C's `compute_pkt_fields` derives the rest with
+/// `av_add_stable`, which `next_pts` reproduces per stream.
+fn MediaFile::playback_ts_next(
+  self : MediaFile,
+  demux : TsDemux,
+  next_pts : Array[Int64],
+) -> MediaPacket? raise MediaError {
+  // cursor[1]: the next ADTS frame inside the current audio PES.
+  // cursor[2]: the video PES currently held back. The C's h264 parser only
+  // completes an access unit when the next one's start code is seen, so
+  // PES i surfaces when PES i+1 arrives (and the last at end of stream).
+  if self.cursor.length() < 2 {
+    self.cursor.push(0)
+  }
+  if self.cursor.length() < 3 {
+    self.cursor.push(-1)
+  }
+  let held = self.cursor[2]
+  if self.cursor[0] >= demux.packets.length() && held >= 0 {
+    let out = ts_video_packet(self, demux, held)
+    self.cursor[2] = -1
+    return out
+  }
   while self.cursor[0] < demux.packets.length() {
     let p = demux.packets[self.cursor[0]]
+    let current = self.cursor[0]
     self.cursor[0] = self.cursor[0] + 1
     let info = self.streams[p.stream_index]
     if info.media_type == MediaType::Audio && info.codec_id == "aac" {
@@ -189,18 +207,26 @@ fn MediaFile::playback_ts_next(self : MediaFile, demux : TsDemux) -> MediaPacket
         }
         // Do not consume the PES until all frames are out.
         self.cursor[0] = self.cursor[0] - 1
-        let pts = if p.pts != ts_nopts {
-          p.pts
-        } else if p.dts != ts_nopts {
-          p.dts
+        let pes_pts = if p.pts != ts_nopts { p.pts } else { p.dts }
+        let pts = if idx == 0 && pes_pts != ts_nopts {
+          pes_pts
+        } else if next_pts[p.stream_index] != ts_nopts {
+          next_pts[p.stream_index]
         } else {
           0
         }
+        next_pts[p.stream_index] = @libavutil.av_add_stable(
+          @libavutil.av_make_q(1, 90000),
+          pts,
+          @libavutil.av_make_q(1024, info.sample_rate),
+          1L,
+        )
         return Some({
           stream_index: p.stream_index,
           data: p.payload[off:off + len].to_owned(),
           pts,
-          keyframe: false,
+          // AAC is intra-only: the C flags every frame as a keyframe.
+          keyframe: true,
         })
       }
       // All frames of this PES emitted: drop the per-PES frame cursor and
@@ -210,10 +236,15 @@ fn MediaFile::playback_ts_next(self : MediaFile, demux : TsDemux) -> MediaPacket
       }
       continue
     }
-    let keyframe = if info.codec_id == "h264" {
-      ts_h264_is_idr(p.payload)
-    } else {
-      false
+    if info.media_type == MediaType::Video {
+      // Hold this PES; emit the one it completes. Read the slot afresh:
+      // several video PES can pass within one call.
+      let prev = self.cursor[2]
+      self.cursor[2] = current
+      if prev >= 0 {
+        return ts_video_packet(self, demux, prev)
+      }
+      continue
     }
     let pts = if p.pts != ts_nopts {
       p.pts
@@ -226,8 +257,42 @@ fn MediaFile::playback_ts_next(self : MediaFile, demux : TsDemux) -> MediaPacket
       stream_index: p.stream_index,
       data: p.payload,
       pts,
-      keyframe,
+      keyframe: false,
     })
   }
+  let last = self.cursor[2]
+  if last >= 0 {
+    self.cursor[2] = -1
+    return ts_video_packet(self, demux, last)
+  }
   None
+}
+
+///|
+/// Build the video packet for a held PES: Annex B IDR detection for the
+/// keyframe flag, PES PTS (or DTS).
+fn ts_video_packet(
+  media : MediaFile,
+  demux : TsDemux,
+  index : Int,
+) -> MediaPacket? raise MediaError {
+  let p = demux.packets[index]
+  let keyframe = if media.streams[p.stream_index].codec_id == "h264" {
+    ts_h264_is_idr(p.payload)
+  } else {
+    false
+  }
+  let pts = if p.pts != ts_nopts {
+    p.pts
+  } else if p.dts != ts_nopts {
+    p.dts
+  } else {
+    0
+  }
+  Some({
+    stream_index: p.stream_index,
+    data: p.payload,
+    pts,
+    keyframe,
+  })
 }

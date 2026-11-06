@@ -57,3 +57,30 @@ test "av_compare_mod" {
   assert_eq(av_compare_mod(0x11, 0x02, 0x20), 15)
   assert_eq(av_compare_mod(3, 5, 16), -2)
 }
+
+///|
+test "av_sat_add64 saturates both ways" {
+  assert_eq(av_sat_add64(1L, 2L), 3L)
+  assert_eq(av_sat_add64(int64_max, 1L), int64_max)
+  assert_eq(av_sat_add64(int64_min, -1L), int64_min)
+}
+
+///|
+test "av_add_stable reproduces FFmpeg's AAC-in-TS timestamp walk" {
+  // 1024-sample frames at 44.1 kHz on the 90 kHz clock: the pts sequence
+  // the real mpegts demuxer reports for one PES (2089.8 ticks per frame).
+  let tb = av_make_q(1, 90000)
+  let inc = av_make_q(1024, 44100)
+  let expected : Array[Int64] = [
+    128090, 130179, 132269, 134359, 136449, 138539, 140628,
+  ]
+  let mut ts = 126000L
+  for want in expected {
+    ts = av_add_stable(tb, ts, inc, 1L)
+    assert_eq(ts, want)
+  }
+  // An exact tick count takes the plain addition path.
+  assert_eq(av_add_stable(av_make_q(1, 1000), 5L, av_make_q(1, 10), 1L), 105L)
+  // An increment below one tick cannot move the timestamp.
+  assert_eq(av_add_stable(tb, 7L, av_make_q(1, 180000), 1L), 7L)
+}

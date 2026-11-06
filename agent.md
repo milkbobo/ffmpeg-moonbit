@@ -348,6 +348,15 @@
   运行时恒 false（guard 失效 → abort）——用 match 转 Option**；旧方法
   语法 fn name(self:T,..) 是方法定义（unbound → fn T::name）；wasm 的
   fail() = abort 无输出（cmd 错误路径改 println+return）。wasm 全量绿。
+  ⑳q §328-§331 ffref 全面差分（音频/容器/图像/编码）：TS 门面四处真实
+  偏差修复（视频留一 PES 对齐 h264 parser AU 语义、ADTS 帧帧 pts 用
+  av_add_stable 插值、AAC 帧全 keyframe、ADTS 头保留）、MP4 discard 帧整帧
+  丢并消耗 skip_samples（decode.c 语义）、MP3 oracle 按注册名 `mp3` 选定点
+  版、MJPEG/PNG 逐字节恒等（镜像需 zlib）、shine 拼接码流逐字节恒等、
+  Opus/AAC 走互通+SNR（原生编码器语义≠打补丁 C 参考）；**AAC 默认路径
+  无 coef2minsf 下限的饱和 bug 由 oracle 揭出并修复**（3.4→67.7 dB）。
+  **oracle mem_read 越界读是 §328 前所有包级对拍的隐患**（症状：包数/尺寸
+  随机错）。wasm 钉住：playback_oracle_pins_test.mbt。
   ⑳o §325 libswresample 第一片：
   `libswresample/` 新包——同采样率转换（`swr_flt_to_s16` =
   audioconvert.c 的 av_clip_int16(lrintf) **round-half-to-even** 逐分支

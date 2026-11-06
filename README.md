@@ -255,7 +255,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-11-07）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **1446/1446** 通过（另有 ffref 原生 oracle 差分 38/38，运行于 docker 镜像内）。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-11-07）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **1453/1453** 通过（另有 ffref 原生 oracle 差分 57/57——音频解码 MP3 定点逐字节/AAC、TS/MKV/WebM/MP4/fMP4 逐包、MJPEG/PNG 逐字节、shine 编码逐字节与 Opus/AAC 互通——运行于 docker 镜像内）。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

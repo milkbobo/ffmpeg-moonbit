@@ -1,7 +1,10 @@
 import {
-  "milkbobo/ffmpeg-moonbit/ffref" @ffref,
+  "milkbobo/ffmpeg-moonbit/ffref",
+  "milkbobo/ffmpeg-moonbit/libavcodec",
   "milkbobo/ffmpeg-moonbit/libavformat" @avf,
-  "milkbobo/ffmpeg-moonbit/libavutil" @libavutil,
+  "milkbobo/ffmpeg-moonbit/libavutil",
+  "milkbobo/ffmpeg-moonbit/libswresample" @swr,
+  "moonbitlang/core/math",
 } for "test"
 
 import {
@@ -9,11 +12,11 @@ import {
 }
 
 options(
-  "native-stub": ["ffref_stub.c"],
+  "native-stub": [ "ffref_stub.c" ],
   targets: {
-    "ffi.mbt": ["native"],
-    "ffref.mbt": ["native"],
-    "ffref_test.mbt": ["native"],
+    "ffi.mbt": [ "native" ],
+    "ffref.mbt": [ "native" ],
+    "ffref_test.mbt": [ "native" ],
   },
   link: {
     "native": {
@@ -22,7 +25,7 @@ options(
       // moon's Windows native backend requires MSVC, so this package runs
       // native tests inside that image only.
       "cc-flags": "-I/usr/local/include",
-      "cc-link-flags": "-L/usr/local/lib -lavformat -lavcodec -lswresample -lavutil -ldav1d -lm",
+      "cc-link-flags": "-L/usr/local/lib -lavformat -lavcodec -lswresample -lavutil -ldav1d -lshine -lz -lm",
     },
   },
 )

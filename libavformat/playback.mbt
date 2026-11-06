@@ -104,7 +104,9 @@ pub(all) enum Source {
   Mkv(MatroskaHeader)
   OggOpus(OggOpusDemux)
   Wav(WavDemux, Bytes)
-  Ts(TsDemux)
+  /// The demuxer plus, per stream, the next interpolated AAC timestamp
+  /// (`ts_nopts` until the first PES timestamp is seen).
+  Ts(TsDemux, Array[Int64])
 }
 
 ///|
@@ -277,12 +279,12 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
 pub fn MediaFile::next_packet(
   self : MediaFile,
 ) -> MediaPacket? raise MediaError {
-  let ts_demux : TsDemux? = match self.source {
-    Ts(d) => Some(d)
+  let ts_demux : (TsDemux, Array[Int64])? = match self.source {
+    Ts(d, next_pts) => Some((d, next_pts))
     _ => None
   }
   match ts_demux {
-    Some(d) => return self.playback_ts_next(d)
+    Some((d, next_pts)) => return self.playback_ts_next(d, next_pts)
     None => ()
   }
   match self.source {
@@ -362,7 +364,7 @@ pub fn MediaFile::next_packet(
         keyframe: p.is_keyframe,
       })
     }
-    Ts(_) => abort("unreachable: TS is routed above")
+    Ts(_, _) => abort("unreachable: TS is routed above")
   }
 }
 
@@ -449,6 +451,21 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
 }
 
 ///|
+/// `aac_decode_frame_int` consumes an in-band ADTS header when a packet
+/// starts with the 12-bit syncword: 7 bytes, plus the 2-byte CRC when
+/// `protection_absent` is clear.
+fn aac_strip_adts(data : Bytes) -> Bytes {
+  if data.length() >= 7 &&
+    data[0].to_int() == 0xFF &&
+    (data[1].to_int() & 0xF0) == 0xF0 {
+    let header = if (data[1].to_int() & 1) != 0 { 7 } else { 9 }
+    data[header:].to_owned()
+  } else {
+    data
+  }
+}
+
+///|
 /// Decode one packet. `Ok(None)` means the packet produced no frame.
 pub fn AudioDecoder::decode(
   self : AudioDecoder,
@@ -456,7 +473,7 @@ pub fn AudioDecoder::decode(
 ) -> AudioFrame? raise MediaError {
   match self.dec {
     Aac(dec) => {
-      let out = match dec.decode_frame(pkt.data) {
+      let out = match dec.decode_frame(aac_strip_adts(pkt.data)) {
         Ok(v) => v
         Err(e) => raise DecodeError(e)
       }
@@ -561,7 +578,7 @@ pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
       } else {
         None
       }
-    Ts(demux) => {
+    Ts(demux, _) => {
       // Span between the first and last packet timestamp (90 kHz), like
       // ffprobe's stream duration when the container has no explicit end.
       let mut first : Int64 = ts_nopts
@@ -644,6 +661,24 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
   for _ch = 0; _ch < dec.channels(); _ch = _ch + 1 {
     rows.push([])
   }
+  // Encoder priming and end padding are not presentation audio; FFmpeg drops
+  // them in decode.c's `discard_samples`. For MP4 the demuxer supplies
+  // `skip_samples` and flags edit-list-cut packets AV_PKT_FLAG_DISCARD: a
+  // discarded frame is dropped whole and consumes `skip_samples` by its own
+  // length, the remainder trims the head of the next kept frame, and the
+  // last packet's `discard_padding` trims the tail.
+  let (mov_track, tail) = match mf.source {
+    Mov(movie, _) => {
+      let track = movie.tracks[audio]
+      (Some(track), mov_audio_tail_discard(movie, track))
+    }
+    _ => (None, 0)
+  }
+  let mut skip = match mov_track {
+    Some(t) => t.skip_samples
+    None => 0
+  }
+  let mut nth = 0
   while true {
     let pkt = mf.next_packet()
     if pkt is None {
@@ -654,29 +689,36 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
       continue
     }
     let frame = dec.decode(p)
+    let discarded = match mov_track {
+      Some(t) => nth < t.samples.length() && t.samples[nth].discard
+      None => false
+    }
+    nth = nth + 1
     if frame is Some(f) {
+      if discarded {
+        skip = if skip > f.nb_samples { skip - f.nb_samples } else { 0 }
+        continue
+      }
+      let from = if skip < f.nb_samples { skip } else { f.nb_samples }
+      skip = skip - from
       for ch = 0; ch < dec.channels(); ch = ch + 1 {
-        for i = 0; i < f.nb_samples; i = i + 1 {
+        for i = from; i < f.nb_samples; i = i + 1 {
           rows[ch].push(f.samples[ch][i])
         }
       }
     }
   }
-  // Ogg Opus streams carry pre-skip in OpusHead: the first N decoded
-  // samples are encoder priming, not presentation audio. FFmpeg drops them
-  // at the decoder (initial_padding); trim them from the head of the rows.
-  if mf.source is OggOpus(demux) && demux.pre_skip > 0 {
-    let skip = if demux.pre_skip < rows[0].length() {
-      demux.pre_skip
-    } else {
-      rows[0].length()
-    }
+  // Ogg Opus pre-skip from OpusHead (initial_padding) trims the head.
+  let head = match mf.source {
+    OggOpus(demux) => demux.pre_skip
+    _ => 0
+  }
+  if rows.length() > 0 && (head > 0 || tail > 0) {
+    let total = rows[0].length()
+    let start = if head < total { head } else { total }
+    let end = if total - tail > start { total - tail } else { start }
     for ch = 0; ch < rows.length(); ch = ch + 1 {
-      let trimmed : Array[Double] = []
-      for i = skip; i < rows[ch].length(); i = i + 1 {
-        trimmed.push(rows[ch][i])
-      }
-      rows[ch] = trimmed
+      rows[ch] = rows[ch][start:end].to_owned()
     }
   }
   {
@@ -686,6 +728,57 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
     format_name: mf.format_name(),
     codec_id: mf.streams()[audio].codec_id,
     duration_seconds: mf.duration_seconds(),
+  }
+}
+
+///|
+/// Samples to drop from the end of an MP4 audio track: `mov_read_packet`
+/// derives `first_discard_sample` from the last packet and the track
+/// duration, and `read_frame_internal` turns that into the packet's
+/// `discard_padding`. Fragmented files skip this in the C (`found_tfhd`);
+/// fragments are also what switches `advanced_editlist` off, so that flag
+/// tells them apart here. The iTunSMPB gapless path is not covered.
+fn mov_audio_tail_discard(movie : Mp4Movie, track : Mp4Track) -> Int {
+  let n = track.samples.length()
+  let rate = track.sample_rate.reinterpret_as_int()
+  let scale = track.timescale.reinterpret_as_int()
+  if !movie.advanced_editlist || n == 0 || rate <= 0 || scale <= 0 {
+    return 0
+  }
+  let to_samples = fn(ts : Int64) -> Int64 {
+    @libavutil.av_rescale_q(
+      ts,
+      @libavutil.av_make_q(1, scale),
+      @libavutil.av_make_q(1, rate),
+    )
+  }
+  let last = track.samples[n - 1]
+  let st_duration = track.duration.reinterpret_as_int64()
+  let last_duration = last.duration.to_int64()
+  let kept = if st_duration < last.pts {
+    0L
+  } else if last_duration < st_duration - last.pts {
+    last_duration
+  } else {
+    st_duration - last.pts
+  }
+  let sample = to_samples(last.pts)
+  let first_discard = sample + to_samples(kept)
+  if first_discard == 0L {
+    return 0
+  }
+  // `FFMAX(codecpar->frame_size, ts_to_samples(pkt->duration))`.
+  let frame_size = to_samples(track.samples[0].duration.to_int64())
+  let in_samples = to_samples(last_duration)
+  let duration = if frame_size > in_samples { frame_size } else { in_samples }
+  let end_sample = sample + duration
+  if duration > 0L &&
+    end_sample >= first_discard &&
+    sample < to_samples(st_duration) {
+    let excess = end_sample - first_discard
+    (if excess < duration { excess } else { duration }).to_int()
+  } else {
+    0
   }
 }
 

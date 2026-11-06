@@ -1627,6 +1627,44 @@ fn AacEncoder::band_targets(
 }
 
 ///|
+/// Smallest scalefactor at which no coefficient of the band quantises past
+/// `aac_encode_max_q` - the guard FFmpeg's coders get from `coef2minsf`.
+/// 0 for an all-zero band.
+fn aac_encode_min_sf(
+  coef : Array[Double],
+  start : Int32,
+  end : Int32,
+  num_windows : Int32,
+) -> Int32 {
+  let mut peak = 0.0
+  for w = 0; w < num_windows; w = w + 1 {
+    for i = w * 128 + start; i < w * 128 + end; i = i + 1 {
+      let a = coef[i].abs()
+      if a > peak {
+        peak = a
+      }
+    }
+  }
+  if peak <= 0.0 {
+    return 0
+  }
+  // `floor((peak * 2^(-(s-100)/4))^(3/4) + 0.405)` must stay <= max_q.
+  let limit = @math.pow(aac_encode_max_q.to_double() + 0.595, 4.0 / 3.0)
+  let mut s = @math.ceil(100.0 + 4.0 * @math.log2(peak / limit)).to_int()
+  if s < 0 {
+    s = 0
+  }
+  // Settle the float edge with the quantiser's own arithmetic.
+  while s < 255 &&
+        @math.pow(peak * @math.pow(2.0, -(s - 100).to_double() / 4.0), 0.75) +
+        0.405 >=
+        aac_encode_max_q.to_double() + 1.0 {
+    s = s + 1
+  }
+  s
+}
+
+///|
 /// Quantise one scalefactor band (of `num_windows` 128-bin segments):
 /// `q = sign(c) * floor((|c| * 2^(-(s-100)/4))^(3/4) + 0.405)`, clamped to
 /// `aac_encode_max_q` (the escape limit of codebook 11). `s < 0` zeroes the
@@ -1883,6 +1921,16 @@ fn AacEncoder::channel_data(
     } else if v > 255 {
       v = 255
     }
+    let start = offsets[b]
+    let end = offsets[b + 1]
+    // FFmpeg's coders never let a band saturate the escape alphabet
+    // (`coef2minsf`): without this floor a tonal peak is clipped to 8191 and
+    // decodes at a fraction of its level - a pure tone kept ~1 dB of SNR on
+    // long frames.
+    let floor_sf = aac_encode_min_sf(coef, start, end, num_windows)
+    if v < floor_sf {
+      v = floor_sf
+    }
     if prev > -1000 {
       if v < prev - 60 {
         v = prev - 60
@@ -1890,8 +1938,6 @@ fn AacEncoder::channel_data(
         v = prev + 60
       }
     }
-    let start = offsets[b]
-    let end = offsets[b + 1]
     aac_encode_quantize_band(q, coef, start, end, num_windows, v)
     let mut magnitude = 0
     for w = 0; w < num_windows; w = w + 1 {

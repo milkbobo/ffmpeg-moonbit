@@ -9079,3 +9079,88 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   `fn T::name`；wasm 里 `fail()` 直接 abort 无输出（cmd 错误路径全改
   println+return）；Python `del` 触发 rm-guard（切片赋值替代）。
 - **验证**：wasm 全量绿。
+
+## 328. ffref 音频解码对拍：MP3 定点逐字节 + AAC-in-TS/MP4/fMP4（decode.c 语义补齐）
+
+- **MP3**：oracle 音频解码按注册名选 `mp3`（`mpegaudiodec_fixed.c` 的
+  USE_FLOATS=0 定点版；codec-id 默认是先注册的 `mp3float`——FFmpeg 9 的
+  `allcodecs.c` 中 float 在前）→ 与 `decode_mp3_stream`（同定点路径）
+  **逐字节恒等**（此前假设按 codec_id 默认即定点，实测拿到 float 版差 1 LSB）。
+- **decode.c 语义补齐**（`decode_audio_file`）：MP4 每音频包带 `discard`
+  标志（edit list 切弃）——**被弃帧整帧丢弃且消耗等量 skip_samples，剩余
+  skip_samples 裁下一保留帧头部**；末包的 discard_padding（`first/last
+  _discard_sample` 推导，`mov_audio_tail_discard` 移植）裁尾。fMP4 只吃
+  `skip_samples`（`advanced_editlist` 关 = 有 moof 的 C 路径）。TS 的
+  AAC-ADTS 包此前剥头导致解码错位——`aac_decode_frame_int` 本就消费带内
+  ADTS 头，facade 的 `aac_strip_adts` 保留兜底（MP4/fMP4 的裸 AAC 包）。
+- **对拍**：MP3 逐字节恒等；TS/MKV/MP4/fMP4 的 AAC 与真 FFmpeg PCM
+  ≤1 LSB（浮点尾数级）。
+- **坑**：heredoc 注入 C 字符串时 `\n` 被 Python 吃成真换行（非法 C）——
+  全部 Edit/`python -I -c` 直写；`is Ts(_)` 运行时恒 false 的坑再现
+  （`decode_audio_file` 的 trim 分支改 match）。
+
+## 329. ffref 容器对拍：TS/MKV/WebM/MP4/fMP4 五容器逐包 + TS 门面四处真实偏差修复
+
+- **新增差分**：MPEG-TS（H264+AAC lavfi 流）、Matroska（playback_real_mkv）、
+  WebM（e2e_vp9）、MP4（aac.m4a）、fMP4 段（DASH init+chunk 拼接）——
+  size/keyframe/stream 精确、pts ±1 tick。MKV/WebM/MP4/fMP4 首轮即绿。
+- **TS 门面四处真实偏差**（oracle 逐包对拍暴露）：
+  1. **视频包序**：C 的 h264 parser 只有看到下一 AU 起始码才交出上一帧
+     ——门面改为「留一 PES」（cursor[2] 槽，文件末 flush 最后一个）。
+  2. **音频帧 pts**：PES 内只有首帧带 PES 时间戳，后续帧是
+     `compute_pkt_fields` 用 **`av_add_stable`**（libavutil 新增移植，
+     `av_sat_add64` 同片）按 1024/44100 步进插值的——门面 per-stream
+     next_pts 数组复刻。
+  3. **keyframe**：ADTS/AAC 帧全为 keyframe（帧内编码）；H264 改为扫描
+     PES 内**全部 NAL**（IDR 前有 AUD/SPS/PPS/SEI，只查首个 NAL 漏报）。
+  4. **ADTS 头保留**：C 的 AAC parser 包含 7 字节头（见 §328）。
+- **`av_add_stable`**（libavutil/mathematics.mbt）：含 `av_sat_add64`；
+  wbtest 用 TS 实测序列（126000 + 2089.8×n @90kHz）钉住非整除累进。
+- **坑**：TS 门面 cursor 槽序（音频帧内进度槽必须先补 0 再压视频槽，
+  否则数组越界 abort）；循环内读局部 `held` 变量在连续两个视频 PES 时
+  丢包——读槽必须取最新值；**oracle mem_read 越界读**（`buf_size < left`
+  写反，读穿输入缓冲随机污染 blob）——本章最隐蔽 bug，症状是「包数/尺寸
+  随机错」，修复前所有差分结论不可信（勘误 §316 的「包级对拍绿」仅在
+  Ogg/WAV 小文件上侥幸）。
+
+## 330. ffref 图像对拍：MJPEG + PNG（oracle 视频种类扩展）
+
+- **`ffref_decode_video` 扩展**：chroma_mode 3=packed rgb24、4=packed
+  rgba、5=gray8（`frame_kind` 取代 `planar_chroma_mode`）。
+- **MJPEG**：MKV 内 mjpeg 流（yuvj420p）逐帧 `av_mjpeg_decode(pkt)` 平面
+  拼接 vs oracle **逐字节恒等**（5 帧）。
+- **PNG**：裸 .png 走 png_pipe demuxer → rgb24/rgba 单帧 vs
+  `av_png_decode` 像素 **逐字节恒等**。裸 PNG 探测需 zlib——镜像
+  configure 加 `--enable-zlib`（链接 `-lz`；zlib 非可选依赖 libavformat
+  会硬链）。
+- **坑**：lavfi rgbtestsrc 输出 RGBA PNG（color type 6）——fixture 生成
+  时显式 `-pix_fmt rgb24`。
+
+## 331. ffref 编码 oracle：shine 逐字节恒等 + Opus 互通 + AAC 默认路径饱和 bug 修复
+
+- **`ffref_encode_audio`**（stub 新函数）：s16 PCM → swr 转编码器格式 →
+  整帧喂真编码器 → 包尺寸表+拼接 blob；**BITEXACT + EXPERIMENTAL**（解锁
+  原生 opus）+ `av_force_cpu_flags(0)` 标量 + 选项字典（`ffref_simd=1`
+  保留 SIMD 作 A/B）。
+- **shine MP3**：libshine 包流 vs `mp3_encoder` **拼接码流逐字节恒等**
+  （shine 按帧输出、我们的 `encode_frame` 是 32-bit 对齐块，边界不同属
+  设计；与 §275 的逐字节一致指拼接后码流）。
+- **Opus**：oracle 用 FFmpeg **原生** opus 编码器（experimental）——
+  移植（§276）对齐的是打确定性 libm 补丁的 C 参考，与原生编码器首帧即异
+  （psy 遥测差异）。转互通+质量对拍：我们的 Ogg 包真 FFmpeg 解码、
+  MoonBit 解码器与真解码器 ≤1 LSB、SNR 20.2 dB vs 原生 18.8 dB。
+- **AAC 重大 bug（默认路径）**：interop 测出我们的流真 FFmpeg 解码 SNR
+  仅 3.4 dB（原生 31.5）。逐步二分（配置×选项×SIMD 矩阵 + 纯音探针 +
+  频谱逐帧）定位：**默认（简化）路径 scalefactor 无 `coef2minsf` 下限**
+  ——纯音峰值系数量化越过 8191 被 escape 码字钳制，长帧解码幅度塌到
+  分数电平（短帧/瞬态帧看似正常，旧 round-trip 测试的复合音源掩盖）。
+  修复 `aac_encode_min_sf`（峰值反推最小 sf + 量化器算术 settle），修复后
+  默认路径真 FFmpeg 解码 **67.7 dB**（原生 31.5）；新增
+  `aac_lc_pure_tone_does_not_saturate` 回归（逐帧频谱 SNR>50 dB）。
+  感知路径（twoloop）本就有 `coef2minsf` 等价逻辑不受影响。
+- **门面钉住**（wasm 可见）：`playback_oracle_pins_test.mbt`——TS 逐包
+  序列（含 pts 插值/keyframe）、MP4 13230/fMP4 12288/TS 19456 样本裁剪
+  长度，oracle 验证过的行为 wasm 套件常驻。
+- **镜像**：ffmpeg-moonbit-ffref:nine 重建（+libshine +zlib，-lopus 弃用
+  ——原生 opus 在 libavcodec 内）。Dockerfile 在 .scratch/ffref（gitignored）。
+- **验证**：容器 native **57/57**；wasm 全量 **1453/1453**。

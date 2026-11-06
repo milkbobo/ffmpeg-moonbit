@@ -14,4 +14,17 @@ extern "c" fn ffref_decode_audio_ffi(data : Bytes) -> Bytes? = "ffref_decode_aud
 extern "c" fn ffref_decode_video_ffi(data : Bytes) -> Bytes? = "ffref_decode_video"
 
 ///|
-extern "c" fn ffref_avformat_version() -> Int = "ffref_avformat_version"
+#borrow(pcm)
+#borrow(codec)
+#borrow(options)
+extern "c" fn ffref_encode_audio_ffi(
+  pcm : Bytes,
+  codec : Bytes,
+  options : Bytes,
+  sample_rate : Int32,
+  channels : Int32,
+  bitrate : Int32,
+) -> Bytes? = "ffref_encode_audio"
+
+///|
+extern "c" fn ffref_avformat_version() -> Int32 = "ffref_avformat_version"

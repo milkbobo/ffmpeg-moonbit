@@ -3,7 +3,6 @@
 /// native-only inside the ffmpeg-moonbit-ffref docker image (the repo
 /// checkout mounted at /work); the wasm host build skips this package
 /// entirely, so the 1438-test wasm suite is unaffected.
-
 let playback_ogg_file_b64 : Bytes = b"T2dnUwACAAAAAAAAAAAN8K0LAAAAADJMpZEBE09wdXNIZWFkAQJ4AIC7AAAAAABPZ2dTAAAAAAAAAAAAAA3wrQsBAAAAxzMUKQEjT3B1" +
   "c1RhZ3MTAAAAbW9vbmJpdC1mZm1wZWctb3B1cwAAAABPZ2dTAAA4BAAAAAAAAA3wrQsCAAAA15PR8QHx/GVAOb6hEtUQTmI+3mLqCRzT" +
   "woqTPWozVsXOPHKuAiclKKuUSoDsSWv/QfKSqSzd+KKw0pgwLIOvB/kIfIomVZ5Ef+nDx+SIN2Gs286KgQkBjJA9BKkpvT5axTMQ7fLs" +
@@ -88,7 +87,11 @@ fn ffref_check_packets(data : Bytes, label : String) -> Unit raise {
   let oracle = ffref_probe(data)
   let mf = @avf.MediaFile::open(data)
   let streams = mf.streams()
-  assert_eq(oracle.timebases.length(), streams.length(), msg="\{label}: stream count")
+  assert_eq(
+    oracle.timebases.length(),
+    streams.length(),
+    msg="\{label}: stream count",
+  )
   let ours : Array[@avf.MediaPacket] = []
   while true {
     let p = match mf.next_packet() {
@@ -97,11 +100,34 @@ fn ffref_check_packets(data : Bytes, label : String) -> Unit raise {
     }
     ours.push(p)
   }
-  assert_eq(ours.length(), oracle.packets.length(), msg="\{label}: packet count")
+  if ours.length() != oracle.packets.length() {
+    println(
+      "\{label}: ours \{ours.length()} vs oracle \{oracle.packets.length()}",
+    )
+    for i = 0; i < ours.length() && i < 30; i = i + 1 {
+      println(
+        "  ours[\{i}] stream=\{ours[i].stream_index} size=\{ours[i].data.length()} pts=\{ours[i].pts}",
+      )
+    }
+    for i = 0; i < oracle.packets.length() && i < 30; i = i + 1 {
+      let o = oracle.packets[i]
+      println(
+        "  orac[\{i}] stream=\{o.stream_index} size=\{o.size} pts=\{Repr(o.pts_us)}",
+      )
+    }
+  }
+  assert_eq(
+    ours.length(),
+    oracle.packets.length(),
+    msg="\{label}: packet count (ours \{ours.length()}, oracle \{oracle.packets.length()})",
+  )
   for idx = 0; idx < ours.length(); idx = idx + 1 {
     let p = ours[idx]
     let o = oracle.packets[idx]
-    assert_true(p.stream_index == o.stream_index, msg="\{label}: stream at \{idx}")
+    assert_true(
+      p.stream_index == o.stream_index,
+      msg="\{label}: stream at \{idx}",
+    )
     assert_eq(p.data.length(), o.size, msg="\{label}: size at \{idx}")
     assert_eq(p.keyframe, o.keyframe, msg="\{label}: keyframe at \{idx}")
     let (num, den) = oracle.timebases[o.stream_index]
@@ -112,7 +138,10 @@ fn ffref_check_packets(data : Bytes, label : String) -> Unit raise {
         let expect = (us * den.to_int64() + num.to_int64() * 500000L) /
           (num.to_int64() * 1000000L)
         let diff = (p.pts - expect).abs()
-        assert_true(diff <= 1L, msg="\{label}: pts at \{idx}: \{p.pts} vs \{expect}")
+        assert_true(
+          diff <= 1L,
+          msg="\{label}: pts at \{idx}: \{p.pts} vs \{expect}",
+        )
       }
       None => fail("\{label}: oracle has no pts at \{idx}")
     }
@@ -491,4 +520,865 @@ test "ffref: VP9 real stream matches the oracle byte-for-byte" {
 ///|
 test "ffref: AV1 real stream matches the oracle byte-for-byte" {
   ffref_e2e_diff(e2e_av1_mkv_b64, "av1")
+}
+
+// ffref-fixture-section
+
+///|
+let ffref_mp3_file_b64 : Bytes = b"//uQZAAAAmsLzp1gYAAAAA0goAABFmVFGBnqAAAAADSDAAAACmtt2MISzaANv00DAY1MNRggDB3ba21933/jcvtiEAAAABAMDwfB" +
+  b"98oCBzE4P8EHTnT7uX85y/nOn3cuD4Pg+HwQDFQDB/Jggcy/gh0mLOU0YyPFhgZBDGP7aAYLwChk4oXG58XKYNIWhzjDAEIHJ3tB" +
+  b"6EgJJiFhQGEuE8EBFQsHAJVwM5HA4TsyP4G4hgYU0BnTCKPgZlAAYJAxQkDED1U/hYkAECAwIQNlBuFf/BtUP2DFQWhCkQ1bqq/h" +
+  b"kUY4QWEFhyRQIoFrv1deQ4XMLmIaMyOaUhzhzttD2v8okVIqXiLEWMSdLpkXmt1f/tl5ZdCQNCVwNrf+362QL////rVgDALAFUwD" +
+  b"ABVMDUA+TAHANYwGUEsM7VckzLqBuEw44JFMGyBNTAxQP4wOUDeMD5AvDASQEB5pG7tnTPR/Rre/KcORUfaJAix3DYeaOyrgCmLK" +
+  b"KP1ElrtZQfao+LaBdJVqhW5DWGyJN1pi2l7W36ToivJueWlUmAAgApgG//uSZD4P87EVQw98QAAAAA0g4AABDsBVDA/sZsgAADSA" +
+  b"AAAEABoYDWA8mBrAhRhAoaiZsEzlmaYhqZhBwJQffgm9xJtzwbbsmfnJdB35RT2Ef5n8KCimnyMgNz98q+Ds99/ihtet9pNeuvQp" +
+  b"/L/r1PEYvu/9Zay+d7f2+nXGX9ZzT96ZN+Nenqr2+2NP/pX3vt3vC6pwDAPQEQwEQBfMBhAnjArAT8waEPwMsoe6jK3Q9owXwERN" +
+  b"VPjHCc2FQOArTUisODnVl1n38r0v8Lf+EVQGIvDO3U27Xnkd6DmkABMYvHCqB6LltlGzCUMZF9AteLIVgg5c81gSWrYoTJr4Zc5C" +
+  b"bk2A+oCLuVVIgwEwETA2A4MHcI0xLh2jgr64N/gdwxNQnzhGQzxGMzPzMngxYWWvLA5Dr029O+10USXEFdLrmOLh0vzgtvP2emMv" +
+  b"W5vnNqqW35a6VvUeT9XuRRIuOzCqTEFNRTQuMKqqqqqqqqqqqqqqqqqqqqqqqqqqqgAAADC3KqmPEpkZwZsymz6hgggViY5yqsmO" +
+  b"DBUJgdoFoBqE4P/7kmSGiPOKIkML+xmwAAANIAAAAQtoVxUvbEaAAAA0gAAABGPGAbpSB0cwGvIBhUiRq/d1VttT99BBNz1TQ4Cw" +
+  b"ZFwpa8WDLSGKLKtjFibzxXI44+xIXXll+1zro171om9fb7K7yrHi5gIIBCYFgBNGCjgnphLQUUYrSPjnGXdsJxLI+iYr4FvHRMAm" +
+  b"qrDmlSzGkcxmW5gmEgJIS2cO3DiBrJyxJjZmWAUnFVT2vq7CQRlGEdhFU1acWt1GmpjHXgUOJx9VKnpKMuzKxA5Y3araJSCTKW9K" +
+  b"tm3iuQJ0qVY9ZKvjJhNiKOCK+kyvT555XRSyBOHzce3zjUOT4gjkLVvwxk6iUjQpZgWucoy3VpxRSVqEMXxDe1O0ba85J5SSIVVM" +
+  b"QU1FNC4wVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUwIsCgMCUA2zAxQVgwUgKbMLzH+jTxvco0z8fQMKsC" +
+  b"STS6wM0Es3KoDj1JNgGEDFJJFtpb9QRMnPnyOm3zGy6ko4azxd1B8ra2a2/S7s5TEHd+a0P/+5Jk0QjzQxZE43+gkAAADSAAAAEX" +
+  b"Aaz+D/UmyAAANIAAAAS1p8vJYqikEuddxrXHxo3/345mUUm6Mv8bsh8n9eEupFpqH7f+k9QmzHatjOYjCdTqPaF/stGPtbD1hjvT" +
+  b"qx7vPvtqLii9xMRoYYCQAKGBcgSJgpwJYYTOE3mLBDuBx7fGYcYAO/GLJhZJ0c/RqgxBpCtpopNxlYYRhGCaEhlb+Q2DmSZGFXt2" +
+  b"sMuqs8pLywEQVjEHu/W1FFYzM5BDJMRNtNGmPzRa5JYowoTx7oYSlCnXsOL1FdKI0Ic/SSWo5b62FRIWdNRwQlcYcVZPDNNPcbGI" +
+  b"jm17Xhy0UC2YSagyRSSOJH/19Mg6bx0LSRMVDl1diYTLBTeQTywkn1wqTEFNRTQuMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qqqqqqqqqqqqqqqqqqqqqqqqqqqqAACoyNEkkwC4A5MAzAVDARgJEwH8EmME4DqzIl3MkyFwOXMEZBAjVSTSjDuNT7/jlmhYLAxl" +
+  b"+dWo593p7Z/3e78bWRjTvup+E0SI//uSZOkP9O1pwIP8MbIAAA0gAAABFlGu/g/0xsAAADSAAAAEwtSnh6h4xty7Ft03w3dL/kML" +
+  b"K4KN7u151DkR5u1jVPxp/zPo+qzp1l7XQWM9Uikda/4fyn35yVFXya9qgwF8ANMDeAmjBiQUcws4KmMZnIFzpjvaU6JEgrMZ0DEj" +
+  b"vGPTX1xzUBqjTG1TL85zCgGi26wjW38QL1T8gvE65kKteaK8UcQqDWxpRnU5UbjOToRJ+hkt3wLrumlCKcplFzTVOQQJyBAft6DE" +
+  b"DGGtx6l9RXpxXEqKElZJIGijE7SXQyQU14KyTp5T4nGlUjS8Ovkm3wKoUmDbl9LbrcJNdlEhlBI7c3sr3uM9JqSriVLF5KyKxzHR" +
+  b"1hLJJ5FcqSyRVUxBTUU0LjBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUZAAMBzAijAdgMEwJkE2ME" +
+  b"ACWzCUxz4z7zgoM9PHGjCEAhkyusjNQlNonY4FATVhHBxGT5AkHr5zDx21/WIU6VlosjA6C8xAlejxxQnVNJ+//7kmTkiPQ8I0PT" +
+  b"+kmiAAANIAAAARf1sPwP9SbIAAA0gAAABBWi4gSjWrS4tL0qHS3fIWohbn1iKU6uESIqj5xs8c8cn1X44gp1vpkuxvoqOQtzEb9y" +
+  b"dVDDYkdJcqnMHXVzv3VMjzW1TGQlD2zVg+ihepBSCAJQwKsBlMEuA5jCLQekxPwXkOCHtDjfvhfQxQUJDOQGsNGlYM6VFM1owMgi" +
+  b"uMFQPSEcuGI3bllvPV7G/y7nnJcnS7LzxBwdddB/Agz3KOINruSKMQLXNpY/N9nKFHNDlo6s4ti8xmnx6yrrE0Von7iJZDKjGQZm" +
+  b"GPJWcfDos94TyeQL6p0pPMWzwySSc/rZJl511txkw5jzV/XpGClXQFT7WIIgpeE3rTTIJBVMQU1FNC4wVVVVVVVVVVVVVVVVVVVV" +
+  b"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUwHACLMBxAwjAkATswPEJkMIuHXTO4eQMznoc5MHtCJDAQAL0wHMAWA2sbQODvADV5" +
+  b"AAUIob8NErIKuzL2WfWUKF30TczUW7d9Ig0w6zS6XUH/+5Jk5wn09mnBE/xBogAADSAAAAEVsakAr/THiAAANIAAAAQLxZNHiPwJ" +
+  b"rD1BcBhVRunMGoxM4TcGSFvGczSOyG2k+HTfs+ZHmtJPRQxmRyQrWG4DGYjAHp2pmcc3cGF8vcEUM79FZFkBvITAX5gZQDUYLGB8" +
+  b"mFDBCBi44y2csxg3nJYjN5i5wT4YUuDxmChgx5oAvhnXRpkeZ5gwCSGbKHDjFSX2MK/KHL8cqWG72srWeGOeOVPB+XaRhpo2SmT2" +
+  b"R+Ei16k5UnbDsZjysM5UDSaA8xbELRhTqndys3KpjBWmUOm2rCcaSt4XvbKLMjTd5suuQWY5TPNOKKsgOc6Cg9kvhezFH0UlrEZP" +
+  b"nLbIa2ciY7P1vG8giUosrC58Fut1TEFNRTQuMFVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVUwG8CKMBsAxTAi" +
+  b"QT4wOAJvMILHeDN/ucwzZsdUMHICMTFLIM9Ac22YjhjhNZDsIIyfLrRXM1pNxv+/6DPuc7PtWOZtLacKK1+9y/9e/zoTzvmu27ZU" +
+  b"//uSZOeP9MNrwQP1GnIAAA0gAAABFqWy/g/0ycAAADSAAAAEbjQ/i+7zVu/qLqcaLt75pWWa+73371X//RzOvHo7GyLqG1A6Wp39" +
+  b"n9r8ulkqdqZu6OPl/FfYebmc8tDc29PSM2mnDNByghBAGaYGiAumC0AcxhR4PeYu0L6HML2tRylQwcYu6EwnTDtGnjHGeq/mbVLG" +
+  b"QRpGCoKo2MrdiGydXqvZTY2H0/deL93UoEZO67QfLbY81po0qWUSTJlMLMJWibhkZ6w/oFotKIpPmiLnfG7lkIIPhhKaJorq/tFA" +
+  b"4w0u1aCpzJk1a2h3FUNytZfH2aZl5RerHumwpfcwl8S7MtjkGYzyctig34xKU4tPaZk6bsfT3wIfaAUbKTNqtkxBTUU0LjCqqqqq" +
+  b"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqMBsAiTAaQMYwH4FDMDRCdjB5h5EzRPqFMy0HbzBoQjwwY1QyDG4CucRZxrUbBhJU" +
+  b"k8tHhq7rv7w/urfzuabewMODH4VzdVGum0pm3DCjAnWUtD65UoUDFtHaQP/7kmTpifTTakED/DGyAAANIAAAARbxqv6v9SbIAAA0" +
+  b"gAAABETbw83JyERAb5o7MaEGXXT96pzz+mHpsebcDtc1U4ynAc0YUsYKKIG+WhM9RAoP+9R6tB5QTiMgeQwIEAKMD2AXjBpwPUwv" +
+  b"gIQMbDGVzr5sC06tcZ3MbCCljvuFzWVyzQxvjO2/zI09zBYHi965G5xAgWTJzsWzPWaQgNO4NajRQSaAfYx1l0FnDsYRYXs0qyUV" +
+  b"m1I6cWnkrbxM6ofYSUQqNEKJ8l2UbTMutLqzbTak1pddlSGNJn5F0k4GnymhV8JxQFEDSN1ujamqM1yq9ulaq5VQmkS+zcmZzOv6" +
+  b"uEjShEgVabnDGJZkEE0c2JM1J6UIYszROtONp7qTTc5MQU1FNC4wqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqMBrAijAYgMkwHcFG" +
+  b"MC+CfzBwR6YzBzssMvFHhDBeAkchcAtEDcpMOKL81sMQ4nKhe6Q2waPtELI8BqXIh5sHGW0HGNwR5y2+uvQpid3NVY9HhrTAIQ54" +
+  b"eyaMxGpmii5XSgL/+5Jk7I/0omjBA/wZ4gAADSAAAAEYcbL8D/UmwAAANIAAAARktPLemTObnqcjHGDLTjsrkwpSLu7DOJlBiXyh" +
+  b"E7JDYjfx/JoiENJWbNCUUjFRiEwsjAngCMwSUBfMHqBADDbwi0x8oauPKJypDxThtYx8cLRPaJYNkoONJ4DM/N2MlEiMHQnCgALT" +
+  b"cCGxWMTIJuSXccMLApK8QtVTD1C5I9hdBSOhl/UtA5FiSczJpyNCbOMpbPabWKniukSuNsEh9dUQQerOrhBQq3EoUmSsnGl4azIi" +
+  b"JF5MplvqAEcXt9iZtWLaqRZeKiRCw0TvREpmK9waWTJMaOa4hmafqa6NHnZnFOxRKTaJSRFrCZ9mD0OuNpmFTRCpTYTiiLN8+WmO" +
+  b"TEFNRTQuMKowGgCJMBdAyDAagUkwK0KEMGYHuzLG+8EysoebMFNCUDBLpNIgM3QQTi6qNdioOJqZzyyfCJ6uaiRiwE7q1R8jho0R" +
+  b"K660csdMX3FmI/bFCxCqvcpEssWOV7KWVimiZaqb5qSYx9w6SqdTNmFPLK31VLa/PWhi3pyd//uSZPAP9JppwQP8GbIAAA0gAAAB" +
+  b"GXmw+g/1JsgAADSAAAAE4wkb20K7KkwP6Q2IsQ6sh4XeGdJui7viFpoZRs33pUqRZgYIB0YKsAsGEdghZh+wSQZHyN8n0LaVp8V4" +
+  b"5aZHcGFGHyhT5g4oS2afSkaF/+ZOqiYOBcFQHVUZHADkR+UWZnGVX+02VVyK3NX8sqXKatS9oH21XIS6a5IyhkfVbE0dI3JtJB4b" +
+  b"XmrXKo10ZCOH5B6iVCUJicjJiKIuq81FAwrZIMLS2YwKVVEAsS0J0RslpKTWrDWRYlInREjSxtQgZSDMC0pQLIFBQco4xZETSNJg" +
+  b"uuUcJMVH5NTDUECwXIlm5498eymjYcjPaa1KaTa7Y+eKipCdI+wy5aCNukxBTUU0LjCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qqqqqqqqqjAZQIgwFgDLMBjBTDAmgoswW8fMMoQ8RDJxR6wwSAJZMTPI0wEjdo0ONJk10JQ4pJwvnJrbngmmfM3h08KVTMS3QfkF" +
+  b"Y4l+83E2AlSuxNmZVRx+KKisUR4VPv/7kmT7j/TTa8ED/EGwAAANIAAAARtlsvgP9SnAAAA0gAAABCpM0oRQhRjJkMyM++FI38IF" +
+  b"gRUZAX4es8ZxZKcTMILJGwRoaSmTpDU3fMYiU3diG6hsYKmgoLXLIGDIgYEoAZmCEgFZg2gFcYYeDImN5CaR2kMkYdgMJ/GNzhFp" +
+  b"3w+Rqc5BnC45llihjEfxgaD6CBkb6Q2TiV7UYQW3TCwtH0y+Nto6DwRxpNTpRQE9QtdJaMFM3VXtGKMoEEoSR6RP7ZFUXRFGpKE5" +
+  b"ySaWQnKDRjTSiUW0oLug0uiJO5qyZNZMilNPKQpr9SpyTxVdKTz+KyYjTTaNFNV6HaYuDDGVSCCVICTYYSVGGoKzW3NxVgW3H62g" +
+  b"RqsXES2ikt2KVWowSACcMBMAGjBDQnswx0M/MU7JqTGI+XszcIXVMNJBfzBwwSMwLEEJMCRAzzA0wOAwLMAKMA2AEAEAAKQp7/7e" +
+  b"3e26LDkGdX+co0pHc35j4eprz/1ez7dzdn/u7Q0tXxoxp/eG7lO+M2NGPmm36zsz4zSQZLc2u9606/87kWd75ez/+5Jk7A/0rWrB" +
+  b"A/wZsgAADSAAAAEYHbD8D/UmyAAANIAAAARr8uv7XdFt89fyWlTdc4djd837lZR+/9pN7zj4z+47UkjOAAIgQAUKAAAAYFISpj5X" +
+  b"EmGOCmZPyTJlvEcmfS3scyoxI4Bod4Ie5EJGbZaRRhridBgRsOGBkCIYIwCRh+gCmFkA/WAEUAbBYGdkSDQrbBb4BgIBBa6Bi8eg" +
+  b"DD4DFQZ1QvuFj4pAdgGAw0AKFgBguA0HPiijDE6BtguwMRCMDAIgAFD4XBgHCnbUMmJ/Iospl4G2wBIEC18G5gN4QbrUns0nCIFM" +
+  b"3K5omIqN0VAW4PiF+ISa+9ZfSNCcTd2THaLKGNGNHAO8XMOSOj/3N1IGidSKZuouDuIqOSQwg5BiAkoWCXtr/62Z1IUz6DLsaSqQ" +
+  b"ElCLmxFSaKRPlQipSKaZVb////u7f///y8TRmTlMQU1FNC4wVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV" +
+  b"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV//uSZP+ABRdrwQV8wAIAAA0goAABIaIRGTnqgAAAADSDAAAAVVVVVVVV" +
+  b"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV" +
+  b"VVVVVVVVVVVVVVVVVVVVVVVVVVVVVQBMOyOnoPnyPTYOCkDA5kEZrmZsGJlyCFyAkwQcxAcHBWQGDGGTJAFJAgFoG8WJfG6EdDBW" +
+  b"xuhqSWvE8opTlQ5XM13sVuOYnSpblczRqvVay3YVbFw+3BYX1vWuoTErosJ9G3WtdZrXWLeC9t6117Qn2gaPBpQKuiUFhKdUDRYO" +
+  b"1AzrBUeGuRxE7KnRK75YOcFVnc7xEkxBTUU0LjCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qv/7kmSLj/StMkGPaeAAAAANIOAAAQAAAaQAAAAgAAA0gAAABKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" +
+  b"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo="
+
+///|
+let ffref_av_ts_b64 : Bytes = b"R0AREABC8CUAAcEAAP8B/wAB/IAUSBIBBkZGbXBlZwlTZXJ2aWNlMDF3fEPK////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"//////////////////////////////////////////////////9HQAAQAACwDQABwQAAAAHwACqxBLL/////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"/0dQABAAArAXAAHBAADhAPAAG+EA8AAP4QHwAC9EuZv/////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////R0EAMAdQAAB/IX4AAAAB4AAAgIAFIQAH6LUAAAABCfAAAAAB" +
+  b"Z0LACtolsBEAAAMAAQAAAwAUDxImoAAAAAFozg/IAAABBgX//z/cRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY1IC0gSC4y" +
+  b"NjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyNSAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRt" +
+  b"bCBHAQARLSBvcHRpb25zOiBjYWJhYz0wIHJlZj0xIGRlYmxvY2s9MDowOjAgYW5hbHlzZT0wOjAgbWU9ZGlhIHN1Ym1lPTAgcHN5" +
+  b"PTEgcHN5X3JkPTEuMDA6MC4wMCBtaXhlZF9yZWY9MCBtZV9yYW5nZT0xNiBjaHJvbWFfbWU9MSB0cmVsbGlzPTAgOHg4ZGN0PTAg" +
+  b"Y3FtPTAgZGVhZHpvbmU9MjEsMTEgZmFzdF9wc2tpcD0xIGNocm9tYUcBABJfcXBfb2Zmc2V0PTAgdGhyZWFkcz0xIGxvb2thaGVh" +
+  b"ZF90aHJlYWRzPTEgc2xpY2VkX3RocmVhZHM9MCBucj0wIGRlY2ltYXRlPTEgaW50ZXJsYWNlZD0wIGJsdXJheV9jb21wYXQ9MCBj" +
+  b"b25zdHJhaW5lZF9pbnRyYT0wIGJmcmFtZXM9MCB3ZWlnaHRwPTAga2V5aW50PTQga2V5aW50X21pbj0xIHNjZW5lY3V0PTAgaW50" +
+  b"cmFfRwEAE3JlZnJlc2g9MCByYz1jcmYgbWJ0cmVlPTAgY3JmPTIzLjAgcWNvbXA9MC42MCBxcG1pbj0wIHFwbWF4PTY5IHFwc3Rl" +
+  b"cD00IGlwX3JhdGlvPTEuNDAgYXE9MACAAAABZYiEOgxgAIaAQDyw3rypgC0gyFtUJ8ACmyImN+hkdwAHQZRHMSaalwryquBM0Sfq" +
+  b"C6ab+zAe/wbh78IAAEAAADAFSw9gAAoAHNMBRsDo+eAyAABALAAEAcBHAQAUD7n4RAAEAEAAQGQAEBAACAkBAHyACZM8yAKBf+f2" +
+  b"sgA4uVwDg99QgQVgsIKwABZOHUREYUSB9xaF+0ULFcH8vw9F8g8IAAVAAEARgQAAqAAIAjAYwA4GEADyITQIyRIJim4EYD9f+DgA" +
+  b"CACABwC5YCQFblD4hy/pxiYWnNIbu0GBGZkaG3Q6M+ABgpmu1KHgd8Ua/t4YIQAAgACBKamMkDJoN77vhQABAWAAEBkAAQ6wgABA" +
+  b"IA4AkkcBABVa81AAo0SgGBDKtRlpsAUDTthAgrBYQVjcEDIDoN4egsYdxsDDPqkwhQCZjcwgABUAAQBGBAACoAAgCMBZwAcYMIHp" +
+  b"8jqHQvThElwynH4APBEAC6keaIJPK+r3+QAAIAgAAgDAZcKgD7gB0QBOAEAKy8WDxcBMHuUgnXWij2X+JAA3Cx4lmhaagnK38JAA" +
+  b"LWgGBkdgQAgACBQoABIQAAgolAAEDhCqWUaWAOXqDTGAcGL1yxGchUCARwEANg8A//////////////////8llfy2WqlgCmHMoegy" +
+  b"ZyInv+xMCchnMJCgWXP+CzgAIACAqQZZIG4W70mDpKtm3V/AB7CDNQPVIGHzfq8DwABACYBgB1wcIDYgONt3gDHYGmsUBxNCcAG4" +
+  b"edDcBQmOUAd+7QkAA3IAHA+GwIAAQAQABAlCAJBAJmKVuWpM8XiQqldAFACM9+y1N4bmUYDN8qebkfEYzMRSPkAOhoA/RBBZVyVj" +
+  b"oWfCB61HQAARAACwDQABwQAAAAHwACqxBLL/////////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"/////////////////////////////////////////////////////////0dQABEAArAXAAHBAADhAPAAG+EA8AAP4QHwAC9EuZv/" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////R0EAN40QAACQtX4A////////////////////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"//8AAAHgAACAgAUhAAkvBQAAAAEJ8AAAAAFBmiBifBHF00qVeCOK22phMoBHQAASAACwDQABwQAAAAHwACqxBLL/////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"/////////0dQABIAArAXAAHBAADhAPAAG+EA8AAP4QHwAC9EuZv/////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////R0EAOGgQAACiSX4A////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"/////wAAAeAAAICABSEACXVVAAAAAQnwAAAAAUGaQMnwxFAweTIGaljDQbQYuk9KF3FWP8V64h0fx4YigwdNkDXcsnTzQbVL+AiA" +
+  b"3UcUZc/ox0BHQAATAACwDQABwQAAAAHwACqxBLL/////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"/////////////////////////////////////////////////////////////0dQABMAArAXAAHBAADhAPAAG+EA8AAP4QHwAC9E" +
+  b"uZv/////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////////R0EAOWUQAACz3X4A////////////////////////////////////////////////////////////////////////" +
+  b"/////////////////////////////////////////////////////wAAAeAAAICABSEACbulAAAAAQnwAAAAAUGaYSfDEUDDCmAp" +
+  b"UtoJP4myvl5RCpvDT8u1xDo/3hiKAMP0wF3lt0LOIWTDQJeYQ2um5inXLsCT0FBHQQEwAUAAAAHAC0+AgAUhAAfYYf/xUEAjv/zc" +
+  b"AExhdmM2My4xLjEwMgACMKtc6QxCDq1Nzm+JrpuDRUXUpknb2SIAEoSCKYRJySK2EmQiMZJIMS7ZWdsqQ3Ayeb2Fn4bB5lFx7Tly" +
+  b"3Hk11FMIhWSSIjIaSbGIyREiQ8exCQ2EWBJFJ/F/DfYfavsP071n4rsHuLrnjLiO4tu6O0bqrEdDcw9ddk83bN2NsnSWwcxapxbj" +
+  b"O9cd3rad6xOOxkcBARHYrjZtBxVxsVhuU7ap21TtarM9Sz2g2K42Kw3Kw2qdtUa/PsdStqVs+v0bTRtWa00a/PsdCtoVVCqlK5Su" +
+  b"UrlK7V4asdWOrRq0YaMNEk0k1U1U0k0lD0SUSTSTVTVTVTSUSUSUSUVTVTVTVTSUSURRRRRRRRf/8VBAI7/8AWaY2TbrNROLcJqS" +
+  b"txUj/T/vri2Fxerrv19dBer1/XoTV2T+t8L41cqQYr0YePLcimsQ49gpMwRHXZMkRwEBEphk+bSeiqsQP2ZbjY54HuT7YY5I7x0a" +
+  b"1VOnapT/xv1a7d/5OiQYGu5BISDAzuEhIMDAzu4SErBgYGd3CQk4DDmXdwk40DMg153fIJCcl5Bz5K/t6JdandiRdATwe3uuD5tQ" +
+  b"OAlYpI8L9TmWOuKaq19TtzSzbbhZMlKaVSZrpdpJpJscMa62dpJpGxwprdnaSZ2xrZ3Z2dpGdnbHBnZ3Z2dnZ2dGdnZ50Kyoi+nO" +
+  b"8QAIEHb71kzQiXRHAQET+dM8Tem79ArosaLXRYxM6KUSUSUT8p0SEhMyUJS3UuDTXP/xUEAWv/wBFvYs9JYpF1RGQT1vv8v188an" +
+  b"FXmt3dXuRHnJJET7ytK42IDxjTukcR7hxHmF28i/CObvLFvqsquQdl2nqvGcTGrU1mxWKsUcqPFazrVqZJOGZNscZmB68MMMHBsc" +
+  b"ccWQHrwwwcT/Hw2n394T/Hw2n39yHx8GT7+4Vj79s1LlbtjsORzMwK9FONvtw4tRokcBARSc3P0NNPHr+OpHpZj5VtuXjXSd5jV3" +
+  b"Vi/hBWmqhNvA//FQQBR//ADoNi0syAsTQsHRMLWK9Z//Z+38/+X3XDv2y8uSJT9pUqrzW5mqmQT1IL+kFWVTN3HOLKFC8PAL10fv" +
+  b"j6cPp7ePDjqoqmkpdHSpBQGlmVJDEAc2r8XSDA7VI2gkJckzdjfOTAuFlFrJoJsudWUYUF0lSShA0ac6CwFYtZber63WEBFTckIW" +
+  b"vI1S5Ij6SZKnDOWTRwEBFS0E9MKdmNKzsR//8VBAG9/8AOY2LPBWTAWPoUPoSDpX6fHf/8Xr/9PPz+NcbpM6xLBUftTFMyKihTtz" +
+  b"IUUcuZBmbwk6WKhGh4ii8e8tW/KscGGVpbKXdE1zQdt5XveTCzmUOVdL7f4IAkRxdgQjvR80SuBohBRCyVGtOA2CPXYgrBYQTBTF" +
+  b"9k8WUEhgaTXaiugXnG2ZuV7tdFiW+CMBCAOGjlmx35Y31NXrh/4TarPh/p8H6HNP+/dHAQEWPytBE4Xs5dVh988nBQ+FWt9OJyJj" +
+  b"jGt6YwonyqEPRQI9vvFrVFZXH2OKu8+VGfTw//FQQBzf/ADgNi0shVociaEiPzOf/7Pr/8/bXfxS08+tuN8GLwSlCBKB2r68srTp" +
+  b"cRWcE35aV0zWh6io4XE/XFJN9vhq8KppJpJq5pJnoqh2eaRmsGea76cPDM1JVpzOVY4XHvmhMXEViW+HH401NzmdTDozpnCqra/X" +
+  b"GKG6apM/LK77/HGMO0cBARc5VUoajG0Mc/OvU87Hweg/+O5eBLnQFtLvc8yws46P0xgzL4RKkRlu45YIHNe2yvYCPISYHZDCVlfX" +
+  b"PFhMIU7KxZJmjLq61qVmFkDv0kuEozYAGZ6udjJ7ZwfrCjv8//FQQBY//ADcNizs9EaFBaFA6EQ6FA6V/Wb//te//z/N1xnVtVzW" +
+  b"sVDJeQOVUYtUBT28WTNAjZ0635PXzUe6CK7O/s77Ls7rLTIyWLLqRXK8QWrBGQgkMAUaRwEBGPoYi5CzC0AhGEqxlwOCWkvGUeOA" +
+  b"LYditQL9Awtt03JnkxaVXu5Gbslrph336+b65ilbetwhdHWkm4gt8lwWXYsosQ6jhPr89Gqn+yOfUUip09a9Sfq9j//xUEAS3/wA" +
+  b"6DYs1GZMBQeiYOiYWsfbz7//2vn/5/fzd62qNMl71t+uMulKlSUUGYswpksWio8xqM+j4gu+wPNGY5rHNY5qqUyTVs1xwmkZ8ZGJ" +
+  b"nZ2el2Ca1tTL3YMt7oRHAQEZYghubxAk/1TQGILWS1cj235D7ENUIe6GHnI6EnwxBx6lYGtJx5XEa13zQ1zBRU9tcqFgpvz/8VBA" +
+  b"G//8AOY2LPRUNQYPoWEhNCwdCgdCwdK53n/97v/3/04r425uziqiZb/wxJGxUwD7gW1hbVGXJSCfBUSNVtUBcfGY+sK1GPsFbfFa" +
+  b"he46Jq1IILhlDwPXxTDTFfy5CGCMoihehENwYHhRMAMTphfRUSmSF0uBkR6LeSyEQEbylkcBARolkPlnvnplACEo4qWD8YsE5YDo" +
+  b"0AQO8ld79ShaNNsBIJ4N/uAwK+Hmr03nTK/ignIkrfPynFfHqoI+36ECmk35cLYR6qN85pZaE76wsBdLGSkjNYgCM0amMCvcuP/x" +
+  b"UEAZf/wA5DYs7OUyL0hB0L+3tv/+9P+/83NXW+LM1O+G9d8YuqRSAUZBxrxsKMwsQk2Mp2Bj8S3qcO7r7uvux7scMe7GumukTdnZ" +
+  b"6XSu+RpWhpKVUq+jAYGNRwEBG+TPMBlETVXnVwq2EXtzvd95OrMaVUzEV1ZZ0vfppkiFAPnpfkQYM+zsUYo4wWKXHJJg63Xeu9BH" +
+  b"S/6jw4y2KmphceIMowrNvG8q4+cSaJdCtzsqPs8OPCZk1E0DvRbwLQVBpDNbNdBiNMX8QZZxwP/xUEAV//wA5DYs7TQehYJh0SB0" +
+  b"aB0r85f/9n9v/x/mOt8ZOHK6kVMH/rdSVUqUqCmcKXL1y8Xeqf9XvpfwpSvT6/Ts4UenZw1HAQEcEqCj0Ogo8PDpLDzrM84oJjT3" +
+  b"ELOiHCChGUDUx0aSZ4O9CC2DFa7cGY2KVgBhRmqCDM2cBp1vbPJVaH36Uvp2Os6MI0jgl3M7TA/BJkias6PlbVhDS1FNOV8mdH0y" +
+  b"TotiHlXS4VC///FQQBof/ADgNizstysbQsXSEHSP4v1//Zn/8EviZF0kvK1l7vICkxQ2VB3F26iQqSE2cvfHSSgNl2Q9+7z+7dr3" +
+  b"e7z9e7HdrrprvrOtazkOs0cBAR21nUkrZ74QvpYo1orexzmcdzWycn3fJzuUJvK5jWMu45gna0JDVTpWkasLmV1Eh65UqYEtCsiZ" +
+  b"qVlaY7v7iShRiDgmoNSiQZiQFI0GU3grr3A5VaGjC96L6FRHustuGrVmDElXOc3R6TETlOh3BZjNLEKuYVMjCeX8k2pK9vD/8VBA" +
+  b"G5/8AN42LSykMokKQ9Cg9CQ9C/Tmf/h+3/4/reSSuDGszisurVQQJUVkofUvqK0snjpeo3SRRwEBHgklg00tSIvf0axs/dGrRqmk" +
+  b"mkmqmfF2dgxFHaRlpBnQ2BLfE0NA7cxdtqdBS/J8KP++7Dr9evdxo+0jbRWblVMZnGb8Tela3sc0kl/AzPooZrjUEO0iMgOzNznE" +
+  b"7pBVmPggNEBCfcynSLsS1lOTSEr8Ui1bI0SQQL2en5NdwvPvogjQChttF681jlbr0Azx2Y6c6DzRsR5qACEg5g+15u/WLv/xUEAU" +
+  b"v/wA4jYs7KVaB0KD0Kh1L9NHAQE/KAD////////////////////////////////////////////////////b5//i7/6/5ldTvzNb" +
+  b"9dOOUqVdQFVLqAoJtpZmyjuEMpuhEmRCIALNWh8/l89t1m/bbflZbeRkFZpSRO731raxUiFfXmGSi4tc77Mb/Z2JQCoic4vNq3dr" +
+  b"Gatq71IT1YnUrlmbzmFs5eG9Vve0KcLtTbU29hvlFJQ4zaOxRC6ROy1Jlhk+FSqy6kd/YXcr4EdBATABQAAAAcADMYCABSEACbzz" +
+  b"//FQQBmf/ADqNizwZmQFB6Fh6FA6Eg6FA6V4nz//az/3/xpqOeCbvWQvY/NZVLrKvcqCmaaWWp0uoHQi3lQY1e1wFYuNrcapnYuN" +
+  b"NnVJTLU0qa06OElLsUzmMw0iBTPHEgMkG+AdDYqSktPrlqETe92GxTNp7aXAHuURpKIeUTgIUioxUJWlKsNigPrb1ZdfWiOyndAL" +
+  b"nKr4jMYG2Ds78LyfTJFluJmzRwEBEQ2oyTCxi8A8ClwiakpkJzEF5iVfq65vlLe9D946N0TzejZd4P/xUEAVv/wA6jYtLNQ+iQWh" +
+  b"Qend17//2c/2/381xjhp263Wm6kPykrJUBQMToE6Q+a6Ufn9TEVtBBIngjXnl49+eVkLAkaVIlq0C5lfROgzqBMhdHAGA4aiJjA2" +
+  b"OZ0+dRibJifaZHuS/5oQc3k7Rmrfd8OtpKvQNHWWgr5iHAGWNXTNDnG1eoUOy6IPLkLMNPjvSbtHAQEShjjxA8xxHq4mqmSIoNSD" +
+  b"OlEooseOh71EnP/xUEAWn/wBCFYttGYqC15B0KBZzP/21/10vqM0kxSXs+lrSSLqT8ZoEFqIIL4J+bg4CZVk49AnbxLn5bx4SmCF" +
+  b"+mQlxSE+SQhuIJLdgfSL96fncJMQiYgkxA/b7Pms2cadwdqdUyiMcSed9X6vxvK49ywsmcbRtGIjHA8nJz8+3Nnrn4+Pj0lGLsss" +
+  b"soQ1zzzlUSjLLLKdDszzzlYjD0cBARMPbgAABUYfCOyPederlDxUol8NQ4D/8VBAHh/8ATKZstNRtmrCZGr2pjrD11+Jri8vU1//" +
+  b"a4/XzrQH9O/rjq3RqakEAoEt9VmGv6yC/D8OOuMTTP/nbktSY4QopjhBigp4YY4QZGKCmOGLkYAfy/kD+X8v5Afy/l/ID+X8vWID" +
+  b"+X8vV6wpWiEfmfneZJmLaSmCOIWVlVAO9r2vGx0El6d1SwxyZL/MxNhno1smSjC//fn+beeVM5lpRwEBNF4A////////////////" +
+  b"////////////////////////////////////////////////////////////////////////////////////////////////////" +
+  b"////////JEQdZy/3lstMlCCIOw1kOzdnZ2Z2Iw+Nn9cMvK7OzsYAABNnnXlP1XRt8P+B+L8cA/mH5/rP0GDC6rslSkJWp1wqGJX9" +
+  b"y0yk7sBxmLj/8VBAAZ/8ARiBtHA="
+
+///|
+let ffref_mjpeg_mkv_b64 : Bytes = b"GkXfo6NChoEBQveBAULygQRC84EIQoKIbWF0cm9za2FCh4EEQoWBAhhTgGcBAAAAAAASyRFNm3TAv4QlmSdKTbuLU6uEFUmpZlOs" +
+  b"gaFNu4tTq4QWVK5rU6yB7027jFOrhBJUw2dTrIIBU027jFOrhBxTu2tTrIISYuwBAAAAAAAAUwAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+  b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFUmpZsm/hGA+d1Uq" +
+  b"17GDD0JATYCMTGF2ZjYzLjEuMTAyV0GMTGF2ZjYzLjEuMTAyc6SQPixPrYqp8jLy66whgPKW5kSJiECPQAAAAAAAFlSua9+/hBJh" +
+  b"SSOuAQAAAAAAAFDXgQFzxYh60BQf+R+zZpyBACK1nIN1bmSIgQCGh1ZfTUpQRUeDgQEj44OEC+vCAOCQsIEguoEgmoECVbCEVbmB" +
+  b"AlXugQDsAQAAAAAAAAIAABJUw2dAf7+Ep6K6hHNzn2PAgGfImUWjh0VOQ09ERVJEh4xMYXZmNjMuMS4xMDJzc9RjwItjxYh60BQf" +
+  b"+R+zZmfIn0Wjh0VOQ09ERVJEh5JMYXZjNjMuMS4xMDIgbWpwZWdnyKFFo4hEVVJBVElPTkSHkzAwOjAwOjAxLjAwMDAwMDAwMAAf" +
+  b"Q7Z1UIS/hMLkEjrngQCjQ0qBAACA/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAyAP/bAEMACAoKCwoLDQ0NDQ0N" +
+  b"EA8QEBAQEBAQEBAQEBISEhUVFRISEhAQEhIUFBUVFxcXFRUVFRcXGRkZHh4cHCMjJCsrM//EAHwAAQADAQEAAAAAAAAAAAAAAAcG" +
+  b"BAMIBQEAAQUBAAAAAAAAAAAAAAAABwECAwQFBhAAAgIBAwIFAwUBAAAAAAAAAQIDEQQSBQAhBiITg0PCUTFBIzORcVJhEQACAgIB" +
+  b"BAIDAQAAAAAAAAABAgMRBAUSACEiMRMGUTIUQf/AABEIACAAIAMBIgACEQADEQD/2gAMAwEAAhEDEQA/AIB2ltU2cZnIZIAyK0td" +
+  b"GZQSY0JFFwGUn/IIJ+4v1N33PPgMRhyp4NWvUIZHiBrTV6GF1Zq7PFTasCDb+3tmWFa87HGTIxC6nknSORixVVurCKTZCKoJNcGd" +
+  b"79j1PjzsPruvxJZflkgjldr7yKHoUwoBgQP1HS42XJmRbiKYIw1qYKYh4jnF/TI0kxDe7kPENVeKgfnpo3bbcDHEQhxMeHXr1eVE" +
+  b"kRatNWUCnpZ/nm/aW/QZUr4s7JFkyDVEnUCZY7LeXd+JQQSl2RbDoDVre/Y9T4855ys+fa83AzMdtMsEjSL1YBq0WjaGViji1dQR" +
+  b"qUkcDf13Oy5E+OSeWRW9h3Z+9t3HImj4j1+Om4mLFlS7uWUM7YDYD4vk3GE5EbRzcVviBItchXcqD/nT3gZEWT29sTxNqUYaRE0R" +
+  b"44USKQeIA+GRGW/sasWOCO9+x6nx5Mu2+6MBInjZMgUFUtoTSNX56SFqFdaF/wDOX87fsbBmBliyPHdAKl+H+5B9elXwhaDe56Zn" +
+  b"80eqeWj+wmUGvI3xKXQvqLNhn0y7J8aJthHshjFZFIiCLitwJAPIyWxANVxsX76nG9+x6nx5zjuePLlz4WPCuuWaQxRrYXU7siqL" +
+  b"YhRZIFkgfXij3HsOU0qS+ZjqrMT4mcVVff8ATr882wO1twzYCFbHiKVqWR2vrdfto4/H15garSa/GxTPjbaPMKjuiQsovv48i5F+" +
+  b"XVvQz47ttI8yZMGXYHEX45O7RtjoXoeudqbNVxFX7HX/2aNDRYEAyID/2P/gABBKRklGAAECAAABAAEAAP/+AA9MYXZjNjMuMS4x" +
+  b"MDIA/9sAQwAICgoLCgsNDQ0NDQ0QDxAQEBAQEBAQEBAQEhISFRUVEhISEBASEhQUFRUXFxcVFRUVFxcZGRkeHhwcIyMkKysz/8QA" +
+  b"eAABAAMBAQAAAAAAAAAAAAAABwYFAwgEAQACAwEAAAAAAAAAAAAAAAAHBgIBBQQQAAICAQMCBwEBAQEAAAAAAAECAxEEEgUAIQZR" +
+  b"EyKDQzHCQVKRMxEAAQQCAgIDAQEBAAAAAAAAAQIDBBESBQAhIjETBlEUMkH/wAARCAAgACADASIAAhEAAxEA/9oADAMBAAIRAxEA" +
+  b"PwCAdpbVNnGZyGSAMitLXRmUEmNCRRcBlJ/yCCfsXabvuefAYjDlTwateoQyPEDWmr0MLqzV2eKm1YEG39vbMsK152OMmRiF1PJO" +
+  b"kcjFiqrdWEUmyEVQSa4M738Hufnjh9d18R135XGG3VqvtxIXQpQoBQIH+Ry40tyY1uGnghQ1qIKIhxGbX9LinHiFe7cOIVVeKQP3" +
+  b"jRu224GOIhDiY8OvXq8qJIi1aasoFPSz/wB5v2lv0GVK+LOyRZMg1RJ1AmWOy3l3fqUEEpdkWw6A16t7+D3PzznnKz59rzcDMx20" +
+  b"ywSNIvVgGrRaNoZWKOLV1BGpSRwN/XZ0txHxuPuuJV7C1qX3auxkTR8R6/ORiRWpTu7ddClqgKgLi+SsWTIbU29im8QHE1kK7KQf" +
+  b"+ce8DIiye3tieJtSjDSImiPXCiRSD1AH0yIy39GrFjgjvfwe5+eTvZO7dufHaDy8pSNALFI9Iu+vSUtQrrS3zXK37G26QedFkest" +
+  b"WlU/leMg8elXwifXN5OEv+ZOrWqifL5kg12bxKbry5yTG5WnGyXHjqntbIRilxJDQQIqsCQDkXLUQDVY2L98nO9/B7n55zjuePLl" +
+  b"z4WPCuuWaQxRrYXU7siqLYhRZIFkgePEje+3MxMlJ2lxgjavt3sVX3cdf3x5YYna+4bhEdLY8RQDUsjtfW6/80cfzx4ua7SwIcUv" +
+  b"xNq3PKR2lDKkCzfWRWRflzW0bkRR2iJcluE7sDET8S+1NqjoK6HrO0mzVY2L9jn/2aNDTIEBkID/2P/gABBKRklGAAECAAABAAEA" +
+  b"AP/+AA9MYXZjNjMuMS4xMDIA/9sAQwAICgoLCgsNDQ0NDQ0QDxAQEBAQEBAQEBAQEhISFRUVEhISEBASEhQUFRUXFxcVFRUVFxcZ" +
+  b"GRkeHhwcIyMkKysz/8QAfAABAAMBAQEAAAAAAAAAAAAABwYFCAMCBAEAAgMBAAAAAAAAAAAAAAAABwYCAQUEEAACAgEDAQkAAwEA" +
+  b"AAAAAAABAgMRBBIFACEGIkExUcJDgxORUnFTEQABBAEDBAMBAQEAAAAAAAABAgMEERIFIQAxEyIGFFEVQTIl/8AAEQgAIAAgAwEi" +
+  b"AAIRAAMRAP/aAAwDAQACEQMRAD8AgHZLaps4zOQyQBkVpa6MygkxoSKLgMpP9QQT5i7Td9zz4DEYcqeDVr1CGR4ga01ehhdWauzx" +
+  b"U2rAg2/s9sywrX7Y4yZGIXU8k6RyMWKqt1YRSbIRVBJrgzvfwfZ7eOHrunxHXe64w26tV7uJC6FKFAKBA/yOXGluTGtYaeCFDTUQ" +
+  b"URDiM2vkuKceIV1tw4hVV4pA++NG7bbgY4iEOJjw69er8okiLVpqygU9LP8APO/ZLfoMqV8WdkiyZBqiTqBMsdlvzu+8oIJS7Ith" +
+  b"0Br6t7+D7PbzPOVnz7Xm4GZjtplgkaRerANWi0bQysUcWrqCNSkjgb9dnS3Edtx91xKuoWtS97VuMiaPiOn1yMSK1Kd1t10KWqAq" +
+  b"AuL5KxZMhtTb2KbxAcTWQrcpB/nHvAyIsns9sTxNqUYaRE0R34USKQd4A92RGW/I1YscEd7+D7PbxB27thtuTjfgseUhQrqZ0j0j" +
+  b"V492VmoV17t+nPGXvuNt40TRZFyB60qnh/sg6dfC+Eb1jWpqpXx/zFgi9+8m633xxuqVzgkpmaT+mpiIua1qQilLoUGwgRV4EpBy" +
+  b"LlqIBqsdr68ne9/B9nt5nHc8eXLnwseFdcs0hijWwup3ZFUWxCiyQLJA9eIW49mc3FyhPJLi6HuqeSxRHncQHj68uMPsxuGf31aC" +
+  b"LQV1LI7avM/80dfD14sQtGgwYxfhamjUsRultlTYBN7ZFShflze0ZUL/AKiZUxuI9qBiJ7Kxam1RkFdDcZ2k2arGxfUc/9mjQ0uB" +
+  b"AliA/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAyAP/bAEMACAoKCwoLDQ0NDQ0NEA8QEBAQEBAQEBAQEBISEhUV" +
+  b"FRISEhAQEhIUFBUVFxcXFRUVFRcXGRkZHh4cHCMjJCsrM//EAHcAAQADAQEAAAAAAAAAAAAAAAcIBgQFAwEBAQEBAQAAAAAAAAAA" +
+  b"AAAABgcBBQIQAAICAQMCBgMBAQAAAAAAAAECAxEEEgUAIQYTIlGDQ8IxQVIzkREAAgEEAgIDAQEBAAAAAAAAAQIDBBESBTEAISIU" +
+  b"BhNRMkH/wAARCAAgACADASIAAhEAAxEA/9oADAMBAAIRAxEAPwCgdpbVNnGZyGSAMitLXRmUEmNCRRcBlJ/kEE/kX1N33PPgMRhy" +
+  b"p4NWvUIZHiBrTV6GF1Zq7PFTasCDb+3tmWFa8bHGTIxC6nknSORixVVurCKTZCKoJNcGd7+D3Prxh9d19JLL+skEcrtfzIoewsws" +
+  b"AwIH+R3aarkrItxFMEYa1KFKQ4jOL5MjSTENzeQ4hrW9VA/vWjdttwMcRCHEx4devV4USRFq01ZQKeln/vPftLfoMqV8WdkiyZBq" +
+  b"iTqBMsdlvDu/MoIJS7Ith0BrVvfwe59eR5ys+fa83AzMdtMsEjSL1YBq0WjaGViji1dQRqUkcjf12uq5E/OSeWRW5Duz+bt5GRNj" +
+  b"6jj+d80lLFVS7uWUM7UDUD0vs2MJqI2jmxW+IEi2yFvJUH/nXvAyIsnt7YnibUow0iJojzwokUg8wB8siMt/g1YscEd7+D3PrxDg" +
+  b"7x23cIRFHHlIUChmkSPSNV9fJK7UK69L9BzPuG94+FF4UsWRqkDVSpXSvWQdPQi+Ur6ruat6n47a5kIvzKt7e3nHG/B7zZvnattm" +
+  b"YqJ6qHZClKzBhGqClfAlQcjJdmANrY+L89v29/B7n15HHc8eXLnwseFdcs0hijWwup3ZFUWxCiyQLJA9eIM/bGbt8/jTS4umQkjS" +
+  b"8nSq/OqJR+/Xnd27tnPzJBKGgj8Mgssjtq63X+aOv6/rhGl1FFr6czUGxTaY8iOJowCb+MizC/txz1LqfgKu0WoroqabYGkX8HHv" +
+  b"G1Mhew8++Sm5tbC4vyO//9mjQ0aBAyCA/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAyAP/bAEMACAoKCwoLDQ0N" +
+  b"DQ0NEA8QEBAQEBAQEBAQEBISEhUVFRISEhAQEhIUFBUVFxcXFRUVFRcXGRkZHh4cHCMjJCsrM//EAHoAAQADAQEAAAAAAAAAAAAA" +
+  b"AAcGBAgDBQEBAQEBAQAAAAAAAAAAAAAABgcBBQIQAAICAQMCBQUAAwEAAAAAAAECAxEEEgUAISIGE4NDwjFSUWFBkTKCFhEAAgEE" +
+  b"AQQDAQEAAAAAAAAAAQIDBBESBTEAISITFAZRMkH/wAARCAAgACADASIAAhEAAxEA/9oADAMBAAIRAxEAPwCAeEtqmzjM5DJAGRWl" +
+  b"rozKCTGhIouAyk/aCCfqL9Td9zz4DEYcqeDVr1CGR4ga01ehhdWauzxU2rAg2/w9sywrXnY4yZGIXU8k6RyMWKqt1YRSbIRVBJrg" +
+  b"zvfsep8eMPruvpJZfbJBHK7X7yKHsLMLAMCB/I62mq5KyLcRTBGGtShSkOIzi+TI0kxDc3kOIa1vFQP3po3bbcDHEQhxMeHXr1eV" +
+  b"EkRatNWUCnpZ/wA87+Et+gypXxZ2SLJkGqJOoEyx2W8u77lBBKXZFsOgNWt79j1PjzPOVnz7Xm4GZjtplgkaRerANWi0bQysUcWr" +
+  b"qCNSkjkb+u11XInrknlkVuQ7s/e7dxkTY+I4/OvNJSxVUu7llDO1A1A9L5NjCaiNo5sVviBItshbuVB/zp7wMiLJ8PbE8TalGGkR" +
+  b"NEd8KJFIO4A9siMt/Q1YscEd79j1PjxCHjHbd0GmKPKj0aAzSpGAL/vZK5oV16X+uUt43iDHgELxzhnuu1K7f+/30q+U76nt6qWo" +
+  b"9D0LRMO9jKpa3l3xxB4PXKY1+tfZlKGSeDZfFKz5BFRaV8CVBuXuxANrY3F+ekTe/Y9T48zjuePLlz4WPCuuWaQxRrYXU7siqLYh" +
+  b"RZIFkgfniF/5nN2o6p5cUhyxGh5OnUfXVEv5HJDs3hzOnm864Ywlakdzr6k1/ojL/Pu4Jp9VSa2H26+vXbBefXE0YHPbIswv5cdK" +
+  b"taNfGm0E1fFDPsDSD47A5xtTIXxHfzyU3NrYXF+R1//ZHFO7a+K/hItKeMy7j7OBALeK94EB8YIB2PCBCbuQs4HIt4v3gQHxggHY" +
+  b"8IIDVruRs4IBkLeL94EB8YIB2PCCBp67kbOCAli3i/eBAfGCAdjwggntu5GzggMgt4v3gQHxggHY8IINOw=="
+
+///|
+let ffref_rgb_png_b64 : Bytes = b"iVBORw0KGgoAAAANSUhEUgAAACgAAAAcCAIAAACcd2qBAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAQUlEQVR4nGNkYGBgAyN2JJIO" +
+  b"XBaGAQKjFo9aPGrx8LD4FxsIfaFv0TUyg3rU4lGLh6HFA1GCjNCgHrV41OJhZTEAaB0JKZArHLwAAAAASUVORK5CYII="
+
+///|
+let ffref_rgba_png_b64 : Bytes = b"iVBORw0KGgoAAAANSUhEUgAAACgAAAAcCAYAAAATFf3WAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAYklEQVR4nO3VMQrAIBQE0Q0E" +
+  b"vf9dU6XKNxKwnyIr7ENRrAYLPVRajTG71NfV4eyUuQRSCaQSSCWQegPvNudVz/f4VvSt6/6nsz1u0FkCqQRSCaRmoPFLvckNGksg" +
+  b"lUAqgdQDhusKIlpnOPAAAAAASUVORK5CYII="
+
+///|
+let ffref_aac_m4a_b64 : Bytes = b"AAAAHGZ0eXBNNEEgAAACAE00QSBpc29taXNvMgAAAAhmcmVlAAAK+21kYXTcAExhdmM2My4xLjEwMgACMKtc6QxCDq1Nzm+JrpuD" +
+  b"RUXUpknb2SIAEoSCKYRJySK2EmQiMZJIMS7ZWdsqQ3Ayeb2Fn4bB5lFx7Tly3Hk11FMIhWSSIjIaSbGIyREiQ8exCQ2EWBJFJ/F/" +
+  b"DfYfavsP071n4rsHuLrnjLiO4tu6O0bqrEdDcw9ddk83bN2NsnSWwcxapxbjO9cd3rad6xOOxtiuNm0HFXGxWG5TtqnbVO1qsz1L" +
+  b"PaDYrjYrDcrDap21Rr8+x1K2pWz6/RtNG1ZrTRr8+x0K2hVUKqUrlK5SuUrtXhqx1Y6tGrRhow0STSTVTVTSTSUPRJRJNJNVNVNV" +
+  b"NJRJRJRJRVNVNVNVNJRJRFFFFFFFFwFmmNk26zUTi3CakrcVI/0/764thcXq679fXQXq9f16E1dk/rfC+NXKkGK9GHjy3IprEOPY" +
+  b"KTMER12TJJhk+bSeiqsQP2ZbjY54HuT7YY5I7x0a1VOnapT/xv1a7d/5OiQYGu5BISDAzuEhIMDAzu4SErBgYGd3CQk4DDmXdwk4" +
+  b"0DMg153fIJCcl5Bz5K/t6JdandiRdATwe3uuD5tQOAlYpI8L9TmWOuKaq19TtzSzbbhZMlKaVSZrpdpJpJscMa62dpJpGxwprdna" +
+  b"SZ2xrZ3Z2dpGdnbHBnZ3Z2dnZ2dGdnZ50Kyoi+nO8QAIEHb71kzQiXT50zxN6bv0CuixotdFjEzopRJRJRPynRISEzJQlLdS4NNc" +
+  b"ARb2LPSWKRdURkE9b7/L9fPGpxV5rd3V7kR5ySRE+8rSuNiA8Y07pHEe4cR5hdvIvwjm7yxb6rKrkHZdp6rxnExq1NZsVirFHKjx" +
+  b"Ws61amSThmTbHGZgevDDDBwbHHHFkB68MMHE/x8Np9/eE/x8Np9/ch8fBk+/uFY+/bNS5W7Y7DkczMCvRTjb7cOLUaKc3P0NNPHr" +
+  b"+OpHpZj5VtuXjXSd5jV3Vi/hBWmqhNvAAOg2LSzICxNCwdEwtYr1n/9n7fz/5fdcO/bLy5IlP2lSqvNbmaqZBPUgv6QVZVM3cc4s" +
+  b"oULw8AvXR++Ppw+nt48OOqiqaSl0dKkFAaWZUkMQBzavxdIMDtUjaCQlyTN2N85MC4WUWsmgmy51ZRhQXSVJKEDRpzoLAVi1lt6v" +
+  b"rdYQEVNyQha8jVLkiPpJkqcM5ZMtBPTCnZjSs7EfAOY2LPBWTAWPoUPoSDpX6fHf/8Xr/9PPz+NcbpM6xLBUftTFMyKihTtzIUUc" +
+  b"uZBmbwk6WKhGh4ii8e8tW/KscGGVpbKXdE1zQdt5XveTCzmUOVdL7f4IAkRxdgQjvR80SuBohBRCyVGtOA2CPXYgrBYQTBTF9k8W" +
+  b"UEhgaTXaiugXnG2ZuV7tdFiW+CMBCAOGjlmx35Y31NXrh/4TarPh/p8H6HNP+/c/K0EThezl1WH3zycFD4Va304nImOMa3pjCifK" +
+  b"oQ9FAj2+8WtUVlcfY4q7z5UZ9PAA4DYtLIVaHImhIj8zn/+z6//P2138UtPPrbjfBi8EpQgSgdq+vLK06XEVnBN+WldM1oeoqOFx" +
+  b"P1xSTfb4avCqaSaSauaSZ6KodnmkZrBnmu+nDwzNSVaczlWOFx75oTFxFYlvhx+NNTc5nUw6M6Zwqq2v1xihumqTPyyu+/xxjDs5" +
+  b"VUoajG0Mc/OvU87Hweg/+O5eBLnQFtLvc8yws46P0xgzL4RKkRlu45YIHNe2yvYCPISYHZDCVlfXPFhMIU7KxZJmjLq61qVmFkDv" +
+  b"0kuEozYAGZ6udjJ7ZwfrCjv8ANw2LOz0RoUFoUDoRDoUDpX9Zv/+17//P83XGdW1XNaxUMl5A5VRi1QFPbxZM0CNnTrfk9fNR7oI" +
+  b"rs7+zvsuzustMjJYsupFcrxBasEZCCQwBRr6GIuQswtAIRhKsZcDglpLxlHjgC2HYrUC/QMLbdNyZ5MWlV7uRm7Ja6Yd9+vm+uYp" +
+  b"W3rcIXR1pJuILfJcFl2LKLEOo4T6/PRqp/sjn1FIqdPWvUn6vY8A6DYs1GZMBQeiYOiYWsfbz7//2vn/5/fzd62qNMl71t+uMulK" +
+  b"lSUUGYswpksWio8xqM+j4gu+wPNGY5rHNY5qqUyTVs1xwmkZ8ZGJnZ2el2Ca1tTL3YMt7oRiCG5vECT/VNAYgtZLVyPbfkPsQ1Qh" +
+  b"7oYecjoSfDEHHqVga0nHlcRrXfNDXMFFT21yoWCm/ADmNiz0VDUGD6FhITQsHQoHQsHSud5//e7/9/9OK+Nubs4qomW/8MSRsVMA" +
+  b"+4FtYW1RlyUgnwVEjVbVAXHxmPrCtRj7BW3xWoXuOiatSCC4ZQ8D18Uw0xX8uQhgjKIoXoRDcGB4UTADE6YX0VEpkhdLgZEei3ks" +
+  b"hEBG8pYlkPlnvnplACEo4qWD8YsE5YDo0AQO8ld79ShaNNsBIJ4N/uAwK+Hmr03nTK/ignIkrfPynFfHqoI+36ECmk35cLYR6qN8" +
+  b"5pZaE76wsBdLGSkjNYgCM0amMCvcuADkNizs5TIvSEHQv7e2//70/7/zc1db4szU74b13xi6pFIBRkHGvGwozCxCTYynYGPxLepw" +
+  b"7uvu6+7Huxwx7sa6a6RN2dnpdK75GlaGkpVSr6MBgY3kzzAZRE1V51cKthF7c73feTqzGlVMxFdWWdL36aZIhQD56X5EGDPs7FGK" +
+  b"OMFilxySYOt13rvQR0v+o8OMtipqYXHiDKMKzbxvKuPnEmiXQrc7Kj7PDjwmZNRNA70W8C0FQaQzWzXQYjTF/EGWccAA5DYs7TQe" +
+  b"hYJh0SB0aB0r85f/9n9v/x/mOt8ZOHK6kVMH/rdSVUqUqCmcKXL1y8Xeqf9XvpfwpSvT6/Ts4UenZw0SoKPQ6Cjw8OksPOszzigm" +
+  b"NPcQs6IcIKEZQNTHRpJng70ILYMVrtwZjYpWAGFGaoIMzZwGnW9s8lVoffpS+nY6zowjSOCXcztMD8EmSJqzo+VtWENLUU05XyZ0" +
+  b"fTJOi2IeVdLhUL8A4DYs7LcrG0LF0hB0j+L9f/2Z//BL4mRdJLytZe7yApMUNlQdxduokKkhNnL3x0koDZdkPfu8/u3a93u8/Xux" +
+  b"3a66a76zrWs5DrO1nUkrZ74QvpYo1orexzmcdzWycn3fJzuUJvK5jWMu45gna0JDVTpWkasLmV1Eh65UqYEtCsiZqVlaY7v7iShR" +
+  b"iDgmoNSiQZiQFI0GU3grr3A5VaGjC96L6FRHustuGrVmDElXOc3R6TETlOh3BZjNLEKuYVMjCeX8k2pK9vAA9DYtcFRREFxm//w/" +
+  b"T/9epXWUyc+atlkolEq9yrqlD5W1g0QH/z+kef6y3Ws51FLBppLuDgHb+rMy4lIMb80bj1hhu66PP3GXYUZ0SfQlpEvkNoQpSkeQ" +
+  b"/KNGeQDI+c+AGFgbsbqNJePoyN2Y9EDoyM2DZtTATNe8Iv3T+jqcIO0H4Q+HgssBpXGc3e8xRX6S8eyatFF1aZ4X93FGzRXP0i39" +
+  b"ejN2c62IYCPzmxylJpidNbnS7PHOteiy9VLq5bislCt/HaNQKuABLDYtdGYhF1SIap/Tn/rczrnRV1km5JHlIkiT6giDjHXXu/pH" +
+  b"uVSgzsK3UtyNoi2SRx4KKdBfX/LOotm5S756Q2/vXHWWie7Be7jiq7UG8JTRr1fsF61U1gmajj247rMqpnptWeSau+Foka1ejc9y" +
+  b"yztbudyLmao5++Lmno+j0WUZMVFykr0wTdlRXjyW7VREqyUqLlJDJit2UlemS3cUV7CYrVREq0xW7KSvTFbsqK8eSlTKIlW4AAAD" +
+  b"Mm1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAArEQAADOuAAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAA" +
+  b"AAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAJddHJhawAAAFx0a2hkAAAAAwAAAAAAAAAAAAAAAQAAAAAA" +
+  b"ADOuAAAAAAAAAAAAAAABAQAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAJGVkdHMAAAAc" +
+  b"ZWxzdAAAAAAAAAABAAAzrgAABAAAAQAAAAAB1W1kaWEAAAAgbWRoZAAAAAAAAAAAAAAAAAAArEQAADeuVcQAAAAAAC1oZGxyAAAA" +
+  b"AAAAAABzb3VuAAAAAAAAAAAAAAAAU291bmRIYW5kbGVyAAAAAYBtaW5mAAAAEHNtaGQAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYA" +
+  b"AAAAAAAAAQAAAAx1cmwgAAAAAQAAAURzdGJsAAAAanN0c2QAAAAAAAAAAQAAAFptcDRhAAAAAAAAAAEAAAAAAAAAAAABABAAAAAA" +
+  b"rEQAAAAAADZlc2RzAAAAAAOAgIAlAAEABICAgBdAFQAAAAABDwAAAQ8ABYCAgAUSCFblAAaAgIABAgAAACBzdHRzAAAAAAAAAAIA" +
+  b"AAANAAAEAAAAAAEAAAOuAAAAHHN0c2MAAAAAAAAAAQAAAAEAAAAOAAAAAQAAAExzdHN6AAAAAAAAAAAAAAAOAAABFgAAARYAAACu" +
+  b"AAAAnAAAANcAAADfAAAAqgAAAI8AAADYAAAAxAAAAKgAAADJAAAAyQAAALgAAAAUc3RjbwAAAAAAAAABAAAALAAAABpzZ3BkAQAA" +
+  b"AHJvbGwAAAACAAAAAf//AAAAHHNiZ3AAAAAAcm9sbAAAAAEAAAAOAAAAAQAAAGF1ZHRhAAAAWW1ldGEAAAAAAAAAIWhkbHIAAAAA" +
+  b"AAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALGlsc3QAAAAkqXRvbwAAABxkYXRhAAAAAQAAAABMYXZmNjMuMS4xMDI="
+
+///|
+let ffref_fmp4_seg_b64 : Bytes = b"AAAAHGZ0eXBpc281AAACAGlzbzVpc282bXA0MQAAAuBtb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAKxEAAAAAAABAAABAAAAAAAA" +
+  b"AAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAB43Ry" +
+  b"YWsAAABcdGtoZAAAAAMAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAQEAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAA" +
+  b"AAAAAAAAAEAAAAAAAAAAAAAAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAAAAAAAQAAAEAAAAAAVttZGlhAAAAIG1kaGQAAAAA" +
+  b"AAAAAAAAAAAAAKxEAAAAAFXEAAAAAAAtaGRscgAAAAAAAAAAc291bgAAAAAAAAAAAAAAAFNvdW5kSGFuZGxlcgAAAAEGbWluZgAA" +
+  b"ABBzbWhkAAAAAAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADKc3RibAAAAH5zdHNkAAAAAAAAAAEA" +
+  b"AABubXA0YQAAAAAAAAABAAAAAAAAAAAAAQAQAAAAAKxEAAAAAAA2ZXNkcwAAAAADgICAJQABAASAgIAXQBUAAAAAAPoAAAD6AAWA" +
+  b"gIAFEghW5QAGgICAAQIAAAAUYnRydAAAAAAAAPoAAAD6AAAAABBzdHRzAAAAAAAAAAAAAAAQc3RzYwAAAAAAAAAAAAAAFHN0c3oA" +
+  b"AAAAAAAAAAAAAAAAAAAQc3RjbwAAAAAAAAAAAAAAKG12ZXgAAAAgdHJleAAAAAAAAAABAAAAAQAAAAAAAAAAAAAAAAAAAGF1ZHRh" +
+  b"AAAAWW1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAG1kaXJhcHBsAAAAAAAAAAAAAAAALGlsc3QAAAAkqXRvbwAAABxkYXRhAAAAAQAA" +
+  b"AABMYXZmNjMuMS4xMDIAAAAYc3R5cG1zZGgAAAAAbXNkaG1zaXgAAAA0c2lkeAEAAAAAAAABAACsRAAAAAAAAAAAAAAAAAAAAAAA" +
+  b"AAABAAAK2wAAMACAAAAAAAAAmG1vb2YAAAAQbWZoZAAAAAAAAAABAAAAgHRyYWYAAAAcdGZoZAACADgAAAABAAAEAAAAARYCAAAA" +
+  b"AAAAFHRmZHQBAAAAAAAAAAAAAAAAAABIdHJ1bgAAAgEAAAANAAAAoAAAARYAAAEWAAAArgAAAJwAAADXAAAA3wAAAKoAAACPAAAA" +
+  b"2AAAAMQAAACoAAAAyQAAAMkAAApDbWRhdNwATGF2YzYzLjEuMTAyAAIwq1zpDEIOrU3Ob4mum4NFRdSmSdvZIgAShIIphEnJIrYS" +
+  b"ZCIxkkgxLtlZ2ypDcDJ5vYWfhsHmUXHtOXLceTXUUwiFZJIiMhpJsYjJESJDx7EJDYRYEkUn8X8N9h9q+w/TvWfiuwe4uueMuI7i" +
+  b"27o7RuqsR0NzD112Tzds3Y2ydJbBzFqnFuM71x3etp3rE47G2K42bQcVcbFYblO2qdtU7WqzPUs9oNiuNisNysNqnbVGvz7HUral" +
+  b"bPr9G00bVmtNGvz7HQraFVQqpSuUrlK5Su1eGrHVjq0atGGjDRJNJNVNVNJNJQ9ElEk0k1U1U1U0lElElElFU1U1U1U0lElEUUUU" +
+  b"UUUXAWaY2TbrNROLcJqStxUj/T/vri2Fxerrv19dBer1/XoTV2T+t8L41cqQYr0YePLcimsQ49gpMwRHXZMkmGT5tJ6KqxA/ZluN" +
+  b"jnge5PthjkjvHRrVU6dqlP/G/Vrt3/k6JBga7kEhIMDO4SEgwMDO7hISsGBgZ3cJCTgMOZd3CTjQMyDXnd8gkJyXkHPkr+3ol1qd" +
+  b"2JF0BPB7e64Pm1A4CVikjwv1OZY64pqrX1O3NLNtuFkyUppVJmul2kmkmxwxrrZ2kmkbHCmt2dpJnbGtndnZ2kZ2dscGdndnZ2dn" +
+  b"Z0Z2dnnQrKiL6c7xAAgQdvvWTNCJdPnTPE3pu/QK6LGi10WMTOilElElE/KdEhITMlCUt1Lg01wBFvYs9JYpF1RGQT1vv8v188an" +
+  b"FXmt3dXuRHnJJET7ytK42IDxjTukcR7hxHmF28i/CObvLFvqsquQdl2nqvGcTGrU1mxWKsUcqPFazrVqZJOGZNscZmB68MMMHBsc" +
+  b"ccWQHrwwwcT/Hw2n394T/Hw2n39yHx8GT7+4Vj79s1LlbtjsORzMwK9FONvtw4tRopzc/Q008ev46kelmPlW25eNdJ3mNXdWL+EF" +
+  b"aaqE28AA6DYtLMgLE0LB0TC1ivWf/2ft/P/l91w79svLkiU/aVKq81uZqpkE9SC/pBVlUzdxziyhQvDwC9dH74+nD6e3jw46qKpp" +
+  b"KXR0qQUBpZlSQxAHNq/F0gwO1SNoJCXJM3Y3zkwLhZRayaCbLnVlGFBdJUkoQNGnOgsBWLWW3q+t1hARU3JCFryNUuSI+kmSpwzl" +
+  b"ky0E9MKdmNKzsR8A5jYs8FZMBY+hQ+hIOlfp8d//xev/08/P41xukzrEsFR+1MUzIqKFO3MhRRy5kGZvCTpYqEaHiKLx7y1b8qxw" +
+  b"YZWlspd0TXNB23le95MLOZQ5V0vt/ggCRHF2BCO9HzRK4GiEFELJUa04DYI9diCsFhBMFMX2TxZQSGBpNdqK6BecbZm5Xu10WJb4" +
+  b"IwEIA4aOWbHfljfU1euH/hNqs+H+nwfoc0/79z8rQROF7OXVYffPJwUPhVrfTiciY4xremMKJ8qhD0UCPb7xa1RWVx9jirvPlRn0" +
+  b"8ADgNi0shVociaEiPzOf/7Pr/8/bXfxS08+tuN8GLwSlCBKB2r68srTpcRWcE35aV0zWh6io4XE/XFJN9vhq8KppJpJq5pJnoqh2" +
+  b"eaRmsGea76cPDM1JVpzOVY4XHvmhMXEViW+HH401NzmdTDozpnCqra/XGKG6apM/LK77/HGMOzlVShqMbQxz869TzsfB6D/47l4E" +
+  b"udAW0u9zzLCzjo/TGDMvhEqRGW7jlggc17bK9gI8hJgdkMJWV9c8WEwhTsrFkmaMurrWpWYWQO/SS4SjNgAZnq52MntnB+sKO/wA" +
+  b"3DYs7PRGhQWhQOhEOhQOlf1m//7Xv/8/zdcZ1bVc1rFQyXkDlVGLVAU9vFkzQI2dOt+T181Hugiuzv7O+y7O6y0yMliy6kVyvEFq" +
+  b"wRkIJDAFGvoYi5CzC0AhGEqxlwOCWkvGUeOALYditQL9Awtt03JnkxaVXu5Gbslrph336+b65ilbetwhdHWkm4gt8lwWXYsosQ6j" +
+  b"hPr89Gqn+yOfUUip09a9Sfq9jwDoNizUZkwFB6Jg6Jhax9vPv//a+f/n9/N3rao0yXvW364y6UqVJRQZizCmSxaKjzGoz6PiC77A" +
+  b"80Zjmsc1jmqpTJNWzXHCaRnxkYmdnZ6XYJrW1Mvdgy3uhGIIbm8QJP9U0BiC1ktXI9t+Q+xDVCHuhh5yOhJ8MQcepWBrSceVxGtd" +
+  b"80NcwUVPbXKhYKb8AOY2LPRUNQYPoWEhNCwdCgdCwdK53n/97v/3/04r425uziqiZb/wxJGxUwD7gW1hbVGXJSCfBUSNVtUBcfGY" +
+  b"+sK1GPsFbfFahe46Jq1IILhlDwPXxTDTFfy5CGCMoihehENwYHhRMAMTphfRUSmSF0uBkR6LeSyEQEbyliWQ+We+emUAISjipYPx" +
+  b"iwTlgOjQBA7yV3v1KFo02wEgng3+4DAr4eavTedMr+KCciSt8/KcV8eqgj7foQKaTflwthHqo3zmlloTvrCwF0sZKSM1iAIzRqYw" +
+  b"K9y4AOQ2LOzlMi9IQdC/t7b//vT/v/NzV1vizNTvhvXfGLqkUgFGQca8bCjMLEJNjKdgY/Et6nDu6+7r7se7HDHuxrprpE3Z2el0" +
+  b"rvkaVoaSlVKvowGBjeTPMBlETVXnVwq2EXtzvd95OrMaVUzEV1ZZ0vfppkiFAPnpfkQYM+zsUYo4wWKXHJJg63Xeu9BHS/6jw4y2" +
+  b"KmphceIMowrNvG8q4+cSaJdCtzsqPs8OPCZk1E0DvRbwLQVBpDNbNdBiNMX8QZZxwADkNiztNB6FgmHRIHRoHSvzl//2f2//H+Y6" +
+  b"3xk4crqRUwf+t1JVSpSoKZwpcvXLxd6p/1e+l/ClK9Pr9OzhR6dnDRKgo9DoKPDw6Sw86zPOKCY09xCzohwgoRlA1MdGkmeDvQgt" +
+  b"gxWu3BmNilYAYUZqggzNnAadb2zyVWh9+lL6djrOjCNI4JdzO0wPwSZImrOj5W1YQ0tRTTlfJnR9Mk6LYh5V0uFQvwDgNizstysb" +
+  b"QsXSEHSP4v1//Zn/8EviZF0kvK1l7vICkxQ2VB3F26iQqSE2cvfHSSgNl2Q9+7z+7dr3e7z9e7HdrrprvrOtazkOs7WdSStnvhC+" +
+  b"lijWit7HOZx3NbJyfd8nO5Qm8rmNYy7jmCdrQkNVOlaRqwuZXUSHrlSpgS0KyJmpWVpju/uJKFGIOCag1KJBmJAUjQZTeCuvcDlV" +
+  b"oaML3ovoVEe6y24atWYMSVc5zdHpMROU6HcFmM0sQq5hUyMJ5fyTakr28AD0Ni1wVFEQXGb//D9P/16ldZTJz5q2WSiUSr3KuqUP" +
+  b"lbWDRAf/P6R5/rLdaznUUsGmku4OAdv6szLiUgxvzRuPWGG7ro8/cZdhRnRJ9CWkS+Q2hClKR5D8o0Z5AMj5z4AYWBuxuo0l4+jI" +
+  b"3Zj0QOjIzYNm1MBM17wi/dP6Opwg7QfhD4eCywGlcZzd7zFFfpLx7Jq0UXVpnhf3cUbNFc/SLf16M3ZzrYhgI/ObHKUmmJ01udLs" +
+  b"8c616LL1UurluKyUK38do1Aq4A=="
+
+// ---- §328 audio decode: MP3 (mp3fixed) + AAC (TS / MP4) -------------------
+
+///|
+/// Read the i-th interleaved s16 sample out of a packed little-endian blob.
+fn ffref_rd_s16(b : Bytes, i : Int32) -> Int32 {
+  let v = b[i * 2].to_int() | (b[i * 2 + 1].to_int() << 8)
+  if v >= 0x8000 {
+    v - 0x10000
+  } else {
+    v
+  }
+}
+
+///|
+test "ffref: MP3 decode matches the mp3fixed oracle byte-for-byte" {
+  let data = @libavutil.av_base64_decode(ffref_mp3_file_b64, 1 << 20).unwrap()
+  let oracle = @ffref.ffref_decode_audio(data)
+  assert_eq(oracle.sample_rate, 44100, msg="mp3: sample rate")
+  assert_eq(oracle.channels, 2, msg="mp3: channels")
+  let ours = @libavcodec.decode_mp3_stream(data).unwrap()
+  assert_eq(
+    ours.samples.length() / oracle.channels,
+    oracle.samples_per_channel,
+    msg="mp3: sample count",
+  )
+  let pcm = ours.pcm_bytes()
+  assert_eq(pcm.length(), oracle.pcm_s16le.length(), msg="mp3: pcm length")
+  let mut worst = 0
+  for i = 0; i < pcm.length() / 2; i = i + 1 {
+    let d = (ffref_rd_s16(pcm, i) - ffref_rd_s16(oracle.pcm_s16le, i)).abs()
+    if d > worst {
+      worst = d
+    }
+  }
+  // Both sides are the fixed-point decoder (USE_FLOATS=0), so this must be
+  // exact, not just close.
+  assert_true(worst == 0, msg="mp3: max sample diff \{worst}")
+}
+
+///|
+/// Compare the facade `decode_audio_file` pipeline against the oracle on a
+/// container: same PCM length, per-sample |diff| <= 1 (float-tail rounding).
+fn ffref_audio_diff(
+  data : Bytes,
+  label : String,
+  rate : Int32,
+  ch : Int32,
+) -> Unit raise {
+  let oracle = @ffref.ffref_decode_audio(data)
+  assert_eq(oracle.sample_rate, rate, msg="\{label}: sample rate")
+  assert_eq(oracle.channels, ch, msg="\{label}: channels")
+  let audio = @avf.decode_audio_file(data)
+  let ours = ffref_wav_pcm(audio.to_wav_s16())
+  assert_eq(
+    ours.length(),
+    oracle.pcm_s16le.length(),
+    msg="\{label}: pcm length (ours \{ours.length()}, oracle \{oracle.pcm_s16le.length()})",
+  )
+  let mut worst = 0
+  for i = 0; i < ours.length() / 2; i = i + 1 {
+    let d = (ffref_rd_s16(ours, i) - ffref_rd_s16(oracle.pcm_s16le, i)).abs()
+    if d > worst {
+      worst = d
+    }
+  }
+  assert_true(worst <= 1, msg="\{label}: max sample diff \{worst}")
+}
+
+///|
+test "ffref: TS AAC decode matches decode_audio_file within 1 LSB" {
+  let data = @libavutil.av_base64_decode(ffref_av_ts_b64, 1 << 20).unwrap()
+  ffref_audio_diff(data, "ts-aac", 44100, 1)
+}
+
+///|
+test "ffref: MP4 AAC decode matches decode_audio_file within 1 LSB" {
+  let data = @libavutil.av_base64_decode(ffref_aac_m4a_b64, 1 << 20).unwrap()
+  ffref_audio_diff(data, "m4a-aac", 44100, 1)
+}
+
+///|
+test "ffref: fMP4 AAC decode matches decode_audio_file within 1 LSB" {
+  let data = @libavutil.av_base64_decode(ffref_fmp4_seg_b64, 1 << 20).unwrap()
+  ffref_audio_diff(data, "fmp4-aac", 44100, 1)
+}
+
+// ---- §329 container packet differential: TS / MKV / WebM / MP4 / fMP4 ------
+
+///|
+test "ffref: packet oracle matches the MoonBit MPEG-TS demux" {
+  let data = @libavutil.av_base64_decode(ffref_av_ts_b64, 1 << 20).unwrap()
+  ffref_check_packets(data, "ts")
+}
+
+///|
+test "ffref: packet oracle matches the MoonBit Matroska demux" {
+  let data = @libavutil.av_base64_decode(playback_real_mkv_b64, 1 << 20).unwrap()
+  ffref_check_packets(data, "mkv")
+}
+
+///|
+test "ffref: packet oracle matches the MoonBit WebM demux" {
+  let data = @libavutil.av_base64_decode(e2e_vp9_webm_b64, 1 << 20).unwrap()
+  ffref_check_packets(data, "webm")
+}
+
+///|
+test "ffref: packet oracle matches the MoonBit MP4 demux" {
+  let data = @libavutil.av_base64_decode(ffref_aac_m4a_b64, 1 << 20).unwrap()
+  ffref_check_packets(data, "mp4")
+}
+
+///|
+test "ffref: packet oracle matches the MoonBit fMP4 segment demux" {
+  // A DASH/HLS-style media segment: ftyp+moov (init) followed by
+  // styp+moof+mdat (the first DASH chunk), which both demuxers open as one
+  // fragmented MP4 file.
+  let data = @libavutil.av_base64_decode(ffref_fmp4_seg_b64, 1 << 20).unwrap()
+  ffref_check_packets(data, "fmp4")
+}
+
+// ---- §330 image codecs: MJPEG + PNG ---------------------------------------
+
+///|
+test "ffref: MJPEG frames match av_mjpeg_decode byte-for-byte" {
+  let data = @libavutil.av_base64_decode(ffref_mjpeg_mkv_b64, 1 << 20).unwrap()
+  let oracle = @ffref.ffref_decode_video(data)
+  assert_true(oracle.frames().length() > 0, msg="mjpeg: oracle frames")
+  // ffmpeg's mjpeg decoder reports yuvj420p for this fixture.
+  assert_eq(oracle.chroma_mode(), 0, msg="mjpeg: chroma kind")
+  let mf = @avf.MediaFile::open(data)
+  let mut video = -1
+  for i = 0; i < mf.streams().length(); i = i + 1 {
+    if video < 0 && mf.streams()[i].media_type == @avf.MediaType::Video {
+      video = i
+    }
+  }
+  assert_true(video >= 0, msg="mjpeg: video stream")
+  let ours : Array[Bytes] = []
+  while true {
+    let pkt = match mf.next_packet() {
+      Some(p) => p
+      None => break
+    }
+    if pkt.stream_index != video {
+      continue
+    }
+    let img = @libavcodec.av_mjpeg_decode(pkt.data).unwrap()
+    // Planes are already cropped to the visible geometry; pack Y, Cb, Cr.
+    let out : Array[Byte] = []
+    for plane in img.planes {
+      for b_ in plane {
+        out.push(b_)
+      }
+    }
+    ours.push(Bytes::from_array(out))
+  }
+  assert_eq(
+    ours.length(),
+    oracle.frames().length(),
+    msg="mjpeg: frames (ours \{ours.length()}, oracle \{oracle.frames().length()})",
+  )
+  for i = 0; i < ours.length(); i = i + 1 {
+    assert_eq(ours[i], oracle.frames()[i], msg="mjpeg: frame \{i} YUV")
+  }
+}
+
+///|
+/// Diff one PNG fixture: the oracle decodes the raw .png through png_pipe
+/// into a packed rgb24/rgba frame, which must equal av_png_decode pixels.
+fn ffref_png_diff(b64 : Bytes, label : String, kind : Int32) -> Unit raise {
+  let data = @libavutil.av_base64_decode(b64, 1 << 20).unwrap()
+  let oracle = @ffref.ffref_decode_video(data)
+  assert_eq(oracle.frames().length(), 1, msg="\{label}: frames")
+  assert_eq(oracle.chroma_mode(), kind, msg="\{label}: kind")
+  let img = @libavcodec.av_png_decode(data).unwrap()
+  assert_eq(img.width, oracle.width(), msg="\{label}: width")
+  assert_eq(img.height, oracle.height(), msg="\{label}: height")
+  assert_eq(
+    img.pixels.length(),
+    oracle.frames()[0].length(),
+    msg="\{label}: pixel length",
+  )
+  assert_eq(img.pixels, oracle.frames()[0], msg="\{label}: pixels")
+}
+
+///|
+test "ffref: PNG rgb24 matches av_png_decode byte-for-byte" {
+  ffref_png_diff(ffref_rgb_png_b64, "png-rgb24", 3)
+}
+
+///|
+test "ffref: PNG rgba matches av_png_decode byte-for-byte" {
+  ffref_png_diff(ffref_rgba_png_b64, "png-rgba", 4)
+}
+
+// ---- §331 audio encode oracle: libshine / aac / native opus -----------------
+
+///|
+/// Deterministic sine PCM (interleaved s16) shared by the encoder
+/// differentials; channel 1 runs at 1.5x the frequency of channel 0.
+/// Returns the sample array and the packed little-endian bytes (what the
+/// oracle receives) from one source of truth.
+fn ffref_sine_pcm(
+  samples : Int32,
+  channels : Int32,
+  freq : Int32,
+  rate : Int32,
+) -> (Array[Int32], Bytes) {
+  let arr : Array[Int32] = []
+  let out : Array[Byte] = []
+  for i = 0; i < samples; i = i + 1 {
+    for c = 0; c < channels; c = c + 1 {
+      let f = if c == 0 { freq.to_double() } else { freq.to_double() * 1.5 }
+      let t = i.to_double() / rate.to_double()
+      let v = @math.sin(t * f * 6.283185307179586) * 10000.0
+      let s = v.round().to_int()
+      let s = if s > 32767 { 32767 } else if s < -32768 { -32768 } else { s }
+      arr.push(s)
+      out.push((s & 0xFF).to_byte())
+      out.push(((s >> 8) & 0xFF).to_byte())
+    }
+  }
+  (arr, Bytes::from_array(out))
+}
+
+///|
+/// First byte index at which two equal-length blobs differ, or None.
+fn ffref_first_diff(a : Bytes, b : Bytes) -> Int32? {
+  for i = 0; i < a.length(); i = i + 1 {
+    if a[i] != b[i] {
+      return Some(i)
+    }
+  }
+  None
+}
+
+///|
+/// Assert our packet sequence equals the oracle's, byte for byte.
+fn ffref_expect_packets(
+  ours : Array[Bytes],
+  oracle : @ffref.FFRefEncode,
+  label : String,
+) -> Unit raise {
+  assert_eq(
+    ours.length(),
+    oracle.packets().length(),
+    msg="\{label}: packet count (ours \{ours.length()}, oracle \{oracle.packets().length()})",
+  )
+  for i = 0; i < ours.length(); i = i + 1 {
+    assert_eq(
+      ours[i].length(),
+      oracle.packets()[i].length(),
+      msg="\{label}: packet \{i} size (ours \{ours[i].length()}, oracle \{oracle.packets()[i].length()})",
+    )
+    assert_eq(
+      ours[i],
+      oracle.packets()[i],
+      msg="\{label}: packet \{i} bytes (first diff at \{Repr(ffref_first_diff(ours[i], oracle.packets()[i]))})",
+    )
+  }
+}
+
+///|
+fn ffref_concat(parts : Array[Bytes]) -> Bytes {
+  let out : Array[Byte] = []
+  for part in parts {
+    for b_ in part {
+      out.push(b_)
+    }
+  }
+  Bytes::from_array(out)
+}
+
+///|
+test "ffref: shine MP3 encoder matches libshine byte-for-byte" {
+  let rate = 44100
+  let channels = 2
+  let frames = 8 // 8 x 1152 samples per channel
+  let (arr, pcm) = ffref_sine_pcm(1152 * frames, channels, 440, rate)
+  let oracle = @ffref.ffref_encode_audio(
+    pcm,
+    "libshine",
+    sample_rate=rate,
+    channels~,
+    bitrate=128000,
+  )
+  let enc = @libavcodec.mp3_encoder_new(
+    @libavcodec.mp3_encode_config(44100, 2, 128000),
+  ).unwrap()
+  let ours : Array[Bytes] = []
+  for i = 0; i < frames; i = i + 1 {
+    let input : Array[Int32] = []
+    for j = 0; j < 1152 * channels; j = j + 1 {
+      input.push(arr[i * 1152 * channels + j])
+    }
+    ours.push(enc.encode_frame(input).unwrap())
+  }
+  // libshine hands out whole MP3 frames while the MoonBit encoder returns
+  // shine's raw 32-bit-aligned output chunks, so the boundaries differ by
+  // design: the concatenated bitstream is what must match.
+  assert_eq(
+    ffref_concat(ours),
+    ffref_concat(oracle.packets()),
+    msg="mp3-enc: bitstream",
+  )
+}
+
+///|
+/// Best-lag SNR (dB) of channel 0 of a decoded interleaved s16le blob
+/// against the encoder input (interleaved), measured over the middle of
+/// the signal; the lag search covers the encoder + decoder delay.
+fn ffref_snr_db(input : Array[Int32], decoded : Bytes, ch : Int32) -> Double {
+  let n_in = input.length() / ch
+  let n_out = decoded.length() / 2 / ch
+  let mut best = -1000.0
+  for lag = 0; lag <= 2048; lag = lag + 1 {
+    let mut sig = 0.0
+    let mut err = 0.0
+    for i = 1024; i < n_in - 1024 && i + lag < n_out; i = i + 1 {
+      let x = input[i * ch].to_double()
+      let y = ffref_rd_s16(decoded, (i + lag) * ch).to_double()
+      sig = sig + x * x
+      err = err + (x - y) * (x - y)
+    }
+    if sig > 0.0 && err > 0.0 {
+      let snr = 10.0 * @math.log10(sig / err)
+      if snr > best {
+        best = snr
+      }
+    }
+  }
+  best
+}
+
+///|
+/// Max |diff| between two interleaved s16le blobs of equal length.
+fn ffref_max_diff(a : Bytes, b : Bytes) -> Int32 {
+  let mut worst = 0
+  for i = 0; i < a.length() / 2; i = i + 1 {
+    let d = (ffref_rd_s16(a, i) - ffref_rd_s16(b, i)).abs()
+    if d > worst {
+      worst = d
+    }
+  }
+  worst
+}
+
+///|
+/// The AAC and Opus encoder ports are byte-exact against their *patched*
+/// C reference harnesses (deterministic libm, direct MDCT; see
+/// PORTING_HISTORY §276/§304-§309), not against the stock FFmpeg encoders:
+/// the oracle shows different frames from the very first one. What holds
+/// against the real FFmpeg is interop and quality, checked here: the real
+/// decoder accepts our streams, the MoonBit decoder agrees with it on them,
+/// and the SNR stays close to the native encoder's at the same bit rate.
+test "ffref: AAC encoder streams decode in real FFmpeg at native-level SNR" {
+  let rate = 44100
+  let channels = 2
+  let frames = 12 // 12 x 1024 samples per channel
+  let (arr, pcm) = ffref_sine_pcm(1024 * frames, channels, 440, rate)
+  // Ours: the default encoder configuration; `encode_frame` already emits
+  // complete ADTS frames, so their concatenation is the stream.
+  let enc = @libavcodec.aac_encoder_new(
+    @libavcodec.aac_encode_config(44100, 2, 128000),
+  ).unwrap()
+  let adts : Array[Bytes] = []
+  for i = 0; i < frames; i = i + 1 {
+    let planes : Array[Array[Double]] = []
+    for c = 0; c < channels; c = c + 1 {
+      let plane : Array[Double] = []
+      for j = 0; j < 1024; j = j + 1 {
+        plane.push(arr[(i * 1024 + j) * channels + c].to_double() / 32768.0)
+      }
+      planes.push(plane)
+    }
+    adts.push(enc.encode_frame(planes).unwrap())
+  }
+  let dec_ours = @ffref.ffref_decode_audio(ffref_concat(adts))
+  assert_eq(dec_ours.channels, 2, msg="aac-enc: channels")
+  assert_eq(
+    dec_ours.samples_per_channel,
+    frames * 1024,
+    msg="aac-enc: real decoder sample count",
+  )
+  // Decoder parity: the MoonBit AAC decoder on the same raw frames, through
+  // the swresample float->s16 rounding, must agree with the real decoder.
+  let dec = @libavcodec.new_aac_decoder_from_asc(@avf.ts_adts_to_asc(2, 4, 2)).unwrap()
+  let mine : Array[Byte] = []
+  for frame in adts {
+    // The encoder writes protection_absent=1: a 7-byte header.
+    let out = dec.decode_frame(frame[7:].to_owned()).unwrap()
+    for i = 0; i < out[0].samples.length(); i = i + 1 {
+      for c = 0; c < out.length(); c = c + 1 {
+        let v = @swr.swr_flt_to_s16(out[c].samples[i])
+        mine.push((v & 0xFF).to_byte())
+        mine.push(((v >> 8) & 0xFF).to_byte())
+      }
+    }
+  }
+  let mine = Bytes::from_array(mine)
+  assert_eq(
+    mine.length(),
+    dec_ours.pcm_s16le.length(),
+    msg="aac-enc: parity length",
+  )
+  let worst = ffref_max_diff(mine, dec_ours.pcm_s16le)
+  assert_true(worst <= 1, msg="aac-enc: decoder parity diff \{worst}")
+  // Quality against the native encoder at the same bit rate.
+  let native = @ffref.ffref_encode_audio(
+    pcm,
+    "aac",
+    sample_rate=rate,
+    channels~,
+    bitrate=128000,
+  )
+  let nmux = @avf.adts_muxer_new(44100, 2).unwrap()
+  for p in native.packets() {
+    nmux.write_frame(p).unwrap()
+  }
+  let dec_native = @ffref.ffref_decode_audio(nmux.finish())
+  let snr_ours = ffref_snr_db(arr, dec_ours.pcm_s16le, 2)
+  let snr_native = ffref_snr_db(arr, dec_native.pcm_s16le, 2)
+  // Measured 67.7 dB vs the native encoder's 31.5 dB. Before the §331
+  // `coef2minsf` floor the default path saturated the tonal peak and this
+  // was 3.4 dB.
+  assert_true(snr_ours >= 60.0, msg="aac-enc: SNR \{snr_ours}")
+  assert_true(
+    snr_ours >= snr_native,
+    msg="aac-enc: SNR \{snr_ours} vs native \{snr_native}",
+  )
+}
+
+///|
+test "ffref: Opus encoder streams decode in real FFmpeg at native-level SNR" {
+  let rate = 48000
+  let channels = 2
+  let frames = 10 // 10 x 960 samples per channel
+  let (arr, pcm) = ffref_sine_pcm(960 * frames, channels, 440, rate)
+  let enc = @libavcodec.opus_encoder_new(
+    @libavcodec.opus_encode_config(2, 64000),
+  ).unwrap()
+  let ours : Array[Bytes] = []
+  for i = 0; i < frames; i = i + 1 {
+    let planes : Array[Array[Float]] = []
+    for c = 0; c < channels; c = c + 1 {
+      let plane : Array[Float] = []
+      for j = 0; j < 960; j = j + 1 {
+        plane.push(Float::from_int(arr[(i * 960 + j) * channels + c]) / 32768.0)
+      }
+      planes.push(plane)
+    }
+    match enc.encode(planes).unwrap() {
+      Some(b) => ours.push(b)
+      None => ()
+    }
+  }
+  for b in enc.flush().unwrap() {
+    ours.push(b)
+  }
+  let mux = @avf.ogg_opus_muxer_new(channels=2, pre_skip=120).unwrap()
+  for b in ours {
+    mux.write_packet(b).unwrap()
+  }
+  let ours_ogg = mux.finish()
+  // The real decoder accepts the stream, and the MoonBit Opus decoder (via
+  // the playback facade, pre-skip trimmed) agrees with it within 1 LSB.
+  ffref_audio_diff(ours_ogg, "opus-enc", 48000, 2)
+  // Quality against the native encoder (same packets-in-Ogg path).
+  let native = @ffref.ffref_encode_audio(
+    pcm,
+    "opus",
+    sample_rate=rate,
+    channels~,
+    bitrate=64000,
+  )
+  let nmux = @avf.ogg_opus_muxer_new(channels=2, pre_skip=120).unwrap()
+  for b in native.packets() {
+    nmux.write_packet(b).unwrap()
+  }
+  let dec_ours = @ffref.ffref_decode_audio(ours_ogg)
+  let dec_native = @ffref.ffref_decode_audio(nmux.finish())
+  let snr_ours = ffref_snr_db(arr, dec_ours.pcm_s16le, 2)
+  let snr_native = ffref_snr_db(arr, dec_native.pcm_s16le, 2)
+  // Measured 20.2 dB vs the native encoder's 18.8 dB on this tone.
+  assert_true(snr_ours >= 18.0, msg="opus-enc: SNR \{snr_ours}")
+  assert_true(
+    snr_ours >= snr_native - 1.0,
+    msg="opus-enc: SNR \{snr_ours} vs native \{snr_native}",
+  )
 }
