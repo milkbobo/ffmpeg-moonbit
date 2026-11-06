@@ -22,7 +22,7 @@ options(
       // moon's Windows native backend requires MSVC, so this package runs
       // native tests inside that image only.
       "cc-flags": "-I/usr/local/include",
-      "cc-link-flags": "-L/usr/local/lib -lavformat -lavcodec -lswresample -lavutil -lm",
+      "cc-link-flags": "-L/usr/local/lib -lavformat -lavcodec -lswresample -lavutil -ldav1d -lm",
     },
   },
 )

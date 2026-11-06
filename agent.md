@@ -340,7 +340,12 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳j §319 HEVC/VP9/AV1 真实流 e2e（§313
+  lengthSize 从偏移 21）。全量 1434/1434。⑳k §320 ffref 镜像加 libdav1d
+  （configure --enable-libdav1d + 链接 -ldav1d）：AV1 从占位转正为正式字节
+  差分——dav1d 与我们 AV1 解码器逐字节恒等。**视频四家对拍矩阵闭环**：
+  H.264（含 444）/HEVC（含 B 帧）/VP9/AV1 真实流全帧全部进程内常驻回归
+  （42/42）。
+  ⑳j §319 HEVC/VP9/AV1 真实流 e2e（§313
   遗留收口）：docker 三流 fixture（64×64×5 帧）；修 HEVC "missing PPS"（hvcC
   参数集 numOfArrays 展开 seed 进批式 pending，镜像 hevc_parse_extradata）+
   HEVC B 帧显示序（finish_video 按 POC 排序）；**ffref SIGSEGV 根因=MemIO 栈

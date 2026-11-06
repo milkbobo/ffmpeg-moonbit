@@ -489,18 +489,6 @@ test "ffref: VP9 real stream matches the oracle byte-for-byte" {
 }
 
 ///|
-/// AV1 e2e is covered on our side by libavformat's playback e2e test (5
-/// frames, 64x64). The oracle image builds FFmpeg without libdav1d, and
-/// the built-in AV1 decoder emits no frames for these streams, so a
-/// byte-level AV1 diff needs the image rebuilt with --enable-libdav1d
-/// first (see .scratch/ffref/Dockerfile).
-test "ffref: AV1 oracle unavailable without libdav1d" {
-  let data = @libavutil.av_base64_decode(e2e_av1_mkv_b64, 1 << 20).unwrap()
-  // Documents the current image: the built-in AV1 decoder yields no
-  // frames, so the oracle refuses the stream instead of comparing. The
-  // refusal is the expected outcome until the image gains libdav1d.
-  match (try Some(@ffref.ffref_decode_video(data)) catch { _ => None }) {
-    Some(_) => fail("expected the oracle to refuse AV1 without libdav1d")
-    None => ()
-  }
+test "ffref: AV1 real stream matches the oracle byte-for-byte" {
+  ffref_e2e_diff(e2e_av1_mkv_b64, "av1")
 }

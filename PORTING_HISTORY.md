@@ -8945,3 +8945,16 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   catch 臂类型必须同成功值（断言「预期 raise」用 try-Some 形状）；x265
   keyint=3 的 5 帧流解码序/显示序差异是 B 帧重排的天然教材。
 - **验证**：容器 native **42/42**；本机 wasm 全量绿。
+
+## 320. ffref 镜像加 libdav1d：AV1 字节对拍转正（视频四家闭环）
+
+- **镜像**：Dockerfile apt 加 `libdav1d-dev`（Ubuntu 26.04 = libdav1d7）、
+  configure 加 `--enable-libdav1d` 重建（ffmpeg-moonbit-ffref:nine）；
+  `ffref/moon.pkg` 链接标志补 `-ldav1d`（libavcodec.a 现引用 dav1d 符号）。
+- **转正**：AV1 测试从「oracle 拒绝语义」占位改为正式 `ffref_e2e_diff`——
+  dav1d 解码 5 帧与我们 AV1 解码器 `yuv_bytes()` **逐字节恒等**。
+- **坑**：并发 docker 命令竞抢 context meta.json 文件锁（"being used by
+  another process"），重试即过。
+- **视频对拍矩阵完成**：H.264（含 4:4:4）、HEVC（含 B 帧）、VP9、AV1
+  四家真实流全帧 vs 真 FFmpeg 逐字节——全部进程内常驻回归。
+- **验证**：容器 native **42/42**；wasm 全量绿。
