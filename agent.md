@@ -340,7 +340,11 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳m §322 extract-frame RGB 输出：
+  lengthSize 从偏移 21）。全量 1434/1434。⑳n §324 libswscale 422/444：
+  `yuv422_to_rgb24`/`yuv444_to_rgb24` 共享每行核（chroma 行映射差异，
+  同官方表）；合成帧测试（444 Y 轴 = 官方 blob、422≡444 恒定 chroma、
+  BGR 互换）。libswscale 3/3；wasm 全量绿。
+  ⑳m §322 extract-frame RGB 输出：
   `--format yuv|rgb24|bgr24`（缺省扩展名随格式；JSON format 字段区分）——
   planar blob 拆三平面走 §321 官方表。对拍定论：docker sws 主路径 chroma
   **半像素中心插值**（bilinear 相位 0.5，1:1 也插）→ G 回绕 ±255 形态，

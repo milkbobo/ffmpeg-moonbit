@@ -1000,3 +1000,40 @@ fn hexsw(digest : FixedArray[Byte]) -> String {
 ///|
 
 ///|
+
+///|
+test "swscale: 422 and 444 inputs share the official table" {
+  // Build a synthetic 8x8 4:4:4 frame whose chroma equals luma ramp
+  // diagonals; 4:2:2 keeps the horizontal layout, doubling rows. The
+  // official-table semantics tie the three subsamplings together: at
+  // chroma value 128 (index 640) the Y axis is the ramp probed from the
+  // FFmpeg blob (0x17 zeros then 1,2,3...).
+  let w = 8
+  let h = 8
+  let yarr : Array[Byte] = []
+  for i = 0; i < w * h; i = i + 1 {
+    yarr.push((i % 256).to_byte())
+  }
+  let y8 = Bytes::from_array(yarr[:])
+  let u444 = Bytes::make(w * h, 128)
+  let v444 = Bytes::make(w * h, 128)
+  let sw = @swscale.Yuv2Rgb::mpeg()
+  let rgb444 = sw.yuv444_to_rgb24(y8, u444, v444, w, h)
+  // Neutral chroma: R channel = Y axis of the table (Y=0..16 -> 0).
+  for i = 0; i < 17; i = i + 1 {
+    assert_eq(rgb444[i * 3].to_int(), 0, msg="444 ramp zero at \{i}")
+  }
+  assert_eq(rgb444[18 * 3].to_int(), 1, msg="444 ramp at 18")
+  // 4:2:2 with the same luma must agree row-by-row with the 4:4:4 result
+  // wherever the chroma values coincide (here: constant 128).
+  let u422 = Bytes::make((w / 2) * h, 128)
+  let v422 = Bytes::make((w / 2) * h, 128)
+  let rgb422 = sw.yuv422_to_rgb24(y8, u422, v422, w, h)
+  assert_eq(rgb422, rgb444, msg="422 equals 444 for constant chroma")
+  // BGR swap on the 444 path.
+  let bgr444 = sw.yuv444_to_rgb24(y8, u444, v444, w, h, bgr=true)
+  for i = 0; i < w * h; i = i + 1 {
+    assert_eq(bgr444[i * 3], rgb444[i * 3 + 2], msg="444 bgr swap")
+    assert_eq(bgr444[i * 3 + 2], rgb444[i * 3], msg="444 bgr swap2")
+  }
+}

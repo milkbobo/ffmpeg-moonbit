@@ -9025,3 +9025,14 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   + BGR 互换（全部绿）。字节级对齐 docker 默认（full 变体输入链）列为
   独立专项。
 - **验证**：libswscale 2/2；wasm 全量绿。
+
+## 324. libswscale 第二片：422/444 输入扩展
+
+- **`Yuv2Rgb::yuv422_to_rgb24` / `yuv444_to_rgb24`**：共享每行转换核
+  （`yuv_rows_to_rgb24`，chroma 行映射 4:2:0 行对 / 4:2:2 与 4:4:4 一对
+  一），同一官方表（chroma 索引逻辑与子采样无关，仅平面几何不同）。
+  平面尺寸校验 + BGR 互换沿 420 路径语义。
+- **测试**（libswscale 累计 3/3）：合成 8x8 中性 chroma 帧——444 的 Y 轴
+  与官方 blob 一致（17 零后 1,2,3…）；422（恒定 chroma）与 444 逐字节
+  相等；BGR 互换自洽。
+- **验证**：wasm 全量绿。
