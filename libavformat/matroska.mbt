@@ -272,6 +272,15 @@ pub fn mkv_chapter_new(
 }
 
 ///|
+/// One `AttachedFile` from the `Attachments` master: the display name, the
+/// MIME type FFmpeg tags the attached-pic stream with, and the raw payload.
+pub struct MkvAttachment {
+  filename : String
+  mime : String
+  data : Bytes
+}
+
+///|
 /// The segment-level state this slice produces (a slice of
 /// `MatroskaDemuxContext`): Info fields, the SeekHead list, and where the
 /// first Cluster starts.
@@ -291,6 +300,9 @@ pub struct MatroskaHeader {
   metadata : Array[(String, String)]
   /// `Chapters` atoms in edition order (`matroska_parse_chapters`).
   chapters : Array[MkvChapter]
+  /// `Attachments` files in order (`matroska_parse_attachments`; FFmpeg
+  /// exposes them as attached-pic streams, we keep the raw bytes).
+  attachments : Array[MkvAttachment]
   /// `matroska->seekhead[]`.
   seekhead : Array[MkvSeekhead]
   /// `matroska->segment_start`.
@@ -316,6 +328,7 @@ fn new_matroska_header() -> MatroskaHeader {
     date_utc: None,
     metadata: [],
     chapters: [],
+    attachments: [],
     seekhead: [],
     segment_start: 0,
     first_cluster_pos: -1L,
@@ -479,7 +492,11 @@ fn matroska_segment_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
       kind: Level1(() => matroska_tracks_table(mh)),
       sink: None,
     },
-    { id: matroska_id_attachments, kind: Skip, sink: None, },
+    {
+      id: matroska_id_attachments,
+      kind: Nest(() => matroska_attachments_table(mh)),
+      sink: None,
+    },
     { id: matroska_id_chapters, kind: Skip, sink: None, },
     { id: matroska_id_cues, kind: Skip, sink: None, },
     {
@@ -647,6 +664,85 @@ fn matroska_tags_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
       sink: None,
     },
     { id: 0xBF, kind: Skip, sink: None, },
+  ]
+}
+
+///|
+/// `matroska_attachedfile[]`: FileName/FileMimeType/FileData may arrive in
+/// any order; the file is flushed to `mh.attachments` once the payload has
+/// landed (FileName defaults empty, the MIME to application/octet-stream -
+/// FFmpeg keeps whatever it saw last).
+fn matroska_attachedfile_table(
+  mh : MatroskaHeader,
+  state : Array[String?],
+  payload : Array[Bytes?],
+) -> Array[EbmlSyntax] {
+  let flush = (data : Bytes) => {
+    let name = match state[0] {
+      Some(v) => v
+      None => ""
+    }
+    let mime = match state[1] {
+      Some(v) => v
+      None => "application/octet-stream"
+    }
+    mh.attachments.push({ filename: name, mime, data })
+  }
+  [
+    {
+      id: matroska_id_filename,
+      kind: Str(None),
+      sink: Some((v, _) => {
+        match v {
+          S(str) => {
+            state[0] = Some(str)
+            Ok(())
+          }
+          _ => Err("EINVAL")
+        }
+      }),
+    },
+    {
+      id: matroska_id_filemimetype,
+      kind: Str(None),
+      sink: Some((v, _) => {
+        match v {
+          S(str) => {
+            state[1] = Some(str)
+            Ok(())
+          }
+          _ => Err("EINVAL")
+        }
+      }),
+    },
+    {
+      id: matroska_id_filedata,
+      kind: Bin,
+      sink: Some((v, _) => {
+        match v {
+          B(bytes) => {
+            flush(bytes)
+            Ok(())
+          }
+          _ => Err("EINVAL")
+        }
+      }),
+    },
+    { id: matroska_id_filedescription, kind: Skip, sink: None, },
+    { id: matroska_id_fileuid, kind: Skip, sink: None, },
+  ]
+}
+
+///|
+/// `matroska_attachments[]`: each `AttachedFile` gets fresh name/mime slots.
+fn matroska_attachments_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
+  [
+    {
+      id: matroska_id_attachedfile,
+      kind: Nest(() =>
+        matroska_attachedfile_table(mh, [None, None], [None])),
+      sink: None,
+    },
   ]
 }
 

@@ -340,7 +340,14 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳g §316 ffref 原生参考 oracle（C 绑定落地）：`ffref/` 包
+  lengthSize 从偏移 21）。全量 1434/1434。⑳h §317 CLI ④⑤收口：`cmd/extract-frame`
+  （首视频流第 N 帧 planar YUV + JSON 摘要，docker 对拍首帧 MD5 逐字节一致）与
+  `cmd/extract-cover`（MKV Attachments 新移植 + MP4 ilst/covr 捕获 →
+  `MediaFile::cover` 统一 API；两容器提取 MD5 恒等 2e84456f…；MP4 covr fixture
+  系 python 手搓注入+size 链修复，ffmpeg ipod muxer 拒写 mjpeg）。坑：else-if
+  挂错层级永不执行；`& 0xFFFFFF == 13` 优先级。全量 1439/1439——申报书②五命令
+  全部交付。
+  ⑳g §316 ffref 原生参考 oracle⑳g §316 ffref 原生参考 oracle（C 绑定落地）：`ffref/` 包
   全 native-gated——stub.c 走 mem AVIO + av_read_frame / avcodec+swr 首音频流
   解码，Value-as-Bytes 扁平 blob（每包 32B 记录 + 每流 timebase / s16 PCM），
   `ffref_probe`/`ffref_decode_audio` 安全包装。运行于专用镜像

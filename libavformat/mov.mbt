@@ -318,6 +318,9 @@ pub struct Mp4Movie {
   mfra : Array[MovTfra]
   /// `udta/meta/ilst` string tags as (FFmpeg metadata key, UTF-8 value).
   metadata : Array[(String, String)]
+  /// `ilst/covr` artwork: raw image bytes plus its MIME (data types 13
+  /// and 14 map to JPEG and PNG, like FFmpeg's attached-pic stream).
+  mut cover : (Bytes, String)?
   /// `udta/chpl` chapters (Nero style, 1/10,000,000 s units).
   chapters : Array[Mp4Chapter]
   tracks : Array[Mp4Track]
@@ -424,6 +427,7 @@ fn new_movie() -> Mp4Movie {
     sidx_refs: [],
     mfra: [],
     metadata: [],
+    cover: None,
     chapters: [],
     tracks: [],
   }
@@ -830,7 +834,18 @@ fn mov_walk_metadata(payload : Bytes, movie : Mp4Movie, key : String) -> Unit {
     if name == "chpl" {
       mov_parse_chpl(body, movie)
     } else if name == "data" {
-      if key != "" && body.length() >= 8 {
+      if key == "covr" && body.length() >= 8 {
+        // Binary artwork (data types 13/14 = JPEG/PNG), kept as raw bytes.
+        let dtype = mov_meta_u32(body, 0) & 0xFFFFFF
+        if dtype == 13 || dtype == 14 {
+          let mime = if dtype == 13 {
+            "image/jpeg"
+          } else {
+            "image/png"
+          }
+          movie.cover = Some((body[8:].to_owned(), mime))
+        }
+      } else if key != "" && body.length() >= 8 {
         let data_type = mov_meta_u32(body, 0) & 0xFFFFFF
         let value_bytes = body[8:].to_owned()
         let value = if data_type == 2 {
@@ -852,6 +867,8 @@ fn mov_walk_metadata(payload : Bytes, movie : Mp4Movie, key : String) -> Unit {
       let mapped = mov_metadata_key(name)
       if mapped != "" {
         mov_walk_metadata(body, movie, mapped)
+      } else if name == "covr" {
+        mov_walk_metadata(body, movie, "covr")
       }
     }
     pos = pos + size

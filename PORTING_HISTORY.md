@@ -8873,3 +8873,31 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   声明，最终 fixture 与测试代码全部 Edit/Write 工具直写。
 - **验证**：容器 native **38/38**；本机 wasm 全量 **1438/1438**（ffref 空
   包不参与）。镜像构建脚本在 `.scratch/ffref/Dockerfile`（gitignored）。
+
+## 317. CLI ④⑤：extract-frame / extract-cover（申报书②五命令收口）
+
+- **`cmd/extract-frame`**：`<file> [--index N] [--output out.yuv]`——首视频流经
+  §312/313 分发解码到第 N 帧（HEVC 批式由 finish_video 冲刷），`yuv_bytes()`
+  planar YUV 落盘 + JSON 摘要（codec/尺寸/位深/字节数）。实跑 docker 对拍：
+  src.mkv 首帧 YUV 与 ffmpeg `-pix_fmt yuv420p` 参考 **MD5 逐字节一致**
+  （f3936bd3…）。
+- **MKV `Attachments` 移植**（`matroska.mbt`）：EBML ID 常量 + `MkvAttachment`
+  {filename, mime, data} + `matroska_attachments_table`（Nest + 状态槽，照
+  SimpleTag 模式；FileData 用 `Bin` kind，FileName/FileMimeType 任意序，data
+  落地即 flush）；Segment 表 Attachments 行从 Skip 改 Nest。
+- **MP4 `ilst/covr` 捕获**（`mov.mbt`）：`Mp4Movie.cover : (Bytes, String)?`；
+  walker 对未映射 `covr` item 递归带 key，data 分支优先处理二进制 artwork
+  （data type 13=JPEG / 14=PNG）。坑：else-if 挂错层级会永不执行（挂在
+  `key != ""` 的 if 上）；`& 0xFFFFFF == 13` 优先级坑（& 低于 ==）再现。
+- **`MediaFile::cover()`**（playback_cover.mbt）：MKV 取首个 image/* 附件
+  （FFmpeg attached-pic 同口径）、MP4 取 covr，Ogg/WAV 恒 None；`MediaCover`
+  {mime, data}。
+- **`cmd/extract-cover`**：`<file> [--output]`（缺省按 MIME 选 cover.jpg/png），
+  无封面非零退出。fixture 由 docker 生成（MKV -attach；MP4 的 covr ffmpeg
+  ipod muxer 拒写 mjpeg——**python 手搓注入** udta/meta/ilst/covr box 并修
+  ilst→meta→udta→moov 四级 size 链，ffprobe 验证 attached_pic 双流）。
+- **对拍结果**：两容器提取字节与源 JPEG **MD5 恒等**（2e84456f…，669B）。
+- **测试**：黑盒 +1（playback_cover_test.mbt：两 fixture 内嵌 + md5 钉死 +
+  Ogg 无封面 None）；全量 **1439/1439**。
+- 申报书②五命令（probe/dump-packets/decode-audio/extract-frame/
+  extract-cover）全部交付。

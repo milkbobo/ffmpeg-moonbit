@@ -146,6 +146,30 @@ pub let matroska_id_seekhead : UInt32 = 0x114D9B74
 pub let matroska_id_attachments : UInt32 = 0x1941A469
 
 ///|
+/// `MATROSKA_ID_ATTACHEDFILE`. */
+pub let matroska_id_attachedfile : UInt32 = 0x61A7
+
+///|
+/// `MATROSKA_ID_FILEDESCRIPTION`. */
+pub let matroska_id_filedescription : UInt32 = 0x467E
+
+///|
+/// `MATROSKA_ID_FILENAME`. */
+pub let matroska_id_filename : UInt32 = 0x466E
+
+///|
+/// `MATROSKA_ID_FILEMIMETYPE`. */
+pub let matroska_id_filemimetype : UInt32 = 0x4660
+
+///|
+/// `MATROSKA_ID_FILEDATA`. */
+pub let matroska_id_filedata : UInt32 = 0x465C
+
+///|
+/// `MATROSKA_ID_FILEUID`. */
+pub let matroska_id_fileuid : UInt32 = 0x46AE
+
+///|
 /// `MATROSKA_ID_CHAPTERS`. */
 pub let matroska_id_chapters : UInt32 = 0x1043A770
 
