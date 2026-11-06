@@ -230,8 +230,12 @@ PNG、ASF、AU、CAF、FLAC、MJPEG、MP3、Ogg。17 组由参考 FFmpeg 9.0.2
 `decode_audio_file` + `to_wav_s16`、`cover()`（MKV Attachments / MP4
 `ilst/covr`）与 ffprobe 风格的 `probe_json`/`dump_packets_json`。配套五个
 JSON CLI 命令（`cmd/`）：`probe`、`dump-packets`、`decode-audio`、
-`extract-frame`、`extract-cover`，pts/分包/解码输出均与 FFmpeg 9.0.2
-docker 对拍逐字节或 ±1 舍入一致。包已发布
+`extract-frame`（`--format yuv|rgb24|bgr24`）、`extract-cover`，pts/分包/
+解码输出均与 FFmpeg 9.0.2 docker 对拍逐字节或 ±1 舍入一致。
+**libswscale 移植开篇**（`libswscale/`）：YUV420P -> RGB24/BGR24
+（`yuv2rgb_1_c_template` 查表语义，表数据从 FFmpeg 9.0.2
+`ff_yuv2rgb_c_init_tables` 全量 probe 内嵌——FFmpeg 9 的系数经 cms
+双精度通路重算，不可公式复算）。包已发布
 [mooncakes.io/milkbobo/ffmpeg-moonbit](https://mooncakes.io/docs/milkbobo/ffmpeg-moonbit)
 （`moon add milkbobo/ffmpeg-moonbit`）；`ffref/` 为开发用原生 FFmpeg 参考
 oracle（native-gated，需 FFmpeg 静态库，见
@@ -247,7 +251,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-11-06）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **1439/1439** 通过（另有 ffref 原生 oracle 差分 38/38，运行于 docker 镜像内）。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-11-07）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **1439/1439** 通过（另有 ffref 原生 oracle 差分 38/38，运行于 docker 镜像内）。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 
