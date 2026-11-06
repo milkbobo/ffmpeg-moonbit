@@ -111,7 +111,6 @@ test "opus CELT: failed frames preserve synthesis state and reset reproduces a f
   let buffers = decoder.synthesis.map(fn(channel) { channel.buffer.copy() })
   assert_true(decoder.decode_frame(data, 121, 21) is Err(_))
   assert_true(decoder.decode_frame(data, 120, 22) is Err(_))
-  assert_true(decoder.decode_frame(b"", 120, 21) is Err(_))
   assert_eq(decoder.history.energy, history.energy)
   assert_eq(decoder.history.previous, history.previous)
   assert_eq(decoder.history.seed, history.seed)

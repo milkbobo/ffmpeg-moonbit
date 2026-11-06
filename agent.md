@@ -340,7 +340,20 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳e §314 播放 API 第五期 + CLI ①：`MediaFile::probe_json()`（ffprobe 风格
+  lengthSize 从偏移 21）。全量 1434/1434。⑳f §315 CLI ②③ + 三处 ffmpeg 对齐修复：
+  `MediaFile::dump_packets_json`（playback_dump.mbt：按容器时间基 stream_timebase
+  的 JSONL，stream/limit 过滤，仅发射行计数）+ `cmd/dump-packets`、`cmd/decode-audio`
+  （--output 写 §311 WAV，stdout summary_json）；**ogg.mbt pts 重写为 ffmpeg 语义**
+  （非 EOS 页按页 gp 后缀和回退、EOS/无 gp 页走 lastpts 链 + 末包 end-trim——
+  oggparseopus.c 逐行核对，RFC 7845 gp 含 pre_skip 的文件首包 0 而非 -pre_skip）；
+  **opus 空熵帧修复**（opus_rc_init 放开空帧，空 CELT 帧经 MDCT 重叠输出上帧衰减
+  拖尾——1 字节 TOC-only 包不再 concealment 全零）；**decode_audio_file Ogg 首段
+  pre_skip 裁剪**（ffmpeg initial_padding 语义）。docker 对拍：dump-packets 四容器
+  pts/size/flags 全对齐（opus 0/20/40、mkv、m4a 含 -21.3ms edit list、PCM WAV
+  1024@0/576@64）；decode-audio 对 ffmpeg 参考解码 max|diff|=1（纯 ±1 dither）。
+  已知限制：AAC-in-WAV 分包 ffmpeg 走 AAC parser 按帧（738/383），我们按块对齐。
+  标签参数调用语法 `f(x=v)`（旧 `x~:` 报 parse error）。全量 1438/1438。
+  ⑳e §314 播放 API 第五期 + CLI ①：`MediaFile::probe_json()`（ffprobe 风格
   format+streams JSON，自带 RFC 8259 转义）与 `cmd/probe`（x/fs 读文件→JSON 打印，
   错误 `MediaError::message` + 非零退出，moon.mod 加 moonbitlang/x）。命令实跑：
   WAV/MKV 双流/垃圾字节三路径全对。转义字面量坑：含反斜杠的 MoonBit 源码一律

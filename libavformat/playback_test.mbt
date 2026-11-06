@@ -12,6 +12,76 @@ let playback_real_mkv_b64 : Bytes = b"GkXfo6NChoEBQveBAULygQRC84EIQoKIbWF0cm9za2
 ///|
 /// Five real libvpx VP9 frames (64x48, first keyframe) and the FFmpeg
 /// decode MD5s, embedded for the facade's VP9-path test.
+let playback_ogg_file_b64 : Bytes = b"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" +
+  "rQsOAAAAFo5fuwEB/A=="
+
+///|
+let playback_pcm_wav_b64 : Bytes = b"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"
+
+///|
 let webm_av_vp9_frames_b64 : Array[Bytes] = [
   b"gkmDQgAD8AL2BDgkHBhCAAMQfLF6f02Juker9g9Z6j0Xr+n9G0Xdj380C/f8/5H59H+m6buv02jPV+m3T6e7HvsAAH/Dmc5Ywiozez4rJK/koYcpfSJ2NT6cU8llQVPf8goJRqzP3MdyefOlT/0WlAMcXBh1/nM7yeMm9hjV1VC4SM5ED+cuiKxbip0JUpppKXuNR/3d+888FB0lBBS4UhUwmOsZCWSFPylu4vn2akF+6Z3hmdbttmQLMSkuXKHVtHVHTGR1naA6s+/q0RPTFVROAaY4mFuyXi58rAVFX+E9yf0e/qDIHCen8h//MuvCNsYSii4f//brrZcyTrM0cLLTeaWcKmy+8+0SQ1I0sEv54lw2GAl8a8kSyyrJ9AgO572+IpMB1RCrDlH8P8ouRxqk46pNslBZfkGwCNYStGHoQas2lzPb804vsQhJvEG4+SnZKSVEa27WP++FxlXv9Epz0nVOMDXlHHX5+FNcG+YCdyUlfmDgRyu+c+s00Ogys4q2QJ0SrAwIV1rYWuR/P/cf0lL2yCmIkleDE0pCuIyu2e/AN0HX/bbebxAuj5gxg0SngHdtP6Gi+EbR4J2FjM7lUehmrHT7lUiPhG0PiZLU80t4Otd7WgdklIkbl4Fcvu/d+83atwGcmqZ/48DOCy/5HniOf+/KKsR5wLBDnTg7gNeaksZlSCEj+s1YrC33aLMZ3KeAXmGmbt/5mwUax2hrVnMfWpslp/QJl3uGMHgi4/u2I6Qh1xJKBBxnBTRMp6pJr8/irPSq6d8ZEJSg281+R667I/syc6iJKQVYmqL5at3v//rmL/+Tb/aZav9ca/x9//moUeO7IN7d6f//6ZhzI3+iVpT/Toz//7bLbAukVI8HfgShbMMmHxMZm/wAsouwskg4mS2zEtAwgPhiAjHfPlcvcWtfWhBjD0mwmP01fqt0av7KGtWaChxI6nzPb7iUYSRBTImjZpNM84alRKjtVDuYex0GHahXCAkSvGVo37i0NDp6Uvo/G4azbIf75/Itcr664ZqOHfIabC65eFEQ0qsY7XawaEQc3UdVkN2JtPaJ5nmN0aOY5a3INtIjFCGieY7r98wvMgUX/iLMgTE5OUg58Im+MN2U9pzPs0UJBz49nlgP9g//DK5r6LVgytqOHr/C9ZHEjX9+6vH7Ewd2eu1Izp9jPyoDKL6oZNM8QV/+YsP+wf8bs/0w/3A/+WKo3/JY3mx///VmIqz6WF0PXZlD+B0M2wF8hOXByGlDMLGroaatXeYnIKT8Wcyixg//7Fq/8ADszqd4GgtRblsKBe6reN7EOwawIkNbUKtiIhoYZIkDl5wtJfaYxep5NVycsIeTXZa+qYuby4nD06f2cePDVWdBi/sTLIPUhYRdUkz11DkNe41NHc41v76WR/KJEoes/5jCXJ6sloefh3m6T7lpNKg5WnWCzVNwtHGCl6Y3mLi1GZYKtb0gpgMRRumewS2GmoMjxPndV9X6fld/eQHwzPMtOikVg6rcVHz4hK32ZSyY8nYle9tgqUGyapiSHv/H2NPFuuJnWDhCUjIo0OlL4QRsW8Eq6ODWQpeptIyFSjUsAA==",
   b"hgBAkpwYSUAAAwAAAH4MtzrMQfjn///hLYqmEjf2K5fq4ZrkKA//4BX2cVjxpY2547S/eDRA", b"hgBAkpwYSsAAA3AAAH9A3qoFu2//9t0/ZYKalJ0pazITZsP/yUx7SHQBwD0q1+p5SLU7GI4Bct1SeicSts0C",
@@ -341,7 +411,9 @@ test "playback: decode_audio_file matches the drain on Opus containers" {
   let audio = @libavformat.decode_audio_file(data)
   assert_eq(audio.sample_rate(), 48000)
   assert_eq(audio.channels(), 1)
-  assert_eq(audio.samples()[0].length(), 2880)
+  // Pre-skip 312 is encoder priming: the decode drops it from the head
+  // (FFmpeg's initial_padding handling), leaving 3x960 - 312 samples.
+  assert_eq(audio.samples()[0].length(), 2568)
   // Duration: last granule (3 packets x 960) minus pre-skip 312.
   let dur = audio.duration_seconds()
   let d = match dur {
@@ -352,7 +424,7 @@ test "playback: decode_audio_file matches the drain on Opus containers" {
   // And the WAV export carries the samples verbatim.
   let out = audio.to_wav_s16()
   let demux = @libavformat.av_wav_open(out).unwrap()
-  assert_eq(demux.sample_count, 2880L)
+  assert_eq(demux.sample_count, 2568L)
 }
 
 ///|
@@ -675,4 +747,88 @@ test "playback: probe_json escapes metacharacters" {
   want.write_string("d")
   let escaped = @libavformat.probe_json_escape_for_test(input.to_string())
   assert_eq(escaped, want.to_string())
+}
+
+///|
+/// Split a JSONL dump into its records (core ships no plain string split);
+/// the renderer always ends with a newline, so no dangling tail remains.
+fn playback_split_lines(s : String) -> Array[String] {
+  let out : Array[String] = []
+  let mut cur = StringBuilder()
+  for ch in s {
+    if ch == '\n' {
+      out.push(cur.to_string())
+      cur = StringBuilder()
+    } else {
+      cur.write_char(ch)
+    }
+  }
+  out
+}
+
+///|
+/// `dump_packets_json` renders one ffprobe-style record per packet on the
+/// container's own timebase. The Ogg fixture (a real docker-ffmpeg mux,
+/// ffprobe-verified) exercises the granule walk-back path: first packet at
+/// 0 ms and 960/48000 steps. The MKV fixture covers the `stream`/`limit`
+/// filters across a two-stream file; the WAV fixture the PCM chunking at
+/// the file rate.
+test "playback: dump_packets_json matches ffprobe-style packet records" {
+  // Ogg Opus: RFC 7845 granules count pre-skip, so after the walk-back the
+  // presentation timeline starts exactly at 0 and steps 20 ms per packet.
+  let ogg = @libavutil.av_base64_decode(playback_ogg_file_b64, 1 << 20).unwrap()
+  let ogg_lines = playback_split_lines(
+    @libavformat.MediaFile::open(ogg).dump_packets_json(),
+  )
+  assert_true(ogg_lines.length() >= 3)
+  assert_true(ogg_lines[0].contains("\"stream_index\": 0, \"pts_ms\": 0,"))
+  assert_true(ogg_lines[1].contains("\"pts_ms\": 20,"))
+  for line in ogg_lines {
+    ignore(@json.parse(line)) // each record is well-formed JSON
+    assert_true(line.contains("\"flags\": \"K\""))
+  }
+  // WAV: PCM chunks at the file rate. The 8 kHz mono s16 fixture pins the
+  // FFmpeg chunking exactly (ffprobe: 1024 bytes at 0 ms, then 576 at
+  // 64 ms - one 512-sample block, then the remainder).
+  let wav = @libavutil.av_base64_decode(playback_pcm_wav_b64, 1 << 20).unwrap()
+  let wav_lines = playback_split_lines(
+    @libavformat.MediaFile::open(wav).dump_packets_json(),
+  )
+  assert_eq(wav_lines.length(), 2)
+  assert_true(wav_lines[0].contains("\"pts_ms\": 0, \"size\": 1024,"))
+  assert_true(wav_lines[1].contains("\"pts_ms\": 64, \"size\": 576,"))
+  for line in wav_lines {
+    ignore(@json.parse(line))
+    assert_true(line.contains("\"stream_index\": 0"))
+    assert_true(line.contains("\"flags\": \"K\""))
+  }
+  // MKV: two streams; the stream filter keeps only stream 1's records and
+  // the limit caps emitted records (only emitted lines count toward it).
+  let mkv = @libavutil.av_base64_decode(playback_real_mkv_b64, 1 << 20).unwrap()
+  let audio_only = playback_split_lines(
+    @libavformat.MediaFile::open(mkv).dump_packets_json(stream=1),
+  )
+  assert_true(audio_only.length() >= 1)
+  for line in audio_only {
+    assert_true(line.contains("\"stream_index\": 1,"))
+  }
+  let capped = playback_split_lines(
+    @libavformat.MediaFile::open(mkv).dump_packets_json(limit=2),
+  )
+  assert_eq(capped.length(), 2)
+  assert_true(capped[0].contains("\"flags\": \"K\""))
+}
+
+///|
+/// `summary_json` renders the `decode-audio` stdout summary: the object
+/// parses as JSON and pins codec, channel count and decoded length.
+test "playback: DecodedAudio::summary_json reports the decode result" {
+  let wav = @libavutil.av_base64_decode(@probe_vectors.probe_fixture_wav, 1 << 20).unwrap()
+  let audio = @libavformat.decode_audio_file(wav)
+  let js = audio.summary_json()
+  ignore(@json.parse(js))
+  assert_true(js.contains("\"codec_name\": \"pcm_s16le\""))
+  assert_true(js.contains("\"channels\": 1"))
+  assert_true(js.contains("\"samples_per_channel\": "))
+  assert_true(js.contains("\"decoded_duration\": "))
 }

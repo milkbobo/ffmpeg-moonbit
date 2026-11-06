@@ -8792,3 +8792,42 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **验证**：`moon check --target wasm --deny-warn` 干净；全量 **1436/1436**。
   CLI ② 剩余四命令（dump-packets/decode-audio/extract-frame/extract-cover）
   的引擎已全部就绪（§311 decode_audio_file + to_wav_s16、§313 yuv_bytes）。
+
+## 315. CLI ②③：dump-packets / decode-audio + 三处 ffmpeg 对齐修复（ogg pts / opus 空帧 / pre-skip 裁剪）
+
+- **`MediaFile::dump_packets_json`**（`libavformat/playback_dump.mbt`，申报书②第二
+  命令引擎）：每包一行 JSONL——`stream_index`/`pts_ms`（按容器自身时间基换算，
+  `stream_timebase`：MP4 mdhd timescale、MKV 1e9/time_scale、Ogg 48 kHz、WAV 采样率）
+  /`size`/`flags`（K/-）；`stream=`/`limit=` 过滤（仅发射行计入 limit）。NaN/失控
+  时间戳渲染 `null`（ffprobe 的 N/A 口径）。
+- **`cmd/dump-packets` / `cmd/decode-audio`**：照 §314 cmd/probe 结构（x/fs + core/env）。
+  dump-packets 解析 `--stream N`/`--limit N`（`@string.parse_int`）；decode-audio 调
+  §311 `decode_audio_file` + `to_wav_s16` 写 `--output` WAV，stdout 打
+  `DecodedAudio::summary_json`（codec/rate/channels/样本数/容器时长/解码时长）。
+- **ogg.mbt pts 重写为 FFmpeg 语义**（对拍驱动的正确性修复）：逐行核对
+  oggdec.c `ogg_calc_pts` + oggparseopus.c `opus_packet`——非 EOS 页且 gp≥0 时每包
+  pts = 页 gp − 后缀和(duration) − pre_skip（后缀和数组实现）；EOS 页/无 gp 页走
+  lastpts/cur_dts 链（锚点 = 上一页原始 gp，流首为 0）+ 末包按闭页 granule
+  end-trim。效果：RFC 7845 gp 含 pre_skip 的文件（v1.opus）首包 pts=0 与 ffprobe
+  一致；ffmpeg mux 的 gp-不含-pre_skip 文件（wbtest 钉值 -312/648/…）逐位不变。
+- **opus 空熵帧修复**：`opus_rc_init` 原拒绝空帧 → TOC-only 包（1 字节，CELT
+  config 31）走 concealment 全零。放开后 BitReader 越界读零（ffmpeg 容忍语义），
+  空 CELT 帧解码出 MDCT 重叠的上帧衰减拖尾（145 样本），docker 对拍 v1.opus
+  12360 样本/ch max|diff|=1（全部 ±1 = ffmpeg float→s16 默认三角 dither）。
+- **decode_audio_file Ogg pre-skip 裁剪**：OpusHead pre_skip 是编码 priming，
+  ffmpeg 在解码器侧丢弃（initial_padding）；我们在拼接后裁掉每通道头部 N 样本。
+- **实跑验证**（docker linuxserver/ffmpeg:9.0.2 交叉）：dump-packets 四容器对齐
+  ffprobe `-show_packets`（Opus 0/20/40ms、MKV 0/40/80 + flags、M4A 含 -21.333ms
+  edit-list 起点、PCM WAV 1024@0ms/576@64ms 两包）；decode-audio 输出 WAV 与
+  ffmpeg 参考解码逐样本比对收敛。已知限制：AAC-in-WAV ffmpeg 走 AAC parser 按帧
+  分包（738/383），我们按 block_align 分块——PCM 完全一致。
+- **测试**：黑盒 +2（dump 三容器 + 过滤/上限钉值、summary_json 合法性+字段），
+  fixture +2（playback_ogg_file_b64 = v1.opus 实文件、playback_pcm_wav_b64）；
+  随修复更新 4 处旧预期（opus_rc 空帧 Ok、celt 空 b"" Ok、failed-frames 状态保持
+  去掉空帧行、drain 测试 2880→2568）。
+- **本轮坑**：标签参数调用是 `f(x=v)` 不是 `f(x~: v)`（parse error）；core 无
+  `print`/无普通 `split`（逐行 println + 自写 playback_split_lines）；`Ref.new`
+  直接作函数调用被禁（本仓库惯例 `let mut` 计数器 + match-break 即可）；
+  Int32 可直接索引数组且 Int32/Int 可混合比较（`p.stream_index != audio`）。
+- **验证**：`moon check --target wasm` 干净；全量 **1438/1438**。CLI 剩
+  extract-frame/extract-cover（§313 yuv_bytes 已就绪）。

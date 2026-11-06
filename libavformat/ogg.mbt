@@ -162,18 +162,43 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
     }
     if completed.length() > 0 {
       let end = if granule >= 0L { granule - pre_skip.to_int64() } else { -1L }
-      for i in 0..<completed.length() {
-        let (packet, nominal) = completed[i]
-        let pts = cumulative - pre_skip.to_int64()
-        let mut duration = nominal
-        if i == completed.length() - 1 &&
-          end >= 0L &&
-          end > pts &&
-          pts + duration.to_int64() > end {
-          duration = (end - pts).to_int()
+      if granule >= 0L && (header_type & 4) == 0 {
+        // FFmpeg's opus parser (oggparseopus.c) anchors every packet of a
+        // fresh non-EOS page by walking back from the page granule across
+        // the durations of the current and following packets. This honours
+        // granule gaps - e.g. RFC 7845 muxers that count pre-skip in the
+        // first audio page's granule - where a running total anchored at 0
+        // would start the stream at -pre_skip.
+        let n = completed.length()
+        // suffix[i] = sum of the nominals of packets i..n-1, so
+        // granule - suffix[i] is packet i's granule at its end.
+        let suffix : Array[Int64] = Array::make(n + 1, 0L)
+        for i = n - 1; i >= 0; i = i - 1 {
+          suffix[i] = suffix[i + 1] + completed[i].1.to_int64()
         }
-        packets.push({ data: packet, pts, duration, pos: page_pos, granule, })
-        cumulative = cumulative + nominal.to_int64()
+        for i = 0; i < n; i = i + 1 {
+          let (packet, nominal) = completed[i]
+          let pts = granule - suffix[i] - pre_skip.to_int64()
+          packets.push({ data: packet, pts, duration: nominal, pos: page_pos, granule })
+        }
+      } else {
+        // EOS pages and pages without a granule follow FFmpeg's
+        // lastpts/cur_dts chain instead: the first packet continues from
+        // the previous page's granule (0 at stream start) and the final
+        // packet is end-trimmed to what the closing granule says.
+        for i = 0; i < completed.length(); i = i + 1 {
+          let (packet, nominal) = completed[i]
+          let pts = cumulative - pre_skip.to_int64()
+          let mut duration = nominal
+          if i == completed.length() - 1 &&
+            end >= 0L &&
+            end > pts &&
+            pts + duration.to_int64() > end {
+            duration = (end - pts).to_int()
+          }
+          packets.push({ data: packet, pts, duration, pos: page_pos, granule, })
+          cumulative = cumulative + nominal.to_int64()
+        }
       }
       // The Ogg granule is the authoritative sample position at page end.
       if granule >= 0L {

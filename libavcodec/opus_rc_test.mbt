@@ -1,6 +1,9 @@
 ///|
 test "opus entropy: public input checks do not consume state" {
-  assert_true(@libavcodec.opus_rc_init(b"") is Err("opus: empty entropy frame"))
+  // Empty entropy input initializes fine (zero-yielding reads, FFmpeg
+  // parity for TOC-only packets); only the over-size input errors.
+  let empty = @libavcodec.opus_rc_init(b"").unwrap()
+  assert_true(empty.decode_uint(2U) is Ok(_))
   assert_true(
     @libavcodec.opus_rc_init(Bytes::make(1276, b'\x00'))
     is Err("opus: entropy frame exceeds 1275 bytes"),

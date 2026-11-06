@@ -68,9 +68,11 @@ fn OpusRangeDecoder::update(
 /// }
 /// ```
 pub fn opus_rc_init(data : Bytes) -> Result[OpusRangeDecoder, String] {
-  if data.length() == 0 {
-    return Err("opus: empty entropy frame")
-  }
+  // Empty entropy input is legal: a TOC-only packet's frame carries zero
+  // entropy bytes, and the bit reader yields zeros past the end (as
+  // FFmpeg's over-read-tolerant range decoder does). The frame decodes to
+  // zero coefficients and the CELT MDCT overlap turns that into the
+  // previous frame's decaying tail.
   if data.length() > 1275 {
     return Err("opus: entropy frame exceeds 1275 bytes")
   }

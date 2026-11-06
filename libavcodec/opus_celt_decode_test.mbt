@@ -29,6 +29,8 @@ test "opus CELT: reject invalid output channels and bandwidth" {
     decoder.decode_frame(b"\xff\xfe", 120, 20)
     is Err("opus: invalid CELT bandwidth"),
   )
-  assert_true(decoder.decode_frame(b"", 120, 13) is Err(_))
+  // An empty entropy frame decodes (FFmpeg parity: zero coefficients, the
+  // MDCT overlap emits the previous frame's decaying tail).
+  assert_true(decoder.decode_frame(b"", 120, 13) is Ok(_))
   assert_true(decoder.decode_frame(b"\xff\xfe", 119, 13) is Err(_))
 }

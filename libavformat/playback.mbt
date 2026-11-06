@@ -628,6 +628,23 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
       }
     }
   }
+  // Ogg Opus streams carry pre-skip in OpusHead: the first N decoded
+  // samples are encoder priming, not presentation audio. FFmpeg drops them
+  // at the decoder (initial_padding); trim them from the head of the rows.
+  if mf.source is OggOpus(demux) && demux.pre_skip > 0 {
+    let skip = if demux.pre_skip < rows[0].length() {
+      demux.pre_skip
+    } else {
+      rows[0].length()
+    }
+    for ch = 0; ch < rows.length(); ch = ch + 1 {
+      let trimmed : Array[Double] = []
+      for i = skip; i < rows[ch].length(); i = i + 1 {
+        trimmed.push(rows[ch][i])
+      }
+      rows[ch] = trimmed
+    }
+  }
   {
     samples: rows,
     sample_rate: dec.sample_rate(),
