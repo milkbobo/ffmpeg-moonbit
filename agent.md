@@ -340,7 +340,19 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳f §315 CLI ②③ + 三处 ffmpeg 对齐修复：
+  lengthSize 从偏移 21）。全量 1434/1434。⑳g §316 ffref 原生参考 oracle（C 绑定落地）：`ffref/` 包
+  全 native-gated——stub.c 走 mem AVIO + av_read_frame / avcodec+swr 首音频流
+  解码，Value-as-Bytes 扁平 blob（每包 32B 记录 + 每流 timebase / s16 PCM），
+  `ffref_probe`/`ffref_decode_audio` 安全包装。运行于专用镜像
+  ffmpeg-moonbit-ffref:nine（单阶段：aliyun apt + GitHub 官方 n9.0.2 tarball
+  静态库 + moon CLI；linuxserver ENTRYPOINT=ffmpeg 必须 --entrypoint sh）。
+  差分 4 条 38/38：Ogg/WAV 逐包 tick 级（±1 rescale）、真 FFmpeg opus 解码
+  逐样本（±1）；§315 三修复获进程内常驻回归。坑：moon Windows native 要
+  MSVC（本机 MinGW 不行）；新版 moon -p 是目录路径、test 独立编译单元（黑盒
+  模式 import 本包 + fixture 同文件）、suberror 才是 error 类型、assert msg=
+  标签、**AV_VERSION_INT 新编码 (maj<<16)|(min<<8)|micro**。wasm 全量
+  1438/1438 不受影响。
+  ⑳f §315 CLI ②③ + 三处 ffmpeg 对齐修复：
   `MediaFile::dump_packets_json`（playback_dump.mbt：按容器时间基 stream_timebase
   的 JSONL，stream/limit 过滤，仅发射行计数）+ `cmd/dump-packets`、`cmd/decode-audio`
   （--output 写 §311 WAV，stdout summary_json）；**ogg.mbt pts 重写为 ffmpeg 语义**

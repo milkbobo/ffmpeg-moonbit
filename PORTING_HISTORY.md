@@ -8831,3 +8831,45 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   Int32 可直接索引数组且 Int32/Int 可混合比较（`p.stream_index != audio`）。
 - **验证**：`moon check --target wasm` 干净；全量 **1438/1438**。CLI 剩
   extract-frame/extract-cover（§313 yuv_bytes 已就绪）。
+
+## 316. ffref：FFmpeg 9.0.2 原生参考 oracle（C 绑定，进程内差分对拍基建）
+
+- **动机**：把对拍从 docker ffprobe 往返升级为进程内直查——`moonbit-c-binding` /
+  `make-moonbit-c-bindings` 两技能的落地。后续任何移植切片都能用真 FFmpeg
+  （与迁移目标同源 n9.0.2）在同一进程里逐包/逐样本对拍。
+- **形态**（`ffref/` 包，全文件 native-gated，wasm 主套件不受影响）：
+  - `ffref_stub.c`：mem AVIO 打开 → avformat_find_stream_info → av_read_frame /
+  首音频流 avcodec + swr(s16 无 dither) 解码；全部以 Value-as-Bytes 扁平 LE
+  blob 返回（头 + 每流 timebase + 每包 32B 记录 / 头 + interleaved PCM），
+  NULL→`FFRefError`（suberror）。pts/dts 以 AV_TIME_BASE 微秒（N/A=INT64_MIN）。
+  - `ffi.mbt`（`#borrow` extern）/`ffref.mbt`（safe API：`FFRefProbe`/`FFRefAudio`）。
+- **运行环境**：moon 的 Windows native 后端要求 MSVC（runtime 源码硬编码
+  `#error only MSVC`，本机仅 MinGW），故 oracle 在专用镜像
+  `ffmpeg-moonbit-ffref:nine` 内跑：单阶段 Dockerfile（aliyun apt 源；
+  GitHub 官方 n9.0.2 tarball——宿主源码树 hevcdec.c 带旧实验损伤不可用；
+  `--disable-programs/avdevice/swscale/avfilter/network` 静态库 make install
+  /usr/local；装 moon CLI。**坑：linuxserver 基础镜像 ENTRYPOINT=ffmpeg，必须
+  `--entrypoint /bin/sh`**）：
+  ```
+  docker run --rm --entrypoint /bin/sh -v "D:/project/FFmpeg-n9.0.2/moonbit:/work" -w /work     ffmpeg-moonbit-ffref:nine -c "/root/.moon/bin/moon update >/dev/null 2>&1;     /root/.moon/bin/moon test --target native -p ffref --target-dir /tmp/mbuild"
+  ```
+  （一次性容器内 `moon update` 拉 registry 索引；--target-dir 离开 Windows 挂载卷）
+- **差分测试**（4 条，38/38 绿）：libavformat 63 版本钉死；Ogg/WAV 逐包
+  tick 级对拍（oracle µs 反推 tick，±1 rescale 舍入；size/keyframe/stream
+  精确）；**真 FFmpeg opus 解码逐样本对拍 `decode_audio_file`（±1 舍入）**——
+  §315 的三处修复（ogg pts 回退、空熵帧 MDCT 拖尾、pre-skip 裁剪）由此获得
+  进程内常驻回归保护。
+- **坑清单**（新版 moon 0.1.20261104 容器内实测）：`-p` 是目录路径语义
+  （`-p ffref`）；test 文件是独立编译单元——顶层 let/私有 extern/构造器
+  一律不可见，须同文件放 fixture + `for "test"` import 本包（黑盒模式）；
+  `assert_*(cond, msg="...")` msg 是标签参数且 raise Error 不能出现在
+  `raise 具体类型` 的函数里；`suberror` 才是 error 类型（enum 不行）；
+  `moonbitlang/core/**debug**` 通配不识别（改普通包名，老版兼容）；
+  String 无 substring/find（对拍逻辑绕开字符串解析，直接 tick 级）；
+  **FFmpeg 9 的 AV_VERSION_INT 改为 (major<<16)|(minor<<8)|micro**（63.1.102
+  = 4129126，不是 63*1e6 编码）。转义地狱再+1：python 生成含 `'
+'`/字面量
+  拼接的测试文件会被吃层——fixture 提取用「无分号字面量」正则会吞后续
+  声明，最终 fixture 与测试代码全部 Edit/Write 工具直写。
+- **验证**：容器 native **38/38**；本机 wasm 全量 **1438/1438**（ffref 空
+  包不参与）。镜像构建脚本在 `.scratch/ffref/Dockerfile`（gitignored）。

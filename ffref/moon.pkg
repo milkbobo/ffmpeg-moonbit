@@ -1,0 +1,28 @@
+import {
+  "milkbobo/ffmpeg-moonbit/ffref" @ffref,
+  "milkbobo/ffmpeg-moonbit/libavformat" @avf,
+  "milkbobo/ffmpeg-moonbit/libavutil" @libavutil,
+} for "test"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+options(
+  "native-stub": ["ffref_stub.c"],
+  targets: {
+    "ffi.mbt": ["native"],
+    "ffref.mbt": ["native"],
+    "ffref_test.mbt": ["native"],
+  },
+  link: {
+    "native": {
+      // The oracle links the FFmpeg n9.0.2 static libraries built into the
+      // ffmpeg-moonbit-ffref docker image (see .scratch/ffref/Dockerfile);
+      // moon's Windows native backend requires MSVC, so this package runs
+      // native tests inside that image only.
+      "cc-flags": "-I/usr/local/include",
+      "cc-link-flags": "-L/usr/local/lib -lavformat -lavcodec -lswresample -lavutil -lm",
+    },
+  },
+)
