@@ -1,13 +1,13 @@
 import {
-  "ffmpeg/moonbit/libavutil",
-  "ffmpeg/moonbit/libavcodec",
+  "milkbobo/ffmpeg-moonbit/libavutil",
+  "milkbobo/ffmpeg-moonbit/libavcodec",
   "moonbitlang/core/double",
   "moonbitlang/core/string",
   "moonbitlang/core/debug",
 }
 
 import {
-  "ffmpeg/moonbit/libavformat/probe_vectors",
+  "milkbobo/ffmpeg-moonbit/libavformat/probe_vectors",
   "moonbitlang/core/math",
   "moonbitlang/core/json",
 } for "test"

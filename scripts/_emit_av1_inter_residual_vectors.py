@@ -34,7 +34,7 @@ def main():
     pkg = os.path.join(OUTDIR, 'moon.pkg')
     if not os.path.exists(pkg):
         io.open(pkg, 'w', encoding='utf-8', newline='\n').write(
-            'import {\n  "ffmpeg/moonbit/libavcodec",\n} for "test"\n')
+            'import {\n  "milkbobo/ffmpeg-moonbit/libavcodec",\n} for "test"\n')
     out = io.StringIO()
     w = out.write
     w('///|\n')

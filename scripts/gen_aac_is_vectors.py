@@ -314,7 +314,7 @@ def main():
     with open(os.path.join(OUT_DIR, "fixtures.mbt"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(parts))
     with open(os.path.join(OUT_DIR, "moon.pkg"), "w", encoding="utf-8", newline="\n") as fh:
-        fh.write('import {\n  "ffmpeg/moonbit/libavcodec",\n} for "test"\n')
+        fh.write('import {\n  "milkbobo/ffmpeg-moonbit/libavcodec",\n} for "test"\n')
     total = sum(sum(r) for r in
                 [[f["band"][g][0] for g in range(NBANDS)] for f in frames])
     print("wrote %s/fixtures.mbt (%d frames, %d IS bands in the reference)"

@@ -1,8 +1,8 @@
 import {
   "moonbitlang/core/math",
   "moonbitlang/core/v128",
-  "ffmpeg/moonbit/libavutil",
-  "ffmpeg/moonbit/libavcodec/av1_mc_core",
+  "milkbobo/ffmpeg-moonbit/libavutil",
+  "milkbobo/ffmpeg-moonbit/libavcodec/av1_mc_core",
 }
 
 warnings = "-alert_experimental"

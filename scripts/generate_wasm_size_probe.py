@@ -37,10 +37,10 @@ PKGS = OrderedDict([
 
 MOON_PKG = """\
 import {
-  "ffmpeg/moonbit/libavutil",
-  "ffmpeg/moonbit/libavformat",
-  "ffmpeg/moonbit/libavcodec",
-  "ffmpeg/moonbit/libavcodec/av1_mc_core",
+  "milkbobo/ffmpeg-moonbit/libavutil",
+  "milkbobo/ffmpeg-moonbit/libavformat",
+  "milkbobo/ffmpeg-moonbit/libavcodec",
+  "milkbobo/ffmpeg-moonbit/libavcodec/av1_mc_core",
 }
 
 pkgtype(kind: "executable")

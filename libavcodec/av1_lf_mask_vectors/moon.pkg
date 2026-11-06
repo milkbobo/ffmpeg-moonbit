@@ -1,3 +1,3 @@
 import {
-  "ffmpeg/moonbit/libavcodec",
+  "milkbobo/ffmpeg-moonbit/libavcodec",
 } for "test"

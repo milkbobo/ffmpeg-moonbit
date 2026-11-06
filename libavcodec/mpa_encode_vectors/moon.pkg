@@ -1,4 +1,4 @@
 import {
-  "ffmpeg/moonbit/libavcodec",
+  "milkbobo/ffmpeg-moonbit/libavcodec",
   "moonbitlang/core/math",
 } for "test"

@@ -1,4 +1,4 @@
 import {
-  "ffmpeg/moonbit/libavformat",
-  "ffmpeg/moonbit/libavutil",
+  "milkbobo/ffmpeg-moonbit/libavformat",
+  "milkbobo/ffmpeg-moonbit/libavutil",
 } for "test"

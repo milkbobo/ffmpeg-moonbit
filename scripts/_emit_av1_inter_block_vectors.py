@@ -55,7 +55,7 @@ def main():
     io.open(OUT, 'w', encoding='utf-8', newline='\n').write(body)
     with io.open(os.path.join(os.path.dirname(OUT), 'moon.pkg'), 'w',
                  encoding='utf-8', newline='\n') as f:
-        f.write('import {\n  "ffmpeg/moonbit/libavcodec",\n} for "test"\n')
+        f.write('import {\n  "milkbobo/ffmpeg-moonbit/libavcodec",\n} for "test"\n')
     print('wrote', OUT, len(body), 'bytes')
 
 

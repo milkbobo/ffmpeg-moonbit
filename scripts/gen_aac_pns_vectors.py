@@ -172,7 +172,7 @@ def main():
         f.write("\n".join(body))
 
     pkg = (
-        'import {\n  "ffmpeg/moonbit/libavcodec",\n} for "test"\n'
+        'import {\n  "milkbobo/ffmpeg-moonbit/libavcodec",\n} for "test"\n'
     )
     with open(os.path.join(OUT_DIR, "moon.pkg"), "w", encoding="utf-8", newline="\n") as f:
         f.write(pkg)
