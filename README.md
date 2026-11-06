@@ -235,7 +235,11 @@ JSON CLI 命令（`cmd/`）：`probe`、`dump-packets`、`decode-audio`、
 **libswscale 移植开篇**（`libswscale/`）：YUV420P -> RGB24/BGR24
 （`yuv2rgb_1_c_template` 查表语义，表数据从 FFmpeg 9.0.2
 `ff_yuv2rgb_c_init_tables` 全量 probe 内嵌——FFmpeg 9 的系数经 cms
-双精度通路重算，不可公式复算）。包已发布
+双精度通路重算，不可公式复算）；420/422/444 三种子采样。**libswresample
+开篇**（`libswresample/`）：同采样率格式/通道转换（planar float ->
+packed s16、mono->stereo），float->s16 采用 FFmpeg 的
+`av_clip_int16(lrintf())` round-half-to-even 舍入（decode-audio 的 WAV
+导出随之与 FFmpeg 舍入语义一致）。包已发布
 [mooncakes.io/milkbobo/ffmpeg-moonbit](https://mooncakes.io/docs/milkbobo/ffmpeg-moonbit)
 （`moon add milkbobo/ffmpeg-moonbit`）；`ffref/` 为开发用原生 FFmpeg 参考
 oracle（native-gated，需 FFmpeg 静态库，见
@@ -251,7 +255,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-11-07）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **1439/1439** 通过（另有 ffref 原生 oracle 差分 38/38，运行于 docker 镜像内）。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-11-07）：`moon check --target wasm --deny-warn --no-render` 通过，Wasm 测试 **1446/1446** 通过（另有 ffref 原生 oracle 差分 38/38，运行于 docker 镜像内）。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

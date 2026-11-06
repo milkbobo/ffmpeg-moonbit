@@ -1,6 +1,6 @@
 name = "milkbobo/ffmpeg-moonbit"
 
-version = "0.3.0"
+version = "0.4.0"
 
 license = "LGPL-2.1-or-later"
 
