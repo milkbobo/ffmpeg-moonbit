@@ -340,7 +340,14 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳h §317 CLI ④⑤收口：`cmd/extract-frame`
+  lengthSize 从偏移 21）。全量 1434/1434。⑳i §318 ffref 视频帧差分：
+  `ffref_decode_video`（真 libavcodec 解码→紧凑 planar YUV，chroma_mode
+  0/1/2=420/422/444 与 yuv_bytes 同布局），H.264 4:4:4 fixture 全帧**与真
+  FFmpeg 逐字节恒等**（ffref 39/39）。坑：**FFmpeg 9 AVPixelFormat 枚举重排
+  （5=YUV444P 非 YUVJ420P）按符号名判**；独立 C 诊断传裸 malloc 指针会让
+  `Moonbit_array_length` 读垃圾（宏从对象头取 length）；mem AVIO 补
+  AVIO_SEEKABLE_NORMAL。
+  ⑳h §317 CLI ④⑤收口：`cmd/extract-frame`
   （首视频流第 N 帧 planar YUV + JSON 摘要，docker 对拍首帧 MD5 逐字节一致）与
   `cmd/extract-cover`（MKV Attachments 新移植 + MP4 ilst/covr 捕获 →
   `MediaFile::cover` 统一 API；两容器提取 MD5 恒等 2e84456f…；MP4 covr fixture

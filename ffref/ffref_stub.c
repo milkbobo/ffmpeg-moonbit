@@ -16,6 +16,7 @@
 #include "libavutil/opt.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -73,6 +74,9 @@ static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
   }
   fmt->pb = avio;
   fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+  // Matroska and a few other demuxers refuse to probe on a non-seekable
+  // AVIO context; the memory backend is fully seekable.
+  avio->seekable |= AVIO_SEEKABLE_NORMAL;
   int ret = avformat_open_input(&fmt, NULL, NULL, NULL);
   if (ret < 0) {
     // On failure avformat_open_input frees the context itself.
@@ -329,6 +333,187 @@ moonbit_bytes_t ffref_decode_audio(moonbit_bytes_t data) {
   free(pcm);
   swr_free(&swr);
   av_channel_layout_uninit(&out_layout);
+  avcodec_free_context(&cc);
+  close_input(fmt, avio);
+  return out;
+}
+
+// ---- video oracle ---------------------------------------------------------
+
+// Map an 8-bit planar YUV pixel format to its chroma mode: 0 = 4:2:0,
+// 1 = 4:2:2, 2 = 4:4:4; -1 for anything else (high bit depth, packed,
+// grayscale...). Full-range legacy variants (yuvj420p and friends) map the
+// same way - their plane layout is identical, which is all byte-level
+// differential testing needs.
+static int planar_chroma_mode(int format) {
+  switch (format) {
+  case AV_PIX_FMT_YUV420P:
+  case AV_PIX_FMT_YUVJ420P:
+    return 0;
+  case AV_PIX_FMT_YUV422P:
+  case AV_PIX_FMT_YUVJ422P:
+    return 1;
+  case AV_PIX_FMT_YUV444P:
+  case AV_PIX_FMT_YUVJ444P:
+    return 2;
+  default:
+    return -1;
+  }
+}
+
+// Chroma plane dimensions for a chroma mode.
+static void chroma_dims(int mode, int w, int h, int *cw, int *ch) {
+  if (mode == 0) {
+    *cw = (w + 1) / 2;
+    *ch = (h + 1) / 2;
+  } else if (mode == 1) {
+    *cw = (w + 1) / 2;
+    *ch = h;
+  } else {
+    *cw = w;
+    *ch = h;
+  }
+}
+
+// Append one decoded frame as compact planar YUV to *buf (growing it as
+// needed). Returns 0 on success; the first frame fixes the geometry.
+static int append_planar(uint8_t **buf, size_t *cap, size_t *len,
+                         AVFrame *frame, int *out_mode, int *out_w,
+                         int *out_h) {
+  int mode = planar_chroma_mode(frame->format);
+  if (mode < 0 || frame->width <= 0 || frame->height <= 0 ||
+      frame->width > 8192 || frame->height > 8192) {
+    return -1;
+  }
+  if (*len == 0) {
+    *out_mode = mode;
+    *out_w = frame->width;
+    *out_h = frame->height;
+  } else if (frame->width != *out_w || frame->height != *out_h ||
+             mode != *out_mode) {
+    return -1; // geometry changes are out of scope
+  }
+  int w = frame->width, h = frame->height, cw, ch;
+  chroma_dims(mode, w, h, &cw, &ch);
+  size_t frame_len = (size_t)w * h + 2 * (size_t)cw * ch;
+  size_t need = *len + frame_len + 4096;
+  if (need > *cap) {
+    size_t next = *cap;
+    while (next < need)
+      next *= 2;
+    uint8_t *grown = realloc(*buf, next);
+    if (!grown)
+      return -1;
+    *buf = grown;
+    *cap = next;
+  }
+  uint8_t *dst = *buf + *len;
+  for (int row = 0; row < h; row++)
+    memcpy(dst + (size_t)row * w,
+           frame->data[0] + (size_t)row * frame->linesize[0], w);
+  dst += (size_t)w * h;
+  for (int row = 0; row < ch; row++)
+    memcpy(dst + (size_t)row * cw,
+           frame->data[1] + (size_t)row * frame->linesize[1], cw);
+  dst += (size_t)cw * ch;
+  for (int row = 0; row < ch; row++)
+    memcpy(dst + (size_t)row * cw,
+           frame->data[2] + (size_t)row * frame->linesize[2], cw);
+  *len += frame_len;
+  return 0;
+}
+
+// Decode every frame currently available from the codec context.
+static int drain_frames(AVCodecContext *cc, uint8_t **buf, size_t *cap,
+                        size_t *len, int *n_frames, int *out_mode, int *out_w,
+                        int *out_h) {
+  AVFrame *frame = av_frame_alloc();
+  if (!frame)
+    return -1;
+  for (;;) {
+    int ret = avcodec_receive_frame(cc, frame);
+    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+      break;
+    if (ret < 0 || *n_frames >= 10000 ||
+        append_planar(buf, cap, len, frame, out_mode, out_w, out_h) < 0) {
+      fprintf(stderr,
+              "ffref: video frame rejected (ret=%d pix_fmt=%d %dx%d)\n", ret,
+              frame->format, frame->width, frame->height);
+      av_frame_free(&frame);
+      return -1;
+    }
+    (*n_frames)++;
+    av_frame_unref(frame);
+  }
+  av_frame_free(&frame);
+  return 0;
+}
+
+// Blob layout (little-endian): n_frames i32, width i32, height i32,
+// chroma_mode i32 (0 = 4:2:0, 1 = 4:2:2, 2 = 4:4:4), then per frame
+// w*h + 2*cw*ch bytes of compact planar YUV (Y, then Cb, then Cr).
+MOONBIT_FFI_EXPORT
+moonbit_bytes_t ffref_decode_video(moonbit_bytes_t data) {
+  AVFormatContext *fmt = NULL;
+  AVIOContext *avio = NULL;
+  if (open_input(data, &fmt, &avio) < 0)
+    return NULL;
+  int vidx = av_find_best_stream(fmt, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+  if (vidx < 0) {
+    close_input(fmt, avio);
+    return NULL;
+  }
+  AVStream *st = fmt->streams[vidx];
+  const AVCodec *dec = avcodec_find_decoder(st->codecpar->codec_id);
+  AVCodecContext *cc = dec ? avcodec_alloc_context3(dec) : NULL;
+  if (!cc || avcodec_parameters_to_context(cc, st->codecpar) < 0 ||
+      avcodec_open2(cc, dec, NULL) < 0) {
+    avcodec_free_context(&cc);
+    close_input(fmt, avio);
+    return NULL;
+  }
+
+  size_t cap = 1 << 22, len = 0;
+  uint8_t *buf = malloc(cap);
+  int failed = buf == NULL;
+  int n_frames = 0, mode = -1, width = 0, height = 0;
+  AVPacket *pkt = failed ? NULL : av_packet_alloc();
+  while (!failed && av_read_frame(fmt, pkt) >= 0) {
+    if (pkt->stream_index != vidx) {
+      av_packet_unref(pkt);
+      continue;
+    }
+    if (avcodec_send_packet(cc, pkt) < 0) {
+      failed = 1;
+      break;
+    }
+    av_packet_unref(pkt);
+    if (drain_frames(cc, &buf, &cap, &len, &n_frames, &mode, &width,
+                     &height) < 0) {
+      failed = 1;
+      break;
+    }
+  }
+  if (!failed && avcodec_send_packet(cc, NULL) >= 0) {
+    if (drain_frames(cc, &buf, &cap, &len, &n_frames, &mode, &width, &height) <
+        0)
+      failed = 1;
+  }
+
+  moonbit_bytes_t out = NULL;
+  if (!failed && n_frames > 0) {
+    out = moonbit_make_bytes((int32_t)(16 + len), 0);
+    if (out) {
+      put_i32(out + 0, n_frames);
+      put_i32(out + 4, width);
+      put_i32(out + 8, height);
+      put_i32(out + 12, mode);
+      if (len > 0)
+        memcpy(out + 16, buf, len);
+    }
+  }
+  av_packet_free(&pkt);
+  free(buf);
   avcodec_free_context(&cc);
   close_input(fmt, avio);
   return out;

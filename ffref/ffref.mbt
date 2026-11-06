@@ -101,6 +101,64 @@ pub fn ffref_probe(data : Bytes) -> FFRefProbe raise FFRefError {
 }
 
 ///|
+/// The oracle's 8-bit planar video decode: compact YUV frames plus the
+/// (constant) geometry. `chroma_mode` is 0 for 4:2:0, 1 for 4:2:2, 2 for
+/// 4:4:4 - the same plane layout `VideoFrame::yuv_bytes` emits.
+pub struct FFRefVideo {
+  width : Int
+  height : Int
+  chroma_mode : Int
+  frames : Array[Bytes]
+}
+
+///|
+/// Accessors.
+pub fn FFRefVideo::width(self : FFRefVideo) -> Int {
+  self.width
+}
+
+///|
+pub fn FFRefVideo::height(self : FFRefVideo) -> Int {
+  self.height
+}
+
+///|
+pub fn FFRefVideo::chroma_mode(self : FFRefVideo) -> Int {
+  self.chroma_mode
+}
+
+///|
+pub fn FFRefVideo::frames(self : FFRefVideo) -> Array[Bytes] {
+  self.frames
+}
+
+///|
+/// Decode `data`'s first video stream with the real FFmpeg decoder chain.
+/// Only fixed-geometry 8-bit planar YUV (4:2:0/4:2:2/4:4:4) is supported;
+/// anything else raises.
+pub fn ffref_decode_video(data : Bytes) -> FFRefVideo raise FFRefError {
+  let blob = match ffref_decode_video_ffi(data) {
+    Some(v) => v
+    None => raise OracleFailed(
+        "FFmpeg could not decode the first video stream as fixed 8-bit planar YUV",
+      )
+  }
+  let n = rd_i32(blob, 0)
+  let w = rd_i32(blob, 4)
+  let h = rd_i32(blob, 8)
+  let mode = rd_i32(blob, 12)
+  let cw = if mode == 2 { w } else { (w + 1) / 2 }
+  let ch = if mode == 0 { (h + 1) / 2 } else { h }
+  let frame_len = w * h + 2 * cw * ch
+  let frames : Array[Bytes] = []
+  for i = 0; i < n; i = i + 1 {
+    let base = 16 + i * frame_len
+    frames.push(blob[base:base + frame_len].to_owned())
+  }
+  { width: w, height: h, chroma_mode: mode, frames }
+}
+
+///|
 /// Decode `data`'s first audio stream with the real FFmpeg decoder chain.
 pub fn ffref_decode_audio(data : Bytes) -> FFRefAudio raise FFRefError {
   let blob = match ffref_decode_audio_ffi(data) {

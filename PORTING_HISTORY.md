@@ -8901,3 +8901,23 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   Ogg 无封面 None）；全量 **1439/1439**。
 - 申报书②五命令（probe/dump-packets/decode-audio/extract-frame/
   extract-cover）全部交付。
+
+## 318. ffref 视频帧差分：真 FFmpeg 解码 vs VideoDecoder 逐字节
+
+- **oracle 扩展**（`ffref_stub.c`）：`ffref_decode_video`——首视频流经真
+  libavcodec 解码，紧凑 planar YUV 逐帧打包（header: n_frames/width/height/
+  chroma_mode；0=4:2:0、1=4:2:2、2=4:4:4，与 `VideoFrame::yuv_bytes` 同布局），
+  `planar_chroma_mode` 映射 YUV/YUVJ 420/422/444（高位深/packed/变几何拒绝）。
+  `append_planar`/`drain_frames` 共用主循环与 drain；拒绝原因打 stderr。
+- **安全 API**：`FFRefVideo {width, height, chroma_mode, frames}` +
+  `ffref_decode_video`。
+- **差分测试**（ffref 累计 39/39）：playback_real_mkv（H.264 High 4:4:4
+  Predictive，32×32）——oracle 报 chroma_mode=2，我们 `VideoDecoder` 全帧
+  `yuv_bytes` **与真 FFmpeg 逐字节恒等**；尺寸一致。
+- **两个定位坑**：① mem AVIO 首版未标 `AVIO_SEEKABLE_NORMAL`（Matroska 实测
+  不依赖它，但已补上确保 seek 型 demuxer 可用）；② **FFmpeg 9 的
+  `AVPixelFormat` 枚举重排——5 是 YUV444P 而非老版的 YUVJ420P**，用数值
+  判断 pix_fmt 必错，按符号名映射。③ 诊断陷阱：裸 `malloc` 指针传给 stub
+  后 `Moonbit_array_length` 读到垃圾长度（它从对象头取 length），独立 C 诊断
+  程序必须自己构造 moonbit 对象头或绕开该宏——否则会误判 "open failed"。
+- **验证**：容器 native 39/39；本机 wasm 1439/1439（ffref 空包）。

@@ -10,4 +10,8 @@ extern "c" fn ffref_packets_ffi(data : Bytes) -> Bytes? = "ffref_packets"
 extern "c" fn ffref_decode_audio_ffi(data : Bytes) -> Bytes? = "ffref_decode_audio"
 
 ///|
+#borrow(data)
+extern "c" fn ffref_decode_video_ffi(data : Bytes) -> Bytes? = "ffref_decode_video"
+
+///|
 extern "c" fn ffref_avformat_version() -> Int = "ffref_avformat_version"
