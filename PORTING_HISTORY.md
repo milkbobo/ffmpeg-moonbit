@@ -8921,3 +8921,27 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   后 `Moonbit_array_length` 读到垃圾长度（它从对象头取 length），独立 C 诊断
   程序必须自己构造 moonbit 对象头或绕开该宏——否则会误判 "open failed"。
 - **验证**：容器 native 39/39；本机 wasm 1439/1439（ffref 空包）。
+
+## 319. HEVC/VP9/AV1 真实流 e2e + ffref 差分（§313 遗留收口）
+
+- **fixture**：docker 三条真实流（testsrc2 64×64 10fps 0.5s yuv420p，各 5 帧）：
+  libx265（keyint 3，含 B 帧）、libvpx-vp9（g 3）、libaom-av1（g 3），MKV/WebM
+  容器。黑盒内嵌 `playback_e2e_test.mbt`。
+- **修复一（HEVC e2e 阻断）**：x265 流首 slice 报 "missing PPS"——Matroska 样本
+  不带带内参数集，而 facade 只从 hvcC 取了 lengthSize。新增
+  `hevc_hvcc_paramsets`（镜像 ffmpeg `hevc_parse_extradata`：numOfArrays 逐
+  NAL 展开，按 `nal_length_size` 前缀），open 时 seed 进 HEVC 批式的 pending。
+- **修复二（HEVC B 帧显示序）**：批式解码器契约是解码序（带 POC），B 帧流
+  中间三帧与 ffmpeg 显示序恰好倒序；`finish_video` 输出前按 POC 选择排序。
+  修后 5 帧 MD5 序列与 ffmpeg 完全一致。
+- **修复三（ffref SIGSEGV 根因）**：`MemIO` 原是 `open_input` 的**栈变量**，
+  avio 与回调活得比它久——多阶段 seek 的 demuxer（matroska）触发栈重用读悬
+  垂指针。堆分配 + close_input/失败路径 free（ogg/wav 一次性读完属侥幸未炸；
+  C 绑定技能「#borrow vs 存储」条款的正反面教材）。
+- **ffref 差分**（42/42）：HEVC、VP9 真实流全帧**与真 FFmpeg 逐字节恒等**；
+  AV1 因镜像 FFmpeg 无 libdav1d（内置 AV1 解码器 0 帧）暂无法字节对拍——
+  测试如实记录「oracle 拒绝」语义，镜像加 `--enable-libdav1d` 后转正。
+- **坑**：`try?` 已从 moon 移除（用 `try Some(e) catch { _ => None }`）；
+  catch 臂类型必须同成功值（断言「预期 raise」用 try-Some 形状）；x265
+  keyint=3 的 5 帧流解码序/显示序差异是 B 帧重排的天然教材。
+- **验证**：容器 native **42/42**；本机 wasm 全量绿。

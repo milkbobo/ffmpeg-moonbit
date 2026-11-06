@@ -912,6 +912,54 @@ pub fn VideoDecoder::height(self : VideoDecoder) -> Int32 {
 }
 
 ///|
+/// Unroll the parameter-set NALs embedded in an hvcC record (VPS/SPS/PPS
+/// and friends) into stream-format bytes - each NAL prefixed with a
+/// `nal_length_size` length, exactly like the in-band slices they precede.
+/// This mirrors FFmpeg's `hevc_parse_extradata` path: Matroska samples
+/// never repeat the parameter sets in band, so the decoder session must be
+/// seeded with them or the first slice fails with "missing PPS".
+fn hevc_hvcc_paramsets(extradata : Bytes, nal_length_size : Int) -> Bytes? {
+  if extradata.length() < 23 || extradata[0].to_int() != 1 {
+    return None
+  }
+  let out : Array[Byte] = []
+  let mut pos = 22
+  let num_arrays = extradata[pos].to_int()
+  pos = pos + 1
+  for _a = 0; _a < num_arrays; _a = _a + 1 {
+    pos = pos + 1 // array_completeness + NAL_unit_type
+    if pos + 2 > extradata.length() {
+      return None
+    }
+    let num_nalus = (extradata[pos].to_int() << 8) | extradata[pos + 1].to_int()
+    pos = pos + 2
+    for _n = 0; _n < num_nalus; _n = _n + 1 {
+      if pos + 2 > extradata.length() {
+        return None
+      }
+      let len = (extradata[pos].to_int() << 8) | extradata[pos + 1].to_int()
+      pos = pos + 2
+      if len <= 0 || pos + len > extradata.length() {
+        return None
+      }
+      for i = 0; i < nal_length_size; i = i + 1 {
+        let shift = (nal_length_size - 1 - i) * 8
+        out.push(((len >> shift) & 0xFF).to_byte())
+      }
+      for i = 0; i < len; i = i + 1 {
+        out.push(extradata[pos + i])
+      }
+      pos = pos + len
+    }
+  }
+  if out.length() == 0 {
+    None
+  } else {
+    Some(Bytes::from_array(out[:]))
+  }
+}
+
+///|
 /// Build the decoder for one video stream. Codecs without a ported decoder
 /// raise `UnsupportedCodec`.
 pub fn VideoDecoder::open(info : StreamInfo) -> VideoDecoder raise MediaError {
@@ -954,7 +1002,12 @@ pub fn VideoDecoder::open(info : StreamInfo) -> VideoDecoder raise MediaError {
         dec: Hevc(nal_length_size),
         width: info.width,
         height: info.height,
-        pending: [],
+        // Seed the batch with the hvcC parameter sets so the first slice
+        // finds its VPS/SPS/PPS (Matroska never carries them in band).
+        pending: match hevc_hvcc_paramsets(extradata, nal_length_size) {
+          Some(seed) => [seed]
+          None => []
+        },
       }
     }
     "vp9" =>
@@ -1060,6 +1113,21 @@ pub fn VideoDecoder::finish_video(
       let frames : Array[VideoFrame] = []
       for frame in out {
         frames.push({ data: Hevc(frame), })
+      }
+      // The batch decoder emits pictures in decode order; present them in
+      // POC order, the order FFmpeg's receive_frame yields B-frame streams.
+      for i = 0; i < frames.length(); i = i + 1 {
+        let mut best = i
+        for j = i + 1; j < frames.length(); j = j + 1 {
+          if frames[j].poc() < frames[best].poc() {
+            best = j
+          }
+        }
+        if best != i {
+          let tmp = frames[i]
+          frames[i] = frames[best]
+          frames[best] = tmp
+        }
       }
       frames
     }

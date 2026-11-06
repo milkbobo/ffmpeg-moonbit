@@ -340,7 +340,15 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳i §318 ffref 视频帧差分：
+  lengthSize 从偏移 21）。全量 1434/1434。⑳j §319 HEVC/VP9/AV1 真实流 e2e（§313
+  遗留收口）：docker 三流 fixture（64×64×5 帧）；修 HEVC "missing PPS"（hvcC
+  参数集 numOfArrays 展开 seed 进批式 pending，镜像 hevc_parse_extradata）+
+  HEVC B 帧显示序（finish_video 按 POC 排序）；**ffref SIGSEGV 根因=MemIO 栈
+  变量被 avio 回调悬垂引用**（堆分配修复——C 绑定「#borrow vs 存储」正反面
+  教材）。ffref 42/42：HEVC/VP9 全帧与真 FFmpeg 逐字节恒等；AV1 因镜像无
+  libdav1d 暂记 oracle 拒绝语义。坑：moon `try?` 已移除（try Some/catch None）；
+  catch 臂类型须同成功值。
+  ⑳i §318 ffref 视频帧差分：
   `ffref_decode_video`（真 libavcodec 解码→紧凑 planar YUV，chroma_mode
   0/1/2=420/422/444 与 yuv_bytes 同布局），H.264 4:4:4 fixture 全帧**与真
   FFmpeg 逐字节恒等**（ffref 39/39）。坑：**FFmpeg 9 AVPixelFormat 枚举重排

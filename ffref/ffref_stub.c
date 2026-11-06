@@ -56,20 +56,31 @@ static int64_t mem_seek(void *opaque, int64_t offset, int whence) {
 // Open `data` through the real libavformat demuxer. Returns 0 on success.
 static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
                       AVIOContext **out_avio) {
-  MemIO io = { data, 0, (int64_t)Moonbit_array_length(data) };
+  // Heap-allocated: the AVIOContext (and thus the read/seek callbacks)
+  // outlives this frame, so the callback state must not live on the stack
+  // (a stack MemIO dangles once open_input returns and demuxers that seek
+  // across phases then read through freed memory).
+  MemIO *io = malloc(sizeof(MemIO));
+  if (!io)
+    return AVERROR(ENOMEM);
+  io->data = data;
+  io->pos = 0;
+  io->len = (int64_t)Moonbit_array_length(data);
   int bufsize = 1 << 16;
   uint8_t *avbuf = av_malloc(bufsize);
   if (!avbuf)
     return AVERROR(ENOMEM);
   AVIOContext *avio =
-      avio_alloc_context(avbuf, bufsize, 0, &io, mem_read, NULL, mem_seek);
+      avio_alloc_context(avbuf, bufsize, 0, io, mem_read, NULL, mem_seek);
   if (!avio) {
     av_free(avbuf);
+    free(io);
     return AVERROR(ENOMEM);
   }
   AVFormatContext *fmt = avformat_alloc_context();
   if (!fmt) {
     avio_context_free(&avio);
+    free(io);
     return AVERROR(ENOMEM);
   }
   fmt->pb = avio;
@@ -81,12 +92,14 @@ static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
   if (ret < 0) {
     // On failure avformat_open_input frees the context itself.
     avio_context_free(&avio);
+    free(io);
     return ret;
   }
   ret = avformat_find_stream_info(fmt, NULL);
   if (ret < 0) {
     avformat_close_input(&fmt);
     avio_context_free(&avio);
+    free(io);
     return ret;
   }
   *out_fmt = fmt;
@@ -95,8 +108,10 @@ static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
 }
 
 static void close_input(AVFormatContext *fmt, AVIOContext *avio) {
+  MemIO *io = avio ? (MemIO *)avio->opaque : NULL;
   avformat_close_input(&fmt);
   avio_context_free(&avio);
+  free(io);
 }
 
 static void put_i32(uint8_t *p, int32_t v) {
