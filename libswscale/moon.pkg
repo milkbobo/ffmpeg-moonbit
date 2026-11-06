@@ -1,0 +1,4 @@
+import {
+  "milkbobo/ffmpeg-moonbit/libswscale" @swscale,
+  "milkbobo/ffmpeg-moonbit/libavutil" @libavutil,
+} for "test"

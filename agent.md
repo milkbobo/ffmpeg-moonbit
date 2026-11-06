@@ -340,7 +340,17 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳k §320 ffref 镜像加 libdav1d
+  lengthSize 从偏移 21）。全量 1434/1434。⑳l §321 libswscale 第一片：`libswscale/`
+  新包——YUV420P→RGB24/BGR24（yuv2rgb_1_c_template 查表语义，BT.601 limited）。
+  **表数据 probe 而非公式复算**：FFmpeg 9 系数经 cms 双精度重算（y_coeff=9539
+  非旧公式 9540），镜像内编译官方 yuv2rgb.c 直调 init_tables 全量 probe 内嵌
+  （blob 2048 + base 1280×3 + gv 偏移）。实测矩阵：CLI/c-only/单线程三种构建
+  输出互差（blob ±1 LSB、帧 chroma 255 级——graph 主路径 hcscale 半像素插值，
+  unscaled 特判失效）→ 对拍锚 = 官方表自洽 + ramp 形状（前 17 零/单调/
+  near-white 253）+ G uint8 回绕锚点。坑：b"..." 是 base64 文本非解码字节
+  （走 av_base64_decode）；顶层 let 小写；Bytes 无 op_set。libswscale 2/2；
+  wasm 全量 1442/1442。
+  ⑳k §320 ffref 镜像加 libdav1d
   （configure --enable-libdav1d + 链接 -ldav1d）：AV1 从占位转正为正式字节
   差分——dav1d 与我们 AV1 解码器逐字节恒等。**视频四家对拍矩阵闭环**：
   H.264（含 444）/HEVC（含 B 帧）/VP9/AV1 真实流全帧全部进程内常驻回归

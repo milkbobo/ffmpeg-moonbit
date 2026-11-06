@@ -8958,3 +8958,33 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **视频对拍矩阵完成**：H.264（含 4:4:4）、HEVC（含 B 帧）、VP9、AV1
   四家真实流全帧 vs 真 FFmpeg 逐字节——全部进程内常驻回归。
 - **验证**：容器 native **42/42**；wasm 全量绿。
+
+## 321. libswscale 第一片：YUV420P → RGB24/BGR24（官方表移植）
+
+- **范围**：`libswscale/` 新包——24-bit packed RGB 输出路径（`yuv2rgb_1_c_template`
+  + `yuv2rgb_write` 语义），BT.601 limited，输入为紧凑 planar 420（与
+  `VideoFrame::yuv_bytes` 同布局）。extract-frame RGB 输出的地基。
+- **关键决策——表数据 probe 而非公式复算**：FFmpeg 9 的系数经
+  **cms（色彩管理）双精度通路**重算（实测 `y_coeff=9539` 而非旧整数公式的
+  9540、`v2r=13075`），旧 `init_tables` 整数公式不可复刻。在镜像内编译官方
+  `yuv2rgb.c` + internal 头直接调 `ff_yuv2rgb_c_init_tables`，把 24bpp blob
+  （2048）与 fill 后的 `table_rV/gU/bU` 指针偏移（1280x3）+ `table_gV` 加法
+  偏移（1280）**全量 probe 内嵌**（`swscale_official_data.mbt`，27.6KB 文本）。
+  G 通道 uint8 回绕语义（`table_gU[U][Y] + table_gV[V]` 可为负）保留。
+- **对拍教训矩阵**（全部实测，防止后人重蹈）：
+  - docker CLI（bicubic/多线程 slice）、c-only ffmpeg、单线程 sws_scale
+    程序——**同一输入三种输出**（ramp blob 相互差 1 LSB；真实帧 chroma 差
+    达 255 级）。
+  - FFmpeg 9 的 `sws_scale` 走 **graph 主路径**（unscaled 特判在 graph 重构
+    后实际不生效）：chroma 经 hcscale 半像素插值后才查表 -> 与纯查表语义
+    （我们）在非中性 chroma 上有大幅差异——**不是表错，是路径不同**。
+  - 中性 ramp：我们的输出与官方表逐值一致（17 零后 1,2,3...、Y=235->253）。
+  - `geq lum=X` 的 nullsrc 默认 420；rawvideo 默认 color_range=pc 会触发
+    输入侧 range 处理——fixture 设计需自查元数据。
+- **测试**（2 条）：中性 ramp 形状（前 17 零、单调、饱和、near-white=253）
+  + 真实帧的表自洽锚点（G 回绕 = 0 的探针像素）+ BGR 通道互换自洽。
+- **坑**：`b"..."` 是 base64 文本 ASCII 而非解码字节（fixture 必须走
+  `av_base64_decode`）；顶层 `let` 名必须小写（大写建议 const 而 const 只收
+  原始类型——数据表用 `pub let` 小写）；Bytes 无 op_set（Array[Byte] 收集）。
+- **验证**：libswscale 2/2；wasm 全量回归绿。字节级对齐 docker 输出需锚定
+  单一构建/单一 flag 组合专项（记录于上）。
