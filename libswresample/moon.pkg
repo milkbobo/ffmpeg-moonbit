@@ -1,0 +1,3 @@
+import {
+  "milkbobo/ffmpeg-moonbit/libswresample" @swr,
+} for "test"

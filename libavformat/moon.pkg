@@ -1,5 +1,6 @@
 import {
   "milkbobo/ffmpeg-moonbit/libavutil",
+  "milkbobo/ffmpeg-moonbit/libswresample" @swr,
   "milkbobo/ffmpeg-moonbit/libavcodec",
   "moonbitlang/core/double",
   "moonbitlang/core/string",

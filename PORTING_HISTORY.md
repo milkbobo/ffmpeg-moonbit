@@ -9036,3 +9036,22 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   与官方 blob 一致（17 零后 1,2,3…）；422（恒定 chroma）与 444 逐字节
   相等；BGR 互换自洽。
 - **验证**：wasm 全量绿。
+
+## 325. libswresample 第一片：格式/通道转换 + float->s16 舍入修正
+
+- **新包 `libswresample/`**：同采样率（无重采样滤波）的转换路径——
+  `swr_flt_to_s16`（= audioconvert.c 的
+  `av_clip_int16(lrintf(x * 32768))`，**lrintf 的 round-half-to-even**
+  逐分支复刻）、`Swr::flt_planar_to_s16_packed`（planar float 交错成
+  packed s16）、`Swr::mono_to_stereo_s16_packed`（swr 的 mono->stereo
+  复制矩阵）。
+- **§315 ±1 残差翻案**：当时归因「ffmpeg 默认三角 dither」实为
+  **舍入方式**——to_wav_s16 原来用截断（toward zero），FFmpeg 用
+  lrintf。改用 swr 舍入后 docker 参考对比从 ~13k 个非零差降到 **12 个
+  孤点**（opus 解码上游浮点尾数，非转换语义）——decode-audio 的 WAV
+  导出现在与 FFmpeg 舍入语义一致。
+- **坑**：只读 struct（priv 字段）测试侧不可构造——加 `Swr::new()`；
+  packed s16 测试读回需符号扩展（无符号拼装 49152 vs -16384）。
+- **测试**（libswresample 3/3）：half-even 四例 + 满幅/clip、planar
+  交错、mono->stereo 复制。
+- **验证**：wasm 全量绿。

@@ -704,14 +704,11 @@ pub fn DecodedAudio::to_wav_s16(self : DecodedAudio) -> Bytes raise MediaError {
   let inter : Array[Int32] = Array::make(nb * self.channels, 0)
   for i = 0; i < nb; i = i + 1 {
     for ch = 0; ch < self.channels; ch = ch + 1 {
-      let v = (self.samples[ch][i] * 32768.0).to_int()
-      inter[i * self.channels + ch] = if v < -32768 {
-        -32768
-      } else if v > 32767 {
-        32767
-      } else {
-        v
-      }
+      // FFmpeg's float->s16 conversion: av_clip_int16(lrintf(x * 32768)),
+      // i.e. round half to even - plain truncation loses an LSB on every
+      // half-way sample, which used to show up as +-1 diffs against the
+      // docker reference decodes.
+      inter[i * self.channels + ch] = @swr.swr_flt_to_s16(self.samples[ch][i])
     }
   }
   mux.write_samples(inter[:])

@@ -340,7 +340,15 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳n §324 libswscale 422/444：
+  lengthSize 从偏移 21）。全量 1434/1434。⑳o §325 libswresample 第一片：
+  `libswresample/` 新包——同采样率转换（`swr_flt_to_s16` =
+  audioconvert.c 的 av_clip_int16(lrintf) **round-half-to-even** 逐分支
+  复刻、planar→packed 交错、mono→stereo 复制）。**§315 ±1 残差翻案**：
+  归因 dither 实为舍入——to_wav_s16 截断→swr 舍入后 docker 参考非零差
+  13k→12 孤点（opus 解码尾数）。坑：只读 struct 测试不可构造（加
+  Swr::new）；packed s16 读回需符号扩展。libswresample 3/3；wasm
+  全量 1446/1446。
+  ⑳n §324 libswscale 422/444：
   `yuv422_to_rgb24`/`yuv444_to_rgb24` 共享每行核（chroma 行映射差异，
   同官方表）；合成帧测试（444 Y 轴 = 官方 blob、422≡444 恒定 chroma、
   BGR 互换）。libswscale 3/3；wasm 全量绿。
