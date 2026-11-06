@@ -56,9 +56,6 @@ pub fn Yuv2Rgb::yuv420_to_rgb24(
       // The C stores G as table_gU[U][Y] + table_gV[V] and writes through
       // a uint8_t pointer, so the possibly negative sum wraps mod 256.
       let g = (official_y_table[official_base_gu[uv] + yv] + official_off_gv[vv]) & 0xFF
-      if row == 0 && col == 21 {
-        println("DBG p21 yv=\{yv} uv=\{uv} vv=\{vv} bg=\{official_base_gu[uv]} gv=\{official_off_gv[vv]} ytv=\{official_y_table[official_base_gu[uv] + yv]} g=\{g}")
-      }
       let b = official_y_table[official_base_b[uv] + yv]
       if flip {
         out.push(b.to_byte())
