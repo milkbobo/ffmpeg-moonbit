@@ -1,5 +1,6 @@
 import {
   "milkbobo/ffmpeg-moonbit/libavformat" @avf,
+  "milkbobo/ffmpeg-moonbit/libswscale" @sws,
   "moonbitlang/x/fs",
   "moonbitlang/core/env",
   "moonbitlang/core/string",

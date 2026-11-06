@@ -8988,3 +8988,19 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   原始类型——数据表用 `pub let` 小写）；Bytes 无 op_set（Array[Byte] 收集）。
 - **验证**：libswscale 2/2；wasm 全量回归绿。字节级对齐 docker 输出需锚定
   单一构建/单一 flag 组合专项（记录于上）。
+
+## 322. extract-frame RGB 输出：--format yuv|rgb24|bgr24
+
+- **`cmd/extract-frame` 扩展**：`--format yuv|rgb24|bgr24`（默认 yuv，缺省
+  扩展名 frame.yuv/.rgb/.bgr）——解码帧的紧凑 planar blob 拆三平面后走
+  §321 的 `Yuv2Rgb::yuv420_to_rgb24`（BT.601 limited 官方表）；JSON 摘要
+  `format` 字段区分 planar-yuv/packed-rgb24/packed-bgr24；非偶数尺寸或
+  非 420 payload 明确报错提示回退 yuv。
+- **对拍结论**（延续 §321）：docker sws 主路径对 chroma 做 **半像素中心
+  插值**（bilinear 相位中心 0.5，即便 1:1 也插值），G 通道查表索引跨
+  uint8 回绕边界呈现 ±255 形态——与我们的官方表直查语义有系统性差异，
+  字节级对齐需移植 hscale 半像素插值（单列后续切片）。本片验证：bgr24
+  与 rgb24 通道互换逐字节自洽；帧自洽锚在 §321 libswscale 测试。
+- **坑**：匿名函数字面量是 `fn () -> T {}` 不是 `() -> T {}`；
+  `frame.width()` 已是 Int（无 to_int）。
+- **验证**：实跑 hevc 流 rgb24/bgr24 + 互换自洽；wasm 全量绿。
