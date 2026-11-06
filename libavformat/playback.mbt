@@ -104,6 +104,7 @@ pub(all) enum Source {
   Mkv(MatroskaHeader)
   OggOpus(OggOpusDemux)
   Wav(WavDemux, Bytes)
+  Ts(TsDemux)
 }
 
 ///|
@@ -266,6 +267,7 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         cursor: [0],
       }
     }
+    MpegTs => playback_ts_build(data)
     other => raise UnsupportedFormat(other.name())
   }
 }
@@ -275,6 +277,14 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
 pub fn MediaFile::next_packet(
   self : MediaFile,
 ) -> MediaPacket? raise MediaError {
+  let ts_demux : TsDemux? = match self.source {
+    Ts(d) => Some(d)
+    _ => None
+  }
+  match ts_demux {
+    Some(d) => return self.playback_ts_next(d)
+    None => ()
+  }
   match self.source {
     Mov(movie, data) => {
       // K-way merge by DTS across the tracks' sample tables - the C's
@@ -352,6 +362,7 @@ pub fn MediaFile::next_packet(
         keyframe: p.is_keyframe,
       })
     }
+    Ts(_) => abort("unreachable: TS is routed above")
   }
 }
 
@@ -550,6 +561,29 @@ pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
       } else {
         None
       }
+    Ts(demux) => {
+      // Span between the first and last packet timestamp (90 kHz), like
+      // ffprobe's stream duration when the container has no explicit end.
+      let mut first : Int64 = ts_nopts
+      let mut last : Int64 = ts_nopts
+      for p in demux.packets {
+        let t = if p.dts != ts_nopts { p.dts } else { p.pts }
+        if t == ts_nopts {
+          continue
+        }
+        if first == ts_nopts || t < first {
+          first = t
+        }
+        if last == ts_nopts || t > last {
+          last = t
+        }
+      }
+      if first != ts_nopts && last > first {
+        Some((last - first).to_double() / 90000.0)
+      } else {
+        None
+      }
+    }
     OggOpus(demux) => {
       let last = if demux.packets.length() > 0 {
         demux.packets[demux.packets.length() - 1].granule

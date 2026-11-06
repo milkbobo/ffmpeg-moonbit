@@ -9055,3 +9055,27 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **测试**（libswresample 3/3）：half-even 四例 + 满幅/clip、planar
   交错、mono->stereo 复制。
 - **验证**：wasm 全量绿。
+
+## 327. 播放 API 第五容器：MPEG-TS（H.264 AnnexB + AAC-ADTS）
+
+- **Source::Ts(TsDemux)**：probe 到 mpegts 的输入经 `playback_ts_build` 进
+  facade——streams 表（codec/codec_type/语言）、next_packet、duration
+  （首末包 90 kHz 时间戳跨度，ffprobe 无显式 end 时的口径）、dump 的
+  timebase（90 kHz）。
+- **H.264**：TS 无 avcC——把首个 PES（IDR + 前置 SPS/PPS）作为 Annex B
+  extradata 交给 `ff_h264_decode_extradata`（C 对非 length-prefixed
+  extradata 的同一路径）；keyframe 用 Annex B 首 NAL type-5 检测（TS 层
+  不标记）。
+- **AAC-ADTS**：PES payload 是连续 ADTS 帧流——`ts_split_adts` 用已移植
+  的 `ff_adts_header_parse_buf` 切帧（去头取帧体、逐帧 yield、cursor[1]
+  跟踪帧内进度），首个 ADTS 头的 object_type/sampling_index/chan_config
+  直接构造 2 字节 AudioSpecificConfig 作 extradata。
+- **对拍**（docker linuxserver/ffmpeg:9.0.2）：H264+AAC TS（lavfi 生成）
+  ——首帧 YUV **MD5 逐字节一致**；AAC 解码 19456 样本 **7 个非零差**
+  （max 1，opus 级尾数）；probe JSON 含 AAC 的 44100/1/has_extradata。
+- **坑**：`is Ts(_)` 模式在运行时不可靠（guard 恒 false → abort）——
+  改 `match self.source { Ts(d) => Some(d), _ => None }` + match Option；
+  旧方法语法 `fn name(self : T, ..)` 定义的是方法（unbound）——用
+  `fn T::name`；wasm 里 `fail()` 直接 abort 无输出（cmd 错误路径全改
+  println+return）；Python `del` 触发 rm-guard（切片赋值替代）。
+- **验证**：wasm 全量绿。

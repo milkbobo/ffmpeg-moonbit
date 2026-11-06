@@ -27,7 +27,10 @@ fn main raise {
       i + 1 < args.length() {
       if a == "--index" {
         index = @string.parse_int(args[i + 1]) catch {
-          _ => fail("extract-frame: --index expects a number, got \{args[i + 1]}")
+          _ => {
+            println("extract-frame: --index expects a number, got \{args[i + 1]}")
+            return
+          }
         }
       } else if a == "--output" {
         output = args[i + 1]
@@ -39,16 +42,23 @@ fn main raise {
       }
       i = i + 2
     } else if a == "--index" || a == "--output" || a == "--format" {
-      fail("extract-frame: \{a} requires a value")
+      println("extract-frame: \{a} requires a value")
+      return
     } else if path == "" {
       path = a
       i = i + 1
     } else {
-      fail("extract-frame: unexpected extra argument \{a}")
+      println("extract-frame: unexpected extra argument \{a}")
+      return
     }
   }
   if path == "" {
-    fail("extract-frame: no input file")
+    println("extract-frame: no input file")
+    return
+  }
+  if format != "yuv" && format != "rgb24" && format != "bgr24" {
+    println("extract-frame: --format must be yuv, rgb24 or bgr24")
+    return
   }
   if output == "" {
     output = if format == "rgb24" {
@@ -61,7 +71,10 @@ fn main raise {
   }
   let data = @fs.read_file_to_bytes(path)
   let mf = @avf.MediaFile::open(data) catch {
-    e => fail("extract-frame: \{path}: \{e.message()}")
+    e => {
+      println("extract-frame: \{path}: \{e.message()}")
+      return
+    }
   }
   let mut video = -1
   for i = 0; i < mf.streams().length(); i = i + 1 {
@@ -70,10 +83,14 @@ fn main raise {
     }
   }
   if video < 0 {
-    fail("extract-frame: no video stream in \{path}")
+    println("extract-frame: no video stream in \{path}")
+    return
   }
   let dec = @avf.VideoDecoder::open(mf.streams()[video]) catch {
-    e => fail("extract-frame: \{path}: \{e.message()}")
+    e => {
+      println("extract-frame: \{path}: \{e.message()}")
+      return
+    }
   }
   // Feed packets until frame `index` leaves the decoder (the HEVC batch
   // flush at EOF covers the tail frames).
@@ -109,7 +126,10 @@ fn main raise {
   }
   let frame = match got {
     Some(f) => f
-    None => fail("extract-frame: stream has only \{seen} frame(s)")
+    None => {
+      println("extract-frame: stream has only \{seen} frame(s)")
+      return
+    }
   }
   let yuv = frame.yuv_bytes()
   let w = frame.width()
@@ -130,14 +150,18 @@ fn main raise {
   let payload = if format == "yuv" {
     yuv
   } else if w % 2 != 0 || h % 2 != 0 {
-    fail("extract-frame: rgb output needs an even-sized 4:2:0 frame; use --format yuv")
+    println("extract-frame: rgb output needs an even-sized 4:2:0 frame; use --format yuv")
+    return
   } else {
     match split() {
       Some((py, pu, pv)) => {
         let sw = @sws.Yuv2Rgb::mpeg()
         sw.yuv420_to_rgb24(py, pu, pv, w, h, bgr=format == "bgr24")
       }
-      None => fail("extract-frame: frame payload is not 4:2:0 planar; use --format yuv")
+      None => {
+        println("extract-frame: frame payload is not 4:2:0 planar; use --format yuv")
+        return
+      }
     }
   }
   @fs.write_bytes_to_file(output, payload)

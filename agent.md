@@ -340,7 +340,15 @@
   （MP4 tkhd/MKV PixelWidth）；三家分发——VP9 `decode_packet`（superframe 内建，
   真实 libvpx 五帧 MD5 与 FFmpeg 逐帧一致）、AV1 `decode_packet`（OBU 内建）、
   HEVC 批式（入口每调用新会话→facade 缓冲至 finish_video 拼接，hvcC
-  lengthSize 从偏移 21）。全量 1434/1434。⑳o §325 libswresample 第一片：
+  lengthSize 从偏移 21）。全量 1434/1434。⑳p §327 播放 API 第五容器
+  MPEG-TS：Source::Ts（probe mpegts → playback_ts_build）；H264 = 首 PES
+  作 AnnexB extradata + IDR 检测；AAC-ADTS = PES 内切帧（cursor[1] 帧内
+  进度）+ ADTS 头直构 2 字节 ASC；duration = 首末包 90kHz 跨度。docker
+  对拍：首帧 YUV MD5 逐字节一致、AAC 解码 7/19456 孤点。坑：**`is Ts(_)`
+  运行时恒 false（guard 失效 → abort）——用 match 转 Option**；旧方法
+  语法 fn name(self:T,..) 是方法定义（unbound → fn T::name）；wasm 的
+  fail() = abort 无输出（cmd 错误路径改 println+return）。wasm 全量绿。
+  ⑳o §325 libswresample 第一片：
   `libswresample/` 新包——同采样率转换（`swr_flt_to_s16` =
   audioconvert.c 的 av_clip_int16(lrintf) **round-half-to-even** 逐分支
   复刻、planar→packed 交错、mono→stereo 复制）。**§315 ±1 残差翻案**：

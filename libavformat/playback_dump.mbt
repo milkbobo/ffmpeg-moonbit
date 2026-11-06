@@ -37,6 +37,7 @@ fn MediaFile::stream_timebase(self : MediaFile, index : Int) -> (Double, Double)
       } else {
         None
       }
+    Ts(_) => Some((90000.0, 0.0))
   }
 }
 
