@@ -10594,3 +10594,58 @@ ORACLE 标记、测试标记）。ffref native **72/72**（nine-ref）；wasm
 harness 修 MDCT scale 后全量向量重生成（字节对齐的终局）；④HLS
 master/DASH 多 Representation oracle 对齐；⑤容器新版 moon `#derive(...)`
 全仓清账。
+
+## 2026-11-08 窗口模型真相：psy_lame_window 是唯一模型（§348，纯发现片）
+
+> 承接 §347 路线图①。准备移植 `psy_3gpp_window` 时发现它是**死代码**——
+> 本片零代码变更（实验全部回滚），交付的是三个改变路线图的事实。
+
+**发现一：stock 注册的唯一窗口模型就是 psy_lame_window**
+
+`aacpsy.c:1022`：`ff_psy_3gpp_model` 的 `.window = psy_lame_window`——
+`psy_3gpp_window`（IIR 探测器）标着 `av_unused`，**从不在链上**（其
+`iir_filter(int in, ...)` 的调用方传 float——隐式截断让归一化音频全变
+0，探测器死寂，也旁证它不可能在用）。§347 路线图①的「移植 IIR 探测器」
+作废。真分歧：**端口感知路径的窗口机是自研 attack machine（§307 前的
+老机器），而 stock 一律跑 LAME 机**——端口的 LAME 机（§307/§309 移植、
+`aac_win_vectors` 钉过）只是接在了 perceptual_short 上。
+
+**发现二：LAME 机的预热瞬态解释了 stock 的「静止正弦切短窗」**
+
+`prev_energy_subshort` 初始 10.0f vs 真实峰 ~0.3 → 首帧 attack_intensity
+冲过阈值 → W0 攻击 → LONG_START → EIGHT_SHORT——stock 在 sine fixture
+的 W1-W3 短窗不是 bug，是预热。WINDBG 探针（aac_ref_patch.py 挂到
+psy_lame_window 尾，打印 prev/uselong/type/att_sum/attacks[0..8]/grp/
+ngrp/pva/thr）实证：stock 的 W0 atk=010000000（attacks[1]=1、att_sum=1、
+grp=1），恢复链 type 1→2→3→0 与端口 LAME 机的 carry 链**逐帧一致**。
+
+**发现三：分歧收窄到两点，且都有明确修法**
+
+1. **grouping 分歧**：stock 的 W0 攻击在子块 1（grp=1），端口在子块 4
+   （grp=4）——同 warm-up 状态、同输入布局（firbuf = la+11 = buf+523，
+   PSY_LAME_FIR_LEN=21 已核实）、同阈值 7.4，attacks 数组不同。端口
+   analyze 每样本读入即 f32 化（§307），精度假设排除；待查 attack_
+   intensity 的边际比较语义。
+2. **la 区域滞后一帧**：C 的 call k 对 [f(k-2)|f(k-1)] 窗的决策用
+   la = f(k-1)尾 ∪ f(k)头（缓冲里下一帧已到位）；端口的同步 rewrite 在
+   encode_frame(i) 分析 buf[533..1578) = f(i-1)尾 ∪ f(i)头——**比 stock
+   的 la 旧一帧**。完整对齐 = 发射时序重构：encode_frame(i) 分析
+   buf[533..1578) 决定**上一窗**的型并发射**上上一窗**的包（包缓冲一帧、
+   encode_frame 返回 Option 如 OpusEncoder），flush 发射缓冲包 + 尾包。
+
+**实验记录（已回滚）**：`use_lame = perceptual`（analyze 节奏/use_psy/
+flush 三处门放开）后 ffref 72/72 仍绿、wasm 11 红——全是「plain≠short」
+旧区分的钉子（perceptual_short 轴在 stock 语义下不存在，plain 与 short
+输出变得完全相同，`changed=0 != short_frames=6`）。11 个测试的诚实重
+设计（比较基线换成 oracle 而非 plain/short 对照）+ 发射时序重构 = 下片
+主体。
+
+**坑**：patch 脚本是 python——C 字符串的 `\n` 必须写成 `\\n`（单反斜杠
+被 python 转义成真换行，`missing terminating "` 编译错）；docker 层缓存
+看内容哈希，编辑未落盘时 COPY 层假命中；`grep -c` 为 0 时退出码 1 短路
+`&&` 链（本片再次踩中，构建根本没跑）。
+
+**未做（下片）**：①窗口发射时序重构（包缓冲 + Option API + flush 双包）
++ grouping 边际分歧根因；②11 个感知测试按 stock 语义重设计；③ABR
+rate control 落地（§347③）；④域统一 + 向量重生成（§347②）；⑤HLS
+master/DASH 多 Representation 对齐；⑥`#derive(...)` 清账。

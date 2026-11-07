@@ -363,6 +363,19 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳v §348 窗口模型真相（纯发现片、代码零变更）：**stock 唯一窗口模型 =
+  psy_lame_window**（aacpsy.c:1022；psy_3gpp_window 是 av_unused 死代码，
+  其 iir_filter(int in) 收 float 实参隐式截断归零也旁证）——§347 路线图
+  ①「移植 IIR」作废；真分歧 = 端口感知路径用自研 attack machine 而非已
+  移植的 LAME 机。LAME 预热瞬态（prev_energy_subshort 初始 10.0 vs 峰
+  0.3）解释 stock 静止正弦切短窗；WINDBG 探针实证 carry 链逐帧一致。
+  剩两点：grouping 边际分歧（stock 子块 1 vs 端口子块 4）、**la 区域
+  滞后一帧**（stock 的 la 含下一帧头；同步 rewrite 旧一帧）→ 修法 =
+  发射时序重构（包缓冲一帧、encode_frame 返回 Option、flush 双包）。
+  use_lame=perceptual 实验：ffref 72/72 仍绿、wasm 11 红全是 plain≠short
+  旧区分钉子（perceptual_short 轴 stock 不存在）→ 回滚，11 测试重设计
+  下片做。坑：patch 脚本（python）里 C 的 \n 须写 \\n；docker COPY 层
+  缓存看内容哈希；grep -c=0 短路 && 链再次踩中。
   ⑳u §347 AAC 字节差分根因链（无新特性、实验全回滚、仓库全绿）：探针
   基建 nine-dbg（aac_ref_patch.py in-image 适配 + aacpsy/aaccoder/
   aacenc_is 探针对象 ar r 进档案副本）+ 两侧同格式打点逐层 diff。四大
