@@ -438,7 +438,7 @@ pub fn DashSegmentReader::skip_through_time(
 ) -> Int64? {
   let segments = self.representation.segments
   while self.next_index < segments.length() &&
-    segments[self.next_index].time <= time {
+        segments[self.next_index].time <= time {
     self.next_index += 1
   }
   if self.next_index >= segments.length() {

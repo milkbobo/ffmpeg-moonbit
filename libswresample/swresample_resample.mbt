@@ -34,7 +34,7 @@ pub enum SwrFilterType {
 /// reachable from a non-test call path and gives callers the same
 /// integer contract the C API has.
 pub fn SwrFilterType::from_code(
-  code : Int,
+  code : Int32,
 ) -> SwrFilterType raise SwrResampleError {
   match code {
     0 => Cubic
