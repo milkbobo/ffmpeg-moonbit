@@ -66,8 +66,23 @@ pub struct StreamingMedia {
   anchored : Array[Bool]
   /// The current segment has not emitted a packet yet (for `discontinuity`).
   mut first_in_segment : Bool
+  /// The variant URI chosen from a master playlist; None for media playlists
+  /// and DASH sessions.
+  mut variant_uri : String?
   duration : Double?
   mut finished : Bool
+  /// Live (no ENDLIST) HLS sessions may be refreshed with `reload`.
+  mut is_live : Bool
+  /// Optional application hook that re-fetches the media playlist bytes.
+  /// Left as a callback (rather than doing IO here) so the caller controls
+  /// polling/backoff, exactly like `MediaFetch` for segment resources.
+  mut playlist_fetch : MediaFetch?
+  /// URI passed to `playlist_fetch` when refreshing a live playlist.
+  mut playlist_uri : String
+  /// Remaining automatic refresh attempts; 0 disables auto-refresh.
+  mut reload_budget : Int32
+  /// Number of successful `reload` calls, for observability/tests.
+  mut reload_count : Int32
 }
 
 ///|
@@ -145,28 +160,52 @@ fn StreamingMedia::streaming_reset_segment(self : StreamingMedia) -> Unit {
 }
 
 ///|
+/// Normalize MP4/MOV sample-entry fourccs into FFmpeg codec names. The file
+/// facade's `Mov` branch leaves fourccs such as `avc1` / `hvc1` in
+/// `StreamInfo.codec_id`, but `VideoDecoder::open` expects `h264` / `hevc`.
+/// Applied only to the streaming stream table so the existing file container
+/// contract (and its tests) stay untouched; unknown names pass through
+/// unchanged via `mov_codec_name`'s default arm.
+fn streaming_normalize_codecs(streams : Array[StreamInfo]) -> Array[StreamInfo] {
+  let out : Array[StreamInfo] = []
+  for s in streams {
+    let name = mov_codec_name(s.codec_id, "")
+    out.push({ ..s, codec_id: name, })
+  }
+  out
+}
+
+///|
 /// Fetch the next segment and hand its bytes to the existing demuxer. A
 /// reader error leaves every cursor untouched, so the same segment is retried
 /// on the next call (the C readers already guarantee this).
 fn StreamingMedia::streaming_load_segment(
   self : StreamingMedia,
 ) -> Unit raise MediaError {
-  let next = match self.reader {
-    HlsReader(r) => r.next()
-    DashReader(r) => r.next()
-  }
-  let segment = match next {
-    Err(e) => raise DemuxError("streaming: \{e}")
-    Ok(None) => {
-      self.finished = true
-      self.current = None
-      return
+  // A live window can be extended by the application. Retry in a loop (not
+  // recursively) so a large refresh budget cannot grow the stack; each
+  // successful refresh consumes one budget unit.
+  let segment = for ;; {
+    let next = match self.reader {
+      HlsReader(r) => r.next()
+      DashReader(r) => r.next()
     }
-    Ok(Some(s)) => s
+    match next {
+      Err(e) => raise DemuxError("streaming: \{e}")
+      Ok(Some(s)) => break s
+      Ok(None) => {
+        if self.streaming_auto_reload() {
+          continue
+        }
+        self.finished = true
+        self.current = None
+        return
+      }
+    }
   }
   let mf = MediaFile::open(segment.bytes())
   if self.streams.length() == 0 {
-    self.streams = mf.streams()
+    self.streams = streaming_normalize_codecs(mf.streams())
   }
   self.current = Some(mf)
   self.current_sequence = segment.sequence
@@ -191,8 +230,14 @@ fn StreamingMedia::streaming_normalize(
     self.anchored[s] = true
     self.offset[s] = match self.last_pts[s] {
       None => 0L
-      Some(last) =>
-        streaming_sat_sub(streaming_sat_add(last, self.last_step[s]), pkt.pts)
+      Some(last) => {
+        // A segment carrying a single packet has no observable intra-segment
+        // step (for example one AAC frame per TS segment with PES pts=0).
+        // Fall back to one container tick so the timeline still advances
+        // instead of stalling every later segment at the same pts.
+        let step = if self.last_step[s] > 0L { self.last_step[s] } else { 1L }
+        streaming_sat_sub(streaming_sat_add(last, step), pkt.pts)
+      }
     }
   }
   let pts = streaming_sat_add(pkt.pts, self.offset[s])
@@ -239,9 +284,198 @@ fn streaming_from_reader(
     offset: [],
     anchored: [],
     first_in_segment: true,
+    variant_uri: None,
     duration,
     finished: false,
+    is_live: false,
+    playlist_fetch: None,
+    playlist_uri: "",
+    reload_budget: 0,
+    reload_count: 0,
   }
+}
+
+///|
+/// Replace the live HLS media playlist and resume reading. `reload` keeps
+/// the normalized timeline, stream table and decoder-relevant state intact:
+/// only the segment cursor moves, following `HlsSegmentReader::reload`'s
+/// overlap/expiry rules. A rejected playlist leaves the session untouched so
+/// the caller can retry. DASH sessions and VOD playlists are refused.
+pub fn StreamingMedia::reload(
+  self : StreamingMedia,
+  playlist : HlsPlaylist,
+) -> Unit raise MediaError {
+  if self.kind != Hls {
+    raise DemuxError("reload: only HLS sessions can be reloaded")
+  }
+  if playlist.is_master {
+    raise DemuxError("reload: expected a media playlist")
+  }
+  let reader = match self.reader {
+    HlsReader(r) => r
+    DashReader(_) =>
+      raise DemuxError("reload: only HLS sessions can be reloaded")
+  }
+  match reader.reload(playlist) {
+    Err(e) => raise DemuxError("reload: \{e}")
+    Ok(_) => ()
+  }
+  // The old segment was fully drained before reload was requested, so no
+  // packet is lost. Keep last_pts/last_step: the new window must continue on
+  // the same monotonic timeline.
+  self.current = None
+  self.streaming_reset_segment()
+  self.finished = false
+  self.reload_count += 1
+}
+
+///|
+/// Parse and install a refreshed media playlist from raw bytes. `base_uri`
+/// resolves relative segment URIs; pass the playlist's own absolute URI (same
+/// value used at `open`) so URI resolution stays stable across refreshes.
+pub fn StreamingMedia::reload_bytes(
+  self : StreamingMedia,
+  playlist : Bytes,
+  base_uri~ : String = "",
+) -> Unit raise MediaError {
+  let parsed = match
+    av_hls_parse(streaming_playlist_text(playlist), base_uri~) {
+    Ok(p) => p
+    Err(e) => raise DemuxError("reload: \{e}")
+  }
+  self.reload(parsed)
+}
+
+///|
+/// True for an HLS media playlist without `EXT-X-ENDLIST`. Only such sessions
+/// can be usefully refreshed; VOD playlists always end at their last segment.
+pub fn StreamingMedia::is_live(self : StreamingMedia) -> Bool {
+  self.is_live
+}
+
+///|
+/// Number of successful playlist reloads on this session.
+pub fn StreamingMedia::reload_count(self : StreamingMedia) -> Int32 {
+  self.reload_count
+}
+
+///|
+/// Try one automatic refresh using the hook supplied at `open`. Returns true
+/// when the playlist was successfully replaced. A fetch/parse failure is
+/// mapped to `DemuxError` (the caller can retry the same `next_packet` call).
+/// Exhausting the budget is not an error: the session just ends.
+fn StreamingMedia::streaming_auto_reload(
+  self : StreamingMedia,
+) -> Bool raise MediaError {
+  if !self.is_live || self.reload_budget <= 0 {
+    return false
+  }
+  match self.playlist_fetch {
+    None => false
+    Some(fetch) => {
+      let data = match fetch(self.playlist_uri, 0L, -1L) {
+        Ok(v) => v
+        Err(e) => raise DemuxError("reload: playlist fetch failed: \{e}")
+      }
+      let parsed = match
+        av_hls_parse(streaming_playlist_text(data), base_uri=self.playlist_uri) {
+        Ok(p) => p
+        Err(e) => raise DemuxError("reload: \{e}")
+      }
+      if parsed.is_master {
+        raise DemuxError("reload: refreshed playlist must be a media playlist")
+      }
+      self.reload(parsed)
+      self.reload_budget -= 1
+      true
+    }
+  }
+}
+
+///|
+/// Pick a playable variant from an HLS master playlist. I-frame-only
+/// renditions are skipped because they cannot be played standalone. By
+/// default the highest-bandwidth variant wins, matching FFmpeg's
+/// `hls_read_header` selection when no bandwidth cap is configured;
+/// `variant` overrides it with an explicit index into `playlist.streams`.
+fn streaming_pick_variant(
+  playlist : HlsPlaylist,
+  variant : Int32?,
+) -> HlsStreamInfo raise MediaError {
+  let streams = playlist.streams
+  let index = match variant {
+    Some(i) => {
+      if i < 0 || i >= streams.length() {
+        raise DemuxError("hls: variant index out of range")
+      }
+      i
+    }
+    None => {
+      let mut best = -1
+      let mut best_bandwidth = -1L
+      for i = 0; i < streams.length(); i = i + 1 {
+        let s = streams[i]
+        if !s.is_i_frame && s.uri != "" && s.bandwidth > best_bandwidth {
+          best = i
+          best_bandwidth = s.bandwidth
+        }
+      }
+      if best < 0 {
+        raise DemuxError("hls: master playlist has no playable variant")
+      }
+      best
+    }
+  }
+  let chosen = streams[index]
+  if chosen.is_i_frame {
+    raise DemuxError("hls: selected variant is I-frame only")
+  }
+  if chosen.uri == "" {
+    raise DemuxError("hls: selected variant has an empty URI")
+  }
+  chosen
+}
+
+///|
+/// Resolve a master playlist to one media playlist. The variant's absolute
+/// URI becomes the base for the child playlist's relative segment URIs, so
+/// `MediaFetch` sees exactly the same URIs `av_hls_parse` resolved. Only one
+/// level of master indirection is allowed; a nested master is refused rather
+/// than followed (it would be an unbounded fetch loop controlled by the server).
+fn streaming_open_master(
+  master : HlsPlaylist,
+  fetch : MediaFetch,
+  variant~ : Int32?,
+  prefer_x_start~ : Bool,
+  live_start_index~ : Int32,
+  playlist_fetch~ : MediaFetch?,
+  max_reloads~ : Int32,
+) -> StreamingMedia raise MediaError {
+  let chosen = streaming_pick_variant(master, variant)
+  let data = match fetch(chosen.uri, 0L, -1L) {
+    Ok(v) => v
+    Err(e) => raise DemuxError("hls: variant fetch failed: \{e}")
+  }
+  let media = match
+    av_hls_parse(streaming_playlist_text(data), base_uri=chosen.uri) {
+    Ok(p) => p
+    Err(e) => raise DemuxError("hls: variant playlist: \{e}")
+  }
+  if media.is_master {
+    raise DemuxError("hls: nested master playlists are not supported")
+  }
+  let session = StreamingMedia::open_hls(
+    media,
+    fetch,
+    prefer_x_start~,
+    live_start_index~,
+    playlist_fetch~,
+    // A live variant refreshes its own media playlist, never the master.
+    playlist_uri=chosen.uri,
+    max_reloads~,
+  )
+  session.variant_uri = Some(chosen.uri)
+  session
 }
 
 ///|
@@ -262,6 +496,9 @@ pub fn StreamingMedia::open_hls(
   fetch : MediaFetch,
   prefer_x_start~ : Bool = false,
   live_start_index~ : Int32 = 0,
+  playlist_fetch~ : MediaFetch? = None,
+  playlist_uri~ : String = "",
+  max_reloads~ : Int32 = 0,
 ) -> StreamingMedia raise MediaError {
   if playlist.is_master {
     raise DemuxError("hls: master playlist is not a media playlist")
@@ -278,7 +515,20 @@ pub fn StreamingMedia::open_hls(
     }
   }
   let duration = if total > 0.0 { Some(total) } else { None }
-  streaming_from_reader(Hls, "hls", HlsReader(reader), duration)
+  let session = streaming_from_reader(Hls, "hls", HlsReader(reader), duration)
+  session.is_live = !playlist.endlist
+  session.playlist_fetch = playlist_fetch
+  session.playlist_uri = if playlist_uri != "" {
+    playlist_uri
+  } else {
+    "live.m3u8"
+  }
+  session.reload_budget = if max_reloads > 0 && session.is_live {
+    max_reloads
+  } else {
+    0
+  }
+  session
 }
 
 ///|
@@ -335,6 +585,9 @@ pub fn StreamingMedia::open(
   base_uri~ : String = "",
   prefer_x_start~ : Bool = false,
   live_start_index~ : Int32 = 0,
+  variant~ : Int32? = None,
+  playlist_fetch~ : MediaFetch? = None,
+  max_reloads~ : Int32 = 0,
 ) -> StreamingMedia raise MediaError {
   let text = streaming_playlist_text(playlist)
   let trimmed = text.trim(chars=" \t\r\n")
@@ -343,11 +596,25 @@ pub fn StreamingMedia::open(
       Err(e) => raise DemuxError("hls: \{e}")
       Ok(p) => p
     }
+    if parsed.is_master {
+      return streaming_open_master(
+        parsed,
+        fetch,
+        variant~,
+        prefer_x_start~,
+        live_start_index~,
+        playlist_fetch~,
+        max_reloads~,
+      )
+    }
     return StreamingMedia::open_hls(
       parsed,
       fetch,
       prefer_x_start~,
       live_start_index~,
+      playlist_fetch~,
+      playlist_uri=if base_uri != "" { base_uri } else { "live.m3u8" },
+      max_reloads~,
     )
   }
   if text.contains("<MPD") {
@@ -384,6 +651,13 @@ pub fn StreamingMedia::streams(self : StreamingMedia) -> Array[StreamInfo] {
 /// Live playlists without a duration return `None`.
 pub fn StreamingMedia::duration_seconds(self : StreamingMedia) -> Double? {
   self.duration
+}
+
+///|
+/// The variant URI chosen from a master playlist, or `None` when the input
+/// was already a media playlist or a DASH MPD.
+pub fn StreamingMedia::variant_uri(self : StreamingMedia) -> String? {
+  self.variant_uri
 }
 
 ///|
@@ -477,4 +751,65 @@ pub fn StreamingMedia::decode_audio(
     codec_id: info.codec_id,
     duration_seconds: self.duration,
   }
+}
+
+///|
+/// Decode the first video stream across every segment into pictures in
+/// presentation order. Decoder state (reference frames, CABAC contexts and
+/// the H.264 reorder buffer) survives segment boundaries. On a discontinuity
+/// the pending batch is flushed and the decoder is rebuilt, matching
+/// FFmpeg's `AV_DISCONTINUITY` reset; the trailing `finish_video` drains
+/// HEVC's batch and any held-back reorder pictures at end of stream.
+/// Already-consumed packets are not replayed - call this on a fresh session.
+pub fn StreamingMedia::decode_video(
+  self : StreamingMedia,
+) -> Array[VideoFrame] raise MediaError {
+  // Loading a segment fills the stream table without consuming a packet.
+  if self.streams.length() == 0 && self.current is None && !self.finished {
+    self.streaming_load_segment()
+  }
+  let mut video = -1
+  for i = 0; i < self.streams.length(); i = i + 1 {
+    if video < 0 && self.streams[i].media_type == MediaType::Video {
+      video = i
+    }
+  }
+  if video < 0 {
+    raise UnsupportedCodec("no video stream in \{self.format_name}")
+  }
+  let info = self.streams[video]
+  let mut dec = VideoDecoder::open(info)
+  let frames : Array[VideoFrame] = []
+  while true {
+    match self.next_packet() {
+      None => break
+      Some(sp) => {
+        if sp.stream_index != video {
+          continue
+        }
+        if sp.discontinuity {
+          // HEVC buffers every packet until finish_video; dropping that
+          // batch on a reset would silently lose the previous segment's
+          // pictures.
+          for f in dec.finish_video() {
+            frames.push(f)
+          }
+          dec = VideoDecoder::open(info)
+        }
+        for
+          f in dec.decode({
+            stream_index: sp.stream_index,
+            data: sp.data,
+            pts: sp.pts,
+            keyframe: sp.keyframe,
+          }) {
+          frames.push(f)
+        }
+      }
+    }
+  }
+  for f in dec.finish_video() {
+    frames.push(f)
+  }
+  frames
 }

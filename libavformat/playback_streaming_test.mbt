@@ -93,7 +93,7 @@ test "streaming: unknown playlist bytes are FormatNotFound" {
 }
 
 ///|
-test "streaming: HLS master playlist is rejected with a clear error" {
+test "streaming: HLS master variant fetch failure propagates" {
   let master =
     #|#EXTM3U
     #|#EXT-X-STREAM-INF:BANDWIDTH=128000
@@ -101,10 +101,11 @@ test "streaming: HLS master playlist is rejected with a clear error" {
     #|
   try
     @libavformat.StreamingMedia::open(streaming_bytes(master), (_, _, _) => {
-      Err("unused")
+      Err("network down")
     })
   catch {
-    @libavformat.DemuxError(msg) => assert_true(msg.contains("master playlist"))
+    @libavformat.DemuxError(msg) =>
+      assert_true(msg.contains("variant fetch failed"))
     _ => fail("expected DemuxError")
   } noraise {
     _ => fail("expected DemuxError")
@@ -514,4 +515,161 @@ test "streaming: DASH decode_audio keeps PCM across fMP4 segment boundary" {
   let reference = @libavformat.decode_audio_file(joined)
   assert_eq(audio.samples[0].length(), reference.samples[0].length())
   assert_eq(audio.samples[0], reference.samples[0])
+}
+
+///|
+/// Master playlist with two playable variants and one I-frame-only rendition
+/// whose bandwidth would otherwise win the selection.
+fn streaming_master_text() -> String {
+  let text =
+    #|#EXTM3U
+    #|#EXT-X-VERSION:4
+    #|#EXT-X-STREAM-INF:BANDWIDTH=128000,RESOLUTION=320x180
+    #|low.m3u8
+    #|#EXT-X-STREAM-INF:BANDWIDTH=2400000,RESOLUTION=1920x1080
+    #|high.m3u8
+    #|#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=9999999,URI="iframe.m3u8"
+    #|#EXT-X-ENDLIST
+    #|
+  text
+}
+
+///|
+/// Two-segment AAC/TS media playlist plus the segments themselves.
+fn streaming_master_media() -> (String, Bytes, Bytes) {
+  let (units, _) = streaming_make_aac(4)
+  (
+    streaming_hls_playlist(2),
+    streaming_ts_segment(units[:2], 0L),
+    streaming_ts_segment(units[2:], 0L),
+  )
+}
+
+///|
+test "streaming: HLS master picks the highest-bandwidth playable variant" {
+  let (child, seg0, seg1) = streaming_master_media()
+  let requested : Array[String] = []
+  let ranges : Array[(Int64, Int64)] = []
+  let media = @libavformat.StreamingMedia::open(
+    streaming_bytes(streaming_master_text()),
+    (uri, offset, length) => {
+      requested.push(uri)
+      if uri == "https://cdn.test/high.m3u8" {
+        ranges.push((offset, length))
+        Ok(streaming_bytes(child))
+      } else if uri == "https://cdn.test/seg0.ts" {
+        Ok(seg0)
+      } else if uri == "https://cdn.test/seg1.ts" {
+        Ok(seg1)
+      } else {
+        Err("unexpected URI: \{uri}")
+      }
+    },
+    base_uri="https://cdn.test/master.m3u8",
+  )
+  assert_eq(ranges, [(0L, -1L)])
+  assert_eq(media.variant_uri(), Some("https://cdn.test/high.m3u8"))
+  assert_eq(media.format_name(), "hls")
+  let count = Ref(0)
+  while true {
+    match media.next_packet() {
+      Some(_) => count.val += 1
+      None => break
+    }
+  }
+  assert_eq(count.val, 4)
+  assert_eq(requested, [
+    "https://cdn.test/high.m3u8", "https://cdn.test/seg0.ts", "https://cdn.test/seg1.ts",
+  ])
+}
+
+///|
+test "streaming: HLS master explicit variant index overrides bandwidth" {
+  let (child, seg0, seg1) = streaming_master_media()
+  let media = @libavformat.StreamingMedia::open(
+    streaming_bytes(streaming_master_text()),
+    (uri, _, _) => {
+      if uri == "https://cdn.test/low.m3u8" {
+        Ok(streaming_bytes(child))
+      } else if uri == "https://cdn.test/seg0.ts" {
+        Ok(seg0)
+      } else if uri == "https://cdn.test/seg1.ts" {
+        Ok(seg1)
+      } else {
+        Err("unexpected URI: \{uri}")
+      }
+    },
+    base_uri="https://cdn.test/master.m3u8",
+    variant=Some(0),
+  )
+  assert_eq(media.variant_uri(), Some("https://cdn.test/low.m3u8"))
+  let count = Ref(0)
+  while true {
+    match media.next_packet() {
+      Some(_) => count.val += 1
+      None => break
+    }
+  }
+  assert_eq(count.val, 4)
+}
+
+///|
+test "streaming: HLS master rejects I-frame-only, nested and bad indexes" {
+  let child = streaming_master_media().0
+  // An I-frame-only master has no playable variant.
+  let iframe_only =
+    #|#EXTM3U
+    #|#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=999,URI="iframe.m3u8"
+    #|
+  for
+    (master, variant, needle) in [
+      (iframe_only, None, "no playable variant"),
+      (streaming_master_text(), Some(9), "variant index out of range"),
+      (streaming_master_text(), Some(-1), "variant index out of range"),
+    ] {
+    try
+      @libavformat.StreamingMedia::open(
+        streaming_bytes(master),
+        (_, _, _) => Ok(streaming_bytes(child)),
+        base_uri="https://cdn.test/master.m3u8",
+        variant~,
+      )
+    catch {
+      @libavformat.DemuxError(msg) => assert_true(msg.contains(needle))
+      _ => fail("expected DemuxError: \{needle}")
+    } noraise {
+      _ => fail("expected DemuxError: \{needle}")
+    }
+  }
+  // A master that resolves to another master is refused instead of looped.
+  try
+    @libavformat.StreamingMedia::open(
+      streaming_bytes(streaming_master_text()),
+      (_, _, _) => Ok(streaming_bytes(streaming_master_text())),
+      base_uri="https://cdn.test/master.m3u8",
+    )
+  catch {
+    @libavformat.DemuxError(msg) => assert_true(msg.contains("nested master"))
+    _ => fail("expected DemuxError for nested master")
+  } noraise {
+    _ => fail("expected DemuxError for nested master")
+  }
+}
+
+///|
+test "streaming: selected I-frame variant is rejected explicitly" {
+  let (child, _, _) = streaming_master_media()
+  try
+    @libavformat.StreamingMedia::open(
+      streaming_bytes(streaming_master_text()),
+      (_, _, _) => Ok(streaming_bytes(child)),
+      base_uri="https://cdn.test/master.m3u8",
+      variant=Some(2),
+    )
+  catch {
+    @libavformat.DemuxError(msg) => assert_true(msg.contains("I-frame"))
+    _ => fail("expected DemuxError for I-frame-only variant")
+  } noraise {
+    _ => fail("expected DemuxError for I-frame-only variant")
+  }
 }
