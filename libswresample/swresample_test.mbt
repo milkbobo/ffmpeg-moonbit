@@ -15,9 +15,10 @@ test "swresample: float to s16 uses round-half-to-even like lrintf" {
 }
 
 ///|
+
 ///|
 /// Read a little-endian s16 sample from packed bytes.
-fn rd_s16(b : Bytes, i : Int) -> Int {
+fn rd_s16(b : Bytes, i : Int32) -> Int32 {
   let v = b[i].to_int() | (b[i + 1].to_int() << 8)
   if v >= 0x8000 {
     v - 0x10000
@@ -26,6 +27,7 @@ fn rd_s16(b : Bytes, i : Int) -> Int {
   }
 }
 
+///|
 test "swresample: planar float interleaves into packed s16" {
   let left : Array[Double] = [0.0, 1.0]
   let right : Array[Double] = [-0.5, 0.25]

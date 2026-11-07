@@ -1,3 +1,4 @@
+///|
 test "swscale: neutral ramp reproduces the official table shape" {
   // The 256-column luma ramp with neutral chroma reads the Y axis of the
   // official table directly. Cross-build probe of FFmpeg n9.0.2's
@@ -1026,8 +1027,8 @@ test "swscale: 422 and 444 inputs share the official table" {
   assert_eq(rgb444[18 * 3].to_int(), 1, msg="444 ramp at 18")
   // 4:2:2 with the same luma must agree row-by-row with the 4:4:4 result
   // wherever the chroma values coincide (here: constant 128).
-  let u422 = Bytes::make((w / 2) * h, 128)
-  let v422 = Bytes::make((w / 2) * h, 128)
+  let u422 = Bytes::make(w / 2 * h, 128)
+  let v422 = Bytes::make(w / 2 * h, 128)
   let rgb422 = sw.yuv422_to_rgb24(y8, u422, v422, w, h)
   assert_eq(rgb422, rgb444, msg="422 equals 444 for constant chroma")
   // BGR swap on the 444 path.

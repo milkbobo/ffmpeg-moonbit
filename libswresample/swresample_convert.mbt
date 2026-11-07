@@ -9,7 +9,7 @@
 ///|
 /// `lrintf` under the default rounding mode: round half to even. `x` is
 /// already scaled to the s16 range by the caller.
-fn swr_lrintf(x : Double) -> Int {
+fn swr_lrintf(x : Double) -> Int32 {
   let f = x.floor()
   let frac = x - f
   if frac > 0.5 {
@@ -25,7 +25,7 @@ fn swr_lrintf(x : Double) -> Int {
 
 ///|
 /// `av_clip_int16`.
-fn swr_clip_int16(v : Int) -> Int {
+fn swr_clip_int16(v : Int32) -> Int32 {
   if v < -32768 {
     -32768
   } else if v > 32767 {
@@ -37,7 +37,7 @@ fn swr_clip_int16(v : Int) -> Int {
 
 ///|
 /// One float sample to s16, FFmpeg's exact semantics.
-pub fn swr_flt_to_s16(x : Double) -> Int {
+pub fn swr_flt_to_s16(x : Double) -> Int32 {
   swr_clip_int16(swr_lrintf(x * 32768.0))
 }
 
@@ -48,7 +48,7 @@ pub fn swr_flt_to_s16(x : Double) -> Int {
 pub fn Swr::flt_planar_to_s16_packed(
   _self : Swr,
   planar : Array[Array[Double]],
-  channels : Int,
+  channels : Int32,
 ) -> Bytes raise {
   if channels <= 0 || planar.length() < channels {
     fail("swresample: planar buffers do not cover the channel count")
@@ -73,7 +73,10 @@ pub fn Swr::flt_planar_to_s16_packed(
 ///|
 /// Mono planar float to packed stereo s16 - swr's mono->stereo rematrix
 /// duplicates the single channel into L and R.
-pub fn Swr::mono_to_stereo_s16_packed(_self : Swr, mono : Array[Double]) -> Bytes raise {
+pub fn Swr::mono_to_stereo_s16_packed(
+  _self : Swr,
+  mono : Array[Double],
+) -> Bytes raise {
   let out : Array[Byte] = []
   for i = 0; i < mono.length(); i = i + 1 {
     let v = swr_flt_to_s16(mono[i])
@@ -95,5 +98,5 @@ pub struct Swr {
 ///|
 /// Create a converter handle.
 pub fn Swr::new() -> Swr {
-  { _unit: () }
+  { _unit: (), }
 }

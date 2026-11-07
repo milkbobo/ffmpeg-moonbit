@@ -16,7 +16,7 @@ pub struct Yuv2Rgb {
 ///|
 /// The swscale default: BT.601 limited (MPEG) range.
 pub fn Yuv2Rgb::mpeg() -> Yuv2Rgb raise {
-  { bgr: false }
+  { bgr: false, }
 }
 
 ///|
@@ -28,8 +28,8 @@ pub fn Yuv2Rgb::yuv420_to_rgb24(
   y : Bytes,
   u : Bytes,
   v : Bytes,
-  width : Int,
-  height : Int,
+  width : Int32,
+  height : Int32,
   bgr~ : Bool = false,
 ) -> Bytes raise {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
@@ -55,7 +55,10 @@ pub fn Yuv2Rgb::yuv420_to_rgb24(
       let r = official_y_table[official_base_r[vv] + yv]
       // The C stores G as table_gU[U][Y] + table_gV[V] and writes through
       // a uint8_t pointer, so the possibly negative sum wraps mod 256.
-      let g = (official_y_table[official_base_gu[uv] + yv] + official_off_gv[vv]) & 0xFF
+      let g = (
+          official_y_table[official_base_gu[uv] + yv] + official_off_gv[vv]
+        ) &
+        0xFF
       let b = official_y_table[official_base_b[uv] + yv]
       if flip {
         out.push(b.to_byte())
@@ -75,14 +78,14 @@ pub fn Yuv2Rgb::yuv420_to_rgb24(
 /// Shared per-row conversion core: `crow`/`cw_c` describe the chroma row
 /// the planar lookup uses for this luma row (4:2:0 rows pair up, 4:2:2 and
 /// 4:4:4 map one-to-one).
-fn yuv_rows_to_rgb24(
+fn Yuv2Rgb::yuv_rows_to_rgb24(
   self : Yuv2Rgb,
   y : Bytes,
   u : Bytes,
   v : Bytes,
-  w : Int,
-  h : Int,
-  cw : Int,
+  w : Int32,
+  h : Int32,
+  cw : Int32,
   paired : Bool,
   bgr : Bool,
 ) -> Bytes raise {
@@ -96,7 +99,10 @@ fn yuv_rows_to_rgb24(
       let uv = u[crow_off + col / 2].to_int() + 512
       let vv = v[crow_off + col / 2].to_int() + 512
       let r = official_y_table[official_base_r[vv] + yv]
-      let g = (official_y_table[official_base_gu[uv] + yv] + official_off_gv[vv]) & 0xFF
+      let g = (
+          official_y_table[official_base_gu[uv] + yv] + official_off_gv[vv]
+        ) &
+        0xFF
       let b = official_y_table[official_base_b[uv] + yv]
       if bgr {
         out.push(b.to_byte())
@@ -120,15 +126,17 @@ pub fn Yuv2Rgb::yuv422_to_rgb24(
   y : Bytes,
   u : Bytes,
   v : Bytes,
-  width : Int,
-  height : Int,
+  width : Int32,
+  height : Int32,
   bgr~ : Bool = false,
 ) -> Bytes raise {
   if width <= 0 || height <= 0 || width % 2 != 0 {
     fail("yuv2rgb: width must be positive and even")
   }
   let cw = width / 2
-  if y.length() < width * height || u.length() < cw * height || v.length() < cw * height {
+  if y.length() < width * height ||
+    u.length() < cw * height ||
+    v.length() < cw * height {
     fail("yuv2rgb: plane too small for the given geometry")
   }
   self.yuv_rows_to_rgb24(y, u, v, width, height, cw, false, bgr)
@@ -142,14 +150,16 @@ pub fn Yuv2Rgb::yuv444_to_rgb24(
   y : Bytes,
   u : Bytes,
   v : Bytes,
-  width : Int,
-  height : Int,
+  width : Int32,
+  height : Int32,
   bgr~ : Bool = false,
 ) -> Bytes raise {
   if width <= 0 || height <= 0 {
     fail("yuv2rgb: width and height must be positive")
   }
-  if y.length() < width * height || u.length() < width * height || v.length() < width * height {
+  if y.length() < width * height ||
+    u.length() < width * height ||
+    v.length() < width * height {
     fail("yuv2rgb: plane too small for the given geometry")
   }
   self.yuv_rows_to_rgb24(y, u, v, width, height, width, false, bgr)

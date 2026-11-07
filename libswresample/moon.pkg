@@ -1,3 +1,9 @@
 import {
+  "milkbobo/ffmpeg-moonbit/libavutil",
+  "moonbitlang/core/debug",
+  "moonbitlang/core/math",
+}
+
+import {
   "milkbobo/ffmpeg-moonbit/libswresample" @swr,
 } for "test"

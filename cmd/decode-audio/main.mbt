@@ -2,6 +2,7 @@
 /// `decode-audio` - the third JSON CLI command (proposal deliverable ②):
 ///
 ///   moon run cmd/decode-audio -- <media-file> [--output out.wav]
+///                               [--rate 8000..192000]
 ///
 /// Decodes the first audio stream all the way to float PCM through the
 /// unified playback API (every container/codec combination the audio line
@@ -10,13 +11,14 @@
 fn main raise {
   let args = @env.args()
   if args.length() < 2 {
-    println("usage: decode-audio <media-file> [--output out.wav]")
+    println("usage: decode-audio <media-file> [--output out.wav] [--rate N]")
     println("  decodes the first audio stream, prints a JSON summary,")
     println("  optionally writing 16-bit PCM WAV to --output")
     return
   }
   let mut path = ""
   let mut output = ""
+  let mut rate : Int32 = 0
   let mut i = 1
   while i < args.length() {
     let a = args[i]
@@ -25,6 +27,13 @@ fn main raise {
       i = i + 2
     } else if a == "--output" {
       fail("decode-audio: --output requires a value")
+    } else if a == "--rate" && i + 1 < args.length() {
+      rate = @string.parse_int(args[i + 1]) catch {
+        _ => fail("decode-audio: --rate expects a number")
+      }
+      i = i + 2
+    } else if a == "--rate" {
+      fail("decode-audio: --rate requires a value")
     } else if path == "" {
       path = a
       i = i + 1
@@ -36,8 +45,15 @@ fn main raise {
     fail("decode-audio: no input file")
   }
   let data = @fs.read_file_to_bytes(path)
-  let audio = @avf.decode_audio_file(data) catch {
+  let decoded = @avf.decode_audio_file(data) catch {
     e => fail("decode-audio: \{path}: \{e.message()}")
+  }
+  let audio = if rate != 0 {
+    decoded.resample_to(rate) catch {
+      e => fail("decode-audio: \{e.message()}")
+    }
+  } else {
+    decoded
   }
   if output != "" {
     let wav = audio.to_wav_s16() catch {

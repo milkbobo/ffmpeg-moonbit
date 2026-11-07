@@ -9192,3 +9192,523 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   ——ffmpeg CLI 语义；RAW AAC-in-WAV 的 C 解码全程报错即是实证。
 - **验证**：容器 native **61/61**；wasm 全量 **1457/1457**（pins 8/8：
   MP3 逐帧序列/ADTS 14 帧 NOPTS/RAW 单包 14336/门面 MP3 14976）。
+
+## 2026-11-07 HLS URI 解析与 C 参考绑定
+
+- 修复根目录播放列表解析相对 segment 地址缺少 `/`、base 查询参数中的
+  斜杠被当作目录、reference 查询/fragment 被路径化简破坏的问题。
+- 对齐 `libavformat/url.c`：本地文件路径保留 `..`，避免改变符号链接语义。
+- ffref 新增 `ffref_resolve_uri(Bytes, Bytes)`：使用固定 n9.0.2 静态库内部
+  `ff_make_absolute_url2`（关闭 DOS 路径处理），供测试参考，不依赖公共 ABI。
+  输入仅借用，拒绝嵌入 NUL，检查长度溢出，输出复制后释放临时 C 缓冲。
+- 验证：wasm-gc HLS 原有测试 7/7、URI 回归 2/2；Docker native URI
+  参考与 NUL 边界测试 2/2；`moon info --target native ffref` 通过。
+- `moon check --target all` 仍受 v128 测试目标配置影响，报告 47 个未绑定
+  符号错误（idct/md5 等测试）；本次未修改这些文件。ASan 尚未运行。
+
+## 2026-11-07 后端测试配置与 HLS 音频端到端验证
+
+- 将 IDCT、Adler-32、avstring、Base64、MD5 的 SIMD 测试限制到
+  `native`/`wasm`，与实现的 `#cfg` 一致；此前 wasm-gc 检查会引用
+  未编译的 SIMD 函数。`moon check --target all` 现已通过。
+- 新增 `hls_audio_e2e_test.mbt`：AAC 编码三帧 → TS 音频封装 → HLS
+  字节范围回调 → 统一容器解码。查询参数中的 URL 和 `/../` 原样保留，
+  回调核对 URI、偏移和长度，3072 个 PCM 样本与直接 AAC 解码完全一致。
+- 窄测试 `moon test libavformat/hls_audio_e2e_test.mbt --target wasm`
+  通过；相关包 `moon info --target wasm` 通过，公共接口未改变。
+- 完整 `moon test --target wasm`：1460/1460 通过，0 失败。
+
+## 2026-11-07 DASH SegmentBase 索引边界与扩展 box 头
+
+- `dash_parse_sidx` 在读取版本相关字段前验证完整头部，损坏或截断的
+  v0/v1 索引返回错误；支持 MP4 64-bit extended-size 及 size=0 box 头。
+- 拒绝零 timescale、空引用与层级索引；检查 first_offset 和累计引用
+  偏移的 Int64 溢出，避免将子索引误当媒体数据或下载回绕地址。
+- 新增 4 项回归：逐字节截断、扩展头绝对偏移、非法字段/溢出、损坏
+  索引重试。原有 SegmentBase（含真实 H.264 MP4 解码）3/3、分片读取
+  6/6 均通过；全后端检查与 libavformat 接口生成通过，公共 API 未改变。
+
+## 2026-11-07 DASH indexRange 内 MP4 box 遍历
+
+- SegmentBase 索引范围可在 `sidx` 前包含 `free` 等完整顶层 box；遍历
+  支持普通、扩展与到响应末尾的 box 尺寸，损坏尺寸和不完整头返回错误。
+- 媒体绝对地址由 `indexRange` 起点 + 跳过的 box 长度 + `sidx` 自身
+  尺寸 + first_offset 计算，响应中后续 box 不改变引用基准。
+- 新增 3 项回归：前后附加 box、损坏跳过 box、真实 FFmpeg MP4 插入
+  `free` 后扩展 indexRange。后者核对初始化、两个媒体片段完整字节、
+  每段 5 个视频样本和全部 fetch 偏移。DASH 大写筛选测试 11/11，
+  小写 dash 筛选测试 28/28，`moon check --target all` 通过；公共 API 未改变。
+
+## 2026-11-07 DASH 完整文件初始化与空 SegmentList
+
+- 完整单文件媒体已包含同 URI 初始化部分，读取器跳过重复的初始化
+  下载与拼接，避免重复 MP4 moov 并改变采样偏移；外部初始化以及带
+  mediaRange 的同文件分片保留原有 init + media 流程。
+- 显式或继承的空 SegmentList 不再合成 BaseURL 单文件分片；直播尚无
+  SegmentURL 时返回 None，且不下载初始化文件或误请求 MPD 本身。
+- 新增 3 项测试：真实完整 MP4（10 个视频样本、仅一次全文件 fetch）、
+  三层空列表继承、外部与同文件范围初始化。均通过，全后端检查通过。
+- `moon test libavformat --target wasm`：533/533 通过；接口生成通过，
+  公共 API 未改变。
+
+## 2026-11-07 DASH 分片配置逐属性继承
+
+- 修复局部 SegmentTemplate/List/Base 将父级配置整个遮蔽的问题。
+  按 Representation → AdaptationSet → Period 合并属性与子元素组，
+  子层已声明的 SegmentTimeline/SegmentURL 组整体覆盖，未声明则继承。
+  同层多个 SegmentURL 均保留，不与父层列表拼接。
+- 新增 5 项黑盒回归，覆盖三层属性、父时间线、局部时间线替换、
+  SegmentList 初始化/时序/列表替换及 SegmentBase 初始化范围继承。
+- libavformat wasm 测试 538/538 通过；全后端检查、接口生成通过，
+  公共 API 未改变。
+
+## 2026-11-07 DASH presentationTimeOffset 开放重复时间线
+
+- 非零媒体时间起点的 `r=-1` 时间线使用 PTO + Period 时长作为截止
+  时间，避免仅生成一段；下一条显式 S@t 优先作为截止点，$Time$ URL
+  保留原媒体时间，不减 PTO。负数/非法 PTO 归零，未知时长不以 PTO
+  单独充当截止点。
+- 偏移加时长使用饱和边界，开放重复计数避免加 duration 后溢出。
+- 新增 5 项回归；第一项在修复前复现 1 段而非 3 段。修复后全部
+  通过；libavformat wasm 543/543，全后端检查、接口生成通过。
+
+## 2026-11-07 DASH 分片计数与序号溢出
+
+- duration 模板的向上取整改为 `1 + (total-1)/duration`，超长单段
+  不再因加法溢出而漏掉；无效 timescale 与 SegmentList 一样归一为 1。
+- 时间线展开前检查 Int32 可表示的段数、Int64 时间终点与序号；
+  SegmentList 用索引计算时间/序号并检查乘加边界。错误通过原有
+  av_dash_parse Result 返回；单个最大序号仍可正常读取。
+- 新增 4 项回归；libavformat wasm 547/547，全后端检查与接口生成
+  通过，公共 API 未改变。
+
+## 2026-11-07 DASH SegmentList 时间线
+
+- SegmentList 不再忽略自身或继承的 SegmentTimeline：将展开后的
+  每段 time/duration 映射到对应 SegmentURL，保留 URI 与 mediaRange。
+- 与模板共用 PTO/Period 截止时间计算；未知时长时，有限 URL 数量
+  可限定末尾 r=-1。显式时间线与 URL 数量不匹配通过 Result 返回错误；
+  空直播列表仍返回 None 且不发起初始化下载。
+- 新增 5 项黑盒回归，包括继承的可变时长+字节范围读取、末尾开放
+  重复、数量不匹配、PTO 和空列表。libavformat wasm 552/552，
+  全后端检查、接口生成通过，公共 API 未改变。
+
+## 2026-11-07 DASH 多 Period 时间边界推导
+
+- 用显式 start/duration 与 MPD 总时长构建边界，按已知 duration
+  正向/反向求省略的 start，再以相邻 start 求缺失 duration。
+  避免每个省略 duration 的 Period 都枚举到整个 MPD 结尾。
+- 显式零时长保留，显式重叠值仍按原有契约保留；缺少足够边界时
+  时长维持未知（0），不凭空生成分片。
+- 新增 5 项测试，覆盖连续起点、下个显式起点、反向推导、未知直播
+  时长、MPD 尾边界及零时长。完整容器回归 556/556，随后新增的尾边界
+  测试亦通过（时序测试 5/5）；全后端检查通过，公共 API 未改变。
+
+## 2026-11-07 HLS EXT-X-START 起始分片选择
+
+- `hls_segment_reader_new` 增加可选 `prefer_x_start=false` 参数。
+  与 FFmpeg hls.c 的显式选项一致，仅在未结束列表启用 TIME-OFFSET；
+  负值从列表尾部回算，越界截到首/末分片，边界选择下一分片。
+- 默认与 ENDLIST 行为保持原样。无效/非有限 offset 回退到原起点，
+  PRECISE 片内样本裁剪仍由解码层处理，读取器返回完整分片。
+- 新增 4 项黑盒测试及 1 个文档测试，覆盖偏移/边界/GAP/重试/空列表。
+  libavformat wasm 562/562，全后端检查通过；接口生成确认仅新增可选参数。
+
+## 2026-11-07 HLS live_start_index
+
+- 读取器增加可选 `live_start_index=0`，正索引从窗口头计数、负索引
+  从窗口尾计数，越界截断；传 -3 可采用 FFmpeg 常见直播起点。
+  默认 0 保持原调用行为，ENDLIST 仍从头读取。
+- 显式启用且有效的 EXT-X-START 优先；缺失/非法标签回退到选定的
+  live_start_index，而非强制归零。
+- 新增 4 项回归（HLS 起点测试共 8/8），覆盖 Int32 极值、优先级、
+  空/结束列表、跳过过期密钥和失败重试。libavformat wasm 566/566，
+  全后端检查、接口生成通过；公共 API 仅新增可选参数。
+
+## 2026-11-07 HLS 手动直播窗口刷新
+
+- 新增 `HlsSegmentReader::reload(HlsPlaylist)`，按待读绝对媒体序号
+  续读重叠窗口，旧窗口不回退；过期待读段前移至新窗口首段并标记
+  discontinuity。下载/解析/刷新调度仍由调用方执行。
+- 每次成功刷新清空按列表下标缓存的 key/map，避免新窗口下标复用
+  命中旧材料；拒绝主列表、不一致序号与溢出的替换，失败不改状态。
+- 记录待传递 discontinuity，修复末尾 GAP 返回 None 后断点丢失。
+- 新增 6 项黑盒及 1 个文档测试：重叠/过期/陈旧窗口、失败重试、
+  初始化与同 URI 密钥轮换、非法替换。libavformat wasm 573/573，
+  全后端检查与接口生成通过。
+
+## 2026-11-07 PNG/APNG 输入与缓冲边界
+
+- 校验颜色类型与位深组合，拒绝低位深 RGB/GA/RGBA、16-bit 调色板。
+- PNG 滤波数据量、Adam7 数据量及原生输出大小先用 Int64 计算，
+  超出字节缓冲 Int32 索引范围时返回错误；APNG 在画布分配前检查尺寸。
+- 块长使用剩余字节数比较，块遍历条件避免 pos+12 回绕；APNG 帧矩形
+  使用画布剩余宽高比较，避免 offset+size 回绕后误通过。
+- 新增 4 项黑盒回归，原有 PNG/APNG 15/15、真实容器矩阵 6/6 均通过，
+  全后端检查与接口生成通过，公共 API 未改变。新测试放入独立黑盒文件，
+  避免白盒 Wasm 模块初始化函数触发 local count too large。
+
+## 2026-11-07 MJPEG 默认 Huffman 表
+
+- 移植 jpegtabs.h 的亮度/色度 DC/AC 标准表，按 mjpegdec.c 初始化行为
+  预装表 0/1，支持未携带 DHT 的缩略 MJPEG 帧；显式 DHT 仍覆盖对应表。
+- 新增 4 项黑盒测试：无 DHT 灰度/4:2:0、非零 DC 系数、显式表覆盖及
+  跨调用恢复默认。原有 mjpeg:* 回归 16/16，真实容器矩阵 6/6 通过。
+- 现有 FFmpeg C oracle 新增缩略帧差分：Docker native 1/1（同时验证
+  灰度和 4:2:0），像素逐字节一致；全后端检查和接口生成通过，公共 API
+  未改变。首次 native 编译后已清理临时容器。
+
+## 2026-11-07 MJPEG DQT/DHT 表定义校验
+
+- DQT precision 仅允许 0/1，非法值在读取条目前拒绝，修复落入16位
+  分支的越界；segment 边界比较使用剩余长度，避免位置加法回绕。
+- DHT 按层计算剩余编码空间，拒绝 oversubscribed 码长；符号总数限制
+  为 256（同上游 mjpegdec.c）。合法稀疏树与自定义覆盖仍可解码。
+- 新增 4 项坏表回归及 1 项合法16位量化表非零 DC 像素回归。
+  大写 MJPEG 9/9、原有 mjpeg:* 16/16、真实容器矩阵 6/6 通过，
+  全后端检查与接口生成通过，公共 API 未改变。
+
+## 2026-11-07 MJPEG 持久表解码会话
+
+- 新增 `MjpegDecoder::new/decode`，沿成功帧保留 DQT/DHT；图像尺寸、
+  预测器和重启状态仍逐帧重建。旧 av_mjpeg_decode 复用同一核心但每次
+  创建新会话，保持独立图片调用语义。
+- 表槽复制后解析，只在完整解码成功时提交；失败的量化/Huffman 表
+  替换不污染后续帧。表字段私有，会话间互不共享。
+- 新增 3 项会话回归及文档测试；大写 MJPEG 12/12、原有 mjpeg:*
+  16/16、容器矩阵 6/6、文档 1/1 通过。全后端检查与接口生成通过。
+- Docker native C oracle 连续两帧差分 1/1 通过：第二帧无 DQT，
+  会话解码像素与 FFmpeg 两帧逐字节一致。README 已补会话用法，临时容器已清理。
+
+## 2026-11-07 HLS/DASH 接入统一播放管线（纯 MoonBit 切片）
+
+- 新增 `libavformat/playback_streaming.mbt` 的 `StreamingMedia`：
+  `open(Bytes, MediaFetch)` 按内容识别 HLS/DASH（`#EXTM3U` / `<MPD`，
+  不依赖 filename/MIME 提示），另提供 `open_hls(HlsPlaylist)` 与
+  `open_dash(DashMpd, period~/adaptation_set~/representation~)`。
+  `MediaFetch` 是调用方提供的 `(uri, offset, length) -> Result[Bytes, String]`
+  回调，等价 FFmpeg 自定义 AVIO；此片不涉及任何 FFI/oracle。
+- 每个分片的 `MediaSegmentData::bytes()` 直接交给既有 `MediaFile::open`，
+  复用 MP4/TS 等解复用器与 `AudioDecoder`，不重复容器或编解码逻辑。
+  `next_packet` 跨片输出 `StreamingPacket`（带 segment_sequence 与
+  discontinuity 标记）；`decode_audio` 跨片保持同一解码器实例，
+  discontinuity 时重新 `AudioDecoder::open`，对齐 C 的
+  `AV_DISCONTINUITY` flush 语义。
+- **跨片 pts 归一**：首片保留容器原始时间戳；后续每片按每流
+  「上片末 pts + 该流最后观测步长」定位首包，段内统一加偏移，
+  得到单一单调时间轴，与 hls.c/dashdec.c 的连续性规则同形
+  （本项目没有共享 AVFormatContext，故以显式偏移表达）。
+  `#EXT-X-DISCONTINUITY` 只标记分片首包、不回退时间轴。
+- 边界加固：所有 pts 加减走 Int64 饱和算术，防止损坏容器把时间轴
+  绕回负值；流索引 ≥ 4096 返回 `DemuxError` 而非无限扩容；
+  DASH 三个索引越界明确报错；master 播放列表明确拒绝。
+  `MediaFetch` 失败原样映射为 `DemuxError` 且保留 reader 游标，
+  下次调用重试同一分片，不丢包不重包。
+- 验证：新增 12 项黑盒 + 3 项白盒测试，夹具全部由本仓 AAC 编码器
+  与 TS/fMP4 复用器现做——HLS 2/3 段包序列与逐样本 PCM、
+  DASH init+双 media 段与 `decode_audio_file` 逐样本一致、
+  discontinuity 标记与解码器重置、回调失败重试、空列表零 fetch、
+  格式识别与索引越界、饱和算术与异常流索引。窄测试 15/15。
+  全后端 `moon check --target all` 通过；`moon info` 公共接口增量
+  仅 `StreamingMedia`/`StreamingPacket`/`StreamingKind`/`StreamingReader`
+  及其方法；未改动 `Source` 枚举与任何既有文件容器路径。
+- 遗留（非本片）：`check --deny-warn` 仍有 6 处历史警告
+  （swscale/swresample 的 unused_error_type/deprecated_syntax 与
+  ffref/moon.pkg 的 unused_package），以及若干测试文件的
+  string-literal-as-Bytes deprecated 字面量，与本片无关，未触碰。
+
+## 2026-11-07 ffref 原生 oracle 注释下线（模块收敛为纯 MoonBit）
+
+- 排查结论：全模块 C FFI 仅存在于 `ffref/`——6 个 `extern "c"` 声明
+  （`ffi.mbt`）、C stub `ffref_stub.c`（链接 FFmpeg n9.0.2 静态库）与
+  `moon.pkg` 的 `native-stub`/native `link` 配置；其余代码零 FFI
+  （`playback_oracle_pins_test.mbt` 等仅注释提及验证出处，本身纯 Wasm）。
+- 决定：**oracle 相关功能明确不做**。模块交付纯 MoonBit，不绑定任何
+  原生 FFmpeg 库；oracle 差分管线整体注释保留（不删除），历史差分
+  验证记录（§328-§332，61/61）保持原文不改写。
+- 落地：`ffref/moon.pkg` 全量注释（imports/native-stub/targets/link），
+  包内三 `.mbt` 逐行 `//` 注释并加"明确不做"头注（MoonBit 无
+  `/* */` 块注释，首版块注释包裹致 3 处 parse error，已改逐行），
+  `ffref_stub.c` 加"未接入构建"头注；`pkg.generated.mbti` 重新生成为
+  空接口。
+- 复验：`moon check --target all` 0 错误（ffref 历史警告 `unused_package`
+  随注释消失，全局历史警告 6→5）；`moon info` 通过；Wasm 全量测试
+  **1544/1544** 通过。README 同步更新（oracle 停用说明与验证段）。
+
+## 2026-11-07 libswresample 第二片——原生重采样器（§333）
+
+- `libswresample/swresample_resample.mbt`：`resample.c` + `resample_template.c`
+  FLTP 路径全量移植。`SwrResampler::new/process/flush`，默认参数照搬
+  options.c（32 抽头、phase_shift 10、linear_interp 1、kaiser β9、
+  cutoff 0.97、exact_rational 1）。
+- **滤波器组**（build_filter，f64 设计/f32 存储）：kaiser/cubic/
+  blackman-nuttall 三窗；`sin_lut` 符号交替的 factor==1 纯插值分支；
+  相位镜像行 + `resample_init` 双 memcpy 的旋转副本行（linear 内积走
+  `filter[i+alloc]` 下一相位）；phase-0 行 DC 归一化。bessel 复用
+  libavutil 既有移植。
+- **相位钟**：av_reduce(out, in·pc) + 倍增到 ≥2^20；exact_rational 把
+  pc 坍到约化分子（48k→8k: pc=1/div=6；48k→44.1k: pc=147；44.1k→48k:
+  pc=160；48k→96k: pc=2 factor=1 走 sin_lut 插值）。
+- **驱动语义**（输出值与分块无关，简化 pull 驱动值等价）：
+  `invert_initial_buffer` 镜像启动史（s[-n]=s[n]，index 归一到 s[-K]，
+  K=(fl-1)/2；不足 fl+1 样本永不输出——含 flush）；
+  `multiple_resample` 窗口界（end_index=(1+len-fl)·pc 的 ceil 除）；
+  `resample_flush` 尾镜像 (min(len,fl)+1)/2 后排干。
+- **内核**：resample_common 偶/奇双累加器逐乘 f32；resample_linear
+  下一相位 + `inv_src_incr` f64 权重（含 C 的 f32 强转链）。
+  s16 出口 `swr_f32_to_s16`：f32 乘 32768 先舍入再 lrintf（audioconvert
+  的 FLTP→S16 表达式）。
+- **对拍**（docker ffmpeg 9.0.2 `aresample`，输入输出双侧内嵌
+  base64，`.scratch/_swr_check/`）：48k→8k（198 抽头）**逐字节恒等**；
+  48k→44.1k/96k、stereo→44.1k、44.1k→48k 四组输出计数恒等、值 ≤1 LSB
+  （错 2-6/4410 样本，f64 libm sin/exp 与 glibc 的 ulp 差在设计期翻转
+  个别舍入，计数钉死）。crafted 白盒 13 项：滤波器组镜像/旋转行、相位钟
+  参数、分块不变性（含乱序碎块）、短流拒收、stereo 平面独立性、三窗形。
+- 坑：**`Array::make(channels, [])` 引用别名**——stereo 双通道推进同一
+  数组（mono 无感），new 里 hist 必须逐通道建新数组；测试 harness 把
+  process/flush 的"本次新样本平面"当累积平面 push 也是同类陷阱。
+  MoonBit 无块注释（上一片已记）。
+- 验证：`moon check --target all` 0 错误、`moon info` 通过、Wasm 全量
+  **1559/1559**（+15）。README 同步。
+
+## 2026-11-07 libswscale 通用缩放片——legacy 定点管线（§334）
+
+- `libswscale/swscale_scale.mbt`：`SwsPlanarScaler`（420P 8bit → 420P 任意偶数尺寸，
+  bicubic=FFmpeg 默认）。initFilter 定点设计（B=0/C=0.6 int64 多项式，无 libm）
+  + 近零削减/单调守卫/边界搬移 + one(H=2^14/V=2^12) 误差扩散归一化；
+  hScale8To15_c（>>7 钳 32767 + int16 回绕）；yuv2planeX_8_c（dither 恒 64 表、
+  plane1 与 planeX(4096) 数学等价）。FFmpeg 9 graph 只是壳，实际走
+  run_legacy_swscale。
+- **A/B 考古（docker）**：CLI==SIMD harness（md5 恒等）；SIMD≠纯 C（±1，
+  139/1800 与 675/10368——x86 filterAlign=4 改变误差扩散），按 §323 双官方
+  路径先例对齐纯 C 语义，av_force_cpu_flags(0) harness 输出为逐字节权威向量。
+- **对拍**：64→40x30、64→96x72 **逐字节恒等**；64→50x38（非整数倍+奇色度宽
+  25/19）差 3/2850 ±1（钉住，待专项）。
+- **坑**：C 系数生成 d≥2^30 时 dd·ddd 会 int64 溢出回绕（外层 tap 被削减丢弃，
+  核心 tap 不受影响）；中间滤波器必须保持 int64 到归一化（首版 to_int() 截
+  32 位=结构性崩坏）；ROUNDED_DIV 负分支必须截断除法（python // 向下取整差 1，
+  MoonBit / 恰是 C 截断语义）。
+- 验证：moon check --target all 0 错误、moon info 通过、Wasm 全量 **1562/1562**
+  （+3 realdata）。README 同步。
+
+## 2026-11-07 libswscale 缩放+RGB 组合路径（§335）
+
+- `SwsPlanarScaler` 之外新增 `SwsRgbScaler`：420P 8bit → RGB24/BGR24 任意
+  偶数宽高。legacy `yuv2rgb_X_c_template` 成对垂直写出（Y 偶/奇列 + 半率
+  色度共享），复用 §334 的 initFilter/hScale8To15 与 §321 官方 LUT。
+  色度几何：chrDstW=dstW/2（isAnyRGB 无 FULL_CHR_H_INT 时 chrDstHSubSample=1）、
+  chrDstH=dstH 全高（垂直上采样）。
+- **G 通道指针语义修正**：C 的 `table_gU[U] + table_gV[V]` 是指针相加——
+  先把 off_gv 加进索引再取表（梯度上差 ±3），第一片的"值相加+回绕"解释
+  在缩放路径全面翻车后修正为索引相加（未缩放路径两解释在原向量值域内
+  碰巧一致）。
+- **奇宽考古（docker 给 utils.c 打 fprintf 补丁重编译问真值）**：dstW=43 时
+  真 C 的色度 H 是 32→43 全宽（xInc=48771）而非 32→22——FFmpeg 图结构对
+  奇宽走全宽色度 full-chroma 插值（另一套 yuv2rgb_full 模板）；偶宽才是
+  X 模板。本片对奇宽明确 raise 范围外（extract-frame 用例均偶尺寸）。
+- 对拍（纯 C harness 向量）：40x30、96x72 **逐字节恒等**；50x38 差 6/5700
+  ±1（钉住，与 §334 的 3 样本残差同源）。坑：调试时 `cp probe_in.yuv in.yuv`
+  覆盖了向量输入导致假回归，重生成向量前先校验输入 md5；moon fmt/hook 会
+  对旧文件做 Int→Int32/方法化 autofix（yuv2rgb.mbt 的 40 行 diff）。
+- 验证：check --target all 0 错误、moon info 通过、Wasm 全量 **1565/1565**
+  （+3 RGB realdata）。README 同步。
+
+## 2026-11-07 extract-frame --scale 接线（§336）
+
+- `cmd/extract-frame` 新增 `--scale W:H`（偶数、2..=16384）：planar/yuv 输出走
+  SwsPlanarScaler（三平面分别缩放再拼接），rgb24/bgr24 走 SwsRgbScaler 一步
+  缩放+转换；JSON 汇总上报缩放后尺寸；原生非 4:2:0 帧明确报错。
+- **端到端（docker 64x48 libx264 mkv + `ffmpeg -vf scale` CLI）**：rgb24
+  40:30 输出**逐字节恒等**（RGB packed 写出的 x86 SIMD 与纯 C 位级一致）；
+  yuv 96:72 输出 498/10368 ±1（yuv2yuvX asm 与 C 的已知双路径差异，§334）。
+  奇数 --scale 参数被 CLI 前置拒绝。
+- 坑：`@string.split` 是 String 方法（`"a:b".split(":")`），包函数不存在；
+  Iter 需 `.collect()` 取 Array[StringView]；`scale = Some((w, h))` 别漏 Some。
+- 验证：check --target all 0 错误、Wasm 全量 **1565/1565**。README 同步。
+
+## 2026-11-07 swscale 奇宽 full-chroma 插值（§337）
+
+- `SwsRgbScaler` 奇宽分支：`yuv2rgb_full_X_c_template`（逐像素、全率色度，
+  U/V 初值 (1<<9)-(128<<19) 先去中心）+ `yuv2rgb_write_full`（Y-=y_off、
+  Y*=y_coeff、+1<<21、R/G=B=+色度系数、(R|G|B)&0xC0000000 时三者分别
+  clip_uintp2(_,30)、>>22）。色度几何：奇宽 chrDstW=dstW 全宽（docker
+  patched-utils.c 探针已证），chrDstH=dstH。
+- **系数探针**（yuv2rgb.c 786 行 6 个 roundToInt16 定点值，docker patched
+  fprintf）：y=9539 y_off=8192 v2r=13075 v2g=-6660 u2g=-3209 u2b=16525
+  （BT.601 limited，9539/8192=1.1642 经典值）。注意 v2g=cgv、u2g=cgu
+  （首版映射写反）。
+- 对拍：43x28（奇宽）**逐字节恒等**；43x29（奇宽+奇高）差 1/3741 ±1
+  （钉住）。CLI --scale 放开奇宽：rgb24 43:29 端到端 vs docker CLI
+  **逐字节恒等**（RGB packed SIMD==C 再次验证）；yuv 奇尺寸由 planar
+  scaler 的 guard 清晰报错。
+- 坑：MoonBit Int 上 0xC0000000 字面量越界（用 -1073741824）；位运算与
+  != 的优先级必须加括号。
+- 验证：Wasm 全量 **1567/1567**（+2 奇宽组）、check --target all 0 错误。
+
+## 2026-11-07 重采样播放门面 decode-audio --rate（§338）
+
+- `libavformat/playback_resample.mbt`：`DecodedAudio::resample_to(rate)`
+  ——整段 process+flush 一次过（输出与分块无关）、逐通道重组 planes、
+  labels/format/duration 全保留；等采样率恒等快路径；8000..=192000
+  守卫（越界 `DemuxError`）；`InvalidResampleConfig` 映射为 `DemuxError`。
+- CLI `cmd/decode-audio` 新增 `--rate N`（WAV 导出前重采样，与 §336
+  `extract-frame --scale` 对偶）。
+- 向量：48k 单声道双音 4800 样本 WAV（md5 41ca331d…，内嵌 base64）；
+  参考 = docker FFmpeg 9.0.2 `ffmpeg -i in48.wav -ar 8000 -c:a pcm_s16le`
+  数据块（1600 字节=800 样本精确计数）。wasm 黑盒 3 项 + CLI 双端一致：
+  差 **1/800 ±1 LSB**（597 号样本 -13556/-13557，x86 SIMD vs 纯 C 标量，
+  §333/§337 双官方路径教义，钉住）。
+- 坑：本工具链 `Int32` 即 `Int` 别名——`Int32` 字段直接传 `Int` 形参即可，
+  `.to_int()`/`.to_int32()`/`reinterpret_as_int` 全不存在（诊断统一显示
+  "Type Int has no method …"，极易误诊为字段类型不符）；`ref` 是保留字
+  （测试变量名改 `ref_pcm`）；`for i in 0..<f()/2` 范围上界须先绑定
+  `let n = …` 再 `0..<n`。
+- 坑（环境）：ffmpeg-moonbit-ffref:nine 镜像 ENTRYPOINT=ffmpeg，docker
+  run 不要再传 "ffmpeg"，否则它被当成输出文件名；git-bash `-v` 路径用
+  python subprocess 传 `D:\...` 原生形式最稳。
+- 验证：Wasm 全量 **1570/1570**（+3）、check --target all 0 错误。
+
+## 2026-11-07 swscale 422/444 缩放 + SWS_MAX_REDUCE_CUTOFF 根因修复（§339）
+
+- `SwsPlanarScaler` 格式参数化：`src_fmt~/dst_fmt~ : SwsChromaFmt`
+  （Yuv420/Yuv422/Yuv444，默认 420），色度几何 = AV_CEIL_RSHIFT(格式 shift)
+  （utils.c:1404-1407）；`get_local_pos` 对任意 chr_subsample 都返回 128
+  （(128<<cs)>>cs），四个滤波器 pos 参数 128/128 不变——滤波器设计维度无关，
+  只换几何。偶数守卫按格式自身子采样需求：420 需宽高偶、422 需宽偶、444 无约束。
+- **根因考古（三轮 docker 探针）**：420→444 首片差 13/13824（U 7/V 6，±1），
+  python 模型复现完全相同差异 → MoonBit 忠实。①全滤波器组 dump
+  （utils_patched2：FULLBANK）→ C 在 dst 列 21/45/69 的 filterPos 比模型 +1；
+  ②设计期 filter2 dump（utils_patched3：DESIGN）→ 设计期逐位一致，差异在
+  缩减环；③缩减环打点（utils_patched4）→ C 在 21 号左移了（头部 2.78e13 通过
+  了阈值测试）→ **swscale.h:447 `#define SWS_MAX_REDUCE_CUTOFF 0.002`**，
+  §334 建模误抄 0.00002（差 100 倍）。旧向量全部落在两阈值的判定同侧区
+  （<3.6e11 或 >3.6e13）所以侥幸逐字节恒等；4.8× 色度上采样头部 2.78e13
+  恰落中间区间暴露。修正后：§334 50x38（原钉 3）、§335 RGB 50x38（原钉 6）、
+  §337 RGB 43x29（原钉 1）对同一 C 参考全部归零——**旧"±1 SIMD/C 双路径"
+  钉值实为本 bug，非 SIMD 差异**（CLI SIMD≠纯 C 的教义本身仍成立，是另一轴）。
+- 向量：7 组（444→444 上下行、422→422、444→420、420→444（色度 4.8× 上采样）、
+  422→420、422→444 50x38→43x29 奇尺寸），`av_force_cpu_flags(0)` harness
+  （harness_fmt.c 通用化：任意 pix fmt 组合），全部**逐字节恒等** + 1 项守卫
+  测试（422 奇宽拒、422 奇高收、444 全奇收）。
+- 坑：python ceil 除 `(w+1)>>s` 在 s=0 给 w+1（必须 `(w + 2**s - 1) >> s`，
+  生成器与向量两处同错——文件大小 +h/2×2 就是症状）；docker 镜像无 python3，
+  补丁本地打好好再挂；C 缩减环左侧移计数与右侧计数**共用变量 j**，打点时
+  "shifts=j" 是右侧环退出值，须结合 min 反推左移次数。
+- 验证：libswscale 19/19、Wasm 全量 **1578/1578**（+8）、check --target all 0 错误。
+
+## 2026-11-07 swscale 422/444→RGB 组合（§340）
+
+- `SwsRgbScaler` 加 `src_fmt~ : SwsChromaFmt`（默认 Yuv420）：
+  - **路由镜像 utils.c**：RGB 目的地非 full-chroma 时 `chrDstHSubSample=1`
+    （半宽 pair 模板）；**奇 dstW 或 444 源强制 SWS_FULL_CHR_H_INT**
+    （"input having non subsampled chroma"，utils.c:1288-1296）→ 全宽
+    per-pixel `yuv2rgb_full_X_c`；色度垂直恒 dstH 全率（RGB 格式无垂直
+    子采样，`chrDstVSubSample` 只在 full-chroma 关闭时才动 H）。
+  - 色度源几何按格式 ceil（422：chr_sh=srcH 全高；444：全尺寸），偶数守卫
+    提为共享 `sws_fmt_even_ok`（420 宽高偶/422 宽偶/444 无约束），planar
+    与 RGB 两个 scaler 一致。
+  - 实现改动极小（§339 几何参数化 + §337 full-chroma 模板天然可组合）：
+  struct 增 chr_sw/chr_sh/chr_dw/full_chroma 四字段，scale() 的守卫与色度
+  行 stride 改用存储几何，奇宽分支条件 `dw%2!=0` → `full_chroma`。
+- 向量：5 组（422→rgb24 偶宽 pair、444→rgb24 偶宽**强制 full-chroma**、
+  422→rgb24 奇尺寸、444→bgr24 奇尺寸、444→rgb24 下行）对
+  `av_force_cpu_flags(0)` harness **全部逐字节恒等**（首跑即绿）+ 1 项
+  422 奇宽守卫。
+- 坑：docker `--entrypoint bash` 后首参不要再写 bash（会执行名为 bash 的
+  文件）；444 50x38 输入须单独生成（422 向量文件字节太少 fread 失败）。
+- 验证：libswscale 25/25、Wasm 全量 **1584/1584**（+6）、check --target all 0 错误。
+
+## 2026-11-07 swscale full-range（yuvj/JPEG）→RGB（§341）
+
+- 探针（yuv2rgb_patched6.c，复用 §337 SWS_DUMP_COEFF 思路 + 新增 24bpp
+  全表 dump：y_table 2048 字节 + table_rV/bU/gU 1280 指针偏移 + gV 整数偏移）：
+  **先跑 limited 一遍自证**——dump 与已提交 official_* 五数组逐值一致，探针
+  可信；full-range 一遍得 `official_full_*` 五数组（yoffs 384 vs 326、cy 不乘
+  255/219、oy=0、crv/cbu/cgu/cgv ×224/255）追加进 swscale_official_data.mbt。
+- **full-chroma per-pixel 系数对**（SWS_DUMP_COEFF）：limited
+  y=9539 y_off=8192 v2r=13075 v2g=-6660 u2g=-3209 u2b=16525；full
+  y=8192 y_off=0 v2r=11485 v2g=-5850 u2g=-2819 u2b=14516。
+- `SwsRgbScaler` 加 `full_range~ : Bool = false`：pair 路径按范围选 LUT 组
+  （y_tab/base_r/base_gu/off_gv/base_b 五元组本地别名），full-chroma 分支
+  按范围选系数对；模板常数（1<<18、>>19、+512）与范围无关（C 模板共享）。
+- 向量：yuvj420p→rgb24 偶宽（pair+full 表）、yuvj420p→rgb24 奇宽
+  （full-chroma+full 系数）、yuvj422p→rgb24、yuvj444p→bgr24 50x38→43x29
+  （444+bgr+full 三重），`av_force_cpu_flags(0)` harness（yuvj 格式名直接
+  可用，弃用警告即所需语义）**4/4 首跑逐字节恒等**。
+- 坑：FFmpeg n9 的 ff_yuv2rgb_c_init_tables 范围是形参 `fullRange`（非
+  ctx 字段），`c->yuvTable` 是 void* 指针差须强转。
+- 验证：libswscale 29/29、Wasm 全量 **1588/1588**（+4）、check --target all 0 错误。
+
+## 2026-11-07 swscale BT.709 色彩空间矩阵（§342）
+
+- **先攻"系数驱动现算表"路线失败并定位根因**：python 整数推导器
+  （fill_table/fill_gv_table/roundToInt16 全 int64）对照已提交表——y_table
+  两 range 逐值一致、full 表基本一致、**limited 表 4 张几乎全差常数**
+  （29/37/7/15）。入口 dump 探针（yuv2rgb_patched7 SWS_DUMP_INVTAB）揭示：
+  inv_table 入参确为 601 原值，但到 24bpp 表构造时 crv 已被改为 89830
+  （full=91881=×224/255 ✓ 整数链可复刻）——**n9 表构造链中段有 cms 双精度
+  变换**（libswscale/cms.c），limited 下与整数推导系统性偏离。结论：表必须
+  按组探针硬编码（§341 路线正确）；系数段（cms 改写前）整数链可推且与探针
+  一致——唯 709 full 的 u2g 探针 -1534 vs 推导 -1535（224/255 的 double/int
+  分界差 1），一切以探针为准。
+- BT.709 探针（harness_fmt.c 加 argv9 colorspace：public
+  `sws_getCoefficients`+`sws_setColorspaceDetails`，srcRange 随 yuvj 输入）：
+  709 limited y=9539 y_off=8192 v2r=14686 v2g=-4366 u2g=-1747 u2b=17305；
+  709 full y=8192 y_off=0 v2r=12901 v2g=-3835 u2g=-1534 u2b=15201。
+  表 `official_709_*`/`official_709_full_*` 十数组（swscale_709_tables.mbt）。
+- MoonBit：`SwsColorSpace`（Bt601/Bt709，pub(all)）+ `sws_rgb_lut_set`/
+  `sws_rgb_full_chroma_coeffs` 两个 (CS×range) 选择器；SwsRgbScaler 加
+  `colorspace~`（默认 Bt601，回归 29/29 不变）。
+- 向量：709 limited pair（40x30→96x72）、709 limited full-chroma（50x38→
+  43x29）、709 full pair、709 full+444+bgr（50x38→43x29）——**4/4 首跑
+  逐字节恒等**。
+- 坑：docker run 偶发 `/w` 挂载不存在（重试即好）；heredoc 反斜杠坑再现
+  （C 字符串 `
+` 补丁必须走 Write 脚本文件）；moon fmt 会压 tuple 成单行
+  导致文本替换 needle 失配（重跑前先看现场）。
+- 验证：libswscale 33/33、Wasm 全量 **1592/1592**（+4）、check --target all 0 错误。
+
+## 2026-11-07 swscale FCC/SMPTE240M/BT.2020 矩阵（§343）
+
+- 纯扩展片：`sws_getCoefficients` 中与 BT.601 值不同的其余矩阵全补齐——
+  FCC(4) {104448,132798,24759,53109}、SMPTE240M(7) {117579,136230,16907,35559}、
+  BT.2020(9) {110013,140363,12277,42626}；SMPTE170M(6) 值同 601 不单列、
+  BT.2020 CL(10) 与 NCL(9) 共 ff_yuv2rgb_coeffs 故共表（enum 单变体）。
+- 探针系数（ setColorspaceDetails 后组）：FCC lim v2r=13056/v2g=-6639/
+  u2g=-3095/u2b=16600、ful 11469/-5831/-2719/14582；240M lim
+  14697/-4445/-2113/17029、ful 12911/-3904/-1856/14959；BT.2020 lim
+  13752/-5328/-1535/17545、ful 12080/-4680/-1348/15412。y/y_off 与 CS 无关
+  （9539/8192、8192/0）。
+- 表：`official_{fcc,smpte240m,bt2020}{,_full}_*` 六组 30 数组
+  （swscale_cs_tables.mbt，212 KB）；enum 加 Fcc/Smpte240M/Bt2020 三变体，
+  两个选择器各加 6 臂。
+- 向量：6 组 pair（每 CS×range）+ BT.2020 limited 奇宽 full-chroma，
+  **7/7 首跑逐字节恒等**。
+- 坑：生成器 limited 组 sfx='' 少下划线（official_bt2020base_r 未绑定）；
+  label punning 语法是 `colorspace=cs`（=变量名≠标签名时不能用 `cs~`）。
+- 验证：libswscale 40/40、Wasm 全量 **1599/1599**（+7）、check --target all 0 错误。
+
+## 2026-11-07 swscale 10bit 平面缩放（§344）
+
+- `SwsPlanarScaler` 加 `src_bits~/dst_bits~`（8/10）：hScale16To15_c
+  （`sh = depth - 1`，u16 LE 读取，step=(bits+7)/8）；输出 yuv2planeX_10_c
+  （`shift = 11 + 16 - bits`、`1<<(shift-1)` 舍入、av_clip_uintp2、LE 写）；
+  8bit 输出管线不变（15bit 中间满量程对齐）。
+- **两个考古发现**：①`should_dither = isNBPS(src)||is16BPS(src)`——10bit 源
+  →8bit 输出时 dither 从全 64 常数表切换为**有序 ff_dither_8x8_128[行&7][列&7]**
+  （swscale.c:42 表 + :519 切换）；②vscale.c 里 **V 平面的 offset=3**
+  （`dither[(i+3)&7]`，U/luma 为 0）——sws_scale_plane 加 `dither_off~` 参数。
+  两步把 10→8 的 2611 差缩到 850 再到 0（Y/U 全对只 V 差时定位到 offset）。
+- **行为放宽**：planar scaler 移除 420 偶数守卫（§334 的政策性限制）——
+  几何本就 AV_CEIL_RSHIFT（§339），奇尺寸输出与 C 一致（43x29 向量
+  3814 字节 ceil 色度逐字节恒等）；RGB scaler 守卫不变。
+- 坑：`src_bits / 8` 整除陷阱（10/8=1，须 `(bits+7)/8`，helper 与管线三处
+  同错）；hscale 行偏移 row_off 是样本单位（byte base 须 `(row_off+pos)*step`，
+  首版只乘 pos 漏乘 row_off → 跨行错位）；positional 参数不能带默认值
+  （`dither_off~` 标签化）。
+- 向量：10→10 上行/下行/奇尺寸（50x38→43x29）+ 10→8 降位深，4 组
+  **逐字节恒等** + 位深守卫测试。
+- 奇宽源补验：422 51x30、420 41x30 → 40x30 对 docker **逐字节恒等**
+  （swscale_odd_realdata_test.mbt +2），§339 的"422 拒奇宽"守卫测试改为
+  正向断言（守卫移除的合法化验证）。
+- 验证：libswscale 47/47、Wasm 全量 **1606/1606**（+7：10bit 5 + 奇宽源 2）、check --target all 0 错误。
