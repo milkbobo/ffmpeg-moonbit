@@ -389,6 +389,12 @@ pub struct DashSegmentReader {
   mut next_index : Int32
   mut index_loaded : Bool
   index_offsets : Array[(Int64, Int64)]
+  /// Start time and duration (in the representation's timescale) of the last
+  /// segment handed out. `last_time` stays -1 until the first `next`, and for
+  /// the single-file `sidx` path where there is no per-segment timing.
+  /// A refreshed live MPD resumes strictly after it.
+  mut last_time : Int64
+  mut last_duration : Int64
 }
 
 ///|
@@ -403,6 +409,42 @@ pub fn dash_segment_reader_new(
     next_index: 0,
     index_loaded: false,
     index_offsets: [],
+    last_time: -1L,
+    last_duration: 0L,
+  }
+}
+
+///|
+/// Start time of the last segment `next` returned (-1 before the first, or
+/// when the representation is a single-file `sidx` resource).
+pub fn DashSegmentReader::last_time(self : DashSegmentReader) -> Int64 {
+  self.last_time
+}
+
+///|
+/// Duration of the last segment `next` returned (0 before the first).
+pub fn DashSegmentReader::last_duration(self : DashSegmentReader) -> Int64 {
+  self.last_duration
+}
+
+///|
+/// Advance the cursor past every segment that starts at or before `time` and
+/// report the start time of the next one. `None` means the window did not
+/// move: every segment it lists has already been played, so the caller should
+/// poll again later instead of treating the session as finished.
+pub fn DashSegmentReader::skip_through_time(
+  self : DashSegmentReader,
+  time : Int64,
+) -> Int64? {
+  let segments = self.representation.segments
+  while self.next_index < segments.length() &&
+    segments[self.next_index].time <= time {
+    self.next_index += 1
+  }
+  if self.next_index >= segments.length() {
+    None
+  } else {
+    Some(segments[self.next_index].time)
   }
 }
 
@@ -496,6 +538,8 @@ pub fn DashSegmentReader::next(
     Ok(value) => value
     Err(e) => return Err(e)
   }
+  self.last_time = segment.time
+  self.last_duration = segment.duration
   self.next_index += 1
   Ok(
     Some({

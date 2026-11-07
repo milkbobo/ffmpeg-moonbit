@@ -49,7 +49,7 @@ pub(all) enum StreamingReader {
 pub struct StreamingMedia {
   kind : StreamingKind
   format_name : String
-  reader : StreamingReader
+  mut reader : StreamingReader
   mut streams : Array[StreamInfo]
   /// Demuxer for the segment currently being drained; None before the first
   /// `next_packet` and between segments.
@@ -83,6 +83,19 @@ pub struct StreamingMedia {
   mut reload_budget : Int32
   /// Number of successful `reload` calls, for observability/tests.
   mut reload_count : Int32
+  /// Selected DASH Period/AdaptationSet/Representation. Kept so a refreshed
+  /// MPD resumes on the same representation instead of re-guessing.
+  mut dash_period : Int32
+  mut dash_adaptation_set : Int32
+  mut dash_representation : Int32
+  /// Start time and duration of the last DASH segment emitted, both in the
+  /// representation's timescale. A refreshed MPD resumes strictly after
+  /// `last_time + last_duration`.
+  mut dash_last_time : Int64
+  mut dash_last_duration : Int64
+  /// The refreshed window skipped segments that expired before we got to
+  /// them; the next emitted segment is flagged as a discontinuity.
+  mut dash_gap : Bool
 }
 
 ///|
@@ -207,9 +220,25 @@ fn StreamingMedia::streaming_load_segment(
   if self.streams.length() == 0 {
     self.streams = streaming_normalize_codecs(mf.streams())
   }
+  // Remember where this DASH segment sits on the representation's timeline so
+  // a refreshed MPD can resume after it.
+  match self.reader {
+    DashReader(r) => {
+      self.dash_last_time = r.last_time()
+      self.dash_last_duration = r.last_duration()
+    }
+    HlsReader(_) => ()
+  }
+  let mut discontinuity = segment.discontinuity
+  if self.dash_gap {
+    // The refreshed window skipped segments we never played; the decoder has
+    // to be reset or the timeline would silently bridge the hole.
+    discontinuity = true
+    self.dash_gap = false
+  }
   self.current = Some(mf)
   self.current_sequence = segment.sequence
-  self.current_discontinuity = segment.discontinuity
+  self.current_discontinuity = discontinuity
   self.streaming_reset_segment()
 }
 
@@ -292,6 +321,12 @@ fn streaming_from_reader(
     playlist_uri: "",
     reload_budget: 0,
     reload_count: 0,
+    dash_period: 0,
+    dash_adaptation_set: 0,
+    dash_representation: 0,
+    dash_last_time: -1L,
+    dash_last_duration: 0L,
+    dash_gap: false,
   }
 }
 
@@ -347,8 +382,9 @@ pub fn StreamingMedia::reload_bytes(
 }
 
 ///|
-/// True for an HLS media playlist without `EXT-X-ENDLIST`. Only such sessions
-/// can be usefully refreshed; VOD playlists always end at their last segment.
+/// True for an HLS media playlist without `EXT-X-ENDLIST` or a DASH MPD with
+/// `type="dynamic"`. Only such sessions can be usefully refreshed; VOD
+/// presentations always end at their last segment.
 pub fn StreamingMedia::is_live(self : StreamingMedia) -> Bool {
   self.is_live
 }
@@ -360,8 +396,88 @@ pub fn StreamingMedia::reload_count(self : StreamingMedia) -> Int32 {
 }
 
 ///|
+/// Replace the live DASH MPD and resume reading. The selected
+/// Period/AdaptationSet/Representation is kept unless overridden, segments
+/// already emitted are skipped by start time (so a refreshed sliding window
+/// neither repeats nor loses packets), and a window that dropped segments in
+/// between is flagged as a discontinuity on the next emitted segment. A
+/// rejected MPD leaves the session untouched so the caller can retry.
+///
+/// A refreshed window that lists nothing new is not an error: the cursor
+/// simply stays at the end and `next_packet` reports `None` again, matching
+/// FFmpeg's `dashdec` polling behaviour.
+pub fn StreamingMedia::reload_dash(
+  self : StreamingMedia,
+  mpd : DashMpd,
+  period~ : Int32 = -1,
+  adaptation_set~ : Int32 = -1,
+  representation~ : Int32 = -1,
+) -> Unit raise MediaError {
+  if self.kind != Dash {
+    raise DemuxError("reload_dash: only DASH sessions can be reloaded")
+  }
+  let fetch = match self.reader {
+    DashReader(r) => r.fetch
+    HlsReader(_) =>
+      raise DemuxError("reload_dash: only DASH sessions can be reloaded")
+  }
+  let p = if period >= 0 { period } else { self.dash_period }
+  let a = if adaptation_set >= 0 { adaptation_set } else {
+    self.dash_adaptation_set
+  }
+  let r = if representation >= 0 { representation } else {
+    self.dash_representation
+  }
+  if p < 0 || p >= mpd.periods.length() {
+    raise DemuxError("dash: period index out of range")
+  }
+  let sets = mpd.periods[p].adaptation_sets
+  if a < 0 || a >= sets.length() {
+    raise DemuxError("dash: adaptation set index out of range")
+  }
+  let reps = sets[a].representations
+  if r < 0 || r >= reps.length() {
+    raise DemuxError("dash: representation index out of range")
+  }
+  if reps[r].segments.length() == 0 {
+    // Single-file SegmentBase representations address one static resource by
+    // byte index; there is no segment list to continue through.
+    raise DemuxError("reload_dash: representation lists no segments")
+  }
+  let fresh = dash_segment_reader_new(reps[r], fetch)
+  // Resume strictly after the last segment we played. `None` means the whole
+  // window is already behind us - keep the cursor parked at the end.
+  let next_time = fresh.skip_through_time(self.dash_last_time)
+  let gap = match next_time {
+    None => false
+    Some(t) => {
+      if self.dash_last_time < 0L {
+        false
+      } else {
+        let expected = streaming_sat_add(
+          self.dash_last_time,
+          self.dash_last_duration,
+        )
+        t > expected
+      }
+    }
+  }
+  self.reader = DashReader(fresh)
+  self.dash_period = p
+  self.dash_adaptation_set = a
+  self.dash_representation = r
+  // Sticky: a second refresh must not clear a gap the first one detected
+  // before the decoder has actually been reset.
+  self.dash_gap = self.dash_gap || gap
+  self.current = None
+  self.streaming_reset_segment()
+  self.finished = false
+  self.reload_count += 1
+}
+
+///|
 /// Try one automatic refresh using the hook supplied at `open`. Returns true
-/// when the playlist was successfully replaced. A fetch/parse failure is
+/// when the playlist/MPD was successfully replaced. A fetch/parse failure is
 /// mapped to `DemuxError` (the caller can retry the same `next_packet` call).
 /// Exhausting the budget is not an error: the session just ends.
 fn StreamingMedia::streaming_auto_reload(
@@ -375,17 +491,32 @@ fn StreamingMedia::streaming_auto_reload(
     Some(fetch) => {
       let data = match fetch(self.playlist_uri, 0L, -1L) {
         Ok(v) => v
-        Err(e) => raise DemuxError("reload: playlist fetch failed: \{e}")
+        Err(e) => raise DemuxError("reload: control fetch failed: \{e}")
       }
-      let parsed = match
-        av_hls_parse(streaming_playlist_text(data), base_uri=self.playlist_uri) {
-        Ok(p) => p
-        Err(e) => raise DemuxError("reload: \{e}")
+      if self.kind == Dash {
+        let parsed = match
+          av_dash_parse(
+            streaming_playlist_text(data),
+            base_uri=self.playlist_uri,
+          ) {
+          Ok(p) => p
+          Err(e) => raise DemuxError("reload: \{e}")
+        }
+        self.reload_dash(parsed)
+      } else {
+        let parsed = match
+          av_hls_parse(
+            streaming_playlist_text(data),
+            base_uri=self.playlist_uri,
+          ) {
+          Ok(p) => p
+          Err(e) => raise DemuxError("reload: \{e}")
+        }
+        if parsed.is_master {
+          raise DemuxError("reload: refreshed playlist must be a media playlist")
+        }
+        self.reload(parsed)
       }
-      if parsed.is_master {
-        raise DemuxError("reload: refreshed playlist must be a media playlist")
-      }
-      self.reload(parsed)
       self.reload_budget -= 1
       true
     }
@@ -535,12 +666,19 @@ pub fn StreamingMedia::open_hls(
 /// Open one DASH representation. The three indexes select a Period,
 /// AdaptationSet and Representation of the parsed MPD; out-of-range values
 /// raise `DemuxError` rather than being silently clamped.
+///
+/// A `type="dynamic"` MPD opens as a live session: `is_live()` is true and
+/// `reload_dash` (or the optional `mpd_fetch~` automatic refresh) can extend
+/// the window. Static MPDs end at their last segment.
 pub fn StreamingMedia::open_dash(
   mpd : DashMpd,
   fetch : MediaFetch,
   period~ : Int32 = 0,
   adaptation_set~ : Int32 = 0,
   representation~ : Int32 = 0,
+  mpd_fetch~ : MediaFetch? = None,
+  mpd_uri~ : String = "",
+  max_reloads~ : Int32 = 0,
 ) -> StreamingMedia raise MediaError {
   if period < 0 || period >= mpd.periods.length() {
     raise DemuxError("dash: period index out of range")
@@ -559,7 +697,19 @@ pub fn StreamingMedia::open_dash(
   } else {
     None
   }
-  streaming_from_reader(Dash, "dash", DashReader(reader), duration)
+  let session = streaming_from_reader(Dash, "dash", DashReader(reader), duration)
+  session.dash_period = period
+  session.dash_adaptation_set = adaptation_set
+  session.dash_representation = representation
+  session.is_live = mpd.type_ == "dynamic"
+  session.playlist_fetch = mpd_fetch
+  session.playlist_uri = mpd_uri
+  session.reload_budget = if max_reloads > 0 && session.is_live {
+    max_reloads
+  } else {
+    0
+  }
+  session
 }
 
 ///|
@@ -622,7 +772,13 @@ pub fn StreamingMedia::open(
       Err(e) => raise DemuxError("dash: \{e}")
       Ok(p) => p
     }
-    return StreamingMedia::open_dash(parsed, fetch)
+    return StreamingMedia::open_dash(
+      parsed,
+      fetch,
+      mpd_fetch=playlist_fetch,
+      mpd_uri=base_uri,
+      max_reloads~,
+    )
   }
   raise FormatNotFound
 }

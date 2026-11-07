@@ -9851,3 +9851,37 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   `moon info --target wasm` 通过；全量 Wasm **1631/1631**（新增 2 项：
   `resample: filter type integer codes`、
   `swscale scale: context reports its algorithm`）。
+
+## 2026-11-07 自适应流第五片：DASH 动态 MPD 刷新（纯 MoonBit）
+
+- 此前 `reload` 对 DASH 直接报错，`is_live()` 只认 HLS，live DASH 是自
+  适应流最后一处不对称。本片补上：`type="dynamic"` 的 MPD 现在以
+  活会话打开，`reload_dash(DashMpd)` 可推进窗口。
+- **续接按起始时间而非分片序号**：`DashSegment` 的 `time`/`duration`
+  是表示内部 timescale 的绝对量，对 `$` 与 `$` 两种寻址都
+  单调，因此统一用 `time` 判断已播过。`DashSegmentReader` 新增
+  `last_time`/`last_duration` 记录（`next` 成功后才更新）与
+  `skip_through_time(time)`：把游标推过所有 `time <= last_time` 的分段，
+  返回下一段的起始时间；`None` 表示窗口没动。
+- **跳段检测**：期望的下一个起点是 `last_time + last_duration`，刷新后
+  首段起点大于它说明中间有分段在窗口里过期了，下一分片会被标
+  `discontinuity` 让解码器重置。该标志**粘性**（`||=`），二次刷新不会在
+  解码器真正重置前把它抹掉。
+- **轮询语义**：窗口没推进不是错误——游标停在末尾，`next_packet` 继续
+  返回 `None`，`reload_count` 正常递增，与 `dashdec` 的行为一致。
+- 选中的 Period/AdaptationSet/Representation 记在会话里，刷新默认沿用，
+  也可用 `period~`/`adaptation_set~`/`representation~` 覆盖；越界照旧
+  报错。只列一段的 SegmentBase 单文件表示没有分片表可续接，`reload_dash`
+  明确拒绝而不是从字节 0 重来。
+- 自动刷新：`open`/`open_dash` 新增 `mpd_fetch~`+`mpd_uri~`+
+  `max_reloads~`，`streaming_auto_reload` 按 `kind` 分流（HLS 解析播放
+  列表、DASH 解析 MPD），预算与循环结构与 HLS 完全相同。控制面拉取的
+  错误串统一成 `reload: control fetch failed: ...`。
+- 验证：新增 9 项黑盒（动态 MPD 打开为 live 且无 duration、静态 MPD 不
+  误判 live、追加窗口续接且 pts 单调不重复、滑动窗口不算 discontinuity、
+  跳段标记 discontinuity 且只标首包、窗口未动时游标停驻后可继续、
+  `mpd_fetch` 自动推进三次预算三次、跨类型刷新互相拒绝且计数不动、
+  SegmentBase 拒绝）。libavformat 整包 **625/625**；全量 Wasm
+  **1640/1640**（本片 +9）；`check --deny-warn` 仍然零警告。
+  公共 API 增量：`reload_dash`、`open_dash` 的三个可选参数、
+  `DashSegmentReader` 的 `last_time`/`last_duration`/`skip_through_time`。
