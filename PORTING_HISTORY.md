@@ -9938,3 +9938,78 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   让 open 直接报错；`next_packet` 仍返回变体自己的包数）。
   libavformat 整包 **636/636**；全量 Wasm **1651/1651**（本片 +6）；
   `check --deny-warn` 仍零警告。公共 API 增量：`audio_track()`。
+
+## 2026-11-07 自适应流第八片：HLS 字幕轨（纯 MoonBit）
+
+`SUBTITLES="group"` + `EXT-X-MEDIA:TYPE=SUBTITLES` + WebVTT 分片，读侧补齐。
+写入侧早就有 `hls_write_vtt_segment`，读侧一片空白——所以这一片是「解析器」
+加「门面跟随」两半。
+
+**解析器（`hls_subtitles.mbt`）**
+
+- `hls_vtt_parse_time`：`HH:MM:SS.mmm` / `MM:SS.mmm` / `SS.mmm`，逗号小数也收
+  （野外的写入器会发），无小数位合法；返回值是毫秒。
+- `hls_vtt_timestamp_map`：`X-TIMESTAMP-MAP=MPEGTS:<90kHz ticks>,LOCAL:<vtt time>`，
+  两侧都折成毫秒（`ticks / 90`），单侧缺失补 0，两侧都解析不出就是「没声明」而
+  不是错误。
+- `hls_vtt_parse_document`：返回 `HlsVttDocument { cues, timestamp_map? }`；
+  `hls_vtt_parse` 保留为只吐 cue 的薄包装。要求 `WEBVTT` 签名、跳过
+  NOTE/STYLE/REGION 与 cue identifier 行、cue 文本按 `\n` 连接、cue settings
+  丢弃、CRLF 与 BOM 容忍。
+- **`X-TIMESTAMP-MAP` 只上报不施加**：把映射落到呈现时间轴需要复用流的
+  MPEG-TS 时钟，字幕 playlist 自身不携带；静默按它平移反而是错的。
+- 头区判定按规范来：`X-TIMESTAMP-MAP` 只在「签名行之后、第一个空行之前」
+  生效，所以 `NOTE` 正文里写同样的字符串不会被误读（用 `in_header` 标志，
+  空行或首个 timing 行关闭）。
+
+**门面（`playback_streaming.mbt`）**
+
+- `streaming_pick_audio_rendition` 抽成 `streaming_pick_rendition(master, group, type_)`，
+  音轨与字幕轨只差一个 `TYPE`；选择规则不变（`DEFAULT=YES` 优先，否则第一个
+  带 `URI` 的同组同类型成员）。
+- `StreamingMedia` 增 `mut subtitle_track : HlsSubtitleTrack?` 与
+  `subtitles()` 访问器。字幕是**打开时就取完**的（cue 比媒体分片小几个数量级），
+  所以访问器无 IO、不抛。
+- 某个分片不是 WebVTT、或 rendition 播放列表取不回来，直接让 `open` 抛
+  `DemuxError`——与 `hls_read_header` 提前打开每个声明过的 rendition 一致，
+  不静默播一个没有字幕的视频。
+
+**时间轴归位规则（`hls_subtitle_track_open`）**
+
+`EXTINF` 累计出每段的播放列表起点。cue 时间默认视为**绝对**（
+`hls_write_vtt_segment` 就是这么写的）；若某段的**最后一个 cue 在段起点
+之前结束**，那只能说明作者写的是段内相对时间，于是整段按段起点平移。
+首段的平移量两种解释下都是 0，所以这条规则不靠猜。
+
+**踩到的坑**
+
+- 时序行是 `start --> end`（箭头两侧各一个空格），`line[arrow+3:]` 拿到的是
+  `" 00:00:02.000"`。第一版按「第一个空白前的 token」切，切出空串，全部 cue
+  都报 `bad cue end timestamp ''`——**写入器 round-trip 测试当场抓到**，
+  改成先 `trim` 再找分隔符。
+- `for i = (a)..<b {` 是 E4137：range operator 只支持 `for i in a..<b`。
+- 测试辅助函数里用 `fail()` 要声明 `raise Failure`（E4122），否则它只能在
+  测试块内用。
+- 无 `.mbt` 文件里 `#|` 多行字符串是本仓库既有写法（144 个文件在用），
+  写 VTT 夹具比拼接 `\n` 可读得多。
+
+**验证**
+
+新增 WebVTT 读取 14 项（写入器 round-trip、六种时间戳形态、五种畸形拒绝、
+NOTE/STYLE/REGION 与 cue id 跳过、settings 丢弃、多行拼接、CRLF+BOM、
+倒序 cue 报错、坏边界报错、timestamp map 换算、NOTE 冒充头、单侧缺失/垃圾、
+`EXTINF` 毫秒取整）与门面 9 项（变体 1 段 + rendition 2 段收集到 3 条 cue 并
+校验 language/name/forced/playlist_uri；三段相对时间平移到 0/3000/6000；
+后段绝对时间不平移 + 越界索引返回 `None`；无 `SUBTITLES` 时无字幕轨且从未
+请求 `.vtt`；同组异类型/异组同类型都不算；`DEFAULT=YES` 胜出且非默认成员
+从未被拉取；非 WebVTT 分片与 rendition 取回失败各自的报错文案；
+`X-TIMESTAMP-MAP` 在场也不动 cue 时间）。
+
+libavformat 整包 **659/659**；全量 Wasm **1674/1674**（本片 +23）；
+`check --target wasm/native --deny-warn` 零警告。
+公共 API 增量：`subtitles()`、`HlsSubtitleTrack`（accessors）、
+`HlsVttDocument`/`HlsVttTimestampMap`、`HlsVttCue::start_ms/end_ms/text`。
+
+**未做**：DASH 侧的字幕 Representation（`text/vtt` AdaptationSet 写入器已有，
+读侧还没跟随）；字幕 rendition 的 live 刷新（当前按打开时的播放列表一次性收集）；
+多字幕语言选择 API（现在只按 `DEFAULT=YES` 取一条）。

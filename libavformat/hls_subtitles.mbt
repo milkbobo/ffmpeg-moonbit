@@ -22,6 +22,60 @@ pub fn hls_vtt_cue_new(
 }
 
 ///|
+pub fn HlsVttCue::start_ms(self : HlsVttCue) -> Int64 {
+  self.start_ms
+}
+
+///|
+pub fn HlsVttCue::end_ms(self : HlsVttCue) -> Int64 {
+  self.end_ms
+}
+
+///|
+pub fn HlsVttCue::text(self : HlsVttCue) -> String {
+  self.text
+}
+
+///|
+/// An `X-TIMESTAMP-MAP` header, both sides converted to milliseconds. The
+/// MPEG-TS side arrives in 90 kHz ticks, the local side as a WebVTT time.
+pub struct HlsVttTimestampMap {
+  mpegts_ms : Int64
+  local_ms : Int64
+}
+
+///|
+pub fn HlsVttTimestampMap::mpegts_ms(self : HlsVttTimestampMap) -> Int64 {
+  self.mpegts_ms
+}
+
+///|
+pub fn HlsVttTimestampMap::local_ms(self : HlsVttTimestampMap) -> Int64 {
+  self.local_ms
+}
+
+///|
+/// One parsed WebVTT document: its cues plus the `X-TIMESTAMP-MAP` header when
+/// the segment declares one.
+pub struct HlsVttDocument {
+  cues : Array[HlsVttCue]
+  timestamp_map : HlsVttTimestampMap?
+}
+
+///|
+pub fn HlsVttDocument::cues(self : HlsVttDocument) -> Array[HlsVttCue] {
+  self.cues
+}
+
+///|
+/// The `X-TIMESTAMP-MAP` the document declared, if any. Reported rather than
+/// applied: mapping it onto a presentation timeline needs the MPEG-TS clock of
+/// the muxed stream, which a subtitle rendition playlist does not carry.
+pub fn HlsVttDocument::timestamp_map(self : HlsVttDocument) -> HlsVttTimestampMap? {
+  self.timestamp_map
+}
+
+///|
 /// `HH:MM:SS.mmm` timestamp.
 fn hls_vtt_timestamp(ms : Int64) -> String {
   let v = if ms < 0L { 0L } else { ms }
@@ -59,4 +113,412 @@ pub fn hls_write_vtt_segment(cues : ArrayView[HlsVttCue]) -> String {
     sb.write_string("\n")
   }
   sb.to_string()
+}
+
+///|
+/// Decimal digits to Int64, or None when the field is empty or not numeric.
+/// Hand-rolled because `@string.parse_int` raises and the cue parser wants a
+/// plain `Option`.
+fn hls_vtt_digits(text : StringView) -> Int64? {
+  if text.length() == 0 {
+    return None
+  }
+  let mut value = 0L
+  for i = 0; i < text.length(); i = i + 1 {
+    let digit = text[i].to_int() - '0'.to_int()
+    if digit < 0 || digit > 9 {
+      return None
+    }
+    value = value * 10L + digit.to_int64()
+  }
+  Some(value)
+}
+
+///|
+/// Parse a WebVTT timestamp: `HH:MM:SS.mmm`, `MM:SS.mmm`, or `SS.mmm`.
+/// A comma decimal separator is accepted because writers in the wild emit it.
+/// Returns milliseconds, or None when the field is malformed.
+fn hls_vtt_parse_time(field : StringView) -> Int64? {
+  let text = field.trim(chars=" \t").to_owned()
+  if text.length() == 0 {
+    return None
+  }
+  let parts : Array[String] = []
+  for part in text.split(":") {
+    parts.push(part.to_owned())
+  }
+  let (hour_text, minute_text, second_text) = if parts.length() == 3 {
+    (parts[0], parts[1], parts[2])
+  } else if parts.length() == 2 {
+    ("0", parts[0], parts[1])
+  } else if parts.length() == 1 {
+    ("0", "0", parts[0])
+  } else {
+    return None
+  }
+  let hours = match hls_vtt_digits(hour_text) {
+    Some(v) => v
+    None => return None
+  }
+  let minutes = match hls_vtt_digits(minute_text) {
+    Some(v) => v
+    None => return None
+  }
+  let (whole_text, fraction_text) = match second_text.find(".") {
+    Some(i) => (second_text[0:i].to_owned(), second_text[i + 1:].to_owned())
+    None =>
+      match second_text.find(",") {
+        Some(i) => (second_text[0:i].to_owned(), second_text[i + 1:].to_owned())
+        None => (second_text, "")
+      }
+  }
+  let seconds = match hls_vtt_digits(whole_text) {
+    Some(v) => v
+    None => return None
+  }
+  let mut millis = 0L
+  let mut scale = 100L
+  for i = 0; i < fraction_text.length() && i < 3; i = i + 1 {
+    let digit = fraction_text[i].to_int() - '0'.to_int()
+    if digit < 0 || digit > 9 {
+      return None
+    }
+    millis = millis + digit.to_int64() * scale
+    scale = scale / 10L
+  }
+  Some(((hours * 60L + minutes) * 60L + seconds) * 1000L + millis)
+}
+
+///|
+/// Split one cue's timing line (`start --> end [settings]`) into absolute
+/// millisecond bounds. Cue settings after the end timestamp are ignored, as
+/// the port has no renderer to apply them to.
+///
+/// The two bounds are whitespace-separated from the `-->` arrow on both
+/// sides (`start --> end`, not `start-->end`), so the fields are trimmed
+/// before parsing rather than fed to the number reader raw.
+fn hls_vtt_parse_timing(line : String) -> Result[(Int64, Int64), String] {
+  let arrow = match line.find("-->") {
+    Some(i) => i
+    None => return Err("vtt: cue line has no --> separator")
+  }
+  let start_field = line[0:arrow].trim(chars=" \t").to_owned()
+  let body = line[arrow + 3:].trim(chars=" \t").to_owned()
+  // The end timestamp is the first whitespace-delimited token of what
+  // follows; the rest is cue settings.
+  let mut end_at = body.length()
+  for sep in [" ", "\t"] {
+    match body.find(sep) {
+      Some(i) =>
+        if i < end_at {
+          end_at = i
+        }
+      None => ()
+    }
+  }
+  let end_field = body[0:end_at].to_owned()
+  let start = match hls_vtt_parse_time(start_field) {
+    Some(v) => v
+    None => return Err("vtt: bad cue start timestamp '\{start_field}'")
+  }
+  let end = match hls_vtt_parse_time(end_field) {
+    Some(v) => v
+    None => return Err("vtt: bad cue end timestamp '\{end_field}'")
+  }
+  if end < start {
+    return Err("vtt: cue ends before it starts (\{start} -> \{end})")
+  }
+  Ok((start, end))
+}
+
+///|
+/// `X-TIMESTAMP-MAP=MPEGTS:<90kHz ticks>,LOCAL:<vtt time>`, both sides turned
+/// into milliseconds. Either side may appear on its own; the other then keeps
+/// `0`. Returns `None` when neither side parses, so a malformed header degrades
+/// to "no map declared" instead of failing the whole segment.
+fn hls_vtt_timestamp_map(line : String) -> HlsVttTimestampMap? {
+  let at = match line.find("=") {
+    Some(i) => i
+    None => return None
+  }
+  let mut mpegts_ms = -1L
+  let mut local_ms = -1L
+  for field in line[at + 1:].split(",") {
+    let text = field.trim(chars=" \t")
+    if text.has_prefix("MPEGTS:") {
+      // Ticks are 90 kHz, so 90 ticks make one millisecond.
+      match hls_vtt_digits(text[7:]) {
+        Some(ticks) => mpegts_ms = ticks / 90L
+        None => ()
+      }
+    } else if text.has_prefix("LOCAL:") {
+      match hls_vtt_parse_time(text[6:]) {
+        Some(ms) => local_ms = ms
+        None => ()
+      }
+    }
+  }
+  if mpegts_ms < 0L && local_ms < 0L {
+    return None
+  }
+  let mpegts_side = if mpegts_ms < 0L { 0L } else { mpegts_ms }
+  let local_side = if local_ms < 0L { 0L } else { local_ms }
+  Some({ mpegts_ms: mpegts_side, local_ms: local_side })
+}
+
+///|
+/// Parse one WebVTT document (an HLS subtitle segment, or a standalone `.vtt`)
+/// into cues with absolute millisecond times.
+///
+/// The `WEBVTT` signature is required. `NOTE`/`STYLE`/`REGION` blocks and the
+/// cue identifier line are skipped; a cue's text is every line after its
+/// timing line, joined with `\n`. Cue settings (`align:`, `line:`, ...) are
+/// dropped - there is no renderer downstream to honor them.
+///
+/// An `X-TIMESTAMP-MAP` header is parsed and reported but *not* applied: cue
+/// times are taken as given, because mapping the header onto a presentation
+/// timeline needs the MPEG-TS clock of the muxed stream, which a subtitle
+/// rendition playlist does not carry.
+pub fn hls_vtt_parse_document(text : String) -> Result[HlsVttDocument, String] {
+  let lines : Array[String] = []
+  for line in text.split("\n") {
+    let owned = line.to_owned()
+    // A trailing CR is the CRLF artifact, not content.
+    if owned.has_suffix("\r") {
+      lines.push(owned[0:owned.length() - 1].to_owned())
+    } else {
+      lines.push(owned)
+    }
+  }
+  let mut cursor = 0
+  // A BOM may precede the signature.
+  while cursor < lines.length() && lines[cursor].trim(chars=" \t").length() == 0 {
+    cursor = cursor + 1
+  }
+  if cursor >= lines.length() {
+    return Err("vtt: empty document")
+  }
+  let signature = lines[cursor]
+  let mut signature_text = signature
+  if signature_text.has_prefix("\u{FEFF}") {
+    signature_text = signature_text[1:].to_owned()
+  }
+  if !signature_text.trim(chars=" \t").has_prefix("WEBVTT") {
+    return Err("vtt: missing WEBVTT signature")
+  }
+  let cues : Array[HlsVttCue] = []
+  let block : Array[String] = []
+  let mut timestamp_map : HlsVttTimestampMap? = None
+  // The WEBVTT header region is the signature line plus the metadata lines up
+  // to the first blank line. `X-TIMESTAMP-MAP` only counts there: a `NOTE`
+  // body that happens to spell the header name must not be picked up.
+  let mut in_header = true
+  let flush = fn() -> Result[Unit, String] {
+    if block.length() == 0 {
+      return Ok(())
+    }
+    let mut timing_at = -1
+    for i = 0; i < block.length(); i = i + 1 {
+      if block[i].find("-->") is Some(_) {
+        timing_at = i
+        break
+      }
+    }
+    if timing_at < 0 {
+      // Header metadata, NOTE, STYLE or REGION: nothing to emit.
+      block.clear()
+      return Ok(())
+    }
+    let (start, end) = match hls_vtt_parse_timing(block[timing_at]) {
+      Ok(v) => v
+      Err(e) => {
+        block.clear()
+        return Err(e)
+      }
+    }
+    let text_lines : Array[String] = []
+    for i in (timing_at + 1)..<block.length() {
+      text_lines.push(block[i])
+    }
+    cues.push(hls_vtt_cue_new(start, end, text_lines.join("\n")))
+    block.clear()
+    Ok(())
+  }
+  for i in (cursor + 1)..<lines.length() {
+    let line = lines[i]
+    let trimmed = line.trim(chars=" \t")
+    if in_header && trimmed.has_prefix("X-TIMESTAMP-MAP") {
+      match hls_vtt_timestamp_map(trimmed.to_owned()) {
+        Some(map) =>
+          if timestamp_map is None {
+            timestamp_map = Some(map)
+          }
+        None => ()
+      }
+    }
+    if trimmed.length() == 0 {
+      in_header = false
+      match flush() {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+    } else {
+      match trimmed.find("-->") {
+        Some(_) => in_header = false
+        None => ()
+      }
+      block.push(line)
+    }
+  }
+  match flush() {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  Ok({ cues, timestamp_map })
+}
+
+///|
+/// Parse one WebVTT document into just its cues. See `hls_vtt_parse_document`
+/// when the `X-TIMESTAMP-MAP` header matters too.
+pub fn hls_vtt_parse(text : String) -> Result[Array[HlsVttCue], String] {
+  match hls_vtt_parse_document(text) {
+    Ok(document) => Ok(document.cues)
+    Err(e) => Err(e)
+  }
+}
+
+///|
+/// Decode a subtitle segment's bytes as UTF-8, replacing malformed sequences
+/// with U+FFFD (the same leniency the playlist decoder applies).
+fn hls_vtt_text(data : Bytes) -> String {
+  let arr : Array[Byte] = []
+  for b in data {
+    arr.push(b)
+  }
+  utf8_to_string(arr)
+}
+
+///|
+/// `EXTINF` seconds to whole milliseconds, rounding to the nearest millisecond
+/// so that a playlist of `2.002`-second segments does not drift one tick per
+/// segment. Non-positive and non-finite durations contribute nothing.
+fn hls_vtt_segment_ms(duration : Double) -> Int64 {
+  if !(duration > 0.0) {
+    return 0L
+  }
+  let ms = duration * 1000.0 + 0.5
+  if ms >= 9223372036854775807.0 {
+    return 9223372036854775807L
+  }
+  ms.to_int64()
+}
+
+///|
+/// A collected HLS subtitle rendition: every cue its segments declared, in
+/// milliseconds on the playlist timeline, in playlist order.
+pub struct HlsSubtitleTrack {
+  language : String
+  name : String
+  forced : Bool
+  playlist_uri : String
+  cues : Array[HlsVttCue]
+}
+
+///|
+pub fn HlsSubtitleTrack::language(self : HlsSubtitleTrack) -> String {
+  self.language
+}
+
+///|
+pub fn HlsSubtitleTrack::name(self : HlsSubtitleTrack) -> String {
+  self.name
+}
+
+///|
+pub fn HlsSubtitleTrack::forced(self : HlsSubtitleTrack) -> Bool {
+  self.forced
+}
+
+///|
+pub fn HlsSubtitleTrack::playlist_uri(self : HlsSubtitleTrack) -> String {
+  self.playlist_uri
+}
+
+///|
+pub fn HlsSubtitleTrack::cue_count(self : HlsSubtitleTrack) -> Int {
+  self.cues.length()
+}
+
+///|
+pub fn HlsSubtitleTrack::cue(self : HlsSubtitleTrack, index : Int) -> HlsVttCue? {
+  if index < 0 || index >= self.cues.length() {
+    return None
+  }
+  Some(self.cues[index])
+}
+
+///|
+pub fn HlsSubtitleTrack::cues(self : HlsSubtitleTrack) -> Array[HlsVttCue] {
+  self.cues
+}
+
+///|
+/// Fetch and parse every segment of an HLS subtitle rendition playlist.
+///
+/// Cue times are read as *absolute on the playlist timeline* (what
+/// `hls_write_vtt_segment` writes, and what FFmpeg's HLS demuxer reports for
+/// segments authored that way). Authors that instead write segment-relative
+/// times are handled by a rule that cannot misfire: a segment whose last cue
+/// ends at or before the segment's own playlist start was authored relative to
+/// the segment, so it is shifted into place. For the first segment the shift is
+/// zero either way, so the rule is never a guess there.
+///
+/// A `discontinuity` segment does not reset the accumulated timeline here -
+/// subtitle cues are absolute, so `EXT-X-DISCONTINUITY` does not move them.
+pub fn hls_subtitle_track_open(
+  playlist : HlsPlaylist,
+  fetch : MediaFetch,
+  playlist_uri : String,
+  rendition : HlsRendition?,
+) -> Result[HlsSubtitleTrack, String] {
+  if playlist.is_master {
+    return Err("vtt: expected a subtitle media playlist, got a master")
+  }
+  let cues : Array[HlsVttCue] = []
+  let mut segment_start = 0L
+  for segment in playlist.segments {
+    if segment.uri == "" {
+      return Err("vtt: subtitle segment has an empty URI")
+    }
+    let data = match fetch(segment.uri, 0L, -1L) {
+      Ok(v) => v
+      Err(e) => return Err("vtt: segment \{segment.uri} fetch failed: \{e}")
+    }
+    let document = match hls_vtt_parse_document(hls_vtt_text(data)) {
+      Ok(d) => d
+      Err(e) => return Err("vtt: segment \{segment.uri}: \{e}")
+    }
+    let mut last_end = -1L
+    for cue in document.cues {
+      if cue.end_ms > last_end {
+        last_end = cue.end_ms
+      }
+    }
+    let shift = if last_end >= 0L && last_end <= segment_start {
+      segment_start
+    } else {
+      0L
+    }
+    for cue in document.cues {
+      cues.push(
+        hls_vtt_cue_new(cue.start_ms + shift, cue.end_ms + shift, cue.text),
+      )
+    }
+    segment_start = segment_start + hls_vtt_segment_ms(segment.duration)
+  }
+  let (language, name, forced) = match rendition {
+    Some(r) => (r.language, r.name, r.forced)
+    None => ("", "", false)
+  }
+  Ok({ language, name, forced, playlist_uri, cues })
 }

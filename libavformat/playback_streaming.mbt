@@ -102,6 +102,9 @@ pub struct StreamingMedia {
   /// HLS variant that declares `EXT-X-MEDIA:TYPE=AUDIO` keeps its audio in a
   /// separate rendition playlist; this is that playlist's own session.
   mut audio_track : StreamingMedia?
+  /// HLS variant that declares `EXT-X-MEDIA:TYPE=SUBTITLES` keeps its cues in
+  /// a separate WebVTT rendition playlist; these are that playlist's cues.
+  mut subtitle_track : HlsSubtitleTrack?
 }
 
 ///|
@@ -340,6 +343,7 @@ fn streaming_from_reader(
     dash_gap: false,
     dash_mpd: None,
     audio_track: None,
+    subtitle_track: None,
   }
 }
 
@@ -717,12 +721,26 @@ fn streaming_pick_audio_rendition(
   master : HlsPlaylist,
   group : String,
 ) -> HlsRendition? {
+  streaming_pick_rendition(master, group, "AUDIO")
+}
+
+///|
+/// Pick a URI-bearing member of an `EXT-X-MEDIA` group, preferring
+/// `DEFAULT=YES`. Shared by the audio and subtitle rendition paths, which
+/// differ only in the `TYPE` they select. Returns `None` when the group is
+/// empty or holds only muxed (`URI`-less) entries that cannot be opened on
+/// their own.
+fn streaming_pick_rendition(
+  master : HlsPlaylist,
+  group : String,
+  type_ : String,
+) -> HlsRendition? {
   if group == "" {
     return None
   }
   let mut fallback : HlsRendition? = None
   for r in master.renditions {
-    if r.type_ == "AUDIO" && r.group_id == group && r.uri != "" {
+    if r.type_ == type_ && r.group_id == group && r.uri != "" {
       if r.is_default {
         return Some(r)
       }
@@ -746,6 +764,9 @@ fn streaming_pick_audio_rendition(
 /// same way): that rendition is opened as its own session and `decode_audio`
 /// follows it. `av_hls_parse` has already resolved the rendition URI against
 /// the master's base URI, so it is used as-is.
+///
+/// A variant that declares `SUBTITLES="group"` likewise gets its cues from a
+/// WebVTT rendition playlist, collected into `subtitles()`.
 fn streaming_open_master(
   master : HlsPlaylist,
   fetch : MediaFetch,
@@ -806,6 +827,35 @@ fn streaming_open_master(
           max_reloads~,
         ),
       )
+    }
+  }
+  // Subtitles are auxiliary, but a broken rendition playlist is a broken
+  // stream: FFmpeg's `hls_read_header` opens every declared rendition eagerly
+  // and fails the whole open, so this does the same rather than silently
+  // playing a video with no cues.
+  match streaming_pick_rendition(master, chosen.subtitles, "SUBTITLES") {
+    None => ()
+    Some(rendition) => {
+      let url = rendition.uri
+      let subtitle_bytes = match fetch(url, 0L, -1L) {
+        Ok(v) => v
+        Err(e) => raise DemuxError("hls: subtitle rendition fetch failed: \{e}")
+      }
+      let subtitle_playlist = match
+        av_hls_parse(streaming_playlist_text(subtitle_bytes), base_uri=url) {
+        Ok(p) => p
+        Err(e) => raise DemuxError("hls: subtitle rendition playlist: \{e}")
+      }
+      if subtitle_playlist.is_master {
+        raise DemuxError("hls: nested master playlists are not supported")
+      }
+      match
+        hls_subtitle_track_open(
+          subtitle_playlist, fetch, url, Some(rendition),
+        ) {
+        Ok(track) => session.subtitle_track = Some(track)
+        Err(e) => raise DemuxError("hls: subtitle rendition: \{e}")
+      }
     }
   }
   session
@@ -1026,6 +1076,16 @@ pub fn StreamingMedia::variant_uri(self : StreamingMedia) -> String? {
 /// is for callers that want to drive another rendition or inspect the track.
 pub fn StreamingMedia::audio_track(self : StreamingMedia) -> StreamingMedia? {
   self.audio_track
+}
+
+///|
+/// The separate `EXT-X-MEDIA` subtitle rendition this session's variant
+/// delegates to, with every segment's cues already fetched and parsed, or
+/// `None` when the variant declares no `SUBTITLES=` group. Loaded eagerly at
+/// open time (cues are tiny compared with media segments), so this accessor
+/// performs no IO and never raises.
+pub fn StreamingMedia::subtitles(self : StreamingMedia) -> HlsSubtitleTrack? {
+  self.subtitle_track
 }
 
 ///|
