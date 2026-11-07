@@ -1,8 +1,3 @@
-// NOTE: intentionally NOT wired into the build. The oracle C FFI is
-// explicitly not done - the module ships as pure MoonBit - so
-// ffref/moon.pkg no longer lists this file in "native-stub". Kept for
-// reference only; see the header of ffref/moon.pkg.
-//
 // Reference-oracle bindings over the locally built FFmpeg n9.0.2 static
 // libraries. The MoonBit demux/decode ports are differential-tested against
 // this in-process oracle instead of docker ffprobe round-trips. Only the C
@@ -27,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 // Internal, pinned n9.0.2 oracle symbol from libavformat/url.h. This is not
 // part of the portable MoonBit implementation or a public FFmpeg ABI promise.
@@ -170,13 +167,11 @@ int32_t ffref_avformat_version(void) {
 //   per packet: stream_index i32, keyframe i32, pts_us i64, dts_us i64,
 //               size i32, unused i32
 // pts/dts are AV_TIME_BASE microseconds; NA (INT64_MIN) marks N/A.
-MOONBIT_FFI_EXPORT
-moonbit_bytes_t ffref_packets(moonbit_bytes_t data) {
-  AVFormatContext *fmt = NULL;
-  AVIOContext *avio = NULL;
-  if (open_input(data, &fmt, &avio) < 0)
-    return NULL;
 
+// Walk every packet of an open AVFormatContext into the probe blob above.
+// Shared by the memory-backed ffref_packets and the path-backed
+// ffref_probe_path; the caller owns the context and closes it.
+static moonbit_bytes_t probe_common(AVFormatContext *fmt) {
   const int nstreams = (int)fmt->nb_streams;
   size_t cap = 64, n = 0;
   uint8_t *recs = malloc(cap * 32);
@@ -228,8 +223,75 @@ moonbit_bytes_t ffref_packets(moonbit_bytes_t data) {
     }
   }
   free(recs);
+  return out;
+}
+
+MOONBIT_FFI_EXPORT
+moonbit_bytes_t ffref_packets(moonbit_bytes_t data) {
+  AVFormatContext *fmt = NULL;
+  AVIOContext *avio = NULL;
+  if (open_input(data, &fmt, &avio) < 0)
+    return NULL;
+  moonbit_bytes_t out = probe_common(fmt);
   close_input(fmt, avio);
   return out;
+}
+
+// Same packet view as ffref_packets, but opened from a filesystem path so
+// multi-file demuxers (hls, dash) can follow their own playlists and
+// segment files the way a real player would. Pair with ffref_write_file:
+// tests stage their fixtures under /tmp and hand the manifest path over.
+MOONBIT_FFI_EXPORT
+moonbit_bytes_t ffref_probe_path(moonbit_bytes_t path) {
+  AVFormatContext *fmt = avformat_alloc_context();
+  if (!fmt)
+    return NULL;
+  int ret = avformat_open_input(&fmt, (const char *)path, NULL, NULL);
+  if (ret < 0) {
+    fprintf(stderr, "ffref: probe_path avformat_open_input(%s) %s\n",
+            (const char *)path, av_err2str(ret));
+    return NULL; // avformat_open_input freed the context on failure
+  }
+  ret = avformat_find_stream_info(fmt, NULL);
+  if (ret < 0) {
+    fprintf(stderr, "ffref: probe_path find_stream_info %s\n",
+            av_err2str(ret));
+    avformat_close_input(&fmt);
+    return NULL;
+  }
+  moonbit_bytes_t out = probe_common(fmt);
+  avformat_close_input(&fmt);
+  return out;
+}
+
+// Stage `data` at `path`, creating parent directories as needed. This is
+// fixture staging for the path-backed oracle above, not a general file API:
+// returns 0 on success, -1 on any failure.
+MOONBIT_FFI_EXPORT
+int32_t ffref_write_file(moonbit_bytes_t path, moonbit_bytes_t data) {
+  const char *p = (const char *)path;
+  size_t len = strlen(p);
+  char *buf = malloc(len + 1);
+  if (!buf)
+    return -1;
+  memcpy(buf, p, len + 1);
+  for (size_t i = 1; i < len; i++) {
+    if (buf[i] == '/') {
+      buf[i] = 0;
+      mkdir(buf, 0755); // EEXIST (or race) is fine, anything else fails fopen
+      buf[i] = '/';
+    }
+  }
+  free(buf);
+  FILE *f = fopen(p, "wb");
+  if (!f) {
+    fprintf(stderr, "ffref: write_file fopen(%s) failed\n", p);
+    return -1;
+  }
+  size_t n = (size_t)Moonbit_array_length(data);
+  int ok = n == 0 || fwrite(data, 1, n, f) == n;
+  ok = (fclose(f) == 0) && ok;
+  return ok ? 0 : -1;
 }
 
 // Blob layout (little-endian):

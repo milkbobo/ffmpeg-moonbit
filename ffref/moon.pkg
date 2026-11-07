@@ -1,39 +1,50 @@
 // ffref: the in-process FFmpeg reference oracle (native C FFI).
 //
-// EXPLICITLY NOT DONE - INTENTIONALLY DISABLED. This module ships as a
-// pure MoonBit port and does not bind the native FFmpeg libraries; the
-// oracle differential harness (PORTING_HISTORY.md §328-§332) is kept
-// below, commented out wholesale, for reference only. To re-enable:
-// restore the original config (native-stub + native link against the
-// FFmpeg n9.0.2 static libraries; they were built in the
-// ffmpeg-moonbit-ffref docker image - see .scratch/ffref/Dockerfile,
-// because moon's Windows native backend requires MSVC) and unblock the
-// three .mbt files. The package is intentionally empty.
+// Native-only package: links the FFmpeg n9.0.2 static libraries built
+// inside the ffmpeg-moonbit-ffref docker image and differential-tests the
+// pure MoonBit demux / decode / encode ports against the real thing
+// in-process. moon's Windows native backend needs MSVC, so the suite runs
+// in the image. Use the nine-xml tag (Dockerfile.xml on top of Dockerfile)
+// - it rebuilds the static libs with --enable-libxml so the dash demuxer
+// is linked in:
+//
+//   MSYS_NO_PATHCONV=1 docker run --rm --entrypoint /bin/sh \
+//     -v "D:/project/FFmpeg-n9.0.2/moonbit:/work" -w /work \
+//     ffmpeg-moonbit-ffref:nine-xml -c \
+//     "/root/.moon/bin/moon update >/dev/null 2>&1; \
+//      /root/.moon/bin/moon test --target native -p ffref --target-dir /tmp/mbuild"
+//
+// Every source file is native-gated, so the wasm build sees an empty
+// package and the host wasm suite is unaffected.
 
-// import {
-//   "milkbobo/ffmpeg-moonbit/ffref",
-//   "milkbobo/ffmpeg-moonbit/libavcodec",
-//   "milkbobo/ffmpeg-moonbit/libavformat" @avf,
-//   "milkbobo/ffmpeg-moonbit/libavutil",
-//   "milkbobo/ffmpeg-moonbit/libswresample" @swr,
-//   "moonbitlang/core/math",
-// } for "test"
+import {
+  "moonbitlang/core/debug",
+}
 
-// import {
-//   "moonbitlang/core/debug",
-// }
+import {
+  "milkbobo/ffmpeg-moonbit/ffref",
+  "milkbobo/ffmpeg-moonbit/libavcodec",
+  "milkbobo/ffmpeg-moonbit/libavformat" @avf,
+  "milkbobo/ffmpeg-moonbit/libavutil",
+  "milkbobo/ffmpeg-moonbit/libswresample" @swr,
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/math",
+} for "test"
 
-// options(
-//   "native-stub": [ "ffref_stub.c" ],
-//   targets: {
-//     "ffi.mbt": [ "native" ],
-//     "ffref.mbt": [ "native" ],
-//     "ffref_test.mbt": [ "native" ],
-//   },
-//   link: {
-//     "native": {
-//       "cc-flags": "-I/usr/local/include",
-//       "cc-link-flags": "-L/usr/local/lib -lavformat -lavcodec -lswresample -lavutil -ldav1d -lshine -lz -lm",
-//     },
-//   },
-// )
+supported_targets = "native"
+
+options(
+  "native-stub": [ "ffref_stub.c" ],
+  targets: {
+    "ffi.mbt": [ "native" ],
+    "ffref.mbt": [ "native" ],
+    "ffref_test.mbt": [ "native" ],
+    "ffref_streaming_test.mbt": [ "native" ],
+  },
+  link: {
+    "native": {
+      "cc-flags": "-I/usr/local/include",
+      "cc-link-flags": "-L/usr/local/lib -lavformat -lavcodec -lswresample -lavutil -ldav1d -lshine -lxml2 -llzma -lz -lm",
+    },
+  },
+)

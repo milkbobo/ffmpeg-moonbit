@@ -363,6 +363,23 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳s §345 ffref 预言机复活 + HLS/DASH 路径式差分：moon.pkg 恢复
+  native-stub/link；包级 supported_targets="native"（wasm 跳整包，9 条
+  unused_package 清零，mooncakes 消费者仍零 C 依赖）。新 C 面
+  ffref_probe_path（真 avformat 按路径开输入，hls/dash 自行跟随清单开
+  分片）+ ffref_write_file（mkdir -p 铺场）；包遍历抽 probe_common。
+  fixture 四套（aac/libx264；HLS TS、DASH SegmentTemplate+Timeline）
+  base64 内嵌，纯侧 media_fetch_from_map 同字节喂 StreamingMedia；
+  断言包数/流号/尺寸/关键帧逐包精确、pts 按流内 tick 域 delta ±1 tick。
+  **ffmpeg hls demuxer 首段双重读 → 首段 pts 滞后一帧**（ffprobe 双验；
+  纯侧=裸 TS 真值；测试 pts_from_segment 参数记录该 oracle 行为）。
+  dashdec 依赖 libxml2 → 镜像叠层 .scratch/ffref/Dockerfile.xml，新 tag
+  **ffmpeg-moonbit-ffref:nine-xml**（configure 开关是 --enable-libxml2；
+  liblzma 传染 → moon.pkg 链接 -lxml2 -llzma；运行命令见 ffref/moon.pkg
+  头注释）。ffmpeg-src 的 hevcdec.c 携带主树实验损伤，GitHub n9.0.2
+  raw 还原后镜像才编译过。oracle 69/69；wasm 1708/1708。坑：sed BRE
+  `\+`=量词；docker build 接管道吞退出码；ADD tarball 网络不稳改 COPY
+  本地树；:nine 残留空 /ffmpeg 目录会把 cp -r 拷成子目录。
   ⑳o §325 libswresample 第一片：
   `libswresample/` 新包——同采样率转换（`swr_flt_to_s16` =
   audioconvert.c 的 av_clip_int16(lrintf) **round-half-to-even** 逐分支

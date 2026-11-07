@@ -10316,3 +10316,100 @@ libavformat 整包 **693/693**；全量 Wasm **1708/1708**（本片 +9）；
 Representation」的播放管线，现在一个会话只播一个 AdaptationSet）；音轨与
 字幕的 `DEFAULT` 在 `reload_dash` 换 Period 后重选（DASH 每个 Period 的
 集可能不同）；`FORCED` 轨自动叠加；ABR 换变体时字幕/音频组重选。
+
+## 2026-11-07 ffref 预言机复活 + HLS/DASH 路径式差分（§345）
+
+> 用 `moonbit-c-binding` / `make-moonbit-c-bindings` 技能流程执行。背景：
+> 用户矩阵（解码 H264/HEVC/AV1/VP9/MJPEG/PNG；音频 AAC/MP3/Opus；容器
+> MP4/MKV/TS/HLS/DASH/WebM/WAV；音频编码 AAC/MP3/Opus）纯侧已全线收敛，
+> 唯进程内 C 预言机在 §332 后整体下线。本片把它复活并补上矩阵最后的
+> 缺口——HLS/DASH 从未有过 oracle 差分（旧 `ffref_packets` 只吃单块
+> bytes，而这两个 demuxer 是多文件的）。
+
+**复活**
+
+`ffref/moon.pkg` 恢复 native-stub + link 配置；三个 .mbt 整体反注释。
+清理项：包级 `supported_targets = "native"`（wasm 直接跳过整包，消掉
+9 条 unused_package——mooncakes 消费者拿到的 wasm 模块仍是零 C 依赖）；
+`#borrow(pcm)\n#borrow(codec)...` 合并成单行（新版 moon 视为重复属性）；
+fixture 续行 `"..."` 全部迁 `b"..."`（268 条字符串字面量过载弃用警告
+清零）；删掉两个未用辅助（`ffref_expect_packets`/`ffref_first_diff`）。
+基线复验：**65/65**（交接文档写 38/38，停用前套件又长了 27 项）。
+
+**路径式 oracle（新 C 面）**
+
+`ffref_packets` 的包遍历抽成 `probe_common`；新增
+`ffref_probe_path(path)`——真 avformat 按**文件系统路径**开输入，hls/dash
+demuxer 自己跟随清单开分片（与真实播放器同路径）；配套
+`ffref_write_file(path, data)`（mkdir -p 语义）做测试铺场。MoonBit 侧
+`ffref_parse_probe` 共用 blob 解析，安全面新增 `ffref_probe_path` /
+`ffref_write_file`。C 侧仍遵守 value-as-bytes + NULL→错误约定。
+
+**fixture 与对拍**
+
+镜像内 ffmpeg 确定性生成四套（sine→aac 48k mono；testsrc2→libx264
+yuv420p keyint=5；HLS `-hls_time 0.32/0.3`，DASH `-seg_duration
+0.32/0.3 -adaptation_sets id=0,streams=a|v`，isoff-live profile =
+SegmentTemplate+SegmentTimeline），base64 内嵌进
+`ffref_streaming_test.mbt`；manifest 经 `@utf8.decode_lossy` 取文本，
+纯侧用 `media_fetch_from_map` 喂同一批字节给 `StreamingMedia::open_hls/
+open_dash`。断言：包数/次序/流号/尺寸/关键帧逐包精确；pts 按流内
+delta 在流自身 tick 域比较（`|Δtick·num·1e6 − Δus·den| ≤ num·1e6`，
+一侧 tick 域=另一侧 timebase，由裸 TS/fMP4 既有逐字节差分背书）。
+
+**发现一：ffmpeg hls demuxer 首段 pts 滞后一帧（真行为，非移植缺陷）**
+
+HLS 音频 fixture 首跑即红：oracle 的 pkt1 pts==pkt0。ffprobe（镜像内
+同版本 9.0.2）双重验证：裸 seg00.ts 的 pts 逐帧递增（1920 tick 步进），
+而 playlist 层 pkt1 起 pts 整体滞后一帧、跨到 seg01 才追平——这是
+hls demuxer 在 header 阶段重复读首段的固有产物。我们的 `StreamingMedia`
+给的是裸 TS 真值（per-PES pts，与既有裸 TS 差分一致）。处理：测试加
+`pts_from_segment~` 参数（首段跳过 pts 断言，尺寸/流号/关键帧仍比），
+音频 HLS 设 1，把这个差异作为已验证的 oracle 行为记录在案。视频
+fixture 无此现象（find_stream_info 只消费关键帧首包）。
+
+**发现二：dashdemuxer 依赖 libxml2（镜像叠层）**
+
+`--disable-network` 之外的旧 configure 没有装 libxml2，`avformat_open_input`
+对 .mpd 报 Invalid data——`ar t libavformat.a` 里根本没有 dashdec.o。
+叠层 `.scratch/ffref/Dockerfile.xml` → 新 tag **`ffmpeg-moonbit-ffref:
+nine-xml`**：`apt install libxml2-dev` + `--enable-libxml2` 重编静态库。
+坑：configure 开关是 `--enable-libxml2`（写 `--enable-libxml` 直接
+Unknown option）；libxml2-dev 引入 liblzma 后 tiff.o 自动启用 LZMA 解压，
+链接补 `-llzma`（连同 `-lxml2` 一起进 moon.pkg 的 cc-link-flags）。
+
+**发现三：ffmpeg-src 的 hevcdec.c 携带主树实验损伤**
+
+`.scratch/ffref/ffmpeg-src` 拷自主树，hevcdec.c 2584 附近有旧实验残留
+（重复声明/未声明标识符，编译直接 Error 1）——交接文档「宿主源码树
+hevcdec.c 有旧实验损伤，勿用作镜像源」的警告在本轮坐实。从 GitHub
+n9.0.2 raw 还原该文件后镜像编译通过。
+
+**验证**
+
+docker（nine-xml）ffref native **69/69**（65 旧 + HLS AAC-TS / HLS
+H264-TS / DASH AAC-fMP4 / DASH H264-fMP4 各一）；宿主 wasm
+**1708/1708** 不受影响（ffref 在 wasm 是空包）；`moon check --target
+native -p ffref` 0 警告；`moon fmt` 通过；ffref 的 `pkg.generated.mbti`
+维持空（moon info 以 wasm 为规范后端，native-only 包的接口差以
+`moon info --target native` 的 diff 输出为准）。容器新版 moon 对仓库
+既有 `derive(...)` 记 deprecated_syntax 警告——属全仓工具链升级事务，
+本片未动。
+
+**坑**
+
+- sed BRE 里 `\+` 是量词不是字面加号（`" \+$` 永远匹配不上；改 `-E`）。
+- `docker build ... | tail` 会吞退出码——`echo $?` 拿到的是 tail 的；
+  重定向到日志文件再看。
+- Dockerfile `ADD` GitHub tarball 在本网络不稳（两次连挂）；改 `COPY`
+  本地 ffmpeg-src。另：`:nine` 里残留一个空 `/ffmpeg` 目录，`cp -r
+  /src /ffmpeg` 会把源树拷成 `/ffmpeg/src` 子目录而不是合并。
+- rm-guard 钩子按命令文本拦截，`docker run -c '... rm -rf ...'` 里的
+  容器内删除也拦——容器内善后改用必然不存在的新目录名。
+- `moon info` 不认 `-p`；全仓 native 视图只打印 ffref 接口 diff 不落盘。
+
+**未做**：HLS master 多变体 / DASH 多 Representation 的 oracle 视角
+对齐（ffmpeg 会同时 demux 全部 Representation 并暴露成多条流，需要先
+定义选流映射再比）；AAC/Opus 编码差分仍是 SNR 级而非逐字节；容器新版
+moon 的 `#derive(...)` 迁移全仓清账；镜像内的运行命令已写进
+`ffref/moon.pkg` 头注释（nine-xml tag）。
