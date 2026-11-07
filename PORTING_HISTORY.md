@@ -10013,3 +10013,62 @@ libavformat 整包 **659/659**；全量 Wasm **1674/1674**（本片 +23）；
 **未做**：DASH 侧的字幕 Representation（`text/vtt` AdaptationSet 写入器已有，
 读侧还没跟随）；字幕 rendition 的 live 刷新（当前按打开时的播放列表一次性收集）；
 多字幕语言选择 API（现在只按 `DEFAULT=YES` 取一条）。
+
+## 2026-11-07 自适应流第九片：DASH 字幕 Representation（纯 MoonBit）
+
+上一片留的第一条缺口：`text/vtt` AdaptationSet 的写入器早就有了（
+`dash_write_segment_template_mpd_periods`/`…segment_list…` 都能写），读侧没跟随。
+
+**类型改名（唯一一次重构）**：`HlsSubtitleTrack` → `SubtitleTrack`，
+`playlist_uri()` → `source_uri()`。名字带 `Hls` 却要塞进 DASH 会话是错的，
+而字段语义（language/name/forced/来源地址/cues）两边都对得上。`HlsVttCue` 与
+`hls_vtt_*` 保持原名：它们是 WebVTT 层（对齐 `webvttdec.c`/`webvttenc.c`），
+DASH 文本段落的也是同一套字节格式，改名的收益不抵 150 处引用的风险。
+
+**放置规则抽公共函数**：`subtitle_place_cues(out, document, segment_start_ms)`。
+原来的「绝对优先、整段都在段起点之前结束则按段起点平移」逻辑从
+`hls_subtitle_track_open` 里搬出来，HLS 用累计 `EXTINF`、DASH 用
+`SegmentTimeline@t` 算出的段起点分别调用。首段起点都是 0，规则仍然不靠猜。
+
+**DASH 侧新增（`playback_streaming.mbt`）**
+
+- `dash_set_is_text`：`contentType="text"`（FFmpeg dashenc 的写法）或
+  `mimeType` 以 `text/` 开头，两种声明都收。
+- `dash_rep_mime`：Representation 自己的 MIME，缺省继承 AdaptationSet 的
+  （Representation 通常省略继承项）。
+- `dash_text_rep_index` / `dash_pick_subtitles`：**只认 `text/vtt`**，
+  且要求有分段。TTML/SRT 之类不喂给 WebVTT 读取器——一个无关的文本格式
+  会因为缺 `WEBVTT` 签名把本来健康的音视频流带崩。一个 Period 有多个文本集
+  （每语言一个）时第一个 `text/vtt` 胜出，与 HLS 选组「第一个带 URI 的成员」
+  同构。没有可解析的文本集就静默无字幕轨，`open` 照常成功。
+- `dash_time_to_ms`：段 time（timescale 内）折算毫秒。**先除后乘**——
+  `time * 1000` 在损坏时间轴上会溢出；余数单独换算，所以 44.1 kHz / 90 kHz
+  这类不能整除的 timescale 仍然精确。极端值饱和。
+- `dash_subtitle_track_open(set, rep, fetch, source_uri)`：逐段取字节
+  （`media_range` 走与媒体段相同的 `dash_resource_range` +
+  `media_fetch_resource`，所以单文件 + range 的字幕也能读）、解析、放置。
+  `language` 取 AdaptationSet 的 `lang`，`name` 取 Representation 的 `id`
+  （DASH 没有 rendition `NAME` 的对应物），`forced` 恒 false（DASH 无此概念）。
+
+**接线**：`open_dash` 在会话建好后，若调用者选的**不是**文本集，就在同一个
+Period 里按上面的规则找一条字幕轨挂上去；选的若是文本集，说明会话本身就是
+字幕读取器，不再二次收集。`open`（按字节嗅探）自然继承。
+
+**验证**
+
+新增黑盒 9 项（text set 的 cue 收集到 `subtitles()` 并校验
+language/name/forced/source_uri；第二段相对时间平移到 2000 ms；`$Time$` +
+90 kHz timescale 的段起点换算；绝对时间不平移；无文本集时既无轨也不多取一次
+字节；TTML 集被跳过而非致错；TTML 在前时第一个 `text/vtt` 胜出且 TTML 从未
+被拉取；选文本集时不二次收集、选视频集时能找到文本集；坏分片与取不到分片
+各自的报错文案）与白盒 1 项（`dash_time_to_ms` 的整除、余数、缺 timescale、
+负值、饱和）。
+
+libavformat 整包 **669/669**；全量 Wasm **1684/1684**（本片 +10）；
+`check --target wasm/native --deny-warn` 零警告。
+公共 API 变化：`HlsSubtitleTrack` → `SubtitleTrack`、`playlist_uri()` →
+`source_uri()`。
+
+**未做**：字幕轨的 live 刷新（HLS live 播放列表与 DASH 动态 MPD 都只在
+`open` 时收集一次，窗口滑动后新段的 cue 不会追加）；多语言字幕/音轨选择
+API（只取第一条）；DASH `@presentationTimeOffset` 参与时间轴归一。

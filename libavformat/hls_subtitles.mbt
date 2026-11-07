@@ -414,43 +414,46 @@ fn hls_vtt_segment_ms(duration : Double) -> Int64 {
 }
 
 ///|
-/// A collected HLS subtitle rendition: every cue its segments declared, in
-/// milliseconds on the playlist timeline, in playlist order.
-pub struct HlsSubtitleTrack {
+/// A collected WebVTT subtitle track: every cue its segments declared, in
+/// milliseconds on the presentation timeline, in segment order. Filled either
+/// from an HLS `EXT-X-MEDIA:TYPE=SUBTITLES` rendition or from a DASH `text`
+/// AdaptationSet, which is why the name carries no container prefix.
+pub struct SubtitleTrack {
   language : String
   name : String
   forced : Bool
-  playlist_uri : String
+  /// The playlist (HLS rendition) or MPD (DASH) the track came from.
+  source_uri : String
   cues : Array[HlsVttCue]
 }
 
 ///|
-pub fn HlsSubtitleTrack::language(self : HlsSubtitleTrack) -> String {
+pub fn SubtitleTrack::language(self : SubtitleTrack) -> String {
   self.language
 }
 
 ///|
-pub fn HlsSubtitleTrack::name(self : HlsSubtitleTrack) -> String {
+pub fn SubtitleTrack::name(self : SubtitleTrack) -> String {
   self.name
 }
 
 ///|
-pub fn HlsSubtitleTrack::forced(self : HlsSubtitleTrack) -> Bool {
+pub fn SubtitleTrack::forced(self : SubtitleTrack) -> Bool {
   self.forced
 }
 
 ///|
-pub fn HlsSubtitleTrack::playlist_uri(self : HlsSubtitleTrack) -> String {
-  self.playlist_uri
+pub fn SubtitleTrack::source_uri(self : SubtitleTrack) -> String {
+  self.source_uri
 }
 
 ///|
-pub fn HlsSubtitleTrack::cue_count(self : HlsSubtitleTrack) -> Int {
+pub fn SubtitleTrack::cue_count(self : SubtitleTrack) -> Int {
   self.cues.length()
 }
 
 ///|
-pub fn HlsSubtitleTrack::cue(self : HlsSubtitleTrack, index : Int) -> HlsVttCue? {
+pub fn SubtitleTrack::cue(self : SubtitleTrack, index : Int) -> HlsVttCue? {
   if index < 0 || index >= self.cues.length() {
     return None
   }
@@ -458,29 +461,55 @@ pub fn HlsSubtitleTrack::cue(self : HlsSubtitleTrack, index : Int) -> HlsVttCue?
 }
 
 ///|
-pub fn HlsSubtitleTrack::cues(self : HlsSubtitleTrack) -> Array[HlsVttCue] {
+pub fn SubtitleTrack::cues(self : SubtitleTrack) -> Array[HlsVttCue] {
   self.cues
+}
+
+///|
+/// Append one segment's cues to `out`, placed on the presentation timeline.
+///
+/// Cue times are read as *absolute* first (what `hls_write_vtt_segment` writes,
+/// and what a packager that keeps cues on the timeline writes). Authors that
+/// instead write segment-relative times are handled by a rule that cannot
+/// misfire: a segment whose last cue ends at or before the segment's own start
+/// was authored relative to the segment, so it is shifted into place. For the
+/// first segment the shift is zero either way, so the rule is never a guess
+/// there. This is shared by the HLS rendition and DASH `text` paths, which
+/// differ only in how the segment start is computed.
+fn subtitle_place_cues(
+  out : Array[HlsVttCue],
+  document : HlsVttDocument,
+  segment_start_ms : Int64,
+) -> Unit {
+  let mut last_end = -1L
+  for cue in document.cues {
+    if cue.end_ms > last_end {
+      last_end = cue.end_ms
+    }
+  }
+  let shift = if last_end >= 0L && last_end <= segment_start_ms {
+    segment_start_ms
+  } else {
+    0L
+  }
+  for cue in document.cues {
+    out.push(hls_vtt_cue_new(cue.start_ms + shift, cue.end_ms + shift, cue.text))
+  }
 }
 
 ///|
 /// Fetch and parse every segment of an HLS subtitle rendition playlist.
 ///
-/// Cue times are read as *absolute on the playlist timeline* (what
-/// `hls_write_vtt_segment` writes, and what FFmpeg's HLS demuxer reports for
-/// segments authored that way). Authors that instead write segment-relative
-/// times are handled by a rule that cannot misfire: a segment whose last cue
-/// ends at or before the segment's own playlist start was authored relative to
-/// the segment, so it is shifted into place. For the first segment the shift is
-/// zero either way, so the rule is never a guess there.
-///
-/// A `discontinuity` segment does not reset the accumulated timeline here -
-/// subtitle cues are absolute, so `EXT-X-DISCONTINUITY` does not move them.
+/// See `subtitle_place_cues` for how a segment's cues are placed on the
+/// timeline. A `discontinuity` segment does not reset the accumulated timeline
+/// here - cue times are absolute in the common case, so `EXT-X-DISCONTINUITY`
+/// does not move them.
 pub fn hls_subtitle_track_open(
   playlist : HlsPlaylist,
   fetch : MediaFetch,
-  playlist_uri : String,
+  source_uri : String,
   rendition : HlsRendition?,
-) -> Result[HlsSubtitleTrack, String] {
+) -> Result[SubtitleTrack, String] {
   if playlist.is_master {
     return Err("vtt: expected a subtitle media playlist, got a master")
   }
@@ -498,27 +527,12 @@ pub fn hls_subtitle_track_open(
       Ok(d) => d
       Err(e) => return Err("vtt: segment \{segment.uri}: \{e}")
     }
-    let mut last_end = -1L
-    for cue in document.cues {
-      if cue.end_ms > last_end {
-        last_end = cue.end_ms
-      }
-    }
-    let shift = if last_end >= 0L && last_end <= segment_start {
-      segment_start
-    } else {
-      0L
-    }
-    for cue in document.cues {
-      cues.push(
-        hls_vtt_cue_new(cue.start_ms + shift, cue.end_ms + shift, cue.text),
-      )
-    }
+    subtitle_place_cues(cues, document, segment_start)
     segment_start = segment_start + hls_vtt_segment_ms(segment.duration)
   }
   let (language, name, forced) = match rendition {
     Some(r) => (r.language, r.name, r.forced)
     None => ("", "", false)
   }
-  Ok({ language, name, forced, playlist_uri, cues })
+  Ok({ language, name, forced, source_uri, cues })
 }

@@ -148,7 +148,7 @@ test "hls subtitles: a variant with SUBTITLES collects the rendition's cues" {
   assert_eq(track.language(), "en")
   assert_eq(track.name(), "English")
   assert_eq(track.forced(), false)
-  assert_eq(track.playlist_uri(), "https://cdn.test/hls/subs.m3u8")
+  assert_eq(track.source_uri(), "https://cdn.test/hls/subs.m3u8")
   assert_eq(track.cue_count(), 3)
   let summary = {
     let parts : Array[String] = []

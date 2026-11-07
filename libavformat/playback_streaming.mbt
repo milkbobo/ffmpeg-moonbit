@@ -103,8 +103,10 @@ pub struct StreamingMedia {
   /// separate rendition playlist; this is that playlist's own session.
   mut audio_track : StreamingMedia?
   /// HLS variant that declares `EXT-X-MEDIA:TYPE=SUBTITLES` keeps its cues in
-  /// a separate WebVTT rendition playlist; these are that playlist's cues.
-  mut subtitle_track : HlsSubtitleTrack?
+  /// a separate WebVTT rendition playlist, and a DASH Period's `text`
+  /// AdaptationSet is a subtitle track of its own. Either way the cues land
+  /// here.
+  mut subtitle_track : SubtitleTrack?
 }
 
 ///|
@@ -915,6 +917,112 @@ pub fn StreamingMedia::open_hls(
 }
 
 ///|
+/// Whether an AdaptationSet carries text rather than media. MPDs in the wild
+/// declare this either as `contentType="text"` (what FFmpeg's dashenc writes)
+/// or as a `mimeType` under `text/`, so both are accepted.
+fn dash_set_is_text(set : DashAdaptationSet) -> Bool {
+  set.content_type == "text" || set.mime_type.has_prefix("text/")
+}
+
+///|
+/// The MIME type that actually applies to a Representation: its own, else the
+/// AdaptationSet's (a Representation usually omits what it inherits).
+fn dash_rep_mime(set : DashAdaptationSet, rep : DashRepresentation) -> String {
+  if rep.mime_type != "" {
+    rep.mime_type
+  } else {
+    set.mime_type
+  }
+}
+
+///|
+/// Index of the first Representation in a text AdaptationSet that this port can
+/// actually parse: a `text/vtt` Representation with segments. Other text
+/// formats (TTML, SRT, ...) are not fed to the WebVTT reader - they would fail
+/// on the missing signature and take an otherwise healthy stream down with
+/// them.
+fn dash_text_rep_index(set : DashAdaptationSet) -> Int32? {
+  if !dash_set_is_text(set) {
+    return None
+  }
+  for i = 0; i < set.representations.length(); i = i + 1 {
+    let rep = set.representations[i]
+    if dash_rep_mime(set, rep).has_prefix("text/vtt") &&
+      rep.segments.length() > 0 {
+      return Some(i)
+    }
+  }
+  None
+}
+
+///|
+/// First `(AdaptationSet, Representation)` pair in `sets` that holds a
+/// parseable WebVTT subtitle track. A Period may list several text sets (one
+/// per language); the first `text/vtt` one wins, mirroring how the HLS path
+/// picks the first URI-bearing member of a `SUBTITLES` group.
+fn dash_pick_subtitles(sets : Array[DashAdaptationSet]) -> (Int32, Int32)? {
+  for i = 0; i < sets.length(); i = i + 1 {
+    match dash_text_rep_index(sets[i]) {
+      Some(r) => return Some((i, r))
+      None => ()
+    }
+  }
+  None
+}
+
+///|
+/// A DASH segment start (`SegmentTimeline`/`SegmentTemplate` time, in the
+/// Representation's timescale) to milliseconds. Divide before multiplying:
+/// `time * 1000` overflows on a corrupt timeline, and the remainder keeps the
+/// conversion exact for the common cases where the timescale does not divide
+/// the time evenly (44.1 kHz, 90 kHz).
+fn dash_time_to_ms(time : Int64, timescale : Int64) -> Int64 {
+  let scale = if timescale > 0L { timescale } else { 1000L }
+  if time == 0L {
+    return 0L
+  }
+  let whole = time / scale
+  let rest = time % scale
+  if whole > 9223372036854775807L / 1000L ||
+    whole < -9223372036854775808L / 1000L {
+    return if time < 0L { -9223372036854775808L } else { 9223372036854775807L }
+  }
+  whole * 1000L + rest * 1000L / scale
+}
+
+///|
+/// Fetch and parse every segment of a DASH `text/vtt` Representation.
+///
+/// Each segment is a self-contained `WEBVTT` file (text AdaptationSets carry no
+/// initialization section), so cue placement follows the same rule as the HLS
+/// path - see `subtitle_place_cues` - with the segment start coming from the
+/// segment's own `time` rather than from accumulated `EXTINF` durations.
+fn dash_subtitle_track_open(
+  set : DashAdaptationSet,
+  rep : DashRepresentation,
+  fetch : MediaFetch,
+  source_uri : String,
+) -> Result[SubtitleTrack, String] {
+  let cues : Array[HlsVttCue] = []
+  for segment in rep.segments {
+    let range = match dash_resource_range(segment.media_range) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    let data = match media_fetch_resource(fetch, segment.uri, range) {
+      Ok(v) => v
+      Err(e) => return Err("vtt: segment \{segment.uri} fetch failed: \{e}")
+    }
+    let document = match hls_vtt_parse_document(hls_vtt_text(data)) {
+      Ok(d) => d
+      Err(e) => return Err("vtt: segment \{segment.uri}: \{e}")
+    }
+    subtitle_place_cues(cues, document, dash_time_to_ms(segment.time, rep.timescale))
+  }
+  Ok({ language: set.lang, name: rep.id, forced: false, source_uri, cues })
+}
+
+///|
 /// Open one DASH representation. The three indexes select a Period,
 /// AdaptationSet and Representation of the parsed MPD; out-of-range values
 /// raise `DemuxError` rather than being silently clamped.
@@ -922,6 +1030,11 @@ pub fn StreamingMedia::open_hls(
 /// A `type="dynamic"` MPD opens as a live session: `is_live()` is true and
 /// `reload_dash` (or the optional `mpd_fetch~` automatic refresh) can extend
 /// the window. Static MPDs end at their last segment.
+///
+/// A Period that also carries a `text/vtt` AdaptationSet gets its cues
+/// collected into `subtitles()`. Only WebVTT is parsed; a Period whose text
+/// sets are all other formats still opens normally, just without a subtitle
+/// track.
 pub fn StreamingMedia::open_dash(
   mpd : DashMpd,
   fetch : MediaFetch,
@@ -961,6 +1074,27 @@ pub fn StreamingMedia::open_dash(
     max_reloads
   } else {
     0
+  }
+  // Subtitles live in a sibling AdaptationSet of the same Period. When the
+  // caller selected a text set itself there is nothing to collect - the
+  // session *is* the subtitle reader then.
+  if !dash_set_is_text(sets[adaptation_set]) {
+    match dash_pick_subtitles(sets) {
+      None => ()
+      Some(pick) => {
+        let (set_index, rep_index) = pick
+        match
+          dash_subtitle_track_open(
+            sets[set_index],
+            sets[set_index].representations[rep_index],
+            fetch,
+            mpd_uri,
+          ) {
+          Ok(track) => session.subtitle_track = Some(track)
+          Err(e) => raise DemuxError("dash: subtitle track: \{e}")
+        }
+      }
+    }
   }
   session
 }
@@ -1079,12 +1213,11 @@ pub fn StreamingMedia::audio_track(self : StreamingMedia) -> StreamingMedia? {
 }
 
 ///|
-/// The separate `EXT-X-MEDIA` subtitle rendition this session's variant
-/// delegates to, with every segment's cues already fetched and parsed, or
-/// `None` when the variant declares no `SUBTITLES=` group. Loaded eagerly at
-/// open time (cues are tiny compared with media segments), so this accessor
-/// performs no IO and never raises.
-pub fn StreamingMedia::subtitles(self : StreamingMedia) -> HlsSubtitleTrack? {
+/// The subtitle track this session found, or `None` when there is none: an HLS
+/// variant without a `SUBTITLES=` group, or a DASH Period without a `text/vtt`
+/// AdaptationSet. Cues are collected at open time (they are tiny compared with
+/// media segments), so this accessor performs no IO and never raises.
+pub fn StreamingMedia::subtitles(self : StreamingMedia) -> SubtitleTrack? {
   self.subtitle_track
 }
 

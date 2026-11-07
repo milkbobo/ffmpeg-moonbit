@@ -57,3 +57,21 @@ test "streaming: normalization places a restarted segment after the last pts" {
   let d = media.streaming_normalize(mk(100L))
   assert_eq(d.pts, 400L)
 }
+
+///|
+/// DASH segment times are in the Representation's timescale; subtitle cues are
+/// in milliseconds. The conversion divides before multiplying so a corrupt
+/// timeline cannot overflow, which makes the remainder path load-bearing.
+test "streaming: dash segment time converts to milliseconds without overflow" {
+  assert_eq(dash_time_to_ms(0L, 1000L), 0L)
+  assert_eq(dash_time_to_ms(1000L, 1000L), 1000L)
+  assert_eq(dash_time_to_ms(180000L, 90000L), 2000L)
+  // 22050 at 44.1 kHz is exactly half a second, reached through the remainder.
+  assert_eq(dash_time_to_ms(22050L, 44100L), 500L)
+  // A missing timescale is treated as milliseconds (the DASH default is per
+  // Representation, and every writer here emits 1000 when absent).
+  assert_eq(dash_time_to_ms(1500L, 0L), 1500L)
+  assert_eq(dash_time_to_ms(-1000L, 1000L), -1000L)
+  // Multiplying first would wrap; the guard saturates instead.
+  assert_eq(dash_time_to_ms(9223372036854775807L, 1L), 9223372036854775807L)
+}
