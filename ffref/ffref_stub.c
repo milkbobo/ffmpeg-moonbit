@@ -1,3 +1,8 @@
+// NOTE: intentionally NOT wired into the build. The oracle C FFI is
+// explicitly not done - the module ships as pure MoonBit - so
+// ffref/moon.pkg no longer lists this file in "native-stub". Kept for
+// reference only; see the header of ffref/moon.pkg.
+//
 // Reference-oracle bindings over the locally built FFmpeg n9.0.2 static
 // libraries. The MoonBit demux/decode ports are differential-tested against
 // this in-process oracle instead of docker ffprobe round-trips. Only the C
@@ -21,6 +26,32 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+
+// Internal, pinned n9.0.2 oracle symbol from libavformat/url.h. This is not
+// part of the portable MoonBit implementation or a public FFmpeg ABI promise.
+extern int ff_make_absolute_url2(char *, int, const char *, const char *, int);
+
+MOONBIT_FFI_EXPORT moonbit_bytes_t ffref_resolve_uri(moonbit_bytes_t base,
+                                                    moonbit_bytes_t rel) {
+  size_t a = Moonbit_array_length(base), b = Moonbit_array_length(rel);
+  if (memchr(base, 0, a) || memchr(rel, 0, b) ||
+      a > INT_MAX - 2 || b > INT_MAX - 2 - a)
+    return NULL;
+  int capacity = (int)(a + b + 2);
+  char *out = malloc(capacity);
+  if (!out) return NULL;
+  int status = ff_make_absolute_url2(out, capacity, (const char *)base,
+                                    (const char *)rel, 0);
+  moonbit_bytes_t result = NULL;
+  if (status >= 0) {
+    size_t length = strlen(out);
+    result = moonbit_make_bytes((int)length, 0);
+    memcpy(result, out, length);
+  }
+  free(out);
+  return result;
+}
 
 #define NA INT64_MIN
 
