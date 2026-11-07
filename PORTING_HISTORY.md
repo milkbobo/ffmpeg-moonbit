@@ -9885,3 +9885,27 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   **1640/1640**（本片 +9）；`check --deny-warn` 仍然零警告。
   公共 API 增量：`reload_dash`、`open_dash` 的三个可选参数、
   `DashSegmentReader` 的 `last_time`/`last_duration`/`skip_through_time`。
+
+## 2026-11-07 自适应流第六片：DASH 多 Period 续播（纯 MoonBit）
+
+- `open_dash(period~)` 此前只播选中的那一个 Period，多 Period MPD 在第一个
+  Period 的分片用尽时就结束——写入侧明明支持多 Period，播放侧却不跟进。
+  现在会话记住 MPD（`dash_mpd`），分片耗尽时先尝试进入下一个 Period，
+  再考虑 live 刷新，最后才结束。
+- **Period 匹配规则**（`dash_period_match_set`）：先按 content_type+codecs
+  精确匹配，再按 MIME 类型，最后才退到同位置——而退到同位置还要求
+  content_type 一致，否则返回 None 让播放在该 Period 停下。这条约束是必要
+  的：否则一个只有视频 AdaptationSet 的 Period 会被当成音频继续喂给解码器。
+- **Representation 匹配**（`dash_period_match_representation`）：同位置且
+  codec 相同优先，其次第一个同 codec，最后 index 0。
+- **Period 边界即 discontinuity**：每个 Period 有自己的媒体时间轴，
+  所以切换时重置 `dash_last_time`/游标并置 `dash_gap`（粘性），下一分片
+  带 discontinuity 让解码器重建——与 `dashdec` 在没有
+  `@presentationTimeOffset` 声明连续性时的行为一致。
+- 新增 `period_index()` 观测当前 Period；HLS 会话恒为 0。
+- 验证：新增 5 项黑盒（两 Period 前后接续且序号重置/只有边界标
+  discontinuity、只含视频的 Period 让播放停下且 stream 表仍是 aac、
+  三 Period 链式推进且恰好两个边界、直接用 `open_dash(period=1)` 从第二个
+  Period 起播、单 Period 行为不变）。libavformat 整包 **630/630**；
+  全量 Wasm **1645/1645**（本片 +5）；`check --deny-warn` 仍零警告。
+  公共 API 增量：`period_index`；`open_dash`/`reload_dash` 签名不变。

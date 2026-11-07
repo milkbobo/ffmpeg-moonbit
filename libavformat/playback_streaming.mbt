@@ -96,6 +96,9 @@ pub struct StreamingMedia {
   /// The refreshed window skipped segments that expired before we got to
   /// them; the next emitted segment is flagged as a discontinuity.
   mut dash_gap : Bool
+  /// The MPD this session was opened from, kept so playback can continue into
+  /// the next Period. Replaced by `reload_dash`.
+  mut dash_mpd : DashMpd?
 }
 
 ///|
@@ -207,6 +210,11 @@ fn StreamingMedia::streaming_load_segment(
       Err(e) => raise DemuxError("streaming: \{e}")
       Ok(Some(s)) => break s
       Ok(None) => {
+        // A multi-Period MPD continues into the next Period before the
+        // session is allowed to end; a live window then gets a refresh.
+        if self.kind == Dash && self.streaming_advance_period() {
+          continue
+        }
         if self.streaming_auto_reload() {
           continue
         }
@@ -327,6 +335,7 @@ fn streaming_from_reader(
     dash_last_time: -1L,
     dash_last_duration: 0L,
     dash_gap: false,
+    dash_mpd: None,
   }
 }
 
@@ -390,9 +399,136 @@ pub fn StreamingMedia::is_live(self : StreamingMedia) -> Bool {
 }
 
 ///|
+/// Index of the AdaptationSet in `sets` that continues `current`: an exact
+/// content-type+codecs match wins, then a MIME-type match, and only then the
+/// same position - and only when that position carries the same content type,
+/// so a Period with nothing but subtitles cannot silently turn the session
+/// into a subtitle reader. `None` means playback should stop at that Period.
+fn dash_period_match_set(
+  sets : Array[DashAdaptationSet],
+  current : DashAdaptationSet,
+  fallback : Int32,
+) -> Int32? {
+  for i = 0; i < sets.length(); i = i + 1 {
+    if sets[i].content_type == current.content_type &&
+      sets[i].codecs == current.codecs {
+      return Some(i)
+    }
+  }
+  if current.mime_type != "" {
+    for i = 0; i < sets.length(); i = i + 1 {
+      if sets[i].mime_type == current.mime_type {
+        return Some(i)
+      }
+    }
+  }
+  if fallback >= 0 && fallback < sets.length() &&
+    sets[fallback].content_type == current.content_type {
+    Some(fallback)
+  } else {
+    None
+  }
+}
+
+///|
+/// Index of the Representation inside a Period's set that continues the
+/// current one: the same codec at the same position is preferred, then the
+/// first same-codec entry, then position 0.
+fn dash_period_match_representation(
+  reps : Array[DashRepresentation],
+  codec : String,
+  fallback : Int32,
+) -> Int32 {
+  if fallback >= 0 && fallback < reps.length() && reps[fallback].codec == codec {
+    return fallback
+  }
+  for i = 0; i < reps.length(); i = i + 1 {
+    if reps[i].codec == codec {
+      return i
+    }
+  }
+  0
+}
+
+///|
+/// Run the stream table through `DashMpd`'s Period chain: when the selected
+/// Period runs out of segments, move to the next one that carries a matching
+/// AdaptationSet. Returns false when there is no next Period, in which case
+/// the caller falls back to live refresh / end of stream.
+///
+/// Every Period starts its own media timeline, so the continuation is flagged
+/// as a discontinuity (FFmpeg's `dashdec` does the same unless the MPD
+/// declares timestamp continuity) and the segment cursor is reset.
+fn StreamingMedia::streaming_advance_period(
+  self : StreamingMedia,
+) -> Bool {
+  let mpd = match self.dash_mpd {
+    None => return false
+    Some(m) => m
+  }
+  let next = self.dash_period + 1
+  if next >= mpd.periods.length() {
+    return false
+  }
+  let current_sets = mpd.periods[self.dash_period].adaptation_sets
+  if self.dash_adaptation_set < 0 ||
+    self.dash_adaptation_set >= current_sets.length() {
+    return false
+  }
+  let current = current_sets[self.dash_adaptation_set]
+  let sets = mpd.periods[next].adaptation_sets
+  let set_index = match
+    dash_period_match_set(sets, current, self.dash_adaptation_set) {
+    None => return false
+    Some(i) => i
+  }
+  let reps = sets[set_index].representations
+  if reps.length() == 0 || current.representations.length() == 0 {
+    return false
+  }
+  let current_rep = current.representations[
+    if self.dash_representation >= 0 &&
+      self.dash_representation < current.representations.length() {
+      self.dash_representation
+    } else {
+      0
+    }
+  ]
+  let rep_index = dash_period_match_representation(
+    reps,
+    current_rep.codec,
+    self.dash_representation,
+  )
+  let fetch = match self.reader {
+    DashReader(r) => r.fetch
+    HlsReader(_) => return false
+  }
+  self.reader = DashReader(dash_segment_reader_new(reps[rep_index], fetch))
+  self.dash_period = next
+  self.dash_adaptation_set = set_index
+  self.dash_representation = rep_index
+  self.dash_last_time = -1L
+  self.dash_last_duration = 0L
+  // A Period boundary restarts the media timeline.
+  self.dash_gap = true
+  self.current = None
+  self.streaming_reset_segment()
+  self.finished = false
+  true
+}
+
+///|
 /// Number of successful playlist reloads on this session.
 pub fn StreamingMedia::reload_count(self : StreamingMedia) -> Int32 {
   self.reload_count
+}
+
+///|
+/// Index of the DASH Period currently being played. Multi-Period MPDs advance
+/// here on their own once a Period runs out of segments; HLS sessions stay
+/// at 0.
+pub fn StreamingMedia::period_index(self : StreamingMedia) -> Int32 {
+  self.dash_period
 }
 
 ///|
@@ -466,6 +602,7 @@ pub fn StreamingMedia::reload_dash(
   self.dash_period = p
   self.dash_adaptation_set = a
   self.dash_representation = r
+  self.dash_mpd = Some(mpd)
   // Sticky: a second refresh must not clear a gap the first one detected
   // before the decoder has actually been reset.
   self.dash_gap = self.dash_gap || gap
@@ -701,6 +838,7 @@ pub fn StreamingMedia::open_dash(
   session.dash_period = period
   session.dash_adaptation_set = adaptation_set
   session.dash_representation = representation
+  session.dash_mpd = Some(mpd)
   session.is_live = mpd.type_ == "dynamic"
   session.playlist_fetch = mpd_fetch
   session.playlist_uri = mpd_uri
