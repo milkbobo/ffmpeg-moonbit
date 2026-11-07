@@ -71,7 +71,9 @@ pub fn HlsVttDocument::cues(self : HlsVttDocument) -> Array[HlsVttCue] {
 /// The `X-TIMESTAMP-MAP` the document declared, if any. Reported rather than
 /// applied: mapping it onto a presentation timeline needs the MPEG-TS clock of
 /// the muxed stream, which a subtitle rendition playlist does not carry.
-pub fn HlsVttDocument::timestamp_map(self : HlsVttDocument) -> HlsVttTimestampMap? {
+pub fn HlsVttDocument::timestamp_map(
+  self : HlsVttDocument,
+) -> HlsVttTimestampMap? {
   self.timestamp_map
 }
 
@@ -209,10 +211,7 @@ fn hls_vtt_parse_timing(line : String) -> Result[(Int64, Int64), String] {
   let mut end_at = body.length()
   for sep in [" ", "\t"] {
     match body.find(sep) {
-      Some(i) =>
-        if i < end_at {
-          end_at = i
-        }
+      Some(i) => if i < end_at { end_at = i }
       None => ()
     }
   }
@@ -263,7 +262,7 @@ fn hls_vtt_timestamp_map(line : String) -> HlsVttTimestampMap? {
   }
   let mpegts_side = if mpegts_ms < 0L { 0L } else { mpegts_ms }
   let local_side = if local_ms < 0L { 0L } else { local_ms }
-  Some({ mpegts_ms: mpegts_side, local_ms: local_side })
+  Some({ mpegts_ms: mpegts_side, local_ms: local_side, })
 }
 
 ///|
@@ -349,10 +348,7 @@ pub fn hls_vtt_parse_document(text : String) -> Result[HlsVttDocument, String] {
     let trimmed = line.trim(chars=" \t")
     if in_header && trimmed.has_prefix("X-TIMESTAMP-MAP") {
       match hls_vtt_timestamp_map(trimmed.to_owned()) {
-        Some(map) =>
-          if timestamp_map is None {
-            timestamp_map = Some(map)
-          }
+        Some(map) => if timestamp_map is None { timestamp_map = Some(map) }
         None => ()
       }
     }
@@ -374,7 +370,7 @@ pub fn hls_vtt_parse_document(text : String) -> Result[HlsVttDocument, String] {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
-  Ok({ cues, timestamp_map })
+  Ok({ cues, timestamp_map, })
 }
 
 ///|
@@ -396,102 +392,6 @@ fn hls_vtt_text(data : Bytes) -> String {
     arr.push(b)
   }
   utf8_to_string(arr)
-}
-
-///|
-/// One *selectable* subtitle track: what a caller needs to offer a language
-/// menu, without fetching a single cue.
-///
-/// The two backends address their tracks differently - an HLS rendition has its
-/// own playlist URI, a DASH text Representation is an index pair inside the
-/// current Period - so both addresses are carried and the unused one stays
-/// empty (`uri == ""`) or `-1`. `SubtitleTrack` (the cues of the one actually
-/// selected) is a separate type for the same reason.
-pub struct SubtitleRendition {
-  language : String
-  name : String
-  forced : Bool
-  /// `DEFAULT=YES` for HLS; always false for DASH, which has no such flag.
-  is_default : Bool
-  /// HLS: the rendition's own playlist URI.
-  uri : String
-  /// DASH: AdaptationSet and Representation inside `dash_period`. HLS: `-1`.
-  set : Int
-  rep : Int
-}
-
-///|
-pub fn SubtitleRendition::language(self : SubtitleRendition) -> String {
-  self.language
-}
-
-///|
-pub fn SubtitleRendition::name(self : SubtitleRendition) -> String {
-  self.name
-}
-
-///|
-pub fn SubtitleRendition::forced(self : SubtitleRendition) -> Bool {
-  self.forced
-}
-
-///|
-pub fn SubtitleRendition::is_default(self : SubtitleRendition) -> Bool {
-  self.is_default
-}
-
-///|
-pub fn SubtitleRendition::uri(self : SubtitleRendition) -> String {
-  self.uri
-}
-
-///|
-/// An HLS choice: addressed by its rendition playlist URI.
-fn subtitle_rendition_hls(rendition : HlsRendition) -> SubtitleRendition {
-  {
-    language: rendition.language,
-    name: rendition.name,
-    forced: rendition.forced,
-    is_default: rendition.is_default,
-    uri: rendition.uri,
-    set: -1,
-    rep: -1,
-  }
-}
-
-///|
-/// A DASH choice: addressed by its position inside the current Period.
-fn subtitle_rendition_dash(
-  set : DashAdaptationSet,
-  rep : DashRepresentation,
-  set_index : Int,
-  rep_index : Int,
-) -> SubtitleRendition {
-  {
-    language: set.lang,
-    name: rep.id,
-    forced: false,
-    is_default: false,
-    uri: "",
-    set: set_index,
-    rep: rep_index,
-  }
-}
-
-///|
-/// Whether two choices designate the same track. The HLS side is identified by
-/// its playlist URI, the DASH side by its index pair - comparing the pair first
-/// would make every DASH track look like every other one when indexes repeat
-/// across Periods. Also used by the accessor that reports which choice is live.
-fn subtitle_rendition_same(
-  a : SubtitleRendition,
-  b : SubtitleRendition,
-) -> Bool {
-  if a.uri != "" || b.uri != "" {
-    a.uri == b.uri
-  } else {
-    a.set == b.set && a.rep == b.rep
-  }
 }
 
 ///|
@@ -563,7 +463,9 @@ fn subtitle_track_new(
 }
 
 ///|
+
 ///|
+
 ///|
 pub fn SubtitleTrack::language(self : SubtitleTrack) -> String {
   self.language
@@ -585,12 +487,12 @@ pub fn SubtitleTrack::source_uri(self : SubtitleTrack) -> String {
 }
 
 ///|
-pub fn SubtitleTrack::cue_count(self : SubtitleTrack) -> Int {
+pub fn SubtitleTrack::cue_count(self : SubtitleTrack) -> Int32 {
   self.cues.length()
 }
 
 ///|
-pub fn SubtitleTrack::cue(self : SubtitleTrack, index : Int) -> HlsVttCue? {
+pub fn SubtitleTrack::cue(self : SubtitleTrack, index : Int32) -> HlsVttCue? {
   if index < 0 || index >= self.cues.length() {
     return None
   }
@@ -630,7 +532,9 @@ fn subtitle_place_cues(
     0L
   }
   for cue in document.cues {
-    out.push(hls_vtt_cue_new(cue.start_ms + shift, cue.end_ms + shift, cue.text))
+    out.push(
+      hls_vtt_cue_new(cue.start_ms + shift, cue.end_ms + shift, cue.text),
+    )
   }
 }
 
@@ -643,7 +547,7 @@ fn hls_subtitle_track_append(
   track : SubtitleTrack,
   playlist : HlsPlaylist,
   fetch : MediaFetch,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   if playlist.is_master {
     return Err("vtt: expected a subtitle media playlist, got a master")
   }

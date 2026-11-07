@@ -75,3 +75,49 @@ test "streaming: dash segment time converts to milliseconds without overflow" {
   // Multiplying first would wrap; the guard saturates instead.
   assert_eq(dash_time_to_ms(9223372036854775807L, 1L), 9223372036854775807L)
 }
+
+///|
+/// A switch inside a live session must hand the new audio sub-session a
+/// **full** refresh budget, not what the parent has left - otherwise the audio
+/// track would run out of refreshes mid-stream while the video keeps going.
+/// The parent's remaining budget is forced down first, so taking it by mistake
+/// would show up here.
+test "streaming: select_audio gives a live switch a full refresh budget" {
+  let master_text = "#EXTM3U\n" +
+    "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Francais\"," +
+    "DEFAULT=NO,LANGUAGE=\"fr\",URI=\"afr.m3u8\"\n" +
+    "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\"," +
+    "DEFAULT=YES,LANGUAGE=\"en\",URI=\"aen.m3u8\"\n" +
+    "#EXT-X-STREAM-INF:BANDWIDTH=200000,AUDIO=\"aud\"\nv/video.m3u8\n"
+  let master = av_hls_parse(
+    master_text,
+    base_uri="https://cdn.test/hls/master.m3u8",
+  ).unwrap()
+  let media_playlist = av_hls_parse(
+    "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:3.0,\nv0.ts\n",
+    base_uri="https://cdn.test/hls/v/video.m3u8",
+  ).unwrap()
+  let fetch : MediaFetch = (uri, _, _) => {
+    if uri == "https://cdn.test/hls/afr.m3u8" {
+      let arr : Array[Byte] = []
+      for c in "#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXTINF:3.0,\nafr0.aac\n" {
+        arr.push(c.to_int().to_byte())
+      }
+      return Ok(Bytes::from_array(arr))
+    }
+    Err("404: \{uri}")
+  }
+  let reader = hls_segment_reader_new(media_playlist, fetch).unwrap()
+  let media = streaming_from_reader(Hls, "hls", HlsReader(reader), None)
+  media.hls_renditions = master.renditions
+  media.audio_group = "aud"
+  media.audio_reload_budget = 3
+  media.is_live = true
+  media.reload_budget = 1
+  media.select_audio(0)
+  assert_eq(media.audio_selected(), 0)
+  let track = media.audio_track.unwrap()
+  assert_true(track.is_live)
+  assert_eq(track.reload_budget, 3)
+  assert_eq(track.playlist_uri, "https://cdn.test/hls/afr.m3u8")
+}

@@ -10233,3 +10233,86 @@ libavformat 整包 **684/684**；全量 Wasm **1699/1699**（本片 +8 加此前
 DASH `@presentationTimeOffset` 参与时间轴归一；字幕 rendition 随变体切换
 重选（ABR 换 variant 后组可能变，现在不重选）；`FORCED` 轨的自动叠加
 （forced 只在候选里作为属性可见，未与普通轨分层渲染）。
+
+## 2026-11-07 自适应流第十二片：多语言音轨选择（纯 MoonBit）
+
+上一片给了字幕选择面，音轨仍是「开什么就播什么」——`audio_track` 只认变体
+`AUDIO="group"` 里 `DEFAULT=YES` 的那一个，别的成员在会话上不可见。这一片
+把音轨补成同构的一套：`audio_renditions()` / `audio_selected()` /
+`select_audio(index)`。
+
+**先统一类型，再复制 API**
+
+字幕那片的 `SubtitleRendition` 描述的是「一个可选的轨道」：语言、名字、
+默认标记、来源地址——与字幕没有关系，只是当初只有字幕在用。加音频时若照
+抄一份 `AudioRendition`，就是一个字段完全相同的空壳。所以先把类型提到
+`libavformat/rendition.mbt` 并改名 `Rendition`（`rendition_hls` /
+`rendition_dash` / `rendition_same` 同步改名），两个容器、两种轨道共用；
+`FORCED` 对音频恒为 false，DASH 的 `is_default` 恒为 false（MPD 没有这个
+标志）。
+
+**打开路径先统一，再谈切换**
+
+`streaming_open_master` 里原来有一段专门打开默认音频 rendition 的代码，
+与 `select_subtitles` 的逻辑几乎逐行重合。这轮把它删掉：open 只记录
+`audio_group`，然后
+
+```moonbit
+match streaming_default_rendition_index(session.streaming_audio_choices()) {
+  None => ()
+  Some(index) => session.select_audio(index)
+}
+```
+
+与字幕完全同构。好处不只是省代码——首窗与第 N 窗共用一条路径，
+「换轨时少做的那一步」不可能只在 live 的第 N 窗才暴露。
+
+**音频与字幕的真正差别：换的是什么**
+
+字幕换轨换的是一个 cue 列表；音频换的是**整个子会话**（`audio_track` 是
+一个 `StreamingMedia`，有自己的 reader、自己的 live 预算、自己的
+`playlist_fetch`）。于是 `select_audio` 必须把 open 时那三个参数原样交给
+新子会话：`prefer_x_start`、`live_start_index`、`max_reloads`。它们原来只是
+open 的局部参数，现在挂在会话上
+（`audio_prefer_x_start` / `audio_live_start_index` / `audio_reload_budget`）。
+
+`audio_reload_budget` 存的是**原始**预算，不是 `reload_budget` 的当前值：
+换轨发生在一场 live 的中途，父会话可能已经花掉几次刷新，若照抄剩余值，
+音轨会比视频先耗尽次数、然后静默停在旧窗口。这条是本片最容易被写错的一处，
+所以专门有一个白盒测试先把父会话的 `reload_budget` 压到 1、再切轨，断言
+子会话拿到的是 3。
+
+**验证**
+
+新增 8 项黑盒（`playback_streaming_audio_select_test.mbt`）：
+`DEFAULT=YES` 胜出于位置 0（`audio_selected() == 1`，非默认成员一次都没被
+拉取）；切换后 `audio_track` 换成另一条（用 playlist 时长区分：
+6.0 s → 3.0 s）；重复选择按 URI 计数不变；切换失败保留旧子会话
+（时长仍是 6.0 s）；越界报错；无 `AUDIO` 组时列表空、`-1`、`audio_track`
+为 `None`；组里全是 muxed（无 URI）成员时同样空——那种情况的音频本来就在
+变体自己的分片里；同组同 `GROUP-ID` 的 `TYPE=SUBTITLES` 成员不算音频候选，
+也从未被拉取。
+
+加 1 项白盒（`playback_streaming_wbtest.mbt`）钉住刷新预算。
+
+libavformat 整包 **693/693**；全量 Wasm **1708/1708**（本片 +9）；
+`check --target wasm/native --deny-warn` 零警告；`moon info` 通过。
+公共 API 增量：`audio_renditions()`、`audio_selected()`、
+`select_audio(index)`；`SubtitleRendition` → `Rendition`（上一片刚加的类型，
+同轮改名）。
+
+**坑**
+
+- **`_test.mbt` 是黑盒包**：连同一目录下定义的私有字段都读不到。想断言
+  `reload_budget` 这种内部状态，必须写进 `*_wbtest.mbt`（同包白盒）。
+  黑盒里改字段撞的是 `E4094 Cannot modify a read-only field`，加
+  `let mut` 也没用，报的还是同一个错。
+- `max_reloads` 是 `Int32`，写 `3L` 会报 `Int64`→`Int32` 不匹配。
+- 删掉 `streaming_pick_audio_rendition` / `streaming_pick_rendition` 之后，
+  「默认选择」这件事就只剩 `streaming_default_rendition_index` 一处实现，
+  音轨字幕不会各自漂移。
+
+**未做**：DASH 侧的音轨选择（需要先有「一个会话同时挂视频与音频两条
+Representation」的播放管线，现在一个会话只播一个 AdaptationSet）；音轨与
+字幕的 `DEFAULT` 在 `reload_dash` 换 Period 后重选（DASH 每个 Period 的
+集可能不同）；`FORCED` 轨自动叠加；ABR 换变体时字幕/音频组重选。

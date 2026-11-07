@@ -102,6 +102,18 @@ pub struct StreamingMedia {
   /// HLS variant that declares `EXT-X-MEDIA:TYPE=AUDIO` keeps its audio in a
   /// separate rendition playlist; this is that playlist's own session.
   mut audio_track : StreamingMedia?
+  /// HLS: the `AUDIO` group the chosen variant named (`""` when none).
+  mut audio_group : String
+  /// The choice currently driving `audio_track`, or `None` when the variant
+  /// carries its own audio (no `AUDIO` group, or a group of muxed entries).
+  mut audio_active : Rendition?
+  /// How an `EXT-X-MEDIA` audio rendition is opened: `select_audio` re-opens one
+  /// mid-session, so the three knobs the open path was given are kept here
+  /// (the budget is the *original* one - a later switch must get a full budget,
+  /// not whatever `reload_budget` has left).
+  mut audio_prefer_x_start : Bool
+  mut audio_live_start_index : Int32
+  mut audio_reload_budget : Int32
   /// HLS variant that declares `EXT-X-MEDIA:TYPE=SUBTITLES` keeps its cues in
   /// a separate WebVTT rendition playlist, and a DASH Period's `text`
   /// AdaptationSet is a subtitle track of its own. Either way the cues land
@@ -115,7 +127,7 @@ pub struct StreamingMedia {
   /// The choice currently driving `subtitle_track`, or `None` when the session
   /// has no subtitles (no `SUBTITLES` group, no parseable `text/vtt` set, or a
   /// DASH MPD whose Period has no text track).
-  mut subtitle_active : SubtitleRendition?
+  mut subtitle_active : Rendition?
   /// Subtitle refreshes that were attempted during `reload`/`reload_dash` and
   /// failed. Those are best effort - a broken cue playlist must not stop live
   /// playback - so this counter is how a caller notices.
@@ -358,6 +370,11 @@ fn streaming_from_reader(
     dash_gap: false,
     dash_mpd: None,
     audio_track: None,
+    audio_group: "",
+    audio_active: None,
+    audio_prefer_x_start: false,
+    audio_live_start_index: 0,
+    audio_reload_budget: 0,
     subtitle_track: None,
     hls_renditions: [],
     subtitle_group: "",
@@ -452,7 +469,8 @@ fn dash_period_match_set(
       }
     }
   }
-  if fallback >= 0 && fallback < sets.length() &&
+  if fallback >= 0 &&
+    fallback < sets.length() &&
     sets[fallback].content_type == current.content_type {
     Some(fallback)
   } else {
@@ -489,9 +507,7 @@ fn dash_period_match_representation(
 /// Every Period starts its own media timeline, so the continuation is flagged
 /// as a discontinuity (FFmpeg's `dashdec` does the same unless the MPD
 /// declares timestamp continuity) and the segment cursor is reset.
-fn StreamingMedia::streaming_advance_period(
-  self : StreamingMedia,
-) -> Bool {
+fn StreamingMedia::streaming_advance_period(self : StreamingMedia) -> Bool {
   let mpd = match self.dash_mpd {
     None => return false
     Some(m) => m
@@ -516,14 +532,12 @@ fn StreamingMedia::streaming_advance_period(
   if reps.length() == 0 || current.representations.length() == 0 {
     return false
   }
-  let current_rep = current.representations[
-    if self.dash_representation >= 0 &&
+  let current_rep = current.representations[if self.dash_representation >= 0 &&
       self.dash_representation < current.representations.length() {
       self.dash_representation
     } else {
       0
-    }
-  ]
+    }]
   let rep_index = dash_period_match_representation(
     reps,
     current_rep.codec,
@@ -588,10 +602,14 @@ pub fn StreamingMedia::reload_dash(
       raise DemuxError("reload_dash: only DASH sessions can be reloaded")
   }
   let p = if period >= 0 { period } else { self.dash_period }
-  let a = if adaptation_set >= 0 { adaptation_set } else {
+  let a = if adaptation_set >= 0 {
+    adaptation_set
+  } else {
     self.dash_adaptation_set
   }
-  let r = if representation >= 0 { representation } else {
+  let r = if representation >= 0 {
+    representation
+  } else {
     self.dash_representation
   }
   if p < 0 || p >= mpd.periods.length() {
@@ -616,7 +634,7 @@ pub fn StreamingMedia::reload_dash(
   let next_time = fresh.skip_through_time(self.dash_last_time)
   let gap = match next_time {
     None => false
-    Some(t) => {
+    Some(t) =>
       if self.dash_last_time < 0L {
         false
       } else {
@@ -626,7 +644,6 @@ pub fn StreamingMedia::reload_dash(
         )
         t > expected
       }
-    }
   }
   self.reader = DashReader(fresh)
   self.dash_period = p
@@ -683,7 +700,9 @@ fn StreamingMedia::streaming_auto_reload(
           Err(e) => raise DemuxError("reload: \{e}")
         }
         if parsed.is_master {
-          raise DemuxError("reload: refreshed playlist must be a media playlist")
+          raise DemuxError(
+            "reload: refreshed playlist must be a media playlist",
+          )
         }
         self.reload(parsed)
       }
@@ -738,52 +757,10 @@ fn streaming_pick_variant(
 }
 
 ///|
-/// Pick the audio rendition a variant's `AUDIO=` group names: a URI-bearing
-/// `TYPE=AUDIO` member of that group, preferring `DEFAULT=YES`. Returns `None`
-/// when the variant declares no group, or when the group only holds muxed
-/// (`URI`-less) entries that cannot be opened on their own.
-fn streaming_pick_audio_rendition(
-  master : HlsPlaylist,
-  group : String,
-) -> HlsRendition? {
-  streaming_pick_rendition(master, group, "AUDIO")
-}
-
-///|
-/// Pick a URI-bearing member of an `EXT-X-MEDIA` group, preferring
-/// `DEFAULT=YES`. Shared by the audio and subtitle rendition paths, which
-/// differ only in the `TYPE` they select. Returns `None` when the group is
-/// empty or holds only muxed (`URI`-less) entries that cannot be opened on
-/// their own.
-fn streaming_pick_rendition(
-  master : HlsPlaylist,
-  group : String,
-  type_ : String,
-) -> HlsRendition? {
-  if group == "" {
-    return None
-  }
-  let mut fallback : HlsRendition? = None
-  for r in master.renditions {
-    if r.type_ == type_ && r.group_id == group && r.uri != "" {
-      if r.is_default {
-        return Some(r)
-      }
-      if fallback is None {
-        fallback = Some(r)
-      }
-    }
-  }
-  fallback
-}
-
-///|
 /// Index of the choice a fresh session should start with: the one flagged
 /// `DEFAULT=YES`, else the first. `None` when there is nothing to choose from
 /// (no `SUBTITLES` group, or a Period without a parseable text set).
-fn streaming_default_rendition_index(
-  choices : Array[SubtitleRendition],
-) -> Int? {
+fn streaming_default_rendition_index(choices : Array[Rendition]) -> Int32? {
   if choices.length() == 0 {
     return None
   }
@@ -843,44 +820,23 @@ fn streaming_open_master(
     max_reloads~,
   )
   session.variant_uri = Some(chosen.uri)
-  match streaming_pick_audio_rendition(master, chosen.audio) {
-    None => ()
-    Some(rendition) => {
-      let url = rendition.uri
-      let audio_bytes = match fetch(url, 0L, -1L) {
-        Ok(v) => v
-        Err(e) => raise DemuxError("hls: audio rendition fetch failed: \{e}")
-      }
-      let audio_playlist = match
-        av_hls_parse(streaming_playlist_text(audio_bytes), base_uri=url) {
-        Ok(p) => p
-        Err(e) => raise DemuxError("hls: audio rendition playlist: \{e}")
-      }
-      if audio_playlist.is_master {
-        raise DemuxError("hls: nested master playlists are not supported")
-      }
-      session.audio_track = Some(
-        StreamingMedia::open_hls(
-          audio_playlist,
-          fetch,
-          prefer_x_start~,
-          live_start_index~,
-          playlist_fetch~,
-          playlist_uri=url,
-          max_reloads~,
-        ),
-      )
-    }
-  }
-  // Keep what a later `select_subtitles` needs to enumerate the group's other
-  // renditions: the master's rendition list and the group this variant named.
+  // Keep what a later `select_audio`/`select_subtitles` needs to enumerate the
+  // sibling renditions: the master's rendition list and the groups this variant
+  // named. Opening the default audio rendition goes through the same call a
+  // caller would use, so the first window and the Nth window share one path.
   session.hls_renditions = master.renditions
+  session.audio_group = chosen.audio
   session.subtitle_group = chosen.subtitles
+  match streaming_default_rendition_index(session.streaming_audio_choices()) {
+    None => ()
+    Some(index) => session.select_audio(index)
+  }
   // Subtitles are auxiliary, but a broken rendition playlist is a broken
   // stream: FFmpeg's `hls_read_header` opens every declared rendition eagerly
   // and fails the whole open, so selecting the default does the same rather
   // than silently playing a video with no cues.
-  match streaming_default_rendition_index(session.streaming_subtitle_choices()) {
+  match
+    streaming_default_rendition_index(session.streaming_subtitle_choices()) {
     None => ()
     Some(index) => session.select_subtitles(index)
   }
@@ -937,6 +893,11 @@ pub fn StreamingMedia::open_hls(
   } else {
     0
   }
+  // A separate audio rendition is a second session of this same shape, opened
+  // with the same knobs - keep them so `select_audio` can open another one.
+  session.audio_prefer_x_start = prefer_x_start
+  session.audio_live_start_index = live_start_index
+  session.audio_reload_budget = session.reload_budget
   session
 }
 
@@ -965,7 +926,7 @@ fn dash_rep_mime(set : DashAdaptationSet, rep : DashRepresentation) -> String {
 /// formats (TTML, SRT, ...) are not fed to the WebVTT reader - they would fail
 /// on the missing signature and take an otherwise healthy stream down with
 /// them.
-fn dash_text_rep_index(set : DashAdaptationSet) -> Int? {
+fn dash_text_rep_index(set : DashAdaptationSet) -> Int32? {
   if !dash_set_is_text(set) {
     return None
   }
@@ -1018,7 +979,7 @@ fn dash_subtitle_track_append(
   track : SubtitleTrack,
   rep : DashRepresentation,
   fetch : MediaFetch,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let fresh : Array[HlsVttCue] = []
   let staged : Map[String, Bool] = Map([])
   let mut next_start = track.next_start_ms
@@ -1095,17 +1056,18 @@ fn dash_subtitle_track_open(
 /// `reload_dash` automatically.
 fn StreamingMedia::streaming_subtitle_choices(
   self : StreamingMedia,
-) -> Array[SubtitleRendition] {
-  let out : Array[SubtitleRendition] = []
+) -> Array[Rendition] {
+  let out : Array[Rendition] = []
   match self.kind {
     Hls => {
       if self.subtitle_group == "" {
         return out
       }
       for r in self.hls_renditions {
-        if r.type_ == "SUBTITLES" && r.group_id == self.subtitle_group &&
+        if r.type_ == "SUBTITLES" &&
+          r.group_id == self.subtitle_group &&
           r.uri != "" {
-          out.push(subtitle_rendition_hls(r))
+          out.push(rendition_hls(r))
         }
       }
     }
@@ -1121,13 +1083,39 @@ fn StreamingMedia::streaming_subtitle_choices(
       for i = 0; i < sets.length(); i = i + 1 {
         match dash_text_rep_index(sets[i]) {
           Some(r) =>
-            out.push(
-              subtitle_rendition_dash(sets[i], sets[i].representations[r], i, r),
-            )
+            out.push(rendition_dash(sets[i], sets[i].representations[r], i, r))
           None => ()
         }
       }
     }
+  }
+  out
+}
+
+///|
+/// The audio renditions the chosen variant delegates to, in playlist order.
+///
+/// HLS only: a variant that names `AUDIO="group"` keeps its audio in
+/// `EXT-X-MEDIA:TYPE=AUDIO` members of that group, and each URI-bearing member
+/// is a selectable track. DASH has no equivalent here - a session plays one
+/// AdaptationSet, and a muxed audio track is not something a menu can switch -
+/// so the list is empty.
+fn StreamingMedia::streaming_audio_choices(
+  self : StreamingMedia,
+) -> Array[Rendition] {
+  let out : Array[Rendition] = []
+  match self.kind {
+    Hls => {
+      if self.audio_group == "" {
+        return out
+      }
+      for r in self.hls_renditions {
+        if r.type_ == "AUDIO" && r.group_id == self.audio_group && r.uri != "" {
+          out.push(rendition_hls(r))
+        }
+      }
+    }
+    Dash => ()
   }
   out
 }
@@ -1172,7 +1160,12 @@ pub fn StreamingMedia::open_dash(
   } else {
     None
   }
-  let session = streaming_from_reader(Dash, "dash", DashReader(reader), duration)
+  let session = streaming_from_reader(
+    Dash,
+    "dash",
+    DashReader(reader),
+    duration,
+  )
   session.dash_period = period
   session.dash_adaptation_set = adaptation_set
   session.dash_representation = representation
@@ -1189,7 +1182,8 @@ pub fn StreamingMedia::open_dash(
   // caller selected a text set itself there is nothing to collect - the
   // session *is* the subtitle reader then.
   if !dash_set_is_text(sets[adaptation_set]) {
-    match streaming_default_rendition_index(session.streaming_subtitle_choices()) {
+    match
+      streaming_default_rendition_index(session.streaming_subtitle_choices()) {
       None => ()
       Some(index) => session.select_subtitles(index)
     }
@@ -1304,10 +1298,97 @@ pub fn StreamingMedia::variant_uri(self : StreamingMedia) -> String? {
 ///|
 /// The separate `EXT-X-MEDIA` audio rendition this session's variant delegates
 /// to, or `None` when the variant carries its own audio. `decode_audio`
-/// already follows it with the default `DEFAULT=YES` rendition; this accessor
-/// is for callers that want to drive another rendition or inspect the track.
+/// already follows it, starting on the `DEFAULT=YES` rendition; this accessor
+/// is for callers that want to drive the sub-session directly (a live stream's
+/// audio playlist advances on its own budget, so `decode_audio` alone is
+/// enough, but a seek or a packet-level loop needs the session itself).
 pub fn StreamingMedia::audio_track(self : StreamingMedia) -> StreamingMedia? {
   self.audio_track
+}
+
+///|
+/// The audio renditions this session could play, for a language menu. No bytes
+/// are fetched, so this is cheap to call whenever the UI needs a list.
+///
+/// HLS only: it lists the `EXT-X-MEDIA:TYPE=AUDIO` members of the group the
+/// chosen variant named. A variant that carries its own audio (no `AUDIO=`
+/// group, or a group whose entries are all muxed `URI`-less ones) offers
+/// nothing, and a DASH session always offers nothing - it plays a single
+/// AdaptationSet. Index them with `select_audio`.
+pub fn StreamingMedia::audio_renditions(
+  self : StreamingMedia,
+) -> Array[Rendition] {
+  self.streaming_audio_choices()
+}
+
+///|
+/// Index of the active audio rendition inside `audio_renditions()`, or `-1`
+/// when this session has none. A variant that starts from the group's
+/// `DEFAULT=YES` member reports that member's position, which is not
+/// necessarily 0.
+pub fn StreamingMedia::audio_selected(self : StreamingMedia) -> Int32 {
+  let active = match self.audio_active {
+    None => return -1
+    Some(a) => a
+  }
+  let choices = self.streaming_audio_choices()
+  for i = 0; i < choices.length(); i = i + 1 {
+    if rendition_same(choices[i], active) {
+      return i
+    }
+  }
+  -1
+}
+
+///|
+/// Switch the active audio track to `index` of `audio_renditions()`: the
+/// rendition's playlist is fetched and opened as a new sub-session, then
+/// `audio_track`/`decode_audio` follow it.
+///
+/// Re-selecting the active rendition is a no-op, so a UI that re-applies the
+/// current selection does not restart a live stream's audio window. A switch
+/// that cannot be opened leaves the previous track in place and raises; an
+/// out-of-range index raises instead of being clamped.
+pub fn StreamingMedia::select_audio(
+  self : StreamingMedia,
+  index : Int32,
+) -> Unit raise MediaError {
+  let choices = self.streaming_audio_choices()
+  if index < 0 || index >= choices.length() {
+    raise DemuxError("audio: selection \{index} out of range")
+  }
+  if self.audio_selected() == index {
+    return
+  }
+  let fetch = match self.reader {
+    HlsReader(r) => r.fetch
+    DashReader(_) => raise DemuxError("audio: not an HLS session")
+  }
+  let choice = choices[index]
+  let url = choice.uri
+  let data = match fetch(url, 0L, -1L) {
+    Ok(v) => v
+    Err(e) => raise DemuxError("hls: audio rendition fetch failed: \{e}")
+  }
+  let playlist = match
+    av_hls_parse(streaming_playlist_text(data), base_uri=url) {
+    Ok(p) => p
+    Err(e) => raise DemuxError("hls: audio rendition playlist: \{e}")
+  }
+  if playlist.is_master {
+    raise DemuxError("hls: nested master playlists are not supported")
+  }
+  let track = StreamingMedia::open_hls(
+    playlist,
+    fetch,
+    prefer_x_start=self.audio_prefer_x_start,
+    live_start_index=self.audio_live_start_index,
+    playlist_fetch=self.playlist_fetch,
+    playlist_uri=url,
+    max_reloads=self.audio_reload_budget,
+  )
+  self.audio_track = Some(track)
+  self.audio_active = Some(choice)
 }
 
 ///|
@@ -1328,7 +1409,7 @@ pub fn StreamingMedia::subtitles(self : StreamingMedia) -> SubtitleTrack? {
 /// playlist / MPD currently installed, so its order follows `reload_dash`.
 pub fn StreamingMedia::subtitle_renditions(
   self : StreamingMedia,
-) -> Array[SubtitleRendition] {
+) -> Array[Rendition] {
   self.streaming_subtitle_choices()
 }
 
@@ -1336,14 +1417,14 @@ pub fn StreamingMedia::subtitle_renditions(
 /// Index of the active track inside `subtitle_renditions()`, or `-1` when the
 /// session has none (or the selection no longer matches anything in the current
 /// MPD).
-pub fn StreamingMedia::subtitle_selected(self : StreamingMedia) -> Int {
+pub fn StreamingMedia::subtitle_selected(self : StreamingMedia) -> Int32 {
   let active = match self.subtitle_active {
     None => return -1
     Some(a) => a
   }
   let choices = self.streaming_subtitle_choices()
   for i = 0; i < choices.length(); i = i + 1 {
-    if subtitle_rendition_same(choices[i], active) {
+    if rendition_same(choices[i], active) {
       return i
     }
   }
@@ -1361,7 +1442,7 @@ pub fn StreamingMedia::subtitle_selected(self : StreamingMedia) -> Int {
 /// previous track stays active when the new one cannot be opened.
 pub fn StreamingMedia::select_subtitles(
   self : StreamingMedia,
-  index : Int,
+  index : Int32,
 ) -> Unit raise MediaError {
   let choices = self.streaming_subtitle_choices()
   if index < 0 || index >= choices.length() {
@@ -1407,7 +1488,8 @@ pub fn StreamingMedia::select_subtitles(
       let (set, rep, fetch) = match self.dash_mpd {
         None => raise DemuxError("dash: no MPD installed")
         Some(m) => {
-          if choice.set < 0 || choice.set >= m.periods[self.dash_period].adaptation_sets.length() {
+          if choice.set < 0 ||
+            choice.set >= m.periods[self.dash_period].adaptation_sets.length() {
             raise DemuxError("dash: subtitle set out of range")
           }
           let sets = m.periods[self.dash_period].adaptation_sets
@@ -1438,7 +1520,9 @@ pub fn StreamingMedia::select_subtitles(
 /// playback - and count the failures here instead, so the condition is
 /// observable without breaking the media loop. Call `refresh_subtitles`
 /// directly to see the error itself.
-pub fn StreamingMedia::subtitle_refresh_failures(self : StreamingMedia) -> Int32 {
+pub fn StreamingMedia::subtitle_refresh_failures(
+  self : StreamingMedia,
+) -> Int32 {
   self.subtitle_refresh_failures
 }
 
@@ -1457,7 +1541,7 @@ pub fn StreamingMedia::subtitle_refresh_failures(self : StreamingMedia) -> Int32
 /// surface the error instead.
 pub fn StreamingMedia::refresh_subtitles(
   self : StreamingMedia,
-) -> Int raise MediaError {
+) -> Int32 raise MediaError {
   let track = match self.subtitle_track {
     None => return 0
     Some(t) => t
@@ -1471,8 +1555,7 @@ pub fn StreamingMedia::refresh_subtitles(
       let fetch = reader.fetch
       let data = match fetch(track.source_uri, 0L, -1L) {
         Ok(v) => v
-        Err(e) =>
-          raise DemuxError("subtitles: playlist fetch failed: \{e}")
+        Err(e) => raise DemuxError("subtitles: playlist fetch failed: \{e}")
       }
       let playlist = match
         av_hls_parse(streaming_playlist_text(data), base_uri=track.source_uri) {
@@ -1525,9 +1608,7 @@ pub fn StreamingMedia::refresh_subtitles(
 fn StreamingMedia::streaming_refresh_subtitles_quietly(
   self : StreamingMedia,
 ) -> Unit {
-  try {
-    ignore(self.refresh_subtitles())
-  } catch {
+  ignore(self.refresh_subtitles()) catch {
     _ => self.subtitle_refresh_failures = self.subtitle_refresh_failures + 1
   }
 }
