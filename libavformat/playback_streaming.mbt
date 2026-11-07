@@ -107,6 +107,10 @@ pub struct StreamingMedia {
   /// AdaptationSet is a subtitle track of its own. Either way the cues land
   /// here.
   mut subtitle_track : SubtitleTrack?
+  /// Subtitle refreshes that were attempted during `reload`/`reload_dash` and
+  /// failed. Those are best effort - a broken cue playlist must not stop live
+  /// playback - so this counter is how a caller notices.
+  mut subtitle_refresh_failures : Int32
 }
 
 ///|
@@ -346,6 +350,7 @@ fn streaming_from_reader(
     dash_mpd: None,
     audio_track: None,
     subtitle_track: None,
+    subtitle_refresh_failures: 0,
   }
 }
 
@@ -381,6 +386,9 @@ pub fn StreamingMedia::reload(
   self.streaming_reset_segment()
   self.finished = false
   self.reload_count += 1
+  // The subtitle rendition is a playlist of its own, so the media reload has to
+  // pull it forward too; a cue problem must not undo the window that just moved.
+  self.streaming_refresh_subtitles_quietly()
 }
 
 ///|
@@ -620,6 +628,9 @@ pub fn StreamingMedia::reload_dash(
   self.streaming_reset_segment()
   self.finished = false
   self.reload_count += 1
+  // `dash_mpd` is now the fresh MPD, which is exactly what the subtitle refresh
+  // reads: a cue problem must not undo the window that just moved.
+  self.streaming_refresh_subtitles_quietly()
 }
 
 ///|
@@ -991,20 +1002,33 @@ fn dash_time_to_ms(time : Int64, timescale : Int64) -> Int64 {
 }
 
 ///|
-/// Fetch and parse every segment of a DASH `text/vtt` Representation.
+/// Append the cues of every not-yet-collected segment of a DASH `text/vtt`
+/// Representation to `track`, returning how many cues were added.
 ///
-/// Each segment is a self-contained `WEBVTT` file (text AdaptationSets carry no
-/// initialization section), so cue placement follows the same rule as the HLS
-/// path - see `subtitle_place_cues` - with the segment start coming from the
-/// segment's own `time` rather than from accumulated `EXTINF` durations.
-fn dash_subtitle_track_open(
-  set : DashAdaptationSet,
+/// Segments are keyed by `uri@mediaRange` rather than by sequence number or
+/// start time: a duration-based `SegmentTemplate` restarts both when a live
+/// window slides (`time` from 0 again, numbers relative to the template), so
+/// neither is monotonic across refreshes, while the segment's own address is.
+///
+/// For the same reason the placement floor is `next_start_ms`: a timeline-based
+/// Representation carries authoritative absolute times so the floor never
+/// binds, while a duration-based window that restarted at 0 continues after
+/// what was already placed instead of stacking cues on top of old ones.
+///
+/// As in the HLS path, nothing is committed until the whole pass succeeds.
+fn dash_subtitle_track_append(
+  track : SubtitleTrack,
   rep : DashRepresentation,
   fetch : MediaFetch,
-  source_uri : String,
-) -> Result[SubtitleTrack, String] {
-  let cues : Array[HlsVttCue] = []
+) -> Result[Int, String] {
+  let fresh : Array[HlsVttCue] = []
+  let staged : Map[String, Bool] = Map([])
+  let mut next_start = track.next_start_ms
   for segment in rep.segments {
+    let key = segment.uri + "@" + segment.media_range
+    if track.collected.contains(key) || staged.contains(key) {
+      continue
+    }
     let range = match dash_resource_range(segment.media_range) {
       Ok(v) => v
       Err(e) => return Err(e)
@@ -1017,9 +1041,49 @@ fn dash_subtitle_track_open(
       Ok(d) => d
       Err(e) => return Err("vtt: segment \{segment.uri}: \{e}")
     }
-    subtitle_place_cues(cues, document, dash_time_to_ms(segment.time, rep.timescale))
+    let declared = dash_time_to_ms(segment.time, rep.timescale)
+    let start = if declared > next_start { declared } else { next_start }
+    subtitle_place_cues(fresh, document, start)
+    let end = streaming_sat_add(
+      start,
+      dash_time_to_ms(segment.duration, rep.timescale),
+    )
+    if end > next_start {
+      next_start = end
+    }
+    staged[key] = true
   }
-  Ok({ language: set.lang, name: rep.id, forced: false, source_uri, cues })
+  let added = fresh.length()
+  for cue in fresh {
+    track.cues.push(cue)
+  }
+  for key in staged.keys() {
+    track.collected[key] = true
+  }
+  track.next_start_ms = next_start
+  Ok(added)
+}
+
+///|
+/// Fetch and parse every segment of a DASH `text/vtt` Representation.
+///
+/// Each segment is a self-contained `WEBVTT` file (text AdaptationSets carry no
+/// initialization section), so cue placement follows the same rule as the HLS
+/// path - see `subtitle_place_cues` - with the segment start coming from the
+/// segment's own `time` rather than from accumulated `EXTINF` durations.
+fn dash_subtitle_track_open(
+  set : DashAdaptationSet,
+  rep : DashRepresentation,
+  fetch : MediaFetch,
+  source_uri : String,
+) -> Result[SubtitleTrack, String] {
+  // DASH has no rendition `NAME`; the Representation id is the closest thing,
+  // and `forced` has no equivalent at all.
+  let track = subtitle_track_new(set.lang, rep.id, false, source_uri)
+  match dash_subtitle_track_append(track, rep, fetch) {
+    Ok(_) => Ok(track)
+    Err(e) => Err(e)
+  }
 }
 
 ///|
@@ -1215,10 +1279,105 @@ pub fn StreamingMedia::audio_track(self : StreamingMedia) -> StreamingMedia? {
 ///|
 /// The subtitle track this session found, or `None` when there is none: an HLS
 /// variant without a `SUBTITLES=` group, or a DASH Period without a `text/vtt`
-/// AdaptationSet. Cues are collected at open time (they are tiny compared with
-/// media segments), so this accessor performs no IO and never raises.
+/// AdaptationSet. Cues of the first window are collected at open time (they are
+/// tiny compared with media segments), so this accessor performs no IO and
+/// never raises; `refresh_subtitles` extends them for a live stream.
 pub fn StreamingMedia::subtitles(self : StreamingMedia) -> SubtitleTrack? {
   self.subtitle_track
+}
+
+///|
+/// How many subtitle refreshes have failed. `reload`/`reload_dash` refresh the
+/// subtitle track best effort - a failing cue playlist must not stop live
+/// playback - and count the failures here instead, so the condition is
+/// observable without breaking the media loop. Call `refresh_subtitles`
+/// directly to see the error itself.
+pub fn StreamingMedia::subtitle_refresh_failures(self : StreamingMedia) -> Int32 {
+  self.subtitle_refresh_failures
+}
+
+///|
+/// Append the cues a live session has published since the last call, returning
+/// how many were added (0 when there is no subtitle track, nothing new, or the
+/// source no longer offers one).
+///
+/// HLS re-fetches the rendition playlist named by the track's `source_uri`;
+/// DASH re-reads the MPD currently installed on the session, so
+/// `reload_dash(new_mpd)` is what advances it. Both are append-only and
+/// idempotent: already-collected segments are skipped, and a failure leaves the
+/// track untouched so the same call can be retried.
+///
+/// `reload`/`reload_dash` already call this (best effort); call it directly to
+/// surface the error instead.
+pub fn StreamingMedia::refresh_subtitles(
+  self : StreamingMedia,
+) -> Int raise MediaError {
+  let track = match self.subtitle_track {
+    None => return 0
+    Some(t) => t
+  }
+  match self.kind {
+    Hls => {
+      let reader = match self.reader {
+        HlsReader(r) => r
+        DashReader(_) => return 0
+      }
+      let fetch = reader.fetch
+      let data = match fetch(track.source_uri, 0L, -1L) {
+        Ok(v) => v
+        Err(e) =>
+          raise DemuxError("subtitles: playlist fetch failed: \{e}")
+      }
+      let playlist = match
+        av_hls_parse(streaming_playlist_text(data), base_uri=track.source_uri) {
+        Ok(p) => p
+        Err(e) => raise DemuxError("subtitles: \{e}")
+      }
+      match hls_subtitle_track_append(track, playlist, reader.fetch) {
+        Ok(n) => n
+        Err(e) => raise DemuxError("subtitles: \{e}")
+      }
+    }
+    Dash => {
+      let mpd = match self.dash_mpd {
+        None => return 0
+        Some(m) => m
+      }
+      if self.dash_period < 0 || self.dash_period >= mpd.periods.length() {
+        return 0
+      }
+      let sets = mpd.periods[self.dash_period].adaptation_sets
+      let (set_index, rep_index) = match dash_pick_subtitles(sets) {
+        None => return 0
+        Some(p) => p
+      }
+      let fetch = match self.reader {
+        DashReader(r) => r.fetch
+        HlsReader(_) => return 0
+      }
+      match
+        dash_subtitle_track_append(
+          track, sets[set_index].representations[rep_index], fetch,
+        ) {
+        Ok(n) => n
+        Err(e) => raise DemuxError("subtitles: \{e}")
+      }
+    }
+  }
+}
+
+///|
+/// Refresh the subtitle track without letting its failure escape, counting the
+/// failure instead. Used by `reload`/`reload_dash`, where the media window has
+/// already moved and a cue problem must not undo that.
+fn StreamingMedia::streaming_refresh_subtitles_quietly(
+  self : StreamingMedia,
+) -> Unit {
+  try {
+    ignore(self.refresh_subtitles())
+  } catch {
+    _ => self.subtitle_refresh_failures = self.subtitle_refresh_failures + 1
+  }
 }
 
 ///|

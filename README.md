@@ -355,7 +355,7 @@ Period 边界标记 `discontinuity`、分段游标重置；`period_index()` 可�
 （解析层同时修掉一处缺陷：空 `URI` 曾被解析成 master 自身的地址）。
 
 **字幕轨（HLS rendition / DASH text AdaptationSet）**：字幕落在
-`SubtitleTrack` 上，两条来源都汇到 `subtitles()`，且都在打开时一次性取完
+`SubtitleTrack` 上，两条来源都汇到 `subtitles()`，首窗在打开时一次性取完
 （cue 比媒体分片小几个数量级），访问器无 IO、不抛。
 
 HLS 侧：变体声明 `SUBTITLES="group"` 时字幕在
@@ -380,6 +380,18 @@ NOTE/STYLE/REGION 与 cue id、丢弃 cue settings、支持 CRLF 与 BOM、多�
 流的 MPEG-TS 时钟，字幕 playlist/分段自身不携带。某个分片不是 WebVTT 或
 取不回来都会让 `open` 报错，而不是静默播一个没有字幕的视频（HLS 侧与
 `hls_read_header` 提前打开每个声明过的 rendition 一致）。
+
+**live 字幕跟窗**：`refresh_subtitles()` 只追加新段，返回新增 cue 数；
+HLS 重取 rendition 播放列表、DASH 读会话上当前的 MPD（所以
+`reload_dash(new_mpd)` 就是推进它的动作）。进度键两边不同：HLS 用绝对
+`EXT-X-MEDIA-SEQUENCE`（窗口内下标会滑动，序号不会），DASH 用段的
+`uri@mediaRange`——duration 型 `SegmentTemplate` 的窗口滑动时序号与时间
+都会从 0 重来，只有段自己的地址稳定。HLS 的时间轴按累计 `EXTINF` 续接；
+DASH 以 `next_start_ms` 作为声明时间的单调下限，于是「窗口重置」的流不会
+把新 cue 叠到旧 cue 上。`reload`/`reload_dash` 都会顺带刷新（best effort：
+cue 出问题不推翻已经移动的媒体窗口），失败次数由
+`subtitle_refresh_failures()` 观测；要拿到错误本身就直接调
+`refresh_subtitles()`——它在整趟成功前不提交，所以可原样重试。
 
 **本地文件取媒体**：`playback_fetch.mbt` 给出 `MediaFetch` 的三种现成实现
 ——`media_fetch_from_reader`（把 `(路径) -> Bytes` 的读取器适配成带
@@ -411,7 +423,7 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-11-07）：Wasm 测试 **1684/1684** 通过，`moon check --target wasm --deny-warn` 与 `moon check --target native --deny-warn` 零警告，`moon info` 通过（`--target js` 有 1 处 `libavutil/moon.pkg` 的 `v128` 未使用告警，`git stash` 回退到上一提交后仍在，属历史遗留、与本轮无关）（新增 HLS/DASH 分段播放 15 项、master 选路与视频线 9 项、live 刷新 8 项、本地文件 `MediaFetch` 适配 6 项、滤波器类型码与缩放算法查询 2 项、DASH 动态 MPD 刷新 9 项、DASH 多 Period 续播 5 项、HLS 分离音轨 6 项、WebVTT 读取 14 项、HLS 字幕 rendition 9 项、DASH 字幕 Representation 9 项 + 分段毫秒换算 1 项，与 libswresample 重采样 15 项、swscale 通用缩放 3 项 + RGB 组合 5 项（含奇宽 2 项）、422/444 组合 8 项（含
+最近一次完整验证（2026-11-07）：Wasm 测试 **1690/1690** 通过，`moon check --target wasm --deny-warn` 与 `moon check --target native --deny-warn` 零警告，`moon info` 通过（`--target js` 有 1 处 `libavutil/moon.pkg` 的 `v128` 未使用告警，`git stash` 回退到上一提交后仍在，属历史遗留、与本轮无关）（新增 HLS/DASH 分段播放 15 项、master 选路与视频线 9 项、live 刷新 8 项、本地文件 `MediaFetch` 适配 6 项、滤波器类型码与缩放算法查询 2 项、DASH 动态 MPD 刷新 9 项、DASH 多 Period 续播 5 项、HLS 分离音轨 6 项、WebVTT 读取 14 项、HLS 字幕 rendition 9 项、DASH 字幕 Representation 9 项 + 分段毫秒换算 1 项、live 字幕跟窗 6 项，与 libswresample 重采样 15 项、swscale 通用缩放 3 项 + RGB 组合 5 项（含奇宽 2 项）、422/444 组合 8 项（含
 奇尺寸）、422/444→RGB 组合 6 项、full-range 4 项、BT.709 4 项、FCC/SMPTE240M/BT.2020 7 项、10bit 缩放 5 项、奇宽源 2 项、重采样门面 3 项；同日 ffref 原生 oracle 整体注释停用后复验仍全绿）。零警告是本轮清账的结果：1127 处 `"..."` 字面量迁到 `b"..."`（字节字面量，拼接语义不变）、9 处把保留字 `ref` 当标识符、2 处 `SwsScaleError` 单变体使 `catch` 兜底与 `noraise` 分支不可达、3 处声明了却永不抛出的 `raise`、2 处未使用参数/局部变量、1 处调试残留函数；另补齐 `SwrFilterType::from_code`（对齐 `SWR_FILTER_TYPE_*` 的 0/1/2）与 `SwsPlanarScaler::algo` 两个小接口，让原先"只在测试里构造"的枚举变体和"只写不读"的字段各有正式入口。ffref 原生 oracle 差分（61/61：音频解码 MP3 定点逐字节/AAC、TS/MKV/WebM/MP4/fMP4 逐包、MJPEG/PNG 逐字节、shine 编码逐字节与 Opus/AAC 互通）为停用前的历史验证记录，见 PORTING_HISTORY §328-§332。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
 
 ## 代码位置

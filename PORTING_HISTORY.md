@@ -10072,3 +10072,72 @@ libavformat 整包 **669/669**；全量 Wasm **1684/1684**（本片 +10）；
 **未做**：字幕轨的 live 刷新（HLS live 播放列表与 DASH 动态 MPD 都只在
 `open` 时收集一次，窗口滑动后新段的 cue 不会追加）；多语言字幕/音轨选择
 API（只取第一条）；DASH `@presentationTimeOffset` 参与时间轴归一。
+
+## 2026-11-07 自适应流第十片：live 字幕跟窗（纯 MoonBit）
+
+上一片列的第一条缺口：字幕只在 `open` 收一次，live 窗口滑动后新段 cue 不追。
+断言"这个片子的字幕是活的"需要三件事：进度键、时间轴续接、失败语义。
+
+**open = new + append（结构上的关键决定）**
+
+原来的 `hls_subtitle_track_open` / `dash_subtitle_track_open` 自带一段收集
+循环。这次把它拆成 `subtitle_track_new(...)` + `*_track_append(...)`，
+`open` 变成两者的组合。**理由不是好看**：首窗和后续窗口如果各写一套循环，
+两边的放置规则与游标推进迟早会分叉，而这种分叉只会在 live 流的第 N 个窗口
+才暴露。现在只有一个循环。
+
+`append` 在整趟成功前不提交任何东西（cue、游标都不动），所以失败可原样重试。
+
+**进度键两边不同（这是本片最实质的判断）**
+
+- HLS：用 `EXT-X-MEDIA-SEQUENCE`。窗口内下标会滑动（同一段在不同窗口里下标
+  不同），序号是绝对的、单调的、唯一的——`HlsSegmentReader::reload` 也已
+  依赖同一性质。已被读过的段直接 `continue`，**不推进** `next_start_ms`
+  （那些 `EXTINF` 在上一趟已经累加过了）。
+- DASH：用 `uri@mediaRange`。`$Number$` + duration 型 `SegmentTemplate` 的
+  窗口一滑，序号从 `startNumber` 重来、时间从 0 重来，两者都不单调；而
+  `$Number$` + `SegmentTimeline` 的序号也是按窗口内第几条算的（同一个
+  `sub1.vtt` 会在两个窗口里都出现）。只有段自己的地址在所有寻址模式下稳定。
+
+**时间轴续接**
+
+- HLS：live 播放列表只列当前窗口，窗口本身的 `EXTINF` 说不了它落在整条时间轴
+  的哪里；因此 `next_start_ms` 从上一趟的累计值继续。
+- DASH：`SegmentTimeline` 的 `time` 是绝对的，正常情况直接用；但 duration 型
+  窗口会重置到 0，所以 `start = max(time_ms, next_start_ms)`——时间轴绝对是
+  权威的场合下限不生效，窗口重置的场合则接着往下排，不会把新 cue 叠到旧 cue
+  上。
+
+**失败语义**
+
+`reload`/`reload_dash` 顺带刷新字幕，但**best effort**：cue 出问题不能推翻
+刚刚移动的媒体窗口（一个字幕 CDN 抖动不该让 live 播放断掉）。
+`streaming_refresh_subtitles_quietly` 吞掉错误并累加
+`subtitle_refresh_failures()`，条件仍然可观测；要拿到错误本身就直接调
+`refresh_subtitles()`，它返回新增 cue 数并照常抛 `DemuxError`。
+
+**验证**
+
+新增 6 项黑盒：HLS 窗口滑一格只追加新段（[0,3000] → [0,3000,6000]）；
+同一播放列表重复刷新追加 0（游标是位置而非"重读"请求）；`reload` 会自动
+带上 rendition 播放列表；失败的刷新不打断 `reload`（`reload_count` 仍增、
+失败计数 +1、cue 不变），源恢复后同一调用能补齐；DASH 用 `$Time$` 窗口
+滑动只追加新段；DASH duration 型窗口重置时 cue 继续落在 [4000,6000] 而不是
+回到 [0,2000]。
+
+libavformat 整包 **675/675**；全量 Wasm **1690/1690**（本片 +6）；
+`check --target wasm/native --deny-warn` 零警告。
+公共 API 增量：`refresh_subtitles()`、`subtitle_refresh_failures()`。
+
+**坑**
+
+- 第一版测试夹具把「滑窗」写成 `MEDIA-SEQUENCE:1` + `[s0.vtt, s1.vtt]`，
+  于是 s0 拿到了**新序号 1**，被当成新段又收了一遍。滑窗里重叠段的序号是
+  **不变**的，写对了才发现这正是 `media_sequence` 作为键的意义。
+- DASH 侧同类错误：用 `$Number$` + SegmentTimeline 造 live 窗口，第二窗口的
+  段号从 `startNumber` 重算，URI 全撞上第一窗口 → 追加 0 条。真实 live 用
+  `$Time$`，换成 `$Time$` 才是这个性质该被验证的地方。
+
+**未做**：多语言字幕/音轨选择 API（只取第一条 `text/vtt` / `DEFAULT=YES`）；
+DASH `@presentationTimeOffset` 参与时间轴归一；字幕 rendition 的换轨（选组
+之后不会随变体切换重新选）。

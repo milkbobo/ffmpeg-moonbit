@@ -418,6 +418,11 @@ fn hls_vtt_segment_ms(duration : Double) -> Int64 {
 /// milliseconds on the presentation timeline, in segment order. Filled either
 /// from an HLS `EXT-X-MEDIA:TYPE=SUBTITLES` rendition or from a DASH `text`
 /// AdaptationSet, which is why the name carries no container prefix.
+///
+/// The two cursors exist so a live refresh appends only what is new:
+/// `next_start_ms`/`last_sequence` track the HLS rendition playlist,
+/// `collected` tracks the DASH segment addresses. They are never both in play -
+/// a track is filled by one source only.
 pub struct SubtitleTrack {
   language : String
   name : String
@@ -425,6 +430,40 @@ pub struct SubtitleTrack {
   /// The playlist (HLS rendition) or MPD (DASH) the track came from.
   source_uri : String
   cues : Array[HlsVttCue]
+  /// Presentation position (ms) where the next uncollected segment starts.
+  /// HLS accumulates it from `EXTINF` - a live playlist lists only its current
+  /// window, so the window's own durations cannot say where it sits. DASH uses
+  /// it as a monotone floor under the segment's declared time, for windows that
+  /// restart their timeline.
+  mut next_start_ms : Int64
+  /// HLS: highest `media_sequence` already collected: absolute, monotonic and
+  /// unique per segment, unlike the index into a sliding window.
+  mut last_sequence : Int64
+  /// DASH: `uri@mediaRange` keys already collected. A duration-based
+  /// `SegmentTemplate` restarts both its sequence numbers and its times when the
+  /// window slides, so the segment's own address is the only stable key.
+  collected : Map[String, Bool]
+}
+
+///|
+/// An empty track. `open` is "new + append", which is what keeps the live
+/// refresh path from drifting away from the first-window path.
+fn subtitle_track_new(
+  language : String,
+  name : String,
+  forced : Bool,
+  source_uri : String,
+) -> SubtitleTrack {
+  {
+    language,
+    name,
+    forced,
+    source_uri,
+    cues: [],
+    next_start_ms: 0L,
+    last_sequence: -1L,
+    collected: Map([]),
+  }
 }
 
 ///|
@@ -498,6 +537,52 @@ fn subtitle_place_cues(
 }
 
 ///|
+/// Append the cues of every not-yet-collected segment of `playlist` to `track`,
+/// returning how many cues were added. Nothing is committed until the whole
+/// pass succeeds, so a fetch or parse failure leaves the track (and its
+/// cursors) exactly as it was and the same refresh can be retried.
+fn hls_subtitle_track_append(
+  track : SubtitleTrack,
+  playlist : HlsPlaylist,
+  fetch : MediaFetch,
+) -> Result[Int, String] {
+  if playlist.is_master {
+    return Err("vtt: expected a subtitle media playlist, got a master")
+  }
+  let fresh : Array[HlsVttCue] = []
+  let mut next_start = track.next_start_ms
+  let mut last_sequence = track.last_sequence
+  for segment in playlist.segments {
+    // The window overlaps what was already read; those durations are already
+    // folded into `next_start`, so skipping without advancing is correct.
+    if segment.media_sequence <= last_sequence {
+      continue
+    }
+    if segment.uri == "" {
+      return Err("vtt: subtitle segment has an empty URI")
+    }
+    let data = match fetch(segment.uri, 0L, -1L) {
+      Ok(v) => v
+      Err(e) => return Err("vtt: segment \{segment.uri} fetch failed: \{e}")
+    }
+    let document = match hls_vtt_parse_document(hls_vtt_text(data)) {
+      Ok(d) => d
+      Err(e) => return Err("vtt: segment \{segment.uri}: \{e}")
+    }
+    subtitle_place_cues(fresh, document, next_start)
+    next_start = next_start + hls_vtt_segment_ms(segment.duration)
+    last_sequence = segment.media_sequence
+  }
+  let added = fresh.length()
+  for cue in fresh {
+    track.cues.push(cue)
+  }
+  track.next_start_ms = next_start
+  track.last_sequence = last_sequence
+  Ok(added)
+}
+
+///|
 /// Fetch and parse every segment of an HLS subtitle rendition playlist.
 ///
 /// See `subtitle_place_cues` for how a segment's cues are placed on the
@@ -510,29 +595,13 @@ pub fn hls_subtitle_track_open(
   source_uri : String,
   rendition : HlsRendition?,
 ) -> Result[SubtitleTrack, String] {
-  if playlist.is_master {
-    return Err("vtt: expected a subtitle media playlist, got a master")
-  }
-  let cues : Array[HlsVttCue] = []
-  let mut segment_start = 0L
-  for segment in playlist.segments {
-    if segment.uri == "" {
-      return Err("vtt: subtitle segment has an empty URI")
-    }
-    let data = match fetch(segment.uri, 0L, -1L) {
-      Ok(v) => v
-      Err(e) => return Err("vtt: segment \{segment.uri} fetch failed: \{e}")
-    }
-    let document = match hls_vtt_parse_document(hls_vtt_text(data)) {
-      Ok(d) => d
-      Err(e) => return Err("vtt: segment \{segment.uri}: \{e}")
-    }
-    subtitle_place_cues(cues, document, segment_start)
-    segment_start = segment_start + hls_vtt_segment_ms(segment.duration)
-  }
   let (language, name, forced) = match rendition {
     Some(r) => (r.language, r.name, r.forced)
     None => ("", "", false)
   }
-  Ok({ language, name, forced, source_uri, cues })
+  let track = subtitle_track_new(language, name, forced, source_uri)
+  match hls_subtitle_track_append(track, playlist, fetch) {
+    Ok(_) => Ok(track)
+    Err(e) => Err(e)
+  }
 }
