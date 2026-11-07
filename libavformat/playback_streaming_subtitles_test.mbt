@@ -105,9 +105,7 @@ fn subs_variant() -> String {
 /// rendition's cues, with the rendition metadata carried through.
 test "hls subtitles: a variant with SUBTITLES collects the rendition's cues" {
   let master = subs_master(
-    [
-      subs_media_line("SUBTITLES", "subs", "English", "subs.m3u8", "en", true),
-    ],
+    [subs_media_line("SUBTITLES", "subs", "English", "subs.m3u8", "en", true)],
     "subs",
   )
   let seg0 =
@@ -128,7 +126,10 @@ test "hls subtitles: a variant with SUBTITLES collects the rendition's cues" {
     [
       ("https://cdn.test/hls/master.m3u8", master),
       ("https://cdn.test/hls/v/video.m3u8", subs_variant()),
-      ("https://cdn.test/hls/subs.m3u8", subs_playlist(["en0.vtt", "en1.vtt"], 3.0)),
+      (
+        "https://cdn.test/hls/subs.m3u8",
+        subs_playlist(["en0.vtt", "en1.vtt"], 3.0),
+      ),
       ("https://cdn.test/hls/en0.vtt", seg0),
       ("https://cdn.test/hls/en1.vtt", seg1),
     ],
@@ -229,7 +230,10 @@ test "hls subtitles: absolute cue times in a later segment are left alone" {
     [
       ("https://cdn.test/hls/master.m3u8", master),
       ("https://cdn.test/hls/v/video.m3u8", subs_variant()),
-      ("https://cdn.test/hls/subs.m3u8", subs_playlist(["en0.vtt", "en1.vtt"], 3.0)),
+      (
+        "https://cdn.test/hls/subs.m3u8",
+        subs_playlist(["en0.vtt", "en1.vtt"], 3.0),
+      ),
       ("https://cdn.test/hls/en0.vtt", first),
       ("https://cdn.test/hls/en1.vtt", second),
     ],

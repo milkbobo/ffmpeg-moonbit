@@ -22,7 +22,9 @@ fn dash_live_fixture(frames : Int32) -> (Bytes, (Int32) -> Bytes) {
   let build = fn(from : Int32) -> Bytes {
     let samples : Array[@libavformat.Fmp4Sample] = []
     for i in from..<(from + 2) {
-      samples.push(@libavformat.fmp4_sample(units[i][7:].to_owned(), 1024, true))
+      samples.push(
+        @libavformat.fmp4_sample(units[i][7:].to_owned(), 1024, true),
+      )
     }
     @libavformat.fmp4_media_segment(
       1,
@@ -38,7 +40,11 @@ fn dash_live_fixture(frames : Int32) -> (Bytes, (Int32) -> Bytes) {
 /// Build a dynamic MPD whose single audio representation lists `count`
 /// segments of 2048 ticks (two AAC frames) starting at 0, numbered from
 /// `start_number`.
-fn dash_live_mpd(start_number : Int64, first_time : Int64, count : Int64) -> String {
+fn dash_live_mpd(
+  start_number : Int64,
+  first_time : Int64,
+  count : Int64,
+) -> String {
   let sb = StringBuilder()
   sb.write_string(
     "<MPD type=\"dynamic\" profiles=\"urn:mpeg:dash:profile:isoff-live:2011\">",
@@ -53,7 +59,9 @@ fn dash_live_mpd(start_number : Int64, first_time : Int64, count : Int64) -> Str
   sb.write_string(
     "<S t=\"\{first_time}\" d=\"2048\" r=\"\{count - 1L}\"/></SegmentTimeline>",
   )
-  sb.write_string("</SegmentTemplate></Representation></AdaptationSet></Period>")
+  sb.write_string(
+    "</SegmentTemplate></Representation></AdaptationSet></Period>",
+  )
   sb.write_string("</MPD>")
   sb.to_string()
 }
@@ -204,9 +212,7 @@ test "dash live: sliding window keeps the timeline continuous" {
   let first = dash_live_drain(media)
   assert_eq(first.length(), 6)
   // Window now lists segments 4 and 5 only, starting exactly where we left.
-  let refreshed = @libavformat.av_dash_parse(
-    dash_live_mpd(4L, 6144L, 2L),
-  ).unwrap()
+  let refreshed = @libavformat.av_dash_parse(dash_live_mpd(4L, 6144L, 2L)).unwrap()
   media.reload_dash(refreshed)
   let rest = dash_live_drain(media)
   assert_eq(rest.length(), 4)
@@ -227,9 +233,7 @@ test "dash live: expired gap is flagged as a discontinuity" {
   let first = dash_live_drain(media)
   assert_eq(first.length(), 6)
   // Expected next start was 6144 (t=4096 + 2048); the window jumps to 10240.
-  let refreshed = @libavformat.av_dash_parse(
-    dash_live_mpd(6L, 10240L, 2L),
-  ).unwrap()
+  let refreshed = @libavformat.av_dash_parse(dash_live_mpd(6L, 10240L, 2L)).unwrap()
   media.reload_dash(refreshed)
   let rest = dash_live_drain(media)
   assert_eq(rest.length(), 4)

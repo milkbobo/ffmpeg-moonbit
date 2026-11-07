@@ -72,7 +72,11 @@ fn rendition_master(media_line : String, group : String) -> String {
 fn rendition_audio_line(uri : String, is_default : Bool) -> String {
   let d = if is_default { "YES" } else { "NO" }
   "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\"," +
-  "DEFAULT=" + d + ",AUTOSELECT=YES,URI=\"" + uri + "\""
+  "DEFAULT=" +
+  d +
+  ",AUTOSELECT=YES,URI=\"" +
+  uri +
+  "\""
 }
 
 ///|
@@ -213,8 +217,7 @@ test "hls rendition: a variant without AUDIO decodes its own audio" {
 test "hls rendition: URI-less group is not opened separately" {
   let seen : Array[String] = []
   let master = rendition_master(
-    "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",DEFAULT=YES",
-    "aud",
+    "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",DEFAULT=YES", "aud",
   )
   let fetch = rendition_fetch(
     master,

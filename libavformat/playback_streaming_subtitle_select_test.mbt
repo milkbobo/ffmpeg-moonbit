@@ -56,7 +56,7 @@ fn ssel_fetch(
 }
 
 ///|
-fn ssel_count(seen : Array[String], uri : String) -> Int {
+fn ssel_count(seen : Array[String], uri : String) -> Int32 {
   let mut n = 0
   for s in seen {
     if s == uri {
@@ -203,8 +203,7 @@ test "subtitle select: a variant without SUBTITLES offers no choices" {
   let files : Map[String, String] = Map([])
   let seen : Array[String] = []
   let fetch = ssel_fetch(files, seen)
-  files["https://cdn.test/hls/master.m3u8"] =
-    "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=200000\nv/video.m3u8\n"
+  files["https://cdn.test/hls/master.m3u8"] = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=200000\nv/video.m3u8\n"
   files["https://cdn.test/hls/v/video.m3u8"] = ssel_playlist(["v0.ts"])
   let media = @libavformat.StreamingMedia::open(
     ssel_bytes(files["https://cdn.test/hls/master.m3u8"]),
@@ -225,7 +224,10 @@ test "subtitle select: DASH lists every parseable text set" {
   let fetch = ssel_fetch(files, seen)
   files["https://cdn.test/dash/zh1.vtt"] = ssel_vtt("nihao")
   files["https://cdn.test/dash/en1.vtt"] = ssel_vtt("hello")
-  let mpd = ssel_dash_mpd(ssel_dash_text("zh", "zh"), ssel_dash_text("en", "en"))
+  let mpd = ssel_dash_mpd(
+    ssel_dash_text("zh", "zh"),
+    ssel_dash_text("en", "en"),
+  )
   let media = @libavformat.StreamingMedia::open(
     ssel_bytes(mpd),
     fetch,
@@ -252,8 +254,7 @@ test "subtitle select: DASH does not offer a non-WebVTT text set" {
   let seen : Array[String] = []
   let fetch = ssel_fetch(files, seen)
   files["https://cdn.test/dash/en1.vtt"] = ssel_vtt("hello")
-  let ttml =
-    "<AdaptationSet mimeType=\"application/ttml+xml\" lang=\"de\">" +
+  let ttml = "<AdaptationSet mimeType=\"application/ttml+xml\" lang=\"de\">" +
     "<Representation id=\"sub-de\"><SegmentTemplate timescale=\"1000\" " +
     "media=\"de$Number$.ttml\"><SegmentTimeline><S t=\"0\" d=\"2000\" r=\"0\"/>" +
     "</SegmentTimeline></SegmentTemplate></Representation></AdaptationSet>"
@@ -309,12 +310,22 @@ test "subtitle select: live refresh follows the selected language" {
 
 ///|
 /// A text AdaptationSet over one `$Number$` timeline of `repeat + 1` segments.
-fn ssel_dash_text_repeat(lang : String, prefix : String, repeat : Int) -> String {
-  "<AdaptationSet mimeType=\"text/vtt\" lang=\"" + lang + "\">" +
-  "<Representation id=\"sub-" + lang + "\" bandwidth=\"256\">" +
-  "<SegmentTemplate timescale=\"1000\" media=\"" + prefix +
+fn ssel_dash_text_repeat(
+  lang : String,
+  prefix : String,
+  repeat : Int32,
+) -> String {
+  "<AdaptationSet mimeType=\"text/vtt\" lang=\"" +
+  lang +
+  "\">" +
+  "<Representation id=\"sub-" +
+  lang +
+  "\" bandwidth=\"256\">" +
+  "<SegmentTemplate timescale=\"1000\" media=\"" +
+  prefix +
   "$Number$.vtt\"><SegmentTimeline><S t=\"0\" d=\"2000\" r=\"" +
-  repeat.to_string() + "\"/></SegmentTimeline></SegmentTemplate>" +
+  repeat.to_string() +
+  "\"/></SegmentTimeline></SegmentTemplate>" +
   "</Representation></AdaptationSet>"
 }
 
@@ -336,5 +347,8 @@ fn ssel_dash_video() -> String {
 ///|
 fn ssel_dash_mpd(a : String, b : String) -> String {
   "<MPD mediaPresentationDuration=\"PT4S\"><Period>" +
-  ssel_dash_video() + a + b + "</Period></MPD>"
+  ssel_dash_video() +
+  a +
+  b +
+  "</Period></MPD>"
 }

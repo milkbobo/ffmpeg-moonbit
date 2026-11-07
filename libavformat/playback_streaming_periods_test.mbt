@@ -20,7 +20,9 @@ fn period_fixture(frames : Int32) -> (Bytes, (Int32) -> Bytes) {
   let build = fn(from : Int32) -> Bytes {
     let samples : Array[@libavformat.Fmp4Sample] = []
     for i in from..<(from + 2) {
-      samples.push(@libavformat.fmp4_sample(units[i][7:].to_owned(), 1024, true))
+      samples.push(
+        @libavformat.fmp4_sample(units[i][7:].to_owned(), 1024, true),
+      )
     }
     @libavformat.fmp4_media_segment(
       1,
@@ -53,7 +55,9 @@ fn period_element(
   sb.write_string("<SegmentTemplate timescale=\"48000\" ")
   sb.write_string("initialization=\"\{prefix}-init.mp4\" ")
   sb.write_string("media=\"\{prefix}-$Number$.m4s\" startNumber=\"1\">")
-  sb.write_string("<SegmentTimeline><S t=\"0\" d=\"2048\" r=\"\{count - 1L}\"/>")
+  sb.write_string(
+    "<SegmentTimeline><S t=\"0\" d=\"2048\" r=\"\{count - 1L}\"/>",
+  )
   sb.write_string("</SegmentTimeline></SegmentTemplate>")
   sb.write_string("</Representation></AdaptationSet></Period>")
   sb.to_string()
@@ -153,7 +157,10 @@ fn period_drain(
 /// segment cursor at the boundary and flagging it as a discontinuity.
 test "dash periods: playback continues into the next Period" {
   let (init, build) = period_fixture(8)
-  let text = period_mpd([period_element("p0", "p0", 2L), period_element("p1", "p1", 2L)])
+  let text = period_mpd([
+    period_element("p0", "p0", 2L),
+    period_element("p1", "p1", 2L),
+  ])
   let media = @libavformat.StreamingMedia::open(
     period_bytes(text),
     period_fetch(init, build),

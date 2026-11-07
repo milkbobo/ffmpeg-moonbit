@@ -49,10 +49,18 @@ fn dsub_video_set() -> String {
 ///|
 /// A `text/vtt` AdaptationSet over two 2-second segments.
 fn dsub_text_set(media : String, timeline : String, lang : String) -> String {
-  "<AdaptationSet mimeType=\"text/vtt\" lang=\"" + lang + "\">" +
-  "<Representation id=\"sub-" + lang + "\" bandwidth=\"256\">" +
-  "<SegmentTemplate timescale=\"1000\" media=\"" + media + "\">" +
-  "<SegmentTimeline>" + timeline + "</SegmentTimeline>" +
+  "<AdaptationSet mimeType=\"text/vtt\" lang=\"" +
+  lang +
+  "\">" +
+  "<Representation id=\"sub-" +
+  lang +
+  "\" bandwidth=\"256\">" +
+  "<SegmentTemplate timescale=\"1000\" media=\"" +
+  media +
+  "\">" +
+  "<SegmentTimeline>" +
+  timeline +
+  "</SegmentTimeline>" +
   "</SegmentTemplate></Representation></AdaptationSet>"
 }
 
@@ -154,8 +162,7 @@ test "dash subtitles: absolute cue times are left alone" {
     [
       ("https://cdn.test/dash/sub1.vtt", dsub_relative()),
       (
-        "https://cdn.test/dash/sub2.vtt",
-        "WEBVTT\n\n00:00:02.000 --> 00:00:03.000\nabs\n",
+        "https://cdn.test/dash/sub2.vtt", "WEBVTT\n\n00:00:02.000 --> 00:00:03.000\nabs\n",
       ),
     ],
     seen,
@@ -190,8 +197,7 @@ test "dash subtitles: a Period without a text set has no track" {
 /// A text set in a format this port cannot parse (TTML) is skipped rather than
 /// fed to the WebVTT reader - the A/V stream still opens.
 test "dash subtitles: a non-WebVTT text set is skipped, not fatal" {
-  let ttml =
-    "<AdaptationSet mimeType=\"application/ttml+xml\" lang=\"en\">" +
+  let ttml = "<AdaptationSet mimeType=\"application/ttml+xml\" lang=\"en\">" +
     "<Representation id=\"ttml\"><SegmentTemplate timescale=\"1000\" " +
     "media=\"sub$Number$.ttml\"><SegmentTimeline>" +
     dsub_timeline() +
@@ -212,14 +218,15 @@ test "dash subtitles: a non-WebVTT text set is skipped, not fatal" {
 /// Among several text sets, the first `text/vtt` one wins even when an
 /// unparseable text set is listed before it.
 test "dash subtitles: the first text/vtt set wins over other text sets" {
-  let ttml =
-    "<AdaptationSet mimeType=\"application/ttml+xml\" lang=\"de\">" +
+  let ttml = "<AdaptationSet mimeType=\"application/ttml+xml\" lang=\"de\">" +
     "<Representation id=\"ttml\"><SegmentTemplate timescale=\"1000\" " +
     "media=\"de$Number$.ttml\"><SegmentTimeline>" +
     dsub_timeline() +
     "</SegmentTimeline></SegmentTemplate></Representation></AdaptationSet>"
   let mpd = dsub_mpd(
-    dsub_video_set() + ttml + dsub_text_set("sub$Number$.vtt", dsub_timeline(), "fr"),
+    dsub_video_set() +
+    ttml +
+    dsub_text_set("sub$Number$.vtt", dsub_timeline(), "fr"),
   )
   let seen : Array[String] = []
   let fetch = dsub_fetch(

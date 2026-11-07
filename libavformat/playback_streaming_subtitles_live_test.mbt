@@ -76,7 +76,8 @@ fn slive_fetch(
 fn slive_dash_text(timeline : String) -> String {
   "<AdaptationSet mimeType=\"text/vtt\" lang=\"en\">" +
   "<Representation id=\"sub-en\"><SegmentTemplate timescale=\"1000\" " +
-  "media=\"sub$Time$.vtt\"><SegmentTimeline>" + timeline +
+  "media=\"sub$Time$.vtt\"><SegmentTimeline>" +
+  timeline +
   "</SegmentTimeline></SegmentTemplate></Representation></AdaptationSet>"
 }
 
@@ -111,7 +112,11 @@ test "live subtitles: HLS refresh appends only the new window" {
   let seen : Array[String] = []
   let fetch = slive_fetch(files, seen)
   files["https://cdn.test/hls/master.m3u8"] = slive_master()
-  files["https://cdn.test/hls/v/video.m3u8"] = slive_playlist(-1L, ["v0.ts"], 1.0)
+  files["https://cdn.test/hls/v/video.m3u8"] = slive_playlist(
+    -1L,
+    ["v0.ts"],
+    1.0,
+  )
   files["https://cdn.test/hls/subs.m3u8"] = slive_playlist(
     0L,
     ["s0.vtt", "s1.vtt"],
@@ -145,7 +150,11 @@ test "live subtitles: HLS refresh is idempotent" {
   let seen : Array[String] = []
   let fetch = slive_fetch(files, seen)
   files["https://cdn.test/hls/master.m3u8"] = slive_master()
-  files["https://cdn.test/hls/v/video.m3u8"] = slive_playlist(-1L, ["v0.ts"], 1.0)
+  files["https://cdn.test/hls/v/video.m3u8"] = slive_playlist(
+    -1L,
+    ["v0.ts"],
+    1.0,
+  )
   files["https://cdn.test/hls/subs.m3u8"] = slive_playlist(0L, ["s0.vtt"], 3.0)
   files["https://cdn.test/hls/s0.vtt"] = slive_vtt("a")
   let media = @libavformat.StreamingMedia::open(
@@ -166,7 +175,11 @@ test "live subtitles: reload refreshes the rendition playlist" {
   let seen : Array[String] = []
   let fetch = slive_fetch(files, seen)
   files["https://cdn.test/hls/master.m3u8"] = slive_master()
-  files["https://cdn.test/hls/v/video.m3u8"] = slive_playlist(-1L, ["v0.ts"], 1.0)
+  files["https://cdn.test/hls/v/video.m3u8"] = slive_playlist(
+    -1L,
+    ["v0.ts"],
+    1.0,
+  )
   files["https://cdn.test/hls/subs.m3u8"] = slive_playlist(0L, ["s0.vtt"], 3.0)
   files["https://cdn.test/hls/s0.vtt"] = slive_vtt("a")
   let media = @libavformat.StreamingMedia::open(
@@ -201,7 +214,11 @@ test "live subtitles: a failing refresh does not fail the reload" {
     base(uri, offset, length)
   }
   files["https://cdn.test/hls/master.m3u8"] = slive_master()
-  files["https://cdn.test/hls/v/video.m3u8"] = slive_playlist(-1L, ["v0.ts"], 1.0)
+  files["https://cdn.test/hls/v/video.m3u8"] = slive_playlist(
+    -1L,
+    ["v0.ts"],
+    1.0,
+  )
   files["https://cdn.test/hls/subs.m3u8"] = slive_playlist(0L, ["s0.vtt"], 3.0)
   files["https://cdn.test/hls/s0.vtt"] = slive_vtt("a")
   let media = @libavformat.StreamingMedia::open(
@@ -275,7 +292,8 @@ test "live subtitles: DASH duration-based window continues the timeline" {
       slive_dash_video() +
       "<AdaptationSet mimeType=\"text/vtt\" lang=\"en\">" +
       "<Representation id=\"sub-en\"><SegmentTemplate timescale=\"1000\" " +
-      "duration=\"2000\" startNumber=\"" + start_number.to_string() +
+      "duration=\"2000\" startNumber=\"" +
+      start_number.to_string() +
       "\" media=\"sub$Number$.vtt\"/></Representation></AdaptationSet>",
     )
   }
