@@ -179,7 +179,13 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
         for i = 0; i < n; i = i + 1 {
           let (packet, nominal) = completed[i]
           let pts = granule - suffix[i] - pre_skip.to_int64()
-          packets.push({ data: packet, pts, duration: nominal, pos: page_pos, granule })
+          packets.push({
+            data: packet,
+            pts,
+            duration: nominal,
+            pos: page_pos,
+            granule,
+          })
         }
       } else {
         // EOS pages and pages without a granule follow FFmpeg's

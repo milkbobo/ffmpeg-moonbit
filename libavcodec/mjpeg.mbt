@@ -22,6 +22,8 @@
 /// chroma-upscaled to 4:4:4 like FFmpeg), and 3-component 1x1 Adobe
 /// transform 0 / R,G,B component IDs -> `gbrp`. Planes are cropped to the
 /// visible size.
+/// Standard luminance/chrominance Huffman tables are installed initially,
+/// allowing abbreviated MJPEG frames without DHT; explicit DHT replaces them.
 ///
 /// Out of scope: arithmetic coding, 12-bit samples, other 4-component
 /// sampling layouts, subsampled 3-component Adobe transforms, and EXIF
@@ -306,12 +308,19 @@ priv struct JpegComponent {
 ///|
 /// Decode an 8-bit baseline, progressive or lossless JPEG. */
 pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
+  MjpegDecoder::new().decode(data)
+}
+
+///|
+fn mjpeg_decode_with_tables(
+  data : Bytes,
+  quant : Array[Array[Int32]],
+  dc_tables : Array[JpegHuffman?],
+  ac_tables : Array[JpegHuffman?],
+) -> Result[JpegImage, String] {
   if data.length() < 4 || data[0] != b'\xff' || data[1] != b'\xd8' {
     return Err("mjpeg: missing SOI")
   }
-  let quant : Array[Array[Int32]] = [[], [], [], []]
-  let dc_tables : Array[JpegHuffman?] = [None, None, None, None]
-  let ac_tables : Array[JpegHuffman?] = [None, None, None, None]
   let components : Array[JpegComponent] = []
   let mut width = 0
   let mut height = 0
@@ -326,7 +335,7 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
   let mut sample_bits = 8
   let mut adobe_transform = -1
   let mut pos = 2
-  while pos + 1 < data.length() {
+  while pos < data.length() - 1 {
     if data[pos] != b'\xff' {
       return Err("mjpeg: expected marker")
     }
@@ -347,11 +356,11 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
     if marker == 0x01 {
       continue
     }
-    if pos + 2 > data.length() {
+    if pos > data.length() - 2 {
       return Err("mjpeg: truncated segment")
     }
     let seg_len = jpeg_be16(data, pos)
-    if seg_len < 2 || pos + seg_len > data.length() {
+    if seg_len < 2 || seg_len > data.length() - pos {
       return Err("mjpeg: invalid segment length")
     }
     let seg = data[pos + 2:pos + seg_len]
@@ -364,6 +373,9 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         p = p + 1
         let pq = pq_tq >> 4
         let tq = pq_tq & 0x0F
+        if pq > 1 {
+          return Err("mjpeg: invalid quant table precision")
+        }
         if tq > 3 {
           return Err("mjpeg: invalid quant table id")
         }
@@ -401,12 +413,20 @@ pub fn av_mjpeg_decode(data : Bytes) -> Result[JpegImage, String] {
         }
         let counts : Array[Int32] = []
         let mut total = 0
+        let mut available = 1
         for i in 0..<16 {
           let c = seg[p + i].to_int()
           counts.push(c)
           total = total + c
+          available = available * 2 - c
+          if available < 0 {
+            return Err("mjpeg: oversubscribed Huffman table")
+          }
         }
         p = p + 16
+        if total > 256 {
+          return Err("mjpeg: too many Huffman symbols")
+        }
         if p + total > seg.length() {
           return Err("mjpeg: truncated DHT values")
         }

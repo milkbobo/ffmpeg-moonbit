@@ -11,10 +11,16 @@
 /// `$RepresentationID$`/`$Bandwidth$` substitution, SegmentTimeline (including
 /// `r="-1"`), and duration-driven segment enumeration. The C's HTTP layer and
 /// lazy per-representation download contexts stay at the platform boundary.
+/// Open timeline repeats use presentationTimeOffset + Period duration as the
+/// media-time bound; S@t and $Time$ retain their original media timestamps.
+/// Omitted Period starts/durations are derived from adjacent known boundaries
+/// and the MPD end; explicitly declared values are preserved.
 ///
 /// SegmentList initialization/media ranges and SegmentBase `indexRange`
 /// (parsed from the representation's `sidx` by segment_io.mbt) are consumed by
-/// segment_io.mbt. Out of scope: xlink remote elements, UTCTiming clock
+/// segment_io.mbt. SegmentList timelines supply per-URL times and durations;
+/// a final open repeat can be bounded by the number of available SegmentURLs.
+/// Out of scope: xlink remote elements, UTCTiming clock
 /// synchronisation, multi-period overlap checks, and DRM (`ContentProtection`).
 
 ///|
@@ -264,19 +270,46 @@ fn dash_join_base(base : String, node : XmlNode) -> String {
 }
 
 ///|
-/// Resolve the nearest segment-addressing element through DASH inheritance.
+/// Merge addressing attributes and child groups from the nearest scope first.
+/// A local SegmentTimeline or SegmentURL list replaces the inherited group;
+/// omitted attributes/children retain their parent values.
 fn dash_segment_node(
   period : XmlNode,
   adapt : XmlNode,
   rep : XmlNode,
   name : String,
 ) -> XmlNode? {
+  let attributes : Array[(String, String)] = []
+  let children : Array[XmlNode] = []
+  let seen_attributes : Map[String, Bool] = Map([])
+  let seen_children : Map[String, Bool] = Map([])
+  let mut found = false
   for node in [rep, adapt, period] {
     if node.child(name) is Some(child) {
-      return Some(child)
+      found = true
+      for (key, value) in child.attributes {
+        let attribute_name = xml_local_name(key)
+        if !seen_attributes.contains(attribute_name) {
+          attributes.push((key, value))
+          seen_attributes[attribute_name] = true
+        }
+      }
+      for item in child.children {
+        if !seen_children.contains(xml_local_name(item.name)) {
+          children.push(item)
+        }
+      }
+      // Mark only after this scope so all sibling SegmentURL entries survive.
+      for item in child.children {
+        seen_children[xml_local_name(item.name)] = true
+      }
     }
   }
-  None
+  if found {
+    Some({ name, attributes, children, text: "", })
+  } else {
+    None
+  }
 }
 
 ///|
@@ -288,7 +321,8 @@ fn dash_segments_from_timeline(
   rep_id : String,
   bandwidth : Int64,
   base : String,
-) -> Array[DashSegment] {
+  expected_count~ : Int32? = None,
+) -> Result[Array[DashSegment], String] {
   let out : Array[DashSegment] = []
   let s_nodes = timeline.children_named("S")
   let mut current_time = 0L
@@ -312,6 +346,9 @@ fn dash_segments_from_timeline(
       i = i + 1
       continue
     }
+    if t < 0L || number < 0L {
+      return Err("dash: negative timeline time or sequence number")
+    }
     let mut repeats = r
     if r < 0L {
       // Repeat until the next S@t or the end of the period.
@@ -328,12 +365,28 @@ fn dash_segments_from_timeline(
       } else if period_end > t {
         period_end
       } else {
-        t + d
+        t
       }
-      repeats = (end - t + d - 1L) / d - 1L
-      if repeats < 0L {
-        repeats = 0L
+      // ceil((end-t)/d)-1, without overflowing by adding d first.
+      repeats = if end > t {
+        (end - t - 1L) / d
+      } else {
+        match expected_count {
+          Some(count) => (count - out.length()).to_int64() - 1L
+          None => 0L
+        }
       }
+    }
+    if expected_count is Some(count) &&
+      (repeats < 0L || repeats >= (count - out.length()).to_int64()) {
+      return Err("dash: SegmentTimeline does not match SegmentURL count")
+    }
+    let max_value = 9223372036854775807L
+    if repeats >= 2147483647L - out.length().to_int64() {
+      return Err("dash: timeline has too many segments")
+    }
+    if repeats > max_value - number || repeats + 1L > (max_value - t) / d {
+      return Err("dash: timeline time or sequence number overflow")
     }
     for k in 0..<=repeats.to_int() {
       let seg_time = t + d * k.to_int64()
@@ -345,12 +398,39 @@ fn dash_segments_from_timeline(
         uri: hls_resolve_uri(base, uri),
         media_range: "",
       })
-      number = number + 1L
+      if number < max_value {
+        number += 1L
+      } else if i + 1 < s_nodes.length() {
+        return Err("dash: timeline time or sequence number overflow")
+      }
     }
     current_time = t + d * (repeats + 1L)
     i = i + 1
   }
-  out
+  if expected_count is Some(count) && out.length() != count {
+    return Err("dash: SegmentTimeline does not match SegmentURL count")
+  }
+  Ok(out)
+}
+
+///|
+fn dash_period_media_end(
+  node : XmlNode,
+  duration : Double,
+  timescale : Int64,
+) -> Int64 {
+  let ticks = dash_time_scale(duration, timescale)
+  let offset = @string.parse_int64(node.attr_or("presentationTimeOffset", "0")) catch {
+    _ => 0L
+  }
+  let offset = if offset < 0L { 0L } else { offset }
+  if ticks <= 0L {
+    0L
+  } else if offset > 9223372036854775807L - ticks {
+    9223372036854775807L
+  } else {
+    offset + ticks
+  }
 }
 
 ///|
@@ -360,7 +440,7 @@ fn dash_parse_representation(
   period : XmlNode,
   period_duration : Double,
   base : String,
-) -> DashRepresentation {
+) -> Result[DashRepresentation, String] {
   let id = rep.attr_or("id", "")
   let bandwidth = match rep.attr("bandwidth") {
     Some(v) => @string.parse_int64(v) catch { _ => 0L }
@@ -412,6 +492,9 @@ fn dash_parse_representation(
         Some(v) => @string.parse_int64(v) catch { _ => 1L }
         None => 1L
       }
+      if timescale < 1L {
+        timescale = 1L
+      }
       start_number = match tmpl.attr("startNumber") {
         Some(v) => @string.parse_int64(v) catch { _ => 1L }
         None => 1L
@@ -426,12 +509,18 @@ fn dash_parse_representation(
         )
       }
       if media_template != "" {
-        let period_end = dash_time_scale(period_duration, timescale)
+        // Period duration is presentation time; S@t and $Time$ use media time.
+        // An unknown duration must remain unbounded rather than end at PTO.
+        let period_end = dash_period_media_end(tmpl, period_duration, timescale)
         match tmpl.child("SegmentTimeline") {
           Some(tl) =>
-            segments = dash_segments_from_timeline(
-              tl, start_number, period_end, media_template, id, bandwidth, rep_base,
-            )
+            segments = match
+              dash_segments_from_timeline(
+                tl, start_number, period_end, media_template, id, bandwidth, rep_base,
+              ) {
+              Ok(value) => value
+              Err(e) => return Err(e)
+            }
           None => {
             let seg_duration = match tmpl.attr("duration") {
               Some(v) => @string.parse_int64(v) catch { _ => 0L }
@@ -439,7 +528,21 @@ fn dash_parse_representation(
             }
             if seg_duration > 0L && period_duration > 0.0 {
               let total = dash_time_scale(period_duration, timescale)
-              let count = (total + seg_duration - 1L) / seg_duration
+              let count = if total > 0L {
+                1L + (total - 1L) / seg_duration
+              } else {
+                0L
+              }
+              if count > 2147483647L {
+                return Err("dash: template has too many segments")
+              }
+              if start_number < 0L ||
+                (
+                  count > 0L &&
+                  start_number > 9223372036854775807L - (count - 1L)
+                ) {
+                return Err("dash: template sequence number overflow")
+              }
               for k in 0..<count.to_int() {
                 let number = start_number + k.to_int64()
                 let time = seg_duration * k.to_int64()
@@ -503,23 +606,59 @@ fn dash_parse_representation(
             Some(v) => @string.parse_int64(v) catch { _ => 0L }
             None => 0L
           }
-          let mut number = start_number
-          let mut time = 0L
-          for su in sl.children_named("SegmentURL") {
+          if dur < 0L || start_number < 0L {
+            return Err("dash: negative SegmentList duration or sequence number")
+          }
+          let urls = sl.children_named("SegmentURL")
+          let timing = match sl.child("SegmentTimeline") {
+            Some(timeline) if urls.length() > 0 =>
+              match
+                dash_segments_from_timeline(
+                  timeline,
+                  start_number,
+                  dash_period_media_end(sl, period_duration, timescale),
+                  "",
+                  id,
+                  bandwidth,
+                  rep_base,
+                  expected_count=Some(urls.length()),
+                ) {
+                Ok(value) => Some(value)
+                Err(e) => return Err(e)
+              }
+            _ => None
+          }
+          for index, su in urls {
+            let (segment_time, segment_duration) = match timing {
+              Some(items) => (items[index].time, items[index].duration)
+              None => {
+                if dur > 0L && index.to_int64() > 9223372036854775807L / dur {
+                  return Err(
+                    "dash: SegmentList time or sequence number overflow",
+                  )
+                }
+                (dur * index.to_int64(), dur)
+              }
+            }
+            let index = index.to_int64()
+            if index > 9223372036854775807L - start_number {
+              return Err("dash: SegmentList time or sequence number overflow")
+            }
             segments.push({
-              number,
-              time,
-              duration: dur,
+              number: start_number + index,
+              time: segment_time,
+              duration: segment_duration,
               uri: hls_resolve_uri(rep_base, su.attr_or("media", "")),
               media_range: su.attr_or("mediaRange", ""),
             })
-            number += 1L
-            time += dur
           }
         }
         None => ()
       }
-      if media_template == "" && segments.length() == 0 && index_range == "" {
+      if media_template == "" &&
+        segments.length() == 0 &&
+        index_range == "" &&
+        dash_segment_node(period, adapt, rep, "SegmentList") is None {
         // A single-file Representation: BaseURL itself is the media URL.
         segments.push({
           number: 0L,
@@ -531,7 +670,7 @@ fn dash_parse_representation(
       }
     }
   }
-  {
+  Ok({
     id,
     bandwidth,
     codecs,
@@ -550,12 +689,77 @@ fn dash_parse_representation(
     media_template,
     index_range,
     segments,
+  })
+}
+
+///|
+fn dash_period_timing(
+  nodes : Array[XmlNode],
+  total : Double,
+) -> Array[(Double, Double)] {
+  let starts : Array[Double?] = [
+    for node in nodes => {
+      match node.attr("start") {
+        Some(value) => Some(dash_parse_duration(value))
+        None => None
+      }
+    }
+  ]
+  let durations : Array[Double?] = [
+    for node in nodes => {
+      match node.attr("duration") {
+        Some(value) => Some(dash_parse_duration(value))
+        None => None
+      }
+    }
+  ]
+  if nodes.length() == 0 {
+    return []
   }
+  if starts[0] is None {
+    starts[0] = Some(0.0)
+  }
+  starts.push(if total > 0.0 { Some(total) } else { None })
+  // Known durations propagate starts in either direction. The MPD end is a
+  // final boundary, allowing a trailing duration to resolve its missing start.
+  for i in 0..<nodes.length() {
+    if starts[i + 1] is None {
+      match (starts[i], durations[i]) {
+        (Some(start), Some(duration)) => starts[i + 1] = Some(start + duration)
+        _ => ()
+      }
+    }
+  }
+  for step in 0..<nodes.length() {
+    let i = nodes.length() - step - 1
+    if starts[i] is None {
+      match (starts[i + 1], durations[i]) {
+        (Some(end), Some(duration)) if end >= duration =>
+          starts[i] = Some(end - duration)
+        _ => ()
+      }
+    }
+  }
+  let result : Array[(Double, Double)] = []
+  for i in 0..<nodes.length() {
+    let duration = match durations[i] {
+      Some(value) => value
+      None =>
+        match (starts[i], starts[i + 1]) {
+          (Some(start), Some(end)) if end >= start => end - start
+          _ => 0.0
+        }
+    }
+    result.push((starts[i].unwrap_or(0.0), duration))
+  }
+  result
 }
 
 ///|
 /// Parse an MPD document. `base_uri` is the MPD's own URL (used to resolve
 /// relative BaseURLs/templates; "" keeps them relative).
+/// Unrepresentable segment counts, timestamps or sequence numbers return Err
+/// instead of wrapping during eager segment enumeration.
 pub fn av_dash_parse(
   text : String,
   base_uri~ : String = "",
@@ -580,18 +784,10 @@ pub fn av_dash_parse(
     base_url: mpd_base,
     periods: [],
   }
-  for period_node in root.children_named("Period") {
-    let period_start = dash_parse_duration(period_node.attr_or("start", ""))
-    let period_dur = {
-      let explicit = dash_parse_duration(period_node.attr_or("duration", ""))
-      if explicit > 0.0 {
-        explicit
-      } else if duration > 0.0 {
-        duration - period_start
-      } else {
-        0.0
-      }
-    }
+  let period_nodes = root.children_named("Period")
+  let timing = dash_period_timing(period_nodes, duration)
+  for period_index, period_node in period_nodes {
+    let (period_start, period_dur) = timing[period_index]
     let period_base = dash_join_base(mpd_base, period_node)
     let period : DashPeriod = {
       id: period_node.attr_or("id", ""),
@@ -628,9 +824,13 @@ pub fn av_dash_parse(
       }
       for rep_node in adapt_node.children_named("Representation") {
         adapt.representations.push(
-          dash_parse_representation(
-            rep_node, adapt_node, period_node, period_dur, adapt_base,
-          ),
+          match
+            dash_parse_representation(
+              rep_node, adapt_node, period_node, period_dur, adapt_base,
+            ) {
+            Ok(value) => value
+            Err(e) => return Err(e)
+          },
         )
       }
       period.adaptation_sets.push(adapt)

@@ -75,6 +75,16 @@ fn png_channels(color_type : Int32) -> Int32 {
 }
 
 ///|
+fn png_valid_bit_depth(color_type : Int32, depth : Int32) -> Bool {
+  match color_type {
+    0 => depth == 1 || depth == 2 || depth == 4 || depth == 8 || depth == 16
+    3 => depth == 1 || depth == 2 || depth == 4 || depth == 8
+    2 | 4 | 6 => depth == 8 || depth == 16
+    _ => false
+  }
+}
+
+///|
 /// `png_handle_row` filters 0..4 over raw bytes (bpp is at least 1). */
 fn png_unfilter_row(
   filter : Int32,
@@ -223,7 +233,7 @@ pub fn av_png_decode_ex(
   let idat : Array[Byte] = []
   let mut saw_ihdr = false
   let mut saw_iend = false
-  while pos + 12 <= data.length() {
+  while pos <= data.length() - 12 {
     let length = png_u32(data, pos)
     let kind = {
       let sb = StringBuilder()
@@ -232,7 +242,7 @@ pub fn av_png_decode_ex(
       }
       sb.to_string()
     }
-    if length < 0 || pos + 12 + length > data.length() {
+    if length < 0 || length > data.length() - pos - 12 {
       return Err("png: truncated chunk \{kind}")
     }
     if verify_crc {
@@ -271,6 +281,9 @@ pub fn av_png_decode_ex(
         color_type != 4 &&
         color_type != 6 {
         return Err("png: invalid color type")
+      }
+      if !png_valid_bit_depth(color_type, bit_depth) {
+        return Err("png: invalid bit depth for color type")
       }
       if compression != 0 || filter != 0 {
         return Err("png: unsupported compression/filter method")
@@ -315,18 +328,40 @@ pub fn av_png_decode_ex(
   let bits_per_pixel = channels * bit_depth
   let rowbytes = (width * bits_per_pixel + 7) / 8
   let bpp = if bits_per_pixel >= 8 { bits_per_pixel / 8 } else { 1 }
-  let expected = if interlace == 0 {
-    (rowbytes + 1) * height
+  let expected64 = if interlace == 0 {
+    (rowbytes + 1).to_int64() * height.to_int64()
   } else {
-    let mut total = 0
+    let mut total = 0L
     for pass in 0..<7 {
       let (_, _, _, _, pw, ph) = png_pass_geometry(pass, width, height)
       if pw > 0 && ph > 0 {
-        total = total + ((pw * bits_per_pixel + 7) / 8 + 1) * ph
+        total += ((pw * bits_per_pixel + 7) / 8 + 1).to_int64() * ph.to_int64()
       }
     }
     total
   }
+  let output_rowbytes = match color_type {
+    0 =>
+      if trns.length() > 0 {
+        width * (if bit_depth == 16 { 4 } else { 2 })
+      } else if bit_depth == 1 {
+        rowbytes
+      } else {
+        width * (if bit_depth == 16 { 2 } else { 1 })
+      }
+    3 => width
+    2 =>
+      width *
+      (if trns.length() >= 6 { 4 } else { 3 }) *
+      (if bit_depth == 16 { 2 } else { 1 })
+    _ => rowbytes
+  }
+  if expected64 > 2147483631L ||
+    rowbytes.to_int64() * height.to_int64() > 2147483647L ||
+    output_rowbytes.to_int64() * height.to_int64() > 2147483647L {
+    return Err("png: image buffer size overflow")
+  }
+  let expected = expected64.to_int()
   if idat.length() == 0 {
     return Err("png: no IDAT")
   }

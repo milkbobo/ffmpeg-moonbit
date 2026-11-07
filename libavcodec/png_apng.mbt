@@ -400,7 +400,7 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
   let mut pending : ApngFrameSpec? = None
   let frames : Array[ApngFrame] = []
   let mut saw_iend = false
-  while pos + 12 <= data.length() {
+  while pos <= data.length() - 12 {
     let length = png_u32(data, pos)
     let kind = {
       let sb = StringBuilder()
@@ -409,7 +409,7 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
       }
       sb.to_string()
     }
-    if length < 0 || pos + 12 + length > data.length() {
+    if length < 0 || length > data.length() - pos - 12 {
       return Err("apng: truncated chunk \{kind}")
     }
     let body_off = pos + 8
@@ -438,6 +438,12 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
         color_type != 4 &&
         color_type != 6 {
         return Err("apng: invalid color type")
+      }
+      if !png_valid_bit_depth(color_type, bit_depth) {
+        return Err("apng: invalid bit depth for color type")
+      }
+      if width.to_int64() * height.to_int64() * 4L > 2147483647L {
+        return Err("apng: image buffer size overflow")
       }
       if compression != 0 || filter != 0 {
         return Err("apng: unsupported compression/filter method")
@@ -489,8 +495,10 @@ pub fn av_apng_decode(data : Bytes) -> Result[ApngImage, String] {
         spec.height <= 0 ||
         spec.x_offset < 0 ||
         spec.y_offset < 0 ||
-        spec.x_offset + spec.width > width ||
-        spec.y_offset + spec.height > height {
+        spec.width > width ||
+        spec.height > height ||
+        spec.x_offset > width - spec.width ||
+        spec.y_offset > height - spec.height {
         return Err("apng: frame rectangle outside canvas")
       }
       if spec.sequence_number == 0 &&

@@ -823,7 +823,10 @@ test "playback: dump_packets_json matches ffprobe-style packet records" {
 /// `summary_json` renders the `decode-audio` stdout summary: the object
 /// parses as JSON and pins codec, channel count and decoded length.
 test "playback: DecodedAudio::summary_json reports the decode result" {
-  let wav = @libavutil.av_base64_decode(@probe_vectors.probe_fixture_wav, 1 << 20).unwrap()
+  let wav = @libavutil.av_base64_decode(
+    @probe_vectors.probe_fixture_wav,
+    1 << 20,
+  ).unwrap()
   let audio = @libavformat.decode_audio_file(wav)
   let js = audio.summary_json()
   ignore(@json.parse(js))

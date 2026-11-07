@@ -4,3 +4,14 @@ import {
 }
 
 warnings = "-alert_experimental"
+
+// Keep SIMD tests on the same backends as their implementations.
+
+options(
+  targets: {
+    "adler32_v128_wbtest.mbt": [ "native", "wasm" ],
+    "avstring_v128_wbtest.mbt": [ "native", "wasm" ],
+    "base64_v128_wbtest.mbt": [ "native", "wasm" ],
+    "md5_v128_wbtest.mbt": [ "native", "wasm" ],
+  },
+)

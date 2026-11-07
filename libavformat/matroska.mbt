@@ -686,7 +686,7 @@ fn matroska_attachedfile_table(
       Some(v) => v
       None => "application/octet-stream"
     }
-    mh.attachments.push({ filename: name, mime, data })
+    mh.attachments.push({ filename: name, mime, data, })
   }
   [
     {
@@ -739,8 +739,7 @@ fn matroska_attachments_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
   [
     {
       id: matroska_id_attachedfile,
-      kind: Nest(() =>
-        matroska_attachedfile_table(mh, [None, None], [None])),
+      kind: Nest(() => matroska_attachedfile_table(mh, [None, None], [None])),
       sink: None,
     },
   ]

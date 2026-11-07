@@ -33,15 +33,17 @@ pub fn MediaFile::cover(self : MediaFile) -> MediaCover? {
     Mkv(mh) => {
       let mut found : MediaCover? = None
       for a in mh.attachments {
-        if found is None && a.mime.length() >= 6 && a.mime[0:6].to_owned() == "image/" {
-          found = Some({ mime: a.mime, data: a.data })
+        if found is None &&
+          a.mime.length() >= 6 &&
+          a.mime[0:6].to_owned() == "image/" {
+          found = Some({ mime: a.mime, data: a.data, })
         }
       }
       found
     }
     Mov(movie, _) =>
       match movie.cover {
-        Some((data, mime)) => Some({ mime, data })
+        Some((data, mime)) => Some({ mime, data, })
         None => None
       }
     _ => None

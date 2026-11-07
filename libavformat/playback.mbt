@@ -939,6 +939,8 @@ pub(all) enum VideoFrameData {
   Hevc(@libavcodec.HevcDecodedFrame)
   Vp9(@libavcodec.Vp9Frame)
   Av1(@libavcodec.Av1FrameOutput)
+  Mjpeg(@libavcodec.JpegImage)
+  Png(@libavcodec.PngImage)
 }
 
 ///|
@@ -954,6 +956,8 @@ pub fn VideoFrame::width(self : VideoFrame) -> Int32 {
     Hevc(f) => f.pic.width
     Vp9(f) => f.width
     Av1(f) => f.width
+    Mjpeg(f) => f.width
+    Png(f) => f.width
   }
 }
 
@@ -965,6 +969,8 @@ pub fn VideoFrame::height(self : VideoFrame) -> Int32 {
     Hevc(f) => f.pic.height
     Vp9(f) => f.height
     Av1(f) => f.height
+    Mjpeg(f) => f.height
+    Png(f) => f.height
   }
 }
 
@@ -1006,13 +1012,25 @@ pub fn VideoFrame::bit_depth(self : VideoFrame) -> Int32 {
     Hevc(_) => 8
     Vp9(_) => 8
     Av1(f) => f.bitdepth
+    Mjpeg(f) => if f.pix_fmt.has_suffix("16le") { 16 } else { 8 }
+    Png(f) =>
+      if f.bit_depth == 16 {
+        16
+      } else if f.pix_fmt == "monob" {
+        1
+      } else {
+        8
+      }
   }
 }
 
 ///|
-/// Pack the visible planes as planar YUV.
+/// Pack the visible planes as planar YUV. For JPEG/PNG use pixel_bytes and
+/// image_pixel_format instead, since their output may be RGB or paletted.
 pub fn VideoFrame::yuv_bytes(self : VideoFrame) -> Bytes {
   match self.data {
+    Mjpeg(_) | Png(_) =>
+      abort("use VideoFrame::pixel_bytes for JPEG/PNG frames")
     H264(f) => {
       // The H.264 planes are macroblock-aligned with strides; the visible
       // region starts at (crop_top, crop_left) and spans width x height
@@ -1098,6 +1116,8 @@ pub(all) enum VideoDec {
   Hevc(Int32)
   Vp9(@libavcodec.Vp9Decoder)
   Av1(@libavcodec.Av1Decoder)
+  Mjpeg(@libavcodec.MjpegDecoder)
+  Png
 }
 
 ///|
@@ -1235,6 +1255,14 @@ pub fn VideoDecoder::open(info : StreamInfo) -> VideoDecoder raise MediaError {
         height: info.height,
         pending: [],
       }
+    "mjpeg" =>
+      {
+        dec: Mjpeg(@libavcodec.MjpegDecoder::new()),
+        width: info.width,
+        height: info.height,
+        pending: [],
+      }
+    "png" => { dec: Png, width: info.width, height: info.height, pending: [], }
     other => raise UnsupportedCodec(other)
   }
 }
@@ -1248,6 +1276,16 @@ pub fn VideoDecoder::decode(
   pkt : MediaPacket,
 ) -> Array[VideoFrame] raise MediaError {
   match self.dec {
+    Mjpeg(dec) =>
+      match dec.decode(pkt.data) {
+        Ok(image) => [{ data: Mjpeg(image), }]
+        Err(e) => raise DecodeError(e)
+      }
+    Png =>
+      match @libavcodec.av_png_decode(pkt.data) {
+        Ok(image) => [{ data: Png(image), }]
+        Err(e) => raise DecodeError(e)
+      }
     H264(dec, is_avc, nal_length_size) => {
       // `decode_avc_sample` yields at most one buffered picture per sample
       // (None while the decoder reorders); the stream entry yields a batch.

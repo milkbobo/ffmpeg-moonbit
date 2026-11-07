@@ -6,3 +6,9 @@ import {
 }
 
 warnings = "-alert_experimental"
+
+// SIMD implementations are gated to native and WebAssembly backends.
+
+options(
+  targets: { "idct_v128_wbtest.mbt": [ "native", "wasm" ] },
+)

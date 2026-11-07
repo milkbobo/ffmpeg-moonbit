@@ -838,11 +838,7 @@ fn mov_walk_metadata(payload : Bytes, movie : Mp4Movie, key : String) -> Unit {
         // Binary artwork (data types 13/14 = JPEG/PNG), kept as raw bytes.
         let dtype = mov_meta_u32(body, 0) & 0xFFFFFF
         if dtype == 13 || dtype == 14 {
-          let mime = if dtype == 13 {
-            "image/jpeg"
-          } else {
-            "image/png"
-          }
+          let mime = if dtype == 13 { "image/jpeg" } else { "image/png" }
           movie.cover = Some((body[8:].to_owned(), mime))
         }
       } else if key != "" && body.length() >= 8 {

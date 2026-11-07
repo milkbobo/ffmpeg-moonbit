@@ -12,7 +12,9 @@
 /// initialization/key/media resources through a caller-provided callback and
 /// hls_crypto.mbt decrypts AES-128 segments; network IO stays with the caller.
 ///
-/// Out of scope: EXT-X-START, EXT-X-SESSION-KEY/DATA, EXT-X-SKIP delta
+/// EXT-X-START can select the reader's initial segment with prefer_x_start;
+/// PRECISE trimming requires decoder-level handling.
+/// Out of scope: EXT-X-SESSION-KEY/DATA, EXT-X-SKIP delta
 /// updates (tags are accepted and ignored), LL-HLS partial segments, and
 /// parsing the segment payload itself (use the existing TS/MP4 demuxers).
 
@@ -233,7 +235,16 @@ pub fn hls_resolve_uri(base : String, reference : String) -> String {
   if reference == "" {
     return base
   }
-  if reference.contains("://") ||
+  let scheme_marker = reference.find("://")
+  let query_marker = reference.find("?")
+  let fragment_marker = reference.find("#")
+  let absolute_url = match scheme_marker {
+    Some(i) =>
+      (query_marker is None || (query_marker is Some(q) && i < q)) &&
+      (fragment_marker is None || (fragment_marker is Some(f) && i < f))
+    None => false
+  }
+  if absolute_url ||
     reference.has_prefix("data:") ||
     reference.has_prefix("skd:") {
     return reference
@@ -241,38 +252,72 @@ pub fn hls_resolve_uri(base : String, reference : String) -> String {
   if base == "" {
     return reference
   }
-  let scheme_end = base.find("://")
+  // A query or fragment belongs to the base resource, not its directory.
+  let base_path = match base.find("#") {
+    Some(i) => base[0:i].to_owned()
+    None => base
+  }
+  if reference.has_prefix("#") {
+    return base_path + reference
+  }
+  let base_path = match base_path.find("?") {
+    Some(i) => base_path[0:i].to_owned()
+    None => base_path
+  }
+  if reference.has_prefix("?") {
+    return base_path + reference
+  }
+  let scheme_end = base_path.find("://")
   let (scheme, after) : (String, String) = match scheme_end {
-    Some(i) => (base[0:i].to_owned(), base[i + 3:].to_owned())
-    None => ("", base)
+    Some(i) => (base_path[0:i].to_owned(), base_path[i + 3:].to_owned())
+    None => ("", base_path)
   }
   let slash = after.find("/")
   let authority = match slash {
     Some(i) => after[0:i].to_owned()
     None => after
   }
-  let path = match slash {
-    Some(i) => after[i:].to_owned()
-    None => "/"
+  let path = if scheme == "" {
+    after
+  } else {
+    match slash {
+      Some(i) => after[i:].to_owned()
+      None => "/"
+    }
   }
   if reference.has_prefix("//") {
-    return "\{scheme}:\{reference}"
+    return if scheme == "" { reference } else { "\{scheme}:\{reference}" }
   }
+  // The query and fragment may themselves contain slashes and dot segments.
+  let suffix_at = match (reference.find("?"), reference.find("#")) {
+    (Some(q), Some(f)) => if q < f { q } else { f }
+    (Some(q), None) => q
+    (None, Some(f)) => f
+    (None, None) => reference.length()
+  }
+  let ref_path = reference[0:suffix_at].to_owned()
+  let suffix = reference[suffix_at:].to_owned()
   if reference.has_prefix("/") {
     if scheme != "" {
-      return "\{scheme}://\{authority}\{reference}"
+      return "\{scheme}://\{authority}\{hls_normalize_path(ref_path)}\{suffix}"
     }
-    return reference
+    return ref_path + suffix
   }
   let dir = match path.rev_find("/") {
     Some(i) => path[0:i]
     None => ""
   }
-  let joined = if dir == "" { reference } else { "\{dir}/\{reference}" }
-  if scheme != "" {
-    "\{scheme}://\{authority}\{hls_normalize_path(joined)}"
+  let joined = if dir == "" && path.has_prefix("/") {
+    "/\{ref_path}"
+  } else if dir == "" {
+    ref_path
   } else {
-    hls_normalize_path(joined)
+    "\{dir}/\{ref_path}"
+  }
+  if scheme != "" {
+    "\{scheme}://\{authority}\{hls_normalize_path(joined)}\{suffix}"
+  } else {
+    joined + suffix
   }
 }
 
@@ -284,7 +329,12 @@ fn hls_normalize_path(path : String) -> String {
   for p in path.split("/") {
     match p.to_owned() {
       "" | "." => ()
-      ".." => if parts.length() > 0 { ignore(parts.pop()) }
+      ".." =>
+        if parts.length() > 0 && parts[parts.length() - 1] != ".." {
+          ignore(parts.pop())
+        } else if !absolute {
+          parts.push("..")
+        }
       seg => parts.push(seg)
     }
   }

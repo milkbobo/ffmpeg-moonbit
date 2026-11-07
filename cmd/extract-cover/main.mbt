@@ -43,11 +43,7 @@ fn main raise {
     None => fail("extract-cover: \{path}: no embedded cover art")
   }
   if output == "" {
-    output = if cover.mime() == "image/png" {
-      "cover.png"
-    } else {
-      "cover.jpg"
-    }
+    output = if cover.mime() == "image/png" { "cover.png" } else { "cover.jpg" }
   }
   @fs.write_bytes_to_file(output, cover.data())
   println(

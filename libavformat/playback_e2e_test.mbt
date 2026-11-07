@@ -250,7 +250,8 @@ fn e2e_decode_all(data : Bytes) -> Array[@libavformat.VideoFrame] raise {
 
 ///|
 test "playback e2e: HEVC/VP9/AV1 real streams decode 5 frames each" {
-  for pair in [
+  for
+    pair in [
       ("hevc", e2e_hevc_mkv_b64),
       ("vp9", e2e_vp9_webm_b64),
       ("av1", e2e_av1_mkv_b64),
@@ -266,7 +267,11 @@ test "playback e2e: HEVC/VP9/AV1 real streams decode 5 frames each" {
     for f in frames {
       assert_eq(f.width(), 64, msg="\{name}: width")
       assert_eq(f.height(), 64, msg="\{name}: height")
-      assert_eq(f.yuv_bytes().length(), 64 * 64 * 3 / 2, msg="\{name}: yuv size")
+      assert_eq(
+        f.yuv_bytes().length(),
+        64 * 64 * 3 / 2,
+        msg="\{name}: yuv size",
+      )
     }
   }
 }
