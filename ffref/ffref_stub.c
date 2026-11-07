@@ -263,10 +263,13 @@ moonbit_bytes_t ffref_decode_audio(moonbit_bytes_t data) {
       av_packet_unref(pkt);
       continue;
     }
+    // Lenient like the ffmpeg CLI: a packet that trips the decoder (e.g.
+    // RAW-AAC-in-WAV packets the parser cut at accidental sync words) is
+    // skipped, not fatal.
     if (avcodec_send_packet(cc, pkt) < 0) {
-      fprintf(stderr, "ffref: decode_audio send_packet failed\n");
-      failed = 1;
-      break;
+      fprintf(stderr, "ffref: decode_audio send_packet failed, skipping\n");
+      av_packet_unref(pkt);
+      continue;
     }
     av_packet_unref(pkt);
     for (;;) {
@@ -274,8 +277,8 @@ moonbit_bytes_t ffref_decode_audio(moonbit_bytes_t data) {
       if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
         break;
       if (ret < 0) {
-        fprintf(stderr, "ffref: decode_audio receive_frame %d\n", ret);
-        failed = 1;
+        fprintf(stderr, "ffref: decode_audio receive_frame %d, continuing\n",
+                ret);
         break;
       }
       int per_frame = frame->nb_samples * cc->ch_layout.nb_channels;

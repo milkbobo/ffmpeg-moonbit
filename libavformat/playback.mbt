@@ -373,6 +373,7 @@ pub fn MediaFile::next_packet(
 pub(all) enum AudioDec {
   Aac(@libavcodec.AacDecoder)
   Opus(@libavcodec.OpusDecoder)
+  Mp3(@libavcodec.Mp3Decoder)
   /// Raw PCM: (little_endian, bytes_per_sample).
   Pcm(Bool, Int32)
 }
@@ -419,6 +420,15 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       }
       { dec: Aac(dec), channels: info.channels, sample_rate: info.sample_rate, }
     }
+    "mp3" | "mp2" | "mp1" =>
+      // The MPEG audio decoder reads the format from each frame header; the
+      // container's rate/channels pair (WAV fmt, MP4 esds) is authoritative
+      // for the facade's StreamInfo.
+      {
+        dec: Mp3(@libavcodec.new_mp3_decoder()),
+        channels: info.channels,
+        sample_rate: info.sample_rate,
+      }
     "opus" => {
       let extradata = match info.extradata {
         Some(v) => v
@@ -554,6 +564,83 @@ pub fn AudioDecoder::decode(
         pts: Some(pkt.pts),
       })
     }
+    Mp3(dec) => {
+      let out = match dec.decode_frame(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      let ch = out.channels
+      if ch <= 0 || out.samples.length() == 0 {
+        return None
+      }
+      // `Mp3Pcm.samples` is interleaved (the same layout `pcm_bytes` packs).
+      let nb = out.samples.length() / ch
+      let channels : Array[Array[Double]] = []
+      for c = 0; c < ch; c = c + 1 {
+        let row : Array[Double] = Array::make(nb, 0.0)
+        for i = 0; i < nb; i = i + 1 {
+          row[i] = out.samples[i * ch + c].to_double() / 32768.0
+        }
+        channels.push(row)
+      }
+      Some({
+        samples: channels,
+        nb_samples: nb,
+        sample_rate: self.sample_rate,
+        pts: Some(pkt.pts),
+      })
+    }
+  }
+}
+
+///|
+/// Decode every frame a packet carries. One packet can hold several access
+/// units (RAW AAC in WAV is demuxed as one blob; the C's decoder consumes
+/// concatenated frames from a single packet the same way), so the facade's
+/// bulk decode goes through here; `decode` stays the one-frame contract.
+pub fn AudioDecoder::decode_all(
+  self : AudioDecoder,
+  pkt : MediaPacket,
+) -> Array[AudioFrame] raise MediaError {
+  match self.dec {
+    Aac(dec) => {
+      let frames : Array[AudioFrame] = []
+      // In-band ADTS headers are the decoder's own sniff in C
+      // (`aac_decode_frame_int`); the port does it at the facade. Strip
+      // before slicing so `consumed` and `rest` share one coordinate system.
+      let mut rest = aac_strip_adts(pkt.data)
+      while rest.length() > 0 {
+        let out = match dec.decode_frame_with_consumed(rest) {
+          Ok(v) => v
+          Err(e) => raise DecodeError(e)
+        }
+        let (elements, consumed) = out
+        if consumed <= 0 || elements.length() == 0 {
+          break
+        }
+        // `AacPcm.samples` is one flat channel array per element (an SCE is
+        // one channel, a CPE arrives as two elements).
+        let channels : Array[Array[Double]] = []
+        let mut nb = 0
+        for element in elements {
+          channels.push(element.samples)
+          nb = element.samples.length()
+        }
+        frames.push({
+          samples: channels,
+          nb_samples: nb,
+          sample_rate: self.sample_rate,
+          pts: Some(pkt.pts),
+        })
+        rest = rest[consumed:rest.length()].to_owned()
+      }
+      frames
+    }
+    _ =>
+      match self.decode(pkt) {
+        Some(f) => [f]
+        None => []
+      }
   }
 }
 
@@ -688,13 +775,13 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
     if p.stream_index != audio {
       continue
     }
-    let frame = dec.decode(p)
+    let frames = dec.decode_all(p)
     let discarded = match mov_track {
       Some(t) => nth < t.samples.length() && t.samples[nth].discard
       None => false
     }
     nth = nth + 1
-    if frame is Some(f) {
+    for f in frames {
       if discarded {
         skip = if skip > f.nb_samples { skip - f.nb_samples } else { 0 }
         continue
@@ -738,7 +825,7 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
 /// `discard_padding`. Fragmented files skip this in the C (`found_tfhd`);
 /// fragments are also what switches `advanced_editlist` off, so that flag
 /// tells them apart here. The iTunSMPB gapless path is not covered.
-fn mov_audio_tail_discard(movie : Mp4Movie, track : Mp4Track) -> Int {
+fn mov_audio_tail_discard(movie : Mp4Movie, track : Mp4Track) -> Int32 {
   let n = track.samples.length()
   let rate = track.sample_rate.reinterpret_as_int()
   let scale = track.timescale.reinterpret_as_int()
@@ -1042,7 +1129,7 @@ pub fn VideoDecoder::height(self : VideoDecoder) -> Int32 {
 /// This mirrors FFmpeg's `hevc_parse_extradata` path: Matroska samples
 /// never repeat the parameter sets in band, so the decoder session must be
 /// seeded with them or the first slice fails with "missing PPS".
-fn hevc_hvcc_paramsets(extradata : Bytes, nal_length_size : Int) -> Bytes? {
+fn hevc_hvcc_paramsets(extradata : Bytes, nal_length_size : Int32) -> Bytes? {
   if extradata.length() < 23 || extradata[0].to_int() != 1 {
     return None
   }

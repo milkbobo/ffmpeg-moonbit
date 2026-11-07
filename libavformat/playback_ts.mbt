@@ -11,8 +11,14 @@
 /// Build the 2-byte AudioSpecificConfig from an ADTS header's raw fields:
 /// 5-bit audio object type, 4-bit sampling frequency index, 4-bit channel
 /// configuration, then the three zero GASpecificConfig bits.
-pub fn ts_adts_to_asc(object_type : Int32, sampling_index : Int32, chan_config : Int32) -> Bytes {
-  let v = ((object_type & 0x1F) << 11) | ((sampling_index & 0xF) << 7) | ((chan_config & 0xF) << 3)
+pub fn ts_adts_to_asc(
+  object_type : Int32,
+  sampling_index : Int32,
+  chan_config : Int32,
+) -> Bytes {
+  let v = ((object_type & 0x1F) << 11) |
+    ((sampling_index & 0xF) << 7) |
+    ((chan_config & 0xF) << 3)
   Bytes::from_array([(v >> 8).to_byte(), (v & 0xFF).to_byte()])
 }
 
@@ -46,8 +52,8 @@ fn ts_h264_is_idr(payload : Bytes) -> Bool {
 /// individual frames (byte ranges of `payload`, ADTS header included, as in
 /// the packets the C's AAC parser emits), using the ported ADTS header
 /// parser for framing.
-fn ts_split_adts(payload : Bytes) -> Array[(Int, Int)] raise MediaError {
-  let frames : Array[(Int, Int)] = []
+fn ts_split_adts(payload : Bytes) -> Array[(Int32, Int32)] raise MediaError {
+  let frames : Array[(Int32, Int32)] = []
   let mut pos = 0
   let n = payload.length()
   let hdr_size = @libavcodec.av_aac_adts_header_size
@@ -193,11 +199,7 @@ fn MediaFile::playback_ts_next(
       // Split the ADTS run; re-scan from the payload start each time by
       // tracking the per-PES offset in cursor[1].
       let frames = ts_split_adts(p.payload)
-      let idx = if self.cursor.length() > 1 {
-        self.cursor[1]
-      } else {
-        0
-      }
+      let idx = if self.cursor.length() > 1 { self.cursor[1] } else { 0 }
       if idx < frames.length() {
         let (off, len) = frames[idx]
         if self.cursor.length() > 1 {
@@ -274,7 +276,7 @@ fn MediaFile::playback_ts_next(
 fn ts_video_packet(
   media : MediaFile,
   demux : TsDemux,
-  index : Int,
+  index : Int32,
 ) -> MediaPacket? raise MediaError {
   let p = demux.packets[index]
   let keyframe = if media.streams[p.stream_index].codec_id == "h264" {
@@ -289,10 +291,5 @@ fn ts_video_packet(
   } else {
     0
   }
-  Some({
-    stream_index: p.stream_index,
-    data: p.payload,
-    pts,
-    keyframe,
-  })
+  Some({ stream_index: p.stream_index, data: p.payload, pts, keyframe, })
 }

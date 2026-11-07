@@ -19,7 +19,10 @@
 /// (the Ogg demuxer folds granule walk-back and pre-skip in), so the offset
 /// is zero everywhere today - it stays in the signature for containers
 /// that need a shift (e.g. MP4 edit lists applied at the demux layer).
-fn MediaFile::stream_timebase(self : MediaFile, index : Int) -> (Double, Double)? {
+fn MediaFile::stream_timebase(
+  self : MediaFile,
+  index : Int32,
+) -> (Double, Double)? {
   match self.source {
     Mov(movie, _) => {
       let track = movie.tracks[index]
@@ -49,8 +52,8 @@ fn MediaFile::stream_timebase(self : MediaFile, index : Int) -> (Double, Double)
 /// ends with a newline per emitted line.
 pub fn MediaFile::dump_packets_json(
   self : MediaFile,
-  stream~ : Int = -1,
-  limit~ : Int = -1,
+  stream~ : Int32 = -1,
+  limit~ : Int32 = -1,
 ) -> String raise MediaError {
   let out = StringBuilder()
   let timebases : Array[(Double, Double)?] = []
@@ -100,11 +103,7 @@ pub fn DecodedAudio::summary_json(self : DecodedAudio) -> String {
     Some(v) => v.to_string()
     None => "null"
   }
-  let nb = if self.samples.length() > 0 {
-    self.samples[0].length()
-  } else {
-    0
-  }
+  let nb = if self.samples.length() > 0 { self.samples[0].length() } else { 0 }
   let real_dur = if self.sample_rate > 0 {
     (nb.to_double() / self.sample_rate.to_double()).to_string()
   } else {

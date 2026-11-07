@@ -205,9 +205,11 @@ test "WAV MP3 and AAC payloads demux and decode" {
   assert_eq(awav.format.channels, 1)
   assert_eq(awav.format.sample_rate, 44100)
   assert_eq(awav.format.extradata.length(), 5)
-  assert_eq(awav.packets.length(), 3)
-  // WAV raw AAC chunks are not frame aligned; split by the bytes each decoded
-  // raw_data_block consumes (the same loop FFmpeg's decoder runs per packet).
+  // RAW_AAC1 (no ADTS headers): the whole data blob stays one packet and the
+  // facade's decode loop advances by the bytes each raw_data_block consumed
+  // (the same loop FFmpeg's decoder runs per packet); the C's parser only
+  // cuts this kind of stream at accidental sync words.
+  assert_eq(awav.packets.length(), 1)
   let data_start = awav.data_offset.to_int()
   let aac_data = aac_wav[data_start:data_start + awav.data_size.to_int()].to_owned()
   let aac_frames = @libavcodec.aac_decode_raw_stream(

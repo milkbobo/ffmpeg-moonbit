@@ -9164,3 +9164,31 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
 - **镜像**：ffmpeg-moonbit-ffref:nine 重建（+libshine +zlib，-lopus 弃用
   ——原生 opus 在 libavcodec 内）。Dockerfile 在 .scratch/ffref（gitignored）。
 - **验证**：容器 native **57/57**；wasm 全量 **1453/1453**。
+## 332. WAV parser 分包：AAC/MP3-in-WAV 逐帧化 + 门面 MP3 解码分支（oracle 61/61）
+
+- **C 语义**（wavdec.c + demux.c 实证）：WAV fmt 路径无条件
+  `AVSTREAM_PARSE_FULL_RAW`——demux 层对**注册了 AVParser 的编解码**把每块
+  数据过 parser 按帧切分（PCM 无 parser 保持按块）。oracle 实测：
+  - **MP3-in-WAV**：整帧含 4 字节头（417/418 CBR padding 交替），pts 由
+    mpegaudio parser 自算（1152 样本步进）——我们 `av_mp3_open` 分包 +
+    帧 pts 直接对上（包级+解码级双绿）。
+  - **ADTS-in-WAV**：逐帧含 7 字节头；**AAC parser 不设 pts → 包全 NOPTS**
+    （门面 AAC pts 插值只在 TS 适配器做）。
+  - **RAW_AAC1（ffmpeg 自家写法，ASC 在 fmt cbSize 尾）**：无 ADTS 头——
+    C 的 parser 只在意外同步字处乱切（实测 19+3857 两包），且其解码器拒
+    绝包内多 RDB（`More than one AAC RDB per ADTS frame is not
+    implemented`）——**上游自产自解都不成立，无对拍锚**。我们的语义：整
+    个 data 块单包 + 门面 `decode_all` 按 `buf_consumed` 循环（14 帧精
+    确消费，14336 样本/通道）。有锚的组合（ADTS/MP3）全绿。
+- **实现**：`wav_build_demux` 三分支（ADTS 嗅探→`av_adts_open` 逐帧；
+  MP3→`av_mp3_open` 逐帧；RAW AAC→单包）；帧头权威回填 rate/channels，
+  AAC 无 ASC 时从首帧头直构（同 TS 门面）；AAC 包 pts=NOPTS。
+- **门面**：`AudioDec` 增 `Mp3` 分支（`Mp3Pcm.samples` 交错→拆行）；
+  `AudioDecoder::decode_all`——包内多 AU 循环（`decode_frame_with_
+  consumed`），`decode_audio_file` 改走它。**坑：剥 ADTS 头必须在切片
+  之前**——对未剥头 `rest` 切 `consumed` 会错位 7 字节产生幽灵第二次
+  迭代（TS 钉住测试当场揭发）。
+- **oracle stub**：音频解码宽容化（坏包跳过、receive 错误不 flush 继续）
+  ——ffmpeg CLI 语义；RAW AAC-in-WAV 的 C 解码全程报错即是实证。
+- **验证**：容器 native **61/61**；wasm 全量 **1457/1457**（pins 8/8：
+  MP3 逐帧序列/ADTS 14 帧 NOPTS/RAW 单包 14336/门面 MP3 14976）。

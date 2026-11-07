@@ -573,31 +573,143 @@ fn wav_build_demux(
   )
   let max_size = if max_size < 0 { 4096 } else { max_size }
   let packets : Array[WavPacket] = []
-  let mut packet_pos = data_ofs
-  let mut left = data_size
-  let mut pts = 0L
-  while left > 0L {
-    let mut size = max_size
-    if fmt.block_align > 1 {
-      if size < fmt.block_align {
-        size = fmt.block_align
+  // §332: the C's WAV demuxer flags every audio stream
+  // `AVSTREAM_PARSE_FULL_RAW`, and demux.c then splits each chunk through
+  // the codec's registered AVParser. Only parsers with ports (AAC ADTS,
+  // MPEG audio) reframe here; everything else keeps the PCM chunking.
+  let mut fmt = fmt
+  let mut raw_aac_whole = false
+  let blob = data[data_ofs.to_int():(data_ofs + data_size).to_int()].to_owned()
+  let framed : RawAudioTrack? = if fmt.codec == "aac" && data_size > 8L {
+    // Genuine ADTS-in-WAV starts with a parseable ADTS header. RAW_AAC1
+    // (how ffmpeg itself writes AAC in WAV: raw frames, ASC in the fmt
+    // cbSize tail) has none - the C parser only cuts the byte run at
+    // accidental sync words there, and the decoder saves it by iterating
+    // frames inside one packet, so the whole data blob stays one packet.
+    let sniff = data
+      .clamped_view(
+        start=data_ofs.to_int(),
+        end=(data_ofs + @libavcodec.av_aac_adts_header_size.to_int64()).to_int(),
+      )
+      .to_owned()
+    match @libavcodec.ff_adts_header_parse_buf(sniff) {
+      Ok(_) =>
+        match av_adts_open(blob) {
+          Ok(t) => Some(t)
+          Err(_) => None
+        }
+      Err(_) => {
+        raw_aac_whole = true
+        None
       }
-      size = size / fmt.block_align * fmt.block_align
     }
-    if left < size.to_int64() {
-      size = left.to_int()
+  } else if (fmt.codec == "mp3" || fmt.codec == "mp2" || fmt.codec == "mp1") &&
+    data_size > 8L {
+    match av_mp3_open(blob) {
+      Ok(t) => Some(t)
+      Err(_) => None
     }
-    let duration = if fmt.block_align > 0 {
-      size / fmt.block_align
-    } else if fmt.channels > 0 && exact_bits > 0 {
-      size * 8 / (fmt.channels * exact_bits)
-    } else {
-      0
+  } else {
+    None
+  }
+  match framed {
+    Some(track) => {
+      // Timestamps: the mpegaudio parser derives CBR pts itself (the oracle
+      // shows 1152-sample steps for MP3-in-WAV); the AAC parser leaves pts
+      // untouched, so WAV AAC packets carry NOPTS in the C. The facade's
+      // TS adapter interpolates AAC pts separately from real PES stamps.
+      for f in track.frames {
+        packets.push({
+          pos: data_ofs + f.pos,
+          size: f.size,
+          pts: if fmt.codec == "aac" {
+            ts_nopts
+          } else {
+            f.pts
+          },
+          duration: f.duration,
+          is_keyframe: true,
+        })
+      }
+      // The frame headers are the authority: real-world files disagree with
+      // their fmt chunk (block_align means "max frame bytes" here), and the
+      // decoder needs a rate/channels pair. AAC without an ASC in the fmt
+      // tail gets one built from the first ADTS header, exactly like the
+      // MPEG-TS facade path.
+      let mut extradata = fmt.extradata
+      if fmt.codec == "aac" &&
+        extradata.length() == 0 &&
+        track.frames.length() > 0 {
+        let hdr = data
+          .clamped_view(
+            start=(data_ofs + track.frames[0].pos).to_int(),
+            end=(data_ofs + track.frames[0].pos).to_int() +
+              @libavcodec.av_aac_adts_header_size,
+          )
+          .to_owned()
+        match @libavcodec.ff_adts_header_parse_buf(hdr) {
+          Ok(h) =>
+            extradata = ts_adts_to_asc(
+              h.object_type,
+              h.sampling_index,
+              h.chan_config,
+            )
+          Err(_) => ()
+        }
+      }
+      fmt = {
+        ..fmt,
+        sample_rate: track.sample_rate,
+        channels: track.channels,
+        extradata,
+      }
     }
-    packets.push({ pos: packet_pos, size, pts, duration, is_keyframe: true, })
-    packet_pos = packet_pos + size.to_int64()
-    pts = pts + duration.to_int64()
-    left = left - size.to_int64()
+    None =>
+      if raw_aac_whole {
+        // One packet spanning the data: the facade's AAC decoder iterates the
+        // frames inside it (decode.c consumes packets that way too). NOPTS
+        // pts, as in the C.
+        packets.push({
+          pos: data_ofs,
+          size: data_size.to_int(),
+          pts: ts_nopts,
+          duration: 0,
+          is_keyframe: true,
+        })
+      } else {
+        let mut packet_pos = data_ofs
+        let mut left = data_size
+        let mut pts = 0L
+        while left > 0L {
+          let mut size = max_size
+          if fmt.block_align > 1 {
+            if size < fmt.block_align {
+              size = fmt.block_align
+            }
+            size = size / fmt.block_align * fmt.block_align
+          }
+          if left < size.to_int64() {
+            size = left.to_int()
+          }
+          let duration = if fmt.block_align > 0 {
+            size / fmt.block_align
+          } else if fmt.channels > 0 && exact_bits > 0 {
+            size * 8 / (fmt.channels * exact_bits)
+          } else {
+            0
+          }
+          packets.push({
+            pos: packet_pos,
+            size,
+            pts,
+            duration,
+            is_keyframe: true,
+          })
+          packet_pos = packet_pos + size.to_int64()
+          pts = pts + duration.to_int64()
+          left = left - size.to_int64()
+        }
+      }
   }
   Ok({
     format: fmt,

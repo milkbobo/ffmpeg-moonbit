@@ -357,6 +357,12 @@
   无 coef2minsf 下限的饱和 bug 由 oracle 揭出并修复**（3.4→67.7 dB）。
   **oracle mem_read 越界读是 §328 前所有包级对拍的隐患**（症状：包数/尺寸
   随机错）。wasm 钉住：playback_oracle_pins_test.mbt。
+  ⑳r §332 WAV parser 分包：C 对 WAV 音频全量 AVSTREAM_PARSE_FULL_RAW——
+  有 parser 的编解码按帧分包（MP3 整帧含头+CBR pts 1152 步进；ADTS 逐帧
+  含头+pts NOPTS；**RAW_AAC1 无 C 锚**：parser 意外同步字乱切+解码器拒包
+  内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
+  分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
+  oracle 61/61；wasm 1457/1457。
   ⑳o §325 libswresample 第一片：
   `libswresample/` 新包——同采样率转换（`swr_flt_to_s16` =
   audioconvert.c 的 av_clip_int16(lrintf) **round-half-to-even** 逐分支
