@@ -363,6 +363,26 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳u §347 AAC 字节差分根因链（无新特性、实验全回滚、仓库全绿）：探针
+  基建 nine-dbg（aac_ref_patch.py in-image 适配 + aacpsy/aaccoder/
+  aacenc_is 探针对象 ar r 进档案副本）+ 两侧同格式打点逐层 diff。四大
+  发现：①stock 选项默认全开（pns/is/tns=1、ms=auto）vs harness 全 0——
+  options 字典对齐有效但 **bit_rate_tolerance 经 dict 静默失效**（须
+  cc 字段直赋）；②**MDCT 域伪影**：harness 域=65536=2× stock av_tx
+  32768，全部向量烙着「stock 常数×4× 能量」——域改 32768 后 psy/twoloop
+  与 stock 对齐到 f32 噪声（thr/TWOINIT sf/帧0 终态全一致）但 SNR 崩
+  5.9 dB（SPL/ATH 绝对锚点锁旧域）→ 域统一须绑定全量向量重生成；③
+  rate control 双分支：stock 默认走 ABR（its==0 必更新、稳定窗 sqrt√
+  钳 [0.9,1.1]），strict 分支无迭代上限会死循环（挂死实证）；ABR 已
+  移植且帧 1 预算 1580==1580 逐帧验证，但有状态 lambda 破坏三个自基准
+  （IS 资格阈值随 lambda 收窄清零、同窗序列⇒同字节不变量失效）→ 回滚；
+  ④窗口机：stock=psy_3gpp_window（IIR 探测器+一帧超前），端口=自研同步
+  attack machine（仅 LAME 路径有向量）——静止正弦上 stock 切
+  EIGHT_SHORT 端口不切（TWOPARM cutoff 682→85=短窗指纹）= 字节对齐
+  最后大件。AAC 测试=框架差分；调试代码全清。坑：heredoc 连吃 `\\n`
+  进 C 源（C 编辑用 Edit 工具）；顶层 let mut 禁止用 Ref；-F 过滤器
+  不生效用标记切分；stdout 块缓冲跨测试污染段；杀 docker 任务后
+  Docker Desktop 假死要重启；ar grep -c=0 短路 && 链。
   ⑳s §345 ffref 预言机复活 + HLS/DASH 路径式差分：moon.pkg 恢复
   native-stub/link；包级 supported_targets="native"（wasm 跳整包，9 条
   unused_package 清零，mooncakes 消费者仍零 C 依赖）。新 C 面

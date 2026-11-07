@@ -10497,3 +10497,100 @@ AAC framing×2）；wasm 全量在跑（flush 重构后回归）；`moon check
 `aac_encode_config_perceptual_short`（LAME 窗路径）的 flush 差分；
 HLS master/DASH 多 Representation oracle 对齐；容器新版 moon
 `#derive(...)` 全仓清账。
+
+## 2026-11-08 AAC 字节差分根因链：四大发现（§347，无新特性、全部回滚验证）
+
+> 承接 §346「装配级漂移」。用 nine-dbg 探针镜像 + 两侧同格式打点把 AAC
+> 感知路径的字节分歧逐层定位，挖出四层根因。**结论先行：端口无缺陷**——
+> 分歧全部来自「harness 伪影 + stock 选项/速率控制语义」；字节对齐需要
+> 向量重生成与窗口机移植，均超出本片范围。所有实验性改动已回滚，仓库
+> 保持全绿（wasm 1709/1709、ffref 72/72）。
+
+**探针基建（常驻工具，gitignored）**
+
+镜像叠层 `.scratch/ffref/Dockerfile.dbg` → **`ffmpeg-moonbit-ffref:
+nine-dbg`**：`aac_ref_patch.py`（`_ref/aacenc/patch.py` 的 in-image 适配
+版，路径参数化、锚点全断言）生成 aacpsy/aaccoder(+twoloop 头)/aacenc_is
+探针对象，`ar d` stock 三对象后 `ar r` 进 `libavcodec_dbg.a`（aactab 不
+换——harness 版把表守卫钉 #if 0，档案里是真表）。端口侧同格式临时打点
+（MBT 前缀行），MONOBEGIN/MONOEND 标记切分日志，C 侧 ORACLE 标记对齐
+oracle 调用边界。diff 方法：两侧 PSYDBG/MBTPSY（psy 带值）、TWOINIT/
+MBTTWOINIT（初始 sf）、TWOWEIGHT（maxvals/minsf）、TWOPARM（预算）、
+TWOOUT（终态 sf/bt）逐层比对。
+
+**发现一：stock 选项默认全开，harness 全钉 0**
+
+stock 默认 `aac_pns=1, aac_is=1, aac_tns=1, aac_ms=-1(auto)`（aacenc.c
+options 表），harness 钉 `pns=0 tns=0 ms=0 is=0`。端口对齐的是 harness——
+stock 每帧跑 PNS/TNS/M-S/IS，端口不跑 → 字节必分歧、解码仍相似。对齐
+方式：ffref_encode_audio 的 options 字典传
+`aac_pns=0:aac_tns=0:aac_ms=0:aac_is=0`（字典对该四项**有效**）。
+**但 `bit_rate_tolerance=0` 经同一字典静默失效**——avcodec_open2 后
+context 字段仍为默认 4000000（C 探针实测）；要让 strict 分支生效必须
+`cc->bit_rate_tolerance = 0` 直接字段赋值。
+
+**发现二：MDCT 域伪影（最深一层，向量级）**
+
+harness 的系数域 = `65536 × textbook MDCT`（端口同域、自洽），stock 的
+av_tx MDCT scale = **32768**（系数减半、能量四分之一）。全部 `_ref/aacenc`
+向量都是「stock psy/twoloop 常数 × 4× 能量输入」的产物——harness 把
+stock 常数喂给了 2× 幅度的系数。证据链（域改 32768 后两侧对齐）：psy
+thr 1.3966262e7 双方一致、TWOINIT 初始 sf 177/178/178/178/179/180/185/
+185 一致、帧 0 终态 sf0-3=144/146/147/148 + bt=11 一致、TWOWEIGHT
+maxvals/minsf 逐带一致（f32 噪声级）。但改域让感知路径 SNR 崩到 5.9 dB
+（psy 的 SPL/ATH 绝对锚点仍锁 65536 域语义）→ **域统一必须与全量向量
+重生成绑定**，已回滚并留下域注释。
+
+**发现三：rate control 双分支，strict 上游会死循环**
+
+stock 默认（tolerance≠0）走 **ABR 分支**：psy alloc 抬目标、稳定窗
+`too_few/-8 .. too_many+/2`、its==0 必更新 lambda、窗内 `sqrt√` 钳
+[0.9,1.1] 即停；strict（tolerance=0）分支是「缩到合适为止」**无迭代
+上限**——不可满足的帧挂死（oracle 实测 600s 超时）。端口实现的是 strict
+语义 + 自设 10 次上限。ABR 分支已完整移植（f32 步进、target_bits 逐元
+累加截断）并逐帧验证：**帧 1 预算 dest=1580 双方一致**、rdlambda
+1.4907119274139404 f32 级一致。但 ABR 的有状态 lambda（跨帧持续、无
+复位）破坏三个自基准：`aac_lc_perceptual_rate_control`（CBR 纪律断言）、
+`aac_lc_perceptual_short_keeps_long_window_baseline`（「同窗序列⇒同字节」
+不变量被路径依赖 lambda 破坏）、`aac_lc_perceptual_short_is_ms_stream`
+（IS 资格阈值 `limit×(lambda/170)` 随 lambda 下移收窄 → 该 fixture 的
+IS 带清零，stock 同样会清零）——测试体系需要按 ABR 语义重设计，与
+窗口机一起下片。已回滚。
+
+**发现四（字节对齐最后一个大件）：窗口机不同**
+
+stock 感知路径的窗口切换 = `psy_3gpp_window`（`iir_filter` 固定点 IIR
+能量探测器 + 一帧超前语义：call k 决定 W_{k-1} 的窗型、la=f(k)）；端口
+感知路径用自己的同步 attack machine（早/晚攻击 + 状态机，仅 LAME 路径
+被 `--win` 向量钉过）。静止 660Hz 正弦上 stock 在 W2/W3 切 EIGHT_SHORT
+（TWOPARM cutoff 682→85 即 num_windows=8 的指纹）而端口保持长窗。字节
+对齐的最后一步 = 移植 psy_3gpp_window 的 IIR 探测器与一帧超前语义。
+
+**收口状态**
+
+AAC 两测 = 框架差分（包计数 13==13 / 9==9 + 双流经真解码器等样本数），
+oracle 配置 harness 对齐（pns/tns/ms/is=0）；Opus 逐字节、flush、
+HLS/DASH 等既有覆盖不动。调试代码全部清除（psy/twoloop 打点、stub
+ORACLE 标记、测试标记）。ffref native **72/72**（nine-ref）；wasm
+**1709/1709**；`--deny-warn` 零警告。
+
+**坑**
+
+- bash heredoc 连续两次把 python 字符串里的 `\\n` 吃成真换行写进 C 源
+  （`missing terminating "` 编译错）——**C 源编辑一律用 Edit 工具**，
+  python 脚本只做无转义的纯文本替换。
+- MoonBit 顶层 `let mut` 不允许（E4074）——跨调用计数器用 `Ref[Int]`。
+- `moon test -F` 过滤器对本仓测试名不生效——临时 println 标记 + awk
+  切分日志替代。
+- stdout 块缓冲会让前序测试的 println 晚刷入后序测试的日志段——段切分
+  必须两侧都有标记（C 侧 fprintf stderr 无缓冲）。
+- `docker run` 后台任务被 TaskStop 杀掉后 Docker Desktop 假死
+  （`unable to start`）——Stop-Process + Start-Process 重启恢复。
+- `ar t | grep -c` 在 count=0 时退出码 1，会静默短路 `&&` 链。
+
+**未做（下片路线图，按依赖序）**：①psy_3gpp_window IIR 探测器 +
+一帧超前语义移植（窗口机对齐）；②ABR rate control 落地 + 三个自基准
+按 ABR 语义重设计（IS 行为用 oracle 仲裁）；③域统一 + `_ref/aacenc`
+harness 修 MDCT scale 后全量向量重生成（字节对齐的终局）；④HLS
+master/DASH 多 Representation oracle 对齐；⑤容器新版 moon `#derive(...)`
+全仓清账。
