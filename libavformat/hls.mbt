@@ -461,6 +461,11 @@ pub fn av_hls_parse(
       })
     } else if line.has_prefix("#EXT-X-MEDIA:") {
       let attrs = hls_parse_attributes(line[13:])
+      // A rendition without URI is muxed into the variant itself (or, for
+      // CLOSED-CAPTIONS, addressed by INSTREAM-ID). `hls_resolve_uri` returns
+      // its base for an empty reference, so resolving unconditionally would
+      // turn "no URI" into the master playlist's own URI.
+      let rendition_uri = hls_attr(attrs, "URI", "")
       playlist.renditions.push({
         type_: hls_attr(attrs, "TYPE", ""),
         group_id: hls_attr(attrs, "GROUP-ID", ""),
@@ -469,7 +474,11 @@ pub fn av_hls_parse(
         is_default: hls_attr(attrs, "DEFAULT", "NO") == "YES",
         autoselect: hls_attr(attrs, "AUTOSELECT", "NO") == "YES",
         forced: hls_attr(attrs, "FORCED", "NO") == "YES",
-        uri: hls_resolve_uri(base_uri, hls_attr(attrs, "URI", "")),
+        uri: if rendition_uri == "" {
+          ""
+        } else {
+          hls_resolve_uri(base_uri, rendition_uri)
+        },
         channels: hls_attr(attrs, "CHANNELS", ""),
         instream_id: hls_attr(attrs, "INSTREAM-ID", ""),
       })

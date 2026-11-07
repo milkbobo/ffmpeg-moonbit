@@ -9909,3 +9909,32 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   Period 起播、单 Period 行为不变）。libavformat 整包 **630/630**；
   全量 Wasm **1645/1645**（本片 +5）；`check --deny-warn` 仍零警告。
   公共 API 增量：`period_index`；`open_dash`/`reload_dash` 签名不变。
+
+## 2026-11-07 自适应流第七片：HLS 分离音轨（纯 MoonBit）
+
+- 变体声明 `AUDIO="group"` 时音频不在该变体的分片里，而在
+  `EXT-X-MEDIA:TYPE=AUDIO` 的另一个 rendition 播放列表。此前 `decode_audio`
+  只认变体自己的流表，遇到这种 master 直接抛
+  `UnsupportedCodec("no audio stream in hls")`。
+- **做法**：复用解析层已有的 `HlsPlaylist.renditions` 与
+  `HlsStreamInfo.audio`，选中变体后按组挑出**带 URI 的** AUDIO rendition
+  （优先 `DEFAULT=YES`，否则第一个），把它的播放列表作为独立会话
+  （`audio_track`，递归 `StreamingMedia?` 字段——MoonBit 允许经 Option 的
+  递归结构）打开。`decode_audio` 在入口直接转交给该会话，
+  `next_packet`/`decode_video` 仍留在变体上（单流视图的既有契约不变）。
+  自动刷新也各自独立：rendition 会话拿同一套 `playlist_fetch~` 与
+  `max_reloads~`，用自己的 `playlist_uri`。
+- **修掉解析层一个真缺陷**：`EXT-X-MEDIA` 没有 `URI` 属性时，
+  `hls_resolve_uri(base_uri, "")` 会返回 base 本身，于是"复用变体音轨的
+  内嵌 rendition"被解析成了 master 自己的地址——按普通 rendition 打开就会
+  递归拉 master 并报 nested master。现在空 URI 保持空串
+  （`hls_mux_wbtest` 里 `renditions[0].uri == ""` 的既有断言本就期望这个）。
+- 由此也确认：`av_hls_parse` 已经把 rendition URI 按 master 的 base 解析过，
+  门面的 `streaming_open_master` 不再重复解析（省掉一个 `master_uri` 参数）。
+- 验证：新增 6 项黑盒（变体 1 段 vs rendition 3 段，靠样本数判定确实解的是
+  rendition；`variant_uri` 在子目录而 rendition 在 master 目录，证明 URI
+  解析基准正确；无 `AUDIO` 属性时解自己的音轨；空 URI 组不单独打开；
+  无 DEFAULT 时取第一个带 URI 的成员且第二个从未被拉取；rendition 拉取失败
+  让 open 直接报错；`next_packet` 仍返回变体自己的包数）。
+  libavformat 整包 **636/636**；全量 Wasm **1651/1651**（本片 +6）；
+  `check --deny-warn` 仍零警告。公共 API 增量：`audio_track()`。

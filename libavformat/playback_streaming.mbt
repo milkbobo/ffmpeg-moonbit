@@ -99,6 +99,9 @@ pub struct StreamingMedia {
   /// The MPD this session was opened from, kept so playback can continue into
   /// the next Period. Replaced by `reload_dash`.
   mut dash_mpd : DashMpd?
+  /// HLS variant that declares `EXT-X-MEDIA:TYPE=AUDIO` keeps its audio in a
+  /// separate rendition playlist; this is that playlist's own session.
+  mut audio_track : StreamingMedia?
 }
 
 ///|
@@ -336,6 +339,7 @@ fn streaming_from_reader(
     dash_last_duration: 0L,
     dash_gap: false,
     dash_mpd: None,
+    audio_track: None,
   }
 }
 
@@ -705,11 +709,43 @@ fn streaming_pick_variant(
 }
 
 ///|
+/// Pick the audio rendition a variant's `AUDIO=` group names: a URI-bearing
+/// `TYPE=AUDIO` member of that group, preferring `DEFAULT=YES`. Returns `None`
+/// when the variant declares no group, or when the group only holds muxed
+/// (`URI`-less) entries that cannot be opened on their own.
+fn streaming_pick_audio_rendition(
+  master : HlsPlaylist,
+  group : String,
+) -> HlsRendition? {
+  if group == "" {
+    return None
+  }
+  let mut fallback : HlsRendition? = None
+  for r in master.renditions {
+    if r.type_ == "AUDIO" && r.group_id == group && r.uri != "" {
+      if r.is_default {
+        return Some(r)
+      }
+      if fallback is None {
+        fallback = Some(r)
+      }
+    }
+  }
+  fallback
+}
+
+///|
 /// Resolve a master playlist to one media playlist. The variant's absolute
 /// URI becomes the base for the child playlist's relative segment URIs, so
 /// `MediaFetch` sees exactly the same URIs `av_hls_parse` resolved. Only one
 /// level of master indirection is allowed; a nested master is refused rather
 /// than followed (it would be an unbounded fetch loop controlled by the server).
+///
+/// A variant that declares `AUDIO="group"` gets its audio from a separate
+/// `EXT-X-MEDIA` rendition playlist (FFmpeg's `hls_read_header` resolves the
+/// same way): that rendition is opened as its own session and `decode_audio`
+/// follows it. `av_hls_parse` has already resolved the rendition URI against
+/// the master's base URI, so it is used as-is.
 fn streaming_open_master(
   master : HlsPlaylist,
   fetch : MediaFetch,
@@ -743,6 +779,35 @@ fn streaming_open_master(
     max_reloads~,
   )
   session.variant_uri = Some(chosen.uri)
+  match streaming_pick_audio_rendition(master, chosen.audio) {
+    None => ()
+    Some(rendition) => {
+      let url = rendition.uri
+      let audio_bytes = match fetch(url, 0L, -1L) {
+        Ok(v) => v
+        Err(e) => raise DemuxError("hls: audio rendition fetch failed: \{e}")
+      }
+      let audio_playlist = match
+        av_hls_parse(streaming_playlist_text(audio_bytes), base_uri=url) {
+        Ok(p) => p
+        Err(e) => raise DemuxError("hls: audio rendition playlist: \{e}")
+      }
+      if audio_playlist.is_master {
+        raise DemuxError("hls: nested master playlists are not supported")
+      }
+      session.audio_track = Some(
+        StreamingMedia::open_hls(
+          audio_playlist,
+          fetch,
+          prefer_x_start~,
+          live_start_index~,
+          playlist_fetch~,
+          playlist_uri=url,
+          max_reloads~,
+        ),
+      )
+    }
+  }
   session
 }
 
@@ -955,6 +1020,15 @@ pub fn StreamingMedia::variant_uri(self : StreamingMedia) -> String? {
 }
 
 ///|
+/// The separate `EXT-X-MEDIA` audio rendition this session's variant delegates
+/// to, or `None` when the variant carries its own audio. `decode_audio`
+/// already follows it with the default `DEFAULT=YES` rendition; this accessor
+/// is for callers that want to drive another rendition or inspect the track.
+pub fn StreamingMedia::audio_track(self : StreamingMedia) -> StreamingMedia? {
+  self.audio_track
+}
+
+///|
 /// Next packet across all segments, with pts on one continuous timeline, or
 /// `None` when the playlist is exhausted. A `MediaFetch` failure raises
 /// `DemuxError` and leaves the cursor intact, so the same segment can be
@@ -992,6 +1066,13 @@ pub fn StreamingMedia::next_packet(
 pub fn StreamingMedia::decode_audio(
   self : StreamingMedia,
 ) -> DecodedAudio raise MediaError {
+  // A variant that delegates its audio to an `EXT-X-MEDIA` rendition has no
+  // audio stream of its own; follow the rendition so `decode_audio` returns
+  // actual PCM instead of `UnsupportedCodec`.
+  match self.audio_track {
+    Some(track) => return track.decode_audio()
+    None => ()
+  }
   // Loading a segment fills the stream table without consuming a packet.
   if self.streams.length() == 0 && self.current is None && !self.finished {
     self.streaming_load_segment()
