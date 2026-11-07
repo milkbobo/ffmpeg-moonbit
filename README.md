@@ -228,10 +228,12 @@ PNG、ASF、AU、CAF、FLAC、MJPEG、MP3、Ogg。17 组由参考 FFmpeg 9.0.2
 （MP4 按 DTS 跨轨归并）、`AudioDecoder`/`VideoDecoder`（H.264/HEVC/VP9/AV1
 视频、AAC/Opus/PCM 音频，全部经已移植解码器）、`duration_seconds`、
 `decode_audio_file` + `to_wav_s16`、`cover()`（MKV Attachments / MP4
-`ilst/covr`）与 ffprobe 风格的 `probe_json`/`dump_packets_json`。配套五个
+`ilst/covr`）与 ffprobe 风格的 `probe_json`/`dump_packets_json`。配套六个
 JSON CLI 命令（`cmd/`）：`probe`、`dump-packets`、`decode-audio`、
-`extract-frame`（`--format yuv|rgb24|bgr24`）、`extract-cover`，pts/分包/
-解码输出均与 FFmpeg 9.0.2 docker 对拍逐字节或 ±1 舍入一致。
+`extract-frame`（`--format yuv|rgb24|bgr24`）、`extract-cover`、
+`stream-audio`（HLS/DASH → WAV，可带 `--dir`/`--output`/`--rate`/
+`--variant`/`--reloads`），pts/分包/解码输出均与 FFmpeg 9.0.2 docker
+对拍逐字节或 ±1 舍入一致。
 **libswscale 移植开篇**（`libswscale/`）：YUV420P -> RGB24/BGR24
 （`yuv2rgb_1_c_template` 查表语义，表数据从 FFmpeg 9.0.2
 `ff_yuv2rgb_c_init_tables` 全量 probe 内嵌——FFmpeg 9 的系数经 cms
@@ -302,10 +304,40 @@ length)` 回调（等价 FFmpeg 的自定义 AVIO），每个分片复用既有
 跨分片 pts 用「上片末 pts + 该流最后步长」归一到单一单调时间轴
 （Int64 饱和算术，拒绝异常流索引）；`#EXT-X-DISCONTINUITY` 只在分片
 首包标记并重置解码器，时间轴不回退。回调失败抛 `DemuxError` 且游标
-不变，可重试；master 播放列表、越界的 DASH Period/AdaptationSet/
-Representation 索引均明确报错。测试覆盖真实 AAC→TS/fMP4 分片：
-多段包序列、逐样本 PCM 与 `decode_audio_file` 一致、断点重置、失败重试
-及空列表（15 项纯 Wasm，无 FFI）。
+不变，可重试；越界的 DASH Period/AdaptationSet/Representation 索引
+均明确报错。
+
+`StreamingMedia::open` 遇到 HLS master 播放列表时自动选带宽最高的
+可播放 variant（跳过 I-frame-only 项，也可用 `variant~` 指定索引），
+用 `MediaFetch` 拉取子播放列表并以其绝对 URI 为 base 再解析；
+嵌套 master 会被拒绝以免形成无界拉取循环，`variant_uri()` 可查询选中项。
+音频线 `decode_audio` 与视频线 `decode_video` 都跨分片保持解码器状态
+（视频在 discontinuity 时先 flush HEVC 批式缓冲再重建，末尾
+`finish_video` 收口）；MP4 fourcc（`avc1`/`hvc1`）在分段流表内经
+`mov_codec_name` 规范化为 `h264`/`hevc`，既有文件门面契约不变。
+
+**直播刷新**：`reload(HlsPlaylist)`/`reload_bytes(Bytes)` 复用
+`HlsSegmentReader::reload` 的重叠窗口、过期段 discontinuity 与
+key/map 缓存失效语义，保留已归一化的 pts 时间轴并复活会话；
+`is_live()`/`reload_count()` 可观测，VOD 与 DASH 明确拒绝。
+`open` 的可选 `playlist_fetch~` + `max_reloads~` 让段耗尽时自动
+重新拉取播放列表（master 场景刷选中的 variant 列表），预算以循环
+而非递归实现，枯竭窗口不会无限轮询；刷新失败抛 `DemuxError`
+且游标不变可重试。单包分片无段内步长时 pts 回退为 1 tick，
+保证时间轴严格单调。
+
+**本地文件取媒体**：`playback_fetch.mbt` 给出 `MediaFetch` 的三种现成实现
+——`media_fetch_from_reader`（把 `(路径) -> Bytes` 的读取器适配成带
+offset/length 的回调，`length = -1` 表示读到 EOF）、`media_fetch_from_map`
+（内存资源表，测试用）与 `media_fetch_path_key`（把分片 URI 收敛成安全的
+单层文件名：剥掉 scheme/host/query/fragment，只取最后一段路径，拒绝
+`.`/`..`/反斜杠与 `%2F`/`%5C` 编码分隔符）。这让 `StreamingMedia` 无需任何
+网络栈就能跑通本地 HLS/DASH 目录，也不把 URI 路径拼进文件系统。
+
+测试覆盖真实 AAC→TS/fMP4 与 x264→fMP4 分片：多段包序列、
+逐样本 PCM 与 `decode_audio_file` 一致、视频 5 帧与 FFmpeg 9.0.2
+参考 MD5 逐帧一致、断点重置、失败重试、master variant 选择、
+live 窗口推进/过期/预算及空列表（38 项纯 Wasm，无 FFI）。
 
 ## 构建与测试
 
@@ -321,8 +353,8 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-11-07）：Wasm 测试 **1606/1606** 通过，`moon check --target all --no-render` 与 `moon info --target wasm` 通过（新增 HLS/DASH 分段播放 15 项与 libswresample 重采样 15 项、swscale 通用缩放 3 项 + RGB 组合 5 项（含奇宽 2 项）、422/444 组合 8 项（含
-奇尺寸）、422/444→RGB 组合 6 项、full-range 4 项、BT.709 4 项、FCC/SMPTE240M/BT.2020 7 项、10bit 缩放 5 项、奇宽源 2 项、重采样门面 3 项；同日 ffref 原生 oracle 整体注释停用后复验仍全绿）。`--deny-warn` 目前仍因 5 处历史警告失败：swscale/swresample 的 `unused_error_type`/`deprecated_syntax`（`ffref/moon.pkg` 的 `unused_package` 已随 oracle 注释消失），均非本片引入，待单独清理。ffref 原生 oracle 差分（61/61：音频解码 MP3 定点逐字节/AAC、TS/MKV/WebM/MP4/fMP4 逐包、MJPEG/PNG 逐字节、shine 编码逐字节与 Opus/AAC 互通）为停用前的历史验证记录，见 PORTING_HISTORY §328-§332。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
+最近一次完整验证（2026-11-07）：Wasm 测试 **1631/1631** 通过，`moon check --target all --no-render` 与 `moon info --target wasm` 通过，**`moon check --target wasm --deny-warn` 零警告**（新增 HLS/DASH 分段播放 15 项、master 选路与视频线 9 项、live 刷新 8 项、本地文件 `MediaFetch` 适配 6 项、滤波器类型码与缩放算法查询 2 项，与 libswresample 重采样 15 项、swscale 通用缩放 3 项 + RGB 组合 5 项（含奇宽 2 项）、422/444 组合 8 项（含
+奇尺寸）、422/444→RGB 组合 6 项、full-range 4 项、BT.709 4 项、FCC/SMPTE240M/BT.2020 7 项、10bit 缩放 5 项、奇宽源 2 项、重采样门面 3 项；同日 ffref 原生 oracle 整体注释停用后复验仍全绿）。零警告是本轮清账的结果：1127 处 `"..."` 字面量迁到 `b"..."`（字节字面量，拼接语义不变）、9 处把保留字 `ref` 当标识符、2 处 `SwsScaleError` 单变体使 `catch` 兜底与 `noraise` 分支不可达、3 处声明了却永不抛出的 `raise`、2 处未使用参数/局部变量、1 处调试残留函数；另补齐 `SwrFilterType::from_code`（对齐 `SWR_FILTER_TYPE_*` 的 0/1/2）与 `SwsPlanarScaler::algo` 两个小接口，让原先"只在测试里构造"的枚举变体和"只写不读"的字段各有正式入口。ffref 原生 oracle 差分（61/61：音频解码 MP3 定点逐字节/AAC、TS/MKV/WebM/MP4/fMP4 逐包、MJPEG/PNG 逐字节、shine 编码逐字节与 Opus/AAC 互通）为停用前的历史验证记录，见 PORTING_HISTORY §328-§332。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
 
 ## 代码位置
 

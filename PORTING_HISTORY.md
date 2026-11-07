@@ -9712,3 +9712,142 @@ CPE 写成 `common_window = 0`——两套独立的 global_gain + ics_info + bod
   （swscale_odd_realdata_test.mbt +2），§339 的"422 拒奇宽"守卫测试改为
   正向断言（守卫移除的合法化验证）。
 - 验证：libswscale 47/47、Wasm 全量 **1606/1606**（+7：10bit 5 + 奇宽源 2）、check --target all 0 错误。
+
+## 2026-11-07 自适应流第二片：HLS master 选路 + 视频线（纯 MoonBit）
+
+- 承接「HLS/DASH 接入统一播放管线」（§本日第一片）。`StreamingMedia::open`
+  遇到 master 播放列表不再报错：`streaming_pick_variant` 跳过
+  `is_i_frame` 与空 URI 项，默认选 `BANDWIDTH` 最高的可播放 variant，
+  `variant~ : Int32?` 可显式指定 `playlist.streams` 下标。选中后通过
+  `MediaFetch(uri, 0, -1)` 拉取子播放列表，以该 **绝对 URI 为 base_uri**
+  再解析（相对分片 URI 因此与 `av_hls_parse` 的解析结果一致），
+  嵌套 master 明确拒绝以防服务端构造无界拉取循环；`variant_uri()`
+  暴露选择结果便于观测。索引越界、无候选、I-frame-only、拉取失败
+  全部映射为 `DemuxError`，不静默降级。
+- 新增 `StreamingMedia::decode_video`：跨分片持有同一 `VideoDecoder`
+  （参考帧/CABAC/重排缓冲不丢），discontinuity 时先 `finish_video()`
+  flush HEVC 批式缓冲再重建解码器，末尾统一 `finish_video()` 收口；
+  无视频流报 `UnsupportedCodec`。HLS 视频分片从播放列表取 init
+  （`EXT-X-MAP`）+ media，逐段交给既有 `MediaFile::open` 解复用。
+- **修复真实缺口**：文件门面 `Mov` 分支把 MP4 fourcc 原样放进
+  `StreamInfo.codec_id`（`avc1`/`hvc1`），而 `VideoDecoder::open` 只认
+  `h264`/`hevc`，导致 fMP4 视频在门面里被拒。新增
+  `streaming_normalize_codecs` 复用既有 `mov_codec_name` 只规范化
+  **分段流表**，既有文件容器契约与 1606 项测试完全不变。
+- 验证：新增 4 项 master 黑盒（带宽排序含 I-frame 排除、显式索引、
+  相对 URI 解析、嵌套/越界/I-frame 拒绝、拉取失败传播）与 5 项视频
+  白盒（真实 x264 fMP4 双段 5 帧、逐帧 MD5 与 FFmpeg 9.0.2 参考
+  **逐帧恒等**、discontinuity 重建、空列表与纯音频列表拒绝）。
+  窄测 **24/24**；全量 Wasm **1615/1615**（本片 +9）；
+  `moon check --target all`、`moon info --target wasm` 通过。
+  公共 API 增量仅 `decode_video` / `variant_uri` / `variant~` 参数；
+  未触碰 `Source` 枚举、文件门面与 ffref。
+- 说明：本片与并行的 §333–§344 libswresample/libswscale 切片同时推进，
+  两者文件无交集；全量数字由 1606 增至 1615 是本片 9 项新测试。
+
+## 2026-11-07 自适应流第三片：HLS live 播放列表刷新（纯 MoonBit）
+
+- `StreamingMedia` 原先读到窗口末尾就把 `finished` 置真并返回 `None`，
+  直播列表无法续读。新增 `reload(HlsPlaylist)` / `reload_bytes(Bytes,
+  base_uri~)`：复用既有 `HlsSegmentReader::reload` 的重叠窗口/过期段
+  discontinuity/清空 key-map 缓存语义，保留已归一化的 pts 时间轴与
+  stream 表，只重置段内锚点并复活会话；被拒绝的播放列表（master、
+  DASH、非法内容）不改状态，可重试。`is_live()` / `reload_count()`
+  提供观测，VOD 与 DASH 明确不可 reload。
+- 自动刷新：`open` / `open_hls` 增加可选
+  `playlist_fetch~ : MediaFetch?` + `max_reloads~`（默认关闭，零回归）。
+  段耗尽时用 `(playlist_uri, 0, -1)` 重新拉列表，按播放列表自身绝对
+  URI 作 base 再解析（master 场景用选中的 variant URI，不刷 master），
+  成功后继续出包；预算递减且以**循环而非递归**实现，服务端持续返回
+  同一枯竭窗口也不会栈溢出或无限轮询。刷新失败映射 `DemuxError`
+  且游标不变，下次 `next_packet` 可重试。
+- **修复真实缺陷**：单包分片（一段一帧且 PES pts 恒为 0）没有可观测
+  的段内步长，原归一逻辑会让后续所有分片的 pts 停滞在同一值。
+  锚点计算在 `last_step <= 0` 时回退为 1 个容器 tick，保证时间轴
+  严格单调；多包分片仍用真实步长，行为不变。
+- 验证：新增 8 项黑盒 live 测试（重叠窗口不回退/不重复、刷新后
+  pts 连续、过期窗口 discontinuity、master 与陈旧窗口拒绝且状态不坏、
+  VOD/DASH 拒绝、自动刷新推进窗口与预算、刷新失败重试不丢包、
+  预算耗尽不多余拉取）。四文件联跑 **32/32**；全量 Wasm
+  **1623/1623**（本片 +8）；`moon check --target all`、
+  `moon info --target wasm` 通过。公共 API 增量仅
+  `reload` / `reload_bytes` / `is_live` / `reload_count` 与
+  `playlist_fetch~` / `max_reloads~` 两个可选参数。
+
+## 2026-11-07 自适应流第四片：本地文件取媒体与 `stream-audio` CLI（纯 MoonBit）
+
+- `StreamingMedia` 要求调用方自己写 `MediaFetch` 回调，README 此前也
+  明写「取媒体字节需要调用方提供回调」——这一片把这段样板收敛成库内
+  实现（`libavformat/playback_fetch.mbt`），并接出第六条 JSON CLI。
+- `media_fetch_from_reader(read : (String) -> Result[Bytes, String])`
+  把「按名取整块」的读取器适配成 `(uri, offset, length)` 回调：正确
+  处理 `offset` 与 `length = -1`（读到 EOF）两种区间语义，越界/未知
+  资源统一返回 `Err(String)`。`media_fetch_from_map` 是同一语义的内存
+  版本，供测试与内嵌资源使用。
+- `media_fetch_path_key(uri)` 负责**路径收敛与防穿越**：剥掉
+  scheme/host/query/fragment，只取最后一段路径；整条路径上出现 `.`/
+  `..`/反斜杠或以 `%2F`/`%5C` 编码的分隔符一律拒绝（否则
+  `a/%2e%2e/b` 这类 URI 会把 `..` 混进文件名）。返回值直接可拼到本地
+  目录下，不需要调用方再做清洗。
+- 新 CLI `cmd/stream-audio`：
+  `stream-audio <playlist> [--dir DIR] [--output out.wav] [--rate N]
+  [--variant N] [--reloads N]`。默认在播放列表所在目录取分片，
+  `--variant` 走 master 选路，`--reloads` 打开 live 自动刷新，
+  `--rate` 复用 `DecodedAudio::resample_to`；输出 JSON 摘要
+  （codec/sample_rate/channels/format_name/samples_per_channel/
+  container_duration/decoded_duration）。
+- 端到端实测（本地双段 AAC→TS HLS）：默认输出 48 kHz 4096 样本，
+  `--rate 16000` 输出 1365 样本且 WAV 头采样率随之改写；master 播放
+  列表路径选路正确；错误路径打印
+  `stream-audio: decode: Demux error: streaming: cannot read ...`
+  后退出（wasm 下 `fail()` 无消息，故先 `println` 再 abort——
+  注意泛型 `die` 的写法是 `fn[T] die(...)`，`fn die[T]` 是语法错误）。
+- 验证：新增 6 项黑盒（路径收敛、非法名拒绝、map 适配器的区间语义、
+  非法区间/未知资源、读取器只看到裸文件名、适配器喂真实 HLS 会话）。
+  窄测 **6/6**；全量 Wasm **1629/1629**（本片 +6）；
+  `moon check --target all --no-render`、`moon info --target wasm`
+  通过，新文件零警告。公共 API 增量仅 `media_fetch_from_reader` /
+  `media_fetch_from_map` / `media_fetch_path_key` 三个函数。
+
+
+## 2026-11-07 清掉全部历史告警：`--deny-warn` 转绿
+
+- 起点：`moon check --target wasm --deny-warn` 失败。早期只暴露 8 处
+  （swresample/swscale 的 `unused_error_type`、`unused_constructor`、
+  `guard_redundant_else`、`unused_value`）；把这些修完后编译器才肯继续
+  往下报，真正的积压是 **1127 处 E0020**（`"..."` 当 Bytes 用）加 9 处
+  E0035（保留字 `ref` 当标识符）+ 2 处 E0012 + 1 处 E0001。
+- **1127 处字节字面量**：全部是 base64 夹具长串（`"AAA" + "BBB" + ...`），
+  按编译器给的 (文件, 行, 列) 精确把 `b` 插到引号前，分四轮迭代到 0。
+  `b"..." + b"..."` 与原来的字符串重载拼接语义一致，夹具字节不变
+  （全量 1631 项测试复验通过即证明）。
+- **9 处 `ref`**：`let ref = av_base64_decode(...)` 撞保留字，改名 `want`。
+- **2 处 E0012**：`SwsScaleError` 只有一个变体 `InvalidScaleConfig`，因此
+  `catch { InvalidScaleConfig(_) => ...; other => fail(...) }` 的兜底臂与
+  `noraise { _ => fail(...) }` 都是死代码。改成从 `try` 里取布尔值
+  （成功 false / 拒绝 true）再 `assert_true`，语义等价且无死分支。
+- **3 处无效 `raise`**：`Swr::mono_to_stereo_s16_packed`、
+  `Yuv2Rgb::mpeg`、私有 `yuv_rows_to_rgb24` 函数体内没有任何抛错操作
+  （`fail` 才算用了错误类型），去掉 `raise`；`yuv_rows_to_rgb24` 顺带
+  从方法改成自由函数（它本来就不用 `self`），422/444 调用点改为传
+  `self.bgr || bgr`，与 420 路径的历史语义对齐。
+- **2 处未使用绑定**：`matroska_attachedfile_table` 的 `payload` 参数
+  （表构造只经 sink 闭包收数据）删掉并更新调用点；`playback_resample`
+  的 `for ci in ...` 改 `for _ in ...`。
+- **1 处调试残留**：`hexsw` 十六进制打印 helper 删除。
+- **2 个补齐的小接口**（让只在测试里构造的变体和只写不读的字段
+  有正式入口，而不是靠删代码消警告）：
+  - `SwrFilterType::from_code(Int)`：对齐 C 的 `SWR_FILTER_TYPE_*`
+    整数契约（CUBIC=0 / BLACKMAN_NUTTALL=1 / KAISER=2），越界报
+    `InvalidResampleConfig`。三个窗口分支本来就已实现。
+  - `SwsPlanarScaler::algo()`：`new` 把传入的 `SwsScaleAlgo` 存进上下文
+    并可查询；顺带删掉那句枚举只有一个变体所以恒假的 `guard scaler is
+    Bicubic` 死判断。
+- 另外修掉 `ts_video_packet` 的 `raise MediaError` 从不抛出——改为对
+  `demux.packets[index]` 做越界校验并抛 `DemuxError`（持有 PES 索引
+  越界是解复用器自身的 bug，不应该静默返回）。
+- 验证：`moon check --target wasm --deny-warn --no-render` **exit 0、
+  0 告警**；`moon check --target all --no-render` exit 0；
+  `moon info --target wasm` 通过；全量 Wasm **1631/1631**（新增 2 项：
+  `resample: filter type integer codes`、
+  `swscale scale: context reports its algorithm`）。
