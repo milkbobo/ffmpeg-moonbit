@@ -31,7 +31,7 @@ fn sws_scale_case(
     Ok(v) => v
     Err(e) => fail("base64: \{e}")
   }
-  let ref = match @libavutil.av_base64_decode(ref_b64, 100000) {
+  let want = match @libavutil.av_base64_decode(ref_b64, 100000) {
     Ok(v) => v
     Err(e) => fail("base64: \{e}")
   }
@@ -51,11 +51,11 @@ fn sws_scale_case(
     }
   }
   let ours = Bytes::from_array(bytes)
-  inspect(ours.length(), content=ref.length().to_string())
+  inspect(ours.length(), content=want.length().to_string())
   let mismatches = {
     let mut m = 0
     for i in 0..<ours.length() {
-      if ours[i] != ref[i] {
+      if ours[i] != want[i] {
         m = m + 1
       }
     }

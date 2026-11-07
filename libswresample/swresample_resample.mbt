@@ -28,6 +28,26 @@ pub enum SwrFilterType {
 }
 
 ///|
+/// `SwrFilterType` from libswresample's integer codes, which are the
+/// `SWR_FILTER_TYPE_*` values of `swr_alloc_set_opts2`'s `filter_type`
+/// (CUBIC = 0, BLACKMAN_NUTTALL = 1, KAISER = 2).  Keeps the enum
+/// reachable from a non-test call path and gives callers the same
+/// integer contract the C API has.
+pub fn SwrFilterType::from_code(
+  code : Int,
+) -> SwrFilterType raise SwrResampleError {
+  match code {
+    0 => Cubic
+    1 => BlackmanNuttall
+    2 => Kaiser
+    _ =>
+      raise InvalidResampleConfig(
+        "swresample: unknown filter type \{code} (want 0..=2)",
+      )
+  }
+}
+
+///|
 pub(all) suberror SwrResampleError {
   InvalidResampleConfig(String)
 } derive(Debug)

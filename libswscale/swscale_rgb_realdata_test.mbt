@@ -15,7 +15,7 @@ fn sws_rgb_case(
     Ok(v) => v
     Err(e) => fail("base64: \{e}")
   }
-  let ref = match @libavutil.av_base64_decode(ref_b64, 100000) {
+  let want = match @libavutil.av_base64_decode(ref_b64, 100000) {
     Ok(v) => v
     Err(e) => fail("base64: \{e}")
   }
@@ -28,10 +28,10 @@ fn sws_rgb_case(
   let v = frame[yl + cl:].to_owned()
   let s = @swscale.SwsRgbScaler::new(src_w=w, src_h=h, dst_w~, dst_h~)
   let ours = s.scale(y, u, v)
-  inspect(ours.length(), content=ref.length().to_string())
+  inspect(ours.length(), content=want.length().to_string())
   let mut m = 0
   for i in 0..<ours.length() {
-    if ours[i] != ref[i] {
+    if ours[i] != want[i] {
       m = m + 1
     }
   }

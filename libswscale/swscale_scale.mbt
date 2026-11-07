@@ -455,6 +455,7 @@ fn sws_init_filter(
 /// dimension-generic (get_local_pos resolves to 128 for every
 /// subsampling, so luma and chroma filters all take pos 128/128).
 pub struct SwsPlanarScaler {
+  algo : SwsScaleAlgo
   src_w : Int32
   src_h : Int32
   dst_w : Int32
@@ -472,6 +473,14 @@ pub struct SwsPlanarScaler {
 }
 
 ///|
+/// The scaling algorithm this context was built with.  `SwsScaleAlgo`
+/// currently has a single variant, so every context reports `Bicubic`;
+/// the accessor exists so callers do not have to assume it.
+pub fn SwsPlanarScaler::algo(self : SwsPlanarScaler) -> SwsScaleAlgo {
+  self.algo
+}
+
+///|
 /// Build a scaler.  Evenness is required only where the format's own
 /// subsampling demands it: 4:2:0 both dimensions, 4:2:2 width only.
 pub fn SwsPlanarScaler::new(
@@ -485,9 +494,6 @@ pub fn SwsPlanarScaler::new(
   dst_bits~ : Int32 = 8,
   scaler~ : SwsScaleAlgo = Bicubic,
 ) -> SwsPlanarScaler raise SwsScaleError {
-  guard scaler is Bicubic else {
-    raise InvalidScaleConfig("swscale: only bicubic in this slice")
-  }
   guard src_bits == 8 || src_bits == 10 else {
     raise InvalidScaleConfig("swscale: only 8- or 10-bit sources")
   }
@@ -517,6 +523,7 @@ pub fn SwsPlanarScaler::new(
   // get_local_pos defaults: luma 128, chroma 128 for every shift
   // ((128 << cs) >> cs == 128).
   {
+    algo: scaler,
     src_w,
     src_h,
     dst_w,

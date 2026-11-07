@@ -214,3 +214,20 @@ test "resample: cubic and blackman-nuttall windows build and run" {
     inspect(n, content="368")
   }
 }
+
+///|
+/// `SWR_FILTER_TYPE_*` is the C API surface: 0/1/2 are cubic,
+/// Blackman-Nuttall and Kaiser, and anything else is refused instead of
+/// silently falling back to the default window.
+test "resample: filter type integer codes" {
+  assert_true(SwrFilterType::from_code(0) is Cubic)
+  assert_true(SwrFilterType::from_code(1) is BlackmanNuttall)
+  assert_true(SwrFilterType::from_code(2) is Kaiser)
+  let refused = try {
+    let _t = SwrFilterType::from_code(3)
+    false
+  } catch {
+    InvalidResampleConfig(_) => true
+  }
+  assert_true(refused)
+}

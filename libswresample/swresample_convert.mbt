@@ -76,7 +76,7 @@ pub fn Swr::flt_planar_to_s16_packed(
 pub fn Swr::mono_to_stereo_s16_packed(
   _self : Swr,
   mono : Array[Double],
-) -> Bytes raise {
+) -> Bytes {
   let out : Array[Byte] = []
   for i = 0; i < mono.length(); i = i + 1 {
     let v = swr_flt_to_s16(mono[i])

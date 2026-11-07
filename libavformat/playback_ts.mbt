@@ -278,6 +278,14 @@ fn ts_video_packet(
   demux : TsDemux,
   index : Int32,
 ) -> MediaPacket? raise MediaError {
+  // `av_read_frame` never hands back a stale index; a held PES that no
+  // longer exists means the caller's cursor and the packet table have
+  // drifted apart, which is a demuxer bug rather than an empty result.
+  guard index >= 0 && index < demux.packets.length() else {
+    raise DemuxError(
+      "ts: held packet index \{index} outside 0..\{demux.packets.length()}",
+    )
+  }
   let p = demux.packets[index]
   let keyframe = if media.streams[p.stream_index].codec_id == "h264" {
     ts_h264_is_idr(p.payload)

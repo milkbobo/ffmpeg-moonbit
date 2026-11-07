@@ -26,7 +26,7 @@ pub fn DecodedAudio::resample_to(
     InvalidResampleConfig(m) => raise DemuxError(m)
   }
   let per_channel : Array[Array[Double]] = []
-  for ci in 0..<self.channels {
+  for _ in 0..<self.channels {
     per_channel.push([])
   }
   // process + flush, then reassemble per channel (the resampler returns

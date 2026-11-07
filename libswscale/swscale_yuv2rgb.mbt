@@ -15,7 +15,7 @@ pub struct Yuv2Rgb {
 
 ///|
 /// The swscale default: BT.601 limited (MPEG) range.
-pub fn Yuv2Rgb::mpeg() -> Yuv2Rgb raise {
+pub fn Yuv2Rgb::mpeg() -> Yuv2Rgb {
   { bgr: false, }
 }
 
@@ -78,8 +78,7 @@ pub fn Yuv2Rgb::yuv420_to_rgb24(
 /// Shared per-row conversion core: `crow`/`cw_c` describe the chroma row
 /// the planar lookup uses for this luma row (4:2:0 rows pair up, 4:2:2 and
 /// 4:4:4 map one-to-one).
-fn Yuv2Rgb::yuv_rows_to_rgb24(
-  self : Yuv2Rgb,
+fn yuv_rows_to_rgb24(
   y : Bytes,
   u : Bytes,
   v : Bytes,
@@ -88,7 +87,7 @@ fn Yuv2Rgb::yuv_rows_to_rgb24(
   cw : Int32,
   paired : Bool,
   bgr : Bool,
-) -> Bytes raise {
+) -> Bytes {
   let out : Array[Byte] = []
   for row = 0; row < h; row = row + 1 {
     let crow = if paired { row / 2 } else { row }
@@ -139,7 +138,7 @@ pub fn Yuv2Rgb::yuv422_to_rgb24(
     v.length() < cw * height {
     fail("yuv2rgb: plane too small for the given geometry")
   }
-  self.yuv_rows_to_rgb24(y, u, v, width, height, cw, false, bgr)
+  yuv_rows_to_rgb24(y, u, v, width, height, cw, false, self.bgr || bgr)
 }
 
 ///|
@@ -162,5 +161,5 @@ pub fn Yuv2Rgb::yuv444_to_rgb24(
     v.length() < width * height {
     fail("yuv2rgb: plane too small for the given geometry")
   }
-  self.yuv_rows_to_rgb24(y, u, v, width, height, width, false, bgr)
+  yuv_rows_to_rgb24(y, u, v, width, height, width, false, self.bgr || bgr)
 }

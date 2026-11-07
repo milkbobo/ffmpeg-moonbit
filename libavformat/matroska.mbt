@@ -675,7 +675,6 @@ fn matroska_tags_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
 fn matroska_attachedfile_table(
   mh : MatroskaHeader,
   state : Array[String?],
-  payload : Array[Bytes?],
 ) -> Array[EbmlSyntax] {
   let flush = (data : Bytes) => {
     let name = match state[0] {
@@ -739,7 +738,7 @@ fn matroska_attachments_table(mh : MatroskaHeader) -> Array[EbmlSyntax] {
   [
     {
       id: matroska_id_attachedfile,
-      kind: Nest(() => matroska_attachedfile_table(mh, [None, None], [None])),
+      kind: Nest(() => matroska_attachedfile_table(mh, [None, None])),
       sink: None,
     },
   ]

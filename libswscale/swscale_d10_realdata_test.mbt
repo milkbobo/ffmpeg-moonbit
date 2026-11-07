@@ -831,18 +831,17 @@ test "swscale d10 realdata: 10->10 odd dst 50x38 -> 43x29" {
 ///|
 /// Unsupported depths are rejected up front.
 test "swscale d10: only 8- and 10-bit depths" {
-  try
-    @swscale.SwsPlanarScaler::new(
+  let rejected = try {
+    let _scaler = @swscale.SwsPlanarScaler::new(
       src_w=40,
       src_h=30,
       dst_w=96,
       dst_h=72,
       src_bits=12,
     )
-  catch {
-    @swscale.InvalidScaleConfig(_) => ()
-    other => fail("unexpected error: \{other.to_repr()}")
-  } noraise {
-    _ => fail("expected InvalidScaleConfig for 12-bit")
+    false
+  } catch {
+    @swscale.InvalidScaleConfig(_) => true
   }
+  assert_true(rejected)
 }

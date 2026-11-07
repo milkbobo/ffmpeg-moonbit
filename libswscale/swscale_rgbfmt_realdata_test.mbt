@@ -1036,18 +1036,17 @@ test "swscale rgbfmt realdata: 444->rgb24 64x48 -> 40x30 (downscale)" {
 /// an even width; 4:4:4 accepts odd everything - covered by the
 /// 50x38 -> 43x29 vector above).
 test "swscale rgbfmt: odd 4:2:2 source width rejected" {
-  try
-    @swscale.SwsRgbScaler::new(
+  let rejected = try {
+    let _scaler = @swscale.SwsRgbScaler::new(
       src_w=51,
       src_h=30,
       dst_w=43,
       dst_h=29,
       src_fmt=Yuv422,
     )
-  catch {
-    @swscale.InvalidScaleConfig(_) => ()
-    other => fail("unexpected error: \{other.to_repr()}")
-  } noraise {
-    _ => fail("expected InvalidScaleConfig for odd 4:2:2 width")
+    false
+  } catch {
+    @swscale.InvalidScaleConfig(_) => true
   }
+  assert_true(rejected)
 }
