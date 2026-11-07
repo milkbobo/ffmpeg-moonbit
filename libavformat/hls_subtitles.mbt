@@ -399,6 +399,102 @@ fn hls_vtt_text(data : Bytes) -> String {
 }
 
 ///|
+/// One *selectable* subtitle track: what a caller needs to offer a language
+/// menu, without fetching a single cue.
+///
+/// The two backends address their tracks differently - an HLS rendition has its
+/// own playlist URI, a DASH text Representation is an index pair inside the
+/// current Period - so both addresses are carried and the unused one stays
+/// empty (`uri == ""`) or `-1`. `SubtitleTrack` (the cues of the one actually
+/// selected) is a separate type for the same reason.
+pub struct SubtitleRendition {
+  language : String
+  name : String
+  forced : Bool
+  /// `DEFAULT=YES` for HLS; always false for DASH, which has no such flag.
+  is_default : Bool
+  /// HLS: the rendition's own playlist URI.
+  uri : String
+  /// DASH: AdaptationSet and Representation inside `dash_period`. HLS: `-1`.
+  set : Int
+  rep : Int
+}
+
+///|
+pub fn SubtitleRendition::language(self : SubtitleRendition) -> String {
+  self.language
+}
+
+///|
+pub fn SubtitleRendition::name(self : SubtitleRendition) -> String {
+  self.name
+}
+
+///|
+pub fn SubtitleRendition::forced(self : SubtitleRendition) -> Bool {
+  self.forced
+}
+
+///|
+pub fn SubtitleRendition::is_default(self : SubtitleRendition) -> Bool {
+  self.is_default
+}
+
+///|
+pub fn SubtitleRendition::uri(self : SubtitleRendition) -> String {
+  self.uri
+}
+
+///|
+/// An HLS choice: addressed by its rendition playlist URI.
+fn subtitle_rendition_hls(rendition : HlsRendition) -> SubtitleRendition {
+  {
+    language: rendition.language,
+    name: rendition.name,
+    forced: rendition.forced,
+    is_default: rendition.is_default,
+    uri: rendition.uri,
+    set: -1,
+    rep: -1,
+  }
+}
+
+///|
+/// A DASH choice: addressed by its position inside the current Period.
+fn subtitle_rendition_dash(
+  set : DashAdaptationSet,
+  rep : DashRepresentation,
+  set_index : Int,
+  rep_index : Int,
+) -> SubtitleRendition {
+  {
+    language: set.lang,
+    name: rep.id,
+    forced: false,
+    is_default: false,
+    uri: "",
+    set: set_index,
+    rep: rep_index,
+  }
+}
+
+///|
+/// Whether two choices designate the same track. The HLS side is identified by
+/// its playlist URI, the DASH side by its index pair - comparing the pair first
+/// would make every DASH track look like every other one when indexes repeat
+/// across Periods. Also used by the accessor that reports which choice is live.
+fn subtitle_rendition_same(
+  a : SubtitleRendition,
+  b : SubtitleRendition,
+) -> Bool {
+  if a.uri != "" || b.uri != "" {
+    a.uri == b.uri
+  } else {
+    a.set == b.set && a.rep == b.rep
+  }
+}
+
+///|
 /// `EXTINF` seconds to whole milliseconds, rounding to the nearest millisecond
 /// so that a playlist of `2.002`-second segments does not drift one tick per
 /// segment. Non-positive and non-finite durations contribute nothing.
@@ -466,6 +562,8 @@ fn subtitle_track_new(
   }
 }
 
+///|
+///|
 ///|
 pub fn SubtitleTrack::language(self : SubtitleTrack) -> String {
   self.language
@@ -593,12 +691,10 @@ pub fn hls_subtitle_track_open(
   playlist : HlsPlaylist,
   fetch : MediaFetch,
   source_uri : String,
-  rendition : HlsRendition?,
+  language~ : String = "",
+  name~ : String = "",
+  forced~ : Bool = false,
 ) -> Result[SubtitleTrack, String] {
-  let (language, name, forced) = match rendition {
-    Some(r) => (r.language, r.name, r.forced)
-    None => ("", "", false)
-  }
   let track = subtitle_track_new(language, name, forced, source_uri)
   match hls_subtitle_track_append(track, playlist, fetch) {
     Ok(_) => Ok(track)

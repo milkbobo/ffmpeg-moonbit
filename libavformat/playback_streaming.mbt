@@ -107,6 +107,15 @@ pub struct StreamingMedia {
   /// AdaptationSet is a subtitle track of its own. Either way the cues land
   /// here.
   mut subtitle_track : SubtitleTrack?
+  /// HLS: the master playlist's `EXT-X-MEDIA` list, kept so `select_subtitles`
+  /// can offer the sibling renditions of the group the variant named.
+  mut hls_renditions : Array[HlsRendition]
+  /// HLS: the `SUBTITLES` group the chosen variant named (`""` when none).
+  mut subtitle_group : String
+  /// The choice currently driving `subtitle_track`, or `None` when the session
+  /// has no subtitles (no `SUBTITLES` group, no parseable `text/vtt` set, or a
+  /// DASH MPD whose Period has no text track).
+  mut subtitle_active : SubtitleRendition?
   /// Subtitle refreshes that were attempted during `reload`/`reload_dash` and
   /// failed. Those are best effort - a broken cue playlist must not stop live
   /// playback - so this counter is how a caller notices.
@@ -350,6 +359,9 @@ fn streaming_from_reader(
     dash_mpd: None,
     audio_track: None,
     subtitle_track: None,
+    hls_renditions: [],
+    subtitle_group: "",
+    subtitle_active: None,
     subtitle_refresh_failures: 0,
   }
 }
@@ -766,6 +778,24 @@ fn streaming_pick_rendition(
 }
 
 ///|
+/// Index of the choice a fresh session should start with: the one flagged
+/// `DEFAULT=YES`, else the first. `None` when there is nothing to choose from
+/// (no `SUBTITLES` group, or a Period without a parseable text set).
+fn streaming_default_rendition_index(
+  choices : Array[SubtitleRendition],
+) -> Int? {
+  if choices.length() == 0 {
+    return None
+  }
+  for i = 0; i < choices.length(); i = i + 1 {
+    if choices[i].is_default {
+      return Some(i)
+    }
+  }
+  Some(0)
+}
+
+///|
 /// Resolve a master playlist to one media playlist. The variant's absolute
 /// URI becomes the base for the child playlist's relative segment URIs, so
 /// `MediaFetch` sees exactly the same URIs `av_hls_parse` resolved. Only one
@@ -842,34 +872,17 @@ fn streaming_open_master(
       )
     }
   }
+  // Keep what a later `select_subtitles` needs to enumerate the group's other
+  // renditions: the master's rendition list and the group this variant named.
+  session.hls_renditions = master.renditions
+  session.subtitle_group = chosen.subtitles
   // Subtitles are auxiliary, but a broken rendition playlist is a broken
   // stream: FFmpeg's `hls_read_header` opens every declared rendition eagerly
-  // and fails the whole open, so this does the same rather than silently
-  // playing a video with no cues.
-  match streaming_pick_rendition(master, chosen.subtitles, "SUBTITLES") {
+  // and fails the whole open, so selecting the default does the same rather
+  // than silently playing a video with no cues.
+  match streaming_default_rendition_index(session.streaming_subtitle_choices()) {
     None => ()
-    Some(rendition) => {
-      let url = rendition.uri
-      let subtitle_bytes = match fetch(url, 0L, -1L) {
-        Ok(v) => v
-        Err(e) => raise DemuxError("hls: subtitle rendition fetch failed: \{e}")
-      }
-      let subtitle_playlist = match
-        av_hls_parse(streaming_playlist_text(subtitle_bytes), base_uri=url) {
-        Ok(p) => p
-        Err(e) => raise DemuxError("hls: subtitle rendition playlist: \{e}")
-      }
-      if subtitle_playlist.is_master {
-        raise DemuxError("hls: nested master playlists are not supported")
-      }
-      match
-        hls_subtitle_track_open(
-          subtitle_playlist, fetch, url, Some(rendition),
-        ) {
-        Ok(track) => session.subtitle_track = Some(track)
-        Err(e) => raise DemuxError("hls: subtitle rendition: \{e}")
-      }
-    }
+    Some(index) => session.select_subtitles(index)
   }
   session
 }
@@ -952,7 +965,7 @@ fn dash_rep_mime(set : DashAdaptationSet, rep : DashRepresentation) -> String {
 /// formats (TTML, SRT, ...) are not fed to the WebVTT reader - they would fail
 /// on the missing signature and take an otherwise healthy stream down with
 /// them.
-fn dash_text_rep_index(set : DashAdaptationSet) -> Int32? {
+fn dash_text_rep_index(set : DashAdaptationSet) -> Int? {
   if !dash_set_is_text(set) {
     return None
   }
@@ -961,21 +974,6 @@ fn dash_text_rep_index(set : DashAdaptationSet) -> Int32? {
     if dash_rep_mime(set, rep).has_prefix("text/vtt") &&
       rep.segments.length() > 0 {
       return Some(i)
-    }
-  }
-  None
-}
-
-///|
-/// First `(AdaptationSet, Representation)` pair in `sets` that holds a
-/// parseable WebVTT subtitle track. A Period may list several text sets (one
-/// per language); the first `text/vtt` one wins, mirroring how the HLS path
-/// picks the first URI-bearing member of a `SUBTITLES` group.
-fn dash_pick_subtitles(sets : Array[DashAdaptationSet]) -> (Int32, Int32)? {
-  for i = 0; i < sets.length(); i = i + 1 {
-    match dash_text_rep_index(sets[i]) {
-      Some(r) => return Some((i, r))
-      None => ()
     }
   }
   None
@@ -1087,6 +1085,54 @@ fn dash_subtitle_track_open(
 }
 
 ///|
+/// The subtitle tracks this session could play, in container order and without
+/// fetching a single cue. HLS answers from the master playlist's `EXT-X-MEDIA`
+/// list (only the group the variant named, and only entries that can be opened
+/// on their own); DASH walks the current Period's `text` AdaptationSets and
+/// keeps the ones whose Representation this port can parse.
+///
+/// The list is computed from the MPD/master currently installed, so it follows
+/// `reload_dash` automatically.
+fn StreamingMedia::streaming_subtitle_choices(
+  self : StreamingMedia,
+) -> Array[SubtitleRendition] {
+  let out : Array[SubtitleRendition] = []
+  match self.kind {
+    Hls => {
+      if self.subtitle_group == "" {
+        return out
+      }
+      for r in self.hls_renditions {
+        if r.type_ == "SUBTITLES" && r.group_id == self.subtitle_group &&
+          r.uri != "" {
+          out.push(subtitle_rendition_hls(r))
+        }
+      }
+    }
+    Dash => {
+      let mpd = match self.dash_mpd {
+        None => return out
+        Some(m) => m
+      }
+      if self.dash_period < 0 || self.dash_period >= mpd.periods.length() {
+        return out
+      }
+      let sets = mpd.periods[self.dash_period].adaptation_sets
+      for i = 0; i < sets.length(); i = i + 1 {
+        match dash_text_rep_index(sets[i]) {
+          Some(r) =>
+            out.push(
+              subtitle_rendition_dash(sets[i], sets[i].representations[r], i, r),
+            )
+          None => ()
+        }
+      }
+    }
+  }
+  out
+}
+
+///|
 /// Open one DASH representation. The three indexes select a Period,
 /// AdaptationSet and Representation of the parsed MPD; out-of-range values
 /// raise `DemuxError` rather than being silently clamped.
@@ -1143,21 +1189,9 @@ pub fn StreamingMedia::open_dash(
   // caller selected a text set itself there is nothing to collect - the
   // session *is* the subtitle reader then.
   if !dash_set_is_text(sets[adaptation_set]) {
-    match dash_pick_subtitles(sets) {
+    match streaming_default_rendition_index(session.streaming_subtitle_choices()) {
       None => ()
-      Some(pick) => {
-        let (set_index, rep_index) = pick
-        match
-          dash_subtitle_track_open(
-            sets[set_index],
-            sets[set_index].representations[rep_index],
-            fetch,
-            mpd_uri,
-          ) {
-          Ok(track) => session.subtitle_track = Some(track)
-          Err(e) => raise DemuxError("dash: subtitle track: \{e}")
-        }
-      }
+      Some(index) => session.select_subtitles(index)
     }
   }
   session
@@ -1287,6 +1321,118 @@ pub fn StreamingMedia::subtitles(self : StreamingMedia) -> SubtitleTrack? {
 }
 
 ///|
+/// The subtitle tracks this session could play, for a language menu. No cues
+/// are fetched, so this is cheap to call whenever the UI needs a list.
+///
+/// Index them with `select_subtitles`: the list is recomputed from the master
+/// playlist / MPD currently installed, so its order follows `reload_dash`.
+pub fn StreamingMedia::subtitle_renditions(
+  self : StreamingMedia,
+) -> Array[SubtitleRendition] {
+  self.streaming_subtitle_choices()
+}
+
+///|
+/// Index of the active track inside `subtitle_renditions()`, or `-1` when the
+/// session has none (or the selection no longer matches anything in the current
+/// MPD).
+pub fn StreamingMedia::subtitle_selected(self : StreamingMedia) -> Int {
+  let active = match self.subtitle_active {
+    None => return -1
+    Some(a) => a
+  }
+  let choices = self.streaming_subtitle_choices()
+  for i = 0; i < choices.length(); i = i + 1 {
+    if subtitle_rendition_same(choices[i], active) {
+      return i
+    }
+  }
+  -1
+}
+
+///|
+/// Switch the active subtitle track to `index` of `subtitle_renditions()`,
+/// fetching that track's cues. Re-selecting the live track is a no-op: doing the
+/// work again would reset its cursor to the first window and lose whatever a
+/// live stream has already published.
+///
+/// Failure raises rather than counting a refresh failure - this is an explicit
+/// caller request, unlike the best-effort refresh that rides on `reload`. The
+/// previous track stays active when the new one cannot be opened.
+pub fn StreamingMedia::select_subtitles(
+  self : StreamingMedia,
+  index : Int,
+) -> Unit raise MediaError {
+  let choices = self.streaming_subtitle_choices()
+  if index < 0 || index >= choices.length() {
+    raise DemuxError("subtitles: selection \{index} out of range")
+  }
+  if self.subtitle_selected() == index {
+    return
+  }
+  let choice = choices[index]
+  let track = match self.kind {
+    Hls => {
+      let fetch = match self.reader {
+        HlsReader(r) => r.fetch
+        DashReader(_) => raise DemuxError("subtitles: not an HLS session")
+      }
+      let url = choice.uri
+      let data = match fetch(url, 0L, -1L) {
+        Ok(v) => v
+        Err(e) => raise DemuxError("hls: subtitle rendition fetch failed: \{e}")
+      }
+      let playlist = match
+        av_hls_parse(streaming_playlist_text(data), base_uri=url) {
+        Ok(p) => p
+        Err(e) => raise DemuxError("hls: subtitle rendition playlist: \{e}")
+      }
+      if playlist.is_master {
+        raise DemuxError("hls: nested master playlists are not supported")
+      }
+      match
+        hls_subtitle_track_open(
+          playlist,
+          fetch,
+          url,
+          language=choice.language,
+          name=choice.name,
+          forced=choice.forced,
+        ) {
+        Ok(t) => t
+        Err(e) => raise DemuxError("hls: subtitle rendition: \{e}")
+      }
+    }
+    Dash => {
+      let (set, rep, fetch) = match self.dash_mpd {
+        None => raise DemuxError("dash: no MPD installed")
+        Some(m) => {
+          if choice.set < 0 || choice.set >= m.periods[self.dash_period].adaptation_sets.length() {
+            raise DemuxError("dash: subtitle set out of range")
+          }
+          let sets = m.periods[self.dash_period].adaptation_sets
+          let reps = sets[choice.set].representations
+          if choice.rep < 0 || choice.rep >= reps.length() {
+            raise DemuxError("dash: subtitle representation out of range")
+          }
+          let fetch = match self.reader {
+            DashReader(r) => r.fetch
+            HlsReader(_) => raise DemuxError("dash: not a DASH session")
+          }
+          (sets[choice.set], reps[choice.rep], fetch)
+        }
+      }
+      match dash_subtitle_track_open(set, rep, fetch, self.playlist_uri) {
+        Ok(t) => t
+        Err(e) => raise DemuxError("dash: subtitle track: \{e}")
+      }
+    }
+  }
+  self.subtitle_track = Some(track)
+  self.subtitle_active = Some(choice)
+}
+
+///|
 /// How many subtitle refreshes have failed. `reload`/`reload_dash` refresh the
 /// subtitle track best effort - a failing cue playlist must not stop live
 /// playback - and count the failures here instead, so the condition is
@@ -1346,19 +1492,25 @@ pub fn StreamingMedia::refresh_subtitles(
       if self.dash_period < 0 || self.dash_period >= mpd.periods.length() {
         return 0
       }
-      let sets = mpd.periods[self.dash_period].adaptation_sets
-      let (set_index, rep_index) = match dash_pick_subtitles(sets) {
+      // Follow the *selected* track, not the first one the Period offers: a
+      // caller that switched language must keep getting that language.
+      let active = match self.subtitle_active {
         None => return 0
-        Some(p) => p
+        Some(a) => a
+      }
+      let sets = mpd.periods[self.dash_period].adaptation_sets
+      if active.set < 0 || active.set >= sets.length() {
+        return 0
+      }
+      let reps = sets[active.set].representations
+      if active.rep < 0 || active.rep >= reps.length() {
+        return 0
       }
       let fetch = match self.reader {
         DashReader(r) => r.fetch
         HlsReader(_) => return 0
       }
-      match
-        dash_subtitle_track_append(
-          track, sets[set_index].representations[rep_index], fetch,
-        ) {
+      match dash_subtitle_track_append(track, reps[active.rep], fetch) {
         Ok(n) => n
         Err(e) => raise DemuxError("subtitles: \{e}")
       }

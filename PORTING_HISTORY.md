@@ -10141,3 +10141,95 @@ libavformat 整包 **675/675**；全量 Wasm **1690/1690**（本片 +6）；
 **未做**：多语言字幕/音轨选择 API（只取第一条 `text/vtt` / `DEFAULT=YES`）；
 DASH `@presentationTimeOffset` 参与时间轴归一；字幕 rendition 的换轨（选组
 之后不会随变体切换重新选）。
+
+## 2026-11-07 自适应流第十一片：多语言字幕轨选择（纯 MoonBit）
+
+前四片把字幕"从无到有"打通，但会话只认一条轨：HLS 取
+`DEFAULT=YES` 的 rendition、DASH 取第一个 `text/vtt` AdaptationSet，别的
+候选既看不见也换不了。这一片补上选择面——**列、选、切**三个动作。
+
+**候选从哪来**
+
+新类型 `SubtitleRendition`（`language`/`name`/`forced`/`is_default` +
+来源标识），两个构造器把两种容器收敛到同一形状：
+
+- `subtitle_rendition_hls(rendition)`：来源标识是 rendition 自己的播放列表
+  URI（HLS 里 `EXT-X-MEDIA` 的 URI 在组内唯一且稳定）。
+- `subtitle_rendition_dash(set, rep, set_index, rep_index)`：来源标识是
+  `(AdaptationSet, Representation)` 索引对。DASH 的 setId 是可选的，
+  真实 MPD 常省略，所以按 Period 内位置索引——与解复用器其余部分一致。
+
+`subtitle_rendition_same(a, b)` 按容器分别比较这两个标识，用于"重复选择是
+no-op"的判断。
+
+`StreamingMedia::streaming_subtitle_choices()` 统一产出候选：HLS 走
+`hls_renditions` 过滤 `type_ == "SUBTITLES" && group_id == subtitle_group
+&& uri != ""`（空 URI 是复用变体自身资源的内嵌项，不能单独打开）；DASH
+遍历当前 Period 的 AdaptationSet，用已有的 `dash_text_rep_index`（只认
+`text/vtt`）取每个文本集里的第一个可解析 Representation。TTML 之类不进
+列表——不是"列出来但选了会炸"，而是根本选不到。
+
+**默认值不等于第 0 条**
+
+`streaming_default_rendition_index` 复用音轨那套规则：`DEFAULT=YES` 优先，
+否则第一个带地址的成员。这个顺序与清册顺序无关——`EXT-X-MEDIA` 里
+French 可以排在 English 前面，而 English 是 `DEFAULT=YES`，于是
+`subtitle_selected()` 返回 1。测试就是按这个构造的：否则"默认优先"与
+"取第一个"两种情况给同一个答案，测不出区别。
+
+**换轨是重取而非合并**
+
+`select_subtitles(index)` 新建一条 `SubtitleTrack` 并跑首窗收集，成功才
+替换旧轨。这里有个反向要求：**重复选同一条必须 no-op**。换轨会重置
+`next_start_ms` 与 `last_sequence`，在 live 上等于把游标打回首窗、把已发布
+的 cue 再吃一遍。所以先 `subtitle_rendition_same` 比一遍，相同直接返回。
+
+失败（分片取不回、不是 WebVTT）保留旧轨并抛 `DemuxError`：会话不会停在
+"有轨但空"这种半状态——那是最坏的结果，因为播放器会以为字幕关了。
+下标越界也明确报错，不静默忽略。
+
+**`refresh_subtitles` 跟随所选**
+
+DASH 分支原本用 `dash_pick_subtitles` 重新找第一个文本集，换语言之后
+`refresh` 会跑回旧语言、新轨永远停在首窗。改成跟随 `subtitle_active`。
+这条缺陷是这轮新加的"live 刷新跟随所选语言"测试抓出来的——写实现时没想
+到，测试写完就红了。
+
+**验证**
+
+新增 8 项黑盒（`playback_streaming_subtitle_select_test.mbt`）：
+
+HLS 侧——两条字幕 rendition 列出 2 条、`DEFAULT=YES` 胜出于位置 0
+（`subtitle_selected() == 1`）；切到另一语言后 `subtitles()` 换成新轨的
+cue；重复选择按 URI 计数不再取字节；切换失败（新 rendition 的分片取不回）
+保留旧轨、`subtitle_selected()` 仍是 1；越界索引报错；无 `SUBTITLES` 组时
+列表空且 `subtitle_selected() == -1`。
+
+DASH 侧——两个文本集列出两条并能在它们之间切换；TTML 集不进列表；
+live 窗口刷新跟随当前所选语言（换到第二条后 `refresh_subtitles` 追加的是
+第二条的 cue）。
+
+libavformat 整包 **684/684**；全量 Wasm **1699/1699**（本片 +8 加此前
+`dash_time_to_ms` 白盒 1 项）；`check --target wasm/native --deny-warn`
+零警告；`moon info` 通过。
+公共 API 增量：`subtitle_renditions()`、`subtitle_selected()`、
+`select_subtitles(index)`。
+
+**坑**
+
+- MoonBit 没有 `Int::to_int32()` / `Int32::to_int()` 这类隐式转换。第一版
+  把 `SubtitleRendition.set/rep` 写成 `Int32`、`subtitle_selected()` 返
+  `Int32`，一路 `E4015: Type Int has no method to_int32`（4 处）。与其到处
+  补转换，不如统一用 `Int` 索引——DASH 的 set/rep 本来也只是数组下标。
+- `hls_subtitle_track_open` 原来接 `HlsRendition?`，一旦候选列表要跨容器
+  就必须解耦。改成 `language~`/`name~`/`forced~` 三个标签参数后，
+  `select_subtitles` 成了唯一调用点，两容器共用。
+- 先写完 `subtitle_rendition_*` 三个函数时会撞 `E0001 unused`（还没接
+  调用点）。接进 `streaming_subtitle_choices` / `subtitle_selected` 后
+  自然消失——`--deny-warn` 在这个仓库是分轮报的，别因为第一轮多就以为
+  改错了。
+
+**未做**：HLS 音轨侧的同款选择 API（`audio_track` 仍只取 `DEFAULT=YES`）；
+DASH `@presentationTimeOffset` 参与时间轴归一；字幕 rendition 随变体切换
+重选（ABR 换 variant 后组可能变，现在不重选）；`FORCED` 轨的自动叠加
+（forced 只在候选里作为属性可见，未与普通轨分层渲染）。
