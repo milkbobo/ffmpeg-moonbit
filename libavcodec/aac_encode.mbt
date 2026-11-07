@@ -103,6 +103,12 @@ pub struct AacEncoder {
   mut lambda : Double
   /// LCG state carried across frames by `search_for_pns` (`s->random_state`).
   mut pns_random_state : Int32
+  /// Frames encoded so far - the port's stand-in for the C flush gate
+  /// `s->afq.remaining_samples`: flush emits the tail frame only after at
+  /// least one frame, and only once until the next `encode_frame`.
+  mut frames_encoded : Int32
+  /// The one-packet-ahead tail frame has been emitted by `flush`.
+  mut flushed : Bool
   /// The per-channel block-type state (`lame_apply_block_type`'s carry) for
   /// the perceptual short path - FFmpeg runs one machine per channel and
   /// drops `common_window` when the two channels' window types (or
@@ -455,6 +461,8 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     last_frame_bits: 0,
     lambda: 120.0,
     pns_random_state: 0,
+    frames_encoded: 0,
+    flushed: false,
     last_max_sfb: Array::make(2, 0),
     lame_seq: Array::make(2, 0),
     sticky_sf,
@@ -2509,6 +2517,8 @@ pub fn AacEncoder::encode_frame(
       return Err("AAC encoder expects 1024 samples per channel")
     }
   }
+  self.frames_encoded += 1
+  self.flushed = false
   // A common-window CPE shares one window sequence, so the attack decision is
   // taken over both channels: either channel attacking starts a short run for
   // the pair.
@@ -2550,7 +2560,7 @@ pub fn AacEncoder::encode_frame(
     // (`aac_win_vectors` pins both).
     if self.config.perceptual && self.config.perceptual_short {
       let d = self.lame[ch].analyze(buf, 523)
-      lame_grp.push(d.grp_first)
+      lame_grp.push(d.group_byte)
       lame_uselong.push(d.uselong)
     }
     bufs.push(buf)
@@ -2593,6 +2603,34 @@ pub fn AacEncoder::encode_frame(
     }
     sequences.push(seq)
   }
+  let built = match self.encode_pipeline(bufs, sequences, lame_grp) {
+    Ok(b) => b
+    Err(e) => return Err(e)
+  }
+  // Feed the psy model the payload bits actually produced: FFmpeg's
+  // `last_frame_pb_count` is the AAC frame without the ADTS header.
+  self.last_frame_bits = (built.length() - av_aac_adts_header_size) * 8
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    self.prev_sequence[ch] = sequences[ch]
+    self.attack_pending[ch] = late[ch]
+  }
+  Ok(built)
+}
+
+///|
+/// The shared per-frame encode pipeline: window the overlap buffers and run
+/// the psy model / quantisation / bitstream write for the already-decided
+/// window sequences. `encode_frame` and `flush` both end here; `lame_grp`
+/// carries the grouping byte per channel on the perceptual-short path (it
+/// stays empty on every other path, where the pipeline then uses the
+/// all-in-one-group default).
+fn AacEncoder::encode_pipeline(
+  self : AacEncoder,
+  bufs : Array[Array[Double]],
+  sequences : Array[Int32],
+  lame_grp : Array[Int32],
+) -> Result[Bytes, String] {
+  let use_lame = self.config.perceptual && self.config.perceptual_short
   let coefs : Array[Array[Double]] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     coefs.push(self.frame_coefficients(bufs[ch], sequences[ch]))
@@ -2613,7 +2651,7 @@ pub fn AacEncoder::encode_frame(
       if use_lame && ch < lame_grp.length() {
         // The channel's own first-attack byte - FFmpeg stores it per
         // channel and the common-window check compares the expansions.
-        aac_window_grouping_expand(aac_window_grouping[lame_grp[ch]])
+        aac_window_grouping_expand(lame_grp[ch])
       } else {
         [8, 0, 0, 0, 0, 0, 0, 0]
       }
@@ -3221,12 +3259,57 @@ pub fn AacEncoder::encode_frame(
     Ok(v) => v
     Err(e) => return Err(e)
   }
-  // Feed the psy model the payload bits actually produced: FFmpeg's
-  // `last_frame_pb_count` is the AAC frame without the ADTS header.
-  self.last_frame_bits = (built.length() - av_aac_adts_header_size) * 8
+  Ok(built)
+}
+
+///|
+/// Flush the encoder: the final frame FFmpeg's `AV_CODEC_CAP_DELAY` path
+/// emits on `avcodec_send_frame(NULL)` - the last frame's samples MDCT'd
+/// against 1024 zeros with no lookahead (`la == NULL`). The window type
+/// repeats the previous sequence without any attack detection (the
+/// `la == NULL` branch of `psy_3gpp_window`); the LAME path still steps its
+/// block-type machine with `uselongblock = !(prev == EIGHT_SHORT)` and runs
+/// the grouping tail with all-zero attacks (`next_grouping` becomes
+/// `window_grouping[0]`, `prev_attack` clears). Everything else is frozen.
+/// Returns `None` before the first frame or on a repeated flush without an
+/// intervening `encode_frame` (the C gate: no samples remain).
+pub fn AacEncoder::flush(self : AacEncoder) -> Result[Bytes?, String] {
+  if self.frames_encoded == 0 || self.flushed {
+    return Ok(None)
+  }
+  let bufs : Array[Array[Double]] = []
+  let sequences : Array[Int32] = []
+  let lame_grp : Array[Int32] = []
+  let use_lame = self.config.perceptual && self.config.perceptual_short
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    let buf : Array[Double] = Array::make(2048, 0.0)
+    let hist = self.history[ch]
+    for i = 0; i < 1024; i = i + 1 {
+      buf[i] = hist[i]
+    }
+    bufs.push(buf)
+    let prev = self.prev_sequence[0]
+    if use_lame {
+      let uselong = prev != aac_eight_short
+      let (emit, next) = aac_lame_apply_block_type(self.lame_seq[ch], uselong)
+      self.lame_seq[ch] = next
+      sequences.push(emit)
+      // The short-frame grouping is the stored byte; the tail then stores
+      // window_grouping[0] and clears prev_attack (attacks[] all zero).
+      lame_grp.push(self.lame[ch].next_grouping)
+      self.lame[ch].next_grouping = aac_window_grouping[0]
+      self.lame[ch].prev_attack = 0
+    } else {
+      sequences.push(prev)
+    }
+  }
+  let built = match self.encode_pipeline(bufs, sequences, lame_grp) {
+    Ok(b) => b
+    Err(e) => return Err(e)
+  }
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     self.prev_sequence[ch] = sequences[ch]
-    self.attack_pending[ch] = late[ch]
   }
-  Ok(built)
+  self.flushed = true
+  Ok(Some(built))
 }

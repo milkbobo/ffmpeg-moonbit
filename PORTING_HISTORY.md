@@ -10413,3 +10413,87 @@ native -p ffref` 0 警告；`moon fmt` 通过；ffref 的 `pkg.generated.mbti`
 定义选流映射再比）；AAC/Opus 编码差分仍是 SNR 级而非逐字节；容器新版
 moon 的 `#derive(...)` 迁移全仓清账；镜像内的运行命令已写进
 `ffref/moon.pkg` 头注释（nine-xml tag）。
+
+## 2026-11-08 编码器逐字节 oracle：Opus 全收口 + AAC flush API（§346）
+
+> 承接 §345 的「AAC/Opus 编码差分仍是 SNR 级」缺口。核心动作：把**移植
+> 同源的确定性 C 参考编码器**编进 oracle（`ffmpeg-moonbit-ffref:nine-ref`
+> 镜像叠层），Opus 升到逐字节差分并一次全绿；AAC 逼出并补上 §304 遗留
+> 的 `la==NULL` flush API，逐字节差距定位为**装配级漂移**（新前沿立档）。
+
+**镜像叠层 nine-ref（`.scratch/ffref/Dockerfile.ref`）**
+
+在 nine-xml 上叠：configure 同旗标重生成 config.h（patched 对象要与
+档案同构）→ `opus_ref_patch.py`（`_ref/opus/build_ref.sh` 的最小确定性
+子集，全部锚点断言）生成 enc/enc_psy/pvq 三份 patched 源（log2f/expf/
+atan2f/cosf/sinf → `ref_det` 确定性孪生、两处 AV_TX_FLOAT_MDCT →
+`opus_ref_mdct_fwd` 直接 MDCT；rc/celt 的补丁是纯调试钩子，stock 照用）
+→ `cp libavcodec.a` 后 `ar d enc.o enc_psy.o pvq.o` + `ar r` 四个对象 →
+`/usr/local-ref/libavcodec_ref.a`。moon.pkg 的 cc-link-flags 用显式路径
+替换 `-lavcodec`——单档案无符号排序问题。校验：`ar t` 确认三个 stock
+对象已删、`nm` 确认 `ff_opus_encoder`（**是 R 不是 T——const AVCodec
+数据对象**，第一版 grep T 前缀假阴性）与 `opus_ref_mdct_fwd` 在档。
+解码器与 stock aac 编码器不受影响。AAC 侧**零 patched 对象**：
+`_ref/aacenc` 的 patched 源只是围绕 stock 计算加探针（patch.py 全是
+printf/globals），stock 标量 + BITEXACT 即同源参考。
+
+**Opus：逐字节一次全绿**
+
+`ffref_encode_ref_test.mbt`：同源确定性参考 vs `OpusEncoder::encode`
+（Float 平面、lookahead 期 None、`flush()` 收尾），10 帧 stereo 64000
+**13 包逐字节恒等**（数包与内容）。两侧输入对齐技巧：fixture 量化到
+s16 网格——端口直接吃 s16/32768.0，C 侧经 swr 的精确 s16→fltp 转换看
+到同一批浮点。§276 的「26/26 逐字节一致」从离线向量升级为**进程内在
+线差分**：任何新 fixture 不再需要重生成向量。
+
+**AAC：flush API 落地（§304 遗留收口）**
+
+oracle 揭出 C 的 `AV_CODEC_CAP_DELAY` 帧计：12 帧进 → **13 包出**
+（C 探针实测：前 11 包 pts −1024..9216 在 send 期、flush 出 2 包
+pts 10240/11264，末包编码 1024 个零样本；首包 pts=−1024 是 1024
+样本 priming）。端口窗口内容与 C **逐包 1:1 对应**（`encode_frame(i)`
+的 `[hist|pcm]` 窗口 = C 的 W_i），只缺 W_12 尾包。新增
+`AacEncoder::flush()`：`encode_pipeline` 从 `encode_frame` 抽出共享
+（`lame_grp` 从「grouping 表下标」改为直接携带字节）；la==NULL 语义
+——默认路径窗口类型=prev、状态冻结（psy_3gpp_window 的 la==NULL 分支）；
+LAME 路径 `uselongblock = !(prev==EIGHT_SHORT)` 后状态机照走、
+`next_grouping←window_grouping[0]`、`prev_attack←0`；`frames_encoded`/
+`flushed` 两个门（对应 C 的 afq remaining_samples gate）。wasm 冒烟
+测试：未编码 flush→None、编码后→Some、重复→None、新帧后再 armed。
+
+**AAC 逐字节：定位为装配级漂移（开放前沿，非本片范围）**
+
+默认路径逐字节必然不等——stock 每帧跑 twoloop coder，端口默认路径是
+简化量化器（§270-273 设计）。换感知路径（twoloop 对齐）后大幅逼近：
+stereo 首包 global_gain 逐字节相等（42==42）、pkt8 长度相等，但
+sticky 状态/后续帧仍漂移；mono 首帧即分歧。**子系统的位级正确性由
+`_ref/aacenc` 向量钉住（psy 98/98 带、twoloop sf 逐位），端到端装配
+从未被逐字节验证过**——这是本片立档的新前沿。根因基建已备：nine-ref
+的档案配方对 AAC 同样适用（把 `aacpsy_patched.o` 等探针对象 `ar r`
+进档案即得 PSYDBG 打点），下一会话可做两侧中间量 dump 差分。收口
+测试：感知路径 framing 差分（13==13 包计数 + 双流经真解码器等样本数）
++ 既有默认路径 SNR/互通测试不动。
+
+**验证**
+
+ffref native（nine-ref）**72/72**（65 旧 + 4 HLS/DASH + Opus 逐字节 +
+AAC framing×2）；wasm 全量在跑（flush 重构后回归）；`moon check
+--target native --deny-warn` 零警告；`moon info` 通过。
+
+**坑**
+
+- `ff_opus_encoder` 是 `const AVCodec` → nm 符号类型 R 不是 T，grep
+  前缀写 T 假阴性。
+- MoonBit 无 `?` 后缀传播（legacy）；Result 解包用
+  `match ... { Ok(b) => b, Err(e) => return Err(e) }`。
+- `OpusEncoder::encode` 平面是 **Float**（f32），AacEncoder::encode_frame
+  是 Double——两套平面辅助函数别混。
+- python 补丁脚本先删后建时注意「替换会产生第二份锚点」——先删原块再
+  建新块，否则 count 断言误报。
+- moon fmt 钩子会在 Edit 之间改文件（Int32 化/重排）——连续编辑用
+  python 脚本一次性做完全部替换再 fmt。
+
+**未做**：AAC 感知路径的端到端字节对齐（装配级漂移根因，基建已备）；
+`aac_encode_config_perceptual_short`（LAME 窗路径）的 flush 差分；
+HLS master/DASH 多 Representation oracle 对齐；容器新版 moon
+`#derive(...)` 全仓清账。

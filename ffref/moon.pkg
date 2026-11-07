@@ -4,13 +4,17 @@
 // inside the ffmpeg-moonbit-ffref docker image and differential-tests the
 // pure MoonBit demux / decode / encode ports against the real thing
 // in-process. moon's Windows native backend needs MSVC, so the suite runs
-// in the image. Use the nine-xml tag (Dockerfile.xml on top of Dockerfile)
-// - it rebuilds the static libs with --enable-libxml so the dash demuxer
-// is linked in:
+// in the image. Use the nine-ref tag (Dockerfile.ref on top of
+// Dockerfile.xml on top of Dockerfile) - nine-xml adds the dash demuxer
+// (--enable-libxml2), nine-ref additionally replaces the opus encoder in
+// a copied archive with the deterministic reference the port is byte-
+// aligned against (ref_det libm twins + direct MDCT; the stock aac encoder
+// run scalar + BITEXACT already IS the aac reference, since _ref/aacenc's
+// patches are probes around the stock computation only):
 //
 //   MSYS_NO_PATHCONV=1 docker run --rm --entrypoint /bin/sh \
 //     -v "D:/project/FFmpeg-n9.0.2/moonbit:/work" -w /work \
-//     ffmpeg-moonbit-ffref:nine-xml -c \
+//     ffmpeg-moonbit-ffref:nine-ref -c \
 //     "/root/.moon/bin/moon update >/dev/null 2>&1; \
 //      /root/.moon/bin/moon test --target native -p ffref --target-dir /tmp/mbuild"
 //
@@ -40,11 +44,12 @@ options(
     "ffref.mbt": [ "native" ],
     "ffref_test.mbt": [ "native" ],
     "ffref_streaming_test.mbt": [ "native" ],
+    "ffref_encode_ref_test.mbt": [ "native" ],
   },
   link: {
     "native": {
       "cc-flags": "-I/usr/local/include",
-      "cc-link-flags": "-L/usr/local/lib -lavformat -lavcodec -lswresample -lavutil -ldav1d -lshine -lxml2 -llzma -lz -lm",
+      "cc-link-flags": "-L/usr/local/lib -lavformat /usr/local-ref/libavcodec_ref.a -lswresample -lavutil -ldav1d -lshine -lxml2 -llzma -lz -lm",
     },
   },
 )

@@ -380,6 +380,22 @@
   raw 还原后镜像才编译过。oracle 69/69；wasm 1708/1708。坑：sed BRE
   `\+`=量词；docker build 接管道吞退出码；ADD tarball 网络不稳改 COPY
   本地树；:nine 残留空 /ffmpeg 目录会把 cp -r 拷成子目录。
+  ⑳t §346 编码器逐字节 oracle：镜像叠层 .scratch/ffref/Dockerfile.ref →
+  **ffmpeg-moonbit-ffref:nine-ref**（/usr/local-ref/libavcodec_ref.a =
+  stock 档案 ar d enc/enc_psy/pvq + ar r ref_det 确定性孪生版 patched
+  对象；nm 校验 ff_opus_encoder 是 R 不是 T）。Opus 逐字节一次全绿
+  （10 帧 13 包恒等；fixture 量化到 s16 网格使两侧浮点输入恒等）。
+  oracle 逼出 C 的 AV_CODEC_CAP_DELAY 帧计（12 帧进 13 包出、flush 出
+  2 包末包编码 1024 零样本）→ **AacEncoder::flush() 落地（§304 遗留
+  收口）**：encode_pipeline 抽出共享、lame_grp 改携字节、la==NULL 分支
+  （默认 seq=prev 冻结；LAME uselong=!(prev==short) 机器照走）。
+  **AAC 逐字节=装配级漂移开放前沿**：stock 每帧跑 twoloop、端口默认
+  路径是简化量化器（必然不等）；感知路径大幅逼近（首包 global_gain
+  相等）但 sticky 漂移——子系统向量全位级、端到端装配从未字节验证，
+  探针档案配方对 AAC 同样适用留待根因。收口：感知 framing 差分
+  （13==13 + 双流等样本数）。oracle 72/72；坑：nm R/T、无 `?` 传播、
+  Opus 平面是 Float/ADC 是 Double、python 补丁先删后建顺序、fmt 钩子
+  编辑间改文件。
   ⑳o §325 libswresample 第一片：
   `libswresample/` 新包——同采样率转换（`swr_flt_to_s16` =
   audioconvert.c 的 av_clip_int16(lrintf) **round-half-to-even** 逐分支
