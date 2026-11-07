@@ -167,7 +167,7 @@ test "streaming: audio-only playlist is refused by decode_video" {
     let samples = Array::makei(1024, i => 0.2 * (i % 17 - 8).to_double() / 8.0)
     mux.write_audio(
       frame.to_int64() * 1920L,
-      encoder.encode_frame([samples]).unwrap(),
+      encoder.encode_frame([samples]).unwrap().unwrap(),
     )
   }
   let ts = mux.finish()

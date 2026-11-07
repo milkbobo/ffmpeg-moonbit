@@ -1236,7 +1236,7 @@ test "ffref: AAC encoder streams decode in real FFmpeg at native-level SNR" {
       }
       planes.push(plane)
     }
-    adts.push(enc.encode_frame(planes).unwrap())
+    adts.push(enc.encode_frame(planes).unwrap().unwrap())
   }
   let dec_ours = @ffref.ffref_decode_audio(ffref_concat(adts))
   assert_eq(dec_ours.channels, 2, msg="aac-enc: channels")

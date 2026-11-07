@@ -84,7 +84,7 @@ test "fetch: adapter feeds a real HLS StreamingMedia session" {
     })
     mux.write_audio(
       frame.to_int64() * 1920L,
-      encoder.encode_frame([samples]).unwrap(),
+      encoder.encode_frame([samples]).unwrap().unwrap(),
     )
   }
   let ts = mux.finish()

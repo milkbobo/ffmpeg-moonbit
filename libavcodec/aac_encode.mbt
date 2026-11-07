@@ -1,4 +1,100 @@
 ///|
+/// Flush the encoder: FFmpeg's `AV_CODEC_CAP_DELAY` drain, which always
+/// emits two packets once at least one frame is buffered - the pending
+/// window (its type decided with `la == NULL`) and the zero-padded tail
+/// `[hist | zeros]` (the type machine steps once more, also `la == NULL`).
+/// Both LAME steps run `uselongblock = !(prev == EIGHT_SHORT)` and the
+/// all-zero-attacks tail (`next_grouping` becomes `window_grouping[0]`,
+/// `prev_attack` clears). Returns an empty array before the first frame or
+/// on a repeated flush without an intervening `encode_frame` (the C gate:
+/// no samples remain).
+pub fn AacEncoder::flush(self : AacEncoder) -> Result[Array[Bytes], String] {
+  if self.frames_encoded == 0 || self.flushed {
+    return Ok([])
+  }
+  let out : Array[Bytes] = []
+  if self.config.perceptual {
+    // Packet A: the pending window.
+    let sequences_a : Array[Int32] = []
+    let lame_grp_a : Array[Int32] = []
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let prev = self.prev_sequence[0]
+      let uselong = prev != aac_eight_short
+      let (emit, next) = aac_lame_apply_block_type(self.lame_seq[ch], uselong)
+      self.lame_seq[ch] = next
+      sequences_a.push(emit)
+      // The short-frame grouping is the stored byte; the tail then stores
+      // window_grouping[0] and clears prev_attack (attacks[] all zero).
+      lame_grp_a.push(self.lame[ch].next_grouping)
+      self.lame[ch].next_grouping = aac_window_grouping[0]
+      self.lame[ch].prev_attack = 0
+    }
+    let built_a = match
+      self.encode_pipeline(self.pending_bufs, sequences_a, lame_grp_a) {
+      Ok(b) => b
+      Err(e) => return Err(e)
+    }
+    self.last_frame_bits = (built_a.length() - av_aac_adts_header_size) * 8
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      self.prev_sequence[ch] = sequences_a[ch]
+    }
+    out.push(built_a)
+    // Packet B: the zero-padded tail. Its grouping is window_grouping[0]
+    // (the tail A ran already stored it), which the pipeline's empty
+    // lame_grp default expands to.
+    let bufs_b : Array[Array[Double]] = []
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let buf : Array[Double] = Array::make(2048, 0.0)
+      let hist = self.history[ch]
+      for i = 0; i < 1024; i = i + 1 {
+        buf[i] = hist[i]
+      }
+      bufs_b.push(buf)
+    }
+    let sequences_b : Array[Int32] = []
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let prev = self.prev_sequence[0]
+      let uselong = prev != aac_eight_short
+      let (emit, next) = aac_lame_apply_block_type(self.lame_seq[ch], uselong)
+      self.lame_seq[ch] = next
+      sequences_b.push(emit)
+    }
+    let built_b = match self.encode_pipeline(bufs_b, sequences_b, []) {
+      Ok(b) => b
+      Err(e) => return Err(e)
+    }
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      self.prev_sequence[ch] = sequences_b[ch]
+    }
+    out.push(built_b)
+    self.flushed = true
+    return Ok(out)
+  }
+  // The simplified path keeps its single synchronous tail.
+  let bufs : Array[Array[Double]] = []
+  let sequences : Array[Int32] = []
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    let buf : Array[Double] = Array::make(2048, 0.0)
+    let hist = self.history[ch]
+    for i = 0; i < 1024; i = i + 1 {
+      buf[i] = hist[i]
+    }
+    bufs.push(buf)
+    sequences.push(self.prev_sequence[0])
+  }
+  let built = match self.encode_pipeline(bufs, sequences, []) {
+    Ok(b) => b
+    Err(e) => return Err(e)
+  }
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    self.prev_sequence[ch] = sequences[ch]
+  }
+  self.flushed = true
+  out.push(built)
+  Ok(out)
+}
+
+///|
 /// MoonBit port of a minimal AAC-LC encoder, shipped as ADTS frames.
 ///
 /// Scope: AAC-LC object type 2, sine windows, no PNS / prediction, one SCE for
@@ -109,6 +205,11 @@ pub struct AacEncoder {
   mut frames_encoded : Int32
   /// The one-packet-ahead tail frame has been emitted by `flush`.
   mut flushed : Bool
+  /// The pending window's MDCT input buffer (per channel, 2048 samples):
+  /// the perceptual path emits each window one frame late, so the buffer
+  /// built by this call waits here while the next call's lookahead decides
+  /// its window type.
+  mut pending_bufs : Array[Array[Double]]
   /// The per-channel block-type state (`lame_apply_block_type`'s carry) for
   /// the perceptual short path - FFmpeg runs one machine per channel and
   /// drops `common_window` when the two channels' window types (or
@@ -463,6 +564,7 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     pns_random_state: 0,
     frames_encoded: 0,
     flushed: false,
+    pending_bufs: [],
     last_max_sfb: Array::make(2, 0),
     lame_seq: Array::make(2, 0),
     sticky_sf,
@@ -2508,7 +2610,7 @@ fn AacEncoder::assemble_frame(
 pub fn AacEncoder::encode_frame(
   self : AacEncoder,
   pcm : Array[Array[Double]],
-) -> Result[Bytes, String] {
+) -> Result[Bytes?, String] {
   if pcm.length() != self.config.channels {
     return Err("AAC encoder input channel count mismatch")
   }
@@ -2519,9 +2621,64 @@ pub fn AacEncoder::encode_frame(
   }
   self.frames_encoded += 1
   self.flushed = false
-  // A common-window CPE shares one window sequence, so the attack decision is
-  // taken over both channels: either channel attacking starts a short run for
-  // the pair.
+  let bufs : Array[Array[Double]] = []
+  for ch = 0; ch < self.config.channels; ch = ch + 1 {
+    let buf : Array[Double] = Array::make(2048, 0.0)
+    let hist = self.history[ch]
+    for i = 0; i < 1024; i = i + 1 {
+      buf[i] = hist[i]
+      buf[1024 + i] = pcm[ch][i]
+      hist[i] = pcm[ch][i]
+    }
+    bufs.push(buf)
+  }
+  if self.config.perceptual {
+    // The stock framing (verified against the oracle's packet pacing): the
+    // window [f(k-2)|f(k-1)] is emitted one frame after its samples arrive,
+    // because its window type is decided by `psy_lame_window`'s lookahead -
+    // la = f(k-1)tail + f(k)head, which only the NEXT frame's buffer
+    // provides. N frames therefore stream N-1 packets and the flush emits
+    // the pending window plus the zero-padded tail (two packets).
+    if self.frames_encoded == 1 {
+      // The C's first call runs nothing (`if (!avctx->frame_num) return 0`):
+      // no analyser cadence, no packet - just stash the window buffer.
+      self.pending_bufs = bufs
+      return Ok(None)
+    }
+    // Decide the pending window's type from this frame's lookahead region.
+    let lame_grp : Array[Int32] = []
+    let lame_uselong : Array[Bool] = []
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let d = self.lame[ch].analyze(bufs[ch], 523)
+      lame_grp.push(d.group_byte)
+      lame_uselong.push(d.uselong)
+    }
+    let sequences : Array[Int32] = []
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      let (emit, next) = aac_lame_apply_block_type(
+        self.lame_seq[ch],
+        lame_uselong[ch],
+      )
+      self.lame_seq[ch] = next
+      sequences.push(emit)
+    }
+    let built = match
+      self.encode_pipeline(self.pending_bufs, sequences, lame_grp) {
+      Ok(b) => b
+      Err(e) => return Err(e)
+    }
+    // Feed the psy model the payload bits actually produced: FFmpeg's
+    // `last_frame_pb_count` is the AAC frame without the ADTS header.
+    self.last_frame_bits = (built.length() - av_aac_adts_header_size) * 8
+    for ch = 0; ch < self.config.channels; ch = ch + 1 {
+      self.prev_sequence[ch] = sequences[ch]
+    }
+    self.pending_bufs = bufs
+    return Ok(Some(built))
+  }
+  // The simplified path is this port's own construction and stays
+  // synchronous: the early/late attack machine decides the window from the
+  // current frame alone, so every call emits its own packet.
   let mut attack = false
   let late : Array[Bool] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
@@ -2537,58 +2694,9 @@ pub fn AacEncoder::encode_frame(
     }
   }
   let prev = self.prev_sequence[0]
-  // First-attack index, long/short verdict and emitted window type of the
-  // LAME analyser per channel, when it runs. The synchronous rewrite
-  // analyses this frame's own MDCT input buffer (`buf[523..1568)` is exactly
-  // the region FFmpeg's one-packet-ahead lookahead covered), so the
-  // grouping and the block type are decided for the frame being encoded -
-  // see `AacLameWindow`.
-  let lame_grp : Array[Int32] = []
-  let lame_uselong : Array[Bool] = []
-  let bufs : Array[Array[Double]] = []
-  for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    let buf : Array[Double] = Array::make(2048, 0.0)
-    let hist = self.history[ch]
-    for i = 0; i < 1024; i = i + 1 {
-      buf[i] = hist[i]
-      buf[1024 + i] = pcm[ch][i]
-      hist[i] = pcm[ch][i]
-    }
-    // Every frame while the short-window perceptual path is enabled - the
-    // analyser's peak history must stay on FFmpeg's per-frame cadence for the
-    // grouping and block-type chains to match the reference
-    // (`aac_win_vectors` pins both).
-    if self.config.perceptual && self.config.perceptual_short {
-      let d = self.lame[ch].analyze(buf, 523)
-      lame_grp.push(d.group_byte)
-      lame_uselong.push(d.uselong)
-    }
-    bufs.push(buf)
-  }
-  // The window sequence, per channel. On the perceptual short path it is
-  // FFmpeg's own block-type machine (§307/§309): one machine per channel -
-  // emit the stored state, patched on the short path, and carry the
-  // computed block type - which among other things keeps a short run alive
-  // for one extra quiet frame before LONG_STOP, and an attack out of
-  // LONG_STOP goes straight to short blocks. Every other path keeps the
-  // early/late+pending machine shared by the pair: LONG_START must be
-  // followed by short blocks, short blocks return through LONG_STOP, a late
-  // attack carries over one frame.
-  let use_lame = self.config.perceptual && self.config.perceptual_short
   let sequences : Array[Int32] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    let seq = if use_lame {
-      let (emit, next) = aac_lame_apply_block_type(
-        self.lame_seq[ch],
-        if ch < lame_uselong.length() {
-          lame_uselong[ch]
-        } else {
-          true
-        },
-      )
-      self.lame_seq[ch] = next
-      emit
-    } else if prev == aac_eight_short {
+    let seq = if prev == aac_eight_short {
       if attack {
         aac_eight_short
       } else {
@@ -2603,18 +2711,16 @@ pub fn AacEncoder::encode_frame(
     }
     sequences.push(seq)
   }
-  let built = match self.encode_pipeline(bufs, sequences, lame_grp) {
+  let built = match self.encode_pipeline(bufs, sequences, []) {
     Ok(b) => b
     Err(e) => return Err(e)
   }
-  // Feed the psy model the payload bits actually produced: FFmpeg's
-  // `last_frame_pb_count` is the AAC frame without the ADTS header.
   self.last_frame_bits = (built.length() - av_aac_adts_header_size) * 8
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     self.prev_sequence[ch] = sequences[ch]
     self.attack_pending[ch] = late[ch]
   }
-  Ok(built)
+  Ok(Some(built))
 }
 
 ///|
@@ -3264,52 +3370,3 @@ fn AacEncoder::encode_pipeline(
 
 ///|
 /// Flush the encoder: the final frame FFmpeg's `AV_CODEC_CAP_DELAY` path
-/// emits on `avcodec_send_frame(NULL)` - the last frame's samples MDCT'd
-/// against 1024 zeros with no lookahead (`la == NULL`). The window type
-/// repeats the previous sequence without any attack detection (the
-/// `la == NULL` branch of `psy_3gpp_window`); the LAME path still steps its
-/// block-type machine with `uselongblock = !(prev == EIGHT_SHORT)` and runs
-/// the grouping tail with all-zero attacks (`next_grouping` becomes
-/// `window_grouping[0]`, `prev_attack` clears). Everything else is frozen.
-/// Returns `None` before the first frame or on a repeated flush without an
-/// intervening `encode_frame` (the C gate: no samples remain).
-pub fn AacEncoder::flush(self : AacEncoder) -> Result[Bytes?, String] {
-  if self.frames_encoded == 0 || self.flushed {
-    return Ok(None)
-  }
-  let bufs : Array[Array[Double]] = []
-  let sequences : Array[Int32] = []
-  let lame_grp : Array[Int32] = []
-  let use_lame = self.config.perceptual && self.config.perceptual_short
-  for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    let buf : Array[Double] = Array::make(2048, 0.0)
-    let hist = self.history[ch]
-    for i = 0; i < 1024; i = i + 1 {
-      buf[i] = hist[i]
-    }
-    bufs.push(buf)
-    let prev = self.prev_sequence[0]
-    if use_lame {
-      let uselong = prev != aac_eight_short
-      let (emit, next) = aac_lame_apply_block_type(self.lame_seq[ch], uselong)
-      self.lame_seq[ch] = next
-      sequences.push(emit)
-      // The short-frame grouping is the stored byte; the tail then stores
-      // window_grouping[0] and clears prev_attack (attacks[] all zero).
-      lame_grp.push(self.lame[ch].next_grouping)
-      self.lame[ch].next_grouping = aac_window_grouping[0]
-      self.lame[ch].prev_attack = 0
-    } else {
-      sequences.push(prev)
-    }
-  }
-  let built = match self.encode_pipeline(bufs, sequences, lame_grp) {
-    Ok(b) => b
-    Err(e) => return Err(e)
-  }
-  for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    self.prev_sequence[ch] = sequences[ch]
-  }
-  self.flushed = true
-  Ok(Some(built))
-}

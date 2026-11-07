@@ -155,19 +155,21 @@ test "ffref: AAC perceptual encoder frames match the oracle's framing and decode
   ).unwrap()
   let adts_frames : Array[Bytes] = []
   for i = 0; i < frames; i = i + 1 {
-    adts_frames.push(
-      enc.encode_frame(ffref_enc_planes(arr, i, 1024, channels)).unwrap(),
-    )
+    // The perceptual path emits one frame late (the first call stashes);
+    // the drain catches up with two packets.
+    match enc.encode_frame(ffref_enc_planes(arr, i, 1024, channels)).unwrap() {
+      Some(adts) => adts_frames.push(adts)
+      None => ()
+    }
   }
-  // The AV_CODEC_CAP_DELAY tail: the last frame MDCT'd against 1024 zeros
-  // with no lookahead.
-  match enc.flush().unwrap() {
-    Some(adts) => adts_frames.push(adts)
-    None => fail("aac: flush emitted no tail packet")
+  // The AV_CODEC_CAP_DELAY drain: the pending window (la == NULL) plus the
+  // zero-padded tail.
+  for adts in enc.flush().unwrap() {
+    adts_frames.push(adts)
   }
   match enc.flush().unwrap() {
-    Some(_) => fail("aac: repeated flush emitted a packet")
-    None => ()
+    [] => ()
+    _ => fail("aac: repeated flush emitted a packet")
   }
   let native = @ffref.ffref_encode_audio(
     pcm,
@@ -239,13 +241,13 @@ test "ffref: AAC mono perceptual encoder frames match the oracle's framing" {
   ).unwrap()
   let adts_frames : Array[Bytes] = []
   for i = 0; i < frames; i = i + 1 {
-    adts_frames.push(
-      enc.encode_frame(ffref_enc_planes(arr, i, 1024, channels)).unwrap(),
-    )
+    match enc.encode_frame(ffref_enc_planes(arr, i, 1024, channels)).unwrap() {
+      Some(adts) => adts_frames.push(adts)
+      None => ()
+    }
   }
-  match enc.flush().unwrap() {
-    Some(adts) => adts_frames.push(adts)
-    None => fail("aac-mono: flush emitted no tail packet")
+  for adts in enc.flush().unwrap() {
+    adts_frames.push(adts)
   }
   let native = @ffref.ffref_encode_audio(
     pcm,

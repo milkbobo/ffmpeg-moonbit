@@ -363,6 +363,19 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳w §349 感知路径发射时序重构：**帧 i 用 buf_i[523..1568) 分析决定
+  buf_{i-1} 的窗型并发射之**（C 的 call k 同 call 内 la 决策+MDCT 发射，
+  la=缓冲里的下一帧头；N 帧→N-1 流内包+flush 双包=N+1 与旧总数同）；
+  flush 恒两包（pending 窗 la=NULL + [hist|z]，C 探针 1/2/3/12 帧全实证，
+  remaining 归零不拦第二包）。API：encode_frame→Result[Bytes?,String]、
+  flush→Result[Array[Bytes],String]（对齐 OpusEncoder）；新状态
+  pending_bufs；LAME analyze 节奏放开到 perceptual、use_psy=perceptual
+  （is8 一律 psy/twoloop）；简化路径保持同步。调用点 10 文件 15 站点
+  （简化站点双 .unwrap()；Option::unwrap 存在，panic on None）。5 基线
+  朝 stock 重校：drain 尾包 la=NULL 冻结窗型（短 run 溢 eight-short 到
+  半零窗）→ 尾包门 25/18 dB、stop>=1 放开；NMR 64k 感知臂反超原生
+  2.89 dB → guard 改 -2/+6。**质量：感知 NMR 128k 15.33 / 64k 21.45，
+  双码率首次双超原生（14.41/18.56）**。wasm 1709/1709；ffref 72/72。
   ⑳v §348 窗口模型真相（纯发现片、代码零变更）：**stock 唯一窗口模型 =
   psy_lame_window**（aacpsy.c:1022；psy_3gpp_window 是 av_unused 死代码，
   其 iir_filter(int in) 收 float 实参隐式截断归零也旁证）——§347 路线图

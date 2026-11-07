@@ -13,7 +13,7 @@ test "HLS shared TS resource decodes every AAC access unit" {
     let samples = Array::makei(1024, i => {
       0.2 * @math.sin((frame * 1024 + i).to_double() * 0.0575958653158129)
     })
-    let packet = encoder.encode_frame([samples]).unwrap()
+    let packet = encoder.encode_frame([samples]).unwrap().unwrap()
     let decoded = direct.decode_frame(packet[7:].to_owned()).unwrap()
     for sample in decoded[0].samples {
       expected.push(sample)

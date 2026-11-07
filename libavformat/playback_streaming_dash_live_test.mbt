@@ -16,7 +16,7 @@ fn dash_live_fixture(frames : Int32) -> (Bytes, (Int32) -> Bytes) {
     let samples = Array::makei(1024, i => {
       0.2 * @math.sin((frame * 1024 + i).to_double() * 0.0575958653158129)
     })
-    units.push(encoder.encode_frame([samples]).unwrap())
+    units.push(encoder.encode_frame([samples]).unwrap().unwrap())
   }
   let init = @libavformat.fmp4_aac_init_segment(48000, 1).unwrap()
   let build = fn(from : Int32) -> Bytes {

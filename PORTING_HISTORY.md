@@ -10649,3 +10649,58 @@ flush 三处门放开）后 ffref 72/72 仍绿、wasm 11 红——全是「plain
 + grouping 边际分歧根因；②11 个感知测试按 stock 语义重设计；③ABR
 rate control 落地（§347③）；④域统一 + 向量重生成（§347②）；⑤HLS
 master/DASH 多 Representation 对齐；⑥`#derive(...)` 清账。
+
+## 2026-11-08 感知路径发射时序重构：包缓冲一帧 + flush 双包（§349）
+
+> 承接 §348 的修法。感知路径对齐 stock 的包节奏，LAME 机成为感知路径的
+> 唯一窗口机，`perceptual_short` 轴退役为纯文档语义。
+
+**发射时序（oracle 包节奏逐帧校准）**
+
+C 的 call k 在同一调用里完成「la 决策 + MDCT 发射」：la = 缓冲里的
+f(k-1)尾 ∪ f(k)头（**下一帧的样本已在缓冲**），MDCT 窗 = [f(k-2)|f(k-1)]
+（上一帧的 buf）。映射到端口：**帧 i 用 buf_i[523..1568) 分析，决定
+buf_{i-1} 的窗型并发射之**；帧 1 仅 stash（C 的 call 1 = frame_num 门
+全跳）。N 帧 → N-1 个流内包 + flush 双包 = N+1（与旧同步时序的包总数
+相同，内容后移一窗）。flush 形状经 C 探针全帧数实证（1/2/3/12 帧）：
+恒为两包——pending 窗（la=NULL 型）+ [hist|zeros] 尾（机器再走一步，
+亦 la=NULL）；`remaining` 归零也不拦第二包（afq 记账与门的位置使然）。
+
+**实现**
+
+`encode_frame → Result[Bytes?, String]`（对齐 `OpusEncoder::encode` 先
+例）；新状态 `pending_bufs`（每通道 2048 样本缓冲）；感知路径：帧 1
+stash 返 None、帧 ≥2 analyze+发射 pending、flush 走双包；简化路径保持
+同步每帧一发（自研域内自洽），flush 单包。`flush → Result[Array[Bytes],
+String]`（对齐 OpusEncoder::flush）。LAME analyze 的节奏从
+`perceptual_short` 放开到 `perceptual`（§304 的「每帧 cadence」注释随之
+ generalized）；`use_psy = perceptual`（is8 帧一律走 psy/twoloop——stock
+无短窗量化开关）。
+
+**调用点适配**：10 文件 15 站点——简化配置的站点加第二层 `.unwrap()`
+（Option::unwrap，None 域外）；感知 framing 测试改 match Some/None +
+`for adts in flush()`；`aac_flush_test` 重写（perceptual 配置：首帧
+None、drain 双包、重_flush 空、新帧重装填）。
+
+**测试基线（5 处，全部朝 stock 语义重校）**
+
+- `aac_lc_spectral_syntax` / `aac_lc_stereo_syntax`：末包 = drain 尾包
+  （la=NULL 冻结窗型，短窗 run 会把 eight-short 型溢到半零窗上）——尾包
+  门放宽（25 / 18 dB），真帧门不动。
+- `aac_lc_transient_windows` / `aac_lc_perceptual_transient`：`stop >= 1`
+  放开——drain 冻结窗型后短 run 可以无 LONG_STOP 收尾。
+- `aac_ffmpeg_ref_test` NMR 64k guard：延迟发射 + 常开 LAME 机让感知臂
+  在 64k **反超原生 2.89 dB**（15.3→21.5 vs 14.4→18.6 的原生臂）——对称
+  ±2 窗改为回归下限 -2 / 改善上限 +6。
+
+**质量变化**：感知路径 NMR 128k 15.33（原生 14.41）、64k 21.45（原生
+18.56）——端口感知臂首次在两个码率都领先原生编码器。
+
+**验证**：wasm **1709/1709**；ffref native **72/72**（nine-ref，framing
+计数 13==13 / 9==9 全对）；`--deny-warn` 零警告。
+
+**未做（下片）**：①grouping 边际分歧根因（§348 剩点，需 attack_
+intensity 逐子块 dump）；②ABR rate control 落地 + 自基准重校
+（§347③，ABR 移植已验证）；③域统一 + `_ref/aacenc` 向量重生成
+（§347②——字节对齐终局）；④HLS master/DASH 多 Representation 对齐；
+⑤`#derive(...)` 清账。

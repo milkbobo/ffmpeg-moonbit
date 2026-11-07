@@ -272,6 +272,7 @@ test "playback: MKV/AAC end to end matches the direct path" {
     let adts = enc
       .encode_frame([pcm[f * 1024:f * 1024 + 1024].to_owned()])
       .unwrap()
+      .unwrap()
     let payload = adts
       .clamped_view(
         start=@libavcodec.av_aac_adts_header_size,
@@ -452,6 +453,7 @@ test "playback: durations on all four adapters" {
   for f = 0; f < 3; f = f + 1 {
     let adts = enc
       .encode_frame([pcm[f * 1024:f * 1024 + 1024].to_owned()])
+      .unwrap()
       .unwrap()
     mux
     .write_packet(

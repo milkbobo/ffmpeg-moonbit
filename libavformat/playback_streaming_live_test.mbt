@@ -38,7 +38,7 @@ fn live_segments(count : Int32) -> Array[Bytes] {
       0.2 * @math.sin((frame * 1024 + i).to_double() * 0.0575958653158129)
     })
     let mux = @libavformat.ts_muxer_new(video=false)
-    mux.write_audio(0L, encoder.encode_frame([samples]).unwrap())
+    mux.write_audio(0L, encoder.encode_frame([samples]).unwrap().unwrap())
     out.push(mux.finish())
   }
   out
