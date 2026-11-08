@@ -11089,3 +11089,28 @@ bits 的 chan_bits 与同帧 qnz=470 的 Huffman 下界矛盾即铁证）。
 而非单点 bug。
 
 验证状态：打点已清、向量 28/28、工作树干净。
+
+## 2026-11-08 mono 对账：写位膨胀跨分支实锤 + λ 崩机制（§362）
+
+> §361 后的干净对账（§358 旧 log 的 mono 段——单测试段无污染；
+  端口 23 行 RC358 中 rate=1365 段 = mono 9 帧）。
+
+**mono 首帧 90% 位差**：端口 `frame_bits=2800`（C 由 ratio=0.9756
+反推 ≈1478）——比 stereo 首帧差（4008 vs 2761，45%）更大。
+
+**λ 崩机制（mono λ 30% 漂移的起点）**：端口 mono 首帧
+`ratio=0.9`（sqrt√(1365/2800)=0.835 钳到下界）→ `ratio > 0.9` 不
+成立 → **its=0 不 break** → λ 连压（108→79→62，few/many 随 alloc·λ
+收缩再出窗）——λ 是跨帧持续量，从首帧永久岔开（尾帧 65 vs C 93）。
+C 同帧 1478 bits 在窗内 → ratio=0.976 → break。第一因仍是帧位差，
+λ 崩是放大器。
+
+**写位膨胀跨分支实锤**：stereo（CPE）差 1564 bits、mono（SCE）差
+~1700 bits——共同膨胀在 `write_channel_body` 的写位量（sections 切分
+/scalefactor 差分码/escape），与 §361「sf 链值干净」不矛盾。
+
+**下片**：write_channel_body 四段位计数（sections/scalefactors/
+pulse+tns/spectral，带帧号）——预期某段千 bits 级膨胀，读对应写位
+器与 C 逐行对（C 侧 encode_individual_channel 可同步加段打点）。
+
+验证状态：零代码改动（纯旧 log 分析），树干净。
