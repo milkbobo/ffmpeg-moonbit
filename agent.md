@@ -166,6 +166,21 @@
   ⑤ **C 的 `float` 字面量必须按 f32 值存**：`0.0035f` 的真值是
   `0.0035000001080334187`，把十进制原值当 f64 喂进 `aac_two_mul` 会差 1 ulp——
   §295 的 `dist2` 差 2 ulp 就是这么来的（拆到 `bmax` 那层才看见）。
+  §366 之后 twoloop/立体声工具全部运行在 **+4 sf 域**（`aac_two_sf_domain_shift`）：
+  port 的系数是 C 的 2×、psy 阈值 4×，每带 sf = C+4，写码流时 `−4`（channel_data_psy）。
+  三条硬规则：① 搜索里一切**绝对 sf 常量**（截断带标记 219、one_pos 140、
+  max_pos 255、qstep 复活线 217、coef2minsf 常量）都要随域 +4（coef2minsf 的 pow34
+  输入只自带 +3，常量要补 +1）；sf **差值**与量化器**表索引公式**（q_idx）不动，
+  网格自动吸收。② 夹具对拍用域适配：`aac_psy_bands_encoder_domain`（energy/threshold
+  ×4，**spread 无量纲不缩放**——它是 `active_lines·2/band_size` 占比，缩了会让
+  PNS 的 `min(spread²,1)` 翻转）+ 谱 ×2 + 期望 sf+4、maxval ×2^{3/4}；浮点成本
+  比较用 1e-6 相对容差（pow34 链 ulp 噪声），整数决策位精确。③ IS 的
+  `dist_spec_err` 在 pow34 空间（×2^{3/2}）而 λ/thr 归一 ÷4，**必须乘 f32(√2)**
+  补偿，否则 shape-error 项欠权 2^{−1/2}、IS 判据整体偏开——这种跨域权重 bug
+  在 1× 域向量上不可见。写位与搜索之间还有 `encode_band_info` 的
+  `codebook_trellis_rate`（`aac_enc_trellis.mbt`，channel_data_psy 前每通道跑
+  (cb×run) Viterbi 重选 cb/零带，省 ~20% 位；MS 时 cb 是副本要显式回写
+  sticky_cb）。对拍口径：SEG-A 立体声 13 帧总位 +1.42%（§363 时 +47%）。
   **§296 已把有逐位向量把关的那批清掉**（`C_QUANT`/`ROUND_STANDARD`、`0.00125f`、
   `0.0125f` 与整条 `zspread`、PNS 的 `1.948f/0.9f/0.7f/0.88f/0.85f`、
   `frame_bit_rate *= 1.15f` 的「整数除 → 单精度乘 → 截回 int」，以及

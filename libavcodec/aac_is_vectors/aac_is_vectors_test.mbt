@@ -27,6 +27,24 @@
 /// flags and `cpe->is_mode` - is asserted exactly, and so are the magnitudes:
 /// one test per tool, both pinning the comparison itself rather than only its
 /// outcome.
+///
+/// Domain adapter (§366): the vectors pin C's 1x coefficient domain, but the
+/// stereo searches now run in the live encoder's domain (2x coefficients, 4x
+/// thresholds, sf == ref + 4 - see `aac_psy_bands_encoder_domain`).  The
+/// fixtures below double the spectra, scale the thresholds by exactly 4 and
+/// shift the incoming scalefactors by +4.  Integer decisions still compare
+/// exactly; the float cost sums and energy ratios are compared by a relative
+/// tolerance, because the pow34 pipelines on doubled inputs carry ulp-level
+/// noise the 1x reference never made.
+fn aac_is_v_close(got : Double, want : Double, label : String) -> Unit raise {
+  let d = (got - want).abs()
+  let scale = if want.abs() > 1.0 { want.abs() } else { 1.0 }
+  if d > scale * 1.0e-6 {
+    fail("\{label}: got \{got}, want \{want}")
+  }
+}
+
+///|
 test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands)" {
   let swb = match @libavcodec.aac_swb_tables(4) {
     Ok(v) => v
@@ -46,14 +64,14 @@ test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands
   let mut is_bands = 0
   for f in 0..<frames {
     let d = @libavcodec.aac_is_in(
-      @aac_is_vectors.aac_is_spec0[f],
-      @aac_is_vectors.aac_is_spec1[f],
+      @aac_is_vectors.aac_is_spec0[f].map(x => x * 2.0),
+      @aac_is_vectors.aac_is_spec1[f].map(x => x * 2.0),
       sizes,
       @libavcodec.aac_two_shape_long(),
-      @aac_is_vectors.aac_is_thr0[f],
-      @aac_is_vectors.aac_is_thr1[f],
-      @aac_is_vectors.aac_is_sf0[f],
-      @aac_is_vectors.aac_is_sf1[f],
+      @aac_is_vectors.aac_is_thr0[f].map(x => x * 4.0),
+      @aac_is_vectors.aac_is_thr1[f].map(x => x * 4.0),
+      @aac_is_vectors.aac_is_sf0[f].map(x => x + 4),
+      @aac_is_vectors.aac_is_sf1[f].map(x => x + 4),
       @aac_is_vectors.aac_is_cb0[f],
       @aac_is_vectors.aac_is_cb1[f],
       @aac_is_vectors.aac_is_zero0[f],
@@ -90,16 +108,16 @@ test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands
             "frame \{f} band \{g}: band_type \{out.band_type1[g]} != \{@aac_is_vectors.aac_is_ref_bt1[f][g]}",
           )
         }
-        if out.is_ener0[g] != @aac_is_vectors.aac_is_ref_ener0[f][g] {
-          fail(
-            "frame \{f} band \{g}: is_ener0 \{out.is_ener0[g]} != \{@aac_is_vectors.aac_is_ref_ener0[f][g]}",
-          )
-        }
-        if out.is_ener1[g] != @aac_is_vectors.aac_is_ref_ener1[f][g] {
-          fail(
-            "frame \{f} band \{g}: is_ener1 \{out.is_ener1[g]} != \{@aac_is_vectors.aac_is_ref_ener1[f][g]}",
-          )
-        }
+        aac_is_v_close(
+          out.is_ener0[g],
+          @aac_is_vectors.aac_is_ref_ener0[f][g],
+          "frame \{f} band \{g} is_ener0",
+        )
+        aac_is_v_close(
+          out.is_ener1[g],
+          @aac_is_vectors.aac_is_ref_ener1[f][g],
+          "frame \{f} band \{g} is_ener1",
+        )
       } else if out.band_type1[g] != 0 {
         fail("frame \{f} band \{g}: band type set on an unselected band")
       }
@@ -120,9 +138,7 @@ test "AAC intensity stereo matches FFmpeg 9.0.2 aacenc_is.c (4 frames x 49 bands
         ),
       ]
       for (got, want, name) in costs {
-        if got != want {
-          fail("frame \{f} band \{g}: \{name} \{got} != \{want}")
-        }
+        aac_is_v_close(got, want, "frame \{f} band \{g} \{name}")
       }
     }
     // `cpe->is_mode` is `!!count`, not the count itself.
@@ -172,16 +188,22 @@ test "AAC mid/side search matches FFmpeg 9.0.2 aaccoder.c (4 frames x 49 bands)"
   let frames = @aac_is_vectors.aac_is_spec0.length()
   let mut ms_bands = 0
   for f in 0..<frames {
+    let spec0_2 = @aac_is_vectors.aac_is_spec0[f].map(x => x * 2.0)
+    let spec1_2 = @aac_is_vectors.aac_is_spec1[f].map(x => x * 2.0)
+    let thr0_4 = @aac_is_vectors.aac_is_thr0[f].map(x => x * 4.0)
+    let thr1_4 = @aac_is_vectors.aac_is_thr1[f].map(x => x * 4.0)
+    let sf0_4 = @aac_is_vectors.aac_is_sf0[f].map(x => x + 4)
+    let sf1_4 = @aac_is_vectors.aac_is_sf1[f].map(x => x + 4)
     let isr = @libavcodec.aac_is_search(
       @libavcodec.aac_is_in(
-        @aac_is_vectors.aac_is_spec0[f],
-        @aac_is_vectors.aac_is_spec1[f],
+        spec0_2,
+        spec1_2,
         sizes,
         @libavcodec.aac_two_shape_long(),
-        @aac_is_vectors.aac_is_thr0[f],
-        @aac_is_vectors.aac_is_thr1[f],
-        @aac_is_vectors.aac_is_sf0[f],
-        @aac_is_vectors.aac_is_sf1[f],
+        thr0_4,
+        thr1_4,
+        sf0_4,
+        sf1_4,
         @aac_is_vectors.aac_is_cb0[f],
         @aac_is_vectors.aac_is_cb1[f],
         @aac_is_vectors.aac_is_zero0[f],
@@ -197,8 +219,8 @@ test "AAC mid/side search matches FFmpeg 9.0.2 aaccoder.c (4 frames x 49 bands)"
     for g in 0..<n {
       flip.push(isr.ms_mask[g] == 1)
     }
-    let left = @aac_is_vectors.aac_is_spec0[f].copy()
-    let right = @aac_is_vectors.aac_is_spec1[f].copy()
+    let left = spec0_2.copy()
+    let right = spec1_2.copy()
     @libavcodec.aac_is_apply(
       left,
       right,
@@ -227,10 +249,10 @@ test "AAC mid/side search matches FFmpeg 9.0.2 aaccoder.c (4 frames x 49 bands)"
         right,
         sizes,
         @libavcodec.aac_two_shape_long(),
-        @aac_is_vectors.aac_is_thr0[f],
-        @aac_is_vectors.aac_is_thr1[f],
-        @aac_is_vectors.aac_is_sf0[f],
-        @aac_is_vectors.aac_is_sf1[f],
+        thr0_4,
+        thr1_4,
+        sf0_4,
+        sf1_4,
         @aac_is_vectors.aac_is_cb0[f],
         cb1,
         @aac_is_vectors.aac_is_zero0[f],
@@ -255,9 +277,9 @@ test "AAC mid/side search matches FFmpeg 9.0.2 aaccoder.c (4 frames x 49 bands)"
           "frame \{f} band \{g}: boost \{ms.boost[g]} != \{@aac_is_vectors.aac_is_ref_ms_boost[f][g]}",
         )
       }
-      if ms.sf0[g] != @aac_is_vectors.aac_is_ref_ms_sf0[f][g] {
+      if ms.sf0[g] != @aac_is_vectors.aac_is_ref_ms_sf0[f][g] + 4 {
         fail(
-          "frame \{f} band \{g}: sf0 \{ms.sf0[g]} != \{@aac_is_vectors.aac_is_ref_ms_sf0[f][g]}",
+          "frame \{f} band \{g}: sf0 \{ms.sf0[g]} != \{@aac_is_vectors.aac_is_ref_ms_sf0[f][g] + 4}",
         )
       }
       if ms.cb0[g] != @aac_is_vectors.aac_is_ref_ms_cb0[f][g] {
@@ -265,9 +287,9 @@ test "AAC mid/side search matches FFmpeg 9.0.2 aaccoder.c (4 frames x 49 bands)"
           "frame \{f} band \{g}: cb0 \{ms.cb0[g]} != \{@aac_is_vectors.aac_is_ref_ms_cb0[f][g]}",
         )
       }
-      if ms.sf1[g] != @aac_is_vectors.aac_is_ref_ms_sf1[f][g] {
+      if ms.sf1[g] != @aac_is_vectors.aac_is_ref_ms_sf1[f][g] + 4 {
         fail(
-          "frame \{f} band \{g}: sf1 \{ms.sf1[g]} != \{@aac_is_vectors.aac_is_ref_ms_sf1[f][g]}",
+          "frame \{f} band \{g}: sf1 \{ms.sf1[g]} != \{@aac_is_vectors.aac_is_ref_ms_sf1[f][g] + 4}",
         )
       }
       if ms.cb1[g] != @aac_is_vectors.aac_is_ref_ms_cb1[f][g] {
@@ -275,21 +297,21 @@ test "AAC mid/side search matches FFmpeg 9.0.2 aaccoder.c (4 frames x 49 bands)"
           "frame \{f} band \{g}: cb1 \{ms.cb1[g]} != \{@aac_is_vectors.aac_is_ref_ms_cb1[f][g]}",
         )
       }
-      if ms.dist1[g] != @aac_is_vectors.aac_is_ref_ms_d1[f][g] {
-        fail(
-          "frame \{f} band \{g}: dist1 \{ms.dist1[g]} != \{@aac_is_vectors.aac_is_ref_ms_d1[f][g]}",
-        )
-      }
-      if ms.dist2[g] != @aac_is_vectors.aac_is_ref_ms_d2[f][g] {
-        fail(
-          "frame \{f} band \{g}: dist2 \{ms.dist2[g]} != \{@aac_is_vectors.aac_is_ref_ms_d2[f][g]} (mid \{ms.mid_cost[g]} vs \{@aac_is_vectors.aac_is_ref_ms_cm[f][g]}, bits \{ms.bits1[g]} vs \{@aac_is_vectors.aac_is_ref_ms_b1[f][g]}, bmax \{ms.bmax[g]} vs \{@aac_is_vectors.aac_is_ref_ms_bmax[f][g]})",
-        )
-      }
-      if ms.mid_cost[g] != @aac_is_vectors.aac_is_ref_ms_cm[f][g] {
-        fail(
-          "frame \{f} band \{g}: mid cost \{ms.mid_cost[g]} != \{@aac_is_vectors.aac_is_ref_ms_cm[f][g]}",
-        )
-      }
+      aac_is_v_close(
+        ms.dist1[g],
+        @aac_is_vectors.aac_is_ref_ms_d1[f][g],
+        "frame \{f} band \{g} dist1",
+      )
+      aac_is_v_close(
+        ms.dist2[g],
+        @aac_is_vectors.aac_is_ref_ms_d2[f][g],
+        "frame \{f} band \{g} dist2",
+      )
+      aac_is_v_close(
+        ms.mid_cost[g],
+        @aac_is_vectors.aac_is_ref_ms_cm[f][g],
+        "frame \{f} band \{g} mid cost",
+      )
       if ms.bits1[g] != @aac_is_vectors.aac_is_ref_ms_b1[f][g] {
         fail(
           "frame \{f} band \{g}: side bits \{ms.bits1[g]} != \{@aac_is_vectors.aac_is_ref_ms_b1[f][g]}",

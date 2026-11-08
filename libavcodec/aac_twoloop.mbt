@@ -38,6 +38,21 @@
 let aac_two_scale_div_512 : Int32 = 36
 
 ///|
+/// The port's twoloop carries its scalefactors on a grid shifted +4 steps
+/// from C's: its 2x coefficient domain meets the quantiser's +4-sf-per-octave
+/// table exactly (the init-scalefactor comment below, §366), so every band
+/// lands on `C_sf + 4` and `aac_encode_channel_data_psy` translates `- 4` at
+/// the write. Every *absolute* sf constant the C search uses - the ladder's
+/// clip range, the SCALE_ONE_POS / SCALE_MAX_POS-SCALE_DIV_512 markers the
+/// rate-loop raise, the zeroing loops and the delta clamps key on, and the
+/// `coef2minsf` floor (whose pow34 input gains only +3 from the doubled
+/// spectrum, one short of the grid) - must carry the same shift. sf
+/// *differences* (max_diff, diff_zero) and the quantiser's table-index
+/// formulas take sf as-is and absorb the shift through the grid, so they
+/// stay unshifted.
+let aac_two_sf_domain_shift : Int32 = 4
+
+///|
 let aac_two_scale_one_pos : Int32 = 140
 
 ///|
@@ -68,8 +83,12 @@ let aac_two_c_quant : Double = 0.40540000796318054
 ///|
 /// `0.00125f` (`aaccoder_twoloop.h:277`, the floor under `uplims` before the
 /// `log2f`) and `0.0125f` (`:532`, the spread interpolation), again as the
-/// binary32 values the reference actually multiplies with.
-let aac_two_uplim_floor : Double = 0.0012499999720603228
+/// binary32 values the reference actually multiplies with. The port's psy
+/// bands sit in its 2x coefficient domain (4x threshold domain), so the
+/// `uplims` floor is pre-scaled by the same 4 (`4 * 0.00125f`, still an
+/// exact f32 product) to keep `max(4f, uplim) == 4 * max(f, uplim_c)` -
+/// see the init-scalefactor comment below.
+let aac_two_uplim_floor : Double = 0.004999999888241291
 
 ///|
 let aac_two_spread_scale : Double = 0.012500000186264515
@@ -226,10 +245,18 @@ fn aac_two_find_max_val(
 /// `av_clip_uint8(log2f(coef)*4 - 69 + SCALE_ONE_POS - SCALE_DIV_512)`.
 /// The float sum is truncated to `int` by the C call, then clipped.
 fn aac_two_coef2minsf(coef : Double) -> Int32 {
+  // The +domain_shift here is only +1 of grid: the pow34 input of the 2x
+  // spectrum already contributes +3 (4 * log2(2^(3/4))), one short of the
+  // sf grid's +4 per octave, so the constant adds the missing step.
   let v = aac_two_mul(aac_two_log2f(coef), 4.0) -
     69.0 +
+    aac_two_sf_domain_shift.to_double() +
     (aac_two_scale_one_pos - aac_two_scale_div_512).to_double()
-  aac_two_clip(v.to_int(), 0, 255)
+  aac_two_clip(
+    v.to_int(),
+    aac_two_sf_domain_shift,
+    255 + aac_two_sf_domain_shift,
+  )
 }
 
 ///|
@@ -880,7 +907,10 @@ pub fn aac_twoloop_search_pns(
     None => Array::make(128, 0)
   }
   let minsf : Array[Int32] = Array::make(128, 0)
-  let maxsf : Array[Int32] = Array::make(128, aac_two_scale_max_pos)
+  let maxsf : Array[Int32] = Array::make(
+    128,
+    aac_two_scale_max_pos + aac_two_sf_domain_shift,
+  )
   // Zero bands and upper distortion limits. `start` is the band's position
   // *within a window*, so it restarts for every window group, while the psy
   // records are read at the slot of each window in the group.
@@ -959,7 +989,7 @@ pub fn aac_twoloop_search_pns(
     let bsf = wsf * 16
     for g in 0..<num_swb {
       if zeroes[bsf + g] != 0 {
-        sf[bsf + g] = aac_two_scale_one_pos
+        sf[bsf + g] = aac_two_scale_one_pos + aac_two_sf_domain_shift
       } else {
         let denom = band_sizes[g].to_double()
         let peak = if uplims[bsf + g] > aac_two_uplim_floor {
@@ -967,10 +997,23 @@ pub fn aac_twoloop_search_pns(
         } else {
           aac_two_uplim_floor
         }
+        // C computes this ladder from the C-domain peak; the port's psy
+        // bands carry its 2x coefficient domain (4x thresholds), and its
+        // quantiser tables sit on a scalefactor grid shifted by exactly
+        // +4 per octave. `1.75 * log2(4x)` alone compensates only 3.5 of
+        // those 4 steps, which left the whole ladder half a step off C's
+        // grid (§366): divide the peak back into the C domain and add the
+        // grid shift instead.
+        let peak_c = aac_two_div(peak, 4.0)
         let v = aac_two_scale_one_pos.to_double() +
-          1.75 * aac_two_log2f(aac_two_div(peak, denom)) +
+          4.0 +
+          1.75 * aac_two_log2f(aac_two_div(peak_c, denom)) +
           sfoffs
-        sf[bsf + g] = aac_two_clip(v.to_int(), 60, aac_two_scale_max_pos)
+        sf[bsf + g] = aac_two_clip(
+          v.to_int(),
+          60 + aac_two_sf_domain_shift,
+          aac_two_scale_max_pos + aac_two_sf_domain_shift,
+        )
         if sf[bsf + g] < minscaler {
           minscaler = sf[bsf + g]
         }
@@ -980,8 +1023,8 @@ pub fn aac_twoloop_search_pns(
   }
   minscaler = aac_two_clip(
     minscaler,
-    aac_two_scale_one_pos - aac_two_scale_div_512,
-    aac_two_scale_max_pos - aac_two_scale_div_512,
+    aac_two_scale_one_pos - aac_two_scale_div_512 + aac_two_sf_domain_shift,
+    aac_two_scale_max_pos - aac_two_scale_div_512 + aac_two_sf_domain_shift,
   )
   let mut wcl = 0
   while wcl < num_windows {
@@ -1141,9 +1184,12 @@ pub fn aac_twoloop_search_pns(
       if tbits > toomanybits {
         recomprd = true
         for i in 0..<128 {
-          if sf[i] < aac_two_scale_max_pos - aac_two_scale_div_512 {
+          if sf[i] <
+            aac_two_scale_max_pos -
+            aac_two_scale_div_512 +
+            aac_two_sf_domain_shift {
             let maxsf_i = if tbits > 5800 {
-              aac_two_scale_max_pos
+              aac_two_scale_max_pos + aac_two_sf_domain_shift
             } else {
               maxsf[i]
             }
@@ -1161,10 +1207,10 @@ pub fn aac_twoloop_search_pns(
       } else if tbits < toofewbits {
         recomprd = true
         for i in 0..<128 {
-          if sf[i] > aac_two_scale_one_pos {
+          if sf[i] > aac_two_scale_one_pos + aac_two_sf_domain_shift {
             let mut new_sf = minsf[i]
-            if aac_two_scale_one_pos > new_sf {
-              new_sf = aac_two_scale_one_pos
+            if aac_two_scale_one_pos + aac_two_sf_domain_shift > new_sf {
+              new_sf = aac_two_scale_one_pos + aac_two_sf_domain_shift
             }
             if sf[i] - qstep > new_sf {
               new_sf = sf[i] - qstep
@@ -1177,7 +1223,10 @@ pub fn aac_twoloop_search_pns(
         }
       }
       qstep = qstep >> 1
-      if qstep == 0 && tbits > toomanybits && sf[0] < 217 && changed {
+      if qstep == 0 &&
+        tbits > toomanybits &&
+        sf[0] < 217 + aac_two_sf_domain_shift &&
+        changed {
         qstep = 1
       }
     }
@@ -1202,7 +1251,7 @@ pub fn aac_twoloop_search_pns(
           let bo = wo * 16
           for g in 0..<num_swb {
             if zeroes[bo + g] == 0 &&
-              sf[bo + g] > aac_two_scale_one_pos &&
+              sf[bo + g] > aac_two_scale_one_pos + aac_two_sf_domain_shift &&
               dists[bo + g] > aac_two_mul(uplims[bo + g], ovrfactor) {
               overdist = overdist + 1
             }
@@ -1271,9 +1320,11 @@ pub fn aac_twoloop_search_pns(
           for zloop in 0..<2 {
             let loopovrfactor = if zloop != 0 { 1.0 } else { ovrfactor }
             let loopminsf = if zloop != 0 {
-              aac_two_scale_one_pos - aac_two_scale_div_512
+              aac_two_scale_one_pos -
+              aac_two_scale_div_512 +
+              aac_two_sf_domain_shift
             } else {
-              aac_two_scale_one_pos
+              aac_two_scale_one_pos + aac_two_sf_domain_shift
             }
             let mut g = num_swb - 1
             while g > 0 && zeroed < maxzeroed {
@@ -1320,7 +1371,7 @@ pub fn aac_twoloop_search_pns(
       twopass = twopass + 1
     }
     // Smallest scalefactor in use.
-    let mut mins = aac_two_scale_max_pos
+    let mut mins = aac_two_scale_max_pos + aac_two_sf_domain_shift
     let mut wm = 0
     while wm < num_windows {
       let glm = shape.group_len[wm]
@@ -1334,8 +1385,8 @@ pub fn aac_twoloop_search_pns(
     }
     mins = aac_two_clip(
       mins,
-      aac_two_scale_one_pos - aac_two_scale_div_512,
-      aac_two_scale_max_pos - aac_two_scale_div_512,
+      aac_two_scale_one_pos - aac_two_scale_div_512 + aac_two_sf_domain_shift,
+      aac_two_scale_max_pos - aac_two_scale_div_512 + aac_two_sf_domain_shift,
     )
     let depth = if its > maxits / 2 {
       if its > maxits * 2 / 3 {
@@ -1383,8 +1434,13 @@ pub fn aac_twoloop_search_pns(
             mindeltasf = 0
           }
           let mut maxdeltasf = prev + aac_two_scale_max_diff
-          if maxdeltasf > aac_two_scale_max_pos - aac_two_scale_div_512 {
-            maxdeltasf = aac_two_scale_max_pos - aac_two_scale_div_512
+          if maxdeltasf >
+            aac_two_scale_max_pos -
+            aac_two_scale_div_512 +
+            aac_two_sf_domain_shift {
+            maxdeltasf = aac_two_scale_max_pos -
+              aac_two_scale_div_512 +
+              aac_two_sf_domain_shift
           }
           let floor = if mindeltasf > minsf[s] { mindeltasf } else { minsf[s] }
           if (cmb == 0 || dists[s] > uplims[s]) && sf[s] > floor {

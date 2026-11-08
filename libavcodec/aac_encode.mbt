@@ -3341,6 +3341,29 @@ fn AacEncoder::encode_pipeline(
       let chans : Array[AacEncChannel] = []
       for ch = 0; ch < self.config.channels; ch = ch + 1 {
         let plan = plans[ch]
+        // `encode_band_info` (`aacenc.c:615-627`): the trellis rewrites each
+        // group's codebooks (and zero bands) on the element's sticky arrays
+        // right before anything is quantised for the bitstream. With no
+        // mid/side rewrite `cb_ch[ch]`/`zeros[ch]` already are those sticky
+        // arrays; after one, the mid/side copies must flow back like the
+        // write-back above did (`aacenc.c`'s trellis mutates `sce->band_type`
+        // in place).
+        aac_encode_codebook_trellis(
+          work[ch],
+          sf_ch[ch],
+          cb_ch[ch],
+          zeros[ch],
+          sizes[ch],
+          plan.num_windows,
+          plan.group_len,
+          iter_max_sfb[ch],
+          plan.is8,
+        )
+        if use_stereo_psy {
+          for slot = 0; slot < cb_ch[ch].length(); slot = slot + 1 {
+            self.sticky_cb[ch][slot] = cb_ch[ch][slot]
+          }
+        }
         let one = aac_encode_channel_data_psy(
           work[ch],
           sf_ch[ch],

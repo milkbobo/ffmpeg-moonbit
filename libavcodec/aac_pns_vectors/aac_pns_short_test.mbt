@@ -76,23 +76,19 @@ test "PNS mark/search matches FFmpeg 9.0.2 on eight short windows (5 frames, sti
     // `mark_pns` runs on the psy bands analyse() just published; the quantiser
     // writes its boosted bandwidth back into the psy context afterwards, so
     // the next frame is analysed wider (same chain as the long vectors).
+    // The §366 domain adapter (doubled spectrum, 4x bands, sf == ref + 4,
+    // energy-domain values x4) mirrors the live encoder's dataflow.
+    let bands = @libavcodec.aac_psy_bands_encoder_domain(r.bands)
     let mark = @libavcodec.aac_pns_mark(
-      r.bands,
-      offsets,
-      num_swb,
-      shape,
-      44100,
-      128000,
-      2,
-      120.0,
+      bands, offsets, num_swb, shape, 44100, 128000, 2, 120.0,
     )
     ctx.set_cutoff(mark.bandwidth)
     // The search's returned arrays alias the sticky ones it ran on, so every
     // assertion below reads the element state directly.
     let _ = @libavcodec.aac_twoloop_search_pns(
-      spec,
+      spec.map(x => x * 2.0),
       sizes,
-      r.bands,
+      bands,
       r.alloc,
       128000,
       44100,
@@ -109,9 +105,9 @@ test "PNS mark/search matches FFmpeg 9.0.2 on eight short windows (5 frames, sti
     let slots = @aac_pns_vectors.aac_pns_s_slot[f]
     for i in 0..<slots.length() {
       let slot = slots[i]
-      if st_sf[slot] != @aac_pns_vectors.aac_pns_s_two_sf[f][i] {
+      if st_sf[slot] != @aac_pns_vectors.aac_pns_s_two_sf[f][i] + 4 {
         fail(
-          "frame \{f} slot \{slot}: two sf \{st_sf[slot]} != \{@aac_pns_vectors.aac_pns_s_two_sf[f][i]}",
+          "frame \{f} slot \{slot}: two sf \{st_sf[slot]} != \{@aac_pns_vectors.aac_pns_s_two_sf[f][i] + 4}",
         )
       }
       if st_cb[slot] != @aac_pns_vectors.aac_pns_s_two_cb[f][i] {
@@ -137,10 +133,10 @@ test "PNS mark/search matches FFmpeg 9.0.2 on eight short windows (5 frames, sti
     // writes its noise decisions back onto them.
     let out = @libavcodec.aac_pns_search(
       @libavcodec.aac_pns_search_in(
-        spec,
+        spec.map(x => x * 2.0),
         sizes,
         offsets,
-        r.bands,
+        bands,
         shape,
         st_sf,
         st_cb,
@@ -176,15 +172,15 @@ test "PNS mark/search matches FFmpeg 9.0.2 on eight short windows (5 frames, sti
       }
       aac_pns_s_close(
         out.pns_ener[slot],
-        @aac_pns_vectors.aac_pns_s_ener[f][i],
+        @aac_pns_vectors.aac_pns_s_ener[f][i] * 4.0,
         "frame \{f} slot \{slot} pns_ener",
       )
     }
     // The end-of-frame sticky arrays are C's carried-forward element state.
     for slot = 0; slot < 128; slot = slot + 1 {
-      if st_sf[slot] != @aac_pns_vectors.aac_pns_s_sticky_sf[f][slot] {
+      if st_sf[slot] != @aac_pns_vectors.aac_pns_s_sticky_sf[f][slot] + 4 {
         fail(
-          "frame \{f} sticky sf[\{slot}]: \{st_sf[slot]} != \{@aac_pns_vectors.aac_pns_s_sticky_sf[f][slot]}",
+          "frame \{f} sticky sf[\{slot}]: \{st_sf[slot]} != \{@aac_pns_vectors.aac_pns_s_sticky_sf[f][slot] + 4}",
         )
       }
       if st_cb[slot] != @aac_pns_vectors.aac_pns_s_sticky_cb[f][slot] {

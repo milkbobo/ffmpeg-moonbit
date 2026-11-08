@@ -11202,3 +11202,66 @@ max_sfb 中某项被改（候选：搜索后处理的清带与返回的 zeroes �
 在 write_spectral 对同带打同量，第一个不匹配带现形。
 
 验证状态：打点全清（git checkout），向量 28/28，树干净。
+
+## 2026-11-08 根因 #8/#9 破案：初始 sf 阶梯域偏移 + 缺失 trellis 段；+4 sf 域全面落位（§366）
+
+> §365 把帧预算失控收窄到 (q, cb, 带集合)；本片双时点 per-band 打点
+> + gg 序列内容配对，三个根因全部现形且都已修复：spectral 位差从
+> §363 的 +47% 收敛到 **总位 +1.42%**（SEG-A 感知立体声 13 帧对拍），
+> 全部向量夹具在新的域约定下回绿（wasm 1709/1709，native oracle
+> 72/72）。
+
+**根因 ①：初始 sf 阶梯 3.5≠4 域偏移**。port 的 frame_coefficients 出口
+是 C 的 2× 系数域 → psy 频带 = 4×C；量化器表网格每倍频程 +4 sf 恰好
+吸收 2× 系数，但初始 sf 公式 `140 + 1.75·log2(peak/size)` 对 4×peak 只
+补偿 3.5 步 → 整个阶梯半步偏，30 次迭代放大成 ±1~2 sf/带。修复
+（`aac_twoloop.mbt`）：`uplim_floor` ×4（0.005 = 4×f32(0.00125)）+
+`peak_c = peak/4` 后显式 +4 网格移位。修复后 TWOINIT 8 带 sf 逐带
+**精确 +4**。
+
+**根因 ②：缺失 `codebook_trellis_rate`**。C 在搜索与写位之间
+（`encode_band_info`，aacenc.c:615-627）对每个窗组跑 (codebook × run)
+Viterbi 重选每带 cb 并改写零带（in-place 于 element 的 sticky 数组），
+省 ~20% 实写位。新文件 `aac_enc_trellis.mbt` 完整移植（整数值 DP、
+无 ε、纯确定）；集成于 `aac_encode.mbt` channel_data_psy 之前每通道，
+MS 时 cb 是副本 → 显式 sticky_cb 回写（zeros 本体即 sticky，原地生效）。
+
+**根因 ③（本片新增，夹具适配实验暴露）：搜索内 13 处 C 域绝对 sf 常量
+未随 +4 域移位**。域适配实验（×2 谱 + 精确 ×4 bands + 期望 sf+4）下
+245 带只剩截断带 6 带 sf=219（C 的 `SCALE_MAX_POS-SCALE_DIV_512` 标记）
+→ rate 循环提升 guard `sf < 219` 爬升边界停错处。全面清单（均以
+`aac_two_sf_domain_shift = 4` 显式标注）：ladder clip [60,255]→[64,259]、
+zero 带 sf 140→144、minscaler/mins clip [104,219]→[108,223]、raise
+guard 219→223、`maxsf_i` 255→259（tbits>5800 分支）、lower-pass/overdist
+的 one_pos 140→144、qstep 复活线 217→221、loopminsf 两分支、
+maxdeltasf 上限、maxsf[] init 255→259、`coef2minsf` 常量 +1（pow34 输入
+在 ×2 谱下只贡献 +3，差 1 步要补；clip [0,255]→[4,259]）。表索引公式
+（q_idx、find_min_book、quantize_band）**不动**——网格自动吸收移位。
+修复后长窗 245 带 + 短窗 5×8 帧全部精确 `C+4`。
+
+**根因 ④（真跨域 bug，1× 域向量不可见）：IS 判据 shape-error 项
+2^(−1/2) 欠权**。`aac_is_encoding_err` 的 `dist_spec_err` 在 pow34 空间
+（平方差 ×2^{3/2}）而 λ/minthr 归一 ÷4（band_cost 的 rd 是幅度域 ×4，
+被 ÷4 精确抵消）→ shape 项权重 = C 的 0.707×，port 更倾向开 IS。修复
+（`aac_is.mbt`）：spec_err 乘 f32(√2) 恢复参考权重。
+
+**夹具域适配**（5 文件）：lib 新增 `aac_psy_bands_encoder_domain`
+（energy/threshold ×4 精确；**spread 无量纲不缩放**——C 是
+`active_lines·2/band_size` 占比，×4 会让 `min(spread²,1)` 分支翻转；
+bits 整数透传）；夹具侧谱 ×2、期望 sf+4、maxval ×2^{3/4}、pns_ener ×4；
+长窗 IS/MS 的浮点成本（dist/is_ener/mid_cost）从位精确改为 1e-6 相对
+容差（pow34 链在倍域谱上的 ulp 噪声），整数决策仍位精确。PNS mark 的
+can_pns/带宽尺度不变（比值判据）。
+
+**验证**：run366e（nine-dbg 镜像）oracle **72/72**；SEG-A 13 帧
+FBDBG vs C RCDBG：逐帧 −3.8%~+9.9%、**总位 38032 vs 37501 = +1.42%**
+（首帧 −0.5%）；修复前同口径 +21.7%/+22.5%，§363 时 +47%。本机 wasm
+全套 **1709/1709**（twoloop 长窗 6/6、短窗、PNS 长短窗、IS 长短窗全绿）；
+docker native ref 库 72/72。λ 跨帧漂移大幅缓解（mono 64k 仍最敏感，
+λ 序列 79-88 vs C 90-94）。
+
+**残余**（按优先级）：① λ 漂移 ε 本源 = psy 链非齐次（ATH 绝对常数 →
+真实编码器阈值 4×C(1±1e-5)），彻底消除需全域统一（5-10 片）；② 简化
+路径（默认/SNR 配置）独立 bug 未动；③ C 写位 `window_clipping` rounding
+未建模（无削波时恒等）；④ 质量门（NMR/谱 SNR）未重测（trellis 省位
+不省质量，预期不降）。

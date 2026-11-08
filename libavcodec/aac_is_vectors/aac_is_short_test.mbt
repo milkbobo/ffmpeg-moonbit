@@ -62,6 +62,8 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
     // One analyze per channel; the pair shares the reservoir, like the
     // single group-analyze call the harness makes.  `bitres.alloc` is
     // element-level state, so what survives is the *last* channel's pass.
+    // The §366 domain adapter applies from here down: doubled spectra, 4x
+    // energy/threshold bands (`spread` is dimensionless), sf == ref + 4.
     let r0 = ctx.analyze(0, spec0, 0, 2, 0)
     let r1 = ctx.analyze(1, spec1, 0, 2, 0)
     if r1.alloc != @aac_is_vectors.aac_isms_alloc[f] {
@@ -69,19 +71,16 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
         "frame \{f}: alloc \{r1.alloc} != \{@aac_is_vectors.aac_isms_alloc[f]}",
       )
     }
+    let bands0 = @libavcodec.aac_psy_bands_encoder_domain(r0.bands)
+    let bands1 = @libavcodec.aac_psy_bands_encoder_domain(r1.bands)
+    let spec0_2 : Array[Double] = spec0.map(x => x * 2.0)
+    let spec1_2 : Array[Double] = spec1.map(x => x * 2.0)
     // Per channel: mark_pns, twoloop (on the sticky arrays), search_for_pns.
     for ch = 0; ch < 2; ch = ch + 1 {
-      let r = if ch == 0 { r0 } else { r1 }
-      let spec = if ch == 0 { spec0 } else { spec1 }
+      let r = if ch == 0 { bands0 } else { bands1 }
+      let spec = if ch == 0 { spec0_2 } else { spec1_2 }
       let mark = @libavcodec.aac_pns_mark(
-        r.bands,
-        offsets,
-        num_swb,
-        shape,
-        44100,
-        128000,
-        2,
-        120.0,
+        r, offsets, num_swb, shape, 44100, 128000, 2, 120.0,
       )
       ctx.set_cutoff(mark.bandwidth)
       // The pair shares the element grant (`bitres.alloc /= chans`).
@@ -89,7 +88,7 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
       let _ = @libavcodec.aac_twoloop_search_pns(
         spec,
         sizes,
-        r.bands,
+        r,
         alloc,
         128000,
         44100,
@@ -106,7 +105,7 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
           spec,
           sizes,
           offsets,
-          r.bands,
+          r,
           shape,
           st_sf[ch],
           st_cb[ch],
@@ -130,9 +129,9 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
     let slots = @aac_is_vectors.aac_isms_slot[f]
     for i in 0..<slots.length() {
       let slot = slots[i]
-      if st_sf[0][slot] != @aac_is_vectors.aac_isms_pre0_sf[f][i] {
+      if st_sf[0][slot] != @aac_is_vectors.aac_isms_pre0_sf[f][i] + 4 {
         fail(
-          "frame \{f} slot \{slot}: pre0 sf \{st_sf[0][slot]} != \{@aac_is_vectors.aac_isms_pre0_sf[f][i]}",
+          "frame \{f} slot \{slot}: pre0 sf \{st_sf[0][slot]} != \{@aac_is_vectors.aac_isms_pre0_sf[f][i] + 4}",
         )
       }
       if st_cb[0][slot] != @aac_is_vectors.aac_isms_pre0_bt[f][i] {
@@ -145,9 +144,9 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
           "frame \{f} slot \{slot}: pre0 z \{st_z[0][slot]} != \{@aac_is_vectors.aac_isms_pre0_z[f][i]}",
         )
       }
-      if st_sf[1][slot] != @aac_is_vectors.aac_isms_pre1_sf[f][i] {
+      if st_sf[1][slot] != @aac_is_vectors.aac_isms_pre1_sf[f][i] + 4 {
         fail(
-          "frame \{f} slot \{slot}: pre1 sf \{st_sf[1][slot]} != \{@aac_is_vectors.aac_isms_pre1_sf[f][i]}",
+          "frame \{f} slot \{slot}: pre1 sf \{st_sf[1][slot]} != \{@aac_is_vectors.aac_isms_pre1_sf[f][i] + 4}",
         )
       }
       if st_cb[1][slot] != @aac_is_vectors.aac_isms_pre1_bt[f][i] {
@@ -157,12 +156,12 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
       }
     }
     for slot = 0; slot < 128; slot = slot + 1 {
-      if st_sf[0][slot] != @aac_is_vectors.aac_isms_sticky0_sf[f][slot] ||
+      if st_sf[0][slot] != @aac_is_vectors.aac_isms_sticky0_sf[f][slot] + 4 ||
         st_cb[0][slot] != @aac_is_vectors.aac_isms_sticky0_bt[f][slot] ||
         st_z[0][slot] != @aac_is_vectors.aac_isms_sticky0_z[f][slot] {
         fail("frame \{f}: ch0 sticky slot \{slot} diverged")
       }
-      if st_sf[1][slot] != @aac_is_vectors.aac_isms_sticky1_sf[f][slot] ||
+      if st_sf[1][slot] != @aac_is_vectors.aac_isms_sticky1_sf[f][slot] + 4 ||
         st_cb[1][slot] != @aac_is_vectors.aac_isms_sticky1_bt[f][slot] ||
         st_z[1][slot] != @aac_is_vectors.aac_isms_sticky1_z[f][slot] {
         fail("frame \{f}: ch1 sticky slot \{slot} diverged")
@@ -172,15 +171,15 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
     let thr0 : Array[Double] = Array::make(128, 0.0)
     let thr1 : Array[Double] = Array::make(128, 0.0)
     for slot = 0; slot < 128; slot = slot + 1 {
-      thr0[slot] = r0.bands[slot].threshold
-      thr1[slot] = r1.bands[slot].threshold
+      thr0[slot] = bands0[slot].threshold
+      thr1[slot] = bands1[slot].threshold
     }
     // `ff_aac_search_for_is` on the raw spectra (PNS synthesises at decode
     // time, so the coefficients are still the analysis output here).
     let isr = @libavcodec.aac_is_search(
       @libavcodec.aac_is_in(
-        spec0,
-        spec1,
+        spec0_2,
+        spec1_2,
         sizes,
         shape,
         thr0,
@@ -234,8 +233,8 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
       }
     }
     // The intensity mix, on copies - the mid/side search reads the mixed pair.
-    let left = spec0.copy()
-    let right = spec1.copy()
+    let left = spec0_2.copy()
+    let right = spec1_2.copy()
     let flip : Array[Bool] = Array::make(128, false)
     for slot = 0; slot < 128; slot = slot + 1 {
       flip[slot] = isr.ms_mask[slot] == 1
@@ -289,9 +288,9 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
           "frame \{f} slot \{slot}: ms_mask \{ms.ms_mask[slot]} != \{@aac_is_vectors.aac_isms_ms_mask[f][i]}",
         )
       }
-      if ms.sf0[slot] != @aac_is_vectors.aac_isms_ms_sf0[f][i] {
+      if ms.sf0[slot] != @aac_is_vectors.aac_isms_ms_sf0[f][i] + 4 {
         fail(
-          "frame \{f} slot \{slot}: ms sf0 \{ms.sf0[slot]} != \{@aac_is_vectors.aac_isms_ms_sf0[f][i]}",
+          "frame \{f} slot \{slot}: ms sf0 \{ms.sf0[slot]} != \{@aac_is_vectors.aac_isms_ms_sf0[f][i] + 4}",
         )
       }
       if ms.cb0[slot] != @aac_is_vectors.aac_isms_ms_cb0[f][i] {
@@ -299,9 +298,9 @@ test "IS/MS match FFmpeg 9.0.2 on eight short windows (5 frames, stereo pair)" {
           "frame \{f} slot \{slot}: ms cb0 \{ms.cb0[slot]} != \{@aac_is_vectors.aac_isms_ms_cb0[f][i]}",
         )
       }
-      if ms.sf1[slot] != @aac_is_vectors.aac_isms_ms_sf1[f][i] {
+      if ms.sf1[slot] != @aac_is_vectors.aac_isms_ms_sf1[f][i] + 4 {
         fail(
-          "frame \{f} slot \{slot}: ms sf1 \{ms.sf1[slot]} != \{@aac_is_vectors.aac_isms_ms_sf1[f][i]}",
+          "frame \{f} slot \{slot}: ms sf1 \{ms.sf1[slot]} != \{@aac_is_vectors.aac_isms_ms_sf1[f][i] + 4}",
         )
       }
       if ms.cb1[slot] != @aac_is_vectors.aac_isms_ms_cb1[f][i] {

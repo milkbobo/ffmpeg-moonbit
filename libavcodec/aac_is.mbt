@@ -251,9 +251,20 @@ fn aac_is_encoding_err(
       ).cost
     // `dist_spec_err` is accumulated per window and scaled by that window's
     // `lambda / minthr` before it joins `dist2` (`aacenc_is.c:89-94`).
+    // Domain note (§366): this port's coefficients and psy thresholds sit at
+    // 2x / 4x C's scale, and the two error families scale differently under
+    // it - `aac_two_band_cost` distortion is amplitude-squared (x4, exactly
+    // cancelled by the x4 in `lambda / threshold`), while `spec_err` lives in
+    // pow34 space, where squared differences grow by 2^(3/2) but the same
+    // threshold normalisation still divides by 4. Left alone the shape term
+    // would weigh 2^(-1/2) of C's; the sqrt(2) factor (as f32) restores the
+    // reference weighting.
     let dist_spec_err = aac_two_mul(
       aac_two_div(lambda, minthr),
-      aac_is_spec_err(l34, r34, i34, size, e01_34),
+      aac_two_mul(
+        1.41421353816986083984375,
+        aac_is_spec_err(l34, r34, i34, size, e01_34),
+      ),
     )
     if first {
       dist1_left_total = dist1_left
