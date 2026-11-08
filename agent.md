@@ -363,6 +363,17 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳y §351 域实验三重实证（方向修正，实验全回滚）：①rms probe——域
+  65536→32768 后解码 PCM rms_ratio=0.519（幅度恰减半 = SNR 6.02dB
+  理论值），端口 sf 刻度按 65536 自洽，域减半 sf 链未整体下移 4 步；
+  ②BYTECMP——两域字节接近度**完全相同**（pkt0 prefix=2/长度差同级）
+  → **域被 sf 吸收，不是字节差主因**，§347②「域统一=终局」降级；
+  ③分叉位置——prefix=2 = global_gain 首字节即不同 → sf 工作点整体
+  偏移，头号嫌疑=psy 跨帧状态演化链（fill_level/pe.previous/
+  bitres.bits 反馈的 put_bits_count 对齐位语义/sticky sf），pkt2 起
+  ref 转小（318 vs 400）= 量化决策级分歧。方法论：nine-dbg PSYDBG
+  已含 fill/desired_bits，下片对 C 侧帧 0 的 last_frame_pb_count
+  初值（含 TYPE_END+对齐位）与端口逐帧比。
   ⑳x §350 grouping 链修复 + ABR 落地（wasm 1709/1709 + ffref 72/72 +
   NMR 128k 15.14/64k 19.12 双超原生 14.41/18.56）：①时序重构后重验——
   端口 k=23 与 C k=52 全字段相等（atk/grp/ngrp/att_sum/carry 链），

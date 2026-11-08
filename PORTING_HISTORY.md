@@ -10755,3 +10755,48 @@ Representation 对齐；③`#derive(...)` 清账。
 > AAC 状态总结：解码全线位级；编码 Opus 逐字节恒等、AAC 窗口机逐帧
 > 一致 + NMR 双超原生 + ABR 对齐；剩余字节差 = harness 域伪影（§347②，
 > 需向量重生成）。
+
+## 2026-11-08 域实验三重实证：域不是字节差主因（§351，方向修正）
+
+> §347②「域统一 = 字节对齐终局」的判决性检验。三个实验推翻了它——
+> 域伪影被 sf 链吸收，真正的字节分歧在 sf 工作点的更上游。
+
+**实验一：round-trip 幅度（rms probe）**
+
+perceptual 分支 MDCT 65536→32768 后，解码 PCM 的 rms_ratio = **0.519**
+（幅度恰减半）——端口编码-解码链的绝对 sf 刻度按 65536 域自洽校准
+（stock 三元组 = {forward 32768, 规范刻度, 解码}；端口三元组 =
+{65536, 等效刻度, 端口解码}）。码流层面两者兼容（sf 吸收域），但域
+减半后 sf 链没有整体下移 4 步维持 dequant 不变，解码幅度跟着减半——
+SNR 17.2→5.8 dB（=幅度减半的 6.02 dB 理论值 + 量化噪声），非质量
+退化。
+
+**实验二：字节接近度（BYTECMP 诊断）**
+
+options 对齐（pns/tns/ms/is=0）+ 窗口机逐帧一致 + ABR 落地后，逐包
+前缀比较：**两域的接近度完全相同**——pkt0 prefix=2（第 3 字节即分
+叉）、长度差同级（390 vs 411 / 383 vs 411）。若域是主因，32768 态
+应显著更近；实测无差 → **域被 sf 吸收，不是字节差的主因**。
+
+**实验三：分叉位置定位**
+
+pkt0 prefix=2 = ADTS 后 raw_data_block 的 ID_SCE(3b)+tag(4b) 之后、
+**global_gain 的首字节即不同** → sf 工作点整体偏移。pkt2 起 ref 转
+小（318 vs ~400）——某量化决策级分歧（候选：ABR 步进的 f32 细节、
+psy 跨帧状态、TNS/MS 搜索的顺序）。§347 的「psy 帧内对齐」验证的是
+thr/energy/desired_bits，**没有验证跨帧的状态演化链**（fill_level/
+pe.previous/prev_band/sticky sf/cb）。
+
+**方向修正（下片路线图）**
+
+1. §347②「域统一 + 向量重生成」**降级**——域实验两连证（幅度减半 +
+   接近度不变）说明它治不了字节差；
+2. 新的头号嫌疑：**global_gain 首 sf 的来源链**——psy 的 fill_level/
+   pe.previous 初值与演化、bitres.bits 反馈（last_frame_bits 的语义
+   是否 = put_bits_count 含 TYPE_END 与对齐位）、alloc 的整数截断；
+3. 方法论：nine-dbg 的 PSYDBG 已含 fill/desired_bits——把 C 侧帧 0
+   的 bitres.bits=0/last_frame_pb_count 初值与端口逐帧对（端口
+   last_frame_bits 首帧=0 但 C 的 put_bits_count 含 padding 对齐）。
+
+**验证状态**：全部实验改动已回滚，仓库维持 §350 绿（wasm 1709/1709、
+ffref 72/72、工作树干净）。
