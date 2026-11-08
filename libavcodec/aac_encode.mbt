@@ -153,6 +153,9 @@ pub struct AacEncodeConfig {
   /// the bitstream layout and the round-trip measurements change.
   /// `aac_encode_config_with_is` turns it on.
   is_stereo : Bool
+  /// Enable mid/side stereo on channel pairs (`aacenc.c`'s
+  /// `options.mid_side`; the stereo searches run when either tool is on).
+  mid_side : Bool
   /// Let the perceptual path also quantise EIGHT_SHORT frames (§302). Off by
   /// default: eight short windows are coded as one group here, so a single
   /// scalefactor covers spectra whose energies differ by an order of magnitude,
@@ -254,6 +257,7 @@ pub fn aac_encode_config(
     perceptual: false,
     pns: false,
     is_stereo: false,
+    mid_side: false,
     perceptual_short: false,
   }
 }
@@ -282,6 +286,7 @@ pub fn aac_encode_config_perceptual(
     perceptual: true,
     pns: false,
     is_stereo: false,
+    mid_side: false,
     perceptual_short: false,
   }
 }
@@ -307,6 +312,7 @@ pub fn aac_encode_config_with_pns(config : AacEncodeConfig) -> AacEncodeConfig {
     // is exactly what `aac_is_search` does with the post-PNS `cb`/`zeroes` it
     // is handed.
     is_stereo: config.is_stereo,
+    mid_side: config.mid_side,
     perceptual_short: config.perceptual_short,
   }
 }
@@ -337,6 +343,27 @@ pub fn aac_encode_config_with_is(config : AacEncodeConfig) -> AacEncodeConfig {
     perceptual: config.perceptual,
     pns: config.pns,
     is_stereo: true,
+    mid_side: config.mid_side,
+    perceptual_short: config.perceptual_short,
+  }
+}
+
+///|
+
+///|
+/// Enable mid/side stereo on a channel pair: bands whose mid/side
+/// reconstruction is cheaper than left/right are coded from the mid channel
+/// with a per-band mask (`encode_ms_info`), exactly `aacenc.c`'s
+/// `options.mid_side = -1` (auto) behaviour. Opt-in like `is`/`pns`.
+pub fn aac_encode_config_with_ms(config : AacEncodeConfig) -> AacEncodeConfig {
+  {
+    sample_rate: config.sample_rate,
+    channels: config.channels,
+    bit_rate: config.bit_rate,
+    perceptual: config.perceptual,
+    pns: config.pns,
+    is_stereo: config.is_stereo,
+    mid_side: true,
     perceptual_short: config.perceptual_short,
   }
 }
@@ -367,6 +394,7 @@ pub fn aac_encode_config_with_perceptual_short(
     perceptual: true,
     pns: config.pns,
     is_stereo: config.is_stereo,
+    mid_side: config.mid_side,
     perceptual_short: true,
   }
 }
@@ -1395,11 +1423,14 @@ priv struct AacEncStereo {
 ///|
 /// A mono (or tool-free) frame: nothing mixed, no intensity bands.
 fn aac_encode_stereo_none(num_swb : Int32) -> AacEncStereo {
+  ignore(num_swb)
   {
     ms_present: 0,
-    ms_mask: Array::make(num_swb, false),
-    is_bt: Array::make(num_swb, 0),
-    is_pos: Array::make(num_swb, 0),
+    // 128 slots: the ms-present counting loop indexes the `w * 16 + b`
+    // layout even when no search ran (short frames reach 7*16+13).
+    ms_mask: Array::make(128, false),
+    is_bt: Array::make(128, 0),
+    is_pos: Array::make(128, 0),
   }
 }
 
@@ -2851,7 +2882,14 @@ fn AacEncoder::encode_pipeline(
   // The stereo pair of tools only exists on a common-window pair: both
   // searches early-return on `!cpe->common_window` upstream, and a forked
   // pair has no shared `ms_mask` to talk about (§309).
-  let use_stereo_psy = self.config.channels == 2 && common_window && use_psy
+  // `aacenc.c` gates the two stereo searches independently
+  // (`options.mid_side` / `options.intensity_stereo`); the port's combined
+  // search runs when either tool is opted into. A plain perceptual
+  // configuration runs neither (matching the harness's is=0/ms=0).
+  let use_stereo_psy = self.config.channels == 2 &&
+    common_window &&
+    use_psy &&
+    (self.config.is_stereo || self.config.mid_side)
   let mut stereo = aac_encode_stereo_none(num_swb)
   if self.config.channels == 2 && !use_psy {
     stereo = aac_encode_stereo(

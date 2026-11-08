@@ -1474,7 +1474,14 @@ test "aac_lc_mid_side_search_rewrites_scalefactor_pairs" {
   let bit_rate = 128000
   let input = aac_encode_test_shared_high(rate, frames, true)
   let base = @libavcodec.aac_encode_config_perceptual(rate, channels, bit_rate)
-  let plain = aac_encode_test_stream_config(input, channels, frames, base)
+  // Mid/side is a separate option from intensity (`options.mid_side`); the
+  // plain arm opts into MS alone since §356.
+  let plain = aac_encode_test_stream_config(
+    input,
+    channels,
+    frames,
+    @libavcodec.aac_encode_config_with_ms(base),
+  )
   let iso = aac_encode_test_stream_config(
     input,
     channels,
