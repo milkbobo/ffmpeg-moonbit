@@ -363,6 +363,15 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳a5 §356 MS 独立开关（bbb5737）：§355 根因实锤——can_remove/
+  nextband 两侧逐字面同，真因 = **端口 MS 搜索恒跑**（use_stereo_psy
+  只看 common_window）而 C 的 stereo 工具是独立 option 门（mid_side/
+  intensity_stereo，harness 双钉 0）。修复：config 加 mid_side（默认
+  false）+ with_ms 构造器；门 = is_stereo||mid_side。顺手修 stereo_
+  none 128 槽潜伏越界（w*16+b 索引 vs num_swb 槽）。MS 测试改 with_ms。
+  **BYTECMP prefix 2→3/3→4（max_sfb 字节对齐）**；新现场 B3（gg 层）+
+  帧长差 501 vs 411（位分配侧，C f=0 desired=2229 待比）。wasm 1709；
+  ffref 72。
   ⑳a4 §355 带级 dump（PSYBD 扩带 36-48 + ch 字段，九-dbg 重建）：
   stereo W0 首帧——带 40-42 的 e/thr **比值两侧完全相同**（1.259）、带
   43（cutoff 外）thr **逐位相等**（ath 同源）、cutoff 宏同——psy 带内

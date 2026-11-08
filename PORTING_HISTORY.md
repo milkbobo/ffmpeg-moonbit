@@ -10942,3 +10942,29 @@ sf 的 prev 链、或 MS/IS 搜索对 cb 的改写顺序）。
 **验证状态**：端口打点已清、moon.pkg 还原、wasm 1709/1709、工作树
 干净。nine-dbg 的 PSYBD 高带打点保留在 .scratch 工具链（gitignored）
 供下片直接使用。
+
+## 2026-11-08 MS 独立开关：§355 根因实锤修复，max_sfb 字节对齐（§356）
+
+> §355 锁定的「带 41 零带移除决策」判决：纸面 diff `can_remove_band`/
+> nextband 两侧逐字面同——不在函数；真因是**调用上下文的 stereo 语义
+> 没对齐**。
+
+**根因**：端口感知路径的 MS 搜索恒跑（`use_stereo_psy` 只看
+common_window），而 `aacenc.c` 的两个 stereo 工具是**独立 option 门**
+（`options.mid_side` / `options.intensity_stereo`），harness 配置双双
+钉 0——C 的 MS/IS 都不跑，端口在 is_stereo=false 时仍混合 M/S，系数
+和 sf 链随之漂移（带 41 的移除决策、max_sfb 43 vs 41 全是下游症状）。
+
+**修复**：`AacEncodeConfig` 新增 `mid_side`（默认 false）+ 构造器
+`aac_encode_config_with_ms`；stereo 搜索门 = `is_stereo || mid_side`
+（任一 opt-in 才跑，plain 感知配置不跑任何 stereo 搜索，匹配
+harness 的 is=0/ms=0）。顺手修 `aac_encode_stereo_none` 的潜伏越界
+（mask 数组 num_swb 槽 vs 统计循环的 `w*16+b` 索引，短帧可达 125——
+「搜索恒跑」时代从未走到）。MS 测试改用 with_ms。
+
+**BYTECMP 验证**：prefix pkt0 **2→3**、pkt1 **3→4**——§353 的
+max_sfb 字节对齐；新现场推进到 B3（global_gain 层）+ 帧长差
+（ours 501 vs ref 411，位分配侧——desC/fill 首帧链，§355 C trace
+f=0 desired=2229 待与端口首帧比）。
+
+wasm 1709/1709；ffref 72/72。
