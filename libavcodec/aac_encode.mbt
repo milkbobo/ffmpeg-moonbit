@@ -3374,15 +3374,14 @@ fn AacEncoder::encode_pipeline(
       // has no iteration cap upstream and hangs on frames that cannot fit,
       // so it is not the alignment target. All ratio steps are f32.
       let cap = 6144 * self.config.channels - 3
+      // `aacenc.c:943-951`: bitres.alloc is reset to -1 before each
+      // element's analyze, every channel's calc_bit_demand overwrites the
+      // shared value, and the accumulator adds ONCE per element with the
+      // LAST channel's allocation - not per channel.
+      let last_alloc = psy_iter[psy_iter.length() - 1].alloc
       let mut target_bits = 0
-      for ch = 0; ch < self.config.channels; ch = ch + 1 {
-        let a = psy_iter[ch].alloc
-        if a > 0 {
-          // `target_bits += alloc * (lambda / 120)`: an int accumulator over
-          // an f32 product, truncated per accumulation like the C's `+=`.
-          target_bits = (target_bits.to_double() +
-          a.to_double() * (self.lambda / 120.0)).to_int()
-        }
+      if last_alloc > 0 {
+        target_bits = (last_alloc.to_double() * (self.lambda / 120.0)).to_int()
       }
       let rate_capped = if rate_bits < cap { rate_bits } else { cap }
       let many0 = if target_bits > rate_capped {
