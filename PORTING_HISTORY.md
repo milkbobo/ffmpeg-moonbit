@@ -10844,3 +10844,34 @@ pe/fill/desired_bits 三链对齐；④BYTECMP prefix 增长至逐字节；
 ⑤`_ref/aacenc` 向量与 aac_encode_vectors 质量门重校。
 
 **验证状态**：探针全清、moon.pkg 还原、wasm 1709/1709、工作树干净。
+
+## 2026-11-08 字节差第一现场定位：max_sfb（§353，施工图闭环）
+
+> §352 拼图的最后一块侦察。HEXCMP（两侧 pkt 前 8 字节）把分叉字段
+> 定位到比特级。
+
+**stereo W0 帧（pkt0）**：B0(id/tag/common)与 B1(ics_info 首 8 位)
+相同；**B2 分叉 = max_sfb**——端口 43 vs stock 41。max_sfb 来自量化
+器的零带链（twoloop 的 `energy ≤ thr·zeroscale` 判零），psy 的 thr 是
+域敏感绝对量（65536 域 4×）→ 高频带零/非零决策不同 → max_sfb 差 2。
+
+**stereo W1 帧（pkt1）**：B2(grouping)相同；**B3 分叉 = global_gain
+层**（差 ~13 步）——stereo 的 per-channel twoloop + common_window +
+MS/IS 搜索链上 sf 移位（mono 的 twoloop 内部 sf 曾与 stock 逐位同，
+§347；stereo 链更长，域经 psy thr 传入 sf 定价）。
+
+**结论（修正 §351）**：域经 **max_sfb（零带链）+ prev_band（pre-echo
+链，§352）+ thr 定价（sf 链）** 三条路径影响字节——§351 的「sf 吸收
+域」只对「纯量化工作点」成立。AAC 字节对齐施工图最终版：
+
+1. psy/twoloop 输入域 32768 化（frame_coefficients 出口统一）——
+   修 max_sfb、prev_band、pe、thr 定价四链；
+2. 量化 sf 锚统一 stock 刻度（表系统 `POW_SF2_ZERO=200/SCALE_ONE_POS=
+   140/乘子 304-sf` vs 端口显式 `(s-100)/4`）——修 global_gain 写出；
+   §351 的 rms 0.5（域减半 sf 未随移）即此锚未统一的症状；
+3. 解码侧刻度衔接处核验（aac_sf_dequant 的 `-pow2sf[v+200]` 表锚
+   与编码锚的折算）；
+4. 九-dbg 三链逐帧验证 + BYTECMP prefix 递增 + 向量/质量门重校。
+
+**验证状态**：HEXCMP 打点已清（git checkout），moon.pkg 干净，
+仓库维持 §350/§352 绿。
