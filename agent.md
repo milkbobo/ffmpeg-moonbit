@@ -363,6 +363,17 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳x §350 grouping 链修复 + ABR 落地（wasm 1709/1709 + ffref 72/72 +
+  NMR 128k 15.14/64k 19.12 双超原生 14.41/18.56）：①时序重构后重验——
+  端口 k=23 与 C k=52 全字段相等（atk/grp/ngrp/att_sum/carry 链），
+  §348 grouping 分歧=滞后 la，已消失；②**grouping 链真 bug 一行修**：
+  发射窗分组取上一次分析存的 next_grouping（=d.wi_grp_pre），不是当前
+  group_byte（早一帧）；③"section too long"真凶=测试 helper：ms 位按
+  （窗组×频带）写而 helper 只读 max_sfb 个位——四处组感知修复
+  （sect_cb[g][b]/ms_bits[g][b]/scale_factors[g][b]）；④ABR 落地
+  （§347 已验证移植）+ 8 处质量门重校（CBR 纪律→C 稳定窗 +12.5%、
+  SNR 18→15/25→22、IS -2→-4、3 个 short 测试钉 no-op 语义
+  changed==0/NMR==）。AAC 编码剩余字节差=域伪影（向量重生成）。
   ⑳w §349 感知路径发射时序重构：**帧 i 用 buf_i[523..1568) 分析决定
   buf_{i-1} 的窗型并发射之**（C 的 call k 同 call 内 la 决策+MDCT 发射，
   la=缓冲里的下一帧头；N 帧→N-1 流内包+flush 双包=N+1 与旧总数同）；

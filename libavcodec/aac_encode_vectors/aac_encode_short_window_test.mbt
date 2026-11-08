@@ -179,8 +179,11 @@ test "aac_lc_perceptual_short_keeps_long_window_baseline" {
   // first frames on such an input do.
   assert_true(short_frames > 0)
   assert_true(long_frames > 0)
-  assert_eq(changed_short, short_frames)
-  assert_true(changed_long <= 4)
+  // `perceptual_short` is a documented no-op since §349 (the stock coder
+  // runs the LAME machine and the psy/twoloop quantiser on every perceptual
+  // configuration), so the two streams are byte-identical by design.
+  assert_eq(changed_short, 0)
+  assert_eq(changed_long, 0)
   println(
     "perceptual short baseline: long=\{long_frames} unchanged short=\{short_frames} changed=\{changed_short}",
   )
@@ -254,11 +257,12 @@ test "aac_lc_perceptual_short_window_stream" {
       }
     }
   }
-  // The LAME attack detector must still produce the short-window run, every
-  // one of those frames must actually be quantised by the new arm, and the
-  // analyser's grouping must have reached the bitstream.
+  // The LAME attack detector must still produce the short-window run, and
+  // the analyser's grouping must have reached the bitstream. The plain and
+  // short configurations are byte-identical by design (perceptual_short is
+  // a documented no-op since §349).
   assert_true(short_frames >= 3)
-  assert_eq(changed, short_frames)
+  assert_eq(changed, 0)
   assert_true(grouped_frames > 0)
   let decoded = aac_encode_test_decode(short_stream, 1)
   let mut peak = 0.0
@@ -453,15 +457,10 @@ test "aac_lc_perceptual_short_noise_to_mask" {
   // NaN fails both bounds).
   assert_true(nmr_off > -100.0 && nmr_off < 60.0)
   assert_true(nmr_on > -100.0 && nmr_on < 60.0)
-  // The §303 finding, and the reason `perceptual_short` stays opt-in: with
-  // the group plan still one group of eight windows, the perceptual arm
-  // shares one scalefactor per band across windows whose energies differ by
-  // an order of magnitude, so it loses on the model's own yardstick too -
-  // 14.2 vs 9.7 dB here, worse in every one of the eight windows, worst in
-  // the low bands. The long-window trade (10 dB of SNR for 1.6 dB of NMR,
-  // §280) does not exist yet on short frames; window grouping (the real
-  // `scale_factor_grouping`) is what can flip this ordering.
-  assert_true(nmr_on > nmr_off)
+  // Since §349 the two arms run the same encoder (perceptual_short is a
+  // documented no-op - the stock coder has no short-window opt-out), so the
+  // measurements coincide by construction.
+  assert_true(nmr_on == nmr_off)
   // The same holds where the two allocations part hardest: at 64 kbps the
   // shared scalefactor starves every quiet window (18.7 vs 15.6 dB, with
   // waveform SNR already known to collapse, §302).
@@ -495,7 +494,7 @@ test "aac_lc_perceptual_short_noise_to_mask" {
   )
   assert_true(n64_off > -100.0 && n64_off < 60.0)
   assert_true(n64_on > -100.0 && n64_on < 60.0)
-  assert_true(n64_on > n64_off)
+  assert_true(n64_on == n64_off)
 }
 
 ///|

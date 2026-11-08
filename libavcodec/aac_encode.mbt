@@ -193,9 +193,10 @@ pub struct AacEncoder {
   /// Bit count of the previous frame's AAC payload, per channel, fed back to
   /// the psy model as `bitres.bits` (`libavcodec` `last_frame_pb_count`).
   mut last_frame_bits : Int32
-  /// Rate-control lambda of the perceptual path: starts each frame at 120 and
-  /// is scaled down by `min(0.9, rate/frame)` while the quantised frame
-  /// overflows (`aac_encode_frame`'s strict bit-rate control).
+  /// Rate-control lambda of the perceptual path: starts the stream at 120
+  /// and then follows `aac_encode_frame`'s ABR tracking (`sqrt` steps, a
+  /// damped `sqrt(sqrt)` step clipped to [0.9, 1.1] inside the stability
+  /// window); it persists across frames - there is no per-frame reset.
   mut lambda : Double
   /// LCG state carried across frames by `search_for_pns` (`s->random_state`).
   mut pns_random_state : Int32
@@ -2650,7 +2651,12 @@ pub fn AacEncoder::encode_frame(
     let lame_uselong : Array[Bool] = []
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       let d = self.lame[ch].analyze(bufs[ch], 523)
-      lame_grp.push(d.group_byte)
+      // The emitted window's grouping is the byte the PREVIOUS analysis
+      // stored (`pch->next_grouping`, read by the EIGHT_SHORT/LONG_START
+      // cases of the current window's decision) - `wi_grp_pre` is exactly
+      // that stored-before-this-call value. This call's own attack byte
+      // goes into `next_grouping` for the next emission.
+      lame_grp.push(d.wi_grp_pre)
       lame_uselong.push(d.uselong)
     }
     let sequences : Array[Int32] = []
@@ -2727,8 +2733,8 @@ pub fn AacEncoder::encode_frame(
 /// The shared per-frame encode pipeline: window the overlap buffers and run
 /// the psy model / quantisation / bitstream write for the already-decided
 /// window sequences. `encode_frame` and `flush` both end here; `lame_grp`
-/// carries the grouping byte per channel on the perceptual-short path (it
-/// stays empty on every other path, where the pipeline then uses the
+/// carries the grouping byte per channel on the perceptual paths (it stays
+/// empty on the simplified path, where the pipeline then uses the
 /// all-in-one-group default).
 fn AacEncoder::encode_pipeline(
   self : AacEncoder,
@@ -2736,7 +2742,7 @@ fn AacEncoder::encode_pipeline(
   sequences : Array[Int32],
   lame_grp : Array[Int32],
 ) -> Result[Bytes, String] {
-  let use_lame = self.config.perceptual && self.config.perceptual_short
+  let use_lame = self.config.perceptual
   let coefs : Array[Array[Double]] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     coefs.push(self.frame_coefficients(bufs[ch], sequences[ch]))
@@ -2751,14 +2757,18 @@ fn AacEncoder::encode_pipeline(
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     let seq = sequences[ch]
     let is8 = seq == aac_eight_short
-    let use_psy = self.config.perceptual &&
-      (!is8 || self.config.perceptual_short)
+    // Short frames quantise through the psy/twoloop on every perceptual
+    // configuration (the stock coder has no short-window opt-out).
+    let use_psy = self.config.perceptual
     let group_len : Array[Int32] = if is8 {
       if use_lame && ch < lame_grp.length() {
         // The channel's own first-attack byte - FFmpeg stores it per
         // channel and the common-window check compares the expansions.
         aac_window_grouping_expand(lame_grp[ch])
       } else {
+        println(
+          "PLANGRP ch=\{ch} default (use_lame=\{use_lame} len=\{lame_grp.length()})",
+        )
         [8, 0, 0, 0, 0, 0, 0, 0]
       }
     } else {
@@ -3317,17 +3327,64 @@ fn AacEncoder::encode_pipeline(
       }
       built = frame_bytes
       let frame_bits = (frame_bytes.length() - av_aac_adts_header_size) * 8
-      if frame_bits <= rate_bits {
-        self.lambda = 120.0
-        break
+      // `aacenc.c`'s ABR rate control (`bit_rate_tolerance != 0`, the
+      // library default and what the reference encoder runs): the psy
+      // allocation raises the target above the nominal bitrate, a stability
+      // window of roughly +-12.5% around it decides between full and damped
+      // sqrt steps, and a stable update terminates the retry. The strict
+      // `tolerance == 0` branch (shrink until the frame fits, reset lambda)
+      // has no iteration cap upstream and hangs on frames that cannot fit,
+      // so it is not the alignment target. All ratio steps are f32.
+      let cap = 6144 * self.config.channels - 3
+      let mut target_bits = 0
+      for ch = 0; ch < self.config.channels; ch = ch + 1 {
+        let a = psy_iter[ch].alloc
+        if a > 0 {
+          // `target_bits += alloc * (lambda / 120)`: an int accumulator over
+          // an f32 product, truncated per accumulation like the C's `+=`.
+          target_bits = (target_bits.to_double() +
+          a.to_double() * (self.lambda / 120.0)).to_int()
+        }
       }
-      let ratio = rate_bits.to_double() / frame_bits.to_double()
-      let step = if ratio < 0.9 { ratio } else { 0.9 }
-      self.lambda = self.lambda * step
-      its = its + 1
-      // Upstream keeps shrinking lambda until the frame fits; the cap only
-      // guards against a pathological input that cannot be made to fit.
-      if its >= 10 {
+      let rate_capped = if rate_bits < cap { rate_bits } else { cap }
+      let many0 = if target_bits > rate_capped {
+        target_bits
+      } else {
+        rate_capped
+      }
+      let many0 = if many0 < cap { many0 } else { cap }
+      let few0 = rate_bits - rate_bits / 4
+      let few1 = if few0 > target_bits { few0 } else { target_bits }
+      let too_few0 = if few1 < many0 { few1 } else { many0 }
+      let too_few = too_few0 - too_few0 / 8
+      let too_many = many0 + many0 / 2
+      let in_stable = frame_bits >= too_few && frame_bits <= too_many
+      if its == 0 ||
+        (its < 5 && (frame_bits < too_few || frame_bits > too_many)) ||
+        frame_bits >= cap {
+        let mut ratio = aac_two_div(
+          rate_capped.to_double(),
+          frame_bits.to_double(),
+        )
+        if in_stable {
+          ratio = aac_two_sqrtf(aac_two_sqrtf(ratio))
+          ratio = aac_two_clipf(ratio, 0.9, 1.1)
+        } else {
+          ratio = aac_two_sqrtf(ratio)
+        }
+        self.lambda = aac_two_clipf(
+          self.lambda * ratio,
+          1.1920928955078125e-07,
+          65536.0,
+        )
+        // A stable update ends the retry; the pcoeffs restore upstream is
+        // implicit here - every attempt rebuilds `work` from the pristine
+        // `coefs`.
+        if ratio > 0.9 && ratio < 1.1 {
+          break
+        }
+        its = its + 1
+      } else {
         break
       }
     }

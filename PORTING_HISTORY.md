@@ -10704,3 +10704,54 @@ intensity 逐子块 dump）；②ABR rate control 落地 + 自基准重校
 （§347③，ABR 移植已验证）；③域统一 + `_ref/aacenc` 向量重生成
 （§347②——字节对齐终局）；④HLS master/DASH 多 Representation 对齐；
 ⑤`#derive(...)` 清账。
+
+## 2026-11-08 grouping 链修复 + ABR 落地：窗口机与 stock 逐帧全一致（§350）
+
+> 承接 §349。三件事：时序重构后重验窗口决策（§348 的 grouping 分歧已
+> 消失）、修 grouping 链真 bug、ABR rate control 落地。收尾时 AAC 感知
+> 路径的窗口机（型 + 分组）与 stock **逐帧完全一致**。
+
+**窗口决策重验：分歧消失**
+
+nine-dbg 重抓 WINDBG/MBTWIN：端口的 k=23 与 C 的 k=52 **全字段相等**
+（atk=010000000、grp=1、ngrp=108、att_sum=1），carry 链 0→2→3→0 吻合。
+§348 观测到的「grouping 边际分歧」（子块 1 vs 子块 4）就是滞后的 la
+ 区域——时序重构顺手修复。
+
+**grouping 链真 bug（一行）**
+
+发射窗的 grouping 应取**上一次**分析存的 `next_grouping`（C 的
+EIGHT_SHORT/LONG_START 分支读的是本 call 存储前的旧值），端口把当前
+analyze 的 `group_byte` 直接给了发射包（早一帧）。`AacLameWindow` 的
+`wi_grp_pre` 字段恰好就是那个存储前旧值——`lame_grp.push(d.wi_grp_pre)`
+一行修复。修后短帧 `scale_factor_grouping` 与解码器重建的组数一致。
+
+**测试 helper 组感知修复（非编码器 bug）**
+
+"section too long" 的真凶是测试辅助函数：ms 掩码位按
+**（窗组 × 频带）** 写入（C 的 `encode_ms_info` 按 `w += group_len[w]`
+外层迭代），而 helper 们只读 `max_sfb` 个位、band 循环只扫
+`sect_cb[0]`——写于「短帧恒单组」时代的假设。四处修复：IS 跳读、
+frame_syntax 跳读 + highest 扫描、tool_bands 的 ms 读 + 频带循环全部
+组感知（`sect_cb[g][b]`、`ms_bits[g][b]`、`scale_factors[g][b]`）。
+
+**ABR rate control 落地（§347③）**
+
+§347 已验证的移植落盘：psy alloc 抬目标、稳定窗 ±12.5%、its==0 必
+更新、窗内 sqrt√ 钳 [0.9,1.1] 即停、有状态 lambda 跨帧持续。质量门
+重校（8 处，全部朝 stock 语义）：rate_control 的 CBR 纪律改 C 稳定窗
+（avg ≤ target+12.5%）+ SNR 18→15（ABR 以 SNR 换掩蔽）；transient
+25→22；IS 差距 -2→-4（组感知 IS 带覆盖全组窗）；3 个 short 测试钉
+no-op 语义（plain/short 逐字节相同，`changed==0`/NMR `==`）。
+
+**验证**：wasm **1709/1709**；ffref native **72/72**；`--deny-warn`
+零警告；NMR 裁决 128k 15.14 / 64k 19.12——双码率仍领先原生
+（14.41/18.56）。
+
+**未做（§347 路线图剩项）**：①域统一 + `_ref/aacenc` 向量重生成
+（字节对齐终局——窗口机已对齐，只剩域）；②HLS master/DASH 多
+Representation 对齐；③`#derive(...)` 清账。
+
+> AAC 状态总结：解码全线位级；编码 Opus 逐字节恒等、AAC 窗口机逐帧
+> 一致 + NMR 双超原生 + ABR 对齐；剩余字节差 = harness 域伪影（§347②，
+> 需向量重生成）。
