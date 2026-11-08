@@ -10988,3 +10988,29 @@ its=0 的预算 dest，未验证 λ 步进后的收敛轨迹）。
 在 rate-control 段加打点），第一次步进后的分叉即根因。
 
 验证状态：打点已清、树干净、向量套件 28/28。
+
+## 2026-11-08 ABR target_bits 元素级语义修复（§358）
+
+> §357 定位的 λ 步进层判决。C 侧 aacenc.c 的 rate-control 打点
+> （RCDBG）编入 nine-dbg 档案（patch 脚本扩第五文件 aacenc_patched.c，
+> Dockerfile 编译 + ar 换 aacenc.o），端口对应 RC358 打点。
+
+**its=0 首步双侧对比**：C `frame_bits=2761 few=1951 many=4458 λ=122.2↑`
+vs 端口 `4008 few=3901 many=6687 λ=111.4↓`。
+
+**根因（target_bits 累计语义）**：`aacenc.c:943-951`——
+`bitres.alloc = -1` 每次 analyze 前重置；analyze 一次吃整个元素
+（每通道的 calc_bit_demand 覆盖共享 alloc，返回时 = **末通道**
+desired）；`target_bits += alloc·(λ/120)` **元素级一次**；然后
+`alloc /= chans` 给 search。端口按通道累计（stereo 4458 vs C 的
+2229）→ too_few/too_many 整体偏移 → stable 窗判定与 λ 方向全错。
+
+**修复**：target_bits = 末通道 alloc 单次（`psy_iter.last.alloc·λ/120`）。
+验证：**few/many 双方完全一致（1951/4458）**。
+
+**新现场**：frame_bits 首量化差（4008 vs 2761；每通道 2004 vs 1380，
+destbits 同为 alloc/chans=1114）——twoloop 的 stereo 首量化收敛差
+（mono 曾逐位同，§347）；下片 TWOINIT/TWOOUT 打点扩 stereo（C 侧
+twoloop 打点已在 aaccoder_patched.o 里，端口补对应即可）。
+
+wasm 1709/1709；ffref 72/72。

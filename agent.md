@@ -363,6 +363,16 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳a6 §358 ABR target_bits 语义修复（6e4fbb2）：RCDBG（aacenc.c
+  rate-control 打点编 nine-dbg——patch 脚本第五文件 + Dockerfile ar 换
+  aacenc.o）+ RC358 双侧 its=0 对比：C 2761/few1951/λ↑ vs 端口
+  4008/few3901/λ↓。根因 = **target_bits 按通道累计 vs C 元素级一次**
+  （aacenc.c:943：alloc 每次 analyze 前重置 -1、末通道覆盖共享值、
+  元素累计用末通道、再 /=chans 给 search）。修复后 **few/many 双方
+  全同（1951/4458）**。新现场：frame_bits 首量化 4008 vs 2761
+  （每通道 2004 vs 1380，destbits 同 1114）= twoloop stereo 收敛差
+  （mono 逐位同）；下片 TWOINIT/TWOOUT 扩 stereo（C 基建已在）。
+  wasm 1709；ffref 72。
   ⑳a5 §356 MS 独立开关（bbb5737）：§355 根因实锤——can_remove/
   nextband 两侧逐字面同，真因 = **端口 MS 搜索恒跑**（use_stereo_psy
   只看 common_window）而 C 的 stereo 工具是独立 option 门（mid_side/
