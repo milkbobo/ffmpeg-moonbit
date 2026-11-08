@@ -11014,3 +11014,31 @@ destbits 同为 alloc/chans=1114）——twoloop 的 stereo 首量化收敛差
 twoloop 打点已在 aaccoder_patched.o 里，端口补对应即可）。
 
 wasm 1709/1709；ffref 72/72。
+
+## 2026-11-08 twoloop stereo 首量化分解决：域回响 + 写位层异常（§359）
+
+> §358 的 frame_bits 差（4008 vs 2761）判决。TWO359I/O（端口）与
+> TWOINIT/TWOOUT（C，镜像内已有）双侧 stereo 首帧对比。
+
+**分解事实**（stereo W0 首帧，ch0）：
+
+- 预算侧全同：dest=1114、cutoff=743、rdlambda 同；
+- **初始 sf 分叉 = 域回响**：sf0 180 vs C 177（+3）——uplim 4×
+  （4.37e7 vs 1.09e7，65536 域 thr）经初始 sf 公式 `140+1.75·log2
+  (uplim/size)` 直传；mono §347 的 TWO 对比是在 32768 实验域下做的
+  （当时 thr 对齐 → sf 同），65536 域下从未比过 TWO——§347 结论的
+  适用范围修正；
+- **收敛后 sf 偏 +13**（端口 159 vs C 146，its=30 vs C its≈4 振荡
+  收敛）——搜索轨迹在 4× dist 绝对量下的偏移；
+- **写位层异常**：端口整帧 4008 bits，但两通道 twoloop 的 spectral
+  tbits 合计仅 2444（1239+1205）——差 1564 bits（≈196 字节）不在
+  量化里，在 sections/scalefactors 的写位（sf 整体偏高 → global_gain
+  与差分码更长；或写位器本身有膨胀）。
+
+**下片**：frame_bits 构成审计——端口在 assemble_frame 分解打
+sections/scalefactors/tns/spectral 各段位数，与 C 的 put_bits 段
+（可在 RCDBG 处再打 put_bits_count 分解）对账，定位 1564 bits 的
+去向；初始 sf 的 +3 是域的最后回响，若写位层修完后仍挡字节对齐，
+则按 §354 结论重新评估（域切换对 prefix 无效）。
+
+验证状态：打点已清、向量 28/28、工作树干净。
