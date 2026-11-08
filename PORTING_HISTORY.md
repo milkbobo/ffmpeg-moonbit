@@ -11149,3 +11149,28 @@ escape，每个 escape 计价/实写差几位即放大）。mono 尾帧正常（
 搜索的预算输入变化）另列。
 
 验证状态：打点与标记全清（git checkout），向量 28/28，工作树干净。
+
+## 2026-11-08 双函数探针：合成数据定价=实写，差在时点不同步（§364）
+
+> §363 根因 #8 的判决性探针。`pricing_probe_wbtest`（docker native，
+> Windows 无 MSVC / wasm 编译超 local count）：合成 32 系数带（cb=11、
+> sf=155、幅度扫过 escape 界）同系数序列过 `aac_two_band_cost` 与
+> `quantize_band + write_spectral` 各计位。
+
+**三轮探针**：①系数太小 → q 全零（64 vs 64 假一致）；②放大 200× →
+64 vs 191（3 倍差！）——但第三轮发现 ②的 priced 是 misuse（`scaled`
+未按 `abs_pow34` 预填 → qcoefs 全零 → 64=16×(0,0) 行）；③正确预填
+后：**priced=198 written=198，diff=0**。
+
+**结论**：定价函数与写位函数在合成数据下**完全一致**（含 escape、
+sign、表行映射；两张 cb11 bits 表也 289 项逐值相同）。§363 的 47%
+差只能来自**真实帧中两个时点的输入不同步**——twoloop 返回 tbits
+（定价时点）之后、write_spectral（写位时点）之前，sf/zeroes/cb/
+max_sfb 中某项被改（候选：搜索后处理的清带与返回的 zeroes 次序、
+`sf − 4` 补偿层的双语义、max_sfb 的 43 vs 49 截断）。
+
+**下片**：真实帧 per-band 双时点打点——twoloop 返回前对每带记
+(bits, sf, cb, nz)，channel_data_psy 入口对同带再记，第一个不匹配
+带即改写点。
+
+验证状态：probe 已删、树干净。
