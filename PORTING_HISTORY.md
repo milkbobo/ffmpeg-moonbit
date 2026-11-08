@@ -10913,3 +10913,32 @@ max_sfb 43 vs 41（§353）的分叉在带 41-43 的高频 thr/零带决策，�
 （PSYDBG 打点扩到高频带），第一个分叉带即根因现场。
 
 **验证状态**：实验全回滚，wasm 1709/1709，工作树干净。
+
+## 2026-11-08 带级 dump：根因现场收到带 41 的零带移除决策（§355）
+
+> §354 转移的高频带嫌疑判决。PSYDBG/MBTPSYBD 打点扩到带 36-48
+> （C 侧 patch 脚本加 ch 字段 + 高带循环，nine-dbg 重建），stereo W0
+> 首帧带级对比。
+
+**带级事实（stereo 128k 首帧，带 40-43）**
+
+- 带 40-42：thr/energy 两侧恒 4×（域），**e/thr 比值完全相同**
+  （带 41 双方 1.259）——psy 的带内相对结构一致；
+- 带 43（cutoff 外）：thr **逐位相等**（0.6247…，ath 表转录）——
+  绝对锚 ath 两侧同源；cutoff 宏也同（682/743 双方一致）；
+- 分叉 = **带 41 的零带移除决策**：带 41 两侧都有能量、e/thr 同比，
+  但 C 的 twoloop 后处理把带 41 移除（max_sfb=41，最后非零带 40），
+  端口保留（max_sfb=43，最后非零带 42）。
+
+**根因锁定（下片现场）**：`ff_sfdelta_can_remove_band` 的端口实现链
+（`aac_two_can_remove_band`）——语义是「移除该带后相邻带 sf 差分
+仍在 2·SCALE_MAX_DIFF 内」。候选差异：nextband map 的构造
+（`ff_init_nextband_map`）、prev 链的初值、或 sticky 槽（端口跨帧
+sticky_sf/ch 与 C 的 sce->sf_idx 生命期差异——C 的 sf_idx 在帧间
+保留且帧首不重置）。mono 帧首 twoloop 全对（§347 TWOOUT 逐位同）而
+stereo 首帧即差——嫌疑集中在 **stereo 链**（common_window 下双通道
+sf 的 prev 链、或 MS/IS 搜索对 cb 的改写顺序）。
+
+**验证状态**：端口打点已清、moon.pkg 还原、wasm 1709/1709、工作树
+干净。nine-dbg 的 PSYBD 高带打点保留在 .scratch 工具链（gitignored）
+供下片直接使用。
