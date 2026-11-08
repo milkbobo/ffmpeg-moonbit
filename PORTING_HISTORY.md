@@ -10875,3 +10875,41 @@ MS/IS 搜索链上 sf 移位（mono 的 twoloop 内部 sf 曾与 stock 逐位同
 
 **验证状态**：HEXCMP 打点已清（git checkout），moon.pkg 干净，
 仓库维持 §350/§352 绿。
+
+## 2026-11-08 刻度定音与干净对照：域彻底排除（§354）
+
+> §353 施工图的执行检验。两个实证把「域」从 AAC 字节差的嫌疑列表里
+> 终局移除，并把根因现场推向高频带。
+
+**刻度定音（表方向数值实证）**
+
+- `aac_pow2sf / aac_twoloop_pow2sf[i] = 2^{(i-200)/4}`（首元素
+  8.881784197e-16 = 2^-50 实证）；
+- 感知路径量化 `aac_twoloop_quantize_band` 的 `q_idx = 304 - sf` 与
+  stock `aacenc_utils.h` **逐字面同刻度**（同表、同索引、同 C_QUANT、
+  同 escape 8191）——端口感知路径的量化/码流 sf 刻度本来就与 stock
+  一致，sf 数值差只来自输入域（65536 系数 2× → sf 工作点 +~2 而非
+  干净 +4）；
+- 编码乘子 2^{(104-sf)/4} × 解码乘子 2^{+sf/4} = **2^26 恒增益**，
+  由 IMDCT 的实现 scale 吸收（C 的 av_tx / 端口解码链各有一致吸收）；
+  §351 的 rms 0.5 = 域减半后 sf 未干净 -4（twoloop 搜索被绝对锚
+  ——maxvals 的 coef2minsf `-69` 常数、escape 8191、maxval 表——
+  打断，不自相似缩放）。
+
+**干净对照（§351 复现于全对齐条件下）**
+
+窗口机 + grouping 链 + ABR 全部对齐后（域是唯一变量），perceptual
+分支 32768 化：**BYTECMP prefix 完全不变**（pkt0-3 = 2/3/1/1，与
+65536 基线逐位同）——域对字节差零影响，sf/max_sfb 的分叉与域无关。
+实验回滚（32768 还会让感知 round-trip 幅度减半——rms 0.5 复现，
+framing 测试不断言幅度故 72/72 仍绿）。
+
+**根因现场转移：高频带**
+
+max_sfb 43 vs 41（§353）的分叉在带 41-43 的高频 thr/零带决策，而
+域切换没有改变它 → 根源是**别的绝对量**。候选：`aac_psy_cutoff`
+（AAC_CUTOFF 宏的端口实现差）、avoid_holes 链、spreading 的高频带
+细节。下片第一步：两侧 band-by-band thr/energy 从带 38-48 dump
+（PSYDBG 打点扩到高频带），第一个分叉带即根因现场。
+
+**验证状态**：实验全回滚，wasm 1709/1709，工作树干净。
