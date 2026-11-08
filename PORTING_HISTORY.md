@@ -10968,3 +10968,23 @@ max_sfb 字节对齐；新现场推进到 B3（global_gain 层）+ 帧长差
 f=0 desired=2229 待与端口首帧比）。
 
 wasm 1709/1709；ffref 72/72。
+
+## 2026-11-08 psy 输入层全对齐；帧长差定位 ABR λ 步进（§357）
+
+> §356 残余两现场（gg 层 + 帧长差）的判决：psy 输入层排除。
+
+**首帧逐位对齐**（stereo W0，C §355 trace vs 端口 P357）：
+`desired=2229 pe=2630.11 fill=4656 frame_bits=1486`——ch0/ch1 双通道
+全同。psy 的预算分配链（pe→bit_demand→desired_bits→fill）在 stereo
+首帧与 C 完全一致。
+
+**帧长差定位**：pkt0 = 501B（4008 bits）远超 stable 窗上沿
+（too_many ≈ 2229+12.5% ≈ 2507），而 C 同输入收敛到 411B（3288
+bits）——分叉在 **ABR 重试的 λ 步进/收敛层**（its 循环内 λ 更新后
+的重新量化结果，或 λ 公式的 f32 链；§350 移植时 mono 只逐帧验证了
+its=0 的预算 dest，未验证 λ 步进后的收敛轨迹）。
+
+**下片**：λ 链 trace（每次 its 打 λ/frame_bits/in_stable 两侧，C 侧
+在 rate-control 段加打点），第一次步进后的分叉即根因。
+
+验证状态：打点已清、树干净、向量套件 28/28。
