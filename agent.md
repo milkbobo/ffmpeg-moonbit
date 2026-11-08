@@ -363,6 +363,13 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳a2 §353 字节差第一现场（HEXCMP 比特级）：stereo W0 帧 B2 分叉 =
+  **max_sfb 43 vs 41**（twoloop 零带链吃域敏感 thr）；W1 帧 B3 分叉
+  = global_gain 层差 ~13 步（stereo 搜索链）。**域经 max_sfb/prev_
+  band/thr 定价三链影响字节**——§351 修正为「sf 吸收域仅对纯量化
+  工作点成立」。施工图最终版：输入域 32768 化（修 max_sfb/prev_band/
+  pe/thr 四链）+ sf 锚统一 stock 刻度（修 gg 写出，rms 0.5 即此症状）
+  + 解码衔接核验（-pow2sf[v+200] 表锚折算）+ 三链验证 + 重校。
   ⑳z §352 psy 跨帧链考古（拼图集齐）：①**fill 链已活**——ABR 落地
   顺带修复（4776→…→3400 逐帧演化，frame_bits=1365 init 常数），§347
   「fill 恒定」是严格 RC 症状；②**pe ~13% 差=prev_band 泄域**——帧内
