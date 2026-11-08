@@ -11042,3 +11042,27 @@ sections/scalefactors/tns/spectral 各段位数，与 C 的 put_bits 段
 则按 §354 结论重新评估（域切换对 prefix 无效）。
 
 验证状态：打点已清、向量 28/28、工作树干净。
+
+## 2026-11-08 写位层实锤：chans 的 sf 与 twoloop 输出脱节（§360）
+
+> §359 的 1564 bits 审计。C 侧拆账：整帧 2761 − spectral 2464
+> （TWOLOOP 终态 tbits 1241+1223）= 头部 297 bits；端口 4008 − 2444
+> = **1564 bits**。ASM360 分段（assemble 的 CPE 每通道位跨）：
+
+**两个实锤**
+
+1. **gg 脱节**：写位用的 `global_gain=176` 而 twoloop 终态 `sf0=159`
+   （TWO359O）——assemble 收到的 `chans[ch].sf` 不是 twoloop 最后一次
+   搜索的输出（候选：sf 写回链断点、多 ABR its 的中间态覆盖、或
+   channel_data_psy 构造 AacEncChannel 时用了别的 sf 源）；
+2. **spectral 写位爆炸**（短窗帧）：chan_bits=**24185/24092**
+   （~3000 字节/通道）——量化谱 `ch.q` 与 twoloop 定价的谱严重不符
+   （同一脱节的下游症状）；首帧 W0 则反向（192 bits/通道 vs 定价
+   1239——q 大面积为零）。
+
+**下片（收网点）**：sf/q 写回链审计——`aac_twoloop_search` 返回
+{sf,cb,zeroes} → `sf_ch/cb_ch/zeros` → `aac_encode_channel_data_psy`
+构造 AacEncChannel{sf,q,cb} → assemble；逐环打印 sf[0]/q 非零数，
+找到第一个不一致的传递点。
+
+验证状态：打点已清、向量 28/28、工作树干净。
