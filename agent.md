@@ -363,6 +363,15 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳a4 §355 带级 dump（PSYBD 扩带 36-48 + ch 字段，九-dbg 重建）：
+  stereo W0 首帧——带 40-42 的 e/thr **比值两侧完全相同**（1.259）、带
+  43（cutoff 外）thr **逐位相等**（ath 同源）、cutoff 宏同——psy 带内
+  相对结构与绝对锚全一致；**分叉 = 带 41 的零带移除决策**（C 移除→
+  max_sfb=41、端口保留→43）。根因锁定 `ff_sfdelta_can_remove_band`
+  端口链（aac_two_can_remove_band/nextband map/prev 链初值/sticky
+  生命期）；mono 帧首 twoloop 全对而 stereo 首帧即差→嫌疑集中 stereo
+  链（common_window 双通道 sf prev 链、MS/IS 的 cb 改写顺序）。九-dbg
+  的 PSYBD 高带打点保留在 .scratch 工具链供下片直用。
   ⑳a3 §354 刻度定音 + 干净对照（域终局排除）：①表方向数值定音
   pow2sf[i]=2^{(i-200)/4}（首元素 2^-50）；**感知量化 q_idx=304-sf 与
   stock 逐字面同刻度**（同表/索引/C_QUANT/escape）——sf 差只来自输入
