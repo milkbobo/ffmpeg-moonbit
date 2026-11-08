@@ -10800,3 +10800,47 @@ pe.previous/prev_band/sticky sf/cb）。
 
 **验证状态**：全部实验改动已回滚，仓库维持 §350 绿（wasm 1709/1709、
 ffref 72/72、工作树干净）。
+
+## 2026-11-08 psy 跨帧链考古：fill 已活、pe 泄域机制、sf 锚系统（§352）
+
+> §351 收窄的「psy 跨帧状态链」判决性检验。三个发现把 AAC 字节对齐的
+> 最后拼图集齐了。
+
+**发现一：fill_level 链已活（ABR 顺带修复）**
+
+MBTBD 探针（bit_demand 入参 + fill 前值）：fill 逐帧演化
+4776→4285→3794→3247→3084→3313→3446→3523→3400，`frame_bits=1365`
+（init 常数 `min(2560, chan_bitrate·1024/rate)`）与 C 逐帧推进机制
+一致。§347 trace 的「fill 恒 4776」是当时严格 RC 下反馈不活——
+§350 的 ABR 落地（its==0 必走 + last_frame_bits 反馈）已顺带修好。
+残余差 ~80 bits/帧（4285 vs 4365）来自 desired_bits 差的下游。
+
+**发现二：pe 的 ~13% 差 = prev_band 链泄域**
+
+帧 1-2 的 pe/desired_bits 与 C 一致，帧 3 起端口 pe 系统性偏高
+（9400 vs 8350）。机制：帧内 pe 是 log2(e/t) 比值（域不变量），但
+pre-echo 控制 `thr = max(RPEMIN·thr, min(thr, RPELEV·prev_band.
+thr_quiet))` 读的是**上帧 thr 的绝对值**——65536 域存的 4× 值把域差
+泄进 pe。**域统一因此重新必要**（§351 的降级只对「sf 吸收帧内域」
+成立，跨帧绝对值链仍需同域），但必须绑定发现三的 sf 锚修正。
+
+**发现三：sf 锚系统两套刻度（字节对齐的最后拼图）**
+
+stock：`POW_SF2_ZERO=200`（规范锚，ff_aac_pow2sf_tab 的 2^0 索引）、
+`SCALE_ONE_POS=140`（scale=1.0 处）、`SCALE_DIV_512=36`；量化乘子
+表索引 `POW_SF2_ZERO - sf + SCALE_ONE_POS - SCALE_DIV_512 = 304-sf`
+（aacenc_utils.h find_min_book/quant 链）。端口：量化/反量化显式
+`(s-100)/4` 锚（aac_encode.mbt），解码侧 aac_spectrum.mbt 用
+POW_SF2_ZERO=200 的表——round-trip 正确的事实约束说明两套刻度在
+某处折算衔接（待定位）。**域 32768 化 + 锚统一到 stock 刻度 =
+码流 sf 与 stock 同刻度**，连同 prev_band 泄域一起，构成字节对齐
+的完整修复路径（§351 的 rms 0.5 幅度问题即 sf 未随域整体移 4 步
+的症状，锚统一后自动解决）。
+
+**下片路线（AAC 字节对齐终局，全部拼图已集齐）**：①定位端口
+编码/解码刻度的折算衔接处；②psy/twoloop/量化全链域 32768 化 +
+锚统一 stock 刻度（sf 整体 -4 步语义）；③九-dbg PSYDBG 逐帧验证
+pe/fill/desired_bits 三链对齐；④BYTECMP prefix 增长至逐字节；
+⑤`_ref/aacenc` 向量与 aac_encode_vectors 质量门重校。
+
+**验证状态**：探针全清、moon.pkg 还原、wasm 1709/1709、工作树干净。
