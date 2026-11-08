@@ -11114,3 +11114,38 @@ pulse+tns/spectral，带帧号）——预期某段千 bits 级膨胀，读对�
 器与 C 逐行对（C 侧 encode_individual_channel 可同步加段打点）。
 
 验证状态：零代码改动（纯旧 log 分析），树干净。
+
+## 2026-11-08 四段审计：定价≠实写 47% + 简化路径爆炸实锤（§363）
+
+> §362 的分段执行。WCB363（write_channel_body 四段位计数 + 全局
+> 序号）+ SEG 段标记（三个 AAC 测试各打一行）单次连续运行定位归属。
+
+**归属实锤**（k 序 vs SEG 行号）：爆炸帧（spec=24002/23896）全部落在
+**SEGB = ffref_test 的 SNR 测试 = 简化路径**——§360 的「爆炸」是真实
+bug（简化路径 spectral 失控，gg=102/94 异常低→量化超细→escape 全开，
+sect=14 粗切分；SNR-only 断言从不查帧大小，长期掩护）。§361 把它定
+性为「跨测试污染」是错的方向判断——**观察本身是真的，只是属于另一
+条代码路径**。
+
+**主线（感知 stereo 首帧 k=217/218）四段**：gg=155/159、sect=63/108、
+sf=130/135、ptns=3、**spec=1817/1705**——每通道合计 2021 bits ×2 +
+CPE 头 = 4008 ✓（frame_bits 全对上）。
+
+**根因 #8（帧预算失控的机械根源）**：spectral 实写 1817 vs twoloop
+定价 tbits 1239——**定价与实写差 47%**。λ/预算全基于定价，帧永远压
+不进预算（ABR 怎么迭代都无效）→ λ 崩、帧大、与 C 永久分叉。C 的
+定价与实写是同一函数（put_bits 计数），两端天然一致。端口两套实现：
+定价 `aac_two_band_cost`（f32 链 + spectral_bits 表 + escape 计
+clipped_escape）vs 写位 `write_spectral`（codes/bits/revs 表 +
+escape 写 `a0>=16`）——**最可疑点：escape 的位计差**（大 q 帧大量
+escape，每个 escape 计价/实写差几位即放大）。mono 尾帧正常（840-
+1852）与「小 q 帧 escape 少」自洽。
+
+**下片（收网）**：构造单带单系数探针——取首帧一个 cb=11 带，对同
+一 q 序列分别过 `aac_two_band_cost` 与 `write_spectral` 计位，逐系
+数找第一个位差（escape 边界/vec 表索引/sign 规则三者之一必现形）；
+修复后定价=实写，帧预算恢复可控，λ/帧长/gg 三链应同时向 C 收敛。
+简化路径的爆炸（独立 bug，gg=102 根因待查——可能是 §349 后 offset
+搜索的预算输入变化）另列。
+
+验证状态：打点与标记全清（git checkout），向量 28/28，工作树干净。
