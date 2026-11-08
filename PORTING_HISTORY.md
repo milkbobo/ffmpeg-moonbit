@@ -11066,3 +11066,26 @@ sections/scalefactors/tns/spectral 各段位数，与 C 的 put_bits 段
 找到第一个不一致的传递点。
 
 验证状态：打点已清、向量 28/28、工作树干净。
+
+## 2026-11-08 sf 链审计：无断点；§360 观察撤回（§361）
+
+> §360 的两个实锤复核。CDP361 打点（channel_data_psy 出口）：
+
+**sf 链干净**：stereo 首帧 ch0 输出 sf0=155 = twoloop 终态 159 − 4
+（`sf[slot] = final_sf[slot] - 4`——65536 域时代的**刻度补偿层**，把
+twoloop 的 140 刻度 sf 折到码流刻度；C 无此层，其 32768 域与解码刻度
+直接一致——这层就是「sf 吸收域」的具体机制，域统一时需随之移除）；
+q 非零 470/457 正常、maxsfb=43、首非零带 slot=0。
+
+**§360 撤回**：「gg 脱节（176 vs 159）」与「短窗 spectral 爆炸
+24k bits」是被污染的观察——docker 跑的是全 ffref 包（moon test 的
+文件参数不过滤），ASM360 的分段打点混入了其它测试/其它帧（192
+bits 的 chan_bits 与同帧 qnz=470 的 Huffman 下界矛盾即铁证）。
+
+**仍开放**：首帧 frame_bits=4008 vs spectral 合计 2444 的 1564 bits
+差（RC358/CDP361 同帧数据，观察干净）——需带帧号的 assemble 分段
+（sections/sf/tns/spectral 各段位数）重测；当前最可能去向：sf 整体
+偏（159 vs C 146）→ scalefactor 差分链与 sections 的写位系统性偏长，
+而非单点 bug。
+
+验证状态：打点已清、向量 28/28、工作树干净。
