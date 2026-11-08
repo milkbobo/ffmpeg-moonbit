@@ -363,6 +363,17 @@
   内多 RDB，我们取整块单包+decode_all 消费循环）。门面 AudioDec 增 Mp3
   分支。坑：decode_all 剥 ADTS 头必须在切片前（错位 7 字节→幽灵迭代）。
   oracle 61/61；wasm 1457/1457。
+  ⑳a3 §354 刻度定音 + 干净对照（域终局排除）：①表方向数值定音
+  pow2sf[i]=2^{(i-200)/4}（首元素 2^-50）；**感知量化 q_idx=304-sf 与
+  stock 逐字面同刻度**（同表/索引/C_QUANT/escape）——sf 差只来自输入
+  域（工作点 +~2 非干净 +4）；编码×解码=2^26 恒增益由 IMDCT 吸收；
+  rms 0.5=域减半 sf 未干净 -4（twoloop 绝对锚打断自相似缩放）。
+  ②干净对照（窗口机/grouping/ABR 全对齐、域唯一变量）：**BYTECMP
+  prefix 完全不变（2/3/1/1）——域对字节差零影响，终局排除**；32768
+  还致感知 round-trip 幅度减半（framing 不断言幅度故 72 绿）。
+  ③根因现场转移：max_sfb 43 vs 41 的高频带（41-43），候选=aac_psy_
+  cutoff/AAC_CUTOFF 宏、avoid_holes、spreading 高频细节；下片第一步
+  =两侧带 38-48 thr/energy dump 找第一个分叉带。
   ⑳a2 §353 字节差第一现场（HEXCMP 比特级）：stereo W0 帧 B2 分叉 =
   **max_sfb 43 vs 41**（twoloop 零带链吃域敏感 thr）；W1 帧 B3 分叉
   = global_gain 层差 ~13 步（stereo 搜索链）。**域经 max_sfb/prev_
