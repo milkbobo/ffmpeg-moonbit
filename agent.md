@@ -348,6 +348,24 @@
   NMR）；感知臂与原生差 <1.7 dB（128k 反超）= 移植质量背书。
   `aac_ffmpeg_ref_test.mbt` 固化断言。FIL 元素无 element_instance_tag
   （id+count 直连，首帧 count=14 版本串）。
+  ⑳a7 §373-§374 AAC 逐字节收口（KBD 窗 + bandwidth 写回 + TNS f32 +
+  trellis 表）：ffref 立体声 13 帧/单声道/TNS-on 24·64·128k 全部
+  **与 stock 去 ADTS 头逐字节同**。三根因：①`psy_lame_window` 对
+  ONLY_LONG/LONG_STOP 用 KBD、C 的取窗是**不对称**的（短降一律 kb[0]、
+  EIGHT_SHORT 窗 0 升 kb[0] 其余升 kb[1]），`ics_info` 只写 kb[0]；
+  ②`aaccoder_twoloop.h` 每次搜索后把 `FFMAX(3000, AAC_CUTOFF_FROM_BITRATE)`
+  写回 `s->psy.cutoff`（漏了它 24k 的 psy 带计划差 17 位）；③trellis 的
+  `run_value_bits_long/short` 移植时**少一项**（63/15 应为 64/16：long
+  31×5+32×10+1×15、short 7×3+8×6+1×9），跨 run 边界 `cost_stay` 少算
+  3 bit → 八短窗某带选错码本，症状是 128k 差 1 bit（首差字节 6）。
+  定位法：探针按 (sf,cb,zeroes) 逐带→逐 bin→按窗口拆 bits→最终码本，
+  先证输入全同再比价格，首个分歧带（swb=7，stay 差恰 3=run_bits）反查表。
+  测试侧两条教训：`aac_encode_test_tool_bands` 的 TNS 统计**不能只数长窗帧**
+  （128k 的滤波就在 EIGHT_SHORT 帧）；属性测试夹具改 s16 量化版
+  （=ffref `ffref_enc_pcm_tonal`）后行为才与 oracle 同源。`aac_mdct_tx` 的
+  校验表与 LCG 助手只被 wbtest 使用，**必须放进 `*_wbtest.mbt`**（否则
+  库目标 4 个 unused 警告）；大表运行时生成是 wasm init 局部上限的正解。
+  验证：wasm 1713/1713（含 NMR 质量门）、native ffref 76/76。
   ⑳ §310 统一播放 API 骨架（申报书①第一期，音频线）：`libavformat/playback.mbt`——
   `MediaFile::open`（probe→分发 MP4/MKV/WebM/Ogg/WAV 四适配器，MP4 样本按 stco 切片
   跨轨 DTS K 路归并）→ `StreamInfo` 表（codec_id 统一 FFmpeg 名）→ `next_packet`

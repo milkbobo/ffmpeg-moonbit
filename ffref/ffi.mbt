@@ -33,6 +33,14 @@ extern "c" fn ffref_encode_audio_ffi(
 ) -> Bytes? = "ffref_encode_audio"
 
 ///|
+/// Per-stream codec parameters as libavformat reports them after
+/// avformat_find_stream_info(). NULL lands as `None` on open/probe failure.
+/// The stub only reads `data` during this call (open_input's MemIO is freed
+/// before returning), so the borrow is call-scoped.
+#borrow(data)
+extern "c" fn ffref_stream_info_ffi(data : Bytes) -> Bytes? = "ffref_stream_info"
+
+///|
 extern "c" fn ffref_avformat_version() -> Int32 = "ffref_avformat_version"
 
 ///|

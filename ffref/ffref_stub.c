@@ -58,6 +58,22 @@ typedef struct {
   int64_t len;
 } MemIO;
 
+// Release an AVIOContext built for custom IO. avio_context_free() frees only
+// the struct: the probe buffer stays ours, and av_probe_input_buffer2() may
+// have realloc'd it during avformat_open_input, so the final pointer has to
+// be read back from the context. LeakSanitizer flagged these allocations on
+// every memory-backed oracle call (one 64 KiB buffer per open, plus the
+// realloc'd probe copies).
+static void free_custom_avio(AVIOContext *avio) {
+  if (!avio)
+    return;
+  uint8_t *buffer = avio->buffer;
+  MemIO *io = (MemIO *)avio->opaque;
+  avio_context_free(&avio);
+  av_free(buffer);
+  free(io);
+}
+
 static int mem_read(void *opaque, uint8_t *buf, int buf_size) {
   MemIO *io = (MemIO *)opaque;
   int64_t left = io->len - io->pos;
@@ -98,8 +114,10 @@ static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
   io->len = (int64_t)Moonbit_array_length(data);
   int bufsize = 1 << 16;
   uint8_t *avbuf = av_malloc(bufsize);
-  if (!avbuf)
+  if (!avbuf) {
+    free(io);
     return AVERROR(ENOMEM);
+  }
   AVIOContext *avio =
       avio_alloc_context(avbuf, bufsize, 0, io, mem_read, NULL, mem_seek);
   if (!avio) {
@@ -109,8 +127,7 @@ static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
   }
   AVFormatContext *fmt = avformat_alloc_context();
   if (!fmt) {
-    avio_context_free(&avio);
-    free(io);
+    free_custom_avio(avio);
     return AVERROR(ENOMEM);
   }
   fmt->pb = avio;
@@ -122,9 +139,9 @@ static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
   if (ret < 0) {
     fprintf(stderr, "ffref: open_input avformat_open_input %s\n",
             av_err2str(ret));
-    // On failure avformat_open_input frees the context itself.
-    avio_context_free(&avio);
-    free(io);
+    // On failure avformat_open_input frees the context itself, but a
+    // custom-IO AVIOContext (and its probe buffer) is still ours.
+    free_custom_avio(avio);
     return ret;
   }
   ret = avformat_find_stream_info(fmt, NULL);
@@ -132,8 +149,7 @@ static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
     fprintf(stderr, "ffref: open_input find_stream_info %s\n",
             av_err2str(ret));
     avformat_close_input(&fmt);
-    avio_context_free(&avio);
-    free(io);
+    free_custom_avio(avio);
     return ret;
   }
   *out_fmt = fmt;
@@ -142,10 +158,8 @@ static int open_input(moonbit_bytes_t data, AVFormatContext **out_fmt,
 }
 
 static void close_input(AVFormatContext *fmt, AVIOContext *avio) {
-  MemIO *io = avio ? (MemIO *)avio->opaque : NULL;
   avformat_close_input(&fmt);
-  avio_context_free(&avio);
-  free(io);
+  free_custom_avio(avio);
 }
 
 static void put_i32(uint8_t *p, int32_t v) {
@@ -857,5 +871,89 @@ moonbit_bytes_t ffref_encode_audio(moonbit_bytes_t pcm,
   free(sink.sizes);
   swr_free(&swr);
   avcodec_free_context(&cc);
+  return out;
+}
+
+// ---- stream metadata oracle -----------------------------------------------
+
+// Blob layout (little-endian):
+//   n_streams i32
+//   per stream, a 32-byte fixed header:
+//     codec_type i32 (0 = video, 1 = audio, 2 = subtitle, 3 = anything else)
+//     width i32, height i32, sample_rate i32, channels i32
+//     codec_len i32, extradata_len i32, flags i32 (reserved, 0)
+//   then every codec name concatenated (ASCII, no NUL),
+//   then every extradata blob concatenated.
+//
+// Both variable regions sit *after* all fixed headers, so the MoonBit side
+// parses with two monotonic cursors and needs no length-prefixed table.
+// `avformat_find_stream_info` (inside open_input) has already normalised the
+// codecpar fields, which is exactly the view a real player starts from.
+MOONBIT_FFI_EXPORT
+moonbit_bytes_t ffref_stream_info(moonbit_bytes_t data) {
+  AVFormatContext *fmt = NULL;
+  AVIOContext *avio = NULL;
+  if (open_input(data, &fmt, &avio) < 0)
+    return NULL;
+
+  const int n = (int)fmt->nb_streams;
+  size_t names_len = 0, extra_len = 0;
+  for (int i = 0; i < n; i++) {
+    const AVCodecParameters *par = fmt->streams[i]->codecpar;
+    const char *name = avcodec_get_name(par->codec_id);
+    names_len += strlen(name);
+    if (par->extradata && par->extradata_size > 0)
+      extra_len += (size_t)par->extradata_size;
+  }
+  const size_t head = 4 + (size_t)n * 32;
+  const size_t total = head + names_len + extra_len;
+  moonbit_bytes_t out =
+      total > INT32_MAX ? NULL : moonbit_make_bytes((int32_t)total, 0);
+  if (!out) {
+    close_input(fmt, avio);
+    return NULL;
+  }
+
+  put_i32(out, n);
+  size_t name_off = head;
+  size_t extra_off = head + names_len;
+  for (int i = 0; i < n; i++) {
+    const AVCodecParameters *par = fmt->streams[i]->codecpar;
+    const char *name = avcodec_get_name(par->codec_id);
+    const int name_len = (int)strlen(name);
+    const int extra = par->extradata && par->extradata_size > 0
+                          ? par->extradata_size
+                          : 0;
+    int type = 3;
+    switch (par->codec_type) {
+    case AVMEDIA_TYPE_VIDEO:
+      type = 0;
+      break;
+    case AVMEDIA_TYPE_AUDIO:
+      type = 1;
+      break;
+    case AVMEDIA_TYPE_SUBTITLE:
+      type = 2;
+      break;
+    default:
+      break;
+    }
+    uint8_t *h = out + 4 + (size_t)i * 32;
+    put_i32(h + 0, type);
+    put_i32(h + 4, par->width);
+    put_i32(h + 8, par->height);
+    put_i32(h + 12, par->sample_rate);
+    put_i32(h + 16, par->ch_layout.nb_channels);
+    put_i32(h + 20, name_len);
+    put_i32(h + 24, extra);
+    put_i32(h + 28, 0);
+    memcpy(out + name_off, name, (size_t)name_len);
+    name_off += (size_t)name_len;
+    if (extra > 0) {
+      memcpy(out + extra_off, par->extradata, (size_t)extra);
+      extra_off += (size_t)extra;
+    }
+  }
+  close_input(fmt, avio);
   return out;
 }

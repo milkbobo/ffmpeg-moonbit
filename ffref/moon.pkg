@@ -23,6 +23,7 @@
 
 import {
   "moonbitlang/core/debug",
+  "moonbitlang/core/encoding/utf8",
 }
 
 import {
@@ -31,7 +32,6 @@ import {
   "milkbobo/ffmpeg-moonbit/libavformat" @avf,
   "milkbobo/ffmpeg-moonbit/libavutil",
   "milkbobo/ffmpeg-moonbit/libswresample" @swr,
-  "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/math",
 } for "test"
 
@@ -45,6 +45,7 @@ options(
     "ffref_test.mbt": [ "native" ],
     "ffref_streaming_test.mbt": [ "native" ],
     "ffref_encode_ref_test.mbt": [ "native" ],
+    "ffref_stream_info_test.mbt": [ "native" ],
   },
   link: {
     "native": {

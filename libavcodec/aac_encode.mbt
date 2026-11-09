@@ -16,13 +16,16 @@ pub fn AacEncoder::flush(self : AacEncoder) -> Result[Array[Bytes], String] {
   if self.config.perceptual {
     // Packet A: the pending window.
     let sequences_a : Array[Int32] = []
+    let shapes_a : Array[Int32] = []
     let lame_grp_a : Array[Int32] = []
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
-      let prev = self.prev_sequence[0]
+      // `prev_type` is the channel's own `ics->window_sequence[0]`.
+      let prev = self.prev_sequence[ch]
       let uselong = prev != aac_eight_short
       let (emit, next) = aac_lame_apply_block_type(self.lame_seq[ch], uselong)
       self.lame_seq[ch] = next
       sequences_a.push(emit)
+      shapes_a.push(aac_lame_window_shape(emit))
       // The short-frame grouping is the stored byte; the tail then stores
       // window_grouping[0] and clears prev_attack (attacks[] all zero).
       lame_grp_a.push(self.lame[ch].next_grouping)
@@ -30,13 +33,14 @@ pub fn AacEncoder::flush(self : AacEncoder) -> Result[Array[Bytes], String] {
       self.lame[ch].prev_attack = 0
     }
     let built_a = match
-      self.encode_pipeline(self.pending_bufs, sequences_a, lame_grp_a) {
+      self.encode_pipeline(self.pending_bufs, sequences_a, shapes_a, lame_grp_a) {
       Ok(b) => b
       Err(e) => return Err(e)
     }
     self.last_frame_bits = (built_a.length() - av_aac_adts_header_size) * 8
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       self.prev_sequence[ch] = sequences_a[ch]
+      self.use_kb[ch] = shapes_a[ch]
     }
     out.push(built_a)
     // Packet B: the zero-padded tail. Its grouping is window_grouping[0]
@@ -52,19 +56,23 @@ pub fn AacEncoder::flush(self : AacEncoder) -> Result[Array[Bytes], String] {
       bufs_b.push(buf)
     }
     let sequences_b : Array[Int32] = []
+    let shapes_b : Array[Int32] = []
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
-      let prev = self.prev_sequence[0]
+      let prev = self.prev_sequence[ch]
       let uselong = prev != aac_eight_short
       let (emit, next) = aac_lame_apply_block_type(self.lame_seq[ch], uselong)
       self.lame_seq[ch] = next
       sequences_b.push(emit)
+      shapes_b.push(aac_lame_window_shape(emit))
     }
-    let built_b = match self.encode_pipeline(bufs_b, sequences_b, []) {
+    let built_b = match
+      self.encode_pipeline(bufs_b, sequences_b, shapes_b, []) {
       Ok(b) => b
       Err(e) => return Err(e)
     }
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       self.prev_sequence[ch] = sequences_b[ch]
+      self.use_kb[ch] = shapes_b[ch]
     }
     out.push(built_b)
     self.flushed = true
@@ -82,7 +90,13 @@ pub fn AacEncoder::flush(self : AacEncoder) -> Result[Array[Bytes], String] {
     bufs.push(buf)
     sequences.push(self.prev_sequence[0])
   }
-  let built = match self.encode_pipeline(bufs, sequences, []) {
+  let built = match
+    self.encode_pipeline(
+      bufs,
+      sequences,
+      Array::make(self.config.channels, 0),
+      [],
+    ) {
     Ok(b) => b
     Err(e) => return Err(e)
   }
@@ -184,8 +198,7 @@ pub struct AacEncoder {
   short_offsets : Array[Int32]
   num_short_swb : Int32
   history : Array[Array[Double]]
-  cos_table : Array[Double]
-  short_window : Array[Double]
+  mdct_tx : @aac_mdct_tx.AacMdctTx
   spectral_codes : Array[Array[UInt32]]
   spectral_bits : Array[Array[Int32]]
   spectral_rev : Array[Array[Int32]]
@@ -227,6 +240,10 @@ pub struct AacEncoder {
   /// §307 is gone). With both analysers agreeing, the per-channel machines
   /// emit exactly what the merged one did.
   lame_seq : Array[Int32]
+  /// The last emitted window's shape per channel (`ics.use_kb_window[0]`,
+  /// which becomes `[1]` for the next window - §371). Stays 0 on the
+  /// simplified path, which only ever uses sine windows.
+  use_kb : Array[Int32]
   /// C's per-`SingleChannelElement` sticky slot arrays (`sf_idx` / `band_type`
   /// / `zeroes`, 128 slots of `w * 16 + g`). The coder only ever writes
   /// group-start slots, so on a short frame the inner-window slots keep what
@@ -417,35 +434,6 @@ fn aac_encode_sampling_index(rate : Int32) -> Int32 {
 }
 
 ///|
-/// Forward MDCT kernel table: `K[j][t] = cos(pi/1024 * (t + 512.5) * (j + 0.5))`
-/// for the 1024 coefficients of a 2048-sample window (`aac_mdct_forward`'s
-/// kernel, precomputed because the direct O(N^2) loop is the encoder's hot
-/// path).
-fn aac_encode_cos_table() -> Array[Double] {
-  let out : Array[Double] = Array::make(1024 * 2048, 0.0)
-  let base = 3.14159265358979323846 / 1024.0
-  for j = 0; j < 1024; j = j + 1 {
-    let jf = j.to_double() + 0.5
-    for t = 0; t < 2048; t = t + 1 {
-      out[j * 2048 + t] = @math.cos(base * (t.to_double() + 512.5) * jf)
-    }
-  }
-  out
-}
-
-///|
-/// Full sine analysis window of a 128-hop short block (256 samples):
-/// `sin(pi/256 * (i + 0.5))` — the rising half is `aac_sine_short`, the falling
-/// half its mirror.
-fn aac_encode_short_window() -> Array[Double] {
-  let out : Array[Double] = Array::make(256, 0.0)
-  for i = 0; i < 256; i = i + 1 {
-    out[i] = @math.sin(3.14159265358979323846 / 256.0 * (i.to_double() + 0.5))
-  }
-  out
-}
-
-///|
 /// Huffman code / code-length tables of codebooks 1..11, indexed by
 /// `codebook - 1`.
 fn aac_encode_code_tables() -> (Array[Array[UInt32]], Array[Array[Int32]]) {
@@ -584,8 +572,7 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     short_offsets,
     num_short_swb,
     history,
-    cos_table: aac_encode_cos_table(),
-    short_window: aac_encode_short_window(),
+    mdct_tx: @aac_mdct_tx.AacMdctTx::new(),
     spectral_codes,
     spectral_bits,
     spectral_rev: aac_encode_reverse_tables(),
@@ -602,6 +589,7 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
     pending_bufs: [],
     last_max_sfb: Array::make(2, 0),
     lame_seq: Array::make(2, 0),
+    use_kb: Array::make(2, 0),
     sticky_sf,
     sticky_cb,
     sticky_zeroes,
@@ -611,88 +599,115 @@ pub fn aac_encoder_new(config : AacEncodeConfig) -> Result[AacEncoder, String] {
 ///|
 /// Apply the analysis window of `seq` to the 2048-sample overlap buffer.
 ///
-/// Natural time order: ONLY_LONG is a full 2048-point sine window; LONG_START
+/// Natural time order: ONLY_LONG is a full 2048-point window; LONG_START
 /// is the long rising half, 448 samples at unit gain, the falling short half
 /// and 448 zeros; LONG_STOP is its mirror (the short rising half and the long
 /// falling half). The flat 448-sample stretches are what the neighbouring long
 /// frame and the eight short blocks overlap, so the transition is TDAC-safe.
-fn aac_encode_window(seq : Int32, buf : Array[Double]) -> Array[Double] {
-  let win = aac_sine_long
-  let swin = aac_sine_short
+///
+/// Mirrors `apply_*_window` (`aacenc.c:383-436`): the windows are the f32
+/// tables, the falling halves index them in reverse (`vector_fmul_reverse`),
+/// and every product is rounded to f32. `lwin0`/`swin0` are the tables of
+/// this frame's shape (`use_kb_window[0]`), `lwin1`/`swin1` the previous
+/// frame's (`[1]`), and each window picks them exactly as the C does -
+/// including ONLY_LONG's current-shape *rising* half, the reverse of the
+/// decoder's convention (§371).
+fn aac_encode_window(
+  seq : Int32,
+  buf : Array[Double],
+  lwin0 : Array[Double],
+  swin0 : Array[Double],
+  lwin1 : Array[Double],
+  swin1 : Array[Double],
+) -> Array[Double] {
   let d : Array[Double] = Array::make(2048, 0.0)
   if seq == aac_long_start {
     for i = 0; i < 1024; i = i + 1 {
-      d[i] = buf[i] * win[i]
+      d[i] = aac_two_mul(buf[i], lwin1[i])
     }
     for i = 0; i < 448; i = i + 1 {
       d[1024 + i] = buf[1024 + i]
     }
     for i = 0; i < 128; i = i + 1 {
-      d[1472 + i] = buf[1472 + i] * swin[127 - i]
+      d[1472 + i] = aac_two_mul(buf[1472 + i], swin0[127 - i])
     }
   } else if seq == aac_long_stop {
     for i = 0; i < 128; i = i + 1 {
-      d[448 + i] = buf[448 + i] * swin[i]
+      d[448 + i] = aac_two_mul(buf[448 + i], swin1[i])
     }
     for i = 0; i < 448; i = i + 1 {
       d[576 + i] = buf[576 + i]
     }
     for i = 0; i < 1024; i = i + 1 {
-      d[1024 + i] = buf[1024 + i] * win[1023 - i]
+      d[1024 + i] = aac_two_mul(buf[1024 + i], lwin0[1023 - i])
     }
   } else {
     for i = 0; i < 1024; i = i + 1 {
-      d[i] = buf[i] * win[i]
-      d[1024 + i] = buf[1024 + i] * win[1023 - i]
+      d[i] = aac_two_mul(buf[i], lwin0[i])
+      d[1024 + i] = aac_two_mul(buf[1024 + i], lwin1[1023 - i])
     }
   }
   d
 }
 
 ///|
-/// Analysis coefficients of a frame in the requested window sequence, scaled
-/// into the encoder's coefficient domain (`32768 * textbook MDCT`, the
-/// reference `av_tx` scale - §368).
+/// Analysis coefficients of a frame in the requested window sequence - the
+/// exact `av_tx` FLOAT MDCT of the windowed samples (scale 32768 folded into
+/// the twiddles, `aac_mdct_tx.mbt`, §370).
 ///
-/// The eight short blocks are 256-sample sine-windowed chunks on a 128-sample
+/// `shape` is this frame's window shape and `prev_shape` the previous
+/// frame's (`use_kb_window[0]`/`[1]`, §371); the simplified path passes 0
+/// for both and stays all-sine.
+///
+/// The eight short blocks are 256-sample windowed chunks on a 128-sample
 /// hop, anchored 448 samples before the current frame (the `flat` of the
 /// decoder's overlap-add), so the last blocks reach 576 samples into the
-/// look-ahead part of the overlap buffer.
+/// look-ahead part of the overlap buffer. `apply_eight_short_window` builds
+/// each chunk with the rising window on the first half and the reversed
+/// window on the second (`vector_fmul_reverse`); the first block rises on
+/// the current shape, blocks 1..7 on the previous one, and every block
+/// falls on the current shape.
 fn AacEncoder::frame_coefficients(
   self : AacEncoder,
   buf : Array[Double],
   seq : Int32,
+  shape : Int32,
+  prev_shape : Int32,
 ) -> Array[Double] {
   let out : Array[Double] = Array::make(1024, 0.0)
   if seq == aac_eight_short {
-    let swin = self.short_window
+    let swin = self.mdct_tx.short_window(shape)
+    let pwin = self.mdct_tx.short_window(prev_shape)
     for w = 0; w < 8; w = w + 1 {
+      let rise = if w == 0 { swin } else { pwin }
       let slot : Array[Double] = Array::make(256, 0.0)
-      for i = 0; i < 256; i = i + 1 {
-        slot[i] = buf[448 + w * 128 + i] * swin[i]
-      }
-      let part = aac_mdct_forward(slot, 256)
       for j = 0; j < 128; j = j + 1 {
-        out[w * 128 + j] = part[j] * 32768.0
+        slot[j] = aac_two_mul(buf[448 + w * 128 + j], rise[j])
+        slot[128 + j] = aac_two_mul(buf[448 + w * 128 + 128 + j], swin[127 - j])
+      }
+      let part = @aac_mdct_tx.aac_mdct_tx_128(self.mdct_tx, slot)
+      for j = 0; j < 128; j = j + 1 {
+        out[w * 128 + j] = part[j]
       }
     }
     return out
   }
-  let d = aac_encode_window(seq, buf)
-  for j = 0; j < 1024; j = j + 1 {
-    let row = j * 2048
-    let mut acc = 0.0
-    for t = 0; t < 2048; t = t + 1 {
-      acc = acc + d[t] * self.cos_table[row + t]
-    }
-    out[j] = acc * 32768.0
-  }
-  out
+  let d = aac_encode_window(
+    seq,
+    buf,
+    self.mdct_tx.long_window(shape),
+    self.mdct_tx.short_window(shape),
+    self.mdct_tx.long_window(prev_shape),
+    self.mdct_tx.short_window(prev_shape),
+  )
+  @aac_mdct_tx.aac_mdct_tx_1024(self.mdct_tx, d)
 }
 
 ///|
 /// The spectrum of one 2048-sample overlap buffer exactly as the encoder forms
-/// it for a steady long frame (sine window plus the 32768-scaled MDCT kernel).
+/// it for a steady long frame on the simplified path (sine window plus the
+/// 32768-scaled MDCT kernel). The perceptual path's steady frames are KBD
+/// (§371); this sine-window spectrum stays the fixed measuring ruler.
 ///
 /// Exposed so tests can measure a decoded frame's error in the same domain the
 /// psy model and the quantiser use — a noise-to-mask comparison is only
@@ -701,7 +716,7 @@ pub fn AacEncoder::spectrum(
   self : AacEncoder,
   buf : Array[Double],
 ) -> Array[Double] {
-  self.frame_coefficients(buf, aac_only_long)
+  self.frame_coefficients(buf, aac_only_long, 0, 0)
 }
 
 ///|
@@ -876,15 +891,18 @@ fn aac_encode_ref_coefs(
 /// predictor coefficients the all-zero filter uses; identical arithmetic to
 /// the decoder's `aac_tns_lpc`.
 fn aac_encode_tns_lpc(coef : Array[Double], order : Int32) -> Array[Double] {
+  // `compute_lpc_coefs(coef, 0, order, lpc, 0, 0, 0, NULL)` with the
+  // encoder's float `LPC_TYPE` (`lpc_functions.h`): every product and sum of
+  // the step-up mirror rounds to f32 (§371).
   let lpc : Array[Double] = Array::make(order, 0.0)
   for i = 0; i < order; i = i + 1 {
-    let r = -coef[i]
+    let r = aac_two_f32(-coef[i])
     lpc[i] = r
     for j = 0; j < (i + 1) / 2; j = j + 1 {
       let f = lpc[j]
       let b = lpc[i - 1 - j]
-      lpc[j] = f + r * b
-      lpc[i - 1 - j] = b + r * f
+      lpc[j] = aac_two_add(f, aac_two_mul(r, b))
+      lpc[i - 1 - j] = aac_two_add(b, aac_two_mul(r, f))
     }
   }
   lpc
@@ -936,6 +954,7 @@ fn AacEncoder::search_tns(
   coef : Array[Double],
   planned_max_sfb : Int32,
   seq : Int32,
+  psy_bands? : Array[AacPsyBandInfo],
 ) -> AacEncTns {
   let is8 = seq == aac_eight_short
   let num_swb = if is8 { self.num_short_swb } else { self.num_swb }
@@ -987,24 +1006,48 @@ fn AacEncoder::search_tns(
   for w = 0; w < num_windows; w = w + 1 {
     // Energy of the start / middle / end slices of the band range.
     let en : Array[Double] = Array::make(4, 0.0)
-    for g = sfb_start; g < sfb_end; g = g + 1 {
-      let mut e = 0.0
-      for i = w * 128 + offsets[g]; i < w * 128 + offsets[g + 1]; i = i + 1 {
-        e = e + coef[i] * coef[i]
-      }
-      if n_filt == 2 {
-        if g > sfb_start + sfb_len / 2 {
-          en[1] = en[1] + e
-        } else {
-          en[0] = en[0] + e
+    match psy_bands {
+      Some(pb) =>
+        // The perceptual path reads the psy model's per-window band energies
+        // (`psy_bands[w*16+g].energy`, f32 sums) over the upstream loop
+        // bounds `g < num_swb && g <= sfb_end` (§371).
+        for g = sfb_start; g < num_swb && g <= sfb_end; g = g + 1 {
+          let e = pb[w * 16 + g].energy
+          if n_filt == 2 {
+            if g > sfb_start + sfb_len / 2 {
+              en[1] = aac_two_add(en[1], e)
+            } else {
+              en[0] = aac_two_add(en[0], e)
+            }
+          } else if g > sfb_start + sfb_len / 2 + sfb_len / 4 {
+            en[2] = aac_two_add(en[2], e)
+          } else if g > sfb_start + sfb_len / 2 - sfb_len / 4 {
+            en[1] = aac_two_add(en[1], e)
+          } else {
+            en[0] = aac_two_add(en[0], e)
+          }
         }
-      } else if g > sfb_start + sfb_len / 2 + sfb_len / 4 {
-        en[2] = en[2] + e
-      } else if g > sfb_start + sfb_len / 2 - sfb_len / 4 {
-        en[1] = en[1] + e
-      } else {
-        en[0] = en[0] + e
-      }
+      None =>
+        // The simplified path has no psy bands: coefficient energies.
+        for g = sfb_start; g < sfb_end; g = g + 1 {
+          let mut e = 0.0
+          for i = w * 128 + offsets[g]; i < w * 128 + offsets[g + 1]; i = i + 1 {
+            e = e + coef[i] * coef[i]
+          }
+          if n_filt == 2 {
+            if g > sfb_start + sfb_len / 2 {
+              en[1] = en[1] + e
+            } else {
+              en[0] = en[0] + e
+            }
+          } else if g > sfb_start + sfb_len / 2 + sfb_len / 4 {
+            en[2] = en[2] + e
+          } else if g > sfb_start + sfb_len / 2 - sfb_len / 4 {
+            en[1] = en[1] + e
+          } else {
+            en[0] = en[0] + e
+          }
+        }
     }
     if n_filt == 2 {
       en[2] = en[0]
@@ -1107,7 +1150,12 @@ fn aac_encode_apply_tns(
       for m = 0; m < size; m = m + 1 {
         let lim = if m < order { m } else { order }
         for i = 1; i <= lim; i = i + 1 {
-          coef[st] = coef[st] + lpc[i - 1] * orig[st - i * inc]
+          // `sce->coeffs[start] += lpc[i-1] * sce->pcoeffs[start - i*inc]`:
+          // a float product and a float sum (§371).
+          coef[st] = aac_two_add(
+            coef[st],
+            aac_two_mul(lpc[i - 1], orig[st - i * inc]),
+          )
         }
         st = st + inc
       }
@@ -1879,6 +1927,8 @@ priv struct AacEncChannel {
   q : Array[Int32]
   max_sfb : Int32
   window_sequence : Int32
+  /// `use_kb_window[0]` (§371): 1 for a KBD window, written in ics_info.
+  window_shape : Int32
   num_windows : Int32
   group_len : Array[Int32]
 }
@@ -2127,7 +2177,17 @@ fn AacEncoder::channel_data(
   } else {
     [1, 0, 0, 0, 0, 0, 0, 0]
   }
-  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, group_len, }
+  // The simplified path windows with sine only (shape 0).
+  {
+    sf,
+    cb,
+    q,
+    max_sfb,
+    window_sequence: seq,
+    window_shape: 0,
+    num_windows,
+    group_len,
+  }
 }
 
 ///|
@@ -2156,6 +2216,7 @@ fn aac_encode_channel_data_psy(
   coef : Array[Double],
   final_sf : Array[Int32],
   seq : Int32,
+  shape : Int32,
   max_sfb : Int32,
   final_cb : Array[Int32],
   final_zeroes : Array[Int32],
@@ -2224,7 +2285,16 @@ fn aac_encode_channel_data_psy(
     }
     w = w + gl
   }
-  { sf, cb, q, max_sfb, window_sequence: seq, num_windows, group_len, }
+  {
+    sf,
+    cb,
+    q,
+    max_sfb,
+    window_sequence: seq,
+    window_shape: shape,
+    num_windows,
+    group_len,
+  }
 }
 
 ///|
@@ -2446,10 +2516,10 @@ fn aac_encode_write_spectral(
 /// CPE and therefore separated from the rest of the channel stream.
 fn aac_encode_write_ics_info(bw : BitWriter, ch : AacEncChannel) -> Unit {
   let is8 = ch.window_sequence == aac_eight_short
-  // reserved bit, window_sequence, sine window.
+  // reserved bit, window_sequence, window_shape (`use_kb_window[0]`).
   bw.put(0, 1)
   bw.put(ch.window_sequence.reinterpret_as_uint(), 2)
-  bw.put(0, 1)
+  bw.put(ch.window_shape.reinterpret_as_uint(), 1)
   if is8 {
     bw.put(ch.max_sfb.reinterpret_as_uint(), 4)
     // scale_factor_grouping (`put_ics_info`): bit w-1 set means window w
@@ -2501,6 +2571,7 @@ fn aac_encode_write_channel_body(
 /// is written as two independent ICS (`common_window = 0`, §309).
 priv struct AacEncPlan {
   seq : Int32
+  shape : Int32
   is8 : Bool
   num_swb : Int32
   offsets : Array[Int32]
@@ -2723,6 +2794,7 @@ pub fn AacEncoder::encode_frame(
       lame_uselong.push(d.uselong)
     }
     let sequences : Array[Int32] = []
+    let shapes : Array[Int32] = []
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       let (emit, next) = aac_lame_apply_block_type(
         self.lame_seq[ch],
@@ -2730,9 +2802,10 @@ pub fn AacEncoder::encode_frame(
       )
       self.lame_seq[ch] = next
       sequences.push(emit)
+      shapes.push(aac_lame_window_shape(emit))
     }
     let built = match
-      self.encode_pipeline(self.pending_bufs, sequences, lame_grp) {
+      self.encode_pipeline(self.pending_bufs, sequences, shapes, lame_grp) {
       Ok(b) => b
       Err(e) => return Err(e)
     }
@@ -2741,6 +2814,7 @@ pub fn AacEncoder::encode_frame(
     self.last_frame_bits = (built.length() - av_aac_adts_header_size) * 8
     for ch = 0; ch < self.config.channels; ch = ch + 1 {
       self.prev_sequence[ch] = sequences[ch]
+      self.use_kb[ch] = shapes[ch]
     }
     self.pending_bufs = bufs
     return Ok(Some(built))
@@ -2780,7 +2854,13 @@ pub fn AacEncoder::encode_frame(
     }
     sequences.push(seq)
   }
-  let built = match self.encode_pipeline(bufs, sequences, []) {
+  let built = match
+    self.encode_pipeline(
+      bufs,
+      sequences,
+      Array::make(self.config.channels, 0),
+      [],
+    ) {
     Ok(b) => b
     Err(e) => return Err(e)
   }
@@ -2798,24 +2878,33 @@ pub fn AacEncoder::encode_frame(
 /// window sequences. `encode_frame` and `flush` both end here; `lame_grp`
 /// carries the grouping byte per channel on the perceptual paths (it stays
 /// empty on the simplified path, where the pipeline then uses the
-/// all-in-one-group default).
+/// all-in-one-group default). `shapes` is each channel's window shape for
+/// this frame (all 0 on the simplified path); the previous frame's shape is
+/// read from `use_kb`, which the caller advances afterwards.
 fn AacEncoder::encode_pipeline(
   self : AacEncoder,
   bufs : Array[Array[Double]],
   sequences : Array[Int32],
+  shapes : Array[Int32],
   lame_grp : Array[Int32],
 ) -> Result[Bytes, String] {
   let use_lame = self.config.perceptual
   let coefs : Array[Array[Double]] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
-    coefs.push(self.frame_coefficients(bufs[ch], sequences[ch]))
+    coefs.push(
+      self.frame_coefficients(
+        bufs[ch],
+        sequences[ch],
+        shapes[ch],
+        self.use_kb[ch],
+      ),
+    )
   }
-  // The frame's window plans, one per channel (§309): sequence, band plan
-  // and window grouping. FFmpeg drops `common_window` unless the two
-  // channels' window types, shapes and groupings all match; the shape bit
-  // this writer emits is a constant (C's `use_kb_window` is never set), so
-  // the equality reduces to type + grouping. Every non-LAME path shares one
-  // decision across the pair, so they always come out common-window.
+  // The frame's window plans, one per channel (§309): sequence, shape, band
+  // plan and window grouping. FFmpeg drops `common_window` unless the two
+  // channels' window types, shapes and groupings all match
+  // (`aacenc.c:960-970`). Every non-LAME path shares one decision across
+  // the pair, so they always come out common-window.
   let plans : Array[AacEncPlan] = []
   for ch = 0; ch < self.config.channels; ch = ch + 1 {
     let seq = sequences[ch]
@@ -2829,9 +2918,6 @@ fn AacEncoder::encode_pipeline(
         // channel and the common-window check compares the expansions.
         aac_window_grouping_expand(lame_grp[ch])
       } else {
-        println(
-          "PLANGRP ch=\{ch} default (use_lame=\{use_lame} len=\{lame_grp.length()})",
-        )
         [8, 0, 0, 0, 0, 0, 0, 0]
       }
     } else {
@@ -2839,6 +2925,7 @@ fn AacEncoder::encode_pipeline(
     }
     plans.push({
       seq,
+      shape: shapes[ch],
       is8,
       num_swb: if is8 {
         self.num_short_swb
@@ -2863,6 +2950,7 @@ fn AacEncoder::encode_pipeline(
     true
   } else {
     plans[0].seq == plans[1].seq &&
+    plans[0].shape == plans[1].shape &&
     (
       plans[0].seq != aac_eight_short ||
       (
@@ -3190,13 +3278,22 @@ fn AacEncoder::encode_pipeline(
           // feed the next frame's `search_for_pns` pricing.
           sticky=aac_two_sticky(st_sf, st_cb, st_z),
         )
+        // `aaccoder_twoloop.h:197`: the search writes its bandwidth into
+        // `s->psy.cutoff`, which every later analysis (the next attempt's
+        // and the next frame's) bands with (§371).
+        self.psy.set_cutoff(two.bandwidth)
         twos.push(two)
         // `aacenc.c:971-985`: `search_for_tns` + `apply_tns_filt` run *after*
         // the quantiser has priced the band and before `search_for_pns`, on
         // coefficients the ABR branch has restored from `pcoeffs`
         // (`aacenc.c:1075-1077`) - so the filter never compounds across
         // attempts and the analysis above always saw the unfiltered spectrum.
-        let tns_data = self.search_tns(coefs[ch], tns_mmm[ch], plan.seq)
+        let tns_data = self.search_tns(
+          coefs[ch],
+          tns_mmm[ch],
+          plan.seq,
+          psy_bands=r.bands,
+        )
         tns_iter.push(tns_data)
         let w = coefs[ch].copy()
         aac_encode_apply_tns(
@@ -3400,6 +3497,7 @@ fn AacEncoder::encode_pipeline(
           work[ch],
           sf_ch[ch],
           plan.seq,
+          plan.shape,
           iter_max_sfb[ch],
           cb_ch[ch],
           zeros[ch],

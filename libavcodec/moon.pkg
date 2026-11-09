@@ -3,6 +3,7 @@ import {
   "moonbitlang/core/v128",
   "milkbobo/ffmpeg-moonbit/libavutil",
   "milkbobo/ffmpeg-moonbit/libavcodec/av1_mc_core",
+  "milkbobo/ffmpeg-moonbit/libavcodec/aac_mdct_tx",
 }
 
 warnings = "-alert_experimental"

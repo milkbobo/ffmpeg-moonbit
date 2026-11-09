@@ -649,6 +649,12 @@ pub struct AacTwoResult {
   maxvals : Array[Double]
   tbits : Int32
   iters : Int32
+  /// The bandwidth (Hz) the search derived, `FFMAX(3000,
+  /// AAC_CUTOFF_FROM_BITRATE(frame_bit_rate, 1, rate))`. The C writes it
+  /// into `s->psy.cutoff` (`aaccoder_twoloop.h:197`), so every later psy
+  /// analysis bands with it instead of `AAC_CUTOFF(avctx)`; the encoder
+  /// mirrors that write-back (§371).
+  bandwidth : Int32
 }
 
 ///|
@@ -814,20 +820,13 @@ pub fn aac_twoloop_search_pns(
     10.0,
   )
   let zeroscale = if lambda > 120.0 {
-    aac_two_clipf(
-      aac_two_powf(aac_two_div(120.0, lambda), 0.25),
-      0.0625,
-      1.0,
-    )
+    aac_two_clipf(aac_two_powf(aac_two_div(120.0, lambda), 0.25), 0.0625, 1.0)
   } else {
     1.0
   }
   if alloc >= 0 {
     // The psy model granted extra bits from the reservoir.
-    destbits = aac_two_mul(
-      alloc.to_double(),
-      aac_two_div(lambda, 120.0),
-    ).to_int()
+    destbits = aac_two_mul(alloc.to_double(), aac_two_div(lambda, 120.0)).to_int()
   }
   // ABR branch: `avctx->flags & AV_CODEC_FLAG_QSCALE == 0`.
   let mut toomanybits = destbits + destbits / 8
@@ -1006,7 +1005,7 @@ pub fn aac_twoloop_search_pns(
     wcl = wcl + gl_scl
   }
   if allz == 0 {
-    return { sf, cb, zeroes, maxvals, tbits: 0, iters: 0, }
+    return { sf, cb, zeroes, maxvals, tbits: 0, iters: 0, bandwidth, }
   }
   let scoefs = aac_two_abs_pow34(coefs, 1024)
   // Per-band peak and the smallest legal scalefactor, per window group.
@@ -1585,7 +1584,7 @@ pub fn aac_twoloop_search_pns(
     }
     wf = wf + glf
   }
-  { sf, cb, zeroes, maxvals, tbits, iters: its, }
+  { sf, cb, zeroes, maxvals, tbits, iters: its, bandwidth, }
 }
 
 ///|

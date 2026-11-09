@@ -294,3 +294,63 @@ pub fn ffref_encode_audio(
   }
   { packets, }
 }
+
+///|
+/// One elementary stream as the oracle sees it. `media_type` is
+/// 0 = video, 1 = audio, 2 = subtitle, 3 = anything else. The remaining
+/// fields mirror `@avf.StreamInfo`, so a demuxer's stream table can be
+/// diffed field for field.
+pub(all) struct FFRefStream {
+  media_type : Int32
+  codec_id : String
+  width : Int32
+  height : Int32
+  sample_rate : Int32
+  channels : Int32
+  extradata : Bytes
+}
+
+///|
+/// Decode the flat stream-info blob. Every codec name precedes every
+/// extradata blob, so the two cursors start at `4 + n * 32` and
+/// `4 + n * 32 + sum(codec_len)` and only move forward.
+fn ffref_parse_stream_info(blob : Bytes) -> Array[FFRefStream] {
+  let n = rd_i32(blob, 0)
+  let mut name_off = 4 + n * 32
+  let mut extra_off = name_off
+  for i = 0; i < n; i = i + 1 {
+    extra_off += rd_i32(blob, 4 + i * 32 + 20)
+  }
+  let streams : Array[FFRefStream] = []
+  for i = 0; i < n; i = i + 1 {
+    let h = 4 + i * 32
+    let name_len = rd_i32(blob, h + 20)
+    let extra_len = rd_i32(blob, h + 24)
+    let name = @utf8.decode_lossy(blob[name_off:name_off + name_len].to_owned())
+    let extra = blob[extra_off:extra_off + extra_len].to_owned()
+    streams.push({
+      media_type: rd_i32(blob, h),
+      codec_id: name,
+      width: rd_i32(blob, h + 4),
+      height: rd_i32(blob, h + 8),
+      sample_rate: rd_i32(blob, h + 12),
+      channels: rd_i32(blob, h + 16),
+      extradata: extra,
+    })
+    name_off += name_len
+    extra_off += extra_len
+  }
+  streams
+}
+
+///|
+/// Probe `data` with the real FFmpeg and return each stream's codec
+/// parameters: codec name, geometry, audio layout and extradata. Raises
+/// `FFRefError` when the reference cannot open the input.
+pub fn ffref_stream_info(data : Bytes) -> Array[FFRefStream] raise FFRefError {
+  let blob = match ffref_stream_info_ffi(data) {
+    Some(v) => v
+    None => raise OracleFailed("avformat could not open or read the input")
+  }
+  ffref_parse_stream_info(blob)
+}

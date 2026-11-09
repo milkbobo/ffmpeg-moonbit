@@ -171,6 +171,20 @@ fn aac_lame_apply_block_type(
 }
 
 ///|
+/// The `window_shape` `psy_lame_window` reports with the emitted type
+/// (`aacpsy.c:1000-1016`): KBD (1) on ONLY_LONG and LONG_STOP, sine (0) on
+/// LONG_START and EIGHT_SHORT. `aacenc.c:859-860` shifts it into
+/// `use_kb_window[0]` (the previous frame's moving to `[1]`); the analysis
+/// windows read both and `put_ics_info` transmits `[0]`.
+fn aac_lame_window_shape(window_type : Int32) -> Int32 {
+  if window_type == aac_eight_short || window_type == 1 {
+    0
+  } else {
+    1
+  }
+}
+
+///|
 /// Build the per-channel switcher state as `lame_window_init` does: the
 /// ABR attack threshold from the bitrate and sixteen `10.0f` seed peaks.
 pub fn AacLameWindow::new(bitrate_kbps_per_ch : Int32) -> AacLameWindow {

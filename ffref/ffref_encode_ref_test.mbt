@@ -140,13 +140,24 @@ fn ffref_expect_ref_packets(
 }
 
 ///|
+/// Strip an ADTS frame's 7-byte header (fixed + variable, no CRC): the
+/// port's packets are ADTS-wrapped while the oracle's are the raw AAC
+/// frames, so the byte differential compares the payloads.
+fn ffref_aac_strip_adts(frame : Bytes) -> Bytes {
+  frame[7:frame.length()].to_owned()
+}
+
+///|
 /// AAC byte-exact differential. The oracle's stock encoder must run the
 /// harness configuration the port is aligned against: `_ref/aacenc`
 /// pins `pns=0 tns=0 ms=0 is=0` (stock defaults are 1/1/auto/1 - the
 /// divergence that looked like assembly drift in §346 was exactly this),
 /// the twoloop coder is the stock default. The port's twoloop-aligned
 /// perceptual path then matches packet for packet, the `AV_CODEC_CAP_DELAY`
-/// framing (one packet per frame plus the flush tail) included.
+/// framing (one packet per frame plus the flush tail) included. Since §370
+/// (the av_tx FLOAT MDCT port) and §371 (the KBD analysis windows) every
+/// frame's bits and lambda track the oracle exactly, so the differential
+/// is byte-for-byte on the raw payload (the port's ADTS headers stripped).
 test "ffref: AAC perceptual encoder frames match the oracle's framing and decode" {
   let rate = 44100
   let channels = 2
@@ -181,13 +192,13 @@ test "ffref: AAC perceptual encoder frames match the oracle's framing and decode
     channels~,
     bitrate=128000,
   )
-  // Byte parity waits on the f32-MDCT port (see the module docs); the
-  // framing and the decode accounting are pinned now.
-  assert_eq(
-    adts_frames.length(),
-    native.packets().length(),
-    msg="aac: packet count (ours \{adts_frames.length()}, ref \{native.packets().length()})",
-  )
+  // §371: byte-for-byte on the raw payloads (the port's ADTS headers
+  // stripped; the oracle's packets are headerless).
+  let ours_raw : Array[Bytes] = []
+  for f_ in adts_frames {
+    ours_raw.push(ffref_aac_strip_adts(f_))
+  }
+  ffref_expect_ref_packets(ours_raw, native, "aac")
   let dec_ours = @ffref.ffref_decode_audio(ffref_enc_concat(adts_frames))
   let nmux = @avf.adts_muxer_new(rate, channels).unwrap()
   for p_ in native.packets() {
@@ -259,9 +270,87 @@ test "ffref: AAC mono perceptual encoder frames match the oracle's framing" {
     channels~,
     bitrate=64000,
   )
-  assert_eq(
-    adts_frames.length(),
-    native.packets().length(),
-    msg="aac-mono: packet count (ours \{adts_frames.length()}, ref \{native.packets().length()})",
-  )
+  let ours_raw : Array[Bytes] = []
+  for f_ in adts_frames {
+    ours_raw.push(ffref_aac_strip_adts(f_))
+  }
+  ffref_expect_ref_packets(ours_raw, native, "aac-mono")
+}
+
+///|
+/// The tonal stereo fixture of the wasm TNS property tests
+/// (`aac_encode_test_shared_high`, shared high partial: 440/550 Hz at 0.30,
+/// 9 kHz at 0.12, LCG dither at 0.008) quantised onto the s16 grid so both
+/// encoders see identical input. Interleaved, like `ffref_enc_pcm`.
+fn ffref_enc_pcm_tonal(frames : Int32, rate : Int32) -> (Array[Int32], Bytes) {
+  let n = frames * 1024
+  let cols : Array[Array[Int32]] = []
+  let seeds : Array[UInt32] = [20261105U, 555000111U]
+  let two_pi = 2.0 * 3.14159265358979323846
+  for c = 0; c < 2; c = c + 1 {
+    let col : Array[Int32] = []
+    let low_freq = if c == 0 { 440.0 } else { 550.0 }
+    let mut seed = seeds[c]
+    for i = 0; i < n; i = i + 1 {
+      let t = i.to_double() / rate.to_double()
+      seed = seed * 1664525U + 1013904223U
+      let dither = (seed.reinterpret_as_int() >> 10).to_double() / 4194304.0
+      let v = 0.30 * @math.sin(two_pi * low_freq * t) +
+        0.12 * @math.sin(two_pi * 9000.0 * t) +
+        0.008 * dither
+      let s = (v * 32768.0).round().to_int()
+      col.push(if s > 32767 { 32767 } else if s < -32768 { -32768 } else { s })
+    }
+    cols.push(col)
+  }
+  let arr : Array[Int32] = []
+  let out : Array[Byte] = []
+  for i = 0; i < n; i = i + 1 {
+    for c = 0; c < 2; c = c + 1 {
+      let s = cols[c][i]
+      arr.push(s)
+      out.push((s & 0xFF).to_byte())
+      out.push(((s >> 8) & 0xFF).to_byte())
+    }
+  }
+  (arr, Bytes::from_array(out))
+}
+
+///|
+/// TNS at the stock default (`aac_tns=1`) on tonal material where the
+/// filter actually engages: the port's perceptual path always runs the TNS
+/// search, so this pins its decisions (in-loop search, the carried
+/// `max_sfb` range, the filter coefficients) against the stock encoder
+/// byte-for-byte at three bitrates - and arbitrates the wasm TNS property
+/// tests, which run the same fixture (§371).
+test "ffref: AAC perceptual encoder with TNS on matches the oracle byte-for-byte" {
+  let rate = 44100
+  let channels = 2
+  let frames = 8
+  let (arr, pcm) = ffref_enc_pcm_tonal(frames, rate)
+  for bit_rate in [24000, 64000, 128000] {
+    let enc = @libavcodec.aac_encoder_new(
+      @libavcodec.aac_encode_config_perceptual(rate, channels, bit_rate),
+    ).unwrap()
+    let ours : Array[Bytes] = []
+    for i = 0; i < frames; i = i + 1 {
+      match
+        enc.encode_frame(ffref_enc_planes(arr, i, 1024, channels)).unwrap() {
+        Some(adts) => ours.push(ffref_aac_strip_adts(adts))
+        None => ()
+      }
+    }
+    for adts in enc.flush().unwrap() {
+      ours.push(ffref_aac_strip_adts(adts))
+    }
+    let native = @ffref.ffref_encode_audio(
+      pcm,
+      "aac",
+      options="aac_pns=0:aac_tns=1:aac_ms=0:aac_is=0",
+      sample_rate=rate,
+      channels~,
+      bitrate=bit_rate,
+    )
+    ffref_expect_ref_packets(ours, native, "aac-tns \{bit_rate}")
+  }
 }
