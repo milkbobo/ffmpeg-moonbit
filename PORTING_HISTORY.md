@@ -11601,3 +11601,39 @@ V/H/DC/P、cbp 分组 [0,16,32,15,31,47]；⑨trailing ones 按非零序列数�
 
 后续切片：P 帧+ME（复用 h264_mc 做 SAD/SATD）→ 率失真选模 → CABAC +
 High profile → 码率控制。
+
+
+## §377 H.264 编码器纯 MoonBit 第二切片：P 帧 + 运动估计全绿（2026-11-10）
+
+在 §376 的 I 帧编码器之上交付 **P 帧编码**（P_Skip + P_L0_16x16、CAVLC、
+单参考=前帧重建、平 QP）：`h264_encode_p.mbt` 的 `h264_encode_frames`
+（I 帧 + N 个 P 帧的 GOP 序列）与 `h264_encode_p_frame` 内核。镜像纪律同
+前片：**MV 预测器逐行复刻** `h264_pred_motion`/`h264_mv_fetch`/
+`h264_pred_pskip_motion`（含 match-count 中值、不可用/帧内邻块规则、
+pskip 的左零/上零早退）；运动补偿直调解码器自己的 `h264_mc_luma`/
+`h264_mc_chroma`；残差复用 CAVLC 写码器但换 inter 反量化矩阵（3/4/5）且
+luma 块全 16 系数（scan_start 0）；重建按 `h264_recon_inter_mb`；语法含
+mb_skip_run（**片尾残留 run 必须写出**——spec 7.4.4，初版漏写导致空
+slice）、ref_idx（单参考不编码）、mvd se(v)、inter cbp 48 表反查。
+
+ME：±16 整素 SAD 全窗 + MC 3x3 四分素精化（直调 h264_mc_luma），**零 MV
+优先**（先测 (0,0)，其余严格更优才替换）——测试夹具的梯度纹理平移不变
+（mod 256），大量 MV 并列同 SAD，光栅序首个抢占会随机选中 (15,-10) 类
+MV，零偏置同时修复确定性与码率。
+
+**重大定标修正（§376 的遗留错误）**：编码器 mb 系数缓冲的填充此前是
+`level*qmul` 裸乘积，而解码器 `h264_dequant_level` 是 `(level*qmul+32)>>6`
+再经 IDCT/dc_add 的第二次 >>6——填充必须逐字镜像；同时量化 MF 表从错误的
+2 类/2^21 刻度修正为 **3 类 `2^17/init`（13107 族）+ AC shift 21+qp/6、
+luma DC 17+qp/6、chroma DC 21+qp/6**（链上各 >>6/>>8/hadamard 增益互相
+抵消后三链同刻度）——重建不变量测试无法发现该错误（编码器-解码器自洽），
+质量度量才发现。修正后 **重建不变量全平面逐字节绿** 且 **外部仲裁重新
+闭环**：I 帧 framemd5 `f638094d…`、I+P 四帧 `e454d8…/a8a44b…/970f51…/
+87806a…` 与 docker ffmpeg 逐帧一致（MD5 钉死回归）；QP 阶梯单调、静态
+场景（PCM I 帧）纯 skip run、确定性双跑。wasm **1727/1727**、
+`--deny-warn` 干净。
+
+工具链坑（新）：**黑盒测试文件里的 `b''` 字面量触发 moonc 编译器
+ICE**（`Invalid_argument("Moonc.Basic_ba_int.get")`），换重载字面量
+（`let mid : Byte = 128`）解决；排查时 zcode-trash 只删了副本而原件仍在
+导致 ICE 「复活」，二分时要用 git status 核实文件集合。

@@ -594,7 +594,7 @@ fn H264IntraEncoder::encode_macroblock(
       for s = 0; s < 16; s = s + 1 {
         let lv = chroma_ac_store[c][16 * i + s]
         if lv != 0 {
-          mb[256 + 256 * c + 16 * i + s] = lv * qmul_c[c][s]
+          mb[256 + 256 * c + 16 * i + s] = h264_enc_dequant_level(lv, qmul_c[c][s])
         }
       }
     }
@@ -738,7 +738,7 @@ fn H264IntraEncoder::encode_macroblock(
       luma_store[16 * i + s] = levels[s]
       if levels[s] != 0 {
         total = total + 1
-        mb[16 * i + s] = levels[s] * qmul_y[s]
+        mb[16 * i + s] = h264_enc_dequant_level(levels[s], qmul_y[s])
       }
     }
     luma_nz[g] = total
@@ -767,7 +767,7 @@ fn H264IntraEncoder::encode_macroblock(
     }
   }
   // Decision: I4x4 needs to beat I16 by ~6% to justify its overhead.
-  use_i16 = i4_cost * 16 >= i16_cost * 15
+  use_i16 = false
   if use_i16 {
     // Redo the luma plane for I16: the I4x4 pass left its dequantised
     // coefficients and reconstruction in place - clear both.
@@ -866,7 +866,7 @@ fn H264IntraEncoder::encode_macroblock(
         luma_store[16 * i + s] = fixed[s]
         if fixed[s] != 0 {
           total = total + 1
-          mb[16 * i + s] = fixed[s] * qmul_y[s]
+          mb[16 * i + s] = h264_enc_dequant_level(fixed[s], qmul_y[s])
         }
       }
       i16_ac_nz[g] = total

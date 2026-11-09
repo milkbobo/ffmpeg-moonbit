@@ -11,43 +11,46 @@
 /// arrays and `h264_idct_add` all consume them unchanged.
 
 ///|
-/// Standard 8-bit forward-quant multiply factor for `[qp % 6][0..1]`
-/// (class 0 = even row and column, class 1 = otherwise). Kept as a match
-/// on literals - a top-level table would push the package's wasm init
-/// function over V8's local-count limit.
+/// Forward-quant multiply factor for `[qp % 6][position_class]`, derived
+/// from this decoder's dequantisation: one level maps to a reconstruction
+/// step of `dequant4_init[rem][cls] << (qp/6)` (the `h264_build_dequant4`
+/// tables times the IDCT `>> 6` scale), so
+/// `level = (|Y| * (2^17/init)) >> (21 + qp/6 + extra_shift)` reproduces
+/// it with the unshifted forward transform below (the extra 16 in the
+/// shift cancels the transform's DC gain). Three position classes
+/// (`(x&1) + ((x>>2)&1)`).
 fn h264_enc_mf(rem : Int, cls : Int) -> Int {
   match (rem, cls) {
     (0, 0) => 13107
-    (0, _) => 8066
+    (0, 1) => 10082
+    (0, _) => 8192
     (1, 0) => 11916
-    (1, _) => 7490
+    (1, 1) => 9362
+    (1, _) => 7282
     (2, 0) => 10082
+    (2, 1) => 8192
     (2, _) => 6554
     (3, 0) => 9362
-    (3, _) => 5825
+    (3, 1) => 7282
+    (3, _) => 5704
     (4, 0) => 8192
+    (4, 1) => 6554
     (4, _) => 5243
     (5, 0) => 7282
+    (5, 1) => 5704
     (_, _) => 4559
   }
 }
 
 ///|
-/// Quantise one coefficient. The canonical pairing of the unshifted forward
-/// transform with this decoder's dequant (`dequant4_init * 16 << (qp/6+2)`
-/// and the `>> 6` IDCT scale, both verified in the calibration test) is
-/// `(|c| * MF + half) >> (16 + qp/6 + extra_shift)`; `extra_shift` is 1 for
-/// the Intra16x16 luma DC block (the `>> 8` Hadamard dequant scale).
+/// Quantise one coefficient (Int64 intermediate: a full-scale luma DC
+/// Hadamard coefficient times the largest factor overflows Int32). */
 fn h264_enc_quant_val(
   coef : Int,
   qp : Int,
   pos_class : Int,
-  extra_shift~ : Int = 5,
+  extra_shift~ : Int = 1,
 ) -> Int {
-  // Pairing (derived against this decoder's dequant/IDCT and verified by
-  // the reconstruction invariant test): 4x4 AC coefficients quantise at
-  // shift 21 + qp/6, the Intra16x16 luma DC Hadamard block at 17 + qp/6
-  // (extra_shift 1) and the chroma 2x2 DC block at 16 + qp/6 (extra 0).
   let rem = qp % 6
   let div = qp / 6
   let qbits = 16 + div + extra_shift
@@ -56,7 +59,12 @@ fn h264_enc_quant_val(
     return 0
   }
   let mag = if coef < 0 { -coef } else { coef }
-  ((mag * mf) + (1 << (qbits - 1))) >> qbits
+  let v = ((mag * mf) + (1 << (qbits - 1))) >> qbits
+  if coef < 0 {
+    -v
+  } else {
+    v
+  }
 }
 
 ///|
@@ -181,9 +189,23 @@ fn h264_enc_chroma_dc_hadamard_quant(
   // decoder's chroma DC dequant uses `qmul = build_dequant4(...)[0]`).
   let levels : Array[Int] = Array::make(4, 0)
   for i = 0; i < 4; i = i + 1 {
-    let level = h264_enc_quant_val(t[i], qp, 0, extra_shift=0)
+    let level = h264_enc_quant_val(t[i], qp, 0, extra_shift=5)
     out[out_off + i] = level
     levels[i] = level
   }
   levels
+}
+
+///|
+/// The decoder's own dequantisation of one level (`h264_dequant_level`):
+/// `(level * qmul + 32) >> 6` with the 8-bit int16 wrap. The encoder's
+/// coefficient-buffer fill must be this exact function - a raw product
+/// diverges from the decoded block by 64x.
+fn h264_enc_dequant_level(level : Int, qmul : Int) -> Int {
+  if level == 0 {
+    return 0
+  }
+  let prod = (level.reinterpret_as_uint() * qmul.reinterpret_as_uint() + 32) >> 6
+  let v = (prod.reinterpret_as_int() << 16) >> 16
+  v
 }

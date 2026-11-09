@@ -138,9 +138,10 @@ test "h264 enc: intra frame reconstruction invariant (I16/I4x4 mix)" {
     }
   }
   let mean = sum_abs / (96 * 64)
-  // Loose bound only: rate-distortion tuning (SATD costs, lambda) is a
-  // later slice; this gate catches gross prediction/quant breakage.
-  if mean > 128 {
+  // The SAD-based mode decision leaves some headroom (rate-distortion
+  // tuning is a later slice), but the standard quantisation step keeps the
+  // mean reconstruction error small.
+  if mean > 40 {
     fail("luma mean abs diff \{mean} exceeds the quantisation bound")
   }
 }
@@ -366,7 +367,7 @@ test "h264 enc: ffmpeg-arbitrated end-to-end (96x64, auto I16/I4x4)" {
   }
   inspect(
     h264_enc_md5(deblocked[0].yuvp()),
-    content="92f604743487c2e4ee50a61cedb93d7b",
+    content="f638094d3c84a83ac27611f0860bd1be",
   )
   let raw = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
     Ok(f) => f
