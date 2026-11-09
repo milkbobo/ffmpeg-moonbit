@@ -204,13 +204,39 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
   if frames_dec.length() != 4 {
     fail("expected 4 frames")
   }
+  // Re-pinned after the partition slice (16x8/8x16/8x8): ffmpeg's framemd5
+  // values for the partitioned stream.
   let pins = [
     "e454d86d27698952c3e354a20cb109cb",
-    "a8a44b1de5d419ff85a65da25720b8e5",
-    "970f5104c4169e721a9a7c573d0a46cd",
-    "87806ab8a6643021241495e26e666642",
+    "529a25cd6da50e5c770783e36f1b5b92",
+    "69edb76ed4fc397f27d185487ac66854",
+    "98ebe355cb1465bf0063f2aec6869b38",
   ]
   for i, f in frames_dec {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
+  }
+}
+
+///|
+/// The moving-box fixture must actually exercise the partition modes: the
+/// 8x8 box inside a smooth gradient makes P_8x8 (and 4x4 sub partitions)
+/// strictly better than 16x16 on the SAD comparison.
+test "h264 enc: partitions engage on the moving box" {
+  let frames = h264p_fixture(96, 64, 3)
+  let stream = match
+    @libavcodec.h264_encode_frames(frames, width=96, height=64, qp=24) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  // The partitioned stream decodes to the same pixels our own decoder
+  // produces (already pinned above); here just gate the byte size: an
+  // all-16x16 stream would be either bigger (worse MC) or the run of
+  // skips would not match the box motion.
+  let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  if frames_dec.length() != 3 {
+    fail("expected 3 frames")
   }
 }

@@ -59,6 +59,11 @@ priv struct H264PEncoder {
   states : Array[H264PMbState]
   /// Current MB's mirror (mv/ref/nz) while coding.
   cur_nz : Array[Int]
+  /// Progressive per-4x4 mirror while coding one macroblock (the decoder's
+  /// `write_back_part` timing: later partitions' predictors see earlier
+  /// partitions' MVs).
+  cur_mv : Array[Int]
+  cur_ref : Array[Int]
 }
 
 ///|
@@ -181,6 +186,8 @@ pub fn h264_encode_frames(
       mb_height,
       states,
       cur_nz: Array::make(48, 0),
+      cur_mv: Array::make(32, 0),
+      cur_ref: Array::make(16, -2),
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f) {
@@ -253,19 +260,27 @@ fn H264PEncoder::encode_p_frame(
   for mb_y = 0; mb_y < self.mb_height; mb_y = mb_y + 1 {
     for mb_x = 0; mb_x < self.mb_width; mb_x = mb_x + 1 {
       let mb_idx = mb_y * self.mb_width + mb_x
-      let decision = self.decide_macroblock(mb_x, mb_y)
-      if true {
-  
-      }
-      if decision.skip {
+      let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
+      let (_, _, skip_sad) = self.me_fixed(
+        mb_x,
+        mb_y,
+        0,
+        0,
+        16,
+        16,
+        pmvx,
+        pmvy,
+      )
+      if skip_sad == 0 {
         skip_run = skip_run + 1
-        self.commit_skip(mb_idx, decision.mvx, decision.mvy)
+        self.commit_skip(mb_idx, pmvx, pmvy)
         continue
       }
       // A coded macroblock ends the skip run.
       r.put_ue(skip_run)
       skip_run = 0
-      match self.write_coded_mb(mb_x, mb_y, decision, r, qp) {
+      let plan = self.decide_plan(mb_x, mb_y)
+      match self.write_coded_mb(mb_x, mb_y, plan, r, qp) {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
@@ -281,36 +296,48 @@ fn H264PEncoder::encode_p_frame(
 }
 
 ///|
-priv struct H264PDecision {
-  skip : Bool
-  mvx : Int
-  mvy : Int
+///|
+/// The decided macroblock plan: partitions with quarter-pel MVs.
+priv enum H264PPlan {
+  Skip
+  /// P_L0_16x16.
+  Part16x16(Int, Int)
+  /// P_L0_16x8: top, bottom.
+  Part16x8(Int, Int, Int, Int)
+  /// P_L0_8x16: left, right.
+  Part8x16(Int, Int, Int, Int)
+  /// P_8x8: four sub types (0 8x8 / 1 8x4 / 2 4x8 / 3 4x4) and the
+  /// quarter-pel MVs of every sub partition in `h264_sub_partitions` order.
+  Part8x8(Int, Int, Int, Int, Array[Int])
 }
 
 ///|
-/// Motion search + mode decision for one macroblock. Integer-pel SAD over
-/// a +-16 window in raster order (strictly-better keeps the first best,
-/// which makes the search deterministic), then a quarter-pel refinement
-/// over the 3x3 subpel neighbourhood through the decoder's own MC filter.
-fn H264PEncoder::decide_macroblock(
+/// Partition ME: +-16 integer SAD (zero MV first, strictly-better
+/// replacements) refined through the decoder's MC filter over the 3x3
+/// subpel neighbourhood. Returns the quarter-pel MV and its MC SAD.
+fn H264PEncoder::me_part(
   self : H264PEncoder,
   mb_x : Int,
   mb_y : Int,
-) -> H264PDecision {
-  let ybase = mb_y * 16 * self.ystride + mb_x * 16
-  // Integer-pel search. The zero MV is evaluated first and later
-  // candidates must be STRICTLY better - translation-invariant content
-  // (gradients, flat areas) ties many MVs at the same SAD, and the zero
-  // bias keeps those deterministic and cheap.
+  ox : Int,
+  oy : Int,
+  w : Int,
+  h : Int,
+) -> (Int, Int, Int) {
+  let src_row = mb_y * 16 + oy
+  let src_col = mb_x * 16 + ox
   let mut best_x = 0
   let mut best_y = 0
   let mut best_sad = h264_p_sad_int(
     self.src_y,
     self.ref_y,
-    ybase,
+    src_row,
+    src_col,
     self.ystride,
-    mb_x * 16,
-    mb_y * 16,
+    mb_x * 16 + ox,
+    mb_y * 16 + oy,
+    w~,
+    h~,
     self.pwidth,
     self.pheight,
   )
@@ -322,10 +349,13 @@ fn H264PEncoder::decide_macroblock(
       let sad = h264_p_sad_int(
         self.src_y,
         self.ref_y,
-        ybase,
+        src_row,
+        src_col,
         self.ystride,
-        mb_x * 16 + dx,
-        mb_y * 16 + dy,
+        mb_x * 16 + ox + dx,
+        mb_y * 16 + oy + dy,
+        w~,
+        h~,
         self.pwidth,
         self.pheight,
       )
@@ -336,29 +366,36 @@ fn H264PEncoder::decide_macroblock(
       }
     }
   }
-  // Quarter-pel refinement: the 3x3 subpel neighbourhood of the best
-  // integer position, evaluated through the decoder's MC filter.
   let mcbuf : Array[Int] = Array::make(256, 0)
-  let mut best_qx = best_x * 4
-  let mut best_qy = best_y * 4
-  // The integer-pel candidate seeds the refinement (zero-subpel bias).
   h264_mc_luma(
     mcbuf,
     0,
     16,
     self.ref_y,
-    mb_x * 16 + (best_qx >> 2),
-    mb_y * 16 + (best_qy >> 2),
+    mb_x * 16 + ox + (best_x >> 2),
+    mb_y * 16 + oy + (best_y >> 2),
     self.ystride,
-    16,
-    16,
-    best_qx & 3,
-    best_qy & 3,
+    w,
+    h,
+    best_x & 3,
+    best_y & 3,
     self.pwidth,
     self.pheight,
     bit_depth=8,
   )
-  let mut best_qsad = h264_p_sad_mc(self.src_y, mcbuf, ybase, self.ystride)
+  let mut best_qx = best_x * 4
+  let mut best_qy = best_y * 4
+  let mut best_qsad = h264_p_sad_mc(
+    self.src_y,
+    mcbuf,
+    src_row,
+    src_col,
+    self.ystride,
+    self.pheight,
+    self.pwidth,
+    w~,
+    h~,
+  )
   for sy = -1; sy <= 1; sy = sy + 1 {
     for sx = -1; sx <= 1; sx = sx + 1 {
       if sx == 0 && sy == 0 {
@@ -372,19 +409,29 @@ fn H264PEncoder::decide_macroblock(
           0,
           16,
           self.ref_y,
-          mb_x * 16 + (qx >> 2),
-          mb_y * 16 + (qy >> 2),
+          mb_x * 16 + ox + (qx >> 2),
+          mb_y * 16 + oy + (qy >> 2),
           self.ystride,
-          16,
-          16,
+          w,
+          h,
           qx & 3,
           qy & 3,
           self.pwidth,
           self.pheight,
           bit_depth=8,
         )
-        let sad = h264_p_sad_mc(self.src_y, mcbuf, ybase, self.ystride)
-        if best_qsad < 0 || sad < best_qsad {
+        let sad = h264_p_sad_mc(
+          self.src_y,
+          mcbuf,
+          src_row,
+          src_col,
+          self.ystride,
+          self.pheight,
+          self.pwidth,
+          w~,
+          h~,
+        )
+        if sad < best_qsad {
           best_qsad = sad
           best_qx = qx
           best_qy = qy
@@ -392,51 +439,154 @@ fn H264PEncoder::decide_macroblock(
       }
     }
   }
-  // Skip check: the P_Skip predictor MV with zero residual.
-  let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
+  (best_qx, best_qy, best_qsad)
+}
+
+///|
+/// MC a fixed MV (no search): the skip check. Returns the MC SAD.
+fn H264PEncoder::me_fixed(
+  self : H264PEncoder,
+  mb_x : Int,
+  mb_y : Int,
+  ox : Int,
+  oy : Int,
+  w : Int,
+  h : Int,
+  mvx : Int,
+  mvy : Int,
+) -> (Int, Int, Int) {
+  let src_row = mb_y * 16 + oy
+  let src_col = mb_x * 16 + ox
+  let mcbuf : Array[Int] = Array::make(256, 0)
   h264_mc_luma(
     mcbuf,
     0,
     16,
     self.ref_y,
-    mb_x * 16 + (pmvx >> 2),
-    mb_y * 16 + (pmvy >> 2),
+    mb_x * 16 + ox + (mvx >> 2),
+    mb_y * 16 + oy + (mvy >> 2),
     self.ystride,
-    16,
-    16,
-    pmvx & 3,
-    pmvy & 3,
+    w,
+    h,
+    mvx & 3,
+    mvy & 3,
     self.pwidth,
     self.pheight,
     bit_depth=8,
   )
-  let skip_sad = h264_p_sad_mc(self.src_y, mcbuf, ybase, self.ystride)
-  if skip_sad == 0 && pmvx == best_qx && pmvy == best_qy {
-    return { skip: true, mvx: pmvx, mvy: pmvy }
+  let sad = h264_p_sad_mc(
+    self.src_y,
+    mcbuf,
+    src_row,
+    src_col,
+    self.ystride,
+    self.pheight,
+    self.pwidth,
+    w~,
+    h~,
+  )
+  (mvx, mvy, sad)
+}
+
+///|
+/// Mode decision: skip check, then 16x16 / 16x8 / 8x16 / 8x8 with the
+/// per-8x8 sub-mode picked by SAD (8x8 preferred on ties). Later modes
+/// must be STRICTLY better, so the coarser partition wins ties - the
+/// deterministic, bit-cheap choice.
+fn H264PEncoder::decide_plan(
+  self : H264PEncoder,
+  mb_x : Int,
+  mb_y : Int,
+) -> H264PPlan {
+  let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
+  let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
+  if skip_sad == 0 {
+    return Skip
   }
-  { skip: false, mvx: best_qx, mvy: best_qy }
+  let (x16, y16, sad16) = self.me_part(mb_x, mb_y, 0, 0, 16, 16)
+  let mut best_sad = sad16
+  let mut plan = Part16x16(x16, y16)
+  let (tx, ty, st) = self.me_part(mb_x, mb_y, 0, 0, 16, 8)
+  let (bx, by, sb) = self.me_part(mb_x, mb_y, 0, 8, 16, 8)
+  if st + sb < best_sad {
+    best_sad = st + sb
+    plan = Part16x8(tx, ty, bx, by)
+  }
+  let (lx, ly, sl) = self.me_part(mb_x, mb_y, 0, 0, 8, 16)
+  let (rx, ry, sr) = self.me_part(mb_x, mb_y, 8, 0, 8, 16)
+  if sl + sr < best_sad {
+    best_sad = sl + sr
+    plan = Part8x16(lx, ly, rx, ry)
+  }
+  let subs : Array[Int] = Array::make(4, 0)
+  let mvs : Array[Int] = []
+  let mut sad88 = 0
+  for k = 0; k < 4; k = k + 1 {
+    let x8 = k % 2
+    let y8 = k / 2
+    let (z0x, z0y, s8) = self.me_part(mb_x, mb_y, x8 * 8, y8 * 8, 8, 8)
+    let (t1x, t1y, t1) = self.me_part(mb_x, mb_y, x8 * 8, y8 * 8, 8, 4)
+    let (t2x, t2y, t2) = self.me_part(mb_x, mb_y, x8 * 8, y8 * 8 + 4, 8, 4)
+    let (l1x, l1y, l1) = self.me_part(mb_x, mb_y, x8 * 8, y8 * 8, 4, 8)
+    let (r1x, r1y, r2) = self.me_part(mb_x, mb_y, x8 * 8 + 4, y8 * 8, 4, 8)
+    let (a1x, a1y, a1) = self.me_part(mb_x, mb_y, x8 * 8, y8 * 8, 4, 4)
+    let (b1x, b1y, b2) = self.me_part(mb_x, mb_y, x8 * 8 + 4, y8 * 8, 4, 4)
+    let (c1x, c1y, c3) = self.me_part(mb_x, mb_y, x8 * 8, y8 * 8 + 4, 4, 4)
+    let (d1x, d1y, d4) = self.me_part(mb_x, mb_y, x8 * 8 + 4, y8 * 8 + 4, 4, 4)
+    let mut sub = 0
+    let mut sub_sad = s8
+    let mut sub_mvs = [z0x, z0y]
+    if t1 + t2 < sub_sad {
+      sub = 1
+      sub_sad = t1 + t2
+      sub_mvs = [t1x, t1y, t2x, t2y]
+    }
+    if l1 + r2 < sub_sad {
+      sub = 2
+      sub_sad = l1 + r2
+      sub_mvs = [l1x, l1y, r1x, r1y]
+    }
+    if a1 + b2 + c3 + d4 < sub_sad {
+      sub = 3
+      sub_sad = a1 + b2 + c3 + d4
+      sub_mvs = [a1x, a1y, b1x, b1y, c1x, c1y, d1x, d1y]
+    }
+    subs[k] = sub
+    sad88 += sub_sad
+    for m in sub_mvs {
+      mvs.push(m)
+    }
+  }
+  if sad88 < best_sad {
+    plan = Part8x8(subs[0], subs[1], subs[2], subs[3], mvs)
+  }
+  plan
 }
 
 ///|
 fn h264_p_sad_int(
   src : Array[Int],
   ref_plane : Array[Int],
-  src_off : Int,
+  src_row : Int,
+  src_col : Int,
   stride : Int,
   ref_x : Int,
   ref_y : Int,
+  w~ : Int = 16,
+  h~ : Int = 16,
   pw : Int,
   ph : Int,
 ) -> Int {
-  // Edge replication matches the MC clamp: the +-16 search window reads
-  // outside the plane near picture borders.
+  // Edge replication matches the MC clamp on BOTH planes: the +-16 search
+  // window and bottom/right partitions read outside the visible area.
   let mut sad = 0
-  for row = 0; row < 16; row = row + 1 {
+  for row = 0; row < h; row = row + 1 {
     let ry = h264_mc_clamp(ref_y + row, ph)
-    let srow = src_off + row * stride
-    for col = 0; col < 16; col = col + 1 {
+    let sy = h264_mc_clamp(src_row + row, ph)
+    for col = 0; col < w; col = col + 1 {
       let rx = h264_mc_clamp(ref_x + col, pw)
-      let d = src[srow + col] - ref_plane[ry * stride + rx]
+      let sx = h264_mc_clamp(src_col + col, pw)
+      let d = src[sy * stride + sx] - ref_plane[ry * stride + rx]
       sad = sad + (if d < 0 { -d } else { d })
     }
   }
@@ -447,13 +597,22 @@ fn h264_p_sad_int(
 fn h264_p_sad_mc(
   src : Array[Int],
   mc : Array[Int],
-  src_off : Int,
+  src_row : Int,
+  src_col : Int,
   stride : Int,
+  ph : Int,
+  pw : Int,
+  w~ : Int = 16,
+  h~ : Int = 16,
 ) -> Int {
+  // The MC buffer keeps the 16-row stride; only the partition's rows are
+  // compared (larger partitions' SADs cover proportionally more samples).
   let mut sad = 0
-  for row = 0; row < 16; row = row + 1 {
-    for col = 0; col < 16; col = col + 1 {
-      let d = src[src_off + row * stride + col] - mc[row * 16 + col]
+  for row = 0; row < h; row = row + 1 {
+    let sy = h264_mc_clamp(src_row + row, ph)
+    for col = 0; col < w; col = col + 1 {
+      let sx = h264_mc_clamp(src_col + col, pw)
+      let d = src[sy * stride + sx] - mc[row * 16 + col]
       sad = sad + (if d < 0 { -d } else { d })
     }
   }
@@ -506,14 +665,20 @@ fn H264PEncoder::mv_fetch(
   if nmb < 0 || nmb >= self.states.length() {
     return (-2, 0, 0)
   }
+  let idx = (ay % 4) * 4 + ax % 4
+  // The current macroblock's own blocks read the PROGRESSIVE mirror
+  // (partitions written so far), exactly like the decoder reading the
+  // partially filled `mv` array of the MB being decoded.
+  if nmb == mb_idx {
+    return (self.cur_ref[idx], self.cur_mv[2 * idx], self.cur_mv[2 * idx + 1])
+  }
   let st = self.states[nmb]
-  if nmb != mb_idx && !st.has_data {
+  if !st.has_data {
     return (-2, 0, 0)
   }
   if st.intra {
     return (-1, 0, 0)
   }
-  let idx = (ay % 4) * 4 + ax % 4
   (st.ref_idx[idx], st.mv[2 * idx], st.mv[2 * idx + 1])
 }
 
@@ -664,13 +829,85 @@ fn H264PEncoder::mc_into_rec(
 }
 
 ///|
-/// Write one coded P_L0_16x16 macroblock: syntax, residual, reconstruction
-/// and the mirror-state commit.
+/// Fill the progressive mirror for one partition (`write_back_part`).
+fn H264PEncoder::fill_part(
+  self : H264PEncoder,
+  bx : Int,
+  by : Int,
+  bw : Int,
+  bh : Int,
+  mvx : Int,
+  mvy : Int,
+) -> Unit {
+  for y = 0; y < bh; y = y + 1 {
+    for x = 0; x < bw; x = x + 1 {
+      let i = (by + y) * 4 + bx + x
+      self.cur_mv[2 * i] = mvx
+      self.cur_mv[2 * i + 1] = mvy
+      self.cur_ref[i] = 0
+    }
+  }
+}
+
+///|
+/// `h264_pred_16x8_motion` mirror: partition i (0 top, 1 bottom).
+fn H264PEncoder::pred_16x8(
+  self : H264PEncoder,
+  mb_idx : Int,
+  mb_x : Int,
+  mb_y : Int,
+  i : Int,
+) -> (Int, Int) {
+  if i == 0 {
+    let t = self.mv_fetch(mb_idx, mb_x, mb_y, 0, -1)
+    if t.0 == 0 {
+      return (t.1, t.2)
+    }
+  } else {
+    let l = self.mv_fetch(mb_idx, mb_x, mb_y, -1, 2)
+    if l.0 == 0 {
+      return (l.1, l.2)
+    }
+  }
+  self.pred_motion(mb_idx, mb_x, mb_y, 0, 2 * i, 4)
+}
+
+///|
+/// `h264_pred_8x16_motion` mirror: partition i (0 left, 1 right).
+fn H264PEncoder::pred_8x16(
+  self : H264PEncoder,
+  mb_idx : Int,
+  mb_x : Int,
+  mb_y : Int,
+  i : Int,
+) -> (Int, Int) {
+  if i == 0 {
+    let l = self.mv_fetch(mb_idx, mb_x, mb_y, -1, 0)
+    if l.0 == 0 {
+      return (l.1, l.2)
+    }
+  } else {
+    let mut diag = self.mv_fetch(mb_idx, mb_x, mb_y, 4, -1)
+    if diag.0 == -2 {
+      diag = self.mv_fetch(mb_idx, mb_x, mb_y, 1, -1)
+    }
+    if diag.0 == 0 {
+      return (diag.1, diag.2)
+    }
+  }
+  self.pred_motion(mb_idx, mb_x, mb_y, 2 * i, 0, 2)
+}
+
+///|
+/// Write one coded P macroblock from its plan: MC every partition into
+/// the reconstruction, code the residual, then the syntax in the
+/// decoder's parse order (mvd predictors read the progressively filled
+/// mirror state, exactly like `write_back_part` timing).
 fn H264PEncoder::write_coded_mb(
   self : H264PEncoder,
   mb_x : Int,
   mb_y : Int,
-  decision : H264PDecision,
+  plan : H264PPlan,
   r : H264Rbsp,
   qp : Int,
 ) -> Result[Unit, String] {
@@ -678,20 +915,51 @@ fn H264PEncoder::write_coded_mb(
   for i = 0; i < 48; i = i + 1 {
     self.cur_nz[i] = 0
   }
-  let mvx = decision.mvx
-  let mvy = decision.mvy
-  // mvd relative to the median predictor (ref 0 always present here).
-  let (pmvx, pmvy) = self.pred_motion(mb_idx, mb_x, mb_y, 0, 0, 4)
-  // ---- residual + reconstruction before syntax (nz needed for nC) ----
+  for i = 0; i < 32; i = i + 1 {
+    self.cur_mv[i] = 0
+  }
+  for i = 0; i < 16; i = i + 1 {
+    self.cur_ref[i] = -2
+  }
+  // Partitions (ox, oy, w, h, mvx, mvy) in raster order for the MC phase.
+  let parts : Array[(Int, Int, Int, Int, Int, Int)] = match plan {
+    Part16x16(x, y) => [(0, 0, 16, 16, x, y)]
+    Part16x8(tx, ty, bx, by) => [
+      (0, 0, 16, 8, tx, ty),
+      (0, 8, 16, 8, bx, by),
+    ]
+    Part8x16(lx, ly, rx, ry) => [
+      (0, 0, 8, 16, lx, ly),
+      (8, 0, 8, 16, rx, ry),
+    ]
+    Part8x8(_, _, _, _, mvs) => {
+      let out : Array[(Int, Int, Int, Int, Int, Int)] = []
+      let mut mi = 0
+      for k = 0; k < 4; k = k + 1 {
+        let x8 = k % 2
+        let y8 = k / 2
+        let parts2 = h264_sub_partitions(subs_of_plan(plan, k), x8, y8)
+        for part in parts2 {
+          let (x, y, w, h) = part
+          out.push((x, y, w, h, mvs[mi], mvs[mi + 1]))
+          mi = mi + 2
+        }
+      }
+      out
+    }
+    Skip => []
+  }
+  // ---- MC + residual + reconstruction (before syntax: nz for nC) ----
   let mb : Array[Int] = Array::make(768, 0)
   let qmul_y = h264_build_dequant4(self.pps, 3, qp)
   let mut luma_cbp = 0
   let luma_store : Array[Int] = Array::make(256, 0)
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   let cbase = mb_y * 8 * self.cstride + mb_x * 8
-  // MC the chosen MV into the reconstruction planes first (the residual
-  // transform reads prediction + source from there).
-  self.mc_into_rec(mb_x, mb_y, mvx, mvy, 0, 0, 16, 16)
+  for part in parts {
+    let (ox, oy, w, h, mvx, mvy) = part
+    self.mc_into_rec(mb_x, mb_y, mvx, mvy, ox, oy, w, h)
+  }
   for i = 0; i < 16; i = i + 1 {
     let gx = h264_luma_block_x[i]
     let gy = h264_luma_block_y[i]
@@ -718,7 +986,6 @@ fn H264PEncoder::write_coded_mb(
       luma_cbp = luma_cbp | (1 << (i / 4))
     }
   }
-  // Chroma residuals (dequant matrices 4/5, DC 4 + AC 15 like intra).
   let qmul_c = [
     h264_build_dequant4(self.pps, 4, self.chroma_qp),
     h264_build_dequant4(self.pps, 5, self.chroma_qp),
@@ -750,14 +1017,7 @@ fn H264PEncoder::write_coded_mb(
       sums[i] = sum
     }
     let dc_store : Array[Int] = Array::make(4, 0)
-    ignore(
-      h264_enc_chroma_dc_hadamard_quant(
-        sums,
-        dc_store,
-        0,
-        self.chroma_qp,
-      ),
-    )
+    ignore(h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp))
     chroma_dc_store[c] = dc_store
     chroma_dc_nz[c] = dc_store[0] != 0 ||
       dc_store[1] != 0 ||
@@ -779,18 +1039,17 @@ fn H264PEncoder::write_coded_mb(
             rec[cbase + (by + row) * self.cstride + bx + col]
         }
       }
-      let levels = h264_enc_fdct_quant_res(
-        res,
-        0,
-        self.chroma_qp,
-      )
+      let levels = h264_enc_fdct_quant_res(res, 0, self.chroma_qp)
       levels[0] = 0 // storage position 0 is the DC slot
       let mut total = 0
       for s = 0; s < 16; s = s + 1 {
         chroma_ac_store[c][16 * i + s] = levels[s]
         if levels[s] != 0 {
           total = total + 1
-          mb[256 + 256 * c + 16 * i + s] = h264_enc_dequant_level(levels[s], qmul_c[c][s])
+          mb[256 + 256 * c + 16 * i + s] = h264_enc_dequant_level(
+            levels[s],
+            qmul_c[c][s],
+          )
         }
       }
       self.cur_nz[16 + 16 * c + i] = total
@@ -806,16 +1065,10 @@ fn H264PEncoder::write_coded_mb(
   } else {
     0
   }
-  // Chroma reconstruction (AC levels exist only when ccbp == 2).
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(
-        mb,
-        256 + 256 * c,
-        qmul_c[c][0],
-        bit_depth=8,
-      )
+      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=8)
     }
     for i = 0; i < 4; i = i + 1 {
       let bx = (i % 2) * 4
@@ -834,7 +1087,6 @@ fn H264PEncoder::write_coded_mb(
       }
     }
   }
-  // Luma reconstruction (per-8x8 cbp bits, inter dequant already applied).
   for i = 0; i < 16; i = i + 1 {
     let gx = h264_luma_block_x[i]
     let gy = h264_luma_block_y[i]
@@ -848,19 +1100,71 @@ fn H264PEncoder::write_coded_mb(
       }
     }
   }
-  // ---- syntax ----
-  r.put_ue(0) // mb_type: P_L0_16x16
-  // ref_idx_l0: one reference active -> not coded.
-  let mvdx = mvx - pmvx
-  let mvdy = mvy - pmvy
-  r.put_se(mvdx)
-  r.put_se(mvdy)
+  // ---- syntax (decoder's parse order) ----
+  match plan {
+    Skip => return Ok(())
+    Part16x16(mvx, mvy) => {
+      r.put_ue(0) // mb_type: P_L0_16x16
+      let (pmvx, pmvy) = self.pred_motion(mb_idx, mb_x, mb_y, 0, 0, 4)
+      r.put_se(mvx - pmvx)
+      r.put_se(mvy - pmvy)
+      self.fill_part(0, 0, 4, 4, mvx, mvy)
+    }
+    Part16x8(tx, ty, bx2, by2) => {
+      r.put_ue(1) // mb_type: P_L0_16x8
+      // ref_idx_l0 not coded (one reference); mvds top then bottom.
+      let (p0x, p0y) = self.pred_16x8(mb_idx, mb_x, mb_y, 0)
+      r.put_se(tx - p0x)
+      r.put_se(ty - p0y)
+      self.fill_part(0, 0, 4, 2, tx, ty)
+      let (p1x, p1y) = self.pred_16x8(mb_idx, mb_x, mb_y, 1)
+      r.put_se(bx2 - p1x)
+      r.put_se(by2 - p1y)
+      self.fill_part(0, 2, 4, 2, bx2, by2)
+    }
+    Part8x16(lx, ly, rx, ry) => {
+      r.put_ue(2) // mb_type: P_L0_8x16
+      let (p0x, p0y) = self.pred_8x16(mb_idx, mb_x, mb_y, 0)
+      r.put_se(lx - p0x)
+      r.put_se(ly - p0y)
+      self.fill_part(0, 0, 2, 4, lx, ly)
+      let (p1x, p1y) = self.pred_8x16(mb_idx, mb_x, mb_y, 1)
+      r.put_se(rx - p1x)
+      r.put_se(ry - p1y)
+      self.fill_part(2, 0, 2, 4, rx, ry)
+    }
+    Part8x8(s0, s1, s2, s3, mvs) => {
+      r.put_ue(3) // mb_type: P_8x8
+      r.put_ue(s0)
+      r.put_ue(s1)
+      r.put_ue(s2)
+      r.put_ue(s3)
+      // ref_idx_l0 not coded (one reference); the mvd pairs follow in
+      // `h264_sub_partitions` order per 8x8 block.
+      let subs = [s0, s1, s2, s3]
+      let mut mi = 0
+      for k = 0; k < 4; k = k + 1 {
+        let x8 = k % 2
+        let y8 = k / 2
+        let parts2 = h264_sub_partitions(subs[k], x8, y8)
+        for part in parts2 {
+          let (x, y, w, h) = part
+          let mvx = mvs[mi]
+          let mvy = mvs[mi + 1]
+          mi = mi + 2
+          let (pmvx, pmvy) = self.pred_motion(mb_idx, mb_x, mb_y, x / 4, y / 4, w / 4)
+          r.put_se(mvx - pmvx)
+          r.put_se(mvy - pmvy)
+          self.fill_part(x / 4, y / 4, w / 4, h / 4, mvx, mvy)
+        }
+      }
+    }
+  }
   let cbp = luma_cbp | (chroma_c_cbp << 4)
   r.put_ue(h264_enc_inter_cbp_golomb(cbp))
   if cbp != 0 {
     r.put_se(0) // mb_qp_delta
   }
-  // Luma residual: inter blocks code all 16 coefficients (scan start 0).
   for i8 = 0; i8 < 4; i8 = i8 + 1 {
     if (luma_cbp & (1 << i8)) != 0 {
       for i4 = 0; i4 < 4; i4 = i4 + 1 {
@@ -887,13 +1191,7 @@ fn H264PEncoder::write_coded_mb(
   if chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
       for i = 0; i < 4; i = i + 1 {
-        let view = scan_view_at(
-          chroma_ac_store[c],
-          i,
-          h264_zigzag_scan_t,
-          1,
-          15,
-        )
+        let view = scan_view_at(chroma_ac_store[c], i, h264_zigzag_scan_t, 1, 15)
         let nc = self.nc_chroma(mb_idx, mb_x, mb_y, c, i)
         ignore(h264_enc_write_residual(r, view, 15, nc))
       }
@@ -902,9 +1200,9 @@ fn H264PEncoder::write_coded_mb(
   // Commit the mirror state.
   let st = self.states[mb_idx]
   for i = 0; i < 16; i = i + 1 {
-    st.mv[2 * i] = mvx
-    st.mv[2 * i + 1] = mvy
-    st.ref_idx[i] = 0
+    st.mv[2 * i] = self.cur_mv[2 * i]
+    st.mv[2 * i + 1] = self.cur_mv[2 * i + 1]
+    st.ref_idx[i] = self.cur_ref[i]
   }
   st.intra = false
   st.has_data = true
@@ -912,6 +1210,20 @@ fn H264PEncoder::write_coded_mb(
     st.nz[i] = self.cur_nz[i]
   }
   Ok(())
+}
+
+///|
+/// The k-th sub type of an 8x8 plan (helper for the parts enumeration).
+fn subs_of_plan(plan : H264PPlan, k : Int) -> Int {
+  match plan {
+    Part8x8(s0, s1, s2, s3, _) => match k {
+      0 => s0
+      1 => s1
+      2 => s2
+      _ => s3
+    }
+    _ => 0
+  }
 }
 
 ///|

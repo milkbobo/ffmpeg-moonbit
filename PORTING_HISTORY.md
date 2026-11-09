@@ -11637,3 +11637,26 @@ luma DC 17+qp/6、chroma DC 21+qp/6**（链上各 >>6/>>8/hadamard 增益互相
 ICE**（`Invalid_argument("Moonc.Basic_ba_int.get")`），换重载字面量
 （`let mid : Byte = 128`）解决；排查时 zcode-trash 只删了副本而原件仍在
 导致 ICE 「复活」，二分时要用 git status 核实文件集合。
+
+
+## §378 H.264 编码器纯 MoonBit 第三切片：P 帧分割全绿（2026-11-10）
+
+P 帧编码器升级到**全分割模式**：P_L0_16x8（mb_type 1）、P_L0_8x16（2）、
+P_8x8（3，sub_mb_type 0..3 = 8x8/8x4/4x8/4x4）。决策器 `decide_plan` 按
+SAD 择优（后者须严格更优，粗分割赢平手），8x8 逐块选子模式；`me_part`
+泛化到任意分区尺寸（±16 整素 + MC 3x3 四分素精化，零 MV 偏置）。语法按
+解码器解析序：16x8/8x16 先后两组 mvd（`pred_16x8`/`pred_8x16` 镜像），
+P_8x8 先 4 个 sub_mb_type 再按 `h264_sub_partitions` 序逐分区的 mvd——
+**mvd 预测器读渐进状态**（`write_back_part` 时序：后面的分区能看到前面
+分区刚写的 MV）。
+
+**本片核心 bug（也是最重要的语义发现）**：`mv_fetch` 镜像对**当前 MB
+内部的块**（子分区的 A/B/C 邻块常落在本 MB 内）读的是 `states` 里的
+上一帧旧值，而解码器读的是正在解码 MB 的**部分填充** `mv` 数组——修复
+为 `nmb == mb_idx` 时读渐进 `cur_mv/cur_ref` 镜像。修复前强制 4x4 质量
+60-97，修复后 1-7（比 16x16 的 5-11 更好）。
+
+SAD 助手泛化 (w~, h~) 且双平面钳位（边缘分区与 ±16 窗口读出平面），
+MC SAD 按分区尺寸取样（mcbuf 恒 16 行步长）。外部仲裁重闭环：I+P 四帧
+framemd5 `e454d8…/529a25…/69edb7…/98ebe3…` 与 docker ffmpeg 逐帧一致
+（MD5 钉死更新）。wasm **1727/1727**、`--deny-warn` 干净。

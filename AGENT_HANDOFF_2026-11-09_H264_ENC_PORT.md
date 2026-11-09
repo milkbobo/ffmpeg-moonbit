@@ -9,6 +9,9 @@
   I_PCM/I16/I4x4。
 - **§377 P 帧**：P_Skip + P_L0_16x16、单参考（前帧重建）、±16 整素 SAD +
   MC 四分素精化的 ME、inter 残差（矩阵 3/4/5）、mb_skip_run。
+- **§378 P 分割**：P_L0_16x8/8x16/P_8x8（sub_mb_type 0..3）、`decide_plan`
+  SAD 择优、mvd 预测读渐进状态（`write_back_part` 时序——mv_fetch 对当前
+  MB 内部块必须读 `cur_mv/cur_ref` 镜像而非上一帧旧值）。
 
 ## 验证矩阵（全绿）
 
@@ -30,7 +33,7 @@
 | `h264_enc_cavlc.mbt` | `h264_enc_write_residual` + pub 自检 `h264_enc_residual_roundtrip` |
 | `h264_encode.mbt` | I 帧主体（I_PCM/I16/I4x4、SAD 选模、本地重建镜像） |
 | `h264_encode_p.mbt` | P 帧（`h264_encode_frames` GOP、pskip/pred_motion 镜像、ME、skip_run、inter 残差/重建） |
-| `h264_encode_test.mbt` / `h264_encode_p_test.mbt` | 黑盒 8 + 5 测 |
+| `h264_encode_test.mbt` / `h264_encode_p_test.mbt` | 黑盒 8 + 6 测 |
 | `h264_shadow_wbtest.mbt` | 调试工具：逐 MB 语法影子解析（native 门控） |
 
 ## 关键语义（续做前必读）
@@ -48,6 +51,11 @@
    ref_idx 不编码。
 5. **ME 零 MV 偏置**：平移不变内容（梯度/平坦）大量 MV 并列，先测 (0,0)、
    严格更优才替换。
+6. **分区 mvd 预测时序**：解码器边解析边 `write_back_part`——后面分区的
+   预测器看到前面分区刚写的 MV；编码器镜像时 `mv_fetch` 对当前 MB 的块
+   必须读渐进 `cur_mv/cur_ref`（不是 states 里的上一帧值）。
+7. **SAD 尺寸语义**：不同尺寸分区的 SAD 覆盖不同样本数，模式决策按
+   「同 MB 总 SAD」比较；MC SAD 按分区尺寸取样（mcbuf 恒 16 行步长）。
 6. **状态数组别名**：`Array::make(n, new_state())` 共享实例——逐个 push。
 
 ## 工具链坑
@@ -71,6 +79,6 @@
 
 ```sh
 moon test --target wasm libavcodec/h264_encode_test.mbt     # 8 测
-moon test --target wasm libavcodec/h264_encode_p_test.mbt   # 5 测
+moon test --target wasm libavcodec/h264_encode_p_test.mbt   # 6 测
 moon test --target wasm --no-render                          # 1727/1727
 ```
