@@ -11,5 +11,11 @@ warnings = "-alert_experimental"
 // SIMD implementations are gated to native and WebAssembly backends.
 
 options(
-  targets: { "idct_v128_wbtest.mbt": [ "native", "wasm" ] },
+  targets: {
+    "idct_v128_wbtest.mbt": [ "native", "wasm" ],
+    // Debug tool: per-MB syntax shadow parse over the encoder's own
+    // stream. Native only - the wasm whitebox executable sits at V8's
+    // init local-count limit and any extra file pushes it over.
+    "h264_shadow_wbtest.mbt": [ "native" ],
+  },
 )

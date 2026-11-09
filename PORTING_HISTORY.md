@@ -11562,3 +11562,42 @@ make-moonbit-c-bindings 技能的完整流程做 native FFI 绑定，而不是�
 （`moon test --target native -p libavcodec/x264 --target-dir /tmp/mbuild`，
 见 moon.pkg 头注释）；宿主 `moon check --target native libavcodec/x264` 干净、
 wasm `--deny-warn` 通过、全量 wasm **1713/1713**、ffref **76/76**。
+
+
+## §376 H.264 编码器纯 MoonBit 移植第一切片：I 帧/CAVLC/Baseline 全绿（2026-11-10）
+
+用户指令推翻 §375 的 FFI 路线（**不能用 C FFI，要把整个功能移植过来**）——
+§375 的 libx264 绑定降级为对拍 oracle（等同 ffref 角色）。本切片交付
+**纯 MoonBit H.264 I 帧编码器**（IDR、单 slice、CAVLC、Baseline 4:2:0
+8-bit、平 QP、I_PCM/I16/I4x4），移植策略是**逐行镜像自家解码器**：参数集
+写完即用 `h264_ps` 解析回读；预测/重建直接调 `h264_pred*`/`h264_idct*`；
+残差写码逐表逆向 `h264_decode_residual`（同一组 len/bits 表）；nC/模式
+预测/nnz 状态镜像 `h264_nc_*`/`h264_pred_intra_mode`；因此**本地重建 ==
+自家解码器输出是构造保证**。
+
+验证矩阵全绿：CAVLC 残差性质测试 3000 随机模式写→读逐值相等；重建不变量
+96×64 全平面逐字节；**docker ffmpeg 外部仲裁——零告警解码且 framemd5
+`92f60474…` 与自家开滤波解码器逐位一致**（MD5 钉死为回归，含去块滤波器
+对编码器产内容的完整验证）；I_PCM 无损、确定性双跑、QP 阶梯单调、66×34
+奇尺寸裁剪路径；wasm **1722/1722**、`--deny-warn` 干净。
+
+十个标准级 bug（全有普适价值）：①CAVLC levels 先抽非零序列再反向；②
+escape prefix=15 是 12 位后缀窗口 [30,4125)；③scan 必须用转置系
+`h264_zigzag_scan_t`；④`Array::make(n, new_state())` 结构体别名（MB 状态
+互相覆盖）；⑤量化移位定标 AC 21+qp/6 / luma DC 17+qp/6 / chroma DC
+16+qp/6（无移位 fdct 配本解码器反量化）；⑥chroma AC 存储位 0 是 DC 槽；
+⑦chroma DC 槽存原始 level、ccb<2 时 AC 不进重建；⑧I16 mb_type 模式序
+V/H/DC/P、cbp 分组 [0,16,32,15,31,47]；⑨trailing ones 按非零序列数；
+⑩SPS 裁剪序 left/right/top/bottom。
+
+最后一课（假阴性排查）：性质测试 iter 85/150 的「写码器 bug」实为测试
+夹具喂了 `finish()` 的**转义后**字节给裸 RBSP 读取器——`00 00 01` 被
+插 0x03 后位流错位；修复用 `finish_raw_of()`。转义是 NAL 传输层语义，
+裸 RBSP 工具链必须绕过。
+
+工具链坑：libavcodec 白盒 wasm 可执行体在 V8 init 局部数上限贴边——
+新 `*_wbtest.mbt` 直接压垮（对策：测试放黑盒、私有自检做 pub 函数、
+顶层表改 match 常量、调试工具 native 门控如 `h264_shadow_wbtest.mbt`）。
+
+后续切片：P 帧+ME（复用 h264_mc 做 SAD/SATD）→ 率失真选模 → CABAC +
+High profile → 码率控制。
