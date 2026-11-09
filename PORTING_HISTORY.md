@@ -11502,3 +11502,63 @@ TNS 的 f32 细节：`compute_lpc_coefs`（float `LPC_TYPE`）与
 的 4 个 unused 警告已随测试助手移入 wbtest 清零）；全量 wasm
 **1713/1713**（含 §368 的 NMR referee 质量门测试）；全量 native ffref
 **76/76**（此前唯一的 `aac-tns 128000` 转绿）；`moon fmt`。
+
+
+## §375 H.264 编码：libx264 绑定（2026-11-09）
+
+"编码：H264"的落地。调研结论先行：**FFmpeg n9.0.2 树内没有软件 H.264 编码器**——
+`ohenc.c` 是 OpenHarmony 硬件封装（依赖 OH NDK 头，不可移植），其余注册名全是
+外库/硬编（libx264、libopenh264、nvenc、qsv、amf、mf、v4l2m2m、rkmpp）。FFmpeg
+的 H.264 软件编码能力**就是** `libx264.c` 封装，因此按 moonbit-c-binding /
+make-moonbit-c-bindings 技能的完整流程做 native FFI 绑定，而不是硬移植 x264
+本体（GPL + 数十万行，非本仓库 LGPL 纯算法移植的对象）。
+
+四层交付：
+
+1. **镜像层** `.scratch/ffref/Dockerfile.x264`（tag `nine-x264`，基于 nine-ref）：
+   `libx264-dev` + `--enable-libx264 --enable-gpl` 全量重编 FFmpeg 静态库。
+   GPL 只作用于测试镜像层；MoonBit 侧源码仍为 LGPL。链接行敲定为
+   `-lavcodec -lswresample -lavutil -lx264 -lz -ldav1d -llzma -lshine -lpthread -lm`
+   （allcodecs.o 拉全注册表；ffref 的 ref archive 的 allcodecs.o 早于 x264，
+   无需 -lx264，76/76 实证）。
+2. **C stub** `libavcodec/x264/libx264_stub.c`：avcodec 编码 API 的薄包装。
+   external object 句柄（finalizer 释放 AVCodecContext/AVFrame/AVPacket）、
+   send_frame 平面拷入（linesize 逐行 memcpy）、receive_packet 扁平 LE 状态
+   blob（status/flags/pts/dts/size/payload）拷出、全局头 extradata、
+   `x264enc_supports` 能力探测（`avcodec_get_supported_config`）、以及测试用
+   C 解码 oracle `x264dec_annexb`（真实 H.264 解码器 + **AVParser 切 AU**——
+   单巨包 send_packet 只出 1-2 帧，必须像 raw demuxer 一样逐 AU 喂），
+   输出打包与纯解码器 `H264Frame::yuvp()` 完全同构（可见区平面 Y/Cb/Cr、
+   LE 样本）。
+3. **安全 MoonBit 层** `libavcodec/x264/{ffi.mbt,x264.mbt}`：私有 extern 全部
+   `#borrow` 标注；`X264Encoder::open`（width/height/pix_fmt/time_base/
+   framerate/bit_rate/global_header/bitexact/options——options 走
+   `av_dict_parse_string`，preset/tune/profile/crf/g/bf/x264-params 直通）、
+   `send_frame`（EAGAIN 语义返回 Bool）、`receive_packet`（Packet/Again/Eof）、
+   `flush`、`encode_all`、`extradata`、`close`；`X264Error` suberror 映射。
+4. **白盒回归** `x264_wbtest.mbt` 六用例（镜像内 6/6）：确定性双跑逐字节一致
+   （ultrafast/Baseline 33 包 + pts/dts/keyframe）；三组流（ultrafast/Baseline
+   CAVLC、medium/High CABAC+8x8+B 金字塔、High 10）经**纯 MoonBit 解码器与
+   C oracle 双解码逐像素一致**；`global_header` 的 Annex B extradata 走
+   movenc 式 avcC 构建 + 4 字节长度前缀样本，`ff_h264_decode_extradata` +
+   `h264_decode_avc_display_frames` 全通且 SPS profile=100/420/8bit 同验，
+   同码流 Annex B 重排后 C 解码像素与 avc 路径一致。
+
+三个踩坑记录（都写进了对应文件的注释）：
+
+- **external object 可选返回失效**：`extern "c" fn open() -> Handle?` 在
+  moon 0.1.20261104（镜像）下 C 侧返回 external object 指针、MoonBit 侧恒得
+  `None`（指针未映成 Some，且对象被立即 finalize）。`#external` 注解同样无效；
+  非可选返回 + 伴随查询正常。改为**失败句柄模式**：open 永远返回句柄，失败时
+  是携带 errmsg 的 failed 句柄，MoonBit 侧 `x264enc_status/errmsg` 立即查验。
+- **x264-params=b_annexb=0 不生效**：`x264_param_parse` 不认识 `b_annexb`
+  （libx264.c 只 WARNING 不失败），extradata 仍是 Annex B。真实世界 movenc
+  正是从 Annex B extradata 自建 avcC——测试改为镜像该路径。
+- **宿主/镜像工具链代差**：宿主 moon 20261016 不认 `#derive`，镜像 20261104
+  对旧式 `derive(...)` 报 deprecation。包内保持旧式语法（宿主 CI 干净），
+  `pub extend ... with Debug::{to_repr}` 显式声明避免隐式提升警告。
+
+运行口径：native 测试须在 nine-x264 镜像内
+（`moon test --target native -p libavcodec/x264 --target-dir /tmp/mbuild`，
+见 moon.pkg 头注释）；宿主 `moon check --target native libavcodec/x264` 干净、
+wasm `--deny-warn` 通过、全量 wasm **1713/1713**、ffref **76/76**。

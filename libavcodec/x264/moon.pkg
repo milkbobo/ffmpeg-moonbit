@@ -1,0 +1,39 @@
+// libavcodec/x264: FFmpeg's software H.264 encoder (the libx264 wrapper,
+// libavcodec/libx264.c) through native FFI. FFmpeg n9.0.2 ships no in-tree
+// software H.264 encoder - encoding goes through the libx264 wrapper - so
+// the H.264 encode capability is bound rather than ported, per the
+// moonbit-c-binding workflow: a thin C wrapper over avcodec's encoder API,
+// private externs in ffi.mbt, and a safe MoonBit surface in x264.mbt.
+//
+// Native-only; the wasm build sees an empty package. Links the FFmpeg n9.0.2
+// static libs of the ffmpeg-moonbit-ffref:nine-x264 image (built with
+// --enable-libx264): run
+//   moon test --target native -p milkbobo/ffmpeg-moonbit/libavcodec/x264 \
+//     --target-dir /tmp/mbuild
+// inside it (see ffref/moon.pkg for the docker invocation).
+
+import {
+  "moonbitlang/core/debug",
+  "moonbitlang/core/encoding/utf8",
+}
+
+import {
+  "milkbobo/ffmpeg-moonbit/libavcodec",
+} for "wbtest"
+
+supported_targets = "native"
+
+options(
+  "native-stub": [ "libx264_stub.c" ],
+  targets: {
+    "ffi.mbt": [ "native" ],
+    "x264.mbt": [ "native" ],
+    "x264_wbtest.mbt": [ "native" ],
+  },
+  link: {
+    "native": {
+      "cc-flags": "-I/usr/local/include",
+      "cc-link-flags": "-L/usr/local/lib -lavcodec -lswresample -lavutil -lx264 -lz -ldav1d -llzma -lshine -lpthread -lm",
+    },
+  },
+)

@@ -4,17 +4,21 @@
 // inside the ffmpeg-moonbit-ffref docker image and differential-tests the
 // pure MoonBit demux / decode / encode ports against the real thing
 // in-process. moon's Windows native backend needs MSVC, so the suite runs
-// in the image. Use the nine-ref tag (Dockerfile.ref on top of
-// Dockerfile.xml on top of Dockerfile) - nine-xml adds the dash demuxer
-// (--enable-libxml2), nine-ref additionally replaces the opus encoder in
-// a copied archive with the deterministic reference the port is byte-
-// aligned against (ref_det libm twins + direct MDCT; the stock aac encoder
-// run scalar + BITEXACT already IS the aac reference, since _ref/aacenc's
-// patches are probes around the stock computation only):
+// in the image. Use the nine-x264 tag (Dockerfile.x264 on top of
+// Dockerfile.ref on top of Dockerfile.xml on top of Dockerfile) - nine-xml
+// adds the dash demuxer (--enable-libxml2), nine-ref additionally replaces
+// the opus encoder in a copied archive with the deterministic reference the
+// port is byte-aligned against (ref_det libm twins + direct MDCT; the
+// stock aac encoder run scalar + BITEXACT already IS the aac reference,
+// since _ref/aacenc's patches are probes around the stock computation
+// only), and nine-x264 rebuilds the installed static libs with
+// --enable-libx264 for the libavcodec/x264 encoder binding (this suite
+// keeps linking /usr/local-ref/libavcodec_ref.a, whose allcodecs.o
+// predates x264, so its link flags are unchanged):
 //
 //   MSYS_NO_PATHCONV=1 docker run --rm --entrypoint /bin/sh \
 //     -v "D:/project/FFmpeg-n9.0.2/moonbit:/work" -w /work \
-//     ffmpeg-moonbit-ffref:nine-ref -c \
+//     ffmpeg-moonbit-ffref:nine-x264 -c \
 //     "/root/.moon/bin/moon update >/dev/null 2>&1; \
 //      /root/.moon/bin/moon test --target native -p ffref --target-dir /tmp/mbuild"
 //
