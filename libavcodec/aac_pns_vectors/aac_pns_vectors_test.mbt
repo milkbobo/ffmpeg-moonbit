@@ -71,11 +71,6 @@ test "PNS mark_pns matches FFmpeg 9.0.2 aaccoder.c (5 frames x 49 bands)" {
 /// 1.15 bandwidth factor, and the `overdist`-driven zeroing block. The C
 /// reference `--pns` run calls `mark_pns` and then the unmodified twoloop, so
 /// its `TWOBAND` lines are the golden `sf/cb/zeroes`.
-///
-/// The §366 domain adapter applies here too (see the long-window twoloop
-/// regression): the doubled spectrum and 4x psy bands move the whole PNS
-/// pipeline into the encoder's sf domain, so the golden `sf` values compare
-/// at `ref + 4`.
 test "PNS-aware twoloop matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
   let ctx = @libavcodec.aac_psy_new(4, 44100, 128000, 2)
   let sizes = ctx.band_sizes()
@@ -90,9 +85,8 @@ test "PNS-aware twoloop matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
   let mut bad = 0
   for f in 0..<5 {
     let r = ctx.analyze(0, @aac_pns_vectors.aac_pns_spec[f], 0, 0, 0)
-    let bands = @libavcodec.aac_psy_bands_encoder_domain(r.bands)
     let mark = @libavcodec.aac_pns_mark(
-      bands,
+      r.bands,
       offsets,
       num_swb,
       @libavcodec.aac_two_shape_long(),
@@ -101,13 +95,10 @@ test "PNS-aware twoloop matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
       2,
       120.0,
     )
-    let spec2 : Array[Double] = @aac_pns_vectors.aac_pns_spec[f].map(x => {
-      x * 2.0
-    })
     let two = @libavcodec.aac_twoloop_search_pns(
-      spec2,
+      @aac_pns_vectors.aac_pns_spec[f],
       sizes,
-      bands,
+      r.bands,
       r.alloc,
       128000,
       44100,
@@ -123,7 +114,7 @@ test "PNS-aware twoloop matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
     // context, where it sticks for later frames (§284).
     ctx.set_cutoff(mark.bandwidth)
     for g in 0..<num_swb {
-      let wsf = @aac_pns_vectors.aac_pns_ref_sf[f][g] + 4
+      let wsf = @aac_pns_vectors.aac_pns_ref_sf[f][g]
       let wcb = @aac_pns_vectors.aac_pns_ref_cb[f][g]
       let wzero = @aac_pns_vectors.aac_pns_ref_zero[f][g]
       if two.sf[g] != wsf || two.cb[g] != wcb || two.zeroes[g] != wzero {
@@ -162,9 +153,8 @@ test "PNS search_for_pns matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
   for f in 0..<5 {
     let spec = @aac_pns_vectors.aac_pns_spec[f]
     let r = ctx.analyze(0, spec, 0, 0, 0)
-    let bands = @libavcodec.aac_psy_bands_encoder_domain(r.bands)
     let mark = @libavcodec.aac_pns_mark(
-      bands,
+      r.bands,
       offsets,
       num_swb,
       @libavcodec.aac_two_shape_long(),
@@ -174,9 +164,9 @@ test "PNS search_for_pns matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
       120.0,
     )
     let two = @libavcodec.aac_twoloop_search_pns(
-      spec.map(x => x * 2.0),
+      spec,
       sizes,
-      bands,
+      r.bands,
       r.alloc,
       128000,
       44100,
@@ -190,10 +180,10 @@ test "PNS search_for_pns matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
     )
     let out = @libavcodec.aac_pns_search(
       @libavcodec.aac_pns_search_in(
-        spec.map(x => x * 2.0),
+        spec,
         sizes,
         offsets,
-        bands,
+        r.bands,
         @libavcodec.aac_two_shape_long(),
         two.sf,
         two.cb,
@@ -211,7 +201,7 @@ test "PNS search_for_pns matches FFmpeg 9.0.2 (5 frames x 49 bands)" {
     ctx.set_cutoff(mark.bandwidth)
     for g in 0..<num_swb {
       let wbt = @aac_pns_vectors.aac_pns_ref_final_bt[f][g]
-      let wsf = @aac_pns_vectors.aac_pns_ref_final_sf[f][g] + 4
+      let wsf = @aac_pns_vectors.aac_pns_ref_final_sf[f][g]
       let wzero = @aac_pns_vectors.aac_pns_ref_final_zero[f][g]
       if out.cb[g] != wbt || two.sf[g] != wsf || out.zeroes[g] != wzero {
         bad = bad + 1

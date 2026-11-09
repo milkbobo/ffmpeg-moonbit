@@ -166,21 +166,25 @@
   ⑤ **C 的 `float` 字面量必须按 f32 值存**：`0.0035f` 的真值是
   `0.0035000001080334187`，把十进制原值当 f64 喂进 `aac_two_mul` 会差 1 ulp——
   §295 的 `dist2` 差 2 ulp 就是这么来的（拆到 `bmax` 那层才看见）。
-  §366 之后 twoloop/立体声工具全部运行在 **+4 sf 域**（`aac_two_sf_domain_shift`）：
-  port 的系数是 C 的 2×、psy 阈值 4×，每带 sf = C+4，写码流时 `−4`（channel_data_psy）。
-  三条硬规则：① 搜索里一切**绝对 sf 常量**（截断带标记 219、one_pos 140、
-  max_pos 255、qstep 复活线 217、coef2minsf 常量）都要随域 +4（coef2minsf 的 pow34
-  输入只自带 +3，常量要补 +1）；sf **差值**与量化器**表索引公式**（q_idx）不动，
-  网格自动吸收。② 夹具对拍用域适配：`aac_psy_bands_encoder_domain`（energy/threshold
-  ×4，**spread 无量纲不缩放**——它是 `active_lines·2/band_size` 占比，缩了会让
-  PNS 的 `min(spread²,1)` 翻转）+ 谱 ×2 + 期望 sf+4、maxval ×2^{3/4}；浮点成本
-  比较用 1e-6 相对容差（pow34 链 ulp 噪声），整数决策位精确。③ IS 的
-  `dist_spec_err` 在 pow34 空间（×2^{3/2}）而 λ/thr 归一 ÷4，**必须乘 f32(√2)**
-  补偿，否则 shape-error 项欠权 2^{−1/2}、IS 判据整体偏开——这种跨域权重 bug
-  在 1× 域向量上不可见。写位与搜索之间还有 `encode_band_info` 的
-  `codebook_trellis_rate`（`aac_enc_trellis.mbt`，channel_data_psy 前每通道跑
-  (cb×run) Viterbi 重选 cb/零带，省 ~20% 位；MS 时 cb 是副本要显式回写
-  sticky_cb）。对拍口径：SEG-A 立体声 13 帧总位 +1.42%（§363 时 +47%）。
+  §368 之后整条 AAC 编码链回到 **C 原生 1× 域**：MDCT 出口 `32768·X`
+  （stock av_tx 尺度），psy 阈值与 C 的绝对 ATH 锚位精确一致（2× 时代的
+  ε 源根除），twoloop 常量全是 C 原值，夹具直接 1× 对拍（零域适配）。
+  三条硬知识：① **锚点代数**：量化网格锚 104（`q_idx=304−sf`，
+  Q=2^((104−sf)/4)），码流/解码器锚 100（`q^(4/3)·2^((sf−100)/4)`），
+  锚差 4 步 = 2× 幅度增益 = 编码器 32768·X → 解码器 −65536·X 约定的全部
+  桥接；感知路径**直写 sf**（stock 行为），简化路径量化器
+  （`aac_encode_quantize_band`/`min_sf`/`band_targets`）同样锚 104 直写。
+  改域时**锚点必须改在量化器上**——band_targets 的 sf 值偏移会被
+  lo/hi 搜索的 delta 完全吸收（target+delta 收敛同一 v）。② §366 时代
+  的 +4 sf 域/×4 floor/IS √2/`aac_psy_bands_encoder_domain` 域适配已全部
+  拆除（那套只属于 2× 域）；spread 仍是无量纲占比（`active_lines·2/
+  band_size`），任何域下不缩放。③ 写位与搜索之间有 `encode_band_info`
+  的 `codebook_trellis_rate`（`aac_enc_trellis.mbt`，channel_data_psy 前
+  每通道跑 (cb×run) Viterbi 重选 cb/零带，省 ~20% 位；MS 时 cb 是副本要
+  显式回写 sticky_cb）。对拍口径（同口径逐字节表，SEG-A 立体声 128k）：
+  13 包总 +2.5%、首帧 +1.7%——残余全在 λ/ABR 轨迹链（§369 目标）。
+  探针方法论：**打点计数器必须区分搜索中间尝试与最终采用**（§363 的
+  「简化路径爆炸」伪影即此，实测发出帧 2760-2872 bits 与 C 同量级）。
   **§296 已把有逐位向量把关的那批清掉**（`C_QUANT`/`ROUND_STANDARD`、`0.00125f`、
   `0.0125f` 与整条 `zspread`、PNS 的 `1.948f/0.9f/0.7f/0.88f/0.85f`、
   `frame_bit_rate *= 1.15f` 的「整数除 → 单精度乘 → 截回 int」，以及

@@ -11,14 +11,6 @@
 /// `sf_idx`, `band_type` and `zeroes` are integer decisions and must agree
 /// bit for bit (245 bands over 5 frames).  `maxval` is a float pipeline
 /// (`abs_pow34` + `find_max_val`) and is compared with a relative tolerance.
-///
-/// Domain adapter (§366): the vectors pin C's 1x coefficient/psy domain, but
-/// the live encoder feeds the search its 2x coefficients and 4x psy bands
-/// (see `aac_psy_bands_encoder_domain`), and the search's initial ladder and
-/// `uplims` floor are tuned to that domain.  The fixture therefore doubles
-/// the spectrum (exact) and scales the port-psy bands by exactly 4, and the
-/// search then tracks the reference at a constant `sf == ref + 4` offset;
-/// `maxval` is `|c|^{3/4}`-shaped, so it scales by exactly `2^{3/4}`.
 test "twoloop matches FFmpeg 9.0.2 for 5 frames x 49 bands" {
   let ctx = @libavcodec.aac_psy_new(4, 44100, 128000, 2)
   let sizes = ctx.band_sizes()
@@ -28,11 +20,10 @@ test "twoloop matches FFmpeg 9.0.2 for 5 frames x 49 bands" {
   for f in 0..<5 {
     let spec = @aac_psy_vectors.aac_psy_spec[f]
     let psy = ctx.analyze(0, spec, 0, 0, 0)
-    let spec2 : Array[Double] = spec.map(x => x * 2.0)
     let r = @libavcodec.aac_twoloop_search(
-      spec2,
+      spec,
       sizes,
-      @libavcodec.aac_psy_bands_encoder_domain(psy.bands),
+      psy.bands,
       psy.alloc,
       128000,
       44100,
@@ -46,9 +37,9 @@ test "twoloop matches FFmpeg 9.0.2 for 5 frames x 49 bands" {
       fail("frame \{f}: expected 30 iterations, got \{r.iters}")
     }
     for g in 0..<49 {
-      if r.sf[g] != @aac_psy_vectors.aac_psy_ref_two_sf[f][g] + 4 {
+      if r.sf[g] != @aac_psy_vectors.aac_psy_ref_two_sf[f][g] {
         fail(
-          "frame \{f} band \{g}: sf_idx \{r.sf[g]} != \{@aac_psy_vectors.aac_psy_ref_two_sf[f][g] + 4}",
+          "frame \{f} band \{g}: sf_idx \{r.sf[g]} != \{@aac_psy_vectors.aac_psy_ref_two_sf[f][g]}",
         )
       }
       if r.cb[g] != @aac_psy_vectors.aac_psy_ref_two_cb[f][g] {
@@ -61,10 +52,7 @@ test "twoloop matches FFmpeg 9.0.2 for 5 frames x 49 bands" {
           "frame \{f} band \{g}: zeroes \{r.zeroes[g]} != \{@aac_psy_vectors.aac_psy_ref_two_zeroes[f][g]}",
         )
       }
-      // `|2c|^{3/4} == 2^{3/4} * |c|^{3/4}` in real arithmetic; the 1e-5
-      // relative tolerance absorbs the f32 pipeline's rounding of the factor.
-      let want = @aac_psy_vectors.aac_psy_ref_two_maxval[f][g] *
-        1.681792830507429
+      let want = @aac_psy_vectors.aac_psy_ref_two_maxval[f][g]
       let got = r.maxvals[g]
       let limit = if want > 1.0 { want * 1.0e-5 } else { 1.0e-5 }
       if (got - want).abs() > limit {
@@ -101,10 +89,8 @@ test "twoloop zeroes a silent spectrum" {
     if r.cb[g] != 0 {
       fail("band \{g}: zeroed band must have no codebook")
     }
-    if r.sf[g] != 144 {
-      // SCALE_ONE_POS + the +4 sf-domain shift (see the domain-adapter
-      // note on the main test).
-      fail("band \{g}: expected SCALE_ONE_POS + 4, got \{r.sf[g]}")
+    if r.sf[g] != 140 {
+      fail("band \{g}: expected SCALE_ONE_POS, got \{r.sf[g]}")
     }
     if r.maxvals[g] != 0.0 {
       fail("band \{g}: expected zero peak")

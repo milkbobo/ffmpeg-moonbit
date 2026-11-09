@@ -11265,3 +11265,72 @@ docker native ref 库 72/72。λ 跨帧漂移大幅缓解（mono 64k 仍最敏�
 路径（默认/SNR 配置）独立 bug 未动；③ C 写位 `window_clipping` rounding
 未建模（无削波时恒等）；④ 质量门（NMR/谱 SNR）未重测（trellis 省位
 不省质量，预期不降）。
+
+## 2026-11-09 §363 简化路径「爆炸」判定撤回 + 质量门重测（§367）
+
+> 零代码改动片。两项 §366 残余一次收口。
+
+**撤回**：§363 的「简化路径帧位爆炸（~24k bits/通道，gg=102/94）」是
+**打点伪影**——WRB/WBDBG 在简化路径 lo/hi 二分拟合搜索的每个
+`build_frame` 尝试上都打点（12 帧×~9 尝试×2ch≈216 与「SEG-C WBDBG
+k=217 起」吻合），被拒绝的超细尝试（gg=102/94）被误当成最终帧。实测
+（临时探针，默认配置 44.1k/2ch/128k，SEG-C 输入）：发出帧 12 帧全部
+352-366 B（2760-2872 bits）+ flush 334 B，与 C oracle RCDBG
+（2070-2904 bits）同量级，且受 `target_bytes≈371B` 预算硬上界约束
+（不 fit 则 `Err`）。与 §361 的跨测试污染误判同类：**探针计数器必须
+区分搜索中间尝试与最终采用**。
+
+**质量门重测**（§366 后，`aac_encode_vectors`）：NMR 裁决 128k 感知臂
+14.12 dB（原生 14.41，−0.29）、64k 18.55（原生 18.56，持平）——trellis
+用 ~0.3 dB 换帧预算 +47%→+1.4%，守门 |on−ff|<2.0 通过。附注：裁决
+打印的 simplified/perceptual 两臂标签已过时（§350 后 `config_perceptual`
+与 `+perceptual_short` 在无短窗输入上是同一配置，两臂逐位相同是确定性
+自证）。
+
+## 2026-11-09 全域统一：MDCT 回 32768·X，+4 sf 域整体拆除（§368）
+
+> §366 残余 ① 的根治：ε 本源（psy 链非齐次：2× 系数 × 绝对 ATH 常数
+> → 真实编码器阈值 4×C(1±1e-5)）随 2× 域一起消失。§348 当年回滚是因
+> 为下游全链锁 2× 域；§366 之后下游完全域感知，本片是机械可逆操作。
+
+**改动清单**：
+- `frame_coefficients` 两处 `×65536` → `×32768`（= stock av_tx 尺度），
+  `spectrum()` 单一真源自动跟随；简化路径 `aac_encode_ath_energy`
+  143900 → 35975（能量域 ÷4，-90 dB re 6e6 满度峰）。
+- twoloop 撤 +4 域：`uplim_floor` 回 f32(0.00125)、init ladder 回
+  `140+1.75·log2(peak/size)`（删 peak/4+4.0）、删
+  `aac_two_sf_domain_shift` 及 13 处移位（ladder clip/zero 带
+  sf/minscaler/mins clip/raise guard 219/maxsf_i 255/lower-pass 与
+  overdist 的 one_pos/qstep 复活线 217/loopminsf/maxdeltasf/maxsf init/
+  `coef2minsf` 常量与 clip）。
+- **写位 −4 层的真相与去留**（本片最重要的一课）：twoloop 量化网格锚
+  104（`q_idx=304−sf`，Q=2^(104−sf)/4），port 解码器/码流锚 100
+  （`q^(4/3)·2^((sf−100)/4)`）。锚差 4 步 = 2× 幅度增益 = 编码器
+  32768·X 域 → 解码器 −65536·X 约定的**全部桥接**。旧 2× 域下写
+  `sf−4` 恰好凑出解码器约定；新 1× 域下**直写 sf** 即 stock FFmpeg
+  原生行为（`aac_encode_channel_data_psy` 改直写，注释记录完整代数）。
+  （中途曾误判 −4 是纯锚转换与域无关而恢复，量化器代数推翻后再次
+  撤除——两种域配置各自自洽，不能混搭。）
+- **简化路径隐性 2× 校准修复**：其独立量化器 `aac_encode_quantize_band`
+  与 `aac_encode_min_sf` settle 循环锚 100 写死（旧 2× 域下「锚 100
+  公式 + 直写 + |c|=65536·X」恰好凑出解码器约定）。纯音回归测试以
+  20·log10(2)=6.0214 dB 恰差暴露。全部改锚 104（band_targets 的
+  v 公式、min_sf 公式与 settle、quantize_band step）后两路径共享同一
+  104 网格约定。注意 band_targets 的 sf 值偏移会被 lo/hi 搜索的 delta
+  完全吸收（target+delta 收敛同一 v）——**锚点必须改在量化器上**。
+- IS 撤 √2 补偿（1× 域下 pow34/λ-thr 权重天然 C 形）；删
+  `aac_psy_bands_encoder_domain`；5 个夹具文件 `git checkout ccf0822`
+  回 1× 直接对拍（twoloop 长窗 245 带/短窗/PNS/IS 全部恢复位精确
+  断言，零域适配）。
+
+**验证**：本机 wasm **1709/1709**；docker oracle（nine-dbg 镜像 ref 库）
+**73/73**；向量包 12/12 位精确。**首张同口径逐字节表**（临时探针：
+port ADTS vs C `ffref_encode_audio` packets，SEG-A 立体声 128k）：
+13 包 vs 13 包，总 4815 vs 4700 B（+2.5%），逐帧 −4%~+11%，**首帧
+418 vs 411 B（+1.7%）即 λ 岔开的源头**——域统一消除了 psy ε，帧级
+残余全部在 λ/ABR 轨迹链（首帧差 → ratio 步进 → 全程放大），下片
+专项（§369）。PNS 附带修复：`search_for_pns` 的 `sfi`（2·log2(E)）
+现在从 1× 能量域计算，noise 链落 C 域（旧 2× 域下潜在 +4 偏移）。
+
+**残余**：λ/ABR 首帧收敛链（§369 目标，逐字节恒等的最后一关）；
+`window_clipping` rounding（远处项）；NMR 裁决两臂标签清理（低优先）。

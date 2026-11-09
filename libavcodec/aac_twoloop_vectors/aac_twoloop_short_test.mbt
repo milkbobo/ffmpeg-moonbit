@@ -13,9 +13,7 @@
 ///
 /// `sf_idx` / `band_type` / `zeroes` are integer decisions and asserted
 /// exactly; `maxvals` is an f32 quantity compared by relative tolerance, like
-/// the long-window regression.  The same §366 domain adapter as the
-/// long-window test applies: doubled spectrum, 4x psy bands, `sf == ref + 4`,
-/// `maxval` scaled by `2^{3/4}`.
+/// the long-window regression.
 fn aac_two_short_close(
   got : Double,
   want : Double,
@@ -65,13 +63,10 @@ test "twoloop eight short windows matches FFmpeg 9.0.2 aaccoder.c (5 frames x 8 
         "frame \{f}: alloc \{r.alloc} != \{@aac_twoloop_vectors.aac_two_short_alloc[f]}",
       )
     }
-    let spec2 : Array[Double] = @aac_twoloop_vectors.aac_two_short_spec[f].map(x => {
-      x * 2.0
-    })
     let two = @libavcodec.aac_twoloop_search(
-      spec2,
+      @aac_twoloop_vectors.aac_two_short_spec[f],
       sizes,
-      @libavcodec.aac_psy_bands_encoder_domain(r.bands),
+      r.bands,
       r.alloc,
       128000,
       44100,
@@ -87,9 +82,9 @@ test "twoloop eight short windows matches FFmpeg 9.0.2 aaccoder.c (5 frames x 8 
       if slot % 16 >= 14 {
         fail("frame \{f} record \{i}: slot \{slot} is not a band of a window")
       }
-      if two.sf[slot] != @aac_twoloop_vectors.aac_two_short_sf[f][i] + 4 {
+      if two.sf[slot] != @aac_twoloop_vectors.aac_two_short_sf[f][i] {
         fail(
-          "frame \{f} slot \{slot}: sf \{two.sf[slot]} != \{@aac_twoloop_vectors.aac_two_short_sf[f][i] + 4}",
+          "frame \{f} slot \{slot}: sf \{two.sf[slot]} != \{@aac_twoloop_vectors.aac_two_short_sf[f][i]}",
         )
       }
       if two.cb[slot] != @aac_twoloop_vectors.aac_two_short_cb[f][i] {
@@ -104,7 +99,7 @@ test "twoloop eight short windows matches FFmpeg 9.0.2 aaccoder.c (5 frames x 8 
       }
       aac_two_short_close(
         two.maxvals[slot],
-        @aac_twoloop_vectors.aac_two_short_maxvals[f][i] * 1.681792830507429,
+        @aac_twoloop_vectors.aac_two_short_maxvals[f][i],
         0.00001,
         "frame \{f} slot \{slot} maxval",
       )

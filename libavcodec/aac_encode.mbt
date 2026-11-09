@@ -126,11 +126,17 @@ pub fn AacEncoder::flush(self : AacEncoder) -> Result[Array[Bytes], String] {
 ///
 /// The quantiser/demultiplexing conventions follow FFmpeg 9.0.2
 /// `libavcodec/aacenc.c` / `aacenc_quantization.h`:
-///   * encoder MDCT coefficient `c` is `65536 * X` where `X` is the textbook
-///     forward MDCT (the decoder's IMDCT carries `2/N` then divides by
-///     65536),
-///   * `q = floor((|c| * 2^(-(sf-100)/4))^(3/4) + 0.405)`,
-///   * decoder dequantisation is `q^(4/3) * 2^((sf-100)/4)`.
+///   * encoder MDCT coefficient `c` is `32768 * X` where `X` is the textbook
+///     forward MDCT - the exact scale of the reference encoder's `av_tx`
+///     float transform (§368; the port's own 2x-era scale is gone, so the
+///     psy thresholds land bit-exact on C's absolute ATH anchors and the
+///     twoloop carries C's own scalefactor grid),
+///   * `q = floor((|c| * 2^(-(sf-104)/4))^(3/4) + 0.405)` on both paths -
+///     the 104-anchored grid the reference quantiser's table indices
+///     (`304 - sf`) encode,
+///   * decoder dequantisation is `q^(4/3) * 2^((sf-100)/4)`, so the
+///     four-step anchor gap is the 2x amplitude gain from the encoder's
+///     `32768 * MDCT` domain into the decoder's `-65536 * MDCT` one.
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same
 /// license.
 
@@ -645,7 +651,8 @@ fn aac_encode_window(seq : Int32, buf : Array[Double]) -> Array[Double] {
 
 ///|
 /// Analysis coefficients of a frame in the requested window sequence, scaled
-/// into the encoder's coefficient domain (`65536 * textbook MDCT`).
+/// into the encoder's coefficient domain (`32768 * textbook MDCT`, the
+/// reference `av_tx` scale - §368).
 ///
 /// The eight short blocks are 256-sample sine-windowed chunks on a 128-sample
 /// hop, anchored 448 samples before the current frame (the `flat` of the
@@ -666,7 +673,7 @@ fn AacEncoder::frame_coefficients(
       }
       let part = aac_mdct_forward(slot, 256)
       for j = 0; j < 128; j = j + 1 {
-        out[w * 128 + j] = part[j] * 65536.0
+        out[w * 128 + j] = part[j] * 32768.0
       }
     }
     return out
@@ -678,14 +685,14 @@ fn AacEncoder::frame_coefficients(
     for t = 0; t < 2048; t = t + 1 {
       acc = acc + d[t] * self.cos_table[row + t]
     }
-    out[j] = acc * 65536.0
+    out[j] = acc * 32768.0
   }
   out
 }
 
 ///|
 /// The spectrum of one 2048-sample overlap buffer exactly as the encoder forms
-/// it for a steady long frame (sine window plus the 65536-scaled MDCT kernel).
+/// it for a steady long frame (sine window plus the 32768-scaled MDCT kernel).
 ///
 /// Exposed so tests can measure a decoded frame's error in the same domain the
 /// psy model and the quantiser use — a noise-to-mask comparison is only
@@ -745,11 +752,11 @@ let aac_encode_max_q : Int32 = 8191
 
 ///|
 /// Absolute threshold of hearing, expressed as the energy of one MDCT
-/// coefficient: a full-scale sine peaks near 1.2e7 in the encoder's
-/// `65536 * MDCT` scale, a 0 dBFS programme sits around 90 dB SPL, and the
-/// threshold in quiet is about 0 dB SPL, so `(1.2e7 * 10^(-90/20))^2`, i.e.
+/// coefficient: a full-scale sine peaks near 6e6 in the encoder's
+/// `32768 * MDCT` scale (§368), a 0 dBFS programme sits around 90 dB SPL, and
+/// the threshold in quiet is about 0 dB SPL, so `(6e6 * 10^(-90/20))^2`, i.e.
 /// -90 dB re full scale.
-let aac_encode_ath_energy : Double = 143900.0
+let aac_encode_ath_energy : Double = 35975.0
 
 ///|
 /// `tns_min_sfb_long/short` (`aacenctab.h`): the first scalefactor band the
@@ -1756,7 +1763,12 @@ fn AacEncoder::band_targets(
     }
     if root[b] > 0.0 && allowed > 0.0 {
       let step = @math.pow(allowed * 27.0 / (16.0 * root[b]), 2.0 / 3.0)
-      let mut v = @math.floor(100.0 + 4.0 * @math.log2(step) + 0.5).to_int()
+      // Anchor 104, the twoloop grid's: with the §368 domain the simplified
+      // path and the reference quantiser share one sf convention, and the
+      // four-step gap to the bitstream's anchor-100 scalefactors is the 2x
+      // gain into the decoder's `-65536 * MDCT` convention (see
+      // `aac_encode_channel_data_psy`).
+      let mut v = @math.floor(104.0 + 4.0 * @math.log2(step) + 0.5).to_int()
       if v < 0 {
         v = 0
       } else if v > 255 {
@@ -1790,15 +1802,16 @@ fn aac_encode_min_sf(
   if peak <= 0.0 {
     return 0
   }
-  // `floor((peak * 2^(-(s-100)/4))^(3/4) + 0.405)` must stay <= max_q.
+  // `floor((peak * 2^(-(s-104)/4))^(3/4) + 0.405)` must stay <= max_q - the
+  // grid is anchored at 104 like the twoloop's (§368).
   let limit = @math.pow(aac_encode_max_q.to_double() + 0.595, 4.0 / 3.0)
-  let mut s = @math.ceil(100.0 + 4.0 * @math.log2(peak / limit)).to_int()
+  let mut s = @math.ceil(104.0 + 4.0 * @math.log2(peak / limit)).to_int()
   if s < 0 {
     s = 0
   }
   // Settle the float edge with the quantiser's own arithmetic.
   while s < 255 &&
-        @math.pow(peak * @math.pow(2.0, -(s - 100).to_double() / 4.0), 0.75) +
+        @math.pow(peak * @math.pow(2.0, -(s - 104).to_double() / 4.0), 0.75) +
         0.405 >=
         aac_encode_max_q.to_double() + 1.0 {
     s = s + 1
@@ -1808,7 +1821,7 @@ fn aac_encode_min_sf(
 
 ///|
 /// Quantise one scalefactor band (of `num_windows` 128-bin segments):
-/// `q = sign(c) * floor((|c| * 2^(-(s-100)/4))^(3/4) + 0.405)`, clamped to
+/// `q = sign(c) * floor((|c| * 2^(-(s-104)/4))^(3/4) + 0.405)`, clamped to
 /// `aac_encode_max_q` (the escape limit of codebook 11). `s < 0` zeroes the
 /// band.
 fn aac_encode_quantize_band(
@@ -1819,10 +1832,14 @@ fn aac_encode_quantize_band(
   num_windows : Int32,
   s : Int32,
 ) -> Unit {
+  // Anchor 104, the shared quantiser grid (§368): the four-step gap to the
+  // bitstream's anchor-100 scalefactors is the 2x amplitude gain from this
+  // encoder's `32768 * MDCT` domain into the decoder's `-65536 * MDCT`
+  // convention, so a directly-written `s` reconstructs at decoder scale.
   let step = if s < 0 {
     0.0
   } else {
-    @math.pow(2.0, -(s - 100).to_double() / 4.0)
+    @math.pow(2.0, -(s - 104).to_double() / 4.0)
   }
   for w = 0; w < num_windows; w = w + 1 {
     for i = w * 128 + start; i < w * 128 + end; i = i + 1 {
@@ -2193,9 +2210,16 @@ fn aac_encode_channel_data_psy(
       // already computed the scalefactor whose entry equals the generated
       // noise amplitude (`noise_amp = -pow2sf_tab[sfi + POW_SF2_ZERO]`), so
       // write that `sfi` into the independent noise chain. The regular chain
-      // instead uses `final_sf - 4`, whose decoded `sfo` is 100 lower.
+      // writes `final_sf` unchanged, exactly like the reference encoder: its
+      // quantiser grid is anchored at 104 (`Q = 2^((104-sf)/4)`, `q_idx =
+      // 304 - sf`) while the bitstream's scalefactors - and this port's
+      // decoder dequant `q^(4/3) * 2^((sf-100)/4)` - are anchored at 100, and
+      // that four-step gap is the 2x amplitude gain between the encoder's
+      // `32768 * MDCT` coefficients and the decoder's `-65536 * MDCT`
+      // convention. (The port's 2x-era MDCT carried the gain instead and the
+      // write compensated with `- 4` - §368 unified the two.)
       // `noise_sfi` is slot-indexed like everything else this reads.
-      sf[slot] = if noise { noise_sfi[slot] } else { final_sf[slot] - 4 }
+      sf[slot] = if noise { noise_sfi[slot] } else { final_sf[slot] }
       cb[slot] = final_cb[slot]
     }
     w = w + gl

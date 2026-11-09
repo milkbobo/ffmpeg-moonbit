@@ -278,28 +278,6 @@ pub struct AacPsyResult {
 }
 
 ///|
-/// The encoder's psy-domain adapter. The port's `frame_coefficients` output
-/// sits at 2x C's coefficient scale, so the psy bands the live encoder feeds
-/// the twoloop (and every stereo/PNS tool downstream of it) carry thresholds
-/// and energies at 4x C's scale, and the twoloop's initial-sf ladder and
-/// `uplims` floor are tuned to that domain (§366). The C-domain vector
-/// fixtures use this to move their bit-exact 1x bands into the encoder
-/// domain: `x * 4` is exact in binary floating point, so the search then
-/// tracks the reference at a constant `sf == ref + 4` offset. `spread` is
-/// dimensionless (`active_lines * 2 / band_size`) and passes through
-/// untouched, as does the integer `bits` count.
-pub fn aac_psy_bands_encoder_domain(
-  bands : Array[AacPsyBandInfo],
-) -> Array[AacPsyBandInfo] {
-  bands.map(b => {
-    energy: b.energy * 4.0,
-    threshold: b.threshold * 4.0,
-    spread: b.spread,
-    bits: b.bits,
-  })
-}
-
-///|
 /// 3GPP psy context. Construct with `aac_psy_new`, then call
 /// `analyze` once per frame; the instance owns all cross-frame state
 /// (`prev_band`, `fill_level`, `pe.min/max`, `pe.previous`).
