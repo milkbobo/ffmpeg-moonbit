@@ -181,8 +181,18 @@
   band_size`），任何域下不缩放。③ 写位与搜索之间有 `encode_band_info`
   的 `codebook_trellis_rate`（`aac_enc_trellis.mbt`，channel_data_psy 前
   每通道跑 (cb×run) Viterbi 重选 cb/零带，省 ~20% 位；MS 时 cb 是副本要
-  显式回写 sticky_cb）。对拍口径（同口径逐字节表，SEG-A 立体声 128k）：
-  13 包总 +2.5%、首帧 +1.7%——残余全在 λ/ABR 轨迹链（§369 目标）。
+  显式回写 sticky_cb）。§369 之后 λ/ABR 链与 C 逐位同：RC 的
+  `frame_bits` 取 **写 `ID_END` 之前**的精确位数（`assemble_frame` 返回
+  `(bytes, pre_end_bits)`；字节×8 只用于 flush 后的 `last_frame_bits`），
+  `lambda*ratio`、`alloc*(λ/120)`、`240/λ`、`120/λ` 等 7 处全是 f32
+  仿真助手（C 的 `float` 表达式逐项对齐）——首帧 frame_bits 3281=3281、
+  λ₁ 117.0689926147461 逐位同 C，帧 0 搜索/写位/通道头全字段零差。
+  同口径（去 ADTS 头）13 包 payload 4725 vs 4700 B（+0.53%）。残余
+  收窄到 **MDCT ε**：port 是 f64 直接 O(N²) 余弦核，C 是 av_tx
+  FLOAT MDCT（f32 FFT，scale=32768.0f，f32 sinewin 窗）——短窗帧
+  ener 相对差至 3e-5、随带号增大（g0 恰 0），把个别短窗带推过 sf
+  舍入边界（帧 1 ch1 w1 3 带 +1 → 3707 vs 3711 bits → λ₂ 起轨迹
+  放大）。逐字节的最后一道门 = 复刻 av_tx 的 f32 MDCT 运算序（§370）。
   探针方法论：**打点计数器必须区分搜索中间尝试与最终采用**（§363 的
   「简化路径爆炸」伪影即此，实测发出帧 2760-2872 bits 与 C 同量级）。
   **§296 已把有逐位向量把关的那批清掉**（`C_QUANT`/`ROUND_STANDARD`、`0.00125f`、

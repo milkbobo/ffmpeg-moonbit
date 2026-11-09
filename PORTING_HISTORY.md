@@ -11334,3 +11334,58 @@ port ADTS vs C `ffref_encode_audio` packets，SEG-A 立体声 128k）：
 
 **残余**：λ/ABR 首帧收敛链（§369 目标，逐字节恒等的最后一关）；
 `window_clipping` rounding（远处项）；NMR 裁决两臂标签清理（低优先）。
+
+## 2026-11-09 λ/ABR 轨迹链闭环：帧位精确口径 + f32 λ 全链（§369）
+
+> §368 残余「首帧 418 vs 411 B」拆出两个机械根因，本片全部修复：
+> 首帧 `frame_bits` 与 λ₁ 现在与 C 逐位一致，帧 0 的搜索阶梯/写位/
+> 通道头全字段零差；残余收窄到 **MDCT ε 引发的个别短窗带 ±1 sf**
+> （新根因，已定量，下一片）。
+
+**根因 ①：帧位计量时点错误（已修）**
+C 的 rate control 在 `put_bits(&s->pb, 3, TYPE_END)` **之前**取
+`put_bits_count`（aacenc.c:1021）——精确到位的 payload 长度；port 用
+字节圆整后的 ADTS payload（含 END 3 位 + 最多 7 填充位）反推，首帧
+3288 vs C 3281。`assemble_frame` 改签名返回 `(bytes, pre_end_bits)`
+（写 `ID_END` 前取 `bw.buf.length()*8 + bw.nbits`），rate control 消费
+精确位数；`last_frame_bits` 的字节×8 语义不变（C flush 后
+`put_bits_count` 就是字节×8，喂 psy 的 `bitres.bits` 用）。
+
+**根因 ②：λ 链的 f64/f32 域（已修，7 处）**
+aacenc.c:1029-1068 与 aaccoder_twoloop.h 的 λ 派生量全是 C `float`：
+- RC 比率 `ratio=((float)rate_bits)/frame_bits`、stable 分支
+  `sqrtf(sqrtf(ratio))`+clip[0.9,1.1] 已是 f32 助手；
+- **`s->lambda = av_clipf(s->lambda * ratio, ...)` 乘法** → `aac_two_mul`；
+- twoloop `destbits = alloc*(lambda/120)`（alloc 是 **int**，`lambda/120`
+  是 f32 除、乘法 f32、截断）→ `aac_two_mul(alloc, aac_two_div(λ,120))`；
+- 初始 destbits：外层 `bit_rate*1024.0/sample_rate/channels` 是
+  **double**（1024.0 字面量），只有 `* (lambda/120.f)` 是 f32 → 只把
+  该因子改 `aac_two_div`；
+- `rdlambda=clipf(2.0f*120.f/lambda)` → `aac_two_div(240, λ)`；
+  `sfoffs=clipf(log2f(120.f/lambda)*4.0f)` → f32 除后 log2f；
+  `zeroscale=clipf(powf(120.f/lambda,0.25f))` → f32 除后 powf；
+- RC `target_bits += alloc*(s->lambda/120)` → 同 twoloop 的 f32 乘积。
+λ₁ 从 117.0066333（f64 链）→ **117.0689926147461**，与 C RCDBG
+`1.170689926e+02` 逐位相同（f64 乘积舍入到 f32 即 C 值）。
+
+**验证（nine-dbg 探针逐字段配对，run369c）**：帧 0 —— TWOPARM
+（dest/many/few/cutoff/rdlambda/zeroscale）SAME、TWOINIT 前 8 带 4 次
+调用（帧 0/1 双通道）无超差、TWOEXIT 49 带×2 通道 **0 字段差**、
+SPEC 写位 ch0 1504=1504 / ch1 1418=1418 **0 带差**、CHC gg/maxsfb/
+nwin SAME、frame_bits 3281=3281。同口径（去 7B ADTS 头）13 包 payload
+4725 vs 4700 B（+0.53%；§368 的 +2.5% 口径把 port 侧 ADTS 头算进去了）。
+工程验证：本机 wasm **1709/1709**；docker nine-ref oracle **72/72**；
+探针全清、`ffref/moon.pkg` 还原 `libavcodec_ref.a`。
+
+**残余（已定量，§370 目标）**：帧 1 是 8 短窗帧，ch1 w1 的 g1/g4/g7
+sf+1（3707 vs 3711 bits）→ λ₂ 差 2.7e-4 → 全程轨迹放大。ε 定量：
+长窗帧 ener 相对差 ≤1.8e-7、uplim ≤8.1e-6；**短窗帧** ener 至 3.0e-5、
+uplim 至 5.9e-5，且随带号单调增大、g0 恰为 0 —— f32 FFT 舍入签名。
+port 的 MDCT 是 **f64 直接 O(N²) 余弦核**（`aac_mdct_forward` +
+逐点 `cos_table`），C 是 `av_tx` **FLOAT MDCT**（f32 FFT，
+`scale=32768.0f`，窗先经 sinewin f32 表 `vector_fmul`）→ port「过于
+精确」。逐字节恒等的最后一道门 = 复刻 av_tx 的 f32 MDCT 运算序
+（预旋转 → FFT（1024→512、128→64 的 codelet 分解）→ 后旋转，
+含 twiddle 舍入），单独一片。`window_clipping` rounding、NMR 标签
+维持远处项。
+

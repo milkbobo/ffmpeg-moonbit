@@ -803,24 +803,31 @@ pub fn aac_twoloop_search_pns(
   1024.0 /
   sample_rate.to_double() /
   channels.to_double() *
-  (lambda / 120.0)).to_int()
-  let mut rdlambda = aac_two_clipf(2.0 * 120.0 / lambda, 0.0625, 16.0)
+  aac_two_div(lambda, 120.0)).to_int()
+  let mut rdlambda = aac_two_clipf(aac_two_div(240.0, lambda), 0.0625, 16.0)
   let nzslope = 1.5
   let rdmin = 0.03125
   let rdmax = 1.0
   let mut sfoffs = aac_two_clipf(
-    aac_two_log2f(120.0 / lambda) * 4.0,
+    aac_two_mul(aac_two_log2f(aac_two_div(120.0, lambda)), 4.0),
     -5.0,
     10.0,
   )
   let zeroscale = if lambda > 120.0 {
-    aac_two_clipf(aac_two_powf(120.0 / lambda, 0.25), 0.0625, 1.0)
+    aac_two_clipf(
+      aac_two_powf(aac_two_div(120.0, lambda), 0.25),
+      0.0625,
+      1.0,
+    )
   } else {
     1.0
   }
   if alloc >= 0 {
     // The psy model granted extra bits from the reservoir.
-    destbits = (alloc.to_double() * (lambda / 120.0)).to_int()
+    destbits = aac_two_mul(
+      alloc.to_double(),
+      aac_two_div(lambda, 120.0),
+    ).to_int()
   }
   // ABR branch: `avctx->flags & AV_CODEC_FLAG_QSCALE == 0`.
   let mut toomanybits = destbits + destbits / 8

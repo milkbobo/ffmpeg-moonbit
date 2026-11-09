@@ -8,13 +8,15 @@
 ///   direct MDCT) the port is aligned against.
 /// - AAC pins the framing and decode accounting with the oracle pinned to
 ///   the harness configuration (`aac_pns=0:aac_tns=0:aac_ms=0:aac_is=0`).
-///   The psy and twoloop stages were traced to f32-noise agreement (§347);
-///   the remaining byte divergence sits in the window machine - the stock
-///   perceptual path runs `psy_3gpp_window`'s IIR detector with
-///   one-frame-ahead semantics, the port still runs its own synchronous
-///   attack machine - and in the rate control: the stock runs the ABR
-///   lambda tracking (its `bit_rate_tolerance` option cannot be overridden
-///   through the open dict), the port implements the strict branch.
+///   The psy and twoloop stages were traced to f32-noise agreement (§347)
+///   and the ABR lambda chain now tracks the stock f32 arithmetic
+///   bit-for-bit (§369: exact pre-`ID_END` frame bits + f32 ratio/target
+///   products), so the first frame's search ladder and written bits match
+///   the oracle field for field. The remaining byte divergence is the
+///   transform itself: the port runs a direct f64 O(N^2) MDCT while the
+///   stock encoder runs `av_tx`'s FLOAT MDCT (f32 FFT, scale 32768.0f),
+///   whose rounding the twoloop search occasionally amplifies into a +-1
+///   scalefactor flip on short-window bands (§369 residual).
 ///
 /// Both sides see identical float input: the fixture is quantized onto the
 /// s16 grid, the MoonBit encoder takes s16/32768.0 directly, and the C side
@@ -179,8 +181,8 @@ test "ffref: AAC perceptual encoder frames match the oracle's framing and decode
     channels~,
     bitrate=128000,
   )
-  // Byte parity waits on the window-machine port (see the module docs);
-  // the framing and the decode accounting are pinned now.
+  // Byte parity waits on the f32-MDCT port (see the module docs); the
+  // framing and the decode accounting are pinned now.
   assert_eq(
     adts_frames.length(),
     native.packets().length(),

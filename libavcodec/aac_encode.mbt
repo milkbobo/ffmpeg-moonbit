@@ -2547,7 +2547,10 @@ fn AacEncoder::build_frame(
     }
     chans.push(one)
   }
-  self.assemble_frame(stereo, tns, [max_sfb, max_sfb], true, chans)
+  match self.assemble_frame(stereo, tns, [max_sfb, max_sfb], true, chans) {
+    Ok((b, _)) => Ok(b)
+    Err(e) => Err(e)
+  }
 }
 
 ///|
@@ -2565,6 +2568,10 @@ fn AacEncoder::aac_encode_rate_bits(self : AacEncoder) -> Int32 {
 ///|
 /// Write the element(s), ics_info, section data, scalefactors, TNS and spectral
 /// data of an already-quantised channel pair, then prefix the ADTS header.
+/// Returns the frame bytes plus the exact pre-`ID_END` bit count: C's rate
+/// control measures `put_bits_count` before writing `TYPE_END` and flushing,
+/// so the byte-rounded payload size (which includes the 3 END bits and up to
+/// 7 padding bits) must not feed the lambda ratio (§369).
 /// `max_sfb` is per channel (a `common_window = 0` pair carries two
 /// independent values); `plans` is the frame's per-channel window plans when
 /// the caller has them (`None` on the simplified path, whose channels always
@@ -2576,7 +2583,7 @@ fn AacEncoder::assemble_frame(
   max_sfb : Array[Int32],
   common_window : Bool,
   chans : Array[AacEncChannel],
-) -> Result[Bytes, String] {
+) -> Result[(Bytes, Int32), String] {
   let bw = BitWriter::new()
   if self.config.channels == 1 {
     bw.put(0, 3) // ID_SCE
@@ -2635,6 +2642,7 @@ fn AacEncoder::assemble_frame(
       )
     }
   }
+  let pre_end_bits = bw.buf.length() * 8 + bw.nbits
   bw.put(7, 3) // ID_END
   let payload = bw.finish()
   let frame_length = av_aac_adts_header_size + payload.length()
@@ -2655,7 +2663,7 @@ fn AacEncoder::assemble_frame(
   for i = 0; i < payload.length(); i = i + 1 {
     out.push(payload[i])
   }
-  Ok(Bytes::from_array(out[:]))
+  Ok((Bytes::from_array(out[:]), pre_end_bits))
 }
 
 ///|
@@ -3405,13 +3413,12 @@ fn AacEncoder::encode_pipeline(
         }
         chans.push(one)
       }
-      let frame_bytes = match
+      let (frame_bytes, frame_bits) = match
         self.assemble_frame(st, tns_iter, iter_max_sfb, common_window, chans) {
         Ok(v) => v
         Err(e) => return Err(e)
       }
       built = frame_bytes
-      let frame_bits = (frame_bytes.length() - av_aac_adts_header_size) * 8
       // `aacenc.c`'s ABR rate control (`bit_rate_tolerance != 0`, the
       // library default and what the reference encoder runs): the psy
       // allocation raises the target above the nominal bitrate, a stability
@@ -3428,7 +3435,10 @@ fn AacEncoder::encode_pipeline(
       let last_alloc = psy_iter[psy_iter.length() - 1].alloc
       let mut target_bits = 0
       if last_alloc > 0 {
-        target_bits = (last_alloc.to_double() * (self.lambda / 120.0)).to_int()
+        target_bits = aac_two_mul(
+          last_alloc.to_double(),
+          aac_two_div(self.lambda, 120.0),
+        ).to_int()
       }
       let rate_capped = if rate_bits < cap { rate_bits } else { cap }
       let many0 = if target_bits > rate_capped {
@@ -3457,7 +3467,7 @@ fn AacEncoder::encode_pipeline(
           ratio = aac_two_sqrtf(ratio)
         }
         self.lambda = aac_two_clipf(
-          self.lambda * ratio,
+          aac_two_mul(self.lambda, ratio),
           1.1920928955078125e-07,
           65536.0,
         )
