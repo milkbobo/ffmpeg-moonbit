@@ -1,20 +1,10 @@
 // Round-trip validation of the libx264 binding: the encoder's output is
-// decoded by BOTH the real FFmpeg H.264 decoder (C oracle in the stub) and
-// the pure MoonBit decoder of this repository, and the two must agree
-// pixel-for-pixel - the same standard the decoder itself was accepted
-// against. Determinism (two opens, byte-identical streams) pins the
-// thread_count=1 + BITEXACT configuration the binding runs.
-
-///|
-/// Test-support oracle extern: decode a whole Annex B stream with the real
-/// FFmpeg H.264 decoder. Blob layout: n i32, width i32, height i32,
-/// kind i32 (0 = yuv420p, 1 = yuv420p10le), then per frame the packed
-/// planes (visible area, Y/Cb/Cr, LE samples) - exactly
-/// `H264Frame::yuvp()`'s packing. NULL = failure. Lives in the white-box
-/// test file (not ffi.mbt) so the library proper carries only production
-/// externs.
-#borrow(data)
-extern "c" fn x264dec_annexb_ffi(data : Bytes) -> Bytes? = "x264dec_annexb"
+// decoded by BOTH the real FFmpeg H.264 decoder (C oracle via
+// `x264_decode_annexb`) and the pure MoonBit decoder of this repository,
+// and the two must agree pixel-for-pixel - the same standard the decoder
+// itself was accepted against. Determinism (two opens, byte-identical
+// streams) pins the thread_count=1 + BITEXACT configuration the binding
+// runs.
 
 ///|
 fn x264_put_sample(
@@ -139,14 +129,13 @@ fn x264_cross_decode(
   want_frames : Int32,
   bps : Int32,
 ) -> Unit raise {
-  let blob = match x264dec_annexb_ffi(stream) {
-    Some(b) => b
-    None => fail("C oracle decode failed")
+  let c = match x264_decode_annexb(stream) {
+    Ok(v) => v
+    Err(e) => fail(e)
   }
-  let n = x264_rd_i32(blob, 0)
-  let width = x264_rd_i32(blob, 4)
-  let height = x264_rd_i32(blob, 8)
-  let kind = x264_rd_i32(blob, 12)
+  let n = c.n_frames
+  let width = c.width
+  let height = c.height
   let frames = match
     @libavcodec.h264_decode_annexb_display_frames(stream, false) {
     Ok(v) => v
@@ -158,29 +147,29 @@ fn x264_cross_decode(
   if n != want_frames {
     fail("expected \{want_frames} frames, decoded \{n}")
   }
-  let cw = width / 2
+  if c.bytes_per_sample() != bps {
+    fail("bps: C \{c.bytes_per_sample()} vs test \{bps}")
+  }
   let plane_y = width * height * bps
-  let plane_c = cw * (height / 2) * bps
-  let frame_len = plane_y + 2 * plane_c
-  for i in 0..<n {
+  let plane_c = (width / 2) * (height / 2) * bps
+  for i = 0; i < n; i = i + 1 {
     let f = frames[i]
     if f.width != width || f.height != height {
       fail(
         "frame \{i}: geometry \{f.width}x\{f.height} vs C \{width}x\{height}",
       )
     }
-    let base = 16 + i * frame_len
-    let want_y = blob[base:base + plane_y].to_owned()
-    let want_u = blob[base + plane_y:base + plane_y + plane_c].to_owned()
-    let want_v = blob[base + plane_y + plane_c:base + frame_len].to_owned()
     let got = f.yuvp()
-    if !x264_bytes_eq(got[0:plane_y].to_owned(), want_y) {
-      fail("frame \{i}: luma planes differ (kind=\{kind})")
+    if !x264_bytes_eq(got[0:plane_y].to_owned(), c.frame_y(i)) {
+      fail("frame \{i}: luma planes differ (kind=\{c.kind})")
     }
-    if !x264_bytes_eq(got[plane_y:plane_y + plane_c].to_owned(), want_u) {
+    if !x264_bytes_eq(got[plane_y:plane_y + plane_c].to_owned(), c.frame_u(i)) {
       fail("frame \{i}: Cb planes differ")
     }
-    if !x264_bytes_eq(got[plane_y + plane_c:frame_len].to_owned(), want_v) {
+    if !x264_bytes_eq(
+        got[plane_y + plane_c:plane_y + 2 * plane_c].to_owned(),
+        c.frame_v(i),
+      ) {
       fail("frame \{i}: Cr planes differ")
     }
   }
@@ -404,21 +393,23 @@ test "x264 global header -> avcC path (movenc-style) round-trip" {
     stream_parts.push(p)
   }
   let stream = x264_concat(stream_parts)
-  let blob = match x264dec_annexb_ffi(stream) {
-    Some(b) => b
-    None => fail("C oracle decode of the repacked stream failed")
+  let c = match x264_decode_annexb(stream) {
+    Ok(v) => v
+    Err(e) => fail("C oracle decode of the repacked stream: \{e}")
   }
-  let n = x264_rd_i32(blob, 0)
-  if n != frames_avc.length() {
-    fail("repacked stream frame count: C \{n} vs pure \{frames_avc.length()}")
+  if c.n_frames != frames_avc.length() {
+    fail(
+      "repacked stream frame count: C \{c.n_frames} vs pure \{frames_avc.length()}",
+    )
   }
-  let frame_len = 96 * 64 + 2 * 48 * 32
-  for i in 0..<n {
-    let base = 16 + i * frame_len
-    if !x264_bytes_eq(
-        frames_avc[i].yuvp(),
-        blob[base:base + frame_len].to_owned(),
-      ) {
+  for i = 0; i < c.n_frames; i = i + 1 {
+    let packed = frames_avc[i].yuvp()
+    if !x264_bytes_eq(packed[0:96 * 64].to_owned(), c.frame_y(i)) ||
+      !x264_bytes_eq(
+        packed[96 * 64:96 * 64 + 48 * 32].to_owned(),
+        c.frame_u(i),
+      ) ||
+      !x264_bytes_eq(packed[96 * 64 + 48 * 32:].to_owned(), c.frame_v(i)) {
       fail("frame \{i}: avc path and C repack decode differ")
     }
   }
@@ -436,4 +427,23 @@ test "x264 10-bit round-trip (High 10)" {
   )
   // C blob kind 1 = yuv420p10le; every sample is 2 bytes LE.
   x264_cross_decode(x264_concat(pk), 33, 2)
+}
+
+///|
+test "x264 oracle: pure-MoonBit CABAC encoder stream decodes identically in C" {
+  // The repository's own CABAC encoder (Main profile I+P): its Annex B
+  // stream must satisfy the dual-decode standard - FFmpeg's C decoder and
+  // the pure MoonBit decoder agree pixel-for-pixel.
+  let frames8 = x264_fixture(6, 96, 64, 1)
+  let planes : Array[(Bytes, Bytes, Bytes)] = []
+  for f in frames8 {
+    let (_, y, u, v) = f
+    planes.push((y, u, v))
+  }
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(planes, width=96, height=64, qp=24) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 6, 1)
 }

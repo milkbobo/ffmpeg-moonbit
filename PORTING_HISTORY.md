@@ -11758,3 +11758,27 @@ wasm **1729/1729**、`--deny-warn` 干净。
 定位信息。另：临时对照实验里写「恒假守卫」（`&& cost < -1`）来禁用某
 条分支会静默把对照链降级成「只选 16x16」，测出来的基线是假的——对照
 切换必须逐分支核对真的生效。
+
+## §381 H.264 CABAC 熵编码切片——P 失步收口 + x264 解码 oracle 一等化（2026-11-10）
+
+CABAC 编码器（`h264_enc_cabac.mbt`，Main profile I+P）全链交付：黑盒
+7 测全绿、六帧流 docker ffmpeg 零告警且 framemd5 与自家解码器逐帧一致、
+bin 级 zip 探针 26271/26271 逐 bin 对齐；`x264dec_annexb` 从 wbtest 本地
+extern 升级为一等 FFI（安全封装 `x264_decode_annexb -> X264DecFrames`），
+x264 oracle 增 CABAC 编码器流双解码用例（7/7）。
+
+**P 失步真因 = 残差电平 escape（level≥15）的数据位写法错。** 旧实现按
+`k=3` 起的前缀梯写 `k` 位数据；解码器（FFmpeg
+`decode_cabac_residual_internal`）的语义是 `jj` 个 1 前缀 + 0 + `jj` 位
+数据（值 = 14 + [2^jj, 2^(jj+1))）。QP 26 电平不达 15 从未触发，QP 24
+即显形——正是交接文档警告过的 psynth「not exercised by this stream」
+分支。skip 分支四位 `mb_type_bits` 对齐（交接第一刀）已在位。
+
+**方法论**：探针从 MB 级对比一路降到 bin 级（编码器 `decision/bypass/
+terminate` 与解码器 `get_cabac*` 全量 emit，两侧 zip 逐行比），第一处
+(c, v, s, r) 不一致即真失步点；期间三次假警报全来自**探针自身**——
+`bypass_sign` 的 mask 语义读反（mask≠0 是 bit 0 不是 1）、`get_cabac_
+bypass` 清理时误留 patch 覆盖上一行（连续 bypass 互相覆盖制造行序错
+位）、emit 位置不对称（res 行/MB 行在 bins 前后的放置差）。引擎本身
+由 200 轮随机往返（QP 10-49 混合序列）预先排除。静态场景测试前提修
+正：CABAC 无 PCM，I 帧有损，P 帧必然带 coded MB，撤 P-vs-I 漂移断言。

@@ -292,3 +292,90 @@ pub fn X264Encoder::encode_all(
 pub fn X264Encoder::close(self : X264Encoder) -> Unit {
   x264enc_close_ffi(self.h)
 }
+
+///|
+/// Result of decoding an Annex B H.264 stream with FFmpeg's real software
+/// decoder through the stub (`x264dec_annexb`): the frame count and
+/// geometry of the decoded pictures plus the packed-plane blob. This is the
+/// C-oracle side of the repository's dual-decode standard (the pure MoonBit
+/// decoder must produce the same pixels).
+pub struct X264DecFrames {
+  n_frames : Int
+  width : Int
+  height : Int
+  /// 0 = yuv420p, 1 = yuv420p10le (the stub's sink kinds).
+  kind : Int
+  blob : Bytes
+}
+
+///|
+fn X264DecFrames::bps(self : X264DecFrames) -> Int {
+  if self.kind == 1 { 2 } else { 1 }
+}
+
+///|
+/// Bytes per sample of the decoded planes (1 for 8-bit, 2 for 10-bit LE).
+pub fn X264DecFrames::bytes_per_sample(self : X264DecFrames) -> Int {
+  self.bps()
+}
+
+///|
+/// One frame's packed luma plane (visible area, row-major, LE samples).
+pub fn X264DecFrames::frame_y(self : X264DecFrames, i : Int) -> Bytes {
+  let n = self.width * self.height * self.bps()
+  let base = 16 + i * (n + 2 * (self.width / 2) * (self.height / 2) * self.bps())
+  self.blob[base:base + n].to_owned()
+}
+
+///|
+/// One frame's packed Cb plane.
+pub fn X264DecFrames::frame_u(self : X264DecFrames, i : Int) -> Bytes {
+  let bps = self.bps()
+  let cy = self.width * self.height * bps
+  let cc = (self.width / 2) * (self.height / 2) * bps
+  let base = 16 + i * (cy + 2 * cc) + cy
+  self.blob[base:base + cc].to_owned()
+}
+
+///|
+/// One frame's packed Cr plane.
+pub fn X264DecFrames::frame_v(self : X264DecFrames, i : Int) -> Bytes {
+  let bps = self.bps()
+  let cy = self.width * self.height * bps
+  let cc = (self.width / 2) * (self.height / 2) * bps
+  let base = 16 + i * (cy + 2 * cc) + cy + cc
+  self.blob[base:base + cc].to_owned()
+}
+
+///|
+/// Decode a whole Annex B H.264 stream with FFmpeg's real software decoder.
+/// The geometry/kind header is validated against the payload size; a NULL
+/// return from the stub surfaces as `Err`.
+pub fn x264_decode_annexb(stream : Bytes) -> Result[X264DecFrames, String] {
+  let blob = match x264dec_annexb_ffi(stream) {
+    Some(b) => b
+    None => return Err("x264dec: C decoder failed on the stream")
+  }
+  if blob.length() < 16 {
+    return Err("x264dec: short blob header")
+  }
+  let n = x264_rd_i32(blob, 0)
+  let width = x264_rd_i32(blob, 4)
+  let height = x264_rd_i32(blob, 8)
+  let kind = x264_rd_i32(blob, 12)
+  if width <= 0 || height <= 0 || n < 0 {
+    return Err("x264dec: bad blob geometry")
+  }
+  if kind != 0 && kind != 1 {
+    return Err("x264dec: unsupported pixel kind \{kind}")
+  }
+  let bps = if kind == 1 { 2 } else { 1 }
+  let frame_len = width * height * bps +
+    2 * (width / 2) * (height / 2) * bps
+  if blob.length() != 16 + n * frame_len {
+    return Err(
+      "x264dec: blob size \{blob.length()} != 16 + \{n}x\{frame_len}",
+    )
+  }
+  Ok({ n_frames: n, width, height, kind, blob })
+}
