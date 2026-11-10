@@ -214,13 +214,47 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
   if frames_dec.length() != 4 {
     fail("expected 4 frames")
   }
-  // Re-pinned after the partition slice (16x8/8x16/8x8): ffmpeg's framemd5
-  // values for the partitioned stream.
+  // Re-pinned after the RD slice (SSD + lambda * exact CAVLC bits, Int64
+  // cost): ffmpeg's framemd5 values, zero warnings.
   let pins = [
     "e454d86d27698952c3e354a20cb109cb",
-    "529a25cd6da50e5c770783e36f1b5b92",
-    "69edb76ed4fc397f27d185487ac66854",
-    "98ebe355cb1465bf0063f2aec6869b38",
+    "a6814aeafbaa3b3bdc330330ae8c1e5b",
+    "74ecadf1b63bfb10ca04c31061808ae5",
+    "791ea22b9811b53493a6095440e78fd3",
+  ]
+  for i, f in frames_dec {
+    inspect(h264p_md5(f.yuvp()), content=pins[i])
+  }
+}
+
+///|
+/// External arbitration of the six-frame RD quality fixture (docker ffmpeg
+/// 9.0.2, `nine-x264`): zero warnings and every deblocked frame matches this
+/// repository's decoder byte-for-byte. The longer sequence carries more
+/// P_Skip macroblocks and more reference drift than the four-frame pin, so
+/// it exercises the nz writeback semantics (`decode_mb_skip`'s memset and
+/// the uncoded chroma AC fill) over more picture boundaries.
+test "h264 enc: ffmpeg-arbitrated RD six frames (96x64, QP 24)" {
+  let frames = h264p_fixture(96, 64, 6)
+  let stream = match
+    @libavcodec.h264_encode_frames(frames, width=96, height=64, qp=24) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  if frames_dec.length() != 6 {
+    fail("expected 6 frames")
+  }
+  let pins = [
+    "e454d86d27698952c3e354a20cb109cb",
+    "a6814aeafbaa3b3bdc330330ae8c1e5b",
+    "74ecadf1b63bfb10ca04c31061808ae5",
+    "791ea22b9811b53493a6095440e78fd3",
+    "aa4569a19890ad8bf10e108c831245e9",
+    "88404345e909bd9bc7da4756e7b08874",
   ]
   for i, f in frames_dec {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
@@ -248,5 +282,53 @@ test "h264 enc: partitions engage on the moving box" {
   }
   if frames_dec.length() != 3 {
     fail("expected 3 frames")
+  }
+}
+
+///|
+/// Rate-distortion operating point, measured on the unfiltered
+/// reconstruction against the source over the five P frames (96x64, QP 24).
+/// The SAD chain this slice replaced spent 4272 bytes for 27.02 dB (luma
+/// SSD 3970767; cost SSD + lambda*bits = 4.542e9). RD spends 2940 bytes for
+/// 27.38 dB (SSD 3654308; cost 4.070e9): 31% fewer bytes at slightly better
+/// quality, and a 10% lower cost on its own objective.
+///
+/// The PSNR floor is the regression gate for the Int32 cost overflow: with
+/// 32-bit arithmetic `ssd * 1024` wraps negative above SSD 2^21, so every
+/// high-distortion P_Skip priced as the cheapest candidate and the sequence
+/// collapsed to 21.49 dB while still producing a syntactically valid
+/// stream (ffmpeg accepted it - only a quality gate catches this).
+test "h264 enc: RD operating point beats the SAD chain" {
+  let frames = h264p_fixture(96, 64, 6)
+  let stream = match
+    @libavcodec.h264_encode_frames(frames, width=96, height=64, qp=24) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  if dec.length() != 6 {
+    fail("expected 6 frames, got \{dec.length()}")
+  }
+  let mut se_sum = 0.0
+  for f in 1..<6 {
+    let (y, _, _) = frames[f]
+    let r = dec[f]
+    for row = 0; row < 64; row = row + 1 {
+      for col = 0; col < 96; col = col + 1 {
+        let d = (y[row * 96 + col].to_int() - r.y[row * r.ystride + col]).to_double()
+        se_sum = se_sum + d * d
+      }
+    }
+  }
+  let mse = se_sum / (5 * 96 * 64).to_double()
+  let psnr = 10.0 * @math.log10(255.0 * 255.0 / mse)
+  if psnr < 26.5 {
+    fail("RD luma PSNR \{psnr} dB below the 26.5 dB floor")
+  }
+  if stream.length() > 3200 {
+    fail("RD stream \{stream.length()} bytes above the 3200 byte ceiling")
   }
 }

@@ -1214,6 +1214,25 @@ $msg | git commit -F -
 - **H.264 P_SKIP 的缺邻规则独立于普通 MV 中值预测**：左邻或上邻为
   `REF_NOT_AVAIL` 时直接取零 MV；不能只处理「ref 0 且 MV=0」的捷径。真实 HLS/DASH
   4 帧流在第 4 帧左边界首次暴露此错误，TS/fMP4/DASH 三条端到端 MD5 都会抓住。
+- **H.264 编码器的 `mb_skip_run` 只能在决策出「这是编码宏块」之后 flush**：
+  先写 run 再调 `decide_plan`，一旦决策器把该宏块改判 Skip，那个 Skip 就无处
+  追加——解码器会把被跳过的宏块当编码宏块读，P 帧第一个宏块即报
+  `total_coeff=-1`。SAD 决策器永不返回 Skip 时这条路径是死代码，接 RD 才触发。
+- **H.264 的 `non_zero_count` 虽然跨帧持久，但没有任何值会活过一帧**：
+  `h->non_zero_count` 只分配一次（`h264dec.c:196`），但每种宏块都完整覆写
+  nC 会读到的槽位——skip 是 `memset(nnz[mb_xy],0,48)`（`h264_mvpred.h:939`）、
+  I_PCM 是 `memset(...,16,48)`、cbp==0 与未编码的 8x8/色度 AC 组都是
+  `fill_rectangle(...,0,1)`。所以编码器镜像**不要**「保留上一帧计数」，
+  skip 要清零；色度 AC 未编码时 nC 跟随**语法**而不是量化器输出。移植解码器
+  每帧新建 nz=0 的 infos 因此是对的。
+- **率失真代价的 `ssd * 定标` 必须用 Int64**：MoonBit `Int` 是 32 位，一个
+  宏块 SSD 可达 ~1.7e7，2^10 定标越过 2^31 回绕成负数，于是每个高失真 Skip
+  都变成「最便宜」的候选。**码流仍然语法合法**（ffmpeg 零告警接受），只有
+  质量度量（PSNR/码长门）能抓到；语法仲裁测不出来。
+- **定位宏块级失步别指望 `trace_headers`**：它只 dump slice 头，不含宏块层
+  语法。把流喂真 ffmpeg oracle、看它报错的**宏块坐标**（`corrupted macroblock
+  X Y (total_coeff=-1)`）是最快的定位手段——第一个坏 MB 往往直接指向编码端
+  的写出时序问题。
 - **AV1 tile size 与数据交错**：读一个 little-endian `tile_size_minus_1` 后先跳过
   此 tile，再读下一长度；末 tile 吃剩余字节。用 UInt32 解析四字节长度，先与剩余
   字节比较再加 1，避免 `0xffffffff + 1` 回绕。`data_offset` 指向真实首 tile payload，

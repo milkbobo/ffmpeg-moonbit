@@ -163,20 +163,15 @@ pub fn h264_encode_frames(
   for k = 0; k < mb_width * mb_height; k = k + 1 {
     states.push(new_h264_p_mb_state())
   }
-  // Seed the persistent nz mirror from the I frame: uncoded blocks' nC
-  // reads see the previous frame's counts (the decoder's per-MB nz is
-  // never reset between pictures).
+  // Seed the persistent nz mirror from the I frame, mirroring the decoder's
+  // `non_zero_count` array (allocated once, never reset between pictures).
+  // Every macroblock kind overwrites the slots the nC predictor reads -
+  // skip zeroes all 48, coded blocks write their count or zero - so the
+  // seed is a lifecycle mirror rather than a value that survives.
   for k = 0; k < mb_width * mb_height; k = k + 1 {
     for i = 0; i < 48; i = i + 1 {
       states[k].nz[i] = first.mb_nz[k][i]
     }
-  }
-  if true {
-    let mut nzd = ""
-    for i = 0; i < 16; i = i + 1 {
-      nzd = nzd + states[0].nz[i].to_string() + ","
-    }
-    println("SEEDED nz[MB0]: \{nzd}")
   }
   for f = 1; f < frames.length(); f = f + 1 {
     let (y, u, v) = frames[f]
@@ -287,32 +282,23 @@ fn H264PEncoder::encode_p_frame(
         pmvx,
         pmvy,
       )
-      if skip_sad == 0 {
-        skip_run = skip_run + 1
-        self.commit_skip(mb_idx, pmvx, pmvy)
-        continue
+      let plan = if skip_sad == 0 {
+        Skip
+      } else {
+        self.decide_plan(mb_x, mb_y)
       }
-      // A coded macroblock ends the skip run.
-      r.put_ue(skip_run)
-      skip_run = 0
-      let plan = self.decide_plan(mb_x, mb_y)
-      if mb_y == 0 {
-        let tag = match plan {
-          Skip => "skip"
-          Part16x16(_, _) => "16x16"
-          Part16x8(_, _, _, _) => "16x8"
-          Part8x16(_, _, _, _) => "8x16"
-          Part8x8(_, _, _, _, _) => "8x8"
-        }
-        println("PLAN(\{mb_x}): \{tag}")
-      }
-      // Rate-distortion may pick Skip even when the predictor SAD is
-      // nonzero: the zero-residual macroblock is cheaper than coding it.
+      // The pending skip run is flushed only once a CODED macroblock is
+      // known. Rate-distortion may turn a macroblock whose predictor SAD
+      // is nonzero into a Skip, and that decision has to extend the run -
+      // emitting mb_skip_run before the decision would leave the decoder
+      // reading a skipped macroblock as a coded one.
       if plan is Skip {
         skip_run = skip_run + 1
         self.commit_skip(mb_idx, pmvx, pmvy)
         continue
       }
+      r.put_ue(skip_run)
+      skip_run = 0
       match self.write_coded_mb(mb_x, mb_y, plan, r, qp) {
         Ok(_) => ()
         Err(e) => return Err(e)
@@ -522,40 +508,161 @@ fn H264PEncoder::me_fixed(
 }
 
 ///|
-/// Mode decision: skip check, then 16x16 / 16x8 / 8x16 / 8x8 with the
-/// per-8x8 sub-mode picked by SAD (8x8 preferred on ties). Later modes
-/// must be STRICTLY better, so the coarser partition wins ties - the
-/// deterministic, bit-cheap choice. (The RD evaluation through
-/// `eval_plan` is wired but disabled: activating it desyncs in a way
-/// that needs clean single-test instrumentation - see the handoff.)
+/// Rate-distortion evaluation of one coded plan: SSD(src, recon) over the
+/// luma macroblock plus the EXACT syntax bit count (the real CAVLC writer
+/// runs against a throwaway bit buffer). Returns (ssd, bits).
+///
+/// The dry run mutates `rec_y`/`cur_nz`/`cur_mv`, so the progressive motion
+/// mirror is reset to its macroblock-entry value first: every candidate is
+/// priced from the same state the final write sees (`write_coded_mb` resets
+/// it identically). Without this, a later candidate's mvd predictor reads
+/// the previous candidate's MVs through `mv_fetch`'s same-MB path. `cur_nz`
+/// needs no snapshot - `code_mb_residuals` re-seeds it from `states[mb].nz`
+/// on every call - and `rec_y` is overwritten by the winning plan's own
+/// `code_mb_residuals` before the slice is finished.
+fn H264PEncoder::eval_plan(
+  self : H264PEncoder,
+  mb_x : Int,
+  mb_y : Int,
+  plan : H264PPlan,
+  qp : Int,
+) -> (Int, Int) {
+  for i = 0; i < 32; i = i + 1 {
+    self.cur_mv[i] = 0
+  }
+  for i = 0; i < 16; i = i + 1 {
+    self.cur_ref[i] = -2
+  }
+  let coded = self.code_mb_residuals(mb_x, mb_y, plan, qp)
+  let ybase = mb_y * 16 * self.ystride + mb_x * 16
+  let mut ssd = 0
+  for row = 0; row < 16; row = row + 1 {
+    for col = 0; col < 16; col = col + 1 {
+      let d = self.src_y[ybase + row * self.ystride + col] -
+        self.rec_y[ybase + row * self.ystride + col]
+      ssd = ssd + d * d
+    }
+  }
+  let cw = H264Rbsp::new()
+  self.write_mb_syntax(mb_x, mb_y, plan, coded, cw)
+  (ssd, cw.bw.buf.length() * 8 + cw.bw.nbits)
+}
+
+///|
+/// SSD-domain mode lambda, scaled by 2^10: `0.85 * 2^((qp-12)/3)`, the
+/// H.264 reference-software convention for SSD distortion (the SAD-domain
+/// motion lambda uses half the exponent, `0.85 * 2^((qp-12)/6)`; the SSD
+/// weight keeps the same 0.85 coefficient rather than squaring it). Built
+/// from repeated doublings and the cube root of two so no libm `pow` is
+/// needed.
+fn h264_rd_lambda(qp : Int) -> Int {
+  let cbrt2 = 1.2599210498948732
+  let mut lam = 0.85
+  let mut k = qp - 12
+  while k >= 3 {
+    lam = lam * 2.0
+    k = k - 3
+  }
+  while k > 0 {
+    lam = lam * cbrt2
+    k = k - 1
+  }
+  while k <= -3 {
+    lam = lam / 2.0
+    k = k + 3
+  }
+  while k < 0 {
+    lam = lam / cbrt2
+    k = k + 1
+  }
+  (lam * 1024.0).to_int()
+}
+
+///|
+/// SSD of the source against the reference at a FIXED MV: the P_Skip
+/// candidate's distortion (a skipped macroblock has no syntax of its own,
+/// so its rate is priced at zero - the shared `mb_skip_run` is amortised).
+fn H264PEncoder::me_fixed_ssd(
+  self : H264PEncoder,
+  mb_x : Int,
+  mb_y : Int,
+  mvx : Int,
+  mvy : Int,
+) -> Int {
+  let mcbuf : Array[Int] = Array::make(256, 0)
+  h264_mc_luma(
+    mcbuf,
+    0,
+    16,
+    self.ref_y,
+    mb_x * 16 + (mvx >> 2),
+    mb_y * 16 + (mvy >> 2),
+    self.ystride,
+    16,
+    16,
+    mvx & 3,
+    mvy & 3,
+    self.pwidth,
+    self.pheight,
+    bit_depth=8,
+  )
+  let ybase = mb_y * 16 * self.ystride + mb_x * 16
+  let mut ssd = 0
+  for row = 0; row < 16; row = row + 1 {
+    for col = 0; col < 16; col = col + 1 {
+      let d = self.src_y[ybase + row * self.ystride + col] - mcbuf[row * 16 + col]
+      ssd = ssd + d * d
+    }
+  }
+  ssd
+}
+
+///|
+/// Mode decision by rate-distortion cost `SSD + lambda * bits`: P_Skip
+/// against 16x16 / 16x8 / 8x16 / 8x8, each partition's MVs from the SAD+MC
+/// search and each 8x8's sub-mode from SAD. Candidates must be STRICTLY
+/// cheaper, so the earlier (coarser, bit-cheaper) mode wins ties.
 fn H264PEncoder::decide_plan(
   self : H264PEncoder,
   mb_x : Int,
   mb_y : Int,
 ) -> H264PPlan {
+  let qp = self.p.qp
+  // Int64 throughout: a macroblock's SSD reaches ~1.7e7 and the 2^10
+  // scaling pushes the cost past 2^31, where Int (32-bit) wraps negative
+  // and makes every high-distortion Skip look like the cheapest candidate.
+  let lam = h264_rd_lambda(qp).to_int64()
   let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
-  let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
-  if skip_sad == 0 {
-    return Skip
+  let mut best_cost = self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy).to_int64() * 1024L
+  let mut plan = Skip
+  let (x16, y16, _) = self.me_part(mb_x, mb_y, 0, 0, 16, 16)
+  let p16 = Part16x16(x16, y16)
+  let (ssd16, bits16) = self.eval_plan(mb_x, mb_y, p16, qp)
+  let c16 = ssd16.to_int64() * 1024L + lam * bits16.to_int64()
+  if c16 < best_cost {
+    best_cost = c16
+    plan = p16
   }
-  let (x16, y16, sad16) = self.me_part(mb_x, mb_y, 0, 0, 16, 16)
-  let mut best_sad = sad16
-  let mut plan = Part16x16(x16, y16)
-  let (tx, ty, st) = self.me_part(mb_x, mb_y, 0, 0, 16, 8)
-  let (bx, by, sb) = self.me_part(mb_x, mb_y, 0, 8, 16, 8)
-  if st + sb < best_sad {
-    best_sad = st + sb
-    plan = Part16x8(tx, ty, bx, by)
+  let (tx, ty, _) = self.me_part(mb_x, mb_y, 0, 0, 16, 8)
+  let (bx, by, _) = self.me_part(mb_x, mb_y, 0, 8, 16, 8)
+  let p168 = Part16x8(tx, ty, bx, by)
+  let (ssd168, bits168) = self.eval_plan(mb_x, mb_y, p168, qp)
+  let c168 = ssd168.to_int64() * 1024L + lam * bits168.to_int64()
+  if c168 < best_cost {
+    best_cost = c168
+    plan = p168
   }
-  let (lx, ly, sl) = self.me_part(mb_x, mb_y, 0, 0, 8, 16)
-  let (rx, ry, sr) = self.me_part(mb_x, mb_y, 8, 0, 8, 16)
-  if sl + sr < best_sad {
-    best_sad = sl + sr
-    plan = Part8x16(lx, ly, rx, ry)
+  let (lx, ly, _) = self.me_part(mb_x, mb_y, 0, 0, 8, 16)
+  let (rx, ry, _) = self.me_part(mb_x, mb_y, 8, 0, 8, 16)
+  let p816 = Part8x16(lx, ly, rx, ry)
+  let (ssd816, bits816) = self.eval_plan(mb_x, mb_y, p816, qp)
+  let c816 = ssd816.to_int64() * 1024L + lam * bits816.to_int64()
+  if c816 < best_cost {
+    best_cost = c816
+    plan = p816
   }
   let subs : Array[Int] = Array::make(4, 0)
   let mvs : Array[Int] = []
-  let mut sad88 = 0
   for k = 0; k < 4; k = k + 1 {
     let x8 = k % 2
     let y8 = k / 2
@@ -587,13 +694,14 @@ fn H264PEncoder::decide_plan(
       sub_mvs = [a1x, a1y, b1x, b1y, c1x, c1y, d1x, d1y]
     }
     subs[k] = sub
-    sad88 += sub_sad
     for m in sub_mvs {
       mvs.push(m)
     }
   }
-  if sad88 < best_sad {
-    plan = Part8x8(subs[0], subs[1], subs[2], subs[3], mvs)
+  let p88 = Part8x8(subs[0], subs[1], subs[2], subs[3], mvs)
+  let (ssd88, bits88) = self.eval_plan(mb_x, mb_y, p88, qp)
+  if ssd88.to_int64() * 1024L + lam * bits88.to_int64() < best_cost {
+    plan = p88
   }
   plan
 }
@@ -795,9 +903,14 @@ fn H264PEncoder::commit_skip(
   }
   st.intra = false
   st.has_data = true
-  // nz is NOT written for skipped macroblocks: the decoder's
-  // `non_zero_count[mb_xy]` keeps the previous frame's counts (no
-  // writeback for cbp == 0), and later nC reads see exactly that.
+  // `decode_mb_skip` (h264_mvpred.h:939) opens with
+  // `memset(h->non_zero_count[mb_xy], 0, 48)`: a skipped macroblock zeroes
+  // the counts, it does not inherit the previous frame's. Every macroblock
+  // kind fully overwrites the slots the nC predictor reads, so nothing of
+  // the previous picture survives into the next one's predictions.
+  for i = 0; i < 48; i = i + 1 {
+    st.nz[i] = 0
+  }
   // Reconstruction: MC straight into the reconstruction planes.
   let mb_x = mb_idx % self.mb_width
   let mb_y = mb_idx / self.mb_width
@@ -991,9 +1104,11 @@ fn H264PEncoder::code_mb_residuals(
   plan : H264PPlan,
   qp : Int,
 ) -> H264PMbCode {
-  // The nC mirror persists per macroblock: blocks this frame does not code
-  // keep the previous frame's counts (the decoder's `fill_decode_caches`
-  // loads them from `non_zero_count[mb_xy]`), so seed from that state.
+  // `fill_decode_caches` seeds the nC cache from the persistent
+  // `non_zero_count[mb_xy]`. Every slot the predictor can read is then
+  // overwritten below (coded blocks get their count, uncoded ones zero),
+  // so the seed never survives into a prediction - it is kept only to
+  // mirror the decoder's cache lifecycle.
   let mb_idx0 = mb_y * self.mb_width + mb_x
   for i = 0; i < 48; i = i + 1 {
     self.cur_nz[i] = self.states[mb_idx0].nz[i]
@@ -1109,6 +1224,18 @@ fn H264PEncoder::code_mb_residuals(
     }
   } else {
     0
+  }
+  // Chroma AC that is not signalled (cbp chroma 0 or 1) has its counts
+  // zeroed by the decoder's `fill_rectangle(..., 0, 1)` (h264_cavlc.c:1136),
+  // even when the quantiser produced non-zero levels that this encoder
+  // chose not to code. The nC mirror has to follow the SYNTAX, not the
+  // quantiser output.
+  if chroma_c_cbp != 2 {
+    for c = 0; c < 2; c = c + 1 {
+      for i = 0; i < 4; i = i + 1 {
+        self.cur_nz[16 + 16 * c + i] = 0
+      }
+    }
   }
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
