@@ -4,14 +4,18 @@
 // docker ffmpeg (pinned framemd5).
 
 ///|
-fn h264p_fixture(w : Int, h : Int, frames_n : Int) -> Array[(Bytes, Bytes, Bytes)] {
+fn h264p_fixture(
+  w : Int32,
+  h : Int32,
+  frames_n : Int32,
+) -> Array[(Bytes, Bytes, Bytes)] {
   let out : Array[(Bytes, Bytes, Bytes)] = []
   for f in 0..<frames_n {
     let y : Array[Byte] = []
     let u : Array[Byte] = []
     let v : Array[Byte] = []
-    let bx = (f * 4) % (w - 16)
-    let by = (f * 3) % (h - 16)
+    let bx = f * 4 % (w - 16)
+    let by = f * 3 % (h - 16)
     for row = 0; row < h; row = row + 1 {
       for col = 0; col < w; col = col + 1 {
         let mut s = (col * 2 + row * 3 + f) & 0xFF
@@ -26,8 +30,8 @@ fn h264p_fixture(w : Int, h : Int, frames_n : Int) -> Array[(Bytes, Bytes, Bytes
     }
     for row = 0; row < h / 2; row = row + 1 {
       for col = 0; col < w / 2; col = col + 1 {
-        u.push(((((col + f) & 0x3F)) + 96).to_byte())
-        v.push(((((row + f * 2) & 0x3F)) + 96).to_byte())
+        u.push((((col + f) & 0x3F) + 96).to_byte())
+        v.push((((row + f * 2) & 0x3F) + 96).to_byte())
       }
     }
     out.push(
@@ -88,8 +92,7 @@ test "h264 enc: static scene codes as pure skip run" {
     let f1 = frames_dec[1]
     for row = 0; row < 64; row = row + 1 {
       for col = 0; col < 96; col = col + 1 {
-        let d = f0.y[row * f0.ystride + col] -
-          f1.y[row * f1.ystride + col]
+        let d = f0.y[row * f0.ystride + col] - f1.y[row * f1.ystride + col]
         sum = sum + (if d < 0 { -d } else { d })
       }
     }
@@ -129,8 +132,7 @@ test "h264 enc: moving scene round trip and reconstruction invariant" {
     let mut sum = 0
     for row = 0; row < 64; row = row + 1 {
       for col = 0; col < 96; col = col + 1 {
-        let d = y[row * 96 + col].to_int() -
-          src.y[row * src.ystride + col]
+        let d = y[row * 96 + col].to_int() - src.y[row * src.ystride + col]
         sum = sum + (if d < 0 { -d } else { d })
       }
     }
@@ -217,9 +219,7 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
   // Re-pinned after the RD slice (SSD + lambda * exact CAVLC bits, Int64
   // cost): ffmpeg's framemd5 values, zero warnings.
   let pins = [
-    "e454d86d27698952c3e354a20cb109cb",
-    "a6814aeafbaa3b3bdc330330ae8c1e5b",
-    "74ecadf1b63bfb10ca04c31061808ae5",
+    "e454d86d27698952c3e354a20cb109cb", "a6814aeafbaa3b3bdc330330ae8c1e5b", "74ecadf1b63bfb10ca04c31061808ae5",
     "791ea22b9811b53493a6095440e78fd3",
   ]
   for i, f in frames_dec {
@@ -249,12 +249,8 @@ test "h264 enc: ffmpeg-arbitrated RD six frames (96x64, QP 24)" {
     fail("expected 6 frames")
   }
   let pins = [
-    "e454d86d27698952c3e354a20cb109cb",
-    "a6814aeafbaa3b3bdc330330ae8c1e5b",
-    "74ecadf1b63bfb10ca04c31061808ae5",
-    "791ea22b9811b53493a6095440e78fd3",
-    "aa4569a19890ad8bf10e108c831245e9",
-    "88404345e909bd9bc7da4756e7b08874",
+    "e454d86d27698952c3e354a20cb109cb", "a6814aeafbaa3b3bdc330330ae8c1e5b", "74ecadf1b63bfb10ca04c31061808ae5",
+    "791ea22b9811b53493a6095440e78fd3", "aa4569a19890ad8bf10e108c831245e9", "88404345e909bd9bc7da4756e7b08874",
   ]
   for i, f in frames_dec {
     inspect(h264p_md5(f.yuvp()), content=pins[i])

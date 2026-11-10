@@ -17,7 +17,7 @@ fn H264Rbsp::new() -> H264Rbsp {
 
 ///|
 /// Append the low `n` bits of `value`, most significant bit first. */
-fn H264Rbsp::put(self : H264Rbsp, value : Int, n : Int) -> Unit {
+fn H264Rbsp::put(self : H264Rbsp, value : Int32, n : Int32) -> Unit {
   if n > 0 {
     self.bw.put(value.reinterpret_as_uint(), n)
   }
@@ -25,18 +25,18 @@ fn H264Rbsp::put(self : H264Rbsp, value : Int, n : Int) -> Unit {
 
 ///|
 /// Append one bit. */
-fn H264Rbsp::put_bit(self : H264Rbsp, b : Int) -> Unit {
+fn H264Rbsp::put_bit(self : H264Rbsp, b : Int32) -> Unit {
   self.bw.put_bit(b)
 }
 
 ///|
 /// `ue(v)`: unsigned Exp-Golomb. */
-fn H264Rbsp::put_ue(self : H264Rbsp, v : Int) -> Unit {
+fn H264Rbsp::put_ue(self : H264Rbsp, v : Int32) -> Unit {
   // x = v + 1 has bit length m + 1; emit m zeros, the stop bit, then the
   // m info bits x - 2^m.
   let x = v + 1
   let mut m = 0
-  while x >= (1 << (m + 1)) {
+  while x >= 1 << (m + 1) {
     m = m + 1
     if m > 30 {
       abort("ue(v) out of range")
@@ -53,7 +53,7 @@ fn H264Rbsp::put_ue(self : H264Rbsp, v : Int) -> Unit {
 
 ///|
 /// `se(v)`: signed Exp-Golomb (`ue` of the interleaved mapping). */
-fn H264Rbsp::put_se(self : H264Rbsp, v : Int) -> Unit {
+fn H264Rbsp::put_se(self : H264Rbsp, v : Int32) -> Unit {
   let code = 2 * (if v > 0 { v } else { -v }) - (if v > 0 { 1 } else { 0 })
   self.put_ue(code)
 }
@@ -113,7 +113,7 @@ fn H264Rbsp::finish(self : H264Rbsp) -> Bytes {
 ///|
 /// Wrap a finished RBSP in a NAL unit (forbidden_zero 0, `nal_ref_idc`,
 /// `nal_unit_type`) with a 4-byte Annex B start code prefix. */
-fn h264_enc_nal(rbsp : H264Rbsp, ref_idc : Int, unit_type : Int) -> Bytes {
+fn h264_enc_nal(rbsp : H264Rbsp, ref_idc : Int32, unit_type : Int32) -> Bytes {
   let payload = rbsp.finish()
   let out : Array[Byte] = [
     b'\x00',

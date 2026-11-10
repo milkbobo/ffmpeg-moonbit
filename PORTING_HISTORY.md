@@ -11782,3 +11782,58 @@ bypass` 清理时误留 patch 覆盖上一行（连续 bypass 互相覆盖制造
 位）、emit 位置不对称（res 行/MB 行在 bins 前后的放置差）。引擎本身
 由 200 轮随机往返（QP 10-49 混合序列）预先排除。静态场景测试前提修
 正：CABAC 无 PCM，I 帧有损，P 帧必然带 coded MB，撤 P-vs-I 漂移断言。
+
+## §382 H.264 编码器 I16x16 CABAC 分支——bin 级 zip 探针钉杀 +c 教训（2026-11-10）
+
+CABAC 编码器最后一块语法面：`encode_macroblock` 的 Intra16x16 决策、
+redo 与完整语法输出。决策规则
+`use_i16 = i16_found && !(100 * i4_cost < 94 * i16_cost)`——I4 必须便宜
+超过 ~6% 才配上其 16 块的模式信令开销，平局选 I16；I16 候选在 I4 循环
+之前评估（`h264_pred16x16` 得失配），redo 时先清 `mb[0..256)` 再
+Hadamard DC 池 + AC 逐块。**CAVLC 死分支照搬会错**：AC 的 fdct 必须跑
+完整残差（含 (0,0) 采样）然后丢弃 levels[0]——DC 属 Hadamard 池；清
+零 (0,0) 再 fdct 会污染每一块 AC。重建镜像 `h264_recon_full_plane`
+的 I16 顺序：DC 散射先于逐块循环，块级 `nz!=0 → idct_add` 否则
+`mb[16i]!=0 → idct_dc_add`。cbp 从 mb_type 组导出（I16 无 cbp bins），
+dqp 门 `cbp != 0 || is_i16x16`，残差 cat 0 DC（n=48 全扫描）+
+`cbp&15` 门控 cat 1 AC（AC-only 扫描）。
+
+**本片两个真因，都是纸面推断对、实证杀死的**：
+
+1. **mb_type mode bins 的 +c 是错的**。`decode_cabac_intra_mb_type`
+   I-slice 续段在首 bin（ctx 3+c，c=I16/PCM 邻居数）之后 `state += 2`
+   **不含 c**：b0@6、b1@7、b2@8（仅 b1=1 才读）、b3@9、b4@10，FFmpeg C
+   源 `libavcodec/h264_cabac.c` 逐行证实（`state[1..3+2*intra_slice]`，
+   上下文一律相对 `ctx_base+2`，唯独首 bin 吃+c）。此前按交接摘要虚构
+   的 `6+c..10+c` 写端在 I16 邻居首次出现（第 2 个 MB）即失步：读端
+   b0@6=1、b1@7=0 解出 pred=V，第一行第二 MB 即报 "unavailable top
+   samples"（首 MB c=0 时 6 个 bin 恰好全对齐，症状完美骗过肉眼）。
+   **教训：解码器真身/FFmpeg C 源才是权威镜像，摘要描述必须实证——
+   bin 级 zip 探针（写端 `decision/terminate` 与读端 `get_cabac*`
+   全 emit 对 zip (ctx, val) 序列）是失步的终局工具**，本次 96×64
+   平场 312 vs 312 bins 逐 bin 对齐即收口。探针同时实证：引擎层
+   `terminate(0)`（PCM reject 的流中终止 bin）往返无损，`cabac_wbtest`
+   增补 "cabac: mid-stream terminate(0) round-trips" 沉淀该结论。
+2. **`luma_cbp` 无条件 OR**：I16 redo 的 AC 块循环把
+   `luma_cbp |= 1 << (i/4)` 写成了不判 `total != 0`，平场全零残差也被
+   置 15 → group 恒 ≥3，平场每 MB 多写一串零 AC cbf bins。按
+   `total != 0` 门控后平场形态正确：luma_cbp=0、chroma DC（u/v=96 对
+   边缺 DC pred=128 的 −32 残差）使 group=1，mb_type=7，~13 bins/MB。
+
+**另案澄清**：单 MB 16×16 平场的 "chroma recon 126" 是量化正常现象，
+不是 bug——首 MB 色度无邻边，DC pred=128，u=96 的 DC 残差 −32 量化
+（QP26 chroma）后 dequant 回 −2，128−2=126。黑盒断言改为与
+`enc.recon_*` 对拍（与全库既有 recon 不变式同法），luma 128 精确性
+另留断言。判读准则：**recon ≠ 源 ≠ 病，recon ≠ enc.recon 才是病**。
+
+**验证**：`moon check --target wasm --deny-warn` 零警告；黑盒
+`h264_enc_cabac_test.mbt` **10/10**（新增 I16 平场单 MB + 96×64 两测、
+QP22 ffmpeg 仲裁钉值 `e590592c…/7ad1fd5f…/5b307436…/bfaf8880…/
+a4332b24…/baa04a02…`——QP24 旧钉值未动，该 fixture 下 I4 仍胜 >6%）；
+bin 级 zip 探针（临时 wbtest，已删）96×64 平场 312/312 bins 全对齐、
+零 DECODE ERR；**docker ffmpeg 9.0.2 对 QP22 六帧（含 I16 宏块）零告
+警 framemd5 与本仓自解码逐帧一致**。全量 Wasm（wasm-gc 目标）
+**1723/1723**；非 gc Wasm 其余包 **841/841**——libavcodec whitebox 在
+非 gc Wasm 撞 V8 单函数局部数上限（历史已知，§“局部数上限”诸篇），
+wasm-gc 后端同文件全过，白盒 wasm 门改记 wasm-gc。x264 解码 oracle
+**7/7**。

@@ -10,21 +10,21 @@
 /// Encoder parameter-set configuration. */
 priv struct H264EncParams {
   /// Visible geometry; must be even for 4:2:0 chroma.
-  width : Int
-  height : Int
+  width : Int32
+  height : Int32
   /// Slice QP (also `pic_init_qp`), 0..51.
-  qp : Int
+  qp : Int32
   /// Level for `level_idc` (pure metadata for the decoders under test).
-  level_idc : Int
+  level_idc : Int32
 }
 
 ///|
-fn H264EncParams::mb_width(self : H264EncParams) -> Int {
+fn H264EncParams::mb_width(self : H264EncParams) -> Int32 {
   (self.width + 15) / 16
 }
 
 ///|
-fn H264EncParams::mb_height(self : H264EncParams) -> Int {
+fn H264EncParams::mb_height(self : H264EncParams) -> Int32 {
   (self.height + 15) / 16
 }
 

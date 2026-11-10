@@ -252,6 +252,41 @@ test "cabac: FFmpeg tests/cabac.c vector round-trips through the decoder" {
 }
 
 ///|
+/// Mid-stream zero terminate bins (`h264_cabac_intra_mb_type`'s Intra_PCM
+/// reject): a terminate bin written as bit 0 in the middle of a slice must
+/// round-trip through the decoder with no value drift - the Intra16x16
+/// continuation depends on it.
+test "cabac: mid-stream terminate(0) round-trips" {
+  let enc = cabac_test_enc_new()
+  let wpair : Array[Int32] = Array::make(10, 0)
+  cabac_test_put_cabac(enc, wpair, 1)
+  cabac_test_put_cabac(enc, wpair, 0)
+  ignore(cabac_test_put_cabac_terminate(enc, 0))
+  cabac_test_put_cabac(enc, wpair, 1)
+  cabac_test_put_cabac(enc, wpair, 1)
+  let n = cabac_test_put_cabac_terminate(enc, 1)
+  let bytes = enc.pb.to_bytes().to_array()
+  let buf : Array[Byte] = []
+  for k = 0; k < n; k = k + 1 {
+    buf.push(bytes[k])
+  }
+  for _k in 0..<8 {
+    buf.push(b'\x00')
+  }
+  let dec = ff_init_cabac_decoder(Bytes::from_array(buf), 0).unwrap()
+  let dpair : Array[Int32] = Array::make(10, 0)
+  assert_eq(dec.get_cabac(dpair, 0), 1)
+  assert_eq(dec.get_cabac(dpair, 0), 0)
+  assert_true(
+    dec.get_cabac_terminate() == 0,
+    msg="mid-stream terminate bin must read as 0",
+  )
+  assert_eq(dec.get_cabac(dpair, 0), 1)
+  assert_eq(dec.get_cabac(dpair, 0), 1)
+  assert_true(dec.get_cabac_terminate() != 0, msg="terminator missing")
+}
+
+///|
 /// `ff_h264_init_cabac_states`: the derivation from `cabac_context_init` is
 /// `pre = 2*(((m*qp)>>4) + n) - 127`, then `pre ^= pre>>31` and the `>124`
 /// clamp to `124 + (pre&1)`. The expected values are computed the same way the

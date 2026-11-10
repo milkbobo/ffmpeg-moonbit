@@ -151,7 +151,7 @@ fn x264_cross_decode(
     fail("bps: C \{c.bytes_per_sample()} vs test \{bps}")
   }
   let plane_y = width * height * bps
-  let plane_c = (width / 2) * (height / 2) * bps
+  let plane_c = width / 2 * (height / 2) * bps
   for i = 0; i < n; i = i + 1 {
     let f = frames[i]
     if f.width != width || f.height != height {
@@ -405,10 +405,7 @@ test "x264 global header -> avcC path (movenc-style) round-trip" {
   for i = 0; i < c.n_frames; i = i + 1 {
     let packed = frames_avc[i].yuvp()
     if !x264_bytes_eq(packed[0:96 * 64].to_owned(), c.frame_y(i)) ||
-      !x264_bytes_eq(
-        packed[96 * 64:96 * 64 + 48 * 32].to_owned(),
-        c.frame_u(i),
-      ) ||
+      !x264_bytes_eq(packed[96 * 64:96 * 64 + 48 * 32].to_owned(), c.frame_u(i)) ||
       !x264_bytes_eq(packed[96 * 64 + 48 * 32:].to_owned(), c.frame_v(i)) {
       fail("frame \{i}: avc path and C repack decode differ")
     }

@@ -28,18 +28,18 @@ pub struct H264EncodedFrame {
   annexb : Bytes
   /// The encoder's local reconstruction, macroblock-aligned planes (the
   /// pre-deblocking pixels the decoder reproduces byte-for-byte).
-  recon_y : Array[Int]
-  recon_u : Array[Int]
-  recon_v : Array[Int]
-  ystride : Int
-  cstride : Int
-  width : Int
-  height : Int
-  qp : Int
+  recon_y : Array[Int32]
+  recon_u : Array[Int32]
+  recon_v : Array[Int32]
+  ystride : Int32
+  cstride : Int32
+  width : Int32
+  height : Int32
+  qp : Int32
   /// The per-macroblock nC mirror after coding (48 slots per MB): the P
   /// encoder seeds its persistent state from this, because uncoded blocks'
   /// nC reads see the previous frame's counts.
-  mb_nz : Array[Array[Int]]
+  mb_nz : Array[Array[Int32]]
 }
 
 ///|
@@ -47,37 +47,33 @@ pub struct H264EncodedFrame {
 /// neighbour prediction: the nz counts, the Intra4x4 signalling modes and
 /// the availability marker.
 priv struct H264EncMbState {
-  nz : Array[Int]
-  modes : Array[Int]
+  nz : Array[Int32]
+  modes : Array[Int32]
   mut intra4x4 : Bool
 }
 
 ///|
 fn new_h264_enc_mb_state() -> H264EncMbState {
-  {
-    nz: Array::make(48, 0),
-    modes: Array::make(16, 0),
-    intra4x4: false,
-  }
+  { nz: Array::make(48, 0), modes: Array::make(16, 0), intra4x4: false, }
 }
 
 ///|
 priv struct H264IntraEncoder {
   p : H264EncParams
   pps : H264Pps
-  chroma_qp : Int
-  src_y : Array[Int]
-  src_u : Array[Int]
-  src_v : Array[Int]
-  rec_y : Array[Int]
-  rec_u : Array[Int]
-  rec_v : Array[Int]
-  ystride : Int
-  cstride : Int
-  mb_width : Int
+  chroma_qp : Int32
+  src_y : Array[Int32]
+  src_u : Array[Int32]
+  src_v : Array[Int32]
+  rec_y : Array[Int32]
+  rec_u : Array[Int32]
+  rec_v : Array[Int32]
+  ystride : Int32
+  cstride : Int32
+  mb_width : Int32
   states : Array[H264EncMbState]
-  cur_nz : Array[Int]
-  cur_modes : Array[Int]
+  cur_nz : Array[Int32]
+  cur_modes : Array[Int32]
 }
 
 ///|
@@ -90,10 +86,10 @@ pub fn h264_encode_intra_frame(
   y : Bytes,
   u : Bytes,
   v : Bytes,
-  width~ : Int,
-  height~ : Int,
-  qp~ : Int = 26,
-  level_idc~ : Int = 30,
+  width~ : Int32,
+  height~ : Int32,
+  qp~ : Int32 = 26,
+  level_idc~ : Int32 = 30,
   pcm~ : Bool = false,
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
@@ -103,11 +99,11 @@ pub fn h264_encode_intra_frame(
     return Err("h264 enc: qp out of range")
   }
   if y.length() != width * height ||
-     u.length() != (width / 2) * (height / 2) ||
-     v.length() != (width / 2) * (height / 2) {
+    u.length() != width / 2 * (height / 2) ||
+    v.length() != width / 2 * (height / 2) {
     return Err("h264 enc: plane size mismatch")
   }
-  let p = { width, height, qp, level_idc }
+  let p = { width, height, qp, level_idc, }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -143,12 +139,12 @@ pub fn h264_encode_intra_frame(
   let chroma_qp = h264_get_chroma_qp(pps, 0, qp)
   fn load_plane(
     src : Bytes,
-    w : Int,
-    h : Int,
-    stride : Int,
-    plane_h : Int,
-  ) -> Array[Int] {
-    let plane : Array[Int] = Array::make(stride * plane_h, 0)
+    w : Int32,
+    h : Int32,
+    stride : Int32,
+    plane_h : Int32,
+  ) -> Array[Int32] {
+    let plane : Array[Int32] = Array::make(stride * plane_h, 0)
     for row = 0; row < h; row = row + 1 {
       for col = 0; col < w; col = col + 1 {
         plane[row * stride + col] = src[row * w + col].to_int()
@@ -205,38 +201,36 @@ pub fn h264_encode_intra_frame(
   }
   r.trailing_bits()
   let slice_nal = h264_enc_nal(r, 3, 5)
-  Ok(
-    {
-      annexb: h264_enc_concat([sps_nal, pps_nal, slice_nal]),
-      recon_y: self_.rec_y,
-      recon_u: self_.rec_u,
-      recon_v: self_.rec_v,
-      ystride: self_.ystride,
-      cstride: self_.cstride,
-      width,
-      height,
-      qp,
-      mb_nz: {
-        let out : Array[Array[Int]] = []
-        for k = 0; k < mb_width * mb_height; k = k + 1 {
-          let st = self_.states[k]
-          let nz : Array[Int] = Array::make(48, 0)
-          for i = 0; i < 48; i = i + 1 {
-            nz[i] = st.nz[i]
-          }
-          out.push(nz)
+  Ok({
+    annexb: h264_enc_concat([sps_nal, pps_nal, slice_nal]),
+    recon_y: self_.rec_y,
+    recon_u: self_.rec_u,
+    recon_v: self_.rec_v,
+    ystride: self_.ystride,
+    cstride: self_.cstride,
+    width,
+    height,
+    qp,
+    mb_nz: {
+      let out : Array[Array[Int32]] = []
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        let st = self_.states[k]
+        let nz : Array[Int32] = Array::make(48, 0)
+        for i = 0; i < 48; i = i + 1 {
+          nz[i] = st.nz[i]
         }
-        out
-      },
+        out.push(nz)
+      }
+      out
     },
-  )
+  })
 }
 
 ///|
 fn H264IntraEncoder::encode_pcm(
   self : H264IntraEncoder,
-  mb_x : Int,
-  mb_y : Int,
+  mb_x : Int32,
+  mb_y : Int32,
   r : H264Rbsp,
 ) -> Unit {
   r.put_ue(25) // mb_type: I_PCM
@@ -272,12 +266,12 @@ fn H264IntraEncoder::encode_pcm(
 ///|
 fn H264IntraEncoder::nc_luma(
   self : H264IntraEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  gx : Int,
-  gy : Int,
-) -> Int {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  gx : Int32,
+  gy : Int32,
+) -> Int32 {
   let left = if gx > 0 {
     self.cur_nz[gy * 4 + gx - 1]
   } else if mb_x > 0 {
@@ -292,44 +286,34 @@ fn H264IntraEncoder::nc_luma(
   } else {
     64
   }
-  h264_pred_non_zero_count(
-    left,
-    top,
-  )
+  h264_pred_non_zero_count(left, top)
 }
 
 ///|
 fn H264IntraEncoder::nc_block0(
   self : H264IntraEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-) -> Int {
-  let left = if mb_x > 0 {
-    self.states[mb_idx - 1].nz[3]
-  } else {
-    64
-  }
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+) -> Int32 {
+  let left = if mb_x > 0 { self.states[mb_idx - 1].nz[3] } else { 64 }
   let top = if mb_y > 0 {
     self.states[mb_idx - self.mb_width].nz[12]
   } else {
     64
   }
-  h264_pred_non_zero_count(
-    left,
-    top,
-  )
+  h264_pred_non_zero_count(left, top)
 }
 
 ///|
 fn H264IntraEncoder::nc_chroma(
   self : H264IntraEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  c : Int,
-  i : Int,
-) -> Int {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  c : Int32,
+  i : Int32,
+) -> Int32 {
   let base = 16 + 16 * c
   let gx = i % 2
   let gy = i / 2
@@ -347,10 +331,7 @@ fn H264IntraEncoder::nc_chroma(
   } else {
     64
   }
-  h264_pred_non_zero_count(
-    left,
-    top,
-  )
+  h264_pred_non_zero_count(left, top)
 }
 
 ///|
@@ -358,12 +339,12 @@ fn H264IntraEncoder::nc_chroma(
 /// modes (non-I4x4 neighbours count as DC).
 fn H264IntraEncoder::pred_mode(
   self : H264IntraEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  gx : Int,
-  gy : Int,
-) -> Int {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  gx : Int32,
+  gy : Int32,
+) -> Int32 {
   let left = if gx > 0 {
     self.cur_modes[gy * 4 + gx - 1]
   } else if mb_x > 0 {
@@ -401,10 +382,10 @@ fn H264IntraEncoder::pred_mode(
 /// SAD between source and reconstruction over an 8x8 chroma block. */
 fn H264IntraEncoder::chroma_sad(
   self : H264IntraEncoder,
-  src : Array[Int],
-  rec : Array[Int],
-  cbase : Int,
-) -> Int {
+  src : Array[Int32],
+  rec : Array[Int32],
+  cbase : Int32,
+) -> Int32 {
   let mut sad = 0
   for row = 0; row < 8; row = row + 1 {
     for col = 0; col < 8; col = col + 1 {
@@ -420,11 +401,11 @@ fn H264IntraEncoder::chroma_sad(
 /// SAD between source and reconstruction over a 4x4 block of the luma
 /// plane at (off, ystride). */
 fn h264_enc_sad4(
-  src : Array[Int],
-  rec : Array[Int],
-  off : Int,
-  stride : Int,
-) -> Int {
+  src : Array[Int32],
+  rec : Array[Int32],
+  off : Int32,
+  stride : Int32,
+) -> Int32 {
   let mut sad = 0
   for row = 0; row < 4; row = row + 1 {
     for col = 0; col < 4; col = col + 1 {
@@ -440,18 +421,17 @@ fn h264_enc_sad4(
 /// `h264_pred8x8` overwrites the 8x8 region), then re-run the winner. */
 fn H264IntraEncoder::pick_chroma(
   self : H264IntraEncoder,
-  cbase : Int,
+  cbase : Int32,
   top : Bool,
   left : Bool,
-) -> Int {
+) -> Int32 {
   // Mirror of the decoder: candidates are the raw signalling modes, the
   // prediction runs on the checked effective mode.
   let mut best_sig = 0
   let mut best_eff = 0
   let mut best_cost = -1
   for sig = 0; sig < 4; sig = sig + 1 {
-    let eff = match
-      h264_check_intra_pred_mode(sig, top, left) {
+    let eff = match h264_check_intra_pred_mode(sig, top, left) {
       Ok(v) => v
       Err(_) => -1
     }
@@ -514,8 +494,8 @@ fn H264IntraEncoder::pick_chroma(
 ///|
 fn H264IntraEncoder::encode_macroblock(
   self : H264IntraEncoder,
-  mb_x : Int,
-  mb_y : Int,
+  mb_x : Int32,
+  mb_y : Int32,
   r : H264Rbsp,
 ) -> Result[Unit, String] {
   let mb_idx = mb_y * self.mb_width + mb_x
@@ -536,22 +516,25 @@ fn H264IntraEncoder::encode_macroblock(
     h264_build_dequant4(self.pps, 1, self.chroma_qp),
     h264_build_dequant4(self.pps, 2, self.chroma_qp),
   ]
-  let chroma_dc_store : Array[Array[Int]] = [Array::make(16, 0), Array::make(16, 0)]
-  let chroma_ac_store : Array[Array[Int]] = [
+  let chroma_dc_store : Array[Array[Int32]] = [
+    Array::make(16, 0),
+    Array::make(16, 0),
+  ]
+  let chroma_ac_store : Array[Array[Int32]] = [
     Array::make(64, 0),
     Array::make(64, 0),
   ]
   let chroma_dc_nz : Array[Bool] = [false, false]
-  let chroma_ac_nz : Array[Int] = Array::make(8, 0)
-  let mb : Array[Int] = Array::make(768, 0)
+  let chroma_ac_nz : Array[Int32] = Array::make(8, 0)
+  let mb : Array[Int32] = Array::make(768, 0)
   for c = 0; c < 2; c = c + 1 {
     let src = if c == 0 { self.src_u } else { self.src_v }
     let rec = if c == 0 { self.rec_u } else { self.rec_v }
     // DC: sums of the four 4x4 residual blocks (raster order).
-    let sums : Array[Int] = Array::make(4, 0)
+    let sums : Array[Int32] = Array::make(4, 0)
     for i = 0; i < 4; i = i + 1 {
-      let bx = (i % 2) * 4
-      let by = (i / 2) * 4
+      let bx = i % 2 * 4
+      let by = i / 2 * 4
       let mut sum = 0
       for row = 0; row < 4; row = row + 1 {
         for col = 0; col < 4; col = col + 1 {
@@ -562,7 +545,7 @@ fn H264IntraEncoder::encode_macroblock(
       }
       sums[i] = sum
     }
-    let dc_store : Array[Int] = Array::make(4, 0)
+    let dc_store : Array[Int32] = Array::make(4, 0)
     let dc_levels = h264_enc_chroma_dc_hadamard_quant(
       sums,
       dc_store,
@@ -576,20 +559,16 @@ fn H264IntraEncoder::encode_macroblock(
       dc_levels[3] != 0
     // AC blocks.
     for i = 0; i < 4; i = i + 1 {
-      let bx = (i % 2) * 4
-      let by = (i / 2) * 4
-      let res : Array[Int] = Array::make(16, 0)
+      let bx = i % 2 * 4
+      let by = i / 2 * 4
+      let res : Array[Int32] = Array::make(16, 0)
       for row = 0; row < 4; row = row + 1 {
         for col = 0; col < 4; col = col + 1 {
           res[row * 4 + col] = src[cbase + (by + row) * self.cstride + bx + col] -
             rec[cbase + (by + row) * self.cstride + bx + col]
         }
       }
-      let levels = h264_enc_fdct_quant_res(
-        res,
-        0,
-        self.chroma_qp,
-      )
+      let levels = h264_enc_fdct_quant_res(res, 0, self.chroma_qp)
       // Storage position 0 is the DC slot the 2x2 DC block owns; the AC
       // transform must not touch it (the stream view starts at scan 1,
       // but the dequant fill and the DC slot share the array).
@@ -611,7 +590,10 @@ fn H264IntraEncoder::encode_macroblock(
       for s = 0; s < 16; s = s + 1 {
         let lv = chroma_ac_store[c][16 * i + s]
         if lv != 0 {
-          mb[256 + 256 * c + 16 * i + s] = h264_enc_dequant_level(lv, qmul_c[c][s])
+          mb[256 + 256 * c + 16 * i + s] = h264_enc_dequant_level(
+            lv,
+            qmul_c[c][s],
+          )
         }
       }
     }
@@ -622,22 +604,17 @@ fn H264IntraEncoder::encode_macroblock(
   let mut luma_cbp = 0
   let mut i16_mode = 0
   let mut use_i16 = false
-  let luma_store : Array[Int] = Array::make(256, 0)
-  let luma_dc_store : Array[Int] = Array::make(16, 0)
-  let luma_nz : Array[Int] = Array::make(16, 0)
-  let i16_ac_nz : Array[Int] = Array::make(16, 0)
+  let luma_store : Array[Int32] = Array::make(256, 0)
+  let luma_dc_store : Array[Int32] = Array::make(16, 0)
+  let luma_nz : Array[Int32] = Array::make(16, 0)
+  let i16_ac_nz : Array[Int32] = Array::make(16, 0)
   let mut i16_dc_total = 0
   let mut i16_cost = 0
   // I16 candidates (signalling mode; prediction on the checked value).
   let mut i16_eff = 0
   let mut i16_found = false
   for sig = 0; sig < 4; sig = sig + 1 {
-    let eff = match
-      h264_check_intra_pred_mode(
-        sig,
-        top_avail,
-        left_avail,
-      ) {
+    let eff = match h264_check_intra_pred_mode(sig, top_avail, left_avail) {
       Ok(v) => v
       Err(_) => -1
     }
@@ -645,14 +622,15 @@ fn H264IntraEncoder::encode_macroblock(
       continue
     }
     let pred_ok = h264_pred16x16(
-      self.rec_y,
-      ybase,
-      self.ystride,
-      eff,
-      top_avail,
-      left_avail,
-      bit_depth=8,
-    ) is Ok(_)
+        self.rec_y,
+        ybase,
+        self.ystride,
+        eff,
+        top_avail,
+        left_avail,
+        bit_depth=8,
+      )
+      is Ok(_)
     if pred_ok {
       let mut sad = 0
       for row = 0; row < 16; row = row + 1 {
@@ -686,15 +664,10 @@ fn H264IntraEncoder::encode_macroblock(
       gx == 0 || gx == 2 || (gx == 1 && gy % 2 == 0)
     }
     let mut best_sig = 0
-    let mut best_eff : Int = -1
+    let mut best_eff : Int32 = -1
     let mut best_sad = -1
     for sig = 0; sig < 9; sig = sig + 1 {
-      let eff = match
-        h264_check_intra4x4_mode(
-          sig,
-          blk_top,
-          blk_left,
-        ) {
+      let eff = match h264_check_intra4x4_mode(sig, blk_top, blk_left) {
         Ok(v) => v
         Err(_) => -1
       }
@@ -702,15 +675,16 @@ fn H264IntraEncoder::encode_macroblock(
         continue
       }
       let pred_err = h264_pred4x4(
-        self.rec_y,
-        off,
-        self.ystride,
-        eff,
-        blk_top,
-        blk_left,
-        topright,
-        bit_depth=8,
-      ) is Err(_)
+          self.rec_y,
+          off,
+          self.ystride,
+          eff,
+          blk_top,
+          blk_left,
+          topright,
+          bit_depth=8,
+        )
+        is Err(_)
       if pred_err {
         continue
       }
@@ -742,7 +716,7 @@ fn H264IntraEncoder::encode_macroblock(
     i4_cost = i4_cost + best_sad
     self.cur_modes[g] = best_sig
     // Residual -> quantise -> dequantise -> reconstruct.
-    let res : Array[Int] = Array::make(16, 0)
+    let res : Array[Int32] = Array::make(16, 0)
     for row = 0; row < 4; row = row + 1 {
       for col = 0; col < 4; col = col + 1 {
         res[row * 4 + col] = self.src_y[off + row * self.ystride + col] -
@@ -763,23 +737,9 @@ fn H264IntraEncoder::encode_macroblock(
     if total != 0 {
       luma_cbp = luma_cbp | (1 << (i / 4))
       if total == 1 && mb[16 * i] != 0 {
-        h264_idct_dc_add(
-          self.rec_y,
-          off,
-          self.ystride,
-          mb,
-          16 * i,
-          bit_depth=8,
-        )
+        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
       } else {
-        h264_idct_add(
-          self.rec_y,
-          off,
-          self.ystride,
-          mb,
-          16 * i,
-          bit_depth=8,
-        )
+        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
       }
     }
   }
@@ -804,7 +764,7 @@ fn H264IntraEncoder::encode_macroblock(
       Ok(_) => ()
       Err(e) => return Err(e)
     }
-    let sums : Array[Int] = Array::make(16, 0)
+    let sums : Array[Int32] = Array::make(16, 0)
     for g = 0; g < 16; g = g + 1 {
       let bx = h264_luma_block_x[g]
       let by = h264_luma_block_y[g]
@@ -820,12 +780,7 @@ fn H264IntraEncoder::encode_macroblock(
       sums[by * 4 + bx] = sum
     }
     let dc_levels = h264_enc_luma_dc_hadamard_quant(
-      sums,
-      0,
-      4,
-      luma_dc_store,
-      0,
-      qp,
+      sums, 0, 4, luma_dc_store, 0, qp,
     )
     ignore(dc_levels)
     i16_dc_total = 0
@@ -840,7 +795,7 @@ fn H264IntraEncoder::encode_macroblock(
       let gy = h264_luma_block_y[i]
       let g = gy * 4 + gx
       let off = ybase + gy * 4 * self.ystride + gx * 4
-      let res : Array[Int] = Array::make(16, 0)
+      let res : Array[Int32] = Array::make(16, 0)
       for row = 0; row < 4; row = row + 1 {
         for col = 0; col < 4; col = col + 1 {
           res[row * 4 + col] = self.src_y[off + row * self.ystride + col] -
@@ -848,7 +803,7 @@ fn H264IntraEncoder::encode_macroblock(
         }
       }
       // AC residual excludes the DC sample (block position 0).
-      let res_ac : Array[Int] = [
+      let res_ac : Array[Int32] = [
         0,
         res[1],
         res[2],
@@ -866,13 +821,9 @@ fn H264IntraEncoder::encode_macroblock(
         res[14],
         res[15],
       ]
-      let levels = h264_enc_fdct_quant_res(
-        res_ac,
-        0,
-        qp,
-      )
+      let levels = h264_enc_fdct_quant_res(res_ac, 0, qp)
       // Zero the DC slot: the DC block owns it.
-      let fixed : Array[Int] = Array::make(16, 0)
+      let fixed : Array[Int32] = Array::make(16, 0)
       for s = 0; s < 16; s = s + 1 {
         if s != 0 {
           fixed[s] = levels[s]
@@ -897,41 +848,20 @@ fn H264IntraEncoder::encode_macroblock(
     }
     // Reconstruction: DC Hadamard inverse then per-block IDCT.
     if i16_dc_total > 0 {
-      let dc_raw : Array[Int] = Array::make(16, 0)
+      let dc_raw : Array[Int32] = Array::make(16, 0)
       for s = 0; s < 16; s = s + 1 {
         dc_raw[s] = luma_dc_store[s]
       }
-      h264_luma_dc_dequant_idct(
-        mb,
-        0,
-        dc_raw,
-        0,
-        qmul_y[0],
-        bit_depth=8,
-      )
+      h264_luma_dc_dequant_idct(mb, 0, dc_raw, 0, qmul_y[0], bit_depth=8)
     }
     for i = 0; i < 16; i = i + 1 {
       let gx = h264_luma_block_x[i]
       let gy = h264_luma_block_y[i]
       let off = ybase + gy * 4 * self.ystride + gx * 4
       if i16_ac_nz[gy * 4 + gx] != 0 {
-        h264_idct_add(
-          self.rec_y,
-          off,
-          self.ystride,
-          mb,
-          16 * i,
-          bit_depth=8,
-        )
+        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
       } else if mb[16 * i] != 0 {
-        h264_idct_dc_add(
-          self.rec_y,
-          off,
-          self.ystride,
-          mb,
-          16 * i,
-          bit_depth=8,
-        )
+        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
       }
     }
   }
@@ -962,16 +892,11 @@ fn H264IntraEncoder::encode_macroblock(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(
-        mb,
-        256 + 256 * c,
-        qmul_c[c][0],
-        bit_depth=8,
-      )
+      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=8)
     }
     for i = 0; i < 4; i = i + 1 {
-      let bx = (i % 2) * 4
-      let by = (i / 2) * 4
+      let bx = i % 2 * 4
+      let by = i / 2 * 4
       let off = cbase + by * self.cstride + bx
       let bo = 256 + 256 * c + 16 * i
       // AC residuals only exist for the decoder when chroma cbp == 2;
@@ -992,11 +917,7 @@ fn H264IntraEncoder::encode_macroblock(
   if use_i16 {
     // `h264_i16x16_cbp` = [0, 16, 32, 15, 31, 47]: groups 0..2 are the
     // no-luma-AC classes (chroma 0/DC/AC), groups 3..5 add luma AC.
-    let group = if luma_cbp != 0 {
-      3 + chroma_c_cbp
-    } else {
-      chroma_c_cbp
-    }
+    let group = if luma_cbp != 0 { 3 + chroma_c_cbp } else { chroma_c_cbp }
     // The I16 mode field of mb_type is ordered V/H/DC/Plane (spec
     // Table 7-11; the decoder's `h264_i16x16_pred` maps it back), while
     // the encoder tracks the pred8 numbering DC/H/V/Plane.
@@ -1010,12 +931,8 @@ fn H264IntraEncoder::encode_macroblock(
     r.put_ue(chroma_mode)
     r.put_se(0) // mb_qp_delta
     // DC block (16 coefficients, full scan).
-    let dc_scan : Array[Int] = scan_view_at(
-      luma_dc_store,
-      0,
-      h264_zigzag_scan_t,
-      0,
-      16,
+    let dc_scan : Array[Int32] = scan_view_at(
+      luma_dc_store, 0, h264_zigzag_scan_t, 0, 16,
     )
     ignore(
       h264_enc_write_residual(
@@ -1031,12 +948,7 @@ fn H264IntraEncoder::encode_macroblock(
         let gy = h264_luma_block_y[i]
         let view = scan_view_at(luma_store, i, h264_zigzag_scan_t, 1, 15)
         let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
-        self.cur_nz[gy * 4 + gx] = h264_enc_write_residual(
-          r,
-          view,
-          15,
-          nc,
-        )
+        self.cur_nz[gy * 4 + gx] = h264_enc_write_residual(r, view, 15, nc)
       }
     }
   } else {
@@ -1071,9 +983,7 @@ fn H264IntraEncoder::encode_macroblock(
           let view = scan_view_at(luma_store, i, h264_zigzag_scan_t, 0, 16)
           let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
           // cur_nz already set during the quantise pass.
-          ignore(
-            h264_enc_write_residual(r, view, 16, nc),
-          )
+          ignore(h264_enc_write_residual(r, view, 16, nc))
         }
       }
     }
@@ -1081,7 +991,7 @@ fn H264IntraEncoder::encode_macroblock(
   // Chroma residual writing (both paths, identical position in the syntax).
   if chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int] = [
+      let dc4 : Array[Int32] = [
         chroma_dc_store[c][0],
         chroma_dc_store[c][1],
         chroma_dc_store[c][2],
@@ -1119,7 +1029,7 @@ fn H264IntraEncoder::encode_macroblock(
 
 ///|
 /// nz total of one chroma AC block (stored levels). */
-fn chroma_block_nz(store : Array[Int], i : Int) -> Int {
+fn chroma_block_nz(store : Array[Int32], i : Int32) -> Int32 {
   let mut total = 0
   for s = 0; s < 16; s = s + 1 {
     if store[16 * i + s] != 0 {
@@ -1130,7 +1040,7 @@ fn chroma_block_nz(store : Array[Int], i : Int) -> Int {
 }
 
 ///|
-fn chroma_ac_nz_count(store : Array[Array[Int]]) -> Bool {
+fn chroma_ac_nz_count(store : Array[Array[Int32]]) -> Bool {
   for c = 0; c < 2; c = c + 1 {
     for i = 0; i < 64; i = i + 1 {
       if store[c][i] != 0 {
@@ -1145,13 +1055,13 @@ fn chroma_ac_nz_count(store : Array[Array[Int]]) -> Bool {
 /// Zigzag view of one 16-level block inside `store` at block index
 /// `block_i`: `out[k] = store[16 * block_i + scan[scan_start + k]]`. */
 fn scan_view_at(
-  store : Array[Int],
-  block_i : Int,
-  scan : Array[Int],
-  scan_start : Int,
-  max_coeff : Int,
-) -> Array[Int] {
-  let out : Array[Int] = Array::make(max_coeff, 0)
+  store : Array[Int32],
+  block_i : Int32,
+  scan : Array[Int32],
+  scan_start : Int32,
+  max_coeff : Int32,
+) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(max_coeff, 0)
   for k = 0; k < max_coeff; k = k + 1 {
     out[k] = store[16 * block_i + scan[scan_start + k]]
   }
@@ -1160,7 +1070,7 @@ fn scan_view_at(
 
 ///|
 /// Inverse of `h264_golomb_to_intra4x4_cbp`: the codeNum for a packed cbp. */
-fn h264_enc_cbp_golomb(cbp : Int) -> Int {
+fn h264_enc_cbp_golomb(cbp : Int32) -> Int32 {
   for i = 0; i < 48; i = i + 1 {
     if h264_golomb_to_intra4x4_cbp[i] == cbp {
       return i

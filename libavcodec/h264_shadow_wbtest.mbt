@@ -5,7 +5,7 @@
 // V8 init local-count limit).
 
 ///|
-fn shadow_fixture(w : Int, h : Int) -> (Bytes, Bytes, Bytes) {
+fn shadow_fixture(w : Int32, h : Int32) -> (Bytes, Bytes, Bytes) {
   let y : Array[Byte] = []
   let u : Array[Byte] = []
   let v : Array[Byte] = []
@@ -30,8 +30,7 @@ fn shadow_fixture(w : Int, h : Int) -> (Bytes, Bytes, Bytes) {
 ///|
 test "shadow parse enc 32x32" {
   let (y, u, v) = shadow_fixture(32, 32)
-  let enc = match
-    h264_encode_intra_frame(y, u, v, width=32, height=32, qp=24) {
+  let enc = match h264_encode_intra_frame(y, u, v, width=32, height=32, qp=24) {
     Ok(e) => e
     Err(e) => {
       println("encode err: \{e}")
@@ -104,11 +103,11 @@ test "shadow parse enc 32x32" {
   println("hdr bits used: \{gb.count()}")
   // MB loop with the decoder's nz/mode mirrors.
   let mbw = 2
-  let nz_rows : Array[Array[Int]] = []
+  let nz_rows : Array[Array[Int32]] = []
   for m = 0; m < mbw * 2; m = m + 1 {
     nz_rows.push(Array::make(48, 0))
   }
-  let mode_rows : Array[Array[Int]] = []
+  let mode_rows : Array[Array[Int32]] = []
   for m = 0; m < mbw * 2; m = m + 1 {
     mode_rows.push(Array::make(16, 0))
   }
@@ -118,7 +117,7 @@ test "shadow parse enc 32x32" {
   }
   let cur_nz = Array::make(48, 0)
   let cur_modes = Array::make(16, 0)
-  fn pred_nz(a : Int, b : Int) -> Int {
+  fn pred_nz(a : Int32, b : Int32) -> Int32 {
     let sum = a + b
     if sum < 64 {
       (sum + 1) >> 1
@@ -202,7 +201,7 @@ test "shadow parse enc 32x32" {
         // I16 always codes mb_qp_delta (`cbp != 0 || is_i16x16`).
         ignore(gb.read_se())
       }
-      fn nc_l(gx : Int, gy : Int) -> Int {
+      fn nc_l(gx : Int32, gy : Int32) -> Int32 {
         let left = if gx > 0 {
           cur_nz[gy * 4 + gx - 1]
         } else if mb_x > 0 {
@@ -222,16 +221,8 @@ test "shadow parse enc 32x32" {
       if mb_type >= 1 && mb_type <= 24 {
         // I16: DC block + AC blocks.
         let blk = Array::make(16, 0)
-        let left = if mb_x > 0 {
-          nz_rows[idx - 1][3]
-        } else {
-          64
-        }
-        let top = if mb_y > 0 {
-          nz_rows[idx - mbw][12]
-        } else {
-          64
-        }
+        let left = if mb_x > 0 { nz_rows[idx - 1][3] } else { 64 }
+        let top = if mb_y > 0 { nz_rows[idx - mbw][12] } else { 64 }
         let nc = pred_nz(left, top)
         let win = gb.show(32)
         println("SHADOW dc win32=\{win}")
@@ -361,9 +352,7 @@ test "shadow parse enc 32x32" {
               ncc,
               bit_depth=8,
             )
-            println(
-              "  cac c=\{c} i=\{i} nc=\{ncc} total=\{t5.unwrap_or(-1)}",
-            )
+            println("  cac c=\{c} i=\{i} nc=\{ncc} total=\{t5.unwrap_or(-1)}")
             cur_nz[base + i] = t5.unwrap_or(0)
           }
         }

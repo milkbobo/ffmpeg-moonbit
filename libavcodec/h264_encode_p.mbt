@@ -14,12 +14,12 @@
 /// Motion state mirror of one macroblock (`info.mv` / `info.ref_idx`).
 priv struct H264PMbState {
   /// Quarter-pel MVs per 4x4 raster block (x = 2*i, y = 2*i+1).
-  mv : Array[Int]
+  mv : Array[Int32]
   /// L0 reference per 4x4 block: -1 intra, -2 unavailable.
-  ref_idx : Array[Int]
+  ref_idx : Array[Int32]
   mut intra : Bool
   mut has_data : Bool
-  nz : Array[Int]
+  nz : Array[Int32]
 }
 
 ///|
@@ -37,33 +37,33 @@ fn new_h264_p_mb_state() -> H264PMbState {
 priv struct H264PEncoder {
   p : H264EncParams
   pps : H264Pps
-  chroma_qp : Int
+  chroma_qp : Int32
   /// Source planes of the frame being encoded (mb-aligned strides).
-  src_y : Array[Int]
-  src_u : Array[Int]
-  src_v : Array[Int]
+  src_y : Array[Int32]
+  src_u : Array[Int32]
+  src_v : Array[Int32]
   /// Reconstruction planes (become the next reference).
-  rec_y : Array[Int]
-  rec_u : Array[Int]
-  rec_v : Array[Int]
+  rec_y : Array[Int32]
+  rec_u : Array[Int32]
+  rec_v : Array[Int32]
   /// Reference planes (previous frame's reconstruction).
-  ref_y : Array[Int]
-  ref_u : Array[Int]
-  ref_v : Array[Int]
-  ystride : Int
-  cstride : Int
-  pwidth : Int
-  pheight : Int
-  mb_width : Int
-  mb_height : Int
+  ref_y : Array[Int32]
+  ref_u : Array[Int32]
+  ref_v : Array[Int32]
+  ystride : Int32
+  cstride : Int32
+  pwidth : Int32
+  pheight : Int32
+  mb_width : Int32
+  mb_height : Int32
   states : Array[H264PMbState]
   /// Current MB's mirror (mv/ref/nz) while coding.
-  cur_nz : Array[Int]
+  cur_nz : Array[Int32]
   /// Progressive per-4x4 mirror while coding one macroblock (the decoder's
   /// `write_back_part` timing: later partitions' predictors see earlier
   /// partitions' MVs).
-  cur_mv : Array[Int]
-  cur_ref : Array[Int]
+  cur_mv : Array[Int32]
+  cur_ref : Array[Int32]
 }
 
 ///|
@@ -72,10 +72,10 @@ priv struct H264PEncoder {
 /// reconstruction. Returns the Annex B stream.
 pub fn h264_encode_frames(
   frames : Array[(Bytes, Bytes, Bytes)],
-  width~ : Int,
-  height~ : Int,
-  qp~ : Int = 26,
-  level_idc~ : Int = 30,
+  width~ : Int32,
+  height~ : Int32,
+  qp~ : Int32 = 26,
+  level_idc~ : Int32 = 30,
   pcm_first~ : Bool = false,
 ) -> Result[Bytes, String] {
   if frames.length() == 0 {
@@ -96,7 +96,7 @@ pub fn h264_encode_frames(
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  let p = { width, height, qp, level_idc }
+  let p = { width, height, qp, level_idc, }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -129,12 +129,12 @@ pub fn h264_encode_frames(
   let chroma_qp = h264_get_chroma_qp(pps, 0, qp)
   fn load_plane(
     src : Bytes,
-    w : Int,
-    h : Int,
-    stride : Int,
-    plane_h : Int,
-  ) -> Array[Int] {
-    let plane : Array[Int] = Array::make(stride * plane_h, 0)
+    w : Int32,
+    h : Int32,
+    stride : Int32,
+    plane_h : Int32,
+  ) -> Array[Int32] {
+    let plane : Array[Int32] = Array::make(stride * plane_h, 0)
     for row = 0; row < h; row = row + 1 {
       for col = 0; col < w; col = col + 1 {
         plane[row * stride + col] = src[row * w + col].to_int()
@@ -237,7 +237,7 @@ pub fn h264_encode_frames(
 ///|
 fn H264PEncoder::encode_p_frame(
   self : H264PEncoder,
-  frame_num : Int,
+  frame_num : Int32,
 ) -> Result[Bytes, String] {
   // Fresh picture: the availability markers reset (every frame is a new
   // slice, so previous-frame macroblocks are unavailable to `mv_fetch`)
@@ -272,21 +272,8 @@ fn H264PEncoder::encode_p_frame(
     for mb_x = 0; mb_x < self.mb_width; mb_x = mb_x + 1 {
       let mb_idx = mb_y * self.mb_width + mb_x
       let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
-      let (_, _, skip_sad) = self.me_fixed(
-        mb_x,
-        mb_y,
-        0,
-        0,
-        16,
-        16,
-        pmvx,
-        pmvy,
-      )
-      let plan = if skip_sad == 0 {
-        Skip
-      } else {
-        self.decide_plan(mb_x, mb_y)
-      }
+      let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
+      let plan = if skip_sad == 0 { Skip } else { self.decide_plan(mb_x, mb_y) }
       // The pending skip run is flushed only once a CODED macroblock is
       // known. Rate-distortion may turn a macroblock whose predictor SAD
       // is nonzero into a Skip, and that decision has to extend the run -
@@ -315,19 +302,20 @@ fn H264PEncoder::encode_p_frame(
 }
 
 ///|
+
 ///|
 /// The decided macroblock plan: partitions with quarter-pel MVs.
 priv enum H264PPlan {
   Skip
   /// P_L0_16x16.
-  Part16x16(Int, Int)
+  Part16x16(Int32, Int32)
   /// P_L0_16x8: top, bottom.
-  Part16x8(Int, Int, Int, Int)
+  Part16x8(Int32, Int32, Int32, Int32)
   /// P_L0_8x16: left, right.
-  Part8x16(Int, Int, Int, Int)
+  Part8x16(Int32, Int32, Int32, Int32)
   /// P_8x8: four sub types (0 8x8 / 1 8x4 / 2 4x8 / 3 4x4) and the
   /// quarter-pel MVs of every sub partition in `h264_sub_partitions` order.
-  Part8x8(Int, Int, Int, Int, Array[Int])
+  Part8x8(Int32, Int32, Int32, Int32, Array[Int32])
 }
 
 ///|
@@ -336,13 +324,13 @@ priv enum H264PPlan {
 /// subpel neighbourhood. Returns the quarter-pel MV and its MC SAD.
 fn H264PEncoder::me_part(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
-  ox : Int,
-  oy : Int,
-  w : Int,
-  h : Int,
-) -> (Int, Int, Int) {
+  mb_x : Int32,
+  mb_y : Int32,
+  ox : Int32,
+  oy : Int32,
+  w : Int32,
+  h : Int32,
+) -> (Int32, Int32, Int32) {
   let src_row = mb_y * 16 + oy
   let src_col = mb_x * 16 + ox
   let mut best_x = 0
@@ -385,7 +373,7 @@ fn H264PEncoder::me_part(
       }
     }
   }
-  let mcbuf : Array[Int] = Array::make(256, 0)
+  let mcbuf : Array[Int32] = Array::make(256, 0)
   h264_mc_luma(
     mcbuf,
     0,
@@ -465,18 +453,18 @@ fn H264PEncoder::me_part(
 /// MC a fixed MV (no search): the skip check. Returns the MC SAD.
 fn H264PEncoder::me_fixed(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
-  ox : Int,
-  oy : Int,
-  w : Int,
-  h : Int,
-  mvx : Int,
-  mvy : Int,
-) -> (Int, Int, Int) {
+  mb_x : Int32,
+  mb_y : Int32,
+  ox : Int32,
+  oy : Int32,
+  w : Int32,
+  h : Int32,
+  mvx : Int32,
+  mvy : Int32,
+) -> (Int32, Int32, Int32) {
   let src_row = mb_y * 16 + oy
   let src_col = mb_x * 16 + ox
-  let mcbuf : Array[Int] = Array::make(256, 0)
+  let mcbuf : Array[Int32] = Array::make(256, 0)
   h264_mc_luma(
     mcbuf,
     0,
@@ -522,11 +510,11 @@ fn H264PEncoder::me_fixed(
 /// `code_mb_residuals` before the slice is finished.
 fn H264PEncoder::eval_plan(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
+  mb_x : Int32,
+  mb_y : Int32,
   plan : H264PPlan,
-  qp : Int,
-) -> (Int, Int) {
+  qp : Int32,
+) -> (Int32, Int32) {
   for i = 0; i < 32; i = i + 1 {
     self.cur_mv[i] = 0
   }
@@ -555,7 +543,7 @@ fn H264PEncoder::eval_plan(
 /// weight keeps the same 0.85 coefficient rather than squaring it). Built
 /// from repeated doublings and the cube root of two so no libm `pow` is
 /// needed.
-fn h264_rd_lambda(qp : Int) -> Int {
+fn h264_rd_lambda(qp : Int32) -> Int32 {
   let cbrt2 = 1.2599210498948732
   let mut lam = 0.85
   let mut k = qp - 12
@@ -584,12 +572,12 @@ fn h264_rd_lambda(qp : Int) -> Int {
 /// so its rate is priced at zero - the shared `mb_skip_run` is amortised).
 fn H264PEncoder::me_fixed_ssd(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
-  mvx : Int,
-  mvy : Int,
-) -> Int {
-  let mcbuf : Array[Int] = Array::make(256, 0)
+  mb_x : Int32,
+  mb_y : Int32,
+  mvx : Int32,
+  mvy : Int32,
+) -> Int32 {
+  let mcbuf : Array[Int32] = Array::make(256, 0)
   h264_mc_luma(
     mcbuf,
     0,
@@ -610,7 +598,8 @@ fn H264PEncoder::me_fixed_ssd(
   let mut ssd = 0
   for row = 0; row < 16; row = row + 1 {
     for col = 0; col < 16; col = col + 1 {
-      let d = self.src_y[ybase + row * self.ystride + col] - mcbuf[row * 16 + col]
+      let d = self.src_y[ybase + row * self.ystride + col] -
+        mcbuf[row * 16 + col]
       ssd = ssd + d * d
     }
   }
@@ -624,8 +613,8 @@ fn H264PEncoder::me_fixed_ssd(
 /// cheaper, so the earlier (coarser, bit-cheaper) mode wins ties.
 fn H264PEncoder::decide_plan(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
+  mb_x : Int32,
+  mb_y : Int32,
 ) -> H264PPlan {
   let qp = self.p.qp
   // Int64 throughout: a macroblock's SSD reaches ~1.7e7 and the 2^10
@@ -633,7 +622,8 @@ fn H264PEncoder::decide_plan(
   // and makes every high-distortion Skip look like the cheapest candidate.
   let lam = h264_rd_lambda(qp).to_int64()
   let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
-  let mut best_cost = self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy).to_int64() * 1024L
+  let mut best_cost = self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy).to_int64() *
+    1024L
   let mut plan = Skip
   let (x16, y16, _) = self.me_part(mb_x, mb_y, 0, 0, 16, 16)
   let p16 = Part16x16(x16, y16)
@@ -661,8 +651,8 @@ fn H264PEncoder::decide_plan(
     best_cost = c816
     plan = p816
   }
-  let subs : Array[Int] = Array::make(4, 0)
-  let mvs : Array[Int] = []
+  let subs : Array[Int32] = Array::make(4, 0)
+  let mvs : Array[Int32] = []
   for k = 0; k < 4; k = k + 1 {
     let x8 = k % 2
     let y8 = k / 2
@@ -708,18 +698,18 @@ fn H264PEncoder::decide_plan(
 
 ///|
 fn h264_p_sad_int(
-  src : Array[Int],
-  ref_plane : Array[Int],
-  src_row : Int,
-  src_col : Int,
-  stride : Int,
-  ref_x : Int,
-  ref_y : Int,
-  w~ : Int = 16,
-  h~ : Int = 16,
-  pw : Int,
-  ph : Int,
-) -> Int {
+  src : Array[Int32],
+  ref_plane : Array[Int32],
+  src_row : Int32,
+  src_col : Int32,
+  stride : Int32,
+  ref_x : Int32,
+  ref_y : Int32,
+  w~ : Int32 = 16,
+  h~ : Int32 = 16,
+  pw : Int32,
+  ph : Int32,
+) -> Int32 {
   // Edge replication matches the MC clamp on BOTH planes: the +-16 search
   // window and bottom/right partitions read outside the visible area.
   let mut sad = 0
@@ -738,16 +728,16 @@ fn h264_p_sad_int(
 
 ///|
 fn h264_p_sad_mc(
-  src : Array[Int],
-  mc : Array[Int],
-  src_row : Int,
-  src_col : Int,
-  stride : Int,
-  ph : Int,
-  pw : Int,
-  w~ : Int = 16,
-  h~ : Int = 16,
-) -> Int {
+  src : Array[Int32],
+  mc : Array[Int32],
+  src_row : Int32,
+  src_col : Int32,
+  stride : Int32,
+  ph : Int32,
+  pw : Int32,
+  w~ : Int32 = 16,
+  h~ : Int32 = 16,
+) -> Int32 {
   // The MC buffer keeps the 16-row stride; only the partition's rows are
   // compared (larger partitions' SADs cover proportionally more samples).
   let mut sad = 0
@@ -767,12 +757,12 @@ fn h264_p_sad_mc(
 /// only, single slice, single reference).
 fn H264PEncoder::mv_fetch(
   self : H264PEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  bx : Int,
-  by : Int,
-) -> (Int, Int, Int) {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  bx : Int32,
+  by : Int32,
+) -> (Int32, Int32, Int32) {
   let ax = mb_x * 4 + bx
   let ay = mb_y * 4 + by
   if ax < 0 || ax >= self.mb_width * 4 || ay < 0 || ay >= self.mb_height * 4 {
@@ -795,12 +785,10 @@ fn H264PEncoder::mv_fetch(
       } else {
         tr
       }
+    } else if mb_y <= 0 {
+      -1
     } else {
-      if mb_y <= 0 {
-        -1
-      } else {
-        mb_idx - self.mb_width
-      }
+      mb_idx - self.mb_width
     }
   } else {
     mb_y * self.mb_width + ax / 4
@@ -808,7 +796,7 @@ fn H264PEncoder::mv_fetch(
   if nmb < 0 || nmb >= self.states.length() {
     return (-2, 0, 0)
   }
-  let idx = (ay % 4) * 4 + ax % 4
+  let idx = ay % 4 * 4 + ax % 4
   // The current macroblock's own blocks read the PROGRESSIVE mirror
   // (partitions written so far), exactly like the decoder reading the
   // partially filled `mv` array of the MB being decoded.
@@ -829,13 +817,13 @@ fn H264PEncoder::mv_fetch(
 /// `h264_pred_motion` mirror (single reference, frame MBs). */
 fn H264PEncoder::pred_motion(
   self : H264PEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  bx : Int,
-  by : Int,
-  part_w : Int,
-) -> (Int, Int) {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  bx : Int32,
+  by : Int32,
+  part_w : Int32,
+) -> (Int32, Int32) {
   let a = self.mv_fetch(mb_idx, mb_x, mb_y, bx - 1, by)
   let b = self.mv_fetch(mb_idx, mb_x, mb_y, bx, by - 1)
   let mut c = self.mv_fetch(mb_idx, mb_x, mb_y, bx + part_w, by - 1)
@@ -873,9 +861,9 @@ fn H264PEncoder::pred_motion(
 /// `h264_pred_pskip_motion` mirror. */
 fn H264PEncoder::pred_pskip(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
-) -> (Int, Int) {
+  mb_x : Int32,
+  mb_y : Int32,
+) -> (Int32, Int32) {
   let mb_idx = mb_y * self.mb_width + mb_x
   let l = self.mv_fetch(mb_idx, mb_x, mb_y, -1, 0)
   if l.0 == -2 || (l.0 == 0 && l.1 == 0 && l.2 == 0) {
@@ -891,9 +879,9 @@ fn H264PEncoder::pred_pskip(
 ///|
 fn H264PEncoder::commit_skip(
   self : H264PEncoder,
-  mb_idx : Int,
-  mvx : Int,
-  mvy : Int,
+  mb_idx : Int32,
+  mvx : Int32,
+  mvy : Int32,
 ) -> Unit {
   let st = self.states[mb_idx]
   for i = 0; i < 16; i = i + 1 {
@@ -923,14 +911,14 @@ fn H264PEncoder::commit_skip(
 /// for frame macroblocks without weighting.
 fn H264PEncoder::mc_into_rec(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
-  mvx : Int,
-  mvy : Int,
-  ox : Int,
-  oy : Int,
-  w : Int,
-  h : Int,
+  mb_x : Int32,
+  mb_y : Int32,
+  mvx : Int32,
+  mvy : Int32,
+  ox : Int32,
+  oy : Int32,
+  w : Int32,
+  h : Int32,
 ) -> Unit {
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   h264_mc_luma(
@@ -980,12 +968,12 @@ fn H264PEncoder::mc_into_rec(
 /// Fill the progressive mirror for one partition (`write_back_part`).
 fn H264PEncoder::fill_part(
   self : H264PEncoder,
-  bx : Int,
-  by : Int,
-  bw : Int,
-  bh : Int,
-  mvx : Int,
-  mvy : Int,
+  bx : Int32,
+  by : Int32,
+  bw : Int32,
+  bh : Int32,
+  mvx : Int32,
+  mvy : Int32,
 ) -> Unit {
   for y = 0; y < bh; y = y + 1 {
     for x = 0; x < bw; x = x + 1 {
@@ -1001,11 +989,11 @@ fn H264PEncoder::fill_part(
 /// `h264_pred_16x8_motion` mirror: partition i (0 top, 1 bottom).
 fn H264PEncoder::pred_16x8(
   self : H264PEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  i : Int,
-) -> (Int, Int) {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  i : Int32,
+) -> (Int32, Int32) {
   if i == 0 {
     let t = self.mv_fetch(mb_idx, mb_x, mb_y, 0, -1)
     if t.0 == 0 {
@@ -1024,11 +1012,11 @@ fn H264PEncoder::pred_16x8(
 /// `h264_pred_8x16_motion` mirror: partition i (0 left, 1 right).
 fn H264PEncoder::pred_8x16(
   self : H264PEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  i : Int,
-) -> (Int, Int) {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  i : Int32,
+) -> (Int32, Int32) {
   if i == 0 {
     let l = self.mv_fetch(mb_idx, mb_x, mb_y, -1, 0)
     if l.0 == 0 {
@@ -1050,19 +1038,19 @@ fn H264PEncoder::pred_8x16(
 /// The residual-coding results of one P macroblock: everything the syntax
 /// writer needs, shared by the final write and the RD evaluation.
 priv struct H264PMbCode {
-  luma_cbp : Int
-  chroma_c_cbp : Int
-  luma_store : Array[Int]
-  chroma_dc_store : Array[Array[Int]]
-  chroma_ac_store : Array[Array[Int]]
+  luma_cbp : Int32
+  chroma_c_cbp : Int32
+  luma_store : Array[Int32]
+  chroma_dc_store : Array[Array[Int32]]
+  chroma_ac_store : Array[Array[Int32]]
 }
 
 ///|
 /// MC every partition of `plan` into the reconstruction planes.
 fn H264PEncoder::mc_plan(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
+  mb_x : Int32,
+  mb_y : Int32,
   plan : H264PPlan,
 ) -> Unit {
   match plan {
@@ -1099,10 +1087,10 @@ fn H264PEncoder::mc_plan(
 /// mirror) and returns the coded stores.
 fn H264PEncoder::code_mb_residuals(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
+  mb_x : Int32,
+  mb_y : Int32,
   plan : H264PPlan,
-  qp : Int,
+  qp : Int32,
 ) -> H264PMbCode {
   // `fill_decode_caches` seeds the nC cache from the persistent
   // `non_zero_count[mb_xy]`. Every slot the predictor can read is then
@@ -1113,10 +1101,10 @@ fn H264PEncoder::code_mb_residuals(
   for i = 0; i < 48; i = i + 1 {
     self.cur_nz[i] = self.states[mb_idx0].nz[i]
   }
-  let mb : Array[Int] = Array::make(768, 0)
+  let mb : Array[Int32] = Array::make(768, 0)
   let qmul_y = h264_build_dequant4(self.pps, 3, qp)
   let mut luma_cbp = 0
-  let luma_store : Array[Int] = Array::make(256, 0)
+  let luma_store : Array[Int32] = Array::make(256, 0)
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   let cbase = mb_y * 8 * self.cstride + mb_x * 8
   self.mc_plan(mb_x, mb_y, plan)
@@ -1125,7 +1113,7 @@ fn H264PEncoder::code_mb_residuals(
     let gy = h264_luma_block_y[i]
     let g = gy * 4 + gx
     let off = ybase + gy * 4 * self.ystride + gx * 4
-    let res : Array[Int] = Array::make(16, 0)
+    let res : Array[Int32] = Array::make(16, 0)
     for row = 0; row < 4; row = row + 1 {
       for col = 0; col < 4; col = col + 1 {
         res[row * 4 + col] = self.src_y[off + row * self.ystride + col] -
@@ -1150,11 +1138,11 @@ fn H264PEncoder::code_mb_residuals(
     h264_build_dequant4(self.pps, 4, self.chroma_qp),
     h264_build_dequant4(self.pps, 5, self.chroma_qp),
   ]
-  let chroma_dc_store : Array[Array[Int]] = [
+  let chroma_dc_store : Array[Array[Int32]] = [
     Array::make(16, 0),
     Array::make(16, 0),
   ]
-  let chroma_ac_store : Array[Array[Int]] = [
+  let chroma_ac_store : Array[Array[Int32]] = [
     Array::make(64, 0),
     Array::make(64, 0),
   ]
@@ -1162,10 +1150,10 @@ fn H264PEncoder::code_mb_residuals(
   for c = 0; c < 2; c = c + 1 {
     let src = if c == 0 { self.src_u } else { self.src_v }
     let rec = if c == 0 { self.rec_u } else { self.rec_v }
-    let sums : Array[Int] = Array::make(4, 0)
+    let sums : Array[Int32] = Array::make(4, 0)
     for i = 0; i < 4; i = i + 1 {
-      let bx = (i % 2) * 4
-      let by = (i / 2) * 4
+      let bx = i % 2 * 4
+      let by = i / 2 * 4
       let mut sum = 0
       for row = 0; row < 4; row = row + 1 {
         for col = 0; col < 4; col = col + 1 {
@@ -1176,7 +1164,7 @@ fn H264PEncoder::code_mb_residuals(
       }
       sums[i] = sum
     }
-    let dc_store : Array[Int] = Array::make(4, 0)
+    let dc_store : Array[Int32] = Array::make(4, 0)
     ignore(h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp))
     chroma_dc_store[c] = dc_store
     chroma_dc_nz[c] = dc_store[0] != 0 ||
@@ -1190,9 +1178,9 @@ fn H264PEncoder::code_mb_residuals(
       }
     }
     for i = 0; i < 4; i = i + 1 {
-      let bx = (i % 2) * 4
-      let by = (i / 2) * 4
-      let res : Array[Int] = Array::make(16, 0)
+      let bx = i % 2 * 4
+      let by = i / 2 * 4
+      let res : Array[Int32] = Array::make(16, 0)
       for row = 0; row < 4; row = row + 1 {
         for col = 0; col < 4; col = col + 1 {
           res[row * 4 + col] = src[cbase + (by + row) * self.cstride + bx + col] -
@@ -1243,8 +1231,8 @@ fn H264PEncoder::code_mb_residuals(
       h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=8)
     }
     for i = 0; i < 4; i = i + 1 {
-      let bx = (i % 2) * 4
-      let by = (i / 2) * 4
+      let bx = i % 2 * 4
+      let by = i / 2 * 4
       let off = cbase + by * self.cstride + bx
       let bo = 256 + 256 * c + 16 * i
       let nzv = if chroma_c_cbp == 2 {
@@ -1272,13 +1260,7 @@ fn H264PEncoder::code_mb_residuals(
       }
     }
   }
-  {
-    luma_cbp,
-    chroma_c_cbp,
-    luma_store,
-    chroma_dc_store,
-    chroma_ac_store,
-  }
+  { luma_cbp, chroma_c_cbp, luma_store, chroma_dc_store, chroma_ac_store, }
 }
 
 ///|
@@ -1289,8 +1271,8 @@ fn H264PEncoder::code_mb_residuals(
 /// and the search keeps the zero-biased MVs anyway).
 fn H264PEncoder::write_mb_syntax(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
+  mb_x : Int32,
+  mb_y : Int32,
   plan : H264PPlan,
   coded : H264PMbCode,
   r : H264Rbsp,
@@ -1344,7 +1326,14 @@ fn H264PEncoder::write_mb_syntax(
           let mvx = mvs[mi]
           let mvy = mvs[mi + 1]
           mi = mi + 2
-          let (pmvx, pmvy) = self.pred_motion(mb_idx, mb_x, mb_y, x / 4, y / 4, w / 4)
+          let (pmvx, pmvy) = self.pred_motion(
+            mb_idx,
+            mb_x,
+            mb_y,
+            x / 4,
+            y / 4,
+            w / 4,
+          )
           r.put_se(mvx - pmvx)
           r.put_se(mvy - pmvy)
           self.fill_part(x / 4, y / 4, w / 4, h / 4, mvx, mvy)
@@ -1371,7 +1360,7 @@ fn H264PEncoder::write_mb_syntax(
   }
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int] = [
+      let dc4 : Array[Int32] = [
         coded.chroma_dc_store[c][0],
         coded.chroma_dc_store[c][1],
         coded.chroma_dc_store[c][2],
@@ -1383,7 +1372,13 @@ fn H264PEncoder::write_mb_syntax(
   if coded.chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
       for i = 0; i < 4; i = i + 1 {
-        let view = scan_view_at(coded.chroma_ac_store[c], i, h264_zigzag_scan_t, 1, 15)
+        let view = scan_view_at(
+          coded.chroma_ac_store[c],
+          i,
+          h264_zigzag_scan_t,
+          1,
+          15,
+        )
         let nc = self.nc_chroma(mb_idx, mb_x, mb_y, c, i)
         ignore(h264_enc_write_residual(r, view, 15, nc))
       }
@@ -1393,10 +1388,7 @@ fn H264PEncoder::write_mb_syntax(
 
 ///|
 /// Commit the mirror state after writing the winning plan.
-fn H264PEncoder::commit_plan_state(
-  self : H264PEncoder,
-  mb_idx : Int,
-) -> Unit {
+fn H264PEncoder::commit_plan_state(self : H264PEncoder, mb_idx : Int32) -> Unit {
   let st = self.states[mb_idx]
   for i = 0; i < 16; i = i + 1 {
     st.mv[2 * i] = self.cur_mv[2 * i]
@@ -1414,11 +1406,11 @@ fn H264PEncoder::commit_plan_state(
 /// Write one coded P macroblock: residual coding + syntax + state commit.
 fn H264PEncoder::write_coded_mb(
   self : H264PEncoder,
-  mb_x : Int,
-  mb_y : Int,
+  mb_x : Int32,
+  mb_y : Int32,
   plan : H264PPlan,
   r : H264Rbsp,
-  qp : Int,
+  qp : Int32,
 ) -> Result[Unit, String] {
   for i = 0; i < 32; i = i + 1 {
     self.cur_mv[i] = 0
@@ -1435,14 +1427,15 @@ fn H264PEncoder::write_coded_mb(
 
 ///|
 /// The k-th sub type of an 8x8 plan (helper for the parts enumeration).
-fn subs_of_plan(plan : H264PPlan, k : Int) -> Int {
+fn subs_of_plan(plan : H264PPlan, k : Int32) -> Int32 {
   match plan {
-    Part8x8(s0, s1, s2, s3, _) => match k {
-      0 => s0
-      1 => s1
-      2 => s2
-      _ => s3
-    }
+    Part8x8(s0, s1, s2, s3, _) =>
+      match k {
+        0 => s0
+        1 => s1
+        2 => s2
+        _ => s3
+      }
     _ => 0
   }
 }
@@ -1450,12 +1443,12 @@ fn subs_of_plan(plan : H264PPlan, k : Int) -> Int {
 ///|
 fn H264PEncoder::nc_luma(
   self : H264PEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  gx : Int,
-  gy : Int,
-) -> Int {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  gx : Int32,
+  gy : Int32,
+) -> Int32 {
   let left = if gx > 0 {
     self.cur_nz[gy * 4 + gx - 1]
   } else if mb_x > 0 {
@@ -1476,12 +1469,12 @@ fn H264PEncoder::nc_luma(
 ///|
 fn H264PEncoder::nc_chroma(
   self : H264PEncoder,
-  mb_idx : Int,
-  mb_x : Int,
-  mb_y : Int,
-  c : Int,
-  i : Int,
-) -> Int {
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  c : Int32,
+  i : Int32,
+) -> Int32 {
   let base = 16 + 16 * c
   let gx = i % 2
   let gy = i / 2
@@ -1504,7 +1497,7 @@ fn H264PEncoder::nc_chroma(
 
 ///|
 /// Inverse of `h264_golomb_to_inter_cbp` (48-entry 4:2:0 table). */
-fn h264_enc_inter_cbp_golomb(cbp : Int) -> Int {
+fn h264_enc_inter_cbp_golomb(cbp : Int32) -> Int32 {
   for i = 0; i < 48; i = i + 1 {
     if h264_golomb_to_inter_cbp[i] == cbp {
       return i

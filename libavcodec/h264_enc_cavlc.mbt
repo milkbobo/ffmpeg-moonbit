@@ -9,7 +9,7 @@
 
 ///|
 /// Write `level_prefix`: `prefix` zero bits then a terminating one. */
-fn h264_enc_write_level_prefix(r : H264Rbsp, prefix : Int) -> Unit {
+fn h264_enc_write_level_prefix(r : H264Rbsp, prefix : Int32) -> Unit {
   for k = 0; k < prefix; k = k + 1 {
     r.put_bit(0)
   }
@@ -22,9 +22,9 @@ fn h264_enc_write_level_prefix(r : H264Rbsp, prefix : Int) -> Unit {
 /// reader's prefix/suffix/escape cases. Returns the `level_prefix` used. */
 fn h264_enc_write_level_code(
   r : H264Rbsp,
-  v : Int,
-  suffix_length : Int,
-) -> Int {
+  v : Int32,
+  suffix_length : Int32,
+) -> Int32 {
   if suffix_length == 0 {
     if v < 14 {
       h264_enc_write_level_prefix(r, v)
@@ -63,11 +63,7 @@ fn h264_enc_write_level_code(
   }
   // Escape: prefix 15 carries a 12-bit suffix; prefixes >= 16 continue the
   // window chain (base(16) joins the prefix-15 window exactly).
-  let base0 = if suffix_length >= 2 {
-    15 << suffix_length
-  } else {
-    30
-  }
+  let base0 = if suffix_length >= 2 { 15 << suffix_length } else { 30 }
   let over = v - base0
   if over < 4096 {
     h264_enc_write_level_prefix(r, 15)
@@ -94,17 +90,14 @@ fn h264_enc_write_level_code(
 /// `coeff_token` for `(total_coeff, trailing_ones)` under the nC class. */
 fn h264_enc_write_coeff_token(
   r : H264Rbsp,
-  max_coeff : Int,
-  total : Int,
-  trail : Int,
-  nc : Int,
+  max_coeff : Int32,
+  total : Int32,
+  trail : Int32,
+  nc : Int32,
 ) -> Unit {
   let sym = total * 4 + trail
   let pair = if max_coeff == 4 {
-    (
-      h264_chroma_dc_coeff_token_len[sym],
-      h264_chroma_dc_coeff_token_bits[sym],
-    )
+    (h264_chroma_dc_coeff_token_len[sym], h264_chroma_dc_coeff_token_bits[sym])
   } else {
     let t = h264_coeff_token_table_for_nc(nc & 31)
     (h264_coeff_token_len[t][sym], h264_coeff_token_bits[t][sym])
@@ -119,10 +112,10 @@ fn h264_enc_write_coeff_token(
 /// `nc` is the nC prediction used for the `coeff_token` table choice. */
 fn h264_enc_write_residual(
   r : H264Rbsp,
-  levels : Array[Int],
-  max_coeff : Int,
-  nc : Int,
-) -> Int {
+  levels : Array[Int32],
+  max_coeff : Int32,
+  nc : Int32,
+) -> Int32 {
   // Scan-order statistics.
   let mut total = 0
   let mut last_idx = -1
@@ -141,7 +134,7 @@ fn h264_enc_write_residual(
   // the run - the coefficient list has no zeros in it).
   // The level list the syntax codes: the non-zero levels highest frequency
   // first (scan positions with zeros in between are NOT part of it).
-  let rev : Array[Int] = Array::make(total, 0)
+  let rev : Array[Int32] = Array::make(total, 0)
   let mut ri = 0
   let mut p = last_idx
   while p >= 0 {
@@ -170,7 +163,8 @@ fn h264_enc_write_residual(
     let first_v = rev[trail]
     let mag = if first_v < 0 { -first_v } else { first_v }
     let mut suffix_length = if total > 10 && trail < 3 { 1 } else { 0 }
-    let code = 2 * (mag - 1) + (if first_v < 0 { 1 } else { 0 }) -
+    let code = 2 * (mag - 1) +
+      (if first_v < 0 { 1 } else { 0 }) -
       (if trail < 3 { 2 } else { 0 })
     let prefix = h264_enc_write_level_code(r, code, suffix_length)
     // Decoder's post-first suffix_length update (uses the OLD value in
@@ -213,10 +207,7 @@ fn h264_enc_write_residual(
       if levels[i] != 0 {
         if zl > 0 {
           let row = if zl < 7 { zl - 1 } else { 6 }
-          r.put(
-            h264_run_bits[row][zeros_since],
-            h264_run_len[row][zeros_since],
-          )
+          r.put(h264_run_bits[row][zeros_since], h264_run_len[row][zeros_since])
           zl = zl - zeros_since
         }
         zeros_since = 0
@@ -236,9 +227,9 @@ fn h264_enc_write_residual(
 /// `h264_decode_residual`, and report whether every level and the total
 /// come back identical.
 pub fn h264_enc_residual_roundtrip(
-  levels : Array[Int],
-  max_coeff : Int,
-  nc : Int,
+  levels : Array[Int32],
+  max_coeff : Int32,
+  nc : Int32,
 ) -> Result[Bool, String] {
   let r = H264Rbsp::new()
   let total = h264_enc_write_residual(r, levels, max_coeff, nc)
@@ -247,12 +238,8 @@ pub fn h264_enc_residual_roundtrip(
   // apply emulation prevention and corrupt any 00 00 0x run).
   let gb = BitReader::new(r.finish_raw_of())
   // 64 slots: the 4:2:0 chroma DC scan writes at offsets 0/16/32/48.
-  let block : Array[Int] = Array::make(64, 0)
-  let scan = if max_coeff == 4 {
-    h264_chroma_dc_scan
-  } else {
-    h264_zigzag_scan
-  }
+  let block : Array[Int32] = Array::make(64, 0)
+  let scan = if max_coeff == 4 { h264_chroma_dc_scan } else { h264_zigzag_scan }
   let scan_start = if max_coeff == 15 { 1 } else { 0 }
   let decoded = match
     h264_decode_residual(
@@ -279,9 +266,7 @@ pub fn h264_enc_residual_roundtrip(
     bv = bv + " " + block[scan[scan_start + k]].to_string()
   }
   if lv != bv {
-    return Err(
-      "levels:\{lv} | decoded:\{bv} | max=\{max_coeff} nc=\{nc}",
-    )
+    return Err("levels:\{lv} | decoded:\{bv} | max=\{max_coeff} nc=\{nc}")
   }
   Ok(true)
 }

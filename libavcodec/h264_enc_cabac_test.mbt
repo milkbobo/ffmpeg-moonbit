@@ -4,14 +4,18 @@
 // and external arbitration against docker ffmpeg (pinned framemd5).
 
 ///|
-fn h264cab_fixture(w : Int, h : Int, frames_n : Int) -> Array[(Bytes, Bytes, Bytes)] {
+fn h264cab_fixture(
+  w : Int32,
+  h : Int32,
+  frames_n : Int32,
+) -> Array[(Bytes, Bytes, Bytes)] {
   let out : Array[(Bytes, Bytes, Bytes)] = []
   for f in 0..<frames_n {
     let y : Array[Byte] = []
     let u : Array[Byte] = []
     let v : Array[Byte] = []
-    let bx = (f * 4) % (w - 16)
-    let by = (f * 3) % (h - 16)
+    let bx = f * 4 % (w - 16)
+    let by = f * 3 % (h - 16)
     for row = 0; row < h; row = row + 1 {
       for col = 0; col < w; col = col + 1 {
         let mut s = (col * 2 + row * 3 + f) & 0xFF
@@ -26,8 +30,8 @@ fn h264cab_fixture(w : Int, h : Int, frames_n : Int) -> Array[(Bytes, Bytes, Byt
     }
     for row = 0; row < h / 2; row = row + 1 {
       for col = 0; col < w / 2; col = col + 1 {
-        u.push(((((col + f) & 0x3F)) + 96).to_byte())
-        v.push(((((row + f * 2) & 0x3F)) + 96).to_byte())
+        u.push((((col + f) & 0x3F) + 96).to_byte())
+        v.push((((row + f * 2) & 0x3F) + 96).to_byte())
       }
     }
     out.push(
@@ -56,10 +60,10 @@ fn h264cab_md5(data : Bytes) -> String {
 
 ///|
 fn h264cab_plane_eq(
-  a : Array[Int],
-  b : Array[Int],
-  stride : Int,
-  rows : Int,
+  a : Array[Int32],
+  b : Array[Int32],
+  stride : Int32,
+  rows : Int32,
 ) -> Bool {
   for row = 0; row < rows; row = row + 1 {
     for col = 0; col < stride; col = col + 1 {
@@ -69,6 +73,99 @@ fn h264cab_plane_eq(
     }
   }
   true
+}
+
+///|
+/// A single flat 16x16 macroblock: the tie in the I16 decision rule
+/// (`100 * i4_cost < 94 * i16_cost` fails when both costs are 0) forces
+/// Intra16x16 with zero cbp and an all-zero DC block, exercising the
+/// `decode_cabac_intra_mb_type` continuation (first bin, the mid-stream
+/// terminate(0) PCM reject and the five mb_type bins), the dqp bin and the
+/// DC-only residual path. The reconstruction is compared against the
+/// encoder's own recon because quantising the flat chroma DC (source 96
+/// against a 128 edge-less prediction) is lossy by design.
+test "h264 cabac enc: I16 flat single mb" {
+  let y : Array[Byte] = Array::make(256, b'\x80')
+  let u : Array[Byte] = Array::make(64, b'\x60')
+  let v : Array[Byte] = Array::make(64, b'\x60')
+  let enc = match
+    @libavcodec.h264_encode_intra_frame_cabac(
+      Bytes::from_array(y),
+      Bytes::from_array(u),
+      Bytes::from_array(v),
+      width=16,
+      height=16,
+      qp=26,
+    ) {
+    Ok(e) => e
+    Err(e) => fail(e)
+  }
+  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  let f = frames[0]
+  if !h264cab_plane_eq(enc.recon_y, f.y, enc.ystride, 16) {
+    fail("i16 flat single mb luma recon mismatch")
+  }
+  if !h264cab_plane_eq(enc.recon_u, f.u, enc.cstride, 8) {
+    fail("i16 flat single mb cb recon mismatch")
+  }
+  if !h264cab_plane_eq(enc.recon_v, f.v, enc.cstride, 8) {
+    fail("i16 flat single mb cr recon mismatch")
+  }
+  for i = 0; i < 256; i = i + 1 {
+    if f.y[i] != 128 {
+      fail("i16 flat single mb luma recon \{f.y[i]} at \{i}")
+    }
+  }
+}
+
+///|
+/// A fully flat 96x64 frame: every macroblock ties to Intra16x16, so every
+/// neighbour is an I16 MB and the first bin context gets the neighbour
+/// count increment. A temporary bin-level zip probe of this exact fixture
+/// showed the writer and the decoder exchange 312 bins with identical
+/// context indices and values (24 I16 MBs of mb_type 7 = cbp group 1 +
+/// DC prediction), which pins the mode-bin contexts: after the first bin
+/// (`3 + c`) the decoder advances `state += 2` and reads b0@6, b1@7,
+/// b2@8 (only when b1 = 1), b3@9, b4@10 - the neighbour count does NOT
+/// feed the remaining mb_type bins.
+test "h264 cabac enc: I16 flat frame" {
+  let y : Array[Byte] = Array::make(96 * 64, b'\x80')
+  let u : Array[Byte] = Array::make(48 * 32, b'\x60')
+  let v : Array[Byte] = Array::make(48 * 32, b'\x60')
+  let enc = match
+    @libavcodec.h264_encode_intra_frame_cabac(
+      Bytes::from_array(y),
+      Bytes::from_array(u),
+      Bytes::from_array(v),
+      width=96,
+      height=64,
+      qp=26,
+    ) {
+    Ok(e) => e
+    Err(e) => fail(e)
+  }
+  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  let f = frames[0]
+  if !h264cab_plane_eq(enc.recon_y, f.y, enc.ystride, 64) {
+    fail("i16 flat frame luma recon mismatch")
+  }
+  if !h264cab_plane_eq(enc.recon_u, f.u, enc.cstride, 32) {
+    fail("i16 flat frame cb recon mismatch")
+  }
+  if !h264cab_plane_eq(enc.recon_v, f.v, enc.cstride, 32) {
+    fail("i16 flat frame cr recon mismatch")
+  }
+  for i = 0; i < 96 * 64; i = i + 1 {
+    if f.y[i] != 128 {
+      fail("i16 flat frame luma recon \{f.y[i]} at \{i}")
+    }
+  }
 }
 
 ///|
@@ -123,12 +220,7 @@ test "h264 cabac enc: intra frame reconstruction invariant" {
 test "h264 cabac enc: moving scene I+P round trip" {
   let frames = h264cab_fixture(96, 64, 6)
   let stream = match
-    @libavcodec.h264_encode_frames_cabac(
-      frames,
-      width=96,
-      height=64,
-      qp=24,
-    ) {
+    @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=24) {
     Ok(s) => s
     Err(e) => fail(e)
   }
@@ -154,8 +246,7 @@ test "h264 cabac enc: moving scene I+P round trip" {
     let mut sum = 0
     for row = 0; row < 64; row = row + 1 {
       for col = 0; col < 96; col = col + 1 {
-        let d = y[row * 96 + col].to_int() -
-          r.y[row * r.ystride + col]
+        let d = y[row * 96 + col].to_int() - r.y[row * r.ystride + col]
         sum = sum + (if d < 0 { -d } else { d })
       }
     }
@@ -182,12 +273,7 @@ test "h264 cabac enc: static scene codes as skip macroblocks" {
   let frames = h264cab_fixture(96, 64, 2)
   let frames2 = [frames[0], frames[0]]
   let stream = match
-    @libavcodec.h264_encode_frames_cabac(
-      frames2,
-      width=96,
-      height=64,
-      qp=26,
-    ) {
+    @libavcodec.h264_encode_frames_cabac(frames2, width=96, height=64, qp=26) {
     Ok(s) => s
     Err(e) => fail(e)
   }
@@ -205,7 +291,9 @@ test "h264 cabac enc: static scene codes as skip macroblocks" {
   // and the stream size staying close to the intra-only stream.
   // The P slice on top of the intra frame must stay small.
   if stream.length() > 9400 {
-    fail("cabac static-scene stream unexpectedly large: \{stream.length()} bytes")
+    fail(
+      "cabac static-scene stream unexpectedly large: \{stream.length()} bytes",
+    )
   }
 }
 
@@ -213,22 +301,12 @@ test "h264 cabac enc: static scene codes as skip macroblocks" {
 test "h264 cabac enc: deterministic" {
   let frames = h264cab_fixture(96, 64, 4)
   let s1 = match
-    @libavcodec.h264_encode_frames_cabac(
-      frames,
-      width=96,
-      height=64,
-      qp=26,
-    ) {
+    @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=26) {
     Ok(s) => s
     Err(e) => fail(e)
   }
   let s2 = match
-    @libavcodec.h264_encode_frames_cabac(
-      frames,
-      width=96,
-      height=64,
-      qp=26,
-    ) {
+    @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=26) {
     Ok(s) => s
     Err(e) => fail(e)
   }
@@ -248,12 +326,7 @@ test "h264 cabac enc: QP ladder" {
   let mut prev = -1
   for qp in [22, 28, 34] {
     let stream = match
-      @libavcodec.h264_encode_frames_cabac(
-        frames,
-        width=96,
-        height=64,
-        qp=qp,
-      ) {
+      @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp~) {
       Ok(s) => s
       Err(e) => fail(e)
     }
@@ -281,12 +354,7 @@ test "h264 cabac enc: QP ladder" {
 test "h264 cabac enc: RD operating point" {
   let frames = h264cab_fixture(96, 64, 6)
   let stream = match
-    @libavcodec.h264_encode_frames_cabac(
-      frames,
-      width=96,
-      height=64,
-      qp=24,
-    ) {
+    @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=24) {
     Ok(s) => s
     Err(e) => fail(e)
   }
@@ -319,6 +387,36 @@ test "h264 cabac enc: RD operating point" {
 }
 
 ///|
+/// External arbitration of the Intra16x16 path (docker ffmpeg 9.0.2,
+/// `nine-x264` image): at QP 22 the moving fixture picks I16 macroblocks,
+/// and the six-frame stream decodes in the reference implementation with
+/// zero warnings and every deblocked frame matching this repository's
+/// decoder byte-for-byte (pinned framemd5 MD5s, re-pinned via the
+/// `ARBCABAC22` dump route like the QP 24 slice above).
+test "h264 cabac enc: ffmpeg-arbitrated QP22 I16 frames" {
+  let frames = h264cab_fixture(96, 64, 6)
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=22) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  if frames_dec.length() != 6 {
+    fail("expected 6 frames")
+  }
+  let pins = [
+    "e590592cddc9d3832fc546de6bc0b333", "7ad1fd5f7fefdfa6962a46ed2bff677f", "5b3074362a8e6cc734f271f4c3154827",
+    "bfaf8880720b1ab8bc9c177b86fc03c7", "a4332b24b1abd0a1fc7476756c53f1a7", "baa04a0279f20d33741d39fdaffd40a0",
+  ]
+  for i, f in frames_dec {
+    inspect(h264cab_md5(f.yuvp()), content=pins[i])
+  }
+}
+
+///|
 /// External arbitration (docker ffmpeg 9.0.2, `nine-x264` image): the
 /// six-frame CABAC I+P stream decodes in the reference implementation with
 /// zero warnings and every deblocked frame matches this repository's
@@ -327,12 +425,7 @@ test "h264 cabac enc: RD operating point" {
 test "h264 cabac enc: ffmpeg-arbitrated six frames (96x64, QP 24)" {
   let frames = h264cab_fixture(96, 64, 6)
   let stream = match
-    @libavcodec.h264_encode_frames_cabac(
-      frames,
-      width=96,
-      height=64,
-      qp=24,
-    ) {
+    @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=24) {
     Ok(s) => s
     Err(e) => fail(e)
   }
@@ -349,12 +442,8 @@ test "h264 cabac enc: ffmpeg-arbitrated six frames (96x64, QP 24)" {
     fail("expected 6 frames")
   }
   let pins = [
-    "e454d86d27698952c3e354a20cb109cb",
-    "a6814aeafbaa3b3bdc330330ae8c1e5b",
-    "74ecadf1b63bfb10ca04c31061808ae5",
-    "791ea22b9811b53493a6095440e78fd3",
-    "aa4569a19890ad8bf10e108c831245e9",
-    "88404345e909bd9bc7da4756e7b08874",
+    "e454d86d27698952c3e354a20cb109cb", "a6814aeafbaa3b3bdc330330ae8c1e5b", "74ecadf1b63bfb10ca04c31061808ae5",
+    "791ea22b9811b53493a6095440e78fd3", "aa4569a19890ad8bf10e108c831245e9", "88404345e909bd9bc7da4756e7b08874",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])

@@ -2,13 +2,10 @@
 // public API, decode with the public decoder entry, compare planes.
 
 ///|
-fn h264_enc_test_fixture(
-  w : Int,
-  h : Int,
-) -> (Bytes, Bytes, Bytes) {
+fn h264_enc_test_fixture(w : Int32, h : Int32) -> (Bytes, Bytes, Bytes) {
   let y : Array[Byte] = Array::make(w * h, b'\x00')
-  let u : Array[Byte] = Array::make((w / 2) * (h / 2), b'\x00')
-  let v : Array[Byte] = Array::make((w / 2) * (h / 2), b'\x00')
+  let u : Array[Byte] = Array::make(w / 2 * (h / 2), b'\x00')
+  let v : Array[Byte] = Array::make(w / 2 * (h / 2), b'\x00')
   for row = 0; row < h; row = row + 1 {
     for col = 0; col < w; col = col + 1 {
       let mut s = (col * 2 + row * 3) & 0xFF
@@ -37,10 +34,10 @@ fn h264_enc_test_fixture(
 ///|
 /// Plane equality over the macroblock-aligned area. */
 fn h264_enc_plane_eq(
-  a : Array[Int],
-  b : Array[Int],
-  stride : Int,
-  rows : Int,
+  a : Array[Int32],
+  b : Array[Int32],
+  stride : Int32,
+  rows : Int32,
 ) -> Bool {
   for row = 0; row < rows; row = row + 1 {
     for col = 0; col < stride; col = col + 1 {
@@ -69,7 +66,15 @@ fn h264_enc_bytes_eq(a : Bytes, b : Bytes) -> Bool {
 test "h264 enc: I_PCM frame is lossless and decodes identically" {
   let (y, u, v) = h264_enc_test_fixture(96, 64)
   let enc = match
-    @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp=26, pcm=true) {
+    @libavcodec.h264_encode_intra_frame(
+      y,
+      u,
+      v,
+      width=96,
+      height=64,
+      qp=26,
+      pcm=true,
+    ) {
     Ok(e) => e
     Err(e) => fail(e)
   }
@@ -104,7 +109,8 @@ test "h264 enc: I_PCM frame is lossless and decodes identically" {
 ///|
 test "h264 enc: intra frame reconstruction invariant (I16/I4x4 mix)" {
   let (y, u, v) = h264_enc_test_fixture(96, 64)
-  let enc = match @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp=24) {
+  let enc = match
+    @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp=24) {
     Ok(e) => e
     Err(e) => fail(e)
   }
@@ -149,19 +155,22 @@ test "h264 enc: intra frame reconstruction invariant (I16/I4x4 mix)" {
 ///|
 test "h264 enc: determinism and QP ladder" {
   let (y, u, v) = h264_enc_test_fixture(96, 64)
-  let e1 = match @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp=26) {
+  let e1 = match
+    @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp=26) {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let e2 = match @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp=26) {
+  let e2 = match
+    @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp=26) {
     Ok(e) => e
     Err(e) => fail(e)
   }
   if !h264_enc_bytes_eq(e1.annexb, e2.annexb) {
     fail("two identical encodes differ")
   }
-  fn size_qp(qp : Int) -> Int raise {
-    match @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp~) {
+  fn size_qp(qp : Int32) -> Int32 raise {
+    match
+      @libavcodec.h264_encode_intra_frame(y, u, v, width=96, height=64, qp~) {
       Ok(e) => e.annexb.length()
       Err(e) => fail(e)
     }
@@ -224,7 +233,7 @@ test "h264 enc: odd geometry uses cropping" {
 }
 
 ///|
-fn h264_enc_lcg(state : Ref[Int]) -> Int {
+fn h264_enc_lcg(state : Ref[Int32]) -> Int32 {
   state.val = (state.val * 1103515245 + 12345) & 0x7FFFFFFF
   (state.val >> 16) & 0x7FFF
 }
@@ -235,7 +244,7 @@ test "h264 enc: cavlc residual write/decode property" {
   for iter = 0; iter < 3000; iter = iter + 1 {
     let max_coeff = [16, 15, 4][iter % 3]
     let nc = h264_enc_lcg(seed) % 32
-    let levels : Array[Int] = Array::make(max_coeff, 0)
+    let levels : Array[Int32] = Array::make(max_coeff, 0)
     for i = 0; i < max_coeff; i = i + 1 {
       if h264_enc_lcg(seed) % 3 == 0 {
         let mag = 1 + h264_enc_lcg(seed) % 40
@@ -261,25 +270,19 @@ test "h264 enc: cavlc residual write/decode property" {
 
 ///|
 test "h264 enc: bisect failing vector" {
-  let v1 : Array[Int] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17,
-  ]
+  let v1 : Array[Int32] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17]
   match @libavcodec.h264_enc_residual_roundtrip(v1, 16, 31) {
     Ok(true) => println("V1 ok")
     Ok(false) => println("V1 mismatch")
     Err(e) => println("V1 err: \{e}")
   }
-  let v2 : Array[Int] = [
-    0, 0, 0, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 0, 17,
-  ]
+  let v2 : Array[Int32] = [0, 0, 0, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 0, 17]
   match @libavcodec.h264_enc_residual_roundtrip(v2, 16, 31) {
     Ok(true) => println("V2 ok")
     Ok(false) => println("V2 mismatch")
     Err(e) => println("V2 err: \{e}")
   }
-  let v3 : Array[Int] = [
-    0, 0, 0, 0, -24, 25, 28, 0, 0, 0, 0, 0, 0, 0, 0, 17,
-  ]
+  let v3 : Array[Int32] = [0, 0, 0, 0, -24, 25, 28, 0, 0, 0, 0, 0, 0, 0, 0, 17]
   match @libavcodec.h264_enc_residual_roundtrip(v3, 16, 31) {
     Ok(true) => println("V3 ok")
     Ok(false) => println("V3 mismatch")
@@ -292,7 +295,7 @@ test "h264 enc: bisect failing vector" {
 /// high-frequency level, a level pair spanning a zero gap with an escape
 /// level, and the four-level pattern that caught the trailing-ones bug.
 test "h264 enc: tricky residual vectors round trip" {
-  let vectors : Array[(Array[Int], Int, Int)] = [
+  let vectors : Array[(Array[Int32], Int32, Int32)] = [
     ([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17], 16, 31),
     ([0, 0, 0, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 0, 17], 16, 31),
     ([0, 0, 0, 0, -24, 25, 28, 0, 0, 0, 0, 0, 0, 0, 0, 17], 16, 31),
@@ -309,7 +312,7 @@ test "h264 enc: tricky residual vectors round trip" {
 }
 
 ///|
-fn h264_enc_fixture(w : Int, h : Int) -> (Bytes, Bytes, Bytes) {
+fn h264_enc_fixture(w : Int32, h : Int32) -> (Bytes, Bytes, Bytes) {
   let y : Array[Byte] = []
   let u : Array[Byte] = []
   let v : Array[Byte] = []
@@ -358,7 +361,8 @@ test "h264 enc: ffmpeg-arbitrated end-to-end (96x64, auto I16/I4x4)" {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let deblocked = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
+  let deblocked = match
+    @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }

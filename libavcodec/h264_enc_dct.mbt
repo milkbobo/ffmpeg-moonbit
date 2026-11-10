@@ -19,7 +19,7 @@
 /// it with the unshifted forward transform below (the extra 16 in the
 /// shift cancels the transform's DC gain). Three position classes
 /// (`(x&1) + ((x>>2)&1)`).
-fn h264_enc_mf(rem : Int, cls : Int) -> Int {
+fn h264_enc_mf(rem : Int32, cls : Int32) -> Int32 {
   match (rem, cls) {
     (0, 0) => 13107
     (0, 1) => 10082
@@ -46,11 +46,11 @@ fn h264_enc_mf(rem : Int, cls : Int) -> Int {
 /// Quantise one coefficient (Int64 intermediate: a full-scale luma DC
 /// Hadamard coefficient times the largest factor overflows Int32). */
 fn h264_enc_quant_val(
-  coef : Int,
-  qp : Int,
-  pos_class : Int,
-  extra_shift~ : Int = 1,
-) -> Int {
+  coef : Int32,
+  qp : Int32,
+  pos_class : Int32,
+  extra_shift~ : Int32 = 1,
+) -> Int32 {
   let rem = qp % 6
   let div = qp / 6
   let qbits = 16 + div + extra_shift
@@ -59,7 +59,7 @@ fn h264_enc_quant_val(
     return 0
   }
   let mag = if coef < 0 { -coef } else { coef }
-  let v = ((mag * mf) + (1 << (qbits - 1))) >> qbits
+  let v = (mag * mf + (1 << (qbits - 1))) >> qbits
   if coef < 0 {
     -v
   } else {
@@ -73,11 +73,11 @@ fn h264_enc_quant_val(
 /// exactly the 16-sample sum, which is the convention the quantisation
 /// multiply factors are tuned against.
 fn h264_enc_fdct1d(
-  src : Array[Int],
-  src_off : Int,
-  dst : Array[Int],
-  dst_off : Int,
-  stride : Int,
+  src : Array[Int32],
+  src_off : Int32,
+  dst : Array[Int32],
+  dst_off : Int32,
+  stride : Int32,
 ) -> Unit {
   // s03 = x0 + x3, d03 = x0 - x3, s12 = x1 + x2, d12 = x1 - x2
   let s03 = src[src_off] + src[src_off + 3 * stride]
@@ -95,19 +95,19 @@ fn h264_enc_fdct1d(
 /// samples at `res[res_off..]`, row stride 4). Returns the levels indexed
 /// by transposed storage position. */
 fn h264_enc_fdct_quant_res(
-  res : Array[Int],
-  res_off : Int,
-  qp : Int,
-) -> Array[Int] {
-  let tmp : Array[Int] = Array::make(16, 0)
-  let col : Array[Int] = Array::make(16, 0)
+  res : Array[Int32],
+  res_off : Int32,
+  qp : Int32,
+) -> Array[Int32] {
+  let tmp : Array[Int32] = Array::make(16, 0)
+  let col : Array[Int32] = Array::make(16, 0)
   for row = 0; row < 4; row = row + 1 {
     h264_enc_fdct1d(res, res_off + row * 4, tmp, row * 4, 1)
   }
   for c = 0; c < 4; c = c + 1 {
     h264_enc_fdct1d(tmp, c, col, c, 4)
   }
-  let levels : Array[Int] = Array::make(16, 0)
+  let levels : Array[Int32] = Array::make(16, 0)
   for p = 0; p < 16; p = p + 1 {
     let s = (p >> 2) | ((p << 2) & 0xF)
     let cls = (p & 1) + ((p >> 2) & 1)
@@ -116,21 +116,19 @@ fn h264_enc_fdct_quant_res(
   levels
 }
 
-
-
 ///|
 /// Forward 4x4 Hadamard of the Intra16x16 DC residual (row-major DC values
 /// of the 16 sub-blocks at `src` grid), quantised into the transposed
 /// 16-slot `out` DC block. Returns the level array in scan order. */
 fn h264_enc_luma_dc_hadamard_quant(
-  src : Array[Int],
-  src_off : Int,
-  src_stride : Int,
-  out : Array[Int],
-  out_off : Int,
-  qp : Int,
-) -> Array[Int] {
-  let tmp : Array[Int] = Array::make(16, 0)
+  src : Array[Int32],
+  src_off : Int32,
+  src_stride : Int32,
+  out : Array[Int32],
+  out_off : Int32,
+  qp : Int32,
+) -> Array[Int32] {
+  let tmp : Array[Int32] = Array::make(16, 0)
   for row = 0; row < 4; row = row + 1 {
     let a = src[src_off + row * src_stride]
     let b = src[src_off + row * src_stride + 1]
@@ -154,7 +152,7 @@ fn h264_enc_luma_dc_hadamard_quant(
   // DC block position classes follow the luma grid: the DC block occupies
   // scan position 0 only for quantisation class purposes (flat class 0 for
   // row/col-even, 1 otherwise) matching the decoder's dequant of the block.
-  let levels : Array[Int] = Array::make(16, 0)
+  let levels : Array[Int32] = Array::make(16, 0)
   for p = 0; p < 16; p = p + 1 {
     let s = (p >> 2) | ((p << 2) & 0xF)
     let cls = (p & 1) + ((p >> 2) & 1)
@@ -170,16 +168,16 @@ fn h264_enc_luma_dc_hadamard_quant(
 /// sub-block DC values in scan order 0/1/2/3 at `src[0..3]`), quantised
 /// into `out[0..3]` (scan order). Returns the four levels. */
 fn h264_enc_chroma_dc_hadamard_quant(
-  src : Array[Int],
-  out : Array[Int],
-  out_off : Int,
-  qp : Int,
-) -> Array[Int] {
+  src : Array[Int32],
+  out : Array[Int32],
+  out_off : Int32,
+  qp : Int32,
+) -> Array[Int32] {
   let a = src[0]
   let b = src[1]
   let c = src[2]
   let d = src[3]
-  let t : Array[Int] = [
+  let t : Array[Int32] = [
     a + b + c + d,
     a + b - c - d,
     a - b - c + d,
@@ -187,7 +185,7 @@ fn h264_enc_chroma_dc_hadamard_quant(
   ]
   // The chroma DC block quantises with the luma-class-0 factor (the
   // decoder's chroma DC dequant uses `qmul = build_dequant4(...)[0]`).
-  let levels : Array[Int] = Array::make(4, 0)
+  let levels : Array[Int32] = Array::make(4, 0)
   for i = 0; i < 4; i = i + 1 {
     let level = h264_enc_quant_val(t[i], qp, 0, extra_shift=5)
     out[out_off + i] = level
@@ -201,11 +199,12 @@ fn h264_enc_chroma_dc_hadamard_quant(
 /// `(level * qmul + 32) >> 6` with the 8-bit int16 wrap. The encoder's
 /// coefficient-buffer fill must be this exact function - a raw product
 /// diverges from the decoded block by 64x.
-fn h264_enc_dequant_level(level : Int, qmul : Int) -> Int {
+fn h264_enc_dequant_level(level : Int32, qmul : Int32) -> Int32 {
   if level == 0 {
     return 0
   }
-  let prod = (level.reinterpret_as_uint() * qmul.reinterpret_as_uint() + 32) >> 6
-  let v = (prod.reinterpret_as_int() << 16) >> 16
+  let prod = (level.reinterpret_as_uint() * qmul.reinterpret_as_uint() + 32) >>
+    6
+  let v = prod.reinterpret_as_int() << 16 >> 16
   v
 }

@@ -300,49 +300,54 @@ pub fn X264Encoder::close(self : X264Encoder) -> Unit {
 /// C-oracle side of the repository's dual-decode standard (the pure MoonBit
 /// decoder must produce the same pixels).
 pub struct X264DecFrames {
-  n_frames : Int
-  width : Int
-  height : Int
+  n_frames : Int32
+  width : Int32
+  height : Int32
   /// 0 = yuv420p, 1 = yuv420p10le (the stub's sink kinds).
-  kind : Int
+  kind : Int32
   blob : Bytes
 }
 
 ///|
-fn X264DecFrames::bps(self : X264DecFrames) -> Int {
-  if self.kind == 1 { 2 } else { 1 }
+fn X264DecFrames::bps(self : X264DecFrames) -> Int32 {
+  if self.kind == 1 {
+    2
+  } else {
+    1
+  }
 }
 
 ///|
 /// Bytes per sample of the decoded planes (1 for 8-bit, 2 for 10-bit LE).
-pub fn X264DecFrames::bytes_per_sample(self : X264DecFrames) -> Int {
+pub fn X264DecFrames::bytes_per_sample(self : X264DecFrames) -> Int32 {
   self.bps()
 }
 
 ///|
 /// One frame's packed luma plane (visible area, row-major, LE samples).
-pub fn X264DecFrames::frame_y(self : X264DecFrames, i : Int) -> Bytes {
+pub fn X264DecFrames::frame_y(self : X264DecFrames, i : Int32) -> Bytes {
   let n = self.width * self.height * self.bps()
-  let base = 16 + i * (n + 2 * (self.width / 2) * (self.height / 2) * self.bps())
+  let base = 16 +
+    i * (n + 2 * (self.width / 2) * (self.height / 2) * self.bps())
   self.blob[base:base + n].to_owned()
 }
 
 ///|
 /// One frame's packed Cb plane.
-pub fn X264DecFrames::frame_u(self : X264DecFrames, i : Int) -> Bytes {
+pub fn X264DecFrames::frame_u(self : X264DecFrames, i : Int32) -> Bytes {
   let bps = self.bps()
   let cy = self.width * self.height * bps
-  let cc = (self.width / 2) * (self.height / 2) * bps
+  let cc = self.width / 2 * (self.height / 2) * bps
   let base = 16 + i * (cy + 2 * cc) + cy
   self.blob[base:base + cc].to_owned()
 }
 
 ///|
 /// One frame's packed Cr plane.
-pub fn X264DecFrames::frame_v(self : X264DecFrames, i : Int) -> Bytes {
+pub fn X264DecFrames::frame_v(self : X264DecFrames, i : Int32) -> Bytes {
   let bps = self.bps()
   let cy = self.width * self.height * bps
-  let cc = (self.width / 2) * (self.height / 2) * bps
+  let cc = self.width / 2 * (self.height / 2) * bps
   let base = 16 + i * (cy + 2 * cc) + cy + cc
   self.blob[base:base + cc].to_owned()
 }
@@ -370,12 +375,9 @@ pub fn x264_decode_annexb(stream : Bytes) -> Result[X264DecFrames, String] {
     return Err("x264dec: unsupported pixel kind \{kind}")
   }
   let bps = if kind == 1 { 2 } else { 1 }
-  let frame_len = width * height * bps +
-    2 * (width / 2) * (height / 2) * bps
+  let frame_len = width * height * bps + 2 * (width / 2) * (height / 2) * bps
   if blob.length() != 16 + n * frame_len {
-    return Err(
-      "x264dec: blob size \{blob.length()} != 16 + \{n}x\{frame_len}",
-    )
+    return Err("x264dec: blob size \{blob.length()} != 16 + \{n}x\{frame_len}")
   }
-  Ok({ n_frames: n, width, height, kind, blob })
+  Ok({ n_frames: n, width, height, kind, blob, })
 }
