@@ -648,3 +648,24 @@ test "x264 oracle: pure-MoonBit 8x8DCT CABAC stream decodes identically in C" {
   }
   x264_cross_decode(stream, 3, 1)
 }
+
+///|
+/// The CAVLC High-profile 8x8DCT stream (four interleaved sub-lists per
+/// quadrant, transform_size_8x8_flag, leader nz sums) through the same
+/// dual-decode standard: FFmpeg's C decoder and the pure MoonBit decoder
+/// agree pixel-for-pixel.
+test "x264 oracle: pure-MoonBit 8x8DCT CAVLC stream decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      dct8x8=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}

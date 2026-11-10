@@ -627,41 +627,11 @@ fn h264_enc_sps_rbsp_main(p : H264EncParams) -> Bytes {
 }
 
 ///|
-/// High-profile SPS RBSP (profile_idc 100) for `transform_8x8_mode`. The
-/// High family inserts the chroma_format_idc block after
-/// seq_parameter_set_id; no scaling matrix is signalled (seq flag 0), so
-/// the flat-16 default lists stay active on both sides. No constraint
-/// flags: the PPS-tail skip of `more_rbsp_data_in_pps` only applies to
-/// profiles 66/77/88, and High requires none of the Baseline constraint
-/// sets (CABAC + 8x8 transform both break A.2.1).
+/// High-profile SPS RBSP for `transform_8x8` (profile_idc 100): the shared
+/// `h264_enc_sps_body_high` body.
 fn h264_enc_sps_rbsp_high(p : H264EncParams) -> Bytes {
   let r = H264Rbsp::new()
-  r.put(100, 8) // profile_idc: High
-  r.put(0, 8) // constraint_set0..5 + reserved_zero_2_bits
-  r.put(p.level_idc, 8)
-  r.put_ue(0) // seq_parameter_set_id
-  r.put_ue(1) // chroma_format_idc: 4:2:0
-  r.put_ue(0) // bit_depth_luma_minus8
-  r.put_ue(0) // bit_depth_chroma_minus8
-  r.put_bit(0) // qpprime_y_zero_transform_bypass_flag
-  r.put_bit(0) // seq_scaling_matrix_present_flag
-  r.put_ue(0) // log2_max_frame_num_minus4
-  r.put_ue(2) // pic_order_cnt_type = 2
-  r.put_ue(1) // max_num_ref_frames
-  r.put_bit(0) // gaps_in_frame_num_value_allowed_flag
-  r.put_ue(p.mb_width() - 1)
-  r.put_ue(p.mb_height() - 1)
-  r.put_bit(1) // frame_mbs_only_flag
-  r.put_bit(1) // direct_8x8_inference_flag
-  let crop = p.width % 16 != 0 || p.height % 16 != 0
-  r.put_bit(if crop { 1 } else { 0 })
-  if crop {
-    r.put_ue(0)
-    r.put_ue((p.mb_width() * 16 - p.width) / 2)
-    r.put_ue(0)
-    r.put_ue((p.mb_height() * 16 - p.height) / 2)
-  }
-  r.put_bit(0) // vui_parameters_present_flag
+  h264_enc_sps_body_high(r, p)
   r.trailing_bits()
   r.finish_raw_of()
 }
@@ -933,15 +903,9 @@ pub fn h264_encode_intra_frame_cabac(
 }
 
 ///|
-/// One full I8x8 luma pass over the macroblock (High-profile
-/// transform_8x8): per 8x8 block, pick the best availability-checked
-/// `pred8x8l` mode by SAD, predict, forward-transform + quantise,
-/// dequantise into `mb` and reconstruct through `h264_idct8_add`. The
-/// 0..3 block order mirrors the decoder's reconstruction, so each block
-/// predicts from exactly the neighbours the decoder will use. Fills
-/// `store` (4 x 64 transposed levels) and the raw signalled modes into
-/// `modes` (2x2 replication, the decoder's fill); returns `(cost, cbp)`
-/// with the post-quantisation SAD and one cbp bit per non-empty block.
+/// The CABAC I8x8 luma pass: the shared transform/mode/reconstruction pass
+/// with the availability derived from the decoder-context mirror
+/// (`h264_recon_full_plane`'s I8x8-branch helpers).
 fn H264CabacIEnc::encode_luma_i8(
   self : H264CabacIEnc,
   mb_x : Int32,
@@ -951,122 +915,38 @@ fn H264CabacIEnc::encode_luma_i8(
   mb : Array[Int32],
 ) -> Result[(Int32, Int32), String] {
   let mb_idx = mb_y * self.mb_width + mb_x
-  let qp = self.p.qp
-  let qmul8 = h264_build_dequant8(self.pps, 0, qp)
-  let ybase = mb_y * 16 * self.ystride + mb_x * 16
-  let mut cost = 0
-  let mut cbp = 0
-  for i8 = 0; i8 < 4; i8 = i8 + 1 {
-    let bx8 = i8 % 2
-    let by8 = i8 / 2
-    let off = ybase + by8 * 8 * self.ystride + bx8 * 8
-    let top = by8 > 0 || mb_y > 0
-    let left = bx8 > 0 || mb_x > 0
-    // `topright`/`topleft` mirror `h264_recon_full_plane`'s I8x8 branch.
-    let topright = if by8 == 0 {
-      top &&
-      (
-        bx8 == 0 ||
+  h264_enc_luma_i8_pass(
+    self.src_y,
+    self.rec_y,
+    self.ystride,
+    mb_x,
+    mb_y,
+    self.pps,
+    self.p.qp,
+    store,
+    modes,
+    mb,
+    fn(bx8, by8) {
+      let top = by8 > 0 || mb_y > 0
+      let left = bx8 > 0 || mb_x > 0
+      let topright = if by8 == 0 {
+        top &&
         (
-          mb_x < self.mb_width - 1 &&
-          h264_intra_available(self.ctx, h264_topright_index(self.ctx, mb_idx))
-        )
-      )
-    } else {
-      bx8 == 0
-    }
-    let topleft = h264_intra_topleft(self.ctx, mb_idx, bx8, by8)
-    let mut best_sig = 0
-    let mut best_eff : Int32 = -1
-    let mut best_sad = -1
-    for sig = 0; sig < 9; sig = sig + 1 {
-      let eff = match h264_check_intra4x4_mode(sig, top, left) {
-        Ok(v) => v
-        Err(_) => -1
-      }
-      if eff < 0 {
-        continue
-      }
-      if h264_pred8x8l(
-          self.rec_y,
-          off,
-          self.ystride,
-          eff,
-          top,
-          left,
-          topright,
-          topleft~,
-          bit_depth=8,
-        )
-        is Err(_) {
-        continue
-      }
-      let sad = h264_enc_sad8(self.src_y, self.rec_y, off, self.ystride)
-      if best_sad < 0 || sad < best_sad {
-        best_sad = sad
-        best_sig = sig
-        best_eff = eff
-      }
-    }
-    if best_eff < 0 {
-      return Err("h264 enc: no feasible intra8x8 mode")
-    }
-    match
-      h264_pred8x8l(
-        self.rec_y,
-        off,
-        self.ystride,
-        best_eff,
-        top,
-        left,
-        topright,
-        topleft~,
-        bit_depth=8,
-      ) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
-    }
-    for dy = 0; dy < 2; dy = dy + 1 {
-      for dx = 0; dx < 2; dx = dx + 1 {
-        modes[(by8 * 2 + dy) * 4 + bx8 * 2 + dx] = best_sig
-      }
-    }
-    let res : Array[Int32] = Array::make(64, 0)
-    for row = 0; row < 8; row = row + 1 {
-      for col = 0; col < 8; col = col + 1 {
-        res[row * 8 + col] = self.src_y[off + row * self.ystride + col] -
-          self.rec_y[off + row * self.ystride + col]
-      }
-    }
-    let levels = h264_enc_fdct8_quant_res(res, 0, qp)
-    let mut total = 0
-    for s = 0; s < 64; s = s + 1 {
-      store[64 * i8 + s] = levels[s]
-      if levels[s] != 0 {
-        total = total + 1
-        mb[64 * i8 + s] = h264_enc_dequant_level(levels[s], qmul8[s])
-      }
-    }
-    if total != 0 {
-      cbp = cbp | (1 << i8)
-      // `h264_idct8_add4`'s nz shortcut: a lone DC level takes the flat
-      // DC add, anything else the full inverse transform.
-      if total == 1 && mb[64 * i8] != 0 {
-        h264_idct8_dc_add(
-          self.rec_y,
-          off,
-          self.ystride,
-          mb,
-          64 * i8,
-          bit_depth=8,
+          bx8 == 0 ||
+          (
+            mb_x < self.mb_width - 1 &&
+            h264_intra_available(
+              self.ctx,
+              h264_topright_index(self.ctx, mb_idx),
+            )
+          )
         )
       } else {
-        h264_idct8_add(self.rec_y, off, self.ystride, mb, 64 * i8, bit_depth=8)
+        bx8 == 0
       }
-    }
-    cost = cost + h264_enc_sad8(self.src_y, self.rec_y, off, self.ystride)
-  }
-  Ok((cost, cbp))
+      (top, left, topright, h264_intra_topleft(self.ctx, mb_idx, bx8, by8))
+    },
+  )
 }
 
 ///|

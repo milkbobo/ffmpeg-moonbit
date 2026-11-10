@@ -129,6 +129,7 @@ pub fn h264_encode_frames(
   level_idc~ : Int32 = 30,
   pcm_first~ : Bool = false,
   intra_in_p~ : Bool = false,
+  dct8x8~ : Bool = false,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
@@ -146,6 +147,8 @@ pub fn h264_encode_frames(
       qp~,
       level_idc~,
       pcm=pcm_first,
+      dct8x8~,
+      stats~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
@@ -159,14 +162,14 @@ pub fn h264_encode_frames(
   let ps = new_h264_param_sets()
   match
     ff_h264_decode_seq_parameter_set(
-      BitReader::new(h264_enc_sps_rbsp(p)),
+      BitReader::new(h264_enc_sps_rbsp(p, dct8x8~)),
       ps,
       false,
     ) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
-  let pps_raw = h264_enc_pps_rbsp(p)
+  let pps_raw = h264_enc_pps_rbsp(p, dct8x8~)
   match
     ff_h264_decode_picture_parameter_set(
       BitReader::new(pps_raw),
@@ -253,7 +256,7 @@ pub fn h264_encode_frames(
       cur_nz: Array::make(48, 0),
       cur_mv: Array::make(32, 0),
       cur_ref: Array::make(16, -2),
-      dct8x8: false,
+      dct8x8,
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f, intra_in_p) {
@@ -1419,15 +1422,24 @@ fn H264PEncoder::code_mb_residuals(
   // DC/AC VLC table choice (`h264_block0_nc` saw 1/13/3 where the decoder
   // saw 0) and desynchronises the bitstream from the first MB whose nc
   // crosses a table boundary.
+  let dct8 = h264_p_dct8x8_allowed(self.dct8x8, plan)
   for i = 0; i < 48; i = i + 1 {
     self.cur_nz[i] = if is_i16 { 0 } else { self.states[mb_idx0].nz[i] }
+  }
+  if dct8 {
+    // The CAVLC nC mirror of an 8x8DCT macroblock is filled progressively
+    // by the syntax layer (per-sub-list counts, then the quadrant's leader
+    // sum - the mirror of `h264_cavlc_luma8`); the decoder's uncoded
+    // quadrants read fresh zero counts, so the seed must not survive.
+    for g = 0; g < 16; g = g + 1 {
+      self.cur_nz[g] = 0
+    }
   }
   let mb : Array[Int32] = Array::make(768, 0)
   // Intra uses the intra dequant matrices (luma 0, chroma 1/2); inter uses
   // 3 and 4/5. The decoder picks by mb_type, so the reconstruction must
   // follow the same split or the two pictures drift apart.
   let qmul_y = h264_build_dequant4(self.pps, if is_i16 { 0 } else { 3 }, qp)
-  let dct8 = h264_p_dct8x8_allowed(self.dct8x8, plan)
   let qmul8 = if dct8 {
     h264_build_dequant8(self.pps, 3, qp) // inter 8x8 luma matrix
   } else {
@@ -1499,10 +1511,9 @@ fn H264PEncoder::code_mb_residuals(
       }
     }
   } else if dct8 {
-    // Inter 8x8DCT luma: four 8x8 blocks, cbp bit per block, implied
-    // coded-block flag on the decode side. The CABAC syntax mirror's nz
-    // quadrants are filled by the residual writer; `cur_nz` keeps the same
-    // quadrant values for the (CAVLC-only) nC mirror, unused here.
+    // Inter 8x8DCT luma: four 8x8 blocks, cbp bit per block, each block's
+    // CAVLC residual written later as four interleaved sub-lists by the
+    // syntax layer (which also fills the nC mirror progressively).
     for i8 = 0; i8 < 4; i8 = i8 + 1 {
       let bx8 = i8 % 2
       let by8 = i8 / 2
@@ -1521,11 +1532,6 @@ fn H264PEncoder::code_mb_residuals(
         if levels[s] != 0 {
           total = total + 1
           mb[64 * i8 + s] = h264_enc_dequant_level(levels[s], qmul8[s])
-        }
-      }
-      for gy = 0; gy < 2; gy = gy + 1 {
-        for gx = 0; gx < 2; gx = gx + 1 {
-          self.cur_nz[(by8 * 2 + gy) * 4 + bx8 * 2 + gx] = total
         }
       }
       if total != 0 {
@@ -1906,24 +1912,54 @@ fn H264PEncoder::write_mb_syntax(
   if !is_i16 {
     let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
     r.put_ue(h264_enc_inter_cbp_golomb(cbp))
+    // transform_size_8x8_flag sits between the cbp codeword and
+    // mb_qp_delta: the decoder reads it whenever dct8x8_allowed holds and
+    // the luma cbp is non-zero (`h264_inter_residual_cavlc`).
+    if h264_p_dct8x8_allowed(self.dct8x8, plan) && (cbp & 15) != 0 {
+      r.put_bit(if coded.dct8 { 1 } else { 0 })
+    }
     if cbp != 0 {
       r.put_se(0) // mb_qp_delta
     }
-    for i8 = 0; i8 < 4; i8 = i8 + 1 {
-      if (coded.luma_cbp & (1 << i8)) != 0 {
-        for i4 = 0; i4 < 4; i4 = i4 + 1 {
-          let i = i8 * 4 + i4
-          let gx = h264_luma_block_x[i]
-          let gy = h264_luma_block_y[i]
-          let view = scan_view_at(
-            coded.luma_store,
-            i,
-            h264_zigzag_scan_t,
-            0,
-            16,
-          )
-          let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
-          ignore(h264_enc_write_residual(r, view, 16, nc))
+    if coded.dct8 {
+      // 8x8DCT luma residual: four interleaved 16-coefficient CAVLC lists
+      // per coded quadrant, the nC of each derived at its own 4x4 grid
+      // cell, then the quadrant's leader cell accumulates the total (the
+      // CAVLC mirror of `h264_cavlc_luma8`).
+      for q = 0; q < 4; q = q + 1 {
+        if (coded.luma_cbp & (1 << q)) != 0 {
+          for sub = 0; sub < 4; sub = sub + 1 {
+            let index = 4 * q + sub
+            let gx = h264_luma_block_x[index]
+            let gy = h264_luma_block_y[index]
+            let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
+            let view = h264_cavlc8_sub_view(coded.luma8_store, q, sub)
+            self.cur_nz[gy * 4 + gx] = h264_enc_write_residual(r, view, 16, nc)
+          }
+          let leader = h264_luma_block_grid[4 * q]
+          self.cur_nz[leader] = self.cur_nz[leader] +
+            self.cur_nz[leader + 1] +
+            self.cur_nz[leader + 4] +
+            self.cur_nz[leader + 5]
+        }
+      }
+    } else {
+      for i8 = 0; i8 < 4; i8 = i8 + 1 {
+        if (coded.luma_cbp & (1 << i8)) != 0 {
+          for i4 = 0; i4 < 4; i4 = i4 + 1 {
+            let i = i8 * 4 + i4
+            let gx = h264_luma_block_x[i]
+            let gy = h264_luma_block_y[i]
+            let view = scan_view_at(
+              coded.luma_store,
+              i,
+              h264_zigzag_scan_t,
+              0,
+              16,
+            )
+            let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
+            ignore(h264_enc_write_residual(r, view, 16, nc))
+          }
         }
       }
     }

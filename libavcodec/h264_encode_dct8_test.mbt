@@ -209,8 +209,12 @@ test "h264 enc: cabac 8x8dct P frames round-trip" {
     Ok(f) => f
     Err(e) => fail(e)
   }
+  // Re-pinned in §386: the rate-distortion dry run now prices the real
+  // 8x8 CAVLC sub-list syntax (§385 priced 8x8 candidates as all-zero 4x4
+  // lists), so plan choices and the stream changed. Same docker ffmpeg
+  // 9.0.2 arbitration: zero warnings, byte-identical to this decoder.
   let pins = [
-    "5e000f9f8f4751c735c9595853041e9c", "b765d76e71eff64313c6355e8bfcc8af", "2070b0ecc8fee0af012416d7456d5468",
+    "5e000f9f8f4751c735c9595853041e9c", "5956be95a23f9b1804bcbc30dd0c2fd2", "50c176cb9f9245dbb6e4b2c222fcda55",
   ]
   for i, f in filtered {
     inspect(h264_dct8_md5(f.yuvp()), content=pins[i])

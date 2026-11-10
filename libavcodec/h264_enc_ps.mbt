@@ -30,21 +30,65 @@ fn H264EncParams::mb_height(self : H264EncParams) -> Int32 {
 
 ///|
 /// The SPS RBSP bytes (no NAL header, no emulation prevention) - what the
-/// parsers consume directly. */
-fn h264_enc_sps_rbsp(p : H264EncParams) -> Bytes {
+/// parsers consume directly. `dct8x8` switches the profile to High (100),
+/// the profile family `transform_8x8_mode` requires.
+fn h264_enc_sps_rbsp(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_sps_body(r, p)
+  if dct8x8 {
+    h264_enc_sps_body_high(r, p)
+  } else {
+    h264_enc_sps_body(r, p)
+  }
   r.trailing_bits()
   r.finish_raw_of()
 }
 
 ///|
 /// Write the SPS NAL (nal_unit_type 7, ref_idc 3). */
-fn h264_enc_write_sps(p : H264EncParams) -> Bytes {
+fn h264_enc_write_sps(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_sps_body(r, p)
+  if dct8x8 {
+    h264_enc_sps_body_high(r, p)
+  } else {
+    h264_enc_sps_body(r, p)
+  }
   r.trailing_bits()
   h264_enc_nal(r, 3, 7)
+}
+
+///|
+/// High-profile SPS body (profile_idc 100): the High family inserts the
+/// chroma_format_idc block after seq_parameter_set_id; no scaling matrix is
+/// signalled (seq flag 0), so the flat-16 default lists stay active on both
+/// sides. No constraint flags: the PPS-tail skip of `more_rbsp_data_in_pps`
+/// only applies to profiles 66/77/88 with a constraint set.
+fn h264_enc_sps_body_high(r : H264Rbsp, p : H264EncParams) -> Unit {
+  r.put(100, 8) // profile_idc: High
+  r.put(0, 8) // constraint_set0..5 + reserved_zero_2bits
+  r.put(p.level_idc, 8)
+  r.put_ue(0) // seq_parameter_set_id
+  r.put_ue(1) // chroma_format_idc: 4:2:0
+  r.put_ue(0) // bit_depth_luma_minus8
+  r.put_ue(0) // bit_depth_chroma_minus8
+  r.put_bit(0) // qpprime_y_zero_transform_bypass_flag
+  r.put_bit(0) // seq_scaling_matrix_present_flag
+  r.put_ue(0) // log2_max_frame_num_minus4 -> 4-bit frame_num
+  r.put_ue(2) // pic_order_cnt_type = 2 (no POC syntax)
+  r.put_ue(1) // max_num_ref_frames
+  r.put_bit(0) // gaps_in_frame_num_value_allowed_flag
+  r.put_ue(p.mb_width() - 1)
+  r.put_ue(p.mb_height() - 1)
+  r.put_bit(1) // frame_mbs_only_flag
+  r.put_bit(1) // direct_8x8_inference_flag
+  let crop = p.width % 16 != 0 || p.height % 16 != 0
+  r.put_bit(if crop { 1 } else { 0 })
+  if crop {
+    r.put_ue(0) // frame_crop_left_offset
+    r.put_ue((p.mb_width() * 16 - p.width) / 2)
+    r.put_ue(0) // frame_crop_top_offset
+    r.put_ue((p.mb_height() * 16 - p.height) / 2)
+  }
+  r.put_bit(0) // vui_parameters_present_flag
 }
 
 ///|
@@ -77,25 +121,32 @@ fn h264_enc_sps_body(r : H264Rbsp, p : H264EncParams) -> Unit {
 }
 
 ///|
-/// The PPS RBSP bytes (parsers consume these directly). */
-fn h264_enc_pps_rbsp(p : H264EncParams) -> Bytes {
+/// The PPS RBSP bytes (parsers consume these directly). `dct8x8` appends the
+/// High-profile tail (`transform_8x8_mode_flag`); the reader only enters
+/// the tail when more_rbsp_data remains, so the baseline stream above must
+/// stay byte-identical when the flag is off.
+fn h264_enc_pps_rbsp(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_pps_body(r, p)
+  h264_enc_pps_body(r, p, dct8x8~)
   r.trailing_bits()
   r.finish_raw_of()
 }
 
 ///|
 /// Write the PPS NAL (nal_unit_type 8, ref_idc 3). */
-fn h264_enc_write_pps(p : H264EncParams) -> Bytes {
+fn h264_enc_write_pps(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_pps_body(r, p)
+  h264_enc_pps_body(r, p, dct8x8~)
   r.trailing_bits()
   h264_enc_nal(r, 3, 8)
 }
 
 ///|
-fn h264_enc_pps_body(r : H264Rbsp, p : H264EncParams) -> Unit {
+fn h264_enc_pps_body(
+  r : H264Rbsp,
+  p : H264EncParams,
+  dct8x8~ : Bool = false,
+) -> Unit {
   r.put_ue(0) // pic_parameter_set_id
   r.put_ue(0) // seq_parameter_set_id
   r.put_bit(0) // entropy_coding_mode_flag: CAVLC
@@ -111,4 +162,9 @@ fn h264_enc_pps_body(r : H264Rbsp, p : H264EncParams) -> Unit {
   r.put_bit(0) // deblocking_filter_control_present_flag
   r.put_bit(0) // constrained_intra_pred_flag
   r.put_bit(0) // redundant_pic_cnt_present_flag
+  if dct8x8 {
+    r.put_bit(1) // transform_8x8_mode_flag
+    r.put_bit(0) // pic_scaling_matrix_present_flag
+    r.put_se(0) // second_chroma_qp_index_offset
+  }
 }

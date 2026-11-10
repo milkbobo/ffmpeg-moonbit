@@ -74,6 +74,10 @@ priv struct H264IntraEncoder {
   states : Array[H264EncMbState]
   cur_nz : Array[Int32]
   cur_modes : Array[Int32]
+  /// Opt-in High-profile transform_8x8 (I_NxN may become I8x8).
+  dct8x8 : Bool
+  /// Shared decision counters (I8x8 usage).
+  stats : H264EncStats
 }
 
 ///|
@@ -91,6 +95,8 @@ pub fn h264_encode_intra_frame(
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
   pcm~ : Bool = false,
+  dct8x8~ : Bool = false,
+  stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -112,13 +118,13 @@ pub fn h264_encode_intra_frame(
   // Parse the parameter sets we just wrote: the parsed PPS carries the
   // dequantisation tables the local reconstruction shares with the decoder.
   let ps = new_h264_param_sets()
-  let sps_nal = h264_enc_write_sps(p)
-  let pps_nal = h264_enc_write_pps(p)
+  let sps_nal = h264_enc_write_sps(p, dct8x8~)
+  let pps_nal = h264_enc_write_pps(p, dct8x8~)
   // Round-trip the parameter sets through the decoder's own parsers: the
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
-  let sps_raw = h264_enc_sps_rbsp(p)
-  let pps_raw = h264_enc_pps_rbsp(p)
+  let sps_raw = h264_enc_sps_rbsp(p, dct8x8~)
+  let pps_raw = h264_enc_pps_rbsp(p, dct8x8~)
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_raw), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
@@ -176,6 +182,8 @@ pub fn h264_encode_intra_frame(
     },
     cur_nz: Array::make(48, 0),
     cur_modes: Array::make(16, 0),
+    dct8x8,
+    stats,
   }
   let r = H264Rbsp::new()
   r.put_ue(0) // first_mb_in_slice
@@ -667,6 +675,39 @@ fn H264IntraEncoder::encode_macroblock(
       }
     }
   }
+  // ---- luma I8x8 candidate (High-profile transform_8x8): evaluated on
+  // the I16 pass's leftover state; the modes go to a scratch array so the
+  // I4x4 pass's within-MB predictors still see zeroes (the shared pass
+  // reconstructs from MB-border samples for the first block and its own
+  // output for the rest, so it is deterministic across runs). ----
+  let luma8_store : Array[Int32] = Array::make(256, 0)
+  let i8_modes : Array[Int32] = Array::make(16, 0)
+  let mut i8_cost = 0
+  let mut luma_cbp8 = 0
+  let mut i8_found = false
+  if self.dct8x8 {
+    match
+      h264_enc_luma_i8_pass(
+        self.src_y,
+        self.rec_y,
+        self.ystride,
+        mb_x,
+        mb_y,
+        self.pps,
+        qp,
+        luma8_store,
+        i8_modes,
+        mb,
+        h264_enc_i8_avail(mb_x, mb_y, self.mb_width),
+      ) {
+      Ok((cost, cbp)) => {
+        i8_cost = cost
+        luma_cbp8 = cbp
+        i8_found = true
+      }
+      Err(e) => return Err(e)
+    }
+  }
   // I4x4: sequential decision + reconstruction (each block's prediction
   // reads the reconstructed samples of its top/left neighbours).
   let mut i4_cost = 0
@@ -761,6 +802,46 @@ fn H264IntraEncoder::encode_macroblock(
         h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
       }
     }
+  }
+  // Decision: I8x8 codes four mode trees and at most four residual blocks -
+  // strictly less signalling than I4x4's sixteen-plus - so a plain SAD win
+  // over the I4x4 pass selects it (I16x16 stays dead in the CAVLC intra
+  // encoder; the CABAC chain compares against it with the 6% margin).
+  let use_i8 = i8_found && i8_cost < i4_cost
+  if use_i8 {
+    // Redo the luma plane for I8x8: clear the I4x4 pass's coefficients and
+    // the nC mirror's luma cells (the decoder reads fresh zero counts for
+    // cells no residual writes) plus the signalled modes, then re-run the
+    // deterministic 8x8 pass committing into cur_modes.
+    self.stats.i8_mbs += 1
+    for i = 0; i < 256; i = i + 1 {
+      mb[i] = 0
+    }
+    for g = 0; g < 16; g = g + 1 {
+      self.cur_nz[g] = 0
+      self.cur_modes[g] = 0
+    }
+    match
+      h264_enc_luma_i8_pass(
+        self.src_y,
+        self.rec_y,
+        self.ystride,
+        mb_x,
+        mb_y,
+        self.pps,
+        qp,
+        luma8_store,
+        self.cur_modes,
+        mb,
+        h264_enc_i8_avail(mb_x, mb_y, self.mb_width),
+      ) {
+      Ok((cost, cbp)) => {
+        i8_cost = cost
+        luma_cbp8 = cbp
+      }
+      Err(e) => return Err(e)
+    }
+    luma_cbp = luma_cbp8
   }
   // Decision: I4x4 needs to beat I16 by ~6% to justify its overhead.
   use_i16 = false
@@ -972,7 +1053,15 @@ fn H264IntraEncoder::encode_macroblock(
     }
   } else {
     r.put_ue(0) // mb_type: I_NxN
-    for i = 0; i < 16; i = i + 1 {
+    // transform_size_8x8_flag: present for every I_NxN macroblock once the
+    // PPS enables the mode (the decoder reads it before the pred modes).
+    if self.dct8x8 {
+      r.put_bit(if use_i8 { 1 } else { 0 })
+    }
+    // One prediction mode per 4x4 block, or per 8x8 block (the z-order
+    // 0/4/8/12 grid cells; cur_modes carries the 2x2 replication).
+    let mode_step = if use_i8 { 4 } else { 1 }
+    for i = 0; i < 16; i = i + mode_step {
       let gx = h264_luma_block_x[i]
       let gy = h264_luma_block_y[i]
       let g = gy * 4 + gx
@@ -993,16 +1082,42 @@ fn H264IntraEncoder::encode_macroblock(
     if cbp != 0 {
       r.put_se(0) // mb_qp_delta
     }
-    for i8 = 0; i8 < 4; i8 = i8 + 1 {
-      if (luma_cbp & (1 << i8)) != 0 {
-        for i4 = 0; i4 < 4; i4 = i4 + 1 {
-          let i = i8 * 4 + i4
-          let gx = h264_luma_block_x[i]
-          let gy = h264_luma_block_y[i]
-          let view = scan_view_at(luma_store, i, h264_zigzag_scan_t, 0, 16)
-          let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
-          // cur_nz already set during the quantise pass.
-          ignore(h264_enc_write_residual(r, view, 16, nc))
+    if use_i8 {
+      // 8x8DCT luma residual: each coded quadrant is four interleaved
+      // 16-coefficient CAVLC lists (`zigzag_scan8x8_cavlc`: one global
+      // zigzag, sub-list element k is position 4*k + sub), each with the
+      // nC of its own 4x4 grid cell; afterwards the quadrant's leader cell
+      // accumulates the quadrant total (`nnz[0] += nnz[1] + nnz[8] +
+      // nnz[9]` in `decode_luma_residual`).
+      for q = 0; q < 4; q = q + 1 {
+        if (luma_cbp & (1 << q)) != 0 {
+          for sub = 0; sub < 4; sub = sub + 1 {
+            let index = 4 * q + sub
+            let gx = h264_luma_block_x[index]
+            let gy = h264_luma_block_y[index]
+            let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
+            let view = h264_cavlc8_sub_view(luma8_store, q, sub)
+            self.cur_nz[gy * 4 + gx] = h264_enc_write_residual(r, view, 16, nc)
+          }
+          let leader = h264_luma_block_grid[4 * q]
+          self.cur_nz[leader] = self.cur_nz[leader] +
+            self.cur_nz[leader + 1] +
+            self.cur_nz[leader + 4] +
+            self.cur_nz[leader + 5]
+        }
+      }
+    } else {
+      for i8 = 0; i8 < 4; i8 = i8 + 1 {
+        if (luma_cbp & (1 << i8)) != 0 {
+          for i4 = 0; i4 < 4; i4 = i4 + 1 {
+            let i = i8 * 4 + i4
+            let gx = h264_luma_block_x[i]
+            let gy = h264_luma_block_y[i]
+            let view = scan_view_at(luma_store, i, h264_zigzag_scan_t, 0, 16)
+            let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
+            // cur_nz already set during the quantise pass.
+            ignore(h264_enc_write_residual(r, view, 16, nc))
+          }
         }
       }
     }

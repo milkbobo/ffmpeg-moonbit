@@ -12016,3 +12016,55 @@ docker ffmpeg 9.0.2 零告警，framemd5 三帧与本仓滤波输出逐字节一
 **未做（更新）**：CAVLC 8x8 写端（读端 `h264_cavlc8.mbt` 已有，需 8x8
 coeff_token/total_zeros 写侧镜像）；码率控制；I16/8x8 转默认策略
 （需重钉全部仲裁值）；P 帧 CABAC 位定价换 CABAC 位数（§381 取舍仍在）。
+
+## §386 H.264 编码器 CAVLC 8x8DCT 写端——四交织子列表收口（2026-11-10）
+
+§385 交接剩余第一项。读端 `h264_cavlc8.mbt`（`decode_luma_residual` 的
+8x8 分支）本就有，本片补写端：CAVLC 下每个 8x8 块是**四条交织的
+16 系数列表**（`zigzag_scan8x8_cavlc`：一条全局 zigzag，子列表 k 元素 =
+64 系数的第 `4*k + sub` 位——与 CABAC 的四条独立块扫描完全不同），
+每条各自 coeff_token/level/total_zeros/run（复用已验证的
+`h264_enc_write_residual`），nC 取该子列表自己 4x4 格位的左/上推导，
+写完四条后 leader 槽累加（`nnz[0] += nnz[1] + nnz[8] + nnz[9]`）。
+
+**共享化**：§385 的 I8x8 pass 抽成 `h264_enc_luma_i8_pass`（avail 闭包
+注入可用性——CABAC 用解码器镜像推导、CAVLC 单 slice 全 intra 用几何式；
+两者在单 slice 帧上等价）；High SPS body（profile 100）与 PPS
+transform_8x8 尾提成 `h264_enc_sps_body_high` / `h264_enc_pps_body`
+共享参数，CABAC 侧改为薄封装，§385 I 帧钉值逐字节不变。
+
+**I 帧 CAVLC I8x8**：评估 pass 在 I4 pass 之前（I16 在 CAVLC intra 仍是
+死分支）；决策对 I4 **平价即胜**（语法严格更省）；redo 复用同一 pass
+（确定性一致），redo 前清 `mb`/luma `cur_nz`/`cur_modes`。语法：
+mb_type ue(0) 后写 `transform_size_8x8_flag` u(1)（PPS 开启即每个
+I_NxN 都有此位，含选 4x4 的 MB——写 0），4 个模式（z 序 0/4/8/12 槽，
+cur_modes 2x2 复制使 `pred_mode` 镜像无需改动），残差子列表写 + leader
+累加，nC 在**语法层渐进回填** `cur_nz`（leader 只在同象限四条写完后才
+累加，此后无人再读——象限外邻居格位只读各自子列表计数）。
+
+**P 帧 CAVLC inter 8x8**：`h264_encode_frames` 增 `dct8x8=`（SPS/PPS
+High + I 帧入口透传）；`code_mb_residuals` 的 dct8 分支不再预写象限 nz
+（改为 16 个 luma 格清零——未编码象限解码端读新鲜零计数），残差与
+nz 回填全部由 `write_mb_syntax` 渐进完成；flag 位在 cbp golomb 与
+mb_qp 增量位之间（镜像 `h264_inter_residual_cavlc` 的读序）。
+
+**计价升级与 CABAC 重钉**：`decide_plan` 的干跑位计走
+`write_mb_syntax`（CAVLC 位数）——§385 时 8x8 候选按全零 4x4 列表计位
+（`luma_store` 为空），本片起按真实 8x8 子列表语法计位，计划选择变化
+→ CABAC dct8 P 帧流变化（2086 B vs 2089 B，像素不变——两链共享同一
+决策与残差链，**只有码流字节不同**），三帧钉值重钉
+`5e000f9f…/5956be95…/50c176cb…` 并经 docker ffmpeg 仲裁一致。
+
+**验证**：CAVLC 黑盒 3/3（I 帧重建不变式 + High SPS 断言 + 与 Baseline
+流不同；P 帧三帧重建不变式 + 钉值；**QP 阶梯 × 双几何**（96×64、80×48
+× QP 14/22/30/38 × busy 夹具）全链重建不变式——nC 镜像任何滑步都会让
+VLC 表选择失步、解码失败或重建成垃圾）；存量 34 项不动（CABAC dct8 P
+重钉后全绿）；全仓 wasm-gc **1736/1736**、非 gc 853/853、deny-warn
+干净；x264 native oracle 扩 CAVLC 8x8 双解码用例 **14/14**；docker
+ffmpeg 9.0.2 对 CAVLC 8x8 流零告警且 framemd5 三帧与本仓滤波输出逐
+字节一致（CAVLC 2749 B vs CABAC 2086 B，同决策同重建）。
+
+**未做（更新）**：码率控制；I16/8x8 转默认策略（需重钉全部仲裁值）；
+CABAC 位定价（干跑计位仍是 CAVLC 位数，§381 取舍；但 8x8 候选的计价
+本片已升级为真实子列表语法）；8x8 与 I4 的真 RD 竞争（现为 SAD 平价
+即胜 + allowed 即用）。
