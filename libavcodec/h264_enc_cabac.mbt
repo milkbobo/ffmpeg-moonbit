@@ -742,6 +742,7 @@ pub fn h264_encode_intra_frame_cabac(
   level_idc~ : Int32 = 30,
   dct8x8~ : Bool = false,
   stats~ : H264EncStats = H264EncStats::new(),
+  pps_qp~ : Int32 = -1,
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -755,6 +756,18 @@ pub fn h264_encode_intra_frame_cabac(
     return Err("h264 enc: plane size mismatch")
   }
   let p = { width, height, qp, level_idc, }
+  // Parameter sets carry the SEQUENCE base QP (`pic_init_qp`); this
+  // picture's own QP travels in `slice_qp_delta` (rate control).
+  let p_ps = {
+    width,
+    height,
+    qp: if pps_qp < 0 {
+      qp
+    } else {
+      pps_qp
+    },
+    level_idc,
+  }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -782,7 +795,7 @@ pub fn h264_encode_intra_frame_cabac(
     Bytes::from_array(out[:])
   }
   let pps_nal = {
-    let raw = h264_enc_pps_rbsp_cabac(p, dct8x8~)
+    let raw = h264_enc_pps_rbsp_cabac(p_ps, dct8x8~)
     let out : Array[Byte] = [
       b'\x00',
       b'\x00',
@@ -800,7 +813,7 @@ pub fn h264_encode_intra_frame_cabac(
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
-  let pps_raw = h264_enc_pps_rbsp_cabac(p, dct8x8~)
+  let pps_raw = h264_enc_pps_rbsp_cabac(p_ps, dct8x8~)
   match
     ff_h264_decode_picture_parameter_set(
       BitReader::new(pps_raw),
@@ -861,7 +874,7 @@ pub fn h264_encode_intra_frame_cabac(
   r.put_ue(0) // idr_pic_id
   r.put_bit(0) // no_output_of_prior_pics_flag
   r.put_bit(0) // long_term_reference_flag
-  r.put_se(0) // slice_qp_delta
+  r.put_se(qp - p_ps.qp) // slice_qp_delta
   while r.bw.nbits != 0 {
     r.put_bit(1) // cabac_alignment_one_bit
   }
@@ -2438,7 +2451,7 @@ fn H264PEncoder::encode_p_frame_cabac(
   r.put_bit(0) // ref_pic_list_modification_flag_l0
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
   r.put_ue(0) // cabac_init_idc
-  r.put_se(0) // slice_qp_delta
+  r.put_se(self.p.qp - self.base_qp) // slice_qp_delta
   while r.bw.nbits != 0 {
     r.put_bit(1) // cabac_alignment_one_bit
   }
@@ -2529,12 +2542,81 @@ pub fn h264_encode_frames_cabac(
   level_idc~ : Int32 = 30,
   intra_in_p~ : Bool = false,
   dct8x8~ : Bool = false,
+  target_bytes~ : Int32 = 0,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
   }
+  let n = frames.length()
+  // Same contract as the CAVLC entry's `target_bytes`: the two-pass
+  // average-bitrate control over `h264_encode_frames_cabac_qps`, with `qp`
+  // as the search start and the PPS base. Off, flat QP byte-identically.
+  let qps = if target_bytes > 0 {
+    match
+      h264_rc_solve(n, qp, target_bytes, fn(trial) {
+        match
+          h264_encode_frames_cabac_qps(
+            frames,
+            width~,
+            height~,
+            base_qp=qp,
+            qps=trial,
+            level_idc~,
+            intra_in_p~,
+            dct8x8~,
+            recon=[],
+            stats=H264EncStats::new(),
+          ) {
+          Ok((bytes, _)) => Ok(bytes.length())
+          Err(e) => Err(e)
+        }
+      }) {
+      Ok(q) => q
+      Err(e) => return Err(e)
+    }
+  } else {
+    Array::make(n, qp)
+  }
+  for q in qps {
+    stats.frame_qps.push(q)
+  }
+  match
+    h264_encode_frames_cabac_qps(
+      frames,
+      width~,
+      height~,
+      base_qp=qp,
+      qps~,
+      level_idc~,
+      intra_in_p~,
+      dct8x8~,
+      recon~,
+      stats~,
+    ) {
+    Ok((bytes, _)) => Ok(bytes)
+    Err(e) => Err(e)
+  }
+}
+
+///|
+/// The CABAC sequence encoder proper: picture `f` codes at `qps[f]`
+/// against the single PPS whose `pic_init_qp` is `base_qp`. Returns the
+/// Annex B stream and the byte size of every access unit (the first
+/// includes SPS + PPS).
+fn h264_encode_frames_cabac_qps(
+  frames : Array[(Bytes, Bytes, Bytes)],
+  width~ : Int32,
+  height~ : Int32,
+  base_qp~ : Int32,
+  qps~ : Array[Int32],
+  level_idc~ : Int32,
+  intra_in_p~ : Bool,
+  dct8x8~ : Bool,
+  recon~ : Array[Bytes],
+  stats~ : H264EncStats,
+) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
     h264_encode_intra_frame_cabac(
@@ -2543,15 +2625,16 @@ pub fn h264_encode_frames_cabac(
       v0,
       width~,
       height~,
-      qp~,
+      qp=qps[0],
       level_idc~,
       dct8x8~,
       stats~,
+      pps_qp=base_qp,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  let p = { width, height, qp, level_idc, }
+  let p = { width, height, qp: base_qp, level_idc, }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -2581,7 +2664,6 @@ pub fn h264_encode_frames_cabac(
     Some(v) => v
     None => return Err("h264 enc: no PPS after round-trip")
   }
-  let chroma_qp = h264_get_chroma_qp(pps, 0, qp)
   fn load_plane(
     src : Bytes,
     w : Int32,
@@ -2624,10 +2706,10 @@ pub fn h264_encode_frames_cabac(
   for f = 1; f < frames.length(); f = f + 1 {
     let (y, u, v) = frames[f]
     let enc : H264PEncoder = {
-      p,
+      p: { width, height, qp: qps[f], level_idc, },
       stats,
       pps,
-      chroma_qp,
+      chroma_qp: h264_get_chroma_qp(pps, 0, qps[f]),
       src_y: load_plane(y, width, height, ystride, pheight),
       src_u: load_plane(u, width / 2, height / 2, cstride, pheight / 2),
       src_v: load_plane(v, width / 2, height / 2, cstride, pheight / 2),
@@ -2648,6 +2730,7 @@ pub fn h264_encode_frames_cabac(
       cur_mv: Array::make(32, 0),
       cur_ref: Array::make(16, -2),
       dct8x8,
+      base_qp,
     }
     let nal = match enc.encode_p_frame_cabac(f, intra_in_p) {
       Ok(n) => n
@@ -2684,10 +2767,12 @@ pub fn h264_encode_frames_cabac(
     ref_v = next_v
   }
   let out : Array[Byte] = []
+  let sizes : Array[Int32] = []
   for part in stream {
+    sizes.push(part.length())
     for i = 0; i < part.length(); i = i + 1 {
       out.push(part[i])
     }
   }
-  Ok(Bytes::from_array(out[:]))
+  Ok((Bytes::from_array(out[:]), sizes))
 }

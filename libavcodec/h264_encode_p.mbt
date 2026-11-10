@@ -53,11 +53,14 @@ pub(all) struct H264EncStats {
   /// Intra 8x8 macroblocks inside P slices (a subset of `i8_mbs`).
   mut i8p_mbs : Int32
   mut coded_mbs : Int32
+  /// The QP every picture was coded with, in coding order (constant in the
+  /// flat-QP mode, the rate control's choice under `target_bytes`).
+  frame_qps : Array[Int32]
 }
 
 ///|
 pub fn H264EncStats::new() -> H264EncStats {
-  { i16_mbs: 0, i8_mbs: 0, i8p_mbs: 0, coded_mbs: 0, }
+  { i16_mbs: 0, i8_mbs: 0, i8p_mbs: 0, coded_mbs: 0, frame_qps: [], }
 }
 
 ///|
@@ -96,6 +99,9 @@ priv struct H264PEncoder {
   /// Opt-in High-profile transform_8x8 for the luma residual of inter
   /// macroblocks whose partitions are all at least 8x8.
   dct8x8 : Bool
+  /// The sequence's base QP (`pic_init_qp` of the single PPS). `p.qp` is
+  /// this picture's own QP; the slice header codes the difference.
+  base_qp : Int32
 }
 
 ///|
@@ -141,12 +147,84 @@ pub fn h264_encode_frames(
   pcm_first~ : Bool = false,
   intra_in_p~ : Bool = false,
   dct8x8~ : Bool = false,
+  target_bytes~ : Int32 = 0,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
   }
+  let n = frames.length()
+  // `target_bytes > 0` turns on the two-pass average-bitrate control: `qp`
+  // then is the search's starting point and the PPS base QP, and every
+  // picture's own QP travels in its slice header. Off, every picture codes
+  // at `qp` and the stream is byte-identical to the flat-QP encoder.
+  let qps = if target_bytes > 0 {
+    match
+      h264_rc_solve(n, qp, target_bytes, fn(trial) {
+        match
+          h264_encode_frames_qps(
+            frames,
+            width~,
+            height~,
+            base_qp=qp,
+            qps=trial,
+            level_idc~,
+            pcm_first~,
+            intra_in_p~,
+            dct8x8~,
+            recon=[],
+            stats=H264EncStats::new(),
+          ) {
+          Ok((bytes, _)) => Ok(bytes.length())
+          Err(e) => Err(e)
+        }
+      }) {
+      Ok(q) => q
+      Err(e) => return Err(e)
+    }
+  } else {
+    Array::make(n, qp)
+  }
+  for q in qps {
+    stats.frame_qps.push(q)
+  }
+  match
+    h264_encode_frames_qps(
+      frames,
+      width~,
+      height~,
+      base_qp=qp,
+      qps~,
+      level_idc~,
+      pcm_first~,
+      intra_in_p~,
+      dct8x8~,
+      recon~,
+      stats~,
+    ) {
+    Ok((bytes, _)) => Ok(bytes)
+    Err(e) => Err(e)
+  }
+}
+
+///|
+/// The sequence encoder proper: picture `f` codes at `qps[f]` against the
+/// single PPS whose `pic_init_qp` is `base_qp`. Returns the Annex B stream
+/// and the byte size of every access unit (the first includes SPS + PPS).
+fn h264_encode_frames_qps(
+  frames : Array[(Bytes, Bytes, Bytes)],
+  width~ : Int32,
+  height~ : Int32,
+  base_qp~ : Int32,
+  qps~ : Array[Int32],
+  level_idc~ : Int32,
+  pcm_first~ : Bool,
+  intra_in_p~ : Bool,
+  dct8x8~ : Bool,
+  recon~ : Array[Bytes],
+  stats~ : H264EncStats,
+) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
     h264_encode_intra_frame(
@@ -155,16 +233,17 @@ pub fn h264_encode_frames(
       v0,
       width~,
       height~,
-      qp~,
+      qp=qps[0],
       level_idc~,
       pcm=pcm_first,
       dct8x8~,
       stats~,
+      pps_qp=base_qp,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  let p = { width, height, qp, level_idc, }
+  let p = { width, height, qp: base_qp, level_idc, }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -194,7 +273,6 @@ pub fn h264_encode_frames(
     Some(v) => v
     None => return Err("h264 enc: no PPS after round-trip")
   }
-  let chroma_qp = h264_get_chroma_qp(pps, 0, qp)
   fn load_plane(
     src : Bytes,
     w : Int32,
@@ -244,10 +322,10 @@ pub fn h264_encode_frames(
   for f = 1; f < frames.length(); f = f + 1 {
     let (y, u, v) = frames[f]
     let enc : H264PEncoder = {
-      p,
+      p: { width, height, qp: qps[f], level_idc, },
       stats,
       pps,
-      chroma_qp,
+      chroma_qp: h264_get_chroma_qp(pps, 0, qps[f]),
       src_y: load_plane(y, width, height, ystride, pheight),
       src_u: load_plane(u, width / 2, height / 2, cstride, pheight / 2),
       src_v: load_plane(v, width / 2, height / 2, cstride, pheight / 2),
@@ -268,6 +346,7 @@ pub fn h264_encode_frames(
       cur_mv: Array::make(32, 0),
       cur_ref: Array::make(16, -2),
       dct8x8,
+      base_qp,
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f, intra_in_p) {
@@ -305,14 +384,187 @@ pub fn h264_encode_frames(
     ref_u = next_u
     ref_v = next_v
   }
-  // Concatenate.
+  // Concatenate; the per-picture sizes feed the rate control.
   let out : Array[Byte] = []
+  let sizes : Array[Int32] = []
   for part in stream {
+    sizes.push(part.length())
     for i = 0; i < part.length(); i = i + 1 {
       out.push(part[i])
     }
   }
-  Ok(Bytes::from_array(out[:]))
+  Ok((Bytes::from_array(out[:]), sizes))
+}
+
+///|
+/// The rate control's QP range. The floor keeps the search away from the
+/// near-lossless QPs, whose level magnitudes approach the CAVLC escape
+/// window and whose bit cost no realistic target asks for; the ceiling is
+/// the format's.
+let h264_rc_qp_min : Int32 = 10
+
+///|
+let h264_rc_qp_max : Int32 = 51
+
+///|
+/// `2^(k/6) * 1024` for k = 0..5: the quantiser step doubles every 6 QP,
+/// and to first order the coded size halves with it.
+let h264_rc_pow2_sixth : FixedArray[Int32] = [
+  1024, 1149, 1290, 1448, 1625, 1825,
+]
+
+///|
+/// Signed QP jump predicted by the "size halves every +6 QP" model: the
+/// largest `j` with `size >= target * 2^(j/6)` (positive when the stream is
+/// over the target), mirrored and negated when it is under. Integer-only,
+/// so every backend takes the same search path.
+fn h264_rc_qp_jump(size : Int32, target : Int32) -> Int32 {
+  if size == target || size <= 0 || target <= 0 {
+    return 0
+  }
+  let over = size > target
+  let hi = (if over { size } else { target }).to_int64()
+  let lo = (if over { target } else { size }).to_int64()
+  let mut j = 0
+  while j < 30 {
+    let k = j + 1
+    let scaled = (lo * h264_rc_pow2_sixth[k % 6].to_int64()) << (k / 6)
+    if hi * 1024L >= scaled {
+      j = k
+    } else {
+      break
+    }
+  }
+  if over {
+    j
+  } else {
+    -j
+  }
+}
+
+///|
+/// Two-pass average-bitrate control over a whole sequence. `encode` codes
+/// the sequence with one QP per picture and reports the total byte size;
+/// the result is the per-picture QP assignment of the best stream that
+/// does not exceed `target` bytes:
+///
+/// 1. **Bracket** the flat QP: probe `start_qp`, jump by the size model,
+///    then walk to the smallest flat QP `q_hi` that fits; `q_lo = q_hi - 1`
+///    does not.
+/// 2. **Dither** between the two: a flat-QP step moves the size by ~12%,
+///    so the last `k` pictures take `q_hi` and the rest `q_lo`, with `k`
+///    bisected to the smallest count that fits. Trailing pictures first -
+///    nothing references the end of a P-only sequence, so coarsening them
+///    costs the least; the I picture (reference of everything) goes last.
+///
+/// Every probe is a real encode (decisions, skips and references all
+/// respond to the QP), so the returned assignment is exact, not modelled.
+/// The search stays inside `[h264_rc_qp_min, h264_rc_qp_max]`: when even
+/// the coarsest QP exceeds the target that flat assignment is returned
+/// (best effort); when the finest fits, the flat finest.
+fn h264_rc_solve(
+  n : Int32,
+  start_qp : Int32,
+  target : Int32,
+  encode : (Array[Int32]) -> Result[Int32, String],
+) -> Result[Array[Int32], String] {
+  let memo : Array[Int32] = Array::make(52, -1)
+  let flat = fn(q : Int32) -> Result[Int32, String] {
+    if memo[q] >= 0 {
+      return Ok(memo[q])
+    }
+    match encode(Array::make(n, q)) {
+      Ok(size) => {
+        memo[q] = size
+        Ok(size)
+      }
+      Err(e) => Err(e)
+    }
+  }
+  let mut q = if start_qp < h264_rc_qp_min {
+    h264_rc_qp_min
+  } else if start_qp > h264_rc_qp_max {
+    h264_rc_qp_max
+  } else {
+    start_qp
+  }
+  let mut size = match flat(q) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  // Model jumps (at most two): land near the boundary in one or two probes
+  // instead of walking there. Under the target the jump stops one step
+  // short, so the walk below never has to climb back.
+  for _i = 0; _i < 2; _i = _i + 1 {
+    let jump = h264_rc_qp_jump(size, target)
+    let step = if jump < 0 { jump + 1 } else { jump }
+    let mut nq = q + step
+    if nq < h264_rc_qp_min {
+      nq = h264_rc_qp_min
+    }
+    if nq > h264_rc_qp_max {
+      nq = h264_rc_qp_max
+    }
+    if nq == q {
+      break
+    }
+    q = nq
+    size = match flat(q) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+  }
+  // Walk up until the flat stream fits.
+  while size > target && q < h264_rc_qp_max {
+    q = q + 1
+    size = match flat(q) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+  }
+  if size > target {
+    return Ok(Array::make(n, h264_rc_qp_max))
+  }
+  // Walk down while the next finer flat QP still fits.
+  while q > h264_rc_qp_min {
+    let finer = match flat(q - 1) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    if finer <= target {
+      q = q - 1
+    } else {
+      break
+    }
+  }
+  if q == h264_rc_qp_min {
+    return Ok(Array::make(n, h264_rc_qp_min))
+  }
+  let q_hi = q
+  let q_lo = q - 1
+  let assign = fn(k : Int32) -> Array[Int32] {
+    let qps : Array[Int32] = Array::make(n, q_lo)
+    for f = n - k; f < n; f = f + 1 {
+      qps[f] = q_hi
+    }
+    qps
+  }
+  // k = 0 is flat q_lo (over the target), k = n flat q_hi (fits).
+  let mut lo_k = 0
+  let mut hi_k = n
+  while hi_k - lo_k > 1 {
+    let mid = (lo_k + hi_k) / 2
+    let trial = match encode(assign(mid)) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    if trial <= target {
+      hi_k = mid
+    } else {
+      lo_k = mid
+    }
+  }
+  Ok(assign(hi_k))
 }
 
 ///|
@@ -347,7 +599,7 @@ fn H264PEncoder::encode_p_frame(
   r.put_bit(0)
   // dec_ref_pic_marking (nal_ref_idc != 0, non-IDR):
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
-  r.put_se(0) // slice_qp_delta
+  r.put_se(self.p.qp - self.base_qp) // slice_qp_delta
   let qp = self.p.qp
   let mut skip_run = 0
   for mb_y = 0; mb_y < self.mb_height; mb_y = mb_y + 1 {

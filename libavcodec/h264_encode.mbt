@@ -97,6 +97,7 @@ pub fn h264_encode_intra_frame(
   pcm~ : Bool = false,
   dct8x8~ : Bool = false,
   stats~ : H264EncStats = H264EncStats::new(),
+  pps_qp~ : Int32 = -1,
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -110,6 +111,19 @@ pub fn h264_encode_intra_frame(
     return Err("h264 enc: plane size mismatch")
   }
   let p = { width, height, qp, level_idc, }
+  // The parameter sets carry `pic_init_qp`: in a rate-controlled sequence
+  // that is the sequence's base QP (one PPS serves every picture) while
+  // this picture's own QP travels in `slice_qp_delta`.
+  let p_ps = {
+    width,
+    height,
+    qp: if pps_qp < 0 {
+      qp
+    } else {
+      pps_qp
+    },
+    level_idc,
+  }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -118,13 +132,13 @@ pub fn h264_encode_intra_frame(
   // Parse the parameter sets we just wrote: the parsed PPS carries the
   // dequantisation tables the local reconstruction shares with the decoder.
   let ps = new_h264_param_sets()
-  let sps_nal = h264_enc_write_sps(p, dct8x8~)
-  let pps_nal = h264_enc_write_pps(p, dct8x8~)
+  let sps_nal = h264_enc_write_sps(p_ps, dct8x8~)
+  let pps_nal = h264_enc_write_pps(p_ps, dct8x8~)
   // Round-trip the parameter sets through the decoder's own parsers: the
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
-  let sps_raw = h264_enc_sps_rbsp(p, dct8x8~)
-  let pps_raw = h264_enc_pps_rbsp(p, dct8x8~)
+  let sps_raw = h264_enc_sps_rbsp(p_ps, dct8x8~)
+  let pps_raw = h264_enc_pps_rbsp(p_ps, dct8x8~)
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_raw), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
@@ -194,7 +208,7 @@ pub fn h264_encode_intra_frame(
   // POC type 2: no picture order syntax.
   r.put_bit(0) // no_output_of_prior_pics_flag
   r.put_bit(0) // long_term_reference_flag
-  r.put_se(0) // slice_qp_delta
+  r.put_se(qp - p_ps.qp) // slice_qp_delta
   for mb_y = 0; mb_y < mb_height; mb_y = mb_y + 1 {
     for mb_x = 0; mb_x < mb_width; mb_x = mb_x + 1 {
       if pcm {

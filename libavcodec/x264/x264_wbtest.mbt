@@ -779,3 +779,40 @@ test "x264 oracle: P-slice Intra 8x8 CABAC stream decodes identically in C" {
   }
   x264_cross_decode(stream, 3, 1)
 }
+
+///|
+/// Rate-controlled streams (per-picture QPs in `slice_qp_delta`, dithered
+/// across pictures): the C decoder and the pure MoonBit decoder must agree
+/// pixel-for-pixel through both entropy coders.
+test "x264 oracle: rate-controlled CAVLC stream decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      target_bytes=1400,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+///|
+test "x264 oracle: rate-controlled CABAC stream decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      target_bytes=1200,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}
