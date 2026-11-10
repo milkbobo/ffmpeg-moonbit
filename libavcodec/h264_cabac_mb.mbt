@@ -1297,6 +1297,10 @@ fn h264_decode_mb_cabac(
   for i = 0; i < 48; i = i + 1 {
     nz[i] = 0
   }
+  // Per-macroblock transform size (see `h264_decode_mb`'s entry clear):
+  // macroblocks that code no transform_size_8x8_flag contribute 0 to their
+  // neighbours' ctx-399 derivation, matching the C's mb_type bit lifecycle.
+  ctx.infos[mb_idx].transform_8x8 = false
   if ctx.slice_type_nos == 1 {
     return h264_decode_b_mb(Cabac(cabac, states), ctx, mb_idx)
   }

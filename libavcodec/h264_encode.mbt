@@ -417,6 +417,25 @@ fn h264_enc_sad4(
 }
 
 ///|
+/// SAD between source and reconstruction over an 8x8 block of a plane at
+/// (off, stride). */
+fn h264_enc_sad8(
+  src : Array[Int32],
+  rec : Array[Int32],
+  off : Int32,
+  stride : Int32,
+) -> Int32 {
+  let mut sad = 0
+  for row = 0; row < 8; row = row + 1 {
+    for col = 0; col < 8; col = col + 1 {
+      let d = src[off + row * stride + col] - rec[off + row * stride + col]
+      sad = sad + (if d < 0 { -d } else { d })
+    }
+  }
+  sad
+}
+
+///|
 /// Choose the chroma mode: evaluate every candidate on both planes (each
 /// `h264_pred8x8` overwrites the 8x8 region), then re-run the winner. */
 fn H264IntraEncoder::pick_chroma(
@@ -1064,6 +1083,22 @@ fn scan_view_at(
   let out : Array[Int32] = Array::make(max_coeff, 0)
   for k = 0; k < max_coeff; k = k + 1 {
     out[k] = store[16 * block_i + scan[scan_start + k]]
+  }
+  out
+}
+
+///|
+/// Scan view of one 64-level 8x8DCT block inside `store` at block index
+/// `block_i`: `out[k] = store[64 * block_i + scan[k]]` (no scan_start -
+/// the 8x8 block always codes its full scan from position 0). */
+fn scan8_view_at(
+  store : Array[Int32],
+  block_i : Int32,
+  scan : Array[Int32],
+) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(64, 0)
+  for k = 0; k < 64; k = k + 1 {
+    out[k] = store[64 * block_i + scan[k]]
   }
   out
 }

@@ -11953,3 +11953,66 @@ make-moonbit-c-bindings 的 FFI 验证门）。
 
 **未做（更新）**：transform_8x8 的 I16/I8x8 组合、码率控制、把 I16
 转成默认策略（两条链目前都 opt-in，转正需重钉全部仲裁值）。
+
+## §385 H.264 编码器 High profile transform_8x8（8x8DCT）写端——I8x8 与 inter 8x8 残差全绿（2026-11-10）
+
+§384 交接剩余第一项。解码端 `pps.transform_8x8_mode` 分支本就完整
+（CABAC cat5 残差 + `h264_pred8x8l` + `h264_idct8_add` + deblock），本片
+补齐写端并 opt-in 接线（`dct8x8=true`，默认关闭保全部既有钉值逐字节不变）。
+
+**参数集写端**：`h264_enc_sps_rbsp_high`（profile_idc=100，High 家族的
+chroma_format_idc=1/bit_depth 0/0/无 scaling matrix 块插在
+seq_parameter_set_id 之后）；`h264_enc_pps_rbsp_cabac` 追加
+`transform_8x8_mode_flag=1 + pic_scaling_matrix_present_flag=0 +
+second_chroma_qp_index_offset=0` 尾（`more_rbsp_data_in_pps` 只对
+66/77/88+constraint 跳过，High 必读）。
+
+**fdct8/量化定标（本片核心）**：正变换取 x264 `DCT8_1D` 权威形式
+（偶部 a0..a3 无乘法蝶形 + 奇部 3·d07+2·d16+2·d25 族的移位近似，与 4x4
+fdct 同为免移位约定，DC 增益 = 8 点和）。MF8 用「量化步长 == 反量化步长」
+不变式定标：`qmul8 = init8·16 << (qp/6)`、`qbits = 17 + qp/6`，得
+`mf8 = round(2^19/init8)`——恰好逐值复现 x264 `quant8_mf` 真表
+（26214/29127/16384/27541/20972/21846）。**实证教训：白噪声残差下
+4x4 已验证链本身就是 ~93% 误差率**（量化杀高频是常态），误差率逐 QP
+对照探针（93/89/92 vs 93/89/92）才是定标判据；低频斜坡另设 SSD 门
+（8x8 5377 vs 4x4 8388，8x8 严格不劣）。
+
+**I 帧 I8x8 全链**：`encode_luma_i8` 顺序 0..3 处理四个 8x8 块——可用性
+镜像 `h264_recon_full_plane`（top/left/topright/topleft 含
+`h264_intra_available`/`h264_topright_index`），9 个 pred8x8l 候选经
+`h264_check_intra4x4_mode` 后按重建后 SAD 择优，残差 fdct8+量化、
+`h264_enc_dequant_level` 填 mb、`h264_idct8_dc_add`（total==1 且仅 DC，
+镜像 `h264_idct8_add4` 的 nz 捷径）/`h264_idct8_add` 重建。决策规则：
+I8x8 语法开销低于 I4（4 模式树 vs 16），对 I4 **平价即胜**；对 I16 仍
+6% 门槛。redo 复用同一函数（首块只读 MB 外边界、后续块读本 pass 自己
+刚重建的块——评估与 redo 确定性一致）；评估期 modes 写独立 scratch 数组
+（cur_modes 必须保持零值给 I4 pass 的块内预测器，解码端 modes 数组从零起）。
+
+**语法位**：I_NxN 首 bin 后写 `transform_size_8x8_flag`（ctx 399 +
+`neighbor_transform_size`，左/上 8x8 数）；4 个模式（z 序 0/4/8/12 槽位）
+走 ctx 68/69 与 I4 相同的 bin 树；残差 cat5（`h264_cabacw_residual` 扩展：
+4:2:0 无 cbf bin（luma cbp 位已隐含、空块+置位 cbp 是非法流）、
+sig/last ctx 换 `h264_cabac_sig8/last8` 压缩表、nz 象限 2x2 回填）、
+`h264_zigzag_scan8x8` 转置扫描。P 帧：`dct8x8_allowed`（PPS 位 + 全部分
+割 ≥8x8，P_8x8 须四子块全 sub_mb_type 0）且 cbp&15≠0 时在 cbp bins 与
+dqp 之间写 flag bin，残差按 8x8 cat5（inter 矩阵 3）；策略为「允许即用」，
+`H264EncStats.i8_mbs` 计数。
+
+**顺带修复（真 C 分叉）**：`info.transform_8x8` 原为「只置真不清零」，
+跨 MB 残留——FFmpeg 的语义是每 MB 独立的 `MB_TYPE_8x8DCT` mb_type 位
+（`h264_mvpred.h:928` 的 `neighbor_transform_size = IS_8x8DCT(top) +
+IS_8x8DCT(left)`，未读 flag 即 0）。混合 8x8/4x6 流在残留态下 ctx399 推导
+与 C 分叉。CABAC（`h264_decode_mb_cabac`）与 CAVLC（`h264_decode_mb`）
+两解析入口补入口清零，编码器镜像同款。
+
+**验证**：白盒探针 2/2（误差率逐 QP 相等 + 斜坡 SSD 不劣于 4x4 链）；
+黑盒 2/2（I 帧 I8x8 选中 + High SPS 断言 + 三平面 recon 不变式 + 质量门；
+P 帧 inter 8x8 三帧往返 recon 不变式 + 钉值）；存量 32/32 不动；全仓
+wasm-gc **1733/1733**、非 gc wasm 其余包 853/853、`--deny-warn` 干净；
+x264 native C oracle（docker nine-x264）扩 8x8 双解码用例 **13/13**；
+docker ffmpeg 9.0.2 零告警，framemd5 三帧与本仓滤波输出逐字节一致
+（`5e000f9f…/b765d76e…/2070b0ec…` 钉入黑盒 inspect）。
+
+**未做（更新）**：CAVLC 8x8 写端（读端 `h264_cavlc8.mbt` 已有，需 8x8
+coeff_token/total_zeros 写侧镜像）；码率控制；I16/8x8 转默认策略
+（需重钉全部仲裁值）；P 帧 CABAC 位定价换 CABAC 位数（§381 取舍仍在）。

@@ -443,41 +443,61 @@ fn h264_cabacw_residual(
       last_pos = k
     }
   }
-  // Coded-block flag (8x8DCT luma is the only implied case and this
-  // encoder is 4x4-only).
-  let cbf_ctx = h264_cabac_cbf_ctx(ctx, mb_idx, mb_x, mb_y, cat, n, nz)
-  enc.decision(states, cbf_ctx, if count > 0 { 1 } else { 0 })
-  if count == 0 {
-    // `fill_rectangle(non_zero_count_cache[...], 0)`: the block's nz slot
-    // is zeroed for the AC/grid categories, DC blocks leave it alone.
-    if !is_dc {
-      if cat == 1 || cat == 2 || cat >= 6 {
-        nz[16 * h264_cabac_cat_plane(cat) + h264_luma_block_grid[n & 15]] = 0
-      } else {
-        nz[n] = 0
+  // Coded-block flag. 8x8DCT luma (cat 5) in 4:2:0 is the one implied
+  // case - the luma CBP bit already said "coded", so no bin exists
+  // (`!is_8x8 || cat != 5 || CHROMA444` on the decode side) and the block
+  // is guaranteed non-empty (a zero block under a set CBP bit would make
+  // the decoder's significance parse fail with EINVAL).
+  let is_8x8 = max_coeff == 64
+  if !is_8x8 || cat != 5 || ctx.chroma_format == 3 {
+    let cbf_ctx = h264_cabac_cbf_ctx(ctx, mb_idx, mb_x, mb_y, cat, n, nz)
+    enc.decision(states, cbf_ctx, if count > 0 { 1 } else { 0 })
+    if count == 0 {
+      // `fill_rectangle(non_zero_count_cache[...], 0)`: the block's nz slot
+      // is zeroed for the AC/grid categories, DC blocks leave it alone.
+      if !is_dc {
+        if is_8x8 {
+          let i8 = (n & 15) / 4
+          let x0 = i8 % 2 * 2
+          let y0 = i8 / 2 * 2
+          let base = 16 * h264_cabac_cat_plane(cat)
+          for dy in 0..<2 {
+            for dx in 0..<2 {
+              nz[base + (y0 + dy) * 4 + x0 + dx] = 0
+            }
+          }
+        } else if cat == 1 || cat == 2 || cat >= 6 {
+          nz[16 * h264_cabac_cat_plane(cat) + h264_luma_block_grid[n & 15]] = 0
+        } else {
+          nz[n] = 0
+        }
       }
+      return
     }
-    return
   }
   let sig_base = h264_cabac_significant_coeff_offset[cat]
   let last_base = h264_cabac_last_coeff_flag_offset[cat]
   // Significance map: sig/last bins for positions 0..max-2; the last scan
-  // position is implied when no `last` flag fired.
+  // position is implied when no `last` flag fired. 8x8 luma contexts are a
+  // compressed function of the scan position (`significant_coeff_flag_offset_8x8`
+  // / `last_coeff_flag_offset_8x8`), not the position itself.
   let coefs = max_coeff - 1
   let mut q = 0
   while q < coefs {
+    let sig_ctx = sig_base + (if is_8x8 { h264_cabac_sig8[q] } else { q })
+    let last_ctx = last_base + (if is_8x8 { h264_cabac_last8[q] } else { q })
     if view[q] != 0 {
-      enc.decision(states, sig_base + q, 1)
+      enc.decision(states, sig_ctx, 1)
       if q == last_pos {
-        enc.decision(states, last_base + q, 1)
+        enc.decision(states, last_ctx, 1)
         // `last = max_coeff` on the decode side: stop.
         q = coefs
         continue
       } else {
-        enc.decision(states, last_base + q, 0)
+        enc.decision(states, last_ctx, 0)
       }
     } else {
-      enc.decision(states, sig_base + q, 0)
+      enc.decision(states, sig_ctx, 0)
     }
     q = q + 1
   }
@@ -490,6 +510,18 @@ fn h264_cabacw_residual(
     } else {
       ctx.infos[mb_idx].cbp_all = ctx.infos[mb_idx].cbp_all |
         (0x100 << (n - 48))
+    }
+  } else if is_8x8 {
+    // `fill_rectangle(non_zero_count_cache[scan8[n]], 2, 2, 8, count)`:
+    // the whole 2x2 quadrant of the plane's grid carries the block's count.
+    let i8 = (n & 15) / 4
+    let x0 = i8 % 2 * 2
+    let y0 = i8 / 2 * 2
+    let base = 16 * h264_cabac_cat_plane(cat)
+    for dy in 0..<2 {
+      for dx in 0..<2 {
+        nz[base + (y0 + dy) * 4 + x0 + dx] = count
+      }
     }
   } else if cat == 1 || cat == 2 || cat >= 6 {
     nz[16 * h264_cabac_cat_plane(cat) + h264_luma_block_grid[n & 15]] = count
@@ -595,9 +627,53 @@ fn h264_enc_sps_rbsp_main(p : H264EncParams) -> Bytes {
 }
 
 ///|
+/// High-profile SPS RBSP (profile_idc 100) for `transform_8x8_mode`. The
+/// High family inserts the chroma_format_idc block after
+/// seq_parameter_set_id; no scaling matrix is signalled (seq flag 0), so
+/// the flat-16 default lists stay active on both sides. No constraint
+/// flags: the PPS-tail skip of `more_rbsp_data_in_pps` only applies to
+/// profiles 66/77/88, and High requires none of the Baseline constraint
+/// sets (CABAC + 8x8 transform both break A.2.1).
+fn h264_enc_sps_rbsp_high(p : H264EncParams) -> Bytes {
+  let r = H264Rbsp::new()
+  r.put(100, 8) // profile_idc: High
+  r.put(0, 8) // constraint_set0..5 + reserved_zero_2_bits
+  r.put(p.level_idc, 8)
+  r.put_ue(0) // seq_parameter_set_id
+  r.put_ue(1) // chroma_format_idc: 4:2:0
+  r.put_ue(0) // bit_depth_luma_minus8
+  r.put_ue(0) // bit_depth_chroma_minus8
+  r.put_bit(0) // qpprime_y_zero_transform_bypass_flag
+  r.put_bit(0) // seq_scaling_matrix_present_flag
+  r.put_ue(0) // log2_max_frame_num_minus4
+  r.put_ue(2) // pic_order_cnt_type = 2
+  r.put_ue(1) // max_num_ref_frames
+  r.put_bit(0) // gaps_in_frame_num_value_allowed_flag
+  r.put_ue(p.mb_width() - 1)
+  r.put_ue(p.mb_height() - 1)
+  r.put_bit(1) // frame_mbs_only_flag
+  r.put_bit(1) // direct_8x8_inference_flag
+  let crop = p.width % 16 != 0 || p.height % 16 != 0
+  r.put_bit(if crop { 1 } else { 0 })
+  if crop {
+    r.put_ue(0)
+    r.put_ue((p.mb_width() * 16 - p.width) / 2)
+    r.put_ue(0)
+    r.put_ue((p.mb_height() * 16 - p.height) / 2)
+  }
+  r.put_bit(0) // vui_parameters_present_flag
+  r.trailing_bits()
+  r.finish_raw_of()
+}
+
+///|
 /// CABAC PPS RBSP: identical to the CAVLC PPS except
-/// `entropy_coding_mode_flag = 1`.
-fn h264_enc_pps_rbsp_cabac(p : H264EncParams) -> Bytes {
+/// `entropy_coding_mode_flag = 1`. With `dct8x8` the High-profile tail is
+/// appended: `transform_8x8_mode_flag`, no PPS scaling matrix and a zero
+/// `second_chroma_qp_index_offset` (the reader only enters the tail when
+/// more_rbsp_data remains, so the Main-profile stream above must stay
+/// byte-identical when the flag is off).
+fn h264_enc_pps_rbsp_cabac(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
   let r = H264Rbsp::new()
   r.put_ue(0) // pic_parameter_set_id
   r.put_ue(0) // seq_parameter_set_id
@@ -614,6 +690,11 @@ fn h264_enc_pps_rbsp_cabac(p : H264EncParams) -> Bytes {
   r.put_bit(0) // deblocking_filter_control_present_flag
   r.put_bit(0) // constrained_intra_pred_flag
   r.put_bit(0) // redundant_pic_cnt_present_flag
+  if dct8x8 {
+    r.put_bit(1) // transform_8x8_mode_flag
+    r.put_bit(0) // pic_scaling_matrix_present_flag
+    r.put_se(0) // second_chroma_qp_index_offset
+  }
   r.trailing_bits()
   r.finish_raw_of()
 }
@@ -670,12 +751,17 @@ priv struct H264CabacIEnc {
   states : Array[Int32]
   /// Raw (signalled) intra4x4 modes of the macroblock being coded.
   cur_modes : Array[Int32]
+  /// Opt-in High-profile transform_8x8 (I_NxN may become I8x8).
+  dct8x8 : Bool
+  /// Shared decision counters (I8x8 usage).
+  stats : H264EncStats
 }
 
 ///|
-/// Encode one IDR I-frame with CABAC entropy coding (Main profile). Same
-/// contract as `h264_encode_intra_frame`; the PPS carries
-/// `entropy_coding_mode_flag = 1` and the SPS is Main profile.
+/// Encode one IDR I-frame with CABAC entropy coding (Main profile by
+/// default; `dct8x8` switches the SPS to High and the PPS to
+/// `transform_8x8_mode_flag = 1`). Same contract as `h264_encode_intra_frame`;
+/// the PPS carries `entropy_coding_mode_flag = 1`.
 pub fn h264_encode_intra_frame_cabac(
   y : Bytes,
   u : Bytes,
@@ -684,6 +770,8 @@ pub fn h264_encode_intra_frame_cabac(
   height~ : Int32,
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
+  dct8x8~ : Bool = false,
+  stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -703,8 +791,13 @@ pub fn h264_encode_intra_frame_cabac(
   let cstride = mb_width * 8
   let pheight = mb_height * 16
   let ps = new_h264_param_sets()
+  let sps_rbsp = if dct8x8 {
+    h264_enc_sps_rbsp_high(p)
+  } else {
+    h264_enc_sps_rbsp_main(p)
+  }
   let sps_nal = {
-    let raw = h264_enc_sps_rbsp_main(p)
+    let raw = sps_rbsp
     let out : Array[Byte] = [
       b'\x00',
       b'\x00',
@@ -719,7 +812,7 @@ pub fn h264_encode_intra_frame_cabac(
     Bytes::from_array(out[:])
   }
   let pps_nal = {
-    let raw = h264_enc_pps_rbsp_cabac(p)
+    let raw = h264_enc_pps_rbsp_cabac(p, dct8x8~)
     let out : Array[Byte] = [
       b'\x00',
       b'\x00',
@@ -733,16 +826,11 @@ pub fn h264_encode_intra_frame_cabac(
     }
     Bytes::from_array(out[:])
   }
-  match
-    ff_h264_decode_seq_parameter_set(
-      BitReader::new(h264_enc_sps_rbsp_main(p)),
-      ps,
-      false,
-    ) {
+  match ff_h264_decode_seq_parameter_set(BitReader::new(sps_rbsp), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
-  let pps_raw = h264_enc_pps_rbsp_cabac(p)
+  let pps_raw = h264_enc_pps_rbsp_cabac(p, dct8x8~)
   match
     ff_h264_decode_picture_parameter_set(
       BitReader::new(pps_raw),
@@ -791,6 +879,8 @@ pub fn h264_encode_intra_frame_cabac(
     enc: h264_cabac_enc_new(),
     states: ff_h264_init_cabac_states(qp, 8, 2, 0),
     cur_modes: Array::make(16, 0),
+    dct8x8,
+    stats,
   }
   // Slice header (POC type 2: no POC syntax).
   let r = H264Rbsp::new()
@@ -840,6 +930,143 @@ pub fn h264_encode_intra_frame_cabac(
       out
     },
   })
+}
+
+///|
+/// One full I8x8 luma pass over the macroblock (High-profile
+/// transform_8x8): per 8x8 block, pick the best availability-checked
+/// `pred8x8l` mode by SAD, predict, forward-transform + quantise,
+/// dequantise into `mb` and reconstruct through `h264_idct8_add`. The
+/// 0..3 block order mirrors the decoder's reconstruction, so each block
+/// predicts from exactly the neighbours the decoder will use. Fills
+/// `store` (4 x 64 transposed levels) and the raw signalled modes into
+/// `modes` (2x2 replication, the decoder's fill); returns `(cost, cbp)`
+/// with the post-quantisation SAD and one cbp bit per non-empty block.
+fn H264CabacIEnc::encode_luma_i8(
+  self : H264CabacIEnc,
+  mb_x : Int32,
+  mb_y : Int32,
+  store : Array[Int32],
+  modes : Array[Int32],
+  mb : Array[Int32],
+) -> Result[(Int32, Int32), String] {
+  let mb_idx = mb_y * self.mb_width + mb_x
+  let qp = self.p.qp
+  let qmul8 = h264_build_dequant8(self.pps, 0, qp)
+  let ybase = mb_y * 16 * self.ystride + mb_x * 16
+  let mut cost = 0
+  let mut cbp = 0
+  for i8 = 0; i8 < 4; i8 = i8 + 1 {
+    let bx8 = i8 % 2
+    let by8 = i8 / 2
+    let off = ybase + by8 * 8 * self.ystride + bx8 * 8
+    let top = by8 > 0 || mb_y > 0
+    let left = bx8 > 0 || mb_x > 0
+    // `topright`/`topleft` mirror `h264_recon_full_plane`'s I8x8 branch.
+    let topright = if by8 == 0 {
+      top &&
+      (
+        bx8 == 0 ||
+        (
+          mb_x < self.mb_width - 1 &&
+          h264_intra_available(self.ctx, h264_topright_index(self.ctx, mb_idx))
+        )
+      )
+    } else {
+      bx8 == 0
+    }
+    let topleft = h264_intra_topleft(self.ctx, mb_idx, bx8, by8)
+    let mut best_sig = 0
+    let mut best_eff : Int32 = -1
+    let mut best_sad = -1
+    for sig = 0; sig < 9; sig = sig + 1 {
+      let eff = match h264_check_intra4x4_mode(sig, top, left) {
+        Ok(v) => v
+        Err(_) => -1
+      }
+      if eff < 0 {
+        continue
+      }
+      if h264_pred8x8l(
+          self.rec_y,
+          off,
+          self.ystride,
+          eff,
+          top,
+          left,
+          topright,
+          topleft~,
+          bit_depth=8,
+        )
+        is Err(_) {
+        continue
+      }
+      let sad = h264_enc_sad8(self.src_y, self.rec_y, off, self.ystride)
+      if best_sad < 0 || sad < best_sad {
+        best_sad = sad
+        best_sig = sig
+        best_eff = eff
+      }
+    }
+    if best_eff < 0 {
+      return Err("h264 enc: no feasible intra8x8 mode")
+    }
+    match
+      h264_pred8x8l(
+        self.rec_y,
+        off,
+        self.ystride,
+        best_eff,
+        top,
+        left,
+        topright,
+        topleft~,
+        bit_depth=8,
+      ) {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+    for dy = 0; dy < 2; dy = dy + 1 {
+      for dx = 0; dx < 2; dx = dx + 1 {
+        modes[(by8 * 2 + dy) * 4 + bx8 * 2 + dx] = best_sig
+      }
+    }
+    let res : Array[Int32] = Array::make(64, 0)
+    for row = 0; row < 8; row = row + 1 {
+      for col = 0; col < 8; col = col + 1 {
+        res[row * 8 + col] = self.src_y[off + row * self.ystride + col] -
+          self.rec_y[off + row * self.ystride + col]
+      }
+    }
+    let levels = h264_enc_fdct8_quant_res(res, 0, qp)
+    let mut total = 0
+    for s = 0; s < 64; s = s + 1 {
+      store[64 * i8 + s] = levels[s]
+      if levels[s] != 0 {
+        total = total + 1
+        mb[64 * i8 + s] = h264_enc_dequant_level(levels[s], qmul8[s])
+      }
+    }
+    if total != 0 {
+      cbp = cbp | (1 << i8)
+      // `h264_idct8_add4`'s nz shortcut: a lone DC level takes the flat
+      // DC add, anything else the full inverse transform.
+      if total == 1 && mb[64 * i8] != 0 {
+        h264_idct8_dc_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          64 * i8,
+          bit_depth=8,
+        )
+      } else {
+        h264_idct8_add(self.rec_y, off, self.ystride, mb, 64 * i8, bit_depth=8)
+      }
+    }
+    cost = cost + h264_enc_sad8(self.src_y, self.rec_y, off, self.ystride)
+  }
+  Ok((cost, cbp))
 }
 
 ///|
@@ -944,10 +1171,13 @@ fn H264CabacIEnc::encode_macroblock(
 ) -> Result[Unit, String] {
   let mb_idx = mb_y * self.mb_width + mb_x
   let info = self.ctx.infos[mb_idx]
-  // Macroblock-entry mirror (the decoder clears `nz` at parse start).
+  // Macroblock-entry mirror (the decoder clears `nz` at parse start; the
+  // transform size is a per-macroblock bit in FFmpeg's mb_type, so it
+  // starts false here exactly like an unread MB_TYPE_8x8DCT bit).
   for i = 0; i < 48; i = i + 1 {
     info.nz[i] = 0
   }
+  info.transform_8x8 = false
   self.ctx.cur_mb_is_intra = true
   self.ctx.qscale = self.p.qp
   self.ctx.last_qscale_diff = 0
@@ -1075,6 +1305,29 @@ fn H264CabacIEnc::encode_macroblock(
       }
     }
   }
+  // ---- luma I8x8 candidate (High-profile transform_8x8): evaluated on
+  // the I16x16 pass's leftover state. Only the MB borders matter for the
+  // first 8x8 block; every later block predicts from blocks this pass
+  // itself reconstructs (the decoder replays the same order), so the pass
+  // is self-consistent regardless of what rec_y holds on entry. The modes
+  // go to a scratch array: `cur_modes` must stay zeroed for the I4x4
+  // pass's within-MB predictors (the decoder's parse starts from zeros
+  // too). ----
+  let luma8_store : Array[Int32] = Array::make(256, 0)
+  let i8_modes : Array[Int32] = Array::make(16, 0)
+  let mut i8_cost = 0
+  let mut luma_cbp8 = 0
+  let mut i8_found = false
+  if self.dct8x8 {
+    match self.encode_luma_i8(mb_x, mb_y, luma8_store, i8_modes, mb) {
+      Ok((cost, cbp)) => {
+        i8_cost = cost
+        luma_cbp8 = cbp
+        i8_found = true
+      }
+      Err(e) => return Err(e)
+    }
+  }
   // ---- luma I4x4: sequential decision + reconstruction ----
   let qmul_y = h264_build_dequant4(self.pps, 0, qp)
   let mut i4_cost = 0
@@ -1174,9 +1427,33 @@ fn H264CabacIEnc::encode_macroblock(
   }
   // Decision: the I4x4 pass must beat I16x16 by ~6% to justify its 16-block
   // mode-signalling overhead; ties prefer I16x16 (its DC-only stream prices
-  // into fewer CABAC bins, too).
+  // into fewer CABAC bins, too). I8x8 codes four mode trees and at most four
+  // residual blocks - strictly less signalling than I4x4's sixteen-plus -
+  // so it needs only a plain SAD win over the I4x4 winner, but the ~6%
+  // margin against I16x16 (whose syntax is one DC block on flat content).
   let use_i16 = i16_found && !(100 * i4_cost < 94 * i16_cost)
-  if use_i16 {
+  let use_i8 = i8_found &&
+    (if use_i16 { 100 * i8_cost < 94 * i16_cost } else { i8_cost < i4_cost })
+  if use_i8 {
+    // Redo the luma plane for I8x8: the I4x4 pass left its dequantised
+    // coefficients and reconstruction in place - clear both, then re-run
+    // the deterministic 8x8 pass committing into `cur_modes`. The pass
+    // reproduces the evaluation exactly: its first block reads only
+    // MB-border samples and every later block reads blocks the pass itself
+    // just reconstructed.
+    self.stats.i8_mbs += 1
+    for i = 0; i < 256; i = i + 1 {
+      mb[i] = 0
+    }
+    match self.encode_luma_i8(mb_x, mb_y, luma8_store, self.cur_modes, mb) {
+      Ok((cost, cbp)) => {
+        i8_cost = cost
+        luma_cbp8 = cbp
+      }
+      Err(e) => return Err(e)
+    }
+    luma_cbp = luma_cbp8
+  } else if use_i16 {
     // Redo the luma plane for I16: the I4x4 pass left its dequantised
     // coefficients and reconstruction in place - clear both.
     for i = 0; i < 256; i = i + 1 {
@@ -1379,31 +1656,69 @@ fn H264CabacIEnc::encode_macroblock(
     self.enc.decision(self.states, 10, b4)
   } else {
     self.enc.decision(self.states, 3 + c, 0)
-    // Intra4x4 prediction modes.
-    for i = 0; i < 16; i = i + 1 {
-      let gx = h264_luma_block_x[i]
-      let gy = h264_luma_block_y[i]
-      let g = gy * 4 + gx
-      let predicted = h264_pred_intra_mode(
-        self.ctx,
-        mb_idx,
-        mb_x,
-        mb_y,
-        gx,
-        gy,
-        self.cur_modes,
+    if use_i8 {
+      // transform_size_8x8_flag: ctx 399 + the left/top 8x8DCT neighbour
+      // count (`neighbor_transform_size`); the mirror bit also feeds the
+      // next macroblock's context and the deblock filter.
+      self.enc.decision(
+        self.states,
+        399 + h264_neighbor_transform_size(self.ctx, mb_idx, mb_x, mb_y),
+        1,
       )
-      let mode = self.cur_modes[g]
-      if mode == predicted {
-        self.enc.decision(self.states, 68, 1)
-      } else {
-        self.enc.decision(self.states, 68, 0)
-        let rem = if mode > predicted { mode - 1 } else { mode }
-        // Three decision bins at ctx 69, least-significant bit first
-        // (mode = b0 + 2*b1 + 4*b2 on the decode side).
-        self.enc.decision(self.states, 69, rem & 1)
-        self.enc.decision(self.states, 69, (rem >> 1) & 1)
-        self.enc.decision(self.states, 69, (rem >> 2) & 1)
+      info.transform_8x8 = true
+      // One prediction mode per 8x8 block (the z-order block index's
+      // 0/4/8/12 grid slots), the same ctx 68/69 bin tree as I4x4.
+      for i = 0; i < 16; i = i + 4 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let g = gy * 4 + gx
+        let predicted = h264_pred_intra_mode(
+          self.ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          gx,
+          gy,
+          self.cur_modes,
+        )
+        let mode = self.cur_modes[g]
+        if mode == predicted {
+          self.enc.decision(self.states, 68, 1)
+        } else {
+          self.enc.decision(self.states, 68, 0)
+          let rem = if mode > predicted { mode - 1 } else { mode }
+          self.enc.decision(self.states, 69, rem & 1)
+          self.enc.decision(self.states, 69, (rem >> 1) & 1)
+          self.enc.decision(self.states, 69, (rem >> 2) & 1)
+        }
+      }
+    } else {
+      // Intra4x4 prediction modes.
+      for i = 0; i < 16; i = i + 1 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let g = gy * 4 + gx
+        let predicted = h264_pred_intra_mode(
+          self.ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          gx,
+          gy,
+          self.cur_modes,
+        )
+        let mode = self.cur_modes[g]
+        if mode == predicted {
+          self.enc.decision(self.states, 68, 1)
+        } else {
+          self.enc.decision(self.states, 68, 0)
+          let rem = if mode > predicted { mode - 1 } else { mode }
+          // Three decision bins at ctx 69, least-significant bit first
+          // (mode = b0 + 2*b1 + 4*b2 on the decode side).
+          self.enc.decision(self.states, 69, rem & 1)
+          self.enc.decision(self.states, 69, (rem >> 1) & 1)
+          self.enc.decision(self.states, 69, (rem >> 2) & 1)
+        }
       }
     }
   }
@@ -1485,6 +1800,27 @@ fn H264CabacIEnc::encode_macroblock(
           i,
           view,
           15,
+          false,
+        )
+      }
+    }
+  } else if use_i8 {
+    // Luma residuals (cbp-gated 8x8 blocks, cat 5, transposed 8x8 zigzag
+    // scan, implied coded-block flag in 4:2:0).
+    for i8 = 0; i8 < 4; i8 = i8 + 1 {
+      if (luma_cbp & (1 << i8)) != 0 {
+        let view = scan8_view_at(luma8_store, i8, h264_zigzag_scan8x8)
+        h264_cabacw_residual(
+          self.enc,
+          self.states,
+          self.ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          5,
+          4 * i8,
+          view,
+          64,
           false,
         )
       }
@@ -1888,17 +2224,63 @@ fn H264PEncoder::write_cabac_mb_syntax(
   h264_cabacw_cbp(enc, states, ctx, mb_idx, mb_x, mb_y, cbp, true)
   // Decoder writes `info.cbp_all = cbp` before the residual bins.
   info.cbp_all = cbp
+  // transform_size_8x8_flag sits between the cbp bins and mb_qp_delta: the
+  // decoder reads it whenever dct8x8_allowed holds and the luma cbp is
+  // non-zero (`h264_inter_residual_cabac`).
+  if h264_p_dct8x8_allowed(self.dct8x8, plan) && (cbp & 15) != 0 {
+    enc.decision(
+      states,
+      399 + h264_neighbor_transform_size(ctx, mb_idx, mb_x, mb_y),
+      if coded.dct8 {
+        1
+      } else {
+        0
+      },
+    )
+    if coded.dct8 {
+      info.transform_8x8 = true
+    }
+  }
   if cbp != 0 {
     enc.decision(states, 60, 0)
   }
-  for i8 = 0; i8 < 4; i8 = i8 + 1 {
-    if (coded.luma_cbp & (1 << i8)) != 0 {
-      for i4 = 0; i4 < 4; i4 = i4 + 1 {
-        let i = i8 * 4 + i4
-        let view = scan_view_at(coded.luma_store, i, h264_zigzag_scan_t, 0, 16)
+  if coded.dct8 {
+    // Luma residuals (cbp-gated 8x8 blocks, cat 5, transposed 8x8 zigzag
+    // scan, implied coded-block flag in 4:2:0).
+    for i8 = 0; i8 < 4; i8 = i8 + 1 {
+      if (coded.luma_cbp & (1 << i8)) != 0 {
+        let view = scan8_view_at(coded.luma8_store, i8, h264_zigzag_scan8x8)
         h264_cabacw_residual(
-          enc, states, ctx, mb_idx, mb_x, mb_y, 2, i, view, 16, false,
+          enc,
+          states,
+          ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          5,
+          4 * i8,
+          view,
+          64,
+          false,
         )
+      }
+    }
+  } else {
+    for i8 = 0; i8 < 4; i8 = i8 + 1 {
+      if (coded.luma_cbp & (1 << i8)) != 0 {
+        for i4 = 0; i4 < 4; i4 = i4 + 1 {
+          let i = i8 * 4 + i4
+          let view = scan_view_at(
+            coded.luma_store,
+            i,
+            h264_zigzag_scan_t,
+            0,
+            16,
+          )
+          h264_cabacw_residual(
+            enc, states, ctx, mb_idx, mb_x, mb_y, 2, i, view, 16, false,
+          )
+        }
       }
     }
   }
@@ -2012,6 +2394,9 @@ fn H264PEncoder::encode_p_frame_cabac(
       for i = 0; i < 48; i = i + 1 {
         info.nz[i] = 0
       }
+      // Per-macroblock transform size (FFmpeg's MB_TYPE_8x8DCT mb_type bit):
+      // false unless this MB's transform_size_8x8_flag is written as 1.
+      info.transform_8x8 = false
       mirror.cur_mb_is_intra = false
       mirror.qscale = qp
       mirror.last_qscale_diff = 0
@@ -2048,6 +2433,9 @@ fn H264PEncoder::encode_p_frame_cabac(
       } else {
         enc.decision(states, skip_ctx, 0)
         let coded = self.code_mb_residuals(mb_x, mb_y, plan, qp)
+        if coded.dct8 {
+          self.stats.i8_mbs += 1
+        }
         self.write_cabac_mb_syntax(mirror, enc, states, mb_x, mb_y, plan, coded)
         self.commit_plan_state(mb_idx, plan)
         // The CABAC writer's nz mirror is the syntax mirror; keep the
@@ -2078,6 +2466,7 @@ pub fn h264_encode_frames_cabac(
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
   intra_in_p~ : Bool = false,
+  dct8x8~ : Bool = false,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
@@ -2086,7 +2475,17 @@ pub fn h264_encode_frames_cabac(
   }
   let (y0, u0, v0) = frames[0]
   let first = match
-    h264_encode_intra_frame_cabac(y0, u0, v0, width~, height~, qp~, level_idc~) {
+    h264_encode_intra_frame_cabac(
+      y0,
+      u0,
+      v0,
+      width~,
+      height~,
+      qp~,
+      level_idc~,
+      dct8x8~,
+      stats~,
+    ) {
     Ok(e) => e
     Err(e) => return Err(e)
   }
@@ -2097,16 +2496,16 @@ pub fn h264_encode_frames_cabac(
   let cstride = mb_width * 8
   let pheight = mb_height * 16
   let ps = new_h264_param_sets()
-  match
-    ff_h264_decode_seq_parameter_set(
-      BitReader::new(h264_enc_sps_rbsp_main(p)),
-      ps,
-      false,
-    ) {
+  let sps_rbsp = if dct8x8 {
+    h264_enc_sps_rbsp_high(p)
+  } else {
+    h264_enc_sps_rbsp_main(p)
+  }
+  match ff_h264_decode_seq_parameter_set(BitReader::new(sps_rbsp), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
-  let pps_raw = h264_enc_pps_rbsp_cabac(p)
+  let pps_raw = h264_enc_pps_rbsp_cabac(p, dct8x8~)
   match
     ff_h264_decode_picture_parameter_set(
       BitReader::new(pps_raw),
@@ -2186,6 +2585,7 @@ pub fn h264_encode_frames_cabac(
       cur_nz: Array::make(48, 0),
       cur_mv: Array::make(32, 0),
       cur_ref: Array::make(16, -2),
+      dct8x8,
     }
     let nal = match enc.encode_p_frame_cabac(f, intra_in_p) {
       Ok(n) => n

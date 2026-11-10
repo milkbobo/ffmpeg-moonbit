@@ -530,6 +530,11 @@ fn h264_decode_mb(
   mb_x : Int32,
   mb_y : Int32,
 ) -> Result[Unit, String] {
+  // The transform size is a per-macroblock bit of the C's mb_type
+  // (MB_TYPE_8x8DCT, set only when transform_size_8x8_flag is READ as 1);
+  // macroblocks that code no flag must contribute 0 to their neighbours'
+  // ctx-399 derivation, so clear the ported mirror at parse entry.
+  ctx.infos[mb_idx].transform_8x8 = false
   if ctx.slice_type_nos == 1 {
     return h264_decode_b_mb(Cavlc(gb), ctx, mb_idx)
   }

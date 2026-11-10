@@ -40,12 +40,13 @@ fn new_h264_p_mb_state() -> H264PMbState {
 /// macroblock from a cheap inter one.
 pub(all) struct H264EncStats {
   mut i16_mbs : Int32
+  mut i8_mbs : Int32
   mut coded_mbs : Int32
 }
 
 ///|
 pub fn H264EncStats::new() -> H264EncStats {
-  { i16_mbs: 0, coded_mbs: 0, }
+  { i16_mbs: 0, i8_mbs: 0, coded_mbs: 0, }
 }
 
 ///|
@@ -81,6 +82,9 @@ priv struct H264PEncoder {
   /// partitions' MVs).
   cur_mv : Array[Int32]
   cur_ref : Array[Int32]
+  /// Opt-in High-profile transform_8x8 for the luma residual of inter
+  /// macroblocks whose partitions are all at least 8x8.
+  dct8x8 : Bool
 }
 
 ///|
@@ -249,6 +253,7 @@ pub fn h264_encode_frames(
       cur_nz: Array::make(48, 0),
       cur_mv: Array::make(32, 0),
       cur_ref: Array::make(16, -2),
+      dct8x8: false,
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f, intra_in_p) {
@@ -1294,6 +1299,27 @@ priv struct H264PMbCode {
   luma_dc_store : Array[Int32]
   chroma_dc_store : Array[Array[Int32]]
   chroma_ac_store : Array[Array[Int32]]
+  /// High-profile transform_8x8: the luma residual was coded as four 8x8
+  /// blocks in `luma8_store` (4 x 64 transposed levels) instead of sixteen
+  /// 4x4 blocks. Always false for intra plans (I16 has no transform size).
+  dct8 : Bool
+  luma8_store : Array[Int32]
+}
+
+///|
+/// `dct8x8_allowed` of the P-slice decoder: the PPS flag plus "every
+/// sub-partition is at least 8x8" (P_L0_16x16/16x8/8x16 always qualify;
+/// P_8x8 only when all four sub_mb_types are 0, i.e. plain 8x8).
+fn h264_p_dct8x8_allowed(dct8x8 : Bool, plan : H264PPlan) -> Bool {
+  if !dct8x8 {
+    return false
+  }
+  match plan {
+    I16(_, _, _) => false
+    Part8x8(s0, s1, s2, s3, _) => s0 == 0 && s1 == 0 && s2 == 0 && s3 == 0
+    Part16x16(_, _) | Part16x8(_, _, _, _) | Part8x16(_, _, _, _) => true
+    Skip => false
+  }
 }
 
 ///|
@@ -1401,8 +1427,15 @@ fn H264PEncoder::code_mb_residuals(
   // 3 and 4/5. The decoder picks by mb_type, so the reconstruction must
   // follow the same split or the two pictures drift apart.
   let qmul_y = h264_build_dequant4(self.pps, if is_i16 { 0 } else { 3 }, qp)
+  let dct8 = h264_p_dct8x8_allowed(self.dct8x8, plan)
+  let qmul8 = if dct8 {
+    h264_build_dequant8(self.pps, 3, qp) // inter 8x8 luma matrix
+  } else {
+    Array::make(64, 0)
+  }
   let mut luma_cbp = 0
   let luma_store : Array[Int32] = Array::make(256, 0)
+  let luma8_store : Array[Int32] = Array::make(256, 0)
   let luma_dc_store : Array[Int32] = Array::make(16, 0)
   let i16_ac_nz : Array[Int32] = Array::make(16, 0)
   let chroma_ac_nz_mirror : Array[Int32] = Array::make(48, 0)
@@ -1463,6 +1496,60 @@ fn H264PEncoder::code_mb_residuals(
       // otherwise `nz` keeps the previous picture's values (our seed).
       for g = 0; g < 16; g = g + 1 {
         self.cur_nz[g] = i16_ac_nz[g]
+      }
+    }
+  } else if dct8 {
+    // Inter 8x8DCT luma: four 8x8 blocks, cbp bit per block, implied
+    // coded-block flag on the decode side. The CABAC syntax mirror's nz
+    // quadrants are filled by the residual writer; `cur_nz` keeps the same
+    // quadrant values for the (CAVLC-only) nC mirror, unused here.
+    for i8 = 0; i8 < 4; i8 = i8 + 1 {
+      let bx8 = i8 % 2
+      let by8 = i8 / 2
+      let off = ybase + by8 * 8 * self.ystride + bx8 * 8
+      let res : Array[Int32] = Array::make(64, 0)
+      for row = 0; row < 8; row = row + 1 {
+        for col = 0; col < 8; col = col + 1 {
+          res[row * 8 + col] = self.src_y[off + row * self.ystride + col] -
+            self.rec_y[off + row * self.ystride + col]
+        }
+      }
+      let levels = h264_enc_fdct8_quant_res(res, 0, qp)
+      let mut total = 0
+      for s = 0; s < 64; s = s + 1 {
+        luma8_store[64 * i8 + s] = levels[s]
+        if levels[s] != 0 {
+          total = total + 1
+          mb[64 * i8 + s] = h264_enc_dequant_level(levels[s], qmul8[s])
+        }
+      }
+      for gy = 0; gy < 2; gy = gy + 1 {
+        for gx = 0; gx < 2; gx = gx + 1 {
+          self.cur_nz[(by8 * 2 + gy) * 4 + bx8 * 2 + gx] = total
+        }
+      }
+      if total != 0 {
+        luma_cbp = luma_cbp | (1 << i8)
+        // `h264_idct8_add4`'s nz shortcut (see the intra path).
+        if total == 1 && mb[64 * i8] != 0 {
+          h264_idct8_dc_add(
+            self.rec_y,
+            off,
+            self.ystride,
+            mb,
+            64 * i8,
+            bit_depth=8,
+          )
+        } else {
+          h264_idct8_add(
+            self.rec_y,
+            off,
+            self.ystride,
+            mb,
+            64 * i8,
+            bit_depth=8,
+          )
+        }
       }
     }
   } else {
@@ -1649,7 +1736,7 @@ fn H264PEncoder::code_mb_residuals(
         h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
       }
     }
-  } else {
+  } else if !dct8 {
     for i = 0; i < 16; i = i + 1 {
       let gx = h264_luma_block_x[i]
       let gy = h264_luma_block_y[i]
@@ -1678,6 +1765,8 @@ fn H264PEncoder::code_mb_residuals(
     luma_dc_store,
     chroma_dc_store,
     chroma_ac_store,
+    dct8,
+    luma8_store,
   }
 }
 

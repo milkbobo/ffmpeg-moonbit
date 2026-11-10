@@ -584,3 +584,67 @@ test "x264 oracle: CABAC mixed intra/inter P slice decodes identically in C" {
   }
   x264_cross_decode(stream, 3, 1)
 }
+
+///|
+/// Textured ramps + a roaming box: content the 8x8 transform's compaction
+/// wins on, so the I frame codes genuine I8x8 macroblocks and the P frames
+/// carry inter 8x8 residuals.
+fn x264_dct8_fixture() -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 96
+  let h = 64
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<3 {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    let bx = f * 4 % (w - 16)
+    let by = f * 6 % (h - 16)
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        let mut s = ((col + row) * 2) & 0xFF
+        if (col / 8 + row / 8 + f) % 2 == 1 {
+          s = (s + 24) & 0xFF
+        }
+        if col >= bx && col < bx + 16 && row >= by && row < by + 16 {
+          s = (s + 90) & 0xFF
+        }
+        y.push(s.to_byte())
+      }
+    }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        u.push((96 + ((col + f) & 0x1F)).to_byte())
+        v.push((160 - ((row + 2 * f) & 0x1F)).to_byte())
+      }
+    }
+    out.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  out
+}
+
+///|
+/// The High-profile transform_8x8 stream (SPS profile 100, PPS
+/// transform_8x8_mode_flag, I-frame I8x8 macroblocks and inter 8x8
+/// residuals) must satisfy the dual-decode standard: FFmpeg's C decoder
+/// and the pure MoonBit decoder agree pixel-for-pixel.
+test "x264 oracle: pure-MoonBit 8x8DCT CABAC stream decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      dct8x8=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}
