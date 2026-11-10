@@ -34,8 +34,25 @@ fn new_h264_p_mb_state() -> H264PMbState {
 }
 
 ///|
+/// Per-sequence mode-decision counters. Pass one through `stats=` to the
+/// public entry points when a test must prove a syntax branch was really
+/// exercised: a decodable stream alone cannot distinguish an intra-coded P
+/// macroblock from a cheap inter one.
+pub(all) struct H264EncStats {
+  mut i16_mbs : Int32
+  mut coded_mbs : Int32
+}
+
+///|
+pub fn H264EncStats::new() -> H264EncStats {
+  { i16_mbs: 0, coded_mbs: 0, }
+}
+
+///|
 priv struct H264PEncoder {
   p : H264EncParams
+  /// Shared decision counters (CAVLC and CABAC entries both feed these).
+  stats : H264EncStats
   pps : H264Pps
   chroma_qp : Int32
   /// Source planes of the frame being encoded (mb-aligned strides).
@@ -77,6 +94,9 @@ pub fn h264_encode_frames(
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
   pcm_first~ : Bool = false,
+  intra_in_p~ : Bool = false,
+  recon~ : Array[Bytes] = [],
+  stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
@@ -127,6 +147,31 @@ pub fn h264_encode_frames(
     None => return Err("h264 enc: no PPS after round-trip")
   }
   let chroma_qp = h264_get_chroma_qp(pps, 0, qp)
+  fn pack_recon(
+    y : Array[Int32],
+    u : Array[Int32],
+    v : Array[Int32],
+    w : Int32,
+    h : Int32,
+    ys : Int32,
+    cs : Int32,
+  ) -> Bytes {
+    let out : Array[Byte] = []
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        out.push(y[row * ys + col].to_byte())
+      }
+    }
+    for plane = 0; plane < 2; plane = plane + 1 {
+      let src = if plane == 0 { u } else { v }
+      for row = 0; row < h / 2; row = row + 1 {
+        for col = 0; col < w / 2; col = col + 1 {
+          out.push(src[row * cs + col].to_byte())
+        }
+      }
+    }
+    Bytes::from_array(out[:])
+  }
   fn load_plane(
     src : Bytes,
     w : Int32,
@@ -177,6 +222,7 @@ pub fn h264_encode_frames(
     let (y, u, v) = frames[f]
     let enc : H264PEncoder = {
       p,
+      stats,
       pps,
       chroma_qp,
       src_y: load_plane(y, width, height, ystride, pheight),
@@ -200,11 +246,22 @@ pub fn h264_encode_frames(
       cur_ref: Array::make(16, -2),
     }
     // frame_num increments per reference frame: the IDR carries 0.
-    let nal = match enc.encode_p_frame(f) {
+    let nal = match enc.encode_p_frame(f, intra_in_p) {
       Ok(n) => n
       Err(e) => return Err(e)
     }
     stream.push(nal)
+    recon.push(
+      pack_recon(
+        enc.rec_y,
+        enc.rec_u,
+        enc.rec_v,
+        width,
+        height,
+        ystride,
+        cstride,
+      ),
+    )
     // The reconstruction becomes the next reference.
     let next_y = Array::make(ystride * pheight, 0)
     let next_u = Array::make(cstride * (pheight / 2), 0)
@@ -238,6 +295,7 @@ pub fn h264_encode_frames(
 fn H264PEncoder::encode_p_frame(
   self : H264PEncoder,
   frame_num : Int32,
+  intra_in_p : Bool,
 ) -> Result[Bytes, String] {
   // Fresh picture: the availability markers reset (every frame is a new
   // slice, so previous-frame macroblocks are unavailable to `mv_fetch`)
@@ -273,7 +331,17 @@ fn H264PEncoder::encode_p_frame(
       let mb_idx = mb_y * self.mb_width + mb_x
       let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
       let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
-      let plan = if skip_sad == 0 { Skip } else { self.decide_plan(mb_x, mb_y) }
+      let plan = if skip_sad == 0 {
+        Skip
+      } else {
+        self.decide_plan(mb_x, mb_y, intra_in_p)
+      }
+      if plan is I16(_, _, _) {
+        self.stats.i16_mbs += 1
+      }
+      if !(plan is Skip) {
+        self.stats.coded_mbs += 1
+      }
       // The pending skip run is flushed only once a CODED macroblock is
       // known. Rate-distortion may turn a macroblock whose predictor SAD
       // is nonzero into a Skip, and that decision has to extend the run -
@@ -316,6 +384,10 @@ priv enum H264PPlan {
   /// P_8x8: four sub types (0 8x8 / 1 8x4 / 2 4x8 / 3 4x4) and the
   /// quarter-pel MVs of every sub partition in `h264_sub_partitions` order.
   Part8x8(Int32, Int32, Int32, Int32, Array[Int32])
+  /// Intra16x16 fallback in a P slice: the signalling prediction mode
+  /// (encoder numbering DC/H/V/Plane), the availability-checked effective
+  /// mode the prediction runs on, and the chroma prediction mode.
+  I16(Int32, Int32, Int32)
 }
 
 ///|
@@ -607,14 +679,166 @@ fn H264PEncoder::me_fixed_ssd(
 }
 
 ///|
+/// SAD between source and reconstruction over an 8x8 chroma block.
+fn H264PEncoder::chroma_sad(
+  self : H264PEncoder,
+  src : Array[Int32],
+  rec : Array[Int32],
+  cbase : Int32,
+) -> Int32 {
+  let mut sad = 0
+  for row = 0; row < 8; row = row + 1 {
+    for col = 0; col < 8; col = col + 1 {
+      let d = src[cbase + row * self.cstride + col] -
+        rec[cbase + row * self.cstride + col]
+      sad = sad + (if d < 0 { -d } else { d })
+    }
+  }
+  sad
+}
+
+///|
+/// Chroma intra prediction mode decision: the four signalling modes are
+/// checked for availability (the prediction runs on the effective mode),
+/// scored by SAD over both planes and the winner's prediction is left in
+/// the reconstruction planes (the residual pass re-applies it).
+fn H264PEncoder::pick_chroma(
+  self : H264PEncoder,
+  cbase : Int32,
+  top : Bool,
+  left : Bool,
+) -> Int32 {
+  let mut best_sig = 0
+  let mut best_eff = 0
+  let mut best_cost = -1
+  for sig = 0; sig < 4; sig = sig + 1 {
+    let eff = match h264_check_intra_pred_mode(sig, top, left) {
+      Ok(v) => v
+      Err(_) => -1
+    }
+    if eff < 0 {
+      continue
+    }
+    let ok_u = h264_pred8x8(
+      self.rec_u,
+      cbase,
+      self.cstride,
+      eff,
+      top,
+      left,
+      bit_depth=8,
+    )
+    let ok_v = h264_pred8x8(
+      self.rec_v,
+      cbase,
+      self.cstride,
+      eff,
+      top,
+      left,
+      bit_depth=8,
+    )
+    if ok_u is Ok(_) && ok_v is Ok(_) {
+      let cost = self.chroma_sad(self.src_u, self.rec_u, cbase) +
+        self.chroma_sad(self.src_v, self.rec_v, cbase)
+      if best_cost < 0 || cost < best_cost {
+        best_cost = cost
+        best_sig = sig
+        best_eff = eff
+      }
+    }
+  }
+  ignore(
+    h264_pred8x8(
+      self.rec_u,
+      cbase,
+      self.cstride,
+      best_eff,
+      top,
+      left,
+      bit_depth=8,
+    ),
+  )
+  ignore(
+    h264_pred8x8(
+      self.rec_v,
+      cbase,
+      self.cstride,
+      best_eff,
+      top,
+      left,
+      bit_depth=8,
+    ),
+  )
+  best_sig
+}
+
+///|
+/// Intra16x16 luma candidate search: the four signalling modes are checked
+/// for availability (top/left edges remap V/H/Plane), scored by prediction
+/// SAD, and the winner is returned as `(signalling mode, effective mode)`.
+fn H264PEncoder::pick_i16(
+  self : H264PEncoder,
+  mb_x : Int32,
+  mb_y : Int32,
+) -> (Int32, Int32)? {
+  let top_avail = mb_y > 0
+  let left_avail = mb_x > 0
+  let ybase = mb_y * 16 * self.ystride + mb_x * 16
+  let mut best_sig = 0
+  let mut best_eff = -1
+  let mut best_sad = -1
+  for sig = 0; sig < 4; sig = sig + 1 {
+    let eff = match h264_check_intra_pred_mode(sig, top_avail, left_avail) {
+      Ok(v) => v
+      Err(_) => -1
+    }
+    if eff < 0 {
+      continue
+    }
+    if h264_pred16x16(
+        self.rec_y,
+        ybase,
+        self.ystride,
+        eff,
+        top_avail,
+        left_avail,
+        bit_depth=8,
+      )
+      is Ok(_) {
+      let mut sad = 0
+      for row = 0; row < 16; row = row + 1 {
+        for col = 0; col < 16; col = col + 1 {
+          let d = self.src_y[ybase + row * self.ystride + col] -
+            self.rec_y[ybase + row * self.ystride + col]
+          sad = sad + (if d < 0 { -d } else { d })
+        }
+      }
+      if best_sad < 0 || sad < best_sad {
+        best_sad = sad
+        best_sig = sig
+        best_eff = eff
+      }
+    }
+  }
+  if best_eff < 0 {
+    None
+  } else {
+    Some((best_sig, best_eff))
+  }
+}
+
+///|
 /// Mode decision by rate-distortion cost `SSD + lambda * bits`: P_Skip
 /// against 16x16 / 16x8 / 8x16 / 8x8, each partition's MVs from the SAD+MC
-/// search and each 8x8's sub-mode from SAD. Candidates must be STRICTLY
-/// cheaper, so the earlier (coarser, bit-cheaper) mode wins ties.
+/// search and each 8x8's sub-mode from SAD; when `allow_intra` is set
+/// (CABAC P slices) the Intra16x16 fallback joins the same comparison.
+/// Candidates must be STRICTLY cheaper, so the earlier (coarser,
+/// bit-cheaper) mode wins ties.
 fn H264PEncoder::decide_plan(
   self : H264PEncoder,
   mb_x : Int32,
   mb_y : Int32,
+  allow_intra : Bool,
 ) -> H264PPlan {
   let qp = self.p.qp
   // Int64 throughout: a macroblock's SSD reaches ~1.7e7 and the 2^10
@@ -692,6 +916,26 @@ fn H264PEncoder::decide_plan(
   let (ssd88, bits88) = self.eval_plan(mb_x, mb_y, p88, qp)
   if ssd88.to_int64() * 1024L + lam * bits88.to_int64() < best_cost {
     plan = p88
+  }
+  // Intra16x16 fallback (CABAC P slices only): a scene change or a moving
+  // edge can leave every inter partition with a large residual; coding the
+  // MB against its own current-frame neighbours then wins the same
+  // `SSD + lambda * bits` comparison. The mode is picked by prediction SAD
+  // first (like the intra encoder), then the full residual/reconstruction
+  // cost is measured by `eval_plan`. Added last, so ties stay inter.
+  if allow_intra {
+    match self.pick_i16(mb_x, mb_y) {
+      Some((sig, eff)) => {
+        let cbase = mb_y * 8 * self.cstride + mb_x * 8
+        let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
+        let pi16 = I16(sig, eff, chroma_mode)
+        let (ssd16x, bits16x) = self.eval_plan(mb_x, mb_y, pi16, qp)
+        if ssd16x.to_int64() * 1024L + lam * bits16x.to_int64() < best_cost {
+          plan = pi16
+        }
+      }
+      None => ()
+    }
   }
   plan
 }
@@ -1041,12 +1285,46 @@ priv struct H264PMbCode {
   luma_cbp : Int32
   chroma_c_cbp : Int32
   luma_store : Array[Int32]
+  /// Intra16x16 Hadamard DC levels (all zero for inter plans).
+  luma_dc_store : Array[Int32]
   chroma_dc_store : Array[Array[Int32]]
   chroma_ac_store : Array[Array[Int32]]
 }
 
 ///|
-/// MC every partition of `plan` into the reconstruction planes.
+/// Re-apply the winning intra prediction into the reconstruction planes.
+/// Every `code_mb_residuals` call (RD dry runs and the final write) starts
+/// from the prediction: an inter candidate leaves its own reconstruction in
+/// `rec_*`, and only MC (or this helper) overwrites it.
+fn H264PEncoder::predict_i16_planes(
+  self : H264PEncoder,
+  mb_x : Int32,
+  mb_y : Int32,
+  eff : Int32,
+  chroma_sig : Int32,
+) -> Unit {
+  let top = mb_y > 0
+  let left = mb_x > 0
+  let ybase = mb_y * 16 * self.ystride + mb_x * 16
+  let cbase = mb_y * 8 * self.cstride + mb_x * 8
+  ignore(
+    h264_pred16x16(self.rec_y, ybase, self.ystride, eff, top, left, bit_depth=8),
+  )
+  let ceff = match h264_check_intra_pred_mode(chroma_sig, top, left) {
+    Ok(v) => v
+    Err(_) => 0 // pick_chroma only returns availability-feasible modes
+  }
+  ignore(
+    h264_pred8x8(self.rec_u, cbase, self.cstride, ceff, top, left, bit_depth=8),
+  )
+  ignore(
+    h264_pred8x8(self.rec_v, cbase, self.cstride, ceff, top, left, bit_depth=8),
+  )
+}
+
+///|
+/// MC every partition of `plan` into the reconstruction planes (or, for an
+/// intra plan, lay down its prediction).
 fn H264PEncoder::mc_plan(
   self : H264PEncoder,
   mb_x : Int32,
@@ -1055,6 +1333,7 @@ fn H264PEncoder::mc_plan(
 ) -> Unit {
   match plan {
     Skip => ()
+    I16(_, eff, cm) => self.predict_i16_planes(mb_x, mb_y, eff, cm)
     Part16x16(x, y) => self.mc_into_rec(mb_x, mb_y, x, y, 0, 0, 16, 16)
     Part16x8(tx, ty, bx, by) => {
       self.mc_into_rec(mb_x, mb_y, tx, ty, 0, 0, 16, 8)
@@ -1098,45 +1377,120 @@ fn H264PEncoder::code_mb_residuals(
   // so the seed never survives into a prediction - it is kept only to
   // mirror the decoder's cache lifecycle.
   let mb_idx0 = mb_y * self.mb_width + mb_x
+  let is_i16 = match plan {
+    I16(_, _, _) => true
+    _ => false
+  }
+  // The CAVLC decoder's intra path starts from a zeroed non_zero_count for
+  // the picture and only writes the counts its cbp actually signals; an
+  // I16x16 MB with cbp&15 == 0 writes no luma counts at all. Inheriting the
+  // inter macroblocks' cross-picture seed here leaks stale values into the
+  // DC/AC VLC table choice (`h264_block0_nc` saw 1/13/3 where the decoder
+  // saw 0) and desynchronises the bitstream from the first MB whose nc
+  // crosses a table boundary.
   for i = 0; i < 48; i = i + 1 {
-    self.cur_nz[i] = self.states[mb_idx0].nz[i]
+    self.cur_nz[i] = if is_i16 { 0 } else { self.states[mb_idx0].nz[i] }
   }
   let mb : Array[Int32] = Array::make(768, 0)
-  let qmul_y = h264_build_dequant4(self.pps, 3, qp)
+  // Intra uses the intra dequant matrices (luma 0, chroma 1/2); inter uses
+  // 3 and 4/5. The decoder picks by mb_type, so the reconstruction must
+  // follow the same split or the two pictures drift apart.
+  let qmul_y = h264_build_dequant4(self.pps, if is_i16 { 0 } else { 3 }, qp)
   let mut luma_cbp = 0
   let luma_store : Array[Int32] = Array::make(256, 0)
+  let luma_dc_store : Array[Int32] = Array::make(16, 0)
+  let i16_ac_nz : Array[Int32] = Array::make(16, 0)
+  let chroma_ac_nz_mirror : Array[Int32] = Array::make(48, 0)
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   let cbase = mb_y * 8 * self.cstride + mb_x * 8
   self.mc_plan(mb_x, mb_y, plan)
-  for i = 0; i < 16; i = i + 1 {
-    let gx = h264_luma_block_x[i]
-    let gy = h264_luma_block_y[i]
-    let g = gy * 4 + gx
-    let off = ybase + gy * 4 * self.ystride + gx * 4
-    let res : Array[Int32] = Array::make(16, 0)
-    for row = 0; row < 4; row = row + 1 {
-      for col = 0; col < 4; col = col + 1 {
-        res[row * 4 + col] = self.src_y[off + row * self.ystride + col] -
-          self.rec_y[off + row * self.ystride + col]
+  if is_i16 {
+    // Intra16x16: Hadamard DC from the 16 block sums, then AC transforms
+    // over the FULL residual with levels[0] discarded (§382: clearing the
+    // (0,0) sample before the fdct pollutes every AC block).
+    let sums : Array[Int32] = Array::make(16, 0)
+    for g = 0; g < 16; g = g + 1 {
+      let bx = h264_luma_block_x[g]
+      let by = h264_luma_block_y[g]
+      let off = ybase + by * 4 * self.ystride + bx * 4
+      let mut sum = 0
+      for row = 0; row < 4; row = row + 1 {
+        for col = 0; col < 4; col = col + 1 {
+          sum = sum +
+            self.src_y[off + row * self.ystride + col] -
+            self.rec_y[off + row * self.ystride + col]
+        }
+      }
+      sums[by * 4 + bx] = sum
+    }
+    ignore(h264_enc_luma_dc_hadamard_quant(sums, 0, 4, luma_dc_store, 0, qp))
+    let mut any_ac = false
+    for i = 0; i < 16; i = i + 1 {
+      let gx = h264_luma_block_x[i]
+      let gy = h264_luma_block_y[i]
+      let g = gy * 4 + gx
+      let off = ybase + gy * 4 * self.ystride + gx * 4
+      let res : Array[Int32] = Array::make(16, 0)
+      for row = 0; row < 4; row = row + 1 {
+        for col = 0; col < 4; col = col + 1 {
+          res[row * 4 + col] = self.src_y[off + row * self.ystride + col] -
+            self.rec_y[off + row * self.ystride + col]
+        }
+      }
+      let levels = h264_enc_fdct_quant_res(res, 0, qp)
+      let mut total = 0
+      for s = 0; s < 16; s = s + 1 {
+        let lv = if s == 0 { 0 } else { levels[s] }
+        luma_store[16 * i + s] = lv
+        if lv != 0 {
+          total = total + 1
+          mb[16 * i + s] = h264_enc_dequant_level(lv, qmul_y[s])
+        }
+      }
+      i16_ac_nz[g] = total
+      if total != 0 {
+        any_ac = true
       }
     }
-    let levels = h264_enc_fdct_quant_res(res, 0, qp)
-    let mut total = 0
-    for s = 0; s < 16; s = s + 1 {
-      luma_store[16 * i + s] = levels[s]
-      if levels[s] != 0 {
-        total = total + 1
-        mb[16 * i + s] = h264_enc_dequant_level(levels[s], qmul_y[s])
+    if any_ac {
+      luma_cbp = 15
+      // The decoder writes all 16 AC counts only when cbp&15 != 0;
+      // otherwise `nz` keeps the previous picture's values (our seed).
+      for g = 0; g < 16; g = g + 1 {
+        self.cur_nz[g] = i16_ac_nz[g]
       }
     }
-    self.cur_nz[g] = total
-    if total != 0 {
-      luma_cbp = luma_cbp | (1 << (i / 4))
+  } else {
+    for i = 0; i < 16; i = i + 1 {
+      let gx = h264_luma_block_x[i]
+      let gy = h264_luma_block_y[i]
+      let g = gy * 4 + gx
+      let off = ybase + gy * 4 * self.ystride + gx * 4
+      let res : Array[Int32] = Array::make(16, 0)
+      for row = 0; row < 4; row = row + 1 {
+        for col = 0; col < 4; col = col + 1 {
+          res[row * 4 + col] = self.src_y[off + row * self.ystride + col] -
+            self.rec_y[off + row * self.ystride + col]
+        }
+      }
+      let levels = h264_enc_fdct_quant_res(res, 0, qp)
+      let mut total = 0
+      for s = 0; s < 16; s = s + 1 {
+        luma_store[16 * i + s] = levels[s]
+        if levels[s] != 0 {
+          total = total + 1
+          mb[16 * i + s] = h264_enc_dequant_level(levels[s], qmul_y[s])
+        }
+      }
+      self.cur_nz[g] = total
+      if total != 0 {
+        luma_cbp = luma_cbp | (1 << (i / 4))
+      }
     }
   }
   let qmul_c = [
-    h264_build_dequant4(self.pps, 4, self.chroma_qp),
-    h264_build_dequant4(self.pps, 5, self.chroma_qp),
+    h264_build_dequant4(self.pps, if is_i16 { 1 } else { 4 }, self.chroma_qp),
+    h264_build_dequant4(self.pps, if is_i16 { 2 } else { 5 }, self.chroma_qp),
   ]
   let chroma_dc_store : Array[Array[Int32]] = [
     Array::make(16, 0),
@@ -1200,7 +1554,7 @@ fn H264PEncoder::code_mb_residuals(
           )
         }
       }
-      self.cur_nz[16 + 16 * c + i] = total
+      chroma_ac_nz_mirror[16 + 16 * c + i] = total
     }
   }
   let chroma_c_cbp = if chroma_dc_nz[0] || chroma_dc_nz[1] {
@@ -1213,15 +1567,31 @@ fn H264PEncoder::code_mb_residuals(
   } else {
     0
   }
-  // Chroma AC that is not signalled (cbp chroma 0 or 1) has its counts
-  // zeroed by the decoder's `fill_rectangle(..., 0, 1)` (h264_cavlc.c:1136),
-  // even when the quantiser produced non-zero levels that this encoder
-  // chose not to code. The nC mirror has to follow the SYNTAX, not the
-  // quantiser output.
-  if chroma_c_cbp != 2 {
+  // The nC mirror has to follow the SYNTAX, not the quantiser output.
+  // Inter decoder (`h264_cavlc.c:1136`): unsigned chroma AC is zeroed by
+  // `fill_rectangle(..., 0, 1)`. Intra decoder (`h264_decode_mb_cavlc_
+  // intra`): the counts are only touched when cbp&0x20 != 0, otherwise the
+  // previous picture's values survive - which is exactly the seed still in
+  // `cur_nz`.
+  if is_i16 {
+    if chroma_c_cbp == 2 {
+      for c = 0; c < 2; c = c + 1 {
+        for i = 0; i < 4; i = i + 1 {
+          self.cur_nz[16 + 16 * c + i] = chroma_ac_nz_mirror[16 + 16 * c + i]
+        }
+      }
+    }
+  } else {
     for c = 0; c < 2; c = c + 1 {
       for i = 0; i < 4; i = i + 1 {
-        self.cur_nz[16 + 16 * c + i] = 0
+        self.cur_nz[16 + 16 * c + i] = chroma_ac_nz_mirror[16 + 16 * c + i]
+      }
+    }
+    if chroma_c_cbp != 2 {
+      for c = 0; c < 2; c = c + 1 {
+        for i = 0; i < 4; i = i + 1 {
+          self.cur_nz[16 + 16 * c + i] = 0
+        }
       }
     }
   }
@@ -1247,20 +1617,63 @@ fn H264PEncoder::code_mb_residuals(
       }
     }
   }
-  for i = 0; i < 16; i = i + 1 {
-    let gx = h264_luma_block_x[i]
-    let gy = h264_luma_block_y[i]
-    let g = gy * 4 + gx
-    let off = ybase + gy * 4 * self.ystride + gx * 4
-    if (luma_cbp & (1 << (i / 4))) != 0 && self.cur_nz[g] != 0 {
-      if self.cur_nz[g] == 1 && mb[16 * i] != 0 {
-        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
-      } else {
+  if is_i16 {
+    // `h264_recon_mb`'s I16 order: scatter the Hadamard DC first, then the
+    // per-block IDCT (or the DC-only add for blocks with no AC levels).
+    let mut dc_total = 0
+    for s = 0; s < 16; s = s + 1 {
+      if luma_dc_store[s] != 0 {
+        dc_total = dc_total + 1
+      }
+    }
+    if dc_total > 0 {
+      let dc_raw : Array[Int32] = Array::make(16, 0)
+      for s = 0; s < 16; s = s + 1 {
+        dc_raw[s] = luma_dc_store[s]
+      }
+      h264_luma_dc_dequant_idct(mb, 0, dc_raw, 0, qmul_y[0], bit_depth=8)
+    }
+    for i = 0; i < 16; i = i + 1 {
+      let gx = h264_luma_block_x[i]
+      let gy = h264_luma_block_y[i]
+      let g = gy * 4 + gx
+      let off = ybase + gy * 4 * self.ystride + gx * 4
+      if i16_ac_nz[g] != 0 {
         h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
+      } else if mb[16 * i] != 0 {
+        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
+      }
+    }
+  } else {
+    for i = 0; i < 16; i = i + 1 {
+      let gx = h264_luma_block_x[i]
+      let gy = h264_luma_block_y[i]
+      let g = gy * 4 + gx
+      let off = ybase + gy * 4 * self.ystride + gx * 4
+      if (luma_cbp & (1 << (i / 4))) != 0 && self.cur_nz[g] != 0 {
+        if self.cur_nz[g] == 1 && mb[16 * i] != 0 {
+          h264_idct_dc_add(
+            self.rec_y,
+            off,
+            self.ystride,
+            mb,
+            16 * i,
+            bit_depth=8,
+          )
+        } else {
+          h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
+        }
       }
     }
   }
-  { luma_cbp, chroma_c_cbp, luma_store, chroma_dc_store, chroma_ac_store, }
+  {
+    luma_cbp,
+    chroma_c_cbp,
+    luma_store,
+    luma_dc_store,
+    chroma_dc_store,
+    chroma_ac_store,
+  }
 }
 
 ///|
@@ -1278,8 +1691,63 @@ fn H264PEncoder::write_mb_syntax(
   r : H264Rbsp,
 ) -> Unit {
   let mb_idx = mb_y * self.mb_width + mb_x
+  let is_i16 = match plan {
+    I16(_, _, _) => true
+    _ => false
+  }
   match plan {
     Skip => return
+    I16(sig, _, chroma_mode) => {
+      // Intra16x16 in a P slice: mb_type 5..30 is the I-slice intra table
+      // shifted by 5. The decoder derives cbp from the mb_type group, so
+      // no cbp codeword is written here; mb_qp_delta is unconditional.
+      let group = if coded.luma_cbp != 0 {
+        3 + coded.chroma_c_cbp
+      } else {
+        coded.chroma_c_cbp
+      }
+      // Encoder pred8 numbering DC/H/V/Plane -> spec Table 7-11 V/H/DC/Plane.
+      let spec_mode = match sig {
+        0 => 2
+        1 => 1
+        2 => 0
+        _ => 3
+      }
+      r.put_ue(5 + 1 + spec_mode + 4 * group)
+      r.put_ue(chroma_mode)
+      r.put_se(0)
+      let dc_scan : Array[Int32] = scan_view_at(
+        coded.luma_dc_store,
+        0,
+        h264_zigzag_scan_t,
+        0,
+        16,
+      )
+      ignore(
+        h264_enc_write_residual(
+          r,
+          dc_scan,
+          16,
+          self.nc_block0(mb_idx, mb_x, mb_y),
+        ),
+      )
+      if coded.luma_cbp != 0 {
+        for i = 0; i < 16; i = i + 1 {
+          let gx = h264_luma_block_x[i]
+          let gy = h264_luma_block_y[i]
+          let view = scan_view_at(
+            coded.luma_store,
+            i,
+            h264_zigzag_scan_t,
+            1,
+            15,
+          )
+          let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
+          let n = h264_enc_write_residual(r, view, 15, nc)
+          self.cur_nz[gy * 4 + gx] = n
+        }
+      }
+    }
     Part16x16(mvx, mvy) => {
       r.put_ue(0) // mb_type: P_L0_16x16
       let (pmvx, pmvy) = self.pred_motion(mb_idx, mb_x, mb_y, 0, 0, 4)
@@ -1341,23 +1809,32 @@ fn H264PEncoder::write_mb_syntax(
       }
     }
   }
-  let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
-  r.put_ue(h264_enc_inter_cbp_golomb(cbp))
-  if cbp != 0 {
-    r.put_se(0) // mb_qp_delta
-  }
-  for i8 = 0; i8 < 4; i8 = i8 + 1 {
-    if (coded.luma_cbp & (1 << i8)) != 0 {
-      for i4 = 0; i4 < 4; i4 = i4 + 1 {
-        let i = i8 * 4 + i4
-        let gx = h264_luma_block_x[i]
-        let gy = h264_luma_block_y[i]
-        let view = scan_view_at(coded.luma_store, i, h264_zigzag_scan_t, 0, 16)
-        let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
-        ignore(h264_enc_write_residual(r, view, 16, nc))
+  if !is_i16 {
+    let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
+    r.put_ue(h264_enc_inter_cbp_golomb(cbp))
+    if cbp != 0 {
+      r.put_se(0) // mb_qp_delta
+    }
+    for i8 = 0; i8 < 4; i8 = i8 + 1 {
+      if (coded.luma_cbp & (1 << i8)) != 0 {
+        for i4 = 0; i4 < 4; i4 = i4 + 1 {
+          let i = i8 * 4 + i4
+          let gx = h264_luma_block_x[i]
+          let gy = h264_luma_block_y[i]
+          let view = scan_view_at(
+            coded.luma_store,
+            i,
+            h264_zigzag_scan_t,
+            0,
+            16,
+          )
+          let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
+          ignore(h264_enc_write_residual(r, view, 16, nc))
+        }
       }
     }
   }
+  // Chroma residual syntax is shared by inter and intra P macroblocks.
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
       let dc4 : Array[Int32] = [
@@ -1388,14 +1865,20 @@ fn H264PEncoder::write_mb_syntax(
 
 ///|
 /// Commit the mirror state after writing the winning plan.
-fn H264PEncoder::commit_plan_state(self : H264PEncoder, mb_idx : Int32) -> Unit {
+fn H264PEncoder::commit_plan_state(
+  self : H264PEncoder,
+  mb_idx : Int32,
+  plan : H264PPlan,
+) -> Unit {
   let st = self.states[mb_idx]
   for i = 0; i < 16; i = i + 1 {
     st.mv[2 * i] = self.cur_mv[2 * i]
     st.mv[2 * i + 1] = self.cur_mv[2 * i + 1]
     st.ref_idx[i] = self.cur_ref[i]
   }
-  st.intra = false
+  // An intra macroblock in a P slice makes its MVs unavailable to the
+  // neighbours' motion predictors (decoder: `IS_INTRA` -> ref_cache -1).
+  st.intra = plan is I16(_, _, _)
   st.has_data = true
   for i = 0; i < 48; i = i + 1 {
     st.nz[i] = self.cur_nz[i]
@@ -1421,7 +1904,7 @@ fn H264PEncoder::write_coded_mb(
   let coded = self.code_mb_residuals(mb_x, mb_y, plan, qp)
   self.write_mb_syntax(mb_x, mb_y, plan, coded, r)
   let mb_idx = mb_y * self.mb_width + mb_x
-  self.commit_plan_state(mb_idx)
+  self.commit_plan_state(mb_idx, plan)
   Ok(())
 }
 
@@ -1438,6 +1921,24 @@ fn subs_of_plan(plan : H264PPlan, k : Int32) -> Int32 {
       }
     _ => 0
   }
+}
+
+///|
+/// nC for the I16x16 luma DC block (`h264_block0_nc`): the retained counts
+/// of luma block 0's left/top neighbours, from the persistent mirror.
+fn H264PEncoder::nc_block0(
+  self : H264PEncoder,
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+) -> Int32 {
+  let left = if mb_x > 0 { self.states[mb_idx - 1].nz[3] } else { 64 }
+  let top = if mb_y > 0 {
+    self.states[mb_idx - self.mb_width].nz[12]
+  } else {
+    64
+  }
+  h264_pred_non_zero_count(left, top)
 }
 
 ///|

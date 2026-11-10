@@ -357,6 +357,13 @@ pub fn X264DecFrames::frame_v(self : X264DecFrames, i : Int32) -> Bytes {
 /// The geometry/kind header is validated against the payload size; a NULL
 /// return from the stub surfaces as `Err`.
 pub fn x264_decode_annexb(stream : Bytes) -> Result[X264DecFrames, String] {
+  // Shape validation belongs on the MoonBit side of the boundary: a NAL
+  // start code plus a non-empty payload is the shortest thing the C parser
+  // could plausibly split. Rejecting it here keeps a caller's empty buffer
+  // from turning into an opaque NULL blob at the extern.
+  if stream.length() < 8 {
+    return Err("x264dec: stream too short for an Annex B access unit")
+  }
   let blob = match x264dec_annexb_ffi(stream) {
     Some(b) => b
     None => return Err("x264dec: C decoder failed on the stream")

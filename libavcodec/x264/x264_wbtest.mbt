@@ -444,3 +444,104 @@ test "x264 oracle: pure-MoonBit CABAC encoder stream decodes identically in C" {
   }
   x264_cross_decode(stream, 6, 1)
 }
+
+///|
+/// Deterministic scene cut for the pure-MoonBit encoder's Intra16x16-in-P
+/// path: a gradient I picture followed by two flat white pictures (the
+/// whole frame with `split_col=0`, only the right half otherwise).
+fn x264_cut_fixture(split_col : Int32) -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 96
+  let h = 64
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<3 {
+    let y : Array[Byte] = Array::make(w * h, b'\x00')
+    let u : Array[Byte] = Array::make(w / 2 * (h / 2), b'\x00')
+    let v : Array[Byte] = Array::make(w / 2 * (h / 2), b'\x00')
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        let flat = f > 0 && col >= split_col
+        let s = if flat { 240 } else { (col * 2 + row * 3) & 0xFF }
+        y[row * w + col] = s.to_byte()
+      }
+    }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        let flat = f > 0 && col * 2 >= split_col
+        u[row * (w / 2) + col] = (if flat {
+          128
+        } else {
+          96 + ((col + row) & 0x3F)
+        }).to_byte()
+        v[row * (w / 2) + col] = (if flat {
+          128
+        } else {
+          96 + ((col * 2 + row) & 0x3F)
+        }).to_byte()
+      }
+    }
+    out.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  out
+}
+
+///|
+/// The intra16x16-in-P macroblock syntax (mb_type 5..30, DC/AC CAVLC
+/// splitting) must satisfy the same dual-decode standard as the x264 and
+/// CABAC encoder streams: FFmpeg's C decoder and this repository's decoder
+/// agree on every pixel of every frame.
+test "x264 oracle: pure-MoonBit P-slice Intra16x16 stream decodes identically in C" {
+  let frames = x264_cut_fixture(0)
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      intra_in_p=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+///|
+/// A partial cut puts intra and inter macroblocks in the same P slice; the
+/// nC mirror across that boundary is the subtle part of §383, so it gets
+/// its own C-oracle regression.
+test "x264 oracle: mixed intra/inter P slice decodes identically in C" {
+  let frames = x264_cut_fixture(48)
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      intra_in_p=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+///|
+/// Shape validation is the safe wrapper's job (moonbit-c-binding phase 3).
+/// Empty and start-code-only buffers must fail before the extern is called,
+/// never as an opaque NULL blob from C.
+test "x264 oracle: short streams are rejected by the safe wrapper" {
+  match x264_decode_annexb(b"") {
+    Ok(_) => fail("empty stream unexpectedly decoded")
+    Err(_) => ()
+  }
+  match x264_decode_annexb(b"\x00\x00\x00\x01") {
+    Ok(_) => fail("start-code-only stream unexpectedly decoded")
+    Err(_) => ()
+  }
+}

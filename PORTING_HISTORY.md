@@ -11837,3 +11837,72 @@ bin 级 zip 探针（临时 wbtest，已删）96×64 平场 312/312 bins 全对�
 非 gc Wasm 撞 V8 单函数局部数上限（历史已知，§“局部数上限”诸篇），
 wasm-gc 后端同文件全过，白盒 wasm 门改记 wasm-gc。x264 解码 oracle
 **7/7**。
+
+## §383 H.264 编码器 P 切片 Intra16x16 fallback——nC 失步收口 + C oracle 扩面（2026-11-10）
+
+接手工作树里未提交的 P 帧 intra 半成品（`h264_encode_p.mbt` 已有
+`H264PPlan::I16` / `pick_i16` / `pick_chroma` / `luma_dc_store` 骨架，但调用点、
+残差、语法、重建全缺，`moon check` 报 6 类错误）。本片把它收口成 **CAVLC
+P slice 的 Intra16x16 完整分支**，并做成 opt-in：`h264_encode_frames(...,
+intra_in_p=true)` 才把 I16 加入 RD 竞价；默认 `false` 让既有钉值、全量套件
+与 CABAC 链逐字节不变（与 PNS / 短窗 psy / CABAC I16 的落地惯例一致）。
+
+**实现面**：`decide_plan` 在 Skip 与四种 inter 分割之后追加 I16 候选（严格更
+优才换，平局保 inter）；`pick_i16` / `pick_chroma` 按
+`h264_check_intra_pred_mode` 筛可用模式并以预测 SAD 择优；`mc_plan` 对 I16
+改为**重放预测**（RD 干跑与最终写入各调一次 `code_mb_residuals`，必须自愈
+前一候选留在 `rec_*` 的重建）；残差走 Hadamard DC 池 + **完整残差 fdct 后
+丢弃 `levels[0]`**（§382 教训：清零 (0,0) 再 fdct 会污染每个 AC 块）；反量化
+矩阵按宏块类型分叉 intra 0/1/2、inter 3/4/5；语法写
+`mb_type = 5 + 1 + spec_mode + 4*group`（P slice 的 5..30 区间，cbp 从
+mb_type 组导出、不写 cbp codeword、`mb_qp_delta` 无条件），随后 DC
+（cat 0，nC 取 `h264_block0_nc` 镜像）、`cbp&15` 门控的 16 个 AC 块
+（scan 1..15）与共用的色度 DC/AC；`commit_plan_state` 把该 MB 标成 intra，
+让后续 MV 预测读到 `ref_cache = -1`。新增 `H264EncStats`（`stats=` 传入）
+让黑盒测试能证明某条语法分支真的被走到，新增 `recon=` 把每帧编码重建
+打包成 `yuvp()` 等价的 `Bytes` 以做重建不变式对拍。
+
+**真因：nC 镜像的跨帧种子泄漏（位流从第 18 个 MB 起失步）**。症状极具
+欺骗性：96×64 全白场景切换流 docker ffmpeg **零告警**、自家解码器也解出
+3 帧，但最后一行 6 个 MB 被当成 P_Skip（复制上一帧渐变）；编码器
+`enc.recon` 与解码器 unfiltered 只在这一行不等（逐 MB 平均差
+74/40/49/150/185/167）。写/读逐 MB zip 探针显示
+`mb_type / pred16 / chroma_mode / cbp` 全对齐，唯一差异是 DC 残差的 nC：
+写端 `nc0 = 1/13/3`、读端恒 `0`。CAVLC 解码器的 intra 路径从**清零**的
+`non_zero_count` 起，I16 且 `cbp&15 == 0` 时一个 luma 计数都不写；编码器
+却按 inter 习惯继承上一帧 I 帧的 nz 种子。nc 决定 VLC 表，跨到 `nc0=13`
+那一处码长变化 → 位流错位，后续 MB 被读成 skip run。**修法**：I16 的
+`cur_nz` 从 0 起，只在解码器同样会写的槽位回填（`cbp&15` 的 16 个 luma、
+`cbp&0x20` 的 8 个色度 AC）；inter 的种子语义原样保留。另一处次要差异是
+色度 AC 未编码时：inter 解码器 `fill_rectangle(...,0,1)` 清零，intra 解码器
+保留上一帧值，两条路径分别处理，不能共用一条分支。
+
+**方法论**：§382 的判读准则再次生效——`recon ≠ 源` 不是病（初值
+`mean_abs=27` 一度把方向误导到量化误差），`recon ≠ enc.recon` 才是；且必须
+用 **unfiltered** 解码（`h264_decode_annexb_frames(stream, true)`）与编码器
+重建对拍，否则去块滤波制造假差异。定位路径：`enc.recon` 打包 MD5 → 逐 MB
+差异分布 → W/R 逐 MB 语法 zip → `nc0` 一列见真章 → ffmpeg framemd5 收口。
+
+**验证**：`moon check --target wasm --deny-warn` 与 `moon check --target native
+libavcodec/x264` 干净；新黑盒 `h264_encode_p_intra_test.mbt` **3/3**（全幅
+场景切换 24/24 MB 选 I16、784 B vs inter-only 1987 B、重建与源零误差、
+`enc.recon == 解码器 unfiltered`、ffmpeg 钉值
+`57c00c8a…/80fe0f66…/80fe0f66…`；默认关闭的基线流逐字节等价；半幅切换的
+intra/inter 混合流）；旧 CAVLC **8/8**、CABAC **10/10** 不变；全量
+**wasm-gc 1726/1726**；docker ffmpeg 9.0.2 零告警；x264 native oracle
+**10/10**（新增 I16 流、混合流 C 解码 vs 纯 MoonBit 解码逐像素，以及短流
+形状校验）。
+
+**C binding 复核（moonbit-c-binding / make-moonbit-c-bindings）**：`ffi.mbt`
+的非基本参数全部 `#borrow` 且 C 侧不留存 MoonBit 指针；`X264EncHandle`
+仍是 external object + finalizer（失败句柄模式，避开可选返回失效坑）；
+`moon.pkg` 的 `native-stub` / `targets` / `cc-flags` / `cc-link-flags` 逐项
+核对未改。C stub 的 `x264dec_annexb` 补 ABI 防御（NULL blob 直接返回、
+输出 blob 长度不越 `INT32_MAX`、`av_parser_close` 的 NULL 保护），安全层
+`x264_decode_annexb` 在进 extern 前拒绝 <8 字节流，blob 头/长度校验保持。
+ASan 运行器与本项目结构的适配结论见本片交接文档。
+
+**未做**：CABAC P slice 的 intra 分支（ctx_base 17 / intra_slice 0，写端
+`write_cabac_mb_syntax` 对 I16 直接 return，CABAC 入口固定
+`allow_intra=false`）、transform_8x8、码率控制，以及把 I16 转成默认策略
+（当前 opt-in，按项目惯例保基线）。

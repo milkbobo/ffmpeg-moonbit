@@ -25,6 +25,7 @@
 #include "libavutil/opt.h"
 #include "libavutil/pixfmt.h"
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -411,6 +412,10 @@ static int annexb_drain(AnnexbDec *d) {
 
 MOONBIT_FFI_EXPORT
 moonbit_bytes_t x264dec_annexb(moonbit_bytes_t data) {
+  // Defensive ABI boundary: a NULL blob or an oversized packed output must
+  // never reach moonbit_make_bytes, whose length is int32_t.
+  if (!data)
+    return NULL;
   const AVCodec *dec = avcodec_find_decoder(AV_CODEC_ID_H264);
   AVCodecParserContext *parser = av_parser_init(AV_CODEC_ID_H264);
   AVCodecContext *cc = dec ? avcodec_alloc_context3(dec) : NULL;
@@ -478,7 +483,7 @@ moonbit_bytes_t x264dec_annexb(moonbit_bytes_t data) {
   }
 
   moonbit_bytes_t out = NULL;
-  if (!failed && d.n_frames > 0) {
+  if (!failed && d.n_frames > 0 && d.sink.len <= (size_t)(INT32_MAX - 16)) {
     out = moonbit_make_bytes((int32_t)(16 + d.sink.len), 0);
     if (out) {
       put_i32(out + 0, d.n_frames);
@@ -492,7 +497,8 @@ moonbit_bytes_t x264dec_annexb(moonbit_bytes_t data) {
   free(d.sink.pay);
   av_packet_free(&pkt);
   av_frame_free(&frame);
-  av_parser_close(parser);
+  if (parser)
+    av_parser_close(parser);
   avcodec_free_context(&cc);
   return out;
 }

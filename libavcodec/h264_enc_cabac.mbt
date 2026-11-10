@@ -1630,6 +1630,11 @@ fn H264PEncoder::write_cabac_mb_syntax(
   let info = ctx.infos[mb_idx]
   match plan {
     Skip => return
+    // Unreachable while `h264_encode_frames_cabac` passes
+    // `allow_intra=false`. Wiring this needs the P-slice intra mb_type
+    // table (ctx_base 17, intra_slice 0) at both ends; keep the door shut
+    // instead of silently emitting inter-shaped bins for an intra plan.
+    I16(_, _, _) => return
     Part16x16(mvx, mvy) => {
       enc.decision(states, 14, 0)
       enc.decision(states, 15, 0)
@@ -1878,7 +1883,20 @@ fn H264PEncoder::encode_p_frame_cabac(
       // P_Skip check with the prediction the decoder itself would derive.
       let (pmvx, pmvy) = h264_pred_pskip_motion(mirror, mb_idx, mb_x, mb_y)
       let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
-      let plan = if skip_sad == 0 { Skip } else { self.decide_plan(mb_x, mb_y) }
+      // CABAC P-slice intra signalling (ctx_base 17) is not wired yet, so
+      // this entry keeps the inter-only RD surface. `allow_intra=false`
+      // makes the CAVLC-priced candidates byte-identical to §382.
+      let plan = if skip_sad == 0 {
+        Skip
+      } else {
+        self.decide_plan(mb_x, mb_y, false)
+      }
+      if plan is I16(_, _, _) {
+        self.stats.i16_mbs += 1
+      }
+      if !(plan is Skip) {
+        self.stats.coded_mbs += 1
+      }
       let skip_ctx = h264_cabacw_skip_ctx(mirror, mb_idx)
       if plan is Skip {
         enc.decision(states, skip_ctx, 1)
@@ -1897,7 +1915,7 @@ fn H264PEncoder::encode_p_frame_cabac(
         enc.decision(states, skip_ctx, 0)
         let coded = self.code_mb_residuals(mb_x, mb_y, plan, qp)
         self.write_cabac_mb_syntax(mirror, enc, states, mb_x, mb_y, plan, coded)
-        self.commit_plan_state(mb_idx)
+        self.commit_plan_state(mb_idx, plan)
         // The CABAC writer's nz mirror is the syntax mirror; keep the
         // encoder-side mirror identical for the next frame's seeds.
         for i = 0; i < 48; i = i + 1 {
@@ -1925,6 +1943,7 @@ pub fn h264_encode_frames_cabac(
   height~ : Int32,
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
+  stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
@@ -2009,6 +2028,7 @@ pub fn h264_encode_frames_cabac(
     let (y, u, v) = frames[f]
     let enc : H264PEncoder = {
       p,
+      stats,
       pps,
       chroma_qp,
       src_y: load_plane(y, width, height, ystride, pheight),
