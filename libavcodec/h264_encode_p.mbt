@@ -84,6 +84,36 @@ priv struct H264PEncoder {
 }
 
 ///|
+/// Pack encoder-side reconstruction planes in `H264Frame::yuvp()` order so
+/// blackbox tests can diff them against the decoder's unfiltered output.
+/// Shared by the CAVLC and CABAC sequence entries.
+fn h264_enc_pack_recon(
+  y : Array[Int32],
+  u : Array[Int32],
+  v : Array[Int32],
+  w : Int32,
+  h : Int32,
+  ys : Int32,
+  cs : Int32,
+) -> Bytes {
+  let out : Array[Byte] = []
+  for row = 0; row < h; row = row + 1 {
+    for col = 0; col < w; col = col + 1 {
+      out.push(y[row * ys + col].to_byte())
+    }
+  }
+  for plane = 0; plane < 2; plane = plane + 1 {
+    let src = if plane == 0 { u } else { v }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        out.push(src[row * cs + col].to_byte())
+      }
+    }
+  }
+  Bytes::from_array(out[:])
+}
+
+///|
 /// Encode a frame sequence: the first frame as IDR I (the intra encoder),
 /// every following frame as a P picture referencing the previous frame's
 /// reconstruction. Returns the Annex B stream.
@@ -147,31 +177,6 @@ pub fn h264_encode_frames(
     None => return Err("h264 enc: no PPS after round-trip")
   }
   let chroma_qp = h264_get_chroma_qp(pps, 0, qp)
-  fn pack_recon(
-    y : Array[Int32],
-    u : Array[Int32],
-    v : Array[Int32],
-    w : Int32,
-    h : Int32,
-    ys : Int32,
-    cs : Int32,
-  ) -> Bytes {
-    let out : Array[Byte] = []
-    for row = 0; row < h; row = row + 1 {
-      for col = 0; col < w; col = col + 1 {
-        out.push(y[row * ys + col].to_byte())
-      }
-    }
-    for plane = 0; plane < 2; plane = plane + 1 {
-      let src = if plane == 0 { u } else { v }
-      for row = 0; row < h / 2; row = row + 1 {
-        for col = 0; col < w / 2; col = col + 1 {
-          out.push(src[row * cs + col].to_byte())
-        }
-      }
-    }
-    Bytes::from_array(out[:])
-  }
   fn load_plane(
     src : Bytes,
     w : Int32,
@@ -252,7 +257,7 @@ pub fn h264_encode_frames(
     }
     stream.push(nal)
     recon.push(
-      pack_recon(
+      h264_enc_pack_recon(
         enc.rec_y,
         enc.rec_u,
         enc.rec_v,

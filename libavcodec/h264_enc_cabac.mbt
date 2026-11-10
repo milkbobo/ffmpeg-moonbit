@@ -1630,11 +1630,145 @@ fn H264PEncoder::write_cabac_mb_syntax(
   let info = ctx.infos[mb_idx]
   match plan {
     Skip => return
-    // Unreachable while `h264_encode_frames_cabac` passes
-    // `allow_intra=false`. Wiring this needs the P-slice intra mb_type
-    // table (ctx_base 17, intra_slice 0) at both ends; keep the door shut
-    // instead of silently emitting inter-shaped bins for an intra plan.
-    I16(_, _, _) => return
+    I16(sig, _, chroma_mode) => {
+      // P-slice intra branch of `decode_cabac_mb_type`: ctx 14 = 1 selects
+      // intra, then `decode_cabac_intra_mb_type(ctx_base 17, intra_slice 0)`.
+      // Unlike the I slice there is NO neighbour-count offset on the first
+      // bin and NO `state += 2` advance: b0@18, b1@19, b2@19 (read only
+      // when b1 = 1), b3@20, b4@20. `terminate(0)` rejects I_PCM (25).
+      enc.decision(states, 14, 1)
+      enc.decision(states, 17, 1)
+      enc.terminate(0)
+      let spec_mode = match sig {
+        0 => 2 // DC
+        1 => 1 // H
+        2 => 0 // V
+        _ => 3 // Plane
+      }
+      let group = if coded.luma_cbp != 0 {
+        3 + coded.chroma_c_cbp
+      } else {
+        coded.chroma_c_cbp
+      }
+      let v = group * 4 + spec_mode // intra mb_type - 1
+      let b0 = if v >= 12 { 1 } else { 0 }
+      let rem = v / 4 - 3 * b0
+      let b1 = if rem >= 1 { 1 } else { 0 }
+      let b2 = if rem == 2 { 1 } else { 0 }
+      let b3 = (spec_mode >> 1) & 1
+      let b4 = spec_mode & 1
+      enc.decision(states, 18, b0)
+      enc.decision(states, 19, b1)
+      if b1 == 1 {
+        enc.decision(states, 19, b2)
+      }
+      enc.decision(states, 20, b3)
+      enc.decision(states, 20, b4)
+      ctx.cur_mb_is_intra = true
+      // Chroma prediction mode tree (identical to the I-slice writer).
+      let mut cc = 0
+      if h264_has_left(ctx, mb_idx) && ctx.infos[mb_idx - 1].chroma_mode != 0 {
+        cc = cc + 1
+      }
+      if h264_has_top(ctx, mb_idx) &&
+        ctx.infos[h264_top_index(ctx, mb_idx)].chroma_mode != 0 {
+        cc = cc + 1
+      }
+      if chroma_mode == 0 {
+        enc.decision(states, 64 + cc, 0)
+      } else {
+        enc.decision(states, 64 + cc, 1)
+        if chroma_mode == 1 {
+          enc.decision(states, 67, 0)
+        } else {
+          enc.decision(states, 67, 1)
+          enc.decision(states, 67, if chroma_mode == 2 { 0 } else { 1 })
+        }
+      }
+      // I16x16 derives cbp from the mb_type group (no cbp bins); the dqp
+      // bin is unconditional on the read side (`cbp != 0 || is_i16x16`).
+      let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
+      info.cbp_all = cbp
+      enc.decision(states, 60, 0)
+      let dc_view = scan_view_at(
+        coded.luma_dc_store,
+        0,
+        h264_zigzag_scan_t,
+        0,
+        16,
+      )
+      h264_cabacw_residual(
+        enc, states, ctx, mb_idx, mb_x, mb_y, 0, 48, dc_view, 16, true,
+      )
+      if coded.luma_cbp != 0 {
+        for i = 0; i < 16; i = i + 1 {
+          let view = scan_view_at(
+            coded.luma_store,
+            i,
+            h264_zigzag_scan_t,
+            1,
+            15,
+          )
+          h264_cabacw_residual(
+            enc, states, ctx, mb_idx, mb_x, mb_y, 1, i, view, 15, false,
+          )
+        }
+      }
+      if coded.chroma_c_cbp != 0 {
+        for c = 0; c < 2; c = c + 1 {
+          let dc4 : Array[Int32] = [
+            coded.chroma_dc_store[c][0],
+            coded.chroma_dc_store[c][1],
+            coded.chroma_dc_store[c][2],
+            coded.chroma_dc_store[c][3],
+          ]
+          h264_cabacw_residual(
+            enc,
+            states,
+            ctx,
+            mb_idx,
+            mb_x,
+            mb_y,
+            3,
+            49 + c,
+            dc4,
+            4,
+            true,
+          )
+        }
+      }
+      if coded.chroma_c_cbp == 2 {
+        for c = 0; c < 2; c = c + 1 {
+          for i = 0; i < 4; i = i + 1 {
+            let view = scan_view_at(
+              coded.chroma_ac_store[c],
+              i,
+              h264_zigzag_scan_t,
+              1,
+              15,
+            )
+            h264_cabacw_residual(
+              enc,
+              states,
+              ctx,
+              mb_idx,
+              mb_x,
+              mb_y,
+              4,
+              16 + 16 * c + i,
+              view,
+              15,
+              false,
+            )
+          }
+        }
+      }
+      info.mb_type_bits = h264_mb_type_intra16x16
+      info.intra4x4 = false
+      info.chroma_mode = chroma_mode
+      info.qp = self.p.qp
+      return
+    }
     Part16x16(mvx, mvy) => {
       enc.decision(states, 14, 0)
       enc.decision(states, 15, 0)
@@ -1827,6 +1961,7 @@ fn H264PEncoder::write_cabac_mb_syntax(
 fn H264PEncoder::encode_p_frame_cabac(
   self : H264PEncoder,
   frame_num : Int32,
+  intra_in_p : Bool,
 ) -> Result[Bytes, String] {
   // Fresh picture for the encoder mirror (same reset as `encode_p_frame`).
   for k = 0; k < self.states.length(); k = k + 1 {
@@ -1883,13 +2018,12 @@ fn H264PEncoder::encode_p_frame_cabac(
       // P_Skip check with the prediction the decoder itself would derive.
       let (pmvx, pmvy) = h264_pred_pskip_motion(mirror, mb_idx, mb_x, mb_y)
       let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
-      // CABAC P-slice intra signalling (ctx_base 17) is not wired yet, so
-      // this entry keeps the inter-only RD surface. `allow_intra=false`
-      // makes the CAVLC-priced candidates byte-identical to §382.
+      // `intra_in_p` is opt-in: with it off the RD surface stays the
+      // inter-only one from §382, so every pinned CABAC stream is unchanged.
       let plan = if skip_sad == 0 {
         Skip
       } else {
-        self.decide_plan(mb_x, mb_y, false)
+        self.decide_plan(mb_x, mb_y, intra_in_p)
       }
       if plan is I16(_, _, _) {
         self.stats.i16_mbs += 1
@@ -1943,6 +2077,8 @@ pub fn h264_encode_frames_cabac(
   height~ : Int32,
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
+  intra_in_p~ : Bool = false,
+  recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
   if frames.length() == 0 {
@@ -2051,11 +2187,22 @@ pub fn h264_encode_frames_cabac(
       cur_mv: Array::make(32, 0),
       cur_ref: Array::make(16, -2),
     }
-    let nal = match enc.encode_p_frame_cabac(f) {
+    let nal = match enc.encode_p_frame_cabac(f, intra_in_p) {
       Ok(n) => n
       Err(e) => return Err(e)
     }
     stream.push(nal)
+    recon.push(
+      h264_enc_pack_recon(
+        enc.rec_y,
+        enc.rec_u,
+        enc.rec_v,
+        width,
+        height,
+        ystride,
+        cstride,
+      ),
+    )
     let next_y = Array::make(ystride * pheight, 0)
     let next_u = Array::make(cstride * (pheight / 2), 0)
     let next_v = Array::make(cstride * (pheight / 2), 0)

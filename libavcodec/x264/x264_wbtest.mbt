@@ -545,3 +545,42 @@ test "x264 oracle: short streams are rejected by the safe wrapper" {
     Err(_) => ()
   }
 }
+
+///|
+/// §384: the CABAC P-slice intra16x16 branch (ctx_base 17, intra_slice 0)
+/// must satisfy the same dual-decode standard - FFmpeg's C decoder and the
+/// pure MoonBit decoder agree on every pixel of every frame.
+test "x264 oracle: CABAC P-slice Intra16x16 stream decodes identically in C" {
+  let frames = x264_cut_fixture(0)
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      intra_in_p=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+///|
+/// The mixed CABAC slice puts intra and inter macroblocks behind the same
+/// arithmetic engine, so the C oracle also covers the context transition.
+test "x264 oracle: CABAC mixed intra/inter P slice decodes identically in C" {
+  let frames = x264_cut_fixture(48)
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      intra_in_p=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}

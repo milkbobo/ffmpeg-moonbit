@@ -11905,4 +11905,51 @@ ASan 运行器与本项目结构的适配结论见本片交接文档。
 **未做**：CABAC P slice 的 intra 分支（ctx_base 17 / intra_slice 0，写端
 `write_cabac_mb_syntax` 对 I16 直接 return，CABAC 入口固定
 `allow_intra=false`）、transform_8x8、码率控制，以及把 I16 转成默认策略
-（当前 opt-in，按项目惯例保基线）。
+（当前 opt-in，按项目惯例保基线）。其中第一项已由 §384 完成。
+
+## §384 H.264 编码器 CABAC P 切片 Intra16x16——ctx_base 17 写端收口（2026-11-10）
+
+§383 留下的第一项：**CABAC P slice 的 intra 分支**。先查清两端边界，
+结论是**解码端早已完整支持**：`h264_cabac_p_mb_type` 在 ctx14=1 时返回
+`Err(intra_mb_type)`，`h264_decode_mb_cabac_p` 据此设
+`cur_mb_is_intra = true` 并转入 `h264_decode_mb_cabac_intra`（mb_type 25
+走 I_PCM）。缺的只有写端——`write_cabac_mb_syntax` 对 `I16` 之前是
+`return`，`h264_encode_frames_cabac` 固定 `allow_intra=false`。
+
+**写端 mb_type 是两套完全不同的数字**（§382 交接预告过）。I slice：
+首 bin `3+c`（c = 左/上 I16/PCM 邻居数），`state += 2` 之后 b0@6、
+b1@7、b2@8（仅 b1=1）、b3@9、b4@10。P slice 的 intra 分支
+（`decode_cabac_intra_mb_type(..., 17, 0)`）：ctx14=1 选 intra，首 bin
+固定 @17 **不带 c**、**没有 `state += 2`**，`terminate(0)` 拒 I_PCM，
+然后 b0@18、b1@19、b2@19（仅 b1=1，与 b1 同上下文）、b3@20、b4@20。
+`v = group*4 + spec_mode = mb_type - 1` 的分解式与 I slice 相同
+（`v = 12*b0 + 4*(b1+b2) + 2*b3 + b4`），所以只有上下文索引不同。
+cbp 由 mb_type 组导出（不写 cbp bins）、dqp 无条件（读端
+`cbp != 0 || is_i16x16`）、DC cat0(blk48) + `cbp&15` 门控的 16 个 AC
+cat1 + 色度 DC cat3 / AC cat4 残差，整条复用 §382 已钉死的 I-slice I16
+写链；镜像同步设 `cur_mb_is_intra` / `mb_type_bits` /
+`chroma_mode` / `cbp_all` / `qp`，因为后续 MB 的 skip/cbf 上下文会读
+邻居类型。
+
+**一次对拍即全绿**（与 §382 两次真因形成对照）：I-slice I16 链在 §382
+已把残差语法、cbp group、DC/AC 扫描钉死；§383 的 nC 清零修复对 CABAC
+同样生效（CABAC 解码器每 MB 清零 `nz`）；共享的 `code_mb_residuals`
+已产出 `luma_dc_store`。本片真正的新代码只有 mb_type bins 与镜像状态。
+
+**接线**：`h264_encode_frames_cabac` 增 opt-in `intra_in_p`（默认 false，
+§382 全部钉值逐字节不变）与 `recon=`；`h264_enc_pack_recon` 从
+`h264_encode_frames` 的局部函数提为包级，两个序列入口共用。
+
+**验证**：`moon check --target wasm --deny-warn` 与 `moon check --target
+native libavcodec/x264` 干净；`h264_encode_p_intra_test.mbt` **6/6**
+（§383 的 3 项 CAVLC + 本片 3 项 CABAC：全幅场景切换 24/24 MB 选 I16、
+515 B < CAVLC 784 B、重建与源零误差、`enc.recon` == unfiltered 解码器、
+ffmpeg 钉值 `50e3b8d5…/80fe0f66…/80fe0f66…`；默认关闭的基线逐字节
+等价；半幅 intra/inter 混合流）；旧 CAVLC **8/8**、CABAC **10/10** 不变；
+全量 **wasm-gc 1729/1729**；docker ffmpeg 9.0.2 零告警；x264 native
+oracle **12/12**（§383 的 10 项 + CABAC P-intra 流与混合流 C 解码 vs
+纯 MoonBit 解码逐像素，继续走 moonbit-c-binding /
+make-moonbit-c-bindings 的 FFI 验证门）。
+
+**未做（更新）**：transform_8x8 的 I16/I8x8 组合、码率控制、把 I16
+转成默认策略（两条链目前都 opt-in，转正需重钉全部仲裁值）。
