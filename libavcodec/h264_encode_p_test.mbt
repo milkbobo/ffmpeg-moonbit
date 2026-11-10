@@ -197,6 +197,16 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
     Ok(s) => s
     Err(e) => fail(e)
   }
+  let mut d3 = ""
+  for i3 = 0; i3 < stream.length(); i3 = i3 + 1 {
+    d3 = d3 + (stream[i3].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARB3:\{d3}")
+  let mut d4 = ""
+  for i4 = 0; i4 < stream.length(); i4 = i4 + 1 {
+    d4 = d4 + (stream[i4].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARB4:\{d4}")
   let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)

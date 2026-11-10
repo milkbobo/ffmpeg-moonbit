@@ -163,6 +163,21 @@ pub fn h264_encode_frames(
   for k = 0; k < mb_width * mb_height; k = k + 1 {
     states.push(new_h264_p_mb_state())
   }
+  // Seed the persistent nz mirror from the I frame: uncoded blocks' nC
+  // reads see the previous frame's counts (the decoder's per-MB nz is
+  // never reset between pictures).
+  for k = 0; k < mb_width * mb_height; k = k + 1 {
+    for i = 0; i < 48; i = i + 1 {
+      states[k].nz[i] = first.mb_nz[k][i]
+    }
+  }
+  if true {
+    let mut nzd = ""
+    for i = 0; i < 16; i = i + 1 {
+      nzd = nzd + states[0].nz[i].to_string() + ","
+    }
+    println("SEEDED nz[MB0]: \{nzd}")
+  }
   for f = 1; f < frames.length(); f = f + 1 {
     let (y, u, v) = frames[f]
     let enc : H264PEncoder = {
@@ -229,7 +244,10 @@ fn H264PEncoder::encode_p_frame(
   self : H264PEncoder,
   frame_num : Int,
 ) -> Result[Bytes, String] {
-  // Reset the per-frame mirror (fresh picture).
+  // Fresh picture: the availability markers reset (every frame is a new
+  // slice, so previous-frame macroblocks are unavailable to `mv_fetch`)
+  // but the nz mirror persists - uncoded blocks' nC reads see the previous
+  // frame's counts.
   for k = 0; k < self.states.length(); k = k + 1 {
     let st = self.states[k]
     for i = 0; i < 32; i = i + 1 {
@@ -239,9 +257,7 @@ fn H264PEncoder::encode_p_frame(
       st.ref_idx[i] = -2
     }
     st.intra = false
-    for i = 0; i < 48; i = i + 1 {
-      st.nz[i] = 0
-    }
+    st.has_data = false
   }
   let r = H264Rbsp::new()
   r.put_ue(0) // first_mb_in_slice
@@ -280,6 +296,23 @@ fn H264PEncoder::encode_p_frame(
       r.put_ue(skip_run)
       skip_run = 0
       let plan = self.decide_plan(mb_x, mb_y)
+      if mb_y == 0 {
+        let tag = match plan {
+          Skip => "skip"
+          Part16x16(_, _) => "16x16"
+          Part16x8(_, _, _, _) => "16x8"
+          Part8x16(_, _, _, _) => "8x16"
+          Part8x8(_, _, _, _, _) => "8x8"
+        }
+        println("PLAN(\{mb_x}): \{tag}")
+      }
+      // Rate-distortion may pick Skip even when the predictor SAD is
+      // nonzero: the zero-residual macroblock is cheaper than coding it.
+      if plan is Skip {
+        skip_run = skip_run + 1
+        self.commit_skip(mb_idx, pmvx, pmvy)
+        continue
+      }
       match self.write_coded_mb(mb_x, mb_y, plan, r, qp) {
         Ok(_) => ()
         Err(e) => return Err(e)
@@ -492,7 +525,9 @@ fn H264PEncoder::me_fixed(
 /// Mode decision: skip check, then 16x16 / 16x8 / 8x16 / 8x8 with the
 /// per-8x8 sub-mode picked by SAD (8x8 preferred on ties). Later modes
 /// must be STRICTLY better, so the coarser partition wins ties - the
-/// deterministic, bit-cheap choice.
+/// deterministic, bit-cheap choice. (The RD evaluation through
+/// `eval_plan` is wired but disabled: activating it desyncs in a way
+/// that needs clean single-test instrumentation - see the handoff.)
 fn H264PEncoder::decide_plan(
   self : H264PEncoder,
   mb_x : Int,
@@ -760,9 +795,9 @@ fn H264PEncoder::commit_skip(
   }
   st.intra = false
   st.has_data = true
-  for i = 0; i < 48; i = i + 1 {
-    st.nz[i] = 0
-  }
+  // nz is NOT written for skipped macroblocks: the decoder's
+  // `non_zero_count[mb_xy]` keeps the previous frame's counts (no
+  // writeback for cbp == 0), and later nC reads see exactly that.
   // Reconstruction: MC straight into the reconstruction planes.
   let mb_x = mb_idx % self.mb_width
   let mb_y = mb_idx / self.mb_width
@@ -899,41 +934,36 @@ fn H264PEncoder::pred_8x16(
 }
 
 ///|
-/// Write one coded P macroblock from its plan: MC every partition into
-/// the reconstruction, code the residual, then the syntax in the
-/// decoder's parse order (mvd predictors read the progressively filled
-/// mirror state, exactly like `write_back_part` timing).
-fn H264PEncoder::write_coded_mb(
+/// The residual-coding results of one P macroblock: everything the syntax
+/// writer needs, shared by the final write and the RD evaluation.
+priv struct H264PMbCode {
+  luma_cbp : Int
+  chroma_c_cbp : Int
+  luma_store : Array[Int]
+  chroma_dc_store : Array[Array[Int]]
+  chroma_ac_store : Array[Array[Int]]
+}
+
+///|
+/// MC every partition of `plan` into the reconstruction planes.
+fn H264PEncoder::mc_plan(
   self : H264PEncoder,
   mb_x : Int,
   mb_y : Int,
   plan : H264PPlan,
-  r : H264Rbsp,
-  qp : Int,
-) -> Result[Unit, String] {
-  let mb_idx = mb_y * self.mb_width + mb_x
-  for i = 0; i < 48; i = i + 1 {
-    self.cur_nz[i] = 0
-  }
-  for i = 0; i < 32; i = i + 1 {
-    self.cur_mv[i] = 0
-  }
-  for i = 0; i < 16; i = i + 1 {
-    self.cur_ref[i] = -2
-  }
-  // Partitions (ox, oy, w, h, mvx, mvy) in raster order for the MC phase.
-  let parts : Array[(Int, Int, Int, Int, Int, Int)] = match plan {
-    Part16x16(x, y) => [(0, 0, 16, 16, x, y)]
-    Part16x8(tx, ty, bx, by) => [
-      (0, 0, 16, 8, tx, ty),
-      (0, 8, 16, 8, bx, by),
-    ]
-    Part8x16(lx, ly, rx, ry) => [
-      (0, 0, 8, 16, lx, ly),
-      (8, 0, 8, 16, rx, ry),
-    ]
+) -> Unit {
+  match plan {
+    Skip => ()
+    Part16x16(x, y) => self.mc_into_rec(mb_x, mb_y, x, y, 0, 0, 16, 16)
+    Part16x8(tx, ty, bx, by) => {
+      self.mc_into_rec(mb_x, mb_y, tx, ty, 0, 0, 16, 8)
+      self.mc_into_rec(mb_x, mb_y, bx, by, 0, 8, 16, 8)
+    }
+    Part8x16(lx, ly, rx, ry) => {
+      self.mc_into_rec(mb_x, mb_y, lx, ly, 0, 0, 8, 16)
+      self.mc_into_rec(mb_x, mb_y, rx, ry, 8, 0, 8, 16)
+    }
     Part8x8(_, _, _, _, mvs) => {
-      let out : Array[(Int, Int, Int, Int, Int, Int)] = []
       let mut mi = 0
       for k = 0; k < 4; k = k + 1 {
         let x8 = k % 2
@@ -941,25 +971,40 @@ fn H264PEncoder::write_coded_mb(
         let parts2 = h264_sub_partitions(subs_of_plan(plan, k), x8, y8)
         for part in parts2 {
           let (x, y, w, h) = part
-          out.push((x, y, w, h, mvs[mi], mvs[mi + 1]))
+          self.mc_into_rec(mb_x, mb_y, mvs[mi], mvs[mi + 1], x, y, w, h)
           mi = mi + 2
         }
       }
-      out
     }
-    Skip => []
   }
-  // ---- MC + residual + reconstruction (before syntax: nz for nC) ----
+}
+
+///|
+/// Residual coding of one P macroblock for the given plan: MC the
+/// partitions, transform+quantise the residual, fill the dequantised
+/// coefficient buffer and run the reconstruction. Fills `cur_nz` (the nC
+/// mirror) and returns the coded stores.
+fn H264PEncoder::code_mb_residuals(
+  self : H264PEncoder,
+  mb_x : Int,
+  mb_y : Int,
+  plan : H264PPlan,
+  qp : Int,
+) -> H264PMbCode {
+  // The nC mirror persists per macroblock: blocks this frame does not code
+  // keep the previous frame's counts (the decoder's `fill_decode_caches`
+  // loads them from `non_zero_count[mb_xy]`), so seed from that state.
+  let mb_idx0 = mb_y * self.mb_width + mb_x
+  for i = 0; i < 48; i = i + 1 {
+    self.cur_nz[i] = self.states[mb_idx0].nz[i]
+  }
   let mb : Array[Int] = Array::make(768, 0)
   let qmul_y = h264_build_dequant4(self.pps, 3, qp)
   let mut luma_cbp = 0
   let luma_store : Array[Int] = Array::make(256, 0)
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   let cbase = mb_y * 8 * self.cstride + mb_x * 8
-  for part in parts {
-    let (ox, oy, w, h, mvx, mvy) = part
-    self.mc_into_rec(mb_x, mb_y, mvx, mvy, ox, oy, w, h)
-  }
+  self.mc_plan(mb_x, mb_y, plan)
   for i = 0; i < 16; i = i + 1 {
     let gx = h264_luma_block_x[i]
     let gy = h264_luma_block_y[i]
@@ -1100,9 +1145,32 @@ fn H264PEncoder::write_coded_mb(
       }
     }
   }
-  // ---- syntax (decoder's parse order) ----
+  {
+    luma_cbp,
+    chroma_c_cbp,
+    luma_store,
+    chroma_dc_store,
+    chroma_ac_store,
+  }
+}
+
+///|
+/// Emit the syntax of one coded P macroblock. `mv_state` says whether the
+/// mvd predictors may read the progressive mirror (`true` for the final
+/// write; the RD evaluation passes `false` and zero MVs because the
+/// mirror is not filled yet - mvd sizes differ by a couple of bits only,
+/// and the search keeps the zero-biased MVs anyway).
+fn H264PEncoder::write_mb_syntax(
+  self : H264PEncoder,
+  mb_x : Int,
+  mb_y : Int,
+  plan : H264PPlan,
+  coded : H264PMbCode,
+  r : H264Rbsp,
+) -> Unit {
+  let mb_idx = mb_y * self.mb_width + mb_x
   match plan {
-    Skip => return Ok(())
+    Skip => return
     Part16x16(mvx, mvy) => {
       r.put_ue(0) // mb_type: P_L0_16x16
       let (pmvx, pmvy) = self.pred_motion(mb_idx, mb_x, mb_y, 0, 0, 4)
@@ -1112,7 +1180,6 @@ fn H264PEncoder::write_coded_mb(
     }
     Part16x8(tx, ty, bx2, by2) => {
       r.put_ue(1) // mb_type: P_L0_16x8
-      // ref_idx_l0 not coded (one reference); mvds top then bottom.
       let (p0x, p0y) = self.pred_16x8(mb_idx, mb_x, mb_y, 0)
       r.put_se(tx - p0x)
       r.put_se(ty - p0y)
@@ -1139,8 +1206,6 @@ fn H264PEncoder::write_coded_mb(
       r.put_ue(s1)
       r.put_ue(s2)
       r.put_ue(s3)
-      // ref_idx_l0 not coded (one reference); the mvd pairs follow in
-      // `h264_sub_partitions` order per 8x8 block.
       let subs = [s0, s1, s2, s3]
       let mut mi = 0
       for k = 0; k < 4; k = k + 1 {
@@ -1160,44 +1225,51 @@ fn H264PEncoder::write_coded_mb(
       }
     }
   }
-  let cbp = luma_cbp | (chroma_c_cbp << 4)
+  let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
   r.put_ue(h264_enc_inter_cbp_golomb(cbp))
   if cbp != 0 {
     r.put_se(0) // mb_qp_delta
   }
   for i8 = 0; i8 < 4; i8 = i8 + 1 {
-    if (luma_cbp & (1 << i8)) != 0 {
+    if (coded.luma_cbp & (1 << i8)) != 0 {
       for i4 = 0; i4 < 4; i4 = i4 + 1 {
         let i = i8 * 4 + i4
         let gx = h264_luma_block_x[i]
         let gy = h264_luma_block_y[i]
-        let view = scan_view_at(luma_store, i, h264_zigzag_scan_t, 0, 16)
+        let view = scan_view_at(coded.luma_store, i, h264_zigzag_scan_t, 0, 16)
         let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
         ignore(h264_enc_write_residual(r, view, 16, nc))
       }
     }
   }
-  if chroma_c_cbp != 0 {
+  if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
       let dc4 : Array[Int] = [
-        chroma_dc_store[c][0],
-        chroma_dc_store[c][1],
-        chroma_dc_store[c][2],
-        chroma_dc_store[c][3],
+        coded.chroma_dc_store[c][0],
+        coded.chroma_dc_store[c][1],
+        coded.chroma_dc_store[c][2],
+        coded.chroma_dc_store[c][3],
       ]
       ignore(h264_enc_write_residual(r, dc4, 4, 0))
     }
   }
-  if chroma_c_cbp == 2 {
+  if coded.chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
       for i = 0; i < 4; i = i + 1 {
-        let view = scan_view_at(chroma_ac_store[c], i, h264_zigzag_scan_t, 1, 15)
+        let view = scan_view_at(coded.chroma_ac_store[c], i, h264_zigzag_scan_t, 1, 15)
         let nc = self.nc_chroma(mb_idx, mb_x, mb_y, c, i)
         ignore(h264_enc_write_residual(r, view, 15, nc))
       }
     }
   }
-  // Commit the mirror state.
+}
+
+///|
+/// Commit the mirror state after writing the winning plan.
+fn H264PEncoder::commit_plan_state(
+  self : H264PEncoder,
+  mb_idx : Int,
+) -> Unit {
   let st = self.states[mb_idx]
   for i = 0; i < 16; i = i + 1 {
     st.mv[2 * i] = self.cur_mv[2 * i]
@@ -1209,6 +1281,28 @@ fn H264PEncoder::write_coded_mb(
   for i = 0; i < 48; i = i + 1 {
     st.nz[i] = self.cur_nz[i]
   }
+}
+
+///|
+/// Write one coded P macroblock: residual coding + syntax + state commit.
+fn H264PEncoder::write_coded_mb(
+  self : H264PEncoder,
+  mb_x : Int,
+  mb_y : Int,
+  plan : H264PPlan,
+  r : H264Rbsp,
+  qp : Int,
+) -> Result[Unit, String] {
+  for i = 0; i < 32; i = i + 1 {
+    self.cur_mv[i] = 0
+  }
+  for i = 0; i < 16; i = i + 1 {
+    self.cur_ref[i] = -2
+  }
+  let coded = self.code_mb_residuals(mb_x, mb_y, plan, qp)
+  self.write_mb_syntax(mb_x, mb_y, plan, coded, r)
+  let mb_idx = mb_y * self.mb_width + mb_x
+  self.commit_plan_state(mb_idx)
   Ok(())
 }
 

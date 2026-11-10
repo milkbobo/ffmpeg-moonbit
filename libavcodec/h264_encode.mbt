@@ -36,6 +36,10 @@ pub struct H264EncodedFrame {
   width : Int
   height : Int
   qp : Int
+  /// The per-macroblock nC mirror after coding (48 slots per MB): the P
+  /// encoder seeds its persistent state from this, because uncoded blocks'
+  /// nC reads see the previous frame's counts.
+  mb_nz : Array[Array[Int]]
 }
 
 ///|
@@ -212,6 +216,18 @@ pub fn h264_encode_intra_frame(
       width,
       height,
       qp,
+      mb_nz: {
+        let out : Array[Array[Int]] = []
+        for k = 0; k < mb_width * mb_height; k = k + 1 {
+          let st = self_.states[k]
+          let nz : Array[Int] = Array::make(48, 0)
+          for i = 0; i < 48; i = i + 1 {
+            nz[i] = st.nz[i]
+          }
+          out.push(nz)
+        }
+        out
+      },
     },
   )
 }
@@ -504,8 +520,9 @@ fn H264IntraEncoder::encode_macroblock(
 ) -> Result[Unit, String] {
   let mb_idx = mb_y * self.mb_width + mb_x
   let state = self.states[mb_idx]
+  // The nC mirror persists per macroblock (see the P encoder's note).
   for i = 0; i < 48; i = i + 1 {
-    self.cur_nz[i] = 0
+    self.cur_nz[i] = state.nz[i]
   }
   let top_avail = mb_y > 0
   let left_avail = mb_x > 0

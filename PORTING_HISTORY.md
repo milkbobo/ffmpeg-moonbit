@@ -11660,3 +11660,25 @@ SAD 助手泛化 (w~, h~) 且双平面钳位（边缘分区与 ±16 窗口读出
 MC SAD 按分区尺寸取样（mcbuf 恒 16 行步长）。外部仲裁重闭环：I+P 四帧
 framemd5 `e454d8…/529a25…/69edb7…/98ebe3…` 与 docker ffmpeg 逐帧一致
 （MD5 钉死更新）。wasm **1727/1727**、`--deny-warn` 干净。
+
+
+## §379 H.264 编码器 nz 持久化语义对齐 + 率失真基础设施（激活暂缓）（2026-11-10）
+
+为激活率失真（rate-distortion）选模做了两相重构（`code_mb_residuals`/
+`write_mb_syntax` + `eval_plan` 的 SSD + λ·真实 CAVLC 位数代价，
+λ=0.85·2^((qp-12)/6)）——激活即失步（cbp/mb_type/dquant out of range）。
+排查定位出**解码器 nz 的持久化语义**：`non_zero_count[mb_xy]` 跨帧持久、
+逐 MB 回写（FFmpeg `fill_decode_caches`），未编码块（cbp 位清零或 skip）
+的 nz 保留上一帧计数，邻块 nC 读到的正是它。三个修复：①编码器 `cur_nz`
+从 `states[mb_idx].nz` 播种而非清零（P 与 intra 两侧）；②I 帧导出
+`mb_nz` 并播种 P 编码器持久状态；③`commit_skip` 不清零 nz（skip 无
+回写）。
+
+率失真激活仍有残余失步（多测试日志混杂，插桩被污染），决策器回退 SAD
+链（基础设施与复激活指南在交接文档）。**仲裁钉值不变**（SAD 流全块编码
+未触发该语义）。wasm **1727/1727**、`--deny-warn` 干净。
+
+排查教训：①dbg 旗标武装必须包住 encode+decode 全程且每测试独立（多测
+试日志互相混杂，mb 重启计数会把后续测试误判为额外帧）；②手工位流解码
+必须先去防竞争（00 00 03）再解；③python 的 ue 解码要加 2^z-1（少加会
+把 slice_type=5 读成 2，白追一小时）。
