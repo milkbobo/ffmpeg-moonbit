@@ -251,7 +251,7 @@ test "h264 cabac enc: moving scene I+P round trip" {
       }
     }
     let mean = sum / (96 * 64)
-    if mean > 24 {
+    if mean > 3 {
       fail("frame \{f} luma mean abs diff \{mean} too high")
     }
   }
@@ -347,10 +347,10 @@ test "h264 cabac enc: QP ladder" {
 ///|
 /// Rate-distortion operating point with CABAC entropy coding (96x64, six
 /// frames, QP 24), measured like the CAVLC slice's gate: luma PSNR of the
-/// unfiltered reconstruction against the source over the five P frames.
-/// CABAC re-prices only the syntax layer, so the PSNR floor stays the CAVLC
-/// gate's 26.5 dB while the byte ceiling tightens well below the CAVLC
-/// stream's 2940 bytes.
+/// unfiltered reconstruction against the source over the five P frames -
+/// **44.24 dB at 1725 bytes** after the §387 transform/quantiser correction
+/// (the 26.5 dB floor this replaced was calibrated to the broken 4x-coarse
+/// Hadamard chain; see the CAVLC gate's history note).
 test "h264 cabac enc: RD operating point" {
   let frames = h264cab_fixture(96, 64, 6)
   let stream = match
@@ -378,10 +378,10 @@ test "h264 cabac enc: RD operating point" {
   }
   let mse = se_sum / (5 * 96 * 64).to_double()
   let psnr = 10.0 * @math.log10(255.0 * 255.0 / mse)
-  if psnr < 26.5 {
-    fail("cabac RD luma PSNR \{psnr} dB below the 26.5 dB floor")
+  if psnr < 42.5 {
+    fail("cabac RD luma PSNR \{psnr} dB below the 42.5 dB floor")
   }
-  if stream.length() > 3200 {
+  if stream.length() > 1900 {
     fail("cabac RD stream \{stream.length()} bytes above the 3200 byte ceiling")
   }
 }
@@ -400,6 +400,11 @@ test "h264 cabac enc: ffmpeg-arbitrated QP22 I16 frames" {
     Ok(s) => s
     Err(e) => fail(e)
   }
+  let mut dump22 = ""
+  for i = 0; i < stream.length(); i = i + 1 {
+    dump22 = dump22 + (stream[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARB22:\{dump22}")
   let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
@@ -408,8 +413,8 @@ test "h264 cabac enc: ffmpeg-arbitrated QP22 I16 frames" {
     fail("expected 6 frames")
   }
   let pins = [
-    "e590592cddc9d3832fc546de6bc0b333", "7ad1fd5f7fefdfa6962a46ed2bff677f", "5b3074362a8e6cc734f271f4c3154827",
-    "bfaf8880720b1ab8bc9c177b86fc03c7", "a4332b24b1abd0a1fc7476756c53f1a7", "baa04a0279f20d33741d39fdaffd40a0",
+    "5e86c08751cbdc2f069ae812d2c675b9", "6c9bfcc8f31f31650f70eb1fd5d8ebc5", "599dbd25280a5382fb8e7c8660829127",
+    "5d9186c4cd75dff06a0610271c6572bd", "1f8e05fb6c16cfef0096e521a4b1140e", "10099a1ec535d44fd1af5876de95e680",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])
@@ -442,8 +447,8 @@ test "h264 cabac enc: ffmpeg-arbitrated six frames (96x64, QP 24)" {
     fail("expected 6 frames")
   }
   let pins = [
-    "e454d86d27698952c3e354a20cb109cb", "a6814aeafbaa3b3bdc330330ae8c1e5b", "74ecadf1b63bfb10ca04c31061808ae5",
-    "791ea22b9811b53493a6095440e78fd3", "aa4569a19890ad8bf10e108c831245e9", "88404345e909bd9bc7da4756e7b08874",
+    "47e79e2c702188f62c13ce0c611fd512", "7486926055bc283e445d788f536f0cb6", "cf18fd21960c104d24820758de21dd53",
+    "6b14b9de0a1684575a4e822c7b232265", "f285715a061532d5b9ee68d6ba5235c8", "b43534371ff12a34ad548ef10f869fc5",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])

@@ -803,11 +803,10 @@ fn H264IntraEncoder::encode_macroblock(
       }
     }
   }
-  // Decision: I8x8 codes four mode trees and at most four residual blocks -
-  // strictly less signalling than I4x4's sixteen-plus - so a plain SAD win
-  // over the I4x4 pass selects it (I16x16 stays dead in the CAVLC intra
-  // encoder; the CABAC chain compares against it with the 6% margin).
-  let use_i8 = i8_found && i8_cost < i4_cost
+  // Decision (the CABAC intra encoder's rule minus the dead I16x16 branch):
+  // I4x4 must beat I8x8 by ~3% in prediction SAD to justify its twelve
+  // extra mode trees; ties keep the cheaper-signalled I8x8.
+  let use_i8 = i8_found && !(100 * i4_cost < 97 * i8_cost)
   if use_i8 {
     // Redo the luma plane for I8x8: clear the I4x4 pass's coefficients and
     // the nC mirror's luma cells (the decoder reads fresh zero counts for

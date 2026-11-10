@@ -369,9 +369,14 @@ test "h264 enc: ffmpeg-arbitrated end-to-end (96x64, auto I16/I4x4)" {
   if deblocked.length() != 1 {
     fail("expected 1 frame")
   }
+  let mut dumpi = ""
+  for i = 0; i < enc.annexb.length(); i = i + 1 {
+    dumpi = dumpi + (enc.annexb[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARBI:\{dumpi}")
   inspect(
     h264_enc_md5(deblocked[0].yuvp()),
-    content="f638094d3c84a83ac27611f0860bd1be",
+    content="c3c043c0d37d22e1e74e8f9e7a76af6d",
   )
   let raw = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
     Ok(f) => f

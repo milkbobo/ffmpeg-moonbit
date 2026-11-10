@@ -669,3 +669,113 @@ test "x264 oracle: pure-MoonBit 8x8DCT CAVLC stream decodes identically in C" {
   }
   x264_cross_decode(stream, 3, 1)
 }
+
+///|
+/// Scene change onto busy content (smooth gradient, then a fresh
+/// checkerboard + gradient + roaming box): inter prediction cannot follow,
+/// so the intra candidates compete and the texture favours Intra 8x8 in
+/// the P slices.
+fn x264_i8p_fixture() -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 96
+  let h = 64
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<3 {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    let bx = f * 5 % (w - 16)
+    let by = f * 3 % (h - 16)
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        let s = if f == 0 {
+          (col * 2 + row * 3) & 0xFF
+        } else {
+          let mut t = ((col * 3 - row * 2 + f * 11) & 0x7F) + 40
+          if (((col >> 2) + (row >> 2) + f) & 1) == 1 {
+            t = (t + 48) & 0xFF
+          }
+          let inbox = col >= bx && col < bx + 16 && row >= by && row < by + 16
+          let border = col == bx ||
+            col == bx + 15 ||
+            row == by ||
+            row == by + 15
+          if inbox && border {
+            40
+          } else if inbox {
+            220
+          } else {
+            t
+          }
+        }
+        y.push(s.to_byte())
+      }
+    }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        u.push(
+          (if f == 0 {
+            96 + ((col + row) & 0x3F)
+          } else {
+            120 + ((col - row + f) & 0x1F)
+          }).to_byte(),
+        )
+        v.push(
+          (if f == 0 {
+            160 - (row & 0x3F)
+          } else {
+            90 + ((col * 2 + row + f) & 0x3F)
+          }).to_byte(),
+        )
+      }
+    }
+    out.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  out
+}
+
+///|
+/// Intra 8x8 macroblocks inside P slices (mb_type 5 + transform flag + four
+/// `pred8x8l` modes, CAVLC sub-list residuals): FFmpeg's C decoder and the
+/// pure MoonBit decoder must agree pixel-for-pixel.
+test "x264 oracle: P-slice Intra 8x8 CAVLC stream decodes identically in C" {
+  let frames = x264_i8p_fixture()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      intra_in_p=true,
+      dct8x8=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+///|
+/// The CABAC twin (ctx 14 -> 17 I_NxN bins, ctx 399 transform flag, cat 5
+/// residuals) behind the same dual-decode standard.
+test "x264 oracle: P-slice Intra 8x8 CABAC stream decodes identically in C" {
+  let frames = x264_i8p_fixture()
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      intra_in_p=true,
+      dct8x8=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  x264_cross_decode(stream, 3, 1)
+}

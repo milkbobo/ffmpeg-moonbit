@@ -12068,3 +12068,106 @@ ffmpeg 9.0.2 对 CAVLC 8x8 流零告警且 framemd5 三帧与本仓滤波输出�
 CABAC 位定价（干跑计位仍是 CAVLC 位数，§381 取舍；但 8x8 候选的计价
 本片已升级为真实子列表语法）；8x8 与 I4 的真 RD 竞争（现为 SAD 平价
 即胜 + allowed 即用）。
+
+## §387 H.264 编码器 P slice I8x8 + §385 决策缺陷修复 + 正变换/量化定标根修（2026-11-11）
+
+本片三件事，一件比一件深。全部编码器仲裁钉值经 docker ffmpeg 9.0.2
+零告警重钉（12 条流）。
+
+### 一、P slice 的 Intra 8x8（I_NxN + transform_size_8x8_flag）
+
+解码端 I/P 两熵的 I_NxN 分支本就完整（CAVLC `h264_decode.mbt:669` /
+CABAC `h264_cabac_mb.mbt:998`），本片补编码端：
+
+- 计划枚举增 `I8(raw_modes[4], chroma_mode)`；`decide_plan` 在 I16 候选
+  之后评估：共享 I8x8 pass 按预测 SAD 选四模式（网格槽 0/2/8/10），
+  `eval_plan` 以固定模式重放计价（`h264_enc_luma_i8_pass` 增
+  `fixed_modes=` 重放路径——重放只重跑预测+量化，不再搜索）
+- `code_mb_residuals`：I8 走共享 pass（intra 矩阵 0）；nz 从 0 起由
+  语法层渐进回填；`qmul_c`/色度 nz 镜像按 `is_intra`（I16 或 I8）
+  分叉；`mc_plan` 的 I8 只铺色度预测（新 `predict_intra_chroma`，
+  I16 路径同步复用）
+- CAVLC 写端：mb_type ue(5)、flag=1、四模式（`pred_nxn_mode` 镜像——
+  邻居 MB 仅 `intra_nxn` 时贡献 modes，否则 DC(2)；`H264PMbState` 增
+  `intra_nxn`/`modes`）、色度 ue、**intra** cbp 表、dqp 仅 cbp≠0、
+  子列表残差（`write_luma8_cavlc` 与 inter 8x8 共享）
+- CABAC 写端：ctx14=1 → @17=0（I_NxN，无 terminate）、flag @399+邻居、
+  四模式树（mirror `h264_pred_intra_mode` 直用）、色度树、cbp bins、
+  dqp 仅 cbp≠0、cat5 残差 + `h264_cabacw_chroma` 助手（三处色度写去重）
+- `H264EncStats` 增 `i8p_mbs`；CAVLC/CABAC 两帧循环计数
+- 交付条件：场景切换到 busy 内容（渐变→棋盘+渐变+游走框），双熵
+  `i8p_mbs>0` + 全帧重建不变式 + docker ffmpeg 零告警钉值
+
+### 二、§385 遗留三缺陷（被其代价偏置互相掩盖）
+
+1. **I16/I8 信令冲突**：决策允许 `use_i16 && use_i8` 同真——重建走
+   I8 redo、语法层 `if use_i16` 先到 → 码流信令 I16。解码器忠实解出
+   I16（流合法、全 bin 对齐、ffmpeg 与本仓解码器逐字节一致），但
+   编码器本地重建是 I8 → 重建不变式破裂且 P 帧 MC 读脏参考。
+   定位路径：bin 级 zip 探针（17927/17927 全对齐）→ 排除语法层 →
+   比对 I 帧本身 → 坏 MB 恰为 `mb_x≥1 && mb_y≥1`（I16 赢过 I4 的
+   平滑区）。修复：决策重构为互斥（先选 NxN 形式，I4 须胜 I8 3%；
+   胜者再以 6% 门槛挑战 I16）
+2. **I8 代价量纲错**：`i8_cost` 是量化后重建 SAD，i4/i16 是预测 SAD
+   ——I8 几乎必胜（QP10 时 i8=411 vs i4=2653 的"必胜"是假象）。修复：
+   共享 pass 返回获胜模式的**预测 SAD**（与另两者同量纲）
+3. **CABAC I4 漏 flag=0**：dct8x8 下选 I4x4 的 I_NxN 必须写
+   `transform_size_8x8_flag=0`，§385 只在 use_i8 分支写位。因 ② 的
+   偏置 I4 从未被选中而潜伏。修复 + 变异验证（撤掉修复 → 3 个 dct8
+   测试立即解码失败）
+
+### 三、正变换与量化定标根修（§376 以来的存量缺陷，最重要）
+
+**症状链**：QP22 下 mean abs error 13-15 且**与 QP 无关**（QP10/22/34
+同为 ~14）；最差 MB 的 >99 误差沿内容回绕对角线分布。幅度探针实锤：
+flat 残差 40 → 重建 **10**（恰 1/4）；水平斜坡 [-30,-10,10,30] →
+[-6,0,0,6]（幅度 1/4 且形状扭曲）。
+
+1. **正变换是 Hadamard 不是 H.264 核心变换**：`h264_enc_fdct1d` 的
+   `dst[1]=d03+d12`/`dst[3]=d03-d12` 缺奇输出的因子 2（正确为
+   `2·d03+d12`/`d03−2·d12`——IDCT 基的正交配对）。奇对称内容形状失真
+2. **AC 量化 4× 过粗**：qbits 用 17+qp/6（标准 15+qp/6），MF 用
+   round(2^17/init)（标准 JVT `quant4_scale` 表——类 1/2 的奇行范数
+   修正 MF×init = 2^17×{1,0.8,0.64}，round-trip 推不出）
+3. **色度 DC 32× 过粗**：extra_shift=5（正确 16+qp/6）；luma DC 17+div
+   恰好是对的（§382 曾把"−32 残差 → −2"合理化为正常量化）
+4. **8x8 MF 行别名**：`FixedArray::make(6, FixedArray::make(64,0))`
+   六行同一数组——所有 qp%6 都用 rem=5 因子（QP24 即 rem0 电平仅 56%）。
+   另 8x8 非 DC 位置类也不能用 2^19/init（「mb=Y」只对 DC 成立）：
+   换 x264 `quant8_scale` 类表（qbits 16+qp/6）
+5. 4x4/8x8 MF 表逐值核对 x264 `common/set.c`（curl 拉真源），且通过
+   「MF×dequant 跨 rem 恒定」36 项自洽校验（类比 {1,f,f²}/{1,f²,g²,f,g,gf}）
+
+**影响**：修正前流完全合法（解码器忠实解码错值——所有重建不变式、
+外部仲裁、x264 oracle 全绿），仅质量度量可见：RD 六帧 QP24 从
+27.38 dB@2940B → **42.14 dB@2163B**（CAVLC，+14.8 dB 且省 26% 码率）；
+CABAC 44.24 dB@1725B。所有质量门按真实工作点重校（PSNR 地板
+40.5/42.5 dB、逐帧 mean abs ≤3、dct8 I 帧 mean abs ≤3）。
+
+**守门测试**（此类刻度错的唯一可测面）：`h264_enc_quant_wbtest.mbt`
+幅度门——四条链（4x4/8x8/luma DC/chroma DC）× 全部 6 个 qp%6 ×
+平场/横竖斜坡/大斜坡/脉冲/棋盘，量化-反量化往返误差 ≤ Qstep 界
+（奇基形状 3× 松弛）。此门当场咬住修复前的 4×、32×、别名、类表
+四个错。教训与 §377「重建不变量测不出刻度错、质量度量才能」同型，
+但这次配了常驻门。
+
+### 基建
+
+- 新增 8x8 测试重放 dump 全部前移到钉值断言之前（此前钉值失败即无
+  流可仲裁）；`.scratch/repin_all.py` 批量「跑测试收 dump → docker
+  ffmpeg 仲裁 → `apply_pins.py` 回钉」流水线
+- **Windows 32K 命令行上限新坑**：`moonrun --test-args {全文件 JSON}`
+  在 libavcodec 包文件数越过阈值后报 os error 206——合并本片新增小
+  文件（`h264_enc_i8x8.mbt` 并入 `h264_enc_dct.mbt`；dct8 三个黑盒
+  并成 `h264_encode_dct8_test.mbt`）恢复余量；以后大包加文件前留意
+- dct8 I 帧夹具棋盘对比度 24→5（正确量化下 I4 真赢强棋盘，I8 测试
+  需斜坡主导内容）
+
+**验证**：编码器 7 套件 **40/40**（含新回归与收紧质量门）；全仓
+wasm-gc **1740/1740**、非 gc 853/853、deny-warn 干净；幅度门 3/3；
+x264 native C oracle 扩 P-slice I8 双熵用例 **16/16**；12 条流
+docker ffmpeg 9.0.2 全部零告警且 framemd5 逐帧与本仓滤波输出一致。
+
+**未做（更新）**：码率控制；I16/8x8 转默认策略（重钉面已就绪——本片
+已把「重钉全部仲裁」走成流水线）；CABAC 位定价；I4-in-P（I_NxN 的
+4x4 形态在 P slice）。

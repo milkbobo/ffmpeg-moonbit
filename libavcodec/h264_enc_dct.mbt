@@ -11,36 +11,23 @@
 /// arrays and `h264_idct_add` all consume them unchanged.
 
 ///|
-/// Forward-quant multiply factor for `[qp % 6][position_class]`, derived
-/// from this decoder's dequantisation: one level maps to a reconstruction
-/// step of `dequant4_init[rem][cls] << (qp/6)` (the `h264_build_dequant4`
-/// tables times the IDCT `>> 6` scale), so
-/// `level = (|Y| * (2^17/init)) >> (21 + qp/6 + extra_shift)` reproduces
-/// it with the unshifted forward transform below (the extra 16 in the
-/// shift cancels the transform's DC gain). Three position classes
-/// (`(x&1) + ((x>>2)&1)`).
-fn h264_enc_mf(rem : Int32, cls : Int32) -> Int32 {
-  match (rem, cls) {
-    (0, 0) => 13107
-    (0, 1) => 10082
-    (0, _) => 8192
-    (1, 0) => 11916
-    (1, 1) => 9362
-    (1, _) => 7282
-    (2, 0) => 10082
-    (2, 1) => 8192
-    (2, _) => 6554
-    (3, 0) => 9362
-    (3, 1) => 7282
-    (3, _) => 5704
-    (4, 0) => 8192
-    (4, 1) => 6554
-    (4, _) => 5243
-    (5, 0) => 7282
-    (5, 1) => 5704
-    (_, _) => 4559
-  }
-}
+/// The JVT forward-quant multiply factors (`quant_mf`, Table 7-5 family):
+/// `level = (|W| * MF[qp%6][class] + 2^(qbits-1)) >> qbits` with
+/// `qbits = 15 + qp/6` and `W` the unnormalised H.264 core-transform
+/// coefficient (the shift-free butterflies below). `class` is the position
+/// class `(p&1) + ((p>>2)&1)` (even-even / mixed / odd-odd). These are the
+/// standard tables (verified against x264 `common/set.c`'s
+/// `quant4_scale` value-for-value) - NOT round(2^17/dequant_init): the
+/// mixed/odd classes carry the odd-row norm corrections (MF*init is
+/// 2^17 x {1, 0.8, 0.64} by class), which that round-trip misses.
+let h264_enc_mf : FixedArray[FixedArray[Int32]] = [
+  [13107, 8066, 5243],
+  [11916, 7496, 4664],
+  [10082, 6554, 4194],
+  [9362, 5496, 3547],
+  [8192, 4906, 3161],
+  [7282, 4352, 2804],
+]
 
 ///|
 /// Quantise one coefficient (Int64 intermediate: a full-scale luma DC
@@ -49,12 +36,12 @@ fn h264_enc_quant_val(
   coef : Int32,
   qp : Int32,
   pos_class : Int32,
-  extra_shift~ : Int32 = 1,
+  extra_shift~ : Int32 = 0,
 ) -> Int32 {
   let rem = qp % 6
   let div = qp / 6
-  let qbits = 16 + div + extra_shift
-  let mf = h264_enc_mf(rem, pos_class)
+  let qbits = 15 + div + extra_shift
+  let mf = h264_enc_mf[rem][pos_class]
   if coef == 0 {
     return 0
   }
@@ -68,10 +55,12 @@ fn h264_enc_quant_val(
 }
 
 ///|
-/// One 1-D stage of the canonical (shift-free) forward transform: the pure
-/// integer butterfly whose inverse carries the `>> 1` steps. The DC gain is
-/// exactly the 16-sample sum, which is the convention the quantisation
-/// multiply factors are tuned against.
+/// One 1-D stage of the H.264 integer core transform (shift-free, the
+/// transform `Cf X Cf^T` every encoder pairs with `ff_h264_idct_add`):
+/// even outputs are the plain butterflies, odd outputs carry the factor-2
+/// terms (`2*(x0-x3) + (x1-x2)` / `(x0-x3) - 2*(x1-x2)`), the transpose
+/// of the IDCT's `>> 1` steps. NOT a Hadamard - the factor 2 is what makes
+/// this the exact (unnormalised) inverse of the decoder's transform.
 fn h264_enc_fdct1d(
   src : Array[Int32],
   src_off : Int32,
@@ -85,9 +74,9 @@ fn h264_enc_fdct1d(
   let s12 = src[src_off + stride] + src[src_off + 2 * stride]
   let d12 = src[src_off + stride] - src[src_off + 2 * stride]
   dst[dst_off] = s03 + s12
-  dst[dst_off + stride] = d03 + d12
+  dst[dst_off + stride] = 2 * d03 + d12
   dst[dst_off + 2 * stride] = s03 - s12
-  dst[dst_off + 3 * stride] = d03 - d12
+  dst[dst_off + 3 * stride] = d03 - 2 * d12
 }
 
 ///|
@@ -156,7 +145,7 @@ fn h264_enc_luma_dc_hadamard_quant(
   for p = 0; p < 16; p = p + 1 {
     let s = (p >> 2) | ((p << 2) & 0xF)
     let cls = (p & 1) + ((p >> 2) & 1)
-    let level = h264_enc_quant_val(tmp[p], qp, cls, extra_shift=1)
+    let level = h264_enc_quant_val(tmp[p], qp, cls, extra_shift=2)
     out[out_off + s] = level
     levels[s] = level
   }
@@ -187,7 +176,7 @@ fn h264_enc_chroma_dc_hadamard_quant(
   // decoder's chroma DC dequant uses `qmul = build_dequant4(...)[0]`).
   let levels : Array[Int32] = Array::make(4, 0)
   for i = 0; i < 4; i = i + 1 {
-    let level = h264_enc_quant_val(t[i], qp, 0, extra_shift=5)
+    let level = h264_enc_quant_val(t[i], qp, 0, extra_shift=1)
     out[out_off + i] = level
     levels[i] = level
   }
@@ -195,24 +184,34 @@ fn h264_enc_chroma_dc_hadamard_quant(
 }
 
 ///|
-/// Forward-quant multiply factors for the 8x8 transform (`[rem][spec pos]`).
-/// Calibrated against this decoder's `h264_build_dequant8` under the same
-/// invariant the 4x4 table has at flat scaling - the dequantised
-/// coefficient equals the unshifted forward-transform output
-/// (`step_quant == step_dequant`): `qmul8 = init8 * 16 << (qp/6)` against
-/// `qbits = 17 + qp/6`, so `mf8 = round(2^19 / init8)`. These are exactly
-/// x264's `quant8_mf` values (26214/29127/16384/... for rem 0).
-let h264_enc_mf8 : FixedArray[FixedArray[Int32]] = {
-  let t : FixedArray[FixedArray[Int32]] = FixedArray::make(
-    6,
-    FixedArray::make(64, 0),
-  )
+/// Forward-quant multiply factors for the 8x8 transform (`[rem][spec pos]`):
+/// the standard `quant8_scale` class table (verified against x264
+/// `common/set.c` value-for-value) applied through the same
+/// `((x>>1)&12)|(x&3)` scan mapping as the dequant table, with
+/// `qbits = 16 + qp/6` (x264's `quant_8x8`). The per-class products with
+/// `dequant8_scale` are 2^18 x {1, 0.8859^2, 1.6^2, 0.8859, 1.6, 1.6*.8859}
+/// - the 8x8 basis-norm corrections; a plain `round(2^19/init8)` misses
+/// them (it is right only for DC) and skews every AC class by up to 2.6x.
+/// Each row is its OWN array: `FixedArray::make(6, row)` would alias one
+/// row six times and every `qp % 6` would silently quantise with the last
+/// remainder's factors (the §385 defect this replaces).
+let h264_enc_mf8 : Array[Array[Int32]] = {
+  let scale : FixedArray[FixedArray[Int32]] = [
+    [13107, 11428, 20972, 12222, 16777, 15481],
+    [11916, 10826, 19174, 11058, 14980, 14290],
+    [10082, 8943, 15978, 9675, 12710, 11985],
+    [9362, 8228, 14913, 8931, 11984, 11259],
+    [8192, 7346, 13159, 7740, 10486, 9777],
+    [7282, 6428, 11570, 6830, 9118, 8640],
+  ]
+  let t : Array[Array[Int32]] = []
   for rem = 0; rem < 6; rem = rem + 1 {
+    let row : Array[Int32] = Array::make(64, 0)
     for x = 0; x < 64; x = x + 1 {
-      let init = h264_dequant8_init[rem][h264_dequant8_init_scan[((x >> 1) & 12) |
-        (x & 3)]]
-      t[rem][x] = (524288 + init / 2) / init
+      let cls = h264_dequant8_init_scan[((x >> 1) & 12) | (x & 3)]
+      row[x] = scale[rem][cls]
     }
+    t.push(row)
   }
   t
 }
@@ -278,7 +277,7 @@ fn h264_enc_fdct8_quant_res(
   }
   let rem = qp % 6
   let div = qp / 6
-  let qbits = 16 + div + 1
+  let qbits = 16 + div
   let levels : Array[Int32] = Array::make(64, 0)
   for p = 0; p < 64; p = p + 1 {
     let coef = col[p]
@@ -305,4 +304,198 @@ fn h264_enc_dequant_level(level : Int32, qmul : Int32) -> Int32 {
     6
   let v = prod.reinterpret_as_int() << 16 >> 16
   v
+}
+
+///|
+/// The shared High-profile I8x8 luma pass of the CAVLC and CABAC intra
+/// encoders: per 8x8 block (z-order 0..3), pick the best availability-checked
+/// `pred8x8l` mode by SAD, predict, forward-transform + quantise, dequantise
+/// into `mb` and reconstruct through `h264_idct8_add`. The 0..3 block order
+/// mirrors the decoder's reconstruction, so each block predicts from exactly
+/// the neighbours the decoder will use. Fills `store` (4 x 64 transposed
+/// levels) and the raw signalled modes into `modes` (2x2 replication, the
+/// decoder's fill); returns `(cost, cbp)` with the summed PREDICTION SAD of
+/// the four winning modes (the same metric the I4x4/I16x16 decisions use -
+/// a post-quantisation SAD would not be comparable to them) and one cbp bit
+/// per non-empty block.
+///
+/// `avail(bx8, by8)` provides the reconstruction-side availability of one
+/// 8x8 block as `(top, left, topright, topleft)` - `h264_recon_full_plane`'s
+/// I8x8-branch semantics. The CABAC encoder derives it from its decoder
+/// mirror; the CAVLC intra encoder (single slice, no constrained intra
+/// prediction) uses the geometric form.
+fn h264_enc_luma_i8_pass(
+  src_y : Array[Int32],
+  rec_y : Array[Int32],
+  ystride : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  pps : H264Pps,
+  qp : Int32,
+  store : Array[Int32],
+  modes : Array[Int32],
+  mb : Array[Int32],
+  avail : (Int32, Int32) -> (Bool, Bool, Bool, Bool),
+  fixed_modes~ : Array[Int32] = [],
+) -> Result[(Int32, Int32), String] {
+  let qmul8 = h264_build_dequant8(pps, 0, qp)
+  let ybase = mb_y * 16 * ystride + mb_x * 16
+  let mut cost = 0
+  let mut cbp = 0
+  for i8 = 0; i8 < 4; i8 = i8 + 1 {
+    let bx8 = i8 % 2
+    let by8 = i8 / 2
+    let off = ybase + by8 * 8 * ystride + bx8 * 8
+    let (top, left, topright, topleft) = avail(bx8, by8)
+    let replay = fixed_modes.length() == 4
+    let mut best_sig = 0
+    let mut best_eff : Int32 = -1
+    let mut best_sad = -1
+    if replay {
+      // Re-predict with the plan's signalled modes (the availability check
+      // redoes the raw -> effective mapping exactly like the search did).
+      best_sig = fixed_modes[i8]
+      best_eff = match h264_check_intra4x4_mode(best_sig, top, left) {
+        Ok(v) => v
+        Err(_) => -1
+      }
+      if best_eff < 0 {
+        return Err("h264 enc: replayed intra8x8 mode infeasible")
+      }
+      best_sad = 0 // unused
+    } else {
+      for sig = 0; sig < 9; sig = sig + 1 {
+        let eff = match h264_check_intra4x4_mode(sig, top, left) {
+          Ok(v) => v
+          Err(_) => -1
+        }
+        if eff < 0 {
+          continue
+        }
+        if h264_pred8x8l(
+            rec_y,
+            off,
+            ystride,
+            eff,
+            top,
+            left,
+            topright,
+            topleft~,
+            bit_depth=8,
+          )
+          is Err(_) {
+          continue
+        }
+        let sad = h264_enc_sad8(src_y, rec_y, off, ystride)
+        if best_sad < 0 || sad < best_sad {
+          best_sad = sad
+          best_sig = sig
+          best_eff = eff
+        }
+      }
+    }
+    if best_eff < 0 {
+      return Err("h264 enc: no feasible intra8x8 mode")
+    }
+    match
+      h264_pred8x8l(
+        rec_y,
+        off,
+        ystride,
+        best_eff,
+        top,
+        left,
+        topright,
+        topleft~,
+        bit_depth=8,
+      ) {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+    // Decision metric: the winning mode's prediction SAD (the plane holds
+    // the bare prediction right here, before any residual is added).
+    cost = cost + h264_enc_sad8(src_y, rec_y, off, ystride)
+    for dy = 0; dy < 2; dy = dy + 1 {
+      for dx = 0; dx < 2; dx = dx + 1 {
+        modes[(by8 * 2 + dy) * 4 + bx8 * 2 + dx] = best_sig
+      }
+    }
+    let res : Array[Int32] = Array::make(64, 0)
+    for row = 0; row < 8; row = row + 1 {
+      for col = 0; col < 8; col = col + 1 {
+        res[row * 8 + col] = src_y[off + row * ystride + col] -
+          rec_y[off + row * ystride + col]
+      }
+    }
+    let levels = h264_enc_fdct8_quant_res(res, 0, qp)
+    let mut total = 0
+    for s = 0; s < 64; s = s + 1 {
+      store[64 * i8 + s] = levels[s]
+      if levels[s] != 0 {
+        total = total + 1
+        mb[64 * i8 + s] = h264_enc_dequant_level(levels[s], qmul8[s])
+      }
+    }
+    if total != 0 {
+      cbp = cbp | (1 << i8)
+      // `h264_idct8_add4`'s nz shortcut: a lone DC level takes the flat
+      // DC add, anything else the full inverse transform.
+      if total == 1 && mb[64 * i8] != 0 {
+        h264_idct8_dc_add(rec_y, off, ystride, mb, 64 * i8, bit_depth=8)
+      } else {
+        h264_idct8_add(rec_y, off, ystride, mb, 64 * i8, bit_depth=8)
+      }
+    }
+  }
+  Ok((cost, cbp))
+}
+
+///|
+/// Geometric availability for a single-slice all-intra picture (the CAVLC
+/// intra encoder): every macroblock decoded before this one in raster order
+/// is an intra neighbour, so availability reduces to frame geometry.
+fn h264_enc_i8_avail(
+  mb_x : Int32,
+  mb_y : Int32,
+  mb_width : Int32,
+) -> (Int32, Int32) -> (Bool, Bool, Bool, Bool) {
+  fn(bx8 : Int32, by8 : Int32) -> (Bool, Bool, Bool, Bool) {
+    let top = by8 > 0 || mb_y > 0
+    let left = bx8 > 0 || mb_x > 0
+    // The topright samples of a top-row block sit above the MB's own
+    // right half for bx8 = 0 and above the top-right MB for bx8 = 1;
+    // an inner-row block sees its same-MB left neighbour.
+    let topright = if by8 == 0 {
+      top && (bx8 == 0 || mb_x < mb_width - 1)
+    } else {
+      bx8 == 0
+    }
+    // `h264_intra_topleft`'s geometric form: same-MB / top MB / left MB /
+    // top-left MB corner samples.
+    let topleft = if bx8 > 0 {
+      by8 > 0 || mb_y > 0
+    } else if by8 > 0 {
+      mb_x > 0
+    } else {
+      mb_x > 0 && mb_y > 0
+    }
+    (top, left, topright, topleft)
+  }
+}
+
+///|
+/// The `sub`-th interleaved CAVLC coefficient list of 8x8DCT quadrant `q`:
+/// list element k is the transposed-8x8 zigzag position `4*k + sub` of the
+/// quadrant's 64 levels (`zigzag_scan8x8_cavlc` - the lists share one
+/// global zigzag order, unlike CABAC's four independent block scans).
+fn h264_cavlc8_sub_view(
+  store : Array[Int32],
+  q : Int32,
+  sub : Int32,
+) -> Array[Int32] {
+  let out : Array[Int32] = Array::make(16, 0)
+  for k = 0; k < 16; k = k + 1 {
+    out[k] = store[64 * q + h264_zigzag_scan8x8[4 * k + sub]]
+  }
+  out
 }

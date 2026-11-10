@@ -127,6 +127,12 @@ test "h264 enc: P-slice Intra16x16 scene cut round-trips" {
   if sum / (96 * 64) > 1 {
     fail("flat scene-cut luma mean abs error \{sum / (96 * 64)} too high")
   }
+  // Replayable Annex B dump for the external arbitration (see test header).
+  let mut d = ""
+  for i = 0; i < stream.length(); i = i + 1 {
+    d = d + (stream[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("I16ARB:\{d}")
   let filtered = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
@@ -134,17 +140,11 @@ test "h264 enc: P-slice Intra16x16 scene cut round-trips" {
   // Pinned against docker ffmpeg 9.0.2 (`nine-x264`) framemd5: zero
   // warnings, every frame byte-identical to this decoder's filtered output.
   let pins = [
-    "57c00c8ae52173ab0283e20006e5a6ec", "80fe0f660ef17d69b35e6a335553d209", "80fe0f660ef17d69b35e6a335553d209",
+    "2ea2995b629ae0670d2e2e7a40acffe4", "80fe0f660ef17d69b35e6a335553d209", "80fe0f660ef17d69b35e6a335553d209",
   ]
   for i, f in filtered {
     inspect(h264_i16_md5(f.yuvp()), content=pins[i])
   }
-  // Replayable Annex B dump for the external arbitration (see test header).
-  let mut d = ""
-  for i = 0; i < stream.length(); i = i + 1 {
-    d = d + (stream[i].to_int() & 0xFF).to_string() + ","
-  }
-  println("I16ARB:\{d}")
 }
 
 ///|
@@ -294,22 +294,22 @@ test "h264 enc: CABAC P-slice Intra16x16 scene cut round-trips" {
   if sum / (96 * 64) > 1 {
     fail("CABAC flat scene-cut luma mean abs error \{sum / (96 * 64)} too high")
   }
-  let filtered = match @libavcodec.h264_decode_annexb_frames(stream, false) {
-    Ok(f) => f
-    Err(e) => fail(e)
-  }
-  let pins = [
-    "50e3b8d58ddfb7d2d3fc3c3f54a8f2a1", "80fe0f660ef17d69b35e6a335553d209", "80fe0f660ef17d69b35e6a335553d209",
-  ]
-  for i, f in filtered {
-    inspect(h264_i16_md5(f.yuvp()), content=pins[i])
-  }
   // Replayable Annex B dump for the external arbitration.
   let mut d = ""
   for i = 0; i < stream.length(); i = i + 1 {
     d = d + (stream[i].to_int() & 0xFF).to_string() + ","
   }
   println("CABARB:\{d}")
+  let filtered = match @libavcodec.h264_decode_annexb_frames(stream, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  let pins = [
+    "9b6f6b7579b6477356224ddd1835735c", "80fe0f660ef17d69b35e6a335553d209", "80fe0f660ef17d69b35e6a335553d209",
+  ]
+  for i, f in filtered {
+    inspect(h264_i16_md5(f.yuvp()), content=pins[i])
+  }
 }
 
 ///|

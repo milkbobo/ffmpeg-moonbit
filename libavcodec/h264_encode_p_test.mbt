@@ -137,7 +137,7 @@ test "h264 enc: moving scene round trip and reconstruction invariant" {
       }
     }
     let mean = sum / (96 * 64)
-    if mean > 24 {
+    if mean > 3 {
       fail("frame \{f} luma mean abs diff \{mean} too high")
     }
   }
@@ -219,8 +219,8 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
   // Re-pinned after the RD slice (SSD + lambda * exact CAVLC bits, Int64
   // cost): ffmpeg's framemd5 values, zero warnings.
   let pins = [
-    "e454d86d27698952c3e354a20cb109cb", "a6814aeafbaa3b3bdc330330ae8c1e5b", "74ecadf1b63bfb10ca04c31061808ae5",
-    "791ea22b9811b53493a6095440e78fd3",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "877e41a7cfe21e1e8fc74044445f9424", "3754207b53763ecb5b0ca0dfdf440106",
+    "c5cac007488f1ce7b9ff722c35c21086",
   ]
   for i, f in frames_dec {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
@@ -248,9 +248,14 @@ test "h264 enc: ffmpeg-arbitrated RD six frames (96x64, QP 24)" {
   if frames_dec.length() != 6 {
     fail("expected 6 frames")
   }
+  let mut dump6 = ""
+  for i = 0; i < stream.length(); i = i + 1 {
+    dump6 = dump6 + (stream[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARB6:\{dump6}")
   let pins = [
-    "e454d86d27698952c3e354a20cb109cb", "a6814aeafbaa3b3bdc330330ae8c1e5b", "74ecadf1b63bfb10ca04c31061808ae5",
-    "791ea22b9811b53493a6095440e78fd3", "aa4569a19890ad8bf10e108c831245e9", "88404345e909bd9bc7da4756e7b08874",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "877e41a7cfe21e1e8fc74044445f9424", "3754207b53763ecb5b0ca0dfdf440106",
+    "c5cac007488f1ce7b9ff722c35c21086", "97f20381fb1fe85e477e6df04b17330a", "73f854104d75d4e10e878b3753349bb8",
   ]
   for i, f in frames_dec {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
@@ -283,17 +288,25 @@ test "h264 enc: partitions engage on the moving box" {
 
 ///|
 /// Rate-distortion operating point, measured on the unfiltered
-/// reconstruction against the source over the five P frames (96x64, QP 24).
-/// The SAD chain this slice replaced spent 4272 bytes for 27.02 dB (luma
-/// SSD 3970767; cost SSD + lambda*bits = 4.542e9). RD spends 2940 bytes for
-/// 27.38 dB (SSD 3654308; cost 4.070e9): 31% fewer bytes at slightly better
-/// quality, and a 10% lower cost on its own objective.
+/// reconstruction against the source over the five P frames (96x64, QP 24):
+/// **42.14 dB at 2163 bytes**.
 ///
-/// The PSNR floor is the regression gate for the Int32 cost overflow: with
-/// 32-bit arithmetic `ssd * 1024` wraps negative above SSD 2^21, so every
-/// high-distortion P_Skip priced as the cheapest candidate and the sequence
-/// collapsed to 21.49 dB while still producing a syntactically valid
-/// stream (ffmpeg accepted it - only a quality gate catches this).
+/// History the floor encodes. §380 measured 27.38 dB at 2940 bytes here and
+/// pinned a 26.5 dB floor - but that figure was itself the symptom of a
+/// transform/quantiser defect present from §376 to §386: the 4x4 forward
+/// "transform" was a Hadamard butterfly (odd outputs missing the factor-2
+/// terms of the H.264 core transform) quantised 4x too coarsely (32x for
+/// chroma DC), so every residual came back at ~1/4 amplitude. PSNR sat near
+/// 27 dB at EVERY qp. §387 replaced it with the real core transform and the
+/// JVT/x264 `quant4_scale`/`quant8_scale` tables: +14.8 dB at 26% FEWER
+/// bytes. The streams were always legal (decoders faithfully decoded the
+/// wrong levels), so no reconstruction invariant or external arbitration
+/// could see it - only an amplitude/quality gate can, which is why this
+/// floor now sits at the encoder's real operating point instead of 26.5.
+///
+/// The floor also still guards the Int32 cost overflow of §380 (with
+/// 32-bit arithmetic `ssd * 1024` wraps negative above SSD 2^21 and every
+/// high-distortion P_Skip prices as the cheapest candidate).
 test "h264 enc: RD operating point beats the SAD chain" {
   let frames = h264p_fixture(96, 64, 6)
   let stream = match
@@ -321,10 +334,10 @@ test "h264 enc: RD operating point beats the SAD chain" {
   }
   let mse = se_sum / (5 * 96 * 64).to_double()
   let psnr = 10.0 * @math.log10(255.0 * 255.0 / mse)
-  if psnr < 26.5 {
-    fail("RD luma PSNR \{psnr} dB below the 26.5 dB floor")
+  if psnr < 40.5 {
+    fail("RD luma PSNR \{psnr} dB below the 40.5 dB floor")
   }
-  if stream.length() > 3200 {
-    fail("RD stream \{stream.length()} bytes above the 3200 byte ceiling")
+  if stream.length() > 2400 {
+    fail("RD stream \{stream.length()} bytes above the 2400 byte ceiling")
   }
 }

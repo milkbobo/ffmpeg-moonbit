@@ -1305,15 +1305,17 @@ fn H264CabacIEnc::encode_macroblock(
       }
     }
   }
-  // Decision: the I4x4 pass must beat I16x16 by ~6% to justify its 16-block
-  // mode-signalling overhead; ties prefer I16x16 (its DC-only stream prices
-  // into fewer CABAC bins, too). I8x8 codes four mode trees and at most four
-  // residual blocks - strictly less signalling than I4x4's sixteen-plus -
-  // so it needs only a plain SAD win over the I4x4 winner, but the ~6%
-  // margin against I16x16 (whose syntax is one DC block on flat content).
-  let use_i16 = i16_found && !(100 * i4_cost < 94 * i16_cost)
-  let use_i8 = i8_found &&
-    (if use_i16 { 100 * i8_cost < 94 * i16_cost } else { i8_cost < i4_cost })
+  // Decision, in the encoder's SAD metric (all three are prediction SADs):
+  // first the Intra_NxN form - I4x4 must beat I8x8 by ~3% to justify its
+  // twelve extra mode trees, ties keep the cheaper-signalled I8x8 - then
+  // that form must beat I16x16 by ~6% (whose whole-MB syntax prices into
+  // fewer bins on smooth content). The I8/I16 conflict of §385 (both flags
+  // true: the reconstruction ran the I8x8 redo while the syntax layer
+  // signalled Intra16x16) is structurally impossible now - use_i16 and
+  // use_i8 are mutually exclusive by construction.
+  let use_i8 = i8_found && !(100 * i4_cost < 97 * i8_cost)
+  let nxn_cost = if use_i8 { i8_cost } else { i4_cost }
+  let use_i16 = !use_i8 && i16_found && !(100 * nxn_cost < 94 * i16_cost)
   if use_i8 {
     // Redo the luma plane for I8x8: the I4x4 pass left its dequantised
     // coefficients and reconstruction in place - clear both, then re-run
@@ -1536,15 +1538,23 @@ fn H264CabacIEnc::encode_macroblock(
     self.enc.decision(self.states, 10, b4)
   } else {
     self.enc.decision(self.states, 3 + c, 0)
-    if use_i8 {
-      // transform_size_8x8_flag: ctx 399 + the left/top 8x8DCT neighbour
-      // count (`neighbor_transform_size`); the mirror bit also feeds the
-      // next macroblock's context and the deblock filter.
+    // transform_size_8x8_flag: ctx 399 + the left/top 8x8DCT neighbour
+    // count (`neighbor_transform_size`). Every I_NxN macroblock codes
+    // the bit once the PPS enables the mode - the I4x4 form writes 0;
+    // the mirror bit also feeds the next macroblock's context and the
+    // deblock filter.
+    if self.dct8x8 {
       self.enc.decision(
         self.states,
         399 + h264_neighbor_transform_size(self.ctx, mb_idx, mb_x, mb_y),
-        1,
+        if use_i8 {
+          1
+        } else {
+          0
+        },
       )
+    }
+    if use_i8 {
       info.transform_8x8 = true
       // One prediction mode per 8x8 block (the z-order block index's
       // 0/4/8/12 grid slots), the same ctx 68/69 bin tree as I4x4.
@@ -1828,6 +1838,70 @@ fn H264PEncoder::cabac_mvd_partition(
 }
 
 ///|
+/// Chroma residual bins of one coded macroblock: the two DC blocks (cat 3,
+/// the four Hadamard levels in scan order) when the chroma cbp is non-zero,
+/// then the eight AC blocks (cat 4, AC-only scan) when it is 2.
+fn h264_cabacw_chroma(
+  enc : H264CabacEnc,
+  states : Array[Int32],
+  ctx : H264DecCtx,
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  coded : H264PMbCode,
+) -> Unit {
+  if coded.chroma_c_cbp != 0 {
+    for c = 0; c < 2; c = c + 1 {
+      let dc4 : Array[Int32] = [
+        coded.chroma_dc_store[c][0],
+        coded.chroma_dc_store[c][1],
+        coded.chroma_dc_store[c][2],
+        coded.chroma_dc_store[c][3],
+      ]
+      h264_cabacw_residual(
+        enc,
+        states,
+        ctx,
+        mb_idx,
+        mb_x,
+        mb_y,
+        3,
+        49 + c,
+        dc4,
+        4,
+        true,
+      )
+    }
+  }
+  if coded.chroma_c_cbp == 2 {
+    for c = 0; c < 2; c = c + 1 {
+      for i = 0; i < 4; i = i + 1 {
+        let view = scan_view_at(
+          coded.chroma_ac_store[c],
+          i,
+          h264_zigzag_scan_t,
+          1,
+          15,
+        )
+        h264_cabacw_residual(
+          enc,
+          states,
+          ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          4,
+          16 + 16 * c + i,
+          view,
+          15,
+          false,
+        )
+      }
+    }
+  }
+}
+
+///|
 /// Emit the CABAC syntax of one coded P macroblock: the encoder-side twin
 /// of `ff_h264_decode_mb_cabac`'s inter path (mb_type bins, sub-mb types,
 /// mvd bypass pairs with the decoder's exact write-back order, cbp, dqp,
@@ -1846,6 +1920,111 @@ fn H264PEncoder::write_cabac_mb_syntax(
   let info = ctx.infos[mb_idx]
   match plan {
     Skip => return
+    I8(raw_modes, chroma_mode) => {
+      // P-slice Intra_NxN: ctx 14 = 1 selects intra, then
+      // `decode_cabac_intra_mb_type(ctx_base 17, intra_slice 0)` reads its
+      // first bin at ctx 17 - 0 is I_NxN (no terminate bin on this path,
+      // that one only follows a 1).
+      enc.decision(states, 14, 1)
+      enc.decision(states, 17, 0)
+      ctx.cur_mb_is_intra = true
+      // transform_size_8x8_flag: the I_NxN branch reads it unconditionally
+      // once the PPS enables the mode (ctx 399 + 8x8DCT neighbour count).
+      enc.decision(
+        states,
+        399 + h264_neighbor_transform_size(ctx, mb_idx, mb_x, mb_y),
+        1,
+      )
+      info.transform_8x8 = true
+      // One prediction mode per 8x8 block on the 2x2-replicated grid (the
+      // decoder's fill), the same ctx 68/69 bin tree as Intra4x4.
+      let cur : Array[Int32] = Array::make(16, 0)
+      for k = 0; k < 4; k = k + 1 {
+        for dy = 0; dy < 2; dy = dy + 1 {
+          for dx = 0; dx < 2; dx = dx + 1 {
+            cur[(k / 2 * 2 + dy) * 4 + k % 2 * 2 + dx] = raw_modes[k]
+          }
+        }
+      }
+      for k = 0; k < 4; k = k + 1 {
+        let predicted = h264_pred_intra_mode(
+          ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          k % 2 * 2,
+          k / 2 * 2,
+          cur,
+        )
+        let mode = raw_modes[k]
+        if mode == predicted {
+          enc.decision(states, 68, 1)
+        } else {
+          enc.decision(states, 68, 0)
+          let rem = if mode > predicted { mode - 1 } else { mode }
+          enc.decision(states, 69, rem & 1)
+          enc.decision(states, 69, (rem >> 1) & 1)
+          enc.decision(states, 69, (rem >> 2) & 1)
+        }
+      }
+      // Chroma prediction mode tree (identical to the I-slice writer).
+      let mut cc = 0
+      if h264_has_left(ctx, mb_idx) && ctx.infos[mb_idx - 1].chroma_mode != 0 {
+        cc = cc + 1
+      }
+      if h264_has_top(ctx, mb_idx) &&
+        ctx.infos[h264_top_index(ctx, mb_idx)].chroma_mode != 0 {
+        cc = cc + 1
+      }
+      if chroma_mode == 0 {
+        enc.decision(states, 64 + cc, 0)
+      } else {
+        enc.decision(states, 64 + cc, 1)
+        if chroma_mode == 1 {
+          enc.decision(states, 67, 0)
+        } else {
+          enc.decision(states, 67, 1)
+          enc.decision(states, 67, if chroma_mode == 2 { 0 } else { 1 })
+        }
+      }
+      // Intra_NxN codes both cbp patterns; mb_qp_delta only when cbp != 0
+      // (unlike I16x16, whose dqp bin is unconditional).
+      let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
+      h264_cabacw_cbp(enc, states, ctx, mb_idx, mb_x, mb_y, cbp, true)
+      info.cbp_all = cbp
+      if cbp != 0 {
+        enc.decision(states, 60, 0)
+      }
+      // Luma residuals (cbp-gated 8x8 blocks, cat 5, intra matrices on
+      // the decode side).
+      for i8 = 0; i8 < 4; i8 = i8 + 1 {
+        if (coded.luma_cbp & (1 << i8)) != 0 {
+          let view = scan8_view_at(coded.luma8_store, i8, h264_zigzag_scan8x8)
+          h264_cabacw_residual(
+            enc,
+            states,
+            ctx,
+            mb_idx,
+            mb_x,
+            mb_y,
+            5,
+            4 * i8,
+            view,
+            64,
+            false,
+          )
+        }
+      }
+      h264_cabacw_chroma(enc, states, ctx, mb_idx, mb_x, mb_y, coded)
+      info.mb_type_bits = h264_mb_type_intra4x4
+      info.intra4x4 = true
+      info.chroma_mode = chroma_mode
+      info.qp = self.p.qp
+      for g = 0; g < 16; g = g + 1 {
+        info.modes[g] = cur[g]
+      }
+      return
+    }
     I16(sig, _, chroma_mode) => {
       // P-slice intra branch of `decode_cabac_mb_type`: ctx 14 = 1 selects
       // intra, then `decode_cabac_intra_mb_type(ctx_base 17, intra_slice 0)`.
@@ -2292,6 +2471,9 @@ fn H264PEncoder::encode_p_frame_cabac(
       }
       if plan is I16(_, _, _) {
         self.stats.i16_mbs += 1
+      }
+      if plan is I8(_, _) {
+        self.stats.i8p_mbs += 1
       }
       if !(plan is Skip) {
         self.stats.coded_mbs += 1
