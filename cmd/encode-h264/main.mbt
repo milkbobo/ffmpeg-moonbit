@@ -5,15 +5,26 @@ fn main raise {
     println(
       "usage: encode-h264 input.yuv --width W --height H --output out.264",
     )
-    println("  8-bit planar YUV420P; all frames loaded into memory")
+    println("  8-bit planar YUV420P")
     println(
       "  [--qp 0..51] [--cabac] [--aq] [--aq-strength 0..6] [--aud] [--target-bytes N]",
     )
     println("  [--vbv-maxrate bits/s --vbv-bufsize bits --fps N]")
+    println(
+      "  [--stream] feed frames to the streaming encoder (constant memory)",
+    )
+    println(
+      "  [--b-slices] code odd display positions as B pictures (POC reorder)",
+    )
     return
   }
   let opts = parse_options(args[1:].to_owned())
-  let (stream, count) = encode_raw(@fs.read_file_to_bytes(opts.input), opts)
+  let raw = @fs.read_file_to_bytes(opts.input)
+  let (stream, count) = if opts.stream {
+    encode_raw_stream(raw, opts)
+  } else {
+    encode_raw(raw, opts)
+  }
   @fs.write_bytes_to_file(opts.output, stream)
   let summary : Json = {
     "codec": "h264",

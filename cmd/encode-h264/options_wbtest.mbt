@@ -137,3 +137,36 @@ test "CLI multi-frame plane splitting and both entropy modes" {
     }
   }
 }
+
+///|
+test "CLI accepts stream and b-slices, rejects their bad combinations" {
+  // Valid: stream alone, b-slices alone, both together.
+  for
+    extra in [
+      ["--stream"],
+      ["--b-slices"],
+      ["--stream", "--b-slices"],
+      ["--stream", "--cabac"],
+    ] {
+    try test_options(extra) catch {
+      _ => fail("rejected valid arguments")
+    } noraise {
+      _ => ()
+    }
+  }
+  // Invalid: b-slices with either rate control.
+  for
+    extra in [
+      ["--b-slices", "--target-bytes", "1000"],
+      [
+        "--b-slices", "--vbv-maxrate", "64000", "--vbv-bufsize", "32000", "--fps",
+        "30",
+      ],
+    ] {
+    try test_options(extra) catch {
+      _ => ()
+    } noraise {
+      _ => fail("accepted invalid arguments")
+    }
+  }
+}

@@ -115,6 +115,7 @@ pub fn h264_encode_intra_frame(
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   vbv~ : H264Vbv? = None,
+  b_seq~ : Bool = false,
 ) -> Result[H264EncodedFrame, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -152,12 +153,20 @@ pub fn h264_encode_intra_frame(
   // Parse the parameter sets we just wrote: the parsed PPS carries the
   // dequantisation tables the local reconstruction shares with the decoder.
   let ps = new_h264_param_sets()
-  let sps_nal = h264_enc_write_sps(p_ps, dct8x8~, vbv~)
+  let sps_nal = if b_seq {
+    h264_enc_write_sps_b(p_ps)
+  } else {
+    h264_enc_write_sps(p_ps, dct8x8~, vbv~)
+  }
   let pps_nal = h264_enc_write_pps(p_ps, dct8x8~)
   // Round-trip the parameter sets through the decoder's own parsers: the
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
-  let sps_raw = h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~)
+  let sps_raw = if b_seq {
+    h264_enc_sps_rbsp_b(p_ps)
+  } else {
+    h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~)
+  }
   let pps_raw = h264_enc_pps_rbsp(p_ps, dct8x8~)
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_raw), ps, false) {
     Ok(_) => ()
@@ -237,6 +246,9 @@ pub fn h264_encode_intra_frame(
   r.put_ue(0) // pic_parameter_set_id
   r.put(0, 4) // frame_num
   r.put_ue(0) // idr_pic_id
+  if b_seq {
+    r.put(0, 4) // pic_order_cnt_lsb (IDR: 0)
+  }
   // POC type 2: no picture order syntax.
   r.put_bit(0) // no_output_of_prior_pics_flag
   r.put_bit(0) // long_term_reference_flag

@@ -13,6 +13,8 @@ priv struct Options {
   maxrate : Int32
   bufsize : Int32
   fps : Int32
+  stream : Bool
+  b_slices : Bool
 }
 
 ///|
@@ -25,7 +27,7 @@ fn parse_options(args : Array[String]) -> Options raise {
   while i < args.length() {
     let arg = args[i]
     match arg {
-      "--cabac" | "--aq" | "--aud" => {
+      "--cabac" | "--aq" | "--aud" | "--stream" | "--b-slices" => {
         if values.contains(arg) {
           fail("encode-h264: repeated option \{arg}")
         }
@@ -114,6 +116,11 @@ fn parse_options(args : Array[String]) -> Options raise {
       )
     }
   }
+  if values.contains("--b-slices") {
+    if target_bytes > 0 || maxrate > 0 || bufsize > 0 || fps > 0 {
+      fail("encode-h264: b-slices excludes the rate controls")
+    }
+  }
   {
     input,
     output,
@@ -128,6 +135,8 @@ fn parse_options(args : Array[String]) -> Options raise {
     maxrate,
     bufsize,
     fps,
+    stream: values.contains("--stream"),
+    b_slices: values.contains("--b-slices"),
   }
 }
 
@@ -186,4 +195,66 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
     Ok(stream) => (stream, frames.length())
     Err(e) => fail("encode-h264: \{e}")
   }
+}
+
+///|
+/// Streaming path: frames are fed to a `H264StreamEncoder` one at a time
+/// (display order), access units collected as they complete. The encoder
+/// keeps only the pending frame and the reference chain, so its memory no
+/// longer grows with the frame count; the host file read stays whole-file
+/// (the WASM filesystem has no chunked reads).
+fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
+  let luma = opts.width * opts.height
+  let chroma = luma / 4
+  let frame_size = luma + chroma * 2
+  if data.length() == 0 || data.length() % frame_size != 0 {
+    fail(
+      "encode-h264: input must contain complete YUV420P frames (\{frame_size} bytes each)",
+    )
+  }
+  let enc = match
+    @codec.H264StreamEncoder::open(
+      width=opts.width,
+      height=opts.height,
+      qp=opts.qp,
+      cabac=opts.cabac,
+      b_slices=opts.b_slices,
+      aud=opts.aud,
+      aq=opts.aq,
+      aq_strength=opts.aq_strength,
+    ) {
+    Ok(e) => e
+    Err(e) => fail("encode-h264: \{e}")
+  }
+  let aus : Array[Bytes] = []
+  let mut count = 0
+  for offset = 0; offset < data.length(); offset = offset + frame_size {
+    match
+      enc.push_frame(
+        data[offset:offset + luma].to_owned(),
+        data[offset + luma:offset + luma + chroma].to_owned(),
+        data[offset + luma + chroma:offset + frame_size].to_owned(),
+      ) {
+      Ok(_) => ()
+      Err(e) => fail("encode-h264: \{e}")
+    }
+    for au in enc.drain() {
+      aus.push(au)
+    }
+    count = count + 1
+  }
+  match enc.finish() {
+    Ok(tail) =>
+      for au in tail {
+        aus.push(au)
+      }
+    Err(e) => fail("encode-h264: \{e}")
+  }
+  let out : Array[Byte] = []
+  for au in aus {
+    for i = 0; i < au.length(); i = i + 1 {
+      out.push(au[i])
+    }
+  }
+  (Bytes::from_array(out[:]), count)
 }

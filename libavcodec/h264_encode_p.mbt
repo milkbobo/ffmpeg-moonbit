@@ -68,6 +68,15 @@ pub(all) struct H264EncStats {
   /// Total bytes of filler NAL units, Annex B start code and NAL header
   /// included (0 when the stream is already dense enough).
   mut vbv_filler_bytes : Int32
+  /// B macroblocks coded this sequence (skip, direct, L1, Bi and L0).
+  mut b_mbs : Int32
+  /// B macroblocks that chose the bidirectional partition.
+  mut bi_mbs : Int32
+  /// B macroblocks that chose the future-only (L1) partition.
+  mut bl1_mbs : Int32
+  /// B macroblocks coded as B_Direct_16x16 (with residual; skips count
+  /// into `b_mbs` only).
+  mut bdirect_mbs : Int32
 }
 
 ///|
@@ -83,6 +92,10 @@ pub fn H264EncStats::new() -> H264EncStats {
     vbv_fills: 0,
     vbv_bits: 0L,
     vbv_filler_bytes: 0,
+    b_mbs: 0,
+    bi_mbs: 0,
+    bl1_mbs: 0,
+    bdirect_mbs: 0,
   }
 }
 
@@ -141,6 +154,16 @@ priv struct H264PEncoder {
   aq_avg : Int32
   aq_on : Bool
   aq_strength : Int32
+  /// Opt-in CABAC bit pricing for the rate-distortion decision (`§392`).
+  /// When set, the CABAC frame encoder publishes its mirror/engine/states
+  /// here and `eval_plan` prices every candidate through the real CABAC
+  /// syntax writer (snapshot/rollback around each candidate) instead of the
+  /// CAVLC dry run. The three stay None on the CAVLC path and on the
+  /// default CABAC path, so every pinned stream is unchanged.
+  cabac_rd : Bool
+  mut price_mirror : H264DecCtx?
+  mut price_enc : H264CabacEnc?
+  mut price_states : Array[Int32]?
 }
 
 ///|
@@ -194,6 +217,10 @@ pub fn h264_encode_frames(
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   aud~ : Bool = false,
+  /// Opt-in (`§393`): code the odd display positions as B pictures
+  /// (I, P2, B1, P4, B3, ... with POC type 0 reordering). Mutually
+  /// exclusive with the rate controls and `dct8x8`.
+  b_slices~ : Bool = false,
   target_bytes~ : Int32 = 0,
   vbv_maxrate~ : Int32 = 0,
   vbv_bufsize~ : Int32 = 0,
@@ -207,6 +234,30 @@ pub fn h264_encode_frames(
   }
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
+  }
+  if b_slices {
+    if target_bytes > 0 || vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+      return Err("h264 enc: b_slices and the rate controls are exclusive")
+    }
+    if dct8x8 {
+      return Err("h264 enc: b_slices does not support dct8x8")
+    }
+    if frames.length() < 2 {
+      return Err("h264 enc: b_slices needs at least 2 frames")
+    }
+    return h264_encode_frames_b(
+      frames,
+      width~,
+      height~,
+      qp~,
+      level_idc~,
+      aq~,
+      aq_strength~,
+      aud~,
+      cabac=false,
+      recon~,
+      stats~,
+    )
   }
   let n = frames.length()
   // VBV/CBR is opt-in: any of the three parameters turns it on, and the
@@ -692,6 +743,10 @@ fn h264_encode_frames_qps(
       aq_avg: act_avg,
       aq_on: aq,
       aq_strength,
+      cabac_rd: false,
+      price_mirror: None,
+      price_enc: None,
+      price_states: None,
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f, intra_in_p) {
@@ -929,6 +984,7 @@ fn H264PEncoder::encode_p_frame(
   self : H264PEncoder,
   frame_num : Int32,
   intra_in_p : Bool,
+  poc_lsb~ : Int32 = -1,
 ) -> Result[Bytes, String] {
   // Fresh picture: the availability markers reset (every frame is a new
   // slice, so previous-frame macroblocks are unavailable to `mv_fetch`)
@@ -950,6 +1006,9 @@ fn H264PEncoder::encode_p_frame(
   r.put_ue(5) // slice_type: P (all slices)
   r.put_ue(0) // pic_parameter_set_id
   r.put(frame_num & 15, 4) // frame_num (log2_max_frame_num = 4)
+  if poc_lsb >= 0 {
+    r.put(poc_lsb & 15, 4) // pic_order_cnt_lsb (POC type 0 sequences)
+  }
   // num_ref_idx_active_override_flag = 0 (PPS default 1 reference)
   r.put_bit(0)
   // ref_pic_list_modification: ref_pic_list_modification_flag_l0 = 0
@@ -1269,16 +1328,138 @@ fn H264PEncoder::eval_plan(
       ssd = ssd + d * d
     }
   }
-  let cw = H264Rbsp::new()
-  // Pricing replays the syntax writer, whose `mb_qp_delta` sites advance
-  // the running-QP mirror and the delta counter; both belong to the real
-  // write only (the CABAC path prices through this same CAVLC writer).
-  let saved_prev_qp = self.prev_qp
-  let saved_dqp_mbs = self.stats.dqp_mbs
-  self.write_mb_syntax(mb_x, mb_y, plan, coded, cw)
-  self.prev_qp = saved_prev_qp
-  self.stats.dqp_mbs = saved_dqp_mbs
-  (ssd, cw.bw.buf.length() * 8 + cw.bw.nbits)
+  match (self.price_mirror, self.price_enc, self.price_states) {
+    (Some(ctx), Some(enc), Some(states)) => {
+      // CABAC RD pricing (opt-in): replay this candidate's syntax through
+      // the real engine and context states, measure the emitted bits, then
+      // roll everything back so the next candidate starts from the same
+      // prefix state. The measured bits are exactly the bits the final
+      // write of this plan would add, not an approximation.
+      let bits = self.eval_cabac_bits(ctx, enc, states, mb_x, mb_y, plan, coded)
+      (ssd, bits)
+    }
+    _ => {
+      let cw = H264Rbsp::new()
+      // Pricing replays the syntax writer, whose `mb_qp_delta` sites advance
+      // the running-QP mirror and the delta counter; both belong to the real
+      // write only (the CABAC path prices through this same CAVLC writer).
+      let saved_prev_qp = self.prev_qp
+      let saved_dqp_mbs = self.stats.dqp_mbs
+      self.write_mb_syntax(mb_x, mb_y, plan, coded, cw)
+      self.prev_qp = saved_prev_qp
+      self.stats.dqp_mbs = saved_dqp_mbs
+      (ssd, cw.bw.buf.length() * 8 + cw.bw.nbits)
+    }
+  }
+}
+
+///|
+/// One CABAC-priced candidate (the `§392` core): snapshot the arithmetic
+/// engine, the context states and every mirror field the syntax writer
+/// touches for the macroblock being priced, run the real
+/// `write_cabac_mb_syntax`, count the bits the engine produced, then restore
+/// the snapshot. The skip flag and `end_of_slice` terminate bin are constant
+/// across candidates and stay outside the measurement.
+fn H264PEncoder::eval_cabac_bits(
+  self : H264PEncoder,
+  ctx : H264DecCtx,
+  enc : H264CabacEnc,
+  states : Array[Int32],
+  mb_x : Int32,
+  mb_y : Int32,
+  plan : H264PPlan,
+  coded : H264PMbCode,
+) -> Int32 {
+  let mb_idx = mb_y * self.mb_width + mb_x
+  let info = ctx.infos[mb_idx]
+  // Engine snapshot: the three scalars plus the emitted-bit length.
+  let s_low = enc.low
+  let s_range = enc.range
+  let s_outstanding = enc.outstanding
+  let s_bits = enc.bits.length()
+  // Context states snapshot (the writer adapts them in place).
+  let s_states = Array::make(states.length(), 0)
+  for i = 0; i < states.length(); i = i + 1 {
+    s_states[i] = states[i]
+  }
+  // Mirror snapshot: the scalars the writer advances plus the current
+  // macroblock's info fields (later macroblocks read them as neighbour
+  // contexts, and the winning write must start from the pre-MB values).
+  let s_qscale = ctx.qscale
+  let s_last_qdiff = ctx.last_qscale_diff
+  let s_cur_intra = ctx.cur_mb_is_intra
+  let s_mb_type = info.mb_type_bits
+  let s_cbp_all = info.cbp_all
+  let s_chroma_mode = info.chroma_mode
+  let s_intra4x4 = info.intra4x4
+  let s_transform = info.transform_8x8
+  let s_qp = info.qp
+  let s_dqp_mbs = self.stats.dqp_mbs
+  // Motion snapshot of the macroblock being priced: the syntax writer's
+  // `h264_write_back_ref` / `h264_write_back_part` fill the current MB's
+  // slots progressively, and partition predictors read not-yet-written
+  // current-MB slots (the decoder sees them unavailable). A losing
+  // candidate must not leave its values there for the next candidate or
+  // the winner's real write - the same reset the CAVLC path's `cur_mv` /
+  // `cur_ref` zeroing provides.
+  let s_mv = Array::make(32, 0)
+  let s_mvd = Array::make(32, 0)
+  let s_ref = Array::make(16, 0)
+  let s_mv1 = Array::make(32, 0)
+  let s_mvd1 = Array::make(32, 0)
+  let s_ref1 = Array::make(16, 0)
+  for i = 0; i < 32; i = i + 1 {
+    s_mv[i] = info.mv[i]
+    s_mvd[i] = info.mvd[i]
+    s_mv1[i] = info.mv1[i]
+    s_mvd1[i] = info.mvd1[i]
+  }
+  for i = 0; i < 16; i = i + 1 {
+    s_ref[i] = info.ref_idx[i]
+    s_ref1[i] = info.ref_idx1[i]
+  }
+  // The decoder's nC semantics: every macroblock overwrites the slots the
+  // predictor reads, so pricing starts from the cleared pre-MB state.
+  for i = 0; i < 48; i = i + 1 {
+    info.nz[i] = 0
+  }
+  self.write_cabac_mb_syntax(ctx, enc, states, mb_x, mb_y, plan, coded)
+  let bits = enc.bits.length() - s_bits
+  // Rollback: engine, states, mirror scalars, the info fields and the
+  // current macroblock's motion slots.
+  enc.low = s_low
+  enc.range = s_range
+  enc.outstanding = s_outstanding
+  enc.bits.truncate(s_bits)
+  for i = 0; i < states.length(); i = i + 1 {
+    states[i] = s_states[i]
+  }
+  ctx.qscale = s_qscale
+  ctx.last_qscale_diff = s_last_qdiff
+  ctx.cur_mb_is_intra = s_cur_intra
+  info.mb_type_bits = s_mb_type
+  info.cbp_all = s_cbp_all
+  info.chroma_mode = s_chroma_mode
+  info.intra4x4 = s_intra4x4
+  info.transform_8x8 = s_transform
+  info.qp = s_qp
+  self.stats.dqp_mbs = s_dqp_mbs
+  for i = 0; i < 32; i = i + 1 {
+    info.mv[i] = s_mv[i]
+    info.mvd[i] = s_mvd[i]
+    info.mv1[i] = s_mv1[i]
+    info.mvd1[i] = s_mvd1[i]
+  }
+  for i = 0; i < 16; i = i + 1 {
+    info.ref_idx[i] = s_ref[i]
+    info.ref_idx1[i] = s_ref1[i]
+  }
+  // Leave the nz slots cleared for the next candidate and, after the last
+  // one, for the winner's real write (uncoded blocks must read as zero).
+  for i = 0; i < 48; i = i + 1 {
+    info.nz[i] = 0
+  }
+  bits
 }
 
 ///|

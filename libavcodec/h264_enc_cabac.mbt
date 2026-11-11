@@ -800,6 +800,7 @@ pub fn h264_encode_intra_frame_cabac(
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   vbv~ : H264Vbv? = None,
+  b_seq~ : Bool = false,
 ) -> Result[H264EncodedFrame, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -834,7 +835,9 @@ pub fn h264_encode_intra_frame_cabac(
   let cstride = mb_width * 8
   let pheight = mb_height * 16
   let ps = new_h264_param_sets()
-  let sps_rbsp = if dct8x8 {
+  let sps_rbsp = if b_seq {
+    h264_enc_sps_rbsp_b(p)
+  } else if dct8x8 {
     h264_enc_sps_rbsp_high(p, vbv~)
   } else {
     h264_enc_sps_rbsp_main(p, vbv~)
@@ -943,6 +946,9 @@ pub fn h264_encode_intra_frame_cabac(
   r.put_ue(0) // pic_parameter_set_id
   r.put(0, 4) // frame_num
   r.put_ue(0) // idr_pic_id
+  if b_seq {
+    r.put(0, 4) // pic_order_cnt_lsb (IDR: 0)
+  }
   r.put_bit(0) // no_output_of_prior_pics_flag
   r.put_bit(0) // long_term_reference_flag
   r.put_se(qp - p_ps.qp) // slice_qp_delta
@@ -2623,6 +2629,7 @@ fn H264PEncoder::encode_p_frame_cabac(
   self : H264PEncoder,
   frame_num : Int32,
   intra_in_p : Bool,
+  poc_lsb~ : Int32 = -1,
 ) -> Result[Bytes, String] {
   // Fresh picture for the encoder mirror (same reset as `encode_p_frame`).
   for k = 0; k < self.states.length(); k = k + 1 {
@@ -2648,12 +2655,23 @@ fn H264PEncoder::encode_p_frame_cabac(
   )
   let enc = h264_cabac_enc_new()
   let states = ff_h264_init_cabac_states(self.p.qp, 8, 0, 0)
+  // CABAC RD pricing (`§392`): publish this picture's mirror, engine and
+  // context states so `eval_plan` can price every candidate through the
+  // real writer with snapshot/rollback instead of the CAVLC dry run.
+  if self.cabac_rd {
+    self.price_mirror = Some(mirror)
+    self.price_enc = Some(enc)
+    self.price_states = Some(states)
+  }
   // Slice header.
   let r = H264Rbsp::new()
   r.put_ue(0) // first_mb_in_slice
   r.put_ue(5) // slice_type: P (all slices)
   r.put_ue(0) // pic_parameter_set_id
   r.put(frame_num & 15, 4) // frame_num (log2_max_frame_num = 4)
+  if poc_lsb >= 0 {
+    r.put(poc_lsb & 15, 4) // pic_order_cnt_lsb (POC type 0 sequences)
+  }
   r.put_bit(0) // num_ref_idx_active_override_flag
   r.put_bit(0) // ref_pic_list_modification_flag_l0
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
@@ -2780,7 +2798,15 @@ pub fn h264_encode_frames_cabac(
   dct8x8~ : Bool = false,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
+  /// Opt-in (`§392`): price the rate-distortion candidates with the real
+  /// CABAC engine and context states instead of the CAVLC dry run. Off, the
+  /// mode decisions (and every pinned stream) are unchanged.
+  cabac_rd~ : Bool = false,
   aud~ : Bool = false,
+  /// Opt-in (`§393`): code the odd display positions as B pictures
+  /// (I, P2, B1, P4, B3, ... with POC type 0 reordering). Mutually
+  /// exclusive with the rate controls, `dct8x8` and `cabac_rd`.
+  b_slices~ : Bool = false,
   target_bytes~ : Int32 = 0,
   vbv_maxrate~ : Int32 = 0,
   vbv_bufsize~ : Int32 = 0,
@@ -2794,6 +2820,33 @@ pub fn h264_encode_frames_cabac(
   }
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
+  }
+  if b_slices {
+    if target_bytes > 0 || vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+      return Err("h264 enc: b_slices and the rate controls are exclusive")
+    }
+    if dct8x8 {
+      return Err("h264 enc: b_slices does not support dct8x8")
+    }
+    if cabac_rd {
+      return Err("h264 enc: b_slices does not support cabac_rd")
+    }
+    if frames.length() < 2 {
+      return Err("h264 enc: b_slices needs at least 2 frames")
+    }
+    return h264_encode_frames_b(
+      frames,
+      width~,
+      height~,
+      qp~,
+      level_idc~,
+      aq~,
+      aq_strength~,
+      aud~,
+      cabac=true,
+      recon~,
+      stats~,
+    )
   }
   let n = frames.length()
   // VBV/CBR is opt-in and cannot be combined with the average-bitrate
@@ -2822,6 +2875,7 @@ pub fn h264_encode_frames_cabac(
         dct8x8~,
         aq~,
         aq_strength~,
+        cabac_rd~,
         aud~,
         vbv=v,
         recon~,
@@ -2848,6 +2902,7 @@ pub fn h264_encode_frames_cabac(
             dct8x8~,
             aq~,
             aq_strength~,
+            cabac_rd~,
             aud~,
             recon=[],
             stats=H264EncStats::new(),
@@ -2878,6 +2933,7 @@ pub fn h264_encode_frames_cabac(
       dct8x8~,
       aq~,
       aq_strength~,
+      cabac_rd~,
       aud~,
       recon~,
       stats~,
@@ -2902,6 +2958,7 @@ fn h264_encode_frames_vbv_cabac(
   dct8x8~ : Bool,
   aq~ : Bool,
   aq_strength~ : Int32,
+  cabac_rd~ : Bool,
   aud~ : Bool,
   vbv~ : H264Vbv,
   recon~ : Array[Bytes],
@@ -2923,6 +2980,7 @@ fn h264_encode_frames_vbv_cabac(
           dct8x8~,
           aq~,
           aq_strength~,
+          cabac_rd~,
           aud~,
           recon=[],
           stats=H264EncStats::new(),
@@ -2952,6 +3010,7 @@ fn h264_encode_frames_vbv_cabac(
       dct8x8~,
       aq~,
       aq_strength~,
+      cabac_rd~,
       recon~,
       stats~,
       vbv=Some(vbv),
@@ -2989,6 +3048,7 @@ fn h264_encode_frames_cabac_qps(
   dct8x8~ : Bool,
   aq~ : Bool,
   aq_strength~ : Int32,
+  cabac_rd~ : Bool = false,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
   vbv~ : H264Vbv? = None,
@@ -3136,6 +3196,10 @@ fn h264_encode_frames_cabac_qps(
       aq_avg: act_avg,
       aq_on: aq,
       aq_strength,
+      cabac_rd,
+      price_mirror: None,
+      price_enc: None,
+      price_states: None,
     }
     let nal = match enc.encode_p_frame_cabac(f, intra_in_p) {
       Ok(n) => n

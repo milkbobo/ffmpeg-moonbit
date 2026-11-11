@@ -12389,3 +12389,85 @@ MoonBit 运行时符号，绕开基于 mimalloc、与 ASan 不兼容的
 **未做（更新）**：CABAC 位定价仍统一走 CAVLC 干跑计位；B 帧（现
 `max_num_reorder_frames=0`）；真 x264 的 SPS VUI/HRD 数值逐字段对拍
 （当前是 NAL 布局 + 零告警级）；AQ 曲线可配；编码器接 CLI。
+（以上四项中的前三项于 §392–§394 完成，CLI 接入亦在 §394。）
+
+## §392 H.264 CABAC 位定价——模式决策换真 CABAC 引擎计价（cabac_rd，opt-in，2026-11-11）
+
+P slice 的率失真决策此前统一用 CAVLC 干跑计位（§380 起），CABAC
+流只是「用 CAVLC 价选模、用 CABAC 写出」。本片 `cabac_rd~` opt-in
+把定价换成真引擎：`encode_p_frame_cabac` 把本图的 mirror（真
+H264DecCtx）、算术引擎与上下文 states 发布到 `H264PEncoder` 的
+`price_*` 字段，`eval_plan` 的每个候选经 `eval_cabac_bits` 以
+快照/回放/回滚测得精确位数——快照面 = 引擎标量（low/range/
+outstanding/bits 截断）+ states 全表 + mirror 当前 MB 的
+mb_type_bits/cbp_all/chroma_mode/intra4x4/transform_8x8/qp/
+qscale/last_qscale_diff/cur_mb_is_intra + nz 清零（解码器「每宏块
+完整覆写 nC 槽」语义）+ **当前 MB 的六个运动数组**（mv/mv1/ref_idx/
+ref_idx1/mvd/mvd1——子分区对角预测读「未写回的当前 MB 槽」，落选
+候选不得留值；基线 CAVLC 路径的 cur_mv/cur_ref 重置提供同语义，
+CABAC 定价直接写 mirror 数组故需显式回滚，这是本片的根修）。
+位数值即真写该计划的引擎增量，非近似；同候选回放自检逐位相等。
+默认关闭逐字节不变（1725 B 钉值）；开启后移动场景 1694 B 省 1.8%，
+AQ / intra_in_p / dct8x8 组合可叠加。门：黑盒 6/6（含无滤波重建
+不变量——注意 `skip_lf=true` 才是无滤波口径，挂错口径曾制造一次
+假失败）、CABAC 套件 16/16、docker ffmpeg 零告警 framemd5 六帧
+钉值（首帧与基线共享 I 帧 MD5）。
+
+## §393 H.264 B 帧编码与帧重排——L1/Bi/Direct 16x16 + POC type 0（b_slices，opt-in，2026-11-11）
+
+`h264_encode_b.mbt`：`b_slices~` 把奇数 display 位编为 B 图像，
+编码序 I, P2, B1, P4, B3, …（B 在其未来参考之后编码），重排由
+POC type 0 携带（`h264_enc_sps_rbsp_b`：Main profile +
+pic_order_cnt_type=0 + log2_max_poc_lsb=4 + max_num_ref_frames=2；
+每个 slice 写 `pic_order_cnt_lsb = display*2 & 15`，非参考 B 与
+其后继 P 共享 frame_num）。B 决策全部走解码器自己的机制：真
+H264DecCtx 镜像（list0=过去参考、list1=未来参考、colocated=未来
+P 的运动态、rec 平面与编码器共享），`h264_b_direct`（空间 direct）
+与 `h264_b_compensate`（(a+b+1)>>1 平均）直调；候选
+{Direct16, L0_16x16, L1_16x16, Bi_16x16} 以 `ssd·2^10 + λ·bits`
+择优（CAVLC 干跑计价，B+CABAC 计价暂拒绝）；direct 试验的 mirror
+写有快照回滚，落选即恢复。写端双熵：CAVLC（ue(kind) + 逐表
+se(mvd) + P 共享残差尾）与 CABAC（skip bin ctx 24+c、mb_type 树
+ctx 27+非 direct 邻居数、mvd ctx 按分量 40/47 两表共享、残差经
+P 的 cbp/dqp/residual 写端）；B 的 nz 镜像取 `cur_nz`（语法级、
+熵无关——CABAC 写端镜像 nz 与 CAVLC 的 cur_nz 语义同源）。
+
+**三个根因**（bin 级对齐 ≠ 语义对齐的又一课）：① B mb_type 的
+kind↔partition 掩码映射反了——`h264_b_partitions` 的 `mask:
+kind`（bit0=list0）即 kind1=L0、kind2=L1、kind3=Bi，双侧一致地
+错使位流自洽合法但列表语义颠倒（MV 应用到错误参考，大面积重建
+差）；② CABAC mb_type kind3 的后缀是 4-bin（1×ctx31+3×ctx32）
+且 `bits<8 → bits+3` 直接出 kind（无继续 bin），第一版多写了
+一个 ctx32 bin；③ mvd 上下文按分量（x→40、y→47）不按 list，
+amvd 由 `h264_mvd_fetch` 的 active_list 感知提供。另：B 的 ME 结果
+钳制在 |mvd|≤70（mvd 语法幅值上限，超出即解码器 clip 后 MV 不可
+达）。定位手段：bin 级 zip 探针（写端 decision / 读端 get_cabac
+全量打点比对第一分叉）+ 解码器 slice header / kind / MV 三级打点。
+门：黑盒 7/7（双熵重建不变量、stats.b_mbs>0、确定性、默认关
+byte-exact、参数互斥、aud+aq 组合、ffmpeg 仲裁 display 序六帧
+framemd5 钉值）；GOP 形状回归 4/4（n=2 骨架 / n=3 首 B / 双熵）；
+编码器全套 **86/86**；docker ffmpeg 零告警。B 的 16x8/8x16/8x8
+子分割、intra-in-B、加权预测、B×VBV/ABR 留待后续。
+
+## §394 H.264 流式编码接口——逐帧 push/drain 常数内存（H264StreamEncoder + CLI --stream，2026-11-11）
+
+`h264_enc_stream.mbt`：`H264StreamEncoder::open / push_frame /
+drain / finish`——display 序逐帧输入，AU 在参考齐备时产出（I/P
+每帧一个；B 调度下 IDR 一个、奇数位缓冲、偶数位产出 P-B 对、
+finish 把尾奇数位 flush 为 P）。编码器只持有 pending 帧 + 参考
+链 + 每 MB 镜像，内存不随帧数增长（B 调度用 past/fut 双参考
+平面：P 重建先停 fut_*，B 编码后才交接，B 的过去参考不被 P
+覆盖）。图像编码全部复用批式入口的单帧本体（intra 入口、
+H264PEncoder 的 encode_p_frame[_cabac]、B 帧 encode_b_frame[_cabac]），
+**契约 = 与批式逐字节相等**（黑盒钉 CAVLC I/P、CABAC I/P、B
+调度三模式 + AU 时机 + recon 一致性 + 拒绝语义，6/6）。两遍码控
+（VBV/ABR）需全序列，open 拒绝。CLI `cmd/encode-h264` 增
+`--stream`（流式路径）与 `--b-slices`；WASM 宿主文件系统无分块
+读，输入缓冲仍整文件（文档化），编码器侧不再持有帧数组。CLI
+实测流式/批式同 md5（16×16×3 帧 66309d12…），B+CABAC+AUD 流
+113 B；docker ffmpeg 两条流零告警；CLI 包测试 6/6。
+
+本片回归门汇总：`moon check --target wasm --deny-warn --no-render`
+EXIT=0；编码器全套 wasm **86/86**；x264 native oracle docker
+**33/33**；C 绑定面（libavcodec/x264）本片无改动，ASan 基线延续
+§391。
