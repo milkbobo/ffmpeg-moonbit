@@ -61,7 +61,7 @@ fn new_h264_enc_mb_state() -> H264EncMbState {
 priv struct H264IntraEncoder {
   p : H264EncParams
   pps : H264Pps
-  chroma_qp : Int32
+  mut chroma_qp : Int32
   src_y : Array[Int32]
   src_u : Array[Int32]
   src_v : Array[Int32]
@@ -78,6 +78,17 @@ priv struct H264IntraEncoder {
   dct8x8 : Bool
   /// Shared decision counters (I8x8 usage).
   stats : H264EncStats
+  /// This macroblock's QP / `mb_qp_delta` (adaptive quantisation; both
+  /// stay at the picture QP with AQ off).
+  mut mb_qp : Int32
+  mut mb_dqp : Int32
+  /// The decoder's running QP: `mb_qp_delta` accumulates onto the previous
+  /// macroblock's QP, not the slice QP (only written dqp's advance it).
+  mut prev_qp : Int32
+  /// Per-MB luma activity and the picture average (`aq_on` false: unused).
+  mut aq_act : Array[Int32]
+  mut aq_avg : Int32
+  aq_on : Bool
 }
 
 ///|
@@ -98,6 +109,7 @@ pub fn h264_encode_intra_frame(
   dct8x8~ : Bool = false,
   stats~ : H264EncStats = H264EncStats::new(),
   pps_qp~ : Int32 = -1,
+  aq~ : Bool = false,
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -198,6 +210,17 @@ pub fn h264_encode_intra_frame(
     cur_modes: Array::make(16, 0),
     dct8x8,
     stats,
+    mb_qp: qp,
+    mb_dqp: 0,
+    prev_qp: qp,
+    aq_act: [],
+    aq_avg: 0,
+    aq_on: aq,
+  }
+  if aq {
+    let (act, avg) = h264_aq_measure(self_.src_y, ystride, mb_width, mb_height)
+    self_.aq_act = act
+    self_.aq_avg = avg
   }
   let r = H264Rbsp::new()
   r.put_ue(0) // first_mb_in_slice
@@ -547,7 +570,23 @@ fn H264IntraEncoder::encode_macroblock(
   }
   let top_avail = mb_y > 0
   let left_avail = mb_x > 0
-  let qp = self.p.qp
+  // Adaptive quantisation: this MB's QP offset rides `mb_qp_delta`.
+  self.mb_qp = self.p.qp
+  self.mb_dqp = 0
+  if self.aq_on {
+    let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg)
+    let mut mq = self.p.qp + adj
+    if mq < 0 {
+      mq = 0
+    }
+    if mq > 51 {
+      mq = 51
+    }
+    self.mb_qp = mq
+    self.mb_dqp = mq - self.prev_qp
+    self.chroma_qp = h264_get_chroma_qp(self.pps, 0, mq)
+  }
+  let qp = self.mb_qp
   // Chroma first: the winning prediction stays in the reconstruction
   // planes for the residual pass below.
   let cbase = mb_y * 8 * self.cstride + mb_x * 8
@@ -1042,7 +1081,11 @@ fn H264IntraEncoder::encode_macroblock(
     }
     r.put_ue(1 + spec_mode + 4 * group)
     r.put_ue(chroma_mode)
-    r.put_se(0) // mb_qp_delta
+    r.put_se(self.mb_dqp) // mb_qp_delta
+    self.prev_qp = self.mb_qp
+    if self.mb_dqp != 0 {
+      self.stats.dqp_mbs += 1
+    }
     // DC block (16 coefficients, full scan).
     let dc_scan : Array[Int32] = scan_view_at(
       luma_dc_store, 0, h264_zigzag_scan_t, 0, 16,
@@ -1093,7 +1136,11 @@ fn H264IntraEncoder::encode_macroblock(
     let code = h264_enc_cbp_golomb(cbp)
     r.put_ue(code)
     if cbp != 0 {
-      r.put_se(0) // mb_qp_delta
+      r.put_se(self.mb_dqp) // mb_qp_delta
+      self.prev_qp = self.mb_qp
+      if self.mb_dqp != 0 {
+        self.stats.dqp_mbs += 1
+      }
     }
     if use_i8 {
       // 8x8DCT luma residual: each coded quadrant is four interleaved

@@ -816,3 +816,50 @@ test "x264 oracle: rate-controlled CABAC stream decodes identically in C" {
   }
   x264_cross_decode(stream, 3, 1)
 }
+
+///|
+/// Adaptive-quantisation streams (per-MB `mb_qp_delta` accumulating onto
+/// the decoder's running QP, both entropy coders): the C decoder and the
+/// pure MoonBit decoder must agree pixel-for-pixel.
+test "x264 oracle: adaptive-quantisation CAVLC stream decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      aq=true,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.dqp_mbs == 0 {
+    fail("fixture must drive non-zero mb_qp_delta")
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+///|
+test "x264 oracle: adaptive-quantisation CABAC stream decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      aq=true,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.dqp_mbs == 0 {
+    fail("fixture must drive non-zero mb_qp_delta")
+  }
+  x264_cross_decode(stream, 3, 1)
+}

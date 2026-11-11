@@ -12227,3 +12227,47 @@ RC 流 docker ffmpeg 9.0.2 零告警且 framemd5 五帧与本仓滤波输出逐�
 **未做（更新）**：宏块级自适应量化（mb_qp_delta≠0——两写端目前恒写
 dqp=0，解码端已支持）；VBV/CBR 缓冲约束；I16/8x8 转默认策略；CABAC
 位定价；I4-in-P。
+
+## §389 H.264 编码器宏块级自适应量化（mb_qp_delta≠0 + AQ，opt-in，2026-11-11）
+
+§388 的帧级 RC 选每帧 QP，本片在帧内再按宏块活动度 ±1 QP：
+`h264_encode_frames` / `h264_encode_frames_cabac` 增 `aq~`（默认 false =
+关，平 QP 路径逐字节不变，存量 40 项钉值 + 12 条 ffmpeg 仲裁钉值全绿）。
+AQ 叠加在帧 QP 之上（RC 选帧 QP，AQ 在帧内 ±1），probe/final 两遍都透传。
+
+**AQ 规则**（`h264_enc_ps.mbt`，两熵共用）：
+- `h264_aq_measure`：每 MB luma 对 MB 均值的平均绝对偏差（MAD，整数）
+  与全图平均
+- `h264_aq_adj`：`act*4 > avg*5` → +1 QP（纹理掩蔽量化噪声）、
+  `act*4 < avg*3` → −1 QP（平块最显 artifact）、中间带 0；全图均匀
+  （avg≤0）全 0。QP 夹 [0,51]，`chroma_qp` 随 mb_qp 联动
+
+**关键正确性：mb_qp_delta 基准是解码器的运行 QP，不是 slice QP**。
+解码器 `ctx.qscale` 跨宏块累积（`h264_picture_slice.mbt` 仅在 slice 起点
+重置为 slice_qp），每个 dqp 叠在前一个 MB 的 QP 上。半成品的
+`mb_dqp = mb_qp − slice_qp` 会让连续调整 MB 的解码器 QP 漂移（重建分叉）。
+四链修复：
+- CAVLC I/P：`H264IntraEncoder`/`H264PEncoder` 增 `prev_qp`（帧入口初始化
+  为帧 QP），`mb_dqp = mb_qp − prev_qp`；仅在真实 dqp 写点推进 prev_qp
+  （I16 无条件、I4/I8/inter 仅 cbp≠0；skip/cbp=0 不推进）
+- CABAC I/P：镜像 `ctx.qscale`/`last_qscale_diff` 改为整帧持久（去掉逐 MB
+  重置），`mb_dqp = mb_qp − 镜像运行 qscale`，dqp ladder 助手自带环绕推进；
+  skip 与 cbp=0 路径按 C 语义重置 `last_qscale_diff`（`h264_cabac.c:1952/2492`）
+- **RD 计价保护**：`eval_plan` 干跑 CAVLC 语法写器计位（CABAC P 也经此
+  计价），写器的 dqp 写点会推进 prev_qp/计数——干跑前后保存/恢复
+  `prev_qp` 与 `stats.dqp_mbs`，使投机计价不污染累积状态
+- `stats.dqp_mbs` 移到真实写点计数（只计实际写入非零 delta 的 MB，
+  skip/cbp=0 不计）
+
+**验证**：AQ 黑盒 3/3（混合活动度夹具 64×48×4：左半平块漂移 + 右半
+梯度/棋盘/游动框；双熵 aq off `dqp_mbs==0`、aq on CAVLC 22 / CABAC 20
+钉值、重建不变式——编码器重建 == unfiltered 解码、aq+RC 叠加仍 ≤ 目标）；
+存量编码器 40/40 + quant 幅度门 3/3 逐字节不变；两条 AQ 流 docker ffmpeg
+9.0.2 零告警且 framemd5 四帧与本仓滤波输出逐字节一致（AQARB/AQCARB 标签）；
+x264 native C oracle 扩 AQ 双熵用例 **20/20**；全仓 wasm-gc **1747/1747**、
+非 gc 黑盒编码器 47/47、deny-warn 干净（非 gc whitebox 的 `__init` 局部数
+上限为预存限制——基线 dc54e14 以同一函数同一偏移触发，与本片无关，
+whitebox 一律走 wasm-gc）。
+
+**未做（更新）**：VBV/CBR 缓冲约束；I16/8x8 转默认策略；CABAC 位定价；
+I4-in-P；AQ 强度/曲线可配（目前固定 ±1 与 25% 带）。

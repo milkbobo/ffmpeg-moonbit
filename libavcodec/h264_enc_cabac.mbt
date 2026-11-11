@@ -1,6 +1,6 @@
 ///|
 /// Pure-MoonBit H.264 CABAC encoder, slice 3 of the port: Main profile
-/// (profile_idc 77), 4:2:0 8-bit, flat QP, single slice, one reference.
+/// (profile_idc 77), 4:2:0 8-bit, single slice, one reference.
 ///
 /// Porting discipline (same as the CAVLC slices): the arithmetic encoder
 /// core mirrors the reference encoder already verified bit-exactly against
@@ -23,8 +23,9 @@
 /// a CAVLC-path feature. P slices code P_Skip plus the four inter
 /// partitions with the same rate-distortion plan decision as the CAVLC
 /// encoder (`decide_plan`). Single L0 reference, so no `ref_idx` syntax;
-/// flat QP, so `mb_qp_delta` is always the zero bin (the decoder reads it
-/// when cbp != 0 or the macroblock is I16x16).
+/// `mb_qp_delta` carries the opt-in adaptive-quantisation offset against
+/// the mirror's running qscale (the decoder reads it when cbp != 0 or the
+/// macroblock is I16x16; with AQ off it is always the zero bin).
 
 ///|
 /// CABAC arithmetic encoder core: the verified mirror of the reference
@@ -332,6 +333,47 @@ fn h264_cabacw_sub_type(
       enc.decision(states, 23, 0)
     }
   }
+}
+
+///|
+/// `decode_cabac_mb_dqp` write side: the zero bin at ctx
+/// 60 + (last_qscale_diff != 0), or the unary ladder - first continuation
+/// bin at 62, the rest at 63 - for the signed code `2*|d|-1` when `d > 0`
+/// and `2*|d|` when `d < 0`. Mirrors the decoder's `last_qscale_diff` and
+/// the wrapped `qscale` update (a no-op in range).
+fn h264_cabacw_dqp(
+  enc : H264CabacEnc,
+  states : Array[Int32],
+  ctx : H264DecCtx,
+  delta : Int32,
+) -> Unit {
+  let off = if ctx.last_qscale_diff != 0 { 1 } else { 0 }
+  if delta == 0 {
+    enc.decision(states, 60 + off, 0)
+    ctx.last_qscale_diff = 0
+    return
+  }
+  enc.decision(states, 60 + off, 1)
+  let code = if delta > 0 { 2 * delta - 1 } else { -2 * delta }
+  if code == 1 {
+    enc.decision(states, 62, 0)
+  } else {
+    enc.decision(states, 62, 1)
+    let mut i = 2
+    while i < code {
+      enc.decision(states, 63, 1)
+      i = i + 1
+    }
+    enc.decision(states, 63, 0)
+  }
+  ctx.last_qscale_diff = delta
+  let mut q = ctx.qscale + delta
+  if q < 0 {
+    q = q + h264_max_qp(ctx) + 1
+  } else if q > h264_max_qp(ctx) {
+    q = q - h264_max_qp(ctx) - 1
+  }
+  ctx.qscale = q
 }
 
 ///|
@@ -706,7 +748,7 @@ fn h264_cabac_nal(
 priv struct H264CabacIEnc {
   p : H264EncParams
   pps : H264Pps
-  chroma_qp : Int32
+  mut chroma_qp : Int32
   src_y : Array[Int32]
   src_u : Array[Int32]
   src_v : Array[Int32]
@@ -725,6 +767,14 @@ priv struct H264CabacIEnc {
   dct8x8 : Bool
   /// Shared decision counters (I8x8 usage).
   stats : H264EncStats
+  /// This macroblock's QP / `mb_qp_delta` (adaptive quantisation; both
+  /// stay at the picture QP with AQ off).
+  mut mb_qp : Int32
+  mut mb_dqp : Int32
+  /// Per-MB luma activity and the picture average (`aq_on` false: unused).
+  mut aq_act : Array[Int32]
+  mut aq_avg : Int32
+  aq_on : Bool
 }
 
 ///|
@@ -743,6 +793,7 @@ pub fn h264_encode_intra_frame_cabac(
   dct8x8~ : Bool = false,
   stats~ : H264EncStats = H264EncStats::new(),
   pps_qp~ : Int32 = -1,
+  aq~ : Bool = false,
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -864,6 +915,16 @@ pub fn h264_encode_intra_frame_cabac(
     cur_modes: Array::make(16, 0),
     dct8x8,
     stats,
+    mb_qp: qp,
+    mb_dqp: 0,
+    aq_act: [],
+    aq_avg: 0,
+    aq_on: aq,
+  }
+  if aq {
+    let (act, avg) = h264_aq_measure(self_.src_y, ystride, mb_width, mb_height)
+    self_.aq_act = act
+    self_.aq_avg = avg
   }
   // Slice header (POC type 2: no POC syntax).
   let r = H264Rbsp::new()
@@ -1072,14 +1133,30 @@ fn H264CabacIEnc::encode_macroblock(
   }
   info.transform_8x8 = false
   self.ctx.cur_mb_is_intra = true
-  self.ctx.qscale = self.p.qp
-  self.ctx.last_qscale_diff = 0
+  // Adaptive quantisation: this MB's QP offset rides `mb_qp_delta`.
+  // `ctx.qscale` / `last_qscale_diff` persist across macroblocks exactly
+  // like the decoder's slice context (reset only at picture start).
+  self.mb_qp = self.p.qp
+  self.mb_dqp = 0
+  if self.aq_on {
+    let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg)
+    let mut mq = self.p.qp + adj
+    if mq < 0 {
+      mq = 0
+    }
+    if mq > 51 {
+      mq = 51
+    }
+    self.mb_qp = mq
+    self.mb_dqp = mq - self.ctx.qscale
+    self.chroma_qp = h264_get_chroma_qp(self.pps, 0, mq)
+  }
   for i = 0; i < 16; i = i + 1 {
     self.cur_modes[i] = 0
   }
   let top_avail = mb_y > 0
   let left_avail = mb_x > 0
-  let qp = self.p.qp
+  let qp = self.mb_qp
   // ---- chroma decisions + residuals ----
   let cbase = mb_y * 8 * self.cstride + mb_x * 8
   let chroma_mode = self.pick_chroma(cbase, top_avail, left_avail)
@@ -1669,7 +1746,13 @@ fn H264CabacIEnc::encode_macroblock(
   // Decoder writes `info.cbp_all = cbp` before the residual bins.
   info.cbp_all = cbp
   if cbp != 0 || use_i16 {
-    self.enc.decision(self.states, 60, 0)
+    h264_cabacw_dqp(self.enc, self.states, self.ctx, self.mb_dqp)
+    if self.mb_dqp != 0 {
+      self.stats.dqp_mbs += 1
+    }
+  } else {
+    // The decoder's all-zero else branch resets the dqp context selector.
+    self.ctx.last_qscale_diff = 0
   }
   if use_i16 {
     // The Hadamard DC block (cat 0, n 48, full zigzag scan) then the
@@ -1812,7 +1895,7 @@ fn H264CabacIEnc::encode_macroblock(
   }
   info.intra4x4 = !use_i16
   info.chroma_mode = chroma_mode
-  info.qp = qp
+  info.qp = self.ctx.qscale
   for g = 0; g < 16; g = g + 1 {
     info.modes[g] = self.cur_modes[g]
   }
@@ -2006,7 +2089,12 @@ fn H264PEncoder::write_cabac_mb_syntax(
       h264_cabacw_cbp(enc, states, ctx, mb_idx, mb_x, mb_y, cbp, true)
       info.cbp_all = cbp
       if cbp != 0 {
-        enc.decision(states, 60, 0)
+        h264_cabacw_dqp(enc, states, ctx, self.mb_dqp)
+        if self.mb_dqp != 0 {
+          self.stats.dqp_mbs += 1
+        }
+      } else {
+        ctx.last_qscale_diff = 0
       }
       // Luma residuals (cbp-gated 8x8 blocks, cat 5, intra matrices on
       // the decode side).
@@ -2032,7 +2120,7 @@ fn H264PEncoder::write_cabac_mb_syntax(
       info.mb_type_bits = h264_mb_type_intra4x4
       info.intra4x4 = true
       info.chroma_mode = chroma_mode
-      info.qp = self.p.qp
+      info.qp = ctx.qscale
       for g = 0; g < 16; g = g + 1 {
         info.modes[g] = cur[g]
       }
@@ -2097,7 +2185,10 @@ fn H264PEncoder::write_cabac_mb_syntax(
       // bin is unconditional on the read side (`cbp != 0 || is_i16x16`).
       let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
       info.cbp_all = cbp
-      enc.decision(states, 60, 0)
+      h264_cabacw_dqp(enc, states, ctx, self.mb_dqp)
+      if self.mb_dqp != 0 {
+        self.stats.dqp_mbs += 1
+      }
       let dc_view = scan_view_at(
         coded.luma_dc_store,
         0,
@@ -2174,7 +2265,7 @@ fn H264PEncoder::write_cabac_mb_syntax(
       info.mb_type_bits = h264_mb_type_intra16x16
       info.intra4x4 = false
       info.chroma_mode = chroma_mode
-      info.qp = self.p.qp
+      info.qp = ctx.qscale
       return
     }
     Part16x16(mvx, mvy) => {
@@ -2314,7 +2405,12 @@ fn H264PEncoder::write_cabac_mb_syntax(
     }
   }
   if cbp != 0 {
-    enc.decision(states, 60, 0)
+    h264_cabacw_dqp(enc, states, ctx, self.mb_dqp)
+    if self.mb_dqp != 0 {
+      self.stats.dqp_mbs += 1
+    }
+  } else {
+    ctx.last_qscale_diff = 0
   }
   if coded.dct8 {
     // Luma residuals (cbp-gated 8x8 blocks, cat 5, transposed 8x8 zigzag
@@ -2456,7 +2552,6 @@ fn H264PEncoder::encode_p_frame_cabac(
     r.put_bit(1) // cabac_alignment_one_bit
   }
   let header = r.finish_raw_of()
-  let qp = self.p.qp
   let n_mbs = self.mb_width * self.mb_height
   let mut mb = 0
   for mb_y = 0; mb_y < self.mb_height; mb_y = mb_y + 1 {
@@ -2470,8 +2565,24 @@ fn H264PEncoder::encode_p_frame_cabac(
       // false unless this MB's transform_size_8x8_flag is written as 1.
       info.transform_8x8 = false
       mirror.cur_mb_is_intra = false
-      mirror.qscale = qp
-      mirror.last_qscale_diff = 0
+      // Adaptive quantisation: this MB's QP offset rides `mb_qp_delta`
+      // against the mirror's running qscale (the decoder accumulates dqp
+      // across macroblocks; the mirror persists for the whole picture).
+      self.mb_qp = self.p.qp
+      self.mb_dqp = 0
+      if self.aq_on {
+        let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg)
+        let mut mq = self.p.qp + adj
+        if mq < 0 {
+          mq = 0
+        }
+        if mq > 51 {
+          mq = 51
+        }
+        self.mb_qp = mq
+        self.mb_dqp = mq - mirror.qscale
+        self.chroma_qp = h264_get_chroma_qp(self.pps, 0, mq)
+      }
       // P_Skip check with the prediction the decoder itself would derive.
       let (pmvx, pmvy) = h264_pred_pskip_motion(mirror, mb_idx, mb_x, mb_y)
       let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
@@ -2497,17 +2608,19 @@ fn H264PEncoder::encode_p_frame_cabac(
         self.commit_skip(mb_idx, pmvx, pmvy)
         // Mirror `h264_cabac_skip_mb` exactly: the partition write-back
         // (mv/ref plus the mvd cache zeros), the decoder's four-bit skip
-        // type (not the bare skip bit), cbp 0 and the slice qp.
+        // type (not the bare skip bit), cbp 0, the running qp and the
+        // dqp-context reset of the C skip path.
         h264_write_back_part(mirror, mb_idx, 0, 0, 4, 4, pmvx, pmvy, 0, 0, 0)
         info.mb_type_bits = h264_mb_type_16x16 |
           h264_mb_type_p0l0 |
           h264_mb_type_p1l0 |
           h264_mb_type_skip
         info.cbp_all = 0
-        info.qp = qp
+        mirror.last_qscale_diff = 0
+        info.qp = mirror.qscale
       } else {
         enc.decision(states, skip_ctx, 0)
-        let coded = self.code_mb_residuals(mb_x, mb_y, plan, qp)
+        let coded = self.code_mb_residuals(mb_x, mb_y, plan, self.mb_qp)
         if coded.dct8 {
           self.stats.i8_mbs += 1
         }
@@ -2518,7 +2631,7 @@ fn H264PEncoder::encode_p_frame_cabac(
         for i = 0; i < 48; i = i + 1 {
           self.states[mb_idx].nz[i] = info.nz[i]
         }
-        info.qp = qp
+        info.qp = mirror.qscale
       }
       mb = mb + 1
       // end_of_slice_flag: the terminating bin of the last macroblock
@@ -2542,6 +2655,7 @@ pub fn h264_encode_frames_cabac(
   level_idc~ : Int32 = 30,
   intra_in_p~ : Bool = false,
   dct8x8~ : Bool = false,
+  aq~ : Bool = false,
   target_bytes~ : Int32 = 0,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
@@ -2566,6 +2680,7 @@ pub fn h264_encode_frames_cabac(
             level_idc~,
             intra_in_p~,
             dct8x8~,
+            aq~,
             recon=[],
             stats=H264EncStats::new(),
           ) {
@@ -2592,6 +2707,7 @@ pub fn h264_encode_frames_cabac(
       level_idc~,
       intra_in_p~,
       dct8x8~,
+      aq~,
       recon~,
       stats~,
     ) {
@@ -2614,6 +2730,7 @@ fn h264_encode_frames_cabac_qps(
   level_idc~ : Int32,
   intra_in_p~ : Bool,
   dct8x8~ : Bool,
+  aq~ : Bool,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
 ) -> Result[(Bytes, Array[Int32]), String] {
@@ -2630,6 +2747,7 @@ fn h264_encode_frames_cabac_qps(
       dct8x8~,
       stats~,
       pps_qp=base_qp,
+      aq~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
@@ -2705,12 +2823,18 @@ fn h264_encode_frames_cabac_qps(
   }
   for f = 1; f < frames.length(); f = f + 1 {
     let (y, u, v) = frames[f]
+    let src_y_p = load_plane(y, width, height, ystride, pheight)
+    let (act, act_avg) = if aq {
+      h264_aq_measure(src_y_p, ystride, mb_width, mb_height)
+    } else {
+      (Array::make(mb_width * mb_height, 0), 0)
+    }
     let enc : H264PEncoder = {
       p: { width, height, qp: qps[f], level_idc, },
       stats,
       pps,
       chroma_qp: h264_get_chroma_qp(pps, 0, qps[f]),
-      src_y: load_plane(y, width, height, ystride, pheight),
+      src_y: src_y_p,
       src_u: load_plane(u, width / 2, height / 2, cstride, pheight / 2),
       src_v: load_plane(v, width / 2, height / 2, cstride, pheight / 2),
       rec_y: Array::make(ystride * pheight, 0),
@@ -2731,6 +2855,12 @@ fn h264_encode_frames_cabac_qps(
       cur_ref: Array::make(16, -2),
       dct8x8,
       base_qp,
+      mb_qp: qps[f],
+      mb_dqp: 0,
+      prev_qp: qps[f],
+      aq_act: act,
+      aq_avg: act_avg,
+      aq_on: aq,
     }
     let nal = match enc.encode_p_frame_cabac(f, intra_in_p) {
       Ok(n) => n

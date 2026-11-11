@@ -168,3 +168,57 @@ fn h264_enc_pps_body(
     r.put_se(0) // second_chroma_qp_index_offset
   }
 }
+
+///|
+/// Per-macroblock luma activity (mean absolute deviation about the MB mean,
+/// integer) plus the picture average - the adaptive-quantisation input.
+fn h264_aq_measure(
+  src_y : Array[Int32],
+  ystride : Int32,
+  mb_width : Int32,
+  mb_height : Int32,
+) -> (Array[Int32], Int32) {
+  let n = mb_width * mb_height
+  let act : Array[Int32] = Array::make(n, 0)
+  let mut total = 0
+  for mb = 0; mb < n; mb = mb + 1 {
+    let mbx = mb % mb_width
+    let mby = mb / mb_width
+    let base = mby * 16 * ystride + mbx * 16
+    let mut sum = 0
+    for row = 0; row < 16; row = row + 1 {
+      for col = 0; col < 16; col = col + 1 {
+        sum = sum + src_y[base + row * ystride + col]
+      }
+    }
+    let mean = sum / 256
+    let mut dev = 0
+    for row = 0; row < 16; row = row + 1 {
+      for col = 0; col < 16; col = col + 1 {
+        let d = src_y[base + row * ystride + col] - mean
+        dev = dev + (if d < 0 { -d } else { d })
+      }
+    }
+    act[mb] = dev / 256
+    total = total + act[mb]
+  }
+  (act, total / n)
+}
+
+///|
+/// The +-1 adaptive-quantisation rule: texture 25% above the picture
+/// average takes one QP step up (detail masks quantisation noise), 25%
+/// below takes one step down (flat blocks show every artefact); the middle
+/// band stays. Zero QP offset when the whole picture is uniform.
+fn h264_aq_adj(act : Int32, avg : Int32) -> Int32 {
+  if avg <= 0 {
+    return 0
+  }
+  if act * 4 > avg * 5 {
+    1
+  } else if act * 4 < avg * 3 {
+    -1
+  } else {
+    0
+  }
+}

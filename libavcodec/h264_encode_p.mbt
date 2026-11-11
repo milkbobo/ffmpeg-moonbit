@@ -56,11 +56,20 @@ pub(all) struct H264EncStats {
   /// The QP every picture was coded with, in coding order (constant in the
   /// flat-QP mode, the rate control's choice under `target_bytes`).
   frame_qps : Array[Int32]
+  /// Macroblocks whose `mb_qp_delta` is non-zero (adaptive quantisation).
+  mut dqp_mbs : Int32
 }
 
 ///|
 pub fn H264EncStats::new() -> H264EncStats {
-  { i16_mbs: 0, i8_mbs: 0, i8p_mbs: 0, coded_mbs: 0, frame_qps: [], }
+  {
+    i16_mbs: 0,
+    i8_mbs: 0,
+    i8p_mbs: 0,
+    coded_mbs: 0,
+    frame_qps: [],
+    dqp_mbs: 0,
+  }
 }
 
 ///|
@@ -69,7 +78,7 @@ priv struct H264PEncoder {
   /// Shared decision counters (CAVLC and CABAC entries both feed these).
   stats : H264EncStats
   pps : H264Pps
-  chroma_qp : Int32
+  mut chroma_qp : Int32
   /// Source planes of the frame being encoded (mb-aligned strides).
   src_y : Array[Int32]
   src_u : Array[Int32]
@@ -102,6 +111,18 @@ priv struct H264PEncoder {
   /// The sequence's base QP (`pic_init_qp` of the single PPS). `p.qp` is
   /// this picture's own QP; the slice header codes the difference.
   base_qp : Int32
+  /// This macroblock's QP and its `mb_qp_delta` against the decoder's
+  /// running QP (adaptive quantisation; both stay at the slice QP with AQ
+  /// off, so the flat path is byte-identical).
+  mut mb_qp : Int32
+  mut mb_dqp : Int32
+  /// The decoder's running QP: only a written `mb_qp_delta` advances it
+  /// (skip / cbp-zero macroblocks leave it untouched).
+  mut prev_qp : Int32
+  /// Per-MB luma activity and the picture average (`aq_on` false: unused).
+  aq_act : Array[Int32]
+  aq_avg : Int32
+  aq_on : Bool
 }
 
 ///|
@@ -147,6 +168,7 @@ pub fn h264_encode_frames(
   pcm_first~ : Bool = false,
   intra_in_p~ : Bool = false,
   dct8x8~ : Bool = false,
+  aq~ : Bool = false,
   target_bytes~ : Int32 = 0,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
@@ -173,6 +195,7 @@ pub fn h264_encode_frames(
             pcm_first~,
             intra_in_p~,
             dct8x8~,
+            aq~,
             recon=[],
             stats=H264EncStats::new(),
           ) {
@@ -200,6 +223,7 @@ pub fn h264_encode_frames(
       pcm_first~,
       intra_in_p~,
       dct8x8~,
+      aq~,
       recon~,
       stats~,
     ) {
@@ -222,6 +246,7 @@ fn h264_encode_frames_qps(
   pcm_first~ : Bool,
   intra_in_p~ : Bool,
   dct8x8~ : Bool,
+  aq~ : Bool,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
 ) -> Result[(Bytes, Array[Int32]), String] {
@@ -239,6 +264,7 @@ fn h264_encode_frames_qps(
       dct8x8~,
       stats~,
       pps_qp=base_qp,
+      aq~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
@@ -321,12 +347,18 @@ fn h264_encode_frames_qps(
   }
   for f = 1; f < frames.length(); f = f + 1 {
     let (y, u, v) = frames[f]
+    let src_y_p = load_plane(y, width, height, ystride, pheight)
+    let (act, act_avg) = if aq {
+      h264_aq_measure(src_y_p, ystride, mb_width, mb_height)
+    } else {
+      (Array::make(mb_width * mb_height, 0), 0)
+    }
     let enc : H264PEncoder = {
       p: { width, height, qp: qps[f], level_idc, },
       stats,
       pps,
       chroma_qp: h264_get_chroma_qp(pps, 0, qps[f]),
-      src_y: load_plane(y, width, height, ystride, pheight),
+      src_y: src_y_p,
       src_u: load_plane(u, width / 2, height / 2, cstride, pheight / 2),
       src_v: load_plane(v, width / 2, height / 2, cstride, pheight / 2),
       rec_y: Array::make(ystride * pheight, 0),
@@ -347,6 +379,12 @@ fn h264_encode_frames_qps(
       cur_ref: Array::make(16, -2),
       dct8x8,
       base_qp,
+      mb_qp: qps[f],
+      mb_dqp: 0,
+      prev_qp: qps[f],
+      aq_act: act,
+      aq_avg: act_avg,
+      aq_on: aq,
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f, intra_in_p) {
@@ -600,11 +638,26 @@ fn H264PEncoder::encode_p_frame(
   // dec_ref_pic_marking (nal_ref_idc != 0, non-IDR):
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
   r.put_se(self.p.qp - self.base_qp) // slice_qp_delta
-  let qp = self.p.qp
   let mut skip_run = 0
   for mb_y = 0; mb_y < self.mb_height; mb_y = mb_y + 1 {
     for mb_x = 0; mb_x < self.mb_width; mb_x = mb_x + 1 {
       let mb_idx = mb_y * self.mb_width + mb_x
+      // Adaptive quantisation: this MB's QP offset rides `mb_qp_delta`.
+      self.mb_qp = self.p.qp
+      self.mb_dqp = 0
+      if self.aq_on {
+        let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg)
+        let mut mq = self.p.qp + adj
+        if mq < 0 {
+          mq = 0
+        }
+        if mq > 51 {
+          mq = 51
+        }
+        self.mb_qp = mq
+        self.mb_dqp = mq - self.prev_qp
+        self.chroma_qp = h264_get_chroma_qp(self.pps, 0, mq)
+      }
       let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
       let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
       let plan = if skip_sad == 0 {
@@ -633,7 +686,7 @@ fn H264PEncoder::encode_p_frame(
       }
       r.put_ue(skip_run)
       skip_run = 0
-      match self.write_coded_mb(mb_x, mb_y, plan, r, qp) {
+      match self.write_coded_mb(mb_x, mb_y, plan, r, self.mb_qp) {
         Ok(_) => ()
         Err(e) => return Err(e)
       }
@@ -887,7 +940,14 @@ fn H264PEncoder::eval_plan(
     }
   }
   let cw = H264Rbsp::new()
+  // Pricing replays the syntax writer, whose `mb_qp_delta` sites advance
+  // the running-QP mirror and the delta counter; both belong to the real
+  // write only (the CABAC path prices through this same CAVLC writer).
+  let saved_prev_qp = self.prev_qp
+  let saved_dqp_mbs = self.stats.dqp_mbs
   self.write_mb_syntax(mb_x, mb_y, plan, coded, cw)
+  self.prev_qp = saved_prev_qp
+  self.stats.dqp_mbs = saved_dqp_mbs
   (ssd, cw.bw.buf.length() * 8 + cw.bw.nbits)
 }
 
@@ -1123,7 +1183,7 @@ fn H264PEncoder::decide_plan(
   mb_y : Int32,
   allow_intra : Bool,
 ) -> H264PPlan {
-  let qp = self.p.qp
+  let qp = self.mb_qp
   // Int64 throughout: a macroblock's SSD reaches ~1.7e7 and the 2^10
   // scaling pushes the cost past 2^31, where Int (32-bit) wraps negative
   // and makes every high-distortion Skip look like the cheapest candidate.
@@ -2200,7 +2260,11 @@ fn H264PEncoder::write_mb_syntax(
       let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
       r.put_ue(h264_enc_cbp_golomb(cbp))
       if cbp != 0 {
-        r.put_se(0) // mb_qp_delta
+        r.put_se(self.mb_dqp) // mb_qp_delta
+        self.prev_qp = self.mb_qp
+        if self.mb_dqp != 0 {
+          self.stats.dqp_mbs += 1
+        }
       }
       self.write_luma8_cavlc(r, mb_idx, mb_x, mb_y, coded)
     }
@@ -2222,7 +2286,11 @@ fn H264PEncoder::write_mb_syntax(
       }
       r.put_ue(5 + 1 + spec_mode + 4 * group)
       r.put_ue(chroma_mode)
-      r.put_se(0)
+      r.put_se(self.mb_dqp)
+      self.prev_qp = self.mb_qp
+      if self.mb_dqp != 0 {
+        self.stats.dqp_mbs += 1
+      }
       let dc_scan : Array[Int32] = scan_view_at(
         coded.luma_dc_store,
         0,
@@ -2326,7 +2394,11 @@ fn H264PEncoder::write_mb_syntax(
       r.put_bit(if coded.dct8 { 1 } else { 0 })
     }
     if cbp != 0 {
-      r.put_se(0) // mb_qp_delta
+      r.put_se(self.mb_dqp) // mb_qp_delta
+      self.prev_qp = self.mb_qp
+      if self.mb_dqp != 0 {
+        self.stats.dqp_mbs += 1
+      }
     }
     if coded.dct8 {
       self.write_luma8_cavlc(r, mb_idx, mb_x, mb_y, coded)

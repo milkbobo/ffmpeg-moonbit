@@ -366,3 +366,263 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     inspect(h264_rc_md5(f.yuvp()), content=pins2[i])
   }
 }
+
+///|
+/// Mixed-activity content, 64x48: the left half is a flat plateau whose
+/// level drifts per picture, the right half carries gradient +
+/// checkerboard texture and a roaming box - per-MB activity spans well
+/// beyond the +-25% adaptive-quantisation band in both directions.
+fn h264_aq_fixture(n : Int32) -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 64
+  let h = 48
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<n {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    let bx = 32 + f * 4 % 16
+    let by = f * 3 % (h - 16)
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        let s = if col < 32 {
+          100 + f * 2
+        } else {
+          let mut t = (col * 2 + row * 3 + f * 5) & 0xFF
+          if (((col >> 2) + (row >> 2) + f) & 1) == 1 {
+            t = (t + 40) & 0xFF
+          }
+          let inbox = col >= bx && col < bx + 16 && row >= by && row < by + 16
+          let border = col == bx ||
+            col == bx + 15 ||
+            row == by ||
+            row == by + 15
+          if inbox && border {
+            40
+          } else if inbox {
+            220
+          } else {
+            t
+          }
+        }
+        y.push(s.to_byte())
+      }
+    }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        u.push((((col + f) & 0x3F) + 96).to_byte())
+        v.push((((row + f * 2) & 0x3F) + 96).to_byte())
+      }
+    }
+    out.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  out
+}
+
+///|
+/// Adaptive quantisation through the CAVLC writer: with AQ off no
+/// `mb_qp_delta` is signalled; with AQ on the mixed-activity fixture drives
+/// non-zero deltas that accumulate onto the decoder's running QP (not the
+/// slice QP), the encoder reconstruction stays identical to the unfiltered
+/// decode, and AQ stacks on the rate-controlled picture QPs.
+test "h264 aq: CAVLC macroblock QP deltas ride the running QP" {
+  let frames = h264_aq_fixture(4)
+  let stats_off = @libavcodec.H264EncStats::new()
+  let off = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      stats=stats_off,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats_off.dqp_mbs != 0 {
+    fail("aq off must not signal any mb_qp_delta")
+  }
+  let stats = @libavcodec.H264EncStats::new()
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      aq=true,
+      stats~,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.dqp_mbs == 0 {
+    fail("aq on must signal mb_qp_delta on mixed activity")
+  }
+  debug_inspect(stats.dqp_mbs, content="22")
+  if h264_rc_md5(stream) == h264_rc_md5(off) {
+    fail("aq must change the bitstream")
+  }
+  h264_rc_recon_invariant("cavlc-aq", stream, recon, 4)
+  // AQ stacks on the rate-controlled picture QPs: still under the target,
+  // still signalling deltas, still reconstruction-exact.
+  let stats_rc = @libavcodec.H264EncStats::new()
+  let recon_rc : Array[Bytes] = []
+  let target = off.length() * 70 / 100
+  let rc = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      aq=true,
+      target_bytes=target,
+      stats=stats_rc,
+      recon=recon_rc,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if rc.length() > target {
+    fail("aq+rc over target: \{rc.length()} > \{target}")
+  }
+  if stats_rc.dqp_mbs == 0 {
+    fail("aq+rc must keep signalling deltas")
+  }
+  h264_rc_recon_invariant("cavlc-aq-rc", rc, recon_rc, 4)
+}
+
+///|
+/// The CABAC twin: the dqp ladder's zero bin rides `last_qscale_diff` and
+/// the mirror's running qscale, so consecutive adjusted macroblocks must
+/// not drift the decoder's quantiser.
+test "h264 aq: CABAC macroblock QP deltas ride the running QP" {
+  let frames = h264_aq_fixture(4)
+  let stats_off = @libavcodec.H264EncStats::new()
+  let off = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      stats=stats_off,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats_off.dqp_mbs != 0 {
+    fail("aq off must not signal any mb_qp_delta")
+  }
+  let stats = @libavcodec.H264EncStats::new()
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      aq=true,
+      stats~,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.dqp_mbs == 0 {
+    fail("aq on must signal mb_qp_delta on mixed activity")
+  }
+  debug_inspect(stats.dqp_mbs, content="20")
+  if h264_rc_md5(stream) == h264_rc_md5(off) {
+    fail("aq must change the bitstream")
+  }
+  h264_rc_recon_invariant("cabac-aq", stream, recon, 4)
+  let stats_rc = @libavcodec.H264EncStats::new()
+  let recon_rc : Array[Bytes] = []
+  let target = off.length() * 70 / 100
+  let rc = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      aq=true,
+      target_bytes=target,
+      stats=stats_rc,
+      recon=recon_rc,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if rc.length() > target {
+    fail("aq+rc over target: \{rc.length()} > \{target}")
+  }
+  if stats_rc.dqp_mbs == 0 {
+    fail("aq+rc must keep signalling deltas")
+  }
+  h264_rc_recon_invariant("cabac-aq-rc", rc, recon_rc, 4)
+}
+
+///|
+/// External arbitration (docker ffmpeg 9.0.2): the adaptive-quantisation
+/// streams (per-MB `mb_qp_delta` against the running QP) decode with zero
+/// warnings and every deblocked frame matches this repository's decoder
+/// byte-for-byte.
+test "h264 aq: ffmpeg-arbitrated CAVLC and CABAC streams" {
+  let frames = h264_aq_fixture(4)
+  let cavlc = match
+    @libavcodec.h264_encode_frames(frames, width=64, height=48, qp=26, aq=true) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let cabac = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      aq=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  // Both dumps precede every pin assertion so the arbitration harvest sees
+  // both streams even while the pins are still placeholders.
+  let mut d1 = ""
+  for i = 0; i < cavlc.length(); i = i + 1 {
+    d1 = d1 + (cavlc[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("AQARB:\{d1}")
+  let mut d2 = ""
+  for i = 0; i < cabac.length(); i = i + 1 {
+    d2 = d2 + (cabac[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("AQCARB:\{d2}")
+  let filtered = match @libavcodec.h264_decode_annexb_frames(cavlc, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  let pins1 = [
+    "ce0e7afa003dc3e3b1ff1d059c2881ba", "0208a80308044b6cfca575383f6f96f9", "33e25d1a78452d138f69b33ca2dac127",
+    "f7032eb288f2d2234ed9759bf111ed86",
+  ]
+  for i, f in filtered {
+    inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
+  }
+  let filtered2 = match @libavcodec.h264_decode_annexb_frames(cabac, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  let pins2 = [
+    "873a22e67ac6a024cd7613ffe7c52150", "c3415303a9b57054726f29a66f3115e5", "026176483fd929652dc879cee0cb4f21",
+    "008d85e1f417fc6c9bf5f4a47ee08aea",
+  ]
+  for i, f in filtered2 {
+    inspect(h264_rc_md5(f.yuvp()), content=pins2[i])
+  }
+}
