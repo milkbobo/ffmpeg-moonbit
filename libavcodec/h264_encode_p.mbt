@@ -52,6 +52,8 @@ pub(all) struct H264EncStats {
   mut i8_mbs : Int32
   /// Intra 8x8 macroblocks inside P slices (a subset of `i8_mbs`).
   mut i8p_mbs : Int32
+  /// Intra 4x4 macroblocks inside P slices (`intra4x4_in_p`).
+  mut i4p_mbs : Int32
   mut coded_mbs : Int32
   /// The QP every picture was coded with, in coding order (constant in the
   /// flat-QP mode, the rate control's choice under `target_bytes`).
@@ -66,6 +68,7 @@ pub fn H264EncStats::new() -> H264EncStats {
     i16_mbs: 0,
     i8_mbs: 0,
     i8p_mbs: 0,
+    i4p_mbs: 0,
     coded_mbs: 0,
     frame_qps: [],
     dqp_mbs: 0,
@@ -108,6 +111,9 @@ priv struct H264PEncoder {
   /// Opt-in High-profile transform_8x8 for the luma residual of inter
   /// macroblocks whose partitions are all at least 8x8.
   dct8x8 : Bool
+  /// Opt-in Intra4x4 fallback in P slices (independent of `intra_in_p`'s
+  /// I16x16/I8x8): the finest intra granularity for detailed textures.
+  intra4x4_in_p : Bool
   /// The sequence's base QP (`pic_init_qp` of the single PPS). `p.qp` is
   /// this picture's own QP; the slice header codes the difference.
   base_qp : Int32
@@ -167,6 +173,7 @@ pub fn h264_encode_frames(
   level_idc~ : Int32 = 30,
   pcm_first~ : Bool = false,
   intra_in_p~ : Bool = false,
+  intra4x4_in_p~ : Bool = false,
   dct8x8~ : Bool = false,
   aq~ : Bool = false,
   target_bytes~ : Int32 = 0,
@@ -194,6 +201,7 @@ pub fn h264_encode_frames(
             level_idc~,
             pcm_first~,
             intra_in_p~,
+            intra4x4_in_p~,
             dct8x8~,
             aq~,
             recon=[],
@@ -222,6 +230,7 @@ pub fn h264_encode_frames(
       level_idc~,
       pcm_first~,
       intra_in_p~,
+      intra4x4_in_p~,
       dct8x8~,
       aq~,
       recon~,
@@ -245,6 +254,7 @@ fn h264_encode_frames_qps(
   level_idc~ : Int32,
   pcm_first~ : Bool,
   intra_in_p~ : Bool,
+  intra4x4_in_p~ : Bool,
   dct8x8~ : Bool,
   aq~ : Bool,
   recon~ : Array[Bytes],
@@ -378,6 +388,7 @@ fn h264_encode_frames_qps(
       cur_mv: Array::make(32, 0),
       cur_ref: Array::make(16, -2),
       dct8x8,
+      intra4x4_in_p,
       base_qp,
       mb_qp: qps[f],
       mb_dqp: 0,
@@ -671,6 +682,9 @@ fn H264PEncoder::encode_p_frame(
       if plan is I8(_, _) {
         self.stats.i8p_mbs += 1
       }
+      if plan is I4(_, _) {
+        self.stats.i4p_mbs += 1
+      }
       if !(plan is Skip) {
         self.stats.coded_mbs += 1
       }
@@ -724,6 +738,10 @@ priv enum H264PPlan {
   /// signalled `pred8x8l` modes in block order and the chroma prediction
   /// mode. Only produced under `dct8x8`.
   I8(Array[Int32], Int32)
+  /// Intra 4x4 (I_NxN) in a P slice: the sixteen signalled `pred4x4` modes
+  /// on the 4x4 grid (grid-indexed) and the chroma prediction mode. Only
+  /// produced under `intra4x4_in_p`.
+  I4(Array[Int32], Int32)
 }
 
 ///|
@@ -1317,8 +1335,49 @@ fn H264PEncoder::decide_plan(
       let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
       let pi8 = I8(raw_modes, chroma_mode)
       let (ssd8x, bits8x) = self.eval_plan(mb_x, mb_y, pi8, qp)
-      if ssd8x.to_int64() * 1024L + lam * bits8x.to_int64() < best_cost {
+      let c8x = ssd8x.to_int64() * 1024L + lam * bits8x.to_int64()
+      if c8x < best_cost {
+        best_cost = c8x
         plan = pi8
+      }
+    }
+  }
+  // Intra 4x4 (I_NxN) under `intra4x4_in_p`: the finest intra granularity,
+  // sixteen independently-predicted 4x4 blocks for detailed textures the
+  // 16x16/8x8 predictors cannot follow. The shared I4x4 pass picks the
+  // modes by prediction SAD on its own reconstruction; `eval_plan` replays
+  // them and prices the plan. Added after I8x8, so ties stay with the
+  // cheaper-to-signal coarser forms.
+  if self.intra4x4_in_p {
+    let scratch_store : Array[Int32] = Array::make(256, 0)
+    let scratch_modes : Array[Int32] = Array::make(16, 0)
+    let scratch_mb : Array[Int32] = Array::make(768, 0)
+    if h264_enc_luma_i4_pass(
+        self.src_y,
+        self.rec_y,
+        self.ystride,
+        mb_x,
+        mb_y,
+        self.pps,
+        qp,
+        scratch_store,
+        scratch_modes,
+        scratch_mb,
+        h264_enc_i4_avail(mb_x, mb_y, self.mb_width),
+      )
+      is Ok(_) {
+      let raw_modes : Array[Int32] = Array::make(16, 0)
+      for g = 0; g < 16; g = g + 1 {
+        raw_modes[g] = scratch_modes[g]
+      }
+      let cbase = mb_y * 8 * self.cstride + mb_x * 8
+      let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
+      let pi4 = I4(raw_modes, chroma_mode)
+      let (ssd4x, bits4x) = self.eval_plan(mb_x, mb_y, pi4, qp)
+      let c4x = ssd4x.to_int64() * 1024L + lam * bits4x.to_int64()
+      if c4x < best_cost {
+        best_cost = c4x
+        plan = pi4
       }
     }
   }
@@ -1691,6 +1750,7 @@ fn h264_p_dct8x8_allowed(dct8x8 : Bool, plan : H264PPlan) -> Bool {
   }
   match plan {
     I16(_, _, _) => false
+    I4(_, _) => false
     // An I8 plan IS 8x8; the inter-tail flag logic never runs for it (the
     // intra arm writes its own unconditional flag bit after mb_type).
     I8(_, _) => true
@@ -1759,6 +1819,7 @@ fn H264PEncoder::mc_plan(
     Skip => ()
     I16(_, eff, cm) => self.predict_i16_planes(mb_x, mb_y, eff, cm)
     I8(_, cm) => self.predict_intra_chroma(mb_x, mb_y, cm)
+    I4(_, cm) => self.predict_intra_chroma(mb_x, mb_y, cm)
     Part16x16(x, y) => self.mc_into_rec(mb_x, mb_y, x, y, 0, 0, 16, 16)
     Part16x8(tx, ty, bx, by) => {
       self.mc_into_rec(mb_x, mb_y, tx, ty, 0, 0, 16, 8)
@@ -1817,7 +1878,11 @@ fn H264PEncoder::code_mb_residuals(
     I8(_, _) => true
     _ => false
   }
-  let is_intra = is_i16 || is_i8
+  let is_i4 = match plan {
+    I4(_, _) => true
+    _ => false
+  }
+  let is_intra = is_i16 || is_i8 || is_i4
   let dct8 = is_i8 || h264_p_dct8x8_allowed(self.dct8x8, plan)
   for i = 0; i < 48; i = i + 1 {
     self.cur_nz[i] = if is_intra { 0 } else { self.states[mb_idx0].nz[i] }
@@ -1835,7 +1900,15 @@ fn H264PEncoder::code_mb_residuals(
   // Intra uses the intra dequant matrices (luma 0, chroma 1/2); inter uses
   // 3 and 4/5. The decoder picks by mb_type, so the reconstruction must
   // follow the same split or the two pictures drift apart.
-  let qmul_y = h264_build_dequant4(self.pps, if is_i16 { 0 } else { 3 }, qp)
+  let qmul_y = h264_build_dequant4(
+    self.pps,
+    if is_i16 || is_i4 {
+      0
+    } else {
+      3
+    },
+    qp,
+  )
   let qmul8 = if dct8 {
     h264_build_dequant8(self.pps, if is_i8 { 0 } else { 3 }, qp)
   } else {
@@ -1935,6 +2008,44 @@ fn H264PEncoder::code_mb_residuals(
       ) {
       Ok((_, cbp)) => luma_cbp = cbp
       Err(e) => abort("h264 enc: I8 replay failed: \{e}")
+    }
+  } else if is_i4 {
+    // Intra 4x4 (I_NxN): the shared sequential pass re-predicts each 4x4
+    // block from the plan's modes, quantises, reconstructs (intra matrix 0)
+    // and fills `luma_store`; the nC mirror is set per block here like the
+    // inter 4x4 path (the decoder reads fresh zero counts for uncoded blocks).
+    let raw_modes = match plan {
+      I4(m, _) => m
+      _ => abort("unreachable: is_i4 without an I4 plan")
+    }
+    let scratch_modes : Array[Int32] = Array::make(16, 0)
+    match
+      h264_enc_luma_i4_pass(
+        self.src_y,
+        self.rec_y,
+        self.ystride,
+        mb_x,
+        mb_y,
+        self.pps,
+        qp,
+        luma_store,
+        scratch_modes,
+        mb,
+        h264_enc_i4_avail(mb_x, mb_y, self.mb_width),
+        fixed_modes=raw_modes,
+      ) {
+      Ok((_, cbp)) => luma_cbp = cbp
+      Err(e) => abort("h264 enc: I4 replay failed: \{e}")
+    }
+    for i = 0; i < 16; i = i + 1 {
+      let g = h264_luma_block_y[i] * 4 + h264_luma_block_x[i]
+      let mut total = 0
+      for s = 0; s < 16; s = s + 1 {
+        if luma_store[16 * i + s] != 0 {
+          total = total + 1
+        }
+      }
+      self.cur_nz[g] = total
     }
   } else if dct8 {
     // Inter 8x8DCT luma: four 8x8 blocks, cbp bit per block, each block's
@@ -2168,7 +2279,7 @@ fn H264PEncoder::code_mb_residuals(
         h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
       }
     }
-  } else if !dct8 {
+  } else if !dct8 && !is_i4 {
     for i = 0; i < 16; i = i + 1 {
       let gx = h264_luma_block_x[i]
       let gy = h264_luma_block_y[i]
@@ -2218,7 +2329,7 @@ fn H264PEncoder::write_mb_syntax(
 ) -> Unit {
   let mb_idx = mb_y * self.mb_width + mb_x
   let is_intra = match plan {
-    I16(_, _, _) | I8(_, _) => true
+    I16(_, _, _) | I8(_, _) | I4(_, _) => true
     _ => false
   }
   match plan {
@@ -2267,6 +2378,61 @@ fn H264PEncoder::write_mb_syntax(
         }
       }
       self.write_luma8_cavlc(r, mb_idx, mb_x, mb_y, coded)
+    }
+    I4(raw_modes, chroma_mode) => {
+      // Intra_NxN in a P slice: mb_type 5 (the I-slice intra table's 0
+      // shifted by 5). The transform flag follows only when the PPS enables
+      // 8x8DCT (the I4x4 form writes 0); then one prediction mode per 4x4
+      // block, the chroma mode, the INTRA cbp codeword and mb_qp_delta when
+      // cbp != 0, then the sixteen cbp-gated 4x4 luma residuals. Chroma
+      // residual is the shared tail below.
+      r.put_ue(5)
+      if self.dct8x8 {
+        r.put_bit(0) // transform_size_8x8_flag
+      }
+      for i = 0; i < 16; i = i + 1 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let g = gy * 4 + gx
+        let predicted = self.pred_nxn_mode(
+          mb_idx, mb_x, mb_y, gx, gy, raw_modes,
+        )
+        let mode = raw_modes[g]
+        if mode == predicted {
+          r.put_bit(1)
+        } else {
+          r.put_bit(0)
+          r.put(if mode > predicted { mode - 1 } else { mode }, 3)
+        }
+      }
+      r.put_ue(chroma_mode)
+      let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
+      r.put_ue(h264_enc_cbp_golomb(cbp))
+      if cbp != 0 {
+        r.put_se(self.mb_dqp) // mb_qp_delta
+        self.prev_qp = self.mb_qp
+        if self.mb_dqp != 0 {
+          self.stats.dqp_mbs += 1
+        }
+      }
+      for i8 = 0; i8 < 4; i8 = i8 + 1 {
+        if (coded.luma_cbp & (1 << i8)) != 0 {
+          for i4 = 0; i4 < 4; i4 = i4 + 1 {
+            let i = i8 * 4 + i4
+            let gx = h264_luma_block_x[i]
+            let gy = h264_luma_block_y[i]
+            let view = scan_view_at(
+              coded.luma_store,
+              i,
+              h264_zigzag_scan_t,
+              0,
+              16,
+            )
+            let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
+            ignore(h264_enc_write_residual(r, view, 16, nc))
+          }
+        }
+      }
     }
     I16(sig, _, chroma_mode) => {
       // Intra16x16 in a P slice: mb_type 5..30 is the I-slice intra table
@@ -2550,7 +2716,7 @@ fn H264PEncoder::commit_plan_state(
   // An intra macroblock in a P slice makes its MVs unavailable to the
   // neighbours' motion predictors (decoder: `IS_INTRA` -> ref_cache -1).
   st.intra = match plan {
-    I16(_, _, _) | I8(_, _) => true
+    I16(_, _, _) | I8(_, _) | I4(_, _) => true
     _ => false
   }
   st.has_data = true
@@ -2567,6 +2733,12 @@ fn H264PEncoder::commit_plan_state(
             st.modes[(k / 2 * 2 + dy) * 4 + k % 2 * 2 + dx] = raw_modes[k]
           }
         }
+      }
+    }
+    I4(raw_modes, _) => {
+      st.intra_nxn = true
+      for g = 0; g < 16; g = g + 1 {
+        st.modes[g] = raw_modes[g]
       }
     }
     _ => st.intra_nxn = false

@@ -863,3 +863,190 @@ test "x264 oracle: adaptive-quantisation CABAC stream decodes identically in C" 
   }
   x264_cross_decode(stream, 3, 1)
 }
+
+///|
+/// Roaming hard-edged box over fine checker texture: with
+/// `intra4x4_in_p` the P slices must actually pick Intra_NxN macroblocks
+/// (mb_type 5), and those streams must satisfy the dual-decode standard.
+fn x264_i4p_fixture() -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 64
+  let h = 48
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<4 {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    let bx = f * 4 % (w - 16)
+    let by = f * 3 % (h - 16)
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        let mut s = (col * 2 + row * 3 + f * 5) & 0xFF
+        if (((col >> 2) + (row >> 2) + f) & 1) == 1 {
+          s = (s + 40) & 0xFF
+        }
+        let inbox = col >= bx && col < bx + 16 && row >= by && row < by + 16
+        let border = col == bx || col == bx + 15 || row == by || row == by + 15
+        if inbox && border {
+          s = 40
+        } else if inbox {
+          s = 220
+        }
+        y.push(s.to_byte())
+      }
+    }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        u.push((((col + f) & 0x3F) + 96).to_byte())
+        v.push((((row + f * 2) & 0x3F) + 96).to_byte())
+      }
+    }
+    out.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  out
+}
+
+///|
+/// Per-frame re-sloped diagonal stripes: the gradient direction changes
+/// every frame (not a pure translation), so inter prediction cannot
+/// follow, while the diagonal 4x4 predictors (DDL/DDR/VL/VR) track the
+/// stripes that the 16x16 V/H/DC/Plane modes cannot.
+fn x264_i4_stripe_fixture() -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 64
+  let h = 48
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<4 {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    let a = 1 + f % 3
+    let b = 1 + f * 2 % 3
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        y.push(((col * a + row * b + f * 13) & 0xFF).to_byte())
+      }
+    }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        u.push((96 + ((col + row + f) & 0x1F)).to_byte())
+        v.push((160 - ((row + f) & 0x1F)).to_byte())
+      }
+    }
+    out.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  out
+}
+
+///|
+/// P-slice Intra4x4 (mb_type 5: sixteen independently predicted 4x4 blocks,
+/// CAVLC residual cat 1) with the 8x8 transform tree present: the C decoder
+/// and the pure MoonBit decoder must agree pixel-for-pixel.
+test "x264 oracle: P-slice Intra 4x4 CAVLC stream decodes identically in C" {
+  let frames = x264_i4p_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      dct8x8=true,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.i4p_mbs == 0 {
+    fail("fixture must drive P-slice Intra4x4 macroblocks")
+  }
+  x264_cross_decode(stream, 4, 1)
+}
+
+///|
+/// Same Intra4x4 P slices through CABAC (ctx 14/17, intra_chroma_pred_mode
+/// tree, residual cat 2): dual-decode standard, pixel-for-pixel.
+test "x264 oracle: P-slice Intra 4x4 CABAC stream decodes identically in C" {
+  let frames = x264_i4p_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      dct8x8=true,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.i4p_mbs == 0 {
+    fail("fixture must drive P-slice Intra4x4 macroblocks")
+  }
+  x264_cross_decode(stream, 4, 1)
+}
+
+///|
+/// Per-frame re-sloped diagonal stripes: motion cannot follow the changing
+/// gradient and the diagonal detail favours Intra4x4 over Intra16x16, so
+/// P slices pick I_NxN macroblocks even without transform_8x8_mode_flag
+/// (no transform_size_8x8_flag bit at all). C decoder must agree.
+test "x264 oracle: Intra 4x4 P slices without 8x8 transform (CAVLC) decode identically in C" {
+  let frames = x264_i4_stripe_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.i4p_mbs == 0 {
+    fail("fixture must drive P-slice Intra4x4 macroblocks")
+  }
+  x264_cross_decode(stream, 4, 1)
+}
+
+///|
+test "x264 oracle: Intra 4x4 P slices without 8x8 transform (CABAC) decode identically in C" {
+  let frames = x264_i4_stripe_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.i4p_mbs == 0 {
+    fail("fixture must drive P-slice Intra4x4 macroblocks")
+  }
+  x264_cross_decode(stream, 4, 1)
+}

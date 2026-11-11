@@ -451,6 +451,153 @@ fn h264_enc_luma_i8_pass(
 }
 
 ///|
+/// The shared I4x4 luma pass of the P-slice intra encoder: per 4x4 block
+/// (z-order 0..15), pick the best availability-checked `pred4x4` mode by
+/// SAD, predict, forward-transform + quantise, dequantise into `mb` and
+/// reconstruct through `h264_idct_add`. The block order mirrors the
+/// decoder's reconstruction, so each block predicts from exactly the
+/// neighbours the decoder will use. Fills `store` (16 x 16 levels) and the
+/// signalled modes into `modes` (one cell per 4x4 grid position); returns
+/// `(cost, cbp)` with the summed PREDICTION SAD of the winning modes and one
+/// cbp bit per non-empty quadrant. `fixed_modes` (16 grid-indexed modes)
+/// replays a decided plan instead of searching.
+fn h264_enc_luma_i4_pass(
+  src_y : Array[Int32],
+  rec_y : Array[Int32],
+  ystride : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  pps : H264Pps,
+  qp : Int32,
+  store : Array[Int32],
+  modes : Array[Int32],
+  mb : Array[Int32],
+  avail : (Int32, Int32) -> (Bool, Bool, Bool),
+  fixed_modes~ : Array[Int32] = [],
+) -> Result[(Int32, Int32), String] {
+  let qmul_y = h264_build_dequant4(pps, 0, qp)
+  let ybase = mb_y * 16 * ystride + mb_x * 16
+  let mut cost = 0
+  let mut cbp = 0
+  for i = 0; i < 16; i = i + 1 {
+    let gx = h264_luma_block_x[i]
+    let gy = h264_luma_block_y[i]
+    let g = gy * 4 + gx
+    let off = ybase + gy * 4 * ystride + gx * 4
+    let (top, left, topright) = avail(gx, gy)
+    let replay = fixed_modes.length() == 16
+    let mut best_sig = 0
+    let mut best_eff : Int32 = -1
+    let mut best_sad = -1
+    if replay {
+      best_sig = fixed_modes[g]
+      best_eff = match h264_check_intra4x4_mode(best_sig, top, left) {
+        Ok(v) => v
+        Err(_) => -1
+      }
+      if best_eff < 0 {
+        return Err("h264 enc: replayed intra4x4 mode infeasible")
+      }
+      best_sad = 0 // unused
+    } else {
+      for sig = 0; sig < 9; sig = sig + 1 {
+        let eff = match h264_check_intra4x4_mode(sig, top, left) {
+          Ok(v) => v
+          Err(_) => -1
+        }
+        if eff < 0 {
+          continue
+        }
+        if h264_pred4x4(
+            rec_y,
+            off,
+            ystride,
+            eff,
+            top,
+            left,
+            topright,
+            bit_depth=8,
+          )
+          is Err(_) {
+          continue
+        }
+        let sad = h264_enc_sad4(src_y, rec_y, off, ystride)
+        if best_sad < 0 || sad < best_sad {
+          best_sad = sad
+          best_sig = sig
+          best_eff = eff
+        }
+      }
+    }
+    if best_eff < 0 {
+      return Err("h264 enc: no feasible intra4x4 mode")
+    }
+    match
+      h264_pred4x4(
+        rec_y,
+        off,
+        ystride,
+        best_eff,
+        top,
+        left,
+        topright,
+        bit_depth=8,
+      ) {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+    cost = cost + h264_enc_sad4(src_y, rec_y, off, ystride)
+    modes[g] = best_sig
+    let res : Array[Int32] = Array::make(16, 0)
+    for row = 0; row < 4; row = row + 1 {
+      for col = 0; col < 4; col = col + 1 {
+        res[row * 4 + col] = src_y[off + row * ystride + col] -
+          rec_y[off + row * ystride + col]
+      }
+    }
+    let levels = h264_enc_fdct_quant_res(res, 0, qp)
+    let mut total = 0
+    for s = 0; s < 16; s = s + 1 {
+      store[16 * i + s] = levels[s]
+      if levels[s] != 0 {
+        total = total + 1
+        mb[16 * i + s] = h264_enc_dequant_level(levels[s], qmul_y[s])
+      }
+    }
+    if total != 0 {
+      cbp = cbp | (1 << (i / 4))
+      if total == 1 && mb[16 * i] != 0 {
+        h264_idct_dc_add(rec_y, off, ystride, mb, 16 * i, bit_depth=8)
+      } else {
+        h264_idct_add(rec_y, off, ystride, mb, 16 * i, bit_depth=8)
+      }
+    }
+  }
+  Ok((cost, cbp))
+}
+
+///|
+/// Geometric I4x4 availability for a single-slice picture (no constrained
+/// intra prediction): the 4x4 form of `h264_enc_i8_avail`, matching the
+/// intra encoder's per-block top/left/topright derivation.
+fn h264_enc_i4_avail(
+  mb_x : Int32,
+  mb_y : Int32,
+  mb_width : Int32,
+) -> (Int32, Int32) -> (Bool, Bool, Bool) {
+  fn(gx : Int32, gy : Int32) -> (Bool, Bool, Bool) {
+    let top = gy > 0 || mb_y > 0
+    let left = gx > 0 || mb_x > 0
+    let topright = if gy == 0 {
+      top && (gx < 3 || mb_x < mb_width - 1)
+    } else {
+      gx == 0 || gx == 2 || (gx == 1 && gy % 2 == 0)
+    }
+    (top, left, topright)
+  }
+}
+
+///|
 /// Geometric availability for a single-slice all-intra picture (the CAVLC
 /// intra encoder): every macroblock decoded before this one in raster order
 /// is an intra neighbour, so availability reduces to frame geometry.

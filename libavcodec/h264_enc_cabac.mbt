@@ -2126,6 +2126,98 @@ fn H264PEncoder::write_cabac_mb_syntax(
       }
       return
     }
+    I4(raw_modes, chroma_mode) => {
+      // P-slice Intra_NxN (I4x4): ctx 14 = 1 selects intra, ctx 17 = 0 is
+      // I_NxN. The transform flag is coded only when the PPS enables 8x8DCT
+      // (the I4x4 form writes 0); then sixteen prediction modes on the 4x4
+      // grid (ctx 68/69), the chroma tree, the intra cbp bins, mb_qp_delta
+      // when cbp != 0, and the cbp-gated 4x4 luma residuals (cat 2).
+      enc.decision(states, 14, 1)
+      enc.decision(states, 17, 0)
+      ctx.cur_mb_is_intra = true
+      if self.dct8x8 {
+        enc.decision(
+          states,
+          399 + h264_neighbor_transform_size(ctx, mb_idx, mb_x, mb_y),
+          0,
+        )
+      }
+      info.transform_8x8 = false
+      for i = 0; i < 16; i = i + 1 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let g = gy * 4 + gx
+        let predicted = h264_pred_intra_mode(
+          ctx, mb_idx, mb_x, mb_y, gx, gy, raw_modes,
+        )
+        let mode = raw_modes[g]
+        if mode == predicted {
+          enc.decision(states, 68, 1)
+        } else {
+          enc.decision(states, 68, 0)
+          let rem = if mode > predicted { mode - 1 } else { mode }
+          enc.decision(states, 69, rem & 1)
+          enc.decision(states, 69, (rem >> 1) & 1)
+          enc.decision(states, 69, (rem >> 2) & 1)
+        }
+      }
+      let mut cc = 0
+      if h264_has_left(ctx, mb_idx) && ctx.infos[mb_idx - 1].chroma_mode != 0 {
+        cc = cc + 1
+      }
+      if h264_has_top(ctx, mb_idx) &&
+        ctx.infos[h264_top_index(ctx, mb_idx)].chroma_mode != 0 {
+        cc = cc + 1
+      }
+      if chroma_mode == 0 {
+        enc.decision(states, 64 + cc, 0)
+      } else {
+        enc.decision(states, 64 + cc, 1)
+        if chroma_mode == 1 {
+          enc.decision(states, 67, 0)
+        } else {
+          enc.decision(states, 67, 1)
+          enc.decision(states, 67, if chroma_mode == 2 { 0 } else { 1 })
+        }
+      }
+      let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
+      h264_cabacw_cbp(enc, states, ctx, mb_idx, mb_x, mb_y, cbp, true)
+      info.cbp_all = cbp
+      if cbp != 0 {
+        h264_cabacw_dqp(enc, states, ctx, self.mb_dqp)
+        if self.mb_dqp != 0 {
+          self.stats.dqp_mbs += 1
+        }
+      } else {
+        ctx.last_qscale_diff = 0
+      }
+      for i8 = 0; i8 < 4; i8 = i8 + 1 {
+        if (coded.luma_cbp & (1 << i8)) != 0 {
+          for i4 = 0; i4 < 4; i4 = i4 + 1 {
+            let i = i8 * 4 + i4
+            let view = scan_view_at(
+              coded.luma_store,
+              i,
+              h264_zigzag_scan_t,
+              0,
+              16,
+            )
+            h264_cabacw_residual(
+              enc, states, ctx, mb_idx, mb_x, mb_y, 2, i, view, 16, false,
+            )
+          }
+        }
+      }
+      h264_cabacw_chroma(enc, states, ctx, mb_idx, mb_x, mb_y, coded)
+      info.mb_type_bits = h264_mb_type_intra4x4
+      info.intra4x4 = true
+      info.chroma_mode = chroma_mode
+      info.qp = ctx.qscale
+      for g = 0; g < 16; g = g + 1 {
+        info.modes[g] = raw_modes[g]
+      }
+      return
+    }
     I16(sig, _, chroma_mode) => {
       // P-slice intra branch of `decode_cabac_mb_type`: ctx 14 = 1 selects
       // intra, then `decode_cabac_intra_mb_type(ctx_base 17, intra_slice 0)`.
@@ -2599,6 +2691,9 @@ fn H264PEncoder::encode_p_frame_cabac(
       if plan is I8(_, _) {
         self.stats.i8p_mbs += 1
       }
+      if plan is I4(_, _) {
+        self.stats.i4p_mbs += 1
+      }
       if !(plan is Skip) {
         self.stats.coded_mbs += 1
       }
@@ -2654,6 +2749,7 @@ pub fn h264_encode_frames_cabac(
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
   intra_in_p~ : Bool = false,
+  intra4x4_in_p~ : Bool = false,
   dct8x8~ : Bool = false,
   aq~ : Bool = false,
   target_bytes~ : Int32 = 0,
@@ -2679,6 +2775,7 @@ pub fn h264_encode_frames_cabac(
             qps=trial,
             level_idc~,
             intra_in_p~,
+            intra4x4_in_p~,
             dct8x8~,
             aq~,
             recon=[],
@@ -2706,6 +2803,7 @@ pub fn h264_encode_frames_cabac(
       qps~,
       level_idc~,
       intra_in_p~,
+      intra4x4_in_p~,
       dct8x8~,
       aq~,
       recon~,
@@ -2729,6 +2827,7 @@ fn h264_encode_frames_cabac_qps(
   qps~ : Array[Int32],
   level_idc~ : Int32,
   intra_in_p~ : Bool,
+  intra4x4_in_p~ : Bool,
   dct8x8~ : Bool,
   aq~ : Bool,
   recon~ : Array[Bytes],
@@ -2854,6 +2953,7 @@ fn h264_encode_frames_cabac_qps(
       cur_mv: Array::make(32, 0),
       cur_ref: Array::make(16, -2),
       dct8x8,
+      intra4x4_in_p,
       base_qp,
       mb_qp: qps[f],
       mb_dqp: 0,

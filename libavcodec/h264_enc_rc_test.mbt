@@ -626,3 +626,327 @@ test "h264 aq: ffmpeg-arbitrated CAVLC and CABAC streams" {
     inspect(h264_rc_md5(f.yuvp()), content=pins2[i])
   }
 }
+
+///|
+/// Per-frame re-sloped diagonal stripes: the gradient direction changes
+/// every frame (not a pure translation), so inter prediction cannot
+/// follow, while the diagonal 4x4 predictors (DDL/DDR/VL/VR) track the
+/// stripes that the 16x16 V/H/DC/Plane modes cannot. Drives Intra4x4 in P
+/// slices both with and without transform_8x8_mode_flag.
+fn h264_i4_stripe_fixture() -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 64
+  let h = 48
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<4 {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    let a = 1 + f % 3
+    let b = 1 + f * 2 % 3
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        y.push(((col * a + row * b + f * 13) & 0xFF).to_byte())
+      }
+    }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        u.push((96 + ((col + row + f) & 0x1F)).to_byte())
+        v.push((160 - ((row + f) & 0x1F)).to_byte())
+      }
+    }
+    out.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  out
+}
+
+///|
+/// Fine checker texture with a roaming hard-edged box: with the 8x8
+/// transform enabled the pure-8x8 inter residuals code the 4x4 checker
+/// poorly, so six P macroblocks per run flip to Intra_NxN (mb_type 5) —
+/// sixteen independently predicted 4x4 blocks. Both entropy coders share
+/// the plan decision, so both must agree on the counts and reconstruct
+/// exactly what the own decoder produces.
+test "h264 i4p: fine texture wins Intra4x4 macroblocks in P slices" {
+  let frames = h264_rc_fixture(4)
+  let stats = @libavcodec.H264EncStats::new()
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      dct8x8=true,
+      stats~,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  debug_inspect(stats.i4p_mbs, content="6")
+  debug_inspect(stats.i16_mbs, content="0")
+  debug_inspect(stats.i8p_mbs, content="0")
+  debug_inspect(stream.length(), content="2624")
+  h264_rc_recon_invariant("cavlc-i4p", stream, recon, 4)
+  let stats2 = @libavcodec.H264EncStats::new()
+  let recon2 : Array[Bytes] = []
+  let stream2 = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      dct8x8=true,
+      stats=stats2,
+      recon=recon2,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  debug_inspect(stats2.i4p_mbs, content="6")
+  debug_inspect(stream2.length(), content="2464")
+  h264_rc_recon_invariant("cabac-i4p", stream2, recon2, 4)
+}
+
+///|
+/// The ffmpeg 9.0.0-series arbitration pins: both entropy coders' I4
+/// streams decode (docker ffmpeg 9.0.2, zero stderr warnings) to exactly
+/// these filtered frame md5s.
+test "h264 i4p: ffmpeg-arbitrated CAVLC and CABAC streams" {
+  let frames = h264_rc_fixture(4)
+  let cavlc = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      dct8x8=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let cabac = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      dct8x8=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let filtered = match @libavcodec.h264_decode_annexb_frames(cavlc, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  let pins1 = [
+    "292edd53ff3434561e2e1d737c563c98", "8a7aa2516bb38166b5cd54291b627e5a", "17ad04874b4fa8fd78abad92cac51eec",
+    "1ecf97c48d15f640f7cf4e313b64d92e",
+  ]
+  for i, f in filtered {
+    inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
+  }
+  let filtered2 = match @libavcodec.h264_decode_annexb_frames(cabac, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  // CABAC shares the plan decision, so the reconstructions — and hence the
+  // arbitrated md5s — are identical to the CAVLC twin's.
+  for i, f in filtered2 {
+    inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
+  }
+}
+
+///|
+/// The no-transform-8x8 path: I4 macroblocks in a stream whose PPS has no
+/// transform_8x8_mode_flag (no transform_size_8x8_flag bit at all). The
+/// stripe fixture's re-sloped gradients defeat motion, and the diagonal
+/// detail favours the sixteen 4x4 predictors over the single 16x16 mode —
+/// so I4 wins even without the 8x8 transform in the mix. Arbitrated by
+/// docker ffmpeg 9.0.2 (zero warnings) against the pins below.
+test "h264 i4p: Intra4x4 without the 8x8 transform" {
+  let frames = h264_i4_stripe_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      stats~,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  debug_inspect(stats.i4p_mbs, content="14")
+  debug_inspect(stats.i16_mbs, content="20")
+  debug_inspect(stats.i8p_mbs, content="0")
+  debug_inspect(stream.length(), content="1119")
+  h264_rc_recon_invariant("cavlc-i4p-no8", stream, recon, 4)
+  let stats2 = @libavcodec.H264EncStats::new()
+  let recon2 : Array[Bytes] = []
+  let stream2 = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      stats=stats2,
+      recon=recon2,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  debug_inspect(stats2.i4p_mbs, content="14")
+  debug_inspect(stream2.length(), content="1010")
+  h264_rc_recon_invariant("cabac-i4p-no8", stream2, recon2, 4)
+  let filtered = match @libavcodec.h264_decode_annexb_frames(stream, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  let pins = [
+    "db4f9f5a354f60a75388bb1762ba6a23", "b424fb90398370e87931cd7accaa10c3", "9ee05f06bfd4eac7e3ad08ca057369f2",
+    "d98b68f3f945aa79d407a816d73d6b5c",
+  ]
+  for i, f in filtered {
+    inspect(h264_rc_md5(f.yuvp()), content=pins[i])
+  }
+  let filtered2 = match @libavcodec.h264_decode_annexb_frames(stream2, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  for i, f in filtered2 {
+    inspect(h264_rc_md5(f.yuvp()), content=pins[i])
+  }
+}
+
+///|
+/// `intra4x4_in_p` is independent of `intra_in_p`: with only the former
+/// enabled, P slices may pick Intra4x4 while Intra16x16/8x8 stay gated
+/// off. Pins the documented field semantics.
+test "h264 i4p: intra4x4_in_p is independent of intra_in_p" {
+  let frames = h264_i4_stripe_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra4x4_in_p=true,
+      stats~,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  debug_inspect(stats.i4p_mbs, content="34")
+  debug_inspect(stats.i16_mbs, content="0")
+  debug_inspect(stats.i8p_mbs, content="0")
+  h264_rc_recon_invariant("i4p-indep", stream, recon, 4)
+}
+
+///|
+/// Stripes plus the 8x8 transform: I8x8, I16x16 and I4x4 all win somewhere
+/// in the same stream. I8 winners must raise the running `best_cost`, so a
+/// later I4 candidate only takes the macroblock by beating the I8 price —
+/// this pins the I8-win/I4-compete chain of `decide_plan`.
+test "h264 i4p: stripe with 8x8 mixes I8 and I4 winners" {
+  let frames = h264_i4_stripe_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      intra4x4_in_p=true,
+      dct8x8=true,
+      stats~,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  debug_inspect(stats.i4p_mbs, content="4")
+  debug_inspect(stats.i16_mbs, content="14")
+  debug_inspect(stats.i8p_mbs, content="16")
+  h264_rc_recon_invariant("i4p-mixed", stream, recon, 4)
+}
+
+///|
+/// The default chain must be byte-identical to the explicit opt-out: with
+/// `intra4x4_in_p` absent the encoder emits zero I4 macroblocks and the
+/// stream equals the §389-era baseline bit-for-bit.
+test "h264 i4p: intra4x4_in_p is opt-in (baseline unchanged)" {
+  let frames = h264_rc_fixture(4)
+  let stats = @libavcodec.H264EncStats::new()
+  let default_stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      dct8x8=true,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.i4p_mbs != 0 {
+    fail("default chain emitted \{stats.i4p_mbs} I4 macroblocks")
+  }
+  let off = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=64,
+      height=48,
+      qp=26,
+      intra_in_p=true,
+      dct8x8=true,
+      intra4x4_in_p=false,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if default_stream.length() != off.length() {
+    fail("default stream length differs from intra4x4_in_p=false")
+  }
+  for i = 0; i < off.length(); i = i + 1 {
+    if default_stream[i] != off[i] {
+      fail("default stream byte \{i} differs from intra4x4_in_p=false")
+    }
+  }
+  let dec = match @libavcodec.h264_decode_annexb_frames(default_stream, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  if dec.length() != 4 {
+    fail("baseline stream failed to decode")
+  }
+}

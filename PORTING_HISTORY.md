@@ -12271,3 +12271,53 @@ whitebox 一律走 wasm-gc）。
 
 **未做（更新）**：VBV/CBR 缓冲约束；I16/8x8 转默认策略；CABAC 位定价；
 I4-in-P；AQ 强度/曲线可配（目前固定 ±1 与 25% 带）。
+
+## §390 H.264 编码器 P slice Intra4x4——I_NxN 十六块独立预测（intra4x4_in_p，opt-in，2026-11-11）
+
+§389 handoff 点名的 I4-in-P：`h264_encode_frames` /
+`h264_encode_frames_cabac` 增 `intra4x4_in_p~`（默认 false = 关，
+基线逐字节不变，存量钉值全绿）。P slice 里允许 **Intra_NxN 宏块**
+（mb_type=5）：十六个独立预测的 4x4 块（各自 pred4x4 模式 + 残差
+cat 1/2），给 16x16/8x8 预测器跟不上的细节纹理。两熵同构。
+
+**实现**：
+- 共享 pass（`h264_enc_dct.mbt`）：`h264_enc_luma_i4_pass` z-order
+  遍历 16 块，逐块 SAD 搜 mode 0..8（先 `h264_pred4x4`）、残差
+  4x4 正变换量化、**逐块内联重建**（后面块用前面块的重建做预测）；
+  `fixed_modes` 可回放已选模式（decide_plan 干跑计价与写端复用同一
+  pass，杜绝选/写分叉）。`h264_enc_i4_avail` 给 top/left/topright
+  可用性（含右下块借右邻 MB 的特判）
+- CAVLC 写端（`h264_encode_p.mbt`）：`put_ue(5)` +（dct8x8 流时）
+  transform flag=0 + 16 个 prev_intra4x4_pred_mode（预测命中 1 bit，
+  否则 0 + 3 bit 余数）+ chroma 模式 + cbp + luma4 残差（nc 用
+  z-order 邻居）；I4 重建已在 pass 内联，`code_mb_residuals` 尾部
+  排除 I4 防二次重建（关键正确性点）
+- CABAC 写端（`h264_enc_cabac.mbt`）：ctx 14/17（intra/I_NxN）+
+  ctx 399 邻居 transform flag + 16 模式（ctx 68/69，余数 3 bin
+  **LSB-first**）+ chroma 树 ctx 64+cc + 残差 cat 2
+- plan 变体 `I4(Array[Int32], Int32)`（16 grid 索引 mode + chroma），
+  与 I8 同构；CABAC P 复用 CAVLC 的 decide_plan/eval_plan（干跑计价）
+
+**决策链修复**（本片顺带根修，RD 选优缺陷、不影响码流自洽）：
+I8/I4 胜出后不更新 `best_cost`，后候选拿陈旧基准比较——I4 可顶掉更
+便宜的 I8。改为胜出即更新（与 I16 对齐）。数学上零存量影响：I8 更新
+只影响后续 I4 候选（`intra4x4_in_p` 默认关），I4 是最后候选。修复后
+dump 逐字节复核不变。
+
+**no8 未决问题收口**（handoff 遗留）：dct8x8=T 时标准夹具 6 MB 选
+I4、dct8x8=F 时 0 个——**合法 RD 结果**：夹具是 4x4 像素棋盘纹理，
+no8 的 inter 残差走 4x4 变换（完美匹配棋盘）压过 I4；dct8x8 的 8x8
+变换对 4x4 棋盘不友好使 inter 变贵、I4 胜出。补**斜纹夹具**（每帧
+变斜率的对角条纹：ME 失效 + I4 对角预测器 DDL/DDR/VL/VR 擅长而
+I16 的 V/H/DC/Plane 不行）钉住 no8 I4 语法：i4=14（双熵）。
+另钉独立性语义：`intra4x4_in_p=T` + `intra_in_p=F` → i4=34、
+i16=0、i8=0（字段文档写明独立于 intra_in_p，用例固定该契约）。
+
+**验证**：钉值 6 测试（std all 双熵 i4=6/2624B/2464B + 重建不变式；
+ffmpeg 仲裁钉值 8 帧 md5；stripe-no8 双熵 i4=14 + 不变式 + 8 帧
+md5；indep i4=34；stripe-all i4=4/i16=14/i8=16 钉 I8 胜出后 I4
+须击败 I8 的 best_cost 链；默认 byte-exact（缺省 == 显式 false 逐
+字节同））。四条 I4 流 docker ffmpeg 9.0.2 零告警且 framemd5 与
+本仓滤波输出逐字节一致（I4ARB/I4CARB/S8ARB/S8CARB 标签）；x264
+native C oracle 扩 I4 四用例（dct8 双熵 + no8 双熵）**24/24**；
+全仓 wasm-gc、非 gc 黑盒、deny-warn 见 README 计数。
