@@ -127,3 +127,14 @@ fn h264_enc_nal(rbsp : H264Rbsp, ref_idc : Int32, unit_type : Int32) -> Bytes {
   }
   Bytes::from_array(out[:])
 }
+
+///|
+/// Access unit delimiter: primary_pic_type 0 (I) or 1 (I/P), followed
+/// by rbsp_stop_one_bit. nal_ref_idc is zero (H.264 7.4.1).
+fn h264_enc_aud(intra : Bool) -> Bytes {
+  if intra {
+    b"\x00\x00\x00\x01\x09\x10"
+  } else {
+    b"\x00\x00\x00\x01\x09\x30"
+  }
+}

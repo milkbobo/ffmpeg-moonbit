@@ -950,3 +950,102 @@ test "h264 i4p: intra4x4_in_p is opt-in (baseline unchanged)" {
     fail("baseline stream failed to decode")
   }
 }
+
+///|
+test "h264 aq strength: defaults, zero and reconstruction at QP boundaries" {
+  let frames = h264_aq_fixture(3)
+  for cabac in [false, true] {
+    fn encode(
+      cabac : Bool,
+      aq : Bool,
+      strength : Int32,
+      qp : Int32,
+      recon : Array[Bytes],
+      stats : @libavcodec.H264EncStats,
+    ) -> Bytes raise {
+      let result = if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=64,
+          height=48,
+          aq~,
+          aq_strength=strength,
+          qp~,
+          recon~,
+          stats~,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=64,
+          height=48,
+          aq~,
+          aq_strength=strength,
+          qp~,
+          recon~,
+          stats~,
+        )
+      }
+      match result {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+    }
+    let off = encode(cabac, false, 1, 26, [], @libavcodec.H264EncStats::new())
+    let zero_stats = @libavcodec.H264EncStats::new()
+    assert_eq(encode(cabac, true, 0, 26, [], zero_stats), off)
+    assert_eq(zero_stats.dqp_mbs, 0)
+    assert_eq(
+      encode(cabac, false, 6, 26, [], @libavcodec.H264EncStats::new()),
+      off,
+    )
+    let default_stream = match
+      (if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=64,
+          height=48,
+          aq=true,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(frames, width=64, height=48, aq=true)
+      }) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    assert_eq(
+      encode(cabac, true, 1, 26, [], @libavcodec.H264EncStats::new()),
+      default_stream,
+    )
+    let mut changed = false
+    for qp in [0, 26, 51] {
+      let recon : Array[Bytes] = []
+      let stats = @libavcodec.H264EncStats::new()
+      let stream = encode(cabac, true, 6, qp, recon, stats)
+      h264_rc_recon_invariant("AQ strength 6", stream, recon, 3)
+      if qp == 26 {
+        changed = stream != default_stream
+        assert_true(stats.dqp_mbs > 0)
+      }
+    }
+    assert_true(changed)
+    for strength in [-1, 7, 2147483647] {
+      let result = if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=64,
+          height=48,
+          aq_strength=strength,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=64,
+          height=48,
+          aq_strength=strength,
+        )
+      }
+      assert_true(result is Err(_))
+    }
+  }
+}

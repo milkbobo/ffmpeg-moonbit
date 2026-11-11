@@ -778,6 +778,7 @@ priv struct H264CabacIEnc {
   mut aq_act : Array[Int32]
   mut aq_avg : Int32
   aq_on : Bool
+  aq_strength : Int32
 }
 
 ///|
@@ -797,8 +798,12 @@ pub fn h264_encode_intra_frame_cabac(
   stats~ : H264EncStats = H264EncStats::new(),
   pps_qp~ : Int32 = -1,
   aq~ : Bool = false,
+  aq_strength~ : Int32 = 1,
   vbv~ : H264Vbv? = None,
 ) -> Result[H264EncodedFrame, String] {
+  if aq_strength < 0 || aq_strength > 6 {
+    return Err("h264 enc: aq_strength must be in 0..=6")
+  }
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
   }
@@ -924,6 +929,7 @@ pub fn h264_encode_intra_frame_cabac(
     aq_act: [],
     aq_avg: 0,
     aq_on: aq,
+    aq_strength,
   }
   if aq {
     let (act, avg) = h264_aq_measure(self_.src_y, ystride, mb_width, mb_height)
@@ -1152,7 +1158,7 @@ fn H264CabacIEnc::encode_macroblock(
   self.mb_qp = self.p.qp
   self.mb_dqp = 0
   if self.aq_on {
-    let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg)
+    let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg, self.aq_strength)
     let mut mq = self.p.qp + adj
     if mq < 0 {
       mq = 0
@@ -2676,7 +2682,11 @@ fn H264PEncoder::encode_p_frame_cabac(
       self.mb_qp = self.p.qp
       self.mb_dqp = 0
       if self.aq_on {
-        let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg)
+        let adj = h264_aq_adj(
+          self.aq_act[mb_idx],
+          self.aq_avg,
+          self.aq_strength,
+        )
         let mut mq = self.p.qp + adj
         if mq < 0 {
           mq = 0
@@ -2755,6 +2765,10 @@ fn H264PEncoder::encode_p_frame_cabac(
 /// first frame as an IDR I picture, every following frame as a P picture
 /// referencing the previous frame's reconstruction. Returns the Annex B
 /// stream.
+/// `aud=true` prefixes each access unit with a delimiter; ABR and VBV
+/// account for its six bytes per picture. The default emits no delimiter.
+/// `aq_strength` (0..6, default 1) controls AQ's +/- QP adjustment when
+/// `aq=true`; zero strength produces the same bytes as disabling AQ.
 pub fn h264_encode_frames_cabac(
   frames : Array[(Bytes, Bytes, Bytes)],
   width~ : Int32,
@@ -2765,6 +2779,8 @@ pub fn h264_encode_frames_cabac(
   intra4x4_in_p~ : Bool = false,
   dct8x8~ : Bool = false,
   aq~ : Bool = false,
+  aq_strength~ : Int32 = 1,
+  aud~ : Bool = false,
   target_bytes~ : Int32 = 0,
   vbv_maxrate~ : Int32 = 0,
   vbv_bufsize~ : Int32 = 0,
@@ -2773,6 +2789,9 @@ pub fn h264_encode_frames_cabac(
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
+  if aq_strength < 0 || aq_strength > 6 {
+    return Err("h264 enc: aq_strength must be in 0..=6")
+  }
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
   }
@@ -2802,6 +2821,8 @@ pub fn h264_encode_frames_cabac(
         intra4x4_in_p~,
         dct8x8~,
         aq~,
+        aq_strength~,
+        aud~,
         vbv=v,
         recon~,
         stats~,
@@ -2826,6 +2847,8 @@ pub fn h264_encode_frames_cabac(
             intra4x4_in_p~,
             dct8x8~,
             aq~,
+            aq_strength~,
+            aud~,
             recon=[],
             stats=H264EncStats::new(),
           ) {
@@ -2854,6 +2877,8 @@ pub fn h264_encode_frames_cabac(
       intra4x4_in_p~,
       dct8x8~,
       aq~,
+      aq_strength~,
+      aud~,
       recon~,
       stats~,
     ) {
@@ -2876,6 +2901,8 @@ fn h264_encode_frames_vbv_cabac(
   intra4x4_in_p~ : Bool,
   dct8x8~ : Bool,
   aq~ : Bool,
+  aq_strength~ : Int32,
+  aud~ : Bool,
   vbv~ : H264Vbv,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
@@ -2895,6 +2922,8 @@ fn h264_encode_frames_vbv_cabac(
           intra4x4_in_p~,
           dct8x8~,
           aq~,
+          aq_strength~,
+          aud~,
           recon=[],
           stats=H264EncStats::new(),
           vbv=Some(vbv),
@@ -2922,10 +2951,12 @@ fn h264_encode_frames_vbv_cabac(
       intra4x4_in_p~,
       dct8x8~,
       aq~,
+      aq_strength~,
       recon~,
       stats~,
       vbv=Some(vbv),
       fillers~,
+      aud~,
     ) {
     Ok((bytes, _)) => {
       stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -2957,10 +2988,12 @@ fn h264_encode_frames_cabac_qps(
   intra4x4_in_p~ : Bool,
   dct8x8~ : Bool,
   aq~ : Bool,
+  aq_strength~ : Int32,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
   vbv~ : H264Vbv? = None,
   fillers~ : Array[Int32] = [],
+  aud~ : Bool = false,
 ) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
@@ -2976,6 +3009,7 @@ fn h264_encode_frames_cabac_qps(
       stats~,
       pps_qp=base_qp,
       aq~,
+      aq_strength~,
       vbv~,
     ) {
     Ok(e) => e
@@ -3033,6 +3067,9 @@ fn h264_encode_frames_cabac_qps(
     )
   } else {
     stream.push(first.annexb)
+  }
+  if aud {
+    stream[0] = h264_enc_concat([h264_enc_aud(true), stream[0]])
   }
   let mut ref_y = Array::make(ystride * pheight, 0)
   let mut ref_u = Array::make(cstride * (pheight / 2), 0)
@@ -3098,6 +3135,7 @@ fn h264_encode_frames_cabac_qps(
       aq_act: act,
       aq_avg: act_avg,
       aq_on: aq,
+      aq_strength,
     }
     let nal = match enc.encode_p_frame_cabac(f, intra_in_p) {
       Ok(n) => n
@@ -3111,6 +3149,9 @@ fn h264_encode_frames_cabac_qps(
     au.push(nal)
     if fillers.length() > f && fillers[f] > 0 {
       au.push(h264_enc_filler_nal(fillers[f] - 5))
+    }
+    if aud {
+      au.insert(0, h264_enc_aud(false))
     }
     stream.push(h264_enc_concat(au))
     recon.push(

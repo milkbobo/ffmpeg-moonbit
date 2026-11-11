@@ -366,18 +366,16 @@ fn h264_aq_measure(
 }
 
 ///|
-/// The +-1 adaptive-quantisation rule: texture 25% above the picture
-/// average takes one QP step up (detail masks quantisation noise), 25%
-/// below takes one step down (flat blocks show every artefact); the middle
-/// band stays. Zero QP offset when the whole picture is uniform.
-fn h264_aq_adj(act : Int32, avg : Int32) -> Int32 {
+/// Texture 25% above/below the picture average takes +/-strength QP
+/// steps (0..6, default 1); the middle band and uniform pictures stay.
+fn h264_aq_adj(act : Int32, avg : Int32, strength : Int32) -> Int32 {
   if avg <= 0 {
     return 0
   }
   if act * 4 > avg * 5 {
-    1
+    strength
   } else if act * 4 < avg * 3 {
-    -1
+    -strength
   } else {
     0
   }

@@ -459,6 +459,96 @@ fn vbv_check_filler_layout(
 // ---------------------------------------------------------------------------
 
 ///|
+test "h264 aud: delimiters, byte compatibility and CPB accounting" {
+  let frames = h264_rc_fixture(5)
+  for cabac in [false, true] {
+    for vbv in [false, true] {
+      let recon : Array[Bytes] = []
+      let stats = @libavcodec.H264EncStats::new()
+      let rate = if vbv { 100000 } else { 0 }
+      let size = if vbv { 32000 } else { 0 }
+      let fps = if vbv { 30 } else { 0 }
+      let result = if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=64,
+          height=48,
+          aud=true,
+          vbv_maxrate=rate,
+          vbv_bufsize=size,
+          fps~,
+          recon~,
+          stats~,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=64,
+          height=48,
+          aud=true,
+          vbv_maxrate=rate,
+          vbv_bufsize=size,
+          fps~,
+          recon~,
+          stats~,
+        )
+      }
+      let stream = match result {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+      let nals = vbv_nals(stream)
+      let stripped : Array[Byte] = []
+      let sizes : Array[Int32] = []
+      let mut start = 0
+      let mut count = 0
+      for (ty, s, e) in nals {
+        if ty == 9 {
+          if count > 0 {
+            sizes.push(s - start)
+          }
+          start = s
+          assert_eq(e - s, 6)
+          assert_eq(stream[s + 4].to_int(), 9)
+          assert_eq(
+            stream[s + 5].to_int(),
+            if count == 0 {
+              0x10
+            } else {
+              0x30
+            },
+          )
+          count += 1
+        } else {
+          for i in s..<e {
+            stripped.push(stream[i])
+          }
+        }
+      }
+      sizes.push(stream.length() - start)
+      assert_eq(count, 5)
+      assert_eq(nals[0].0, 9)
+      h264_rc_recon_invariant("AUD", stream, recon, 5)
+      if vbv {
+        ignore(vbv_cpb_check("AUD", sizes, rate, size, fps, 90))
+        assert_eq(stats.vbv_bits, stream.length().to_int64() * 8L)
+      } else {
+        let plain = match
+          (if cabac {
+            @libavcodec.h264_encode_frames_cabac(frames, width=64, height=48)
+          } else {
+            @libavcodec.h264_encode_frames(frames, width=64, height=48)
+          }) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        assert_true(vbv_bytes_eq(plain, Bytes::from_array(stripped[:])))
+      }
+    }
+  }
+}
+
+///|
 /// The CPB mode is opt-in: absent/zero VBV arguments and a non-default
 /// `vbv_init` leave the flat-QP streams byte-identical.
 test "h264 vbv: opt-in leaves flat streams byte-identical" {
@@ -1202,5 +1292,70 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
   ]
   for i, f in filtered2 {
     inspect(h264_rc_md5(f.yuvp()), content=pins2[i])
+  }
+}
+
+///|
+test "h264 aq strength: ABR and VBV searches preserve strong AQ" {
+  let frames = h264_aq_fixture(3)
+  for cabac in [false, true] {
+    for vbv in [false, true] {
+      let recon : Array[Bytes] = []
+      let stats = @libavcodec.H264EncStats::new()
+      let target = if vbv { 0 } else { 1200 }
+      let maxrate = if vbv { 100000 } else { 0 }
+      let bufsize = if vbv { 32000 } else { 0 }
+      let fps = if vbv { 30 } else { 0 }
+      let result = if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=64,
+          height=48,
+          aq=true,
+          aq_strength=6,
+          target_bytes=target,
+          vbv_maxrate=maxrate,
+          vbv_bufsize=bufsize,
+          fps~,
+          recon~,
+          stats~,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=64,
+          height=48,
+          aq=true,
+          aq_strength=6,
+          target_bytes=target,
+          vbv_maxrate=maxrate,
+          vbv_bufsize=bufsize,
+          fps~,
+          recon~,
+          stats~,
+        )
+      }
+      let stream = match result {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+      h264_rc_recon_invariant("strong AQ rate control", stream, recon, 3)
+      assert_true(stats.dqp_mbs > 0)
+      if vbv {
+        ignore(
+          vbv_cpb_check(
+            "strong AQ",
+            vbv_au_sizes(vbv_nals(stream)),
+            maxrate,
+            bufsize,
+            fps,
+            90,
+          ),
+        )
+        assert_eq(stats.vbv_bits, stream.length().to_int64() * 8L)
+      } else {
+        assert_true(stream.length() <= target)
+      }
+    }
   }
 }

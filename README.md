@@ -444,6 +444,14 @@ DASH 多 Period 链式续播与类型不匹配即停、HLS 分离音轨跟随与
 
 ## 构建与测试
 
+H.264 编码命令现可读取原始 8-bit YUV420P 并输出 Annex B，支持
+CAVLC/CABAC、AQ、AUD、ABR 与 VBV。用法与限制见
+[`cmd/encode-h264`](cmd/encode-h264/README.md)。
+
+```sh
+moon run cmd/encode-h264 -- input.yuv --width 640 --height 480 --output out.264 --cabac --aud
+```
+
 连续 MJPEG 帧可以复用 `@libavcodec.MjpegDecoder::new()` 返回的会话，逐包调用
 `decoder.decode(packet)`。会话保留成功帧中的 DQT/DHT 定义，支持后续帧省略这些表；
 失败帧不会覆盖已保存的表。独立图片仍可调用 `av_mjpeg_decode`，其状态互不共享。

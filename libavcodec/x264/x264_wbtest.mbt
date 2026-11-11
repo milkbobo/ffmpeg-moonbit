@@ -1251,8 +1251,8 @@ test "x264 oracle: VBV CBR NAL layout agrees in C and decodes warning-free" {
     x264_probe_count(probe.nal_types, 8) != 1 {
     fail("expected exactly one SPS and one PPS")
   }
-  if x264_probe_count(probe.nal_types, 5) +
-    x264_probe_count(probe.nal_types, 1) != 3 {
+  if x264_probe_count(probe.nal_types, 5) + x264_probe_count(probe.nal_types, 1) !=
+    3 {
     fail("expected three VCL NALs")
   }
 }
@@ -1273,7 +1273,9 @@ test "x264 oracle: probe separates flat and VBV CABAC streams" {
     Err(e) => fail(e)
   }
   if fp.n_frames != 3 || fp.au_sizes.length() != 3 {
-    fail("flat stream: C decoded \{fp.n_frames} frames / \{fp.au_sizes.length()} AUs")
+    fail(
+      "flat stream: C decoded \{fp.n_frames} frames / \{fp.au_sizes.length()} AUs",
+    )
   }
   if fp.warnings != 0 || fp.errors != 0 {
     fail("flat stream raised C diagnostics")
@@ -1302,7 +1304,9 @@ test "x264 oracle: probe separates flat and VBV CABAC streams" {
     Err(e) => fail(e)
   }
   if tp.n_frames != 3 || tp.au_sizes.length() != 3 {
-    fail("tight CABAC: C decoded \{tp.n_frames} frames / \{tp.au_sizes.length()} AUs")
+    fail(
+      "tight CABAC: C decoded \{tp.n_frames} frames / \{tp.au_sizes.length()} AUs",
+    )
   }
   if tp.warnings != 0 || tp.errors != 0 {
     fail(
@@ -1371,5 +1375,82 @@ test "x264 oracle: probe rejects shape-invalid streams" {
   match x264_probe_annexb(short) {
     Ok(_) => fail("probe accepted a start-code-only stream")
     Err(_) => ()
+  }
+}
+
+///|
+test "pure H264 AUD: C parser boundaries and dual decoder" {
+  let frames = x264_dct8_fixture()
+  for cabac in [false, true] {
+    let result = if cabac {
+      @libavcodec.h264_encode_frames_cabac(
+        frames,
+        width=96,
+        height=64,
+        aud=true,
+      )
+    } else {
+      @libavcodec.h264_encode_frames(frames, width=96, height=64, aud=true)
+    }
+    let stream = match result {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    let probe = match x264_probe_annexb(stream) {
+      Ok(p) => p
+      Err(e) => fail(e)
+    }
+    assert_eq(probe.n_frames, 3)
+    assert_eq(probe.au_sizes.length(), 3)
+    assert_eq(probe.warnings, 0)
+    assert_eq(probe.errors, 0)
+    assert_eq(x264_probe_count(probe.nal_types, 9), 3)
+    assert_eq(probe.nal_types[0], 9)
+    let mut total = 0
+    for size in probe.au_sizes {
+      total += size
+    }
+    assert_eq(total, stream.length())
+    x264_cross_decode(stream, 3, 1)
+  }
+}
+
+///|
+test "pure H264 AQ strength: maximum deltas decode identically in C" {
+  let frames = x264_dct8_fixture()
+  for cabac in [false, true] {
+    for qp in [0, 26, 51] {
+      let result = if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=96,
+          height=64,
+          aq=true,
+          aq_strength=6,
+          qp~,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=96,
+          height=64,
+          aq=true,
+          aq_strength=6,
+          qp~,
+        )
+      }
+      let stream = match result {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      assert_eq(probe.n_frames, 3)
+      x264_cross_decode(stream, 3, 1)
+    }
   }
 }

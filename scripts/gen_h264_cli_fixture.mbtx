@@ -1,0 +1,19 @@
+import {
+  "moonbitlang/x/fs",
+}
+
+// Reproducible 16x16, three-frame YUV420P input for cmd/encode-h264.
+// Run from the module root; output is an ignored arbitration artifact.
+fn main raise {
+  let raw : Array[Byte] = []
+  for f in 0..<3 {
+    for row in 0..<16 {
+      for col in 0..<16 {
+        raw.push(((row * 5 + col * 3 + f * 17) & 255).to_byte())
+      }
+    }
+    for _ in 0..<64 { raw.push(90) }
+    for _ in 0..<64 { raw.push(170) }
+  }
+  @fs.write_bytes_to_file(".scratch/h264_cli_input.yuv", Bytes::from_array(raw[:]))
+}

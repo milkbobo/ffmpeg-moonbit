@@ -89,6 +89,7 @@ priv struct H264IntraEncoder {
   mut aq_act : Array[Int32]
   mut aq_avg : Int32
   aq_on : Bool
+  aq_strength : Int32
 }
 
 ///|
@@ -97,6 +98,8 @@ priv struct H264IntraEncoder {
 /// positive and even (cropping covers the macroblock remainder). `qp` is
 /// the flat slice QP; `pcm` selects I_PCM for every macroblock - a
 /// lossless conformance path.
+/// With `aq=true`, `aq_strength` selects the QP offset (0..6, default 1);
+/// 0 produces the flat-QP stream. The final macroblock QP is clipped to 0..51.
 pub fn h264_encode_intra_frame(
   y : Bytes,
   u : Bytes,
@@ -110,8 +113,12 @@ pub fn h264_encode_intra_frame(
   stats~ : H264EncStats = H264EncStats::new(),
   pps_qp~ : Int32 = -1,
   aq~ : Bool = false,
+  aq_strength~ : Int32 = 1,
   vbv~ : H264Vbv? = None,
 ) -> Result[H264EncodedFrame, String] {
+  if aq_strength < 0 || aq_strength > 6 {
+    return Err("h264 enc: aq_strength must be in 0..=6")
+  }
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
   }
@@ -217,6 +224,7 @@ pub fn h264_encode_intra_frame(
     aq_act: [],
     aq_avg: 0,
     aq_on: aq,
+    aq_strength,
   }
   if aq {
     let (act, avg) = h264_aq_measure(self_.src_y, ystride, mb_width, mb_height)
@@ -586,7 +594,7 @@ fn H264IntraEncoder::encode_macroblock(
   self.mb_qp = self.p.qp
   self.mb_dqp = 0
   if self.aq_on {
-    let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg)
+    let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg, self.aq_strength)
     let mut mq = self.p.qp + adj
     if mq < 0 {
       mq = 0
