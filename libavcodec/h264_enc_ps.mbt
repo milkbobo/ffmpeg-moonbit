@@ -29,15 +29,157 @@ fn H264EncParams::mb_height(self : H264EncParams) -> Int32 {
 }
 
 ///|
+/// Constrained-buffer (VBV/CPB) configuration shared by the SPS VUI, the
+/// buffering-period/picture-timing SEIs and the per-picture quantiser
+/// search. `maxrate`/`bufsize` are bits per second and bits; they are
+/// rounded down to the multiples the SPS HRD syntax can express, and the
+/// declared values are what the rate control actually tracks.
+pub struct H264Vbv {
+  bufsize : Int32
+  fps : Int32
+  /// Initial CPB fullness in bits (`vbv_init` percent of `bufsize`).
+  init_bits : Int32
+  /// Nominal bits removed by one picture (`maxrate / fps`).
+  rate_bits : Int32
+  bit_rate_scale : Int32
+  bit_rate_value_minus1 : Int32
+  cpb_size_scale : Int32
+  cpb_size_value_minus1 : Int32
+  /// `initial_cpb_removal_delay` in 90 kHz units, and its buffering-period
+  /// offset partner (both written at
+  /// `initial_cpb_removal_delay_length = 24` bits).
+  init_delay : Int32
+  init_delay_offset : Int32
+  /// Syntax-element widths in bits (constant for a whole stream).
+  initial_cpb_removal_delay_length : Int32
+  cpb_removal_delay_length : Int32
+  dpb_output_delay_length : Int32
+}
+
+///|
+/// Validate and derive the CPB configuration. `maxrate`/`bufsize` are
+/// rounded down to multiples of 64/16 bits (HRD units with scale 0); the
+/// declared (rounded) values feed both the SPS and the simulation, so the
+/// stream never claims more than the user asked for.
+fn h264_vbv_new(
+  maxrate : Int32,
+  bufsize : Int32,
+  fps : Int32,
+  init_pct : Int32,
+) -> Result[H264Vbv, String] {
+  if maxrate <= 0 || bufsize <= 0 || fps <= 0 {
+    return Err("h264 enc: vbv needs positive maxrate, bufsize and fps")
+  }
+  if maxrate < 64 || bufsize < 16 {
+    return Err("h264 enc: vbv maxrate/bufsize below the HRD resolution")
+  }
+  if init_pct < 1 || init_pct > 100 {
+    return Err("h264 enc: vbv_init must be 1..100")
+  }
+  if fps > 1_000_000_000 {
+    return Err("h264 enc: vbv fps out of range")
+  }
+  let bit_rate_scale = 0
+  let bit_rate_value_minus1 = maxrate / 64 - 1
+  let cpb_size_scale = 0
+  let cpb_size_value_minus1 = bufsize / 16 - 1
+  let declared_rate = (bit_rate_value_minus1 + 1) << 6
+  let declared_size = (cpb_size_value_minus1 + 1) << 4
+  let rate_bits = declared_rate / fps
+  if rate_bits < 1 {
+    return Err("h264 enc: vbv maxrate below one bit per picture")
+  }
+  // One nominal picture plus the smallest filler-data NAL (6 bytes: start
+  // code, header, trailing byte) must fit. Without that slack a nearly
+  // empty bucket could need filler to stop the next arrival overflowing
+  // but be unable to spare six bytes to carry it, leaving the CPB up to
+  // 47 bits over its declared size. Subtracting rather than adding avoids
+  // wrapping `rate_bits + 48` for a near-Int32.max maxrate.
+  if declared_size - 48 < rate_bits {
+    return Err("h264 enc: vbv bufsize must hold one picture plus 48 bits")
+  }
+  let init_bits = (declared_size.to_int64() * init_pct.to_int64() / 100L).to_int()
+  if init_bits < 1 {
+    return Err("h264 enc: vbv initial fullness is zero")
+  }
+  let init_delay64 = init_bits.to_int64() * 90000L / declared_rate.to_int64()
+  if init_delay64 > 0xFFFFFFL {
+    return Err("h264 enc: vbv initial delay exceeds 24 bits")
+  }
+  let init_delay = init_delay64.to_int()
+  Ok({
+    bufsize: declared_size,
+    fps,
+    init_bits,
+    rate_bits,
+    bit_rate_scale,
+    bit_rate_value_minus1,
+    cpb_size_scale,
+    cpb_size_value_minus1,
+    init_delay,
+    init_delay_offset: if init_delay < 90000 {
+      90000 - init_delay
+    } else {
+      0
+    },
+    initial_cpb_removal_delay_length: 24,
+    cpb_removal_delay_length: 16,
+    dpb_output_delay_length: 4,
+  })
+}
+
+///|
+/// VUI for a CPB-constrained stream: timing info at one frame = two
+/// `num_units_in_tick` clocks (the frame-doubling convention), CBR NAL HRD
+/// with one CPB and no reordering.
+fn h264_enc_sps_vui(r : H264Rbsp, v : H264Vbv) -> Unit {
+  r.put_bit(1) // vui_parameters_present_flag
+  r.put_bit(0) // aspect_ratio_info_present_flag
+  r.put_bit(0) // overscan_info_present_flag
+  r.put_bit(0) // video_signal_type_present_flag
+  r.put_bit(0) // chroma_loc_info_present_flag
+  r.put_bit(1) // timing_info_present_flag
+  r.put(1, 32) // num_units_in_tick
+  r.put(v.fps * 2, 32) // time_scale: one frame = two ticks
+  r.put_bit(1) // fixed_frame_rate_flag
+  r.put_bit(1) // nal_hrd_parameters_present_flag
+  r.put_ue(0) // cpb_cnt_minus1
+  r.put(v.bit_rate_scale, 4)
+  r.put(v.cpb_size_scale, 4)
+  r.put_ue(v.bit_rate_value_minus1)
+  r.put_ue(v.cpb_size_value_minus1)
+  r.put_bit(1) // cbr_flag
+  r.put(v.initial_cpb_removal_delay_length - 1, 5)
+  r.put(v.cpb_removal_delay_length - 1, 5)
+  r.put(v.dpb_output_delay_length - 1, 5)
+  r.put(0, 5) // time_offset_length
+  r.put_bit(0) // vcl_hrd_parameters_present_flag
+  r.put_bit(0) // low_delay_hrd_flag
+  r.put_bit(0) // pic_struct_present_flag
+  r.put_bit(1) // bitstream_restriction_flag
+  r.put_bit(0) // motion_vectors_over_pic_boundaries_flag
+  r.put_ue(0) // max_bytes_per_pic_denom
+  r.put_ue(0) // max_bits_per_mb_denom
+  r.put_ue(15) // log2_max_mv_length_horizontal
+  r.put_ue(15) // log2_max_mv_length_vertical
+  r.put_ue(0) // max_num_reorder_frames: IPPP
+  r.put_ue(1) // max_dec_frame_buffering
+}
+
+///|
 /// The SPS RBSP bytes (no NAL header, no emulation prevention) - what the
 /// parsers consume directly. `dct8x8` switches the profile to High (100),
 /// the profile family `transform_8x8_mode` requires.
-fn h264_enc_sps_rbsp(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
+fn h264_enc_sps_rbsp(
+  p : H264EncParams,
+  dct8x8~ : Bool = false,
+  vbv~ : H264Vbv? = None,
+) -> Bytes {
   let r = H264Rbsp::new()
   if dct8x8 {
-    h264_enc_sps_body_high(r, p)
+    h264_enc_sps_body_high(r, p, vbv~)
   } else {
-    h264_enc_sps_body(r, p)
+    h264_enc_sps_body(r, p, vbv~)
   }
   r.trailing_bits()
   r.finish_raw_of()
@@ -45,12 +187,16 @@ fn h264_enc_sps_rbsp(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
 
 ///|
 /// Write the SPS NAL (nal_unit_type 7, ref_idc 3). */
-fn h264_enc_write_sps(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
+fn h264_enc_write_sps(
+  p : H264EncParams,
+  dct8x8~ : Bool = false,
+  vbv~ : H264Vbv? = None,
+) -> Bytes {
   let r = H264Rbsp::new()
   if dct8x8 {
-    h264_enc_sps_body_high(r, p)
+    h264_enc_sps_body_high(r, p, vbv~)
   } else {
-    h264_enc_sps_body(r, p)
+    h264_enc_sps_body(r, p, vbv~)
   }
   r.trailing_bits()
   h264_enc_nal(r, 3, 7)
@@ -62,7 +208,11 @@ fn h264_enc_write_sps(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
 /// signalled (seq flag 0), so the flat-16 default lists stay active on both
 /// sides. No constraint flags: the PPS-tail skip of `more_rbsp_data_in_pps`
 /// only applies to profiles 66/77/88 with a constraint set.
-fn h264_enc_sps_body_high(r : H264Rbsp, p : H264EncParams) -> Unit {
+fn h264_enc_sps_body_high(
+  r : H264Rbsp,
+  p : H264EncParams,
+  vbv~ : H264Vbv? = None,
+) -> Unit {
   r.put(100, 8) // profile_idc: High
   r.put(0, 8) // constraint_set0..5 + reserved_zero_2bits
   r.put(p.level_idc, 8)
@@ -88,11 +238,18 @@ fn h264_enc_sps_body_high(r : H264Rbsp, p : H264EncParams) -> Unit {
     r.put_ue(0) // frame_crop_top_offset
     r.put_ue((p.mb_height() * 16 - p.height) / 2)
   }
-  r.put_bit(0) // vui_parameters_present_flag
+  match vbv {
+    None => r.put_bit(0) // vui_parameters_present_flag
+    Some(v) => h264_enc_sps_vui(r, v)
+  }
 }
 
 ///|
-fn h264_enc_sps_body(r : H264Rbsp, p : H264EncParams) -> Unit {
+fn h264_enc_sps_body(
+  r : H264Rbsp,
+  p : H264EncParams,
+  vbv~ : H264Vbv? = None,
+) -> Unit {
   r.put(66, 8) // profile_idc: Baseline
   r.put(0xE0, 8) // constraint_set0/1/2 flags
   r.put(p.level_idc, 8)
@@ -117,7 +274,10 @@ fn h264_enc_sps_body(r : H264Rbsp, p : H264EncParams) -> Unit {
     r.put_ue(0) // frame_crop_top_offset
     r.put_ue((p.mb_height() * 16 - p.height) / 2) // frame_crop_bottom_offset
   }
-  r.put_bit(0) // vui_parameters_present_flag
+  match vbv {
+    None => r.put_bit(0) // vui_parameters_present_flag
+    Some(v) => h264_enc_sps_vui(r, v)
+  }
 }
 
 ///|
@@ -221,4 +381,62 @@ fn h264_aq_adj(act : Int32, avg : Int32) -> Int32 {
   } else {
     0
   }
+}
+
+// ---------------------------------------------------------------------------
+// SEI / filler writers for the CPB-constrained mode
+// ---------------------------------------------------------------------------
+
+///|
+/// Wrap one SEI payload in a type-6 NAL. The `payload_size` counts only the
+/// syntax bytes (zero-padded to a byte boundary); the `rbsp_trailing_bits`
+/// that close the NAL are a separate byte, as in x264. FFmpeg strips the
+/// trailing bits from the NAL before parsing the payload, so folding them
+/// into `payload_size` would make every message look truncated by one byte.
+fn h264_enc_sei_nal(payload_type : Int32, payload : H264Rbsp) -> Bytes {
+  let data = payload.finish_raw_of()
+  let r = H264Rbsp::new()
+  r.put(payload_type, 8)
+  r.put(data.length(), 8) // our payloads are far below the 255-byte step
+  for i = 0; i < data.length(); i = i + 1 {
+    r.put(data[i].to_int() & 0xFF, 8)
+  }
+  r.trailing_bits()
+  h264_enc_nal(r, 0, 6)
+}
+
+///|
+/// `buffering_period` SEI: declares the initial CPB fullness through the
+/// 90 kHz removal delay (the offset keeps delay+offset inside one second,
+/// the x264 convention this encoder mirrors).
+fn h264_enc_sei_buffering_period(v : H264Vbv) -> Bytes {
+  let p = H264Rbsp::new()
+  p.put_ue(0) // seq_parameter_set_id
+  p.put(v.init_delay, v.initial_cpb_removal_delay_length)
+  p.put(v.init_delay_offset, v.initial_cpb_removal_delay_length)
+  h264_enc_sei_nal(0, p)
+}
+
+///|
+/// `pic_timing` SEI: the picture's CPB removal delay in
+/// `num_units_in_tick` clocks (two per frame) and no DPB reordering delay.
+fn h264_enc_sei_pic_timing(v : H264Vbv, cpb_removal_delay : Int32) -> Bytes {
+  let p = H264Rbsp::new()
+  p.put(cpb_removal_delay, v.cpb_removal_delay_length)
+  p.put(0, v.dpb_output_delay_length)
+  h264_enc_sei_nal(1, p)
+}
+
+///|
+/// A filler-data NAL (type 12, ref_idc 0): `payload_len - 1` 0xFF bytes
+/// followed by rbsp_trailing_bits. Only the byte length matters to the CPB
+/// bookkeeping; decoders discard the NAL.
+fn h264_enc_filler_nal(payload_len : Int32) -> Bytes {
+  let n = if payload_len < 1 { 1 } else { payload_len }
+  let out : Array[Byte] = [b'\x00', b'\x00', b'\x00', b'\x01', b'\x0c']
+  for _i = 0; _i < n - 1; _i = _i + 1 {
+    out.push(b'\xFF')
+  }
+  out.push(b'\x80')
+  Bytes::from_array(out[:])
 }

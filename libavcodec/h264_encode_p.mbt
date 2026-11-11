@@ -60,6 +60,14 @@ pub(all) struct H264EncStats {
   frame_qps : Array[Int32]
   /// Macroblocks whose `mb_qp_delta` is non-zero (adaptive quantisation).
   mut dqp_mbs : Int32
+  /// Access units that received at least one filler-data NAL (VBV/CBR).
+  mut vbv_fills : Int32
+  /// Total bits emitted under VBV/CBR, including parameter sets, SEI and
+  /// filler (the CPB's actual traffic).
+  mut vbv_bits : Int64
+  /// Total bytes of filler NAL units, Annex B start code and NAL header
+  /// included (0 when the stream is already dense enough).
+  mut vbv_filler_bytes : Int32
 }
 
 ///|
@@ -72,6 +80,9 @@ pub fn H264EncStats::new() -> H264EncStats {
     coded_mbs: 0,
     frame_qps: [],
     dqp_mbs: 0,
+    vbv_fills: 0,
+    vbv_bits: 0L,
+    vbv_filler_bytes: 0,
   }
 }
 
@@ -177,6 +188,10 @@ pub fn h264_encode_frames(
   dct8x8~ : Bool = false,
   aq~ : Bool = false,
   target_bytes~ : Int32 = 0,
+  vbv_maxrate~ : Int32 = 0,
+  vbv_bufsize~ : Int32 = 0,
+  fps~ : Int32 = 0,
+  vbv_init~ : Int32 = 90,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
@@ -184,6 +199,39 @@ pub fn h264_encode_frames(
     return Err("h264 enc: no frames")
   }
   let n = frames.length()
+  // VBV/CBR is opt-in: any of the three parameters turns it on, and the
+  // two rate-control modes cannot be combined (ABR has no local buffer
+  // notion, VBV assigns QPs while encoding).
+  let vbv = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+    if target_bytes > 0 {
+      return Err("h264 enc: target_bytes and vbv are mutually exclusive")
+    }
+    match h264_vbv_new(vbv_maxrate, vbv_bufsize, fps, vbv_init) {
+      Ok(v) => Some(v)
+      Err(e) => return Err(e)
+    }
+  } else {
+    None
+  }
+  match vbv {
+    Some(v) =>
+      return h264_encode_frames_vbv(
+        frames,
+        width~,
+        height~,
+        qp~,
+        level_idc~,
+        pcm_first~,
+        intra_in_p~,
+        intra4x4_in_p~,
+        dct8x8~,
+        aq~,
+        vbv=v,
+        recon~,
+        stats~,
+      )
+    None => ()
+  }
   // `target_bytes > 0` turns on the two-pass average-bitrate control: `qp`
   // then is the search's starting point and the PPS base QP, and every
   // picture's own QP travels in its slice header. Off, every picture codes
@@ -242,6 +290,215 @@ pub fn h264_encode_frames(
 }
 
 ///|
+/// The VBV/CBR sequence entry: assign per-picture QPs under the CPB
+/// constraint (real prefix encodes), then emit the stream with filler-data
+/// NALs that keep the declared CBR buffer from overflowing. See
+/// `h264_vbv_solve` / `h264_vbv_fillers`.
+fn h264_encode_frames_vbv(
+  frames : Array[(Bytes, Bytes, Bytes)],
+  width~ : Int32,
+  height~ : Int32,
+  qp~ : Int32,
+  level_idc~ : Int32,
+  pcm_first~ : Bool,
+  intra_in_p~ : Bool,
+  intra4x4_in_p~ : Bool,
+  dct8x8~ : Bool,
+  aq~ : Bool,
+  vbv~ : H264Vbv,
+  recon~ : Array[Bytes],
+  stats~ : H264EncStats,
+) -> Result[Bytes, String] {
+  let n = frames.length()
+  let (qps, sizes) = match
+    h264_vbv_solve(n, qp, vbv, fn(trial) {
+      match
+        h264_encode_frames_qps(
+          frames,
+          width~,
+          height~,
+          base_qp=qp,
+          qps=trial,
+          level_idc~,
+          pcm_first~,
+          intra_in_p~,
+          intra4x4_in_p~,
+          dct8x8~,
+          aq~,
+          recon=[],
+          stats=H264EncStats::new(),
+          vbv=Some(vbv),
+        ) {
+        Ok((_, sizes)) => Ok(sizes)
+        Err(e) => Err(e)
+      }
+    }) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let fillers = h264_vbv_fillers(n, sizes, vbv)
+  for q in qps {
+    stats.frame_qps.push(q)
+  }
+  match
+    h264_encode_frames_qps(
+      frames,
+      width~,
+      height~,
+      base_qp=qp,
+      qps~,
+      level_idc~,
+      pcm_first~,
+      intra_in_p~,
+      intra4x4_in_p~,
+      dct8x8~,
+      aq~,
+      recon~,
+      stats~,
+      vbv=Some(vbv),
+      fillers~,
+    ) {
+    Ok((bytes, _)) => {
+      stats.vbv_bits = bytes.length().to_int64() * 8L
+      for f = 0; f < n; f = f + 1 {
+        if fillers[f] > 0 {
+          stats.vbv_fills += 1
+          stats.vbv_filler_bytes += fillers[f]
+        }
+      }
+      Ok(bytes)
+    }
+    Err(e) => Err(e)
+  }
+}
+
+///|
+/// Greedy CPB-constrained QP assignment. The model is the HRD leaky
+/// bucket: the buffer starts `init_bits` full, each picture is removed at
+/// its nominal time, and `maxrate/fps` bits arrive between removals.
+/// Increasing a picture's QP is the only lever (the reference chain makes
+/// the whole suffix respond), so the search is monotone:
+///
+/// 1. encode the sequence with the starting flat QP;
+/// 2. simulate the buffer, filler schedule included, and find the first
+///    access unit that does not fit;
+/// 3. raise that picture's QP by the size-model jump, re-encode the whole
+///    sequence, repeat until every removal fits.
+///
+/// Every probe is a real encode (decisions, skips and references all
+/// respond to the QP), so the final assignment satisfies the constraint
+/// exactly, not just in the model.
+fn h264_vbv_solve(
+  n : Int32,
+  start_qp : Int32,
+  v : H264Vbv,
+  encode : (Array[Int32]) -> Result[Array[Int32], String],
+) -> Result[(Array[Int32], Array[Int32]), String] {
+  let q0 = if start_qp < h264_rc_qp_min {
+    h264_rc_qp_min
+  } else if start_qp > h264_rc_qp_max {
+    h264_rc_qp_max
+  } else {
+    start_qp
+  }
+  let qps = Array::make(n, q0)
+  let mut rounds = 0
+  while true {
+    let sizes = match encode(qps) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    // Replay the CPB over the real access units, filler included: a filler
+    // is removed together with the picture it trails, so it eats into the
+    // next removal's headroom. The ideal filler leaves the bucket within
+    // 47 bits of full; if the next picture is that close to the declared
+    // size, it must coarsen too.
+    let fillers = h264_vbv_fillers(n, sizes, v)
+    let mut fullness = v.init_bits
+    let mut under = -1
+    let mut available = 0
+    for f = 0; f < n; f = f + 1 {
+      let bits = (sizes[f] + fillers[f]) * 8
+      if bits > fullness {
+        under = f
+        available = fullness
+        break
+      }
+      fullness = fullness - bits + v.rate_bits
+      if fullness > v.bufsize {
+        fullness = v.bufsize
+      }
+    }
+    if under < 0 {
+      return Ok((qps, sizes))
+    }
+    rounds = rounds + 1
+    if rounds > 2048 {
+      return Err("h264 enc: vbv solver did not converge")
+    }
+    let jump = h264_rc_qp_jump(sizes[under] * 8, available)
+    let step = if jump < 1 { 1 } else { jump }
+    if qps[under] >= h264_rc_qp_max {
+      return Err(
+        "h264 enc: vbv underflow at picture \{under} even at QP \{h264_rc_qp_max}",
+      )
+    }
+    let next = qps[under] + step
+    qps[under] = if next > h264_rc_qp_max { h264_rc_qp_max } else { next }
+  }
+  Err("h264 enc: vbv solver exhausted")
+}
+
+///|
+/// Filler-data schedule: for each access unit, the total NAL size (start
+/// code + header + payload) that must be appended so the buffer does not
+/// overflow between this removal and the next. The raw sizes come from the
+/// solver's last pass, so the first removal is known to fit; a filler is
+/// only ever added when the post-removal buffer can absorb it. The 48-bit
+/// slack enforced by `h264_vbv_new` guarantees the minimum six-byte NAL
+/// fits whenever the next arrival would otherwise overflow.
+fn h264_vbv_fillers(
+  n : Int32,
+  sizes : Array[Int32],
+  v : H264Vbv,
+) -> Array[Int32] {
+  let fillers = Array::make(n, 0)
+  let mut fullness = v.init_bits
+  for f = 0; f < n; f = f + 1 {
+    let bits = sizes[f] * 8
+    let after = if bits >= fullness { 0 } else { fullness - bits }
+    let room = v.bufsize - after
+    let mut nal = 0
+    if room < v.rate_bits {
+      let deficit = v.rate_bits - room
+      let mut payload = (deficit + 7) / 8 - 5
+      if payload < 1 {
+        payload = 1
+      }
+      nal = payload + 5
+      // The filler is removed together with this picture, so it may only
+      // spend bits the post-removal bucket holds. `h264_vbv_new` keeps 48
+      // bits of slack, which makes the minimum NAL always affordable here;
+      // the cap is defensive anyway.
+      if nal * 8 > after {
+        let cap = after / 8
+        nal = if cap >= 6 { cap } else { 0 }
+      }
+    }
+    fillers[f] = nal
+    let next = after - nal * 8 + v.rate_bits
+    fullness = if next > v.bufsize {
+      v.bufsize
+    } else if next < 0 {
+      0
+    } else {
+      next
+    }
+  }
+  fillers
+}
+
+///|
 /// The sequence encoder proper: picture `f` codes at `qps[f]` against the
 /// single PPS whose `pic_init_qp` is `base_qp`. Returns the Annex B stream
 /// and the byte size of every access unit (the first includes SPS + PPS).
@@ -259,6 +516,8 @@ fn h264_encode_frames_qps(
   aq~ : Bool,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
+  vbv~ : H264Vbv? = None,
+  fillers~ : Array[Int32] = [],
 ) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
@@ -275,6 +534,7 @@ fn h264_encode_frames_qps(
       stats~,
       pps_qp=base_qp,
       aq~,
+      vbv~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
@@ -324,7 +584,14 @@ fn h264_encode_frames_qps(
     }
     plane
   }
-  let stream : Array[Bytes] = [first.annexb]
+  let stream : Array[Bytes] = []
+  if fillers.length() > 0 && fillers[0] > 0 {
+    stream.push(
+      h264_enc_concat([first.annexb, h264_enc_filler_nal(fillers[0] - 5)]),
+    )
+  } else {
+    stream.push(first.annexb)
+  }
   // Reference = the I frame's reconstruction (deep copy: P recon replaces
   // the reference each frame).
   let mut ref_y = Array::make(ystride * pheight, 0)
@@ -402,7 +669,16 @@ fn h264_encode_frames_qps(
       Ok(n) => n
       Err(e) => return Err(e)
     }
-    stream.push(nal)
+    let au : Array[Bytes] = []
+    match vbv {
+      None => ()
+      Some(v) => au.push(h264_enc_sei_pic_timing(v, f * 2))
+    }
+    au.push(nal)
+    if fillers.length() > f && fillers[f] > 0 {
+      au.push(h264_enc_filler_nal(fillers[f] - 5))
+    }
+    stream.push(h264_enc_concat(au))
     recon.push(
       h264_enc_pack_recon(
         enc.rec_y,

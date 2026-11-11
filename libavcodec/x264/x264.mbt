@@ -130,6 +130,11 @@ pub fn X264Encoder::open(
   time_base~ : (Int32, Int32) = (1, 25),
   framerate~ : (Int32, Int32) = (25, 1),
   bit_rate~ : Int32 = 0,
+  /// VBV maximum rate (bit/s) and buffer size (bits) passed to libx264 via
+  /// `AVCodecContext.rc_max_rate` / `rc_buffer_size`. Required by
+  /// `x264-params=nal-hrd=cbr`; both default to 0 (disabled).
+  rc_max_rate~ : Int32 = 0,
+  rc_buffer_size~ : Int32 = 0,
   global_header~ : Bool = true,
   bitexact~ : Bool = true,
   codec~ : String = "libx264",
@@ -160,6 +165,8 @@ pub fn X264Encoder::open(
     framerate.1,
     bit_rate,
     flags,
+    rc_max_rate,
+    rc_buffer_size,
     @utf8.encode(joined),
   )
   // Failed opens come back as a failed-open handle (see ffi.mbt).
@@ -387,4 +394,61 @@ pub fn x264_decode_annexb(stream : Bytes) -> Result[X264DecFrames, String] {
     return Err("x264dec: blob size \{blob.length()} != 16 + \{n}x\{frame_len}")
   }
   Ok({ n_frames: n, width, height, kind, blob, })
+}
+
+///|
+/// C-side view of an Annex B stream: the NAL types in stream order, the
+/// access units FFmpeg's H.264 parser split, how many pictures the real
+/// software decoder produced, and the WARNING/ERROR diagnostics raised
+/// while consuming them. This turns the external "ffmpeg decodes with zero
+/// warnings" arbitration into an in-process native test.
+pub struct X264AnnexbProbe {
+  /// Pictures the C decoder produced.
+  n_frames : Int32
+  /// Diagnostics at WARNING level during the decode.
+  warnings : Int32
+  /// Diagnostics at ERROR level (or worse) during the decode.
+  errors : Int32
+  /// NAL unit types in stream order, from raw start-code scanning.
+  nal_types : Array[Int32]
+  /// Byte sizes of the access units the H.264 parser split.
+  au_sizes : Array[Int32]
+}
+
+///|
+/// Probe an Annex B stream with the real FFmpeg H.264 parser/decoder.
+/// Shape validation and blob decoding stay on the MoonBit side of the
+/// boundary; a NULL return from the stub surfaces as `Err`.
+pub fn x264_probe_annexb(stream : Bytes) -> Result[X264AnnexbProbe, String] {
+  if stream.length() < 8 {
+    return Err("x264probe: stream too short for an Annex B access unit")
+  }
+  let blob = match x264probe_annexb_ffi(stream) {
+    Some(b) => b
+    None => return Err("x264probe: C parser/decoder failed on the stream")
+  }
+  if blob.length() < 20 {
+    return Err("x264probe: short blob header")
+  }
+  let n_frames = x264_rd_i32(blob, 0)
+  let warnings = x264_rd_i32(blob, 4)
+  let errors = x264_rd_i32(blob, 8)
+  let n_nals = x264_rd_i32(blob, 12)
+  let n_aus = x264_rd_i32(blob, 16)
+  if n_frames < 0 || n_nals < 0 || n_aus < 0 {
+    return Err("x264probe: bad blob counts")
+  }
+  let expected = 20 + n_nals + 4 * n_aus
+  if blob.length() != expected {
+    return Err("x264probe: blob size \{blob.length()} != \{expected}")
+  }
+  let nal_types : Array[Int32] = []
+  for i = 0; i < n_nals; i = i + 1 {
+    nal_types.push(blob[20 + i].to_int())
+  }
+  let au_sizes : Array[Int32] = []
+  for i = 0; i < n_aus; i = i + 1 {
+    au_sizes.push(x264_rd_i32(blob, 20 + n_nals + 4 * i))
+  }
+  Ok({ n_frames, warnings, errors, nal_types, au_sizes, })
 }

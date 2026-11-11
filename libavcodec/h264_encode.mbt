@@ -110,6 +110,7 @@ pub fn h264_encode_intra_frame(
   stats~ : H264EncStats = H264EncStats::new(),
   pps_qp~ : Int32 = -1,
   aq~ : Bool = false,
+  vbv~ : H264Vbv? = None,
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -144,12 +145,12 @@ pub fn h264_encode_intra_frame(
   // Parse the parameter sets we just wrote: the parsed PPS carries the
   // dequantisation tables the local reconstruction shares with the decoder.
   let ps = new_h264_param_sets()
-  let sps_nal = h264_enc_write_sps(p_ps, dct8x8~)
+  let sps_nal = h264_enc_write_sps(p_ps, dct8x8~, vbv~)
   let pps_nal = h264_enc_write_pps(p_ps, dct8x8~)
   // Round-trip the parameter sets through the decoder's own parsers: the
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
-  let sps_raw = h264_enc_sps_rbsp(p_ps, dct8x8~)
+  let sps_raw = h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~)
   let pps_raw = h264_enc_pps_rbsp(p_ps, dct8x8~)
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_raw), ps, false) {
     Ok(_) => ()
@@ -246,8 +247,19 @@ pub fn h264_encode_intra_frame(
   }
   r.trailing_bits()
   let slice_nal = h264_enc_nal(r, 3, 5)
+  let header : Array[Bytes] = [sps_nal, pps_nal]
+  match vbv {
+    None => ()
+    Some(v) => {
+      // The buffering period is only sent with the first picture of the
+      // sequence; every picture carries its own picture timing.
+      header.push(h264_enc_sei_buffering_period(v))
+      header.push(h264_enc_sei_pic_timing(v, 0))
+    }
+  }
+  header.push(slice_nal)
   Ok({
-    annexb: h264_enc_concat([sps_nal, pps_nal, slice_nal]),
+    annexb: h264_enc_concat(header),
     recon_y: self_.rec_y,
     recon_u: self_.rec_u,
     recon_v: self_.rec_v,

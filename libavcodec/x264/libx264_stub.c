@@ -22,10 +22,12 @@
 #include "libavutil/dict.h"
 #include "libavutil/error.h"
 #include "libavutil/frame.h"
+#include "libavutil/log.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixfmt.h"
 
 #include <limits.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,13 +91,17 @@ static int sel_pix_fmt(int sel, enum AVPixelFormat *out) {
 // flags: bit0 = AV_CODEC_FLAG_GLOBAL_HEADER, bit1 = AV_CODEC_FLAG_BITEXACT.
 // `options` is a "key=value:key=value" list applied through avcodec_open2's
 // dictionary (ctx options first, then the codec's private options: preset,
-// tune, profile, crf, g, bf, ...). Always returns a handle; on failure it is
-// a failed-open handle carrying the message (see `x264enc_status`).
+// tune, profile, crf, g, bf, ...). `rc_max_rate` / `rc_buffer_size` map onto
+// libx264's VBV fields, which `nal-hrd=cbr` requires; zero leaves the
+// existing flat/CRF configurations untouched. Always returns a handle; on
+// failure it is a failed-open handle carrying the message (see
+// `x264enc_status`).
 MOONBIT_FFI_EXPORT
 X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
                       int32_t pix_sel, int32_t tb_num, int32_t tb_den,
                       int32_t fps_num, int32_t fps_den, int32_t bit_rate,
-                      int32_t flags, moonbit_bytes_t options) {
+                      int32_t flags, int32_t rc_max_rate,
+                      int32_t rc_buffer_size, moonbit_bytes_t options) {
   enum AVPixelFormat fmt;
   if (sel_pix_fmt(pix_sel, &fmt) < 0)
     return x264enc_fail("%s: bad pixel format selector", NULL);
@@ -120,6 +126,15 @@ X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
   cc->framerate = (AVRational){fps_num, fps_den};
   if (bit_rate > 0)
     cc->bit_rate = bit_rate;
+  // FFmpeg's libx264 wrapper copies these onto
+  // x264_param_t.rc.i_vbv_max_bitrate / i_vbv_buffer_size. Setting them
+  // through the wrapped context (rather than x264-params, whose colons
+  // collide with av_dict_parse_string's pair separator) is what makes
+  // `nal-hrd=cbr` produce a real CBR HRD stream.
+  if (rc_max_rate > 0)
+    cc->rc_max_rate = rc_max_rate;
+  if (rc_buffer_size > 0)
+    cc->rc_buffer_size = rc_buffer_size;
   if (flags & 1)
     cc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
   if (flags & 2)
@@ -495,6 +510,217 @@ moonbit_bytes_t x264dec_annexb(moonbit_bytes_t data) {
     }
   }
   free(d.sink.pay);
+  av_packet_free(&pkt);
+  av_frame_free(&frame);
+  if (parser)
+    av_parser_close(parser);
+  avcodec_free_context(&cc);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Annex B layout / decoder-diagnostic probe (VBV/CBR streams)
+// ---------------------------------------------------------------------------
+// A second, C-side reader of the stream layout: it inventories NAL unit
+// types from the raw start codes, records the access units FFmpeg's H.264
+// parser actually split, decodes the stream with the real software decoder,
+// and counts WARNING/ERROR diagnostics raised during that decode. The
+// returned flat little-endian blob is
+//   [n_frames i32][n_warn i32][n_err i32][n_nals i32][n_aus i32]
+//   [nal_type u8 x n_nals][au_size i32 x n_aus]
+// so the MoonBit side can compare its own NAL walk with the C parser's view
+// and assert a warning-free decode without shelling out to the ffmpeg CLI.
+//
+// av_log's callback is process-global, so the probe installs its counting
+// callback only for the duration of one decode and restores the previous
+// one on every exit path. Tests using this entry point must be serial.
+
+static int probe_warn, probe_err;
+static void (*probe_prev_log)(void *, int, const char *, va_list);
+
+static void probe_log_cb(void *avcl, int level, const char *fmt, va_list vl) {
+  if (level <= AV_LOG_ERROR)
+    probe_err++;
+  else if (level <= AV_LOG_WARNING)
+    probe_warn++;
+  if (probe_prev_log) {
+    va_list dup;
+    va_copy(dup, vl);
+    probe_prev_log(avcl, level, fmt, dup);
+    va_end(dup);
+  }
+}
+
+typedef struct {
+  int32_t *v;
+  int n, cap;
+} I32Vec;
+
+static int i32vec_push(I32Vec *a, int32_t x) {
+  if (a->n == a->cap) {
+    int next = a->cap ? a->cap * 2 : 32;
+    int32_t *grown = (int32_t *)realloc(a->v, (size_t)next * sizeof(int32_t));
+    if (!grown)
+      return -1;
+    a->v = grown;
+    a->cap = next;
+  }
+  a->v[a->n++] = x;
+  return 0;
+}
+
+MOONBIT_FFI_EXPORT
+moonbit_bytes_t x264probe_annexb(moonbit_bytes_t data) {
+  if (!data)
+    return NULL;
+  size_t len = (size_t)Moonbit_array_length(data);
+  const uint8_t *buf = (const uint8_t *)data;
+  I32Vec nals = {0}, aus = {0};
+  int failed = 0, n_frames = 0;
+  moonbit_bytes_t out = NULL;
+
+  // Raw NAL inventory: both 3- and 4-byte start codes. Emulation prevention
+  // guarantees 00 00 01 never occurs inside an RBSP payload.
+  for (size_t i = 0; i + 3 <= len;) {
+    int sc = 0;
+    if (buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 1)
+      sc = 3;
+    else if (i + 4 <= len && buf[i] == 0 && buf[i + 1] == 0 &&
+             buf[i + 2] == 0 && buf[i + 3] == 1)
+      sc = 4;
+    if (!sc) {
+      i++;
+      continue;
+    }
+    if (i + (size_t)sc >= len)
+      break;
+    if (i32vec_push(&nals, buf[i + sc] & 0x1F) < 0) {
+      failed = 1;
+      break;
+    }
+    i += (size_t)sc + 1;
+  }
+
+  const AVCodec *dec = avcodec_find_decoder(AV_CODEC_ID_H264);
+  AVCodecParserContext *parser = av_parser_init(AV_CODEC_ID_H264);
+  AVCodecContext *cc = dec ? avcodec_alloc_context3(dec) : NULL;
+  AVFrame *frame = av_frame_alloc();
+  AVPacket *pkt = av_packet_alloc();
+  if (!cc || !frame || !pkt || !parser)
+    failed = 1;
+
+  probe_warn = 0;
+  probe_err = 0;
+  // FFmpeg n9.0.2 has no av_log_get_callback() accessor (it was added in a
+  // later libavutil), and nothing else in this binding installs a custom
+  // callback, so the previous callback is the default one. Restore it on
+  // every exit path below.
+  probe_prev_log = av_log_default_callback;
+  av_log_set_callback(probe_log_cb);
+
+  if (!failed && avcodec_open2(cc, dec, NULL) < 0)
+    failed = 1;
+
+  if (!failed) {
+    const uint8_t *cur = buf;
+    size_t left = len;
+    while (left > 0) {
+      uint8_t *au;
+      int au_size;
+      int used = av_parser_parse2(parser, cc, &au, &au_size, cur, (int)left,
+                                  AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+      if (used < 0 || used > (int)left) {
+        failed = 1;
+        break;
+      }
+      cur += used;
+      left -= (size_t)used;
+      if (au_size > 0) {
+        if (i32vec_push(&aus, au_size) < 0 || av_new_packet(pkt, au_size) < 0) {
+          failed = 1;
+          break;
+        }
+        memcpy(pkt->data, au, au_size);
+        if (avcodec_send_packet(cc, pkt) < 0) {
+          failed = 1;
+          break;
+        }
+        av_packet_unref(pkt);
+        for (;;) {
+          int ret = avcodec_receive_frame(cc, frame);
+          if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            break;
+          if (ret < 0) {
+            failed = 1;
+            break;
+          }
+          n_frames++;
+          av_frame_unref(frame);
+        }
+        if (failed)
+          break;
+      }
+    }
+  }
+  if (!failed) {
+    uint8_t *au;
+    int au_size;
+    av_parser_parse2(parser, cc, &au, &au_size, NULL, 0, AV_NOPTS_VALUE,
+                     AV_NOPTS_VALUE, 0);
+    if (au_size > 0 && av_new_packet(pkt, au_size) == 0) {
+      memcpy(pkt->data, au, au_size);
+      if (avcodec_send_packet(cc, pkt) == 0) {
+        av_packet_unref(pkt);
+        if (i32vec_push(&aus, au_size) < 0)
+          failed = 1;
+        for (;;) {
+          int ret = avcodec_receive_frame(cc, frame);
+          if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            break;
+          if (ret < 0) {
+            failed = 1;
+            break;
+          }
+          n_frames++;
+          av_frame_unref(frame);
+        }
+      }
+    }
+  }
+  if (!failed && avcodec_send_packet(cc, NULL) >= 0) {
+    for (;;) {
+      int ret = avcodec_receive_frame(cc, frame);
+      if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+        break;
+      if (ret < 0) {
+        failed = 1;
+        break;
+      }
+      n_frames++;
+      av_frame_unref(frame);
+    }
+  }
+  av_log_set_callback(probe_prev_log);
+
+  if (!failed) {
+    size_t total = 20 + (size_t)nals.n + 4 * (size_t)aus.n;
+    if (total <= (size_t)(INT32_MAX - 1)) {
+      out = moonbit_make_bytes((int32_t)total, 0);
+      if (out) {
+        put_i32(out + 0, n_frames);
+        put_i32(out + 4, probe_warn);
+        put_i32(out + 8, probe_err);
+        put_i32(out + 12, nals.n);
+        put_i32(out + 16, aus.n);
+        for (int k = 0; k < nals.n; k++)
+          out[20 + k] = (uint8_t)nals.v[k];
+        for (int k = 0; k < aus.n; k++)
+          put_i32(out + 20 + nals.n + 4 * k, aus.v[k]);
+      }
+    }
+  }
+  free(nals.v);
+  free(aus.v);
   av_packet_free(&pkt);
   av_frame_free(&frame);
   if (parser)

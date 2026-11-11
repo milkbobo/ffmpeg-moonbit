@@ -24,6 +24,8 @@ extern "c" fn x264enc_open_ffi(
   fps_den : Int32,
   bit_rate : Int32,
   flags : Int32,
+  rc_max_rate : Int32,
+  rc_buffer_size : Int32,
   options : Bytes,
 ) -> X264EncHandle = "x264enc_open"
 
@@ -75,3 +77,12 @@ extern "c" fn x264enc_close_ffi(enc : X264EncHandle) -> Unit = "x264enc_close"
 /// stream bytes are copied into the parser during the call (`#borrow`).
 #borrow(stream)
 extern "c" fn x264dec_annexb_ffi(stream : Bytes) -> Bytes? = "x264dec_annexb"
+
+///|
+/// C-side Annex B layout / decoder-diagnostic probe (`x264probe_annexb` in
+/// the stub): inventories NAL types, records the AUs FFmpeg's H.264 parser
+/// split, decodes with the real software decoder, and counts the WARNING /
+/// ERROR diagnostics raised. The stream bytes are copied into the parser
+/// during the call, so the parameter is call-scoped (`#borrow`).
+#borrow(stream)
+extern "c" fn x264probe_annexb_ffi(stream : Bytes) -> Bytes? = "x264probe_annexb"

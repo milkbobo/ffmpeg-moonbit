@@ -12321,3 +12321,71 @@ md5；indep i4=34；stripe-all i4=4/i16=14/i8=16 钉 I8 胜出后 I4
 本仓滤波输出逐字节一致（I4ARB/I4CARB/S8ARB/S8CARB 标签）；x264
 native C oracle 扩 I4 四用例（dct8 双熵 + no8 双熵）**24/24**；
 全仓 wasm-gc、非 gc 黑盒、deny-warn 见 README 计数。
+
+## §391 H.264 编码器 VBV/CBR 缓冲约束 + x264 FFI 布局探针（2026-11-11）
+
+§388/§389 分别做了帧级 ABR 与宏块级 AQ，本片补上**解码器 CPB 缓冲
+约束**：`h264_encode_frames` / `h264_encode_frames_cabac` 增 opt-in
+`vbv_maxrate~` / `vbv_bufsize~` / `fps~` / `vbv_init~`（缺省或全 0 =
+平 QP 路径逐字节不变；与 `target_bytes` 互斥），两熵同构。
+
+**参数集与 SEI**（`h264_enc_ps.mbt`）：`H264Vbv` 把 bit/s 与 bit 取整到
+HRD 可表达的单位（`bit_rate_value_minus1 = maxrate/64-1`、
+`cpb_size_value_minus1 = bufsize/16-1`，scale 全 0），声明值同时喂 SPS
+与仿真；SPS VUI 写 `num_units_in_tick=1` / `time_scale=fps*2`、
+`fixed_frame_rate`、单 CBR NAL HRD（`cbr_flag=1`、delay 长度 24/16/4/0）、
+`low_delay=0`、`bitstream_restriction`（无重排、`max_dec_frame_buffering=1`）。
+首 AU 加 `buffering_period`（90 kHz 初始移除延迟 24 bit + offset），
+每图加 `pic_timing`（`cpb_removal_delay = f*2`）。SEI 的
+`payload_size` **不含** `rbsp_trailing_bits` 那个 0x80 字节——FFmpeg 先
+剥 trailing 再解析 payload，折进去会让每条消息短一字节。CBR 缺口用
+type-12 filler NAL（起始码 + `0x0c` + `0xFF…` + `0x80`）补足。
+
+**求解器**（`h264_encode_p.mbt`）：`h264_vbv_solve` 是**真实前缀编码搜索**——
+每轮用当前帧 QP 序列实际编码得到 AU 尺寸，重放 leaky bucket（filler
+一并计入，因为它与本图一起移除），找首个下溢的 AU，按 `2^(k/6)` 整数
+模型跳 QP 后重编码整条序列（参考链会随 QP 变，模型不能替代实测）；
+上限 2048 轮，QP 51 仍下溢即报错。`h264_vbv_fillers` 只花「移除后桶
+里还剩下的位」，最小 6 字节 NAL = 48 bit，故 `h264_vbv_new` 强制
+`declared_size - 48 >= rate_bits`（用减法避免近 `Int32.max` 回绕）。
+`H264EncStats` 增 `vbv_fills` / `vbv_bits` / `vbv_filler_bytes`。
+
+**验证**：黑盒 7 测（`h264_enc_vbv_test.mbt`，含自带 SPS VUI/HRD 位
+解析器与 AU 分组的 CPB 不变量回放）：opt-in byte-exact（flat CAVLC
+2615 B / `866d5978…`、CABAC 2351 B / `45d3adc1…`）、SPS/SEI/NAL 布局
+钉值（5 帧 NAL 序列 `[7,8,6,6,5,6,1,6,1,6,1,6,1]`、HRD `1561/1999`、
+buffering period `25928/64072`）、CBR filler 使累计流量贴合声明速率、
+紧缓冲 60000/12000 下 CAVLC QP `[26,26,26,33,35]` / CABAC
+`[26,26,26,26,31]` 且重建不变式成立、10 项参数校验与模式互斥、
+两条流 docker ffmpeg 9.0.2 **零 stderr 告警**且 5+5 帧 framemd5 与
+钉值逐字节一致（VBVARB / VBVCARB）。
+
+**x264 FFI 侧按 `moonbit-c-binding` / `make-moonbit-c-bindings`
+扩展 C oracle**（纯 MoonBit 编码本体仍不依赖 FFI）：C stub 新增
+`x264probe_annexb`——独立扫描 Annex B 起始码得 NAL 类型清单、记录
+`av_parser_parse2` 实际切出的 AU 尺寸、用真 FFmpeg 解码器数帧，并在
+调用期安装 `av_log` 计数回调统计 WARNING/ERROR；`ffi.mbt` 私有 extern
+全 `#borrow`，`x264.mbt` 的 `x264_probe_annexb` 做 blob 形状校验后返回
+领域类型 `X264AnnexbProbe`。这把「docker ffmpeg 零告警」外部仲裁内化
+成进程内可回归断言：4 个新用例分别钉 CBR 流 C/MoonBit 双侧 NAL 清单
+一致 + filler 数与 `vbv_fills` 一致 + 零诊断、flat 与紧缓冲 CABAC 的
+对照、真 libx264 `nal-hrd=cbr` 参考流、短流形状负例。为让真 x264
+的 HRD 生效，`X264Encoder::open` 增 `rc_max_rate~` / `rc_buffer_size~`
+透传到 `AVCodecContext`（libx264 wrapper 映射到 `x264_param_t.rc`），
+并配 `bit_rate>0` 使其从 CRF 切到 ABR；否则 `x264-params` 里带冒号的
+值会被 `av_dict_parse_string` 拆坏，x264 只报
+`NAL HRD parameters require VBV parameters` / `CBR HRD requires
+constant bitrate` 后丢弃 HRD。FFmpeg n9.0.2 无 `av_log_get_callback`，
+探针显式恢复 `av_log_default_callback` 并用 `va_copy` 转发。
+
+验证：x264 native **31/31**（原 27 + VBV 交叉解码 3 + probe 4）；
+`moon check --target wasm --deny-warn --no-render` 干净；H.264 编码器
+全套黑盒（7 个测试文件，§376–§391 全部钉值）**60/60**（本机全仓
+`moon test` 的 wasm 与 wasm-gc 口径均在 `moonrun` 上挂起，属环境问题，
+详见当日交接文档）；**定向 ASan**（`libavcodec/x264/asan_probe_harness.c` mock 三个
+MoonBit 运行时符号，绕开基于 mimalloc、与 ASan 不兼容的
+`libruntime.a`）两轮 probe + decode + 短 blob，`detect_leaks=1` 全清。
+
+**未做（更新）**：CABAC 位定价仍统一走 CAVLC 干跑计位；B 帧（现
+`max_num_reorder_frames=0`）；真 x264 的 SPS VUI/HRD 数值逐字段对拍
+（当前是 NAL 布局 + 零告警级）；AQ 曲线可配；编码器接 CLI。

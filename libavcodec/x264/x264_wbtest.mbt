@@ -79,6 +79,8 @@ fn x264_run(
   pix : X264PixelFormat,
   global_header : Bool,
   bit_rate : Int32,
+  rc_max_rate~ : Int32 = 0,
+  rc_buffer_size~ : Int32 = 0,
 ) -> (Bytes?, Array[X264Packet]) raise X264Error {
   let enc = X264Encoder::open(
     width=96,
@@ -89,6 +91,8 @@ fn x264_run(
     bit_rate~,
     global_header~,
     options~,
+    rc_max_rate~,
+    rc_buffer_size~,
   )
   let extra = if global_header { Some(enc.extradata()) } else { None }
   let packets = enc.encode_all(frames)
@@ -1049,4 +1053,323 @@ test "x264 oracle: Intra 4x4 P slices without 8x8 transform (CABAC) decode ident
     fail("fixture must drive P-slice Intra4x4 macroblocks")
   }
   x264_cross_decode(stream, 4, 1)
+}
+
+///|
+/// CPB-constrained CBR with filler-data NALs (type 12) between slices: the
+/// C decoder must skip the filler and agree with the pure MoonBit decoder
+/// pixel-for-pixel.
+test "x264 oracle: VBV/CBR CAVLC stream with filler decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      vbv_maxrate=1000000,
+      vbv_bufsize=100000,
+      fps=25,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if stats.vbv_fills == 0 {
+    fail("fixture must emit filler-data NALs")
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+///|
+/// A buffer that cannot hold one picture at the starting QP forces the
+/// solver to coarsen pictures; those slice_qp_delta values must decode
+/// identically in C through both entropy coders.
+test "x264 oracle: VBV tight-buffer CAVLC stream decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      vbv_maxrate=60000,
+      vbv_bufsize=12000,
+      fps=25,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let mut raised = false
+  for q in stats.frame_qps {
+    if q > 26 {
+      raised = true
+    }
+  }
+  if !raised {
+    fail("tight buffer must raise at least one picture QP")
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+///|
+test "x264 oracle: VBV tight-buffer CABAC stream decodes identically in C" {
+  let frames = x264_dct8_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      vbv_maxrate=60000,
+      vbv_bufsize=12000,
+      fps=25,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let mut raised = false
+  for q in stats.frame_qps {
+    if q > 26 {
+      raised = true
+    }
+  }
+  if !raised {
+    fail("tight buffer must raise at least one picture QP")
+  }
+  x264_cross_decode(stream, 3, 1)
+}
+
+// ---------------------------------------------------------------------------
+// C-side Annex B probe: NAL inventory, parser AUs and decode diagnostics
+// ---------------------------------------------------------------------------
+
+///|
+/// Independent MoonBit-side NAL walk (4-byte start codes only, which is
+/// what this repository's encoder emits). Used to cross-check the C stub's
+/// own raw start-code inventory.
+fn x264_probe_nal_walk(stream : Bytes) -> Array[Int32] {
+  let out : Array[Int32] = []
+  let mut i = 0
+  while i + 4 < stream.length() {
+    if stream[i].to_int() == 0 &&
+      stream[i + 1].to_int() == 0 &&
+      stream[i + 2].to_int() == 0 &&
+      stream[i + 3].to_int() == 1 {
+      out.push(stream[i + 4].to_int() & 0x1F)
+      i = i + 5
+    } else {
+      i = i + 1
+    }
+  }
+  out
+}
+
+///|
+fn x264_probe_count(types : Array[Int32], needle : Int32) -> Int32 {
+  let mut n = 0
+  for t in types {
+    if t == needle {
+      n = n + 1
+    }
+  }
+  n
+}
+
+///|
+fn x264_probe_types_eq(a : Array[Int32], b : Array[Int32]) -> Bool {
+  if a.length() != b.length() {
+    return false
+  }
+  for i = 0; i < a.length(); i = i + 1 {
+    if a[i] != b[i] {
+      return false
+    }
+  }
+  true
+}
+
+///|
+/// A CBR stream adds SPS VUI/HRD, buffering-period and picture-timing SEIs,
+/// and filler-data NALs. The C stub's independent NAL inventory, FFmpeg's
+/// AU splitter and the real decoder must all agree with the pure MoonBit
+/// encoder's own layout, with no WARNING/ERROR diagnostics.
+test "x264 oracle: VBV CBR NAL layout agrees in C and decodes warning-free" {
+  let frames = x264_dct8_fixture()
+  let stats = @libavcodec.H264EncStats::new()
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      vbv_maxrate=1000000,
+      vbv_bufsize=100000,
+      fps=25,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let probe = match x264_probe_annexb(stream) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  if probe.n_frames != 3 {
+    fail("C decoder produced \{probe.n_frames} frames, expected 3")
+  }
+  if probe.warnings != 0 || probe.errors != 0 {
+    fail(
+      "VBV CBR stream raised C diagnostics: warnings=\{probe.warnings} errors=\{probe.errors}",
+    )
+  }
+  if probe.au_sizes.length() != 3 {
+    fail("C parser split \{probe.au_sizes.length()} AUs, expected 3")
+  }
+  let walk = x264_probe_nal_walk(stream)
+  if !x264_probe_types_eq(probe.nal_types, walk) {
+    fail("C NAL inventory \{Repr(probe.nal_types)} != MoonBit \{Repr(walk)}")
+  }
+  let fillers = x264_probe_count(probe.nal_types, 12)
+  if fillers == 0 {
+    fail("CBR fixture must emit filler-data NALs")
+  }
+  if fillers != stats.vbv_fills {
+    fail("C saw \{fillers} filler NALs, encoder reported \{stats.vbv_fills}")
+  }
+  // One buffering-period SEI plus one picture-timing SEI per picture.
+  let sei = x264_probe_count(probe.nal_types, 6)
+  if sei != 4 {
+    fail("expected 4 SEI NALs for 3 pictures, C saw \{sei}")
+  }
+  if x264_probe_count(probe.nal_types, 7) != 1 ||
+    x264_probe_count(probe.nal_types, 8) != 1 {
+    fail("expected exactly one SPS and one PPS")
+  }
+  if x264_probe_count(probe.nal_types, 5) +
+    x264_probe_count(probe.nal_types, 1) != 3 {
+    fail("expected three VCL NALs")
+  }
+}
+
+///|
+/// The opt-in contract is visible from C as well: a flat stream has no SEI
+/// or filler, while a tight-buffer CABAC stream (adaptive per-picture QPs,
+/// HRD VUI, SEI) still decodes without diagnostics.
+test "x264 oracle: probe separates flat and VBV CABAC streams" {
+  let frames = x264_dct8_fixture()
+  let flat = match
+    @libavcodec.h264_encode_frames(frames, width=96, height=64, qp=26) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let fp = match x264_probe_annexb(flat) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  if fp.n_frames != 3 || fp.au_sizes.length() != 3 {
+    fail("flat stream: C decoded \{fp.n_frames} frames / \{fp.au_sizes.length()} AUs")
+  }
+  if fp.warnings != 0 || fp.errors != 0 {
+    fail("flat stream raised C diagnostics")
+  }
+  if x264_probe_count(fp.nal_types, 6) != 0 ||
+    x264_probe_count(fp.nal_types, 12) != 0 {
+    fail("flat stream must not carry SEI or filler NALs")
+  }
+  let stats = @libavcodec.H264EncStats::new()
+  let tight = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      vbv_maxrate=60000,
+      vbv_bufsize=12000,
+      fps=25,
+      stats~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let tp = match x264_probe_annexb(tight) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  if tp.n_frames != 3 || tp.au_sizes.length() != 3 {
+    fail("tight CABAC: C decoded \{tp.n_frames} frames / \{tp.au_sizes.length()} AUs")
+  }
+  if tp.warnings != 0 || tp.errors != 0 {
+    fail(
+      "tight CABAC stream raised C diagnostics: warnings=\{tp.warnings} errors=\{tp.errors}",
+    )
+  }
+  if x264_probe_count(tp.nal_types, 6) != 4 {
+    fail("tight CABAC: expected 4 SEI NALs")
+  }
+  let mut raised = false
+  for q in stats.frame_qps {
+    if q > 26 {
+      raised = true
+    }
+  }
+  if !raised {
+    fail("tight buffer must raise at least one picture QP")
+  }
+}
+
+///|
+/// The same probe also reads a real libx264 CBR/HRD stream: this exercises
+/// the C oracle side independently of the pure MoonBit encoder and confirms
+/// the entry point is not tailored to our own bitstream layout. The VBV
+/// fields travel through `AVCodecContext` (see `rc_max_rate` in the stub),
+/// because `av_dict_parse_string` would split a colon-bearing
+/// `x264-params` value into separate options.
+test "x264 oracle: probe reads a real libx264 nal-hrd CBR stream" {
+  let frames = x264_fixture(3, 96, 64, 1)
+  let (_, packets) = x264_run(
+    frames,
+    [("preset", "ultrafast"), ("x264-params", "nal-hrd=cbr")],
+    Yuv420p,
+    false,
+    500000,
+    rc_max_rate=500000,
+    rc_buffer_size=100000,
+  )
+  let stream = x264_concat(packets)
+  let probe = match x264_probe_annexb(stream) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  if probe.n_frames != 3 {
+    fail("libx264 CBR stream: C decoded \{probe.n_frames} frames, expected 3")
+  }
+  if probe.errors != 0 || probe.warnings != 0 {
+    fail(
+      "libx264 CBR stream raised C diagnostics: warnings=\{probe.warnings} errors=\{probe.errors}",
+    )
+  }
+  if probe.au_sizes.length() != 3 {
+    fail("libx264 CBR stream: \{probe.au_sizes.length()} AUs, expected 3")
+  }
+  // With the VBV fields wired through, x264 emits buffering_period and
+  // picture_timing SEIs rather than dropping nal-hrd for lack of a buffer.
+  let sei = x264_probe_count(probe.nal_types, 6)
+  if sei < 2 {
+    fail("nal-hrd=cbr must emit HRD SEI NALs, C saw \{sei}")
+  }
+}
+
+///|
+test "x264 oracle: probe rejects shape-invalid streams" {
+  let short = Bytes::from_array([b'\x00', b'\x00', b'\x00', b'\x01'])
+  match x264_probe_annexb(short) {
+    Ok(_) => fail("probe accepted a start-code-only stream")
+    Err(_) => ()
+  }
 }

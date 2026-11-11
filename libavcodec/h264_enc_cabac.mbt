@@ -636,7 +636,7 @@ fn h264_cabacw_residual(
 ///|
 /// Main-profile SPS RBSP (profile_idc 77, no constraint flags — CABAC
 /// breaks Baseline compatibility). Everything else matches the CAVLC SPS.
-fn h264_enc_sps_rbsp_main(p : H264EncParams) -> Bytes {
+fn h264_enc_sps_rbsp_main(p : H264EncParams, vbv~ : H264Vbv? = None) -> Bytes {
   let r = H264Rbsp::new()
   r.put(77, 8) // profile_idc: Main
   // constraint_set1 (Annex A.2.2, Main): the parser's
@@ -663,7 +663,10 @@ fn h264_enc_sps_rbsp_main(p : H264EncParams) -> Bytes {
     r.put_ue(0)
     r.put_ue((p.mb_height() * 16 - p.height) / 2)
   }
-  r.put_bit(0) // vui_parameters_present_flag
+  match vbv {
+    None => r.put_bit(0) // vui_parameters_present_flag
+    Some(v) => h264_enc_sps_vui(r, v)
+  }
   r.trailing_bits()
   r.finish_raw_of()
 }
@@ -671,9 +674,9 @@ fn h264_enc_sps_rbsp_main(p : H264EncParams) -> Bytes {
 ///|
 /// High-profile SPS RBSP for `transform_8x8` (profile_idc 100): the shared
 /// `h264_enc_sps_body_high` body.
-fn h264_enc_sps_rbsp_high(p : H264EncParams) -> Bytes {
+fn h264_enc_sps_rbsp_high(p : H264EncParams, vbv~ : H264Vbv? = None) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_sps_body_high(r, p)
+  h264_enc_sps_body_high(r, p, vbv~)
   r.trailing_bits()
   r.finish_raw_of()
 }
@@ -794,6 +797,7 @@ pub fn h264_encode_intra_frame_cabac(
   stats~ : H264EncStats = H264EncStats::new(),
   pps_qp~ : Int32 = -1,
   aq~ : Bool = false,
+  vbv~ : H264Vbv? = None,
 ) -> Result[H264EncodedFrame, String] {
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -826,9 +830,9 @@ pub fn h264_encode_intra_frame_cabac(
   let pheight = mb_height * 16
   let ps = new_h264_param_sets()
   let sps_rbsp = if dct8x8 {
-    h264_enc_sps_rbsp_high(p)
+    h264_enc_sps_rbsp_high(p, vbv~)
   } else {
-    h264_enc_sps_rbsp_main(p)
+    h264_enc_sps_rbsp_main(p, vbv~)
   }
   let sps_nal = {
     let raw = sps_rbsp
@@ -951,8 +955,17 @@ pub fn h264_encode_intra_frame_cabac(
     }
   }
   let slice_nal = h264_cabac_nal(header, self_.enc.to_bytes(), 3, 5)
+  let au : Array[Bytes] = [sps_nal, pps_nal]
+  match vbv {
+    None => ()
+    Some(v) => {
+      au.push(h264_enc_sei_buffering_period(v))
+      au.push(h264_enc_sei_pic_timing(v, 0))
+    }
+  }
+  au.push(slice_nal)
   Ok({
-    annexb: h264_enc_concat([sps_nal, pps_nal, slice_nal]),
+    annexb: h264_enc_concat(au),
     recon_y: self_.rec_y,
     recon_u: self_.rec_u,
     recon_v: self_.rec_v,
@@ -2753,6 +2766,10 @@ pub fn h264_encode_frames_cabac(
   dct8x8~ : Bool = false,
   aq~ : Bool = false,
   target_bytes~ : Int32 = 0,
+  vbv_maxrate~ : Int32 = 0,
+  vbv_bufsize~ : Int32 = 0,
+  fps~ : Int32 = 0,
+  vbv_init~ : Int32 = 90,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
@@ -2760,6 +2777,37 @@ pub fn h264_encode_frames_cabac(
     return Err("h264 enc: no frames")
   }
   let n = frames.length()
+  // VBV/CBR is opt-in and cannot be combined with the average-bitrate
+  // target; see the CAVLC entry for the shared contract.
+  let vbv = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+    if target_bytes > 0 {
+      return Err("h264 enc: target_bytes and vbv are mutually exclusive")
+    }
+    match h264_vbv_new(vbv_maxrate, vbv_bufsize, fps, vbv_init) {
+      Ok(v) => Some(v)
+      Err(e) => return Err(e)
+    }
+  } else {
+    None
+  }
+  match vbv {
+    Some(v) =>
+      return h264_encode_frames_vbv_cabac(
+        frames,
+        width~,
+        height~,
+        qp~,
+        level_idc~,
+        intra_in_p~,
+        intra4x4_in_p~,
+        dct8x8~,
+        aq~,
+        vbv=v,
+        recon~,
+        stats~,
+      )
+    None => ()
+  }
   // Same contract as the CAVLC entry's `target_bytes`: the two-pass
   // average-bitrate control over `h264_encode_frames_cabac_qps`, with `qp`
   // as the search start and the PPS base. Off, flat QP byte-identically.
@@ -2815,6 +2863,85 @@ pub fn h264_encode_frames_cabac(
 }
 
 ///|
+/// The CABAC twin of `h264_encode_frames_vbv`: assign per-picture QPs under
+/// the CPB constraint with real prefix encodes, then emit the stream with
+/// filler-data NALs. See `h264_vbv_solve` / `h264_vbv_fillers`.
+fn h264_encode_frames_vbv_cabac(
+  frames : Array[(Bytes, Bytes, Bytes)],
+  width~ : Int32,
+  height~ : Int32,
+  qp~ : Int32,
+  level_idc~ : Int32,
+  intra_in_p~ : Bool,
+  intra4x4_in_p~ : Bool,
+  dct8x8~ : Bool,
+  aq~ : Bool,
+  vbv~ : H264Vbv,
+  recon~ : Array[Bytes],
+  stats~ : H264EncStats,
+) -> Result[Bytes, String] {
+  let n = frames.length()
+  let (qps, sizes) = match
+    h264_vbv_solve(n, qp, vbv, fn(trial) {
+      match
+        h264_encode_frames_cabac_qps(
+          frames,
+          width~,
+          height~,
+          base_qp=qp,
+          qps=trial,
+          level_idc~,
+          intra_in_p~,
+          intra4x4_in_p~,
+          dct8x8~,
+          aq~,
+          recon=[],
+          stats=H264EncStats::new(),
+          vbv=Some(vbv),
+        ) {
+        Ok((_, sizes)) => Ok(sizes)
+        Err(e) => Err(e)
+      }
+    }) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let fillers = h264_vbv_fillers(n, sizes, vbv)
+  for q in qps {
+    stats.frame_qps.push(q)
+  }
+  match
+    h264_encode_frames_cabac_qps(
+      frames,
+      width~,
+      height~,
+      base_qp=qp,
+      qps~,
+      level_idc~,
+      intra_in_p~,
+      intra4x4_in_p~,
+      dct8x8~,
+      aq~,
+      recon~,
+      stats~,
+      vbv=Some(vbv),
+      fillers~,
+    ) {
+    Ok((bytes, _)) => {
+      stats.vbv_bits = bytes.length().to_int64() * 8L
+      for f = 0; f < n; f = f + 1 {
+        if fillers[f] > 0 {
+          stats.vbv_fills += 1
+          stats.vbv_filler_bytes += fillers[f]
+        }
+      }
+      Ok(bytes)
+    }
+    Err(e) => Err(e)
+  }
+}
+
+///|
 /// The CABAC sequence encoder proper: picture `f` codes at `qps[f]`
 /// against the single PPS whose `pic_init_qp` is `base_qp`. Returns the
 /// Annex B stream and the byte size of every access unit (the first
@@ -2832,6 +2959,8 @@ fn h264_encode_frames_cabac_qps(
   aq~ : Bool,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
+  vbv~ : H264Vbv? = None,
+  fillers~ : Array[Int32] = [],
 ) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
@@ -2847,6 +2976,7 @@ fn h264_encode_frames_cabac_qps(
       stats~,
       pps_qp=base_qp,
       aq~,
+      vbv~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
@@ -2859,9 +2989,9 @@ fn h264_encode_frames_cabac_qps(
   let pheight = mb_height * 16
   let ps = new_h264_param_sets()
   let sps_rbsp = if dct8x8 {
-    h264_enc_sps_rbsp_high(p)
+    h264_enc_sps_rbsp_high(p, vbv~)
   } else {
-    h264_enc_sps_rbsp_main(p)
+    h264_enc_sps_rbsp_main(p, vbv~)
   }
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_rbsp), ps, false) {
     Ok(_) => ()
@@ -2896,7 +3026,14 @@ fn h264_encode_frames_cabac_qps(
     }
     plane
   }
-  let stream : Array[Bytes] = [first.annexb]
+  let stream : Array[Bytes] = []
+  if fillers.length() > 0 && fillers[0] > 0 {
+    stream.push(
+      h264_enc_concat([first.annexb, h264_enc_filler_nal(fillers[0] - 5)]),
+    )
+  } else {
+    stream.push(first.annexb)
+  }
   let mut ref_y = Array::make(ystride * pheight, 0)
   let mut ref_u = Array::make(cstride * (pheight / 2), 0)
   let mut ref_v = Array::make(cstride * (pheight / 2), 0)
@@ -2966,7 +3103,16 @@ fn h264_encode_frames_cabac_qps(
       Ok(n) => n
       Err(e) => return Err(e)
     }
-    stream.push(nal)
+    let au : Array[Bytes] = []
+    match vbv {
+      None => ()
+      Some(v) => au.push(h264_enc_sei_pic_timing(v, f * 2))
+    }
+    au.push(nal)
+    if fillers.length() > f && fillers[f] > 0 {
+      au.push(h264_enc_filler_nal(fillers[f] - 5))
+    }
+    stream.push(h264_enc_concat(au))
     recon.push(
       h264_enc_pack_recon(
         enc.rec_y,
