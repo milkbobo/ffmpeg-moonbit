@@ -211,7 +211,7 @@ MSYS_NO_PATHCONV=1 docker run --rm --entrypoint /bin/sh \
 
 ---
 
-## 待补（本文件写完时仍在跑）
+## 收口状态（写文档时仍在跑的项，现已全部有结论）
 
 | 项 | 结果 |
 | --- | --- |
@@ -220,4 +220,4 @@ MSYS_NO_PATHCONV=1 docker run --rm --entrypoint /bin/sh \
 | 镜像内 `moon check --target native` / `moon info --target native` | **均 EXIT=0**，日志 `.scratch/native_check_info.log`；仅 2 处既有 `derive(...)` deprecation 与 native-only 包的 `wasm` info 提示 |
 | `PORTING_HISTORY.md` §391 节、`README.md` H.264 行 | **已写** |
 | 临时产物清理 | 10 个 `.264` 与 `scripts/vbv_tool/` 已 `mv` 进 `.trash/2026-11-11/` |
-| `git` 提交 | 见仓库 HEAD |
+| `git` 提交 | **`29f51cb`**（13 files，+2964 / −30）；随后本文档补记单独提交 |
