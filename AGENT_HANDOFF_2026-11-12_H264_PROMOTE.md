@@ -367,3 +367,62 @@ intra_in_b（默认其余）——B1（dec[2]）col 36-55 区域 1424 字节失�
   触碰 mirror MV 槽；
 - 修后解除 `h264 aq strength` 的 qp 腿 containment（[0,26] →
   [0,26,51]）并全族回归。
+
+## 十四、Bug C 深挖（续十三，未修——根因已收窄到 MC 输入差异）
+
+复现保持：`h264_aq_fixture(3)` + CAVLC + qp51 + aq(strength 6) + B
+schedule（intra_in_b 等默认）。B1（dec[2]）col 36-55 失配。
+
+### 十三的事实链全部复核成立，并新增以下硬事实
+
+1. **B1 MB2 的最终 plan 不是 Bi16/16x16**：`h264_b_plan_kind == 5`，即
+   **B_L0_8x16**（masks (1,1)，两个竖 partition 都 L0-only）。
+   `BParts(5 + 2*cv, [], mvs_v)` 的 mvs 顺序 = [l0, r0]（v0=v1=1）。
+2. **两侧写出/解析的运动完全一致**：编码器语法 SYN k=5 mi=0
+   mv=(-16,-12) pmv=(0,0) se=(-16,-12)、mi=1 mv=(-16,-12)
+   pmv=(-16,-12) se=(0,0)（右 partition 的 pmv 经
+   `h264_pred_8x16_motion(i=1)` 读 topright→不可用→above-left→不可用
+   →`h264_pred_motion(bx=2)` 读左 partition 已写回的 mv ✓ 对称）；
+   解码器 DMB type 位完全一致、DMV2 全 8 槽 (-16,-12) 一致。
+3. **残差双侧全零**（cbp=7 但 levels 全 0，qp51 死区）——recon = 纯 MC。
+4. **compensate 输入两侧一致**（`h264_b_compensate` 打印，poc==2 &&
+   index==2）：mv0=(-16,-12) ref0=0，mv1=(0,0) ref1=-1，l0len=l1len=1。
+   r1=-1 → `b=[]` → 单参考分支 `v = av`（纯 list0 MC）——两侧同分支。
+5. **同一 `h264_b_compensate`/`h264_b_prediction`/`h264_mc_luma`，
+   相同 mv/refi，输出不同**：
+   - 解码器 B1 row0 col 36-39 = f0 row0 col 32-35（0,48,120,44），
+     即采样 **f0(x-4, y-3→row0 截断)**——对 mv=(-16,-12) qpel
+     （=(-4,-3) pel）**正确**；
+   - 编码器同位置 = 56,0,64…（不是 f0(x-4) 的 0）——采样位置/内容
+     与解码器不一致（56 = f0 的其它样本）。
+6. **参考面内容已核同**：编码器 ref_y（EREF0）与解码器 DPB f0（DF0）
+   row0 col32-39 逐字节相同（0,48,120,44,44…）。行 1-3 未核。
+7. **rec_y 的写入者时序**（rec36 监视，row 4 col 36）：trial 期间多值
+   （42/48/123…），winner re-establish：R0=123（上一次 trial 残留的
+   mirror mv=0,0）→ R1（commit 后 mv=(-16,-12)，rec 仍 123）→
+   R2=48（**compensate 输出 48，非解码器的 0**）→ A_RET=48 →
+   B_WR=48 → pack=56（后面还有一个写入者，见 8）。
+8. **A_RET=48 但最终 pack=56**：A_RET 之后 main-loop 语法写（只动
+   mirror/r）、后续 MB 的 trial（各自 MB 区域）都不该碰 col 36——
+   但 pack=56 ≠ 48，**A_RET 之后仍有写入者**（最可疑：后续 MB 的
+   compensate/ME 经 `h264_b_prediction` 读跨界样本时写出？或
+   rec_y 的别名/重建顺序问题）。
+
+### 下一片的第一步（明确）
+
+A. 在 `h264_mc_luma` 入口打印（gate: 调用来自 poc2/mb2 的
+   compensate）：`mvx>>2`、`mvy>>2`、`mvx&3`、`mvy&3`、目标 x/y、
+   pic 指针身份（用 pic.y[0] 首字节做指纹）、pic.width/height/base_y——
+   两侧对比，直接看采样坐标差在哪。
+B. 打印 B1 row0-3 的编码器 ref_y 与解码器 DPB f0 的 col 30-46——
+   行 1-3 尚未核对（step 6 只核了 row 0）。
+C. 查 `h264_ref_entry(ctx, r0, field, parity)`：编码器 mirror 的
+   mb_field 与解码器的 mb_field 在 B1 是否一致（field/parity 影响
+   entry 索引与 plane 偏移，`src_y = (mb_y>>1)*16` 分支）。
+D. 修掉后（预期一行或几行）：解除 `h264 aq strength` 的 qp 腿
+   containment（[0,26] → [0,26,51]），全族回归，提交。
+
+### 本片工作区状态
+
+已全部还原到 HEAD 0a49bbc（干净）；调试桩不留存。复现命令 =
+十三节的 repro（加 aq=true, aq_strength=6）。
