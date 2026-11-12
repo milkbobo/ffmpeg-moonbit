@@ -3954,7 +3954,12 @@ fn H264PEncoder::encode_b_frame_cabac(
       // every macroblock; the mirror reuses the infos across the P and B
       // pictures of the sequence, so a P-picture 8x8DCT macroblock would
       // otherwise leak into this slice's ctx-399 neighbour derivation.
+      // Same lifecycle for `chroma_mode`: the decoder builds fresh infos
+      // per picture (inter macroblocks read as chroma DC), while this
+      // mirror would carry the previous picture's intra chroma mode into
+      // the next intra macroblock's ctx-64 neighbour derivation.
       mirror.infos[mb_idx].transform_8x8 = false
+      mirror.infos[mb_idx].chroma_mode = 0
       match self.decide_b_mb(mirror, past_y, fut_y, mb_x, mb_y, self.mb_qp) {
         Ok((BSkip, _)) => {
           // CABAC has no skip RUN: one mb_skip_flag bin per macroblock.
@@ -3966,6 +3971,14 @@ fn H264PEncoder::encode_b_frame_cabac(
           enc.decision(states, sctx, 0)
           match coded {
             Some(c) => {
+              // The decide-phase candidate trials (dry-run writes and the
+              // RD pricing) can leave intra trial state on this MB's info
+              // even when an inter plan won; re-clear right before the
+              // real write so the intra writers' own values stay
+              // authoritative and the ctx-64/ctx-399 neighbour
+              // derivations match the decoder's fresh-info lifecycle.
+              mirror.infos[mb_idx].chroma_mode = 0
+              mirror.infos[mb_idx].transform_8x8 = false
               self.write_b_mb_syntax_cabac(
                 mirror, enc, states, mb_x, mb_y, plan, c,
               )

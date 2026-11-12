@@ -12851,3 +12851,37 @@ CLI 16/16）；docker native（nine-x264）
 
 剩余（沿 §403 交接）：六开关默认转正（WIP 存 `.scratch/promote_wip.diff`，
 需重钉全量钉值）；统一播放门面 / 更多 profile 与位深。
+
+## §405 H.264 B 线正确性第二轮——试价残留清除 + 转正预演结论（2026-11-12）
+
+§403 交接的「六开关默认转正」预演：默认翻转落地后全套普查暴露
+**两个新的真 bug**（均可用显式旗标在 100addf 复现，非转正引入）：
+
+1. **CABAC `b_slices+b_parts+dct8x8` B slice 失步**（bi8 夹具；
+   ffmpeg 同样拒收）：decide 阶段的候选试价（干跑写出与率失真计价）
+   会在**落选的 inter MB** 的 mirror info 上留下 intra 试验状态。
+   §403 修的是 MB 入口清位，但试价发生在入口清位**之后**、真实
+   写出**之前**，污染窗口仍在。修复：`encode_b_frame_cabac` 的真实
+   写出前再清 `chroma_mode`/`transform_8x8`（intra 写出器随后写真值，
+   以写出路径为权威）。新增回归
+   `h264 enc combo: parts+dct8x8 cabac on the bi8 fixture`（梯度夹具
+   踩不到，必须用偏 intra 夹具）。
+2. **CABAC `b_parts+intra4x4_in_b+dct8x8` 编码器重建错**（h264b 扫盒
+   夹具，B3 的 MB(2,1) 左半 12 行像素）：解码器与真 ffmpeg 像素一致
+   （147 vs 142±去块），编码器自身重建（220）是异类——即写出的系数
+   与编码器重建所用系数不一致。**未修**，定位记录见交接文档
+   （bin 级 (ctx,bit) 全对拍、逐 MB 形状分析、ffmpeg 像素仲裁已做）。
+
+因 bug 2 挡路，六开关默认转正再次回退（`.scratch/promote_wip.diff`
+仍可用；重放时需带上本轮 encode_b 修复，且先修 bug 2）。保留的
+净收益：预写出清位修复、bi8 测试的 intra 竞争隔离
+（`intra_in_b=false`/`intra4x4_in_b=false`/`b_parts=false` 显式化，
+配合 §404 的 `bi8_mbs` 口径）。
+
+验证：wasm 按族 69 项 + CLI 16/16 全绿；docker native（bintra/bi8/
+bparts/b/combo/brc/stream/x264）；`moon check --deny-warn` 干净。
+
+方法论：bin 级对拍须覆盖 **bypass 与 bypass_sign**（符号 bin 走独立
+函数，漏打点会造成假分歧）；ctx 序列一致不代表值一致，需 (ctx,bit)
+全量对拍；编码器/解码器 bin 数不等时先怀疑干跑计价混入（用门控标志
+只采真实写出段）。

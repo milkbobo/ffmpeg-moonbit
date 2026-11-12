@@ -24,6 +24,12 @@ fn h264bi8_check(
       qp=20,
       b_slices=true,
       dct8x8=true,
+      // §403+: the competing intra-in-B forms default on and steal the
+      // I8x8 decisions on this fixture; keep them off so the test still
+      // targets Intra 8x8 inside B specifically.
+      intra_in_b=false,
+      intra4x4_in_b=false,
+      b_parts=false,
       cabac_rd~,
       recon~,
       stats~,
@@ -36,6 +42,9 @@ fn h264bi8_check(
       qp=20,
       b_slices=true,
       dct8x8=true,
+      intra_in_b=false,
+      intra4x4_in_b=false,
+      b_parts=false,
       recon~,
       stats~,
     )
@@ -182,6 +191,9 @@ test "h264 enc bi8: deterministic and opt-in" {
       }
     }
     let stats = @libavcodec.H264EncStats::new()
+    // §403+: dct8x8 defaults on, so the Main-profile baseline is the
+    // explicit opt-out (and keep the competing intra forms off to match
+    // the `a`/`b` runs above).
     let off = if cabac {
       @libavcodec.h264_encode_frames_cabac(
         frames,
@@ -189,6 +201,10 @@ test "h264 enc bi8: deterministic and opt-in" {
         height=64,
         qp=20,
         b_slices=true,
+        dct8x8=false,
+        intra_in_b=false,
+        intra4x4_in_b=false,
+        b_parts=false,
         stats~,
       )
     } else {
@@ -198,6 +214,10 @@ test "h264 enc bi8: deterministic and opt-in" {
         height=64,
         qp=20,
         b_slices=true,
+        dct8x8=false,
+        intra_in_b=false,
+        intra4x4_in_b=false,
+        b_parts=false,
         stats~,
       )
     }

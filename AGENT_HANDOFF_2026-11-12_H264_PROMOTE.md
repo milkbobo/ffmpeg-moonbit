@@ -217,6 +217,48 @@ libavcodec 白盒 wasm 已贴 `local count too large` 上限，别再加
 
 ---
 
+
+## 九、§405 预演补充（2026-11-12 晚）
+
+六开关默认翻转曾完整落地并普查：暴露两个**既有**真 bug（显式旗标即可
+在 100addf 复现）。已修其一、其二未修，转正再次回退（WIP 仍在
+`.scratch/promote_wip.diff`，重放须带上本轮 encode_b 修复）。
+
+### 已修：CABAC `b_slices+b_parts+dct8x8` B slice 失步
+
+- 复现：bi8 夹具（偏 intra）`b_slices+b_parts+dct8x8` CABAC——
+  梯度夹具踩不到；`end_of_slice_flag`/`bytestream overread`，
+  真 ffmpeg 同样拒收。
+- 根因：decide 阶段候选试价（干跑写出 + 率失真计价）在**落选 inter
+  MB** 的 mirror info 留下 intra 试验状态（`chroma_mode` /
+  `transform_8x8`）。§403 的 MB 入口清位在试价**之前**，污染窗口仍在。
+- 修复：`encode_b_frame_cabac` 真实写出前再清两字段（写出器权威）。
+  回归：`h264 enc combo: parts+dct8x8 cabac on the bi8 fixture`。
+
+### 未修：CABAC `b_parts+intra4x4_in_b+dct8x8` 编码器重建错
+
+- 复现：`h264b_fixture(96,64,6)` qp24 CABAC
+  `b_slices+b_parts+intra4x4_in_b+dct8x8`（cabac_rd 无关）；
+  B3 的 MB(2,1)：左半 8 列 × 上 12 行像素错（blocks by0..2 × bx0..1）。
+- 仲裁：本仓解码器 == 真 ffmpeg（像素 142 vs 147，去块差异），
+  编码器重建（220）是异类 → **写出的系数 ≠ 编码器重建所用系数**，
+  错在编码器侧 decide/写出系数路径，不在语法层。
+- 已排除：bin 级 (ctx,bit) 全对拍 B1/B3 通过前的失步（B1 完全对齐；
+  B3 分歧是本 bug 的下游表象）；I4 写出器的 transform flag/残差读取
+  貌似正确；单开关与两两组合全部通过，仅三元组合触发。
+- 下一步建议：在 `code_b_mb_residuals` 与
+  `write_b_mb_i4_syntax_cabac` 之间对拍 BI4 计划的 `luma_store` 逐块
+  系数；怀疑 b_parts 开启后某计划分支的 coded store 与重建用的系数
+  来源不一致；或 MC/帧内预测输入在 decide 内用了源样本而非重建样本。
+
+### 方法论沉淀（bin 级对拍增强版）
+
+- bypass 与 bypass_sign（独立函数）都要打点，否则假分歧；
+- ctx 序列一致 ≠ 值一致，须 (ctx,bit) 全量；
+- 编码器 bin 数偏多时先怀疑干跑计价混入——用包级门控标志只采
+  真实写出段；
+- 对拍前先核对标记行号（每轮 trace 行号会漂移）。
+
 ## 八、剩余 / 下一片候选
 
 1. **六个 opt-in 转正**（独立一片）：从 `.scratch/promote_wip.diff`

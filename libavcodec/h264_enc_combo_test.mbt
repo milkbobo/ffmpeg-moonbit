@@ -217,3 +217,16 @@ test "h264 enc combo: default streams remain opt-in byte-identical" {
   h264_combo_decode(legacy, "default CAVLC", 4)
   h264_combo_decode(legacy_cabac, "default CABAC", 4)
 }
+
+///|
+/// §405 regression: `b_slices + b_parts + dct8x8` CABAC used to desync the
+/// B slice (the candidate-price trials left intra state on inter MBs'
+/// mirror infos; the pre-write clear in `encode_b_frame_cabac` fixes it).
+/// The gradient fixture misses it — the intra-leaning bi8 fixture
+/// reproduces.
+test "h264 enc combo: parts+dct8x8 cabac on the bi8 fixture" {
+  let frames = h264bi8_fixture(96, 64, 6)
+  h264_combo_cabac(
+    frames, true, true, false, false, true, false, "bi8-fixture b+parts+dct8x8",
+  )
+}
