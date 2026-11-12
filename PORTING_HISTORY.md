@@ -12968,3 +12968,35 @@ bparts 三文件，已回滚重做）。
 遗留：CABAC×AQ recon 不对称 bug（containment 中）；i4p「independent」
 夹具在现决策下已无区分度（I4 全输，结构性覆盖）；P 路径 I_NxN MV/
 模式编码不对称的定位（同 405 方法论）。
+
+## §408 H.264 AQ×CABAC 双 bug 修复——containment 全解除（2026-11-13）
+
+§407 遗留的两个 recon 不对称 bug 全部定位并修复，全族 containment 拆除：
+
+1. **CABAC IDR 的 I8x8 pass 用基础 qp**（Bug A 主因）：
+   `H264CabacIEnc::encode_luma_i8` 把 `self.p.qp`（PPS/flat 锚，26）传给
+   `h264_enc_luma_i8_pass`，而 AQ 下该宏块的实际 qp 是 `self.mb_qp`
+   （解码器按运行 slice QP 反量化）→ 每个 AQ 调整过的 I8x8 宏块重建
+   ±1。固定 qp 的既有 I8 测试（bi8 等）不可见（p.qp==mb_qp）。
+   修：传 `self.mb_qp`。定位链：IDR recon 探针（源 vs 解码）→
+   EMB0 类型打印（MB0=I4 非 I8）→ 矩阵探针（luma-only 全绿）→
+   **yuvp md5 才暴露色度/其他域**→ 最终矩阵（3qp×7 旗标×双熵）
+   全绿。教训：**探针比对域必须与断言域完全一致**（luma-only 探针
+   两度给出假绿/假象；yuvp md5 与 recon-invariant 同域后才收敛）。
+2. **B 图 mirror 的运行 QP 初值用基础 qp**：`h264_b_mirror_new(..., qp, ...)`
+   拿的是函数级 `qp~`（26），而 B 图按 `qps_arr[e]` 编码——ABR/VBV 下
+   B 图 AQ 的 `mb_dqp = mq - mirror.qscale` 全部错位（flat/无 AQ 不可
+   见）。修：传 `qps_arr[e]`。
+3. **新立 Bug C（未修）**：CAVLC B 图 × qp=51 × Intra16x16-in-B 的
+   recon ±1（B 族从未测过 qp51；I16-in-B 只在粗 qp 才会被选中，故
+   仅有此角落暴露）。`h264 aq strength` 测试的 qp 边界腿暂收在
+   [0, 26] 并注明；修复需专片（I16-in-B CAVLC DC 链 qp=51 对拍）。
+
+containment 解除：`h264 aq: CABAC`（dqp 重钉 22）、
+`h264 aq strength` 两测试、`h264 aq strength: ABR/VBV` 的码控腿——
+全部恢复默认旗标全开。§407 的 dqp_mbs 快照/恢复保持不变。
+
+验证：wasm 全族 **142 + CLI 16 全绿**（enc 36/b 8/bi4 4/bi8 7/
+bintra 5/bparts 7/combo 5/rc 4/aud 1/vbv 7/stream 8/brc 4/probe 4/
+cabac 16/aq 3/aq-strength 2/i4p 6）。`moon check --deny-warn` 干净。
+wasm-only 约定（agent.md §2）下交付。

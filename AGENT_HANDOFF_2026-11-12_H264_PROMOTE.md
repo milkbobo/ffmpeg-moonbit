@@ -323,3 +323,17 @@ x264 帧级仲裁 38 项、ffref、以及本仓重钉 md5 的 ffmpeg 逐钉复�
 （i4p=0），独立性只剩结构性覆盖；CABAC 计价默认开后与 CAVLC 干跑
 分歧按熵钉值（i4p 8 vs 6、2547 vs 2624、pins 拆 pins1/pins2）。专片
 重调夹具恢复区分度。
+
+## 十二、§408 Bug A/B 已修（2026-11-13）
+
+- **Bug A 根因**：`H264CabacIEnc::encode_luma_i8` 把 `self.p.qp` 传给
+  I8x8 pass，AQ 下应为 `self.mb_qp`（解码器按运行 slice QP 反量化）。
+  一行修。Bug A 的「MV 不对称/I_NxN」假说作废——那是探针比对域错误
+  （luma-only + 源像素冒充 recon）造成的假象。
+- **Bug B 根因**：`h264_b_mirror_new` 收到函数级 `qp~`（26）而非
+  `qps_arr[e]`——ABR/VBV 下 B 图 AQ 的 dqp 基准错位。一行修。
+- 全部 containment 拆除；wasm 全族 142 + CLI 16 绿。
+- **Bug C（新立，未修）**：CAVLC B 图 × qp51 × I16-in-B recon ±1
+  （B 族从未覆盖 qp51；I16-in-B 仅粗 qp 被选中）。strength 测试的
+  qp 腿暂收 [0,26]。修复线索：`write_b_mb_i16_syntax` 的 DC Hadamard
+  链在 qp51 的编码/解码对拍（§405 方法论直接适用）。

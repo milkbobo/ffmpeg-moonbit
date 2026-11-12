@@ -4384,7 +4384,11 @@ fn h264_encode_frames_b(
         mb_width,
         mb_height,
         pps,
-        qp,
+        // The mirror's running QP must start at THIS picture's slice QP
+        // (the decoder's `qscale` initialises from the slice header): the
+        // base `qp` is only the PPS/flat-QP anchor, and under the rate
+        // controls every picture codes at its own `qps_arr[e]`.
+        qps_arr[e],
         ystride,
         cstride,
         past_pic,

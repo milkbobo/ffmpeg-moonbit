@@ -1047,7 +1047,11 @@ fn H264CabacIEnc::encode_luma_i8(
     mb_x,
     mb_y,
     self.pps,
-    self.p.qp,
+    // The quantiser must be this macroblock's (possibly AQ-adjusted) QP:
+    // the decoder dequantises the I8x8 blocks at the running slice QP, so
+    // pricing/reconstructing at the base QP desynchronises the
+    // reconstruction on every AQ-adjusted macroblock.
+    self.mb_qp,
     store,
     modes,
     mb,
