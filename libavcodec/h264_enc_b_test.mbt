@@ -286,6 +286,8 @@ test "h264 enc b: default off is byte-identical" {
 ///|
 test "h264 enc b: rejects invalid combinations" {
   let frames = h264b_fixture(96, 64, 4)
+  // b_slices with a rate control is SUPPORTED since §398; the flat
+  // combination must still code (a tiny target forces coarse QPs).
   match
     @libavcodec.h264_encode_frames(
       frames,
@@ -293,35 +295,12 @@ test "h264 enc b: rejects invalid combinations" {
       height=64,
       qp=24,
       b_slices=true,
-      target_bytes=1000,
+      target_bytes=6000,
     ) {
-    Err(_) => ()
-    Ok(_) => fail("b_slices with target_bytes should fail")
+    Err(e) => fail(e)
+    Ok(_) => ()
   }
-  match
-    @libavcodec.h264_encode_frames(
-      frames,
-      width=96,
-      height=64,
-      qp=24,
-      b_slices=true,
-      dct8x8=true,
-    ) {
-    Err(_) => ()
-    Ok(_) => fail("b_slices with dct8x8 should fail")
-  }
-  match
-    @libavcodec.h264_encode_frames_cabac(
-      frames,
-      width=96,
-      height=64,
-      qp=24,
-      b_slices=true,
-      cabac_rd=true,
-    ) {
-    Err(_) => ()
-    Ok(_) => fail("b_slices with cabac_rd should fail")
-  }
+  // A lone last B has no future reference and stays rejected.
   let single : Array[(Bytes, Bytes, Bytes)] = [frames[0]]
   match
     @libavcodec.h264_encode_frames(

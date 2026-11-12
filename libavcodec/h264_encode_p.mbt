@@ -77,6 +77,12 @@ pub(all) struct H264EncStats {
   /// B macroblocks coded as B_Direct_16x16 (with residual; skips count
   /// into `b_mbs` only).
   mut bdirect_mbs : Int32
+  /// B macroblocks coded with a sub-partitioned kind (16x8/8x16 or B_8x8,
+  /// the `b_parts` opt-in).
+  mut bpart_mbs : Int32
+  /// Sub-partitioned B macroblocks coded as B_8x8 (kind 22, a subset of
+  /// `bpart_mbs`).
+  mut b8x8_mbs : Int32
 }
 
 ///|
@@ -96,6 +102,8 @@ pub fn H264EncStats::new() -> H264EncStats {
     bi_mbs: 0,
     bl1_mbs: 0,
     bdirect_mbs: 0,
+    bpart_mbs: 0,
+    b8x8_mbs: 0,
   }
 }
 
@@ -164,6 +172,17 @@ priv struct H264PEncoder {
   mut price_mirror : H264DecCtx?
   mut price_enc : H264CabacEnc?
   mut price_states : Array[Int32]?
+  /// Opt-in sub-partitioned B kinds 4..22 (`b_parts`): 16x8/8x16
+  /// two-partition kinds and B_8x8 with per-group sub decisions. Only the
+  /// B-picture encoder sets this; P macroblocks are unaffected.
+  b_parts : Bool
+  /// Opt-in Intra16x16 fallback inside B slices (`intra_in_b`): a scene
+  /// change inside the B picture codes the macroblock against its own
+  /// current-frame neighbours. Only the B-picture encoder sets this.
+  intra_in_b : Bool
+  /// Opt-in Intra_NxN (4x4) macroblocks inside B slices (`intra4x4_in_b`).
+  /// Only the B-picture encoder sets this.
+  intra4x4_in_b : Bool
 }
 
 ///|
@@ -221,6 +240,16 @@ pub fn h264_encode_frames(
   /// (I, P2, B1, P4, B3, ... with POC type 0 reordering). Mutually
   /// exclusive with the rate controls and `dct8x8`.
   b_slices~ : Bool = false,
+  /// Opt-in (`§395`): sub-partitioned B kinds — 16x8/8x16 two-partition
+  /// kinds and B_8x8 with per-group sub-macroblock decisions. Requires
+  /// `b_slices`; off, every stream is unchanged.
+  b_parts~ : Bool = false,
+  /// Opt-in (`§396`): Intra16x16 macroblocks inside B slices (scene cuts).
+  /// Requires `b_slices`; off, every stream is unchanged.
+  intra_in_b~ : Bool = false,
+  /// Opt-in (`§397`): Intra_NxN (4x4) macroblocks inside B slices. Requires
+  /// `b_slices`; off, every stream is unchanged.
+  intra4x4_in_b~ : Bool = false,
   target_bytes~ : Int32 = 0,
   vbv_maxrate~ : Int32 = 0,
   vbv_bufsize~ : Int32 = 0,
@@ -236,28 +265,164 @@ pub fn h264_encode_frames(
     return Err("h264 enc: no frames")
   }
   if b_slices {
-    if target_bytes > 0 || vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
-      return Err("h264 enc: b_slices and the rate controls are exclusive")
-    }
-    if dct8x8 {
-      return Err("h264 enc: b_slices does not support dct8x8")
-    }
     if frames.length() < 2 {
       return Err("h264 enc: b_slices needs at least 2 frames")
     }
-    return h264_encode_frames_b(
-      frames,
-      width~,
-      height~,
-      qp~,
-      level_idc~,
-      aq~,
-      aq_strength~,
-      aud~,
-      cabac=false,
-      recon~,
-      stats~,
-    )
+    let vbv_b = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+      if target_bytes > 0 {
+        return Err("h264 enc: target_bytes and vbv are mutually exclusive")
+      }
+      match h264_vbv_new(vbv_maxrate, vbv_bufsize, fps, vbv_init) {
+        Ok(v) => Some(v)
+        Err(e) => return Err(e)
+      }
+    } else {
+      None
+    }
+    if target_bytes > 0 {
+      // ABR: the two-pass search drives every display position's QP.
+      let qps = match
+        h264_rc_solve(frames.length(), qp, target_bytes, fn(trial) {
+          match
+            h264_encode_frames_b(
+              frames,
+              width~,
+              height~,
+              qp~,
+              level_idc~,
+              aq~,
+              aq_strength~,
+              aud~,
+              cabac=false,
+              b_parts~,
+              intra_in_b~,
+              intra4x4_in_b~,
+              dct8x8~,
+              qps=trial,
+              recon=[],
+              stats=H264EncStats::new(),
+            ) {
+            Ok((bytes, _)) => Ok(bytes.length())
+            Err(e) => Err(e)
+          }
+        }) {
+        Ok(q) => q
+        Err(e) => return Err(e)
+      }
+      return match
+        h264_encode_frames_b(
+          frames,
+          width~,
+          height~,
+          qp~,
+          level_idc~,
+          aq~,
+          aq_strength~,
+          aud~,
+          cabac=false,
+          b_parts~,
+          intra_in_b~,
+          intra4x4_in_b~,
+          dct8x8~,
+          qps~,
+          recon~,
+          stats~,
+        ) {
+        Ok((bytes, _)) => Ok(bytes)
+        Err(e) => Err(e)
+      }
+    }
+    match vbv_b {
+      Some(v) => {
+        // VBV: the solver raises QPs until every removal fits, then the
+        // final pass emits the pic_timing SEIs and the filler schedule.
+        let (qps, sizes) = match
+          h264_vbv_solve(frames.length(), qp, v, fn(trial) {
+            match
+              h264_encode_frames_b(
+                frames,
+                width~,
+                height~,
+                qp~,
+                level_idc~,
+                aq~,
+                aq_strength~,
+                aud~,
+                cabac=false,
+                b_parts~,
+                intra_in_b~,
+                intra4x4_in_b~,
+                dct8x8~,
+                qps=trial,
+                recon=[],
+                stats=H264EncStats::new(),
+                vbv=Some(v),
+              ) {
+              Ok((_, sizes)) => Ok(sizes)
+              Err(e) => Err(e)
+            }
+          }) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let fillers = h264_vbv_fillers(frames.length(), sizes, v)
+        return match
+          h264_encode_frames_b(
+            frames,
+            width~,
+            height~,
+            qp~,
+            level_idc~,
+            aq~,
+            aq_strength~,
+            aud~,
+            cabac=false,
+            b_parts~,
+            intra_in_b~,
+            intra4x4_in_b~,
+            dct8x8~,
+            qps~,
+            vbv=Some(v),
+            fillers~,
+            recon~,
+            stats~,
+          ) {
+          Ok((bytes, _)) => {
+            stats.vbv_bits = bytes.length().to_int64() * 8L
+            for f = 0; f < frames.length(); f = f + 1 {
+              if fillers[f] > 0 {
+                stats.vbv_fills += 1
+                stats.vbv_filler_bytes += fillers[f]
+              }
+            }
+            Ok(bytes)
+          }
+          Err(e) => Err(e)
+        }
+      }
+      None => ()
+    }
+    return match
+      h264_encode_frames_b(
+        frames,
+        width~,
+        height~,
+        qp~,
+        level_idc~,
+        aq~,
+        aq_strength~,
+        aud~,
+        cabac=false,
+        b_parts~,
+        intra_in_b~,
+        intra4x4_in_b~,
+        dct8x8~,
+        recon~,
+        stats~,
+      ) {
+      Ok((bytes, _)) => Ok(bytes)
+      Err(e) => Err(e)
+    }
   }
   let n = frames.length()
   // VBV/CBR is opt-in: any of the three parameters turns it on, and the
@@ -747,6 +912,9 @@ fn h264_encode_frames_qps(
       price_mirror: None,
       price_enc: None,
       price_states: None,
+      b_parts: false,
+      intra_in_b: false,
+      intra4x4_in_b: false,
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f, intra_in_p) {

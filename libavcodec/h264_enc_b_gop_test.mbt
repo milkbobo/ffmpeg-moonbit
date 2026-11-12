@@ -1,4 +1,5 @@
 // TEMP probe: isolate the B-sequence failure plane.
+
 ///|
 test "probe: b-seq skeleton I+P only (n=2, no B pictures)" {
   let frames = h264b_fixture(96, 64, 2)

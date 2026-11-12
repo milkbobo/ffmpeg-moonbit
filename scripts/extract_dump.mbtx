@@ -1,0 +1,30 @@
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+}
+
+// Extract a comma-separated byte dump tagged `TAG:` from a test log and
+// write it as a raw file. Usage: moon run scripts/extract_dump.mbtx LOG TAG OUT
+fn main raise {
+  let args = @env.args()
+  let log = @fs.read_file_to_string(args[1])
+  let tag = args[2] + ":"
+  let out = args[3]
+  for line in log.split("\n") {
+    if line.has_prefix(tag) {
+      let body = line[tag.length():].trim()
+      let raw : Array[Byte] = []
+      for field in body.split(",") {
+        let t = field.trim()
+        if !t.is_empty() {
+          raw.push(@string.parse_int(t).to_byte())
+        }
+      }
+      @fs.write_bytes_to_file(out, Bytes::from_array(raw[:]))
+      println("wrote \{raw.length()} bytes to \{out}")
+      return
+    }
+  }
+  println("tag \{tag} not found in \{args[1]}")
+}

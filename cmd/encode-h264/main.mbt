@@ -10,11 +10,21 @@ fn main raise {
       "  [--qp 0..51] [--cabac] [--aq] [--aq-strength 0..6] [--aud] [--target-bytes N]",
     )
     println("  [--vbv-maxrate bits/s --vbv-bufsize bits --fps N]")
+    println("  [--stream] [--cabac-rd] CABAC bit pricing requires --cabac")
     println(
-      "  [--stream] feed frames to the streaming encoder (constant memory)",
+      "  [--dct8x8]  High profile 8x8 transform (I8x8, inter 8x8, I8x8-in-B)",
     )
     println(
       "  [--b-slices] code odd display positions as B pictures (POC reorder)",
+    )
+    println(
+      "  [--b-parts]  sub-partitioned B kinds (16x8/8x16, B_8x8); requires --b-slices",
+    )
+    println(
+      "  [--intra-in-b] Intra16x16 macroblocks inside B slices (scene cuts); requires --b-slices",
+    )
+    println(
+      "  [--intra4x4-in-b] Intra4x4 macroblocks inside B slices; requires --b-slices",
     )
     return
   }

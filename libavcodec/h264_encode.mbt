@@ -40,6 +40,15 @@ pub struct H264EncodedFrame {
   /// encoder seeds its persistent state from this, because uncoded blocks'
   /// nC reads see the previous frame's counts.
   mb_nz : Array[Array[Int32]]
+  /// The per-macroblock prediction-mode mirror (16 slots per MB, the
+  /// 2x2-replicated grid for Intra 8x8 macroblocks) and the Intra_NxN /
+  /// transform-size flags: the B-slice sequence seeds its persistent
+  /// per-macroblock state and the decoder-context mirror's intra fields
+  /// from these, because the next picture's intra mode prediction and the
+  /// CABAC transform-size context read them.
+  mb_modes : Array[Array[Int32]]
+  mb_intra4x4 : Array[Bool]
+  mb_tf8 : Array[Bool]
 }
 
 ///|
@@ -50,11 +59,17 @@ priv struct H264EncMbState {
   nz : Array[Int32]
   modes : Array[Int32]
   mut intra4x4 : Bool
+  mut transform_8x8 : Bool
 }
 
 ///|
 fn new_h264_enc_mb_state() -> H264EncMbState {
-  { nz: Array::make(48, 0), modes: Array::make(16, 0), intra4x4: false, }
+  {
+    nz: Array::make(48, 0),
+    modes: Array::make(16, 0),
+    intra4x4: false,
+    transform_8x8: false,
+  }
 }
 
 ///|
@@ -154,7 +169,7 @@ pub fn h264_encode_intra_frame(
   // dequantisation tables the local reconstruction shares with the decoder.
   let ps = new_h264_param_sets()
   let sps_nal = if b_seq {
-    h264_enc_write_sps_b(p_ps)
+    h264_enc_write_sps_b(p_ps, dct8x8~)
   } else {
     h264_enc_write_sps(p_ps, dct8x8~, vbv~)
   }
@@ -163,7 +178,7 @@ pub fn h264_encode_intra_frame(
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
   let sps_raw = if b_seq {
-    h264_enc_sps_rbsp_b(p_ps)
+    h264_enc_sps_rbsp_b(p_ps, dct8x8~)
   } else {
     h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~)
   }
@@ -288,6 +303,32 @@ pub fn h264_encode_intra_frame(
     width,
     height,
     qp,
+    mb_modes: {
+      let out : Array[Array[Int32]] = []
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        let st = self_.states[k]
+        let arr : Array[Int32] = Array::make(16, 0)
+        for i = 0; i < 16; i = i + 1 {
+          arr[i] = st.modes[i]
+        }
+        out.push(arr)
+      }
+      out
+    },
+    mb_intra4x4: {
+      let out : Array[Bool] = []
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        out.push(self_.states[k].intra4x4)
+      }
+      out
+    },
+    mb_tf8: {
+      let out : Array[Bool] = []
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        out.push(self_.states[k].transform_8x8)
+      }
+      out
+    },
     mb_nz: {
       let out : Array[Array[Int32]] = []
       for k = 0; k < mb_width * mb_height; k = k + 1 {
@@ -1250,6 +1291,7 @@ fn H264IntraEncoder::encode_macroblock(
     state.modes[i] = self.cur_modes[i]
   }
   state.intra4x4 = !use_i16
+  state.transform_8x8 = use_i8
   Ok(())
 }
 

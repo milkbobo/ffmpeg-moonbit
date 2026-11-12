@@ -1,4 +1,56 @@
 ///|
+test "CLI B pictures reach the batch encoder in both entropies" {
+  for cabac in [false, true] {
+    let opts = test_options(
+      if cabac {
+        ["--b-slices", "--cabac"]
+      } else {
+        ["--b-slices"]
+      },
+    )
+    let raw = Bytes::make(384 * 3, 128)
+    let (batch, _) = encode_raw(raw, opts)
+    let (streamed, _) = encode_raw_stream(raw, opts)
+    assert_eq(batch, streamed)
+  }
+}
+
+///|
+test "CLI CABAC RD streaming agrees with batch" {
+  for b_slices in [false, true] {
+    let opts = test_options([
+      "--cabac", "--cabac-rd", "--stream", "--aq", "--aud",
+    ])
+    let opts = { ..opts, b_slices, }
+    let raw = Bytes::make(384 * 3, 128)
+    let (batch, count) = encode_raw(raw, opts)
+    let (streamed, stream_count) = encode_raw_stream(raw, opts)
+    assert_eq(stream_count, count)
+    assert_eq(streamed, batch)
+  }
+}
+
+///|
+test "CLI rejects unsupported streaming and CABAC RD combinations" {
+  for
+    extra in [
+      ["--cabac-rd"],
+      ["--stream", "--target-bytes", "1000"],
+      [
+        "--stream", "--vbv-maxrate", "64000", "--vbv-bufsize", "32000", "--fps",
+        "30",
+      ],
+      ["--cabac", "--cabac-rd", "--cabac-rd"],
+    ] {
+    try test_options(extra) catch {
+      _ => ()
+    } noraise {
+      _ => fail("accepted unsupported options")
+    }
+  }
+}
+
+///|
 fn test_options(extra : Array[String]) -> Options raise {
   let args = [
     "input.yuv", "--width", "16", "--height", "16", "--output", "out.264",
@@ -169,4 +221,53 @@ test "CLI accepts stream and b-slices, rejects their bad combinations" {
       _ => fail("accepted invalid arguments")
     }
   }
+}
+
+///|
+test "CLI b-parts requires b-slices and reaches the batch and stream paths" {
+  // Invalid: b-parts alone.
+  try test_options(["--b-parts"]) catch {
+    _ => ()
+  } noraise {
+    _ => fail("accepted b-parts without b-slices")
+  }
+  // Valid: with b-slices, batch and stream agree byte for byte.
+  let opts = test_options(["--b-slices", "--b-parts"])
+  assert_true(opts.b_parts)
+  let raw = Bytes::make(384 * 3, 128)
+  let (batch, count) = encode_raw(raw, opts)
+  let (streamed, stream_count) = encode_raw_stream(raw, opts)
+  assert_eq(stream_count, count)
+  assert_eq(streamed, batch)
+  // The flat fixture stays skip/direct dominated; a real exercise of the
+  // partition kinds lives in the libavcodec bparts tests.
+  assert_eq(batch.length() > 0, true)
+}
+
+///|
+test "CLI dct8x8 reaches the batch and stream paths in both entropies" {
+  let raw = Bytes::make(384 * 3, 128)
+  for cabac in [false, true] {
+    for b_slices in [false, true] {
+      let extra : Array[String] = ["--dct8x8"]
+      if cabac {
+        extra.push("--cabac")
+      }
+      if b_slices {
+        extra.push("--b-slices")
+      }
+      let opts = test_options(extra)
+      assert_true(opts.dct8x8)
+      let (batch, count) = encode_raw(raw, opts)
+      let (streamed, stream_count) = encode_raw_stream(raw, opts)
+      assert_eq(stream_count, count)
+      assert_eq(streamed, batch)
+      // The High profile SPS (profile_idc 100) must reach the stream:
+      // start code (4 bytes), SPS NAL header, then profile_idc.
+      assert_eq(batch[5], b'\x64')
+    }
+  }
+  // Off by default: the Main/Baseline profile byte stays put.
+  let plain = test_options([])
+  assert_eq(plain.dct8x8, false)
 }

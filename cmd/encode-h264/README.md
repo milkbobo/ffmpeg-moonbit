@@ -15,6 +15,13 @@ moon run cmd/encode-h264 -- input.yuv --width 640 --height 480 --output out.264 
 | --- | --- |
 | `--qp N` | 26，范围 0..51 |
 | `--cabac` | 使用 CABAC；缺省为 CAVLC |
+| `--cabac-rd` | 用真实 CABAC 位数评估 P/B 帧候选；要求 `--cabac`，支持批式与流式 |
+| `--dct8x8` | High profile 8x8 变换（I8x8、inter 8x8，与 `--b-slices` 组合时含 B 帧内 Intra8x8）；支持批式与流式 |
+| `--stream` | 逐帧编码；与 ABR/VBV 互斥，宿主仍整文件读取和收集输出 |
+| `--b-slices` | 奇数显示位置使用 B 帧，编码顺序重排；可与 ABR/VBV 组合（B 序列按显示位置分配帧级 QP，VBV 逐 AU 带 pic_timing SEI 与 filler） |
+| `--b-parts` | B 帧子分割（16x8/8x16 与 B_8x8 逐 8x8 组决策）；要求 `--b-slices`，支持批式与流式 |
+| `--intra-in-b` | B 帧内 Intra16x16 宏块（场景切换）；要求 `--b-slices`，支持批式与流式 |
+| `--intra4x4-in-b` | B 帧内 Intra4x4 宏块；要求 `--b-slices`，支持批式与流式 |
 | `--aq` | 开启宏块自适应量化 |
 | `--aq-strength N` | 0..6，默认 1；仅在 `--aq` 时生效，0 等价于关闭 AQ |
 | `--aud` | 每个访问单元前写入 AUD |

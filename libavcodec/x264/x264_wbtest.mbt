@@ -1379,6 +1379,46 @@ test "x264 oracle: probe rejects shape-invalid streams" {
 }
 
 ///|
+test "pure H264 streaming CABAC RD: C parser and dual decoder" {
+  for b_slices in [false, true] {
+    let enc = match
+      @libavcodec.H264StreamEncoder::open(
+        width=96,
+        height=64,
+        cabac=true,
+        cabac_rd=true,
+        b_slices~,
+        aq=true,
+        aud=true,
+      ) {
+      Ok(e) => e
+      Err(e) => fail(e)
+    }
+    let bytes : Array[Byte] = []
+    for frame in x264_dct8_fixture() {
+      match enc.push_frame(frame.0, frame.1, frame.2) {
+        Ok(_) => ()
+        Err(e) => fail(e)
+      }
+      for au in enc.drain() {
+        for b in au {
+          bytes.push(b)
+        }
+      }
+    }
+    let stream = Bytes::from_array(bytes[:])
+    let probe = match x264_probe_annexb(stream) {
+      Ok(p) => p
+      Err(e) => fail(e)
+    }
+    assert_eq(probe.n_frames, 3)
+    assert_eq(probe.warnings, 0)
+    assert_eq(probe.errors, 0)
+    x264_cross_decode(stream, 3, 1)
+  }
+}
+
+///|
 test "pure H264 AUD: C parser boundaries and dual decoder" {
   let frames = x264_dct8_fixture()
   for cabac in [false, true] {

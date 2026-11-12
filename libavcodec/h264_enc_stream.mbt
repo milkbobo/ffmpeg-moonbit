@@ -25,7 +25,12 @@ pub struct H264StreamEncoder {
   qp : Int32
   level_idc : Int32
   cabac : Bool
+  cabac_rd : Bool
+  dct8x8 : Bool
   b_slices : Bool
+  b_parts : Bool
+  intra_in_b : Bool
+  intra4x4_in_b : Bool
   aud : Bool
   aq : Bool
   aq_strength : Int32
@@ -68,18 +73,43 @@ pub struct H264StreamEncoder {
 ///|
 /// Open a streaming encoder. `b_slices` schedules the odd display
 /// positions as B pictures; the two-pass rate controls are batch-only.
+/// `cabac_rd` enables the batch encoder's exact CABAC candidate pricing;
+/// it requires `cabac=true` and supports P and B pictures. `dct8x8` selects
+/// the High profile 8x8 transform (I8x8, inter 8x8 and, with `b_slices`,
+/// Intra 8x8 inside the B slices). `b_parts`
+/// enables the sub-partitioned B kinds (16x8/8x16 and B_8x8); it requires
+/// `b_slices`. `intra_in_b` enables Intra16x16 macroblocks inside the B
+/// slices (scene cuts), `intra4x4_in_b` the Intra_NxN (4x4) form; both
+/// also require `b_slices`.
 pub fn H264StreamEncoder::open(
   width~ : Int32,
   height~ : Int32,
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
   cabac~ : Bool = false,
+  cabac_rd~ : Bool = false,
+  dct8x8~ : Bool = false,
   b_slices~ : Bool = false,
+  b_parts~ : Bool = false,
+  intra_in_b~ : Bool = false,
+  intra4x4_in_b~ : Bool = false,
   aud~ : Bool = false,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[H264StreamEncoder, String] {
+  if cabac_rd && !cabac {
+    return Err("h264 enc: cabac_rd requires CABAC")
+  }
+  if b_parts && !b_slices {
+    return Err("h264 enc: b_parts requires b_slices")
+  }
+  if intra_in_b && !b_slices {
+    return Err("h264 enc: intra_in_b requires b_slices")
+  }
+  if intra4x4_in_b && !b_slices {
+    return Err("h264 enc: intra4x4_in_b requires b_slices")
+  }
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
@@ -104,20 +134,24 @@ pub fn H264StreamEncoder::open(
   // parsed PPS holds the dequantisation tables shared with the decoder.
   let ps = new_h264_param_sets()
   let sps_rbsp = if b_slices {
-    h264_enc_sps_rbsp_b(p)
+    h264_enc_sps_rbsp_b(p, dct8x8~)
   } else if cabac {
-    h264_enc_sps_rbsp_main(p)
+    if dct8x8 {
+      h264_enc_sps_rbsp_high(p)
+    } else {
+      h264_enc_sps_rbsp_main(p)
+    }
   } else {
-    h264_enc_sps_rbsp(p)
+    h264_enc_sps_rbsp(p, dct8x8~)
   }
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_rbsp), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
   let pps_raw = if cabac {
-    h264_enc_pps_rbsp_cabac(p)
+    h264_enc_pps_rbsp_cabac(p, dct8x8~)
   } else {
-    h264_enc_pps_rbsp(p)
+    h264_enc_pps_rbsp(p, dct8x8~)
   }
   match
     ff_h264_decode_picture_parameter_set(
@@ -142,7 +176,12 @@ pub fn H264StreamEncoder::open(
     qp,
     level_idc,
     cabac,
+    cabac_rd,
+    dct8x8,
     b_slices,
+    b_parts,
+    intra_in_b,
+    intra4x4_in_b,
     aud,
     aq,
     aq_strength,
@@ -304,6 +343,7 @@ fn H264StreamEncoder::stream_idr(
       aq=self.aq,
       aq_strength=self.aq_strength,
       b_seq=self.b_slices,
+      dct8x8=self.dct8x8,
     )
   } else {
     h264_encode_intra_frame(
@@ -319,6 +359,7 @@ fn H264StreamEncoder::stream_idr(
       aq=self.aq,
       aq_strength=self.aq_strength,
       b_seq=self.b_slices,
+      dct8x8=self.dct8x8,
     )
   }
   let first = match first {
@@ -388,7 +429,7 @@ fn H264StreamEncoder::stream_p(
     cur_nz: Array::make(48, 0),
     cur_mv: Array::make(32, 0),
     cur_ref: Array::make(16, -2),
-    dct8x8: false,
+    dct8x8: self.dct8x8,
     intra4x4_in_p: false,
     base_qp: self.qp,
     mb_qp: self.qp,
@@ -398,10 +439,13 @@ fn H264StreamEncoder::stream_p(
     aq_avg: act_avg,
     aq_on: self.aq,
     aq_strength: self.aq_strength,
-    cabac_rd: false,
+    cabac_rd: self.cabac_rd,
     price_mirror: None,
     price_enc: None,
     price_states: None,
+    b_parts: self.b_parts,
+    intra_in_b: self.intra_in_b,
+    intra4x4_in_b: self.intra4x4_in_b,
   }
   let poc_lsb = if self.b_slices { (display * 2) & 15 } else { -1 }
   let nal = if self.cabac {
@@ -496,7 +540,7 @@ fn H264StreamEncoder::stream_b(
     cur_nz: Array::make(48, 0),
     cur_mv: Array::make(32, 0),
     cur_ref: Array::make(16, -2),
-    dct8x8: false,
+    dct8x8: self.dct8x8,
     intra4x4_in_p: false,
     base_qp: self.qp,
     mb_qp: self.qp,
@@ -506,10 +550,13 @@ fn H264StreamEncoder::stream_b(
     aq_avg: act_avg,
     aq_on: self.aq,
     aq_strength: self.aq_strength,
-    cabac_rd: false,
+    cabac_rd: self.cabac_rd,
     price_mirror: None,
     price_enc: None,
     price_states: None,
+    b_parts: self.b_parts,
+    intra_in_b: self.intra_in_b,
+    intra4x4_in_b: self.intra4x4_in_b,
   }
   let past_pic = h264_b_refpic(
     self.ref_y,

@@ -6,6 +6,8 @@ priv struct Options {
   height : Int32
   qp : Int32
   cabac : Bool
+  cabac_rd : Bool
+  dct8x8 : Bool
   aq : Bool
   aq_strength : Int32
   aud : Bool
@@ -15,6 +17,9 @@ priv struct Options {
   fps : Int32
   stream : Bool
   b_slices : Bool
+  b_parts : Bool
+  intra_in_b : Bool
+  intra4x4_in_b : Bool
 }
 
 ///|
@@ -27,7 +32,16 @@ fn parse_options(args : Array[String]) -> Options raise {
   while i < args.length() {
     let arg = args[i]
     match arg {
-      "--cabac" | "--aq" | "--aud" | "--stream" | "--b-slices" => {
+      "--cabac"
+      | "--cabac-rd"
+      | "--dct8x8"
+      | "--aq"
+      | "--aud"
+      | "--stream"
+      | "--b-slices"
+      | "--b-parts"
+      | "--intra-in-b"
+      | "--intra4x4-in-b" => {
         if values.contains(arg) {
           fail("encode-h264: repeated option \{arg}")
         }
@@ -116,10 +130,25 @@ fn parse_options(args : Array[String]) -> Options raise {
       )
     }
   }
+  if values.contains("--cabac-rd") && !values.contains("--cabac") {
+    fail("encode-h264: cabac-rd requires CABAC")
+  }
+  if values.contains("--stream") && (target_bytes > 0 || maxrate > 0) {
+    fail("encode-h264: stream excludes the rate controls")
+  }
   if values.contains("--b-slices") {
     if target_bytes > 0 || maxrate > 0 || bufsize > 0 || fps > 0 {
       fail("encode-h264: b-slices excludes the rate controls")
     }
+  }
+  if values.contains("--b-parts") && !values.contains("--b-slices") {
+    fail("encode-h264: b-parts requires b-slices")
+  }
+  if values.contains("--intra-in-b") && !values.contains("--b-slices") {
+    fail("encode-h264: intra-in-b requires b-slices")
+  }
+  if values.contains("--intra4x4-in-b") && !values.contains("--b-slices") {
+    fail("encode-h264: intra4x4-in-b requires b-slices")
   }
   {
     input,
@@ -128,6 +157,8 @@ fn parse_options(args : Array[String]) -> Options raise {
     height,
     qp,
     cabac: values.contains("--cabac"),
+    cabac_rd: values.contains("--cabac-rd"),
+    dct8x8: values.contains("--dct8x8"),
     aq: values.contains("--aq"),
     aq_strength,
     aud: values.contains("--aud"),
@@ -137,6 +168,9 @@ fn parse_options(args : Array[String]) -> Options raise {
     fps,
     stream: values.contains("--stream"),
     b_slices: values.contains("--b-slices"),
+    b_parts: values.contains("--b-parts"),
+    intra_in_b: values.contains("--intra-in-b"),
+    intra4x4_in_b: values.contains("--intra4x4-in-b"),
   }
 }
 
@@ -165,6 +199,12 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let result = if opts.cabac {
     @codec.h264_encode_frames_cabac(
       frames,
+      cabac_rd=opts.cabac_rd,
+      dct8x8=opts.dct8x8,
+      b_slices=opts.b_slices,
+      b_parts=opts.b_parts,
+      intra_in_b=opts.intra_in_b,
+      intra4x4_in_b=opts.intra4x4_in_b,
       width=opts.width,
       height=opts.height,
       qp=opts.qp,
@@ -179,6 +219,11 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   } else {
     @codec.h264_encode_frames(
       frames,
+      dct8x8=opts.dct8x8,
+      b_slices=opts.b_slices,
+      b_parts=opts.b_parts,
+      intra_in_b=opts.intra_in_b,
+      intra4x4_in_b=opts.intra4x4_in_b,
       width=opts.width,
       height=opts.height,
       qp=opts.qp,
@@ -218,7 +263,12 @@ fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
       height=opts.height,
       qp=opts.qp,
       cabac=opts.cabac,
+      cabac_rd=opts.cabac_rd,
+      dct8x8=opts.dct8x8,
       b_slices=opts.b_slices,
+      b_parts=opts.b_parts,
+      intra_in_b=opts.intra_in_b,
+      intra4x4_in_b=opts.intra4x4_in_b,
       aud=opts.aud,
       aq=opts.aq,
       aq_strength=opts.aq_strength,

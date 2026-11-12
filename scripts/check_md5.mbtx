@@ -1,0 +1,36 @@
+import {
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+}
+
+// Compare a test log's `TAGMD5:<hash>` lines against a docker ffmpeg
+// framemd5 file, in order. Usage: moon run scripts/check_md5.mbtx LOG TAG FFMD5
+fn main raise {
+  let args = @env.args()
+  let want : Array[String] = []
+  let prefix = args[2] + "MD5:"
+  for line in @fs.read_file_to_string(args[1]).split("\n") {
+    let t = line.trim()
+    if t.has_prefix(prefix) {
+      want.push(t[prefix.length():].trim().to_owned())
+    }
+  }
+  let got : Array[String] = []
+  for line in @fs.read_file_to_string(args[3]).split("\n") {
+    let t = line.trim()
+    if t.has_prefix("0,") {
+      let fields = t.split(",").collect()
+      got.push(fields[fields.length() - 1].trim().to_owned())
+    }
+  }
+  if want.length() != got.length() {
+    fail("count mismatch: local \{want.length()} vs ffmpeg \{got.length()}")
+  }
+  for i in 0..<want.length() {
+    if want[i] != got[i] {
+      fail("frame \{i}: local \{want[i]} != ffmpeg \{got[i]}")
+    }
+  }
+  println("\{args[2]}: \{want.length()} frames match ffmpeg exactly")
+}

@@ -836,7 +836,7 @@ pub fn h264_encode_intra_frame_cabac(
   let pheight = mb_height * 16
   let ps = new_h264_param_sets()
   let sps_rbsp = if b_seq {
-    h264_enc_sps_rbsp_b(p)
+    h264_enc_sps_rbsp_b(p, dct8x8~)
   } else if dct8x8 {
     h264_enc_sps_rbsp_high(p, vbv~)
   } else {
@@ -986,6 +986,32 @@ pub fn h264_encode_intra_frame_cabac(
     width,
     height,
     qp,
+    mb_modes: {
+      let out : Array[Array[Int32]] = []
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        let info = self_.ctx.infos[k]
+        let arr : Array[Int32] = Array::make(16, 0)
+        for i = 0; i < 16; i = i + 1 {
+          arr[i] = info.modes[i]
+        }
+        out.push(arr)
+      }
+      out
+    },
+    mb_intra4x4: {
+      let out : Array[Bool] = []
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        out.push(self_.ctx.infos[k].intra4x4)
+      }
+      out
+    },
+    mb_tf8: {
+      let out : Array[Bool] = []
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        out.push(self_.ctx.infos[k].transform_8x8)
+      }
+      out
+    },
     mb_nz: {
       let out : Array[Array[Int32]] = []
       for k = 0; k < mb_width * mb_height; k = k + 1 {
@@ -2805,8 +2831,18 @@ pub fn h264_encode_frames_cabac(
   aud~ : Bool = false,
   /// Opt-in (`§393`): code the odd display positions as B pictures
   /// (I, P2, B1, P4, B3, ... with POC type 0 reordering). Mutually
-  /// exclusive with the rate controls, `dct8x8` and `cabac_rd`.
+  /// exclusive with the rate controls and `dct8x8`. Supports `cabac_rd`.
   b_slices~ : Bool = false,
+  /// Opt-in (`§395`): sub-partitioned B kinds — 16x8/8x16 two-partition
+  /// kinds and B_8x8 with per-group sub-macroblock decisions. Requires
+  /// `b_slices`; off, every stream is unchanged.
+  b_parts~ : Bool = false,
+  /// Opt-in (`§396`): Intra16x16 macroblocks inside B slices (scene cuts).
+  /// Requires `b_slices`; off, every stream is unchanged.
+  intra_in_b~ : Bool = false,
+  /// Opt-in (`§397`): Intra_NxN (4x4) macroblocks inside B slices. Requires
+  /// `b_slices`; off, every stream is unchanged.
+  intra4x4_in_b~ : Bool = false,
   target_bytes~ : Int32 = 0,
   vbv_maxrate~ : Int32 = 0,
   vbv_bufsize~ : Int32 = 0,
@@ -2822,31 +2858,166 @@ pub fn h264_encode_frames_cabac(
     return Err("h264 enc: no frames")
   }
   if b_slices {
-    if target_bytes > 0 || vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
-      return Err("h264 enc: b_slices and the rate controls are exclusive")
-    }
-    if dct8x8 {
-      return Err("h264 enc: b_slices does not support dct8x8")
-    }
-    if cabac_rd {
-      return Err("h264 enc: b_slices does not support cabac_rd")
-    }
     if frames.length() < 2 {
       return Err("h264 enc: b_slices needs at least 2 frames")
     }
-    return h264_encode_frames_b(
-      frames,
-      width~,
-      height~,
-      qp~,
-      level_idc~,
-      aq~,
-      aq_strength~,
-      aud~,
-      cabac=true,
-      recon~,
-      stats~,
-    )
+    let vbv_b = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+      if target_bytes > 0 {
+        return Err("h264 enc: target_bytes and vbv are mutually exclusive")
+      }
+      match h264_vbv_new(vbv_maxrate, vbv_bufsize, fps, vbv_init) {
+        Ok(v) => Some(v)
+        Err(e) => return Err(e)
+      }
+    } else {
+      None
+    }
+    if target_bytes > 0 {
+      let qps = match
+        h264_rc_solve(frames.length(), qp, target_bytes, fn(trial) {
+          match
+            h264_encode_frames_b(
+              frames,
+              width~,
+              height~,
+              qp~,
+              level_idc~,
+              aq~,
+              aq_strength~,
+              aud~,
+              cabac=true,
+              cabac_rd~,
+              b_parts~,
+              intra_in_b~,
+              intra4x4_in_b~,
+              dct8x8~,
+              qps=trial,
+              recon=[],
+              stats=H264EncStats::new(),
+            ) {
+            Ok((bytes, _)) => Ok(bytes.length())
+            Err(e) => Err(e)
+          }
+        }) {
+        Ok(q) => q
+        Err(e) => return Err(e)
+      }
+      return match
+        h264_encode_frames_b(
+          frames,
+          width~,
+          height~,
+          qp~,
+          level_idc~,
+          aq~,
+          aq_strength~,
+          aud~,
+          cabac=true,
+          cabac_rd~,
+          b_parts~,
+          intra_in_b~,
+          intra4x4_in_b~,
+          dct8x8~,
+          qps~,
+          recon~,
+          stats~,
+        ) {
+        Ok((bytes, _)) => Ok(bytes)
+        Err(e) => Err(e)
+      }
+    }
+    match vbv_b {
+      Some(v) => {
+        let (qps, sizes) = match
+          h264_vbv_solve(frames.length(), qp, v, fn(trial) {
+            match
+              h264_encode_frames_b(
+                frames,
+                width~,
+                height~,
+                qp~,
+                level_idc~,
+                aq~,
+                aq_strength~,
+                aud~,
+                cabac=true,
+                cabac_rd~,
+                b_parts~,
+                intra_in_b~,
+                intra4x4_in_b~,
+                dct8x8~,
+                qps=trial,
+                recon=[],
+                stats=H264EncStats::new(),
+                vbv=Some(v),
+              ) {
+              Ok((_, sizes)) => Ok(sizes)
+              Err(e) => Err(e)
+            }
+          }) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        let fillers = h264_vbv_fillers(frames.length(), sizes, v)
+        return match
+          h264_encode_frames_b(
+            frames,
+            width~,
+            height~,
+            qp~,
+            level_idc~,
+            aq~,
+            aq_strength~,
+            aud~,
+            cabac=true,
+            cabac_rd~,
+            b_parts~,
+            intra_in_b~,
+            intra4x4_in_b~,
+            dct8x8~,
+            qps~,
+            vbv=Some(v),
+            fillers~,
+            recon~,
+            stats~,
+          ) {
+          Ok((bytes, _)) => {
+            stats.vbv_bits = bytes.length().to_int64() * 8L
+            for f = 0; f < frames.length(); f = f + 1 {
+              if fillers[f] > 0 {
+                stats.vbv_fills += 1
+                stats.vbv_filler_bytes += fillers[f]
+              }
+            }
+            Ok(bytes)
+          }
+          Err(e) => Err(e)
+        }
+      }
+      None => ()
+    }
+    return match
+      h264_encode_frames_b(
+        frames,
+        width~,
+        height~,
+        qp~,
+        level_idc~,
+        aq~,
+        aq_strength~,
+        aud~,
+        cabac=true,
+        cabac_rd~,
+        b_parts~,
+        intra_in_b~,
+        intra4x4_in_b~,
+        dct8x8~,
+        recon~,
+        stats~,
+      ) {
+      Ok((bytes, _)) => Ok(bytes)
+      Err(e) => Err(e)
+    }
   }
   let n = frames.length()
   // VBV/CBR is opt-in and cannot be combined with the average-bitrate
@@ -3200,6 +3371,9 @@ fn h264_encode_frames_cabac_qps(
       price_mirror: None,
       price_enc: None,
       price_states: None,
+      b_parts: false,
+      intra_in_b: false,
+      intra4x4_in_b: false,
     }
     let nal = match enc.encode_p_frame_cabac(f, intra_in_p) {
       Ok(n) => n

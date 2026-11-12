@@ -5,6 +5,78 @@
 // the guards (geometry, no second frame after finish semantics) hold.
 
 ///|
+test "h264 stream: CABAC RD matches batch with AQ and AUD" {
+  for aq in [false, true] {
+    for b_slices in [false, true] {
+      let frames = h264s_fixture(48, 32, 4)
+      let batch = match
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=48,
+          height=32,
+          qp=24,
+          cabac_rd=true,
+          b_slices~,
+          aq~,
+          aud=true,
+        ) {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+      let enc = match
+        @libavcodec.H264StreamEncoder::open(
+          width=48,
+          height=32,
+          qp=24,
+          cabac=true,
+          cabac_rd=true,
+          b_slices~,
+          aq~,
+          aud=true,
+        ) {
+        Ok(e) => e
+        Err(e) => fail(e)
+      }
+      let aus : Array[Bytes] = []
+      for f in frames {
+        match enc.push_frame(f.0, f.1, f.2) {
+          Ok(_) => ()
+          Err(e) => fail(e)
+        }
+        for au in enc.drain() {
+          aus.push(au)
+        }
+      }
+      match enc.finish() {
+        Ok(tail) =>
+          for au in tail {
+            aus.push(au)
+          }
+        Err(e) => fail(e)
+      }
+      assert_true(h264s_bytes_eq(h264s_concat(aus), batch))
+    }
+  }
+}
+
+///|
+test "h264 stream: rejects CABAC RD without CABAC" {
+  for b_slices in [false, true] {
+    match
+      @libavcodec.H264StreamEncoder::open(
+        width=32,
+        height=32,
+        cabac=false,
+        cabac_rd=true,
+        b_slices~,
+      ) {
+      Err(_) => ()
+      Ok(_) => fail("accepted unsupported CABAC RD combination")
+    }
+  }
+}
+
+///|
 fn h264s_fixture(
   w : Int32,
   h : Int32,
