@@ -337,3 +337,33 @@ x264 帧级仲裁 38 项、ffref、以及本仓重钉 md5 的 ffmpeg 逐钉复�
   （B 族从未覆盖 qp51；I16-in-B 仅粗 qp 被选中）。strength 测试的
   qp 腿暂收 [0,26]。修复线索：`write_b_mb_i16_syntax` 的 DC Hadamard
   链在 qp51 的编码/解码对拍（§405 方法论直接适用）。
+
+## 十三、Bug C 考察（408 后续，未修——事实链已固定）
+
+复现：`h264_aq_fixture(3)` + CAVLC + qp51 + aq(strength 6) + B schedule +
+intra_in_b（默认其余）——B1（dec[2]）col 36-55 区域 1424 字节失配。
+**注意 qp51 下 AQ 并非无效**：strength 6 的负向 offset 仍生效
+（mq ∈ 45..51），"flat 51" 的早期判断错误。
+
+已证事实链（全部打印验证）：
+
+1. IDR recon 在 qp51+AQ 下是"垃圾但自洽"：编码器 rec == 解码器输出
+   （0,48,120,44…，源是 40）——qp51 重量化噪声，**不是 bug**；
+   frame 0/1 的 recon 不变式实际成立。
+2. B1 MB2：双侧同为 Bi16 型、list0 mv=(-16,-12)/ref0=0 **完全一致**、
+   list1 空（mv1=0/ref1=-1）一致、**残差双侧全零**（cbp=7 但 levels
+   全 0，qp51 死区）。
+3. 解码器 MC(col 36) = ref(32) = 0 ✓（对 mv=(-16,-12) 的正确 MC）；
+   **编码器 MC(col 36) = 56 ✗**——编码器 compensate/MC 使用的有效
+   mv ≠ 已提交的 (-16,-12)。
+4. 结论：**CAVLC B 路径在 AQ 下，decide 的 winner compensate 所读的
+   mirror MV 槽 ≠ 最终写出的 MV**——试价 commit 的 MV 残留或
+   compensate/commit 时序问题（405 的预清三字段不含 MV 槽）。
+
+下一片入口（半天量级）：
+- 在 `decide_b_mb` 的 winner 分支（h264_b_commit_mb + h264_b_compensate
+  前后）打印 mirror.infos[2].mv 与 Bi16 plan 的原始 mv（poc==2 门）；
+- 对照 main loop AQ 分支（`self.mb_dqp = mq - self.prev_qp` 一带）是否
+  触碰 mirror MV 槽；
+- 修后解除 `h264 aq strength` 的 qp 腿 containment（[0,26] →
+  [0,26,51]）并全族回归。
