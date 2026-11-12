@@ -223,10 +223,15 @@ libavcodec 白盒 wasm 已贴 `local count too large` 上限，别再加
    接着做，前提是重钉全部码流/md5 与 PSNR/字节门；`bi8` 用例需显式
    `intra4x4_in_b=false`，`h264_enc_rc_test` 受 `dct8x8`/`cabac_rd`
    影响最大。
-2. **`H264EncStats` B-intra 专用计数**：新增 `bi16_mbs` / `bi4_mbs` /
-   `bi8_mbs`，替代 `h264_encode_b.mbt:2768-2779` 复用 P 帧计数器。
-3. **CABAC B inter `dct8x8_allowed` 完整镜像**解码端的
-   `direct_8x8 || !direct.any()`（当前不触发）。
-4. 删除过时的 CLI「b-slices excludes rate controls」校验（§399 已支持
-   B×VBV/ABR，WIP 里已删但随回退一起退回了）。
+2. ~~`H264EncStats` B-intra 专用计数~~ —— **§404 已完成**（544cd75）：
+   `bi16_mbs` / `bi4_mbs` / `bi8_mbs` 上线，bintra/bi8 断言已切新口径。
+3. ~~B 尾 `dct8x8_allowed` 完整镜像~~ —— **§404 已完成**（四个残尾
+   调用点补 direct 分量；当前 SPS 恒 direct_8x8=1，流不变，防御性对齐）。
+4. ~~删 CLI 过时「b-slices excludes rate controls」~~ —— **§404 已完成**
+   （`--stream`×码控互斥保留）。
 5. 编码器接统一播放门面 / 更多 profile 与位深。
+
+§404 验证：wasm 按族 91 项 + CLI 16/16 全绿；docker native 65/65、
+x264 帧级仲裁 38/38；`moon check --deny-warn` 干净；`.mbti` 仅
+`H264EncStats` 三个新字段。宿主白盒 wasm `local count too large` 为
+100addf 起既有（白盒走 docker native）。
