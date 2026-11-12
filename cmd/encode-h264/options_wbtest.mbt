@@ -180,10 +180,13 @@ test "CLI multi-frame plane splitting and both entropy modes" {
       Err(e) => fail(e)
     }
     assert_eq(decoded.length(), 3)
+    // 405: the defaults schedule B pictures; the decoder emits coding
+    // order (I, P2, B1), so compare against the display-position source.
+    let disp = [0, 2, 1]
     for f in 0..<3 {
       let pixels = decoded[f].yuvp()
       // Quantisation permits a small luma/chroma error.
-      assert_true((pixels[0].to_int() - (40 + f * 20)).abs() <= 3)
+      assert_true((pixels[0].to_int() - (40 + disp[f] * 20)).abs() <= 3)
       assert_true((pixels[256].to_int() - 90).abs() <= 3)
       assert_true((pixels[320].to_int() - 170).abs() <= 3)
     }
@@ -240,8 +243,9 @@ test "CLI accepts stream and b-slices, rejects their bad combinations" {
 
 ///|
 test "CLI b-parts requires b-slices and reaches the batch and stream paths" {
-  // Invalid: b-parts alone.
-  try test_options(["--b-parts"]) catch {
+  // Invalid: b-parts with the explicit slices opt-out (§405: with the
+  // defaults both are on, so only the explicit conflict is rejected).
+  try test_options(["--b-parts", "--no-b-slices"]) catch {
     _ => ()
   } noraise {
     _ => fail("accepted b-parts without b-slices")
@@ -282,9 +286,12 @@ test "CLI dct8x8 reaches the batch and stream paths in both entropies" {
       assert_eq(batch[5], b'\x64')
     }
   }
-  // Off by default: the Main/Baseline profile byte stays put.
+  // 405: dct8x8 defaults on (High profile byte); the explicit opt-out
+  // keeps the Main/Baseline profile byte.
   let plain = test_options([])
-  assert_eq(plain.dct8x8, false)
+  assert_eq(plain.dct8x8, true)
+  let off = test_options(["--no-dct8x8"])
+  assert_eq(off.dct8x8, false)
 }
 
 ///|

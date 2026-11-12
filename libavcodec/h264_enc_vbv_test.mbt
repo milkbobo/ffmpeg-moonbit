@@ -510,14 +510,17 @@ test "h264 aud: delimiters, byte compatibility and CPB accounting" {
           start = s
           assert_eq(e - s, 6)
           assert_eq(stream[s + 4].to_int(), 9)
-          assert_eq(
-            stream[s + 5].to_int(),
-            if count == 0 {
-              0x10
-            } else {
-              0x30
-            },
-          )
+          // §405: the defaults put the sequence in coding order
+          // I, P2, B1, P4, B3; the B access units carry primary_pic_type
+          // 0x50 (`h264_enc_aud_b`), the P units 0x30.
+          let expect_ty = if count == 0 {
+            0x10
+          } else if count % 2 == 1 {
+            0x30
+          } else {
+            0x50
+          }
+          assert_eq(stream[s + 5].to_int(), expect_ty)
           count += 1
         } else {
           for i in s..<e {
@@ -558,10 +561,10 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if flat.length() != 2615 {
+  if flat.length() != 2697 {
     fail("flat CAVLC length changed: \{flat.length()}")
   }
-  if h264_rc_md5(flat) != "866d5978ff005edd1c8741abf92554f5" {
+  if h264_rc_md5(flat) != "ce1d994a99a836014b8e8f1c2a330244" {
     fail("flat CAVLC bytes changed: \{h264_rc_md5(flat)}")
   }
   let flatc = match
@@ -569,10 +572,10 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if flatc.length() != 2351 {
+  if flatc.length() != 2347 {
     fail("flat CABAC length changed: \{flatc.length()}")
   }
-  if h264_rc_md5(flatc) != "45d3adc1a3a368bd11c863cec9eece15" {
+  if h264_rc_md5(flatc) != "1f88b8d3f63f9cc3b5b3876853e4eb52" {
     fail("flat CABAC bytes changed: \{h264_rc_md5(flatc)}")
   }
   // Explicit zero parameters and a non-default init percentage (ignored
@@ -744,6 +747,10 @@ test "h264 vbv: CAVLC SPS VUI/HRD, SEI and NAL layout" {
       vbv_maxrate=100000,
       vbv_bufsize=32000,
       fps=30,
+      // 405: these pin the P-slice VBV layout; keep the (now default-on)
+      // B-line out of them.
+      b_slices=false,
+      dct8x8=false,
       stats~,
     ) {
     Ok(s) => s
@@ -782,6 +789,8 @@ test "h264 vbv: CAVLC SPS VUI/HRD, SEI and NAL layout" {
       vbv_maxrate=100000,
       vbv_bufsize=32000,
       fps=30,
+      b_slices=false,
+      dct8x8=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
@@ -811,6 +820,11 @@ test "h264 vbv: CABAC SPS VUI/HRD, SEI and NAL layout" {
       vbv_maxrate=100000,
       vbv_bufsize=32000,
       fps=30,
+      // 405: these pin the P-slice VBV layout; keep the (now default-on)
+      // B-line and CABAC-rate pricing out of them.
+      b_slices=false,
+      dct8x8=false,
+      cabac_rd=false,
       stats~,
     ) {
     Ok(s) => s
@@ -951,6 +965,10 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
       vbv_maxrate=60000,
       vbv_bufsize=12000,
       fps=30,
+      // 405: this test drives the P-slice tight-buffer solver; the
+      // B-line under a tight budget is covered by the brc suite.
+      b_slices=false,
+      dct8x8=false,
       stats=stats_c,
       recon=recon_c,
     ) {
@@ -995,6 +1013,9 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
       vbv_maxrate=60000,
       vbv_bufsize=12000,
       fps=30,
+      b_slices=false,
+      dct8x8=false,
+      cabac_rd=false,
       stats=stats_k,
       recon=recon_k,
     ) {
@@ -1255,8 +1276,8 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
     Err(e) => fail(e)
   }
   let pins1 = [
-    "e2a551ec3d95aa8b253a7a27b596645d", "3072f737b2d0c3470fce540c377dd594", "35ded9aab6ea3979fafc1007bc7aabae",
-    "e135e4b7af460ca5f69457c87b81b52c", "7dc50b8cf30ade5ded4d3244f9a7e858",
+    "292edd53ff3434561e2e1d737c563c98", "abde823cec3dc9021df89d81d02d36a1", "18b4f9149092b59b77fc9f1b9b6506e0",
+    "c5164e001c35014f6003663261d631f9", "8a78a272b64469198398628b4da2f480",
   ]
   for i, f in filtered {
     inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
@@ -1287,8 +1308,8 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "d5774463aab20d0e320a5ca12872e5b0", "1325d8176f00f65e947c3a83f90f5247", "12bb8f28b87273891bf367cc3092f565",
-    "6bed03421e929ac0321bc2519617917c", "82e2124dbb8cd290cd16584c6c62c6e3",
+    "292edd53ff3434561e2e1d737c563c98", "a0adea1495420568e5bc45e0d51bab13", "7e6010ee8d92549c225c386f663db38e",
+    "1c913fbc0d236e8c7442d1da6c816a8a", "aca08b118f66d226ec966ecb02eae60b",
   ]
   for i, f in filtered2 {
     inspect(h264_rc_md5(f.yuvp()), content=pins2[i])

@@ -60,7 +60,9 @@ test "h264 stream: CABAC RD matches batch with AQ and AUD" {
 }
 
 ///|
-test "h264 stream: rejects CABAC RD without CABAC" {
+test "h264 stream: CABAC pricing without CABAC degrades to CAVLC" {
+  // §405: `cabac_rd` defaults on, so the opener treats it as meaningless
+  // without CABAC (a silent no-op) instead of rejecting the combination.
   for b_slices in [false, true] {
     match
       @libavcodec.H264StreamEncoder::open(
@@ -70,8 +72,8 @@ test "h264 stream: rejects CABAC RD without CABAC" {
         cabac_rd=true,
         b_slices~,
       ) {
-      Err(_) => ()
-      Ok(_) => fail("accepted unsupported CABAC RD combination")
+      Ok(_) => ()
+      Err(e) => fail("rejected the degraded combination: \{e}")
     }
   }
 }
@@ -165,6 +167,15 @@ test "h264 stream: byte-identical to batch (cavlc I/P)" {
       aus.push(au)
     }
   }
+  // §405: the defaults schedule B pictures, so the trailing reference
+  // picture only completes at `finish()` — drain it like the CLI does.
+  match enc.finish() {
+    Ok(tail) =>
+      for au in tail {
+        aus.push(au)
+      }
+    Err(e) => fail(e)
+  }
   let streamed = h264s_concat(aus)
   if !h264s_bytes_eq(streamed, batch) {
     fail(
@@ -195,6 +206,15 @@ test "h264 stream: byte-identical to batch (cabac I/P)" {
     for au in enc.drain() {
       aus.push(au)
     }
+  }
+  // §405: the defaults schedule B pictures, so the trailing reference
+  // picture only completes at `finish()` — drain it like the CLI does.
+  match enc.finish() {
+    Ok(tail) =>
+      for au in tail {
+        aus.push(au)
+      }
+    Err(e) => fail(e)
   }
   let streamed = h264s_concat(aus)
   if !h264s_bytes_eq(streamed, batch) {
@@ -245,6 +265,15 @@ test "h264 stream: byte-identical to batch (b schedule)" {
       }
     Err(e) => fail(e)
   }
+  // §405: the defaults schedule B pictures, so the trailing reference
+  // picture only completes at `finish()` — drain it like the CLI does.
+  match enc.finish() {
+    Ok(tail) =>
+      for au in tail {
+        aus.push(au)
+      }
+    Err(e) => fail(e)
+  }
   let streamed = h264s_concat(aus)
   if !h264s_bytes_eq(streamed, batch) {
     fail(
@@ -256,9 +285,15 @@ test "h264 stream: byte-identical to batch (b schedule)" {
 ///|
 test "h264 stream: access units appear when references complete" {
   let frames = h264s_fixture(96, 64, 6)
-  // I/P schedule: one access unit per frame.
+  // I/P schedule (§405: the explicit opt-out; one access unit per frame).
   let enc = match
-    @libavcodec.H264StreamEncoder::open(width=96, height=64, qp=24) {
+    @libavcodec.H264StreamEncoder::open(
+      width=96,
+      height=64,
+      qp=24,
+      b_slices=false,
+      dct8x8=false,
+    ) {
     Ok(e) => e
     Err(e) => fail(e)
   }
@@ -358,6 +393,15 @@ test "h264 stream: decodes and rejects bad input" {
     for au in enc.drain() {
       aus.push(au)
     }
+  }
+  // §405: the defaults schedule B pictures; the trailing reference only
+  // completes at `finish()`.
+  match enc.finish() {
+    Ok(tail) =>
+      for au in tail {
+        aus.push(au)
+      }
+    Err(e) => fail(e)
   }
   let dec = match
     @libavcodec.h264_decode_annexb_frames(h264s_concat(aus), false) {

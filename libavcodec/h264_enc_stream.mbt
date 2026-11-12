@@ -87,29 +87,33 @@ pub fn H264StreamEncoder::open(
   qp~ : Int32 = 26,
   level_idc~ : Int32 = 30,
   cabac~ : Bool = false,
-  cabac_rd~ : Bool = false,
-  dct8x8~ : Bool = false,
-  b_slices~ : Bool = false,
-  b_parts~ : Bool = false,
-  intra_in_b~ : Bool = false,
-  intra4x4_in_b~ : Bool = false,
+  /// Default on (`§403`); requires `cabac`. Pass `cabac_rd~=false` for
+  /// CAVLC-priced decisions.
+  cabac_rd~ : Bool = true,
+  /// Default on (`§403`). Pass `dct8x8~=false` for 4x4-only streams.
+  dct8x8~ : Bool = true,
+  /// Default on (`§403`); needs at least 2 frames per sequence.
+  b_slices~ : Bool = true,
+  /// Default on (`§403`); requires `b_slices`.
+  b_parts~ : Bool = true,
+  /// Default on (`§403`); requires `b_slices`.
+  intra_in_b~ : Bool = true,
+  /// Default on (`§403`); requires `b_slices`.
+  intra4x4_in_b~ : Bool = true,
   aud~ : Bool = false,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[H264StreamEncoder, String] {
-  if cabac_rd && !cabac {
-    return Err("h264 enc: cabac_rd requires CABAC")
-  }
-  if b_parts && !b_slices {
-    return Err("h264 enc: b_parts requires b_slices")
-  }
-  if intra_in_b && !b_slices {
-    return Err("h264 enc: intra_in_b requires b_slices")
-  }
-  if intra4x4_in_b && !b_slices {
-    return Err("h264 enc: intra4x4_in_b requires b_slices")
-  }
+  // `cabac_rd` defaults on (`§403`) and is meaningless without CABAC, so
+  // it silently no-ops instead of erroring; `cabac~` stays authoritative.
+  let cabac_rd = cabac_rd && cabac
+  // §405: the sub-flags default on together with `b_slices`; with the
+  // slices off they degrade silently (the batch entries ignore them the
+  // same way) instead of erroring.
+  let b_parts = b_parts && b_slices
+  let intra_in_b = intra_in_b && b_slices
+  let intra4x4_in_b = intra4x4_in_b && b_slices
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
   }

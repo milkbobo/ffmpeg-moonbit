@@ -270,18 +270,18 @@ fn hrd_parse(stream : Bytes, name : String) -> HrdInfo raise {
 /// fit its declared widths.
 fn hrd_check_widths(name : String, info : HrdInfo) -> Unit raise {
   hrd_check(
-    info.bp_delay < (1 << info.initial_cpb_removal_delay_length),
+    info.bp_delay < 1 << info.initial_cpb_removal_delay_length,
     "\{name}: buffering_period delay \{info.bp_delay} overflows its \{info.initial_cpb_removal_delay_length}-bit field",
   )
   for d in info.pt_removal {
     hrd_check(
-      d < (1 << info.cpb_removal_delay_length),
+      d < 1 << info.cpb_removal_delay_length,
       "\{name}: cpb_removal_delay \{d} overflows its \{info.cpb_removal_delay_length}-bit field",
     )
   }
   for d in info.pt_dpb {
     hrd_check(
-      d < (1 << info.dpb_output_delay_length),
+      d < 1 << info.dpb_output_delay_length,
       "\{name}: dpb_output_delay \{d} overflows its \{info.dpb_output_delay_length}-bit field",
     )
   }

@@ -74,7 +74,11 @@ fn h264_enc_aud_b() -> Bytes {
 /// and `max_num_ref_frames = 2` (one past and one future reference). The
 /// High variant inserts the chroma_format_idc block (as
 /// `h264_enc_sps_body_high`) and drops the constraint flags.
-fn h264_enc_sps_rbsp_b(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
+fn h264_enc_sps_rbsp_b(
+  p : H264EncParams,
+  dct8x8~ : Bool = false,
+  vbv~ : H264Vbv? = None,
+) -> Bytes {
   let r = H264Rbsp::new()
   if dct8x8 {
     r.put(100, 8) // profile_idc: High
@@ -109,7 +113,10 @@ fn h264_enc_sps_rbsp_b(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
     r.put_ue(0)
     r.put_ue((p.mb_height() * 16 - p.height) / 2)
   }
-  r.put_bit(0) // vui_parameters_present_flag
+  match vbv {
+    None => r.put_bit(0) // vui_parameters_present_flag
+    Some(v) => h264_enc_sps_vui(r, v)
+  }
   r.trailing_bits()
   r.finish_raw_of()
 }
@@ -3979,6 +3986,14 @@ fn H264PEncoder::encode_b_frame_cabac(
               // derivations match the decoder's fresh-info lifecycle.
               mirror.infos[mb_idx].chroma_mode = 0
               mirror.infos[mb_idx].transform_8x8 = false
+              // `intra4x4` too: the decoder's most-probable-mode lookup
+              // reads a neighbour's modes only when its `intra4x4` flag
+              // is set (inter neighbours contribute DC); a leftover trial
+              // flag makes the writer code rem-bits against a different
+              // predicted mode than the decoder derives — the bins still
+              // parse, but the decoded absolute modes (and therefore the
+              // reconstruction) diverge.
+              mirror.infos[mb_idx].intra4x4 = false
               self.write_b_mb_syntax_cabac(
                 mirror, enc, states, mb_x, mb_y, plan, c,
               )
@@ -4106,7 +4121,7 @@ fn h264_encode_frames_b(
   // Round-trip the B-capable parameter sets: the parsed PPS carries the
   // dequantisation tables the local reconstructions share with the decoder.
   let ps = new_h264_param_sets()
-  let sps_rbsp = h264_enc_sps_rbsp_b(p, dct8x8~)
+  let sps_rbsp = h264_enc_sps_rbsp_b(p, dct8x8~, vbv~)
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_rbsp), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")

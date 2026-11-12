@@ -165,14 +165,34 @@ test "h264 enc combo: B slice appears only from the third picture" {
 /// explicitly passing every B-line / transform flag as false. §403 keeps the
 /// defaults off; promoting them is a separate change that must re-pin every
 /// stream digest and PSNR gate first.
-test "h264 enc combo: default streams remain opt-in byte-identical" {
+test "h264 enc combo: defaults are the full B-line and opt-out restores it" {
   let frames = h264_combo_fixture(4)
-  let legacy = match
+  // §405: the six flags default on — the default stream must equal the
+  // explicit all-on call and differ from the legacy opt-out one.
+  let default_ = match
     @libavcodec.h264_encode_frames(frames, width=96, height=64, qp=24) {
     Ok(s) => s
     Err(e) => fail("default CAVLC encode failed: \{e}")
   }
-  let explicit = match
+  let all_on = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      b_slices=true,
+      b_parts=true,
+      intra_in_b=true,
+      intra4x4_in_b=true,
+      dct8x8=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail("explicit-on CAVLC encode failed: \{e}")
+  }
+  if default_ != all_on {
+    fail("default CAVLC stream differs from the explicit all-on stream")
+  }
+  let off = match
     @libavcodec.h264_encode_frames(
       frames,
       width=96,
@@ -187,35 +207,35 @@ test "h264 enc combo: default streams remain opt-in byte-identical" {
     Ok(s) => s
     Err(e) => fail("explicit-off CAVLC encode failed: \{e}")
   }
-  if legacy != explicit {
-    fail("default CAVLC stream differs from the explicit opt-out stream")
+  if off == default_ {
+    fail("the opt-out CAVLC stream equals the default (all-on) one")
   }
-  let legacy_cabac = match
+  let default_cabac = match
     @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=24) {
     Ok(s) => s
     Err(e) => fail("default CABAC encode failed: \{e}")
   }
-  let explicit_cabac = match
+  let all_on_cabac = match
     @libavcodec.h264_encode_frames_cabac(
       frames,
       width=96,
       height=64,
       qp=24,
-      b_slices=false,
-      b_parts=false,
-      intra_in_b=false,
-      intra4x4_in_b=false,
-      dct8x8=false,
-      cabac_rd=false,
+      b_slices=true,
+      b_parts=true,
+      intra_in_b=true,
+      intra4x4_in_b=true,
+      dct8x8=true,
+      cabac_rd=true,
     ) {
     Ok(s) => s
-    Err(e) => fail("explicit-off CABAC encode failed: \{e}")
+    Err(e) => fail("explicit-on CABAC encode failed: \{e}")
   }
-  if legacy_cabac != explicit_cabac {
-    fail("default CABAC stream differs from the explicit opt-out stream")
+  if default_cabac != all_on_cabac {
+    fail("default CABAC stream differs from the explicit all-on stream")
   }
-  h264_combo_decode(legacy, "default CAVLC", 4)
-  h264_combo_decode(legacy_cabac, "default CABAC", 4)
+  h264_combo_decode(default_, "default CAVLC", 4)
+  h264_combo_decode(default_cabac, "default CABAC", 4)
 }
 
 ///|

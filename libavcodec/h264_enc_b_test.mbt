@@ -255,12 +255,30 @@ test "h264 enc b: deterministic (both entropies)" {
 }
 
 ///|
-test "h264 enc b: default off is byte-identical" {
+test "h264 enc b: defaults are the full B-line and opt-out restores it" {
   let frames = h264b_fixture(96, 64, 4)
-  let plain = match
+  let default_ = match
     @libavcodec.h264_encode_frames(frames, width=96, height=64, qp=24) {
     Ok(s) => s
     Err(e) => fail(e)
+  }
+  let all_on = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      b_slices=true,
+      b_parts=true,
+      intra_in_b=true,
+      intra4x4_in_b=true,
+      dct8x8=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if default_ != all_on {
+    fail("default stream differs from the explicit all-on stream")
   }
   let off = match
     @libavcodec.h264_encode_frames(
@@ -269,17 +287,16 @@ test "h264 enc b: default off is byte-identical" {
       height=64,
       qp=24,
       b_slices=false,
+      b_parts=false,
+      intra_in_b=false,
+      intra4x4_in_b=false,
+      dct8x8=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if plain.length() != off.length() {
-    fail("explicit b_slices=false changed the stream length")
-  }
-  for i = 0; i < plain.length(); i = i + 1 {
-    if plain[i] != off[i] {
-      fail("byte \{i} differs with b_slices=false")
-    }
+  if off == default_ {
+    fail("the opt-out stream equals the default (all-on) one")
   }
 }
 
@@ -300,7 +317,8 @@ test "h264 enc b: rejects invalid combinations" {
     Err(e) => fail(e)
     Ok(_) => ()
   }
-  // A lone last B has no future reference and stays rejected.
+  // §405: a one-frame sequence degrades b_slices to the I-only stream
+  // instead of erroring (a lone picture can never hold a B).
   let single : Array[(Bytes, Bytes, Bytes)] = [frames[0]]
   match
     @libavcodec.h264_encode_frames(
@@ -310,8 +328,12 @@ test "h264 enc b: rejects invalid combinations" {
       qp=24,
       b_slices=true,
     ) {
-    Err(_) => ()
-    Ok(_) => fail("b_slices with a single frame should fail")
+    Err(e) => fail("single frame with b_slices should degrade, got \{e}")
+    Ok(s) =>
+      match @libavcodec.h264_decode_annexb_frames(s, true) {
+        Ok(d) => if d.length() != 1 { fail("expected 1 frame") }
+        Err(e) => fail(e)
+      }
   }
 }
 
@@ -343,7 +365,7 @@ test "h264 enc b: aud and aq combine" {
   inspect(
     h264b_md5(stream),
     content=(
-      #|560643f59f9263b9419d7a9b09f21413
+      #|e8ad6016715083ca06fd76a490b505d1
     ),
   )
   inspect(
@@ -386,15 +408,64 @@ test "h264 enc b: ffmpeg-arbitrated six frames (96x64, QP 24)" {
     fail("expected 6 frames")
   }
   let md5s = h264b_display_md5s(dec)
-  // TEMP-PROBE
-  for i, f in dec {
-    println("ARBDEC i=\{i} poc=\{f.poc}")
-  }
+  // §405 re-pin (defaults on): frame 0 is unchanged, the reordered
+  // P/B pictures carry the new B-line + 8x8DCT decisions.
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "e090f33594efab799ff326a8fb42c886", "de5481133a503741d0216fa844806f3a",
-    "0818a913be15c8463f994dac76e2418e", "e5739d1d31653a42483f7bfbf3929953", "1c01aeed2b8da17f736302b545dc0234",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "c5c4868e055734b3972615c374c7e693", "3696059c7b46132a7eb2a4f043985fd1",
+    "4868059ef25a65a1ecb1d6cd6dfbeb97", "43719c0f77cefbdabd8a0b9ce2bf57a9", "e751410b417324f561a0548888c140ee",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])
+  }
+}
+
+///|
+/// §405 regression: `b_slices + b_parts + intra4x4_in_b + dct8x8` CABAC
+/// used to break the reconstruction invariant (a leftover intra trial
+/// `intra4x4` flag on an inter neighbour made the writer code the
+/// intra4x4 rem-bits against a different most-probable mode than the
+/// decoder derives — bins parse, pixels diverge). The pre-write clear in
+/// `encode_b_frame_cabac` fixes it; this guards the recon invariant on
+/// the sweeping-box fixture that reproduces.
+test "h264 enc b: all-on cabac keeps the recon invariant" {
+  let frames = h264b_fixture(96, 64, 6)
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      b_slices=true,
+      b_parts=true,
+      intra_in_b=true,
+      intra4x4_in_b=true,
+      dct8x8=true,
+      cabac_rd=true,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  if dec.length() != 6 {
+    fail("expected 6 frames, got \{dec.length()}")
+  }
+  if recon.length() != 5 {
+    fail("expected 5 recons, got \{recon.length()}")
+  }
+  for i in 1..<6 {
+    let r = dec[i]
+    let src = recon[i - 1]
+    for row in 0..<64 {
+      for col in 0..<96 {
+        if src[row * 96 + col] != r.y[row * r.ystride + col].to_byte() {
+          fail("frame \{i} recon mismatch at \{row},\{col}")
+        }
+      }
+    }
   }
 }

@@ -184,13 +184,13 @@ test "h264 rc: CAVLC lands under the target and responds monotonically" {
   debug_inspect(
     stats_s.frame_qps,
     content=(
-      #|[37, 37, 37, 37, 37]
+      #|[37, 37, 37, 37, 38]
     ),
   )
   debug_inspect(
     stats_b.frame_qps,
     content=(
-      #|[20, 20, 20, 20, 21]
+      #|[19, 20, 20, 20, 20]
     ),
   )
   h264_rc_recon_invariant("cavlc-small", small, recon_s, 5)
@@ -227,7 +227,7 @@ test "h264 rc: CABAC lands under the target with dithered QPs" {
   debug_inspect(
     stats.frame_qps,
     content=(
-      #|[37, 38, 38, 38, 38]
+      #|[38, 38, 38, 38, 38]
     ),
   )
   h264_rc_recon_invariant("cabac", stream, recon, 5)
@@ -343,8 +343,8 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins1 = [
-    "4066ce148aa7e45fa58ef43c126ff420", "19474e69984e0fa7fea91a2a84796e72", "9b7d79a0ccec8f155b3f7d925fde70f0",
-    "f64428f141b578e506e09d0e29e61039", "b64d40a425f1a97148402626e732ba86",
+    "81d73c30f11e4182ed4c338451d55d7b", "ae354f7322fcc0e3aedd2c64cf64ff81", "1f5af3bec1c3816ef0c0bc24f38000b2",
+    "978337d695ef2aca44d83cfa4f07ec8d", "f1d686f76c3900f25539f6e72315081d",
   ]
   for i, f in filtered {
     inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
@@ -359,8 +359,8 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "6cbb109497c9e5e741df6f560bd86e61", "17016af44af83a39a611a7798d9305b2", "70e87b4d7f0d6f202592e5c7eee260e6",
-    "b73b57f24e951ac7551c7c6cbf82d76c", "378d4980c759665b22991f6d89e59987",
+    "81d73c30f11e4182ed4c338451d55d7b", "5f7d8818d00dd555554074ecb65c962d", "9d15ad6addfac079ffb45d7a022d74a1",
+    "7390c3f145843d12f25f901e071c6856", "ce243667cce02800ab1302c5255b65ac",
   ]
   for i, f in filtered2 {
     inspect(h264_rc_md5(f.yuvp()), content=pins2[i])

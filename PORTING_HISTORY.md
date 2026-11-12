@@ -12885,3 +12885,43 @@ bparts/b/combo/brc/stream/x264）；`moon check --deny-warn` 干净。
 函数，漏打点会造成假分歧）；ctx 序列一致不代表值一致，需 (ctx,bit)
 全量对拍；编码器/解码器 bin 数不等时先怀疑干跑计价混入（用门控标志
 只采真实写出段）。
+
+## §406 H.264 六开关默认转正——B 线 + 8x8DCT + CABAC 计价全开为默认（2026-11-13，wasm）
+
+沿 §405：修复重建 bug（落选 inter MB 的 mirror `intra4x4` 标志残留，
+使后续 intra MB 的 most-probable 推导读到假邻居模式——写出器真实写
+出前再清 `chroma_mode`/`transform_8x8`/`intra4x4`，解码器/ffmpeg/
+编码器重建三方一致，回归
+`h264 enc b: all-on cabac keeps the recon invariant`）后，第三次
+（最终）转正落地：
+
+- **libavcodec 三个入口**（`h264_encode_frames` / `_cabac` /
+  `H264StreamEncoder::open`）六个开关默认 `true`：
+  `b_slices`/`b_parts`/`intra_in_b`/`intra4x4_in_b`/`dct8x8`/`cabac_rd`。
+- **降级语义**：单帧序列 `b_slices` 自动降为 I-only（原报错删）；
+  无 CABAC 时 `cabac_rd` 静默 no-op（原报错删）；流式入口子旗标随
+  `b_slices=false` 降级（原三条 requires 报错删，与批式一致）。
+- **B 序列 SPS 补 VUI/HRD**：`h264_enc_sps_rbsp_b` 增 `vbv~`，VBV
+  开启时经 `h264_enc_sps_vui` 写 timing/HRD（转正前 B×VBV 流的 SPS
+  从不带 VUI——P 路径一直带，属既有缺口）。
+- **CLI**：默认全开 + `--no-cabac/--no-cabac-rd/--no-dct8x8/
+  --no-b-slices/--no-b-parts/--no-intra-in-b/--no-intra4x4-in-b`
+  反开关；正向旧拼法保留为 no-op；`--stream`×码控互斥保留。
+- **测试重钉/语义更新**（全 wasm 重跑）：
+  - 显示序映射：CABAC 工作点/移动场景/CLI 多帧等按编码序
+    （I,P2,B1,P4,B3,P5）映射回显示位再比对；新工作点
+    **45.80 dB @ 1993 B**（旧 44.24 dB @ 1725 B，+1.55 dB/+268 B）。
+  - ffmpeg 仲裁钉值重钉（b/cabac/brc/rc/md5 共 30+ 处）；bparts/
+    vbv 布局类专测显式 opt-out 保持原 ffmpeg 验证过的字节流。
+  - 语义负例转降级正例（单帧 b_slices、子旗标无 b_slices、
+    cabac_rd 无 cabac）；bi8/bintra 显式隔离竞争 intra 形态。
+  - AUD primary_pic_type 按编码序预期（B AU = 0x50）。
+  - 流式测试补 `finish()`（B 调度尾参考图在 finish 才产出）。
+
+验证：`moon check --target wasm --deny-warn` 干净；wasm 按族
+70 项 + CLI 16/16 全绿。**native/x264/docker 仲裁未跑**（Docker
+Desktop 引擎 500 未恢复，自 §405 起挂起；恢复后跑 §405 交接文档的
+复现命令 + h264_enc_hrd_wbtest 白盒套件）。
+
+剩余：docker 恢复后的 native/x264/ffref 补跑与 ffmpeg 逐钉复核；
+统一播放门面 / 更多 profile 与位深。

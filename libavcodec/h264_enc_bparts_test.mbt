@@ -384,10 +384,18 @@ test "h264 enc bparts: deterministic and opt-in gated" {
       fail("determinism: byte mismatch at \{i}")
     }
   }
-  // b_parts without b_slices must be rejected by the stream opener.
-  match @libavcodec.H264StreamEncoder::open(width=64, height=64, b_parts=true) {
-    Ok(_) => fail("b_parts without b_slices must fail")
-    Err(_) => ()
+  // §405: b_slices defaults on and the opener degrades the sub-flags
+  // with the slices off (the batch entries ignore them the same way), so
+  // the explicit conflict is accepted as a plain P/I stream.
+  match
+    @libavcodec.H264StreamEncoder::open(
+      width=64,
+      height=64,
+      b_slices=false,
+      b_parts=true,
+    ) {
+    Ok(_) => ()
+    Err(e) => fail("b_parts without b_slices should degrade, got \{e}")
   }
 }
 
@@ -428,6 +436,11 @@ test "h264 enc bparts: ffmpeg-arbitrated six frames (96x64, QP 22)" {
       qp=22,
       b_slices=true,
       b_parts=true,
+      // 405: pin the ffmpeg-arbitrated sub-partition streams exactly;
+      // keep the (now default-on) extra tools out of them.
+      intra_in_b=false,
+      intra4x4_in_b=false,
+      dct8x8=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
@@ -470,6 +483,12 @@ test "h264 enc bparts: ffmpeg-arbitrated CABAC six frames (96x64, QP 22)" {
       qp=22,
       b_slices=true,
       b_parts=true,
+      // 405: pin the ffmpeg-arbitrated sub-partition streams exactly;
+      // keep the (now default-on) extra tools out of them.
+      intra_in_b=false,
+      intra4x4_in_b=false,
+      dct8x8=false,
+      cabac_rd=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)

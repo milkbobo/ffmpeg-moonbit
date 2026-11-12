@@ -242,24 +242,27 @@ pub fn h264_encode_frames(
   pcm_first~ : Bool = false,
   intra_in_p~ : Bool = false,
   intra4x4_in_p~ : Bool = false,
-  dct8x8~ : Bool = false,
+  /// Default on (`§403`): 8x8 transforms in I/P pictures (and I8x8 in B
+  /// with `b_slices` since `§400`). Pass `dct8x8~=false` for the legacy
+  /// 4x4-only streams.
+  dct8x8~ : Bool = true,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   aud~ : Bool = false,
-  /// Opt-in (`§393`): code the odd display positions as B pictures
-  /// (I, P2, B1, P4, B3, ... with POC type 0 reordering). Mutually
-  /// exclusive with the rate controls and `dct8x8`.
-  b_slices~ : Bool = false,
-  /// Opt-in (`§395`): sub-partitioned B kinds — 16x8/8x16 two-partition
-  /// kinds and B_8x8 with per-group sub-macroblock decisions. Requires
-  /// `b_slices`; off, every stream is unchanged.
-  b_parts~ : Bool = false,
-  /// Opt-in (`§396`): Intra16x16 macroblocks inside B slices (scene cuts).
-  /// Requires `b_slices`; off, every stream is unchanged.
-  intra_in_b~ : Bool = false,
-  /// Opt-in (`§397`): Intra_NxN (4x4) macroblocks inside B slices. Requires
-  /// `b_slices`; off, every stream is unchanged.
-  intra4x4_in_b~ : Bool = false,
+  /// Default on (`§403`): code the odd display positions as B pictures
+  /// (I, P2, B1, P4, B3, ... with POC type 0 reordering). Needs at least
+  /// 2 frames; pass `b_slices~=false` for the legacy I/P-only streams.
+  b_slices~ : Bool = true,
+  /// Default on (`§403`, on top of `§395`): sub-partitioned B kinds —
+  /// 16x8/8x16 two-partition kinds and B_8x8 with per-group
+  /// sub-macroblock decisions. Requires `b_slices`.
+  b_parts~ : Bool = true,
+  /// Default on (`§403`, on top of `§396`): Intra16x16 macroblocks inside
+  /// B slices (scene cuts). Requires `b_slices`.
+  intra_in_b~ : Bool = true,
+  /// Default on (`§403`, on top of `§397`): Intra_NxN (4x4) macroblocks
+  /// inside B slices. Requires `b_slices`.
+  intra4x4_in_b~ : Bool = true,
   target_bytes~ : Int32 = 0,
   vbv_maxrate~ : Int32 = 0,
   vbv_bufsize~ : Int32 = 0,
@@ -274,10 +277,10 @@ pub fn h264_encode_frames(
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
   }
+  // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
+  // B picture, so it degrades to the I-only stream instead of erroring.
+  let b_slices = b_slices && frames.length() >= 2
   if b_slices {
-    if frames.length() < 2 {
-      return Err("h264 enc: b_slices needs at least 2 frames")
-    }
     let vbv_b = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
       if target_bytes > 0 {
         return Err("h264 enc: target_bytes and vbv are mutually exclusive")

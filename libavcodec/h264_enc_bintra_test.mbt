@@ -111,6 +111,11 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cavlc)" {
       qp=22,
       b_slices=true,
       intra_in_b=true,
+      // §405: keep the competing B-line forms off so these tests still
+      // target Intra16x16 inside B specifically.
+      intra4x4_in_b=false,
+      dct8x8=false,
+      b_parts=false,
       recon~,
       stats~,
     ) {
@@ -150,6 +155,11 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cabac)" {
       qp=22,
       b_slices=true,
       intra_in_b=true,
+      // §405: keep the competing B-line forms off so these tests still
+      // target Intra16x16 inside B specifically.
+      intra4x4_in_b=false,
+      dct8x8=false,
+      b_parts=false,
       recon~,
       stats~,
     ) {
@@ -182,6 +192,11 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cabac rd)" {
       qp=22,
       b_slices=true,
       intra_in_b=true,
+      // §405: keep the competing B-line forms off so these tests still
+      // target Intra16x16 inside B specifically.
+      intra4x4_in_b=false,
+      dct8x8=false,
+      b_parts=false,
       cabac_rd=true,
       recon~,
       stats~,
@@ -213,6 +228,11 @@ test "h264 enc bintra: streaming encoder is byte-identical to the batch" {
       qp=24,
       b_slices=true,
       intra_in_b=true,
+      // §405: keep the competing B-line forms off so these tests still
+      // target Intra16x16 inside B specifically.
+      intra4x4_in_b=false,
+      dct8x8=false,
+      b_parts=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
@@ -224,6 +244,11 @@ test "h264 enc bintra: streaming encoder is byte-identical to the batch" {
       qp=24,
       b_slices=true,
       intra_in_b=true,
+      // §405: keep the competing B-line forms off so these tests still
+      // target Intra16x16 inside B specifically.
+      intra4x4_in_b=false,
+      dct8x8=false,
+      b_parts=false,
     ) {
     Ok(e) => e
     Err(e) => fail(e)
@@ -263,10 +288,18 @@ test "h264 enc bintra: streaming encoder is byte-identical to the batch" {
     }
   }
   // intra_in_b without b_slices must be rejected by the stream opener.
+  // §405: b_slices defaults on, so the negative needs the explicit
+  // §405: the opener degrades the sub-flags with the slices off, so the
+  // explicit conflict is accepted as a plain P/I stream.
   match
-    @libavcodec.H264StreamEncoder::open(width=64, height=64, intra_in_b=true) {
-    Ok(_) => fail("intra_in_b without b_slices must fail")
-    Err(_) => ()
+    @libavcodec.H264StreamEncoder::open(
+      width=64,
+      height=64,
+      b_slices=false,
+      intra_in_b=true,
+    ) {
+    Ok(_) => ()
+    Err(e) => fail("intra_in_b without b_slices should degrade, got \{e}")
   }
 }
 
@@ -308,6 +341,11 @@ test "h264 enc bintra: ffmpeg-arbitrated six frames (96x64, QP 22)" {
       qp=22,
       b_slices=true,
       intra_in_b=true,
+      // §405: keep the competing B-line forms off so these tests still
+      // target Intra16x16 inside B specifically.
+      intra4x4_in_b=false,
+      dct8x8=false,
+      b_parts=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
@@ -523,11 +561,11 @@ test "h264 enc bi4: streaming encoder is byte-identical to the batch" {
       fail("stream/batch byte mismatch at \{i}")
     }
   }
-  // intra4x4_in_b without b_slices must be rejected by the stream opener.
+  // §405: same degradation as above — accepted as a plain P/I stream.
   match
     @libavcodec.H264StreamEncoder::open(width=64, height=64, intra4x4_in_b=true) {
-    Ok(_) => fail("intra4x4_in_b without b_slices must fail")
-    Err(_) => ()
+    Ok(_) => ()
+    Err(e) => fail("intra4x4_in_b without b_slices should degrade, got \{e}")
   }
 }
 

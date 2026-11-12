@@ -240,8 +240,11 @@ test "h264 cabac enc: moving scene I+P round trip" {
     Ok(f) => f
     Err(e) => fail(e)
   }
+  // §405 defaults put the sequence in coding order (see the operating
+  // point test); map each coded picture to its display-position source.
+  let disp = [0, 2, 1, 4, 3, 5]
   for f in 1..<6 {
-    let (y, _, _) = frames[f]
+    let (y, _, _) = frames[disp[f]]
     let r = dec[f]
     let mut sum = 0
     for row = 0; row < 64; row = row + 1 {
@@ -347,10 +350,12 @@ test "h264 cabac enc: QP ladder" {
 ///|
 /// Rate-distortion operating point with CABAC entropy coding (96x64, six
 /// frames, QP 24), measured like the CAVLC slice's gate: luma PSNR of the
-/// unfiltered reconstruction against the source over the five P frames -
-/// **44.24 dB at 1725 bytes** after the §387 transform/quantiser correction
-/// (the 26.5 dB floor this replaced was calibrated to the broken 4x-coarse
-/// Hadamard chain; see the CAVLC gate's history note).
+/// unfiltered reconstruction against the source over the five non-IDR
+/// pictures. **45.80 dB at 1993 bytes** with the §405 defaults (B-line +
+/// 8x8DCT + CABAC-rate pricing all on; the legacy 4x4/I-P-only point was
+/// 44.24 dB at 1725 bytes after the §387 transform/quantiser correction -
+/// the defaults buy +1.55 dB for +268 B). The 42.5 dB floor and the 2100 B
+/// ceiling pin the new operating point.
 test "h264 cabac enc: RD operating point" {
   let frames = h264cab_fixture(96, 64, 6)
   let stream = match
@@ -365,9 +370,13 @@ test "h264 cabac enc: RD operating point" {
   if dec.length() != 6 {
     fail("expected 6 frames, got \{dec.length()}")
   }
+  // §405: with the defaults the sequence is coded I, P2, B1, P4, B3, P5;
+  // the decoder emits coding order, so compare each coded picture against
+  // its display-position source (`disp` maps coding index -> display index).
+  let disp = [0, 2, 1, 4, 3, 5]
   let mut se_sum = 0.0
   for f in 1..<6 {
-    let (y, _, _) = frames[f]
+    let (y, _, _) = frames[disp[f]]
     let r = dec[f]
     for row = 0; row < 64; row = row + 1 {
       for col = 0; col < 96; col = col + 1 {
@@ -379,10 +388,12 @@ test "h264 cabac enc: RD operating point" {
   let mse = se_sum / (5 * 96 * 64).to_double()
   let psnr = 10.0 * @math.log10(255.0 * 255.0 / mse)
   if psnr < 42.5 {
-    fail("cabac RD luma PSNR \{psnr} dB below the 42.5 dB floor")
+    fail("cabac RD luma PSNR \\{psnr} dB below the 42.5 dB floor")
   }
-  if stream.length() > 1900 {
-    fail("cabac RD stream \{stream.length()} bytes above the 3200 byte ceiling")
+  if stream.length() > 2100 {
+    fail(
+      "cabac RD stream \\{stream.length()} bytes above the 2100 byte ceiling",
+    )
   }
 }
 
@@ -412,9 +423,11 @@ test "h264 cabac enc: ffmpeg-arbitrated QP22 I16 frames" {
   if frames_dec.length() != 6 {
     fail("expected 6 frames")
   }
+  // §405 re-pin (defaults on; coding order, deblocked): frame 0 is
+  // unchanged, the P/B pictures carry the new B-line + 8x8DCT decisions.
   let pins = [
-    "5e86c08751cbdc2f069ae812d2c675b9", "6c9bfcc8f31f31650f70eb1fd5d8ebc5", "599dbd25280a5382fb8e7c8660829127",
-    "5d9186c4cd75dff06a0610271c6572bd", "1f8e05fb6c16cfef0096e521a4b1140e", "10099a1ec535d44fd1af5876de95e680",
+    "5e86c08751cbdc2f069ae812d2c675b9", "9034d0ce9bde97af7c7c879f3caf8a04", "c0d32bc8b05d82aaa51a11082971499c",
+    "a74fb39e9ba36ed9acd19ab5635ec36d", "e26c78d342cf30d42f875ba2d969eac8", "24588868e01e54b1bff709bc6ebf5af9",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])
@@ -446,9 +459,10 @@ test "h264 cabac enc: ffmpeg-arbitrated six frames (96x64, QP 24)" {
   if frames_dec.length() != 6 {
     fail("expected 6 frames")
   }
+  // §405 re-pin (defaults on; coding order, deblocked).
   let pins = [
-    "47e79e2c702188f62c13ce0c611fd512", "7486926055bc283e445d788f536f0cb6", "cf18fd21960c104d24820758de21dd53",
-    "6b14b9de0a1684575a4e822c7b232265", "f285715a061532d5b9ee68d6ba5235c8", "b43534371ff12a34ad548ef10f869fc5",
+    "47e79e2c702188f62c13ce0c611fd512", "9f210a004aa853926ea81865a4daa6ac", "4bbaa5fbd653e129cfc55b84eb95329e",
+    "355a508bfbf33f04c26fd126019e4c94", "ace33a7062cbcae265c2a2f44a8314a8", "3bcd6869dbe1894c4dabc03c9355019d",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])

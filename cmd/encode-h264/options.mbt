@@ -41,7 +41,14 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--b-slices"
       | "--b-parts"
       | "--intra-in-b"
-      | "--intra4x4-in-b" => {
+      | "--intra4x4-in-b"
+      | "--no-cabac"
+      | "--no-cabac-rd"
+      | "--no-dct8x8"
+      | "--no-b-slices"
+      | "--no-b-parts"
+      | "--no-intra-in-b"
+      | "--no-intra4x4-in-b" => {
         if values.contains(arg) {
           fail("encode-h264: repeated option \{arg}")
         }
@@ -130,7 +137,9 @@ fn parse_options(args : Array[String]) -> Options raise {
       )
     }
   }
-  if values.contains("--cabac-rd") && !values.contains("--cabac") {
+  if values.contains("--cabac-rd") &&
+    !values.contains("--cabac") &&
+    !values.contains("--no-cabac") {
     fail("encode-h264: cabac-rd requires CABAC")
   }
   if values.contains("--stream") && (target_bytes > 0 || maxrate > 0) {
@@ -138,24 +147,29 @@ fn parse_options(args : Array[String]) -> Options raise {
   }
   // b-slices × rate controls is supported since §398 (B×VBV/ABR); no
   // exclusion here anymore.
-  if values.contains("--b-parts") && !values.contains("--b-slices") {
+  // Since §403 the B-line and transform flags default on; the positive
+  // spellings stay accepted as no-ops and each `--no-*` spelling opts out.
+  // The sub-flags only reject an explicit `--no-b-slices`.
+  let no_b = values.contains("--no-b-slices")
+  if values.contains("--b-parts") && no_b {
     fail("encode-h264: b-parts requires b-slices")
   }
-  if values.contains("--intra-in-b") && !values.contains("--b-slices") {
+  if values.contains("--intra-in-b") && no_b {
     fail("encode-h264: intra-in-b requires b-slices")
   }
-  if values.contains("--intra4x4-in-b") && !values.contains("--b-slices") {
+  if values.contains("--intra4x4-in-b") && no_b {
     fail("encode-h264: intra4x4-in-b requires b-slices")
   }
+  let cabac = values.contains("--cabac") && !values.contains("--no-cabac")
   {
     input,
     output,
     width,
     height,
     qp,
-    cabac: values.contains("--cabac"),
-    cabac_rd: values.contains("--cabac-rd"),
-    dct8x8: values.contains("--dct8x8"),
+    cabac,
+    cabac_rd: cabac && !values.contains("--no-cabac-rd"),
+    dct8x8: !values.contains("--no-dct8x8"),
     aq: values.contains("--aq"),
     aq_strength,
     aud: values.contains("--aud"),
@@ -164,10 +178,10 @@ fn parse_options(args : Array[String]) -> Options raise {
     bufsize,
     fps,
     stream: values.contains("--stream"),
-    b_slices: values.contains("--b-slices"),
-    b_parts: values.contains("--b-parts"),
-    intra_in_b: values.contains("--intra-in-b"),
-    intra4x4_in_b: values.contains("--intra4x4-in-b"),
+    b_slices: !no_b,
+    b_parts: !no_b && !values.contains("--no-b-parts"),
+    intra_in_b: !no_b && !values.contains("--no-intra-in-b"),
+    intra4x4_in_b: !no_b && !values.contains("--no-intra4x4-in-b"),
   }
 }
 
