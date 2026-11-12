@@ -1522,9 +1522,9 @@ fn H264PEncoder::write_b_residual_tail_cavlc(
 /// I_NxN shifted by 23 — the decoder's `kind - 23` feeds the shared intra
 /// path), the sixteen differentially-coded prediction modes, the chroma
 /// prediction mode, the INTRA cbp codeword, the cbp-gated `mb_qp_delta`,
-/// the sixteen cbp-gated 4x4 luma residuals and the chroma residual. No
-/// `transform_size_8x8_flag` exists here (the B slices' PPS keeps 8x8DCT
-/// off).
+/// the sixteen cbp-gated 4x4 luma residuals and the chroma residual. The
+/// I_NxN branch codes `transform_size_8x8_flag = 0` whenever the PPS
+/// enables 8x8DCT (`h264_decode.mbt` reads that bit unconditionally then).
 fn H264PEncoder::write_b_mb_i4_syntax(
   self : H264PEncoder,
   mirror : H264DecCtx,
@@ -1542,9 +1542,15 @@ fn H264PEncoder::write_b_mb_i4_syntax(
   let info = mirror.infos[mb_idx]
   info.mb_type_bits = h264_mb_type_intra4x4
   info.intra4x4 = true
+  info.transform_8x8 = false
   info.chroma_mode = chroma_mode
   info.cbp_all = coded.luma_cbp | (coded.chroma_c_cbp << 4)
   r.put_ue(23)
+  // transform_size_8x8_flag: the I4x4 form signals 0, the I8x8 writer
+  // (:1641) signals 1. Mirrors h264_encode_p.mbt's I4x4-in-P branch.
+  if self.dct8x8 {
+    r.put_bit(0)
+  }
   for i = 0; i < 16; i = i + 1 {
     let gx = h264_luma_block_x[i]
     let gy = h264_luma_block_y[i]
@@ -3172,6 +3178,9 @@ fn H264PEncoder::write_b_residual_tail_cabac(
       0,
     )
   }
+  // Mirror the decoder's per-MB bit: an inter MB contributes 0 to the next
+  // macroblock's ctx-399 neighbour derivation.
+  info.transform_8x8 = false
   if cbp != 0 {
     h264_cabacw_dqp(enc, states, mirror, self.mb_dqp)
     if self.mb_dqp != 0 {
@@ -3621,7 +3630,8 @@ fn H264PEncoder::write_b_mb_i8_syntax_cabac(
   let info = mirror.infos[mb_idx]
   info.mb_type_bits = h264_mb_type_intra4x4
   info.intra4x4 = true
-  info.transform_8x8 = true
+  // The mirror bit is set only AFTER the ctx-399 derivation below, so the
+  // neighbour count matches the decoder's per-MB bit lifecycle.
   info.chroma_mode = chroma_mode
   info.cbp_all = coded.luma_cbp | (coded.chroma_c_cbp << 4)
   let tctx = h264_cabacw_b_type_ctx(mirror, mb_idx)
@@ -3636,12 +3646,15 @@ fn H264PEncoder::write_b_mb_i8_syntax_cabac(
   enc.decision(states, 32, 0)
   mirror.cur_mb_is_intra = true
   // transform_size_8x8_flag: read unconditionally on the I_NxN branch
-  // once the PPS enables the mode.
-  enc.decision(
-    states,
-    399 + h264_neighbor_transform_size(mirror, mb_idx, mb_x, mb_y),
-    1,
-  )
+  // once the PPS enables the mode. The decoder gates the bin on
+  // pps.transform_8x8_mode, so the writer must use the same gate.
+  if self.dct8x8 {
+    enc.decision(
+      states,
+      399 + h264_neighbor_transform_size(mirror, mb_idx, mb_x, mb_y),
+      1,
+    )
+  }
   info.transform_8x8 = true
   // One prediction mode per 8x8 block on the 2x2-replicated grid.
   let cur : Array[Int32] = Array::make(16, 0)
@@ -3766,6 +3779,17 @@ fn H264PEncoder::write_b_mb_i4_syntax_cabac(
   // The intra tree's first bin: 0 is I_NxN (kind 23).
   enc.decision(states, 32, 0)
   mirror.cur_mb_is_intra = true
+  // transform_size_8x8_flag: the I_NxN branch reads this bin
+  // unconditionally once the PPS enables 8x8DCT (ctx 399 + the 8x8DCT
+  // neighbour count). The I4x4 form signals 0.
+  if self.dct8x8 {
+    enc.decision(
+      states,
+      399 + h264_neighbor_transform_size(mirror, mb_idx, mb_x, mb_y),
+      0,
+    )
+  }
+  info.transform_8x8 = false
   for i = 0; i < 16; i = i + 1 {
     let gx = h264_luma_block_x[i]
     let gy = h264_luma_block_y[i]
@@ -3903,6 +3927,11 @@ fn H264PEncoder::encode_b_frame_cabac(
         self.mb_dqp = mq - mirror.qscale
         self.chroma_qp = h264_get_chroma_qp(self.pps, 0, mq)
       }
+      // `h264_decode_mb` clears the per-MB transform flag before parsing
+      // every macroblock; the mirror reuses the infos across the P and B
+      // pictures of the sequence, so a P-picture 8x8DCT macroblock would
+      // otherwise leak into this slice's ctx-399 neighbour derivation.
+      mirror.infos[mb_idx].transform_8x8 = false
       match self.decide_b_mb(mirror, past_y, fut_y, mb_x, mb_y, self.mb_qp) {
         Ok((BSkip, _)) => {
           // CABAC has no skip RUN: one mb_skip_flag bin per macroblock.

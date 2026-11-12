@@ -452,3 +452,85 @@ pub fn x264_probe_annexb(stream : Bytes) -> Result[X264AnnexbProbe, String] {
   }
   Ok({ n_frames, warnings, errors, nal_types, au_sizes, })
 }
+
+///|
+/// One picture as the real FFmpeg H.264 decoder output it, in display
+/// order. `pict_type` follows `AVPictureType` (1 = I, 2 = P, 3 = B);
+/// `key_frame` is 1 when `AV_FRAME_FLAG_KEY` is set (FFmpeg n9.0.2 removed
+/// `AVFrame.key_frame`). `flags` / `decode_error_flags` are the raw frame
+/// flags. `digest_lo` / `digest_hi` are the halves of a 64-bit FNV-1a
+/// digest over the visible-area planes (Y, then chroma, row-major, LE
+/// samples); `pts_lo` / `pts_hi` are the halves of the int64 PTS bits.
+pub(all) struct X264FrameInfo {
+  pict_type : Int32
+  key_frame : Int32
+  flags : Int32
+  decode_error_flags : Int32
+  pts_lo : Int32
+  pts_hi : Int32
+  digest_lo : Int32
+  digest_hi : Int32
+}
+
+///|
+/// Frame-level C-side view of an Annex B stream: geometry and pixel format
+/// of the first picture, the WARNING/ERROR diagnostics raised while
+/// decoding, and one `X264FrameInfo` per output picture in display order.
+pub struct X264FrameProbe {
+  n_frames : Int32
+  warnings : Int32
+  errors : Int32
+  width : Int32
+  height : Int32
+  pix_fmt : Int32
+  frames : Array[X264FrameInfo]
+}
+
+///|
+/// Probe an Annex B stream with the real FFmpeg H.264 decoder at frame
+/// granularity. Shape validation and blob decoding stay on the MoonBit
+/// side of the boundary; a NULL return from the stub surfaces as `Err`.
+/// The C stub installs a process-global av_log callback for the duration
+/// of the decode, so callers must not run this probe concurrently with
+/// `x264_probe_annexb`.
+pub fn x264_probe_frames(stream : Bytes) -> Result[X264FrameProbe, String] {
+  if stream.length() < 8 {
+    return Err("x264probe: stream too short for an Annex B access unit")
+  }
+  let blob = match x264probe_frames_ffi(stream) {
+    Some(b) => b
+    None => return Err("x264probe: C frame decoder failed on the stream")
+  }
+  if blob.length() < 32 {
+    return Err("x264probe: short frame blob header")
+  }
+  let n_frames = x264_rd_i32(blob, 0)
+  let warnings = x264_rd_i32(blob, 4)
+  let errors = x264_rd_i32(blob, 8)
+  let width = x264_rd_i32(blob, 12)
+  let height = x264_rd_i32(blob, 16)
+  let pix_fmt = x264_rd_i32(blob, 20)
+  let fields = x264_rd_i32(blob, 24)
+  if fields != 8 || n_frames < 0 {
+    return Err("x264probe: bad frame blob shape")
+  }
+  let expected = 32 + 32 * n_frames
+  if blob.length() != expected {
+    return Err("x264probe: frame blob size \{blob.length()} != \{expected}")
+  }
+  let frames : Array[X264FrameInfo] = []
+  for i = 0; i < n_frames; i = i + 1 {
+    let base = 32 + 32 * i
+    frames.push({
+      pict_type: x264_rd_i32(blob, base),
+      key_frame: x264_rd_i32(blob, base + 4),
+      flags: x264_rd_i32(blob, base + 8),
+      decode_error_flags: x264_rd_i32(blob, base + 12),
+      pts_lo: x264_rd_i32(blob, base + 16),
+      pts_hi: x264_rd_i32(blob, base + 20),
+      digest_lo: x264_rd_i32(blob, base + 24),
+      digest_hi: x264_rd_i32(blob, base + 28),
+    })
+  }
+  Ok({ n_frames, warnings, errors, width, height, pix_fmt, frames, })
+}

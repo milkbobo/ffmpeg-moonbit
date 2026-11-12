@@ -19,11 +19,13 @@
 #include "moonbit.h"
 
 #include "libavcodec/avcodec.h"
+#include "libavutil/common.h"
 #include "libavutil/dict.h"
 #include "libavutil/error.h"
 #include "libavutil/frame.h"
 #include "libavutil/log.h"
 #include "libavutil/opt.h"
+#include "libavutil/pixdesc.h"
 #include "libavutil/pixfmt.h"
 
 #include <limits.h>
@@ -721,6 +723,231 @@ moonbit_bytes_t x264probe_annexb(moonbit_bytes_t data) {
   }
   free(nals.v);
   free(aus.v);
+  av_packet_free(&pkt);
+  av_frame_free(&frame);
+  if (parser)
+    av_parser_close(parser);
+  avcodec_free_context(&cc);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Frame-level arbitration probe (§403): decode an Annex B stream with the
+// real FFmpeg H.264 decoder and report, per output picture, its picture
+// type / key-frame and display-order metadata plus a stable FNV-1a digest
+// of the visible-area planes. A pure-MoonBit B-slice stream can then be
+// checked by an independent decoder for frame reordering and zero
+// diagnostics without shelling out to the ffmpeg CLI.
+//
+// Blob layout (all little-endian int32):
+//   [n_frames][warnings][errors][width][height][pix_fmt][8][0]
+//   then n_frames * 8 records:
+//   [pict_type][key_flag][flags][decode_error_flags]
+//   [pts_lo][pts_hi][digest_lo][digest_hi]
+// FFmpeg n9.0.2 removed AVFrame.key_frame / coded_picture_number /
+// display_picture_number; the key flag lives in AV_FRAME_FLAG_KEY.
+// ---------------------------------------------------------------------------
+
+#define PROBE_FRAME_FIELDS 8
+
+static uint64_t probe_frame_fnv(const AVFrame *f) {
+  uint64_t h = 14695981039346656037ULL;
+  enum AVPixelFormat fmt = (enum AVPixelFormat)f->format;
+  const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(fmt);
+  int planes = av_pix_fmt_count_planes(fmt);
+  int hs = desc ? desc->log2_chroma_h : 1;
+  int ws = desc ? desc->log2_chroma_w : 1;
+  int bps = desc && desc->comp[0].depth > 8 ? 2 : 1;
+  if (planes < 1 || planes > 4)
+    return h;
+  for (int p = 0; p < planes; p++) {
+    int pw = p == 0 ? f->width : AV_CEIL_RSHIFT(f->width, ws);
+    int ph = p == 0 ? f->height : AV_CEIL_RSHIFT(f->height, hs);
+    if (!f->data[p])
+      continue;
+    for (int y = 0; y < ph; y++) {
+      const uint8_t *row = f->data[p] + (size_t)y * f->linesize[p];
+      for (int x = 0; x < pw * bps; x++) {
+        h ^= row[x];
+        h *= 1099511628211ULL;
+      }
+    }
+  }
+  return h;
+}
+
+static void probe_push_frame(I32Vec *v, const AVFrame *f, int *failed) {
+  uint64_t digest = probe_frame_fnv(f);
+  uint64_t pts = (uint64_t)f->pts;
+  int32_t rec[PROBE_FRAME_FIELDS] = {
+      (int32_t)f->pict_type,
+      (f->flags & AV_FRAME_FLAG_KEY) ? 1 : 0,
+      (int32_t)f->flags,
+      (int32_t)f->decode_error_flags,
+      (int32_t)(uint32_t)pts,
+      (int32_t)(uint32_t)(pts >> 32),
+      (int32_t)(uint32_t)digest,
+      (int32_t)(uint32_t)(digest >> 32),
+  };
+  for (int i = 0; i < PROBE_FRAME_FIELDS; i++)
+    if (i32vec_push(v, rec[i]) < 0)
+      *failed = 1;
+}
+
+MOONBIT_FFI_EXPORT
+moonbit_bytes_t x264probe_frames(moonbit_bytes_t data) {
+  if (!data)
+    return NULL;
+  size_t len = (size_t)Moonbit_array_length(data);
+  const uint8_t *buf = (const uint8_t *)data;
+  I32Vec recs = {0};
+  int failed = 0, n_frames = 0;
+  int width = 0, height = 0, pix_fmt = -1;
+  moonbit_bytes_t out = NULL;
+
+  const AVCodec *dec = avcodec_find_decoder(AV_CODEC_ID_H264);
+  AVCodecParserContext *parser = av_parser_init(AV_CODEC_ID_H264);
+  AVCodecContext *cc = dec ? avcodec_alloc_context3(dec) : NULL;
+  AVFrame *frame = av_frame_alloc();
+  AVPacket *pkt = av_packet_alloc();
+  if (!cc || !frame || !pkt || !parser)
+    failed = 1;
+
+  probe_warn = 0;
+  probe_err = 0;
+  // av_log's callback is process-global: restore the default on every
+  // exit path. Tests using either probe must be serial (see §391).
+  probe_prev_log = av_log_default_callback;
+  av_log_set_callback(probe_log_cb);
+
+  if (!failed && avcodec_open2(cc, dec, NULL) < 0)
+    failed = 1;
+
+  if (!failed) {
+    const uint8_t *cur = buf;
+    size_t left = len;
+    while (left > 0) {
+      uint8_t *au;
+      int au_size;
+      int used = av_parser_parse2(parser, cc, &au, &au_size, cur, (int)left,
+                                  AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+      if (used < 0 || used > (int)left) {
+        failed = 1;
+        break;
+      }
+      cur += used;
+      left -= (size_t)used;
+      if (au_size > 0) {
+        if (av_new_packet(pkt, au_size) < 0) {
+          failed = 1;
+          break;
+        }
+        memcpy(pkt->data, au, au_size);
+        if (avcodec_send_packet(cc, pkt) < 0) {
+          av_packet_unref(pkt);
+          failed = 1;
+          break;
+        }
+        av_packet_unref(pkt);
+        for (;;) {
+          int ret = avcodec_receive_frame(cc, frame);
+          if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            break;
+          if (ret < 0) {
+            failed = 1;
+            break;
+          }
+          if (n_frames == 0) {
+            width = frame->width;
+            height = frame->height;
+            pix_fmt = frame->format;
+          }
+          probe_push_frame(&recs, frame, &failed);
+          n_frames++;
+          av_frame_unref(frame);
+          if (failed)
+            break;
+        }
+      }
+      if (failed)
+        break;
+    }
+  }
+  if (!failed) {
+    uint8_t *au;
+    int au_size;
+    av_parser_parse2(parser, cc, &au, &au_size, NULL, 0, AV_NOPTS_VALUE,
+                     AV_NOPTS_VALUE, 0);
+    if (au_size > 0 && av_new_packet(pkt, au_size) == 0) {
+      memcpy(pkt->data, au, au_size);
+      if (avcodec_send_packet(cc, pkt) == 0) {
+        av_packet_unref(pkt);
+        for (;;) {
+          int ret = avcodec_receive_frame(cc, frame);
+          if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            break;
+          if (ret < 0) {
+            failed = 1;
+            break;
+          }
+          if (n_frames == 0) {
+            width = frame->width;
+            height = frame->height;
+            pix_fmt = frame->format;
+          }
+          probe_push_frame(&recs, frame, &failed);
+          n_frames++;
+          av_frame_unref(frame);
+          if (failed)
+            break;
+        }
+      } else {
+        av_packet_unref(pkt);
+      }
+    }
+  }
+  if (!failed && avcodec_send_packet(cc, NULL) >= 0) {
+    for (;;) {
+      int ret = avcodec_receive_frame(cc, frame);
+      if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+        break;
+      if (ret < 0) {
+        failed = 1;
+        break;
+      }
+      if (n_frames == 0) {
+        width = frame->width;
+        height = frame->height;
+        pix_fmt = frame->format;
+      }
+      probe_push_frame(&recs, frame, &failed);
+      n_frames++;
+      av_frame_unref(frame);
+      if (failed)
+        break;
+    }
+  }
+  av_log_set_callback(probe_prev_log);
+
+  if (!failed && recs.n == n_frames * PROBE_FRAME_FIELDS) {
+    size_t total = 32 + 4 * (size_t)recs.n;
+    if (total <= (size_t)(INT32_MAX - 1)) {
+      out = moonbit_make_bytes((int32_t)total, 0);
+      if (out) {
+        put_i32(out + 0, n_frames);
+        put_i32(out + 4, probe_warn);
+        put_i32(out + 8, probe_err);
+        put_i32(out + 12, width);
+        put_i32(out + 16, height);
+        put_i32(out + 20, pix_fmt);
+        put_i32(out + 24, PROBE_FRAME_FIELDS);
+        put_i32(out + 28, 0);
+        for (int k = 0; k < recs.n; k++)
+          put_i32(out + 32 + 4 * k, recs.v[k]);
+      }
+    }
+  }
+  free(recs.v);
   av_packet_free(&pkt);
   av_frame_free(&frame);
   if (parser)

@@ -3,9 +3,10 @@
 // The official run-asan.py does not fit this toolchain: MoonBit's
 // libruntime.a is built on mimalloc and is not ASan-compatible. Instead this
 // harness supplies the three runtime symbols the stub links against, so the
-// C side (Annex B decode, NAL/AU probe, log-callback install/restore,
-// growable vectors, blob packing) can be checked for out-of-bounds writes,
-// use-after-free and leaks while still calling the real FFmpeg libraries.
+// C side (Annex B decode, NAL/AU probe, frame-level probe, log-callback
+// install/restore, growable vectors, blob packing) can be checked for
+// out-of-bounds writes, use-after-free and leaks while still calling the
+// real FFmpeg libraries.
 //
 // Build inside ffmpeg-moonbit-ffref:nine-x264:
 //   cc -fsanitize=address -g -O1 -I/root/.moon/include \
@@ -55,6 +56,7 @@ void *moonbit_make_external_object(
 }
 
 MOONBIT_FFI_EXPORT moonbit_bytes_t x264probe_annexb(moonbit_bytes_t data);
+MOONBIT_FFI_EXPORT moonbit_bytes_t x264probe_frames(moonbit_bytes_t data);
 MOONBIT_FFI_EXPORT moonbit_bytes_t x264dec_annexb(moonbit_bytes_t data);
 
 static void release(moonbit_bytes_t b) {
@@ -121,6 +123,33 @@ static int run(const char *path) {
       sink += probe[i];
     (void)sink;
     release(probe);
+
+    // Frame-level probe: 8 int32 records per decoded picture. Check the
+    // claimed shape against the real blob length, then touch every byte so
+    // ASan guards the full packed range (including the FNV digest halves).
+    moonbit_bytes_t fprobe = x264probe_frames(stream);
+    if (!fprobe) {
+      fprintf(stderr, "asan: frame probe returned NULL on pass %d\n", pass);
+      return 1;
+    }
+    int32_t fn = rd_i32(fprobe);
+    int32_t fw = rd_i32(fprobe + 4);
+    int32_t fe = rd_i32(fprobe + 8);
+    int32_t fields = rd_i32(fprobe + 24);
+    int32_t flen = (int32_t)Moonbit_array_length(fprobe);
+    printf(
+      "asan pass %d frames: n=%d warn=%d err=%d fields=%d len=%d\n",
+      pass, fn, fw, fe, fields, flen
+    );
+    if (fields != 8 || fn < 0 || flen != 32 + 32 * fn) {
+      fprintf(stderr, "asan: frame probe blob shape mismatch\n");
+      return 1;
+    }
+    volatile int fsink = 0;
+    for (int i = 0; i < flen; i++)
+      fsink += fprobe[i];
+    (void)fsink;
+    release(fprobe);
   }
 
   moonbit_bytes_t dec = x264dec_annexb(stream);
@@ -146,6 +175,9 @@ static int run(const char *path) {
     moonbit_bytes_t r = x264probe_annexb(tiny);
     printf("asan short-blob probe: %s\n", r ? "blob" : "NULL");
     release(r);
+    moonbit_bytes_t fr = x264probe_frames(tiny);
+    printf("asan short-blob frame probe: %s\n", fr ? "blob" : "NULL");
+    release(fr);
     release(tiny);
   }
   return 0;

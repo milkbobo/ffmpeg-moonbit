@@ -12721,3 +12721,96 @@ ASAN_OPTIONS=detect_leaks=1:fast_unwind_on_malloc=0` 一轮全清
 C 桩零改动通过）。
 
 剩余（沿 §400）：B 线各 opt-in 转正、`H264EncStats` B-intra 计数口径。
+
+## §403 H.264 B 线组合正确性收口 + x264 帧级 C 仲裁探针（2026-11-12）
+
+接手时工作树有一片**未完成的 §403**：把 `dct8x8` / `b_slices` /
+`b_parts` / `intra_in_b` / `intra4x4_in_b` / `cabac_rd` 六个 opt-in 默认
+翻成 `true`，并加了 CLI `--no-*` 反开关。该 WIP 的探针矩阵有 3 类解码
+错误未定位、大量钉值待重钉，交接文档自述「未验证、未提交」。
+
+**本轮决策：回退默认值翻转，六个开关继续 opt-in。** 理由是转正是独立的
+产品决策——它会推翻 §376–§402 全部 54 个测试文件的码流钉值与
+「默认路径逐字节不变」契约，需要逐条 docker ffmpeg 仲裁重钉，不应夹带在
+正确性修复里交付。WIP 的 4 个文件（`h264_encode_p.mbt` /
+`h264_enc_cabac.mbt` / `h264_enc_stream.mbt` / `cmd/encode-h264/options.mbt`）
+按 `git checkout --` 恢复到 §402 的 HEAD，diff 已备份在
+`.scratch/promote_wip.diff`；`h264_encode_b.mbt` 的 bug 修复保留。
+
+### 三处真 bug（位级根因）
+
+两路独立只读调查交叉印证，主因是 **I_NxN 分支漏写
+`transform_size_8x8_flag`**：解码端 `h264_decode.mbt:674`（CAVLC）与
+`h264_cabac_mb.mbt:998`（CABAC）在 PPS `transform_8x8_mode != 0` 时对该
+分支**无条件读 1 bit**，而 B slice 的 I4x4 写入层沿用了 §397 的旧注释
+「B slices' PPS keeps 8x8DCT off」，只写 `put_ue(23)` 就直接进 16 个
+pred mode。I / P 帧的同一分支早已修好（`h264_encode.mbt:1187`、
+`h264_encode_p.mbt:3054`、`h264_enc_cabac.mbt:2189`），B 帧漏跟。
+
+| # | 文件 | 修复 |
+| --- | --- | --- |
+| 1 | `h264_encode_b.mbt` `write_b_mb_i4_syntax` | `dct8x8` 时补 `r.put_bit(0)`；显式 `info.transform_8x8 = false`；改正过时注释 |
+| 2 | `h264_encode_b.mbt` `write_b_mb_i4_syntax_cabac` | `dct8x8` 时补 `enc.decision(399 + neighbor_transform_size, 0)`；显式清 mirror 位 |
+| 3 | `h264_encode_b.mbt` `write_b_mb_i8_syntax_cabac` | 删掉 ctx-399 推导**之前**的 `info.transform_8x8 = true`，改为写完 flag 后置位；给 flag bin 加 `if self.dct8x8` 门控（对齐解码端的 PPS 门控） |
+| 4 | `h264_encode_b.mbt` `write_b_residual_tail_cabac` | inter MB 写 `flag=0` 后回写 `info.transform_8x8 = false`，让下一个 MB 的 ctx-399 邻居推导与解码端逐 MB 生命周期一致 |
+
+四者共同解释全部症状：CAVLC 缺 1 bit 使解码端把 I4x4 按 I8x8 解读
+（16↔4 pred mode、16×4x4↔4×8x8 残差、nC 粒度错位）→
+`invalid coeff_token` / `intra prediction mode needs unavailable left
+samples`；CABAC 少一个 bin 或 ctx 编号分歧使 `low/range` 与 `states[]`
+从该 bin 起分叉 → `missing end_of_slice_flag` /
+`H.264 CABAC bytestream overread`。`b+dct8x8` 在 n=2（I+P）正常、n=3
+（首现 B slice）才挂，与「B slice 的 8x8DCT 邻居计数第一次非 0」吻合。
+
+修复后 28 个 opt-in 组合（CAVLC/CABAC × 单开关/配对/全开）全部
+`ok`，收敛为正式黑盒 `libavcodec/h264_enc_combo_test.mbt`（4 测、
+14 个关键组合 + 默认路径逐字节不变断言）。所有新增语法均受
+`if self.dct8x8` 保护，既有钉值零改动。
+
+### C 绑定面（用户指定两个技能）
+
+按 `moonbit-c-binding` 四阶段 + `make-moonbit-c-bindings` 五步，给
+x264 native oracle 新增 **帧级仲裁探针** `x264probe_frames`：
+
+- **Survey**：直接查镜像 `/usr/local/include/libavutil/frame.h` 确认
+  FFmpeg n9.0.2 **已移除** `AVFrame.key_frame` /
+  `coded_picture_number` / `display_picture_number`；改用
+  `pict_type` / `AV_FRAME_FLAG_KEY` / `flags` / `decode_error_flags` /
+  `pts`。第一次按旧 API 写直接编译失败，改后通过（freshness gate 实证）。
+- **Design / FFI**：`libx264_stub.c` 解码每个 AU 后逐帧记录 8 个 int32
+  （类型、key flag、flags、decode_error_flags、PTS 两半、可见区域平面
+  的 64-bit FNV-1a 摘要两半），连同 WARNING/ERROR 计数打包成
+  `[8-word header][n_frames × 8 records]`。`ffi.mbt` 私有 extern
+  `x264probe_frames_ffi` 带 `#borrow(stream)`——C 侧只在调用期把流拷进
+  parser，不跨调用持有 MoonBit 对象；`moon.pkg` 的 `native-stub` 与
+  `targets` 门控无需改动。
+- **MoonBit API**：`x264.mbt` 增 `X264FrameInfo` / `X264FrameProbe`
+  领域类型与 `x264_probe_frames`，在安全层做长度下限、
+  `fields == 8`、`blob.length() == 32 + 32*n_frames` 的精确形状校验，
+  NULL 映射为 `Err`，坏输入不进 C。
+- **Validate**：`x264_wbtest.mbt` 增 4 用例——坏输入边界、全开 B 流在
+  真 FFmpeg 解码器下零告警且出现 B 帧 / 与纯 MoonBit 解码器帧数一致、
+  摘要稳定且对 QP 敏感、I/P-only 与 B-reordered 分流。定向 ASan
+  harness 扩展覆盖新入口（真 libx264 `-bf 2` 的 5 帧 B 流，两轮 probe
+  + decode + 短 blob，`detect_leaks=1` 全清）。
+
+这补上了 §401 留下的「x264 流 C 侧零告警复核」之外更进一层的
+**帧级**外部仲裁：`x264_probe_annexb` 看 NAL/AU，本探针看图像类型、
+显示序、像素摘要与诊断。
+
+### 验证
+
+| 门 | 结果 |
+| --- | --- |
+| 修复前 / 后组合探针 | 28 组合中 6 个失败 → **28/28 ok** |
+| 正式黑盒 `h264_enc_combo_test.mbt` | **4/4** |
+| H.264 编码全系 17 个测试文件（wasm，按文件串行） | 15 个 **全绿**；2 个白盒文件在本机 wasm 命中既有 `local count too large` 上限，改 `--target wasm-gc` 各 **3/3** |
+| `moon check --target wasm --deny-warn --no-render` / `moon info` | **EXIT=0** |
+| docker x264 native（C 桩重编） | **38/38**（原 34 + 新 4） |
+| 定向 ASan（5 帧 B 流 + 短 blob） | **EXIT=0**，两轮 frame probe `n=5 warn=0 err=0 fields=8 len=192`，无越界 / UAF / 泄漏 |
+| docker `moon check --target native` / `moon info --target native` | **均 EXIT=0**（`check` 9 处既有 `derive(...)` deprecation 警告、0 error） |
+
+剩余（沿 §400/§403）：六个 opt-in 转正（须先重钉全部码流/PSNR 门）、
+`H264EncStats` B-intra 专用计数（`bi16_mbs`/`bi4_mbs`/`bi8_mbs`，
+现复用 P 帧计数器）、CABAC B inter 的 `dct8x8_allowed` 完整镜像解码端
+`direct_8x8 || !direct.any()` 条件（当前 SPS 恒 `direct_8x8=1`，不触发）。

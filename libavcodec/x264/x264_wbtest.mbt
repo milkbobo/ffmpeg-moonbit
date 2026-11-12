@@ -1494,3 +1494,196 @@ test "pure H264 AQ strength: maximum deltas decode identically in C" {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Frame-level C arbitration probe (§403): an independent FFmpeg decoder view
+// of the pure-MoonBit B-slice / 8x8DCT streams whose syntax bugs were fixed
+// in this section. Where `x264_probe_annexb` sees NALs and AUs, this probe
+// sees pictures: types, reordering, geometry, diagnostics and pixel digests.
+// ---------------------------------------------------------------------------
+
+///|
+fn x264_frame_probe_fixture(count : Int32) -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 96
+  let h = 64
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<count {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    // A moving diagonal edge gives the intra / inter / 8x8 decisions signal.
+    for row in 0..<h {
+      for col in 0..<w {
+        let edge = (col + row + f * 3) % 24 < 4
+        y.push((if edge { 208 } else { 48 }).to_byte())
+      }
+    }
+    for _row in 0..<(h / 2) {
+      for _col in 0..<(w / 2) {
+        u.push((128).to_byte())
+        v.push((128).to_byte())
+      }
+    }
+    out.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  out
+}
+
+///|
+/// `all_on` is exactly the combination that used to produce broken B slices
+/// (I4x4-in-B x 8x8DCT); `false` is the legacy I/P-only default.
+fn x264_frame_probe_encode(
+  frames : Array[(Bytes, Bytes, Bytes)],
+  qp : Int32,
+  all_on : Bool,
+) -> Bytes raise {
+  let result = if all_on {
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp~,
+      b_slices=true,
+      b_parts=true,
+      intra_in_b=true,
+      intra4x4_in_b=true,
+      dct8x8=true,
+    )
+  } else {
+    @libavcodec.h264_encode_frames(frames, width=96, height=64, qp~)
+  }
+  match result {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+}
+
+///|
+/// Bad input is rejected on the MoonBit side before it can reach the C
+/// decoder (skill Phase 3: validate shapes at the safe boundary).
+test "x264 oracle: frame probe rejects short and shape-invalid streams" {
+  let short : Array[Byte] = [0, 0, 0]
+  match x264_probe_frames(Bytes::from_array(short[:])) {
+    Ok(_) => fail("frame probe accepted a 3-byte stream")
+    Err(_) => ()
+  }
+  // A start-code-only blob reaches C; it may fail outright or produce no
+  // pictures, but it must never be reported as a decoded frame sequence.
+  let junk : Array[Byte] = [0, 0, 0, 1, 0x67, 0x42, 0, 0, 1]
+  match x264_probe_frames(Bytes::from_array(junk[:])) {
+    Ok(p) => assert_eq(p.frames.length(), 0)
+    Err(_) => ()
+  }
+}
+
+///|
+/// The real FFmpeg decoder must consume the all-on B stream with zero
+/// diagnostics and see the reordered GOP as pictures, not just NALs.
+test "x264 oracle: frame probe arbitrates an all-on B-slice stream" {
+  let frames = x264_frame_probe_fixture(5)
+  let stream = x264_frame_probe_encode(frames, 24, true)
+  let probe = match x264_probe_frames(stream) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  assert_eq(probe.n_frames, 5)
+  assert_eq(probe.warnings, 0)
+  assert_eq(probe.errors, 0)
+  assert_eq(probe.width, 96)
+  assert_eq(probe.height, 64)
+  assert_eq(probe.frames.length(), 5)
+  // FFmpeg outputs pictures in display order: an I key frame first, then
+  // at least one B picture from the reordered GOP.
+  assert_eq(probe.frames[0].pict_type, 1)
+  assert_eq(probe.frames[0].key_frame, 1)
+  let mut n_b = 0
+  for info in probe.frames {
+    if info.pict_type == 3 {
+      n_b = n_b + 1
+    }
+  }
+  if n_b == 0 {
+    fail("C decoder saw no B pictures in a b_slices stream")
+  }
+  // The pure MoonBit decoder must agree on the picture count.
+  let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
+  assert_eq(probe.frames.length(), decoded.length())
+}
+
+///|
+/// The digest is a stable function of the decoded pixels, so it can be used
+/// to compare configurations without shipping raw YUV across the boundary.
+test "x264 oracle: frame digests are stable and content-sensitive" {
+  let frames = x264_frame_probe_fixture(5)
+  let a = x264_frame_probe_encode(frames, 24, true)
+  let b = x264_frame_probe_encode(frames, 30, true)
+  let pa = match x264_probe_frames(a) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  let pa_again = match x264_probe_frames(a) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  let pb = match x264_probe_frames(b) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  assert_eq(pa.frames.length(), pa_again.frames.length())
+  let mut differs = false
+  for i in 0..<pa.frames.length() {
+    assert_eq(pa.frames[i].digest_lo, pa_again.frames[i].digest_lo)
+    assert_eq(pa.frames[i].digest_hi, pa_again.frames[i].digest_hi)
+    if pa.frames[i].digest_lo != pb.frames[i].digest_lo ||
+      pa.frames[i].digest_hi != pb.frames[i].digest_hi {
+      differs = true
+    }
+  }
+  if !differs {
+    fail("QP 24 and QP 30 produced identical C decode digests")
+  }
+}
+
+///|
+/// A legacy I/P-only stream has no B pictures; the same frames with the
+/// B-line enabled do. This pins the probe's ability to observe reordering.
+test "x264 oracle: frame probe separates I/P-only from B-reordered streams" {
+  let frames = x264_frame_probe_fixture(5)
+  let plain = x264_frame_probe_encode(frames, 24, false)
+  let with_b = x264_frame_probe_encode(frames, 24, true)
+  let pp = match x264_probe_frames(plain) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  let bp = match x264_probe_frames(with_b) {
+    Ok(p) => p
+    Err(e) => fail(e)
+  }
+  assert_eq(pp.frames.length(), 5)
+  assert_eq(bp.frames.length(), 5)
+  assert_eq(pp.warnings, 0)
+  assert_eq(pp.errors, 0)
+  for info in pp.frames {
+    if info.pict_type == 3 {
+      fail("legacy I/P-only stream reported a B picture")
+    }
+  }
+  let mut n_b = 0
+  for info in bp.frames {
+    if info.pict_type == 3 {
+      n_b = n_b + 1
+    }
+  }
+  if n_b == 0 {
+    fail("B-line stream reported no B pictures")
+  }
+}

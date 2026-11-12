@@ -86,3 +86,13 @@ extern "c" fn x264dec_annexb_ffi(stream : Bytes) -> Bytes? = "x264dec_annexb"
 /// during the call, so the parameter is call-scoped (`#borrow`).
 #borrow(stream)
 extern "c" fn x264probe_annexb_ffi(stream : Bytes) -> Bytes? = "x264probe_annexb"
+
+///|
+/// C-side frame-level arbitration probe (`x264probe_frames` in the stub):
+/// decodes with FFmpeg's real H.264 decoder and returns, per output
+/// picture, the picture type / key-frame / display-order metadata and an
+/// FNV-1a digest of the visible-area planes. The stream bytes are copied
+/// into the parser during the call, so the parameter is call-scoped
+/// (`#borrow`); a NULL return means the C decode failed.
+#borrow(stream)
+extern "c" fn x264probe_frames_ffi(stream : Bytes) -> Bytes? = "x264probe_frames"
