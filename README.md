@@ -445,8 +445,9 @@ DASH 多 Period 链式续播与类型不匹配即停、HLS 分离音轨跟随与
 ## 构建与测试
 
 H.264 编码命令现可读取原始 8-bit YUV420P 并输出 Annex B，支持
-CAVLC/CABAC、AQ、AUD、ABR 与 VBV。用法与限制见
-[`cmd/encode-h264`](cmd/encode-h264/README.md)。
+CAVLC/CABAC、AQ、AUD、ABR 与 VBV；`--stream` 在 native 目标上逐帧
+读取、逐访问单元写出（wasm/js 宿主整文件回退，码流逐字节一致）。用法与
+限制见 [`cmd/encode-h264`](cmd/encode-h264/README.md)。
 
 ```sh
 moon run cmd/encode-h264 -- input.yuv --width 640 --height 480 --output out.264 --cabac --aud

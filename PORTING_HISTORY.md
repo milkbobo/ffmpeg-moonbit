@@ -12660,3 +12660,64 @@ libavcodec/xxx_test.mbt`——`-p libavcodec` 前缀匹配会把 native-only
 复核仍是 §391 既有用例（native）；本轮对拍在纯 MoonBit 侧闭环，无新
 FFI 面。剩余（沿 §400）：流式宿主分块读、B 线各 opt-in 转正、
 `H264EncStats` B-intra 计数口径。
+
+## §402 H.264 流式宿主分块读写——native C 标准 I/O 绑定 + wasm 整文件回退（2026-11-12，opt-in）
+
+§394 的 `H264StreamEncoder` 已把**编码器侧**内存压到与序列长度无关，
+但 `--stream` 仍在宿主层整文件读写；本节补齐最后一段：
+
+**native 绑定**（`cmd/encode-h264/host_io_stub.c` + `host_io_native.mbt`）：
+
+- `H264HostReader` / `H264HostWriter` 是 `moonbit_make_external_object`
+  分配的 GC 外部对象，finalizer 关闭仍打开的 `FILE*`；显式
+  `h264cli_*_close` 让 CLI 在打印摘要前 `fclose` 刷新写缓冲。
+- 读端 `fread` 循环填满一帧；返回 `frame_size` 表示整帧、`0` 表示干净
+  EOF、`(0, frame_size)` 表示截断尾帧（MoonBit 侧转错误）、负值表示
+  I/O 错误。写端 `fwrite` 循环 + `fflush`，每个访问单元完成即落盘。
+- 打开后先 `fseek/ftell` 取输入长度（Windows 用 `_fseeki64` /
+  `_ftelli64`），校验 `size > 0 && size % frame_size == 0` 后才创建
+  输出，保持批式路径「坏输入不碰输出」的契约。
+- 路径在目标边界统一为 UTF-8 `Bytes`（native FFI 的 `const char *`）；
+  `#borrow` 覆盖路径、句柄与读写缓冲，C 侧不保存 MoonBit 对象。
+
+**wasm/js 回退**（`host_io_wasm.mbt`）：`@fs` 只有整文件
+`read_file_to_bytes` / `write_bytes_to_file`，因此读端把文件放在内存里
+按帧切片、写端按访问单元追加到 `Array[Byte]`，`close` 时一次写出。
+编码器仍逐帧消费，只有宿主缓冲是整文件。
+
+**CLI 接线**：`options.mbt` 新增 `encode_stream_file`，逐帧
+`FrameReader::read` → `H264StreamEncoder::push_frame` → 立即
+`FrameWriter::write` 每个 drain/finish 出的 AU；`frame_planes` 与
+`open_stream_encoder` 抽成批式/流式共用，保证平面切分与编码配置逐字
+一致。`main.mbt` 的 `--stream` 改走该路径，批式路径保持「先编码后
+写文件」；摘要的 `bytes` 改为流式计数，值与输出文件长度相同。
+原内存流式函数移入 `options_wbtest.mbt` 作为测试 oracle。
+
+**验证**：
+
+- `moon check --target wasm --deny-warn --no-render` 干净；
+  `cmd/encode-h264` wasm 白盒 **16/16**（新增 5 项：分块与批式逐字节、
+  读端整帧/EOF、截断尾帧拒绝、坏输入不创建输出、目录输出报错）。
+- Docker `ffmpeg-moonbit-ffref:nine-x264` 内
+  `moon test --target native cmd/encode-h264` **16/16**（C 桩随 native
+  测试编译并执行）。
+- 192×128×3 帧真实 YUV（CABAC + AUD + B slices）分别用 native 批式、
+  native `--stream`、wasm 批式编码，三个文件 SHA-256 均为
+  `e5fba9495daf185e7e657e9ce894d7ab7aec8c911acf7125f26bc82449a72fd9`，
+  摘要均为 11231 B / 3 帧。
+
+**限制**：wasm/js 宿主仍整文件缓冲；native `--stream` 在编码中途失败
+时会留下已写出的前缀（输入长度错误仍在创建输出前拒绝）。
+
+**ASan**（补充，同日）：`cmd/encode-h264/asan_host_io_probe.c` 沿 §391
+的「mock 运行时符号」方案直连 `host_io_stub.c`——本探针的外部对象
+finalizer 真正执行（句柄靠 finalizer 关 `FILE*`），`mock_gc` 回放全部
+finalizer 后 LSan 验证每个 `fopen` 都有对应 `fclose`；覆盖整帧读、
+干净 EOF、截断尾帧、坏输入/坏输出错误路径、finalizer-only 句柄与写端
+落盘内容回读。Docker 内
+`cc -fsanitize=address -g -O1 -I/root/.moon/include ... &&
+ASAN_OPTIONS=detect_leaks=1:fast_unwind_on_malloc=0` 一轮全清
+（无 UAF/越界/泄露；首轮暴露的 2 处失败为探针自身漏写/漏释放，修正后
+C 桩零改动通过）。
+
+剩余（沿 §400）：B 线各 opt-in 转正、`H264EncStats` B-intra 计数口径。

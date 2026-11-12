@@ -10,7 +10,9 @@ fn main raise {
       "  [--qp 0..51] [--cabac] [--aq] [--aq-strength 0..6] [--aud] [--target-bytes N]",
     )
     println("  [--vbv-maxrate bits/s --vbv-bufsize bits --fps N]")
-    println("  [--stream] [--cabac-rd] CABAC bit pricing requires --cabac")
+    println(
+      "  [--stream] chunked host I/O (native); [--cabac-rd] requires --cabac",
+    )
     println(
       "  [--dct8x8]  High profile 8x8 transform (I8x8, inter 8x8, I8x8-in-B)",
     )
@@ -29,13 +31,14 @@ fn main raise {
     return
   }
   let opts = parse_options(args[1:].to_owned())
-  let raw = @fs.read_file_to_bytes(opts.input)
-  let (stream, count) = if opts.stream {
-    encode_raw_stream(raw, opts)
+  let (count, bytes) = if opts.stream {
+    encode_stream_file(opts)
   } else {
-    encode_raw(raw, opts)
+    let raw = @fs.read_file_to_bytes(opts.input)
+    let (stream, count) = encode_raw(raw, opts)
+    @fs.write_bytes_to_file(opts.output, stream)
+    (count, stream.length())
   }
-  @fs.write_bytes_to_file(opts.output, stream)
   let summary : Json = {
     "codec": "h264",
     "format": "annexb",
@@ -43,7 +46,7 @@ fn main raise {
     "width": opts.width,
     "height": opts.height,
     "frames": count,
-    "bytes": stream.length(),
+    "bytes": bytes,
     "cabac": opts.cabac,
     "qp": opts.qp,
     "aq": opts.aq,

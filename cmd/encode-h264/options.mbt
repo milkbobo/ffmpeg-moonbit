@@ -175,6 +175,46 @@ fn parse_options(args : Array[String]) -> Options raise {
 }
 
 ///|
+/// Split one packed YUV420P frame into its three display-order planes.
+fn frame_planes(
+  data : Bytes,
+  offset : Int32,
+  luma : Int32,
+  chroma : Int32,
+) -> (Bytes, Bytes, Bytes) {
+  (
+    data[offset:offset + luma].to_owned(),
+    data[offset + luma:offset + luma + chroma].to_owned(),
+    data[offset + luma + chroma:offset + luma + chroma * 2].to_owned(),
+  )
+}
+
+///|
+/// Open the streaming encoder shared by the in-memory and chunked host
+/// paths, so both feed exactly the same configuration.
+fn open_stream_encoder(opts : Options) -> @codec.H264StreamEncoder raise {
+  match
+    @codec.H264StreamEncoder::open(
+      width=opts.width,
+      height=opts.height,
+      qp=opts.qp,
+      cabac=opts.cabac,
+      cabac_rd=opts.cabac_rd,
+      dct8x8=opts.dct8x8,
+      b_slices=opts.b_slices,
+      b_parts=opts.b_parts,
+      intra_in_b=opts.intra_in_b,
+      intra4x4_in_b=opts.intra4x4_in_b,
+      aud=opts.aud,
+      aq=opts.aq,
+      aq_strength=opts.aq_strength,
+    ) {
+    Ok(enc) => enc
+    Err(e) => fail("encode-h264: \{e}")
+  }
+}
+
+///|
 /// Raw 8-bit planar Y, U, V in display order, with no row padding.
 /// Geometry is checked by parse_options before this function is called.
 fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
@@ -188,13 +228,7 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   }
   let frames : Array[(Bytes, Bytes, Bytes)] = []
   for offset = 0; offset < data.length(); offset = offset + frame_size {
-    frames.push(
-      (
-        data[offset:offset + luma].to_owned(),
-        data[offset + luma:offset + luma + chroma].to_owned(),
-        data[offset + luma + chroma:offset + frame_size].to_owned(),
-      ),
-    )
+    frames.push(frame_planes(data, offset, luma, chroma))
   }
   let result = if opts.cabac {
     @codec.h264_encode_frames_cabac(
@@ -243,68 +277,62 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
 }
 
 ///|
-/// Streaming path: frames are fed to a `H264StreamEncoder` one at a time
-/// (display order), access units collected as they complete. The encoder
-/// keeps only the pending frame and the reference chain, so its memory no
-/// longer grows with the frame count; the host file read stays whole-file
-/// (the WASM filesystem has no chunked reads).
-fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
+/// `--stream` host path: read one frame at a time and append every finished
+/// access unit immediately. The frame/AU sequence is exactly the one
+/// `encode_raw` produces, so native builds are byte-identical while never
+/// holding the whole input or output; wasm/js fall back to whole-file host
+/// buffers (see host_io_wasm.mbt). The input size is checked before the
+/// output is opened, so a partial trailing frame cannot truncate an
+/// existing output file.
+fn encode_stream_file(opts : Options) -> (Int32, Int32) raise {
   let luma = opts.width * opts.height
   let chroma = luma / 4
   let frame_size = luma + chroma * 2
-  if data.length() == 0 || data.length() % frame_size != 0 {
+  let reader = FrameReader::open(@utf8.encode(opts.input))
+  let input_size = reader.size()
+  if input_size == 0 || input_size % frame_size.to_int64() != 0 {
+    reader.close()
     fail(
       "encode-h264: input must contain complete YUV420P frames (\{frame_size} bytes each)",
     )
   }
-  let enc = match
-    @codec.H264StreamEncoder::open(
-      width=opts.width,
-      height=opts.height,
-      qp=opts.qp,
-      cabac=opts.cabac,
-      cabac_rd=opts.cabac_rd,
-      dct8x8=opts.dct8x8,
-      b_slices=opts.b_slices,
-      b_parts=opts.b_parts,
-      intra_in_b=opts.intra_in_b,
-      intra4x4_in_b=opts.intra4x4_in_b,
-      aud=opts.aud,
-      aq=opts.aq,
-      aq_strength=opts.aq_strength,
-    ) {
-    Ok(e) => e
-    Err(e) => fail("encode-h264: \{e}")
-  }
-  let aus : Array[Bytes] = []
+  let enc = open_stream_encoder(opts)
+  let writer = FrameWriter::open(@utf8.encode(opts.output))
   let mut count = 0
-  for offset = 0; offset < data.length(); offset = offset + frame_size {
-    match
-      enc.push_frame(
-        data[offset:offset + luma].to_owned(),
-        data[offset + luma:offset + luma + chroma].to_owned(),
-        data[offset + luma + chroma:offset + frame_size].to_owned(),
-      ) {
-      Ok(_) => ()
-      Err(e) => fail("encode-h264: \{e}")
+  let mut written = 0
+  let mut running = true
+  while running {
+    match reader.read(frame_size) {
+      None => running = false
+      Some(frame) => {
+        let (y, u, v) = frame_planes(frame, 0, luma, chroma)
+        match enc.push_frame(y, u, v) {
+          Ok(_) => ()
+          Err(e) => {
+            reader.close()
+            fail("encode-h264: \{e}")
+          }
+        }
+        for au in enc.drain() {
+          writer.write(au)
+          written = written + au.length()
+        }
+        count = count + 1
+      }
     }
-    for au in enc.drain() {
-      aus.push(au)
-    }
-    count = count + 1
   }
   match enc.finish() {
     Ok(tail) =>
       for au in tail {
-        aus.push(au)
+        writer.write(au)
+        written = written + au.length()
       }
-    Err(e) => fail("encode-h264: \{e}")
-  }
-  let out : Array[Byte] = []
-  for au in aus {
-    for i = 0; i < au.length(); i = i + 1 {
-      out.push(au[i])
+    Err(e) => {
+      reader.close()
+      fail("encode-h264: \{e}")
     }
   }
-  (Bytes::from_array(out[:]), count)
+  reader.close()
+  writer.close()
+  (count, written)
 }

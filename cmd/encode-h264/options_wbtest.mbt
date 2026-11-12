@@ -271,3 +271,47 @@ test "CLI dct8x8 reaches the batch and stream paths in both entropies" {
   let plain = test_options([])
   assert_eq(plain.dct8x8, false)
 }
+
+///|
+/// In-memory streaming oracle: feed the same configuration to
+/// `H264StreamEncoder` one frame at a time and collect its access units.
+/// This isolates the encoder's streaming contract from host file I/O; the
+/// CLI's `--stream` path uses `encode_stream_file` instead.
+fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
+  let luma = opts.width * opts.height
+  let chroma = luma / 4
+  let frame_size = luma + chroma * 2
+  if data.length() == 0 || data.length() % frame_size != 0 {
+    fail(
+      "encode-h264: input must contain complete YUV420P frames (\{frame_size} bytes each)",
+    )
+  }
+  let enc = open_stream_encoder(opts)
+  let aus : Array[Bytes] = []
+  let mut count = 0
+  for offset = 0; offset < data.length(); offset = offset + frame_size {
+    let (y, u, v) = frame_planes(data, offset, luma, chroma)
+    match enc.push_frame(y, u, v) {
+      Ok(_) => ()
+      Err(e) => fail("encode-h264: \{e}")
+    }
+    for au in enc.drain() {
+      aus.push(au)
+    }
+    count = count + 1
+  }
+  match enc.finish() {
+    Ok(tail) =>
+      for au in tail {
+        aus.push(au)
+      }
+    Err(e) => fail("encode-h264: \{e}")
+  }
+  let out : Array[Byte] = []
+  for au in aus {
+    for i = 0; i < au.length(); i = i + 1 {
+      out.push(au[i])
+    }
+  }
+  (Bytes::from_array(out[:]), count)
+}
