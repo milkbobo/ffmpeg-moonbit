@@ -1444,7 +1444,19 @@ fn H264PEncoder::write_b_mb_syntax(
   }
   mirror.active_list = 0
   // Inter residual tail: identical to the P writer's (4x4 transform only).
-  self.write_b_residual_tail_cavlc(mirror, mb_idx, mb_x, mb_y, coded, r, true)
+  // Mirror the decoder's `dct8x8_allowed` (`h264_b_mb.mbt`): a direct
+  // macroblock only codes transform_size_8x8_flag under
+  // direct_8x8_inference (the B SPS sets it, but keep the read condition
+  // derived, not assumed).
+  self.write_b_residual_tail_cavlc(
+    mirror,
+    mb_idx,
+    mb_x,
+    mb_y,
+    coded,
+    r,
+    mirror.direct_8x8 || kind != 0,
+  )
 }
 
 ///|
@@ -1802,7 +1814,8 @@ fn H264PEncoder::write_b_mb_parts_syntax(
     mb_y,
     coded,
     r,
-    parts.all(fn(part) { part.w >= 2 && part.h >= 2 }),
+    parts.all(fn(part) { part.w >= 2 && part.h >= 2 }) &&
+    (mirror.direct_8x8 || !direct.any(fn(value) { value })),
   )
 }
 
@@ -2776,9 +2789,9 @@ fn H264PEncoder::decide_b_mb(
     BL1x16(_, _) => self.stats.bl1_mbs += 1
     BBi16(_, _, _, _) => self.stats.bi_mbs += 1
     BDirect16 => self.stats.bdirect_mbs += 1
-    BI16(_, _, _) => self.stats.i16_mbs += 1
-    BI4(_, _) => self.stats.i4p_mbs += 1
-    BI8(_, _) => self.stats.i8p_mbs += 1
+    BI16(_, _, _) => self.stats.bi16_mbs += 1
+    BI4(_, _) => self.stats.bi4_mbs += 1
+    BI8(_, _) => self.stats.bi8_mbs += 1
     BParts(kind, _, _) => {
       self.stats.bpart_mbs += 1
       if kind == 22 {
@@ -3146,8 +3159,17 @@ fn H264PEncoder::write_b_mb_syntax_cabac(
     }
   }
   mirror.active_list = 0
+  // `dct8x8_allowed` mirrors the decoder (`h264_b_mb.mbt`): direct
+  // macroblocks only read the flag under direct_8x8_inference.
   self.write_b_residual_tail_cabac(
-    mirror, enc, states, mb_idx, mb_x, mb_y, coded, true,
+    mirror,
+    enc,
+    states,
+    mb_idx,
+    mb_x,
+    mb_y,
+    coded,
+    mirror.direct_8x8 || kind != 0,
   )
 }
 
@@ -3442,7 +3464,8 @@ fn H264PEncoder::write_b_mb_parts_syntax_cabac(
     mb_x,
     mb_y,
     coded,
-    parts.all(fn(part) { part.w >= 2 && part.h >= 2 }),
+    parts.all(fn(part) { part.w >= 2 && part.h >= 2 }) &&
+    (mirror.direct_8x8 || !direct.any(fn(value) { value })),
   )
 }
 

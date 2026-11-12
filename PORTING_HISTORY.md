@@ -12814,3 +12814,40 @@ x264 native oracle 新增 **帧级仲裁探针** `x264probe_frames`：
 `H264EncStats` B-intra 专用计数（`bi16_mbs`/`bi4_mbs`/`bi8_mbs`，
 现复用 P 帧计数器）、CABAC B inter 的 `dct8x8_allowed` 完整镜像解码端
 `direct_8x8 || !direct.any()` 条件（当前 SPS 恒 `direct_8x8=1`，不触发）。
+
+## §404 H.264 收尾三件——EncStats B-intra 专用计数、B 尾 dct8x8_allowed 镜像、CLI 过时校验清理（2026-11-12）
+
+沿 §403 交接的剩余项 2/3/4：
+
+- **`H264EncStats` B-intra 口径**：新增 `bi16_mbs` / `bi4_mbs` /
+  `bi8_mbs` 专用计数器；`h264_encode_b.mbt` 的 plan 统计从复用
+  `i16_mbs` / `i4p_mbs` / `i8p_mbs`（P 帧口径）改为只进 B 专用字段，
+  P 计数器回归「P slice 专属」。`bintra` / `bi8` 测试断言随口径切换
+  （`bi8` 的「dct8x8 off 不得有 8x8」负例改为同时查 `bi8_mbs` 与
+  `i8_mbs`）。
+- **B inter 尾 `dct8x8_allowed` 完整镜像**：解码端
+  `h264_b_mb.mbt` 的读取条件是
+  `transform_8x8_mode && parts 全 ≥8x8 && (direct_8x8 || 无 direct 子块)`；
+  编码端四个残尾调用点（CAVLC/CABAC × 普通 kind / 子分割 kind）原先
+  只传 `true` 或 `parts.all(...)`，补上 direct 分量（普通 kind 中仅
+  B_Direct_16x16（kind 0）受 `mirror.direct_8x8` 约束）。当前 B SPS
+  恒写 `direct_8x8_inference_flag=1`，不改变任何现行流——按
+  「条件位发射对齐解码端推导」的 §400 教训做的防御性对齐。
+- **CLI**：删除过时的「b-slices excludes the rate controls」校验
+  （§398 起 B×VBV/ABR 已支持），`--stream` 仍与码控互斥
+  （`H264StreamEncoder` 无码控参数，语义未变）；
+  `options_wbtest` 相应改为「b-slices×码控为合法组合」+ 保留
+  stream×码控负例。
+
+验证：`moon check --target wasm --deny-warn` 干净；wasm 按族全绿
+（b/bintra/bi8/bparts/combo/rc/aud/vbv/stream/brc/cabac 共 91 项 +
+CLI 16/16）；docker native（nine-x264）
+`bintra/bi8/bparts/b/combo/brc/stream/hrd + cmd/encode-h264`
+**65/65**、`libavcodec/x264`（真 FFmpeg 帧级仲裁）**38/38**。
+`moon info` 后 `pkg.generated.mbti` 仅 `H264EncStats` 三个新字段。
+宿主白盒 wasm `local count too large` 为 100addf 起既有状态
+（白盒走 docker native，黑盒不受影响）。C 绑定面无改动，ASan 基线
+沿用 §403。
+
+剩余（沿 §403 交接）：六开关默认转正（WIP 存 `.scratch/promote_wip.diff`，
+需重钉全量钉值）；统一播放门面 / 更多 profile 与位深。

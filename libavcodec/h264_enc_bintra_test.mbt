@@ -117,7 +117,7 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cavlc)" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if stats.i16_mbs <= 0 {
+  if stats.bi16_mbs <= 0 {
     fail("no Intra16x16 macroblocks inside the B slices")
   }
   let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
@@ -156,7 +156,7 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cabac)" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if stats.i16_mbs <= 0 {
+  if stats.bi16_mbs <= 0 {
     fail("no Intra16x16 macroblocks inside the B slices under CABAC")
   }
   let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
@@ -189,7 +189,7 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cabac rd)" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if stats.i16_mbs <= 0 {
+  if stats.bi16_mbs <= 0 {
     fail("no Intra16x16 macroblocks inside the B slices under CABAC RD")
   }
   let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
@@ -411,7 +411,7 @@ test "h264 enc bi4: fine-texture B pictures pick Intra4x4 (cavlc)" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if stats.i4p_mbs <= 0 {
+  if stats.bi4_mbs <= 0 {
     fail("no Intra4x4 macroblocks inside the B slices")
   }
   let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
@@ -450,7 +450,7 @@ test "h264 enc bi4: fine-texture B pictures pick Intra4x4 (cabac)" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if stats.i4p_mbs <= 0 {
+  if stats.bi4_mbs <= 0 {
     fail("no Intra4x4 macroblocks inside the B slices under CABAC")
   }
   let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {

@@ -136,11 +136,8 @@ fn parse_options(args : Array[String]) -> Options raise {
   if values.contains("--stream") && (target_bytes > 0 || maxrate > 0) {
     fail("encode-h264: stream excludes the rate controls")
   }
-  if values.contains("--b-slices") {
-    if target_bytes > 0 || maxrate > 0 || bufsize > 0 || fps > 0 {
-      fail("encode-h264: b-slices excludes the rate controls")
-    }
-  }
+  // b-slices × rate controls is supported since §398 (B×VBV/ABR); no
+  // exclusion here anymore.
   if values.contains("--b-parts") && !values.contains("--b-slices") {
     fail("encode-h264: b-parts requires b-slices")
   }

@@ -83,6 +83,13 @@ pub(all) struct H264EncStats {
   /// Sub-partitioned B macroblocks coded as B_8x8 (kind 22, a subset of
   /// `bpart_mbs`).
   mut b8x8_mbs : Int32
+  /// Intra16x16 macroblocks inside B slices (`intra_in_b`; §404 dedicated
+  /// counter — B intra no longer leaks into `i16_mbs`).
+  mut bi16_mbs : Int32
+  /// Intra_NxN (4x4) macroblocks inside B slices (`intra4x4_in_b`).
+  mut bi4_mbs : Int32
+  /// Intra 8x8 macroblocks inside B slices (I8x8-in-B under `dct8x8`).
+  mut bi8_mbs : Int32
 }
 
 ///|
@@ -104,6 +111,9 @@ pub fn H264EncStats::new() -> H264EncStats {
     bdirect_mbs: 0,
     bpart_mbs: 0,
     b8x8_mbs: 0,
+    bi16_mbs: 0,
+    bi4_mbs: 0,
+    bi8_mbs: 0,
   }
 }
 

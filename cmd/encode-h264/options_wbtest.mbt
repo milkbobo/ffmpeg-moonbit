@@ -206,12 +206,27 @@ test "CLI accepts stream and b-slices, rejects their bad combinations" {
       _ => ()
     }
   }
-  // Invalid: b-slices with either rate control.
+  // Since §398 (B×VBV/ABR) b-slices combines with both rate controls.
   for
     extra in [
       ["--b-slices", "--target-bytes", "1000"],
       [
         "--b-slices", "--vbv-maxrate", "64000", "--vbv-bufsize", "32000", "--fps",
+        "30",
+      ],
+    ] {
+    try test_options(extra) catch {
+      _ => fail("rejected valid b-slices x rate-control arguments")
+    } noraise {
+      _ => ()
+    }
+  }
+  // Invalid: --stream still excludes the rate controls.
+  for
+    extra in [
+      ["--stream", "--target-bytes", "1000"],
+      [
+        "--stream", "--vbv-maxrate", "64000", "--vbv-bufsize", "32000", "--fps",
         "30",
       ],
     ] {

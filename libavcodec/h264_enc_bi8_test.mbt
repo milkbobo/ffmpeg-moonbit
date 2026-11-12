@@ -44,7 +44,7 @@ fn h264bi8_check(
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if stats.i8p_mbs <= 0 {
+  if stats.bi8_mbs <= 0 {
     fail("no Intra 8x8 macroblocks inside the B slices")
   }
   if stats.b_mbs <= 0 {
@@ -205,7 +205,7 @@ test "h264 enc bi8: deterministic and opt-in" {
       Ok(s) => s
       Err(e) => fail(e)
     }
-    if stats.i8p_mbs != 0 || stats.i8_mbs != 0 {
+    if stats.bi8_mbs != 0 || stats.i8_mbs != 0 {
       fail("dct8x8 off must not code any 8x8 transform")
     }
     if off.length() == a.length() {
