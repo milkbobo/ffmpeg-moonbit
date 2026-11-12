@@ -277,3 +277,20 @@ libavcodec 白盒 wasm 已贴 `local count too large` 上限，别再加
 x264 帧级仲裁 38/38；`moon check --deny-warn` 干净；`.mbti` 仅
 `H264EncStats` 三个新字段。宿主白盒 wasm `local count too large` 为
 100addf 起既有（白盒走 docker native）。
+
+## 十、§406 转正落地（2026-11-13，commit c5d7961）
+
+第九节的重建 bug 已修：落选 inter MB 的 mirror `intra4x4` 标志残留
+（第三个同类污染字段）——真实写出前再清
+`chroma_mode`/`transform_8x8`/`intra4x4`，回归
+`h264 enc b: all-on cabac keeps the recon invariant`。随后六开关
+默认转正最终落地（细节见 PORTING_HISTORY §406）：三入口默认 true、
+降级语义（单帧/无 CABAC/无 b_slices 子旗标）、B SPS 补 VBV/HRD
+（B×VBV 既有缺口）、CLI `--no-*` 反开关、测试全量重钉
+（显示序映射 / 30+ md5 / 语义负例转降级正例 / AUD 0x50 / 流式补
+finish()）。wasm 70 + CLI 16 全绿。
+
+**待办（Docker 恢复后）**：native 全套（含 h264_enc_hrd_wbtest 白盒）、
+x264 帧级仲裁 38 项、ffref、以及本仓重钉 md5 的 ffmpeg 逐钉复核
+（ARB22/ARBCABAC/ARBBPARTS/ARBBRC 等 dump 路由已在测试内保留）。
+`.scratch/promote_wip.diff` 已被本提交超越，可删。
