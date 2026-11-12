@@ -12471,3 +12471,192 @@ H264PEncoder 的 encode_p_frame[_cabac]、B 帧 encode_b_frame[_cabac]），
 EXIT=0；编码器全套 wasm **86/86**；x264 native oracle docker
 **33/33**；C 绑定面（libavcodec/x264）本片无改动，ASan 基线延续
 §391。
+
+## §395 H.264 B 帧子分割——16x8/8x16 与 B_8x8（b_parts，opt-in，2026-11-12）
+
+`b_parts~` 支持 B 宏块 kinds 4..22：16x8/8x16 双分割（九种 list
+组合 × 两朝向全枚举）与 B_8x8（逐 8x8 组在 direct/L0/L1/Bi ×
+8x8/8x4/4x8/4x4 共 13 种 sub 类型中按 SAD+λ 位估计决策）。核心是
+`h264_b_slot_reset` + **按解码序回放**：b_direct(direct 组) →
+kind22 右侧组 2/10 号块 ref 隐藏(-2) → refs 写回 → `h264_b_mvd_walk`
+（逐组 preamble，kinds 4..21 用 `pred_16x8/8x16`、kind22 用
+`pred_motion`）→ 每部分 pred 后发 mvd 并 `h264_write_back_part`，
+使每个 mvd 预测恰好看到解码器读时刻的邻居（含后继分割未写回槽位
+的 stale 值）。mvd 夹 ±70 时同步改写计划 MV 数组，镜像/码流/重建
+三方同一决策。CABAC 新增 `h264_cabacw_b_parts_type`（4-bin 后缀 +
+kinds 12..21 第 5 bin）与 `h264_cabacw_b_sub_type`（ctx 36/37/38/39
+的 13 分支树），逐分支转写解码端。批式三模式 + 流式 + CLI
+`--b-parts` 全打通，默认关闭逐字节不变。bparts 7/7；ffmpeg 9.0.2
+零告警，CAVLC/CABAC 两条流 display 序六帧 framemd5 钉值
+（ARBBPARTS/ARBBPARTSCABAC）。
+
+## §396 H.264 B 帧内 Intra16x16（intra_in_b，opt-in，2026-11-12）
+
+B slice 内 Intra16x16 宏块（B mb_type 24..47 = I-slice intra 表
+1..24 + 23）。场景切换的 B 图像中 inter/direct 全候选残差巨大，
+宏块改用本帧邻居预测入 RD 竞争。复用 intra-in-P 全部构件
+（`pick_i16` + `pick_chroma` + `code_b_mb_i16_residuals`：Hadamard
+DC 矩阵 0、AC level[0]=0、intra 色度矩阵 1/2、先散 DC 再逐块 IDCT
+的 I16 重建序、nC 走 intra 语法语义）。CAVLC `ue(23+1+spec_mode+
+4*group)`（无 cbp 码字）+ 无条件 dqp；CABAC B mb_type 树后缀
+`bits=13`（bins 31/32/32/32 = 1/1/0/1）→ intra 树 b0..b4（ctx
+33/34/34/35/35，terminate(0) 拒 PCM）。镜像：`h264_b_slot_reset` +
+`cur_mb_is_intra=true` 驱动残差上下文，`price_b_bits` 快照扩
+`cur_mb_is_intra`/`chroma_mode`。bintra 5/5；ffmpeg 零告警六帧钉值
+（ARBBINTRA）。
+
+## §397 H.264 B 帧内 Intra4x4（intra4x4_in_b，opt-in，2026-11-12）
+
+B slice 内 Intra_NxN（4x4）宏块（B mb_type 23）。细纹理下 16 个
+pred4x4 逐块预测入 RD 竞争。`h264_enc_luma_i4_pass` 选模+重建，
+`code_b_mb_i4_residuals` 以 fixed_modes 回放；抽出共享
+`code_b_mb_chroma_intra`（I16/I4 共用 intra 色度链）。CAVLC `ue(23)`
+→ 16 差分模式 bin → 色度 ue → **INTRA cbp 码字**（与 I16 的「由
+mb_type 组推导」不同）；CABAC bits=13 后 intra 树**首 bin=0**
+（I_NxN，无 terminate/模式域）。**唯一真 bug**：`commit_b_mb_state`
+尾部残留旧 `st.intra_nxn = false` 覆写新 match 结果，跨 MB 模式
+预测读旧值 → 同一位流两侧 predicted 分歧。bi4 9/9；ffmpeg 零告警
+六帧钉值（ARBBI4）。
+
+## §398 H.264 B×VBV/ABR——B 序列接入码率控制（2026-11-12）
+
+解除 B slices 与码率控制的互斥：ABR 两遍 `target_bytes` 搜索与
+CPB 约束的 VBV/CBR 现在驱动 B 序列**按显示位置**的帧级 QP
+（I=qps[0]，显示位 f=qps[f]，PPS pic_init_qp=qps[0]）。
+`h264_encode_frames_b` 扩 `qps~`/`vbv~`（每 AU 开头 pic_timing SEI）
+/`fillers~`，返回 `(Bytes, sizes)`。P/B encoder 的
+qp/base_qp/mb_qp/prev_qp/chroma_qp 按显示位 QP；B 序列入口统一推送
+`stats.frame_qps`（pub 的 ABR/VBV 分支不再推，避免双计）。B AU 的
+SEI/filler 顺序与 P AU 一致（[SEI, slice, filler]，AUD 前插）。
+brc 4/4（双熵×双目标命中且 ≤ target、CPB 轨迹合法、逐 AU
+pic_timing 断言）；ffmpeg 零告警，ABR 与 VBV 两条流 display 序六帧
+钉值（ARBBRC）。
+
+## §399 H.264 B 子分割候选剪枝（2026-11-12）
+
+`b_parts` 的 16x8/8x16 两分割候选加**粗估排序 + top-3 精评**：每
+朝向九种 list 组合先按「Σ 分区 SAD + λ·20·mvd 对数」粗估排序，仅
+最优三种过 `eval_b_parts` 完整评估。每 B 宏块的两分割精评从 18 次
+降到 6 次（整体候选 24 → 12）。粗估数据零额外搜索（`me_b_part` 的
+分区 SAD + `b_bi_part_sad` 每分区一次）；排序用复合键
+`(rough_cost*16 + kind)` 的 Int64 选择排序保证确定性。剪枝改变
+`b_parts` 开启的输出流，ARBBPARTS/ARBBPARTSCABAC 两条 framemd5 经
+docker ffmpeg 重新零告警验证并重钉。bparts 7/7。
+
+## §400 H.264 I8x8-in-B 收口——B 序列 P 图像的 transform_8x8_mode 根修（dct8x8 × b_slices，2026-11-12）
+
+解除 `b_slices × dct8x8` 互斥（§395 起遗留的最后一项 B 线组合）。
+BI8 基础设施在上一轮已落地但组合被禁用，交接归因为「CABAC 的 B 帧
+8x8DCT 上下文与 ffmpeg 分歧」。**bin 级 zip 探针定位到真因不在 B
+写端，而在 B 序列的 P 编码器**：
+
+- **根因**：`h264_encode_frames_b` 的 `new_p_encoder` 把 `dct8x8`
+  硬编码为 `false`（注释声称「B 序列 P 帧保持 4x4 变换，故写端不发
+  inter flag 位」）。但 `dct8x8_allowed` 是**解码端从 PPS 的
+  `transform_8x8_mode` 推导**的，与写端字段无关：PPS 说 1，解码器
+  就在 cbp bins 与 mb_qp_delta 之间读 `transform_size_8x8_flag`，
+  写端却不发 → 从第一个 P 图像 MB0 起整片失步。修复 = 透传真实
+  `dct8x8`，P 帧遂走 §385/§387 已验证的完整 8x8DCT 路径。
+- **定位手段**：临时在 CABAC 读写两侧原语（`get_cabac` /
+  `get_cabac_bypass` / `get_cabac_bypass_sign` / `get_cabac_terminate`
+  与 `H264CabacEnc::decision/bypass/terminate`）打 `W/R ctx= bit=`
+  打点 + 每 MB 标记，zip 首个分歧 bin。注意 `bypass_sign` 的
+  `mask = low >> 31` 与 bin 值**极性相反**（mask=-1 对应 bin 0），
+  打点须写 `if mask == 0 { 1 } else { 0 }`，否则每个符号位都假分歧。
+  修复后 76182/76182 bins 逐 bin 对齐、本地解码零 overread。
+- **BI8 候选解禁**：`decide_b_mb` 末尾的 Intra 8x8 候选去掉
+  `&& !self.cabac_on` 门（CABAC 写端 `write_b_mb_i8_syntax_cabac`
+  与 `price_b_bits` 定价链上一轮已备齐）；顺带清除该写端遗留的
+  调试 `println`。`cabac_on` 字段自此无读取点，按「无兼容包袱」
+  原则整字段删除（7 处构造点同步）。
+- **流式与 CLI 透传**：`H264StreamEncoder` 增 `dct8x8` 字段与
+  `open(dct8x8~=false)`，SPS 选择镜像批式（b_slices → High b_seq
+  变体；cabac → high/main；否则 `h264_enc_sps_rbsp(dct8x8~)`），
+  PPS 两侧透传，`stream_idr`/`stream_p`/`stream_b` 三处构造点接
+  `self.dct8x8`。CLI `encode-h264` 增 `--dct8x8`（批式双熵 + 流式
+  全打通，usage 补行）。
+
+验证：新增 `h264_enc_bi8_test.mbt` **6/6**（CAVLC/CABAC/CABAC-RD
+三模式重建不变式 + i8p_mbs>0 + 滤波解码；流式与批式三模式逐字节
+相等；确定性双跑 + opt-in 门控（关时 i8_mbs==i8p_mbs==0 且流长
+变化）；**ffmpeg 9.0.2 零告警，三模式 × display 序六帧 framemd5
+全部钉值**，ARBBI8V/ARBBI8C/ARBBI8R 路由，18 帧经
+`scripts/check_md5.mbtx` 与 docker 输出逐帧核对一致）。CABAC 流
+6766 → 5972 B（BI8 胜出）。删除两处过时的「组合必须被拒绝」断言
+（`h264_enc_b_test.mbt` / `h264_enc_bintra_test.mbt`）。CLI 新增
+`--dct8x8` 双熵 × b_slices 四组合流式/批式逐字节 + High profile
+SPS profile_idc=100 断言，CLI **11/11**。B 线回归 38/38、其余编码器
+套件 77/77；`moon check --target all` 0 错误（仅既有 v128
+unused_package 警告）；`moon fmt` 干净。
+
+工具面：新增 `scripts/extract_dump.mbtx`（测试日志的逗号字节 dump →
+裸流文件）与 `scripts/check_md5.mbtx`（本地 `TAGMD5:` 行 vs docker
+framemd5 逐帧核对），把「dump → 外部仲裁 → 钉值」闭环脚本化。
+临时 bin trace 钩子收口后全部移除（热路径不留调试分支）。
+C 绑定面（libavcodec/x264、ffref）本轮无改动，ASan 基线延续 §391。
+
+**宿主限制（既有，非本轮引入）**：libavcodec blackbox 整包一次
+spawn 超 Windows 命令行上限（os error 206），按文件分批跑；
+`moonbitlang/async@0.22.7` 与本机 core 不兼容（`Cannot find import
+'moonbitlang/core/async'`），既有 async `.mbtx` 脚本同样无法运行，
+故本轮编排用直接分批命令而非 async 脚本。
+
+B 线至此完整：b_slices（§393）→ B RD → 子分割（§395）→
+intra-in-B（§396）→ I4x4-in-B（§397）→ B×VBV/ABR（§398）→
+剪枝（§399）→ **I8x8-in-B（§400）**。剩余：流式宿主分块读、
+x264 HRD 逐字段对拍、B 线各 opt-in 转正（需重钉全部仲裁钉值与
+PSNR/字节门）。
+
+## §401 H.264 HRD 逐字段对拍——真 x264 CBR 流 × 纯 MoonBit 解析器（wasm，2026-11-12）
+
+§391 留下的最后一项 VBV/HRD 缺口：彼时真 x264 的对拍只到「NAL 布局 +
+零告警」级，SPS VUI/HRD 数值未逐字段核。本轮按用户指示走 **wasm 路线**
+（不走 docker native）：x264 参考流用既有 base64 内嵌
+`sei_hrd_b64`（`h264_sei_realdata_wbtest.mbt`，testsrc2 64x48@30 两帧，
+`nal-hrd=cbr:force-cfr=1:vbv-maxrate=200:vbv-bufsize=200 -b:v 200k`，
+trace_headers 已核），与新测试里 MoonBit 编码器以**同一标称 VBV**
+（200 kbit/s / 200 kbit / 30 fps）产出的流，双双用本包自己的参数集与
+SEI 解码器（`ff_h264_decode_seq_parameter_set` + `h264_sei_decode` +
+`sei_process_picture_timing`——解码器同款代码路径）解析后逐字段对拍。
+
+**能力补齐**：`decode_hrd_parameters` 此前按 C 的行为丢弃
+`cpb_size_scale`（FFmpeg h264_ps.c 同样只消费不存），重建声明 CPB 尺寸
+无据可依；`H264Sps` 增存该字段（默认 0，仅一处赋值，解码行为零影响），
+声明值重建 = `(value_minus1+1) << (6/4+scale)`。
+
+**新增 `h264_enc_hrd_wbtest.mbt` 3/3**（纯 MoonBit、零 FFI，wasm-gc
+宿主直跑）：
+
+1. MoonBit CBR 流字段锚点：声明 200000/200000 精确（scale 0、
+   3125/12500）、宽度 24/16/4/0、时序 1/60 + fixed_frame_rate、
+   buffering_period 81000（init_bits 180000 × 90000 / 200000）、
+   pic_timing `[0,2,4,6]` + dpb 0、filler NAL 数与 `stats.vbv_fills`
+   一致、单 SPS/单 PPS 布局、**严格零容差 CPB 漏桶回放**。
+2. 真 x264 CBR 流：声明速率/尺寸落在标称 ±1024 内（kbps 量化 +
+   HRD 粒度）、implied fps（time_scale/(step×num_units)）= 30、
+   dpb 0（baseline）、±1024 容差 CPB 回放、宽度自洽
+   （`2^len > 实际值`）。
+3. 双编码器逐字段一致性：同一标称请求下声明速率/尺寸**逐字段相等**
+   （x264 端 200000 精确重建）、implied fps 相等，双方通过**同一个**
+   CPB 回放函数（各自用自己流里抽出的声明值驱动）。
+
+**对拍揭示的 x264 写端事实**（均为合法写端自由度，语义层一致）：
+`b_repeat_headers` 默认开 → annexb 每 IDR 前重发 SPS/PPS（2 图 2 组，
+逐字节相同，测试断言重发实例一致后取首份解析）；HRD 延迟宽度取
+19/5/23/0（本仓 24/16/4/0）——宽度只需装下各自流值，测试改为逐流
+自洽断言；两帧 testsrc2 均超 200k 目标速率 → CPB 持续放空，无 filler
+（CBR ≠ 必有 filler，回放才是真正的合规判据）。
+
+**测试基建发现（可复用）**：宿主 wasm 跑 libavcodec 单测试文件的
+正确姿势是**位置参数路径** `moon test --target wasm-gc
+libavcodec/xxx_test.mbt`——`-p libavcodec` 前缀匹配会把 native-only
+的 `libavcodec/x264` 子包拽进选择集而整体失败，位置路径则精确选包。
+由此 H.264 全系 54 个测试文件（黑盒+白盒，含 §395–§400 全部 B 线
+套件与 h264_ps/sei 解析器）宿主 wasm 直跑 **339/339 全绿**，
+`cmd/encode-h264` **11/11**，另 36 个 libavcodec 子包 wasm 扫尾全绿
+（上轮遗留项补证，排除 native-only x264）。
+
+**未做**：`sei_hrd_b64` 的 x264 流经 `x264_probe_annexb` 的 C 侧零告警
+复核仍是 §391 既有用例（native）；本轮对拍在纯 MoonBit 侧闭环，无新
+FFI 面。剩余（沿 §400）：流式宿主分块读、B 线各 opt-in 转正、
+`H264EncStats` B-intra 计数口径。

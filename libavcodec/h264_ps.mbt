@@ -158,6 +158,7 @@ pub struct H264Sps {
   mut time_offset_length : Int32
   mut cpb_cnt : Int32
   mut bit_rate_scale : Int32
+  mut cpb_size_scale : Int32
   bit_rate_value : Array[Int32]
   cpb_size_value : Array[Int32]
   mut cpr_flag : UInt32
@@ -270,6 +271,7 @@ fn new_h264_sps() -> H264Sps {
     time_offset_length: 24,
     cpb_cnt: 0,
     bit_rate_scale: 0,
+    cpb_size_scale: 0,
     bit_rate_value: Array::make(32, 0),
     cpb_size_value: Array::make(32, 0),
     cpr_flag: 0U,
@@ -573,7 +575,7 @@ fn decode_hrd_parameters(gb : BitReader, sps : H264Sps) -> Result[Unit, String] 
   }
   sps.cpr_flag = 0U
   sps.bit_rate_scale = gb.read(4).reinterpret_as_int()
-  let _ = gb.read(4) // cpb_size_scale
+  sps.cpb_size_scale = gb.read(4).reinterpret_as_int()
   for i = 0; i < cpb_count; i = i + 1 {
     sps.bit_rate_value[i] = (gb.read_ue_long() + 1UL).to_int()
     sps.cpb_size_value[i] = (gb.read_ue_long() + 1UL).to_int()
