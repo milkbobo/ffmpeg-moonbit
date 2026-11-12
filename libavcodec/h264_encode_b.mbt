@@ -2149,6 +2149,11 @@ fn H264PEncoder::decide_b_mb(
   mb_y : Int32,
   qp : Int32,
 ) -> Result[(H264BPlan, H264PMbCode?), String] {
+  // The candidate pricing below dry-runs the syntax writers, and the
+  // residual tails count `mb_qp_delta` macroblocks into `stats.dqp_mbs`.
+  // Only the caller's REAL write (after this decide returns) may count,
+  // so restore the counter before handing the plan back.
+  let dqp_before = self.stats.dqp_mbs
   let mb_idx = mb_y * self.mb_width + mb_x
   let info = mirror.infos[mb_idx]
   for i = 0; i < 48; i = i + 1 {
@@ -2852,6 +2857,9 @@ fn H264PEncoder::decide_b_mb(
   }
   ignore(coded)
   self.commit_b_mb_state(mb_idx, plan, mirror)
+  // Undo the pricing trials' `dqp_mbs` contributions (see the snapshot
+  // at the top); the caller's real write re-counts this macroblock.
+  self.stats.dqp_mbs = dqp_before
   Ok((plan, Some(coded_final)))
 }
 

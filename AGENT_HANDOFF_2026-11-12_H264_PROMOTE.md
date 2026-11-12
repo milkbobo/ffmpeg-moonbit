@@ -294,3 +294,32 @@ finish()）。wasm 70 + CLI 16 全绿。
 x264 帧级仲裁 38 项、ffref、以及本仓重钉 md5 的 ffmpeg 逐钉复核
 （ARB22/ARBCABAC/ARBBPARTS/ARBBRC 等 dump 路由已在测试内保留）。
 `.scratch/promote_wip.diff` 已被本提交超越，可删。
+
+## 十一、407 补验发现的两个未修 bug（下一片主菜）
+
+### Bug A：CABAC×AQ recon 不对称（containment 中）
+
+- 复现：`h264 aq: CABAC macroblock QP deltas`（64x48 h264_aq_fixture(4)，
+  qp26，aq=true，CABAC，默认旗标或仅 dct8x8=false+ABR）——
+  `h264_rc_recon_invariant` 报 "P frame 1/2: encoder reconstruction !=
+  decoder"。
+- 事实矩阵：CAVLC 同夹具绿；b_slices=false+aq+CABAC 绿（legacy）；
+  dct8x8=true 或 target_bytes/ABR任一 + AQ + CABAC 即挂（决策矩阵探针
+  已验证）。
+- 现象：编码器 recon ≠ 本仓解码器（差 1~2），ffmpeg 解码无错（流合
+  法）；首失配 MB 常为 cbp=0 的宏块，解码端 info.mv 为 -64 填充（不
+  可用标记）→ 解码器把该 MB 解成 **P 切片内 I_NxN（cbp=0）**，编码器
+  侧 plan/写出与重建的 MV/模式记账不对称——405 bi4 的 mirror 污染
+  同族，但污染源不止 intra4x4 一个字段（dct8x8/ABR 路径各有一条）。
+- 下一步：405 方法论（(ctx,bit) 全量 + bypass_sign + 门控），对
+  `write_cabac_mb_syntax` 的 I4/I16 分支与解码端
+  `h264_decode_mb_cabac_intra` 的模式回放逐 bin 对拍；重点查
+  `eval_cabac_bits` 试价回滚漏掉的 mirror 字段与 h264_enc_cabac.mbt
+  主循环 AQ 的 `ctx.qscale` 记账。
+
+### Bug B：i4p「independent」夹具失效（结构性覆盖）
+
+`intra4x4_in_p is independent of intra_in_p` 在现决策下 I4 全输
+（i4p=0），独立性只剩结构性覆盖；CABAC 计价默认开后与 CAVLC 干跑
+分歧按熵钉值（i4p 8 vs 6、2547 vs 2624、pins 拆 pins1/pins2）。专片
+重调夹具恢复区分度。

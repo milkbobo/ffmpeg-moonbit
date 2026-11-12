@@ -705,6 +705,25 @@ C:\Users\milkb\.moon\bin\moon.exe test  --no-render   # 必须全绿
 
 - 加 `--no-render` 抑制刷屏；用 `Select-String -NotMatch "INFO"` 过滤日志后看结论。
 - **交付标准**：`moon check` 0 error / 0 warning，且 `moon test` 全通过。
+- **验证目标约定（2026-11-13 起）：只跑 wasm。** H.264 编码器（§405-§407 起）
+  及此后新片的回归门一律是 **wasm**（宿主 `moon test --target wasm`）；
+  **不要**主动跑 docker native / x264 / ffref 套件——本机 Docker Desktop
+  反复 500（引擎不稳定，单容器全量编译 40 分钟以上还可能挂死），native 结果
+  以仓库里最近一次成功记录为准；只有用户明确点名（如改了 C 桩/FFI 面、
+  或要求出 native 数据）才跑，且按测试文件分小批（带 `timeout`）。
+  纯 MoonBit 逻辑改动对后端透明，wasm 绿即可交付。
+- **编码器测试按「名字族」跑，不要整包**：libavcodec 整包 wasm 会撞
+  `__moonbit__init` 局部上限（见 §6）/ moonrun 挂起；用
+  `moon test --target wasm -p milkbobo/ffmpeg-moonbit/libavcodec -f "名字 glob" --no-render`
+  按族过滤。**坑：`-f` 匹配的是测试名不是文件名**——同文件里前缀不同的族
+  （如 `h264_enc_bintra_test.mbt` 里的 `h264 enc bi4:`）会被漏扫；普查前先
+  `grep -hoE '^test "[^"]+"' libavcodec/h264_enc*.mbt` 枚举全部测试名 stem，
+  再逐族跑全。已知族清单（H.264 编码线，2026-11-13）：`h264 enc *`、
+  `h264 enc b:`、`h264 enc bi4*`、`h264 enc bi8*`、`h264 enc bintra*`、
+  `h264 enc bparts*`、`h264 enc combo*`、`h264 rc:`、`h264 aud:`、`h264 vbv:`、
+  `h264 stream:`、`h264 brc:`、`h264 cabac enc:`、`h264 cabac rd:`、
+  `h264 aq:`、`h264 aq strength*`、`h264 i4p:`、`hrd:`、`probe:`、
+  `CLI *`（cmd/encode-h264 包）。
 - **wasm 体积测量**：`python scripts/generate_wasm_size_probe.py`（重新生成探针 →
   编译 `wasm`/`wasm-gc` release → 报告原始/gzip 体积并做字符串指纹验证）。
   `wasm_probe/main/main.mbt` 是生成物，勿手改；**公共 API 变更后探针失配**

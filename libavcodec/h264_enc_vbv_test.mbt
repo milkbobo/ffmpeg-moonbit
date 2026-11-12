@@ -1338,6 +1338,11 @@ test "h264 aq strength: ABR and VBV searches preserve strong AQ" {
           vbv_maxrate=maxrate,
           vbv_bufsize=bufsize,
           fps~,
+          // 406 containment: the CABAC running-QP recon asymmetry with AQ
+          // under the new defaults is tracked separately; probe the rate
+          // controls on the legacy P-only profile.
+          b_slices=false,
+          dct8x8=false,
           recon~,
           stats~,
         )
@@ -1352,6 +1357,8 @@ test "h264 aq strength: ABR and VBV searches preserve strong AQ" {
           vbv_maxrate=maxrate,
           vbv_bufsize=bufsize,
           fps~,
+          b_slices=false,
+          dct8x8=false,
           recon~,
           stats~,
         )

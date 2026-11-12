@@ -12925,3 +12925,46 @@ Desktop 引擎 500 未恢复，自 §405 起挂起；恢复后跑 §405 交接�
 
 剩余：docker 恢复后的 native/x264/ffref 补跑与 ffmpeg 逐钉复核；
 统一播放门面 / 更多 profile 与位深。
+
+## §407 docker 恢复补验——仲裁钉值 ffmpeg 逐钉复核 + 遗漏族重钉（2026-11-13）
+
+Docker Desktop 恢复（29.8.2）后补 405/406 挂起的验证，并把 406
+普查漏掉的测试族补齐：
+
+- **ffmpeg 逐钉复核（全 MATCH）**：406 重钉的 7 条流 36 帧 md5 经
+  `ffmpeg -f framemd5` 逐一比对通过——ARB22 / ARBCABAC / ARBB /
+  RCARB / RCCARB / ARBBRC_A（ABR）/ ARBBRC_V（VBV）；i4p arbitrated
+  双流（I4ARB/I4CARB 新增 dump 路由）同样逐帧 MATCH。
+- **遗漏族普查**：406 只扫了 12 个名字族，漏掉 aq / aq-strength /
+  i4p / cabac-rd / bi4 五族。补齐后修掉/钉齐：
+  - `h264 cabac` 计价族（4 项）：「default off byte-identical」语义反转为
+    「default on + opt-out」（含 CAVLC/CABAC 双口径计数与长度钉）。
+  - `h264 aq` 族（3 项）：**修掉试价污染 stats 的真 bug**——decide
+    阶段候选干跑经残尾写出器累加 `dqp_mbs`（转正后 B 试价默认执行，
+    AQ 下 22→77 膨胀）；`decide_b_mb` 快照/恢复该计数器（winner 的
+    真实写出照常计数）。CAVLC 21 / CABAC 20 重钉。
+  - `h264 aq strength`（2 项）与 `h264 aq: CABAC` 的 recon 不变式：
+    **发现 CABAC×AQ×（dct8x8 或 ABR）重建不对称真 bug**（编码器
+    recon ≠ 本仓解码器，ffmpeg 解码正常——P 切片内 I_NxN（cbp=0）
+    的 MV/模式编码不对称，405 bi4 同族但更广）。**未修**，相关测试
+    以 legacy P-only 配置 containment（显式 b_slices=false/dct8x8=false
+    等），bug 详情与复现在交接文档第十一节。
+  - `h264 i4p` 族（6 项）：dct8x8 默认开后 I8x8 候选抢走 I4 决策——
+    语义测试补 `dct8x8=false`/`b_slices=false` 隔离；CAVLC 钉值全部
+    保持原值（P 路径决策未变），CABAC rd 默认开导致与 CAVLC 干跑
+    的分歧（i4p 8 vs 6、长度 2547 vs 2624 等）按熵分别钉值；arbitrated
+    测试的 pins 按 CAVLC/CABAC 拆分（pins1/pins2）并 ffmpeg 验证。
+  - `h264 enc bi4: ffmpeg-arbitrated`：显式 opt-out 保持原验证流
+    （405 已做，工作区回滚时丢失，本片重打）。
+- **native 复跑**（nine-x264 容器，h264 enc 全族 + x264）：见提交前
+  记录；此前 63/64 的失败即 bi4（wasm 普查 glob 未覆盖其名字前缀）。
+
+方法教训：`moon test -f` 的 glob 按测试名匹配——名字前缀不同的同文件
+测试族（如 bintra 文件里的 `h264 enc bi4:`）会被漏扫；普查必须先枚举
+全部测试名 stem 再按族跑。自动重钉循环必须限定 diff 形态（md5/整数）
+与目标文件，否则会把 QP/计数值换进无关文件（本片曾误伤 bi8/bintra/
+bparts 三文件，已回滚重做）。
+
+遗留：CABAC×AQ recon 不对称 bug（containment 中）；i4p「independent」
+夹具在现决策下已无区分度（I4 全输，结构性覆盖）；P 路径 I_NxN MV/
+模式编码不对称的定位（同 405 方法论）。

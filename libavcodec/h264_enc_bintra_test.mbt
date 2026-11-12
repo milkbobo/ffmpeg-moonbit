@@ -608,6 +608,11 @@ test "h264 enc bi4: ffmpeg-arbitrated six frames (96x64, QP 18)" {
       qp=18,
       b_slices=true,
       intra4x4_in_b=true,
+      // 406: pin the ffmpeg-arbitrated I4x4-in-B stream exactly; keep
+      // the (now default-on) extra tools out of it.
+      b_parts=false,
+      intra_in_b=false,
+      dct8x8=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)

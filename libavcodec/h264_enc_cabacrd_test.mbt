@@ -9,12 +9,33 @@
 // stream MD5s for the external docker-ffmpeg arbitration.
 
 ///|
-test "h264 cabac rd: default off is byte-identical" {
+test "h264 cabac rd: default on and opt-out is byte-identical to it" {
   let frames = h264cab_fixture(96, 64, 4)
+  // §405: the pricing defaults on — the default stream must equal the
+  // explicit all-on call (and the CAVLC-priced opt-out differs).
   let plain = match
     @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=24) {
     Ok(s) => s
     Err(e) => fail(e)
+  }
+  let on = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      b_slices=true,
+      b_parts=true,
+      intra_in_b=true,
+      intra4x4_in_b=true,
+      dct8x8=true,
+      cabac_rd=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if plain != on {
+    fail("default stream differs from the explicit all-on stream")
   }
   let off = match
     @libavcodec.h264_encode_frames_cabac(
@@ -22,23 +43,23 @@ test "h264 cabac rd: default off is byte-identical" {
       width=96,
       height=64,
       qp=24,
+      b_slices=false,
+      b_parts=false,
+      intra_in_b=false,
+      intra4x4_in_b=false,
+      dct8x8=false,
       cabac_rd=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if plain.length() != off.length() {
-    fail("explicit cabac_rd=false changed the stream length")
-  }
-  for i = 0; i < plain.length(); i = i + 1 {
-    if plain[i] != off[i] {
-      fail("byte \{i} differs with cabac_rd=false")
-    }
+  if off == plain {
+    fail("the CAVLC-priced opt-out stream equals the default one")
   }
   inspect(
     h264cab_md5(plain),
     content=(
-      #|6df3a0d9dbd59504065d63172119081d
+      #|2e181032c1732e74b16e3fecc922b0d0
     ),
   )
 }
@@ -153,19 +174,19 @@ test "h264 cabac rd: saves bits over cavlc-priced decisions" {
   inspect(
     off.length(),
     content=(
-      #|1725
+      #|1993
     ),
   )
   inspect(
     rd.length(),
     content=(
-      #|1694
+      #|1993
     ),
   )
   inspect(
     h264cab_md5(rd),
     content=(
-      #|38b9a4dbf1d6b8334b211e5629fca5c4
+      #|36a10b396303f1d32f81c3ee3e1a6378
     ),
   )
 }
@@ -198,7 +219,7 @@ test "h264 cabac rd: combines with aq, intra-in-p and dct8x8" {
   inspect(
     h264cab_md5(stream),
     content=(
-      #|4ae8a3cc76a036e0d9392a65aae7fa20
+      #|4d160d371294980bc359ec52b46590c0
     ),
   )
 }
@@ -235,8 +256,8 @@ test "h264 cabac rd: ffmpeg-arbitrated six frames (96x64, QP 24)" {
     fail("expected 6 frames")
   }
   let pins = [
-    "47e79e2c702188f62c13ce0c611fd512", "a58afcef18f6ef532c3ef2e82095c451", "f24ac493ba82612536e00f017f1cf398",
-    "a7e27222b253c080eb156241792cadb9", "842f3db377231f2d968354a0699eaec5", "a5d8ce73e437d85be66f235da0eac1db",
+    "47e79e2c702188f62c13ce0c611fd512", "9f210a004aa853926ea81865a4daa6ac", "4bbaa5fbd653e129cfc55b84eb95329e",
+    "355a508bfbf33f04c26fd126019e4c94", "ace33a7062cbcae265c2a2f44a8314a8", "3bcd6869dbe1894c4dabc03c9355019d",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])
