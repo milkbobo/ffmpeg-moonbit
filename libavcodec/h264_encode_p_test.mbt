@@ -243,7 +243,7 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
   }
   let pins = [
     "4215ee3be54b5cf3f3a8ccf97cc7ee64", "fe024801f9edddf9772c44c365c5ae25", "5a11f5b10c0fe07851e633d806d9a94b",
-    "6039e16a638ff1c502455149073edf85",
+    "125367a315f5e083ad159459eab74da7",
   ]
   for i, f in by_display {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
@@ -285,7 +285,7 @@ test "h264 enc: ffmpeg-arbitrated RD six frames (96x64, QP 24)" {
   }
   let pins = [
     "4215ee3be54b5cf3f3a8ccf97cc7ee64", "fe024801f9edddf9772c44c365c5ae25", "5a11f5b10c0fe07851e633d806d9a94b",
-    "3776ef97c61c4d5d96f8434efe9ec11b", "e0bb9368d8eb712976afb77e31f08e3e", "b0aba3c4cce939470a271d7b6dd3f68c",
+    "2db3868d82a77e893f1f857e71dcd2ad", "7d22163859621d1dedb36c1a7f4221e6", "f0c7494c788f6cf245fedd3e3503dc36",
   ]
   for i, f in by_display {
     inspect(h264p_md5(f.yuvp()), content=pins[i])

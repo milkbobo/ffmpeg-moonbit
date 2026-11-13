@@ -108,13 +108,14 @@ test "h264 enc: P-slice Intra16x16 scene cut round-trips" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  // `§411` recalibration: with `dct8x8` now the default the inter baseline
-  // tightened (2356 B vs >= 2364 B before) and the old 2x gate failed by a
-  // few bytes - measured 1182 B intra vs 2356 B inter (1.99x), gate set to
-  // 1.8x with margin.
-  if stream.length() * 18 >= plain.length() * 10 {
+  // `§413` recalibration: with weighted P prediction now the default, the
+  // scene-cut frame's global chroma change (right half 96+grad -> 128) is
+  // exactly what the fitted weights describe, so the inter baseline dropped
+  // from 2356 B to 2017 B - measured 1188 B intra vs 2017 B inter (1.69x),
+  // gate relaxed from 1.8x to 1.6x.
+  if stream.length() * 16 >= plain.length() * 10 {
     fail(
-      "intra stream \{stream.length()} B is not at least 1.8x smaller than inter \{plain.length()} B",
+      "intra stream \{stream.length()} B is not at least 1.6x smaller than inter \{plain.length()} B",
     )
   }
   let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {

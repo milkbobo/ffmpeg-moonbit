@@ -195,7 +195,9 @@ fn parse_options(args : Array[String]) -> Options raise {
     b_parts: !no_b && !values.contains("--no-b-parts"),
     intra_in_b: !no_b && !values.contains("--no-intra-in-b"),
     intra4x4_in_b: !no_b && !values.contains("--no-intra4x4-in-b"),
-    weightp: values.contains("--weightp") && !values.contains("--no-weightp"),
+    // Since §413 weighted P prediction defaults on; the positive spelling
+    // stays accepted as a no-op and `--no-weightp` opts out.
+    weightp: !values.contains("--no-weightp"),
     bit_depth,
   }
 }

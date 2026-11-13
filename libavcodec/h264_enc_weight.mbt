@@ -84,7 +84,41 @@ fn h264_enc_plane_weight(
   if off > 127 {
     off = 127
   }
-  (wq.to_int(), off)
+  // `§413` benefit gate: the least-squares fit is a *global* model, so on
+  // mostly-static content with a few strong edges it is numerically
+  // meaningless (a measured moving-box fit landed at w=29/o=13 and made the
+  // whole-picture SAD 164% of the plain prediction; a chroma gradient's
+  // half-pixel shift fit an offset of +1/+2 that had a marginal SAD gain
+  // under the zero-MV fit but turned every exactly-matching static block
+  // into a ±1 residual — 2.2x the P-picture bytes). Keep the fitted pair
+  // only when the integer-rounded weighted prediction — exactly the
+  // transform `h264_weight_rect` applies — cuts the visible-area SAD by at
+  // least a quarter; only genuine global fades/gains clear that bar.
+  // Otherwise return the neutral pair (the table still rides the slice
+  // header, but as the identity transform).
+  let wi = wq.to_int()
+  if wi == scale.to_int() && off == 0 {
+    return (wi, off)
+  }
+  let off2 = (off << (bit_depth - 8 + denom)).to_int64() +
+    ((1L : Int64) << (denom - 1))
+  let mut sad_plain : Int64 = 0L
+  let mut sad_weighted : Int64 = 0L
+  for y = 0; y < h; y = y + 1 {
+    for x = 0; x < w; x = x + 1 {
+      let d = dst[y * dst_stride + x]
+      let s = src[y * src_stride + x]
+      let dp = d - s
+      sad_plain = sad_plain + (if dp < 0 { -dp } else { dp }).to_int64()
+      let pred = ((s.to_int64() * wq + off2) >> denom).to_int()
+      let dw = d - pred
+      sad_weighted = sad_weighted + (if dw < 0 { -dw } else { dw }).to_int64()
+    }
+  }
+  if sad_plain <= 0L || sad_weighted * 4L >= sad_plain * 3L {
+    return (scale.to_int(), 0)
+  }
+  (wi, off)
 }
 
 ///|

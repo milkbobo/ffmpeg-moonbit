@@ -561,10 +561,10 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if flat.length() != 2697 {
+  if flat.length() != 2684 {
     fail("flat CAVLC length changed: \{flat.length()}")
   }
-  if h264_rc_md5(flat) != "ce1d994a99a836014b8e8f1c2a330244" {
+  if h264_rc_md5(flat) != "84ee35e38ed196f6ab1a761db3c1999a" {
     fail("flat CAVLC bytes changed: \{h264_rc_md5(flat)}")
   }
   let flatc = match
@@ -572,10 +572,10 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if flatc.length() != 2347 {
+  if flatc.length() != 2321 {
     fail("flat CABAC length changed: \{flatc.length()}")
   }
-  if h264_rc_md5(flatc) != "1f88b8d3f63f9cc3b5b3876853e4eb52" {
+  if h264_rc_md5(flatc) != "c094f3d9c6a7ab600d07869c1a8bb4d9" {
     fail("flat CABAC bytes changed: \{h264_rc_md5(flatc)}")
   }
   // Explicit zero parameters and a non-default init percentage (ignored
@@ -773,7 +773,7 @@ test "h264 vbv: CAVLC SPS VUI/HRD, SEI and NAL layout" {
     fail("cavlc: expected 5 access units, got \{sizes.length()}")
   }
   let (total, fullness) = vbv_cpb_check("cavlc", sizes, 100000, 32000, 30, 90)
-  if total != stream.length() * 8 || total != 21672 {
+  if total != stream.length() * 8 || total != 21552 {
     fail("cavlc: AU bits \{total}, stream \{stream.length() * 8}")
   }
   if fullness > 32000 {
@@ -841,7 +841,7 @@ test "h264 vbv: CABAC SPS VUI/HRD, SEI and NAL layout" {
   }
   let sizes = vbv_au_sizes(nals)
   let (total, fullness) = vbv_cpb_check("cabac", sizes, 100000, 32000, 30, 90)
-  if total != stream.length() * 8 || total != 19560 {
+  if total != stream.length() * 8 || total != 19624 {
     fail("cabac: AU bits \{total}, stream \{stream.length() * 8}")
   }
   if fullness > 32000 {
@@ -989,8 +989,8 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
   if stats_c.vbv_fills != 0 || stats_c.vbv_filler_bytes != 0 {
     fail("cavlc: tight buffer should not need filler")
   }
-  if cavlc.length() != 2339 ||
-    h264_rc_md5(cavlc) != "db436cd55d911f3ec7a63dea7462418a" {
+  if cavlc.length() != 2332 ||
+    h264_rc_md5(cavlc) != "5bbc6815ade3dadd59864985d88487f0" {
     fail("cavlc: tight-buffer stream drifted: \{h264_rc_md5(cavlc)}")
   }
   h264_rc_recon_invariant("vbv-cavlc-tight", cavlc, recon_c, 5)
@@ -1276,8 +1276,8 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
     Err(e) => fail(e)
   }
   let pins1 = [
-    "292edd53ff3434561e2e1d737c563c98", "abde823cec3dc9021df89d81d02d36a1", "18b4f9149092b59b77fc9f1b9b6506e0",
-    "c5164e001c35014f6003663261d631f9", "8a78a272b64469198398628b4da2f480",
+    "292edd53ff3434561e2e1d737c563c98", "31d694a5ee739d63753f0db7c7ec7be0", "ae677397c8d01eecbdce42c1d01e8817",
+    "87a80c535bde32c2b31610f42fcd8291", "70ae53ae1d2440934724c79c909fdf42",
   ]
   for i, f in filtered {
     inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
@@ -1308,8 +1308,8 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "292edd53ff3434561e2e1d737c563c98", "a0adea1495420568e5bc45e0d51bab13", "7e6010ee8d92549c225c386f663db38e",
-    "1c913fbc0d236e8c7442d1da6c816a8a", "aca08b118f66d226ec966ecb02eae60b",
+    "292edd53ff3434561e2e1d737c563c98", "7bb5a2aa12cd43d89fee4a65ebafc03c", "80e0e4117df82fe77dbf5c9ec28a18fc",
+    "dd09e66766df750d5a2f0b6e714facd9", "6a4f997e6bedf6a547e9e2550982be33",
   ]
   for i, f in filtered2 {
     inspect(h264_rc_md5(f.yuvp()), content=pins2[i])

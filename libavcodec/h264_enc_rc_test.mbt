@@ -184,7 +184,7 @@ test "h264 rc: CAVLC lands under the target and responds monotonically" {
   debug_inspect(
     stats_s.frame_qps,
     content=(
-      #|[37, 37, 37, 37, 38]
+      #|[36, 36, 36, 37, 37]
     ),
   )
   debug_inspect(
@@ -227,7 +227,7 @@ test "h264 rc: CABAC lands under the target with dithered QPs" {
   debug_inspect(
     stats.frame_qps,
     content=(
-      #|[38, 38, 38, 38, 38]
+      #|[38, 38, 38, 38, 39]
     ),
   )
   h264_rc_recon_invariant("cabac", stream, recon, 5)
@@ -343,8 +343,8 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins1 = [
-    "81d73c30f11e4182ed4c338451d55d7b", "ae354f7322fcc0e3aedd2c64cf64ff81", "1f5af3bec1c3816ef0c0bc24f38000b2",
-    "978337d695ef2aca44d83cfa4f07ec8d", "f1d686f76c3900f25539f6e72315081d",
+    "81d73c30f11e4182ed4c338451d55d7b", "ba0b694753f81a6fa8023be615553d6f", "0b3b1575abea4b20552784211477d589",
+    "c6815444a6f7b8baa6df76963e27a0e3", "32710d81cc1b76bd270a7b1c4a806169",
   ]
   for i, f in filtered {
     inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
@@ -359,8 +359,8 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "81d73c30f11e4182ed4c338451d55d7b", "5f7d8818d00dd555554074ecb65c962d", "9d15ad6addfac079ffb45d7a022d74a1",
-    "7390c3f145843d12f25f901e071c6856", "ce243667cce02800ab1302c5255b65ac",
+    "81d73c30f11e4182ed4c338451d55d7b", "697dbcf294c372600c190345d0d537d6", "ee7b61e4fc1a17254af2dcb3a27ba24b",
+    "8b2dcad458b5090f676108a299ebf588", "794a9d77ad30525ca6cc7eee84e8eeba",
   ]
   for i, f in filtered2 {
     inspect(h264_rc_md5(f.yuvp()), content=pins2[i])
@@ -543,7 +543,7 @@ test "h264 aq: CABAC macroblock QP deltas ride the running QP" {
   }
   // 408: with the defaults (B schedule + all tools) 22 of the 24
   // macroblocks carry a non-zero delta.
-  debug_inspect(stats.dqp_mbs, content="22")
+  debug_inspect(stats.dqp_mbs, content="21")
   if h264_rc_md5(stream) == h264_rc_md5(off) {
     fail("aq must change the bitstream")
   }
@@ -627,8 +627,8 @@ test "h264 aq: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins1 = [
-    "ce0e7afa003dc3e3b1ff1d059c2881ba", "0208a80308044b6cfca575383f6f96f9", "33e25d1a78452d138f69b33ca2dac127",
-    "f7032eb288f2d2234ed9759bf111ed86",
+    "ce0e7afa003dc3e3b1ff1d059c2881ba", "0208a80308044b6cfca575383f6f96f9", "c91071f607a44c88861801047289629c",
+    "4a5e22864f8432ffca9212097db77273",
   ]
   for i, f in filtered {
     inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
@@ -638,8 +638,8 @@ test "h264 aq: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "873a22e67ac6a024cd7613ffe7c52150", "c3415303a9b57054726f29a66f3115e5", "026176483fd929652dc879cee0cb4f21",
-    "008d85e1f417fc6c9bf5f4a47ee08aea",
+    "873a22e67ac6a024cd7613ffe7c52150", "c3415303a9b57054726f29a66f3115e5", "b52811a162bf2b22a3b840c5da558b86",
+    "174f1bd8232d05d71bdb6d2b491d74af",
   ]
   for i, f in filtered2 {
     inspect(h264_rc_md5(f.yuvp()), content=pins2[i])
@@ -714,7 +714,7 @@ test "h264 i4p: fine texture wins Intra4x4 macroblocks in P slices" {
   debug_inspect(stats.i4p_mbs, content="6")
   debug_inspect(stats.i16_mbs, content="0")
   debug_inspect(stats.i8p_mbs, content="0")
-  debug_inspect(stream.length(), content="2624")
+  debug_inspect(stream.length(), content="2629")
   h264_rc_recon_invariant("cavlc-i4p", stream, recon, 4)
   let stats2 = @libavcodec.H264EncStats::new()
   let recon2 : Array[Bytes] = []
@@ -737,7 +737,7 @@ test "h264 i4p: fine texture wins Intra4x4 macroblocks in P slices" {
   // 406: the CABAC pricing (default on) wins 2 more I8x8 macroblocks
   // than the CAVLC dry-run pricing on this fixture.
   debug_inspect(stats2.i4p_mbs, content="8")
-  debug_inspect(stream2.length(), content="2547")
+  debug_inspect(stream2.length(), content="2553")
   h264_rc_recon_invariant("cabac-i4p", stream2, recon2, 4)
 }
 
@@ -831,7 +831,7 @@ test "h264 i4p: Intra4x4 without the 8x8 transform" {
   debug_inspect(stats.i4p_mbs, content="14")
   debug_inspect(stats.i16_mbs, content="20")
   debug_inspect(stats.i8p_mbs, content="0")
-  debug_inspect(stream.length(), content="1119")
+  debug_inspect(stream.length(), content="1130")
   h264_rc_recon_invariant("cavlc-i4p-no8", stream, recon, 4)
   let stats2 = @libavcodec.H264EncStats::new()
   let recon2 : Array[Bytes] = []
@@ -853,8 +853,8 @@ test "h264 i4p: Intra4x4 without the 8x8 transform" {
   }
   // 406: the CABAC pricing wins one more I4x4 macroblock than the CAVLC
   // dry-run pricing on this fixture.
-  debug_inspect(stats2.i4p_mbs, content="15")
-  debug_inspect(stream2.length(), content="1031")
+  debug_inspect(stats2.i4p_mbs, content="12")
+  debug_inspect(stream2.length(), content="1019")
   h264_rc_recon_invariant("cabac-i4p-no8", stream2, recon2, 4)
   let filtered = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
@@ -873,7 +873,7 @@ test "h264 i4p: Intra4x4 without the 8x8 transform" {
   }
   // 406: the CABAC pricing diverges from the CAVLC dry run on frames 1-2.
   let pins2 = [
-    "db4f9f5a354f60a75388bb1762ba6a23", "4d8dde0869589de5e97f5d739cfd3baf", "b75cae4d587c3d1b5083ed99b3149cbd",
+    "db4f9f5a354f60a75388bb1762ba6a23", "ddcf5381f4475334078a203b6fb562bd", "bde34b7bb5f3b3147f321cf6e5a87f0b",
     "d98b68f3f945aa79d407a816d73d6b5c",
   ]
   for i, f in filtered2 {

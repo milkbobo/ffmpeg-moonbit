@@ -13172,3 +13172,55 @@ ffmpeg CLI framemd5 10-bit B-GOP 双熵流 **12/12 帧 MATCH 零告警**
 死循环（E0052 警告即线索，容器 100% CPU 挂 45 分钟）；docker 内
 `moon test -f` 是**全名匹配**（需 `ffref: ` 前缀）且不可重复传；探针包
 必须放 repo 根（`.scratch` 不参与包发现），moon.pkg 用仓库 s-表达式语法。
+
+## §413 H.264 `weightp` 转正默认 + 收益门——两个「全局拟合噪声」真 bug 的发现与修复（2026-11-13）
+
+`§410` 交付时 weightp 保持 opt-in，本片把它转正为默认（§406 六开关同款路数：
+公开三入口 `h264_encode_frames` / `h264_encode_frames_cabac` /
+`H264StreamEncoder::open` 翻 `weightp = true`，单帧 intra 入口与 PPS 辅助保持
+false 默认；CLI 默认开、`--weightp` 变 no-op、`--no-weightp` 退出）。转正
+第一轮全族 45 项失败，其中质量塌方类（round-trip MAD 5-6、RD PSNR 35.2 dB）
+暴露出**拟合缺收益门**的两层真 bug——这正是 opt-in 时代 fade 专用测试网测
+不到的：
+
+**Bug 1（luma 噪声拟合）**：移动方块场景的最小二乘拟合在「大片静止 + 少量
+强边缘」的病态数值条件下拟出 `w=29/o=13`（中性为 32/0），全图加权后 SAD
+是直接预测的 **164%**，RD PSNR 从 43.5 dB 塌到 35.2 dB、round-trip MAD 超
+阈。修法第一版：拟合后整数化权重必须**严格减小**可见区 SAD 才保留，否则退
+中性表（表仍随 slice 头写出，但为恒等变换）。
+
+**Bug 2（chroma 边缘收益 × skip 精确匹配）**：严格更优门修完后 rc fixture
+（棋盘+方块）上 P 帧仍从 ~400B 膨胀到 ~900B（**2.2x**）。机理：chroma 梯度
+每帧平移半像素，零 MV 全图拟合下 `o=+1/+2` 有微小 SAD 改善（半像素平移的
+常数近似）能过严格门；但真实 MC 里静止块是**精确匹配（残差全 0）**，offset
+平白造出 ±1 残差 → skip 崩、系数冒出。SAD 门用错了域（零 MV 拟合域 ≠ 实际
+MV 预测域）。修法：门收紧为**显著性阈值**——`sad_weighted * 4 < sad_plain * 3`
+（改善 >25%）才保留；只有真正的全局 fade/增益/色度渐变能过，边缘噪声全挡。
+moving fixture 的 chroma `(col+f)&0x3F+96` 是逐帧精确 +1/+2 的全局增益，
+>25% 改善 → 保留（合理且有益：i16_cut 场景切换帧 inter 腿因此省 339B）。
+
+**重钉**（收益门后语义反转/字节变化）：
+
+- `h264_enc_weightp_test` 5 项：对照腿显式 `weightp=false`；opt-in 测试改写
+  为 default-on（默认 == 显式 true；fade 上默认 ≠ false）。
+- `h264_enc_vbv_test`：flat 2697→2684 / 2347→2321（md5 重钉）；AU bits
+  21672→21552 / 19560→19624；tight-buffer md5 2339→2332（**QP 轨迹
+  [26,26,26,33,35] / [26,26,26,26,31] 与旧钉完全一致**——率控行为未变）；
+  ffmpeg 仲裁 pins1/pins2 重钉（注意该测试按**解码序**遍历，显示序映射
+  slot=[0,2,1,4,3] 逆排后回填）。
+- `h264_encode_p_intra_test` 场景切换比值门 1.8x→1.6x（inter 基线因 chroma
+  加权 2356→2017，实测 1188/2017=1.69x）。
+
+**仲裁**：tmp_probe（repo 根 native 包）产 V413A（CAVLC 200000/60000/30）/
+V413K（CABAC 60000/12000/30）流 + 显示序逐帧 md5，docker ffmpeg framemd5
+**10/10 帧 MATCH 零告警**（产物 `.scratch/repin413/`）。ffref 全套 **78/78**
+（10-bit 默认流带 PWT 后与 oracle 仍逐样本一致）。
+
+**验证**：wasm check 干净；黑盒全族+CLI **153/153**；白盒
+`h264_enc_weight_wbtest` 4/4（wasm-gc——纯 wasm 白盒二进制既有
+`local count too large` 崩溃，勿混跑）。
+
+**方法论**：全局最小二乘权重在非全局变化内容上是噪声放大器——x264 用真实
+RD 代价门，我们用 SAD 显著性近似；门的**域**必须贴近实际预测路径（零 MV
+拟合域的「收益」会欺骗静止内容的 skip 精确匹配）。转正默认是对 opt-in 特性
+最有效的压力测试：45 项失败里藏着两个 fade 测试网永远测不到的真 bug。

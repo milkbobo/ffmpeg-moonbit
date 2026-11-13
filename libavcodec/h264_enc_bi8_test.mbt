@@ -244,16 +244,16 @@ test "h264 enc bi8: ffmpeg-arbitrated six frames (96x64, QP 20)" {
   let frames = h264bi8_fixture(96, 64, 6)
   let pins = [
     [
-      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "0037af1eef93c8f33a64cf9bd15478d4",
-      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "d82f604a03383dde0bf77b2ee8220fb4", "7ab794a1d54c2550c8cd475f667f19b9",
+      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "2180b3b0d0ab8ce7def33b331d682ecc",
+      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "87796b531536231d1466e80dbbe7cbd7", "364ee0fc3520ec82ae4e98cf16a89733",
     ],
     [
-      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "0037af1eef93c8f33a64cf9bd15478d4",
-      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "d82f604a03383dde0bf77b2ee8220fb4", "7a14afeeb3a2cd3c6b9b980bac1d7df5",
+      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "2180b3b0d0ab8ce7def33b331d682ecc",
+      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "87796b531536231d1466e80dbbe7cbd7", "364ee0fc3520ec82ae4e98cf16a89733",
     ],
     [
-      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "0037af1eef93c8f33a64cf9bd15478d4",
-      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "d82f604a03383dde0bf77b2ee8220fb4", "bb7ca4d48ab389648a36cdfb7a0c32db",
+      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "2180b3b0d0ab8ce7def33b331d682ecc",
+      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "ca005c237dad014ca4b5fd66639cdcfd", "ca9e56a3bf2d2eceb13a6eaf827e73a8",
     ],
   ]
   let routes = ["ARBBI8V", "ARBBI8C", "ARBBI8R"]

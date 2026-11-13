@@ -59,7 +59,7 @@ test "h264 cabac rd: default on and opt-out is byte-identical to it" {
   inspect(
     h264cab_md5(plain),
     content=(
-      #|2e181032c1732e74b16e3fecc922b0d0
+      #|37b30dcf85a02b7291daaa9d0c5898d2
     ),
   )
 }
@@ -174,19 +174,19 @@ test "h264 cabac rd: saves bits over cavlc-priced decisions" {
   inspect(
     off.length(),
     content=(
-      #|1993
+      #|1919
     ),
   )
   inspect(
     rd.length(),
     content=(
-      #|1993
+      #|1919
     ),
   )
   inspect(
     h264cab_md5(rd),
     content=(
-      #|36a10b396303f1d32f81c3ee3e1a6378
+      #|1e6b96b73ccaf5026169b270cd7bcd16
     ),
   )
 }
@@ -219,7 +219,7 @@ test "h264 cabac rd: combines with aq, intra-in-p and dct8x8" {
   inspect(
     h264cab_md5(stream),
     content=(
-      #|4d160d371294980bc359ec52b46590c0
+      #|60351f46b20d1f5045d7df5cbc9911fc
     ),
   )
 }
@@ -257,7 +257,7 @@ test "h264 cabac rd: ffmpeg-arbitrated six frames (96x64, QP 24)" {
   }
   let pins = [
     "47e79e2c702188f62c13ce0c611fd512", "9f210a004aa853926ea81865a4daa6ac", "4bbaa5fbd653e129cfc55b84eb95329e",
-    "355a508bfbf33f04c26fd126019e4c94", "ace33a7062cbcae265c2a2f44a8314a8", "3bcd6869dbe1894c4dabc03c9355019d",
+    "4bab814244912c92b5c425dc1b4ee0b0", "eb5fb0b2fc71efccb948c2cd21af0158", "74779281ed1a483dad2355ba9b2cbc17",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])

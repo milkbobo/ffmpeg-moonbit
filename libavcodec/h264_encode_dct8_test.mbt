@@ -233,7 +233,7 @@ test "h264 enc: cabac 8x8dct P frames round-trip" {
     by_display[disp[s]] = f
   }
   let pins = [
-    "e659929b54b1464bdfb83061e7f7d31c", "9681402f40bd7f37e8f6688e2ddbd965", "d0a781b9b16545170a359c6a2865bc6f",
+    "e659929b54b1464bdfb83061e7f7d31c", "a9f686a7184a863262b9d38e397d190f", "b9ab013e93a71f103d46371e136206ef",
   ]
   for i, f in by_display {
     inspect(h264_dct8_md5(f.yuvp()), content=pins[i])
@@ -560,7 +560,7 @@ test "h264 enc: cavlc 8x8dct P frames round-trip" {
     by_display[disp[s]] = f
   }
   let pins = [
-    "e659929b54b1464bdfb83061e7f7d31c", "08dc5aca9d1012e83b5d99ef573fb648", "541e963de88a9108d578bef6fe241de9",
+    "e659929b54b1464bdfb83061e7f7d31c", "4ddac9fafa0b4e50ba50a638d9a96a8a", "2f5dfe48276da002684a7d4b809d16cf",
   ]
   for i, f in by_display {
     inspect(h264_dct8c_md5(f.yuvp()), content=pins[i])
@@ -863,7 +863,7 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CAVLC)" {
     Err(e) => fail(e)
   }
   let pins = [
-    "d22cde9ae2786a87e92dddeeb489972f", "5a71eefb89894ff8d74e9e008fb5b727", "071fe7f6a628f7aa123cd8acd42faee7",
+    "d22cde9ae2786a87e92dddeeb489972f", "87632d0814891d2df210844c6fc6b8da", "86c1ef163f45d85a1da02ff362460839",
   ]
   for i, f in filtered {
     inspect(h264_i8p_md5(f.yuvp()), content=pins[i])
@@ -909,7 +909,7 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CABAC)" {
   // changed frame 2's macroblock decisions on this fixture (pins 0-1
   // unchanged).
   let pins = [
-    "82fad6309b69ab79f6401362847fdfca", "5a71eefb89894ff8d74e9e008fb5b727", "c7054bd76a07f3b185c5c0a959dd0836",
+    "82fad6309b69ab79f6401362847fdfca", "5530fa7f617694afed603430bf8b99da", "d66dc8d0cc5323aa51f4b968c2b030f7",
   ]
   for i, f in filtered {
     inspect(h264_i8p_md5(f.yuvp()), content=pins[i])

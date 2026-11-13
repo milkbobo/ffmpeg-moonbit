@@ -120,6 +120,7 @@ test "h264 enc: weightp cuts a fade's residual energy" {
       height=h,
       qp=26,
       b_slices=false,
+      weightp=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
@@ -184,9 +185,10 @@ test "h264 enc: weightp cuts a fade's residual energy" {
 }
 
 ///|
-/// The new tool must stay opt-in: omitting `weightp` produces the exact same
-/// bytes as an explicit `false`, so every pre-existing stream stays stable.
-test "h264 enc: weightp is opt-in (default stream unchanged)" {
+/// Since `§413` weighted P prediction defaults on: omitting `weightp`
+/// produces the exact same bytes as an explicit `true`, and the explicit
+/// opt-out restores the pre-§410 unweighted stream.
+test "h264 enc: weightp is default-on (opt-out restores unweighted)" {
   let w = 96
   let h = 64
   let frames = h264wp_fade_fixture(w, h, 4)
@@ -194,6 +196,20 @@ test "h264 enc: weightp is opt-in (default stream unchanged)" {
     @libavcodec.h264_encode_frames(frames, width=w, height=h, qp=28) {
     Ok(s) => s
     Err(e) => fail(e)
+  }
+  let explicit_on = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=w,
+      height=h,
+      qp=28,
+      weightp=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  if h264wp_md5(default_stream) != h264wp_md5(explicit_on) {
+    fail("default stream differs from weightp=true")
   }
   let explicit_off = match
     @libavcodec.h264_encode_frames(
@@ -206,8 +222,8 @@ test "h264 enc: weightp is opt-in (default stream unchanged)" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if h264wp_md5(default_stream) != h264wp_md5(explicit_off) {
-    fail("default stream differs from weightp=false")
+  if h264wp_md5(default_stream) == h264wp_md5(explicit_off) {
+    fail("fade default stream unexpectedly equals the unweighted stream")
   }
 }
 
@@ -257,6 +273,7 @@ test "h264 enc: weightp reproduces a pure gain change" {
       height=h,
       qp=30,
       b_slices=false,
+      weightp=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
@@ -305,6 +322,7 @@ test "h264 enc: weightp round-trips under CABAC" {
       height=h,
       qp=26,
       b_slices=false,
+      weightp=false,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
@@ -348,7 +366,13 @@ test "h264 enc: weightp composes with the B-slice GOP" {
     Err(e) => fail(e)
   }
   let off = match
-    @libavcodec.h264_encode_frames(frames, width=w, height=h, qp=26) {
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=w,
+      height=h,
+      qp=26,
+      weightp=false,
+    ) {
     Ok(s) => s
     Err(e) => fail(e)
   }

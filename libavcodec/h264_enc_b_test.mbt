@@ -365,7 +365,7 @@ test "h264 enc b: aud and aq combine" {
   inspect(
     h264b_md5(stream),
     content=(
-      #|e8ad6016715083ca06fd76a490b505d1
+      #|e8ed1d152644985504ce9208b84933d4
     ),
   )
   inspect(
@@ -412,7 +412,7 @@ test "h264 enc b: ffmpeg-arbitrated six frames (96x64, QP 24)" {
   // P/B pictures carry the new B-line + 8x8DCT decisions.
   let pins = [
     "4215ee3be54b5cf3f3a8ccf97cc7ee64", "c5c4868e055734b3972615c374c7e693", "3696059c7b46132a7eb2a4f043985fd1",
-    "4868059ef25a65a1ecb1d6cd6dfbeb97", "43719c0f77cefbdabd8a0b9ce2bf57a9", "e751410b417324f561a0548888c140ee",
+    "4b9983fe2892fa17bd3f81963294c7ca", "f52b6925ce4baa217950fc7bc314c2d5", "9b0cbacb170c82123740b8920d8f3f3f",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])

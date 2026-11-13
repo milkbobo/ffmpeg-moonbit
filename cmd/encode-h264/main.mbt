@@ -28,6 +28,9 @@ fn main raise {
     println(
       "  [--intra4x4-in-b] Intra4x4 macroblocks inside B slices; requires --b-slices",
     )
+    println(
+      "  [--no-weightp] disable explicit weighted P prediction (default on)",
+    )
     return
   }
   let opts = parse_options(args[1:].to_owned())

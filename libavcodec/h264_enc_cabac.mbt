@@ -2939,9 +2939,9 @@ pub fn h264_encode_frames_cabac(
   vbv_init~ : Int32 = 90,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
-  /// `§410`: explicit P weighted prediction. Changes the bitstream, so it
-  /// stays opt-in; the default path is byte-identical.
-  weightp~ : Bool = false,
+  /// `§410`: explicit P weighted prediction; default on since `§413`
+  /// (`weightp=false` restores the pre-§410 byte-identical path).
+  weightp~ : Bool = true,
   /// `§412`: 8 (default), 9 or 10 bits (`yuv420p10le` frames above 8).
   bit_depth~ : Int32 = 8,
 ) -> Result[Bytes, String] {

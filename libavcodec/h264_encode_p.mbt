@@ -278,9 +278,9 @@ pub fn h264_encode_frames(
   stats~ : H264EncStats = H264EncStats::new(),
   /// Opt-in (`§410`): explicit P weighted prediction — one fitted
   /// `pred_weight_table()` per P picture, applied to every inter prediction
-  /// (skip runs included). Off, the PPS/slice headers are byte-identical to
-  /// the previous sections.
-  weightp~ : Bool = false,
+  /// (skip runs included). Default on since `§413`; `weightp=false` keeps
+  /// the PPS/slice headers byte-identical to the pre-§410 streams.
+  weightp~ : Bool = true,
   /// `§412`: 8 (default), 9 or 10 bits; above 8 the frames are
   /// `yuv420p10le` (little-endian 16-bit planes) and the SPS is High 10.
   bit_depth~ : Int32 = 8,

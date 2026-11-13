@@ -367,8 +367,8 @@ test "h264 enc bintra: ffmpeg-arbitrated six frames (96x64, QP 22)" {
     println("ARBBINTRAMD5:\{md5}")
   }
   let pins = [
-    "2ee9cae30c5978acfe03e23b4bcc3d74", "c67c47cd7c0624823646d05ed6e73b9a", "60cdcdfca15b74cdff1b49d00463be16",
-    "c67c47cd7c0624823646d05ed6e73b9a", "7b2972576e3f0ee3c899bbd7a150d253", "947e78f8f462b58eadda5480f66b5738",
+    "2ee9cae30c5978acfe03e23b4bcc3d74", "c67c47cd7c0624823646d05ed6e73b9a", "ca907efb446044033b389d99b85695b5",
+    "c67c47cd7c0624823646d05ed6e73b9a", "a3f01c1f7f6859761ff5012a03b247a6", "60c3edfb3a22d52c1ce9964ab624601f",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])
@@ -634,8 +634,8 @@ test "h264 enc bi4: ffmpeg-arbitrated six frames (96x64, QP 18)" {
     println("ARBBI4MD5:\{md5}")
   }
   let pins = [
-    "8123205a72cae4bfd209c448bb42fe6f", "dcc556dfe40339f31443e945548dc067", "cd1c2449c3a2d9a02203c2e917d55d56",
-    "811cbefba136977c0966429cbebb487e", "641def1012f507dae51392251d05b56f", "ca4bab8aa324678d80cc7942c9768ba0",
+    "8123205a72cae4bfd209c448bb42fe6f", "dcc556dfe40339f31443e945548dc067", "196fe3f6c3f77a7093d715e74798d4aa",
+    "811cbefba136977c0966429cbebb487e", "aee68dbc79894dceb234de09c335beac", "945c019a6685aa291b470e21ce9e31a5",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])

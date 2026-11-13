@@ -104,10 +104,11 @@ pub fn H264StreamEncoder::open(
   intra_in_b~ : Bool = true,
   /// Default on (`§403`); requires `b_slices`.
   intra4x4_in_b~ : Bool = true,
-  /// Opt-in (`§410`): explicit weighted prediction for the P pictures —
-  /// a fitted `pred_weight_table()` per picture, applied to every inter
-  /// prediction. Changes the bitstream, so it stays opt-in.
-  weightp~ : Bool = false,
+  /// Explicit weighted prediction for the P pictures — a fitted
+  /// `pred_weight_table()` per picture, applied to every inter prediction.
+  /// Opt-in in `§410`; default on since `§413` (`weightp=false` restores
+  /// the unweighted headers).
+  weightp~ : Bool = true,
   /// `§412`: 8 (default), 9 or 10 bits; above 8 the pushed frames are
   /// `yuv420p10le` planes and the SPS is High 10 (profile_idc 110).
   bit_depth~ : Int32 = 8,
