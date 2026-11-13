@@ -1066,11 +1066,7 @@ test "h264 aq strength: defaults, zero and reconstruction at QP boundaries" {
       default_stream,
     )
     let mut changed = false
-    // 408 KNOWN ISSUE: at qp 51 the AQ offsets clamp away entirely (the
-    // picture codes flat at 51), and the CAVLC B-schedule Intra16x16-in-B
-    // recon diverges by ±1 there (Bug C, tracked separately) - the qp
-    // boundary leg stays at 0/26 until that fix lands.
-    for qp in [0, 26] {
+    for qp in [0, 26, 51] {
       let recon : Array[Bytes] = []
       let stats = @libavcodec.H264EncStats::new()
       let stream = encode(cabac, true, 6, qp, recon, stats)
@@ -1098,6 +1094,67 @@ test "h264 aq strength: defaults, zero and reconstruction at QP boundaries" {
         )
       }
       assert_true(result is Err(_))
+    }
+  }
+}
+
+///|
+/// §409 regression: CAVLC B schedule at qp 51 with strong AQ used to
+/// desynchronise the decoder's running QP — the decide-phase candidate
+/// trials advanced `prev_qp` (CAVLC) / the mirror's `qscale`
+/// (CABAC) before the real write, so a B_Direct macroblock with cbp=0
+/// (which codes no `mb_qp_delta`) left the decoder's dequantiser at a
+/// different QP than the encoder's. The running-QP snapshot/restore in
+/// `decide_b_mb` fixes it; this pins the reconstruction invariant on the
+/// extreme-QP corner (qp 51, strength 6).
+test "h264 aq strength: qp51 B schedule keeps the recon invariant" {
+  let frames = h264_aq_fixture(3)
+  for cabac in [false, true] {
+    let recon : Array[Bytes] = []
+    let stream = match
+      (if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=64,
+          height=48,
+          qp=51,
+          aq=true,
+          aq_strength=6,
+          recon~,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=64,
+          height=48,
+          qp=51,
+          aq=true,
+          aq_strength=6,
+          recon~,
+        )
+      }) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      Ok(f) => f
+      Err(e) => fail(e)
+    }
+    if dec.length() != 3 {
+      fail("expected 3 frames, got \{dec.length()}")
+    }
+    if recon.length() != 2 {
+      fail("expected 2 recons, got \{recon.length()}")
+    }
+    for i, src in recon {
+      let r = dec[i + 1]
+      for k in 0..<src.length() {
+        if src[k] != r.yuvp()[k] {
+          fail(
+            "cabac=\{cabac} frame \{i + 1}: recon mismatch at byte \{k} (enc \{src[k]} dec \{r.yuvp()[k]})",
+          )
+        }
+      }
     }
   }
 }

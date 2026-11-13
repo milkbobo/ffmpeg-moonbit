@@ -2150,10 +2150,17 @@ fn H264PEncoder::decide_b_mb(
   qp : Int32,
 ) -> Result[(H264BPlan, H264PMbCode?), String] {
   // The candidate pricing below dry-runs the syntax writers, and the
-  // residual tails count `mb_qp_delta` macroblocks into `stats.dqp_mbs`.
-  // Only the caller's REAL write (after this decide returns) may count,
-  // so restore the counter before handing the plan back.
+  // residual tails count `mb_qp_delta` macroblocks into `stats.dqp_mbs`
+  // AND advance the running-QP state (`prev_qp` for CAVLC, the mirror's
+  // `qscale`/`last_qscale_diff` for CABAC). Only the caller's REAL write
+  // (after this decide returns) may do either, so restore all of them
+  // before handing the plan back — otherwise the first cbp!=0 trial
+  // (e.g. an L0 candidate on a B_Direct macroblock) shifts every later
+  // `mb_qp_delta` and the decoder's dequantiser diverges.
   let dqp_before = self.stats.dqp_mbs
+  let prev_qp_before = self.prev_qp
+  let qscale_before = mirror.qscale
+  let lqd_before = mirror.last_qscale_diff
   let mb_idx = mb_y * self.mb_width + mb_x
   let info = mirror.infos[mb_idx]
   for i = 0; i < 48; i = i + 1 {
@@ -2857,9 +2864,13 @@ fn H264PEncoder::decide_b_mb(
   }
   ignore(coded)
   self.commit_b_mb_state(mb_idx, plan, mirror)
-  // Undo the pricing trials' `dqp_mbs` contributions (see the snapshot
-  // at the top); the caller's real write re-counts this macroblock.
+  // Undo the pricing trials' `dqp_mbs` / running-QP contributions (see
+  // the snapshot at the top); the caller's real write re-applies this
+  // macroblock's delta against the restored state.
   self.stats.dqp_mbs = dqp_before
+  self.prev_qp = prev_qp_before
+  mirror.qscale = qscale_before
+  mirror.last_qscale_diff = lqd_before
   Ok((plan, Some(coded_final)))
 }
 

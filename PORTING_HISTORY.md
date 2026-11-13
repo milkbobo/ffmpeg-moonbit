@@ -13000,3 +13000,34 @@ containment 解除：`h264 aq: CABAC`（dqp 重钉 22）、
 bintra 5/bparts 7/combo 5/rc 4/aud 1/vbv 7/stream 8/brc 4/probe 4/
 cabac 16/aq 3/aq-strength 2/i4p 6）。`moon check --deny-warn` 干净。
 wasm-only 约定（agent.md §2）下交付。
+
+## §409 Bug C 修复——decide 试价污染运行 QP 链（CAVLC prev_qp / CABAC mirror.qscale）（2026-11-13）
+
+沿十四节的四步入口，第一步 `h264_b_prediction` 的 MC 参数打印即当场
+破案：**两侧 compensate 的 mv/采样坐标完全一致（sx=28, sy=-3,
+sub=0,0），且编码器侧输出正确（100…）——真正的分歧在反量化 QP**：
+
+- 解码器 qs 链（B1）：51 →(MB0) 51 →(MB1) 51 →(MB2 +6) **57→回绕 5**；
+  编码器链：51 →45 →45 →51。MB0 是 **B_Direct16 且 cbp=0**——正确地
+  不写 `mb_qp_delta`（解码器保持 51），但 decide 试价的候选写出
+  （L0/L1/Bi/parts 的 cbp≠0 tail）把 `self.prev_qp` 推进到 45，
+  MB1/MB2 的 `mb_dqp = mq - prev_qp` 因此基于被污染的基准：
+  MB1 dqp=0（应为 -6）、MB2 dqp=+6（解码器 51+6=57→回绕 5，编码器
+  按 51 反量化）→ 盒区 recon 完全分叉。
+- **修复**：`decide_b_mb` 的快照/恢复从 `dqp_mbs`（§407）扩展到
+  `prev_qp`（CAVLC）与 `mirror.qscale` / `mirror.last_qscale_diff`
+  （CABAC 的 `h264_cabacw_dqp` 在干跑中同样推进二者）——四个状态
+  在返回 winner 前统一还原，真实写出照常重放。
+- Bug C 的「MC 输入差异」假说作废（MCP 打印证明两侧采样坐标/参考面
+  指纹全同）；「I16-in-B」「B_L0_8x16 语义」也都是过路假设。
+- **containment 解除**：`h264 aq strength` 的 qp 腿恢复 [0, 26, 51]；
+  新增回归 `h264 aq strength: qp51 B schedule keeps the recon
+  invariant`（双熵 × 极端 qp 角 × 全 yuvp 逐字节）。
+
+验证：wasm 全族 **143 + CLI 16 全绿**（新增 1 项）；`moon check
+--deny-warn` 干净；`moon info` 无 .mbti 变化。wasm-only 约定下交付。
+
+至此 §405-§409 的 B 线正确性收口完成：decide 试价的全部可污染状态
+（dqp_mbs、prev_qp、mirror.qscale、last_qscale_diff、chroma_mode、
+transform_8x8、intra4x4）均已快照/还原或预清。剩余：统一播放门面 /
+更多 profile 与位深（无已知正确性欠账）。
