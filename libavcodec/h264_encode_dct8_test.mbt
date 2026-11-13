@@ -1,8 +1,9 @@
 // Blackbox tests for the High-profile transform_8x8 (8x8DCT) CABAC write
 // path: I-frame I8x8 (I_NxN + transform_size_8x8_flag) and P-frame inter
-// 8x8 residuals. Opt-in (`dct8x8=true`); the default chain stays Main
-// profile byte-for-byte. Pinned against this repository's decoder, the
-// encoder's own reconstruction, and docker ffmpeg's framemd5.
+// 8x8 residuals. `dct8x8` is the sequence default since `§403` (pass
+// `dct8x8=false` for the legacy 4x4-only streams; the standalone intra
+// encoder entries still default it off). Pinned against this repository's
+// decoder, the encoder's own reconstruction, and docker ffmpeg's framemd5.
 
 ///|
 /// Textured fixture: diagonal ramps + per-8x8-grid offset pattern - the
@@ -194,14 +195,22 @@ test "h264 enc: cabac 8x8dct P frames round-trip" {
       fail("P frame \{i + 1}: encoder reconstruction != decoder reconstruction")
     }
   }
-  // The plain stream (no 8x8) must be a different byte sequence.
+  // The plain stream (no 8x8) must be a different byte sequence. Since
+  // `§403` promoted `dct8x8` to the sequence default, "plain" is the
+  // explicit legacy `dct8x8=false` stream.
   let plain = match
-    @libavcodec.h264_encode_frames_cabac(frames, width=96, height=64, qp=24) {
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      dct8x8=false,
+    ) {
     Ok(s) => s
     Err(e) => fail(e)
   }
   if plain == stream {
-    fail("8x8 stream identical to the default stream")
+    fail("8x8 stream identical to the legacy 4x4 stream")
   }
   // Replayable Annex B dump for the external ffmpeg arbitration.
   let mut d = ""
@@ -215,14 +224,18 @@ test "h264 enc: cabac 8x8dct P frames round-trip" {
     Ok(f) => f
     Err(e) => fail(e)
   }
-  // Re-pinned in §386: the rate-distortion dry run now prices the real
-  // 8x8 CAVLC sub-list syntax (§385 priced 8x8 candidates as all-zero 4x4
-  // lists), so plan choices and the stream changed. Same docker ffmpeg
-  // 9.0.2 arbitration: zero warnings, byte-identical to this decoder.
+  // Re-pinned in `§411`: the `§403` B-GOP default reordered the stream to
+  // I0,P2,B1, so the pins are ffmpeg's display-order framemd5 values (the
+  // decoder emits decode order; slot 1 is P2, slot 2 is B1).
+  let disp = [0, 2, 1]
+  let by_display : Array[@libavcodec.H264Frame] = Array::make(3, filtered[0])
+  for s, f in filtered {
+    by_display[disp[s]] = f
+  }
   let pins = [
-    "e659929b54b1464bdfb83061e7f7d31c", "77c50f5edcc0a62dbd0cd9e8186a64de", "e8aea2ab1899b485d775eb6ed3f1b8a3",
+    "e659929b54b1464bdfb83061e7f7d31c", "9681402f40bd7f37e8f6688e2ddbd965", "d0a781b9b16545170a359c6a2865bc6f",
   ]
-  for i, f in filtered {
+  for i, f in by_display {
     inspect(h264_dct8_md5(f.yuvp()), content=pins[i])
   }
 }
@@ -509,13 +522,21 @@ test "h264 enc: cavlc 8x8dct P frames round-trip" {
     }
   }
   // The plain stream (Baseline, no 8x8) must be a different byte sequence.
+  // `dct8x8` is the sequence default since `§403`, so the Baseline
+  // comparison passes it explicitly.
   let plain = match
-    @libavcodec.h264_encode_frames(frames, width=96, height=64, qp=24) {
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      dct8x8=false,
+    ) {
     Ok(s) => s
     Err(e) => fail(e)
   }
   if plain == stream {
-    fail("8x8 stream identical to the default stream")
+    fail("8x8 stream identical to the legacy 4x4 stream")
   }
   // Replayable Annex B dump for the external ffmpeg arbitration.
   let mut d = ""
@@ -529,14 +550,19 @@ test "h264 enc: cavlc 8x8dct P frames round-trip" {
     Ok(f) => f
     Err(e) => fail(e)
   }
-  // The pixels equal the CABAC suite's pins by construction: both entropy
-  // coders share one plan decision and one residual chain, so only the
-  // bitstream bytes differ (the `plain == stream` check above and the
-  // ffmpeg arbitration cover the CAVLC syntax itself).
+  // Re-pinned in `§411`, display order (see the CABAC suite above). The
+  // legacy chain shared one plan decision across entropy coders, but in
+  // the B-GOP era the B-slice decisions differ between CAVLC and CABAC,
+  // so this suite carries its own pins (the I picture is shared).
+  let disp = [0, 2, 1]
+  let by_display : Array[@libavcodec.H264Frame] = Array::make(3, filtered[0])
+  for s, f in filtered {
+    by_display[disp[s]] = f
+  }
   let pins = [
-    "e659929b54b1464bdfb83061e7f7d31c", "77c50f5edcc0a62dbd0cd9e8186a64de", "e8aea2ab1899b485d775eb6ed3f1b8a3",
+    "e659929b54b1464bdfb83061e7f7d31c", "08dc5aca9d1012e83b5d99ef573fb648", "541e963de88a9108d578bef6fe241de9",
   ]
-  for i, f in filtered {
+  for i, f in by_display {
     inspect(h264_dct8c_md5(f.yuvp()), content=pins[i])
   }
 }
@@ -781,6 +807,9 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CAVLC)" {
   let frames = h264_i8p_fixture(96, 64)
   let stats = @libavcodec.H264EncStats::new()
   let recon : Array[Bytes] = []
+  // `b_slices=false` (`§411` re-pin): the P-slice intra fallback only
+  // exists on the legacy I/P chain (the B-GOP wires its P pictures with
+  // `intra_in_p=false`).
   let stream = match
     @libavcodec.h264_encode_frames(
       frames,
@@ -789,6 +818,7 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CAVLC)" {
       qp=24,
       intra_in_p=true,
       dct8x8=true,
+      b_slices=false,
       stats~,
       recon~,
     ) {
@@ -808,6 +838,7 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CAVLC)" {
       height=64,
       qp=24,
       dct8x8=true,
+      b_slices=false,
       stats~,
     ) {
     Ok(s) => s
@@ -825,7 +856,8 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CAVLC)" {
   }
   println("I8PARB:\{d}")
   // Pinned against docker ffmpeg 9.0.2 framemd5: zero warnings, every
-  // frame byte-identical to this decoder's filtered output.
+  // frame byte-identical to this decoder's filtered output. `§411`:
+  // legacy-chain stream byte-stable, pins unchanged.
   let filtered = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
@@ -843,6 +875,7 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CABAC)" {
   let frames = h264_i8p_fixture(96, 64)
   let stats = @libavcodec.H264EncStats::new()
   let recon : Array[Bytes] = []
+  // `b_slices=false` (`§411` re-pin, see the CAVLC test above).
   let stream = match
     @libavcodec.h264_encode_frames_cabac(
       frames,
@@ -851,6 +884,7 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CABAC)" {
       qp=24,
       intra_in_p=true,
       dct8x8=true,
+      b_slices=false,
       stats~,
       recon~,
     ) {
@@ -870,8 +904,12 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CABAC)" {
     Ok(f) => f
     Err(e) => fail(e)
   }
+  // Re-pinned in `§411`: the legacy chain itself is byte-stable since the
+  // last arbitration, but the `§405`-`§409` CABAC decide/pricing fixes
+  // changed frame 2's macroblock decisions on this fixture (pins 0-1
+  // unchanged).
   let pins = [
-    "82fad6309b69ab79f6401362847fdfca", "5a71eefb89894ff8d74e9e008fb5b727", "071fe7f6a628f7aa123cd8acd42faee7",
+    "82fad6309b69ab79f6401362847fdfca", "5a71eefb89894ff8d74e9e008fb5b727", "c7054bd76a07f3b185c5c0a959dd0836",
   ]
   for i, f in filtered {
     inspect(h264_i8p_md5(f.yuvp()), content=pins[i])

@@ -109,6 +109,28 @@ test "h264 enc: static scene codes as pure skip run" {
 }
 
 ///|
+/// Decode-order slot -> display position for the default B-GOP (`§403`):
+/// I0, then P(e+1) B(e) pairs, with a trailing P when the length is even.
+/// The decoder emits pictures in decode order; docker ffmpeg's framemd5
+/// reorders to display order, so every source comparison goes through
+/// this map (n=4: I0,P2,B1,P3; n=6: I0,P2,B1,P4,B3,P5).
+fn h264p_decode_to_display(n : Int) -> Array[Int] {
+  let order : Array[Int] = [0]
+  let mut e = 1
+  while e < n {
+    if e + 1 < n {
+      order.push(e + 1)
+      order.push(e)
+      e = e + 2
+    } else {
+      order.push(e)
+      e = e + 1
+    }
+  }
+  order
+}
+
+///|
 test "h264 enc: moving scene round trip and reconstruction invariant" {
   let frames = h264p_fixture(96, 64, 6)
   let stream = match
@@ -123,22 +145,22 @@ test "h264 enc: moving scene round trip and reconstruction invariant" {
   if frames_dec.length() != 6 {
     fail("expected 6 frames, got \{frames_dec.length()}")
   }
-  // Quality sanity per P frame (the I frame's SAD-decision quality is the
-  // intra slice's tuning target, gated in its own tests): mean absolute
-  // luma error vs source.
-  for f in 1..<6 {
-    let (y, _, _) = frames[f]
-    let src = frames_dec[f]
+  // Quality sanity per coded picture against its SOURCE frame (the I
+  // frame's SAD-decision quality is the intra slice's tuning target,
+  // gated in its own tests): mean absolute luma error.
+  let disp = h264p_decode_to_display(frames_dec.length())
+  for d, src in frames_dec {
+    let (y, _, _) = frames[disp[d]]
     let mut sum = 0
     for row = 0; row < 64; row = row + 1 {
       for col = 0; col < 96; col = col + 1 {
-        let d = y[row * 96 + col].to_int() - src.y[row * src.ystride + col]
-        sum = sum + (if d < 0 { -d } else { d })
+        let diff = y[row * 96 + col].to_int() - src.y[row * src.ystride + col]
+        sum = sum + (if diff < 0 { -diff } else { diff })
       }
     }
     let mean = sum / (96 * 64)
     if mean > 3 {
-      fail("frame \{f} luma mean abs diff \{mean} too high")
+      fail("display frame \{disp[d]} luma mean abs diff \{mean} too high")
     }
   }
 }
@@ -204,11 +226,6 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
     d3 = d3 + (stream[i3].to_int() & 0xFF).to_string() + ","
   }
   println("ARB3:\{d3}")
-  let mut d4 = ""
-  for i4 = 0; i4 < stream.length(); i4 = i4 + 1 {
-    d4 = d4 + (stream[i4].to_int() & 0xFF).to_string() + ","
-  }
-  println("ARB4:\{d4}")
   let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
@@ -216,13 +233,19 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
   if frames_dec.length() != 4 {
     fail("expected 4 frames")
   }
-  // Re-pinned after the RD slice (SSD + lambda * exact CAVLC bits, Int64
-  // cost): ffmpeg's framemd5 values, zero warnings.
+  // Re-pinned in `§411`: `§403`'s B-GOP default reordered the stream to
+  // I0,P2,B1,P3, so the pins are ffmpeg's framemd5 values in DISPLAY
+  // order (this decoder emits decode order; the map inverts it).
+  let disp = h264p_decode_to_display(4)
+  let by_display : Array[@libavcodec.H264Frame] = Array::make(4, frames_dec[0])
+  for d, f in frames_dec {
+    by_display[disp[d]] = f
+  }
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "877e41a7cfe21e1e8fc74044445f9424", "3754207b53763ecb5b0ca0dfdf440106",
-    "c5cac007488f1ce7b9ff722c35c21086",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "fe024801f9edddf9772c44c365c5ae25", "5a11f5b10c0fe07851e633d806d9a94b",
+    "6039e16a638ff1c502455149073edf85",
   ]
-  for i, f in frames_dec {
+  for i, f in by_display {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
   }
 }
@@ -253,11 +276,18 @@ test "h264 enc: ffmpeg-arbitrated RD six frames (96x64, QP 24)" {
     dump6 = dump6 + (stream[i].to_int() & 0xFF).to_string() + ","
   }
   println("ARB6:\{dump6}")
+  // Re-pinned in `§411` (display order, see the four-frame test above):
+  // the B-GOP default emits I0,P2,B1,P4,B3,P5.
+  let disp = h264p_decode_to_display(6)
+  let by_display : Array[@libavcodec.H264Frame] = Array::make(6, frames_dec[0])
+  for d, f in frames_dec {
+    by_display[disp[d]] = f
+  }
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "877e41a7cfe21e1e8fc74044445f9424", "3754207b53763ecb5b0ca0dfdf440106",
-    "c5cac007488f1ce7b9ff722c35c21086", "97f20381fb1fe85e477e6df04b17330a", "73f854104d75d4e10e878b3753349bb8",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "fe024801f9edddf9772c44c365c5ae25", "5a11f5b10c0fe07851e633d806d9a94b",
+    "3776ef97c61c4d5d96f8434efe9ec11b", "e0bb9368d8eb712976afb77e31f08e3e", "b0aba3c4cce939470a271d7b6dd3f68c",
   ]
-  for i, f in frames_dec {
+  for i, f in by_display {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
   }
 }
@@ -288,8 +318,8 @@ test "h264 enc: partitions engage on the moving box" {
 
 ///|
 /// Rate-distortion operating point, measured on the unfiltered
-/// reconstruction against the source over the five P frames (96x64, QP 24):
-/// **42.14 dB at 2163 bytes**.
+/// reconstruction against the source over the five non-I pictures (96x64,
+/// QP 24): **43.50 dB at 2542 bytes**.
 ///
 /// History the floor encodes. §380 measured 27.38 dB at 2940 bytes here and
 /// pinned a 26.5 dB floor - but that figure was itself the symptom of a
@@ -303,6 +333,12 @@ test "h264 enc: partitions engage on the moving box" {
 /// wrong levels), so no reconstruction invariant or external arbitration
 /// could see it - only an amplitude/quality gate can, which is why this
 /// floor now sits at the encoder's real operating point instead of 26.5.
+/// §387-§402's chain measured 42.14 dB at 2163 bytes on the legacy I/P
+/// stream; `§403`'s six-switch promotion (B-GOP, 8x8 transforms, B intra
+/// candidates) moved the point to 43.50 dB at 2542 bytes - the B pictures
+/// buy 1.4 dB for 380 bytes, and `§411` re-derived both gates at the new
+/// default working point (the old 40.5 dB floor would have masked a B-line
+/// regression that ate 3 dB).
 ///
 /// The floor also still guards the Int32 cost overflow of §380 (with
 /// 32-bit arithmetic `ssd * 1024` wraps negative above SSD 2^21 and every
@@ -322,22 +358,23 @@ test "h264 enc: RD operating point beats the SAD chain" {
     fail("expected 6 frames, got \{dec.length()}")
   }
   let mut se_sum = 0.0
-  for f in 1..<6 {
-    let (y, _, _) = frames[f]
-    let r = dec[f]
+  let disp = h264p_decode_to_display(6)
+  for d = 1; d < 6; d = d + 1 {
+    let (y, _, _) = frames[disp[d]]
+    let r = dec[d]
     for row = 0; row < 64; row = row + 1 {
       for col = 0; col < 96; col = col + 1 {
-        let d = (y[row * 96 + col].to_int() - r.y[row * r.ystride + col]).to_double()
-        se_sum = se_sum + d * d
+        let diff = y[row * 96 + col].to_int() - r.y[row * r.ystride + col]
+        se_sum = se_sum + (diff.to_double() * diff.to_double())
       }
     }
   }
   let mse = se_sum / (5 * 96 * 64).to_double()
   let psnr = 10.0 * @math.log10(255.0 * 255.0 / mse)
-  if psnr < 40.5 {
-    fail("RD luma PSNR \{psnr} dB below the 40.5 dB floor")
+  if psnr < 42.0 {
+    fail("RD luma PSNR \{psnr} dB below the 42.0 dB floor")
   }
-  if stream.length() > 2400 {
-    fail("RD stream \{stream.length()} bytes above the 2400 byte ceiling")
+  if stream.length() > 2700 {
+    fail("RD stream \{stream.length()} bytes above the 2700 byte ceiling")
   }
 }
