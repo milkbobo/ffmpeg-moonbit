@@ -139,6 +139,9 @@ pub fn h264_encode_intra_frame(
   /// little-endian 16-bit samples (`yuv420p10le`) and the SPS switches to
   /// High 10 (profile_idc 110); `qp` keeps its 8-bit meaning.
   bit_depth~ : Int32 = 8,
+  /// `§415`: the sequence's P-slice reference count, signalled by the
+  /// parameter sets this picture carries (single-frame callers keep 1).
+  multi_ref~ : Int32 = 1,
 ) -> Result[H264EncodedFrame, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -158,7 +161,7 @@ pub fn h264_encode_intra_frame(
     v.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) {
     return Err("h264 enc: plane size mismatch")
   }
-  let p = { width, height, qp, level_idc, bit_depth, }
+  let p = { width, height, qp, level_idc, bit_depth, nrefs: multi_ref, }
   // The parameter sets carry `pic_init_qp`: in a rate-controlled sequence
   // that is the sequence's base QP (one PPS serves every picture) while
   // this picture's own QP travels in `slice_qp_delta`.
@@ -172,6 +175,7 @@ pub fn h264_encode_intra_frame(
     },
     level_idc,
     bit_depth,
+    nrefs: multi_ref,
   }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()

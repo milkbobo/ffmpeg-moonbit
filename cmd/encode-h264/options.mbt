@@ -29,6 +29,9 @@ priv struct Options {
   /// `§414`: selected codec (the facade's `VideoCodec`; only `h264`
   /// exists today, so the flag's value space is "h264").
   codec : @codec.VideoCodec
+  /// `§415`: P-slice multi-reference history depth (1 = single reference;
+  /// 2..=16 requires `--no-b-slices` and no rate controls).
+  multi_ref : Int32
 }
 
 ///|
@@ -72,6 +75,7 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--qp"
       | "--bit-depth"
       | "--codec"
+      | "--multi-ref"
       | "--aq-strength"
       | "--target-bytes"
       | "--vbv-maxrate"
@@ -124,6 +128,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     Some("h264") => @codec.VideoCodec::H264
     Some(other) => fail("encode-h264: unsupported codec \{other} (h264)")
   }
+  let multi_ref = number(values, "--multi-ref", 1)
   let aq_strength = number(values, "--aq-strength", 1)
   if aq_strength < 0 || aq_strength > 6 {
     fail("encode-h264: aq-strength must be in 0..=6")
@@ -209,6 +214,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     weightp: !values.contains("--no-weightp"),
     bit_depth,
     codec,
+    multi_ref,
   }
 }
 
@@ -262,6 +268,7 @@ fn video_config(opts : Options) -> @codec.VideoEncConfig {
     intra4x4_in_b: opts.intra4x4_in_b,
     weightp: opts.weightp,
     bit_depth: opts.bit_depth,
+    multi_ref: opts.multi_ref,
     aud: opts.aud,
     aq: opts.aq,
     aq_strength: opts.aq_strength,

@@ -178,34 +178,45 @@ fn h264_enc_fit_p_weight(
 /// emits this between `ref_pic_list_modification()` and
 /// `dec_ref_pic_marking()`, the order FFmpeg's own parser expects
 /// (h264_slice.c:1841 reads the table before h264_slice.c:1853).
-fn h264_enc_put_pwt(r : H264Rbsp, pwt : H264PredWeight) -> Unit {
+fn h264_enc_put_pwt(
+  r : H264Rbsp,
+  pwt : H264PredWeight,
+  nrefs~ : Int32 = 1,
+) -> Unit {
   let luma_denom = pwt.luma_log2_weight_denom
   let chroma_denom = pwt.chroma_log2_weight_denom
   let luma_unit = 1 << luma_denom
   let chroma_unit = 1 << chroma_denom
   r.put_ue(luma_denom)
   r.put_ue(chroma_denom)
-  let lw = pwt.luma_weight_l0[0]
-  let lo = pwt.luma_offset_l0[0]
-  if lw != luma_unit || lo != 0 {
-    r.put_bit(1)
-    r.put_se(lw)
-    r.put_se(lo)
-  } else {
-    r.put_bit(0)
-  }
-  let uw = pwt.chroma_weight_l0[0][0]
-  let uo = pwt.chroma_offset_l0[0][0]
-  let vw = pwt.chroma_weight_l0[0][1]
-  let vo = pwt.chroma_offset_l0[0][1]
-  if uw != chroma_unit || uo != 0 || vw != chroma_unit || vo != 0 {
-    r.put_bit(1)
-    r.put_se(uw)
-    r.put_se(uo)
-    r.put_se(vw)
-    r.put_se(vo)
-  } else {
-    r.put_bit(0)
+  // `§415`: one entry per active L0 reference, **interleaved** exactly as
+  // the decoder's `pred_weight_table` loop reads it (per reference: the
+  // luma flag/pair, then the single chroma flag and its pairs). The fit
+  // fills entry 0; entries 1.. carry the neutral pair, so their flags
+  // stay 0 and the decoder derives `2^denom / 0` itself.
+  for i = 0; i < nrefs; i = i + 1 {
+    let lw = pwt.luma_weight_l0[i]
+    let lo = pwt.luma_offset_l0[i]
+    if lw != luma_unit || lo != 0 {
+      r.put_bit(1)
+      r.put_se(lw)
+      r.put_se(lo)
+    } else {
+      r.put_bit(0)
+    }
+    let uw = pwt.chroma_weight_l0[i][0]
+    let uo = pwt.chroma_offset_l0[i][0]
+    let vw = pwt.chroma_weight_l0[i][1]
+    let vo = pwt.chroma_offset_l0[i][1]
+    if uw != chroma_unit || uo != 0 || vw != chroma_unit || vo != 0 {
+      r.put_bit(1)
+      r.put_se(uw)
+      r.put_se(uo)
+      r.put_se(vw)
+      r.put_se(vo)
+    } else {
+      r.put_bit(0)
+    }
   }
 }
 

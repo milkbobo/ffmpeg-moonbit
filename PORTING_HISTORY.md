@@ -13273,3 +13273,65 @@ B-GOP 默认开，解码回环 6 帧）；② 率控三腿（ABR/VBV-CAVLC/VBV-C
 
 **验证**：`moon check --target wasm --deny-warn` 干净；wasm 全族 19 文件 +
 CLI（含新测试）全绿；`moon info` 门面进公开面（mbti 为本地生成物）。
+
+## §415 H.264 编码器 P 切片多参考——语法层全链 + ff 仲裁 + 已知决策限制（2026-11-14）
+
+编码器从单参考升到 **P 切片多参考**（`multi_ref~ : Int32 = 1`，1 = 原
+字节流）。解码器侧的双熵 `ref_idx` 语法、DPB、ref list 早已就绪
+（`h264_cabac_mb_ref`/CAVLC `read_ref`/滑动窗口 mark_reference），本片
+把编码器补齐：
+
+**语法层（全部经 ffmpeg 仲裁验证）**：
+- SPS `max_num_ref_frames = p.nrefs`、PPS
+  `num_ref_idx_l0_default_active_minus1 = p.nrefs - 1`（参数集源自 I 帧
+  入口，`h264_encode_intra_frame(_cabac)` 加 `multi_ref~` 并贯穿
+  `p/p_ps`——**两处 p_ps 都要带**，漏一处即「PPS 说 2、语法不写
+  ref_idx」的失步）。
+- PPS active>1 时每分区写 `ref_idx_l0`（CAVLC `te(v)`：rc==2 反转 bit /
+  ue；CABAC ctx 54+c unary，与解码器 `h264_cabac_mb_ref` 逐位镜像）。
+  语法层计数用 **`p.nrefs`（序列声明）**而非实际历史长度——解码器按
+  序列常量读，P1（历史仅 1 帧）也必须写。
+- PWT 多条目：**per-ref 交错**（luma flag/pair → chroma flag/pairs，
+  解码器循环序），slot 0 拟合、其余中性——写两段式会把位流错开。
+- `pred_motion`/`pred_16x8`/`pred_8x16` 全面 ref-aware（邻域 ref ==
+  当前分区 ref 才参与预测），与解码器 `h264_mvpred.mbt` 逐行对齐。
+- `H264PEncoder` 加 `refs_y/u/v` 历史（insert(0) 最新在前、cap 请求深度）、
+  `cur_ref_mb`（**MB 级**参考选择，x264 粒度）；`me_part` 加 `refi~`
+  参数（探针纯读历史平面，无指针副作用）；选定后把 `self.ref_y/u/v`
+  **指向选中条目**（MC/eval 全部读这三个字段）；`mc_into_rec` 的加权
+  查表从 `[0]` 改 `[cur_ref_mb]`；`fill_part` 写 `cur_ref_mb` 进镜像。
+- 入口穿透：`h264_encode_frames(_cabac)` + `H264StreamEncoder::open`
+  加 `multi_ref~`；流式 refs 维护**两调度分支统一**（B-GOP 下 P 帧也进
+  历史）；VideoEncConfig/门面/CLI `--multi-ref N`。
+
+**调试过程中的四个连环坑（全部位级定位）**：
+1. I 帧 p_ps 漏 nrefs → 解码器 rc=1 不读 ref_idx，编码器却写 → 失步
+   （EINVAL / coeff_token 越界）。
+2. put_pwt 两段式（先全部 luma 再全部 chroma）→ 解码器按 per-ref 交错
+   读 → PWT 后全部错位（mb_skip_run invalid）。
+3. PE `nrefs` 用请求值而非 `refs_y.length()` → P1 的探针循环越界。
+4. best-ref 探针换指 vs MC 换指分离 → 选 ref1 的 MB 残差用 P1、MC 用
+   P2（recon 不变式破）。
+
+**仲裁**：multi_ref=2 双熵流（MR2B CAVLC 2031B / MR2C CABAC 1524B），
+ffmpeg framemd5 **12/12 帧逐帧 MATCH 零致命告警**（MR2B 有 2 条
+"Missing reference picture" 滑动窗口提示，解码输出正确；产物
+`.scratch/repin415/`）。x264 `--ref 2` 真流被本仓解码器 **3 帧全解**
+（解码器多参考路径首次真流验证）。
+
+**已知决策限制**（语法正确、流有效，下一片候选）：
+1. **recon 不变式在 multi_ref>1 时不成立**——ref-1 宏块的编码器本地
+   recon 与解码器重建相差 ±1..±8（MC 槽位错位疑点，位级排查记录在
+   AGENT_HANDOFF）。
+2. 两参考流不保证更小（决策质量受 1 影响）。
+3. `multi_ref=2` 下流式与批式字节不同（历史维护差异）。
+
+**测试**（`h264_enc_multiref_test.mbt` 7 项）：multi_ref=1 默认字节相同
+（双熵）、双熵 6 帧解码、组合拒收（B 切片/率控/0/17）、深度退化、
+weightp 组合、流式 mr=1 恒等、High 10 组合；CLI +1。
+
+**验证**：wasm check 干净；wasm 全族+CLI **167/167**（153 基线 + 门面 5 +
+multiref 7 + CLI 2）；ffref native **78/78**；白盒 wbtest 须 wasm-gc。
+SPS 的 DPB 容量实验（put_ue(p.nrefs+1)）必须还原——max_num_ref_frames
+进了 VUI 的 max_dec_frame_buffering，vbv 流位级漂移（worktree 位级对拍
+定位）。

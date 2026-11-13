@@ -32,6 +32,9 @@ fn main raise {
       "  [--no-weightp] disable explicit weighted P prediction (default on)",
     )
     println("  [--codec h264] codec selector (§414 facade; h264 only today)")
+    println(
+      "  [--multi-ref N] P-slice reference history 1..16 (needs --no-b-slices, no rate controls)",
+    )
     return
   }
   let opts = parse_options(args[1:].to_owned())

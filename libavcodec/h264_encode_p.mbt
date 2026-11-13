@@ -132,10 +132,24 @@ priv struct H264PEncoder {
   rec_y : Array[Int32]
   rec_u : Array[Int32]
   rec_v : Array[Int32]
-  /// Reference planes (previous frame's reconstruction).
-  ref_y : Array[Int32]
-  ref_u : Array[Int32]
-  ref_v : Array[Int32]
+  /// Reference planes (previous frame's reconstruction). With
+  /// `nrefs > 1` these alias the currently selected entry of the history
+  /// lists below, so every SAD/MC call site keeps reading one set of
+  /// fields while the decision switches references per macroblock.
+  mut ref_y : Array[Int32]
+  mut ref_u : Array[Int32]
+  mut ref_v : Array[Int32]
+  /// Reference history, newest first (`refs_y[0]` is the previous frame's
+  /// reconstruction). Length `nrefs`, capped by the slice header's active
+  /// count; `§415` multi-reference.
+  refs_y : Array[Array[Int32]]
+  refs_u : Array[Array[Int32]]
+  refs_v : Array[Array[Int32]]
+  nrefs : Int32
+  /// This macroblock's selected reference index (MB-level choice, the
+  /// x264 granularity): written into the mirror by `fill_part` and into
+  /// the syntax by the partition writers when `nrefs > 1`.
+  mut cur_ref_mb : Int32
   ystride : Int32
   cstride : Int32
   pwidth : Int32
@@ -284,6 +298,10 @@ pub fn h264_encode_frames(
   /// `§412`: 8 (default), 9 or 10 bits; above 8 the frames are
   /// `yuv420p10le` (little-endian 16-bit planes) and the SPS is High 10.
   bit_depth~ : Int32 = 8,
+  /// `§415`: P-slice multi-reference history depth (1 = the
+  /// single-reference stream, byte-identical to the pre-`§415` encoder).
+  /// Requires `b_slices=false`; the rate controls do not support it yet.
+  multi_ref~ : Int32 = 1,
 ) -> Result[Bytes, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -293,6 +311,17 @@ pub fn h264_encode_frames(
   }
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
+  }
+  if multi_ref < 1 || multi_ref > 16 {
+    return Err("h264 enc: multi_ref must be in 1..=16")
+  }
+  if multi_ref > 1 {
+    if b_slices {
+      return Err("h264 enc: multi_ref does not support B slices yet")
+    }
+    if target_bytes > 0 || vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+      return Err("h264 enc: multi_ref does not support the rate controls yet")
+    }
   }
   // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
   // B picture, so it degrades to the I-only stream instead of erroring.
@@ -528,6 +557,7 @@ pub fn h264_encode_frames(
             stats=H264EncStats::new(),
             weightp~,
             bit_depth~,
+            multi_ref~,
           ) {
           Ok((bytes, _)) => Ok(bytes.length())
           Err(e) => Err(e)
@@ -561,6 +591,7 @@ pub fn h264_encode_frames(
       stats~,
       weightp~,
       bit_depth~,
+      multi_ref~,
     ) {
     Ok((bytes, _)) => Ok(bytes)
     Err(e) => Err(e)
@@ -816,6 +847,9 @@ fn h264_encode_frames_qps(
   weightp~ : Bool = false,
   /// `§412`: bit depth (see `h264_encode_frames`).
   bit_depth~ : Int32 = 8,
+  /// `§415`: P-slice multi-reference history depth (1 = single reference,
+  /// the pre-§415 stream). Requires `b_slices=false`.
+  multi_ref~ : Int32 = 1,
 ) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
@@ -836,11 +870,12 @@ fn h264_encode_frames_qps(
       weightp~,
       bit_depth~,
       vbv~,
+      multi_ref~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  let p = { width, height, qp: base_qp, level_idc, bit_depth, }
+  let p = { width, height, qp: base_qp, level_idc, bit_depth, nrefs: multi_ref, }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -897,6 +932,22 @@ fn h264_encode_frames_qps(
       ref_v[row * cstride + col] = first.recon_v[row * cstride + col]
     }
   }
+  // `§415` multi-reference history: newest first, starting from the I
+  // frame's reconstruction. The active count is capped by both the
+  // request and the sequence length (fewer pictures than references).
+  let mut nrefs = if multi_ref < 1 {
+    1
+  } else if multi_ref > frames.length() {
+    frames.length()
+  } else {
+    multi_ref
+  }
+  if nrefs > 16 {
+    nrefs = 16
+  }
+  let refs_y : Array[Array[Int32]] = [ref_y]
+  let refs_u : Array[Array[Int32]] = [ref_u]
+  let refs_v : Array[Array[Int32]] = [ref_v]
   let states : Array[H264PMbState] = []
   for k = 0; k < mb_width * mb_height; k = k + 1 {
     states.push(new_h264_p_mb_state())
@@ -922,7 +973,7 @@ fn h264_encode_frames_qps(
       (Array::make(mb_width * mb_height, 0), 0)
     }
     let enc : H264PEncoder = {
-      p: { width, height, qp: qps[f], level_idc, bit_depth, },
+      p: { width, height, qp: qps[f], level_idc, bit_depth, nrefs: multi_ref, },
       stats,
       pps,
       chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qps[f]), bit_depth~),
@@ -939,6 +990,11 @@ fn h264_encode_frames_qps(
       ref_y,
       ref_u,
       ref_v,
+      refs_y,
+      refs_u,
+      refs_v,
+      nrefs: refs_y.length(),
+      cur_ref_mb: 0,
       ystride,
       cstride,
       pwidth: ystride,
@@ -1017,6 +1073,17 @@ fn h264_encode_frames_qps(
     ref_y = next_y
     ref_u = next_u
     ref_v = next_v
+    // `§415`: grow the reference history (newest first), capped at the
+    // active count. `next_*` are freshly allocated copies, so the history
+    // keeps them by reference with no extra copying.
+    refs_y.insert(0, next_y)
+    refs_u.insert(0, next_u)
+    refs_v.insert(0, next_v)
+    if refs_y.length() > multi_ref {
+      refs_y.truncate(multi_ref)
+      refs_u.truncate(multi_ref)
+      refs_v.truncate(multi_ref)
+    }
   }
   // Concatenate; the per-picture sizes feed the rate control.
   let out : Array[Byte] = []
@@ -1242,6 +1309,17 @@ fn H264PEncoder::encode_p_frame(
       bit_depth=self.p.bit_depth,
     )
   }
+  // `§415`: the fit fills entry 0; entries 1.. carry the denom-neutral
+  // pair so the syntax writer can flag them 0 and the weighted MC reads
+  // a true identity transform for the other references.
+  for i = 1; i < self.nrefs; i = i + 1 {
+    self.pwt.luma_weight_l0[i] = 1 << self.pwt.luma_log2_weight_denom
+    self.pwt.luma_offset_l0[i] = 0
+    self.pwt.chroma_weight_l0[i][0] = 1 << self.pwt.chroma_log2_weight_denom
+    self.pwt.chroma_offset_l0[i][0] = 0
+    self.pwt.chroma_weight_l0[i][1] = 1 << self.pwt.chroma_log2_weight_denom
+    self.pwt.chroma_offset_l0[i][1] = 0
+  }
   let r = H264Rbsp::new()
   r.put_ue(0) // first_mb_in_slice
   r.put_ue(5) // slice_type: P (all slices)
@@ -1257,7 +1335,7 @@ fn H264PEncoder::encode_p_frame(
   // pred_weight_table (`weightp`): FFmpeg's parser reads it right after the
   // list modification and before the marking (h264_slice.c:1841/1853).
   if self.weightp {
-    h264_enc_put_pwt(r, self.pwt)
+    h264_enc_put_pwt(r, self.pwt, nrefs=self.p.nrefs)
   }
   // dec_ref_pic_marking (nal_ref_idc != 0, non-IDR):
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
@@ -1291,6 +1369,14 @@ fn H264PEncoder::encode_p_frame(
           bit_depth=self.p.bit_depth,
         )
       }
+      // Skip candidates always reference slot 0 (P_Skip codes no ref_idx),
+      // so the reference pointers are reset to the newest entry before the
+      // shortcut test; `decide_plan` may then switch them to the selected
+      // history entry for the whole macroblock (`§415`).
+      self.cur_ref_mb = 0
+      self.ref_y = self.refs_y[0]
+      self.ref_u = self.refs_u[0]
+      self.ref_v = self.refs_v[0]
       let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
       let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
       let plan = if skip_sad == 0 {
@@ -1378,14 +1464,23 @@ fn H264PEncoder::me_part(
   oy : Int32,
   w : Int32,
   h : Int32,
+  /// `§415`: the history entry to search (default 0 = the selected
+  /// reference `self.ref_y`); the multi-reference probe reads the entry's
+  /// planes directly so the probe leaves no state behind.
+  refi~ : Int32 = -1,
 ) -> (Int32, Int32, Int32) {
+  let ref_y = if refi < 0 {
+    self.ref_y
+  } else {
+    self.refs_y[refi]
+  }
   let src_row = mb_y * 16 + oy
   let src_col = mb_x * 16 + ox
   let mut best_x = 0
   let mut best_y = 0
   let mut best_sad = h264_p_sad_int(
     self.src_y,
-    self.ref_y,
+    ref_y,
     src_row,
     src_col,
     self.ystride,
@@ -1403,7 +1498,7 @@ fn H264PEncoder::me_part(
       }
       let sad = h264_p_sad_int(
         self.src_y,
-        self.ref_y,
+        ref_y,
         src_row,
         src_col,
         self.ystride,
@@ -1426,7 +1521,7 @@ fn H264PEncoder::me_part(
     mcbuf,
     0,
     16,
-    self.ref_y,
+    ref_y,
     mb_x * 16 + ox + (best_x >> 2),
     mb_y * 16 + oy + (best_y >> 2),
     self.ystride,
@@ -1463,7 +1558,7 @@ fn H264PEncoder::me_part(
           mcbuf,
           0,
           16,
-          self.ref_y,
+          ref_y,
           mb_x * 16 + ox + (qx >> 2),
           mb_y * 16 + oy + (qy >> 2),
           self.ystride,
@@ -1954,6 +2049,34 @@ fn H264PEncoder::decide_plan(
   let mut best_cost = self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy).to_int64() *
     1024L
   let mut plan = Skip
+  // `§415` multi-reference: the macroblock-level reference is chosen by
+  // the 16x16 motion SAD over the history (x264's granularity); every
+  // partition of this MB then searches the selected entry. P_Skip keeps
+  // slot 0 by syntax, so its candidate above is untouched. Single
+  // -reference sequences skip the loop and the pointer assignments are
+  // no-op aliases.
+  if self.nrefs > 1 {
+    let mut best_ref = 0
+    let (_, _, s0) = self.me_part(mb_x, mb_y, 0, 0, 16, 16)
+    let mut best_sad = s0
+    for refi in 1..<self.nrefs {
+      let (_, _, sad) = self.me_part(mb_x, mb_y, 0, 0, 16, 16, refi~)
+      if sad < best_sad {
+        best_sad = sad
+        best_ref = refi
+      }
+    }
+    self.cur_ref_mb = best_ref
+    // Point the MC/eval reference planes at the selected entry: every
+    // reconstruction path reads `self.ref_y/u/v`, so the decision's choice
+    // must be visible there before any candidate is priced.
+    self.ref_y = self.refs_y[best_ref]
+    self.ref_u = self.refs_u[best_ref]
+    self.ref_v = self.refs_v[best_ref]
+  }
+  self.ref_y = self.refs_y[self.cur_ref_mb]
+  self.ref_u = self.refs_u[self.cur_ref_mb]
+  self.ref_v = self.refs_v[self.cur_ref_mb]
   let (x16, y16, _) = self.me_part(mb_x, mb_y, 0, 0, 16, 16)
   let p16 = Part16x16(x16, y16)
   let (ssd16, bits16) = self.eval_plan(mb_x, mb_y, p16, qp)
@@ -2255,6 +2378,7 @@ fn H264PEncoder::pred_motion(
   bx : Int32,
   by : Int32,
   part_w : Int32,
+  refi : Int32,
 ) -> (Int32, Int32) {
   let a = self.mv_fetch(mb_idx, mb_x, mb_y, bx - 1, by)
   let b = self.mv_fetch(mb_idx, mb_x, mb_y, bx, by - 1)
@@ -2262,22 +2386,26 @@ fn H264PEncoder::pred_motion(
   if c.0 == -2 {
     c = self.mv_fetch(mb_idx, mb_x, mb_y, bx - 1, by - 1)
   }
+  // `§415` ref-aware prediction, the decoder's `h264_pred_motion` exactly:
+  // a neighbour's MV only participates when its reference equals this
+  // partition's (`refi`), which is the identity for single-reference
+  // streams where every coded reference is 0.
   let mut match_count = 0
-  if c.0 == 0 {
+  if c.0 == refi {
     match_count = match_count + 1
   }
-  if b.0 == 0 {
+  if b.0 == refi {
     match_count = match_count + 1
   }
-  if a.0 == 0 {
+  if a.0 == refi {
     match_count = match_count + 1
   }
   if match_count > 1 {
     (h264_mid3(a.1, b.1, c.1), h264_mid3(a.2, b.2, c.2))
   } else if match_count == 1 {
-    if a.0 == 0 {
+    if a.0 == refi {
       (a.1, a.2)
-    } else if b.0 == 0 {
+    } else if b.0 == refi {
       (b.1, b.2)
     } else {
       (c.1, c.2)
@@ -2305,7 +2433,7 @@ fn H264PEncoder::pred_pskip(
   if t.0 == -2 || (t.0 == 0 && t.1 == 0 && t.2 == 0) {
     return (0, 0)
   }
-  self.pred_motion(mb_idx, mb_x, mb_y, 0, 0, 4)
+  self.pred_motion(mb_idx, mb_x, mb_y, 0, 0, 4, 0)
 }
 
 ///|
@@ -2352,6 +2480,7 @@ fn H264PEncoder::mc_into_rec(
   w : Int32,
   h : Int32,
 ) -> Unit {
+
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   h264_mc_luma(
     self.rec_y,
@@ -2408,7 +2537,7 @@ fn H264PEncoder::mc_into_rec(
         w,
         h,
         self.pwt.luma_log2_weight_denom,
-        self.pwt.luma_weight_l0[0],
+        self.pwt.luma_weight_l0[self.cur_ref_mb],
         self.pwt.luma_offset_l0[0],
         bit_depth=self.p.bit_depth,
       )
@@ -2423,7 +2552,7 @@ fn H264PEncoder::mc_into_rec(
           ccw,
           cch,
           self.pwt.chroma_log2_weight_denom,
-          self.pwt.chroma_weight_l0[0][j],
+          self.pwt.chroma_weight_l0[self.cur_ref_mb][j],
           self.pwt.chroma_offset_l0[0][j],
           bit_depth=self.p.bit_depth,
         )
@@ -2434,6 +2563,63 @@ fn H264PEncoder::mc_into_rec(
 
 ///|
 /// Fill the progressive mirror for one partition (`write_back_part`).
+///|
+/// Write `ref_idx_l0` for one partition when more than one reference is
+/// active (`§415`): `rc == 2` is a single inverted bit, larger counts are
+/// `ue(v)` — the inverse of the decoder's `read_ref` in
+/// `h264_decode_mb_cavlc_p`. With `rc <= 1` the syntax element is absent.
+fn h264_enc_put_ref_idx(r : H264Rbsp, refi : Int32, rc : Int32) -> Unit {
+  if rc <= 1 {
+    return
+  }
+  if rc == 2 {
+    r.put_bit(if refi == 0 { 1 } else { 0 })
+  } else {
+    r.put_ue(refi)
+  }
+}
+
+///|
+/// The CABAC `ref_idx_l0` writer (`§415`): the decoder's
+/// `h264_cabac_mb_ref` unary read over contexts 54.., mirrored — the
+/// context derivation reads the same `H264DecCtx` mirror the syntax
+/// writer uses, and the unary one-bits advance the context exactly like
+/// the reader before the terminating zero. P slices take the decoder's
+/// `slice_type_nos != 1` shortcut, so the B-direct neighbour test never
+/// fires. `rc <= 1` codes nothing.
+fn h264_cabac_put_ref(
+  _enc_self : H264PEncoder,
+  enc : H264CabacEnc,
+  states : Array[Int32],
+  ctx : H264DecCtx,
+  mb_idx : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  bx : Int32,
+  by : Int32,
+  refi : Int32,
+  rc : Int32,
+) -> Unit {
+  if rc <= 1 {
+    return
+  }
+  let (refa, _, _) = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, bx - 1, by)
+  let (refb, _, _) = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, bx, by - 1)
+  let mut c = 0
+  if refa > 0 {
+    c = c + 1
+  }
+  if refb > 0 {
+    c = c + 2
+  }
+  for _i in 0..<refi {
+    enc.decision(states, 54 + c, 1)
+    c = (c >> 2) + 4
+  }
+  enc.decision(states, 54 + c, 0)
+}
+
+///|
 fn H264PEncoder::fill_part(
   self : H264PEncoder,
   bx : Int32,
@@ -2448,7 +2634,7 @@ fn H264PEncoder::fill_part(
       let i = (by + y) * 4 + bx + x
       self.cur_mv[2 * i] = mvx
       self.cur_mv[2 * i + 1] = mvy
-      self.cur_ref[i] = 0
+      self.cur_ref[i] = self.cur_ref_mb
     }
   }
 }
@@ -2461,19 +2647,20 @@ fn H264PEncoder::pred_16x8(
   mb_x : Int32,
   mb_y : Int32,
   i : Int32,
+  refi : Int32,
 ) -> (Int32, Int32) {
   if i == 0 {
     let t = self.mv_fetch(mb_idx, mb_x, mb_y, 0, -1)
-    if t.0 == 0 {
+    if t.0 == refi {
       return (t.1, t.2)
     }
   } else {
     let l = self.mv_fetch(mb_idx, mb_x, mb_y, -1, 2)
-    if l.0 == 0 {
+    if l.0 == refi {
       return (l.1, l.2)
     }
   }
-  self.pred_motion(mb_idx, mb_x, mb_y, 0, 2 * i, 4)
+  self.pred_motion(mb_idx, mb_x, mb_y, 0, 2 * i, 4, refi)
 }
 
 ///|
@@ -2484,10 +2671,11 @@ fn H264PEncoder::pred_8x16(
   mb_x : Int32,
   mb_y : Int32,
   i : Int32,
+  refi : Int32,
 ) -> (Int32, Int32) {
   if i == 0 {
     let l = self.mv_fetch(mb_idx, mb_x, mb_y, -1, 0)
-    if l.0 == 0 {
+    if l.0 == refi {
       return (l.1, l.2)
     }
   } else {
@@ -2495,11 +2683,11 @@ fn H264PEncoder::pred_8x16(
     if diag.0 == -2 {
       diag = self.mv_fetch(mb_idx, mb_x, mb_y, 1, -1)
     }
-    if diag.0 == 0 {
+    if diag.0 == refi {
       return (diag.1, diag.2)
     }
   }
-  self.pred_motion(mb_idx, mb_x, mb_y, 2 * i, 0, 2)
+  self.pred_motion(mb_idx, mb_x, mb_y, 2 * i, 0, 2, refi)
 }
 
 ///|
@@ -3277,29 +3465,34 @@ fn H264PEncoder::write_mb_syntax(
     }
     Part16x16(mvx, mvy) => {
       r.put_ue(0) // mb_type: P_L0_16x16
-      let (pmvx, pmvy) = self.pred_motion(mb_idx, mb_x, mb_y, 0, 0, 4)
+      h264_enc_put_ref_idx(r, self.cur_ref_mb, self.p.nrefs)
+      let (pmvx, pmvy) = self.pred_motion(mb_idx, mb_x, mb_y, 0, 0, 4, self.cur_ref_mb)
       r.put_se(mvx - pmvx)
       r.put_se(mvy - pmvy)
       self.fill_part(0, 0, 4, 4, mvx, mvy)
     }
     Part16x8(tx, ty, bx2, by2) => {
       r.put_ue(1) // mb_type: P_L0_16x8
-      let (p0x, p0y) = self.pred_16x8(mb_idx, mb_x, mb_y, 0)
+      h264_enc_put_ref_idx(r, self.cur_ref_mb, self.p.nrefs)
+      h264_enc_put_ref_idx(r, self.cur_ref_mb, self.p.nrefs)
+      let (p0x, p0y) = self.pred_16x8(mb_idx, mb_x, mb_y, 0, self.cur_ref_mb)
       r.put_se(tx - p0x)
       r.put_se(ty - p0y)
       self.fill_part(0, 0, 4, 2, tx, ty)
-      let (p1x, p1y) = self.pred_16x8(mb_idx, mb_x, mb_y, 1)
+      let (p1x, p1y) = self.pred_16x8(mb_idx, mb_x, mb_y, 1, self.cur_ref_mb)
       r.put_se(bx2 - p1x)
       r.put_se(by2 - p1y)
       self.fill_part(0, 2, 4, 2, bx2, by2)
     }
     Part8x16(lx, ly, rx, ry) => {
       r.put_ue(2) // mb_type: P_L0_8x16
-      let (p0x, p0y) = self.pred_8x16(mb_idx, mb_x, mb_y, 0)
+      h264_enc_put_ref_idx(r, self.cur_ref_mb, self.p.nrefs)
+      h264_enc_put_ref_idx(r, self.cur_ref_mb, self.p.nrefs)
+      let (p0x, p0y) = self.pred_8x16(mb_idx, mb_x, mb_y, 0, self.cur_ref_mb)
       r.put_se(lx - p0x)
       r.put_se(ly - p0y)
       self.fill_part(0, 0, 2, 4, lx, ly)
-      let (p1x, p1y) = self.pred_8x16(mb_idx, mb_x, mb_y, 1)
+      let (p1x, p1y) = self.pred_8x16(mb_idx, mb_x, mb_y, 1, self.cur_ref_mb)
       r.put_se(rx - p1x)
       r.put_se(ry - p1y)
       self.fill_part(2, 0, 2, 4, rx, ry)
@@ -3310,6 +3503,10 @@ fn H264PEncoder::write_mb_syntax(
       r.put_ue(s1)
       r.put_ue(s2)
       r.put_ue(s3)
+      // `§415`: all four reference indices follow the sub types.
+      for _k in 0..<4 {
+        h264_enc_put_ref_idx(r, self.cur_ref_mb, self.p.nrefs)
+      }
       let subs = [s0, s1, s2, s3]
       let mut mi = 0
       for k = 0; k < 4; k = k + 1 {
@@ -3328,6 +3525,7 @@ fn H264PEncoder::write_mb_syntax(
             x / 4,
             y / 4,
             w / 4,
+            self.cur_ref_mb,
           )
           r.put_se(mvx - pmvx)
           r.put_se(mvy - pmvy)

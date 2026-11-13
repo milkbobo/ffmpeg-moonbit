@@ -19,6 +19,10 @@ priv struct H264EncParams {
   level_idc : Int32
   /// Luma/chroma bit depth, 8 (default streams) / 9 / 10 (`§412`).
   bit_depth : Int32
+  /// `§415`: P-slice reference count signalled to the decoders (1 = the
+  /// single-reference streams; SPS `max_num_ref_frames` and the PPS
+  /// `num_ref_idx_l0_default_active_minus1` derive from it).
+  nrefs : Int32
 }
 
 ///|
@@ -237,7 +241,7 @@ fn h264_enc_sps_body_high(
   r.put_bit(0) // seq_scaling_matrix_present_flag
   r.put_ue(0) // log2_max_frame_num_minus4 -> 4-bit frame_num
   r.put_ue(2) // pic_order_cnt_type = 2 (no POC syntax)
-  r.put_ue(1) // max_num_ref_frames
+  r.put_ue(p.nrefs) // max_num_ref_frames
   r.put_bit(0) // gaps_in_frame_num_value_allowed_flag
   r.put_ue(p.mb_width() - 1)
   r.put_ue(p.mb_height() - 1)
@@ -269,7 +273,7 @@ fn h264_enc_sps_body(
   r.put_ue(0) // seq_parameter_set_id
   r.put_ue(0) // log2_max_frame_num_minus4 -> 4-bit frame_num
   r.put_ue(2) // pic_order_cnt_type = 2 (no POC syntax)
-  r.put_ue(1) // max_num_ref_frames
+  r.put_ue(p.nrefs) // max_num_ref_frames
   r.put_bit(0) // gaps_in_frame_num_value_allowed_flag
   r.put_ue(p.mb_width() - 1)
   r.put_ue(p.mb_height() - 1)
@@ -337,7 +341,7 @@ fn h264_enc_pps_body(
   r.put_bit(0) // entropy_coding_mode_flag: CAVLC
   r.put_bit(0) // bottom_field_pic_order_in_frame_present_flag
   r.put_ue(0) // num_slice_groups_minus1
-  r.put_ue(0) // num_ref_idx_l0_default_active_minus1
+  r.put_ue(p.nrefs - 1) // num_ref_idx_l0_default_active_minus1
   r.put_ue(0) // num_ref_idx_l1_default_active_minus1
   r.put_bit(if weightp { 1 } else { 0 }) // weighted_pred_flag
   r.put(0, 2) // weighted_bipred_idc

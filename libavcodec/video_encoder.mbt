@@ -71,6 +71,9 @@ pub(all) struct VideoEncConfig {
   vbv_maxrate : Int32
   vbv_bufsize : Int32
   fps : Int32
+  /// `§415`: P-slice multi-reference history depth (1 = single reference;
+  /// requires `b_slices=false` and no rate controls at the codec layer).
+  multi_ref : Int32
 }
 
 ///|
@@ -100,6 +103,7 @@ pub fn VideoEncConfig::new(
     vbv_maxrate: 0,
     vbv_bufsize: 0,
     fps: 0,
+    multi_ref: 1,
   }
 }
 
@@ -148,6 +152,7 @@ pub fn VideoEncoder::open(
           intra4x4_in_b=config.intra4x4_in_b,
           weightp=config.weightp,
           bit_depth=config.bit_depth,
+          multi_ref=config.multi_ref,
           aud=config.aud,
           aq=config.aq,
           aq_strength=config.aq_strength,
@@ -251,6 +256,7 @@ pub fn video_encode(
           bit_depth=config.bit_depth,
           recon~,
           stats~,
+          multi_ref=config.multi_ref,
         )
       } else {
         h264_encode_frames(
@@ -274,6 +280,7 @@ pub fn video_encode(
           bit_depth=config.bit_depth,
           recon~,
           stats~,
+          multi_ref=config.multi_ref,
         )
       }
     }

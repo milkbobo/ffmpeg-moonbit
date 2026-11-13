@@ -415,3 +415,25 @@ test "CLI codec flag selects the facade codec" {
   assert_eq(count, stream_count)
   assert_eq(batch, streamed)
 }
+
+///|
+test "CLI multi-ref parses and reaches the facade" {
+  // Default is the single-reference stream.
+  assert_eq(test_options([]).multi_ref, 1)
+  let opts = test_options([
+    "--multi-ref", "2", "--no-b-slices", "--no-weightp",
+  ])
+  assert_eq(opts.multi_ref, 2)
+  // The facade rejects the B-slice combination; the CLI passes the depth
+  // through untouched.
+  assert_true(opts.b_slices == false)
+  // A multi-reference encode decodes cleanly end to end.
+  let raw = Bytes::make(384 * 3, 128)
+  let (stream, count) = encode_raw(raw, opts)
+  assert_eq(count, 3)
+  let dec = match @codec.h264_decode_annexb_frames(stream, false) {
+    Ok(frames) => frames
+    Err(e) => fail(e)
+  }
+  assert_eq(dec.length(), 3)
+}

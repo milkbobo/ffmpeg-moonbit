@@ -52,6 +52,11 @@ pub struct H264StreamEncoder {
   priv mut ref_y : Array[Int32]
   priv mut ref_u : Array[Int32]
   priv mut ref_v : Array[Int32]
+  /// `§415` multi-reference history, newest first (`refs_y[0] == ref_y`).
+  priv mut refs_y : Array[Array[Int32]]
+  priv mut refs_u : Array[Array[Int32]]
+  priv mut refs_v : Array[Array[Int32]]
+  priv nrefs : Int32
   /// The colocated motion history of the most recent reference picture
   /// (`b_slices` only; the next B picture's direct mode samples it).
   priv mut ref_colocated : Array[H264MbInfo]
@@ -112,6 +117,9 @@ pub fn H264StreamEncoder::open(
   /// `§412`: 8 (default), 9 or 10 bits; above 8 the pushed frames are
   /// `yuv420p10le` planes and the SPS is High 10 (profile_idc 110).
   bit_depth~ : Int32 = 8,
+  /// `§415`: P-slice multi-reference history depth (1 = single reference).
+  /// Requires `b_slices=false`.
+  multi_ref~ : Int32 = 1,
   aud~ : Bool = false,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
@@ -140,7 +148,7 @@ pub fn H264StreamEncoder::open(
   if qp < 0 || qp > 51 {
     return Err("h264 enc: qp out of range")
   }
-  let p = { width, height, qp, level_idc, bit_depth, }
+  let p = { width, height, qp, level_idc, bit_depth, nrefs: multi_ref, }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -217,6 +225,10 @@ pub fn H264StreamEncoder::open(
     ref_y: [],
     ref_u: [],
     ref_v: [],
+    refs_y: [],
+    refs_u: [],
+    refs_v: [],
+    nrefs: multi_ref,
     ref_colocated: [],
     fut_y: [],
     fut_u: [],
@@ -400,6 +412,11 @@ fn H264StreamEncoder::stream_idr(
   self.ref_y = h264_b_copy_plane(first.recon_y)
   self.ref_u = h264_b_copy_plane(first.recon_u)
   self.ref_v = h264_b_copy_plane(first.recon_v)
+  // `§415` multi-reference history: newest first, seeded with the I
+  // frame's reconstruction.
+  self.refs_y = [self.ref_y]
+  self.refs_u = [self.ref_u]
+  self.refs_v = [self.ref_v]
   for k = 0; k < self.mb_width * self.mb_height; k = k + 1 {
     for i = 0; i < 48; i = i + 1 {
       self.states[k].nz[i] = first.mb_nz[k][i]
@@ -432,6 +449,7 @@ fn H264StreamEncoder::stream_p(
       qp: self.qp,
       level_idc: self.level_idc,
       bit_depth: self.bit_depth,
+      nrefs: self.nrefs,
     },
     stats: self.stats,
     pps: self.pps,
@@ -451,6 +469,11 @@ fn H264StreamEncoder::stream_p(
     ref_y: self.ref_y,
     ref_u: self.ref_u,
     ref_v: self.ref_v,
+    refs_y: self.refs_y,
+    refs_u: self.refs_u,
+    refs_v: self.refs_v,
+    nrefs: self.refs_y.length(),
+    cur_ref_mb: 0,
     ystride: self.ystride,
     cstride: self.cstride,
     pwidth: self.ystride,
@@ -511,18 +534,34 @@ fn H264StreamEncoder::stream_p(
       bit_depth=self.bit_depth,
     ),
   )
+  // `§415`: every coded picture enters the reference history (newest
+  // first) — the P decoder loop resets `ref_y = refs_y[0]` per macroblock,
+  // so the list must always lead with the newest reconstruction in every
+  // scheduling mode. With B slices the P picture ALSO becomes the pending
+  // B picture's future; `ref_*` keeps the past until the B hand-off.
+  let ny = h264_b_copy_plane(enc.rec_y)
+  let nu = h264_b_copy_plane(enc.rec_u)
+  let nv = h264_b_copy_plane(enc.rec_v)
+  self.refs_y.insert(0, ny)
+  self.refs_u.insert(0, nu)
+  self.refs_v.insert(0, nv)
+  if self.refs_y.length() > self.nrefs {
+    self.refs_y.truncate(self.nrefs)
+    self.refs_u.truncate(self.nrefs)
+    self.refs_v.truncate(self.nrefs)
+  }
   if self.b_slices {
     // The pending B picture reads the PAST (still in ref_*) and THIS
     // picture as its future; the hand-off happens once the B picture is
     // coded. The colocated history is this picture's motion state.
-    self.fut_y = h264_b_copy_plane(enc.rec_y)
-    self.fut_u = h264_b_copy_plane(enc.rec_u)
-    self.fut_v = h264_b_copy_plane(enc.rec_v)
+    self.fut_y = ny
+    self.fut_u = nu
+    self.fut_v = nv
     self.ref_colocated = h264_b_colocated_from_states(self.states)
   } else {
-    self.ref_y = h264_b_copy_plane(enc.rec_y)
-    self.ref_u = h264_b_copy_plane(enc.rec_u)
-    self.ref_v = h264_b_copy_plane(enc.rec_v)
+    self.ref_y = ny
+    self.ref_u = nu
+    self.ref_v = nv
   }
   Ok(())
 }
@@ -553,6 +592,7 @@ fn H264StreamEncoder::stream_b(
       qp: self.qp,
       level_idc: self.level_idc,
       bit_depth: self.bit_depth,
+      nrefs: self.nrefs,
     },
     stats: self.stats,
     pps: self.pps,
@@ -572,6 +612,11 @@ fn H264StreamEncoder::stream_b(
     ref_y: self.ref_y,
     ref_u: self.ref_u,
     ref_v: self.ref_v,
+    refs_y: self.refs_y,
+    refs_u: self.refs_u,
+    refs_v: self.refs_v,
+    nrefs: self.refs_y.length(),
+    cur_ref_mb: 0,
     ystride: self.ystride,
     cstride: self.cstride,
     pwidth: self.ystride,

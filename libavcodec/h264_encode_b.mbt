@@ -4171,7 +4171,7 @@ fn h264_encode_frames_b(
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  let p = { width, height, qp: qps_arr[0], level_idc, bit_depth, }
+  let p = { width, height, qp: qps_arr[0], level_idc, bit_depth, nrefs: 1, }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -4248,7 +4248,7 @@ fn h264_encode_frames_b(
       (Array::make(mb_width * mb_height, 0), 0)
     }
     {
-      p: { width, height, qp: qp_f, level_idc, bit_depth, },
+      p: { width, height, qp: qp_f, level_idc, bit_depth, nrefs: 1, },
       stats,
       pps,
       chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qp_f), bit_depth~),
@@ -4265,6 +4265,11 @@ fn h264_encode_frames_b(
       ref_y: ry,
       ref_u: ru,
       ref_v: rv,
+      refs_y: [ref_y],
+      refs_u: [ref_u],
+      refs_v: [ref_v],
+      nrefs: 1,
+      cur_ref_mb: 0,
       ystride,
       cstride,
       pwidth: ystride,
@@ -4366,7 +4371,7 @@ fn h264_encode_frames_b(
         (Array::make(mb_width * mb_height, 0), 0)
       }
       let b_enc : H264PEncoder = {
-        p: { width, height, qp: qps_arr[e], level_idc, bit_depth, },
+        p: { width, height, qp: qps_arr[e], level_idc, bit_depth, nrefs: 1, },
         stats,
         pps,
         chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qps_arr[e]), bit_depth~),
@@ -4383,6 +4388,11 @@ fn h264_encode_frames_b(
         ref_y,
         ref_u,
         ref_v,
+        refs_y: [ref_y],
+        refs_u: [ref_u],
+        refs_v: [ref_v],
+        nrefs: 1,
+        cur_ref_mb: 0,
         ystride,
         cstride,
         pwidth: ystride,
