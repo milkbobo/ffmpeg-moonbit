@@ -31,6 +31,7 @@ fn main raise {
     println(
       "  [--no-weightp] disable explicit weighted P prediction (default on)",
     )
+    println("  [--codec h264] codec selector (§414 facade; h264 only today)")
     return
   }
   let opts = parse_options(args[1:].to_owned())
@@ -43,9 +44,9 @@ fn main raise {
     (count, stream.length())
   }
   let summary : Json = {
-    "codec": "h264",
+    "codec": opts.codec.name(),
     "format": "annexb",
-    "pixel_format": pixel_format_name(opts.bit_depth),
+    "pixel_format": @codec.video_pixel_format(opts.bit_depth),
     "bit_depth": opts.bit_depth,
     "width": opts.width,
     "height": opts.height,

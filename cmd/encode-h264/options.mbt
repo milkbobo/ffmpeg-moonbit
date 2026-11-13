@@ -26,6 +26,9 @@ priv struct Options {
   /// little-endian 16-bit samples (`yuv420p10le` layout) and the parameter
   /// sets switch to High 10 (profile_idc 110).
   bit_depth : Int32
+  /// `§414`: selected codec (the facade's `VideoCodec`; only `h264`
+  /// exists today, so the flag's value space is "h264").
+  codec : @codec.VideoCodec
 }
 
 ///|
@@ -68,6 +71,7 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--height"
       | "--qp"
       | "--bit-depth"
+      | "--codec"
       | "--aq-strength"
       | "--target-bytes"
       | "--vbv-maxrate"
@@ -114,6 +118,11 @@ fn parse_options(args : Array[String]) -> Options raise {
   let bit_depth = number(values, "--bit-depth", 8)
   if bit_depth != 8 && bit_depth != 9 && bit_depth != 10 {
     fail("encode-h264: bit-depth must be 8, 9 or 10")
+  }
+  let codec = match values.get("--codec") {
+    None => @codec.VideoCodec::default()
+    Some("h264") => @codec.VideoCodec::H264
+    Some(other) => fail("encode-h264: unsupported codec \{other} (h264)")
   }
   let aq_strength = number(values, "--aq-strength", 1)
   if aq_strength < 0 || aq_strength > 6 {
@@ -199,6 +208,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     // stays accepted as a no-op and `--no-weightp` opts out.
     weightp: !values.contains("--no-weightp"),
     bit_depth,
+    codec,
   }
 }
 
@@ -236,37 +246,38 @@ fn raw_frame_size(opts : Options) -> Int32 {
 }
 
 ///|
-/// The input layout's ffmpeg name, for the summary and error messages.
-fn pixel_format_name(bit_depth : Int32) -> String {
-  if bit_depth > 8 {
-    "yuv420p\{bit_depth}le"
-  } else {
-    "yuv420p"
+/// The parsed options' encoder configuration (`§414` facade): geometry,
+/// quality, entropy and feature flags in one value shared by the batch
+/// and streaming paths.
+fn video_config(opts : Options) -> @codec.VideoEncConfig {
+  {
+    ..@codec.VideoEncConfig::new(width=opts.width, height=opts.height),
+    qp: opts.qp,
+    cabac: opts.cabac,
+    cabac_rd: opts.cabac_rd,
+    dct8x8: opts.dct8x8,
+    b_slices: opts.b_slices,
+    b_parts: opts.b_parts,
+    intra_in_b: opts.intra_in_b,
+    intra4x4_in_b: opts.intra4x4_in_b,
+    weightp: opts.weightp,
+    bit_depth: opts.bit_depth,
+    aud: opts.aud,
+    aq: opts.aq,
+    aq_strength: opts.aq_strength,
+    target_bytes: opts.target_bytes,
+    vbv_maxrate: opts.maxrate,
+    vbv_bufsize: opts.bufsize,
+    fps: opts.fps,
   }
 }
 
 ///|
 /// Open the streaming encoder shared by the in-memory and chunked host
 /// paths, so both feed exactly the same configuration.
-fn open_stream_encoder(opts : Options) -> @codec.H264StreamEncoder raise {
+fn open_stream_encoder(opts : Options) -> @codec.VideoEncoder raise {
   match
-    @codec.H264StreamEncoder::open(
-      width=opts.width,
-      height=opts.height,
-      qp=opts.qp,
-      cabac=opts.cabac,
-      cabac_rd=opts.cabac_rd,
-      dct8x8=opts.dct8x8,
-      b_slices=opts.b_slices,
-      b_parts=opts.b_parts,
-      intra_in_b=opts.intra_in_b,
-      intra4x4_in_b=opts.intra4x4_in_b,
-      weightp=opts.weightp,
-      aud=opts.aud,
-      aq=opts.aq,
-      aq_strength=opts.aq_strength,
-      bit_depth=opts.bit_depth,
-    ) {
+    @codec.VideoEncoder::open(codec=opts.codec, config=video_config(opts)) {
     Ok(enc) => enc
     Err(e) => fail("encode-h264: \{e}")
   }
@@ -283,58 +294,15 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let frame_size = raw_frame_size(opts)
   if data.length() == 0 || data.length() % frame_size != 0 {
     fail(
-      "encode-h264: input must contain complete \{pixel_format_name(opts.bit_depth)} frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth)} frames (\{frame_size} bytes each)",
     )
   }
   let frames : Array[(Bytes, Bytes, Bytes)] = []
   for offset = 0; offset < data.length(); offset = offset + frame_size {
     frames.push(frame_planes(data, offset, luma, chroma))
   }
-  let result = if opts.cabac {
-    @codec.h264_encode_frames_cabac(
-      frames,
-      cabac_rd=opts.cabac_rd,
-      dct8x8=opts.dct8x8,
-      b_slices=opts.b_slices,
-      b_parts=opts.b_parts,
-      intra_in_b=opts.intra_in_b,
-      intra4x4_in_b=opts.intra4x4_in_b,
-      weightp=opts.weightp,
-      width=opts.width,
-      height=opts.height,
-      qp=opts.qp,
-      aq=opts.aq,
-      aq_strength=opts.aq_strength,
-      aud=opts.aud,
-      target_bytes=opts.target_bytes,
-      vbv_maxrate=opts.maxrate,
-      vbv_bufsize=opts.bufsize,
-      fps=opts.fps,
-      bit_depth=opts.bit_depth,
-    )
-  } else {
-    @codec.h264_encode_frames(
-      frames,
-      dct8x8=opts.dct8x8,
-      b_slices=opts.b_slices,
-      b_parts=opts.b_parts,
-      intra_in_b=opts.intra_in_b,
-      intra4x4_in_b=opts.intra4x4_in_b,
-      weightp=opts.weightp,
-      width=opts.width,
-      height=opts.height,
-      qp=opts.qp,
-      aq=opts.aq,
-      aq_strength=opts.aq_strength,
-      aud=opts.aud,
-      target_bytes=opts.target_bytes,
-      vbv_maxrate=opts.maxrate,
-      vbv_bufsize=opts.bufsize,
-      fps=opts.fps,
-      bit_depth=opts.bit_depth,
-    )
-  }
-  match result {
+  match
+    @codec.video_encode(frames, codec=opts.codec, config=video_config(opts)) {
     Ok(stream) => (stream, frames.length())
     Err(e) => fail("encode-h264: \{e}")
   }
@@ -358,7 +326,7 @@ fn encode_stream_file(opts : Options) -> (Int32, Int32) raise {
   if input_size == 0 || input_size % frame_size.to_int64() != 0 {
     reader.close()
     fail(
-      "encode-h264: input must contain complete \{pixel_format_name(opts.bit_depth)} frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth)} frames (\{frame_size} bytes each)",
     )
   }
   let enc = open_stream_encoder(opts)

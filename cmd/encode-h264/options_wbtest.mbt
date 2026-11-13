@@ -300,7 +300,7 @@ test "CLI dct8x8 reaches the batch and stream paths in both entropies" {
 fn bit_depth_leg(bd : Int32) -> Unit raise {
   let opts = test_options(["--bit-depth", "\{bd}", "--cabac"])
   assert_eq(opts.bit_depth, bd)
-  assert_eq(pixel_format_name(bd), "yuv420p\{bd}le")
+  assert_eq(@codec.video_pixel_format(bd), "yuv420p\{bd}le")
   assert_eq(raw_frame_size(opts), 768)
   // Distinct luma/chroma patterns in the low byte of each 16-bit sample
   // (samples stay under 512, so 9-bit accepts them too).
@@ -342,7 +342,7 @@ test "CLI bit-depth parses, reaches both paths, rejects bad depths" {
   // Default stays 8-bit with the plain yuv420p naming.
   let plain = test_options([])
   assert_eq(plain.bit_depth, 8)
-  assert_eq(pixel_format_name(plain.bit_depth), "yuv420p")
+  assert_eq(@codec.video_pixel_format(plain.bit_depth), "yuv420p")
   assert_eq(raw_frame_size(plain), 384)
   // 16-bit LE samples double the frame size, the stream encoder matches
   // the batch entry byte for byte, the SPS carries profile_idc 110 and the
@@ -363,7 +363,7 @@ fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let frame_size = raw_frame_size(opts)
   if data.length() == 0 || data.length() % frame_size != 0 {
     fail(
-      "encode-h264: input must contain complete \{pixel_format_name(opts.bit_depth)} frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth)} frames (\{frame_size} bytes each)",
     )
   }
   let enc = open_stream_encoder(opts)
@@ -394,4 +394,24 @@ fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
     }
   }
   (Bytes::from_array(out[:]), count)
+}
+
+///|
+test "CLI codec flag selects the facade codec" {
+  // Default and explicit h264 agree; unknown codecs are rejected.
+  assert_eq(test_options([]).codec.name(), "h264")
+  assert_eq(test_options(["--codec", "h264"]).codec.name(), "h264")
+  try test_options(["--codec", "hevc"]) catch {
+    _ => ()
+  } noraise {
+    _ => fail("accepted an unimplemented codec")
+  }
+  // The codec rides the facade: an explicitly selected h264 encodes
+  // through video_encode byte-identically to the default path.
+  let opts = test_options(["--codec", "h264", "--b-slices"])
+  let raw = Bytes::make(384 * 2, 128)
+  let (batch, count) = encode_raw(raw, opts)
+  let (streamed, stream_count) = encode_raw_stream(raw, opts)
+  assert_eq(count, stream_count)
+  assert_eq(batch, streamed)
 }

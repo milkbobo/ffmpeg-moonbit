@@ -13224,3 +13224,52 @@ V413K（CABAC 60000/12000/30）流 + 显示序逐帧 md5，docker ffmpeg framemd
 RD 代价门，我们用 SAD 显著性近似；门的**域**必须贴近实际预测路径（零 MV
 拟合域的「收益」会欺骗静止内容的 skip 精确匹配）。转正默认是对 opt-in 特性
 最有效的压力测试：45 项失败里藏着两个 fade 测试网永远测不到的真 bug。
+
+## §414 统一视频编码门面——`VideoEncoder` 抽象 + CLI 整合（2026-11-14）
+
+§410 交接「下一片候选」第 3 项（第 1 项重钉=§411、第 2 项 weightp 转正=§413
+先后落地后轮到它）。目标：视频编码器像音频侧（`AacEncoder`/`Mp3Encoder`/
+`OpusEncoder` 的 open/push/finish 惯例）一样有统一入口，未来第二个视频
+编码器（HEVC/VP9/AV1）接入时配置面与 CLI 不再重构。
+
+**新文件 `libavcodec/video_encoder.mbt`**——纯字节保真转发层，零码流变化：
+
+- `pub(all) enum VideoCodec { H264 }` + `name()`（"h264"）+ `default()`。
+- `pub(all) struct VideoEncConfig`：几何/QP/熵/特性/率控 19 字段一个值，
+  `::new(width~, height~)` 默认值即 §403/§413 序列默认（B 线 + 8x8DCT +
+  CABAC-RD 计价 + weightp 全开、CAVLC 熵）。`pcm_first`/`intra_in_p`/
+  `intra4x4_in_p`/`level_idc`/`vbv_init` 这类单入口特有项不进 config，
+  文档指回直连入口。
+- `VideoEncoder` 流式门面（包 `H264StreamEncoder`）：`open(codec~, config~,
+  stats?)` + `push_frame/drain/finish` 转发 + `codec_name()/pixel_format()/
+  width()/height()` 报告访问器；率控（ABR/VBV）是批式专属，流式 open 拒收
+  （原 CLI 的 `--stream` 排他规则上移入库）。
+- `video_encode(frames, codec~, config~, recon?, stats?)` 批式分发：按
+  `config.cabac` 转发 `h264_encode_frames(_cabac)`，**逐参数一致**（含
+  target_bytes/VBV/fps），字节保真由测试钉住。
+
+**可见性坑**：新写的 `pub enum VideoCodec` 在 blackbox 测试里构造报
+`E4036 Cannot create values of the read-only type`——MoonBit 的 `pub`
+类型外部只读不可构造，跨包可构造必须是 `pub(all)`（libavformat 的
+`MediaType`/`StreamInfo`/`MediaPacket` 全是先例）。`VideoEncConfig` 同理
+改 `pub(all)`（外部要 `{ ..cfg, cabac }` 更新）；`VideoEncoder` 保持
+`pub`（外部只能 open，不可手搓——正是想要的封装）。
+
+**CLI 整合**（`cmd/encode-h264`）：新增 `--codec h264`（默认
+`VideoCodec::default()`，未知值拒收）；`video_config(opts)` 从 Options 构
+`VideoEncConfig`；`encode_raw` 的双熵 if/else 两段 18 参数调用**收敛为一行**
+`video_encode(...)`，`open_stream_encoder` 返回门面 `VideoEncoder`；
+`pixel_format_name` 上移为 `@codec.video_pixel_format`（CLI 删本地副本）；
+summary JSON 的 `"codec"` 从硬编码改 `opts.codec.name()`。批式/流式输出
+字节不变（17 项既有 CLI 测试全绿即证）。
+
+**测试**（`video_encoder_test.mbt` 5 项）：① 门面批式 == 直连入口（双熵 +
+B-GOP 默认开，解码回环 6 帧）；② 率控三腿（ABR/VBV-CAVLC/VBV-CABAC）门面
+== 直连逐字节；③ 流式三重一致（门面 == H264StreamEncoder == 批式）+ 报告
+访问器；④ `video_pixel_format(8/9/10)` 命名 + 10-bit 过门面（profile 110
+字节 + 解码 bit_depth）+ 流式 pixel_format() 报 "yuv420p10le"；⑤ 错误面
+（流式 + ABR/VBV 拒收、bit_depth 11 / 奇数几何透传编解码器错误、流式几何
+错误）。CLI 侧 +1 项（--codec 解析/拒收/门面路由字节一致）。
+
+**验证**：`moon check --target wasm --deny-warn` 干净；wasm 全族 19 文件 +
+CLI（含新测试）全绿；`moon info` 门面进公开面（mbti 为本地生成物）。
