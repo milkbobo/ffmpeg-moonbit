@@ -13123,3 +13123,52 @@ opt-in（默认 false，逐字节不变）。
 4 项、`h264_encode_dct8_test.mbt` 4 项——形态都是「默认流 8x8 相同」
 （§406 `dct8x8` 转正后语义反转）、「未选 Intra」与六帧快照/PSNR 地板
 （B 转正后判据按编码序、未做显示序映射）。下一片应统一重钉。
+
+## §412 H.264 编码器 High 10 位深——9/10-bit 全链（profile 110 + yuv420p10le + CLI + ffref 仲裁）（2026-11-13）
+
+WIP 收口片：位深管线贯通 + CLI `--bit-depth` + **ffref C 绑定扩展 9/10-bit
+解码**（oracle `chroma_mode` 6=yuv420p9le / 7=yuv420p10le）+ ffmpeg 双路仲裁。
+
+**位深管线（`libavcodec/h264_enc_depth.mbt`）**：用户态 QP 保持 8-bit 单位
+（x264 `QP_BD_OFFSET` 语义），`qp_ext = qp + 6*(bd-8)` 只在量化器/反量化
+表/`get_chroma_qp` 消费点转换；`>8` 位输入输出为平面小端 16-bit
+（`yuv420p10le` 布局，与解码器 `yuvp()` 同构）；样本缓冲维持
+`Array[Int32]`。SPS：`bit_depth > 8` 切 High 10（profile_idc 110），走
+High 族 body 写 `bit_depth_luma/chroma_minus8`；PPS 两处关键：
+`pic_init_qp_minus26` 写**用户态**差值（FFmpeg `h264_ps.c:776` 解析端自加
+`qp_bd_offset`，双加会落到 user+2×offset）；High 族 PPS 尾
+（`transform_8x8_mode_flag=0` + scaling + second_chroma_offset）**即使
+8x8 关闭也必须写全**——解码器按「High 族 + more_rbsp_data」进尾段，
+漏写会把 stop bit 误读为 8x8 flag。
+
+**CLI `--bit-depth 8|9|10`**：`Options.bit_depth` + `sample_bytes`/
+`raw_frame_size`/`pixel_format_name`（`yuv420p10le` 等报文名）；帧尺寸随
+位深 ×2，批式/流式两路透传 `bit_depth=`；summary JSON 增 `bit_depth` 字段。
+
+**ffref 绑定扩展**（`ffref_stub.c`）：`frame_kind` 增 `YUV420P9LE→6`、
+`YUV420P10LE→7`；`append_frame` 16-bit LE 平面逐行 verbatim 拷贝（LE 内存
+序即字节序）；帧长 `2*(Y+2*C)`；blob 头布局不变。安全面（`ffref.mbt`）：
+`FFRefVideo::bit_depth()`（mode 6/7→9/10，余 8）+ 文档更新。
+
+**仲裁过程中抓到的最大坑——比对域不对称**：首版 ffref 测试拿解码器
+`skip_lf=true` 输出（对齐编码器 pre-deblock recon 的 wasm round-trip 约定）
+对比 oracle（FFmpeg 全解码**含环内去块滤波**），9/10-bit qp26 全帧 ±1..±10
+小差异、且 CAVLC/CABAC **逐值相同**（熵编码不改系数量值，只改打包）。
+qp 极值 bracket 定位：**qp0 与 PCM 腿 ndiff=0**、qp26/51 大面积差异、
+dct8 腿与普通腿同构 ⇒ 分歧=去块滤波，非编码器 bug。判别实验（x264
+High10 真流交叉解码）证明本仓解码器与 FFmpeg 在真流上逐样本一致，且
+**本片顺带首次把解码器 9/10-bit 去块路径纳入 ffmpeg 仲裁**。修正后
+ffref 测试统一 `skip_lf=false` 对齐 oracle。
+
+**验证矩阵**：wasm check 干净；wasm 全族 136 + CLI 17 = **153/153**；
+docker ffref native **78/78**（High10 主测试 11 腿：9/10×双熵×I/3 帧 P 链
++ weightp 3 腿；B-GOP 4 腿按 §411 显示序映射 `[0,2,1,4,3,5]` 对 oracle）；
+ffmpeg CLI framemd5 10-bit B-GOP 双熵流 **12/12 帧 MATCH 零告警**
+（产物 `.scratch/repin412/`，gitignored）。新增 wasm 黑盒 8 项
+（`h264_enc_high10_test.mbt`：I16/PCM/I8 CABAC/PB 序列双熵/AQ+weightp/
+流式一致性/9-bit+11 拒收）+ CLI 1 项（bit_depth_leg 双位深）。
+
+**排障方法沉淀**：诊断脚本的 MoonBit `for c = 0; c < pw` 漏更新子句 =
+死循环（E0052 警告即线索，容器 100% CPU 挂 45 分钟）；docker 内
+`moon test -f` 是**全名匹配**（需 `ffref: ` 前缀）且不可重复传；探针包
+必须放 repo 根（`.scratch` 不参与包发现），moon.pkg 用仓库 s-表达式语法。

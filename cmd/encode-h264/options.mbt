@@ -22,6 +22,10 @@ priv struct Options {
   intra4x4_in_b : Bool
   /// `§410`: explicit P weighted prediction (opt-in).
   weightp : Bool
+  /// `§412`: sample bit depth (8 / 9 / 10). Above 8 the input is planar
+  /// little-endian 16-bit samples (`yuv420p10le` layout) and the parameter
+  /// sets switch to High 10 (profile_idc 110).
+  bit_depth : Int32
 }
 
 ///|
@@ -63,6 +67,7 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--width"
       | "--height"
       | "--qp"
+      | "--bit-depth"
       | "--aq-strength"
       | "--target-bytes"
       | "--vbv-maxrate"
@@ -106,6 +111,10 @@ fn parse_options(args : Array[String]) -> Options raise {
   let width = number(values, "--width", 0)
   let height = number(values, "--height", 0)
   let qp = number(values, "--qp", 26)
+  let bit_depth = number(values, "--bit-depth", 8)
+  if bit_depth != 8 && bit_depth != 9 && bit_depth != 10 {
+    fail("encode-h264: bit-depth must be 8, 9 or 10")
+  }
   let aq_strength = number(values, "--aq-strength", 1)
   if aq_strength < 0 || aq_strength > 6 {
     fail("encode-h264: aq-strength must be in 0..=6")
@@ -187,6 +196,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     intra_in_b: !no_b && !values.contains("--no-intra-in-b"),
     intra4x4_in_b: !no_b && !values.contains("--no-intra4x4-in-b"),
     weightp: values.contains("--weightp") && !values.contains("--no-weightp"),
+    bit_depth,
   }
 }
 
@@ -203,6 +213,34 @@ fn frame_planes(
     data[offset + luma:offset + luma + chroma].to_owned(),
     data[offset + luma + chroma:offset + luma + chroma * 2].to_owned(),
   )
+}
+
+///|
+/// Bytes per plane sample at the configured depth: 1 for 8-bit packed u8,
+/// 2 for the 9/10-bit little-endian 16-bit layout.
+fn sample_bytes(bit_depth : Int32) -> Int32 {
+  if bit_depth > 8 {
+    2
+  } else {
+    1
+  }
+}
+
+///|
+/// One packed frame's byte size (Y, Cb, Cr planes, no row padding).
+fn raw_frame_size(opts : Options) -> Int32 {
+  let luma = opts.width * opts.height
+  (luma + luma / 2) * sample_bytes(opts.bit_depth)
+}
+
+///|
+/// The input layout's ffmpeg name, for the summary and error messages.
+fn pixel_format_name(bit_depth : Int32) -> String {
+  if bit_depth > 8 {
+    "yuv420p\{bit_depth}le"
+  } else {
+    "yuv420p"
+  }
 }
 
 ///|
@@ -225,6 +263,7 @@ fn open_stream_encoder(opts : Options) -> @codec.H264StreamEncoder raise {
       aud=opts.aud,
       aq=opts.aq,
       aq_strength=opts.aq_strength,
+      bit_depth=opts.bit_depth,
     ) {
     Ok(enc) => enc
     Err(e) => fail("encode-h264: \{e}")
@@ -232,15 +271,17 @@ fn open_stream_encoder(opts : Options) -> @codec.H264StreamEncoder raise {
 }
 
 ///|
-/// Raw 8-bit planar Y, U, V in display order, with no row padding.
-/// Geometry is checked by parse_options before this function is called.
+/// Raw planar Y, U, V in display order, with no row padding: 8-bit packed
+/// u8 samples, or little-endian 16-bit samples above 8 bits. Geometry is
+/// checked by parse_options before this function is called.
 fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
-  let luma = opts.width * opts.height
-  let chroma = luma / 4
-  let frame_size = luma + chroma * 2
+  let bpp = sample_bytes(opts.bit_depth)
+  let luma = opts.width * opts.height * bpp
+  let chroma = opts.width * opts.height / 4 * bpp
+  let frame_size = raw_frame_size(opts)
   if data.length() == 0 || data.length() % frame_size != 0 {
     fail(
-      "encode-h264: input must contain complete YUV420P frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{pixel_format_name(opts.bit_depth)} frames (\{frame_size} bytes each)",
     )
   }
   let frames : Array[(Bytes, Bytes, Bytes)] = []
@@ -267,6 +308,7 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
       vbv_maxrate=opts.maxrate,
       vbv_bufsize=opts.bufsize,
       fps=opts.fps,
+      bit_depth=opts.bit_depth,
     )
   } else {
     @codec.h264_encode_frames(
@@ -287,6 +329,7 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
       vbv_maxrate=opts.maxrate,
       vbv_bufsize=opts.bufsize,
       fps=opts.fps,
+      bit_depth=opts.bit_depth,
     )
   }
   match result {
@@ -304,15 +347,16 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
 /// output is opened, so a partial trailing frame cannot truncate an
 /// existing output file.
 fn encode_stream_file(opts : Options) -> (Int32, Int32) raise {
-  let luma = opts.width * opts.height
-  let chroma = luma / 4
-  let frame_size = luma + chroma * 2
+  let bpp = sample_bytes(opts.bit_depth)
+  let luma = opts.width * opts.height * bpp
+  let chroma = opts.width * opts.height / 4 * bpp
+  let frame_size = raw_frame_size(opts)
   let reader = FrameReader::open(@utf8.encode(opts.input))
   let input_size = reader.size()
   if input_size == 0 || input_size % frame_size.to_int64() != 0 {
     reader.close()
     fail(
-      "encode-h264: input must contain complete YUV420P frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{pixel_format_name(opts.bit_depth)} frames (\{frame_size} bytes each)",
     )
   }
   let enc = open_stream_encoder(opts)

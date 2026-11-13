@@ -33,6 +33,8 @@ pub struct H264StreamEncoder {
   intra4x4_in_b : Bool
   /// Opt-in explicit weighted prediction for the P pictures (`§410`).
   weightp : Bool
+  /// `§412`: luma/chroma bit depth (8 / 9 / 10).
+  bit_depth : Int32
   aud : Bool
   aq : Bool
   aq_strength : Int32
@@ -106,6 +108,9 @@ pub fn H264StreamEncoder::open(
   /// a fitted `pred_weight_table()` per picture, applied to every inter
   /// prediction. Changes the bitstream, so it stays opt-in.
   weightp~ : Bool = false,
+  /// `§412`: 8 (default), 9 or 10 bits; above 8 the pushed frames are
+  /// `yuv420p10le` planes and the SPS is High 10 (profile_idc 110).
+  bit_depth~ : Int32 = 8,
   aud~ : Bool = false,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
@@ -134,7 +139,7 @@ pub fn H264StreamEncoder::open(
   if qp < 0 || qp > 51 {
     return Err("h264 enc: qp out of range")
   }
-  let p = { width, height, qp, level_idc, }
+  let p = { width, height, qp, level_idc, bit_depth, }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -146,7 +151,7 @@ pub fn H264StreamEncoder::open(
   let sps_rbsp = if b_slices {
     h264_enc_sps_rbsp_b(p, dct8x8~)
   } else if cabac {
-    if dct8x8 {
+    if dct8x8 || p.bit_depth > 8 {
       h264_enc_sps_rbsp_high(p)
     } else {
       h264_enc_sps_rbsp_main(p)
@@ -196,6 +201,7 @@ pub fn H264StreamEncoder::open(
     intra_in_b,
     intra4x4_in_b,
     weightp,
+    bit_depth,
     aud,
     aq,
     aq_strength,
@@ -225,7 +231,9 @@ pub fn H264StreamEncoder::open(
 
 ///|
 /// Plane loader shared by the picture steps: source bytes into an
-/// MB-aligned plane (zero padding beyond the visible area).
+/// MB-aligned plane (zero padding beyond the visible area). Delegates to
+/// `h264_enc_load_plane` so 16-bit input decodes exactly like the batch
+/// entries (`§412`).
 fn H264StreamEncoder::load_plane(
   self : H264StreamEncoder,
   src : Bytes,
@@ -233,13 +241,7 @@ fn H264StreamEncoder::load_plane(
   h : Int32,
   stride : Int32,
 ) -> Array[Int32] {
-  let plane : Array[Int32] = Array::make(stride * self.pheight, 0)
-  for row = 0; row < h; row = row + 1 {
-    for col = 0; col < w; col = col + 1 {
-      plane[row * stride + col] = src[row * w + col].to_int()
-    }
-  }
-  plane
+  h264_enc_load_plane(src, w, h, stride, self.pheight, bit_depth=self.bit_depth)
 }
 
 ///|
@@ -250,9 +252,13 @@ fn H264StreamEncoder::check_frame(
   u : Bytes,
   v : Bytes,
 ) -> Result[Unit, String] {
-  let luma = self.width * self.height
-  let chroma = self.width / 2 * (self.height / 2)
-  if y.length() != luma || u.length() != chroma || v.length() != chroma {
+  let plane_bytes =
+    h264_enc_plane_bytes(self.width, self.height, self.bit_depth)
+  let chroma_bytes =
+    h264_enc_plane_bytes(self.width / 2, self.height / 2, self.bit_depth)
+  if y.length() != plane_bytes ||
+    u.length() != chroma_bytes ||
+    v.length() != chroma_bytes {
     return Err("h264 enc: plane size mismatch")
   }
   Ok(())
@@ -359,6 +365,7 @@ fn H264StreamEncoder::stream_idr(
       b_seq=self.b_slices,
       dct8x8=self.dct8x8,
       weightp=self.weightp,
+      bit_depth=self.bit_depth,
     )
   } else {
     h264_encode_intra_frame(
@@ -376,6 +383,7 @@ fn H264StreamEncoder::stream_idr(
       b_seq=self.b_slices,
       dct8x8=self.dct8x8,
       weightp=self.weightp,
+      bit_depth=self.bit_depth,
     )
   }
   let first = match first {
@@ -422,10 +430,17 @@ fn H264StreamEncoder::stream_p(
       height: self.height,
       qp: self.qp,
       level_idc: self.level_idc,
+      bit_depth: self.bit_depth,
     },
     stats: self.stats,
     pps: self.pps,
-    chroma_qp: h264_get_chroma_qp(self.pps, 0, self.qp),
+    // `§412`: `get_chroma_qp` consumes the extended quantiser QP.
+    chroma_qp: h264_get_chroma_qp(
+      self.pps,
+      0,
+      h264_enc_qp_ext(self.qp, self.bit_depth),
+      bit_depth=self.bit_depth,
+    ),
     src_y,
     src_u: self.load_plane(u, self.width / 2, self.height / 2, self.cstride),
     src_v: self.load_plane(v, self.width / 2, self.height / 2, self.cstride),
@@ -492,6 +507,7 @@ fn H264StreamEncoder::stream_p(
       self.height,
       self.ystride,
       self.cstride,
+      bit_depth=self.bit_depth,
     ),
   )
   if self.b_slices {
@@ -535,10 +551,17 @@ fn H264StreamEncoder::stream_b(
       height: self.height,
       qp: self.qp,
       level_idc: self.level_idc,
+      bit_depth: self.bit_depth,
     },
     stats: self.stats,
     pps: self.pps,
-    chroma_qp: h264_get_chroma_qp(self.pps, 0, self.qp),
+    // `§412`: `get_chroma_qp` consumes the extended quantiser QP.
+    chroma_qp: h264_get_chroma_qp(
+      self.pps,
+      0,
+      h264_enc_qp_ext(self.qp, self.bit_depth),
+      bit_depth=self.bit_depth,
+    ),
     src_y,
     src_u: self.load_plane(u, self.width / 2, self.height / 2, self.cstride),
     src_v: self.load_plane(v, self.width / 2, self.height / 2, self.cstride),
@@ -602,7 +625,8 @@ fn H264StreamEncoder::stream_b(
     self.mb_width,
     self.mb_height,
     self.pps,
-    self.qp,
+    // `§412`: the mirror's `qscale` indexes the extended-range tables.
+    h264_enc_qp_ext(self.qp, self.bit_depth),
     self.ystride,
     self.cstride,
     past_pic,
@@ -612,6 +636,7 @@ fn H264StreamEncoder::stream_b(
     enc.rec_u,
     enc.rec_v,
     display * 2,
+    bit_depth=self.bit_depth,
   )
   let nal = if self.cabac {
     match
@@ -651,6 +676,7 @@ fn H264StreamEncoder::stream_b(
       self.height,
       self.ystride,
       self.cstride,
+      bit_depth=self.bit_depth,
     ),
   )
   // The B picture is non-reference: the future P becomes the past now.

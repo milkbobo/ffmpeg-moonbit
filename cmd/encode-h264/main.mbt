@@ -5,9 +5,9 @@ fn main raise {
     println(
       "usage: encode-h264 input.yuv --width W --height H --output out.264",
     )
-    println("  8-bit planar YUV420P")
+    println("  8-bit planar YUV420P, or 9/10-bit yuv420p9le/yuv420p10le with --bit-depth")
     println(
-      "  [--qp 0..51] [--cabac] [--aq] [--aq-strength 0..6] [--aud] [--target-bytes N]",
+      "  [--qp 0..51] [--bit-depth 8|9|10] [--cabac] [--aq] [--aq-strength 0..6] [--aud] [--target-bytes N]",
     )
     println("  [--vbv-maxrate bits/s --vbv-bufsize bits --fps N]")
     println(
@@ -42,7 +42,8 @@ fn main raise {
   let summary : Json = {
     "codec": "h264",
     "format": "annexb",
-    "pixel_format": "yuv420p",
+    "pixel_format": pixel_format_name(opts.bit_depth),
+    "bit_depth": opts.bit_depth,
     "width": opts.width,
     "height": opts.height,
     "frames": count,

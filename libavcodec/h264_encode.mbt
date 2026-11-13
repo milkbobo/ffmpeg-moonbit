@@ -135,6 +135,10 @@ pub fn h264_encode_intra_frame(
   /// `weighted_pred_flag = 1` and every P slice header a fitted
   /// `pred_weight_table()`; off, the stream stays byte-identical.
   weightp~ : Bool = false,
+  /// `§412`: 8 (default), 9 or 10 bits. Above 8 the input planes are
+  /// little-endian 16-bit samples (`yuv420p10le`) and the SPS switches to
+  /// High 10 (profile_idc 110); `qp` keeps its 8-bit meaning.
+  bit_depth~ : Int32 = 8,
 ) -> Result[H264EncodedFrame, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -145,12 +149,16 @@ pub fn h264_encode_intra_frame(
   if qp < 0 || qp > 51 {
     return Err("h264 enc: qp out of range")
   }
-  if y.length() != width * height ||
-    u.length() != width / 2 * (height / 2) ||
-    v.length() != width / 2 * (height / 2) {
+  if !h264_enc_bit_depth_ok(bit_depth) {
+    return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
+  }
+  if y.length() != h264_enc_plane_bytes(width, height, bit_depth) ||
+    u.length() !=
+    h264_enc_plane_bytes(width / 2, height / 2, bit_depth) ||
+    v.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) {
     return Err("h264 enc: plane size mismatch")
   }
-  let p = { width, height, qp, level_idc, }
+  let p = { width, height, qp, level_idc, bit_depth, }
   // The parameter sets carry `pic_init_qp`: in a rate-controlled sequence
   // that is the sequence's base QP (one PPS serves every picture) while
   // this picture's own QP travels in `slice_qp_delta`.
@@ -163,6 +171,7 @@ pub fn h264_encode_intra_frame(
       pps_qp
     },
     level_idc,
+    bit_depth,
   }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
@@ -204,29 +213,28 @@ pub fn h264_encode_intra_frame(
     Some(v) => v
     None => return Err("h264 enc: no PPS after round-trip")
   }
-  let chroma_qp = h264_get_chroma_qp(pps, 0, qp)
-  fn load_plane(
-    src : Bytes,
-    w : Int32,
-    h : Int32,
-    stride : Int32,
-    plane_h : Int32,
-  ) -> Array[Int32] {
-    let plane : Array[Int32] = Array::make(stride * plane_h, 0)
-    for row = 0; row < h; row = row + 1 {
-      for col = 0; col < w; col = col + 1 {
-        plane[row * stride + col] = src[row * w + col].to_int()
-      }
-    }
-    plane
-  }
+  let chroma_qp = h264_get_chroma_qp(pps, 0, p.qp_ext(qp), bit_depth~)
   let self_ : H264IntraEncoder = {
     p,
     pps,
     chroma_qp,
-    src_y: load_plane(y, width, height, ystride, pheight),
-    src_u: load_plane(u, width / 2, height / 2, cstride, pheight / 2),
-    src_v: load_plane(v, width / 2, height / 2, cstride, pheight / 2),
+    src_y: h264_enc_load_plane(y, width, height, ystride, pheight, bit_depth~),
+    src_u: h264_enc_load_plane(
+      u,
+      width / 2,
+      height / 2,
+      cstride,
+      pheight / 2,
+      bit_depth~,
+    ),
+    src_v: h264_enc_load_plane(
+      v,
+      width / 2,
+      height / 2,
+      cstride,
+      pheight / 2,
+      bit_depth~,
+    ),
     rec_y: Array::make(ystride * pheight, 0),
     rec_u: Array::make(cstride * (pheight / 2), 0),
     rec_v: Array::make(cstride * (pheight / 2), 0),
@@ -357,11 +365,12 @@ fn H264IntraEncoder::encode_pcm(
 ) -> Unit {
   r.put_ue(25) // mb_type: I_PCM
   r.align_zero()
+  let bd = self.p.bit_depth
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   for row = 0; row < 16; row = row + 1 {
     for col = 0; col < 16; col = col + 1 {
       let s = self.src_y[ybase + row * self.ystride + col]
-      r.put(s, 8)
+      r.put(s, bd)
       self.rec_y[ybase + row * self.ystride + col] = s
     }
   }
@@ -372,7 +381,7 @@ fn H264IntraEncoder::encode_pcm(
     for row = 0; row < 8; row = row + 1 {
       for col = 0; col < 8; col = col + 1 {
         let s = src[cbase + row * self.cstride + col]
-        r.put(s, 8)
+        r.put(s, bd)
         dst[cbase + row * self.cstride + col] = s
       }
     }
@@ -586,7 +595,7 @@ fn H264IntraEncoder::pick_chroma(
       eff,
       top,
       left,
-      bit_depth=8,
+      bit_depth=self.p.bit_depth,
     )
     let ok_v = h264_pred8x8(
       self.rec_v,
@@ -595,7 +604,7 @@ fn H264IntraEncoder::pick_chroma(
       eff,
       top,
       left,
-      bit_depth=8,
+      bit_depth=self.p.bit_depth,
     )
     if ok_u is Ok(_) && ok_v is Ok(_) {
       let cost = self.chroma_sad(self.src_u, self.rec_u, cbase) +
@@ -615,7 +624,7 @@ fn H264IntraEncoder::pick_chroma(
       best_eff,
       top,
       left,
-      bit_depth=8,
+      bit_depth=self.p.bit_depth,
     ),
   )
   ignore(
@@ -626,7 +635,7 @@ fn H264IntraEncoder::pick_chroma(
       best_eff,
       top,
       left,
-      bit_depth=8,
+      bit_depth=self.p.bit_depth,
     ),
   )
   best_sig
@@ -661,9 +670,18 @@ fn H264IntraEncoder::encode_macroblock(
     }
     self.mb_qp = mq
     self.mb_dqp = mq - self.prev_qp
-    self.chroma_qp = h264_get_chroma_qp(self.pps, 0, mq)
+    self.chroma_qp = h264_get_chroma_qp(
+      self.pps,
+      0,
+      self.p.qp_ext(mq),
+      bit_depth=self.p.bit_depth,
+    )
   }
-  let qp = self.mb_qp
+  // `qp` is the *extended* quantiser QP (user QP + 6*(bit_depth-8)): the
+  // quantiser, `h264_build_dequant4` and the 8x8/DC helpers all index the
+  // shared tables by it, so no call site below needs its own conversion.
+  // `mb_qp`/`mb_dqp` stay in user units (deltas are offset-invariant).
+  let qp = self.p.qp_ext(self.mb_qp)
   // Chroma first: the winning prediction stays in the reconstruction
   // planes for the residual pass below.
   let cbase = mb_y * 8 * self.cstride + mb_x * 8
@@ -750,6 +768,7 @@ fn H264IntraEncoder::encode_macroblock(
           mb[256 + 256 * c + 16 * i + s] = h264_enc_dequant_level(
             lv,
             qmul_c[c][s],
+            bit_depth=self.p.bit_depth,
           )
         }
       }
@@ -785,7 +804,7 @@ fn H264IntraEncoder::encode_macroblock(
         eff,
         top_avail,
         left_avail,
-        bit_depth=8,
+        bit_depth=self.p.bit_depth,
       )
       is Ok(_)
     if pred_ok {
@@ -829,6 +848,7 @@ fn H264IntraEncoder::encode_macroblock(
         i8_modes,
         mb,
         h264_enc_i8_avail(mb_x, mb_y, self.mb_width),
+        bit_depth=self.p.bit_depth,
       ) {
       Ok((cost, cbp)) => {
         i8_cost = cost
@@ -872,7 +892,7 @@ fn H264IntraEncoder::encode_macroblock(
           blk_top,
           blk_left,
           topright,
-          bit_depth=8,
+          bit_depth=self.p.bit_depth,
         )
         is Err(_)
       if pred_err {
@@ -898,7 +918,7 @@ fn H264IntraEncoder::encode_macroblock(
         blk_top,
         blk_left,
         topright,
-        bit_depth=8,
+        bit_depth=self.p.bit_depth,
       ) {
       Ok(_) => ()
       Err(e) => return Err(e)
@@ -919,7 +939,11 @@ fn H264IntraEncoder::encode_macroblock(
       luma_store[16 * i + s] = levels[s]
       if levels[s] != 0 {
         total = total + 1
-        mb[16 * i + s] = h264_enc_dequant_level(levels[s], qmul_y[s])
+        mb[16 * i + s] = h264_enc_dequant_level(
+          levels[s],
+          qmul_y[s],
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
     luma_nz[g] = total
@@ -927,9 +951,9 @@ fn H264IntraEncoder::encode_macroblock(
     if total != 0 {
       luma_cbp = luma_cbp | (1 << (i / 4))
       if total == 1 && mb[16 * i] != 0 {
-        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
+        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
       } else {
-        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
+        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
       }
     }
   }
@@ -963,6 +987,7 @@ fn H264IntraEncoder::encode_macroblock(
         self.cur_modes,
         mb,
         h264_enc_i8_avail(mb_x, mb_y, self.mb_width),
+        bit_depth=self.p.bit_depth,
       ) {
       Ok((cost, cbp)) => {
         i8_cost = cost
@@ -988,7 +1013,7 @@ fn H264IntraEncoder::encode_macroblock(
         i16_eff,
         top_avail,
         left_avail,
-        bit_depth=8,
+        bit_depth=self.p.bit_depth,
       ) {
       Ok(_) => ()
       Err(e) => return Err(e)
@@ -1063,7 +1088,11 @@ fn H264IntraEncoder::encode_macroblock(
         luma_store[16 * i + s] = fixed[s]
         if fixed[s] != 0 {
           total = total + 1
-          mb[16 * i + s] = h264_enc_dequant_level(fixed[s], qmul_y[s])
+          mb[16 * i + s] = h264_enc_dequant_level(
+            fixed[s],
+            qmul_y[s],
+            bit_depth=self.p.bit_depth,
+          )
         }
       }
       i16_ac_nz[g] = total
@@ -1081,16 +1110,16 @@ fn H264IntraEncoder::encode_macroblock(
       for s = 0; s < 16; s = s + 1 {
         dc_raw[s] = luma_dc_store[s]
       }
-      h264_luma_dc_dequant_idct(mb, 0, dc_raw, 0, qmul_y[0], bit_depth=8)
+      h264_luma_dc_dequant_idct(mb, 0, dc_raw, 0, qmul_y[0], bit_depth=self.p.bit_depth)
     }
     for i = 0; i < 16; i = i + 1 {
       let gx = h264_luma_block_x[i]
       let gy = h264_luma_block_y[i]
       let off = ybase + gy * 4 * self.ystride + gx * 4
       if i16_ac_nz[gy * 4 + gx] != 0 {
-        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
+        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
       } else if mb[16 * i] != 0 {
-        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=8)
+        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
       }
     }
   }
@@ -1121,7 +1150,7 @@ fn H264IntraEncoder::encode_macroblock(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=8)
+      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=self.p.bit_depth)
     }
     for i = 0; i < 4; i = i + 1 {
       let bx = i % 2 * 4
@@ -1136,9 +1165,9 @@ fn H264IntraEncoder::encode_macroblock(
         0
       }
       if nzv != 0 {
-        h264_idct_add(plane, off, self.cstride, mb, bo, bit_depth=8)
+        h264_idct_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
       } else if mb[bo] != 0 {
-        h264_idct_dc_add(plane, off, self.cstride, mb, bo, bit_depth=8)
+        h264_idct_dc_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
       }
     }
   }

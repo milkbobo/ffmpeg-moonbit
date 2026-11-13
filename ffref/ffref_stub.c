@@ -482,13 +482,22 @@ moonbit_bytes_t ffref_decode_audio(moonbit_bytes_t data) {
 // ---- video oracle ---------------------------------------------------------
 
 // Map a pixel format to its frame kind: 0 = planar 4:2:0, 1 = planar 4:2:2,
-// 2 = planar 4:4:4, 3 = packed rgb24, 4 = packed rgba, 5 = gray8;
-// -1 for anything else (high bit depth, other packed layouts...).
+// 2 = planar 4:4:4, 3 = packed rgb24, 4 = packed rgba, 5 = gray8,
+// 6 = planar 4:2:0 9-bit (yuv420p9le), 7 = planar 4:2:0 10-bit
+// (yuv420p10le); -1 for anything else (other bit depths, big-endian
+// layouts, other packed layouts...).
 // Full-range legacy variants (yuvj420p and friends) map the same way -
 // their plane layout is identical, which is all byte-level differential
-// testing needs.
+// testing needs. The 9/10-bit kinds exist for the H.264 High 10 encoder
+// (§412): ffmpeg's decoder emits little-endian 16-bit samples there, and
+// the H.264 encoder under test accepts exactly 8, 9 or 10 bits, so no
+// other depths are half-supported.
 static int frame_kind(int format) {
   switch (format) {
+  case AV_PIX_FMT_YUV420P9LE:
+    return 6;
+  case AV_PIX_FMT_YUV420P10LE:
+    return 7;
   case AV_PIX_FMT_YUV420P:
   case AV_PIX_FMT_YUVJ420P:
     return 0;
@@ -553,6 +562,10 @@ static int append_frame(uint8_t **buf, size_t *cap, size_t *len,
     frame_len = (size_t)w * h + 2 * (size_t)cw * ch;
   } else if (kind <= 4) {
     frame_len = (size_t)w * h * packed_bpp(kind);
+  } else if (kind >= 6) {
+    // 9/10-bit planar 4:2:0: two bytes per little-endian sample.
+    chroma_dims(0, w, h, &cw, &ch);
+    frame_len = 2 * ((size_t)w * h + 2 * (size_t)cw * ch);
   } else {
     frame_len = (size_t)w * h;
   }
@@ -580,6 +593,21 @@ static int append_frame(uint8_t **buf, size_t *cap, size_t *len,
     for (int row = 0; row < ch; row++)
       memcpy(dst + (size_t)row * cw,
              frame->data[2] + (size_t)row * frame->linesize[2], cw);
+  } else if (kind >= 6) {
+    // The LE formats keep their byte order in memory, so verbatim row
+    // copies preserve the little-endian 16-bit samples.
+    size_t row_bytes = (size_t)w * 2, c_bytes = (size_t)cw * 2;
+    for (int row = 0; row < h; row++)
+      memcpy(dst + (size_t)row * row_bytes,
+             frame->data[0] + (size_t)row * frame->linesize[0], row_bytes);
+    dst += row_bytes * h;
+    for (int row = 0; row < ch; row++)
+      memcpy(dst + (size_t)row * c_bytes,
+             frame->data[1] + (size_t)row * frame->linesize[1], c_bytes);
+    dst += c_bytes * ch;
+    for (int row = 0; row < ch; row++)
+      memcpy(dst + (size_t)row * c_bytes,
+             frame->data[2] + (size_t)row * frame->linesize[2], c_bytes);
   } else if (kind <= 4) {
     int bpp = packed_bpp(kind);
     size_t row_bytes = (size_t)w * bpp;
@@ -623,8 +651,9 @@ static int drain_frames(AVCodecContext *cc, uint8_t **buf, size_t *cap,
 
 // Blob layout (little-endian): n_frames i32, width i32, height i32,
 // chroma_mode i32 (0 = 4:2:0, 1 = 4:2:2, 2 = 4:4:4, 3 = packed rgb24,
-// 4 = packed rgba, 5 = gray8), then per frame the kind's compact bytes
-// (planar kinds: Y, then Cb, then Cr; packed: w*bpp rows; gray: w*h).
+// 4 = packed rgba, 5 = gray8, 6 = 4:2:0 9-bit LE, 7 = 4:2:0 10-bit LE),
+// then per frame the kind's compact bytes (planar kinds: Y, then Cb, then
+// Cr, two bytes per sample for kinds 6/7; packed: w*bpp rows; gray: w*h).
 MOONBIT_FFI_EXPORT
 moonbit_bytes_t ffref_decode_video(moonbit_bytes_t data) {
   AVFormatContext *fmt = NULL;

@@ -145,10 +145,12 @@ pub fn ffref_write_file(path : Bytes, data : Bytes) -> Unit raise FFRefError {
 }
 
 ///|
-/// The oracle's 8-bit video decode: compact frames plus the (constant)
+/// The oracle's video decode: compact frames plus the (constant)
 /// geometry. `chroma_mode` is 0 for planar 4:2:0, 1 for 4:2:2, 2 for 4:4:4
 /// (the plane layout `VideoFrame::yuv_bytes` emits), 3 for packed rgb24,
-/// 4 for packed rgba and 5 for gray8.
+/// 4 for packed rgba, 5 for gray8, and 6/7 for 9/10-bit planar 4:2:0
+/// little-endian 16-bit samples (`yuv420p9le`/`yuv420p10le`, the H.264
+/// High 10 layout the encoder's `§412` emits).
 pub struct FFRefVideo {
   width : Int32
   height : Int32
@@ -160,6 +162,19 @@ pub struct FFRefVideo {
 /// Accessors.
 pub fn FFRefVideo::width(self : FFRefVideo) -> Int32 {
   self.width
+}
+
+///|
+/// Sample bit depth of the decoded frames: 9 or 10 for the High 10
+/// kinds, 8 for everything else.
+pub fn FFRefVideo::bit_depth(self : FFRefVideo) -> Int32 {
+  if self.chroma_mode == 6 {
+    9
+  } else if self.chroma_mode == 7 {
+    10
+  } else {
+    8
+  }
 }
 
 ///|
@@ -180,13 +195,14 @@ pub fn FFRefVideo::frames(self : FFRefVideo) -> Array[Bytes] {
 ///|
 /// Decode `data`'s first video stream with the real FFmpeg decoder chain.
 /// Only fixed-geometry 8-bit planar YUV (4:2:0/4:2:2/4:4:4), packed
-/// rgb24/rgba and gray8 frames are supported; anything else raises.
+/// rgb24/rgba, gray8 and 9/10-bit planar 4:2:0 (`yuv420p9le`/`yuv420p10le`,
+/// the H.264 High 10 layout) frames are supported; anything else raises.
 pub fn ffref_decode_video(data : Bytes) -> FFRefVideo raise FFRefError {
   let blob = match ffref_decode_video_ffi(data) {
     Some(v) => v
     None =>
       raise OracleFailed(
-        "FFmpeg could not decode the first video stream as fixed 8-bit frames",
+        "FFmpeg could not decode the first video stream as fixed 8/9/10-bit frames",
       )
   }
   let n = rd_i32(blob, 0)
@@ -213,6 +229,9 @@ fn ffref_video_frame_len(w : Int32, h : Int32, mode : Int32) -> Int32 {
     w * h * 3
   } else if mode == 4 {
     w * h * 4
+  } else if mode >= 6 {
+    // 9/10-bit 4:2:0: two bytes per little-endian sample.
+    2 * (w * h + 2 * ((w + 1) / 2) * ((h + 1) / 2))
   } else {
     w * h
   }

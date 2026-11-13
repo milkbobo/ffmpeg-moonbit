@@ -295,17 +295,75 @@ test "CLI dct8x8 reaches the batch and stream paths in both entropies" {
 }
 
 ///|
+/// One 9/10-bit leg of the CLI bit-depth test: parse, batch-encode, stream
+/// and round-trip decode at depth `bd`.
+fn bit_depth_leg(bd : Int32) -> Unit raise {
+  let opts = test_options(["--bit-depth", "\{bd}", "--cabac"])
+  assert_eq(opts.bit_depth, bd)
+  assert_eq(pixel_format_name(bd), "yuv420p\{bd}le")
+  assert_eq(raw_frame_size(opts), 768)
+  // Distinct luma/chroma patterns in the low byte of each 16-bit sample
+  // (samples stay under 512, so 9-bit accepts them too).
+  let buf : Array[Byte] = []
+  for i in 0..<(768 * 2) {
+    buf.push(if i % 2 == 0 { (64 + i % 97).to_byte() } else { b'\x00' })
+  }
+  let raw = Bytes::from_array(buf[:])
+  let (batch, count) = encode_raw(raw, opts)
+  assert_eq(count, 2)
+  let (streamed, _) = encode_raw_stream(raw, opts)
+  assert_eq(streamed, batch)
+  assert_eq(batch[5], b'\x6e') // High 10 profile_idc 110
+  let decoded = match @codec.h264_decode_annexb_frames(batch, false) {
+    Ok(frames) => frames
+    Err(e) => fail(e)
+  }
+  for f in decoded {
+    assert_eq(f.bit_depth, bd)
+  }
+  // A truncated (8-bit-sized) input must be rejected, not mis-decoded.
+  try encode_raw(Bytes::make(384, 0), opts) catch {
+    _ => ()
+  } noraise {
+    _ => fail("accepted an 8-bit-sized frame at bit-depth \{bd}")
+  }
+}
+
+///|
+test "CLI bit-depth parses, reaches both paths, rejects bad depths" {
+  // Invalid depths are rejected before any encoding.
+  for bad in ["7", "11", "0", "abc"] {
+    try test_options(["--bit-depth", bad]) catch {
+      _ => ()
+    } noraise {
+      _ => fail("accepted --bit-depth \{bad}")
+    }
+  }
+  // Default stays 8-bit with the plain yuv420p naming.
+  let plain = test_options([])
+  assert_eq(plain.bit_depth, 8)
+  assert_eq(pixel_format_name(plain.bit_depth), "yuv420p")
+  assert_eq(raw_frame_size(plain), 384)
+  // 16-bit LE samples double the frame size, the stream encoder matches
+  // the batch entry byte for byte, the SPS carries profile_idc 110 and the
+  // decoder round-trips at the configured depth.
+  bit_depth_leg(9)
+  bit_depth_leg(10)
+}
+
+///|
 /// In-memory streaming oracle: feed the same configuration to
 /// `H264StreamEncoder` one frame at a time and collect its access units.
 /// This isolates the encoder's streaming contract from host file I/O; the
 /// CLI's `--stream` path uses `encode_stream_file` instead.
 fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
-  let luma = opts.width * opts.height
-  let chroma = luma / 4
-  let frame_size = luma + chroma * 2
+  let bpp = sample_bytes(opts.bit_depth)
+  let luma = opts.width * opts.height * bpp
+  let chroma = opts.width * opts.height / 4 * bpp
+  let frame_size = raw_frame_size(opts)
   if data.length() == 0 || data.length() % frame_size != 0 {
     fail(
-      "encode-h264: input must contain complete YUV420P frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{pixel_format_name(opts.bit_depth)} frames (\{frame_size} bytes each)",
     )
   }
   let enc = open_stream_encoder(opts)

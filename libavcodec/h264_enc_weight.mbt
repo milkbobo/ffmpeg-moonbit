@@ -3,9 +3,11 @@
 /// `weightp`): the least-squares model `dst ≈ (w / 2^denom) * src + o`
 /// fitted per plane against the reference picture this slice actually
 /// predicts from, rounded into the `pred_weight_table()` integer domain:
-/// offsets clamp to -128..127 (the `se(v)` syntax range) and weights clamp
-/// to 0..127 — the syntax would allow -128, but a negative slope only ever
-/// fits a sign-inverted reference, which this encoder never predicts from.
+/// offsets clamp to -128..127 (the `se(v)` syntax range — an `int8` at every
+/// bit depth, so the sample-domain fit is divided by `2^(bit_depth-8)`
+/// first) and weights clamp to 0..127 — the syntax would allow -128, but a
+/// negative slope only ever fits a sign-inverted reference, which this
+/// encoder never predicts from.
 ///
 /// The fit is the classic two-pass normal-equation solution
 /// (`w = (nΣds - ΣdΣs) / (nΣs² - (Σs)²)`, `o = (Σd - wΣs) / n`), evaluated
@@ -22,6 +24,7 @@ fn h264_enc_plane_weight(
   w : Int32,
   h : Int32,
   denom : Int32,
+  bit_depth~ : Int32 = 8,
 ) -> (Int32, Int32) {
   let scale : Int64 = (1L : Int64) << denom
   if w <= 0 || h <= 0 {
@@ -64,7 +67,17 @@ fn h264_enc_plane_weight(
     wq = 127L
   }
   let oq = h264_enc_div_round(sd * scale - wq * ss, n * scale)
-  let mut off = oq.to_int()
+  // `§412`: the fit yields a *sample-domain* offset, but the bitstream entry
+  // is an `int8` in every bit depth — FFmpeg `h264_parse.c:67` rejects
+  // anything outside -128..127 and applies it in sample domain directly, and
+  // this decoder mirrors that by scaling it `2^(bit_depth-8)` on the way in.
+  // So divide by the sample scale here and keep the syntax range.
+  let sample_scale : Int64 = (1L : Int64) << (bit_depth - 8)
+  let mut off = if sample_scale > 1L {
+    h264_enc_div_round(oq, sample_scale).to_int()
+  } else {
+    oq.to_int()
+  }
   if off < -128 {
     off = -128
   }
@@ -92,13 +105,14 @@ fn h264_enc_fit_p_weight(
   cstride : Int32,
   width : Int32,
   height : Int32,
+  bit_depth~ : Int32 = 8,
 ) -> Unit {
   let denom = 5
   let unit = 1 << denom
   pwt.luma_log2_weight_denom = denom
   pwt.chroma_log2_weight_denom = denom
   let (lw, lo) = h264_enc_plane_weight(
-    src_y, ystride, ref_y, ystride, width, height, denom,
+    src_y, ystride, ref_y, ystride, width, height, denom, bit_depth~,
   )
   pwt.luma_weight_l0[0] = lw
   pwt.luma_offset_l0[0] = lo
@@ -106,10 +120,10 @@ fn h264_enc_fit_p_weight(
   let cw = width / 2
   let ch = height / 2
   let (uw, uo) = h264_enc_plane_weight(
-    src_u, cstride, ref_u, cstride, cw, ch, denom,
+    src_u, cstride, ref_u, cstride, cw, ch, denom, bit_depth~,
   )
   let (vw, vo) = h264_enc_plane_weight(
-    src_v, cstride, ref_v, cstride, cw, ch, denom,
+    src_v, cstride, ref_v, cstride, cw, ch, denom, bit_depth~,
   )
   pwt.chroma_weight_l0[0][0] = uw
   pwt.chroma_offset_l0[0][0] = uo

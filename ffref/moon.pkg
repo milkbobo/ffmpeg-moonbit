@@ -49,6 +49,7 @@ options(
     "ffref_test.mbt": [ "native" ],
     "ffref_streaming_test.mbt": [ "native" ],
     "ffref_encode_ref_test.mbt": [ "native" ],
+    "ffref_high10_test.mbt": [ "native" ],
     "ffref_stream_info_test.mbt": [ "native" ],
   },
   link: {

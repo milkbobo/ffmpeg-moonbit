@@ -230,6 +230,8 @@ pub fn h264_enc_residual_roundtrip(
   levels : Array[Int32],
   max_coeff : Int32,
   nc : Int32,
+  /// `§412`: the decoder keeps coefficients full-width above 8 bits.
+  bit_depth~ : Int32 = 8,
 ) -> Result[Bool, String] {
   let r = H264Rbsp::new()
   let total = h264_enc_write_residual(r, levels, max_coeff, nc)
@@ -251,7 +253,7 @@ pub fn h264_enc_residual_roundtrip(
       None,
       max_coeff,
       nc,
-      bit_depth=8,
+      bit_depth~,
     ) {
     Ok(v) => v
     Err(e) => return Err(e)

@@ -12,15 +12,25 @@ priv struct H264EncParams {
   /// Visible geometry; must be even for 4:2:0 chroma.
   width : Int32
   height : Int32
-  /// Slice QP (also `pic_init_qp`), 0..51.
+  /// Slice QP (also `pic_init_qp`), in 8-bit units 0..51 at every bit
+  /// depth (§412: the stream's QP is this plus `qp_bd_offset`).
   qp : Int32
   /// Level for `level_idc` (pure metadata for the decoders under test).
   level_idc : Int32
+  /// Luma/chroma bit depth, 8 (default streams) / 9 / 10 (`§412`).
+  bit_depth : Int32
 }
 
 ///|
 fn H264EncParams::mb_width(self : H264EncParams) -> Int32 {
   (self.width + 15) / 16
+}
+
+///|
+/// User-space QP -> the extended QP the stream and the shared dequant
+/// tables use.
+fn H264EncParams::qp_ext(self : H264EncParams, qp : Int32) -> Int32 {
+  h264_enc_qp_ext(qp, self.bit_depth)
 }
 
 ///|
@@ -169,14 +179,16 @@ fn h264_enc_sps_vui(r : H264Rbsp, v : H264Vbv) -> Unit {
 ///|
 /// The SPS RBSP bytes (no NAL header, no emulation prevention) - what the
 /// parsers consume directly. `dct8x8` switches the profile to High (100),
-/// the profile family `transform_8x8_mode` requires.
+/// the profile family `transform_8x8_mode` requires; `bit_depth > 8`
+/// switches it to High 10 (110), which carries the same chroma/bit-depth
+/// block (`§412`).
 fn h264_enc_sps_rbsp(
   p : H264EncParams,
   dct8x8~ : Bool = false,
   vbv~ : H264Vbv? = None,
 ) -> Bytes {
   let r = H264Rbsp::new()
-  if dct8x8 {
+  if dct8x8 || p.bit_depth > 8 {
     h264_enc_sps_body_high(r, p, vbv~)
   } else {
     h264_enc_sps_body(r, p, vbv~)
@@ -193,7 +205,7 @@ fn h264_enc_write_sps(
   vbv~ : H264Vbv? = None,
 ) -> Bytes {
   let r = H264Rbsp::new()
-  if dct8x8 {
+  if dct8x8 || p.bit_depth > 8 {
     h264_enc_sps_body_high(r, p, vbv~)
   } else {
     h264_enc_sps_body(r, p, vbv~)
@@ -203,23 +215,24 @@ fn h264_enc_write_sps(
 }
 
 ///|
-/// High-profile SPS body (profile_idc 100): the High family inserts the
-/// chroma_format_idc block after seq_parameter_set_id; no scaling matrix is
-/// signalled (seq flag 0), so the flat-16 default lists stay active on both
-/// sides. No constraint flags: the PPS-tail skip of `more_rbsp_data_in_pps`
-/// only applies to profiles 66/77/88 with a constraint set.
+/// High-family SPS body (profile_idc 100 High, or 110 High 10 above 8 bits):
+/// the High family inserts the chroma_format_idc / bit-depth block after
+/// seq_parameter_set_id; no scaling matrix is signalled (seq flag 0), so the
+/// flat-16 default lists stay active on both sides. No constraint flags: the
+/// PPS-tail skip of `more_rbsp_data_in_pps` only applies to profiles 66/77/88
+/// with a constraint set.
 fn h264_enc_sps_body_high(
   r : H264Rbsp,
   p : H264EncParams,
   vbv~ : H264Vbv? = None,
 ) -> Unit {
-  r.put(100, 8) // profile_idc: High
+  r.put(h264_enc_profile_idc(p.bit_depth, 100), 8)
   r.put(0, 8) // constraint_set0..5 + reserved_zero_2bits
   r.put(p.level_idc, 8)
   r.put_ue(0) // seq_parameter_set_id
   r.put_ue(1) // chroma_format_idc: 4:2:0
-  r.put_ue(0) // bit_depth_luma_minus8
-  r.put_ue(0) // bit_depth_chroma_minus8
+  r.put_ue(p.bit_depth - 8) // bit_depth_luma_minus8
+  r.put_ue(p.bit_depth - 8) // bit_depth_chroma_minus8
   r.put_bit(0) // qpprime_y_zero_transform_bypass_flag
   r.put_bit(0) // seq_scaling_matrix_present_flag
   r.put_ue(0) // log2_max_frame_num_minus4 -> 4-bit frame_num
@@ -328,14 +341,21 @@ fn h264_enc_pps_body(
   r.put_ue(0) // num_ref_idx_l1_default_active_minus1
   r.put_bit(if weightp { 1 } else { 0 }) // weighted_pred_flag
   r.put(0, 2) // weighted_bipred_idc
+  // `§412`: `pic_init_qp_minus26` is the *user-space* QP difference — the
+  // parser (FFmpeg `h264_ps.c:776`) adds `6 * (bit_depth - 8)` itself, so
+  // re-adding it here would land the slice at user QP + 2*offset.
   r.put_se(p.qp - 26) // pic_init_qp_minus26
   r.put_se(0) // pic_init_qs_minus26
   r.put_se(0) // chroma_qp_index_offset
   r.put_bit(0) // deblocking_filter_control_present_flag
   r.put_bit(0) // constrained_intra_pred_flag
   r.put_bit(0) // redundant_pic_cnt_present_flag
-  if dct8x8 {
-    r.put_bit(1) // transform_8x8_mode_flag
+  // The High-family PPS tail must be written even with `transform_8x8` off:
+  // the decoder enters it whenever the profile is High family and more
+  // RBSP data remains (trailing bits included), so omitting it would
+  // misparse the stop bit as `transform_8x8_mode_flag`.
+  if dct8x8 || p.bit_depth > 8 {
+    r.put_bit(if dct8x8 { 1 } else { 0 }) // transform_8x8_mode_flag
     r.put_bit(0) // pic_scaling_matrix_present_flag
     r.put_se(0) // second_chroma_qp_index_offset
   }

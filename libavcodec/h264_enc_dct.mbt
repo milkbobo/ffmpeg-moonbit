@@ -296,14 +296,24 @@ fn h264_enc_fdct8_quant_res(
 /// `(level * qmul + 32) >> 6` with the 8-bit int16 wrap. The encoder's
 /// coefficient-buffer fill must be this exact function - a raw product
 /// diverges from the decoded block by 64x.
-fn h264_enc_dequant_level(level : Int32, qmul : Int32) -> Int32 {
+///|
+/// Dequantise one stored level with the shared table value, mirroring the
+/// decoder's `((level * qmul + 32) >> 6)` (32-bit unsigned product). At
+/// 8-bit the result is truncated to `int16` exactly like FFmpeg's
+/// `int16_t coeffs[]`; above 8 bits it is kept full-width (`§412`).
+fn h264_enc_dequant_level(
+  level : Int32,
+  qmul : Int32,
+  bit_depth~ : Int32 = 8,
+) -> Int32 {
   if level == 0 {
     return 0
   }
-  let prod = (level.reinterpret_as_uint() * qmul.reinterpret_as_uint() + 32) >>
-    6
-  let v = prod.reinterpret_as_int() << 16 >> 16
-  v
+  // Reinterpret *before* the shift: `>> 6` must be arithmetic, otherwise a
+  // negative product comes back as a huge positive value — invisible at
+  // 8-bit where the `int16` truncation repairs it, fatal above 8 bits.
+  let prod = level.reinterpret_as_uint() * qmul.reinterpret_as_uint() + 32U
+  h264_store_coef(prod.reinterpret_as_int() >> 6, bit_depth~)
 }
 
 ///|
@@ -331,12 +341,14 @@ fn h264_enc_luma_i8_pass(
   mb_x : Int32,
   mb_y : Int32,
   pps : H264Pps,
+  /// Extended quantiser QP (user QP + `6*(bit_depth-8)`).
   qp : Int32,
   store : Array[Int32],
   modes : Array[Int32],
   mb : Array[Int32],
   avail : (Int32, Int32) -> (Bool, Bool, Bool, Bool),
   fixed_modes~ : Array[Int32] = [],
+  bit_depth~ : Int32 = 8,
 ) -> Result[(Int32, Int32), String] {
   let qmul8 = h264_build_dequant8(pps, 0, qp)
   let ybase = mb_y * 16 * ystride + mb_x * 16
@@ -381,7 +393,7 @@ fn h264_enc_luma_i8_pass(
             left,
             topright,
             topleft~,
-            bit_depth=8,
+            bit_depth~,
           )
           is Err(_) {
           continue
@@ -407,7 +419,7 @@ fn h264_enc_luma_i8_pass(
         left,
         topright,
         topleft~,
-        bit_depth=8,
+        bit_depth~,
       ) {
       Ok(_) => ()
       Err(e) => return Err(e)
@@ -433,7 +445,7 @@ fn h264_enc_luma_i8_pass(
       store[64 * i8 + s] = levels[s]
       if levels[s] != 0 {
         total = total + 1
-        mb[64 * i8 + s] = h264_enc_dequant_level(levels[s], qmul8[s])
+        mb[64 * i8 + s] = h264_enc_dequant_level(levels[s], qmul8[s], bit_depth~)
       }
     }
     if total != 0 {
@@ -441,9 +453,9 @@ fn h264_enc_luma_i8_pass(
       // `h264_idct8_add4`'s nz shortcut: a lone DC level takes the flat
       // DC add, anything else the full inverse transform.
       if total == 1 && mb[64 * i8] != 0 {
-        h264_idct8_dc_add(rec_y, off, ystride, mb, 64 * i8, bit_depth=8)
+        h264_idct8_dc_add(rec_y, off, ystride, mb, 64 * i8, bit_depth~)
       } else {
-        h264_idct8_add(rec_y, off, ystride, mb, 64 * i8, bit_depth=8)
+        h264_idct8_add(rec_y, off, ystride, mb, 64 * i8, bit_depth~)
       }
     }
   }
@@ -468,12 +480,14 @@ fn h264_enc_luma_i4_pass(
   mb_x : Int32,
   mb_y : Int32,
   pps : H264Pps,
+  /// Extended quantiser QP (user QP + `6*(bit_depth-8)`).
   qp : Int32,
   store : Array[Int32],
   modes : Array[Int32],
   mb : Array[Int32],
   avail : (Int32, Int32) -> (Bool, Bool, Bool),
   fixed_modes~ : Array[Int32] = [],
+  bit_depth~ : Int32 = 8,
 ) -> Result[(Int32, Int32), String] {
   let qmul_y = h264_build_dequant4(pps, 0, qp)
   let ybase = mb_y * 16 * ystride + mb_x * 16
@@ -516,7 +530,7 @@ fn h264_enc_luma_i4_pass(
             top,
             left,
             topright,
-            bit_depth=8,
+            bit_depth~,
           )
           is Err(_) {
           continue
@@ -541,7 +555,7 @@ fn h264_enc_luma_i4_pass(
         top,
         left,
         topright,
-        bit_depth=8,
+        bit_depth~,
       ) {
       Ok(_) => ()
       Err(e) => return Err(e)
@@ -561,15 +575,15 @@ fn h264_enc_luma_i4_pass(
       store[16 * i + s] = levels[s]
       if levels[s] != 0 {
         total = total + 1
-        mb[16 * i + s] = h264_enc_dequant_level(levels[s], qmul_y[s])
+        mb[16 * i + s] = h264_enc_dequant_level(levels[s], qmul_y[s], bit_depth~)
       }
     }
     if total != 0 {
       cbp = cbp | (1 << (i / 4))
       if total == 1 && mb[16 * i] != 0 {
-        h264_idct_dc_add(rec_y, off, ystride, mb, 16 * i, bit_depth=8)
+        h264_idct_dc_add(rec_y, off, ystride, mb, 16 * i, bit_depth~)
       } else {
-        h264_idct_add(rec_y, off, ystride, mb, 16 * i, bit_depth=8)
+        h264_idct_add(rec_y, off, ystride, mb, 16 * i, bit_depth~)
       }
     }
   }
