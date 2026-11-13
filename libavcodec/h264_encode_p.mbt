@@ -193,6 +193,15 @@ priv struct H264PEncoder {
   /// Opt-in Intra_NxN (4x4) macroblocks inside B slices (`intra4x4_in_b`).
   /// Only the B-picture encoder sets this.
   intra4x4_in_b : Bool
+  /// Opt-in explicit weighted prediction for P macroblocks (`weightp`,
+  /// `§410`): the slice header carries a `pred_weight_table()` and every
+  /// inter prediction — `Skip` included, they all funnel through
+  /// `mc_into_rec` — is scaled/offset against the single L0 reference.
+  weightp : Bool
+  /// This picture's fitted weight table. Neutral until `encode_p_frame` /
+  /// `encode_p_frame_cabac` fits it against `ref_y/ref_u/ref_v`; the
+  /// decoder rebuilds the same values from the slice header.
+  pwt : H264PredWeight
 }
 
 ///|
@@ -270,6 +279,11 @@ pub fn h264_encode_frames(
   vbv_init~ : Int32 = 90,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
+  /// Opt-in (`§410`): explicit P weighted prediction — one fitted
+  /// `pred_weight_table()` per P picture, applied to every inter prediction
+  /// (skip runs included). Off, the PPS/slice headers are byte-identical to
+  /// the previous sections.
+  weightp~ : Bool = false,
 ) -> Result[Bytes, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -314,6 +328,7 @@ pub fn h264_encode_frames(
               qps=trial,
               recon=[],
               stats=H264EncStats::new(),
+              weightp~,
             ) {
             Ok((bytes, _)) => Ok(bytes.length())
             Err(e) => Err(e)
@@ -340,6 +355,7 @@ pub fn h264_encode_frames(
           qps~,
           recon~,
           stats~,
+          weightp~,
         ) {
         Ok((bytes, _)) => Ok(bytes)
         Err(e) => Err(e)
@@ -370,6 +386,7 @@ pub fn h264_encode_frames(
                 recon=[],
                 stats=H264EncStats::new(),
                 vbv=Some(v),
+                weightp~,
               ) {
               Ok((_, sizes)) => Ok(sizes)
               Err(e) => Err(e)
@@ -399,6 +416,7 @@ pub fn h264_encode_frames(
             fillers~,
             recon~,
             stats~,
+            weightp~,
           ) {
           Ok((bytes, _)) => {
             stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -432,6 +450,7 @@ pub fn h264_encode_frames(
         dct8x8~,
         recon~,
         stats~,
+        weightp~,
       ) {
       Ok((bytes, _)) => Ok(bytes)
       Err(e) => Err(e)
@@ -470,6 +489,7 @@ pub fn h264_encode_frames(
         vbv=v,
         recon~,
         stats~,
+        weightp~,
       )
     None => ()
   }
@@ -497,6 +517,7 @@ pub fn h264_encode_frames(
             aud~,
             recon=[],
             stats=H264EncStats::new(),
+            weightp~,
           ) {
           Ok((bytes, _)) => Ok(bytes.length())
           Err(e) => Err(e)
@@ -528,6 +549,7 @@ pub fn h264_encode_frames(
       aud~,
       recon~,
       stats~,
+      weightp~,
     ) {
     Ok((bytes, _)) => Ok(bytes)
     Err(e) => Err(e)
@@ -555,6 +577,8 @@ fn h264_encode_frames_vbv(
   vbv~ : H264Vbv,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
+  /// `§410`: explicit P weighted prediction (see `h264_encode_frames`).
+  weightp~ : Bool = false,
 ) -> Result[Bytes, String] {
   let n = frames.length()
   let (qps, sizes) = match
@@ -577,6 +601,7 @@ fn h264_encode_frames_vbv(
           recon=[],
           stats=H264EncStats::new(),
           vbv=Some(vbv),
+          weightp~,
         ) {
         Ok((_, sizes)) => Ok(sizes)
         Err(e) => Err(e)
@@ -608,6 +633,7 @@ fn h264_encode_frames_vbv(
       vbv=Some(vbv),
       fillers~,
       aud~,
+      weightp~,
     ) {
     Ok((bytes, _)) => {
       stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -771,6 +797,8 @@ fn h264_encode_frames_qps(
   vbv~ : H264Vbv? = None,
   fillers~ : Array[Int32] = [],
   aud~ : Bool = false,
+  /// `§410`: explicit P weighted prediction (see `h264_encode_frames`).
+  weightp~ : Bool = false,
 ) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
@@ -788,6 +816,7 @@ fn h264_encode_frames_qps(
       pps_qp=base_qp,
       aq~,
       aq_strength~,
+      weightp~,
       vbv~,
     ) {
     Ok(e) => e
@@ -809,7 +838,7 @@ fn h264_encode_frames_qps(
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
-  let pps_raw = h264_enc_pps_rbsp(p, dct8x8~)
+  let pps_raw = h264_enc_pps_rbsp(p, dct8x8~, weightp~)
   match
     ff_h264_decode_picture_parameter_set(
       BitReader::new(pps_raw),
@@ -928,6 +957,8 @@ fn h264_encode_frames_qps(
       b_parts: false,
       intra_in_b: false,
       intra4x4_in_b: false,
+      weightp,
+      pwt: new_h264_pred_weight(),
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f, intra_in_p) {
@@ -1182,6 +1213,24 @@ fn H264PEncoder::encode_p_frame(
     st.intra = false
     st.has_data = false
   }
+  // `weightp` (`§410`): fit this picture's weight table against the very
+  // reference planes the macroblock loop predicts from, before any slice
+  // byte is written (the table rides the slice header).
+  if self.weightp {
+    h264_enc_fit_p_weight(
+      self.pwt,
+      self.src_y,
+      self.ref_y,
+      self.src_u,
+      self.ref_u,
+      self.src_v,
+      self.ref_v,
+      self.ystride,
+      self.cstride,
+      self.p.width,
+      self.p.height,
+    )
+  }
   let r = H264Rbsp::new()
   r.put_ue(0) // first_mb_in_slice
   r.put_ue(5) // slice_type: P (all slices)
@@ -1194,6 +1243,11 @@ fn H264PEncoder::encode_p_frame(
   r.put_bit(0)
   // ref_pic_list_modification: ref_pic_list_modification_flag_l0 = 0
   r.put_bit(0)
+  // pred_weight_table (`weightp`): FFmpeg's parser reads it right after the
+  // list modification and before the marking (h264_slice.c:1841/1853).
+  if self.weightp {
+    h264_enc_put_pwt(r, self.pwt)
+  }
   // dec_ref_pic_marking (nal_ref_idc != 0, non-IDR):
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
   r.put_se(self.p.qp - self.base_qp) // slice_qp_delta
@@ -2323,6 +2377,40 @@ fn H264PEncoder::mc_into_rec(
       self.pwidth / 2,
       self.pheight / 2,
     )
+  }
+  // `weightp` (`§410`): explicit weighted prediction, the decoder's
+  // `h264_weight_rect` applied to exactly the rectangle just motion
+  // compensated. Every P prediction path (skip runs, 16x16/16x8/8x16/8x8
+  // and the intra fallbacks' neighbours) reaches the reconstruction planes
+  // through here, so one injection covers them all.
+  if self.weightp {
+    if self.pwt.use_weight != 0 {
+      h264_weight_rect(
+        self.rec_y,
+        ybase + oy * self.ystride + ox,
+        self.ystride,
+        w,
+        h,
+        self.pwt.luma_log2_weight_denom,
+        self.pwt.luma_weight_l0[0],
+        self.pwt.luma_offset_l0[0],
+      )
+    }
+    if self.pwt.use_weight_chroma != 0 {
+      for j in 0..<2 {
+        let plane = if j == 0 { self.rec_u } else { self.rec_v }
+        h264_weight_rect(
+          plane,
+          cbase + csy * self.cstride + csx,
+          self.cstride,
+          ccw,
+          cch,
+          self.pwt.chroma_log2_weight_denom,
+          self.pwt.chroma_weight_l0[0][j],
+          self.pwt.chroma_offset_l0[0][j],
+        )
+      }
+    }
   }
 }
 

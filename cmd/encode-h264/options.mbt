@@ -20,6 +20,8 @@ priv struct Options {
   b_parts : Bool
   intra_in_b : Bool
   intra4x4_in_b : Bool
+  /// `§410`: explicit P weighted prediction (opt-in).
+  weightp : Bool
 }
 
 ///|
@@ -42,13 +44,15 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--b-parts"
       | "--intra-in-b"
       | "--intra4x4-in-b"
+      | "--weightp"
       | "--no-cabac"
       | "--no-cabac-rd"
       | "--no-dct8x8"
       | "--no-b-slices"
       | "--no-b-parts"
       | "--no-intra-in-b"
-      | "--no-intra4x4-in-b" => {
+      | "--no-intra4x4-in-b"
+      | "--no-weightp" => {
         if values.contains(arg) {
           fail("encode-h264: repeated option \{arg}")
         }
@@ -182,6 +186,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     b_parts: !no_b && !values.contains("--no-b-parts"),
     intra_in_b: !no_b && !values.contains("--no-intra-in-b"),
     intra4x4_in_b: !no_b && !values.contains("--no-intra4x4-in-b"),
+    weightp: values.contains("--weightp") && !values.contains("--no-weightp"),
   }
 }
 
@@ -216,6 +221,7 @@ fn open_stream_encoder(opts : Options) -> @codec.H264StreamEncoder raise {
       b_parts=opts.b_parts,
       intra_in_b=opts.intra_in_b,
       intra4x4_in_b=opts.intra4x4_in_b,
+      weightp=opts.weightp,
       aud=opts.aud,
       aq=opts.aq,
       aq_strength=opts.aq_strength,
@@ -250,6 +256,7 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
       b_parts=opts.b_parts,
       intra_in_b=opts.intra_in_b,
       intra4x4_in_b=opts.intra4x4_in_b,
+      weightp=opts.weightp,
       width=opts.width,
       height=opts.height,
       qp=opts.qp,
@@ -269,6 +276,7 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
       b_parts=opts.b_parts,
       intra_in_b=opts.intra_in_b,
       intra4x4_in_b=opts.intra4x4_in_b,
+      weightp=opts.weightp,
       width=opts.width,
       height=opts.height,
       qp=opts.qp,

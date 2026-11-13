@@ -31,6 +31,8 @@ pub struct H264StreamEncoder {
   b_parts : Bool
   intra_in_b : Bool
   intra4x4_in_b : Bool
+  /// Opt-in explicit weighted prediction for the P pictures (`§410`).
+  weightp : Bool
   aud : Bool
   aq : Bool
   aq_strength : Int32
@@ -100,6 +102,10 @@ pub fn H264StreamEncoder::open(
   intra_in_b~ : Bool = true,
   /// Default on (`§403`); requires `b_slices`.
   intra4x4_in_b~ : Bool = true,
+  /// Opt-in (`§410`): explicit weighted prediction for the P pictures —
+  /// a fitted `pred_weight_table()` per picture, applied to every inter
+  /// prediction. Changes the bitstream, so it stays opt-in.
+  weightp~ : Bool = false,
   aud~ : Bool = false,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
@@ -152,10 +158,13 @@ pub fn H264StreamEncoder::open(
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
+  // `§410`: the PPS carries `weighted_pred_flag`, so the streaming encoder
+  // must hand the same flag to the PPS builder that its P slices use — a
+  // table on the wire with `weighted_pred_flag = 0` would decode unweighted.
   let pps_raw = if cabac {
-    h264_enc_pps_rbsp_cabac(p, dct8x8~)
+    h264_enc_pps_rbsp_cabac(p, dct8x8~, weightp~)
   } else {
-    h264_enc_pps_rbsp(p, dct8x8~)
+    h264_enc_pps_rbsp(p, dct8x8~, weightp~)
   }
   match
     ff_h264_decode_picture_parameter_set(
@@ -186,6 +195,7 @@ pub fn H264StreamEncoder::open(
     b_parts,
     intra_in_b,
     intra4x4_in_b,
+    weightp,
     aud,
     aq,
     aq_strength,
@@ -348,6 +358,7 @@ fn H264StreamEncoder::stream_idr(
       aq_strength=self.aq_strength,
       b_seq=self.b_slices,
       dct8x8=self.dct8x8,
+      weightp=self.weightp,
     )
   } else {
     h264_encode_intra_frame(
@@ -364,6 +375,7 @@ fn H264StreamEncoder::stream_idr(
       aq_strength=self.aq_strength,
       b_seq=self.b_slices,
       dct8x8=self.dct8x8,
+      weightp=self.weightp,
     )
   }
   let first = match first {
@@ -450,6 +462,8 @@ fn H264StreamEncoder::stream_p(
     b_parts: self.b_parts,
     intra_in_b: self.intra_in_b,
     intra4x4_in_b: self.intra4x4_in_b,
+    weightp: self.weightp,
+    pwt: new_h264_pred_weight(),
   }
   let poc_lsb = if self.b_slices { (display * 2) & 15 } else { -1 }
   let nal = if self.cabac {
@@ -561,6 +575,8 @@ fn H264StreamEncoder::stream_b(
     b_parts: self.b_parts,
     intra_in_b: self.intra_in_b,
     intra4x4_in_b: self.intra4x4_in_b,
+    weightp: false,
+    pwt: new_h264_pred_weight(),
   }
   let past_pic = h264_b_refpic(
     self.ref_y,

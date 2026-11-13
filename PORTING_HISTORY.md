@@ -13031,3 +13031,95 @@ sub=0,0），且编码器侧输出正确（100…）——真正的分歧在反�
 （dqp_mbs、prev_qp、mirror.qscale、last_qscale_diff、chroma_mode、
 transform_8x8、intra4x4）均已快照/还原或预清。剩余：统一播放门面 /
 更多 profile 与位深（无已知正确性欠账）。
+
+## §410 H.264 编码器显式加权预测——P 切片 `weightp`：逐帧拟合 PWT + 加权 MC（2026-11-13，opt-in）
+
+选片先读了「B 隐式权重（`weighted_bipred_idc = 2`）」再放弃：本编码器
+GOP 是 `I,P2,B1,P4,B3…`、`poc_lsb = display * 2`，每个 B 恰落在两参考
+中点，`h264_b_mc.mbt` 的隐式推导恒得 `scale = 32` / `implicit0 = 32`
+（中性），几乎零收益；改做 P 显式加权——fade 场景有真实收益。
+
+**新文件 `libavcodec/h264_enc_weight.mbt`**（LGPL 注释沿用四条）：
+
+- `h264_enc_plane_weight`：最小二乘 `dst ≈ (w / 2^denom) * src + o`
+  （`w = (nΣds - ΣdΣs) / (nΣs² - (Σs)²)`、`o = (Σd - wΣs) / n`），
+  Int64 累加（1080p 的 Σs² 可达 1.4e11）；参考平坦/退化
+  （`nΣs² - (Σs)² <= 0`）退化为中性权重 `2^denom` 但仍拟合 offset
+  （可精确重建常量场）；w 夹 0..127、o 夹 -128..127（`se(v)` 域）。
+- `h264_enc_div_round`：Int64 半数远离零的整数除法。
+- `h264_enc_fit_p_weight`：`denom = 5`（x264 8-bit `--weightp` 的同一
+  分母），Y/U/V 三平面各拟合；`use_weight` / `use_weight_chroma` 只在
+  「偏离中性表」时置位——与解码器 `h264_slice.mbt` 的同名门控一致，
+  两侧不同门会直接解出偏差。
+- `h264_enc_put_pwt`：写 `pred_weight_table()`（两个 `log2_weight_denom`
+  + luma flag/pair + 单个覆盖两分量的 chroma flag）。
+
+**接线**：`H264PEncoder` 增 `weightp : Bool` 与 `pwt : H264PredWeight`
+（5 处结构体字面量补齐：`h264_encode_p.mbt` CAVLC 序列、`h264_encode_b.mbt`
+的 `new_p_encoder` 与 B 帧 `b_enc`、`h264_enc_cabac.mbt` CABAC 序列、
+`h264_enc_stream.mbt` 的 `stream_p` / `stream_b`；B 帧写死
+`weightp: false`）。`encode_p_frame` / `encode_p_frame_cabac` 帧首拟合
+（用可见区 `self.p.width/height`），PWT 写在
+`ref_pic_list_modification_flag_l0` 之后、`adaptive_ref_pic_marking_mode_flag`
+之前（与 FFmpeg `h264_slice.c:1841` 先读 PWT、`:1853` 后读 marking 一致，
+本仓解码器 `h264_slice.mbt:251` 同序）。`mc_into_rec` 末尾按矩形套
+`h264_weight_rect`（luma + 两个 chroma，plane 索引 j=0→U/1→V）——
+skip 与 16x16/16x8/8x16/8x8 全部预测都经此入口，一处注入全覆盖。
+
+PPS：`h264_enc_pps_body` / `h264_enc_pps_rbsp_cabac` / `h264_enc_write_pps`
+增 `weightp~`（默认 0，字节不变）。参数贯通：`h264_encode_intra_frame(_cabac)`、
+`h264_encode_frames(_qps/_b/_cabac/_cabac_qps/_vbv/_vbv_cabac)`、
+`H264StreamEncoder::open` 各加 `weightp~ : Bool = false`（18 处内部调用点
+一次性补齐，幂等脚本已删）。CLI `cmd/encode-h264` 增 `--weightp` /
+`--no-weightp`，`open_stream_encoder` 与 `encode_raw` 的 CAVLC/CABAC
+两处透传。
+
+**测试期抓到并修掉的两个真缺陷**（本片最有价值的产出，均出在流式入口）：
+
+1. `H264StreamEncoder::open` 构建 `pps_raw` 时漏传 `weightp~`——流式
+   PPS 声明 `weighted_pred_flag = 0`，而 P 切片带了 PWT（解码器按 PPS
+   不读表、按 slice 又需要表，属自相矛盾的流）。
+2. `stream_idr` 调 `h264_encode_intra_frame(_cabac)` 漏传 `weightp`——
+   IDR 自带的 SPS/PPS 前言仍写 0（PPS 第 17 字节 206 vs 207，**差一位
+   即该 flag**）。
+
+两处修好后，流式与批式同参输出逐字节一致（测试 ⑥ 钉住）。
+
+**新增测试 10 项（blackbox 6 + whitebox 4）**：
+
+- `h264_enc_weightp_test.mbt`（黑盒 6）：① 96×64/6 帧 fade、qp26、
+  `b_slices=false`：on **7335 B** vs off **9686 B**（−24.3%）、P 帧
+  MAE 10 vs 11、5 个 P 帧 recon 与 `skip_lf=false` 解码逐帧 md5 相等；
+  ② opt-in：默认流与显式 `weightp=false` md5 相同；③ 纯增益：3323 vs
+  3386 B、MAE 3 vs 4（断言写成「加权必须优于不加权」而非绝对阈值）；
+  ④ CABAC：加权流更小且 5 个 P 帧 recon 不变式成立；⑤ 与默认 B-GOP
+  组合：6 画面全解码、8013 vs 10025 B；⑥ 流式 `push_frame`/`finish`
+  与批式同参 md5 完全一致（6436 B）。
+- `h264_enc_weight_wbtest.mbt`（白盒 4）：精确增益+偏移恢复（w 落
+  24..28、o 落 1..5，期望 26/3）；平坦参考退化（w=32、o=20 且
+  `(32*100)/32+20 == 120`）；恒等参考保持中性（32/0）；极端近黑目标
+  的 w/o 落在 `se(v)` 语法域。
+- **C 仲裁（docker ffmpeg 9.0.2）**：加权 6 帧流落盘
+  `%TEMP%\wp_fade.h264`（7335 B），`ffmpeg -f h264 -i … -f framemd5`
+  解码**零告警**，六帧哈希
+  `a89bd6379ca72e67b8593d4546f172f8` / `70ad49b3f0d98ddb494fd8c90a94581f`
+  / `f3e840210eea8690dc4ab5b427e41906` / `1a7e01b35ddb423598c496c140958b44`
+  / `936394915bdfc14a978b98a002efe77d` / `6d8751612c86016c73ccff7189362006`
+  与本解码器 filtered 输出逐一相同，已 pin 进测试 ①（`WPARB:` hex dump
+  保留，可复跑外部仲裁）。这条证据同时证明「我们写的 PWT」与「我们
+  执行的加权 MC」跟 FFmpeg 的实现同值。
+
+验证：`moon check --target wasm --deny-warn --no-render` 干净；
+`moon info` 无 `.mbti` 变化（`H264StreamEncoder` 的新字段不进公开面）；
+wasm 黑盒 6/6、`h264_enc_stream_test` 8/8、CLI 16/16；白盒须走
+`--target wasm-gc`（该包白盒 wasm 二进制既有 `local count too large`），
+4/4 过。docker native `-f 'h264*'` **362 项 / 350 过 / 12 失败**，12 项
+失败与改动前基线 `955d35c` 逐条逐值相同（§406 六开关转正后未重钉的
+陈旧断言族 `h264 enc:`，见交接文档），本片零回归。`weightp` 保持
+opt-in（默认 false，逐字节不变）。
+
+顺带留下的继承欠账（非本片引入，已用 `git worktree` 在 `955d35c`
+复现同一组失败）：`h264_encode_p_test.mbt` 4 项、`h264_encode_p_intra_test.mbt`
+4 项、`h264_encode_dct8_test.mbt` 4 项——形态都是「默认流 8x8 相同」
+（§406 `dct8x8` 转正后语义反转）、「未选 Intra」与六帧快照/PSNR 地板
+（B 转正后判据按编码序、未做显示序映射）。下一片应统一重钉。

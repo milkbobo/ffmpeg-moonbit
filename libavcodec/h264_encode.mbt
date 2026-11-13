@@ -131,6 +131,10 @@ pub fn h264_encode_intra_frame(
   aq_strength~ : Int32 = 1,
   vbv~ : H264Vbv? = None,
   b_seq~ : Bool = false,
+  /// `§410`: explicit P weighted prediction. The PPS then carries
+  /// `weighted_pred_flag = 1` and every P slice header a fitted
+  /// `pred_weight_table()`; off, the stream stays byte-identical.
+  weightp~ : Bool = false,
 ) -> Result[H264EncodedFrame, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -173,7 +177,7 @@ pub fn h264_encode_intra_frame(
   } else {
     h264_enc_write_sps(p_ps, dct8x8~, vbv~)
   }
-  let pps_nal = h264_enc_write_pps(p_ps, dct8x8~)
+  let pps_nal = h264_enc_write_pps(p_ps, dct8x8~, weightp~)
   // Round-trip the parameter sets through the decoder's own parsers: the
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
@@ -182,7 +186,7 @@ pub fn h264_encode_intra_frame(
   } else {
     h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~)
   }
-  let pps_raw = h264_enc_pps_rbsp(p_ps, dct8x8~)
+  let pps_raw = h264_enc_pps_rbsp(p_ps, dct8x8~, weightp~)
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_raw), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")

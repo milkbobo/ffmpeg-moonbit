@@ -688,7 +688,11 @@ fn h264_enc_sps_rbsp_high(p : H264EncParams, vbv~ : H264Vbv? = None) -> Bytes {
 /// `second_chroma_qp_index_offset` (the reader only enters the tail when
 /// more_rbsp_data remains, so the Main-profile stream above must stay
 /// byte-identical when the flag is off).
-fn h264_enc_pps_rbsp_cabac(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
+fn h264_enc_pps_rbsp_cabac(
+  p : H264EncParams,
+  dct8x8~ : Bool = false,
+  weightp~ : Bool = false,
+) -> Bytes {
   let r = H264Rbsp::new()
   r.put_ue(0) // pic_parameter_set_id
   r.put_ue(0) // seq_parameter_set_id
@@ -697,7 +701,7 @@ fn h264_enc_pps_rbsp_cabac(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
   r.put_ue(0) // num_slice_groups_minus1
   r.put_ue(0) // num_ref_idx_l0_default_active_minus1
   r.put_ue(0) // num_ref_idx_l1_default_active_minus1
-  r.put_bit(0) // weighted_pred_flag
+  r.put_bit(if weightp { 1 } else { 0 }) // weighted_pred_flag
   r.put(0, 2) // weighted_bipred_idc
   r.put_se(p.qp - 26) // pic_init_qp_minus26
   r.put_se(0) // pic_init_qs_minus26
@@ -801,6 +805,9 @@ pub fn h264_encode_intra_frame_cabac(
   aq_strength~ : Int32 = 1,
   vbv~ : H264Vbv? = None,
   b_seq~ : Bool = false,
+  /// `§410`: explicit P weighted prediction (the PPS carries
+  /// `weighted_pred_flag = 1`; the P slice headers carry the table).
+  weightp~ : Bool = false,
 ) -> Result[H264EncodedFrame, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -858,7 +865,7 @@ pub fn h264_encode_intra_frame_cabac(
     Bytes::from_array(out[:])
   }
   let pps_nal = {
-    let raw = h264_enc_pps_rbsp_cabac(p_ps, dct8x8~)
+    let raw = h264_enc_pps_rbsp_cabac(p_ps, dct8x8~, weightp~)
     let out : Array[Byte] = [
       b'\x00',
       b'\x00',
@@ -876,7 +883,7 @@ pub fn h264_encode_intra_frame_cabac(
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
-  let pps_raw = h264_enc_pps_rbsp_cabac(p_ps, dct8x8~)
+  let pps_raw = h264_enc_pps_rbsp_cabac(p_ps, dct8x8~, weightp~)
   match
     ff_h264_decode_picture_parameter_set(
       BitReader::new(pps_raw),
@@ -2673,6 +2680,21 @@ fn H264PEncoder::encode_p_frame_cabac(
     st.intra = false
     st.has_data = false
   }
+  if self.weightp {
+    h264_enc_fit_p_weight(
+      self.pwt,
+      self.src_y,
+      self.ref_y,
+      self.src_u,
+      self.ref_u,
+      self.src_v,
+      self.ref_v,
+      self.ystride,
+      self.cstride,
+      self.p.width,
+      self.p.height,
+    )
+  }
   let mirror = h264_cabac_mirror_new(
     self.mb_width,
     self.mb_height,
@@ -2704,6 +2726,10 @@ fn H264PEncoder::encode_p_frame_cabac(
   }
   r.put_bit(0) // num_ref_idx_active_override_flag
   r.put_bit(0) // ref_pic_list_modification_flag_l0
+  // pred_weight_table (`weightp`), before dec_ref_pic_marking.
+  if self.weightp {
+    h264_enc_put_pwt(r, self.pwt)
+  }
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
   r.put_ue(0) // cabac_init_idc
   r.put_se(self.p.qp - self.base_qp) // slice_qp_delta
@@ -2858,6 +2884,9 @@ pub fn h264_encode_frames_cabac(
   vbv_init~ : Int32 = 90,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
+  /// `§410`: explicit P weighted prediction. Changes the bitstream, so it
+  /// stays opt-in; the default path is byte-identical.
+  weightp~ : Bool = false,
 ) -> Result[Bytes, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -2902,6 +2931,7 @@ pub fn h264_encode_frames_cabac(
               qps=trial,
               recon=[],
               stats=H264EncStats::new(),
+              weightp~,
             ) {
             Ok((bytes, _)) => Ok(bytes.length())
             Err(e) => Err(e)
@@ -2929,6 +2959,7 @@ pub fn h264_encode_frames_cabac(
           qps~,
           recon~,
           stats~,
+          weightp~,
         ) {
         Ok((bytes, _)) => Ok(bytes)
         Err(e) => Err(e)
@@ -2958,6 +2989,7 @@ pub fn h264_encode_frames_cabac(
                 recon=[],
                 stats=H264EncStats::new(),
                 vbv=Some(v),
+                weightp~,
               ) {
               Ok((_, sizes)) => Ok(sizes)
               Err(e) => Err(e)
@@ -2988,6 +3020,7 @@ pub fn h264_encode_frames_cabac(
             fillers~,
             recon~,
             stats~,
+            weightp~,
           ) {
           Ok((bytes, _)) => {
             stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -3022,6 +3055,7 @@ pub fn h264_encode_frames_cabac(
         dct8x8~,
         recon~,
         stats~,
+        weightp~,
       ) {
       Ok((bytes, _)) => Ok(bytes)
       Err(e) => Err(e)
@@ -3059,6 +3093,7 @@ pub fn h264_encode_frames_cabac(
         vbv=v,
         recon~,
         stats~,
+        weightp~,
       )
     None => ()
   }
@@ -3085,6 +3120,7 @@ pub fn h264_encode_frames_cabac(
             aud~,
             recon=[],
             stats=H264EncStats::new(),
+            weightp~,
           ) {
           Ok((bytes, _)) => Ok(bytes.length())
           Err(e) => Err(e)
@@ -3116,6 +3152,7 @@ pub fn h264_encode_frames_cabac(
       aud~,
       recon~,
       stats~,
+      weightp~,
     ) {
     Ok((bytes, _)) => Ok(bytes)
     Err(e) => Err(e)
@@ -3142,6 +3179,8 @@ fn h264_encode_frames_vbv_cabac(
   vbv~ : H264Vbv,
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
+  /// `§410`: explicit P weighted prediction (see `h264_encode_frames_cabac`).
+  weightp~ : Bool = false,
 ) -> Result[Bytes, String] {
   let n = frames.length()
   let (qps, sizes) = match
@@ -3164,6 +3203,7 @@ fn h264_encode_frames_vbv_cabac(
           recon=[],
           stats=H264EncStats::new(),
           vbv=Some(vbv),
+          weightp~,
         ) {
         Ok((_, sizes)) => Ok(sizes)
         Err(e) => Err(e)
@@ -3195,6 +3235,7 @@ fn h264_encode_frames_vbv_cabac(
       vbv=Some(vbv),
       fillers~,
       aud~,
+      weightp~,
     ) {
     Ok((bytes, _)) => {
       stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -3233,6 +3274,8 @@ fn h264_encode_frames_cabac_qps(
   vbv~ : H264Vbv? = None,
   fillers~ : Array[Int32] = [],
   aud~ : Bool = false,
+  /// `§410`: explicit P weighted prediction (see `h264_encode_frames_cabac`).
+  weightp~ : Bool = false,
 ) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
@@ -3250,6 +3293,7 @@ fn h264_encode_frames_cabac_qps(
       aq~,
       aq_strength~,
       vbv~,
+      weightp~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
@@ -3270,7 +3314,7 @@ fn h264_encode_frames_cabac_qps(
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
-  let pps_raw = h264_enc_pps_rbsp_cabac(p, dct8x8~)
+  let pps_raw = h264_enc_pps_rbsp_cabac(p, dct8x8~, weightp~)
   match
     ff_h264_decode_picture_parameter_set(
       BitReader::new(pps_raw),
@@ -3382,6 +3426,8 @@ fn h264_encode_frames_cabac_qps(
       b_parts: false,
       intra_in_b: false,
       intra4x4_in_b: false,
+      weightp,
+      pwt: new_h264_pred_weight(),
     }
     let nal = match enc.encode_p_frame_cabac(f, intra_in_p) {
       Ok(n) => n

@@ -4088,6 +4088,8 @@ fn h264_encode_frames_b(
   fillers~ : Array[Int32] = [],
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
+  /// B-slice flags.
+  weightp~ : Bool = false,
 ) -> Result[(Bytes, Array[Int32]), String] {
   let n = frames.length()
   let qps_arr = if qps.length() == n { qps } else { Array::make(n, qp) }
@@ -4109,6 +4111,7 @@ fn h264_encode_frames_b(
         aq_strength~,
         b_seq=true,
         vbv~,
+        weightp~,
       )
     } else {
       h264_encode_intra_frame(
@@ -4126,6 +4129,7 @@ fn h264_encode_frames_b(
         aq_strength~,
         b_seq=true,
         vbv~,
+        weightp~,
       )
     }) {
     Ok(e) => e
@@ -4146,9 +4150,9 @@ fn h264_encode_frames_b(
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
   let pps_raw = if cabac {
-    h264_enc_pps_rbsp_cabac(p, dct8x8~)
+    h264_enc_pps_rbsp_cabac(p, dct8x8~, weightp~)
   } else {
-    h264_enc_pps_rbsp(p, dct8x8~)
+    h264_enc_pps_rbsp(p, dct8x8~, weightp~)
   }
   match
     ff_h264_decode_picture_parameter_set(
@@ -4264,6 +4268,8 @@ fn h264_encode_frames_b(
       b_parts: false,
       intra_in_b: false,
       intra4x4_in_b: false,
+      weightp,
+      pwt: new_h264_pred_weight(),
     }
   }
   fn push_au(stream : Array[Bytes], parts : Array[Bytes]) -> Unit {
@@ -4370,6 +4376,8 @@ fn h264_encode_frames_b(
         b_parts,
         intra_in_b,
         intra4x4_in_b,
+        weightp: false,
+        pwt: new_h264_pred_weight(),
       }
       let past_pic = h264_b_refpic(
         ref_y,

@@ -285,27 +285,39 @@ fn h264_enc_sps_body(
 /// High-profile tail (`transform_8x8_mode_flag`); the reader only enters
 /// the tail when more_rbsp_data remains, so the baseline stream above must
 /// stay byte-identical when the flag is off.
-fn h264_enc_pps_rbsp(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
+fn h264_enc_pps_rbsp(
+  p : H264EncParams,
+  dct8x8~ : Bool = false,
+  weightp~ : Bool = false,
+) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_pps_body(r, p, dct8x8~)
+  h264_enc_pps_body(r, p, dct8x8~, weightp~)
   r.trailing_bits()
   r.finish_raw_of()
 }
 
 ///|
 /// Write the PPS NAL (nal_unit_type 8, ref_idc 3). */
-fn h264_enc_write_pps(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
+fn h264_enc_write_pps(
+  p : H264EncParams,
+  dct8x8~ : Bool = false,
+  weightp~ : Bool = false,
+) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_pps_body(r, p, dct8x8~)
+  h264_enc_pps_body(r, p, dct8x8~, weightp~)
   r.trailing_bits()
   h264_enc_nal(r, 3, 8)
 }
 
 ///|
+/// `weightp` sets `weighted_pred_flag` (`§410`): with it the decoder expects
+/// a `pred_weight_table()` in every P slice header, so the picture
+/// encoders must emit one. Off, the PPS stays byte-identical.
 fn h264_enc_pps_body(
   r : H264Rbsp,
   p : H264EncParams,
   dct8x8~ : Bool = false,
+  weightp~ : Bool = false,
 ) -> Unit {
   r.put_ue(0) // pic_parameter_set_id
   r.put_ue(0) // seq_parameter_set_id
@@ -314,7 +326,7 @@ fn h264_enc_pps_body(
   r.put_ue(0) // num_slice_groups_minus1
   r.put_ue(0) // num_ref_idx_l0_default_active_minus1
   r.put_ue(0) // num_ref_idx_l1_default_active_minus1
-  r.put_bit(0) // weighted_pred_flag
+  r.put_bit(if weightp { 1 } else { 0 }) // weighted_pred_flag
   r.put(0, 2) // weighted_bipred_idc
   r.put_se(p.qp - 26) // pic_init_qp_minus26
   r.put_se(0) // pic_init_qs_minus26
