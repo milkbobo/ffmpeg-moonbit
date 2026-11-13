@@ -1,11 +1,9 @@
-// Blackbox tests for the P-slice multi-reference encoder (`§415`): an
-// opt-in history depth (`multi_ref`) that keeps N reconstructions and
-// picks a macroblock-level reference per picture. `multi_ref=1` must be
-// byte-identical to the pre-§415 streams; deeper histories change the
-// decision inputs only — the syntax (SPS `max_num_ref_frames`, the PPS
-// default L0 count, per-partition `ref_idx_l0` and the multi-entry
-// `pred_weight_table()`) is validated by this repository's own decoder,
-// which has parsed every element since the B-line work.
+// Blackbox tests for the P-slice multi-reference encoder (`§415`/`§416`).
+// CAVLC multi-reference is fully verified: decode round-trip, the recon
+// invariant (the `§415` skip/weight slot mismatches are fixed), streaming
+// == batch byte identity, and external ffmpeg arbitration. CABAC multi
+// -reference is rejected at the entries until its ref_idx bin writer and
+// the reader are re-traced (see AGENT_HANDOFF §416).
 
 ///|
 fn mr_md5(data : Bytes) -> String {
@@ -59,104 +57,9 @@ test "h264 multiref: multi_ref=1 is byte-identical to the default" {
 }
 
 ///|
-test "h264 multiref: two references round-trip in both entropies" {
+test "h264 multiref: two references round-trip with the recon invariant" {
   let frames = h264p_fixture(96, 64, 6)
-  for cabac in [false, true] {
-    let recon : Array[Bytes] = []
-    let stream = match
-      (if cabac {
-        @libavcodec.h264_encode_frames_cabac(
-          frames,
-          width=96,
-          height=64,
-          qp=26,
-          b_slices=false,
-          multi_ref=2,
-          recon~,
-        )
-      } else {
-        @libavcodec.h264_encode_frames(
-          frames,
-          width=96,
-          height=64,
-          qp=26,
-          b_slices=false,
-          multi_ref=2,
-          recon~,
-        )
-      }) {
-      Ok(s) => s
-      Err(e) => fail(e)
-    }
-    let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
-      Ok(f) => f
-      Err(e) => fail(e)
-    }
-    assert_eq(dec.length(), 6)
-    // The parameter sets signal the active count: SPS max_num_ref_frames
-    // and the PPS default L0 count are 2 — a full decode already proved
-    // the parser accepts the stream and consumes the per-partition
-    // ref_idx elements (an unparsed ref_idx would desync immediately).
-    if dec[1].bit_depth != 8 {
-      fail("multiref stream decoded at the wrong depth")
-    }
-    // Known `§415` limitation (see AGENT_HANDOFF): the encoder's local
-    // recon references a different history slot than the decoder's list
-    // for reference-1 macroblocks, so the recon invariant does not hold
-    // yet. The stream itself is valid — the external ffmpeg arbitration
-    // (AGENT_HANDOFF §415) decodes every picture warning-free.
-  }
-}
-
-///|
-test "h264 multiref: deeper history never hurts, and usually helps" {
-  let frames = h264p_fixture(96, 64, 6)
-  for cabac in [false, true] {
-    let mut total_one = 0
-    let mut total_two = 0
-    for mr in [1, 2] {
-      let stream = match
-        (if cabac {
-          @libavcodec.h264_encode_frames_cabac(
-            frames,
-            width=96,
-            height=64,
-            qp=26,
-            b_slices=false,
-            multi_ref=mr,
-          )
-        } else {
-          @libavcodec.h264_encode_frames(
-            frames,
-            width=96,
-            height=64,
-            qp=26,
-            b_slices=false,
-            multi_ref=mr,
-          )
-        }) {
-        Ok(s) => s
-        Err(e) => fail(e)
-      }
-      if mr == 1 {
-        total_one = stream.length()
-      } else {
-        total_two = stream.length()
-      }
-    }
-    // Known limitation: the two-reference stream is not yet guaranteed
-    // smaller — the recon-slot mismatch distorts the reference content
-    // the decision and the residual see (tracked in the §415 handoff).
-    assert_true(total_one > 0 && total_two > 0)
-  }
-}
-
-///|
-test "h264 multiref: weighted P prediction composes (PWT per entry)" {
-  let frames = h264wp_fade_fixture(96, 64, 5)
   let recon : Array[Bytes] = []
-  // weightp defaults on: the multi-entry PWT carries the fitted pair for
-  // slot 0 and the neutral pair for slot 1.
   let stream = match
     @libavcodec.h264_encode_frames(
       frames,
@@ -174,19 +77,73 @@ test "h264 multiref: weighted P prediction composes (PWT per entry)" {
     Ok(f) => f
     Err(e) => fail(e)
   }
-  // Known limitation: the recon invariant is relaxed here (see handoff);
-  // the decode itself proves the multi-entry PWT syntax round-trips.
-  assert_eq(dec.length(), 5)
+  assert_eq(dec.length(), 6)
+  assert_eq(recon.length(), 5)
+  // `§416`: the recon invariant holds — the `§415` divergences (skips
+  // committed after the reference switch, weighted MC reading entry-0
+  // offsets for entry-1 references) are fixed.
+  for i, r in recon {
+    assert_eq(
+      mr_md5(r),
+      mr_md5(dec[i + 1].yuvp()),
+      msg="P frame \{i + 1}: encoder recon != decoder recon",
+    )
+  }
+  // The parameter sets signal the active count: SPS max_num_ref_frames
+  // and the PPS default L0 count are 2 — a full decode already proved
+  // the parser consumes the per-partition ref_idx elements.
+  if dec[1].bit_depth != 8 {
+    fail("multiref stream decoded at the wrong depth")
+  }
 }
 
 ///|
-test "h264 multiref: streaming matches the batch stream" {
-  let frames = h264p_fixture(96, 64, 6)
-  // The streaming==batch byte identity holds for the single-reference
-  // configuration; at multi_ref=2 the two histories diverge (known
-  // limitation), so this leg pins mr=1 identity instead.
-  let batch = match
-    @libavcodec.h264_encode_frames_cabac(
+/// A two-position toggle: even pictures show pattern A, odd pictures
+/// pattern B. Every odd P picture's best reference is the picture two
+/// back (the previous A), which multi-reference finds and single
+/// -reference cannot — the case the tool exists for.
+fn mr_toggle_fixture(n : Int32) -> Array[(Bytes, Bytes, Bytes)] {
+  let w = 96
+  let h = 64
+  let out : Array[(Bytes, Bytes, Bytes)] = []
+  for f = 0; f < n; f = f + 1 {
+    let phase = f % 2
+    let bx = if phase == 0 { 8 } else { 56 }
+    let by = if phase == 0 { 8 } else { 32 }
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    for row = 0; row < h; row = row + 1 {
+      for col = 0; col < w; col = col + 1 {
+        let mut s = (col * 3 + row * 5) & 0x7F
+        let inbox = col >= bx && col < bx + 16 && row >= by && row < by + 16
+        if inbox &&
+          (col == bx || col == bx + 15 || row == by || row == by + 15) {
+          s = 30
+        } else if inbox {
+          s = 210
+        }
+        y.push(s.to_byte())
+      }
+    }
+    for row = 0; row < h / 2; row = row + 1 {
+      for col = 0; col < w / 2; col = col + 1 {
+        u.push((96 + ((col / 2 + phase * 8) & 0x3F)).to_byte())
+        v.push((96 + ((row / 2 + phase * 4) & 0x3F)).to_byte())
+      }
+    }
+    out.push(
+      (Bytes::from_array(y[:]), Bytes::from_array(u[:]), Bytes::from_array(v[:])),
+    )
+  }
+  out
+}
+
+///|
+test "h264 multiref: a toggle scene codes far smaller with two refs" {
+  let frames = mr_toggle_fixture(7)
+  let one = match
+    @libavcodec.h264_encode_frames(
       frames,
       width=96,
       height=64,
@@ -197,14 +154,54 @@ test "h264 multiref: streaming matches the batch stream" {
     Ok(s) => s
     Err(e) => fail(e)
   }
+  let two = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      b_slices=false,
+      multi_ref=2,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  // The odd pictures become near-skips against their true match two back;
+  // the two-reference stream must be dramatically smaller (the syntax
+  // overhead of ref_idx/PWT entries is a few bytes per picture).
+  assert_true(
+    two.length() * 5 < one.length() * 4,
+    msg="toggle scene: two-ref \{two.length()} B not clearly smaller than one-ref \{one.length()} B",
+  )
+  let dec = match @libavcodec.h264_decode_annexb_frames(two, true) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  assert_eq(dec.length(), 7)
+}
+
+///|
+test "h264 multiref: streaming matches the batch stream" {
+  let frames = h264p_fixture(96, 64, 6)
+  let batch = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      b_slices=false,
+      multi_ref=2,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
   let enc = match
     @libavcodec.H264StreamEncoder::open(
       width=96,
       height=64,
       qp=26,
-      cabac=true,
       b_slices=false,
-      multi_ref=1,
+      multi_ref=2,
     ) {
     Ok(e) => e
     Err(e) => fail(e)
@@ -240,7 +237,7 @@ test "h264 multiref: High 10 composes" {
   let frames = h264h10_fixture(96, 64, 4, 10)
   let recon : Array[Bytes] = []
   let stream = match
-    @libavcodec.h264_encode_frames_cabac(
+    @libavcodec.h264_encode_frames(
       frames,
       width=96,
       height=64,
@@ -260,7 +257,9 @@ test "h264 multiref: High 10 composes" {
   for f in dec {
     assert_eq(f.bit_depth, 10)
   }
-  // Known limitation: recon invariant relaxed (see handoff).
+  for i, r in recon {
+    assert_eq(mr_md5(r), mr_md5(dec[i + 1].yuvp()))
+  }
 }
 
 ///|
@@ -278,6 +277,31 @@ test "h264 multiref: combination and range validation" {
     Ok(_) => fail("multi_ref accepted B slices")
     Err(_) => ()
   }
+  // CABAC is rejected until the ref_idx bin writer is re-traced (`§416`).
+  match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      b_slices=false,
+      multi_ref=2,
+    ) {
+    Ok(_) => fail("multi_ref accepted CABAC")
+    Err(e) => assert_true(e.contains("CABAC"), msg=e)
+  }
+  match
+    @libavcodec.H264StreamEncoder::open(
+      width=96,
+      height=64,
+      qp=26,
+      cabac=true,
+      b_slices=false,
+      multi_ref=2,
+    ) {
+    Ok(_) => fail("streaming multi_ref accepted CABAC")
+    Err(e) => assert_true(e.contains("CABAC"), msg=e)
+  }
   // Rate controls are rejected.
   match
     @libavcodec.h264_encode_frames(
@@ -290,21 +314,6 @@ test "h264 multiref: combination and range validation" {
       target_bytes=1500,
     ) {
     Ok(_) => fail("multi_ref accepted target_bytes")
-    Err(_) => ()
-  }
-  match
-    @libavcodec.h264_encode_frames_cabac(
-      frames,
-      width=96,
-      height=64,
-      qp=26,
-      b_slices=false,
-      multi_ref=2,
-      vbv_maxrate=90000,
-      vbv_bufsize=18000,
-      fps=30,
-    ) {
-    Ok(_) => fail("multi_ref accepted VBV")
     Err(_) => ()
   }
   // Range: 0 and 17 are out of the documented 1..=16.

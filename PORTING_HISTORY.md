@@ -13335,3 +13335,46 @@ multiref 7 + CLI 2）；ffref native **78/78**；白盒 wbtest 须 wasm-gc。
 SPS 的 DPB 容量实验（put_ue(p.nrefs+1)）必须还原——max_num_ref_frames
 进了 VUI 的 max_dec_frame_buffering，vbv 流位级漂移（worktree 位级对拍
 定位）。
+
+## §416 H.264 多参考正确性收口——五个连环真 bug 修复 + CAVLC 全验 + CABAC 拒收（2026-11-14）
+
+§415 交付时 recon 不变式在 multi_ref>1 破损（归因"槽位错位"）。本片位级重诊，
+**推翻原假设**：解码器 DPB 顺序与历史内容逐像素一致（wbtest 前缀解码 +
+`dec.refs` 与编码 recon 对拍 ndiff=0），失败 MB 是 **ref=0 的 skip**——五个真
+bug 逐层现形，全部修复：
+
+1. **skip 换指污染**：`decide_plan` 的 best-ref 探针把 `self.ref_y/u/v` 指向
+   选中条目；RD 最终选 **Skip** 时（skip 是 decide_plan 候选！），主循环
+   `commit_skip` 在其后执行，MC 读的仍是 ref1 平面——而 P_Skip 语法恒
+   ref 0。修：`commit_skip` 开头指回 `refs_y[0]` 并复位 `cur_ref_mb`。
+2. **加权 MC 偏移错索引**：`mc_into_rec` 的 weight_rect 只把 **weight**
+   改成 `[cur_ref_mb]`，**offset** 仍是 `[0]`——ref1 宏块用中性权重却叠
+   entry0 的真实偏移（症状：纯 chroma 全 MB ±1/±2 恒差）。修：两处 offset
+   同步 `[cur_ref_mb]`。
+3. **流式 IDR 漏传 multi_ref**：`stream_idr` 不给 I 帧入口传 `multi_ref~`，
+   流式 SPS/PPS 说 1 而 P 片写 ref_idx → 流式 mr=2 流无效。修：两熵入口
+   都传 `self.nrefs`。
+4. **CABAC 批式缺 refs 轮换**：`h264_encode_frames_cabac_qps` 帧循环从不
+   insert/truncate 历史（refs 恒 [I]），且 PE 字面量 `nrefs: 1`、`p.nrefs`
+   也是 1——CABAC 批式根本没有多参考。修：补轮换 + 两处字面量。
+5. **PWT 中性填充界错**：填充循环以 `self.nrefs`（历史长度）为界，P1 时
+   entry1 未中性化（构造器权重 1 被当真权重写进流）；且 CABAC 入口**完全
+   没有**填充。修：两熵都以 `p.nrefs`（语法计数）为界补中性填充。
+
+修后：CAVLC mr=2 recon 不变式逐帧 md5 全过、流式==批式逐字节（双熵）、
+toggle 场景（偶帧模式 A/奇帧模式 B——多参考的设计场景）两参考流
+2115B vs 2750B（−23%）；ffmpeg framemd5 **14/14 帧 MATCH**（移动 + toggle
+双流，`.scratch/repin415/MR3B|MR3T`）。
+
+**CABAC×multi_ref 拒收**：修完后 CABAC 路残差解析仍 EINVAL（与 wp/rd 无
+关）——ref_idx 的 CABAC 写读 bin 级失步是独立深层 bug（写/读上下文推导与
+unary 表面逐行核对未现差异，需 bin 级 trace 专项）。两入口 + 流式 open 明确
+`Err("multi_ref does not support CABAC yet")`，避免产出坏流。
+
+**验证**：wasm check 干净；全族+CLI **166/166**；ffref native **78/78**；
+x264 `--ref 2` 真流解码依旧 3 帧全解。
+
+**排障工具沉淀**：位级 dump 的十六进制格式化必须 `get_char().unwrap() +
+write_char`（`String[i]` 返回码点数值、`toString()` 是十进制——本片"0x97 非
+法 NAL"乌龙即此）；MoonBit 字节字面量 `b'\x00'` 经 python 转写时双反斜杠
+陷阱；诊断断言与打印必须同轮同源（跨轮复用旧 dump 曾误导两小时）。

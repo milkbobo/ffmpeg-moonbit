@@ -137,6 +137,17 @@ pub fn H264StreamEncoder::open(
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
+  if multi_ref < 1 || multi_ref > 16 {
+    return Err("h264 enc: multi_ref must be in 1..=16")
+  }
+  if multi_ref > 1 && b_slices {
+    return Err("h264 enc: multi_ref does not support B slices yet")
+  }
+  if multi_ref > 1 && cabac {
+    // `§416`: same rejection as the batch CABAC entry (ref_idx bin
+    // desync; see AGENT_HANDOFF §416).
+    return Err("h264 enc: multi_ref does not support CABAC yet")
+  }
   if width <= 0 ||
     height <= 0 ||
     width % 2 != 0 ||
@@ -379,6 +390,7 @@ fn H264StreamEncoder::stream_idr(
       dct8x8=self.dct8x8,
       weightp=self.weightp,
       bit_depth=self.bit_depth,
+      multi_ref=self.nrefs,
     )
   } else {
     h264_encode_intra_frame(
@@ -397,6 +409,7 @@ fn H264StreamEncoder::stream_idr(
       dct8x8=self.dct8x8,
       weightp=self.weightp,
       bit_depth=self.bit_depth,
+      multi_ref=self.nrefs,
     )
   }
   let first = match first {

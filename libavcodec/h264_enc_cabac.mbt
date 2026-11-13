@@ -2771,6 +2771,19 @@ fn H264PEncoder::encode_p_frame_cabac(
   // `§412`: the mirror and the CABAC context init take the extended
   // quantiser QP — the *slice* QP (`p.qp`), not the PPS anchor `base_qp`
   // which only rides `slice_qp_delta`.
+  // `§416`: entries beyond the fitted one carry the denom-neutral
+  // pair so their pred_weight_table flags stay 0 (the decoder then
+  // derives the identity transform itself). Bounded by the SYNTAX
+  // count `p.nrefs`, which leads the history length on the early
+  // pictures of a multi-reference sequence.
+  for i = 1; i < self.p.nrefs; i = i + 1 {
+    self.pwt.luma_weight_l0[i] = 1 << self.pwt.luma_log2_weight_denom
+    self.pwt.luma_offset_l0[i] = 0
+    self.pwt.chroma_weight_l0[i][0] = 1 << self.pwt.chroma_log2_weight_denom
+    self.pwt.chroma_offset_l0[i][0] = 0
+    self.pwt.chroma_weight_l0[i][1] = 1 << self.pwt.chroma_log2_weight_denom
+    self.pwt.chroma_offset_l0[i][1] = 0
+  }
   let mirror = h264_cabac_mirror_new(
     self.mb_width,
     self.mb_height,
@@ -2996,12 +3009,12 @@ pub fn h264_encode_frames_cabac(
     return Err("h264 enc: multi_ref must be in 1..=16")
   }
   if multi_ref > 1 {
-    if b_slices {
-      return Err("h264 enc: multi_ref does not support B slices yet")
-    }
-    if target_bytes > 0 || vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
-      return Err("h264 enc: multi_ref does not support the rate controls yet")
-    }
+    // `§416`: the CABAC ref_idx bins desync between the writer and the
+    // reader (residual parse diverges with `EINVAL`); the CAVLC path is
+    // fully verified (decode, recon invariant, streaming identity, ffmpeg
+    // arbitration). CABAC multi-reference stays rejected until the bin
+    // trace is done — see AGENT_HANDOFF §416.
+    return Err("h264 enc: multi_ref does not support CABAC yet")
   }
   // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
   // B picture, so it degrades to the I-only stream instead of erroring.
@@ -3471,6 +3484,9 @@ fn h264_encode_frames_cabac_qps(
   let mut ref_y = Array::make(ystride * pheight, 0)
   let mut ref_u = Array::make(cstride * (pheight / 2), 0)
   let mut ref_v = Array::make(cstride * (pheight / 2), 0)
+  let refs_y : Array[Array[Int32]] = []
+  let refs_u : Array[Array[Int32]] = []
+  let refs_v : Array[Array[Int32]] = []
   for row = 0; row < pheight; row = row + 1 {
     for col = 0; col < ystride; col = col + 1 {
       ref_y[row * ystride + col] = first.recon_y[row * ystride + col]
@@ -3491,6 +3507,9 @@ fn h264_encode_frames_cabac_qps(
       states[k].nz[i] = first.mb_nz[k][i]
     }
   }
+  refs_y.push(ref_y)
+  refs_u.push(ref_u)
+  refs_v.push(ref_v)
   for f = 1; f < frames.length(); f = f + 1 {
     let (y, u, v) = frames[f]
     let src_y_p = h264_enc_load_plane(
@@ -3502,7 +3521,7 @@ fn h264_encode_frames_cabac_qps(
       (Array::make(mb_width * mb_height, 0), 0)
     }
     let enc : H264PEncoder = {
-      p: { width, height, qp: qps[f], level_idc, bit_depth, nrefs: 1, },
+      p: { width, height, qp: qps[f], level_idc, bit_depth, nrefs: multi_ref, },
       stats,
       pps,
       chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qps[f]), bit_depth~),
@@ -3519,10 +3538,10 @@ fn h264_encode_frames_cabac_qps(
       ref_y,
       ref_u,
       ref_v,
-      refs_y: [ref_y],
-      refs_u: [ref_u],
-      refs_v: [ref_v],
-      nrefs: 1,
+      refs_y,
+      refs_u,
+      refs_v,
+      nrefs: refs_y.length(),
       cur_ref_mb: 0,
       ystride,
       cstride,
@@ -3600,6 +3619,18 @@ fn h264_encode_frames_cabac_qps(
     ref_y = next_y
     ref_u = next_u
     ref_v = next_v
+    // `§416`: the CABAC batch entry kept a single reference forever — the
+    // P pictures never saw the multi-ref history the streaming entry (and
+    // the CAVLC entry) maintain. Rotate exactly like them: newest first,
+    // capped at the requested depth.
+    refs_y.insert(0, next_y)
+    refs_u.insert(0, next_u)
+    refs_v.insert(0, next_v)
+    if refs_y.length() > multi_ref {
+      refs_y.truncate(multi_ref)
+      refs_u.truncate(multi_ref)
+      refs_v.truncate(multi_ref)
+    }
   }
   let out : Array[Byte] = []
   let sizes : Array[Int32] = []

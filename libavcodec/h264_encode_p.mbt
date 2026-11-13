@@ -1312,7 +1312,7 @@ fn H264PEncoder::encode_p_frame(
   // `§415`: the fit fills entry 0; entries 1.. carry the denom-neutral
   // pair so the syntax writer can flag them 0 and the weighted MC reads
   // a true identity transform for the other references.
-  for i = 1; i < self.nrefs; i = i + 1 {
+  for i = 1; i < self.p.nrefs; i = i + 1 {
     self.pwt.luma_weight_l0[i] = 1 << self.pwt.luma_log2_weight_denom
     self.pwt.luma_offset_l0[i] = 0
     self.pwt.chroma_weight_l0[i][0] = 1 << self.pwt.chroma_log2_weight_denom
@@ -2061,7 +2061,7 @@ fn H264PEncoder::decide_plan(
     let mut best_sad = s0
     for refi in 1..<self.nrefs {
       let (_, _, sad) = self.me_part(mb_x, mb_y, 0, 0, 16, 16, refi~)
-      if sad < best_sad {
+      if sad * 4 < best_sad * 3 {
         best_sad = sad
         best_ref = refi
       }
@@ -2443,6 +2443,15 @@ fn H264PEncoder::commit_skip(
   mvx : Int32,
   mvy : Int32,
 ) -> Unit {
+  // P_Skip codes no ref_idx: the reference is slot 0 by syntax. When
+  // the RD decision reached this skip through decide_plan, the multi
+  // -reference probe left the reference planes pointing at the selected
+  // history entry; repoint them at slot 0 before the skip's MC, exactly
+  // like the per-macroblock reset at the top of the slice loop.
+  self.ref_y = self.refs_y[0]
+  self.ref_u = self.refs_u[0]
+  self.ref_v = self.refs_v[0]
+  self.cur_ref_mb = 0
   let st = self.states[mb_idx]
   for i = 0; i < 16; i = i + 1 {
     st.mv[2 * i] = mvx
@@ -2538,7 +2547,7 @@ fn H264PEncoder::mc_into_rec(
         h,
         self.pwt.luma_log2_weight_denom,
         self.pwt.luma_weight_l0[self.cur_ref_mb],
-        self.pwt.luma_offset_l0[0],
+        self.pwt.luma_offset_l0[self.cur_ref_mb],
         bit_depth=self.p.bit_depth,
       )
     }
@@ -2553,7 +2562,7 @@ fn H264PEncoder::mc_into_rec(
           cch,
           self.pwt.chroma_log2_weight_denom,
           self.pwt.chroma_weight_l0[self.cur_ref_mb][j],
-          self.pwt.chroma_offset_l0[0][j],
+          self.pwt.chroma_offset_l0[self.cur_ref_mb][j],
           bit_depth=self.p.bit_depth,
         )
       }
