@@ -426,3 +426,23 @@ D. 修掉后（预期一行或几行）：解除 `h264 aq strength` 的 qp 腿
 
 已全部还原到 HEAD 0a49bbc（干净）；调试桩不留存。复现命令 =
 十三节的 repro（加 aq=true, aq_strength=6）。
+
+## 十五、§409 Bug C 已修（416c570）——B 线正确性收口
+
+十四节的四步入口第一步即破案：MCP 打印证明两侧 compensate 的 mv/
+采样坐标/参考面指纹**完全一致**（编码器侧 MC 输出正确），真因是
+**反量化 QP 链分叉**——解码器 qs 链 51→51→51→57→回绕 5，编码器
+51→45→45→51。MB0 = B_Direct16 + cbp=0 正确不写 dqp，但 decide
+试价（L0/L1/Bi/parts 候选的 cbp≠0 tail 写出）把 `self.prev_qp`
+推到 45，MB1/MB2 的 dqp 基准全错。
+
+**修复**：`decide_b_mb` 的快照/恢复扩展至四状态（dqp_mbs、prev_qp、
+mirror.qscale、mirror.last_qscale_diff）。containment 全解除
+（strength qp 腿 [0,26,51]），新增 qp51×双熵回归。wasm 全族 143 +
+CLI 16 绿。
+
+**B 线正确性至此收口**：decide 试价的全部可污染状态（dqp_mbs、
+prev_qp、mirror.qscale、last_qscale_diff、chroma_mode、
+transform_8x8、intra4x4）均已快照/还原或预清。无已知正确性欠账；
+剩余方向 = 统一播放门面 / 更多 profile 与位深。本交接文档的使命
+（六开关转正及其正确性收口）完成，后续新片另立交接。
