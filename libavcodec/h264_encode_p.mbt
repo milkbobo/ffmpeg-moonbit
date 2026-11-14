@@ -316,11 +316,6 @@ pub fn h264_encode_frames(
   if multi_ref < 1 || multi_ref > 16 {
     return Err("h264 enc: multi_ref must be in 1..=16")
   }
-  if multi_ref > 1 {
-    if b_slices {
-      return Err("h264 enc: multi_ref does not support B slices yet")
-    }
-  }
   // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
   // B picture, so it degrades to the I-only stream instead of erroring.
   let b_slices = b_slices && frames.length() >= 2
@@ -355,6 +350,7 @@ pub fn h264_encode_frames(
               intra_in_b~,
               intra4x4_in_b~,
               dct8x8~,
+              multi_ref~,
               qps=trial,
               recon=[],
               stats=H264EncStats::new(),
@@ -383,6 +379,7 @@ pub fn h264_encode_frames(
           intra_in_b~,
           intra4x4_in_b~,
           dct8x8~,
+          multi_ref~,
           qps~,
           recon~,
           stats~,
@@ -418,6 +415,7 @@ pub fn h264_encode_frames(
                   intra_in_b~,
                   intra4x4_in_b~,
                   dct8x8~,
+                  multi_ref~,
                   qps=trial,
                   recon=[],
                   stats=H264EncStats::new(),
@@ -450,6 +448,7 @@ pub fn h264_encode_frames(
             intra_in_b~,
             intra4x4_in_b~,
             dct8x8~,
+            multi_ref~,
             qps~,
             vbv=Some(v),
             fillers~,
@@ -488,6 +487,7 @@ pub fn h264_encode_frames(
         intra_in_b~,
         intra4x4_in_b~,
         dct8x8~,
+        multi_ref~,
         recon~,
         stats~,
         weightp~,
@@ -2720,11 +2720,16 @@ fn h264_cabac_put_ref(
   }
   let (refa, _, _) = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, bx - 1, by)
   let (refb, _, _) = h264_mv_fetch(ctx, mb_idx, mb_x, mb_y, bx, by - 1)
+  // B slices exclude direct neighbours from the context derivation
+  // (`h264_cabac_mb_ref`'s `h264_b_direct_neighbor` test).
+  let b_slice = ctx.slice_type_nos == 1
   let mut c = 0
-  if refa > 0 {
+  if refa > 0 &&
+    (!b_slice || !h264_b_direct_neighbor(ctx, mb_idx, mb_x, mb_y, bx - 1, by)) {
     c = c + 1
   }
-  if refb > 0 {
+  if refb > 0 &&
+    (!b_slice || !h264_b_direct_neighbor(ctx, mb_idx, mb_x, mb_y, bx, by - 1)) {
     c = c + 2
   }
   for _i in 0..<refi {

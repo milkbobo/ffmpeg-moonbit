@@ -116,6 +116,7 @@ fn video_encode_periodic_qps(
         intra_in_b=config.intra_in_b,
         intra4x4_in_b=config.intra4x4_in_b,
         dct8x8=config.dct8x8,
+        multi_ref=config.multi_ref,
         weightp=config.weightp,
         bit_depth=config.bit_depth,
         vbv=segment_vbv,

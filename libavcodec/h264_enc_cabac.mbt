@@ -3186,11 +3186,6 @@ pub fn h264_encode_frames_cabac(
   if multi_ref < 1 || multi_ref > 16 {
     return Err("h264 enc: multi_ref must be in 1..=16")
   }
-  if multi_ref > 1 {
-    if b_slices {
-      return Err("h264 enc: multi_ref does not support B slices yet")
-    }
-  }
   // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
   // B picture, so it degrades to the I-only stream instead of erroring.
   let b_slices = b_slices && frames.length() >= 2
@@ -3225,6 +3220,7 @@ pub fn h264_encode_frames_cabac(
               intra_in_b~,
               intra4x4_in_b~,
               dct8x8~,
+              multi_ref~,
               qps=trial,
               recon=[],
               stats=H264EncStats::new(),
@@ -3254,6 +3250,7 @@ pub fn h264_encode_frames_cabac(
           intra_in_b~,
           intra4x4_in_b~,
           dct8x8~,
+          multi_ref~,
           qps~,
           recon~,
           stats~,
@@ -3288,6 +3285,7 @@ pub fn h264_encode_frames_cabac(
                   intra_in_b~,
                   intra4x4_in_b~,
                   dct8x8~,
+                  multi_ref~,
                   qps=trial,
                   recon=[],
                   stats=H264EncStats::new(),
@@ -3321,6 +3319,7 @@ pub fn h264_encode_frames_cabac(
             intra_in_b~,
             intra4x4_in_b~,
             dct8x8~,
+            multi_ref~,
             qps~,
             vbv=Some(v),
             fillers~,
@@ -3360,6 +3359,7 @@ pub fn h264_encode_frames_cabac(
         intra_in_b~,
         intra4x4_in_b~,
         dct8x8~,
+        multi_ref~,
         recon~,
         stats~,
         weightp~,

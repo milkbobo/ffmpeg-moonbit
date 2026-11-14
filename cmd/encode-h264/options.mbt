@@ -30,7 +30,7 @@ priv struct Options {
   /// exists today, so the flag's value space is "h264").
   codec : @codec.VideoCodec
   /// `§415`: P-slice multi-reference history depth (1 = single reference;
-  /// 2..=16 requires `--no-b-slices`).
+  /// `§418` extends 2..=16 to the B schedule).
   multi_ref : Int32
   keyint : Int32
 }

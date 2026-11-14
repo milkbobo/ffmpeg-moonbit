@@ -242,7 +242,7 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
     by_display[disp[d]] = f
   }
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "128850f58ad90cbd2e4b8a3e24168a06", "d37c3e1a348172ef64b786e030e5084c",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "a5a7f3adbb1dd9d2349a2ba861b7d3d4", "d37c3e1a348172ef64b786e030e5084c",
     "ad098e2b25d81fe47e29d38627b5c549",
   ]
   for i, f in by_display {
@@ -284,7 +284,7 @@ test "h264 enc: ffmpeg-arbitrated RD six frames (96x64, QP 24)" {
     by_display[disp[d]] = f
   }
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "128850f58ad90cbd2e4b8a3e24168a06", "d37c3e1a348172ef64b786e030e5084c",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "a5a7f3adbb1dd9d2349a2ba861b7d3d4", "d37c3e1a348172ef64b786e030e5084c",
     "6389532064b5c2317a51450c8e719292", "750e2cc3ee0053390a7b168305b86c2f", "fca2b07dd7d0bb815acd3c2f0b291362",
   ]
   for i, f in by_display {

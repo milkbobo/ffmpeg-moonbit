@@ -278,12 +278,12 @@ test "h264 brc: ffmpeg-arbitrated ABR and VBV b_slices streams" {
     println("ARBBRCMD5:vbv poc\{i * 2} \{md5}")
   }
   let pins_abr = [
-    "f78bb894f8f44a94d6b37d3073824d36", "dcfc638f073005a6ed9114f2951025ea", "b78178ae167176e90e8d8283a93beec4",
-    "f85f599e7f9e9defc68dfbe97e6f26b7", "b1a3d177cfc3778b7bb50c52b6914b5d", "bac860ba5e587b8bb2ffc55c7cd684c5",
+    "019d0591d9c2bd9373f350072c8a610e", "fc099a37522b2aab8ac5d5df5da335da", "0c31631cb164fdebbc45d82e77cefc29",
+    "55c0baf8c9d47926a34f676b29538e08", "e9237c5288a3ff2aaeecbdb4ce4d417a", "3d6c39dad01ed0176e3113ce4be26eb9",
   ]
   let pins_vbv = [
-    "292edd53ff3434561e2e1d737c563c98", "b4ef80dcb946516963f30842329dfcce", "ac522e2c0e46a0d10adaf8695b84db0e",
-    "fa1bf4bcdbc408bc5857aea1fd12c937", "d7813b5d70d37ff0d0457fbbb2a9172b", "a40a683f99b038fbe693a9e2c7db6369",
+    "292edd53ff3434561e2e1d737c563c98", "b54c15c267abfc146871337defa22303", "ac522e2c0e46a0d10adaf8695b84db0e",
+    "2f621fe17403b7be316e1c799bc1d52b", "d7813b5d70d37ff0d0457fbbb2a9172b", "a40a683f99b038fbe693a9e2c7db6369",
   ]
   let md5s_abr = h264b_display_md5s(dec_abr)
   let md5s_vbv = h264b_display_md5s(dec_vbv)

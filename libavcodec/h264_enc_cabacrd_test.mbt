@@ -236,7 +236,7 @@ test "h264 cabac rd: combines with aq, intra-in-p and dct8x8" {
   inspect(
     h264cab_md5(stream),
     content=(
-      #|1103d0d4b46eb4397786822828afa42f
+      #|441ae8e1787c358c46c13ed7066599c9
     ),
   )
 }

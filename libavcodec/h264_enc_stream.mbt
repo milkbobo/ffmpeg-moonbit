@@ -54,6 +54,9 @@ pub struct H264StreamEncoder {
   priv mut ref_u : Array[Int32]
   priv mut ref_v : Array[Int32]
   /// `§415` multi-reference history, newest first (`refs_y[0] == ref_y`).
+  /// With `b_slices` the cap grows by one slot: the B picture's future P
+  /// parks at the head, and its list 0 is `refs_[1..]` — the past pictures
+  /// only. P searches still cap at `nrefs`.
   priv mut refs_y : Array[Array[Int32]]
   priv mut refs_u : Array[Array[Int32]]
   priv mut refs_v : Array[Array[Int32]]
@@ -84,6 +87,19 @@ pub struct H264StreamEncoder {
   priv mut vbv_fullness : Int32
   priv mut vbv_last_bp : Int32
   priv mut vbv_coded : Int32
+}
+
+///|
+/// The reference history's entry cap: `nrefs` for P-only streams, one
+/// more with `b_slices` (the B picture's future P parks at the head while
+/// its list 0 reads `refs_[1..]`), never above 16 (the `max_num_ref_frames`
+/// syntax limit).
+fn H264StreamEncoder::ref_history_cap(self : H264StreamEncoder) -> Int32 {
+  if self.b_slices {
+    (self.nrefs + 1).min(16)
+  } else {
+    self.nrefs
+  }
 }
 
 ///|
@@ -127,7 +143,10 @@ pub fn H264StreamEncoder::open(
   /// `yuv420p10le` planes and the SPS is High 10 (profile_idc 110).
   bit_depth~ : Int32 = 8,
   /// `§415`: P-slice multi-reference history depth (1 = single reference).
-  /// Requires `b_slices=false`.
+  /// With `b_slices` the depth applies to list 0 of the B pictures too
+  /// (their future P occupies one history slot, so a B sees `multi_ref`
+  /// past references when the history is full — one less than the P
+  /// pictures' `multi_ref` plus the single future reference).
   multi_ref~ : Int32 = 1,
   aud~ : Bool = false,
   aq~ : Bool = false,
@@ -171,9 +190,6 @@ pub fn H264StreamEncoder::open(
   }
   if multi_ref < 1 || multi_ref > 16 {
     return Err("h264 enc: multi_ref must be in 1..=16")
-  }
-  if multi_ref > 1 && b_slices {
-    return Err("h264 enc: multi_ref does not support B slices yet")
   }
   if width <= 0 ||
     height <= 0 ||
@@ -574,7 +590,9 @@ fn H264StreamEncoder::stream_p(
     refs_y: self.refs_y,
     refs_u: self.refs_u,
     refs_v: self.refs_v,
-    nrefs: self.refs_y.length(),
+    // The P search caps at the configured depth even when the B schedule
+    // keeps one extra history slot (the pending B's future reference).
+    nrefs: self.refs_y.length().min(self.nrefs),
     cur_ref_mb: 0,
     ystride: self.ystride,
     cstride: self.cstride,
@@ -645,17 +663,20 @@ fn H264StreamEncoder::stream_p(
   // first) — the P decoder loop resets `ref_y = refs_y[0]` per macroblock,
   // so the list must always lead with the newest reconstruction in every
   // scheduling mode. With B slices the P picture ALSO becomes the pending
-  // B picture's future; `ref_*` keeps the past until the B hand-off.
+  // B picture's future; `ref_*` keeps the past until the B hand-off, and
+  // the history keeps one extra slot (`ref_history_cap`) so the B's list 0
+  // (`refs_[1..]`) still holds `nrefs` past pictures.
   let ny = h264_b_copy_plane(enc.rec_y)
   let nu = h264_b_copy_plane(enc.rec_u)
   let nv = h264_b_copy_plane(enc.rec_v)
   self.refs_y.insert(0, ny)
   self.refs_u.insert(0, nu)
   self.refs_v.insert(0, nv)
-  if self.refs_y.length() > self.nrefs {
-    self.refs_y.truncate(self.nrefs)
-    self.refs_u.truncate(self.nrefs)
-    self.refs_v.truncate(self.nrefs)
+  let cap = self.ref_history_cap()
+  if self.refs_y.length() > cap {
+    self.refs_y.truncate(cap)
+    self.refs_u.truncate(cap)
+    self.refs_v.truncate(cap)
   }
   if self.b_slices {
     // The pending B picture reads the PAST (still in ref_*) and THIS
@@ -696,6 +717,36 @@ fn H264StreamEncoder::stream_b(
   } else {
     (Array::make(self.mb_width * self.mb_height, 0), 0)
   }
+  // The B picture's list 0: the reference history minus its head — the
+  // just-coded future P parks at `refs_[0]` (the `b_slices` history keeps
+  // one extra slot for exactly this), the past pictures follow newest
+  // first. One past entry reproduces the single-reference streams'
+  // reference bit for bit.
+  let past_y : Array[Array[Int32]] = []
+  let past_u : Array[Array[Int32]] = []
+  let past_v : Array[Array[Int32]] = []
+  let pasts : Array[H264RefPic] = []
+  for i in 1..<self.refs_y.length() {
+    let j = i - 1
+    past_y.push(self.refs_y[i])
+    past_u.push(self.refs_u[i])
+    past_v.push(self.refs_v[i])
+    pasts.push(
+      h264_b_refpic(
+        self.refs_y[i],
+        self.refs_u[i],
+        self.refs_v[i],
+        self.ystride,
+        self.cstride,
+        self.pheight,
+        (display - 1 - j * 2) * 2,
+        j,
+      ),
+    )
+  }
+  if pasts.is_empty() {
+    return Err("h264 enc: stream scheduling lost the past reference")
+  }
   let enc : H264PEncoder = {
     p: {
       width: self.width,
@@ -723,10 +774,10 @@ fn H264StreamEncoder::stream_b(
     ref_y: self.ref_y,
     ref_u: self.ref_u,
     ref_v: self.ref_v,
-    refs_y: self.refs_y,
-    refs_u: self.refs_u,
-    refs_v: self.refs_v,
-    nrefs: self.refs_y.length(),
+    refs_y: past_y,
+    refs_u: past_u,
+    refs_v: past_v,
+    nrefs: past_y.length(),
     cur_ref_mb: 0,
     ystride: self.ystride,
     cstride: self.cstride,
@@ -758,16 +809,6 @@ fn H264StreamEncoder::stream_b(
     weightp: false,
     pwt: new_h264_pred_weight(),
   }
-  let past_pic = h264_b_refpic(
-    self.ref_y,
-    self.ref_u,
-    self.ref_v,
-    self.ystride,
-    self.cstride,
-    self.pheight,
-    (display - 1) * 2,
-    0,
-  )
   let fut_pic = h264_b_refpic(
     self.fut_y,
     self.fut_u,
@@ -786,7 +827,7 @@ fn H264StreamEncoder::stream_b(
     h264_enc_qp_ext(qp, self.bit_depth),
     self.ystride,
     self.cstride,
-    past_pic,
+    pasts,
     fut_pic,
     self.ref_colocated,
     enc.rec_y,
@@ -799,7 +840,6 @@ fn H264StreamEncoder::stream_b(
     match
       enc.encode_b_frame_cabac(
         mirror,
-        self.ref_y,
         self.fut_y,
         self.fn_counter,
         (display * 2) & 15,
@@ -812,7 +852,6 @@ fn H264StreamEncoder::stream_b(
     match
       enc.encode_b_frame(
         mirror,
-        self.ref_y,
         self.fut_y,
         self.fn_counter,
         (display * 2) & 15,

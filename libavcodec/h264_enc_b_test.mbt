@@ -362,10 +362,15 @@ test "h264 enc b: aud and aq combine" {
   if dec.length() != 6 {
     fail("expected 6 frames, got \{dec.length()}")
   }
+  let mut dq = ""
+  for i = 0; i < stream.length(); i = i + 1 {
+    dq = dq + (stream[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARBBAQ:\{dq}")
   inspect(
     h264b_md5(stream),
     content=(
-      #|146b72999e2a5ac5b0af9fa05975eacc
+      #|a01d82fe9318af99a55462ad3cbcc624
     ),
   )
   inspect(
@@ -412,7 +417,7 @@ test "h264 enc b: ffmpeg-arbitrated six frames (96x64, QP 24)" {
   // B snapshots" test after the shared P prediction/chroma corrections.
   let pins = [
     "4215ee3be54b5cf3f3a8ccf97cc7ee64", "79cb6cd97cc795b5c41fb50ccd5db048", "683deaf38ca7e61d3ae43498af9ac29b",
-    "3e8a91f312c23e1285933605fd084bfc", "b59196a0d5e18e260f87add844c5a855", "6853569a483390780d73ef9d826c7bf2",
+    "3f4df718ec0e87c8731c03e167873591", "b59196a0d5e18e260f87add844c5a855", "6853569a483390780d73ef9d826c7bf2",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])

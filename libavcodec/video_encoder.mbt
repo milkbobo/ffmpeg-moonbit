@@ -71,8 +71,9 @@ pub(all) struct VideoEncConfig {
   vbv_maxrate : Int32
   vbv_bufsize : Int32
   fps : Int32
-  /// `§415`: P-slice multi-reference history depth (1 = single reference;
-  /// requires `b_slices=false`; batch rate controls are supported).
+  /// `§415`: P-slice multi-reference history depth (1 = single reference).
+  /// `§418` extends it to the B schedule (the B's list 0 holds the past
+  /// references); batch rate controls are supported.
   multi_ref : Int32
   /// Periodic IDR distance in display frames, 0 = disabled. Batch ABR and
   /// VBV cover the full sequence, including reordered B GOPs.

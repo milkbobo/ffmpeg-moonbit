@@ -13458,3 +13458,54 @@ AU 大小 CPB 回放通过（逐轮数字见各交接文档）。**收口轮（R
 coding↔display 序映射核对全等才钉），cabacrd 补三条永久转储、WPARB 转储
 前移钉值之前。收口门：宿主 wasm 103+84+CLI 25 = **212/212 全绿**；
 moon check --target wasm --deny-warn、git diff --check 通过。
+
+## §418 H.264 B 调度多参考——B 片 ref_idx 全链 + GOP 重启潜伏 bug 收口 + 全族钉值债清偿（2026-11-14）
+
+接续 §417 最后一项拒收「B × multi_ref>1」。B 计划枚举携带 list 0 参考索引
+（BL0x16/BBi16/BParts 带 per-partition refs，B_8x8 组级 refs），搜索侧
+`me_b_l0_multi` 对每条活动参考跑完整 ME 并把运动补偿色度 SAD 计入代价
+（替换旧 luma-only `me_b_l0`——单参考冠军选择亦随之改变，属有意决策变更，
+全族钉值经 FFmpeg 仲裁重钉）；16x8/8x16 与 B_8x8 逐组独立选参考；MVD
+预测器带等参考测试（`pred_16x8/8x16/pred_motion` 传 refi）。双熵 ref_idx
+语法：CAVLC `h264_enc_put_ref_idx`（rc==2 单反码位、>2 ue）、CABAC
+`h264_cabac_put_ref` 一进制链（B 片上下文推导按 `h264_b_direct_neighbor`
+排除 direct 邻居，镜像解码器 `h264_cabac_mb_ref`）。
+
+B 镜像与列表：`h264_b_mirror_new` 收 past 数组（`ref_count0 = pasts.length()`），
+list 1 保持单条未来参考。流式：B 的 list 0 = 参考历史去头（`refs_[1..]`，
+B 时序中最新条目是其未来 P），历史容量在 B 调度下加一格（`ref_history_cap`
+= nrefs+1，封顶 16），P 搜索仍按 `min(len, nrefs)` 钳制；参考条目 POC 按显示
+位距推导（`(display-1-2j)*2`，GOP 相对序下与 IDR 的 poc 0 天然一致）。批式
+`h264_encode_frames_b` 同构：多参考历史数组替代单条 ref，尾部 P 与 GOP 内
+P 共享。B 片头 override 写双列表计数（P 只写 l0，B 按 `h264_slice` 的 is_b
+读法补 `num_ref_idx_l1_active_minus1=0`）。SPS `max_num_ref_frames` = nrefs+1
+（B 的 DPB 含未来 P），IDR intra 入口透传 multi_ref 使参数集声明容量一致。
+三处「B × multi_ref」拒收全部解除（流式 open、批式双熵 master），周期 B
+ABR/VBV 与在线 B VBV 均按新组合验证后放行；keyint×multi_ref、
+target_bytes×keyint×multi_ref、流式 B VBV×multi_ref 进正面覆盖。
+
+真 bug 五个：① 批式 IDR 参数集未透传 multi_ref（流内 PPS 声明 1 而后续图片
+按容量编码，FFmpeg/本仓解码参考错位）；② 流式 P 搜索未钳制（B 调度加格后
+P 多搜一条）；③ 流式 stream_b 过去列表含未来 P（首版 refs[1..] 落在重复
+pasts 构造块）；④ **kind-22 preamble 潜伏 bug**（非本轮引入）：B_8x8 组在
+某列表无分区时编码镜像把该组参考缓存写 0（有效参考 0）而解码器写 -1
+（不可用），`h264_b_compensate` 据此把纯 L1 组双向预测——编码重建≠解码；
+仅特定计划形态触发（9/10-bit 周期 GOP 第二组首个 B 的全 L1 B_8x8 宏块），
+旧测试未覆盖该形态；⑤ GOP 重启 B 一致性（由④修复连带收口）。
+
+钉值债清偿（REPIN417 后遗留 13 处，全部经 docker FFmpeg
+`ffmpeg-moonbit-ffref:nine-x264 -v warning -threads 1 -f framemd5` 零告警
+仲裁，帧值逐帧核对全等后才重钉）：b（aud/aq 流 md5 + ARBB 显示序 B3）、
+bparts（CAVLC/CABAC 各 2 帧）、brc（abr 全 6 帧 + vbv 2 帧）、cabac（B1/B3）、
+cabacrd（combo 流 md5）、rc（QP 轨迹 [37,37,37,37,37] + RCARB/RCCARB 的
+B1/B3）、vbv（平铺 CAVLC 2627B/5e7d290c + 平铺 CABAC 2372B/65af8abc +
+CBR pins1/pins2 的 B 帧）、encode_p（ARB3/ARB6 的 B1）。RCCARB/VBVCARB/
+FLATARB/FLATACARB 转储前移或新增至钉值断言之前（assert_eq 失败即中止，
+转储必须先行）。新 oracle：ARBMR2（CAVLC nrefs=2）/ARBMR3（CABAC nrefs=3）
+toggle 场景 9 帧流 FFmpeg 逐帧一致并永久钉值。
+
+验证：新专项 9 项（round-trip 各深度/流式=批式字节恒等/multi_ref=1 恒等
+默认/toggle 双参考显著更小/预热 override+工具组合/高位深/keyint×ABR×VBV×
+multi_ref/在线 B VBV×multi_ref/FFmpeg 仲裁锚点）；全族 28 文件 + CLI
+25/25；`moon check --target wasm --deny-warn`、`moon fmt`、git diff --check
+通过。仍拒收：流式 ABR（不变）。

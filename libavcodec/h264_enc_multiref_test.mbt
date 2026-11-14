@@ -1,5 +1,7 @@
-// Blackbox tests for the P-slice multi-reference encoder (`§415`/`§416`).
-// CAVLC multi-reference is fully verified: decode round-trip, the recon
+// Blackbox tests for the P-slice multi-reference encoder (`§415`/`§416`;
+// `§418` lifts the B-schedule restriction — see
+// h264_enc_b_multiref_test.mbt for the B coverage). CAVLC
+// multi-reference is fully verified: decode round-trip, the recon
 // invariant (the `§415` skip/weight slot mismatches are fixed), streaming
 // == batch byte identity, and external ffmpeg arbitration. CABAC uses
 // the same reference history with partition-local reference write-back.
@@ -867,29 +869,42 @@ test "h264 multiref: combination and range validation" {
       Err(e) => assert_true(e.contains("vbv underflow"), msg=e)
     }
   }
-  // B slices are rejected.
-  match
-    @libavcodec.h264_encode_frames(
-      frames,
-      width=96,
-      height=64,
-      qp=26,
-      multi_ref=2,
-    ) {
-    Ok(_) => fail("multi_ref accepted B slices")
-    Err(_) => ()
-  }
-  // CABAC retains the B-slice restriction.
-  match
-    @libavcodec.h264_encode_frames_cabac(
-      frames,
-      width=96,
-      height=64,
-      qp=26,
-      multi_ref=2,
-    ) {
-    Ok(_) => fail("CABAC multi_ref accepted B slices")
-    Err(e) => assert_true(e.contains("B slices"), msg=e)
+  // `§418`: B slices with multi-reference now encode (previously rejected)
+  // and round-trip through the decoder.
+  for cabac in [false, true] {
+    let recon : Array[Bytes] = []
+    let bstream = match
+      (if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=96,
+          height=64,
+          qp=26,
+          multi_ref=2,
+          recon~,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=96,
+          height=64,
+          qp=26,
+          multi_ref=2,
+          recon~,
+        )
+      }) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    let bdec = match @libavcodec.h264_decode_annexb_frames(bstream, true) {
+      Ok(d) => d
+      Err(e) => fail(e)
+    }
+    assert_eq(bdec.length(), 4)
+    assert_eq(recon.length(), 3)
+    for i, r in recon {
+      assert_eq(mr_md5(r), mr_md5(bdec[i + 1].yuvp()))
+    }
   }
   match
     @libavcodec.h264_encode_frames_cabac(

@@ -184,7 +184,7 @@ test "h264 rc: CAVLC lands under the target and responds monotonically" {
   debug_inspect(
     stats_s.frame_qps,
     content=(
-      #|[36, 37, 37, 37, 37]
+      #|[37, 37, 37, 37, 37]
     ),
   )
   debug_inspect(
@@ -339,29 +339,29 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     d1 = d1 + (cavlc[i].to_int() & 0xFF).to_string() + ","
   }
   println("RCARB:\{d1}")
-  let filtered = match @libavcodec.h264_decode_annexb_frames(cavlc, false) {
-    Ok(f) => f
-    Err(e) => fail(e)
-  }
-  let pins1 = [
-    "81d73c30f11e4182ed4c338451d55d7b", "b08ef1a2f71e8be294122328a69acbb3", "95125a60835c44a3be86b495afa31ff7",
-    "1146c0cc0238d58a70af1d8981c2f54d", "1edea1129decff3ce1d2fc70ef6d6b7f",
-  ]
-  for i, f in filtered {
-    assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
-  }
   let mut d2 = ""
   for i = 0; i < cabac.length(); i = i + 1 {
     d2 = d2 + (cabac[i].to_int() & 0xFF).to_string() + ","
   }
   println("RCCARB:\{d2}")
+  let filtered = match @libavcodec.h264_decode_annexb_frames(cavlc, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  let pins1 = [
+    "81d73c30f11e4182ed4c338451d55d7b", "b08ef1a2f71e8be294122328a69acbb3", "9af150375ea340e427598357868540d8",
+    "1146c0cc0238d58a70af1d8981c2f54d", "a42a1d62a54e30b177f1eb26a05b47d8",
+  ]
+  for i, f in filtered {
+    assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
+  }
   let filtered2 = match @libavcodec.h264_decode_annexb_frames(cabac, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
   let pins2 = [
-    "81d73c30f11e4182ed4c338451d55d7b", "1e30e10a1c787d98a70d7fe5a791455a", "958d22094afe801efbd04182721aec72",
-    "7731c569f7fa9512b94cfa319af51ac2", "52d75d888c5dbb970d51f445c4fe50fe",
+    "81d73c30f11e4182ed4c338451d55d7b", "1e30e10a1c787d98a70d7fe5a791455a", "7ed5c6472bb754730d3f7e8836e589a2",
+    "7731c569f7fa9512b94cfa319af51ac2", "d96e3b0cbcc52bc2c5417e9949d8fb0a",
   ]
   for i, f in filtered2 {
     assert_eq(h264_rc_md5(f.yuvp()), pins2[i])

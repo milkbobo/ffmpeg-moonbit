@@ -462,8 +462,8 @@ test "h264 enc bparts: ffmpeg-arbitrated six frames (96x64, QP 22)" {
     println("ARBBPARTSMD5:\{md5}")
   }
   let pins = [
-    "56fd577a3d9ed7d5999bc5bb41b80944", "b5a1d61e6e247237672fd17643076b71", "676d7e5fb06b7bead4b704dc758adecb",
-    "9b5de3760281b92069ea0e62e76356fa", "6eba367847a748686365696776dc08fe", "69f88c79d2ee8d9fa3be4b4549c63895",
+    "56fd577a3d9ed7d5999bc5bb41b80944", "b3323d2d1f41d2ee621b41d4b042bdb7", "676d7e5fb06b7bead4b704dc758adecb",
+    "6442773308c070fce3907163adc91599", "6eba367847a748686365696776dc08fe", "69f88c79d2ee8d9fa3be4b4549c63895",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])
@@ -510,8 +510,8 @@ test "h264 enc bparts: ffmpeg-arbitrated CABAC six frames (96x64, QP 22)" {
     println("ARBBPARTSCABACMD5:\{md5}")
   }
   let pins = [
-    "8eebc020e8938ba2aa6ba05a9180ef8e", "0e31363243009ffc5c46724701144f48", "44802abc0c853b7e9f833a7616d8fc26",
-    "1d05ee273d6954446b373749bac6e747", "c453c8c26531fdd5fe7098ce0485ce1f", "5cf4385d082984209d1dce5c96b7c3b6",
+    "8eebc020e8938ba2aa6ba05a9180ef8e", "4908f97d828938650eaf302ef07d66eb", "44802abc0c853b7e9f833a7616d8fc26",
+    "7721d24e76447d94a860ac57a5ad26f3", "c453c8c26531fdd5fe7098ce0485ce1f", "5cf4385d082984209d1dce5c96b7c3b6",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])

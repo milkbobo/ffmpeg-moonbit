@@ -96,7 +96,8 @@ test "h264 stream VBV: invalid options and first-frame underflow do not emit" {
   let base = @libavcodec.VideoEncConfig::new(width=32, height=32)
   for
     config in [
-      { ..base, multi_ref: 2, vbv_maxrate: 64000, vbv_bufsize: 8000, fps: 25, },
+      // `§418` made the online B VBV x multi_ref combination legal — see
+      // h264_enc_b_multiref_test.mbt for the positive coverage.
       { ..base, b_slices: false, fps: 25, },
       { ..base, b_slices: false, vbv_maxrate: -1, },
       {

@@ -426,8 +426,8 @@ test "h264 cabac enc: ffmpeg-arbitrated QP22 I16 frames" {
   // §405 re-pin (defaults on; coding order, deblocked): frame 0 is
   // unchanged, the P/B pictures carry the new B-line + 8x8DCT decisions.
   let pins = [
-    "5e86c08751cbdc2f069ae812d2c675b9", "2cc0f704e199487a39fdcaca289fffec", "301729b484641303bc95087fa05d22fc",
-    "e8aa8e44a82c554a7254a3a1e7b9a694", "ca617cc7ad14de0ad48d3174080ab587", "1363a52648eba2b54ff210e6db60dc19",
+    "5e86c08751cbdc2f069ae812d2c675b9", "2cc0f704e199487a39fdcaca289fffec", "390d49a9ce5fc7208c5a292132aa9b64",
+    "e8aa8e44a82c554a7254a3a1e7b9a694", "88c4654f49260c990379bec74a911ed9", "1363a52648eba2b54ff210e6db60dc19",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])

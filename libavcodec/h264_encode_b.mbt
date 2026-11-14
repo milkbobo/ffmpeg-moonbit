@@ -29,12 +29,14 @@ priv enum H264BPlan {
   BSkip
   /// B_Direct_16x16 (kind 0): residual-coding direct macroblock.
   BDirect16
-  /// B_L1_16x16 (kind 1): single future MV.
+  /// B_L1_16x16 (kind 1): single future MV (list 1 keeps its single
+  /// future reference, so no ref_idx is ever coded for it).
   BL1x16(Int32, Int32)
-  /// B_Bi_16x16 (kind 2): one past and one future MV.
-  BBi16(Int32, Int32, Int32, Int32)
-  /// B_L0_16x16 (kind 3): single past MV.
-  BL0x16(Int32, Int32)
+  /// B_Bi_16x16 (kind 2): one past and one future MV; `ref0` is the list 0
+  /// reference index the forward partitions code.
+  BBi16(Int32, Int32, Int32, Int32, Int32)
+  /// B_L0_16x16 (kind 3): single past MV and its list 0 reference index.
+  BL0x16(Int32, Int32, Int32)
   /// Intra16x16 inside the B slice (the `intra_in_b` opt-in, kinds
   /// 24..47): the signalled luma mode (encoder numbering DC/H/V/Plane),
   /// the availability-checked effective mode the prediction runs on, and
@@ -53,10 +55,11 @@ priv enum H264BPlan {
   /// 22 only, 0 elsewhere) and the quarter-pel MV of every (partition,
   /// list) pair whose mask bit is set, in the decode walk order — list 0's
   /// partitions first, then list 1's, partitions in `h264_b_partitions`
-  /// order. The commit walk may adjust entries (clipping an mvd into the
-  /// syntax's reachable square), so the array is the single source of
-  /// truth for every writer.
-  BParts(Int32, Array[Int32], Array[(Int32, Int32)])
+  /// order, plus each entry's list 0 reference index (list 1 entries carry
+  /// 0; list 1 never codes a ref_idx). The commit walk may adjust entries
+  /// (clipping an mvd into the syntax's reachable square), so the arrays
+  /// are the single source of truth for every writer.
+  BParts(Int32, Array[Int32], Array[(Int32, Int32)], Array[Int32])
 }
 
 ///|
@@ -100,7 +103,10 @@ fn h264_enc_sps_rbsp_b(
   r.put_ue(0) // log2_max_frame_num_minus4 -> 4-bit frame_num
   r.put_ue(0) // pic_order_cnt_type = 0
   r.put_ue(0) // log2_max_pic_order_cnt_lsb_minus4 -> 4-bit POC LSB
-  r.put_ue(2) // max_num_ref_frames
+  // `§418`: the B schedule's DPB holds the past references plus the B's
+  // future P — `nrefs` past slots plus one (2 for the single-reference
+  // streams, unchanged), capped by the 16-frame syntax limit.
+  r.put_ue((p.nrefs + 1).min(16)) // max_num_ref_frames
   r.put_bit(0) // gaps_in_frame_num_value_allowed_flag
   r.put_ue(p.mb_width() - 1)
   r.put_ue(p.mb_height() - 1)
@@ -208,11 +214,13 @@ fn h264_b_refpic(
 
 ///|
 /// The B picture's decoder-context mirror: fresh `H264MbInfo` entries,
-/// `slice_type_nos = 1`, list 0 = the past reference, list 1 = the future
-/// reference, the colocated history = the future picture's motion state,
-/// and the reconstruction planes SHARED with the encoder (`h264_b_comp
-/// ensate` motion-compensates straight into them). Spatial direct with
-/// 8x8 inference, single active reference per list.
+/// `slice_type_nos = 1`, list 0 = the past references (newest first, as
+/// many as the reference history holds — one entry keeps the previous
+/// single-reference streams), list 1 = the future reference, the colocated
+/// history = the future picture's motion state, and the reconstruction
+/// planes SHARED with the encoder (`h264_b_compensate` motion-compensates
+/// straight into them). Spatial direct with 8x8 inference; list 1 stays a
+/// single active reference.
 fn h264_b_mirror_new(
   mb_width : Int32,
   mb_height : Int32,
@@ -222,7 +230,7 @@ fn h264_b_mirror_new(
   qp : Int32,
   ystride : Int32,
   cstride : Int32,
-  past : H264RefPic,
+  pasts : Array[H264RefPic],
   future : H264RefPic,
   colocated : Array[H264MbInfo],
   rec_y : Array[Int32],
@@ -275,8 +283,8 @@ fn h264_b_mirror_new(
     last_qscale_diff: 0,
     slice_type_nos: 1,
     cur_mb_is_intra: false,
-    ref_count0: 1,
-    ref_list0: [past],
+    ref_count0: pasts.length(),
+    ref_list0: pasts.copy(),
     mb_skip_run: -1,
     pwt: new_h264_pred_weight(),
   }
@@ -341,13 +349,14 @@ fn H264PEncoder::mc_b_uni_into_rec(
   self : H264PEncoder,
   mirror : H264DecCtx,
   list : Int32,
+  refi : Int32,
   mb_x : Int32,
   mb_y : Int32,
   mvx : Int32,
   mvy : Int32,
 ) -> Unit {
   let pred = h264_b_prediction(
-    mirror, list, 0, mb_x, mb_y, 0, 0, 16, 16, mvx, mvy,
+    mirror, list, refi, mb_x, mb_y, 0, 0, 16, 16, mvx, mvy,
   )
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   for row = 0; row < 16; row = row + 1 {
@@ -375,12 +384,15 @@ fn H264PEncoder::mc_b_bi_into_rec(
   mirror : H264DecCtx,
   mb_x : Int32,
   mb_y : Int32,
+  ref0 : Int32,
   mv0x : Int32,
   mv0y : Int32,
   mv1x : Int32,
   mv1y : Int32,
 ) -> Unit {
-  let a = h264_b_prediction(mirror, 0, 0, mb_x, mb_y, 0, 0, 16, 16, mv0x, mv0y)
+  let a = h264_b_prediction(
+    mirror, 0, ref0, mb_x, mb_y, 0, 0, 16, 16, mv0x, mv0y,
+  )
   let b = h264_b_prediction(mirror, 1, 0, mb_x, mb_y, 0, 0, 16, 16, mv1x, mv1y)
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   for row = 0; row < 16; row = row + 1 {
@@ -1180,10 +1192,10 @@ fn H264PEncoder::code_b_mb_i8_residuals(
 fn h264_b_plan_kind(plan : H264BPlan) -> Int32 {
   match plan {
     BDirect16 => 0
-    BL0x16(_, _) => 1
+    BL0x16(_, _, _) => 1
     BL1x16(_, _) => 2
-    BBi16(_, _, _, _) => 3
-    BParts(kind, _, _) => kind
+    BBi16(_, _, _, _, _) => 3
+    BParts(kind, _, _, _) => kind
     BI16(_, _, _) => 23
     BI4(_, _) => 23
     BI8(_, _) => 23
@@ -1217,6 +1229,25 @@ fn h264_b_slot_reset(mirror : H264DecCtx, mb_idx : Int32) -> Unit {
 }
 
 ///|
+/// Write the B slice's `num_ref_idx_active_override_flag`: unlike the P
+/// writer (`put_active_refs`), a B-slice override carries BOTH lists'
+/// active counts (`h264_slice`'s `is_b` second `read_ue`) — list 1 keeps
+/// its single future reference either way, so only list 0's actual count
+/// against the PPS capacity drives the flag.
+fn H264PEncoder::put_active_refs_b(
+  self : H264PEncoder,
+  r : H264Rbsp,
+  active : Int32,
+) -> Unit {
+  let override_count = active != self.pps.ref_count_l0
+  r.put_bit(if override_count { 1 } else { 0 })
+  if override_count {
+    r.put_ue(active - 1)
+    r.put_ue(0) // num_ref_idx_l1_active_minus1: one future reference
+  }
+}
+
+///|
 /// The decoder's sub-partition mvd pass (`h264_decode_b_mb`'s per-list
 /// loop), replayed on `mirror` whose current-macroblock slot already
 /// holds the plan's reference state: per B_8x8 group the reference
@@ -1226,6 +1257,8 @@ fn h264_b_slot_reset(mirror : H264DecCtx, mb_idx : Int32) -> Unit {
 /// `pred_8x16` for the two-partition kinds 4..21 (the decoder skips
 /// `pred_motion` for exactly those kinds), `pred_motion` per part for
 /// B_8x8 — handed to `visit` with the walk index of the (partition,
+
+///|
 /// list) pair. The walk index enumerates list 0's masked partitions
 /// first, then list 1's, matching `H264BPlan::BParts`' mvs order.
 fn h264_b_mvd_walk(
@@ -1236,7 +1269,13 @@ fn h264_b_mvd_walk(
   kind : Int32,
   parts : Array[H264BPart],
   direct : Array[Bool],
-  visit : (H264BPart, Int32, Int32, Int32) -> Unit,
+  /// Per-entry list 0 reference index, walk-ordered like the MV array
+  /// (list 1 entries carry 0).
+  refs : Array[Int32],
+  /// Kind 22 only: each group's list 0 reference (the per-group preamble's
+  /// write-back), ignored otherwise.
+  group_refs : Array[Int32],
+  visit : (H264BPart, Int32, Int32, Int32, Int32) -> Unit,
 ) -> Unit {
   let info = mirror.infos[mb_idx]
   let mut mi = 0
@@ -1250,7 +1289,22 @@ fn h264_b_mvd_walk(
         if direct[group] {
           cache[gy * 4 + gx] = cache[gy * 4 + gx + 1]
         } else {
-          h264_write_back_ref(mirror, mb_idx, gx, gy, 2, 2, 0)
+          // The group's reference in THIS list, mirroring the decoder's
+          // `refs[list][group]`: a group with no partition in the list
+          // carries -1 (not "reference 0") — `h264_b_compensate` would
+          // otherwise bidirectionally predict blocks the decoder codes
+          // from the other list only.
+          let in_list = parts.any(p => {
+            p.group == group && (p.mask & (1 << list)) != 0
+          })
+          let group_ref = if !in_list {
+            -1
+          } else if list == 0 {
+            group_refs[group]
+          } else {
+            0
+          }
+          h264_write_back_ref(mirror, mb_idx, gx, gy, 2, 2, group_ref)
         }
       }
       for part in parts {
@@ -1260,11 +1314,12 @@ fn h264_b_mvd_walk(
         if (part.mask & (1 << list)) == 0 {
           continue
         }
+        let refi = if list == 0 { refs[mi] } else { 0 }
         let (pmvx, pmvy) = if kind < 22 {
           if (kind & 1) == 0 {
-            h264_pred_16x8_motion(mirror, mb_idx, mb_x, mb_y, part.group, 0)
+            h264_pred_16x8_motion(mirror, mb_idx, mb_x, mb_y, part.group, refi)
           } else {
-            h264_pred_8x16_motion(mirror, mb_idx, mb_x, mb_y, part.group, 0)
+            h264_pred_8x16_motion(mirror, mb_idx, mb_x, mb_y, part.group, refi)
           }
         } else {
           h264_pred_motion(
@@ -1275,10 +1330,10 @@ fn h264_b_mvd_walk(
             part.x,
             part.y,
             part.w,
-            0,
+            refi,
           )
         }
-        visit(part, mi, pmvx, pmvy)
+        visit(part, mi, pmvx, pmvy, refi)
         mi = mi + 1
       }
     }
@@ -1304,8 +1359,8 @@ fn h264_b_commit_parts(
   plan : H264BPlan,
   skip : Bool,
 ) -> Unit {
-  let (kind, subs, mvs) = match plan {
-    BParts(k, s, m) => (k, s, m)
+  let (kind, subs, mvs, refs) = match plan {
+    BParts(k, s, m, rf) => (k, s, m, rf)
     _ => abort("h264 enc b: commit_parts on a 16x16 plan")
   }
   let info = mirror.infos[mb_idx]
@@ -1327,47 +1382,85 @@ fn h264_b_commit_parts(
       info.ref_idx1[block] = -2
     }
   }
+  // Kind 22's per-group list 0 reference: the first walk-ordered list 0
+  // entry of each group (a group's partitions share one reference).
+  let group_refs : Array[Int32] = [0, 0, 0, 0]
+  if kind == 22 {
+    let mut mi = 0
+    for part in parts {
+      if (part.mask & 1) != 0 {
+        group_refs[part.group] = refs[mi]
+      }
+      if (part.mask & 3) != 0 {
+        mi = mi + 1
+      }
+    }
+  }
   if kind < 22 {
     // References first, list by list, partition by partition (the
     // decoder's ref loop for the two-partition kinds; B_8x8's references
     // are written by the per-group preamble of the mvd pass below, which
-    // is where the decoder's own kind-22 cache mutations happen).
+    // is where the decoder's own kind-22 cache mutations happen). The
+    // walk-ordered refs array indexes list 0's entries from zero; list 1
+    // carries the single future reference (index 0 by syntax).
+    let mut mi = 0
     for list in 0..<2 {
       mirror.active_list = list
       for part in groups {
         if (part.mask & (1 << list)) == 0 {
           continue
         }
-        h264_write_back_ref(mirror, mb_idx, part.x, part.y, part.w, part.h, 0)
+        h264_write_back_ref(
+          mirror,
+          mb_idx,
+          part.x,
+          part.y,
+          part.w,
+          part.h,
+          if list == 0 {
+            refs[mi]
+          } else {
+            0
+          },
+        )
+        if list == 0 {
+          mi = mi + 1
+        }
       }
     }
   }
-  h264_b_mvd_walk(mirror, mb_idx, mb_x, mb_y, kind, parts, direct, (
-    part,
-    mi,
-    pmvx,
-    pmvy,
-  ) => {
-    let (mvx, mvy) = mvs[mi]
-    let dx = (mvx - pmvx).max(-70).min(70)
-    let dy = (mvy - pmvy).max(-70).min(70)
-    if dx != mvx - pmvx || dy != mvy - pmvy {
-      mvs[mi] = (pmvx + dx, pmvy + dy)
-    }
-    h264_write_back_part(
-      mirror,
-      mb_idx,
-      part.x,
-      part.y,
-      part.w,
-      part.h,
-      pmvx + dx,
-      pmvy + dy,
-      0,
-      dx.abs(),
-      dy.abs(),
-    )
-  })
+  h264_b_mvd_walk(
+    mirror,
+    mb_idx,
+    mb_x,
+    mb_y,
+    kind,
+    parts,
+    direct,
+    refs,
+    group_refs,
+    (part, mi, pmvx, pmvy, refi) => {
+      let (mvx, mvy) = mvs[mi]
+      let dx = (mvx - pmvx).max(-70).min(70)
+      let dy = (mvy - pmvy).max(-70).min(70)
+      if dx != mvx - pmvx || dy != mvy - pmvy {
+        mvs[mi] = (pmvx + dx, pmvy + dy)
+      }
+      h264_write_back_part(
+        mirror,
+        mb_idx,
+        part.x,
+        part.y,
+        part.w,
+        part.h,
+        pmvx + dx,
+        pmvy + dy,
+        refi,
+        dx.abs(),
+        dy.abs(),
+      )
+    },
+  )
 }
 
 ///|
@@ -1429,17 +1522,26 @@ fn h264_b_commit_mb(
     }
     return
   }
+  // The plan's list 0 reference (list 1 keeps its single future reference,
+  // index 0 by syntax).
+  let ref0 = match plan {
+    BBi16(_, _, r, _, _) => r
+    BL0x16(_, _, r) => r
+    _ => 0
+  }
   for list in 0..<2 {
     mirror.active_list = list
+    let refi = if list == 0 { ref0 } else { 0 }
     for part in groups {
       if (part.mask & (1 << list)) == 0 {
         continue
       }
-      h264_write_back_ref(mirror, mb_idx, part.x, part.y, part.w, part.h, 0)
+      h264_write_back_ref(mirror, mb_idx, part.x, part.y, part.w, part.h, refi)
     }
   }
   for list in 0..<2 {
     mirror.active_list = list
+    let refi = if list == 0 { ref0 } else { 0 }
     for part in groups {
       if (part.mask & (1 << list)) == 0 {
         continue
@@ -1452,11 +1554,11 @@ fn h264_b_commit_mb(
         part.x,
         part.y,
         part.w,
-        0,
+        refi,
       )
       let (mvx, mvy) = match plan {
-        BBi16(a, b, c, d) => if list == 0 { (a, b) } else { (c, d) }
-        BL0x16(a, b) => (a, b)
+        BBi16(a, b, _, c, d) => if list == 0 { (a, b) } else { (c, d) }
+        BL0x16(a, b, _) => (a, b)
         BL1x16(a, b) => (a, b)
         _ => (0, 0)
       }
@@ -1471,7 +1573,7 @@ fn h264_b_commit_mb(
         part.h,
         mvx,
         mvy,
-        0,
+        refi,
         dx,
         dy,
       )
@@ -1518,10 +1620,29 @@ fn H264PEncoder::write_b_mb_syntax(
   }
   let (groups, _parts, _direct, _mb_bits) = h264_b_partitions(kind, [])
   r.put_ue(kind)
+  // The plan's list 0 reference (list 1 keeps its single future reference,
+  // index 0 by syntax, so list 1 never codes a ref_idx).
+  let ref0 = match plan {
+    BBi16(_, _, rf, _, _) => rf
+    BL0x16(_, _, rf) => rf
+    _ => 0
+  }
+  // Reference indices first, list 0's partitions then list 1's (the
+  // decoder's ref loop; list 1's active count is one, so nothing there).
+  if mirror.ref_count0 > 1 {
+    mirror.active_list = 0
+    for part in groups {
+      if (part.mask & 1) == 0 {
+        continue
+      }
+      h264_enc_put_ref_idx(r, ref0, mirror.ref_count0)
+    }
+  }
   // Motion vector differences, list 0's partitions then list 1's, each
   // against the mirror's prediction (the committed reference state).
   for list in 0..<2 {
     mirror.active_list = list
+    let refi = if list == 0 { ref0 } else { 0 }
     for part in groups {
       if (part.mask & (1 << list)) == 0 {
         continue
@@ -1534,11 +1655,11 @@ fn H264PEncoder::write_b_mb_syntax(
         part.x,
         part.y,
         part.w,
-        0,
+        refi,
       )
       let (mvx, mvy) = match plan {
-        BBi16(a, b, c, d) => if list == 0 { (a, b) } else { (c, d) }
-        BL0x16(a, b) => (a, b)
+        BBi16(a, b, _, c, d) => if list == 0 { (a, b) } else { (c, d) }
+        BL0x16(a, b, _) => (a, b)
         BL1x16(a, b) => (a, b)
         _ => (0, 0)
       }
@@ -1846,8 +1967,8 @@ fn H264PEncoder::write_b_mb_parts_syntax(
   r : H264Rbsp,
 ) -> Unit {
   let mb_idx = mb_y * self.mb_width + mb_x
-  let (kind, subs, mvs) = match plan {
-    BParts(k, s, m) => (k, s, m)
+  let (kind, subs, mvs, refs) = match plan {
+    BParts(k, s, m, rf) => (k, s, m, rf)
     _ => abort("h264 enc b: parts syntax on a 16x16 plan")
   }
   let info = mirror.infos[mb_idx]
@@ -1866,48 +1987,94 @@ fn H264PEncoder::write_b_mb_parts_syntax(
       info.ref_idx1[block] = -2
     }
   }
+  // Kind 22's per-group list 0 reference (the first walk-ordered list 0
+  // entry of each group).
+  let group_refs : Array[Int32] = [0, 0, 0, 0]
+  if kind == 22 {
+    let mut mi = 0
+    for part in parts {
+      if (part.mask & 1) != 0 {
+        group_refs[part.group] = refs[mi]
+      }
+      if (part.mask & 3) != 0 {
+        mi = mi + 1
+      }
+    }
+  }
   r.put_ue(kind)
   if kind == 22 {
     for s in subs {
       r.put_ue(s)
     }
   }
-  // References: a single reference per list, so neither entropy coder
-  // reads reference bits — only the mirror state advances.
+  // References, list 0's partitions then list 1's (the decoder's ref
+  // loop). List 1 keeps its single future reference, so only list 0 ever
+  // codes a ref_idx; the walk-ordered refs array indexes list 0's entries
+  // from zero, groups order for kind 22 via the group map.
   if kind < 22 {
+    let mut mi = 0
     for list in 0..<2 {
       mirror.active_list = list
       for part in groups {
         if (part.mask & (1 << list)) == 0 {
           continue
         }
-        h264_write_back_ref(mirror, mb_idx, part.x, part.y, part.w, part.h, 0)
+        let refi = if list == 0 { refs[mi] } else { 0 }
+        if list == 0 && mirror.ref_count0 > 1 {
+          h264_enc_put_ref_idx(r, refi, mirror.ref_count0)
+        }
+        h264_write_back_ref(
+          mirror,
+          mb_idx,
+          part.x,
+          part.y,
+          part.w,
+          part.h,
+          refi,
+        )
+        if list == 0 {
+          mi = mi + 1
+        }
       }
     }
+  } else if mirror.ref_count0 > 1 {
+    mirror.active_list = 0
+    for part in groups {
+      if (part.mask & 1) == 0 {
+        continue
+      }
+      h264_enc_put_ref_idx(r, group_refs[part.group], mirror.ref_count0)
+    }
   }
-  h264_b_mvd_walk(mirror, mb_idx, mb_x, mb_y, kind, parts, direct, (
-    part,
-    mi,
-    pmvx,
-    pmvy,
-  ) => {
-    let (mvx, mvy) = mvs[mi]
-    r.put_se(mvx - pmvx)
-    r.put_se(mvy - pmvy)
-    h264_write_back_part(
-      mirror,
-      mb_idx,
-      part.x,
-      part.y,
-      part.w,
-      part.h,
-      mvx,
-      mvy,
-      0,
-      (mvx - pmvx).abs().min(70),
-      (mvy - pmvy).abs().min(70),
-    )
-  })
+  h264_b_mvd_walk(
+    mirror,
+    mb_idx,
+    mb_x,
+    mb_y,
+    kind,
+    parts,
+    direct,
+    refs,
+    group_refs,
+    (part, mi, pmvx, pmvy, refi) => {
+      let (mvx, mvy) = mvs[mi]
+      r.put_se(mvx - pmvx)
+      r.put_se(mvy - pmvy)
+      h264_write_back_part(
+        mirror,
+        mb_idx,
+        part.x,
+        part.y,
+        part.w,
+        part.h,
+        mvx,
+        mvy,
+        refi,
+        (mvx - pmvx).abs().min(70),
+        (mvy - pmvy).abs().min(70),
+      )
+    },
+  )
   // The residual tail runs against the committed mirror (the walk ends in
   // the decoder's post-macroblock state). The 8x8 transform is only
   // signalled for partitions of at least 8x8.
@@ -2094,12 +2261,15 @@ fn H264PEncoder::b_bi_part_sad(
   oy : Int32,
   w : Int32,
   h : Int32,
+  ref0 : Int32,
   mv0x : Int32,
   mv0y : Int32,
   mv1x : Int32,
   mv1y : Int32,
 ) -> Int32 {
-  let a = h264_b_prediction(mirror, 0, 0, mb_x, mb_y, ox, oy, w, h, mv0x, mv0y)
+  let a = h264_b_prediction(
+    mirror, 0, ref0, mb_x, mb_y, ox, oy, w, h, mv0x, mv0y,
+  )
   let b = h264_b_prediction(mirror, 1, 0, mb_x, mb_y, ox, oy, w, h, mv1x, mv1y)
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
   let mut sad = 0
@@ -2112,6 +2282,106 @@ fn H264PEncoder::b_bi_part_sad(
     }
   }
   sad
+}
+
+///|
+/// Cb/Cr SAD of the true motion-compensated prediction from one B-list
+/// reference at the (`ox`, `oy`, `w`, `h`) rectangle of macroblock
+/// (`mb_x`, `mb_y`) under quarter-pel MV (`mvx`, `mvy`) — the B-side
+/// reference-choice tiebreak of `§417`'s chroma-aware P selection: luma
+/// alone cannot see a reference whose luma matches but colours drifted.
+fn H264PEncoder::b_ref_chroma_sad(
+  self : H264PEncoder,
+  mirror : H264DecCtx,
+  list : Int32,
+  refi : Int32,
+  mb_x : Int32,
+  mb_y : Int32,
+  ox : Int32,
+  oy : Int32,
+  w : Int32,
+  h : Int32,
+  mvx : Int32,
+  mvy : Int32,
+) -> Int32 {
+  let pred = h264_b_prediction(
+    mirror, list, refi, mb_x, mb_y, ox, oy, w, h, mvx, mvy,
+  )
+  let cw = w >> mirror.chroma_hshift
+  let ch = h >> mirror.chroma_vshift
+  let cbase_y = mb_y * (16 >> mirror.chroma_vshift) * self.cstride +
+    mb_x * (16 >> mirror.chroma_hshift)
+  let mut sad = 0
+  for c in 0..<2 {
+    let src = if c == 0 { self.src_u } else { self.src_v }
+    for row in 0..<ch {
+      for col in 0..<cw {
+        let got = pred[c + 1][row * 8 + col]
+        let want = src[cbase_y +
+          ((oy >> mirror.chroma_vshift) + row) * self.cstride +
+          (ox >> mirror.chroma_hshift) +
+          col]
+        let d = want - got
+        sad = sad + (if d < 0 { -d } else { d })
+      }
+    }
+  }
+  sad
+}
+
+///|
+/// Multi-reference list 0 search of one rectangle: per reference, search
+/// its plane (`me_b_part`) seeded at the caller's hint (the historical
+/// single-reference seed, so a single-reference list reproduces the
+/// previous single-plane search bit for bit), add the motion-compensated
+/// Cb/Cr SAD of the best MV, and keep the luma+chroma champion (the first
+/// reference wins ties). Returns the reference index, quarter-pel MV and
+/// the combined SAD.
+fn H264PEncoder::me_b_l0_multi(
+  self : H264PEncoder,
+  mirror : H264DecCtx,
+  mb_x : Int32,
+  mb_y : Int32,
+  ox : Int32,
+  oy : Int32,
+  w : Int32,
+  h : Int32,
+  seed_x : Int32,
+  seed_y : Int32,
+) -> (Int32, Int32, Int32, Int32) {
+  mirror.active_list = 0
+  let count = if mirror.ref_count0 < self.nrefs {
+    mirror.ref_count0
+  } else {
+    self.nrefs
+  }
+  let mut best_ref = 0
+  let mut best_x = 0
+  let mut best_y = 0
+  let mut best_sad = 0x7FFFFFFF
+  for refi = 0; refi < count; refi = refi + 1 {
+    let (mvx, mvy, sad) = self.me_b_part(
+      self.refs_y[refi],
+      mb_x,
+      mb_y,
+      ox,
+      oy,
+      w,
+      h,
+      seed_x,
+      seed_y,
+    )
+    let total = sad +
+      self.b_ref_chroma_sad(mirror, 0, refi, mb_x, mb_y, ox, oy, w, h, mvx, mvy)
+    if total < best_sad {
+      best_sad = total
+      best_ref = refi
+      best_x = mvx
+      best_y = mvy
+    }
+  }
+  mirror.active_list = 0
+  (best_ref, best_x, best_y, best_sad)
 }
 
 ///|
@@ -2240,7 +2510,6 @@ fn H264PEncoder::eval_b_parts(
 fn H264PEncoder::decide_b_mb(
   self : H264PEncoder,
   mirror : H264DecCtx,
-  past_y : Array[Int32],
   fut_y : Array[Int32],
   mb_x : Int32,
   mb_y : Int32,
@@ -2303,14 +2572,16 @@ fn H264PEncoder::decide_b_mb(
   }
   // Candidates: direct-with-residual, L0, L1, Bi. The predictors of the
   // single-partition kinds never read the current macroblock, so the
-  // direct trial's state may stay while they are priced.
+  // direct trial's state may stay while they are priced. The forward
+  // search runs over every active list 0 reference (`me_b_l0_multi`); the
+  // backward one keeps the single future reference.
   mirror.active_list = 0
   let (p0x, p0y) = h264_pred_motion(mirror, mb_idx, mb_x, mb_y, 0, 0, 4, 0)
   mirror.active_list = 1
   let (p1x, p1y) = h264_pred_motion(mirror, mb_idx, mb_x, mb_y, 0, 0, 4, 0)
   mirror.active_list = 0
-  let (mv0x, mv0y, _sad0) = self.me_b_part(
-    past_y, mb_x, mb_y, 0, 0, 16, 16, p0x, p0y,
+  let (ref0, mv0x, mv0y, _sad0) = self.me_b_l0_multi(
+    mirror, mb_x, mb_y, 0, 0, 16, 16, p0x, p0y,
   )
   let (mv1x, mv1y, _sad1) = self.me_b_part(
     fut_y, mb_x, mb_y, 0, 0, 16, 16, p1x, p1y,
@@ -2328,23 +2599,30 @@ fn H264PEncoder::decide_b_mb(
     lam *
     self.price_b_bits(mirror, mb_x, mb_y, BDirect16, coded_d, bits_of(cw_d))
   // L0 candidate.
-  self.mc_b_uni_into_rec(mirror, 0, mb_x, mb_y, mv0x, mv0y)
+  self.mc_b_uni_into_rec(mirror, 0, ref0, mb_x, mb_y, mv0x, mv0y)
   let ssd_0 = self.b_mb_ssd(mb_x, mb_y)
   let coded_0 = self.code_b_mb_residuals(mb_x, mb_y, qp)
   let cw_0 = H264Rbsp::new()
-  self.write_b_mb_syntax(mirror, mb_x, mb_y, BL0x16(mv0x, mv0y), coded_0, cw_0)
+  self.write_b_mb_syntax(
+    mirror,
+    mb_x,
+    mb_y,
+    BL0x16(mv0x, mv0y, ref0),
+    coded_0,
+    cw_0,
+  )
   let cost_0 = ssd_0.to_int64() * 1024L +
     lam *
     self.price_b_bits(
       mirror,
       mb_x,
       mb_y,
-      BL0x16(mv0x, mv0y),
+      BL0x16(mv0x, mv0y, ref0),
       coded_0,
       bits_of(cw_0),
     )
   // L1 candidate.
-  self.mc_b_uni_into_rec(mirror, 1, mb_x, mb_y, mv1x, mv1y)
+  self.mc_b_uni_into_rec(mirror, 1, 0, mb_x, mb_y, mv1x, mv1y)
   let ssd_1 = self.b_mb_ssd(mb_x, mb_y)
   let coded_1 = self.code_b_mb_residuals(mb_x, mb_y, qp)
   let cw_1 = H264Rbsp::new()
@@ -2360,7 +2638,7 @@ fn H264PEncoder::decide_b_mb(
       bits_of(cw_1),
     )
   // Bidirectional candidate.
-  self.mc_b_bi_into_rec(mirror, mb_x, mb_y, mv0x, mv0y, mv1x, mv1y)
+  self.mc_b_bi_into_rec(mirror, mb_x, mb_y, ref0, mv0x, mv0y, mv1x, mv1y)
   let ssd_b = self.b_mb_ssd(mb_x, mb_y)
   let coded_b = self.code_b_mb_residuals(mb_x, mb_y, qp)
   let cw_b = H264Rbsp::new()
@@ -2368,7 +2646,7 @@ fn H264PEncoder::decide_b_mb(
     mirror,
     mb_x,
     mb_y,
-    BBi16(mv0x, mv0y, mv1x, mv1y),
+    BBi16(mv0x, mv0y, ref0, mv1x, mv1y),
     coded_b,
     cw_b,
   )
@@ -2378,7 +2656,7 @@ fn H264PEncoder::decide_b_mb(
       mirror,
       mb_x,
       mb_y,
-      BBi16(mv0x, mv0y, mv1x, mv1y),
+      BBi16(mv0x, mv0y, ref0, mv1x, mv1y),
       coded_b,
       bits_of(cw_b),
     )
@@ -2387,7 +2665,7 @@ fn H264PEncoder::decide_b_mb(
   let mut cost = cost_d
   let mut coded = coded_d
   if cost_0 < cost {
-    plan = BL0x16(mv0x, mv0y)
+    plan = BL0x16(mv0x, mv0y, ref0)
     cost = cost_0
     coded = coded_0
   }
@@ -2397,28 +2675,31 @@ fn H264PEncoder::decide_b_mb(
     coded = coded_1
   }
   if cost_b < cost {
-    plan = BBi16(mv0x, mv0y, mv1x, mv1y)
+    plan = BBi16(mv0x, mv0y, ref0, mv1x, mv1y)
     cost = cost_b
     coded = coded_b
   }
   // ---- Sub-partitioned candidates (opt-in `b_parts`) ----
   if self.b_parts {
     // Per-partition ME for the two-partition kinds: top/bottom 16x8 and
-    // left/right 8x16, both lists, seeded at the mirror's whole-macroblock
-    // prediction (a hint only; the commit walk clips every mvd into the
-    // syntax's reachable square against the real per-partition predictor).
+    // left/right 8x16, both lists. Each forward partition searches every
+    // active list 0 reference on its own (`me_b_l0_multi`, seeded at the
+    // mirror's whole-macroblock prediction like the single-reference
+    // search before it); the backward partitions keep the future
+    // reference. The commit walk clips every mvd into the syntax's
+    // reachable square against the real per-partition predictor.
     mirror.active_list = 0
-    let (t0x, t0y, ts0) = self.me_b_part(
-      past_y, mb_x, mb_y, 0, 0, 16, 8, p0x, p0y,
+    let (t0r, t0x, t0y, ts0) = self.me_b_l0_multi(
+      mirror, mb_x, mb_y, 0, 0, 16, 8, p0x, p0y,
     )
-    let (b0x, b0y, bs0) = self.me_b_part(
-      past_y, mb_x, mb_y, 0, 8, 16, 8, p0x, p0y,
+    let (b0r, b0x, b0y, bs0) = self.me_b_l0_multi(
+      mirror, mb_x, mb_y, 0, 8, 16, 8, p0x, p0y,
     )
-    let (l0x, l0y, ls0) = self.me_b_part(
-      past_y, mb_x, mb_y, 0, 0, 8, 16, p0x, p0y,
+    let (l0r, l0x, l0y, ls0) = self.me_b_l0_multi(
+      mirror, mb_x, mb_y, 0, 0, 8, 16, p0x, p0y,
     )
-    let (r0x, r0y, rs0) = self.me_b_part(
-      past_y, mb_x, mb_y, 8, 0, 8, 16, p0x, p0y,
+    let (r0r, r0x, r0y, rs0) = self.me_b_l0_multi(
+      mirror, mb_x, mb_y, 8, 0, 8, 16, p0x, p0y,
     )
     mirror.active_list = 1
     let (t1x, t1y, ts1) = self.me_b_part(
@@ -2456,22 +2737,30 @@ fn H264PEncoder::decide_b_mb(
     let t_sads = [
       ts0,
       ts1,
-      self.b_bi_part_sad(mirror, mb_x, mb_y, 0, 0, 16, 8, t0x, t0y, t1x, t1y),
+      self.b_bi_part_sad(
+        mirror, mb_x, mb_y, 0, 0, 16, 8, t0r, t0x, t0y, t1x, t1y,
+      ),
     ]
     let b_sads = [
       bs0,
       bs1,
-      self.b_bi_part_sad(mirror, mb_x, mb_y, 0, 8, 16, 8, b0x, b0y, b1x, b1y),
+      self.b_bi_part_sad(
+        mirror, mb_x, mb_y, 0, 8, 16, 8, b0r, b0x, b0y, b1x, b1y,
+      ),
     ]
     let l_sads = [
       ls0,
       ls1,
-      self.b_bi_part_sad(mirror, mb_x, mb_y, 0, 0, 8, 16, l0x, l0y, l1x, l1y),
+      self.b_bi_part_sad(
+        mirror, mb_x, mb_y, 0, 0, 8, 16, l0r, l0x, l0y, l1x, l1y,
+      ),
     ]
     let r_sads = [
       rs0,
       rs1,
-      self.b_bi_part_sad(mirror, mb_x, mb_y, 8, 0, 8, 16, r0x, r0y, r1x, r1y),
+      self.b_bi_part_sad(
+        mirror, mb_x, mb_y, 8, 0, 8, 16, r0r, r0x, r0y, r1x, r1y,
+      ),
     ]
     fn mask_sad(sads : Array[Int32], mask : Int32) -> Int32 {
       if mask == 3 {
@@ -2533,19 +2822,24 @@ fn H264PEncoder::decide_b_mb(
       let (m0, m1) = mask_table[c]
       // 16x8 (even kinds): top, bottom.
       let mvs_h : Array[(Int32, Int32)] = []
+      let refs_h : Array[Int32] = []
       if (m0 & 1) != 0 {
         mvs_h.push((t0x, t0y))
+        refs_h.push(t0r)
       }
       if (m1 & 1) != 0 {
         mvs_h.push((b0x, b0y))
+        refs_h.push(b0r)
       }
       if (m0 & 2) != 0 {
         mvs_h.push((t1x, t1y))
+        refs_h.push(0)
       }
       if (m1 & 2) != 0 {
         mvs_h.push((b1x, b1y))
+        refs_h.push(0)
       }
-      let plan_h = BParts(4 + 2 * c, [], mvs_h)
+      let plan_h = BParts(4 + 2 * c, [], mvs_h, refs_h)
       match self.eval_b_parts(mirror, mb_x, mb_y, plan_h, qp, lam) {
         Ok((cost_h, coded_h)) =>
           if cost_h < cost {
@@ -2559,19 +2853,24 @@ fn H264PEncoder::decide_b_mb(
       let (v0, v1) = mask_table[cv]
       // 8x16 (odd kinds): left, right.
       let mvs_v : Array[(Int32, Int32)] = []
+      let refs_v : Array[Int32] = []
       if (v0 & 1) != 0 {
         mvs_v.push((l0x, l0y))
+        refs_v.push(l0r)
       }
       if (v1 & 1) != 0 {
         mvs_v.push((r0x, r0y))
+        refs_v.push(r0r)
       }
       if (v0 & 2) != 0 {
         mvs_v.push((l1x, l1y))
+        refs_v.push(0)
       }
       if (v1 & 2) != 0 {
         mvs_v.push((r1x, r1y))
+        refs_v.push(0)
       }
-      let plan_v = BParts(5 + 2 * cv, [], mvs_v)
+      let plan_v = BParts(5 + 2 * cv, [], mvs_v, refs_v)
       match self.eval_b_parts(mirror, mb_x, mb_y, plan_v, qp, lam) {
         Ok((cost_v, coded_v)) =>
           if cost_v < cost {
@@ -2588,6 +2887,7 @@ fn H264PEncoder::decide_b_mb(
     // estimate (the assembled plan is priced exactly afterwards).
     let subs : Array[Int32] = [0, 0, 0, 0]
     let g_mvs0 : Array[Array[(Int32, Int32)]] = [[], [], [], []]
+    let g_refs0 : Array[Array[Int32]] = [[], [], [], []]
     let g_mvs1 : Array[Array[(Int32, Int32)]] = [[], [], [], []]
     for g in 0..<4 {
       let gx8 = (g & 1) * 8
@@ -2611,10 +2911,12 @@ fn H264PEncoder::decide_b_mb(
       let mut best_sub = 0
       let mut best_cost = direct_group_sads[g].to_int64()
       let mut best_r0 : Array[(Int32, Int32)] = []
+      let mut best_rf0 : Array[Int32] = []
       let mut best_r1 : Array[(Int32, Int32)] = []
       for entry in shape_rects {
         let (shape, rects) = entry
         let m0 : Array[(Int32, Int32)] = []
+        let rf0 : Array[Int32] = []
         let m1 : Array[(Int32, Int32)] = []
         let mut sad_l0 = 0
         let mut sad_l1 = 0
@@ -2631,10 +2933,11 @@ fn H264PEncoder::decide_b_mb(
             w / 4,
             0,
           )
-          let (mx, my, ms) = self.me_b_part(
-            past_y, mb_x, mb_y, ox, oy, w, h, pm0x, pm0y,
+          let (mr, mx, my, ms) = self.me_b_l0_multi(
+            mirror, mb_x, mb_y, ox, oy, w, h, pm0x, pm0y,
           )
           m0.push((mx, my))
+          rf0.push(mr)
           sad_l0 = sad_l0 + ms
           mirror.active_list = 1
           let (pm1x, pm1y) = h264_pred_motion(
@@ -2666,6 +2969,7 @@ fn H264PEncoder::decide_b_mb(
               oy,
               w,
               h,
+              rf0[i],
               m0[i].0,
               m0[i].1,
               m1[i].0,
@@ -2688,29 +2992,35 @@ fn H264PEncoder::decide_b_mb(
           best_cost = cost_l0
           best_sub = s_l0
           best_r0 = m0
+          best_rf0 = rf0
           best_r1 = []
         }
         if cost_l1 < best_cost {
           best_cost = cost_l1
           best_sub = s_l1
           best_r0 = []
+          best_rf0 = []
           best_r1 = m1
         }
         if cost_bi < best_cost {
           best_cost = cost_bi
           best_sub = s_bi
           best_r0 = m0
+          best_rf0 = rf0
           best_r1 = m1
         }
       }
       subs[g] = best_sub
       g_mvs0[g] = best_r0
       g_mvs1[g] = best_r1
+      g_refs0[g] = best_rf0
     }
     // Assemble the plan's mvs array in the decode walk order (list 0's
-    // masked partitions first, then list 1's).
+    // masked partitions first, then list 1's), with each entry's list 0
+    // reference alongside it.
     let (_, parts22, _direct22, _) = h264_b_partitions(22, subs)
     let mvs88 : Array[(Int32, Int32)] = []
+    let refs88 : Array[Int32] = []
     let idx : Array[Int32] = [0, 0, 0, 0]
     for list in 0..<2 {
       for part in parts22 {
@@ -2720,11 +3030,16 @@ fn H264PEncoder::decide_b_mb(
         let g = part.group
         let i = idx[g]
         idx[g] = i + 1
-        let mv = if list == 0 { g_mvs0[g][i] } else { g_mvs1[g][i] }
-        mvs88.push(mv)
+        if list == 0 {
+          mvs88.push(g_mvs0[g][i])
+          refs88.push(g_refs0[g][i])
+        } else {
+          mvs88.push(g_mvs1[g][i])
+          refs88.push(0)
+        }
       }
     }
-    let plan_88 = BParts(22, subs, mvs88)
+    let plan_88 = BParts(22, subs, mvs88, refs88)
     match self.eval_b_parts(mirror, mb_x, mb_y, plan_88, qp, lam) {
       Ok((cost_88, coded_88)) =>
         if cost_88 < cost {
@@ -2905,12 +3220,12 @@ fn H264PEncoder::decide_b_mb(
   self.stats.b_mbs += 1
   match plan {
     BL1x16(_, _) => self.stats.bl1_mbs += 1
-    BBi16(_, _, _, _) => self.stats.bi_mbs += 1
+    BBi16(_, _, _, _, _) => self.stats.bi_mbs += 1
     BDirect16 => self.stats.bdirect_mbs += 1
     BI16(_, _, _) => self.stats.bi16_mbs += 1
     BI4(_, _) => self.stats.bi4_mbs += 1
     BI8(_, _) => self.stats.bi8_mbs += 1
-    BParts(kind, _, _) => {
+    BParts(kind, _, _, _) => {
       self.stats.bpart_mbs += 1
       if kind == 22 {
         self.stats.b8x8_mbs += 1
@@ -2919,7 +3234,7 @@ fn H264PEncoder::decide_b_mb(
     _ => ()
   }
   if !(plan is BDirect16) &&
-    !(plan is BParts(_, _, _)) &&
+    !(plan is BParts(_, _, _, _)) &&
     !(plan is BI16(_, _, _)) &&
     !(plan is BI4(_, _)) &&
     !(plan is BI8(_, _)) {
@@ -2932,11 +3247,12 @@ fn H264PEncoder::decide_b_mb(
         Ok(_) => ()
         Err(e) => return Err("h264 enc b: direct re-MC failed: \{e}")
       }
-    BL0x16(x, y) => self.mc_b_uni_into_rec(mirror, 0, mb_x, mb_y, x, y)
-    BL1x16(x, y) => self.mc_b_uni_into_rec(mirror, 1, mb_x, mb_y, x, y)
-    BBi16(a, b, c, d) => self.mc_b_bi_into_rec(mirror, mb_x, mb_y, a, b, c, d)
+    BL0x16(x, y, rf) => self.mc_b_uni_into_rec(mirror, 0, rf, mb_x, mb_y, x, y)
+    BL1x16(x, y) => self.mc_b_uni_into_rec(mirror, 1, 0, mb_x, mb_y, x, y)
+    BBi16(a, b, rf, c, d) =>
+      self.mc_b_bi_into_rec(mirror, mb_x, mb_y, rf, a, b, c, d)
     BSkip => ()
-    BParts(_, _, _) => {
+    BParts(_, _, _, _) => {
       // The sub-partition commit replays the decoder's mutations on a
       // fresh slot; the decoder's own compensate re-establishes the
       // winning prediction from the committed per-4x4 motion.
@@ -2950,7 +3266,7 @@ fn H264PEncoder::decide_b_mb(
     BI4(_, _) => ()
     BI8(_, _) => ()
   }
-  if !(plan is BParts(_, _, _)) {
+  if !(plan is BParts(_, _, _, _)) {
     h264_b_commit_mb(mirror, mb_idx, mb_x, mb_y, plan, false)
   }
   let coded_final = match plan {
@@ -3033,7 +3349,6 @@ fn H264PEncoder::commit_b_mb_state(
 fn H264PEncoder::encode_b_frame(
   self : H264PEncoder,
   mirror : H264DecCtx,
-  past_y : Array[Int32],
   fut_y : Array[Int32],
   frame_num : Int32,
   poc_lsb : Int32,
@@ -3057,7 +3372,7 @@ fn H264PEncoder::encode_b_frame(
   r.put(frame_num & 15, 4) // frame_num
   r.put(poc_lsb & 15, 4) // pic_order_cnt_lsb
   r.put_bit(1) // direct_spatial_mv_pred_flag
-  r.put_bit(0) // num_ref_idx_active_override_flag
+  self.put_active_refs_b(r, mirror.ref_count0)
   r.put_bit(0) // ref_pic_list_modification_flag_l0
   r.put_bit(0) // ref_pic_list_modification_flag_l1
   // nal_ref_idc == 0: no dec_ref_pic_marking.
@@ -3090,7 +3405,7 @@ fn H264PEncoder::encode_b_frame(
           bit_depth=self.p.bit_depth,
         )
       }
-      match self.decide_b_mb(mirror, past_y, fut_y, mb_x, mb_y, self.mb_qp) {
+      match self.decide_b_mb(mirror, fut_y, mb_x, mb_y, self.mb_qp) {
         Ok((BSkip, _)) => skip_run = skip_run + 1
         Ok((plan, coded)) => {
           r.put_ue(skip_run)
@@ -3244,8 +3559,41 @@ fn H264PEncoder::write_b_mb_syntax_cabac(
     }
   }
   let (groups, _parts, _direct, _mb_bits) = h264_b_partitions(kind, [])
+  // The plan's list 0 reference (list 1 keeps its single future reference,
+  // index 0 by syntax, so list 1 never codes a ref_idx).
+  let ref0 = match plan {
+    BBi16(_, _, rf, _, _) => rf
+    BL0x16(_, _, rf) => rf
+    _ => 0
+  }
+  // Reference indices first, list 0's partitions then list 1's (the
+  // decoder's ref loop; list 1's active count is one, so nothing there).
+  // The mirror already carries the committed references — the context
+  // derivation reads exactly the neighbours the decoder sees.
+  if mirror.ref_count0 > 1 {
+    mirror.active_list = 0
+    for part in groups {
+      if (part.mask & 1) == 0 {
+        continue
+      }
+      h264_cabac_put_ref(
+        self,
+        enc,
+        states,
+        mirror,
+        mb_idx,
+        mb_x,
+        mb_y,
+        part.x,
+        part.y,
+        ref0,
+        mirror.ref_count0,
+      )
+    }
+  }
   for list in 0..<2 {
     mirror.active_list = list
+    let refi = if list == 0 { ref0 } else { 0 }
     for part in groups {
       if (part.mask & (1 << list)) == 0 {
         continue
@@ -3258,11 +3606,11 @@ fn H264PEncoder::write_b_mb_syntax_cabac(
         part.x,
         part.y,
         part.w,
-        0,
+        refi,
       )
       let (mvx, mvy) = match plan {
-        BBi16(a, b, c, d) => if list == 0 { (a, b) } else { (c, d) }
-        BL0x16(a, b) => (a, b)
+        BBi16(a, b, _, c, d) => if list == 0 { (a, b) } else { (c, d) }
+        BL0x16(a, b, _) => (a, b)
         BL1x16(a, b) => (a, b)
         _ => (0, 0)
       }
@@ -3496,8 +3844,8 @@ fn H264PEncoder::write_b_mb_parts_syntax_cabac(
   coded : H264PMbCode,
 ) -> Unit {
   let mb_idx = mb_y * self.mb_width + mb_x
-  let (kind, subs, mvs) = match plan {
-    BParts(k, s, m) => (k, s, m)
+  let (kind, subs, mvs, refs) = match plan {
+    BParts(k, s, m, rf) => (k, s, m, rf)
     _ => abort("h264 enc b: parts cabac on a 16x16 plan")
   }
   let info = mirror.infos[mb_idx]
@@ -3516,6 +3864,20 @@ fn H264PEncoder::write_b_mb_parts_syntax_cabac(
       info.ref_idx1[block] = -2
     }
   }
+  // Kind 22's per-group list 0 reference (the first walk-ordered list 0
+  // entry of each group).
+  let group_refs : Array[Int32] = [0, 0, 0, 0]
+  if kind == 22 {
+    let mut mi = 0
+    for part in parts {
+      if (part.mask & 1) != 0 {
+        group_refs[part.group] = refs[mi]
+      }
+      if (part.mask & 3) != 0 {
+        mi = mi + 1
+      }
+    }
+  }
   h264_cabacw_b_parts_type(
     enc,
     states,
@@ -3527,65 +3889,130 @@ fn H264PEncoder::write_b_mb_parts_syntax_cabac(
       h264_cabacw_b_sub_type(enc, states, s)
     }
   }
-  // References: a single reference per list reads no ref bins; for B_8x8
-  // the CABAC decoder's per-group cache dance writes the read reference
-  // into three of the group's four cells (the top-left stays hidden until
-  // the group's motion pass) — replicated for exactness.
-  for list in 0..<2 {
-    mirror.active_list = list
-    for part in groups {
-      if (part.mask & (1 << list)) == 0 {
-        continue
-      }
-      if kind == 22 {
-        h264_write_back_ref(mirror, mb_idx, part.x + 1, part.y, 1, 1, 0)
-        h264_write_back_ref(mirror, mb_idx, part.x, part.y + 1, 2, 1, 0)
-      } else {
-        h264_write_back_ref(mirror, mb_idx, part.x, part.y, part.w, part.h, 0)
+  // References, list 0's partitions then list 1's (the decoder's ref
+  // loop): list 0 codes a ref_idx per partition when more than one
+  // reference is active; list 1 keeps its single future reference. For
+  // B_8x8 the CABAC decoder's per-group cache dance writes the read
+  // reference into three of the group's four cells (the top-left stays
+  // hidden until the group's motion pass) — replicated for exactness.
+  if kind < 22 {
+    let mut mi = 0
+    for list in 0..<2 {
+      mirror.active_list = list
+      for part in groups {
+        if (part.mask & (1 << list)) == 0 {
+          continue
+        }
+        let refi = if list == 0 { refs[mi] } else { 0 }
+        if list == 0 && mirror.ref_count0 > 1 {
+          h264_cabac_put_ref(
+            self,
+            enc,
+            states,
+            mirror,
+            mb_idx,
+            mb_x,
+            mb_y,
+            part.x,
+            part.y,
+            refi,
+            mirror.ref_count0,
+          )
+        }
+        h264_write_back_ref(
+          mirror,
+          mb_idx,
+          part.x,
+          part.y,
+          part.w,
+          part.h,
+          refi,
+        )
+        if list == 0 {
+          mi = mi + 1
+        }
       }
     }
+  } else {
+    mirror.active_list = 0
+    for part in groups {
+      if (part.mask & 1) == 0 {
+        continue
+      }
+      let refi = group_refs[part.group]
+      if mirror.ref_count0 > 1 {
+        h264_cabac_put_ref(
+          self,
+          enc,
+          states,
+          mirror,
+          mb_idx,
+          mb_x,
+          mb_y,
+          part.x,
+          part.y,
+          refi,
+          mirror.ref_count0,
+        )
+      }
+      h264_write_back_ref(mirror, mb_idx, part.x + 1, part.y, 1, 1, refi)
+      h264_write_back_ref(mirror, mb_idx, part.x, part.y + 1, 2, 1, refi)
+    }
+    for part in groups {
+      if (part.mask & 2) == 0 {
+        continue
+      }
+      h264_write_back_ref(mirror, mb_idx, part.x + 1, part.y, 1, 1, 0)
+      h264_write_back_ref(mirror, mb_idx, part.x, part.y + 1, 2, 1, 0)
+    }
   }
-  h264_b_mvd_walk(mirror, mb_idx, mb_x, mb_y, kind, parts, direct, (
-    part,
-    mi,
-    pmvx,
-    pmvy,
-  ) => {
-    let (mvx, mvy) = mvs[mi]
-    let (lamvd0, lamvd1) = h264_mvd_fetch(
-      mirror,
-      mb_idx,
-      mb_x,
-      mb_y,
-      part.x - 1,
-      part.y,
-    )
-    let (tamvd0, tamvd1) = h264_mvd_fetch(
-      mirror,
-      mb_idx,
-      mb_x,
-      mb_y,
-      part.x,
-      part.y - 1,
-    )
-    // The mvd contexts are per-COMPONENT (x 40.., y 47..) shared by both
-    // lists; `h264_mvd_fetch` reads the active list's mvd mirror.
-    let _ = h264_cabacw_mvd_one(enc, states, 40, lamvd0 + tamvd0, mvx - pmvx)
-    let _ = h264_cabacw_mvd_one(enc, states, 47, lamvd1 + tamvd1, mvy - pmvy)
-    h264_write_back_part(
-      mirror,
-      mb_idx,
-      part.x,
-      part.y,
-      part.w,
-      part.h,
-      mvx,
-      mvy,
-      0,
-      (mvx - pmvx).abs().min(70),
-      (mvy - pmvy).abs().min(70),
-    )
-  })
+  h264_b_mvd_walk(
+    mirror,
+    mb_idx,
+    mb_x,
+    mb_y,
+    kind,
+    parts,
+    direct,
+    refs,
+    group_refs,
+    (part, mi, pmvx, pmvy, refi) => {
+      let (mvx, mvy) = mvs[mi]
+      let (lamvd0, lamvd1) = h264_mvd_fetch(
+        mirror,
+        mb_idx,
+        mb_x,
+        mb_y,
+        part.x - 1,
+        part.y,
+      )
+      let (tamvd0, tamvd1) = h264_mvd_fetch(
+        mirror,
+        mb_idx,
+        mb_x,
+        mb_y,
+        part.x,
+        part.y - 1,
+      )
+      // The mvd contexts are per-COMPONENT (x 40.., y 47..) shared by both
+      // lists; `h264_mvd_fetch` reads the active list's mvd mirror.
+      let _ = h264_cabacw_mvd_one(enc, states, 40, lamvd0 + tamvd0, mvx - pmvx)
+      let _ = h264_cabacw_mvd_one(enc, states, 47, lamvd1 + tamvd1, mvy - pmvy)
+      h264_write_back_part(
+        mirror,
+        mb_idx,
+        part.x,
+        part.y,
+        part.w,
+        part.h,
+        mvx,
+        mvy,
+        refi,
+        (mvx - pmvx).abs().min(70),
+        (mvy - pmvy).abs().min(70),
+      )
+    },
+  )
   self.write_b_residual_tail_cabac(
     mirror,
     enc,
@@ -4015,7 +4442,6 @@ fn H264PEncoder::write_b_mb_i4_syntax_cabac(
 fn H264PEncoder::encode_b_frame_cabac(
   self : H264PEncoder,
   mirror : H264DecCtx,
-  past_y : Array[Int32],
   fut_y : Array[Int32],
   frame_num : Int32,
   poc_lsb : Int32,
@@ -4046,7 +4472,7 @@ fn H264PEncoder::encode_b_frame_cabac(
   r.put(frame_num & 15, 4) // frame_num
   r.put(poc_lsb & 15, 4) // pic_order_cnt_lsb
   r.put_bit(1) // direct_spatial_mv_pred_flag
-  r.put_bit(0) // num_ref_idx_active_override_flag
+  self.put_active_refs_b(r, mirror.ref_count0)
   r.put_bit(0) // ref_pic_list_modification_flag_l0
   r.put_bit(0) // ref_pic_list_modification_flag_l1
   // nal_ref_idc == 0: no dec_ref_pic_marking.
@@ -4096,7 +4522,7 @@ fn H264PEncoder::encode_b_frame_cabac(
       // the next intra macroblock's ctx-64 neighbour derivation.
       mirror.infos[mb_idx].transform_8x8 = false
       mirror.infos[mb_idx].chroma_mode = 0
-      match self.decide_b_mb(mirror, past_y, fut_y, mb_x, mb_y, self.mb_qp) {
+      match self.decide_b_mb(mirror, fut_y, mb_x, mb_y, self.mb_qp) {
         Ok((BSkip, _)) => {
           // CABAC has no skip RUN: one mb_skip_flag bin per macroblock.
           let sctx = h264_cabacw_b_skip_ctx(mirror, mb_idx)
@@ -4225,7 +4651,17 @@ fn h264_encode_frames_b(
   weightp~ : Bool = false,
   /// `§412`: 8 (default), 9 or 10 bits (`yuv420p10le` frames above 8).
   bit_depth~ : Int32 = 8,
+  /// Reference history depth for the P pictures and list 0 of the B
+  /// pictures (`§418`): 1 keeps the single-reference streams bit-identical;
+  /// above it the P pictures search the newest `multi_ref` references and
+  /// each B picture's list 0 holds the past references (its future P keeps
+  /// one history slot, so a B sees `multi_ref` past pictures once the
+  /// history is full).
+  multi_ref~ : Int32 = 1,
 ) -> Result[(Bytes, Array[Int32]), String] {
+  if multi_ref < 1 || multi_ref > 16 {
+    return Err("h264 enc: multi_ref must be in 1..=16")
+  }
   let n = frames.length()
   if !h264_enc_bit_depth_ok(bit_depth) {
     return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
@@ -4252,6 +4688,7 @@ fn h264_encode_frames_b(
         idr_cpb_delay~,
         weightp~,
         bit_depth~,
+        multi_ref~,
       )
     } else {
       h264_encode_intra_frame(
@@ -4272,12 +4709,20 @@ fn h264_encode_frames_b(
         idr_cpb_delay~,
         weightp~,
         bit_depth~,
+        multi_ref~,
       )
     }) {
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  let p = { width, height, qp: qps_arr[0], level_idc, bit_depth, nrefs: 1, }
+  let p = {
+    width,
+    height,
+    qp: qps_arr[0],
+    level_idc,
+    bit_depth,
+    nrefs: multi_ref,
+  }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -4318,11 +4763,14 @@ fn h264_encode_frames_b(
   if aud {
     stream[0] = h264_enc_concat([h264_enc_aud(true), stream[0]])
   }
-  // The reference chain: the most recent reference picture's planes and
-  // the encoder-side per-MB mirror (nz persistence across all pictures).
-  let mut ref_y = h264_b_copy_plane(first.recon_y)
-  let mut ref_u = h264_b_copy_plane(first.recon_u)
-  let mut ref_v = h264_b_copy_plane(first.recon_v)
+  // The reference chain (`§418` multi-reference history): every coded
+  // reference picture's planes, newest first. The P pictures search the
+  // newest `multi_ref` entries; each B's list 0 skips the head (its future
+  // P parks there) and takes up to `multi_ref` past pictures. The
+  // encoder-side per-MB mirror (nz persistence) is shared across pictures.
+  let hist_y : Array[Array[Int32]] = [h264_b_copy_plane(first.recon_y)]
+  let hist_u : Array[Array[Int32]] = [h264_b_copy_plane(first.recon_u)]
+  let hist_v : Array[Array[Int32]] = [h264_b_copy_plane(first.recon_v)]
   let states : Array[H264PMbState] = []
   for _k = 0; _k < mb_width * mb_height; _k = _k + 1 {
     states.push(new_h264_p_mb_state())
@@ -4340,9 +4788,9 @@ fn h264_encode_frames_b(
     y : Bytes,
     u : Bytes,
     v : Bytes,
-    ry : Array[Int32],
-    ru : Array[Int32],
-    rv : Array[Int32],
+    hist_y : Array[Array[Int32]],
+    hist_u : Array[Array[Int32]],
+    hist_v : Array[Array[Int32]],
     qp_f : Int32,
   ) -> H264PEncoder {
     let src_y_p = h264_enc_load_plane(
@@ -4359,7 +4807,7 @@ fn h264_encode_frames_b(
       (Array::make(mb_width * mb_height, 0), 0)
     }
     {
-      p: { width, height, qp: qp_f, level_idc, bit_depth, nrefs: 1, },
+      p: { width, height, qp: qp_f, level_idc, bit_depth, nrefs: multi_ref, },
       stats,
       pps,
       chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qp_f), bit_depth~),
@@ -4383,13 +4831,15 @@ fn h264_encode_frames_b(
       rec_y: Array::make(ystride * pheight, 0),
       rec_u: Array::make(cstride * (pheight / 2), 0),
       rec_v: Array::make(cstride * (pheight / 2), 0),
-      ref_y: ry,
-      ref_u: ru,
-      ref_v: rv,
-      refs_y: [ref_y],
-      refs_u: [ref_u],
-      refs_v: [ref_v],
-      nrefs: 1,
+      ref_y: hist_y[0],
+      ref_u: hist_u[0],
+      ref_v: hist_v[0],
+      // The P search caps at the configured depth even while the history
+      // keeps one extra slot for the pending B's future reference.
+      refs_y: hist_y,
+      refs_u: hist_u,
+      refs_v: hist_v,
+      nrefs: hist_y.length().min(multi_ref),
       cur_ref_mb: 0,
       ystride,
       cstride,
@@ -4434,7 +4884,7 @@ fn h264_encode_frames_b(
       // ---- P picture at display position e+1 ----
       fn_counter = fn_counter + 1
       let (y, u, v) = frames[e + 1]
-      let enc = new_p_encoder(y, u, v, ref_y, ref_u, ref_v, qps_arr[e + 1])
+      let enc = new_p_encoder(y, u, v, hist_y, hist_u, hist_v, qps_arr[e + 1])
       let p_nal = if cabac {
         match
           enc.encode_p_frame_cabac(
@@ -4488,6 +4938,41 @@ fn h264_encode_frames_b(
       let p_u = h264_b_copy_plane(enc.rec_u)
       let p_v = h264_b_copy_plane(enc.rec_v)
       let p_infos = h264_b_colocated_from_states(states)
+      // The coded P enters the reference history (newest first); the B
+      // picture below reads the PAST entries (`hist_[1..]`) as its list 0.
+      hist_y.insert(0, p_y)
+      hist_u.insert(0, p_u)
+      hist_v.insert(0, p_v)
+      let hist_cap = (multi_ref + 1).min(16)
+      if hist_y.length() > hist_cap {
+        hist_y.truncate(hist_cap)
+        hist_u.truncate(hist_cap)
+        hist_v.truncate(hist_cap)
+      }
+      // The B picture's list 0: the past entries of the history (its
+      // future P parks at the head) — newest first, up to `multi_ref`.
+      let past_y : Array[Array[Int32]] = []
+      let past_u : Array[Array[Int32]] = []
+      let past_v : Array[Array[Int32]] = []
+      let pasts : Array[H264RefPic] = []
+      for i in 1..<hist_y.length() {
+        let j = i - 1
+        past_y.push(hist_y[i])
+        past_u.push(hist_u[i])
+        past_v.push(hist_v[i])
+        pasts.push(
+          h264_b_refpic(
+            hist_y[i],
+            hist_u[i],
+            hist_v[i],
+            ystride,
+            cstride,
+            pheight,
+            (e - 1 - j * 2) * 2,
+            j,
+          ),
+        )
+      }
       // ---- B picture at display position e ----
       let (by, bu, bv) = frames[e]
       let b_src_y = h264_enc_load_plane(
@@ -4528,13 +5013,13 @@ fn h264_encode_frames_b(
         rec_y: Array::make(ystride * pheight, 0),
         rec_u: Array::make(cstride * (pheight / 2), 0),
         rec_v: Array::make(cstride * (pheight / 2), 0),
-        ref_y,
-        ref_u,
-        ref_v,
-        refs_y: [ref_y],
-        refs_u: [ref_u],
-        refs_v: [ref_v],
-        nrefs: 1,
+        ref_y: past_y[0],
+        ref_u: past_u[0],
+        ref_v: past_v[0],
+        refs_y: past_y,
+        refs_u: past_u,
+        refs_v: past_v,
+        nrefs: past_y.length(),
         cur_ref_mb: 0,
         ystride,
         cstride,
@@ -4566,16 +5051,6 @@ fn h264_encode_frames_b(
         weightp: false,
         pwt: new_h264_pred_weight(),
       }
-      let past_pic = h264_b_refpic(
-        ref_y,
-        ref_u,
-        ref_v,
-        ystride,
-        cstride,
-        pheight,
-        (e - 1) * 2,
-        0,
-      )
       let fut_pic = h264_b_refpic(
         p_y,
         p_u,
@@ -4599,7 +5074,7 @@ fn h264_encode_frames_b(
         p.qp_ext(qps_arr[e]),
         ystride,
         cstride,
-        past_pic,
+        pasts,
         fut_pic,
         p_infos,
         b_enc.rec_y,
@@ -4611,20 +5086,12 @@ fn h264_encode_frames_b(
 
       let b_nal = if cabac {
         match
-          b_enc.encode_b_frame_cabac(
-            mirror,
-            ref_y,
-            p_y,
-            fn_counter,
-            (e * 2) & 15,
-            aq,
-          ) {
+          b_enc.encode_b_frame_cabac(mirror, p_y, fn_counter, (e * 2) & 15, aq) {
           Ok(x) => x
           Err(er) => return Err(er)
         }
       } else {
-        match
-          b_enc.encode_b_frame(mirror, ref_y, p_y, fn_counter, (e * 2) & 15, aq) {
+        match b_enc.encode_b_frame(mirror, p_y, fn_counter, (e * 2) & 15, aq) {
           Ok(x) => x
           Err(er) => return Err(er)
         }
@@ -4661,18 +5128,16 @@ fn h264_encode_frames_b(
           bit_depth~,
         ),
       )
-      // The new reference picture becomes the past of everything after
-      // the B picture (which still reads the PREVIOUS reference as its
-      // list 0: display e's B sits between e-1's and e+1's references).
-      ref_y = p_y
-      ref_u = p_u
-      ref_v = p_v
+      // The new reference picture already entered the history above; it
+      // becomes the past of everything after the B picture (which read
+      // the PREVIOUS references as its list 0: display e's B sits between
+      // e-1's and e+1's references).
       e = e + 2
     } else {
       // ---- trailing P picture (a lone last B has no future) ----
       fn_counter = fn_counter + 1
       let (y, u, v) = frames[e]
-      let enc = new_p_encoder(y, u, v, ref_y, ref_u, ref_v, qps_arr[e])
+      let enc = new_p_encoder(y, u, v, hist_y, hist_u, hist_v, qps_arr[e])
       let p_nal = if cabac {
         match
           enc.encode_p_frame_cabac(fn_counter, false, poc_lsb=(e * 2) & 15) {

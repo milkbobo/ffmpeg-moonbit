@@ -106,8 +106,9 @@ test "h264 keyint: unsupported combinations fail explicitly" {
   for
     config in [
       { ..base, keyint: -1, },
-      { ..base, keyint: 2, target_bytes: 1000, multi_ref: 2, },
-      { ..base, keyint: 2, multi_ref: 2, },
+      // `§418` made keyint x multi_ref (with and without the batch rate
+      // controls) legal — see h264_enc_b_multiref_test.mbt for the
+      // positive coverage; ABR x VBV stays mutually exclusive.
       {
         ..base,
         keyint: 2,
