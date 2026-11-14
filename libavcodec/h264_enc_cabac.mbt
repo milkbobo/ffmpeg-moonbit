@@ -816,7 +816,7 @@ pub fn h264_encode_intra_frame_cabac(
   /// `§410`: explicit P weighted prediction (the PPS carries
   /// `weighted_pred_flag = 1`; the P slice headers carry the table).
   weightp~ : Bool = false,
-  /// `§412`: 8 (default), 9 or 10 bits (`yuv420p10le` input above 8).
+  /// `§412`/`§419`: 8 (default), 9, 10, 12 or 14 bits (`yuv420p10le` input above 8).
   bit_depth~ : Int32 = 8,
   /// `§415`: the sequence's P-slice reference count (parameter sets).
   multi_ref~ : Int32 = 1,
@@ -831,7 +831,9 @@ pub fn h264_encode_intra_frame_cabac(
     return Err("h264 enc: qp out of range")
   }
   if !h264_enc_bit_depth_ok(bit_depth) {
-    return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
+    return Err(
+      "h264 enc: unsupported bit depth \{bit_depth} (8, 9, 10, 12 or 14)",
+    )
   }
   if y.length() != h264_enc_plane_bytes(width, height, bit_depth) ||
     u.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) ||
@@ -3167,7 +3169,7 @@ pub fn h264_encode_frames_cabac(
   /// `§410`: explicit P weighted prediction; default on since `§413`
   /// (`weightp=false` restores the pre-§410 byte-identical path).
   weightp~ : Bool = true,
-  /// `§412`: 8 (default), 9 or 10 bits (`yuv420p10le` frames above 8).
+  /// `§412`/`§419`: 8 (default), 9, 10, 12 or 14 bits (`yuv420p10le` frames above 8).
   bit_depth~ : Int32 = 8,
   /// `§415`: P-slice multi-reference history depth (see
   /// `h264_encode_frames`). Requires `b_slices=false`; supports
@@ -3178,7 +3180,9 @@ pub fn h264_encode_frames_cabac(
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
   if !h264_enc_bit_depth_ok(bit_depth) {
-    return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
+    return Err(
+      "h264 enc: unsupported bit depth \{bit_depth} (8, 9, 10, 12 or 14)",
+    )
   }
   if frames.length() == 0 {
     return Err("h264 enc: no frames")

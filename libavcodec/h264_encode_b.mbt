@@ -3242,11 +3242,21 @@ fn H264PEncoder::decide_b_mb(
   }
   // Re-establish the winner's prediction.
   match plan {
-    BDirect16 =>
+    BDirect16 => {
+      // Re-derive every quadrant's direct motion first: a LATER candidate
+      // trial (the sub-partition kinds run after direct) overwrote the
+      // per-block cells with its own motion, while the decoder re-derives
+      // direct from the syntax at parse — compensating from the stale
+      // cells would predict some quadrants from the trial's MVs.
+      match h264_b_direct(mirror, mb_idx, [true, true, true, true]) {
+        Ok(_) => ()
+        Err(e) => return Err("h264 enc b: direct re-derive failed: \{e}")
+      }
       match h264_b_compensate(mirror, mb_idx) {
         Ok(_) => ()
         Err(e) => return Err("h264 enc b: direct re-MC failed: \{e}")
       }
+    }
     BL0x16(x, y, rf) => self.mc_b_uni_into_rec(mirror, 0, rf, mb_x, mb_y, x, y)
     BL1x16(x, y) => self.mc_b_uni_into_rec(mirror, 1, 0, mb_x, mb_y, x, y)
     BBi16(a, b, rf, c, d) =>
@@ -4649,7 +4659,7 @@ fn h264_encode_frames_b(
   stats~ : H264EncStats,
   /// B-slice flags.
   weightp~ : Bool = false,
-  /// `§412`: 8 (default), 9 or 10 bits (`yuv420p10le` frames above 8).
+  /// `§412`/`§419`: 8 (default), 9, 10, 12 or 14 bits (`yuv420p10le` frames above 8).
   bit_depth~ : Int32 = 8,
   /// Reference history depth for the P pictures and list 0 of the B
   /// pictures (`§418`): 1 keeps the single-reference streams bit-identical;
@@ -4664,7 +4674,9 @@ fn h264_encode_frames_b(
   }
   let n = frames.length()
   if !h264_enc_bit_depth_ok(bit_depth) {
-    return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
+    return Err(
+      "h264 enc: unsupported bit depth \{bit_depth} (8, 9, 10, 12 or 14)",
+    )
   }
   let qps_arr = if qps.length() == n { qps } else { Array::make(n, qp) }
   let (y0, u0, v0) = frames[0]

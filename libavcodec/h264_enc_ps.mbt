@@ -223,7 +223,7 @@ fn h264_enc_write_sps(
 }
 
 ///|
-/// High-family SPS body (profile_idc 100 High, or 110 High 10 above 8 bits):
+/// High-family SPS body (profile_idc 100 High / 110 High 10 / 244 Hi444PP):
 /// the High family inserts the chroma_format_idc / bit-depth block after
 /// seq_parameter_set_id; no scaling matrix is signalled (seq flag 0), so the
 /// flat-16 default lists stay active on both sides. No constraint flags: the

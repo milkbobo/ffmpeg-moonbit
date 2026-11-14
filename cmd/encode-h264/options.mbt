@@ -122,8 +122,12 @@ fn parse_options(args : Array[String]) -> Options raise {
   let height = number(values, "--height", 0)
   let qp = number(values, "--qp", 26)
   let bit_depth = number(values, "--bit-depth", 8)
-  if bit_depth != 8 && bit_depth != 9 && bit_depth != 10 {
-    fail("encode-h264: bit-depth must be 8, 9 or 10")
+  if bit_depth != 8 &&
+    bit_depth != 9 &&
+    bit_depth != 10 &&
+    bit_depth != 12 &&
+    bit_depth != 14 {
+    fail("encode-h264: bit-depth must be 8, 9, 10, 12 or 14")
   }
   let codec = match values.get("--codec") {
     None => @codec.VideoCodec::default()

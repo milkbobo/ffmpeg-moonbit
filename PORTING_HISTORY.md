@@ -13509,3 +13509,31 @@ toggle 场景 9 帧流 FFmpeg 逐帧一致并永久钉值。
 multi_ref/在线 B VBV×multi_ref/FFmpeg 仲裁锚点）；全族 28 文件 + CLI
 25/25；`moon check --target wasm --deny-warn`、`moon fmt`、git diff --check
 通过。仍拒收：流式 ABR（不变）。
+
+## §419 H.264 编码器 12/14-bit——Hi444PP 面 + BDirect16 胜者重建脏 cell 收口（2026-11-14）
+
+接续 §418。编码器深度面从 {8,9,10} 扩到 {8,9,10,12,14}：>10 bit 时参数集切
+High 4:4:4 Predictive（profile_idc 244——bit_depth_luma_minus8 上限 6 的唯一
+profile，即使仍是 4:2:0），SPS/PPS/IDR 透传链与量化/去块/chroma_qp 全部沿用
+§412 的深度泛化（qp_ext 最大 87、qbits 最大 29、Int64 中间量）。11/13 保持
+拒收（本仓解码器与 FFmpeg 一致 PATCHWELCOME）。CLI --bit-depth 与
+video_pixel_format 同步（yuv420p12le/14le）。
+
+真 bug（潜伏期，非本轮引入）：`decide_b_mb` 的胜者重建对 BDirect16 只跑
+`h264_b_compensate` 不重跑 `h264_b_direct`——更晚的子分区候选（k=22 等）把
+per-block cell 覆写成自己的运动，而解码器解析 k=0 时全象限重新推导 direct；
+补偿从脏 cell 读 MV 时部分象限按试验 MV 预测（本地 recon≠解码，且错值随
+intra 邻居级联）。触发形态罕见（direct 胜出且其后的 k=22 候选在分歧象限
+恰好是纯 L1 子分区），14-bit 的决策标度才首次选中；流本身始终合法
+（FFmpeg 零告警、本仓解码器=FFmpeg 逐帧全等，编码器 recon 是唯一异类）。
+修复：胜者路径 BDirect16 先 `h264_b_direct` 重推导再补偿。§418 同族
+（「试价后落选仍留状态」家族第三个实例——§416 教训④的 direct 版）。
+
+仲裁：ARBH12（CAVLC 12-bit）/ARBH14（CABAC 14-bit）6 帧流 docker FFmpeg
+`-v warning -threads 1 -f framemd5` 零告警、显示序逐帧 md5 全等后永久钉值。
+门：新专项 5 项（round-trip 双熵双深度/流式=批式字节恒等/全工具组合×
+multi_ref×AQ×AUD/11·13·7·15·16 拒收/FFmpeg 锚点）；全族 29 文件
+104+89=193/193 + CLI 25/25（bit-depth 测试加 12/14 legs，SPS profile 断言
+参数化 110/244）；`moon check --target wasm --deny-warn`、`moon fmt`、
+git diff --check 通过。修复零钉值扰动（语法不变，仅本地 recon 修正）。
+仍拒收：流式 ABR（不变）。

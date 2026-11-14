@@ -137,7 +137,7 @@ pub fn h264_encode_intra_frame(
   /// `weighted_pred_flag = 1` and every P slice header a fitted
   /// `pred_weight_table()`; off, the stream stays byte-identical.
   weightp~ : Bool = false,
-  /// `§412`: 8 (default), 9 or 10 bits. Above 8 the input planes are
+  /// `§412`/`§419`: 8 (default), 9, 10, 12 or 14 bits. Above 8 the input planes are
   /// little-endian 16-bit samples (`yuv420p10le`) and the SPS switches to
   /// High 10 (profile_idc 110); `qp` keeps its 8-bit meaning.
   bit_depth~ : Int32 = 8,
@@ -155,7 +155,9 @@ pub fn h264_encode_intra_frame(
     return Err("h264 enc: qp out of range")
   }
   if !h264_enc_bit_depth_ok(bit_depth) {
-    return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
+    return Err(
+      "h264 enc: unsupported bit depth \{bit_depth} (8, 9, 10, 12 or 14)",
+    )
   }
   if y.length() != h264_enc_plane_bytes(width, height, bit_depth) ||
     u.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) ||

@@ -313,7 +313,8 @@ fn bit_depth_leg(bd : Int32) -> Unit raise {
   assert_eq(count, 2)
   let (streamed, _) = encode_raw_stream(raw, opts)
   assert_eq(streamed, batch)
-  assert_eq(batch[5], b'\x6e') // High 10 profile_idc 110
+  // High 10 (110) through 10 bits, Hi444PP (244) above (`§419`).
+  assert_eq(batch[5], if bd > 10 { b'\xf4' } else { b'\x6e' })
   let decoded = match @codec.h264_decode_annexb_frames(batch, false) {
     Ok(frames) => frames
     Err(e) => fail(e)
@@ -349,6 +350,11 @@ test "CLI bit-depth parses, reaches both paths, rejects bad depths" {
   // decoder round-trips at the configured depth.
   bit_depth_leg(9)
   bit_depth_leg(10)
+  // `§419`: 12/14-bit legs reach both paths with Hi444PP (244) parameter
+  // sets; 13 stays in the rejected list above (the reference decoder
+  // PATCHWELCOMEs it).
+  bit_depth_leg(12)
+  bit_depth_leg(14)
 }
 
 ///|

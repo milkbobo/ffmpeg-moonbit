@@ -139,7 +139,7 @@ pub fn H264StreamEncoder::open(
   /// Opt-in in `§410`; default on since `§413` (`weightp=false` restores
   /// the unweighted headers).
   weightp~ : Bool = true,
-  /// `§412`: 8 (default), 9 or 10 bits; above 8 the pushed frames are
+  /// `§412`/`§419`: 8 (default), 9, 10, 12 or 14 bits; above 8 the pushed frames are
   /// `yuv420p10le` planes and the SPS is High 10 (profile_idc 110).
   bit_depth~ : Int32 = 8,
   /// `§415`: P-slice multi-reference history depth (1 = single reference).

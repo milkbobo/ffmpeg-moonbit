@@ -296,7 +296,7 @@ pub fn h264_encode_frames(
   /// (skip runs included). Default on since `§413`; `weightp=false` keeps
   /// the PPS/slice headers byte-identical to the pre-§410 streams.
   weightp~ : Bool = true,
-  /// `§412`: 8 (default), 9 or 10 bits; above 8 the frames are
+  /// `§412`/`§419`: 8 (default), 9, 10, 12 or 14 bits; above 8 the frames are
   /// `yuv420p10le` (little-endian 16-bit planes) and the SPS is High 10.
   bit_depth~ : Int32 = 8,
   /// `§415`: P-slice multi-reference history depth (1 = the
@@ -308,7 +308,9 @@ pub fn h264_encode_frames(
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
   if !h264_enc_bit_depth_ok(bit_depth) {
-    return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
+    return Err(
+      "h264 enc: unsupported bit depth \{bit_depth} (8, 9, 10, 12 or 14)",
+    )
   }
   if frames.length() == 0 {
     return Err("h264 enc: no frames")

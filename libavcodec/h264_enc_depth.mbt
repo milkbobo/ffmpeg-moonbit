@@ -29,19 +29,28 @@ fn h264_enc_max_sample(bit_depth : Int32) -> Int32 {
 }
 
 ///|
-/// Encoder bit depths in scope: 8 (Baseline/Main/High) plus 9 and 10
-/// (High 10, profile_idc 110). The encoder is 4:2:0 only, so the
-/// High 4:2:2 / 4:4:4 profiles (which would allow 12/14 bits) are out of
-/// scope and rejected rather than half-supported.
+/// Encoder bit depths in scope (`§419`): 8 (Baseline/Main/High), 9 and 10
+/// (High 10, profile_idc 110) plus 12 and 14 (High 4:4:4 Predictive,
+/// profile_idc 244 — the only profile with `bit_depth_luma_minus8` up to 6,
+/// even at 4:2:0). 11/13 stay rejected: the reference decoder
+/// PATCHWELCOMEs them (h264_ps.mbt's parity check). The encoder remains
+/// 4:2:0 only; 4:2:2/4:4:4 chroma is out of scope.
 fn h264_enc_bit_depth_ok(bit_depth : Int32) -> Bool {
-  bit_depth == 8 || bit_depth == 9 || bit_depth == 10
+  bit_depth == 8 ||
+  bit_depth == 9 ||
+  bit_depth == 10 ||
+  bit_depth == 12 ||
+  bit_depth == 14
 }
 
 ///|
-/// profile_idc of the parameter sets: 110 (High 10) above 8 bits, else the
-/// caller's 8-bit profile (66 Baseline / 77 Main / 100 High).
+/// profile_idc of the parameter sets: 244 (High 4:4:4 Predictive) above 10
+/// bits, 110 (High 10) at 9/10, else the caller's 8-bit profile
+/// (66 Baseline / 77 Main / 100 High).
 fn h264_enc_profile_idc(bit_depth : Int32, base : Int32) -> Int32 {
-  if bit_depth > 8 {
+  if bit_depth > 10 {
+    244
+  } else if bit_depth > 8 {
     110
   } else {
     base
