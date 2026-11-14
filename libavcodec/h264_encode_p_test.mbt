@@ -114,8 +114,8 @@ test "h264 enc: static scene codes as pure skip run" {
 /// The decoder emits pictures in decode order; docker ffmpeg's framemd5
 /// reorders to display order, so every source comparison goes through
 /// this map (n=4: I0,P2,B1,P3; n=6: I0,P2,B1,P4,B3,P5).
-fn h264p_decode_to_display(n : Int) -> Array[Int] {
-  let order : Array[Int] = [0]
+fn h264p_decode_to_display(n : Int32) -> Array[Int32] {
+  let order : Array[Int32] = [0]
   let mut e = 1
   while e < n {
     if e + 1 < n {
@@ -242,8 +242,8 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
     by_display[disp[d]] = f
   }
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "fe024801f9edddf9772c44c365c5ae25", "5a11f5b10c0fe07851e633d806d9a94b",
-    "125367a315f5e083ad159459eab74da7",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "128850f58ad90cbd2e4b8a3e24168a06", "d37c3e1a348172ef64b786e030e5084c",
+    "ad098e2b25d81fe47e29d38627b5c549",
   ]
   for i, f in by_display {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
@@ -284,8 +284,8 @@ test "h264 enc: ffmpeg-arbitrated RD six frames (96x64, QP 24)" {
     by_display[disp[d]] = f
   }
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "fe024801f9edddf9772c44c365c5ae25", "5a11f5b10c0fe07851e633d806d9a94b",
-    "2db3868d82a77e893f1f857e71dcd2ad", "7d22163859621d1dedb36c1a7f4221e6", "f0c7494c788f6cf245fedd3e3503dc36",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "128850f58ad90cbd2e4b8a3e24168a06", "d37c3e1a348172ef64b786e030e5084c",
+    "6389532064b5c2317a51450c8e719292", "750e2cc3ee0053390a7b168305b86c2f", "fca2b07dd7d0bb815acd3c2f0b291362",
   ]
   for i, f in by_display {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
@@ -365,7 +365,7 @@ test "h264 enc: RD operating point beats the SAD chain" {
     for row = 0; row < 64; row = row + 1 {
       for col = 0; col < 96; col = col + 1 {
         let diff = y[row * 96 + col].to_int() - r.y[row * r.ystride + col]
-        se_sum = se_sum + (diff.to_double() * diff.to_double())
+        se_sum = se_sum + diff.to_double() * diff.to_double()
       }
     }
   }

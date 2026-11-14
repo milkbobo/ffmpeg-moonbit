@@ -1,6 +1,6 @@
 ///|
 /// Pure-MoonBit H.264 CABAC encoder, slice 3 of the port: Main profile
-/// (profile_idc 77), 4:2:0 8-bit, single slice, one reference.
+/// (profile_idc 77), 4:2:0, single slice, P-slice reference history.
 ///
 /// Porting discipline (same as the CAVLC slices): the arithmetic encoder
 /// core mirrors the reference encoder already verified bit-exactly against
@@ -22,7 +22,8 @@
 /// derived from mb_type's group, so no cbp bins exist there. I_PCM stays
 /// a CAVLC-path feature. P slices code P_Skip plus the four inter
 /// partitions with the same rate-distortion plan decision as the CAVLC
-/// encoder (`decide_plan`). Single L0 reference, so no `ref_idx` syntax;
+/// encoder (`decide_plan`). Multiple L0 references code `ref_idx` before
+/// motion differences and preserve each partition's index in the mirror;
 /// `mb_qp_delta` carries the opt-in adaptive-quantisation offset against
 /// the mirror's running qscale (the decoder reads it when cbp != 0 or the
 /// macroblock is I16x16; with AQ off it is always the zero bin).
@@ -652,7 +653,7 @@ fn h264_enc_sps_rbsp_main(p : H264EncParams, vbv~ : H264Vbv? = None) -> Bytes {
   r.put_ue(0) // seq_parameter_set_id
   r.put_ue(0) // log2_max_frame_num_minus4
   r.put_ue(2) // pic_order_cnt_type = 2
-  r.put_ue(1) // max_num_ref_frames
+  r.put_ue(p.nrefs) // max_num_ref_frames
   r.put_bit(0) // gaps_in_frame_num_value_allowed_flag
   r.put_ue(p.mb_width() - 1)
   r.put_ue(p.mb_height() - 1)
@@ -702,7 +703,7 @@ fn h264_enc_pps_rbsp_cabac(
   r.put_bit(1) // entropy_coding_mode_flag: CABAC
   r.put_bit(0) // bottom_field_pic_order_in_frame_present_flag
   r.put_ue(0) // num_slice_groups_minus1
-  r.put_ue(0) // num_ref_idx_l0_default_active_minus1
+  r.put_ue(p.nrefs - 1) // num_ref_idx_l0_default_active_minus1
   r.put_ue(0) // num_ref_idx_l1_default_active_minus1
   r.put_bit(if weightp { 1 } else { 0 }) // weighted_pred_flag
   r.put(0, 2) // weighted_bipred_idc
@@ -809,6 +810,8 @@ pub fn h264_encode_intra_frame_cabac(
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   vbv~ : H264Vbv? = None,
+  /// HRD ticks since the preceding buffering period (zero at stream start).
+  idr_cpb_delay~ : Int32 = 0,
   b_seq~ : Bool = false,
   /// `§410`: explicit P weighted prediction (the PPS carries
   /// `weighted_pred_flag = 1`; the P slice headers carry the table).
@@ -831,8 +834,7 @@ pub fn h264_encode_intra_frame_cabac(
     return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
   }
   if y.length() != h264_enc_plane_bytes(width, height, bit_depth) ||
-    u.length() !=
-    h264_enc_plane_bytes(width / 2, height / 2, bit_depth) ||
+    u.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) ||
     v.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) {
     return Err("h264 enc: plane size mismatch")
   }
@@ -849,7 +851,7 @@ pub fn h264_encode_intra_frame_cabac(
     },
     level_idc,
     bit_depth,
-    nrefs: 1,
+    nrefs: multi_ref,
   }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
@@ -858,7 +860,7 @@ pub fn h264_encode_intra_frame_cabac(
   let pheight = mb_height * 16
   let ps = new_h264_param_sets()
   let sps_rbsp = if b_seq {
-    h264_enc_sps_rbsp_b(p, dct8x8~)
+    h264_enc_sps_rbsp_b(p, dct8x8~, vbv~)
   } else if dct8x8 || p.bit_depth > 8 {
     h264_enc_sps_rbsp_high(p, vbv~)
   } else {
@@ -1001,7 +1003,13 @@ pub fn h264_encode_intra_frame_cabac(
     None => ()
     Some(v) => {
       au.push(h264_enc_sei_buffering_period(v))
-      au.push(h264_enc_sei_pic_timing(v, 0))
+      au.push(
+        h264_enc_sei_pic_timing(
+          v,
+          idr_cpb_delay,
+          dpb_output_delay=if b_seq { 2 } else { 0 },
+        ),
+      )
     }
   }
   au.push(slice_nal)
@@ -1488,9 +1496,23 @@ fn H264CabacIEnc::encode_macroblock(
     if total != 0 {
       luma_cbp = luma_cbp | (1 << (i / 4))
       if total == 1 && mb[16 * i] != 0 {
-        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+        h264_idct_dc_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          16 * i,
+          bit_depth=self.p.bit_depth,
+        )
       } else {
-        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+        h264_idct_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          16 * i,
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
   }
@@ -1614,27 +1636,45 @@ fn H264CabacIEnc::encode_macroblock(
     // an IDCT-add over any non-zero AC count, else a DC cover for the
     // dequantised DC slot the scatter left.
     if luma_dc_total > 0 {
-      h264_luma_dc_dequant_idct(mb, 0, luma_dc_store, 0, qmul_y[0], bit_depth=self.p.bit_depth)
+      h264_luma_dc_dequant_idct(
+        mb,
+        0,
+        luma_dc_store,
+        0,
+        qmul_y[0],
+        bit_depth=self.p.bit_depth,
+      )
     }
     for i = 0; i < 16; i = i + 1 {
       let gx = h264_luma_block_x[i]
       let gy = h264_luma_block_y[i]
       let off = ybase + gy * 4 * self.ystride + gx * 4
       if i16_ac_nz[gy * 4 + gx] != 0 {
-        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+        h264_idct_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          16 * i,
+          bit_depth=self.p.bit_depth,
+        )
       } else if mb[16 * i] != 0 {
-        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+        h264_idct_dc_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          16 * i,
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
   }
   // Chroma cbp decision (below 2 the decoder never sees the AC levels).
-  let chroma_c_cbp = if chroma_dc_nz[0] || chroma_dc_nz[1] {
-    let any_ac = chroma_ac_nz_count(chroma_ac_store)
-    if any_ac {
-      2
-    } else {
-      1
-    }
+  let chroma_c_cbp = if chroma_ac_nz_count(chroma_ac_store) {
+    2
+  } else if chroma_dc_nz[0] || chroma_dc_nz[1] {
+    1
   } else {
     0
   }
@@ -1653,7 +1693,12 @@ fn H264CabacIEnc::encode_macroblock(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=self.p.bit_depth)
+      h264_chroma_dc_dequant_idct(
+        mb,
+        256 + 256 * c,
+        qmul_c[c][0],
+        bit_depth=self.p.bit_depth,
+      )
     }
     for i = 0; i < 4; i = i + 1 {
       let bx = i % 2 * 4
@@ -1666,9 +1711,23 @@ fn H264CabacIEnc::encode_macroblock(
         0
       }
       if nzv != 0 {
-        h264_idct_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
+        h264_idct_add(
+          plane,
+          off,
+          self.cstride,
+          mb,
+          bo,
+          bit_depth=self.p.bit_depth,
+        )
       } else if mb[bo] != 0 {
-        h264_idct_dc_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
+        h264_idct_dc_add(
+          plane,
+          off,
+          self.cstride,
+          mb,
+          bo,
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
   }
@@ -2032,7 +2091,19 @@ fn H264PEncoder::cabac_mvd_partition(
   let (tamvd0, tamvd1) = h264_mvd_fetch(ctx, mb_idx, mb_x, mb_y, bx, by - 1)
   let absx = h264_cabacw_mvd_one(enc, states, 40, lamvd0 + tamvd0, mvx - pmvx)
   let absy = h264_cabacw_mvd_one(enc, states, 47, lamvd1 + tamvd1, mvy - pmvy)
-  h264_write_back_part(ctx, mb_idx, bx, by, bw, bh, mvx, mvy, 0, absx, absy)
+  h264_write_back_part(
+    ctx,
+    mb_idx,
+    bx,
+    by,
+    bw,
+    bh,
+    mvx,
+    mvy,
+    self.cur_ref_mb,
+    absx,
+    absy,
+  )
   self.fill_part(bx, by, bw, bh, mvx, mvy)
 }
 
@@ -2468,11 +2539,29 @@ fn H264PEncoder::write_cabac_mb_syntax(
       enc.decision(states, 15, 0)
       enc.decision(states, 16, 0)
       h264_cabac_put_ref(
-        self, enc, states, ctx, mb_idx, mb_x, mb_y, 0, 0,
-        self.cur_ref_mb, self.p.nrefs,
+        self,
+        enc,
+        states,
+        ctx,
+        mb_idx,
+        mb_x,
+        mb_y,
+        0,
+        0,
+        self.cur_ref_mb,
+        self.nrefs,
       )
       h264_write_back_ref(ctx, mb_idx, 0, 0, 4, 4, self.cur_ref_mb)
-      let (pmvx, pmvy) = h264_pred_motion(ctx, mb_idx, mb_x, mb_y, 0, 0, 4, self.cur_ref_mb)
+      let (pmvx, pmvy) = h264_pred_motion(
+        ctx,
+        mb_idx,
+        mb_x,
+        mb_y,
+        0,
+        0,
+        4,
+        self.cur_ref_mb,
+      )
       self.cabac_mvd_partition(
         ctx, enc, states, mb_idx, mb_x, mb_y, 0, 0, 4, 4, pmvx, pmvy, mvx, mvy,
       )
@@ -2483,21 +2572,50 @@ fn H264PEncoder::write_cabac_mb_syntax(
       enc.decision(states, 14, 0)
       enc.decision(states, 15, 1)
       enc.decision(states, 17, 1)
-      // `§415`: both reference indices precede the mvd pairs.
+      // `§417`: each partition's reference index is written back BEFORE
+      // the next partition's context derivation runs — the decoder
+      // interleaves read and write-back exactly so, and the writer must
+      // mirror that ordering (the `§415` batch-then-write-back form made
+      // partition 1's context read a different neighbour state once
+      // partition 0's ref was nonzero, desyncing the engine bins).
       h264_cabac_put_ref(
-        self, enc, states, ctx, mb_idx, mb_x, mb_y, 0, 0,
-        self.cur_ref_mb, self.p.nrefs,
+        self,
+        enc,
+        states,
+        ctx,
+        mb_idx,
+        mb_x,
+        mb_y,
+        0,
+        0,
+        self.cur_ref_mb,
+        self.nrefs,
       )
+      h264_write_back_ref(ctx, mb_idx, 0, 0, 4, 2, self.cur_ref_mb)
       h264_cabac_put_ref(
-        self, enc, states, ctx, mb_idx, mb_x, mb_y, 0, 2,
-        self.cur_ref_mb, self.p.nrefs,
+        self,
+        enc,
+        states,
+        ctx,
+        mb_idx,
+        mb_x,
+        mb_y,
+        0,
+        2,
+        self.cur_ref_mb,
+        self.nrefs,
       )
-      for i = 0; i < 2; i = i + 1 {
-        h264_write_back_ref(ctx, mb_idx, 0, 2 * i, 4, 2, self.cur_ref_mb)
-      }
+      h264_write_back_ref(ctx, mb_idx, 0, 2, 4, 2, self.cur_ref_mb)
       for i = 0; i < 2; i = i + 1 {
         let by = 2 * i
-        let (pmvx, pmvy) = h264_pred_16x8_motion(ctx, mb_idx, mb_x, mb_y, i, self.cur_ref_mb)
+        let (pmvx, pmvy) = h264_pred_16x8_motion(
+          ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          i,
+          self.cur_ref_mb,
+        )
         let (mvx, mvy) = if i == 0 { (tx, ty) } else { (bx2, by2) }
         self.cabac_mvd_partition(
           ctx, enc, states, mb_idx, mb_x, mb_y, 0, by, 4, 2, pmvx, pmvy, mvx, mvy,
@@ -2513,19 +2631,43 @@ fn H264PEncoder::write_cabac_mb_syntax(
       enc.decision(states, 15, 1)
       enc.decision(states, 17, 0)
       h264_cabac_put_ref(
-        self, enc, states, ctx, mb_idx, mb_x, mb_y, 0, 0,
-        self.cur_ref_mb, self.p.nrefs,
+        self,
+        enc,
+        states,
+        ctx,
+        mb_idx,
+        mb_x,
+        mb_y,
+        0,
+        0,
+        self.cur_ref_mb,
+        self.nrefs,
       )
+      h264_write_back_ref(ctx, mb_idx, 0, 0, 2, 4, self.cur_ref_mb)
       h264_cabac_put_ref(
-        self, enc, states, ctx, mb_idx, mb_x, mb_y, 2, 0,
-        self.cur_ref_mb, self.p.nrefs,
+        self,
+        enc,
+        states,
+        ctx,
+        mb_idx,
+        mb_x,
+        mb_y,
+        2,
+        0,
+        self.cur_ref_mb,
+        self.nrefs,
       )
-      for i = 0; i < 2; i = i + 1 {
-        h264_write_back_ref(ctx, mb_idx, 2 * i, 0, 2, 4, self.cur_ref_mb)
-      }
+      h264_write_back_ref(ctx, mb_idx, 2, 0, 2, 4, self.cur_ref_mb)
       for i = 0; i < 2; i = i + 1 {
         let bx = 2 * i
-        let (pmvx, pmvy) = h264_pred_8x16_motion(ctx, mb_idx, mb_x, mb_y, i, self.cur_ref_mb)
+        let (pmvx, pmvy) = h264_pred_8x16_motion(
+          ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          i,
+          self.cur_ref_mb,
+        )
         let (mvx, mvy) = if i == 0 { (lx, ly) } else { (rx, ry) }
         self.cabac_mvd_partition(
           ctx, enc, states, mb_idx, mb_x, mb_y, bx, 0, 2, 4, pmvx, pmvy, mvx, mvy,
@@ -2544,25 +2686,55 @@ fn H264PEncoder::write_cabac_mb_syntax(
       for k = 0; k < 4; k = k + 1 {
         h264_cabacw_sub_type(enc, states, subs[k])
       }
-      // `§415`: the four reference indices follow the sub types, before
-      // any mvd (the decoder reads them in the same batch).
+      // `§417`: one interleaved loop — the decoder reads group k's
+      // reference index, writes back its three non-top-left cells and
+      // clears the top-left, and only then derives group k+1's context
+      // (which reads those cells). Batching the reads first (the `§415`
+      // form) desynced the context indices for every group after the
+      // first with a nonzero ref.
       for k = 0; k < 4; k = k + 1 {
         let x8 = k % 2
         let y8 = k / 2
         h264_cabac_put_ref(
-          self, enc, states, ctx, mb_idx, mb_x, mb_y, 2 * x8, 2 * y8,
-          self.cur_ref_mb, self.p.nrefs,
+          self,
+          enc,
+          states,
+          ctx,
+          mb_idx,
+          mb_x,
+          mb_y,
+          2 * x8,
+          2 * y8,
+          self.cur_ref_mb,
+          self.nrefs,
         )
-      }
-      // The decoder's ref_cache dance: three non-top-left cells per 8x8
-      // group plus the cleared top-left, then the top-left refill right
-      // before each group's mvd loop.
-      for k = 0; k < 4; k = k + 1 {
-        let x8 = k % 2
-        let y8 = k / 2
-        h264_write_back_ref(ctx, mb_idx, 2 * x8 + 1, 2 * y8, 1, 1, self.cur_ref_mb)
-        h264_write_back_ref(ctx, mb_idx, 2 * x8, 2 * y8 + 1, 1, 1, self.cur_ref_mb)
-        h264_write_back_ref(ctx, mb_idx, 2 * x8 + 1, 2 * y8 + 1, 1, 1, self.cur_ref_mb)
+        h264_write_back_ref(
+          ctx,
+          mb_idx,
+          2 * x8 + 1,
+          2 * y8,
+          1,
+          1,
+          self.cur_ref_mb,
+        )
+        h264_write_back_ref(
+          ctx,
+          mb_idx,
+          2 * x8,
+          2 * y8 + 1,
+          1,
+          1,
+          self.cur_ref_mb,
+        )
+        h264_write_back_ref(
+          ctx,
+          mb_idx,
+          2 * x8 + 1,
+          2 * y8 + 1,
+          1,
+          1,
+          self.cur_ref_mb,
+        )
         h264_clear_block(ctx, mb_idx, 2 * x8, 2 * y8)
       }
       let mut mi = 0
@@ -2773,10 +2945,9 @@ fn H264PEncoder::encode_p_frame_cabac(
   // which only rides `slice_qp_delta`.
   // `§416`: entries beyond the fitted one carry the denom-neutral
   // pair so their pred_weight_table flags stay 0 (the decoder then
-  // derives the identity transform itself). Bounded by the SYNTAX
-  // count `p.nrefs`, which leads the history length on the early
-  // pictures of a multi-reference sequence.
-  for i = 1; i < self.p.nrefs; i = i + 1 {
+  // derives the identity transform itself). The slice's active count
+  // follows the available history, including its initial warm-up.
+  for i = 1; i < self.nrefs; i = i + 1 {
     self.pwt.luma_weight_l0[i] = 1 << self.pwt.luma_log2_weight_denom
     self.pwt.luma_offset_l0[i] = 0
     self.pwt.chroma_weight_l0[i][0] = 1 << self.pwt.chroma_log2_weight_denom
@@ -2819,11 +2990,11 @@ fn H264PEncoder::encode_p_frame_cabac(
   if poc_lsb >= 0 {
     r.put(poc_lsb & 15, 4) // pic_order_cnt_lsb (POC type 0 sequences)
   }
-  r.put_bit(0) // num_ref_idx_active_override_flag
+  self.put_active_refs(r)
   r.put_bit(0) // ref_pic_list_modification_flag_l0
   // pred_weight_table (`weightp`), before dec_ref_pic_marking.
   if self.weightp {
-    h264_enc_put_pwt(r, self.pwt, nrefs=self.p.nrefs)
+    h264_enc_put_pwt(r, self.pwt, nrefs=self.nrefs)
   }
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
   r.put_ue(0) // cabac_init_idc
@@ -2875,11 +3046,18 @@ fn H264PEncoder::encode_p_frame_cabac(
         )
       }
       // P_Skip check with the prediction the decoder itself would derive.
+      // A previous macroblock may have selected an older reference.
+      // P_Skip always uses slot 0, including its distortion estimate.
+      self.cur_ref_mb = 0
+      self.ref_y = self.refs_y[0]
+      self.ref_u = self.refs_u[0]
+      self.ref_v = self.refs_v[0]
       let (pmvx, pmvy) = h264_pred_pskip_motion(mirror, mb_idx, mb_x, mb_y)
       let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
       // `intra_in_p` is opt-in: with it off the RD surface stays the
       // inter-only one from §382, so every pinned CABAC stream is unchanged.
-      let plan = if skip_sad == 0 {
+      let plan = if skip_sad == 0 &&
+        self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy) == 0 {
         Skip
       } else {
         self.decide_plan(mb_x, mb_y, intra_in_p)
@@ -2992,8 +3170,8 @@ pub fn h264_encode_frames_cabac(
   /// `§412`: 8 (default), 9 or 10 bits (`yuv420p10le` frames above 8).
   bit_depth~ : Int32 = 8,
   /// `§415`: P-slice multi-reference history depth (see
-  /// `h264_encode_frames`). Requires `b_slices=false`; the rate controls
-  /// do not support it yet.
+  /// `h264_encode_frames`). Requires `b_slices=false`; supports
+  /// `target_bytes` or VBV.
   multi_ref~ : Int32 = 1,
 ) -> Result[Bytes, String] {
   if aq_strength < 0 || aq_strength > 6 {
@@ -3009,12 +3187,9 @@ pub fn h264_encode_frames_cabac(
     return Err("h264 enc: multi_ref must be in 1..=16")
   }
   if multi_ref > 1 {
-    // `§416`: the CABAC ref_idx bins desync between the writer and the
-    // reader (residual parse diverges with `EINVAL`); the CAVLC path is
-    // fully verified (decode, recon invariant, streaming identity, ffmpeg
-    // arbitration). CABAC multi-reference stays rejected until the bin
-    // trace is done — see AGENT_HANDOFF §416.
-    return Err("h264 enc: multi_ref does not support CABAC yet")
+    if b_slices {
+      return Err("h264 enc: multi_ref does not support B slices yet")
+    }
   }
   // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
   // B picture, so it degrades to the I-only stream instead of erroring.
@@ -3092,34 +3267,40 @@ pub fn h264_encode_frames_cabac(
     match vbv_b {
       Some(v) => {
         let (qps, sizes) = match
-          h264_vbv_solve(frames.length(), qp, v, fn(trial) {
-            match
-              h264_encode_frames_b(
-                frames,
-                width~,
-                height~,
-                qp~,
-                level_idc~,
-                aq~,
-                aq_strength~,
-                aud~,
-                cabac=true,
-                cabac_rd~,
-                b_parts~,
-                intra_in_b~,
-                intra4x4_in_b~,
-                dct8x8~,
-                qps=trial,
-                recon=[],
-                stats=H264EncStats::new(),
-                vbv=Some(v),
-                weightp~,
-                bit_depth~,
-              ) {
-              Ok((_, sizes)) => Ok(sizes)
-              Err(e) => Err(e)
-            }
-          }) {
+          h264_vbv_solve(
+            frames.length(),
+            qp,
+            v,
+            fn(trial) {
+              match
+                h264_encode_frames_b(
+                  frames,
+                  width~,
+                  height~,
+                  qp~,
+                  level_idc~,
+                  aq~,
+                  aq_strength~,
+                  aud~,
+                  cabac=true,
+                  cabac_rd~,
+                  b_parts~,
+                  intra_in_b~,
+                  intra4x4_in_b~,
+                  dct8x8~,
+                  qps=trial,
+                  recon=[],
+                  stats=H264EncStats::new(),
+                  vbv=Some(v),
+                  weightp~,
+                  bit_depth~,
+                ) {
+                Ok((_, sizes)) => Ok(sizes)
+                Err(e) => Err(e)
+              }
+            },
+            coding_order=h264_b_coding_order(frames.length()),
+          ) {
           Ok(v) => v
           Err(e) => return Err(e)
         }
@@ -3222,6 +3403,7 @@ pub fn h264_encode_frames_cabac(
         stats~,
         weightp~,
         bit_depth~,
+        multi_ref~,
       )
     None => ()
   }
@@ -3315,6 +3497,7 @@ fn h264_encode_frames_vbv_cabac(
   weightp~ : Bool = false,
   /// `§412`: bit depth (see `h264_encode_frames_cabac`).
   bit_depth~ : Int32 = 8,
+  multi_ref~ : Int32 = 1,
 ) -> Result[Bytes, String] {
   let n = frames.length()
   let (qps, sizes) = match
@@ -3339,6 +3522,7 @@ fn h264_encode_frames_vbv_cabac(
           vbv=Some(vbv),
           weightp~,
           bit_depth~,
+          multi_ref~,
         ) {
         Ok((_, sizes)) => Ok(sizes)
         Err(e) => Err(e)
@@ -3372,6 +3556,7 @@ fn h264_encode_frames_vbv_cabac(
       aud~,
       weightp~,
       bit_depth~,
+      multi_ref~,
     ) {
     Ok((bytes, _)) => {
       stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -3408,6 +3593,7 @@ fn h264_encode_frames_cabac_qps(
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
   vbv~ : H264Vbv? = None,
+  idr_cpb_delay~ : Int32 = 0,
   fillers~ : Array[Int32] = [],
   aud~ : Bool = false,
   /// `§410`: explicit P weighted prediction (see `h264_encode_frames_cabac`).
@@ -3433,6 +3619,7 @@ fn h264_encode_frames_cabac_qps(
       aq~,
       aq_strength~,
       vbv~,
+      idr_cpb_delay~,
       weightp~,
       bit_depth~,
       multi_ref~,
@@ -3440,7 +3627,14 @@ fn h264_encode_frames_cabac_qps(
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  let p = { width, height, qp: base_qp, level_idc, bit_depth, nrefs: multi_ref, }
+  let p = {
+    width,
+    height,
+    qp: base_qp,
+    level_idc,
+    bit_depth,
+    nrefs: multi_ref,
+  }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -3513,7 +3707,12 @@ fn h264_encode_frames_cabac_qps(
   for f = 1; f < frames.length(); f = f + 1 {
     let (y, u, v) = frames[f]
     let src_y_p = h264_enc_load_plane(
-      y, width, height, ystride, pheight, bit_depth~,
+      y,
+      width,
+      height,
+      ystride,
+      pheight,
+      bit_depth~,
     )
     let (act, act_avg) = if aq {
       h264_aq_measure(src_y_p, ystride, mb_width, mb_height)
@@ -3527,10 +3726,20 @@ fn h264_encode_frames_cabac_qps(
       chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qps[f]), bit_depth~),
       src_y: src_y_p,
       src_u: h264_enc_load_plane(
-        u, width / 2, height / 2, cstride, pheight / 2, bit_depth~,
+        u,
+        width / 2,
+        height / 2,
+        cstride,
+        pheight / 2,
+        bit_depth~,
       ),
       src_v: h264_enc_load_plane(
-        v, width / 2, height / 2, cstride, pheight / 2, bit_depth~,
+        v,
+        width / 2,
+        height / 2,
+        cstride,
+        pheight / 2,
+        bit_depth~,
       ),
       rec_y: Array::make(ystride * pheight, 0),
       rec_u: Array::make(cstride * (pheight / 2), 0),

@@ -426,8 +426,8 @@ test "h264 cabac enc: ffmpeg-arbitrated QP22 I16 frames" {
   // §405 re-pin (defaults on; coding order, deblocked): frame 0 is
   // unchanged, the P/B pictures carry the new B-line + 8x8DCT decisions.
   let pins = [
-    "5e86c08751cbdc2f069ae812d2c675b9", "6f135ff7bb1527f47c87d89d30734071", "332925af57f6b37d617548b09e6f8e46",
-    "3da3c84a787baeb7e85126334d50737e", "0801e561b5c6dba747d2be91a2d67c76", "286480361227c0bff996a33ed6628ece",
+    "5e86c08751cbdc2f069ae812d2c675b9", "2cc0f704e199487a39fdcaca289fffec", "301729b484641303bc95087fa05d22fc",
+    "e8aa8e44a82c554a7254a3a1e7b9a694", "ca617cc7ad14de0ad48d3174080ab587", "1363a52648eba2b54ff210e6db60dc19",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])
@@ -461,8 +461,8 @@ test "h264 cabac enc: ffmpeg-arbitrated six frames (96x64, QP 24)" {
   }
   // §405 re-pin (defaults on; coding order, deblocked).
   let pins = [
-    "47e79e2c702188f62c13ce0c611fd512", "9f210a004aa853926ea81865a4daa6ac", "4bbaa5fbd653e129cfc55b84eb95329e",
-    "4bab814244912c92b5c425dc1b4ee0b0", "eb5fb0b2fc71efccb948c2cd21af0158", "74779281ed1a483dad2355ba9b2cbc17",
+    "47e79e2c702188f62c13ce0c611fd512", "bd75ca1dba4b2466094842e73f3cf316", "d8471a5b9f96449c127543fd5c9ffac0",
+    "2a1259c862fccd3aeebacd2f0ac02e0f", "7428daf19023a3c31ca70875952fbbcc", "2569dcbc73c920620922df5cbd9fa33e",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])

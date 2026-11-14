@@ -561,10 +561,10 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if flat.length() != 2684 {
+  if flat.length() != 2624 {
     fail("flat CAVLC length changed: \{flat.length()}")
   }
-  if h264_rc_md5(flat) != "84ee35e38ed196f6ab1a761db3c1999a" {
+  if h264_rc_md5(flat) != "96376a6127b26641353458bb24ede830" {
     fail("flat CAVLC bytes changed: \{h264_rc_md5(flat)}")
   }
   let flatc = match
@@ -572,10 +572,10 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  if flatc.length() != 2321 {
+  if flatc.length() != 2354 {
     fail("flat CABAC length changed: \{flatc.length()}")
   }
-  if h264_rc_md5(flatc) != "c094f3d9c6a7ab600d07869c1a8bb4d9" {
+  if h264_rc_md5(flatc) != "1916f5dbfbeea88d4213d94adb10ed6d" {
     fail("flat CABAC bytes changed: \{h264_rc_md5(flatc)}")
   }
   // Explicit zero parameters and a non-default init percentage (ignored
@@ -773,7 +773,7 @@ test "h264 vbv: CAVLC SPS VUI/HRD, SEI and NAL layout" {
     fail("cavlc: expected 5 access units, got \{sizes.length()}")
   }
   let (total, fullness) = vbv_cpb_check("cavlc", sizes, 100000, 32000, 30, 90)
-  if total != stream.length() * 8 || total != 21552 {
+  if total != stream.length() * 8 || total != 21712 {
     fail("cavlc: AU bits \{total}, stream \{stream.length() * 8}")
   }
   if fullness > 32000 {
@@ -841,7 +841,7 @@ test "h264 vbv: CABAC SPS VUI/HRD, SEI and NAL layout" {
   }
   let sizes = vbv_au_sizes(nals)
   let (total, fullness) = vbv_cpb_check("cabac", sizes, 100000, 32000, 30, 90)
-  if total != stream.length() * 8 || total != 19624 {
+  if total != stream.length() * 8 || total != 19456 {
     fail("cabac: AU bits \{total}, stream \{stream.length() * 8}")
   }
   if fullness > 32000 {
@@ -975,7 +975,7 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let expected_c = [26, 26, 26, 33, 35]
+  let expected_c = [26, 26, 26, 33, 34]
   if stats_c.frame_qps.length() != expected_c.length() {
     fail("cavlc: frame_qps length \{stats_c.frame_qps.length()}")
   }
@@ -989,8 +989,8 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
   if stats_c.vbv_fills != 0 || stats_c.vbv_filler_bytes != 0 {
     fail("cavlc: tight buffer should not need filler")
   }
-  if cavlc.length() != 2332 ||
-    h264_rc_md5(cavlc) != "5bbc6815ade3dadd59864985d88487f0" {
+  if cavlc.length() != 2344 ||
+    h264_rc_md5(cavlc) != "bfd8493953719daa8a4e0c6fd603bcd4" {
     fail("cavlc: tight-buffer stream drifted: \{h264_rc_md5(cavlc)}")
   }
   h264_rc_recon_invariant("vbv-cavlc-tight", cavlc, recon_c, 5)
@@ -1276,11 +1276,11 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
     Err(e) => fail(e)
   }
   let pins1 = [
-    "292edd53ff3434561e2e1d737c563c98", "31d694a5ee739d63753f0db7c7ec7be0", "ae677397c8d01eecbdce42c1d01e8817",
-    "87a80c535bde32c2b31610f42fcd8291", "70ae53ae1d2440934724c79c909fdf42",
+    "292edd53ff3434561e2e1d737c563c98", "ac522e2c0e46a0d10adaf8695b84db0e", "b4ef80dcb946516963f30842329dfcce",
+    "d7813b5d70d37ff0d0457fbbb2a9172b", "fa1bf4bcdbc408bc5857aea1fd12c937",
   ]
   for i, f in filtered {
-    inspect(h264_rc_md5(f.yuvp()), content=pins1[i])
+    assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
   }
   let stats_k = @libavcodec.H264EncStats::new()
   let cabac = match
@@ -1308,11 +1308,11 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "292edd53ff3434561e2e1d737c563c98", "7bb5a2aa12cd43d89fee4a65ebafc03c", "80e0e4117df82fe77dbf5c9ec28a18fc",
-    "dd09e66766df750d5a2f0b6e714facd9", "6a4f997e6bedf6a547e9e2550982be33",
+    "292edd53ff3434561e2e1d737c563c98", "cb8e6eb82f8e93f8eb928ffa2d9f0e03", "e5d1b26ac9dcb4009af3357230e83162",
+    "9c5984eb067b166abf616726dacc5f5f", "ef684b878c1bcbc18d58428023d84f9b",
   ]
   for i, f in filtered2 {
-    inspect(h264_rc_md5(f.yuvp()), content=pins2[i])
+    assert_eq(h264_rc_md5(f.yuvp()), pins2[i])
   }
 }
 

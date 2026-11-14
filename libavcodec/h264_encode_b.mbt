@@ -116,7 +116,7 @@ fn h264_enc_sps_rbsp_b(
   }
   match vbv {
     None => r.put_bit(0) // vui_parameters_present_flag
-    Some(v) => h264_enc_sps_vui(r, v)
+    Some(v) => h264_enc_sps_vui(r, v, b_frames=true)
   }
   r.trailing_bits()
   r.finish_raw_of()
@@ -124,8 +124,12 @@ fn h264_enc_sps_rbsp_b(
 
 ///|
 /// The B SPS as a NAL unit (nal_unit_type 7, ref_idc 3).
-fn h264_enc_write_sps_b(p : H264EncParams, dct8x8~ : Bool = false) -> Bytes {
-  let body = h264_enc_sps_rbsp_b(p, dct8x8~)
+fn h264_enc_write_sps_b(
+  p : H264EncParams,
+  dct8x8~ : Bool = false,
+  vbv~ : H264Vbv? = None,
+) -> Bytes {
+  let body = h264_enc_escape(h264_enc_sps_rbsp_b(p, dct8x8~, vbv~))
   let out : Array[Byte] = [
     b'\x00',
     b'\x00',
@@ -675,7 +679,12 @@ fn H264PEncoder::code_b_mb_residuals(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=self.p.bit_depth)
+      h264_chroma_dc_dequant_idct(
+        mb,
+        256 + 256 * c,
+        qmul_c[c][0],
+        bit_depth=self.p.bit_depth,
+      )
     }
     for i = 0; i < 4; i = i + 1 {
       let bx = i % 2 * 4
@@ -688,9 +697,23 @@ fn H264PEncoder::code_b_mb_residuals(
         0
       }
       if nzv != 0 {
-        h264_idct_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
+        h264_idct_add(
+          plane,
+          off,
+          self.cstride,
+          mb,
+          bo,
+          bit_depth=self.p.bit_depth,
+        )
       } else if mb[bo] != 0 {
-        h264_idct_dc_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
+        h264_idct_dc_add(
+          plane,
+          off,
+          self.cstride,
+          mb,
+          bo,
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
   }
@@ -699,9 +722,23 @@ fn H264PEncoder::code_b_mb_residuals(
     let gy = h264_luma_block_y[i]
     let off = ybase + gy * 4 * self.ystride + gx * 4
     if self.cur_nz[gy * 4 + gx] != 0 {
-      h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+      h264_idct_add(
+        self.rec_y,
+        off,
+        self.ystride,
+        mb,
+        16 * i,
+        bit_depth=self.p.bit_depth,
+      )
     } else if mb[16 * i] != 0 {
-      h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+      h264_idct_dc_add(
+        self.rec_y,
+        off,
+        self.ystride,
+        mb,
+        16 * i,
+        bit_depth=self.p.bit_depth,
+      )
     }
   }
   {
@@ -814,7 +851,14 @@ fn H264PEncoder::code_b_mb_i16_residuals(
     for s = 0; s < 16; s = s + 1 {
       dc_raw[s] = luma_dc_store[s]
     }
-    h264_luma_dc_dequant_idct(mb, 0, dc_raw, 0, qmul_y[0], bit_depth=self.p.bit_depth)
+    h264_luma_dc_dequant_idct(
+      mb,
+      0,
+      dc_raw,
+      0,
+      qmul_y[0],
+      bit_depth=self.p.bit_depth,
+    )
   }
   for i = 0; i < 16; i = i + 1 {
     let gx = h264_luma_block_x[i]
@@ -822,9 +866,23 @@ fn H264PEncoder::code_b_mb_i16_residuals(
     let g = gy * 4 + gx
     let off = ybase + gy * 4 * self.ystride + gx * 4
     if i16_ac_nz[g] != 0 {
-      h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+      h264_idct_add(
+        self.rec_y,
+        off,
+        self.ystride,
+        mb,
+        16 * i,
+        bit_depth=self.p.bit_depth,
+      )
     } else if mb[16 * i] != 0 {
-      h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+      h264_idct_dc_add(
+        self.rec_y,
+        off,
+        self.ystride,
+        mb,
+        16 * i,
+        bit_depth=self.p.bit_depth,
+      )
     }
   }
   {
@@ -948,7 +1006,12 @@ fn H264PEncoder::code_b_mb_chroma_intra(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=self.p.bit_depth)
+      h264_chroma_dc_dequant_idct(
+        mb,
+        256 + 256 * c,
+        qmul_c[c][0],
+        bit_depth=self.p.bit_depth,
+      )
     }
     for i = 0; i < 4; i = i + 1 {
       let bx = i % 2 * 4
@@ -961,9 +1024,23 @@ fn H264PEncoder::code_b_mb_chroma_intra(
         0
       }
       if nzv != 0 {
-        h264_idct_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
+        h264_idct_add(
+          plane,
+          off,
+          self.cstride,
+          mb,
+          bo,
+          bit_depth=self.p.bit_depth,
+        )
       } else if mb[bo] != 0 {
-        h264_idct_dc_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
+        h264_idct_dc_add(
+          plane,
+          off,
+          self.cstride,
+          mb,
+          bo,
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
   }
@@ -1001,12 +1078,13 @@ fn H264PEncoder::code_b_mb_i4_residuals(
       mb_x,
       mb_y,
       self.pps,
-      qp,
+      self.p.qp_ext(qp),
       luma_store,
       scratch_modes,
       mb,
       h264_enc_i4_avail(mb_x, mb_y, self.mb_width),
       fixed_modes=raw_modes,
+      bit_depth=self.p.bit_depth,
     ) {
     Ok((_, cbp)) => luma_cbp = cbp
     Err(e) => abort("h264 enc b: I4 replay failed: \{e}")
@@ -1068,12 +1146,13 @@ fn H264PEncoder::code_b_mb_i8_residuals(
       mb_x,
       mb_y,
       self.pps,
-      qp,
+      self.p.qp_ext(qp),
       luma8_store,
       scratch_modes,
       mb,
       h264_enc_i8_avail(mb_x, mb_y, self.mb_width),
       fixed_modes=raw_modes,
+      bit_depth=self.p.bit_depth,
     ) {
     Ok((_, cbp)) => luma_cbp = cbp
     Err(e) => abort("h264 enc b: I8 replay failed: \{e}")
@@ -2714,11 +2793,12 @@ fn H264PEncoder::decide_b_mb(
         mb_x,
         mb_y,
         self.pps,
-        qp,
+        self.p.qp_ext(qp),
         scratch_store,
         scratch_modes,
         scratch_mb,
         h264_enc_i4_avail(mb_x, mb_y, self.mb_width),
+        bit_depth=self.p.bit_depth,
       )
       is Ok(_) {
       let raw_modes : Array[Int32] = Array::make(16, 0)
@@ -2774,11 +2854,12 @@ fn H264PEncoder::decide_b_mb(
         mb_x,
         mb_y,
         self.pps,
-        qp,
+        self.p.qp_ext(qp),
         scratch_store,
         scratch_modes,
         scratch_mb,
         h264_enc_i8_avail(mb_x, mb_y, self.mb_width),
+        bit_depth=self.p.bit_depth,
       )
       is Ok(_) {
       let raw_modes : Array[Int32] = [
@@ -4075,6 +4156,28 @@ fn h264_b_copy_plane(src : Array[Int32]) -> Array[Int32] {
 }
 
 ///|
+/// Decode-order AU index -> global display position. A zero GOP size is
+/// one complete sequence; an unmatched odd position becomes a tail P.
+fn h264_b_coding_order(n : Int32, gop_size~ : Int32 = 0) -> Array[Int32] {
+  let order : Array[Int32] = []
+  let mut start = 0
+  while start < n {
+    let end = if gop_size > 0 { start + (n - start).min(gop_size) } else { n }
+    order.push(start)
+    let mut pos = start + 1
+    while pos < end {
+      if pos + 1 < end {
+        order.push(pos + 1)
+      }
+      order.push(pos)
+      pos += 2
+    }
+    start = end
+  }
+  order
+}
+
+///|
 /// The B-slice sequence core (shared by the CAVLC and CABAC public
 /// entries; `cabac` selects the entropy of every picture). Coding order:
 /// I, P2, B1, P4, B3, ... — every B picture is coded after its future
@@ -4113,6 +4216,7 @@ fn h264_encode_frames_b(
   /// VBV state (`§398`): when set, every access unit opens with a
   /// `pic_timing` SEI carrying the CPB removal delay.
   vbv~ : H264Vbv? = None,
+  idr_cpb_delay~ : Int32 = 0,
   /// Per-access-unit filler NAL payloads (the VBV solver's schedule).
   fillers~ : Array[Int32] = [],
   recon~ : Array[Bytes],
@@ -4145,6 +4249,7 @@ fn h264_encode_frames_b(
         aq_strength~,
         b_seq=true,
         vbv~,
+        idr_cpb_delay~,
         weightp~,
         bit_depth~,
       )
@@ -4164,6 +4269,7 @@ fn h264_encode_frames_b(
         aq_strength~,
         b_seq=true,
         vbv~,
+        idr_cpb_delay~,
         weightp~,
         bit_depth~,
       )
@@ -4240,7 +4346,12 @@ fn h264_encode_frames_b(
     qp_f : Int32,
   ) -> H264PEncoder {
     let src_y_p = h264_enc_load_plane(
-      y, width, height, ystride, pheight, bit_depth~,
+      y,
+      width,
+      height,
+      ystride,
+      pheight,
+      bit_depth~,
     )
     let (act, act_avg) = if aq {
       h264_aq_measure(src_y_p, ystride, mb_width, mb_height)
@@ -4254,10 +4365,20 @@ fn h264_encode_frames_b(
       chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qp_f), bit_depth~),
       src_y: src_y_p,
       src_u: h264_enc_load_plane(
-        u, width / 2, height / 2, cstride, pheight / 2, bit_depth~,
+        u,
+        width / 2,
+        height / 2,
+        cstride,
+        pheight / 2,
+        bit_depth~,
       ),
       src_v: h264_enc_load_plane(
-        v, width / 2, height / 2, cstride, pheight / 2, bit_depth~,
+        v,
+        width / 2,
+        height / 2,
+        cstride,
+        pheight / 2,
+        bit_depth~,
       ),
       rec_y: Array::make(ystride * pheight, 0),
       rec_u: Array::make(cstride * (pheight / 2), 0),
@@ -4334,11 +4455,18 @@ fn h264_encode_frames_b(
       let au : Array[Bytes] = []
       match vbv {
         None => ()
-        Some(v) => au.push(h264_enc_sei_pic_timing(v, (e + 1) * 2))
+        Some(v) =>
+          au.push(
+            h264_enc_sei_pic_timing(
+              v,
+              stream.length() * 2,
+              dpb_output_delay=(e + 2 - stream.length()) * 2,
+            ),
+          )
       }
       au.push(p_nal)
-      if fillers.length() > e + 1 && fillers[e + 1] > 0 {
-        au.push(h264_enc_filler_nal(fillers[e + 1] - 5))
+      if fillers.length() > stream.length() && fillers[stream.length()] > 0 {
+        au.push(h264_enc_filler_nal(fillers[stream.length()] - 5))
       }
       if aud {
         au.insert(0, h264_enc_aud(false))
@@ -4363,7 +4491,12 @@ fn h264_encode_frames_b(
       // ---- B picture at display position e ----
       let (by, bu, bv) = frames[e]
       let b_src_y = h264_enc_load_plane(
-        by, width, height, ystride, pheight, bit_depth~,
+        by,
+        width,
+        height,
+        ystride,
+        pheight,
+        bit_depth~,
       )
       let (b_act, b_act_avg) = if aq {
         h264_aq_measure(b_src_y, ystride, mb_width, mb_height)
@@ -4377,10 +4510,20 @@ fn h264_encode_frames_b(
         chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qps_arr[e]), bit_depth~),
         src_y: b_src_y,
         src_u: h264_enc_load_plane(
-          bu, width / 2, height / 2, cstride, pheight / 2, bit_depth~,
+          bu,
+          width / 2,
+          height / 2,
+          cstride,
+          pheight / 2,
+          bit_depth~,
         ),
         src_v: h264_enc_load_plane(
-          bv, width / 2, height / 2, cstride, pheight / 2, bit_depth~,
+          bv,
+          width / 2,
+          height / 2,
+          cstride,
+          pheight / 2,
+          bit_depth~,
         ),
         rec_y: Array::make(ystride * pheight, 0),
         rec_u: Array::make(cstride * (pheight / 2), 0),
@@ -4489,11 +4632,18 @@ fn h264_encode_frames_b(
       let b_au : Array[Bytes] = []
       match vbv {
         None => ()
-        Some(v) => b_au.push(h264_enc_sei_pic_timing(v, e * 2))
+        Some(v) =>
+          b_au.push(
+            h264_enc_sei_pic_timing(
+              v,
+              stream.length() * 2,
+              dpb_output_delay=(e + 1 - stream.length()) * 2,
+            ),
+          )
       }
       b_au.push(b_nal)
-      if fillers.length() > e && fillers[e] > 0 {
-        b_au.push(h264_enc_filler_nal(fillers[e] - 5))
+      if fillers.length() > stream.length() && fillers[stream.length()] > 0 {
+        b_au.push(h264_enc_filler_nal(fillers[stream.length()] - 5))
       }
       if aud {
         b_au.insert(0, h264_enc_aud_b())
@@ -4538,11 +4688,18 @@ fn h264_encode_frames_b(
       let au : Array[Bytes] = []
       match vbv {
         None => ()
-        Some(v) => au.push(h264_enc_sei_pic_timing(v, e * 2))
+        Some(v) =>
+          au.push(
+            h264_enc_sei_pic_timing(
+              v,
+              stream.length() * 2,
+              dpb_output_delay=(e + 1 - stream.length()) * 2,
+            ),
+          )
       }
       au.push(p_nal)
-      if fillers.length() > e && fillers[e] > 0 {
-        au.push(h264_enc_filler_nal(fillers[e] - 5))
+      if fillers.length() > stream.length() && fillers[stream.length()] > 0 {
+        au.push(h264_enc_filler_nal(fillers[stream.length()] - 5))
       }
       if aud {
         au.insert(0, h264_enc_aud(false))

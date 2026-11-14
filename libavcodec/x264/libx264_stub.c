@@ -223,7 +223,8 @@ int32_t x264enc_supports(moonbit_bytes_t codec_name, int32_t pix_sel) {
 // -1 error. Plane lengths are validated against the opened geometry.
 MOONBIT_FFI_EXPORT
 int32_t x264enc_send_frame(X264Enc *e, int64_t pts, moonbit_bytes_t y,
-                           moonbit_bytes_t u, moonbit_bytes_t v) {
+                           moonbit_bytes_t u, moonbit_bytes_t v,
+                           int32_t force_idr) {
   if (!e || !e->ctx || e->failed)
     return -1;
   int w = e->ctx->width, h = e->ctx->height;
@@ -246,6 +247,15 @@ int32_t x264enc_send_frame(X264Enc *e, int64_t pts, moonbit_bytes_t y,
   f->width = w;
   f->height = h;
   f->pts = pts;
+  // libx264 maps AV_PICTURE_TYPE_I to IDR only when forced-idr is set.
+  // av_frame_unref above resets pict_type so the request cannot leak to
+  // the next picture. Buffers remain call-scoped copies, including retries.
+  if (force_idr) {
+    int ret = av_opt_set_int(e->ctx->priv_data, "forced-idr", 1, 0);
+    if (ret < 0)
+      return ret;
+    f->pict_type = AV_PICTURE_TYPE_I;
+  }
   if (av_frame_get_buffer(f, 0) < 0)
     return -1;
   const uint8_t *srcs[3] = {y, u, v};
@@ -373,7 +383,7 @@ static int sink_planes(PlaneSink *s, const AVFrame *f, int bps) {
 // frame exactly like the pure port's H264Frame::yuvp(): visible area only,
 // planar Y/Cb/Cr with little-endian samples. Blob layout (LE):
 //   n_frames i32, width i32, height i32, kind i32 (0 = yuv420p, 1 =
-//   yuv420p10le), then the per-frame planes concatenated.
+//   yuv420p10le, 2 = yuv420p9le), then the per-frame planes concatenated.
 typedef struct {
   PlaneSink sink;
   AVCodecContext *cc;
@@ -391,6 +401,9 @@ static int annexb_take(AnnexbDec *d) {
   } else if (d->frame->format == AV_PIX_FMT_YUV420P10LE) {
     bps = 2;
     kind = 1;
+  } else if (d->frame->format == AV_PIX_FMT_YUV420P9LE) {
+    bps = 2;
+    kind = 2;
   } else {
     fprintf(stderr, "x264dec: unsupported pix_fmt %d\n", d->frame->format);
     return -1;

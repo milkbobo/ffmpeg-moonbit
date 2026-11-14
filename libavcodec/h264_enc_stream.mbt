@@ -6,19 +6,20 @@
 /// of the `I, P2, B1, P4, B3, ...` schedule (`b_slices` on, the B picture
 /// waits for its future reference). The encoder keeps only the pending
 /// frame, the reference chain and the per-macroblock mirror: pushing a
-/// frame releases the previous pending one, so the encoder-side memory is
-/// constant in the sequence length.
+/// frame releases the previous pending one. The raw input/reference working
+/// set is bounded; the existing reconstruction history is retained.
 ///
 /// The picture encoders are the batch entries' own: the intra picture via
 /// `h264_encode_intra_frame` / `h264_encode_intra_frame_cabac`, every P
 /// picture via a `H264PEncoder` over the shared reference planes and
 /// per-macroblock mirror, and the B pictures via the mirror-based direct /
-/// bidirectional decision of `h264_encode_b.mbt`. The contract is byte
+/// bidirectional decision of `h264_encode_b.mbt`. Without VBV the contract is byte
 /// equality with the batch entries (the blackbox tests pin `drain` output
 /// against `h264_encode_frames` / `h264_encode_frames_cabac` /
 /// `b_slices=true`), so streaming callers get bit-identical streams. The
-/// two-pass rate controls (VBV/CBR and the ABR `target_bytes`) need the
-/// whole sequence and are rejected at `open`.
+/// online VBV/CBR path commits a P picture, a P/B pair, or a tail-P/IDR
+/// group transactionally. B pictures wait for one future input picture.
+/// ABR `target_bytes` remains a batch-entry feature.
 pub struct H264StreamEncoder {
   width : Int32
   height : Int32
@@ -71,17 +72,25 @@ pub struct H264StreamEncoder {
   mut pending : (Bytes, Bytes, Bytes)?
   /// Display position of the NEXT pushed frame.
   mut next_display : Int32
+  /// Global display position of the current GOP's IDR.
+  priv mut gop_start : Int32
   /// frame_num counter of reference pictures (the IDR is 0).
   mut fn_counter : Int32
   /// Finished access units and reconstructions, in coding order.
   out : Array[Bytes]
   recons : Array[Bytes]
   mut frames_out : Int32
+  priv vbv : H264Vbv?
+  priv mut vbv_fullness : Int32
+  priv mut vbv_last_bp : Int32
+  priv mut vbv_coded : Int32
 }
 
 ///|
 /// Open a streaming encoder. `b_slices` schedules the odd display
-/// positions as B pictures; the two-pass rate controls are batch-only.
+/// positions as B pictures. Online VBV supports both P and B schedules and keeps
+/// the usual frame-QP/reconstruction history. Without VBV, bytes stay equal
+/// to the original flat-QP path.
 /// `cabac_rd` enables the batch encoder's exact CABAC candidate pricing;
 /// it requires `cabac=true` and supports P and B pictures. `dct8x8` selects
 /// the High profile 8x8 transform (I8x8, inter 8x8 and, with `b_slices`,
@@ -124,7 +133,30 @@ pub fn H264StreamEncoder::open(
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   stats~ : H264EncStats = H264EncStats::new(),
+  /// Online VBV. Rejected emitting pushes leave encoder state intact;
+  /// an odd B input is buffered until its future P arrives or finish.
+  vbv_maxrate~ : Int32 = 0,
+  vbv_bufsize~ : Int32 = 0,
+  fps~ : Int32 = 0,
+  vbv_init~ : Int32 = 90,
 ) -> Result[H264StreamEncoder, String] {
+  if vbv_maxrate < 0 || vbv_bufsize < 0 || fps < 0 {
+    return Err("h264 enc: streaming VBV parameters must be nonnegative")
+  }
+  let vbv = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+    let v = match h264_vbv_new(vbv_maxrate, vbv_bufsize, fps, vbv_init) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    let rate = (v.bit_rate_value_minus1 + 1) << 6
+    if v.init_delay < 1 ||
+      v.bufsize.to_int64() * 90000L / rate.to_int64() > 0xFFFFFFL {
+      return Err("h264 enc: streaming VBV delay outside 24-bit HRD range")
+    }
+    Some(v)
+  } else {
+    None
+  }
   // `cabac_rd` defaults on (`§403`) and is meaningless without CABAC, so
   // it silently no-ops instead of erroring; `cabac~` stays authoritative.
   let cabac_rd = cabac_rd && cabac
@@ -142,11 +174,6 @@ pub fn H264StreamEncoder::open(
   }
   if multi_ref > 1 && b_slices {
     return Err("h264 enc: multi_ref does not support B slices yet")
-  }
-  if multi_ref > 1 && cabac {
-    // `§416`: same rejection as the batch CABAC entry (ref_idx bin
-    // desync; see AGENT_HANDOFF §416).
-    return Err("h264 enc: multi_ref does not support CABAC yet")
   }
   if width <= 0 ||
     height <= 0 ||
@@ -246,10 +273,18 @@ pub fn H264StreamEncoder::open(
     fut_v: [],
     pending: None,
     next_display: 0,
+    gop_start: 0,
     fn_counter: 0,
     out: [],
     recons: [],
     frames_out: 0,
+    vbv,
+    vbv_fullness: match vbv {
+      Some(v) => v.init_bits
+      None => 0
+    },
+    vbv_last_bp: 0,
+    vbv_coded: 0,
   })
 }
 
@@ -276,10 +311,16 @@ fn H264StreamEncoder::check_frame(
   u : Bytes,
   v : Bytes,
 ) -> Result[Unit, String] {
-  let plane_bytes =
-    h264_enc_plane_bytes(self.width, self.height, self.bit_depth)
-  let chroma_bytes =
-    h264_enc_plane_bytes(self.width / 2, self.height / 2, self.bit_depth)
+  let plane_bytes = h264_enc_plane_bytes(
+    self.width,
+    self.height,
+    self.bit_depth,
+  )
+  let chroma_bytes = h264_enc_plane_bytes(
+    self.width / 2,
+    self.height / 2,
+    self.bit_depth,
+  )
   if y.length() != plane_bytes ||
     u.length() != chroma_bytes ||
     v.length() != chroma_bytes {
@@ -293,19 +334,33 @@ fn H264StreamEncoder::check_frame(
 /// any) queue up for `drain`; with `b_slices` off every push after the
 /// first yields one access unit, with it on an even display position
 /// yields the P-B pair and an odd one just buffers.
+/// `force_idr=true` starts an independent GOP with repeated SPS/PPS and
+/// clears reference history. A pending B picture is first coded as a P
+/// picture against the old GOP, just like a sequence tail.
 pub fn H264StreamEncoder::push_frame(
   self : H264StreamEncoder,
   y : Bytes,
   u : Bytes,
   v : Bytes,
+  force_idr~ : Bool = false,
 ) -> Result[Unit, String] {
   match self.check_frame(y, u, v) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
-  let d = self.next_display
+  match self.vbv {
+    Some(vbv) => return self.push_vbv(y, u, v, vbv, force_idr~)
+    None => ()
+  }
+  let d = self.next_display - self.gop_start
+  if force_idr {
+    match self.flush_pending() {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+  }
   self.next_display = self.next_display + 1
-  if d == 0 {
+  if d == 0 || force_idr {
     return self.stream_idr(y, u, v)
   }
   if !self.b_slices {
@@ -335,20 +390,36 @@ pub fn H264StreamEncoder::push_frame(
 pub fn H264StreamEncoder::finish(
   self : H264StreamEncoder,
 ) -> Result[Array[Bytes], String] {
-  if self.b_slices {
-    match self.pending {
-      Some((y, u, v)) => {
-        let d = self.next_display - 1
-        self.pending = None
-        match self.stream_p(y, u, v, d) {
-          Ok(_) => ()
-          Err(e) => return Err(e)
-        }
-      }
-      None => ()
+  if self.vbv is Some(v) && self.pending is Some(_) {
+    let trial = self.vbv_trial()
+    match trial.vbv_flush_pending(v) {
+      Ok(_) => self.vbv_commit(trial)
+      Err(e) => return Err(e)
     }
+    return Ok(self.drain())
+  }
+  match self.flush_pending() {
+    Ok(_) => ()
+    Err(e) => return Err(e)
   }
   Ok(self.drain())
+}
+
+///|
+/// Close an incomplete B pair before end-of-stream or a new IDR. Do this
+/// before advancing next_display so the old picture retains its local POC.
+fn H264StreamEncoder::flush_pending(
+  self : H264StreamEncoder,
+) -> Result[Unit, String] {
+  match self.pending {
+    Some((y, u, v)) =>
+      match self.stream_p(y, u, v, self.next_display - self.gop_start - 1) {
+        Ok(_) => self.pending = None
+        Err(e) => return Err(e)
+      }
+    None => ()
+  }
+  Ok(())
 }
 
 ///|
@@ -372,6 +443,9 @@ fn H264StreamEncoder::stream_idr(
   y : Bytes,
   u : Bytes,
   v : Bytes,
+  qp~ : Int32 = self.qp,
+  vbv~ : H264Vbv? = None,
+  idr_cpb_delay~ : Int32 = 0,
 ) -> Result[Unit, String] {
   let first = if self.cabac {
     h264_encode_intra_frame_cabac(
@@ -380,7 +454,7 @@ fn H264StreamEncoder::stream_idr(
       v,
       width=self.width,
       height=self.height,
-      qp=self.qp,
+      qp~,
       level_idc=self.level_idc,
       stats=self.stats,
       pps_qp=self.qp,
@@ -391,6 +465,8 @@ fn H264StreamEncoder::stream_idr(
       weightp=self.weightp,
       bit_depth=self.bit_depth,
       multi_ref=self.nrefs,
+      vbv~,
+      idr_cpb_delay~,
     )
   } else {
     h264_encode_intra_frame(
@@ -399,7 +475,7 @@ fn H264StreamEncoder::stream_idr(
       v,
       width=self.width,
       height=self.height,
-      qp=self.qp,
+      qp~,
       level_idc=self.level_idc,
       stats=self.stats,
       pps_qp=self.qp,
@@ -410,6 +486,8 @@ fn H264StreamEncoder::stream_idr(
       weightp=self.weightp,
       bit_depth=self.bit_depth,
       multi_ref=self.nrefs,
+      vbv~,
+      idr_cpb_delay~,
     )
   }
   let first = match first {
@@ -431,10 +509,17 @@ fn H264StreamEncoder::stream_idr(
   self.refs_u = [self.ref_u]
   self.refs_v = [self.ref_v]
   for k = 0; k < self.mb_width * self.mb_height; k = k + 1 {
+    self.states[k] = new_h264_p_mb_state()
     for i = 0; i < 48; i = i + 1 {
       self.states[k].nz[i] = first.mb_nz[k][i]
     }
   }
+  self.fn_counter = 0
+  self.gop_start = self.next_display - 1
+  self.ref_colocated = []
+  self.fut_y = []
+  self.fut_u = []
+  self.fut_v = []
   Ok(())
 }
 
@@ -447,6 +532,10 @@ fn H264StreamEncoder::stream_p(
   u : Bytes,
   v : Bytes,
   display : Int32,
+  qp~ : Int32 = self.qp,
+  vbv~ : H264Vbv? = None,
+  cpb_delay~ : Int32 = display * 2,
+  dpb_delay~ : Int32 = 0,
 ) -> Result[Unit, String] {
   self.fn_counter = self.fn_counter + 1
   let src_y = self.load_plane(y, self.width, self.height, self.ystride)
@@ -459,7 +548,7 @@ fn H264StreamEncoder::stream_p(
     p: {
       width: self.width,
       height: self.height,
-      qp: self.qp,
+      qp,
       level_idc: self.level_idc,
       bit_depth: self.bit_depth,
       nrefs: self.nrefs,
@@ -470,7 +559,7 @@ fn H264StreamEncoder::stream_p(
     chroma_qp: h264_get_chroma_qp(
       self.pps,
       0,
-      h264_enc_qp_ext(self.qp, self.bit_depth),
+      h264_enc_qp_ext(qp, self.bit_depth),
       bit_depth=self.bit_depth,
     ),
     src_y,
@@ -500,9 +589,9 @@ fn H264StreamEncoder::stream_p(
     dct8x8: self.dct8x8,
     intra4x4_in_p: false,
     base_qp: self.qp,
-    mb_qp: self.qp,
+    mb_qp: qp,
     mb_dqp: 0,
-    prev_qp: self.qp,
+    prev_qp: qp,
     aq_act: act,
     aq_avg: act_avg,
     aq_on: self.aq,
@@ -529,12 +618,17 @@ fn H264StreamEncoder::stream_p(
       Err(e) => return Err(e)
     }
   }
-  let au = if self.aud {
-    h264_enc_concat([h264_enc_aud(false), nal])
-  } else {
-    nal
+  let au : Array[Bytes] = []
+  if self.aud {
+    au.push(h264_enc_aud(false))
   }
-  self.out.push(au)
+  match vbv {
+    Some(v) =>
+      au.push(h264_enc_sei_pic_timing(v, cpb_delay, dpb_output_delay=dpb_delay))
+    None => ()
+  }
+  au.push(nal)
+  self.out.push(h264_enc_concat(au))
   self.recons.push(
     h264_enc_pack_recon(
       enc.rec_y,
@@ -591,6 +685,10 @@ fn H264StreamEncoder::stream_b(
   u : Bytes,
   v : Bytes,
   display : Int32,
+  qp~ : Int32 = self.qp,
+  vbv~ : H264Vbv? = None,
+  cpb_delay~ : Int32 = display * 2,
+  dpb_delay~ : Int32 = 0,
 ) -> Result[Unit, String] {
   let src_y = self.load_plane(y, self.width, self.height, self.ystride)
   let (act, act_avg) = if self.aq {
@@ -602,7 +700,7 @@ fn H264StreamEncoder::stream_b(
     p: {
       width: self.width,
       height: self.height,
-      qp: self.qp,
+      qp,
       level_idc: self.level_idc,
       bit_depth: self.bit_depth,
       nrefs: self.nrefs,
@@ -613,7 +711,7 @@ fn H264StreamEncoder::stream_b(
     chroma_qp: h264_get_chroma_qp(
       self.pps,
       0,
-      h264_enc_qp_ext(self.qp, self.bit_depth),
+      h264_enc_qp_ext(qp, self.bit_depth),
       bit_depth=self.bit_depth,
     ),
     src_y,
@@ -643,9 +741,9 @@ fn H264StreamEncoder::stream_b(
     dct8x8: self.dct8x8,
     intra4x4_in_p: false,
     base_qp: self.qp,
-    mb_qp: self.qp,
+    mb_qp: qp,
     mb_dqp: 0,
-    prev_qp: self.qp,
+    prev_qp: qp,
     aq_act: act,
     aq_avg: act_avg,
     aq_on: self.aq,
@@ -685,7 +783,7 @@ fn H264StreamEncoder::stream_b(
     self.mb_height,
     self.pps,
     // `§412`: the mirror's `qscale` indexes the extended-range tables.
-    h264_enc_qp_ext(self.qp, self.bit_depth),
+    h264_enc_qp_ext(qp, self.bit_depth),
     self.ystride,
     self.cstride,
     past_pic,
@@ -724,8 +822,17 @@ fn H264StreamEncoder::stream_b(
       Err(e) => return Err(e)
     }
   }
-  let au = if self.aud { h264_enc_concat([h264_enc_aud_b(), nal]) } else { nal }
-  self.out.push(au)
+  let au : Array[Bytes] = []
+  if self.aud {
+    au.push(h264_enc_aud_b())
+  }
+  match vbv {
+    Some(v) =>
+      au.push(h264_enc_sei_pic_timing(v, cpb_delay, dpb_output_delay=dpb_delay))
+    None => ()
+  }
+  au.push(nal)
+  self.out.push(h264_enc_concat(au))
   self.recons.push(
     h264_enc_pack_recon(
       enc.rec_y,

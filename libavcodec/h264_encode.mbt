@@ -130,6 +130,8 @@ pub fn h264_encode_intra_frame(
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   vbv~ : H264Vbv? = None,
+  /// HRD ticks since the preceding buffering period (zero at stream start).
+  idr_cpb_delay~ : Int32 = 0,
   b_seq~ : Bool = false,
   /// `§410`: explicit P weighted prediction. The PPS then carries
   /// `weighted_pred_flag = 1` and every P slice header a fitted
@@ -156,8 +158,7 @@ pub fn h264_encode_intra_frame(
     return Err("h264 enc: unsupported bit depth \{bit_depth} (8, 9 or 10)")
   }
   if y.length() != h264_enc_plane_bytes(width, height, bit_depth) ||
-    u.length() !=
-    h264_enc_plane_bytes(width / 2, height / 2, bit_depth) ||
+    u.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) ||
     v.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) {
     return Err("h264 enc: plane size mismatch")
   }
@@ -186,7 +187,7 @@ pub fn h264_encode_intra_frame(
   // dequantisation tables the local reconstruction shares with the decoder.
   let ps = new_h264_param_sets()
   let sps_nal = if b_seq {
-    h264_enc_write_sps_b(p_ps, dct8x8~)
+    h264_enc_write_sps_b(p_ps, dct8x8~, vbv~)
   } else {
     h264_enc_write_sps(p_ps, dct8x8~, vbv~)
   }
@@ -195,7 +196,7 @@ pub fn h264_encode_intra_frame(
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
   let sps_raw = if b_seq {
-    h264_enc_sps_rbsp_b(p_ps, dct8x8~)
+    h264_enc_sps_rbsp_b(p_ps, dct8x8~, vbv~)
   } else {
     h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~)
   }
@@ -302,10 +303,16 @@ pub fn h264_encode_intra_frame(
   match vbv {
     None => ()
     Some(v) => {
-      // The buffering period is only sent with the first picture of the
-      // sequence; every picture carries its own picture timing.
+      // Every IDR starts a buffering period; its timing can still refer
+      // to the preceding period when it belongs to a longer bitstream.
       header.push(h264_enc_sei_buffering_period(v))
-      header.push(h264_enc_sei_pic_timing(v, 0))
+      header.push(
+        h264_enc_sei_pic_timing(
+          v,
+          idr_cpb_delay,
+          dpb_output_delay=if b_seq { 2 } else { 0 },
+        ),
+      )
     }
   }
   header.push(slice_nal)
@@ -955,9 +962,23 @@ fn H264IntraEncoder::encode_macroblock(
     if total != 0 {
       luma_cbp = luma_cbp | (1 << (i / 4))
       if total == 1 && mb[16 * i] != 0 {
-        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+        h264_idct_dc_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          16 * i,
+          bit_depth=self.p.bit_depth,
+        )
       } else {
-        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+        h264_idct_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          16 * i,
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
   }
@@ -1114,28 +1135,46 @@ fn H264IntraEncoder::encode_macroblock(
       for s = 0; s < 16; s = s + 1 {
         dc_raw[s] = luma_dc_store[s]
       }
-      h264_luma_dc_dequant_idct(mb, 0, dc_raw, 0, qmul_y[0], bit_depth=self.p.bit_depth)
+      h264_luma_dc_dequant_idct(
+        mb,
+        0,
+        dc_raw,
+        0,
+        qmul_y[0],
+        bit_depth=self.p.bit_depth,
+      )
     }
     for i = 0; i < 16; i = i + 1 {
       let gx = h264_luma_block_x[i]
       let gy = h264_luma_block_y[i]
       let off = ybase + gy * 4 * self.ystride + gx * 4
       if i16_ac_nz[gy * 4 + gx] != 0 {
-        h264_idct_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+        h264_idct_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          16 * i,
+          bit_depth=self.p.bit_depth,
+        )
       } else if mb[16 * i] != 0 {
-        h264_idct_dc_add(self.rec_y, off, self.ystride, mb, 16 * i, bit_depth=self.p.bit_depth)
+        h264_idct_dc_add(
+          self.rec_y,
+          off,
+          self.ystride,
+          mb,
+          16 * i,
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
   }
   // Chroma cbp decision (needed before reconstruction: below cbp 2 the
   // decoder never sees the AC levels, so neither may the local recon).
-  let chroma_c_cbp = if chroma_dc_nz[0] || chroma_dc_nz[1] {
-    let any_ac = chroma_ac_nz_count(chroma_ac_store)
-    if any_ac {
-      2
-    } else {
-      1
-    }
+  let chroma_c_cbp = if chroma_ac_nz_count(chroma_ac_store) {
+    2
+  } else if chroma_dc_nz[0] || chroma_dc_nz[1] {
+    1
   } else {
     0
   }
@@ -1154,7 +1193,12 @@ fn H264IntraEncoder::encode_macroblock(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(mb, 256 + 256 * c, qmul_c[c][0], bit_depth=self.p.bit_depth)
+      h264_chroma_dc_dequant_idct(
+        mb,
+        256 + 256 * c,
+        qmul_c[c][0],
+        bit_depth=self.p.bit_depth,
+      )
     }
     for i = 0; i < 4; i = i + 1 {
       let bx = i % 2 * 4
@@ -1169,9 +1213,23 @@ fn H264IntraEncoder::encode_macroblock(
         0
       }
       if nzv != 0 {
-        h264_idct_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
+        h264_idct_add(
+          plane,
+          off,
+          self.cstride,
+          mb,
+          bo,
+          bit_depth=self.p.bit_depth,
+        )
       } else if mb[bo] != 0 {
-        h264_idct_dc_add(plane, off, self.cstride, mb, bo, bit_depth=self.p.bit_depth)
+        h264_idct_dc_add(
+          plane,
+          off,
+          self.cstride,
+          mb,
+          bo,
+          bit_depth=self.p.bit_depth,
+        )
       }
     }
   }

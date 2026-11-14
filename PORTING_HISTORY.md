@@ -13378,3 +13378,83 @@ x264 `--ref 2` 真流解码依旧 3 帧全解。
 write_char`（`String[i]` 返回码点数值、`toString()` 是十进制——本片"0x97 非
 法 NAL"乌龙即此）；MoonBit 字节字面量 `b'\x00'` 经 python 转写时双反斜杠
 陷阱；诊断断言与打印必须同轮同源（跨轮复用旧 dump 曾误导两小时）。
+
+## §417 H.264 编码能力大满贯系列——CABAC 多参考收口 + 色度 RD + 周期/强制 IDR × 码控全家 + 在线 VBV（2026-11-14）
+
+§416 之后连续十七轮（十七份交接文档随提交入库），把纯 MoonBit 编码器从
+「P-only 单 GOP 固定 QP」推进到「周期/手动 IDR + B GOP + ABR/VBV + 在线流式
+VBV」全组合，并解除 §416 的 CABAC×multi_ref 拒收。逐线要点：
+
+**CABAC×multi_ref 收口**：四个真因——CABAC Main SPS 的 max_num_ref_frames
+写死 1、PPS 默认 L0 活动数写死 1、IDR 参数集副本 p_ps.nrefs 写死 1（外发 PPS
+与后续 P 片 ref_idx 计数失步）、cabac_mvd_partition 运动分区写回复位
+ref_idx=0（mb20 写回 0 → mb21 编码器 ctx0/解码器 ctx1 分歧）。修后双熵多参考
+全开（B 切片多参考与批式多参考码控仍拒收）。
+
+**色度失真进决策**：快速 Skip 由 luma-SAD 升级为「真实 MC/加权预测的 YUV
+SSD 全零」；RD 的 coded/Skip 候选统一 reconstruction_ssd（16×16 Y + 双 8×8
+色度，10-bit 最坏 384×1023^2 在 Int32 安全、代价乘法仍在 Int64）；多参考
+选择增加 Cb/Cr SAD。三个连带真 bug：DC 全零 AC 非零时 cbp 判断顺序（先判
+AC=2 再判 DC=1，CAVLC/CABAC 双路径）、CABAC 下一 MB skip 探价前漏复位
+reference slot 0、P_8x8 胜出不更新 best_cost。决策变更后 RC/AQ/I4P/旧 VBV/
+CABAC 的十余项历史黄金值全部经真实 FFmpeg（-v warning -threads 1，零告警）
+framemd5 重新仲裁重钉，不放宽任何功能断言。
+
+**活动参考数量预热**：SPS/PPS 声明配置容量，P 片按当前重建历史长度写
+num_ref_idx_active_override（新私有 put_active_refs），权重表条目数与中性
+权重填充同步用活动数——消除 DPB 未填满期 FFmpeg「Missing reference picture」
+提示；35 帧跨 frame_num 两次回绕（3/16 深度 × 双熵）逐帧对拍零告警。
+
+**多参考 × 码控**：multi_ref × target_bytes 与 multi_ref × VBV/CBR 相继开放
+（VBV 两包装函数原先不收 multi_ref——QP 搜索与最终带 filler 编码静默回退单
+参考，补私有参数穿透至两次 qps 编码）；8/9/10-bit × 双熵 × 4×4/8x8 ×
+multi_ref+AQ+weightp+AUD+VBV 十二组合统一门面全过；参考解码 FFI 补
+AV_PIX_FMT_YUV420P9LE（kind=2，两字节 LE 样本逐行复制）使 9-bit 输出可被
+仲裁；x264 绑定按定向 ASan 复验。
+
+**流式/周期 IDR 家族**：x264 绑定 send_frame(force_idr=)（AVFrame.pict_type=I
++ 私有选项 forced-idr=1，逐帧 av_frame_unref 不跨帧继承）；纯 MoonBit
+push_frame(force_idr=)（重复 SPS/PPS、参考平面/宏块镜像/frame_num 重置、B
+调度有 pending 图时明确拒收且不消费输入）；VideoEncConfig.keyint 周期 GOP
+（显示帧距离判界，手动 force_idr 重启周期；批式经同一流式调度实现）；
+keyint × target_bytes 全局一次 QP 搜索（video_encoder_periodic.mbt，候选
+成本=含全部 IDR/重复参数集/AUD/filler 的完整拼接码流）；keyint × 批式 VBV
+连续 CPB——每个 IDR AU 携带 buffering_period、后续 BP 按前序 AU 消耗后的
+真实余量，cpb_removal_delay 相对 preceding AU 最近 BP（H.264 08/2024
+D.2.1/D.2.2），低层 intra 编码函数补可选 idr_cpb_delay。
+
+**周期 B GOP**：固定 QP 周期/手动 B IDR（私有 gop_start 计显示位距 +
+flush_pending 尾 P 收尾，一次 push 可输出旧尾 P 与新 IDR 两个 AU）；顺手修
+B 帧 intra4x4/8x8 helper 四处漏传 qp_ext/bit_depth（9-bit CABAC 第二 GOP 起
+recon 分歧真因）；周期 B × ABR（B 分支复用 h264_encode_frames_b，全局显示序
+QP 数组按 GOP 切片）；周期 B × VBV——新 h264_b_coding_order 解码序→显示位
+映射修正 VBV 的 QP 提升（旧实现按 AU 索引，I0/P2/B1 溢出会错提 B1 的 QP；
+普通 B 的 filler 索引同步改解码序）、固定一帧输出滞后（output_delay =
+2*(display+1-decode)：IDR=2/超前 P=4/B=0/尾 P=2）、B SPS VUI
+max_num_reorder_frames=1/max_dec_frame_buffering=2；两个真 bug——B intra
+分支漏传 vbv（内部 PS 有 HRD 而实际写出的 B SPS 无 VUI）与 CAVLC B SPS 漏
+防起始码转义（加入 HRD 后被 FFmpeg 检出 Truncated VUI）。
+
+**在线（逐帧流式）VBV**：P-only 在线 VBV（h264_enc_stream_vbv.mbt 候选克隆
+事务——共享只读参考像素/PPS，独立宏块镜像/参考列表外层数组/统计/输出队列；
+只有实际 AU+filler 可移除且下一帧不溢出才提交，失败丢弃不消费输入、QP51
+仍不适配报错；周期/手动 IDR 沿用连续 CPB）；B 序列在线 VBV 成对事务（先选
+未来 P 的 QP 再按剩余缓冲选待编码 B 的 QP，两图全部成功才提交，否则撤销已
+成功的 P、保留 pending B/参考/统计/旧输出；finish 对 pending 尾 P 走同一
+事务；新私有 vbv_coded 区分显示帧数与实际编码 AU，CPB 时钟按编码序推进、
+DPB delay 按显示/编码位置计算）。CLI --stream 已支持完整 VBV 三参数 + keyint。
+
+**仍拒收**：流式 ABR（未知输入长度的总字节预算契约未定，不能直接解除
+target_bytes 拒收）、B × multi_ref>1。
+
+**验证**：每轮 wasm 专项+回归+CLI 全绿（末轮 59 项、CLI 25/25）；native
+（ffmpeg-moonbit-ffref:nine-x264）累计新增 oracle 覆盖 CABAC 多参考、色度、
+活动参考、工具组合、IDR/周期族、周期 B ABR/VBV、在线 P/B VBV——数百帧
+FFmpeg/MoonBit 逐像素一致、完整流与独立 IDR 尾流 warning/error 均 0、独立
+AU 大小 CPB 回放通过（逐轮数字见各交接文档）。**收口轮（REPIN417）**：全族
+29 个编码器测试文件完整重跑，清偿系列期间未重跑的七文件 15 处旧黄金值
+（bi8/bintra/bparts/cabacrd/weightp/dct8/vbv——色度 RD 与周期/在线线决策
+变更的遗留钉），18 条流经 docker FFmpeg 零告警 framemd5 仲裁重钉（B 流按
+coding↔display 序映射核对全等才钉），cabacrd 补三条永久转储、WPARB 转储
+前移钉值之前。收口门：宿主 wasm 103+84+CLI 25 = **212/212 全绿**；
+moon check --target wasm --deny-warn、git diff --check 通过。

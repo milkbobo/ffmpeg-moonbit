@@ -185,14 +185,17 @@ pub fn X264Encoder::open(
 /// only, row-major, `bytes_per_sample` bytes per sample, little-endian).
 /// Returns `false` when the encoder still has an undrained packet
 /// (avcodec's EAGAIN); the caller should drain and resend.
+/// `force_idr = true` requests an IDR picture at this frame's PTS, even
+/// with an open GOP. On EAGAIN, resend with the same flag and planes.
 pub fn X264Encoder::send_frame(
   self : X264Encoder,
   pts~ : Int64,
   y~ : Bytes,
   u~ : Bytes,
   v~ : Bytes,
+  force_idr~ : Bool = false,
 ) -> Bool raise X264Error {
-  match x264enc_send_frame_ffi(self.h, pts, y, u, v) {
+  match x264enc_send_frame_ffi(self.h, pts, y, u, v, force_idr) {
     0 => true
     1 => false
     code => raise SendFailed(code)
@@ -310,14 +313,14 @@ pub struct X264DecFrames {
   n_frames : Int32
   width : Int32
   height : Int32
-  /// 0 = yuv420p, 1 = yuv420p10le (the stub's sink kinds).
+  /// 0 = yuv420p, 1 = yuv420p10le, 2 = yuv420p9le (sink kinds).
   kind : Int32
   blob : Bytes
 }
 
 ///|
 fn X264DecFrames::bps(self : X264DecFrames) -> Int32 {
-  if self.kind == 1 {
+  if self.kind != 0 {
     2
   } else {
     1
@@ -325,7 +328,7 @@ fn X264DecFrames::bps(self : X264DecFrames) -> Int32 {
 }
 
 ///|
-/// Bytes per sample of the decoded planes (1 for 8-bit, 2 for 10-bit LE).
+/// Bytes per sample of the decoded planes (1 for 8-bit, 2 for 9/10-bit LE).
 pub fn X264DecFrames::bytes_per_sample(self : X264DecFrames) -> Int32 {
   self.bps()
 }
@@ -385,10 +388,10 @@ pub fn x264_decode_annexb(stream : Bytes) -> Result[X264DecFrames, String] {
   if width <= 0 || height <= 0 || n < 0 {
     return Err("x264dec: bad blob geometry")
   }
-  if kind != 0 && kind != 1 {
+  if kind != 0 && kind != 1 && kind != 2 {
     return Err("x264dec: unsupported pixel kind \{kind}")
   }
-  let bps = if kind == 1 { 2 } else { 1 }
+  let bps = if kind == 0 { 1 } else { 2 }
   let frame_len = width * height * bps + 2 * (width / 2) * (height / 2) * bps
   if blob.length() != 16 + n * frame_len {
     return Err("x264dec: blob size \{blob.length()} != 16 + \{n}x\{frame_len}")

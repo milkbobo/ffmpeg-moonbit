@@ -365,7 +365,7 @@ test "h264 enc b: aud and aq combine" {
   inspect(
     h264b_md5(stream),
     content=(
-      #|e8ed1d152644985504ce9208b84933d4
+      #|146b72999e2a5ac5b0af9fa05975eacc
     ),
   )
   inspect(
@@ -408,11 +408,11 @@ test "h264 enc b: ffmpeg-arbitrated six frames (96x64, QP 24)" {
     fail("expected 6 frames")
   }
   let md5s = h264b_display_md5s(dec)
-  // §405 re-pin (defaults on): frame 0 is unchanged, the reordered
-  // P/B pictures carry the new B-line + 8x8DCT decisions.
+  // Re-pinned against the C decoder by x264_wbtest's "legacy six-frame
+  // B snapshots" test after the shared P prediction/chroma corrections.
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "c5c4868e055734b3972615c374c7e693", "3696059c7b46132a7eb2a4f043985fd1",
-    "4b9983fe2892fa17bd3f81963294c7ca", "f52b6925ce4baa217950fc7bc314c2d5", "9b0cbacb170c82123740b8920d8f3f3f",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "79cb6cd97cc795b5c41fb50ccd5db048", "683deaf38ca7e61d3ae43498af9ac29b",
+    "3e8a91f312c23e1285933605fd084bfc", "b59196a0d5e18e260f87add844c5a855", "6853569a483390780d73ef9d826c7bf2",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])

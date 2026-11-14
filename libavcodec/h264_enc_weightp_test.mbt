@@ -169,19 +169,20 @@ test "h264 enc: weightp cuts a fade's residual energy" {
     Ok(f) => f
     Err(e) => fail(e)
   }
-  let pins = [
-    "a89bd6379ca72e67b8593d4546f172f8", "70ad49b3f0d98ddb494fd8c90a94581f", "f3e840210eea8690dc4ab5b427e41906",
-    "1a7e01b35ddb423598c496c140958b44", "936394915bdfc14a978b98a002efe77d", "6d8751612c86016c73ccff7189362006",
-  ]
-  for i, f in filtered {
-    inspect(h264wp_md5(f.yuvp()), content=pins[i])
-  }
-  // Replayable Annex B dump for re-running the external arbitration.
+  // Replayable Annex B dump for re-running the external arbitration
+  // (printed before the pins so it survives a stale-pin failure).
   let mut d = ""
   for i = 0; i < on.length(); i = i + 1 {
     d = d + (on[i].to_int() & 0xFF).to_string() + ","
   }
   println("WPARB:\{d}")
+  let pins = [
+    "a89bd6379ca72e67b8593d4546f172f8", "2c3baa7eb776aaf2be0014130e59010a", "bb0c44ff0291a78c1aadbf107dc8eed5",
+    "db21e79b002fcfd107bc8454b9110e9b", "816079cbc81af0f19c0abfca2d0e803a", "4bffc3ceaf65e313651a8ded2b25d728",
+  ]
+  for i, f in filtered {
+    inspect(h264wp_md5(f.yuvp()), content=pins[i])
+  }
 }
 
 ///|

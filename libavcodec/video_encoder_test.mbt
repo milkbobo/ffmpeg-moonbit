@@ -18,12 +18,125 @@ fn ve_md5(data : Bytes) -> String {
 }
 
 ///|
+test "video enc: multiref VBV forwards to both batch encoders" {
+  let frames = h264p_fixture(32, 32, 6)
+  for cabac in [false, true] {
+    let config = {
+      ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+      cabac,
+      b_slices: false,
+      multi_ref: 3,
+      qp: 20,
+      vbv_maxrate: 200000,
+      vbv_bufsize: 32000,
+      fps: 25,
+    }
+    let via = match
+      @libavcodec.video_encode(
+        frames,
+        codec=@libavcodec.VideoCodec::H264,
+        config~,
+      ) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    let direct = match
+      (if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=32,
+          height=32,
+          qp=20,
+          b_slices=false,
+          multi_ref=3,
+          vbv_maxrate=200000,
+          vbv_bufsize=32000,
+          fps=25,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=32,
+          height=32,
+          qp=20,
+          b_slices=false,
+          multi_ref=3,
+          vbv_maxrate=200000,
+          vbv_bufsize=32000,
+          fps=25,
+        )
+      }) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    assert_eq(ve_md5(via), ve_md5(direct))
+  }
+}
+
+///|
+test "video enc: multiref average-byte targeting forwards to both encoders" {
+  let frames = h264p_fixture(32, 32, 5)
+  for cabac in [false, true] {
+    let config = {
+      ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+      cabac,
+      b_slices: false,
+      multi_ref: 3,
+      qp: 20,
+      target_bytes: 300,
+    }
+    let via = match
+      @libavcodec.video_encode(
+        frames,
+        codec=@libavcodec.VideoCodec::H264,
+        config~,
+      ) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    let direct = match
+      (if cabac {
+        @libavcodec.h264_encode_frames_cabac(
+          frames,
+          width=32,
+          height=32,
+          qp=20,
+          target_bytes=300,
+          b_slices=false,
+          multi_ref=3,
+        )
+      } else {
+        @libavcodec.h264_encode_frames(
+          frames,
+          width=32,
+          height=32,
+          qp=20,
+          target_bytes=300,
+          b_slices=false,
+          multi_ref=3,
+        )
+      }) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    assert_eq(ve_md5(via), ve_md5(direct))
+  }
+}
+
+///|
 test "video enc: facade batch is byte-identical to the h264 entries" {
   let frames = h264p_fixture(96, 64, 6)
   for cabac in [false, true] {
-    let config = { ..@libavcodec.VideoEncConfig::new(width=96, height=64), cabac, }
+    let config = {
+      ..@libavcodec.VideoEncConfig::new(width=96, height=64),
+      cabac,
+    }
     let via = match
-      @libavcodec.video_encode(frames, codec=@libavcodec.VideoCodec::H264, config~) {
+      @libavcodec.video_encode(
+        frames,
+        codec=@libavcodec.VideoCodec::H264,
+        config~,
+      ) {
       Ok(s) => s
       Err(e) => fail(e)
     }
@@ -80,31 +193,44 @@ test "video enc: facade batch is byte-identical to the h264 entries" {
 ///|
 test "video enc: facade forwards rate controls byte-identically" {
   let frames = h264_rc_fixture(5)
-  for (tag, config, cabac) in [
-    ("abr", { ..@libavcodec.VideoEncConfig::new(width=64, height=48), target_bytes: 1500, }, false),
-    (
-      "vbv-cavlc",
-      {
-        ..@libavcodec.VideoEncConfig::new(width=64, height=48),
-        vbv_maxrate: 90000,
-        vbv_bufsize: 18000,
-        fps: 30,
-      },
-      false,
-    ),
-    (
-      "vbv-cabac",
-      {
-        ..@libavcodec.VideoEncConfig::new(width=64, height=48),
-        cabac: true,
-        vbv_maxrate: 60000,
-        vbv_bufsize: 12000,
-        fps: 30,
-      },
-      true,
-    ),
-  ] {
-    let via = match @libavcodec.video_encode(frames, codec=@libavcodec.VideoCodec::H264, config~) {
+  for
+    (tag, config, cabac) in [
+      (
+        "abr",
+        {
+          ..@libavcodec.VideoEncConfig::new(width=64, height=48),
+          target_bytes: 1500,
+        },
+        false,
+      ),
+      (
+        "vbv-cavlc",
+        {
+          ..@libavcodec.VideoEncConfig::new(width=64, height=48),
+          vbv_maxrate: 90000,
+          vbv_bufsize: 18000,
+          fps: 30,
+        },
+        false,
+      ),
+      (
+        "vbv-cabac",
+        {
+          ..@libavcodec.VideoEncConfig::new(width=64, height=48),
+          cabac: true,
+          vbv_maxrate: 60000,
+          vbv_bufsize: 12000,
+          fps: 30,
+        },
+        true,
+      ),
+    ] {
+    let via = match
+      @libavcodec.video_encode(
+        frames,
+        codec=@libavcodec.VideoCodec::H264,
+        config~,
+      ) {
       Ok(s) => s
       Err(e) => fail("\{tag}: \{e}")
     }
@@ -163,7 +289,10 @@ test "video enc: facade forwards rate controls byte-identically" {
 ///|
 test "video enc: streaming facade matches H264StreamEncoder and the batch" {
   let frames = h264p_fixture(96, 64, 5)
-  let config = { ..@libavcodec.VideoEncConfig::new(width=96, height=64), b_slices: false, }
+  let config = {
+    ..@libavcodec.VideoEncConfig::new(width=96, height=64),
+    b_slices: false,
+  }
   let via = match
     @libavcodec.VideoEncoder::open(codec=@libavcodec.VideoCodec::H264, config~) {
     Ok(enc) => enc
@@ -237,7 +366,12 @@ test "video enc: streaming facade matches H264StreamEncoder and the batch" {
   assert_eq(ve_md5(joined), ve_md5(direct_bytes))
   // And the batch entry agrees with both (the long-standing stream==batch
   // invariant, pinned here through the facade).
-  let batch = match @libavcodec.video_encode(frames, codec=@libavcodec.VideoCodec::H264, config~) {
+  let batch = match
+    @libavcodec.video_encode(
+      frames,
+      codec=@libavcodec.VideoCodec::H264,
+      config~,
+    ) {
     Ok(s) => s
     Err(e) => fail(e)
   }
@@ -260,7 +394,12 @@ test "video enc: pixel format naming and High 10 through the facade" {
     cabac: true,
     bit_depth: 10,
   }
-  let stream = match @libavcodec.video_encode(frames, codec=@libavcodec.VideoCodec::H264, config~) {
+  let stream = match
+    @libavcodec.video_encode(
+      frames,
+      codec=@libavcodec.VideoCodec::H264,
+      config~,
+    ) {
     Ok(s) => s
     Err(e) => fail(e)
   }
@@ -283,39 +422,46 @@ test "video enc: pixel format naming and High 10 through the facade" {
 
 ///|
 test "video enc: facade error surface" {
-  // Rate controls are batch-only.
+  // ABR remains batch-only; incomplete VBV is rejected.
   match
-    @libavcodec.VideoEncoder::open(
-      codec=@libavcodec.VideoCodec::H264,
-      config={
-        ..@libavcodec.VideoEncConfig::new(width=64, height=48),
-        target_bytes: 1500,
-      },
-    ) {
+    @libavcodec.VideoEncoder::open(codec=@libavcodec.VideoCodec::H264, config={
+      ..@libavcodec.VideoEncConfig::new(width=64, height=48),
+      target_bytes: 1500,
+    }) {
     Ok(_) => fail("streaming accepted target_bytes")
     Err(_) => ()
   }
   match
-    @libavcodec.VideoEncoder::open(
-      codec=@libavcodec.VideoCodec::H264,
-      config={
-        ..@libavcodec.VideoEncConfig::new(width=64, height=48),
-        vbv_maxrate: 90000,
-        vbv_bufsize: 18000,
-        fps: 30,
-      },
-    ) {
-    Ok(_) => fail("streaming accepted VBV")
+    @libavcodec.VideoEncoder::open(codec=@libavcodec.VideoCodec::H264, config={
+      ..@libavcodec.VideoEncConfig::new(width=64, height=48),
+      vbv_maxrate: 90000,
+      vbv_bufsize: 0,
+      fps: 30,
+    }) {
+    Ok(_) => fail("streaming accepted incomplete VBV")
     Err(_) => ()
   }
   // Codec-level validation passes through unchanged (bad depth, geometry).
-  let config = { ..@libavcodec.VideoEncConfig::new(width=64, height=48), bit_depth: 11, }
-  match @libavcodec.video_encode(h264_rc_fixture(2), codec=@libavcodec.VideoCodec::H264, config~) {
+  let config = {
+    ..@libavcodec.VideoEncConfig::new(width=64, height=48),
+    bit_depth: 11,
+  }
+  match
+    @libavcodec.video_encode(
+      h264_rc_fixture(2),
+      codec=@libavcodec.VideoCodec::H264,
+      config~,
+    ) {
     Ok(_) => fail("facade accepted bit_depth 11")
     Err(e) => assert_true(e.contains("bit depth"), msg=e)
   }
   let bad_geom = @libavcodec.VideoEncConfig::new(width=63, height=48)
-  match @libavcodec.video_encode(h264_rc_fixture(2), codec=@libavcodec.VideoCodec::H264, config=bad_geom) {
+  match
+    @libavcodec.video_encode(
+      h264_rc_fixture(2),
+      codec=@libavcodec.VideoCodec::H264,
+      config=bad_geom,
+    ) {
     Ok(_) => fail("facade accepted odd width")
     Err(_) => ()
   }

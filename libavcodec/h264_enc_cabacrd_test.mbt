@@ -56,10 +56,21 @@ test "h264 cabac rd: default on and opt-out is byte-identical to it" {
   if off == plain {
     fail("the CAVLC-priced opt-out stream equals the default one")
   }
+  // Replayable Annex B dumps for re-running the external arbitration.
+  let mut d1 = ""
+  for i = 0; i < plain.length(); i = i + 1 {
+    d1 = d1 + (plain[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARBCRDALLON:\{d1}")
+  let mut d2 = ""
+  for i = 0; i < off.length(); i = i + 1 {
+    d2 = d2 + (off[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARBCRDOFF:\{d2}")
   inspect(
     h264cab_md5(plain),
     content=(
-      #|37b30dcf85a02b7291daaa9d0c5898d2
+      #|25040389940d0c3d1cf5393ac5521a9e
     ),
   )
 }
@@ -174,19 +185,19 @@ test "h264 cabac rd: saves bits over cavlc-priced decisions" {
   inspect(
     off.length(),
     content=(
-      #|1919
+      #|2089
     ),
   )
   inspect(
     rd.length(),
     content=(
-      #|1919
+      #|2089
     ),
   )
   inspect(
     h264cab_md5(rd),
     content=(
-      #|1e6b96b73ccaf5026169b270cd7bcd16
+      #|830625fad5a0ea1c20fd439573ba9bbb
     ),
   )
 }
@@ -216,10 +227,16 @@ test "h264 cabac rd: combines with aq, intra-in-p and dct8x8" {
   if dec.length() != 5 {
     fail("expected 5 frames, got \{dec.length()}")
   }
+  // Replayable Annex B dump for re-running the external arbitration.
+  let mut d = ""
+  for i = 0; i < stream.length(); i = i + 1 {
+    d = d + (stream[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARBCRDCOMBO:\{d}")
   inspect(
     h264cab_md5(stream),
     content=(
-      #|60351f46b20d1f5045d7df5cbc9911fc
+      #|1103d0d4b46eb4397786822828afa42f
     ),
   )
 }
@@ -256,8 +273,8 @@ test "h264 cabac rd: ffmpeg-arbitrated six frames (96x64, QP 24)" {
     fail("expected 6 frames")
   }
   let pins = [
-    "47e79e2c702188f62c13ce0c611fd512", "9f210a004aa853926ea81865a4daa6ac", "4bbaa5fbd653e129cfc55b84eb95329e",
-    "4bab814244912c92b5c425dc1b4ee0b0", "eb5fb0b2fc71efccb948c2cd21af0158", "74779281ed1a483dad2355ba9b2cbc17",
+    "47e79e2c702188f62c13ce0c611fd512", "bd75ca1dba4b2466094842e73f3cf316", "d8471a5b9f96449c127543fd5c9ffac0",
+    "2a1259c862fccd3aeebacd2f0ac02e0f", "7428daf19023a3c31ca70875952fbbcc", "2569dcbc73c920620922df5cbd9fa33e",
   ]
   for i, f in frames_dec {
     inspect(h264cab_md5(f.yuvp()), content=pins[i])

@@ -38,7 +38,7 @@ test "CLI rejects unsupported streaming and CABAC RD combinations" {
       ["--stream", "--target-bytes", "1000"],
       [
         "--stream", "--vbv-maxrate", "64000", "--vbv-bufsize", "32000", "--fps",
-        "30",
+        "30", "--target-bytes", "1000",
       ],
       ["--cabac", "--cabac-rd", "--cabac-rd"],
     ] {
@@ -224,13 +224,13 @@ test "CLI accepts stream and b-slices, rejects their bad combinations" {
       _ => ()
     }
   }
-  // Invalid: --stream still excludes the rate controls.
+  // Invalid: streaming ABR and mixed ABR/VBV are unsupported.
   for
     extra in [
       ["--stream", "--target-bytes", "1000"],
       [
         "--stream", "--vbv-maxrate", "64000", "--vbv-bufsize", "32000", "--fps",
-        "30",
+        "30", "--target-bytes", "1000",
       ],
     ] {
     try test_options(extra) catch {
@@ -420,9 +420,7 @@ test "CLI codec flag selects the facade codec" {
 test "CLI multi-ref parses and reaches the facade" {
   // Default is the single-reference stream.
   assert_eq(test_options([]).multi_ref, 1)
-  let opts = test_options([
-    "--multi-ref", "2", "--no-b-slices", "--no-weightp",
-  ])
+  let opts = test_options(["--multi-ref", "2", "--no-b-slices", "--no-weightp"])
   assert_eq(opts.multi_ref, 2)
   // The facade rejects the B-slice combination; the CLI passes the depth
   // through untouched.
@@ -436,4 +434,198 @@ test "CLI multi-ref parses and reaches the facade" {
     Err(e) => fail(e)
   }
   assert_eq(dec.length(), 3)
+}
+
+///|
+test "CLI periodic keyint agrees in batch and streaming modes" {
+  assert_eq(test_options([]).keyint, 0)
+  for cabac in [false, true] {
+    let args = ["--no-b-slices", "--keyint", "2", "--multi-ref", "3"]
+    if cabac {
+      args.push("--cabac")
+    }
+    let opts = test_options(args)
+    assert_eq(opts.keyint, 2)
+    let raw = Bytes::make(384 * 5, 128)
+    let (batch, count) = encode_raw(raw, opts)
+    let (streamed, stream_count) = encode_raw_stream(raw, opts)
+    assert_eq(count, 5)
+    assert_eq(stream_count, 5)
+    assert_eq(batch, streamed)
+    let mut idrs = 0
+    for i in 0..<(batch.length() - 4) {
+      if batch[i] == 0 &&
+        batch[i + 1] == 0 &&
+        batch[i + 2] == 0 &&
+        batch[i + 3] == 1 &&
+        (batch[i + 4].to_int() & 31) == 5 {
+        idrs += 1
+      }
+    }
+    assert_eq(idrs, 3)
+    let decoded = match @codec.h264_decode_annexb_frames(batch, false) {
+      Ok(d) => d
+      Err(e) => fail(e)
+    }
+    assert_eq(decoded.length(), 5)
+  }
+  for
+    args in [
+      ["--keyint", "-1"],
+      ["--keyint", "2", "--target-bytes", "1000", "--stream"],
+      ["--keyint", "2", "--no-b-slices", "--stream", "--target-bytes", "1000"],
+    ] {
+    try test_options(args) catch {
+      _ => ()
+    } noraise {
+      _ => fail("invalid keyint accepted")
+    }
+  }
+}
+
+///|
+test "CLI periodic keyint accepts a batch byte budget" {
+  let opts = test_options([
+    "--keyint", "2", "--no-b-slices", "--target-bytes", "1000", "--multi-ref", "3",
+  ])
+  let (stream, count) = encode_raw(Bytes::make(384 * 5, 128), opts)
+  assert_eq(count, 5)
+  assert_true(stream.length() <= 1000)
+  let decoded = match @codec.h264_decode_annexb_frames(stream, false) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
+  assert_eq(decoded.length(), 5)
+}
+
+///|
+test "CLI periodic B GOPs agree in batch and streaming modes" {
+  for cabac in [false, true] {
+    for keyint in [1, 3, 4] {
+      let args = ["--keyint", keyint.to_string(), "--aq", "--aud"]
+      if cabac {
+        args.push("--cabac")
+      }
+      let opts = test_options(args)
+      let raw = Bytes::make(384 * 9, 128)
+      let (batch, count) = encode_raw(raw, opts)
+      let (streamed, stream_count) = encode_raw_stream(raw, opts)
+      assert_eq(count, 9)
+      assert_eq(stream_count, 9)
+      assert_eq(batch, streamed)
+      let decoded = match
+        @codec.h264_decode_annexb_display_frames(batch, false) {
+        Ok(d) => d
+        Err(e) => fail(e)
+      }
+      assert_eq(decoded.length(), 9)
+    }
+  }
+  for
+    args in [
+      ["--keyint", "3", "--target-bytes", "1000", "--stream"],
+      [
+        "--keyint", "3", "--vbv-maxrate", "64000", "--vbv-bufsize", "8000", "--fps",
+        "25", "--stream", "--target-bytes", "1000",
+      ],
+    ] {
+    try test_options(args) catch {
+      _ => ()
+    } noraise {
+      _ => fail("periodic B rate controls accepted")
+    }
+  }
+}
+
+///|
+test "CLI periodic P VBV agrees in batch and streaming modes" {
+  for cabac in [false, true] {
+    let args = [
+      "--keyint", "2", "--no-b-slices", "--vbv-maxrate", "64000", "--vbv-bufsize",
+      "8000", "--fps", "25", "--aud",
+    ]
+    if cabac {
+      args.push("--cabac")
+    }
+    let opts = test_options(args)
+    let (stream, count) = encode_raw(Bytes::make(384 * 5, 128), opts)
+    assert_eq(count, 5)
+    let decoded = match @codec.h264_decode_annexb_frames(stream, false) {
+      Ok(d) => d
+      Err(e) => fail(e)
+    }
+    assert_eq(decoded.length(), 5)
+    args.push("--stream")
+    let stream_opts = test_options(args)
+    let (online, online_count) = encode_raw_stream(
+      Bytes::make(384 * 5, 128),
+      stream_opts,
+    )
+    assert_eq(online_count, 5)
+    assert_eq(online, stream)
+  }
+}
+
+///|
+test "CLI periodic B GOPs accept a whole-sequence batch budget" {
+  for cabac in [false, true] {
+    let args = ["--keyint", "3", "--target-bytes", "1000", "--aq", "--aud"]
+    if cabac {
+      args.push("--cabac")
+    }
+    let opts = test_options(args)
+    let (stream, count) = encode_raw(Bytes::make(384 * 7, 128), opts)
+    assert_eq(count, 7)
+    assert_true(stream.length() <= 1000)
+    let decoded = match
+      @codec.h264_decode_annexb_display_frames(stream, false) {
+      Ok(d) => d
+      Err(e) => fail(e)
+    }
+    assert_eq(decoded.length(), 7)
+  }
+}
+
+///|
+test "CLI periodic B GOPs accept continuous batch VBV" {
+  for cabac in [false, true] {
+    for keyint in [1, 3, 4] {
+      let args = [
+        "--keyint",
+        keyint.to_string(),
+        "--vbv-maxrate",
+        "64000",
+        "--vbv-bufsize",
+        "8000",
+        "--fps",
+        "25",
+        "--aud",
+      ]
+      if cabac {
+        args.push("--cabac")
+      }
+      let opts = test_options(args)
+      let (stream, count) = encode_raw(Bytes::make(384 * 8, 128), opts)
+      assert_eq(count, 8)
+      let decoded = match
+        @codec.h264_decode_annexb_display_frames(stream, false) {
+        Ok(d) => d
+        Err(e) => fail(e)
+      }
+      assert_eq(decoded.length(), 8)
+      args.push("--stream")
+      let online_opts = test_options(args)
+      let (online, online_count) = encode_raw_stream(
+        Bytes::make(384 * 8, 128),
+        online_opts,
+      )
+      assert_eq(online_count, 8)
+      let online_decoded = match
+        @codec.h264_decode_annexb_display_frames(online, false) {
+        Ok(d) => d
+        Err(e) => fail(e)
+      }
+      assert_eq(online_decoded.length(), 8)
+    }
+  }
 }

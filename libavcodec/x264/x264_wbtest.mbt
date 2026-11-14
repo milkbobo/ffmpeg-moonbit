@@ -180,6 +180,1621 @@ fn x264_cross_decode(
 }
 
 ///|
+test "x264 forced IDR respects PTS and does not persist across frames" {
+  for bframes in [0, 2] {
+    let enc = X264Encoder::open(width=96, height=64, global_header=false, options=[
+      ("preset", "medium"),
+      ("g", "100"),
+      ("bf", bframes.to_string()),
+      ("b_strategy", "0"),
+      ("sc_threshold", "0"),
+      ("x264-params", "open-gop=1"),
+    ])
+    let packets : Array[X264Packet] = []
+    fn pull(enc : X264Encoder, packets : Array[X264Packet]) -> Unit raise {
+      for ;; {
+        match enc.receive_packet() {
+          Packet(p) => packets.push(p)
+          Again | Eof => break
+        }
+      }
+    }
+    for frame in x264_fixture(9, 96, 64, 1) {
+      let (pts, y, u, v) = frame
+      while !enc.send_frame(pts~, y~, u~, v~, force_idr=pts == 4L) {
+        pull(enc, packets)
+      }
+      pull(enc, packets)
+    }
+    for p in enc.flush() {
+      packets.push(p)
+    }
+    enc.close()
+    assert_eq(packets.length(), 9)
+    for p in packets {
+      assert_eq(p.keyframe, p.pts == Some(0L) || p.pts == Some(4L))
+    }
+    let stream = x264_concat(packets)
+    let probe = match x264_probe_annexb(stream) {
+      Ok(p) => p
+      Err(e) => fail(e)
+    }
+    assert_eq(probe.errors, 0)
+    assert_eq(probe.warnings, 0)
+    assert_eq(probe.nal_types.filter(t => t == 5).length(), 2)
+    if bframes > 0 {
+      let fp = match x264_probe_frames(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_true(fp.frames.any(f => f.pict_type == 3))
+    }
+    x264_cross_decode(stream, 9, 1)
+    // An IDR must also be independently decodable from its own access unit.
+    let tail : Array[X264Packet] = []
+    let mut started = false
+    for p in packets {
+      if p.pts == Some(4L) {
+        started = true
+      }
+      if started {
+        tail.push(p)
+      }
+    }
+    x264_cross_decode(x264_concat(tail), 5, 1)
+  }
+}
+
+///|
+test "x264 oracle: pure multiref warm-up is warning-free and matches FFmpeg pixels" {
+  let input = x264_fixture(7, 96, 64, 1)
+  let frames = input.map(f => (f.1, f.2, f.3))
+  for nrefs in [2, 3, 16] {
+    for cabac in [false, true] {
+      for weightp in [false, true] {
+        let stream = match
+          (if cabac {
+            @libavcodec.h264_encode_frames_cabac(
+              frames,
+              width=96,
+              height=64,
+              qp=26,
+              b_slices=false,
+              multi_ref=nrefs,
+              weightp~,
+            )
+          } else {
+            @libavcodec.h264_encode_frames(
+              frames,
+              width=96,
+              height=64,
+              qp=26,
+              b_slices=false,
+              multi_ref=nrefs,
+              weightp~,
+            )
+          }) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.n_frames, 7)
+        x264_cross_decode(stream, 7, 1)
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: multiref eviction across frame_num wraps is warning-free" {
+  let frames = x264_fixture(35, 32, 32, 1).map(f => (f.1, f.2, f.3))
+  for nrefs in [3, 16] {
+    for cabac in [false, true] {
+      let stream = match
+        (if cabac {
+          @libavcodec.h264_encode_frames_cabac(
+            frames,
+            width=32,
+            height=32,
+            qp=26,
+            b_slices=false,
+            multi_ref=nrefs,
+          )
+        } else {
+          @libavcodec.h264_encode_frames(
+            frames,
+            width=32,
+            height=32,
+            qp=26,
+            b_slices=false,
+            multi_ref=nrefs,
+          )
+        }) {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      assert_eq(probe.n_frames, 35)
+      x264_cross_decode(stream, 35, 1)
+    }
+  }
+}
+
+///|
+test "x264 oracle: chroma-only AC residuals match FFmpeg at 8 and 10 bits" {
+  for depth in [8, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames : Array[(Bytes, Bytes, Bytes)] = []
+    for f in 0..<7 {
+      let y = Array::make(1024 * bps, b'\x00')
+      let c = Array::make(256 * bps, b'\x00')
+      for i in 0..<1024 {
+        x264_put_sample(y, i, 128 << (depth - 8), bps)
+      }
+      for i in 0..<256 {
+        let value = if (i / 16 / 2 + i % 16 / 2 + f % 2) % 2 == 0 {
+          40
+        } else {
+          210
+        }
+        x264_put_sample(c, i, value << (depth - 8), bps)
+      }
+      let chroma = Bytes::from_array(c[:])
+      frames.push((Bytes::from_array(y[:]), chroma, chroma))
+    }
+    for cabac in [false, true] {
+      for weightp in [false, true] {
+        let stream = match
+          (if cabac {
+            @libavcodec.h264_encode_frames_cabac(
+              frames,
+              width=32,
+              height=32,
+              qp=16,
+              b_slices=false,
+              multi_ref=2,
+              bit_depth=depth,
+              weightp~,
+            )
+          } else {
+            @libavcodec.h264_encode_frames(
+              frames,
+              width=32,
+              height=32,
+              qp=16,
+              b_slices=false,
+              multi_ref=2,
+              bit_depth=depth,
+              weightp~,
+            )
+          }) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        x264_cross_decode(stream, 7, bps)
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: multiref average-byte control matches FFmpeg" {
+  for depth in [8, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(5, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      fn encode(qp : Int32, target : Int32) -> Bytes raise {
+        match
+          (if cabac {
+            @libavcodec.h264_encode_frames_cabac(
+              frames,
+              width=32,
+              height=32,
+              qp~,
+              target_bytes=target,
+              b_slices=false,
+              multi_ref=3,
+              bit_depth=depth,
+            )
+          } else {
+            @libavcodec.h264_encode_frames(
+              frames,
+              width=32,
+              height=32,
+              qp~,
+              target_bytes=target,
+              b_slices=false,
+              multi_ref=3,
+              bit_depth=depth,
+            )
+          }) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+      }
+      let fine = encode(20, 0)
+      let coarse = encode(51, 0)
+      let target = (fine.length() + coarse.length()) / 2
+      let stream = encode(20, target)
+      assert_true(stream.length() <= target)
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      assert_eq(probe.n_frames, 5)
+      x264_cross_decode(stream, 5, bps)
+    }
+  }
+}
+
+///|
+test "x264 oracle: multiref VBV streams match FFmpeg" {
+  for depth in [8, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(6, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      for tight in [false, true] {
+        let rate = if tight { 32000 } else { 200000 }
+        let buffer = if tight { 8000 } else { 32000 }
+        let stream = match
+          (if cabac {
+            @libavcodec.h264_encode_frames_cabac(
+              frames,
+              width=32,
+              height=32,
+              qp=20,
+              b_slices=false,
+              multi_ref=3,
+              bit_depth=depth,
+              vbv_maxrate=rate,
+              vbv_bufsize=buffer,
+              fps=25,
+            )
+          } else {
+            @libavcodec.h264_encode_frames(
+              frames,
+              width=32,
+              height=32,
+              qp=20,
+              b_slices=false,
+              multi_ref=3,
+              bit_depth=depth,
+              vbv_maxrate=rate,
+              vbv_bufsize=buffer,
+              fps=25,
+            )
+          }) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.n_frames, 6)
+        x264_cross_decode(stream, 6, bps)
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: multiref VBV frame_num wrap matches FFmpeg" {
+  let frames = x264_fixture(35, 32, 32, 1).map(f => (f.1, f.2, f.3))
+  for nrefs in [3, 16] {
+    for cabac in [false, true] {
+      let stream = match
+        (if cabac {
+          @libavcodec.h264_encode_frames_cabac(
+            frames,
+            width=32,
+            height=32,
+            qp=20,
+            b_slices=false,
+            multi_ref=nrefs,
+            vbv_maxrate=200000,
+            vbv_bufsize=32000,
+            fps=25,
+          )
+        } else {
+          @libavcodec.h264_encode_frames(
+            frames,
+            width=32,
+            height=32,
+            qp=20,
+            b_slices=false,
+            multi_ref=nrefs,
+            vbv_maxrate=200000,
+            vbv_bufsize=32000,
+            fps=25,
+          )
+        }) {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      assert_eq(probe.n_frames, 35)
+      x264_cross_decode(stream, 35, 1)
+    }
+  }
+}
+
+///|
+test "x264 oracle: all P tools compose at 8 9 and 10 bits" {
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    fn scale(plane : Bytes) -> Bytes {
+      if depth == 8 {
+        return plane
+      }
+      let out = Array::make(plane.length(), b'\x00')
+      for i in 0..<(plane.length() / 2) {
+        let sample = plane[i * 2].to_int() | (plane[i * 2 + 1].to_int() << 8)
+        x264_put_sample(out, i, sample << (depth - 8), 2)
+      }
+      Bytes::from_array(out[:])
+    }
+    let frames = x264_fixture(6, 32, 32, bps).map(f => {
+      (scale(f.1), scale(f.2), scale(f.3))
+    })
+    for cabac in [false, true] {
+      for dct8x8 in [false, true] {
+        let stream = match
+          @libavcodec.video_encode(frames, codec=@libavcodec.VideoCodec::H264, config={
+            ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+            cabac,
+            dct8x8,
+            b_slices: false,
+            multi_ref: 3,
+            bit_depth: depth,
+            aud: true,
+            aq: true,
+            aq_strength: 6,
+            weightp: true,
+            vbv_maxrate: 200000,
+            vbv_bufsize: 32000,
+            fps: 25,
+          }) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.n_frames, 6)
+        let decoded = match x264_decode_annexb(stream) {
+          Ok(d) => d
+          Err(e) => fail(e)
+        }
+        assert_eq(
+          decoded.kind,
+          if depth == 8 {
+            0
+          } else if depth == 9 {
+            2
+          } else {
+            1
+          },
+        )
+        assert_eq(decoded.bytes_per_sample(), bps)
+        x264_cross_decode(stream, 6, bps)
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: pure streaming forced IDR is independently decodable" {
+  fn join(aus : Array[Bytes]) -> Bytes {
+    let bytes : Array[Byte] = []
+    for au in aus {
+      for byte in au {
+        bytes.push(byte)
+      }
+    }
+    Bytes::from_array(bytes[:])
+  }
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(8, 32, 32, bps)
+    for
+      (cabac, aud) in [
+        (false, false),
+        (false, true),
+        (true, false),
+        (true, true),
+      ] {
+      let enc = match
+        @libavcodec.VideoEncoder::open(codec=@libavcodec.VideoCodec::H264, config={
+          ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+          cabac,
+          b_slices: false,
+          multi_ref: 3,
+          bit_depth: depth,
+          aq: true,
+          aq_strength: 6,
+          aud,
+        }) {
+        Ok(e) => e
+        Err(e) => fail(e)
+      }
+      let aus : Array[Bytes] = []
+      for i, (_, y, u, v) in frames {
+        match enc.push_frame(y, u, v, force_idr=i == 3 || i == 4) {
+          Ok(_) => ()
+          Err(e) => fail(e)
+        }
+        for au in enc.drain() {
+          aus.push(au)
+        }
+      }
+      match enc.finish() {
+        Ok(tail) =>
+          for au in tail {
+            aus.push(au)
+          }
+        Err(e) => fail(e)
+      }
+      assert_eq(aus.length(), 8)
+      let stream = join(aus)
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      for ty in [5, 7, 8] {
+        assert_eq(probe.nal_types.filter(t => t == ty).length(), 3)
+      }
+      x264_cross_decode(stream, 8, bps)
+      for start in [3, 4] {
+        let tail = join(aus[start:].to_owned())
+        let tp = match x264_probe_annexb(tail) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(tp.warnings, 0)
+        assert_eq(tp.errors, 0)
+        x264_cross_decode(tail, 8 - start, bps)
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: periodic batch IDR GOPs are independent" {
+  fn join(aus : Array[Bytes]) -> Bytes {
+    let bytes : Array[Byte] = []
+    for au in aus {
+      for byte in au {
+        bytes.push(byte)
+      }
+    }
+    Bytes::from_array(bytes[:])
+  }
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(8, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      let config = {
+        ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+        cabac,
+        keyint: 3,
+        b_slices: false,
+        multi_ref: 3,
+        bit_depth: depth,
+        aud: true,
+        aq: true,
+        aq_strength: 6,
+      }
+      let stream = match
+        @libavcodec.video_encode(
+          frames,
+          codec=@libavcodec.VideoCodec::H264,
+          config~,
+        ) {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      assert_eq(probe.nal_types.filter(t => t == 5).length(), 3)
+      x264_cross_decode(stream, 8, bps)
+      let enc = match
+        @libavcodec.VideoEncoder::open(
+          codec=@libavcodec.VideoCodec::H264,
+          config~,
+        ) {
+        Ok(e) => e
+        Err(e) => fail(e)
+      }
+      let aus : Array[Bytes] = []
+      for (y, u, v) in frames {
+        match enc.push_frame(y, u, v) {
+          Ok(_) => ()
+          Err(e) => fail(e)
+        }
+        for au in enc.drain() {
+          aus.push(au)
+        }
+      }
+      match enc.finish() {
+        Ok(tail) =>
+          for au in tail {
+            aus.push(au)
+          }
+        Err(e) => fail(e)
+      }
+      assert_eq(stream, join(aus))
+      for start in [3, 6] {
+        let tail = join(aus[start:].to_owned())
+        let tp = match x264_probe_annexb(tail) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(tp.warnings, 0)
+        assert_eq(tp.errors, 0)
+        x264_cross_decode(tail, 8 - start, bps)
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: periodic ABR uses a whole-sequence budget" {
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(7, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      let config = {
+        ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+        cabac,
+        keyint: 3,
+        b_slices: false,
+        multi_ref: 3,
+        bit_depth: depth,
+        qp: 20,
+        aud: true,
+        aq: true,
+        aq_strength: 3,
+      }
+      fn encode(config : @libavcodec.VideoEncConfig) -> Bytes raise {
+        match
+          @libavcodec.video_encode(
+            frames,
+            codec=@libavcodec.VideoCodec::H264,
+            config~,
+          ) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+      }
+      let fine = encode(config)
+      let coarse = encode({ ..config, qp: 51, })
+      let target = (fine.length() + coarse.length()) / 2
+      let stream = encode({ ..config, target_bytes: target, })
+      assert_true(stream.length() <= target)
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      assert_eq(probe.n_frames, 7)
+      assert_eq(probe.nal_types.filter(t => t == 5).length(), 3)
+      x264_cross_decode(stream, 7, bps)
+      assert_eq(probe.au_sizes.length(), 7)
+      let mut offset = 0
+      for i in 0..<7 {
+        if i == 3 || i == 6 {
+          let tail = stream[offset:].to_owned()
+          let tp = match x264_probe_annexb(tail) {
+            Ok(p) => p
+            Err(e) => fail(e)
+          }
+          assert_eq(tp.warnings, 0)
+          assert_eq(tp.errors, 0)
+          x264_cross_decode(tail, 7 - i, bps)
+        }
+        offset += probe.au_sizes[i]
+      }
+      assert_eq(offset, stream.length())
+    }
+  }
+}
+
+///|
+test "x264 oracle: periodic VBV keeps CPB continuity and random access" {
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(8, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      for keyint in [1, 3] {
+        let stats = @libavcodec.H264EncStats::new()
+        let stream = match
+          @libavcodec.video_encode(
+            frames,
+            codec=@libavcodec.VideoCodec::H264,
+            config={
+              ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+              cabac,
+              keyint,
+              b_slices: false,
+              multi_ref: 3,
+              bit_depth: depth,
+              qp: 10,
+              aud: true,
+              aq: true,
+              aq_strength: 3,
+              vbv_maxrate: 64000,
+              vbv_bufsize: 8000,
+              fps: 25,
+            },
+            stats~,
+          ) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.n_frames, 8)
+        assert_eq(probe.au_sizes.length(), 8)
+        assert_eq(
+          probe.nal_types.filter(t => t == 5).length(),
+          (8 + keyint - 1) / keyint,
+        )
+        let mut fullness = 7200
+        for size in probe.au_sizes {
+          assert_true(size * 8 <= fullness)
+          fullness = fullness - size * 8 + 2560
+          assert_true(fullness <= 8000)
+        }
+        assert_eq(stats.vbv_bits, stream.length().to_int64() * 8L)
+        x264_cross_decode(stream, 8, bps)
+        let mut offset = 0
+        for i in 0..<8 {
+          if i > 0 && i % keyint == 0 {
+            let tail = stream[offset:].to_owned()
+            let tp = match x264_probe_annexb(tail) {
+              Ok(p) => p
+              Err(e) => fail(e)
+            }
+            assert_eq(tp.warnings, 0)
+            assert_eq(tp.errors, 0)
+            x264_cross_decode(tail, 8 - i, bps)
+          }
+          offset += probe.au_sizes[i]
+        }
+        assert_eq(offset, stream.length())
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: periodic B GOPs preserve display order and random access" {
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(9, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      for keyint in [1, 3, 4] {
+        let config = {
+          ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+          cabac,
+          keyint,
+          bit_depth: depth,
+          aq: true,
+          aq_strength: 3,
+          aud: keyint == 4,
+        }
+        let stream = match
+          @libavcodec.video_encode(frames, codec=@libavcodec.H264, config~) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.n_frames, 9)
+        assert_eq(probe.au_sizes.length(), 9)
+        assert_eq(
+          probe.nal_types.filter(t => t == 5).length(),
+          (9 + keyint - 1) / keyint,
+        )
+        x264_cross_decode(stream, 9, bps)
+        let mut offset = 0
+        for i in 0..<9 {
+          if i > 0 && i % keyint == 0 {
+            let tail = stream[offset:].to_owned()
+            let tp = match x264_probe_annexb(tail) {
+              Ok(p) => p
+              Err(e) => fail(e)
+            }
+            assert_eq(tp.warnings, 0)
+            assert_eq(tp.errors, 0)
+            x264_cross_decode(tail, 9 - i, bps)
+          }
+          offset += probe.au_sizes[i]
+        }
+        assert_eq(offset, stream.length())
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: high-depth B intra texture uses extended QP" {
+  let mut intra_mbs = 0
+  // Moving bordered box and chroma ramps, matching the pure encoder's
+  // High 10 fixture. Frame 4 used to select an I8 B macroblock that was
+  // reconstructed with the helper's default 8-bit depth and user QP.
+  for depth in [9, 10] {
+    let scale = 1 << (depth - 8)
+    let frames : Array[(Bytes, Bytes, Bytes)] = []
+    for f in 0..<9 {
+      let planes : Array[Bytes] = []
+      for plane in 0..<3 {
+        let size = if plane == 0 { 32 } else { 16 }
+        let data : Array[Byte] = []
+        for row in 0..<size {
+          for col in 0..<size {
+            let value = if plane == 0 {
+              let bx = f * 4 % 16
+              let by = f * 3 % 16
+              let inside = col >= bx &&
+                col < bx + 16 &&
+                row >= by &&
+                row < by + 16
+              if inside &&
+                (col == bx || col == bx + 15 || row == by || row == by + 15) {
+                40
+              } else if inside {
+                220
+              } else {
+                (col * 2 + row * 3 + f) & 255
+              }
+            } else if plane == 1 {
+              ((col + f) & 63) + 96
+            } else {
+              ((row + f * 2) & 63) + 96
+            }
+            let sample = value * scale
+            data.push((sample & 255).to_byte())
+            data.push((sample >> 8).to_byte())
+          }
+        }
+        planes.push(Bytes::from_array(data[:]))
+      }
+      frames.push((planes[0], planes[1], planes[2]))
+    }
+    for cabac in [false, true] {
+      for keyint in [0, 3] {
+        let stats = @libavcodec.H264EncStats::new()
+        let recon : Array[Bytes] = []
+        let stream = match
+          @libavcodec.video_encode(
+            frames,
+            codec=@libavcodec.H264,
+            config={
+              ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+              cabac,
+              keyint,
+              bit_depth: depth,
+              aq: true,
+              aq_strength: 3,
+            },
+            stats~,
+            recon~,
+          ) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        intra_mbs += stats.bi4_mbs + stats.bi8_mbs
+        let decoded = match
+          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          Ok(d) => d
+          Err(e) => fail(e)
+        }
+        let mut r = 0
+        for i, frame in decoded {
+          if i == 0 || (keyint > 0 && i % keyint == 0) {
+            continue
+          }
+          assert_true(x264_bytes_eq(recon[r], frame.yuvp()))
+          r += 1
+        }
+        assert_eq(recon.length(), r)
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        x264_cross_decode(stream, 9, 2)
+      }
+    }
+  }
+  assert_true(intra_mbs > 0)
+}
+
+///|
+fn x264_md5(data : Bytes) -> String {
+  let digest = FixedArray::make(16, b'\x00')
+  @libavutil.av_md5_sum(digest, data, data.length())
+  let hex = "0123456789abcdef"
+  let out = StringBuilder()
+  for b in digest {
+    out.write_char(hex.get_char(b.to_int() >> 4).unwrap())
+    out.write_char(hex.get_char(b.to_int() & 15).unwrap())
+  }
+  out.to_string()
+}
+
+///|
+test "x264 oracle: legacy six-frame B snapshots have independent pixels" {
+  let frames : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<6 {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    let bx = f * 6 % 80
+    let by = f * 4 % 48
+    for row in 0..<64 {
+      for col in 0..<96 {
+        let inside = col >= bx && col < bx + 16 && row >= by && row < by + 16
+        let value = if inside &&
+          (col == bx || col == bx + 15 || row == by || row == by + 15) {
+          40
+        } else if inside {
+          220
+        } else {
+          (col * 2 + row * 3 + f) & 255
+        }
+        y.push(value.to_byte())
+      }
+    }
+    for row in 0..<32 {
+      for col in 0..<48 {
+        u.push((((col + f) & 63) + 96).to_byte())
+        v.push((((row + f * 2) & 63) + 96).to_byte())
+      }
+    }
+    frames.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  for aq in [false, true] {
+    let stream = match
+      @libavcodec.h264_encode_frames(
+        frames,
+        width=96,
+        height=64,
+        qp=if aq { 26 } else { 24 },
+        b_slices=true,
+        aq~,
+        aud=aq,
+      ) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    let probe = match x264_probe_annexb(stream) {
+      Ok(p) => p
+      Err(e) => fail(e)
+    }
+    assert_eq(probe.warnings, 0)
+    assert_eq(probe.errors, 0)
+    x264_cross_decode(stream, 6, 1)
+    let c = match x264_decode_annexb(stream) {
+      Ok(d) => d
+      Err(e) => fail(e)
+    }
+    println("B reference aq=\{aq} stream=\{x264_md5(stream)}")
+    for i in 0..<6 {
+      let data = c.frame_y(i) + c.frame_u(i) + c.frame_v(i)
+      println("B reference aq=\{aq} frame=\{i} md5=\{x264_md5(data)}")
+    }
+  }
+}
+
+///|
+test "x264 oracle: periodic B ABR budgets the full reordered sequence" {
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(7, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      for keyint in [3, 4] {
+        let base = {
+          ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+          cabac,
+          keyint,
+          qp: 20,
+          bit_depth: depth,
+          aq: true,
+          aq_strength: 3,
+          aud: keyint == 4,
+        }
+        fn encode(
+          config : @libavcodec.VideoEncConfig,
+          stats : @libavcodec.H264EncStats,
+        ) -> Bytes raise {
+          match
+            @libavcodec.video_encode(
+              frames,
+              codec=@libavcodec.H264,
+              config~,
+              stats~,
+            ) {
+            Ok(s) => s
+            Err(e) => fail(e)
+          }
+        }
+        let fine = encode(base, @libavcodec.H264EncStats::new())
+        let coarse = encode(
+          { ..base, qp: 51, },
+          @libavcodec.H264EncStats::new(),
+        )
+        assert_true(fine.length() > coarse.length())
+        let target = (fine.length() + coarse.length()) / 2
+        let stats = @libavcodec.H264EncStats::new()
+        let stream = encode({ ..base, target_bytes: target, }, stats)
+        assert_true(stream.length() <= target)
+        assert_eq(stats.frame_qps.length(), 7)
+        assert_eq(stats.b_mbs, 8)
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.n_frames, 7)
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.au_sizes.length(), 7)
+        assert_eq(
+          probe.nal_types.filter(t => t == 5).length(),
+          (7 + keyint - 1) / keyint,
+        )
+        x264_cross_decode(stream, 7, bps)
+        let mut offset = 0
+        for i in 0..<7 {
+          if i > 0 && i % keyint == 0 {
+            let tail = stream[offset:].to_owned()
+            let tp = match x264_probe_annexb(tail) {
+              Ok(p) => p
+              Err(e) => fail(e)
+            }
+            assert_eq(tp.warnings, 0)
+            assert_eq(tp.errors, 0)
+            x264_cross_decode(tail, 7 - i, bps)
+          }
+          offset += probe.au_sizes[i]
+        }
+        assert_eq(offset, stream.length())
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: periodic B VBV keeps decoding-order CPB and random access" {
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(8, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      for keyint in [3, 4] {
+        println("B VBV oracle depth=\{depth} cabac=\{cabac} keyint=\{keyint}")
+        let stats = @libavcodec.H264EncStats::new()
+        let stream = match
+          @libavcodec.video_encode(
+            frames,
+            codec=@libavcodec.H264,
+            config={
+              ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+              cabac,
+              keyint,
+              bit_depth: depth,
+              qp: 26,
+              aq: true,
+              aq_strength: 3,
+              aud: keyint == 4,
+              vbv_maxrate: 64000,
+              vbv_bufsize: 4000,
+              fps: 25,
+            },
+            stats~,
+          ) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.n_frames, 8)
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.au_sizes.length(), 8)
+        assert_eq(stats.frame_qps.length(), 8)
+        assert_eq(stats.b_mbs, 8)
+        assert_eq(stats.vbv_bits, stream.length().to_int64() * 8L)
+        let mut fullness = 3600
+        for size in probe.au_sizes {
+          assert_true(size * 8 <= fullness)
+          fullness = fullness - size * 8 + 2560
+          assert_true(fullness <= 4000)
+        }
+        x264_cross_decode(stream, 8, bps)
+        let mut offset = 0
+        for i in 0..<8 {
+          if i > 0 && i % keyint == 0 {
+            let tail = stream[offset:].to_owned()
+            let tp = match x264_probe_annexb(tail) {
+              Ok(p) => p
+              Err(e) => fail(e)
+            }
+            assert_eq(tp.warnings, 0)
+            assert_eq(tp.errors, 0)
+            x264_cross_decode(tail, 8 - i, bps)
+          }
+          offset += probe.au_sizes[i]
+        }
+        assert_eq(offset, stream.length())
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: B VBV filler works for ordinary and short GOPs" {
+  let frames = Array::make(
+    6,
+    (Bytes::make(1024, 128), Bytes::make(256, 128), Bytes::make(256, 128)),
+  )
+  for cabac in [false, true] {
+    for keyint in [0, 1, 2, 20] {
+      let stats = @libavcodec.H264EncStats::new()
+      let stream = match
+        @libavcodec.video_encode(
+          frames,
+          codec=@libavcodec.H264,
+          config={
+            ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+            cabac,
+            keyint,
+            aud: true,
+            vbv_maxrate: 128000,
+            vbv_bufsize: 16000,
+            fps: 25,
+          },
+          stats~,
+        ) {
+        Ok(s) => s
+        Err(e) => fail(e)
+      }
+      assert_true(stats.vbv_filler_bytes > 0)
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      let mut fullness = 14400
+      for size in probe.au_sizes {
+        assert_true(size * 8 <= fullness)
+        fullness = fullness - size * 8 + 5120
+        assert_true(fullness <= 16000)
+      }
+      x264_cross_decode(stream, 6, 1)
+    }
+  }
+}
+
+///|
+test "x264 oracle: legacy B rate-control snapshots match FFmpeg" {
+  // Exact 64x48 checkerboard/box fixture used by h264_enc_brc_test.
+  let frames : Array[(Bytes, Bytes, Bytes)] = []
+  for f in 0..<6 {
+    let y : Array[Byte] = []
+    let u : Array[Byte] = []
+    let v : Array[Byte] = []
+    let bx = f * 4 % 48
+    let by = f * 3 % 32
+    for row in 0..<48 {
+      for col in 0..<64 {
+        let mut value = (col * 2 + row * 3 + f * 5) & 255
+        if (((col >> 2) + (row >> 2) + f) & 1) == 1 {
+          value = (value + 40) & 255
+        }
+        let inside = col >= bx && col < bx + 16 && row >= by && row < by + 16
+        if inside &&
+          (col == bx || col == bx + 15 || row == by || row == by + 15) {
+          value = 40
+        } else if inside {
+          value = 220
+        }
+        y.push(value.to_byte())
+      }
+    }
+    for row in 0..<24 {
+      for col in 0..<32 {
+        u.push((((col + f) & 63) + 96).to_byte())
+        v.push((((row + f * 2) & 63) + 96).to_byte())
+      }
+    }
+    frames.push(
+      (
+        Bytes::from_array(y[:]),
+        Bytes::from_array(u[:]),
+        Bytes::from_array(v[:]),
+      ),
+    )
+  }
+  for vbv in [false, true] {
+    let stream = match
+      @libavcodec.h264_encode_frames(
+        frames,
+        width=64,
+        height=48,
+        qp=26,
+        b_slices=true,
+        target_bytes=if vbv { 0 } else { 4000 },
+        vbv_maxrate=if vbv { 90000 } else { 0 },
+        vbv_bufsize=if vbv { 18000 } else { 0 },
+        fps=if vbv { 30 } else { 0 },
+        aud=vbv,
+      ) {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    let probe = match x264_probe_annexb(stream) {
+      Ok(p) => p
+      Err(e) => fail(e)
+    }
+    assert_eq(probe.warnings, 0)
+    assert_eq(probe.errors, 0)
+    if vbv {
+      let mut fullness = 16200
+      for size in probe.au_sizes {
+        assert_true(size * 8 <= fullness)
+        fullness = fullness - size * 8 + 2999
+        assert_true(fullness <= 18000)
+      }
+    } else {
+      assert_true(stream.length() <= 4000)
+    }
+    x264_cross_decode(stream, 6, 1)
+    let c = match x264_decode_annexb(stream) {
+      Ok(d) => d
+      Err(e) => fail(e)
+    }
+    for i in 0..<6 {
+      println(
+        "BRC reference vbv=\{vbv} frame=\{i} md5=\{x264_md5(c.frame_y(i) + c.frame_u(i) + c.frame_v(i))}",
+      )
+    }
+  }
+}
+
+///|
+test "x264 oracle: online P VBV preserves pixels and independent IDRs" {
+  fn join(aus : Array[Bytes]) -> Bytes {
+    let out : Array[Byte] = []
+    for au in aus {
+      for b in au {
+        out.push(b)
+      }
+    }
+    Bytes::from_array(out[:])
+  }
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(7, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      for keyint in [0, 3] {
+        let stats = @libavcodec.H264EncStats::new()
+        let enc = match
+          @libavcodec.VideoEncoder::open(
+            codec=@libavcodec.H264,
+            config={
+              ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+              cabac,
+              keyint,
+              b_slices: false,
+              multi_ref: 3,
+              bit_depth: depth,
+              qp: 26,
+              aq: true,
+              aq_strength: 3,
+              aud: true,
+              vbv_maxrate: 64000,
+              vbv_bufsize: 4000,
+              fps: 25,
+            },
+            stats~,
+          ) {
+          Ok(e) => e
+          Err(e) => fail(e)
+        }
+        let aus : Array[Bytes] = []
+        let mut fullness = 3600
+        for i, (y, u, v) in frames {
+          match
+            enc.push_frame(y, u, v, force_idr=keyint == 0 && (i == 3 || i == 4)) {
+            Ok(_) => ()
+            Err(e) => fail(e)
+          }
+          let ready = enc.drain()
+          assert_eq(ready.length(), 1)
+          assert_eq(stats.frame_qps.length(), i + 1)
+          let bytes = ready[0]
+          assert_true(bytes.length() * 8 <= fullness)
+          fullness = fullness - bytes.length() * 8 + 2560
+          assert_true(fullness <= 4000)
+          aus.push(bytes)
+        }
+        let tail = match enc.finish() {
+          Ok(t) => t
+          Err(e) => fail(e)
+        }
+        assert_eq(tail.length(), 0)
+        let stream = join(aus)
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.n_frames, 7)
+        assert_eq(stats.vbv_bits, stream.length().to_int64() * 8L)
+        x264_cross_decode(stream, 7, bps)
+        for start in (if keyint == 0 { [3, 4] } else { [3, 6] }) {
+          let tail = join(aus[start:].to_owned())
+          let tp = match x264_probe_annexb(tail) {
+            Ok(p) => p
+            Err(e) => fail(e)
+          }
+          assert_eq(tp.warnings, 0)
+          assert_eq(tp.errors, 0)
+          x264_cross_decode(tail, 7 - start, bps)
+        }
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: online P VBV filler survives reference and frame_num wraps" {
+  for cabac in [false, true] {
+    let stats = @libavcodec.H264EncStats::new()
+    let enc = match
+      @libavcodec.H264StreamEncoder::open(
+        width=32,
+        height=32,
+        cabac~,
+        b_slices=false,
+        multi_ref=16,
+        aud=true,
+        vbv_maxrate=128000,
+        vbv_bufsize=16000,
+        fps=25,
+        stats~,
+      ) {
+      Ok(e) => e
+      Err(e) => fail(e)
+    }
+    let packets : Array[X264Packet] = []
+    let mut fullness = 14400
+    for _ in 0..<35 {
+      match
+        enc.push_frame(
+          Bytes::make(1024, 128),
+          Bytes::make(256, 128),
+          Bytes::make(256, 128),
+        ) {
+        Ok(_) => ()
+        Err(e) => fail(e)
+      }
+      let ready = enc.drain()
+      assert_eq(ready.length(), 1)
+      assert_true(ready[0].length() * 8 <= fullness)
+      fullness = fullness - ready[0].length() * 8 + 5120
+      assert_true(fullness <= 16000)
+      packets.push({ data: ready[0], pts: None, dts: None, keyframe: false, })
+    }
+    assert_true(stats.vbv_filler_bytes > 0)
+    let stream = x264_concat(packets)
+    let probe = match x264_probe_annexb(stream) {
+      Ok(p) => p
+      Err(e) => fail(e)
+    }
+    assert_eq(probe.warnings, 0)
+    assert_eq(probe.errors, 0)
+    x264_cross_decode(stream, 35, 1)
+  }
+}
+
+///|
+fn x264_join_online_aus(aus : Array[Bytes]) -> Bytes {
+  let out : Array[Byte] = []
+  for au in aus {
+    for b in au {
+      out.push(b)
+    }
+  }
+  Bytes::from_array(out[:])
+}
+
+///|
+test "x264 oracle: online B VBV preserves reordered pixels and independent GOPs" {
+  for depth in [8, 9, 10] {
+    let bps = if depth == 8 { 1 } else { 2 }
+    let frames = x264_fixture(8, 32, 32, bps).map(f => (f.1, f.2, f.3))
+    for cabac in [false, true] {
+      for keyint in [0, 3, 4] {
+        let stats = @libavcodec.H264EncStats::new()
+        let enc = match
+          @libavcodec.VideoEncoder::open(
+            codec=@libavcodec.H264,
+            config={
+              ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+              cabac,
+              keyint,
+              bit_depth: depth,
+              qp: 26,
+              aq: true,
+              aq_strength: 3,
+              aud: keyint == 4,
+              vbv_maxrate: 64000,
+              vbv_bufsize: 4000,
+              fps: 25,
+            },
+            stats~,
+          ) {
+          Ok(e) => e
+          Err(e) => fail(e)
+        }
+        let aus : Array[Bytes] = []
+        for (y, u, v) in frames {
+          match enc.push_frame(y, u, v) {
+            Ok(_) => ()
+            Err(e) => fail(e)
+          }
+          for au in enc.drain() {
+            aus.push(au)
+          }
+          assert_eq(stats.frame_qps.length(), aus.length())
+        }
+        match enc.finish() {
+          Ok(t) =>
+            for au in t {
+              aus.push(au)
+            }
+          Err(e) => fail(e)
+        }
+        assert_eq(aus.length(), 8)
+        assert_eq(stats.frame_qps.length(), 8)
+        assert_eq(stats.b_mbs, if keyint == 0 { 12 } else { 8 })
+        let stream = x264_join_online_aus(aus)
+        let probe = match x264_probe_annexb(stream) {
+          Ok(p) => p
+          Err(e) => fail(e)
+        }
+        assert_eq(probe.warnings, 0)
+        assert_eq(probe.errors, 0)
+        assert_eq(probe.n_frames, 8)
+        assert_eq(probe.au_sizes.length(), 8)
+        assert_eq(stats.vbv_bits, stream.length().to_int64() * 8L)
+        let mut fullness = 3600
+        for size in probe.au_sizes {
+          assert_true(size * 8 <= fullness)
+          fullness = fullness - size * 8 + 2560
+          assert_true(fullness <= 4000)
+        }
+        x264_cross_decode(stream, 8, bps)
+        if keyint > 0 {
+          for start in (if keyint == 3 { [3, 6] } else { [4] }) {
+            let tail = x264_join_online_aus(aus[start:].to_owned())
+            let tp = match x264_probe_annexb(tail) {
+              Ok(p) => p
+              Err(e) => fail(e)
+            }
+            assert_eq(tp.warnings, 0)
+            assert_eq(tp.errors, 0)
+            x264_cross_decode(tail, 8 - start, bps)
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: online B VBV manual IDR and short GOP filler" {
+  let texture = x264_fixture(9, 32, 32, 1).map(f => (f.1, f.2, f.3))
+  let flat = Array::make(
+    9,
+    (Bytes::make(1024, 128), Bytes::make(256, 128), Bytes::make(256, 128)),
+  )
+  for cabac in [false, true] {
+    for keyint in [0, 1, 2] {
+      let frames = if keyint == 0 { texture } else { flat }
+      let stats = @libavcodec.H264EncStats::new()
+      let enc = match
+        @libavcodec.VideoEncoder::open(
+          codec=@libavcodec.H264,
+          config={
+            ..@libavcodec.VideoEncConfig::new(width=32, height=32),
+            cabac,
+            keyint,
+            aud: true,
+            vbv_maxrate: 128000,
+            vbv_bufsize: 16000,
+            fps: 25,
+          },
+          stats~,
+        ) {
+        Ok(e) => e
+        Err(e) => fail(e)
+      }
+      let aus : Array[Bytes] = []
+      for i, (y, u, v) in frames {
+        match
+          enc.push_frame(
+            y,
+            u,
+            v,
+            force_idr=keyint == 0 && [2, 5, 6].contains(i),
+          ) {
+          Ok(_) => ()
+          Err(e) => fail(e)
+        }
+        for au in enc.drain() {
+          aus.push(au)
+        }
+      }
+      match enc.finish() {
+        Ok(t) =>
+          for au in t {
+            aus.push(au)
+          }
+        Err(e) => fail(e)
+      }
+      let stream = x264_join_online_aus(aus)
+      let probe = match x264_probe_annexb(stream) {
+        Ok(p) => p
+        Err(e) => fail(e)
+      }
+      assert_eq(probe.warnings, 0)
+      assert_eq(probe.errors, 0)
+      assert_eq(probe.n_frames, 9)
+      assert_eq(stats.frame_qps.length(), 9)
+      assert_true(stats.vbv_filler_bytes > 0)
+      let mut fullness = 14400
+      for size in probe.au_sizes {
+        assert_true(size * 8 <= fullness)
+        fullness = fullness - size * 8 + 5120
+        assert_true(fullness <= 16000)
+      }
+      x264_cross_decode(stream, 9, 1)
+      if keyint == 0 {
+        for start in [2, 5, 6] {
+          let tail = x264_join_online_aus(aus[start:].to_owned())
+          let tp = match x264_probe_annexb(tail) {
+            Ok(p) => p
+            Err(e) => fail(e)
+          }
+          assert_eq(tp.warnings, 0)
+          assert_eq(tp.errors, 0)
+          x264_cross_decode(tail, 9 - start, 1)
+        }
+      }
+    }
+  }
+}
+
+///|
+test "x264 oracle: online B VBV long GOP survives POC and frame_num wraps" {
+  for cabac in [false, true] {
+    let stats = @libavcodec.H264EncStats::new()
+    let enc = match
+      @libavcodec.H264StreamEncoder::open(
+        width=32,
+        height=32,
+        cabac~,
+        aud=true,
+        vbv_maxrate=128000,
+        vbv_bufsize=16000,
+        fps=25,
+        stats~,
+      ) {
+      Ok(e) => e
+      Err(e) => fail(e)
+    }
+    let aus : Array[Bytes] = []
+    for _ in 0..<35 {
+      match
+        enc.push_frame(
+          Bytes::make(1024, 128),
+          Bytes::make(256, 128),
+          Bytes::make(256, 128),
+        ) {
+        Ok(_) => ()
+        Err(e) => fail(e)
+      }
+      for au in enc.drain() {
+        aus.push(au)
+      }
+    }
+    match enc.finish() {
+      Ok(t) =>
+        for au in t {
+          aus.push(au)
+        }
+      Err(e) => fail(e)
+    }
+    assert_eq(aus.length(), 35)
+    assert_eq(stats.frame_qps.length(), 35)
+    assert_eq(stats.b_mbs, 68)
+    assert_true(stats.vbv_filler_bytes > 0)
+    let stream = x264_join_online_aus(aus)
+    let probe = match x264_probe_annexb(stream) {
+      Ok(p) => p
+      Err(e) => fail(e)
+    }
+    assert_eq(probe.warnings, 0)
+    assert_eq(probe.errors, 0)
+    let mut fullness = 14400
+    for size in probe.au_sizes {
+      assert_true(size * 8 <= fullness)
+      fullness = fullness - size * 8 + 5120
+      assert_true(fullness <= 16000)
+    }
+    x264_cross_decode(stream, 35, 1)
+  }
+}
+
+///|
 test "x264 supports the canonical formats" {
   assert_true(x264_supports("libx264", Yuv420p))
   // The nine-x264 image pins Ubuntu noble's multi-bit-depth x264 build.

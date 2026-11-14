@@ -30,8 +30,9 @@ priv struct Options {
   /// exists today, so the flag's value space is "h264").
   codec : @codec.VideoCodec
   /// `§415`: P-slice multi-reference history depth (1 = single reference;
-  /// 2..=16 requires `--no-b-slices` and no rate controls).
+  /// 2..=16 requires `--no-b-slices`).
   multi_ref : Int32
+  keyint : Int32
 }
 
 ///|
@@ -76,6 +77,7 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--bit-depth"
       | "--codec"
       | "--multi-ref"
+      | "--keyint"
       | "--aq-strength"
       | "--target-bytes"
       | "--vbv-maxrate"
@@ -129,6 +131,10 @@ fn parse_options(args : Array[String]) -> Options raise {
     Some(other) => fail("encode-h264: unsupported codec \{other} (h264)")
   }
   let multi_ref = number(values, "--multi-ref", 1)
+  let keyint = number(values, "--keyint", 0)
+  if keyint < 0 {
+    fail("encode-h264: keyint must be nonnegative")
+  }
   let aq_strength = number(values, "--aq-strength", 1)
   if aq_strength < 0 || aq_strength > 6 {
     fail("encode-h264: aq-strength must be in 0..=6")
@@ -169,8 +175,8 @@ fn parse_options(args : Array[String]) -> Options raise {
     !values.contains("--no-cabac") {
     fail("encode-h264: cabac-rd requires CABAC")
   }
-  if values.contains("--stream") && (target_bytes > 0 || maxrate > 0) {
-    fail("encode-h264: stream excludes the rate controls")
+  if values.contains("--stream") && target_bytes > 0 {
+    fail("encode-h264: streaming ABR is not supported")
   }
   // b-slices × rate controls is supported since §398 (B×VBV/ABR); no
   // exclusion here anymore.
@@ -215,6 +221,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     bit_depth,
     codec,
     multi_ref,
+    keyint,
   }
 }
 
@@ -269,6 +276,7 @@ fn video_config(opts : Options) -> @codec.VideoEncConfig {
     weightp: opts.weightp,
     bit_depth: opts.bit_depth,
     multi_ref: opts.multi_ref,
+    keyint: opts.keyint,
     aud: opts.aud,
     aq: opts.aq,
     aq_strength: opts.aq_strength,
@@ -283,8 +291,7 @@ fn video_config(opts : Options) -> @codec.VideoEncConfig {
 /// Open the streaming encoder shared by the in-memory and chunked host
 /// paths, so both feed exactly the same configuration.
 fn open_stream_encoder(opts : Options) -> @codec.VideoEncoder raise {
-  match
-    @codec.VideoEncoder::open(codec=opts.codec, config=video_config(opts)) {
+  match @codec.VideoEncoder::open(codec=opts.codec, config=video_config(opts)) {
     Ok(enc) => enc
     Err(e) => fail("encode-h264: \{e}")
   }

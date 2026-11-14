@@ -220,7 +220,7 @@ test "h264 brc: deterministic re-encode and pinned QP direction" {
 /// QPs — decode in the reference implementation with zero warnings, in
 /// DISPLAY order (POC reordering), every deblocked frame matching this
 /// repository's decoder byte-for-byte (pinned framemd5 MD5s, obtained
-/// via the ARBBRC dump route).
+/// via x264_wbtest's "legacy B rate-control snapshots" C decoder oracle).
 test "h264 brc: ffmpeg-arbitrated ABR and VBV b_slices streams" {
   let frames = h264_rc_fixture(6)
   let abr = match
@@ -278,12 +278,12 @@ test "h264 brc: ffmpeg-arbitrated ABR and VBV b_slices streams" {
     println("ARBBRCMD5:vbv poc\{i * 2} \{md5}")
   }
   let pins_abr = [
-    "f78bb894f8f44a94d6b37d3073824d36", "7cc179b948f330c454727e567a23988b", "4c3b591afaa54be633257b6ad6417ce3",
-    "e1675864f38da042bcdd27defbba4980", "b404f9f1f89130f006ae592849862917", "03384fd8c12cb8bc3c4314fc81f1a9ff",
+    "f78bb894f8f44a94d6b37d3073824d36", "dcfc638f073005a6ed9114f2951025ea", "b78178ae167176e90e8d8283a93beec4",
+    "f85f599e7f9e9defc68dfbe97e6f26b7", "b1a3d177cfc3778b7bb50c52b6914b5d", "bac860ba5e587b8bb2ffc55c7cd684c5",
   ]
   let pins_vbv = [
-    "292edd53ff3434561e2e1d737c563c98", "ae677397c8d01eecbdce42c1d01e8817", "31d694a5ee739d63753f0db7c7ec7be0",
-    "70ae53ae1d2440934724c79c909fdf42", "87a80c535bde32c2b31610f42fcd8291", "0ebb8361beee679d123d1fd65ac97b44",
+    "292edd53ff3434561e2e1d737c563c98", "b4ef80dcb946516963f30842329dfcce", "ac522e2c0e46a0d10adaf8695b84db0e",
+    "fa1bf4bcdbc408bc5857aea1fd12c937", "d7813b5d70d37ff0d0457fbbb2a9172b", "a40a683f99b038fbe693a9e2c7db6369",
   ]
   let md5s_abr = h264b_display_md5s(dec_abr)
   let md5s_vbv = h264b_display_md5s(dec_vbv)

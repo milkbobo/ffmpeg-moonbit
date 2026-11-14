@@ -46,8 +46,8 @@ pub fn video_pixel_format(bit_depth : Int32) -> String {
 /// Codec-shared encode options. The defaults reproduce the §403/§413
 /// sequence defaults (B-line + 8x8DCT + CABAC-RD pricing + weighted P
 /// prediction on, CAVLC entropy). Rate controls (`target_bytes` or
-/// `vbv_maxrate`/`vbv_bufsize` + `fps`) are a batch-entry feature and are
-/// rejected by the streaming open. Exotic per-entry options this struct
+/// `vbv_maxrate`/`vbv_bufsize` + `fps`) are supported by the batch entry;
+/// streaming supports P/B VBV, while ABR remains batch-only. Options this struct
 /// does not carry (`pcm_first`, `intra_in_p`, `intra4x4_in_p`,
 /// `level_idc`, `vbv_init`) stay reachable through the codec's direct
 /// entry points.
@@ -72,17 +72,18 @@ pub(all) struct VideoEncConfig {
   vbv_bufsize : Int32
   fps : Int32
   /// `§415`: P-slice multi-reference history depth (1 = single reference;
-  /// requires `b_slices=false` and no rate controls at the codec layer).
+  /// requires `b_slices=false`; batch rate controls are supported).
   multi_ref : Int32
+  /// Periodic IDR distance in display frames, 0 = disabled. Batch ABR and
+  /// VBV cover the full sequence, including reordered B GOPs.
+  /// Explicit forced IDRs restart this interval in the streaming encoder.
+  keyint : Int32
 }
 
 ///|
 /// Defaults for a `width` x `height` sequence: QP 26, CAVLC, the §403
 /// feature defaults on, 8-bit, no rate controls.
-pub fn VideoEncConfig::new(
-  width~ : Int32,
-  height~ : Int32,
-) -> VideoEncConfig {
+pub fn VideoEncConfig::new(width~ : Int32, height~ : Int32) -> VideoEncConfig {
   {
     width,
     height,
@@ -104,13 +105,8 @@ pub fn VideoEncConfig::new(
     vbv_bufsize: 0,
     fps: 0,
     multi_ref: 1,
+    keyint: 0,
   }
-}
-
-///|
-/// True when any rate control is configured (ABR target or VBV).
-fn VideoEncConfig::has_rate_control(self : VideoEncConfig) -> Bool {
-  self.target_bytes > 0 || self.vbv_maxrate > 0 || self.vbv_bufsize > 0
 }
 
 ///|
@@ -131,12 +127,13 @@ pub fn VideoEncoder::open(
   config~ : VideoEncConfig,
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[VideoEncoder, String] {
+  if config.keyint < 0 {
+    return Err("video enc: keyint must be nonnegative")
+  }
   match codec {
     VideoCodec::H264 => {
-      if config.has_rate_control() {
-        return Err(
-          "video enc: the streaming encoder does not support rate controls",
-        )
+      if config.target_bytes > 0 {
+        return Err("video enc: the streaming encoder does not support ABR")
       }
       match
         H264StreamEncoder::open(
@@ -157,6 +154,9 @@ pub fn VideoEncoder::open(
           aq=config.aq,
           aq_strength=config.aq_strength,
           stats~,
+          vbv_maxrate=config.vbv_maxrate,
+          vbv_bufsize=config.vbv_bufsize,
+          fps=config.fps,
         ) {
         Ok(h264) => Ok({ codec, config, h264, })
         Err(e) => Err(e)
@@ -191,14 +191,22 @@ pub fn VideoEncoder::height(self : VideoEncoder) -> Int32 {
 /// Push one display-order planar frame (packed u8 at 8 bits, little-endian
 /// 16-bit samples above). Returns when the frame is consumed; call
 /// `drain()` for the access units this made final.
+/// `force_idr=true` closes any pending B pair and starts an independent GOP.
 pub fn VideoEncoder::push_frame(
   self : VideoEncoder,
   y : Bytes,
   u : Bytes,
   v : Bytes,
+  force_idr~ : Bool = false,
 ) -> Result[Unit, String] {
+  let force_idr = force_idr ||
+    (
+      self.config.keyint > 0 &&
+      self.h264.next_display > 0 &&
+      self.h264.next_display - self.h264.gop_start >= self.config.keyint
+    )
   match self.codec {
-    VideoCodec::H264 => self.h264.push_frame(y, u, v)
+    VideoCodec::H264 => self.h264.push_frame(y, u, v, force_idr~)
   }
 }
 
@@ -212,7 +220,9 @@ pub fn VideoEncoder::drain(self : VideoEncoder) -> Array[Bytes] {
 
 ///|
 /// Flush the encoder tail (delayed B pictures and the stream end).
-pub fn VideoEncoder::finish(self : VideoEncoder) -> Result[Array[Bytes], String] {
+pub fn VideoEncoder::finish(
+  self : VideoEncoder,
+) -> Result[Array[Bytes], String] {
   match self.codec {
     VideoCodec::H264 => self.h264.finish()
   }
@@ -220,10 +230,13 @@ pub fn VideoEncoder::finish(self : VideoEncoder) -> Result[Array[Bytes], String]
 
 ///|
 /// Encode a whole display-order frame sequence with the batch entry for
-/// `codec` (rate controls supported). Byte-identical to calling the
-/// codec's own entry with the same effective options; the plain (no rate
+/// `codec` (rate controls supported). With `keyint=0`, byte-identical to
+/// the codec's own entry with the same effective options; the plain (no rate
 /// control) case could equally go through the streaming encoder, which
 /// the CLI tests pin byte-for-byte.
+/// Positive `keyint` uses periodic independent GOPs. ABR targets the whole
+/// sequence; VBV keeps a continuous CPB in decoding order.
+/// `recon` excludes every IDR and keeps predicted pictures in coding order.
 pub fn video_encode(
   frames : Array[(Bytes, Bytes, Bytes)],
   codec~ : VideoCodec,
@@ -231,8 +244,50 @@ pub fn video_encode(
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
 ) -> Result[Bytes, String] {
+  if config.keyint < 0 {
+    return Err("video enc: keyint must be nonnegative")
+  }
+  if config.keyint > 0 {
+    if frames.length() == 0 {
+      return Err("h264 enc: no frames")
+    }
+    if config.vbv_maxrate > 0 || config.vbv_bufsize > 0 || config.fps > 0 {
+      return video_encode_periodic_vbv(frames, codec~, config~, recon~, stats~)
+    }
+    if config.target_bytes > 0 {
+      return video_encode_periodic_abr(frames, codec~, config~, recon~, stats~)
+    }
+    let enc = match VideoEncoder::open(codec~, config~, stats~) {
+      Ok(e) => e
+      Err(e) => return Err(e)
+    }
+    let output : Array[Bytes] = []
+    for (y, u, v) in frames {
+      match enc.push_frame(y, u, v) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+      stats.frame_qps.push(config.qp)
+      for au in enc.drain() {
+        output.push(au)
+      }
+    }
+    match enc.finish() {
+      Ok(tail) =>
+        for au in tail {
+          output.push(au)
+        }
+      Err(e) => return Err(e)
+    }
+    // Like the codec's batch recon output, keep only predicted pictures;
+    // each periodic IDR starts a fresh independently reconstructed GOP.
+    for frame in enc.h264.recons {
+      recon.push(frame)
+    }
+    return Ok(h264_enc_concat(output))
+  }
   match codec {
-    VideoCodec::H264 => {
+    VideoCodec::H264 =>
       if config.cabac {
         h264_encode_frames_cabac(
           frames,
@@ -283,6 +338,5 @@ pub fn video_encode(
           multi_ref=config.multi_ref,
         )
       }
-    }
   }
 }

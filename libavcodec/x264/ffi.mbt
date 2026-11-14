@@ -49,6 +49,7 @@ extern "c" fn x264enc_send_frame_ffi(
   y : Bytes,
   u : Bytes,
   v : Bytes,
+  force_idr : Bool,
 ) -> Int32 = "x264enc_send_frame"
 
 ///|
@@ -71,7 +72,7 @@ extern "c" fn x264enc_close_ffi(enc : X264EncHandle) -> Unit = "x264enc_close"
 /// Decode a whole Annex B H.264 stream with FFmpeg's real software decoder
 /// (`x264dec_annexb` in the stub). The returned blob is
 /// `[n_frames i32][width i32][height i32][kind i32][payload...]` with
-/// `kind` 0 = yuv420p / 1 = yuv420p10le and the payload holding, per frame,
+/// `kind` 0 = yuv420p / 1 = yuv420p10le / 2 = yuv420p9le; payload per frame,
 /// the packed visible-area planes Y/Cb/Cr (LE samples) — exactly
 /// `H264Frame::yuvp()`'s packing. NULL means the C decode failed; the
 /// stream bytes are copied into the parser during the call (`#borrow`).

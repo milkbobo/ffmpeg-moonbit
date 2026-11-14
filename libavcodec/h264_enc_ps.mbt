@@ -146,7 +146,11 @@ fn h264_vbv_new(
 /// VUI for a CPB-constrained stream: timing info at one frame = two
 /// `num_units_in_tick` clocks (the frame-doubling convention), CBR NAL HRD
 /// with one CPB and no reordering.
-fn h264_enc_sps_vui(r : H264Rbsp, v : H264Vbv) -> Unit {
+fn h264_enc_sps_vui(
+  r : H264Rbsp,
+  v : H264Vbv,
+  b_frames~ : Bool = false,
+) -> Unit {
   r.put_bit(1) // vui_parameters_present_flag
   r.put_bit(0) // aspect_ratio_info_present_flag
   r.put_bit(0) // overscan_info_present_flag
@@ -176,8 +180,8 @@ fn h264_enc_sps_vui(r : H264Rbsp, v : H264Vbv) -> Unit {
   r.put_ue(0) // max_bits_per_mb_denom
   r.put_ue(15) // log2_max_mv_length_horizontal
   r.put_ue(15) // log2_max_mv_length_vertical
-  r.put_ue(0) // max_num_reorder_frames: IPPP
-  r.put_ue(1) // max_dec_frame_buffering
+  r.put_ue(if b_frames { 1 } else { 0 }) // max_num_reorder_frames
+  r.put_ue(if b_frames { 2 } else { 1 }) // max_dec_frame_buffering
 }
 
 ///|
@@ -453,11 +457,15 @@ fn h264_enc_sei_buffering_period(v : H264Vbv) -> Bytes {
 
 ///|
 /// `pic_timing` SEI: the picture's CPB removal delay in
-/// `num_units_in_tick` clocks (two per frame) and no DPB reordering delay.
-fn h264_enc_sei_pic_timing(v : H264Vbv, cpb_removal_delay : Int32) -> Bytes {
+/// `num_units_in_tick` clocks (two per frame), plus its DPB output delay.
+fn h264_enc_sei_pic_timing(
+  v : H264Vbv,
+  cpb_removal_delay : Int32,
+  dpb_output_delay~ : Int32 = 0,
+) -> Bytes {
   let p = H264Rbsp::new()
   p.put(cpb_removal_delay, v.cpb_removal_delay_length)
-  p.put(0, v.dpb_output_delay_length)
+  p.put(dpb_output_delay, v.dpb_output_delay_length)
   h264_enc_sei_nal(1, p)
 }
 
