@@ -92,15 +92,85 @@ test "h264 c444: single IDR round trip" {
 }
 
 ///|
+/// External arbitration anchor (`§421` I+P): the annexb bytes for the docker
+/// ffmpeg framemd5 oracle.
+test "h264 c444: ffmpeg-arbitrated I+P stream" {
+  let frames = c444_fixture(2)
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=24,
+      chroma_format=3,
+      b_slices=false,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let mut dump = ""
+  for i = 0; i < stream.length(); i = i + 1 {
+    dump = dump + (stream[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARBC44P:\{dump}")
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
+    Ok(f) => f
+    Err(e) => fail(e)
+  }
+  assert_eq(dec.length(), 2)
+  let mut md5s = "C44PMD5:"
+  for f in dec {
+    md5s = md5s + " " + mr_md5(f.yuvp())
+  }
+  println(md5s)
+  // Pinned against docker linuxserver/ffmpeg:9.0.2 (zero warnings,
+  // byte-identical per-frame hashes).
+  assert_eq(mr_md5(dec[0].yuvp()), "843711bf73c3cfb162a019e63ae3ce45")
+  assert_eq(
+    mr_md5(dec[1].yuvp()),
+    "914c05ef21e1dc94f4cbd46c7b2b86eb",
+    msg="P frame anchor",
+  )
+}
+
+///|
 /// §421 contract: the inter pictures are still open, so a multi-frame 4:4:4
 /// request must fail loudly instead of emitting a drifting stream.
-test "h264 c444: inter pictures stay rejected" {
-  let frames = c444_fixture(2)
+test "h264 c444: B schedule stays rejected" {
+  let frames = c444_fixture(3)
   match
     @libavcodec.h264_encode_frames(frames, width=96, height=64, chroma_format=3) {
-    Ok(_) => fail("4:4:4 inter pictures accepted")
+    Ok(_) => fail("4:4:4 with the B schedule accepted")
     Err(_) => ()
   }
+}
+
+///|
+/// §421: 4:4:4 P pictures — three-plane luma-geometry MC + the shared 4-bit
+/// cbp.
+test "h264 c444: I+P round trip" {
+  let frames = c444_fixture(2)
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      chroma_format=3,
+      b_slices=false,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  assert_eq(recon.length(), 1)
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
+  assert_eq(dec.length(), 2)
+  assert_eq(mr_md5(recon[0]), mr_md5(dec[1].yuvp()), msg="P frame")
 }
 
 ///|

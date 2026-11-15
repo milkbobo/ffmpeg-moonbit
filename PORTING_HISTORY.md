@@ -13560,6 +13560,27 @@ chroma_format 拒收 / FFmpeg 锚点）；全族 197/197（4:2:0 钉值逐字节
 CLI 25/25；moon check --target wasm --deny-warn、moonfmt 单文件、
 git diff --check 干净。仍拒收：流式 ABR、4:4:4（下一片）。
 
+## §421b H.264 编码器 4:4:4 P 帧——三平面 MC + 两个几何 bug（2026-11-15）
+
+接续 §421。4:4:4 的 P 帧打通（CAVLC，b_slices=false）：mc_into_rec 的色度
+改用 h264_mc_luma 跑 luma 坐标，残差走三平面 luma 路径，cbp 用 16 项 gray
+表，transform_size_8x8_flag 用 dct8_signal 强制 0，decide_plan 关掉 intra
+候选（其色度预测仍是 4:2:0 几何）。
+
+两个真 bug 都不在 MC 层，但都伪装成 MC 症状：① h264_enc_pack_recon 的色度
+宽度写死 w/2，4:4:4 的 recon 被打包成 48 宽（长度 12288 vs 18432），与解码
+输出线性比较时 U 段整体错位——表现为「U 整平面错、V 全对」，互换 U/V 数据
+仍同样表现；② 包裹 chroma 段的 if cf != 3 闭合点错了，把后面的 luma 重建
+if 链一起包住，4:4:4 的 luma 只有预测没有残差（141 像素差异）。
+
+排障沉淀：先用 16x16 单宏块 + 纯 DC 残差做最小用例（一次通过即排除 MC）；
+再比 recon 与解码输出的长度——长度不等说明打包/几何错，不是像素错。
+
+仲裁：ARBC44P（96x64 qp24 I+P 2693 B）docker ffmpeg 9.0.2 零告警，逐帧
+md5 843711bf... / 914c05ef21e1dc94f4cbd46c7b2b86eb 与本仓解码器、编码 recon
+三方一致。门：h264_enc_c444_test 6 项（I / I+P / 非法格式 / B 调度拒收 /
+两条锚点）。B 帧、CABAC、流式仍开放（b_slices=true 时 4:4:4 显式报错）。
+
 ## §421 H.264 编码器 4:4:4 面（I 帧）——separate_colour_plane + 三平面 luma 残差（2026-11-15）
 
 接续 §420。色度面扩到 4:4:4（chroma_format=3，profile 244），CAVLC I 帧

@@ -817,6 +817,7 @@ fn H264PEncoder::code_b_mb_residuals(
     chroma_ac_store,
     dct8: false,
     luma8_store: Array::make(256, 0),
+    planes_444: Array::make(768, 0),
   }
 }
 
@@ -961,6 +962,7 @@ fn H264PEncoder::code_b_mb_i16_residuals(
     chroma_ac_store,
     dct8: false,
     luma8_store: Array::make(256, 0),
+    planes_444: Array::make(768, 0),
   }
 }
 
@@ -1213,6 +1215,7 @@ fn H264PEncoder::code_b_mb_i4_residuals(
     chroma_ac_store,
     dct8: false,
     luma8_store: Array::make(256, 0),
+    planes_444: Array::make(768, 0),
   }
 }
 
@@ -1271,6 +1274,7 @@ fn H264PEncoder::code_b_mb_i8_residuals(
     chroma_ac_store,
     dct8: true,
     luma8_store,
+    planes_444: Array::make(768, 0),
   }
 }
 

@@ -231,15 +231,18 @@ fn h264_enc_pack_recon(
   ys : Int32,
   cs : Int32,
   bit_depth~ : Int32 = 8,
-  /// `§420`: chroma plane rows (h/2 at 4:2:0, h at 4:2:2).
+  /// `§420`/`§421`: chroma plane rows (h/2 at 4:2:0, h at 4:2:2 and 4:4:4).
   chroma_h~ : Int32 = h / 2,
+  /// `§421`: chroma plane width (w/2 unless 4:4:4, which keeps w).
+  chroma_w~ : Int32 = -1,
 ) -> Bytes {
+  let cw = if chroma_w < 0 { w / 2 } else { chroma_w }
   let out : Array[Byte] = []
   for
     packed in [
       h264_enc_pack_plane(y, w, h, ys, bit_depth~),
-      h264_enc_pack_plane(u, w / 2, chroma_h, cs, bit_depth~),
-      h264_enc_pack_plane(v, w / 2, chroma_h, cs, bit_depth~),
+      h264_enc_pack_plane(u, cw, chroma_h, cs, bit_depth~),
+      h264_enc_pack_plane(v, cw, chroma_h, cs, bit_depth~),
     ] {
     for b in packed {
       out.push(b)
@@ -315,17 +318,6 @@ pub fn h264_encode_frames(
   if chroma_format < 1 || chroma_format > 3 {
     return Err("h264 enc: chroma_format must be 1, 2 or 3")
   }
-  if chroma_format == 3 && frames.length() > 1 {
-    // §421: the 4:4:4 inter paths are still open (an inter-picture drift is
-    // documented in AGENT_HANDOFF_2026-11-15_H264_C444.md); the intra-only
-    // 4:4:4 stream is byte-exact.
-    return Err("h264 enc: 4:4:4 inter pictures are not implemented yet")
-  }
-  if chroma_format == 3 && frames.length() > 1 {
-    // §421 step 1: the 4:4:4 inter paths (P/B + CABAC/streaming) land in the
-    // next slice; intra-only sequences are already byte-exact.
-    return Err("h264 enc: 4:4:4 inter pictures are not implemented yet")
-  }
   if !h264_enc_bit_depth_ok(bit_depth) {
     return Err(
       "h264 enc: unsupported bit depth \{bit_depth} (8, 9, 10, 12 or 14)",
@@ -340,6 +332,12 @@ pub fn h264_encode_frames(
   // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
   // B picture, so it degrades to the I-only stream instead of erroring.
   let b_slices = b_slices && frames.length() >= 2
+  if b_slices && chroma_format == 3 {
+    // 4:4:4 B pictures are the next slice; the I+P path is byte-exact.
+    return Err(
+      "h264 enc: 4:4:4 requires b_slices=false (B pictures are not implemented yet)",
+    )
+  }
   if b_slices {
     let vbv_b = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
       if target_bytes > 0 {
@@ -938,9 +936,10 @@ fn h264_encode_frames_qps(
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
-  let cstride = mb_width * 8
+  let cstride = if chroma_format == 3 { mb_width * 16 } else { mb_width * 8 }
   let pheight = mb_height * 16
-  let chroma_plane_h = if chroma_format == 2 { pheight } else { pheight / 2 }
+  let chroma_plane_h = if chroma_format == 1 { pheight / 2 } else { pheight }
+  let chroma_plane_w = if chroma_format == 3 { width } else { width / 2 }
   let ps = new_h264_param_sets()
   match
     ff_h264_decode_seq_parameter_set(
@@ -1045,7 +1044,7 @@ fn h264_encode_frames_qps(
       src_y: src_y_p,
       src_u: h264_enc_load_plane(
         u,
-        width / 2,
+        chroma_plane_w,
         chroma_plane_h,
         cstride,
         chroma_plane_h,
@@ -1053,7 +1052,7 @@ fn h264_encode_frames_qps(
       ),
       src_v: h264_enc_load_plane(
         v,
-        width / 2,
+        chroma_plane_w,
         chroma_plane_h,
         cstride,
         chroma_plane_h,
@@ -1129,6 +1128,7 @@ fn h264_encode_frames_qps(
         cstride,
         bit_depth~,
         chroma_h=chroma_plane_h,
+        chroma_w=chroma_plane_w,
       ),
     )
     // The reconstruction becomes the next reference.
@@ -2124,6 +2124,9 @@ fn H264PEncoder::decide_plan(
   allow_intra : Bool,
 ) -> H264PPlan {
   let qp = self.mb_qp
+  // The 4:4:4 intra fallbacks still predict through the 4:2:0/4:2:2 chroma
+  // helpers; keep the inter candidates only until they get three-plane twins.
+  let allow_intra = allow_intra && self.pps.chroma_format != 3
   // Int64 throughout: a macroblock's SSD reaches ~1.7e7 and the 2^10
   // scaling pushes the cost past 2^31, where Int (32-bit) wraps negative
   // and makes every high-distortion Skip look like the cheapest candidate.
@@ -2307,7 +2310,7 @@ fn H264PEncoder::decide_plan(
   // modes by prediction SAD on its own reconstruction; `eval_plan` replays
   // them and prices the plan. Added after I8x8, so ties stay with the
   // cheaper-to-signal coarser forms.
-  if self.intra4x4_in_p {
+  if self.intra4x4_in_p && self.pps.chroma_format != 3 {
     let scratch_store : Array[Int32] = Array::make(256, 0)
     let scratch_modes : Array[Int32] = Array::make(16, 0)
     let scratch_mb : Array[Int32] = Array::make(768, 0)
@@ -2670,34 +2673,59 @@ fn H264PEncoder::mc_into_rec(
   )
   let cf = self.pps.chroma_format
   let cw = 16 >> 1
-  let chh = if cf == 2 { 16 } else { 8 }
-  let cbase = mb_y * chh * self.cstride + mb_x * 8
-  let csx = ox >> 1
-  let csy = if cf == 2 { oy } else { oy >> 1 }
-  let ccw = w >> 1
-  let cch = if cf == 2 { h } else { h >> 1 }
+  let chh = if cf == 2 || cf == 3 { 16 } else { 8 }
+  // 4:4:4 chroma shares the luma geometry (full resolution, same quarter-pel
+  // filter) -- the decoder h264_inter.mbt twin.
+  let cbase = if cf == 3 {
+    mb_y * 16 * self.cstride + mb_x * 16
+  } else {
+    mb_y * chh * self.cstride + mb_x * 8
+  }
+  let csx = if cf == 3 { ox } else { ox >> 1 }
+  let csy = if cf == 3 { oy } else if cf == 2 { oy } else { oy >> 1 }
+  let ccw = if cf == 3 { w } else { w >> 1 }
+  let cch = if cf == 3 { h } else if cf == 2 { h } else { h >> 1 }
   for plane_pair in [(self.rec_u, self.ref_u), (self.rec_v, self.ref_v)] {
     let (plane, ref_plane) = plane_pair
-    h264_mc_chroma(
-      plane,
-      cbase + csy * self.cstride + csx,
-      self.cstride,
-      ref_plane,
-      mb_x * cw + csx,
-      mb_y * chh + csy,
-      mvx,
-      mvy,
-      self.cstride,
-      ccw,
-      cch,
-      self.pwidth / 2,
-      if cf == 2 {
-        self.pheight
-      } else {
-        self.pheight / 2
-      },
-      vshift=if cf == 2 { 0 } else { 1 },
-    )
+    if cf == 3 {
+      h264_mc_luma(
+        plane,
+        cbase + csy * self.cstride + csx,
+        self.cstride,
+        ref_plane,
+        mb_x * 16 + csx + (mvx >> 2),
+        mb_y * 16 + csy + (mvy >> 2),
+        self.cstride,
+        ccw,
+        cch,
+        mvx & 3,
+        mvy & 3,
+        self.pwidth,
+        self.pheight,
+        bit_depth=self.p.bit_depth,
+      )
+    } else {
+      h264_mc_chroma(
+        plane,
+        cbase + csy * self.cstride + csx,
+        self.cstride,
+        ref_plane,
+        mb_x * cw + csx,
+        mb_y * chh + csy,
+        mvx,
+        mvy,
+        self.cstride,
+        ccw,
+        cch,
+        self.pwidth / 2,
+        if cf == 2 {
+          self.pheight
+        } else {
+          self.pheight / 2
+        },
+        vshift=if cf == 2 { 0 } else { 1 },
+      )
+    }
   }
   // `weightp` (`§410`): explicit weighted prediction, the decoder's
   // `h264_weight_rect` applied to exactly the rectangle just motion
@@ -2899,6 +2927,9 @@ priv struct H264PMbCode {
   /// 4x4 blocks. Always false for intra plans (I16 has no transform size).
   dct8 : Bool
   luma8_store : Array[Int32]
+  /// 4:4:4 inter residual levels: three luma-shaped planes (3 x 256,
+  /// block-major inside each plane). Empty for every other chroma format.
+  planes_444 : Array[Int32]
 }
 
 ///|
@@ -3056,6 +3087,9 @@ fn H264PEncoder::code_mb_residuals(
   }
   let is_intra = is_i16 || is_i8 || is_i4
   let dct8 = is_i8 || h264_p_dct8x8_allowed(self.dct8x8, plan)
+  // The 4:4:4 inter path always codes 4x4 (its three-plane residual has no
+  // 8x8 form yet), so the signalled transform flag must stay 0.
+  let dct8_signal = if self.pps.chroma_format == 3 { false } else { dct8 }
   for i = 0; i < 48; i = i + 1 {
     self.cur_nz[i] = if is_intra { 0 } else { self.states[mb_idx0].nz[i] }
   }
@@ -3069,6 +3103,8 @@ fn H264PEncoder::code_mb_residuals(
     }
   }
   let mb : Array[Int32] = Array::make(768, 0)
+  // 4:4:4 inter residual levels (three luma-shaped planes).
+  let planes_444 : Array[Int32] = Array::make(768, 0)
   // Intra uses the intra dequant matrices (luma 0, chroma 1/2); inter uses
   // 3 and 4/5. The decoder picks by mb_type, so the reconstruction must
   // follow the same split or the two pictures drift apart.
@@ -3222,6 +3258,61 @@ fn H264PEncoder::code_mb_residuals(
       }
       self.cur_nz[g] = total
     }
+  } else if self.pps.chroma_format == 3 {
+    // 4:4:4: three luma-shaped planes, one shared 4-bit cbp. Reconstruction
+    // runs in the shared inter tail (luma) plus the 4:4:4 chroma pass below.
+    let cq0 = h264_get_chroma_qp(self.pps, 0, qp, bit_depth~)
+    let cq1 = h264_get_chroma_qp(self.pps, 1, qp, bit_depth~)
+    let plane_qp : Array[Int32] = [qp, cq0, cq1]
+    for p = 0; p < 3; p = p + 1 {
+      let src = if p == 0 {
+        self.src_y
+      } else if p == 1 {
+        self.src_u
+      } else {
+        self.src_v
+      }
+      let rec = if p == 0 {
+        self.rec_y
+      } else if p == 1 {
+        self.rec_u
+      } else {
+        self.rec_v
+      }
+      let stride = if p == 0 { self.ystride } else { self.cstride }
+      let qmul = h264_build_dequant4(self.pps, 3 + p, plane_qp[p])
+      let base = mb_y * 16 * stride + mb_x * 16
+      for i = 0; i < 16; i = i + 1 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let g = gy * 4 + gx
+        let off = base + gy * 4 * stride + gx * 4
+        let res : Array[Int32] = Array::make(16, 0)
+        for row = 0; row < 4; row = row + 1 {
+          for col = 0; col < 4; col = col + 1 {
+            res[row * 4 + col] = src[off + row * stride + col] -
+              rec[off + row * stride + col]
+          }
+        }
+        let levels = h264_enc_fdct_quant_res(res, 0, plane_qp[p])
+        let mut total = 0
+        for s = 0; s < 16; s = s + 1 {
+          planes_444[256 * p + 16 * i + s] = levels[s]
+          if levels[s] != 0 {
+            total = total + 1
+            mb[256 * p + 16 * i + s] = h264_enc_dequant_level(
+              levels[s],
+              qmul[s],
+              bit_depth~,
+            )
+          }
+        }
+        self.cur_nz[16 * p + g] = total
+        if total != 0 {
+          luma_cbp = luma_cbp | (1 << (i / 4))
+        }
+      }
+    }
   } else if dct8 {
     // Inter 8x8DCT luma: four 8x8 blocks, cbp bit per block, each block's
     // CAVLC residual written later as four interleaved sub-lists by the
@@ -3321,172 +3412,181 @@ fn H264PEncoder::code_mb_residuals(
     Array::make(16 * nblk, 0),
   ]
   let chroma_dc_nz : Array[Bool] = [false, false]
-  for c = 0; c < 2; c = c + 1 {
-    let src = if c == 0 { self.src_u } else { self.src_v }
-    let rec = if c == 0 { self.rec_u } else { self.rec_v }
-    let sums : Array[Int32] = Array::make(nblk, 0)
-    for i = 0; i < nblk; i = i + 1 {
-      let bx = i % 2 * 4
-      let by = i / 2 * 4
-      let mut sum = 0
-      for row = 0; row < 4; row = row + 1 {
-        for col = 0; col < 4; col = col + 1 {
-          sum = sum +
-            src[cbase + (by + row) * self.cstride + bx + col] -
-            rec[cbase + (by + row) * self.cstride + bx + col]
+  // 4:4:4 has no chroma DC/AC pair: its three planes went through the luma
+  // path above, so the whole 4:2:0/4:2:2 chroma block is skipped (running
+  // it would overwrite the three-plane levels and their nz mirror).
+  let mut chroma_c_cbp = 0
+  if cf != 3 {
+    for c = 0; c < 2; c = c + 1 {
+      let src = if c == 0 { self.src_u } else { self.src_v }
+      let rec = if c == 0 { self.rec_u } else { self.rec_v }
+      let sums : Array[Int32] = Array::make(nblk, 0)
+      for i = 0; i < nblk; i = i + 1 {
+        let bx = i % 2 * 4
+        let by = i / 2 * 4
+        let mut sum = 0
+        for row = 0; row < 4; row = row + 1 {
+          for col = 0; col < 4; col = col + 1 {
+            sum = sum +
+              src[cbase + (by + row) * self.cstride + bx + col] -
+              rec[cbase + (by + row) * self.cstride + bx + col]
+          }
+        }
+        sums[i] = sum
+      }
+      let dc_store : Array[Int32] = Array::make(16, 0)
+      let dc_n = if cf == 2 {
+        h264_enc_chroma422_dc_hadamard_quant(sums, dc_store, self.chroma_qp)
+        8
+      } else {
+        ignore(
+          h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp),
+        )
+        4
+      }
+      chroma_dc_store[c] = dc_store
+      let mut any_dc = false
+      for s2 = 0; s2 < dc_n; s2 = s2 + 1 {
+        if dc_store[s2] != 0 {
+          any_dc = true
+          break
         }
       }
-      sums[i] = sum
+      chroma_dc_nz[c] = any_dc
+      if cf == 2 {
+        for k = 0; k < 8; k = k + 1 {
+          let lv = dc_store[k]
+          if lv != 0 {
+            mb[256 + 256 * c + h264_chroma422_dc_scan[k]] = lv
+          }
+        }
+      } else {
+        for s = 0; s < 4; s = s + 1 {
+          let lv = dc_store[s]
+          if lv != 0 {
+            mb[256 + 256 * c + 16 * s] = lv
+          }
+        }
+      }
+      for i = 0; i < nblk; i = i + 1 {
+        let bx = i % 2 * 4
+        let by = i / 2 * 4
+        let res : Array[Int32] = Array::make(16, 0)
+        for row = 0; row < 4; row = row + 1 {
+          for col = 0; col < 4; col = col + 1 {
+            res[row * 4 + col] = src[cbase +
+              (by + row) * self.cstride +
+              bx +
+              col] -
+              rec[cbase + (by + row) * self.cstride + bx + col]
+          }
+        }
+        let levels = h264_enc_fdct_quant_res(res, 0, self.chroma_qp)
+        levels[0] = 0 // storage position 0 is the DC slot
+        let mut total = 0
+        for s = 0; s < 16; s = s + 1 {
+          chroma_ac_store[c][16 * i + s] = levels[s]
+          if levels[s] != 0 {
+            total = total + 1
+            mb[256 + 256 * c + 16 * i + s] = h264_enc_dequant_level(
+              levels[s],
+              qmul_c[c][s],
+              bit_depth~,
+            )
+          }
+        }
+        chroma_ac_nz_mirror[16 + 16 * c + i] = total
+      }
     }
-    let dc_store : Array[Int32] = Array::make(16, 0)
-    let dc_n = if cf == 2 {
-      h264_enc_chroma422_dc_hadamard_quant(sums, dc_store, self.chroma_qp)
-      8
+    // AC can survive quantisation while every DC coefficient is zero
+    // (for example a color checkerboard with zero-mean residual).
+    chroma_c_cbp = if chroma_ac_nz_count(chroma_ac_store) {
+      2
+    } else if chroma_dc_nz[0] || chroma_dc_nz[1] {
+      1
     } else {
-      ignore(
-        h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp),
-      )
-      4
+      0
     }
-    chroma_dc_store[c] = dc_store
-    let mut any_dc = false
-    for s2 = 0; s2 < dc_n; s2 = s2 + 1 {
-      if dc_store[s2] != 0 {
-        any_dc = true
-        break
-      }
-    }
-    chroma_dc_nz[c] = any_dc
-    if cf == 2 {
-      for k = 0; k < 8; k = k + 1 {
-        let lv = dc_store[k]
-        if lv != 0 {
-          mb[256 + 256 * c + h264_chroma422_dc_scan[k]] = lv
-        }
-      }
-    } else {
-      for s = 0; s < 4; s = s + 1 {
-        let lv = dc_store[s]
-        if lv != 0 {
-          mb[256 + 256 * c + 16 * s] = lv
-        }
-      }
-    }
-    for i = 0; i < nblk; i = i + 1 {
-      let bx = i % 2 * 4
-      let by = i / 2 * 4
-      let res : Array[Int32] = Array::make(16, 0)
-      for row = 0; row < 4; row = row + 1 {
-        for col = 0; col < 4; col = col + 1 {
-          res[row * 4 + col] = src[cbase + (by + row) * self.cstride + bx + col] -
-            rec[cbase + (by + row) * self.cstride + bx + col]
-        }
-      }
-      let levels = h264_enc_fdct_quant_res(res, 0, self.chroma_qp)
-      levels[0] = 0 // storage position 0 is the DC slot
-      let mut total = 0
-      for s = 0; s < 16; s = s + 1 {
-        chroma_ac_store[c][16 * i + s] = levels[s]
-        if levels[s] != 0 {
-          total = total + 1
-          mb[256 + 256 * c + 16 * i + s] = h264_enc_dequant_level(
-            levels[s],
-            qmul_c[c][s],
-            bit_depth~,
-          )
-        }
-      }
-      chroma_ac_nz_mirror[16 + 16 * c + i] = total
-    }
-  }
-  // AC can survive quantisation while every DC coefficient is zero
-  // (for example a color checkerboard with zero-mean residual).
-  let chroma_c_cbp = if chroma_ac_nz_count(chroma_ac_store) {
-    2
-  } else if chroma_dc_nz[0] || chroma_dc_nz[1] {
-    1
-  } else {
-    0
-  }
 
-  // The nC mirror has to follow the SYNTAX, not the quantiser output.
-  // Inter decoder (`h264_cavlc.c:1136`): unsigned chroma AC is zeroed by
-  // `fill_rectangle(..., 0, 1)`. Intra decoder (`h264_decode_mb_cavlc_
-  // intra`): the counts are only touched when cbp&0x20 != 0, otherwise the
-  // previous picture's values survive - which is exactly the seed still in
-  // `cur_nz`.
-  if is_intra {
-    if chroma_c_cbp == 2 {
+    // The nC mirror has to follow the SYNTAX, not the quantiser output.
+    // Inter decoder (`h264_cavlc.c:1136`): unsigned chroma AC is zeroed by
+    // `fill_rectangle(..., 0, 1)`. Intra decoder (`h264_decode_mb_cavlc_
+    // intra`): the counts are only touched when cbp&0x20 != 0, otherwise the
+    // previous picture's values survive - which is exactly the seed still in
+    // `cur_nz`.
+    if is_intra {
+      if chroma_c_cbp == 2 {
+        for c = 0; c < 2; c = c + 1 {
+          for i = 0; i < nblk; i = i + 1 {
+            self.cur_nz[16 + 16 * c + i] = chroma_ac_nz_mirror[16 + 16 * c + i]
+          }
+        }
+      }
+    } else {
       for c = 0; c < 2; c = c + 1 {
         for i = 0; i < nblk; i = i + 1 {
           self.cur_nz[16 + 16 * c + i] = chroma_ac_nz_mirror[16 + 16 * c + i]
         }
       }
-    }
-  } else {
-    for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < nblk; i = i + 1 {
-        self.cur_nz[16 + 16 * c + i] = chroma_ac_nz_mirror[16 + 16 * c + i]
-      }
-    }
-    if chroma_c_cbp != 2 {
-      for c = 0; c < 2; c = c + 1 {
-        for i = 0; i < nblk; i = i + 1 {
-          self.cur_nz[16 + 16 * c + i] = 0
+      if chroma_c_cbp != 2 {
+        for c = 0; c < 2; c = c + 1 {
+          for i = 0; i < nblk; i = i + 1 {
+            self.cur_nz[16 + 16 * c + i] = 0
+          }
         }
       }
     }
-  }
-  for c = 0; c < 2; c = c + 1 {
-    let plane = if c == 0 { self.rec_u } else { self.rec_v }
-    if chroma_dc_nz[c] {
-      if cf == 2 {
-        h264_chroma422_dc_dequant_idct(
-          mb,
-          256 + 256 * c,
-          h264_build_dequant4(self.pps, 1 + c, self.chroma_qp + 3)[0],
-          bit_depth=self.p.bit_depth,
-        )
-      } else {
-        h264_chroma_dc_dequant_idct(
-          mb,
-          256 + 256 * c,
-          qmul_c[c][0],
-          bit_depth=self.p.bit_depth,
-        )
+    for c = 0; c < 2; c = c + 1 {
+      let plane = if c == 0 { self.rec_u } else { self.rec_v }
+      if chroma_dc_nz[c] {
+        if cf == 2 {
+          h264_chroma422_dc_dequant_idct(
+            mb,
+            256 + 256 * c,
+            h264_build_dequant4(self.pps, 1 + c, self.chroma_qp + 3)[0],
+            bit_depth=self.p.bit_depth,
+          )
+        } else {
+          h264_chroma_dc_dequant_idct(
+            mb,
+            256 + 256 * c,
+            qmul_c[c][0],
+            bit_depth=self.p.bit_depth,
+          )
+        }
+      }
+      for i = 0; i < nblk; i = i + 1 {
+        let bx = i % 2 * 4
+        let by = i / 2 * 4
+        let off = cbase + by * self.cstride + bx
+        let bo = 256 + 256 * c + 16 * i
+        let nzv = if chroma_c_cbp == 2 {
+          chroma_block_nz(chroma_ac_store[c], i)
+        } else {
+          0
+        }
+        if nzv != 0 {
+          h264_idct_add(
+            plane,
+            off,
+            self.cstride,
+            mb,
+            bo,
+            bit_depth=self.p.bit_depth,
+          )
+        } else if mb[bo] != 0 {
+          h264_idct_dc_add(
+            plane,
+            off,
+            self.cstride,
+            mb,
+            bo,
+            bit_depth=self.p.bit_depth,
+          )
+        }
       }
     }
-    for i = 0; i < nblk; i = i + 1 {
-      let bx = i % 2 * 4
-      let by = i / 2 * 4
-      let off = cbase + by * self.cstride + bx
-      let bo = 256 + 256 * c + 16 * i
-      let nzv = if chroma_c_cbp == 2 {
-        chroma_block_nz(chroma_ac_store[c], i)
-      } else {
-        0
-      }
-      if nzv != 0 {
-        h264_idct_add(
-          plane,
-          off,
-          self.cstride,
-          mb,
-          bo,
-          bit_depth=self.p.bit_depth,
-        )
-      } else if mb[bo] != 0 {
-        h264_idct_dc_add(
-          plane,
-          off,
-          self.cstride,
-          mb,
-          bo,
-          bit_depth=self.p.bit_depth,
-        )
-      }
-    }
-  }
+  } // cf != 3
   if is_i16 {
     // `h264_recon_mb`'s I16 order: scatter the Hadamard DC first, then the
     // per-block IDCT (or the DC-only add for blocks with no AC levels).
@@ -3535,7 +3635,7 @@ fn H264PEncoder::code_mb_residuals(
         )
       }
     }
-  } else if !dct8 && !is_i4 {
+  } else if !dct8_signal && !is_i4 {
     for i = 0; i < 16; i = i + 1 {
       let gx = h264_luma_block_x[i]
       let gy = h264_luma_block_y[i]
@@ -3564,6 +3664,42 @@ fn H264PEncoder::code_mb_residuals(
       }
     }
   }
+  if cf == 3 && !is_intra {
+    // 4:4:4: the chroma planes replay the luma 4x4 inter reconstruction
+    // (levels at 256*p, counts at 16*p).
+    for p = 1; p < 3; p = p + 1 {
+      let rec = if p == 1 { self.rec_u } else { self.rec_v }
+      let base = mb_y * 16 * self.cstride + mb_x * 16
+      for i = 0; i < 16; i = i + 1 {
+        let gx = h264_luma_block_x[i]
+        let gy = h264_luma_block_y[i]
+        let g = gy * 4 + gx
+        let off = base + gy * 4 * self.cstride + gx * 4
+        let nz = self.cur_nz[16 * p + g]
+        if (luma_cbp & (1 << (i / 4))) != 0 && nz != 0 {
+          if nz == 1 && mb[256 * p + 16 * i] != 0 {
+            h264_idct_dc_add(
+              rec,
+              off,
+              self.cstride,
+              mb,
+              256 * p + 16 * i,
+              bit_depth=self.p.bit_depth,
+            )
+          } else {
+            h264_idct_add(
+              rec,
+              off,
+              self.cstride,
+              mb,
+              256 * p + 16 * i,
+              bit_depth=self.p.bit_depth,
+            )
+          }
+        }
+      }
+    }
+  }
   {
     luma_cbp,
     chroma_c_cbp,
@@ -3571,8 +3707,9 @@ fn H264PEncoder::code_mb_residuals(
     luma_dc_store,
     chroma_dc_store,
     chroma_ac_store,
-    dct8,
+    dct8: dct8_signal,
     luma8_store,
+    planes_444,
   }
 }
 
@@ -3832,8 +3969,20 @@ fn H264PEncoder::write_mb_syntax(
     }
   }
   if !is_intra {
-    let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
-    r.put_ue(h264_enc_inter_cbp_golomb(cbp))
+    let cf3 = self.pps.chroma_format == 3
+    // 4:4:4 codes no chroma CBP: the 4-bit pattern gates every plane.
+    let cbp = if cf3 {
+      coded.luma_cbp
+    } else {
+      coded.luma_cbp | (coded.chroma_c_cbp << 4)
+    }
+    r.put_ue(
+      if cf3 {
+        h264_enc_inter_cbp_golomb_gray(cbp)
+      } else {
+        h264_enc_inter_cbp_golomb(cbp)
+      },
+    )
     // transform_size_8x8_flag sits between the cbp codeword and
     // mb_qp_delta: the decoder reads it whenever dct8x8_allowed holds and
     // the luma cbp is non-zero (`h264_inter_residual_cavlc`).
@@ -3847,7 +3996,29 @@ fn H264PEncoder::write_mb_syntax(
         self.stats.dqp_mbs += 1
       }
     }
-    if coded.dct8 {
+    if cf3 {
+      // 4:4:4: three luma-shaped planes, each 4x4 list with its own counts.
+      for p = 0; p < 3; p = p + 1 {
+        for i8 = 0; i8 < 4; i8 = i8 + 1 {
+          if (cbp & (1 << i8)) != 0 {
+            for i4 = 0; i4 < 4; i4 = i4 + 1 {
+              let i = i8 * 4 + i4
+              let gx = h264_luma_block_x[i]
+              let gy = h264_luma_block_y[i]
+              let view = scan_view_at(
+                coded.planes_444,
+                16 * p + i,
+                h264_zigzag_scan_t,
+                0,
+                16,
+              )
+              let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy, base=16 * p)
+              ignore(h264_enc_write_residual(r, view, 16, nc))
+            }
+          }
+        }
+      }
+    } else if coded.dct8 {
       self.write_luma8_cavlc(r, mb_idx, mb_x, mb_y, coded)
     } else {
       for i8 = 0; i8 < 4; i8 = i8 + 1 {
@@ -4104,18 +4275,20 @@ fn H264PEncoder::nc_luma(
   mb_y : Int32,
   gx : Int32,
   gy : Int32,
+  /// Plane base of the mirror (0 luma, 16/32 the 4:4:4 chroma planes).
+  base~ : Int32 = 0,
 ) -> Int32 {
   let left = if gx > 0 {
-    self.cur_nz[gy * 4 + gx - 1]
+    self.cur_nz[base + gy * 4 + gx - 1]
   } else if mb_x > 0 {
-    self.states[mb_idx - 1].nz[gy * 4 + 3]
+    self.states[mb_idx - 1].nz[base + gy * 4 + 3]
   } else {
     64
   }
   let top = if gy > 0 {
-    self.cur_nz[(gy - 1) * 4 + gx]
+    self.cur_nz[base + (gy - 1) * 4 + gx]
   } else if mb_y > 0 {
-    self.states[mb_idx - self.mb_width].nz[3 * 4 + gx]
+    self.states[mb_idx - self.mb_width].nz[base + 3 * 4 + gx]
   } else {
     64
   }
@@ -4176,6 +4349,18 @@ fn H264PEncoder::nc_chroma(
 fn h264_enc_inter_cbp_golomb(cbp : Int32) -> Int32 {
   for i = 0; i < 48; i = i + 1 {
     if h264_golomb_to_inter_cbp[i] == cbp {
+      return i
+    }
+  }
+  0
+}
+
+///|
+/// 4:4:4: the 16-entry inter cbp code (the 4-bit luma pattern shared by all
+/// three planes).
+fn h264_enc_inter_cbp_golomb_gray(cbp : Int32) -> Int32 {
+  for i = 0; i < 16; i = i + 1 {
+    if h264_golomb_to_inter_cbp_gray[i] == cbp {
       return i
     }
   }
