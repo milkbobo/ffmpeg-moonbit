@@ -316,6 +316,12 @@ pub fn h264_encode_frames(
     return Err("h264 enc: chroma_format must be 1, 2 or 3")
   }
   if chroma_format == 3 && frames.length() > 1 {
+    // §421: the 4:4:4 inter paths are still open (an inter-picture drift is
+    // documented in AGENT_HANDOFF_2026-11-15_H264_C444.md); the intra-only
+    // 4:4:4 stream is byte-exact.
+    return Err("h264 enc: 4:4:4 inter pictures are not implemented yet")
+  }
+  if chroma_format == 3 && frames.length() > 1 {
     // §421 step 1: the 4:4:4 inter paths (P/B + CABAC/streaming) land in the
     // next slice; intra-only sequences are already byte-exact.
     return Err("h264 enc: 4:4:4 inter pictures are not implemented yet")

@@ -92,6 +92,18 @@ test "h264 c444: single IDR round trip" {
 }
 
 ///|
+/// §421 contract: the inter pictures are still open, so a multi-frame 4:4:4
+/// request must fail loudly instead of emitting a drifting stream.
+test "h264 c444: inter pictures stay rejected" {
+  let frames = c444_fixture(2)
+  match
+    @libavcodec.h264_encode_frames(frames, width=96, height=64, chroma_format=3) {
+    Ok(_) => fail("4:4:4 inter pictures accepted")
+    Err(_) => ()
+  }
+}
+
+///|
 test "h264 c444: validation rejects bad formats" {
   let frames = c444_fixture(1)
   for bad in [0, 4, -1] {
