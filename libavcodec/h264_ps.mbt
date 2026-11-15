@@ -181,6 +181,9 @@ pub struct H264Pps {
   /// `profile_idc` of the referenced SPS (244 selects the pred_add bypass
   /// kernels for vertical/horizontal intra modes).
   mut profile_idc : Int32
+  /// `chroma_format_idc` of the referenced SPS (`§420`: the encoders read
+  /// their chroma geometry from the round-tripped parameter sets).
+  mut chroma_format : Int32
   mut cabac : Int32
   mut pic_order_present : Int32
   mut slice_group_count : Int32
@@ -294,6 +297,7 @@ fn new_h264_pps() -> H264Pps {
     pps_id: 0,
     sps_id: 0,
     profile_idc: 0,
+    chroma_format: 1,
     cabac: 0,
     pic_order_present: 0,
     slice_group_count: 0,
@@ -944,6 +948,7 @@ pub fn ff_h264_decode_picture_parameter_set(
   pps.pic_order_present = gb.read1().reinterpret_as_int()
   let slice_groups = gb.read_ue()
   if slice_groups < 0 {
+    println("PPSGUARD: slice_groups=\{slice_groups}")
     return Err("EINVAL")
   }
   pps.slice_group_count = slice_groups + 1
@@ -954,6 +959,7 @@ pub fn ff_h264_decode_picture_parameter_set(
   let ref0 = gb.read_ue()
   let ref1 = gb.read_ue()
   if ref0 < 0 || ref1 < 0 || ref0 > 31 || ref1 > 31 {
+    println("PPSGUARD: ref0=\{ref0} ref1=\{ref1}")
     return Err("EINVAL")
   }
   pps.ref_count_l0 = ref0 + 1
@@ -974,6 +980,7 @@ pub fn ff_h264_decode_picture_parameter_set(
   pps.transform_8x8_mode = 0
   pps.transform_bypass = sps.transform_bypass
   pps.profile_idc = sps.profile_idc
+  pps.chroma_format = sps.chroma_format_idc
   for i = 0; i < 6; i = i + 1 {
     for j = 0; j < 16; j = j + 1 {
       pps.scaling_matrix4[i][j] = sps.scaling_matrix4[i][j]

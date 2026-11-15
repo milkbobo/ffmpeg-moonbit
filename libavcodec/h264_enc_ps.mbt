@@ -194,10 +194,11 @@ fn h264_enc_sps_rbsp(
   p : H264EncParams,
   dct8x8~ : Bool = false,
   vbv~ : H264Vbv? = None,
+  chroma_format~ : Int32 = 1,
 ) -> Bytes {
   let r = H264Rbsp::new()
-  if dct8x8 || p.bit_depth > 8 {
-    h264_enc_sps_body_high(r, p, vbv~)
+  if dct8x8 || p.bit_depth > 8 || chroma_format > 1 {
+    h264_enc_sps_body_high(r, p, vbv~, chroma_format~)
   } else {
     h264_enc_sps_body(r, p, vbv~)
   }
@@ -211,10 +212,11 @@ fn h264_enc_write_sps(
   p : H264EncParams,
   dct8x8~ : Bool = false,
   vbv~ : H264Vbv? = None,
+  chroma_format~ : Int32 = 1,
 ) -> Bytes {
   let r = H264Rbsp::new()
-  if dct8x8 || p.bit_depth > 8 {
-    h264_enc_sps_body_high(r, p, vbv~)
+  if dct8x8 || p.bit_depth > 8 || chroma_format > 1 {
+    h264_enc_sps_body_high(r, p, vbv~, chroma_format~)
   } else {
     h264_enc_sps_body(r, p, vbv~)
   }
@@ -233,12 +235,13 @@ fn h264_enc_sps_body_high(
   r : H264Rbsp,
   p : H264EncParams,
   vbv~ : H264Vbv? = None,
+  chroma_format~ : Int32 = 1,
 ) -> Unit {
-  r.put(h264_enc_profile_idc(p.bit_depth, 100), 8)
+  r.put(h264_enc_profile_idc(p.bit_depth, 100, chroma=chroma_format), 8)
   r.put(0, 8) // constraint_set0..5 + reserved_zero_2bits
   r.put(p.level_idc, 8)
   r.put_ue(0) // seq_parameter_set_id
-  r.put_ue(1) // chroma_format_idc: 4:2:0
+  r.put_ue(chroma_format) // chroma_format_idc: 4:2:0 / 4:2:2
   r.put_ue(p.bit_depth - 8) // bit_depth_luma_minus8
   r.put_ue(p.bit_depth - 8) // bit_depth_chroma_minus8
   r.put_bit(0) // qpprime_y_zero_transform_bypass_flag
@@ -310,9 +313,10 @@ fn h264_enc_pps_rbsp(
   p : H264EncParams,
   dct8x8~ : Bool = false,
   weightp~ : Bool = false,
+  chroma_format~ : Int32 = 1,
 ) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_pps_body(r, p, dct8x8~, weightp~)
+  h264_enc_pps_body(r, p, dct8x8~, weightp~, chroma_format~)
   r.trailing_bits()
   r.finish_raw_of()
 }
@@ -323,9 +327,10 @@ fn h264_enc_write_pps(
   p : H264EncParams,
   dct8x8~ : Bool = false,
   weightp~ : Bool = false,
+  chroma_format~ : Int32 = 1,
 ) -> Bytes {
   let r = H264Rbsp::new()
-  h264_enc_pps_body(r, p, dct8x8~, weightp~)
+  h264_enc_pps_body(r, p, dct8x8~, weightp~, chroma_format~)
   r.trailing_bits()
   h264_enc_nal(r, 3, 8)
 }
@@ -339,6 +344,9 @@ fn h264_enc_pps_body(
   p : H264EncParams,
   dct8x8~ : Bool = false,
   weightp~ : Bool = false,
+  /// `§420`: the High-family tail follows the SPS's profile family, so a
+  /// 4:2:2 SPS (profile 122) needs it even at 8 bits with `dct8x8` off.
+  chroma_format~ : Int32 = 1,
 ) -> Unit {
   r.put_ue(0) // pic_parameter_set_id
   r.put_ue(0) // seq_parameter_set_id
@@ -362,7 +370,7 @@ fn h264_enc_pps_body(
   // the decoder enters it whenever the profile is High family and more
   // RBSP data remains (trailing bits included), so omitting it would
   // misparse the stop bit as `transform_8x8_mode_flag`.
-  if dct8x8 || p.bit_depth > 8 {
+  if dct8x8 || p.bit_depth > 8 || chroma_format > 1 {
     r.put_bit(if dct8x8 { 1 } else { 0 }) // transform_8x8_mode_flag
     r.put_bit(0) // pic_scaling_matrix_present_flag
     r.put_se(0) // second_chroma_qp_index_offset

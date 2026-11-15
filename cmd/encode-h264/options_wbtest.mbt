@@ -365,7 +365,11 @@ test "CLI bit-depth parses, reaches both paths, rejects bad depths" {
 fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
-  let chroma = opts.width * opts.height / 4 * bpp
+  let chroma = if opts.chroma_format == 2 {
+    luma * bpp
+  } else {
+    opts.width * opts.height / 4 * bpp
+  }
   let frame_size = raw_frame_size(opts)
   if data.length() == 0 || data.length() % frame_size != 0 {
     fail(

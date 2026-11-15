@@ -13537,3 +13537,25 @@ multi_ref×AQ×AUD/11·13·7·15·16 拒收/FFmpeg 锚点）；全族 29 文件
 参数化 110/244）；`moon check --target wasm --deny-warn`、`moon fmt`、
 git diff --check 通过。修复零钉值扰动（语法不变，仅本地 recon 修正）。
 仍拒收：流式 ABR（不变）。
+
+## §420 H.264 编码器 4:2:2 面——色度几何全链 + 五个硬编码收口（2026-11-15）
+
+接续 §419。色度面从 4:2:0 扩到 4:2:2（chroma_format=2，profile 122
+High 4:2:2），CAVLC/CABAC 双熵、I/P/B 全调度、流式=批式字节恒等。
+
+五个真 bug 全是「4:2:0 下恰好等价」的硬编码：① CABAC 批量 P 链的 SPS 生成
+漏传 chroma_format（SPS 说 4:2:0、编码按 4:2:2，PPS 回读成 1）；② 借用解码器
+的镜像上下文 h264_cabac_mirror_new 写死 chroma_format=1 / vshift=1 /
+cheight=pheight/2 与 refpic 色度缓冲长度，这些字段喂 cbf nz 邻居与色度语法；
+③ CABAC 色度 AC 块数写死 4（解码侧 4*num_c8x8=8）；④ CABAC 着色度 DC 固定
+4 系数（4:2:2 是 2x4 Hadamard 八系数、DECODE_SIGNIFICANCE(7) 第八隐含）；
+⑤ coeff_abs_levelgt1_ctx 未按 is_dc422 选 [1] 行（escape 阶梯上下文）。
+另修 CABAC/流式主循环的 pheight/2 与两处 h264_b_refpic 漏传 chroma_h
+（B 帧 cheight 错 → 流式与批式从首个 B 帧分叉）。
+
+仲裁：ARBC22（CAVLC）/ARBC22C（CABAC）6 帧 qp24 流 docker
+linuxserver/ffmpeg:9.0.2 零告警、显示序逐帧 md5 全等后钉值。门：新专项
+4 项（round-trip 双熵 + SPS profile/chroma 断言 / 流式=批式 / 非法
+chroma_format 拒收 / FFmpeg 锚点）；全族 197/197（4:2:0 钉值逐字节未动）+
+CLI 25/25；moon check --target wasm --deny-warn、moonfmt 单文件、
+git diff --check 干净。仍拒收：流式 ABR、4:4:4（下一片）。

@@ -32,6 +32,8 @@ priv struct Options {
   /// `§415`: P-slice multi-reference history depth (1 = single reference;
   /// `§418` extends 2..=16 to the B schedule).
   multi_ref : Int32
+  /// `§420`: chroma format, 420 (default) or 422.
+  chroma_format : Int32
   keyint : Int32
 }
 
@@ -135,6 +137,13 @@ fn parse_options(args : Array[String]) -> Options raise {
     Some(other) => fail("encode-h264: unsupported codec \{other} (h264)")
   }
   let multi_ref = number(values, "--multi-ref", 1)
+  let chroma_format = match values.get("--chroma") {
+    None => 1
+    Some("420") => 1
+    Some("422") => 2
+    Some(other) =>
+      fail("encode-h264: --chroma must be 420 or 422 (got \{other})")
+  }
   let keyint = number(values, "--keyint", 0)
   if keyint < 0 {
     fail("encode-h264: keyint must be nonnegative")
@@ -225,6 +234,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     bit_depth,
     codec,
     multi_ref,
+    chroma_format,
     keyint,
   }
 }
@@ -256,10 +266,12 @@ fn sample_bytes(bit_depth : Int32) -> Int32 {
 }
 
 ///|
-/// One packed frame's byte size (Y, Cb, Cr planes, no row padding).
+/// One packed frame's byte size (Y, Cb, Cr planes, no row padding; the
+/// chroma planes double their rows at 4:2:2).
 fn raw_frame_size(opts : Options) -> Int32 {
   let luma = opts.width * opts.height
-  (luma + luma / 2) * sample_bytes(opts.bit_depth)
+  let chroma = if opts.chroma_format == 2 { luma } else { luma / 2 }
+  (luma + chroma) * sample_bytes(opts.bit_depth)
 }
 
 ///|
@@ -280,6 +292,7 @@ fn video_config(opts : Options) -> @codec.VideoEncConfig {
     weightp: opts.weightp,
     bit_depth: opts.bit_depth,
     multi_ref: opts.multi_ref,
+    chroma_format: opts.chroma_format,
     keyint: opts.keyint,
     aud: opts.aud,
     aq: opts.aq,
@@ -308,7 +321,11 @@ fn open_stream_encoder(opts : Options) -> @codec.VideoEncoder raise {
 fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
-  let chroma = opts.width * opts.height / 4 * bpp
+  let chroma = if opts.chroma_format == 2 {
+    luma * bpp
+  } else {
+    opts.width * opts.height / 4 * bpp
+  }
   let frame_size = raw_frame_size(opts)
   if data.length() == 0 || data.length() % frame_size != 0 {
     fail(
@@ -337,7 +354,11 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
 fn encode_stream_file(opts : Options) -> (Int32, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
-  let chroma = opts.width * opts.height / 4 * bpp
+  let chroma = if opts.chroma_format == 2 {
+    luma * bpp
+  } else {
+    opts.width * opts.height / 4 * bpp
+  }
   let frame_size = raw_frame_size(opts)
   let reader = FrameReader::open(@utf8.encode(opts.input))
   let input_size = reader.size()

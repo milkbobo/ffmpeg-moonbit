@@ -140,24 +140,47 @@ fn h264_enc_fit_p_weight(
   width : Int32,
   height : Int32,
   bit_depth~ : Int32 = 8,
+  /// `§420`: chroma plane rows (h/2 at 4:2:0, h at 4:2:2).
+  chroma_h~ : Int32 = height / 2,
 ) -> Unit {
   let denom = 5
   let unit = 1 << denom
   pwt.luma_log2_weight_denom = denom
   pwt.chroma_log2_weight_denom = denom
   let (lw, lo) = h264_enc_plane_weight(
-    src_y, ystride, ref_y, ystride, width, height, denom, bit_depth~,
+    src_y,
+    ystride,
+    ref_y,
+    ystride,
+    width,
+    height,
+    denom,
+    bit_depth~,
   )
   pwt.luma_weight_l0[0] = lw
   pwt.luma_offset_l0[0] = lo
   pwt.use_weight = if lw != unit || lo != 0 { 1 } else { 0 }
   let cw = width / 2
-  let ch = height / 2
+  let ch = chroma_h
   let (uw, uo) = h264_enc_plane_weight(
-    src_u, cstride, ref_u, cstride, cw, ch, denom, bit_depth~,
+    src_u,
+    cstride,
+    ref_u,
+    cstride,
+    cw,
+    ch,
+    denom,
+    bit_depth~,
   )
   let (vw, vo) = h264_enc_plane_weight(
-    src_v, cstride, ref_v, cstride, cw, ch, denom, bit_depth~,
+    src_v,
+    cstride,
+    ref_v,
+    cstride,
+    cw,
+    ch,
+    denom,
+    bit_depth~,
   )
   pwt.chroma_weight_l0[0][0] = uw
   pwt.chroma_offset_l0[0][0] = uo

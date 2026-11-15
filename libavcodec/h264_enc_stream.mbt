@@ -34,8 +34,10 @@ pub struct H264StreamEncoder {
   intra4x4_in_b : Bool
   /// Opt-in explicit weighted prediction for the P pictures (`§410`).
   weightp : Bool
-  /// `§412`: luma/chroma bit depth (8 / 9 / 10).
+  /// `§412`/`§419`: luma/chroma bit depth (8 / 9 / 10 / 12 / 14).
   bit_depth : Int32
+  /// `§420`: chroma format 1 (4:2:0) or 2 (4:2:2).
+  chroma_format : Int32
   aud : Bool
   aq : Bool
   aq_strength : Int32
@@ -152,6 +154,8 @@ pub fn H264StreamEncoder::open(
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   stats~ : H264EncStats = H264EncStats::new(),
+  /// `§420`: chroma format, 1 (4:2:0, default) or 2 (4:2:2).
+  chroma_format~ : Int32 = 1,
   /// Online VBV. Rejected emitting pushes leave encoder state intact;
   /// an odd B input is buffered until its future P arrives or finish.
   vbv_maxrate~ : Int32 = 0,
@@ -191,6 +195,9 @@ pub fn H264StreamEncoder::open(
   if multi_ref < 1 || multi_ref > 16 {
     return Err("h264 enc: multi_ref must be in 1..=16")
   }
+  if chroma_format != 1 && chroma_format != 2 {
+    return Err("h264 enc: chroma_format must be 1 or 2")
+  }
   if width <= 0 ||
     height <= 0 ||
     width % 2 != 0 ||
@@ -212,15 +219,15 @@ pub fn H264StreamEncoder::open(
   // parsed PPS holds the dequantisation tables shared with the decoder.
   let ps = new_h264_param_sets()
   let sps_rbsp = if b_slices {
-    h264_enc_sps_rbsp_b(p, dct8x8~)
+    h264_enc_sps_rbsp_b(p, dct8x8~, chroma_format~)
   } else if cabac {
-    if dct8x8 || p.bit_depth > 8 {
-      h264_enc_sps_rbsp_high(p)
+    if dct8x8 || p.bit_depth > 8 || chroma_format > 1 {
+      h264_enc_sps_rbsp_high(p, chroma_format~)
     } else {
       h264_enc_sps_rbsp_main(p)
     }
   } else {
-    h264_enc_sps_rbsp(p, dct8x8~)
+    h264_enc_sps_rbsp(p, dct8x8~, chroma_format~)
   }
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_rbsp), ps, false) {
     Ok(_) => ()
@@ -230,9 +237,9 @@ pub fn H264StreamEncoder::open(
   // must hand the same flag to the PPS builder that its P slices use — a
   // table on the wire with `weighted_pred_flag = 0` would decode unweighted.
   let pps_raw = if cabac {
-    h264_enc_pps_rbsp_cabac(p, dct8x8~, weightp~)
+    h264_enc_pps_rbsp_cabac(p, dct8x8~, weightp~, chroma_format~)
   } else {
-    h264_enc_pps_rbsp(p, dct8x8~, weightp~)
+    h264_enc_pps_rbsp(p, dct8x8~, weightp~, chroma_format~)
   }
   match
     ff_h264_decode_picture_parameter_set(
@@ -265,6 +272,7 @@ pub fn H264StreamEncoder::open(
     intra4x4_in_b,
     weightp,
     bit_depth,
+    chroma_format,
     aud,
     aq,
     aq_strength,
@@ -320,6 +328,30 @@ fn H264StreamEncoder::load_plane(
 }
 
 ///|
+/// Chroma plane loader: rows = `pheight` at 4:2:2, `pheight / 2` at 4:2:0.
+fn H264StreamEncoder::load_chroma_plane(
+  self : H264StreamEncoder,
+  src : Bytes,
+  w : Int32,
+  h : Int32,
+  stride : Int32,
+) -> Array[Int32] {
+  let rows = self.chroma_plane_rows()
+  h264_enc_load_plane(src, w, h, stride, rows, bit_depth=self.bit_depth)
+}
+
+///|
+/// The chroma plane's row count (drives every reference/rec allocation and
+/// the packed recon layout).
+fn H264StreamEncoder::chroma_plane_rows(self : H264StreamEncoder) -> Int32 {
+  if self.chroma_format == 2 {
+    self.pheight
+  } else {
+    self.pheight / 2
+  }
+}
+
+///|
 /// Validate a frame's planes against the opened geometry.
 fn H264StreamEncoder::check_frame(
   self : H264StreamEncoder,
@@ -334,7 +366,7 @@ fn H264StreamEncoder::check_frame(
   )
   let chroma_bytes = h264_enc_plane_bytes(
     self.width / 2,
-    self.height / 2,
+    self.chroma_plane_rows(),
     self.bit_depth,
   )
   if y.length() != plane_bytes ||
@@ -480,6 +512,7 @@ fn H264StreamEncoder::stream_idr(
       dct8x8=self.dct8x8,
       weightp=self.weightp,
       bit_depth=self.bit_depth,
+      chroma_format=self.chroma_format,
       multi_ref=self.nrefs,
       vbv~,
       idr_cpb_delay~,
@@ -502,6 +535,7 @@ fn H264StreamEncoder::stream_idr(
       weightp=self.weightp,
       bit_depth=self.bit_depth,
       multi_ref=self.nrefs,
+      chroma_format=self.chroma_format,
       vbv~,
       idr_cpb_delay~,
     )
@@ -579,11 +613,21 @@ fn H264StreamEncoder::stream_p(
       bit_depth=self.bit_depth,
     ),
     src_y,
-    src_u: self.load_plane(u, self.width / 2, self.height / 2, self.cstride),
-    src_v: self.load_plane(v, self.width / 2, self.height / 2, self.cstride),
+    src_u: self.load_chroma_plane(
+      u,
+      self.width / 2,
+      self.chroma_plane_rows(),
+      self.cstride,
+    ),
+    src_v: self.load_chroma_plane(
+      v,
+      self.width / 2,
+      self.chroma_plane_rows(),
+      self.cstride,
+    ),
     rec_y: Array::make(self.ystride * self.pheight, 0),
-    rec_u: Array::make(self.cstride * (self.pheight / 2), 0),
-    rec_v: Array::make(self.cstride * (self.pheight / 2), 0),
+    rec_u: Array::make(self.cstride * self.chroma_plane_rows(), 0),
+    rec_v: Array::make(self.cstride * self.chroma_plane_rows(), 0),
     ref_y: self.ref_y,
     ref_u: self.ref_u,
     ref_v: self.ref_v,
@@ -657,6 +701,7 @@ fn H264StreamEncoder::stream_p(
       self.ystride,
       self.cstride,
       bit_depth=self.bit_depth,
+      chroma_h=self.chroma_plane_rows(),
     ),
   )
   // `§415`: every coded picture enters the reference history (newest
@@ -741,6 +786,7 @@ fn H264StreamEncoder::stream_b(
         self.pheight,
         (display - 1 - j * 2) * 2,
         j,
+        chroma_h=self.chroma_plane_rows(),
       ),
     )
   }
@@ -766,11 +812,21 @@ fn H264StreamEncoder::stream_b(
       bit_depth=self.bit_depth,
     ),
     src_y,
-    src_u: self.load_plane(u, self.width / 2, self.height / 2, self.cstride),
-    src_v: self.load_plane(v, self.width / 2, self.height / 2, self.cstride),
+    src_u: self.load_chroma_plane(
+      u,
+      self.width / 2,
+      self.chroma_plane_rows(),
+      self.cstride,
+    ),
+    src_v: self.load_chroma_plane(
+      v,
+      self.width / 2,
+      self.chroma_plane_rows(),
+      self.cstride,
+    ),
     rec_y: Array::make(self.ystride * self.pheight, 0),
-    rec_u: Array::make(self.cstride * (self.pheight / 2), 0),
-    rec_v: Array::make(self.cstride * (self.pheight / 2), 0),
+    rec_u: Array::make(self.cstride * self.chroma_plane_rows(), 0),
+    rec_v: Array::make(self.cstride * self.chroma_plane_rows(), 0),
     ref_y: self.ref_y,
     ref_u: self.ref_u,
     ref_v: self.ref_v,
@@ -818,6 +874,7 @@ fn H264StreamEncoder::stream_b(
     self.pheight,
     (display + 1) * 2,
     1,
+    chroma_h=self.chroma_plane_rows(),
   )
   let mirror = h264_b_mirror_new(
     self.mb_width,
@@ -835,6 +892,7 @@ fn H264StreamEncoder::stream_b(
     enc.rec_v,
     display * 2,
     bit_depth=self.bit_depth,
+    chroma_format=self.pps.chroma_format,
   )
   let nal = if self.cabac {
     match
@@ -882,6 +940,7 @@ fn H264StreamEncoder::stream_b(
       self.ystride,
       self.cstride,
       bit_depth=self.bit_depth,
+      chroma_h=self.chroma_plane_rows(),
     ),
   )
   // The B picture is non-reference: the future P becomes the past now.

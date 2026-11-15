@@ -184,6 +184,50 @@ fn h264_enc_chroma_dc_hadamard_quant(
 }
 
 ///|
+/// The 4:2:2 chroma DC forward path (`§420`): 2x4 Hadamard over the eight
+/// 4x4 block sums (raster `x + 2*y`), quantised at `qp + 3` with the
+/// class-0 factor and `extra_shift=3` - the exact inverse pairing of the
+/// decoder's `h264_chroma422_dc_dequant_idct` (its `>> 8` dequant reads
+/// `qmul` at chroma QP + 3, `h264_mb.mbt`'s Hadamard-gain compensation).
+/// `out[k]` lands in the ZIGZAG order the syntax codes (`h264_chroma422_
+/// dc_scan`), the caller stores the raw levels at the scan's byte offsets.
+fn h264_enc_chroma422_dc_hadamard_quant(
+  sums : Array[Int32],
+  out : Array[Int32],
+  qp : Int32,
+) -> Unit {
+  // H2 across x: a[2y + x]
+  let a : Array[Int32] = Array::make(8, 0)
+  for y = 0; y < 4; y = y + 1 {
+    a[2 * y] = sums[2 * y] + sums[2 * y + 1]
+    a[2 * y + 1] = sums[2 * y] - sums[2 * y + 1]
+  }
+  // H4 down y for each x: f[2m + x] = sum_y H4[m][y] * a[2y + x]
+  let f : Array[Int32] = Array::make(8, 0)
+  let h4 : FixedArray[FixedArray[Int32]] = [
+    [1, 1, 1, 1],
+    [1, 1, -1, -1],
+    [1, -1, -1, 1],
+    [1, -1, 1, -1],
+  ]
+  for x = 0; x < 2; x = x + 1 {
+    for m = 0; m < 4; m = m + 1 {
+      f[2 * m + x] = h4[m][0] * a[0 + x] +
+        h4[m][1] * a[2 + x] +
+        h4[m][2] * a[4 + x] +
+        h4[m][3] * a[6 + x]
+    }
+  }
+  // Emit in zigzag order: scan slot = x + 2*y.
+  for k = 0; k < 8; k = k + 1 {
+    let slot = h264_chroma422_dc_scan[k] / 16
+    let sx = slot % 2
+    let sy = slot / 2
+    out[k] = h264_enc_quant_val(f[2 * sy + sx], qp + 3, 0, extra_shift=3)
+  }
+}
+
+///|
 /// Forward-quant multiply factors for the 8x8 transform (`[rem][spec pos]`):
 /// the standard `quant8_scale` class table (verified against x264
 /// `common/set.c` value-for-value) applied through the same
@@ -296,6 +340,7 @@ fn h264_enc_fdct8_quant_res(
 /// `(level * qmul + 32) >> 6` with the 8-bit int16 wrap. The encoder's
 /// coefficient-buffer fill must be this exact function - a raw product
 /// diverges from the decoded block by 64x.
+
 ///|
 /// Dequantise one stored level with the shared table value, mirroring the
 /// decoder's `((level * qmul + 32) >> 6)` (32-bit unsigned product). At
@@ -445,7 +490,11 @@ fn h264_enc_luma_i8_pass(
       store[64 * i8 + s] = levels[s]
       if levels[s] != 0 {
         total = total + 1
-        mb[64 * i8 + s] = h264_enc_dequant_level(levels[s], qmul8[s], bit_depth~)
+        mb[64 * i8 + s] = h264_enc_dequant_level(
+          levels[s],
+          qmul8[s],
+          bit_depth~,
+        )
       }
     }
     if total != 0 {
@@ -575,7 +624,11 @@ fn h264_enc_luma_i4_pass(
       store[16 * i + s] = levels[s]
       if levels[s] != 0 {
         total = total + 1
-        mb[16 * i + s] = h264_enc_dequant_level(levels[s], qmul_y[s], bit_depth~)
+        mb[16 * i + s] = h264_enc_dequant_level(
+          levels[s],
+          qmul_y[s],
+          bit_depth~,
+        )
       }
     }
     if total != 0 {

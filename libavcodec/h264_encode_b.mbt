@@ -81,11 +81,12 @@ fn h264_enc_sps_rbsp_b(
   p : H264EncParams,
   dct8x8~ : Bool = false,
   vbv~ : H264Vbv? = None,
+  chroma_format~ : Int32 = 1,
 ) -> Bytes {
   let r = H264Rbsp::new()
-  let high = dct8x8 || p.bit_depth > 8
+  let high = dct8x8 || p.bit_depth > 8 || chroma_format > 1
   if high {
-    r.put(h264_enc_profile_idc(p.bit_depth, 100), 8) // High / High 10
+    r.put(h264_enc_profile_idc(p.bit_depth, 100, chroma=chroma_format), 8) // High / 422 / 10
     r.put(0, 8) // constraint_set0..5 + reserved_zero_2bits
   } else {
     r.put(77, 8) // profile_idc: Main
@@ -94,7 +95,7 @@ fn h264_enc_sps_rbsp_b(
   r.put(p.level_idc, 8)
   r.put_ue(0) // seq_parameter_set_id
   if high {
-    r.put_ue(1) // chroma_format_idc: 4:2:0
+    r.put_ue(chroma_format) // chroma_format_idc: 4:2:0 / 4:2:2
     r.put_ue(p.bit_depth - 8) // bit_depth_luma_minus8
     r.put_ue(p.bit_depth - 8) // bit_depth_chroma_minus8
     r.put_bit(0) // qpprime_y_zero_transform_bypass_flag
@@ -134,8 +135,11 @@ fn h264_enc_write_sps_b(
   p : H264EncParams,
   dct8x8~ : Bool = false,
   vbv~ : H264Vbv? = None,
+  chroma_format~ : Int32 = 1,
 ) -> Bytes {
-  let body = h264_enc_escape(h264_enc_sps_rbsp_b(p, dct8x8~, vbv~))
+  let body = h264_enc_escape(
+    h264_enc_sps_rbsp_b(p, dct8x8~, vbv~, chroma_format~),
+  )
   let out : Array[Byte] = [
     b'\x00',
     b'\x00',
@@ -190,6 +194,7 @@ fn h264_b_refpic(
   pheight : Int32,
   poc : Int32,
   identity : Int32,
+  chroma_h~ : Int32 = pheight / 2,
 ) -> H264RefPic {
   {
     identity,
@@ -201,7 +206,7 @@ fn h264_b_refpic(
     width: ystride,
     height: pheight,
     cwidth: cstride,
-    cheight: pheight / 2,
+    cheight: chroma_h,
     poc,
     field_poc_top: poc,
     field_poc_bottom: poc,
@@ -238,6 +243,9 @@ fn h264_b_mirror_new(
   rec_v : Array[Int32],
   cur_poc : Int32,
   bit_depth~ : Int32 = 8,
+  /// `§420`: the B picture's chroma format (drives the mirror's
+  /// prediction/MC geometry and the direct/colocated paths).
+  chroma_format~ : Int32 = 1,
 ) -> H264DecCtx {
   let infos : Array[H264MbInfo] = []
   for _k = 0; _k < mb_width * mb_height; _k = _k + 1 {
@@ -245,9 +253,13 @@ fn h264_b_mirror_new(
   }
   {
     bit_depth,
-    chroma_format: 1,
+    chroma_format,
     chroma_hshift: 1,
-    chroma_vshift: 1,
+    chroma_vshift: if chroma_format == 2 {
+      0
+    } else {
+      1
+    },
     si_slice: false,
     slice_num: 0,
     active_list: 0,
@@ -364,11 +376,15 @@ fn H264PEncoder::mc_b_uni_into_rec(
       self.rec_y[ybase + row * self.ystride + col] = pred[0][row * 16 + col]
     }
   }
-  let cbase = mb_y * 8 * self.cstride + mb_x * 8
+  let cbase = mb_y *
+    (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
+    self.cstride +
+    mb_x * 8
+  let rows = if self.pps.chroma_format == 2 { 16 } else { 8 }
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     let src = pred[c + 1]
-    for row = 0; row < 8; row = row + 1 {
+    for row = 0; row < rows; row = row + 1 {
       for col = 0; col < 8; col = col + 1 {
         plane[cbase + row * self.cstride + col] = src[row * 8 + col]
       }
@@ -402,12 +418,16 @@ fn H264PEncoder::mc_b_bi_into_rec(
         1
     }
   }
-  let cbase = mb_y * 8 * self.cstride + mb_x * 8
+  let cbase = mb_y *
+    (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
+    self.cstride +
+    mb_x * 8
+  let rows = if self.pps.chroma_format == 2 { 16 } else { 8 }
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     let sa = a[c + 1]
     let sb = b[c + 1]
-    for row = 0; row < 8; row = row + 1 {
+    for row = 0; row < rows; row = row + 1 {
       for col = 0; col < 8; col = col + 1 {
         let i = row * 8 + col
         plane[cbase + row * self.cstride + col] = (sa[i] + sb[i] + 1) >> 1
@@ -566,7 +586,10 @@ fn H264PEncoder::code_b_mb_residuals(
   let mut luma_cbp = 0
   let mb : Array[Int32] = Array::make(768, 0)
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
-  let cbase = mb_y * 8 * self.cstride + mb_x * 8
+  let cbase = mb_y *
+    (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
+    self.cstride +
+    mb_x * 8
   for i = 0; i < 16; i = i + 1 {
     let gx = h264_luma_block_x[i]
     let gy = h264_luma_block_y[i]
@@ -601,21 +624,23 @@ fn H264PEncoder::code_b_mb_residuals(
     h264_build_dequant4(self.pps, 4, self.chroma_qp),
     h264_build_dequant4(self.pps, 5, self.chroma_qp),
   ]
+  let cf = self.pps.chroma_format
+  let nblk = 4 * cf
   let chroma_dc_store : Array[Array[Int32]] = [
     Array::make(16, 0),
     Array::make(16, 0),
   ]
   let chroma_ac_store : Array[Array[Int32]] = [
-    Array::make(64, 0),
-    Array::make(64, 0),
+    Array::make(16 * nblk, 0),
+    Array::make(16 * nblk, 0),
   ]
   let chroma_dc_nz : Array[Bool] = [false, false]
   let chroma_ac_nz_mirror : Array[Int32] = Array::make(48, 0)
   for c = 0; c < 2; c = c + 1 {
     let src = if c == 0 { self.src_u } else { self.src_v }
     let rec = if c == 0 { self.rec_u } else { self.rec_v }
-    let sums : Array[Int32] = Array::make(4, 0)
-    for i = 0; i < 4; i = i + 1 {
+    let sums : Array[Int32] = Array::make(nblk, 0)
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let mut sum = 0
@@ -628,19 +653,40 @@ fn H264PEncoder::code_b_mb_residuals(
       }
       sums[i] = sum
     }
-    let dc_store : Array[Int32] = Array::make(4, 0)
-    ignore(h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp))
+    let dc_store : Array[Int32] = Array::make(16, 0)
+    let dc_n = if cf == 2 {
+      h264_enc_chroma422_dc_hadamard_quant(sums, dc_store, self.chroma_qp)
+      8
+    } else {
+      ignore(
+        h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp),
+      )
+      4
+    }
     chroma_dc_store[c] = dc_store
-    chroma_dc_nz[c] = dc_store[0] != 0 ||
-      dc_store[1] != 0 ||
-      dc_store[2] != 0 ||
-      dc_store[3] != 0
-    for s = 0; s < 4; s = s + 1 {
-      if dc_store[s] != 0 {
-        mb[256 + 256 * c + 16 * s] = dc_store[s]
+    let mut any_dc = false
+    for s2 = 0; s2 < dc_n; s2 = s2 + 1 {
+      if dc_store[s2] != 0 {
+        any_dc = true
+        break
       }
     }
-    for i = 0; i < 4; i = i + 1 {
+    chroma_dc_nz[c] = any_dc
+    if cf == 2 {
+      for k = 0; k < 8; k = k + 1 {
+        let lv = dc_store[k]
+        if lv != 0 {
+          mb[256 + 256 * c + h264_chroma422_dc_scan[k]] = lv
+        }
+      }
+    } else {
+      for s = 0; s < 4; s = s + 1 {
+        if dc_store[s] != 0 {
+          mb[256 + 256 * c + 16 * s] = dc_store[s]
+        }
+      }
+    }
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let res : Array[Int32] = Array::make(16, 0)
@@ -680,7 +726,7 @@ fn H264PEncoder::code_b_mb_residuals(
   // Inter nC semantics: the AC counts follow the syntax (zero when the
   // cbp does not code AC), the DC flags ride `cbp_all`.
   for c = 0; c < 2; c = c + 1 {
-    for i = 0; i < 4; i = i + 1 {
+    for i = 0; i < nblk; i = i + 1 {
       self.cur_nz[16 + 16 * c + i] = if chroma_c_cbp == 2 {
         chroma_ac_nz_mirror[16 + 16 * c + i]
       } else {
@@ -691,14 +737,23 @@ fn H264PEncoder::code_b_mb_residuals(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(
-        mb,
-        256 + 256 * c,
-        qmul_c[c][0],
-        bit_depth=self.p.bit_depth,
-      )
+      if cf == 2 {
+        h264_chroma422_dc_dequant_idct(
+          mb,
+          256 + 256 * c,
+          h264_build_dequant4(self.pps, 4 + c, self.chroma_qp + 3)[0],
+          bit_depth=self.p.bit_depth,
+        )
+      } else {
+        h264_chroma_dc_dequant_idct(
+          mb,
+          256 + 256 * c,
+          qmul_c[c][0],
+          bit_depth=self.p.bit_depth,
+        )
+      }
     }
-    for i = 0; i < 4; i = i + 1 {
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let off = cbase + by * self.cstride + bx
@@ -925,26 +980,31 @@ fn H264PEncoder::code_b_mb_chroma_intra(
 ) -> (Array[Array[Int32]], Array[Array[Int32]], Int32) {
   let bit_depth = self.p.bit_depth
   self.predict_intra_chroma(mb_x, mb_y, chroma_sig)
-  let cbase = mb_y * 8 * self.cstride + mb_x * 8
+  let cbase = mb_y *
+    (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
+    self.cstride +
+    mb_x * 8
   let qmul_c = [
     h264_build_dequant4(self.pps, 1, self.chroma_qp),
     h264_build_dequant4(self.pps, 2, self.chroma_qp),
   ]
+  let cf = self.pps.chroma_format
+  let nblk = 4 * cf
   let chroma_dc_store : Array[Array[Int32]] = [
     Array::make(16, 0),
     Array::make(16, 0),
   ]
   let chroma_ac_store : Array[Array[Int32]] = [
-    Array::make(64, 0),
-    Array::make(64, 0),
+    Array::make(16 * nblk, 0),
+    Array::make(16 * nblk, 0),
   ]
   let chroma_dc_nz : Array[Bool] = [false, false]
   let chroma_ac_nz_mirror : Array[Int32] = Array::make(48, 0)
   for c = 0; c < 2; c = c + 1 {
     let src = if c == 0 { self.src_u } else { self.src_v }
     let rec = if c == 0 { self.rec_u } else { self.rec_v }
-    let sums : Array[Int32] = Array::make(4, 0)
-    for i = 0; i < 4; i = i + 1 {
+    let sums : Array[Int32] = Array::make(nblk, 0)
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let mut sum = 0
@@ -957,19 +1017,40 @@ fn H264PEncoder::code_b_mb_chroma_intra(
       }
       sums[i] = sum
     }
-    let dc_store : Array[Int32] = Array::make(4, 0)
-    ignore(h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp))
+    let dc_store : Array[Int32] = Array::make(16, 0)
+    let dc_n = if cf == 2 {
+      h264_enc_chroma422_dc_hadamard_quant(sums, dc_store, self.chroma_qp)
+      8
+    } else {
+      ignore(
+        h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp),
+      )
+      4
+    }
     chroma_dc_store[c] = dc_store
-    chroma_dc_nz[c] = dc_store[0] != 0 ||
-      dc_store[1] != 0 ||
-      dc_store[2] != 0 ||
-      dc_store[3] != 0
-    for s = 0; s < 4; s = s + 1 {
-      if dc_store[s] != 0 {
-        mb[256 + 256 * c + 16 * s] = dc_store[s]
+    let mut any_dc = false
+    for s2 = 0; s2 < dc_n; s2 = s2 + 1 {
+      if dc_store[s2] != 0 {
+        any_dc = true
+        break
       }
     }
-    for i = 0; i < 4; i = i + 1 {
+    chroma_dc_nz[c] = any_dc
+    if cf == 2 {
+      for k = 0; k < 8; k = k + 1 {
+        let lv = dc_store[k]
+        if lv != 0 {
+          mb[256 + 256 * c + h264_chroma422_dc_scan[k]] = lv
+        }
+      }
+    } else {
+      for s = 0; s < 4; s = s + 1 {
+        if dc_store[s] != 0 {
+          mb[256 + 256 * c + 16 * s] = dc_store[s]
+        }
+      }
+    }
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let res : Array[Int32] = Array::make(16, 0)
@@ -1010,7 +1091,7 @@ fn H264PEncoder::code_b_mb_chroma_intra(
   // the zero seed survives otherwise.
   if chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < nblk; i = i + 1 {
         self.cur_nz[16 + 16 * c + i] = chroma_ac_nz_mirror[16 + 16 * c + i]
       }
     }
@@ -1018,14 +1099,23 @@ fn H264PEncoder::code_b_mb_chroma_intra(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(
-        mb,
-        256 + 256 * c,
-        qmul_c[c][0],
-        bit_depth=self.p.bit_depth,
-      )
+      if cf == 2 {
+        h264_chroma422_dc_dequant_idct(
+          mb,
+          256 + 256 * c,
+          h264_build_dequant4(self.pps, 1 + c, self.chroma_qp + 3)[0],
+          bit_depth=self.p.bit_depth,
+        )
+      } else {
+        h264_chroma_dc_dequant_idct(
+          mb,
+          256 + 256 * c,
+          qmul_c[c][0],
+          bit_depth=self.p.bit_depth,
+        )
+      }
     }
-    for i = 0; i < 4; i = i + 1 {
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let off = cbase + by * self.cstride + bx
@@ -1699,6 +1789,7 @@ fn H264PEncoder::write_b_residual_tail_cavlc(
   dct8_allowed : Bool,
 ) -> Unit {
   ignore(mirror)
+  let nblk = 4 * self.pps.chroma_format
   let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
   r.put_ue(h264_enc_inter_cbp_golomb(cbp))
   if self.dct8x8 && dct8_allowed && (cbp & 15) != 0 {
@@ -1727,18 +1818,26 @@ fn H264PEncoder::write_b_residual_tail_cavlc(
   }
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int32] = [
-        coded.chroma_dc_store[c][0],
-        coded.chroma_dc_store[c][1],
-        coded.chroma_dc_store[c][2],
-        coded.chroma_dc_store[c][3],
-      ]
-      ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      if nblk == 8 {
+        let dc8 : Array[Int32] = Array::make(8, 0)
+        for k = 0; k < 8; k = k + 1 {
+          dc8[k] = coded.chroma_dc_store[c][k]
+        }
+        ignore(h264_enc_write_residual(r, dc8, 8, 0))
+      } else {
+        let dc4 : Array[Int32] = [
+          coded.chroma_dc_store[c][0],
+          coded.chroma_dc_store[c][1],
+          coded.chroma_dc_store[c][2],
+          coded.chroma_dc_store[c][3],
+        ]
+        ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      }
     }
   }
   if coded.chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < nblk; i = i + 1 {
         let view = scan_view_at(
           coded.chroma_ac_store[c],
           i,
@@ -1772,6 +1871,7 @@ fn H264PEncoder::write_b_mb_i4_syntax(
   r : H264Rbsp,
 ) -> Unit {
   let mb_idx = mb_y * self.mb_width + mb_x
+  let nblk = 4 * self.pps.chroma_format
   let (raw_modes, chroma_mode) = match plan {
     BI4(m, c) => (m, c)
     _ => abort("h264 enc b: i4 syntax on a non-I4 plan")
@@ -1825,18 +1925,26 @@ fn H264PEncoder::write_b_mb_i4_syntax(
   }
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int32] = [
-        coded.chroma_dc_store[c][0],
-        coded.chroma_dc_store[c][1],
-        coded.chroma_dc_store[c][2],
-        coded.chroma_dc_store[c][3],
-      ]
-      ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      if nblk == 8 {
+        let dc8 : Array[Int32] = Array::make(8, 0)
+        for k = 0; k < 8; k = k + 1 {
+          dc8[k] = coded.chroma_dc_store[c][k]
+        }
+        ignore(h264_enc_write_residual(r, dc8, 8, 0))
+      } else {
+        let dc4 : Array[Int32] = [
+          coded.chroma_dc_store[c][0],
+          coded.chroma_dc_store[c][1],
+          coded.chroma_dc_store[c][2],
+          coded.chroma_dc_store[c][3],
+        ]
+        ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      }
     }
   }
   if coded.chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < nblk; i = i + 1 {
         let view = scan_view_at(
           coded.chroma_ac_store[c],
           i,
@@ -1870,6 +1978,7 @@ fn H264PEncoder::write_b_mb_i8_syntax(
   r : H264Rbsp,
 ) -> Unit {
   let mb_idx = mb_y * self.mb_width + mb_x
+  let nblk = 4 * self.pps.chroma_format
   let (raw_modes, chroma_mode) = match plan {
     BI8(m, c) => (m, c)
     _ => abort("h264 enc b: i8 syntax on a non-I8 plan")
@@ -1920,18 +2029,26 @@ fn H264PEncoder::write_b_mb_i8_syntax(
   self.write_luma8_cavlc(r, mb_idx, mb_x, mb_y, coded)
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int32] = [
-        coded.chroma_dc_store[c][0],
-        coded.chroma_dc_store[c][1],
-        coded.chroma_dc_store[c][2],
-        coded.chroma_dc_store[c][3],
-      ]
-      ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      if nblk == 8 {
+        let dc8 : Array[Int32] = Array::make(8, 0)
+        for k = 0; k < 8; k = k + 1 {
+          dc8[k] = coded.chroma_dc_store[c][k]
+        }
+        ignore(h264_enc_write_residual(r, dc8, 8, 0))
+      } else {
+        let dc4 : Array[Int32] = [
+          coded.chroma_dc_store[c][0],
+          coded.chroma_dc_store[c][1],
+          coded.chroma_dc_store[c][2],
+          coded.chroma_dc_store[c][3],
+        ]
+        ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      }
     }
   }
   if coded.chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < nblk; i = i + 1 {
         let view = scan_view_at(
           coded.chroma_ac_store[c],
           i,
@@ -2108,6 +2225,7 @@ fn H264PEncoder::write_b_mb_i16_syntax(
   r : H264Rbsp,
 ) -> Unit {
   let mb_idx = mb_y * self.mb_width + mb_x
+  let nblk = 4 * self.pps.chroma_format
   let (sig, chroma_mode) = match plan {
     BI16(s, _, c) => (s, c)
     _ => abort("h264 enc b: i16 syntax on a non-I16 plan")
@@ -2158,18 +2276,26 @@ fn H264PEncoder::write_b_mb_i16_syntax(
   }
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int32] = [
-        coded.chroma_dc_store[c][0],
-        coded.chroma_dc_store[c][1],
-        coded.chroma_dc_store[c][2],
-        coded.chroma_dc_store[c][3],
-      ]
-      ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      if nblk == 8 {
+        let dc8 : Array[Int32] = Array::make(8, 0)
+        for k = 0; k < 8; k = k + 1 {
+          dc8[k] = coded.chroma_dc_store[c][k]
+        }
+        ignore(h264_enc_write_residual(r, dc8, 8, 0))
+      } else {
+        let dc4 : Array[Int32] = [
+          coded.chroma_dc_store[c][0],
+          coded.chroma_dc_store[c][1],
+          coded.chroma_dc_store[c][2],
+          coded.chroma_dc_store[c][3],
+        ]
+        ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      }
     }
   }
   if coded.chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < nblk; i = i + 1 {
         let view = scan_view_at(
           coded.chroma_ac_store[c],
           i,
@@ -3058,7 +3184,10 @@ fn H264PEncoder::decide_b_mb(
   if self.intra_in_b {
     match self.pick_i16(mb_x, mb_y) {
       Some((sig, eff)) => {
-        let cbase = mb_y * 8 * self.cstride + mb_x * 8
+        let cbase = mb_y *
+          (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
+          self.cstride +
+          mb_x * 8
         let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
         let coded_i = self.code_b_mb_i16_residuals(
           mb_x, mb_y, eff, chroma_mode, qp,
@@ -3120,7 +3249,10 @@ fn H264PEncoder::decide_b_mb(
       for g in 0..<16 {
         raw_modes[g] = scratch_modes[g]
       }
-      let cbase = mb_y * 8 * self.cstride + mb_x * 8
+      let cbase = mb_y *
+        (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
+        self.cstride +
+        mb_x * 8
       let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
       let coded_i = self.code_b_mb_i4_residuals(
         mb_x, mb_y, raw_modes, chroma_mode, qp,
@@ -3183,7 +3315,10 @@ fn H264PEncoder::decide_b_mb(
         scratch_modes[8],
         scratch_modes[10],
       ]
-      let cbase = mb_y * 8 * self.cstride + mb_x * 8
+      let cbase = mb_y *
+        (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
+        self.cstride +
+        mb_x * 8
       let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
       let coded_i = self.code_b_mb_i8_residuals(
         mb_x, mb_y, raw_modes, chroma_mode, qp,
@@ -3712,30 +3847,51 @@ fn H264PEncoder::write_b_residual_tail_cabac(
   }
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int32] = [
-        coded.chroma_dc_store[c][0],
-        coded.chroma_dc_store[c][1],
-        coded.chroma_dc_store[c][2],
-        coded.chroma_dc_store[c][3],
-      ]
-      h264_cabacw_residual(
-        enc,
-        states,
-        mirror,
-        mb_idx,
-        mb_x,
-        mb_y,
-        3,
-        49 + c,
-        dc4,
-        4,
-        true,
-      )
+      let dc_n = mirror.chroma_format * 4
+      if dc_n == 8 {
+        let dc8 : Array[Int32] = Array::make(8, 0)
+        for k = 0; k < 8; k = k + 1 {
+          dc8[k] = coded.chroma_dc_store[c][k]
+        }
+        h264_cabacw_residual(
+          enc,
+          states,
+          mirror,
+          mb_idx,
+          mb_x,
+          mb_y,
+          3,
+          49 + c,
+          dc8,
+          8,
+          true,
+        )
+      } else {
+        let dc4 : Array[Int32] = [
+          coded.chroma_dc_store[c][0],
+          coded.chroma_dc_store[c][1],
+          coded.chroma_dc_store[c][2],
+          coded.chroma_dc_store[c][3],
+        ]
+        h264_cabacw_residual(
+          enc,
+          states,
+          mirror,
+          mb_idx,
+          mb_x,
+          mb_y,
+          3,
+          49 + c,
+          dc4,
+          4,
+          true,
+        )
+      }
     }
   }
   if coded.chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < 4 * mirror.chroma_format; i = i + 1 {
         let view = scan_view_at(
           coded.chroma_ac_store[c],
           i,
@@ -4143,30 +4299,51 @@ fn H264PEncoder::write_b_mb_i16_syntax_cabac(
   }
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int32] = [
-        coded.chroma_dc_store[c][0],
-        coded.chroma_dc_store[c][1],
-        coded.chroma_dc_store[c][2],
-        coded.chroma_dc_store[c][3],
-      ]
-      h264_cabacw_residual(
-        enc,
-        states,
-        mirror,
-        mb_idx,
-        mb_x,
-        mb_y,
-        3,
-        49 + c,
-        dc4,
-        4,
-        true,
-      )
+      let dc_n = mirror.chroma_format * 4
+      if dc_n == 8 {
+        let dc8 : Array[Int32] = Array::make(8, 0)
+        for k = 0; k < 8; k = k + 1 {
+          dc8[k] = coded.chroma_dc_store[c][k]
+        }
+        h264_cabacw_residual(
+          enc,
+          states,
+          mirror,
+          mb_idx,
+          mb_x,
+          mb_y,
+          3,
+          49 + c,
+          dc8,
+          8,
+          true,
+        )
+      } else {
+        let dc4 : Array[Int32] = [
+          coded.chroma_dc_store[c][0],
+          coded.chroma_dc_store[c][1],
+          coded.chroma_dc_store[c][2],
+          coded.chroma_dc_store[c][3],
+        ]
+        h264_cabacw_residual(
+          enc,
+          states,
+          mirror,
+          mb_idx,
+          mb_x,
+          mb_y,
+          3,
+          49 + c,
+          dc4,
+          4,
+          true,
+        )
+      }
     }
   }
   if coded.chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < 4 * mirror.chroma_format; i = i + 1 {
         let view = scan_view_at(
           coded.chroma_ac_store[c],
           i,
@@ -4668,9 +4845,14 @@ fn h264_encode_frames_b(
   /// one history slot, so a B sees `multi_ref` past pictures once the
   /// history is full).
   multi_ref~ : Int32 = 1,
+  /// `§420`: chroma format (see `h264_encode_frames`).
+  chroma_format~ : Int32 = 1,
 ) -> Result[(Bytes, Array[Int32]), String] {
   if multi_ref < 1 || multi_ref > 16 {
     return Err("h264 enc: multi_ref must be in 1..=16")
+  }
+  if chroma_format != 1 && chroma_format != 2 {
+    return Err("h264 enc: chroma_format must be 1 or 2")
   }
   let n = frames.length()
   if !h264_enc_bit_depth_ok(bit_depth) {
@@ -4701,6 +4883,7 @@ fn h264_encode_frames_b(
         weightp~,
         bit_depth~,
         multi_ref~,
+        chroma_format~,
       )
     } else {
       h264_encode_intra_frame(
@@ -4722,6 +4905,7 @@ fn h264_encode_frames_b(
         weightp~,
         bit_depth~,
         multi_ref~,
+        chroma_format~,
       )
     }) {
     Ok(e) => e
@@ -4740,18 +4924,19 @@ fn h264_encode_frames_b(
   let ystride = mb_width * 16
   let cstride = mb_width * 8
   let pheight = mb_height * 16
+  let chroma_plane_h = if chroma_format == 2 { pheight } else { pheight / 2 }
   // Round-trip the B-capable parameter sets: the parsed PPS carries the
   // dequantisation tables the local reconstructions share with the decoder.
   let ps = new_h264_param_sets()
-  let sps_rbsp = h264_enc_sps_rbsp_b(p, dct8x8~, vbv~)
+  let sps_rbsp = h264_enc_sps_rbsp_b(p, dct8x8~, vbv~, chroma_format~)
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_rbsp), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
   let pps_raw = if cabac {
-    h264_enc_pps_rbsp_cabac(p, dct8x8~, weightp~)
+    h264_enc_pps_rbsp_cabac(p, dct8x8~, weightp~, chroma_format~)
   } else {
-    h264_enc_pps_rbsp(p, dct8x8~, weightp~)
+    h264_enc_pps_rbsp(p, dct8x8~, weightp~, chroma_format~)
   }
   match
     ff_h264_decode_picture_parameter_set(
@@ -4827,22 +5012,22 @@ fn h264_encode_frames_b(
       src_u: h264_enc_load_plane(
         u,
         width / 2,
-        height / 2,
+        chroma_plane_h,
         cstride,
-        pheight / 2,
+        chroma_plane_h,
         bit_depth~,
       ),
       src_v: h264_enc_load_plane(
         v,
         width / 2,
-        height / 2,
+        chroma_plane_h,
         cstride,
-        pheight / 2,
+        chroma_plane_h,
         bit_depth~,
       ),
       rec_y: Array::make(ystride * pheight, 0),
-      rec_u: Array::make(cstride * (pheight / 2), 0),
-      rec_v: Array::make(cstride * (pheight / 2), 0),
+      rec_u: Array::make(cstride * chroma_plane_h, 0),
+      rec_v: Array::make(cstride * chroma_plane_h, 0),
       ref_y: hist_y[0],
       ref_u: hist_u[0],
       ref_v: hist_v[0],
@@ -4944,6 +5129,7 @@ fn h264_encode_frames_b(
           ystride,
           cstride,
           bit_depth~,
+          chroma_h=chroma_plane_h,
         ),
       )
       let p_y = h264_b_copy_plane(enc.rec_y)
@@ -4982,6 +5168,7 @@ fn h264_encode_frames_b(
             pheight,
             (e - 1 - j * 2) * 2,
             j,
+            chroma_h=chroma_plane_h,
           ),
         )
       }
@@ -5009,22 +5196,22 @@ fn h264_encode_frames_b(
         src_u: h264_enc_load_plane(
           bu,
           width / 2,
-          height / 2,
+          chroma_plane_h,
           cstride,
-          pheight / 2,
+          chroma_plane_h,
           bit_depth~,
         ),
         src_v: h264_enc_load_plane(
           bv,
           width / 2,
-          height / 2,
+          chroma_plane_h,
           cstride,
-          pheight / 2,
+          chroma_plane_h,
           bit_depth~,
         ),
         rec_y: Array::make(ystride * pheight, 0),
-        rec_u: Array::make(cstride * (pheight / 2), 0),
-        rec_v: Array::make(cstride * (pheight / 2), 0),
+        rec_u: Array::make(cstride * chroma_plane_h, 0),
+        rec_v: Array::make(cstride * chroma_plane_h, 0),
         ref_y: past_y[0],
         ref_u: past_u[0],
         ref_v: past_v[0],
@@ -5072,6 +5259,7 @@ fn h264_encode_frames_b(
         pheight,
         (e + 1) * 2,
         1,
+        chroma_h=chroma_plane_h,
       )
       let mirror = h264_b_mirror_new(
         mb_width,
@@ -5094,6 +5282,7 @@ fn h264_encode_frames_b(
         b_enc.rec_v,
         e * 2,
         bit_depth~,
+        chroma_format~,
       )
 
       let b_nal = if cabac {
@@ -5138,6 +5327,7 @@ fn h264_encode_frames_b(
           ystride,
           cstride,
           bit_depth~,
+          chroma_h=chroma_plane_h,
         ),
       )
       // The new reference picture already entered the history above; it
@@ -5192,6 +5382,7 @@ fn h264_encode_frames_b(
           ystride,
           cstride,
           bit_depth~,
+          chroma_h=chroma_plane_h,
         ),
       )
       e = e + 1

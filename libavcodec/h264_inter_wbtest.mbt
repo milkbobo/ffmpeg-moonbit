@@ -135,6 +135,8 @@ fn inter_test_pps() -> H264Pps {
   {
     pps_id: 0,
     sps_id: 0,
+    profile_idc: 100,
+    chroma_format: 1,
     cabac: 0,
     pic_order_present: 0,
     slice_group_count: 1,
@@ -152,7 +154,6 @@ fn inter_test_pps() -> H264Pps {
     redundant_pic_cnt_present: 0,
     transform_8x8_mode: 0,
     transform_bypass: 0,
-    profile_idc: 100,
     pic_scaling_matrix_present_flag: 0,
     pic_scaling_matrix_present_mask: 0,
     scaling_matrix4: [],

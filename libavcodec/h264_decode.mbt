@@ -946,6 +946,13 @@ fn h264_cavlc_luma_residual(
           Ok(v) => v
           Err(e) => return Err(e)
         }
+        if mb_idx == 0 {
+          let view : Array[Int32] = []
+          ignore(view)
+          println(
+            "DTRACE: blk=\{i} nc=\{nc} total=\{total} qmul0=\{qmul[0]} qp=\{plane_qp}",
+          )
+        }
         nz[base + gy * 4 + gx] = total
       }
     }

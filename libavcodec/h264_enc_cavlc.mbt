@@ -96,7 +96,12 @@ fn h264_enc_write_coeff_token(
   nc : Int32,
 ) -> Unit {
   let sym = total * 4 + trail
-  let pair = if max_coeff == 4 {
+  let pair = if max_coeff == 8 {
+    (
+      h264_chroma422_dc_coeff_token_len[sym],
+      h264_chroma422_dc_coeff_token_bits[sym],
+    )
+  } else if max_coeff == 4 {
     (h264_chroma_dc_coeff_token_len[sym], h264_chroma_dc_coeff_token_bits[sym])
   } else {
     let t = h264_coeff_token_table_for_nc(nc & 31)
@@ -188,7 +193,12 @@ fn h264_enc_write_residual(
   // total_zeros: zeros preceding the last non-zero coefficient.
   if total != max_coeff {
     let zeros_left = last_idx - (total - 1)
-    if max_coeff == 4 {
+    if max_coeff == 8 {
+      r.put(
+        h264_chroma422_dc_total_zeros_bits[total - 1][zeros_left],
+        h264_chroma422_dc_total_zeros_len[total - 1][zeros_left],
+      )
+    } else if max_coeff == 4 {
       r.put(
         h264_chroma_dc_total_zeros_bits[total - 1][zeros_left],
         h264_chroma_dc_total_zeros_len[total - 1][zeros_left],

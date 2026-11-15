@@ -40,8 +40,8 @@ fn ffh10_fixture(
     }
     for row = 0; row < h / 2; row = row + 1 {
       for col = 0; col < w / 2; col = col + 1 {
-        let cu = ((((col + f) & 0x3F) + 96) * scale)
-        let cv = ((((row + f * 2) & 0x3F) + 96) * scale)
+        let cu = (((col + f) & 0x3F) + 96) * scale
+        let cv = (((row + f * 2) & 0x3F) + 96) * scale
         u.push((cu & 0xFF).to_byte())
         u.push(((cu >> 8) & 0xFF).to_byte())
         v.push((cv & 0xFF).to_byte())

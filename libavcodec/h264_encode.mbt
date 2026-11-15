@@ -144,9 +144,15 @@ pub fn h264_encode_intra_frame(
   /// `§415`: the sequence's P-slice reference count, signalled by the
   /// parameter sets this picture carries (single-frame callers keep 1).
   multi_ref~ : Int32 = 1,
+  /// `§420`: chroma format, 1 (4:2:0, default) or 2 (4:2:2 — the chroma
+  /// planes are `w/2 x h`, profile High 4:2:2 at 8..10 bits).
+  chroma_format~ : Int32 = 1,
 ) -> Result[H264EncodedFrame, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
+  }
+  if chroma_format != 1 && chroma_format != 2 {
+    return Err("h264 enc: chroma_format must be 1 or 2")
   }
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -159,9 +165,10 @@ pub fn h264_encode_intra_frame(
       "h264 enc: unsupported bit depth \{bit_depth} (8, 9, 10, 12 or 14)",
     )
   }
+  let chroma_h = if chroma_format == 2 { height } else { height / 2 }
   if y.length() != h264_enc_plane_bytes(width, height, bit_depth) ||
-    u.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) ||
-    v.length() != h264_enc_plane_bytes(width / 2, height / 2, bit_depth) {
+    u.length() != h264_enc_plane_bytes(width / 2, chroma_h, bit_depth) ||
+    v.length() != h264_enc_plane_bytes(width / 2, chroma_h, bit_depth) {
     return Err("h264 enc: plane size mismatch")
   }
   let p = { width, height, qp, level_idc, bit_depth, nrefs: multi_ref, }
@@ -185,24 +192,25 @@ pub fn h264_encode_intra_frame(
   let ystride = mb_width * 16
   let cstride = mb_width * 8
   let pheight = mb_height * 16
+  let chroma_plane_h = if chroma_format == 2 { pheight } else { pheight / 2 }
   // Parse the parameter sets we just wrote: the parsed PPS carries the
   // dequantisation tables the local reconstruction shares with the decoder.
   let ps = new_h264_param_sets()
   let sps_nal = if b_seq {
-    h264_enc_write_sps_b(p_ps, dct8x8~, vbv~)
+    h264_enc_write_sps_b(p_ps, dct8x8~, vbv~, chroma_format~)
   } else {
-    h264_enc_write_sps(p_ps, dct8x8~, vbv~)
+    h264_enc_write_sps(p_ps, dct8x8~, vbv~, chroma_format~)
   }
-  let pps_nal = h264_enc_write_pps(p_ps, dct8x8~, weightp~)
+  let pps_nal = h264_enc_write_pps(p_ps, dct8x8~, weightp~, chroma_format~)
   // Round-trip the parameter sets through the decoder's own parsers: the
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
   let sps_raw = if b_seq {
-    h264_enc_sps_rbsp_b(p_ps, dct8x8~, vbv~)
+    h264_enc_sps_rbsp_b(p_ps, dct8x8~, vbv~, chroma_format~)
   } else {
-    h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~)
+    h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~, chroma_format~)
   }
-  let pps_raw = h264_enc_pps_rbsp(p_ps, dct8x8~, weightp~)
+  let pps_raw = h264_enc_pps_rbsp(p_ps, dct8x8~, weightp~, chroma_format~)
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_raw), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
@@ -214,7 +222,14 @@ pub fn h264_encode_intra_frame(
       pps_raw.length() * 8,
     ) {
     Ok(_) => ()
-    Err(e) => return Err("h264 enc: PPS round-trip failed: \{e}")
+    Err(e) => {
+      let mut d = ""
+      for i = 0; i < pps_raw.length(); i = i + 1 {
+        d = d + (pps_raw[i].to_int() & 0xFF).to_string() + ","
+      }
+      println("PPSDBG cf=\{chroma_format}: \{e} bytes \{d}")
+      return Err("h264 enc: PPS round-trip failed: \{e}")
+    }
   }
   let pps = match ps.pps_list[0] {
     Some(v) => v
@@ -229,22 +244,22 @@ pub fn h264_encode_intra_frame(
     src_u: h264_enc_load_plane(
       u,
       width / 2,
-      height / 2,
+      chroma_h,
       cstride,
-      pheight / 2,
+      chroma_plane_h,
       bit_depth~,
     ),
     src_v: h264_enc_load_plane(
       v,
       width / 2,
-      height / 2,
+      chroma_h,
       cstride,
-      pheight / 2,
+      chroma_plane_h,
       bit_depth~,
     ),
     rec_y: Array::make(ystride * pheight, 0),
-    rec_u: Array::make(cstride * (pheight / 2), 0),
-    rec_v: Array::make(cstride * (pheight / 2), 0),
+    rec_u: Array::make(cstride * chroma_plane_h, 0),
+    rec_v: Array::make(cstride * chroma_plane_h, 0),
     ystride,
     cstride,
     mb_width,
@@ -459,6 +474,26 @@ fn H264IntraEncoder::nc_chroma(
   i : Int32,
 ) -> Int32 {
   let base = 16 + 16 * c
+  if self.pps.chroma_format == 2 {
+    // `h264_nc_chroma_422`'s scan8 cache layout: the left neighbour of a
+    // column-0 block is the left macroblock's same-row right block, the
+    // top of a row-0 block is the top macroblock's bottom row.
+    let left = if (i & 1) == 1 {
+      self.cur_nz[base + i - 1]
+    } else if mb_x > 0 {
+      self.states[mb_idx - 1].nz[base + i + 1]
+    } else {
+      64
+    }
+    let top = if i >= 2 {
+      self.cur_nz[base + i - 2]
+    } else if mb_y > 0 {
+      self.states[mb_idx - self.mb_width].nz[base + 6 + i]
+    } else {
+      64
+    }
+    return h264_pred_non_zero_count(left, top)
+  }
   let gx = i % 2
   let gy = i / 2
   let left = if gx > 0 {
@@ -523,7 +558,8 @@ fn H264IntraEncoder::pred_mode(
 }
 
 ///|
-/// SAD between source and reconstruction over an 8x8 chroma block. */
+/// SAD between source and reconstruction over one 8-wide chroma block
+/// (8x8 at 4:2:0, 8x16 at 4:2:2). */
 fn H264IntraEncoder::chroma_sad(
   self : H264IntraEncoder,
   src : Array[Int32],
@@ -531,7 +567,8 @@ fn H264IntraEncoder::chroma_sad(
   cbase : Int32,
 ) -> Int32 {
   let mut sad = 0
-  for row = 0; row < 8; row = row + 1 {
+  let rows = if self.pps.chroma_format == 2 { 16 } else { 8 }
+  for row = 0; row < rows; row = row + 1 {
     for col = 0; col < 8; col = col + 1 {
       let d = src[cbase + row * self.cstride + col] -
         rec[cbase + row * self.cstride + col]
@@ -601,24 +638,48 @@ fn H264IntraEncoder::pick_chroma(
     if eff < 0 {
       continue
     }
-    let ok_u = h264_pred8x8(
-      self.rec_u,
-      cbase,
-      self.cstride,
-      eff,
-      top,
-      left,
-      bit_depth=self.p.bit_depth,
-    )
-    let ok_v = h264_pred8x8(
-      self.rec_v,
-      cbase,
-      self.cstride,
-      eff,
-      top,
-      left,
-      bit_depth=self.p.bit_depth,
-    )
+    let ok_u = if self.pps.chroma_format == 2 {
+      h264_pred8x16(
+        self.rec_u,
+        cbase,
+        self.cstride,
+        eff,
+        top,
+        left,
+        bit_depth=self.p.bit_depth,
+      )
+    } else {
+      h264_pred8x8(
+        self.rec_u,
+        cbase,
+        self.cstride,
+        eff,
+        top,
+        left,
+        bit_depth=self.p.bit_depth,
+      )
+    }
+    let ok_v = if self.pps.chroma_format == 2 {
+      h264_pred8x16(
+        self.rec_v,
+        cbase,
+        self.cstride,
+        eff,
+        top,
+        left,
+        bit_depth=self.p.bit_depth,
+      )
+    } else {
+      h264_pred8x8(
+        self.rec_v,
+        cbase,
+        self.cstride,
+        eff,
+        top,
+        left,
+        bit_depth=self.p.bit_depth,
+      )
+    }
     if ok_u is Ok(_) && ok_v is Ok(_) {
       let cost = self.chroma_sad(self.src_u, self.rec_u, cbase) +
         self.chroma_sad(self.src_v, self.rec_v, cbase)
@@ -629,28 +690,33 @@ fn H264IntraEncoder::pick_chroma(
       }
     }
   }
-  ignore(
-    h264_pred8x8(
-      self.rec_u,
-      cbase,
-      self.cstride,
-      best_eff,
-      top,
-      left,
-      bit_depth=self.p.bit_depth,
-    ),
-  )
-  ignore(
-    h264_pred8x8(
-      self.rec_v,
-      cbase,
-      self.cstride,
-      best_eff,
-      top,
-      left,
-      bit_depth=self.p.bit_depth,
-    ),
-  )
+  let repred = if self.pps.chroma_format == 2 {
+    fn(plane : Array[Int32], mode : Int32) -> Result[Unit, String] {
+      h264_pred8x16(
+        plane,
+        cbase,
+        self.cstride,
+        mode,
+        top,
+        left,
+        bit_depth=self.p.bit_depth,
+      )
+    }
+  } else {
+    fn(plane : Array[Int32], mode : Int32) -> Result[Unit, String] {
+      h264_pred8x8(
+        plane,
+        cbase,
+        self.cstride,
+        mode,
+        top,
+        left,
+        bit_depth=self.p.bit_depth,
+      )
+    }
+  }
+  ignore(repred(self.rec_u, best_eff))
+  ignore(repred(self.rec_v, best_eff))
   best_sig
 }
 
@@ -697,30 +763,43 @@ fn H264IntraEncoder::encode_macroblock(
   let qp = self.p.qp_ext(self.mb_qp)
   // Chroma first: the winning prediction stays in the reconstruction
   // planes for the residual pass below.
-  let cbase = mb_y * 8 * self.cstride + mb_x * 8
+  let cf = self.pps.chroma_format
+  let nblk = 4 * cf
+  let crow = if cf == 2 { 16 } else { 8 }
+  let cbase = mb_y * crow * self.cstride + mb_x * 8
   let chroma_mode = self.pick_chroma(cbase, top_avail, left_avail)
   // Chroma residuals (before the luma decision, but written later).
   let qmul_c = [
     h264_build_dequant4(self.pps, 1, self.chroma_qp),
     h264_build_dequant4(self.pps, 2, self.chroma_qp),
   ]
+  // 4:2:2's DC dequant reads the table three QP steps up (the 2x4
+  // Hadamard gain compensation, `h264_mb.mbt`).
+  let qmul_dc422 = if cf == 2 {
+    [
+      h264_build_dequant4(self.pps, 1, self.chroma_qp + 3),
+      h264_build_dequant4(self.pps, 2, self.chroma_qp + 3),
+    ]
+  } else {
+    [Array::make(16, 0), Array::make(16, 0)]
+  }
   let chroma_dc_store : Array[Array[Int32]] = [
     Array::make(16, 0),
     Array::make(16, 0),
   ]
   let chroma_ac_store : Array[Array[Int32]] = [
-    Array::make(64, 0),
-    Array::make(64, 0),
+    Array::make(16 * nblk, 0),
+    Array::make(16 * nblk, 0),
   ]
   let chroma_dc_nz : Array[Bool] = [false, false]
-  let chroma_ac_nz : Array[Int32] = Array::make(8, 0)
+  let chroma_ac_nz : Array[Int32] = Array::make(2 * nblk, 0)
   let mb : Array[Int32] = Array::make(768, 0)
   for c = 0; c < 2; c = c + 1 {
     let src = if c == 0 { self.src_u } else { self.src_v }
     let rec = if c == 0 { self.rec_u } else { self.rec_v }
-    // DC: sums of the four 4x4 residual blocks (raster order).
-    let sums : Array[Int32] = Array::make(4, 0)
-    for i = 0; i < 4; i = i + 1 {
+    // DC: sums of the 4x4 residual blocks (raster order, x + 2*y).
+    let sums : Array[Int32] = Array::make(nblk, 0)
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let mut sum = 0
@@ -733,20 +812,27 @@ fn H264IntraEncoder::encode_macroblock(
       }
       sums[i] = sum
     }
-    let dc_store : Array[Int32] = Array::make(4, 0)
-    let dc_levels = h264_enc_chroma_dc_hadamard_quant(
-      sums,
-      dc_store,
-      0,
-      self.chroma_qp,
-    )
+    let dc_store : Array[Int32] = Array::make(16, 0)
+    let dc_n = if cf == 2 {
+      h264_enc_chroma422_dc_hadamard_quant(sums, dc_store, self.chroma_qp)
+      8
+    } else {
+      ignore(
+        h264_enc_chroma_dc_hadamard_quant(sums, dc_store, 0, self.chroma_qp),
+      )
+      4
+    }
     chroma_dc_store[c] = dc_store
-    chroma_dc_nz[c] = dc_levels[0] != 0 ||
-      dc_levels[1] != 0 ||
-      dc_levels[2] != 0 ||
-      dc_levels[3] != 0
+    let mut any_dc = false
+    for s2 = 0; s2 < dc_n; s2 = s2 + 1 {
+      if dc_store[s2] != 0 {
+        any_dc = true
+        break
+      }
+    }
+    chroma_dc_nz[c] = any_dc
     // AC blocks.
-    for i = 0; i < 4; i = i + 1 {
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let res : Array[Int32] = Array::make(16, 0)
@@ -765,16 +851,26 @@ fn H264IntraEncoder::encode_macroblock(
         chroma_ac_store[c][16 * i + s] = levels[s]
       }
     }
-    // Chroma DC slots hold the RAW levels (0/16/32/48): the decoder's
-    // h264_chroma_dc_dequant_idct applies the dequant itself, and the
-    // local reconstruction calls the same function.
-    for s = 0; s < 4; s = s + 1 {
-      let lv = dc_store[s]
-      if lv != 0 {
-        mb[256 + 256 * c + 16 * s] = lv
+    // Chroma DC slots hold the RAW levels (raster 0/16/32/48 at 4:2:0,
+    // the 4:2:2 zigzag's byte offsets at 4:2:2): the decoder's DC
+    // dequant_idct applies the dequant itself, and the local
+    // reconstruction calls the same function.
+    if cf == 2 {
+      for k = 0; k < 8; k = k + 1 {
+        let lv = dc_store[k]
+        if lv != 0 {
+          mb[256 + 256 * c + h264_chroma422_dc_scan[k]] = lv
+        }
+      }
+    } else {
+      for s = 0; s < 4; s = s + 1 {
+        let lv = dc_store[s]
+        if lv != 0 {
+          mb[256 + 256 * c + 16 * s] = lv
+        }
       }
     }
-    for i = 0; i < 4; i = i + 1 {
+    for i = 0; i < nblk; i = i + 1 {
       for s = 0; s < 16; s = s + 1 {
         let lv = chroma_ac_store[c][16 * i + s]
         if lv != 0 {
@@ -1182,7 +1278,7 @@ fn H264IntraEncoder::encode_macroblock(
   }
   if chroma_c_cbp < 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < nblk; i = i + 1 {
         for k = 0; k < 16; k = k + 1 {
           if k != 0 {
             mb[256 + 256 * c + 16 * i + k] = 0
@@ -1195,14 +1291,23 @@ fn H264IntraEncoder::encode_macroblock(
   for c = 0; c < 2; c = c + 1 {
     let plane = if c == 0 { self.rec_u } else { self.rec_v }
     if chroma_dc_nz[c] {
-      h264_chroma_dc_dequant_idct(
-        mb,
-        256 + 256 * c,
-        qmul_c[c][0],
-        bit_depth=self.p.bit_depth,
-      )
+      if cf == 2 {
+        h264_chroma422_dc_dequant_idct(
+          mb,
+          256 + 256 * c,
+          qmul_dc422[c][0],
+          bit_depth=self.p.bit_depth,
+        )
+      } else {
+        h264_chroma_dc_dequant_idct(
+          mb,
+          256 + 256 * c,
+          qmul_c[c][0],
+          bit_depth=self.p.bit_depth,
+        )
+      }
     }
-    for i = 0; i < 4; i = i + 1 {
+    for i = 0; i < nblk; i = i + 1 {
       let bx = i % 2 * 4
       let by = i / 2 * 4
       let off = cbase + by * self.cstride + bx
@@ -1353,20 +1458,31 @@ fn H264IntraEncoder::encode_macroblock(
     }
   }
   // Chroma residual writing (both paths, identical position in the syntax).
+  // `§420`: the 4:2:2 DC block codes EIGHT levels with the chroma422 VLC
+  // tables (already zigzag-ordered by the quantiser), the AC loop covers
+  // the doubled per-plane block count.
   if chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
-      let dc4 : Array[Int32] = [
-        chroma_dc_store[c][0],
-        chroma_dc_store[c][1],
-        chroma_dc_store[c][2],
-        chroma_dc_store[c][3],
-      ]
-      ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      if cf == 2 {
+        let dc8 : Array[Int32] = Array::make(8, 0)
+        for k = 0; k < 8; k = k + 1 {
+          dc8[k] = chroma_dc_store[c][k]
+        }
+        ignore(h264_enc_write_residual(r, dc8, 8, 0))
+      } else {
+        let dc4 : Array[Int32] = [
+          chroma_dc_store[c][0],
+          chroma_dc_store[c][1],
+          chroma_dc_store[c][2],
+          chroma_dc_store[c][3],
+        ]
+        ignore(h264_enc_write_residual(r, dc4, 4, 0))
+      }
     }
   }
   if chroma_c_cbp == 2 {
     for c = 0; c < 2; c = c + 1 {
-      for i = 0; i < 4; i = i + 1 {
+      for i = 0; i < nblk; i = i + 1 {
         let view = scan_view_at(
           chroma_ac_store[c],
           i,
@@ -1375,8 +1491,8 @@ fn H264IntraEncoder::encode_macroblock(
           15,
         )
         let nc = self.nc_chroma(mb_idx, mb_x, mb_y, c, i)
-        chroma_ac_nz[4 * c + i] = h264_enc_write_residual(r, view, 15, nc)
-        self.cur_nz[16 + 16 * c + i] = chroma_ac_nz[4 * c + i]
+        chroma_ac_nz[nblk * c + i] = h264_enc_write_residual(r, view, 15, nc)
+        self.cur_nz[16 + 16 * c + i] = chroma_ac_nz[nblk * c + i]
       }
     }
   }
@@ -1407,7 +1523,7 @@ fn chroma_block_nz(store : Array[Int32], i : Int32) -> Int32 {
 ///|
 fn chroma_ac_nz_count(store : Array[Array[Int32]]) -> Bool {
   for c = 0; c < 2; c = c + 1 {
-    for i = 0; i < 64; i = i + 1 {
+    for i = 0; i < store[c].length(); i = i + 1 {
       if store[c][i] != 0 {
         return true
       }

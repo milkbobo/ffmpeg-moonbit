@@ -45,11 +45,18 @@ fn h264_enc_bit_depth_ok(bit_depth : Int32) -> Bool {
 
 ///|
 /// profile_idc of the parameter sets: 244 (High 4:4:4 Predictive) above 10
-/// bits, 110 (High 10) at 9/10, else the caller's 8-bit profile
+/// bits, 122 (High 4:2:2) at 8..10 bits with `chroma_format=2` (`§420`),
+/// 110 (High 10) at 9/10, else the caller's 8-bit profile
 /// (66 Baseline / 77 Main / 100 High).
-fn h264_enc_profile_idc(bit_depth : Int32, base : Int32) -> Int32 {
+fn h264_enc_profile_idc(
+  bit_depth : Int32,
+  base : Int32,
+  chroma~ : Int32 = 1,
+) -> Int32 {
   if bit_depth > 10 {
     244
+  } else if chroma == 2 {
+    122
   } else if bit_depth > 8 {
     110
   } else {

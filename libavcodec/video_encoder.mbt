@@ -75,6 +75,8 @@ pub(all) struct VideoEncConfig {
   /// `§418` extends it to the B schedule (the B's list 0 holds the past
   /// references); batch rate controls are supported.
   multi_ref : Int32
+  /// `§420`: chroma format 1 (4:2:0, default) or 2 (4:2:2).
+  chroma_format : Int32
   /// Periodic IDR distance in display frames, 0 = disabled. Batch ABR and
   /// VBV cover the full sequence, including reordered B GOPs.
   /// Explicit forced IDRs restart this interval in the streaming encoder.
@@ -106,6 +108,7 @@ pub fn VideoEncConfig::new(width~ : Int32, height~ : Int32) -> VideoEncConfig {
     vbv_bufsize: 0,
     fps: 0,
     multi_ref: 1,
+    chroma_format: 1,
     keyint: 0,
   }
 }
@@ -150,6 +153,7 @@ pub fn VideoEncoder::open(
           intra4x4_in_b=config.intra4x4_in_b,
           weightp=config.weightp,
           bit_depth=config.bit_depth,
+          chroma_format=config.chroma_format,
           multi_ref=config.multi_ref,
           aud=config.aud,
           aq=config.aq,
@@ -313,6 +317,7 @@ pub fn video_encode(
           recon~,
           stats~,
           multi_ref=config.multi_ref,
+          chroma_format=config.chroma_format,
         )
       } else {
         h264_encode_frames(
@@ -337,6 +342,7 @@ pub fn video_encode(
           recon~,
           stats~,
           multi_ref=config.multi_ref,
+          chroma_format=config.chroma_format,
         )
       }
   }
