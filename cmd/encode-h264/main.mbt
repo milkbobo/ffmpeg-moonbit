@@ -55,7 +55,10 @@ fn main raise {
   let summary : Json = {
     "codec": opts.codec.name(),
     "format": "annexb",
-    "pixel_format": @codec.video_pixel_format(opts.bit_depth),
+    "pixel_format": @codec.video_pixel_format(
+      opts.bit_depth,
+      chroma_format=opts.chroma_format,
+    ),
     "bit_depth": opts.bit_depth,
     "width": opts.width,
     "height": opts.height,

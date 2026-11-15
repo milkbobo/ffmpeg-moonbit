@@ -366,14 +366,14 @@ fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
   let chroma = if opts.chroma_format == 2 {
-    luma * bpp
+    opts.width / 2 * opts.height * bpp
   } else {
     opts.width * opts.height / 4 * bpp
   }
   let frame_size = raw_frame_size(opts)
   if data.length() == 0 || data.length() % frame_size != 0 {
     fail(
-      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth)} frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth, chroma_format~=opts.chroma_format)} frames (\{frame_size} bytes each)",
     )
   }
   let enc = open_stream_encoder(opts)
@@ -637,5 +637,43 @@ test "CLI periodic B GOPs accept continuous batch VBV" {
       }
       assert_eq(online_decoded.length(), 8)
     }
+  }
+}
+
+///|
+/// §420: the CLI carries the chroma format end to end — `--chroma 422`
+/// parses, sizes the raw input as 4:2:2 and round-trips through the decoder.
+test "CLI chroma 422 option round trip" {
+  let opts = parse_options([
+    "input.yuv", "--width", "32", "--height", "16", "--chroma", "422", "--no-b-slices",
+    "--output", "out.264",
+  ])
+  assert_eq(opts.chroma_format, 2)
+  let frame_size = raw_frame_size(opts)
+  assert_eq(frame_size, 32 * 16 * 2)
+  let data = Bytes::make(frame_size * 2, 100)
+  for cabac in [false, true] {
+    let (stream, count) = encode_raw(data, { ..opts, cabac, })
+    assert_eq(count, 2)
+    let decoded = match @codec.h264_decode_annexb_frames(stream, false) {
+      Ok(frames) => frames
+      Err(e) => fail(e)
+    }
+    assert_eq(decoded.length(), 2)
+    assert_eq(decoded[0].width, 32)
+    assert_eq(decoded[0].height, 16)
+    assert_eq(decoded[0].yuvp().length(), 32 * 16 * 2)
+  }
+  try
+    ignore(
+      parse_options([
+        "input.yuv", "--width", "32", "--height", "16", "--chroma", "444", "--output",
+        "out.264",
+      ]),
+    )
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("--chroma 444 accepted")
   }
 }

@@ -79,6 +79,7 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--bit-depth"
       | "--codec"
       | "--multi-ref"
+      | "--chroma"
       | "--keyint"
       | "--aq-strength"
       | "--target-bytes"
@@ -322,14 +323,14 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
   let chroma = if opts.chroma_format == 2 {
-    luma * bpp
+    opts.width / 2 * opts.height * bpp
   } else {
     opts.width * opts.height / 4 * bpp
   }
   let frame_size = raw_frame_size(opts)
   if data.length() == 0 || data.length() % frame_size != 0 {
     fail(
-      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth)} frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth, chroma_format~=opts.chroma_format)} frames (\{frame_size} bytes each)",
     )
   }
   let frames : Array[(Bytes, Bytes, Bytes)] = []
@@ -355,7 +356,7 @@ fn encode_stream_file(opts : Options) -> (Int32, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
   let chroma = if opts.chroma_format == 2 {
-    luma * bpp
+    opts.width / 2 * opts.height * bpp
   } else {
     opts.width * opts.height / 4 * bpp
   }
@@ -365,7 +366,7 @@ fn encode_stream_file(opts : Options) -> (Int32, Int32) raise {
   if input_size == 0 || input_size % frame_size.to_int64() != 0 {
     reader.close()
     fail(
-      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth)} frames (\{frame_size} bytes each)",
+      "encode-h264: input must contain complete \{@codec.video_pixel_format(opts.bit_depth, chroma_format~=opts.chroma_format)} frames (\{frame_size} bytes each)",
     )
   }
   let enc = open_stream_encoder(opts)

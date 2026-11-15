@@ -2204,11 +2204,6 @@ fn h264_cabacw_chroma(
   coded : H264PMbCode,
 ) -> Unit {
   let nblk = 4 * ctx.pps.chroma_format
-  if mb_idx == 0 {
-    println(
-      "DBGCF pps_cf=\{ctx.pps.chroma_format} nblk=\{nblk} ccbp=\{coded.chroma_c_cbp}",
-    )
-  }
   if coded.chroma_c_cbp != 0 {
     for c = 0; c < 2; c = c + 1 {
       if nblk == 8 {

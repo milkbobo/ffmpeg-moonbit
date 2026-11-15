@@ -34,11 +34,15 @@ pub fn VideoCodec::default() -> VideoCodec {
 /// The input/output layout's ffmpeg name for the configured depth:
 /// planar 4:2:0 8-bit (`yuv420p`), or little-endian 16-bit above 8 bits
 /// (`yuv420p9le` / `yuv420p10le`, the High 10 family).
-pub fn video_pixel_format(bit_depth : Int32) -> String {
+pub fn video_pixel_format(
+  bit_depth : Int32,
+  chroma_format~ : Int32 = 1,
+) -> String {
+  let base = if chroma_format == 2 { "yuv422p" } else { "yuv420p" }
   if bit_depth > 8 {
-    "yuv420p\{bit_depth}le"
+    base + "\{bit_depth}le"
   } else {
-    "yuv420p"
+    base
   }
 }
 
@@ -179,7 +183,10 @@ pub fn VideoEncoder::codec_name(self : VideoEncoder) -> String {
 ///|
 /// Input pixel format name (for JSON summaries).
 pub fn VideoEncoder::pixel_format(self : VideoEncoder) -> String {
-  video_pixel_format(self.config.bit_depth)
+  video_pixel_format(
+    self.config.bit_depth,
+    chroma_format=self.config.chroma_format,
+  )
 }
 
 ///|
