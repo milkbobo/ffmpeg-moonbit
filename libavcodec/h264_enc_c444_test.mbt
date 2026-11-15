@@ -174,6 +174,42 @@ test "h264 c444: I+P round trip" {
 }
 
 ///|
+/// §421: 4:4:4 in CABAC (single IDR).
+test "h264 c444: cabac single IDR round trip" {
+  let frames = c444_fixture(1)
+  let recon : Array[Bytes] = []
+  let stream = match
+    @libavcodec.h264_encode_frames_cabac(
+      frames,
+      width=96,
+      height=64,
+      qp=26,
+      chroma_format=3,
+      recon~,
+    ) {
+    Ok(s) => s
+    Err(e) => fail(e)
+  }
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
+  assert_eq(dec.length(), 1)
+  let mut dump = ""
+  for i = 0; i < stream.length(); i = i + 1 {
+    dump = dump + (stream[i].to_int() & 0xFF).to_string() + ","
+  }
+  println("ARBC44C:\{dump}")
+  println("C44CMD5: " + mr_md5(dec[0].yuvp()))
+  // Anchored against docker linuxserver/ffmpeg:9.0.2 with
+  // `-skip_loop_filter all`: the 4:4:4 loop filter does not run in this port
+  // yet (see AGENT_HANDOFF_2026-11-15_H264_C444.md). The entropy layer is
+  // exact — with the filter enabled ffmpeg hashes this frame as
+  // 38c33e4c86fa0ca08e672e0c524c7906.
+  assert_eq(mr_md5(dec[0].yuvp()), "b69044fda520a48a40c014c295cb861c")
+}
+
+///|
 test "h264 c444: validation rejects bad formats" {
   let frames = c444_fixture(1)
   for bad in [0, 4, -1] {

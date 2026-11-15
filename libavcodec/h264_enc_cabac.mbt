@@ -849,8 +849,8 @@ pub fn h264_encode_intra_frame_cabac(
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
-  if chroma_format != 1 && chroma_format != 2 {
-    return Err("h264 enc: chroma_format must be 1 or 2")
+  if chroma_format < 1 || chroma_format > 3 {
+    return Err("h264 enc: chroma_format must be 1, 2 or 3")
   }
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -863,10 +863,11 @@ pub fn h264_encode_intra_frame_cabac(
       "h264 enc: unsupported bit depth \{bit_depth} (8, 9, 10, 12 or 14)",
     )
   }
-  let chroma_h = if chroma_format == 2 { height } else { height / 2 }
+  let chroma_w = if chroma_format == 3 { width } else { width / 2 }
+  let chroma_h = if chroma_format == 1 { height / 2 } else { height }
   if y.length() != h264_enc_plane_bytes(width, height, bit_depth) ||
-    u.length() != h264_enc_plane_bytes(width / 2, chroma_h, bit_depth) ||
-    v.length() != h264_enc_plane_bytes(width / 2, chroma_h, bit_depth) {
+    u.length() != h264_enc_plane_bytes(chroma_w, chroma_h, bit_depth) ||
+    v.length() != h264_enc_plane_bytes(chroma_w, chroma_h, bit_depth) {
     return Err("h264 enc: plane size mismatch")
   }
   let p = { width, height, qp, level_idc, bit_depth, nrefs: multi_ref, }
@@ -887,9 +888,9 @@ pub fn h264_encode_intra_frame_cabac(
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
-  let cstride = mb_width * 8
+  let cstride = if chroma_format == 3 { mb_width * 16 } else { mb_width * 8 }
   let pheight = mb_height * 16
-  let chroma_plane_h = if chroma_format == 2 { pheight } else { pheight / 2 }
+  let chroma_plane_h = if chroma_format == 1 { pheight / 2 } else { pheight }
   let ps = new_h264_param_sets()
   let sps_rbsp = if b_seq {
     h264_enc_sps_rbsp_b(p, dct8x8~, vbv~, chroma_format~)
@@ -954,7 +955,7 @@ pub fn h264_encode_intra_frame_cabac(
     src_y: h264_enc_load_plane(y, width, height, ystride, pheight, bit_depth~),
     src_u: h264_enc_load_plane(
       u,
-      width / 2,
+      chroma_w,
       chroma_h,
       cstride,
       chroma_plane_h,
@@ -962,7 +963,7 @@ pub fn h264_encode_intra_frame_cabac(
     ),
     src_v: h264_enc_load_plane(
       v,
-      width / 2,
+      chroma_w,
       chroma_h,
       cstride,
       chroma_plane_h,
@@ -1246,6 +1247,294 @@ fn H264CabacIEnc::chroma_pred_fn(
 }
 
 ///|
+/// `§421`: one 4:4:4 intra macroblock in CABAC. `ChromaArrayType == 3`
+/// reuses the luma prediction modes and the luma residual categories
+/// (cat 6/7/8 and 10/11/12) for the two chroma planes: no chroma prediction
+/// mode bins, no chroma cbp bins, and one 4-bit cbp that gates the same 8x8
+/// quadrant in every plane.
+fn H264CabacIEnc::encode_macroblock_444(
+  self : H264CabacIEnc,
+  mb_x : Int32,
+  mb_y : Int32,
+) -> Result[Unit, String] {
+  let mb_idx = mb_y * self.mb_width + mb_x
+  let info = self.ctx.infos[mb_idx]
+  for i = 0; i < 48; i = i + 1 {
+    info.nz[i] = 0
+  }
+  info.transform_8x8 = false
+  self.ctx.cur_mb_is_intra = true
+  self.mb_qp = self.p.qp
+  self.mb_dqp = 0
+  if self.aq_on {
+    let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg, self.aq_strength)
+    let mut mq = self.p.qp + adj
+    if mq < 0 {
+      mq = 0
+    }
+    if mq > 51 {
+      mq = 51
+    }
+    self.mb_qp = mq
+    self.mb_dqp = self.p.qp_ext(mq) - self.ctx.qscale
+  }
+  let qp = self.p.qp_ext(self.mb_qp)
+  let cq0 = h264_get_chroma_qp(self.pps, 0, qp, bit_depth=self.p.bit_depth)
+  let cq1 = h264_get_chroma_qp(self.pps, 1, qp, bit_depth=self.p.bit_depth)
+  let plane_qp : Array[Int32] = [qp, cq0, cq1]
+  let mb : Array[Int32] = Array::make(768, 0)
+  let levels_all : Array[Int32] = Array::make(768, 0)
+  let ybase = mb_y * 16 * self.ystride + mb_x * 16
+  let top_avail = mb_y > 0
+  let left_avail = mb_x > 0
+  // ---- prediction-mode decision: luma SAD, shared by the three planes ----
+  let effs : Array[Int32] = Array::make(16, 0)
+  let topright_of : Array[Bool] = Array::make(16, false)
+  for i = 0; i < 16; i = i + 1 {
+    let gx = h264_luma_block_x[i]
+    let gy = h264_luma_block_y[i]
+    let g = gy * 4 + gx
+    let off = ybase + gy * 4 * self.ystride + gx * 4
+    let blk_top = gy > 0 || top_avail
+    let blk_left = gx > 0 || left_avail
+    let topright = if gy == 0 {
+      top_avail && (gx < 3 || mb_x < self.mb_width - 1)
+    } else {
+      gx == 0 || gx == 2 || (gx == 1 && gy % 2 == 0)
+    }
+    topright_of[g] = topright
+    let mut best_sig = 0
+    let mut best_eff : Int32 = -1
+    let mut best_sad = -1
+    for sig = 0; sig < 9; sig = sig + 1 {
+      let eff = match h264_check_intra4x4_mode(sig, blk_top, blk_left) {
+        Ok(v) => v
+        Err(_) => -1
+      }
+      if eff < 0 {
+        continue
+      }
+      let err = h264_pred4x4(
+          self.rec_y,
+          off,
+          self.ystride,
+          eff,
+          blk_top,
+          blk_left,
+          topright,
+          bit_depth=self.p.bit_depth,
+        )
+        is Err(_)
+      if err {
+        continue
+      }
+      let sad = h264_enc_sad4(self.src_y, self.rec_y, off, self.ystride)
+      if best_sad < 0 || sad < best_sad {
+        best_sad = sad
+        best_sig = sig
+        best_eff = eff
+      }
+    }
+    if best_eff < 0 {
+      return Err("h264 enc: no feasible intra4x4 mode")
+    }
+    self.cur_modes[g] = best_sig
+    effs[g] = best_eff
+  }
+  // ---- per-block, per-plane: predict, transform, quantise, reconstruct ----
+  let mut cbp = 0
+  for i = 0; i < 16; i = i + 1 {
+    let gx = h264_luma_block_x[i]
+    let gy = h264_luma_block_y[i]
+    let g = gy * 4 + gx
+    let eff = effs[g]
+    let topright = topright_of[g]
+    let blk_top = gy > 0 || top_avail
+    let blk_left = gx > 0 || left_avail
+    let mut any = false
+    for p = 0; p < 3; p = p + 1 {
+      let src = if p == 0 {
+        self.src_y
+      } else if p == 1 {
+        self.src_u
+      } else {
+        self.src_v
+      }
+      let rec = if p == 0 {
+        self.rec_y
+      } else if p == 1 {
+        self.rec_u
+      } else {
+        self.rec_v
+      }
+      let stride = if p == 0 { self.ystride } else { self.cstride }
+      let off = mb_y * 16 * stride + mb_x * 16 + gy * 4 * stride + gx * 4
+      match
+        h264_pred4x4(
+          rec,
+          off,
+          stride,
+          eff,
+          blk_top,
+          blk_left,
+          topright,
+          bit_depth=self.p.bit_depth,
+        ) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+      let res : Array[Int32] = Array::make(16, 0)
+      for row = 0; row < 4; row = row + 1 {
+        for col = 0; col < 4; col = col + 1 {
+          res[row * 4 + col] = src[off + row * stride + col] -
+            rec[off + row * stride + col]
+        }
+      }
+      let levels = h264_enc_fdct_quant_res(res, 0, plane_qp[p])
+      let qmul = h264_build_dequant4(self.pps, p, plane_qp[p])
+      let mut total = 0
+      for s = 0; s < 16; s = s + 1 {
+        levels_all[256 * p + 16 * i + s] = levels[s]
+        if levels[s] != 0 {
+          total = total + 1
+          mb[256 * p + 16 * i + s] = h264_enc_dequant_level(
+            levels[s],
+            qmul[s],
+            bit_depth=self.p.bit_depth,
+          )
+        }
+      }
+      info.nz[16 * p + g] = total
+      if total != 0 {
+        any = true
+        h264_idct_add(
+          rec,
+          off,
+          stride,
+          mb,
+          256 * p + 16 * i,
+          bit_depth=self.p.bit_depth,
+        )
+      }
+    }
+    if any {
+      cbp = cbp | (1 << (i / 4))
+    }
+  }
+  // ---- syntax ----
+  // I16/Intra_PCM neighbour count feeds the first mb_type bin.
+  let mut c = 0
+  if h264_has_left(self.ctx, mb_idx) &&
+    (
+      self.ctx.infos[mb_idx - 1].mb_type_bits &
+      (h264_mb_type_intra16x16 | h264_mb_type_intra_pcm)
+    ) !=
+    0 {
+    c = c + 1
+  }
+  if h264_has_top(self.ctx, mb_idx) &&
+    (
+      self.ctx.infos[h264_top_index(self.ctx, mb_idx)].mb_type_bits &
+      (h264_mb_type_intra16x16 | h264_mb_type_intra_pcm)
+    ) !=
+    0 {
+    c = c + 1
+  }
+  self.enc.decision(self.states, 3 + c, 0) // I_NxN
+  if self.dct8x8 {
+    self.enc.decision(
+      self.states,
+      399 + h264_neighbor_transform_size(self.ctx, mb_idx, mb_x, mb_y),
+      0,
+    )
+  }
+  for i = 0; i < 16; i = i + 1 {
+    let gx = h264_luma_block_x[i]
+    let gy = h264_luma_block_y[i]
+    let g = gy * 4 + gx
+    let predicted = h264_pred_intra_mode(
+      self.ctx,
+      mb_idx,
+      mb_x,
+      mb_y,
+      gx,
+      gy,
+      self.cur_modes,
+    )
+    let mode = self.cur_modes[g]
+    if mode == predicted {
+      self.enc.decision(self.states, 68, 1)
+    } else {
+      self.enc.decision(self.states, 68, 0)
+      let rem = if mode > predicted { mode - 1 } else { mode }
+      self.enc.decision(self.states, 69, rem & 1)
+      self.enc.decision(self.states, 69, (rem >> 1) & 1)
+      self.enc.decision(self.states, 69, (rem >> 2) & 1)
+    }
+  }
+  // No chroma prediction mode bins in 4:4:4.
+  h264_cabacw_cbp(
+    self.enc,
+    self.states,
+    self.ctx,
+    mb_idx,
+    mb_x,
+    mb_y,
+    cbp,
+    false,
+  )
+  info.cbp_all = cbp
+  if cbp != 0 {
+    h264_cabacw_dqp(self.enc, self.states, self.ctx, self.mb_dqp)
+    if self.mb_dqp != 0 {
+      self.stats.dqp_mbs += 1
+    }
+  } else {
+    self.ctx.last_qscale_diff = 0
+  }
+  // Three planes, luma residual categories (cat 2/8/12 for 4x4 AC blocks).
+  for p = 0; p < 3; p = p + 1 {
+    let cat = if p == 0 { 2 } else if p == 1 { 8 } else { 12 }
+    for i8 = 0; i8 < 4; i8 = i8 + 1 {
+      if (cbp & (1 << i8)) != 0 {
+        for i4 = 0; i4 < 4; i4 = i4 + 1 {
+          let i = i8 * 4 + i4
+          let view = scan_view_at(
+            levels_all,
+            16 * p + i,
+            h264_zigzag_scan_t,
+            0,
+            16,
+          )
+          h264_cabacw_residual(
+            self.enc,
+            self.states,
+            self.ctx,
+            mb_idx,
+            mb_x,
+            mb_y,
+            cat,
+            16 * p + i,
+            view,
+            16,
+            false,
+          )
+        }
+      }
+    }
+  }
+  // Commit the mirror the way the decoder's parse would.
+  info.mb_type_bits = h264_mb_type_intra4x4
+  info.intra4x4 = true
+  info.chroma_mode = 0
+  info.qp = self.ctx.qscale
+  for g = 0; g < 16; g = g + 1 {
+    info.modes[g] = self.cur_modes[g]
+  }
+  Ok(())
+}
+
+///|
 /// Encode one intra macroblock: mode decisions + reconstruction (the CAVLC
 /// intra encoder's I_NxN flow) followed by the CABAC syntax layer.
 fn H264CabacIEnc::encode_macroblock(
@@ -1254,6 +1543,9 @@ fn H264CabacIEnc::encode_macroblock(
   mb_y : Int32,
 ) -> Result[Unit, String] {
   let mb_idx = mb_y * self.mb_width + mb_x
+  if self.pps.chroma_format == 3 {
+    return self.encode_macroblock_444(mb_x, mb_y)
+  }
   let info = self.ctx.infos[mb_idx]
   // Macroblock-entry mirror (the decoder clears `nz` at parse start; the
   // transform size is a per-macroblock bit in FFmpeg's mb_type, so it
@@ -3336,8 +3628,8 @@ pub fn h264_encode_frames_cabac(
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
-  if chroma_format != 1 && chroma_format != 2 {
-    return Err("h264 enc: chroma_format must be 1 or 2")
+  if chroma_format < 1 || chroma_format > 3 {
+    return Err("h264 enc: chroma_format must be 1, 2 or 3")
   }
   if !h264_enc_bit_depth_ok(bit_depth) {
     return Err(
@@ -3346,6 +3638,11 @@ pub fn h264_encode_frames_cabac(
   }
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
+  }
+  if chroma_format == 3 && frames.length() > 1 {
+    // §421: only the 4:4:4 intra macroblock has its CABAC twin so far; the
+    // inter syntax (and CABAC P/B in general) is the next slice.
+    return Err("h264 enc: 4:4:4 CABAC supports intra pictures only")
   }
   if multi_ref < 1 || multi_ref > 16 {
     return Err("h264 enc: multi_ref must be in 1..=16")
