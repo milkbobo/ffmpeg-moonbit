@@ -391,6 +391,8 @@ test "video enc: pixel format naming and High 10 through the facade" {
   // `§420`: the facade names the 4:2:2 layouts too.
   assert_eq(@libavcodec.video_pixel_format(8, chroma_format=2), "yuv422p")
   assert_eq(@libavcodec.video_pixel_format(10, chroma_format=2), "yuv422p10le")
+  // §421: 4:4:4 layout naming.
+  assert_eq(@libavcodec.video_pixel_format(8, chroma_format=3), "yuv444p")
   let frames = h264h10_fixture(96, 64, 3, 10)
   let config = {
     ..@libavcodec.VideoEncConfig::new(width=96, height=64),

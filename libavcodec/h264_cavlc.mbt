@@ -463,6 +463,12 @@ fn h264_get_chroma_qp(
   }
   let depth_offset = 6 * (bit_depth - 8)
   let idx = (qscale + offset).max(0).min(51 + depth_offset)
+  // §421: `ChromaArrayType == 3` skips the 4:2:0/4:2:2 mapping table
+  // (`ff_h264_get_chroma_qp` in the reference: the offset applies directly —
+  // 4:4:4 chroma is quantised exactly like luma).
+  if pps.chroma_format == 3 {
+    return idx
+  }
   if idx < depth_offset {
     idx
   } else {

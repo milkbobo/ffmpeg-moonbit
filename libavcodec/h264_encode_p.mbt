@@ -312,8 +312,13 @@ pub fn h264_encode_frames(
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
-  if chroma_format != 1 && chroma_format != 2 {
-    return Err("h264 enc: chroma_format must be 1 or 2")
+  if chroma_format < 1 || chroma_format > 3 {
+    return Err("h264 enc: chroma_format must be 1, 2 or 3")
+  }
+  if chroma_format == 3 && frames.length() > 1 {
+    // §421 step 1: the 4:4:4 inter paths (P/B + CABAC/streaming) land in the
+    // next slice; intra-only sequences are already byte-exact.
+    return Err("h264 enc: 4:4:4 inter pictures are not implemented yet")
   }
   if !h264_enc_bit_depth_ok(bit_depth) {
     return Err(

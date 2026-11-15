@@ -667,13 +667,37 @@ test "CLI chroma 422 option round trip" {
   try
     ignore(
       parse_options([
-        "input.yuv", "--width", "32", "--height", "16", "--chroma", "444", "--output",
+        "input.yuv", "--width", "32", "--height", "16", "--chroma", "440", "--output",
         "out.264",
       ]),
     )
   catch {
     _ => ()
   } noraise {
-    _ => fail("--chroma 444 accepted")
+    _ => fail("--chroma 440 accepted")
   }
+}
+
+///|
+/// §421: the CLI carries 4:4:4 end to end (single IDR — the inter paths are
+/// the next slice).
+test "CLI chroma 444 option round trip" {
+  let opts = parse_options([
+    "input.yuv", "--width", "32", "--height", "16", "--chroma", "444", "--output",
+    "out.264",
+  ])
+  assert_eq(opts.chroma_format, 3)
+  let frame_size = raw_frame_size(opts)
+  assert_eq(frame_size, 32 * 16 * 3)
+  let data = Bytes::make(frame_size, 100)
+  let (stream, count) = encode_raw(data, opts)
+  assert_eq(count, 1)
+  let decoded = match @codec.h264_decode_annexb_frames(stream, false) {
+    Ok(frames) => frames
+    Err(e) => fail(e)
+  }
+  assert_eq(decoded.length(), 1)
+  assert_eq(decoded[0].width, 32)
+  assert_eq(decoded[0].height, 16)
+  assert_eq(decoded[0].yuvp().length(), 32 * 16 * 3)
 }

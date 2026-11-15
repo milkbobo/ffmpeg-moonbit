@@ -142,8 +142,9 @@ fn parse_options(args : Array[String]) -> Options raise {
     None => 1
     Some("420") => 1
     Some("422") => 2
+    Some("444") => 3
     Some(other) =>
-      fail("encode-h264: --chroma must be 420 or 422 (got \{other})")
+      fail("encode-h264: --chroma must be 420, 422 or 444 (got \{other})")
   }
   let keyint = number(values, "--keyint", 0)
   if keyint < 0 {
@@ -271,7 +272,15 @@ fn sample_bytes(bit_depth : Int32) -> Int32 {
 /// chroma planes double their rows at 4:2:2).
 fn raw_frame_size(opts : Options) -> Int32 {
   let luma = opts.width * opts.height
-  let chroma = if opts.chroma_format == 2 { luma } else { luma / 2 }
+  // Both chroma planes combined: half the luma budget at 4:2:0, the full
+  // luma budget at 4:2:2 and twice it at 4:4:4 (§421).
+  let chroma = if opts.chroma_format == 3 {
+    luma * 2
+  } else if opts.chroma_format == 2 {
+    luma
+  } else {
+    luma / 2
+  }
   (luma + chroma) * sample_bytes(opts.bit_depth)
 }
 
@@ -322,7 +331,9 @@ fn open_stream_encoder(opts : Options) -> @codec.VideoEncoder raise {
 fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
-  let chroma = if opts.chroma_format == 2 {
+  let chroma = if opts.chroma_format == 3 {
+    luma
+  } else if opts.chroma_format == 2 {
     opts.width / 2 * opts.height * bpp
   } else {
     opts.width * opts.height / 4 * bpp
@@ -355,7 +366,9 @@ fn encode_raw(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
 fn encode_stream_file(opts : Options) -> (Int32, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
-  let chroma = if opts.chroma_format == 2 {
+  let chroma = if opts.chroma_format == 3 {
+    luma
+  } else if opts.chroma_format == 2 {
     opts.width / 2 * opts.height * bpp
   } else {
     opts.width * opts.height / 4 * bpp

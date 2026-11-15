@@ -38,7 +38,13 @@ pub fn video_pixel_format(
   bit_depth : Int32,
   chroma_format~ : Int32 = 1,
 ) -> String {
-  let base = if chroma_format == 2 { "yuv422p" } else { "yuv420p" }
+  let base = if chroma_format == 3 {
+    "yuv444p"
+  } else if chroma_format == 2 {
+    "yuv422p"
+  } else {
+    "yuv420p"
+  }
   if bit_depth > 8 {
     base + "\{bit_depth}le"
   } else {

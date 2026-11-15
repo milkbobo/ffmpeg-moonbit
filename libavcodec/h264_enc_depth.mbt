@@ -33,8 +33,8 @@ fn h264_enc_max_sample(bit_depth : Int32) -> Int32 {
 /// (High 10, profile_idc 110) plus 12 and 14 (High 4:4:4 Predictive,
 /// profile_idc 244 — the only profile with `bit_depth_luma_minus8` up to 6,
 /// even at 4:2:0). 11/13 stay rejected: the reference decoder
-/// PATCHWELCOMEs them (h264_ps.mbt's parity check). The encoder remains
-/// 4:2:0 only; 4:2:2/4:4:4 chroma is out of scope.
+/// PATCHWELCOMEs them (h264_ps.mbt's parity check). Chroma §420/§421:
+/// 4:2:0, 4:2:2 and 4:4:4 (4:4:4 at 8 bits so far).
 fn h264_enc_bit_depth_ok(bit_depth : Int32) -> Bool {
   bit_depth == 8 ||
   bit_depth == 9 ||
@@ -54,6 +54,11 @@ fn h264_enc_profile_idc(
   chroma~ : Int32 = 1,
 ) -> Int32 {
   if bit_depth > 10 {
+    244
+  } else if chroma == 3 {
+    // §421: High 4:4:4 Predictive at 8..10 bits as well (the reference
+    // decoder only accepts 4:4:4 under 244/144, and 244 is the one that also
+    // carries the deep bit depths).
     244
   } else if chroma == 2 {
     122

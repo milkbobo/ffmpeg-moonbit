@@ -13559,3 +13559,28 @@ linuxserver/ffmpeg:9.0.2 零告警、显示序逐帧 md5 全等后钉值。门�
 chroma_format 拒收 / FFmpeg 锚点）；全族 197/197（4:2:0 钉值逐字节未动）+
 CLI 25/25；moon check --target wasm --deny-warn、moonfmt 单文件、
 git diff --check 干净。仍拒收：流式 ABR、4:4:4（下一片）。
+
+## §421 H.264 编码器 4:4:4 面（I 帧）——separate_colour_plane + 三平面 luma 残差（2026-11-15）
+
+接续 §420。色度面扩到 4:4:4（chroma_format=3，profile 244），CAVLC I 帧
+（IDR）与 FFmpeg 逐帧 framemd5 全等零告警，CLI --chroma 444 端到端闭环。
+P/B、CABAC、流式留待下一片（h264_encode_frames 对 4:4:4 多帧显式报错）。
+
+语法差异（编码器镜像解码器）：SPS 在 chroma_format_idc=3 后多一个
+separate_colour_plane_flag（写 0，漏写会让其后全部语法错位）；无
+chroma_pred_mode（三平面复用 luma 模式）；无色度 DC Hadamard（三平面各走
+luma 残差路径，cat 6/7/8）；cbp 只有 4 位（golomb_to_intra4x4_cbp_gray），
+一个位图门控三平面的同一 8x8 象限（任一平面非零即置位，其余平面写
+TotalCoeff=0）；ChromaArrayType==3 的 QPc 跳过 4:2:0/4:2:2 映射表，直接
+QP+offset（h264_get_chroma_qp 加分支，其余格式行为不变）。
+
+实现：新 H264IntraEncoder::encode_macroblock_444（luma SAD 决策三平面共用
+模式，逐块逐平面预测/变换/量化/重建，nz 镜像按 base=16*p 独立）；入口接受
+chroma_format=3（色度平面 w x h、cstride=mb_width*16）；nc_luma/nc_block0
+加 base~；CLI --chroma 444 + raw_frame_size 3*luma + video_pixel_format
+yuv444p。
+
+仲裁：ARBC44（单 IDR 96x64 qp24 1974 B）docker ffmpeg 9.0.2 零告警，
+md5 843711bf73c3cfb162a019e63ae3ce45 与本仓解码器、编码 recon 三者一致；
+docker native CLI 产物与该流字节相同。门：新专项 3 项、CLI 27/27、
+video_encoder 命名断言；顺手清掉 PPSDBG / DTRACE 两处调试残留。

@@ -241,7 +241,13 @@ fn h264_enc_sps_body_high(
   r.put(0, 8) // constraint_set0..5 + reserved_zero_2bits
   r.put(p.level_idc, 8)
   r.put_ue(0) // seq_parameter_set_id
-  r.put_ue(chroma_format) // chroma_format_idc: 4:2:0 / 4:2:2
+  r.put_ue(chroma_format) // chroma_format_idc: 4:2:0 / 4:2:2 / 4:4:4
+  if chroma_format == 3 {
+    // §421: `separate_colour_plane_flag`. The parser reads this bit for
+    // `chroma_format_idc == 3` (and rejects 1), so it must be present or
+    // every following syntax element shifts by one bit.
+    r.put_bit(0)
+  }
   r.put_ue(p.bit_depth - 8) // bit_depth_luma_minus8
   r.put_ue(p.bit_depth - 8) // bit_depth_chroma_minus8
   r.put_bit(0) // qpprime_y_zero_transform_bypass_flag
