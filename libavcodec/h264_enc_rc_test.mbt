@@ -184,7 +184,7 @@ test "h264 rc: CAVLC lands under the target and responds monotonically" {
   debug_inspect(
     stats_s.frame_qps,
     content=(
-      #|[37, 37, 37, 37, 37]
+      #|[36, 37, 37, 37, 37]
     ),
   )
   debug_inspect(
@@ -228,7 +228,7 @@ test "h264 rc: CABAC lands under the target with per-picture QPs" {
   debug_inspect(
     stats.frame_qps,
     content=(
-      #|[38, 38, 38, 38, 38]
+      #|[37, 37, 37, 37, 37]
     ),
   )
   h264_rc_recon_invariant("cabac", stream, recon, 5)
@@ -348,9 +348,12 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Ok(f) => f
     Err(e) => fail(e)
   }
+  // §422e re-arbitration (decode order): the trial encodes the ABR
+  // search runs now include the B inter 8x8 RD choice, shifting the
+  // solved QPs — the I frame differs too.
   let pins1 = [
-    "81d73c30f11e4182ed4c338451d55d7b", "b08ef1a2f71e8be294122328a69acbb3", "9af150375ea340e427598357868540d8",
-    "1146c0cc0238d58a70af1d8981c2f54d", "a42a1d62a54e30b177f1eb26a05b47d8",
+    "7b8daf1fa23e7e242a13d4c71caa2dbe", "1c405e95f6f1a1fdd943620f6590066d", "bb1cf0253dab49d2f03f864f468b10c4",
+    "9621f608595825bbc83c7fb26e41770f", "c7b1be2f95aa3bf8c3179cce965e2e14",
   ]
   for i, f in filtered {
     assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
@@ -360,8 +363,8 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "81d73c30f11e4182ed4c338451d55d7b", "1e30e10a1c787d98a70d7fe5a791455a", "7ed5c6472bb754730d3f7e8836e589a2",
-    "7731c569f7fa9512b94cfa319af51ac2", "d96e3b0cbcc52bc2c5417e9949d8fb0a",
+    "7b8daf1fa23e7e242a13d4c71caa2dbe", "7a6ae33db839dd684a15903874266704", "ca4f2324fc628640244b09afc564a0c1",
+    "9c4dda3f88aa4a2108ba203fad166202", "db5be5dc91667c4d1a533323acbc984b",
   ]
   for i, f in filtered2 {
     assert_eq(h264_rc_md5(f.yuvp()), pins2[i])
@@ -466,14 +469,15 @@ test "h264 aq: CAVLC macroblock QP deltas ride the running QP" {
   if stats.dqp_mbs == 0 {
     fail("aq on must signal mb_qp_delta on mixed activity")
   }
-  // With YUV distortion priced, all 24
-  // macroblocks carry a non-zero delta; the decide-phase pricing trials
-  // no longer count (the trial dqp contributions are restored in
-  // decide_b_mb).
+  // With YUV distortion priced, all macroblocks of the two P pictures
+  // carry a non-zero delta (24), and since `§422e` one B macroblock's
+  // 8x8-priced residual flips to coded with a delta (25); the
+  // decide-phase pricing trials no longer count (the trial dqp
+  // contributions are restored in decide_b_mb).
   debug_inspect(
     stats.dqp_mbs,
     content=(
-      #|24
+      #|25
     ),
   )
   if h264_rc_md5(stream) == h264_rc_md5(off) {
@@ -547,12 +551,12 @@ test "h264 aq: CABAC macroblock QP deltas ride the running QP" {
   if stats.dqp_mbs == 0 {
     fail("aq on must signal mb_qp_delta on mixed activity")
   }
-  // With YUV distortion priced, all 24
-  // macroblocks carry a non-zero delta.
+  // With YUV distortion priced, the two P pictures' macroblocks all
+  // carry a non-zero delta plus `§422e`'s one B macroblock.
   debug_inspect(
     stats.dqp_mbs,
     content=(
-      #|24
+      #|25
     ),
   )
   if h264_rc_md5(stream) == h264_rc_md5(off) {

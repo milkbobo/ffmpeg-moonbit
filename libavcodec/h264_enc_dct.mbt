@@ -46,7 +46,7 @@ fn h264_enc_quant_val(
     return 0
   }
   let mag = if coef < 0 { -coef } else { coef }
-  let v = (mag * mf + (1 << (qbits - 1))) >> qbits
+  let v = ((mag.to_int64() * mf.to_int64() + (1L << (qbits - 1))) >> qbits).to_int()
   if coef < 0 {
     -v
   } else {
@@ -328,7 +328,10 @@ fn h264_enc_fdct8_quant_res(
     if coef != 0 {
       let s = (p >> 3) | ((p & 7) << 3)
       let mag = if coef < 0 { -coef } else { coef }
-      let v = (mag * h264_enc_mf8[rem][p] + (1 << (qbits - 1))) >> qbits
+      let v = ((
+        mag.to_int64() * h264_enc_mf8[rem][p].to_int64() + (1L << (qbits - 1))
+      ) >>
+      qbits).to_int()
       levels[s] = if coef < 0 { -v } else { v }
     }
   }
@@ -394,8 +397,9 @@ fn h264_enc_luma_i8_pass(
   avail : (Int32, Int32) -> (Bool, Bool, Bool, Bool),
   fixed_modes~ : Array[Int32] = [],
   bit_depth~ : Int32 = 8,
+  matrix~ : Int32 = 0,
 ) -> Result[(Int32, Int32), String] {
-  let qmul8 = h264_build_dequant8(pps, 0, qp)
+  let qmul8 = h264_build_dequant8(pps, matrix, qp)
   let ybase = mb_y * 16 * ystride + mb_x * 16
   let mut cost = 0
   let mut cbp = 0
@@ -537,8 +541,9 @@ fn h264_enc_luma_i4_pass(
   avail : (Int32, Int32) -> (Bool, Bool, Bool),
   fixed_modes~ : Array[Int32] = [],
   bit_depth~ : Int32 = 8,
+  matrix~ : Int32 = 0,
 ) -> Result[(Int32, Int32), String] {
-  let qmul_y = h264_build_dequant4(pps, 0, qp)
+  let qmul_y = h264_build_dequant4(pps, matrix, qp)
   let ybase = mb_y * 16 * ystride + mb_x * 16
   let mut cost = 0
   let mut cbp = 0

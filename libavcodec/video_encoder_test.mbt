@@ -388,9 +388,13 @@ test "video enc: pixel format naming and High 10 through the facade" {
   assert_eq(@libavcodec.video_pixel_format(8), "yuv420p")
   assert_eq(@libavcodec.video_pixel_format(9), "yuv420p9le")
   assert_eq(@libavcodec.video_pixel_format(10), "yuv420p10le")
-  // `§420`: the facade names the 4:2:2 layouts too.
+  // `§420`: the facade names the 4:2:2 layouts too — every depth the
+  // encoder accepts (§422d), not just the High 4:2:2 pair.
   assert_eq(@libavcodec.video_pixel_format(8, chroma_format=2), "yuv422p")
+  assert_eq(@libavcodec.video_pixel_format(9, chroma_format=2), "yuv422p9le")
   assert_eq(@libavcodec.video_pixel_format(10, chroma_format=2), "yuv422p10le")
+  assert_eq(@libavcodec.video_pixel_format(12, chroma_format=2), "yuv422p12le")
+  assert_eq(@libavcodec.video_pixel_format(14, chroma_format=2), "yuv422p14le")
   // §421: 4:4:4 layout naming.
   assert_eq(@libavcodec.video_pixel_format(8, chroma_format=3), "yuv444p")
   let frames = h264h10_fixture(96, 64, 3, 10)

@@ -18,6 +18,34 @@ pub struct X264Encoder {
 pub(all) enum X264PixelFormat {
   Yuv420p
   Yuv420p10le
+  Yuv422p
+  Yuv422p10le
+  Yuv444p
+  Yuv444p10le
+  Gray8
+  Gray10le
+  /// Semi-planar 4:2:0: plane 0 luma, plane 1 interleaved U then V.
+  Nv12
+  /// Semi-planar 4:2:0 with the chroma pairs swapped (V then U).
+  Nv21
+  /// Semi-planar 4:2:2: one luma plane plus interleaved U then V.
+  Nv16
+  /// Semi-planar 4:2:2 at 10-bit little-endian.
+  Nv20le
+  /// Packed 32-bit BGRX (alpha ignored) for the `libx264rgb` encoder.
+  Bgr0
+  /// Packed 24-bit BGR for the `libx264rgb` encoder.
+  Bgr24
+  /// Packed 24-bit RGB for the `libx264rgb` encoder.
+  Rgb24
+  /// Full-range 4:2:0 (FFmpeg's deprecated `yuvj420p` alias). Same plane
+  /// layout as `Yuv420p`; the wrapper turns on VUI full-range signalling
+  /// unless `color_range` overrides it.
+  Yuvj420p
+  /// Full-range 4:2:2 (`yuvj422p`): same layout as `Yuv422p`.
+  Yuvj422p
+  /// Full-range 4:4:4 (`yuvj444p`): same layout as `Yuv444p`.
+  Yuvj444p
 } derive(Debug, Eq)
 
 ///|
@@ -31,15 +59,50 @@ fn X264PixelFormat::selector(self : X264PixelFormat) -> Int32 {
   match self {
     Yuv420p => 0
     Yuv420p10le => 1
+    Yuv422p => 2
+    Yuv422p10le => 3
+    Yuv444p => 4
+    Yuv444p10le => 5
+    Gray8 => 6
+    Gray10le => 7
+    Nv12 => 8
+    Nv21 => 9
+    Nv16 => 10
+    Nv20le => 11
+    Bgr0 => 12
+    Bgr24 => 13
+    Rgb24 => 14
+    Yuvj420p => 15
+    Yuvj422p => 16
+    Yuvj444p => 17
   }
 }
 
 ///|
-/// Bytes per luma sample of the format (1 or 2).
+/// Bytes per component of the format (1 or 2). Note that the packed RGB
+/// formats store whole pixels in one plane: size `y` with
+/// `bytes_per_pixel()`, not with this.
 pub fn X264PixelFormat::bytes_per_sample(self : X264PixelFormat) -> Int32 {
   match self {
-    Yuv420p => 1
-    Yuv420p10le => 2
+    Yuv420p | Yuv422p | Yuv444p | Gray8 => 1
+    Yuvj420p | Yuvj422p | Yuvj444p => 1
+    Yuv420p10le | Yuv422p10le | Yuv444p10le | Gray10le => 2
+    Nv12 | Nv21 | Nv16 => 1
+    Nv20le => 2
+    Bgr0 | Bgr24 | Rgb24 => 1
+  }
+}
+
+///|
+/// Bytes per pixel of plane 0: 1 for the planar and grayscale formats,
+/// 2 for the 10-bit ones (a sample spans two bytes), and 3 (Bgr24, Rgb24)
+/// or 4 (Bgr0) for the packed RGB formats. The semi-planar chroma plane
+/// holds 2 samples per pixel of `bytes_per_sample()` bytes each.
+pub fn X264PixelFormat::bytes_per_pixel(self : X264PixelFormat) -> Int32 {
+  match self {
+    Bgr24 | Rgb24 => 3
+    Bgr0 => 4
+    _ => self.bytes_per_sample()
   }
 }
 
@@ -108,6 +171,67 @@ pub fn x264_supports(codec : String, fmt : X264PixelFormat) -> Bool {
 }
 
 ///|
+/// Colour metadata values for `X264Encoder::open`, kept as the raw
+/// `AVCOL_*` / `AVCHROMA_LOC_*` integers so the wrapper's own value space
+/// (libx264.c copies these onto `x264_param_t.vui`) passes through
+/// unchanged; 0 everywhere means unspecified and leaves the field unset.
+/// The handful below are the values the tests and README reference; any
+/// other FFmpeg enumeration value (e.g. `AVCOL_TRC_ARIB_STD_B67 = 17`)
+/// passes through equally well.
+pub let x264_color_range_mpeg : Int32 = 1 // AVCOL_RANGE_MPEG
+
+///|
+pub let x264_color_range_jpeg : Int32 = 2 // AVCOL_RANGE_JPEG
+
+///|
+pub let x264_col_spc_unspecified : Int32 = 2 // AVCOL_SPC_UNSPECIFIED (0 is RGB!)
+
+///|
+pub let x264_col_spc_bt709 : Int32 = 1 // AVCOL_SPC_BT709
+
+///|
+pub let x264_col_spc_smpte170m : Int32 = 4 // AVCOL_SPC_SMPTE170M
+
+///|
+pub let x264_col_spc_bt2020nc : Int32 = 7 // AVCOL_SPC_BT2020NCL
+
+///|
+pub let x264_col_pri_bt709 : Int32 = 1 // AVCOL_PRI_BT709
+
+///|
+pub let x264_col_pri_bt2020 : Int32 = 9 // AVCOL_PRI_BT2020
+
+///|
+pub let x264_col_trc_bt709 : Int32 = 1 // AVCOL_TRC_BT709
+
+///|
+pub let x264_col_trc_smpte2084 : Int32 = 15 // AVCOL_TRC_SMPTE2084
+
+///|
+pub let x264_chroma_loc_left : Int32 = 1 // AVCHROMA_LOC_LEFT
+
+///|
+pub let x264_chroma_loc_center : Int32 = 2 // AVCHROMA_LOC_CENTER
+
+///|
+// av_get_token removes one escape layer when av_dict_parse_string reads
+// the outer dictionary. Preserve nested x264-params separators and quotes.
+fn x264_option_token(text : String) -> String {
+  let out = StringBuilder()
+  for ch in text.iter() {
+    if ch == ':' ||
+      ch == '=' ||
+      ch == '\\' ||
+      ch == '\'' ||
+      ch.is_ascii_whitespace() {
+      out.write_char('\\')
+    }
+    out.write_char(ch)
+  }
+  out.to_string()
+}
+
+///|
 /// Open an H.264 encoder.
 ///
 /// `options` reaches avcodec_open2's dictionary, so both AVCodecContext
@@ -116,6 +240,11 @@ pub fn x264_supports(codec : String, fmt : X264PixelFormat) -> Bool {
 /// key/value pairs. `global_header = true` moves SPS/PPS out of the
 /// bitstream into `extradata` (avcC; the MP4/MKV configuration record);
 /// `bitexact = true` additionally drops the x264 version SEI.
+/// Packed RGB input (`Bgr0`/`Bgr24`/`Rgb24`) goes through the separate
+/// `libx264rgb` encoder: pass `codec = "libx264rgb"`.
+/// Values are passed literally, including nested `x264-params` lists;
+/// callers do not escape the outer dictionary separators. Empty keys or
+/// values and embedded NUL characters are rejected before entering C.
 ///
 /// ```mbt nocheck
 /// let enc = X264Encoder::open(width=96, height=64, options=[
@@ -138,6 +267,22 @@ pub fn X264Encoder::open(
   global_header~ : Bool = true,
   bitexact~ : Bool = true,
   codec~ : String = "libx264",
+  /// Colour metadata passed to libx264's VUI signalling (the raw
+  /// `AVCOL_*` / `AVCHROMA_LOC_*` values; see the `x264_color_*` /
+  /// `x264_col_*` / `x264_chroma_loc_*` constants). 0 (the default) means
+  /// unspecified and leaves the field unset, so an absent value never
+  /// forces a VUI. Note that FFmpeg 9's encode core force-marks every
+  /// selected `yuvj*` format `AVCOL_RANGE_JPEG` before the wrapper runs
+  /// (encode.c ff_encode_preinit), so the YUVJ formats always signal
+  /// full-range regardless of `color_range`.
+  color_range~ : Int32 = 0,
+  /// `AVCOL_SPC_UNSPECIFIED` is 2, not 0 (0 is RGB), so the default
+  /// mirrors the wrapper's "field unset" guard; pass
+  /// `x264_col_spc_unspecified` explicitly if you want to be literal.
+  colorspace~ : Int32 = 2,
+  color_primaries~ : Int32 = 0,
+  color_trc~ : Int32 = 0,
+  chroma_sample_location~ : Int32 = 0,
   options~ : Array[(String, String)] = [],
 ) -> X264Encoder raise X264Error {
   if width <= 0 || height <= 0 {
@@ -145,7 +290,19 @@ pub fn X264Encoder::open(
   }
   let mut joined = ""
   for i, (key, value) in options {
-    joined = joined + (if i == 0 { "" } else { ":" }) + key + "=" + value
+    if key.is_empty() ||
+      value.is_empty() ||
+      key.iter().any(ch => ch.to_int() == 0) ||
+      value.iter().any(ch => ch.to_int() == 0) {
+      raise EncoderUnavailable(
+        "option keys and values must be nonempty and contain no NUL",
+      )
+    }
+    joined = joined +
+      (if i == 0 { "" } else { ":" }) +
+      x264_option_token(key) +
+      "=" +
+      x264_option_token(value)
   }
   let mut flags = 0
   if global_header {
@@ -167,6 +324,11 @@ pub fn X264Encoder::open(
     flags,
     rc_max_rate,
     rc_buffer_size,
+    color_range,
+    colorspace,
+    color_primaries,
+    color_trc,
+    chroma_sample_location,
     @utf8.encode(joined),
   )
   // Failed opens come back as a failed-open handle (see ffi.mbt).
@@ -183,6 +345,12 @@ pub fn X264Encoder::open(
 ///|
 /// Push one frame. `y`/`u`/`v` are tightly-packed planes (visible area
 /// only, row-major, `bytes_per_sample` bytes per sample, little-endian).
+/// Grayscale and the packed RGB formats (`Bgr0`/`Bgr24`/`Rgb24`, opened
+/// with `codec="libx264rgb"`) pass empty `u` and `v` buffers; the
+/// semi-planar `Nv12`/`Nv21`/`Nv16`/`Nv20le` formats pass one interleaved
+/// chroma plane of `chroma_width * chroma_height * 2` samples as `u` and
+/// an empty `v` (`Nv12` pairs are U then V, `Nv21` pairs are V then U).
+/// Packed RGB `y` planes hold `width * height * bytes_per_pixel()` bytes.
 /// Returns `false` when the encoder still has an undrained packet
 /// (avcodec's EAGAIN); the caller should drain and resend.
 /// `force_idr = true` requests an IDR picture at this frame's PTS, even
@@ -203,17 +371,20 @@ pub fn X264Encoder::send_frame(
 }
 
 ///|
-/// Enter drain mode; after this only `receive_packet` until `Eof`.
+/// Enter drain mode; after acceptance, call `receive_packet` until `Eof`.
+/// Raises `SendFailed(1)` on backpressure: receive pending packets, then
+/// retry `send_eof`. `flush` handles this retry and collects the packets.
+/// Repeated calls after drain acceptance succeed.
 pub fn X264Encoder::send_eof(self : X264Encoder) -> Unit raise X264Error {
   match x264enc_send_eof_ffi(self.h) {
-    0 | 1 => ()
+    0 => ()
     code => raise SendFailed(code)
   }
 }
 
 ///|
 /// Pull the next packet. `Again` means the encoder needs another frame
-/// (or, after `send_eof`, that nothing is ready yet); `Eof` ends the drain.
+/// until EOF is accepted; `Eof` ends the drain.
 pub fn X264Encoder::receive_packet(
   self : X264Encoder,
 ) -> X264Receive raise X264Error {
@@ -234,16 +405,28 @@ pub fn X264Encoder::receive_packet(
 }
 
 ///|
-/// Drain every remaining packet (`send_eof` + pull until `Eof`).
+/// Drain every remaining packet, receiving and retrying EOF on backpressure.
+/// Repeated calls return an empty array after draining completes.
 pub fn X264Encoder::flush(
   self : X264Encoder,
 ) -> Array[X264Packet] raise X264Error {
-  self.send_eof()
   let out : Array[X264Packet] = []
+  for ;; {
+    match x264enc_send_eof_ffi(self.h) {
+      0 => break
+      1 =>
+        match self.receive_packet() {
+          Packet(p) => out.push(p)
+          Again => raise ReceiveFailed(1)
+          Eof => return out
+        }
+      code => raise SendFailed(code)
+    }
+  }
   for ;; {
     match self.receive_packet() {
       Packet(p) => out.push(p)
-      Again => continue
+      Again => raise ReceiveFailed(1)
       Eof => break
     }
   }
@@ -313,18 +496,44 @@ pub struct X264DecFrames {
   n_frames : Int32
   width : Int32
   height : Int32
-  /// 0 = yuv420p, 1 = yuv420p10le, 2 = yuv420p9le (sink kinds).
+  /// Sink kinds: 0/1/2 = 420 at 8/10/9 bits;
+  /// 3/4 = 422 at 8/10 bits; 5/6 = 444 at 8/10 bits;
+  /// 7 = GBR planar 4:4:4 (libx264rgb keeps RGB plane order).
   kind : Int32
+  /// First-frame VUI-derived colour metadata, the raw `AVCOL_*` /
+  /// `AVCHROMA_LOC_*` values (0 = unspecified in the bitstream).
+  color_range : Int32
+  colorspace : Int32
+  color_primaries : Int32
+  color_trc : Int32
+  chroma_location : Int32
   blob : Bytes
 }
 
 ///|
 fn X264DecFrames::bps(self : X264DecFrames) -> Int32 {
-  if self.kind != 0 {
-    2
-  } else {
+  if self.kind == 0 || self.kind == 3 || self.kind == 5 || self.kind == 7 {
     1
+  } else {
+    2
   }
+}
+
+///|
+fn x264_chroma_geometry(
+  width : Int32,
+  height : Int32,
+  kind : Int32,
+) -> (Int32, Int32) {
+  let cw = if kind >= 5 { width } else { width / 2 + width % 2 }
+  let ch = if kind >= 3 { height } else { height / 2 + height % 2 }
+  (cw, ch)
+}
+
+///|
+fn X264DecFrames::chroma_bytes(self : X264DecFrames) -> Int32 {
+  let (cw, ch) = x264_chroma_geometry(self.width, self.height, self.kind)
+  cw * ch * self.bps()
 }
 
 ///|
@@ -337,8 +546,7 @@ pub fn X264DecFrames::bytes_per_sample(self : X264DecFrames) -> Int32 {
 /// One frame's packed luma plane (visible area, row-major, LE samples).
 pub fn X264DecFrames::frame_y(self : X264DecFrames, i : Int32) -> Bytes {
   let n = self.width * self.height * self.bps()
-  let base = 16 +
-    i * (n + 2 * (self.width / 2) * (self.height / 2) * self.bps())
+  let base = 36 + i * (n + 2 * self.chroma_bytes())
   self.blob[base:base + n].to_owned()
 }
 
@@ -347,8 +555,8 @@ pub fn X264DecFrames::frame_y(self : X264DecFrames, i : Int32) -> Bytes {
 pub fn X264DecFrames::frame_u(self : X264DecFrames, i : Int32) -> Bytes {
   let bps = self.bps()
   let cy = self.width * self.height * bps
-  let cc = self.width / 2 * (self.height / 2) * bps
-  let base = 16 + i * (cy + 2 * cc) + cy
+  let cc = self.chroma_bytes()
+  let base = 36 + i * (cy + 2 * cc) + cy
   self.blob[base:base + cc].to_owned()
 }
 
@@ -357,8 +565,8 @@ pub fn X264DecFrames::frame_u(self : X264DecFrames, i : Int32) -> Bytes {
 pub fn X264DecFrames::frame_v(self : X264DecFrames, i : Int32) -> Bytes {
   let bps = self.bps()
   let cy = self.width * self.height * bps
-  let cc = self.width / 2 * (self.height / 2) * bps
-  let base = 16 + i * (cy + 2 * cc) + cy + cc
+  let cc = self.chroma_bytes()
+  let base = 36 + i * (cy + 2 * cc) + cy + cc
   self.blob[base:base + cc].to_owned()
 }
 
@@ -378,25 +586,52 @@ pub fn x264_decode_annexb(stream : Bytes) -> Result[X264DecFrames, String] {
     Some(b) => b
     None => return Err("x264dec: C decoder failed on the stream")
   }
-  if blob.length() < 16 {
+  if blob.length() < 36 {
     return Err("x264dec: short blob header")
   }
   let n = x264_rd_i32(blob, 0)
   let width = x264_rd_i32(blob, 4)
   let height = x264_rd_i32(blob, 8)
   let kind = x264_rd_i32(blob, 12)
+  let color_range = x264_rd_i32(blob, 16)
+  let colorspace = x264_rd_i32(blob, 20)
+  let color_primaries = x264_rd_i32(blob, 24)
+  let color_trc = x264_rd_i32(blob, 28)
+  let chroma_location = x264_rd_i32(blob, 32)
   if width <= 0 || height <= 0 || n < 0 {
     return Err("x264dec: bad blob geometry")
   }
-  if kind != 0 && kind != 1 && kind != 2 {
+  if kind < 0 || kind > 7 {
     return Err("x264dec: unsupported pixel kind \{kind}")
   }
-  let bps = if kind == 0 { 1 } else { 2 }
-  let frame_len = width * height * bps + 2 * (width / 2) * (height / 2) * bps
-  if blob.length() != 16 + n * frame_len {
-    return Err("x264dec: blob size \{blob.length()} != 16 + \{n}x\{frame_len}")
+  let bps = if kind == 0 || kind == 3 || kind == 5 || kind == 7 {
+    1L
+  } else {
+    2L
   }
-  Ok({ n_frames: n, width, height, kind, blob, })
+  let (cw, ch) = x264_chroma_geometry(width, height, kind)
+  let payload = (blob.length() - 36).to_int64()
+  let luma_samples = width.to_int64() * height.to_int64()
+  if n == 0 || luma_samples > payload {
+    return Err("x264dec: geometry exceeds packed payload")
+  }
+  let frame_len = (luma_samples + 2L * cw.to_int64() * ch.to_int64()) * bps
+  // Compare by division before multiplying by the untrusted frame count.
+  if payload / frame_len != n.to_int64() || payload % frame_len != 0 {
+    return Err("x264dec: blob size \{blob.length()} != 36 + \{n}x\{frame_len}")
+  }
+  Ok({
+    n_frames: n,
+    width,
+    height,
+    kind,
+    color_range,
+    colorspace,
+    color_primaries,
+    color_trc,
+    chroma_location,
+    blob,
+  })
 }
 
 ///|

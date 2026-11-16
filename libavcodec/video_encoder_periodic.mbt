@@ -124,6 +124,7 @@ fn video_encode_periodic_qps(
         idr_cpb_delay~,
         recon~,
         stats~,
+        deblock=config.deblock,
       )
     } else if config.cabac {
       h264_encode_frames_cabac_qps(
@@ -148,6 +149,7 @@ fn video_encode_periodic_qps(
         stats~,
         vbv=segment_vbv,
         idr_cpb_delay~,
+        deblock=config.deblock,
       )
     } else {
       h264_encode_frames_qps(
@@ -172,6 +174,7 @@ fn video_encode_periodic_qps(
         stats~,
         vbv=segment_vbv,
         idr_cpb_delay~,
+        deblock=config.deblock,
       )
     }
     match result {

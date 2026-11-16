@@ -13605,3 +13605,39 @@ yuv444p。
 md5 843711bf73c3cfb162a019e63ae3ce45 与本仓解码器、编码 recon 三者一致；
 docker native CLI 产物与该流字节相同。门：新专项 3 项、CLI 27/27、
 video_encoder 命名断言；顺手清掉 PPSDBG / DTRACE 两处调试残留。
+
+## §423 H.264 编码器环路滤波（opt-in）——I/P/B × 双熵 × 420/422/444 × 8..14-bit（2026-11-16）
+
+接续 §422 系列（该系列只有交接文档，未入本节）。编码器此前**不做**去块滤波：
+重建与参考帧都是滤波前像素，锚点靠挑选「去块无效果」的夹具/QP 回避漂移。
+本片把解码端已钉死的 `h264_filter_mb` 直接用于编码器重建，`deblock~` opt-in
+（默认关，字节与全部旧钉值不变），批式 I/P/B、流式与 ABR/VBV 全链生效。
+
+关键语义与 bug：
+
+- **滤波基准偏移是 52，不是 0**：FFmpeg `filter_mb_dir` 用
+  `a = 52 + slice_offset - qp_bd_offset`；传 0 会让 alpha/beta 阈值塌缩成
+  近距离边条件，滤波恒无效果（首版探针 diff=0 的根因）。
+- **bS 比较的是参考图像身份**：编码器参考表无重复、无重排别名，助手里按
+  `L0 = idx*8+3`、`L1 = idx1*8+7` 合成不相交身份（`h264_bs_pair` 的交换比较
+  需要 L0/L1 不串号），等价于解码端 `ref2frm`。
+- **CABAC I/P/B 直接用解码镜像** `ctx.infos`（qp/nz/mb_type/tf8 已由写码层
+  维护）；**CAVLC I/P** 给每 MB 状态补 `qp`（扩展、AQ 感知）与 `tf8`，
+  在 `commit_plan_state`/`commit_skip` 与三个 intra 提交点写入。
+- **CAVLC B 镜像三处补齐**：编码宏块缺 picture QP（`info.qp` 默认 0）、
+  inter 残差尾巴未写 luma-8x8 标志、末态 nz 只进状态不进镜像。补前 B 帧
+  逐帧不等、P 帧全等，是定位这片的判据。
+- **门面 `frame_qps` 双写**（未提交链既有 bug）：流式编码器每接受一帧自行
+  记录 QP，keyint 批式路径又 push 一次（16 vs 8）——删掉门面重复写入。
+
+验证：新 `h264_enc_deblock_test.mbt` 8/8（IDR 三色度格式 × 双熵 recon==默认
+解码且≠skip_lf；I+P/B 序列逐帧全等；10-bit B；流式==批式且重建立滤波；门面
+转发；默认关保持滤波前）。外部仲裁 docker ffmpeg 9.0.2：96x64 qp26 五帧
+CABAC B 流默认解码零告警、显示序整包 md5 `6ed6c2ce…` 与本仓一致，
+`-skip_loop_filter all` 为 `c0c67a32…`（滤波确实生效），钉入测试。CLI 新增
+`--deblock`（24/24）。回归：idr 5/5（含上述 frame_qps 修复）、cabac 10/10、
+b 8/8、multiref 14/14、stream 8/8、c444 全族、c422_depth 4/4、h1214 5/5、
+video_encoder 7/7 等；wbtest 走 wasm-gc（wasm debug 触既有 local-count 上限）。
+
+边界：`deblock` 保持 opt-in；转正默认会改变参考像素并需要全族重钉，留作
+独立切片。

@@ -503,16 +503,19 @@ test "h264 b multiref: ffmpeg-arbitrated streams" {
     // FFmpeg-arbitrated display MD5s (docker framemd5, zero warnings;
     // CAVLC nrefs=2 and CABAC nrefs=3 both match every frame).
     let pins = if nrefs == 2 {
+      // §422e re-arbitration: the B inter 8x8 RD choice changed the four
+      // B pictures (P frames byte-identical).
       [
-        "4e4da0761a12604f40b43e6516a75390", "f396b022803fe326b1a80ca42a96c4ee", "c26fd86e823e4b81998d64320e501372",
-        "9b8e93043b03ca8dcd277f751bade16c", "1302a890f6802a2043b47f8b4fea741d", "e702f5bd7204afd97c2a200a5f680feb",
-        "f60e31bbe113fca7218a940c426f0532", "c35b3eaa5b56d23f3f7fa25870bc6283", "16766379db4fc3c0ea4072bc91d6fdac",
+        "4e4da0761a12604f40b43e6516a75390", "049f1d561f6322286d8b073f41df5e05", "c26fd86e823e4b81998d64320e501372",
+        "534dbcc819df3455a9287982bbdbbdf8", "1302a890f6802a2043b47f8b4fea741d", "2c79cf5aba3866d921253fac780b6d86",
+        "f60e31bbe113fca7218a940c426f0532", "6d8571cd2a952a7ee07186de9c53872f", "16766379db4fc3c0ea4072bc91d6fdac",
       ]
     } else {
+      // §422e re-arbitration (the four B pictures).
       [
-        "b30bf6018077f7560485b96e9a65fb11", "4367ba2603a29b17e3da4e0302159b00", "f08b818bd0f419b9f3fc8251c4abca7f",
-        "1919d4deb54c7debe237ca8951caabe7", "f17ce41c8ced0d69eea6dba44646cb01", "0f291210ee7326d3eae0a3cfd6970b20",
-        "9512c71cab2c04d8b810baa5188250d7", "f5e28d3a82f749aa4710e57a31719a9f", "57127f4d1ef8d6581ddeba4c0f2020bf",
+        "b30bf6018077f7560485b96e9a65fb11", "a59b9ce5be0cd8d19cec11942870523e", "f08b818bd0f419b9f3fc8251c4abca7f",
+        "06bac29fd7f3d86adb490f5291472f7e", "f17ce41c8ced0d69eea6dba44646cb01", "24cd6600e525c4daecc2d202e6330125",
+        "9512c71cab2c04d8b810baa5188250d7", "ac82682fce4f1b0968aff9cbf2b40038", "57127f4d1ef8d6581ddeba4c0f2020bf",
       ]
     }
     for i, f in by_display {

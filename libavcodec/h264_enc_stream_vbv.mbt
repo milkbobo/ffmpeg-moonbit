@@ -134,6 +134,9 @@ fn H264StreamEncoder::vbv_commit(
   self.vbv_fullness = trial.vbv_fullness
   self.vbv_last_bp = trial.vbv_last_bp
   self.vbv_coded = trial.vbv_coded
+  self.abr_bits = trial.abr_bits
+  self.abr_pics = trial.abr_pics
+  self.abr_qp = trial.abr_qp
   for au in trial.out {
     self.out.push(au)
   }
@@ -183,7 +186,10 @@ fn H264StreamEncoder::vbv_picture(
   } else {
     0
   }
-  let mut qp = self.qp.max(h264_rc_qp_min).min(h264_rc_qp_max)
+  // §422f: ABR (if on) proposes the starting QP; the VBV climb stacks on
+  // top and `abr_note` (called inside the accepted trial's picture step)
+  // folds the final QP and the emitted bits into the controller.
+  let mut qp = self.abr_suggest().max(h264_rc_qp_min).min(h264_rc_qp_max)
   while true {
     let trial = self.vbv_trial()
     let result = match kind {
@@ -242,7 +248,6 @@ fn H264StreamEncoder::vbv_picture(
       if filler > 0 {
         trial.out[0] = h264_enc_concat([raw, h264_enc_filler_nal(filler - 5)])
       }
-      trial.stats.frame_qps.push(qp)
       trial.stats.vbv_bits = bits.to_int64()
       if filler > 0 {
         trial.stats.vbv_fills = 1

@@ -399,6 +399,10 @@ test "hrd: MoonBit CBR stream HRD fields and CPB invariant" {
       vbv_maxrate=200000,
       vbv_bufsize=200000,
       fps=30,
+      // The B-schedule dpb_output_delay (2 per reordered picture) is
+      // covered by the B × VBV suites; this test pins the P-only HRD
+      // fields and the CPB replay.
+      b_slices=false,
       stats~,
     ) {
     Ok(s) => s

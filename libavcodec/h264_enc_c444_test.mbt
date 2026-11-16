@@ -102,6 +102,8 @@ test "h264 c444: ffmpeg-arbitrated I+P stream" {
       width=96,
       height=64,
       qp=24,
+      // Preserve the original 4x4 arbitration anchor.
+      dct8x8=false,
       chroma_format=3,
       b_slices=false,
     ) {
@@ -128,20 +130,20 @@ test "h264 c444: ffmpeg-arbitrated I+P stream" {
   assert_eq(mr_md5(dec[0].yuvp()), "843711bf73c3cfb162a019e63ae3ce45")
   assert_eq(
     mr_md5(dec[1].yuvp()),
-    "914c05ef21e1dc94f4cbd46c7b2b86eb",
+    // Re-arbitrated through x264_probe_frames after full-chroma RD pricing.
+    "4f1577f252c919ebc3f8e1b2890085fc",
     msg="P frame anchor",
   )
 }
 
 ///|
-/// §421 contract: the inter pictures are still open, so a multi-frame 4:4:4
-/// request must fail loudly instead of emitting a drifting stream.
-test "h264 c444: B schedule stays rejected" {
+/// Default B tools are now supported for all three planes.
+test "h264 c444: default B schedule accepted" {
   let frames = c444_fixture(3)
   match
     @libavcodec.h264_encode_frames(frames, width=96, height=64, chroma_format=3) {
-    Ok(_) => fail("4:4:4 with the B schedule accepted")
-    Err(_) => ()
+    Ok(_) => ()
+    Err(e) => fail(e)
   }
 }
 
@@ -184,29 +186,61 @@ test "h264 c444: cabac single IDR round trip" {
       width=96,
       height=64,
       qp=26,
+      dct8x8=false,
       chroma_format=3,
       recon~,
     ) {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let recon_dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
     Ok(d) => d
     Err(e) => fail(e)
   }
-  assert_eq(dec.length(), 1)
+  assert_eq(recon_dec.length(), 1)
+  // Second argument of `h264_decode_annexb_frames` is `skip_lf`: the local
+  // reconstruction is pre-filter, so the round-trip compares against a
+  // filter-disabled decode.
+  // The batch recon history contains only inter pictures; obtain the
+  // IDR reconstruction from its single-frame entry instead.
+  assert_eq(recon.length(), 0)
+  let first = match
+    @libavcodec.h264_encode_intra_frame_cabac(
+      frames[0].0,
+      frames[0].1,
+      frames[0].2,
+      width=96,
+      height=64,
+      qp=26,
+      chroma_format=3,
+    ) {
+    Ok(e) => e
+    Err(e) => fail(e)
+  }
+  let packed : Array[Byte] = []
+  for plane in [first.recon_y, first.recon_u, first.recon_v] {
+    for sample in plane {
+      packed.push(sample.to_byte())
+    }
+  }
+  assert_eq(
+    mr_md5(Bytes::from_array(packed[:])),
+    mr_md5(recon_dec[0].yuvp()),
+    msg="recon",
+  )
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
   let mut dump = ""
   for i = 0; i < stream.length(); i = i + 1 {
     dump = dump + (stream[i].to_int() & 0xFF).to_string() + ","
   }
   println("ARBC44C:\{dump}")
   println("C44CMD5: " + mr_md5(dec[0].yuvp()))
-  // Anchored against docker linuxserver/ffmpeg:9.0.2 with
-  // `-skip_loop_filter all`: the 4:4:4 loop filter does not run in this port
-  // yet (see AGENT_HANDOFF_2026-11-15_H264_C444.md). The entropy layer is
-  // exact — with the filter enabled ffmpeg hashes this frame as
-  // 38c33e4c86fa0ca08e672e0c524c7906.
-  assert_eq(mr_md5(dec[0].yuvp()), "b69044fda520a48a40c014c295cb861c")
+  // Anchored against docker linuxserver/ffmpeg:9.0.2 (default options, loop
+  // filter on).
+  assert_eq(mr_md5(dec[0].yuvp()), "38c33e4c86fa0ca08e672e0c524c7906")
 }
 
 ///|
@@ -237,6 +271,7 @@ test "h264 c444: ffmpeg-arbitrated stream" {
       width=96,
       height=64,
       qp=24,
+      dct8x8=false,
       chroma_format=3,
     ) {
     Ok(s) => s

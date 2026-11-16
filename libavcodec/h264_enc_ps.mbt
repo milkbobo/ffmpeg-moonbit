@@ -264,9 +264,13 @@ fn h264_enc_sps_body_high(
   r.put_bit(if crop { 1 } else { 0 })
   if crop {
     r.put_ue(0) // frame_crop_left_offset
-    r.put_ue((p.mb_width() * 16 - p.width) / 2)
+    r.put_ue(
+      (p.mb_width() * 16 - p.width) / (if chroma_format == 3 { 1 } else { 2 }),
+    )
     r.put_ue(0) // frame_crop_top_offset
-    r.put_ue((p.mb_height() * 16 - p.height) / 2)
+    r.put_ue(
+      (p.mb_height() * 16 - p.height) / (if chroma_format == 1 { 2 } else { 1 }),
+    )
   }
   match vbv {
     None => r.put_bit(0) // vui_parameters_present_flag

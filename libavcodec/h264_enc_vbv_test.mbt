@@ -566,10 +566,14 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     fd1 = fd1 + (flat[i].to_int() & 0xFF).to_string() + ","
   }
   println("FLATARB:\{fd1}")
-  if flat.length() != 2627 {
+  // §422e re-pin: the B inter 8x8 RD choice added 58 bytes (+2.2%) —
+  // the gate-through variant measured +356 (docker framemd5 confirms the
+  // stream decodes clean; the CABAC variant below kept its 4x4 winners
+  // and its pin).
+  if flat.length() != 2685 {
     fail("flat CAVLC length changed: \{flat.length()}")
   }
-  if h264_rc_md5(flat) != "5e7d290c775de7a00dbd12194001b249" {
+  if h264_rc_md5(flat) != "8ac7d74424e73c1cb4dfe8e2b0a86e9c" {
     fail("flat CAVLC bytes changed: \{h264_rc_md5(flat)}")
   }
   let flatc = match
@@ -582,10 +586,10 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     fd2 = fd2 + (flatc[i].to_int() & 0xFF).to_string() + ","
   }
   println("FLATACARB:\{fd2}")
-  if flatc.length() != 2372 {
+  if flatc.length() != 2471 {
     fail("flat CABAC length changed: \{flatc.length()}")
   }
-  if h264_rc_md5(flatc) != "65af8abcf17d3c48414f4fb861d4aec9" {
+  if h264_rc_md5(flatc) != "bd3b8b517edd8f9dd5b3cc32841edbc2" {
     fail("flat CABAC bytes changed: \{h264_rc_md5(flatc)}")
   }
   // Explicit zero parameters and a non-default init percentage (ignored
@@ -1309,8 +1313,10 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
   // Both dumps precede every pinned assertion so a stale pin cannot hide
   // the bytes from re-arbitration.
   let pins1 = [
-    "292edd53ff3434561e2e1d737c563c98", "ac522e2c0e46a0d10adaf8695b84db0e", "b54c15c267abfc146871337defa22303",
-    "d7813b5d70d37ff0d0457fbbb2a9172b", "2f621fe17403b7be316e1c799bc1d52b",
+    // §422e re-arbitration (decode order): the trial encodes the VBV
+    // solver runs now include the B inter 8x8 RD choice.
+    "292edd53ff3434561e2e1d737c563c98", "ac522e2c0e46a0d10adaf8695b84db0e", "15805750e5ce2080435b5015bd764bed",
+    "d7813b5d70d37ff0d0457fbbb2a9172b", "d93e10806a19b2f2078418f0adfcf729",
   ]
   for i, f in filtered {
     assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
@@ -1320,8 +1326,8 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "292edd53ff3434561e2e1d737c563c98", "cb8e6eb82f8e93f8eb928ffa2d9f0e03", "5b13fa282e7142df5cf420db6021a9dc",
-    "9c5984eb067b166abf616726dacc5f5f", "d464010e996871d68110d505d454bfea",
+    "292edd53ff3434561e2e1d737c563c98", "cb8e6eb82f8e93f8eb928ffa2d9f0e03", "80eadd14c10b1f3fdd818efe6a897eac",
+    "482082ef77f641a1f4dd4da21fd0984f", "c248b4969bd07b2c34f240943314387a",
   ]
   for i, f in filtered2 {
     assert_eq(h264_rc_md5(f.yuvp()), pins2[i])

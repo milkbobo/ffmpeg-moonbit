@@ -365,7 +365,9 @@ test "CLI bit-depth parses, reaches both paths, rejects bad depths" {
 fn encode_raw_stream(data : Bytes, opts : Options) -> (Bytes, Int32) raise {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height * bpp
-  let chroma = if opts.chroma_format == 2 {
+  let chroma = if opts.chroma_format == 3 {
+    luma
+  } else if opts.chroma_format == 2 {
     opts.width / 2 * opts.height * bpp
   } else {
     opts.width * opts.height / 4 * bpp
@@ -700,4 +702,64 @@ test "CLI chroma 444 option round trip" {
   assert_eq(decoded[0].width, 32)
   assert_eq(decoded[0].height, 16)
   assert_eq(decoded[0].yuvp().length(), 32 * 16 * 3)
+}
+
+///|
+/// §422d: the CLI carries `--chroma 422` together with a deep
+/// `--bit-depth` — 16-bit samples double the raw frame size, both
+/// profile families (122 at 10 bits, 244 at 12) round-trip through the
+/// decoder with full-height chroma.
+test "CLI chroma 422 depth option round trip" {
+  for (depth, plane_bytes) in [(10, 2), (12, 2)] {
+    let opts = parse_options([
+      "input.yuv", "--width", "32", "--height", "16", "--chroma", "422",
+      "--bit-depth", depth.to_string(), "--no-b-slices", "--output", "out.264",
+    ])
+    assert_eq(opts.chroma_format, 2)
+    assert_eq(opts.bit_depth, depth)
+    let frame_size = raw_frame_size(opts)
+    assert_eq(frame_size, 32 * 16 * 2 * plane_bytes)
+    let data = Bytes::make(frame_size * 2, 100)
+    for cabac in [false, true] {
+      let (stream, count) = encode_raw(data, { ..opts, cabac, })
+      assert_eq(count, 2)
+      let decoded = match @codec.h264_decode_annexb_frames(stream, false) {
+        Ok(frames) => frames
+        Err(e) => fail(e)
+      }
+      assert_eq(decoded.length(), 2)
+      assert_eq(decoded[0].width, 32)
+      assert_eq(decoded[0].height, 16)
+      assert_eq(decoded[0].yuvp().length(), 32 * 16 * 2 * plane_bytes)
+    }
+  }
+}
+
+///|
+/// `§423`: `--deblock` reaches both batch and streaming paths; the filtered
+/// references change the P/B syntax (the fixture is textured), and the two
+/// paths agree byte-for-byte.
+test "CLI deblock reaches batch and stream paths" {
+  let opts = parse_options([
+    "input.yuv", "--width", "32", "--height", "32", "--deblock", "--b-slices",
+    "--output", "out.264",
+  ])
+  assert_true(opts.deblock)
+  let frame_size = raw_frame_size(opts)
+  let raw : Array[Byte] = []
+  for f = 0; f < 5; f = f + 1 {
+    for i = 0; i < frame_size; i = i + 1 {
+      raw.push(((i * 7 + f * 13 + i / 3 * 5) & 0xFF).to_byte())
+    }
+  }
+  let data = Bytes::from_array(raw[:])
+  let off = { ..opts, deblock: false, }
+  let (batch_on, _) = encode_raw(data, opts)
+  let (batch_off, _) = encode_raw(data, off)
+  let (stream_on, stream_count) = encode_raw_stream(data, opts)
+  let (stream_off, _) = encode_raw_stream(data, off)
+  assert_eq(stream_count, 5)
+  assert_eq(stream_on, batch_on)
+  assert_eq(stream_off, batch_off)
+  assert_true(batch_on != batch_off, msg="deblock must change references")
 }

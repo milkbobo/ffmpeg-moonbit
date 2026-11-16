@@ -179,8 +179,10 @@ pub fn H264Frame::yuvp(self : H264Frame) -> Bytes {
       }
     }
   }
-  let cw = self.width >> self.chroma_hshift
-  let ch = self.height >> self.chroma_vshift
+  // Monochrome SPS cropping can leave odd visible dimensions while the
+  // decoded output still has neutral 4:2:0 planes (as FFmpeg does).
+  let cw = (self.width + (1 << self.chroma_hshift) - 1) >> self.chroma_hshift
+  let ch = (self.height + (1 << self.chroma_vshift) - 1) >> self.chroma_vshift
   let ccrop_l = self.crop_left >> self.chroma_hshift
   let ccrop_t = self.crop_top >> self.chroma_vshift
   for plane = 0; plane < 2; plane = plane + 1 {

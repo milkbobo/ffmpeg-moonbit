@@ -26,6 +26,11 @@ extern "c" fn x264enc_open_ffi(
   flags : Int32,
   rc_max_rate : Int32,
   rc_buffer_size : Int32,
+  color_range : Int32,
+  colorspace : Int32,
+  color_primaries : Int32,
+  color_trc : Int32,
+  chroma_sample_location : Int32,
   options : Bytes,
 ) -> X264EncHandle = "x264enc_open"
 
@@ -71,8 +76,11 @@ extern "c" fn x264enc_close_ffi(enc : X264EncHandle) -> Unit = "x264enc_close"
 ///|
 /// Decode a whole Annex B H.264 stream with FFmpeg's real software decoder
 /// (`x264dec_annexb` in the stub). The returned blob is
-/// `[n_frames i32][width i32][height i32][kind i32][payload...]` with
-/// `kind` 0 = yuv420p / 1 = yuv420p10le / 2 = yuv420p9le; payload per frame,
+/// `[n_frames i32][width i32][height i32][kind i32][color_range i32]
+/// [colorspace i32][color_primaries i32][color_trc i32][chroma_location i32]
+/// [payload...]` with `kind` 0/1/2 = 420 at 8/10/9 bits, 3/4 = 422 at 8/10,
+/// 5/6 = 444 at 8/10, 7 = gbrp; the five colour ints are the first frame's
+/// VUI-derived AVCOL_* / AVCHROMA_LOC_* values; payload per frame,
 /// the packed visible-area planes Y/Cb/Cr (LE samples) — exactly
 /// `H264Frame::yuvp()`'s packing. NULL means the C decode failed; the
 /// stream bytes are copied into the parser during the call (`#borrow`).

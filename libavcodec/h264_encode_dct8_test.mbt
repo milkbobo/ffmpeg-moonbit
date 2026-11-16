@@ -232,8 +232,9 @@ test "h264 enc: cabac 8x8dct P frames round-trip" {
   for s, f in filtered {
     by_display[disp[s]] = f
   }
+  // §422e re-pin: the B picture (frame 1).
   let pins = [
-    "e659929b54b1464bdfb83061e7f7d31c", "35913b9b7ebcbebfeb19b87653e22049", "323ab44d39c6f2747547be2728fba4f4",
+    "e659929b54b1464bdfb83061e7f7d31c", "dc81faf5b608b04564bc3e5a9b207ebe", "323ab44d39c6f2747547be2728fba4f4",
   ]
   for i, f in by_display {
     inspect(h264_dct8_md5(f.yuvp()), content=pins[i])
@@ -559,8 +560,9 @@ test "h264 enc: cavlc 8x8dct P frames round-trip" {
   for s, f in filtered {
     by_display[disp[s]] = f
   }
+  // §422e re-pin: the B picture (frame 1).
   let pins = [
-    "e659929b54b1464bdfb83061e7f7d31c", "034623b5ccfd19f48547a57290dc6986", "2adc3ebaba17184cac2d3f45d5369858",
+    "e659929b54b1464bdfb83061e7f7d31c", "3295396176f21bb84e4995bfda4c1e77", "2adc3ebaba17184cac2d3f45d5369858",
   ]
   for i, f in by_display {
     inspect(h264_dct8c_md5(f.yuvp()), content=pins[i])

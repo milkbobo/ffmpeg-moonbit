@@ -91,6 +91,8 @@ pub(all) struct VideoEncConfig {
   /// VBV cover the full sequence, including reordered B GOPs.
   /// Explicit forced IDRs restart this interval in the streaming encoder.
   keyint : Int32
+  /// `§423`: opt-in in-loop deblocking (batch and streaming).
+  deblock : Bool
 }
 
 ///|
@@ -120,6 +122,7 @@ pub fn VideoEncConfig::new(width~ : Int32, height~ : Int32) -> VideoEncConfig {
     multi_ref: 1,
     chroma_format: 1,
     keyint: 0,
+    deblock: false,
   }
 }
 
@@ -172,6 +175,7 @@ pub fn VideoEncoder::open(
           vbv_maxrate=config.vbv_maxrate,
           vbv_bufsize=config.vbv_bufsize,
           fps=config.fps,
+          deblock=config.deblock,
         ) {
         Ok(h264) => Ok({ codec, config, h264, })
         Err(e) => Err(e)
@@ -285,7 +289,7 @@ pub fn video_encode(
         Ok(_) => ()
         Err(e) => return Err(e)
       }
-      stats.frame_qps.push(config.qp)
+      // The stream encoder records each accepted picture's QP itself.
       for au in enc.drain() {
         output.push(au)
       }
@@ -331,6 +335,7 @@ pub fn video_encode(
           stats~,
           multi_ref=config.multi_ref,
           chroma_format=config.chroma_format,
+          deblock=config.deblock,
         )
       } else {
         h264_encode_frames(
@@ -356,6 +361,7 @@ pub fn video_encode(
           stats~,
           multi_ref=config.multi_ref,
           chroma_format=config.chroma_format,
+          deblock=config.deblock,
         )
       }
   }

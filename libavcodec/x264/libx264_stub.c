@@ -23,6 +23,7 @@
 #include "libavutil/dict.h"
 #include "libavutil/error.h"
 #include "libavutil/frame.h"
+#include "libavutil/imgutils.h"
 #include "libavutil/log.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
@@ -39,7 +40,6 @@ typedef struct {
   AVCodecContext *ctx;
   AVFrame *frame;
   AVPacket *pkt;
-  int bps; // bytes per luma sample: 1 for yuv420p, 2 for yuv420p10le
   // Open-failure state: the MoonBit toolchain's optional return for
   // external objects does not map a raw pointer to Some (verified against
   // moon 0.1.20261104), so open() ALWAYS returns a handle - on failure one
@@ -76,7 +76,7 @@ static void put_i64(uint8_t *p, int64_t v) { memcpy(p, &v, 8); }
 
 // Pixel format selector -> AVPixelFormat. Kept as an int mapping (instead of
 // passing enum values) so the MoonBit side never assumes the C enum layout.
-// 0 = yuv420p, 1 = yuv420p10le.
+// Stable selectors; independent of AVPixelFormat enum values.
 static int sel_pix_fmt(int sel, enum AVPixelFormat *out) {
   switch (sel) {
   case 0:
@@ -85,25 +85,84 @@ static int sel_pix_fmt(int sel, enum AVPixelFormat *out) {
   case 1:
     *out = AV_PIX_FMT_YUV420P10LE;
     return 0;
+  case 2:
+    *out = AV_PIX_FMT_YUV422P;
+    return 0;
+  case 3:
+    *out = AV_PIX_FMT_YUV422P10LE;
+    return 0;
+  case 4:
+    *out = AV_PIX_FMT_YUV444P;
+    return 0;
+  case 5:
+    *out = AV_PIX_FMT_YUV444P10LE;
+    return 0;
+  case 6:
+    *out = AV_PIX_FMT_GRAY8;
+    return 0;
+  case 7:
+    *out = AV_PIX_FMT_GRAY10LE;
+    return 0;
+  case 8:
+    *out = AV_PIX_FMT_NV12;
+    return 0;
+  case 9:
+    *out = AV_PIX_FMT_NV21;
+    return 0;
+  case 10:
+    *out = AV_PIX_FMT_NV16;
+    return 0;
+  case 11:
+    *out = AV_PIX_FMT_NV20LE;
+    return 0;
+  case 12:
+    *out = AV_PIX_FMT_BGR0;
+    return 0;
+  case 13:
+    *out = AV_PIX_FMT_BGR24;
+    return 0;
+  case 14:
+    *out = AV_PIX_FMT_RGB24;
+    return 0;
+  case 15:
+    *out = AV_PIX_FMT_YUVJ420P;
+    return 0;
+  case 16:
+    *out = AV_PIX_FMT_YUVJ422P;
+    return 0;
+  case 17:
+    *out = AV_PIX_FMT_YUVJ444P;
+    return 0;
   default:
     return -1;
   }
 }
 
 // flags: bit0 = AV_CODEC_FLAG_GLOBAL_HEADER, bit1 = AV_CODEC_FLAG_BITEXACT.
-// `options` is a "key=value:key=value" list applied through avcodec_open2's
+// `options` is an escaped "key=value:key=value" list (one av_get_token
+// escape layer supplied by MoonBit) applied through avcodec_open2's
 // dictionary (ctx options first, then the codec's private options: preset,
 // tune, profile, crf, g, bf, ...). `rc_max_rate` / `rc_buffer_size` map onto
 // libx264's VBV fields, which `nal-hrd=cbr` requires; zero leaves the
-// existing flat/CRF configurations untouched. Always returns a handle; on
-// failure it is a failed-open handle carrying the message (see
-// `x264enc_status`).
+// existing flat/CRF configurations untouched.
+// The five colour metadata ints are AVCOL_* / AVCHROMA_LOC_* values as
+// libavcodec stores them; each field's *_UNSPECIFIED value (0 for all but
+// colorspace, whose unspecified is 2) leaves it unset, mirroring
+// libx264.c's `!= UNSPECIFIED` guards. FFmpeg 9's encode core force-marks
+// every selected yuvj format AVCOL_RANGE_JPEG before the wrapper's private
+// init runs (encode.c ff_encode_preinit), so yuvj inputs always signal VUI
+// full-range no matter what color_range says here.
+// Always returns a handle; on failure it is a failed-open handle carrying
+// the message (see `x264enc_status`).
 MOONBIT_FFI_EXPORT
 X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
                       int32_t pix_sel, int32_t tb_num, int32_t tb_den,
                       int32_t fps_num, int32_t fps_den, int32_t bit_rate,
                       int32_t flags, int32_t rc_max_rate,
-                      int32_t rc_buffer_size, moonbit_bytes_t options) {
+                      int32_t rc_buffer_size, int32_t color_range,
+                      int32_t colorspace, int32_t color_primaries,
+                      int32_t color_trc, int32_t chroma_sample_location,
+                      moonbit_bytes_t options) {
   enum AVPixelFormat fmt;
   if (sel_pix_fmt(pix_sel, &fmt) < 0)
     return x264enc_fail("%s: bad pixel format selector", NULL);
@@ -130,8 +189,7 @@ X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
     cc->bit_rate = bit_rate;
   // FFmpeg's libx264 wrapper copies these onto
   // x264_param_t.rc.i_vbv_max_bitrate / i_vbv_buffer_size. Setting them
-  // through the wrapped context (rather than x264-params, whose colons
-  // collide with av_dict_parse_string's pair separator) is what makes
+  // through the wrapped context (rather than requiring x264-params) makes
   // `nal-hrd=cbr` produce a real CBR HRD stream.
   if (rc_max_rate > 0)
     cc->rc_max_rate = rc_max_rate;
@@ -141,10 +199,26 @@ X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
     cc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
   if (flags & 2)
     cc->flags |= AV_CODEC_FLAG_BITEXACT;
+  // Colour metadata: zero means unspecified, matching the AVCOL_*
+  // enumerations, so absent fields keep the wrapper's own defaults
+  // (libx264.c copies these onto x264_param_t.vui during X264_init).
+  if (color_range != AVCOL_RANGE_UNSPECIFIED)
+    cc->color_range = color_range;
+  // AVCOL_SPC_UNSPECIFIED is 2 (0 is RGB!), so 2 means "leave unset" and
+  // an explicit 0 still reaches the encoder as a real colourspace.
+  if (colorspace != AVCOL_SPC_UNSPECIFIED)
+    cc->colorspace = colorspace;
+  if (color_primaries != AVCOL_PRI_UNSPECIFIED)
+    cc->color_primaries = color_primaries;
+  if (color_trc != AVCOL_TRC_UNSPECIFIED)
+    cc->color_trc = color_trc;
+  if (chroma_sample_location != AVCHROMA_LOC_UNSPECIFIED)
+    cc->chroma_sample_location = chroma_sample_location;
   cc->thread_count = 1; // deterministic output: no frame/slice threading
   AVDictionary *dict = NULL;
   if (Moonbit_array_length(options) > 0 &&
       av_dict_parse_string(&dict, (const char *)options, "=", ":", 0) < 0) {
+    av_dict_free(&dict);
     avcodec_free_context(&cc);
     av_frame_free(&frame);
     av_packet_free(&pkt);
@@ -172,7 +246,6 @@ X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
   e->ctx = cc;
   e->frame = frame;
   e->pkt = pkt;
-  e->bps = pix_sel == 1 ? 2 : 1;
   return e;
 }
 
@@ -218,9 +291,11 @@ int32_t x264enc_supports(moonbit_bytes_t codec_name, int32_t pix_sel) {
   return 0;
 }
 
-// Copy tightly-packed planes (y then u then v, row-major, `bps` bytes per
-// sample) into a fresh AVFrame buffer and push it. Returns 0 ok, 1 EAGAIN,
-// -1 error. Plane lengths are validated against the opened geometry.
+// Copy tightly-packed planes into a fresh AVFrame buffer and push it.
+// Returns 0 ok, 1 EAGAIN, -1 error. Plane lengths are validated against the
+// opened geometry. Planar formats pass y/u/v separately; the semi-planar
+// NV formats pass one interleaved U(+V) plane as `u` and an empty `v`;
+// grayscale and the packed RGB formats (libx264rgb) pass empty `u` and `v`.
 MOONBIT_FFI_EXPORT
 int32_t x264enc_send_frame(X264Enc *e, int64_t pts, moonbit_bytes_t y,
                            moonbit_bytes_t u, moonbit_bytes_t v,
@@ -228,17 +303,30 @@ int32_t x264enc_send_frame(X264Enc *e, int64_t pts, moonbit_bytes_t y,
   if (!e || !e->ctx || e->failed)
     return -1;
   int w = e->ctx->width, h = e->ctx->height;
-  int cw = (w + 1) / 2, ch = (h + 1) / 2, bps = e->bps;
-  int64_t need_y = (int64_t)w * h * bps, need_c = (int64_t)cw * ch * bps;
+  const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(e->ctx->pix_fmt);
+  int ch = AV_CEIL_RSHIFT(h, desc->log2_chroma_h);
+  // Plane count comes from av_pix_fmt_count_planes, not desc->nb_components:
+  // NV formats report three components sharing two planes, and packed RGB
+  // reports three-four components on one plane.
+  int planes = av_pix_fmt_count_planes(e->ctx->pix_fmt);
+  // Row bytes straight from the descriptor math. This covers planar luma
+  // (w samples), 10-bit samples (x2 bytes), the packed NV chroma rows
+  // (cw*2 samples) and the packed RGB plane (w*3 or w*4 bytes) without
+  // per-format arithmetic here.
+  int row_y = av_image_get_linesize(e->ctx->pix_fmt, w, 0);
+  int row_c = planes == 1 ? 0 : av_image_get_linesize(e->ctx->pix_fmt, w, 1);
+  int64_t need_y = (int64_t)row_y * h;
+  int64_t need_c = planes == 1 ? 0 : (int64_t)row_c * ch;
+  int64_t need_v = planes == 3 ? need_c : 0;
   if ((int64_t)Moonbit_array_length(y) != need_y ||
       (int64_t)Moonbit_array_length(u) != need_c ||
-      (int64_t)Moonbit_array_length(v) != need_c) {
+      (int64_t)Moonbit_array_length(v) != need_v) {
     fprintf(stderr,
             "x264enc: plane size mismatch (y=%d want %lld, u=%d want %lld, "
-            "v=%d)\n",
+            "v=%d want %lld)\n",
             Moonbit_array_length(y), (long long)need_y,
             Moonbit_array_length(u), (long long)need_c,
-            Moonbit_array_length(v));
+            Moonbit_array_length(v), (long long)need_v);
     return -1;
   }
   AVFrame *f = e->frame;
@@ -259,12 +347,12 @@ int32_t x264enc_send_frame(X264Enc *e, int64_t pts, moonbit_bytes_t y,
   if (av_frame_get_buffer(f, 0) < 0)
     return -1;
   const uint8_t *srcs[3] = {y, u, v};
-  int pl_w[3] = {w, cw, cw}, pl_h[3] = {h, ch, ch};
-  for (int p = 0; p < 3; p++) {
-    int row = pl_w[p] * bps;
+  int pl_h[3] = {h, ch, ch};
+  int rows[3] = {row_y, row_c, row_c};
+  for (int p = 0; p < planes; p++) {
     for (int r = 0; r < pl_h[p]; r++)
       memcpy(f->data[p] + (ptrdiff_t)r * f->linesize[p],
-             srcs[p] + (ptrdiff_t)r * row, row);
+             srcs[p] + (ptrdiff_t)r * rows[p], rows[p]);
   }
   int ret = avcodec_send_frame(e->ctx, f);
   av_frame_unref(f); // send_frame keeps its own reference
@@ -277,12 +365,15 @@ int32_t x264enc_send_frame(X264Enc *e, int64_t pts, moonbit_bytes_t y,
   return 0;
 }
 
-// Enter drain mode. Returns 0 ok, 1 EAGAIN, -1 error.
+// Enter drain mode. Already draining is success. Returns 0 ok, 1 EAGAIN,
+// -1 error; EAGAIN means EOF was NOT accepted and must be retried.
 MOONBIT_FFI_EXPORT
 int32_t x264enc_send_eof(X264Enc *e) {
   if (!e || !e->ctx || e->failed)
     return -1;
   int ret = avcodec_send_frame(e->ctx, NULL);
+  if (ret == AVERROR_EOF)
+    return 0;
   if (ret == AVERROR(EAGAIN))
     return 1;
   if (ret < 0) {
@@ -352,7 +443,9 @@ typedef struct {
 } PlaneSink;
 
 static int sink_planes(PlaneSink *s, const AVFrame *f, int bps) {
-  int cw = (f->width + 1) / 2, ch = (f->height + 1) / 2;
+  const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(f->format);
+  int cw = AV_CEIL_RSHIFT(f->width, desc->log2_chroma_w);
+  int ch = AV_CEIL_RSHIFT(f->height, desc->log2_chroma_h);
   const uint8_t *data[3] = {f->data[0], f->data[1], f->data[2]};
   int pl_w[3] = {f->width, cw, cw}, pl_h[3] = {f->height, ch, ch};
   size_t need = s->len;
@@ -383,19 +476,28 @@ static int sink_planes(PlaneSink *s, const AVFrame *f, int bps) {
 // frame exactly like the pure port's H264Frame::yuvp(): visible area only,
 // planar Y/Cb/Cr with little-endian samples. Blob layout (LE):
 //   n_frames i32, width i32, height i32, kind i32 (0 = yuv420p, 1 =
-//   yuv420p10le, 2 = yuv420p9le), then the per-frame planes concatenated.
+//   yuv420p10le, 2 = yuv420p9le, 3/4 = yuv422p/10le,
+//   5/6 = yuv444p/10le, 7 = gbrp),
+//   color_range i32, colorspace i32, color_primaries i32, color_trc i32,
+//   chroma_location i32 (AVCOL_* / AVCHROMA_LOC_* of the first frame),
+// then the per-frame planes concatenated.
 typedef struct {
   PlaneSink sink;
   AVCodecContext *cc;
   AVFrame *frame;
   int n_frames, width, height, kind;
+  int color_range, colorspace, color_primaries, color_trc, chroma_location;
 } AnnexbDec;
 
 // Accept one decoded frame: record geometry consistency and append the
 // packed planes. Returns 0 ok, -1 failure.
 static int annexb_take(AnnexbDec *d) {
   int bps, kind;
-  if (d->frame->format == AV_PIX_FMT_YUV420P) {
+  // The deprecated full-range aliases (yuvj*) carry the same plane layout;
+  // RGB sources make x264 signal full range, so libx264rgb streams decode
+  // as yuvj420p.
+  if (d->frame->format == AV_PIX_FMT_YUV420P ||
+      d->frame->format == AV_PIX_FMT_YUVJ420P) {
     bps = 1;
     kind = 0;
   } else if (d->frame->format == AV_PIX_FMT_YUV420P10LE) {
@@ -404,6 +506,24 @@ static int annexb_take(AnnexbDec *d) {
   } else if (d->frame->format == AV_PIX_FMT_YUV420P9LE) {
     bps = 2;
     kind = 2;
+  } else if (d->frame->format == AV_PIX_FMT_YUV422P ||
+             d->frame->format == AV_PIX_FMT_YUVJ422P) {
+    bps = 1;
+    kind = 3;
+  } else if (d->frame->format == AV_PIX_FMT_YUV422P10LE) {
+    bps = 2;
+    kind = 4;
+  } else if (d->frame->format == AV_PIX_FMT_YUV444P ||
+             d->frame->format == AV_PIX_FMT_YUVJ444P) {
+    bps = 1;
+    kind = 5;
+  } else if (d->frame->format == AV_PIX_FMT_YUV444P10LE) {
+    bps = 2;
+    kind = 6;
+  } else if (d->frame->format == AV_PIX_FMT_GBRP) {
+    // x264 keeps RGB input in GBR plane order as 4:4:4 (libx264rgb).
+    bps = 1;
+    kind = 7;
   } else {
     fprintf(stderr, "x264dec: unsupported pix_fmt %d\n", d->frame->format);
     return -1;
@@ -412,6 +532,14 @@ static int annexb_take(AnnexbDec *d) {
     d->width = d->frame->width;
     d->height = d->frame->height;
     d->kind = kind;
+    // First-frame VUI-derived colour metadata. A VUI absent from the
+    // bitstream leaves these at the decoder's UNSPECIFIED defaults, which
+    // is exactly what the range/primaries tests distinguish against.
+    d->color_range = d->frame->color_range;
+    d->colorspace = d->frame->colorspace;
+    d->color_primaries = d->frame->color_primaries;
+    d->color_trc = d->frame->color_trc;
+    d->chroma_location = d->frame->chroma_location;
   } else if (d->width != d->frame->width || d->height != d->frame->height ||
              d->kind != kind) {
     fprintf(stderr, "x264dec: frame geometry changed\n");
@@ -513,15 +641,20 @@ moonbit_bytes_t x264dec_annexb(moonbit_bytes_t data) {
   }
 
   moonbit_bytes_t out = NULL;
-  if (!failed && d.n_frames > 0 && d.sink.len <= (size_t)(INT32_MAX - 16)) {
-    out = moonbit_make_bytes((int32_t)(16 + d.sink.len), 0);
+  if (!failed && d.n_frames > 0 && d.sink.len <= (size_t)(INT32_MAX - 36)) {
+    out = moonbit_make_bytes((int32_t)(36 + d.sink.len), 0);
     if (out) {
       put_i32(out + 0, d.n_frames);
       put_i32(out + 4, d.width);
       put_i32(out + 8, d.height);
       put_i32(out + 12, d.kind);
+      put_i32(out + 16, d.color_range);
+      put_i32(out + 20, d.colorspace);
+      put_i32(out + 24, d.color_primaries);
+      put_i32(out + 28, d.color_trc);
+      put_i32(out + 32, d.chroma_location);
       if (d.sink.len > 0)
-        memcpy(out + 16, d.sink.pay, d.sink.len);
+        memcpy(out + 36, d.sink.pay, d.sink.len);
     }
   }
   free(d.sink.pay);

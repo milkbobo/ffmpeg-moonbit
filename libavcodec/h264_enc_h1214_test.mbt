@@ -282,14 +282,19 @@ test "h264 h1214: ffmpeg-arbitrated streams" {
     println(md5s)
     // FFmpeg-arbitrated display MD5s (docker framemd5, zero warnings).
     let pins = if depth == 12 {
+      // §422e re-arbitration: the B inter 8x8 RD choice changed the
+      // display B frames (the CABAC 14-bit arm kept its pins).
       [
-        "7e438cb6f062cef70088bd8d0cdcdf7c", "b394e084b37f3c2fff14ac17cf2819b8", "abb9326702ca56f178c2245625d374c5",
-        "3bc42ce275750a97986cc69bb1e8237e", "55d48391588309f0e2ab8b6af0435680", "6c36f83270a899f5f6596c7ace793526",
+        "7e438cb6f062cef70088bd8d0cdcdf7c", "4bdee07d358d5fe1824344144b964e86", "abb9326702ca56f178c2245625d374c5",
+        "b239672318f8ce5cd072853a23e1a9ea", "55d48391588309f0e2ab8b6af0435680", "6c36f83270a899f5f6596c7ace793526",
       ]
     } else {
+      // §422e re-arbitration on top of `WIDE_RD_QUANT` (the display B
+      // frames changed again). docker framemd5 zero warnings, identical
+      // to the local default decode.
       [
-        "3049a1723fc9a2a0fd6d0de7ed7777cb", "dde968b4ea8484e345086a2b03b36ab0", "54f50c4cc0d1cbac438c992d074a4e3a",
-        "fbb66703efe716bcd172b6e98e45708a", "01d914a0f46640d4a7ddd9fdcb422a2f", "19c0b6089c4876f369a26feba3c9dbbe",
+        "3049a1723fc9a2a0fd6d0de7ed7777cb", "6972cddc630a0e275fc9531da7cd774c", "02e7a55e80e6f9231563cfd08898f765",
+        "79367dcc09cb952ece1ec8cc31b95abb", "60e3da44f9582755a7af6559f6d2582f", "3295547d5fe35e86ce021b85c0d685a9",
       ]
     }
     for i, f in by_display {

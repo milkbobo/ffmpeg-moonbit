@@ -26,6 +26,11 @@ priv struct H264PMbState {
   /// grid.
   mut intra_nxn : Bool
   modes : Array[Int32]
+  /// `§423`: the extended QP and the 8x8-transform flag this macroblock was
+  /// reconstructed with — the in-loop deblock's `qscale_table` and
+  /// `transform_8x8` mirror.
+  mut qp : Int32
+  mut tf8 : Bool
 }
 
 ///|
@@ -38,6 +43,8 @@ fn new_h264_p_mb_state() -> H264PMbState {
     nz: Array::make(48, 0),
     intra_nxn: false,
     modes: Array::make(16, 0),
+    qp: 0,
+    tf8: false,
   }
 }
 
@@ -216,6 +223,10 @@ priv struct H264PEncoder {
   /// `encode_p_frame_cabac` fits it against `ref_y/ref_u/ref_v`; the
   /// decoder rebuilds the same values from the slice header.
   pwt : H264PredWeight
+  /// `§423`: in-loop deblocking. On, the finished picture is filtered before
+  /// it leaves the encoder, so the reconstruction matches the decoder's
+  /// output and the next pictures predict from filtered references.
+  deblock : Bool
 }
 
 ///|
@@ -309,8 +320,14 @@ pub fn h264_encode_frames(
   /// Requires `b_slices=false`; supports `target_bytes` or VBV.
   multi_ref~ : Int32 = 1,
   /// `§420`: chroma format, 1 (4:2:0, default) or 2 (4:2:2 — the chroma
-  /// planes are `w/2 x h`, profile High 4:2:2 at 8..10 bits).
+  /// planes are `w/2 x h`; profile High 4:2:2 at 8..10 bits and Hi444PP
+  /// above, `§422d`).
   chroma_format~ : Int32 = 1,
+  /// `§423`: opt-in in-loop deblocking. The IDR, every P picture and every
+  /// B picture are filtered before they leave the encoder, so the returned
+  /// reconstructions match a conforming decoder's output and inter
+  /// prediction uses filtered references.
+  deblock~ : Bool = false,
 ) -> Result[Bytes, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
@@ -332,12 +349,6 @@ pub fn h264_encode_frames(
   // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
   // B picture, so it degrades to the I-only stream instead of erroring.
   let b_slices = b_slices && frames.length() >= 2
-  if b_slices && chroma_format == 3 {
-    // 4:4:4 B pictures are the next slice; the I+P path is byte-exact.
-    return Err(
-      "h264 enc: 4:4:4 requires b_slices=false (B pictures are not implemented yet)",
-    )
-  }
   if b_slices {
     let vbv_b = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
       if target_bytes > 0 {
@@ -376,6 +387,7 @@ pub fn h264_encode_frames(
               stats=H264EncStats::new(),
               weightp~,
               bit_depth~,
+              deblock~,
             ) {
             Ok((bytes, _)) => Ok(bytes.length())
             Err(e) => Err(e)
@@ -406,6 +418,7 @@ pub fn h264_encode_frames(
           stats~,
           weightp~,
           bit_depth~,
+          deblock~,
         ) {
         Ok((bytes, _)) => Ok(bytes)
         Err(e) => Err(e)
@@ -444,6 +457,7 @@ pub fn h264_encode_frames(
                   vbv=Some(v),
                   weightp~,
                   bit_depth~,
+                  deblock~,
                 ) {
                 Ok((_, sizes)) => Ok(sizes)
                 Err(e) => Err(e)
@@ -479,6 +493,7 @@ pub fn h264_encode_frames(
             stats~,
             weightp~,
             bit_depth~,
+            deblock~,
           ) {
           Ok((bytes, _)) => {
             stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -516,6 +531,7 @@ pub fn h264_encode_frames(
         stats~,
         weightp~,
         bit_depth~,
+        deblock~,
       ) {
       Ok((bytes, _)) => Ok(bytes)
       Err(e) => Err(e)
@@ -558,6 +574,7 @@ pub fn h264_encode_frames(
         bit_depth~,
         multi_ref~,
         chroma_format~,
+        deblock~,
       )
     None => ()
   }
@@ -589,6 +606,7 @@ pub fn h264_encode_frames(
             bit_depth~,
             multi_ref~,
             chroma_format~,
+            deblock~,
           ) {
           Ok((bytes, _)) => Ok(bytes.length())
           Err(e) => Err(e)
@@ -624,6 +642,7 @@ pub fn h264_encode_frames(
       bit_depth~,
       multi_ref~,
       chroma_format~,
+      deblock~,
     ) {
     Ok((bytes, _)) => Ok(bytes)
     Err(e) => Err(e)
@@ -657,6 +676,8 @@ fn h264_encode_frames_vbv(
   bit_depth~ : Int32 = 8,
   multi_ref~ : Int32 = 1,
   chroma_format~ : Int32 = 1,
+  /// `§423`: in-loop deblocking (see `h264_encode_frames`).
+  deblock~ : Bool = false,
 ) -> Result[Bytes, String] {
   let n = frames.length()
   let (qps, sizes) = match
@@ -683,6 +704,7 @@ fn h264_encode_frames_vbv(
           bit_depth~,
           multi_ref~,
           chroma_format~,
+          deblock~,
         ) {
         Ok((_, sizes)) => Ok(sizes)
         Err(e) => Err(e)
@@ -718,6 +740,7 @@ fn h264_encode_frames_vbv(
       bit_depth~,
       multi_ref~,
       chroma_format~,
+      deblock~,
     ) {
     Ok((bytes, _)) => {
       stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -898,6 +921,8 @@ fn h264_encode_frames_qps(
   multi_ref~ : Int32 = 1,
   /// `§420`: chroma format (see `h264_encode_frames`).
   chroma_format~ : Int32 = 1,
+  /// `§423`: in-loop deblocking for the IDR and every P picture.
+  deblock~ : Bool = false,
 ) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
@@ -921,6 +946,7 @@ fn h264_encode_frames_qps(
       idr_cpb_delay~,
       multi_ref~,
       chroma_format~,
+      deblock~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
@@ -940,6 +966,7 @@ fn h264_encode_frames_qps(
   let pheight = mb_height * 16
   let chroma_plane_h = if chroma_format == 1 { pheight / 2 } else { pheight }
   let chroma_plane_w = if chroma_format == 3 { width } else { width / 2 }
+  let chroma_visible_h = if chroma_format == 1 { height / 2 } else { height }
   let ps = new_h264_param_sets()
   match
     ff_h264_decode_seq_parameter_set(
@@ -1045,7 +1072,7 @@ fn h264_encode_frames_qps(
       src_u: h264_enc_load_plane(
         u,
         chroma_plane_w,
-        chroma_plane_h,
+        chroma_visible_h,
         cstride,
         chroma_plane_h,
         bit_depth~,
@@ -1053,7 +1080,7 @@ fn h264_encode_frames_qps(
       src_v: h264_enc_load_plane(
         v,
         chroma_plane_w,
-        chroma_plane_h,
+        chroma_visible_h,
         cstride,
         chroma_plane_h,
         bit_depth~,
@@ -1098,6 +1125,7 @@ fn h264_encode_frames_qps(
       intra4x4_in_b: false,
       weightp,
       pwt: new_h264_pred_weight(),
+      deblock,
     }
     // frame_num increments per reference frame: the IDR carries 0.
     let nal = match enc.encode_p_frame(f, intra_in_p) {
@@ -1127,7 +1155,7 @@ fn h264_encode_frames_qps(
         ystride,
         cstride,
         bit_depth~,
-        chroma_h=chroma_plane_h,
+        chroma_h=chroma_visible_h,
         chroma_w=chroma_plane_w,
       ),
     )
@@ -1502,6 +1530,24 @@ fn H264PEncoder::encode_p_frame(
     r.put_ue(skip_run)
   }
   r.trailing_bits()
+  // `§423`: filter the finished picture in place. The syntax is already
+  // written (the filter changes no entropy state), but everything that reads
+  // `rec_*` afterwards — the recon history and the next picture's reference —
+  // must see the filtered pixels.
+  if self.deblock {
+    h264_enc_deblock_picture(
+      self.rec_y,
+      self.rec_u,
+      self.rec_v,
+      self.ystride,
+      self.cstride,
+      self.mb_width,
+      self.mb_height,
+      h264_enc_infos_from_p(self.states),
+      self.pps,
+      self.p.bit_depth,
+    )
+  }
   Ok(h264_enc_nal(r, 3, 1))
 }
 
@@ -1735,7 +1781,7 @@ fn H264PEncoder::eval_plan(
   mb_y : Int32,
   plan : H264PPlan,
   qp : Int32,
-) -> (Int32, Int32) {
+) -> (Int64, Int32) {
   for i = 0; i < 32; i = i + 1 {
     self.cur_mv[i] = 0
   }
@@ -1918,40 +1964,33 @@ fn H264PEncoder::me_fixed_ssd(
   mb_y : Int32,
   mvx : Int32,
   mvy : Int32,
-) -> Int32 {
+) -> Int64 {
   self.mc_into_rec(mb_x, mb_y, mvx, mvy, 0, 0, 16, 16)
   self.reconstruction_ssd(mb_x, mb_y)
 }
 
 ///|
-/// All 384 YUV420 samples participate in mode decisions. At 10 bits the
-/// maximum sum is 384 * 1023^2, which fits Int32; RD scales it in Int64.
+/// All planes participate. At 12/14 bits the sum can exceed Int32;
+/// retain Int64 from the squared differences through RD comparison.
 fn H264PEncoder::reconstruction_ssd(
   self : H264PEncoder,
   mb_x : Int32,
   mb_y : Int32,
-) -> Int32 {
+) -> Int64 {
   let ybase = mb_y * 16 * self.ystride + mb_x * 16
-  let mut ssd = 0
-  for row = 0; row < 16; row = row + 1 {
-    for col = 0; col < 16; col = col + 1 {
-      let d = self.src_y[ybase + row * self.ystride + col] -
-        self.rec_y[ybase + row * self.ystride + col]
-      ssd = ssd + d * d
-    }
-  }
-  let cbase = mb_y *
-    (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
-    self.cstride +
-    mb_x * 8
+  let mut ssd = h264_enc_plane_ssd(
+    self.src_y,
+    self.rec_y,
+    ybase,
+    self.ystride,
+    16,
+    16,
+  )
+  let cw = if self.pps.chroma_format == 3 { 16 } else { 8 }
+  let ch = if self.pps.chroma_format == 1 { 8 } else { 16 }
+  let cbase = mb_y * ch * self.cstride + mb_x * cw
   for (src, rec) in [(self.src_u, self.rec_u), (self.src_v, self.rec_v)] {
-    for row in 0..<8 {
-      for col in 0..<8 {
-        let i = cbase + row * self.cstride + col
-        let d = src[i] - rec[i]
-        ssd += d * d
-      }
-    }
+    ssd += h264_enc_plane_ssd(src, rec, cbase, self.cstride, cw, ch)
   }
   ssd
 }
@@ -2124,16 +2163,15 @@ fn H264PEncoder::decide_plan(
   allow_intra : Bool,
 ) -> H264PPlan {
   let qp = self.mb_qp
-  // The 4:4:4 intra fallbacks still predict through the 4:2:0/4:2:2 chroma
-  // helpers; keep the inter candidates only until they get three-plane twins.
+  // I8 has a three-plane replay; I16 still uses subsampled chroma helpers.
+  let allow_i8 = allow_intra
   let allow_intra = allow_intra && self.pps.chroma_format != 3
   // Int64 throughout: a macroblock's SSD reaches ~1.7e7 and the 2^10
   // scaling pushes the cost past 2^31, where Int (32-bit) wraps negative
   // and makes every high-distortion Skip look like the cheapest candidate.
   let lam = h264_rd_lambda(qp).to_int64()
   let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
-  let mut best_cost = self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy).to_int64() *
-    1024L
+  let mut best_cost = self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy) * 1024L
   let mut plan = Skip
   // `§415` multi-reference: the macroblock-level reference is chosen by
   // the 16x16 motion SAD plus both chroma planes over the history; every
@@ -2167,7 +2205,7 @@ fn H264PEncoder::decide_plan(
   let (x16, y16, _) = self.me_part(mb_x, mb_y, 0, 0, 16, 16)
   let p16 = Part16x16(x16, y16)
   let (ssd16, bits16) = self.eval_plan(mb_x, mb_y, p16, qp)
-  let c16 = ssd16.to_int64() * 1024L + lam * bits16.to_int64()
+  let c16 = ssd16 * 1024L + lam * bits16.to_int64()
   if c16 < best_cost {
     best_cost = c16
     plan = p16
@@ -2176,7 +2214,7 @@ fn H264PEncoder::decide_plan(
   let (bx, by, _) = self.me_part(mb_x, mb_y, 0, 8, 16, 8)
   let p168 = Part16x8(tx, ty, bx, by)
   let (ssd168, bits168) = self.eval_plan(mb_x, mb_y, p168, qp)
-  let c168 = ssd168.to_int64() * 1024L + lam * bits168.to_int64()
+  let c168 = ssd168 * 1024L + lam * bits168.to_int64()
   if c168 < best_cost {
     best_cost = c168
     plan = p168
@@ -2185,7 +2223,7 @@ fn H264PEncoder::decide_plan(
   let (rx, ry, _) = self.me_part(mb_x, mb_y, 8, 0, 8, 16)
   let p816 = Part8x16(lx, ly, rx, ry)
   let (ssd816, bits816) = self.eval_plan(mb_x, mb_y, p816, qp)
-  let c816 = ssd816.to_int64() * 1024L + lam * bits816.to_int64()
+  let c816 = ssd816 * 1024L + lam * bits816.to_int64()
   if c816 < best_cost {
     best_cost = c816
     plan = p816
@@ -2229,7 +2267,7 @@ fn H264PEncoder::decide_plan(
   }
   let p88 = Part8x8(subs[0], subs[1], subs[2], subs[3], mvs)
   let (ssd88, bits88) = self.eval_plan(mb_x, mb_y, p88, qp)
-  let c88 = ssd88.to_int64() * 1024L + lam * bits88.to_int64()
+  let c88 = ssd88 * 1024L + lam * bits88.to_int64()
   if c88 < best_cost {
     best_cost = c88
     plan = p88
@@ -2250,7 +2288,7 @@ fn H264PEncoder::decide_plan(
         let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
         let pi16 = I16(sig, eff, chroma_mode)
         let (ssd16x, bits16x) = self.eval_plan(mb_x, mb_y, pi16, qp)
-        let c16x = ssd16x.to_int64() * 1024L + lam * bits16x.to_int64()
+        let c16x = ssd16x * 1024L + lam * bits16x.to_int64()
         if c16x < best_cost {
           best_cost = c16x
           plan = pi16
@@ -2265,7 +2303,7 @@ fn H264PEncoder::decide_plan(
   // its own reconstruction); `eval_plan` then replays those modes and
   // prices the plan like every other candidate. Added after I16x16, so
   // ties stay with the cheaper-to-signal 16x16 form.
-  if allow_intra && self.dct8x8 {
+  if allow_i8 && self.dct8x8 {
     let scratch_store : Array[Int32] = Array::make(256, 0)
     let scratch_modes : Array[Int32] = Array::make(16, 0)
     let scratch_mb : Array[Int32] = Array::make(768, 0)
@@ -2276,11 +2314,12 @@ fn H264PEncoder::decide_plan(
         mb_x,
         mb_y,
         self.pps,
-        qp,
+        self.p.qp_ext(qp),
         scratch_store,
         scratch_modes,
         scratch_mb,
         h264_enc_i8_avail(mb_x, mb_y, self.mb_width),
+        bit_depth=self.p.bit_depth,
       )
       is Ok(_) {
       // Grid cells 0/2/8/10 hold the four blocks' signalled modes.
@@ -2294,10 +2333,14 @@ fn H264PEncoder::decide_plan(
         (if self.pps.chroma_format == 2 { 16 } else { 8 }) *
         self.cstride +
         mb_x * 8
-      let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
+      let chroma_mode = if self.pps.chroma_format == 3 {
+        0
+      } else {
+        self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
+      }
       let pi8 = I8(raw_modes, chroma_mode)
       let (ssd8x, bits8x) = self.eval_plan(mb_x, mb_y, pi8, qp)
-      let c8x = ssd8x.to_int64() * 1024L + lam * bits8x.to_int64()
+      let c8x = ssd8x * 1024L + lam * bits8x.to_int64()
       if c8x < best_cost {
         best_cost = c8x
         plan = pi8
@@ -2339,7 +2382,7 @@ fn H264PEncoder::decide_plan(
       let chroma_mode = self.pick_chroma(cbase, mb_y > 0, mb_x > 0)
       let pi4 = I4(raw_modes, chroma_mode)
       let (ssd4x, bits4x) = self.eval_plan(mb_x, mb_y, pi4, qp)
-      let c4x = ssd4x.to_int64() * 1024L + lam * bits4x.to_int64()
+      let c4x = ssd4x * 1024L + lam * bits4x.to_int64()
       if c4x < best_cost {
         best_cost = c4x
         plan = pi4
@@ -2633,6 +2676,8 @@ fn H264PEncoder::commit_skip(
   for i = 0; i < 48; i = i + 1 {
     st.nz[i] = 0
   }
+  st.tf8 = false
+  st.qp = self.p.qp_ext(self.mb_qp)
   // Reconstruction: MC straight into the reconstruction planes.
   let mb_x = mb_idx % self.mb_width
   let mb_y = mb_idx / self.mb_width
@@ -3016,7 +3061,10 @@ fn H264PEncoder::mc_plan(
   match plan {
     Skip => ()
     I16(_, eff, cm) => self.predict_i16_planes(mb_x, mb_y, eff, cm)
-    I8(_, cm) => self.predict_intra_chroma(mb_x, mb_y, cm)
+    I8(_, cm) =>
+      if self.pps.chroma_format != 3 {
+        self.predict_intra_chroma(mb_x, mb_y, cm)
+      }
     I4(_, cm) => self.predict_intra_chroma(mb_x, mb_y, cm)
     Part16x16(x, y) => self.mc_into_rec(mb_x, mb_y, x, y, 0, 0, 16, 16)
     Part16x8(tx, ty, bx, by) => {
@@ -3087,9 +3135,7 @@ fn H264PEncoder::code_mb_residuals(
   }
   let is_intra = is_i16 || is_i8 || is_i4
   let dct8 = is_i8 || h264_p_dct8x8_allowed(self.dct8x8, plan)
-  // The 4:4:4 inter path always codes 4x4 (its three-plane residual has no
-  // 8x8 form yet), so the signalled transform flag must stay 0.
-  let dct8_signal = if self.pps.chroma_format == 3 { false } else { dct8 }
+  let dct8_signal = dct8
   for i = 0; i < 48; i = i + 1 {
     self.cur_nz[i] = if is_intra { 0 } else { self.states[mb_idx0].nz[i] }
   }
@@ -3190,6 +3236,37 @@ fn H264PEncoder::code_mb_residuals(
         self.cur_nz[g] = i16_ac_nz[g]
       }
     }
+  } else if is_i8 && self.pps.chroma_format == 3 {
+    let raw_modes = match plan {
+      I8(m, _) => m
+      _ => abort("I8 plan expected")
+    }
+    let qps = [
+      qp,
+      h264_get_chroma_qp(self.pps, 0, qp, bit_depth~),
+      h264_get_chroma_qp(self.pps, 1, qp, bit_depth~),
+    ]
+    luma_cbp = match
+      h264_enc_i8444_pass(
+        [self.src_y, self.src_u, self.src_v],
+        [self.rec_y, self.rec_u, self.rec_v],
+        self.ystride,
+        mb_x,
+        mb_y,
+        self.mb_width,
+        self.pps,
+        qps,
+        planes_444,
+        Array::make(16, 0),
+        bit_depth,
+        fixed_modes=raw_modes,
+      ) {
+      Ok(v) => v
+      Err(e) => abort(e)
+    }
+    for i in 0..<48 {
+      self.cur_nz[i] = 0
+    }
   } else if is_i8 {
     // Intra 8x8 (I_NxN + transform_size_8x8_flag): the shared sequential
     // pass re-predicts each block from the plan's modes, quantises,
@@ -3257,6 +3334,61 @@ fn H264PEncoder::code_mb_residuals(
         }
       }
       self.cur_nz[g] = total
+    }
+  } else if self.pps.chroma_format == 3 && dct8 {
+    let plane_qp = [
+      qp,
+      h264_get_chroma_qp(self.pps, 0, qp, bit_depth~),
+      h264_get_chroma_qp(self.pps, 1, qp, bit_depth~),
+    ]
+    for p in 0..<3 {
+      let src = if p == 0 {
+        self.src_y
+      } else if p == 1 {
+        self.src_u
+      } else {
+        self.src_v
+      }
+      let rec = if p == 0 {
+        self.rec_y
+      } else if p == 1 {
+        self.rec_u
+      } else {
+        self.rec_v
+      }
+      let stride = if p == 0 { self.ystride } else { self.cstride }
+      let qmul = h264_build_dequant8(self.pps, 3 + p, plane_qp[p])
+      for g in 0..<16 {
+        self.cur_nz[16 * p + g] = 0
+      }
+      for i8 in 0..<4 {
+        let off = (mb_y * 16 + i8 / 2 * 8) * stride + mb_x * 16 + i8 % 2 * 8
+        let res = Array::make(64, 0)
+        for row in 0..<8 {
+          for col in 0..<8 {
+            res[row * 8 + col] = src[off + row * stride + col] -
+              rec[off + row * stride + col]
+          }
+        }
+        let levels = h264_enc_fdct8_quant_res(res, 0, plane_qp[p])
+        let bo = 256 * p + 64 * i8
+        let mut total = 0
+        for s in 0..<64 {
+          planes_444[bo + s] = levels[s]
+          if levels[s] != 0 {
+            total += 1
+            mb[bo + s] = h264_enc_dequant_level(levels[s], qmul[s], bit_depth~)
+          }
+        }
+        if total != 0 {
+          luma_cbp = luma_cbp | (1 << i8)
+          if total == 1 && mb[bo] != 0 {
+            h264_idct8_dc_add(rec, off, stride, mb, bo, bit_depth~)
+          } else {
+            h264_idct8_add(rec, off, stride, mb, bo, bit_depth~)
+          }
+        }
+      }
     }
   } else if self.pps.chroma_format == 3 {
     // 4:4:4: three luma-shaped planes, one shared 4-bit cbp. Reconstruction
@@ -3664,7 +3796,7 @@ fn H264PEncoder::code_mb_residuals(
       }
     }
   }
-  if cf == 3 && !is_intra {
+  if cf == 3 && !is_intra && !dct8_signal {
     // 4:4:4: the chroma planes replay the luma 4x4 inter reconstruction
     // (levels at 256*p, counts at 16*p).
     for p = 1; p < 3; p = p + 1 {
@@ -3767,9 +3899,17 @@ fn H264PEncoder::write_mb_syntax(
           r.put(if mode > predicted { mode - 1 } else { mode }, 3)
         }
       }
-      r.put_ue(chroma_mode)
+      if self.pps.chroma_format != 3 {
+        r.put_ue(chroma_mode)
+      }
       let cbp = coded.luma_cbp | (coded.chroma_c_cbp << 4)
-      r.put_ue(h264_enc_cbp_golomb(cbp))
+      r.put_ue(
+        if self.pps.chroma_format == 3 {
+          h264_enc_cbp_golomb_gray(cbp)
+        } else {
+          h264_enc_cbp_golomb(cbp)
+        },
+      )
       if cbp != 0 {
         r.put_se(self.mb_dqp) // mb_qp_delta
         self.prev_qp = self.mb_qp
@@ -3777,7 +3917,9 @@ fn H264PEncoder::write_mb_syntax(
           self.stats.dqp_mbs += 1
         }
       }
-      self.write_luma8_cavlc(r, mb_idx, mb_x, mb_y, coded)
+      for p in 0..<(if self.pps.chroma_format == 3 { 3 } else { 1 }) {
+        self.write_luma8_cavlc(r, mb_idx, mb_x, mb_y, coded, plane=p)
+      }
     }
     I4(raw_modes, chroma_mode) => {
       // Intra_NxN in a P slice: mb_type 5 (the I-slice intra table's 0
@@ -3999,6 +4141,10 @@ fn H264PEncoder::write_mb_syntax(
     if cf3 {
       // 4:4:4: three luma-shaped planes, each 4x4 list with its own counts.
       for p = 0; p < 3; p = p + 1 {
+        if coded.dct8 {
+          self.write_luma8_cavlc(r, mb_idx, mb_x, mb_y, coded, plane=p)
+          continue
+        }
         for i8 = 0; i8 < 4; i8 = i8 + 1 {
           if (cbp & (1 << i8)) != 0 {
             for i4 = 0; i4 < 4; i4 = i4 + 1 {
@@ -4095,18 +4241,27 @@ fn H264PEncoder::write_luma8_cavlc(
   mb_x : Int32,
   mb_y : Int32,
   coded : H264PMbCode,
+  plane~ : Int32 = 0,
 ) -> Unit {
+  let base = 16 * plane
+  let store = if self.pps.chroma_format == 3 {
+    coded.planes_444
+  } else {
+    coded.luma8_store
+  }
   for q = 0; q < 4; q = q + 1 {
     if (coded.luma_cbp & (1 << q)) != 0 {
       for sub = 0; sub < 4; sub = sub + 1 {
         let index = 4 * q + sub
         let gx = h264_luma_block_x[index]
         let gy = h264_luma_block_y[index]
-        let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy)
-        let view = h264_cavlc8_sub_view(coded.luma8_store, q, sub)
-        self.cur_nz[gy * 4 + gx] = h264_enc_write_residual(r, view, 16, nc)
+        let nc = self.nc_luma(mb_idx, mb_x, mb_y, gx, gy, base~)
+        let view = h264_cavlc8_sub_view(store, 4 * plane + q, sub)
+        self.cur_nz[base + gy * 4 + gx] = h264_enc_write_residual(
+          r, view, 16, nc,
+        )
       }
-      let leader = h264_luma_block_grid[4 * q]
+      let leader = base + h264_luma_block_grid[4 * q]
       self.cur_nz[leader] = self.cur_nz[leader] +
         self.cur_nz[leader + 1] +
         self.cur_nz[leader + 4] +
@@ -4169,6 +4324,9 @@ fn H264PEncoder::commit_plan_state(
   self : H264PEncoder,
   mb_idx : Int32,
   plan : H264PPlan,
+  /// `§423`: the winning residual used the 8x8 transform (inter 8x8 DCT or
+  /// Intra 8x8). The in-loop deblock skips the odd internal edges then.
+  dct8~ : Bool = false,
 ) -> Unit {
   let st = self.states[mb_idx]
   for i = 0; i < 16; i = i + 1 {
@@ -4206,6 +4364,8 @@ fn H264PEncoder::commit_plan_state(
     }
     _ => st.intra_nxn = false
   }
+  st.qp = self.p.qp_ext(self.mb_qp)
+  st.tf8 = dct8
 }
 
 ///|
@@ -4230,7 +4390,7 @@ fn H264PEncoder::write_coded_mb(
   }
   self.write_mb_syntax(mb_x, mb_y, plan, coded, r)
   let mb_idx = mb_y * self.mb_width + mb_x
-  self.commit_plan_state(mb_idx, plan)
+  self.commit_plan_state(mb_idx, plan, dct8=coded.dct8)
   Ok(())
 }
 
@@ -4257,10 +4417,11 @@ fn H264PEncoder::nc_block0(
   mb_idx : Int32,
   mb_x : Int32,
   mb_y : Int32,
+  base~ : Int32 = 0,
 ) -> Int32 {
-  let left = if mb_x > 0 { self.states[mb_idx - 1].nz[3] } else { 64 }
+  let left = if mb_x > 0 { self.states[mb_idx - 1].nz[base + 3] } else { 64 }
   let top = if mb_y > 0 {
-    self.states[mb_idx - self.mb_width].nz[12]
+    self.states[mb_idx - self.mb_width].nz[base + 12]
   } else {
     64
   }

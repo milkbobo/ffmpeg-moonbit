@@ -22,9 +22,8 @@ priv struct Options {
   intra4x4_in_b : Bool
   /// `§410`: explicit P weighted prediction (opt-in).
   weightp : Bool
-  /// `§412`: sample bit depth (8 / 9 / 10). Above 8 the input is planar
-  /// little-endian 16-bit samples (`yuv420p10le` layout) and the parameter
-  /// sets switch to High 10 (profile_idc 110).
+  /// Sample bit depth (8 / 9 / 10 / 12 / 14). Above 8 the input uses
+  /// planar little-endian 16-bit samples; profile follows depth and chroma.
   bit_depth : Int32
   /// `§414`: selected codec (the facade's `VideoCodec`; only `h264`
   /// exists today, so the flag's value space is "h264").
@@ -32,9 +31,11 @@ priv struct Options {
   /// `§415`: P-slice multi-reference history depth (1 = single reference;
   /// `§418` extends 2..=16 to the B schedule).
   multi_ref : Int32
-  /// `§420`: chroma format, 420 (default) or 422.
+  /// Chroma format, 420 (default), 422, or 444.
   chroma_format : Int32
   keyint : Int32
+  /// `§423`: in-loop deblocking (batch and streaming).
+  deblock : Bool
 }
 
 ///|
@@ -58,6 +59,7 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--intra-in-b"
       | "--intra4x4-in-b"
       | "--weightp"
+      | "--deblock"
       | "--no-cabac"
       | "--no-cabac-rd"
       | "--no-dct8x8"
@@ -238,6 +240,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     multi_ref,
     chroma_format,
     keyint,
+    deblock: values.contains("--deblock"),
   }
 }
 
@@ -311,6 +314,7 @@ fn video_config(opts : Options) -> @codec.VideoEncConfig {
     vbv_maxrate: opts.maxrate,
     vbv_bufsize: opts.bufsize,
     fps: opts.fps,
+    deblock: opts.deblock,
   }
 }
 

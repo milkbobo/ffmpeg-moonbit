@@ -6,10 +6,10 @@ fn main raise {
       "usage: encode-h264 input.yuv --width W --height H --output out.264",
     )
     println(
-      "  8-bit planar YUV420P, or 9/10-bit yuv420p9le/yuv420p10le with --bit-depth",
+      "  planar YUV: --chroma 420|422|444 (default 420); samples above 8 bits are 16-bit little-endian",
     )
     println(
-      "  [--qp 0..51] [--bit-depth 8|9|10] [--cabac] [--aq] [--aq-strength 0..6] [--aud] [--target-bytes N]",
+      "  [--qp 0..51] [--bit-depth 8|9|10|12|14] [--cabac] [--aq] [--aq-strength 0..6] [--aud] [--target-bytes N]",
     )
     println("  [--vbv-maxrate bits/s --vbv-bufsize bits --fps N]")
     println(
@@ -37,9 +37,7 @@ fn main raise {
       "  [--no-weightp] disable explicit weighted P prediction (default on)",
     )
     println("  [--codec h264] codec selector (§414 facade; h264 only today)")
-    println(
-      "  [--multi-ref N] P-slice reference history 1..16 (needs --no-b-slices)",
-    )
+    println("  [--multi-ref N] reference history 1..16 (P and B schedules)")
     println("  [--keyint N] periodic IDR in display frames, 0 disables")
     return
   }

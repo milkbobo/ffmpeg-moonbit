@@ -36,7 +36,7 @@ pub struct H264StreamEncoder {
   weightp : Bool
   /// `§412`/`§419`: luma/chroma bit depth (8 / 9 / 10 / 12 / 14).
   bit_depth : Int32
-  /// `§420`: chroma format 1 (4:2:0) or 2 (4:2:2).
+  /// Chroma format 1 (4:2:0), 2 (4:2:2), or 3 (I/P 4:4:4).
   chroma_format : Int32
   aud : Bool
   aq : Bool
@@ -89,6 +89,16 @@ pub struct H264StreamEncoder {
   priv mut vbv_fullness : Int32
   priv mut vbv_last_bp : Int32
   priv mut vbv_coded : Int32
+  /// `§422f` streaming ABR: target bits per second (0 = off) and the
+  /// controller state — the coded-bit total, the picture count and the
+  /// working QP (the accepted picture's final QP, so VBV climbs carry).
+  priv abr_rate : Int64
+  priv abr_fps : Int32
+  priv mut abr_bits : Int64
+  priv mut abr_pics : Int32
+  priv mut abr_qp : Int32
+  /// `§423`: in-loop deblocking for every picture (see `open`).
+  deblock : Bool
 }
 
 ///|
@@ -154,7 +164,9 @@ pub fn H264StreamEncoder::open(
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
   stats~ : H264EncStats = H264EncStats::new(),
-  /// `§420`: chroma format, 1 (4:2:0, default) or 2 (4:2:2).
+  /// Chroma format, 1 (4:2:0, default), 2 (4:2:2), or 3 (4:4:4).
+  /// 4:4:4 B slices support inter partitions and I4/I8/I16 candidates.
+  /// `dct8x8` enables I8 and eligible inter 8x8 transforms for 4:4:4 B slices.
   chroma_format~ : Int32 = 1,
   /// Online VBV. Rejected emitting pushes leave encoder state intact;
   /// an odd B input is buffered until its future P arrives or finish.
@@ -162,11 +174,32 @@ pub fn H264StreamEncoder::open(
   vbv_bufsize~ : Int32 = 0,
   fps~ : Int32 = 0,
   vbv_init~ : Int32 = 90,
+  /// `§422f` streaming ABR: average bits per second to track. Unlike the
+  /// batch `target_bytes` (a two-pass whole-sequence budget) this is a
+  /// single-pass controller — every picture's QP starts from the
+  /// cumulative deviation against `bitrate / fps` and the VBV climb (if
+  /// any) stacks on top. Requires `fps > 0`; without it the QP stays at
+  /// the caller's flat value (byte-identical to the pre-`§422f` streams).
+  target_bitrate~ : Int32 = 0,
+  /// `§423`: opt-in in-loop deblocking for every pushed picture; the
+  /// reconstruction history and the drained recons carry filtered pixels.
+  deblock~ : Bool = false,
 ) -> Result[H264StreamEncoder, String] {
   if vbv_maxrate < 0 || vbv_bufsize < 0 || fps < 0 {
     return Err("h264 enc: streaming VBV parameters must be nonnegative")
   }
-  let vbv = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
+  if target_bitrate < 0 {
+    return Err("h264 enc: target_bitrate must be nonnegative")
+  }
+  if target_bitrate > 0 && fps <= 0 {
+    return Err("h264 enc: streaming ABR needs fps > 0")
+  }
+  // fps alone configures nothing: it either paces a VBV or the ABR
+  // controller, and a silent no-op would hide a caller's mistake.
+  if fps > 0 && vbv_maxrate == 0 && vbv_bufsize == 0 && target_bitrate == 0 {
+    return Err("h264 enc: fps requires VBV or target_bitrate")
+  }
+  let vbv = if vbv_maxrate > 0 || vbv_bufsize > 0 {
     let v = match h264_vbv_new(vbv_maxrate, vbv_bufsize, fps, vbv_init) {
       Ok(v) => v
       Err(e) => return Err(e)
@@ -195,8 +228,8 @@ pub fn H264StreamEncoder::open(
   if multi_ref < 1 || multi_ref > 16 {
     return Err("h264 enc: multi_ref must be in 1..=16")
   }
-  if chroma_format != 1 && chroma_format != 2 {
-    return Err("h264 enc: chroma_format must be 1 or 2")
+  if chroma_format < 1 || chroma_format > 3 {
+    return Err("h264 enc: chroma_format must be 1, 2 or 3")
   }
   if width <= 0 ||
     height <= 0 ||
@@ -213,7 +246,7 @@ pub fn H264StreamEncoder::open(
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
-  let cstride = mb_width * 8
+  let cstride = mb_width * (if chroma_format == 3 { 16 } else { 8 })
   let pheight = mb_height * 16
   // Round-trip the parameter sets the pictures will actually carry: the
   // parsed PPS holds the dequantisation tables shared with the decoder.
@@ -309,7 +342,68 @@ pub fn H264StreamEncoder::open(
     },
     vbv_last_bp: 0,
     vbv_coded: 0,
+    abr_rate: target_bitrate.to_int64(),
+    abr_fps: if target_bitrate > 0 {
+      fps
+    } else {
+      1
+    },
+    abr_bits: 0L,
+    abr_pics: 0,
+    abr_qp: qp,
+    deblock,
   })
+}
+
+///|
+/// The `§422f` ABR controller's starting QP for the next picture: the
+/// cumulative deviation of the coded bits from the per-picture budget
+/// (`bitrate / fps`), mapped through the same `2^(j/6)` model the batch
+/// solver uses (`h264_rc_qp_jump`), damped against a three-picture window
+/// and clamped to ±6 QP steps per picture so the QP walks rather than
+/// oscillates. `abr_qp` carries the last accepted picture's final QP —
+/// a VBV climb survives into the next picture's starting point.
+fn H264StreamEncoder::abr_suggest(self : H264StreamEncoder) -> Int32 {
+  if self.abr_rate == 0L {
+    return self.qp
+  }
+  let budget = self.abr_rate / self.abr_fps.to_int64()
+  let ahead = self.abr_bits - budget * self.abr_pics.to_int64()
+  let window = budget * 3L
+  // `h264_rc_qp_jump` is signed (over => +j, under => -j). Like the
+  // batch `target_bytes` solver, the QP only climbs above the caller's
+  // flat value — the rate is a budget ceiling, and a single-pass encoder
+  // cannot know that a cheap present hides an expensive future (the
+  // batch two-pass can). Clamp the climb so the QP walks, not leaps.
+  let corr = if window <= 0L || ahead <= 0L {
+    0
+  } else {
+    h264_rc_qp_jump(
+      ahead.min(0x3FFFFFFFL).to_int(),
+      window.min(0x3FFFFFFFL).to_int(),
+    )
+    .max(1)
+    .min(3)
+  }
+  (self.abr_qp + corr).max(h264_rc_qp_min).min(h264_rc_qp_max)
+}
+
+///|
+/// Fold one accepted picture into the ABR controller: the coded bits and
+/// the picture's final QP (the VBV trial's accepted QP, or the caller's
+/// hint on the plain path). No-op with ABR off, so the default streams
+/// stay byte-identical.
+fn H264StreamEncoder::abr_note(
+  self : H264StreamEncoder,
+  bits : Int64,
+  qp : Int32,
+) -> Unit {
+  if self.abr_rate == 0L {
+    return
+  }
+  self.abr_bits = self.abr_bits + bits
+  self.abr_pics = self.abr_pics + 1
+  self.abr_qp = qp.max(h264_rc_qp_min).min(h264_rc_qp_max)
 }
 
 ///|
@@ -344,10 +438,28 @@ fn H264StreamEncoder::load_chroma_plane(
 /// The chroma plane's row count (drives every reference/rec allocation and
 /// the packed recon layout).
 fn H264StreamEncoder::chroma_plane_rows(self : H264StreamEncoder) -> Int32 {
-  if self.chroma_format == 2 {
+  if self.chroma_format != 1 {
     self.pheight
   } else {
     self.pheight / 2
+  }
+}
+
+///|
+fn H264StreamEncoder::chroma_width(self : H264StreamEncoder) -> Int32 {
+  if self.chroma_format == 3 {
+    self.width
+  } else {
+    self.width / 2
+  }
+}
+
+///|
+fn H264StreamEncoder::chroma_height(self : H264StreamEncoder) -> Int32 {
+  if self.chroma_format == 1 {
+    self.height / 2
+  } else {
+    self.height
   }
 }
 
@@ -365,8 +477,8 @@ fn H264StreamEncoder::check_frame(
     self.bit_depth,
   )
   let chroma_bytes = h264_enc_plane_bytes(
-    self.width / 2,
-    self.chroma_plane_rows(),
+    self.chroma_width(),
+    self.chroma_height(),
     self.bit_depth,
   )
   if y.length() != plane_bytes ||
@@ -409,27 +521,29 @@ pub fn H264StreamEncoder::push_frame(
   }
   self.next_display = self.next_display + 1
   if d == 0 || force_idr {
-    return self.stream_idr(y, u, v)
+    return self.stream_idr(y, u, v, qp=self.abr_suggest())
   }
   if !self.b_slices {
-    return self.stream_p(y, u, v, d)
+    return self.stream_p(y, u, v, d, qp=self.abr_suggest())
   }
   if d % 2 == 1 {
     self.pending = Some((y, u, v))
     return Ok(())
   }
   // Even position: the pending B picture's future reference. Code this P
-  // picture first, then the B picture against past+future.
+  // picture first, then the B picture against past+future. The B hint is
+  // taken after the P picture's bits are folded in, so its budget already
+  // sees the pair's first half.
   let (by, bu, bv) = match self.pending {
     Some(t) => t
     None => return Err("h264 enc: stream scheduling lost the B picture")
   }
   self.pending = None
-  match self.stream_p(y, u, v, d) {
+  match self.stream_p(y, u, v, d, qp=self.abr_suggest()) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
-  self.stream_b(by, bu, bv, d - 1)
+  self.stream_b(by, bu, bv, d - 1, qp=self.abr_suggest())
 }
 
 ///|
@@ -461,7 +575,14 @@ fn H264StreamEncoder::flush_pending(
 ) -> Result[Unit, String] {
   match self.pending {
     Some((y, u, v)) =>
-      match self.stream_p(y, u, v, self.next_display - self.gop_start - 1) {
+      match
+        self.stream_p(
+          y,
+          u,
+          v,
+          self.next_display - self.gop_start - 1,
+          qp=self.abr_suggest(),
+        ) {
         Ok(_) => self.pending = None
         Err(e) => return Err(e)
       }
@@ -516,6 +637,7 @@ fn H264StreamEncoder::stream_idr(
       multi_ref=self.nrefs,
       vbv~,
       idr_cpb_delay~,
+      deblock=self.deblock,
     )
   } else {
     h264_encode_intra_frame(
@@ -538,6 +660,7 @@ fn H264StreamEncoder::stream_idr(
       chroma_format=self.chroma_format,
       vbv~,
       idr_cpb_delay~,
+      deblock=self.deblock,
     )
   }
   let first = match first {
@@ -550,6 +673,8 @@ fn H264StreamEncoder::stream_idr(
     first.annexb
   }
   self.out.push(au)
+  self.stats.frame_qps.push(qp)
+  self.abr_note((au.length() * 8).to_int64(), qp)
   self.ref_y = h264_b_copy_plane(first.recon_y)
   self.ref_u = h264_b_copy_plane(first.recon_u)
   self.ref_v = h264_b_copy_plane(first.recon_v)
@@ -615,14 +740,14 @@ fn H264StreamEncoder::stream_p(
     src_y,
     src_u: self.load_chroma_plane(
       u,
-      self.width / 2,
-      self.chroma_plane_rows(),
+      self.chroma_width(),
+      self.chroma_height(),
       self.cstride,
     ),
     src_v: self.load_chroma_plane(
       v,
-      self.width / 2,
-      self.chroma_plane_rows(),
+      self.chroma_width(),
+      self.chroma_height(),
       self.cstride,
     ),
     rec_y: Array::make(self.ystride * self.pheight, 0),
@@ -667,6 +792,7 @@ fn H264StreamEncoder::stream_p(
     intra4x4_in_b: self.intra4x4_in_b,
     weightp: self.weightp,
     pwt: new_h264_pred_weight(),
+    deblock: self.deblock,
   }
   let poc_lsb = if self.b_slices { (display * 2) & 15 } else { -1 }
   let nal = if self.cabac {
@@ -690,7 +816,10 @@ fn H264StreamEncoder::stream_p(
     None => ()
   }
   au.push(nal)
-  self.out.push(h264_enc_concat(au))
+  let total = h264_enc_concat(au)
+  self.out.push(total)
+  self.stats.frame_qps.push(qp)
+  self.abr_note((total.length() * 8).to_int64(), qp)
   self.recons.push(
     h264_enc_pack_recon(
       enc.rec_y,
@@ -701,7 +830,8 @@ fn H264StreamEncoder::stream_p(
       self.ystride,
       self.cstride,
       bit_depth=self.bit_depth,
-      chroma_h=self.chroma_plane_rows(),
+      chroma_h=self.chroma_height(),
+      chroma_w=self.chroma_width(),
     ),
   )
   // `§415`: every coded picture enters the reference history (newest
@@ -814,14 +944,14 @@ fn H264StreamEncoder::stream_b(
     src_y,
     src_u: self.load_chroma_plane(
       u,
-      self.width / 2,
-      self.chroma_plane_rows(),
+      self.chroma_width(),
+      self.chroma_height(),
       self.cstride,
     ),
     src_v: self.load_chroma_plane(
       v,
-      self.width / 2,
-      self.chroma_plane_rows(),
+      self.chroma_width(),
+      self.chroma_height(),
       self.cstride,
     ),
     rec_y: Array::make(self.ystride * self.pheight, 0),
@@ -864,6 +994,7 @@ fn H264StreamEncoder::stream_b(
     intra4x4_in_b: self.intra4x4_in_b,
     weightp: false,
     pwt: new_h264_pred_weight(),
+    deblock: self.deblock,
   }
   let fut_pic = h264_b_refpic(
     self.fut_y,
@@ -929,7 +1060,10 @@ fn H264StreamEncoder::stream_b(
     None => ()
   }
   au.push(nal)
-  self.out.push(h264_enc_concat(au))
+  let total = h264_enc_concat(au)
+  self.out.push(total)
+  self.stats.frame_qps.push(qp)
+  self.abr_note((total.length() * 8).to_int64(), qp)
   self.recons.push(
     h264_enc_pack_recon(
       enc.rec_y,
@@ -940,7 +1074,8 @@ fn H264StreamEncoder::stream_b(
       self.ystride,
       self.cstride,
       bit_depth=self.bit_depth,
-      chroma_h=self.chroma_plane_rows(),
+      chroma_h=self.chroma_height(),
+      chroma_w=self.chroma_width(),
     ),
   )
   // The B picture is non-reference: the future P becomes the past now.
