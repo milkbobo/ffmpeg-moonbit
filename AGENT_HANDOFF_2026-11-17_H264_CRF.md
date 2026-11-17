@@ -74,24 +74,26 @@ delta/dqp 码字分叉（n=2 全 QP 23 仍差 2 字节 → 定位到 base_qp）�
 | stream==batch（B/P 调度，plain CRF） | 逐字节相等 |
 | crf+VBV（批式紧桶 + 流式） | 解码 6 帧；QP ≥ CRF 地板 |
 
-### 回归附带的既有问题处置（非 §435 引入）
+### 回归附带的既有问题处置（非 §435 引入；均已收口）
 
 - `h264_enc_binter8_420_wbtest` / `h264_enc_c444_binter8_wbtest` 的
   recon 断言在 §424 去块默认翻转后过期（仍用跳过滤波解码对比滤波
   recon）——两处 `decode(stream, true)` 重钉为 `false`（补 §424 全族
   重钉在当时 wasm 跑不到的文件）。420 变体 wasm-gc 全绿。
-- **c444_binter8 重钉后暴露既有解码器问题**：444 B inter8 流
-  `skip_lf=false` 时 `decoded[f].infos` 的 inter transform_8x8 计数归零
-  （skip_lf=true 通过；recon 逐像素全对）——滤波开/关改变 infos。
-  `h264_deblock.mbt` 只读该标志，嫌疑在 444 滤波路径 per-MB 状态。
-  复现：`moon test libavcodec/h264_enc_c444_binter8_wbtest.mbt
-  --target wasm-gc`。留给后续切片。
+- **c444_binter8 的 inter-8x8 断言收口（后续切片当日完成）**：CABAC×444
+  腿默认 `cabac_rd=true` 的真实位计价把 8x8/4x4 候选拉到 ~40 位内，
+  失真项合法选 4x4（插桩：ssd 2805/2530、cabac 价 1521/1563、cavlc 价
+  1849/2088；rd=false 全 8x8 流 1641B < rd=true 1655B，均为合法 RD 产物）。
+  **非解码器/滤波问题**——探针证明 skip_lf 开关对 infos 逐字段零影响
+  （首判「滤波改变 infos」系被测试循环顺序误导）。修法：tf8 断言改吃
+  `cabac_rd=false` 流（CAVLC 定价确定性选 8x8，钉 CABAC 444 inter8
+  写/读路径），默认 rd 流保留 stream==batch 与 recon 断言。8 个
+  h264_enc wbtest 于 wasm-gc 全 8/8。
 
 ## 5. 本线后续切片（沿用 §434 清单，CRF 已销项）
 
 | # | 切片 | 要点 |
 |---|---|---|
-| 优先 | 444×tf8×滤波 infos 修复 | 上节暴露的解码器问题；范围小（单交叉点），先于新特性 |
 | 后续 | scenecut + open-GOP | 流式已有 §431 keyframe/IDR 请求面；缺自动检测（cut 检测→强制 IDR/keyframe + recovery point SEI） |
 | 后续 | 多 slice | slice-max-size/slices（每帧多 slice NAL） |
 | 后续 | lossless | qp=0 + qpprime_y_zero_transform_bypass（High 444 谱系已在） |

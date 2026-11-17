@@ -736,9 +736,9 @@ C:\Users\milkb\.moon\bin\moon.exe test  --no-render   # 必须全绿
   把包源码与全部 `*_wbtest.mbt` 编进一个 wasm，`__moonbit__init` 局部数
   早已越过 V8 MVP 上限（包级既有，与任何单切片无关）——`--target wasm`
   下每个 wbtest 文件都报 `local count too large` 假红。黑盒
-  `*_test.mbt` 两后端皆可。已知残留：`h264_enc_c444_binter8_wbtest`
-  在 wasm-gc 有一个 444×tf8×滤波 infos 的解码器既有红（§435 归档，
-  见 `AGENT_HANDOFF_2026-11-17_H264_CRF.md`）。
+  `*_test.mbt` 两后端皆可。注意 cabac_rd（默认开）下 B inter 的 8x8/4x4
+  是真实位计价 RD——平滑夹具会合法选 4x4，断言 inter tf8 存在时用
+  `cabac_rd=false` 流（§435 收口的 c444_binter8 先例）。
 - **wasm 体积测量**：`python scripts/generate_wasm_size_probe.py`（重新生成探针 →
   编译 `wasm`/`wasm-gc` release → 报告原始/gzip 体积并做字符串指纹验证）。
   `wasm_probe/main/main.mbt` 是生成物，勿手改；**公共 API 变更后探针失配**

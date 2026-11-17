@@ -111,9 +111,39 @@ test "h264 c444 B inter8: transform flags, reconstruction and partition gate" {
         Ok(d) => d
         Err(e) => fail(e)
       }
+      // The inter-8x8 syntax under CABAC: `cabac_rd`'s real-bin pricing
+      // puts the 8x8/4x4 candidates within ~40 bits of each other on this
+      // smooth fixture, so the distortion term legitimately picks plain
+      // 4x4 and the default stream carries no inter transform_8x8 MBs.
+      // The CAVLC-priced decision (`cabac_rd=false`) selects 8x8
+      // deterministically — assert the inter-8x8 round-trip there.
+      let tf8_frames = if cabac {
+        let flat = match
+          h264_encode_frames_cabac(
+            inputs,
+            width=32,
+            height=32,
+            qp=20,
+            chroma_format=3,
+            dct8x8=true,
+            cabac_rd=false,
+            bit_depth~,
+          ) {
+          Ok(s) => s
+          Err(e) => fail(e)
+        }
+        let d = match h264_decode_annexb_frames(flat, false) {
+          Ok(d) => d
+          Err(e) => fail(e)
+        }
+        assert_eq(d.length(), 5)
+        d
+      } else {
+        decoded
+      }
       let mut count = 0
       for f in [2, 4] {
-        for info in decoded[f].infos {
+        for info in tf8_frames[f].infos {
           if info.transform_8x8 &&
             (
               info.mb_type_bits &

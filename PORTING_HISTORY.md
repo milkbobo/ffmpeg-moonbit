@@ -14365,8 +14365,8 @@ CLI `options_wbtest.mbt` +1（26/26）：默认 -1、23.5 解析与透传、七�
 ≠缺省流、5 帧解码。
 
 验证：CRF 7/7（wasm + wasm-gc 双后端）+ CLI 26/26 + 编码器黑盒全量回归
-（wasm 单文件制 0 失败）+ 8 个 h264_enc wbtest 于 wasm-gc 7/8（唯一红为
-下述既有解码器问题）+ 全模块 wasm `moon check --deny-warn` 0 错 0 警；
+（wasm 单文件制 0 失败）+ 8 个 h264_enc wbtest 于 wasm-gc **8/8**（c444
+binter8 随下述收口转绿）+ 全模块 wasm `moon check --deny-warn` 0 错 0 警；
 缺省路径逐字节不变。
 
 ### 回归附带发现（均既有，非 §435 引入；§435 对 crf-off 路径逐点值恒等）
@@ -14383,11 +14383,16 @@ CLI `options_wbtest.mbt` +1（26/26）：默认 -1、23.5 解析与透传、七�
   recon——§424 后 recon 是滤波像。重钉 `true`→`false`（补 §424
   全族重钉在当时跑不到的文件）：420 变体 wasm-gc 全绿；444 变体 recon
   段转绿后暴露下一条。
-- **新暴露既有解码器问题（后续切片）**：444 B inter8 流在
-  `skip_lf=false` 下 `decoded[f].infos` 的 inter transform_8x8 计数
-  归零（skip_lf=true 时通过；recon 逐像素反而全对）——滤波开/关改变
-  infos，两断言今日不可兼得。deblock.mbt 只读该标志，嫌疑在 444
-  滤波路径的 per-MB 状态；证据链与复现（wasm-gc 单文件）已归档于交接。
+- **`h264_enc_c444_binter8_wbtest` 的 inter-8x8 断言在 cabac_rd 下过强
+  （已收口）**：CABAC×444 腿默认 `cabac_rd=true` 的真实位计价把 8x8/4x4
+  候选拉到 ~40 位内，失真项合法选 4x4（插桩分解：ssd 2805/2530、
+  cabac 价 1521/1563、cavlc 价 1849/2088——CAVLC 粗估的 239 位优势是
+  虚高），流里本就没有 inter tf8 MB（且 rd=false 全 8x8 流实测 1641B <
+  rd=true 1655B，两者都是合法 RD 产物）。**并非解码器/滤波问题**——
+  探针证明 skip_lf 开关对 infos 逐字段零影响（§435 首判「滤波改变
+  infos」系被测试循环顺序误导，特此修正）。修法：tf8 断言改吃
+  `cabac_rd=false` 流（CAVLC 定价确定性选 8x8，直接钉 CABAC 444 inter8
+  写/读路径），默认 rd 流保留 stream==batch 与 recon 断言。
 
 ### 坑
 
