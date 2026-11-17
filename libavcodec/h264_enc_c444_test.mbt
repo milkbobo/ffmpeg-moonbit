@@ -62,7 +62,7 @@ test "h264 c444: single IDR round trip" {
   }
   assert_eq(profile, 244)
   assert_eq(ps.sps_list[0].unwrap().chroma_format_idc, 3)
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(d) => d
     Err(e) => fail(e)
   }
@@ -131,7 +131,7 @@ test "h264 c444: ffmpeg-arbitrated I+P stream" {
   assert_eq(
     mr_md5(dec[1].yuvp()),
     // Re-arbitrated through x264_probe_frames after full-chroma RD pricing.
-    "4f1577f252c919ebc3f8e1b2890085fc",
+    "116972f3855c15e7e100a68d7f4ee872",
     msg="P frame anchor",
   )
 }
@@ -167,7 +167,7 @@ test "h264 c444: I+P round trip" {
     Err(e) => fail(e)
   }
   assert_eq(recon.length(), 1)
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(d) => d
     Err(e) => fail(e)
   }
@@ -193,7 +193,7 @@ test "h264 c444: cabac single IDR round trip" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let recon_dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let recon_dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(d) => d
     Err(e) => fail(e)
   }

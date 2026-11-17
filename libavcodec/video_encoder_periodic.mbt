@@ -118,13 +118,18 @@ fn video_encode_periodic_qps(
         dct8x8=config.dct8x8,
         multi_ref=config.multi_ref,
         chroma_format=config.chroma_format,
+        chroma_qp_offset=config.chroma_qp_offset,
         weightp=config.weightp,
+        weightp_b=config.weightp_b,
         bit_depth=config.bit_depth,
         vbv=segment_vbv,
         idr_cpb_delay~,
         recon~,
         stats~,
         deblock=config.deblock,
+        deblock_alpha=config.deblock_alpha,
+        deblock_beta=config.deblock_beta,
+        sar=config.sar,
       )
     } else if config.cabac {
       h264_encode_frames_cabac_qps(
@@ -145,11 +150,15 @@ fn video_encode_periodic_qps(
         bit_depth=config.bit_depth,
         multi_ref=config.multi_ref,
         chroma_format=config.chroma_format,
+        chroma_qp_offset=config.chroma_qp_offset,
         recon~,
         stats~,
         vbv=segment_vbv,
         idr_cpb_delay~,
         deblock=config.deblock,
+        deblock_alpha=config.deblock_alpha,
+        deblock_beta=config.deblock_beta,
+        sar=config.sar,
       )
     } else {
       h264_encode_frames_qps(
@@ -170,11 +179,15 @@ fn video_encode_periodic_qps(
         bit_depth=config.bit_depth,
         multi_ref=config.multi_ref,
         chroma_format=config.chroma_format,
+        chroma_qp_offset=config.chroma_qp_offset,
         recon~,
         stats~,
         vbv=segment_vbv,
         idr_cpb_delay~,
         deblock=config.deblock,
+        deblock_alpha=config.deblock_alpha,
+        deblock_beta=config.deblock_beta,
+        sar=config.sar,
       )
     }
     match result {

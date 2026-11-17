@@ -42,7 +42,7 @@ test "h264 c444 inter8: chroma-only residuals and 4x4 fallback" {
       }
       outputs.push(stream)
       last_recons.push(recon[1])
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

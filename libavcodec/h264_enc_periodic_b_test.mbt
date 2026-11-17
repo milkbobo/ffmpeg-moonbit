@@ -70,7 +70,8 @@ test "h264 periodic B: display intervals match independent GOPs" {
           nals.filter(n => n.0 == 5).length(),
           (9 + keyint - 1) / keyint,
         )
-        let decoded = match @libavcodec.h264_decode_annexb_frames(batch, true) {
+        let decoded = match
+          @libavcodec.h264_decode_annexb_frames(batch, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }
@@ -123,7 +124,7 @@ test "h264 periodic B: manual IDR flushes pending input and restarts interval" {
       assert_eq(idr_concat(aus[start:end].to_owned()), idr_concat(expected))
     }
     let decoded = match
-      @libavcodec.h264_decode_annexb_frames(idr_concat(aus), true) {
+      @libavcodec.h264_decode_annexb_frames(idr_concat(aus), false) {
       Ok(d) => d
       Err(e) => fail(e)
     }

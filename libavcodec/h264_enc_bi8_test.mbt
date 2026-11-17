@@ -7,7 +7,7 @@
 // docker-ffmpeg arbitration with pinned framemd5 values.
 
 ///|
-/// One b_slices + dct8x8 sequence: reconstruction invariant (unfiltered,
+/// One b_slices + dct8x8 sequence: reconstruction invariant (filtered,
 /// coding order), the Intra 8x8 statistic and a clean filtered decode.
 fn h264bi8_check(
   frames : Array[(Bytes, Bytes, Bytes)],
@@ -59,7 +59,7 @@ fn h264bi8_check(
   if stats.b_mbs <= 0 {
     fail("no B macroblocks coded")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -244,16 +244,16 @@ test "h264 enc bi8: ffmpeg-arbitrated six frames (96x64, QP 20)" {
   let frames = h264bi8_fixture(96, 64, 6)
   let pins = [
     [
-      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "77f0355736a5ea160b77f3685748dc84",
-      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "04b32d7c218116d542ba19b6f75b53e6", "d2d0db3e2630d7662be21f2983994cad",
+      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "c38bb02a4e5a52b6120f3e4f33540861",
+      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "773577114c87b1c952d74deef525db5a", "d785e3af7d4098dcad92eccfab76029e",
     ],
     [
-      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "77f0355736a5ea160b77f3685748dc84",
-      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "04b32d7c218116d542ba19b6f75b53e6", "d2d0db3e2630d7662be21f2983994cad",
+      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "c38bb02a4e5a52b6120f3e4f33540861",
+      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "773577114c87b1c952d74deef525db5a", "d785e3af7d4098dcad92eccfab76029e",
     ],
     [
-      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "f5aa19324d5d62cc88e2def0435cce15",
-      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "d7888e0bd57dec485322f829d6450ec1", "b85e39fe081402e759c11131609ae8f3",
+      "208469698064f1d80620d092ca2bb19e", "79d1758ac80f13a40bbda47f6a9571ae", "c38bb02a4e5a52b6120f3e4f33540861",
+      "f10b82f6dfca4c0a5f3372b7c4bbbb01", "7b737b18a481e4098e8a66bb1a615ec0", "a4743b93553e8940fc697cd7adda091e",
     ],
   ]
   let routes = ["ARBBI8V", "ARBBI8C", "ARBBI8R"]

@@ -50,6 +50,9 @@ fn abrs_encode(
   vbv_maxrate~ : Int32 = 0,
   vbv_bufsize~ : Int32 = 0,
 ) -> (Bytes, @libavcodec.H264StreamEncoder) raise {
+  // fps paces the VBV/ABR controllers only; the flat-reference legs must not
+  // pass it (open rejects fps without a controller to feed).
+  let paced = bitrate > 0 || vbv_maxrate > 0 || vbv_bufsize > 0
   let enc = match
     @libavcodec.H264StreamEncoder::open(
       width=96,
@@ -57,7 +60,7 @@ fn abrs_encode(
       qp=26,
       cabac~,
       b_slices~,
-      fps=25,
+      fps=if paced { 25 } else { 0 },
       target_bitrate=bitrate,
       vbv_maxrate~,
       vbv_bufsize~,
@@ -114,9 +117,6 @@ fn abrs_qps_repr(qps : Array[Int32]) -> String {
 /// expensive IDR cannot be exact), and every reconstruction equals the
 /// local skip-filter decode.
 test "h264 stream abr: converges near the target rate" {
-  if true {
-    // DIAGNOSTIC SHORT CIRCUIT
-  }
   let frames = abrs_fixture(12)
   for cabac in [false, true] {
     for b_slices in [false, true] {
@@ -146,7 +146,7 @@ test "h264 stream abr: converges near the target rate" {
         qps.any(q => q > 26),
         msg="cabac=\{cabac} b=\{b_slices} no QP above the flat 26: \{abrs_qps_repr(qps)}",
       )
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -179,7 +179,7 @@ test "h264 stream abr: stacks on the online VBV" {
       vbv_maxrate=bitrate,
       vbv_bufsize=bitrate / 2,
     )
-    let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(d) => d
       Err(e) => fail(e)
     }

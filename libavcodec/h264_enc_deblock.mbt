@@ -17,6 +17,11 @@ fn h264_enc_deblock_picture(
   infos : Array[H264MbInfo],
   pps : H264Pps,
   bit_depth : Int32,
+  /// `§433`: slice-level offsets in div2 units; the filter tables index
+  /// `qp + 52 + 2*offset` exactly like the decoder's per-MB
+  /// `alpha_offset`/`beta_offset` (`h264_picture_slice.mbt`).
+  alpha~ : Int32 = 0,
+  beta~ : Int32 = 0,
 ) -> Unit {
   let chroma_format = pps.chroma_format
   let chroma_hshift = if chroma_format <= 2 { 1 } else { 0 }
@@ -91,12 +96,42 @@ fn h264_enc_deblock_picture(
     pwt: new_h264_pred_weight(),
   }
   for i = 0; i < mb_width * mb_height; i = i + 1 {
-    // The encoder always writes `deblocking_filter_control_present_flag = 0`,
-    // so the slice-level alpha/beta offsets stay at zero. FFmpeg's filter
-    // indexes the tables with `qp + 52 + offset` (`h264_loopfilter.c`);
-    // `52` is the neutral base the decoder's `H264MbInfo` defaults carry.
-    h264_filter_mb(ctx, i, i % mb_width, i / mb_width, 52, 52)
+    // FFmpeg's filter indexes the tables with `qp + 52 + offset`
+    // (`h264_loopfilter.c`); `52` is the neutral base the decoder's
+    // `H264MbInfo` defaults carry, and the slice-level div2 offsets ride on
+    // top of it (`§433`; both stay 0 when the PPS has no deblocking control).
+    h264_filter_mb(
+      ctx,
+      i,
+      i % mb_width,
+      i / mb_width,
+      52 + 2 * alpha,
+      52 + 2 * beta,
+    )
   }
+}
+
+///|
+/// `§433`: validate the slice-level deblocking offsets (div2 units, the
+/// spec's -6..=6 range for both `slice_alpha_c0_offset_div2` and
+/// `slice_beta_offset_div2`). Nonzero offsets need the in-loop filter on:
+/// with `deblock=false` the encoder would keep unfiltered references while
+/// the stream tells decoders to filter at a non-neutral strength.
+fn h264_enc_deblock_offsets_ok(
+  deblock : Bool,
+  alpha : Int32,
+  beta : Int32,
+) -> Result[Unit, String] {
+  if alpha < -6 || alpha > 6 {
+    return Err("h264 enc: deblock_alpha must be in -6..=6")
+  }
+  if beta < -6 || beta > 6 {
+    return Err("h264 enc: deblock_beta must be in -6..=6")
+  }
+  if !deblock && (alpha != 0 || beta != 0) {
+    return Err("h264 enc: deblock offsets require deblock=true")
+  }
+  Ok(())
 }
 
 ///|

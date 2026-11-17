@@ -109,7 +109,11 @@ test "h264 b inter8 420/422: transform flags, reconstruction, stream" {
         stream,
         msg="cf=\{cf} cabac=\{cabac} stream != batch",
       )
-      let decoded = match h264_decode_annexb_frames(stream, true) {
+      // §424 made in-loop deblocking the default, so the encoder's recon
+      // is the FILTERED picture — decode with the loop filter on to
+      // compare (the pre-§424 `true` here skipped it and went stale when
+      // the wbtest unit lost its wasm runner; re-pinned with §435).
+      let decoded = match h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail("cf=\{cf} cabac=\{cabac}: \{e}")
       }

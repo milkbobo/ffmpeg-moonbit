@@ -59,7 +59,7 @@ test "h264 c444 B parts: actual subpartitions and streaming equality" {
       assert_true(stats.bpart_mbs > 0)
       assert_true(stats.b8x8_mbs > 0)
       assert_true(stats.bpart_mbs > stats.b8x8_mbs)
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

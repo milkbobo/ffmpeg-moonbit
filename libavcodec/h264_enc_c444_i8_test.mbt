@@ -47,7 +47,7 @@ test "h264 c444 I8: three-plane reconstruction at 8 and 10 bits" {
       }
       assert_eq(stats.i8_mbs, 4)
       let decoded = match
-        @libavcodec.h264_decode_annexb_frames(encoded.annexb, true) {
+        @libavcodec.h264_decode_annexb_frames(encoded.annexb, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

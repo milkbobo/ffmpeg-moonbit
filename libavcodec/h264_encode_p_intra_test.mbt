@@ -118,7 +118,7 @@ test "h264 enc: P-slice Intra16x16 scene cut round-trips" {
       "intra stream \{stream.length()} B is not at least 1.6x smaller than inter \{plain.length()} B",
     )
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -246,7 +246,7 @@ test "h264 enc: partial scene cut mixes intra16x16 and inter MBs" {
   if stats.i16_mbs >= stats.coded_mbs {
     fail("partial cut selected intra for every coded MB")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -304,7 +304,7 @@ test "h264 enc: CABAC P-slice Intra16x16 scene cut round-trips" {
       "CABAC intra stream \{stream.length()} B is not smaller than inter-only \{plain.length()} B",
     )
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -429,7 +429,7 @@ test "h264 enc: CABAC partial cut mixes intra16x16 and inter MBs" {
   if stats.i16_mbs >= stats.coded_mbs {
     fail("CABAC partial cut selected intra for every coded MB")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }

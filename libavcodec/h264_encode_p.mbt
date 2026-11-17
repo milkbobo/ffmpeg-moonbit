@@ -193,6 +193,11 @@ priv struct H264PEncoder {
   aq_avg : Int32
   aq_on : Bool
   aq_strength : Int32
+  /// `§429`: per-MB ROI QP offsets (empty = no ROI; only applied with AQ on).
+  roi_off : Array[Int32]
+  /// `§430`: per-MB motion-hint flags (true = constant, force skip; empty =
+  /// no hint).
+  hint_const : Array[Bool]
   /// Opt-in CABAC bit pricing for the rate-distortion decision (`§392`).
   /// When set, the CABAC frame encoder publishes its mirror/engine/states
   /// here and `eval_plan` prices every candidate through the real CABAC
@@ -285,6 +290,13 @@ pub fn h264_encode_frames(
   dct8x8~ : Bool = true,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
+  /// `§429`: per-macroblock ROI quantisation offsets (`H264Roi`) applied to
+  /// every picture; ignored when `aq=false` (upstream semantics).
+  roi~ : Array[H264Roi] = [],
+  /// `§430`: per-display-position motion hints (`H264VideoHint`, x264
+  /// `mb_info` semantics); empty = none, when non-empty the length must
+  /// match the frame count.
+  hints~ : Array[H264VideoHint?] = [],
   aud~ : Bool = false,
   /// Default on (`§403`): code the odd display positions as B pictures
   /// (I, P2, B1, P4, B3, ... with POC type 0 reordering). Needs at least
@@ -305,6 +317,14 @@ pub fn h264_encode_frames(
   vbv_bufsize~ : Int32 = 0,
   fps~ : Int32 = 0,
   vbv_init~ : Int32 = 90,
+  /// `§435`: constant rate factor (x264 `--crf`, 0.0..=51.0; negative =
+  /// off). The value is the baseline QP and every picture bends around it
+  /// by its temporal complexity (see `h264_enc_crf.mbt`) — constant
+  /// quality instead of the flat quantiser or a bitrate target. Mutually
+  /// exclusive with `target_bytes` and with forced `pict_types`; composes
+  /// with VBV (the CRF QPs are the solver's starting assignment, raised
+  /// wherever the CPB demands).
+  crf~ : Double = -1.0,
   recon~ : Array[Bytes] = [],
   stats~ : H264EncStats = H264EncStats::new(),
   /// Opt-in (`§410`): explicit P weighted prediction — one fitted
@@ -312,6 +332,9 @@ pub fn h264_encode_frames(
   /// (skip runs included). Default on since `§413`; `weightp=false` keeps
   /// the PPS/slice headers byte-identical to the pre-§410 streams.
   weightp~ : Bool = true,
+  /// `§434`: opt-in explicit B weighted prediction (`weighted_bipred_idc =
+  /// 1`). Off keeps B slices byte-identical; requires `b_slices`.
+  weightp_b~ : Bool = false,
   /// `§412`/`§419`: 8 (default), 9, 10, 12 or 14 bits; above 8 the frames are
   /// `yuv420p10le` (little-endian 16-bit planes) and the SPS is High 10.
   bit_depth~ : Int32 = 8,
@@ -323,17 +346,59 @@ pub fn h264_encode_frames(
   /// planes are `w/2 x h`; profile High 4:2:2 at 8..10 bits and Hi444PP
   /// above, `§422d`).
   chroma_format~ : Int32 = 1,
-  /// `§423`: opt-in in-loop deblocking. The IDR, every P picture and every
+  /// `§432`: Cb/Cr chroma QP offset -12..12 (x264 `chroma-qp-offset`);
+  /// 0 keeps every stream byte-identical.
+  chroma_qp_offset~ : Int32 = 0,
+  /// `§423`: in-loop deblocking, default on. The IDR, every P picture and every
   /// B picture are filtered before they leave the encoder, so the returned
-  /// reconstructions match a conforming decoder's output and inter
-  /// prediction uses filtered references.
-  deblock~ : Bool = false,
+  /// reconstructions match a conforming decoder's output and inter prediction
+  /// uses filtered references. Pass `deblock=false` for the legacy path.
+  deblock~ : Bool = true,
+  /// `§433`: slice deblocking alpha/beta offsets in div2 units (-6..=6,
+  /// x264 `--deblock alpha:beta`); either nonzero opts the PPS into
+  /// deblocking control. Requires `deblock=true`.
+  deblock_alpha~ : Int32 = 0,
+  deblock_beta~ : Int32 = 0,
+  /// `§426`: sample aspect ratio for the SPS VUI (0/0 = unset).
+  sar~ : (Int32, Int32) = (0, 0),
+  /// `§427`: per-display-position ATSC A/53 caption triples (multiples
+  /// of 3, ≤63 bytes each) carried in GA94 `user_data_registered` SEIs.
+  /// Empty = none; when non-empty the length must match the frame count.
+  a53~ : Array[Bytes?] = [],
+  /// `§427`: per-display-position `user_data_unregistered` SEI payloads
+  /// (16-byte UUID + user data each).
+  sei_unregistered~ : Array[Bytes?] = [],
+  /// §428: stereo frame packing layout written with the IDR
+  /// (0 = off; an av_stereo3d_* value).
+  stereo3d~ : Int32 = 0,
+  /// `§431`: per-display-position type requests (`h264_pict_type_*`).
+  /// Empty reproduces the default schedule byte for byte; non-empty must
+  /// match the frame count. Forced types need a plain sequence (no
+  /// `target_bytes` / VBV) and `b_slices` for `B`.
+  pict_types~ : Array[Int32] = [],
 ) -> Result[Bytes, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
   if chroma_format < 1 || chroma_format > 3 {
     return Err("h264 enc: chroma_format must be 1, 2 or 3")
+  }
+  if chroma_qp_offset < -12 || chroma_qp_offset > 12 {
+    return Err("h264 enc: chroma_qp_offset must be in -12..=12")
+  }
+  match h264_enc_deblock_offsets_ok(deblock, deblock_alpha, deblock_beta) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  if (a53.length() > 0 && a53.length() != frames.length()) ||
+    (
+      sei_unregistered.length() > 0 &&
+      sei_unregistered.length() != frames.length()
+    ) ||
+    (hints.length() > 0 && hints.length() != frames.length()) {
+    return Err(
+      "h264 enc: side data arrays must be empty or match the frame count (\{frames.length()})",
+    )
   }
   if !h264_enc_bit_depth_ok(bit_depth) {
     return Err(
@@ -343,12 +408,42 @@ pub fn h264_encode_frames(
   if frames.length() == 0 {
     return Err("h264 enc: no frames")
   }
+  match h264_pict_types_validate(pict_types, frames.length()) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  if h264_pict_types_forced(pict_types) &&
+    (
+      target_bytes > 0 ||
+      vbv_maxrate > 0 ||
+      vbv_bufsize > 0 ||
+      fps > 0 ||
+      crf >= 0.0
+    ) {
+    return Err(
+      "h264 enc: pict_types is not supported with target_bytes or VBV (use the streaming encoder)",
+    )
+  }
+  if crf > 51.0 {
+    return Err("h264 enc: crf must be in 0.0..=51.0")
+  }
+  if crf >= 0.0 && target_bytes > 0 {
+    return Err("h264 enc: crf and target_bytes are mutually exclusive")
+  }
   if multi_ref < 1 || multi_ref > 16 {
     return Err("h264 enc: multi_ref must be in 1..=16")
   }
   // `b_slices` defaults on (`§403`); a one-frame sequence can never hold a
   // B picture, so it degrades to the I-only stream instead of erroring.
   let b_slices = b_slices && frames.length() >= 2
+  // `§435`: display-position QPs for the whole array. The recurrence is
+  // display-causal, so the streaming encoder evaluates the same formula
+  // push by push and the two stay byte-identical under CRF.
+  let crf_qps = if crf >= 0.0 {
+    h264_enc_crf_qps(frames, height, crf)
+  } else {
+    []
+  }
   if b_slices {
     let vbv_b = if vbv_maxrate > 0 || vbv_bufsize > 0 || fps > 0 {
       if target_bytes > 0 {
@@ -382,12 +477,22 @@ pub fn h264_encode_frames(
               dct8x8~,
               multi_ref~,
               chroma_format~,
+              chroma_qp_offset~,
               qps=trial,
               recon=[],
               stats=H264EncStats::new(),
               weightp~,
+              weightp_b~,
               bit_depth~,
               deblock~,
+              deblock_alpha~,
+              deblock_beta~,
+              sar~,
+              a53~,
+              sei_unregistered~,
+              stereo3d~,
+              roi~,
+              hints~,
             ) {
             Ok((bytes, _)) => Ok(bytes.length())
             Err(e) => Err(e)
@@ -413,12 +518,22 @@ pub fn h264_encode_frames(
           dct8x8~,
           multi_ref~,
           chroma_format~,
+          chroma_qp_offset~,
           qps~,
           recon~,
           stats~,
           weightp~,
+          weightp_b~,
           bit_depth~,
           deblock~,
+          deblock_alpha~,
+          deblock_beta~,
+          sar~,
+          a53~,
+          sei_unregistered~,
+          stereo3d~,
+          roi~,
+          hints~,
         ) {
         Ok((bytes, _)) => Ok(bytes)
         Err(e) => Err(e)
@@ -451,19 +566,30 @@ pub fn h264_encode_frames(
                   dct8x8~,
                   multi_ref~,
                   chroma_format~,
+                  chroma_qp_offset~,
                   qps=trial,
                   recon=[],
                   stats=H264EncStats::new(),
                   vbv=Some(v),
                   weightp~,
+                  weightp_b~,
                   bit_depth~,
                   deblock~,
+                  deblock_alpha~,
+                  deblock_beta~,
+                  sar~,
+                  a53~,
+                  sei_unregistered~,
+                  stereo3d~,
+                  roi~,
+                  hints~,
                 ) {
                 Ok((_, sizes)) => Ok(sizes)
                 Err(e) => Err(e)
               }
             },
             coding_order=h264_b_coding_order(frames.length()),
+            start_qps=crf_qps,
           ) {
           Ok(v) => v
           Err(e) => return Err(e)
@@ -486,14 +612,24 @@ pub fn h264_encode_frames(
             dct8x8~,
             multi_ref~,
             chroma_format~,
+            chroma_qp_offset~,
             qps~,
             vbv=Some(v),
             fillers~,
             recon~,
             stats~,
             weightp~,
+            weightp_b~,
             bit_depth~,
             deblock~,
+            deblock_alpha~,
+            deblock_beta~,
+            sar~,
+            a53~,
+            sei_unregistered~,
+            stereo3d~,
+            roi~,
+            hints~,
           ) {
           Ok((bytes, _)) => {
             stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -527,11 +663,23 @@ pub fn h264_encode_frames(
         dct8x8~,
         multi_ref~,
         chroma_format~,
+        chroma_qp_offset~,
+        qps=crf_qps,
         recon~,
         stats~,
         weightp~,
+        weightp_b~,
         bit_depth~,
         deblock~,
+        deblock_alpha~,
+        deblock_beta~,
+        sar~,
+        a53~,
+        sei_unregistered~,
+        stereo3d~,
+        roi~,
+        hints~,
+        pict_types~,
       ) {
       Ok((bytes, _)) => Ok(bytes)
       Err(e) => Err(e)
@@ -568,13 +716,23 @@ pub fn h264_encode_frames(
         aq_strength~,
         aud~,
         vbv=v,
+        crf_qps~,
         recon~,
         stats~,
         weightp~,
         bit_depth~,
         multi_ref~,
         chroma_format~,
+        chroma_qp_offset~,
         deblock~,
+        deblock_alpha~,
+        deblock_beta~,
+        sar~,
+        a53~,
+        sei_unregistered~,
+        stereo3d~,
+        roi~,
+        hints~,
       )
     None => ()
   }
@@ -606,7 +764,16 @@ pub fn h264_encode_frames(
             bit_depth~,
             multi_ref~,
             chroma_format~,
+            chroma_qp_offset~,
             deblock~,
+            deblock_alpha~,
+            deblock_beta~,
+            sar~,
+            a53~,
+            sei_unregistered~,
+            stereo3d~,
+            roi~,
+            hints~,
           ) {
           Ok((bytes, _)) => Ok(bytes.length())
           Err(e) => Err(e)
@@ -615,6 +782,8 @@ pub fn h264_encode_frames(
       Ok(q) => q
       Err(e) => return Err(e)
     }
+  } else if crf >= 0.0 {
+    crf_qps
   } else {
     Array::make(n, qp)
   }
@@ -642,7 +811,17 @@ pub fn h264_encode_frames(
       bit_depth~,
       multi_ref~,
       chroma_format~,
+      chroma_qp_offset~,
       deblock~,
+      deblock_alpha~,
+      deblock_beta~,
+      sar~,
+      a53~,
+      sei_unregistered~,
+      stereo3d~,
+      roi~,
+      hints~,
+      pict_types~,
     ) {
     Ok((bytes, _)) => Ok(bytes)
     Err(e) => Err(e)
@@ -668,48 +847,83 @@ fn h264_encode_frames_vbv(
   aq_strength~ : Int32,
   aud~ : Bool,
   vbv~ : H264Vbv,
+  /// `§435`: CRF starting assignment (display order = coding order for
+  /// the P-only line; empty keeps the flat `qp` start).
+  crf_qps~ : Array[Int32] = [],
   recon~ : Array[Bytes],
   stats~ : H264EncStats,
   /// `§410`: explicit P weighted prediction (see `h264_encode_frames`).
   weightp~ : Bool = false,
+  /// `§434`: explicit B weighted prediction (see `h264_encode_frames`).
   /// `§412`: bit depth (see `h264_encode_frames`).
   bit_depth~ : Int32 = 8,
   multi_ref~ : Int32 = 1,
   chroma_format~ : Int32 = 1,
+  /// `§432`: Cb/Cr chroma QP offset (see `h264_encode_frames`).
+  chroma_qp_offset~ : Int32 = 0,
   /// `§423`: in-loop deblocking (see `h264_encode_frames`).
   deblock~ : Bool = false,
+  deblock_alpha~ : Int32 = 0,
+  deblock_beta~ : Int32 = 0,
+  /// `§426`: sample aspect ratio for the SPS VUI (0/0 = unset).
+  sar~ : (Int32, Int32) = (0, 0),
+  /// `§427`: per-display-position side data (see `h264_encode_frames`).
+  a53~ : Array[Bytes?] = [],
+  sei_unregistered~ : Array[Bytes?] = [],
+  /// §428: stereo frame packing layout written with the IDR
+  /// (0 = off; an av_stereo3d_* value).
+  stereo3d~ : Int32 = 0,
+  /// `§429`: ROI map for every picture (see `h264_encode_frames`).
+  roi~ : Array[H264Roi] = [],
+  /// `§430`: per-display-position motion hints (see `h264_encode_frames`).
+  hints~ : Array[H264VideoHint?] = [],
 ) -> Result[Bytes, String] {
   let n = frames.length()
   let (qps, sizes) = match
-    h264_vbv_solve(n, qp, vbv, fn(trial) {
-      match
-        h264_encode_frames_qps(
-          frames,
-          width~,
-          height~,
-          base_qp=qp,
-          qps=trial,
-          level_idc~,
-          pcm_first~,
-          intra_in_p~,
-          intra4x4_in_p~,
-          dct8x8~,
-          aq~,
-          aq_strength~,
-          aud~,
-          recon=[],
-          stats=H264EncStats::new(),
-          vbv=Some(vbv),
-          weightp~,
-          bit_depth~,
-          multi_ref~,
-          chroma_format~,
-          deblock~,
-        ) {
-        Ok((_, sizes)) => Ok(sizes)
-        Err(e) => Err(e)
-      }
-    }) {
+    h264_vbv_solve(
+      n,
+      qp,
+      vbv,
+      fn(trial) {
+        match
+          h264_encode_frames_qps(
+            frames,
+            width~,
+            height~,
+            base_qp=qp,
+            qps=trial,
+            level_idc~,
+            pcm_first~,
+            intra_in_p~,
+            intra4x4_in_p~,
+            dct8x8~,
+            aq~,
+            aq_strength~,
+            aud~,
+            recon=[],
+            stats=H264EncStats::new(),
+            vbv=Some(vbv),
+            weightp~,
+            bit_depth~,
+            multi_ref~,
+            chroma_format~,
+            chroma_qp_offset~,
+            deblock~,
+            deblock_alpha~,
+            deblock_beta~,
+            sar~,
+            a53~,
+            sei_unregistered~,
+            stereo3d~,
+            roi~,
+            hints~,
+          ) {
+          Ok((_, sizes)) => Ok(sizes)
+          Err(e) => Err(e)
+        }
+      },
+      start_qps=crf_qps,
+    ) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -740,7 +954,16 @@ fn h264_encode_frames_vbv(
       bit_depth~,
       multi_ref~,
       chroma_format~,
+      chroma_qp_offset~,
       deblock~,
+      deblock_alpha~,
+      deblock_beta~,
+      sar~,
+      a53~,
+      sei_unregistered~,
+      stereo3d~,
+      roi~,
+      hints~,
     ) {
     Ok((bytes, _)) => {
       stats.vbv_bits = bytes.length().to_int64() * 8L
@@ -779,6 +1002,11 @@ fn h264_vbv_solve(
   encode : (Array[Int32]) -> Result[Array[Int32], String],
   /// Decode-order AU index -> display-order QP index; empty is identity.
   coding_order~ : Array[Int32] = [],
+  /// `§435`: starting assignment (display order) — the CRF QPs. Empty
+  /// keeps the flat `start_qp` start; when set, the solver's monotone
+  /// raise works on top of the CRF distribution (constant quality as
+  /// far as the CPB allows, x264's crf+vbv contract).
+  start_qps~ : Array[Int32] = [],
 ) -> Result[(Array[Int32], Array[Int32]), String] {
   let q0 = if start_qp < h264_rc_qp_min {
     h264_rc_qp_min
@@ -787,7 +1015,11 @@ fn h264_vbv_solve(
   } else {
     start_qp
   }
-  let qps = Array::make(n, q0)
+  let qps = if start_qps.length() == n {
+    start_qps.copy()
+  } else {
+    Array::make(n, q0)
+  }
   let mut rounds = 0
   while true {
     let sizes = match encode(qps) {
@@ -914,6 +1146,7 @@ fn h264_encode_frames_qps(
   aud~ : Bool = false,
   /// `§410`: explicit P weighted prediction (see `h264_encode_frames`).
   weightp~ : Bool = false,
+  /// `§434`: explicit B weighted prediction (see `h264_encode_frames`).
   /// `§412`: bit depth (see `h264_encode_frames`).
   bit_depth~ : Int32 = 8,
   /// `§415`: P-slice multi-reference history depth (1 = single reference,
@@ -921,8 +1154,27 @@ fn h264_encode_frames_qps(
   multi_ref~ : Int32 = 1,
   /// `§420`: chroma format (see `h264_encode_frames`).
   chroma_format~ : Int32 = 1,
+  /// `§432`: Cb/Cr chroma QP offset (see `h264_encode_frames`).
+  chroma_qp_offset~ : Int32 = 0,
   /// `§423`: in-loop deblocking for the IDR and every P picture.
   deblock~ : Bool = false,
+  deblock_alpha~ : Int32 = 0,
+  deblock_beta~ : Int32 = 0,
+  /// `§426`: sample aspect ratio for the SPS VUI (0/0 = unset).
+  sar~ : (Int32, Int32) = (0, 0),
+  /// `§427`: per-display-position side data (see `h264_encode_frames`).
+  a53~ : Array[Bytes?] = [],
+  sei_unregistered~ : Array[Bytes?] = [],
+  /// §428: stereo frame packing layout written with the IDR
+  /// (0 = off; an av_stereo3d_* value).
+  stereo3d~ : Int32 = 0,
+  /// `§429`: ROI map for every picture (see `h264_encode_frames`).
+  roi~ : Array[H264Roi] = [],
+  /// `§430`: per-display-position motion hints (see `h264_encode_frames`).
+  hints~ : Array[H264VideoHint?] = [],
+  /// `§431`: per-display-position type requests (see
+  /// `h264_encode_frames`).
+  pict_types~ : Array[Int32] = [],
 ) -> Result[(Bytes, Array[Int32]), String] {
   let (y0, u0, v0) = frames[0]
   let first = match
@@ -946,7 +1198,15 @@ fn h264_encode_frames_qps(
       idr_cpb_delay~,
       multi_ref~,
       chroma_format~,
+      chroma_qp_offset~,
       deblock~,
+      deblock_alpha~,
+      deblock_beta~,
+      sar~,
+      a53=h264_enc_sei_pick(a53, 0),
+      sei_unregistered=h264_enc_sei_pick(sei_unregistered, 0),
+      stereo3d~,
+      roi~,
     ) {
     Ok(e) => e
     Err(e) => return Err(e)
@@ -958,6 +1218,10 @@ fn h264_encode_frames_qps(
     level_idc,
     bit_depth,
     nrefs: multi_ref,
+    sar,
+    deblock_alpha,
+    deblock_beta,
+    weightp_b: false,
   }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
@@ -967,6 +1231,12 @@ fn h264_encode_frames_qps(
   let chroma_plane_h = if chroma_format == 1 { pheight / 2 } else { pheight }
   let chroma_plane_w = if chroma_format == 3 { width } else { width / 2 }
   let chroma_visible_h = if chroma_format == 1 { height / 2 } else { height }
+  // `§429`: one ROI map expands to per-MB QP offsets (empty when AQ is off).
+  let roi_off = match
+    h264_roi_offsets_for(roi, aq, mb_width, mb_height, bit_depth) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
   let ps = new_h264_param_sets()
   match
     ff_h264_decode_seq_parameter_set(
@@ -977,7 +1247,13 @@ fn h264_encode_frames_qps(
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
   }
-  let pps_raw = h264_enc_pps_rbsp(p, dct8x8~, weightp~, chroma_format~)
+  let pps_raw = h264_enc_pps_rbsp(
+    p,
+    dct8x8~,
+    weightp~,
+    chroma_format~,
+    chroma_qp_offset~,
+  )
   match
     ff_h264_decode_picture_parameter_set(
       BitReader::new(pps_raw),
@@ -1048,145 +1324,329 @@ fn h264_encode_frames_qps(
       states[k].nz[i] = first.mb_nz[k][i]
     }
   }
-  for f = 1; f < frames.length(); f = f + 1 {
-    let (y, u, v) = frames[f]
-    let src_y_p = h264_enc_load_plane(
-      y,
-      width,
-      height,
-      ystride,
-      pheight,
-      bit_depth~,
-    )
-    let (act, act_avg) = if aq {
-      h264_aq_measure(src_y_p, ystride, mb_width, mb_height)
+  // `§431`: this schedule codes in display order (no B pictures), so a
+  // forced type replaces this position's writer. All-`Auto` keeps the
+  // historical loop's frame numbering (`fn_counter == f`).
+  let requests = if pict_types.length() == frames.length() {
+    pict_types
+  } else {
+    Array::make(frames.length(), h264_pict_type_auto)
+  }
+  let plan = match h264_pict_type_plan(requests, false) {
+    Ok(p) => p
+    Err(e) => return Err(e)
+  }
+  let mut fn_counter = 0
+  for (f, kind) in plan[1:] {
+    if kind == h264_pict_type_idr {
+      // ---- mid-sequence IDR: repeated parameter sets, new GOP ----
+      let (y, u, v) = frames[f]
+      let intra = match
+        h264_encode_intra_frame(
+          y,
+          u,
+          v,
+          width~,
+          height~,
+          qp=qps[f],
+          level_idc~,
+          dct8x8~,
+          stats~,
+          pps_qp=base_qp,
+          aq~,
+          aq_strength~,
+          weightp~,
+          bit_depth~,
+          multi_ref~,
+          chroma_format~,
+          chroma_qp_offset~,
+          deblock~,
+          deblock_alpha~,
+          deblock_beta~,
+          sar~,
+          a53=h264_enc_sei_pick(a53, f),
+          sei_unregistered=h264_enc_sei_pick(sei_unregistered, f),
+          stereo3d~,
+          roi~,
+          idr=true,
+        ) {
+        Ok(e2) => e2
+        Err(e2) => return Err(e2)
+      }
+      let au : Array[Bytes] = [intra.annexb]
+      if fillers.length() > f && fillers[f] > 0 {
+        au.push(h264_enc_filler_nal(fillers[f] - 5))
+      }
+      if aud {
+        au.insert(0, h264_enc_aud(true))
+      }
+      stream.push(h264_enc_concat(au))
+      ref_y = h264_b_copy_plane(intra.recon_y)
+      ref_u = h264_b_copy_plane(intra.recon_u)
+      ref_v = h264_b_copy_plane(intra.recon_v)
+      refs_y.clear()
+      refs_y.push(ref_y)
+      refs_u.clear()
+      refs_u.push(ref_u)
+      refs_v.clear()
+      refs_v.push(ref_v)
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        states[k] = new_h264_p_mb_state()
+        for i = 0; i < 48; i = i + 1 {
+          states[k].nz[i] = intra.mb_nz[k][i]
+        }
+      }
+      fn_counter = 0
+    } else if kind == h264_pict_type_keyframe {
+      // ---- non-IDR open-GOP I picture: new prediction chain ----
+      let (y, u, v) = frames[f]
+      fn_counter = fn_counter + 1
+      let intra = match
+        h264_encode_intra_frame(
+          y,
+          u,
+          v,
+          width~,
+          height~,
+          qp=qps[f],
+          level_idc~,
+          dct8x8~,
+          stats~,
+          pps_qp=base_qp,
+          aq~,
+          aq_strength~,
+          weightp~,
+          bit_depth~,
+          multi_ref~,
+          chroma_format~,
+          chroma_qp_offset~,
+          deblock~,
+          deblock_alpha~,
+          deblock_beta~,
+          sar~,
+          a53=h264_enc_sei_pick(a53, f),
+          sei_unregistered=h264_enc_sei_pick(sei_unregistered, f),
+          stereo3d~,
+          roi~,
+          idr=false,
+          frame_num=fn_counter,
+        ) {
+        Ok(e2) => e2
+        Err(e2) => return Err(e2)
+      }
+      let au : Array[Bytes] = [intra.annexb]
+      if fillers.length() > f && fillers[f] > 0 {
+        au.push(h264_enc_filler_nal(fillers[f] - 5))
+      }
+      if aud {
+        au.insert(0, h264_enc_aud(true))
+      }
+      stream.push(h264_enc_concat(au))
+      recon.push(
+        h264_enc_pack_recon(
+          intra.recon_y,
+          intra.recon_u,
+          intra.recon_v,
+          width,
+          height,
+          ystride,
+          cstride,
+          bit_depth~,
+          chroma_h=chroma_visible_h,
+          chroma_w=chroma_plane_w,
+        ),
+      )
+      let i_y = h264_b_copy_plane(intra.recon_y)
+      let i_u = h264_b_copy_plane(intra.recon_u)
+      let i_v = h264_b_copy_plane(intra.recon_v)
+      ref_y = i_y
+      ref_u = i_u
+      ref_v = i_v
+      refs_y.insert(0, i_y)
+      refs_u.insert(0, i_u)
+      refs_v.insert(0, i_v)
+      if refs_y.length() > multi_ref {
+        refs_y.truncate(multi_ref)
+        refs_u.truncate(multi_ref)
+        refs_v.truncate(multi_ref)
+      }
+      for k = 0; k < mb_width * mb_height; k = k + 1 {
+        states[k] = new_h264_p_mb_state()
+        for i = 0; i < 48; i = i + 1 {
+          states[k].nz[i] = intra.mb_nz[k][i]
+        }
+      }
     } else {
-      (Array::make(mb_width * mb_height, 0), 0)
-    }
-    let enc : H264PEncoder = {
-      p: { width, height, qp: qps[f], level_idc, bit_depth, nrefs: multi_ref, },
-      stats,
-      pps,
-      chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qps[f]), bit_depth~),
-      src_y: src_y_p,
-      src_u: h264_enc_load_plane(
-        u,
-        chroma_plane_w,
-        chroma_visible_h,
-        cstride,
-        chroma_plane_h,
-        bit_depth~,
-      ),
-      src_v: h264_enc_load_plane(
-        v,
-        chroma_plane_w,
-        chroma_visible_h,
-        cstride,
-        chroma_plane_h,
-        bit_depth~,
-      ),
-      rec_y: Array::make(ystride * pheight, 0),
-      rec_u: Array::make(cstride * chroma_plane_h, 0),
-      rec_v: Array::make(cstride * chroma_plane_h, 0),
-      ref_y,
-      ref_u,
-      ref_v,
-      refs_y,
-      refs_u,
-      refs_v,
-      nrefs: refs_y.length(),
-      cur_ref_mb: 0,
-      ystride,
-      cstride,
-      pwidth: ystride,
-      pheight,
-      mb_width,
-      mb_height,
-      states,
-      cur_nz: Array::make(48, 0),
-      cur_mv: Array::make(32, 0),
-      cur_ref: Array::make(16, -2),
-      dct8x8,
-      intra4x4_in_p,
-      base_qp,
-      mb_qp: qps[f],
-      mb_dqp: 0,
-      prev_qp: qps[f],
-      aq_act: act,
-      aq_avg: act_avg,
-      aq_on: aq,
-      aq_strength,
-      cabac_rd: false,
-      price_mirror: None,
-      price_enc: None,
-      price_states: None,
-      b_parts: false,
-      intra_in_b: false,
-      intra4x4_in_b: false,
-      weightp,
-      pwt: new_h264_pred_weight(),
-      deblock,
-    }
-    // frame_num increments per reference frame: the IDR carries 0.
-    let nal = match enc.encode_p_frame(f, intra_in_p) {
-      Ok(n) => n
-      Err(e) => return Err(e)
-    }
-    let au : Array[Bytes] = []
-    match vbv {
-      None => ()
-      Some(v) => au.push(h264_enc_sei_pic_timing(v, f * 2))
-    }
-    au.push(nal)
-    if fillers.length() > f && fillers[f] > 0 {
-      au.push(h264_enc_filler_nal(fillers[f] - 5))
-    }
-    if aud {
-      au.insert(0, h264_enc_aud(false))
-    }
-    stream.push(h264_enc_concat(au))
-    recon.push(
-      h264_enc_pack_recon(
-        enc.rec_y,
-        enc.rec_u,
-        enc.rec_v,
+      fn_counter = fn_counter + 1
+      let (y, u, v) = frames[f]
+      let src_y_p = h264_enc_load_plane(
+        y,
         width,
         height,
         ystride,
-        cstride,
+        pheight,
         bit_depth~,
-        chroma_h=chroma_visible_h,
-        chroma_w=chroma_plane_w,
-      ),
-    )
-    // The reconstruction becomes the next reference.
-    let next_y = Array::make(ystride * pheight, 0)
-    let next_u = Array::make(cstride * chroma_plane_h, 0)
-    let next_v = Array::make(cstride * chroma_plane_h, 0)
-    for row = 0; row < pheight; row = row + 1 {
-      for col = 0; col < ystride; col = col + 1 {
-        next_y[row * ystride + col] = enc.rec_y[row * ystride + col]
+      )
+      let (act, act_avg) = if aq {
+        h264_aq_measure(src_y_p, ystride, mb_width, mb_height)
+      } else {
+        (Array::make(mb_width * mb_height, 0), 0)
       }
-    }
-    for row = 0; row < chroma_plane_h; row = row + 1 {
-      for col = 0; col < cstride; col = col + 1 {
-        next_u[row * cstride + col] = enc.rec_u[row * cstride + col]
-        next_v[row * cstride + col] = enc.rec_v[row * cstride + col]
+      // `§430`: this picture's motion hint expanded to per-MB skip flags.
+      let hint_const = match
+        h264_hint_constants(h264_hint_at(hints, f), mb_width, mb_height) {
+        Ok(v) => v
+        Err(e) => return Err(e)
       }
-    }
-    ref_y = next_y
-    ref_u = next_u
-    ref_v = next_v
-    // `§415`: grow the reference history (newest first), capped at the
-    // active count. `next_*` are freshly allocated copies, so the history
-    // keeps them by reference with no extra copying.
-    refs_y.insert(0, next_y)
-    refs_u.insert(0, next_u)
-    refs_v.insert(0, next_v)
-    if refs_y.length() > multi_ref {
-      refs_y.truncate(multi_ref)
-      refs_u.truncate(multi_ref)
-      refs_v.truncate(multi_ref)
+      let enc : H264PEncoder = {
+        p: {
+          width,
+          height,
+          qp: qps[f],
+          level_idc,
+          bit_depth,
+          nrefs: multi_ref,
+          sar,
+          deblock_alpha,
+          deblock_beta,
+          weightp_b: false,
+        },
+        stats,
+        pps,
+        chroma_qp: h264_get_chroma_qp(pps, 0, p.qp_ext(qps[f]), bit_depth~),
+        src_y: src_y_p,
+        src_u: h264_enc_load_plane(
+          u,
+          chroma_plane_w,
+          chroma_visible_h,
+          cstride,
+          chroma_plane_h,
+          bit_depth~,
+        ),
+        src_v: h264_enc_load_plane(
+          v,
+          chroma_plane_w,
+          chroma_visible_h,
+          cstride,
+          chroma_plane_h,
+          bit_depth~,
+        ),
+        rec_y: Array::make(ystride * pheight, 0),
+        rec_u: Array::make(cstride * chroma_plane_h, 0),
+        rec_v: Array::make(cstride * chroma_plane_h, 0),
+        ref_y,
+        ref_u,
+        ref_v,
+        refs_y,
+        refs_u,
+        refs_v,
+        nrefs: refs_y.length(),
+        cur_ref_mb: 0,
+        ystride,
+        cstride,
+        pwidth: ystride,
+        pheight,
+        mb_width,
+        mb_height,
+        states,
+        cur_nz: Array::make(48, 0),
+        cur_mv: Array::make(32, 0),
+        cur_ref: Array::make(16, -2),
+        dct8x8,
+        intra4x4_in_p,
+        base_qp,
+        mb_qp: qps[f],
+        mb_dqp: 0,
+        prev_qp: qps[f],
+        aq_act: act,
+        aq_avg: act_avg,
+        aq_on: aq,
+        aq_strength,
+        roi_off,
+        hint_const,
+        cabac_rd: false,
+        price_mirror: None,
+        price_enc: None,
+        price_states: None,
+        b_parts: false,
+        intra_in_b: false,
+        intra4x4_in_b: false,
+        weightp,
+        pwt: new_h264_pred_weight(),
+        deblock,
+      }
+      // frame_num increments per reference frame: the IDR carries 0.
+      let nal = match enc.encode_p_frame(fn_counter, intra_in_p) {
+        Ok(n) => n
+        Err(e) => return Err(e)
+      }
+      let au : Array[Bytes] = []
+      match vbv {
+        None => ()
+        Some(v) => au.push(h264_enc_sei_pic_timing(v, f * 2))
+      }
+      match
+        h264_enc_sei_side_data_nals(
+          h264_enc_sei_pick(a53, f),
+          h264_enc_sei_pick(sei_unregistered, f),
+        ) {
+        Ok(nals) =>
+          for sei_nal in nals {
+            au.push(sei_nal)
+          }
+        Err(e) => return Err(e)
+      }
+      au.push(nal)
+      if fillers.length() > f && fillers[f] > 0 {
+        au.push(h264_enc_filler_nal(fillers[f] - 5))
+      }
+      if aud {
+        au.insert(0, h264_enc_aud(false))
+      }
+      stream.push(h264_enc_concat(au))
+      recon.push(
+        h264_enc_pack_recon(
+          enc.rec_y,
+          enc.rec_u,
+          enc.rec_v,
+          width,
+          height,
+          ystride,
+          cstride,
+          bit_depth~,
+          chroma_h=chroma_visible_h,
+          chroma_w=chroma_plane_w,
+        ),
+      )
+      // The reconstruction becomes the next reference.
+      let next_y = Array::make(ystride * pheight, 0)
+      let next_u = Array::make(cstride * chroma_plane_h, 0)
+      let next_v = Array::make(cstride * chroma_plane_h, 0)
+      for row = 0; row < pheight; row = row + 1 {
+        for col = 0; col < ystride; col = col + 1 {
+          next_y[row * ystride + col] = enc.rec_y[row * ystride + col]
+        }
+      }
+      for row = 0; row < chroma_plane_h; row = row + 1 {
+        for col = 0; col < cstride; col = col + 1 {
+          next_u[row * cstride + col] = enc.rec_u[row * cstride + col]
+          next_v[row * cstride + col] = enc.rec_v[row * cstride + col]
+        }
+      }
+      ref_y = next_y
+      ref_u = next_u
+      ref_v = next_v
+      // `§415`: grow the reference history (newest first), capped at the
+      // active count. `next_*` are freshly allocated copies, so the history
+      // keeps them by reference with no extra copying.
+      refs_y.insert(0, next_y)
+      refs_u.insert(0, next_u)
+      refs_v.insert(0, next_v)
+      if refs_y.length() > multi_ref {
+        refs_y.truncate(multi_ref)
+        refs_u.truncate(multi_ref)
+        refs_v.truncate(multi_ref)
+      }
     }
   }
   // Concatenate; the per-picture sizes feed the rate control.
@@ -1396,16 +1856,18 @@ fn H264PEncoder::encode_p_frame(
   }
   // `weightp` (`§410`): fit this picture's weight table against the very
   // reference planes the macroblock loop predicts from, before any slice
-  // byte is written (the table rides the slice header).
+  // byte is written (the table rides the slice header). The primary
+  // reference is the history head — `ref_y` can lag it with `b_slices`
+  // (the pending B picture keeps the past alive until it is coded).
   if self.weightp {
     h264_enc_fit_p_weight(
       self.pwt,
       self.src_y,
-      self.ref_y,
+      self.refs_y[0],
       self.src_u,
-      self.ref_u,
+      self.refs_u[0],
       self.src_v,
-      self.ref_v,
+      self.refs_v[0],
       self.ystride,
       self.cstride,
       self.p.width,
@@ -1449,6 +1911,12 @@ fn H264PEncoder::encode_p_frame(
   // dec_ref_pic_marking (nal_ref_idc != 0, non-IDR):
   r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
   r.put_se(self.p.qp - self.base_qp) // slice_qp_delta
+  // `§433`: slice-level deblocking syntax when the PPS opted in.
+  if self.pps.deblocking_filter_parameters_present != 0 {
+    r.put_ue(0) // disable_deblocking_filter_idc
+    r.put_se(self.p.deblock_alpha) // slice_alpha_c0_offset_div2
+    r.put_se(self.p.deblock_beta) // slice_beta_offset_div2
+  }
   let mut skip_run = 0
   for mb_y = 0; mb_y < self.mb_height; mb_y = mb_y + 1 {
     for mb_x = 0; mb_x < self.mb_width; mb_x = mb_x + 1 {
@@ -1462,7 +1930,7 @@ fn H264PEncoder::encode_p_frame(
           self.aq_avg,
           self.aq_strength,
         )
-        let mut mq = self.p.qp + adj
+        let mut mq = self.p.qp + adj + h264_roi_off_at(self.roi_off, mb_idx)
         if mq < 0 {
           mq = 0
         }
@@ -1487,12 +1955,20 @@ fn H264PEncoder::encode_p_frame(
       self.ref_u = self.refs_u[0]
       self.ref_v = self.refs_v[0]
       let (pmvx, pmvy) = self.pred_pskip(mb_x, mb_y)
-      let (_, _, skip_sad) = self.me_fixed(mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy)
-      let plan = if skip_sad == 0 &&
-        self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy) == 0 {
+      // `§430`: x264 trusts the mb_info hint unconditionally — a constant
+      // macroblock is forced to P_Skip (the predicted skip MV, zero
+      // residual), skipping the motion search and the RD candidates.
+      let plan = if h264_hint_is_constant(self.hint_const, mb_idx) {
         Skip
       } else {
-        self.decide_plan(mb_x, mb_y, intra_in_p)
+        let (_, _, skip_sad) = self.me_fixed(
+          mb_x, mb_y, 0, 0, 16, 16, pmvx, pmvy,
+        )
+        if skip_sad == 0 && self.me_fixed_ssd(mb_x, mb_y, pmvx, pmvy) == 0 {
+          Skip
+        } else {
+          self.decide_plan(mb_x, mb_y, intra_in_p)
+        }
       }
       if plan is I16(_, _, _) {
         self.stats.i16_mbs += 1
@@ -1513,7 +1989,7 @@ fn H264PEncoder::encode_p_frame(
       // reading a skipped macroblock as a coded one.
       if plan is Skip {
         skip_run = skip_run + 1
-        self.commit_skip(mb_idx, pmvx, pmvy)
+        self.commit_skip(mb_idx, pmvx, pmvy, qp=self.p.qp_ext(self.prev_qp))
         continue
       }
       r.put_ue(skip_run)
@@ -1546,6 +2022,8 @@ fn H264PEncoder::encode_p_frame(
       h264_enc_infos_from_p(self.states),
       self.pps,
       self.p.bit_depth,
+      alpha=self.p.deblock_alpha,
+      beta=self.p.deblock_beta,
     )
   }
   Ok(h264_enc_nal(r, 3, 1))
@@ -2650,6 +3128,7 @@ fn H264PEncoder::commit_skip(
   mb_idx : Int32,
   mvx : Int32,
   mvy : Int32,
+  qp~ : Int32,
 ) -> Unit {
   // P_Skip codes no ref_idx: the reference is slot 0 by syntax. When
   // the RD decision reached this skip through decide_plan, the multi
@@ -2661,6 +3140,10 @@ fn H264PEncoder::commit_skip(
   self.ref_v = self.refs_v[0]
   self.cur_ref_mb = 0
   let st = self.states[mb_idx]
+  // P_Skip carries no QP delta: the decoder keeps its running QP. The AQ
+  // candidate for this MB is not transmitted and must not reach deblock.
+  st.qp = qp
+  st.tf8 = false
   for i = 0; i < 16; i = i + 1 {
     st.mv[2 * i] = mvx
     st.mv[2 * i + 1] = mvy
@@ -2676,8 +3159,6 @@ fn H264PEncoder::commit_skip(
   for i = 0; i < 48; i = i + 1 {
     st.nz[i] = 0
   }
-  st.tf8 = false
-  st.qp = self.p.qp_ext(self.mb_qp)
   // Reconstruction: MC straight into the reconstruction planes.
   let mb_x = mb_idx % self.mb_width
   let mb_y = mb_idx / self.mb_width
@@ -4327,6 +4808,9 @@ fn H264PEncoder::commit_plan_state(
   /// `§423`: the winning residual used the 8x8 transform (inter 8x8 DCT or
   /// Intra 8x8). The in-loop deblock skips the odd internal edges then.
   dct8~ : Bool = false,
+  /// Effective extended QP after syntax write: CAVLC supplies prev_qp;
+  /// CABAC supplies the arithmetic writer's mirror.qscale.
+  qp~ : Int32,
 ) -> Unit {
   let st = self.states[mb_idx]
   for i = 0; i < 16; i = i + 1 {
@@ -4364,7 +4848,7 @@ fn H264PEncoder::commit_plan_state(
     }
     _ => st.intra_nxn = false
   }
-  st.qp = self.p.qp_ext(self.mb_qp)
+  st.qp = qp
   st.tf8 = dct8
 }
 
@@ -4390,7 +4874,16 @@ fn H264PEncoder::write_coded_mb(
   }
   self.write_mb_syntax(mb_x, mb_y, plan, coded, r)
   let mb_idx = mb_y * self.mb_width + mb_x
-  self.commit_plan_state(mb_idx, plan, dct8=coded.dct8)
+  // Inter transform_size_8x8_flag is present only with non-zero luma CBP;
+  // Intra 8x8 always carries its flag. A zero-CBP 8x8 candidate must not
+  // leave transform_8x8 set in the deblock mirror.
+  let effective_dct8 = coded.dct8 && (plan is I8(_, _) || coded.luma_cbp != 0)
+  self.commit_plan_state(
+    mb_idx,
+    plan,
+    dct8=effective_dct8,
+    qp=self.p.qp_ext(self.prev_qp),
+  )
   Ok(())
 }
 

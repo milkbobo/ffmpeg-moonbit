@@ -15,6 +15,9 @@ priv struct Options {
   maxrate : Int32
   bufsize : Int32
   fps : Int32
+  /// `§435`: constant rate factor `--crf` (0..=51, decimals allowed;
+  /// negative = unset — `qp` stays the quality selector).
+  crf : Double
   stream : Bool
   b_slices : Bool
   b_parts : Bool
@@ -22,6 +25,8 @@ priv struct Options {
   intra4x4_in_b : Bool
   /// `§410`: explicit P weighted prediction (opt-in).
   weightp : Bool
+  /// `§434`: explicit B weighted prediction (opt-in).
+  weightp_b : Bool
   /// Sample bit depth (8 / 9 / 10 / 12 / 14). Above 8 the input uses
   /// planar little-endian 16-bit samples; profile follows depth and chroma.
   bit_depth : Int32
@@ -33,9 +38,17 @@ priv struct Options {
   multi_ref : Int32
   /// Chroma format, 420 (default), 422, or 444.
   chroma_format : Int32
+  /// `§432`: Cb/Cr chroma QP offset -12..12 (`--chroma-qp-offset`).
+  chroma_qp_offset : Int32
   keyint : Int32
   /// `§423`: in-loop deblocking (batch and streaming).
   deblock : Bool
+  /// `§433`: slice deblocking alpha/beta offsets -6..=6 in div2 units
+  /// (`--deblock-alpha` / `--deblock-beta`, x264 `--deblock alpha:beta`).
+  deblock_alpha : Int32
+  deblock_beta : Int32
+  /// `§426`: sample aspect ratio `--sar NUM:DEN` (0/0 = unset).
+  sar : (Int32, Int32)
 }
 
 ///|
@@ -59,7 +72,9 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--intra-in-b"
       | "--intra4x4-in-b"
       | "--weightp"
+      | "--weightp-b"
       | "--deblock"
+      | "--no-deblock"
       | "--no-cabac"
       | "--no-cabac-rd"
       | "--no-dct8x8"
@@ -67,7 +82,8 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--no-b-parts"
       | "--no-intra-in-b"
       | "--no-intra4x4-in-b"
-      | "--no-weightp" => {
+      | "--no-weightp"
+      | "--no-weightp-b" => {
         if values.contains(arg) {
           fail("encode-h264: repeated option \{arg}")
         }
@@ -82,12 +98,17 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--codec"
       | "--multi-ref"
       | "--chroma"
+      | "--chroma-qp-offset"
+      | "--deblock-alpha"
+      | "--deblock-beta"
       | "--keyint"
+      | "--sar"
       | "--aq-strength"
       | "--target-bytes"
       | "--vbv-maxrate"
       | "--vbv-bufsize"
-      | "--fps" => {
+      | "--fps"
+      | "--crf" => {
         if values.contains(arg) {
           fail("encode-h264: repeated option \{arg}")
         }
@@ -152,6 +173,49 @@ fn parse_options(args : Array[String]) -> Options raise {
   if keyint < 0 {
     fail("encode-h264: keyint must be nonnegative")
   }
+  let chroma_qp_offset = number(values, "--chroma-qp-offset", 0)
+  if chroma_qp_offset < -12 || chroma_qp_offset > 12 {
+    fail("encode-h264: --chroma-qp-offset must be in -12..=12")
+  }
+  let deblock_alpha = number(values, "--deblock-alpha", 0)
+  if deblock_alpha < -6 || deblock_alpha > 6 {
+    fail("encode-h264: --deblock-alpha must be in -6..=6")
+  }
+  let deblock_beta = number(values, "--deblock-beta", 0)
+  if deblock_beta < -6 || deblock_beta > 6 {
+    fail("encode-h264: --deblock-beta must be in -6..=6")
+  }
+  let sar = match values.get("--sar") {
+    None => (0, 0)
+    Some(spec) => {
+      // Split NUM:DEN by hand: core's split returns an iterator without
+      // indexing, and the two-component shape is all we accept anyway.
+      let mut cut = -1
+      for i, c in spec {
+        if c == ':' && cut < 0 {
+          cut = i
+        }
+      }
+      if cut < 0 {
+        fail("encode-h264: --sar must be NUM:DEN (got \{spec})")
+      }
+      let num_s = spec[:cut].to_owned()
+      let den_s = spec[cut + 1:].to_owned()
+      if num_s.is_empty() || den_s.is_empty() {
+        fail("encode-h264: --sar must be NUM:DEN (got \{spec})")
+      }
+      let num = @string.parse_int(num_s) catch {
+        _ => fail("encode-h264: --sar must be NUM:DEN (got \{spec})")
+      }
+      let den = @string.parse_int(den_s) catch {
+        _ => fail("encode-h264: --sar must be NUM:DEN (got \{spec})")
+      }
+      if num <= 0 || den <= 0 {
+        fail("encode-h264: --sar components must be positive (got \{spec})")
+      }
+      (num, den)
+    }
+  }
   let aq_strength = number(values, "--aq-strength", 1)
   if aq_strength < 0 || aq_strength > 6 {
     fail("encode-h264: aq-strength must be in 0..=6")
@@ -186,6 +250,23 @@ fn parse_options(args : Array[String]) -> Options raise {
         "encode-h264: VBV needs maxrate/bufsize/fps and excludes target-bytes",
       )
     }
+  }
+  // `§435`: CRF replaces the bitrate target as the quality selector (the
+  // NaN-safe range test keeps "inf"/"nan" out with the invalid values).
+  let crf = match values.get("--crf") {
+    None => -1.0
+    Some(s) => {
+      let v = @string.parse_double(s) catch {
+        _ => fail("encode-h264: --crf expects a number")
+      }
+      if !(v >= 0.0 && v <= 51.0) {
+        fail("encode-h264: --crf must be in 0..=51")
+      }
+      v
+    }
+  }
+  if crf >= 0.0 && target_bytes > 0 {
+    fail("encode-h264: --crf and --target-bytes are mutually exclusive")
   }
   if values.contains("--cabac-rd") &&
     !values.contains("--cabac") &&
@@ -227,6 +308,7 @@ fn parse_options(args : Array[String]) -> Options raise {
     maxrate,
     bufsize,
     fps,
+    crf,
     stream: values.contains("--stream"),
     b_slices: !no_b,
     b_parts: !no_b && !values.contains("--no-b-parts"),
@@ -235,12 +317,19 @@ fn parse_options(args : Array[String]) -> Options raise {
     // Since §413 weighted P prediction defaults on; the positive spelling
     // stays accepted as a no-op and `--no-weightp` opts out.
     weightp: !values.contains("--no-weightp"),
+    // `§434`: opt-in B weights; disabled when B slices are off.
+    weightp_b: !no_b && values.contains("--weightp-b"),
     bit_depth,
     codec,
     multi_ref,
     chroma_format,
+    chroma_qp_offset,
     keyint,
-    deblock: values.contains("--deblock"),
+    // Default on since §424; the positive spelling stays accepted as a no-op.
+    deblock: !values.contains("--no-deblock"),
+    deblock_alpha,
+    deblock_beta,
+    sar,
   }
 }
 
@@ -303,18 +392,24 @@ fn video_config(opts : Options) -> @codec.VideoEncConfig {
     intra_in_b: opts.intra_in_b,
     intra4x4_in_b: opts.intra4x4_in_b,
     weightp: opts.weightp,
+    weightp_b: opts.weightp_b,
     bit_depth: opts.bit_depth,
     multi_ref: opts.multi_ref,
     chroma_format: opts.chroma_format,
+    chroma_qp_offset: opts.chroma_qp_offset,
     keyint: opts.keyint,
     aud: opts.aud,
     aq: opts.aq,
     aq_strength: opts.aq_strength,
     target_bytes: opts.target_bytes,
+    crf: opts.crf,
     vbv_maxrate: opts.maxrate,
     vbv_bufsize: opts.bufsize,
     fps: opts.fps,
     deblock: opts.deblock,
+    deblock_alpha: opts.deblock_alpha,
+    deblock_beta: opts.deblock_beta,
+    sar: opts.sar,
   }
 }
 

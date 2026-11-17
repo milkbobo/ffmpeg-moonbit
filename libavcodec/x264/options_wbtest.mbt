@@ -60,7 +60,7 @@ test "x264 options: malformed raw dictionary releases partially parsed entries" 
   // The safe wrapper never creates this string; exercise the C failure path.
   for _ in 0..<8 {
     let handle = x264enc_open_ffi(
-      b"libx264", 32, 16, 0, 1, 25, 25, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, b"preset=medium:broken",
+      b"libx264", 32, 16, 0, 1, 25, 25, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b"preset=medium:broken",
     )
     assert_eq(x264enc_status_ffi(handle), 1)
     assert_true(x264enc_errmsg_ffi(handle) is Some(_))

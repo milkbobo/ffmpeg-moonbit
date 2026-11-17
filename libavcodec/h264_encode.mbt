@@ -9,7 +9,8 @@
 /// field for field, and nC prediction replicates `h264_nc_luma` /
 /// `h264_nc_chroma` / `h264_block0_nc` on a mirrored per-MB nz state - so
 /// the encoder's local reconstruction is, by construction, exactly what
-/// `h264_decode_annexb_frames` (loop filter off) produces from the stream.
+/// `h264_decode_annexb_frames` produces from the stream when both sides use
+/// the same deblocking setting.
 
 ///|
 fn h264_enc_concat(parts : Array[Bytes]) -> Bytes {
@@ -26,8 +27,8 @@ fn h264_enc_concat(parts : Array[Bytes]) -> Bytes {
 pub struct H264EncodedFrame {
   /// SPS + PPS + IDR slice NALs, Annex B start codes.
   annexb : Bytes
-  /// The encoder's local reconstruction, macroblock-aligned planes (the
-  /// pre-deblocking pixels the decoder reproduces byte-for-byte).
+  /// The encoder's local reconstruction, macroblock-aligned planes. With
+  /// deblocking enabled these are the filtered pixels; I_PCM stays lossless.
   recon_y : Array[Int32]
   recon_u : Array[Int32]
   recon_v : Array[Int32]
@@ -110,6 +111,8 @@ priv struct H264IntraEncoder {
   mut aq_avg : Int32
   aq_on : Bool
   aq_strength : Int32
+  /// `§429`: per-MB ROI QP offsets (empty = no ROI; only applied with AQ on).
+  roi_off : Array[Int32]
   /// `§423`: apply the in-loop deblocking filter to the reconstruction (and
   /// so to the reference planes) instead of returning pre-filter pixels.
   deblock : Bool
@@ -137,6 +140,9 @@ pub fn h264_encode_intra_frame(
   pps_qp~ : Int32 = -1,
   aq~ : Bool = false,
   aq_strength~ : Int32 = 1,
+  /// `§429`: per-macroblock ROI quantisation offsets (`H264Roi`); applied on
+  /// top of AQ and silently ignored when `aq=false` (upstream semantics).
+  roi~ : Array[H264Roi] = [],
   vbv~ : H264Vbv? = None,
   /// HRD ticks since the preceding buffering period (zero at stream start).
   idr_cpb_delay~ : Int32 = 0,
@@ -145,6 +151,10 @@ pub fn h264_encode_intra_frame(
   /// `weighted_pred_flag = 1` and every P slice header a fitted
   /// `pred_weight_table()`; off, the stream stays byte-identical.
   weightp~ : Bool = false,
+  /// `§434`: opt-in explicit B weighted prediction (PPS `weighted_bipred_idc
+  /// = 1`); the B slice headers carry the tables. Only meaningful in a B
+  /// sequence (`b_seq`); off keeps the parameter sets byte-identical.
+  weightp_b~ : Bool = false,
   /// `§412`/`§419`: 8 (default), 9, 10, 12 or 14 bits. Above 8 the input planes are
   /// little-endian 16-bit samples (`yuv420p10le`) and the SPS switches to
   /// High 10 (profile_idc 110); `qp` keeps its 8-bit meaning.
@@ -156,17 +166,56 @@ pub fn h264_encode_intra_frame(
   /// planes are `w/2 x h`; profile High 4:2:2 at 8..10 bits and Hi444PP
   /// above, `§422d`).
   chroma_format~ : Int32 = 1,
-  /// `§423`: opt-in in-loop deblocking. Off (default) the reconstruction is
-  /// the pre-filter picture the pre-`§423` streams were verified against; on,
-  /// the IDR's planes are filtered exactly as a conforming decoder will
-  /// filter them before they are returned.
-  deblock~ : Bool = false,
+  /// `§432`: Cb/Cr chroma QP offset (x264 `chroma-qp-offset`, -12..12).
+  /// Written to both PPS offsets and applied to the chroma dequantisation
+  /// and deblocking QP; 0 keeps the stream byte-identical.
+  chroma_qp_offset~ : Int32 = 0,
+  /// `§423`: in-loop deblocking, default on. The IDR's planes are filtered
+  /// exactly as a conforming decoder will filter them before they are returned.
+  /// Pass `deblock=false` for the legacy pre-filter reconstruction.
+  deblock~ : Bool = true,
+  /// `§433`: slice-level deblocking alpha/beta offsets in div2 units
+  /// (-6..=6, x264 `--deblock alpha:beta`). Either nonzero opts the PPS into
+  /// `deblocking_filter_control_present_flag` and shifts the filter strength
+  /// of this picture (and, through the filtered reference, the sequence);
+  /// 0/0 keeps the stream byte-identical. Requires `deblock=true`.
+  deblock_alpha~ : Int32 = 0,
+  deblock_beta~ : Int32 = 0,
+  /// `§426`: sample aspect ratio for the SPS VUI (0/0 = unset).
+  sar~ : (Int32, Int32) = (0, 0),
+  /// `§427`: ATSC A/53 caption triples (multiple of 3, ≤63 bytes) carried
+  /// in a GA94 `user_data_registered` SEI before the slice NAL.
+  a53~ : Bytes? = None,
+  /// `§427`: one `user_data_unregistered` SEI payload (16-byte UUID + user
+  /// data); `None` writes no SEI NAL.
+  sei_unregistered~ : Bytes? = None,
+  /// `§428`: stereo frame packing layout carried in a
+  /// `frame_packing_arrangement` SEI (`§424d` semantics: IDR AUs only; the
+  /// decoder context persists it onto every following frame).
+  stereo3d~ : Int32 = 0,
+  /// `§431`: `false` codes a non-IDR open-GOP keyframe instead of the
+  /// sequence's IDR — an I slice in a type-1 NAL with the position's
+  /// `frame_num` / `poc_lsb` and the non-IDR `dec_ref_pic_marking` syntax,
+  /// without parameter sets. Such a picture starts no buffering period and
+  /// carries no frame-packing SEI (`vbv` / `stereo3d` apply to the IDR).
+  idr~ : Bool = true,
+  /// `§431`: `frame_num` of a non-IDR I picture (ignored when `idr`).
+  frame_num~ : Int32 = 0,
+  /// `§431`: `pic_order_cnt_lsb` of a non-IDR I picture (`b_seq` only).
+  poc_lsb~ : Int32 = 0,
 ) -> Result[H264EncodedFrame, String] {
   if aq_strength < 0 || aq_strength > 6 {
     return Err("h264 enc: aq_strength must be in 0..=6")
   }
   if chroma_format < 1 || chroma_format > 3 {
     return Err("h264 enc: chroma_format must be 1, 2 or 3")
+  }
+  if chroma_qp_offset < -12 || chroma_qp_offset > 12 {
+    return Err("h264 enc: chroma_qp_offset must be in -12..=12")
+  }
+  match h264_enc_deblock_offsets_ok(deblock, deblock_alpha, deblock_beta) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
   }
   if width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0 {
     return Err("h264 enc: invalid geometry \{width}x\{height}")
@@ -187,7 +236,18 @@ pub fn h264_encode_intra_frame(
     v.length() != h264_enc_plane_bytes(chroma_w, chroma_h, bit_depth) {
     return Err("h264 enc: plane size mismatch")
   }
-  let p = { width, height, qp, level_idc, bit_depth, nrefs: multi_ref, }
+  let p = {
+    width,
+    height,
+    qp,
+    level_idc,
+    bit_depth,
+    nrefs: multi_ref,
+    sar,
+    deblock_alpha,
+    deblock_beta,
+    weightp_b,
+  }
   // The parameter sets carry `pic_init_qp`: in a rate-controlled sequence
   // that is the sequence's base QP (one PPS serves every picture) while
   // this picture's own QP travels in `slice_qp_delta`.
@@ -202,6 +262,10 @@ pub fn h264_encode_intra_frame(
     level_idc,
     bit_depth,
     nrefs: multi_ref,
+    sar,
+    deblock_alpha,
+    deblock_beta,
+    weightp_b,
   }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
@@ -217,7 +281,13 @@ pub fn h264_encode_intra_frame(
   } else {
     h264_enc_write_sps(p_ps, dct8x8~, vbv~, chroma_format~)
   }
-  let pps_nal = h264_enc_write_pps(p_ps, dct8x8~, weightp~, chroma_format~)
+  let pps_nal = h264_enc_write_pps(
+    p_ps,
+    dct8x8~,
+    weightp~,
+    chroma_format~,
+    chroma_qp_offset~,
+  )
   // Round-trip the parameter sets through the decoder's own parsers: the
   // parsed PPS carries the dequantisation tables shared with the local
   // reconstruction.
@@ -226,7 +296,13 @@ pub fn h264_encode_intra_frame(
   } else {
     h264_enc_sps_rbsp(p_ps, dct8x8~, vbv~, chroma_format~)
   }
-  let pps_raw = h264_enc_pps_rbsp(p_ps, dct8x8~, weightp~, chroma_format~)
+  let pps_raw = h264_enc_pps_rbsp(
+    p_ps,
+    dct8x8~,
+    weightp~,
+    chroma_format~,
+    chroma_qp_offset~,
+  )
   match ff_h264_decode_seq_parameter_set(BitReader::new(sps_raw), ps, false) {
     Ok(_) => ()
     Err(e) => return Err("h264 enc: SPS round-trip failed: \{e}")
@@ -245,6 +321,13 @@ pub fn h264_encode_intra_frame(
     None => return Err("h264 enc: no PPS after round-trip")
   }
   let chroma_qp = h264_get_chroma_qp(pps, 0, p.qp_ext(qp), bit_depth~)
+  // `§429`: ROI offsets ride the same `mb_qp_delta` mechanism as AQ; upstream
+  // requires AQ and silently skips the ROI otherwise.
+  let roi_off = match
+    h264_roi_offsets_for(roi, aq, mb_width, mb_height, bit_depth) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
   let self_ : H264IntraEncoder = {
     p,
     pps,
@@ -292,6 +375,7 @@ pub fn h264_encode_intra_frame(
     aq_avg: 0,
     aq_on: aq,
     aq_strength,
+    roi_off,
     deblock,
   }
   if aq {
@@ -303,15 +387,29 @@ pub fn h264_encode_intra_frame(
   r.put_ue(0) // first_mb_in_slice
   r.put_ue(7) // slice_type: I (all slices)
   r.put_ue(0) // pic_parameter_set_id
-  r.put(0, 4) // frame_num
-  r.put_ue(0) // idr_pic_id
-  if b_seq {
-    r.put(0, 4) // pic_order_cnt_lsb (IDR: 0)
+  r.put(frame_num & 15, 4) // frame_num (log2_max_frame_num = 4)
+  if idr {
+    r.put_ue(0) // idr_pic_id
   }
-  // POC type 2: no picture order syntax.
-  r.put_bit(0) // no_output_of_prior_pics_flag
-  r.put_bit(0) // long_term_reference_flag
+  if b_seq {
+    // `§431`: a non-IDR I picture keeps the sequence's POC (open GOP).
+    r.put(if idr { 0 } else { poc_lsb & 15 }, 4) // pic_order_cnt_lsb
+  }
+  if idr {
+    r.put_bit(0) // no_output_of_prior_pics_flag
+    r.put_bit(0) // long_term_reference_flag
+  } else {
+    r.put_bit(0) // adaptive_ref_pic_marking_mode_flag
+  }
+  // POC type 2 (b_seq off) has no picture order syntax at all.
   r.put_se(qp - p_ps.qp) // slice_qp_delta
+  // `§433`: with the PPS deblocking control on, every slice header carries
+  // idc 0 (filter all edges) and both div2 offsets.
+  if pps.deblocking_filter_parameters_present != 0 {
+    r.put_ue(0) // disable_deblocking_filter_idc
+    r.put_se(p.deblock_alpha) // slice_alpha_c0_offset_div2
+    r.put_se(p.deblock_beta) // slice_beta_offset_div2
+  }
   for mb_y = 0; mb_y < mb_height; mb_y = mb_y + 1 {
     for mb_x = 0; mb_x < mb_width; mb_x = mb_x + 1 {
       if pcm {
@@ -325,10 +423,13 @@ pub fn h264_encode_intra_frame(
     }
   }
   r.trailing_bits()
-  let slice_nal = h264_enc_nal(r, 3, 5)
+  let slice_nal = h264_enc_nal(r, 3, if idr { 5 } else { 1 })
   // `§423`: the reconstruction (and the planes a following P picture will
   // reference) becomes the decoder's filtered output.
-  if self_.deblock {
+  // `§424`: I_PCM is the lossless conformance path. Filtering its samples
+  // would make both the local reconstruction and decoder output differ from
+  // the source, so the whole-PCM picture keeps its original pixels.
+  if self_.deblock && !pcm {
     h264_enc_deblock_picture(
       self_.rec_y,
       self_.rec_u,
@@ -340,22 +441,41 @@ pub fn h264_encode_intra_frame(
       h264_enc_infos_from_intra(self_.states),
       self_.pps,
       bit_depth,
+      alpha=p.deblock_alpha,
+      beta=p.deblock_beta,
     )
   }
-  let header : Array[Bytes] = [sps_nal, pps_nal]
-  match vbv {
-    None => ()
-    Some(v) => {
-      // Every IDR starts a buffering period; its timing can still refer
-      // to the preceding period when it belongs to a longer bitstream.
-      header.push(h264_enc_sei_buffering_period(v))
-      header.push(
-        h264_enc_sei_pic_timing(
-          v,
-          idr_cpb_delay,
-          dpb_output_delay=if b_seq { 2 } else { 0 },
-        ),
-      )
+  let header : Array[Bytes] = []
+  if idr {
+    header.push(sps_nal)
+    header.push(pps_nal)
+    match vbv {
+      None => ()
+      Some(v) => {
+        // Every IDR starts a buffering period; its timing can still refer
+        // to the preceding period when it belongs to a longer bitstream.
+        header.push(h264_enc_sei_buffering_period(v))
+        header.push(
+          h264_enc_sei_pic_timing(
+            v,
+            idr_cpb_delay,
+            dpb_output_delay=if b_seq { 2 } else { 0 },
+          ),
+        )
+      }
+    }
+  }
+  match h264_enc_sei_side_data_nals(a53, sei_unregistered) {
+    Ok(nals) =>
+      for nal in nals {
+        header.push(nal)
+      }
+    Err(e) => return Err(e)
+  }
+  if idr && stereo3d != 0 {
+    match h264_enc_sei_frame_packing(stereo3d) {
+      Ok(nal) => header.push(nal)
+      Err(e) => return Err(e)
     }
   }
   header.push(slice_nal)
@@ -435,7 +555,7 @@ fn H264IntraEncoder::encode_macroblock_444(
   self.mb_dqp = 0
   if self.aq_on {
     let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg, self.aq_strength)
-    let mut mq = self.p.qp + adj
+    let mut mq = self.p.qp + adj + h264_roi_off_at(self.roi_off, mb_idx)
     if mq < 0 {
       mq = 0
     }
@@ -1060,7 +1180,7 @@ fn H264IntraEncoder::encode_macroblock(
   self.mb_dqp = 0
   if self.aq_on {
     let adj = h264_aq_adj(self.aq_act[mb_idx], self.aq_avg, self.aq_strength)
-    let mut mq = self.p.qp + adj
+    let mut mq = self.p.qp + adj + h264_roi_off_at(self.roi_off, mb_idx)
     if mq < 0 {
       mq = 0
     }

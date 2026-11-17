@@ -106,7 +106,7 @@ test "h264 enc: cabac 8x8dct I frame round-trips through own decoder" {
   if annexb[5] != 100 {
     fail("SPS profile_idc \{annexb[5].to_int()} != 100 (High)")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(annexb, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -180,7 +180,7 @@ test "h264 enc: cabac 8x8dct P frames round-trip" {
   if stats.i8_mbs <= 0 {
     fail("no inter macroblock used the 8x8 transform")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -232,9 +232,9 @@ test "h264 enc: cabac 8x8dct P frames round-trip" {
   for s, f in filtered {
     by_display[disp[s]] = f
   }
-  // §422e re-pin: the B picture (frame 1).
+  // §424 re-pin (deblocking on by default; IDR frame 0 identical).
   let pins = [
-    "e659929b54b1464bdfb83061e7f7d31c", "dc81faf5b608b04564bc3e5a9b207ebe", "323ab44d39c6f2747547be2728fba4f4",
+    "e659929b54b1464bdfb83061e7f7d31c", "c2d2ec9cecd5ad8542b38d04f818865b", "8e2b5459010a376532ef61b596d219f2",
   ]
   for i, f in by_display {
     inspect(h264_dct8_md5(f.yuvp()), content=pins[i])
@@ -305,7 +305,7 @@ test "h264 enc: cabac 8x8dct mixed I16/I8/I4 decisions stay consistent" {
         Ok(e) => e
         Err(e) => fail("kind \{kind} qp \{qp}: \{e}")
       }
-      let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+      let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
         Ok(f) => f
         Err(e) => fail("kind \{kind} qp \{qp}: decode failed: \{e}")
       }
@@ -435,7 +435,7 @@ test "h264 enc: cavlc 8x8dct I frame round-trips through own decoder" {
   if annexb[5] != 100 {
     fail("SPS profile_idc \{annexb[5].to_int()} != 100 (High)")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(annexb, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -507,7 +507,7 @@ test "h264 enc: cavlc 8x8dct P frames round-trip" {
   if stats.i8_mbs <= 0 {
     fail("no macroblock used the 8x8 transform")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -560,9 +560,9 @@ test "h264 enc: cavlc 8x8dct P frames round-trip" {
   for s, f in filtered {
     by_display[disp[s]] = f
   }
-  // §422e re-pin: the B picture (frame 1).
+  // §424 re-pin (deblocking on by default; IDR frame 0 identical).
   let pins = [
-    "e659929b54b1464bdfb83061e7f7d31c", "3295396176f21bb84e4995bfda4c1e77", "2adc3ebaba17184cac2d3f45d5369858",
+    "e659929b54b1464bdfb83061e7f7d31c", "888c3f10e9e7aa3f9f1fad78d7540f77", "c6b680e004a58711149a071c4229f029",
   ]
   for i, f in by_display {
     inspect(h264_dct8c_md5(f.yuvp()), content=pins[i])
@@ -647,7 +647,7 @@ test "h264 enc: cavlc 8x8dct reconstruction invariant across qp ladder" {
       if stats.i8_mbs <= 0 {
         fail("qp \{qp} \{w}x\{h}: 8x8 transform never used")
       }
-      let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(f) => f
         Err(e) => fail("qp \{qp} \{w}x\{h}: decode failed: \{e}")
       }
@@ -785,7 +785,7 @@ fn h264_i8p_roundtrip(
   stream : Bytes,
   recon : Array[Bytes],
 ) -> Unit raise {
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail("\{name}: decode failed: \{e}")
   }
@@ -859,13 +859,14 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CAVLC)" {
   println("I8PARB:\{d}")
   // Pinned against docker ffmpeg 9.0.2 framemd5: zero warnings, every
   // frame byte-identical to this decoder's filtered output. `§411`:
-  // legacy-chain stream byte-stable, pins unchanged.
+  // legacy-chain stream byte-stable, pins unchanged. `§424`: frame 2
+  // re-pinned with deblocking on by default.
   let filtered = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
   let pins = [
-    "d22cde9ae2786a87e92dddeeb489972f", "825bc86b9be0781c596eca2ab2429d90", "e67d683aa134055dc476ed509eef8495",
+    "d22cde9ae2786a87e92dddeeb489972f", "825bc86b9be0781c596eca2ab2429d90", "06e6a28ef41f9ae427246ef217cef9b2",
   ]
   for i, f in filtered {
     inspect(h264_i8p_md5(f.yuvp()), content=pins[i])
@@ -909,9 +910,9 @@ test "h264 enc: P-slice Intra 8x8 macroblocks (CABAC)" {
   // Re-pinned in `§411`: the legacy chain itself is byte-stable since the
   // last arbitration, but the `§405`-`§409` CABAC decide/pricing fixes
   // changed frame 2's macroblock decisions on this fixture (pins 0-1
-  // unchanged).
+  // unchanged). `§424`: frame 2 re-pinned with deblocking on by default.
   let pins = [
-    "82fad6309b69ab79f6401362847fdfca", "f1665a45928a84a0610e7c6cfb0ede06", "f4bc5eeea6edac43313fab48c49ab449",
+    "82fad6309b69ab79f6401362847fdfca", "f1665a45928a84a0610e7c6cfb0ede06", "d25abc1226c42a7b98b5131593c581f1",
   ]
   for i, f in filtered {
     inspect(h264_i8p_md5(f.yuvp()), content=pins[i])

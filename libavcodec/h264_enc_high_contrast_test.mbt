@@ -65,7 +65,7 @@ test "h264 high contrast: P skip cannot win with an overflowed SSD" {
             assert_true(stats.bi16_mbs > 0)
           }
           let decoded = match
-            @libavcodec.h264_decode_annexb_frames(stream, true) {
+            @libavcodec.h264_decode_annexb_frames(stream, false) {
             Ok(d) => d
             Err(e) => fail(e)
           }

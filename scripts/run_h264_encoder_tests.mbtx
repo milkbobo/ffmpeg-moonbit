@@ -1,0 +1,77 @@
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/shell",
+}
+
+// Run H.264 encoder test files separately. This avoids the Windows process
+// command-line limit hit when moon tries to launch the whole package at once.
+async fn main {
+  let files = [
+    "libavcodec/h264_encode_test.mbt",
+    "libavcodec/h264_enc_b_gop_test.mbt",
+    "libavcodec/h264_enc_stream_test.mbt",
+    "libavcodec/h264_enc_combo_test.mbt",
+    "libavcodec/h264_encode_p_intra_test.mbt",
+    "libavcodec/h264_enc_periodic_rc_test.mbt",
+    "libavcodec/h264_enc_periodic_vbv_test.mbt",
+    "libavcodec/h264_enc_periodic_b_test.mbt",
+    "libavcodec/h264_enc_periodic_brc_test.mbt",
+    "libavcodec/h264_enc_periodic_bvbv_test.mbt",
+    "libavcodec/h264_enc_stream_bvbv_test.mbt",
+    "libavcodec/h264_enc_bintra_test.mbt",
+    "libavcodec/h264_enc_weightp_test.mbt",
+    "libavcodec/h264_enc_bi8_test.mbt",
+    "libavcodec/h264_enc_multiref_test.mbt",
+    "libavcodec/h264_enc_idr_test.mbt",
+    "libavcodec/h264_enc_stream_vbv_test.mbt",
+    "libavcodec/h264_enc_bparts_test.mbt",
+    "libavcodec/h264_enc_high10_test.mbt",
+    "libavcodec/h264_enc_c422_test.mbt",
+    "libavcodec/h264_enc_c444_cabac_test.mbt",
+    "libavcodec/h264_enc_c444_dct8_test.mbt",
+    "libavcodec/h264_enc_c444_i8_test.mbt",
+    "libavcodec/h264_enc_c444_i8p_test.mbt",
+    "libavcodec/h264_enc_c444_bparts_test.mbt",
+    "libavcodec/h264_enc_c444_bi8_test.mbt",
+    "libavcodec/h264_enc_c444_bi4_test.mbt",
+    "libavcodec/h264_enc_c444_test.mbt",
+    "libavcodec/h264_enc_c444_bi16_test.mbt",
+    "libavcodec/h264_enc_stream_c444_b_test.mbt",
+    "libavcodec/h264_enc_c444_online_depth_test.mbt",
+    "libavcodec/h264_enc_chroma_crop_test.mbt",
+    "libavcodec/h264_enc_c444_rollback_test.mbt",
+    "libavcodec/h264_enc_high_contrast_test.mbt",
+    "libavcodec/h264_enc_stream_c444_test.mbt",
+    "libavcodec/h264_enc_b_multiref_test.mbt",
+    "libavcodec/h264_enc_h1214_test.mbt",
+    "libavcodec/h264_enc_vbv_test.mbt",
+    "libavcodec/h264_enc_c444_b_test.mbt",
+    "libavcodec/h264_enc_brc_test.mbt",
+    "libavcodec/h264_enc_cabac_test.mbt",
+    "libavcodec/h264_enc_b_test.mbt",
+    "libavcodec/h264_enc_c422_depth_test.mbt",
+    "libavcodec/h264_enc_cabacrd_test.mbt",
+    "libavcodec/h264_enc_rc_test.mbt",
+    "libavcodec/h264_encode_p_test.mbt",
+    "libavcodec/h264_encode_dct8_test.mbt",
+    "libavcodec/h264_enc_stream_abr_test.mbt",
+    "libavcodec/h264_enc_deblock_test.mbt",
+  ]
+  let failed : Array[String] = []
+  for file in files {
+    println("=== \{file} ===")
+    let status = @shell.Cmd("moon", [
+      "test", file, "--target", "wasm-gc",
+    ]).each_line(line => println(line))
+    if status != 0 {
+      failed.push(file)
+    }
+  }
+  println("=== FAILED FILES (\{failed.length()}) ===")
+  for file in failed {
+    println(file)
+  }
+  if !failed.is_empty() {
+    fail("H264 encoder test failures: \{failed.length()}")
+  }
+}

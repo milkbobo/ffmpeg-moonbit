@@ -54,7 +54,7 @@ test "h264 stream: forced IDR starts independent multi-reference GOPs" {
       for ty in [5, 7, 8] {
         assert_eq(nals.filter(n => n.0 == ty).length(), 3)
       }
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -75,7 +75,7 @@ test "h264 stream: forced IDR starts independent multi-reference GOPs" {
           mr_md5(expected),
         )
         let independent = match
-          @libavcodec.h264_decode_annexb_frames(expected, true) {
+          @libavcodec.h264_decode_annexb_frames(expected, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }
@@ -202,7 +202,7 @@ test "h264 keyint: periodic batch GOPs match independent encodes" {
         }
         assert_eq(mr_md5(stream), mr_md5(idr_concat(independent)))
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }

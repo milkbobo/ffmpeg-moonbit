@@ -130,11 +130,11 @@ test "h264 enc: weightp cuts a fade's residual energy" {
       "weightp stream \{on.length()} B is not smaller than \{off.length()} B",
     )
   }
-  let dec_on = match @libavcodec.h264_decode_annexb_frames(on, true) {
+  let dec_on = match @libavcodec.h264_decode_annexb_frames(on, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
-  let dec_off = match @libavcodec.h264_decode_annexb_frames(off, true) {
+  let dec_off = match @libavcodec.h264_decode_annexb_frames(off, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -143,8 +143,8 @@ test "h264 enc: weightp cuts a fade's residual energy" {
       "expected 6 frames each, got \{dec_on.length()} and \{dec_off.length()}",
     )
   }
-  // Reconstruction invariant: with weights in play the decoder applies the
-  // same table, so the unfiltered rebuild must equal the encoder's recon.
+  // Reconstruction invariant: with weights and loop filtering in play the
+  // decoder applies the same operations as the encoder's reconstruction.
   if rec_on.length() != 5 {
     fail("expected 5 P-frame reconstructions, got \{rec_on.length()}")
   }
@@ -177,8 +177,8 @@ test "h264 enc: weightp cuts a fade's residual energy" {
   }
   println("WPARB:\{d}")
   let pins = [
-    "a89bd6379ca72e67b8593d4546f172f8", "2c3baa7eb776aaf2be0014130e59010a", "bb0c44ff0291a78c1aadbf107dc8eed5",
-    "db21e79b002fcfd107bc8454b9110e9b", "816079cbc81af0f19c0abfca2d0e803a", "4bffc3ceaf65e313651a8ded2b25d728",
+    "a89bd6379ca72e67b8593d4546f172f8", "cf609b71a6dbcaf360604b5e779bf8c1", "cea85ec5f3fe490ba615bdfcf198445b",
+    "2a0dde75456a7c09671d2efddcacc3c3", "81103b4b01de1954b73257e60a7fe66e", "c7effac9f37f8665ee0c7476d2ac3a06",
   ]
   for i, f in filtered {
     inspect(h264wp_md5(f.yuvp()), content=pins[i])
@@ -250,7 +250,7 @@ test "h264 enc: weightp reproduces a pure gain change" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -279,7 +279,7 @@ test "h264 enc: weightp reproduces a pure gain change" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec_off = match @libavcodec.h264_decode_annexb_frames(off, true) {
+  let dec_off = match @libavcodec.h264_decode_annexb_frames(off, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -333,7 +333,7 @@ test "h264 enc: weightp round-trips under CABAC" {
       "weighted CABAC stream \{stream.length()} B is not smaller than \{plain.length()} B",
     )
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -377,7 +377,7 @@ test "h264 enc: weightp composes with the B-slice GOP" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(on, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(on, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }

@@ -45,7 +45,7 @@ test "h264 c444 BI8: scene change, reconstruction and streaming" {
         Err(e) => fail(e)
       }
       assert_true(stats.bi8_mbs > 0)
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

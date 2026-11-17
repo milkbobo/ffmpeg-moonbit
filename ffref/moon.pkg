@@ -1,5 +1,9 @@
 // ffref: the in-process FFmpeg reference oracle (native C FFI).
 //
+// ⛔ 下线（用户决定 2026-11-16）：oracle 明确不做——不修复、不扩展、
+// 不重跑（见 agent.md §2）。本包全部源码/stub 已整体注释保留为历史
+// 证据；恢复方法 = 取消注释并重建 moon.pkg（原配置见下方注释）。
+//
 // Native-only package: links the FFmpeg n9.0.2 static libraries built
 // inside the ffmpeg-moonbit-ffref docker image and differential-tests the
 // pure MoonBit demux / decode / encode ports against the real thing
@@ -25,37 +29,37 @@
 // Every source file is native-gated, so the wasm build sees an empty
 // package and the host wasm suite is unaffected.
 
-import {
-  "moonbitlang/core/debug",
-  "moonbitlang/core/encoding/utf8",
-}
-
-import {
-  "milkbobo/ffmpeg-moonbit/ffref",
-  "milkbobo/ffmpeg-moonbit/libavcodec",
-  "milkbobo/ffmpeg-moonbit/libavformat" @avf,
-  "milkbobo/ffmpeg-moonbit/libavutil",
-  "milkbobo/ffmpeg-moonbit/libswresample" @swr,
-  "moonbitlang/core/math",
-} for "test"
-
-supported_targets = "native"
-
-options(
-  "native-stub": [ "ffref_stub.c" ],
-  targets: {
-    "ffi.mbt": [ "native" ],
-    "ffref.mbt": [ "native" ],
-    "ffref_test.mbt": [ "native" ],
-    "ffref_streaming_test.mbt": [ "native" ],
-    "ffref_encode_ref_test.mbt": [ "native" ],
-    "ffref_high10_test.mbt": [ "native" ],
-    "ffref_stream_info_test.mbt": [ "native" ],
-  },
-  link: {
-    "native": {
-      "cc-flags": "-I/usr/local/include",
-      "cc-link-flags": "-L/usr/local/lib -lavformat /usr/local-ref/libavcodec_ref.a -lswresample -lavutil -ldav1d -lshine -lxml2 -llzma -lz -lm",
-    },
-  },
-)
+// import {
+//   "moonbitlang/core/debug",
+//   "moonbitlang/core/encoding/utf8",
+// }
+//
+// import {
+//   "milkbobo/ffmpeg-moonbit/ffref",
+//   "milkbobo/ffmpeg-moonbit/libavcodec",
+//   "milkbobo/ffmpeg-moonbit/libavformat" @avf,
+//   "milkbobo/ffmpeg-moonbit/libavutil",
+//   "milkbobo/ffmpeg-moonbit/libswresample" @swr,
+//   "moonbitlang/core/math",
+// } for "test"
+//
+// supported_targets = "native"
+//
+// options(
+//   "native-stub": [ "ffref_stub.c" ],
+//   targets: {
+//     "ffi.mbt": [ "native" ],
+//     "ffref.mbt": [ "native" ],
+//     "ffref_test.mbt": [ "native" ],
+//     "ffref_streaming_test.mbt": [ "native" ],
+//     "ffref_encode_ref_test.mbt": [ "native" ],
+//     "ffref_high10_test.mbt": [ "native" ],
+//     "ffref_stream_info_test.mbt": [ "native" ],
+//   },
+//   link: {
+//     "native": {
+//       "cc-flags": "-I/usr/local/include",
+//       "cc-link-flags": "-L/usr/local/lib -lavformat /usr/local-ref/libavcodec_ref.a -lswresample -lavutil -ldav1d -lshine -lxml2 -llzma -lz -lm",
+//     },
+//   },
+// )

@@ -712,8 +712,18 @@ test "CLI chroma 444 option round trip" {
 test "CLI chroma 422 depth option round trip" {
   for (depth, plane_bytes) in [(10, 2), (12, 2)] {
     let opts = parse_options([
-      "input.yuv", "--width", "32", "--height", "16", "--chroma", "422",
-      "--bit-depth", depth.to_string(), "--no-b-slices", "--output", "out.264",
+      "input.yuv",
+      "--width",
+      "32",
+      "--height",
+      "16",
+      "--chroma",
+      "422",
+      "--bit-depth",
+      depth.to_string(),
+      "--no-b-slices",
+      "--output",
+      "out.264",
     ])
     assert_eq(opts.chroma_format, 2)
     assert_eq(opts.bit_depth, depth)
@@ -739,10 +749,12 @@ test "CLI chroma 422 depth option round trip" {
 /// `§423`: `--deblock` reaches both batch and streaming paths; the filtered
 /// references change the P/B syntax (the fixture is textured), and the two
 /// paths agree byte-for-byte.
-test "CLI deblock reaches batch and stream paths" {
+test "CLI deblock defaults on and reaches batch and stream paths" {
+  assert_true(test_options([]).deblock)
+  assert_false(test_options(["--no-deblock"]).deblock)
   let opts = parse_options([
-    "input.yuv", "--width", "32", "--height", "32", "--deblock", "--b-slices",
-    "--output", "out.264",
+    "input.yuv", "--width", "32", "--height", "32", "--deblock", "--b-slices", "--output",
+    "out.264",
   ])
   assert_true(opts.deblock)
   let frame_size = raw_frame_size(opts)
@@ -762,4 +774,121 @@ test "CLI deblock reaches batch and stream paths" {
   assert_eq(stream_on, batch_on)
   assert_eq(stream_off, batch_off)
   assert_true(batch_on != batch_off, msg="deblock must change references")
+}
+
+///|
+/// `§433`: `--deblock-alpha` / `--deblock-beta` parse with the -6..=6
+/// range, reach both host paths byte-identically, change the stream, and
+/// the deblock=false exclusivity is enforced by the encoder.
+test "CLI deblock offsets parse and reach batch and stream paths" {
+  let plain = test_options([])
+  assert_eq(plain.deblock_alpha, 0)
+  assert_eq(plain.deblock_beta, 0)
+  let opts = test_options(["--deblock-alpha", "3", "--deblock-beta", "-2"])
+  assert_eq(opts.deblock_alpha, 3)
+  assert_eq(opts.deblock_beta, -2)
+  assert_eq(video_config(opts).deblock_alpha, 3)
+  assert_eq(video_config(opts).deblock_beta, -2)
+  for
+    bad in [
+      ["--deblock-alpha", "7"],
+      ["--deblock-alpha", "-7"],
+      ["--deblock-beta", "7"],
+      ["--deblock-beta", "-7"],
+      ["--deblock-alpha", "abc"],
+      ["--deblock-alpha"],
+      ["--deblock-alpha", "1", "--deblock-alpha", "2"],
+    ] {
+    try test_options(bad) catch {
+      _ => ()
+    } noraise {
+      _ => fail("accepted invalid deblock offset arguments")
+    }
+  }
+  let opts = parse_options([
+    "input.yuv", "--width", "32", "--height", "32", "--deblock-alpha", "3", "--deblock-beta",
+    "-2", "--b-slices", "--output", "out.264",
+  ])
+  let frame_size = raw_frame_size(opts)
+  let raw : Array[Byte] = []
+  for f = 0; f < 5; f = f + 1 {
+    for i = 0; i < frame_size; i = i + 1 {
+      raw.push(((i * 7 + f * 13 + i / 3 * 5) & 0xFF).to_byte())
+    }
+  }
+  let data = Bytes::from_array(raw[:])
+  let (batch, count) = encode_raw(data, opts)
+  let (streamed, stream_count) = encode_raw_stream(data, opts)
+  assert_eq(count, 5)
+  assert_eq(stream_count, 5)
+  assert_eq(batch, streamed)
+  let (default_batch, _) = encode_raw(data, {
+    ..opts,
+    deblock_alpha: 0,
+    deblock_beta: 0,
+  })
+  assert_true(batch != default_batch, msg="offsets must change the stream")
+  let decoded = match @codec.h264_decode_annexb_frames(batch, false) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
+  assert_eq(decoded.length(), 5)
+  // The exclusivity rides the encoder's validation, not the parser.
+  try encode_raw(data, { ..opts, deblock: false, }) catch {
+    _ => ()
+  } noraise {
+    _ => fail("accepted offsets with --no-deblock")
+  }
+}
+
+///|
+/// `§435`: `--crf` parses a decimal in 0..=51, rejects clashes with
+/// `--target-bytes`, and reaches batch and streaming byte-identically.
+test "CLI crf parses and reaches batch and stream paths" {
+  let plain = test_options([])
+  assert_eq(plain.crf, -1.0)
+  let opts = test_options(["--crf", "23.5"])
+  assert_eq(opts.crf, 23.5)
+  assert_eq(video_config(opts).crf, 23.5)
+  for
+    bad in [
+      ["--crf", "52"],
+      ["--crf", "-1"],
+      ["--crf", "abc"],
+      ["--crf", "nan"],
+      ["--crf", "inf"],
+      ["--crf"],
+      ["--crf", "23", "--crf", "24"],
+      ["--crf", "23", "--target-bytes", "1000"],
+    ] {
+    try test_options(bad) catch {
+      _ => ()
+    } noraise {
+      _ => fail("accepted invalid crf arguments")
+    }
+  }
+  let opts = parse_options([
+    "input.yuv", "--width", "32", "--height", "32", "--crf", "23", "--b-slices",
+    "--output", "out.264",
+  ])
+  let frame_size = raw_frame_size(opts)
+  let raw : Array[Byte] = []
+  for f = 0; f < 5; f = f + 1 {
+    for i = 0; i < frame_size; i = i + 1 {
+      raw.push(((i * 7 + f * 13 + i / 3 * 5) & 0xFF).to_byte())
+    }
+  }
+  let data = Bytes::from_array(raw[:])
+  let (batch, count) = encode_raw(data, opts)
+  let (streamed, stream_count) = encode_raw_stream(data, opts)
+  assert_eq(count, 5)
+  assert_eq(stream_count, 5)
+  assert_eq(batch, streamed)
+  let (default_batch, _) = encode_raw(data, { ..opts, crf: -1.0, })
+  assert_true(batch != default_batch, msg="crf must change the stream")
+  let decoded = match @codec.h264_decode_annexb_frames(batch, false) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
+  assert_eq(decoded.length(), 5)
 }

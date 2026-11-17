@@ -54,7 +54,7 @@ test "h264 c444 BI16: DC and AC reconstruction, streaming" {
         }
         assert_true(stats.bi16_mbs > 0)
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }

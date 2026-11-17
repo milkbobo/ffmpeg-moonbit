@@ -712,18 +712,33 @@ C:\Users\milkb\.moon\bin\moon.exe test  --no-render   # 必须全绿
   以仓库里最近一次成功记录为准；只有用户明确点名（如改了 C 桩/FFI 面、
   或要求出 native 数据）才跑，且按测试文件分小批（带 `timeout`）。
   纯 MoonBit 逻辑改动对后端透明，wasm 绿即可交付。
-- **编码器测试按「名字族」跑，不要整包**：libavcodec 整包 wasm 会撞
-  `__moonbit__init` 局部上限（见 §6）/ moonrun 挂起；用
-  `moon test --target wasm -p milkbobo/ffmpeg-moonbit/libavcodec -f "名字 glob" --no-render`
-  按族过滤。**坑：`-f` 匹配的是测试名不是文件名**——同文件里前缀不同的族
-  （如 `h264_enc_bintra_test.mbt` 里的 `h264 enc bi4:`）会被漏扫；普查前先
-  `grep -hoE '^test "[^"]+"' libavcodec/h264_enc*.mbt` 枚举全部测试名 stem，
-  再逐族跑全。已知族清单（H.264 编码线，2026-11-13）：`h264 enc *`、
-  `h264 enc b:`、`h264 enc bi4*`、`h264 enc bi8*`、`h264 enc bintra*`、
-  `h264 enc bparts*`、`h264 enc combo*`、`h264 rc:`、`h264 aud:`、`h264 vbv:`、
-  `h264 stream:`、`h264 brc:`、`h264 cabac enc:`、`h264 cabac rd:`、
-  `h264 aq:`、`h264 aq strength*`、`h264 i4p:`、`hrd:`、`probe:`、
-  `CLI *`（cmd/encode-h264 包）。
+- **oracle 明确不做（用户决定，2026-11-16 起）**：C 参考对拍一律不是交付物——
+  `ffref/` 包（FFmpeg 参考解码 oracle）、`libavcodec/x264/` 里的
+  `x264 oracle:`/`pure H264` 测试族（纯编码器流的 C 仲裁）、docker
+  `ffmpeg-moonbit-ffref:nine*` 镜像套件。**不修复、不扩展、不重跑**；
+  这些套件的失败/陈旧钉值不作为交付门，也不为其发起重钉。已落地的
+  oracle 代码与测试以逐行注释形态留在原处（历史证据），`ffref/moon.pkg`
+  已注释置空、`ffref_stub.c` 带"未接线"头注；恢复 = 取消注释并还原
+  moon.pkg。注意区分：`libavcodec/x264` 的**绑定本体与绑定自测**
+  （`X264Encoder`、lifecycle/输入格式/options/pict_type/round-trip 族）
+  是编码能力交付物，不是 oracle，照常维护；`libavcodec/*.mbt` 里的
+  ffmpeg-arbitrated 黑盒钉值测试跑在纯 wasm、不调用 C oracle，照常维护。
+- **编码器测试按「文件」跑，不要整包**：libavcodec 整包 wasm 会撞
+  `__moonbit__init` 局部上限（见 §6）/ moonrun 挂起。**2026-11-17（§427）起
+  `-f` 族过滤与包级跑法一并失效**：moonrun 的 `--test-args` JSON 列出包内
+  全部源文件，第 51 个测试文件起命令行超过 Windows 限制，直接
+  `os error 206（文件名或扩展名太长）`。回归一律单文件制：
+  `moon test libavcodec/<文件>.mbt --target wasm --no-render`
+  （§426 起的 50/51 文件循环即此形态，清单见 `.scratch/s427_filelist.txt`
+  + `h264_enc_sei_test.mbt`）。历史坑（`-f` 匹配测试名不匹配文件名、
+  同文件多前缀族漏扫）随该跑法一并失效，单文件跑天然无此问题。
+- **wbtest（白盒）文件的目标必须是 `wasm-gc`**（§435 确认）：白盒单元
+  把包源码与全部 `*_wbtest.mbt` 编进一个 wasm，`__moonbit__init` 局部数
+  早已越过 V8 MVP 上限（包级既有，与任何单切片无关）——`--target wasm`
+  下每个 wbtest 文件都报 `local count too large` 假红。黑盒
+  `*_test.mbt` 两后端皆可。已知残留：`h264_enc_c444_binter8_wbtest`
+  在 wasm-gc 有一个 444×tf8×滤波 infos 的解码器既有红（§435 归档，
+  见 `AGENT_HANDOFF_2026-11-17_H264_CRF.md`）。
 - **wasm 体积测量**：`python scripts/generate_wasm_size_probe.py`（重新生成探针 →
   编译 `wasm`/`wasm-gc` release → 报告原始/gzip 体积并做字符串指纹验证）。
   `wasm_probe/main/main.mbt` 是生成物，勿手改；**公共 API 变更后探针失配**

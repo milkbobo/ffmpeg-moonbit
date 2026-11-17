@@ -78,7 +78,7 @@ test "h264 chroma crop: visible dimensions and reconstruction at 34x18" {
         }
         assert_true(h264s_bytes_eq(h264s_concat(aus), stream))
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }

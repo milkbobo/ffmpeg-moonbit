@@ -111,7 +111,6 @@ test "h264 deblock: IDR reconstruction equals filtered decode" {
           height=64,
           qp=26,
           chroma_format=chroma,
-          deblock=true,
         )
       } else {
         @libavcodec.h264_encode_intra_frame(
@@ -122,7 +121,6 @@ test "h264 deblock: IDR reconstruction equals filtered decode" {
           height=64,
           qp=26,
           chroma_format=chroma,
-          deblock=true,
         )
       }
       let enc = match result {
@@ -316,19 +314,12 @@ test "h264 deblock: streaming equals batch and filtered" {
         qp=26,
         b_slices~,
         recon=batch_recon,
-        deblock=true,
       ) {
       Ok(s) => s
       Err(e) => fail(e)
     }
     let enc = match
-      @libavcodec.H264StreamEncoder::open(
-        width=96,
-        height=64,
-        qp=26,
-        b_slices~,
-        deblock=true,
-      ) {
+      @libavcodec.H264StreamEncoder::open(width=96, height=64, qp=26, b_slices~) {
       Ok(e) => e
       Err(e) => fail(e)
     }
@@ -402,27 +393,88 @@ test "h264 deblock: facade forwards the flag" {
 }
 
 ///|
-test "h264 deblock: default stays pre-filter" {
+test "h264 deblock: default on with explicit opt-out" {
   let frames = h264dbg_fixture(96, 64, 3, 1)
-  let recon : Array[Bytes] = []
-  let stream = match
-    @libavcodec.h264_encode_frames(
-      frames,
-      width=96,
-      height=64,
-      qp=26,
-      b_slices=false,
-      recon~,
-    ) {
-    Ok(s) => s
-    Err(e) => fail(e)
-  }
-  let plain = match @libavcodec.h264_decode_annexb_frames(stream, true) {
-    Ok(d) => d
-    Err(e) => fail(e)
-  }
-  for i, r in recon {
-    assert_eq(mr_md5(r), mr_md5(plain[i + 1].yuvp()), msg="frame=\{i}")
+  assert_true(
+    @libavcodec.VideoEncConfig::new(width=96, height=64).deblock,
+    msg="facade default must enable deblocking",
+  )
+  for cabac in [false, true] {
+    let default_recon : Array[Bytes] = []
+    let off_recon : Array[Bytes] = []
+    let default_result = if cabac {
+      @libavcodec.h264_encode_frames_cabac(
+        frames,
+        width=96,
+        height=64,
+        qp=26,
+        b_slices=false,
+        recon=default_recon,
+      )
+    } else {
+      @libavcodec.h264_encode_frames(
+        frames,
+        width=96,
+        height=64,
+        qp=26,
+        b_slices=false,
+        recon=default_recon,
+      )
+    }
+    let off_result = if cabac {
+      @libavcodec.h264_encode_frames_cabac(
+        frames,
+        width=96,
+        height=64,
+        qp=26,
+        b_slices=false,
+        recon=off_recon,
+        deblock=false,
+      )
+    } else {
+      @libavcodec.h264_encode_frames(
+        frames,
+        width=96,
+        height=64,
+        qp=26,
+        b_slices=false,
+        recon=off_recon,
+        deblock=false,
+      )
+    }
+    let default_stream = match default_result {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    let off_stream = match off_result {
+      Ok(s) => s
+      Err(e) => fail(e)
+    }
+    assert_true(
+      default_stream != off_stream,
+      msg="cabac=\{cabac}: opt-out must preserve the legacy stream",
+    )
+    let filtered = match
+      @libavcodec.h264_decode_annexb_frames(default_stream, false) {
+      Ok(d) => d
+      Err(e) => fail(e)
+    }
+    let plain = match @libavcodec.h264_decode_annexb_frames(off_stream, true) {
+      Ok(d) => d
+      Err(e) => fail(e)
+    }
+    for i in 0..<default_recon.length() {
+      assert_eq(
+        mr_md5(default_recon[i]),
+        mr_md5(filtered[i + 1].yuvp()),
+        msg="cabac=\{cabac}: default frame=\{i}",
+      )
+      assert_eq(
+        mr_md5(off_recon[i]),
+        mr_md5(plain[i + 1].yuvp()),
+        msg="cabac=\{cabac}: opt-out frame=\{i}",
+      )
+    }
   }
 }
 

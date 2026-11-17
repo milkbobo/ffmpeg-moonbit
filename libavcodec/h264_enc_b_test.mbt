@@ -122,10 +122,10 @@ test "h264 enc b: round trip equals encoder reconstruction (cavlc)" {
       fail("expected 6 frames, got \{dec.length()}")
     }
   }
-  // Unfiltered decode equals the encoder reconstructions. The recons are
+  // Filtered decode equals the encoder reconstructions. The recons are
   // in coding order (P2, B1, P4, B3, P5); the decoder outputs coding
   // order too, offset by the IDR.
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -172,7 +172,7 @@ test "h264 enc b: round trip equals encoder reconstruction (cabac)" {
       fail("expected 6 frames, got \{dec.length()}")
     }
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -330,7 +330,7 @@ test "h264 enc b: rejects invalid combinations" {
     ) {
     Err(e) => fail("single frame with b_slices should degrade, got \{e}")
     Ok(s) =>
-      match @libavcodec.h264_decode_annexb_frames(s, true) {
+      match @libavcodec.h264_decode_annexb_frames(s, false) {
         Ok(d) => if d.length() != 1 { fail("expected 1 frame") }
         Err(e) => fail(e)
       }
@@ -367,10 +367,12 @@ test "h264 enc b: aud and aq combine" {
     dq = dq + (stream[i].to_int() & 0xFF).to_string() + ","
   }
   println("ARBBAQ:\{dq}")
+  // §424: re-pinned with deblocking on by default (external FFmpeg 9.0.2
+  // decodes the dump with zero warnings; the stream shrank on filtered refs).
   inspect(
     h264b_md5(stream),
     content=(
-      #|58996c21e5fdb30eba5e100513f66929
+      #|e58514cb7d27d377df857eef816247d0
     ),
   )
   inspect(
@@ -415,10 +417,11 @@ test "h264 enc b: ffmpeg-arbitrated six frames (96x64, QP 24)" {
   let md5s = h264b_display_md5s(dec)
   // Re-pinned against the C decoder by x264_wbtest's "legacy six-frame
   // B snapshots" test after the shared P prediction/chroma corrections;
-  // display B frames re-pinned again for `§422e` (B inter 8x8 RD).
+  // display B frames re-pinned again for `§422e` (B inter 8x8 RD) and for
+  // `§424` (deblocking on by default; IDR frame 0 identical).
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "64e5ddf3311378d21253a3f44f366a7f", "683deaf38ca7e61d3ae43498af9ac29b",
-    "b0ac081c83207c59727f75cdf1252fa5", "b59196a0d5e18e260f87add844c5a855", "6853569a483390780d73ef9d826c7bf2",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "e43ce9111a0437541b447a2d30e15738", "e24567422ae8c2c7d1a3fc66ddf3ca5a",
+    "3fc379bd0d6d937657a4a0492b1ebecd", "8d897e82ecf6ec476e0588eab23f7ca4", "88d17e2af51c742f2eda3744a6e7ee9a",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])
@@ -453,7 +456,7 @@ test "h264 enc b: all-on cabac keeps the recon invariant" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }

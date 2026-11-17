@@ -46,7 +46,7 @@ fn h264_combo_fixture(count : Int32) -> Array[(Bytes, Bytes, Bytes)] {
 
 ///|
 fn h264_combo_decode(stream : Bytes, label : String, n : Int32) -> Unit raise {
-  let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(d) => d
     Err(e) => fail("\{label}: decode failed: \{e}")
   }

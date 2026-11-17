@@ -14,7 +14,7 @@ test "probe: b-seq skeleton I+P only (n=2, no B pictures)" {
     Ok(x) => x
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(s, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(s, false) {
     Ok(f) => f
     Err(e) => fail("cavlc n=2: \{e}")
   }
@@ -35,7 +35,7 @@ test "probe: first B picture (n=3)" {
     Ok(x) => x
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(s, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(s, false) {
     Ok(f) => f
     Err(e) => fail("cavlc n=3: \{e}")
   }
@@ -56,7 +56,7 @@ test "probe: cabac b-seq skeleton I+P only (n=2)" {
     Ok(x) => x
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(s, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(s, false) {
     Ok(f) => f
     Err(e) => fail("cabac n=2: \{e}")
   }
@@ -77,7 +77,7 @@ test "probe: cabac first B picture (n=3)" {
     Ok(x) => x
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(s, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(s, false) {
     Ok(f) => f
     Err(e) => fail("cabac n=3: \{e}")
   }

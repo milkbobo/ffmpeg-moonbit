@@ -77,7 +77,7 @@ test "h264 enc: static scene codes as pure skip run" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -241,10 +241,10 @@ test "h264 enc: ffmpeg-arbitrated P frames (96x64, ME + residual)" {
   for d, f in frames_dec {
     by_display[disp[d]] = f
   }
-  // §422e re-pin: the B picture (frame 1).
+  // §424 re-pin (deblocking on by default; IDR frame 0 identical).
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "dd67436069326b9f6d442f4af64c0bba", "d37c3e1a348172ef64b786e030e5084c",
-    "ad098e2b25d81fe47e29d38627b5c549",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "fe0a3de02415bef4b6f7e7cd4212f6ef", "e5b21057ec15ca3be9e96131efa44ec3",
+    "b5a438f373b9a4357c647ceb9d68374b",
   ]
   for i, f in by_display {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
@@ -284,11 +284,10 @@ test "h264 enc: ffmpeg-arbitrated RD six frames (96x64, QP 24)" {
   for d, f in frames_dec {
     by_display[disp[d]] = f
   }
-  // §422e re-pin: the B picture (frame 1); the P pictures keep their
-  // §405 values.
+  // §424 re-pin (deblocking on by default; IDR frame 0 identical).
   let pins = [
-    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "dd67436069326b9f6d442f4af64c0bba", "d37c3e1a348172ef64b786e030e5084c",
-    "9ffebc186a120553fd93a452b561da02", "750e2cc3ee0053390a7b168305b86c2f", "fca2b07dd7d0bb815acd3c2f0b291362",
+    "4215ee3be54b5cf3f3a8ccf97cc7ee64", "fe0a3de02415bef4b6f7e7cd4212f6ef", "e5b21057ec15ca3be9e96131efa44ec3",
+    "1419b7020f23b1e5ce65fafba37e267f", "2b5b6c0a6bea7fd3c77fae90a51612e0", "f8f0ff25e680179aee9263c870d49dbc",
   ]
   for i, f in by_display {
     inspect(h264p_md5(f.yuvp()), content=pins[i])
@@ -310,7 +309,7 @@ test "h264 enc: partitions engage on the moving box" {
   // produces (already pinned above); here just gate the byte size: an
   // all-16x16 stream would be either bigger (worse MC) or the run of
   // skips would not match the box motion.
-  let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let frames_dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -353,7 +352,7 @@ test "h264 enc: RD operating point beats the SAD chain" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }

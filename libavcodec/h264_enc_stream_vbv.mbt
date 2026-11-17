@@ -1,6 +1,8 @@
 ///|
 priv enum H264VbvPicture {
   Idr
+  /// `§431`: a non-IDR open-GOP keyframe (the `Keyframe` request).
+  I
   P
   B
 }
@@ -8,52 +10,155 @@ priv enum H264VbvPicture {
 ///|
 /// Buffer odd display positions. Every emitting push is transactional:
 /// a P/B pair or an old tail P plus a new IDR commits as one group.
+/// `§431`: `pict_type` carries `push_frame`'s request (already with
+/// `force_idr` folded in); a forced type replaces the positional schedule.
 fn H264StreamEncoder::push_vbv(
   self : H264StreamEncoder,
   y : Bytes,
   u : Bytes,
   v : Bytes,
   vbv : H264Vbv,
-  force_idr~ : Bool,
+  pict_type~ : Int32,
+  /// `§435`: the current push's CRF QP (0 without CRF — the picture
+  /// starts from the ABR suggestion / flat `qp` as before).
+  qp_hint~ : Int32 = 0,
+  a53~ : Bytes? = None,
+  sei_unregistered~ : Bytes? = None,
 ) -> Result[Unit, String] {
   let display = self.next_display - self.gop_start
-  if self.b_slices && self.next_display > 0 && !force_idr && display % 2 == 1 {
-    self.pending = Some((y, u, v))
-    self.next_display += 1
-    return Ok(())
-  }
-  let trial = self.vbv_trial()
-  if self.next_display == 0 || force_idr {
+  if self.next_display == 0 || pict_type == h264_pict_type_idr {
+    let trial = self.vbv_trial()
     match trial.vbv_flush_pending(vbv) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
     trial.next_display += 1
-    match trial.vbv_picture(y, u, v, vbv, 0, Idr) {
+    match
+      trial.vbv_picture(
+        y,
+        u,
+        v,
+        vbv,
+        0,
+        Idr,
+        qp_hint~,
+        a53~,
+        sei_unregistered~,
+        roi=trial.roi,
+      ) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
-  } else if !self.b_slices {
+    self.vbv_commit(trial)
+    return Ok(())
+  }
+  // `§431`: a non-IDR I picture: no buffering period, the usual CPB.
+  if pict_type == h264_pict_type_keyframe {
+    let trial = self.vbv_trial()
+    match trial.vbv_flush_pending(vbv) {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
     trial.next_display += 1
-    match trial.vbv_picture(y, u, v, vbv, display, P) {
+    match
+      trial.vbv_picture(
+        y,
+        u,
+        v,
+        vbv,
+        display,
+        I,
+        qp_hint~,
+        a53~,
+        sei_unregistered~,
+        roi=trial.roi,
+      ) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
-  } else {
+    self.vbv_commit(trial)
+    return Ok(())
+  }
+  // `§431`: a forced B rides the pending slot; an old pending B is first
+  // closed as a tail P so this frame can wait for its own future P.
+  if pict_type == h264_pict_type_b {
+    if !self.b_slices {
+      return Err("h264 enc: forced B requires b_slices (POC type 0)")
+    }
+    if self.pending is Some(_) {
+      let trial = self.vbv_trial()
+      match trial.vbv_flush_pending(vbv) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+      self.vbv_commit(trial)
+    }
+    self.next_display += 1
+    self.stash_pending(y, u, v, a53, sei_unregistered, qp=qp_hint)
+    return Ok(())
+  }
+  // The default schedule buffers an odd display position as a B picture.
+  // A frame parked in `pending` (forced B) is waiting for this one as its
+  // future P, so parity no longer decides the pairing.
+  let pair = self.pending is Some(_)
+  if !pair &&
+    pict_type == h264_pict_type_auto &&
+    self.b_slices &&
+    display % 2 == 1 {
+    self.next_display += 1
+    self.stash_pending(y, u, v, a53, sei_unregistered, qp=qp_hint)
+    return Ok(())
+  }
+  let trial = self.vbv_trial()
+  trial.next_display += 1
+  match
+    trial.vbv_picture(
+      y,
+      u,
+      v,
+      vbv,
+      display,
+      P,
+      qp_hint~,
+      a53~,
+      sei_unregistered~,
+      roi=trial.roi,
+      hint=trial.hint,
+    ) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  if pair {
     let (by, bu, bv) = match trial.pending {
       Some(f) => f
       None => return Err("h264 enc: stream scheduling lost the B picture")
     }
-    trial.next_display += 1
-    match trial.vbv_picture(y, u, v, vbv, display, P) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
-    }
-    match trial.vbv_picture(by, bu, bv, vbv, display - 1, B) {
+    let b_a53 = trial.pending_a53
+    let b_sei = trial.pending_sei
+    let b_roi = trial.pending_roi
+    let b_hint = trial.pending_hint
+    match
+      trial.vbv_picture(
+        by,
+        bu,
+        bv,
+        vbv,
+        display - 1,
+        B,
+        qp_hint=trial.pending_qp,
+        a53=b_a53,
+        sei_unregistered=b_sei,
+        roi=b_roi,
+        hint=b_hint,
+      ) {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
     trial.pending = None
+    trial.pending_a53 = None
+    trial.pending_sei = None
+    trial.pending_roi = []
+    trial.pending_hint = None
     // AU/recon order stays P then B; QP history stays display order.
     let p_qp = trial.stats.frame_qps[0]
     trial.stats.frame_qps[0] = trial.stats.frame_qps[1]
@@ -78,8 +183,19 @@ fn H264StreamEncoder::vbv_flush_pending(
           vbv,
           self.next_display - self.gop_start - 1,
           P,
+          qp_hint=self.pending_qp,
+          a53=self.pending_a53,
+          sei_unregistered=self.pending_sei,
+          roi=self.pending_roi,
+          hint=self.pending_hint,
         ) {
-        Ok(_) => self.pending = None
+        Ok(_) => {
+          self.pending = None
+          self.pending_a53 = None
+          self.pending_sei = None
+          self.pending_roi = []
+          self.pending_hint = None
+        }
         Err(e) => return Err(e)
       }
     None => ()
@@ -128,6 +244,8 @@ fn H264StreamEncoder::vbv_commit(
   self.fut_u = trial.fut_u
   self.fut_v = trial.fut_v
   self.pending = trial.pending
+  self.pending_a53 = trial.pending_a53
+  self.pending_sei = trial.pending_sei
   self.next_display = trial.next_display
   self.fn_counter = trial.fn_counter
   self.gop_start = trial.gop_start
@@ -163,6 +281,15 @@ fn H264StreamEncoder::vbv_picture(
   vbv : H264Vbv,
   display : Int32,
   kind : H264VbvPicture,
+  /// `§435`: the picture's push-computed CRF QP (0 without CRF; the
+  /// ABR suggestion / flat `qp` path is unchanged).
+  qp_hint~ : Int32 = 0,
+  a53~ : Bytes? = None,
+  sei_unregistered~ : Bytes? = None,
+  /// `§429`: this picture's ROI map (see `push_frame`).
+  roi~ : Array[H264Roi] = [],
+  /// `§430`: this picture's motion hint (see `push_frame`).
+  hint~ : H264VideoHint? = None,
 ) -> Result[Unit, String] {
   let idr = kind is Idr
   let frame_vbv = if idr && self.vbv_coded > 0 {
@@ -189,7 +316,12 @@ fn H264StreamEncoder::vbv_picture(
   // §422f: ABR (if on) proposes the starting QP; the VBV climb stacks on
   // top and `abr_note` (called inside the accepted trial's picture step)
   // folds the final QP and the emitted bits into the controller.
-  let mut qp = self.abr_suggest().max(h264_rc_qp_min).min(h264_rc_qp_max)
+  // §435: CRF replaces the proposal with the push-computed QP (format
+  // range — `h264_rc_qp_min` is an ABR-search floor, not a CRF one).
+  let mut qp = match self.crf {
+    Some(_) => self.pic_suggest(qp_hint)
+    None => self.abr_suggest().max(h264_rc_qp_min).min(h264_rc_qp_max)
+  }
   while true {
     let trial = self.vbv_trial()
     let result = match kind {
@@ -201,6 +333,25 @@ fn H264StreamEncoder::vbv_picture(
           qp~,
           vbv=Some(frame_vbv),
           idr_cpb_delay=cpb_delay,
+          a53~,
+          sei_unregistered~,
+          roi~,
+        )
+      I =>
+        // `§431`: a non-IDR I picture carries no buffering period and does
+        // not reset the reference history — only its own pic_timing SEI.
+        trial.stream_i(
+          y,
+          u,
+          v,
+          display,
+          qp~,
+          vbv=Some(frame_vbv),
+          cpb_delay~,
+          dpb_delay~,
+          a53~,
+          sei_unregistered~,
+          roi~,
         )
       P =>
         trial.stream_p(
@@ -212,6 +363,10 @@ fn H264StreamEncoder::vbv_picture(
           vbv=Some(frame_vbv),
           cpb_delay~,
           dpb_delay~,
+          a53~,
+          sei_unregistered~,
+          roi~,
+          hint~,
         )
       B =>
         trial.stream_b(
@@ -223,6 +378,10 @@ fn H264StreamEncoder::vbv_picture(
           vbv=Some(frame_vbv),
           cpb_delay~,
           dpb_delay~,
+          a53~,
+          sei_unregistered~,
+          roi~,
+          hint~,
         )
     }
     match result {

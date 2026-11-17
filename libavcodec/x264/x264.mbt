@@ -13,6 +13,158 @@ pub struct X264Encoder {
 }
 
 ///|
+/// Per-picture type request, mirroring libx264.c's `X264_frame` switch on
+/// `frame->pict_type`. `Auto` signals nothing and lets x264's own GOP
+/// logic pick; the other variants set the corresponding `AVPictureType`
+/// so libx264 maps them to `X264_TYPE_KEYFRAME` (I, not IDR - unless the
+/// `forced-idr` option applies, as `Idr` arranges), `X264_TYPE_P` or
+/// `X264_TYPE_B`.
+pub(all) enum X264PictType {
+  Auto
+  Keyframe
+  Idr
+  P
+  B
+}
+
+///|
+fn X264PictType::to_sel(self : X264PictType) -> Int32 {
+  match self {
+    Auto => 0
+    Keyframe => 1
+    Idr => 2
+    P => 3
+    B => 4
+  }
+}
+
+///|
+/// One `AVRegionOfInterest` region for per-MB quantisation deltas
+/// (libx264.c's `setup_roi`). The rectangle is in pixels, exclusive at
+/// `right` / `bottom` and clipped upstream to the 16px macroblock grid;
+/// `qoffset_num / qoffset_den` is the normalised quality offset in
+/// -1..+1 (negative = better quality, positive = worse) which upstream
+/// scales by the QP range and clamps per macroblock.
+///
+/// Setup requires adaptive quantisation to be on (`aq-mode != 0`; it is
+/// x264's default with CRF but the caller can pin `aq-mode=1`) — with AQ
+/// off upstream warns once and silently skips the ROI. When regions
+/// overlap the FIRST region in the array wins.
+pub(all) struct X264Roi {
+  top : Int32
+  bottom : Int32
+  left : Int32
+  right : Int32
+  qoffset_num : Int32
+  qoffset_den : Int32
+}
+
+///|
+/// Serialize to the stub's 24-bytes-per-region little-endian blob
+/// (struct field order; `self_size` is filled host-side).
+fn X264Roi::encode_blob(rois : Array[X264Roi]) -> Bytes {
+  let buf : Array[Byte] = []
+  for r in rois {
+    for v in [r.top, r.bottom, r.left, r.right, r.qoffset_num, r.qoffset_den] {
+      buf.push((v & 0xFF).to_byte())
+      buf.push(((v >> 8) & 0xFF).to_byte())
+      buf.push(((v >> 16) & 0xFF).to_byte())
+      buf.push(((v >> 24) & 0xFF).to_byte())
+    }
+  }
+  Bytes::from_array(buf[:])
+}
+
+///|
+/// Stereo3D layout for per-picture frame packing (libx264.c's
+/// `reconfig_encoder` STEREO3D path). x264 emits an H.264
+/// frame-packing-arrangement SEI for as long as the packing stays set;
+/// a conforming decoder exports it as `Stereo3d` frame side data. The
+/// upstream INVERT flag is rejected by x264 (warning, no packing) and is
+/// therefore not exposed here.
+pub(all) enum X264Stereo3D {
+  Checkerboard
+  Columns
+  Lines
+  SideBySide
+  TopBottom
+  FrameSequence
+  TwoD
+}
+
+///|
+/// Selector 0 stays reserved for "absent" at the FFI boundary.
+fn X264Stereo3D::to_sel(self : X264Stereo3D) -> Int32 {
+  match self {
+    Checkerboard => 1
+    Columns => 2
+    Lines => 3
+    SideBySide => 4
+    TopBottom => 5
+    FrameSequence => 6
+    TwoD => 7
+  }
+}
+
+///|
+/// Which side the `X264VideoHint` rectangles describe (libx264.c's
+/// `setup_mb_info` via `AVVideoHintType`): `Constant` rects delimit the
+/// UNCHANGED areas (the rest of the frame is assumed changed);
+/// `Changed` rects delimit the CHANGED areas (the rest is assumed
+/// unchanged).
+pub(all) enum X264VideoHintKind {
+  Constant
+  Changed
+}
+
+///|
+fn X264VideoHintKind::to_type(self : X264VideoHintKind) -> Int32 {
+  match self {
+    Constant => 1
+    Changed => 2
+  }
+}
+
+///|
+/// Per-macroblock motion hint (libx264.c's `setup_mb_info` →
+/// `pic.prop.mb_info`): pixel rectangles telling the encoder which areas
+/// of the picture did (`Changed`) or did not (`Constant`) change since
+/// the previous picture. x264 only acts on the array when the `mb_info`
+/// option is enabled — pass `("mb_info", "1")` in `open`'s options.
+/// Rectangles are pixel coordinates (no alignment requirement; upstream
+/// clamps to the 16px macroblock grid) and an empty `rects` array is
+/// legal: with `Constant` it claims the WHOLE frame changed, with
+/// `Changed` that nothing did.
+pub(all) struct X264VideoHint {
+  kind : X264VideoHintKind
+  rects : Array[X264HintRect]
+}
+
+///|
+/// One pixel rectangle of an `X264VideoHint`.
+pub(all) struct X264HintRect {
+  x : Int32
+  y : Int32
+  width : Int32
+  height : Int32
+}
+
+///|
+/// Serialize to the stub's 16-bytes-per-rect little-endian blob.
+fn X264VideoHint::encode_blob(self : X264VideoHint) -> Bytes {
+  let buf : Array[Byte] = []
+  for r in self.rects {
+    for v in [r.x, r.y, r.width, r.height] {
+      buf.push((v & 0xFF).to_byte())
+      buf.push(((v >> 8) & 0xFF).to_byte())
+      buf.push(((v >> 16) & 0xFF).to_byte())
+      buf.push(((v >> 24) & 0xFF).to_byte())
+    }
+  }
+  Bytes::from_array(buf[:])
+}
+
+///|
 /// Pixel formats the binding accepts. The selector integers are translated
 /// to `AVPixelFormat` inside the stub, never passed through as enum values.
 pub(all) enum X264PixelFormat {
@@ -114,6 +266,9 @@ pub(all) suberror X264Error {
   SendFailed(Int32)
   ReceiveFailed(Int32)
   ExtradataUnavailable
+  /// A per-picture side-data payload violated its shape contract
+  /// (e.g. A53 captions whose length is not a multiple of 3).
+  BadSideData(String)
 } derive(Debug)
 
 ///|
@@ -283,6 +438,12 @@ pub fn X264Encoder::open(
   color_primaries~ : Int32 = 0,
   color_trc~ : Int32 = 0,
   chroma_sample_location~ : Int32 = 0,
+  /// Sample aspect ratio as a fraction (`sample_aspect_ratio`), written
+  /// into the SPS VUI by libx264 at open (av_reduce-capped at 4096).
+  /// The default 0/0 leaves the aspect-ratio VUI unset (square-pixel
+  /// inference is then the decoder's policy, not the bitstream's);
+  /// `sar=(1, 1)` explicitly marks square pixels.
+  sar~ : (Int32, Int32) = (0, 0),
   options~ : Array[(String, String)] = [],
 ) -> X264Encoder raise X264Error {
   if width <= 0 || height <= 0 {
@@ -329,6 +490,8 @@ pub fn X264Encoder::open(
     color_primaries,
     color_trc,
     chroma_sample_location,
+    sar.0,
+    sar.1,
     @utf8.encode(joined),
   )
   // Failed opens come back as a failed-open handle (see ffi.mbt).
@@ -355,6 +518,38 @@ pub fn X264Encoder::open(
 /// (avcodec's EAGAIN); the caller should drain and resend.
 /// `force_idr = true` requests an IDR picture at this frame's PTS, even
 /// with an open GOP. On EAGAIN, resend with the same flag and planes.
+/// `pict_type` is libx264.c's per-frame `AVPictureType` mapping (the
+/// `X264_frame` switch): `Auto` lets x264 pick, `Keyframe` asks for an
+/// I picture that is NOT an IDR (open-GOP scene-cut keyframe), `Idr`
+/// behaves like `force_idr = true`, and `P` / `B` pin the slice type
+/// x264 would otherwise choose with b-adapt. `force_idr = true` wins
+/// over `pict_type = Keyframe`, mirroring upstream's
+/// `I + forced-idr -> X264_TYPE_IDR`. The forcing is per picture: the
+/// stub restores the open-time `forced-idr` option value afterwards,
+/// so mixed IDR / non-IDR keyframe requests compose.
+///
+/// SEI side data (libx264.c's per-frame path): `a53` carries raw A53
+/// closed-caption blocks - a multiple of 3 bytes, up to 63 (21 blocks) -
+/// which libx264 wraps into a registered ITU-T T.35 `GA94` SEI (option
+/// `a53cc`, on by upstream default). `sei_unregistered` carries one
+/// unregistered-SEI payload verbatim: a 16-byte UUID followed by the
+/// data (up to 16 MiB per SEI); the binding enables the upstream
+/// `udu_sei` option on demand. Both attach to THIS picture's access
+/// unit only, and both round-trip: a conforming decoder exports them
+/// as `A53Cc` / `SeiUnregistered` frame side data.
+///
+/// `roi` carries `AVRegionOfInterest` per-macroblock quantisation deltas
+/// for THIS picture (see `X264Roi`; requires `aq-mode != 0`, first
+/// region wins overlaps, and a zero `qoffset_den` is rejected here at
+/// the safe boundary). `stereo3d` attaches an `AVStereo3D` side data for
+/// THIS picture, which libx264 turns into frame packing; x264 emits the
+/// frame-packing SEI on IDR pictures only and captures the packing in
+/// force when the picture is actually encoded (lookahead may delay an
+/// IDR past its send call - the safe pattern is one request per forced
+/// IDR riding the same send_frame), and the decoder exports the
+/// resulting frame-packing SEI as `Stereo3d` side data. `video_hint`
+/// carries per-macroblock motion hints for THIS picture (see
+/// `X264VideoHint`; requires the `mb_info` option at open time).
 pub fn X264Encoder::send_frame(
   self : X264Encoder,
   pts~ : Int64,
@@ -362,8 +557,60 @@ pub fn X264Encoder::send_frame(
   u~ : Bytes,
   v~ : Bytes,
   force_idr~ : Bool = false,
+  pict_type~ : X264PictType = Auto,
+  a53~ : Bytes = b"",
+  sei_unregistered~ : Bytes = b"",
+  roi~ : Array[X264Roi] = [],
+  stereo3d~ : X264Stereo3D? = None,
+  video_hint~ : X264VideoHint? = None,
 ) -> Bool raise X264Error {
-  match x264enc_send_frame_ffi(self.h, pts, y, u, v, force_idr) {
+  if a53.length() % 3 != 0 {
+    raise BadSideData(
+      "A53 caption payload must be a multiple of 3 bytes, got \{a53.length()}",
+    )
+  }
+  if a53.length() > 63 {
+    raise BadSideData(
+      "A53 caption payload exceeds 21 cc blocks (63 bytes), got \{a53.length()}",
+    )
+  }
+  for r in roi {
+    if r.qoffset_den == 0 {
+      raise BadSideData(
+        "X264Roi qoffset_den must not be zero (upstream AVERROR(EINVAL))",
+      )
+    }
+  }
+  let request = if force_idr { X264PictType::Idr } else { pict_type }
+  let sel = request.to_sel()
+  let roi_blob = X264Roi::encode_blob(roi)
+  let stereo_sel = match stereo3d {
+    Some(s) => s.to_sel()
+    None => 0
+  }
+  let hint_type = match video_hint {
+    Some(h) => h.kind.to_type()
+    None => 0
+  }
+  let hint_blob = match video_hint {
+    Some(h) => h.encode_blob()
+    None => b""
+  }
+  match
+    x264enc_send_frame_ffi(
+      self.h,
+      pts,
+      y,
+      u,
+      v,
+      sel,
+      a53,
+      sei_unregistered,
+      roi_blob,
+      stereo_sel,
+      hint_type,
+      hint_blob,
+    ) {
     0 => true
     1 => false
     code => raise SendFailed(code)

@@ -271,7 +271,7 @@ test "h264 stream VBV: manual IDR uses continuous fullness and timing" {
     )
     assert_eq(stats.frame_qps.length(), 7)
     assert_eq(enc.recons.length(), 4)
-    let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(d) => d
       Err(e) => fail(e)
     }

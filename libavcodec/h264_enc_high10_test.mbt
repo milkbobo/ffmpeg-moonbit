@@ -152,7 +152,7 @@ test "h264 enc: high10 CAVLC intra frame round-trips" {
   if h264h10_sps_profile(enc.annexb) != 110 {
     fail("High 10 SPS profile_idc \{h264h10_sps_profile(enc.annexb)} != 110")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -208,7 +208,7 @@ test "h264 enc: high10 I_PCM is lossless" {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -258,7 +258,7 @@ test "h264 enc: high10 CABAC 8x8 DCT intra frame round-trips" {
   if stats.i8_mbs <= 0 {
     fail("high10 CABAC intra never selected the 8x8 transform")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -289,7 +289,7 @@ test "h264 enc: high10 CAVLC P/B sequence round-trips" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -327,7 +327,7 @@ test "h264 enc: high10 CABAC P/B sequence round-trips" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -368,7 +368,7 @@ test "h264 enc: high10 AQ and weighted P prediction round-trip" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -447,7 +447,7 @@ test "h264 enc: 9-bit round-trips and other depths are rejected" {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }

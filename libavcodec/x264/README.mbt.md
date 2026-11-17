@@ -28,6 +28,74 @@ for everything except `colorspace`, whose unspecified value is **2** —
 The `x264_color_*` / `x264_col_*` / `x264_chroma_loc_*` constants carry
 the common values.
 
+Sample aspect ratio rides `open`'s `sar=(num, den)` (libx264.c
+av_reduce-caps it into the SPS VUI at open). The default 0/0 leaves the
+aspect-ratio VUI unset; `sar=(1, 1)` explicitly marks square pixels and
+e.g. `sar=(16, 11)` marks PAL-DV anamorphic pixels. The pure decoder
+returns the parsed fraction on every frame (`H264Frame.vui.sar_num/den`).
+
+Per-picture type forcing mirrors libx264.c's `X264_frame` switch on
+`frame->pict_type`: `send_frame(..., pict_type=...)` accepts `Auto`
+(x264's own GOP logic, the default), `Keyframe` (an I picture that is
+**not** an IDR — an open-GOP scene-cut keyframe), `Idr` (equivalent to
+the historical `force_idr=true`, which still wins when both are given),
+and `P` / `B` to pin the slice type x264 would otherwise choose. The
+forcing is per picture — the stub restores the open-time `forced-idr`
+option around every `Idr` request, so mixed IDR / non-IDR keyframe
+streams compose. IDR access units re-emit SPS/PPS and the type-5 slice
+NAL; plain keyframes do neither, which `x264_probe_annexb` /
+`x264_probe_frames` expose for assertions.
+
+Per-picture SEI side data follows libx264.c's frame path:
+`send_frame(..., a53=...)` attaches raw A53 closed-caption blocks (a
+multiple of 3 bytes, at most 21 blocks), which `ff_alloc_a53_sei` wraps
+into a registered ITU-T T.35 `GA94` SEI (option `a53cc`, on by upstream
+default), and `send_frame(..., sei_unregistered=...)` passes one
+unregistered-SEI payload verbatim — a 16-byte UUID followed by the
+data (the binding enables the upstream `udu_sei` option on demand; it
+only gates the copy, never the encoding). Both attach to that picture's
+access unit only and round-trip: a conforming decoder exports them as
+`A53Cc` / `SeiUnregistered` frame side data.
+
+Per-macroblock quality control rides `send_frame(..., roi=...)` with
+`X264Roi` values (`AVRegionOfInterest`): pixel rectangles exclusive at
+`right`/`bottom`, and a normalised `qoffset_num / qoffset_den` in
+-1..+1 (negative = better quality, positive = worse) scaled by upstream
+to the QP range per macroblock. Setup requires adaptive quantisation
+(`aq-mode != 0`; x264's default with CRF — pin `aq-mode=1` to be sure);
+with AQ off upstream warns once and silently skips the ROI. A zero
+`qoffset_den` is rejected at the safe boundary, and where regions
+overlap the FIRST region in the array wins.
+
+`send_frame(..., stereo3d=Some(...))` attaches an `AVStereo3D` side data
+(`X264Stereo3D`: checkerboard / columns / lines / side-by-side /
+top-bottom / frame-sequence / 2D) which libx264 turns into x264 frame
+packing — an H.264 frame-packing-arrangement SEI rides the stream and a
+conforming decoder exports it as `Stereo3d` frame side data. x264 emits
+the SEI on **IDR pictures only**, and the packing in force when a
+picture is actually encoded wins (x264's lookahead means an IDR sent at
+PTS n may be encoded during a later `send_frame` call, so a request must
+stay in force until then — the safe pattern is one request per forced
+IDR, riding the same `send_frame` as `force_idr = true`). The upstream
+INVERT flag is rejected by x264 (warning, no packing) and is not exposed
+here.
+
+`send_frame(..., video_hint=Some(h))` attaches per-macroblock motion
+hints (`X264VideoHint` = kind + pixel rectangles): `Constant` rects
+delimit the UNCHANGED areas (the rest is assumed changed), `Changed`
+rects delimit the CHANGED areas (the rest unchanged). x264 honours the
+array only with the `mb_info` option enabled — pass `("mb_info", "1")`
+in `open`'s options — and **trusts it unconditionally**: macroblocks the
+hint marks constant are forced against motion search. An accurate hint
+therefore constrains the encoder to what it would usually pick anyway
+(the stream need not shrink), while a hint that lies about a moving
+region changes the stream in a content-dependent direction — either way
+it diverges from the baseline, which is what makes the pipeline
+observable. Rectangles need no alignment (upstream clamps to the
+macroblock grid); an empty rect list is legal, claiming the whole-frame
+default for that kind; the two spellings of the same fact are equivalent
+and produce byte-identical streams.
+
 The semi-planar formats carry one interleaved chroma plane instead of
 separate U and V planes: pass it as `u` with an empty `v`. `Nv12` pairs
 are U then V, `Nv21` pairs are V then U; `Nv16` is the 4:2:2 variant and

@@ -277,15 +277,15 @@ test "h264 brc: ffmpeg-arbitrated ABR and VBV b_slices streams" {
   for i, md5 in h264b_display_md5s(dec_vbv) {
     println("ARBBRCMD5:vbv poc\{i * 2} \{md5}")
   }
-  // §422e re-pins: the ABR/VBV trial encodes carry the B inter 8x8 RD
-  // choice, so both schedules shifted.
+  // §424 re-pins: deblocking on by default shifted both schedules (the
+  // VBV leg's pictures 0-4 stay pixel-identical to the flat stream).
   let pins_abr = [
-    "f78bb894f8f44a94d6b37d3073824d36", "74f9ddb5ccc09ac1788ee1d6e66dec92", "b78178ae167176e90e8d8283a93beec4",
-    "2b0b30bc102bc155e5bdb8cd52fcc9bc", "b1a3d177cfc3778b7bb50c52b6914b5d", "bac860ba5e587b8bb2ffc55c7cd684c5",
+    "019d0591d9c2bd9373f350072c8a610e", "598ae1b100223b09f6319437c89cd96a", "d6ff4fda91af7ec2b363977f707b8b7f",
+    "724d800d66e4296e80d384ee6589fd4d", "64af2203fd508271a051b62226308ea0", "ddfd3711a61a6d714e13af5039e3db36",
   ]
   let pins_vbv = [
-    "292edd53ff3434561e2e1d737c563c98", "15805750e5ce2080435b5015bd764bed", "ac522e2c0e46a0d10adaf8695b84db0e",
-    "d93e10806a19b2f2078418f0adfcf729", "d7813b5d70d37ff0d0457fbbb2a9172b", "a40a683f99b038fbe693a9e2c7db6369",
+    "292edd53ff3434561e2e1d737c563c98", "8939b394fe8c36618d19f652722caf9e", "38b675826ba7c8180041c06e653fa6fc",
+    "6b03f4a4cc1ab3f12a59a4399f282c06", "8795883852ef64ec921d344d640186ed", "cfd1d0047aae071b740aab9a4e48955e",
   ]
   let md5s_abr = h264b_display_md5s(dec_abr)
   let md5s_vbv = h264b_display_md5s(dec_vbv)

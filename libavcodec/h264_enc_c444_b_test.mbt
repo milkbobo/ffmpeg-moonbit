@@ -37,7 +37,7 @@ test "h264 c444 B: 16x16 inter schedule reconstructs three planes" {
         Ok(s) => s
         Err(e) => fail(e)
       }
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -109,15 +109,15 @@ test "h264 c444 B: ffmpeg-arbitrated default-tools streams" {
     // RD choice is active in this default-tools configuration.
     let pins = if cabac {
       [
-        "e2e0abb9eee6521cf87cf701c2ec8b32", "5388a1446ba2675015c7b4116a99ed4c", "25044a70a6a64c6795c507dc9dae0f85",
-        "968910968435ba605d40d603457c239c", "e5248b387d9c654a6c271aac7872486a", "58ea280bb8e1dcd08b91321f3d3a11b1",
-        "b84b9adf4c591ff70c91ed2a1da646f6",
+        "e2e0abb9eee6521cf87cf701c2ec8b32", "7e725a715bfd4d3ff33c2cdc1970b216", "1c184054fd67d7bffb20c0736d098833",
+        "38506347a2d54a4f255e33f36dc88434", "3703ecc115220fd7abaf5a2d0b9737a5", "d535916c72f66a9364087809901813d0",
+        "c7d9a6e6f584c453a901ca826336768c",
       ]
     } else {
       [
-        "e2e0abb9eee6521cf87cf701c2ec8b32", "a7e5887e21f7d12d25b81fe659f18a6b", "39cc8fbfe3cae1feefdef424db630843",
-        "3f54d9143ddb3ed6fb4ceb0ec2a08e49", "a0d4ffdc45048fd1a262fc459e3cfb92", "8cc72ed019130e09dbefa2a7eb8b31fd",
-        "4a79ddcdf312ac8f7c57a11097f8a59c",
+        "e2e0abb9eee6521cf87cf701c2ec8b32", "126a9f0b9ba8de3b9f4f99aafc26872c", "1b8e64adaff369ac3a732c92c7d4a18b",
+        "d491365b84eb12539a824d9d2f332d71", "b8c1a9fe906f6fb576b284afd701ee38", "5e0fa725e1c13b2e76656df14e6c8a66",
+        "2e053e7a73cb0cf40955fbff400b9bca",
       ]
     }
     for i, f in by_display {

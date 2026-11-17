@@ -31,6 +31,8 @@ extern "c" fn x264enc_open_ffi(
   color_primaries : Int32,
   color_trc : Int32,
   chroma_sample_location : Int32,
+  sar_num : Int32,
+  sar_den : Int32,
   options : Bytes,
 ) -> X264EncHandle = "x264enc_open"
 
@@ -47,14 +49,30 @@ extern "c" fn x264enc_errmsg_ffi(enc : X264EncHandle) -> Bytes? = "x264enc_errms
 extern "c" fn x264enc_supports_ffi(codec : Bytes, pix_sel : Int32) -> Int32 = "x264enc_supports"
 
 ///|
-#borrow(enc, y, u, v)
+/// `pict_sel` mirrors libx264.c's `frame->pict_type` switch:
+/// 0 auto, 1 I without forced-idr (open-GOP keyframe), 2 I with
+/// forced-idr (IDR), 3 P, 4 B. `a53` / `sei_unreg` / `roi_blob` /
+/// `hint_blob` are per-picture side-data payloads (empty = absent):
+/// AV_FRAME_DATA_A53_CC, AV_FRAME_DATA_SEI_UNREGISTERED,
+/// AV_FRAME_DATA_REGIONS_OF_INTEREST (24 LE bytes per region: top,
+/// bottom, left, right, qoffset num, den) and AV_FRAME_DATA_VIDEO_HINT
+/// (16 LE bytes per rect: x, y, width, height).
+/// `stereo3d_sel`: 0 absent, 1..7 = the libx264.c STEREO3D switch.
+/// `hint_type`: 0 absent, 1 = CONSTANT rects, 2 = CHANGED rects.
+#borrow(enc, y, u, v, a53, sei_unreg, roi_blob, hint_blob)
 extern "c" fn x264enc_send_frame_ffi(
   enc : X264EncHandle,
   pts : Int64,
   y : Bytes,
   u : Bytes,
   v : Bytes,
-  force_idr : Bool,
+  pict_sel : Int32,
+  a53 : Bytes,
+  sei_unreg : Bytes,
+  roi_blob : Bytes,
+  stereo3d_sel : Int32,
+  hint_type : Int32,
+  hint_blob : Bytes,
 ) -> Int32 = "x264enc_send_frame"
 
 ///|

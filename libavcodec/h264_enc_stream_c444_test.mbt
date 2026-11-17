@@ -75,7 +75,7 @@ test "h264 stream c444: CAVLC I/P equals batch and reconstruction" {
       }
       let stream = h264s_concat(aus)
       assert_true(h264s_bytes_eq(stream, batch))
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

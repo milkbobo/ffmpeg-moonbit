@@ -83,7 +83,7 @@ test "h264 c422: round trip with the recon invariant in both entropies" {
     }
     assert_eq(profile, 122)
     assert_eq(ps.sps_list[0].unwrap().chroma_format_idc, 2)
-    let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(d) => d
       Err(e) => fail(e)
     }

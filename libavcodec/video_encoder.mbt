@@ -73,11 +73,16 @@ pub(all) struct VideoEncConfig {
   intra_in_b : Bool
   intra4x4_in_b : Bool
   weightp : Bool
+  /// `§434`: opt-in explicit B weighted prediction (requires `b_slices`).
+  weightp_b : Bool
   bit_depth : Int32
   aud : Bool
   aq : Bool
   aq_strength : Int32
   target_bytes : Int32
+  /// `§435`: constant rate factor (0.0..=51.0, negative = off; x264
+  /// `--crf`). Mutually exclusive with `target_bytes`; composes with VBV.
+  crf : Double
   vbv_maxrate : Int32
   vbv_bufsize : Int32
   fps : Int32
@@ -87,12 +92,21 @@ pub(all) struct VideoEncConfig {
   multi_ref : Int32
   /// `§420`: chroma format 1 (4:2:0, default) or 2 (4:2:2).
   chroma_format : Int32
+  /// `§432`: Cb/Cr chroma QP offset -12..12 (x264 `chroma-qp-offset`).
+  chroma_qp_offset : Int32
   /// Periodic IDR distance in display frames, 0 = disabled. Batch ABR and
   /// VBV cover the full sequence, including reordered B GOPs.
   /// Explicit forced IDRs restart this interval in the streaming encoder.
   keyint : Int32
-  /// `§423`: opt-in in-loop deblocking (batch and streaming).
+  /// `§423`: in-loop deblocking, default on (batch and streaming).
   deblock : Bool
+  /// `§433`: slice deblocking alpha/beta offsets in div2 units (-6..=6,
+  /// x264 `--deblock alpha:beta`); either nonzero opts the PPS into
+  /// deblocking control. Requires `deblock=true`.
+  deblock_alpha : Int32
+  deblock_beta : Int32
+  /// `§426`: sample aspect ratio for the SPS VUI; 0/0 keeps it unset.
+  sar : (Int32, Int32)
 }
 
 ///|
@@ -111,18 +125,24 @@ pub fn VideoEncConfig::new(width~ : Int32, height~ : Int32) -> VideoEncConfig {
     intra_in_b: true,
     intra4x4_in_b: true,
     weightp: true,
+    weightp_b: false,
     bit_depth: 8,
     aud: false,
     aq: false,
     aq_strength: 1,
     target_bytes: 0,
+    crf: -1.0,
     vbv_maxrate: 0,
     vbv_bufsize: 0,
     fps: 0,
     multi_ref: 1,
     chroma_format: 1,
+    chroma_qp_offset: 0,
     keyint: 0,
-    deblock: false,
+    deblock: true,
+    deblock_alpha: 0,
+    deblock_beta: 0,
+    sar: (0, 0),
   }
 }
 
@@ -165,8 +185,10 @@ pub fn VideoEncoder::open(
           intra_in_b=config.intra_in_b,
           intra4x4_in_b=config.intra4x4_in_b,
           weightp=config.weightp,
+          weightp_b=config.weightp_b,
           bit_depth=config.bit_depth,
           chroma_format=config.chroma_format,
+          chroma_qp_offset=config.chroma_qp_offset,
           multi_ref=config.multi_ref,
           aud=config.aud,
           aq=config.aq,
@@ -175,7 +197,11 @@ pub fn VideoEncoder::open(
           vbv_maxrate=config.vbv_maxrate,
           vbv_bufsize=config.vbv_bufsize,
           fps=config.fps,
+          crf=config.crf,
           deblock=config.deblock,
+          deblock_alpha=config.deblock_alpha,
+          deblock_beta=config.deblock_beta,
+          sar=config.sar,
         ) {
         Ok(h264) => Ok({ codec, config, h264, })
         Err(e) => Err(e)
@@ -214,12 +240,25 @@ pub fn VideoEncoder::height(self : VideoEncoder) -> Int32 {
 /// 16-bit samples above). Returns when the frame is consumed; call
 /// `drain()` for the access units this made final.
 /// `force_idr=true` closes any pending B pair and starts an independent GOP.
+/// `§427`: optional A53 caption triples / one unregistered SEI payload
+/// ride this picture's own access unit (see `h264_encode_intra_frame`).
+/// `§428`: the stereo layout is stashed and written with the next IDR AU.
+/// `§429`: the ROI map applies to this picture (ignored when AQ is off).
+/// `§430`: the motion hint applies to this picture (IDR pictures ignore it).
+/// `§431`: `pict_type` pins this picture's type (`H264StreamEncoder`'s
+/// vocabulary: 0 auto, 1 keyframe, 2 IDR, 3 P, 4 B); `force_idr` wins.
 pub fn VideoEncoder::push_frame(
   self : VideoEncoder,
   y : Bytes,
   u : Bytes,
   v : Bytes,
   force_idr~ : Bool = false,
+  pict_type~ : Int32 = 0,
+  a53~ : Bytes? = None,
+  sei_unregistered~ : Bytes? = None,
+  stereo3d~ : Int32 = 0,
+  roi~ : Array[H264Roi] = [],
+  hint~ : H264VideoHint? = None,
 ) -> Result[Unit, String] {
   let force_idr = force_idr ||
     (
@@ -228,7 +267,19 @@ pub fn VideoEncoder::push_frame(
       self.h264.next_display - self.h264.gop_start >= self.config.keyint
     )
   match self.codec {
-    VideoCodec::H264 => self.h264.push_frame(y, u, v, force_idr~)
+    VideoCodec::H264 =>
+      self.h264.push_frame(
+        y,
+        u,
+        v,
+        force_idr~,
+        pict_type~,
+        a53~,
+        sei_unregistered~,
+        stereo3d~,
+        roi~,
+        hint~,
+      )
   }
 }
 
@@ -268,6 +319,11 @@ pub fn video_encode(
 ) -> Result[Bytes, String] {
   if config.keyint < 0 {
     return Err("video enc: keyint must be nonnegative")
+  }
+  // `§435`: CRF replaces the bitrate target — the two modes are mutually
+  // exclusive at the facade so every dispatch below is unambiguous.
+  if config.crf >= 0.0 && config.target_bytes > 0 {
+    return Err("video enc: crf and target_bytes are mutually exclusive")
   }
   if config.keyint > 0 {
     if frames.length() == 0 {
@@ -320,6 +376,7 @@ pub fn video_encode(
           intra_in_b=config.intra_in_b,
           intra4x4_in_b=config.intra4x4_in_b,
           weightp=config.weightp,
+          weightp_b=config.weightp_b,
           width=config.width,
           height=config.height,
           qp=config.qp,
@@ -327,6 +384,7 @@ pub fn video_encode(
           aq_strength=config.aq_strength,
           aud=config.aud,
           target_bytes=config.target_bytes,
+          crf=config.crf,
           vbv_maxrate=config.vbv_maxrate,
           vbv_bufsize=config.vbv_bufsize,
           fps=config.fps,
@@ -335,7 +393,11 @@ pub fn video_encode(
           stats~,
           multi_ref=config.multi_ref,
           chroma_format=config.chroma_format,
+          chroma_qp_offset=config.chroma_qp_offset,
           deblock=config.deblock,
+          deblock_alpha=config.deblock_alpha,
+          deblock_beta=config.deblock_beta,
+          sar=config.sar,
         )
       } else {
         h264_encode_frames(
@@ -346,6 +408,7 @@ pub fn video_encode(
           intra_in_b=config.intra_in_b,
           intra4x4_in_b=config.intra4x4_in_b,
           weightp=config.weightp,
+          weightp_b=config.weightp_b,
           width=config.width,
           height=config.height,
           qp=config.qp,
@@ -353,6 +416,7 @@ pub fn video_encode(
           aq_strength=config.aq_strength,
           aud=config.aud,
           target_bytes=config.target_bytes,
+          crf=config.crf,
           vbv_maxrate=config.vbv_maxrate,
           vbv_bufsize=config.vbv_bufsize,
           fps=config.fps,
@@ -361,7 +425,11 @@ pub fn video_encode(
           stats~,
           multi_ref=config.multi_ref,
           chroma_format=config.chroma_format,
+          chroma_qp_offset=config.chroma_qp_offset,
           deblock=config.deblock,
+          deblock_alpha=config.deblock_alpha,
+          deblock_beta=config.deblock_beta,
+          sar=config.sar,
         )
       }
   }

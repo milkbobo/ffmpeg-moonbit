@@ -38,6 +38,8 @@ pub struct H264StreamEncoder {
   bit_depth : Int32
   /// Chroma format 1 (4:2:0), 2 (4:2:2), or 3 (I/P 4:4:4).
   chroma_format : Int32
+  /// `§432`: Cb/Cr chroma QP offset written to the PPS.
+  chroma_qp_offset : Int32
   aud : Bool
   aq : Bool
   aq_strength : Int32
@@ -63,6 +65,8 @@ pub struct H264StreamEncoder {
   priv mut refs_u : Array[Array[Int32]]
   priv mut refs_v : Array[Array[Int32]]
   priv nrefs : Int32
+  /// `§426`: sample aspect ratio for the SPS VUI (0/0 = unset).
+  priv sar : (Int32, Int32)
   /// The colocated motion history of the most recent reference picture
   /// (`b_slices` only; the next B picture's direct mode samples it).
   priv mut ref_colocated : Array[H264MbInfo]
@@ -75,6 +79,20 @@ pub struct H264StreamEncoder {
   /// The frame waiting for its future reference (`b_slices`: the odd
   /// display position stays here until the even one arrives).
   mut pending : (Bytes, Bytes, Bytes)?
+  /// `§427`: the pending frame's side data, stashed with `pending`.
+  priv mut pending_a53 : Bytes?
+  priv mut pending_sei : Bytes?
+  /// `§428`: the latest stereo layout (written with IDR AUs only; the
+  /// stash keeps the binding's capture-at-encode-time semantics).
+  priv mut stereo3d : Int32
+  /// `§429`: the current push's ROI map (per picture, like x264's frame
+  /// side data; empty = none) and the pending B picture's stashed map.
+  priv mut roi : Array[H264Roi]
+  priv mut pending_roi : Array[H264Roi]
+  /// `§430`: the current push's motion hint and the pending B picture's
+  /// stashed hint (x264 `mb_info` frame side data).
+  priv mut hint : H264VideoHint?
+  priv mut pending_hint : H264VideoHint?
   /// Display position of the NEXT pushed frame.
   mut next_display : Int32
   /// Global display position of the current GOP's IDR.
@@ -99,6 +117,20 @@ pub struct H264StreamEncoder {
   priv mut abr_qp : Int32
   /// `§423`: in-loop deblocking for every picture (see `open`).
   deblock : Bool
+  /// `§433`: slice deblocking alpha/beta offsets in div2 units (see `open`).
+  deblock_alpha : Int32
+  deblock_beta : Int32
+  /// `§434`: explicit weighted prediction for B slices (see `open`).
+  weightp_b : Bool
+  /// `§435`: the CRF controller (None = off; mutually exclusive with
+  /// the ABR controller by `open`).
+  priv crf : H264Crf?
+  /// `§435`: raw luma of the previous push — the temporal-complexity
+  /// SAD reference (advances with every push, display order).
+  priv mut prev_y : Bytes?
+  /// `§435`: the pending B picture's push-computed QP (stashed with the
+  /// frame like the side data; the B codes after its future P arrives).
+  priv mut pending_qp : Int32
 }
 
 ///|
@@ -168,6 +200,9 @@ pub fn H264StreamEncoder::open(
   /// 4:4:4 B slices support inter partitions and I4/I8/I16 candidates.
   /// `dct8x8` enables I8 and eligible inter 8x8 transforms for 4:4:4 B slices.
   chroma_format~ : Int32 = 1,
+  /// `§432`: Cb/Cr chroma QP offset -12..12 (x264 `chroma-qp-offset`);
+  /// 0 keeps every stream byte-identical to the pre-`§432` encoder.
+  chroma_qp_offset~ : Int32 = 0,
   /// Online VBV. Rejected emitting pushes leave encoder state intact;
   /// an odd B input is buffered until its future P arrives or finish.
   vbv_maxrate~ : Int32 = 0,
@@ -181,9 +216,27 @@ pub fn H264StreamEncoder::open(
   /// any) stacks on top. Requires `fps > 0`; without it the QP stays at
   /// the caller's flat value (byte-identical to the pre-`§422f` streams).
   target_bitrate~ : Int32 = 0,
-  /// `§423`: opt-in in-loop deblocking for every pushed picture; the
+  /// `§423`: in-loop deblocking, default on for every pushed picture; the
   /// reconstruction history and the drained recons carry filtered pixels.
-  deblock~ : Bool = false,
+  /// Pass `deblock=false` for the legacy pre-filter path.
+  deblock~ : Bool = true,
+  /// `§433`: slice deblocking alpha/beta offsets in div2 units (-6..=6,
+  /// x264 `--deblock alpha:beta`); either nonzero opts the PPS into
+  /// deblocking control. Requires `deblock=true`.
+  deblock_alpha~ : Int32 = 0,
+  deblock_beta~ : Int32 = 0,
+  /// `§434`: explicit weighted prediction in B slices (opt-in).
+  weightp_b~ : Bool = false,
+  /// `§426`: sample aspect ratio as a `(num, den)` fraction, written into
+  /// the SPS VUI (Extended_SAR); 0/0 keeps the aspect-ratio VUI unset.
+  sar~ : (Int32, Int32) = (0, 0),
+  /// `§435`: constant rate factor (x264 `--crf`, 0.0..=51.0; negative =
+  /// off). The value is the baseline QP; every picture's QP bends around
+  /// it by its temporal complexity (see `h264_enc_crf.mbt`). Mutually
+  /// exclusive with `target_bitrate`; composes with online VBV (the CRF
+  /// QP is the climb's starting point). Byte-identical to the batch
+  /// entries with the same `crf`.
+  crf~ : Double = -1.0,
 ) -> Result[H264StreamEncoder, String] {
   if vbv_maxrate < 0 || vbv_bufsize < 0 || fps < 0 {
     return Err("h264 enc: streaming VBV parameters must be nonnegative")
@@ -193,6 +246,12 @@ pub fn H264StreamEncoder::open(
   }
   if target_bitrate > 0 && fps <= 0 {
     return Err("h264 enc: streaming ABR needs fps > 0")
+  }
+  if crf > 51.0 {
+    return Err("h264 enc: crf must be in 0.0..=51.0")
+  }
+  if crf >= 0.0 && target_bitrate > 0 {
+    return Err("h264 enc: crf and target_bitrate are mutually exclusive")
   }
   // fps alone configures nothing: it either paces a VBV or the ABR
   // controller, and a silent no-op would hide a caller's mistake.
@@ -231,6 +290,13 @@ pub fn H264StreamEncoder::open(
   if chroma_format < 1 || chroma_format > 3 {
     return Err("h264 enc: chroma_format must be 1, 2 or 3")
   }
+  if chroma_qp_offset < -12 || chroma_qp_offset > 12 {
+    return Err("h264 enc: chroma_qp_offset must be in -12..=12")
+  }
+  match h264_enc_deblock_offsets_ok(deblock, deblock_alpha, deblock_beta) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
   if width <= 0 ||
     height <= 0 ||
     width % 2 != 0 ||
@@ -242,7 +308,18 @@ pub fn H264StreamEncoder::open(
   if qp < 0 || qp > 51 {
     return Err("h264 enc: qp out of range")
   }
-  let p = { width, height, qp, level_idc, bit_depth, nrefs: multi_ref, }
+  let p = {
+    width,
+    height,
+    qp,
+    level_idc,
+    bit_depth,
+    nrefs: multi_ref,
+    sar,
+    deblock_alpha,
+    deblock_beta,
+    weightp_b,
+  }
   let mb_width = p.mb_width()
   let mb_height = p.mb_height()
   let ystride = mb_width * 16
@@ -270,9 +347,15 @@ pub fn H264StreamEncoder::open(
   // must hand the same flag to the PPS builder that its P slices use — a
   // table on the wire with `weighted_pred_flag = 0` would decode unweighted.
   let pps_raw = if cabac {
-    h264_enc_pps_rbsp_cabac(p, dct8x8~, weightp~, chroma_format~)
+    h264_enc_pps_rbsp_cabac(
+      p,
+      dct8x8~,
+      weightp~,
+      chroma_format~,
+      chroma_qp_offset~,
+    )
   } else {
-    h264_enc_pps_rbsp(p, dct8x8~, weightp~, chroma_format~)
+    h264_enc_pps_rbsp(p, dct8x8~, weightp~, chroma_format~, chroma_qp_offset~)
   }
   match
     ff_h264_decode_picture_parameter_set(
@@ -306,6 +389,7 @@ pub fn H264StreamEncoder::open(
     weightp,
     bit_depth,
     chroma_format,
+    chroma_qp_offset,
     aud,
     aq,
     aq_strength,
@@ -324,11 +408,22 @@ pub fn H264StreamEncoder::open(
     refs_u: [],
     refs_v: [],
     nrefs: multi_ref,
+    sar,
+    deblock_alpha,
+    deblock_beta,
+    weightp_b,
     ref_colocated: [],
     fut_y: [],
     fut_u: [],
     fut_v: [],
     pending: None,
+    pending_a53: None,
+    pending_sei: None,
+    stereo3d: 0,
+    roi: [],
+    pending_roi: [],
+    hint: None,
+    pending_hint: None,
     next_display: 0,
     gop_start: 0,
     fn_counter: 0,
@@ -352,6 +447,13 @@ pub fn H264StreamEncoder::open(
     abr_pics: 0,
     abr_qp: qp,
     deblock,
+    crf: if crf >= 0.0 {
+      Some(H264Crf::create(crf))
+    } else {
+      None
+    },
+    prev_y: None,
+    pending_qp: 0,
   })
 }
 
@@ -497,53 +599,256 @@ fn H264StreamEncoder::check_frame(
 /// `force_idr=true` starts an independent GOP with repeated SPS/PPS and
 /// clears reference history. A pending B picture is first coded as a P
 /// picture against the old GOP, just like a sequence tail.
+/// `§431`: `pict_type` pins this picture's type with libx264.c's
+/// per-frame vocabulary (see `h264_pict_type_*`). `Keyframe` codes a
+/// non-IDR I picture — a new prediction chain without the IDR's POC,
+/// parameter-set and reference resets; `P` codes a P immediately (a
+/// pending B becomes its pair); `B` buffers a B for the following frame's
+/// future reference (`b_slices` only). `force_idr` wins over `pict_type`,
+/// and the first picture of a sequence is always its IDR.
 pub fn H264StreamEncoder::push_frame(
   self : H264StreamEncoder,
   y : Bytes,
   u : Bytes,
   v : Bytes,
   force_idr~ : Bool = false,
+  /// `§431`: per-picture type request (`h264_pict_type_auto` by default).
+  pict_type~ : Int32 = 0,
+  /// `§427`: A53 caption triples / one unregistered SEI payload riding
+  /// this picture's own access unit (see `h264_encode_intra_frame`).
+  a53~ : Bytes? = None,
+  sei_unregistered~ : Bytes? = None,
+  /// `§428`: stereo layout stashed for the next IDR AU (the push that
+  /// carries it applies when that same push is the IDR — the §424d
+  /// binding's per-layout forced-IDR pattern).
+  stereo3d~ : Int32 = 0,
+  /// `§429`: this picture's ROI map (`H264Roi`, per picture like x264's
+  /// frame side data). Ignored when the encoder was opened with `aq=false`.
+  roi~ : Array[H264Roi] = [],
+  /// `§430`: this picture's motion hint (`H264VideoHint`, x264 `mb_info`
+  /// semantics; IDR pictures ignore it).
+  hint~ : H264VideoHint? = None,
 ) -> Result[Unit, String] {
   match self.check_frame(y, u, v) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
+  if stereo3d != 0 {
+    self.stereo3d = stereo3d
+  }
+  // `§429`: validate the map eagerly (upstream rejects qoffset.den == 0 at
+  // the safe boundary) and keep this push's copy; AQ off skips it silently.
+  match
+    h264_roi_offsets_for(
+      roi,
+      self.aq,
+      self.mb_width,
+      self.mb_height,
+      self.bit_depth,
+    ) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  self.roi = roi.copy()
+  // `§430`: per-picture motion hint (copied; the encoder outlives the call).
+  self.hint = match hint {
+    Some(h) => {
+      match h264_hint_validate(h) {
+        Ok(_) => ()
+        Err(e) => return Err(e)
+      }
+      Some({ kind: h.kind, rects: h.rects.copy(), })
+    }
+    None => None
+  }
+  match h264_pict_type_validate(pict_type) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  // `§431`: `force_idr` is the legacy spelling of `pict_type = Idr` and wins.
+  let request = if force_idr { h264_pict_type_idr } else { pict_type }
+  // `§435`: CRF evaluates the picture's QP at push time (display-causal
+  // — the same recurrence the batch entries run over the whole array);
+  // a frame parked as pending B keeps its QP stashed until it codes.
+  let qp0 = if self.crf is Some(_) { self.crf_qp_for(y) } else { 0 }
   match self.vbv {
-    Some(vbv) => return self.push_vbv(y, u, v, vbv, force_idr~)
+    Some(vbv) =>
+      return self.push_vbv(
+        y,
+        u,
+        v,
+        vbv,
+        pict_type=request,
+        qp_hint=qp0,
+        a53~,
+        sei_unregistered~,
+      )
     None => ()
   }
   let d = self.next_display - self.gop_start
-  if force_idr {
+  // The first picture of the sequence is always its IDR; an explicit IDR
+  // request closes the pending pair and starts a new GOP.
+  if d == 0 || request == h264_pict_type_idr {
     match self.flush_pending() {
       Ok(_) => ()
       Err(e) => return Err(e)
     }
+    self.next_display = self.next_display + 1
+    return self.stream_idr(
+      y,
+      u,
+      v,
+      qp=self.pic_suggest(qp0),
+      a53~,
+      sei_unregistered~,
+      roi=self.roi,
+    )
   }
-  self.next_display = self.next_display + 1
-  if d == 0 || force_idr {
-    return self.stream_idr(y, u, v, qp=self.abr_suggest())
+  // `§431`: an open-GOP keyframe: a non-IDR I picture that starts a new
+  // prediction chain without an IDR's POC/reference/parameter-set resets.
+  if request == h264_pict_type_keyframe {
+    match self.flush_pending() {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+    self.next_display = self.next_display + 1
+    return self.stream_i(
+      y,
+      u,
+      v,
+      d,
+      qp=self.pic_suggest(qp0),
+      a53~,
+      sei_unregistered~,
+      roi=self.roi,
+    )
   }
-  if !self.b_slices {
-    return self.stream_p(y, u, v, d, qp=self.abr_suggest())
+  // `§431`: a P request codes this picture now; a pending B picture's
+  // future reference is exactly this frame, so the pair closes after it.
+  if request == h264_pict_type_p {
+    self.next_display = self.next_display + 1
+    match
+      self.stream_p(
+        y,
+        u,
+        v,
+        d,
+        qp=self.pic_suggest(qp0),
+        a53~,
+        sei_unregistered~,
+        roi=self.roi,
+        hint=self.hint,
+      ) {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+    return self.stream_pending_b(d)
   }
-  if d % 2 == 1 {
-    self.pending = Some((y, u, v))
+  // `§431`: a forced B waits for its future reference like the default
+  // odd-position schedule; a pending B is first closed as a tail P.
+  if request == h264_pict_type_b {
+    if !self.b_slices {
+      return Err("h264 enc: forced B requires b_slices (POC type 0)")
+    }
+    match self.flush_pending() {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+    self.next_display = self.next_display + 1
+    self.stash_pending(y, u, v, a53, sei_unregistered, qp=qp0)
     return Ok(())
   }
-  // Even position: the pending B picture's future reference. Code this P
-  // picture first, then the B picture against past+future. The B hint is
-  // taken after the P picture's bits are folded in, so its budget already
-  // sees the pair's first half.
+  // Auto: the default schedule — a pending B closes against this P, an
+  // odd display position waits as a B, every other picture codes as a P.
+  self.next_display = self.next_display + 1
+  if self.pending is Some(_) {
+    match
+      self.stream_p(
+        y,
+        u,
+        v,
+        d,
+        qp=self.pic_suggest(qp0),
+        a53~,
+        sei_unregistered~,
+        roi=self.roi,
+        hint=self.hint,
+      ) {
+      Ok(_) => ()
+      Err(e) => return Err(e)
+    }
+    return self.stream_pending_b(d)
+  }
+  if self.b_slices && d % 2 == 1 {
+    self.stash_pending(y, u, v, a53, sei_unregistered, qp=qp0)
+    return Ok(())
+  }
+  self.stream_p(
+    y,
+    u,
+    v,
+    d,
+    qp=self.pic_suggest(qp0),
+    a53~,
+    sei_unregistered~,
+    roi=self.roi,
+    hint=self.hint,
+  )
+}
+
+///|
+/// `§431`: stash the incoming frame as the pending B picture, with its
+/// side data captured like the default odd-position schedule does.
+fn H264StreamEncoder::stash_pending(
+  self : H264StreamEncoder,
+  y : Bytes,
+  u : Bytes,
+  v : Bytes,
+  a53 : Bytes?,
+  sei_unregistered : Bytes?,
+  /// `§435`: the frame's push-computed QP (CRF only; parked with the
+  /// frame like the side data so it codes with its own complexity).
+  qp~ : Int32 = 0,
+) -> Unit {
+  self.pending = Some((y, u, v))
+  self.pending_a53 = a53
+  self.pending_sei = sei_unregistered
+  self.pending_roi = self.roi.copy()
+  self.pending_hint = self.hint
+  self.pending_qp = qp
+}
+
+///|
+/// `§431`: close the pending B picture after its future P (`display` is
+/// the just-coded P's display position; the B sits one before it).
+fn H264StreamEncoder::stream_pending_b(
+  self : H264StreamEncoder,
+  display : Int32,
+) -> Result[Unit, String] {
   let (by, bu, bv) = match self.pending {
     Some(t) => t
-    None => return Err("h264 enc: stream scheduling lost the B picture")
+    None => return Ok(())
   }
+  let b_a53 = self.pending_a53
+  let b_sei = self.pending_sei
+  let b_roi = self.pending_roi
+  let b_hint = self.pending_hint
   self.pending = None
-  match self.stream_p(y, u, v, d, qp=self.abr_suggest()) {
-    Ok(_) => ()
-    Err(e) => return Err(e)
-  }
-  self.stream_b(by, bu, bv, d - 1, qp=self.abr_suggest())
+  self.pending_a53 = None
+  self.pending_sei = None
+  self.pending_roi = []
+  self.pending_hint = None
+  self.stream_b(
+    by,
+    bu,
+    bv,
+    display - 1,
+    qp=self.pic_suggest(self.pending_qp),
+    a53=b_a53,
+    sei_unregistered=b_sei,
+    roi=b_roi,
+    hint=b_hint,
+  )
 }
 
 ///|
@@ -574,18 +879,33 @@ fn H264StreamEncoder::flush_pending(
   self : H264StreamEncoder,
 ) -> Result[Unit, String] {
   match self.pending {
-    Some((y, u, v)) =>
+    Some((y, u, v)) => {
+      let a53 = self.pending_a53
+      let sei = self.pending_sei
+      let roi = self.pending_roi
+      let hint = self.pending_hint
       match
         self.stream_p(
           y,
           u,
           v,
           self.next_display - self.gop_start - 1,
-          qp=self.abr_suggest(),
+          qp=self.pic_suggest(self.pending_qp),
+          a53~,
+          sei_unregistered=sei,
+          roi~,
+          hint~,
         ) {
-        Ok(_) => self.pending = None
+        Ok(_) => {
+          self.pending = None
+          self.pending_a53 = None
+          self.pending_sei = None
+          self.pending_roi = []
+          self.pending_hint = None
+        }
         Err(e) => return Err(e)
       }
+    }
     None => ()
   }
   Ok(())
@@ -615,6 +935,10 @@ fn H264StreamEncoder::stream_idr(
   qp~ : Int32 = self.qp,
   vbv~ : H264Vbv? = None,
   idr_cpb_delay~ : Int32 = 0,
+  a53~ : Bytes? = None,
+  sei_unregistered~ : Bytes? = None,
+  /// `§429`: this IDR picture's ROI map (see `push_frame`).
+  roi~ : Array[H264Roi] = [],
 ) -> Result[Unit, String] {
   let first = if self.cabac {
     h264_encode_intra_frame_cabac(
@@ -626,18 +950,26 @@ fn H264StreamEncoder::stream_idr(
       qp~,
       level_idc=self.level_idc,
       stats=self.stats,
-      pps_qp=self.qp,
+      pps_qp=self.pps_qp(),
       aq=self.aq,
       aq_strength=self.aq_strength,
       b_seq=self.b_slices,
       dct8x8=self.dct8x8,
       weightp=self.weightp,
+      weightp_b=self.weightp_b,
       bit_depth=self.bit_depth,
       chroma_format=self.chroma_format,
+      chroma_qp_offset=self.chroma_qp_offset,
       multi_ref=self.nrefs,
       vbv~,
       idr_cpb_delay~,
       deblock=self.deblock,
+      deblock_alpha=self.deblock_alpha,
+      deblock_beta=self.deblock_beta,
+      sar=self.sar,
+      a53~,
+      sei_unregistered~,
+      roi~,
     )
   } else {
     h264_encode_intra_frame(
@@ -649,29 +981,46 @@ fn H264StreamEncoder::stream_idr(
       qp~,
       level_idc=self.level_idc,
       stats=self.stats,
-      pps_qp=self.qp,
+      pps_qp=self.pps_qp(),
       aq=self.aq,
       aq_strength=self.aq_strength,
       b_seq=self.b_slices,
       dct8x8=self.dct8x8,
       weightp=self.weightp,
+      weightp_b=self.weightp_b,
       bit_depth=self.bit_depth,
       multi_ref=self.nrefs,
       chroma_format=self.chroma_format,
+      chroma_qp_offset=self.chroma_qp_offset,
       vbv~,
       idr_cpb_delay~,
       deblock=self.deblock,
+      deblock_alpha=self.deblock_alpha,
+      deblock_beta=self.deblock_beta,
+      sar=self.sar,
+      a53~,
+      sei_unregistered~,
+      roi~,
     )
   }
   let first = match first {
     Ok(e) => e
     Err(e) => return Err(e)
   }
-  let au = if self.aud {
-    h264_enc_concat([h264_enc_aud(true), first.annexb])
-  } else {
-    first.annexb
+  // `§428`: the frame packing SEI rides the IDR AU (after the AUD, before
+  // the parameter sets' payload — SEI messages precede the slice NAL).
+  let idr_parts : Array[Bytes] = []
+  if self.aud {
+    idr_parts.push(h264_enc_aud(true))
   }
+  if self.stereo3d != 0 {
+    match h264_enc_sei_frame_packing(self.stereo3d) {
+      Ok(nal) => idr_parts.push(nal)
+      Err(e) => return Err(e)
+    }
+  }
+  idr_parts.push(first.annexb)
+  let au = h264_enc_concat(idr_parts)
   self.out.push(au)
   self.stats.frame_qps.push(qp)
   self.abr_note((au.length() * 8).to_int64(), qp)
@@ -699,6 +1048,155 @@ fn H264StreamEncoder::stream_idr(
 }
 
 ///|
+/// `§431`: one non-IDR I picture (the `Keyframe` request) — an open-GOP
+/// keyframe: a new prediction chain in a type-1 NAL carrying the
+/// position's `frame_num` / `poc_lsb`, without the IDR's parameter sets,
+/// POC reset and reference flush. Its reconstruction becomes the newest
+/// reference and reseeds the per-macroblock nC mirror, exactly like the
+/// IDR's does.
+fn H264StreamEncoder::stream_i(
+  self : H264StreamEncoder,
+  y : Bytes,
+  u : Bytes,
+  v : Bytes,
+  display : Int32,
+  qp~ : Int32 = self.qp,
+  vbv~ : H264Vbv? = None,
+  cpb_delay~ : Int32 = display * 2,
+  dpb_delay~ : Int32 = 0,
+  a53~ : Bytes? = None,
+  sei_unregistered~ : Bytes? = None,
+  /// `§429`: this picture's ROI map (see `push_frame`).
+  roi~ : Array[H264Roi] = [],
+) -> Result[Unit, String] {
+  self.fn_counter = self.fn_counter + 1
+  let first = if self.cabac {
+    h264_encode_intra_frame_cabac(
+      y,
+      u,
+      v,
+      width=self.width,
+      height=self.height,
+      qp~,
+      level_idc=self.level_idc,
+      stats=self.stats,
+      pps_qp=self.pps_qp(),
+      aq=self.aq,
+      aq_strength=self.aq_strength,
+      b_seq=self.b_slices,
+      dct8x8=self.dct8x8,
+      weightp=self.weightp,
+      weightp_b=self.weightp_b,
+      bit_depth=self.bit_depth,
+      chroma_format=self.chroma_format,
+      chroma_qp_offset=self.chroma_qp_offset,
+      multi_ref=self.nrefs,
+      deblock=self.deblock,
+      deblock_alpha=self.deblock_alpha,
+      deblock_beta=self.deblock_beta,
+      sar=self.sar,
+      a53~,
+      sei_unregistered~,
+      roi~,
+      idr=false,
+      frame_num=self.fn_counter,
+      poc_lsb=(display * 2) & 15,
+    )
+  } else {
+    h264_encode_intra_frame(
+      y,
+      u,
+      v,
+      width=self.width,
+      height=self.height,
+      qp~,
+      level_idc=self.level_idc,
+      stats=self.stats,
+      pps_qp=self.pps_qp(),
+      aq=self.aq,
+      aq_strength=self.aq_strength,
+      b_seq=self.b_slices,
+      dct8x8=self.dct8x8,
+      weightp=self.weightp,
+      weightp_b=self.weightp_b,
+      bit_depth=self.bit_depth,
+      multi_ref=self.nrefs,
+      chroma_format=self.chroma_format,
+      chroma_qp_offset=self.chroma_qp_offset,
+      deblock=self.deblock,
+      deblock_alpha=self.deblock_alpha,
+      deblock_beta=self.deblock_beta,
+      sar=self.sar,
+      a53~,
+      sei_unregistered~,
+      roi~,
+      idr=false,
+      frame_num=self.fn_counter,
+      poc_lsb=(display * 2) & 15,
+    )
+  }
+  let first = match first {
+    Ok(e) => e
+    Err(e) => return Err(e)
+  }
+  let au : Array[Bytes] = []
+  if self.aud {
+    au.push(h264_enc_aud(true))
+  }
+  match vbv {
+    Some(v) =>
+      au.push(h264_enc_sei_pic_timing(v, cpb_delay, dpb_output_delay=dpb_delay))
+    None => ()
+  }
+  au.push(first.annexb)
+  let total = h264_enc_concat(au)
+  self.out.push(total)
+  self.stats.frame_qps.push(qp)
+  self.abr_note((total.length() * 8).to_int64(), qp)
+  self.recons.push(
+    h264_enc_pack_recon(
+      first.recon_y,
+      first.recon_u,
+      first.recon_v,
+      self.width,
+      self.height,
+      self.ystride,
+      self.cstride,
+      bit_depth=self.bit_depth,
+      chroma_h=self.chroma_height(),
+      chroma_w=self.chroma_width(),
+    ),
+  )
+  let ny = h264_b_copy_plane(first.recon_y)
+  let nu = h264_b_copy_plane(first.recon_u)
+  let nv = h264_b_copy_plane(first.recon_v)
+  self.refs_y.insert(0, ny)
+  self.refs_u.insert(0, nu)
+  self.refs_v.insert(0, nv)
+  let cap = self.ref_history_cap()
+  if self.refs_y.length() > cap {
+    self.refs_y.truncate(cap)
+    self.refs_u.truncate(cap)
+    self.refs_v.truncate(cap)
+  }
+  self.ref_y = ny
+  self.ref_u = nu
+  self.ref_v = nv
+  // The keyframe closes any pending pair first, so no B picture is
+  // outstanding: the I reconstruction is immediately the past context.
+  self.fut_y = []
+  self.fut_u = []
+  self.fut_v = []
+  for k = 0; k < self.mb_width * self.mb_height; k = k + 1 {
+    self.states[k] = new_h264_p_mb_state()
+    for i = 0; i < 48; i = i + 1 {
+      self.states[k].nz[i] = first.mb_nz[k][i]
+    }
+  }
+  Ok(())
+}
+
+///|
 /// One P picture against the current reference. Identical per-picture
 /// construction to the batch entries' loop, so the bytes match.
 fn H264StreamEncoder::stream_p(
@@ -711,6 +1209,12 @@ fn H264StreamEncoder::stream_p(
   vbv~ : H264Vbv? = None,
   cpb_delay~ : Int32 = display * 2,
   dpb_delay~ : Int32 = 0,
+  a53~ : Bytes? = None,
+  sei_unregistered~ : Bytes? = None,
+  /// `§429`: this picture's ROI map (see `push_frame`).
+  roi~ : Array[H264Roi] = [],
+  /// `§430`: this picture's motion hint (see `push_frame`).
+  hint~ : H264VideoHint? = None,
 ) -> Result[Unit, String] {
   self.fn_counter = self.fn_counter + 1
   let src_y = self.load_plane(y, self.width, self.height, self.ystride)
@@ -718,6 +1222,22 @@ fn H264StreamEncoder::stream_p(
     h264_aq_measure(src_y, self.ystride, self.mb_width, self.mb_height)
   } else {
     (Array::make(self.mb_width * self.mb_height, 0), 0)
+  }
+  let roi_off = match
+    h264_roi_offsets_for(
+      roi,
+      self.aq,
+      self.mb_width,
+      self.mb_height,
+      self.bit_depth,
+    ) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let hint_const = match
+    h264_hint_constants(hint, self.mb_width, self.mb_height) {
+    Ok(v) => v
+    Err(e) => return Err(e)
   }
   let enc : H264PEncoder = {
     p: {
@@ -727,6 +1247,10 @@ fn H264StreamEncoder::stream_p(
       level_idc: self.level_idc,
       bit_depth: self.bit_depth,
       nrefs: self.nrefs,
+      sar: self.sar,
+      deblock_alpha: self.deblock_alpha,
+      deblock_beta: self.deblock_beta,
+      weightp_b: self.weightp_b,
     },
     stats: self.stats,
     pps: self.pps,
@@ -775,7 +1299,10 @@ fn H264StreamEncoder::stream_p(
     cur_ref: Array::make(16, -2),
     dct8x8: self.dct8x8,
     intra4x4_in_p: false,
-    base_qp: self.qp,
+    // `§435`: the slice QP delta rides the PPS base — under CRF the B
+    // schedule's PPS is written with the CRF baseline (batch B line:
+    // `base_qp = qps[0]`), so the P/B picture encoders mirror that.
+    base_qp: self.pps_qp(),
     mb_qp: qp,
     mb_dqp: 0,
     prev_qp: qp,
@@ -783,6 +1310,8 @@ fn H264StreamEncoder::stream_p(
     aq_avg: act_avg,
     aq_on: self.aq,
     aq_strength: self.aq_strength,
+    roi_off,
+    hint_const,
     cabac_rd: self.cabac_rd,
     price_mirror: None,
     price_enc: None,
@@ -814,6 +1343,13 @@ fn H264StreamEncoder::stream_p(
     Some(v) =>
       au.push(h264_enc_sei_pic_timing(v, cpb_delay, dpb_output_delay=dpb_delay))
     None => ()
+  }
+  match h264_enc_sei_side_data_nals(a53, sei_unregistered) {
+    Ok(nals) =>
+      for sei_nal in nals {
+        au.push(sei_nal)
+      }
+    Err(e) => return Err(e)
   }
   au.push(nal)
   let total = h264_enc_concat(au)
@@ -885,12 +1421,34 @@ fn H264StreamEncoder::stream_b(
   vbv~ : H264Vbv? = None,
   cpb_delay~ : Int32 = display * 2,
   dpb_delay~ : Int32 = 0,
+  a53~ : Bytes? = None,
+  sei_unregistered~ : Bytes? = None,
+  /// `§429`: this B picture's ROI map (see `push_frame`).
+  roi~ : Array[H264Roi] = [],
+  /// `§430`: this B picture's motion hint (see `push_frame`).
+  hint~ : H264VideoHint? = None,
 ) -> Result[Unit, String] {
   let src_y = self.load_plane(y, self.width, self.height, self.ystride)
   let (act, act_avg) = if self.aq {
     h264_aq_measure(src_y, self.ystride, self.mb_width, self.mb_height)
   } else {
     (Array::make(self.mb_width * self.mb_height, 0), 0)
+  }
+  let roi_off = match
+    h264_roi_offsets_for(
+      roi,
+      self.aq,
+      self.mb_width,
+      self.mb_height,
+      self.bit_depth,
+    ) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let hint_const = match
+    h264_hint_constants(hint, self.mb_width, self.mb_height) {
+    Ok(v) => v
+    Err(e) => return Err(e)
   }
   // The B picture's list 0: the reference history minus its head — the
   // just-coded future P parks at `refs_[0]` (the `b_slices` history keeps
@@ -931,6 +1489,10 @@ fn H264StreamEncoder::stream_b(
       level_idc: self.level_idc,
       bit_depth: self.bit_depth,
       nrefs: self.nrefs,
+      sar: self.sar,
+      deblock_alpha: self.deblock_alpha,
+      deblock_beta: self.deblock_beta,
+      weightp_b: self.weightp_b,
     },
     stats: self.stats,
     pps: self.pps,
@@ -977,7 +1539,10 @@ fn H264StreamEncoder::stream_b(
     cur_ref: Array::make(16, -2),
     dct8x8: self.dct8x8,
     intra4x4_in_p: false,
-    base_qp: self.qp,
+    // `§435`: the slice QP delta rides the PPS base — under CRF the B
+    // schedule's PPS is written with the CRF baseline (batch B line:
+    // `base_qp = qps[0]`), so the P/B picture encoders mirror that.
+    base_qp: self.pps_qp(),
     mb_qp: qp,
     mb_dqp: 0,
     prev_qp: qp,
@@ -985,6 +1550,8 @@ fn H264StreamEncoder::stream_b(
     aq_avg: act_avg,
     aq_on: self.aq,
     aq_strength: self.aq_strength,
+    roi_off,
+    hint_const,
     cabac_rd: self.cabac_rd,
     price_mirror: None,
     price_enc: None,
@@ -1058,6 +1625,13 @@ fn H264StreamEncoder::stream_b(
     Some(v) =>
       au.push(h264_enc_sei_pic_timing(v, cpb_delay, dpb_output_delay=dpb_delay))
     None => ()
+  }
+  match h264_enc_sei_side_data_nals(a53, sei_unregistered) {
+    Ok(nals) =>
+      for sei_nal in nals {
+        au.push(sei_nal)
+      }
+    Err(e) => return Err(e)
   }
   au.push(nal)
   let total = h264_enc_concat(au)

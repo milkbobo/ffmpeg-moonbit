@@ -11,11 +11,7 @@ test "x264 full-range: yuvj 420/422/444 inputs signal full-range VUI" {
   // (video_signal_type present + full_range 1). A 4:4:4 stream would flip
   // to GBRP only if the colour description named RGB, which the default
   // (unspecified) colourspace never does.
-  for (fmt, cf, kind) in [
-    (Yuvj420p, 1, 0),
-    (Yuvj422p, 2, 3),
-    (Yuvj444p, 3, 5),
-  ] {
+  for (fmt, cf, kind) in [(Yuvj420p, 1, 0), (Yuvj422p, 2, 3), (Yuvj444p, 3, 5)] {
     assert_true(x264_supports("libx264", fmt))
     // 420 subsamples both axes, so the luma width and height must both
     // be even; the same even geometry keeps the three formats comparable.
@@ -117,7 +113,7 @@ test "x264 colour metadata: explicit range overrides, VUI fields pass through" {
     color_range=x264_color_range_mpeg,
     options=[("preset", "ultrafast"), ("qp", "20"), ("bf", "0")],
   )
-  let y = Bytes::makei(32 * 18, i => ((i * 29) % 256).to_byte())
+  let y = Bytes::makei(32 * 18, i => (i * 29 % 256).to_byte())
   let c = Bytes::makei(16 * 9, i => ((i * 17 + 96) % 256).to_byte())
   let packets = enc.encode_all([(0L, y, c, c)])
   enc.close()

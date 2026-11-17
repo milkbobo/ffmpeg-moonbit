@@ -143,6 +143,105 @@ fn h264_enc_fit_p_weight(
   /// `§420`: chroma plane rows (h/2 at 4:2:0, h at 4:2:2).
   chroma_h~ : Int32 = height / 2,
 ) -> Unit {
+  pwt.use_weight = 0
+  pwt.use_weight_chroma = 0
+  h264_enc_fit_list_weight(
+    pwt,
+    src_y,
+    ref_y,
+    src_u,
+    ref_u,
+    src_v,
+    ref_v,
+    ystride,
+    cstride,
+    width,
+    height,
+    bit_depth~,
+    chroma_h~,
+  )
+}
+
+///|
+/// `§434`: fit both B lists against the same source frame — L0 from the
+/// past reference, L1 from the future one. The benefit gate in
+/// `h264_enc_plane_weight` keeps either list neutral when a fade model does
+/// not help, so a static sequence still codes a neutral (but present) table.
+fn h264_enc_fit_b_weight(
+  pwt : H264PredWeight,
+  src_y : Array[Int32],
+  l0_y : Array[Int32],
+  l1_y : Array[Int32],
+  src_u : Array[Int32],
+  l0_u : Array[Int32],
+  l1_u : Array[Int32],
+  src_v : Array[Int32],
+  l0_v : Array[Int32],
+  l1_v : Array[Int32],
+  ystride : Int32,
+  cstride : Int32,
+  width : Int32,
+  height : Int32,
+  bit_depth~ : Int32 = 8,
+  chroma_h~ : Int32 = height / 2,
+) -> Unit {
+  pwt.use_weight = 0
+  pwt.use_weight_chroma = 0
+  h264_enc_fit_list_weight(
+    pwt,
+    src_y,
+    l0_y,
+    src_u,
+    l0_u,
+    src_v,
+    l0_v,
+    ystride,
+    cstride,
+    width,
+    height,
+    bit_depth~,
+    chroma_h~,
+    list=0,
+  )
+  h264_enc_fit_list_weight(
+    pwt,
+    src_y,
+    l1_y,
+    src_u,
+    l1_u,
+    src_v,
+    l1_v,
+    ystride,
+    cstride,
+    width,
+    height,
+    bit_depth~,
+    chroma_h~,
+    list=1,
+  )
+}
+
+///|
+/// Fit one list's single-reference weight entry (`§434`): the same
+/// least-squares model as `§410`, but writing into a caller-chosen list so
+/// B pictures can fit L0 and L1 independently. Denominators are shared by
+/// both lists in the syntax, so they are (re)written to `5` here.
+fn h264_enc_fit_list_weight(
+  pwt : H264PredWeight,
+  src_y : Array[Int32],
+  ref_y : Array[Int32],
+  src_u : Array[Int32],
+  ref_u : Array[Int32],
+  src_v : Array[Int32],
+  ref_v : Array[Int32],
+  ystride : Int32,
+  cstride : Int32,
+  width : Int32,
+  height : Int32,
+  bit_depth~ : Int32 = 8,
+  chroma_h~ : Int32 = height / 2,
+  list~ : Int32 = 0,
+) -> Unit {
   let denom = 5
   let unit = 1 << denom
   pwt.luma_log2_weight_denom = denom
@@ -157,9 +256,13 @@ fn h264_enc_fit_p_weight(
     denom,
     bit_depth~,
   )
-  pwt.luma_weight_l0[0] = lw
-  pwt.luma_offset_l0[0] = lo
-  pwt.use_weight = if lw != unit || lo != 0 { 1 } else { 0 }
+  let luma_w = if list == 0 { pwt.luma_weight_l0 } else { pwt.luma_weight_l1 }
+  let luma_o = if list == 0 { pwt.luma_offset_l0 } else { pwt.luma_offset_l1 }
+  luma_w[0] = lw
+  luma_o[0] = lo
+  if lw != unit || lo != 0 {
+    pwt.use_weight = 1
+  }
   let cw = width / 2
   let ch = chroma_h
   let (uw, uo) = h264_enc_plane_weight(
@@ -182,14 +285,113 @@ fn h264_enc_fit_p_weight(
     denom,
     bit_depth~,
   )
-  pwt.chroma_weight_l0[0][0] = uw
-  pwt.chroma_offset_l0[0][0] = uo
-  pwt.chroma_weight_l0[0][1] = vw
-  pwt.chroma_offset_l0[0][1] = vo
-  pwt.use_weight_chroma = if uw != unit || uo != 0 || vw != unit || vo != 0 {
-    1
+  let chroma_w = if list == 0 {
+    pwt.chroma_weight_l0
   } else {
-    0
+    pwt.chroma_weight_l1
+  }
+  let chroma_o = if list == 0 {
+    pwt.chroma_offset_l0
+  } else {
+    pwt.chroma_offset_l1
+  }
+  chroma_w[0][0] = uw
+  chroma_o[0][0] = uo
+  chroma_w[0][1] = vw
+  chroma_o[0][1] = vo
+  if uw != unit || uo != 0 || vw != unit || vo != 0 {
+    pwt.use_weight_chroma = 1
+  }
+}
+
+///|
+/// `§434`: the `(weight, offset, log2_denom)` triple a B prediction sample
+/// uses, mirroring `h264_b_compensate` exactly. The offset is scaled from
+/// the syntax `int8` into sample domain by `2^(bit_depth-8)`. Plane 0 is
+/// luma, 1/2 are Cb/Cr.
+fn h264_enc_b_weight_params(
+  pwt : H264PredWeight,
+  list : Int32,
+  refi : Int32,
+  plane : Int32,
+  bit_depth~ : Int32 = 8,
+) -> (Int32, Int32, Int32) {
+  let denom = if plane == 0 {
+    pwt.luma_log2_weight_denom
+  } else {
+    pwt.chroma_log2_weight_denom
+  }
+  let w = if list == 0 {
+    if plane == 0 {
+      pwt.luma_weight_l0[refi]
+    } else {
+      pwt.chroma_weight_l0[refi][plane - 1]
+    }
+  } else if plane == 0 {
+    pwt.luma_weight_l1[refi]
+  } else {
+    pwt.chroma_weight_l1[refi][plane - 1]
+  }
+  let o = if list == 0 {
+    if plane == 0 {
+      pwt.luma_offset_l0[refi]
+    } else {
+      pwt.chroma_offset_l0[refi][plane - 1]
+    }
+  } else if plane == 0 {
+    pwt.luma_offset_l1[refi]
+  } else {
+    pwt.chroma_offset_l1[refi][plane - 1]
+  }
+  (w, o << (bit_depth - 8), denom)
+}
+
+///|
+/// Write `pred_weight_table()` for a B slice — the two denominators,
+/// then L0's and L1's per-reference luma flag/pair and single chroma
+/// flag/pairs. FFmpeg's parser (`h264_slice.c:252-330`) reads both lists
+/// back-to-back for `weighted_bipred_idc == 1`; this must sit after the two
+/// `ref_pic_list_modification` flags and before the dec-ref-pic-marking.
+/// Each list has exactly one active reference in the encoder, so only
+/// entry 0 may carry a non-neutral pair.
+fn h264_enc_put_bwt(
+  r : H264Rbsp,
+  pwt : H264PredWeight,
+  nrefs0~ : Int32 = 1,
+) -> Unit {
+  let luma_denom = pwt.luma_log2_weight_denom
+  let chroma_denom = pwt.chroma_log2_weight_denom
+  let luma_unit = 1 << luma_denom
+  let chroma_unit = 1 << chroma_denom
+  r.put_ue(luma_denom)
+  r.put_ue(chroma_denom)
+  for list = 0; list < 2; list = list + 1 {
+    let nrefs = if list == 0 { nrefs0 } else { 1 }
+    let lw = if list == 0 { pwt.luma_weight_l0 } else { pwt.luma_weight_l1 }
+    let lo = if list == 0 { pwt.luma_offset_l0 } else { pwt.luma_offset_l1 }
+    let cw = if list == 0 { pwt.chroma_weight_l0 } else { pwt.chroma_weight_l1 }
+    let co = if list == 0 { pwt.chroma_offset_l0 } else { pwt.chroma_offset_l1 }
+    for i = 0; i < nrefs; i = i + 1 {
+      if lw[i] != luma_unit || lo[i] != 0 {
+        r.put_bit(1)
+        r.put_se(lw[i])
+        r.put_se(lo[i])
+      } else {
+        r.put_bit(0)
+      }
+      if cw[i][0] != chroma_unit ||
+        co[i][0] != 0 ||
+        cw[i][1] != chroma_unit ||
+        co[i][1] != 0 {
+        r.put_bit(1)
+        r.put_se(cw[i][0])
+        r.put_se(co[i][0])
+        r.put_se(cw[i][1])
+        r.put_se(co[i][1])
+      } else {
+        r.put_bit(0)
+      }
+    }
   }
 }
 

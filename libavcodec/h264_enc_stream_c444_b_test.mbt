@@ -72,7 +72,7 @@ test "h264 stream c444 B: forced IDR flushes pending picture with online VBV" {
         }
       }
       assert_eq(idrs, 2)
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -199,7 +199,7 @@ test "h264 stream c444 B: batch equality, scheduling and tail flush" {
         let stream = h264s_concat(aus)
         assert_true(h264s_bytes_eq(stream, batch))
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }

@@ -87,7 +87,7 @@ test "h264 enc: I_PCM frame is lossless and decodes identically" {
     }
   }
   // The decoder reproduces the reconstruction byte-for-byte.
-  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -114,7 +114,7 @@ test "h264 enc: intra frame reconstruction invariant (I16/I4x4 mix)" {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -213,7 +213,7 @@ test "h264 enc: odd geometry uses cropping" {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -378,7 +378,7 @@ test "h264 enc: ffmpeg-arbitrated end-to-end (96x64, auto I16/I4x4)" {
     h264_enc_md5(deblocked[0].yuvp()),
     content="c3c043c0d37d22e1e74e8f9e7a76af6d",
   )
-  let raw = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let raw = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }

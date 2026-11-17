@@ -125,7 +125,7 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cavlc)" {
   if stats.bi16_mbs <= 0 {
     fail("no Intra16x16 macroblocks inside the B slices")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -169,7 +169,7 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cabac)" {
   if stats.bi16_mbs <= 0 {
     fail("no Intra16x16 macroblocks inside the B slices under CABAC")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -207,7 +207,7 @@ test "h264 enc bintra: scene-cut B pictures pick Intra16x16 (cabac rd)" {
   if stats.bi16_mbs <= 0 {
     fail("no Intra16x16 macroblocks inside the B slices under CABAC RD")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -367,8 +367,8 @@ test "h264 enc bintra: ffmpeg-arbitrated six frames (96x64, QP 22)" {
     println("ARBBINTRAMD5:\{md5}")
   }
   let pins = [
-    "2ee9cae30c5978acfe03e23b4bcc3d74", "c67c47cd7c0624823646d05ed6e73b9a", "859b4038a9fa9b47122a2cfb7ac7e919",
-    "c67c47cd7c0624823646d05ed6e73b9a", "821c91d68d33a4108156ff7751f9c9a3", "a2d615dbe655f1751402d34e93257205",
+    "2ee9cae30c5978acfe03e23b4bcc3d74", "c67c47cd7c0624823646d05ed6e73b9a", "5b5850880a5268dda21f365744a1e435",
+    "c67c47cd7c0624823646d05ed6e73b9a", "e5ddfbe36d7106c6d261313fc7b42cf2", "a55af4d211cf9e1caeec7aa5b308976d",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])
@@ -452,7 +452,7 @@ test "h264 enc bi4: fine-texture B pictures pick Intra4x4 (cavlc)" {
   if stats.bi4_mbs <= 0 {
     fail("no Intra4x4 macroblocks inside the B slices")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -491,7 +491,7 @@ test "h264 enc bi4: fine-texture B pictures pick Intra4x4 (cabac)" {
   if stats.bi4_mbs <= 0 {
     fail("no Intra4x4 macroblocks inside the B slices under CABAC")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -634,8 +634,8 @@ test "h264 enc bi4: ffmpeg-arbitrated six frames (96x64, QP 18)" {
     println("ARBBI4MD5:\{md5}")
   }
   let pins = [
-    "8123205a72cae4bfd209c448bb42fe6f", "dcc556dfe40339f31443e945548dc067", "cde9d2a5aab822affad0ac89ccfab346",
-    "811cbefba136977c0966429cbebb487e", "816b3c0bfcc8ae78db725a32258136d6", "b966269047bbfe4879cd0fe607cdb4e6",
+    "8123205a72cae4bfd209c448bb42fe6f", "dcc556dfe40339f31443e945548dc067", "15a77f1092eba25581fec500e1736031",
+    "811cbefba136977c0966429cbebb487e", "0ca79fb958e5a27bf54b5458c60c13a3", "0588df09cb73c4af42d96180dd0f6b31",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])

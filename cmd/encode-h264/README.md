@@ -30,7 +30,8 @@ moon run cmd/encode-h264 -- input.yuv --width 640 --height 480 --output out.264 
 | `--vbv-maxrate N` | VBV 码率，bit/s |
 | `--vbv-bufsize N` | VBV 缓冲大小，bit |
 | `--fps N` | VBV 所需的整数帧率 |
-| `--deblock` | 环路去块滤波（opt-in）：重建与参考帧按解码器语义滤波；支持批式与流式，I/P/B、双熵、420/422/444 与各深度 |
+| `--deblock` / `--no-deblock` | 环路去块滤波默认开启；`--no-deblock` 显式关闭，原 `--deblock` 保留兼容。重建与参考帧按解码器语义滤波；支持批式与流式，I/P/B、双熵、420/422/444 与各深度 |
+| `--sar NUM:DEN` | 样本宽高比写进 SPS VUI（§426，Extended_SAR，自动 gcd 约简）；缺省不写 aspect-ratio 字段。非方像素源（如 16:11 PAL-DV）显示比例正确的前提 |
 
 VBV 三个选项必须一起提供正值，与 `--target-bytes` 互斥。
 VBV 初始填充使用库默认值 90%。未启用 VBV 时，此命令不写入帧率信息。

@@ -67,7 +67,7 @@ test "h264 multiref: all P tools compose at every supported depth" {
         assert_eq(stats.frame_qps.length(), 6)
         assert_eq(recon.length(), 5)
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }
@@ -132,7 +132,7 @@ test "h264 multiref: VBV history survives two frame_num wraps" {
       assert_eq(stats.frame_qps.length(), 35)
       assert_eq(recon.length(), 34)
       assert_true(stats.vbv_fills > 0)
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -225,7 +225,7 @@ test "h264 multiref: VBV enforces CPB with filler and adaptive QPs" {
         }
         assert_eq(recon.length(), 5)
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }
@@ -302,7 +302,7 @@ test "h264 multiref: average-byte control preserves recon and final-pass stats" 
         assert_true(q >= 0 && q <= 51)
       }
       assert_eq(recon.length(), 4)
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -315,12 +315,12 @@ test "h264 multiref: average-byte control preserves recon and final-pass stats" 
       // The PPS retains the caller's base QP, so equal picture QPs need
       // not produce identical bytes (slice_qp_delta differs).
       let fallback_dec = match
-        @libavcodec.h264_decode_annexb_frames(fallback, true) {
+        @libavcodec.h264_decode_annexb_frames(fallback, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
       let coarse_dec = match
-        @libavcodec.h264_decode_annexb_frames(coarse, true) {
+        @libavcodec.h264_decode_annexb_frames(coarse, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -379,7 +379,7 @@ test "h264 multiref: chroma-only changes are coded and older colors are reused" 
         Err(e) => fail(e)
       }
       sizes.push(stream.length())
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -433,7 +433,7 @@ test "h264 multiref: reference eviction survives two frame_num wraps" {
         Ok(s) => s
         Err(e) => fail(e)
       }
-      let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -500,7 +500,7 @@ test "h264 multiref: CABAC recon and streaming agree across reference counts" {
         Ok(s) => s
         Err(e) => fail(e)
       }
-      let decoded = match @libavcodec.h264_decode_annexb_frames(batch, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(batch, false) {
         Ok(f) => f
         Err(e) => fail(e)
       }
@@ -573,7 +573,7 @@ test "h264 multiref: CABAC motion reference write-back preserves recon" {
         Ok(s) => s
         Err(e) => fail(e)
       }
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(f) => f
         Err(e) => fail(e)
       }
@@ -641,7 +641,7 @@ test "h264 multiref: two references round-trip with the recon invariant" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -746,7 +746,7 @@ test "h264 multiref: a toggle scene codes far smaller with two refs" {
     two.length() * 10 < one.length() * 9,
     msg="toggle scene: two-ref \{two.length()} B not clearly smaller than one-ref \{one.length()} B",
   )
-  let dec = match @libavcodec.h264_decode_annexb_frames(two, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(two, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -823,7 +823,7 @@ test "h264 multiref: High 10 composes" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -896,7 +896,7 @@ test "h264 multiref: combination and range validation" {
       Ok(s) => s
       Err(e) => fail(e)
     }
-    let bdec = match @libavcodec.h264_decode_annexb_frames(bstream, true) {
+    let bdec = match @libavcodec.h264_decode_annexb_frames(bstream, false) {
       Ok(d) => d
       Err(e) => fail(e)
     }
@@ -971,7 +971,7 @@ test "h264 multiref: combination and range validation" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(two, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(two, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }

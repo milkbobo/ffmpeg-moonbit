@@ -64,8 +64,14 @@ fn h264_rc_md5(data : Bytes) -> String {
 }
 
 ///|
-/// Sum of absolute luma error of the unfiltered decode against the source
-/// over the whole sequence - the quality side of the monotonicity checks.
+/// Sum of absolute luma error of the PRE-deblocking decode (skip_lf=true)
+/// against the source over the whole sequence - the quality side of the
+/// monotonicity checks. `§424`: the monotonicity axis must skip the loop
+/// filter. Deblocking is a deterministic post-process whose strength grows
+/// with QP and behaves as a denoiser, so on this fixture the FILTERED
+/// domain systematically favors the high-QP small-budget stream
+/// (743748 < 767310) while the coding fidelity itself stays strictly
+/// monotone (796912 > 767963 > 764324).
 fn h264_rc_sad(
   frames : Array[(Bytes, Bytes, Bytes)],
   stream : Bytes,
@@ -92,7 +98,7 @@ fn h264_rc_sad(
 
 ///|
 /// The encoder's per-picture reconstruction must equal the decoder's
-/// unfiltered output with the rate-chosen QPs in force (slice_qp_delta
+/// filtered output with the rate-chosen QPs in force (slice_qp_delta
 /// feeding the decoder's quantiser, chroma QP per picture, CABAC state
 /// initialisation at the picture QP).
 fn h264_rc_recon_invariant(
@@ -101,7 +107,7 @@ fn h264_rc_recon_invariant(
   recon : Array[Bytes],
   n : Int32,
 ) -> Unit raise {
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail("\{name}: decode failed: \{e}")
   }
@@ -112,7 +118,16 @@ fn h264_rc_recon_invariant(
     fail("\{name}: expected \{n - 1} P reconstructions, got \{recon.length()}")
   }
   for i, r in recon {
-    if h264_rc_md5(r) != h264_rc_md5(dec[i + 1].yuvp()) {
+    let decoded = dec[i + 1].yuvp()
+    if h264_rc_md5(r) != h264_rc_md5(decoded) {
+      for k in 0..<r.length() {
+        if r[k] != decoded[k] {
+          println(
+            "RECON_DIFF frame=\{i + 1} byte=\{k} enc=\{r[k]} dec=\{decoded[k]}",
+          )
+          break
+        }
+      }
       fail("\{name} P frame \{i + 1}: encoder reconstruction != decoder")
     }
   }
@@ -178,13 +193,15 @@ test "h264 rc: CAVLC lands under the target and responds monotonically" {
   }
   // The chosen per-picture QPs (deterministic encoder: pinned). The big
   // budget's dither puts the trailing pictures one QP above the rest.
+  // §424: deblocked references shrink the flat stream, so the small
+  // budget solves one QP step finer than pre-deblock; the big QPs hold.
   if stats_s.frame_qps.length() != 5 || stats_b.frame_qps.length() != 5 {
     fail("frame QPs not reported per picture")
   }
   debug_inspect(
     stats_s.frame_qps,
     content=(
-      #|[36, 37, 37, 37, 37]
+      #|[37, 38, 38, 38, 38]
     ),
   )
   debug_inspect(
@@ -228,7 +245,7 @@ test "h264 rc: CABAC lands under the target with per-picture QPs" {
   debug_inspect(
     stats.frame_qps,
     content=(
-      #|[37, 37, 37, 37, 37]
+      #|[38, 38, 38, 38, 38]
     ),
   )
   h264_rc_recon_invariant("cabac", stream, recon, 5)
@@ -286,7 +303,7 @@ test "h264 rc: saturates at the QP bounds" {
     }
   }
   // The finest-QP extreme decodes cleanly too and dwarfs the coarsest.
-  match @libavcodec.h264_decode_annexb_frames(huge, true) {
+  match @libavcodec.h264_decode_annexb_frames(huge, false) {
     Ok(f) => if f.length() != 3 { fail("expected 3 frames") }
     Err(e) => fail("QP-10 stream failed to decode: \{e}")
   }
@@ -348,12 +365,11 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Ok(f) => f
     Err(e) => fail(e)
   }
-  // §422e re-arbitration (decode order): the trial encodes the ABR
-  // search runs now include the B inter 8x8 RD choice, shifting the
-  // solved QPs — the I frame differs too.
+  // §424 re-arbitration (decode order, B-GOP I0,P2,B1,P4,B3): deblocking
+  // on by default shifted the solved QPs again — the I frame differs too.
   let pins1 = [
-    "7b8daf1fa23e7e242a13d4c71caa2dbe", "1c405e95f6f1a1fdd943620f6590066d", "bb1cf0253dab49d2f03f864f468b10c4",
-    "9621f608595825bbc83c7fb26e41770f", "c7b1be2f95aa3bf8c3179cce965e2e14",
+    "81d73c30f11e4182ed4c338451d55d7b", "75213013c1ce4688c8bee49cd6681b6c", "7430a8b1bd9a0b53b65dd815f0b8b986",
+    "19e6f9e5c32ab3eea4f846e354f80919", "445cc43f0d7590ae8bc2a273356a51a3",
   ]
   for i, f in filtered {
     assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
@@ -363,8 +379,8 @@ test "h264 rc: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "7b8daf1fa23e7e242a13d4c71caa2dbe", "7a6ae33db839dd684a15903874266704", "ca4f2324fc628640244b09afc564a0c1",
-    "9c4dda3f88aa4a2108ba203fad166202", "db5be5dc91667c4d1a533323acbc984b",
+    "81d73c30f11e4182ed4c338451d55d7b", "23c788799e46aa2ec263bcc93710d7b2", "bd41eccd9ef6436041a69ce7688faab4",
+    "1671bd1f26ad24fc39caf2fda97f52a0", "88ba2f6e1125c62da15230f374a64d6d",
   ]
   for i, f in filtered2 {
     assert_eq(h264_rc_md5(f.yuvp()), pins2[i])
@@ -432,7 +448,7 @@ fn h264_aq_fixture(n : Int32) -> Array[(Bytes, Bytes, Bytes)] {
 /// Adaptive quantisation through the CAVLC writer: with AQ off no
 /// `mb_qp_delta` is signalled; with AQ on the mixed-activity fixture drives
 /// non-zero deltas that accumulate onto the decoder's running QP (not the
-/// slice QP), the encoder reconstruction stays identical to the unfiltered
+/// slice QP), the encoder reconstruction stays identical to the filtered
 /// decode, and AQ stacks on the rate-controlled picture QPs.
 test "h264 aq: CAVLC macroblock QP deltas ride the running QP" {
   let frames = h264_aq_fixture(4)
@@ -470,14 +486,15 @@ test "h264 aq: CAVLC macroblock QP deltas ride the running QP" {
     fail("aq on must signal mb_qp_delta on mixed activity")
   }
   // With YUV distortion priced, all macroblocks of the two P pictures
-  // carry a non-zero delta (24), and since `§422e` one B macroblock's
-  // 8x8-priced residual flips to coded with a delta (25); the
+  // carry a non-zero delta (24); `§422e` flipped one B macroblock's
+  // 8x8-priced residual to coded with a delta (25), and `§424`'s
+  // deblocked references flip two of them back to skip (23); the
   // decide-phase pricing trials no longer count (the trial dqp
   // contributions are restored in decide_b_mb).
   debug_inspect(
     stats.dqp_mbs,
     content=(
-      #|25
+      #|23
     ),
   )
   if h264_rc_md5(stream) == h264_rc_md5(off) {
@@ -552,11 +569,12 @@ test "h264 aq: CABAC macroblock QP deltas ride the running QP" {
     fail("aq on must signal mb_qp_delta on mixed activity")
   }
   // With YUV distortion priced, the two P pictures' macroblocks all
-  // carry a non-zero delta plus `§422e`'s one B macroblock.
+  // carry a non-zero delta plus `§422e`'s one B macroblock; `§424`'s
+  // deblocked references flip two B macroblocks back to skip (23).
   debug_inspect(
     stats.dqp_mbs,
     content=(
-      #|25
+      #|23
     ),
   )
   if h264_rc_md5(stream) == h264_rc_md5(off) {
@@ -641,9 +659,11 @@ test "h264 aq: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Ok(f) => f
     Err(e) => fail(e)
   }
+  // §424 re-arbitration (decode order = display order, legacy P-only):
+  // deblocking on by default; the IDR frame 0 stays byte-identical.
   let pins1 = [
-    "ce0e7afa003dc3e3b1ff1d059c2881ba", "19a890f437ca1dc636518fc212768e8d", "6a48140664d9710d3cf4a574ea63eb46",
-    "37047512f7703bc399ccd12fbb8d26d4",
+    "ce0e7afa003dc3e3b1ff1d059c2881ba", "6e213cb648124991ec77fefe07292c60", "95977f4019fa89f71c9c9d03016b34f8",
+    "9648946db8e05db2532c555b432bb11e",
   ]
   for i, f in filtered {
     assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
@@ -653,8 +673,8 @@ test "h264 aq: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "873a22e67ac6a024cd7613ffe7c52150", "4ef0103f85d3242711fa7546ec87cf4d", "e41cedb899f5be1f0b5e88872ad80e35",
-    "ce0928eb0e6dffb557320ae9e3f00403",
+    "873a22e67ac6a024cd7613ffe7c52150", "8643204ca4185e64a91e2234aaa0507a", "4062b03c4fc3441959f1f9cb31c011d1",
+    "6991b5a97f47b2f9ec1557c40e6d6b43",
   ]
   for i, f in filtered2 {
     assert_eq(h264_rc_md5(f.yuvp()), pins2[i])
@@ -726,10 +746,12 @@ test "h264 i4p: fine texture wins Intra4x4 macroblocks in P slices" {
     Err(e) => fail(e)
   }
   assert_true(stats.i4p_mbs > 0)
+  // §424: deblocked references flip one of the two I4 winners back to
+  // inter on this fixture.
   debug_inspect(
     stats.i4p_mbs,
     content=(
-      #|2
+      #|1
     ),
   )
   debug_inspect(stats.i16_mbs, content="0")
@@ -737,7 +759,7 @@ test "h264 i4p: fine texture wins Intra4x4 macroblocks in P slices" {
   debug_inspect(
     stream.length(),
     content=(
-      #|2479
+      #|2436
     ),
   )
   h264_rc_recon_invariant("cavlc-i4p", stream, recon, 4)
@@ -759,18 +781,19 @@ test "h264 i4p: fine texture wins Intra4x4 macroblocks in P slices" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  // Both entropy coders retain genuine I4 winners with YUV distortion.
+  // Both entropy coders retain genuine I4 winners with YUV distortion
+  // (§424: one winner each flips back to inter on deblocked references).
   assert_true(stats2.i4p_mbs > 0)
   debug_inspect(
     stats2.i4p_mbs,
     content=(
-      #|2
+      #|1
     ),
   )
   debug_inspect(
     stream2.length(),
     content=(
-      #|2241
+      #|2188
     ),
   )
   h264_rc_recon_invariant("cabac-i4p", stream2, recon2, 4)
@@ -814,9 +837,11 @@ test "h264 i4p: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Ok(f) => f
     Err(e) => fail(e)
   }
+  // §424 re-arbitration (decode order = display order, legacy P-only);
+  // the IDR frame 0 stays byte-identical.
   let pins1 = [
-    "292edd53ff3434561e2e1d737c563c98", "536633ac8e9363669115db8448b222d2", "aede30595ba756077bf1f078e3a33eec",
-    "aa2b78a61b3afaf8f85926a5000d76f3",
+    "292edd53ff3434561e2e1d737c563c98", "65243c52551e0a1919c00f75d5398d85", "5f12f077fef8306f9f62b623f9770d9e",
+    "1776248723a0ae7f13cf24a8a94b7cc6",
   ]
   for i, f in filtered {
     assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
@@ -826,10 +851,10 @@ test "h264 i4p: ffmpeg-arbitrated CAVLC and CABAC streams" {
     Err(e) => fail(e)
   }
   // 406: the CABAC pricing (default on) now diverges from the CAVLC dry
-  // run on frames 1-3; the pins split accordingly.
+  // run on frames 1-3; the pins split accordingly. §424 re-arbitration.
   let pins2 = [
-    "292edd53ff3434561e2e1d737c563c98", "536633ac8e9363669115db8448b222d2", "dc41a231333597d9f5c0276a24ce8ac2",
-    "7f55e3466401c8419e9eb0bf87588143",
+    "292edd53ff3434561e2e1d737c563c98", "34bd3c20d0bada09e5a4bbee4fdd1a9f", "ed8fc5f6d6931a288b66126969257e46",
+    "e64e4e46d72eac9dcc327c59917346ad",
   ]
   for i, f in filtered2 {
     assert_eq(h264_rc_md5(f.yuvp()), pins2[i])
@@ -863,10 +888,12 @@ test "h264 i4p: Intra4x4 without the 8x8 transform" {
     Ok(s) => s
     Err(e) => fail(e)
   }
+  // §424: deblocked references flip three I4 winners to inter (13→10)
+  // and move one I16 win; CABAC 11→9.
   debug_inspect(
     stats.i4p_mbs,
     content=(
-      #|13
+      #|10
     ),
   )
   debug_inspect(
@@ -879,7 +906,7 @@ test "h264 i4p: Intra4x4 without the 8x8 transform" {
   debug_inspect(
     stream.length(),
     content=(
-      #|1162
+      #|1163
     ),
   )
   h264_rc_recon_invariant("cavlc-i4p-no8", stream, recon, 4)
@@ -906,13 +933,13 @@ test "h264 i4p: Intra4x4 without the 8x8 transform" {
   debug_inspect(
     stats2.i4p_mbs,
     content=(
-      #|11
+      #|9
     ),
   )
   debug_inspect(
     stream2.length(),
     content=(
-      #|1055
+      #|1060
     ),
   )
   h264_rc_recon_invariant("cabac-i4p-no8", stream2, recon2, 4)
@@ -920,9 +947,10 @@ test "h264 i4p: Intra4x4 without the 8x8 transform" {
     Ok(f) => f
     Err(e) => fail(e)
   }
+  // §424 re-arbitration (deblocking on by default; frame 0 identical).
   let pins = [
-    "db4f9f5a354f60a75388bb1762ba6a23", "b424fb90398370e87931cd7accaa10c3", "cc7985a4e66e6eedac58da5f98dacb65",
-    "5760301b28a218df195fda2a92c1309f",
+    "db4f9f5a354f60a75388bb1762ba6a23", "b424fb90398370e87931cd7accaa10c3", "f0c0b89697467aac570b907c84d0937a",
+    "d52b0f63b134ff2692583a434b3a2ab4",
   ]
   for i, f in filtered {
     assert_eq(h264_rc_md5(f.yuvp()), pins[i])
@@ -932,9 +960,10 @@ test "h264 i4p: Intra4x4 without the 8x8 transform" {
     Err(e) => fail(e)
   }
   // 406: the CABAC pricing diverges from the CAVLC dry run on frames 1-2.
+  // §424 re-arbitration (deblocking on by default; frame 0 identical).
   let pins2 = [
-    "db4f9f5a354f60a75388bb1762ba6a23", "ddcf5381f4475334078a203b6fb562bd", "066fcefd04a00c02320af9df58692f69",
-    "3f4d8ffa4caae6f4bc31e67e2ae41a62",
+    "db4f9f5a354f60a75388bb1762ba6a23", "e89d28eed76318907fecd485e4c426de", "d38fdead0d335a2fd4bf9984d91ec88e",
+    "dc097204112df4000b17f7968d1d21f4",
   ]
   for i, f in filtered2 {
     assert_eq(h264_rc_md5(f.yuvp()), pins2[i])
@@ -1002,7 +1031,8 @@ test "h264 i4p: stripe with 8x8 mixes I8 and I4 winners" {
   }
   debug_inspect(stats.i4p_mbs, content="4")
   assert_true(stats.i4p_mbs > 0 && stats.i16_mbs > 0 && stats.i8p_mbs > 0)
-  debug_inspect(stats.i16_mbs, content="14")
+  // §424: one I16 winner flips to inter on deblocked references.
+  debug_inspect(stats.i16_mbs, content="13")
   debug_inspect(
     stats.i8p_mbs,
     content=(
@@ -1202,7 +1232,7 @@ test "h264 aq strength: qp51 B schedule keeps the recon invariant" {
       Ok(s) => s
       Err(e) => fail(e)
     }
-    let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(f) => f
       Err(e) => fail(e)
     }

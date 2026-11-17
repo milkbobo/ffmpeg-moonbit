@@ -100,7 +100,7 @@ test "h264 cabac enc: I16 flat single mb" {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -147,7 +147,7 @@ test "h264 cabac enc: I16 flat frame" {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -186,7 +186,7 @@ test "h264 cabac enc: intra frame reconstruction invariant" {
     Ok(e) => e
     Err(e) => fail(e)
   }
-  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, true) {
+  let frames = match @libavcodec.h264_decode_annexb_frames(enc.annexb, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -280,7 +280,7 @@ test "h264 cabac enc: static scene codes as skip macroblocks" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -333,7 +333,7 @@ test "h264 cabac enc: QP ladder" {
       Ok(s) => s
       Err(e) => fail(e)
     }
-    let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(f) => f
       Err(e) => fail(e)
     }
@@ -363,7 +363,7 @@ test "h264 cabac enc: RD operating point" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -426,11 +426,16 @@ test "h264 cabac enc: ffmpeg-arbitrated QP22 I16 frames" {
   // §405 re-pin (defaults on; coding order, deblocked): frame 0 is
   // unchanged, the P/B pictures carry the new B-line + 8x8DCT decisions.
   let pins = [
-    "5e86c08751cbdc2f069ae812d2c675b9", "2cc0f704e199487a39fdcaca289fffec", "e582c99259534461cdc292d99b86a466",
-    "e8aa8e44a82c554a7254a3a1e7b9a694", "e2146f52538c219211a723e36bbf0e42", "1363a52648eba2b54ff210e6db60dc19",
+    "5e86c08751cbdc2f069ae812d2c675b9", "ddef4d52d89999ed6af2133e07843e86", "8787f35d887139e35271d2f8a0075b25",
+    "149551fe4718c4991c61f5ac4c33a0ec", "26912c614cba9977890fffccc5bd656f", "0d82d5d1e89e9323c338e16a19cd7ca7",
   ]
   for i, f in frames_dec {
-    inspect(h264cab_md5(f.yuvp()), content=pins[i])
+    let actual = h264cab_md5(f.yuvp())
+    if actual != pins[i] {
+      fail(
+        "deblocked frame \{i} MD5 mismatch: expected \{pins[i]}, got \{actual}",
+      )
+    }
   }
 }
 
@@ -462,10 +467,15 @@ test "h264 cabac enc: ffmpeg-arbitrated six frames (96x64, QP 24)" {
   // §405 re-pin (defaults on; coding order, deblocked); §422e re-pinned
   // the two B pictures.
   let pins = [
-    "47e79e2c702188f62c13ce0c611fd512", "bd75ca1dba4b2466094842e73f3cf316", "a5ad8319bc5e3456d853da87357f9781",
-    "2a1259c862fccd3aeebacd2f0ac02e0f", "c1eccbff9cf130d2eaa40231b2c36a42", "2569dcbc73c920620922df5cbd9fa33e",
+    "47e79e2c702188f62c13ce0c611fd512", "df0cfb231bd93641024eaafdd7b7fe10", "7a9395d56997e25d985c65cd4838cbdc",
+    "e749523927ef75e647040385d8b9f1a0", "a8753f0ea3a0cd300a856af553e7f87f", "ce30b16c89778c99fc3dbbc406afcc90",
   ]
   for i, f in frames_dec {
-    inspect(h264cab_md5(f.yuvp()), content=pins[i])
+    let actual = h264cab_md5(f.yuvp())
+    if actual != pins[i] {
+      fail(
+        "deblocked frame \{i} MD5 mismatch: expected \{pins[i]}, got \{actual}",
+      )
+    }
   }
 }

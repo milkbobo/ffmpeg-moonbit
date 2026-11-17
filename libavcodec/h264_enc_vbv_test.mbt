@@ -566,14 +566,11 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     fd1 = fd1 + (flat[i].to_int() & 0xFF).to_string() + ","
   }
   println("FLATARB:\{fd1}")
-  // §422e re-pin: the B inter 8x8 RD choice added 58 bytes (+2.2%) —
-  // the gate-through variant measured +356 (docker framemd5 confirms the
-  // stream decodes clean; the CABAC variant below kept its 4x4 winners
-  // and its pin).
-  if flat.length() != 2685 {
+  // §424: FFmpeg 9.0.2 decodes the re-pinned default-deblock stream cleanly.
+  if flat.length() != 2621 {
     fail("flat CAVLC length changed: \{flat.length()}")
   }
-  if h264_rc_md5(flat) != "8ac7d74424e73c1cb4dfe8e2b0a86e9c" {
+  if h264_rc_md5(flat) != "47f0588b41e760c35dce0fa0ca6b6040" {
     fail("flat CAVLC bytes changed: \{h264_rc_md5(flat)}")
   }
   let flatc = match
@@ -586,10 +583,10 @@ test "h264 vbv: opt-in leaves flat streams byte-identical" {
     fd2 = fd2 + (flatc[i].to_int() & 0xFF).to_string() + ","
   }
   println("FLATACARB:\{fd2}")
-  if flatc.length() != 2471 {
+  if flatc.length() != 2428 {
     fail("flat CABAC length changed: \{flatc.length()}")
   }
-  if h264_rc_md5(flatc) != "bd3b8b517edd8f9dd5b3cc32841edbc2" {
+  if h264_rc_md5(flatc) != "2213f8b739657290787b9cfdee85192d" {
     fail("flat CABAC bytes changed: \{h264_rc_md5(flatc)}")
   }
   // Explicit zero parameters and a non-default init percentage (ignored
@@ -787,7 +784,7 @@ test "h264 vbv: CAVLC SPS VUI/HRD, SEI and NAL layout" {
     fail("cavlc: expected 5 access units, got \{sizes.length()}")
   }
   let (total, fullness) = vbv_cpb_check("cavlc", sizes, 100000, 32000, 30, 90)
-  if total != stream.length() * 8 || total != 21712 {
+  if total != stream.length() * 8 || total != 21064 {
     fail("cavlc: AU bits \{total}, stream \{stream.length() * 8}")
   }
   if fullness > 32000 {
@@ -812,7 +809,7 @@ test "h264 vbv: CAVLC SPS VUI/HRD, SEI and NAL layout" {
   if !vbv_bytes_eq(again, stream) {
     fail("cavlc: VBV encode is not deterministic")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail("cavlc: decode failed: \{e}")
   }
@@ -855,13 +852,13 @@ test "h264 vbv: CABAC SPS VUI/HRD, SEI and NAL layout" {
   }
   let sizes = vbv_au_sizes(nals)
   let (total, fullness) = vbv_cpb_check("cabac", sizes, 100000, 32000, 30, 90)
-  if total != stream.length() * 8 || total != 19456 {
+  if total != stream.length() * 8 || total != 18864 {
     fail("cabac: AU bits \{total}, stream \{stream.length() * 8}")
   }
   if fullness > 32000 {
     fail("cabac: CPB overflowed to \{fullness}")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail("cabac: decode failed: \{e}")
   }
@@ -954,7 +951,7 @@ test "h264 vbv: filler NALs keep the CPB full at CBR" {
         fail("\{mode}: buffer-rich stream changed QP to \{q}")
       }
     }
-    let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(f) => f
       Err(e) => fail("\{mode}: decode failed: \{e}")
     }
@@ -989,7 +986,9 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let expected_c = [26, 26, 26, 33, 34]
+  // §424: the deblocked references shrink the P pictures, so the solver
+  // coarsens pictures 3/4 one step less than pre-deblock.
+  let expected_c = [26, 26, 26, 32, 33]
   if stats_c.frame_qps.length() != expected_c.length() {
     fail("cavlc: frame_qps length \{stats_c.frame_qps.length()}")
   }
@@ -1003,8 +1002,8 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
   if stats_c.vbv_fills != 0 || stats_c.vbv_filler_bytes != 0 {
     fail("cavlc: tight buffer should not need filler")
   }
-  if cavlc.length() != 2344 ||
-    h264_rc_md5(cavlc) != "bfd8493953719daa8a4e0c6fd603bcd4" {
+  if cavlc.length() != 2342 ||
+    h264_rc_md5(cavlc) != "9e8d9441c5e64490d4b57b559967f46d" {
     fail("cavlc: tight-buffer stream drifted: \{h264_rc_md5(cavlc)}")
   }
   h264_rc_recon_invariant("vbv-cavlc-tight", cavlc, recon_c, 5)
@@ -1015,7 +1014,8 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
   if full_c > 12000 {
     fail("cavlc: tight-buffer CPB overflowed to \{full_c}")
   }
-  // CABAC adapts differently (one trailing picture needs a coarser QP).
+  // CABAC adapts differently (one trailing picture needs a coarser QP;
+  // §424 deblocking moved it from 31 to 27).
   let stats_k = @libavcodec.H264EncStats::new()
   let recon_k : Array[Bytes] = []
   let cabac = match
@@ -1036,7 +1036,7 @@ test "h264 vbv: tight buffer raises per-picture QPs; recon invariant" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let expected_k = [26, 26, 26, 26, 31]
+  let expected_k = [26, 26, 26, 26, 27]
   if stats_k.frame_qps.length() != expected_k.length() {
     fail("cabac: frame_qps length \{stats_k.frame_qps.length()}")
   }
@@ -1313,10 +1313,9 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
   // Both dumps precede every pinned assertion so a stale pin cannot hide
   // the bytes from re-arbitration.
   let pins1 = [
-    // §422e re-arbitration (decode order): the trial encodes the VBV
-    // solver runs now include the B inter 8x8 RD choice.
-    "292edd53ff3434561e2e1d737c563c98", "ac522e2c0e46a0d10adaf8695b84db0e", "15805750e5ce2080435b5015bd764bed",
-    "d7813b5d70d37ff0d0457fbbb2a9172b", "d93e10806a19b2f2078418f0adfcf729",
+    // §424 re-arbitration with default encoder-side deblocking.
+    "292edd53ff3434561e2e1d737c563c98", "38b675826ba7c8180041c06e653fa6fc", "8939b394fe8c36618d19f652722caf9e",
+    "8795883852ef64ec921d344d640186ed", "6b03f4a4cc1ab3f12a59a4399f282c06",
   ]
   for i, f in filtered {
     assert_eq(h264_rc_md5(f.yuvp()), pins1[i])
@@ -1326,8 +1325,8 @@ test "h264 vbv: ffmpeg-arbitrated CBR and tight-buffer streams" {
     Err(e) => fail(e)
   }
   let pins2 = [
-    "292edd53ff3434561e2e1d737c563c98", "cb8e6eb82f8e93f8eb928ffa2d9f0e03", "80eadd14c10b1f3fdd818efe6a897eac",
-    "482082ef77f641a1f4dd4da21fd0984f", "c248b4969bd07b2c34f240943314387a",
+    "292edd53ff3434561e2e1d737c563c98", "1cf8184ac1d1664d483636851d125c16", "1b822fe9a0b16a45b4bee942ac75d359",
+    "937b84b88061444dd4139aad0dc79654", "a19262eaaa08e172c53c5b04b68c401f",
   ]
   for i, f in filtered2 {
     assert_eq(h264_rc_md5(f.yuvp()), pins2[i])

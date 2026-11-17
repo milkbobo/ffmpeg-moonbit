@@ -69,7 +69,7 @@ test "h264 c444 online: depth, default B tools, VBV, IDR and tail" {
       assert_eq(stats.frame_qps.length(), 6)
       assert_eq(stats.vbv_bits, h264s_concat(aus).length().to_int64() * 8L)
       let decoded = match
-        @libavcodec.h264_decode_annexb_frames(h264s_concat(aus), true) {
+        @libavcodec.h264_decode_annexb_frames(h264s_concat(aus), false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

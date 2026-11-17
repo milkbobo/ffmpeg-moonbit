@@ -47,7 +47,7 @@ fn c422d_fixture(
 /// parameter sets stay High 4:2:2 (122) through 10 bits and switch to
 /// Hi444PP (244) above it — the only profile family that carries
 /// bit_depth_minus8 > 2 — while chroma_format_idc stays 2. The recon
-/// invariant (encoder recon == local skip-filter decode, encode order)
+/// invariant (encoder recon == local filtered decode, encode order)
 /// holds for the default B schedule.
 test "h264 c422 depth: round trip in both entropies" {
   for bit_depth in [9, 10, 12, 14] {
@@ -111,7 +111,7 @@ test "h264 c422 depth: round trip in both entropies" {
       let sps = ps.sps_list[0].unwrap()
       assert_eq(sps.chroma_format_idc, 2)
       assert_eq(sps.bit_depth_luma, bit_depth)
-      let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail("depth=\{bit_depth} cabac=\{cabac} decode: \{e}")
       }
@@ -254,17 +254,17 @@ test "h264 c422 depth: ffmpeg-arbitrated streams" {
     // FFmpeg-arbitrated display MD5s (docker framemd5, zero warnings,
     // identical to the local default decode).
     let pins = if depth == 10 {
-      // §422e re-arbitration: the B inter 8x8 RD choice changed frames
-      // 1/3/5 (the CABAC 12-bit arm kept its 4x4 winners and pins).
+      // §424 re-arbitration: deblocking on by default changed every
+      // post-IDR picture (frame 0 byte-identical).
       [
-        "f9694f078d474a895e6b9cdd9e782dff", "4de5ebca95315636bf188ffa8b3c56c2", "a9df55160abea7aa3e4266255c5ac97d",
-        "e48e320883e666f02918220ab31a3098", "55529990344effea214208103816db12", "d2157c6b1b06f038ceb7321c088507b6",
+        "f9694f078d474a895e6b9cdd9e782dff", "0d3d3cf2f2c914b445f2852c57df250b", "2d8ee428be1b980eaeac5126a946f442",
+        "bc3db3f5c2eea631f3c931aaf42934de", "e3cfacbdde137de43b3029e9718c2f94", "bd342144d6ba084d4585efba66c8887d",
       ]
     } else {
-      // §422e re-arbitration (the two display B frames).
+      // §424 re-arbitration (deblocking on by default; frame 0 identical).
       [
-        "93a1440884d20df22e6a2693f72ffacb", "b508478788b05a073f036ca7902117fb", "365beec190a84c48a02d8dd4f0da15a4",
-        "83cba42635b87c2a35a1389e3b50e6aa", "86685a61cd3d91aa36bb6b6edb455e32", "51885294e9c2573063906f8554d0d842",
+        "93a1440884d20df22e6a2693f72ffacb", "93a62a9437b9daa3e063a294804f910b", "6b86c2ef5c696e5561228d41f9974d11",
+        "cae0fa1d7aa115d8709248555e2b6b72", "886e897192f3a874d6e67514145b1d96", "dfcac530f34820bf31dd346623f2bdf0",
       ]
     }
     for i, f in by_display {
@@ -331,7 +331,7 @@ test "h264 c422 depth: online VBV with default B tools and forced IDR" {
         msg="depth=\{bit_depth} cabac=\{cabac}",
       )
       let decoded = match
-        @libavcodec.h264_decode_annexb_frames(h264s_concat(aus), true) {
+        @libavcodec.h264_decode_annexb_frames(h264s_concat(aus), false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

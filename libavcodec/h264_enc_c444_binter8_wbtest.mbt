@@ -103,7 +103,11 @@ test "h264 c444 B inter8: transform flags, reconstruction and partition gate" {
         Err(e) => fail(e)
       }
       assert_eq(Bytes::from_array(bytes[:]), stream)
-      let decoded = match h264_decode_annexb_frames(stream, true) {
+      // §424 made in-loop deblocking the default, so the encoder's recon
+      // is the FILTERED picture — decode with the loop filter on to
+      // compare (the pre-§424 `true` here skipped it and went stale when
+      // the wbtest unit lost its wasm runner; re-pinned with §435).
+      let decoded = match h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

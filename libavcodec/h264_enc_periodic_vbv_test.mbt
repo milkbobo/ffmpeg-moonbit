@@ -90,7 +90,7 @@ test "h264 periodic VBV: continuous CPB and buffering periods" {
         assert_eq(timing_count, 8)
         assert_eq(bp_count, (8 + keyint - 1) / keyint)
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }
@@ -141,7 +141,7 @@ test "h264 periodic VBV: filler carries CPB fullness across IDR" {
     ignore(
       vbv_cpb_check("filler IDR", vbv_au_sizes(nals), 128000, 16000, 25, 90),
     )
-    let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(d) => d
       Err(e) => fail(e)
     }
@@ -211,6 +211,9 @@ test "h264 periodic VBV: a single GOP preserves ordinary VBV bytes" {
         Err(e) => fail(e)
       }
     }
+    println(
+      "VBVDIAG cabac=\{cabac} k0=\{encode(0).length()} k20=\{encode(20).length()}",
+    )
     assert_eq(encode(0), encode(20))
   }
 }

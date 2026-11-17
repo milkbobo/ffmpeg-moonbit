@@ -202,7 +202,7 @@ test "h264 enc bparts: round trip equals encoder reconstruction (cavlc)" {
   if qstats.bpart_mbs <= 0 {
     fail("no sub-partitioned B macroblocks on the four-quadrant fixture")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -242,7 +242,7 @@ test "h264 enc bparts: round trip equals encoder reconstruction (cabac)" {
   if stats.bpart_mbs <= 0 {
     fail("no sub-partitioned B macroblocks under CABAC")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -275,7 +275,7 @@ test "h264 enc bparts: round trip equals encoder reconstruction (cabac rd)" {
   if stats.bpart_mbs <= 0 {
     fail("no sub-partitioned B macroblocks under CABAC RD")
   }
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -462,8 +462,8 @@ test "h264 enc bparts: ffmpeg-arbitrated six frames (96x64, QP 22)" {
     println("ARBBPARTSMD5:\{md5}")
   }
   let pins = [
-    "56fd577a3d9ed7d5999bc5bb41b80944", "b3323d2d1f41d2ee621b41d4b042bdb7", "676d7e5fb06b7bead4b704dc758adecb",
-    "6442773308c070fce3907163adc91599", "6eba367847a748686365696776dc08fe", "69f88c79d2ee8d9fa3be4b4549c63895",
+    "56fd577a3d9ed7d5999bc5bb41b80944", "0525fe23e613e7d2ed2bbc73b3c777e7", "e47f8fc568ba8325a80eb08cd8b74abd",
+    "bdf679d3000a7aafe22ca7df588e180b", "8f6e4412600133e8716af214491f5251", "ddff3cbcfb8b19ad15b7d6a59a26a4e9",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])
@@ -510,8 +510,8 @@ test "h264 enc bparts: ffmpeg-arbitrated CABAC six frames (96x64, QP 22)" {
     println("ARBBPARTSCABACMD5:\{md5}")
   }
   let pins = [
-    "8eebc020e8938ba2aa6ba05a9180ef8e", "4908f97d828938650eaf302ef07d66eb", "44802abc0c853b7e9f833a7616d8fc26",
-    "7721d24e76447d94a860ac57a5ad26f3", "c453c8c26531fdd5fe7098ce0485ce1f", "5cf4385d082984209d1dce5c96b7c3b6",
+    "8eebc020e8938ba2aa6ba05a9180ef8e", "bf55fbea4806e78be0061b1e2d6b76ab", "590432a998fc80b32eb6d7b3839d1cb4",
+    "9e97a15a7c3a4d6bf89599d130a9d85f", "f14c61457ffe90ea274c79425ccda07b", "939e7ad09451d3d2ba3154ef227af77c",
   ]
   for i in 0..<6 {
     inspect(md5s[i], content=pins[i])

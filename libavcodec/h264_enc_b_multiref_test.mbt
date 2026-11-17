@@ -122,7 +122,7 @@ test "h264 b multiref: round trip with the recon invariant at every depth" {
       // oldest past slot drops instead).
       assert_eq(ps.sps_list[0].unwrap().ref_frame_count, (nrefs + 1).min(16))
       assert_eq(ps.pps_list[0].unwrap().ref_count_l0, nrefs)
-      let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -277,7 +277,7 @@ test "h264 b multiref: a toggle scene codes far smaller with two refs" {
     two.length() * 10 < one.length() * 9,
     msg="toggle scene: two-ref \{two.length()} B not clearly smaller than one-ref \{one.length()} B",
   )
-  let dec = match @libavcodec.h264_decode_annexb_frames(two, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(two, false) {
     Ok(f) => f
     Err(e) => fail(e)
   }
@@ -323,7 +323,7 @@ test "h264 b multiref: warm-up history and the b tool set compose" {
       Ok(s) => s
       Err(e) => fail(e)
     }
-    let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(d) => d
       Err(e) => fail(e)
     }
@@ -371,7 +371,7 @@ test "h264 b multiref: periodic IDR and batch rate controls compose" {
       Ok(s) => s
       Err(e) => fail(e)
     }
-    let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+    let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
       Ok(d) => d
       Err(e) => fail(e)
     }
@@ -442,7 +442,7 @@ test "h264 b multiref: online streaming VBV composes" {
     "b-multiref-online", sizes, 120000, 16000, 25, 90,
   )
   assert_eq(bits.to_int64(), stats.vbv_bits)
-  let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(d) => d
     Err(e) => fail(e)
   }
@@ -503,19 +503,19 @@ test "h264 b multiref: ffmpeg-arbitrated streams" {
     // FFmpeg-arbitrated display MD5s (docker framemd5, zero warnings;
     // CAVLC nrefs=2 and CABAC nrefs=3 both match every frame).
     let pins = if nrefs == 2 {
-      // §422e re-arbitration: the B inter 8x8 RD choice changed the four
-      // B pictures (P frames byte-identical).
+      // §424 re-arbitration: in-loop deblocking on by default changed every
+      // post-IDR picture (frame 0 byte-identical).
       [
-        "4e4da0761a12604f40b43e6516a75390", "049f1d561f6322286d8b073f41df5e05", "c26fd86e823e4b81998d64320e501372",
-        "534dbcc819df3455a9287982bbdbbdf8", "1302a890f6802a2043b47f8b4fea741d", "2c79cf5aba3866d921253fac780b6d86",
-        "f60e31bbe113fca7218a940c426f0532", "6d8571cd2a952a7ee07186de9c53872f", "16766379db4fc3c0ea4072bc91d6fdac",
+        "4e4da0761a12604f40b43e6516a75390", "9479694b7814ae30e756c8e600bac33f", "5e48de7d3ea995ba364694e0af2f58d2",
+        "f650fb964ed65a0d4af54e9602b0bd5a", "f4af4987e3c6617660c637688e4217be", "25357f66d18adea191a4d61107eeaacf",
+        "e53d2a05b39f1cea8fa1a8b092d234f5", "c9c6486cfb6ebe80630fbfbcc220f1a1", "672873df24b2e804baa340e2141b52ee",
       ]
     } else {
-      // §422e re-arbitration (the four B pictures).
+      // §424 re-arbitration (deblocking on by default; frame 0 identical).
       [
-        "b30bf6018077f7560485b96e9a65fb11", "a59b9ce5be0cd8d19cec11942870523e", "f08b818bd0f419b9f3fc8251c4abca7f",
-        "06bac29fd7f3d86adb490f5291472f7e", "f17ce41c8ced0d69eea6dba44646cb01", "24cd6600e525c4daecc2d202e6330125",
-        "9512c71cab2c04d8b810baa5188250d7", "ac82682fce4f1b0968aff9cbf2b40038", "57127f4d1ef8d6581ddeba4c0f2020bf",
+        "b30bf6018077f7560485b96e9a65fb11", "aef191ba96e698af5b94381febf39c07", "fd4ac95099a0fde92aeb47e04a889716",
+        "220a1e02349370eec7f32aece565b1a8", "24680f3135c194c514a682ec7c88ad82", "954e350b52a2fc27d98e5600aad9bbb4",
+        "e827018c7dc2eda31d7225518e7ac51f", "83df8b717168d169fcc1373c687727ce", "0bba257a6d4df6fcf78e910e4832aa72",
       ]
     }
     for i, f in by_display {
@@ -555,7 +555,7 @@ test "h264 b multiref: high bit depths compose" {
         Ok(s) => s
         Err(e) => fail(e)
       }
-      let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

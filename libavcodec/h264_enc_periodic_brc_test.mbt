@@ -116,7 +116,7 @@ test "h264 periodic B ABR: global budget and display-position QPs" {
         assert_eq(stats.b_mbs, 8)
         periodic_brc_check_qps(stream, base, stats.frame_qps)
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }

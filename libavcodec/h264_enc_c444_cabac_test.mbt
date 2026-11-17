@@ -15,7 +15,7 @@ test "h264 c444 CABAC: repeated flat frames preserve all planes" {
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+  let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
     Ok(d) => d
     Err(e) => fail(e)
   }
@@ -80,7 +80,7 @@ test "h264 c444 CABAC: streaming and batch I/P reconstruction" {
         aus.push(ready[0])
       }
       assert_true(h264s_bytes_eq(h264s_concat(aus), batch))
-      let decoded = match @libavcodec.h264_decode_annexb_frames(batch, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(batch, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

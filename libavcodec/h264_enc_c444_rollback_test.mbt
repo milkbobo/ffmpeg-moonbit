@@ -52,7 +52,8 @@ test "h264 c444 VBV: rejected IDR restores pending tail and queued output" {
     }
     let recovered = run(true)
     assert_eq(recovered, run(false))
-    let decoded = match @libavcodec.h264_decode_annexb_frames(recovered, true) {
+    let decoded = match
+      @libavcodec.h264_decode_annexb_frames(recovered, false) {
       Ok(d) => d
       Err(e) => fail(e)
     }

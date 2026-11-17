@@ -13,6 +13,9 @@ fn main raise {
     )
     println("  [--vbv-maxrate bits/s --vbv-bufsize bits --fps N]")
     println(
+      "  [--crf 0..51] constant rate factor (decimals; replaces --target-bytes as the quality selector)",
+    )
+    println(
       "  streaming VBV supports P/B pictures; streaming ABR is unsupported",
     )
     println(
@@ -36,9 +39,16 @@ fn main raise {
     println(
       "  [--no-weightp] disable explicit weighted P prediction (default on)",
     )
+    println(
+      "  [--weightp-b] [--no-weightp-b] explicit weighted B prediction (default off)",
+    )
     println("  [--codec h264] codec selector (§414 facade; h264 only today)")
     println("  [--multi-ref N] reference history 1..16 (P and B schedules)")
     println("  [--keyint N] periodic IDR in display frames, 0 disables")
+    println("  [--chroma-qp-offset N] Cb/Cr QP offset -12..12 (default 0)")
+    println(
+      "  [--deblock-alpha N] [--deblock-beta N] slice deblocking offsets -6..6 (div2, default 0)",
+    )
     return
   }
   let opts = parse_options(args[1:].to_owned())

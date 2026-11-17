@@ -13641,3 +13641,762 @@ video_encoder 7/7 等；wbtest 走 wasm-gc（wasm debug 触既有 local-count �
 
 边界：`deblock` 保持 opt-in；转正默认会改变参考像素并需要全族重钉，留作
 独立切片。
+
+## §424 H.264 编码器环路去块默认开启——全族重钉 + 质量口径收口（2026-11-16）
+
+接续 §423 的遗留边界：`deblock` 转正为默认开启（`h264_encode_intra_frame`、
+两个公开 IDR 入口、`h264_encode_frames(_cabac)`、`H264StreamEncoder::open`、
+`VideoEncConfig::new` 全部默认 true；CLI 新增 `--no-deblock`，`--deblock`
+保留为兼容拼写）。重建承诺随之升级：开启去块时 `recon_*` 即滤波后解码重建，
+I_PCM 保持无损不滤波，显式 `deblock=false` 仍走旧未滤波路径。
+
+默认开启暴露/带出的生产修复（§423 opt-in 时代未显形）：
+
+- **I_PCM 无损路径**：整图 PCM 时不滤波（否则本地重建与解码输出都偏离源）。
+- **B 帧 I16 陈旧 tf8**：B CAVLC/CABAC 写端显式置 `info.transform_8x8=false`，
+  防止候选阶段遗留标志污染共享去块器。
+- **P/B 去块 QP 必须用码流实际 QP**：AQ 开启时 skip 块的去块 QP 此前用 AQ
+  候选 QP——P-CAVLC/Skip 统一 `prev_qp`、P-CABAC 统一 `mirror.qscale`、
+  B 同理（`commit_plan_state`/`commit_skip` 增加显式有效 QP 参数）。
+- **P 帧有效 8×8 标志**：`coded.dct8 && (I8 || luma_cbp != 0)`——零亮度
+  CBP 的候选 8×8 变换不再污染 mirror。
+
+全族重钉战役（去块进参考→流内容/大小/QP 轨迹连锁变化，非 bug：全部流经
+外部 FFmpeg 9.0.2（gyan essentials）零告警解码且与自解码器逐帧一致）：
+
+- 帧级仲裁重钉：ARBBI8C/R（C 路解码像素与 V 路全同——滤波参考消平了旧
+  熵间分歧；R 路仅尾部两帧 RD 决策分歧）、ARBMR2/3、ARBC22D10/D12、ARBB/
+  ARBBAQ（整流 MD5）、ARBBRC A/V 双流、ARBCABACRD（解码序 pts [0,2,1,4,3]）、
+  ARB3/ARB6、DCT8ARB/CARB、I8PARB/CARB、RCARB/RCCARB（解码序重排）、
+  AQARB/AQCARB、I4P 双流 + stripe 双流（探针复刻编码取 dump——测试本身
+  不打流）。规律：IDR 帧逐字节不变，其后所有帧重钉。
+- 绝对钉值：VBV 布局总位 21712→21064/19456→18864、tight-buffer QP 轨迹
+  [33,34]→[32,33]/CABAC 尾帧 31→27 与流 MD5、FLATACARB 2428/`2213f8b7…`、
+  cabacrd 三流 MD5 与长度 2097→1770、AQ dqp_mbs 25→23、I4P/stripe 计数
+  （i4p 2→1、13→10、11→9、i16 14→13 等）与长度。
+- **RC 质量口径收口**：滤波域 SAD 被去块的「去噪效应」翻转（QP 越高滤波
+  越强，小预算流 743748 < flat 767310），而预滤波域严格单调（796912 >
+  767963 > 764324）——`h264_rc_sad` 改测 `skip_lf=true` 解码：RC 控制的
+  本就是编码保真度，去块是强度随 QP 增长的确定性后处理；断言保持严格。
+- **stream_abr helper 修复（HEAD 既有红）**：`abrs_encode` 无条件传
+  `fps=25`，平坦参照腿撞 §422f 的「fps 必须配 VBV/ABR」校验（3 测试全挂，
+  a4d8e6d 引入）——改为仅 VBV/bitrate 存在时传 fps；顺带清除遗留诊断短路。
+
+门：49 文件 **241/241** wasm-gc 全绿（每文件独立编译）、CLI `cmd/encode-h264`
+**30/30**（wasm；wasm-gc 缺 FrameWriter 目标文件属包结构限制）、
+`moon check --target native` 0 警告。工作流沉淀：测试日志 `TAG:十进制逗号
+流` dump → python 提取 → 外部 ffmpeg framemd5（pts 排序即显示序；带 B 流
+按 [0,2,1,4,3] 重排对解码序断言）→ 与自打印 MD5 对帧 → 重钉。
+
+## §424a oracle 下线——用户决定：C 参考对拍明确不做（2026-11-16）
+
+用户指令："oracle 帮我写在 agent 里面明确不做，已经做的用注释注释掉"。
+agent.md §2 新增规则：**oracle 明确不做**——不修复、不扩展、不重跑，
+其失败/陈旧钉值不作为交付门，也不为其发起重钉。已落地内容以逐行注释
+形态留在原处（MoonBit 无块注释），恢复 = 取消注释 + 还原 moon.pkg。
+
+- `ffref/` 整包：7 源文件（.mbt ×7 共 3670 行）逐行注释、`moon.pkg`
+  注释置空、`ffref_stub.c` 加"未接线"头注。
+- `libavcodec/x264/x264_wbtest.mbt`：55 个测试块（`x264 oracle:` ×50、
+  `pure H264 …C 仲裁` ×3、帧探针族含其中）+ 12 个孤儿 helper 注释；
+  保留 7 个绑定自测（forced-IDR/deterministic/round-trip/avcC/10-bit）。
+- 九个 pure-H264 wbtest 整文件注释：c444_bi16/bi8/binter8/online_depth/
+  parts、chroma_crop、high_contrast、stream_c444（872 行）。
+- `x264/moon.pkg` wbtest 的 libavutil import 注释（唯一使用方为 oracle
+  测试）。§424 遗留的 9 个 oracle 族陈旧红随注释失效，不修复。
+- **保留边界**：x264 绑定本体与绑定自测（编码能力交付物）、
+  `libavcodec/*.mbt` 的 ffmpeg-arbitrated 黑盒钉值测试（纯 wasm、不调用
+  C oracle）照常维护。
+
+验证：`moon check --target native` 与 wasm 均 0 错 0 警（12 个
+unused_value 孤儿 helper 全部处置）；wasm 回归抽查不受影响（deblock 族
+9/9）。工具沉淀：`.scratch/oracle_off.py`（spans/whole/funcs 三模式，
+幂等，已注释行跳过）。
+
+## §424b x264 绑定 SEI 侧数据路径——A53 隐式字幕 + 未注册 SEI 透传（2026-11-16）
+
+接续 §424a（oracle 下线后绑定本体继续按 moonbit-c-binding/
+make-moonbit-c-bindings 流程推进）。补 libx264.c 每帧 SEI 路径（libx264.c
+:531-600）的绑定缺口：
+
+- `send_frame(a53~)`：原始 A53 闭合字幕块（3 字节倍数、≤21 块，MoonBit 侧
+  BadSideData 前置校验）→ 桩 `av_frame_new_side_data(A53_CC)` → 上游
+  `ff_alloc_a53_sei` 包成注册 ITU-T T.35 `GA94` SEI（选项 `a53cc` 上游
+  默认开；封装格式 181,0,49,'GA94',3,(n/3)|0x40,0,blocks,255）。
+- `send_frame(sei_unregistered~)`：UUID+数据整段透传（选项 `udu_sei` 上游
+  默认关——绑定按需开启，该选项只门控拷贝不影响编码行为）。
+- 侧数据挂载在 `av_frame_unref` 之后每帧新建，严格逐帧无泄漏；EAGAIN
+  重发路径安全（unref 清旧）。
+
+验证（docker nine-x264 绑定自测门 `-f 'x264 sei:*'` **3/3**）：A53 双帧
+往返（纯解码器 `H264FrameSideData::A53Cc` 逐字节相等 + probe SEI NAL≥2）、
+UUID 载荷逐字节往返（`SeiUnregistered` 恰一份）、形状校验负例 ×2。
+
+**上游事实钉死（首轮测试红的原因）**：libx264.c **不映射**
+`AV_CODEC_FLAG_BITEXACT`——x264 core 的版本 SEI（unregistered，
+"x264 - core …"）恒发于首 AU、无公开参数可压制；绑定的 `bitexact~` 对
+libx264 不抑制该载荷（历史确定性测试仍绿：版本串对给定构建恒定）。测试
+按指纹（"x264" 字节）容忍版本 SEI、精确断言用户载荷。
+
+## §424c x264 绑定 ROI 侧数据——逐 MB 量化偏移（2026-11-16）
+
+接续 §424b。补 libx264.c `setup_roi` 路径（AV_FRAME_DATA_REGIONS_OF_INTEREST
+→ `pic.prop.quant_offsets`）的绑定：
+
+- `X264Roi{top,bottom,left,right,qoffset_num,qoffset_den}`（AVRegionOfInterest
+  对应；矩形像素、right/bottom 独占、上游裁剪到 16px MB 网格）。
+  qoffset 归一化 -1..+1（负=更好质量），上游乘 QP 范围并逐 MB 钳制。
+- `send_frame(roi~)`：MoonBit 侧拒绝 `qoffset_den == 0`（上游
+  AVERROR(EINVAL) 语义）；序列化为 24B/区域 LE blob（结构字段序），桩侧
+  从宿主 `sizeof(AVRegionOfInterest)` 填 `self_size`——**结构布局假设不跨
+  边界**；重叠区域首条胜（上游逆序迭代、第一条最后应用）。
+- 上游前提：AQ 必须开（aq-mode != 0；x264 CRF 默认开）——AQ 关时上游警告
+  一次并静默跳过 ROI；测试显式钉 `aq-mode=1` + `crf=23`。
+
+验证（docker nine-x264 `-f 'x264 roi:*'` **3/3 首跑绿**）：① 全帧 ±10 QP
+对无 ROI 基线的三向流大小排序（worse < base < better）且三流经纯解码器
+零告警零警告；② 重叠首胜语义——次条 -10 落选，与仅首条流字节恒等；
+③ den=0 边界负例。README 文档段同步。
+
+工作流注记：x264_wbtest.mbt 的 `x264_frame_probe_*`/fixture helper 已随
+§424a 注释，ROI 测试复用 pict_type_forcing_wbtest.mbt 的 `ptf_fixture`
+（同包 wbtest 共享顶层 fn）。
+
+## §424d x264 绑定 STEREO3D——逐帧 frame packing（2026-11-17）
+
+接续 §424c。补 libx264.c `reconfig_encoder` 的 STEREO3D 路径
+（AV_FRAME_DATA_STEREO3D → x264 `i_frame_packing` 变更即 reconfig）：
+
+- `X264Stereo3D`（Checkerboard/Columns/Lines/SideBySide/TopBottom/
+  FrameSequence/TwoD，选择子 1..7、0=缺席）+ `send_frame(stereo3d~)`；
+  桩经 `av_stereo3d_create_side_data` 构造（AVStereo3D 布局不跨边界）。
+  上游 INVERT 标志被 x264 拒绝（警告+无 packing），绑定不暴露。
+- **上游事实（docker 门两轮试错钉死）**：x264 的 frame-packing-arrangement
+  SEI **只写在 IDR 帧**，且打包内容按**实际编码时刻**的 fpa 捕获——x264
+  lookahead 使 PTS n 的 IDR 在后续 send_frame 调用中才编码，若中途变更
+  请求，IDR 捕获的是新值（首版切换测试 `collected=1 types=[1]` 即此机理：
+  帧 0 的 tb 被 lookahead 后的 sbs 覆盖，P 帧无 SEI）。安全模式 = 每个布局
+  配一个 forced IDR、请求与 force_idr 同帧 send（libx264 在交给 x264 前重配）。
+- 验证（docker nine-x264 `-f 'x264 stereo:*'` **2/2**）：① IDR 单请求 tb
+  往返（纯解码器 `Stereo3d` side_data、`av_stereo3d_top_bottom` 逐帧相等）
+  + 无请求对照腿无 SEI 且流不同；② 双 IDR 双布局（tb+sbs 各自落位）+
+  keyframe 标志恰两 IDR + 零告警。
+
+reconfig 的其余面（SAR/RC-diff 重配、interlaced tff）依赖暴露可变
+ctx 字段，绑定面价值低，明确跳过（文档注明）；libx264.c 至此仅剩
+mb_info/AV_VIDEO_HINT 未绑。
+
+## §424e x264 绑定 mb_info——逐 MB 运动提示（VIDEO_HINT side data）（2026-11-17）
+
+接续 §424d。补 libx264.c `setup_mb_info` 路径（AV_FRAME_DATA_VIDEO_HINT →
+`pic.prop.mb_info`）——libx264.c 绑定面最后一块：
+
+- `X264VideoHint{kind: Constant|Changed, rects: Array[X264HintRect]}` +
+  `send_frame(video_hint~)`；rect 像素坐标（无对齐要求，上游裁剪 MB 网格）、
+  16B/rect LE blob；桩经 `av_video_hint_create_side_data(f, nb)` 构造
+  （**FFmpeg 9.0.2 签名 2 参**——kind 是普通字段由桩赋值；本地 D:\ 树的
+  4 参签名是另一版本，以镜像为准）。
+- x264 端前提：`mb_info` AVOption（默认 0）→ `analyse.b_mb_info`；绑定经
+  `options=[("mb_info","1")]` 直通。
+
+**上游语义（C 探针 `.scratch/mbinfo_probe.c` 三轮定音，绕开 moon 慢循环）**：
+x264 **无条件相信提示**——标记恒定的 MB 被强制跳过运动搜索。准确提示约束的
+恰是编码器自由决策下本就会选的（左带真静止 → skip 本就是最优）→ 流不变
+（3379==3379 是**预期**，非失效）；提示与事实不符时流必然偏离基线，但**方向
+随约束范围而定**（全帧谎→forced-intra 变贵；局部谎→skip 变小）——观察到的
+方向不可作为断言，只有「偏离基线」本身可靠。探针逐帧数据（P 包 10 字节=
+纯 skip）证实强制 skip 直达输出。
+
+- 测试（docker nine-x264 `-f 'x264 video hint:*'` **2/2 绿**）：① accurate
+  ≤ base + 互补拼写字节恒等 + lying ≠ base 且 ≠ accurate（方向无关行为组）；
+  ② 空 rect 列表语义（Changed-空 = 全帧恒定声明）≠ base。
+- 排障沉淀：moon 测试与 C 探针结果矛盾时先对比**每帧包大小**（10 字节帧 =
+  强制 skip 的指纹）而非总量；`Bytes::makei` 闭包引用 `mut` 局部数组的
+  两遍法改写（快照语义风险）；镜像 9.0.2 与本地树的 API 签名差异
+  （video_hint 2 参 vs 4 参）以镜像头文件为准。
+
+libx264.c 绑定面至此**全覆盖**（像素格式/色彩 VUI/pict_type/SEI×2/ROI/
+stereo3d/mb_info + VBV/CRF/x264-params 直通）；reconfig 的 SAR/RC-diff 面
+明确跳过。
+
+## §425 x264 绑定 SAR——样本宽高比入 SPS VUI（2026-11-17）
+
+接续 §424e。补 libx264.c open 路径（:1308 av_reduce → `vui.i_sar_width/
+height`）的绑定缺口：
+
+- `open(sar~ : (Int32, Int32) = (0, 0))`：桩在 open2 前设
+  `cc->sample_aspect_ratio`；默认 0/0 → av_reduce 得 0/1 → x264 跳过
+  aspect-ratio VUI（解码端"未指定"）；`(1,1)` 显式方像素、`(16,11)`
+  PAL-DV 变形像素等。reconfig 的 SAR 动态面无需处理（绑定 SAR 为
+  open 常量，与 ctx 恒等不再触发 upstream 的 diff-reconfig）。
+- 白盒既有测试跟进：options_wbtest 直呼 `x264enc_open_ffi` 的 18 参
+  调用补 2 个 0（签名扩参的连带面）。
+
+验证（docker nine-x264 `-f 'x264 sar:*'` **1/1 绿**，三腿）：非方像素
+16/11、显式方像素 1/1 逐帧经纯解码器 `H264Frame.vui.sar_num/den` 往返
+相等；默认腿解码端"未指定"语义是 **0/1**（C `vui.sar` 默认，与本地
+h264_ps 默认构造一致——首版误断言 0/0 修正）；三流因 SPS 不同而互异。
+
+libx264.c 绑定面全覆盖状态保持；`moon info` 的 native-only 包 mbti 缺失
+已定音为工具链限制（canonical 只写模块 preferred backend）。
+
+## §426 纯 MoonBit H.264 编码器 SAR——SPS VUI 样本宽高比 + CLI --sar（2026-11-17）
+
+与 §425（x264 绑定 SAR）对称的纯编码器缺口：`h264_enc_sps_vui` 恒写
+`aspect_ratio_info_present_flag=0`——非方像素源编出的流无 SAR 信息，显示
+比例依赖解码端策略。本片全链补齐：
+
+- **VUI 写端**：`h264_enc_vui_aspect_ratio`（Extended_SAR idc 255 +
+  16 位宽高，写前 gcd 约简；0/0 或退化分数保持 flag 关——默认路径
+  **逐字节不变**）。**四个 SPS 写端副本全部覆盖**：`h264_enc_sps_rbsp`
+  /`h264_enc_sps_body_high`（ps.mbt）、`h264_enc_sps_rbsp_main`
+  （cabac:661）、B 线 `h264_enc_sps_rbsp_b`（encode_b:80，测试红的
+  真断点——flat+b_slices 默认路径走它）。SAR 单独存在时也要 VUI：
+  无 VBV 的 SAR 腿写「仅 aspect-ratio」的 VUI（其余标志全 0）。
+- **透传链**：`H264EncParams.sar` 字段 + 7 构造点；公开入口
+  `h264_encode_intra_frame`/`h264_encode_frames`/`h264_encode_frames_cabac`
+  /`H264StreamEncoder::open` + `VideoEncConfig.sar` 全加 `sar~`；
+  frames_qps/frames_b/qps_cabac/vbv_cabac/new_p_encoder 等内部函数逐层
+  转发；CLI `--sar NUM:DEN`（手工 split——core 的 split 返回 Iter 无索引）。
+- **缝合事故与恢复**：python 正则跨 patch 累计字符偏移导致 cabac 的 qps
+  定义被吞 89 行（签名+中段+vbv_cabac return 腿参数错接）——用 git diff
+  对照 HEAD（该函数未提交无差异）整段重建，且 return 腿的
+  vbv=Some(vbv)/fillers~/vbv_bits 统计三件套一度错接成 frames_cabac 形态
+  （periodic_vbv 的 keyint=20 流 1098→1180 暴露），最终以
+  HEAD 逐段对照+尾部上下文锚定恢复。教训：**批量插参必须行级逆序且每处
+  独立验证**；VBV 腿与 frames 腿的参数序相近，锚定必须带尾部上下文。
+- **排障沉淀**：① python 正则批量插参**绝不能用字符偏移跨 patch 累计**
+  （两次插入间文本位移→撕裂；cabac 的 qps 定义被吞 89 行，从 HEAD 结构
+  + git diff 对照手工缝合恢复，`git show HEAD:file | sed -n` 提取原段）；
+  ② SPS 写端变体不止一个——flat+b_slices 默认走 **B 线 SPS**
+  （`h264_enc_sps_rbsp_b`），漏改它则测试 SARDIAG 0/1 而链路看似全对；
+  ③ 逐帧包大小/SARDIAG（解码端 idc/sar 值）是链路断点定位的探针。
+
+验证：新 `h264_enc_sar_test.mbt`（16/11、64/48→gcd 约简 4/3、默认腿
+0/1 三腿 + 流互异）；CLI 端到端 --sar 16:11 流 4487B vs 无 sar 4481B
+（VUI 6 字节差）；全量 50 文件回归（含 §424 全部钉值——默认路径字节
+不变的最强证据）。x264 绑定侧 §425 已有对应能力。
+
+## §427 纯 MoonBit H.264 编码器 SEI 侧数据——A53 字幕 + 未注册用户数据（2026-11-17）
+
+与 §424b（x264 绑定 SEI 侧数据）对称的纯编码器缺口：编码器没有 A53/
+未注册 SEI 的写端，字幕/自定义元数据无法随流携带。本片全链补齐：
+
+- **写端**（h264_enc_ps.mbt）：`h264_enc_sei_a53`（GA94 容器——
+  0xB5/0x0031/"GA94"/type 3/`0x40|cc_count`/保留/三元组/收尾 marker，
+  与 x264 及解码端 `ff_parse_a53_cc` 兼容；校验 3 倍数 ≤63B）与
+  `h264_enc_sei_unregistered`（整段透传，含 16B UUID 前缀，校验 ≥16B）；
+  `h264_enc_sei_nal` 的 payload_size 扩成 **255 步长编码**（0xFF 扩展
+  字节，<255 载荷字节不变——大 UUID 载荷经解码端步长解析逐字节往返）。
+  注入位统一在 pic_timing SEI 之后、slice NAL 之前（x264 消息序）。
+- **入口面**：intra 两入口标量 `a53~/sei_unregistered~`；批量两入口
+  （CAVLC/CABAC）+ 内部 frames_qps/vbv/frames_b 全链**并行数组**
+  （按显示位索引，B 线 P=[e+1]/B=[e]/尾 P=[e]，IDR=[0]）；ABR/VBV
+  试算调用同步携带（SEI 计入试算尺寸，filler 预算不失真）；
+  `H264StreamEncoder::push_frame` 标量入参——pending B 帧的侧数据伴生
+  字段（pending_a53/pending_sei）随 pending 元组存取，VBV 事务路径
+  （push_vbv/vbv_picture/vbv_commit）镜像透传；`VideoEncoder::push_frame`
+  门面转发。CLI 不加开关（裸 YUV 无侧数据表示，API 级能力）。
+- **§426 残留 SAR 漏转发一并修复**（本片接线时发现，各补 `sar~` 转发）：
+  ① CABAC 批量入口的 5 个 frames_b 调用 + vbv_cabac 调用；② CAVLC 批量
+  入口的 frames_vbv 调用；③ B 线 CABAC IDR 分支；④ **流式 stream_idr 的
+  两个 intra 调用（流式 IDR SPS 丢 SAR）**。§426 测试只覆盖 CAVLC 默认
+  路径故未暴露；新增 `h264 sar: CABAC batch and streaming IDRs carry
+  the VUI` 钉死。教训：**参数透传切片必须矩阵式核对每个入口×每条内
+  部路径**，单一路径的绿灯不是全覆盖的证据。
+- **测试**（h264_enc_sei_test.mbt，9 测）：intra/P 线逐帧/B 线重排
+  （解码序 [0,2,1,3] 映射断言——**本解码器输出编码序**，非显示序）/
+  CABAC/>255B 大载荷/流式（含 VBV 事务腿）/门面/负例（精确错误串）/
+  默认字节不变（显式空数组 == 缺省编码逐字节相等）。
+- **工具链新坑**：libavcodec 黑盒测试二进制的 moonrun `--test-args`
+  JSON 列出包内全部源文件，**第 51 个测试文件起撞 Windows 命令行
+  206（文件名或扩展名太长）**——包级/`-f` 族跑法全失效，回归一律
+  `moon test libavcodec/<文件>.mbt` 单文件跑（§426 的 50 文件循环
+  本就是单文件制，惯例延续即可）。
+
+验证：h264_enc_sei_test 9/9 + h264_enc_sar_test 2/2 + CLI 30/30
+（顺手清掉 §426 留下的 `to_string` 弃用警告）+ 全模块 wasm check
+0 警 + 全量 51 文件回归。x264 绑定侧 §424b 已有对应能力，两侧语义
+一致（GA94 容器/整段透传）。
+
+
+## §428 纯 MoonBit H.264 编码器 STEREO3D/FPA SEI（2026-11-17）
+
+与 §424d（x264 绑定 STEREO3D）对称的纯编码器缺口：编码器不会写
+frame packing arrangement SEI，帧打包 3D 布局无法随流携带。本片补齐：
+
+- **写端**（`h264_enc_ps.mbt`）：`h264_enc_sei_frame_packing`（SEI type 45）
+  入参为 `av_stereo3d_*` Int32（0 = off，合法 1..7），映射
+  sbs→type3/q0、top_bottom→4、frame_sequence→5、checkerboard→0、
+  sbs_quincunx→3/q1、lines→2、columns→1（解码端 `sei_to_frame` 的逆向）；
+  字段序镜像 `decode_frame_packing_arrangement`（ue id 0 / cancel 0 /
+  type u7 / quincunx u1 / content u6=1 / 3×flip 0 / current_frame0=1 /
+  2×self 0 / grid 16bit（quincunx=0 且 type≠5）/ reserved u8=0 /
+  ue repetition 0 / ext 0），payload 恰 6 字节（带 grid）或 4 字节
+  （quincunx / frame_sequence）；非法值报精确错误串。设计反转记录：
+  首版是 7 变体 `pub enum`，lib 目标报 `unused_constructor`（输入型枚举
+  只在测试构造不算消费者），改为 Int32 + 校验，同时贴合解码侧词汇表。
+- **接线**：intra 两入口（CAVLC/CABAC）`stereo3d~` 标量，注入点在
+  §427 侧数据 SEI 之后、slice NAL 之前；批量链 7 个签名 + 20 个调用点
+  转发 + 4 个 IDR intra 调用点；流式 `H264StreamEncoder` 新字段
+  `stereo3d`（`push_frame(stereo3d~)` 非 0 才 stash，下一次 IDR 生效），
+  `stream_idr` 在 AUD 之后、annexb 之前注入（AU 组装改为 idr_parts
+  数组 + concat）；VBV 事务路径经 `..self` 拷贝字段自动携带；
+  `VideoEncoder::push_frame` 门面转发。
+- **语义钉值**：沿用 §424d 的上游事实——**x264 的 frame packing SEI
+  只写在 IDR 帧**，后续 AU 不带；解码端 `h264dec.c decode_nal_units`
+  在每个 AU 起始 `ff_h264_sei_uninit` 重置 FPA 状态，故 `Stereo3d`
+  side data 只出现在含 SEI 的 AU（本片测试按此断言；交接文档里
+  “解码端持久到后续帧”的假设经 C 源码核对为误）。
+- **测试**（`h264_enc_stereo_test.mbt`，6 测）：7 布局往返（含
+  frame_sequence 的 view_left）、FPA SEI 形状（黑盒按 Annex B 扫描
+  type-6 NAL，剥除防竞争字节后断言 payload type 45 / 6|4 字节 /
+  rbsp 尾 0x80）、非法值精确串（8 / -1；`av_stereo3d_2d`=0 是 off 合法）、
+  批量仅 IDR 携带（P 帧无 side data）、流式 stash + force_idr 换布局
+  （编码序 IDR0 sbs / P1 无 / IDR2 checkerboard）、缺省字节恒等。
+- **工具链**：libavcodec 白盒测试包（196 个 `*wbtest.mbt`）在 wasm 下
+  已撞 `__moonbit__init` 局部变量上限（移走新文件仍复现，属既有状态），
+  白盒测试无法运行；本片把原 wbtest 的断言并入黑盒后删除
+  `h264_enc_stereo_wbtest.mbt`。回归仍为黑盒单文件制。
+
+验证：`h264_enc_stereo_test` 6/6 + 全量 52 文件回归 + CLI 30/30 +
+全模块 wasm check 0 错 0 警。
+
+
+## §429 纯 MoonBit H.264 编码器 ROI 逐 MB 量化偏移（2026-11-17）
+
+与 §424c（x264 绑定 ROI）对称的纯编码器缺口：逐宏块画质控制无法表达。
+本片按 libx264.c `setup_roi` 语义补齐：
+
+- **公开面**（`h264_enc_roi.mbt`）：`pub(all) struct H264Roi`
+  （top/bottom/left/right 像素矩形，right/bottom 独占；qoffset_num /
+  qoffset_den 归一化 -1..+1）+ `h264_roi_offsets`（逐 MB 偏移）。
+  换算照抄上游：`qoffset = num * qp_range / den`（向零截断、
+  `qp_range = 51 + 6*(bit_depth-8)`、夹到 ±qp_range），矩形按 16px
+  宏块网格外扩/裁剪，**列表逆序遍历使首条区域胜出**；`den == 0` 在安全
+  边界拒收，错误串 `h264 enc: roi qoffset.den must not be zero`。
+  AQ 关闭时整张 ROI 忽略且不校验（上游 warn once + skip 的无声等价）。
+- **接线**：偏移叠加在 AQ 之后（`mq = qp + aq_adj + roi_off`，夹 0..51），
+  `mb_qp_delta` 机制复用 §389；8 个 AQ 注入点全部覆盖（CAVLC I 4:2:0/
+  4:4:4、CABAC I 4:2:0/4:4:4、CAVLC P、CABAC P、CAVLC B、CABAC B），
+  三个编码器结构（H264IntraEncoder/H264CabacIEnc/H264PEncoder）新增
+  `roi_off` 字段；批量入口（CAVLC/CABAC × 普通/VBV/ABR/周期 B）统一
+  `roi~ : Array[H264Roi] = []`，每序列展开一次后共享；流式
+  `push_frame(roi~)` 逐帧生效（B 调度下随 pending 一起 stash，
+  VBV 事务经 `..self` 继承），`VideoEncoder::push_frame` 门面转发。
+  空 ROI 逐字节不变（既有 52 文件回归全绿）。
+- **测试**（`h264_enc_roi_test.mbt`，7 测，无解码端往返、按 §424c 的
+  三向流尺寸排序）：CAVLC/CABAC intra 全帧 +10/−10 vs 基线
+  （worse < base < better，`aq_strength=0` 隔离 AQ）；重叠首胜
+  （两种顺序都与只给首条逐字节相等）；AQ 关闭跳过且 den=0 不报错；
+  den=0 精确错误串（intra 入口 + 流式 push）；批量 P 四帧三向排序；
+  流式 P 链与批式同参逐字节相等 + B 调度下 pending 帧的 ROI stash
+  （仅中间帧带图 → 流改变）。
+
+验证：h264_enc_roi_test 7/7 + 全量 53 文件回归 + CLI 30/30 +
+全模块 wasm check 0 错 0 警。
+
+
+## §430 纯 MoonBit H.264 编码器 mb_info 运动提示（2026-11-17）
+
+与 §424e（x264 绑定 AVVideoHint）对称的纯编码器缺口：逐 MB 运动提示
+无法表达。本片按 libx264.c `setup_mb_info` 语义补齐：
+
+- **公开面**（`h264_enc_hint.mbt`）：`h264_video_hint_constant`(1) /
+  `h264_video_hint_changed`(2) 选择子（复用绑定词汇表，避免纯输入枚举
+  的 unused_constructor 坑）、`pub(all) struct H264VideoRect`
+  （x/y/width/height 像素）与 `H264VideoHint { kind, rects }`。
+  展开规则照抄上游：`Constant` 只标记**完全落入** rect 的宏块
+  （ceil 起点 / floor 终点），`Changed` 从全常量默认值里清除**相交**
+  宏块（floor / ceil）；空 rects 合法——`Constant([])` 声称整帧都变了
+  （无跳过），`Changed([])` 声称整帧没变（全跳过）。未知 kind 报精确串
+  `h264 enc: unsupported video hint kind N (1 = constant, 2 = changed)`。
+- **行为**：常量 MB 强制 Skip（P_Skip / B_Skip，零残差；B 的 direct
+  预测/重建仍先跑，与解码端 skip 分支一致），跳过运动搜索与 RD 候选；
+  IDR 不受影响（上游只用于帧间分析）。
+- **接线**：`H264PEncoder.hint_const : Array[Bool]`；CAVLC/CABAC 的 P 循环
+  在 ME 前短路，B 决策在 `decide_b_mb` 的 direct 试验后短路（同时覆盖
+  CAVLC/CABAC B 写端）。批量入口 `hints~ : Array[H264VideoHint?] = []`
+  （按显示位索引，空 = 无；非空长度须等于帧数），CAVLC/CABAC ×
+  普通/VBV/ABR/周期 B 全链转发；流式 `push_frame(hint~)` 逐帧生效
+  （B 调度下随 pending 一起 stash，VBV 事务经 `..self` 继承）；
+  `VideoEncoder` 门面转发。空列表逐字节不变。
+- **测试**（`h264_enc_hint_test.mbt`，6 测）：全帧 Constant 使 CAVLC/CABAC
+  P 流都变小（强制跳过）；准确提示在静态内容 + 无损 IDR 下逐字节不变
+  （§424e 的「准确提示不保证变小」教训）；空 rects 两种拼写与各自
+  全帧孪生逐字节相等；网格取整（两个覆盖同一 MB 的 Constant 拼写相等、
+  两个清除同一 MB 的 Changed 拼写相等、非对齐 Constant 退化为基线）；
+  未知 kind 精确错误串（批量 + push）；流式 P 链与批式同参逐字节相等 +
+  B 调度下 pending 帧的提示 stash。
+
+验证：h264_enc_hint_test 6/6 + 全量 54 文件回归 + CLI 30/30 +
+全模块 wasm check 0 错 0 警。
+
+
+## §431 纯 MoonBit H.264 编码器逐帧 pict_type 强制（流式，2026-11-17）
+
+与 §424a（x264 绑定 `X264PictType`）对称的纯编码器缺口：流式/门面只能
+`force_idr=true`，无法按帧请求 Keyframe（非 IDR I）/P/B。本片先落
+**流式侧**（批量的 pair-phase 调度重构留作后续）：
+
+- **公开面**（`h264_enc_pict_type.mbt`）：`h264_pict_type_auto`(0) /
+  `h264_pict_type_keyframe`(1) / `h264_pict_type_idr`(2) /
+  `h264_pict_type_p`(3) / `h264_pict_type_b`(4)，与绑定
+  `X264PictType::to_sel` 逐值对应（libx264.c 的 `X264_frame` 词汇表）；
+  非法值报精确串。`force_idr=true` 仍是最强请求（等价 `pict_type = idr`，
+  与上游 `I + forced-idr -> X264_TYPE_IDR` 一致）。
+- **非 IDR I 写端**：intra 两入口（CAVLC/CABAC）新增
+  `idr~ : Bool = true`、`frame_num~`、`poc_lsb~`——`idr=false` 时写
+  类型 1 的 NAL（slice_type 仍为 I）、`frame_num`/`pic_order_cnt_lsb`
+  取当前位置（POC type 0 序列）、`dec_ref_pic_marking` 用非 IDR 语法、
+  不写参数集 / buffering period / frame-packing SEI。批量的 IDR 路径
+  缺省不变（逐字节）。流式 `stream_i` 用它在 GOP 中间写 open-GOP
+  keyframe：fn_counter 前进、重建进入参考链、nC 镜像按 IDR 同法重播。
+- **流式调度**（`h264_enc_stream.mbt`）：`push_frame(pict_type~)`
+  扩展 `force_idr` 的位置逻辑——首帧恒 IDR；`Idr` 先 flush 待定 B
+  再开新 GOP；`Keyframe` 先 flush 再写非 IDR I；`P` 立即编码（待定 B
+  以此为 future 配对）；`B` 进 pending 槽等下一帧做 future
+  （`b_slices=false` 时明确报错：POC type 2 无法表达 B）。默认
+  （Auto）路径与旧调度逐分支等价，缺省字节不变。VBV 事务路径
+  （`h264_enc_stream_vbv.mbt`）加 `H264VbvPicture::I` 与同一套请求
+  分派，非 IDR I 只带 pic_timing、不重置 CPB。
+- **门面**：`VideoEncoder::push_frame(pict_type~)` 转发；keyint 的
+  周期强制 IDR 仍优先。
+- **测试**（`h264_enc_pict_type_test.mbt`，5 测）：强制 Keyframe 是
+  类型 1 的 I slice（仅首帧有 SPS/PPS/IDR；POC 保持显示位 2 的 4），
+  且其解码像素与同源单帧 intra 编码逐字节相等；强制 P 跳过 B 配对
+  （显示位 1 是 P，仅默认奇位 3 是 B），其像素与全 P 批式第 1 帧相等；
+  偶数位强制 B 等下一帧做 future（POC 4=B、6=P），尾部 P 与批式一致；
+  校验/错误串与 force_idr 优先级；VBV 路径 keyframe 往返。
+- **批量侧（§431b）**：`h264_encode_frames` / `h264_encode_frames_cabac`
+  新增 `pict_types~ : Array[Int32] = []`（空/全 Auto 逐字节不变；非空须
+  与帧数等长）。`h264_pict_type_plan` 把请求展开成编码序（与流式同一套
+  规则），批量 B 核心改为按 plan 的「参考图 + 其后 B」单元循环：
+  `gop_start` 相对 POC、`hist_poc` 记录每个参考的真实 POC（多参考 +
+  非均匀间隔时 B 时间直接模式需要）、批量 mid-IDR（重复参数集、参考 /
+  状态 / frame_num 重置）与非 IDR I 写端复用；P-only 核心（POC type 2）
+  同样按 plan 走显示序，mid-IDR 重置 frame_num。强制类型与
+  `target_bytes`/VBV 互斥（两个 QP 求解器按默认编码序索引），报精确串。
+  **顺带修复**：P 加权预测表的拟合源改用参考历史头 `refs_[0]`
+  （CAVLC/CABAC 两处）——流式 `b_slices` 下 `ref_y` 在「孤立 P」之后
+  仍是过去参考，强制 P/B 序列会让 PWT 拟合到过期参考（批式此前恰好
+  总是 `ref_y == refs_[0]`，故无行为变化）。
+- **批量测试**（同上文件，共 9 测）：新增 4 测——五种强制计划 × 双熵 ×
+  `b_slices` 开关与流式逐字节相等、空 / 全 Auto 不变、参数校验
+  （长度 / 非法值 / 无 `b_slices` 的 B / 与 RC 互斥）、批量 mid-IDR 流
+  的解码（2×SPS/PPS/IDR、8 帧、6 个非 IDR recon 全部匹配解码输出）。
+
+验证：h264_enc_pict_type_test 9/9 + 全量 55 文件回归 + CLI 30/30 +
+全模块 wasm check 0 错 0 警；缺省（空 / 全 Auto）批量与流式均逐字节不变。
+
+## §432 PPS chroma QP offset（Cb/Cr 色度 QP 偏移）
+
+日期：2026-11-17
+
+对齐 x264 `chroma-qp-offset`：Cb/Cr 共用一个 `Int32` 偏移值，写入 PPS 的
+`chroma_qp_index_offset` 与 `second_chroma_qp_index_offset` 两个字段。
+
+### 写端改动
+
+- `libavcodec/h264_enc_ps.mbt`：`h264_enc_pps_body` / `h264_enc_pps_rbsp` /
+  `h264_enc_write_pps` 新增 `chroma_qp_offset~ : Int32 = 0`，两个原本
+  `put_se(0)` 的位置改为 `put_se(chroma_qp_offset)`。
+- `libavcodec/h264_enc_cabac.mbt`：`h264_enc_pps_rbsp_cabac` 同样处理。
+
+### 入口透传（全部带默认值 0，缺省逐字节不变）
+
+- intra：`h264_encode_intra_frame` / `_cabac` 加 param + 范围校验
+  （`-12..=12`，越界返回 `Err("h264 enc: chroma_qp_offset must be in -12..=12")`）。
+- batch：`h264_encode_frames` / `_vbv` / `_qps`（CAVLC）与
+  `h264_encode_frames_cabac` / `_cabac_vbv` / `_cabac_qps`（CABAC）加 param、
+  校验、透传到所有内部调用（含 `h264_encode_frames_b`、intra、PPS writer）。
+- `h264_encode_frames_b` 加 param、校验、透传。
+- 流式：`H264StreamEncoder` 加 `chroma_qp_offset` 字段；`open()` 加 param + 校验；
+  `stream_idr` / `stream_i` 透传 `chroma_qp_offset=self.chroma_qp_offset`。VBV
+  文件无需改（`self` 继承）。
+- 门面/CLI：`VideoEncConfig` 加 `chroma_qp_offset` 字段（`new` 默认 0），
+  `video_encode` 透传；`video_encoder_periodic.mbt` 3 处调用透传；
+  `cmd/encode-h264/options.mbt` + `main.mbt` 加 `--chroma-qp-offset` 选项 + 帮助行。
+
+### 解码端
+
+`h264_get_chroma_qp` 已从解析后的 PPS 读取偏移，编码器各站点无需额外改动。
+
+### 测试
+
+`libavcodec/h264_enc_chroma_qp_test.mbt`，8 个用例：
+
+1. 默认 offset=0 与省略参数逐字节一致；
+2. CAVLC intra：offset 0/6/12 的 luma 逐字节相同、chroma 两两不同；
+3. CABAC intra：同上；
+4. PPS 两字段 `chroma_qp_index_offset0/1` 均携带写入值（自写 start-code
+   扫描器 + `ff_h264_decode_seq_parameter_set` /
+   `ff_h264_decode_picture_parameter_set` 回读）；
+5. 越界 offset（±13）在 intra/batch/流式/门面四处入口均被拒收；
+6. batch P 序列：offset 0 与 6 的解码帧数相同、每帧 chroma 不同；
+7. 流式与批式同参输出逐字节相等；
+8. 门面 `VideoEncConfig.chroma_qp_offset` 透传到编码结果。
+
+注意点：
+- 不假设 QP 0 无损（H.264 QP0 量化步非零），改用 offset 间互相比对；
+- intra 下 luma 与 chroma offset 无关（逐字节相等），但 P/B 帧因编码器 inter
+  决策可能耦合 chroma 代价，故 batch 测试只断言 chroma 不同、不断言 luma 相等；
+- QP 0 下负 offset 会把 chroma QP index 夹到 0，故 intra 测试用 0/6/12 三个
+  非负 offset。
+
+验证：`h264_enc_chroma_qp_test` 8/8 + 核心 h264 编码器测试 86/86 +
+`moon check --target wasm --deny-warn` 0 错 0 警；缺省路径逐字节不变。
+
+## §433 slice 级去块滤波 α/β 偏移（deblocking offsets）
+
+日期：2026-11-17
+
+对齐 x264 `--deblock alpha:beta` / FFmpeg `-deblock`：两个 div2 单位的
+slice 级偏移（`Int32`，-6..=6），任一非零即 opt-in。缺省 0/0 逐字节不变。
+
+### 写端改动
+
+- `libavcodec/h264_enc_ps.mbt`：`H264EncParams` 增 `deblock_alpha` /
+  `deblock_beta` 两字段（共享参数块，三个编码器结构体经 `p` 字段共用）；
+  `h264_enc_pps_body` 的 `deblocking_filter_control_present_flag` 由
+  `p.deblock_alpha != 0 || p.deblock_beta != 0` 派生。PPS writer
+  （`h264_enc_pps_rbsp` / `h264_enc_write_pps` / `h264_enc_pps_body`）
+  已收 `p`，**零签名改动**。
+- `libavcodec/h264_enc_cabac.mbt`：`h264_enc_pps_rbsp_cabac` 同样派生。
+- 六处 slice 头（CAVLC I/P/B、CABAC I/P/B）在 `slice_qp_delta` 之后
+  （CABAC 在 `cabac_alignment_one_bit` 之前）按**回读后 PPS** 的
+  `deblocking_filter_parameters_present` 分支写
+  `disable_deblocking_filter_idc=0`（ue）+ 两个 se(v) div2 偏移。
+- `libavcodec/h264_enc_deblock.mbt`：`h264_enc_deblock_picture` 增
+  `alpha~`/`beta~`（默认 0），滤波调用传 `52 + 2*alpha` / `52 + 2*beta`
+  （与解码器 `info.alpha_offset = 52 + sh.slice_alpha_c0_offset` 同式）；
+  新增校验 helper `h264_enc_deblock_offsets_ok`：越界返回
+  `Err("h264 enc: deblock_alpha must be in -6..=6")`（beta 同理），
+  `deblock=false` 且任一偏移非零返回
+  `Err("h264 enc: deblock offsets require deblock=true")`
+  （编码器留未滤波参考而码流声称非中性滤波会失配，故拒收）。
+
+### 入口透传（全部带默认值 0，缺省逐字节不变）
+
+- intra：`h264_encode_intra_frame` / `_cabac` 加 param + 校验。
+- batch：`h264_encode_frames` / `_vbv` / `_qps`（CAVLC）与
+  `h264_encode_frames_cabac` / `_vbv_cabac` / `_qps`（CABAC）加 param、
+  校验（公共入口）、透传；`h264_encode_frames_b` 加 param + 校验 + 透传。
+  全部 `H264EncParams` 字面量（含 VBV/ABR 逐帧 trial 与 mid-IDR）补两字段；
+  VBV trial 的 `{ ..self }` 克隆自动继承。
+- 流式：`H264StreamEncoder` 增两字段；`open()` 加 param + 校验；
+  `stream_idr` / `stream_i` 透传 `deblock_alpha=self.deblock_alpha` 等；
+  `stream_p` / `stream_b` 的 p 字面量补字段。VBV 事务文件无需改。
+- 门面/CLI：`VideoEncConfig` 增两字段（`new` 默认 0），`VideoEncoder::open`
+  与 `video_encode` 三处批量调用透传；`video_encoder_periodic.mbt` 3 处
+  透传；`cmd/encode-h264/options.mbt` 加 `--deblock-alpha` /
+  `--deblock-beta`（值开关 + -6..=6 范围校验）+ `video_config` 透传，
+  `main.mbt` 帮助行。
+
+### 设计要点
+
+- 偏移放共享 `H264EncParams` 而非各编码器私有字段：PPS writer 零签名改动，
+  且 `moon check` 的缺字段错误自动枚举全部字面量站点（安全网）。
+- slice 写端读**回读后 PPS** 的标志位（编码器本就把自写 SPS/PPS 经真实
+  解析器往返），写/读两侧天然一致。
+- idc 恒 0（不支持 disable=1/2 的 slice 边界豁免语义，x264 亦只发 0）。
+
+### 测试
+
+`libavcodec/h264_enc_deblock_offsets_test.mbt`，7 个黑盒用例：
+
+1. 默认 0/0：intra 双熵与省略参数逐字节一致、batch 同、PPS 标志=0；
+2. intra 双熵 × 5 组偏移（含 ±6 角点与异号）：PPS 标志=1、slice 回读
+   `(0, 2α, 2β)`、重建 MD5 == 解码器 filtered 输出、且 ≠ 默认输出；
+3. P/B 调度 × 双熵：5 个 slice 全携带偏移、4 个非 IDR 重建逐一等于
+   filtered 解码；
+4. VBV 路径：trial 重编码后每个 slice 仍携带偏移、流 ≠ 默认偏移流；
+5. 越界（±7）与 `deblock=false` 互斥：intra/batch/流式/门面 exact 消息；
+6. 流式与批式同参逐字节相等；
+7. 门面透传：== 直调批式、≠ 默认。
+
+CLI `options_wbtest.mbt` +1 用例（31/31）：解析/默认/范围拒收/重复拒收、
+batch==stream、流 ≠ 默认、`--no-deblock` 互斥经编码器拒收。
+
+验证：新测 7/7 + CLI 31/31 + 57 文件 h264 编码器全量回归 295 用例 0 失败 +
+全模块 wasm `moon check --deny-warn` 0 错 0 警；缺省路径逐字节不变。
+
+## §434 B 片显式加权预测（weighted bipred）（2026-11-17）
+
+日期：2026-11-17
+上游对齐：x264 `--weightp` 作用于 B 片（`weighted_bipred_idc = 1`）。
+opt-in，缺省关闭时码流逐字节不变。接 §433。
+
+### 写端与拟合
+
+- `H264EncParams` 增 `weightp_b : Bool`；CAVLC（`h264_enc_pps_body`）与
+  CABAC（`h264_enc_pps_rbsp_cabac`）的 PPS 把 `weighted_bipred_idc` 由写死
+  0 改为按 `p.weightp_b` 写 0/1。
+- `h264_enc_weight.mbt` 把 §410 的单列表拟合抽成
+  `h264_enc_fit_list_weight(list~)`；新增 `h264_enc_fit_b_weight`（同一源帧
+  对 L0 最新过去参考、L1 唯一未来参考各拟合一次，沿用 offset 缩放与 SAD
+  收益门）、`h264_enc_put_bwt`（两列表 `pred_weight_table()`）、
+  `h264_enc_b_weight_params`（取样点权重/偏移/分母三元组）。
+- 两处 B 片头（CAVLC `encode_b_frame` / CABAC `encode_b_frame_cabac`）在两
+  个 list-modification 标志之后、dec-ref-pic-marking 之前，按回读 PPS 的
+  `weighted_bipred_idc == 1` 写表。
+- `H264PEncoder::fit_b_weights` 在写片头前拟合并把表装入 mirror 的 `pwt`
+  （与编码器 `self.pwt` 同一引用，杜绝两侧漂移）；非拟合 ref 槽填恒等。
+
+### 重建路径
+
+- 解码器 `h264_b_compensate` 早已支持显式权重（读 `ctx.pwt`），本次不改
+  解码端一行；关键是 mirror.pwt 装入拟合表。
+- 编码器私有的 `mc_b_uni_into_rec` / `mc_b_bi_into_rec` 补上与解码器逐式
+  相同的加权：单向 `(v*w + 2^(den-1)) >> den + (o << (bit_depth-8))`，
+  双向 `((av*w0+bv*w1+2^den) >> (den+1)) + ((o0+o1+1)>>1)`，再 clip。
+
+### 入口透传（全部带默认值 false）
+
+- intra：`h264_encode_intra_frame` / `_cabac` 加参数并写入 `p`/`p_ps`
+  ——批量 IDR 经 `h264_encode_frames_b`、流式 IDR 经 `stream_idr`，线上的
+  PPS 由这两条路写，漏任一处即 bipred 仍为 0。
+- batch：`h264_encode_frames_b` 加参数并透传到 5 处 B 调用；主入口
+  `h264_encode_frames` / `_cabac` 加参数并透传。P-only 的 `*_vbv`/`*_qps`
+  helper 不接该旋钮（无 B 片，接了会被编译器报未使用）。
+- 流式：`H264StreamEncoder` 增字段，`open` 加参数；`stream_idr`/`stream_i`
+  传给 intra，P/B 编码器 `p` 块透传。
+- 门面/CLI：`VideoEncConfig` 增字段并透传；`--weightp-b` / `--no-weightp-b`
+  开关（关 B 片时自动失效），帮助行同步。
+
+### 测试
+
+`libavcodec/h264_enc_weightp_b_test.mbt`，6 个黑盒用例：
+
+1. 缺省关闭 vs 不传参逐字节相等、PPS bipred=0；
+2. opt-in：PPS bipred=1、B 宏块实际编码、编码 recon == 解码 filtered
+   （逐像素）、6 帧全解码；
+3. CABAC 路径同样翻标志并解码通过；
+4. 流式 == 批式逐字节相等；
+5. 淡出序列 opt-in 流 ≠ 中性流（拟合确实偏离恒等）；
+6. `b_slices=false` 时该旋钮被忽略、流不变、PPS bipred=0。
+
+验证：新测 6/6 + 核心 8 文件 62 用例 0 失败 + 补充 4 文件 42 用例
+0 失败 + CLI `options_wbtest` 25/25 + 全模块 wasm
+`moon check --deny-warn` 0 错 0 警。
+
+### 坑
+
+- 黑盒解析 PPS 必须先喂 SPS NAL，否则 `ff_h264_decode_picture_parameter_set`
+  返回 EINVAL。
+- 只改流式 `open` 的局部 `p` 不影响线上 PPS；stream==batch 的差异正是
+  这样暴露的——线上参数集由 `stream_idr` 的 intra 调用写。
+- 探针文件收尾已 `mv` 入 `.trash/2026-11-17/libavcodec/`。
+交接见 `AGENT_HANDOFF_2026-11-17_H264_WEIGHTP_B.md`。
+
+## §435 H.264 恒定速率因子 CRF（x264 `--crf`）（2026-11-17）
+
+日期：2026-11-17
+上游对齐：x264 `--crf`（0..51，质量驱动码控）。opt-in，缺省关闭时码流
+逐字节不变。接 §434（交接清单「B 类深层能力」第一项）。
+
+### 设计（x264 语义 + 本仓求解器风格）
+
+- `crf~ : Double = -1.0`（负值=关）；`round(crf)` 为**基线 QP**（x264 的
+  ratefactor→QP 是其内部 λ 模型标定，本编码器直接取 QP 尺度，crf 18/23/28
+  落 QP 18/23/28）。
+- 逐帧**时间复杂度** = luma SAD(当前帧, 上一显示帧)，隔行隔字节子采样
+  （16-bit 深度只采低字节——只用序列内比值，尺度自消）。
+- QP 映射：`qp_i = round(base + 6·(qcompress−1)·log2(cplx_i/mean(cplx_1..i)))`，
+  qcompress=0.6（x264 默认）→ 每倍复杂度 −2.4 QP（复杂帧细化、平坦帧粗化），
+  ±6 QP 饱和；帧 0 恒 base 且不进均值；**均值只含帧 1..i 且含当前样本**
+  （帧 1 恒 base，序列内偏移自平衡）。全静态序列（均值~0）偏移为 0；
+  单帧静态（cplx=0、均值>0）直接 +6。
+- **因果性是核心不变量**：样本 i 只依赖帧 i−1/i，批量与流式跑同一公式、
+  同一顺序 → plain CRF 下 stream==batch 逐字节恒等（黑盒钉死）。
+
+### 组合与互斥
+
+- 与 `target_bytes`（批式 ABR）/`target_bitrate`（流式 ABR）互斥——CRF 取代
+  码率目标作为质量选择器；与 VBV **可组合**（x264 crf+vbv 契约：常质量尽
+  CPB 所容）。
+- 批式 forced `pict_types` 与 CRF 互斥（沿用 target_bytes/VBV 口径与报错文案）。
+
+### 接线（入口×路径矩阵）
+
+- **批式 CAVLC/CABAC**（`h264_encode_frames` / `_cabac`）：B 线平路
+  `qps=crf_qps`；P 线 `qps` else-分支接 CRF 数组（PPS base 仍=用户 `qp`）。
+- **VBV 组合**：`h264_vbv_solve` 增 `start_qps~` 种子（空=原平坦起步，既有
+  调用零改动；求解器只升不降，天然适配 CRF 地板）；B 线经主入口传种子，
+  P 线经 `h264_encode_frames_vbv` / `_vbv_cabac` 的 `crf_qps~` 透传。
+- **流式**：`H264StreamEncoder` 增 `crf : H264Crf?` + `prev_y`（上次 push 的
+  原始 luma）+ `pending_qp`（停等 B 帧的 push 时刻 QP）。QP 选择点统一为
+  `pic_suggest(hint)`——CRF 给 push 时刻算好的 hint，否则走 `abr_suggest`
+  （互斥保证不混）。push_frame 5 处（IDR/keyframe-I/forced-P/auto-P×2）、
+  `stream_pending_b`/`flush_pending`（停等帧用 `pending_qp`）、`stash_pending`
+  增 `qp~` 参数；VBV 事务 `push_vbv`→`vbv_picture(qp_hint~)` 同槽位
+  （pair-B 与尾-P 传 `trial.pending_qp`）；`vbv_picture` 起步 QP 在 CRF 下
+  不受 `h264_rc_qp_min` 钳位（rc 下限是 ABR 搜索工艺，非 CRF 语义）。
+- **门面/CLI**：`VideoEncConfig.crf` + 互斥校验（`video enc:` 前缀）+ 批式
+  两调用点透传；CLI `--crf`（`@string.parse_double`，NaN 安全范围测试
+  `!(v>=0 && v<=51)` 把 "nan"/"inf" 一并拒掉）。
+
+### 根因修复：流式 P/B 编码器 `base_qp` 误钉 `self.qp`
+
+`slice_qp_delta = p.qp − base_qp`（h264_encode_p.mbt:1907）。批式 B 线 P
+编码器 `base_qp = qps_arr[0]`（PPS `pic_init_qp`），而流式 `stream_p`/
+`stream_b` 的构造恒写 `base_qp: self.qp`——plain/ABR 下图 QP 起点恒为
+`self.qp` 或 PPS=qp 故从未暴露；CRF 使 B 线 PPS base=CRF 基线（`pps_qp()`
+新 helper 按 `b_slices` 分派：B 线=CRF 基线、P 线=用户 qp）后，QP≠base 的
+slice_delta 与 dqp 码字分叉（n=2 双 23 QP 仍差 2 字节定位）。两处构造改
+`base_qp: self.pps_qp()`，CRF 关闭时值恒等旧路径。
+
+### 测试
+
+`libavcodec/h264_enc_crf_test.mbt` 7 个黑盒用例：
+
+1. 缺省 -1 == 不传参逐字节相等；首帧 QP=基线；
+2. 夹具 `[A, A+40, A+40, A, A, A+40]`（样本 [S,0,S,0,S] 全等）——QP 序列
+   精确钉值 [23,23,29,22,29,21]（3/2、5/3 比值 @qcompress 0.6）+ 重建
+   逐像素 == 解码 filtered；
+3. CABAC 同 QP 序列 + crf 18 > crf 28 双熵尺寸单调 + 18.4 四舍五入==18.0；
+4. stream==batch 逐字节（B 调度 + P 调度）；
+5. crf+VBV 批式（紧桶）解 6 帧、QP 不落 CRF 地板下；流式 crf+VBV 同验；
+6. 互斥/范围（批式两入口 + 流式 ABR + forced pict_types）exact 消息；
+7. 门面 == 直调批式 + 门面互斥消息。
+
+CLI `options_wbtest.mbt` +1（26/26）：默认 -1、23.5 解析与透传、七组拒收
+（52/-1/abc/nan/inf/缺值/重复 + --target-bytes 互斥）、批式==流式逐字节、
+≠缺省流、5 帧解码。
+
+验证：CRF 7/7（wasm + wasm-gc 双后端）+ CLI 26/26 + 编码器黑盒全量回归
+（wasm 单文件制 0 失败）+ 8 个 h264_enc wbtest 于 wasm-gc 7/8（唯一红为
+下述既有解码器问题）+ 全模块 wasm `moon check --deny-warn` 0 错 0 警；
+缺省路径逐字节不变。
+
+### 回归附带发现（均既有，非 §435 引入；§435 对 crf-off 路径逐点值恒等）
+
+- **libavcodec 白盒测试单元在 wasm（V8 MVP）下编译越限**：
+  `__moonbit__init` local count too large——包级既有状况（§424 起单测
+  回归即用 wasm-gc；本次删净 §435 的两个顶层 `let`（常量内联）仍越限，
+  证明与 §435 无关）。**libavcodec wbtest 的回归目标是 wasm-gc**（黑盒
+  文件 wasm/wasm-gc 皆可）。195 个 wbtest 全部同症；抽查解码器
+  wbtest 13/13 绿。
+- **`h264_enc_binter8_420_wbtest` / `h264_enc_c444_binter8_wbtest`
+  语义过期（§424 去块默认翻转漏钉）**：两文件断言仍用
+  `h264_decode_annexb_frames(stream, true)`（跳过滤波）对比编码器
+  recon——§424 后 recon 是滤波像。重钉 `true`→`false`（补 §424
+  全族重钉在当时跑不到的文件）：420 变体 wasm-gc 全绿；444 变体 recon
+  段转绿后暴露下一条。
+- **新暴露既有解码器问题（后续切片）**：444 B inter8 流在
+  `skip_lf=false` 下 `decoded[f].infos` 的 inter transform_8x8 计数
+  归零（skip_lf=true 时通过；recon 逐像素反而全对）——滤波开/关改变
+  infos，两断言今日不可兼得。deblock.mbt 只读该标志，嫌疑在 444
+  滤波路径的 per-MB 状态；证据链与复现（wasm-gc 单文件）已归档于交接。
+
+### 坑
+
+- 黑盒测试文件各自独立编译单元——跨文件复用 helper（concat 等）不可行，
+  需本地重定义。
+- `stats=bstats~` 不是合法标签语法（`~` 后缀是 punning）；变量名≠标签名时
+  写 `stats=bstats`。Array 直接插值 `\{arr}` 走弃用 Show——拼字符串。
+- 流式 `stats.frame_qps` 是**编码序**（B 调度 P 先于 B），批式 B 线是显示序；
+  对比 QP 序列时先按调度重排。
+- 探针定位法沿用：AU 逐段尺寸 + 首个分歧字节 ±16 hex dump，n=2 消减变量
+  一轮定根因（qp 全等仍差 → 与 QP 序列无关 → base_qp）。
+交接见 `AGENT_HANDOFF_2026-11-17_H264_CRF.md`。

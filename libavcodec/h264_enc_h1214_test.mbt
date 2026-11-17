@@ -59,7 +59,7 @@ test "h264 h1214: round trip with the recon invariant at 12 and 14 bits" {
       }
       assert_eq(profile, 244)
       assert_eq(ps.sps_list[0].unwrap().bit_depth_luma, depth)
-      let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -189,7 +189,7 @@ test "h264 h1214: composes with the tool set and multi-reference" {
         Err(e) => fail(e)
       }
       assert_true(stats.dqp_mbs > 0)
-      let dec = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let dec = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -285,16 +285,16 @@ test "h264 h1214: ffmpeg-arbitrated streams" {
       // §422e re-arbitration: the B inter 8x8 RD choice changed the
       // display B frames (the CABAC 14-bit arm kept its pins).
       [
-        "7e438cb6f062cef70088bd8d0cdcdf7c", "4bdee07d358d5fe1824344144b964e86", "abb9326702ca56f178c2245625d374c5",
-        "b239672318f8ce5cd072853a23e1a9ea", "55d48391588309f0e2ab8b6af0435680", "6c36f83270a899f5f6596c7ace793526",
+        "7e438cb6f062cef70088bd8d0cdcdf7c", "f662ecb6c9ba4c3a3b723164c968524c", "f9ce7d2644c1db89dbef34eca9137132",
+        "b55a155509b0ec6ea6180751d44b14c8", "1fe9aebc56087d25140917665c861e46", "3b4e305e47daa4354485fee8362b3e68",
       ]
     } else {
       // §422e re-arbitration on top of `WIDE_RD_QUANT` (the display B
       // frames changed again). docker framemd5 zero warnings, identical
       // to the local default decode.
       [
-        "3049a1723fc9a2a0fd6d0de7ed7777cb", "6972cddc630a0e275fc9531da7cd774c", "02e7a55e80e6f9231563cfd08898f765",
-        "79367dcc09cb952ece1ec8cc31b95abb", "60e3da44f9582755a7af6559f6d2582f", "3295547d5fe35e86ce021b85c0d685a9",
+        "3049a1723fc9a2a0fd6d0de7ed7777cb", "92dcabd72d34af5bf0eabe72f4f3de8b", "a55731200b878966828cebd8dca378fc",
+        "127901e9075f4c2078baf3d66c42e595", "12c03b183a5899505902afb53aa3cca8", "e2b0c4e5505c673fbe669679f7854d5f",
       ]
     }
     for i, f in by_display {

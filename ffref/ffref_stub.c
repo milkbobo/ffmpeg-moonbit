@@ -1,3 +1,6 @@
+// ⛔ 未接线（用户决定 2026-11-16）：oracle 明确不做（agent.md §2），
+// moon.pkg 已注释置空，本文件不再参与任何构建；内容原样保留为历史证据。
+//
 // Reference-oracle bindings over the locally built FFmpeg n9.0.2 static
 // libraries. The MoonBit demux/decode ports are differential-tested against
 // this in-process oracle instead of docker ffprobe round-trips. Only the C

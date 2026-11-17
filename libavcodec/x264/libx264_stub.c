@@ -28,6 +28,8 @@
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/pixfmt.h"
+#include "libavutil/stereo3d.h"
+#include "libavutil/video_hint.h"
 
 #include <limits.h>
 #include <stdarg.h>
@@ -40,6 +42,12 @@ typedef struct {
   AVCodecContext *ctx;
   AVFrame *frame;
   AVPacket *pkt;
+  // Open-time value of libx264's `forced-idr` private option (0 unless the
+  // caller's options string set it). Per-picture IDR forcing writes the
+  // option to 1 for that picture only and restores this value afterwards,
+  // so mixed IDR / non-IDR keyframe requests compose (upstream reads the
+  // sticky option every frame; the binding keeps the caller's base).
+  int64_t base_forced_idr;
   // Open-failure state: the MoonBit toolchain's optional return for
   // external objects does not map a raw pointer to Some (verified against
   // moon 0.1.20261104), so open() ALWAYS returns a handle - on failure one
@@ -162,6 +170,7 @@ X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
                       int32_t rc_buffer_size, int32_t color_range,
                       int32_t colorspace, int32_t color_primaries,
                       int32_t color_trc, int32_t chroma_sample_location,
+                      int32_t sar_num, int32_t sar_den,
                       moonbit_bytes_t options) {
   enum AVPixelFormat fmt;
   if (sel_pix_fmt(pix_sel, &fmt) < 0)
@@ -214,6 +223,10 @@ X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
     cc->color_trc = color_trc;
   if (chroma_sample_location != AVCHROMA_LOC_UNSPECIFIED)
     cc->chroma_sample_location = chroma_sample_location;
+  // Sample aspect ratio (libx264.c:1308 av_reduce's into the SPS VUI at
+  // open). 0/0 leaves the field unset (av_reduce maps it to 0/1 and
+  // x264 skips the aspect-ratio VUI), matching the default open.
+  cc->sample_aspect_ratio = (AVRational){sar_num, sar_den};
   cc->thread_count = 1; // deterministic output: no frame/slice threading
   AVDictionary *dict = NULL;
   if (Moonbit_array_length(options) > 0 &&
@@ -246,6 +259,13 @@ X264Enc *x264enc_open(moonbit_bytes_t codec_name, int32_t width, int32_t height,
   e->ctx = cc;
   e->frame = frame;
   e->pkt = pkt;
+  // Snapshot the caller's forced-idr base (an av_dict option may have set
+  // it at open). Per-picture Idr requests toggle around this value.
+  {
+    int64_t v = 0;
+    if (av_opt_get_int(cc->priv_data, "forced-idr", 0, &v) >= 0)
+      e->base_forced_idr = v;
+  }
   return e;
 }
 
@@ -299,7 +319,11 @@ int32_t x264enc_supports(moonbit_bytes_t codec_name, int32_t pix_sel) {
 MOONBIT_FFI_EXPORT
 int32_t x264enc_send_frame(X264Enc *e, int64_t pts, moonbit_bytes_t y,
                            moonbit_bytes_t u, moonbit_bytes_t v,
-                           int32_t force_idr) {
+                           int32_t pict_sel, moonbit_bytes_t a53,
+                           moonbit_bytes_t sei_unreg,
+                           moonbit_bytes_t roi_blob,
+                           int32_t stereo3d_sel, int32_t hint_type,
+                           moonbit_bytes_t hint_blob) {
   if (!e || !e->ctx || e->failed)
     return -1;
   int w = e->ctx->width, h = e->ctx->height;
@@ -335,14 +359,141 @@ int32_t x264enc_send_frame(X264Enc *e, int64_t pts, moonbit_bytes_t y,
   f->width = w;
   f->height = h;
   f->pts = pts;
-  // libx264 maps AV_PICTURE_TYPE_I to IDR only when forced-idr is set.
-  // av_frame_unref above resets pict_type so the request cannot leak to
-  // the next picture. Buffers remain call-scoped copies, including retries.
-  if (force_idr) {
-    int ret = av_opt_set_int(e->ctx->priv_data, "forced-idr", 1, 0);
+  // libx264.c's X264_frame switch on frame->pict_type: I maps to
+  // X264_TYPE_KEYFRAME (an I that is an IDR only when the forced-idr
+  // option is set), P and B pin the slice type, everything else is
+  // X264_TYPE_AUTO. av_frame_unref above resets pict_type so a request
+  // cannot leak to the next picture; the forced-idr option is restored
+  // to the open-time base around each Idr request so per-picture forcing
+  // composes. Buffers remain call-scoped copies, including retries.
+  if (pict_sel >= 1 && pict_sel <= 4) {
+    // Only I pictures consult the forced-idr option; rewrite it around
+    // every I request so per-picture IDR / non-IDR keyframes compose even
+    // when the open-time base is 0 (a previous Idr request must not leak
+    // into a later Keyframe).
+    if (pict_sel == 1 || pict_sel == 2) {
+      int ret = av_opt_set_int(e->ctx->priv_data, "forced-idr",
+                               pict_sel == 2 ? 1 : e->base_forced_idr, 0);
+      if (ret < 0)
+        return ret;
+    }
+    switch (pict_sel) {
+    case 1:
+    case 2:
+      f->pict_type = AV_PICTURE_TYPE_I;
+      break;
+    case 3:
+      f->pict_type = AV_PICTURE_TYPE_P;
+      break;
+    case 4:
+      f->pict_type = AV_PICTURE_TYPE_B;
+      break;
+    }
+  }
+  // libx264.c's SEI side-data path: AV_FRAME_DATA_A53_CC becomes a
+  // registered (ITU-T T.35, GA94) payload when the a53cc option is on
+  // (upstream default), AV_FRAME_DATA_SEI_UNREGISTERED passes through
+  // verbatim but only when udu_sei is on (upstream default OFF - the
+  // explicit payload here is the caller's intent, so flip the option on
+  // demand; it only gates the copy, never the encoding itself).
+  // av_frame_unref above drops any previous side data, so the attachment
+  // is strictly per picture.
+  if (Moonbit_array_length(a53) > 0) {
+    AVFrameSideData *sd = av_frame_new_side_data(
+        f, AV_FRAME_DATA_A53_CC, Moonbit_array_length(a53));
+    if (!sd)
+      return -1;
+    memcpy(sd->data, a53, Moonbit_array_length(a53));
+  }
+  if (Moonbit_array_length(sei_unreg) > 0) {
+    int ret = av_opt_set_int(e->ctx->priv_data, "udu_sei", 1, 0);
     if (ret < 0)
       return ret;
-    f->pict_type = AV_PICTURE_TYPE_I;
+    AVFrameSideData *sd = av_frame_new_side_data(
+        f, AV_FRAME_DATA_SEI_UNREGISTERED, Moonbit_array_length(sei_unreg));
+    if (!sd)
+      return -1;
+    memcpy(sd->data, sei_unreg, Moonbit_array_length(sei_unreg));
+  }
+  // libx264.c's ROI path (setup_roi): AV_FRAME_DATA_REGIONS_OF_INTEREST
+  // carrying AVRegionOfInterest records. The blob from MoonBit holds 24
+  // bytes per region - six little-endian int32s in struct order (top,
+  // bottom, left, right, qoffset.num, qoffset.den); self_size is filled
+  // from the host's sizeof here so no struct-layout assumption crosses
+  // the boundary. Upstream requires AQ on (else it warns once and skips
+  // the ROI) and iterates the list in reverse, so the FIRST region wins
+  // where regions overlap.
+  if (Moonbit_array_length(roi_blob) > 0) {
+    if (Moonbit_array_length(roi_blob) % 24 != 0)
+      return -1;
+    int nb = Moonbit_array_length(roi_blob) / 24;
+    AVFrameSideData *sd = av_frame_new_side_data(
+        f, AV_FRAME_DATA_REGIONS_OF_INTEREST,
+        nb * sizeof(AVRegionOfInterest));
+    if (!sd)
+      return -1;
+    AVRegionOfInterest *rs = (AVRegionOfInterest *)sd->data;
+    for (int i = 0; i < nb; i++) {
+      int32_t v[6];
+      memcpy(v, roi_blob + i * 24, 24);
+      rs[i].self_size = (uint32_t)sizeof(AVRegionOfInterest);
+      rs[i].top = v[0];
+      rs[i].bottom = v[1];
+      rs[i].left = v[2];
+      rs[i].right = v[3];
+      rs[i].qoffset.num = v[4];
+      rs[i].qoffset.den = v[5];
+    }
+  }
+  // libx264.c's reconfig_encoder STEREO3D path: AV_FRAME_DATA_STEREO3D
+  // carrying an AVStereo3D maps to x264's frame packing (i_frame_packing)
+  // with a reconfig on change. Selector 0 = absent; 1..7 mirror
+  // libx264.c's switch (checkerboard, columns, lines, side-by-side,
+  // top-bottom, frame-sequence, 2D). The INVERT flag is upstream-
+  // rejected (warning + no packing) and is therefore not exposed by the
+  // binding.
+  if (stereo3d_sel >= 1 && stereo3d_sel <= 7) {
+    static const int stereo_types[7] = {
+      AV_STEREO3D_CHECKERBOARD, AV_STEREO3D_COLUMNS,
+      AV_STEREO3D_LINES,        AV_STEREO3D_SIDEBYSIDE,
+      AV_STEREO3D_TOPBOTTOM,    AV_STEREO3D_FRAMESEQUENCE,
+      AV_STEREO3D_2D,
+    };
+    AVStereo3D *stereo = av_stereo3d_create_side_data(f);
+    if (!stereo)
+      return -1;
+    stereo->type = stereo_types[stereo3d_sel - 1];
+  }
+  // libx264.c's mb_info path (setup_mb_info): AV_FRAME_DATA_VIDEO_HINT
+  // carrying an AVVideoHint of AVVideoRect records. hint_type 1 =
+  // AV_VIDEO_HINT_TYPE_CONSTANT (rects delimit UNCHANGED areas, the rest
+  // is assumed changed), 2 = AV_VIDEO_HINT_TYPE_CHANGED (rects delimit
+  // CHANGED areas, the rest unchanged); 0 = absent. The blob holds 16
+  // little-endian uint32s per rect (x, y, width, height); the AVVideoHint
+  // and its rect array are built host-side via
+  // av_video_hint_create_side_data, so no struct layout crosses the
+  // boundary. x264 only acts on the array when the mb_info option is on
+  // (analyse.b_mb_info), which the caller passes at open time.
+  if (hint_type >= 1 && hint_type <= 2) {
+    if (Moonbit_array_length(hint_blob) % 16 != 0)
+      return -1;
+    int nb = Moonbit_array_length(hint_blob) / 16;
+    // FFmpeg 9.0.2's creator takes only (frame, nb_rects) - the kind is
+    // assigned as a plain struct field afterwards.
+    AVVideoHint *hint = av_video_hint_create_side_data(f, nb);
+    if (!hint)
+      return -1;
+    hint->type = hint_type == 1 ? AV_VIDEO_HINT_TYPE_CONSTANT
+                                : AV_VIDEO_HINT_TYPE_CHANGED;
+    AVVideoRect *rs = av_video_hint_rects(hint);
+    for (int i = 0; i < nb; i++) {
+      uint32_t v[4];
+      memcpy(v, hint_blob + i * 16, 16);
+      rs[i].x = v[0];
+      rs[i].y = v[1];
+      rs[i].width = v[2];
+      rs[i].height = v[3];
+    }
   }
   if (av_frame_get_buffer(f, 0) < 0)
     return -1;

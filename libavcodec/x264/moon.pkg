@@ -19,7 +19,9 @@ import {
 
 import {
   "milkbobo/ffmpeg-moonbit/libavcodec",
-  "milkbobo/ffmpeg-moonbit/libavutil",
+  // 2026-11-16 oracle shutdown: the wbtest files that pulled in libavutil
+  // are commented out; restore this import together with them.
+  // "milkbobo/ffmpeg-moonbit/libavutil",
 } for "wbtest"
 
 supported_targets = "native"

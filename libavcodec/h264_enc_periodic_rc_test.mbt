@@ -55,7 +55,7 @@ test "h264 periodic ABR: one budget covers all GOPs and headers" {
       for ty in [5, 7, 8] {
         assert_eq(nals.filter(n => n.0 == ty).length(), 3)
       }
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
@@ -73,12 +73,12 @@ test "h264 periodic ABR: one budget covers all GOPs and headers" {
         assert_eq(q, 51)
       }
       assert_eq(fallback_stats.frame_qps.length(), 7)
-      let worst = match @libavcodec.h264_decode_annexb_frames(fallback, true) {
+      let worst = match @libavcodec.h264_decode_annexb_frames(fallback, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
       let reference = match
-        @libavcodec.h264_decode_annexb_frames(coarse, true) {
+        @libavcodec.h264_decode_annexb_frames(coarse, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }

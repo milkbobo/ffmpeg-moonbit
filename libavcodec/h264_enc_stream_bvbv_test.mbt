@@ -177,7 +177,7 @@ test "h264 online B VBV: paired scheduling, QPs, CPB and recon" {
         )
         assert_eq(stats.vbv_bits, stream.length().to_int64() * 8L)
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }

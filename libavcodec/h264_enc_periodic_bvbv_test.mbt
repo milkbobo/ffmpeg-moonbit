@@ -129,7 +129,7 @@ test "h264 periodic B VBV: CPB and HRD follow decode order across GOPs" {
         assert_eq(timing_count, 8)
         assert_eq(bp_count, (8 + keyint - 1) / keyint)
         let decoded = match
-          @libavcodec.h264_decode_annexb_frames(stream, true) {
+          @libavcodec.h264_decode_annexb_frames(stream, false) {
           Ok(d) => d
           Err(e) => fail(e)
         }
@@ -189,7 +189,7 @@ test "h264 periodic B VBV: all-IDR, filler and single-GOP compatibility" {
           90,
         ),
       )
-      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, true) {
+      let decoded = match @libavcodec.h264_decode_annexb_frames(stream, false) {
         Ok(d) => d
         Err(e) => fail(e)
       }
