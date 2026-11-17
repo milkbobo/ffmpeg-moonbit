@@ -22,6 +22,9 @@ fn H264StreamEncoder::push_vbv(
   /// `§435`: the current push's CRF QP (0 without CRF — the picture
   /// starts from the ABR suggestion / flat `qp` as before).
   qp_hint~ : Int32 = 0,
+  /// `§437`: this push is an auto-detected open-GOP cut (its keyframe AU
+  /// carries the `recovery_point` SEI).
+  recovery~ : Bool = false,
   a53~ : Bytes? = None,
   sei_unregistered~ : Bytes? = None,
 ) -> Result[Unit, String] {
@@ -69,6 +72,7 @@ fn H264StreamEncoder::push_vbv(
         display,
         I,
         qp_hint~,
+        recovery~,
         a53~,
         sei_unregistered~,
         roi=trial.roi,
@@ -284,6 +288,9 @@ fn H264StreamEncoder::vbv_picture(
   /// `§435`: the picture's push-computed CRF QP (0 without CRF; the
   /// ABR suggestion / flat `qp` path is unchanged).
   qp_hint~ : Int32 = 0,
+  /// `§437`: an auto-detected open-GOP cut (the keyframe AU carries the
+  /// `recovery_point` SEI).
+  recovery~ : Bool = false,
   a53~ : Bytes? = None,
   sei_unregistered~ : Bytes? = None,
   /// `§429`: this picture's ROI map (see `push_frame`).
@@ -352,6 +359,7 @@ fn H264StreamEncoder::vbv_picture(
           a53~,
           sei_unregistered~,
           roi~,
+          recovery_sei=recovery,
         )
       P =>
         trial.stream_p(

@@ -892,3 +892,99 @@ test "CLI crf parses and reaches batch and stream paths" {
   }
   assert_eq(decoded.length(), 5)
 }
+
+///|
+/// `§436`: `--scenecut` parses 0..=100, defaults off, reaches the
+/// streaming encoder, and a hard cut inserts an IDR AU.
+test "CLI scenecut parses and reaches the streaming path" {
+  let plain = test_options([])
+  assert_eq(plain.scenecut, 0)
+  let opts = test_options(["--scenecut", "40"])
+  assert_eq(opts.scenecut, 40)
+  assert_eq(video_config(opts).scenecut, 40)
+  for
+    bad in [
+      ["--scenecut", "101"],
+      ["--scenecut", "-1"],
+      ["--scenecut", "abc"],
+      ["--scenecut"],
+    ] {
+    try test_options(bad) catch {
+      _ => ()
+    } noraise {
+      _ => fail("accepted invalid scenecut arguments")
+    }
+  }
+  // Two smooth scenes, hard cut at frame 3 (odd position — closes the
+  // pending B as a tail P before the new GOP's IDR).
+  let opts = parse_options([
+    "input.yuv", "--width", "96", "--height", "64", "--scenecut", "40", "--output",
+    "out.264",
+  ])
+  let frame_size = raw_frame_size(opts)
+  let raw : Array[Byte] = []
+  for f in 0..<8 {
+    for i = 0; i < frame_size; i = i + 1 {
+      let sample = if f >= 3 {
+        235 - ((i * 5 + i / 97 * 3) % 170 + 40)
+      } else {
+        (i * 5 + i / 97 * 3) % 170 + 40 + f
+      }
+      raw.push((sample & 0xFF).to_byte())
+    }
+  }
+  let (cut, count) = encode_raw_stream(Bytes::from_array(raw[:]), opts)
+  assert_eq(count, 8)
+  let (off, _) = encode_raw_stream(Bytes::from_array(raw[:]), {
+    ..opts,
+    scenecut: 0,
+  })
+  assert_true(cut != off, msg="the cut must change the stream")
+  let decoded = match @codec.h264_decode_annexb_frames(cut, false) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
+  assert_eq(decoded.length(), 8)
+}
+
+///|
+/// `§437`: `--open-gop` parses, requires `--scenecut`, and reaches the
+/// streaming path (the cut AU carries a recovery-point SEI).
+test "CLI open-gop requires scenecut and reaches the streaming path" {
+  try test_options(["--open-gop"]) catch {
+    _ => ()
+  } noraise {
+    _ => fail("--open-gop without --scenecut was accepted")
+  }
+  let opts = test_options(["--scenecut", "40", "--open-gop"])
+  assert_true(opts.open_gop)
+  assert_true(video_config(opts).open_gop)
+  let opts = parse_options([
+    "input.yuv", "--width", "96", "--height", "64", "--scenecut", "40", "--open-gop",
+    "--output", "out.264",
+  ])
+  let frame_size = raw_frame_size(opts)
+  let raw : Array[Byte] = []
+  for f in 0..<8 {
+    for i = 0; i < frame_size; i = i + 1 {
+      let sample = if f >= 3 {
+        235 - ((i * 5 + i / 97 * 3) % 170 + 40)
+      } else {
+        (i * 5 + i / 97 * 3) % 170 + 40 + f
+      }
+      raw.push((sample & 0xFF).to_byte())
+    }
+  }
+  let (open_gop, count) = encode_raw_stream(Bytes::from_array(raw[:]), opts)
+  assert_eq(count, 8)
+  let (closed, _) = encode_raw_stream(Bytes::from_array(raw[:]), {
+    ..opts,
+    open_gop: false,
+  })
+  assert_true(open_gop != closed, msg="open-gop must change the cut AU")
+  let decoded = match @codec.h264_decode_annexb_frames(open_gop, false) {
+    Ok(d) => d
+    Err(e) => fail(e)
+  }
+  assert_eq(decoded.length(), 8)
+}

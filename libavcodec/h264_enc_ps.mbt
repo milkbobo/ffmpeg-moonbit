@@ -594,6 +594,19 @@ fn h264_enc_sei_pic_timing(
 }
 
 ///|
+/// `recovery_point` SEI: an open-GOP keyframe's decodability declaration
+/// (x264 `--open-gop`). The payload mirrors the decoder's
+/// `decode_recovery_point`: `ue(recovery_frame_cnt)` then
+/// exact_match/broken_link/changing_slice_group_idc (4 zero bits — the
+/// decoder skips them; a neutral, unbroken link).
+fn h264_enc_sei_recovery_point(recovery_frame_cnt : Int32) -> Bytes {
+  let p = H264Rbsp::new()
+  p.put_ue(recovery_frame_cnt)
+  p.put(0, 4)
+  h264_enc_sei_nal(6, p)
+}
+
+///|
 /// `§427`: one `user_data_unregistered` SEI (type 5). The payload is the
 /// caller's 16-byte `uuid_iso_iec_11578` followed by the user data; the
 /// decoder exports the whole blob (`SeiUnregistered`, the same shape the

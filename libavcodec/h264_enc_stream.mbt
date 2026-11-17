@@ -125,8 +125,15 @@ pub struct H264StreamEncoder {
   /// `§435`: the CRF controller (None = off; mutually exclusive with
   /// the ABR controller by `open`).
   priv crf : H264Crf?
-  /// `§435`: raw luma of the previous push — the temporal-complexity
-  /// SAD reference (advances with every push, display order).
+  /// `§436`: scene-cut threshold in 0..=100 (0 = off; see
+  /// `h264_enc_scenecut.mbt`). Higher cuts more aggressively.
+  priv scenecut : Int32
+  /// `§437`: open-GOP cuts — a detected scene change codes as a non-IDR
+  /// I picture carrying a `recovery_point` SEI instead of an IDR.
+  priv open_gop : Bool
+  /// `§435`/`§436`: raw luma of the previous push — the reference of
+  /// CRF's temporal-complexity SAD and the scenecut inter proxy
+  /// (advances with every push, display order).
   priv mut prev_y : Bytes?
   /// `§435`: the pending B picture's push-computed QP (stashed with the
   /// frame like the side data; the B codes after its future P arrives).
@@ -237,6 +244,21 @@ pub fn H264StreamEncoder::open(
   /// QP is the climb's starting point). Byte-identical to the batch
   /// entries with the same `crf`.
   crf~ : Double = -1.0,
+  /// `§436`: scene-cut threshold in 0..=100 (x264 `--scenecut`; 0 = off,
+  /// the default keeps every stream byte-identical). A push whose inter
+  /// SAD against the previous display frame reaches
+  /// `(100 - scenecut)%` of the frame's spatial gradient codes as an
+  /// IDR — closing the GOP (a pending B first codes as a tail P) and
+  /// restarting the reference chain. Ignored for pushes that carry an
+  /// explicit `pict_type`. Composes with CRF and online VBV.
+  scenecut~ : Int32 = 0,
+  /// `§437`: open-GOP scene cuts (x264 `--open-gop`): a detected cut
+  /// codes as a non-IDR I picture — no POC/reference/parameter-set
+  /// resets, the old reference chain keeps serving later decodes — and
+  /// its AU carries a `recovery_point` SEI (`recovery_frame_cnt = 0`).
+  /// Requires `scenecut > 0` (without a detector there is no cut to
+  /// open); explicit `Keyframe` requests keep their §431 bytes (no SEI).
+  open_gop~ : Bool = false,
 ) -> Result[H264StreamEncoder, String] {
   if vbv_maxrate < 0 || vbv_bufsize < 0 || fps < 0 {
     return Err("h264 enc: streaming VBV parameters must be nonnegative")
@@ -252,6 +274,12 @@ pub fn H264StreamEncoder::open(
   }
   if crf >= 0.0 && target_bitrate > 0 {
     return Err("h264 enc: crf and target_bitrate are mutually exclusive")
+  }
+  if scenecut < 0 || scenecut > 100 {
+    return Err("h264 enc: scenecut must be in 0..=100")
+  }
+  if open_gop && scenecut <= 0 {
+    return Err("h264 enc: open_gop requires scenecut > 0")
   }
   // fps alone configures nothing: it either paces a VBV or the ABR
   // controller, and a silent no-op would hide a caller's mistake.
@@ -452,6 +480,8 @@ pub fn H264StreamEncoder::open(
     } else {
       None
     },
+    scenecut,
+    open_gop,
     prev_y: None,
     pending_qp: 0,
   })
@@ -666,11 +696,43 @@ pub fn H264StreamEncoder::push_frame(
     Err(e) => return Err(e)
   }
   // `§431`: `force_idr` is the legacy spelling of `pict_type = Idr` and wins.
-  let request = if force_idr { h264_pict_type_idr } else { pict_type }
-  // `§435`: CRF evaluates the picture's QP at push time (display-causal
-  // — the same recurrence the batch entries run over the whole array);
-  // a frame parked as pending B keeps its QP stashed until it codes.
-  let qp0 = if self.crf is Some(_) { self.crf_qp_for(y) } else { 0 }
+  let mut request = if force_idr { h264_pict_type_idr } else { pict_type }
+  // `§437`: an auto-detected cut (below) tags its keyframe/IDR AU.
+  let mut auto_cut = false
+  // `§435`/`§436`: both push-time controllers sample the raw luma against
+  // the previous push — CRF evaluates the display-causal QP (the same
+  // recurrence the batch entries run over the whole array; a frame parked
+  // as pending B keeps its QP stashed until it codes), scenecut decides
+  // whether this picture opens a new GOP. `prev_y` advances only when a
+  // consumer is on, so the default path stays bit-for-bit inert.
+  let prev = self.prev_y
+  let qp0 = if self.crf is Some(_) { self.crf_qp_for(prev, y) } else { 0 }
+  if self.scenecut > 0 && request == h264_pict_type_auto {
+    match prev {
+      Some(p) => {
+        let inter = h264_enc_crf_sad(p, y, self.height)
+        let intra = h264_enc_scenecut_intra(y, self.height)
+        let row = y.length() / self.height
+        let samples = (self.height / 2).to_int64() * (row / 2).to_int64()
+        if h264_enc_scenecut_cut(inter, intra, samples, self.scenecut) {
+          // Never the sequence's own first picture (it is the IDR already).
+          // `§437`: open-GOP cuts take the non-IDR keyframe instead.
+          if self.next_display - self.gop_start > 0 {
+            request = if self.open_gop {
+              h264_pict_type_keyframe
+            } else {
+              h264_pict_type_idr
+            }
+            auto_cut = true
+          }
+        }
+      }
+      None => ()
+    }
+  }
+  if self.crf is Some(_) || self.scenecut > 0 {
+    self.prev_y = Some(y)
+  }
   match self.vbv {
     Some(vbv) =>
       return self.push_vbv(
@@ -680,6 +742,7 @@ pub fn H264StreamEncoder::push_frame(
         vbv,
         pict_type=request,
         qp_hint=qp0,
+        recovery=auto_cut,
         a53~,
         sei_unregistered~,
       )
@@ -721,6 +784,9 @@ pub fn H264StreamEncoder::push_frame(
       a53~,
       sei_unregistered~,
       roi=self.roi,
+      // `§437`: auto-detected open-GOP cuts declare their recovery point
+      // (explicit Keyframe requests keep the §431 bytes).
+      recovery_sei=auto_cut,
     )
   }
   // `§431`: a P request codes this picture now; a pending B picture's
@@ -1068,6 +1134,10 @@ fn H264StreamEncoder::stream_i(
   sei_unregistered~ : Bytes? = None,
   /// `§429`: this picture's ROI map (see `push_frame`).
   roi~ : Array[H264Roi] = [],
+  /// `§437`: emit a `recovery_point` SEI before the slice (open-GOP
+  /// scenecut keyframes; explicit `Keyframe` requests keep the §431
+  /// bytes via the default).
+  recovery_sei~ : Bool = false,
 ) -> Result[Unit, String] {
   self.fn_counter = self.fn_counter + 1
   let first = if self.cabac {
@@ -1147,6 +1217,11 @@ fn H264StreamEncoder::stream_i(
     Some(v) =>
       au.push(h264_enc_sei_pic_timing(v, cpb_delay, dpb_output_delay=dpb_delay))
     None => ()
+  }
+  // `§437`: the recovery point rides the AU after any pic_timing and
+  // before the slice (the §427 injection position).
+  if recovery_sei {
+    au.push(h264_enc_sei_recovery_point(0))
   }
   au.push(first.annexb)
   let total = h264_enc_concat(au)

@@ -7,7 +7,15 @@
 
 ## 0. 一句话定位
 
-用 MoonBit 逐模块重写 FFmpeg 9.0.2 的**纯算法**部分。当前覆盖：
+用 MoonBit 逐模块重写 FFmpeg 9.0.2 的**纯算法**部分。
+
+> **本项目只做 wasm（用户决定，2026-11-17 起常设约束）。** 一切设计、
+> 交付、验证、性能与测试决策都以 wasm（及 wasm-gc）为准；native-only
+> 的功能不是交付物（C FFI 绑定一律不做，已做的以注释形态留档——见
+> §2 的 wasm-only 规则与 `libavcodec/x264`、`ffref/` 两个下线先例）。
+> 新增代码默认面向 wasm；确需 native 的仅限测试基建，且不得成为交付门。
+
+当前覆盖：
 
 - **libavutil**：数学/有理数、CRC/Adler-32、Base64、MD5、SHA-1/224/256、avstring、
   RC4、AES(ECB/CBC)、XTEA、TEA、Blowfish、CAST-128、AES-CTR；另有 `@v128` SIMD 版：
@@ -719,10 +727,18 @@ C:\Users\milkb\.moon\bin\moon.exe test  --no-render   # 必须全绿
   这些套件的失败/陈旧钉值不作为交付门，也不为其发起重钉。已落地的
   oracle 代码与测试以逐行注释形态留在原处（历史证据），`ffref/moon.pkg`
   已注释置空、`ffref_stub.c` 带"未接线"头注；恢复 = 取消注释并还原
-  moon.pkg。注意区分：`libavcodec/x264` 的**绑定本体与绑定自测**
-  （`X264Encoder`、lifecycle/输入格式/options/pict_type/round-trip 族）
-  是编码能力交付物，不是 oracle，照常维护；`libavcodec/*.mbt` 里的
+  moon.pkg。注意区分：`libavcodec/*.mbt` 里的
   ffmpeg-arbitrated 黑盒钉值测试跑在纯 wasm、不调用 C oracle，照常维护。
+- **wasm-only（用户决定，2026-11-17 起，§0 置顶常设约束的执行细则）**：
+  本项目只在 wasm 里使用——native-only 的功能一律不是交付物。
+  `libavcodec/x264`（libx264 绑定，
+  含 §424a 时保留的绑定本体与自测）已整体注释下线（moon.pkg 置空 +
+  全部 .mbt 逐行注释 + stub 带"未接线"头注；README.mbt.md 代码块降级
+  `mbt nocheck`），H.264 编码能力由纯 MoonBit 编码器独家承担
+  （`h264_encode_frames`/`_cabac`/`H264StreamEncoder`/`video_encode` 门
+  面，§376-§437）。**不重建、不扩展、不重跑**任何 native 绑定；`cmd/`
+  CLI 的 native host I/O（`--stream` 分块读写）保留——wasm 侧有对应实
+  现（`host_io_wasm.mbt`），是同一 CLI 的双后端适配而非多余编码器。
 - **编码器测试按「文件」跑，不要整包**：libavcodec 整包 wasm 会撞
   `__moonbit__init` 局部上限（见 §6）/ moonrun 挂起。**2026-11-17（§427）起
   `-f` 族过滤与包级跑法一并失效**：moonrun 的 `--test-args` JSON 列出包内
@@ -1353,6 +1369,19 @@ $msg | git commit -F -
 - 目前 **libavutil 内唯一**一处「按规范而非按 C 源码逐行」实现的是 `aes.mbt` 的轮函数
   （FIPS-197）；libavcodec 的 Huffman 规范化码另有等效性说明。均在 README 记录理由；
   改动实现方式时必须在源码头与 README 同步记录。
+- **能力面闸门（2026-11-17 立，凌驾于"对齐上游"之上）**：本项目
+  `preferred_target = "wasm"`。判断一个特性"要不要做"的**唯一**标准是
+  **wasm 端有没有触发场景**，不是"上游有没有这个特性"。
+  - 新增能力面前，先在提案里写清触发场景：哪个门面/CLI 路径、哪类输入会走到、
+    不做会坏掉什么。写不出来就**不进 backlog**，也不写交接文档。
+  - **禁止把上游 x264 / FFmpeg 的 feature list 当路线图抄**。x264 服务的是压片厂与
+    广播（4:4:4、12-bit、mb_info、STEREO3D、B 金字塔、MB-tree），浏览器里的 wasm
+    编码器不消费这些；"x264 有而我们没有"本身不构成理由。
+  - `supported_targets = "native"` 的包（`libavcodec/x264/`）**wasm 构建看不见**，
+    对该目标零收益。任何"补全绑定"的切片必须先回答"wasm 侧谁用得上"，
+    否则不做（§424a 的 oracle 下线同理）。
+  - 已落地的能力面**不回删**（测试与钉值成本高于收益），但默认关闭的保持关闭、
+    opt-in 的保持 opt-in，不再为其二次扩面。
 
 ---
 

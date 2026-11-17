@@ -14405,3 +14405,151 @@ binter8 随下述收口转绿）+ 全模块 wasm `moon check --deny-warn` 0 错 
 - 探针定位法沿用：AU 逐段尺寸 + 首个分歧字节 ±16 hex dump，n=2 消减变量
   一轮定根因（qp 全等仍差 → 与 QP 序列无关 → base_qp）。
 交接见 `AGENT_HANDOFF_2026-11-17_H264_CRF.md`。
+## §436 H.264 流式 scenecut 场景切换自动 IDR（x264 `--scenecut`）（2026-11-17）
+
+日期：2026-11-17
+上游对齐：x264 `--scenecut`（0..=100，越高越激进；0=关）。opt-in，
+缺省 0 时所有流逐字节不变。接 §435（交接清单「scenecut + open-GOP」的
+scenecut 半片；open-GOP keyframe 模式 + recovery point SEI 留下片）。
+
+### 检测器（`h264_enc_scenecut.mbt`，整数确定性）
+
+- **inter 代理** = SAD(上一显示帧, 当前帧)——复用 §435 CRF 的隔行隔字节
+  子采样 SAD（`h264_enc_crf_sad`）。
+- **intra 代理** = 同网格空间梯度 `|p[x]−p[x−1]| + |p[x]−p[row]|`
+  （帧内预测残差代理；每样本累加两条边，固有 ×2 尺度由阈值吸收）。
+- 决策：`inter*100 ≥ intra*(100−scenecut)` 即切（s=40 → inter 达 intra
+  的 60% 切；s=100 任何 inter 活动都切——x264 极端语义，静态 inter=0
+  永不切）。绝对地板 `inter*16 ≥ samples`（每 16 个采样像素 1 单位）
+  防平坦噪声误切；intra=0 且 inter>0（平坦→纹理硬切）直接判切。
+- 全整数、显示序因果——流式专属（批式用显式 `pict_types`）。
+
+### 接线
+
+- **流式**：`H264StreamEncoder` 增 `scenecut : Int32`；`open(scenecut~=0)`
+  + 0..=100 校验。检测在 `push_frame` 与 VBV 分派**之前**：auto cut 直接
+  映射为 `request = h264_pict_type_idr`，§431 的既有 IDR 路径（pending B
+  闭合为尾 P → stream_idr；VBV 侧 `vbv_picture(Idr)` 的 mid-stream 重
+  init delay）全数复用。首帧不判（d==0 本就是 IDR）；显式 `pict_type`/
+  `force_idr` 优先（auto 只在 request==auto 时评估）。
+- **prev_y 生命周期统一**：原 §435 的 `crf_qp_for` 自读自写 `prev_y`，
+  本片重构为 push_frame 统一持有（`crf_qp_for(prev, y)` 纯函数化），
+  crf/scenecut 任一开启时推进——CRF 决策值与顺序不变（7/7 回归钉住）。
+- **门面/CLI**：`VideoEncConfig.scenecut` + 流式 open 透传；
+  `--scenecut`（0..=100）+ 帮助行。
+
+### 测试
+
+`libavcodec/h264_enc_scenecut_test.mbt` 7 个黑盒用例：
+
+1. 缺省 0 == 不传参逐字节；恰好 1 个 IDR slice NAL；
+2. 硬切（display 3 奇数位，B 调度）：第二个 IDR 插入、8 帧全解码、
+   基线对照；
+3. 平滑漂移不切（s=40）；真静态序列（全同帧）s=100 也不切；
+4. 显式 pict_type=P 在切点压制 auto IDR；
+5. CRF 组合（切 IDR 保留 + 8 帧解码）；在线 VBV 组合（150k/120k@25 桶
+   下 mid-stream IDR 可解——小桶会在 IDR AU 撞 QP51 下限，属桶容量
+   物理约束）；
+6. 门面 == 直调流式逐字节；
+7. 越界（101/-1）exact 消息。
+
+CLI `options_wbtest.mbt` +1（27/27）：默认 0、40 解析与透传、四组拒收、
+切点流 ≠ 缺省流、8 帧解码。
+
+验证：scenecut 7/7 + CLI 27/27 + 流式回归 5 文件（stream/stream_vbv/
+stream_abr/pict_type/idr）全绿 + facade 7/7 + 8 个 h264_enc wbtest
+（wasm-gc）8/8 + 全模块 wasm `moon check --deny-warn` 0 错 0 警。
+
+### 语义边界（入档）
+
+- 代理式检测（非 x264 的 lowres SATD 双成本）：运动剧烈但非切换的内容
+  可能触发切（x264 同类边界），阈值即调节此权衡。
+- 无 x264 的 min-keynet/GOP 偏置：切点可与上一 IDR 任意近（除首帧外）。
+- 批式入口不接（显式 `pict_types` 等价覆盖）。
+
+交接见 `AGENT_HANDOFF_2026-11-17_H264_SCENECUT.md`。
+
+## §437 H.264 流式 open-GOP 场景切换——keyframe + recovery point SEI（2026-11-17）
+
+日期：2026-11-17
+上游对齐：x264 `--open-gop`。接 §436（scenecut 的开放 GOP 半片）。
+opt-in（`open_gop~=false`），缺省关闭时 §436 流逐字节不变。
+
+### 写端
+
+- `h264_enc_sei_recovery_point(cnt)`（h264_enc_ps.mbt）：SEI type 6，
+  payload = `ue(recovery_frame_cnt)` + 4 零位（exact_match/broken_link/
+  changing_slice_group_idc——解码器 skip），镜像自家
+  `decode_recovery_point` 的位序。auto 切点写 `cnt = 0`。
+- `stream_i` 增 `recovery_sei~ : Bool = false`：AU 组装在 pic_timing
+  之后、slice 之前注入（§427 统一注入位）。
+
+### 接线
+
+- 流式 `open(open_gap~=false)`：校验 `open_gop 需要 scenecut>0`（无
+  检测器则无切点可开放，防呆）；auto 切分派 `request = keyframe`
+  （closed 仍 idr）+ `auto_cut` 局部标志。
+- **显式 `pict_type=Keyframe` 不带 SEI**（保 §431 字节钉值）——SEI 只
+  跟 auto 检测切点（`auto_cut` 标志区分）。
+- 透传：非 VBV `stream_i(recovery_sei=auto_cut)`；VBV 事务
+  `push_vbv(recovery~)` → `vbv_picture(recovery~)` → I 分支
+  `stream_i(recovery_sei=recovery)`。
+- 门面 `VideoEncConfig.open_gop` + CLI `--open-gop`（要求 `--scenecut`）。
+
+### 测试
+
+`h264_enc_scenecut_test.mbt` +4 用例（11/11）：
+
+1. open-gop 切点：无第二 IDR（type5=1）+ **恰好一个 recovery SEI** +
+   8 帧解码 + 解码帧 `sei_recovery_frame_cnt==0` 恰好一帧（SEI 挂帧）；
+2. 在线 VBV 组合可解、形状保持；
+3. `open_gop 无 scenecut` 拒收 + 显式 Keyframe 无 SEI（0 个）与 auto
+   切（1 个）的字节区分；
+4. 门面 == 直调逐字节。
+
+CLI `options_wbtest.mbt` +1（28/28）：拒收/解析/透传/切点 AU 变化/8 帧
+解码。
+
+验证：scenecut 11/11 + CLI 28/28 + 流式回归（stream/stream_vbv/
+pict_type/crf/facade）全绿 + 全模块 wasm deny-warn 0/0。
+
+### 坑（新增）
+
+- **SEI NAL 的 nal_unit_type 恒为 6**——数 recovery SEI 不能数 NAL
+  类型（pic_timing/buffering_period 同为 type 6 NAL），必须解 SEI
+  payload 首字节（本仓每 SEI 独立 NAL，首 payload 字节即判据）。
+- CLI fail() 抛 `Failure(...)` 包装——wbtest 断言拒收即可，不要
+  inspect 消息内容（与既有 wbtest 口径一致）。
+
+语义边界：open-GOP 切点前无 leading B（本仓 B 调度把 pending B 闭合为
+尾 P，x264 的跨 GOP 前向 B 不实现，入档）。
+
+交接见 `AGENT_HANDOFF_2026-11-17_H264_OPENGOP.md`。
+
+## §437a x264 绑定整体下线——wasm-only 决定（2026-11-17）
+
+日期：2026-11-17
+**用户指令**：「本项目只用在 wasm 里面，把多余的功能注释掉，比如 h264
+有多个编码器，留下能用、好用的就可以。」
+
+- **范围定音**：H.264 的多余编码路径 = `libavcodec/x264`（libx264
+  native FFI 绑定，native-only，wasm 视图本就为空）。**保留** = 纯
+  MoonBit 编码器全套（`h264_encode_frames`/`_cabac`/`H264StreamEncoder`/
+  `video_encode` 门面，§376-§437）；`cmd/encode-h264` CLI 的 native
+  host I/O（`--stream`）保留——wasm 侧有 `host_io_wasm.mbt` 对应实现，
+  是同一 CLI 的双后端适配而非多余编码器；`ffref/` 维持 §424a 空置。
+- **下线形态（ffref 先例）**：`x264/moon.pkg` 头注 + 原配置逐行注释
+  （包从构建移除）；全部 24 个 `.mbt`（ffi/x264 + 22 wbtest）逐行
+  `//`（文档注释保留）；`libx264_stub.c`/`asan_probe_harness.c` 加
+  「未接线」头注；`README.mbt.md` 加下线头注且 5 个 `mbt check` 代码
+  块降级 `mbt nocheck`（包符号消失后文档代码块不能再编译）。幂等工具
+  `.scratch/x264_off.py`（用后入回收站）。
+- **该决定取代 §424a 的保留边界**（「绑定本体与绑定自测是编码能力
+  交付物」就此失效——第二次边界收缩：oracle → 绑定本体）。
+- 门：全模块 wasm `moon check --deny-warn` 0 错 0 警 + 核心套件抽跑
+  （scenecut 11/11、crf 7/7、stream 8/8、facade 7/7）全绿——x264 本
+  不参与 wasm 构建，下线是构建面/文档面清理，wasm 行为零变化。
+- **agent.md 落规**：§0「一句话定位」置顶 wasm-only 常设约束声明
+  （一切设计/交付/验证/性能/测试决策以 wasm 及 wasm-gc 为准；C FFI
+  绑定一律不做，已做的以注释形态留档；native 仅限测试基建且不得成为
+  交付门），§2 执行细则与本条呼应。

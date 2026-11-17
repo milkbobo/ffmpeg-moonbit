@@ -1,3 +1,7 @@
+// ⛔ 未接线（用户决定 2026-11-17）：wasm-only——libx264 native 绑定下线
+// （agent.md §2），moon.pkg 已注释置空，本文件不再参与任何构建；内容
+// 原样保留为历史证据。
+//
 // C wrapper over FFmpeg's avcodec encoder API for the MoonBit libavcodec/x264
 // binding (the libx264 wrapper is FFmpeg's portable software H.264 encoder).
 // Only the C ABI surface lives here; everything MoonBit-visible is wrapped

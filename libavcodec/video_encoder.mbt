@@ -83,6 +83,15 @@ pub(all) struct VideoEncConfig {
   /// `§435`: constant rate factor (0.0..=51.0, negative = off; x264
   /// `--crf`). Mutually exclusive with `target_bytes`; composes with VBV.
   crf : Double
+  /// `§436`: scene-cut threshold 0..=100 (x264 `--scenecut`; 0 = off).
+  /// Streaming only: a push whose inter SAD against the previous display
+  /// frame reaches the threshold codes as an IDR (see
+  /// `h264_enc_scenecut.mbt`).
+  scenecut : Int32
+  /// `§437`: open-GOP scene cuts (x264 `--open-gop`): detected cuts code
+  /// as non-IDR keyframes carrying a `recovery_point` SEI. Requires
+  /// `scenecut > 0`.
+  open_gop : Bool
   vbv_maxrate : Int32
   vbv_bufsize : Int32
   fps : Int32
@@ -132,6 +141,8 @@ pub fn VideoEncConfig::new(width~ : Int32, height~ : Int32) -> VideoEncConfig {
     aq_strength: 1,
     target_bytes: 0,
     crf: -1.0,
+    scenecut: 0,
+    open_gop: false,
     vbv_maxrate: 0,
     vbv_bufsize: 0,
     fps: 0,
@@ -198,6 +209,8 @@ pub fn VideoEncoder::open(
           vbv_bufsize=config.vbv_bufsize,
           fps=config.fps,
           crf=config.crf,
+          scenecut=config.scenecut,
+          open_gop=config.open_gop,
           deblock=config.deblock,
           deblock_alpha=config.deblock_alpha,
           deblock_beta=config.deblock_beta,

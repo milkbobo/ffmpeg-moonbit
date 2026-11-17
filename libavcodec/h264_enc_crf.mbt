@@ -117,19 +117,22 @@ fn h264_enc_crf_qps(
 
 ///|
 /// `§435` streaming: the display-causal CRF QP for the frame being
-/// pushed (advances the controller; the raw luma of the previous push is
-/// kept for the SAD). Only called with CRF on.
-fn H264StreamEncoder::crf_qp_for(self : H264StreamEncoder, y : Bytes) -> Int32 {
+/// pushed. `prev` is the raw luma of the previous push (the caller owns
+/// the `prev_y` lifecycle since `§436` — scenecut samples the same
+/// plane). Advances the controller; only called with CRF on.
+fn H264StreamEncoder::crf_qp_for(
+  self : H264StreamEncoder,
+  prev : Bytes?,
+  y : Bytes,
+) -> Int32 {
   let rc = match self.crf {
     Some(r) => r
     None => return self.qp
   }
-  let q = match self.prev_y {
+  match prev {
     None => rc.base
-    Some(prev) => rc.qp_for(h264_enc_crf_sad(prev, y, self.height))
+    Some(p) => rc.qp_for(h264_enc_crf_sad(p, y, self.height))
   }
-  self.prev_y = Some(y)
-  q
 }
 
 ///|

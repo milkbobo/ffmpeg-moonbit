@@ -15,6 +15,10 @@ fn main raise {
     println(
       "  [--crf 0..51] constant rate factor (decimals; replaces --target-bytes as the quality selector)",
     )
+    println("  [--scenecut 0..100] auto-IDR on scene cuts, 0 = off (streaming)")
+    println(
+      "  [--open-gop] cuts as recovery-point keyframes (requires --scenecut)",
+    )
     println(
       "  streaming VBV supports P/B pictures; streaming ABR is unsupported",
     )

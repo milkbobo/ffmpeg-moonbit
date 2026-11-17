@@ -1,3 +1,8 @@
+<!--
+⛔ 下线（用户决定 2026-11-17）：wasm-only——本 native 绑定包整体注释
+（agent.md §2），文档保留为历史证据。H.264 编码能力由纯 MoonBit 编码器
+承担（libavcodec/h264_encode*.mbt / video_encoder.mbt）。
+-->
 # Native H.264 input formats
 
 The libx264 binding accepts planar 4:2:0, 4:2:2 and 4:4:4, each at
@@ -108,7 +113,7 @@ Packed RGB goes through the separate `libx264rgb` encoder: open with
 keeps RGB plane order: the bitstream is 4:4:4 and decodes to GBR
 planar output (sink kind 7).
 
-```mbt check
+```mbt nocheck
 ///|
 test "native bgr24 encoder example" {
   if @x264.x264_supports("libx264rgb", @x264.Bgr24) {
@@ -138,7 +143,7 @@ test "native bgr24 encoder example" {
 }
 ```
 
-```mbt check
+```mbt nocheck
 ///|
 test "native nv12 encoder example" {
   if @x264.x264_supports("libx264", @x264.Nv12) {
@@ -171,7 +176,7 @@ test "native nv12 encoder example" {
 }
 ```
 
-```mbt check
+```mbt nocheck
 ///|
 test "native grayscale encoder example" {
   if @x264.x264_supports("libx264", @x264.Gray8) {
@@ -198,7 +203,7 @@ test "native grayscale encoder example" {
 }
 ```
 
-```mbt check
+```mbt nocheck
 ///|
 test "native 444 encoder example" {
   let fmt = @x264.Yuv444p
@@ -233,7 +238,7 @@ Both `x264_probe_frames` and `x264_decode_annexb` support these formats.
 The latter exposes the visible Y/Cb/Cr planes through `frame_y`, `frame_u`,
 and `frame_v`; each call returns a MoonBit-owned copy.
 
-```mbt check
+```mbt nocheck
 ///|
 test "native full-range encoder example" {
   if @x264.x264_supports("libx264", @x264.Yuvj420p) {

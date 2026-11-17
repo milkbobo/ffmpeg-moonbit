@@ -1,3 +1,7 @@
+// ⛔ 未接线（用户决定 2026-11-17）：wasm-only——libx264 native 绑定下线
+// （agent.md §2），moon.pkg 已注释置空，本文件不再参与任何构建；内容
+// 原样保留为历史证据。
+//
 // Standalone AddressSanitizer harness for the libavcodec/x264 FFI stub.
 //
 // The official run-asan.py does not fit this toolchain: MoonBit's

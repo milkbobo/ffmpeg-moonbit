@@ -18,6 +18,10 @@ priv struct Options {
   /// `§435`: constant rate factor `--crf` (0..=51, decimals allowed;
   /// negative = unset — `qp` stays the quality selector).
   crf : Double
+  /// `§436`: scene-cut threshold `--scenecut` (0..=100, 0 = off).
+  scenecut : Int32
+  /// `§437`: open-GOP cuts (`--open-gop`; requires `--scenecut`).
+  open_gop : Bool
   stream : Bool
   b_slices : Bool
   b_parts : Bool
@@ -83,7 +87,8 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--no-intra-in-b"
       | "--no-intra4x4-in-b"
       | "--no-weightp"
-      | "--no-weightp-b" => {
+      | "--no-weightp-b"
+      | "--open-gop" => {
         if values.contains(arg) {
           fail("encode-h264: repeated option \{arg}")
         }
@@ -108,7 +113,8 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--vbv-maxrate"
       | "--vbv-bufsize"
       | "--fps"
-      | "--crf" => {
+      | "--crf"
+      | "--scenecut" => {
         if values.contains(arg) {
           fail("encode-h264: repeated option \{arg}")
         }
@@ -268,6 +274,16 @@ fn parse_options(args : Array[String]) -> Options raise {
   if crf >= 0.0 && target_bytes > 0 {
     fail("encode-h264: --crf and --target-bytes are mutually exclusive")
   }
+  // `§436`: 0 disables; 100 cuts on any inter activity.
+  let scenecut = number(values, "--scenecut", 0)
+  if scenecut < 0 || scenecut > 100 {
+    fail("encode-h264: --scenecut must be in 0..=100")
+  }
+  // `§437`: open-GOP cuts ride the detector.
+  let open_gop = values.contains("--open-gop")
+  if open_gop && scenecut <= 0 {
+    fail("encode-h264: --open-gop requires --scenecut")
+  }
   if values.contains("--cabac-rd") &&
     !values.contains("--cabac") &&
     !values.contains("--no-cabac") {
@@ -309,6 +325,8 @@ fn parse_options(args : Array[String]) -> Options raise {
     bufsize,
     fps,
     crf,
+    scenecut,
+    open_gop,
     stream: values.contains("--stream"),
     b_slices: !no_b,
     b_parts: !no_b && !values.contains("--no-b-parts"),
@@ -403,6 +421,8 @@ fn video_config(opts : Options) -> @codec.VideoEncConfig {
     aq_strength: opts.aq_strength,
     target_bytes: opts.target_bytes,
     crf: opts.crf,
+    scenecut: opts.scenecut,
+    open_gop: opts.open_gop,
     vbv_maxrate: opts.maxrate,
     vbv_bufsize: opts.bufsize,
     fps: opts.fps,
