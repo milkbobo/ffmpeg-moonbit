@@ -54,12 +54,16 @@ run_batch() {
 }
 
 batch_files() {
-  # $1 = target, $2 = max files per batch
+  # $1 = target, $2 = max files per batch, rest = file list
+  # NOTE: the file list is passed as arguments, never through a pipe — a
+  # pipeline would run this in a subshell and the TPASS/TFAIL totals would
+  # be lost.
   local target="$1"
-  local maxn="${2:-$BATCH_FILES}"
+  local maxn="$2"
+  shift 2
   local -a cur=()
   local f
-  while IFS= read -r f; do
+  for f in "$@"; do
     [ -z "$f" ] && continue
     cur+=("$f")
     if [ ${#cur[@]} -ge "$maxn" ]; then
@@ -71,17 +75,24 @@ batch_files() {
   return 0
 }
 
+enc_bb=()
+while IFS= read -r f; do enc_bb+=("$f"); done < <(ls libavcodec/*_test.mbt 2>/dev/null | grep -v '_wbtest\.mbt$' | grep 'h264_enc')
+rest_bb=()
+while IFS= read -r f; do rest_bb+=("$f"); done < <(ls libavcodec/*_test.mbt 2>/dev/null | grep -v '_wbtest\.mbt$' | grep -v 'h264_enc')
+enc_wb=()
+while IFS= read -r f; do enc_wb+=("$f"); done < <(ls libavcodec/*_wbtest.mbt 2>/dev/null | grep 'h264_enc')
+rest_wb=()
+while IFS= read -r f; do rest_wb+=("$f"); done < <(ls libavcodec/*_wbtest.mbt 2>/dev/null | grep -v 'h264_enc')
+
 echo "=== black-box (wasm) ===" | tee -a "$LOG"
 # H.264 encoder tests are RD-heavy (h264_enc_brc_test alone takes ~220s),
 # so they get their own small batches.
-ls libavcodec/*_test.mbt 2>/dev/null | grep -v '_wbtest\.mbt$' | grep 'h264_enc' \
-  | batch_files wasm 5
-ls libavcodec/*_test.mbt 2>/dev/null | grep -v '_wbtest\.mbt$' | grep -v 'h264_enc' \
-  | batch_files wasm 15
+batch_files wasm 5 "${enc_bb[@]}"
+batch_files wasm 15 "${rest_bb[@]}"
 
 echo "=== white-box (wasm-gc) ===" | tee -a "$LOG"
-ls libavcodec/*_wbtest.mbt 2>/dev/null | grep 'h264_enc' | batch_files wasm-gc 5
-ls libavcodec/*_wbtest.mbt 2>/dev/null | grep -v 'h264_enc' | batch_files wasm-gc 15
+batch_files wasm-gc 5 "${enc_wb[@]}"
+batch_files wasm-gc 15 "${rest_wb[@]}"
 
 echo "=== SUMMARY ===" | tee -a "$LOG"
 echo "libavcodec: passed=$TPASS failed=$TFAIL  batches ok=$NPASS bad=$NFAIL  elapsed=${ELAPSED}s" | tee -a "$LOG"

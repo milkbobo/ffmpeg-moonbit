@@ -14896,8 +14896,8 @@ CDF 槽位 oracle）。
 |---|---|
 | 仓库根（保留） | `README.md`、`LICENSE.md`、`LEGAL.md`、`COPYING.LGPLv2.1`、`COPYING.LGPLv3`（平台识别与许可证惯例） |
 | `doc/` | `PORTING_HISTORY.md`（本文）、`agent.md`（维护手册）、`项目申报书.md` |
-| `doc/handoff/` | 130 篇切片交接文档（`AGENT_HANDOFF_*.md` 126 + `AV1_AGENT_HANDOFF.md` + `AV1_ENC_HANDOFF_2026-11-17/18.md` + `H264_AGENT_HANDOFF.md`） |
-| `doc/reports/` | `HEREDOC_ISSUE_REPORT.md` |
+| `doc/handoff/` | 130 篇切片交接文档（`AGENT_HANDOFF_*` 126 篇 + `AV1_AGENT_HANDOFF` + `AV1_ENC_HANDOFF_2026-11-17` + `AV1_ENC_HANDOFF_2026-11-18` + `H264_AGENT_HANDOFF`） |
+| `doc/reports/` | `HEREDOC_ISSUE_REPORT` |
 
 全部经 `git mv` 迁移以保留文件历史。
 
@@ -14911,22 +14911,22 @@ CDF 槽位 oracle）。
   因此 `cmd/encode-h264/README.md` 这类同名文件不会被误伤。
 - `scripts/_check_doc_links.py` —— 校验全仓 92 处引用是否可解析。
 
-首轮改写 56 个文件（含 22 个源码 `.mbt` 的文档注释——`PORTING_HISTORY.md` /
-`agent.md` / `AGENT_HANDOFF_*.md` 的路径提及同步改为 `doc/` 前缀）；
+首轮改写 56 个文件（含 22 个源码 `.mbt` 的文档注释——`PORTING_HISTORY` /
+`agent` / `AGENT_HANDOFF_*` 的路径提及同步改为 `doc/` 前缀）；
 第二轮补掉 9 个「指向留在根目录的文件（README/LICENSE/LEGAL）」的相对路径；
-第三轮统一 39 个文件里的**纯文本**提及（无反引号、无链接，如「见 agent.md §2」）。
+第三轮统一 39 个文件里的**纯文本**提及（无反引号、无链接，如「见 agent §2」）。
 
 顺带清偿 **11 处历史断链**（移动前就断的，非本次移动所致）：
 
-- `PORTING_HISTORY` 的 `_AAC_KBD_TNS.md` → 补全为
+- `PORTING_HISTORY` 的 `_AAC_KBD_TNS` → 补全为
   `doc/handoff/AGENT_HANDOFF_2026-11-09_AAC_KBD_TNS.md`；
-- `PORTING_HISTORY` 的 `README.mbt.md` → 笔误，改 `README.md`；
-- 5 篇交接文档引用的旧记忆文件（`av1-pixel-status.md`、`vp9-slice-status.md`、
-  `ffmpeg-moonbit-migration-progress.md`、`opus-encoder-status.md`、
-  `h264-enc-status.md`）→ 这些文件早已并入本仓 `.workbuddy/memory/`，
+- `PORTING_HISTORY` 的 `README.mbt` → 笔误，改 `README.md`；
+- 5 篇交接文档引用的旧记忆文件（`av1-pixel-status`、`vp9-slice-status`、
+  `ffmpeg-moonbit-migration-progress`、`opus-encoder-status`、
+  `h264-enc-status`）→ 这些文件早已并入本仓 `.workbuddy/memory/`，
   引用改指 `.workbuddy/memory/MEMORY.md`；
-- `AGENT_HANDOFF_2026-11-11_H264_AQ_WIP.md`（从未入库的 WIP 半成品）→
-  改为指向本片自身 `AGENT_HANDOFF_2026-11-11_H264_AQ.md`。
+- `AGENT_HANDOFF_2026-11-11_H264_AQ_WIP`（从未入库的 WIP 半成品）→
+  改为指向本片自身 `doc/handoff/AGENT_HANDOFF_2026-11-11_H264_AQ.md`。
 
 ### README 更新
 
@@ -14948,5 +14948,37 @@ CDF 槽位 oracle）。
 - **AV1 解码**：解码侧 273/273 用例全绿（20 个向量包 260 + `av1_lossy_vectors` 4
   + 黑盒 3 + 白盒 6）。
 - **AV1 编码**：四套件 31/31 全绿（msac 7 + seq 5 + frame 7 + tile 12）。
+
+### 全量回归：Windows 命令行 32K 上限 + 一批首次暴露的既有红
+
+跑全量时 `moon test`（整仓）与 `moon test -p libavcodec`（整包）都**长时间
+无输出后失败**：moon 会把目标包内每个 `.mbt` 的测试索引序列成 JSON，以
+`--test-args` 走**命令行**交给 `moonrun.exe`，而 libavcodec 主包有 563 个
+`.mbt`，JSON 远超 Windows 的 32767 字符上限 → `CreateProcessW` 报
+`os error 206`（"文件名或扩展名太长"）。症状极具误导性：构建目录长时间零
+更新、`moonc` CPU=0，第一反应会误判成 `.moon-lock` 死锁。与目标无关，
+`--target wasm` 与 `--target wasm-gc` 同样撞。
+
+规避：**显式列出测试文件分批跑**（黑盒 `*_test.mbt` → wasm，白盒
+`*_wbtest.mbt` → wasm-gc）。两个工具已入库：`scripts/_run_all_tests.sh`
+（逐包串行 + 单包超时 + 汇总）、`scripts/_run_libavcodec_tests.sh`
+（libavcodec 主包分批；`h264_enc_*` 单独小批——`h264_enc_brc_test` 单个
+就要 219 秒，一批塞 109 个文件会跑超 25 分钟仍未结束）。
+
+**本轮全量结果**：53 个包（不含 libavcodec 主包）**1275 通过 / 0 失败**
+（372 秒）+ libavcodec 主包分批 **998 通过 / 8 失败** = **2273/2281**。
+
+8 个失败全在 `libavcodec/h264_paff_realdata_wbtest.mbt`（PAFF 4:4:4 的
+`jm_paff_b_444` / `_b_444_10` / `_b_444_14` 的 **filt frame 1** 期望 MD5
+不符）。**已用 `git worktree` 在上一提交 `7b7ac5e` 上复现出完全相同的
+哈希**（`17ae65ae…` / `5422f388…` / `f9a3658d…`）→ 判为既有红，与本轮
+改动无关。成因是覆盖面而非新 bug：libavcodec 的 195 个白盒 wbtest 在 wasm
+目标下**全部撞 `local count too large` 编译失败**，历史上从未真正进入全量
+回归，本轮首次以 wasm-gc 目标分批跑完才把它们暴露出来。
+
+（worktree 复现的附带发现：worktree 路径每长 1 个字符，563 个文件的 JSON
+就长 563 字符——放在仓库内的 `.worktrees/paff-check` 因路径过长同样撞 206，
+复现实验必须放在短路径（如 `D:\pw`）下做。）
+
 - **纠错**：本仓长期记忆里「VP9 帧间、AV1 像素未做」一条已过期（AV1 像素解码
   早在 2026-10 即收口），就地改写为解码侧清单 + 编码侧进度两段。

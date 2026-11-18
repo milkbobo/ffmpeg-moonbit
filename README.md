@@ -486,7 +486,18 @@ moon test --target wasm --no-render
 moon info --target wasm
 ```
 
-最近一次完整验证（2026-11-07）：Wasm 测试 **1708/1708** 通过，`moon check --target wasm --deny-warn` 与 `moon check --target native --deny-warn` 零警告，`moon info` 通过（`--target js` 有 1 处 `libavutil/moon.pkg` 的 `v128` 未使用告警，`git stash` 回退到上一提交后仍在，属历史遗留、与本轮无关）（新增 HLS/DASH 分段播放 15 项、master 选路与视频线 9 项、live 刷新 8 项、本地文件 `MediaFetch` 适配 6 项、滤波器类型码与缩放算法查询 2 项、DASH 动态 MPD 刷新 9 项、DASH 多 Period 续播 5 项、HLS 分离音轨 6 项、WebVTT 读取 14 项、HLS 字幕 rendition 9 项、DASH 字幕 Representation 9 项 + 分段毫秒换算 1 项、live 字幕跟窗 6 项、多语言字幕选择 8 项、多语言音轨选择 8 项 + 刷新预算白盒 1 项，与 libswresample 重采样 15 项、swscale 通用缩放 3 项 + RGB 组合 5 项（含奇宽 2 项）、422/444 组合 8 项（含
+最近一次完整验证（2026-11-18）：Wasm 测试 **2273/2281** 通过（2273 通过 /
+8 失败）。8 个失败全部落在 `libavcodec/h264_paff_realdata_wbtest.mbt` 的
+PAFF 4:4:4 filtered 期望值（`jm_paff_b_444` / `_b_444_10` / `_b_444_14`
+的 filt frame 1），**已在上一提交 `7b7ac5e` 的独立 worktree 上复现出完全
+相同的哈希**（`17ae65ae…` / `5422f388…` / `f9a3658d…`），判为既有红、与
+本轮改动无关。根因是覆盖面：此前 libavcodec 的 195 个白盒 wbtest 在 wasm
+目标下全部撞 `local count too large` 编译失败，**从未真正进入全量回归**，
+本轮首次以 wasm-gc 目标按文件分批跑完才暴露。注意整包 `moon test -p
+libavcodec` 在 Windows 上会因 moonrun 的 `--test-args` JSON 超 32K 命令行
+上限报 `os error 206`（表现为长时间无输出后失败，勿误判为锁死），需按文件
+分批——工具见 `scripts/_run_all_tests.sh` 与 `scripts/_run_libavcodec_tests.sh`。
+2026-11-07 那轮的记录：Wasm 测试 **1708/1708** 通过，`moon check --target wasm --deny-warn` 与 `moon check --target native --deny-warn` 零警告，`moon info` 通过（`--target js` 有 1 处 `libavutil/moon.pkg` 的 `v128` 未使用告警，`git stash` 回退到上一提交后仍在，属历史遗留、与本轮无关）（新增 HLS/DASH 分段播放 15 项、master 选路与视频线 9 项、live 刷新 8 项、本地文件 `MediaFetch` 适配 6 项、滤波器类型码与缩放算法查询 2 项、DASH 动态 MPD 刷新 9 项、DASH 多 Period 续播 5 项、HLS 分离音轨 6 项、WebVTT 读取 14 项、HLS 字幕 rendition 9 项、DASH 字幕 Representation 9 项 + 分段毫秒换算 1 项、live 字幕跟窗 6 项、多语言字幕选择 8 项、多语言音轨选择 8 项 + 刷新预算白盒 1 项，与 libswresample 重采样 15 项、swscale 通用缩放 3 项 + RGB 组合 5 项（含奇宽 2 项）、422/444 组合 8 项（含
 奇尺寸）、422/444→RGB 组合 6 项、full-range 4 项、BT.709 4 项、FCC/SMPTE240M/BT.2020 7 项、10bit 缩放 5 项、奇宽源 2 项、重采样门面 3 项；同日 ffref 原生 oracle 整体注释停用后复验仍全绿）。零警告是本轮清账的结果：1127 处 `"..."` 字面量迁到 `b"..."`（字节字面量，拼接语义不变）、9 处把保留字 `ref` 当标识符、2 处 `SwsScaleError` 单变体使 `catch` 兜底与 `noraise` 分支不可达、3 处声明了却永不抛出的 `raise`、2 处未使用参数/局部变量、1 处调试残留函数；另补齐 `SwrFilterType::from_code`（对齐 `SWR_FILTER_TYPE_*` 的 0/1/2）与 `SwsPlanarScaler::algo` 两个小接口，让原先"只在测试里构造"的枚举变体和"只写不读"的字段各有正式入口。ffref 原生 oracle 差分已于 §345 复活并常驻（72/72：音频解码 MP3 定点逐字节/AAC/Opus、TS/MKV/WebM/MP4/fMP4 逐包、MJPEG/PNG 逐字节、HLS TS 与 DASH fMP4 路径式逐包差分、shine 编码逐字节与 AAC 互通，**Opus 编码与确定性 C 参考逐字节恒等**、AAC `AV_CODEC_CAP_DELAY` 帧计差分（§346 新增 `flush` 尾帧 API）；运行于 docker 镜像 `ffmpeg-moonbit-ffref:nine-ref`，命令见 `ffref/moon.pkg` 头注释），记录见 doc/PORTING_HISTORY §328-§332、§345 与 §346。H.264 等真实码流测试将输出与 FFmpeg 9.0.2 对拍；测试素材和生成说明位于各 `*_realdata_wbtest.mbt` 与 `*_test.mbt` 文件及 `scripts/`。
 
 ## 代码位置
