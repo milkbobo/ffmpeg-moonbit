@@ -112,7 +112,9 @@ def collect_calls():
 def write_probe(calls):
     PROBE_DIR.mkdir(parents=True, exist_ok=True)
     (PROBE_DIR / "moon.pkg").write_text(MOON_PKG, encoding="utf-8", newline="\n")
-    body = HEADER + "\nfn main() -> Unit {\n" + "\n".join(calls) + '\n  abort("end")\n}\n'
+    # main 带 raise：库里有 raises 错误类型的公开函数（如 decode_audio_file），
+    # 在无错误类型的 main 里直接调用会被 4122 拒绝
+    body = HEADER + "\nfn main raise {\n" + "\n".join(calls) + '\n  abort("end")\n}\n'
     (PROBE_DIR / "main.mbt").write_text(body, encoding="utf-8", newline="\n")
 
 
