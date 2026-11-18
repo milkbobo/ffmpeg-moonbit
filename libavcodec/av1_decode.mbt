@@ -537,8 +537,9 @@ fn av1_get_dc_sign_ctx(
 }
 
 ///|
-/// `read_golomb` from recon_tmpl.c.
-fn Av1Msac::read_golomb(self : Av1Msac) -> Int32 {
+/// `read_golomb` from recon_tmpl.c (pub: the encoder's round-trip tests
+/// exercise it against `encode_golomb`).
+pub fn Av1Msac::read_golomb(self : Av1Msac) -> Int32 {
   let mut len = 0
   let mut val = 1
   while self.decode_bool_equi() == 0 && len < 32 {
