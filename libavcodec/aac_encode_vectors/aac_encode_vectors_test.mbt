@@ -765,7 +765,7 @@ test "aac_lc_encoder_round_trip" {
 }
 
 ///|
-/// The opt-in perceptual rate control (`PORTING_HISTORY.md` §279): the same
+/// The opt-in perceptual rate control (`doc/PORTING_HISTORY.md` §279): the same
 /// programme as `aac_lc_encoder_round_trip`, but steady-state long frames are
 /// quantised by the ported 3GPP model + twoloop search instead of the
 /// simplified model and the frame-wide offset search.

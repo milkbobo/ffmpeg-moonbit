@@ -296,7 +296,7 @@ pub fn aac_encode_config(
 /// dB below the simplified model in SNR at the same bit rate, and the
 /// quantisation noise still exceeds the model's own thresholds on steady
 /// frames, so the default stays the path with the measured 30 dB round trip.
-/// `PORTING_HISTORY.md` §279 records the measurements and what is still open.
+/// `doc/PORTING_HISTORY.md` §279 records the measurements and what is still open.
 pub fn aac_encode_config_perceptual(
   sample_rate : Int32,
   channels : Int32,
@@ -403,7 +403,7 @@ pub fn aac_encode_config_with_ms(config : AacEncodeConfig) -> AacEncodeConfig {
 /// at 128 kbps) but did not flip it below the simplified arm (9.75 dB), so
 /// the default stays the measured path. The multi-window forms of PNS / IS /
 /// M-S remain future work and stay off on short frames.
-/// `PORTING_HISTORY.md` §303/§304 record the measurements.
+/// `doc/PORTING_HISTORY.md` §303/§304 record the measurements.
 ///
 /// It also turns `perceptual` on, like `aac_encode_config_with_pns` does:
 /// otherwise the flag would be a silent no-op.

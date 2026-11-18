@@ -13,7 +13,7 @@
 /// refill / protocol callback), and the dyn-buffer writer with its ×1.5+1
 /// growth policy.
 ///
-/// Conventions (MoonBit-forced diffs, see `README.md` §6 and `agent.md` §7):
+/// Conventions (MoonBit-forced diffs, see `README.md` §6 and `doc/agent.md` §7):
 ///   * error returns (`AVERROR(EINVAL)` & friends) become `Result[T, String]`
 ///     carrying the errno name; `AVERROR_EOF` is `Err("EOF")`.
 ///   * read/write callbacks take `(buf, start, len)` — a slice of a

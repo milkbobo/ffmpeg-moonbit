@@ -1,6 +1,6 @@
 <!--
 ⛔ 下线（用户决定 2026-11-17）：wasm-only——本 native 绑定包整体注释
-（agent.md §2），文档保留为历史证据。H.264 编码能力由纯 MoonBit 编码器
+（doc/agent.md §2），文档保留为历史证据。H.264 编码能力由纯 MoonBit 编码器
 承担（libavcodec/h264_encode*.mbt / video_encoder.mbt）。
 -->
 # Native H.264 input formats

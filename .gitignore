@@ -12,6 +12,8 @@ target
 # Local tooling / scratch directories
 .trash/
 .workbuddy/
+.codebuddy/
+.worktrees/
 # Scratch vectors / trace dumps (generation commands live in the test file headers)
 _tmp_sei/
 .scratch/
