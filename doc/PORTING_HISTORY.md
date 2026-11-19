@@ -15630,3 +15630,199 @@ n=4，从未暴露）。修复为 `anchor_gap_two = is_b_interleaved && i%2==0`�
 - 其余边界不变（单色/色度 SAO/B 片加权/多 slice/tile/VBV）。
 
 - 后续切片预告：VBV/ABR 码率控制 → 或 HEVC 编码器收尾项（单色/色度 SAO）。
+
+## 460. HEVC 编码器色度 SAO（opt-in）
+
+`hevc_encode_sequence` / `hevc_encode_frames` / `hevc_encode_intra_frame` 与
+`HevcStreamEncoder::open`、CLI `cmd/encode-hevc --chroma-sao` 新增可选
+`sao_chroma : Bool = false`：置位后 `slice_sao_chroma_flag = 1`，Cb/Cr 平面
+进入与 §453 luma 同款的 band-offset 决策（每 CTB 32-band 残差直方图、
+均值偏移、最大增益四连 band），色度 CTB 几何按 `ctb >> hshift/vshift`
+对齐（4:2:0 半宽高、4:2:2 半宽全高、4:4:4 全尺寸）。默认关闭，既有钉值
+流字节不变。纯 MoonBit、wasm-only。
+
+### 组件耦合（镜像 `hevc_sao_parse`）
+
+- Cb 有自己的 `sao_type_idx` bin；**Cr 无 type bin**——继承 Cb 的
+  type_idx/eo_class，但 offsets、sign、band_position 各自编 bins。写侧
+  `hevc_enc_write_sao_ctb` 的分量循环严格按 cIdx 0/1/2 顺序镜像；决策侧
+  Cr 在 Cb 的 type 约束下跑自己的 band 决策，Cb 关则 Cr 全关。
+- CABAC 写端分量无关（单一 sao_type_idx ctx + bypass offsets），零改动；
+  `hevc_sao_apply` 本就三分量通用，pass 2 重建自动带色度滤波。
+
+### 验证
+
+- 白盒 `hevc_enc_csao_wbtest.mbt` 5/5：色度 SAO 流按 POC 对齐逐样本
+  重建一致（Y/U/V）；决策耦合钉值（Cr type 恒等于 Cb、偏置 -3/+2 下
+  Cb offsets>0 且 Cr offsets<0、chroma off 时两色度分量全 0）；默认
+  关闭字节恒等 + 开启流必不同；4:2:2 与 10-bit 往返；流式==批式（CRF
+  + B 调度 + 色度 SAO）字节恒等。
+- 黑盒 `hevc_enc_csao_test.mbt` 1/1（wasm-gc 与 wasm 双目标）：64x64、
+  5 帧（逐帧色度偏置 ±4k，第 5 帧平移 (20,10) 镜像生成器）、crf=28、
+  b_slices、sao_chroma，解码序 POC 0/2/1/4/3 MD5 对照 FFmpeg 9.0.2：
+  `063479b0…`/`814d15ad…`/`5dc66de5…`/`7d340c3f…`/`96ebec1a…`。
+- FFmpeg 9.0.2 `-xerror` 零告警解出 5651 字节流；I+P 调度（n=2..5）
+  与 B 调度（flat/CRF）探针流逐字节一致（30720 字节 raw 全同）。
+- 生成器 `cmd/generate-hevc-crf` 扩展写 `csao_ipb.265`，复跑 SHA-256
+  一致（`6335214256e2b59527e547aad0ccba6192b56f3646f1b3afb6f88a5e390cbd10`）。
+- HEVC 编码器测试 wasm-gc 100/100、黑盒 wasm 13/13；`moon fmt`/`moon
+  info` 已跑，全仓 `moon check --target wasm` 0 错误。
+
+### 本轮坑
+
+- **黑盒钉值必须与生成器帧序列逐帧同步**：首轮把生成器流（第 5 帧平移
+  (20,10)）的 FFmpeg MD5 钉到了测试帧（第 5 帧平移 (16,8)）上——
+  「测试 MD5 != FFmpeg」的假阳性浪费了一轮排查（I+P/B 调度探针二分后
+  才发现是数据不同步，非编解码问题）。
+- `with` 是 MoonBit 关键字，不能做变量名（parse error 定位绕了弯）。
+- `HevcPicture` 平面是 `Array[Int32]`（非 FixedArray）；`for k, f in
+  arr` 是 index/value 迭代。
+
+### 边界
+
+- SAO 决策仍只有 band 模式（EO 0-3 未做决策——写端/apply 已支持，
+  补决策即可开）；单色（cfidc=0）未开放；VBV/ABR 未实现。
+
+- 后续切片预告：SAO EO 决策 → 或 VBV/ABR → 单色。
+
+## 461. HEVC 编码器 SAO 边带偏移（EO，opt-in）
+
+`hevc_encode_sequence` / `hevc_encode_frames` / `hevc_encode_intra_frame`
+与 `HevcStreamEncoder::open`、CLI `cmd/encode-hevc --sao-eo` 新增可选
+`sao_eo : Bool = false`：置位后 EO（edge offset）候选与 band 候选逐 CTB
+竞争——对四个 `eo_class` 方向各按 `edge_idx` 类别（样本与两邻居的
+d0+d1 → 五类，类 0 恒不偏移）统计残差，类 1/2 偏移向上、类 3/4 向下
+（语法无 sign bins，符号由类别蕴含），均值偏移取**对称 round-half-away**
+（朴素 `(d+c/2)/c` 对负均值向零截断、系统性偏 +0.5——振铃构例钉值抓
+出），精确 SAD 增益择优；**增益平局选 EO**（bins 更少：无 band_position
+5 bits、无 sign bits，x265 同款偏好）。胜出写 `sao_type_idx=EO` +
+`sao_eo_class`（2 bypass bits，MSB 先，镜像 `ff_hevc_sao_eo_class_decode`；
+Cr 无 class bin、继承 Cb）。默认关闭，全部既有钉值流字节不变。
+
+### 决策结构重构
+
+band/EO 评估统一为 `HevcSaoCand` 候选（增益/kind/aux/4 offsets），
+`hevc_enc_sao_decide` 外层择优后 `hevc_enc_sao_adopt` 一次写入参数槽，
+避免两种模式互相覆盖 offset_val。
+
+### 验证
+
+- 白盒 `hevc_enc_eosao_wbtest.mbt` 4/4：单元钉值——手工振铃构例
+  （8x8 水平边缘、+3 残差仅限贴缘两行）band 增益 0、EO 选垂直类
+  `aux=1`、增益恰 24、类 2 偏移 +3；残差取反后类 3 偏移 -3（对称
+  舍入修复的直接钉值）；`force_class` 钉方向。条纹流（1px 水平条
+  纹相位平移、QP38）双向合法 + EO 流按 POC 逐样本重建一致；EO+
+  chroma 组合与 10-bit 往返；默认关闭字节恒等；流式==批式（双 SAO
+  旗标 + CRF + B 调度）。
+- 黑盒 `hevc_enc_eosao_test.mbt` 1/1（wasm-gc 与 wasm 双目标）：
+  2 帧条纹流（282 字节）MD5 对照 FFmpeg 9.0.2：
+  `47ed9337…` / `0978e4e3…`，零告警。
+- 生成器 `cmd/generate-hevc-crf` 写 `eosao_seq.265`，复跑 SHA-256
+  一致（`37a6102a0e51dbcda997ae40dfeafbe4ceb734ec55ecf1cfb389c881e2936033`）。
+- HEVC 编码器测试 wasm-gc 105/105；`moon fmt`/`moon info` 已跑，
+  全仓 `moon check --target wasm` 0 错误。
+
+### 本轮坑
+
+- **负均值的整数舍入**：`(diff + cnt/2)/cnt` 向零截断把 -3 推到 -2
+  （振铃单元钉值 16≠24 抓出）；EO 用对称 round-half-away，band 保持
+  §453 既有公式（其行为已被钉值流锁定）。
+- 自然流里 band 几乎总不劣于 EO（值映射更自由），EO 进流与否是决策
+  的事——流级断言只钉「双向合法+往返一致」，EO 位级正确性由单元
+  钉值 + 写读镜像结构保证。
+- all-IDR 多帧整解 duplicate POC 坑再犯（条纹测试先用了
+  `hevc_encode_frames`）——多帧一律 `hevc_encode_sequence`。
+
+### 边界
+
+- EO 的 merge flag 仍未使用（始终显式写参数）；SAO 决策无率项
+  （纯 SAD 增益 + 平局偏好）。
+- 后续切片预告：VBV/ABR → 单色 → 或 HEVC 编码器收尾。
+
+## 462. HEVC 流式 ABR 码率控制（target_bitrate）
+
+`HevcStreamEncoder::open` 新增可选 `target_bitrate : Int32 = 0`（bits/s）
+与 `fps : Int32 = 0`：单 pass 控制器——每帧 QP 从累计偏差
+`abr_bits − budget × abr_pics`（budget = target/fps）出发，经
+「每 +6 QP 尺寸减半」模型（复用 H.264 的 `h264_rc_qp_jump`，同包共享）
+预测跳变、三帧窗阻尼、+1..+3 步钳制——**QP 只升不降**（码率是预算上
+限；单 pass 无法预知廉价现在背后是否藏着昂贵未来），`abr_qp` 携带上一
+接受帧的最终 QP 使爬坡延续。CRF 互斥（open 拒绝）；`target_bitrate=0`
+（默认）字节恒等。CLI `cmd/encode-hevc --target-bitrate N --fps N`。
+零新码流语法（QP 本就逐帧），纯 MoonBit、wasm-only。
+
+### 实现
+
+- `HevcStreamEncoder` 增 `abr_rate/abr_fps/abr_bits/abr_pics/abr_qp`
+  五字段；`push_frame` 的 QP 推导插 ABR 分支（优先于 flat；CRF 已在
+  open 拒绝）；`code_picture` 在帧接受后 `abr_note(bits, qp)`——
+  pending B park 时按当时建议值存 QP、编码时才计入控制器（编码序）。
+- 校验：`target_bitrate > 0` 需 `fps > 0`、与 `crf` 互斥、
+  `target/fps ≥ 1`；负值拒绝。
+
+### 验证
+
+- 白盒 `hevc_enc_abr_wbtest.mbt` 3/3：紧预算（60 kbit/s@30fps、
+  qp22、6 帧）下流小于平坦流（上限性质）、可解出全 POC；宽预算
+  （100 Mbit/s）恒等平坦流字节；B 调度组合可解全 POC；四组 open
+  拒绝（无 fps/CRF 冲突/低于每帧 1 bit/负值）与「fps 单独合法」。
+- 黑盒 `hevc_enc_abr_test.mbt` 1/1（wasm-gc 与 wasm 双目标）：4 帧
+  B 调度、60 kbit/s@30fps、qp22（5382 字节）解码序 POC 0/2/1/3 MD5
+  对照 FFmpeg 9.0.2：`564d84ed…`/`51f8f0b4…`/`e5f4cd35…`/
+  `0db1e6a0…`，零告警。
+- 生成器写 `abr_ipb.265`，复跑 SHA-256 一致
+  （`653d4b9131995f5d711cf6ee691527fb1a8f0dacf6b37f7177e583ab017496cc`）。
+- HEVC 编码器测试 wasm-gc 109/109；`moon fmt`/`moon info` 已跑，
+  全仓 `moon check --target wasm` 0 错误。
+
+### 边界
+
+- 无 CPB/HRD 流级语法（H.264 VBV 的 SPS VUI HRD 声明、filler NAL、
+  buffering-period/picture-timing SEI 均未做）——HEVC 侧若需要须另起
+  切片；QP 只升不降（无两 pass）。
+- 后续切片预告：单色（cfidc=0）→ 或 HEVC VBV 完整 CPB 模型。
+
+## 463. HEVC 编码器单色（chroma_format_idc=0）
+
+三个公开入口、`HevcStreamEncoder::open` 与 CLI 的 `chroma_format_idc` 接受
+0（单色）：色度平面为空 `FixedArray`，picture 几何 0x0（镜像解码器），
+走 Rext `profile_idc=4` + `max_monochrome_constraint_flag=1`（§456 预留的
+约束位就此生效），`pix_fmt` 映射 gray/gray10le/gray12le。8/10/12-bit ×
+I/P/B/CRF/ABR/流式全可用；`sao_chroma` 与单色互斥（open/编码入口拒绝）。
+CLI `--chroma 400`。默认 4:2:0 行为与全部钉值不变。
+
+### 门控清单（编码器侧全部色度触点）
+
+- 守卫：cfidc=0 放行、只查 luma 平面尺寸；负值仍拒。
+- `hevc_enc_frame_ex`：cw/ch=0、色度 pad 跳过。
+- intra CU：`intra_chroma_pred_mode`（DM 零 bin）不写——解码器
+  `hls_coding_unit` 只在 ChromaArrayType!=0 读。
+- transform_unit：`chroma_coded` 加 `cfidc != 0 &&`；**cbf_cb/cbf_cr bins
+  写入移入 chroma_coded 块**（本轮真 bug：原在块外按 n_cb 无条件写，
+  单色流每 TU 多 2 个 bin 导致 CABAC 失步——症状为编码器本地重建
+  （正确）与解码输出（FFmpeg 同）不一致，dec 首样本落在 DC 预设值）。
+- inter：n_cb=0（量化/cbf/重建循环自动零）；MC 三函数的色度段
+  `cfidc != 0` 包裹（cfidc=0 时 hshift=0，不门控会写 0 尺寸平面）。
+- SAO：`slice_sao_chroma_flag` 本就只在 cfidc!=0 写；`sao_eo` 单色可用
+  （纯 luma）。
+
+### 验证
+
+- 白盒 `hevc_enc_mono_wbtest.mbt` 4/4：SPS/PTL 往返（profile_idc=4、
+  max_monochrome=1、gray、hshift 0）；I/P/B 往返（POC 对齐、recon 无
+  色度、pic 0x0）；intra 入口/10-bit/流式==批式；sao_chroma 互斥
+  （批式与流式同消息）、sao_eo 合法、cfidc=-1 拒、luma 尺寸仍查。
+- 黑盒 `hevc_enc_mono_test.mbt` 1/1（wasm-gc 与 wasm 双目标）：2 帧
+  mono I/P（1440 字节）`yuvp(8)` 恰 4096 字节（luma-only），MD5 对照
+  FFmpeg 9.0.2 gray framemd5：`e9e60500…` / `834f9eff…`，零告警。
+- HEVC 编码器测试 wasm-gc 114/114；`moon fmt`/`moon info` 已跑，全仓
+  `moon check --target wasm` 0 错误。§456 的「cfidc 0/4 拒绝」白盒断言
+  更新为 4/-1。
+
+### 边界
+
+- 位深×色度矩阵至此含单色：{8,10,12} × {mono,420,422,444} 十二格全开。
+- 剩余：完整 CPB/VBV 流级语法、B 片加权/时间 MVP/多参考、多 slice/tile、
+  SAO merge flag。
+
+- 后续切片预告：HEVC 编码器收尾（多参考/temporal MVP）或转其他模块。

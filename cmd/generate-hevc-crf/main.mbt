@@ -153,4 +153,107 @@ fn main raise {
   let stream5_path = dir + "/crf28_ipb5_stream.265"
   @fs.write_bytes_to_file(stream5_path, streamed)
   println("wrote \{stream5_path} (\{streamed.length()} bytes, == batch5)")
+  // §460: the same frames with a per-frame chroma bias and chroma SAO on —
+  // the Cb/Cr band offsets ride the bitstream (slice_sao_chroma_flag = 1).
+  let biased : Array[(FixedArray[Int32], FixedArray[Int32], FixedArray[Int32])] = []
+  for k, f in frames {
+    let cb : Int32 = k * 4
+    let uk = plane(w >> 1, h >> 1, fn(i, j) {
+      (f.1[j * (w >> 1) + i] + cb) & 255
+    })
+    let vk = plane(w >> 1, h >> 1, fn(i, j) {
+      (f.2[j * (w >> 1) + i] - cb) & 255
+    })
+    biased.push((f.0, uk, vk))
+  }
+  let csao = match
+    @libavcodec.hevc_encode_sequence(
+      biased,
+      width=w,
+      height=h,
+      crf=28.0,
+      b_slices=true,
+      sao_chroma=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail("encode csao: \{e}")
+  }
+  let csao_path = dir + "/csao_ipb.265"
+  @fs.write_bytes_to_file(csao_path, csao.annexb)
+  println("wrote \{csao_path} (\{csao.annexb.length()} bytes)")
+  // §461: 1-pixel horizontal stripes (phase-shifted in frame 2) with both
+  // SAO flags on — the edge-offset candidates compete with the bands.
+  let stripe = fn(
+    phase : Int32,
+  ) -> (FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]) {
+    let y = plane(w, h, fn(_i, j) {
+      if ((j + phase) & 1) == 0 {
+        172
+      } else {
+        84
+      }
+    })
+    let c = plane(w >> 1, h >> 1, fn(_i, _j) { 128 })
+    (y, c, c)
+  }
+  let eosao = match
+    @libavcodec.hevc_encode_sequence(
+      [stripe(0), stripe(1)],
+      width=w,
+      height=h,
+      qp=38,
+      sao_chroma=true,
+      sao_eo=true,
+    ) {
+    Ok(s) => s
+    Err(e) => fail("encode eosao: \{e}")
+  }
+  let eosao_path = dir + "/eosao_seq.265"
+  @fs.write_bytes_to_file(eosao_path, eosao.annexb)
+  println("wrote \{eosao_path} (\{eosao.annexb.length()} bytes)")
+  // §462: the first four frames through the streaming ABR controller at a
+  // tight budget (target 60 kbit/s at 30 fps, flat qp 22).
+  let abr_enc = match
+    @libavcodec.HevcStreamEncoder::open(
+      width=w,
+      height=h,
+      qp=22,
+      b_slices=true,
+      target_bitrate=60000,
+      fps=30,
+    ) {
+    Ok(e) => e
+    Err(e) => fail("abr open: \{e}")
+  }
+  let first4b : Array[(FixedArray[Int32], FixedArray[Int32], FixedArray[Int32])] = []
+  for i in 0..<4 {
+    first4b.push(frames[i])
+  }
+  let abr_parts : Array[Bytes] = []
+  for f in first4b {
+    match abr_enc.push_frame(f.0, f.1, f.2) {
+      Ok(_) =>
+        for au in abr_enc.drain() {
+          abr_parts.push(au)
+        }
+      Err(e) => fail("abr push: \{e}")
+    }
+  }
+  match abr_enc.finish() {
+    Ok(tail) =>
+      for au in tail {
+        abr_parts.push(au)
+      }
+    Err(e) => fail("abr finish: \{e}")
+  }
+  let abr_total : Array[Byte] = []
+  for p2 in abr_parts {
+    for b in p2 {
+      abr_total.push(b)
+    }
+  }
+  let abr_stream = Bytes::from_array(abr_total)
+  let abr_path = dir + "/abr_ipb.265"
+  @fs.write_bytes_to_file(abr_path, abr_stream)
+  println("wrote \{abr_path} (\{abr_stream.length()} bytes)")
 }

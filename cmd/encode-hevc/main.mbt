@@ -33,6 +33,13 @@ fn frame_planes(
 ) -> (FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]) {
   let bpp = sample_bytes(opts.bit_depth)
   let luma = opts.width * opts.height
+  if opts.chroma_format == 0 {
+    return (
+      unpack_plane(data, offset, luma, bpp),
+      FixedArray::make(0, 0),
+      FixedArray::make(0, 0),
+    )
+  }
   let cw = opts.width / (if opts.chroma_format == 1 { 2 } else { 1 })
   let ch = opts.height / (if opts.chroma_format == 3 { 1 } else { 2 })
   let chroma = cw * ch
@@ -46,6 +53,9 @@ fn frame_planes(
 ///|
 fn pixel_format_name(opts : Options) -> String {
   let base = match (opts.bit_depth, opts.chroma_format) {
+    (8, 0) => "gray8"
+    (10, 0) => "gray10le"
+    (12, 0) => "gray12le"
     (8, 1) => "yuv420p"
     (8, 2) => "yuv422p"
     (8, 3) => "yuv444p"
@@ -91,6 +101,10 @@ fn main raise {
       b_slices=opts.b_slices,
       bit_depth=opts.bit_depth,
       chroma_format_idc=opts.chroma_format,
+      sao_chroma=opts.chroma_sao,
+      sao_eo=opts.sao_eo,
+      target_bitrate=opts.target_bitrate,
+      fps=opts.fps,
     ) {
     Ok(e) => e
     Err(e) => fail("encode-hevc: \{e}")

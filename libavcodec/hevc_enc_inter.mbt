@@ -402,28 +402,31 @@ fn hevc_enc_mc_l0(
     size,
     bd,
   )
-  let hs = sps.hshift[1]
-  let vs = sps.vshift[1]
-  let csize_w = size >> hs
-  let csize_h = size >> vs
-  for c in 1..<3 {
-    hevc_chroma_mc_uni(
-      refp.plane(c),
-      refp.cw,
-      refp.cw,
-      refp.ch,
-      pic.plane(c),
-      pic.cw,
-      x0 >> hs,
-      y0 >> vs,
-      mvx,
-      mvy,
-      csize_w,
-      csize_h,
-      bd,
-      hs,
-      vs,
-    )
+  // Monochrome: no chroma planes to predict (§463).
+  if sps.chroma_format_idc != 0 {
+    let hs = sps.hshift[1]
+    let vs = sps.vshift[1]
+    let csize_w = size >> hs
+    let csize_h = size >> vs
+    for c in 1..<3 {
+      hevc_chroma_mc_uni(
+        refp.plane(c),
+        refp.cw,
+        refp.cw,
+        refp.ch,
+        pic.plane(c),
+        pic.cw,
+        x0 >> hs,
+        y0 >> vs,
+        mvx,
+        mvy,
+        csize_w,
+        csize_h,
+        bd,
+        hs,
+        vs,
+      )
+    }
   }
 }
 
@@ -475,32 +478,35 @@ fn hevc_enc_mc_b(
     size,
     bd,
   )
-  let hs = sps.hshift[1]
-  let vs = sps.vshift[1]
-  let csize_w = size >> hs
-  let csize_h = size >> vs
-  for c in 1..<3 {
-    hevc_chroma_mc_bi(
-      ref0.plane(c),
-      ref0.cw,
-      ref1.plane(c),
-      ref1.cw,
-      ref0.cw,
-      ref0.ch,
-      pic.plane(c),
-      pic.cw,
-      x0 >> hs,
-      y0 >> vs,
-      mv0x,
-      mv0y,
-      mv1x,
-      mv1y,
-      csize_w,
-      csize_h,
-      bd,
-      hs,
-      vs,
-    )
+  // Monochrome: no chroma planes to predict (§463).
+  if sps.chroma_format_idc != 0 {
+    let hs = sps.hshift[1]
+    let vs = sps.vshift[1]
+    let csize_w = size >> hs
+    let csize_h = size >> vs
+    for c in 1..<3 {
+      hevc_chroma_mc_bi(
+        ref0.plane(c),
+        ref0.cw,
+        ref1.plane(c),
+        ref1.cw,
+        ref0.cw,
+        ref0.ch,
+        pic.plane(c),
+        pic.cw,
+        x0 >> hs,
+        y0 >> vs,
+        mv0x,
+        mv0y,
+        mv1x,
+        mv1y,
+        csize_w,
+        csize_h,
+        bd,
+        hs,
+        vs,
+      )
+    }
   }
 }
 
@@ -533,28 +539,31 @@ fn hevc_enc_mc_l1(
     size,
     bd,
   )
-  let hs = sps.hshift[1]
-  let vs = sps.vshift[1]
-  let csize_w = size >> hs
-  let csize_h = size >> vs
-  for c in 1..<3 {
-    hevc_chroma_mc_uni(
-      refp.plane(c),
-      refp.cw,
-      refp.cw,
-      refp.ch,
-      pic.plane(c),
-      pic.cw,
-      x0 >> hs,
-      y0 >> vs,
-      mvx,
-      mvy,
-      csize_w,
-      csize_h,
-      bd,
-      hs,
-      vs,
-    )
+  // Monochrome: no chroma planes to predict (§463).
+  if sps.chroma_format_idc != 0 {
+    let hs = sps.hshift[1]
+    let vs = sps.vshift[1]
+    let csize_w = size >> hs
+    let csize_h = size >> vs
+    for c in 1..<3 {
+      hevc_chroma_mc_uni(
+        refp.plane(c),
+        refp.cw,
+        refp.cw,
+        refp.ch,
+        pic.plane(c),
+        pic.cw,
+        x0 >> hs,
+        y0 >> vs,
+        mvx,
+        mvy,
+        csize_w,
+        csize_h,
+        bd,
+        hs,
+        vs,
+      )
+    }
   }
 }
 
@@ -986,7 +995,13 @@ fn hevc_enc_coding_unit_inter(
   let log2_c = log2_cb_size - hs
   let nc = 1 << log2_c
   let qp_c = hevc_enc_chroma_qp_fwd(sps, ctx.qp)
-  let n_cb = if sps.chroma_format_idc == 2 { 2 } else { 1 }
+  let n_cb = if sps.chroma_format_idc == 0 {
+    0
+  } else if sps.chroma_format_idc == 2 {
+    2
+  } else {
+    1
+  }
   let luma_levels = hevc_enc_quant_plane(
     ctx,
     0,
@@ -1340,7 +1355,13 @@ fn hevc_enc_coding_unit_b(
   let log2_c = log2_cb_size - hs
   let nc = 1 << log2_c
   let qp_c = hevc_enc_chroma_qp_fwd(sps, ctx.qp)
-  let n_cb = if sps.chroma_format_idc == 2 { 2 } else { 1 }
+  let n_cb = if sps.chroma_format_idc == 0 {
+    0
+  } else if sps.chroma_format_idc == 2 {
+    2
+  } else {
+    1
+  }
   let luma_levels = hevc_enc_quant_plane(
     ctx,
     0,

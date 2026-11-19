@@ -903,6 +903,13 @@ fn HevcEncCabac::sao_band_position(self : HevcEncCabac, pos : Int32) -> Unit {
 }
 
 ///|
+/// `ff_hevc_sao_eo_class_decode` write side: 2 bypass bits, MSB first. */
+fn HevcEncCabac::sao_eo_class(self : HevcEncCabac, eo_class : Int32) -> Unit {
+  self.bypass((eo_class >> 1) & 1)
+  self.bypass(eo_class & 1)
+}
+
+///|
 /// `ff_hevc_inter_pred_idc_decode` write side: 0 = PRED_L0, 1 = PRED_L1,
 /// 2 = PRED_BI. The 2Nx2N (non-4x4) shape uses one context bin for "is BI",
 /// then one bin distinguishing L0 from L1. */

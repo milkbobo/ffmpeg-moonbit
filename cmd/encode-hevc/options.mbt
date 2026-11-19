@@ -17,6 +17,13 @@ priv struct Options {
   bit_depth : Int32
   /// 1 (4:2:0, default), 2 (4:2:2), or 3 (4:4:4).
   chroma_format : Int32
+  /// `--chroma-sao`: opt the Cb/Cr planes into SAO (§460).
+  chroma_sao : Bool
+  /// `--sao-eo`: let the edge-offset SAO mode compete with the band (§461).
+  sao_eo : Bool
+  /// `§462` streaming ABR: bits per second (0 = off); requires --fps.
+  target_bitrate : Int32
+  fps : Int32
 }
 
 ///|
@@ -29,7 +36,7 @@ fn parse_options(args : Array[String]) -> Options raise {
   while i < args.length() {
     let arg = args[i]
     match arg {
-      "--b-slices" | "--all-intra" => {
+      "--b-slices" | "--all-intra" | "--chroma-sao" | "--sao-eo" => {
         if values.contains(arg) {
           fail("encode-hevc: repeated option \{arg}")
         }
@@ -42,7 +49,9 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--qp"
       | "--bit-depth"
       | "--chroma"
-      | "--crf" => {
+      | "--crf"
+      | "--target-bitrate"
+      | "--fps" => {
         if values.contains(arg) {
           fail("encode-hevc: repeated option \{arg}")
         }
@@ -87,11 +96,12 @@ fn parse_options(args : Array[String]) -> Options raise {
   }
   let chroma_format = match values.get("--chroma") {
     None => 1
+    Some("400") => 0
     Some("420") => 1
     Some("422") => 2
     Some("444") => 3
     Some(other) =>
-      fail("encode-hevc: --chroma must be 420, 422 or 444 (got \{other})")
+      fail("encode-hevc: --chroma must be 400, 420, 422 or 444 (got \{other})")
   }
   // NaN-safe range test (keeps "inf"/"nan" out with the invalid values).
   let crf = match values.get("--crf") {
@@ -123,6 +133,19 @@ fn parse_options(args : Array[String]) -> Options raise {
   if qp < 0 || qp > 51 {
     fail("encode-hevc: qp must be in 0..=51")
   }
+  let target_bitrate = number(values, "--target-bitrate", 0)
+  let fps = number(values, "--fps", 0)
+  if target_bitrate < 0 {
+    fail("encode-hevc: --target-bitrate must be nonnegative")
+  }
+  if target_bitrate > 0 {
+    if fps <= 0 {
+      fail("encode-hevc: --target-bitrate needs --fps")
+    }
+    if crf >= 0.0 {
+      fail("encode-hevc: --crf and --target-bitrate are mutually exclusive")
+    }
+  }
   {
     input,
     output,
@@ -134,6 +157,10 @@ fn parse_options(args : Array[String]) -> Options raise {
     b_slices: values.contains("--b-slices"),
     bit_depth,
     chroma_format,
+    chroma_sao: values.contains("--chroma-sao"),
+    sao_eo: values.contains("--sao-eo"),
+    target_bitrate,
+    fps,
   }
 }
 
@@ -159,6 +186,8 @@ fn raw_frame_size(opts : Options) -> Int32 {
     luma * 2
   } else if opts.chroma_format == 2 {
     luma
+  } else if opts.chroma_format == 0 {
+    0
   } else {
     luma / 2
   }

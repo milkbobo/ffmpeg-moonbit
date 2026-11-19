@@ -289,6 +289,7 @@ fn hevc_enc_slice_header(
   slice_type : Int32,
   poc~ : Int32 = 0,
   rps_delta~ : Int32 = -1,
+  sao_chroma~ : Bool = false,
 ) -> Bytes {
   let rbsp = H264Rbsp::new()
   rbsp.put_bit(1) // first_slice_segment_in_pic_flag
@@ -331,7 +332,8 @@ fn hevc_enc_slice_header(
     if sps.sao_enabled != 0 {
       rbsp.put_bit(1) // slice_sao_luma_flag
       if sps.chroma_format_idc != 0 {
-        rbsp.put_bit(0) // slice_sao_chroma_flag
+        // §460: opt-in chroma SAO; the default streams keep the flag at 0.
+        rbsp.put_bit(if sao_chroma { 1 } else { 0 }) // slice_sao_chroma_flag
       }
       sao_done = true
     }
@@ -344,7 +346,7 @@ fn hevc_enc_slice_header(
   if !sao_done && sps.sao_enabled != 0 {
     rbsp.put_bit(1) // slice_sao_luma_flag
     if sps.chroma_format_idc != 0 {
-      rbsp.put_bit(0) // slice_sao_chroma_flag
+      rbsp.put_bit(if sao_chroma { 1 } else { 0 }) // slice_sao_chroma_flag
     }
   }
   rbsp.put_se(qp - 26 - pps.pic_init_qp_minus26) // slice_qp_delta
@@ -377,6 +379,8 @@ fn hevc_enc_frame_ex(
   chroma_format_idc : Int32,
   ref_pic_l1~ : HevcPicture = hevc_picture_new(0, 0, 0, 0),
   rps_delta~ : Int32 = -1,
+  sao_chroma~ : Bool = false,
+  sao_eo~ : Bool = false,
 ) -> Result[HevcEncodedFrame, String] {
   if qp < 0 || qp > 51 {
     return Err("hevc enc: qp out of range")
@@ -384,12 +388,16 @@ fn hevc_enc_frame_ex(
   if width <= 0 || height <= 0 {
     return Err("hevc enc: empty frame")
   }
+  if sao_chroma && chroma_format_idc == 0 {
+    return Err("hevc enc: sao_chroma needs chroma_format_idc != 0")
+  }
   let pad_w = (width + 31) / 32 * 32
   let pad_h = (height + 31) / 32 * 32
   let horiz_mult = hevc_sub_width_c[chroma_format_idc]
   let vert_mult = hevc_sub_height_c[chroma_format_idc]
-  let cw = pad_w / horiz_mult
-  let ch = pad_h / vert_mult
+  // Monochrome: no chroma planes (the decoder's picture geometry is 0x0).
+  let cw = if chroma_format_idc == 0 { 0 } else { pad_w / horiz_mult }
+  let ch = if chroma_format_idc == 0 { 0 } else { pad_h / vert_mult }
   let inter = slice_type != hevc_slice_i
   // The SPS must describe the whole sequence, not just this picture: a stream
   // whose first picture is an I slice still needs the short-term RPS for the
@@ -430,7 +438,15 @@ fn hevc_enc_frame_ex(
     None => return Err("hevc enc: PPS missing after round-trip")
   }
   let nal_type = if slice_type == hevc_slice_i { 19 } else { 1 }
-  let header = hevc_enc_slice_header(sps, pps, qp, slice_type, poc~, rps_delta~)
+  let header = hevc_enc_slice_header(
+    sps,
+    pps,
+    qp,
+    slice_type,
+    poc~,
+    rps_delta~,
+    sao_chroma~,
+  )
   let sh = match hevc_enc_parse_slice_header(header, nal_type, ps) {
     Ok(h) => h
     Err(e) => return Err("hevc enc: slice header does not round-trip: \{e}")
@@ -440,8 +456,10 @@ fn hevc_enc_frame_ex(
   let su : FixedArray[Int32] = FixedArray::make(cw * ch, 0)
   let sv : FixedArray[Int32] = FixedArray::make(cw * ch, 0)
   hevc_enc_pad_plane(y, sy, width, height, pad_w, pad_h)
-  hevc_enc_pad_plane(u, su, width / horiz_mult, height / vert_mult, cw, ch)
-  hevc_enc_pad_plane(v, sv, width / horiz_mult, height / vert_mult, cw, ch)
+  if chroma_format_idc != 0 {
+    hevc_enc_pad_plane(u, su, width / horiz_mult, height / vert_mult, cw, ch)
+    hevc_enc_pad_plane(v, sv, width / horiz_mult, height / vert_mult, cw, ch)
+  }
   let pic = hevc_picture_new(pad_w, pad_h, cw, ch)
   // SAO needs the *deblocked* reconstruction to decide its per-CTB offsets, but
   // the parameters must be coded before the CTB data. Run the CTU loop twice:
@@ -470,8 +488,9 @@ fn hevc_enc_frame_ex(
     Ok(_) => ()
     Err(e) => return Err(e)
   }
-  let sao = if sps.sao_enabled != 0 && sh.slice_sao_luma_flag {
-    hevc_enc_sao_decide(sps, sy, pic)
+  let sao = if sps.sao_enabled != 0 &&
+    (sh.slice_sao_luma_flag || sh.slice_sao_chroma_flag) {
+    hevc_enc_sao_decide(sps, sy, su, sv, pic, chroma=sao_chroma, eo=sao_eo)
   } else {
     hevc_sao_params_new(sps.ctb_size, sps.ctb_width)
   }
@@ -588,8 +607,18 @@ fn hevc_enc_guard_frame(
   if bit_depth != 8 && bit_depth != 10 && bit_depth != 12 {
     return Err("hevc enc: bit_depth must be 8, 10 or 12")
   }
-  if chroma_format_idc < 1 || chroma_format_idc > 3 {
-    return Err("hevc enc: chroma_format_idc must be 1, 2 or 3")
+  if chroma_format_idc < 0 || chroma_format_idc > 3 {
+    return Err("hevc enc: chroma_format_idc must be 0, 1, 2 or 3")
+  }
+  // Monochrome (§463): no chroma planes exist, so nothing to check.
+  if chroma_format_idc == 0 {
+    if width <= 0 || height <= 0 || (width & 1) != 0 || (height & 1) != 0 {
+      return Err("hevc enc: dimensions must be even and positive")
+    }
+    if y.length() < width * height {
+      return Err("hevc enc: plane too small")
+    }
+    return Ok(())
   }
   let horiz_mult = hevc_sub_width_c[chroma_format_idc]
   let vert_mult = hevc_sub_height_c[chroma_format_idc]
@@ -611,13 +640,18 @@ fn hevc_enc_guard_frame(
 /// flat per-picture QP (0..51). `bit_depth = 10` selects Main10 and
 /// `bit_depth = 12` plus `chroma_format_idc` 2/3 selects Range Extensions; the
 /// defaults remain 4:2:0 8-bit Main. `crf >= 0` (0.0..=51.0) replaces the flat
-/// QP with the §458 quality-driven per-picture QPs and makes `qp` a no-op. */
+/// QP with the §458 quality-driven per-picture QPs and makes `qp` a no-op.
+/// `sao_chroma = true` (§460) opts the Cb/Cr planes into SAO and
+/// `sao_eo = true` (§461) lets the edge-offset mode compete with the band
+/// mode; both defaults keep the pinned streams unchanged. */
 pub fn hevc_encode_frames(
   frames : Array[(FixedArray[Int32], FixedArray[Int32], FixedArray[Int32])],
   width~ : Int32,
   height~ : Int32,
   qp~ : Int32 = 26,
   crf~ : Double = -1.0,
+  sao_chroma~ : Bool = false,
+  sao_eo~ : Bool = false,
   bit_depth~ : Int32 = 8,
   chroma_format_idc~ : Int32 = 1,
 ) -> Result[Bytes, String] {
@@ -628,6 +662,8 @@ pub fn hevc_encode_frames(
       height~,
       qp~,
       crf~,
+      sao_chroma~,
+      sao_eo~,
       inter=false,
       bit_depth~,
       chroma_format_idc~,
@@ -648,13 +684,18 @@ pub fn hevc_encode_frames(
 /// Extensions profile. 4:2:0 8-bit Main remains the default. `crf >= 0`
 /// (0.0..=51.0) replaces the flat `qp` with the §458 causal per-picture QPs
 /// (display-order temporal complexity against the running mean); under CRF
-/// the `qp` argument is ignored. */
+/// the `qp` argument is ignored. `sao_chroma = true` (§460) opts the Cb/Cr
+/// planes into SAO and `sao_eo = true` (§461) lets the edge-offset mode
+/// compete with the band mode; both defaults keep the pinned streams
+/// unchanged. */
 pub fn hevc_encode_sequence(
   frames : Array[(FixedArray[Int32], FixedArray[Int32], FixedArray[Int32])],
   width~ : Int32,
   height~ : Int32,
   qp~ : Int32 = 26,
   crf~ : Double = -1.0,
+  sao_chroma~ : Bool = false,
+  sao_eo~ : Bool = false,
   inter~ : Bool = true,
   b_slices~ : Bool = false,
   bit_depth~ : Int32 = 8,
@@ -779,6 +820,8 @@ pub fn hevc_encode_sequence(
         chroma_format_idc,
         ref_pic_l1=l1,
         rps_delta~,
+        sao_chroma~,
+        sao_eo~,
       ) {
       Ok(f) => f
       Err(e) => return Err(e)
@@ -812,7 +855,10 @@ pub fn hevc_encode_sequence(
 
 ///|
 /// Encode a single intra frame, returning the Annex B NALs (VPS/SPS/PPS +
-/// slice) and the local reconstruction for round-trip assertions. */
+/// slice) and the local reconstruction for round-trip assertions.
+/// `sao_chroma = true` (§460) opts the Cb/Cr planes into SAO and
+/// `sao_eo = true` (§461) lets the edge-offset mode compete with the band
+/// mode. */
 pub fn hevc_encode_intra_frame(
   y : FixedArray[Int32],
   u : FixedArray[Int32],
@@ -822,6 +868,8 @@ pub fn hevc_encode_intra_frame(
   qp~ : Int32 = 26,
   bit_depth~ : Int32 = 8,
   chroma_format_idc~ : Int32 = 1,
+  sao_chroma~ : Bool = false,
+  sao_eo~ : Bool = false,
 ) -> Result[HevcEncodedFrame, String] {
   match
     hevc_enc_guard_frame(y, u, v, width, height, bit_depth~, chroma_format_idc~) {
@@ -841,6 +889,8 @@ pub fn hevc_encode_intra_frame(
         false,
         bit_depth,
         chroma_format_idc,
+        sao_chroma~,
+        sao_eo~,
       )
   }
 }

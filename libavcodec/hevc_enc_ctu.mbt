@@ -429,8 +429,11 @@ fn hevc_enc_coding_unit(
       ctx.tab_ipm[(y_pu + i) * sps.min_pu_width + x_pu + j] = mode
     }
   }
-  // Chroma: DM (derived from luma) - one zero bin.
-  ctx.cabac.intra_chroma_pred_mode(4)
+  // Chroma: DM (derived from luma) - one zero bin. Monochrome codes none
+  // (`hls_coding_unit` reads it only under ChromaArrayType != 0).
+  if sps.chroma_format_idc != 0 {
+    ctx.cabac.intra_chroma_pred_mode(4)
+  }
   // Transform tree: a single leaf TU of the CU size (hierarchy depth 0).
   match hevc_enc_transform_unit(ctx, x0, y0, log2_cb_size, mode) {
     Ok(_) => ()
@@ -595,7 +598,10 @@ fn hevc_enc_transform_unit(
   }
   // The decoder only codes chroma for `log2_trafo_size > 2` unless 4:4:4; the
   // encoder's minimum TU is 8x8 luma, so this is always taken today.
-  let chroma_coded = log2_tb > 2 || sps.chroma_format_idc == 3
+  // Monochrome codes no chroma bins at all — the decoder's transform tree
+  // gates them on `chroma_format_idc != 0`.
+  let chroma_coded = sps.chroma_format_idc != 0 &&
+    (log2_tb > 2 || sps.chroma_format_idc == 3)
   let n_cb = if sps.chroma_format_idc == 2 { 2 } else { 1 }
   let cb_levels : Array[FixedArray[Int32]] = []
   let cr_levels : Array[FixedArray[Int32]] = []
@@ -692,13 +698,18 @@ fn hevc_enc_transform_unit(
     }
   }
   let cbf_luma = hevc_enc_levels_nonzero(luma_levels)
-  // Bins: cbf_cb (one per 4:2:2 block), cbf_cr, then cbf_luma. A single TU at
-  // `trafo_depth == 0` never splits, so both 4:2:2 bins are always coded.
-  for i in 0..<n_cb {
-    ctx.cabac.cbf_cb_cr(0, cbf_cb[i])
-  }
-  for i in 0..<n_cb {
-    ctx.cabac.cbf_cb_cr(0, cbf_cr[i])
+  // Bins: cbf_cb (one per 4:2:2 block), cbf_cr, then cbf_luma — but only
+  // when chroma is coded at all (the decoder's transform tree gates the
+  // cbf_cb/cr bins on `chroma_format_idc != 0`; monochrome writes none).
+  // A single TU at `trafo_depth == 0` never splits, so both 4:2:2 bins are
+  // always coded.
+  if chroma_coded {
+    for i in 0..<n_cb {
+      ctx.cabac.cbf_cb_cr(0, cbf_cb[i])
+    }
+    for i in 0..<n_cb {
+      ctx.cabac.cbf_cb_cr(0, cbf_cr[i])
+    }
   }
   ctx.cabac.cbf_luma(0, cbf_luma)
   // Scan indices follow the mode ranges. The decoder gates BOTH scans on the

@@ -29,6 +29,10 @@ pub struct HevcStreamEncoder {
   b_slices : Bool
   bit_depth : Int32
   chroma_format_idc : Int32
+  /// `§460`: opt-in chroma SAO.
+  sao_chroma : Bool
+  /// `§461`: opt-in edge-offset SAO mode.
+  sao_eo : Bool
   priv crf_rc : HevcCrf?
   /// The previous push's luma plane (the CRF SAD sample source).
   priv mut prev_y : FixedArray[Int32]?
@@ -46,6 +50,14 @@ pub struct HevcStreamEncoder {
   )?
   /// Display position of the NEXT pushed frame.
   priv mut next_display : Int32
+  /// `§462` streaming ABR: target bits per second (0 = off) and the
+  /// controller state — the coded-bit total, the picture count and the
+  /// working QP (the accepted picture's final QP, so the walk carries).
+  abr_rate : Int64
+  abr_fps : Int32
+  priv mut abr_bits : Int64
+  priv mut abr_pics : Int32
+  priv mut abr_qp : Int32
   /// Finished pictures (access unit + reconstruction), coding order.
   out : Array[HevcEncodedFrame]
 }
@@ -55,7 +67,9 @@ pub struct HevcStreamEncoder {
 /// `qp` is the flat per-picture QP (ignored under `crf >= 0`), `crf` 0.0..=51.0
 /// selects the §458 per-picture QPs (negative = off), `inter = false` makes
 /// every push an IDR, `b_slices` enables the interleaved I/P/B schedule,
-/// `bit_depth` 8/10/12 and `chroma_format_idc` 1/2/3 pick the coding format.
+/// `bit_depth` 8/10/12 and `chroma_format_idc` 1/2/3 pick the coding format;
+/// `sao_chroma = true` (§460) opts the Cb/Cr planes into SAO and
+/// `sao_eo = true` (§461) lets the edge-offset mode compete with the band.
 pub fn HevcStreamEncoder::open(
   width~ : Int32,
   height~ : Int32,
@@ -65,6 +79,16 @@ pub fn HevcStreamEncoder::open(
   b_slices~ : Bool = false,
   bit_depth~ : Int32 = 8,
   chroma_format_idc~ : Int32 = 1,
+  sao_chroma~ : Bool = false,
+  sao_eo~ : Bool = false,
+  /// `§462` streaming ABR: average bits per second to track. A single-pass
+  /// controller — every picture's QP starts from the cumulative deviation
+  /// against `target_bitrate / fps` (only ever climbing above the caller's
+  /// flat `qp`; the rate is a budget ceiling). Requires `fps > 0` and is
+  /// mutually exclusive with `crf`; without it the QP stays flat
+  /// (byte-identical to the pre-§462 streams).
+  target_bitrate~ : Int32 = 0,
+  fps~ : Int32 = 0,
 ) -> Result[HevcStreamEncoder, String] {
   if width <= 0 || height <= 0 || (width & 1) != 0 || (height & 1) != 0 {
     return Err("hevc enc: dimensions must be even and positive")
@@ -72,14 +96,31 @@ pub fn HevcStreamEncoder::open(
   if bit_depth != 8 && bit_depth != 10 && bit_depth != 12 {
     return Err("hevc enc: bit_depth must be 8, 10 or 12")
   }
-  if chroma_format_idc < 1 || chroma_format_idc > 3 {
-    return Err("hevc enc: chroma_format_idc must be 1, 2 or 3")
+  if chroma_format_idc < 0 || chroma_format_idc > 3 {
+    return Err("hevc enc: chroma_format_idc must be 0, 1, 2 or 3")
+  }
+  if sao_chroma && chroma_format_idc == 0 {
+    return Err("hevc enc: sao_chroma needs chroma_format_idc != 0")
   }
   if qp < 0 || qp > 51 {
     return Err("hevc enc: qp out of range")
   }
   if crf > 51.0 {
     return Err("hevc enc: crf must be in 0.0..=51.0")
+  }
+  if target_bitrate < 0 {
+    return Err("hevc enc: target_bitrate must be nonnegative")
+  }
+  if target_bitrate > 0 {
+    if fps <= 0 {
+      return Err("hevc enc: target_bitrate needs fps > 0")
+    }
+    if crf >= 0.0 {
+      return Err("hevc enc: crf and target_bitrate are mutually exclusive")
+    }
+    if target_bitrate.to_int64() / fps.to_int64() < 1L {
+      return Err("hevc enc: target_bitrate below one bit per picture")
+    }
   }
   Ok({
     width,
@@ -90,6 +131,13 @@ pub fn HevcStreamEncoder::open(
     b_slices,
     bit_depth,
     chroma_format_idc,
+    sao_chroma,
+    sao_eo,
+    abr_rate: target_bitrate.to_int64(),
+    abr_fps: fps,
+    abr_bits: 0L,
+    abr_pics: 0,
+    abr_qp: qp,
     crf_rc: if crf >= 0.0 {
       Some(HevcCrf::create(crf))
     } else {
@@ -131,17 +179,22 @@ pub fn HevcStreamEncoder::push_frame(
   let i = self.next_display
   self.next_display = self.next_display + 1
   // §458: the display-causal QP for this push (first push = the baseline);
-  // the raw luma joins the SAD source afterwards.
-  let pic_qp = match self.crf_rc {
-    Some(rc) => {
-      let qp = match self.prev_y {
-        None => rc.base
-        Some(prev) =>
-          rc.qp_for(hevc_enc_crf_sad(prev, y, self.width, self.height))
+  // the raw luma joins the SAD source afterwards. §462: with ABR on the
+  // controller's suggestion replaces the flat QP (CRF is rejected at open).
+  let pic_qp = if self.abr_rate != 0L {
+    self.abr_suggest()
+  } else {
+    match self.crf_rc {
+      Some(rc) => {
+        let qp = match self.prev_y {
+          None => rc.base
+          Some(prev) =>
+            rc.qp_for(hevc_enc_crf_sad(prev, y, self.width, self.height))
+        }
+        qp
       }
-      qp
+      None => self.qp
     }
-    None => self.qp
   }
   self.prev_y = Some(y.copy())
   if !self.inter || i == 0 {
@@ -236,10 +289,15 @@ fn HevcStreamEncoder::code_picture(
       self.chroma_format_idc,
       ref_pic_l1=l1,
       rps_delta~,
+      sao_chroma=self.sao_chroma,
+      sao_eo=self.sao_eo,
     ) {
     Ok(f) => f
     Err(e) => return Err(e)
   }
+  // §462: every accepted picture feeds the ABR controller (its coded bits
+  // and final QP); a no-op with ABR off.
+  self.abr_note(frame.annexb.length().to_int64() * 8L, qp)
   let recon = {
     width: frame.width,
     height: frame.height,
@@ -329,4 +387,56 @@ fn HevcStreamEncoder::code_pending_b(
     }
     None => Ok(())
   }
+}
+
+///|
+/// `§462` streaming ABR suggestion: every picture's QP starts from the
+/// cumulative deviation against `target_bitrate / fps`, predicted by the
+/// "size halves every +6 QP" model (`h264_rc_qp_jump` — shared with the
+/// H.264 controller), damped against a three-picture window and clamped to
+/// +1..+3 QP per picture so the QP walks rather than leaps. The QP only
+/// climbs above the caller's flat value — the rate is a budget ceiling, and
+/// a single-pass encoder cannot know that a cheap present hides an
+/// expensive future. `abr_qp` carries the last accepted picture's QP.
+fn HevcStreamEncoder::abr_suggest(self : HevcStreamEncoder) -> Int32 {
+  if self.abr_rate == 0L {
+    return self.qp
+  }
+  let budget = self.abr_rate / self.abr_fps.to_int64()
+  let ahead = self.abr_bits - budget * self.abr_pics.to_int64()
+  let window = budget * 3L
+  let corr = if window <= 0L || ahead <= 0L {
+    0
+  } else {
+    h264_rc_qp_jump(
+      ahead.min(0x3FFFFFFFL).to_int(),
+      window.min(0x3FFFFFFFL).to_int(),
+    )
+    .max(1)
+    .min(3)
+  }
+  let q = self.abr_qp + corr
+  if q < 0 {
+    0
+  } else if q > 51 {
+    51
+  } else {
+    q
+  }
+}
+
+///|
+/// `§462`: fold one accepted picture into the ABR controller. No-op with
+/// ABR off, so the default streams stay byte-identical.
+fn HevcStreamEncoder::abr_note(
+  self : HevcStreamEncoder,
+  bits : Int64,
+  qp : Int32,
+) -> Unit {
+  if self.abr_rate == 0L {
+    return
+  }
+  self.abr_bits = self.abr_bits + bits
+  self.abr_pics = self.abr_pics + 1
+  self.abr_qp = if qp < 0 { 0 } else if qp > 51 { 51 } else { qp }
 }

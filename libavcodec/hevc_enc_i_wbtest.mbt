@@ -237,7 +237,14 @@ test "hevc enc i: sao decides real band offsets" {
   for i in 0..<(w * h) {
     pic.y[i] = y0[i] - 3
   }
-  let sao = hevc_enc_sao_decide(sps, sy, pic)
+  // Chroma SAO off (the default): dummy chroma sources are never read.
+  let sao = hevc_enc_sao_decide(
+    sps,
+    sy,
+    FixedArray::make((w >> 1) * (h >> 1), 0),
+    FixedArray::make((w >> 1) * (h >> 1), 0),
+    pic,
+  )
   let mut nonzero = 0
   for ctb in 0..<sps.ctb_size {
     if sao.type_idx[ctb * 3] != 0 {

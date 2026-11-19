@@ -247,10 +247,10 @@ test "hevc enc 422: plane size guard uses 4:2:2 chroma geometry" {
 }
 
 ///|
-test "hevc enc 422: chroma_format_idc 0 and 4 are rejected" {
+test "hevc enc 422: chroma_format_idc 4 and -1 are rejected" {
   let y = hevc_enc_422_plane(64, 64, fn(_, _) { 128 })
   let c = hevc_enc_422_plane(32, 32, fn(_, _) { 128 })
-  for cf in [0, 4, -1] {
+  for cf in [4, -1] {
     match
       hevc_encode_intra_frame(
         y,
