@@ -14982,3 +14982,651 @@ CDF 槽位 oracle）。
 
 - **纠错**：本仓长期记忆里「VP9 帧间、AV1 像素未做」一条已过期（AV1 像素解码
   早在 2026-10 即收口），就地改写为解码侧清单 + 编码侧进度两段。
+
+## §447 浏览器演示 + 统一错误码——申报书⑤①收口（2026-11-19）
+
+申报书六项交付里①统一 API、②五命令 CLI、③swresample→WAV、④swscale→
+封面/缩略图此前已落地，本次补齐缺口：**⑤浏览器演示**与**①错误码体系**，
+形成「拖入媒体文件 → 元数据 / 封面缩略图 / 转 WAV」的浏览器内完整核心
+使用路径。
+
+- **统一错误码**（`MediaError::code()`，playback.mbt）：五个构造器各映射
+  一个 ASCII UPPER_SNAKE 稳定码（FORMAT_NOT_FOUND / UNSUPPORTED_FORMAT /
+  DEMUX_ERROR / UNSUPPORTED_CODEC / DECODE_ERROR），与人类可读
+  `message()` 并列；机器匹配不再解析文案。底层 350+ 处 `Result[T, String]`
+  保持不动。
+- **wasm 导出面**（`demo/api/`，新包）：`pkgtype(kind: "foreign_library")`
+  + `#export_name` + `use-js-builtin-string`（moon 0.1.20261016 实证路径；
+  JS 侧 `WebAssembly.compile(bytes, { builtins:["js-string"],
+  importedStringConstants:"_" })`，imports 空对象）。四个导出：
+  `ff_probe`/`ff_cover`/`ff_thumbnail`/`ff_decode_audio`，统一
+  `{ok, error:{code,message}}` 信封 + 演示层失败码 NO_VIDEO_STREAM /
+  THUMBNAIL_UNSUPPORTED。**U+0100 偏移编码**过界（字节 ↔ 码元 +0x100）：
+  首版 latin-1 裸码元被 JS 严格 JSON.parse 以「控制字符」拒收（RFC 8259
+  禁 <0x20），+0x100 落 Latin-1 Supplement 零膨胀解决；全 256 值往返
+  wbtest 钉死。
+- **门面缺口修复**：MP4 视频轨 `codec_id` 原样透传 stsd fourcc（"avc1"），
+  `VideoDecoder::open` 只认 FFmpeg 编解码器名——浏览器实测暴露（CLI
+  extract-frame 此前未走过 MP4 视频路径）。`playback_mov_video_codec`
+  归一化 avc1-4/hvc1/hev1/vp09/av01/jpeg/png ，probe_json 的
+  codec_name 随之变为规范名。
+- **调试遗留清理**：库代码 5 处 `println` 移除（asf.mbt DBG、h264_ps.mbt
+  PPSGUARD×2、vp9_inter_scaled.mbt EMU/CHW 热路径打印）——它们让 wasm
+  产物凭空依赖 `console.log` 导入，清理后 imports 清零。
+- **演示页**（`demo/index.html` + `main.js`，零构建原生 ES module）：拖
+  拽/选文件、元数据表、封面（Blob URL）或首帧缩略图（SwsRgbScaler →
+  canvas putImageData）、音频轨转 WAV（可选 48k/44.1k 重采样）下载、
+  错误横幅（code+message）、WasmGC/js-string 能力检测。构建
+  `scripts/build_demo.sh`（2458 KiB / gzip 750 KiB）。
+- **验证**：demo/api 单测 10/10（含内联 PCM WAV 夹具端到端 + 全 256 值
+  U+0100 往返）；Node 严格 JSON.parse 全四函数实调（真实 H.264+AAC MP4：
+  probe 6ms / 缩略图 64×48=9216 字符 / WAV 44100Hz 重采样 48000 后
+  96044B）；浏览器（IAB/Chromium）拖入 MP4——元数据表、testsrc2 首帧
+  缩略图视觉确认、WAV 下载 930ms、txt 投入 FORMAT_NOT_FOUND 横幅、面板
+  正确隐藏；libavformat 693/693、libavcodec 分批回归全绿。
+
+## §448 HEVC 编码器纯 MoonBit 第一切片——I 帧 CABAC 全链（2026-11-19）
+
+用户指令「移植 h265，记得只做 wasm」（§437a wasm-only 决定的 HEVC 延续）。
+HEVC 解码器（I/P/B 全链）此前已收敛，本切片交付编码器第一片：**IDR I 帧、
+单 slice、CABAC、4:2:0 8-bit、平 QP、SAO/去块关闭**（Main profile Level 1，
+CTB 32）。
+
+- **文件**：`hevc_encode.mbt`（入口 + VPS/SPS/PPS/切片头写端 +
+  `hevc_encode_frames`/`hevc_encode_intra_frame` 批式/单帧 API）、
+  `hevc_enc_cabac.mbt`（算术引擎 + HEVC 语法 bin 写端 + 残差写端）、
+  `hevc_enc_dct.mbt`（正向 DCT-II/DST-VII + 正向量化）、`hevc_enc_ctu.mbt`
+  （CTB/CU/TU intra 编码循环）。
+- **镜像纪律**（§376 方法论）：参数集写端由自家 `hevc_ps.mbt` 解析器回读
+  验证；预测与重建直接调解码器自己的 `hevc_intra_predict`/`hevc_idct*`/
+  dequant/`hevc_add_residual_at` 内核——编码器局部重建==解码器输出是构造
+  保证；CABAC bin 写端逐 bin 镜像 `hevc_cabac_syntax.mbt`/
+  `hevc_decode_residual`；正向变换=解码器整数逆变换的代数逆（列范数定标
+  常量，增益误差 <3e-5）。
+- **正向变换定标**：`dq = 2^19·(Mᵀ)⁻¹·r·M⁻¹ ≈ (M·r·Mᵀ)·SCALE >> 28`，
+  SCALE 取自尺寸 N 基矩阵的均匀列范数（16377/32747/65520/131142）；
+  DST-VII 行范数非均匀（16398×3 + 16428），按 (行,列) 范数类逐项折算；
+  量化 `level = (|dq|·2^(bd+log2-9) + rnd)/scale` 与解码器 dequant 公式
+  互逆，int16 封顶防解码端 clip。
+- **纠错五轮**（全部由 bin 级/残差级对拍测试钉死）：
+  1. fdct 定标常量初版比值错 2^11 倍（列范数平方少乘一次）→ dq 溢出
+     int16 被 clip，重建全错；
+  2. last_sig 的 x-suffix 插在 y-prefix 之前（解码器先读双前缀再读
+     后缀）→ 后缀错位；
+  3. `coeff_abs_level_remaining` 的 prefix≥3 分支漏写终止 0-bin（解码器
+     的 unary 计数靠 0 停止）→ remaining 全部解错；
+  4. MPM rem 逆映射用被修改的 rem 做比较（必须对原始 mode 数数）→
+     非 MPM 模式解码偏 +1；
+  5. **vert/horiz 扫描的隐式 CG 判断被多余 swap 转置**：解码器的 swap 是
+     把「读到的 coded 值」转回「真实坐标」，而写端坐标本来就是真实值——
+     写端再做一次 swap 使 x_cg_last/y_cg_last 转置，最后一个子集的隐式
+     significant-CG 测试错位 → 整个 sig 相位被跳过（该 bug 只在
+     vert/horiz 扫描 + 跨 CG last 时显现，diag 全绿掩盖了它）；顺带修复
+     rice_param 的作用域（解码器每子集复位，写端原本整块延续）与
+     `hevc_enc_last_coord` 把行主序索引当扫描序的 bug。
+- **测试**（22 个 wbtest + 1 个黑盒，全部 wasm-gc）：CABAC 引擎
+  terminate(0) 扫描（40 个插入位 × 400 bin 回放——terminate(0) 中途继续
+  编码是 H.264 引擎验证没走过的路径）；fdct/idct 往返误差界、DC-only、
+  量化往返、DST4；残差写读直接对拍（DC-only、每 CG last、稠密多子集、
+  大 remaining+rice 增长、vert/horiz、32x32）；全链 round-trip（渐变/
+  平坦/阶梯/棋盘/噪声/奇尺寸 50x36/96x48/qp 阶梯码率单调/确定性双跑）；
+  黑盒 ffmpeg 三方仲裁钉值（2 帧 framemd5：f79440fa…、289694be…，
+  `hevc_enc_i_test.mbt`）。
+- **验证**：docker FFmpeg 9.0.2 零告警解码纯 MoonBit 码流，framemd5 与
+  自家解码器逐帧一致；`moon check` 0 error；libavformat 693/693、
+  libavcodec 分批回归全绿（既有 84 个 HEVC 解码器测试不动）。
+- 后续切片预告：P 帧+ME → RD 选模 → SAO/去块开启 → Main10/4:2:2/4:4:4 →
+  码控（CRF/VBV）→ 流式 + CLI。
+
+## §449 HEVC 编码器纯 MoonBit 第二切片——P 帧帧间预测（2026-11-19）
+
+接续 §448（IDR I 帧），本切片补上 HEVC 编码器的 P 帧路径：I 带头、后续
+帧以单条 L0 参考（前一帧重建）做帧间预测，纯 MoonBit/wasm，无 C FFI。
+新增公开入口 `hevc_encode_sequence`（I+P 序列，回填每帧局部重建），原
+`hevc_encode_frames` 保持 §448 的全 IDR 契约不变。
+
+- **文件**：`hevc_enc_inter.mbt`（整数 ME + merge/AMVP 决策 + MC 重建 +
+  inter TU 残差），`hevc_enc_cabac.mbt` 增 inter 语法写端（skip_flag /
+  pred_mode_flag / part_mode / merge_flag / merge_idx / mvd_coding /
+  mvp_lx_flag / no_residual_flag），`hevc_enc_ctu.mbt` 增 `HevcEncCtx` 的
+  inter 状态并按 slice_type 分派 CU，`hevc_encode.mbt` 增 P 切片头写端、
+  RPS 与参数集序列级镜像（每帧 SPS/PPS/切片头写出后用自家解码器回读，
+  写端与读端逐帧互证）。
+- **镜像纪律**：merge 候选表与 AMVP 预测器直接调解码器的
+  `hevc_derive_spatial_merge_candidates` / `hevc_luma_mv_mvp_mode`，MC 调
+  `hevc_luma_mc_uni` / `hevc_chroma_mc_uni`，因此编码器局部重建==解码器
+  输出由构造保证；CABAC bin 逐 bin 镜像 `coding_unit` 的 inter 分支与
+  `hls_transform_tree` 的 inter cbf 规则（depth-0 的 cbf_luma 仅在有 chroma
+  cbf 时写出，否则隐含 1）。
+- **ME 与模式决策**：全搜索 `[-16,16]` 整数位置，SAD 代价，静态块保留
+  MV 0；若某 merge 候选与所选 MV 完全一致则走 merge/skip，否则写 AMVP
+  预测子标志 + MVD（`-2^k` EG 风格 + bypass 符号），再按 `rqt_root_cbf`
+  决定残差。当前不做分数像素搜索、B 片、多参考、sub-2Nx2N 划分或 intra
+  CU 插入（P 片全是 inter），即尚非率失真选模编码器。
+- **纠错**：①AMVP 推导需要 `rpl[list].poc()`，编码器上下文必须构造单条目
+  L0 参考列表（否则数组越界）；②SPS 必须描述整条序列而非单帧——首帧是
+  IDR 但后续有 P 时 SPS 也要带短时 RPS，故 `sequence_inter` 由序列层传入；
+  ③切片头单独回读时不能走 `ff_h2645_packet_split`（会裁掉尾部对齐位），
+  改为按原始 RBSP 精确位长解析；④MVD 符号取 `get_cabac_bypass_sign` 语义
+  （1=负），merge_idx 到上限时不写终止 bin；⑤恢复第一切片遗留的两个
+  缺陷：黑盒测试源码中被写成 NUL 字节的 `b'\x00'`，以及 CTU 循环里的
+  调试 `println`。
+- **测试**：7 个白盒（静态 skip/merge、四组纯平移 AMVP+MVD、带残差的
+  merge+rqt_root_cbf、三帧参考链、qp 阶梯、确定性双跑、P 帧显著小于 I
+  帧）+ 1 个黑盒 FFmpeg 仲裁；白盒判据是编码器局部重建与自家帧级解码器
+  输出逐字节一致，黑盒钉值来自 `linuxserver/ffmpeg:9.0.2` 对纯 MoonBit
+  I+P 码流的 framemd5（4 帧 64x64 qp26：1f82a629… / d898bd3e… /
+  d107765e… / ef8c10f8…），FFmpeg 零告警解码且四帧与自家解码器逐字节同。
+  生成器 `scripts/generate_hevc_p_vectors.mbtx`。
+- **验证**：改动文件 `moonfmt` 后 `moon check --target wasm --deny-warn
+  --no-render` 零警告；HEVC 编码器白盒 29/29、黑盒 2/2 全绿；`moon info
+  --target wasm` 生成接口（公开新增 `hevc_encode_sequence` 与
+  `HevcEncodedSequence` / `HevcEncodedFrame` 的 `poc`/`is_idr` 字段，
+  既有入口兼容）。
+- 后续切片预告：分数像素 ME → RD 选模/I+inter 混合 P → B 片 → SAO/去块
+  开启 → Main10/4:2:2/4:4:4 → 码控（CRF/VBV）→ 流式 + CLI。
+
+## §450 HEVC 编码器纯 MoonBit 第三切片——分数像素运动估计（2026-11-19）
+
+接续 §449（P 帧整数 ME），本切片把 P 帧运动搜索从整数位置扩到 1/4 像素：
+先做原有 `[-16,16]` 整数全搜索，再在最佳整数 MV 的 4x4 分数邻域内精修。
+判据仍是「分数 SAD 用解码器自己的 MC 核在 scratch 画面上算出的最终预测
+样本」，因此评价域与解码器重建完全一致，不存在滤波器/舍入模型偏差。
+
+- **实现**：`hevc_enc_inter.mbt::hevc_enc_me_search` 在整数搜索后新增
+  4x4 分数精修：对 `(best_mvx + fx, best_mvy + fy)`，`fx,fy ∈ [0,3]`，调
+  `hevc_luma_mc_uni` 在临时 `HevcPicture` 上生成预测，SAD 最小的分数 MV
+  获胜；仅当严格小于整数代价时才替换，静态块仍稳定落在整数 MV 0。
+  分数 MV 的 MVD 语法与 §449 完全相同（MVD 本就是 1/4 像素单位），
+  无需新增 bin。
+- **钉值更新**：分数搜索使 I+P 夹具的 P 帧选到更优 MV，FFmpeg 9.0.2
+  framemd5 从 4 帧 `1f82a629… / d898bd3e… / d107765e… / ef8c10f8…`
+  变为 `1f82a629… / ad2ddfb5… / 0e87898d… / 4abf3a6a…`；FFmpeg 零
+  告警解码新码流，四帧与自家解码器逐字节一致，黑盒钉值同步更新。
+- **测试**：`hevc_enc_p_wbtest.mbt` 新增 2 个白盒——用解码器 MC 核构造
+  四种真实 1/4 像素位移（含负位移）的参考帧验证 round-trip，以及半像素
+  位移在 qp 10/42 两端的 round-trip；白盒总数 29→31，全部通过。
+- **验证**：`moon check --target wasm --deny-warn --no-render` 零警告；
+  HEVC 编码器白盒 31/31、黑盒 2/2 全绿；改动文件 `moonfmt` 且格式幂等。
+- 后续切片预告：RD 选模/I+inter 混合 P → B 片 → SAO/去块开启 →
+  Main10/4:2:2/4:4:4 → 码控（CRF/VBV）→ 流式 + CLI。
+
+## §451 HEVC 编码器纯 MoonBit 第四切片——P 片 RD 选模 / I+inter 混合编码（2026-11-19）
+
+接续 §450（分数像素 ME），本切片在 P 片加入 intra 候选与率失真（RD）选模：
+每个 CU 先无副作用地评价 inter（ME + merge/AMVP）与 intra（35 模式 luma
+搜索）两条候选，再按 `distortion + lambda * bit_hint` 择优提交。P 片从此
+不再是全 inter，可对突发新内容改用 intra CU。纯 MoonBit/wasm，公开 API 不变。
+
+- **实现**：`hevc_enc_inter.mbt` 新增无副作用的 `hevc_enc_intra_eval`（用
+  scratch 画面跑 35 模式 intra 搜索，返回最佳模式与 SAD，不写 bin/不写
+  tab_ipm）与 `hevc_enc_mvf_intra`（intra CU 的 `tab_mvf` 写 `PF_INTRA`，
+  防止陈旧 MV 泄漏到后续 merge 候选与去块强度）；`hevc_enc_coding_unit_inter`
+  在提交前比较两条候选的代价：lambda = 1 << (qp/6)，inter 的 bit_hint 为
+  2（merge）或 8（AMVP+MVD），intra 为 10。intra 胜出时按解码器 P 片语法
+  写 `skip_flag=0` + `pred_mode_flag=1`，再复用 I 帧的 `hevc_enc_coding_unit`
+  体，保证与 §448 intra 路径逐 bin 同源。
+- **关键约束**：intra 与 inter 的预测都写 `ctx.pic`，因此两候选都必须在
+  无副作用的 scratch 上评价，只对胜者提交一次预测+残差； RD 判据是
+  确定性的（无浮点）、解码器无关，bit_hint 只区分两条路径的大致 bin 数，
+  不是精确的码率模型——属于启发式 RD，不是完整率失真优化器。
+- **验证**：`hevc_enc_p_wbtest.mbt` 新增 2 个白盒——「intra-favoured 新内容」
+  （第二帧与第一帧完全无关，应触发 intra CU）与「三帧 inter/intra 交替」
+  （验证模式状态与邻域表跨帧不泄漏），白盒总数 31→33；新增黑盒
+  `hevc_enc_p_test.mbt::hevc enc p: intra-CU mode ffmpeg arbitration`，
+  钉值 `2c22b1c1db90c212edc036dfff2cb2ff` / `a36cb10d0d9d443b8015a33253cd99d7`
+  来自 FFmpeg 9.0.2 对含 intra CU 的 P 片码流的 framemd5，零告警解码、
+  两家逐字节一致。实测平移帧 P=584B vs I=1054B（inter 生效）、突发新内容
+  帧 P=1639B（intra 生效）。
+- **验证汇总**：`moon check --target wasm --deny-warn --no-render` 零警告；
+  HEVC 编码器白盒 33/33、黑盒 3/3 全绿；改动文件 `moonfmt` 且幂等。
+- 后续切片预告：B 片 → SAO/去块开启 → Main10/4:2:2/4:4:4 → 码控
+  （CRF/VBV）→ 流式 + CLI；RD 本身后续可升级为精确码率模型与 sub-CU
+  层级决策。
+
+## §452 HEVC 编码器纯 MoonBit 第五切片——去块滤波（DBF）开启（2026-11-19）
+
+接续 §451（P 片 RD 选模），本切片打开 HEVC 环内滤波的第一级——去块滤波。
+此前编码器 PPS 写 `pps_deblocking_filter_disabled_flag = 1`，重建样本未经
+滤波；现在置 0，编码器用**解码器自己的去块核**处理局部重建，因此
+recon == decoder 输出依旧逐字节成立。纯 MoonBit/wasm，公开 API 不变。
+
+- **语法侧（零新增 bin）**：PPS 的 `deblocking_filter_override_enabled_flag`
+  保持 0、`seq_loop_filter_across_slices_enabled_flag` 保持 0，因此片头
+  不新增任何语法元素——只把 `pps_deblocking_filter_disabled_flag` 从 1 改成
+  0，并补写 PPS 的 `pps_beta_offset_div2` / `pps_tc_offset_div2`（均 0）。
+  这是 HEVC 语法允许的最省位开启方式，码流长度不变（I 夹具仍 752 字节）。
+- **镜像实现**：把解码器的 bS 推导从 `HevcIntraDecoder` 方法抽成共享自由函数
+  `hevc_bs_derive(sps, tab_mvf, cbf_luma_tab, rpl, x0, y0, log2_trafo_size,
+  vertical_bs, horizontal_bs, bs_width)`，编解码器调用同一份代码；编码器新增
+  `cbf_luma_tab`（按解码器规则标记每个 min-TB）、`vertical_bs`/`horizontal_bs`
+  /`bs_width` 状态，在 TU 结束处推导 bS，帧末调用解码器的
+  `hevc_deblock_picture` 处理整幅重建。
+- **顺序对齐（关键）**：解码器先 `prediction_unit` 填 `tab_mvf`，再在
+  `transform_unit` 里推导 bS。编码器最初在残差编码之后才填 mvf，导致 bS
+  读到陈旧的 `pred_flag == intra`（值 0）而把 inter 边界误判成 bS=2；
+  修正为 **先填 mvf 再推 bS**，并补齐 skip CU（无变换树）与 P 片 intra CU
+  的 bS 推导路径。P 片 intra 分支还漏填 `qp_y_tab`（去块按错误 QP 取
+  beta/tc），一并修复。
+- **验证**：白盒改为带滤波解码（`ff_hevc_decode_intra_frame` /
+  `ff_hevc_decode_frames_ex(..., apply_filters=true)`），与编码器重建在同一
+  滤波域比较——I 白盒 9/9、P 白盒 11/11、HEVC 编码器白盒合计 33/33 全绿。
+  黑盒钉值全部重钉并经 FFmpeg 9.0.2 仲裁：I 两帧
+  `2ce4c26c6559cda49e446eaa7ce7da6b` / `4d62cabe9cfa99da49e837d6d350551a`，
+  I+P 四帧 `3cd0cc018a300377c23c154eb8ce1ce5` /
+  `08ef1f76ccaaad9a2364c3949efe09c2` / `21d88024934d81ef8ec833de8c27c48c` /
+  `953904dce2339a8f405b8f7afaa893da`，intra-CU 两帧
+  `9de31269479cce2e8b46460db9926fba` / `c2705b19af387140b62b873458405e98`。
+  FFmpeg 零告警解码，三方（FFmpeg / 自家解码器 / 编码器重建）逐字节一致。
+- **验证汇总**：`moon check --target wasm --deny-warn --no-render` 零警告；
+  白盒 33/33、黑盒 3/3 全绿；改动文件 `moonfmt` 且幂等。
+- 后续切片预告：SAO（去块之后、顺序必须保持）→ B 片 → Main10/4:2:2/4:4:4
+  → 码控（CRF/VBV）→ 流式 + CLI。
+
+## §453 HEVC 编码器纯 MoonBit 第六切片——SAO（样点自适应偏移）开启（2026-11-19）
+
+接续 §452（去块滤波），本切片打开 HEVC 环内滤波的第二级：SAO。顺序严格
+遵守规范——去块之后、参考帧存储之前。纯 MoonBit/wasm，公开 API 不变。
+
+- **语法侧**：SPS `sample_adaptive_offset_enabled_flag` 置 1，片头新增
+  `slice_sao_luma_flag = 1` / `slice_sao_chroma_flag = 0`（位置在 short-term
+  RPS 之后、参考帧计数之前，与 `ff_hevc_decode_slice_header` 完全一致），
+  每个 CTB 在**编码四叉树之前**写 SAO 参数，与解码器 `hevc_sao_parse` 的
+  调用点对齐。码流长度因此从 752B 增到 773B（每 CTB 若干 bin）。
+- **真实决策，不是退化**：新增 `hevc_enc_sao.mbt`，对每个 CTB 的 luma 建
+  32-band 直方图，统计每带残差（source − 去块重建）的和/绝对值和/计数，
+  取 `o = clamp(round(mean))` 作为该带偏移，再用精确 SAD 增益
+  `sum|e| − sum|e − o|` 选出增益最大的**四个连续带**（band 模式，32 带环绕）。
+  没有任何带获益时写 `sao_type_idx = 0`（该 CTB 关闭）。实测在人为 −3 偏置
+  的重建上，4/4 CTB 全部选出 band 模式且偏移为 +3——确实是失真补偿。
+- **两遍编码**：SAO 参数必须在 CTB 数据之前写，但决策需要**去块后**的重建。
+  因此 CTU 循环跑两遍：第一遍用全关 SAO（语法合法、参数数组尺寸正确）得到
+  去块重建，据此决策，第二遍带真实参数重编。所有像素级决策确定且与 CABAC
+  状态无关，故第二遍重建除 SAO 本身外与第一遍完全一致。
+- **镜像保证**：编码器调用解码器的 `hevc_sao_apply`（同一份滤波核），
+  `filter_slice_edges` 全 1、`ctb_slice_idx` 全 0（单 slice），因此
+  recon == decoder 输出依旧逐字节成立。新增 6 个 CABAC 写方法
+  （`sao_merge_flag` / `sao_type_idx` / `sao_offset_abs` /
+  `sao_offset_sign` / `sao_band_position`，以及被裁掉的 `sao_eo_class`）。
+- **验证**：白盒 I 10/10（新增 §453 永久测试：SPS 必须置位、决策必须产出
+  非零 band 偏移、应用后样本必须更接近源）、P 11/11，HEVC 编码器白盒
+  合计 34/34；黑盒 3/3 钉值全部重钉并经 FFmpeg 9.0.2 仲裁——I 两帧
+  `41161203d03781c8a9b1f80e4b1b773c` / `d1eb62e3e53523b2eccb73ade254f992`，
+  I+P 四帧 `5339917ee1981843254cc740e4d00157` / `5d67d379e920e467241e0219b3e020dc` /
+  `8caabf3aeaa269c6fa3d10dce5a6b37d` / `14cd0ecf168b8310fd83e4f26c38b04b`，
+  intra-CU 两帧 `a979107f1dc0c9579bbe3c2ec8a1bb18` / `ac475a20c09ffb1993a9a2905730e8df`。
+  FFmpeg 零告警解码，三方（FFmpeg / 自家解码器 / 编码器重建）逐字节一致。
+- **边界**：只做 luma band 模式；chroma SAO、edge 模式、SAO merge 尚未实现
+  （chroma 由 `slice_sao_chroma_flag = 0` 干净关闭，merge flag 恒写 0）。
+- **验证汇总**：`moon check --target wasm --deny-warn --no-render` 零警告；
+  白盒 34/34、黑盒 3/3 全绿；改动文件 `moonfmt` 且幂等。
+- 后续切片预告：B 片 → Main10/4:2:2/4:4:4 → 码控（CRF/VBV）→ 流式 + CLI。
+
+## §454 HEVC 编码器纯 MoonBit 第七切片——B 片（双向预测）（2026-11-19）
+
+**目标**：把编码器从 I/P 扩展到 I/P/B，实现真正的双向预测编码（两个参考
+列表、L0/L1/BI 三种预测形状、B 片的合并候选与 AMVP）。仍然纯 MoonBit、
+wasm-only，不引入任何 C FFI。
+
+### 实现要点
+
+- **编码顺序**：`I0, P2, B1, P4, B3, ...`——每个 B 位于两个锚点之间，因此
+  先编它后面的锚点，再编 B。偶数帧是锚点，奇数帧是 B；帧数为偶数时末尾
+  的奇数帧没有后继锚点，退化为 P。
+- **B 片使用内联 RPS**（1 个负向 POC−1、1 个正向 POC+1），使
+  `hevc_slice_rpl` 的 L0 取 `ST_CURR_BEF`、L1 取 `ST_CURR_AFT`，无需
+  `ref_pic_list_modification` 即可得到两个不同的参考列表。SPS 仍只保留
+  一个 RPS，`short_term_ref_pic_set_sps_flag` 宽度为 0 bit，P 码流字节不变。
+- **B 片头**：`first_slice_segment_in_pic_flag` → `slice_pic_parameter_set_id`
+  → `slice_type` → POC LSB → 内联 RPS → SAO 标志 → `num_ref_idx_active_override_flag=0`
+  → `mvd_l1_zero_flag=0` → `five_minus_max_num_merge_cand=0` → `slice_qp_delta`
+  → 对齐。位置严格镜像 `ff_hevc_decode_slice_header`。
+- **运动估计**：L0 用既有 `hevc_enc_me_search`（±8 全搜索 + 1/4 像素细化），
+  新增 `hevc_enc_me_search_ref` 对任意参考图做同样的搜索，供 L1 使用。
+  三种预测形状（L0 / L1 / BI）各算 SAD，取最省者；BI 的 SAD 由
+  `hevc_enc_sad_bi` 在 scratch 图上用解码器同一份 `hevc_luma_mc_bi` 生成。
+- **合并候选**：`hevc_enc_merge_candidates` 复用解码器的
+  `hevc_derive_spatial_merge_candidates`（`single_mcl_flag=false`、
+  `part_idx=0`），`hevc_enc_merge_match_b` 在 L0/L1/BI 三种候选里做精确
+  匹配，命中就只写一个 `merge_idx` bin。
+- **AMVP/MVD**：L0 用 `hevc_enc_amvp`，L1 用新增的 `hevc_enc_amvp_l1`
+  （`hevc_luma_mv_mvp_mode(..., lx = 1, ...)`）。L1 对两个 MVP 候选都试，
+  选位移更小的那个并写对应的 `mvp_lx_flag`。`mvd_l1_zero_flag = 0` 保证
+  解码器按 `mvp1 + mvd1` 重建 L1 运动矢量。
+- **运动场写入**：`hevc_enc_fill_mvf_b` 按 `pred_flag` 把未使用方向的 MV
+  清零，与解码器 `tab_mvf` 的写入规则一致，bS 推导因此不会看到脏数据。
+- **B 片 CU 的语法顺序**：`skip_flag` → （skip：`merge_idx` + mvf + bS +
+  ipm）或（`pred_mode_flag(0)` → `part_mode_inter_2nx2n` → `merge_flag` →
+  `merge_idx` | `inter_pred_idc` + L0 AMVP/MVD/`mvp_lx_flag` + L1
+  AMVP/MVD/`mvp_lx_flag` → `no_residual_flag` → mvf → 残差/bS）。intra
+  回退复用 I 片 CU 编码器（解码器在 `pred_mode_flag` 之后才读 `part_mode`，
+  因此调用点正确）。
+
+### 两个真实 bug（都靠逐 bin 对比定位）
+
+1. **B 片 CU 漏写 `tab_ct_depth` / `qp_y_tab`**。`split_coding_unit_flag` 的
+   上下文由邻居的 `tab_ct_depth` 推导，而 B 路径的 skip 分支直接
+   `return Ok(())`、inter 分支末尾也没补，导致**从第二个 CU 起**编码器与
+   解码器的 CU 四叉树划分分叉。逐 bin trace 对比显示第 87 个 bin 的
+   `inter_pred_idc` 上下文编码器用 `+0`、解码器用 `+1`，正是 CU 深度不一致。
+   修复：抽出 `hevc_enc_b_post_cu`，skip 分支与函数末尾都调用。
+2. **尾帧 P 片的 `rps_delta` 误用 −2**。原逻辑对所有 P 片都用 −2，但末尾
+   那个 P 前面并没有 B 帧，它的 L0 应是紧邻的前一张图（delta −1）。
+   修复：仅当该锚点后面还有 B 片（`i % 2 == 0 && i + 1 < n`）时才用 −2。
+
+### 验证
+
+- **白盒**：`hevc_enc_p_wbtest.mbt` 16/16（新增 4 个 B 片永久测试：
+  I/P/B 梯度往返、常量帧、B 等于未来锚点、B 等于过去锚点，以及内联 RPS
+  解析出的参考 delta 断言），`hevc_enc_i_wbtest.mbt` 10/10，合计 26/26。
+- **黑盒钉值**：`hevc_enc_i_test.mbt` 1/1、`hevc_enc_p_test.mbt` 2/2，§453 的
+  全部 MD5 钉值**未变**（B 片是 opt-in，默认路径不受影响）。
+- **FFmpeg 9.0.2 权威仲裁**：4 帧 I/B/P/P 码流（2827 B）零告警解码，
+  framemd5 四帧 `8ef0079cf2173e40bd90a7e2868a95da` /
+  `3fb850ebcb18a7d0efe6e9cd031bd7e8` / `db76e5fb00c495b2746f4ce8acb1fa3c` /
+  `c558552fa4e0d35a7644f4b0a637d227`，与编码器重建的 MD5 **逐帧完全一致**，
+  三方（FFmpeg / 自家解码器 / 编码器重建）逐字节一致。
+- `moon check --target wasm --deny-warn --no-render` 零警告；改动文件
+  `moonfmt` 且幂等。
+
+### 边界
+
+- B 片是 **opt-in**（`hevc_encode_sequence(..., b_slices=true)`），默认
+  仍只产 I/P，因此 §453 的钉值保持稳定。若要让 B 片成为默认，必须重钉
+  黑盒 MD5。
+- 只做 2Nx2N 的 B CU；`part_mode` 的 2NxN / Nx2N / NxN 分区、加权双向
+  预测（`weighted_bipred_flag`）、时间 MVP、多参考帧索引均未实现。
+- 每帧仍是单 slice、单 tile，去块与 SAO 只覆盖 luma。
+
+- 后续切片预告：Main10/4:2:2/4:4:4 → 码控（CRF/VBV）→ 流式 + CLI。
+
+## 455. HEVC 编码器 Main10（10-bit 4:2:0 I/P/B）
+
+`hevc_encode_frames`、`hevc_encode_sequence`、`hevc_encode_intra_frame` 新增
+可选 `bit_depth`（默认 8，仅接受 8/10）。10-bit 路径写 Main10 PTL
+（`profile_idc=2`，Main/Main10 compatibility flags），VPS/SPS 的亮度与色度
+位深均为 10；默认调用和显式 8-bit 仍写 Main 参数集。纯 MoonBit、wasm-only，
+未引入 C FFI。
+
+### 实现与真实 bug
+
+- 既有整数及 1/4 像素运动补偿已经使用 `ctx.sps.bit_depth`，Main10 直接复用；
+  I/P/B、merge/AMVP/MVD、去块滤波和 SAO 路径不变。
+- 首轮 10-bit 重建在 POC 0 的首个亮度样本失配（编码器 512、解码器 298）。
+  根因是解码器反量化 QP 含 `sps.qp_bd_offset=12`，编码器本地重建却只用公开
+  QP。修复 `hevc_enc_ctu.mbt` 与 `hevc_enc_inter.mbt`：亮度、色度本地重建
+  统一使用 `qp + sps.qp_bd_offset`；前向量化 QP 不变，8-bit 时偏移为 0。
+- 保持既有输入守卫语义，没有新增样本值域拒绝；色度格式仍限 4:2:0。
+
+### 验证
+
+- `hevc_enc_main10_wbtest.mbt` 4/4：参数集/Main10 profile、QP 12/26/40 的
+  I 帧全平面往返、I/P/B 与分数像素 MC、非法 9-bit 拒绝；I/P/B 按 POC 对齐。
+- `hevc_enc_main10_test.mbt` 黑盒 1/1：重新生成同一 64x64、QP26、4 帧流，
+  本仓库解码后逐帧 MD5 对照 FFmpeg 9.0.2。原始 Annex B 无容器时间戳，
+  外部输出为解码序 POC 0/2/1/3；显示序正确性由白盒测试覆盖。
+- 全部 HEVC 编码器测试文件 wasm-gc **47/47**，包含既有 8-bit 黑盒钉值。
+- FFmpeg 9.0.2 对 23671 字节 Main10 码流在 `-loglevel error -xerror` 下零
+  告警解出 4 帧 64x64 `yuv420p10le`（每帧 12288 字节），解码序 framemd5：
+  `f8408f1a8dc72c0d08eb928d8353d9b8` /
+  `c0fd3680d01781507c64ac0b2e9f5913` /
+  `ff73d0cb0995a7dc74b8090e78d8050f` /
+  `6445b66a286c1bc48586b12967d19550`。
+- 可复跑生成器：`moon run --target wasm-gc cmd/generate-hevc-main10 <目录>`。
+- `moon check libavcodec --target wasm-gc` 通过；仅有既有未使用 `v128`
+  依赖警告。全仓检查仍受 `cmd/encode-h264` 的既有类型错误阻断。
+
+### 边界
+
+- Main10 仅覆盖 4:2:0；4:2:2/4:4:4、12-bit、码控和流式 CLI 仍为后续工作。
+- B 片继续由 `b_slices=true` opt-in；默认 8-bit I/P 行为及钉值不变。
+
+## 456. HEVC 编码器 4:2:2 / 4:4:4（Range Extensions）
+
+`hevc_encode_frames`、`hevc_encode_sequence`、`hevc_encode_intra_frame` 新增
+可选 `chroma_format_idc`（默认 1，取值 1/2/3 对应 4:2:0、4:2:2、4:4:4）。
+4:2:2/4:4:4 走 Range Extensions：PTL 写 `profile_idc=4`、compat 只置第 4
+位、9 个 `XXX_constraint_flags` 加 34 位保留位；SPS 按格式写
+`chroma_format_idc`，一致性窗口偏移按 `hevc_sub_width_c` /
+`hevc_sub_height_c` 折算。8-bit 与 10-bit 均可。纯 MoonBit、wasm-only，
+未引入 C FFI；默认 4:2:0 行为与 §453/§455 既有黑盒钉值不变。
+
+### 实现
+
+- 色度 QP：`hevc_enc_chroma_qp` 改为 `(sps, qp_y)` 两参数、格式通用，返回值
+  已含 `sps.qp_bd_offset`；另加 `hevc_enc_chroma_qp_fwd` 供前向量化，保持
+  §455「前向量化用公开 QP、本地反量化用 QP + offset」的关系。
+- 变换单元：色度段镜像 `hls_transform_unit` 的循环——`log2_c = log2_tb -
+  hshift[1]`、`n_cb = if chroma_format_idc == 2 { 2 } else { 1 }`，4:2:2 的
+  两个色度块堆叠于 `y_c = y0 + (i << log2_c)`，每块单独 set_na/预测/量化/重建
+  （块 i 的残差在块 i+1 预测前已叠加），每块各写一个 cbf_cb/cbf_cr bin。
+- 4:2:2 的色度 DM 模式经 `hevc_tab_mode_idx` 重映射；色度扫描索引用色度模式
+  选择、但用 luma `log2_tb` 门控。
+- 帧间：`hevc_enc_mc_l0/l1/b` 的色度块尺寸拆成 `size >> hs` 与 `size >> vs`；
+  `hevc_enc_code_residual_inter` 的色度 level 数组改为 `Array[FixedArray]`，
+  `hevc_enc_coding_unit_inter` / `_b` 的量化循环按 `n_cb` 展开。
+
+### 真实 bug
+
+- `hevc_enc_mc_*` 里 `csize = size >> hs` 同时用作宽高。4:2:0 两者相等所以
+  看不出来；4:2:2 只水平下采样，色度块高度必须是 `size >> vs = size`，不改
+  会把 4:2:2 的色度预测写少一半。
+- 色度扫描原先用 `log2_c` 门控，但解码器用 luma `log2_trafo_size < 4` 判断。
+  4:2:0 时两者同侧，4:2:2/4:4:4 会分叉；改为按 `log2_tb` 门控。
+- Rext 的 43 位是「9 个约束标志 + 34 位保留」，不是 43 位保留。写错时
+  `decode_profile_tier_level` 的 `2+1+5+32+4+43+1` 预算检查仍通过，但字段
+  整体错位——只有参数集往返（编码器每帧都做）能抓到。
+
+### 验证
+
+- 白盒 `hevc_enc_422_wbtest.mbt` 12/12、`hevc_enc_444_wbtest.mbt` 7/7：
+  64x64 与非 CTB 对齐尺寸往返、平坦色度（零 cbf）、QP 12/26/40/51、
+  8-bit 与 10-bit、SPS 的 chroma_format_idc/shift/pix_fmt/Rext profile
+  断言、色度平面尺寸守卫、非法格式拒绝、I/P 静止与纯平移（色度 MC）。
+- 黑盒 `hevc_enc_422_test.mbt` 3/3、`hevc_enc_444_test.mbt` 2/2：本仓库
+  解码器逐帧 MD5 与 FFmpeg 9.0.2 对齐。
+- FFmpeg 9.0.2 在 `-loglevel error -xerror` 下零告警；输出尺寸自证格式
+  （64x64 8-bit 4:2:2 = 8192 字节、10-bit 4:2:2 = 16384、8-bit 4:4:4 =
+  12288）。framemd5：`a4b6e1166c3120c855472b55c8440fcb`（422 I）、
+  `a9960e5db6869f77e887e909d7e95d2c`（422 P）、
+  `9e431e626bb8971de4cdfd92aea50aee`（422 10-bit I）、
+  `d120074228e928227abd8aad38d1f444`（444 I）、
+  `d2709c85f193d1cc3a0fa4b1c43ab9e0`（444 P）。
+- 生成器 `cmd/generate-hevc-422` 一次写出上述 5 条流。
+- HEVC 编码器测试 wasm-gc 62/62、wasm 黑盒 9/9；`moon check --target wasm`
+  0 错误 0 警告（仅既有 `v128` 未使用依赖警告）。全仓检查仍受
+  `cmd/encode-h264` 的既有类型错误阻断。
+
+### 边界
+
+- 色度 SAO 仍关闭（`slice_sao_chroma_flag=0`），SAO 只有 luma band 模式。
+- 12-bit、单色（`chroma_format_idc=0`）未开放。
+- B 片仍由 `b_slices=true` opt-in；默认 8-bit 4:2:0 I/P 行为与钉值不变。
+- 每帧仍是单 slice、单 tile；码控（CRF/VBV）、多 slice/多 tile、流式 CLI
+  仍未实现。
+
+- 后续切片预告：12-bit → 码控（CRF/VBV）→ 流式 + CLI。
+
+## 457. HEVC 编码器 12-bit（Range Extensions 完成色深矩阵）
+
+`hevc_encode_frames`、`hevc_encode_sequence`、`hevc_encode_intra_frame` 的
+`bit_depth` 可选参数接受 8/10/12；12-bit 连同 4:2:0 在内的全部色度格式走
+Range Extensions（`profile_idc=4`），`qp_bd_offset` 由 SPS 往返自然得到 24。
+纯 MoonBit、wasm-only，未引入 C FFI；默认与 8/10-bit 既有钉值不变。
+
+### 实现
+
+- PTL：`rext = chroma_format_idc != 1 || bit_depth > 10`——Main/Main10 只覆
+  盖到 10-bit 4:2:0，12-bit 即使 4:2:0 也必须宣告 Rext；
+  `max_10bit_constraint_flag` 从硬编码 1 改为 `bit_depth <= 10`（12-bit 流
+  不得宣称兼容 10-bit 解码），`max_12bit` 恒 1、`max_8bit`/`max_422chroma`/
+  `max_420chroma`/`max_monochrome` 沿用 §456 的按格式推导。
+- 守卫：`hevc_enc_guard_frame` 接受 12，错误消息改为
+  `bit_depth must be 8, 10 or 12`（§455 白盒钉值同步）。
+- 其余零改动：量化/反量化以 `bd` 为参数、deblock 的 beta/tc 按
+  `bit_depth - 8` 缩放、MC 的 `ox << (bd - 8)`、clip 上界 `(1 << bd) - 1`
+  在解码侧本就全部经 `sps.bit_depth` 通用，编码器复用同一路径；本地重建
+  的 `qp + qp_bd_offset` 关系（§455 引入、§456 重申）对 24 的偏移量自动
+  成立。
+
+### 验证
+
+- 白盒 `hevc_enc_12bit_wbtest.mbt` 7/7：SPS/PTL 往返（profile_idc=4、
+  compat 只置第 4 位、max_10bit=0、max_12bit=1、`qp_bd_offset=24`、
+  `pix_fmt=yuv420p12le`、默认字节不变、与 Main10 PTL 字节不同）、422/444
+  组合的色度约束位、I 帧 QP 12/26/40 全平面往返、非 CTB 对齐 48x40、
+  I/P/B 平移序列（分数像素 MC）按 POC 对齐重建、422/444 12-bit intra
+  往返、非法位深 9/11/14 拒绝。
+- 黑盒 `hevc_enc_12bit_test.mbt` 1/1（wasm-gc 与 wasm 双目标）：重新生成
+  同一 64x64、QP26、4 帧 12-bit 流，本仓库解码后对 16-bit LE 平面 MD5 对照
+  FFmpeg 9.0.2 framemd5，解码序 POC 0/2/1/3：
+  `692d2ea8220b68a8bb80edb0c5a9ce4a`（I）、`42a798df129a2e6537937b291f6000f8`
+  （P）、`1befb89dd7c6b45095fe184f6bf7932d`（B）、
+  `fda6dc07783d5c6e07a29a25c4e4f0ea`（P）。
+- FFmpeg 9.0.2 在 `-loglevel error -xerror` 下零告警解出 43028 字节码流，
+  ffprobe 确认 `profile=Rext`、`pix_fmt=yuv420p12le`，每帧 12288 字节
+  （64x64 4:2:0 16-bit 三平面）。
+- 生成器 `cmd/generate-hevc-12bit` 复跑 SHA-256 一致
+  （`08b3fc4694cd6c87f448e33373ec2c3667c1b5132a5dfdf4ed44967ca541aa40`）。
+- HEVC 编码器测试 wasm-gc 79/79、黑盒 wasm 10/10；`moon fmt`/`moon info`
+  已跑，全仓 `moon check --target wasm` 与定向 wasm-gc 均 0 错误（仅既有
+  `v128` 未使用依赖警告）。
+
+### 边界
+
+- 单色（`chroma_format_idc=0`）仍未开放；色度 SAO 仍关闭；B 片仍限 2Nx2N
+  与 `b_slices=true` opt-in；码控（CRF/VBV）、多 slice/多 tile、流式 CLI
+  仍未实现。
+
+- 后续切片预告：码控（CRF/VBV）→ 流式 + CLI。
+
+## 458. HEVC 编码器恒定速率因子 CRF（x265 `--crf`）
+
+`hevc_encode_sequence` 与 `hevc_encode_frames` 新增可选 `crf : Double =
+-1.0`（0.0..=51.0；负值=关闭，走既有平直 QP 路径）。模型与 H.264 §435
+共享：CRF 值即基线 QP（`round(crf)`），其后每帧 QP 按时间复杂度——对
+上一显示帧的 luma SAD（隔行隔列子采样）——相对运行均值的对数偏离弯曲：
+
+```text
+qp_i = round(base + 6 * (qcompress - 1) * log2(cplx_i / mean(cplx_1..i)))
+```
+
+qcompress=0.6（即每倍增复杂度 -2.4 QP），±6 QP 饱和；全静态序列（均值
+~0）恒基线，静态帧对运动均值 +6 封顶。递推严格 display-causal（样本 i
+只需显示序帧 i-1 与 i），故 B 片编码重排（I0, P2, B1, ...）不影响它：
+qps 按 display 位次一次算好，编码循环按下标取用。CRF 开启时 `qp` 参数
+被忽略。纯 MoonBit、wasm-only；CRF 关闭路径与既有钉值字节恒等。
+
+### 实现
+
+- 新文件 `hevc_enc_crf.mbt`：`HevcCrf`（base/sum/count，`qp_for` 样本先
+  进均值再取比）、`hevc_enc_crf_sad`（Int32 样本平面，隔行隔列；比值
+  之外无绝对尺度，位深无需折叠）、`hevc_enc_crf_qps`（display 序批量
+  驱动）。常量（0.6/±6）就地内联——包白盒测试贴 V8 `__moonbit__init__`
+  局部上限，顶层 `let` 每个耗一个 init local（§435 同款约束）。
+- `hevc_encode.mbt`：两入口加 `crf`（`> 51.0` 拒绝，消息
+  `hevc enc: crf must be in 0.0..=51.0`）；编码循环内
+  `pic_qp = if crf >= 0.0 { qps[i] } else { qp }`。每帧本就携带自己的
+  PPS/slice QP（`hevc_enc_frame_ex` 按帧写 `hevc_enc_pps(qp,..)`），逐帧
+  QP 无需新语法通路。
+
+### 验证
+
+- 白盒 `hevc_enc_crf_wbtest.mbt` 8/8：手算复杂度序列的精确 QP（SAD
+  [-, 4000, 0] @ crf26 → [26, 26, 32]，位置 1 样本先进均值 ratio=1 恒
+  基线、静态 +6 饱和）；递增复杂度至少一帧 refine、全静态恒基线；
+  `round(crf)` 半值边界（18.4→18、18.5→19）与 crf51+饱和钳 51；
+  display-causal QP 在 B 重排下取值稳定；crf=28 I/P/B 流按 POC 对齐
+  重建逐样本一致；crf=10 于 8/10/12-bit 序列往返；`qp` 在 CRF 下不改变
+  一字节、`crf=-1.0` 与不传恒等、同参重跑字节恒等；crf 51.5/52/100
+  拒绝、51.0 与 0.0 合法。
+- 黑盒 `hevc_enc_crf_test.mbt` 1/1（wasm-gc 与 wasm 双目标）：64x64、
+  crf=28、4 帧 I/P/B（编码序 POC 0/2/1/3），本仓库解码 `yuvp(8)` 平面
+  MD5 对照 FFmpeg 9.0.2 framemd5，解码序：
+  `c6111e30fdd6fedd991b7f65c8155a95`（I）、
+  `e3e97fe5425cf3dd3b86c0464082ab19`（P）、
+  `bd7123fb72320e6e4b2e691f8310b99a`（B）、
+  `f87ee55cb7c1e9f0f9634e167515c91d`（P）。
+- FFmpeg 9.0.2 在 `-loglevel error -xerror` 下零告警解出 4769 字节码流，
+  每帧 6144 字节（64x64 8-bit 4:2:0）。
+- 生成器 `cmd/generate-hevc-crf` 复跑 SHA-256 一致
+  （`5d6d5777b60729e958d7a3089a8cf372f1a296806f824d736b63443824ba8425`）。
+- HEVC 编码器测试 wasm-gc 88/88、黑盒 wasm 11/11；`moon fmt`/`moon info`
+  已跑，全仓 `moon check --target wasm` 0 错误（仅既有 `v128` 警告）。
+
+### 边界
+
+- VBV/ABR（目标码率约束）未实现——CRF 是质量驱动，无码率反馈；x265 的
+  cu-tree/lookahead、aq-mode 等复杂度来源未引入（单一带内 SAD）。
+- `hevc_encode_intra_frame` 不接受 crf（单帧无时间前驱，基线即 qp）。
+- 其余边界不变（单色/色度 SAO/加权 B/多 slice/tile/流式 CLI）。
+
+- 后续切片预告：流式（逐帧推送编码器）+ CLI → 或 VBV/ABR 码率控制。
+
+## 459. HEVC 流式编码器 + CLI；批式 B 片奇数长 RPS 修复
+
+`HevcStreamEncoder`（`libavcodec/hevc_enc_stream.mbt`）：逐帧推送的流式
+HEVC 编码器——`open`/`push_frame`/`finish`/`drain`，显示序进、编码序出
+（B 片调度下奇数位 parked 为 pending，等未来锚点到达即出 P-B 对；尾奇数
+位在 `finish` 落为尾 P）。**契约：drain 拼接与 `hevc_encode_sequence`
+批式输出字节恒等**——平直 QP 与 CRF（§458 display-causal 逐 push 递推即
+批式全数组公式）、4:2:0/4:2:2、8/10/12-bit、all-intra（§448 调度）皆然。
+纯 MoonBit、wasm-only。CLI `cmd/encode-hevc`（planar YUV 输入，流式推送，
+JSON summary）随之交付。
+
+### 批式 B 片奇数长 RPS 修复（本切片真实 bug）
+
+设计流式调度时发现批式 `hevc_encode_sequence` 的
+`has_following_b = is_b_interleaved && i%2==0 && i+1<n` 对**奇数长序列的
+最后一个偶锚点**错写 `rps_delta=-1`：P 锚的 L0 参考在 2 个 display 步
+之前（中间夹着 display i-1 的 B——只要锚点存在该 B 必存在），`i+1<n`
+看到的却是 display i+1（序列尾不存在）。症状：n=3/5 的 b_slices 流本仓
+解码器报 `duplicate POC in a sequence`（n=4 恰好避开——既有测试全用
+n=4，从未暴露）。修复为 `anchor_gap_two = is_b_interleaved && i%2==0`；
+偶数长流字节不变（88/88 既有钉值原样通过），n=5 修复流经 FFmpeg 9.0.2
+`-xerror` 零告警 5 帧仲裁。
+
+### 实现
+
+- `HevcStreamEncoder`：字段仅参考链（`ref_pic`/`prev_anchor`，镜像批式
+  旋转：锚点编码后旧 L0 移入 `prev_anchor` 供随后 B 的 L0）、pending B
+  （y/u/v 拷贝 + 该帧 CRF QP + display 位次）、CRF 控制器与上一 push 的
+  luma 拷贝——有界工作集。
+- 调度完全镜像批式：首 push IDR 带参数集；`inter=false` 每 push IDR
+  （仅首帧带 PS）；`b_slices` 奇数位 park、偶数位出 P（delta=-2）+pending
+  B（L0=prev_anchor, L1=ref_pic）；`finish` 尾 P（delta=-1）。
+- `push_frame` 错误（平面过小等）不推进状态；`finish` 无 push 报
+  `hevc enc: no frames`（镜像批式空数组）。
+- CLI `cmd/encode-hevc`：`encode-h264` 词汇表子集（--qp/--crf/--chroma/
+  --bit-depth/--b-slices/--all-intra），planar YUV（8-bit u8、10/12-bit
+  16-bit LE）逐帧推送；e2e：CLI 输出与 FFmpeg 仲裁过的批式流 SHA-256
+  一致（`5d6d5777…41aa40`）。
+
+### 验证
+
+- 白盒 `hevc_enc_stream_wbtest.mbt` 5/5：恒等矩阵（qp/crf × b_slices
+  on/off × n=1..6，24 组合全部字节恒等）；all-intra/10-bit+CRF+B/422+B
+  恒等；逐 push 节奏（b_slices：1/0/2/0/2|finish 0，偶数长 finish 出
+  尾 P，无 b 每帧 1）；n=3/5 解码序 POC 全出现（0,2,1 / 0,2,1,4,3）；
+  open 六种非法参数、空 finish、平面过小后仍可用。
+- 黑盒 `hevc_enc_stream_test.mbt` 1/1（wasm-gc 与 wasm 双目标）：流式
+  5 帧 CRF 流（crf28_ipb5_stream.265，5517 字节）解码序 POC 0/2/1/4/3
+  MD5 对照 FFmpeg 9.0.2：
+  `c6111e30…`/`e3e97fe5…`/`bd7123fb…`（前三帧与 4 帧钉值流一致）、
+  `d38ddbc3685d721f7bbc0286ed75002c`（P4）、
+  `7e6eceb2ac22ce95fe7b9a74f6ab2028`（B3）。
+- 生成器 `cmd/generate-hevc-crf` 扩展：同帧序列 n=5 经流式编码器落盘
+  并自证与批式字节恒等；4 帧钉值流 SHA 不变。
+- CLI `cmd/encode-hevc`：options 2/2（默认值/帧尺寸公式、十种拒绝）；
+  e2e 与仲裁流 SHA-256 一致。
+- HEVC 编码器测试 wasm-gc 94/94、黑盒 wasm 12/12；`moon fmt`/`moon info`
+  已跑，全仓 `moon check --target wasm` 0 错误。
+
+### 边界
+
+- 流式无 VBV/ABR/scenecut/keyint（H.264 流式已有，HEVC 侧未移植）；
+  无 per-picture pict_type/SEI/side data。
+- CLI 为整文件缓冲 IO（encode-h264 的 --stream 分块宿主 IO 未镜像）。
+- 其余边界不变（单色/色度 SAO/B 片加权/多 slice/tile/VBV）。
+
+- 后续切片预告：VBV/ABR 码率控制 → 或 HEVC 编码器收尾项（单色/色度 SAO）。

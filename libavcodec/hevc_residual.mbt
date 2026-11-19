@@ -112,6 +112,8 @@ fn hevc_persistent_rice_update(
 ///|
 /// `ff_hevc_hls_residual_coding`: decode, dequantize, inverse transform and add
 /// one transform block. `qp_y` is the luma QP of the current CU.
+
+///|
 pub fn hevc_hls_residual_coding(
   cabac : HevcCabac,
   sps : HevcSps,

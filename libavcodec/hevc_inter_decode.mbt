@@ -527,6 +527,132 @@ fn hevc_boundary_strength(
 }
 
 ///|
+/// `ff_hevc_deblocking_boundary_strengths` (filter.c) for a single-slice,
+/// single-tile picture. Shared by the decoder and the encoder so both derive
+/// exactly the same boundary strengths from the same tables — the encoder's
+/// reconstruction after `hevc_deblock_picture` then matches the decoder's by
+/// construction.
+///
+/// `vertical_bs`/`horizontal_bs` are `Array[Int32]` (not `FixedArray`) so the
+/// encoder, which keeps its bS arrays as `Array`, can pass them directly.
+fn hevc_bs_derive(
+  sps : HevcSps,
+  tab_mvf : Array[HevcMvField],
+  cbf_luma_tab : Array[Int32],
+  rpl : Array[HevcRefPicList],
+  x0 : Int32,
+  y0 : Int32,
+  log2_trafo_size : Int32,
+  vertical_bs : Array[Int32],
+  horizontal_bs : Array[Int32],
+  bs_width : Int32,
+) -> Unit {
+  let l2pu = sps.log2_min_pu_size
+  let l2tu = sps.log2_min_tb_size
+  let min_pu_width = sps.min_pu_width
+  let min_tu_width = sps.min_tb_width
+  let is_intra = tab_mvf[(y0 >> l2pu) * min_pu_width + (x0 >> l2pu)].pred_flag ==
+    hevc_pf_intra
+  let boundary_upper = y0 > 0 && (y0 & 7) == 0
+  let boundary_left = x0 > 0 && (x0 & 7) == 0
+  if boundary_upper {
+    let yp_pu = (y0 - 1) >> l2pu
+    let yq_pu = y0 >> l2pu
+    let yp_tu = (y0 - 1) >> l2tu
+    let yq_tu = y0 >> l2tu
+    let mut i = 0
+    while i < 1 << log2_trafo_size {
+      let x_pu = (x0 + i) >> l2pu
+      let x_tu = (x0 + i) >> l2tu
+      let top = tab_mvf[yp_pu * min_pu_width + x_pu]
+      let curr = tab_mvf[yq_pu * min_pu_width + x_pu]
+      let top_cbf = cbf_luma_tab[yp_tu * min_tu_width + x_tu]
+      let curr_cbf = cbf_luma_tab[yq_tu * min_tu_width + x_tu]
+      let bs = if curr.pred_flag == hevc_pf_intra ||
+        top.pred_flag == hevc_pf_intra {
+        2
+      } else if curr_cbf != 0 || top_cbf != 0 {
+        1
+      } else if rpl.length() >= 2 {
+        hevc_boundary_strength(rpl, rpl, curr, top)
+      } else {
+        1
+      }
+      horizontal_bs[(x0 + i + y0 * bs_width) >> 2] = bs
+      i = i + 4
+    }
+  }
+  if boundary_left {
+    let xp_pu = (x0 - 1) >> l2pu
+    let xq_pu = x0 >> l2pu
+    let xp_tu = (x0 - 1) >> l2tu
+    let xq_tu = x0 >> l2tu
+    let mut i = 0
+    while i < 1 << log2_trafo_size {
+      let y_pu = (y0 + i) >> l2pu
+      let y_tu = (y0 + i) >> l2tu
+      let left = tab_mvf[y_pu * min_pu_width + xp_pu]
+      let curr = tab_mvf[y_pu * min_pu_width + xq_pu]
+      let left_cbf = cbf_luma_tab[y_tu * min_tu_width + xp_tu]
+      let curr_cbf = cbf_luma_tab[y_tu * min_tu_width + xq_tu]
+      let bs = if curr.pred_flag == hevc_pf_intra ||
+        left.pred_flag == hevc_pf_intra {
+        2
+      } else if curr_cbf != 0 || left_cbf != 0 {
+        1
+      } else if rpl.length() >= 2 {
+        hevc_boundary_strength(rpl, rpl, curr, left)
+      } else {
+        1
+      }
+      vertical_bs[(x0 + (y0 + i) * bs_width) >> 2] = bs
+      i = i + 4
+    }
+  }
+  if log2_trafo_size > l2pu && !is_intra {
+    // TU-internal PU boundaries.
+    let mut j = 8
+    while j < 1 << log2_trafo_size {
+      let yp_pu = (y0 + j - 1) >> l2pu
+      let yq_pu = (y0 + j) >> l2pu
+      let mut i = 0
+      while i < 1 << log2_trafo_size {
+        let x_pu = (x0 + i) >> l2pu
+        let top = tab_mvf[yp_pu * min_pu_width + x_pu]
+        let curr = tab_mvf[yq_pu * min_pu_width + x_pu]
+        let bs = if rpl.length() >= 2 {
+          hevc_boundary_strength(rpl, rpl, curr, top)
+        } else {
+          1
+        }
+        horizontal_bs[(x0 + i + (y0 + j) * bs_width) >> 2] = bs
+        i = i + 4
+      }
+      j = j + 8
+    }
+    let mut j2 = 0
+    while j2 < 1 << log2_trafo_size {
+      let y_pu = (y0 + j2) >> l2pu
+      let mut i = 8
+      while i < 1 << log2_trafo_size {
+        let xp_pu = (x0 + i - 1) >> l2pu
+        let xq_pu = (x0 + i) >> l2pu
+        let left = tab_mvf[y_pu * min_pu_width + xp_pu]
+        let curr = tab_mvf[y_pu * min_pu_width + xq_pu]
+        let bs = if rpl.length() >= 2 {
+          hevc_boundary_strength(rpl, rpl, curr, left)
+        } else {
+          1
+        }
+        vertical_bs[(x0 + i + (y0 + j2) * bs_width) >> 2] = bs
+        i = i + 8
+      }
+      j2 = j2 + 4
+    }
+  }
+}
+
+///|
 /// `ff_hevc_deblocking_boundary_strengths` (filter.c) for a single-slice
 /// picture. */
 fn HevcIntraDecoder::deblocking_boundary_strengths(

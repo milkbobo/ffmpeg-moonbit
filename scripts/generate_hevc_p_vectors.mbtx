@@ -1,0 +1,81 @@
+///|
+/// Generate the pure-MoonBit HEVC I+P stream for slice 2's black-box test.
+/// Usage: moon run scripts/generate_hevc_p_vectors.mbtx <absolute .scratch/hevc_enc dir>
+///
+/// Writes `p_i.265` (I + 3 P frames, 64x64, qp 26). The FFmpeg framemd5
+/// reference is obtained separately by decoding that file with docker.
+
+///|
+import {
+  "moonbitlang/core/env",
+  "moonbitlang/x/fs",
+}
+
+///|
+fn plane(
+  w : Int32,
+  h : Int32,
+  f : (Int32, Int32) -> Int32,
+) -> FixedArray[Int32] {
+  let out : FixedArray[Int32] = FixedArray::make(w * h, 0)
+  for j in 0..<h {
+    for i in 0..<w {
+      out[j * w + i] = f(i, j)
+    }
+  }
+  out
+}
+
+///|
+fn clamp(v : Int32, n : Int32) -> Int32 {
+  if v < 0 {
+    0
+  } else if v >= n {
+    n - 1
+  } else {
+    v
+  }
+}
+
+///|
+fn main raise {
+  let args = @env.args()
+  guard args.length() == 2 else {
+    fail("usage: generate_hevc_p_vectors.mbtx <absolute scratch dir>")
+  }
+  let dir = args[1]
+  @fs.mkdir_all(dir)
+  let w = 64
+  let h = 64
+  let y0 = plane(w, h, fn(i, j) { (i * 3 + j * 2 + 40) & 255 })
+  let u0 = plane(w >> 1, h >> 1, fn(i, j) { (i * 5 + j * 3) & 255 })
+  let v0 = plane(w >> 1, h >> 1, fn(i, j) { (i * 7 + j) & 255 })
+  let frames : Array[(FixedArray[Int32], FixedArray[Int32], FixedArray[Int32])] = [
+    (y0, u0, v0),
+  ]
+  for k in 1..<4 {
+    let dx = k * 4
+    let dy = k * 2
+    let yk = plane(w, h, fn(i, j) {
+      y0[clamp(j + dy, h) * w + clamp(i + dx, w)]
+    })
+    let uk = plane(w >> 1, h >> 1, fn(i, j) {
+      u0[clamp(j + dy, h >> 1) * (w >> 1) + clamp(i + dx, w >> 1)]
+    })
+    let vk = plane(w >> 1, h >> 1, fn(i, j) {
+      v0[clamp(j + dy, h >> 1) * (w >> 1) + clamp(i + dx, w >> 1)]
+    })
+    frames.push((yk, uk, vk))
+  }
+  let seq = match
+    @libavcodec.hevc_encode_sequence(frames, width=w, height=h, qp=26) {
+    Ok(s) => s
+    Err(e) => fail("encode: \{e}")
+  }
+  let stream_path = dir + "/p_i.265"
+  @fs.write_binary(stream_path, seq.annexb)
+  println("wrote \{stream_path} (\{seq.annexb.length()} bytes)")
+  for f in seq.frames {
+    println("frame poc=\{f.poc} idr=\{f.is_idr} bytes=\{f.annexb.length()}")
+  }
+}
