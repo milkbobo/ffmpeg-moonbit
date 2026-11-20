@@ -16793,3 +16793,33 @@ ME 复用 4/4、inter 24/24、tile 12/12、frame 7/7（共 84）；
 **边界**：CLI 仅 8-bit 4:2:0/64 倍数；三维开销 = |q|×|skip|×|ref|×单帧
 （ME 已由 §466 复用，残差仍每组合全跑）；未接 `--rd-candidates`。
 交接 `AGENT_HANDOFF_2026-11-20_AV1_CLI_EXTEND.md`。**未提交**。
+
+## §468a AV1 编码器 loop_filter 帧头打通（2026-11-20）
+
+打通编码器 → 帧头 → 解码器去块滤波的参数链路（第一步）：
+`Av1Encoder::encode_frame` 增 `loop_filter_level0~`/`loop_filter_level1~`/
+`loop_filter_sharpness~`，透传到 `Av1KeyFrameEncConfig`；默认全 0 与既有
+行为一致。本步只通参数、不做编码器侧滤波，故设非零 level 后该帧
+「decode==expected」契约暂不成立（刻意中间状态）。
+
+**验证**：白盒 3/3——lf=32 vs lf=0 解码有 114 个 luma 像素不同；
+sharp=7 vs sharp=0 有 117 个不同；不传参数与显式 lf=0 逐字节相同。
+
+**两个坑**：①首版夹具用 40/200 硬阶跃（差 160），测出「无变化」误判参数
+未接上；实际 `av1_lf_filter` 门控 `|p0-q0|*2+(|p1-q1|>>1) <= e`，e 由
+level 推出很小，大阶跃不滤波是规范正确行为。换成 120/128（差 8）轻阶跃
+后立刻出现 114 差异像素。**教训：验证去块须让边缘差落在 level 的 limit
+内**。②`Array<Int32>` 非法，MoonBit 泛型用方括号。
+
+**回归**：encoder 8/8、refring 5/5、RD 三维 5/5、RD 4/4、skip 5/5、
+NEARMV 2/2、RD×skip 4/4、multiref 4/4、ME 复用 4/4、loop-filter 3/3、
+inter 24/24、tile 12/12、frame 7/7（共 87）；`moon check --deny-warn` 0、
+fmt/info 已跑。注：wasm-gc 目标报 `cmd/encode-h264` 的 FrameReader/Writer
+缺失是既有无关问题（wasm 目标正常）。
+
+**第二步入口**：编码器侧滤波所需零件已确认同包可用（`av1_lf_filter` 系列
+不依赖 Av1FrameCtx；`av1_calc_eih`/`av1_calc_lf_values` 可直接调），缺
+intra 的 lf_mask 构造与帧级 cols/rows 循环需新写。本节的 114/117 差异
+像素即第二步必须复现的目标。交接
+`AGENT_HANDOFF_2026-11-20_AV1_LF_HEADER.md` +
+`AGENT_HANDOFF_2026-11-20_AV1_ENCODER_DEBLOCK_RESEARCH.md`。**未提交**。

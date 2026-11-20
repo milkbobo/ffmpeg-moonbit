@@ -94,6 +94,16 @@ pub fn Av1Encoder::encode_frame(
   /// When set, this takes precedence over rd_skip_pcts~ / rd_lambda~ /
   /// ref_age~ for inter frames.
   rd_ref_ages? : Array[Int32],
+  /// §468 (first step): loop-filter levels for the frame header. Default
+  /// 0 keeps deblocking off, matching every prior behaviour. NOTE: setting
+  /// these makes the DECODER filter the reconstruction while the encoder's
+  /// expected planes are still unfiltered, so the frame's pixel-exactness
+  /// contract no longer holds until the encoder applies the same filter
+  /// (the §468 second step). Provided now so the header path can be
+  /// exercised and verified independently.
+  loop_filter_level0~ : Int32 = 0,
+  loop_filter_level1~ : Int32 = 0,
+  loop_filter_sharpness~ : Int32 = 0,
 ) -> Result[(Bytes, Av1EncPlanes), String] {
   let w = self.seq.width
   let h = self.seq.height
@@ -165,6 +175,9 @@ pub fn Av1Encoder::encode_frame(
       av1_enc_write_key_frame_obu(self.seq, {
         ..Av1KeyFrameEncConfig::default(),
         base_q_idx,
+        loop_filter_level0,
+        loop_filter_level1,
+        loop_filter_sharpness,
         tiles,
         tile_cols: sb_cols,
         tile_rows: sb_rows,
