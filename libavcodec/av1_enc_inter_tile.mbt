@@ -38,6 +38,11 @@ fn av1_enc_inter_skip_block(
   bx : Int32,
   by : Int32,
   skip~ : Bool = true,
+  /// §463: the single reference index in dav1d's 0..6 order (0 = LAST,
+  /// 1..3 = LAST2/LAST3/GOLDEN, 4..6 = BWDREF/ALTREF2/ALTREF). The ref
+  /// tree, the refmvs `find` reference slot and the `splat` publish all
+  /// follow it. Default 0 keeps the §446b..§462 LAST-only behaviour.
+  ref_idx~ : Int32 = 0,
   motion~ : (Av1MsacEnc, Av1CdfCtx, Av1RefmvsResult) -> (Int32, (Int32, Int32)),
   tail~ : (Av1MsacEnc, Av1CdfCtx) -> Unit = (_, _) => (),
 ) -> Unit {
@@ -67,36 +72,49 @@ fn av1_enc_inter_skip_block(
   let left_opt = if bx > 0 { Some(nstate.left[by & 31]) } else { None }
   let ictx = av1_inter_intra_ctx(top_opt, left_opt)
   enc.encode_bool_adapt(cdf.intra, ictx * 2, 1)
-  // Reference tree → LAST: three zero bools (rows 0, 2, 3 of cdf.ref_,
-  // the exact path av1_inter_read_refs walks for ref0 = 0).
+  // Reference tree → `ref_idx` (§463). Mirrors av1_inter_read_refs:
+  //   bit0=0, bit2=0, bit3=b  → ref0 = b            (LAST / LAST2)
+  //   bit0=0, bit2=1, bit4=b  → ref0 = 2 + b        (LAST3 / GOLDEN)
+  //   bit0=1, bit1=0, bit5=b  → ref0 = 4 + b        (BWDREF / ALTREF2)
+  //   bit0=1, bit1=1          → ref0 = 6            (ALTREF)
   let top_any : Av1InterNeighbor? = Some(nstate.top[bx & 31])
   let left_any : Av1InterNeighbor? = Some(nstate.left[by & 31])
-  enc.encode_bool_adapt(
-    cdf.ref_,
-    (0 * 3 + av1_inter_ref_tree_ctx(top_any, left_any, 0)) * 2,
-    0,
-  )
-  enc.encode_bool_adapt(
-    cdf.ref_,
-    (2 * 3 + av1_inter_ref_tree_ctx(top_any, left_any, 1)) * 2,
-    0,
-  )
-  enc.encode_bool_adapt(
-    cdf.ref_,
-    (3 * 3 + av1_inter_ref_tree_ctx(top_any, left_any, 2)) * 2,
-    0,
-  )
+  let ref_bit = (row : Int32, ctx_row : Int32, v : Int32) => {
+    enc.encode_bool_adapt(
+      cdf.ref_,
+      (row * 3 + av1_inter_ref_tree_ctx(top_any, left_any, ctx_row)) * 2,
+      v.reinterpret_as_uint(),
+    )
+  }
+  if ref_idx >= 4 {
+    ref_bit(0, 0, 1)
+    if ref_idx == 6 {
+      ref_bit(1, 4, 1)
+    } else {
+      ref_bit(1, 4, 0)
+      ref_bit(5, 5, ref_idx - 4)
+    }
+  } else {
+    ref_bit(0, 0, 0)
+    if ref_idx >= 2 {
+      ref_bit(2, 1, 1)
+      ref_bit(4, 3, ref_idx - 2)
+    } else {
+      ref_bit(2, 1, 0)
+      ref_bit(3, 2, ref_idx)
+    }
+  }
   // top_has_right: the 64x64 NONE node carries the i444 bit.
-  let stack = rstate.find(0, bw, 0, bh, 1, -1, bs, true, by, bx)
+  let stack = rstate.find(0, bw, 0, bh, ref_idx + 1, -1, bs, true, by, bx)
   let (mode, mv) = motion(enc, cdf, stack)
   tail(enc, cdf)
   // Publish mirrors (decode_inter_block's writes): refmvs splat,
   // neighbor banks, skip edges.
-  rstate.splat_single(0, mode, mv, false, bs, bx, by, 16, 16)
+  rstate.splat_single(ref_idx, mode, mv, false, bs, bx, by, 16, 16)
   nstate.set_block(bx, by, 16, 16, {
     intra: false,
     comp_type: 0,
-    ref0: 0,
+    ref0: ref_idx,
     ref1: -1,
     filter0: 0,
     filter1: 0,

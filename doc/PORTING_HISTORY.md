@@ -16653,3 +16653,31 @@ encoder 8/8、RD 4/4、skip 5/5、NEARMV 2/2、inter 24/24、tile 12/12；
 **边界**：逐帧穷举，开销 ≈ |q|×|skip|×单帧编码；无 per-SB delta_q、
 无 trellis、无码控闭环；分区/变换/帧内模式未进同一代价函数。
 交接 `AGENT_HANDOFF_2026-11-20_AV1_RD_SKIP_JOINT.md`。**未提交**。
+
+## §463 AV1 编码器多参考（ref_slot / ref_idx）（2026-11-20）
+
+让 inter 帧可指定参考槽位与参考索引：`av1_enc_write_me_res420_inter_frame_obu`
+增 `ref_slot~`（0..7）与 `ref_idx~`（dav1d 0..6）。`ref_slot` 决定帧头七个
+`ref_frame_idx` 全部指向哪个槽、`prepare_frame` 的 ref_slots 也按它 gather
+（两者一致，块级参考必然解析到该槽画面）；`ref_idx` 决定块级 ref 树写哪条
+路径。`av1_enc_inter_skip_block` 增 `ref_idx~`，把 ref 树、`rstate.find` 的
+`ref0+1`、`splat_single` 的 ref 索引、邻居状态 `ref0` 四处统一参数化；
+`av1_enc_write_me_res_tile` 透传。默认 `ref_slot=0, ref_idx=0` 与既有
+LAST-only 行为完全一致。
+
+ref 树写端镜像 `av1_inter_read_refs` 单参考分支：
+bit0=0/bit2=0/bit3=b → ref0=b（LAST/LAST2）；bit0=0/bit2=1/bit4=b →
+ref0=2+b（LAST3/GOLDEN）；bit0=1/bit1=0/bit5=b → ref0=4+b（BWDREF/ALTREF2）；
+bit0=1/bit1=1 → ref0=6（ALTREF）；每位 ctx 走
+`av1_inter_ref_tree_ctx(top, left, ctx_row)`。
+
+**验证**：黑盒 4/4（七个参考索引 0..6 全部逐像素 decode==expected；
+**LAST 与 ALTREF 包字节内容必须不同**——防「参数被静默忽略」的关键断言；
+默认路径确定性与行为不变；`ref_slot=8`/`ref_idx=7` 拒收）；回归 encoder
+8/8、RD 4/4、skip 5/5、NEARMV 2/2、RD×skip 4/4、inter 24/24、tile 12/12、
+frame 7/7（共 70）；`moon check --deny-warn` 0、fmt/info 已跑。
+
+**边界**：只做「单参考 + 可任意选索引/槽」；尚无同帧内多参考候选选择、
+复合预测、session 层参考帧环形缓冲（`Av1Encoder` 仍只保留上一帧）。
+七项 ref_frame_idx 同指一槽，跨索引的 MV 预测器候选尚未真正利用。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_MULTIREF.md`。**未提交**。

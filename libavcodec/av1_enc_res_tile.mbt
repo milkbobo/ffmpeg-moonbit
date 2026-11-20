@@ -38,6 +38,8 @@ pub fn av1_enc_write_me_res_tile(
   /// instead of GLOBALMV — this is NEARMV skip for non-zero MVs. The
   /// zero-MV guard is lifted in this mode. Default false keeps §458.
   skip_uniform~ : Bool = false,
+  /// §463: the single reference index (dav1d 0..6) every block codes.
+  ref_idx~ : Int32 = 0,
 ) -> Result[Bytes, String] {
   if width <= 0 || height <= 0 || width % 64 != 0 || height % 64 != 0 {
     return Err(
@@ -133,6 +135,7 @@ pub fn av1_enc_write_me_res_tile(
           bx,
           by,
           skip=is_skip,
+          ref_idx~,
           motion=(enc2, cdf2, stack) => {
             if is_skip && !skip_uniform {
               // GLOBALMV: newmv_mode=1 (not new), globalmv_mode=0

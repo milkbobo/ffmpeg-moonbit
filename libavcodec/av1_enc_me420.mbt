@@ -28,6 +28,16 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
   base_q_idx~ : Int32 = 200,
   range~ : Int32 = 8,
   dz_pm~ : Int32 = 0,
+  /// §463: the reference slot (0..7) this frame predicts from. The frame
+  /// header's seven ref_frame_idx entries all point here, and the refmvs
+  /// prepared state gathers the same slot, so every block's LAST (or the
+  /// `ref_idx~` reference) resolves to this picture. Default 0 = the
+  /// previous frame's slot, i.e. the pre-§463 single-reference behaviour.
+  ref_slot~ : Int32 = 0,
+  /// §463: which reference index (dav1d 0..6) the blocks code. The frame
+  /// header maps it to `ref_slot`, so any index resolves to the same
+  /// picture; coding a non-LAST index exercises the ref tree.
+  ref_idx~ : Int32 = 0,
 ) -> Result[
   (Bytes, FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]),
   String,
@@ -276,9 +286,15 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
     gm_types: FixedArray::make(7, 0),
     gm_matrices: FixedArray::makei(7, _ => FixedArray::make(6, 0)),
   }
+  if ref_slot < 0 || ref_slot > 7 {
+    return Err("av1 enc: ref_slot must be 0..=7")
+  }
+  if ref_idx < 0 || ref_idx > 6 {
+    return Err("av1 enc: ref_idx must be 0..=6")
+  }
   let prepared = match
     refs.prepare_frame(
-      [0, 0, 0, 0, 0, 0, 0],
+      [ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot],
       seq.order_hint_bits,
       0,
       w,
@@ -303,14 +319,21 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
       mono=false,
       chroma_toks=Some(chroma_toks),
       chroma_signs=Some(chroma_signs),
+      ref_idx~,
     ) {
     Ok(t) => t
     Err(e) => return Err(e)
   }
+  // §463: every ref_frame_idx entry maps to `ref_slot`, so whichever
+  // reference index the blocks code resolves to that picture.
+  let ref_frame_idx : Array[Int32] = [
+    ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot,
+  ]
   let obu = match
     av1_enc_write_inter_frame_obu(seq, {
       ..Av1InterFrameEncConfig::default(),
       base_q_idx,
+      ref_frame_idx,
       tile_data: tile,
     }) {
     Ok(b) => b
