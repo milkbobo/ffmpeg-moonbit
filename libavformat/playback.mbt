@@ -47,6 +47,21 @@ pub fn MediaError::message(self : MediaError) -> String {
 }
 
 ///|
+/// Machine-readable stable error code (one per constructor, ASCII
+/// UPPER_SNAKE). This is the unified error-code surface of the facade: the
+/// wasm/browser layer reports `{code, message}` envelopes and callers match
+/// on `code` without parsing `message()`.
+pub fn MediaError::code(self : MediaError) -> String {
+  match self {
+    FormatNotFound => "FORMAT_NOT_FOUND"
+    UnsupportedFormat(_) => "UNSUPPORTED_FORMAT"
+    DemuxError(_) => "DEMUX_ERROR"
+    UnsupportedCodec(_) => "UNSUPPORTED_CODEC"
+    DecodeError(_) => "DECODE_ERROR"
+  }
+}
+
+///|
 /// The kind of an elementary stream.
 pub(all) enum MediaType {
   Audio
@@ -134,6 +149,22 @@ pub fn MediaFile::streams(self : MediaFile) -> Array[StreamInfo] {
 }
 
 ///|
+/// MP4 stsd fourcc → FFmpeg codec name for the facade's video dispatch
+/// (still-image tracks included). Unknown tags pass through unchanged so
+/// `VideoDecoder::open` reports the original fourcc.
+fn playback_mov_video_codec(fourcc : String) -> String {
+  match fourcc {
+    "avc1" | "avc2" | "avc3" | "avc4" => "h264"
+    "hvc1" | "hev1" => "hevc"
+    "vp09" => "vp9"
+    "av01" => "av1"
+    "jpeg" => "mjpeg"
+    "png " => "png"
+    other => other
+  }
+}
+
+///|
 /// Open a byte buffer: probe the format, open the demuxer, build the stream
 /// table. Formats without an adapter yet come back as `UnsupportedFormat`
 /// with the probe's name, so callers can distinguish "not media" from
@@ -169,10 +200,14 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         streams.push({
           index: i,
           media_type: mt,
-          codec_id: if t.codec_id != "" {
-            t.codec_id
-          } else {
-            t.codec
+          codec_id: {
+            // Video tracks carry the raw stsd fourcc ("avc1", ...); the
+            // facade's decoder dispatch speaks FFmpeg codec names.
+            let raw = if t.codec_id != "" { t.codec_id } else { t.codec }
+            match t.media_type {
+              Mp4MediaType::Video => playback_mov_video_codec(raw)
+              _ => raw
+            }
           },
           sample_rate: rate,
           channels: ch,

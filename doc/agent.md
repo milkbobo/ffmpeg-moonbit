@@ -759,6 +759,21 @@ C:\Users\milkb\.moon\bin\moon.exe test  --no-render   # 必须全绿
   编译 `wasm`/`wasm-gc` release → 报告原始/gzip 体积并做字符串指纹验证）。
   `wasm_probe/main/main.mbt` 是生成物，勿手改；**公共 API 变更后探针失配**
   （`moon check` 报 unbound/参数不符），重跑脚本再提交。
+- **HEVC 编码器（§448 起）**：`hevc_enc_*.mbt` 纯 MoonBit（wasm-only，
+  无 C 绑定）。测试全部 wasm-gc：wbtest 单文件跑法
+  `moon test libavcodec/hevc_enc_i_wbtest.mbt --target wasm-gc --no-render`；
+  黑盒仲裁 `hevc_enc_i_test.mbt` 钉 ffmpeg framemd5（码流可由 wbtest 的
+  base64 输出再生后送 docker ffmpeg 复验）。纠错史见 PORTING_HISTORY
+  §448（fdct 定标/last_sig 后缀序/remaining 终止位/MPM rem 映射/vert
+  隐式 CG swap 五轮）。
+- **浏览器演示构建**：`scripts/build_demo.sh`——`demo/api` 以 wasm-gc
+  foreign_library + `#export_name` 导出统一播放 API（`demo/api.wasm`
+  是构建产物，已 gitignore）。JS 侧必须用
+  `WebAssembly.compile(bytes, { builtins: ["js-string"], importedStringConstants: "_" })`
+  实例化，imports 为空对象（库内不得残留 `println`，否则产物出现
+  `console.log` 导入依赖）；二进制载荷走 U+0100 偏移编码
+  （`demo/api/api.mbt` 的 `bytes_to_u0100`/`u0100_to_bytes`）——不要用
+  latin-1 裸码元，`<0x20` 控制符会让 JS `JSON.parse` 拒收信封（实测踩过）。
 
 ---
 

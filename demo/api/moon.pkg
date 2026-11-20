@@ -1,0 +1,10 @@
+import {
+  "milkbobo/ffmpeg-moonbit/libavformat" @avf,
+  "milkbobo/ffmpeg-moonbit/libswscale" @sws,
+}
+
+pkgtype(kind: "foreign_library")
+
+options(
+  link: { "wasm-gc": { "use-js-builtin-string": true } },
+)

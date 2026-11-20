@@ -17,4 +17,11 @@ target
 # Scratch vectors / trace dumps (generation commands live in the test file headers)
 _tmp_sei/
 .scratch/
+scratch/
 _ref/
+
+# 浏览器演示构建产物（scripts/build_demo.sh 生成）
+demo/api.wasm
+
+# ZCode 本地会话状态
+.zcode/

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FFmpeg-MoonBit 浏览器媒体工具</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --fg: #e6e9ef; --dim: #8b93a3; --accent: #4f9cf9; --ok: #3fb96f;
+    --err: #e5534b; --warn: #d9a03f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h1 .tag {
+    font-size: 12px; font-weight: 600; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 4px; padding: 1px 7px;
+    vertical-align: 3px; margin-left: 8px;
+  }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 22px; }
+  .drop {
+    border: 2px dashed var(--line); border-radius: 12px; padding: 42px 20px;
+    text-align: center; transition: border-color .15s, background .15s;
+    cursor: pointer; color: var(--dim);
+  }
+  .drop.hover { border-color: var(--accent); background: rgba(79,156,249,.06); color: var(--fg); }
+  .drop b { color: var(--fg); }
+  .drop input { display: none; }
+  #status { margin: 14px 2px; font-size: 13px; color: var(--dim); min-height: 20px; }
+  #status.err { color: var(--err); }
+  #status.ok { color: var(--ok); }
+  .banner {
+    display: none; background: rgba(229,83,75,.12); border: 1px solid var(--err);
+    color: var(--err); border-radius: 8px; padding: 10px 14px; margin: 14px 0;
+    font-size: 13px; word-break: break-all;
+  }
+  .banner code { background: rgba(229,83,75,.15); padding: 0 6px; border-radius: 4px; }
+  section.panel {
+    display: none; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px; margin-top: 16px;
+  }
+  section.panel h2 {
+    font-size: 15px; margin: 0 0 12px; color: var(--fg);
+    display: flex; align-items: center; gap: 8px;
+  }
+  section.panel h2 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .kv { display: grid; grid-template-columns: 150px 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv .k { color: var(--dim); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 600; }
+  .media-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+  #thumbWrap {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px; display: none;
+  }
+  #thumbWrap .cap { font-size: 12px; color: var(--dim); margin-top: 6px; text-align: center; }
+  canvas, #coverImg { display: block; max-width: 100%; image-rendering: pixelated; border-radius: 4px; }
+  #coverImg { max-height: 360px; }
+  .src-note { font-size: 12px; color: var(--dim); max-width: 380px; }
+  .src-note code { background: var(--panel2); padding: 0 5px; border-radius: 4px; }
+  select, button {
+    background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 14px; font-size: 14px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #audioBar { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
+  .spin {
+    display: inline-block; width: 13px; height: 13px; border-radius: 50%;
+    border: 2px solid var(--dim); border-top-color: var(--accent);
+    animation: r .8s linear infinite; vertical-align: -2px; margin-right: 7px;
+  }
+  @keyframes r { to { transform: rotate(360deg); } }
+  footer { margin-top: 34px; font-size: 12px; color: var(--dim); line-height: 1.9; }
+  footer code { background: var(--panel); padding: 0 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>FFmpeg-MoonBit 浏览器媒体工具<span class="tag">wasm-gc</span></h1>
+  <div class="sub">拖入 MP4 / MKV / WebM / TS / Ogg / WAV——元数据、封面与首帧缩略图、音频轨转 WAV，全程浏览器内计算，文件不出本机。</div>
+
+  <div class="drop" id="drop">
+    <b>拖入媒体文件</b>，或点击选择<br>
+    <span style="font-size:12px">视频 H.264 / HEVC / VP9 / AV1 / MJPEG / PNG · 音频 AAC / MP3 / Opus / PCM</span>
+    <input type="file" id="picker" accept="video/*,audio/*,.mkv,.webm,.ts,.m4a,.ogg,.opus">
+  </div>
+  <div id="status">正在加载 wasm…</div>
+  <div class="banner" id="banner"></div>
+
+  <section class="panel" id="metaPanel">
+    <h2><span class="dot"></span>元数据</h2>
+    <div class="kv" id="formatKv"></div>
+    <table id="streamTable">
+      <thead><tr>
+        <th>#</th><th>类型</th><th>编解码器</th><th>尺寸 / 采样率</th><th>时长来源</th><th>extradata</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="panel" id="thumbPanel">
+    <h2><span class="dot"></span>封面 / 首帧缩略图</h2>
+    <div class="media-row">
+      <div id="thumbWrap">
+        <img id="coverImg" alt="封面">
+        <canvas id="thumbCanvas"></canvas>
+        <div class="cap" id="thumbCap"></div>
+      </div>
+      <div class="src-note" id="thumbNote"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="audioPanel">
+    <h2><span class="dot"></span>音频轨 → WAV</h2>
+    <div class="kv" id="audioKv"></div>
+    <div id="audioBar" style="margin-top:14px">
+      <select id="rateSel">
+        <option value="0">保持原始采样率</option>
+        <option value="48000">重采样 → 48000 Hz</option>
+        <option value="44100">重采样 → 44100 Hz</option>
+      </select>
+      <button class="primary" id="wavBtn">转 WAV 并下载</button>
+    </div>
+  </section>
+
+  <footer>
+    全部解码逻辑为 <b>纯 MoonBit 移植的 FFmpeg 9.0.2 子集</b>（libavformat / libavcodec / libswscale / libswresample），
+    编译为 wasm-gc 模块（<code>demo/api.wasm</code>），错误以 <code>{code, message}</code> 稳定码信封返回。<br>
+    需要支持 WasmGC + JS String Builtins 的浏览器（Chrome ~130+ / Edge 130+ / Firefox 133+）。
+    未找到 wasm 时先运行 <code>scripts/build_demo.sh</code>。
+  </footer>
+</div>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
