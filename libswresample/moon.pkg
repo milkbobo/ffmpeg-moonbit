@@ -2,8 +2,19 @@ import {
   "milkbobo/ffmpeg-moonbit/libavutil",
   "moonbitlang/core/debug",
   "moonbitlang/core/math",
+  "moonbitlang/core/v128",
 }
 
 import {
   "milkbobo/ffmpeg-moonbit/libswresample" @swr,
 } for "test"
+
+warnings = "-alert_experimental"
+
+// Keep SIMD tests on the same backends as their implementations.
+
+options(
+  targets: {
+    "audio_convert_v128_wbtest.mbt": [ "native", "wasm" ],
+  },
+)

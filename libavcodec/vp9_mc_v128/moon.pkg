@@ -1,0 +1,17 @@
+import {
+  "moonbitlang/core/v128",
+}
+
+warnings = "-alert_experimental"
+
+// Keep SIMD tests on the same backends as their implementations.
+// Subpackage (like the other libavcodec *_v128 packages) so the tests stay
+// clear of the giant libavcodec whitebox unit, which cannot run on wasm-gc
+// (@v128 is unavailable there) and whose moonrun command line exceeds the
+// Windows limit on long checkouts.
+
+options(
+  targets: {
+    "vp9_mc_v128_wbtest.mbt": [ "native", "wasm" ],
+  },
+)

@@ -1,8 +1,21 @@
 import {
   "moonbitlang/core/debug",
+  "moonbitlang/core/v128",
 }
 
 import {
   "milkbobo/ffmpeg-moonbit/libswscale" @swscale,
   "milkbobo/ffmpeg-moonbit/libavutil",
 } for "test"
+
+warnings = "-alert_experimental"
+
+// Keep SIMD tests on the same backends as their implementations.
+
+options(
+  targets: {
+    "hscale_v128_wbtest.mbt": [ "native", "wasm" ],
+    "yuv2plane_v128_wbtest.mbt": [ "native", "wasm" ],
+    "yuv2rgb_v128_wbtest.mbt": [ "native", "wasm" ],
+  },
+)

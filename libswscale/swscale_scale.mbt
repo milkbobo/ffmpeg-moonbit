@@ -578,6 +578,73 @@ fn sws_hscale8to15(
 }
 
 ///|
+/// `yuv2planeX` 8-bit output row (`libswscale/vscale.c`): dither + Σ
+/// src[j][i]·filter[j], `clip_uint8(val >> 19)`. Extracted from
+/// `sws_scale_plane` unchanged so the SIMD path (`yuv2plane_v128.mbt`)
+/// has a scalar counterpart to be asserted against.
+fn sws_yuv2planeX_row_8(
+  rows : Array[Array[Int32]],
+  coffs : Array[Int32],
+  dst_w : Int32,
+  y : Int32,
+  dither_off : Int32,
+  nbps : Bool,
+) -> Array[Byte] {
+  let out : Array[Byte] = Array::make(dst_w, b'\x00')
+  for i in 0..<dst_w {
+    // sws_pb_64 (all 64) for byte sources; ff_dither_8x8_128 indexed
+    // by (output line & 7, pixel & 7) when an N-BPS source is reduced
+    // to 8-bit (`should_dither`).
+    let dither = if nbps {
+      sws_dither_8x8_128[y % 8 * 8 + (i + dither_off) % 8]
+    } else {
+      64
+    }
+    let mut val = dither << 12
+    for j in 0..<coffs.length() {
+      val = val + rows[j][i] * coffs[j]
+    }
+    out[i] = sws_clip_uint8(val >> 19).to_byte()
+  }
+  out
+}
+
+///|
+/// `yuv2planeX` 9..16-bit output row (`yuv2planeX_10_c_template`
+/// semantics): shift `11 + 16 - bits`, rounding offset,
+/// `av_clip_uintp2`, little-endian `u16` store.
+fn sws_yuv2planeX_row_16(
+  rows : Array[Array[Int32]],
+  coffs : Array[Int32],
+  dst_w : Int32,
+  dst_bits : Int32,
+) -> Array[Byte] {
+  let shift = 11 + 16 - dst_bits
+  let half = 1 << (shift - 1)
+  let out : Array[Byte] = Array::make(2 * dst_w, b'\x00')
+  for i in 0..<dst_w {
+    let mut val = half
+    for j in 0..<coffs.length() {
+      val = val + rows[j][i] * coffs[j]
+    }
+    // av_clip_uintp2(val >> shift, bits)
+    let raw = val >> shift
+    let clamped = if (raw & -(1 << dst_bits)) != 0 {
+      if raw < 0 {
+        0
+      } else {
+        (1 << dst_bits) - 1
+      }
+    } else {
+      raw
+    }
+    out[2 * i] = (clamped & 0xFF).to_byte()
+    out[2 * i + 1] = ((clamped >> 8) & 0xFF).to_byte()
+  }
+  out
+}
+
+///|
 /// Scale one plane (generic H then V, rows h-scaled on demand).
 fn sws_scale_plane(
   src : Bytes,
@@ -611,48 +678,14 @@ fn sws_scale_plane(
     // output is yuv2planeX_10_c_template: shift 11 + 16 - bits, rounding
     // offset 1 << (shift - 1), av_clip_uintp2(_, bits), LE u16 store.
     let row0 = y
-    let out_row : Array[Byte] = []
-    if dst_bits > 8 {
-      let shift = 11 + 16 - dst_bits
-      let half = 1 << (shift - 1)
-      let clip_mask = dst_bits
-      for i in 0..<dst_w {
-        let mut val = half
-        for j in 0..<v.size {
-          val = val + rows[j][i] * v.coeffs[row0 * v.size + j]
-        }
-        // av_clip_uintp2(val >> shift, bits)
-        let raw = val >> shift
-        let clamped = if (raw & -(1 << clip_mask)) != 0 {
-          if raw < 0 {
-            0
-          } else {
-            (1 << clip_mask) - 1
-          }
-        } else {
-          raw
-        }
-        out_row.push((clamped & 0xFF).to_byte())
-        out_row.push(((clamped >> 8) & 0xFF).to_byte())
-      }
+    let coffs : Array[Int32] = Array::make(v.size, 0)
+    for j in 0..<v.size {
+      coffs[j] = v.coeffs[row0 * v.size + j]
+    }
+    let out_row : Array[Byte] = if dst_bits > 8 {
+      sws_yuv2planeX_row_16(rows, coffs, dst_w, dst_bits)
     } else {
-      // sws_pb_64 (all 64) for byte sources; ff_dither_8x8_128 indexed
-      // by (output line & 7, pixel & 7) when an N-BPS source is reduced
-      // to 8-bit (`should_dither`).
-      let nbps = src_bits > 8
-      for i in 0..<dst_w {
-        // the V plane is written with a +3 column offset (vscale.c)
-        let dither = if nbps {
-          sws_dither_8x8_128[y % 8 * 8 + (i + dither_off) % 8]
-        } else {
-          64
-        }
-        let mut val = dither << 12
-        for j in 0..<v.size {
-          val = val + rows[j][i] * v.coeffs[row0 * v.size + j]
-        }
-        out_row.push(sws_clip_uint8(val >> 19).to_byte())
-      }
+      sws_yuv2planeX_row_8(rows, coffs, dst_w, y, dither_off, src_bits > 8)
     }
     for b in out_row {
       dst.push(b)

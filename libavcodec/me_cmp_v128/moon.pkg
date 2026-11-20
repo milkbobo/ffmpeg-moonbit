@@ -1,0 +1,17 @@
+import {
+  "moonbitlang/core/v128",
+}
+
+warnings = "-alert_experimental"
+
+// Keep SIMD tests on the same backends as their implementations.
+// This is a subpackage (like av1_mc_core) rather than a libavcodec
+// whitebox file: the giant parent package's moonrun --test-args command
+// line exceeds the Windows limit on long checkouts, and whitebox units
+// cannot run on wasm-gc where @v128 is unavailable.
+
+options(
+  targets: {
+    "me_cmp_v128_wbtest.mbt": [ "native", "wasm" ],
+  },
+)

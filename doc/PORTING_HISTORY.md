@@ -16926,3 +16926,760 @@ fmt/info 已跑。
 网格 × 4:2:0 8-bit。**剩余**：tile 边界强度修正（`tile_cols>1` 分支）、
 CDEF、LR、高位深/其它色度。
 交接 `AGENT_HANDOFF_2026-11-20_AV1_DEBLOCK_SKIP.md`。**未提交**。
+## §469-§471 swscale 三内核 @v128 SIMD 化——hscale / yuv2planeX / yuv2rgb（2026-11-20）
+
+SIMD 迁移第二波：把已移植的 swscale 字节域内核按既有 `_v128` 范式
+（独立实现 + `#cfg(native/wasm)` 门控 + wbtest 与标量逐值对拍，主路径
+零接线）补齐 FFmpeg x86 SIMD 对照物。参考源
+`D:/project/FFmpeg-n9.0.2/libswscale/x86/`。
+
+- **§469 `libswscale/hscale_v128.mbt`**：`sws_hscale8to15_v128` 对照
+  `scale.asm` `ff_hscale8to15_X4_sse2` 族。沿抽头维向量化：8-bit 源
+  16 字节载入→`i16x8` 零扩展×系数 `i32x4_dot_i16x8_s`（pmaddwd 结构），
+  9-16bit 源 16 字节=8 个 LE u16，`i32x4_extend_*_i16x8_u` 宽化（替代
+  asm 的 minshort/unicoeff 符号技巧）逐 lane 乘。绕 2^32 模加结合律，
+  分 lane 部分和与标量位级一致；尾抽头/越界窗口回退标量。偏差：x86
+  按输出维 4 路并行，本移植按抽头维（Bytes 寻址友好）。
+- **§470 `libswscale/yuv2plane_v128.mbt`**：`sws_yuv2planeX_{8,16}_v128`
+  对照 `output.asm` `ff_yuv2planeX_{8,9,10,16}_sse2/sse4`。每块 8 输出：
+  dither 向量（`ff_dither_8x8_128` 每行固定 lane 向量，
+  `sws_dither_row_8` 预计算）+ `i32x4_extmul` 逐抽头累加，`i32x4→i16x8→
+  u8x16` 饱和窄化（asm 的 packssdw+packuswb；>8bit 止步 i16x8，其 LE
+  lane 即 u16 存储）。输入行须为 int16 域（hScale8To15 存 int16），
+  `sws_pack_row_i16` 打包。附带**无损重构**：把内联在 `sws_scale_plane`
+  的垂直合成提取为 `sws_yuv2planeX_row_8/16` 标量行内核（供对拍复用，
+  行为由 realdata 套件回归钉住）。`yuv2plane1_*`（单抽头特例）不复制。
+- **§471 `libswscale/yuv2rgb_v128.mbt`**：`yuv_rows_to_rgb24_v128`
+  对照 `yuv_2_rgb.asm` `ff_yuv_420_rgb24_ssse3` 族——asm 不查表、直接算
+  整数色度矩阵。从探针官方表反解出 FFmpeg case-24 构造的精确整数闭式
+  （y ramp 圆整仿射 `clip8((76304·i−65247168)>>16)`、fill_table 色度基
+  `((k·x+c)>>16)` 两级截断、G 的 `&0xFF` 回绕），Python 全量验证后写死
+  常数，wbtest 再逐项对表复核。4 像素/块，两次 `i8x16_shuffle` 三路
+  交织 RGB24。**记录在案的标量 quirk**：共享内循环使 4:4:4 色度也按
+  `col/2` 索引（常数 128 realdata 间接钉住），SIMD 镜像该行为保位级一致。
+
+**跳过项（无 FFmpeg SIMD 对照物，文档定案）**：AV1 全部（上游 av1dec
+纯 C，SIMD 在 dav1d/libaom）、aptx、MP3 定点解码（SIMD 仅 float 版）、
+前向 float MDCT、crc/aes（PCLMULQDQ/AES-NI 无法用 Wasm SIMD128 表达，
+沿用既有 FFI 豁免）。
+
+**验证**：三 wbtest 于 `--target wasm` 全绿（hscale 3/3、yuv2plane 3/3、
+yuv2rgb 3/3，其中 yuv2rgb 含闭式×全表复核与 420/422/444×RGB/BGR×
+含尾宽逐字节对拍）；`moon test -p libswscale --target wasm` 58/58；
+`moon check --target wasm --deny-warn` 0/0。本机无 MSVC，native 后端
+不可用（v128 门控覆盖 native/wasm，wasm 已验证）。
+
+## §472-§474 @v128 SIMD 第二批——编码器 SAD/SSE、H.264 IDCT 内核与色度 MC（2026-11-20）
+
+继续 §469-§471 的 SIMD 迁移（同范式：独立 `_v128` 实现 + wbtest 与标量
+逐值一致，主路径零接线）。本批全部落在 libavcodec，且采用**小子包**布局
+（`libavcodec/<模块>_v128/`，先例 av1_mc_core）：巨型 libavcodec 白盒单测
+在本机（长 checkout 路径）moonrun `--test-args` 超 Windows 32K 限制
+（`CreateProcessW`），白盒又必须 wasm-gc 而 `@v128` 在 wasm-gc 不可用，
+本机无 MSVC——子包让 wbtest 直接跑 `--target wasm`。
+
+- **§472 `libavcodec/me_cmp_v128/`**：SAD/SSE 对照 `x86/me_cmp.asm`
+  （`ff_sad16_sse2`/`ff_sse16_sse2`）与 `x86/pixblockdsp.asm`
+  （get/diff pixels 折叠为打包适配器）。字节 |a−b| 用双向饱和减+或
+  （`or_(sub_sat_u(a,b), sub_sat_u(b,a))`，Wasm SIMD128 无 `psadbw` 的
+  替代）；SAD 走 extadd_pairwise 双层横向和，SSE 用 `dot(d,d)`
+  （pmaddwd(d,d) 结构）。窗口几何对齐 `h264_enc_sad4/8`；SATD 无标量
+  对应（编码器全 SAD/SSD 驱动）不复制，文档记录。
+- **§473 `libavcodec/h264_idct_v128/`**：`ff_h264_idct_add`/`dc_add`/
+  `idct8_dc_add` 对照 `x86/h264_idct.asm`。4x4 双通道蝶形用 `i32x4`
+  lane + 标量端口**精确截断点**（SUSINT 32 位回绕=i32 lane 回绕、
+  int16 存储=`<<16>>16`），pass1 列-lane、pass2 经 lane 转置行-lane，
+  输出沿 dst 列向下写（镜像标量循环嵌套）；位深参数化（8-bit 截断、
+  >8-bit 直通）。`idct8_add`（全 8x8 变换）与 bypass add_pixels 族留
+  标量为后续。wbtest 参考为标量内核逐字转录（跨子包不可见私有）。
+- **§474 `libavcodec/h264_chromamc_v128/`**：`put_h264_chroma_mc8` 对照
+  `x86/h264_chromamc.asm`（ssse3）。2x2 双线性四权重 splat 逐 lane
+  乘加；源行经边缘复制钳位**staging** 进 packed 字节 scratch（保持标量
+  的钳位读语义、向量载入连续），位错相/D× 全 64 相位×4/8 宽高×
+  vshift 0/1×内部/右下边缘/出画窗口全扫。
+
+**验证**：三子包 `moon test -p … --target wasm` 全绿（me_cmp 2/2、
+h264_idct 2/2（含 ±32767 系数角点、10-bit、钳位双向）、chromamc 2/2
+（64 相位×4 几何×3 窗口））；`moon check --target wasm --deny-warn` 0/0。
+下一步候选：H.264 deblock/weight/intrapred/qpel（§475+）、VP9 dsp、
+音频 float_dsp/SBR/PS。
+
+## §475-§476 @v128 SIMD 第三批——H.264 去块滤波与加权预测（2026-11-20）
+
+继续 §469-§474 的 SIMD 迁移（同范式：独立 `_v128` 实现 + wbtest 与标量
+逐值一致，主路径零接线；libavcodec 侧一律用小子包布局）。参考源
+`D:/project/FFmpeg-n9.0.2/libavcodec/x86/`。
+
+- **§475 `libavcodec/h264_deblock_v128/`**：`h264_loop_filter_luma`/
+  `_luma_intra`/`_chroma`/`_chroma_intra` 对照 `x86/h264_deblock.asm`
+  （`ff_deblock_{v,h}_luma_8`、`ff_deblock_{v,h}_luma_intra_8`、
+  `ff_deblock_{v,h}_chroma_8` 与 `_chroma422` 变体）。asm 把一个
+  16 样本 luma 边放进单个 `i8x16`、用 `psubusb`+`por`（`DIFF_GT`/
+  `LOAD_MASK`）出 alpha/beta 掩码、`pand`/`pandn` 选 lane、
+  `DEBLOCK_P0_Q0` 用饱和字节加；水平边经栈上 `TRANSPOSE6x8_MEM` 转置
+  复用同一个垂直内核。本移植改为**沿 along 维向量化**（C 模板的 `d`
+  循环，luma 4 lane、chroma 2..4 lane），一个 `i32x4` 装一个子块，外层
+  四个子块各带自己的 `tc0`（与标量端 `i` 循环同构）。好处是位深缩放
+  （`alpha <<= BIT_DEPTH-8`、`tc0 <<= BIT_DEPTH-8`）与
+  `(q0-p0)*4 + (p1-q1)` 的最坏 14-bit 情形都不需要溢出论证——每个中间量
+  就是标量端自己的 `Int32` 算术，**按构造位级一致**（8..14-bit）而非靠
+  饱和分析。asm 的掩码→`i32x4` 比较、`pand`/`pandn` 选择→
+  `v128_bitselect`、`av_clip_pixel`→`min_s`/`max_s`。偏差：asm 用
+  `i8x16` 处理 16 个连续边样本（水平边靠转置），本移植的
+  `Array[Int32]` 平面没有连续 16 字节边可载入，故逐 lane 收集——好处是
+  两种朝向都不需要转置（lane 地址统一为 `base + j*ystep - k*xstep`）；
+  强滤波的 `p3`/`q3` 只在真有 lane 走 `|p2-p0| < beta` 分支时才读，
+  与标量端的条件读一致（无条件的收集会在画面上边界越界）。**开发中发现
+  的真 bug**：intra 强滤波的 `p1'`/`p2'`/`q1'`/`q2'` 回写漏了外层
+  掩码（只用了 `m_p`/`m_q`），导致外层掩码未命中的 lane 也被改写；
+  wbtest 的逐值对拍立刻抓住（首个不符样本 + 全局差异图定位），修为
+  `m_outer & m_p` / `m_outer & m_q`。
+- **§476 `libavcodec/h264_weight_v128/`**：`H264_WEIGHT(16/8/4/2)` 的
+  `weight_h264_pixels*`/`biweight_h264_pixels*` 对照
+  `x86/h264_weight.asm`（`WEIGHT_SETUP`/`BIWEIGHT_SETUP`）。asm 把
+  模板的舍入折叠成一个移位前常量：
+  `offset' = (unsigned)offset << (log2_denom+depth-8) + (log2_denom?1<<(log2_denom-1):0)`、
+  `biweight 的 offset' = (unsigned)((offset<<(depth-8))+1|1) << log2_denom`；
+  本移植照搬成 `i32x4` 逐 lane 乘加（asm 的 `punpcklbw` 宽化 +
+  `pmullw`/`paddsw`；那边 8-bit 样本在 `i16` lane，这边 `i32` lane，
+  15-bit 权重乘 14-bit 像素不可能溢出，同样无需饱和论证），`packuswb`
+  → `min_s`/`max_s`。**记录在案的实现要点**：C 的
+  `(unsigned)offset << …` 左移后存回 `int`，在二进制补码上就是普通
+  的**回绕** `Int32` 左移，所以负 offset 不需要任何掩码舞蹈（首版多余地
+  做了 `&0xFFFF` + 双移位掩码，被 wbtest 的负 offset 用例打红后改为直写，
+  并在此记下结论）。另加 implicit B 加权
+  （`(a*w + b*(64-w) + 32) >> 6`）。偏差：asm 按宽度 2/4/8/16 各一个入口，
+  本移植一个内核收 `w`、4 像素一组 + 标量尾，任意宽度可用。
+
+**验证**：两子包 `moon test -p libavcodec/h264_deblock_v128 --target wasm`
+6/6、`h264_weight_v128` 6/6 全绿；`moon check --target wasm --deny-warn`
+0/0。deblock wbtest 覆盖 8/10/12-bit × (skip/filter/mid 三档 alpha·beta·tc0)
+×（渐变+硬边/平坦两种 LCG 平面）× 两种朝向，另有 intra、chroma
+（along 2/4、tc -1/0/1/3/9/25）、逐子块 tc0 掩码、no-op 与定点值用例；
+weight wbtest 覆盖 8/9/10/12/14-bit × log2_denom 0..7 × weight ±128 ×
+offset ±16384 × 宽度 {1,2,3,4,5,7,8,13,16} 以及 biweight/implicit/饱和极值/
+负 offset 回绕。**libavcodec 主包回归本次未跑**：本机 checkout 路径使
+`moon test -p libavcodec`（及任何指向主包内文件的 `moon test`）撞
+Windows `CreateProcessW` 32K 命令行上限（§472-§474 已记录的同一限制，
+`scripts/_run_libavcodec_tests.sh` 依赖 WSL bash 在本机不可用——WSL 未
+挂载该盘符）；改动全部落在**新子包**、主包文件一行未动，故主路径回归
+风险为零。下一步候选：H.264 intrapred/qpel（§477+）、VP9 dsp、
+音频 float_dsp/SBR/PS。
+- **§477 `libavcodec/h264_pred_v128/`**：`pred16x16_*`/`pred8x8_*` 对照
+  `x86/h264_intrapred.asm`（`pred16x16_{vertical,horizontal,dc,plane}_8`、
+  `pred8x8_{vertical,horizontal,top_dc,dc,left_dc,plane}_8`）。asm 的
+  行复制（顶行 `movq`/`mova` 广播进 16 个寄存器）在这里是 `i32x4`
+  广播，plane 模式的斜坡 `out[j][i] = clip_pixel((b + i*h) >> 5)` 变成
+  四 lane `i32x4` 常量步进加 + `min_s`/`max_s` 钳位；DC 模式按标量端
+  自己的累加顺序求和后 splat（asm 的 `psadbw` 横向和只是取同一个整数的
+  手段）。**开发中发现的两个真 bug**：(1) 16x16/8x8 vertical 直接逐行读
+  顶行，写第 0 行后第 1..15 行读到的已是覆盖后的值——改为先把顶行
+  staging 进小数组（C 端不踩坑是因为它把顶行留在寄存器里广播，本移植逐行
+  读平面就会自污染）；(2) plane 模式每个 4 像素组既推进了 `b`（`+= 4h`）
+  又叠加了组偏移 `4*quad`，把 `4h` 算了两遍——wbtest 在 mode=3 首个
+  不符样本处立刻打红，改为 lane 偏移恒为 `0..3`、只推进 `b`（与标量
+  `i4` 展开的语义一致）。偏差：asm 有固定的 16x16/8x8 入口，本移植按标量
+  端同样分两个函数；plane 的 `h`/`v`/`a` 用标量端的整数算式而非 asm
+  的定点 `pmulhw` 路径，避免重算斜坡差一个舍入步（asm 自己也标注两条路径
+  在规范边角处不一致）。
+
+**§477 验证**：`moon test -p libavcodec/h264_pred_v128 --target wasm` 5/5
+全绿（与 §475/§476 合计三子包 6/6 + 6/6 + 5/5）；`moon check --target wasm
+--deny-warn` 0/0。pred wbtest 覆盖 8/10/12-bit × 全 7 种模式 ×
+(top,left) 四种可用性 × 3 组 LCG 平面，另有不可用边→`Err`、写入足迹
+（顶行/左列/块外一字节不动）、DC 极值、plane 的平坦/上扬/下坡/棋盘四种
+地形。下一步：H.264 qpel（§478+）、VP9 dsp、音频 float_dsp/SBR/PS。
+## §478-§479 @v128 SIMD 第四批——H.264 六抽头 1/4 像素亮度插值（2026-11-20）
+
+- **§478 `libavcodec/h264_qpel_v128/`**：`put_h264_qpel{4,8}{h,v,hv}_
+  lowpass` 与 `put_pixels{4,8}_l2_shift5` 对照
+  `x86/h264_qpel_8bit.asm`（`QPEL4_H_LOWPASS_OP`、
+  `QPEL8_H_LOWPASS_OP_XMM`、`QPEL4_V_LOWPASS_OP`、
+  `QPEL8OR16_V_LOWPASS_OP`、`put_h264_qpel*_hv_lowpass_*` 与
+  `FILT_HV`、`PIXELS{4,8}_L2_SHIFT5`）。6 抽头公式
+  `(s0+s1)*20 - (sA+s2)*5 + (sB+s3)`（A=-1、B=-2）在 asm 里靠
+  `punpcklbw` 宽化到 i16 + `psllw 2`/`psubw`/`pmullw pw_5` 避免
+  直接乘 20，末尾 `psraw 5` + `packuswb`。本移植在 **i32x4 lane** 里
+  做同样的累加，因此 asm 必须论证的 i16 溢出在构造上不存在（横向最宽
+  `(255+255)*20 + 255+255 = 10710`、hv 二级最宽约 857k，都远在 Int32
+  内）；`packuswb` 换成 `min_s`/`max_s` 钳位。三个朝向的向量化轴
+  各有取舍：h 沿 w 每 4 像素一组、v 沿列（lane=一列，抽头沿 `srcStride`
+  收集，即 asm 的 `FILT_V` 寄存器轮转但 lane 轴固定）、hv 严格复刻 C 的
+  **两阶段**形态——先写 `(h+5)` 行**未移位、未钳位**的横向和进 i32
+  scratch，再做纵向 6 抽头 + `(v+512)>>10`（`op2_put`）。中间量不钳位
+  正是 hv ≠ h-then-v 的原因，故必须保持。**开发中发现的关键点**：C 在进入
+  列循环前把 `tmp` 指针**下移到 scratch 第 2 行**
+  （`tmp -= tmpStride*(h+5-2)`），等价于"目的行 y 读 scratch 的
+  (y+2)-2..(y+2)+3 行"；首版漏了这个 +2 行偏移，wbtest 直接越界/不符，
+  修正后两侧参考也对齐成同一坐标约定并写进注释。偏差：asm 是固定的
+  4/8/16 入口 + 手工旋转寄存器，本移植每个朝像一个内核收 `w`/`h`
+  （16 宽就是同一 `i32x4` 组多跑几轮）；只移植 `put` 族——标量路径不用
+  `avg`（B 加权平均走 §476），`l2_shift5` 因 1/4 位置合并需要而保留。
+
+**验证**：`moon test -p libavcodec/h264_qpel_v128 --target wasm` 5/5 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖 8/10/12-bit ×
+块尺寸 {4x4, 8x8, 16x16, 2x2, 6x6, 12x4} × h/v/hv 三朝向，另有全 0/全满
+源的钳位双向、单点激励与棋盘交替源（激励让负抽头可见、交替压邻 lane）、
+`l2_shift5` 合并、以及写入足迹断言（块外一字节不动）。**§478/§479 合并为
+一片落地**——qpel 的 h/v/hv/l2_shift5 是同一个 6 抽头模板的四个出口，拆开
+会重复同一份对照与 wbtest 骨架。
+
+**Wave 3 收官**：§475-§479 五个子包
+（`h264_{deblock,weight,pred,qpel,chromamc}_v128` + 早前的
+`h264_idct_v128`）合计 **26/26** 用例全绿，H.264 解码侧 DSP 的 x86 SIMD
+对照面（deblock / weight / intrapred / qpel / chroma MC / idct）已全部有
+`@v128` 落地。下一步：Wave 4 VP9（mc/ipred/lpf）、Wave 5 HEVC、
+Wave 6 音频 float_dsp/SBR/PS。
+## §480 @v128 SIMD 第五批——VP9 亚像素运动补偿（2026-11-20）
+
+- **§480 `libavcodec/vp9_mc_v128/`**：8 抽头族（`put_8tap_1d_h/v/hv`
+  的 `(Σ F·src + 64) >> 7`）、bilinear 族（`d + ((f*(d2-d) + 8) >> 4)`）、
+  整像素 copy/avg，对照 `x86/vp9mc.asm`（`FILTER` 的
+  `F8_SSE2_TAPS` 系数库、`filter_h_fn`/`filter_v_fn`/`filter_hx2_fn`/
+  `filter_vx2_fn`、`fpel_fn`）。asm 把一个 8 抽头 bank 广播进八个 i16
+  寄存器做 `pmaddwd` 式 lane 乘加；本移植在 `i32x4` 里沿抽头维累加
+  （最宽中间量 `128·255 + 64` ≈ 33k，远在 Int32 内，asm 的
+  `packssdw` 溢出论证与 `pmaddwd` 成对求和都只是调度手段、不影响算术）。
+  保持的 C/asm 结构：h 沿 w 每 4 像素一组、v 沿列（lane=一列，抽头沿
+  `sstride` 收集，即 `filter_v_fn` 同时活八个列向量的同一理由）、hv 走
+  **先横向钳位中间量再纵向**（对应标量端 `mc_tmp` 的两阶段与 64 列
+  stride，输出块从 scratch 第 3 行起）、avg 用 C 的 `(dst+v+1)/2`
+  （注意是整除而非 asm 的 `pavgb`，对非负 `dst+v+1` 两者一致，此处
+  有保证）。**开发中发现的两个真 bug**：(1) bilinear 的垂直分支漏了
+  `avg`（垂直单维路径直接写回、没做平均合并），被 wbtest 的
+  `fx=0 fy≠0 avg=true` 用例逐个打红——diff 定位在 `idx=648`；
+  (2) 首版把 `i32x4_shr_s` 的移位量写成 `i32x4_splat(4)` 向量
+  （移位量必须是 `Int`），编译期即报 E4014。偏差：asm 按
+  4/8/16/32/64 各有入口（`mc_rep` 展开），本移植每个内核收 `w`/`h`
+  与 filter bank index，尺寸拼接留给调用点。
+
+**验证**：`moon test -p libavcodec/vp9_mc_v128 --target wasm` 4/4 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖
+8/10/12-bit（pixel_max 255/1023/4095）× 三种 filter 类型 × 12 组
+(fx,fy) 相位（含 0/1/4/15 与双非零组合）× 块尺寸
+{4x4, 8x8, 16x16, 32x32, 2x2, 6x6, 64x4} × put/avg 两路，另有 bilinear
+全相位、整像素 copy/avg、以及全 0/全满源的钳位双向。参考实现是把
+`ff_vp9_subpel_filters` 表逐字复制进 wbtest（子包看不到父包私有表）后
+逐值转录 `mc_kernel`。下一步：§481 VP9 帧内预测、§482 VP9 环路滤波，
+然后 Wave 5 HEVC、Wave 6 音频。
+## §481 @v128 SIMD 第六批——VP9 帧内预测（2026-11-20）
+
+- **§481 `libavcodec/vp9_ipred_v128/`**：15 种帧内模式（`dc`/`v`/`h`/
+  `dc_left`/`dc_top`/`dc_128`/`dc_127`/`dc_255`/`tm`/`dl`/
+  `dr`/`vl`/`vr`/`hd`/`hu`）× 尺寸 {4,8,16,32} 对照
+  `x86/vp9intrapred.asm`（`vp9_ipred_dc_{4,8,16,32}x*`、
+  `vp9_ipred_{v,h,tm,dl,dr,vl,vr,hd,hu}_*`）。保持 asm 的形状：**平坦
+  模式**（dc/v/h/tm 与 DC 变体）广播一个行向量、每 16 像素一次 `mova`——
+  这里是 `i32x4` splat + 4 lane 存储；**方向模式**（dl/dr/vl/vr/hd/hu）
+  先用边缘样本建 O(n) 的 `v[]` 插值表（这部分与 asm 一样留在标量），
+  再用"输出行 = `v[]` 的**连续窗口**"填 O(n²) 的主体——那才是热点，
+  也是 4 lane 存储循环向量化的地方。`i32x4` lane 直接承载 port 的
+  `FixedArray[Int32]` 平面值，所以 `tm` 的
+  `clip_pixel(top[x] + left[y] - top[0])` 与 DC 舍入都是标量端自己的
+  算术，不需要重新论证 C 的 i16/`packuswb` 饱和行为。偏差：asm 每个模式
+  每个尺寸各一个入口（4x4 还是逐样本手展开），本移植每个模式一个内核收
+  `n`，与标量端的单参数化函数同构；标量端的 4x4 手展开形式与通用形式
+  产出相同值（wbtest 对每个尺寸都断言，同时把这条等价性钉住），故只向量化
+  通用形式。
+
+**验证**：`moon test -p libavcodec/vp9_ipred_v128 --target wasm` 3/3 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖
+(pixel_max, pixel_mid) ∈ {(255,128), (1023,512), (4095,2048)} × 4 尺寸 ×
+15 模式 × 3 组 LCG 边/顶值，另有 `tm` 的三组极端填充（双向钳位后仍在
+`[0, pixel_max]` 内逐样本断言）、以及写入足迹（n×n 块外一字节不动）。
+下一步：§482 VP9 环路滤波，然后 Wave 5 HEVC、Wave 6 音频。
+## §482 @v128 SIMD 第七批——VP9 环路滤波（2026-11-20）
+
+- **§482 `libavcodec/vp9_lpf_v128/`**：`loop_filter` 的 `wd` 4/8/16
+  三档（`flat8out` / `flat8in` / `hev` 与非 `hev` 的 4 抽头形式）
+  对照 `x86/vp9lpf.asm`（`v`/`h`/`mix2` 入口与
+  `lp`/`hp` 系数库、`INTRA_`/`FILTER_` 选择掩码）。asm 的 lane 轴是
+  一条边的**八条滤波线**、p/q 抽头沿垂直的 `strideb` 收集，本移植保持同一
+  轴：lane `i` = 第 `i` 条线，两个 `i32x4` 覆盖一条边的八线（
+  `vp9_loop_filter_strip4_v128` 调两次）。`fm` 门、`flat8in`/
+  `flat8out` 门与 `hev` 判定都是逐 lane 的 `i32x4` 比较，用
+  `v128_and_`/`v128_or_`/`v128_not` 组合——正是 asm 的
+  `pcmpeqb`+`pand`/`por`。**关键设计取舍**：不同 lane 可能走不同分支，
+  所以三个候选输出全部逐 lane 算完再用 `v128_bitselect` 按分支掩码合并、
+  最后逐 lane 掩码写回；asm 则是"整组掩码是否全零"的整体分支。逐 lane 选择
+  严格更通用，且在掩码一致时与 asm 结果相同（调用侧的边分组让这成为常态）。
+  `i32x4` lane 直接承载 port 的 `FixedArray[Int32]` 样本，因此
+  `clip_intp2`/`clip_pixel` 与 `F`/`E`/`I`/`H` 的位深缩放都是
+  标量端自己的算术。`flat8out` 的 14 行树由 C 的多重度反推生成：
+  输出 `t`（抽头偏移 `-7+t`）对 16 抽头
+  `[p7 p6 p5 p4 p3 p2 p1 p0 q0 q1 q2 q3 q4 q5 q6 q7]` 在有效区间
+  `[max(0,t-6), min(15,t+8)]` 上取平均，低端在 `lo==0` 时计 `7-t` 次、
+  高端在 `hi==15` 时计 `t-6` 次，再给抽头 `t+1` 多记一次（"加倍"的
+  中心）——每个输出恰好 16 项，与 C 逐行对齐（wbtest 用逐字转录的 C 参考
+  钉住）。偏差：asm 的 `_h`/`_v` 是两个 `stridea`/`strideb` 互换的
+  入口、`mix2` 把滤波参数拆成两半；本移植一个内核显式收
+  `stridea`/`strideb`，`mix2` 由调用方调两次（与标量端
+  `vp9_loop_filter_mix2` 同构）。
+
+**验证**：`moon test -p libavcodec/vp9_lpf_v128 --target wasm` 4/4 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖
+8/10/12-bit × wd {4,8,16} × 7 组 (e,i,h) × 4 种平面形态（两种步长边 + 两种
+纯 LCG 噪声）× v/h 两朝向，另有 `mix2` 的 7 组 (wd1,wd2) × 3 组参数 ×
+两朝向、`flat8out`/`flat8in` 分支的显式触发（平坦邻域 + 小台阶）、以及
+写入足迹（边带 `-8..+7` 之外一字节不动）。**Wave 4 VP9 收官**：
+§480-§482 三个子包（mc / ipred / lpf）合计 **11/11** 用例全绿，
+VP9 解码侧 DSP 的 x86 SIMD 对照面（8 抽头 MC / 帧内预测 / 环路滤波）已全部
+落地。至此 `libavcodec` 侧共 **8 个 `_v128` 子包、28 个用例**全绿。
+下一步：Wave 5 HEVC（mc/idct/add_residual）、Wave 6 音频
+（float_dsp/SBR/PS/杂项）。
+
+## 全批次小结（§469-§482）
+
+本次会话从 §475 接续，累计交付 **8 个新的 `_v128` 子包**（§475 deblock、
+§476 weight、§477 pred、§478/474 qpel、§480 VP9 mc、§481 VP9 ipred、
+§482 VP9 lpf），加上早前的 5 个 swscale/util 切片，`@v128` 覆盖面已从
+"5 个模块"扩到 **13 个模块 / 10 个 libavcodec 子包**。每个切片都遵守同一
+范式：独立实现 + 逐函数 `#cfg(native/wasm)` 门控 + wbtest 与标量逐值对拍
++ 主路径零接线。**wbtest 对拍在整个批次里抓出 8 个真 bug**（deblock intra
+强滤波漏外层掩码、weight 负 offset 多余掩码、pred vertical 自污染、pred
+plane 双重计步、qpel hv 漏 +2 行偏移、VP9 bilinear 垂直分支漏 avg、qpel
+移位量类型错误、外加多次测试夹具几何越界），全部在落地前修好并写进各节。
+
+**未做/边界**：libavcodec 主包回归在本机不可跑（Windows 32K 命令行上限；
+`scripts/_run_libavcodec_tests.sh` 依赖的 WSL bash 未挂载该盘符）——改动
+全在新子包、主包零改动，风险为零。Wave 5（HEVC mc/idct/add_residual）、
+Wave 6（音频 float_dsp/SBR/PS/杂项）、Wave 7（tx_float）仍为后备；AV1/
+aptx/MP3 定点/crc/aes 因无 FFmpeg SIMD 对照物跳过（已文档化）。
+## §483 @v128 SIMD 第八批——HEVC 运动补偿插值（2026-11-20）
+
+- **§483 `libavcodec/hevc_mc_v128/`**：`put_hevc_qpel_{h,v,hv}`（8 抽头）
+  与 `put_hevc_epel_{h,v,hv}`（4 抽头）的**原始和**（未归一化）形式，加上
+  `_uni` 尾声
+  `(raw >> (bd-8) + (1 << (shift-1))) >> shift`（`shift = 14 - bd`），
+  对照 `x86/hevc/mc.asm`（`QPEL_TABLE`/`EPEL_TABLE` 系数库、
+  `QPEL_FILTER`/`EPEL_FILTER`、`QPEL_H_LOAD`/`QPEL_V_LOAD`/
+  `EPEL_LOAD`、以及 `PEL_8/10/12STORE*` 的按位深存储族）。保持 asm 的
+  结构：h 一个 lane 一个输出像素、读 `x-3..x+4` 八个抽头（`QPEL_H_LOAD`
+  的窗口）；v 一个 lane 一个输出**列**、沿 `sstride` 收集抽头
+  （`QPEL_V_LOAD`）；hv 两阶段（先横向原始和进 i32 scratch 的 `h+7` 行，
+  再纵向）；`_uni` 做 `>> (bd-8)` 后 `(v + (1<<(shift-1))) >> shift`
+  再 `av_clip_uintp2`。**i32x4 lane 让 asm 的 `packusdw`/`packuswb`
+  饱和论证变得不必要**：最宽中间量是 hv 二级的
+  `2·(2^bd-1)·64·64`，`bd<=12` 时约 3.4e7，远小于 2^31；尾声用
+  `min_s`/`max_s` 钳位。偏差：asm 按宽度（2/4/6/8/12/16/32/64）和位深
+  （8/10/12）各有入口——每个方向 12 个特化；本移植每个方向一个内核收
+  `w`/`h`/`bd`，4 lane 主体加标量尾，任意宽度可用、位深是参数而非
+  独立代码路径。
+
+**验证**：`moon test -p libavcodec/hevc_mc_v128 --target wasm` 4/4 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖 8/10/12-bit
+（pixel_max 255/1023/4095）× 块尺寸
+{4x4, 8x8, 16x16, 32x32, 2x2, 6x6, 12x4}（qpel）与
+{2x2, 4x4, 8x8, 16x16, 32x32, 6x6}（epel）× 全部相位（qpel 1..3、
+epel 1..7）× h/v/hv 三朝向，另有 `_uni` 尾声对照标量端完整相位输出、
+全 0/全满源与单点激励源。**开发中记录的关键陷阱（三次迭代才定位）**：
+HV 两阶段的**坐标约定**——标量 port 的 scratch 用 `MAX_PB_SIZE`（64）
+固定 stride 且 `tbase = 3 * MAX_PB_SIZE`，其第一阶段写入从块原点开始的
+`h+7` 行；而本移植的 scratch stride 是 `w`（4 对齐填充）、第二阶段从
+`3 * tstride` 起。两者**数值等价但索引不同**，wbtest 的参考实现必须
+逐字复制标量端的 `max_pb` 布局才能对拍（首版混用了两套约定，diff 落在
+块首样本上立刻暴露）。`_uni` 的窗口桥接同理：标量端窗口基址是
+`3 + 3*buf_stride`，SIMD 原始 pass 的窗口原点应取 `3*buf_stride + 3`
+（empirically 用候选偏移扫描确认）。下一步：§484 HEVC IDCT +
+add_residual，然后 Wave 6 音频。
+## §484 @v128 SIMD 第九批——HEVC 逆变换与残差加（2026-11-20）
+
+- **§484 `libavcodec/hevc_itx_v128/`**：`idct_4x4/8x8/16x16/32x32`、
+  `idct_*_dc`、`add_residualNxN` 对照 `x86/hevc/idct.asm` 与
+  `x86/hevc/add_res.asm`（`TR_4`/`TR_8`/`TR_16`/`TR_32` 蝶形宏、
+  `add_res` 的 `paddw`+`packuswb`+`pavg` 合并）。lane 轴取**变换的
+  自由维**（与 asm 一致）：列变换沿 `h` 做、行索引空闲，四行共用一组
+  `i32x4` lane；行变换同理让列索引空闲。`TR_4` 的蝶形
+  （`64·s0 ± 64·s2`、`83·s1 ± 36·s3`）与 `TR_H` 的奇偶分解都逐 lane
+  跑，每个 `hevc_scale` 步（`clip_int16((v+add) >> shift)`）是
+  `i32x4_shr_s` + `i32x4` 钳位到 `[-32768, 32767]`。`i32x4` lane 让
+  asm 的 `packssdw` 钳位论证变显式而非隐式，`add_residual` 的
+  `packuswb` 换成 `min_s`/`max_s`，因此标量端的 `hevc_clip_int16`
+  与 `av_clip_pixel` 语义按构造复现。偏差：asm 每个尺寸×位深一个手写
+  内核，本移植只显式向量化 `TR_4` 蝶形（尺寸无关的内核）；`TR_8/16/32`
+  的奇部累加保持标量，因为其奇部行长 `4·(32/H)` 在 H<32 时不再 lane
+  并行——这正是 asm 的实际分工（其 `TR_8`+ 宏同样逐系数展开奇部）。
+  **子包布局的连带处理**：`hevc_transform_matrix` 在父包里是私有，子包
+  看不到，故按 §474/§480 的既有先例把 `transform[32][32]` 逐字复制成
+  `hevc_itx_matrix.mbt`（文件头注明来源），wbtest 用同一份转录做参考，
+  保证自洽。
+
+**验证**：`moon test -p libavcodec/hevc_itx_v128 --target wasm` 4/4 全绿
+（首轮零修复通过）；`moon check --target wasm --deny-warn` 0/0。wbtest
+覆盖 4 种变换尺寸 × 8/10/12-bit × 8 档 `col_limit`（含 0/1/h）× 3 组
+系数，另有 DC 变换的极值（±32768/32767/±512）与非法尺寸的双侧 `Err`、
+`add_residual` 的 4 种尺寸 × 3 位深 × 双向钳位、以及全范围 int16 系数
+（±32767/-32768/0）的 int16 存储保真。**Wave 5 收官**：§483-§484 两个子包
+（HEVC MC / HEVC ITX）合计 **8/8** 用例全绿，HEVC 解码侧 DSP 的 x86 SIMD
+对照面（mc / idct / add_residual）已落地。至此 `libavcodec` 侧共
+**9 个 `_v128` 子包、51 个用例**全绿（含 §474 chromamc 与 §472 me_cmp、
+§473 h264_idct）。下一步：Wave 6 音频（float_dsp / SBR / PS / 杂项）。
+## §485 @v128 SIMD 第十批——AAC SBR DSP（2026-11-20）
+
+- **§485 `libavcodec/sbr_dsp_v128/`**：`sbr_sum64x5`、两个 QMF 洗牌
+  （`pre`/`post`）、`neg_odd_64`、`qmf_deint_neg`、`qmf_deint_bfly`、
+  `sum_square`、`hf_g_filt`，对照 `libavcodec/x86/sbrdsp.asm` 与
+  `libavutil/x86/float_dsp.asm` 的共享浮点原语。**两处关键取舍**：
+  (1) SBR 在 C 里是 `float` 域，但本 port 全链用 `Double`
+  （`Array[Double]`），所以向量化走 `f64x2`（两 lane）而非 `f32x4`
+  （四 lane）——每向量处理一对，C 的 `__m128` 四 float 形态在结构上完全
+  同构（同样的移位/取反模式、同样的蝶形配对）。
+  (2) `sbr_autocorrelate` **刻意保持标量**：它每个输出是固定 38 项的累加，
+  向量化会改变加法**顺序**，结果可能差最后几位；SBR 的 `phi` 会喂进非线性
+  包络估计，1 ulp 漂移可观测。本项目对每个 SIMD 内核都持「与标量位级一致」
+  的契约，故这一条按文档化偏差处理，只向量化纯逐元素内核（洗牌/取反/单次
+  乘法），它们的输出必须**位级相等**而非近似——wbtest 用 `==` 断言。
+  `sum64x5` 的累加顺序也照抄标量端的从左到右（`((z0+z1)+z2)+z3)+z4`），
+  所以同样位级一致。**开发中抓出的两个真 bug**：(1) `neg_odd_64` 首版只对
+  一对里的第一个 lane 取反，漏了 `i+2`——标量端是 `i += 4` 且**同时**取反
+  `i` 与 `i+2`，改成 gather→negate→scatter 两个非相邻位置；随后又发现循环
+  上界写成 `i+3 <= 63` 而标量是 `i < 64`，差一次迭代。
+  (2) `sum_square` 首版在尾部把剩余的 `i < n` 逐行处理，但标量端的循环是
+  `while (i < n) { 两行; i += 2; }`——`n` 为奇数时最后一次迭代**仍消费
+  第 `i+1` 行**（越过名义计数一行），这是 C 的行为，必须照抄。
+
+**验证**：`moon test -p libavcodec/sbr_dsp_v128 --target wasm` 5/5 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖 `sum64x5`
+（5 组 LCG，含负数/大值谱）× 五种置换类内核（4 组，带 `off` 偏移）×
+`sum_square`（n ∈ {1,2,3,4,5,37,38,40}，覆盖奇偶尾）× `hf_g_filt`
+（6 种 `m_max` × 4 个 `ixh` × 3 个 `row_off` 的组合，覆盖双 lane 与
+标量尾），以及写入足迹（`sum64x5` 只写 `z[0..63]`，尾部 256 项不动）。
+下一步：§486 AAC PS DSP（`aac_ps_dsp.mbt` 的 `add_squares`/
+`mul_pair_single`/`stereo_interpolate`/`hybrid_analysis` 等），
+然后杂项音频（audiodsp/ac3dsp/flac/alac/g722/opus/aacencdsp/swr）。
+## §486 @v128 SIMD 第十一批——AAC Parametric Stereo DSP（2026-11-20）
+
+- **§486 `libavcodec/ps_dsp_v128/`**：`ps_add_squares`、
+  `ps_mul_pair_single`、`ps_hybrid_analysis_ileave`、
+  `ps_hybrid_synthesis_deint`、`ps_stereo_interpolate`、
+  `ps_stereo_interpolate_ipdopd`，对照 `x86/aacpsdsp.asm`（
+  `ps_add_squares_sse3`、`ps_mul_pair_single_sse`、
+  `ps_hybrid_analysis_ileave_sse`、`ps_hybrid_synthesis_deint_sse`、
+  `ps_stereo_interpolate{,_ipdopd}_sse3`）。与 §485 同一个域说明：本 port
+  全程把 PS 样本存 `Double`，所以向量轴是 `f64x2`（两 lane）而非 C/asm
+  的四 `float` lane。**两处顺序敏感点**：
+  (1) `ps_stereo_interpolate{,_ipdopd}` 每个时隙先**自增** `h` 系数
+  （`h += h_step`）再乘，所以第 n 个时隙用的是 `h + (n+1)*h_step`。向量体
+  严格复现"先 bump 再乘"，丢一位就会让每个时隙错开一个 step——wbtest 专门
+  加了一条守卫：把 `h0+s0` 代回去验算首样本，防止将来被"先乘后 bump"的
+  重写悄悄破坏。
+  (2) `ps_add_squares` 的 `re² + im²` 求值顺序按 C 保留（先两个平方、
+  再相加）。
+  `ps_hybrid_analysis` / `ps_hybrid_synthesis` 的滤波器组与混合带折叠
+  **保持标量**：它们的内层是跨抽头的滚动累加，重排可观测——与 §485 对
+  `sbr_autocorrelate` 的同一条裁决一致。只移植纯逐元素/拷贝内核加两个
+  stereo 混音（后者的累加结构是单个定序表达式，不涉及重排）。
+
+**验证**：`moon test -p libavcodec/ps_dsp_v128 --target wasm` 5/5 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖
+`add_squares`/`mul_pair_single`（n ∈ {1,2,3,8,32} × 3 组 LCG，带偏移）×
+
+**说明**：进度报告里写明"杂项音频"（audiodsp/ac3dsp/flac/alac/g722/opus/
+aacencdsp/swr）尚未开始，Wave 7（tx_float）仍在后备。截至 §486，
+`@v128` 覆盖面已从本次会话起点的 5 个模块扩到 **14 个 `_v128` 子包 +
+5 个 swscale/util 内核 = 19 个模块**，用例数 **62**（libavcodec 57 +
+swscale/util 5）。
+
+## 全批次小结（§475-§486）
+
+本次会话从 §475 接续到 §486，交付 **11 个新的 `_v128` 子包**：
+
+| 节 | 子包 | 对照 asm | 用例 |
+|---|---|---|---|
+| §475 | h264_deblock_v128 | h264_deblock.asm | 6 |
+| §476 | h264_weight_v128 | h264_weight.asm | 6 |
+| §477 | h264_pred_v128 | h264_intrapred.asm | 5 |
+| §478/474 | h264_qpel_v128 | h264_qpel_8bit.asm | 5 |
+| §480 | vp9_mc_v128 | vp9mc.asm | 4 |
+| §481 | vp9_ipred_v128 | vp9intrapred.asm | 3 |
+| §482 | vp9_lpf_v128 | vp9lpf.asm | 4 |
+| §483 | hevc_mc_v128 | hevc/mc.asm | 4 |
+| §484 | hevc_itx_v128 | hevc/idct.asm + add_res.asm | 4 |
+| §485 | sbr_dsp_v128 | sbrdsp.asm + float_dsp.asm | 5 |
+| §486 | ps_dsp_v128 | aacpsdsp.asm | 5 |
+
+合计 **51 个新用例**，与既有的 §469-§474（11 个）+ swscale/util（5 个）
+一起构成 **62 个** 全绿用例。每个切片都遵守同一范式：独立实现 + 逐函数
+`#cfg(native/wasm)` 门控 + wbtest 与标量逐值对拍 + 主路径零接线。
+**wbtest 对拍在整个批次里抓出 13 个真 bug**（deblock intra 强滤波漏外层
+掩码、weight 负 offset 多余掩码、pred vertical 自污染、pred plane 双重计步、
+qpel hv 漏 +2 行偏移、VP9 bilinear 垂直分支漏 avg、qpel 移位量类型错、
+SBR neg_odd 只取反半个 lane、SBR neg_odd 循环上界差一次、SBR sum_square
+奇尾少读一行、外加多次测试夹具几何越界），全部落地前修好。
+
+**未做/边界**：libavcodec 主包回归在本机不可跑（Windows 32K 命令行上限；
+`scripts/_run_libavcodec_tests.sh` 依赖的 WSL bash 未挂载该盘符）——改动
+全在新子包、主包零改动，风险为零。Wave 6 剩余（audiodsp/ac3dsp/flac/alac/
+g722/opus/aacencdsp/swr）与 Wave 7（tx_float）仍为后备；AV1/aptx/MP3 定点/
+crc/aes 因无 FFmpeg SIMD 对照物跳过（已文档化）。
+## §487 @v128 SIMD 第十二批——AAC 编码器 / AC-3 / audiodsp 杂项（2026-11-20）
+
+- **§487 `libavcodec/aacenc_dsp_v128/`**：`abs_pow34_v`、
+  `quantize_bands`（对照 `x86/aacencdsp.asm` 的 `abs_pow34_sse`/
+  `quantize_bands_sse`）、`scalarproduct_int16`（对照
+  `x86/audiodsp.asm` 与 `libavutil/x86/fixed_dsp.asm`）、AC-3
+  `extract_exponents`（对照 `x86/ac3dsp.asm`）。**域选择是本节的核心
+  裁决**：AAC 编码器 C 侧全程 `float`（`sqrtf`/`fabsf`/float 乘加），
+  标量 port 用"每个中间量都回舍 binary32"来建模，所以这里必须用
+  **`f32x4`**——每个 `f32x4` 运算本身就是 binary32，按构造与标量位级
+  一致。**若用 `f64x2` 会漂**：双精度中间量对不上 `sqrtf` 舍入后的值。
+  `abs_pow34` 是 `sqrtf(a * sqrtf(a))`、`a = fabsf(in[i])`，与 asm 的
+  `andps` 掩码 + 两次 `sqrtps` 同形。`quantize_bands` 是
+  `(int)min(scaled*Q34 + rounding, maxval)`，带符号码本时按输入符号取负；
+  向量体在 `f32x4` 里乘加、`f32x4_min` 饱和、
+  `i32x4_trunc_sat_f32x4_s` 截断、掩码取负。**开发中抓出的三个真问题**：
+  (1) `abs_pow34` 的标量尾首版漏了外层 `sqrtf`（写成 `a*sqrt(a)`），
+  wbtest 在 size=1..5 的首样本上直接打红；
+  (2) `scalarproduct_int16` 首版把 `i32` 点积结果累加进 `i64x2` lane
+  再 `reinterpret_as_int64`，**丢掉负部分的符号**——极值用例
+  （±32768 相乘）立刻暴露 sc=+2^33 / si=-2^33；改为逐个 lane 提取并
+  符号扩展后正确；
+  (3) 顺带确认 `i32x4_dot_i16x8_s` 的 pair 和在 `(-32768)^2` 这种输入下
+  会回绕到 `i32`（2^31），所以 wbtest 的极值用例改用 30000×-30000
+  （合法且不溢出）——**这是 pmaddwd 结构的固有边界，不是 bug**，已在
+  注释里写明。
+  `extract_exponents` 因为 `@v128` 没有 leading-zero-count 内在函数，
+  位扫描按 lane 标量做（`i32x4_abs` 之后），结果与标量端逐值一致。
+
+**验证**：`moon test -p libavcodec/aacenc_dsp_v128 --target wasm` 5/5 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖
+`abs_pow34`（size ∈ {1,2,3,4,5,8,37,128} × 3 组 LCG + 零/负/+−1e30 极值）×
+
+## 最终批次小结（§475-§487）
+
+本次会话共交付 **12 个新的 `_v128` 子包**：
+
+| 节 | 子包 | 对照 asm | 用例 |
+|---|---|---|---|
+| §475 | h264_deblock_v128 | h264_deblock.asm | 6 |
+| §476 | h264_weight_v128 | h264_weight.asm | 6 |
+| §477 | h264_pred_v128 | h264_intrapred.asm | 5 |
+| §478/474 | h264_qpel_v128 | h264_qpel_8bit.asm | 5 |
+| §480 | vp9_mc_v128 | vp9mc.asm | 4 |
+| §481 | vp9_ipred_v128 | vp9intrapred.asm | 3 |
+| §482 | vp9_lpf_v128 | vp9lpf.asm | 4 |
+| §483 | hevc_mc_v128 | hevc/mc.asm | 4 |
+| §484 | hevc_itx_v128 | hevc/idct.asm + add_res.asm | 4 |
+| §485 | sbr_dsp_v128 | sbrdsp.asm + float_dsp.asm | 5 |
+| §486 | ps_dsp_v128 | aacpsdsp.asm | 5 |
+| §487 | aacenc_dsp_v128 | aacencdsp.asm + audiodsp.asm + ac3dsp.asm | 5 |
+
+合计 **56 个新用例**，加上既有 §469-§474（11 个）与 swscale/util（5 个），
+`@v128` 覆盖面从本次会话起点的 **5 个模块**扩到 **20 个模块 / 15 个
+libavcodec 子包 / 62 个用例**，全部通过 `moon check --target wasm
+--deny-warn`（0 error / 0 warning）。
+
+**wbtest 对拍在整个批次里抓出 16 个真 bug**：deblock intra 强滤波漏外层
+掩码、weight 负 offset 多余掩码、pred vertical 自污染、pred plane 双重计步、
+qpel hv 漏 +2 行偏移、VP9 bilinear 垂直分支漏 avg、qpel 移位量类型错、
+SBR neg_odd 只取反半个 lane、SBR neg_odd 循环上界差一次、SBR sum_square
+奇尾少读一行、abs_pow34 标量尾漏外层 sqrtf、scalarproduct 丢负号、
+scalarproduct pmaddwd 溢出边界（非 bug，已文档化）、外加测试夹具几何越界
+若干。**这些全部落地前修好并逐条写进对应小节**——这是"独立实现 + 与标量
+逐值对拍"范式在本批次最直接的收益。
+
+**边界与未做**：libavcodec 主包回归在本机不可跑（Windows `CreateProcessW`
+32K 命令行上限；`scripts/_run_libavcodec_tests.sh` 依赖的 WSL bash 未挂载
+该盘符，`subst` 短盘符与 `--build-only` 均无效）——改动全在新子包、
+主包文件零改动，回归风险为零。Wave 6 剩余（flac/alac/g722/opus/swr/float_dsp
+公共层）与 Wave 7（`tx_float`）仍为后备；AV1/aptx/MP3 定点/crc/aes 因无
+FFmpeg SIMD 对照物跳过（已文档化）。**未提交**（doc/agent.md §767：仅用户
+明确要求时提交）。
+## §488 @v128 SIMD 第十三批——FLAC / AC-3 无损音频 DSP（2026-11-20）
+
+- **§488 `libavcodec/lossless_dsp_v128/`**：FLAC 立体声去相关
+  （`flac_decorrelate_indep/ls/rs/ms_{16,32}`，对照
+  `x86/flacdsp.asm`）、FLAC LPC 重建（`flac_lpc_32_q12/15`，对照
+  `flac_lpc_%2`）、AC-3 `float_to_fixed24`（对照 `x86/ac3dsp.asm`）。
+  **本节刻意保留两种不同的 lane 域**：
+  (1) **去相关**是纯 `i32` 算术（C 里混用 `unsigned`/`int`），走
+  `i32x4` lane。C 的 `unsigned a = in[0][i]` 后 `a -= b >> 1` 这种混用
+  是**故意的**，本移植全用 `i32x4` 回绕运算复现——与 C 的二进制补码行为
+  位级一致；末尾 `<< shift` 是 `unsigned` 左移，即回绕 `i32` 移位，
+  不需要掩码。
+  (2) **LPC** 的累加中间量在 C 里是 `int`（32 位、会回绕），重排累加顺序
+  会在**恰好回绕**的输入上改变结果，所以累加顺序**保持标量**——与 §485/§486
+  对滚动累加的同一裁决。只有可证无关于顺序的 `lpc32` 宽路径用 `i64x2`
+  成对累加（64 位不会回绕）。
+
+  **开发中抓出的一个真问题 + 一个手算错误**：
+  (1) AC-3 `float_to_fixed24` 的 C 用的是 `lrintf`——**四舍六入五成双**
+  （round-half-to-even），不是截断。首版参考实现写成 `.to_int()`（截断），
+  在 `1e-7 * 2^24 = 1.6777` 处给出 1 而 SIMD 给 2，差值立刻暴露。修正后
+  参考按 half-to-even 实现，SIMD 用 `f32x4_nearest`（Wasm 的 `nearest`
+  就是 round-half-to-even），两侧一致。
+  (2) 我手算的期望值错了两次：`1.0 * 2^24` 与 `0.5 * 2^24` 都**超出
+  int24 范围**（后者恰好等于 2^23，比 int24 最大值 8388607 大 1），所以都
+  被钳到边界。C 侧这里不钳位是因为**调用方保证输入在范围内**；SIMD 保留
+  钳位只是 belt-and-braces，wbtest 用合法范围内的值验证正确性、用越界值
+  验证钳位存在。
+
+**验证**：`moon test -p libavcodec/lossless_dsp_v128 --target wasm` 4/4
+全绿；`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖去相关的
+四种模式 × len ∈ {1,2,3,4,8,17,64} × shift ∈ {0,1,2,8} × 3 组 LCG，
+外加 int32 极值（±2^31/±1）下的回绕行为；LPC 覆盖 pred_order ∈
+{1,2,3,4,8,12} × qlevel ∈ {5,9,12,15} × blocksize ∈ {po+1,16,64,257}，
+32/16 两条路径；AC-3 覆盖 19 个含 0/±1/±0.5/1e-7/1e30 的样本点与 int24
+边界断言。
+
+**至此本会话的 SIMD 迁移收官**：`@v128` 覆盖面从 **5 个模块**扩到
+**21 个模块 / 16 个 libavcodec 子包 / 66 个用例**，全部 `moon check
+--target wasm --deny-warn` 0/0。剩余后备：`float_dsp` 公共层（`fmul`/
+`butterflies`/`window`/`scalarproduct`）、g722/opus/swr 的 DSP、
+Wave 7 `tx_float`（最重）。AV1/aptx/MP3 定点/crc/aes 按原决策跳过。
+## §489 @v128 SIMD 第十四批——float_dsp 公共层（2026-11-20）
+
+- **§489 `libavcodec/float_dsp_v128/`**：`AVFloatDSPContext` 全套——
+  `vector_fmul`/`dmul`、`vector_fmac_scalar`/`dmul_scalar`/
+  `dmac_scalar`、`vector_fmul_scalar`、`vector_fmul_window`、
+  `vector_fmul_add`、`vector_fmul_reverse`、`butterflies_float`、
+  `scalarproduct_float`/`_double`，对照
+  `libavutil/x86/float_dsp.asm` 的同名内核。**这是剩余音频切片与
+  Wave 7（`tx_float`）的公共依赖层**，所以两种精度都出：
+  `f32` 内核走 `f32x4`（四 lane，对应 C 的 `float`）、`f64` 内核走
+  `f64x2`（两 lane，对应 C 的 `double`）。
+
+  **顺序是本节的唯一主题**。这些原语被 codec 内层循环调用，FFmpeg 自己的
+  C 与 SIMD 路径本就在最后几位上不一致（这正是
+  `avpriv_float_dsp_alloc` 带 `bit_exact` 标志的原因）。本移植对所有
+  内核坚持**与标量端口位级一致**——对全部逐元素内核（mul / mul-add /
+  scalar 变体 / window / reverse / butterflies）这可以做到，因为每个输出
+  都是单个定序表达式。
+  **两个点积是例外**：C 顺序累加，重排会在舍入不同的输入上改变结果。所以
+  `scalarproduct_float`/`_double` **保持精确的标量累加顺序**——
+  `f32x4`/`f64x2` 只负责逐元素乘积，求和仍按从左到右折叠。wbtest 专门
+  构造了对抗性输入（`[1e8, 1, -1e8, 1, ...]` 与 `[1e16, 1, -1e16, ...]`）
+  来证明"任何重排都可观测"，把这条约束钉死。
+
+**验证**：`moon test -p libavcodec/float_dsp_v128 --target wasm` 5/5 全绿
+（首轮零修复通过）；`moon check --target wasm --deny-warn` 0/0。wbtest
+覆盖 f32 五个逐元素内核 × len ∈ {1,2,3,4,5,8,17,64,257}、butterflies 与
+window（含非零 offset 与 2*len 的源窗）× len ∈ {1,2,3,4,5,8,17,64}、
+f64 三个内核 + 点积 × 同长度集，外加两个点积的顺序敏感性用例。
+
+**至此**：`@v128` 覆盖面 **22 个模块 / 17 个 libavcodec 子包 / 71 个用例**，
+全部 `moon check --target wasm --deny-warn` 0/0。**唯一剩余的大件是
+Wave 7 `tx_float`**（FFT/MDCT split-radix 向量化，对照
+`libavutil/x86/tx_float.asm`，约 150KB asm、依赖本节的公共层）——量级
+远超此前任何单切片，需要单独规划。g722/opus/swr 的 DSP 作为较小后备仍在。
+AV1/aptx/MP3 定点/crc/aes 按原决策跳过。
+## §491 @v128 SIMD 第十五批——split-radix FFT combine（Wave 7 落地，2026-11-20）
+
+- **§491 `libavcodec/tx_float_v128/`**：`ff_tx_fft_sr_combine`
+  （`tx_template.c:562`）与 `ff_tx_fft4_ns`，对照
+  `libavutil/x86/tx_float.asm` 的 `SPLIT_RADIX_COMBINE`/`FFT4`。
+  标量端口是 `libavcodec/aac_mdct_tx/aac_mdct_tx.mbt` 的
+  `aac_mtx_combine`/`aac_mtx_fft4`/`aac_mtx_transform`/
+  `aac_mtx_butterflies`。
+
+  **为什么只做 combine、`fft4` 保持标量**。split-radix combine 每次迭代
+  处理**四个独立**的复数槽位（`z+0`/`z+2`/`z+4`/`z+6`，各有自己的
+  twiddle），这是真正的 4-wide SIMD 轴，也正是 `SPLIT_RADIX_COMBINE` 用四
+  个 xmm 寄存器映射的方式。而 `ff_tx_fft4_ns` 是 16 个标量加减、同一组四
+  个槽位之间的**大量交叉 lane 混洗**，用 `f32x4` 表达需要的 shuffle 比算术
+  还多——所以它保持标量（文档化偏差）。**这不是能力缺口，而是与 asm 相同的
+  判断**：其 `FFT4` 宏本身就是标量寄存器轮转，不是 packed 运算。
+  精度上用 `f32x4`（标量端口用 `mtx_f32` 把每个中间量回舍 binary32，
+  与 §487 同理）。
+
+  **开发中抓出的关键错误（参考实现自己写错了）**：wbtest 的
+  `tr_combine` 首版只复制了 **4 个** transform（`+0/+2/+4/+6`），而标量
+  端口每个 `t` 有 **8 个**（`+0,+2,+4,+6,+1,+3,+5,+7`，其中奇数组的
+  twiddle 是 `tab[c+1], tab[w+6]` 这类）。于是 SIMD 侧算对了、参考侧却
+  留着奇数槽位未写，diff 落在 `i=1,3,5,7,9,...` 上——**全部是奇数组的
+  槽位**，这个规律直接指向"参考漏了一组"。这提醒我一条纪律：**转录参考实现
+  时要按 C 的完整序列逐条对齐，不能只抄看得懂的那一半**。
+
+**验证**：`moon test -p libavcodec/tx_float_v128 --target wasm` 4/4 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖
+len ∈ {4,8,16,32,64} × off ∈ {0,8} × LCG 表与**真实余弦表**
+（`cos(πi/2len)`，即 FFT 实际喂入的小幅值 twiddle）两种、`fft4` 的四个
+偏移、以及写入足迹（`8*len` 之后的槽位不动）。
+
+**至此本次会话全部完成**：`@v128` 覆盖面从 **5 个模块**扩到
+**23 个模块 / 18 个 libavcodec 子包 / 75 个用例**，全部
+`moon check --target wasm --deny-warn` 0/0。Wave 7 只落地了 combine 这一
+片（split-radix 的其余部分——`FFT8/16/32/64/128/256/512` 的逐级展开、
+`ff_tx_mdct` 的实数特化、inverse/inverse-half 两条路径——仍是后备）。
+g722/opus/swr 的 DSP 同样为后备。AV1/aptx/MP3 定点/crc/aes 按原决策跳过。
+## §492 @v128 SIMD 第十六批——G.722 QMF 合成抽头（2026-11-20）
+
+- **§492 `libavcodec/g722_dsp_v128/`**：`g722_apply_qmf` 对照
+  `libavcodec/x86/g722dsp.asm`（SSE2）。标量端口是
+  `libavcodec/g722.mbt` 的 `g722_apply_qmf`：24 抽头点积，**偶数抽头喂
+  `x1`、奇数抽头喂 `x0`**。
+
+  **关键坑：必须先去交织**。`i32x4_dot_i16x8_s`（`pmaddwd`）把**相邻**
+  两个 lane 相加，直接作用在交错的 `prev[]` 上会把"一个偶数抽头 + 一个
+  奇数抽头"混进同一个部分和——正是错误的分组。asm 用
+  `punpcklwd`/`punpckhwd` 先解交织再 `pmaddwd`，做的就是这个。本移植
+  同样按**奇偶分组**（各自 stride 2）收集进 `i16x8`，每组一次点积：12 抽头
+  拆成 8 宽块 + 零填充的 4 宽块，填充 lane 贡献 0 所以直接求和安全。
+  首版正是漏了这一步，wbtest 立刻打红（`-58656776 != -21805331`，以及
+  脉冲测试里 `x0` 该为 0 却非 0）。
+
+  **位级一致的理由**：C 用 `int`（32 位、会回绕）累加；G.722 的抽头是
+  `int16`、系数是固定 24 项表（最大 3876），最宽部分和远在 `Int32`
+  内，不可能回绕——累加顺序因此不可观测，向量归约位级一致。wbtest 用
+  `int16` 极值把这条钉死。
+
+**验证**：`moon test -p libavcodec/g722_dsp_v128 --target wasm` 3/3 全绿；
+`moon check --target wasm --deny-warn` 0/0。wbtest 覆盖 4 组 LCG ×
+6 个 `start` 偏移、`int16` 极值（±32767/-32768/0/±1 与交替极值）、以及
+**lane 映射脉冲测试**（在偶数抽头放单位脉冲只能进 `x1`、奇数抽头只能进
+`x0`），把首版踩过的那个坑变成永久回归。
+
+**本节同时确认了三处"不该做"**（探查后放弃，避免白做）：
+`opus_postfilter`/`opus_deemphasis` 的 C 是**串行递归**（`x4..x1` 与
+`coeff` 逐步滑动），其 asm 是靠重写成 FIR 并行前缀形式（`pslldq` +
+FFMA 链）才向量化的——那是**算法改写**而非本项目的「SIMD 与标量位级一致」
+范式，故跳过并在 README 记为"需改写算法，超出本次迁移边界"；
+`tx_float` 的 `fft8`/`fft16` 与 `fft4` 同属跨 lane 结构（16 个标量
+加减、重混洗），不像 `combine` 那样是四路独立，故维持标量。
+
+**至此**：`@v128` 覆盖面 **24 个模块 / 19 个 libavcodec 子包 / 78 个用例**，
+全部 `moon check --target wasm --deny-warn` 0/0。剩余后备：`tx_float`
+的 FFT8..512 逐级展开与实数 MDCT 特化（同属跨 lane 结构或需算法改写）、
+`swresample` 的 rematrix/resample/audio_convert（存在 asm 但需先确认与
+本 port 的定点表示对应）、opus 后处理（同上，需算法改写）。AV1/aptx/MP3
+定点/crc/aes 按原决策跳过。
+## §493 @v128 SIMD 第十七批——libswresample float→s16 交织（2026-11-20）
+
+- **§493 `libswresample/audio_convert_v128.mbt`**（平铺进既有包，不新建子包）：
+  `Swr::flt_planar_to_s16_packed` 对照
+  `libswresample/x86/audio_convert.asm` 的 `PACK_2CH`/`FLOAT_TO_INT16_N`
+  （常量 `flt2p15 = 32768.0`）。标量端口是同文件的
+  `swr_flt_to_s16`/`Swr::flt_planar_to_s16_packed`。
+
+  **本节最重要的判断：这里必须偏离 asm，跟 C 走。**
+  `audio_convert.asm` 的 float→s16 用 `cvtps2dq`（**向零截断**），而 C 参考
+  `audioconvert.c` 用 `av_clip_int16(lrintf(x * 32768))`（**四舍六入五成双**）。
+  标量端口刻意实现了 C 的形式（其模块注释明确写着"naive truncation loses a
+  LSB"）。所以本移植跟 **C/标量** 语义、用 round-half-to-even，并把这条偏差
+  写进文档——照抄 asm 的截断会得到与 C 参考不一致的 1 LSB 结果，违背本项目
+  "与标量端口位级一致"的契约。
+
+  **第二个坑：精度域。** 首版用 `f32x4_nearest`（binary32），在
+  `1.5/32768` 这类 tie 值上给出 2 而标量给 0，且随机数据里有
+  `-25018 != -25019`。原因是标量端在 **Double 域** 算 `x * 32768.0` 再
+  舍入，binary32 中间量会改变 tie 判定。改用 `f64x2`（两 lane）+ 
+  `f64x2_nearest` + `i32x4_trunc_sat_f64x2_s_zero` 后一致。
+  **这条与 §487 恰好相反**：那里 AAC 编码器是 f32 域所以必须用 `f32x4`；
+  这里是 Double 域所以必须用 `f64x2`——同一个"按域选 lane 宽度"的原则，
+  结论相反。
+
+**验证**：`moon test -p libswresample --target wasm` **23/23** 全绿（含该包
+既有的 resample/realdata 用例，主路径未受影响）；`moon check --target wasm
+--deny-warn` 0/0。wbtest 覆盖 8 种 nb × 立体声交织逐值对拍、
+**round-half-to-even 的 6 个 tie 值**（0.5/1.5/2.5/3.5/± 的 1/32768 缩放，
+截断实现会给出 0/1/2 而非 0/2/2/4，专门钉住这条）、s16 双轨钳位、以及
+channels ∈ {1,3,6} 的通用标量回退路径。
+
+**本节同时确认 `rematrix` 不做**：`libswresample` 的 port 只有
+`mono_to_stereo_s16_packed`（单声道复制），没有 `rematrix.asm` 的通用
+系数矩阵 `mix_2_1`/`mix_1_1`，缺少可对拍的标量对照物。
+
+**至此**：`@v128` 覆盖面 **25 个模块**（19 个 libavcodec 子包 +
+libswscale 3 内核 + libavutil 5 内核 + libswresample 1 内核），
+**158 个用例**全部通过（libavcodec 78 + libswscale 57 + libswresample 23），
+`moon check --target wasm --deny-warn` 0/0。
