@@ -491,7 +491,7 @@ pub fn av_asf_open(data : Bytes) -> Result[AsfDemux, String] {
     match
       asf_parse_one_packet(data, pos, packet_size, preroll, tracks, packets) {
       Ok(_) => ()
-      Err(e) => println("DBG asf packet err at \{pos}: \{e}")
+      Err(_) => ()
     }
     pos = pos + packet_size
   }

@@ -948,7 +948,6 @@ pub fn ff_h264_decode_picture_parameter_set(
   pps.pic_order_present = gb.read1().reinterpret_as_int()
   let slice_groups = gb.read_ue()
   if slice_groups < 0 {
-    println("PPSGUARD: slice_groups=\{slice_groups}")
     return Err("EINVAL")
   }
   pps.slice_group_count = slice_groups + 1
@@ -959,7 +958,6 @@ pub fn ff_h264_decode_picture_parameter_set(
   let ref0 = gb.read_ue()
   let ref1 = gb.read_ue()
   if ref0 < 0 || ref1 < 0 || ref0 > 31 || ref1 > 31 {
-    println("PPSGUARD: ref0=\{ref0} ref1=\{ref1}")
     return Err("EINVAL")
   }
   pps.ref_count_l0 = ref0 + 1

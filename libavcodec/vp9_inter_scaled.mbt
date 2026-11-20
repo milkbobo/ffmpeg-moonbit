@@ -260,9 +260,6 @@ fn Vp9Decoder::mc_luma_scaled(
     y < 3 ||
     x + 4 >= ref_frame.width - refbw_m1 ||
     y + 5 >= ref_frame.height - refbh_m1 {
-    println(
-      "EMU x=\{x} y=\{y} bw=\{refbw_m1 + 8} bh=\{refbh_m1 + 8} ref=\{ref_frame.width}x\{ref_frame.height} mv=(\{mvx},\{mvy}) scale=(\{scale_x},\{scale_y})",
-    )
     vp9_emulated_edge(
       self.mc_scaled_emu,
       0,
@@ -450,8 +447,5 @@ fn Vp9Decoder::mc_chroma_scaled(
   self.mc_scaled_kernel(
     dst_cr, dst_off, dst_stride, src_cr, base, sstride, cbw, cbh, mx, my, step_x,
     step_y, filter, avg,
-  )
-  println(
-    "CHW dbg: dir cb=\{dst_cb[dst_off]} cr=\{dst_cr[dst_off]} cbw=\{cbw} cbh=\{cbh} mx=\{mx} my=\{my} step=(\{step_x},\{step_y}) base=\{base} sstride=\{sstride}",
   )
 }
