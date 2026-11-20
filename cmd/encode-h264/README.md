@@ -17,7 +17,7 @@ moon run cmd/encode-h264 -- input.yuv --width 640 --height 480 --output out.264 
 | `--cabac` | 使用 CABAC；缺省为 CAVLC |
 | `--cabac-rd` | 用真实 CABAC 位数评估 P/B 帧候选；要求 `--cabac`，支持批式与流式 |
 | `--dct8x8` | High profile 8x8 变换（I8x8、inter 8x8，与 `--b-slices` 组合时含 B 帧内 Intra8x8）；支持批式与流式 |
-| `--stream` | 逐帧编码并逐个访问单元写出；native 目标分块读写文件，wasm/js 宿主仍整文件缓冲；支持 P/B VBV，与 ABR 互斥 |
+| `--stream` | 逐帧编码并逐个访问单元写出；native 目标分块读写文件，wasm/wasm-gc/js 宿主整文件缓冲；支持 P/B VBV，与 ABR 互斥 |
 | `--b-slices` | 奇数显示位置使用 B 帧，编码顺序重排；可与 ABR/VBV 组合（B 序列按显示位置分配帧级 QP，VBV 逐 AU 带 pic_timing SEI 与 filler） |
 | `--b-parts` | B 帧子分割（16x8/8x16 与 B_8x8 逐 8x8 组决策）；要求 `--b-slices`，支持批式与流式 |
 | `--intra-in-b` | B 帧内 Intra16x16 宏块（场景切换）；要求 `--b-slices`，支持批式与流式 |
@@ -52,7 +52,7 @@ B 图片等待下一张未来 P，再按解码顺序搜索当前 CPB 余量。�
 默认（批式）路径会把全部帧读入内存，适合有限长度的原始视频文件。
 `--stream` 使用 `H264StreamEncoder` 逐帧编码：native 目标通过 C 标准
 I/O 每次读入一帧、每个访问单元完成即写出，原始输入缓冲不随序列增长；
-编码器仍保留重建历史及在线 VBV 的 QP 历史。wasm/js
+编码器仍保留重建历史及在线 VBV 的 QP 历史。wasm/wasm-gc/js
 宿主没有分块文件 API，仍整文件读取输入并在结束时写出输出。固定 QP 和
 P-only VBV 已逐字节验证批式/流式一致；B 在线 VBV 的逐对搜索可产生不同
 QP及字节输出，完整 AU 均受连续 CPB 约束。

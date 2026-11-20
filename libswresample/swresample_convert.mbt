@@ -50,6 +50,21 @@ pub fn Swr::flt_planar_to_s16_packed(
   planar : Array[Array[Double]],
   channels : Int32,
 ) -> Bytes raise {
+  let samples = swr_flt_planar_to_s16(planar, channels)
+  let out : Array[Byte] = []
+  for v in samples {
+    out.push((v & 0xFF).to_byte())
+    out.push(((v >> 8) & 0xFF).to_byte())
+  }
+  Bytes::from_array(out)
+}
+
+///|
+/// Convert planar floating-point channels to interleaved signed 16-bit samples.
+pub fn swr_flt_planar_to_s16(
+  planar : Array[Array[Double]],
+  channels : Int32,
+) -> Array[Int32] raise {
   if channels <= 0 || planar.length() < channels {
     fail("swresample: planar buffers do not cover the channel count")
   }
@@ -59,15 +74,31 @@ pub fn Swr::flt_planar_to_s16_packed(
       fail("swresample: unequal plane lengths")
     }
   }
-  let out : Array[Byte] = []
-  for i = 0; i < nb; i = i + 1 {
-    for ch = 0; ch < channels; ch = ch + 1 {
-      let v = swr_flt_to_s16(planar[ch][i])
-      out.push((v & 0xFF).to_byte())
-      out.push(((v >> 8) & 0xFF).to_byte())
-    }
-  }
-  Bytes::from_array(out[:])
+  swr_interleave_s16(planar, channels, nb)
+}
+
+///|
+#cfg(any(target="wasm", target="wasm-gc"))
+fn swr_interleave_s16(
+  planar : Array[Array[Double]],
+  channels : Int32,
+  nb : Int32,
+) -> Array[Int32] {
+  let out = Array::make(nb * channels, 0)
+  swr_flt_planar_to_s16_packed_v128(planar, channels, nb, out)
+  out
+}
+
+///|
+#cfg(not(any(target="wasm", target="wasm-gc")))
+fn swr_interleave_s16(
+  planar : Array[Array[Double]],
+  channels : Int32,
+  nb : Int32,
+) -> Array[Int32] {
+  Array::makei(nb * channels, i => {
+    swr_flt_to_s16(planar[i % channels][i / channels])
+  })
 }
 
 ///|

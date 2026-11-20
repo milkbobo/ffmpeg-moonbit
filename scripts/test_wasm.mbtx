@@ -1,0 +1,84 @@
+///|
+extern "js" fn arguments() -> FixedArray[String] =
+  #|() => process.argv.slice(2)
+
+///|
+extern "js" fn read_dir(path : String) -> FixedArray[String] =
+  #|(path) => process.getBuiltinModule("node:fs").readdirSync(path)
+
+///|
+extern "js" fn path_exists(path : String) -> Bool =
+  #|(path) => process.getBuiltinModule("node:fs").existsSync(path)
+
+///|
+extern "js" fn run_moon(args : FixedArray[String]) -> String =
+  #|(args) => {
+  #|  const child = process.getBuiltinModule("node:child_process");
+  #|  const result = child.spawnSync("moon", args, {encoding: "utf8", maxBuffer: 16 * 1024 * 1024});
+  #|  return (result.status ?? -1) + "\n" + (result.stdout ?? "") +
+  #|    (result.stderr ?? "") + (result.error?.message ?? "");
+  #|}
+
+///|
+fn run_batch(paths : Array[String], target : String) -> Bool {
+  let args = [
+      "test",
+      "--target",
+      target,
+      "--release",
+      "--no-render",
+      "--target-dir",
+      "_build/test-" + target,
+    ] +
+    paths
+  let output = run_moon(FixedArray::makei(args.length(), i => args[i]))
+  let ok = output.has_prefix("0\n")
+  if !ok {
+    println(output)
+    println("Failed: " + paths.join(" "))
+  } else {
+    for line in output.split("\n") {
+      let line = line.to_owned()
+      if line.has_prefix("Total tests:") {
+        println(line)
+      }
+    }
+  }
+  ok
+}
+
+///|
+fn main raise {
+  let args = arguments()
+  let target = if args.length() > 0 { args[0] } else { "wasm" }
+  guard target == "wasm" || target == "wasm-gc" else {
+    fail("usage: moon run --target js scripts/test_wasm.mbtx [wasm|wasm-gc]")
+  }
+  let packages : Array[String] = [
+    "libavutil", "libavformat", "libswscale", "libswresample", "demo/api",
+  ]
+  for parent in ["cmd", "libavcodec"] {
+    for entry in read_dir(parent) {
+      let path = parent + "/" + entry
+      if path_exists(path + "/moon.pkg") {
+        packages.push(path)
+      }
+    }
+  }
+  let mut passed = run_batch(packages, target)
+  let codec_files : Array[String] = []
+  for entry in read_dir("libavcodec") {
+    if entry.has_suffix(".mbt") || entry.has_suffix(".mbt.md") {
+      codec_files.push("libavcodec/" + entry)
+    }
+  }
+  codec_files.sort()
+  // File selection keeps moonrun's --test-args below Windows' command-line
+  // limit. Release builds avoid the debug white-box module's local limit.
+  for start = 0; start < codec_files.length(); start = start + 18 {
+    let end = (start + 18).min(codec_files.length())
+    let ok = run_batch(codec_files[start:end].to_owned(), target)
+    passed = passed && ok
+  }
+  guard passed else { fail("one or more Wasm test batches failed") }
+}

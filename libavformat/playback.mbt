@@ -118,6 +118,9 @@ pub(all) enum Source {
   Mov(Mp4Movie, Bytes)
   Mkv(MatroskaHeader)
   OggOpus(OggOpusDemux)
+  OggVorbis(OggVorbisDemux)
+  OggFlac(OggFlacDemux)
+  StillImage(Bytes)
   Wav(WavDemux, Bytes)
   /// The demuxer plus, per stream, the next interpolated AAC timestamp
   /// (`ts_nopts` until the first PES timestamp is seen).
@@ -252,6 +255,8 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
       }
       { format_name: format.name(), streams, source: Mkv(mh), cursor: [0], }
     }
+    Ogg if playback_ogg_codec(data) is Some(codec) =>
+      playback_ogg_open(data, format.name(), codec)
     Ogg => {
       let demux = match av_ogg_opus_open(data) {
         Ok(v) => v
@@ -304,6 +309,7 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         cursor: [0],
       }
     }
+    Png => playback_open_png(data, format.name())
     MpegTs => playback_ts_build(data)
     other => raise UnsupportedFormat(other.name())
   }
@@ -380,6 +386,30 @@ pub fn MediaFile::next_packet(
       let p = demux.packets[cur]
       Some({ stream_index: 0, data: p.data, pts: p.pts, keyframe: true, })
     }
+    OggVorbis(demux) => {
+      let index = self.cursor[0]
+      guard index < demux.packets.length() else { return None }
+      self.cursor[0] = index + 1
+      let packet = demux.packets[index]
+      Some({
+        stream_index: 0,
+        data: packet.data,
+        pts: packet.granule,
+        keyframe: true,
+      })
+    }
+    OggFlac(demux) => {
+      let index = self.cursor[0]
+      guard index < demux.frames.length() else { return None }
+      self.cursor[0] = index + 1
+      let frame = demux.frames[index]
+      Some({
+        stream_index: 0,
+        data: frame.data,
+        pts: frame.granule,
+        keyframe: true,
+      })
+    }
     Wav(demux, data) => {
       let cur = self.cursor[0]
       if cur >= demux.packets.length() {
@@ -399,6 +429,13 @@ pub fn MediaFile::next_packet(
         keyframe: p.is_keyframe,
       })
     }
+    StillImage(data) =>
+      if self.cursor[0] == 0 {
+        self.cursor[0] = 1
+        Some({ stream_index: 0, data, pts: 0L, keyframe: true, })
+      } else {
+        None
+      }
     Ts(_, _) => abort("unreachable: TS is routed above")
   }
 }
@@ -408,6 +445,8 @@ pub fn MediaFile::next_packet(
 pub(all) enum AudioDec {
   Aac(@libavcodec.AacDecoder)
   Opus(@libavcodec.OpusDecoder)
+  Vorbis(@libavcodec.VorbisDecoder, Ref[Int32])
+  Flac(Bytes)
   Mp3(@libavcodec.Mp3Decoder)
   /// Raw PCM: (little_endian, bytes_per_sample).
   Pcm(Bool, Int32)
@@ -479,6 +518,7 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       }
       { dec: Opus(dec), channels: head.channels, sample_rate: 48000, }
     }
+    "vorbis" | "flac" => playback_ogg_audio_decoder(info)
     "pcm_s16le" =>
       {
         dec: Pcm(true, 2),
@@ -561,6 +601,42 @@ pub fn AudioDecoder::decode(
         samples: channels,
         nb_samples: n,
         sample_rate: self.sample_rate,
+        pts: Some(pkt.pts),
+      })
+    }
+    Vorbis(dec, first) => {
+      let samples = match dec.decode_packet_native(pkt.data) {
+        Ok(value) => value
+        Err(e) => raise DecodeError(e)
+      }
+      let nb_samples = samples[0].length()
+      if first.val < 0 {
+        first.val = nb_samples
+        return None
+      }
+      Some({
+        samples,
+        nb_samples,
+        sample_rate: self.sample_rate,
+        pts: Some(pkt.pts),
+      })
+    }
+    Flac(streaminfo) => {
+      let out = match @libavcodec.flac_decode_packet(streaminfo, pkt.data) {
+        Ok(value) => value
+        Err(e) => raise DecodeError(e)
+      }
+      let nb_samples = out.samples.length() / out.channels
+      let scale = if out.bits <= 16 { 32768.0 } else { 2147483648.0 }
+      let samples = Array::makei(out.channels, ch => {
+        Array::makei(nb_samples, i => {
+          out.samples[i * out.channels + ch].to_double() / scale
+        })
+      })
+      Some({
+        samples,
+        nb_samples,
+        sample_rate: out.sample_rate,
         pts: Some(pkt.pts),
       })
     }
@@ -687,6 +763,12 @@ pub fn AudioDecoder::decode_all(
 /// carries no duration.
 pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
   match self.source {
+    StillImage(_) => None
+    OggVorbis(demux) if demux.total_samples > 0L =>
+      Some(demux.total_samples.to_double() / demux.sample_rate.to_double())
+    OggFlac(demux) if demux.total_samples > 0L =>
+      Some(demux.total_samples.to_double() / demux.sample_rate.to_double())
+    OggVorbis(_) | OggFlac(_) => None
     Mov(movie, _) =>
       if movie.timescale != 0U && movie.duration > 0UL {
         Some(movie.duration.to_double() / movie.timescale.to_double())
@@ -835,6 +917,14 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
     OggOpus(demux) => demux.pre_skip
     _ => 0
   }
+  let tail = match (mf.source, dec.dec) {
+    (OggVorbis(demux), Vorbis(_, first)) if demux.total_samples > 0L =>
+      (rows[0].length().to_int64() -
+      (demux.total_samples - first.val.max(0).to_int64()).max(0L))
+      .max(0L)
+      .to_int()
+    _ => tail
+  }
   if rows.length() > 0 && (head > 0 || tail > 0) {
     let total = rows[0].length()
     let start = if head < total { head } else { total }
@@ -949,16 +1039,8 @@ pub fn DecodedAudio::to_wav_s16(self : DecodedAudio) -> Bytes raise MediaError {
     Ok(v) => v
     Err(e) => raise DemuxError(e)
   }
-  let nb = if self.samples.length() > 0 { self.samples[0].length() } else { 0 }
-  let inter : Array[Int32] = Array::make(nb * self.channels, 0)
-  for i = 0; i < nb; i = i + 1 {
-    for ch = 0; ch < self.channels; ch = ch + 1 {
-      // FFmpeg's float->s16 conversion: av_clip_int16(lrintf(x * 32768)),
-      // i.e. round half to even - plain truncation loses an LSB on every
-      // half-way sample, which used to show up as +-1 diffs against the
-      // docker reference decodes.
-      inter[i * self.channels + ch] = @swr.swr_flt_to_s16(self.samples[ch][i])
-    }
+  let inter = @swr.swr_flt_planar_to_s16(self.samples, self.channels) catch {
+    e => raise DecodeError(e.to_string())
   }
   mux.write_samples(inter[:])
   mux.finish()
@@ -1043,9 +1125,9 @@ pub fn VideoFrame::poc(self : VideoFrame) -> Int32 {
 /// The bit depth the planes are rendered at (8 for 8-bit codecs).
 pub fn VideoFrame::bit_depth(self : VideoFrame) -> Int32 {
   match self.data {
-    H264(_) => 8
-    Hevc(_) => 8
-    Vp9(_) => 8
+    H264(f) => f.bit_depth
+    Hevc(f) => f.bit_depth
+    Vp9(f) => f.bit_depth
     Av1(f) => f.bitdepth
     Mjpeg(f) => if f.pix_fmt.has_suffix("16le") { 16 } else { 8 }
     Png(f) =>
@@ -1066,39 +1148,8 @@ pub fn VideoFrame::yuv_bytes(self : VideoFrame) -> Bytes {
   match self.data {
     Mjpeg(_) | Png(_) =>
       abort("use VideoFrame::pixel_bytes for JPEG/PNG frames")
-    H264(f) => {
-      // The H.264 planes are macroblock-aligned with strides; the visible
-      // region starts at (crop_top, crop_left) and spans width x height
-      // (chroma subsampled by the frame's shifts).
-      let w = f.width
-      let h = f.height
-      let cw = w >> f.chroma_hshift
-      let ch = h >> f.chroma_vshift
-      let out : Array[Byte] = []
-      let ytop = f.crop_top
-      let ctop = f.crop_top >> f.chroma_vshift
-      let cleft = f.crop_left >> f.chroma_hshift
-      for row = ytop; row < ytop + h; row = row + 1 {
-        let base = row * f.ystride + f.crop_left
-        for i = 0; i < w; i = i + 1 {
-          out.push(f.y[base + i].to_byte())
-        }
-      }
-      for row = ctop; row < ctop + ch; row = row + 1 {
-        let base = row * f.cstride + cleft
-        for i = 0; i < cw; i = i + 1 {
-          out.push(f.u[base + i].to_byte())
-        }
-      }
-      for row = ctop; row < ctop + ch; row = row + 1 {
-        let base = row * f.cstride + cleft
-        for i = 0; i < cw; i = i + 1 {
-          out.push(f.v[base + i].to_byte())
-        }
-      }
-      Bytes::from_array(out)
-    }
-    Hevc(f) => f.yuvp(8)
+    H264(f) => f.yuvp()
+    Hevc(f) => f.yuvp(f.bit_depth)
     Vp9(f) => f.data
     Av1(f) => {
       let out : Array[Byte] = []

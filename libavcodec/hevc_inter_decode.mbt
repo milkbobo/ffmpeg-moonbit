@@ -827,6 +827,7 @@ fn HevcIntraDecoder::deblocking_boundary_strengths(
 /// A decoded output frame. */
 pub struct HevcDecodedFrame {
   pic : HevcPicture
+  bit_depth : Int32
   poc : Int32
   is_irap : Bool
 }
@@ -1613,6 +1614,11 @@ fn hevc_decode_picture(
       pcm=dec_slice.pcm,
     )
   }
-  dec.frames.push({ pic: cur.pic.clone(), poc: cur.poc, is_irap, })
+  dec.frames.push({
+    pic: cur.pic.clone(),
+    bit_depth: sps.bit_depth,
+    poc: cur.poc,
+    is_irap,
+  })
   Ok(())
 }

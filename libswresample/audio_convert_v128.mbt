@@ -28,12 +28,12 @@
 /// byte stream, which here is an `i16x8` interleave via `i8x16_shuffle` of
 /// the two lane vectors' low halves.
 ///
-/// Gated to `native`/`wasm`; other targets keep the scalar path. Equal
+/// Available on `native`, `wasm` and `wasm-gc`. Equal
 /// outputs are asserted in `audio_convert_v128_wbtest.mbt`.
 
 ///|
 /// `av_clip_int16` lane-wise. */
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn acv_clip_int16(v : V128) -> V128 {
   @v128.i32x4_min_s(
     @v128.i32x4_max_s(
@@ -51,14 +51,11 @@ fn acv_clip_int16(v : V128) -> V128 {
 /// than 24 significant bits, the integer result). `f64x2` preserves it.
 ///
 /// Returns the two results in `i32x4` lanes 0 and 1 (lanes 2/3 are zero).
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn acv_flt2_to_s16(a : Array[Double], at : Int32) -> V128 {
   let scale = @v128.f64x2_splat(32768.0)
   let r = @v128.f64x2_nearest(
-    @v128.f64x2_mul(
-      @v128.f64x2_const(a[at], a[at + 1]),
-      scale,
-    ),
+    @v128.f64x2_mul(@v128.f64x2_const(a[at], a[at + 1]), scale),
   )
   let as_i32 = @v128.i32x4_trunc_sat_f64x2_s_zero(r)
   acv_clip_int16(as_i32)
@@ -71,7 +68,7 @@ fn acv_flt2_to_s16(a : Array[Double], at : Int32) -> V128 {
 /// Vectorised for the common 2-channel case (the asm's `PACK_2CH`), with
 /// the general channel count and the tail handled scalar. The float→s16
 /// step uses the C's round-half-to-even semantics throughout.
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 pub fn swr_flt_planar_to_s16_packed_v128(
   planar : Array[Array[Double]],
   channels : Int32,
@@ -93,14 +90,14 @@ pub fn swr_flt_planar_to_s16_packed_v128(
       i = i + 2
     }
     while i < nb {
-      out[2 * i] = acv_one(planar[0], i)
-      out[2 * i + 1] = acv_one(planar[1], i)
+      out[2 * i] = swr_flt_to_s16(planar[0][i])
+      out[2 * i + 1] = swr_flt_to_s16(planar[1][i])
       i = i + 1
     }
   } else {
     for i = 0; i < nb; i = i + 1 {
       for ch = 0; ch < channels; ch = ch + 1 {
-        out[i * channels + ch] = acv_one(planar[ch], i)
+        out[i * channels + ch] = swr_flt_to_s16(planar[ch][i])
       }
     }
   }
@@ -108,34 +105,8 @@ pub fn swr_flt_planar_to_s16_packed_v128(
 
 ///|
 /// Extract the s16 held in the low half of `i32x4` lane `k`, sign-extended. */
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn acv_low_i16(v : V128, k : Int32) -> Int32 {
   let x = @v128.i32x4_extract_lane(v, k).reinterpret_as_int()
   x << 16 >> 16
-}
-
-///|
-/// One scalar sample: `av_clip_int16(lrintf(x * 32768))`, round-half-even.
-#cfg(any(target="native", target="wasm"))
-fn acv_one(a : Array[Double], at : Int32) -> Int32 {
-  let scaled = a[at] * 32768.0
-  let f = scaled.floor()
-  let frac = scaled - f
-  let r = if frac > 0.5 {
-    f + 1.0
-  } else if frac < 0.5 {
-    f
-  } else if f.to_int() % 2 == 0 {
-    f
-  } else {
-    f + 1.0
-  }
-  let v = r.to_int()
-  if v < -32768 {
-    -32768
-  } else if v > 32767 {
-    32767
-  } else {
-    v
-  }
 }

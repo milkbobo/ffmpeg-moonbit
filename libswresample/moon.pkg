@@ -14,7 +14,5 @@ warnings = "-alert_experimental"
 // Keep SIMD tests on the same backends as their implementations.
 
 options(
-  targets: {
-    "audio_convert_v128_wbtest.mbt": [ "native", "wasm" ],
-  },
+  targets: { "audio_convert_v128_wbtest.mbt": [ "native", "wasm", "wasm-gc" ] },
 )

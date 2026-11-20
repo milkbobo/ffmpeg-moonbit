@@ -189,6 +189,9 @@ pub struct Vp9MvRefPair {
 pub struct Vp9RefFrame {
   width : Int32
   height : Int32
+  bit_depth : Int32
+  chroma_hshift : Int32
+  chroma_vshift : Int32
   y : FixedArray[Int32]
   cb : FixedArray[Int32]
   cr : FixedArray[Int32]
@@ -1108,6 +1111,9 @@ pub fn Vp9Decoder::decode_frame(
     uvstride: self.uvstride,
     ybase: self.ybase,
     uvbase: self.uvbase,
+    bit_depth: self.bpp,
+    chroma_hshift: self.ss_h,
+    chroma_vshift: self.ss_v,
     packed: snapshot,
     mvmap: self.mvmap,
     segmap: self.seg_map,

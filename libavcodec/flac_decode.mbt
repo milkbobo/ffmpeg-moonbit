@@ -692,6 +692,36 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
     return Err("flac: unsupported stream parameters")
   }
   let _ = max_blocksize
+  flac_decode_frames(
+    gb, stream_rate, stream_channels, stream_bps, total_samples,
+  )
+}
+
+///|
+/// Decode FLAC frames using the container's 34-byte STREAMINFO payload.
+pub fn flac_decode_packet(
+  streaminfo : Bytes,
+  data : Bytes,
+) -> Result[FlacAudio, String] {
+  guard streaminfo.length() == 34 && data.length() >= 8 else {
+    return Err("flac: invalid packet or STREAMINFO size")
+  }
+  let (rate, channels, bits, _, _) = match
+    flac_streaminfo(BitReader::new(streaminfo)) {
+    Ok(info) => info
+    Err(e) => return Err(e)
+  }
+  flac_decode_frames(BitReader::new(data), rate, channels, bits, 0L)
+}
+
+///|
+fn flac_decode_frames(
+  gb : BitReader,
+  stream_rate : Int32,
+  stream_channels : Int32,
+  stream_bps : Int32,
+  total_samples : Int64,
+) -> Result[FlacAudio, String] {
   let shift = if stream_bps <= 16 { 16 - stream_bps } else { 32 - stream_bps }
   let samples : Array[Int32] = []
   let mut decoded_total = 0L
@@ -713,6 +743,40 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
     }
     if frame.channels != stream_channels || frame.bps != stream_bps {
       return Err("flac: frame parameters differ from STREAMINFO")
+    }
+    if frame.ch_mode == 0 {
+      let decoded = Array::makei(frame.channels, _ => {
+        Array::make(frame.blocksize, 0)
+      })
+      for ch in 0..<frame.channels {
+        match
+          flac_decode_subframe(
+            gb,
+            decoded[ch],
+            ch,
+            0,
+            frame.bps,
+            frame.blocksize,
+            None,
+          ) {
+          Ok(_) => ()
+          Err(e) => return Err(e)
+        }
+      }
+      gb.align()
+      gb.skip(16)
+      if gb.bits_left() < 0 {
+        return Err("flac: truncated audio frame")
+      }
+      for i in 0..<frame.blocksize {
+        for ch in 0..<frame.channels {
+          samples.push(
+            (decoded[ch][i].reinterpret_as_uint() << shift).reinterpret_as_int(),
+          )
+        }
+      }
+      decoded_total = decoded_total + frame.blocksize.to_int64()
+      continue
     }
     let decoded0 : Array[Int32] = Array::make(frame.blocksize, 0)
     let decoded1 : Array[Int32] = Array::make(frame.blocksize, 0)
@@ -761,12 +825,11 @@ pub fn ff_flac_decode(data : Bytes) -> Result[FlacAudio, String] {
     }
     gb.align()
     gb.skip(16) // frame CRC-16
+    if gb.bits_left() < 0 {
+      return Err("flac: truncated audio frame")
+    }
     for i = 0; i < frame.blocksize; i = i + 1 {
-      if frame.channels == 1 {
-        samples.push(
-          (decoded0[i].reinterpret_as_uint() << shift).reinterpret_as_int(),
-        )
-      } else if frame.bps == 32 && frame.ch_mode > 0 {
+      if frame.bps == 32 {
         let side = match side64 {
           Some(v) => v
           None => return Err("flac: missing 33-bit side channel buffer")

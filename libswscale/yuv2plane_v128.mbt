@@ -25,7 +25,7 @@
 /// path) is arithmetic-identical to this kernel with one tap and is not
 /// duplicated.
 ///
-/// Gated to `native`/`wasm`; other targets keep the scalar rows. Equal
+/// Available on `native`, `wasm` and `wasm-gc`. Equal
 /// outputs are asserted in `yuv2plane_v128_wbtest.mbt`.
 
 ///|
@@ -39,6 +39,67 @@ pub fn sws_pack_row_i16(row : Array[Int32], len : Int32) -> FixedArray[Byte] {
     buf[2 * i + 1] = ((c >> 8) & 0xFF).to_byte()
   }
   buf
+}
+
+///|
+#cfg(any(target="wasm", target="wasm-gc"))
+fn sws_pack_vertical_rows(
+  rows : Array[Array[Int32]],
+  width : Int32,
+  taps : Int32,
+) -> Array[FixedArray[Byte]]? {
+  guard width >= 8 && taps > 1 else { return None }
+  Some(rows.map(row => sws_pack_row_i16(row, width)))
+}
+
+///|
+#cfg(not(any(target="wasm", target="wasm-gc")))
+fn sws_pack_vertical_rows(
+  _rows : Array[Array[Int32]],
+  _width : Int32,
+  _taps : Int32,
+) -> Array[FixedArray[Byte]]? {
+  None
+}
+
+///|
+#cfg(any(target="wasm", target="wasm-gc"))
+fn sws_vertical_packed(
+  packed : Array[FixedArray[Byte]],
+  start : Int32,
+  coeffs : Array[Int32],
+  width : Int32,
+  bits : Int32,
+  y : Int32,
+  dither_off : Int32,
+  nbps : Bool,
+) -> Array[Byte] {
+  let rows = Array::makei(coeffs.length(), j => packed[start + j])
+  if bits > 8 {
+    sws_yuv2planeX_16_v128(rows, coeffs, width, bits)
+  } else {
+    sws_yuv2planeX_8_v128(
+      rows,
+      coeffs,
+      width,
+      sws_dither_row_8(y, dither_off, nbps),
+    )
+  }
+}
+
+///|
+#cfg(not(any(target="wasm", target="wasm-gc")))
+fn sws_vertical_packed(
+  _packed : Array[FixedArray[Byte]],
+  _start : Int32,
+  _coeffs : Array[Int32],
+  _width : Int32,
+  _bits : Int32,
+  _y : Int32,
+  _dither_off : Int32,
+  _nbps : Bool,
+) -> Array[Byte] {
+  abort("packed vertical rows are available on Wasm")
 }
 
 ///|
@@ -62,7 +123,7 @@ pub fn sws_dither_row_8(
 ///|
 /// Sign-extended `int16` read from a packed row (`sws_pack_row_i16`
 /// layout); the scalar tails use the same reads as the scalar port. */
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn sws_unpack_i16(buf : FixedArray[Byte], i : Int32) -> Int32 {
   let u = buf[2 * i].to_uint() | (buf[2 * i + 1].to_uint() << 8)
   u.reinterpret_as_int() << 16 >> 16
@@ -70,7 +131,7 @@ fn sws_unpack_i16(buf : FixedArray[Byte], i : Int32) -> Int32 {
 
 ///|
 /// `sws_yuv2planeX_row_8` over packed rows, eight pixels per block.
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 pub fn sws_yuv2planeX_8_v128(
   rows : Array[FixedArray[Byte]],
   coffs : Array[Int32],
@@ -127,7 +188,7 @@ pub fn sws_yuv2planeX_8_v128(
 
 ///|
 /// `sws_yuv2planeX_row_16` over packed rows, eight pixels per block.
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 pub fn sws_yuv2planeX_16_v128(
   rows : Array[FixedArray[Byte]],
   coffs : Array[Int32],

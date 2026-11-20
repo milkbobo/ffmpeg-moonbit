@@ -161,13 +161,22 @@ fn main raise {
   let image_format = frame.image_pixel_format()
   let w = frame.width()
   let h = frame.height()
+  let depth = frame.bit_depth()
+  let src_fmt : @sws.SwsChromaFmt? = match frame.chroma_shifts() {
+    Some((1, 1)) => Some(Yuv420)
+    Some((1, 0)) => Some(Yuv422)
+    Some((0, 0)) => Some(Yuv444)
+    _ => None
+  }
   // Split the compact planar blob into its three planes for the RGB path.
   let split = fn() -> (Bytes, Bytes, Bytes)? {
-    let ylen = w * h
-    let clen = (w + 1) / 2 * ((h + 1) / 2)
-    if yuv.length() < ylen + 2 * clen {
-      return None
-    }
+    guard frame.chroma_shifts() is Some((hs, vs)) else { return None }
+    let sample_bytes = if depth > 8 { 2 } else { 1 }
+    let ylen = w * h * sample_bytes
+    let cw = (w + (1 << hs) - 1) >> hs
+    let ch = (h + (1 << vs) - 1) >> vs
+    let clen = cw * ch * sample_bytes
+    guard yuv.length() == ylen + 2 * clen else { return None }
     Some(
       (
         yuv[0:ylen].to_owned(),
@@ -185,22 +194,27 @@ fn main raise {
     out_h = dh
     if image_format is Some(fmt) {
       println(
-        "extract-frame: --scale needs a planar 4:2:0 frame, got \{fmt}; use --format native",
+        "extract-frame: --scale needs a planar video frame, got \{fmt}; use --format native",
       )
       return
     }
-    if w % 2 != 0 || h % 2 != 0 {
-      println("extract-frame: --scale needs an even-sized 4:2:0 frame")
+    guard src_fmt is Some(src_fmt) else {
+      println("extract-frame: unsupported chroma layout for --scale")
       return
     }
     match split() {
       Some((py, pu, pv)) =>
         if format == "rgb24" || format == "bgr24" {
+          guard depth == 8 else {
+            println("extract-frame: RGB scaling requires 8-bit YUV")
+            return
+          }
           let rs = @sws.SwsRgbScaler::new(
             src_w=w,
             src_h=h,
             dst_w=dw,
             dst_h=dh,
+            src_fmt~,
             bgr=format == "bgr24",
           ) catch {
             InvalidScaleConfig(m) => {
@@ -220,6 +234,10 @@ fn main raise {
             src_h=h,
             dst_w=dw,
             dst_h=dh,
+            src_fmt~,
+            dst_fmt=src_fmt,
+            src_bits=depth,
+            dst_bits=depth,
           ) catch {
             InvalidScaleConfig(m) => {
               println("extract-frame: \{m}")
@@ -241,9 +259,7 @@ fn main raise {
           Bytes::from_array(out)
         }
       None => {
-        println(
-          "extract-frame: frame payload is not 4:2:0 planar; cannot scale",
-        )
+        println("extract-frame: frame payload does not match its planar layout")
         return
       }
     }
@@ -283,20 +299,26 @@ fn main raise {
       }
     }
     Bytes::from_array(out)
-  } else if w % 2 != 0 || h % 2 != 0 {
-    println(
-      "extract-frame: rgb output needs an even-sized 4:2:0 frame; use --format yuv",
-    )
-    return
   } else {
+    guard depth == 8 && src_fmt is Some(src_fmt) else {
+      println(
+        "extract-frame: RGB output requires an 8-bit YUV frame with supported chroma",
+      )
+      return
+    }
     match split() {
       Some((py, pu, pv)) => {
         let sw = @sws.Yuv2Rgb::mpeg()
-        sw.yuv420_to_rgb24(py, pu, pv, w, h, bgr=format == "bgr24")
+        let bgr = format == "bgr24"
+        match src_fmt {
+          Yuv420 => sw.yuv420_to_rgb24(py, pu, pv, w, h, bgr~)
+          Yuv422 => sw.yuv422_to_rgb24(py, pu, pv, w, h, bgr~)
+          Yuv444 => sw.yuv444_to_rgb24(py, pu, pv, w, h, bgr~)
+        }
       }
       None => {
         println(
-          "extract-frame: frame payload is not 4:2:0 planar; use --format yuv",
+          "extract-frame: frame payload does not match its planar layout; use --format yuv",
         )
         return
       }

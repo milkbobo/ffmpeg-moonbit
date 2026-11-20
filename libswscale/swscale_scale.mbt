@@ -578,6 +578,56 @@ fn sws_hscale8to15(
 }
 
 ///|
+fn sws_hscale_rows(
+  src : Bytes,
+  src_w : Int32,
+  src_h : Int32,
+  f : SwsFilter,
+  dst_w : Int32,
+  src_bits : Int32,
+) -> Array[Array[Int32]] {
+  match sws_hscale_rows_v128(src, src_w, src_h, f, dst_w, src_bits) {
+    Some(rows) => rows
+    None =>
+      Array::makei(src_h, r => {
+        sws_hscale8to15(src, r * src_w, f, dst_w, src_bits)
+      })
+  }
+}
+
+///|
+#cfg(any(target="wasm", target="wasm-gc"))
+fn sws_hscale_rows_v128(
+  src : Bytes,
+  src_w : Int32,
+  src_h : Int32,
+  f : SwsFilter,
+  dst_w : Int32,
+  src_bits : Int32,
+) -> Array[Array[Int32]]? {
+  guard f.size >= (if src_bits <= 8 { 8 } else { 4 }) else { return None }
+  let coeffs = sws_pack_row_i16(f.coeffs, f.coeffs.length())
+  Some(
+    Array::makei(src_h, r => {
+      sws_hscale_packed(src, r * src_w, f, dst_w, src_bits, coeffs)
+    }),
+  )
+}
+
+///|
+#cfg(not(any(target="wasm", target="wasm-gc")))
+fn sws_hscale_rows_v128(
+  _src : Bytes,
+  _src_w : Int32,
+  _src_h : Int32,
+  _f : SwsFilter,
+  _dst_w : Int32,
+  _src_bits : Int32,
+) -> Array[Array[Int32]]? {
+  None
+}
+
+///|
 /// `yuv2planeX` 8-bit output row (`libswscale/vscale.c`): dither + Σ
 /// src[j][i]·filter[j], `clip_uint8(val >> 19)`. Extracted from
 /// `sws_scale_plane` unchanged so the SIMD path (`yuv2plane_v128.mbt`)
@@ -658,11 +708,9 @@ fn sws_scale_plane(
   dither_off~ : Int32 = 0,
 ) -> Bytes raise SwsScaleError {
   // H-scale every source row once (row stride in samples).
-  let hrows : Array[Array[Int32]] = []
   let src_w = src.length() / src_h / ((src_bits + 7) / 8)
-  for r in 0..<src_h {
-    hrows.push(sws_hscale8to15(src, r * src_w, h, dst_w, src_bits))
-  }
+  let hrows = sws_hscale_rows(src, src_w, src_h, h, dst_w, src_bits)
+  let packed = sws_pack_vertical_rows(hrows, dst_w, v.size)
   let dst : Array[Byte] = []
   for y in 0..<dst_h {
     let rows : Array[Array[Int32]] = []
@@ -682,7 +730,18 @@ fn sws_scale_plane(
     for j in 0..<v.size {
       coffs[j] = v.coeffs[row0 * v.size + j]
     }
-    let out_row : Array[Byte] = if dst_bits > 8 {
+    let out_row : Array[Byte] = if packed is Some(packed) {
+      sws_vertical_packed(
+        packed,
+        v.pos[y],
+        coffs,
+        dst_w,
+        dst_bits,
+        y,
+        dither_off,
+        src_bits > 8,
+      )
+    } else if dst_bits > 8 {
       sws_yuv2planeX_row_16(rows, coffs, dst_w, dst_bits)
     } else {
       sws_yuv2planeX_row_8(rows, coffs, dst_w, y, dither_off, src_bits > 8)
@@ -853,18 +912,25 @@ pub fn SwsRgbScaler::scale(
   }
   let dw = self.dst_w
   let chr_dw = self.chr_dw
-  // H-scale every source row once (chroma planes each, at chr_dw width).
-  let lum_rows : Array[Array[Int32]] = []
-  for r in 0..<self.src_h {
-    lum_rows.push(sws_hscale8to15(y, r * self.src_w, self.h_lum, dw, 8))
-  }
-  let u_rows : Array[Array[Int32]] = []
-  let v_rows : Array[Array[Int32]] = []
   let chr_sh = self.chr_sh
-  for r in 0..<chr_sh {
-    u_rows.push(sws_hscale8to15(u, r * self.chr_sw, self.h_chr, chr_dw, 8))
-    v_rows.push(sws_hscale8to15(v, r * self.chr_sw, self.h_chr, chr_dw, 8))
-  }
+  // H-scale every source row once (chroma planes each, at chr_dw width).
+  let lum_rows = sws_hscale_rows(y, self.src_w, self.src_h, self.h_lum, dw, 8)
+  let u_rows = sws_hscale_rows(
+    u,
+    self.chr_sw,
+    self.chr_sh,
+    self.h_chr,
+    chr_dw,
+    8,
+  )
+  let v_rows = sws_hscale_rows(
+    v,
+    self.chr_sw,
+    self.chr_sh,
+    self.h_chr,
+    chr_dw,
+    8,
+  )
   let out : Array[Byte] = []
   if self.full_chroma {
     // Odd width or 4:4:4 source: full-chroma interpolation

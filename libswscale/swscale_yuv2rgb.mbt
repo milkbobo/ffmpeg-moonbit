@@ -40,44 +40,14 @@ pub fn Yuv2Rgb::yuv420_to_rgb24(
   if y.length() < width * height || u.length() < cw * ch || v.length() < cw * ch {
     fail("yuv2rgb: plane too small for the given geometry")
   }
-  let w = width
-  let h = height
-  let flip = self.bgr || bgr
-  let out : Array[Byte] = []
-  for row = 0; row < h; row = row + 1 {
-    let crow = row / 2
-    let yrow = row * w
-    let crow_off = crow * cw
-    for col = 0; col < w; col = col + 1 {
-      let yv = y[yrow + col].to_int()
-      let uv = u[crow_off + col / 2].to_int() + 512
-      let vv = v[crow_off + col / 2].to_int() + 512
-      let r = official_y_table[official_base_r[vv] + yv]
-      // The C stores G as table_gU[U][Y] + table_gV[V] and writes through
-      // a uint8_t pointer, so the possibly negative sum wraps mod 256.
-      let g = (
-          official_y_table[official_base_gu[uv] + yv] + official_off_gv[vv]
-        ) &
-        0xFF
-      let b = official_y_table[official_base_b[uv] + yv]
-      if flip {
-        out.push(b.to_byte())
-        out.push(g.to_byte())
-        out.push(r.to_byte())
-      } else {
-        out.push(r.to_byte())
-        out.push(g.to_byte())
-        out.push(b.to_byte())
-      }
-    }
-  }
-  Bytes::from_array(out[:])
+  yuv_rows_to_rgb24(y, u, v, width, height, cw, true, self.bgr || bgr)
 }
 
 ///|
 /// Shared per-row conversion core: `crow`/`cw_c` describe the chroma row
 /// the planar lookup uses for this luma row (4:2:0 rows pair up, 4:2:2 and
 /// 4:4:4 map one-to-one).
+#cfg(not(any(target="wasm", target="wasm-gc")))
 fn yuv_rows_to_rgb24(
   y : Bytes,
   u : Bytes,
@@ -88,6 +58,40 @@ fn yuv_rows_to_rgb24(
   paired : Bool,
   bgr : Bool,
 ) -> Bytes {
+  yuv_rows_to_rgb24_scalar(y, u, v, w, h, cw, paired, bgr)
+}
+
+///|
+#cfg(any(target="wasm", target="wasm-gc"))
+fn yuv_rows_to_rgb24(
+  y : Bytes,
+  u : Bytes,
+  v : Bytes,
+  w : Int32,
+  h : Int32,
+  cw : Int32,
+  paired : Bool,
+  bgr : Bool,
+) -> Bytes {
+  if w < 4 {
+    yuv_rows_to_rgb24_scalar(y, u, v, w, h, cw, paired, bgr)
+  } else {
+    yuv_rows_to_rgb24_v128(y, u, v, w, h, cw, paired, bgr)
+  }
+}
+
+///|
+fn yuv_rows_to_rgb24_scalar(
+  y : Bytes,
+  u : Bytes,
+  v : Bytes,
+  w : Int32,
+  h : Int32,
+  cw : Int32,
+  paired : Bool,
+  bgr : Bool,
+) -> Bytes {
+  let hshift = if cw == w { 0 } else { 1 }
   let out : Array[Byte] = []
   for row = 0; row < h; row = row + 1 {
     let crow = if paired { row / 2 } else { row }
@@ -95,8 +99,9 @@ fn yuv_rows_to_rgb24(
     let crow_off = crow * cw
     for col = 0; col < w; col = col + 1 {
       let yv = y[yrow + col].to_int()
-      let uv = u[crow_off + col / 2].to_int() + 512
-      let vv = v[crow_off + col / 2].to_int() + 512
+      let chroma = crow_off + (col >> hshift)
+      let uv = u[chroma].to_int() + 512
+      let vv = v[chroma].to_int() + 512
       let r = official_y_table[official_base_r[vv] + yv]
       let g = (
           official_y_table[official_base_gu[uv] + yv] + official_off_gv[vv]

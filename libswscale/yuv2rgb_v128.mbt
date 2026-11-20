@@ -30,7 +30,7 @@
 /// four pixels into a 12-byte scratch, and each row is staged through a
 /// padded byte buffer so vector loads never cross plane ends.
 ///
-/// Gated to `native`/`wasm`; other targets keep the scalar converter.
+/// Available on `native`, `wasm` and `wasm-gc`.
 /// Equal outputs are asserted in `yuv2rgb_v128_wbtest.mbt`.
 
 ///|
@@ -49,6 +49,7 @@ pub fn sws_yramp(i : Int32) -> Int32 {
 
 ///|
 /// One scalar pixel with the SIMD kernel's exact arithmetic (tail path). */
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn yuv2rgb_v128_pixel(
   yv : Int32,
   uv : Int32,
@@ -66,7 +67,7 @@ fn yuv2rgb_v128_pixel(
 ///|
 /// `yuv_rows_to_rgb24` with the colour matrix carried by `@v128`,
 /// four pixels per block.
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 pub fn yuv_rows_to_rgb24_v128(
   y : Bytes,
   u : Bytes,
@@ -77,11 +78,7 @@ pub fn yuv_rows_to_rgb24_v128(
   paired : Bool,
   bgr : Bool,
 ) -> Bytes {
-  // Quirk kept for bit-equality with the scalar port: its shared inner
-  // loop indexes the chroma planes with `col / 2` for every geometry,
-  // including 4:4:4 (constant-128 real-data tests pin that behaviour
-  // indirectly). The SIMD lanes therefore always duplicate chroma
-  // pairs and always load at `col / 2`.
+  let hshift = if cw == w { 0 } else { 1 }
   let ys : FixedArray[Byte] = FixedArray::make(w + 16, b'\x00')
   let cs : FixedArray[Byte] = FixedArray::make(cw + 16, b'\x00')
   let c2 : FixedArray[Byte] = FixedArray::make(cw + 16, b'\x00')
@@ -89,8 +86,8 @@ pub fn yuv_rows_to_rgb24_v128(
   let out : Array[Byte] = []
   // lane duplication: [u0,u0,u1,u1]
   let cidx = @v128.i8x16_const(
-    b'\x00', b'\x00', b'\x01', b'\x01', b'\x00', b'\x00', b'\x01', b'\x01',
-    b'\x00', b'\x00', b'\x01', b'\x01', b'\x00', b'\x00', b'\x01', b'\x01',
+    b'\x00', b'\x00', b'\x01', b'\x01', b'\x00', b'\x00', b'\x01', b'\x01', b'\x00',
+    b'\x00', b'\x01', b'\x01', b'\x00', b'\x00', b'\x01', b'\x01',
   )
   let cy = @v128.i32x4_splat(76304)
   let yc = @v128.i32x4_splat((-65247168).reinterpret_as_uint())
@@ -120,39 +117,37 @@ pub fn yuv_rows_to_rgb24_v128(
     }
     let mut col = 0
     while col + 4 <= w {
-      let ch_off = col / 2
+      let ch_off = col >> hshift
+      let chroma_u = @v128.v128_load(cs, ch_off)
+      let chroma_v = @v128.v128_load(c2, ch_off)
+      let chroma_u = if hshift == 0 {
+        chroma_u
+      } else {
+        @v128.i8x16_swizzle(chroma_u, cidx)
+      }
+      let chroma_v = if hshift == 0 {
+        chroma_v
+      } else {
+        @v128.i8x16_swizzle(chroma_v, cidx)
+      }
       let yv16 = @v128.i16x8_extend_low_i8x16_u(@v128.v128_load(ys, col))
       let y32 = @v128.i32x4_extend_low_i16x8_u(yv16)
       let uv32 = @v128.i32x4_add(
-        @v128.i32x4_extend_low_i16x8_u(
-          @v128.i16x8_extend_low_i8x16_u(
-            @v128.i8x16_swizzle(@v128.v128_load(cs, ch_off), cidx),
-          ),
-        ),
+        @v128.i32x4_extend_low_i16x8_u(@v128.i16x8_extend_low_i8x16_u(chroma_u)),
         p512,
       )
       let vv32 = @v128.i32x4_add(
-        @v128.i32x4_extend_low_i16x8_u(
-          @v128.i16x8_extend_low_i8x16_u(
-            @v128.i8x16_swizzle(@v128.v128_load(c2, ch_off), cidx),
-          ),
-        ),
+        @v128.i32x4_extend_low_i16x8_u(@v128.i16x8_extend_low_i8x16_u(chroma_v)),
         p512,
       )
       // r = clip8(yramp(y + base_r(V)))
       let idx_r = @v128.i32x4_add(
         y32,
-        @v128.i32x4_shr_s(
-          @v128.i32x4_add(@v128.i32x4_mul(vv32, crv), crc),
-          16,
-        ),
+        @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(vv32, crv), crc), 16),
       )
       let r = @v128.i32x4_min_s(
         @v128.i32x4_max_s(
-          @v128.i32x4_shr_s(
-            @v128.i32x4_add(@v128.i32x4_mul(idx_r, cy), yc),
-            16,
-          ),
+          @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(idx_r, cy), yc), 16),
           zero,
         ),
         lim,
@@ -160,10 +155,7 @@ pub fn yuv_rows_to_rgb24_v128(
       // g = (clip8(yramp(y + base_gu(U))) + off_gv(V)) & 0xff
       let idx_g = @v128.i32x4_add(
         y32,
-        @v128.i32x4_shr_s(
-          @v128.i32x4_add(@v128.i32x4_mul(uv32, cgu), cguc),
-          16,
-        ),
+        @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(uv32, cgu), cguc), 16),
       )
       let g = @v128.v128_and_(
         @v128.i32x4_add(
@@ -187,17 +179,11 @@ pub fn yuv_rows_to_rgb24_v128(
       // b = clip8(yramp(y + base_b(U)))
       let idx_b = @v128.i32x4_add(
         y32,
-        @v128.i32x4_shr_s(
-          @v128.i32x4_add(@v128.i32x4_mul(uv32, cbu), cbc),
-          16,
-        ),
+        @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(uv32, cbu), cbc), 16),
       )
       let b = @v128.i32x4_min_s(
         @v128.i32x4_max_s(
-          @v128.i32x4_shr_s(
-            @v128.i32x4_add(@v128.i32x4_mul(idx_b, cy), yc),
-            16,
-          ),
+          @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(idx_b, cy), yc), 16),
           zero,
         ),
         lim,
@@ -219,14 +205,10 @@ pub fn yuv_rows_to_rgb24_v128(
       // the third channel's bytes 0..3 into the P positions
       let (ca, cb, cc) = if bgr { (b8, g8, r8) } else { (r8, g8, b8) }
       let t = @v128.i8x16_shuffle(
-        ca,
-        cb,
-        0, 16, 0, 1, 17, 0, 2, 18, 0, 3, 19, 0, 0, 0, 0, 0,
+        ca, cb, 0, 16, 0, 1, 17, 0, 2, 18, 0, 3, 19, 0, 0, 0, 0, 0,
       )
       let rgb = @v128.i8x16_shuffle(
-        t,
-        cc,
-        0, 1, 16, 3, 4, 17, 6, 7, 18, 9, 10, 19, 12, 13, 20, 15,
+        t, cc, 0, 1, 16, 3, 4, 17, 6, 7, 18, 9, 10, 19, 12, 13, 20, 15,
       )
       @v128.v128_store(scratch, 0, rgb)
       for t2 = 0; t2 < 12; t2 = t2 + 1 {
@@ -234,12 +216,11 @@ pub fn yuv_rows_to_rgb24_v128(
       }
       col = col + 4
     }
-    // scalar tail (w % 4 pixels) with the same arithmetic and the same
-    // col/2 chroma indexing as the scalar port
+    // Scalar tail with the same chroma addressing as the vector loop.
     while col < w {
       let yv = y[yrow + col].to_int()
-      let uv = u[coff + col / 2].to_int() + 512
-      let vv = v[coff + col / 2].to_int() + 512
+      let uv = u[coff + (col >> hshift)].to_int() + 512
+      let vv = v[coff + (col >> hshift)].to_int() + 512
       let (r, g, b) = yuv2rgb_v128_pixel(yv, uv, vv)
       if bgr {
         out.push(b.to_byte())

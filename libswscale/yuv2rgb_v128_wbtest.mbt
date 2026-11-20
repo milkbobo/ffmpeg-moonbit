@@ -41,22 +41,15 @@ test "yuv2rgb v128: closed forms equal the official tables" {
       let vv = c + 512
       let uv = c + 512
       let idx_r = yv + ((89828 * vv - 2541216) >> 16)
-      assert_eq(
-        sws_yramp(idx_r),
-        official_y_table[official_base_r[vv] + yv],
-      )
+      assert_eq(sws_yramp(idx_r), official_y_table[official_base_r[vv] + yv])
       let idx_b = yv + ((113536 * uv - 17694720) >> 16)
-      assert_eq(
-        sws_yramp(idx_b),
-        official_y_table[official_base_b[uv] + yv],
-      )
+      assert_eq(sws_yramp(idx_b), official_y_table[official_base_b[uv] + yv])
       let idx_g = yv + ((-22050 * uv + 69092460) >> 16)
       let gv = (-45756 * vv + 29325312) >> 16
       let g = (sws_yramp(idx_g) + gv) & 0xFF
       assert_eq(
         g,
-        (official_y_table[official_base_gu[uv] + yv] +
-        official_off_gv[vv]) &
+        (official_y_table[official_base_gu[uv] + yv] + official_off_gv[vv]) &
         0xFF,
       )
     }
@@ -65,9 +58,7 @@ test "yuv2rgb v128: closed forms equal the official tables" {
 
 ///|
 test "yuv2rgb v128: byte equality with the scalar converter" {
-  let widths : Array[Int32] = [
-    2, 4, 6, 8, 12, 16, 18, 20, 64, 66,
-  ]
+  let widths : Array[Int32] = [2, 4, 6, 8, 12, 16, 18, 20, 64, 66]
   for w in widths {
     let h : Int32 = 4
     // 4:2:0 (paired chroma rows)
@@ -76,7 +67,7 @@ test "yuv2rgb v128: byte equality with the scalar converter" {
     let u = yr_gen_bytes(0xDEADBEEFU + w.reinterpret_as_uint(), cw0 * h / 2)
     let v = yr_gen_bytes(0x12345678U + w.reinterpret_as_uint(), cw0 * h / 2)
     for bgr in [false, true] {
-      let a = yuv_rows_to_rgb24(y, u, v, w, h, cw0, true, bgr)
+      let a = yuv_rows_to_rgb24_scalar(y, u, v, w, h, cw0, true, bgr)
       let b = yuv_rows_to_rgb24_v128(y, u, v, w, h, cw0, true, bgr)
       assert_eq(b.length(), a.length())
       for i = 0; i < a.length(); i = i + 1 {
@@ -85,13 +76,17 @@ test "yuv2rgb v128: byte equality with the scalar converter" {
     }
     // 4:2:2 and 4:4:4 (one-to-one chroma rows)
     let geoms : Array[(Int32, Bytes, Bytes)] = [
-      (cw0, yr_gen_bytes(0xA5A5A5A5U, cw0 * h), yr_gen_bytes(0x5A5A5A5AU, cw0 * h)),
+      (
+        cw0,
+        yr_gen_bytes(0xA5A5A5A5U, cw0 * h),
+        yr_gen_bytes(0x5A5A5A5AU, cw0 * h),
+      ),
       (w, yr_gen_bytes(0xC0FFEE01U, w * h), yr_gen_bytes(0x0BADF00DU, w * h)),
     ]
     for pair in geoms {
       let (cw, uu, vv) = pair
       for bgr in [false, true] {
-        let a = yuv_rows_to_rgb24(y, uu, vv, w, h, cw, false, bgr)
+        let a = yuv_rows_to_rgb24_scalar(y, uu, vv, w, h, cw, false, bgr)
         let b = yuv_rows_to_rgb24_v128(y, uu, vv, w, h, cw, false, bgr)
         assert_eq(b.length(), a.length())
         for i = 0; i < a.length(); i = i + 1 {
@@ -110,32 +105,61 @@ test "yuv2rgb v128: extreme luma/chroma frames" {
   let h : Int32 = 2
   let cw = w / 2
   let planes : Array[(Bytes, Bytes, Bytes)] = []
-  planes.push((
-    Bytes::make(w * h, b'\x00'),
-    Bytes::make(cw * h, b'\x00'),
-    Bytes::make(cw * h, b'\x00'),
-  ))
-  planes.push((
-    Bytes::make(w * h, b'\xff'),
-    Bytes::make(cw * h, b'\xff'),
-    Bytes::make(cw * h, b'\xff'),
-  ))
-  planes.push((
-    yr_gen_bytes(0xFEEDFACEU, w * h),
-    Bytes::make(cw * h, b'\x00'),
-    Bytes::make(cw * h, b'\xff'),
-  ))
-  planes.push((
-    Bytes::make(w * h, b'\x10'),
-    Bytes::make(cw * h, b'\x80'),
-    yr_gen_bytes(0x13579BDFU, cw * h),
-  ))
+  planes.push(
+    (
+      Bytes::make(w * h, b'\x00'),
+      Bytes::make(cw * h, b'\x00'),
+      Bytes::make(cw * h, b'\x00'),
+    ),
+  )
+  planes.push(
+    (
+      Bytes::make(w * h, b'\xff'),
+      Bytes::make(cw * h, b'\xff'),
+      Bytes::make(cw * h, b'\xff'),
+    ),
+  )
+  planes.push(
+    (
+      yr_gen_bytes(0xFEEDFACEU, w * h),
+      Bytes::make(cw * h, b'\x00'),
+      Bytes::make(cw * h, b'\xff'),
+    ),
+  )
+  planes.push(
+    (
+      Bytes::make(w * h, b'\x10'),
+      Bytes::make(cw * h, b'\x80'),
+      yr_gen_bytes(0x13579BDFU, cw * h),
+    ),
+  )
   for idx = 0; idx < planes.length(); idx = idx + 1 {
     let (y, u, v) = planes[idx]
-    let a = yuv_rows_to_rgb24(y, u, v, w, h, cw, true, false)
+    let a = yuv_rows_to_rgb24_scalar(y, u, v, w, h, cw, true, false)
     let b = yuv_rows_to_rgb24_v128(y, u, v, w, h, cw, true, false)
     for i = 0; i < a.length(); i = i + 1 {
       assert_eq(b[i], a[i])
     }
   }
+}
+
+///|
+test "yuv444 to RGB gives each pixel its own chroma sample" {
+  let converter = Yuv2Rgb::mpeg()
+  let luma = b"\x80\x80\x80\x80\x80"
+  let cb = b"\x80\x60\x70\x90\xa0"
+  let cr = b"\x80\x90\x70\xb0\x60"
+  let row = converter.yuv444_to_rgb24(luma, cb, cr, 5, 1)
+  let mut expected = b""
+  for i in 0..<5 {
+    expected = expected +
+      converter.yuv444_to_rgb24(
+        luma[i:i + 1].to_owned(),
+        cb[i:i + 1].to_owned(),
+        cr[i:i + 1].to_owned(),
+        1,
+        1,
+      )
+  }
+  assert_eq(row, expected)
 }

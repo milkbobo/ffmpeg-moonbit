@@ -31,24 +31,24 @@
 /// Coefficients must fit `int16` (FFmpeg keeps them 14-bit); the bank is
 /// packed once per call into a little-endian byte buffer.
 ///
-/// Gated to `native`/`wasm`; other targets keep the scalar
+/// Available on `native`, `wasm` and `wasm-gc`. Other targets keep the scalar
 /// `sws_hscale8to15`. Equal outputs are asserted in
 /// `hscale_v128_wbtest.mbt`.
 
 ///|
 /// Horizontal sum of the four `i32x4` lanes (wrapping, order-free). */
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn hscale_red4(v : V128) -> Int32 {
   let u = @v128.i32x4_extract_lane(v, 0) +
-  @v128.i32x4_extract_lane(v, 1) +
-  @v128.i32x4_extract_lane(v, 2) +
-  @v128.i32x4_extract_lane(v, 3)
+    @v128.i32x4_extract_lane(v, 1) +
+    @v128.i32x4_extract_lane(v, 2) +
+    @v128.i32x4_extract_lane(v, 3)
   u.reinterpret_as_int()
 }
 
 ///|
 /// `sws_hscale8to15` with the per-output tap dot carried by `@v128`.
-#cfg(any(target="native", target="wasm"))
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
 pub fn sws_hscale8to15_v128(
   src : Bytes,
   row_off : Int32,
@@ -56,17 +56,22 @@ pub fn sws_hscale8to15_v128(
   dst_w : Int32,
   src_bits : Int32,
 ) -> Array[Int32] {
+  let coeffs = sws_pack_row_i16(f.coeffs, f.coeffs.length())
+  sws_hscale_packed(src, row_off, f, dst_w, src_bits, coeffs)
+}
+
+///|
+#cfg(any(target="native", target="wasm", target="wasm-gc"))
+fn sws_hscale_packed(
+  src : Bytes,
+  row_off : Int32,
+  f : SwsFilter,
+  dst_w : Int32,
+  src_bits : Int32,
+  cbuf : FixedArray[Byte],
+) -> Array[Int32] {
   let sh = src_bits - 1
-  let step = (src_bits + 7) / 8 // bytes per sample: 1 or 2
-  // Pack the coefficient bank once as little-endian int16 (+32B pad so
-  // vector loads of the last bank never go out of bounds).
-  let ncoef = f.coeffs.length()
-  let cbuf : FixedArray[Byte] = FixedArray::make(2 * ncoef + 32, b'\x00')
-  for i = 0; i < ncoef; i = i + 1 {
-    let c = f.coeffs[i]
-    cbuf[2 * i] = (c & 0xFF).to_byte()
-    cbuf[2 * i + 1] = ((c >> 8) & 0xFF).to_byte()
-  }
+  let step = (src_bits + 7) / 8
   let out : Array[Int32] = Array::make(dst_w, 0)
   for i in 0..<dst_w {
     let base = (row_off + f.pos[i]) * step
@@ -75,8 +80,8 @@ pub fn sws_hscale8to15_v128(
     let mut k = 0
     if step == 1 {
       // 8-bit: one 16-byte load = 16 samples; each half is one 8-tap dot.
-      while k + 8 <= f.size {
-        match src[base + k : base + k + 16] {
+      while k + 8 <= f.size && base + k + 16 <= src.length() {
+        match src[base + k:base + k + 16] {
           [v128le(v), ..] => {
             let dlo = @v128.i32x4_dot_i16x8_s(
               @v128.i16x8_extend_low_i8x16_u(v),
@@ -100,8 +105,8 @@ pub fn sws_hscale8to15_v128(
     } else {
       // 9..16-bit: one 16-byte load = 8 LE u16 samples; each widened half
       // is one 4-tap lane product.
-      while k + 4 <= f.size {
-        match src[base + 2 * k : base + 2 * k + 16] {
+      while k + 4 <= f.size && base + 2 * k + 16 <= src.length() {
+        match src[base + 2 * k:base + 2 * k + 16] {
           [v128le(v), ..] => {
             let c16 = @v128.v128_load(cbuf, 2 * (bank + k))
             let dlo = @v128.i32x4_mul(

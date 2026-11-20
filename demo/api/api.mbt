@@ -154,8 +154,8 @@ fn first_video_frame(
 }
 
 ///|
-/// 视频首帧缩略图：4:2:0 8-bit planar 经 `SwsRgbScaler`（BT.601 RGB24）
-/// 缩到宽 ≤ `max_w`（≤0 时 256）；rgb24 原生帧（PNG/MJPEG）不缩放直出。
+/// 视频首帧缩略图：8-bit planar YUV 经 `SwsRgbScaler` 转为 RGB24。
+/// PNG 和 RGB JPEG 以原始尺寸转换。
 #export_name("ff_thumbnail")
 pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
   let mf = @avf.MediaFile::open(u0100_to_bytes(data)) catch {
@@ -183,10 +183,8 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
   }
   let w = frame.width()
   let h = frame.height()
-  let payload = frame.pixel_bytes()
-  // PNG/MJPEG 解码即 rgb24，原生直出（画布侧再按需缩放显示）。
-  if frame.image_pixel_format() is Some("rgb24") {
-    let rgb = bytes_to_u0100(payload)
+  if frame.image_rgb24() is Some(pixels) {
+    let rgb = bytes_to_u0100(pixels)
     return env_ok(
       "\"width\":" +
       w.to_string() +
@@ -197,24 +195,25 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
       "\"",
     )
   }
-  if w % 2 != 0 || h % 2 != 0 || w < 2 || h < 2 {
-    let msg = "thumbnail needs an even-sized 4:2:0 frame, got " +
-      w.to_string() +
-      "x" +
-      h.to_string()
-    return env_err_code("THUMBNAIL_UNSUPPORTED", msg)
-  }
   if frame.bit_depth() > 8 {
-    let msg = "thumbnail supports 8-bit 4:2:0 frames only, got " +
+    let msg = "thumbnail supports 8-bit YUV frames only, got " +
       frame.bit_depth().to_string() +
       "-bit"
     return env_err_code("THUMBNAIL_UNSUPPORTED", msg)
   }
+  let payload = frame.pixel_bytes()
   let ylen = w * h
-  let clen = (w + 1) / 2 * ((h + 1) / 2)
-  if payload.length() < ylen + 2 * clen {
+  let c420 = (w + 1) / 2 * ((h + 1) / 2)
+  let c422 = (w + 1) / 2 * h
+  let layout : (@sws.SwsChromaFmt, Int32)? = match frame.chroma_shifts() {
+    Some((1, 1)) => Some((Yuv420, c420))
+    Some((1, 0)) => Some((Yuv422, c422))
+    Some((0, 0)) => Some((Yuv444, ylen))
+    _ => None
+  }
+  guard layout is Some((src_fmt, clen)) && payload.length() == ylen + 2 * clen else {
     return env_err_code(
-      "THUMBNAIL_UNSUPPORTED", "frame payload is not 4:2:0 planar",
+      "THUMBNAIL_UNSUPPORTED", "unsupported planar frame layout",
     )
   }
   let py = payload[0:ylen].to_owned()
@@ -232,7 +231,18 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
     dh = 2
   }
   dh -= dh % 2
-  let rs = @sws.SwsRgbScaler::new(src_w=w, src_h=h, dst_w=dw, dst_h=dh) catch {
+  let full_range = match frame.image_pixel_format() {
+    Some(fmt) => fmt.has_prefix("yuvj")
+    None => false
+  }
+  let rs = @sws.SwsRgbScaler::new(
+    src_w=w,
+    src_h=h,
+    dst_w=dw,
+    dst_h=dh,
+    src_fmt~,
+    full_range~,
+  ) catch {
     InvalidScaleConfig(m) => return env_err_code("THUMBNAIL_UNSUPPORTED", m)
   }
   let rgb = rs.scale(py, pu, pv) catch {

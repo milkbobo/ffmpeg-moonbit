@@ -93,6 +93,56 @@ test "ogg tags: Ogg FLAC metadata blocks" {
 }
 
 ///|
+test "playback: Ogg Vorbis preserves direct decode, channel order and trimming" {
+  let data = @libavutil.av_base64_decode(oggtags_vorbis_b64, 100000).unwrap()
+  let ogg = @libavformat.av_ogg_vorbis_open(data).unwrap()
+  let direct = @libavcodec.vorbis_decoder_new(ogg.id_header, ogg.setup_header).unwrap()
+  let expected = direct
+    .decode_stream_trimmed(ogg.packets.map(p => p.data), ogg.total_samples)
+    .unwrap()
+  let audio = @libavformat.decode_audio_file(data)
+  assert_eq(audio.codec_id(), "vorbis")
+  assert_eq(audio.sample_rate(), ogg.sample_rate)
+  assert_eq(audio.samples(), expected)
+}
+
+///|
+test "playback: Ogg FLAC packets decode to the native FLAC PCM" {
+  let data = @libavutil.av_base64_decode(oggtags_flac_b64, 100000).unwrap()
+  let ogg = @libavformat.av_ogg_flac_open(data).unwrap()
+  let direct = @libavcodec.ff_flac_decode(ogg.stream).unwrap()
+  let audio = @libavformat.decode_audio_file(data)
+  assert_eq(audio.codec_id(), "flac")
+  assert_eq(audio.sample_rate(), direct.sample_rate)
+  assert_eq(audio.channels(), direct.channels)
+  let scale = if direct.bits <= 16 { 32768.0 } else { 2147483648.0 }
+  let expected = Array::makei(direct.channels, ch => {
+    Array::makei(direct.samples.length() / direct.channels, i => {
+      direct.samples[i * direct.channels + ch].to_double() / scale
+    })
+  })
+  assert_eq(audio.samples(), expected)
+}
+
+///|
+test "playback: Ogg FLAC decodes all six independent subframes" {
+  // FFmpeg libavcodec 62.28.102 (PyAV), 256 constant 48 kHz samples per channel.
+  let data = @libavutil.av_base64_decode(
+    b"T2dnUwACAAAAAAAAAAAr1VNIAAAAALXd5J8BM39GTEFDAQAAAWZMYUMAAAAiEgASAAAAGgAAGgu4CvAAAAEABgR+e14mkjOegfXWXko8nU9nZ1MAAAAAAAAAAAAAK9VTSAEAAAC6FTIAATKEAAAuDQAAAExhdmY2Mi4xMi4xMDIBAAAAFQAAAGVuY29kZXI9TGF2ZjYyLjEyLjEwMk9nZ1MABAABAAAAAAAAK9VTSAIAAAAbaNn1ARr/+IpYAKIBIH0BH4MBIXcBD4MBInEBHonfqQ==",
+    1024,
+  ).unwrap()
+  let audio = @libavformat.decode_audio_file(data)
+  let expected = [1000, -2000, 3000, -4000, 5000, -6000]
+  assert_eq(audio.channels(), expected.length())
+  for ch in 0..<expected.length() {
+    assert_eq(
+      audio.samples()[ch],
+      Array::make(256, expected[ch].to_double() / 32768.0),
+    )
+  }
+}
+
+///|
 test "ogg tags: Opus muxer writes OpusTags comments" {
   let mux = @libavformat.ogg_opus_muxer_new(channels=1, pre_skip=312, tags=[
     ("title", "Opus Title"),

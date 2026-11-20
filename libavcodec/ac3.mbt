@@ -2,13 +2,12 @@
 /// AC-3 (ATSC A/52A) decoder, ported from FFmpeg 9.0.2 `libavcodec/ac3dec.c`
 /// (float path), `ac3.c` (bit allocation) and `ac3_parser.c` (frame header).
 ///
-/// Scope: plain AC-3 (bsid <= 10), all channel modes including dual mono and
+/// AC-3 (bsid <= 10) covers all channel modes including dual mono and
 /// LFE, coupling, stereo rematrixing, delta bit allocation, zero-mantissa
 /// dithering, dynamic range compression (`drc_scale` fixed at FFmpeg's default
-/// 1.0), and the 256/128-point IMDCT with KBD windowing.  E-AC-3 is rejected
-/// with an error.  No downmixing is applied (FFmpeg's default decoder layout
-/// keeps the coded channel count), so output channels follow the SMPTE order
-/// of `ff_ac3_dec_channel_map`.
+/// 1.0), and the 256/128-point IMDCT with KBD windowing. E-AC-3 independent
+/// frames also support spectral extension (SPX). Output keeps the coded channel
+/// count in the SMPTE order of `ff_ac3_dec_channel_map`.
 ///
 /// The C runs an FFT-based IMDCT; this port evaluates the same half-inverse
 /// MDCT directly with precomputed cosine matrices (exact, O(N^2)).
@@ -737,6 +736,7 @@ pub struct Ac3Decoder {
   first_cpl_coords : FixedArray[Bool]
   cpl_coords : Array[FixedArray[Int32]]
   mut first_cpl_leak : Bool
+  priv spx : Ac3SpxState
   mut num_rematrixing_bands : Int32
   rematrixing_flags : FixedArray[Bool]
   exp_strategy : Array[FixedArray[Int32]]
@@ -832,6 +832,7 @@ pub fn ac3_decoder_new() -> Ac3Decoder {
     first_cpl_coords: FixedArray::make(ac3_max_channels, false),
     cpl_coords: ac3_channel_arrays_int(ac3_max_cpl_bands),
     first_cpl_leak: false,
+    spx: ac3_spx_new(),
     num_rematrixing_bands: 0,
     rematrixing_flags: FixedArray::make(4, false),
     exp_strategy,
@@ -1154,14 +1155,15 @@ fn ac3_decode_band_structure(
   eac3 : Bool,
   start_subband : Int32,
   end_subband : Int32,
+  defaults : FixedArray[Int32],
   band_struct : FixedArray[Bool],
   num_bands : Ref[Int32],
   band_sizes : FixedArray[Int32],
 ) -> Unit {
   let n_subbands = end_subband - start_subband
   if blk == 0 {
-    for i = 0; i < ac3_max_cpl_bands; i = i + 1 {
-      band_struct[i] = ac3_default_cpl_band_struct[i] != 0
+    for i in 0..<defaults.length() {
+      band_struct[i] = defaults[i] != 0
     }
   }
   // E-AC-3 writes a "new structure" bit; 0 keeps the previous (or default)
@@ -1225,7 +1227,11 @@ fn Ac3Decoder::coupling_strategy(
       self.phase_flags_in_use = gb.read1() != 0
     }
     let cpl_start_subband = gb.read(4).reinterpret_as_int()
-    let cpl_end_subband = gb.read(4).reinterpret_as_int() + 3
+    let cpl_end_subband = if self.spx.in_use {
+      (self.spx.start - 37) / 12
+    } else {
+      gb.read(4).reinterpret_as_int() + 3
+    }
     if cpl_start_subband >= cpl_end_subband {
       return Err("ac3: invalid coupling range")
     }
@@ -1238,6 +1244,7 @@ fn Ac3Decoder::coupling_strategy(
       self.eac3,
       cpl_start_subband,
       cpl_end_subband,
+      ac3_default_cpl_band_struct,
       self.cpl_band_struct,
       num_bands,
       self.cpl_band_sizes,
@@ -1571,13 +1578,9 @@ fn Ac3Decoder::decode_audio_block(
     }
     i = i - 1
   }
-  // Spectral extension strategy (E-AC-3).  SPX is not implemented, so a
-  // stream that enables it is rejected instead of decoded incorrectly.
-  if self.eac3 {
-    let parse_spx = if blk == 0 { true } else { gb.read1() != 0 }
-    if parse_spx && gb.read1() != 0 {
-      return Err("eac3: spectral extension is not supported")
-    }
+  match self.read_spx(gb, blk) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
   }
   // Coupling strategy.
   let cpl_strategy = if self.eac3 {
@@ -1614,6 +1617,8 @@ fn Ac3Decoder::decode_audio_block(
       if cpl_in_use && self.start_freq[0] <= 61 {
         self.num_rematrixing_bands = self.num_rematrixing_bands -
           (1 + (if self.start_freq[0] == 37 { 1 } else { 0 }))
+      } else if self.spx.in_use && self.spx.start <= 61 {
+        self.num_rematrixing_bands = self.num_rematrixing_bands - 1
       }
       for bnd = 0; bnd < self.num_rematrixing_bands; bnd = bnd + 1 {
         self.rematrixing_flags[bnd] = gb.read1() != 0
@@ -1639,6 +1644,8 @@ fn Ac3Decoder::decode_audio_block(
       let prev = self.end_freq[ch]
       if self.channel_in_cpl[ch] {
         self.end_freq[ch] = self.start_freq[0]
+      } else if self.spx.channel_uses[ch] {
+        self.end_freq[ch] = self.spx.start
       } else {
         let bandwidth_code = gb.read(6).reinterpret_as_int()
         if bandwidth_code > 60 {
@@ -1874,6 +1881,9 @@ fn Ac3Decoder::decode_audio_block(
       self.transform_coeffs[ch][i] = self.fixed_coeffs[ch][i].to_double() * gain
     }
   }
+  if self.spx.in_use {
+    self.apply_spx()
+  }
   self.do_imdct(self.channels, out, channel_map, blk)
   Ok(())
 }
@@ -2080,8 +2090,10 @@ fn Ac3Decoder::parse_eac3_frame_header(
     }
   }
   for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
-    if parse_spx_atten && gb.read1() != 0 {
-      let _ = gb.read(5) // spx attenuation code
+    self.spx.attenuation[ch] = if parse_spx_atten && gb.read1() != 0 {
+      gb.read(5).reinterpret_as_int()
+    } else {
+      -1
     }
   }
   if self.num_blocks > 1 && gb.read1() != 0 {
@@ -2091,6 +2103,7 @@ fn Ac3Decoder::parse_eac3_frame_header(
   }
   for ch = 1; ch <= self.fbw_channels; ch = ch + 1 {
     self.first_cpl_coords[ch] = true
+    self.spx.first_coords[ch] = true
   }
   self.first_cpl_leak = true
   Ok(())

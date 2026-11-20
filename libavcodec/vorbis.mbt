@@ -1729,6 +1729,19 @@ fn VorbisDecoder::decode_stream_impl(
 }
 
 ///|
+/// Decode an audio packet in FFmpeg native channel order.
+pub fn VorbisDecoder::decode_packet_native(
+  self : VorbisDecoder,
+  packet : Bytes,
+) -> Result[Array[Array[Double]], String] {
+  match self.decode_packet(packet) {
+    Ok(rows) =>
+      Ok(Array::makei(self.channels, i => rows[self.channel_offsets[i]]))
+    Err(e) => Err(e)
+  }
+}
+
+///|
 /// Decode every audio packet and return planar PCM in FFmpeg's native channel
 /// order. The first packet's output is dropped, mirroring the decoder's
 /// `skip_samples = len` on the first frame.

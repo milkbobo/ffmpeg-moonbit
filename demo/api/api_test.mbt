@@ -41,12 +41,29 @@ fn tiny_wav() -> Bytes {
 
 ///|
 fn tiny_wav_u0100() -> String {
-  let b = tiny_wav()
+  demo_encode_bytes(tiny_wav())
+}
+
+///|
+fn demo_encode_bytes(b : Bytes) -> String {
   let sb = StringBuilder()
   for i in 0..<b.length() {
     sb.write_char((b[i].to_int() + 0x100).unsafe_to_char())
   }
   sb.to_string()
+}
+
+///|
+test "PNG standalone: probe metadata and grayscale-alpha thumbnail" {
+  let png = demo_encode_bytes(
+    b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0b\x49\x44\x41\x54\x78\xda\x63\xfc\xff\x1f\x00\x03\x03\x02\x00\xef\x9a\x0f\x5b\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82",
+  )
+  let info = @api.ff_probe(png)
+  assert_true(info.contains("\"png_pipe\""))
+  assert_true(info.contains("\"png\""))
+  let thumbnail = @api.ff_thumbnail(png, 64)
+  assert_true(thumbnail.contains("\"width\":1,\"height\":1"))
+  assert_true(thumbnail.contains("\"rgb24\":\"ǿǿǿ\""))
 }
 
 ///|

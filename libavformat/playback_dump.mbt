@@ -34,6 +34,9 @@ fn MediaFile::stream_timebase(
     }
     Mkv(mh) => Some((1.0e9 / mh.time_scale.to_double(), 0.0))
     OggOpus(_) => Some((48000.0, 0.0))
+    OggVorbis(demux) => Some((demux.sample_rate.to_double(), 0.0))
+    OggFlac(demux) => Some((demux.sample_rate.to_double(), 0.0))
+    StillImage(_) => None
     Wav(demux, _) =>
       if demux.format.sample_rate > 0 {
         Some((demux.format.sample_rate.to_double(), 0.0))
