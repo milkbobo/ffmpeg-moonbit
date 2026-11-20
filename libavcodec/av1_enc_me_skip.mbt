@@ -57,6 +57,14 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
   /// independent of q/skip, so a caller sweeping those reuses one result.
   precomputed_mvs_y8? : FixedArray[Int32],
   precomputed_mvs_x8? : FixedArray[Int32],
+  /// §468d: loop-filter levels for the frame header. Non-zero makes the
+  /// decoder deblock, so the encoder filters its expected planes the same
+  /// way — passing this frame's per-SB `skips` to the mask builder (a
+  /// skipped superblock has no residual, so its inner tx edges are
+  /// omitted). Default 0 keeps filtering off.
+  loop_filter_level0~ : Int32 = 0,
+  loop_filter_level1~ : Int32 = 0,
+  loop_filter_sharpness~ : Int32 = 0,
 ) -> Result[
   (Bytes, FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]),
   String,
@@ -469,10 +477,38 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
       base_q_idx,
       ref_frame_idx,
       refresh_frame_flags: 1 << out_slot,
+      loop_filter_level0,
+      loop_filter_level1,
+      loop_filter_sharpness,
       tile_data: tile,
     }) {
     Ok(b) => b
     Err(e) => return Err(e)
+  }
+  // §468d: mirror the decoder's deblocking. This path mixes skipped and
+  // residual superblocks, so the mask builder needs this frame's `skips`.
+  if loop_filter_level0 != 0 ||
+    loop_filter_level1 != 0 ||
+    loop_filter_sharpness != 0 {
+    let hdr = match av1_parse_frame_header(obu, seq) {
+      Ok(h) => h
+      Err(e) => return Err(e)
+    }
+    let _ = av1_enc_deblock_frame_inter(
+      expected_y,
+      w,
+      expected_u,
+      expected_v,
+      cw,
+      w,
+      h,
+      hdr,
+      skips,
+      !seq.monochrome,
+      1,
+      1,
+      8,
+    )
   }
   refs.refresh(prepared, 1 << out_slot)
   Ok((obu, expected_y, expected_u, expected_v))

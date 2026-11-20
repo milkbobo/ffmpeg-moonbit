@@ -16894,3 +16894,35 @@ RD×skip 4/4、multiref 4/4、ME 复用 4/4、loop-filter 3/3、deblock-intra
 （§458/§460）尚未接 loop_filter**（`skips` 数组已存在，接入很直接）；
 tile 边界强度修正未做；CDEF/LR 未做。
 交接 `AGENT_HANDOFF_2026-11-20_AV1_DEBLOCK_INTER.md`。**未提交**。
+
+## §468d AV1 编码器去块收口（skip 路径 + 多 SB 修复）（2026-11-20）
+
+1）skip 混合路径接上环路去块：`av1_enc_write_me_skip420_inter_frame_obu`
+增 loop_filter 三参数，把该帧真实 `skips` 传给
+`av1_enc_deblock_frame_inter`；session skip 分支透传。
+2）修掉 §468c 的一个**多 SB 真 bug**。
+
+**核心 bug：mask 与滤波循环按「128 宽区域」组织，不是按 64×64 SB。**
+解码器即使 `use_128x128_superblock=0`，`lf_mask` 仍按 128×128 区域索引
+（`(by>>5)*sb128w + (bx>>5)`）——一个 128 宽区域内的两个 64×64 SB **共享
+同一个 mask 对象**，滤波循环也以 `sb128w` 为列数、`x*128` 像素步进。
+首版按 64×64 SB 分配/索引，单 SB 帧恰好正确，帧宽超过 64 就失配
+（Y 差 110 像素）。修正：masks 按 `sb128w*sb128h` 分配、构造索引
+`(by>>5)*sb128w+(bx>>5)`、滤波循环用 sb128w 列与 x*128 步进。
+**教训：dav1d 的 lf_mask/cdef_idx 是 128 区域粒度而非 SB 粒度；即便用
+64×64 SB 也必须按 128 区域组织，且测试必须覆盖多 SB 帧（单 SB 会掩盖）。**
+
+**另两处 skip 修正**：skip SB 不写 var-tx 符号 → `tx_masks=[0,0]`
+（残差 SB 是 `[1,0]`）；level 选择索引 skip=GLOBALMV→2、残差→3，须按 SB
+分别选。
+
+**验证**：白盒 5/5（skip 混合帧 lf=8/32/63 均 decode==expected Y=0 UV=0；
+基线 lf=0 本就精确；探针确认解码器滤波 126 像素；默认与显式 lf=0 逐字节
+同）；deblock-inter 扩到 4/4，新增多 SB(128×64) 用例 lf=16/48 精确——正是
+它抓出 128 区域 bug。回归 99 测试全绿；`moon check --deny-warn` 0、
+fmt/info 已跑。
+
+**覆盖范围**：intra key + inter（全残差与 skip 混合两条路径）× 任意 SB
+网格 × 4:2:0 8-bit。**剩余**：tile 边界强度修正（`tile_cols>1` 分支）、
+CDEF、LR、高位深/其它色度。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_DEBLOCK_SKIP.md`。**未提交**。

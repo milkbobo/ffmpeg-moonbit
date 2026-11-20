@@ -107,6 +107,60 @@ test "av1 enc deblock inter: decode equals expected with lf on" {
 }
 
 ///|
+/// Multi-superblock frames: the above/left tx-LPF banks must propagate
+/// across superblocks exactly like the decoder's, so this covers a 2x1 SB
+/// grid (which the single-SB tests above cannot exercise).
+test "av1 enc deblock inter: multi-SB frame decodes exact" {
+  let w = 128
+  let h = 64
+  let cw = 64
+  let ch = 32
+  for lf in [16, 48] {
+    let enc = Av1Encoder::new(Av1SeqEncConfig::default(width=w, height=h))
+    let dec = Av1Decoder::new()
+    let src0 : Av1EncPlanes = {
+      y: dbi_src(w, h, 1),
+      y_stride: w,
+      u: dbi_src(cw, ch, 2),
+      uv_stride: cw,
+      v: dbi_src(cw, ch, 3),
+    }
+    let (pkt0, _) = match enc.encode_frame(src0, base_q_idx=100) {
+      Ok(v) => v
+      Err(e) => fail("key: \{e}")
+    }
+    let _ = match dec.decode_packet(pkt0) {
+      Ok(Some(f)) => f
+      Ok(None) => fail("key hidden")
+      Err(e) => fail("key decode: \{e}")
+    }
+    let src1 : Av1EncPlanes = {
+      y: dbi_src(w, h, 5),
+      y_stride: w,
+      u: dbi_src(cw, ch, 6),
+      uv_stride: cw,
+      v: dbi_src(cw, ch, 7),
+    }
+    let (pkt1, exp1) = match
+      enc.encode_frame(
+        src1,
+        base_q_idx=100,
+        loop_filter_level0=lf,
+        loop_filter_level1=lf,
+      ) {
+      Ok(v) => v
+      Err(e) => fail("inter lf=\{lf}: \{e}")
+    }
+    let got = match dec.decode_packet(pkt1) {
+      Ok(Some(f)) => f
+      Ok(None) => fail("inter hidden")
+      Err(e) => fail("inter decode lf=\{lf}: \{e}")
+    }
+    dbi_assert(got, exp1, w, h, "multi-SB lf=\{lf}")
+  }
+}
+
+///|
 /// The filter must actually change the inter reconstruction (otherwise the
 /// test above would pass vacuously).
 test "av1 enc deblock inter: the filter changes the reconstruction" {

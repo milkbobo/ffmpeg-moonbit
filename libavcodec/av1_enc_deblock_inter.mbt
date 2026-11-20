@@ -53,17 +53,28 @@ pub fn av1_enc_deblock_frame_inter(
   if skips.length() != n_sb {
     return false
   }
+  // Masks are indexed by 128-wide AREAS, not by 64x64 superblocks: with
+  // `use_128x128_superblock = 0` the decoder still groups four 64x64 SBs
+  // into one 128 area (`lf_mask[(by >> 5) * sb128w + (bx >> 5)]`), so the
+  // two 64x64 SBs of a 128-wide area share one mask object.
+  let sb128w = (bw + 31) >> 5
+  let sb128h = (bh + 31) >> 5
+  let n_area = sb128w * sb128h
   let lf_level = FixedArray::make(8 * 64 * 64, 0)
   av1_calc_lf_values(lf_level, hdr, FixedArray::make(4, 0))
   let lf_lut = av1_filter_lut_new()
   av1_calc_eih(lf_lut, hdr.loop_filter_sharpness)
   let masks : Array[Av1Filter] = []
-  for _ in 0..<n_sb {
+  for _ in 0..<n_area {
     masks.push(av1_filter_new())
   }
-  // Inter frames code a whole 64x64 block with var-tx SPLIT into four
-  // TX_32X32 leaves: the root split bit is set, the leaf level is not.
-  let tx_masks : FixedArray[Int32] = [1, 0]
+  // Inter frames code a whole 64x64 block. A residual superblock splits
+  // its var-tx tree into four TX_32X32 leaves (`tx_masks[0]` bit 0 set); a
+  // SKIPPED superblock writes no var-tx symbols at all, so the decoder
+  // fills the whole block as one TX_64X64 and its mask must use the
+  // unsplit shape.
+  let tx_masks_res : FixedArray[Int32] = [1, 0]
+  let tx_masks_skip : FixedArray[Int32] = [0, 0]
   let ytx = 4 // TX_64X64: the block's max tx, which the tree splits from
   let uvtx = 3 // chroma TX_32X32
   let bs = av1_block_sizes[(1 * 10 + 0) * 2].to_int() // BL_64X64
@@ -76,6 +87,19 @@ pub fn av1_enc_deblock_frame_inter(
   lvl_y[1] = level_at(hdr, 1)
   lvl_y[2] = level_at(hdr, 2)
   lvl_y[3] = level_at(hdr, 3)
+  // The mask builder wants a 64-entry level table with each direction's
+  // SELECTED ref/mode level at offset 0 of its 16-entry group (see
+  // `av1_decode_inter`). Our frames always code reference LAST (ref0 = 0);
+  // the mode differs per superblock:
+  //   - a skipped SB codes GLOBALMV (mode 2) → index (0+1)*2 + 0 = 2
+  //   - a residual SB codes NEWMV/NEARESTMV → index (0+1)*2 + 1 = 3
+  // so the selection is per-SB, not per-frame.
+  let levels_skip = FixedArray::make(64, 0)
+  let levels_res = FixedArray::make(64, 0)
+  for dir in 0..<4 {
+    levels_skip[dir * 16] = lf_level[dir * 16 + 2]
+    levels_res[dir * 16] = lf_level[dir * 16 + 3]
+  }
   for sby in 0..<sb_rows {
     for i in 0..<32 {
       l_tx_y[i] = 0
@@ -83,15 +107,19 @@ pub fn av1_enc_deblock_frame_inter(
     }
     for sbx in 0..<sb_cols {
       let sb = sby * sb_cols + sbx
-      let mask = masks[sb]
       let bx = sbx * 16
       let by = sby * 16
+      let mask = masks[(by >> 5) * sb128w + (bx >> 5)]
       av1_create_lf_mask_inter(
         lf_level,
-        lf_level,
+        if skips[sb] {
+          levels_skip
+        } else {
+          levels_res
+        },
         b4_stride,
-        bw,
-        bh,
+        w4,
+        h4,
         ss_h,
         ss_v,
         mask.fy,
@@ -101,7 +129,11 @@ pub fn av1_enc_deblock_frame_inter(
         skips[sb],
         bs,
         ytx,
-        tx_masks,
+        if skips[sb] {
+          tx_masks_skip
+        } else {
+          tx_masks_res
+        },
         uvtx,
         a_tx_y,
         bx & 31,
@@ -129,8 +161,8 @@ pub fn av1_enc_deblock_frame_inter(
     let lvl_off = row4 * b4_stride * 4
     let uv_row4 = row4 >> ss_v
     let uv_lvl_off = uv_row4 * b4_stride * 4
-    for x in 0..<sb_cols {
-      let mask = masks[sby * sb_cols + x]
+    for x in 0..<sb128w {
+      let mask = masks[(sby >> 1) * sb128w + x]
       let w = av1_imin(32, w4 - x * 32)
       if lf_y_active {
         deblock_cols_y(
@@ -169,8 +201,8 @@ pub fn av1_enc_deblock_frame_inter(
         )
       }
     }
-    for x in 0..<sb_cols {
-      let mask = masks[sby * sb_cols + x]
+    for x in 0..<sb128w {
+      let mask = masks[(sby >> 1) * sb128w + x]
       let w = av1_imin(32, w4 - x * 32)
       if lf_y_active {
         deblock_rows_y(

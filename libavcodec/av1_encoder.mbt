@@ -459,6 +459,9 @@ pub fn Av1Encoder::encode_frame(
       skip_uniform~,
       ref_slot~,
       refresh_slot=out_slot,
+      loop_filter_level0~,
+      loop_filter_level1~,
+      loop_filter_sharpness~,
     )
   } else {
     av1_enc_write_me_res420_inter_frame_obu(
