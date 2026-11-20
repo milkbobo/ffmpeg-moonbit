@@ -16823,3 +16823,39 @@ intra 的 lf_mask 构造与帧级 cols/rows 循环需新写。本节的 114/117 
 像素即第二步必须复现的目标。交接
 `AGENT_HANDOFF_2026-11-20_AV1_LF_HEADER.md` +
 `AGENT_HANDOFF_2026-11-20_AV1_ENCODER_DEBLOCK_RESEARCH.md`。**未提交**。
+
+## §468b AV1 编码器侧去块滤波（2026-11-20）
+
+实现编码器侧去块并接入 key 帧重建路径，使 `expected` = 解码器滤波后输出
+（§468a 留的第二环闭环）。新文件 `libavcodec/av1_enc_deblock.mbt`：
+公开入口 `av1_enc_deblock_frame` 就地滤波，自建 mask
+（复用 `av1_mask_edges_intra`/`av1_mask_edges_chroma`）、lf_level
+（`av1_calc_lf_values`）、LUT（`av1_calc_eih`），帧级循环复刻解码器
+cols→rows 顺序并复用底层核 `av1_lf_h_y`/`av1_lf_v_y`/`av1_lf_h_uv`/
+`av1_lf_v_uv`。`encode_frame` key 路径在帧头写出后解析回 hdr 并滤波
+expected 三平面；level/sharpness 全 0 时完全跳过（默认零开销零变化）。
+
+**一致性来源**：不重写滤波逻辑，复用同一批内核；只新写帧级 cols/rows
+循环与 mask/level 填充顺序（解码端那份绑 Av1FrameCtx）。编码器分区固定
+（单 tile、64x64 SB 四块 32x32、TX_32X32、skip=0、4:2:0），省掉 tile 边界
+修正与多 tile 记账。
+
+**真 bug（可复用教训）**：首版把 `a_tx_y`/`l_tx_y` 等初始化为 −1，直接
+数组越界崩溃。根因是解码端有**两个不同的 tx 银行**——`tx_intra`
+（reset_keyframe 设 **−1**，用于模式/变换尺寸语法）与 `tx_lpf_y`/
+`tx_lpf_uv`（初始化为 **0**，用于去块 mask）；`av1_mask_edges_intra` 用的是
+后者。传 −1 使 `av1_imin(twl4c,-1)=-1` → `av1_fy_i(...,-1,...)` 负索引越界。
+**镜像前必须逐个确认是哪一个同名银行。**
+
+**验证**：白盒 3/3——lf=8/32/63 三档 `decode==expected` 均 Y=0 UV=0；
+滤波确实生效（lf=0 vs lf=32 的 expected 相差 117 个 luma 像素）；默认与
+显式 lf=0 码流逐字节相同、expected 逐像素相同。回归 90 测试全绿
+（encoder 8/8、refring 5/5、RD 三维 5/5、RD 4/4、skip 5/5、NEARMV 2/2、
+RD×skip 4/4、multiref 4/4、ME 复用 4/4、loop-filter 3/3、deblock 3/3、
+inter 24/24、tile 12/12、frame 7/7）；`moon check --deny-warn` 0、
+fmt/info 已跑。
+
+**边界**：仅覆盖编码器当前形态（单 tile/intra key/4:2:0/8-bit/TX_32X32）；
+**inter 帧未接**（需走公开的 `av1_create_lf_mask_inter` 并按块传
+skip/ytx/uvtx，多一层记账）；未处理 tile 边界强度修正；CDEF/LR 未做。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_ENCODER_DEBLOCK.md`。**未提交**。

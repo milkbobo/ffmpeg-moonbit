@@ -186,6 +186,34 @@ pub fn Av1Encoder::encode_frame(
       Err(e) => return Err(e)
     }
     parts.push(kf_obu)
+    // §468b: the decoder runs the in-loop deblocking filter after
+    // reconstructing, so the encoder must apply the same filter to its own
+    // reconstruction for the "expected == decoded" contract to hold. The
+    // filter is a no-op when every level is zero.
+    if loop_filter_level0 != 0 ||
+      loop_filter_level1 != 0 ||
+      loop_filter_sharpness != 0 {
+      let hdr = match av1_parse_frame_header(kf_obu, self.seq) {
+        Ok(h) => h
+        Err(e) => return Err(e)
+      }
+      let _ = av1_enc_deblock_frame(
+        expected_y,
+        w,
+        expected_u,
+        expected_v,
+        cw,
+        w,
+        h,
+        hdr,
+        3, // key luma blocks are TX_32X32
+        2, // 4:2:0 chroma is TX_16X16
+        !self.seq.monochrome,
+        1,
+        1,
+        8,
+      )
+    }
     self.refs.refresh_without_mvs(0, w, h, 255)
     let out : Array[Byte] = []
     for part in parts {
