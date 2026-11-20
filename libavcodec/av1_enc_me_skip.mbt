@@ -53,6 +53,10 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
   /// §464: the slot this frame's reconstruction refreshes. Defaults to
   /// `ref_slot` (the pre-§464 shape).
   refresh_slot~ : Int32 = -1,
+  /// §466: precomputed 1/8-pel per-SB MVs (see the me420 entry). ME is
+  /// independent of q/skip, so a caller sweeping those reuses one result.
+  precomputed_mvs_y8? : FixedArray[Int32],
+  precomputed_mvs_x8? : FixedArray[Int32],
 ) -> Result[
   (Bytes, FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]),
   String,
@@ -76,25 +80,40 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
   let sb_rows = h >> 6
   let n_sb = sb_cols * sb_rows
   // 1. ME: full-pel search + sub-pel refinement, exactly the §449b path.
-  let (iy, ix) = match
-    av1_enc_me_fullpel_sad(
-      src_y,
-      src_y_stride,
-      ref_y,
-      ref_y_stride,
-      w,
-      h,
-      range~,
-    ) {
-    Ok(v) => v
-    Err(e) => return Err(e)
-  }
-  let (ry, rx) = match
-    av1_enc_me_subpel_refine(
-      src_y, src_y_stride, ref_y, ref_y_stride, w, h, iy, ix,
-    ) {
-    Ok(v) => v
-    Err(e) => return Err(e)
+  //    §466: precomputed MVs skip the search — ME depends only on
+  //    (src, ref), so a caller sweeping q/skip reuses one result.
+  let (ry, rx) = match (precomputed_mvs_y8, precomputed_mvs_x8) {
+    (Some(py), Some(px)) =>
+      if py.length() != n_sb || px.length() != n_sb {
+        return Err(
+          "av1 enc: precomputed MVs need one entry per 64x64 SB (\{n_sb})",
+        )
+      } else {
+        (py, px)
+      }
+    (None, None) => {
+      let (iy, ix) = match
+        av1_enc_me_fullpel_sad(
+          src_y,
+          src_y_stride,
+          ref_y,
+          ref_y_stride,
+          w,
+          h,
+          range~,
+        ) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+      match
+        av1_enc_me_subpel_refine(
+          src_y, src_y_stride, ref_y, ref_y_stride, w, h, iy, ix,
+        ) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+    }
+    _ => return Err("av1 enc: precomputed MVs need both y and x arrays")
   }
   // 2. Per-SB skip decision.
   //    §458 (skip_uniform=false): zero MV only, SAD against the plain

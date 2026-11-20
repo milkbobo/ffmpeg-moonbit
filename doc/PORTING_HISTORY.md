@@ -16735,3 +16735,34 @@ fmt/info 已跑。
 **边界**：三维穷举开销 = |q|×|skip|×|ref|×单帧编码，生产需缩候选或
 early-out；仍是单参考无复合预测；分区树/变换尺寸/CDEF/LR 未做。
 交接 `AGENT_HANDOFF_2026-11-20_AV1_RD_3WAY.md`。**未提交**。
+
+## §466 AV1 编码器 RD 搜索的 ME 复用（2026-11-20）
+
+三维 RD 选择器原先对每个 (q, skip, ref) 组合都调完整帧编码入口，其内部
+会跑运动估计（±8 全搜索 + 子像素精化）。ME 只依赖 (src, ref)，与 qindex
+和 skip 阈值无关，因此同一参考下每个 q/skip 组合都在重复相同的搜索。
+
+拆分复用：两个帧级入口（me420 / me_skip）增可选
+`precomputed_mvs_y8?` / `precomputed_mvs_x8?`（传入则跳过 full-pel 与
+subpel，数组长度须等于 SB 数、两数组须同时给）；新增
+`av1_enc_me_for_ref` 封装「full-pel + subpel」；选择器增 `me_cache`
+每参考惰性算一次 ME，所有 (q, skip) 组合复用。
+
+**收益**：4 q × 3 skip × 3 ref = 36 次试编码，ME 从 36 次降到 3 次
+（12× 下降）。res 与 skip 两条路径都接入，覆盖全部组合。
+
+**关键约束——字节必须完全一致**（纯性能优化）：三维既有测试字节逐一复现
+（age0=2301、age2=3059、q220=495、q40=3404，与 §465 相同）；新增白盒
+逐字节比对 res 路径 q=40/100/160/220 四档、skip 路径 pct=50/100 两档
+全部一致。
+
+**验证**：新白盒 4/4（res 四档恒等、skip 两档恒等、长度错误拒收、
+`av1_enc_me_for_ref` 与两段式逐 MV 相同）；回归 encoder 8/8、refring 5/5、
+RD 三维 5/5、RD 4/4、skip 5/5、NEARMV 2/2、RD×skip 4/4、multiref 4/4、
+ME 复用 4/4、inter 24/24、tile 12/12、frame 7/7（共 84）；
+`moon check --deny-warn` 0、fmt/info 已跑。
+
+**边界**：只消除 ME 重复；残差编码仍每组合全跑（依赖 q/skip，不可复用）。
+进一步可做「预测/残差缓存」或「参考维度粗筛 early-out」（后者会改变
+搜索结果，需新验收标准）。交接 `AGENT_HANDOFF_2026-11-20_AV1_ME_REUSE.md`。
+**未提交**。

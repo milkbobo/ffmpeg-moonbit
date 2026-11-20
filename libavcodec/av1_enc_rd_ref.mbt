@@ -16,6 +16,39 @@
 /// without a second lookup.
 
 ///|
+/// §466: run motion estimation for one (src, ref) pair — the full-pel SAD
+/// search plus sub-pel refinement — and return the per-SB 1/8-pel MVs.
+/// ME is independent of the qindex and of the skip threshold, so callers
+/// sweeping those dimensions run this once per reference.
+fn av1_enc_me_for_ref(
+  seq : Av1SequenceParameters,
+  src_y : FixedArray[Int32],
+  src_y_stride : Int32,
+  ref_y : FixedArray[Int32],
+  ref_y_stride : Int32,
+  range~ : Int32 = 8,
+) -> Result[(FixedArray[Int32], FixedArray[Int32]), String] {
+  let w = seq.width
+  let h = seq.height
+  let (iy, ix) = match
+    av1_enc_me_fullpel_sad(
+      src_y,
+      src_y_stride,
+      ref_y,
+      ref_y_stride,
+      w,
+      h,
+      range~,
+    ) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  av1_enc_me_subpel_refine(
+    src_y, src_y_stride, ref_y, ref_y_stride, w, h, iy, ix,
+  )
+}
+
+///|
 /// One candidate reference picture: the planes to predict from plus the
 /// AV1 reference slot and the age (frames back) it came from.
 pub(all) struct Av1EncRefCandidate {
@@ -82,6 +115,12 @@ pub fn av1_enc_rd_select_q_skip_ref_inter(
   let mut best_pct = 0
   let mut best_ref = 0
   let mut best_cost : Int64? = None
+  // §466: one ME result per reference, computed lazily and reused across
+  // every (q, skip) combination.
+  let me_cache : FixedArray[(FixedArray[Int32], FixedArray[Int32])?] = FixedArray::make(
+    ref_candidates.length(),
+    None,
+  )
   for q in candidates {
     if q < 0 || q > 255 {
       return Err("av1 enc rd: qindex outside 0..=255")
@@ -89,6 +128,29 @@ pub fn av1_enc_rd_select_q_skip_ref_inter(
     for pct in pcts {
       for ri in 0..<ref_candidates.length() {
         let rc = ref_candidates[ri]
+        // §466: ME depends only on (src, ref), not on q or the skip
+        // threshold, so it is computed once per reference and reused for
+        // every (q, skip) combination. The bytes are identical to running
+        // ME inside each trial — only the redundant work disappears.
+        let mvs = match me_cache[ri] {
+          Some(v) => v
+          None => {
+            let computed = match
+              av1_enc_me_for_ref(
+                seq,
+                src_y,
+                src_y_stride,
+                rc.y,
+                rc.y_stride,
+                range~,
+              ) {
+              Ok(v) => v
+              Err(e) => return Err(e)
+            }
+            me_cache[ri] = Some(computed)
+            computed
+          }
+        }
         let trial_refs = av1_enc_rd_fork_refs(refs)
         let trial = if pct > 0 {
           av1_enc_write_me_skip420_inter_frame_obu(
@@ -110,6 +172,8 @@ pub fn av1_enc_rd_select_q_skip_ref_inter(
             skip_sad_pct=pct,
             skip_uniform=true,
             ref_slot=rc.slot,
+            precomputed_mvs_y8=mvs.0,
+            precomputed_mvs_x8=mvs.1,
           )
         } else {
           av1_enc_write_me_res420_inter_frame_obu(
@@ -129,6 +193,8 @@ pub fn av1_enc_rd_select_q_skip_ref_inter(
             range~,
             dz_pm~,
             ref_slot=rc.slot,
+            precomputed_mvs_y8=mvs.0,
+            precomputed_mvs_x8=mvs.1,
           )
         }
         let (pkt, exp_y, exp_u, exp_v) = match trial {

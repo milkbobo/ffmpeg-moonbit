@@ -43,6 +43,13 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
   /// header maps it to `ref_slot`, so any index resolves to the same
   /// picture; coding a non-LAST index exercises the ref tree.
   ref_idx~ : Int32 = 0,
+  /// §466: precomputed 1/8-pel per-SB MVs. Motion estimation depends only
+  /// on (src, ref) — not on the qindex — so a caller sweeping several q
+  /// values for one reference can run ME once and pass the result in,
+  /// skipping the full-pel search plus sub-pel refinement. Both arrays
+  /// must hold one entry per 64x64 SB; when omitted ME runs as before.
+  precomputed_mvs_y8? : FixedArray[Int32],
+  precomputed_mvs_x8? : FixedArray[Int32],
 ) -> Result[
   (Bytes, FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]),
   String,
@@ -62,26 +69,41 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
   let sb_cols = w >> 6
   let sb_rows = h >> 6
   let n_sb = sb_cols * sb_rows
-  // 1. ME on luma.
-  let (iy, ix) = match
-    av1_enc_me_fullpel_sad(
-      src_y,
-      src_y_stride,
-      ref_y,
-      ref_y_stride,
-      w,
-      h,
-      range~,
-    ) {
-    Ok(v) => v
-    Err(e) => return Err(e)
-  }
-  let (ry, rx) = match
-    av1_enc_me_subpel_refine(
-      src_y, src_y_stride, ref_y, ref_y_stride, w, h, iy, ix,
-    ) {
-    Ok(v) => v
-    Err(e) => return Err(e)
+  // 1. ME on luma. §466: when the caller supplies precomputed MVs, the
+  //    search is skipped entirely — the result is identical because ME
+  //    depends only on (src, ref), not on the qindex.
+  let (ry, rx) = match (precomputed_mvs_y8, precomputed_mvs_x8) {
+    (Some(py), Some(px)) =>
+      if py.length() != n_sb || px.length() != n_sb {
+        return Err(
+          "av1 enc: precomputed MVs need one entry per 64x64 SB (\{n_sb})",
+        )
+      } else {
+        (py, px)
+      }
+    (None, None) => {
+      let (iy, ix) = match
+        av1_enc_me_fullpel_sad(
+          src_y,
+          src_y_stride,
+          ref_y,
+          ref_y_stride,
+          w,
+          h,
+          range~,
+        ) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+      match
+        av1_enc_me_subpel_refine(
+          src_y, src_y_stride, ref_y, ref_y_stride, w, h, iy, ix,
+        ) {
+        Ok(v) => v
+        Err(e) => return Err(e)
+      }
+    }
+    _ => return Err("av1 enc: precomputed MVs need both y and x arrays")
   }
   // 2. Dequant tables: ydc/yac for luma, udc/uac for chroma (the
   //    frame's dq_u_* offsets are zero, so udc = uac = base_q_idx).
