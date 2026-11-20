@@ -16681,3 +16681,29 @@ frame 7/7（共 70）；`moon check --deny-warn` 0、fmt/info 已跑。
 复合预测、session 层参考帧环形缓冲（`Av1Encoder` 仍只保留上一帧）。
 七项 ref_frame_idx 同指一槽，跨索引的 MV 预测器候选尚未真正利用。
 交接 `AGENT_HANDOFF_2026-11-20_AV1_MULTIREF.md`。**未提交**。
+
+## §464 AV1 编码器 session 参考帧管理（ref_age）（2026-11-20）
+
+让 session 真正维护参考历史：`Av1Encoder` 增 8 槽环形缓冲
+`slots : FixedArray[Av1EncPlanes?]` 与 `cur_slot`；`encode_frame` 增
+`ref_age~`（0 = 上一帧原行为，k = k 帧前的重建，超出历史夹到最老槽、
+负值当 0）。两个帧级入口（me420 / me_skip）均增 `ref_slot~`（预测来源槽，
+帧头七个 ref_frame_idx 全指向它）与 `refresh_slot~`（本帧重建写入的槽，
+`refresh_frame_flags = 1<<slot`）。
+
+**核心设计——预测源与刷新目标必须分离**：第一版把 refresh 也设成
+`1<<ref_slot`，第 3 帧起全链失步（`F2 Y(0,2) = 0 want 14`）。根因是
+`ref_slot` 是**读取**槽，重建写回同一槽会覆盖解码端参考历史，而编码器
+环形缓冲还留旧图，两边分叉。修正为读/写分离：`ref_slot` 读、
+`refresh_slot=(cur_slot+1)%8` 写，帧头同时写出两字段；key 帧刷新全部 8 槽
+（mask 0xFF），session 同步填满 8 槽、`cur_slot=0`。
+
+**验证**：黑盒 5/5（6 帧 age 0/0/1/2/3 全逐像素精确；age=99 夹最老槽、
+负 age 当 0；默认路径字节长度恒等；**不同 ref_age 产生不同码流**
+2358 vs 2241 字节——防选项被静默忽略）；回归 encoder 8/8、RD 4/4、
+skip 5/5、NEARMV 2/2、RD×skip 4/4、multiref 4/4、inter 24/24、tile 12/12、
+frame 7/7（共 75）；`moon check --deny-warn` 0、fmt/info 已跑。
+
+**边界**：ref_age 由调用方显式指定，无自动多参考择优；仍是单参考，
+无复合预测；分区树/变换尺寸/CDEF/LR 未做。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_REFRING.md`。**未提交**。

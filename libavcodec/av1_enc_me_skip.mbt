@@ -47,6 +47,12 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
   /// decoder realizes equals the ME target used for the prediction, so
   /// expected stays exact. Default false keeps §458's zero-MV GLOBALMV skip.
   skip_uniform~ : Bool = false,
+  /// §464: the reference slot every block's reference resolves to. The
+  /// frame header's seven ref_frame_idx entries all point here.
+  ref_slot~ : Int32 = 0,
+  /// §464: the slot this frame's reconstruction refreshes. Defaults to
+  /// `ref_slot` (the pre-§464 shape).
+  refresh_slot~ : Int32 = -1,
 ) -> Result[
   (Bytes, FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]),
   String,
@@ -400,7 +406,7 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
   }
   let prepared = match
     refs.prepare_frame(
-      [0, 0, 0, 0, 0, 0, 0],
+      [ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot],
       seq.order_hint_bits,
       0,
       w,
@@ -431,15 +437,24 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
     Ok(t) => t
     Err(e) => return Err(e)
   }
+  let out_slot = if refresh_slot < 0 { ref_slot } else { refresh_slot }
+  if out_slot < 0 || out_slot > 7 {
+    return Err("av1 enc: refresh_slot must be 0..=7")
+  }
+  let ref_frame_idx : Array[Int32] = [
+    ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot,
+  ]
   let obu = match
     av1_enc_write_inter_frame_obu(seq, {
       ..Av1InterFrameEncConfig::default(),
       base_q_idx,
+      ref_frame_idx,
+      refresh_frame_flags: 1 << out_slot,
       tile_data: tile,
     }) {
     Ok(b) => b
     Err(e) => return Err(e)
   }
-  refs.refresh(prepared, 1)
+  refs.refresh(prepared, 1 << out_slot)
   Ok((obu, expected_y, expected_u, expected_v))
 }

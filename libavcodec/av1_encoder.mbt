@@ -26,6 +26,14 @@ pub struct Av1Encoder {
   refs : Av1RefmvsReferenceStore
   mut frames : Int32
   mut last_ref : Av1EncPlanes?
+  /// §464: the reconstructed picture in every reference slot (index =
+  /// the AV1 slot 0..7). `None` means the slot has never been refreshed.
+  /// This mirrors the decoder's reference-frame store so an inter frame
+  /// can predict from an older picture, not just the previous one.
+  slots : FixedArray[Av1EncPlanes?]
+  /// §464: which slot the most recent frame was written to (the "current"
+  /// reference); the next frame refreshes the following slot.
+  mut cur_slot : Int32
 }
 
 ///|
@@ -48,6 +56,8 @@ pub fn Av1Encoder::new(cfg : Av1SeqEncConfig) -> Av1Encoder raise {
     refs: av1_refmvs_reference_store_new(),
     frames: 0,
     last_ref: None,
+    slots: FixedArray::make(8, None),
+    cur_slot: 0,
   }
 }
 
@@ -71,6 +81,13 @@ pub fn Av1Encoder::encode_frame(
   /// skip_sad_pct~ paths for inter frames (the lambda is rd_lambda or
   /// 1000 when unset).
   rd_skip_pcts? : Array[Int32],
+  /// §464: which past reconstruction to predict from. 0 = the previous
+  /// frame (default, the pre-§464 behaviour); k = the picture encoded k
+  /// frames ago. The chosen picture's slot is what the frame header's
+  /// ref_frame_idx entries point at, so the decoder resolves the same
+  /// picture. Values beyond the retained history fall back to the oldest
+  /// available slot.
+  ref_age~ : Int32 = 0,
 ) -> Result[(Bytes, Av1EncPlanes), String] {
   let w = self.seq.width
   let h = self.seq.height
@@ -165,17 +182,37 @@ pub fn Av1Encoder::encode_frame(
       uv_stride: cw,
       v: expected_v,
     }
+    // §464: the key frame refreshes every slot in the decoder
+    // (refresh_mask 0xFF), so mirror that in the session's ring.
+    for i in 0..<8 {
+      self.slots[i] = Some(planes)
+    }
+    self.cur_slot = 0
     self.last_ref = Some(planes)
     return Ok((Bytes::from_array(out[:]), planes))
   }
-  // ---- Inter frames: the §449b full-residual pipeline. The encoder's
-  // reference = the previous frame's expected reconstruction (the
-  // decoder's slot 0 realizes it — validated by the frame's own
-  // exactness assertion in the tests).
-  let ref_p = match self.last_ref {
-    Some(p) => p
-    None => return Err("inter frame without a key frame")
+  // ---- Inter frames: the §449b full-residual pipeline. §464: the
+  // reference is `ref_age` frames back, taken from the session's slot
+  // store; the frame header's ref_frame_idx entries point at that slot
+  // so the decoder resolves the same picture.
+  let n_hist = if self.frames < 8 { self.frames } else { 8 }
+  if n_hist <= 0 {
+    return Err("inter frame without a key frame")
   }
+  // Walk back `ref_age` frames through the slot ring. cur_slot holds the
+  // most recent frame; slot k back is (cur_slot - k) mod 8.
+  let age = if ref_age < 0 { 0 } else { ref_age }
+  let capped = if age >= n_hist { n_hist - 1 } else { age }
+  let mut ref_slot = self.cur_slot - capped
+  while ref_slot < 0 {
+    ref_slot = ref_slot + 8
+  }
+  let ref_p = match self.slots[ref_slot] {
+    Some(p) => p
+    None => return Err("selected reference slot is empty")
+  }
+  // §464: the reconstruction lands in the slot after the current one.
+  let out_slot = (self.cur_slot + 1) % 8
   // §457: with `rd_lambda~`, pick the qindex that minimizes
   // lambda*SAD + bits*1000 over the candidate ladder (default when only
   // the lambda is given). The selector trial-encodes on a private refmvs
@@ -284,6 +321,8 @@ pub fn Av1Encoder::encode_frame(
       dz_pm~,
       skip_sad_pct=effective_skip,
       skip_uniform~,
+      ref_slot~,
+      refresh_slot=out_slot,
     )
   } else {
     av1_enc_write_me_res420_inter_frame_obu(
@@ -302,6 +341,8 @@ pub fn Av1Encoder::encode_frame(
       base_q_idx=q,
       range~,
       dz_pm~,
+      ref_slot~,
+      refresh_slot=out_slot,
     )
   }
   let (frame_obu, exp_y, exp_u, exp_v) = match result {
@@ -323,6 +364,11 @@ pub fn Av1Encoder::encode_frame(
     uv_stride: cw,
     v: exp_v,
   }
+  // §464: this frame's reconstruction lands in `out_slot`; the header's
+  // refresh_frame_flags and the decoder's reference store were set to the
+  // same slot, so the ring here and the decoder stay in lockstep.
+  self.cur_slot = out_slot
+  self.slots[out_slot] = Some(planes)
   self.last_ref = Some(planes)
   Ok((Bytes::from_array(out[:]), planes))
 }

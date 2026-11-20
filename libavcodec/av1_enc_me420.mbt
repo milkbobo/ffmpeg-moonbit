@@ -34,6 +34,11 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
   /// `ref_idx~` reference) resolves to this picture. Default 0 = the
   /// previous frame's slot, i.e. the pre-§463 single-reference behaviour.
   ref_slot~ : Int32 = 0,
+  /// §464: the slot this frame's reconstruction is written to
+  /// (refresh_frame_flags). Defaults to `ref_slot` (the pre-§464 shape);
+  /// a session that rings its slots passes the next slot here so a
+  /// prediction source and a refresh target can differ.
+  refresh_slot~ : Int32 = -1,
   /// §463: which reference index (dav1d 0..6) the blocks code. The frame
   /// header maps it to `ref_slot`, so any index resolves to the same
   /// picture; coding a non-LAST index exercises the ref tree.
@@ -325,7 +330,13 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
     Err(e) => return Err(e)
   }
   // §463: every ref_frame_idx entry maps to `ref_slot`, so whichever
-  // reference index the blocks code resolves to that picture.
+  // reference index the blocks code resolves to that picture. §464: the
+  // reconstruction refreshes `out_slot`, which may differ from the
+  // prediction source when the session rings its slots.
+  let out_slot = if refresh_slot < 0 { ref_slot } else { refresh_slot }
+  if out_slot < 0 || out_slot > 7 {
+    return Err("av1 enc: refresh_slot must be 0..=7")
+  }
   let ref_frame_idx : Array[Int32] = [
     ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot, ref_slot,
   ]
@@ -334,11 +345,12 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
       ..Av1InterFrameEncConfig::default(),
       base_q_idx,
       ref_frame_idx,
+      refresh_frame_flags: 1 << out_slot,
       tile_data: tile,
     }) {
     Ok(b) => b
     Err(e) => return Err(e)
   }
-  refs.refresh(prepared, 1)
+  refs.refresh(prepared, 1 << out_slot)
   Ok((obu, expected_y, expected_u, expected_v))
 }
