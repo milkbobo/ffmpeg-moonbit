@@ -17,6 +17,13 @@ fn main raise {
     println(
       "  [--skip-uniform]  allow non-zero-MV skip via NEWMV/NEARESTMV (§460)",
     )
+    println("  [--ref-age N]      predict from N frames back (§464)")
+    println(
+      "  [--rd-ref-ages L]  joint q×skip×ref-age search, e.g. 0,1,2 (§465)",
+    )
+    println(
+      "  [--rd-skip-pcts L] skip thresholds for the joint search, e.g. 50,100",
+    )
     return
   }
   let opts = parse_options(args[1:].to_owned())
@@ -46,13 +53,31 @@ fn main raise {
       uv_stride: cw,
       v,
     }
-    let encoded = if opts.rd_lambda < 0 {
+    // §465: the joint q × skip × reference-age search, when requested,
+    // overrides the individual selectors.
+    let encoded = if !opts.rd_ref_ages.is_empty() {
+      let pcts = if opts.rd_skip_pcts.is_empty() {
+        [opts.skip_pct]
+      } else {
+        opts.rd_skip_pcts
+      }
+      enc.encode_frame(
+        src,
+        base_q_idx=opts.qp,
+        range=opts.me_range,
+        rd_lambda=if opts.rd_lambda < 0 { 1000 } else { opts.rd_lambda },
+        rd_skip_pcts=pcts,
+        rd_ref_ages=opts.rd_ref_ages,
+        skip_uniform=opts.skip_uniform,
+      )
+    } else if opts.rd_lambda < 0 {
       enc.encode_frame(
         src,
         base_q_idx=opts.qp,
         range=opts.me_range,
         skip_sad_pct=opts.skip_pct,
         skip_uniform=opts.skip_uniform,
+        ref_age=opts.ref_age,
       )
     } else {
       enc.encode_frame(
@@ -62,6 +87,7 @@ fn main raise {
         rd_lambda=opts.rd_lambda,
         skip_sad_pct=opts.skip_pct,
         skip_uniform=opts.skip_uniform,
+        ref_age=opts.ref_age,
       )
     }
     let (pkt, exp) = match encoded {
@@ -102,6 +128,9 @@ fn main raise {
     "rd_lambda": opts.rd_lambda,
     "skip_pct": opts.skip_pct,
     "skip_uniform": opts.skip_uniform,
+    "ref_age": opts.ref_age,
+    "rd_ref_ages": opts.rd_ref_ages.length(),
+    "rd_skip_pcts": opts.rd_skip_pcts.length(),
     "output": opts.output,
   }
   println(summary.stringify())

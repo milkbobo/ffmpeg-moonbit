@@ -18,6 +18,15 @@ priv struct Options {
   me_range : Int32
   /// §460: allow non-zero-MV skip through the uniform motion chain.
   skip_uniform : Bool
+  /// §464: which past reconstruction to predict from (0 = previous frame,
+  /// k = k frames back). Negative means "unset" (use 0).
+  ref_age : Int32
+  /// §465: when non-empty, jointly choose q × skip × reference age by
+  /// trial encoding. Comma-separated ages, e.g. "0,1,2".
+  rd_ref_ages : Array[Int32]
+  /// §462/§465: comma-separated skip thresholds for the joint search,
+  /// e.g. "50,100". Empty means the caller's --skip-pct only.
+  rd_skip_pcts : Array[Int32]
 }
 
 ///|
@@ -41,7 +50,10 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--qp"
       | "--rd-lambda"
       | "--skip-pct"
-      | "--me-range" => {
+      | "--me-range"
+      | "--ref-age"
+      | "--rd-ref-ages"
+      | "--rd-skip-pcts" => {
         if values.contains(arg) {
           fail("encode-av1: repeated option \{arg}")
         }
@@ -97,6 +109,40 @@ fn parse_options(args : Array[String]) -> Options raise {
   if me_range < 0 || me_range > 1024 {
     fail("encode-av1: --me-range must be 0..=1024")
   }
+  let ref_age = number("--ref-age", 0)
+  if ref_age < 0 {
+    fail("encode-av1: --ref-age must be nonnegative")
+  }
+  // Comma-separated integer list, used by the joint RD search.
+  let int_list = fn(key : String) -> Array[Int32] raise {
+    let out : Array[Int32] = []
+    match values.get(key) {
+      None => ()
+      Some(s) =>
+        for part in s.split(",") {
+          let t = part.trim().to_owned()
+          if t != "" {
+            let v = @string.parse_int(t) catch {
+              _ => fail("encode-av1: \{key} expects comma-separated integers")
+            }
+            out.push(v)
+          }
+        }
+    }
+    out
+  }
+  let rd_ref_ages = int_list("--rd-ref-ages")
+  let rd_skip_pcts = int_list("--rd-skip-pcts")
+  for a in rd_ref_ages {
+    if a < 0 || a > 7 {
+      fail("encode-av1: --rd-ref-ages entries must be 0..=7")
+    }
+  }
+  for p in rd_skip_pcts {
+    if p < 0 || p > 100 {
+      fail("encode-av1: --rd-skip-pcts entries must be 0..=100")
+    }
+  }
   {
     input,
     output,
@@ -107,6 +153,9 @@ fn parse_options(args : Array[String]) -> Options raise {
     skip_pct,
     me_range,
     skip_uniform: values.contains("--skip-uniform"),
+    ref_age,
+    rd_ref_ages,
+    rd_skip_pcts,
   }
 }
 
