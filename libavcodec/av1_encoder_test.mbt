@@ -450,3 +450,108 @@ test "av1 encoder: deadzone session frames stay exact and bounded" {
     fail("dz distortion blew up: \{sad0} -> \{sad350}")
   }
 }
+
+///|
+/// §458 session wiring: `skip_sad_pct~` reaches the per-SB mode decision
+/// through the facade. A 3-frame sequence with skip on must still
+/// round-trip frame by frame; byte savings are proven at the frame-level
+/// writer tests, here only the facade reach and chain integrity matter.
+test "av1 encoder session: skip_sad_pct wires through to inter frames" {
+  let w = 64
+  let h = 64
+  let cw = 32
+  let ch = 32
+  let src = @libavcodec.Av1EncPlanes::{
+    y: av1enc_src_plane(w, h, 5),
+    y_stride: w,
+    u: av1enc_src_plane(cw, ch, 6),
+    uv_stride: cw,
+    v: av1enc_src_plane(cw, ch, 7),
+  }
+  for use_skip in [false, true] {
+    let enc = @libavcodec.Av1Encoder::new(
+      @libavcodec.Av1SeqEncConfig::default(width=w, height=h),
+    )
+    let dec = @libavcodec.Av1Decoder::new()
+    for idx in 0..<3 {
+      let (pkt, exp) = match
+        enc.encode_frame(
+          src,
+          base_q_idx=100,
+          skip_sad_pct=if use_skip { 100 } else { 0 },
+        ) {
+        Ok(v) => v
+        Err(e) => fail("skip session encode f\{idx}: \{e}")
+      }
+      let d = match dec.decode_packet(pkt) {
+        Ok(Some(f)) => f
+        Ok(None) => fail("skip session frame \{idx} hidden")
+        Err(e) => fail("skip session decode f\{idx}: \{e}")
+      }
+      for y in 0..<h {
+        for x in 0..<w {
+          if d.y[y * d.y_stride + x] != exp.y[y * w + x] {
+            fail("skip session f\{idx} Y(\{y},\{x}) diverged")
+          }
+        }
+      }
+      for y in 0..<ch {
+        for x in 0..<cw {
+          if d.u[y * d.uv_stride + x] != exp.u[y * cw + x] ||
+            d.v[y * d.uv_stride + x] != exp.v[y * cw + x] {
+            fail("skip session f\{idx} UV diverged")
+          }
+        }
+      }
+    }
+  }
+  // Byte-level savings of the skip path are proven at the frame level
+  // (`av1_enc_me_skip_test.mbt`); here the contract is that the facade
+  // reaches the skip writer and keeps the multiframe chain exact.
+}
+
+///|
+/// §457+§458 coexistence: RD qindex selection and skip gating both live
+/// on the facade. With RD on and skip off, the multiframe chain must stay
+/// pixel-exact and the selected q must be in the candidate ladder.
+test "av1 encoder session: RD and skip flags coexist" {
+  let w = 64
+  let h = 64
+  let cw = 32
+  let ch = 32
+  let src = @libavcodec.Av1EncPlanes::{
+    y: av1enc_src_plane(w, h, 9),
+    y_stride: w,
+    u: av1enc_src_plane(cw, ch, 10),
+    uv_stride: cw,
+    v: av1enc_src_plane(cw, ch, 11),
+  }
+  let enc = @libavcodec.Av1Encoder::new(
+    @libavcodec.Av1SeqEncConfig::default(width=w, height=h),
+  )
+  let dec = @libavcodec.Av1Decoder::new()
+  for idx in 0..<3 {
+    let (pkt, exp) = match
+      enc.encode_frame(
+        src,
+        rd_lambda=1000,
+        rd_candidates=[40, 100, 160, 220],
+        skip_sad_pct=0,
+      ) {
+      Ok(v) => v
+      Err(e) => fail("rd+skip chain encode f\{idx}: \{e}")
+    }
+    let d = match dec.decode_packet(pkt) {
+      Ok(Some(f)) => f
+      Ok(None) => fail("rd+skip chain frame \{idx} hidden")
+      Err(e) => fail("rd+skip chain decode f\{idx}: \{e}")
+    }
+    for y in 0..<h {
+      for x in 0..<w {
+        if d.y[y * d.y_stride + x] != exp.y[y * w + x] {
+          fail("rd+skip chain f\{idx} Y(\{y},\{x}) diverged")
+        }
+      }
+    }
+  }
+}

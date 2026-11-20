@@ -16584,4 +16584,24 @@ RD 4/4；`moon check --deny-warn` 0、fmt/info 已跑。
 **边界**：只对全零 MV 触发，NEARMV skip 未做；SAD 阈值启发式未与 §457
 RD 联动；未接 `Av1Encoder::encode_frame` 门面。下一片候选：接 session
 门面（`skip_sad_pct~`）、NEARMV skip、skip 与 RD 统一模式选择。
-交接 `AGENT_HANDOFF_2026-11-20_AV1_SB_SKIP.md`，**未提交**。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_SB_SKIP.md`。
+
+> §446–§458 已于 2026-11-20 一并提交 `c69b909`（上文 §457/§458 的
+> 「未提交」为该切片记录时点状态，现已固化）。
+
+## §459 AV1 编码器门面接线 + CLI（2026-11-20）
+
+把 §457/§458 的帧级能力接进公开门面并新增 CLI：
+
+- `Av1Encoder::encode_frame` 增可选 `skip_sad_pct?`（>0 时 inter 帧走
+  §458 skip 写端；缺省全残差链，逐字节行为不变）。§457 的 `rd_lambda?`/
+  `rd_candidates?` 门面参数本已在 c69b909 引入，本片补 RD+skip 共存测试。
+- 新 CLI `cmd/encode-av1/`：8-bit 4:2:0 planar YUV（64 倍数几何）→ 裸
+  AV1 OBU 流；`--qp`/`--rd-lambda`/`--skip-pct`/`--me-range`；每帧用
+  自家解码器逐像素自检（wasm-only 契约，无外部 oracle）+ JSON 汇总。
+
+**验证**：session 8/8（原 6 + skip 门面接线 + RD/skip 共存多帧链）；
+RD 4/4、skip 5/5、inter 24/24 回归；CLI 64×64 三种配置端到端通过；
+`moon check --deny-warn` 0、fmt/info 已跑。
+**边界**：CLI 仅 8-bit 4:2:0/64 倍数；RD+skip 联合代价、NEARMV skip、
+高位深编码未做。交接 `AGENT_HANDOFF_2026-11-20_AV1_FACADE_CLI.md`。

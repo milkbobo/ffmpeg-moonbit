@@ -64,6 +64,7 @@ pub fn Av1Encoder::encode_frame(
   dz_pm~ : Int32 = 0,
   rd_lambda? : Int32,
   rd_candidates? : Array[Int32],
+  skip_sad_pct? : Int32,
 ) -> Result[(Bytes, Av1EncPlanes), String] {
   let w = self.seq.width
   let h = self.seq.height
@@ -205,23 +206,52 @@ pub fn Av1Encoder::encode_frame(
     }
     None => base_q_idx
   }
-  let result = av1_enc_write_me_res420_inter_frame_obu(
-    self.seq,
-    self.refs,
-    src.y,
-    src.y_stride,
-    src.u,
-    src.uv_stride,
-    src.v,
-    ref_p.y,
-    ref_p.y_stride,
-    ref_p.u,
-    ref_p.uv_stride,
-    ref_p.v,
-    base_q_idx=q,
-    range~,
-    dz_pm~,
-  )
+  // §458: when `skip_sad_pct~` is positive, static zero-MV SBs take the
+  // GLOBALMV skip path (no residual token chain). Both entries return the
+  // same (obu, exp_y, exp_u, exp_v) shape; the skip one differs only in
+  // the per-SB mode decision and the exact reconstruction it implies.
+  let use_skip = match skip_sad_pct {
+    Some(pct) => pct > 0
+    None => false
+  }
+  let result = if use_skip {
+    av1_enc_write_me_skip420_inter_frame_obu(
+      self.seq,
+      self.refs,
+      src.y,
+      src.y_stride,
+      src.u,
+      src.uv_stride,
+      src.v,
+      ref_p.y,
+      ref_p.y_stride,
+      ref_p.u,
+      ref_p.uv_stride,
+      ref_p.v,
+      base_q_idx=q,
+      range~,
+      dz_pm~,
+      skip_sad_pct=skip_sad_pct.unwrap(),
+    )
+  } else {
+    av1_enc_write_me_res420_inter_frame_obu(
+      self.seq,
+      self.refs,
+      src.y,
+      src.y_stride,
+      src.u,
+      src.uv_stride,
+      src.v,
+      ref_p.y,
+      ref_p.y_stride,
+      ref_p.u,
+      ref_p.uv_stride,
+      ref_p.v,
+      base_q_idx=q,
+      range~,
+      dz_pm~,
+    )
+  }
   let (frame_obu, exp_y, exp_u, exp_v) = match result {
     Ok(v) => v
     Err(e) => return Err(e)
