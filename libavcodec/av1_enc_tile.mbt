@@ -77,7 +77,18 @@ fn av1_enc_txb_dc_only(
   /// 0x40 ("nothing coded") into the slots it covers. The chroma branch
   /// of `av1_get_skip_ctx` distinguishes exactly these two.
   ctx_init~ : Int32 = 0,
-) -> Unit {
+  /// The dc token magnitude 1..=3 (the eob-position base_tok trick:
+  /// symbol tok−1; larger magnitudes need the br/golomb chain).
+  tok~ : Int32 = 1,
+  /// 0 positive, 1 negative.
+  sign~ : Int32 = 0,
+) -> Result[Unit, String] {
+  if tok < 1 || tok > 3 {
+    return Err("av1 enc: dc token must be 1..=3 (br chain is §443 land)")
+  }
+  if sign < 0 || sign > 1 {
+    return Err("av1 enc: dc sign must be 0 or 1")
+  }
   let lw = av1_txfm_lw(tx)
   let lh = av1_txfm_lh(tx)
   let a = FixedArray::make(1 << lw, ctx_init)
@@ -102,10 +113,21 @@ fn av1_enc_txb_dc_only(
     5 => enc.encode_symbol_adapt(cdf.eob_bin_512, chroma * 16, 9, 0)
     _ => enc.encode_symbol_adapt(cdf.eob_bin_1024, chroma * 16, 10, 0)
   }
-  // dc-only path: eob_base_tok 0 at the dc-only ctx (0) -> dc_tok = 1.
-  enc.encode_symbol_adapt(cdf.eob_base_tok, (t_dim_ctx * 2 + chroma) * 16, 2, 0)
-  // dc_sign = 0 (positive; fresh sign context -> ctx 0).
-  enc.encode_bool_adapt(cdf.dc_sign, (chroma * 3 + dcs_ctx) * 2, 0)
+  // dc-only path: eob_base_tok at the dc-only ctx (0); the eob-position
+  // trick maps symbol tok−1 back to the token value.
+  enc.encode_symbol_adapt(
+    cdf.eob_base_tok,
+    (t_dim_ctx * 2 + chroma) * 16,
+    2,
+    tok - 1,
+  )
+  // dc_sign (fresh sign context -> ctx 0).
+  enc.encode_bool_adapt(
+    cdf.dc_sign,
+    (chroma * 3 + dcs_ctx) * 2,
+    sign.reinterpret_as_uint(),
+  )
+  Ok(())
 }
 
 ///|
@@ -175,9 +197,18 @@ pub fn av1_enc_write_minimal_residual_tile(
     },
     0,
   )
-  av1_enc_txb_dc_only(enc, cdf, tx_y, 0, bs0)
-  av1_enc_txb_dc_only(enc, cdf, tx_uv, 1, bs0, ctx_init=0)
-  av1_enc_txb_dc_only(enc, cdf, tx_uv, 1, bs0, ctx_init=0)
+  match av1_enc_txb_dc_only(enc, cdf, tx_y, 0, bs0) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  match av1_enc_txb_dc_only(enc, cdf, tx_uv, 1, bs0, ctx_init=0) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  match av1_enc_txb_dc_only(enc, cdf, tx_uv, 1, bs0, ctx_init=0) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
   Ok(enc.done())
 }
 
@@ -288,6 +319,23 @@ pub fn av1_enc_write_directional_tile(
 }
 
 ///|
+
+///|
+/// The decoder's res_ctx sign field (decode_coefs): dc_sign_level
+/// starts at 1<<6 and is only rewritten when the dc token is nonzero —
+/// (dc_sign - 1) & 128. A dc-less leaf (ac-only) therefore publishes
+/// 1<<6, not the dc-positive 1<<7.
+fn av1_enc_res_sign_field(dc_tok : Int32, dc_sign : Int32) -> Int32 {
+  if dc_tok == 0 {
+    1 << 6
+  } else if dc_sign == 0 {
+    1 << 7
+  } else {
+    0
+  }
+}
+
+///|
 /// §443 token-domain transform-block writer — the write-side twin of the
 /// decoder's `av1_decode_coefs` for the DCT_DCT (tx_class 0, is_1d 0)
 /// non-lossless path with seg_id 0 and a nonzero qidx. `toks` holds one
@@ -314,6 +362,11 @@ fn av1_enc_txb_tokens(
   signs : FixedArray[Int32],
   a : FixedArray[Int32],
   l : FixedArray[Int32],
+  /// When true the caller already wrote the coef_skip bool (and any
+  /// txtp bits the frame's txtp derivation needs) — the chain starts at
+  /// the eob symbols (inter TX_32X32 luma inserts a txtp_inter3 bool
+  /// between the two).
+  coef_skip_written~ : Bool = false,
 ) -> Unit {
   let lw = av1_txfm_lw(tx)
   let lh = av1_txfm_lh(tx)
@@ -323,11 +376,19 @@ fn av1_enc_txb_tokens(
   let t_dim_ctx = av1_txfm_ctx(tx)
   let sctx = av1_get_skip_ctx(tx, bs, a, 0, l, 0, chroma == 1, 1, 1)
   // all_skip = 0: read residuals. (txtp: DCT_DCT derives with no bits on
-  // every caller — >= 32x32 luma by the txfm_max+intra rule, chroma via
+  // every caller — >= 32x32 luma by the txfm_max+intra >= 4 rule, chroma via
   // the DC_PRED uv-mode LUT.)
-  enc.encode_bool_adapt(cdf.coef_skip, (t_dim_ctx * 13 + sctx) * 2, 0)
+  if !coef_skip_written {
+    enc.encode_bool_adapt(cdf.coef_skip, (t_dim_ctx * 13 + sctx) * 2, 0)
+  }
   // eob = last nonzero scan position.
-  let scan_len = 1 << (lw + lh)
+  // The coefficient count: (4 << lw) x (4 << lh) pixels — lw counts
+  // 4px units, so the naive 1 << (lw + lh) undercounts by 4^2 (the
+  // §443 specs only used the first 64 scan positions and never hit
+  // this; full-residual tokens past scan position 63 were silently
+  // dropped by the eob scan while the expected reconstruction kept
+  // them).
+  let scan_len = (4 << lw) * (4 << lh)
   let mut eob = 0
   let mut i = scan_len - 1
   while i > 0 {
@@ -384,12 +445,19 @@ fn av1_enc_txb_tokens(
       (if eob > 4 << szctx { 1 } else { 0 })
     let tok_e = toks[eob]
     let lvl_tok_e = if tok_e <= 2 {
-      enc.encode_symbol_adapt(cdf.eob_base_tok, eob_cdf_base + ctx_e * 4, 2, tok_e - 1)
+      enc.encode_symbol_adapt(
+        cdf.eob_base_tok,
+        eob_cdf_base + ctx_e * 4,
+        2,
+        tok_e - 1,
+      )
       tok_e * 0x41
     } else {
       enc.encode_symbol_adapt(cdf.eob_base_tok, eob_cdf_base + ctx_e * 4, 2, 2)
       let bctx = if (x_e | y_e) > 1 { 14 } else { 7 }
       enc.encode_hi_tok(cdf.br_tok, hi_cdf_base + bctx * 4, tok_e)
+      // hi_tok caps at 15 (the escape symbol); the golomb expansion is
+      // consumed later and never enters the levels byte.
       av1_imin(tok_e, 15) + (3 << 6)
     }
     levels[x_e * stride + y_e] = lvl_tok_e.to_byte()
@@ -427,9 +495,11 @@ fn av1_enc_txb_tokens(
       enc.encode_symbol_adapt(cdf.base_tok, lo_cdf_base, 3, dc_tok)
     } else {
       enc.encode_symbol_adapt(cdf.base_tok, lo_cdf_base, 3, 3)
-      let mag = (levels[0 * stride + 1].to_int() +
-        levels[1 * stride + 0].to_int() +
-        levels[1 * stride + 1].to_int()) &
+      let mag = (
+          levels[0 * stride + 1].to_int() +
+          levels[1 * stride + 0].to_int() +
+          levels[1 * stride + 1].to_int()
+        ) &
         63
       let bctx = if mag > 12 { 6 } else { (mag + 1) >> 1 }
       enc.encode_hi_tok(cdf.br_tok, hi_cdf_base + bctx * 4, dc_tok)
@@ -722,7 +792,12 @@ pub fn av1_enc_write_modes_tile(
     let x8 = (sbx & 31) >> 1
     let y8 = (sby & 31) >> 1
     let c2 = part_ctx(2, x8, y8)
-    enc.encode_symbol_adapt(cdf.partition, (2 * 4 + c2) * 16, count2, av1_partition_none)
+    enc.encode_symbol_adapt(
+      cdf.partition,
+      (2 * 4 + c2) * 16,
+      count2,
+      av1_partition_none,
+    )
     part_write_back(2, x8, y8, av1_partition_none)
     let sctx = a_skip[sbx] + l_skip[sby]
     enc.encode_bool_adapt(cdf.skip, sctx * 2, 1)
@@ -730,7 +805,12 @@ pub fn av1_enc_write_modes_tile(
     // the 13 modes onto 5 buckets; base (above*5 + left) * 16).
     let mctx = av1_intra_mode_context[a_mode[sbx]].to_int() * 5 +
       av1_intra_mode_context[l_mode[sby]].to_int()
-    enc.encode_symbol_adapt(cdf.kfym, mctx * 16, av1_n_intra_pred_modes - 1, y_mode)
+    enc.encode_symbol_adapt(
+      cdf.kfym,
+      mctx * 16,
+      av1_n_intra_pred_modes - 1,
+      y_mode,
+    )
     // Y angle delta: only for the directional modes V..VL (1..=8), 6
     // symbols, base (mode - V_PRED) * 8.
     if y_mode >= av1_vert_pred && y_mode <= av1_vert_left_pred {

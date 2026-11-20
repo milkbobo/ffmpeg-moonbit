@@ -502,7 +502,9 @@ test "av1 tile enc: ac tokens decode to a non-uniform residual" {
     }
   }
   if min_v == max_v {
-    fail("block 0 stayed uniform (\{v00}) — ac tokens did not shape the residual")
+    fail(
+      "block 0 stayed uniform (\{v00}) — ac tokens did not shape the residual",
+    )
   }
   // The residual moved the block off the flat prediction.
   if min_v == 128 && max_v == 128 {
@@ -524,7 +526,11 @@ test "av1 tile enc: ac tokens decode to a non-uniform residual" {
     }
   }
   // Determinism.
-  let out2 = av1tile_tokens_decode(av1tile_ac_spec().0, av1tile_ac_spec().1, 200)
+  let out2 = av1tile_tokens_decode(
+    av1tile_ac_spec().0,
+    av1tile_ac_spec().1,
+    200,
+  )
   if out.y != out2.y {
     fail("two runs decoded differently")
   }
@@ -613,7 +619,9 @@ test "av1 tile enc: br_tok, golomb and eob ctx-2 coverage" {
     }
   }
   if min_v == max_v {
-    fail("block 0 stayed uniform — the ac/golomb chain did not shape the residual")
+    fail(
+      "block 0 stayed uniform — the ac/golomb chain did not shape the residual",
+    )
   }
   // Determinism.
   let toks2 = FixedArray::make(1024, 0)
@@ -652,7 +660,8 @@ fn av1tile_modes_decode(
     Ok(s) => s
     Err(e) => fail(e)
   }
-  let tile = match @libavcodec.av1_enc_write_modes_tile(blocks, base_q_idx=qidx) {
+  let tile = match
+    @libavcodec.av1_enc_write_modes_tile(blocks, base_q_idx=qidx) {
     Ok(b) => b
     Err(e) => fail(e)
   }
@@ -709,7 +718,9 @@ test "av1 tile enc: modes tile constant propagation frame" {
   for row in 0..<64 {
     for col in 0..<64 {
       if out2.y[row * out2.y_stride + col] != 129 {
-        fail("Y(\{row},\{col}) = \{out2.y[row * out2.y_stride + col]} (want 129)")
+        fail(
+          "Y(\{row},\{col}) = \{out2.y[row * out2.y_stride + col]} (want 129)",
+        )
       }
     }
   }

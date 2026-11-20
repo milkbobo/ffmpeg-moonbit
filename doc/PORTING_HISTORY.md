@@ -15826,3 +15826,762 @@ CLI `--chroma 400`。默认 4:2:0 行为与全部钉值不变。
   SAO merge flag。
 
 - 后续切片预告：HEVC 编码器收尾（多参考/temporal MVP）或转其他模块。
+
+## §446 AV1 编码器 inter 开工——帧头 INTER 分支 + 全 GLOBALMV 帧（2026-11-19）
+
+§438a-§445 的 key frame 全链之后，inter 线第一片（两半）：
+
+### §446a 帧头 inter 最小分支
+
+- `libavcodec/av1_enc_frame.mbt`：新增 `Av1InterFrameEncConfig`
+  （q/lfs/refresh_frame_flags/ref_frame_idx[7]/tiles）与
+  `av1_enc_write_inter_frame_obu`。位序逐位镜像解码端
+  `av1_parse_frame_header` INTER 分支（§438b 序列形状下）：
+  type/show/err-res/cdf/sct(f=2)/override=0 → primary_ref f(3)=7 →
+  refresh f(8) → ref_frame_idx f(3)×7 → render diff 0 →
+  allow_high_precision 0 → filter 非 switchable + EIGHTTAP →
+  motion-mode 非 switchable → disable_frame_end 0 → tile_info →
+  quant → seg/dq/lf 全关零 → tx_mode=LARGEST → **reference_select 0**
+  → reduced_tx_set 0 → **global motion 7 个 identity 位**（不被 seq
+  门控，key 帧没有）。
+- 重构：key 头写端的 tile_info/quant/lf 三块抽成共享私有函数
+  （`av1_enc_write_tile_info/quant_params/lf_params`），OBU 组装抽成
+  `av1_enc_assemble_frame_obu`，key/inter 两个包装器复用；key 流
+  位不变（7/7 回归绿）。
+- 守卫：inter 头写端拒绝 still-picture（reduced）序列、frame-id/
+  order-hint/superres/CDEF/LR/warp/film-grain 序列、sct/imv ≠ 2/2、
+  refresh 越界、ref_frame_idx 非 7 项或越界。
+
+### §446b 全 GLOBALMV skip 帧（最小合法 inter 流）
+
+- `libavcodec/av1_enc_inter_tile.mbt`：
+  `av1_enc_write_globalmv_skip_tile` 每块只写 6 个符号——partition
+  NONE、skip=1、intra=inter 位（skip=1 时解码端仍读！）、LAST 参考树
+  3 个零 bool（cdf.ref_ 行 0/2/3）、newmv_mode=1、globalmv_mode=0。
+  MC=块拷贝（identity GM 零 MV）、skip 压掉 var-tx 与残差。
+- **镜像法**（§440a 模式，全部直接驱动解码器自己的代码）：CDF 轨迹
+  （av1_cdf_copy_defaults）、skip/partition 上下文 a/l 银行（a_idx 按
+  128px 列切换、l 每 SB 行重置）、inter 邻居状态
+  （Av1InterTileState top/left，帧首 intra=false、每行 reset_left）、
+  refmvs 帧状态（Av1RefmvsReferenceStore：key 后
+  refresh_without_mvs(0xFF)，inter 前 prepare_frame →
+  find/splat_single 与解码端逐调用同轨迹）。
+- `av1_enc_write_globalmv_inter_frame_obu`：帧级入口（几何需 64 倍
+  数），组装头+tile，并把 prepared 刷回 store 槽 0（refresh=1）。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` 7/7：§446a 写→parse 字段恒等（refresh/
+  refs/lf 对/多 tile 回收/校验拒绝/still-picture 拒绝）4 项；
+  §446b 像素 round-trip 3 项——key(双色)+inter 两包经
+  `Av1Decoder::decode_packet`（完整 session 驱动：参考槽/prepared
+  refmvs/MC），inter 输出与 key 输出逐像素相等（128x64 / 64x128 /
+  128x128 四 SB 双银行双行），非 64 倍数几何拒绝。
+- AV1 编码器测试 38/38（frame 7 + tile 12 + seq 5 + msac 7 + inter 7）；
+  解码端 inter 夹具包 31/31；fmt/info/check 全绿。
+
+### 边界与下一步
+
+- 64 倍数几何 + 单 tile + 全 skip；残差链（skip=0 + §443 txb）与
+  MV 编码（NEWMV joint/class）留给 §447（整像素 ME）——平移序列
+  用残差承载差异的用例并入 §447。
+- 工作树既有 av1_enc_* M 文件为 fmt 漂移，随本片首次提交带走。
+
+## §447a AV1 编码器 NEWMV/NEARESTMV 写端 + 平移帧（2026-11-19）
+
+§446 之后 inter 线第二片：MV 编码链 + 整像素平移帧。
+
+### 写端（libavcodec/av1_enc_inter_tile.mbt 重构 + 新增）
+
+- 重构：抽出 `av1_enc_inter_skip_block`（逐块前缀：partition NONE /
+  skip=1 / intra=inter / LAST 参考树 3 bool → `motion~` 闭包 → publish
+  镜像）与 `av1_enc_inter_skip_frame_loop`（SB 行序列 + a_idx 银行步进
+  + 邻居/边缘镜像）。GLOBALMV 写端改走共享路径（字节不变，3 测试回归
+  绿）。
+- **MV 分量写端** `av1_enc_write_mv_component_diff`（镜像
+  read_mv_component_diff）：sign → class（0..10）→ class0 bool 或
+  cl 个 classN 位 → fp 符号。**mv_prec=0**（hp 关）：fp 读、hp 不读
+  （隐含 1）→ 幅度恒为偶（1/4 pel 倍数）；全像素分量 fp 恒 3。
+  class 分解：up = (mag−1)>>3，up≤1 走 class0，否则 cl=floor(log2 up)
+  （class cl 覆盖 up∈[2^cl, 2^(cl+1)−1]）。
+- **模式链**：NEARESTMV（newmv=1/globalmv=1/refmv=0，候选 =
+  fix_precision(cands[0])，等于目标即选）否则 NEWMV（newmv=0，
+  cnt>1 时 drl_bit 0，ref=cands[0]（cnt>1 原值/否则 fix），joint
+  f(3) + 非零分量）。首块全量 NEWMV，后续块 stack 顶部候选==目标 →
+  NEARESTMV 三 bool——两条路径一帧全覆盖。
+- 帧级入口 `av1_enc_write_translated_inter_frame_obu(seq, refs,
+  base_q_idx~, mv_y~, mv_x~)`（±1024 像素界，store 槽 0 刷回）。
+
+### MC 语义（测试断言依据）
+
+全像素 MV → `av1_mc_put_unscaled` 的 mx=my=0 分支 = `av1_mc_sample`
+**钳位拷贝**：out[y,x] = ref[clamp(y+dy)·stride + clamp(x+dx)]——整帧
+可精确断言（非仅内部区域）。奇位移时色度 mv>>4 出分数 → 8tap 滤波，
+只断言 luma。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **10/10**：新增 4——平移 (2,4) 与 (−4,−2)
+  全平面钳位拷贝恒等（128x64 / 64x128）、(7,−5) luma 恒等（class-2
+  两位分解）、±1024 越界拒绝；平移可见性断言（moved>0）。
+- AV1 编码器 41/41（frame 7 + tile 12 + seq 5 + msac 7 + inter 10）；
+  解码端 inter 夹具 31/31；fmt/info/check 绿（修掉 unused bs 警告）。
+
+### 边界与下一步
+
+- 全 skip + 均匀 MV + 单 tile + 64 倍数几何；§447b：残差链（skip=0 →
+  var-tx txfm_split bools + §443 txb tokens + lcoef/ccoef 镜像），
+  之后 §447c 整像素 SAD ME（HEVC §449 菱形搬移 + 编码端参考图存储）。
+
+## §447b AV1 编码器 inter 残差链——skip=0 零残差（2026-11-19）
+
+§447a 之后：skip=0 的 inter 块走残差语法（全零系数），验证 var-tx 树 +
+系数上下文链。
+
+### 写端（libavcodec/av1_enc_inter_tile.mbt）
+
+- `av1_enc_inter_skip_block` 增 `skip~`（skip 位值 + 边沿写回）与
+  `tail~`（模式链后的残差符号闭包，默认空——skip=1 压掉）。
+- `av1_enc_write_uniform_motion` 从 §447a 闭包提为共享函数（字节不变）。
+- **`av1_enc_write_newmv_zero_residual_tile`**（`mono~` 支持单色）：每块
+  在模式链后写——①var-tx split 位（TX_MODE_LARGEST + skip=0 → 一棵
+  read_tx_tree：cat=2·(4−txfm_max)−depth，a/l 位比较 lw/lh；写 0 不分裂
+  → 叶填 a.tx/l.tx=lw）②luma all_skip（coef_skip=1 @
+  (t_dim_ctx·13+av1_get_skip_ctx)·2）③色度两平面 all_skip（uvtx=
+  TX_32X32，base=pl·32+(b4>>ss)）。
+- **新增镜像**：a.tx/l_tx（初值 4=TX_64X64；skip=1 块 switchable 填
+  bw_lw=4 同值——§446b/§447a 不镜像无误因恒 4）、lcoef/ccoef a/l 银行
+  （0x40「无系数」；all_skip 的 res_ctx 返回值恰 0x40，与 skip=1 快路径
+  的直填一致）；l 变体经 frame loop 新增 `on_row~` 每 SB 行重置
+  （reset_keyframe 语义）。
+- 帧级入口 `av1_enc_write_translated_inter_frame_obu` 增 `skip~`。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **11/11**：新增 skip0 用例——同参考两帧
+  （skip=1 vs skip=0）：解码输出同为钳位平移恒等（all_skip 无残差），
+  **字节必须不同且 skip=0 不短**（var-tx 位 + 3 个 all_skip 位真实在
+  流里）；64x128 双行验证 on_row 重置。修一处测试 bug（新解码器实例无
+  序列头 → 复用同一 Av1Decoder）。
+- 编码器 42/42、inter 夹具 31/31、fmt/info 绿。
+
+### 边界与下一步
+
+- 零系数 only；真残差（fdct+量化+§443 token 化）是 §447c ME 的前置或
+  并入（HEVC §449 先例：整像素 ME + 残差承载）。all_skip 之外的 eob/
+  token 链写端已在 §443 就绪（av1_enc_txb_tokens），缺的是 inter 预测
+  残差的量化/token spec 生成。
+
+## §447c AV1 编码器整像素 ME + 逐块 dc-token 残差（2026-11-19）
+
+§447b 之后 inter 线第四片：编码器首次「看像素做决策」。
+
+### 写端
+
+- `av1_enc_me.mbt`：**`av1_enc_me_fullpel_sad`**——每 64x64 SB 穷举
+  ±range 整像素 SAD，候代价镜像解码端 MC（`av1_mc_sample` 钳位读），
+  平局取更小位移（|dy|+|dx|→dy→dx，确定性）；+ 帧级入口
+  `av1_enc_write_me_dc_inter_frame_obu`。
+- `av1_enc_inter_tile.mbt`：**`av1_enc_write_me_dc_tile`**——逐 SB
+  `(mvs_y, mvs_x)`（各自走 uniform_motion：NEARESTMV 命中或 NEWMV 差分）
+  + luma txb：tok 0 → all_skip，tok 1..3+sign → dc-only（eob 位
+  base_tok 技巧 symbol=tok−1；dc_sign）。**系数上下文镜像跟
+  res_ctx**：all_skip 留 0x40，coded dc 留 `tok | (正号?1<<7:0)`
+  （decode_coefs 的 cul_level | (sign−1)&(2<<6)）。
+- `av1_enc_txb_dc_only` 增 `tok~`/`sign~`（返回 Result；key 侧调用
+  点同步）。
+
+### 语义入档（本轮排障）
+
+- **dc 重建 level 随 tx 尺寸不同**：tok1@qidx200 = TX_32X32 +21、
+  TX_64X64 +1（dequant/itx 增益按尺寸）——测试校准须同 tx。
+- **SAD 对分段常数内容的系统性歧义**：均匀块+恒定偏移下
+  (0,0) 常胜（偏移在常数区抵消）；偏移恰等于色调差时错位 MV 可
+  完全对齐。测试设计律：**位移放在有结构的块（SAD=0 严格最小）、
+  dc 偏移放在静态块且不经 ME**（mvs 直给）。真实编码器的对应解
+  是残差感知代价（后续率失真阶段）。
+- 工具坑复现：**heredoc 长内容被吞尾**（EOF 定位失败）——长追加
+  改用 Edit/Write 工具或 python 脚本。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **12/12**：ME 用例——§443 AC 结构 tile 为
+  key 顶块（非均匀断言），源=钳位平移(2,0) → ME 得 (2,0)/(0,0)，
+  me_dc 帧（异构 MV、零 token）解码**逐像素==源**；dc token 帧
+  （静态 MV 直给）±sign 两种，TX_64X64 校准 level 后 SB0 整块精确
+  抬升/降低、SB1 不动。
+- 编码器 43/43（7+12+5+7+12）、inter 夹具 31/31、fmt/info 绿
+  （仅既有 v128 unused 警告）。
+
+### 边界与下一步
+
+- dc-only token 1..3；完整残差（fdct + 全 token 化）与率失真代价、
+  NEARMV/drl>0、帧内 intra 块（y_mode 上下文）、分数 MV（§448）为
+  后续切片。
+
+## §448 AV1 编码器分数 MV——半像素均匀位移 + ME 精化（2026-11-20）
+
+§447c 之后 inter 线第五片：1/8-pel MV 写端 + 半像素搜索。
+
+### 写端
+
+- `av1_enc_inter_tile.mbt`：`av1_enc_write_uniform8_skip_tile` 核心
+  （显式 1/8-pel target；**分量须偶**——hp 关；±8192 界），全像素
+  `av1_enc_write_newmv_skip_tile` 改薄包装，新增
+  `av1_enc_write_subpel8_skip_tile`。
+- `av1_enc_me.mbt`：`av1_enc_write_subpel_inter_frame_obu`（帧级入口）
+  + **`av1_enc_mc_predict`**（解码端 `av1_mc_core.av1_mc_predict_plane`
+  的主包 re-export，黑盒测试/未来编码端预测共用）+
+  **`av1_enc_me_halfpel_refine`**——全像素结果周围 5 候选
+  （整数 + 四个半 pel）重打分：整像素候选=钳位拷贝、半 pel=双样点
+  均值、四分之一=四样点+2>>2（8-tap 核在半 pel 相位的钳位模型，
+  确定性廉价；端到端行为由 MC 核恒等测试钉住）；平局保整数 MV。
+  参数改名 refimg（`ref` 保留字警告）。
+
+### 语义入档
+
+- **半 pel MC 恒等**：mv8=4 → 解码端 8-tap 核逐像素等于编码器预测
+  （64x64 EIGHTTAP filter2d=0 直调对比）——写端无相位错位。
+- **混合位移的方向语义**：src=blend(上,下) 行 → MC 读 ref(y−0.5) →
+  **mv8=−4**（y−1 基 + fy 混合），符号别凭直觉写 +4。
+- 奇数 mv8 分量（1/8、1/16 pel 相位）在 hp=0 下**不可编码**（fp 隐含
+  1）——只到 1/4 pel；1/8 pel 需 §448b 开 hp（mv_prec=1，class0_hp/
+  classN_hp 位写端）。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **14/14**：半 pel 位移帧 vs 解码端 MC 核
+  逐像素恒等（av1_enc_mc_predict 包装）；ME 精化——水平阶跃内容
+  整数 (0,0) → 半 pel (−4,0)（blend 语义 + 方向修正后排障一轮）、
+  平坦内容平局保 (0,0)。
+- 编码器 45/45（7+12+5+7+14）、inter 夹具 31/31、fmt/info/check 绿
+  （仅既有 v128 警告）。
+
+### 边界与下一步
+
+- 均匀 MV + skip=1 + 全帧统一相位；后续：逐 SB 半 pel 精化并入
+  me_dc_tile（refine 输出直接喂 mvs_y/x）、1/8 pel 相位（hp 开）、
+  fdct 全残差、率失真代价。
+
+## §448b AV1 编码器半像素精化升级——真 MC 核打分 + me8 逐 SB 帧（2026-11-20）
+
+§448 之后的升级片：ME 精化从「混合模型近似」改为「真内核精确」，并接
+入逐 SB 1/8-pel MV 写端。
+
+### 写端
+
+- **`av1_enc_me_halfpel_refine` 重写**：5 候选（整数 + 四半 pel）每者
+  直接调 `av1_enc_mc_predict`（解码端 8-tap 核）对 SB 预测、SAD 对源
+  ——**代价与解码重建 bit 级一致 by construction**（SAD=0 的候选解码
+  像素恒等源）；混合模型版整体删除。平局仍保整数 MV（严格更优才替换）。
+- `av1_enc_write_me_dc_tile` 增 `mv8~` 参数（true = mv 数组已是 1/8-pel
+  单位；默认 ×8 全像素；两种模式都查偶分量/±8192 界）+ 帧级入口
+  **`av1_enc_write_me8_dc_inter_frame_obu`**。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **15/15**：refine 测试源改由 MC 核生成
+  （mv8=−4 整帧预测，旧版手混 blend 无法代表 8-tap 输出）；新增
+  me8 端到端——§443 结构 key，src=核预测(4,0)，整数搜索落在近旁 →
+  refine 恰中 (4,0) → me8 帧（零 token）解码**逐像素==源**。
+- 编码器 46/46（7+12+5+7+15）、inter 夹具 31/31、fmt/info 绿（me 文件
+  余 4 条为既有 v128 unused 警告计数口径，非本片引入）。
+
+### 语义入档
+
+- 混合模型（(a+b)>>1）无法代表 8-tap 半 pel 输出——任何用近似模型
+  打分的 ME 都可能选错相位；**ME 的子 pel 打分必须用解码器自己的
+  核**（dav1d/libvpx 同律）。
+- 全像素搜索 + 半 pel 精化的两段式成本：整数阶段钳位拷贝模型足够
+  （相位正确），子 pel 阶段才需要核。
+
+### 边界与下一步
+
+- 5 候选窗（整数±半 pel）；1/8 pel 相位（非偶分量）需 hp 开；
+  fdct 全残差、率失真代价、1/4 pel 相位精化（(2,0) 类）为后续。
+
+## §449a AV1 编码器全残差链——伪逆 fdct + 量化 + var-tx SPLIT token 化（2026-11-20）
+
+§448b 之后 inter 线第六片：**编码器首次携带真残差**（skip=0 + 全系数
+token 链），「看像素决策」从 MV 扩展到变换域。
+
+### 设计：伪逆 fdct（probe 解码端 itx 基）
+
+repo 无 AV1 正变换；不做移植——**直接测逆核**：对每个 scan 位置 p 以
+大系数（S=16384）跑一次解码端 `av1_itxfm_add`，得基向量 f_p（像素
+delta），正交基下 c_p = <R, f_p>×S/||f_p||²——**代价模型=重建模型
+by construction**（同核同输入 → 逐像素一致）。量化镜像 decode_coefs：
+dequant(t) = (tbl×t)>>dq_shift（dq_shift = t_dim_ctx−2 = 1
+@TX_32X32；表值 qidx100 dc=93/ac=112），t = round(c×scale/tbl)，
+golomb 24-bit 积界 + **cf_max 饱和镜像**。probe 缩放律：itx 末端
+(±0.5) 输出舍入是绝对误差 → S 必须 ≫ 1（16384 时 entry 误差 3%），
+同时中间值须避开 int16 行/列钳位（16384 时 max ~12k ✓）。
+
+### 写端（av1_enc_res_tile.mbt + av1_enc_fdct.mbt + me 入口）
+
+- **`av1_enc_write_me_res_tile`**：逐 SB mv8（uniform_motion）+
+  skip=0 尾部：var-tx **SPLIT**（TX_64X64 → 4×TX_32X32：TX_64X64 的
+  64 位 scan 表不存在，scan_3 已验证——根 split bool cat=0 + 4 叶
+  bool cat=1 + tx 银行填 lw）→ 4 条 luma TX_32X32 全 token 链
+  （all_skip 或 coef_skip(0) + **txtp_inter3 bool（inter TX_32X32 的
+  DCT_DCT 选择符，t_dim_min×2 基）** + §443 txb）→ 色度 all_skip×2。
+  **res_ctx 镜像** = min(cul,63)|(dc 正号?1<<7:0) 逐叶 publish（叶间
+  上下文依赖 BR 读 TR/BL ✓ 顺序 TL,TR,BL,BR 立即 publish）。
+- `av1_enc_txb_tokens` 增 `coef_skip_written~`（inter TX_32X32 在
+  coef_skip 与 eob 链之间插 txtp 位）。
+- 帧级入口 `av1_enc_write_me_res_inter_frame_obu(seq, refs, src,
+  src_stride, refimg, ref_stride, ...)`：ME（整像素+半 pel 精化）→
+  MC 预测 → 残差 → 量化 → 期望重建（同核 itx）一并返回。
+
+### 排障三根因（全链排障纪录）
+
+1. **`av1_enc_txb_tokens` 的 scan_len = 1<<(lw+lh) 漏位**：lw/lh 是
+   4px 单位对数，系数数应为 (4<<lw)×(4<<lh)——TX_32X32 少算 16 倍
+   （64 vs 1024），scan ≥64 的 token 被静默跳过而期望重建保留 →
+   像素分歧。§443 的 spec 恰好全在 ≤7 位置故从未暴露。
+2. **系数饱和未镜像**：decode_coefs 对每个 dequant 系数
+   `dq_sat = imin(dq, cf_max+sign)`（8-bit ±32768）——大 golomb
+   token 的 dq 远超此界，写端重建未饱和 → 与解码器输入不同。
+3. **probe 的 bd_max = 1<<30 灾难**：clip 常数按 (bd_max+1)<<7/<<5
+   推导，Int32 溢出 → 垃圾钳位界 → itx 输出恒为常数 1 → 基向量
+   全错 → 量化系数爆炸。bd_max 必须是合法位深上限（4095）。
+   （附：总根因查找靠双侧系数 dump——解码端插桩 cf 轨迹 vs 写端
+   coeff 数组，一行 (868,−168000) vs (868,−32768) 定位饱和缺失，
+   再由恒定 flat=1 锁定 bd_max。）
+
+### 语义入档
+
+- **全路径 dc 增益 1/1024**（TX_32X32/64X64 实测 flat 响应），捷径
+  （eob=0）增益 ~1/150——eob=0/≥0 两路径增益不同是 dav1d 语义，
+  量化必须按所在路径的域换算。
+- inter TX_32X32 luma 的 txtp_inter3：写 1 = DCT_DCT（txfm_max==3
+  分支）；色度 inter 派生无位。
+- 混合符号律（复用 §447c）：位移给结构块、残差给静态块；本次内容
+  = 结构 tile 平移 + x-only overlay（对所有 dy 贡献相同）。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **18/18**：新增 4——零残差骨架（var-tx
+  split + all_skip 链 + 行重置，decode==src）；token 链隔离（手工
+  spec 七级二分 + 大 golomb/饱和，经 §443 key 路径独立验证）；
+  me_res e2e：**decode == pred+itx(dequant) 逐像素** + 残差改善断言
+  （sad(recon) < sad(pred)）。
+- AV1 编码器 **49/49**（7+12+5+7+18）、inter 解码夹具 31/31、
+  fmt/info/check 绿（仅既有 v128 警告）。
+
+### 边界与下一步
+
+- 4×TX_32X32 叶 + DCT_DCT only；64 位 scan 表缺失使 TX_64X64 全
+  残差不可用（如需再生成表）；fdct 的量化决策（死区/RD）未做——
+  token 即 round(c×scale/tbl)；色度残差、1/4 pel 相位、hp 开为后续。
+
+## §449b AV1 编码器色度残差——4:2:0 全平面 token 化（2026-11-20）
+
+§449a 之后 inter 线第七片：色度从 all_skip 升级为真残差（U/V 各一条
+TX_32X32 全 token 链），4:2:0 三平面全部 token 化。
+
+### 写端
+
+- `av1_enc_res_tile.mbt`：me_res tile 增 `chroma_toks~/chroma_signs~`
+  （per SB 2 平面 × 1024 scan 序；None = all_skip 向后兼容）——色度
+  txb：coef_skip（sctx 同 §447b 镜像）→ **无 txtp 位**（inter 色度
+  txtp = av1_get_uv_inter_txtp(TX_32X32, luma 0) 派生 DCT_DCT）→
+  av1_enc_txb_tokens(chroma=1) → res_ctx 逐平面 publish 到 ccoef 银行
+  （base = pl·32 + (b4>>ss)，ctw/cth 项）。
+- **chroma 上下文旗标 = 0/1 而非平面号**（U/V 都读 chroma=1——传
+  1+pl 会使 eob_bin_1024 基越界，本轮 OOB 根因）。
+- `av1_enc_me420.mbt` 帧级入口 `av1_enc_write_me_res420_inter_frame_obu`：
+  Y/U/V 六平面进出，色度 dequant 表 = fill_dq 的 udc/uac 槽（本帧头
+  dq_u_* = 0 → 同 ydc/yac），色度残差 = src − MC（**MC 几何全在 luma
+  4px 域**：bx4/bw4 与 luma 相同、仅 ss_h/ss_v=1——kernel 自行换算
+  平面尺寸与相位；传色度域尺寸会双重折半），期望重建三平面返回。
+
+### 语义入档
+
+- **色度 MC 的域律**：decoder 的 chroma 调用传 luma 的 bx4/bw4 和
+  luma width/height，仅 ss 旗标不同——kernel 的 plane_w =
+  (w+ss)>>ss 自行折半、相位 mv>>4 自行缩放；调用方给色度域尺寸会
+  错两次。
+- **色度质量律**：±8 overlay 在 qidx 80 的量化噪声与信号同量级
+  （res_ctx 3% 基误差 + dequant 舍入）——质量断言放宽为「不灾难性
+  变差」（精确性断言 decode==expected 才是强检查）。
+- SB 间 token 序：SB0 色度 all_skip 时解码端不进 decode_coefs（无
+  dump）——trace 对拍时注意 all_skip txb 不留痕。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **19/19**：新增 me_res420 e2e——4:2:0 三
+  平面 overlay，Y=结构 tile 平移 + x-only ramp、U/V=平坦 + 各自
+  overlay；**decode == expected 三平面逐像素**；质量断言 luma 严格
+  （res < pred）、色度放宽（3/2 + 4096）。
+- AV1 编码器 **50/50**（7+12+5+7+19）、inter 解码夹具 31/31、
+  fmt/info/check 绿（0 新警告）。
+
+### 边界与下一步
+
+- 色度 DCT_DCT only（CFL 是 intra 语义）；量化 RD/死区、1/4 pel、
+  hp、多参考/compound、CLI/生成器为后续。
+
+## §450 AV1 编码器多帧参考链——key + 2×inter 连续解码（2026-11-20）
+
+§449b 之后 inter 线第八片：序列级验证——一个 OBU 流（TD + seq + key +
+2×inter 帧包）连续过 `Av1Decoder::decode_packet`，参考链首次贯通。
+
+### 验证（即设计）
+
+- **Frame 1**：key 的 (2,0) 平移 + x-only 三平面 overlay → me_res420
+  （ME + 全残差）→ 解码 == 期望（Y 逐像素）✓；store 刷回 slot 0。
+- **Frame 2**：**参考 = frame 1 的重建**（编码端用入口返回的期望平面，
+  解码端 slot 0 = 解码等价——已由 frame 1 的精确性断言串联）：
+  src2 = frame1_recon 的 (0,−4) 平移 + 第二组 overlay → ME 找到
+  (0,−4) 相位 + 残差改善 ✓ → 解码 == 期望（Y/U/V）✓。
+- 断言：F1 精确 + F2 精确 + F2 残差改善（res < pred）——**参考链
+  （key 0xFF 刷新 → inter1 刷 slot 0 → inter2 prepare 读 slot 0）
+  端到端成立**。
+- 无新代码：刷新链/prepare/MC/量化机制 §446a-§449b 已全部就位，
+  本片是序列级装配验证（one-pass 通过）。
+- AV1 编码器 **51/51**（inter 20）、inter 解码夹具 31/31、fmt 绿。
+
+### 边界与下一步
+
+- 序列仍为手工装配（测试内联）；编码器序列 API（`Av1Encoder` 流式
+  结构：new/encode_frame，自动 key/inter 判定）与 CLI 待做。
+- key 帧仍为固定 tile（结构 AC + 平坦）——**intra DC_PRED + 伪逆
+  fdct 的 key 帧真编码**（DC 预测顺序模拟：av1_dc_gen/gen_left/
+  gen_top 可直接调用；4×32x32 + 色度 TX_16X16 + TX_16X16 基探针）
+  是下一片的主体。
+- 1/4 pel 相位、量化死区/RD、NEARMV/drl、子 64x64 分割按需。
+
+## §451 AV1 编码器序列成形——key 帧真编码 + Av1Encoder 流式 API（2026-11-20）
+
+§450 之后 inter 线第九片：**真正的编码器 API**——`Av1Encoder`（new/
+encode_frame），首帧自动 key（intra DC_PRED + 伪逆 fdct 真残差），后续
+帧自动 inter（ME + MC + 全残差），参考链内部维护。
+
+### 写端（av1_enc_key_tile.mbt + av1_encoder.mbt + fdct 泛化）
+
+- **fdct 基础设施按 tx 泛化**：`Av1EncItxBasis`（tx/n/g/basis/
+  probe_scale）+ `av1_enc_itx_basis(tx)`（probe：每 scan 位置以
+  S=16384 跑一次解码端 itx）+ `av1_enc_quantize_leaf/rescon_leaf`
+  （tx 参数化；dq_shift = t_dim_ctx−2：TX_32X32=1、TX_16X16=0）。
+- **key 帧 intra tile 写端** `av1_enc_write_intra_dc_tile`：4×32x32
+  DC_PRED + skip=0 + kfym/uv_mode DC_PRED + txsz（tctx 镜像）→
+  luma TX_32X32 全 token 链（**intra 无 txtp 位**：txfm_max+1≥4；
+  色度 intra LUT 派生也无位）+ 色度 TX_16X16 链×2（**暂 all_skip**，
+  chroma_tokens~ 旗标预留）。
+- **DC 预测顺序模拟**：块 0=128；块 1=左列均值；块 2=上行均值；块 3=
+  双邻——**dc_gen 初始值 = (w+h)>>1 = 32（非 64！）**，dc_gen_left/top
+  = h>>1 = 16——**±1 像素排障根因**；公式与 av1_dc_gen/gen_left/gen_top
+  逐字对齐。重建顺序写入 expected 平面驱动后续块的 DC（与解码器同序
+  by construction）。
+- **色度 sctx 槽数律**：解码器色度 sctx 读 (1<<lw) 槽——TX_16X16=4、
+  TX_32X32=8——写端上下文拷贝/读取必须同数（8 槽拷贝会把块 0 的
+  publish 读进块 1 的 ctx → coef_skip 槽 70 vs 68 失步）。
+- **色度 publish 宽度律**：解码器色度 publish = uv_t_dim_w 槽
+  （TX_16X16=4）——写端 8 槽 publish 会泄漏 res_ctx 到下一块的 sctx
+  窗口（同一失步）。
+- **序列 API** `av1_encoder.mbt`：`Av1Encoder::new(cfg)`（seq OBU +
+  几何检查）/ `encode_frame(src, base_q_idx~, range~)` → (packet,
+  expected planes)：首帧 key（多 tile §444 形状 + 0xFF 刷新），后续
+  inter（me_res420 + slot 0 刷新）；packet = TD + [seq] + frame OBU；
+  参考链内部维护（last_ref = 上一帧期望重建）。
+
+### 排障（本轮四根因）
+
+1. **SPLIT al-part 写回**：§441 已入档「解码端 SPLIT 不写回 al-part
+   ctx」——key tile 的 part_write_back(1, SPLIT) 污染子块 partition
+   ctx → 首 txb 即失步（§443 骨架无此写回 ✓）。
+2. **uv_mode nsym**：cfl allowed 时解码器 nsym = n_uv−1 = 13——写端
+   12 → 算术区间分歧（符号巧合相同但后续全错）。
+3. **色度 sctx 槽数**：解码器色度 sctx 读 (1<<lw) 槽（TX_16X16=4）——
+   写端 8 槽拷贝把块 0 的 publish 读进块 1 的 ctx。
+4. **色度 publish 宽度**：解码器 publish = uv_t_dim_w 槽（4）——写端
+   8 槽泄漏 res_ctx 到块 1 的 sctx 窗口（同 3 的另一面）。
+   （方法论：双侧 msac 符号+bool trace（E(base,n,s)/D(base,n) s=）+
+   逐符号 diff——一次定位到 uv_mode nsym；二次定位到色度 sctx/
+   publish。）
+
+### 语义入档
+
+- **intra 无 txtp 位**：TX_32X32 intra（txfm_max+1≥4）与色度 intra
+  LUT 均派生 DCT_DCT——key 帧残差链的符号序与 inter 同构（除 DC 预测
+  模拟与 var-tx 缺失）。
+- **DC 预测顺序模拟**：dc_gen 初始 (w+h)>>1（不是 w+h）——±1 像素
+  排障根因；边缘 = 重建平面（顺序写入的 expected）。
+- **色度 sctx/publish 槽数**：(1<<lw) 读 / uv_t_dim_w 写——TX 尺寸
+  决定，不可硬编码。
+- 色度 TX_16X16 token 链已实现但暂 all_skip（chroma_tokens~ 旗标）——
+  色度 sctx/publish 律修正后待下一片启用。
+
+### 验证
+
+- `av1_encoder_test.mbt` **3/3**：三帧序列（key + 2 inter，64x128）
+  全帧 decode == expected（Y/U/V）；multi-tile key（128x128, 2x2
+  tiles）decode == expected；量化 spec 经 §443 key 路径隔离验证。
+- AV1 编码器 **54/54**（7+12+5+7+20+3）、inter 解码夹具 31/31、
+  fmt/info/check 绿（0 新警告，插桩全清）。
+
+### 边界与下一步
+
+- 色度 TX_16X16 token 链启用（chroma_tokens 旗标已留）；量化死区/RD；
+  1/4 pel 相位、hp、NEARMV/drl、子 64x64 分割；CLI/MP4 封装。
+
+
+## §452 AV1 编码器 key 帧色度 token 启用——dc-less 叶 res_ctx 根因（2026-11-20）
+
+§451 留下的 `chroma_tokens~` 旗标翻正：key 帧 intra tile 的色度
+TX_16X16 链携带真 token（量化/重建/系数链全部启用），序列 API 的
+key 帧从此三平面全编码。
+
+### 写端
+
+- `av1_enc_write_intra_dc_tile`：`cuv_tbl` 单表拆 **`udc_tbl`/`uac_tbl`**
+  （fill_dq 语义：dq_u_* 偏移为零时色度 qindex = base_q_idx，但 dc/ac
+  两列不同——此前单表把 dc 列同时当 ac 列用）；`chroma_tokens~` 默认
+  true。量化/重建分支 §451 已就位（basis16 + dq_shift16=0 + 4 槽
+  sctx/publish），实际只差表拆分与默认值。
+- `Av1Encoder::encode_frame` key 路径接线 udc/uac 两表。
+
+### 根因：dc-less 叶的 res_ctx 符号位（四处统一修复）
+
+decode_coefs 的 `dc_sign_level` **初值 = 1<<6（64），仅当 dc token
+非零才改写为 (dc_sign−1)&128**。写端此前一律「dc 正号 → 1<<7」——
+**有 ac 无 dc 的叶（dc-less）发布 128，解码端是 64**，污染后续块的
+chroma/lcoef sctx → coef_skip CDF 槽错位 → 全链失同步。§449a-§451
+从未暴露：这些叶的内容恰使 dc 系数非零。本轮 salts 4/8 的色度块 3
+（首个读双邻居 publish 的块）首次触发——块 0-2 像素精确、块 3 起
+U/V 同点发散（写端期望饱和 255 vs 解码 ~DC）。
+修复 = `av1_enc_res_sign_field(dc_tok, dc_sign)` 助手（tile 包），
+四处调用点统一：key tile luma/chroma + me_res tile luma/chroma
+（me_dc tile 的 dc-only token 路径 dc_tok≥1 恒成立，无此缺陷）。
+
+### 语义入档
+
+- **res_ctx 符号域三分**：dc_tok=0 → 64；dc_tok>0 且 dc_sign=0 →
+  128；dc_sign=1 → 0（与 all_skip 的 0x40=64 同基）。
+- intra 色度 TX_16X16（szctx=4）全链与 32x32 同构：eob_bin_256 基
+  = chroma*32，txtp 由 `txtp_from_uvmode[DC_PRED]` LUT 派生零位。
+- 平滑 ±10 色度内容在 qidx 100 量化全零（all_skip）——**测试内容须
+  压过量噪底**（±40 overlay：q40 SAD/样本 ≈6.3 vs q220 ≈12.8）。
+
+### 验证
+
+- `av1_encoder_test.mbt` **4/4**：三帧序列 key 帧补查 V 平面；
+  multi-tile key（128x128, 2x2 tiles）U/V 全查；新增「色度 qidx
+  质量梯度」——±40 色度源 q40/q220 双档编码，decode == expected
+  逐像素（Y/U/V）+ sad40 < sad220 + sad40 < 4096*8 上限。
+- AV1 编码器 **55/55**（7+12+5+7+20+4）、解码真实流/向量套件全绿
+  （session 10 + qm 10 + resize 6 + 其余向量 0 失败）、fmt/info/
+  check deny-warn 0（顺清 inter 测试 3 个既有未用变量与 §451 遗留
+  未用 `av1_enc_itx_basis16`）。
+
+### 边界与下一步
+
+- 量化决策（死区/RD）；1/4 pel 相位、hp；NEARMV/drl、子 64x64
+  分割；CLI/MP4 封装。
+
+
+## §453 AV1 编码器 MP4 封装——av1C 构造 + E2E 一次通过（2026-11-20）
+
+编码器产物进容器：`av1_enc_mux.mbt`（libavcodec）+ 既有
+`Mp4Av1Muxer`（libavformat，此前只有容器级往返测试）接成完整
+E2E——编码 → av01/av1C MP4 → `av_mov_open` → 逐样本解码 ==
+编码端期望平面（逐像素）。
+
+### 写端（libavcodec/av1_enc_mux.mbt）
+
+- **`Av1Encoder::av1c()`**：av1C 记录 = 4 字节头（0x81 / profile<<5|level
+  / tier<<7|high_bitdepth<<6|twelve_bit<<5|mono<<4|ssx<<3|ssy<<2|csp /
+  initial_presentation_delay=0）+ configOBUs = 序列头 OBU 原文（含 OBU
+  头）。字段全部取自会话持有的 `Av1SequenceParameters`（解析自自家
+  输出——不是手抄配置）。
+- **`av1_enc_mp4_sample(packet)`**：编码包（TD+[seq]+frame）→ MP4 样本
+  ——剥 OBU_TEMPORAL_DELIMITER（裸流定界专用，容器内样本由 stsz 分界），
+  其余 OBU 原样保留（自定界）。**序列头留在带内首样本**（规范合法，
+  且本仓 playback 的 AV1 分支不种 extradata——带内是它唯一能消费的
+  形态）。
+
+### 语义/约定入档
+
+- **样本格式 = 裸自定界 OBU**（Matroska 形态）：本仓 demux 按 stsz
+  切片、`decode_packet` 走 OBU 尺寸场，全链无长度前缀处理——与
+  官方 ISOBMFF 的 length-prefixed 约定不同，但与仓库既有回放路径
+  （MKV e2e）自洽；外部播放器兼容属后续（demux 侧加前缀剥离）。
+- av1C 的 configOBUs 带 OBU 头（libaom 16 字节实测形态：4 头 + 12
+  configOBUs，payload 以 0x0A 序列头 OBU 开头）。
+- 工具坑两枚：`(if c {1} else {0} << 4)` 解析进 if 体——布尔转位
+  先绑 `let`；`0x81.to_byte()` 被吞成 double（hex 字面量后跟方法
+  调用需 `(0x81).to_byte()`）。
+
+### 验证
+
+- `libavformat/mp4_av1_encode_e2e_wbtest.mbt` **2/2**（一次通过）：
+  ①E2E——三帧序列 → av1C（经容器侧 `av1c_parse` 交叉验证
+  profile/level/8bit/4:2:0）→ mux → demux（codec av01、extradata、
+  尺寸/关键帧/dts）→ 每样本 `decode_packet` 逐像素 Y/U/V == 期望；
+  ②TD 剥离恰两字节 + 垃圾拒收。
+- AV1 编码器 **55/55**；MP4 组（av1_mux 3 + av_av1 2 + mp4 16 +
+  mux 5）+ playback e2e 1/1 全绿；fmt/info/check deny-warn 0。
+
+### 边界与下一步
+
+- 样本格式为仓库内自洽约定（外部播放器需长度前缀形态时再议）；
+  CLI/生成器、量化 RD、1/4 pel 相位按需。
+
+
+## §454 AV1 编码器 1/4-pel 相位精化——两段式 refine + 遗留插桩清理（2026-11-20）
+
+`av1_enc_me_halfpel_refine` → **`av1_enc_me_subpel_refine`**：两段式
+候选——段一整数 + 四轴向半 pel（§448b 原样），段二在段一胜者邻域
+加 **八个 1/4-pel 候选**（轴向 + 对角，分量皆偶——hp=0 可编码）。
+全部经解码器自己的 MC 核打分（§448b 律不变），严格更优才替换；
+平局保前段胜者。me/me420/me_res 三条链自动受益（共用 refine）。
+顺清 §449b 遗留的 me420 ckpt1/2/3 println（此前污染测试输出）。
+
+### 语义入档
+
+- **1/4-pel = 1/8-pel 单位的 ±2**（偶分量）：hp=0 编码上限即 1/4-pel
+  （fp 隐含 1，1/8 与 1/16 相位需 allow_high_precision）。
+- **x-only overlay 是列信号**：半 pel 的列混合能真实追踪它
+  （实测 SAD(16,−4)=24674 < SAD(16,0)=24704），故 ME 钉值断言须用
+  「结构块 SAD=0 严格最小」的内容（src=核在真相位的前述预测），
+  叠加 overlay 的合成内容只能在真相位邻域内钉（±2）——精确性
+  （decode == expected）才是内容无关的强断言。
+- 测试法：**src ≔ MC(ref, phase)** ⇒ 真相位 SAD=0，两段走位必恰中
+  （轴向/对角/半+quarter 复合 (6,0)/(0,−6)/(6,6) 全过）；平内容
+  平局保整数。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **21/21**：新测「subpel ME finds quarter
+  phases exactly」（7 相位恰中 + 平局保整数）；me_res 用例 MV 钉值
+  放宽为 16±2 并注明 overlay-列混合根因（实测值入档）。
+- 编码 **56/56**（inter 21）+ MP4 E2E 2/2；fmt/info/check
+  deny-warn 0。
+
+### 边界与下一步
+
+- 1/8-pel 相位：开 hp（帧头 allow_high_precision=1 + mv 分量
+  class0_hp/classN_hp 位写端参数化）；量化死区/RD；NEARMV/drl、
+  子 64x64 分割、CLI 按需。
+
+
+## §455 AV1 编码器 1/8-pel 相位——hp 开启（帧头位 + MV 分量 hp 位 + 三段 refine）（2026-11-20）
+
+`allow_high_precision_mv` 全链接通：奇 1/8-pel 分量可编码。
+
+### 写端
+
+- **帧头**：`Av1InterFrameEncConfig` 增 `allow_high_precision`（默认
+  false）→ inter 分支位（force_integer=0 时读）。
+- **MV 分量写端** `av1_enc_write_mv_component_diff(hp~)`：m = mag−1 分解
+  `up<<3|fp<<1|hpbit`——class0 链在 class0_fp 后写 **class0_hp bool
+  （基 0，无 up 索引——dav1d 特例）**，classN 链在 classn_fp 后写
+  classn_hp bool；hp 关时 hpbit 恒 1（解码端隐式偶律）。
+- **uniform_motion/uniform8/subpel8/me_dc_tile** 增 `hp~`：fix_precision
+  第三参传 hp（hp=true 不再抹奇位）、奇分量校验仅 hp 关时生效。
+- **入口**：subpel/me8 增 `hp~` → rf.hp + config 位 + tile 透传。
+- **refine 三段**：`av1_enc_me_subpel_refine(hp~)` 段三 = 段二胜者邻域
+  8 个 ±1（含对角）——hp 帧专用。
+
+### 语义入档
+
+- 解码端 `mv_prec = hp<<1 | !force_integer`；**hp 位读取当且仅当
+  mv_prec>0**（即 hp=1），fp 位当 mv_prec≥0。diff = ((up<<3)|(fp<<1)|hp)+1，
+  hp 关隐式 hp=1 → 恒偶。
+- class0_hp 的 CDF 基**不带 up 索引**（dav1d 读法；class0_fp 带 up*4）。
+- MC 核天然 1/8-pel：相位 = mv&7，hp 关时偶 MV 使相位落在 {0,2,4,6}。
+- **平坦内容相位不可恢复**：平 key 上 (1,0) 与 (0,0) 的核预测 SAD 平局
+  ——相位测试必须用结构 key（§443 AC tile）。
+
+### 验证
+
+- `av1_enc_inter_test.mbt` **24/24**：新增 3——①hp uniform 奇目标 (1,0)
+  解码逐像素 == 核预测 + hp=0 拒收奇分量；②hp refine 五个奇相位
+  （(1,0)/(0,1)/(1,−1)/(5,0)/(1,4)）恰中 + hp=0 refine 恒偶；③me8 hp
+  e2e：结构 key 的核 (1,0) 相位源 → refine (1,0) → hp 帧解码逐像素
+  == 源。
+- 编码 **59/59**（inter 24）+ MP4 E2E 2/2；fmt/info/check deny-warn 0。
+
+### 边界与下一步
+
+- me_res/me420/Av1Encoder 的 hp 接线（参数已备，默认关——RD 决策时
+  开）；量化死区/RD；NEARMV/drl、子 64x64 分割、CLI 按需。
+
+
+## §456 AV1 编码器量化死区——dz_pm 参数化（2026-11-20）
+
+`av1_enc_quantize_leaf` 增 `dz_pm~`（千分位死区，占量化步长比例）：
+t = (2·mag·scale + gt − (2·dz_pm·gt)/1000) / (2·gt)——**dz=0 与旧式逐位
+相同**（半上舍入），dz=500 = floor（系数须达整步才存活）。dz 项单独
+整除，不放大 Int64 包络。接线：key tile（luma+chroma）、me_res/me420
+入口、`Av1Encoder::encode_frame(dz_pm~)`。
+
+### 语义入档（率模型实测）
+
+- **死区的字节率收益是内容依赖的**：中段扫描的零仍付 base_tok 符号
+  （只有 eob 之后的拖尾零免费），dz 主要省 eob 缩短与 br_tok/golomb
+  逃逸；本片 qidx60 key 内容实测包长 +1%（3642→3682）而 SAD 反降
+  （73955→71189）——自适应 CDF 下方向不定。**token 域收益确定**：
+  噪声残差 nz 886→701（−21%），token 只减不增、eob 不增（单调律）。
+- 死区只移除或收缩 token，从不增大（测试断言 toks350 ≤ toks0 逐位）。
+
+### 验证
+
+- `av1_encoder_test.mbt` **6/6**：新增 2——①token 域（nz 严格降 +
+  eob 不增 + 逐位 toks350≤toks0 + dz=0 参考不变）；②session e2e
+  （dz=0/350 双向 decode == expected 逐像素 + 率 ±10% 界 + 失真
+  3/2 界，实测数字入档）。调试助手 `av1_enc_debug_quantize_leaf32`
+  增 `dz_pm~`。
+- 编码 **61/61**（session 6）+ MP4 E2E 2/2；fmt/info/check
+  deny-warn 0；dz=0 全链位流不变（色度 SAD 钉值 25936/52572 复现）。
+
+### 边界与下一步
+
+- dz 的率失真最优值未搜（真 RD 需代价模型：λ·D + 位消耗估计）；
+  NEARMV/drl、子 64x64 分割、CLI 按需。
+
+## §457 AV1 编码器 per-frame qindex 粗 RD 选择（2026-11-20）
+
+承接 §456 留下的「真 RD 需代价模型」入口：新增逐帧 qindex 粗 RD
+（`libavcodec/av1_enc_rd.mbt`），对候选 `base_q_idx` 逐个试编码，
+代价 = `lambda * SAD + bits * 1000`（Int64 定点；SAD 取 §449b 试编码
+返回的解码重建与源之差，bits 取 msac 真实包字节 ×8，不手拍 bit hint），
+取最小者，平局取小 q。默认候选 `[40, 100, 160, 220]`。
+
+- **参考库隔离**：试编码的 `refresh` 只替换 slot 条目，因此浅拷贝
+  `refs.slots.copy()` 即可防止试验污染真实参考链；赢家在未污染的
+  `self.refs` 上再编一次。
+- **零语法改动**：选中 q 就是帧头既有 `base_q_idx`；`Av1Encoder::encode_frame`
+  增可选 `rd_lambda?` / `rd_candidates?`，两者缺省时走旧路径、既有钉值不变。
+- **验证**：新黑盒 4/4（确定性/候选约束、λ 单调端点 0→q220 与 1e6→q40、
+  参考库隔离、session e2e 逐像素）；回归 encoder 6/6、inter 24/24；
+  `moon check --deny-warn` 0、`moon fmt`/`moon info` 已跑。
+- **边界**：逐帧穷举，开销 ≈ 候选数×单帧编码；不做 per-SB/delta_q、
+  真 RD/trellis、CABAC 级 bit 代价、VBV/ABR。下一片候选：per-SB skip/MV
+  决策（tile 写端已参数化 skip~，需同步 a/l skip/tx/lcoef/ccoef 银行）。
+- 交接 `AGENT_HANDOFF_2026-11-20_AV1_RD.md`。**未提交**（随 §446–§456 留在工作树）。
+
+## §458 AV1 编码器 per-SB skip/MV 模式决策（2026-11-20）
+
+新增逐 SB skip 决策（`libavcodec/av1_enc_me_skip.mbt`）：静止（零 MV +
+SAD ≤ `skip_sad_pct% × 64×64×255`）64x64 SB 走 GLOBALMV skip（无残差
+token 链），运动 SB 走 §449b 全残差链。`av1_enc_write_me_res_tile` 增
+可选 `skip_flags~`（缺省全 false，§449b 行为不变）。
+
+**最易错点——skip 块的上下文银行同步**：skip=1 不读 var-tx/token 符号，
+但解码器仍按 `av1_read_vartx_tree` switchable+skip 分支填 a/l tx 银行
+（整块 bw_lw/bh_lh=5 → 32 槽），按 `av1_recon_b_inter` skip 分支填
+a/l lcoef=0x40、a/l ccoef 双平面=0x40；写端 `tail` 逐条镜像，否则下个
+SB 的 sctx 从第二块起分叉（§454 B 片 `tab_ct_depth` 漏写同类坑）。
+skip 块仍写 intra=inter 位与 ref tree（解码端不按 skip 门控）。
+
+**验证**：黑盒 5/5（skip=0 基线精确、静态帧省码 q40/100/180 下
+4224/1515/92→恒 27 字节、skip 开运动内容精确、混合静/动 SB 跨 128px
+a 银行边界与 l 行重置精确、确定性）；回归 inter 24/24、encoder 6/6、
+RD 4/4；`moon check --deny-warn` 0、fmt/info 已跑。
+
+**边界**：只对全零 MV 触发，NEARMV skip 未做；SAD 阈值启发式未与 §457
+RD 联动；未接 `Av1Encoder::encode_frame` 门面。下一片候选：接 session
+门面（`skip_sad_pct~`）、NEARMV skip、skip 与 RD 统一模式选择。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_SB_SKIP.md`，**未提交**。
