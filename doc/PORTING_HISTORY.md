@@ -16859,3 +16859,38 @@ fmt/info 已跑。
 **inter 帧未接**（需走公开的 `av1_create_lf_mask_inter` 并按块传
 skip/ytx/uvtx，多一层记账）；未处理 tile 边界强度修正；CDEF/LR 未做。
 交接 `AGENT_HANDOFF_2026-11-20_AV1_ENCODER_DEBLOCK.md`。**未提交**。
+
+## §468c AV1 编码器 inter 帧去块（2026-11-20）
+
+把 §468b 的编码器侧去块扩展到 inter 帧，两种帧类型都支持环路去块。
+新文件 `libavcodec/av1_enc_deblock_inter.mbt`：公开入口
+`av1_enc_deblock_frame_inter` 直接驱动**公开的** `av1_create_lf_mask_inter`，
+再跑与 §468b 相同的 cols→rows 循环（复用 deblock_cols/rows_y/uv）。
+`av1_enc_write_me_res420_inter_frame_obu` 增 loop_filter 三参数（写帧头 +
+滤波 expected，全 0 跳过），`encode_frame` inter 路径透传。
+
+**与 intra 差异**：inter 是 64x64 SB 单块（非 4×32x32）、mask 走公开的
+`av1_create_lf_mask_inter`、var-tx SPLIT 四叶 TX_32X32
+（`tx_masks=[1,0]`、`ytx=TX_64X64`）、每 SB 一个 skip 标志。
+
+**真 bug（可复用教训）**：首版把 `av1_calc_lf_values` 算出的 4 项小数组
+传给 `av1_create_lf_mask_inter` 的 `lvl` 参数，数组越界崩溃
+（`av1_lf.mbt:698` 需 ≥64 项）。根因是该函数 `lvl` 与 `lf_level` 两个
+参数用途不同——`lvl` 是「每段×4方向」表（`seg*64+dir*16`），`lf_level`
+是「每 4x4 缓存项」的 4 个 level；两者都应由同一个 `av1_calc_lf_values`
+输出数组提供。修正为 `av1_create_lf_mask_inter(lf_level, lf_level, ...)`
+后通过。**教训：名字相近的两个参数可能是同一数据的不同视图，看调用点
+比看名字可靠。**
+
+**验证**：白盒 3/3——key+inter 两帧序列中 inter 在 lf=8/32/63 三档
+`decode==expected` 均 Y=0 UV=0；滤波确实生效（lf=0 vs 32 相差 119 个
+luma 像素）；默认与显式 lf=0 的 inter 码流逐字节相同。回归 93 测试全绿
+（encoder 8/8、refring 5/5、RD 三维 5/5、RD 4/4、skip 5/5、NEARMV 2/2、
+RD×skip 4/4、multiref 4/4、ME 复用 4/4、loop-filter 3/3、deblock-intra
+3/3、deblock-inter 3/3、inter 24/24、tile 12/12、frame 7/7）；
+`moon check --deny-warn` 0、fmt/info 已跑。
+
+**边界**：只覆盖全残差 inter 路径（所有 SB skip=0）；**skip 混合路径
+（§458/§460）尚未接 loop_filter**（`skips` 数组已存在，接入很直接）；
+tile 边界强度修正未做；CDEF/LR 未做。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_DEBLOCK_INTER.md`。**未提交**。

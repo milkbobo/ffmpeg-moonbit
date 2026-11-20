@@ -479,6 +479,9 @@ pub fn Av1Encoder::encode_frame(
       dz_pm~,
       ref_slot~,
       refresh_slot=out_slot,
+      loop_filter_level0~,
+      loop_filter_level1~,
+      loop_filter_sharpness~,
     )
   }
   let (frame_obu, exp_y, exp_u, exp_v) = match result {

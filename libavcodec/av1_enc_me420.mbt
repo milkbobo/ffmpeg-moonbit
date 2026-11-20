@@ -50,6 +50,12 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
   /// must hold one entry per 64x64 SB; when omitted ME runs as before.
   precomputed_mvs_y8? : FixedArray[Int32],
   precomputed_mvs_x8? : FixedArray[Int32],
+  /// §468c: loop-filter levels for the frame header. Non-zero makes the
+  /// decoder deblock, so the encoder applies the same filter to its
+  /// expected planes before returning them. Default 0 keeps it off.
+  loop_filter_level0~ : Int32 = 0,
+  loop_filter_level1~ : Int32 = 0,
+  loop_filter_sharpness~ : Int32 = 0,
 ) -> Result[
   (Bytes, FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]),
   String,
@@ -368,10 +374,40 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
       base_q_idx,
       ref_frame_idx,
       refresh_frame_flags: 1 << out_slot,
+      loop_filter_level0,
+      loop_filter_level1,
+      loop_filter_sharpness,
       tile_data: tile,
     }) {
     Ok(b) => b
     Err(e) => return Err(e)
+  }
+  // §468c: mirror the decoder's deblocking on the expected planes.
+  if loop_filter_level0 != 0 ||
+    loop_filter_level1 != 0 ||
+    loop_filter_sharpness != 0 {
+    let hdr = match av1_parse_frame_header(obu, seq) {
+      Ok(h) => h
+      Err(e) => return Err(e)
+    }
+    // This entry codes every superblock with a full residual, so no SB is
+    // skipped.
+    let skips = FixedArray::make(n_sb, false)
+    let _ = av1_enc_deblock_frame_inter(
+      expected_y,
+      w,
+      expected_u,
+      expected_v,
+      cw,
+      w,
+      h,
+      hdr,
+      skips,
+      !seq.monochrome,
+      1,
+      1,
+      8,
+    )
   }
   refs.refresh(prepared, 1 << out_slot)
   Ok((obu, expected_y, expected_u, expected_v))
