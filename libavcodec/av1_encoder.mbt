@@ -88,6 +88,12 @@ pub fn Av1Encoder::encode_frame(
   /// picture. Values beyond the retained history fall back to the oldest
   /// available slot.
   ref_age~ : Int32 = 0,
+  /// §465: jointly choose qindex, skip threshold AND reference age by
+  /// trial-encoding every combination. The list holds the ages to try
+  /// (0 = previous frame); the encoder resolves each to the slot ring.
+  /// When set, this takes precedence over rd_skip_pcts~ / rd_lambda~ /
+  /// ref_age~ for inter frames.
+  rd_ref_ages? : Array[Int32],
 ) -> Result[(Bytes, Av1EncPlanes), String] {
   let w = self.seq.width
   let h = self.seq.height
@@ -213,14 +219,11 @@ pub fn Av1Encoder::encode_frame(
   }
   // §464: the reconstruction lands in the slot after the current one.
   let out_slot = (self.cur_slot + 1) % 8
-  // §457: with `rd_lambda~`, pick the qindex that minimizes
-  // lambda*SAD + bits*1000 over the candidate ladder (default when only
-  // the lambda is given). The selector trial-encodes on a private refmvs
-  // fork, so self.refs is untouched; the real encode below re-encodes the
-  // winner against the untouched state.
-  // §462: joint (q, skip) selection takes precedence when requested.
-  let joint = match rd_skip_pcts {
-    Some(pcts) => {
+  // §465: the three-way joint choice, when requested, decides the q, the
+  // skip threshold AND which past reconstruction to predict from. It runs
+  // before the q/skip selection below and overrides all three.
+  let three_way = match rd_ref_ages {
+    Some(ages) => {
       let cands = match rd_candidates {
         Some(c) => c
         None => av1_enc_rd_default_q_candidates()
@@ -229,8 +232,39 @@ pub fn Av1Encoder::encode_frame(
         Some(l) => l
         None => 1000
       }
+      let pcts = match rd_skip_pcts {
+        Some(p) => p
+        None => [50, 100]
+      }
+      // Build one candidate per requested age, resolving each through the
+      // slot ring; skip ages with no retained picture.
+      let ref_cands : Array[Av1EncRefCandidate] = []
+      for a in ages {
+        let av = if a < 0 { 0 } else { a }
+        let ac = if av >= n_hist { n_hist - 1 } else { av }
+        let mut sl = self.cur_slot - ac
+        while sl < 0 {
+          sl = sl + 8
+        }
+        match self.slots[sl] {
+          Some(p) =>
+            ref_cands.push({
+              slot: sl,
+              age: ac,
+              y: p.y,
+              y_stride: p.y_stride,
+              u: p.u,
+              uv_stride: p.uv_stride,
+              v: p.v,
+            })
+          None => ()
+        }
+      }
+      if ref_cands.is_empty() {
+        return Err("av1 enc: no retained reference for the requested ages")
+      }
       let choice = match
-        av1_enc_rd_select_q_skip_inter(
+        av1_enc_rd_select_q_skip_ref_inter(
           self.seq,
           self.refs,
           src.y,
@@ -238,11 +272,7 @@ pub fn Av1Encoder::encode_frame(
           src.u,
           src.uv_stride,
           src.v,
-          ref_p.y,
-          ref_p.y_stride,
-          ref_p.u,
-          ref_p.uv_stride,
-          ref_p.v,
+          ref_cands,
           cands,
           pcts,
           lambda~,
@@ -252,9 +282,74 @@ pub fn Av1Encoder::encode_frame(
         Ok(v) => v
         Err(e) => return Err(e)
       }
-      Some(choice)
+      Some((choice, ref_cands[choice.ref_index]))
     }
     None => None
+  }
+  // The chosen reference (three-way winner, or the ref_age walk above).
+  let chosen : Av1EncRefCandidate = match three_way {
+    Some((_, rc)) => rc
+    None =>
+      {
+        slot: ref_slot,
+        age: capped,
+        y: ref_p.y,
+        y_stride: ref_p.y_stride,
+        u: ref_p.u,
+        uv_stride: ref_p.uv_stride,
+        v: ref_p.v,
+      }
+  }
+  let ref_slot = chosen.slot
+  // §457: with `rd_lambda~`, pick the qindex that minimizes
+  // lambda*SAD + bits*1000 over the candidate ladder (default when only
+  // the lambda is given). The selector trial-encodes on a private refmvs
+  // fork, so self.refs is untouched; the real encode below re-encodes the
+  // winner against the untouched state.
+  // §465: the three-way choice already settled q and skip; feed them in
+  // as the joint result so the branches below do not re-search.
+  // §462: joint (q, skip) selection takes precedence when requested.
+  let joint = match three_way {
+    Some((choice, _)) =>
+      Some({ q: choice.q, skip_pct: choice.skip_pct, cost: choice.cost, })
+    None =>
+      match rd_skip_pcts {
+        Some(pcts) => {
+          let cands = match rd_candidates {
+            Some(c) => c
+            None => av1_enc_rd_default_q_candidates()
+          }
+          let lambda = match rd_lambda {
+            Some(l) => l
+            None => 1000
+          }
+          let choice = match
+            av1_enc_rd_select_q_skip_inter(
+              self.seq,
+              self.refs,
+              src.y,
+              src.y_stride,
+              src.u,
+              src.uv_stride,
+              src.v,
+              chosen.y,
+              chosen.y_stride,
+              chosen.u,
+              chosen.uv_stride,
+              chosen.v,
+              cands,
+              pcts,
+              lambda~,
+              range~,
+              dz_pm~,
+            ) {
+            Ok(v) => v
+            Err(e) => return Err(e)
+          }
+          Some(choice)
+        }
+        None => None
+      }
   }
   let q = match joint {
     Some(choice) => choice.q
@@ -274,11 +369,11 @@ pub fn Av1Encoder::encode_frame(
               src.u,
               src.uv_stride,
               src.v,
-              ref_p.y,
-              ref_p.y_stride,
-              ref_p.u,
-              ref_p.uv_stride,
-              ref_p.v,
+              chosen.y,
+              chosen.y_stride,
+              chosen.u,
+              chosen.uv_stride,
+              chosen.v,
               cands,
               lambda~,
               range~,
@@ -311,11 +406,11 @@ pub fn Av1Encoder::encode_frame(
       src.u,
       src.uv_stride,
       src.v,
-      ref_p.y,
-      ref_p.y_stride,
-      ref_p.u,
-      ref_p.uv_stride,
-      ref_p.v,
+      chosen.y,
+      chosen.y_stride,
+      chosen.u,
+      chosen.uv_stride,
+      chosen.v,
       base_q_idx=q,
       range~,
       dz_pm~,
@@ -333,11 +428,11 @@ pub fn Av1Encoder::encode_frame(
       src.u,
       src.uv_stride,
       src.v,
-      ref_p.y,
-      ref_p.y_stride,
-      ref_p.u,
-      ref_p.uv_stride,
-      ref_p.v,
+      chosen.y,
+      chosen.y_stride,
+      chosen.u,
+      chosen.uv_stride,
+      chosen.v,
       base_q_idx=q,
       range~,
       dz_pm~,

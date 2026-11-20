@@ -16707,3 +16707,31 @@ frame 7/7（共 75）；`moon check --deny-warn` 0、fmt/info 已跑。
 **边界**：ref_age 由调用方显式指定，无自动多参考择优；仍是单参考，
 无复合预测；分区树/变换尺寸/CDEF/LR 未做。
 交接 `AGENT_HANDOFF_2026-11-20_AV1_REFRING.md`。**未提交**。
+
+## §465 AV1 编码器 q×skip×ref_age 三维联合决策（2026-11-20）
+
+把 §462 的二维联合选择器扩成三维（`libavcodec/av1_enc_rd_ref.mbt`）：
+同时对 qindex × per-SB skip 阈值 × 参考帧年龄做真实试编码择优。
+`Av1EncRefCandidate`（槽位+年龄+三平面）、`Av1EncRdRefChoice`
+（q/skip_pct/ref_index/cost）、`av1_enc_rd_select_q_skip_ref_inter`。
+门面 `Av1Encoder::encode_frame` 增 `rd_ref_ages?`（设置后覆盖
+rd_skip_pcts~/rd_lambda~/ref_age~；q 候选缺省 [40,100,160,220]、
+skip 候选缺省 [50,100]、0 恒在集内；参考候选由年龄解析到 §464 槽环，
+无保留图的年龄跳过）。
+
+沿用 §462 的真值代价 `lambda*SAD + bits*1000`（SAD 取试编码 expected、
+bits 取真实 msac 包长）；每次试验在私有槽拷贝上跑，调用方参考库零污染；
+三维结果包装成 §462 的 joint 结果喂给后续分支避免二次搜索；平局依次取
+更小 q、更小 skip、更年轻参考。候选参考的槽位随结果返回，直接用于
+ref_slot / refresh_slot。
+
+**验证**：黑盒 5/5（6 帧三维链逐像素精确；**参考维度真生效**只给 age0
+vs 只给 age2 码流不同 2301 vs 3059 字节；**q 维度真生效** q220 vs q40
+495 vs 3404 字节；确定性；钉死候选时精确）；回归 encoder 8/8、refring
+5/5、RD 4/4、skip 5/5、NEARMV 2/2、RD×skip 4/4、multiref 4/4、
+inter 24/24、tile 12/12、frame 7/7（共 80）；`moon check --deny-warn` 0、
+fmt/info 已跑。
+
+**边界**：三维穷举开销 = |q|×|skip|×|ref|×单帧编码，生产需缩候选或
+early-out；仍是单参考无复合预测；分区树/变换尺寸/CDEF/LR 未做。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_RD_3WAY.md`。**未提交**。
