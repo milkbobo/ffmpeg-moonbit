@@ -16628,3 +16628,28 @@ skip 5/5、inter 24/24、tile 12/12；CLI `--skip-uniform` 端到端通过；
 **边界**：仅 mv8 偶数（hp=0 可编码）；未针对 skip 优化 NEARESTMV 命中率；
 RD+skip 联合代价、高位深编码未做。交接
 `AGENT_HANDOFF_2026-11-20_AV1_NEARMV_SKIP.md`。**未提交**。
+
+## §462 AV1 编码器 RD×skip 联合决策（2026-11-20）
+
+把 §457 的 qindex 选择与 §458/§460 的 skip 开关合并为联合决策
+（`libavcodec/av1_enc_rd_skip.mbt`）：对每个候选 q × 每个候选 skip 阈值，
+全残差与 skip 混合两种形态都真实试编码，取代价
+`lambda * SAD + bits * 1000` 最小者；代价相同的平局先取小 q 再取小 skip
+百分比。SAD 取试编码返回的 expected 重建（解码器将实现的像素），bits 取
+真实 msac 包长 —— 不用 bit 估计（§456 教训：自适应 CDF 下字节方向内容
+相关）。每次试编码在私有槽拷贝上跑，调用方参考库零污染；赢家由真实路径
+在未污染状态上重新编码。skip 形态用 §460 的 `skip_uniform=true`，使非零
+MV 也进候选。
+
+门面 `Av1Encoder::encode_frame` 增 `rd_skip_pcts?`（设置后覆盖
+rd_lambda~/skip_sad_pct~ 的独立路径；lambda 缺省 1000），0（全残差基线）
+恒在候选集内。
+
+**验证**：黑盒 4/4（静态内容 λ=0 下选中 q=40+skip=50、确定性、候选集约束、
+选中组合逐像素 decode==expected 三平面、session 三帧链精确）；回归
+encoder 8/8、RD 4/4、skip 5/5、NEARMV 2/2、inter 24/24、tile 12/12；
+`moon check --deny-warn` 0、fmt/info 已跑。
+
+**边界**：逐帧穷举，开销 ≈ |q|×|skip|×单帧编码；无 per-SB delta_q、
+无 trellis、无码控闭环；分区/变换/帧内模式未进同一代价函数。
+交接 `AGENT_HANDOFF_2026-11-20_AV1_RD_SKIP_JOINT.md`。**未提交**。

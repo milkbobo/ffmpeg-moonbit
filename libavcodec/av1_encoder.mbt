@@ -66,6 +66,11 @@ pub fn Av1Encoder::encode_frame(
   rd_candidates? : Array[Int32],
   skip_sad_pct? : Int32,
   skip_uniform~ : Bool = false,
+  /// §462: jointly choose qindex AND skip threshold by trial-encoding
+  /// both shapes. When set, this overrides the separate rd_lambda~ /
+  /// skip_sad_pct~ paths for inter frames (the lambda is rd_lambda or
+  /// 1000 when unset).
+  rd_skip_pcts? : Array[Int32],
 ) -> Result[(Bytes, Av1EncPlanes), String] {
   let w = self.seq.width
   let h = self.seq.height
@@ -176,14 +181,19 @@ pub fn Av1Encoder::encode_frame(
   // the lambda is given). The selector trial-encodes on a private refmvs
   // fork, so self.refs is untouched; the real encode below re-encodes the
   // winner against the untouched state.
-  let q = match rd_lambda {
-    Some(lambda) => {
+  // §462: joint (q, skip) selection takes precedence when requested.
+  let joint = match rd_skip_pcts {
+    Some(pcts) => {
       let cands = match rd_candidates {
         Some(c) => c
         None => av1_enc_rd_default_q_candidates()
       }
-      match
-        av1_enc_rd_select_q_inter(
+      let lambda = match rd_lambda {
+        Some(l) => l
+        None => 1000
+      }
+      let choice = match
+        av1_enc_rd_select_q_skip_inter(
           self.seq,
           self.refs,
           src.y,
@@ -197,6 +207,7 @@ pub fn Av1Encoder::encode_frame(
           ref_p.uv_stride,
           ref_p.v,
           cands,
+          pcts,
           lambda~,
           range~,
           dz_pm~,
@@ -204,17 +215,56 @@ pub fn Av1Encoder::encode_frame(
         Ok(v) => v
         Err(e) => return Err(e)
       }
+      Some(choice)
     }
-    None => base_q_idx
+    None => None
   }
-  // §458: when `skip_sad_pct~` is positive, static zero-MV SBs take the
-  // GLOBALMV skip path (no residual token chain). Both entries return the
-  // same (obu, exp_y, exp_u, exp_v) shape; the skip one differs only in
-  // the per-SB mode decision and the exact reconstruction it implies.
-  let use_skip = match skip_sad_pct {
-    Some(pct) => pct > 0
-    None => false
+  let q = match joint {
+    Some(choice) => choice.q
+    None =>
+      match rd_lambda {
+        Some(lambda) => {
+          let cands = match rd_candidates {
+            Some(c) => c
+            None => av1_enc_rd_default_q_candidates()
+          }
+          match
+            av1_enc_rd_select_q_inter(
+              self.seq,
+              self.refs,
+              src.y,
+              src.y_stride,
+              src.u,
+              src.uv_stride,
+              src.v,
+              ref_p.y,
+              ref_p.y_stride,
+              ref_p.u,
+              ref_p.uv_stride,
+              ref_p.v,
+              cands,
+              lambda~,
+              range~,
+              dz_pm~,
+            ) {
+            Ok(v) => v
+            Err(e) => return Err(e)
+          }
+        }
+        None => base_q_idx
+      }
   }
+  // §458/§460: a positive skip percentage takes the skip-mixed path.
+  // §462 overrides it with the jointly-chosen threshold.
+  let effective_skip = match joint {
+    Some(choice) => choice.skip_pct
+    None =>
+      match skip_sad_pct {
+        Some(pct) => pct
+        None => 0
+      }
+  }
+  let use_skip = effective_skip > 0
   let result = if use_skip {
     av1_enc_write_me_skip420_inter_frame_obu(
       self.seq,
@@ -232,7 +282,7 @@ pub fn Av1Encoder::encode_frame(
       base_q_idx=q,
       range~,
       dz_pm~,
-      skip_sad_pct=skip_sad_pct.unwrap(),
+      skip_sad_pct=effective_skip,
       skip_uniform~,
     )
   } else {
