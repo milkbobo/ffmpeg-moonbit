@@ -16605,3 +16605,26 @@ RD 4/4、skip 5/5、inter 24/24 回归；CLI 64×64 三种配置端到端通过�
 `moon check --deny-warn` 0、fmt/info 已跑。
 **边界**：CLI 仅 8-bit 4:2:0/64 倍数；RD+skip 联合代价、NEARMV skip、
 高位深编码未做。交接 `AGENT_HANDOFF_2026-11-20_AV1_FACADE_CLI.md`。
+
+## §460 AV1 编码器 NEARMV skip（2026-11-20）
+
+把 §458 的 per-SB skip 从零 MV GLOBALMV 扩展到非零 MV：`skip_uniform~`
+打开时，skip 块的 motion 复用 `av1_enc_write_uniform_motion`
+（NEARESTMV/NEWMV），决策律改成 `SAD(src, MC(ref,mv8)) ≤ 阈值`（任意 MV，
+SAD 用解码器 MC 核，与 expected 同源）。
+
+**方案选择（避免双状态镜像）**：预演 refmvs stack 求 NEARESTMV 邻居值需要
+在 expected 循环外另跑一遍逐 SB begin/find/splat/finish，双状态易失步；
+skip_mode 机制因帧头 reference_select=0 不可用。故采用 uniform motion 复用：
+NEARESTMV 命中写 3 bool（MV=near=target），否则 NEWMV（MV=target），两种
+情形编码 MV 都等于 ME target → decode==expected 自动成立，零时序耦合。
+skip 块的 a/l tx/lcoef/ccoef 银行镜像沿用 §458。
+
+**验证**：黑盒 2/2（逐像素精确 + 确定性 + 平移静态内容 12824→33 字节，
+且 ME 断言确认 best MV 非零证明 NEARMV 真触发）；回归 encoder 8/8、RD 4/4、
+skip 5/5、inter 24/24、tile 12/12；CLI `--skip-uniform` 端到端通过；
+`moon check --deny-warn` 0、fmt/info 已跑。
+
+**边界**：仅 mv8 偶数（hp=0 可编码）；未针对 skip 优化 NEARESTMV 命中率；
+RD+skip 联合代价、高位深编码未做。交接
+`AGENT_HANDOFF_2026-11-20_AV1_NEARMV_SKIP.md`。**未提交**。

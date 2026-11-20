@@ -42,6 +42,11 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
   range~ : Int32 = 8,
   dz_pm~ : Int32 = 0,
   skip_sad_pct~ : Int32 = 0,
+  /// §460: when true the skip decision is allowed on non-zero MVs and the
+  /// coded MV goes through the uniform (NEWMV/NEARESTMV) chain — the MV the
+  /// decoder realizes equals the ME target used for the prediction, so
+  /// expected stays exact. Default false keeps §458's zero-MV GLOBALMV skip.
+  skip_uniform~ : Bool = false,
 ) -> Result[
   (Bytes, FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]),
   String,
@@ -85,23 +90,55 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
     Ok(v) => v
     Err(e) => return Err(e)
   }
-  // 2. Per-SB skip decision: zero MV only (the GLOBALMV path reconstructs
-  //    pure block copy), and the source close enough to the zero-MV copy.
+  // 2. Per-SB skip decision.
+  //    §458 (skip_uniform=false): zero MV only, SAD against the plain
+  //      reference block copy (the GLOBALMV reconstruction).
+  //    §460 (skip_uniform=true): any MV, SAD against the MC prediction at
+  //      the ME target mv8 — the exact image the decoder will realize for
+  //      a NEWMV/NEARESTMV skip. Both use the decoder's own MC kernel.
   let skips = FixedArray::make(n_sb, false)
   if skip_sad_pct > 0 {
     let threshold : Int64 = skip_sad_pct.to_int64() * (64L * 64L * 255L) / 100L
     for sby in 0..<sb_rows {
       for sbx in 0..<sb_cols {
         let sb = sby * sb_cols + sbx
-        if ry[sb] == 0 && rx[sb] == 0 {
+        if skip_uniform || (ry[sb] == 0 && rx[sb] == 0) {
           let y0 = sby * 64
           let x0 = sbx * 64
           let mut sad : Int64 = 0L
-          for y in 0..<64 {
-            for x in 0..<64 {
-              let d = src_y[(y0 + y) * src_y_stride + x0 + x] -
-                ref_y[(y0 + y) * ref_y_stride + x0 + x]
-              sad += (if d < 0 { -d } else { d }).to_int64()
+          if skip_uniform && (ry[sb] != 0 || rx[sb] != 0) {
+            let pred = av1_enc_mc_predict(
+              ref_y,
+              ref_y_stride,
+              w,
+              h,
+              w,
+              h,
+              sbx * 16,
+              sby * 16,
+              16,
+              16,
+              ry[sb],
+              rx[sb],
+              0,
+              0,
+              0,
+              8,
+            )
+            for y in 0..<64 {
+              for x in 0..<64 {
+                let d = src_y[(y0 + y) * src_y_stride + x0 + x] -
+                  pred[y * 64 + x]
+                sad += (if d < 0 { -d } else { d }).to_int64()
+              }
+            }
+          } else {
+            for y in 0..<64 {
+              for x in 0..<64 {
+                let d = src_y[(y0 + y) * src_y_stride + x0 + x] -
+                  ref_y[(y0 + y) * ref_y_stride + x0 + x]
+                sad += (if d < 0 { -d } else { d }).to_int64()
+              }
             }
           }
           if sad <= threshold {
@@ -389,6 +426,7 @@ pub fn av1_enc_write_me_skip420_inter_frame_obu(
       chroma_toks=Some(chroma_toks),
       chroma_signs=Some(chroma_signs),
       skip_flags=Some(skips),
+      skip_uniform~,
     ) {
     Ok(t) => t
     Err(e) => return Err(e)

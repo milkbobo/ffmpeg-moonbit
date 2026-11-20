@@ -16,6 +16,8 @@ priv struct Options {
   skip_pct : Int32
   /// Full-pel ME search radius.
   me_range : Int32
+  /// §460: allow non-zero-MV skip through the uniform motion chain.
+  skip_uniform : Bool
 }
 
 ///|
@@ -26,6 +28,13 @@ fn parse_options(args : Array[String]) -> Options raise {
   while i < args.length() {
     let arg = args[i]
     match arg {
+      "--skip-uniform" => {
+        if values.contains(arg) {
+          fail("encode-av1: repeated option \{arg}")
+        }
+        values[arg] = "true"
+        i += 1
+      }
       "--output"
       | "--width"
       | "--height"
@@ -88,7 +97,17 @@ fn parse_options(args : Array[String]) -> Options raise {
   if me_range < 0 || me_range > 1024 {
     fail("encode-av1: --me-range must be 0..=1024")
   }
-  { input, output, width, height, qp, rd_lambda, skip_pct, me_range, }
+  {
+    input,
+    output,
+    width,
+    height,
+    qp,
+    rd_lambda,
+    skip_pct,
+    me_range,
+    skip_uniform: values.contains("--skip-uniform"),
+  }
 }
 
 ///|

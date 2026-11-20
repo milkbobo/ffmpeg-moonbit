@@ -14,6 +14,9 @@ fn main raise {
     println(
       "  [--qp 1..=255] [--rd-lambda N] [--skip-pct 0..=100] [--me-range 0..=1024]",
     )
+    println(
+      "  [--skip-uniform]  allow non-zero-MV skip via NEWMV/NEARESTMV (§460)",
+    )
     return
   }
   let opts = parse_options(args[1:].to_owned())
@@ -49,6 +52,7 @@ fn main raise {
         base_q_idx=opts.qp,
         range=opts.me_range,
         skip_sad_pct=opts.skip_pct,
+        skip_uniform=opts.skip_uniform,
       )
     } else {
       enc.encode_frame(
@@ -57,6 +61,7 @@ fn main raise {
         range=opts.me_range,
         rd_lambda=opts.rd_lambda,
         skip_sad_pct=opts.skip_pct,
+        skip_uniform=opts.skip_uniform,
       )
     }
     let (pkt, exp) = match encoded {
@@ -96,6 +101,7 @@ fn main raise {
     "qp": opts.qp,
     "rd_lambda": opts.rd_lambda,
     "skip_pct": opts.skip_pct,
+    "skip_uniform": opts.skip_uniform,
     "output": opts.output,
   }
   println(summary.stringify())

@@ -33,6 +33,11 @@ pub fn av1_enc_write_me_res_tile(
   /// Skipped SBs must carry mv8 = (0, 0); the residual token slots for a
   /// skipped SB are ignored by the writer.
   skip_flags~ : FixedArray[Bool]? = None,
+  /// §460: when true, a skipped SB codes its mv8 through the uniform
+  /// motion chain (NEWMV/NEARESTMV, so the coded MV equals `mvs_*8[sb]`)
+  /// instead of GLOBALMV — this is NEARMV skip for non-zero MVs. The
+  /// zero-MV guard is lifted in this mode. Default false keeps §458.
+  skip_uniform~ : Bool = false,
 ) -> Result[Bytes, String] {
   if width <= 0 || height <= 0 || width % 64 != 0 || height % 64 != 0 {
     return Err(
@@ -56,8 +61,10 @@ pub fn av1_enc_write_me_res_tile(
     return Err("av1 enc: me res tile needs one skip flag per SB")
   }
   for i in 0..<n_sb {
-    if skips[i] && (mvs_y8[i] != 0 || mvs_x8[i] != 0) {
-      return Err("av1 enc: a skipped SB must have mv8 = (0, 0)")
+    if skips[i] && !skip_uniform && (mvs_y8[i] != 0 || mvs_x8[i] != 0) {
+      return Err(
+        "av1 enc: a skipped SB must have mv8 = (0, 0) unless skip_uniform",
+      )
     }
   }
   if chroma_full &&
@@ -127,7 +134,7 @@ pub fn av1_enc_write_me_res_tile(
           by,
           skip=is_skip,
           motion=(enc2, cdf2, stack) => {
-            if is_skip {
+            if is_skip && !skip_uniform {
               // GLOBALMV: newmv_mode=1 (not new), globalmv_mode=0
               // (identity GM → zero MV). Mirrors §446b's skip writer.
               enc2.encode_bool_adapt(cdf2.newmv_mode, (stack.ctx & 7) * 2, 1)
@@ -138,6 +145,10 @@ pub fn av1_enc_write_me_res_tile(
               )
               (2, (0, 0))
             } else {
+              // §460 NEARMV skip (and the usual skip=0 path): the uniform
+              // chain codes NEWMV or NEARESTMV so the coded MV equals
+              // `target` (= the frame's ME result). Skip still suppresses
+              // the residual tail, so only the MV bits are spent.
               av1_enc_write_uniform_motion(enc2, cdf2, stack, target, err)
             }
           },

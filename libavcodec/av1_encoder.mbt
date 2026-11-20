@@ -65,6 +65,7 @@ pub fn Av1Encoder::encode_frame(
   rd_lambda? : Int32,
   rd_candidates? : Array[Int32],
   skip_sad_pct? : Int32,
+  skip_uniform~ : Bool = false,
 ) -> Result[(Bytes, Av1EncPlanes), String] {
   let w = self.seq.width
   let h = self.seq.height
@@ -232,6 +233,7 @@ pub fn Av1Encoder::encode_frame(
       range~,
       dz_pm~,
       skip_sad_pct=skip_sad_pct.unwrap(),
+      skip_uniform~,
     )
   } else {
     av1_enc_write_me_res420_inter_frame_obu(
