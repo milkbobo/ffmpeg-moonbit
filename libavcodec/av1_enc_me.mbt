@@ -399,6 +399,226 @@ pub fn av1_enc_me_subpel_refine(
 }
 
 ///|
+/// §498: kernel SAD of one `size` x `size` block at `(x0, y0)` under an
+/// explicit 1/8-pel mv — the decoder's own MC kernel, so the distortion
+/// the partition decision minimizes is the one the reconstruction
+/// realizes. Luma only (the split decision rides the luma residual).
+fn av1_enc_kernel_sad_block(
+  src : FixedArray[Int32],
+  src_stride : Int32,
+  refimg : FixedArray[Int32],
+  ref_stride : Int32,
+  width : Int32,
+  height : Int32,
+  x0 : Int32,
+  y0 : Int32,
+  size : Int32,
+  mv_y8 : Int32,
+  mv_x8 : Int32,
+) -> Int64 {
+  let pred = av1_enc_mc_predict(
+    refimg,
+    ref_stride,
+    width,
+    height,
+    width,
+    height,
+    x0 >> 2,
+    y0 >> 2,
+    size >> 2,
+    size >> 2,
+    mv_y8,
+    mv_x8,
+    0,
+    0,
+    0,
+    8,
+  )
+  let mut sad : Int64 = 0L
+  for y in 0..<size {
+    let srow = (y0 + y) * src_stride + x0
+    for x in 0..<size {
+      let d = src[srow + x] - pred[y * size + x]
+      sad = sad + (if d < 0 { -d.to_int64() } else { d.to_int64() })
+    }
+  }
+  sad
+}
+
+///|
+/// §498: full-pel SAD search for one block — the per-SB loop of
+/// `av1_enc_me_fullpel_sad` generalized to sub-64 blocks, so a partition
+/// decision can compare a 64x64 candidate against its four 32x32
+/// quadrants. Same tie-break as the frame-level search (cheaper
+/// displacement first, then dy, dx). Returns `(best_dy, best_dx,
+/// best_sad)` in full-pel units.
+pub fn av1_enc_me_fullpel_sad_block(
+  src : FixedArray[Int32],
+  src_stride : Int32,
+  refimg : FixedArray[Int32],
+  ref_stride : Int32,
+  width : Int32,
+  height : Int32,
+  x0 : Int32,
+  y0 : Int32,
+  size : Int32,
+  range~ : Int32 = 16,
+) -> Result[(Int32, Int32, Int32), String] {
+  if size <= 0 || size % 4 != 0 || size > 64 {
+    return Err("av1 enc: me block size must be a 4..=64 multiple of 4")
+  }
+  if x0 < 0 || y0 < 0 || x0 + size > width || y0 + size > height {
+    return Err("av1 enc: me block outside the frame")
+  }
+  if range < 0 || range > 1024 {
+    return Err("av1 enc: me range must be 0..=1024")
+  }
+  let clamp = fn(v : Int32, n : Int32) -> Int32 {
+    if v < 0 {
+      0
+    } else if v >= n {
+      n - 1
+    } else {
+      v
+    }
+  }
+  let mut best = -1
+  let mut best_dy = 0
+  let mut best_dx = 0
+  for dy in -range..<=range {
+    for dx in -range..<=range {
+      let mut sad = 0
+      for y in 0..<size {
+        let sy = clamp(y0 + y + dy, height)
+        let srow = (y0 + y) * src_stride
+        let rrow = sy * ref_stride
+        for x in 0..<size {
+          let sx = clamp(x0 + x + dx, width)
+          let d = src[srow + x0 + x] - refimg[rrow + sx]
+          sad = sad + (if d < 0 { -d } else { d })
+        }
+      }
+      let cost = (if dy < 0 { -dy } else { dy }) +
+        (if dx < 0 { -dx } else { dx })
+      let better = if best < 0 {
+        true
+      } else if sad != best {
+        sad < best
+      } else {
+        let bc = (if best_dy < 0 { -best_dy } else { best_dy }) +
+          (if best_dx < 0 { -best_dx } else { best_dx })
+        cost < bc ||
+        (cost == bc && (dy < best_dy || (dy == best_dy && dx < best_dx)))
+      }
+      if better {
+        best = sad
+        best_dy = dy
+        best_dx = dx
+      }
+    }
+  }
+  Ok((best_dy, best_dx, best))
+}
+
+///|
+/// §498: kernel-SAD sub-pel refinement for one block — the per-SB
+/// stages of `av1_enc_me_subpel_refine` (integer + axial half-pel, then
+/// the quarter-pel neighborhood, then eighth-pel when hp) generalized to
+/// sub-64 blocks. Takes the full-pel result and returns the refined
+/// 1/8-pel mv plus the winner's kernel SAD (the distortion value for the
+/// partition decision). Ties keep the earlier stage's winner.
+pub fn av1_enc_me_subpel_refine_block(
+  src : FixedArray[Int32],
+  src_stride : Int32,
+  refimg : FixedArray[Int32],
+  ref_stride : Int32,
+  width : Int32,
+  height : Int32,
+  x0 : Int32,
+  y0 : Int32,
+  size : Int32,
+  mv_y : Int32,
+  mv_x : Int32,
+  hp~ : Bool = false,
+) -> Result[(Int32, Int32, Int64), String] {
+  if size <= 0 || size % 4 != 0 || size > 64 {
+    return Err("av1 enc: refine block size must be a 4..=64 multiple of 4")
+  }
+  if x0 < 0 || y0 < 0 || x0 + size > width || y0 + size > height {
+    return Err("av1 enc: refine block outside the frame")
+  }
+  let cands : Array[(Int32, Int32)] = [(0, 0), (4, 0), (-4, 0), (0, 4), (0, -4)]
+  let qcands : Array[(Int32, Int32)] = [
+    (2, 0),
+    (-2, 0),
+    (0, 2),
+    (0, -2),
+    (2, 2),
+    (2, -2),
+    (-2, 2),
+    (-2, -2),
+  ]
+  let ecands : Array[(Int32, Int32)] = [
+    (1, 0),
+    (-1, 0),
+    (0, 1),
+    (0, -1),
+    (1, 1),
+    (1, -1),
+    (-1, 1),
+    (-1, -1),
+  ]
+  let base8 : (Int32, Int32) = (mv_y * 8, mv_x * 8)
+  let mut best = av1_enc_kernel_sad_block(
+    src,
+    src_stride,
+    refimg,
+    ref_stride,
+    width,
+    height,
+    x0,
+    y0,
+    size,
+    base8.0,
+    base8.1,
+  )
+  let mut best8 = base8
+  for c in cands {
+    let cand8 : (Int32, Int32) = (base8.0 + c.0, base8.1 + c.1)
+    let sad = av1_enc_kernel_sad_block(
+      src, src_stride, refimg, ref_stride, width, height, x0, y0, size, cand8.0, cand8.1,
+    )
+    if sad < best {
+      best = sad
+      best8 = cand8
+    }
+  }
+  for c in qcands {
+    let cand8 : (Int32, Int32) = (best8.0 + c.0, best8.1 + c.1)
+    let sad = av1_enc_kernel_sad_block(
+      src, src_stride, refimg, ref_stride, width, height, x0, y0, size, cand8.0, cand8.1,
+    )
+    if sad < best {
+      best = sad
+      best8 = cand8
+    }
+  }
+  if hp {
+    for c in ecands {
+      let cand8 : (Int32, Int32) = (best8.0 + c.0, best8.1 + c.1)
+      let sad = av1_enc_kernel_sad_block(
+        src, src_stride, refimg, ref_stride, width, height, x0, y0, size, cand8.0, cand8.1,
+      )
+      if sad < best {
+        best = sad
+        best8 = cand8
+      }
+    }
+  }
+  Ok((best8.0, best8.1, best))
+}
+
+///|
 /// Encode a per-superblock sub-pel ME + dc-token inter frame OBU
 /// (§448b): the mv arrays are 1/8-pel pairs (e.g. the output of
 /// `av1_enc_me_subpel_refine`), passed through to the tile writer's

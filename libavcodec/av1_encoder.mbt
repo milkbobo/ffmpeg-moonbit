@@ -104,6 +104,17 @@ pub fn Av1Encoder::encode_frame(
   loop_filter_level0~ : Int32 = 0,
   loop_filter_level1~ : Int32 = 0,
   loop_filter_sharpness~ : Int32 = 0,
+  /// §498: the per-SB 64x64-vs-32x32 partition SAD margin for inter
+  /// frames. 0 (default) keeps the §449b single-partition residual path;
+  /// a value ≥ 0 routes it through the partitioned pipeline, where an SB
+  /// splits into four 32x32 blocks when their quadrant SADs beat the
+  /// whole-SB SAD by more than the margin. Loop-filter levels must stay
+  /// 0 in this mode (the deblock mirror is not partition-aware yet).
+  split_margin~ : Int32 = 0,
+  /// §499: NEARMV stack hits (drl bools, no MV payload) instead of NEWMV
+  /// when a deeper refmv candidate equals the target. Applies to the
+  /// residual inter paths (me_res420 and the partitioned pipeline).
+  drl~ : Bool = false,
 ) -> Result[(Bytes, Av1EncPlanes), String] {
   let w = self.seq.width
   let h = self.seq.height
@@ -438,6 +449,14 @@ pub fn Av1Encoder::encode_frame(
       }
   }
   let use_skip = effective_skip > 0
+  if split_margin > 0 &&
+    (loop_filter_level0 != 0 ||
+      loop_filter_level1 != 0 ||
+      loop_filter_sharpness != 0) {
+    return Err(
+      "av1 enc: split_margin requires zero loop-filter levels (the deblock mirror is not partition-aware yet)",
+    )
+  }
   let result = if use_skip {
     av1_enc_write_me_skip420_inter_frame_obu(
       self.seq,
@@ -463,6 +482,29 @@ pub fn Av1Encoder::encode_frame(
       loop_filter_level1~,
       loop_filter_sharpness~,
     )
+  } else if split_margin > 0 {
+    match
+      av1_enc_write_me_res_part420_inter_frame_obu(
+        self.seq,
+        self.refs,
+        src.y,
+        src.y_stride,
+        chosen.y,
+        chosen.y_stride,
+        chosen.u,
+        chosen.uv_stride,
+        chosen.v,
+        base_q_idx=q,
+        range~,
+        dz_pm~,
+        ref_slot~,
+        refresh_slot=out_slot,
+        split_margin~,
+        drl~,
+      ) {
+      Ok((obu, ey, eu, ev, _splits)) => Ok((obu, ey, eu, ev))
+      Err(e) => Err(e)
+    }
   } else {
     av1_enc_write_me_res420_inter_frame_obu(
       self.seq,
@@ -485,6 +527,7 @@ pub fn Av1Encoder::encode_frame(
       loop_filter_level0~,
       loop_filter_level1~,
       loop_filter_sharpness~,
+      drl~,
     )
   }
   let (frame_obu, exp_y, exp_u, exp_v) = match result {

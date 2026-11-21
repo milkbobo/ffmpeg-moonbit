@@ -363,7 +363,9 @@ fn av1_enc_write_mv_component_diff(
 ///|
 /// The uniform-MV mode chain (§447a): NEARESTMV when the stack's top
 /// candidate equals `target`, else NEWMV with joint + component
-/// residuals. Shared by every uniform-MV tile writer.
+/// residuals. With `drl` (§499) a deeper stack candidate equal to the
+/// target codes NEARMV instead — three mode bools plus the drl bools,
+/// with no MV payload. Shared by every uniform-MV tile writer.
 fn av1_enc_write_uniform_motion(
   enc : Av1MsacEnc,
   cdf : Av1CdfCtx,
@@ -371,6 +373,7 @@ fn av1_enc_write_uniform_motion(
   target : (Int32, Int32),
   err : Ref[String?],
   hp~ : Bool = false,
+  drl~ : Bool = false,
 ) -> (Int32, (Int32, Int32)) {
   // NEARESTMV candidate: the decoder's NEARESTMV return is
   // fix_precision(cands[0].mv0) unconditionally.
@@ -382,6 +385,64 @@ fn av1_enc_write_uniform_motion(
     enc.encode_bool_adapt(cdf.globalmv_mode, ((stack.ctx >> 3) & 1) * 2, 1)
     enc.encode_bool_adapt(cdf.refmv_mode, ((stack.ctx >> 4) & 15) * 2, 0)
     return (0, near)
+  }
+  if drl {
+    // §499 NEARMV: the decoder reads newmv=1, globalmv=1, refmv=1, then
+    // drl bools walking the stack from index 1; the mv is
+    // fix_precision(cands[1]) at index 1 and the raw candidate at 2/3
+    // (dav1d's `drl < 2` precision rule). Coding an index stops at the
+    // first zero bool, and a bool is only read while the stack has a
+    // deeper candidate (cnt > index + 1).
+    if stack.cnt > 1 {
+      let c1 = av1_rmv_fix_precision(stack.cands[1].mv0, false, hp)
+      if c1 == target {
+        enc.encode_bool_adapt(cdf.newmv_mode, (stack.ctx & 7) * 2, 1)
+        enc.encode_bool_adapt(cdf.globalmv_mode, ((stack.ctx >> 3) & 1) * 2, 1)
+        enc.encode_bool_adapt(cdf.refmv_mode, ((stack.ctx >> 4) & 15) * 2, 1)
+        if stack.cnt > 2 {
+          enc.encode_bool_adapt(
+            cdf.drl_bit,
+            av1_inter_drl_ctx(stack.cands[1].weight, stack.cands[2].weight) * 2,
+            0,
+          )
+        }
+        return (1, c1)
+      }
+      if stack.cnt > 2 && stack.cands[2].mv0 == target {
+        enc.encode_bool_adapt(cdf.newmv_mode, (stack.ctx & 7) * 2, 1)
+        enc.encode_bool_adapt(cdf.globalmv_mode, ((stack.ctx >> 3) & 1) * 2, 1)
+        enc.encode_bool_adapt(cdf.refmv_mode, ((stack.ctx >> 4) & 15) * 2, 1)
+        enc.encode_bool_adapt(
+          cdf.drl_bit,
+          av1_inter_drl_ctx(stack.cands[1].weight, stack.cands[2].weight) * 2,
+          1,
+        )
+        if stack.cnt > 3 {
+          enc.encode_bool_adapt(
+            cdf.drl_bit,
+            av1_inter_drl_ctx(stack.cands[2].weight, stack.cands[3].weight) * 2,
+            0,
+          )
+        }
+        return (1, stack.cands[2].mv0)
+      }
+      if stack.cnt > 3 && stack.cands[3].mv0 == target {
+        enc.encode_bool_adapt(cdf.newmv_mode, (stack.ctx & 7) * 2, 1)
+        enc.encode_bool_adapt(cdf.globalmv_mode, ((stack.ctx >> 3) & 1) * 2, 1)
+        enc.encode_bool_adapt(cdf.refmv_mode, ((stack.ctx >> 4) & 15) * 2, 1)
+        enc.encode_bool_adapt(
+          cdf.drl_bit,
+          av1_inter_drl_ctx(stack.cands[1].weight, stack.cands[2].weight) * 2,
+          1,
+        )
+        enc.encode_bool_adapt(
+          cdf.drl_bit,
+          av1_inter_drl_ctx(stack.cands[2].weight, stack.cands[3].weight) * 2,
+          1,
+        )
+        return (1, stack.cands[3].mv0)
+      }
+    }
   }
   // NEWMV: newmv_mode = 0 (no globalmv/refmv bits), drl = 0 (one zero
   // bool when the stack holds extra candidates), then the joint +

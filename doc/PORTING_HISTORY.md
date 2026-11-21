@@ -17778,3 +17778,53 @@ docker linuxserver/ffmpeg:9.0.2 仲裁发现自编流解码近全零，逐级定
 - **验收口径**：vorbis_encode_wbtest 增加两道永久回归——首包与 FFmpeg 逐字节
   相同（hex 夹具）、decode_stream 往返 SNR > 20 dB 门；libavformat E2E 全绿；
   全仓 libavcodec 回归（812 过）无新失败。
+
+## §498 AV1 编码器子 64 分割——per-SB NONE/SPLIT 决策（2026-11-22）
+
+inter 帧此前每个 64x64 SB 只编码单个 partition NONE 块（一个 MV）；本片补上
+dav1d decode_sb 的 SPLIT 递归镜像，per-SB 在「整块 NONE」与「四象限 SPLIT」
+之间做 SAD 决策，运动分象限的内容不再被单一 MV 绑架。
+
+- **镜像点（全部从解码端逐条核对）**：partition 符号 bl=1 时 count=
+  `av1_partition_type_count[1]`=9、SPLIT=3；bl=2 子块 NONE 的 ctx shift 是
+  `4-bl`=2、写回 `av1_al_part_ctx[bl=2]` 覆盖 `min(hsz=4,16)`=4 个 8px 槽；
+  **SPLIT 在 bl<4 不写回 a/l partition 银行**（§441 律的 inter 侧印证）。子块
+  的 `top_has_right` 来自 intra edge tree 节点：SB 的四个 32x32 象限是
+  [T,T,T,F]（`av1_init_mode_node` 的 thr 链），不是 64x64 NONE 的恒真。
+- **子块语法**：skip=0 + intra=inter + 参考树 + 各自 uniform motion 链 +
+  **TX_32X32 无分裂 var-tx 根 bool**（cat = 2·(4−3)−0 = **2**，64x64 根是 0、
+  其叶是 1——cat = 2·(4−txfm_max)−depth 沿树变化）+ luma txb 用
+  `(sb*4+q)` 的 1024 token 槽（与 NONE 叶同布局）+ 色度 TX_16X16 all_skip。
+- **决策**：`av1_enc_split_decide`——四象限 kernel-SAD（解码器自己的 MC 核）
+  之和 + margin 严格小于整 SB SAD 才 SPLIT（平局保 NONE）。margin 以 SAD
+  为单位折算语法开销（§457 尺度下 1 SAD ≈ 1 bit）。ME 增加块级原语
+  `av1_enc_me_fullpel_sad_block` / `av1_enc_me_subpel_refine_block`（4..64
+  任意 4 的倍数块，同平局律）。
+- **色度口径**：SPLIT SB 的色度残差 all_skip（色度修正留待后续片）；NONE SB
+  维持 me_res420 现状。入口签名不收色度源（expected 色度 = MC 预测）。
+- **验收**：新 `av1_enc_split_test` 4 测——决策律单元表、混合分割帧（SB0 四象限
+  异动 → split，其余 static → NONE）过解码器**逐像素相等**、session
+  split_margin E2E、**全 NONE 输出与 me_res420 逐字节一致**（回归门；色度源
+  必须随动否则 me_res420 的色度 token 产生合法差异）。CLI `encode-av1` 增
+  `--split-margin`；AV1 编码套件 118/118。
+
+## §499 AV1 编码器 drl——NEARMV 栈命中（2026-11-22）
+
+`av1_enc_write_uniform_motion` 此前只会 NEARESTMV（栈顶命中）或 NEWMV（全
+payload）；本片补 dav1d 单参考模式链的 NEARMV 分支：栈深部候选等于目标时，
+3 个模式 bool + drl bool 代替 joint + 两分量残差（约省 30 bit/块）。
+
+- **读序镜像**：NEARMV = newmv=1、globalmv=1、refmv=1，然后 drl bool 从栈
+  索引 1 起步：`cnt>2` 读 `drl_bit(ctx(w1,w2))`，1 则到 2 且 `cnt>3` 再读
+  `ctx(w2,w3)`；**索引 1 的候选要 fix_precision（drl<2 规则），2/3 用原始
+  值**。编码侧按目标命中深度写 0/1 序列，无 bool 可读时（cnt==2 命中 1、
+  cnt==3 命中 2）不写。
+- **NEWMV 保持 drl=0**（读 cands[0] 当参考）——写入位不变。
+- **优先级**：cands[0] 命中 → NEARESTMV（最便宜），再扫 1/2/3。
+- **接线**：`drl~` 穿透 me_res tile / split SB 助手 / me_res420 与
+  part420 入口 / session `encode_frame` / CLI `--drl`；其余写端默认 false
+  字节不变。
+- **验收**：新 `av1_enc_drl_test` 3 测——栈单元（手工 splat A/B 后 find SB2，
+  断言 cands[0]=A、cands[1]=B，验证 top-right 扫描扩展）/ drl 流严格更短
+  （连续逐 SB 运动场 A/B/B/B）/ 双变体各自过解码器逐像素相等。CLI 冒烟：
+  4 帧连续运动 yuv，`--drl` 58048 vs 无 58049 字节，双向自校验像素级通过。

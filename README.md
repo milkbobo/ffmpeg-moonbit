@@ -9,7 +9,7 @@
 | 格式 | 解码 | 编码 |
 | --- | --- | --- |
 | H.264、HEVC（H.265） | 已实现 I/P/B 帧 | 已实现，可输出 MP4 |
-| AV1 | 已实现关键帧、帧间帧及 film grain 等工具 | 已实现关键帧、帧间帧和多参考帧，目标码率控制待实现 |
+| AV1 | 已实现关键帧、帧间帧及 film grain 等工具 | 已实现关键帧、帧间帧、多参考帧、per-SB 64x64/32x32 分割与 NEARMV 栈复用，目标码率控制待实现 |
 | VP9 | 已实现 Profile 0–3 | 未实现 |
 | MJPEG、PNG/APNG | 已实现，MJPEG 支持部分格式 | 已实现 8 位 baseline MJPEG，以及 8/16 位 PNG 和全画幅 APNG |
 | AAC | 已实现 AAC-LC、HE-AAC v1/v2，未覆盖 USAC | 已实现 AAC-LC |

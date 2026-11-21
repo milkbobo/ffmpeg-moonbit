@@ -27,6 +27,11 @@ priv struct Options {
   /// §462/§465: comma-separated skip thresholds for the joint search,
   /// e.g. "50,100". Empty means the caller's --skip-pct only.
   rd_skip_pcts : Array[Int32]
+  /// §498: per-SB 64x64-vs-32x32 partition SAD margin (0 = off). Positive
+  /// values require zero loop-filter levels.
+  split_margin : Int32
+  /// §499: NEARMV stack hits through the drl bools.
+  drl : Bool
 }
 
 ///|
@@ -37,7 +42,7 @@ fn parse_options(args : Array[String]) -> Options raise {
   while i < args.length() {
     let arg = args[i]
     match arg {
-      "--skip-uniform" => {
+      "--skip-uniform" | "--drl" => {
         if values.contains(arg) {
           fail("encode-av1: repeated option \{arg}")
         }
@@ -53,7 +58,8 @@ fn parse_options(args : Array[String]) -> Options raise {
       | "--me-range"
       | "--ref-age"
       | "--rd-ref-ages"
-      | "--rd-skip-pcts" => {
+      | "--rd-skip-pcts"
+      | "--split-margin" => {
         if values.contains(arg) {
           fail("encode-av1: repeated option \{arg}")
         }
@@ -143,6 +149,10 @@ fn parse_options(args : Array[String]) -> Options raise {
       fail("encode-av1: --rd-skip-pcts entries must be 0..=100")
     }
   }
+  let split_margin = number("--split-margin", 0)
+  if split_margin < 0 {
+    fail("encode-av1: --split-margin must be nonnegative")
+  }
   {
     input,
     output,
@@ -156,6 +166,8 @@ fn parse_options(args : Array[String]) -> Options raise {
     ref_age,
     rd_ref_ages,
     rd_skip_pcts,
+    split_margin,
+    drl: values.contains("--drl"),
   }
 }
 

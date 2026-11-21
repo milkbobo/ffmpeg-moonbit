@@ -24,6 +24,12 @@ fn main raise {
     println(
       "  [--rd-skip-pcts L] skip thresholds for the joint search, e.g. 50,100",
     )
+    println(
+      "  [--split-margin N] per-SB 64x64/32x32 partition SAD margin (§498)",
+    )
+    println(
+      "  [--drl]            NEARMV stack hits through the drl bools (§499)",
+    )
     return
   }
   let opts = parse_options(args[1:].to_owned())
@@ -69,6 +75,8 @@ fn main raise {
         rd_skip_pcts=pcts,
         rd_ref_ages=opts.rd_ref_ages,
         skip_uniform=opts.skip_uniform,
+        split_margin=opts.split_margin,
+        drl=opts.drl,
       )
     } else if opts.rd_lambda < 0 {
       enc.encode_frame(
@@ -78,6 +86,8 @@ fn main raise {
         skip_sad_pct=opts.skip_pct,
         skip_uniform=opts.skip_uniform,
         ref_age=opts.ref_age,
+        split_margin=opts.split_margin,
+        drl=opts.drl,
       )
     } else {
       enc.encode_frame(
@@ -88,6 +98,8 @@ fn main raise {
         skip_sad_pct=opts.skip_pct,
         skip_uniform=opts.skip_uniform,
         ref_age=opts.ref_age,
+        split_margin=opts.split_margin,
+        drl=opts.drl,
       )
     }
     let (pkt, exp) = match encoded {
@@ -131,6 +143,8 @@ fn main raise {
     "ref_age": opts.ref_age,
     "rd_ref_ages": opts.rd_ref_ages.length(),
     "rd_skip_pcts": opts.rd_skip_pcts.length(),
+    "split_margin": opts.split_margin,
+    "drl": opts.drl,
     "output": opts.output,
   }
   println(summary.stringify())

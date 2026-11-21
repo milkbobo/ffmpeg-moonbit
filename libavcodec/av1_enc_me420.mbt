@@ -56,6 +56,9 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
   loop_filter_level0~ : Int32 = 0,
   loop_filter_level1~ : Int32 = 0,
   loop_filter_sharpness~ : Int32 = 0,
+  /// §499: NEARMV stack hits (drl bools, no MV payload) instead of NEWMV
+  /// when a deeper refmv candidate equals the target.
+  drl~ : Bool = false,
 ) -> Result[
   (Bytes, FixedArray[Int32], FixedArray[Int32], FixedArray[Int32]),
   String,
@@ -353,6 +356,7 @@ pub fn av1_enc_write_me_res420_inter_frame_obu(
       chroma_toks=Some(chroma_toks),
       chroma_signs=Some(chroma_signs),
       ref_idx~,
+      drl~,
     ) {
     Ok(t) => t
     Err(e) => return Err(e)
