@@ -120,6 +120,13 @@ test "ff_decode_audio: 重采样到 16000 → 采样率字段跟随" {
 }
 
 ///|
+test "ff_encode_flac: WAV 解码、重采样并导出 FLAC" {
+  let result = @api.ff_encode_flac(tiny_wav_u0100(), 16000)
+  assert_true(result.has_prefix("{\"ok\":true,\"flac\":\"ŦŌšŃ"))
+  assert_true(result.contains("\"sample_rate\":16000,\"channels\":1"))
+}
+
+///|
 test "MediaError::code: 五个稳定码" {
   inspect(
     @avf.MediaError::code(@avf.FormatNotFound),

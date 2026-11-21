@@ -154,7 +154,7 @@ fn first_video_frame(
 }
 
 ///|
-/// 视频首帧缩略图：8-bit planar YUV 经 `SwsRgbScaler` 转为 RGB24。
+/// 视频首帧缩略图：planar YUV 经 `SwsRgbScaler` 转为 RGB24。
 /// PNG 和 RGB JPEG 以原始尺寸转换。
 #export_name("ff_thumbnail")
 pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
@@ -181,11 +181,21 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
     Some(f) => f
     None => return env_err_code("NO_VIDEO_STREAM", "no decodable video frame")
   }
+  render_video_rgb(frame, max_w)
+}
+
+///|
+fn render_video_rgb(
+  frame : @avf.VideoFrame,
+  max_w : Int32,
+  fields~ : String = "",
+) -> String {
   let w = frame.width()
   let h = frame.height()
   if frame.image_rgb24() is Some(pixels) {
     let rgb = bytes_to_u0100(pixels)
     return env_ok(
+      fields +
       "\"width\":" +
       w.to_string() +
       ",\"height\":" +
@@ -195,12 +205,8 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
       "\"",
     )
   }
-  if frame.bit_depth() > 8 {
-    let msg = "thumbnail supports 8-bit YUV frames only, got " +
-      frame.bit_depth().to_string() +
-      "-bit"
-    return env_err_code("THUMBNAIL_UNSUPPORTED", msg)
-  }
+  let bits = frame.bit_depth()
+  let stride = if bits > 8 { 2 } else { 1 }
   let payload = frame.pixel_bytes()
   let ylen = w * h
   let c420 = (w + 1) / 2 * ((h + 1) / 2)
@@ -211,14 +217,15 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
     Some((0, 0)) => Some((Yuv444, ylen))
     _ => None
   }
-  guard layout is Some((src_fmt, clen)) && payload.length() == ylen + 2 * clen else {
+  guard layout is Some((src_fmt, clen)) &&
+    payload.length() == (ylen + 2 * clen) * stride else {
     return env_err_code(
       "THUMBNAIL_UNSUPPORTED", "unsupported planar frame layout",
     )
   }
-  let py = payload[0:ylen].to_owned()
-  let pu = payload[ylen:ylen + clen].to_owned()
-  let pv = payload[ylen + clen:ylen + 2 * clen].to_owned()
+  let py = preview_plane(payload, 0, ylen, bits)
+  let pu = preview_plane(payload, ylen, clen, bits)
+  let pv = preview_plane(payload, ylen + clen, clen, bits)
   let mw = if max_w <= 0 { 256 } else { max_w }
   let mut dw = if w <= mw { w } else { mw }
   dw -= dw % 2
@@ -250,6 +257,7 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
   }
   let rgb_s = bytes_to_u0100(rgb)
   env_ok(
+    fields +
     "\"width\":" +
     dw.to_string() +
     ",\"height\":" +
@@ -261,28 +269,55 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
 }
 
 ///|
-/// 音频轨 → 16-bit WAV：`rate > 0` 且异于源率时经 libswresample 重采样。
-#export_name("ff_decode_audio")
-pub fn ff_decode_audio(data : String, rate : Int32) -> String {
-  let audio = @avf.decode_audio_file(u0100_to_bytes(data)) catch {
-    e => return env_err(e)
+fn preview_plane(
+  pixels : Bytes,
+  start : Int32,
+  count : Int32,
+  bits : Int32,
+) -> Bytes {
+  if bits <= 8 {
+    return pixels[start:start + count].to_owned()
   }
-  let audio = if rate > 0 && rate != audio.sample_rate() {
-    audio.resample_to(rate) catch {
-      e => return env_err(e)
-    }
+  // Decoders pack >8-bit samples as little-endian words. Canvas needs 8 bits.
+  let shift = bits - 8
+  let round = 1 << (shift - 1)
+  Bytes::from_array(
+    FixedArray::makei(count, i => {
+      let pos = (start + i) * 2
+      let word = pixels[pos].to_int() | (pixels[pos + 1].to_int() << 8)
+      ((word + round) >> shift).min(255).to_byte()
+    }),
+  )
+}
+
+///|
+fn decode_audio_at_rate(
+  data : String,
+  rate : Int32,
+) -> @avf.DecodedAudio raise @avf.MediaError {
+  let audio = @avf.decode_audio_file(u0100_to_bytes(data))
+  if rate > 0 && rate != audio.sample_rate() {
+    audio.resample_to(rate)
   } else {
     audio
   }
-  let wav = audio.to_wav_s16() catch { e => return env_err(e) }
-  let wav_s = bytes_to_u0100(wav)
+}
+
+///|
+fn audio_result(
+  audio : @avf.DecodedAudio,
+  field : String,
+  bytes : Bytes,
+) -> String {
   let dur = match audio.duration_seconds() {
     Some(d) => d.to_string()
     None => "null"
   }
   env_ok(
-    "\"wav\":\"" +
-    wav_s +
+    "\"" +
+    field +
+    "\":\"" +
+    bytes_to_u0100(bytes) +
     "\",\"sample_rate\":" +
     audio.sample_rate().to_string() +
     ",\"channels\":" +
@@ -290,4 +325,27 @@ pub fn ff_decode_audio(data : String, rate : Int32) -> String {
     ",\"duration_seconds\":" +
     dur,
   )
+}
+
+///|
+/// 音频轨 → 16-bit WAV，采样率为 0 时保留源采样率。
+#export_name("ff_decode_audio")
+pub fn ff_decode_audio(data : String, rate : Int32) -> String {
+  let audio = decode_audio_at_rate(data, rate) catch { e => return env_err(e) }
+  let wav = audio.to_wav_s16() catch { e => return env_err(e) }
+  audio_result(audio, "wav", wav)
+}
+
+///|
+/// 音频轨 → 16-bit FLAC，采样率为 0 时保留源采样率。
+#export_name("ff_encode_flac")
+pub fn ff_encode_flac(data : String, rate : Int32) -> String {
+  let audio = decode_audio_at_rate(data, rate) catch { e => return env_err(e) }
+  let samples = @swr.swr_flt_planar_to_s16(audio.samples(), audio.channels()) catch {
+    e => return env_err_code("AUDIO_CONVERSION_FAILED", e.to_string())
+  }
+  match @avc.flac_encode(samples, audio.channels(), audio.sample_rate(), 16) {
+    Ok(flac) => audio_result(audio, "flac", flac.file())
+    Err(e) => env_err_code("FLAC_ENCODE_FAILED", e)
+  }
 }

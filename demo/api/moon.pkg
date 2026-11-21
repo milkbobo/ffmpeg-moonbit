@@ -1,5 +1,7 @@
 import {
+  "milkbobo/ffmpeg-moonbit/libavcodec" @avc,
   "milkbobo/ffmpeg-moonbit/libavformat" @avf,
+  "milkbobo/ffmpeg-moonbit/libswresample" @swr,
   "milkbobo/ffmpeg-moonbit/libswscale" @sws,
 }
 
