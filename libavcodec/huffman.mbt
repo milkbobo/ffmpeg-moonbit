@@ -322,6 +322,14 @@ pub fn BitWriter::put(self : BitWriter, value : UInt32, n : Int32) -> Unit {
 }
 
 ///|
+/// `align_put_bits`: zero-pad to the next byte boundary. */
+pub fn BitWriter::align(self : BitWriter) -> Unit {
+  while self.nbits != 0 {
+    self.put_bit(0)
+  }
+}
+
+///|
 /// Flush the partial byte and return the encoded bytes. */
 pub fn BitWriter::finish(self : BitWriter) -> Bytes {
   if self.nbits > 0 {

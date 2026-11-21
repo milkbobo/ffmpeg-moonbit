@@ -215,6 +215,7 @@ pub struct WmaDecoder {
   high_band_coded : Array[FixedArray[Int32]]
   high_band_values : Array[FixedArray[Int32]]
   coef_vlc : Array[WmaCoefVlc]
+  coef_vlc_index : Int32
   mut reset_block_lengths : Bool
   mut block_len_bits : Int32
   mut next_block_len_bits : Int32
@@ -569,6 +570,7 @@ pub fn wma_decoder_new(
     wma_coef_table(coef_vlc_table * 2),
     wma_coef_table(coef_vlc_table * 2 + 1),
   ]
+  let coef_vlc_index = coef_vlc_table
   let exp_vlc = if use_exp_vlc {
     wma_vlc_build(aac_scalefactor_code, aac_scalefactor_bits)
   } else {
@@ -626,6 +628,7 @@ pub fn wma_decoder_new(
     high_band_coded,
     high_band_values,
     coef_vlc,
+    coef_vlc_index,
     reset_block_lengths: true,
     block_len_bits: frame_len_bits,
     next_block_len_bits: frame_len_bits,
