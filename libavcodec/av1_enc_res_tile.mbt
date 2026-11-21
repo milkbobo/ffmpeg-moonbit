@@ -53,6 +53,10 @@ fn av1_enc_inter_split_sb(
   sb : Int32,
   err : Ref[String?],
   drl : Bool,
+  /// §500: per-quadrant chroma token specs ((sb*8+q*2+pl)*256, TX_16X16
+  /// scan order); an empty array keeps the §498 all-skip chroma.
+  sct : FixedArray[Int32],
+  scs : FixedArray[Int32],
 ) -> Unit {
   let bs32 = av1_block_sizes[(2 * 10 + 0) * 2].to_int()
   let uvtx32 = av1_max_txfm_size_for_bs[bs32 * 4 + layout].to_int()
@@ -172,8 +176,10 @@ fn av1_enc_inter_split_sb(
       a_lcoef[(qx4 & 31) + i2] = res_ctx
       l_lcoef[(qy4 & 31) + i2] = res_ctx
     }
-    // Chroma: one all_skip per plane at the sub-block's uvtx (TX_16X16
-    // for a 32x32 4:2:0 block).
+    // Chroma: per plane at the sub-block's uvtx (TX_16X16 for a 32x32
+    // 4:2:0 block) — all_skip, or a full §443 token chain from the
+    // §500 quadrant specs (the chroma txtp derives from the luma's with
+    // no bits, as §449b).
     if !mono {
       let t_dim_ctx_c = av1_txfm_ctx(uvtx32)
       for pl in 0..<2 {
@@ -190,14 +196,53 @@ fn av1_enc_inter_split_sb(
           ss,
           ss,
         )
-        enc.encode_bool_adapt(cdf.coef_skip, (t_dim_ctx_c * 13 + sctx_c) * 2, 1U)
         let ctw = av1_imin(av1_txfm_w(uvtx32), (bw - qx4 + 1) >> 1)
         let cth = av1_imin(av1_txfm_h(uvtx32), (bh - qy4 + 1) >> 1)
+        let a_leaf_c = FixedArray::make(4, 0)
+        let l_leaf_c = FixedArray::make(4, 0)
+        for i2 in 0..<4 {
+          a_leaf_c[i2] = a_ccoef[a_base + i2]
+          l_leaf_c[i2] = l_ccoef[l_base + i2]
+        }
+        let base_c = (sb * 8 + q * 2 + pl) * 256
+        let toks_c : FixedArray[Int32] = FixedArray::make(256, 0)
+        let signs_c : FixedArray[Int32] = FixedArray::make(256, 0)
+        let mut cul_c = 0
+        let mut any_c = false
+        if sct.length() > 0 {
+          for i2 in 0..<256 {
+            toks_c[i2] = sct[base_c + i2]
+            signs_c[i2] = scs[base_c + i2]
+            cul_c += toks_c[i2]
+            if toks_c[i2] != 0 {
+              any_c = true
+            }
+          }
+        }
+        let res_ctx_c = if !any_c {
+          enc.encode_bool_adapt(cdf.coef_skip, (t_dim_ctx_c * 13 + sctx_c) * 2, 1U)
+          0x40
+        } else {
+          enc.encode_bool_adapt(cdf.coef_skip, (t_dim_ctx_c * 13 + sctx_c) * 2, 0U)
+          av1_enc_txb_tokens(
+            enc,
+            cdf,
+            uvtx32,
+            1,
+            bs32,
+            toks_c,
+            signs_c,
+            a_leaf_c,
+            l_leaf_c,
+            coef_skip_written=true,
+          )
+          av1_imin(cul_c, 63) | av1_enc_res_sign_field(toks_c[0], signs_c[0])
+        }
         for i2 in 0..<ctw {
-          a_ccoef[a_base + i2] = 0x40
+          a_ccoef[a_base + i2] = res_ctx_c
         }
         for i2 in 0..<cth {
-          l_ccoef[l_base + i2] = 0x40
+          l_ccoef[l_base + i2] = res_ctx_c
         }
       }
     }
@@ -267,6 +312,11 @@ pub fn av1_enc_write_me_res_tile(
   /// when a deeper refmv candidate equals the target. Default false keeps
   /// the §447a chain byte-identical.
   drl~ : Bool = false,
+  /// §500: per-quadrant chroma token specs for split SBs —
+  /// (sb*8 + q*2 + pl) * 256 slots of TX_16X16 scan order. When omitted
+  /// (or empty) split SBs keep all-skip chroma (§498 behaviour).
+  split_chroma_toks~ : FixedArray[Int32]? = None,
+  split_chroma_signs~ : FixedArray[Int32]? = None,
 ) -> Result[Bytes, String] {
   if width <= 0 || height <= 0 || width % 64 != 0 || height % 64 != 0 {
     return Err(
@@ -296,10 +346,12 @@ pub fn av1_enc_write_me_res_tile(
       )
     }
   }
-  // §498: split flags and per-quadrant MVs.
+  // §498: split flags and per-quadrant MVs; §500: split chroma tokens.
   let sp = splits.unwrap_or(FixedArray::make(n_sb, false))
   let smy = split_mvs_y8.unwrap_or(FixedArray::make(0, 0))
   let smx = split_mvs_x8.unwrap_or(FixedArray::make(0, 0))
+  let sct = split_chroma_toks.unwrap_or(FixedArray::make(0, 0))
+  let scs = split_chroma_signs.unwrap_or(FixedArray::make(0, 0))
   let mut any_split = false
   for i in 0..<n_sb {
     if sp[i] {
@@ -315,6 +367,12 @@ pub fn av1_enc_write_me_res_tile(
       splits is None) {
     return Err(
       "av1 enc: split SBs need 4 quadrant mv entries per SB (got \{smy.length()}/\{smx.length()})",
+    )
+  }
+  if sct.length() > 0 &&
+    (mono || sct.length() != n_sb * 8 * 256 || scs.length() != n_sb * 8 * 256) {
+    return Err(
+      "av1 enc: split chroma token specs need 8x256 entries per SB (non-mono)",
     )
   }
   if chroma_full &&
@@ -400,6 +458,8 @@ pub fn av1_enc_write_me_res_tile(
             sb,
             err,
             drl,
+            sct,
+            scs,
           )
         } else {
           av1_enc_inter_skip_block(

@@ -17828,3 +17828,25 @@ payload）；本片补 dav1d 单参考模式链的 NEARMV 分支：栈深部候�
   断言 cands[0]=A、cands[1]=B，验证 top-right 扫描扩展）/ drl 流严格更短
   （连续逐 SB 运动场 A/B/B/B）/ 双变体各自过解码器逐像素相等。CLI 冒烟：
   4 帧连续运动 yuv，`--drl` 58048 vs 无 58049 字节，双向自校验像素级通过。
+
+## §500 SPLIT SB 色度残差补全——per-quadrant TX_16X16（2026-11-22）
+
+§498 的 part 入口把色度全部 all-skip（含 NONE SB），与 me_res420 路径
+（NONE SB 每平面一个 TX_32X32 txb）相比是质量回退；本片拉平并补全。
+
+- **NONE SB**：色度量化照搬 me_res420（TX_32X32、(sb*2+pl)*1024 槽、
+  recon 先写 pred 再写修正）——恢复 src_u/src_v 参数后，part 入口与
+  me_res420 在全 NONE 内容下**逐字节一致**依旧成立，且色度残差非零时
+  两者生成相同的 token 链（字节一致性测试升级为静态色度源，把色度
+  token 链纳入守卫）。**残差 scratch 顺序律：luma 叶先消费 `resid`，
+  色度块后跑**（同 me_res420 的排布，色度复用同 buffer 会覆写）。
+- **SPLIT SB**：每象限每平面一个 TX_16X16 txb——(sb*8+q*2+pl)*256 槽、
+  basis16 / dq_shift16=0 / recon tx=2（照搬 key tile 的 TX_16X16 链）；
+  色度 txtp 仍从 luma 派生无位（§449b 律）；上下文银行 publish 覆盖
+  ctw/cth=4 色度槽。写端 `split_chroma_toks~/signs~` 缺省空数组保持
+  §498 all-skip 行为。
+- **验收**：新行为测试「chroma residuals are coded on split SBs」——
+  同 luma 运动场下静态色度（残差非零 → token 编码）与随动色度
+  （残差全零 → all-skip）两包对比：前者更长、重建含色度修正、两者
+  各自（独立解码器，**inter 帧刷新槽 0 后不可复用同一解码器链**）
+  过解码器逐像素相等；AV1 编码套件 119/119。

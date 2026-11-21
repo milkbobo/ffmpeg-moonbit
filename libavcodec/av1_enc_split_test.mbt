@@ -157,6 +157,9 @@ test "av1 split: mixed partition frame decodes pixel-exact" {
       refs,
       src_y,
       w,
+      exp.u,
+      exp.uv_stride,
+      exp.v,
       exp.y,
       exp.y_stride,
       exp.u,
@@ -197,6 +200,159 @@ test "av1 split: mixed partition frame decodes pixel-exact" {
       if d.u[y * d.uv_stride + x] != eu[y * cw + x] ||
         d.v[y * d.uv_stride + x] != ev[y * cw + x] {
         fail("split UV(\{y},\{x}) diverged")
+      }
+    }
+  }
+}
+
+///|
+///|
+/// Chroma sources for the mixed-motion frame: `moving=true` shifts each
+/// chroma quadrant (16x16) by its luma quadrant's shift halved, making
+/// every chroma residual an exact MC match (zero → all-skip); `moving=
+/// false` leaves chroma static, so the split SBs carry real chroma
+/// residuals.
+fn split_mixed_chroma(
+  ref_p : FixedArray[Int32],
+  cw : Int32,
+  ch : Int32,
+  moving : Bool,
+) -> FixedArray[Int32] {
+  let out : FixedArray[Int32] = FixedArray::make(cw * ch, 0)
+  for i in 0..<(cw * ch) {
+    out[i] = ref_p[i]
+  }
+  if !moving {
+    return out
+  }
+  let clamp = fn(v : Int32, n : Int32) -> Int32 {
+    if v < 0 {
+      0
+    } else if v >= n {
+      n - 1
+    } else {
+      v
+    }
+  }
+  // SB (0,0)'s chroma quadrants (16x16 each): q1 +4 px horizontal,
+  // q2 +4 px vertical, q3 diagonal — halving the luma quadrant shifts.
+  for y in 0..<32 {
+    for x in 0..<32 {
+      let q = (x / 16) + (y / 16) * 2
+      let dx = if q % 2 == 1 { 4 } else { 0 }
+      let dy = if q / 2 == 1 { 4 } else { 0 }
+      out[y * cw + x] = ref_p[clamp(y + dy, ch) * cw + clamp(x + dx, cw)]
+    }
+  }
+  out
+}
+
+///|
+test "av1 split: chroma residuals are coded on split SBs" {
+  let w = 128
+  let h = 128
+  let cw = 64
+  let ch = 64
+  let enc = @libavcodec.Av1Encoder::new(
+    @libavcodec.Av1SeqEncConfig::default(width=w, height=h),
+  )
+  let key_src = @libavcodec.Av1EncPlanes::{
+    y: split_tex_plane(w, h, 21),
+    y_stride: w,
+    u: split_tex_plane(cw, ch, 22),
+    uv_stride: cw,
+    v: split_tex_plane(cw, ch, 23),
+  }
+  let dec = @libavcodec.Av1Decoder::new()
+  let (pkt0, exp) = match enc.encode_frame(key_src) {
+    Ok(v) => v
+    Err(e) => fail("key encode: \{e}")
+  }
+  match dec.decode_packet(pkt0) {
+    Ok(Some(_)) => ()
+    Ok(None) => fail("key frame hidden")
+    Err(e) => fail("key decode: \{e}")
+  }
+  let (seq, refs_a) = split_seq_refs(w, h)
+  ignore(seq)
+  let refs_b = @libavcodec.av1_refmvs_reference_store_new()
+  refs_b.refresh_without_mvs(0, w, h, 255)
+  let src_y = split_mixed_y(exp.y, w, h)
+  let encode = fn(
+    refs,
+    src_u : FixedArray[Int32],
+    src_v : FixedArray[Int32],
+  ) -> (
+    Bytes,
+    FixedArray[Int32],
+    FixedArray[Int32],
+  ) raise {
+    match
+      @libavcodec.av1_enc_write_me_res_part420_inter_frame_obu(
+        seq,
+        refs,
+        src_y,
+        w,
+        src_u,
+        cw,
+        src_v,
+        exp.y,
+        exp.y_stride,
+        exp.u,
+        exp.uv_stride,
+        exp.v,
+        base_q_idx=100,
+      ) {
+      Ok((obu, _, eu, ev, _)) => (obu, eu, ev)
+      Err(e) => fail("split encode: \{e}")
+    }
+  }
+  // Static chroma: the split SB's chroma residuals are real (tokens
+  // coded). Moving chroma: every quadrant is an exact match (all-skip).
+  let (pkt_a, eu_a, _) = encode(refs_a, exp.u, exp.v)
+  let (pkt_b, eu_b, _) = encode(
+    refs_b,
+    split_mixed_chroma(exp.u, cw, ch, true),
+    split_mixed_chroma(exp.v, cw, ch, true),
+  )
+  if pkt_a.length() <= pkt_b.length() {
+    fail(
+      "chroma tokens did not grow the stream: \{pkt_a.length()} vs \{pkt_b.length()}",
+    )
+  }
+  // The static-chroma run's reconstruction carries the chroma correction
+  // (differences against the all-skip reconstruction inside SB 0).
+  let mut diff = 0
+  for y in 0..<32 {
+    for x in 0..<32 {
+      if eu_a[y * cw + x] != eu_b[y * cw + x] {
+        diff += 1
+      }
+    }
+  }
+  if diff == 0 {
+    fail("no chroma correction in the split SB reconstruction")
+  }
+  // Both streams decode pixel-exactly — each in its own decoder, since
+  // frame A refreshes slot 0 and frame B was encoded against the key.
+  for pair in [(pkt_a, eu_a, "static"), (pkt_b, eu_b, "moving")] {
+    let (pkt, eu, tag) = pair
+    let dec_i = @libavcodec.Av1Decoder::new()
+    match dec_i.decode_packet(pkt0) {
+      Ok(Some(_)) => ()
+      Ok(None) => fail("key frame hidden (\{tag})")
+      Err(e) => fail("key decode (\{tag}): \{e}")
+    }
+    let d = match dec_i.decode_packet(pkt) {
+      Ok(Some(f)) => f
+      Ok(None) => fail("inter frame hidden (\{tag})")
+      Err(e) => fail("inter decode (\{tag}): \{e}")
+    }
+    for y in 0..<ch {
+      for x in 0..<cw {
+        if d.u[y * d.uv_stride + x] != eu[y * cw + x] {
+          fail("chroma (\{tag}) U(\{y},\{x}) diverged")
+        }
       }
     }
   }
@@ -272,13 +428,11 @@ test "av1 split: all-NONE output is byte-identical to the single-partition write
   let ref_u = split_tex_plane(cw, ch, 12)
   let ref_v = split_tex_plane(cw, ch, 13)
   // Uniform diagonal move — every quadrant's best mv equals the SB's, so
-  // the decision keeps NONE for all SBs. The chroma sources move with the
-  // same motion (chroma 4 px = luma 8 px), keeping their residuals at
-  // zero, because the comparison writer (me_res420) does code chroma
-  // tokens while the partitioned entry keeps chroma all-skip.
+  // the decision keeps NONE for all SBs. The chroma sources stay static,
+  // so their residuals (reference minus the motion-shifted prediction)
+  // are nonzero and both entries must produce identical chroma token
+  // chains for the byte identity to hold.
   let src_y = split_shift_plane(ref_y, w, h, 8, 8)
-  let src_u = split_shift_plane(ref_u, cw, ch, 4, 4)
-  let src_v = split_shift_plane(ref_v, cw, ch, 4, 4)
   let refs_a = @libavcodec.av1_refmvs_reference_store_new()
   refs_a.refresh_without_mvs(0, w, h, 255)
   let refs_b = @libavcodec.av1_refmvs_reference_store_new()
@@ -289,6 +443,9 @@ test "av1 split: all-NONE output is byte-identical to the single-partition write
       refs_a,
       src_y,
       w,
+      ref_u,
+      cw,
+      ref_v,
       ref_y,
       w,
       ref_u,
@@ -305,9 +462,9 @@ test "av1 split: all-NONE output is byte-identical to the single-partition write
       refs_b,
       src_y,
       w,
-      src_u,
+      ref_u,
       cw,
-      src_v,
+      ref_v,
       ref_y,
       w,
       ref_u,

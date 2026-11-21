@@ -33,16 +33,19 @@ pub fn av1_enc_split_decide(
 
 ///|
 /// Encode a per-SB partitioned full-residual 4:2:0 inter frame OBU.
-/// Chroma residuals are all-skip on every SB (the session's me_res420
-/// convention), so only the luma source planes are consumed; the chroma
-/// source content does not affect the output. Returns the OBU, the
-/// expected Y/U/V planes (raster, plane strides = w/cw) and the per-SB
-/// split flags the writer realized.
+/// Chroma residuals follow the §449b convention: NONE SBs quantize one
+/// TX_32X32 txb per plane (byte-identical to the me_res420 path), split
+/// SBs quantize one TX_16X16 txb per quadrant plane ((sb*8+q*2+pl)*256
+/// slots, §500). Returns the OBU, the expected Y/U/V planes (raster,
+/// plane strides = w/cw) and the per-SB split flags the writer realized.
 pub fn av1_enc_write_me_res_part420_inter_frame_obu(
   seq : Av1SequenceParameters,
   refs : Av1RefmvsReferenceStore,
   src_y : FixedArray[Int32],
   src_y_stride : Int32,
+  src_u : FixedArray[Int32],
+  src_u_stride : Int32,
+  src_v : FixedArray[Int32],
   ref_y : FixedArray[Int32],
   ref_y_stride : Int32,
   ref_u : FixedArray[Int32],
@@ -164,7 +167,8 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
       splits[sb] = av1_enc_split_decide(sad64, q_sads, split_margin)
     }
   }
-  // 3. Dequant tables (as me_res420).
+  // 3. Dequant tables (as me_res420: the frame's dq_u_* offsets are zero,
+  //    so udc = uac = base_q_idx, with separate dc/ac columns).
   let dq_tbl = if seq.bitdepth == 8 {
     av1_dq_tbl_0
   } else if seq.bitdepth == 10 {
@@ -174,16 +178,27 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
   }
   let ydc_tbl = dq_tbl[base_q_idx * 2].to_int()
   let yac_tbl = dq_tbl[base_q_idx * 2 + 1].to_int()
+  let udc_tbl = dq_tbl[base_q_idx * 2].to_int()
+  let uac_tbl = dq_tbl[base_q_idx * 2 + 1].to_int()
   let dq_shift = av1_imax(0, av1_txfm_ctx(3) - 2)
+  let dq_shift16 = av1_imax(0, av1_txfm_ctx(2) - 2)
   let basis = av1_enc_itx_basis32()
+  let basis16 = av1_enc_itx_basis(2)
   // 4. Per SB: predict all planes, quantize luma into the (sb*4+q) token
   //    slots (NONE: the four 32x32 leaves of the 64x64 residual; SPLIT:
-  //    one 32x32 leaf per quadrant), and compose the expected
-  //    reconstruction. Chroma stays all-skip on every SB — the same
-  //    convention as the session's me_res420 path — so its expected
-  //    planes are the raw MC predictions.
+  //    one 32x32 leaf per quadrant) and chroma into per-plane tokens
+  //    (NONE: one TX_32X32 txb per plane at (sb*2+pl)*1024; SPLIT: one
+  //    TX_16X16 txb per quadrant plane at (sb*8+q*2+pl)*256), then
+  //    compose the expected reconstruction.
   let tok_specs : FixedArray[Int32] = FixedArray::make(n_sb * 4 * 1024, 0)
   let sign_specs : FixedArray[Int32] = FixedArray::make(n_sb * 4 * 1024, 0)
+  let chroma_toks : FixedArray[Int32] = FixedArray::make(n_sb * 2 * 1024, 0)
+  let chroma_signs : FixedArray[Int32] = FixedArray::make(n_sb * 2 * 1024, 0)
+  let split_chroma_toks : FixedArray[Int32] = FixedArray::make(n_sb * 8 * 256, 0)
+  let split_chroma_signs : FixedArray[Int32] = FixedArray::make(
+    n_sb * 8 * 256,
+    0,
+  )
   let expected_y : FixedArray[Int32] = FixedArray::make(w * h, 0)
   let expected_u : FixedArray[Int32] = FixedArray::make(cw * ch, 0)
   let expected_v : FixedArray[Int32] = FixedArray::make(cw * ch, 0)
@@ -268,8 +283,10 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
             }
           }
           // Chroma predictions (luma 4px-domain positions; the kernel
-          // derives the subsampled geometry itself).
+          // derives the subsampled geometry itself) + one TX_16X16 txb
+          // per quadrant plane (§500).
           for pl in 0..<2 {
+            let src_p = if pl == 0 { src_u } else { src_v }
             let ref_p = if pl == 0 { ref_u } else { ref_v }
             let expected_p = if pl == 0 { expected_u } else { expected_v }
             let pred_p = av1_enc_mc_predict(
@@ -294,7 +311,43 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
             let cqy0 = cy0 + (q / 2) * 16
             for y in 0..<16 {
               for x in 0..<16 {
+                leaf_r[y * 16 + x] = src_p[(cqy0 + y) * src_u_stride + cqx0 + x] -
+                  pred_p[y * 16 + x]
                 expected_p[(cqy0 + y) * cw + cqx0 + x] = pred_p[y * 16 + x]
+              }
+            }
+            let _ = av1_enc_quantize_leaf(
+              leaf_r,
+              16,
+              basis16,
+              udc_tbl,
+              uac_tbl,
+              dq_shift16,
+              toks,
+              signs,
+              dz_pm~,
+            )
+            let base_c = (sb * 8 + q * 2 + pl) * 256
+            for i in 0..<256 {
+              split_chroma_toks[base_c + i] = toks[i]
+              split_chroma_signs[base_c + i] = signs[i]
+            }
+            let scratch : FixedArray[Int32] = FixedArray::make(256, 0)
+            for r in 0..<16 {
+              for c in 0..<16 {
+                scratch[r * 16 + c] = pred_p[r * 16 + c]
+              }
+            }
+            for i in 0..<256 {
+              toks[i] = split_chroma_toks[base_c + i]
+              signs[i] = split_chroma_signs[base_c + i]
+            }
+            let _ = av1_enc_recon_leaf(
+              scratch, 0, 16, toks, signs, 2, udc_tbl, uac_tbl, dq_shift16,
+            )
+            for r in 0..<16 {
+              for c in 0..<16 {
+                expected_p[(cqy0 + r) * cw + cqx0 + c] = scratch[r * 16 + c]
               }
             }
           }
@@ -364,13 +417,6 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
           0,
           8,
         )
-        // Chroma: no residual (all-skip), expected = the prediction.
-        for y in 0..<32 {
-          for x in 0..<32 {
-            expected_u[(cy0 + y) * cw + cx0 + x] = pred_u[y * 32 + x]
-            expected_v[(cy0 + y) * cw + cx0 + x] = pred_v[y * 32 + x]
-          }
-        }
         for li in 0..<4 {
           let lx = li % 2 * 32
           let ly = li / 2 * 32
@@ -411,6 +457,55 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
           for r in 0..<32 {
             for c in 0..<32 {
               expected_y[(y0 + ly + r) * w + x0 + lx + c] = scratch[r * 32 + c]
+            }
+          }
+        }
+        // Chroma: one TX_32X32 txb per plane (the §449b me_res420 path,
+        // byte-identical). Runs after the luma leaves — it reuses the
+        // `resid` scratch, which the leaves consume first.
+        for pl in 0..<2 {
+          let src_p = if pl == 0 { src_u } else { src_v }
+          let pred_p = if pl == 0 { pred_u } else { pred_v }
+          let expected_p = if pl == 0 { expected_u } else { expected_v }
+          for y in 0..<32 {
+            for x in 0..<32 {
+              let s = src_p[(cy0 + y) * src_u_stride + cx0 + x]
+              resid[y * 32 + x] = s - pred_p[y * 32 + x]
+              expected_p[(cy0 + y) * cw + cx0 + x] = pred_p[y * 32 + x]
+            }
+          }
+          let _ = av1_enc_quantize_leaf(
+            resid,
+            32,
+            basis,
+            udc_tbl,
+            uac_tbl,
+            dq_shift,
+            toks,
+            signs,
+            dz_pm~,
+          )
+          let base_c = (sb * 2 + pl) * 1024
+          for i in 0..<1024 {
+            chroma_toks[base_c + i] = toks[i]
+            chroma_signs[base_c + i] = signs[i]
+          }
+          let scratch : FixedArray[Int32] = FixedArray::make(1024, 0)
+          for r in 0..<32 {
+            for c in 0..<32 {
+              scratch[r * 32 + c] = pred_p[r * 32 + c]
+            }
+          }
+          for i in 0..<1024 {
+            toks[i] = chroma_toks[base_c + i]
+            signs[i] = chroma_signs[base_c + i]
+          }
+          let _ = av1_enc_recon_leaf(
+            scratch, 0, 32, toks, signs, 3, udc_tbl, uac_tbl, dq_shift,
+          )
+          for r in 0..<32 {
+            for c in 0..<32 {
+              expected_p[(cy0 + r) * cw + cx0 + c] = scratch[r * 32 + c]
             }
           }
         }
@@ -460,10 +555,14 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
       tok_specs,
       sign_specs,
       mono=false,
+      chroma_toks=Some(chroma_toks),
+      chroma_signs=Some(chroma_signs),
       ref_idx~,
       splits=Some(splits),
       split_mvs_y8=Some(qy8),
       split_mvs_x8=Some(qx8),
+      split_chroma_toks=Some(split_chroma_toks),
+      split_chroma_signs=Some(split_chroma_signs),
       drl~,
     ) {
     Ok(t) => t
