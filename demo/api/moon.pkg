@@ -1,8 +1,12 @@
 import {
   "milkbobo/ffmpeg-moonbit/libavcodec" @avc,
+  "milkbobo/ffmpeg-moonbit/libavfilter" @avfilter,
   "milkbobo/ffmpeg-moonbit/libavformat" @avf,
   "milkbobo/ffmpeg-moonbit/libswresample" @swr,
   "milkbobo/ffmpeg-moonbit/libswscale" @sws,
+  "moonbitlang/core/math",
+  "moonbitlang/core/cmp",
+  "moonbitlang/core/encoding/utf8",
 }
 
 pkgtype(kind: "foreign_library")

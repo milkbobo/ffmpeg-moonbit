@@ -20,13 +20,15 @@ priv struct DemoPlayback {
   mut end : Double
   mut eof : Bool
   mut locate_frame : (@avf.VideoFrame, Double)?
+  mut decoded_pixels : Int64
+  bulk : Bool
 }
 
 ///|
 let demo_playback : Ref[DemoPlayback?] = { val: None, }
 
 ///|
-fn demo_open_player(data : Bytes) -> DemoPlayback raise {
+fn demo_open_player(data : Bytes, bulk~ : Bool = false) -> DemoPlayback raise {
   let file = @avf.MediaFile::open(data)
   let video = for stream in file.streams() {
     if stream.media_type == @avf.MediaType::Video {
@@ -36,6 +38,9 @@ fn demo_open_player(data : Bytes) -> DemoPlayback raise {
     None
   }
   guard video is Some(video) else { fail("input has no video stream") }
+  if video.width != 0 || video.height != 0 {
+    demo_check_video_size(video.width, video.height)
+  }
   let track = demo_mov_track(data, file, video.index)
   let (order, durations) = match track {
     Some(track) => demo_mov_timeline_for(track)
@@ -106,6 +111,8 @@ fn demo_open_player(data : Bytes) -> DemoPlayback raise {
     end: 0.0,
     eof: false,
     locate_frame: None,
+    decoded_pixels: 0L,
+    bulk,
   }
 }
 
@@ -160,6 +167,14 @@ fn DemoPlayback::next(self : DemoPlayback) -> @avf.VideoFrame? raise {
     match self.read_packet() {
       Some(packet) if packet.stream_index == self.video.index => {
         let frames = self.decoder.decode(packet)
+        self.decoded_pixels = demo_count_video(
+          frames,
+          if self.bulk {
+            self.decoded_pixels
+          } else {
+            0L
+          },
+        )
         if self.order.is_empty() {
           self.frame_batch = frames
           self.batch_index = 0
@@ -177,11 +192,34 @@ fn DemoPlayback::next(self : DemoPlayback) -> @avf.VideoFrame? raise {
       Some(_) => ()
       None => {
         self.eof = true
-        self.frame_batch = self.decoder.finish_video()
+        self.frame_batch = self.decoder.finish_video(
+          pixel_budget=demo_hevc_batch_pixels,
+        )
+        self.decoded_pixels = demo_count_video(
+          self.frame_batch,
+          if self.bulk {
+            self.decoded_pixels
+          } else {
+            0L
+          },
+        )
         self.batch_index = 0
       }
     }
   }
+}
+
+///|
+fn DemoPlayback::advance(self : DemoPlayback) -> Double {
+  let start = self.end
+  let index = self.frame_index
+  self.end += if index < self.durations.length() {
+    self.durations[index].to_double() / 90000.0
+  } else {
+    self.fallback_step
+  }
+  self.frame_index += 1
+  start
 }
 
 ///|
@@ -285,7 +323,7 @@ pub fn ff_player_seek(target : Double) -> String {
     if player.seek_indexed(target) || (!player.eof && target >= player.end) {
       player
     } else {
-      demo_open_player(player.data)
+      demo_open_player(player.data, bulk=player.bulk)
     }
   } catch {
     error => return env_err_code("PLAYBACK_FAILED", error.to_string())
@@ -297,8 +335,19 @@ pub fn ff_player_seek(target : Double) -> String {
 ///|
 #export_name("ff_player_open")
 pub fn ff_player_open(data : String) -> String {
+  demo_player_open(data, false)
+}
+
+///|
+#export_name("ff_player_open_bulk")
+pub fn ff_player_open_bulk(data : String) -> String {
+  demo_player_open(data, true)
+}
+
+///|
+fn demo_player_open(data : String, bulk : Bool) -> String {
   demo_playback.val = None
-  let player = demo_open_player(u0100_to_bytes(data)) catch {
+  let player = demo_open_player(u0100_to_bytes(data), bulk~) catch {
     error => return env_err_code("PLAYBACK_FAILED", error.to_string())
   }
   demo_playback.val = Some(player)
@@ -313,6 +362,12 @@ pub fn ff_player_open(data : String) -> String {
 #export_name("ff_player_frame")
 pub fn ff_player_frame(target : Double, max_width : Int32) -> String {
   demo_player_read(target, max_width, 0)
+}
+
+///|
+#export_name("ff_player_close")
+pub fn ff_player_close() -> Unit {
+  demo_playback.val = None
 }
 
 ///|
@@ -341,15 +396,7 @@ fn demo_player_read(
       error => return env_err_code("PLAYBACK_FAILED", error.to_string())
     }
     guard frame is Some(frame) else { break }
-    let start = player.end
-    let index = player.frame_index
-    let step = if index < player.durations.length() {
-      player.durations[index].to_double() / 90000.0
-    } else {
-      player.fallback_step
-    }
-    player.end += step
-    player.frame_index += 1
+    let start = player.advance()
     selected = Some((frame, start))
     if player.end > target {
       break

@@ -48,6 +48,8 @@ pub fn mp4_av_muxer_new(
   /// Explicit audio sample entry (e.g. `mp4_ac3_entry`); built from
   /// `audio_codec` when None.
   audio_entry~ : Array[Byte]? = None,
+  /// Preserve the source AAC AudioSpecificConfig when copying compressed packets.
+  aac_config~ : Bytes? = None,
   /// Audio codec when `audio_entry` is None: "aac" or "opus".
   audio_codec~ : String = "aac",
   /// Video sample entry: "h264", "hevc", "av1" or "vp9".
@@ -63,6 +65,15 @@ pub fn mp4_av_muxer_new(
   let known_audio = audio_codec == "aac" || audio_codec == "opus"
   if audio_codec == "opus" && channels > 2 {
     return Err("EINVAL: MP4 Opus supports 1 or 2 channels")
+  }
+  if aac_config is Some(config) &&
+    (
+      audio_codec != "aac" ||
+      audio_entry is Some(_) ||
+      config.length() < 2 ||
+      config.length() > 64
+    ) {
+    return Err("EINVAL: invalid AAC AudioSpecificConfig")
   }
   // avcC needs at least 7 bytes; hvcC/av1C/vpcC can be shorter.
   let min_config = if video_codec == "h264" { 7 } else { 4 }
@@ -102,7 +113,10 @@ pub fn mp4_av_muxer_new(
     video_codec,
     audio_codec,
     aac_priming,
-    audio_entry,
+    audio_entry: match aac_config {
+      Some(config) => Some(mp4_av_aac_entry(sample_rate, channels, config~))
+      None => audio_entry
+    },
     video_language: mp4_language_code(video_language),
     audio_language: mp4_language_code(audio_language),
     video_packets: [],
@@ -167,8 +181,15 @@ fn mp4_av_asc(rate : Int32, channels : Int32) -> Array[Byte] {
 }
 
 ///|
-fn mp4_av_aac_entry(rate : Int32, channels : Int32) -> Array[Byte] {
-  let asc = mp4_av_asc(rate, channels)
+fn mp4_av_aac_entry(
+  rate : Int32,
+  channels : Int32,
+  config? : Bytes,
+) -> Array[Byte] {
+  let asc = match config {
+    Some(bytes) => bytes.to_array()
+    None => mp4_av_asc(rate, channels)
+  }
   let dcd_len = 15 + asc.length()
   let es_len = 8 + dcd_len
   let esds_body : Array[Byte] = []

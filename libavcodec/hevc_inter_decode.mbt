@@ -867,6 +867,7 @@ pub struct HevcDecoder {
   frames : Array[HevcDecodedFrame]
   // The single-thread C local context retains chroma modes across pictures.
   priv rdpcm_chroma_modes : Array[Int32]
+  priv mut pixel_budget : Int64?
 }
 
 ///|
@@ -877,6 +878,7 @@ pub fn hevc_decoder_new() -> HevcDecoder {
     poc_tid0: 0,
     frames: [],
     rdpcm_chroma_modes: Array::make(4, 0),
+    pixel_budget: None,
   }
 }
 
@@ -1038,8 +1040,10 @@ pub fn ff_hevc_decode_frames_ex(
   is_nalff : Bool,
   nal_length_size : Int32,
   apply_filters : Bool,
+  pixel_budget? : Int64,
 ) -> Result[Array[HevcDecodedFrame], String] {
   let dec = hevc_decoder_new()
+  dec.pixel_budget = pixel_budget
   let pkt = match ff_h2645_packet_split(data, nal_length_size, Hevc, is_nalff) {
     Ok(p) => p
     Err(e) => return Err(e)
@@ -1312,6 +1316,17 @@ fn hevc_decode_picture(
   let sps = match ps.sps_list[pps.sps_id] {
     Some(s) => s
     None => return Err("hevc: missing SPS")
+  }
+  if dec.pixel_budget is Some(remaining) {
+    let pixels = sps.width.to_int64() * sps.height.to_int64()
+    guard pixels > 0L &&
+      pixels <= remaining &&
+      sps.width <= 4096 &&
+      sps.height <= 4096 &&
+      pixels <= 4096L * 2160L else {
+      return Err("hevc: decoded picture exceeds the batch pixel budget")
+    }
+    dec.pixel_budget = Some(remaining - pixels)
   }
   if (sps.bit_depth != 8 && sps.bit_depth != 10 && sps.bit_depth != 12) ||
     sps.separate_colour_plane != 0 {

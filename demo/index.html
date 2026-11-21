@@ -47,6 +47,13 @@
           <audio id="audio" controls hidden></audio>
           <canvas id="wasmCanvas" aria-label="Wasm 解码的画面" hidden></canvas>
           <button id="wasmStart" class="primary wasm-start" type="button" hidden>播放视频</button>
+          <div id="subtitleOverlay" class="subtitle-overlay" hidden></div>
+        </div>
+        <div id="subtitleControls" class="subtitle-controls" hidden>
+          <label>字幕轨 <select id="subtitleTrack"></select></label>
+          <label>导出格式 <select id="subtitleFormat"><option value="vtt">WebVTT</option><option value="srt">SRT</option></select></label>
+          <button id="exportSubtitle" type="button" disabled>导出字幕</button>
+          <p id="subtitleStatus" role="status"></p>
         </div>
         <div id="wasmControls" class="wasm-controls" hidden>
           <button id="wasmPlay" type="button" disabled>播放</button>
@@ -78,7 +85,7 @@
             <button id="cancel" type="button" hidden>取消</button>
           </div>
         </div>
-        <div class="tool">
+        <form class="tool" id="audioExportForm">
           <h3 id="audioTitle">转音频 / 提取音轨</h3>
           <p>导出首条音轨为 16 位音频，可调整采样率。</p>
           <div class="audio-options">
@@ -94,8 +101,30 @@
               </select>
             </label>
           </div>
-          <button id="exportAudio" type="button" disabled>生成音频</button>
-        </div>
+          <details id="audioPost" class="audio-post">
+            <summary>音频后期处理</summary>
+            <fieldset id="audioPostOptions" disabled aria-label="后期处理选项">
+              <label class="audio-toggle"><input id="audioTrimSilence" type="checkbox"> 去除首尾静音</label>
+              <p>低于 −60 dBFS 且持续至少 0.5 秒。</p>
+              <div class="audio-options">
+                <label>淡入（秒） <input id="audioFadeIn" type="number" min="0" max="3600" step="any" value="0" required></label>
+                <label>淡出（秒） <input id="audioFadeOut" type="number" min="0" max="3600" step="any" value="0" required></label>
+              </div>
+              <label class="audio-toggle"><input id="audioNormalize" type="checkbox"> 按目标响度调整音量</label>
+              <div class="audio-options">
+                <label>目标响度（LUFS） <input id="audioTarget" type="number" min="-40" max="-5" step="any" value="-16" disabled required></label>
+                <label>采样峰值上限（dBFS） <input id="audioCeiling" type="number" min="-20" max="0" step="any" value="-1" disabled required></label>
+              </div>
+              <div class="audio-mix">
+                <label>混音文件 <input id="audioMixFile" type="file"></label>
+                <label>混音音量（%） <input id="audioMixWeight" type="number" min="0" max="100" step="any" value="50" disabled required></label>
+                <button id="clearAudioMix" type="button" hidden>移除混音文件</button>
+              </div>
+              <p>响度归一化和混音支持单声道与立体声。</p>
+            </fieldset>
+          </details>
+          <button id="exportAudio" type="submit" disabled>生成音频</button>
+        </form>
         <div class="tool">
           <h3>首帧与封面</h3>
           <p>解码视频首帧为 PNG，或读取容器封面。</p>
@@ -104,10 +133,80 @@
             <button id="cover" type="button" disabled>提取封面</button>
           </div>
         </div>
+        <div class="tool">
+          <h3>视频缩略图总览</h3>
+          <p>沿视频时间轴等间隔取帧，拼成一张带时间戳的 PNG。</p>
+          <label class="video-format">最多取帧
+            <select id="contactCount">
+              <option value="6">6 帧</option>
+              <option value="12" selected>12 帧</option>
+              <option value="24">24 帧</option>
+            </select>
+          </label>
+          <button id="contactSheet" type="button" disabled>生成缩略图总览</button>
+        </div>
+        <div class="tool">
+          <h3>音频分析</h3>
+          <p>查看首条音轨的波形、采样峰值、整体响度和静音区间。</p>
+          <button id="analyzeAudio" type="button" disabled>分析音轨</button>
+        </div>
+        <div class="tool">
+          <h3>视频故障检测</h3>
+          <p>检测 H.264、HEVC、VP9 和 AV1 的黑场与冻结，并标记音轨静音。</p>
+          <button id="diagnose" type="button" disabled>检测视频</button>
+        </div>
       </section>
     </div>
 
+    <section class="panel editing" aria-labelledby="editTitle">
+      <div class="panel-head"><h2 id="editTitle">关键帧裁剪与片段拼接</h2></div>
+      <div class="edit-tools">
+        <form class="tool" id="trimForm">
+          <h3>裁剪当前 MP4</h3>
+          <p>起点向前对齐、终点向后对齐到 H.264 IDR 或文件结尾。</p>
+          <div class="audio-options">
+            <label>起点（秒） <input id="trimStart" type="number" min="0" step="any" value="0" required></label>
+            <label>终点（秒） <input id="trimEnd" type="number" min="0" step="any" required></label>
+          </div>
+          <button id="trim" type="submit" disabled>裁剪并导出 MP4</button>
+        </form>
+        <div class="tool">
+          <h3>拼接 MP4</h3>
+          <p>当前文件为首段。追加片段须使用相同的 H.264 配置、尺寸和 AAC 参数。</p>
+          <div class="actions">
+            <button id="chooseClips" type="button" disabled>添加后续片段</button>
+            <input id="clipPicker" type="file" accept=".mp4,.m4v,.mov,video/mp4" multiple hidden>
+            <button id="concat" type="button" disabled>拼接并导出 MP4</button>
+          </div>
+          <ol id="clipList" class="clip-list"></ol>
+        </div>
+      </div>
+    </section>
     <p id="taskStatus" class="notice" role="status" hidden></p>
+    <button id="cancelTool" type="button" hidden>取消处理</button>
+    <section class="panel editing" id="videoDiagnostics" aria-labelledby="diagnosticTitle" hidden>
+      <div class="panel-head"><h2 id="diagnosticTitle">视频故障检测结果</h2></div>
+      <div class="tool">
+        <p id="diagnosticNote"></p>
+        <ul id="diagnosticList" class="diagnostic-list"></ul>
+      </div>
+    </section>
+    <section class="panel analysis" id="audioAnalysis" aria-labelledby="analysisTitle" hidden>
+      <div class="panel-head"><h2 id="analysisTitle">音频分析结果</h2><span id="analysisSource"></span></div>
+      <dl>
+        <div><dt>采样峰值</dt><dd id="analysisPeak"></dd></div>
+        <div><dt>整体响度</dt><dd id="analysisLoudness"></dd></div>
+        <div><dt>静音区间</dt><dd id="silenceCount"></dd></div>
+      </dl>
+      <figure class="waveform">
+        <canvas id="analysisWaveform" width="960" height="144" role="img" aria-label="音频波形，阴影表示静音区间"></canvas>
+        <figcaption><span>0:00</span><span id="analysisDuration"></span></figcaption>
+      </figure>
+      <details id="silenceDetails">
+        <summary>查看静音区间（低于 −60 dBFS，持续至少 0.5 秒）</summary>
+        <ol id="silenceIntervals"></ol>
+      </details>
+    </section>
     <section class="panel" id="results" hidden>
       <div class="panel-head"><h2>输出文件</h2></div>
       <ul id="outputs" class="outputs"></ul>

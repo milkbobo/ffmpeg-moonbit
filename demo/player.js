@@ -1,3 +1,5 @@
+import { PLAYBACK_TIMEOUT } from "./media-task.js";
+
 export class WasmPlayer {
   constructor(file, fileId, canvas, controls, callbacks) {
     this.canvas = canvas;
@@ -25,18 +27,22 @@ export class WasmPlayer {
       const request = this.pending.get(data.id);
       if (!request) return;
       this.pending.delete(data.id);
+      clearTimeout(request.timer);
       if (data.error) request.reject(new Error(data.error));
       else request.resolve(data.result);
     };
     this.worker.onerror = () => this.fail("Wasm 播放线程无法启动。");
+    this.worker.onmessageerror = () => this.fail("无法读取播放线程返回的画面。");
     this.load(file);
   }
 
   send(action, options) {
+    if (this.closed || this.error) return Promise.reject(new Error(this.error || "播放器已关闭。"));
     const id = ++this.requestId;
     return new Promise((resolve, reject) => {
       this.worker.postMessage({ id, fileId: this.fileId, action, ...options });
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => this.fail("视频解码超时，已停止播放线程。"), PLAYBACK_TIMEOUT);
+      this.pending.set(id, { resolve, reject, timer });
     });
   }
 
@@ -49,9 +55,11 @@ export class WasmPlayer {
       this.duration = duration;
       this.controls.seek.max = duration ?? 0;
       this.draw(first);
-      this.updateTime(0);
-      this.updateButtons();
-      this.prefetch();
+      if (!this.seeking) {
+        this.updateTime(0);
+        this.updateButtons();
+        this.prefetch();
+      }
     } catch (error) {
       this.fail(error.message);
     }
@@ -97,6 +105,7 @@ export class WasmPlayer {
     const minutes = Math.floor(time / 60);
     const seconds = String(Math.floor(time % 60)).padStart(2, "0");
     this.controls.time.textContent = `${minutes}:${seconds}`;
+    this.callbacks.timeChanged?.(time);
   }
 
   previewSeek(time) {
@@ -246,6 +255,7 @@ export class WasmPlayer {
   fail(message) {
     if (this.closed || this.error) return;
     this.error = message;
+    this.stopWorker(message);
     this.pause();
     this.updateButtons();
     this.callbacks.error(message);
@@ -254,11 +264,18 @@ export class WasmPlayer {
   close() {
     this.pause();
     this.closed = true;
-    this.worker.terminate();
-    for (const request of this.pending.values()) request.reject(new Error("播放器已关闭。"));
-    this.pending.clear();
+    this.stopWorker("播放器已关闭。");
     this.sound.removeAttribute("src");
     this.sound.load();
     if (this.soundUrl) URL.revokeObjectURL(this.soundUrl);
+  }
+
+  stopWorker(message) {
+    this.worker.terminate();
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error(message));
+    }
+    this.pending.clear();
   }
 }

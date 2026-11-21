@@ -397,6 +397,7 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
     None
   }
   guard video is Some(video) else { fail("input has no video stream") }
+  demo_check_video_size(video.width, video.height)
   let decoder = @avf.VideoDecoder::open(video)
   // Both output encoders use even 4:2:0 dimensions.
   let width = (video.width + 1) / 2 * 2
@@ -413,10 +414,12 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
   let pending : Map[Int32, @avf.VideoFrame] = Map([])
   let mut decode_index = 0
   let mut display_index = 0
+  let mut decoded_pixels = 0L
   for ;; {
     guard file.next_packet() is Some(packet) else { break }
     if packet.stream_index == video.index {
       let frames = decoder.decode(packet)
+      decoded_pixels = demo_count_video(frames, decoded_pixels)
       if h264_order.is_empty() {
         for frame in frames {
           units.append(encoder.push(demo_video_planes(frame, width, height)))
@@ -440,7 +443,9 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
   guard pending.is_empty() else {
     fail("incomplete H.264 presentation timeline")
   }
-  for frame in decoder.finish_video() {
+  let tail = decoder.finish_video(pixel_budget=demo_hevc_batch_pixels)
+  ignore(demo_count_video(tail, decoded_pixels))
+  for frame in tail {
     units.append(encoder.push(demo_video_planes(frame, width, height)))
   }
   units.append(encoder.finish())
@@ -464,7 +469,7 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
     }
   }
   let audio = if file.streams().any(s => s.media_type == @avf.MediaType::Audio) {
-    let audio = @avf.decode_audio_file(data)
+    let audio = demo_decode_audio(data)
     guard audio.channels() <= 2 else {
       fail("MP4 conversion currently supports mono or stereo audio")
     }
@@ -472,7 +477,7 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
       if audio.sample_rate() == 48000 {
         audio
       } else {
-        audio.resample_to(48000)
+        demo_resample_audio(audio, 48000)
       },
     )
   } else {

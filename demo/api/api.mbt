@@ -145,7 +145,7 @@ fn first_video_frame(
     }
   }
   if frame is None {
-    for f in dec.finish_video() {
+    for f in dec.finish_video(pixel_budget=demo_hevc_batch_pixels) {
       frame = Some(f)
       break
     }
@@ -173,6 +173,11 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
     None =>
       return env_err_code("NO_VIDEO_STREAM", "no video stream in this file")
   }
+  if vinfo.width != 0 || vinfo.height != 0 {
+    demo_check_video_size(vinfo.width, vinfo.height) catch {
+      error => return env_err_code("MEDIA_BUDGET_EXCEEDED", error.to_string())
+    }
+  }
   let dec = @avf.VideoDecoder::open(vinfo) catch { e => return env_err(e) }
   let frame = first_video_frame(mf, dec, vinfo.index) catch {
     e => return env_err(e)
@@ -192,6 +197,9 @@ fn render_video_rgb(
 ) -> String {
   let w = frame.width()
   let h = frame.height()
+  demo_check_video_size(w, h) catch {
+    error => return env_err_code("MEDIA_BUDGET_EXCEEDED", error.to_string())
+  }
   if frame.image_rgb24() is Some(pixels) {
     let rgb = bytes_to_u0100(pixels)
     return env_ok(
@@ -295,12 +303,7 @@ fn decode_audio_at_rate(
   data : String,
   rate : Int32,
 ) -> @avf.DecodedAudio raise @avf.MediaError {
-  let audio = @avf.decode_audio_file(u0100_to_bytes(data))
-  if rate > 0 && rate != audio.sample_rate() {
-    audio.resample_to(rate)
-  } else {
-    audio
-  }
+  demo_resample_audio(demo_decode_audio(u0100_to_bytes(data)), rate)
 }
 
 ///|
@@ -309,22 +312,39 @@ fn audio_result(
   field : String,
   bytes : Bytes,
 ) -> String {
-  let dur = match audio.duration_seconds() {
+  env_ok(
+    audio_fields(
+      field,
+      bytes,
+      audio.sample_rate(),
+      audio.channels(),
+      audio.duration_seconds(),
+    ),
+  )
+}
+
+///|
+fn audio_fields(
+  field : String,
+  bytes : Bytes,
+  rate : Int32,
+  channels : Int32,
+  duration : Double?,
+) -> String {
+  let dur = match duration {
     Some(d) => d.to_string()
     None => "null"
   }
-  env_ok(
-    "\"" +
-    field +
-    "\":\"" +
-    bytes_to_u0100(bytes) +
-    "\",\"sample_rate\":" +
-    audio.sample_rate().to_string() +
-    ",\"channels\":" +
-    audio.channels().to_string() +
-    ",\"duration_seconds\":" +
-    dur,
-  )
+  "\"" +
+  field +
+  "\":\"" +
+  bytes_to_u0100(bytes) +
+  "\",\"sample_rate\":" +
+  rate.to_string() +
+  ",\"channels\":" +
+  channels.to_string() +
+  ",\"duration_seconds\":" +
+  dur
 }
 
 ///|

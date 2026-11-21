@@ -45,6 +45,51 @@ fn tiny_wav_u0100() -> String {
 }
 
 ///|
+test "audio decoding enforces an optional aggregate PCM sample budget" {
+  let data = tiny_wav()
+  let audio = @avf.decode_audio_file(data, sample_budget=16L)
+  assert_eq(audio.samples()[0].length(), 16)
+  let status = try {
+    ignore(@avf.decode_audio_file(data, sample_budget=15L))
+    "unexpected success"
+  } catch {
+    error => error.message()
+  }
+  assert_true(status.contains("sample budget exceeded"))
+}
+
+///|
+test "audio post-processing exports WAV and FLAC with processed duration" {
+  let source = tiny_wav_u0100()
+  let wav = @api.ff_process_audio(
+    source, source, "wav", 0, false, 0.001, 0.001, false, -16.0, -1.0, 0.5,
+  )
+  let flac = @api.ff_process_audio(
+    source, "", "flac", 0, false, 0.001, 0.0, false, -16.0, -1.0, 0.0,
+  )
+  assert_true(
+    wav.contains("\"wav\":") && wav.contains("\"duration_seconds\":0.002"),
+  )
+  assert_true(
+    flac.contains("\"flac\":") && flac.contains("\"duration_seconds\":0.002"),
+  )
+  let invalid = @api.ff_process_audio(
+    source, "", "wav", 0, false, -1.0, 0.0, false, -16.0, -1.0, 0.0,
+  )
+  assert_true(invalid.contains("AUDIO_POST_FAILED"))
+}
+
+///|
+test "audio analysis measures a short WAV and propagates demux errors" {
+  let result = @api.ff_analyze_audio(tiny_wav_u0100())
+  assert_true(result.contains("\"ok\":true"))
+  assert_true(result.contains("\"rate\":8000"))
+  assert_true(result.contains("\"peak\":0.030517578125"))
+  assert_true(result.contains("\"lufs\":null"))
+  assert_true(@api.ff_analyze_audio("").contains("FORMAT_NOT_FOUND"))
+}
+
+///|
 fn demo_encode_bytes(b : Bytes) -> String {
   let sb = StringBuilder()
   for i in 0..<b.length() {

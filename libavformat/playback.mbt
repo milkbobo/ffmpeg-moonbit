@@ -849,7 +849,10 @@ pub struct DecodedAudio {
 /// Decode the first audio stream of a container to PCM - the engine the JSON
 /// CLI's `decode-audio` command and the libswresample slice build on. Files
 /// without an audio stream raise `UnsupportedCodec` with the format name.
-pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
+pub fn decode_audio_file(
+  data : Bytes,
+  sample_budget? : Int64,
+) -> DecodedAudio raise MediaError {
   let mf = MediaFile::open(data)
   let mut audio = -1
   for i = 0; i < mf.streams().length(); i = i + 1 {
@@ -883,6 +886,7 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
     None => 0
   }
   let mut nth = 0
+  let mut decoded = 0L
   while true {
     let pkt = mf.next_packet()
     if pkt is None {
@@ -899,6 +903,12 @@ pub fn decode_audio_file(data : Bytes) -> DecodedAudio raise MediaError {
     }
     nth = nth + 1
     for f in frames {
+      if sample_budget is Some(limit) {
+        decoded += f.nb_samples.to_int64() * dec.channels().to_int64()
+        guard decoded <= limit else {
+          raise DecodeError("decoded audio sample budget exceeded")
+        }
+      }
       if discarded {
         skip = if skip > f.nb_samples { skip - f.nb_samples } else { 0 }
         continue
@@ -1423,6 +1433,7 @@ pub fn VideoDecoder::decode(
 /// entry point is built for.
 pub fn VideoDecoder::finish_video(
   self : VideoDecoder,
+  pixel_budget? : Int64,
 ) -> Array[VideoFrame] raise MediaError {
   match self.dec {
     Hevc(nal_length_size) => {
@@ -1441,6 +1452,7 @@ pub fn VideoDecoder::finish_video(
           nal_length_size > 0,
           nal_length_size,
           true,
+          pixel_budget?,
         ) {
         Ok(v) => v
         Err(e) => raise DecodeError(e)
