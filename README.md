@@ -4,7 +4,7 @@
 
 ## 编解码支持范围
 
-截至 2026-11-21，主要格式的实现情况如下。
+截至 2026-11-22，主要格式的实现情况如下。
 
 | 格式 | 解码 | 编码 |
 | --- | --- | --- |
@@ -14,7 +14,9 @@
 | MJPEG、PNG/APNG | 已实现，MJPEG 支持部分格式 | 已实现 8 位 baseline MJPEG，以及 8/16 位 PNG 和全画幅 APNG |
 | AAC | 已实现 AAC-LC、HE-AAC v1/v2，未覆盖 USAC | 已实现 AAC-LC |
 | MP2、MP3、FLAC、ALAC、Opus | 已实现 | 已实现 |
-| Vorbis、AC-3、E-AC-3、WavPack 等 | 已实现，E-AC-3 支持部分模式 | 未实现 |
+| APE（Monkey's Audio） | 已实现 v3.80–3.99 全版本 | 格式无公开编码器 |
+| WMA v1/v2 | 已实现 | 已实现 |
+| Vorbis、AC-3、E-AC-3、WavPack 等 | 已实现，E-AC-3 支持部分模式 | Vorbis 已实现（实验性，首包与 FFmpeg 原生编码器逐字节一致，解码质量持平），AC-3 等未实现 |
 
 **容器和工具**　支持读取 MP4/MOV、MKV/WebM、MPEG-TS、WAV、Ogg 等容器，可写入 MP4、WebM、MPEG-TS、WAV 等格式，也支持 HLS/DASH 分片读取、图像缩放和音频重采样。
 

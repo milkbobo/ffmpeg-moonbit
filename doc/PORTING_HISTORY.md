@@ -17682,4 +17682,99 @@ channels ∈ {1,3,6} 的通用标量回退路径。
 **至此**：`@v128` 覆盖面 **25 个模块**（19 个 libavcodec 子包 +
 libswscale 3 内核 + libavutil 5 内核 + libswresample 1 内核），
 **158 个用例**全部通过（libavcodec 78 + libswscale 57 + libswresample 23），
-`moon check --target wasm --deny-warn` 0/0。
+`moon check --target wasm --deny-warn` 0/0。
+placeholder
+
+## §494 APE 解码器（libavcodec/apedec.c → libavcodec/ape.mbt，2026-11-22）
+
+Monkey's Audio 无损解码器的纯 MoonBit 移植，覆盖 FATE 全家族向量：
+9 组真实流（luckynight-mac380/388/389b1-c2000、mac388-c4000、mac391b1/392b2/394b1-c2000、
+mac394b1-c4000、luckynight-partial、NoLegacy-cut）与 docker linuxserver/ffmpeg:9.0.2
+解码 **位级一致**（无损格式 MD5 逐字节相同，含 16/24-bit、
+c2000/c4000、所有 entropy 路径）。
+
+- **结构**：范围编码器（range coder）+ 四代 rice 熵解码（_0000/_3860/_3900/_3990）+
+  三代预测器（32-bit 的 3800/3930 与 64-bit 的 3950，含 interim 双通道路径）+
+  多阶格式滤波（do_apply_filter 的 scalarproduct_and_madd_int16）。
+  C 的大量有符/无符转换通过 ape_u/ape_i/ape_u64/ape_i64 助手在使用点显式化。
+- **decode_frame 分块语义**：对齐 C decode API 的循环——同一 packet 反复喂入直到
+  packet_done，每次出 blocks_per_loop（4608）样本；fileversion < 3930 整包一次解。
+- **位流读入**：bswap_buf 字序反转直接表达为读入时每 4 字节字节翻转；
+  < 3950 流的 +2 字节 overread 补偿与尾字节清零照搬（实测位型若不对齐会
+  把尾字节 rice 码吃掉，表现为个别样本非零）。
+- **单/立体声分派修正**：C 的 ape_unpack_mono（伪立体声）调 **mono** 变体
+  熵解码（只解 ch0），不能按 channels 字段判分支——初版按 channels 走
+  会在伪立体声帧上解出错误额外通道。
+- **测试侧**：静音帧、伪立体声、构造器拒绝、level-1000 fast 滤波
+  零残差帧（手拼 rice 位流，11 bit/码）+ 9 组 realdata 位级。生成器
+  scripts/gen_ape_fixtures.py（源在 .scratch/ape_dl，FATE rsync 可再生）。
+
+## §495 WMA 编码器（libavcodec/wmaenc.c → libavcodec/wma_encode.mbt，2026-11-22）
+
+WMA v1/v2 编码器的纯 MoonBit 移植：**与 stock FFmpeg wmav1/wmav2 编码器都逐字节一致**。
+6 包 128 kbit/s / 44.1 kHz / 立体声语音帧与 docker 编码的 ASF payload 逐字节相同
+（v1、v2 各 6 包全同；v1 的差异分支——exponent 5bit 头 + 跳首带、
+mdct_norm×sqrt(n4)、coefs_start=3、每声道后 align——全部验证正确），
+自解与 docker 参考解码 ±1 LSB。
+
+- **共享初始化**：嵌入一个 flags2=1（exp-VLC/无 reservoir/定长）的 WmaDecoder
+  欣 ff_wma_init 参数派生——C 编/解码器本就同一初始化；WmaDecoder 新增
+  coef_vlc_index 字段把 coef_vlc_table 选择暴露给编码器。block_align=1 绕过解码
+  构造器的正性检查（ff_wma_init 不读该字段，编码器自己算）。
+- **位级的关键**：f32 截断点全部照 C：窗乘、n 归一化、mult = exp10(tg·0.05)/
+  max_exp 的 double→float、exponents·mult 的 float×float，以及 mdct_norm×sqrt(n4)
+  的 double 域乘法后一次 f32；MDCT 用 f64 naive（量化格点吸收了 1e-13 级
+  相对漂移，lrint 边界无翻转），lrint 按银行家舍入手写。
+- **total_gain 二分搜索**与 C 同序（64..1 位尋优 + 线性上行），encode_frame
+  返回字节差，最后一次调用的输出即终态，再按 block_align 补 'N'。
+- **坑**：测试夹具的负数样本走 reinterpret_as_uint 会变 2^32-x，必须 to_double；
+  v2 extradata 是 10 字节（mallocz 补 4 零）。向后的伪立体声测试零输入需足量
+  零 rc 字节（范围码零输入每 sample 拉 ~10 字节 normalization）。
+
+## §496 Vorbis 编码器（libavcodec/vorbisenc.c → libavcodec/vorbis_encode*.mbt，2026-11-22）
+
+FFmpeg 原生 Vorbis 编码器（实验性）的纯 MoonBit 移植：自编→自解往返
+SNR 门 + FFmpeg Ogg 互解 ±1 LSB。
+
+- **结构**：LSB-first 位写器（BITSTREAM_WRITER_LE）+ 29 个 codebook（cvectors/
+  codebooks/quant_tables 表由 scripts/gen_vorbis_enc_tables.py 提取，注意先剥 /* */
+  注释再抓数字，否则多抓 62 个）+ floor1（复用解码器的 ready_list/render）+
+  residue type 2 8-pass + 立体声 coupling。
+- **帧驱动**：frame_size=64，32 帧攟 1024 样本半块 + 上一块 saved 重叠→
+  2048 长窗 MDCT；flush 补零帧。
+- **put_float 坑**：C frexp 对负数返回 [-0.5,-1) 尾数——按正数规范化
+  写的 while mant < 0.5 在 min = -1530.0 上死循环（构造夹具即卡死的根因）；
+  修法 = 先取绝对值规范化，符号位单独置。
+- **互通对拍**：我们的解码器解 FFmpeg -strict -2 vorbis 编码的 Ogg 包
+  （decode_stream 已内置首块 pre-skip 语义）±1 LSB；夹具包用 4 hex 字符
+  长度前缀拼接（不能用 0x2E 分隔——音频数据会撞上）。
+
+## §497 Vorbis 编码器三处缺陷修复 + Ogg 封装 E2E（2026-11-22）
+
+docker linuxserver/ffmpeg:9.0.2 仲裁发现自编流解码近全零，逐级定位修掉三处
+移植缺陷；修复后自编流经 docker 解码 SNR = 39.16 dB，与 FFmpeg 原生编码器
+对同一输入的 39.16 dB **完全持平**，且首个音频包与 FFmpeg 输出**逐字节相同**。
+
+- **floor 通道基址缺失（致命）**：C 对每声道传 `&venc->coeffs[i*frame_size]` /
+  `&venc->floor[i*frame_size]`，初版两个声道都从 0 号基址拟合/渲染——
+  floor[1024..2048) 从未写入（恒 0），`coeffs /= floor` 使第二声道系数全部
+  变 ±inf/NaN，residue VQ 量化出垃圾。修法：floor_fit/floor_encode/
+  get_floor_average 增加 `base` 参数；共享的 vorbis_floor1_render 不动，
+  编码器渲染到临时数组再拷贝到 `floor[base..]`。
+- **residue 分类 max1 误写为赋值**：C 是 `FFMAX(max1, fabs(...))`（分区最大值），
+  初版写成 `max1 = fabs(v1)`（每轮重置，实际取的是最后一个元素）——分类值
+  错 → 用错 residue 书。修为 if 更新的 FFMAX 语义（max2 原本就是对的）。
+- **move_audio saved 拷贝未按通道**：C 逐声道
+  `memcpy(samples + 2*ch*frame_size, saved + ch*frame_size, frame_size)`，
+  初版线性拷 `samples[i] = saved[i]`（i < frame_size*channels）——第二声道的
+  saved 永远到不了 samples[2048..3072)，**第 2 帧起 ch1 窗口前半恒为零**。
+  第 1 包恰好不受影响（首块 saved 本来就是零），这正是"pkt0 与 FFmpeg 逐字节
+  相同、后续包劣化"的唯一原因；修复前自编流 docker 解码 SNR 仅 6.4 dB，
+  修复后 39.16 dB。scratch 镜像拷贝同步改为全窗（C 为 psy 遗留死状态）。
+- **E2E 对齐口径**：编码→Ogg 封装→解封装→解码（libavformat/vorbis_e2e_test）
+  的参考偏移是"丢首块后从输入样本 0 对齐"，不是 1024——该偏移经 docker 解码
+  逐样本核对。OggVorbisMuxer（libavformat/ogg_vorbis_mux.mbt）三头 BOS 页 +
+  每音频包一页累计 granule + EOS；mux/demux 字节保真已断言。
+- **验收口径**：vorbis_encode_wbtest 增加两道永久回归——首包与 FFmpeg 逐字节
+  相同（hex 夹具）、decode_stream 往返 SNR > 20 dB 门；libavformat E2E 全绿；
+  全仓 libavcodec 回归（812 过）无新失败。
