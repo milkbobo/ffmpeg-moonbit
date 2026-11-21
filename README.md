@@ -11,7 +11,7 @@
 | H.264、HEVC（H.265） | 已实现 I/P/B 帧 | 已实现，可输出 MP4 |
 | AV1 | 已实现关键帧、帧间帧及 film grain 等工具 | 已实现关键帧、帧间帧和多参考帧，目标码率控制待实现 |
 | VP9 | 已实现 Profile 0–3 | 未实现 |
-| MJPEG、PNG/APNG | 已实现，MJPEG 支持部分格式 | 未实现 |
+| MJPEG、PNG/APNG | 已实现，MJPEG 支持部分格式 | 已实现 8 位 baseline MJPEG，以及 8/16 位 PNG 和全画幅 APNG |
 | AAC | 已实现 AAC-LC、HE-AAC v1/v2，未覆盖 USAC | 已实现 AAC-LC |
 | MP2、MP3、FLAC、ALAC、Opus | 已实现 | 已实现 |
 | Vorbis、AC-3、E-AC-3、WavPack 等 | 已实现，E-AC-3 支持部分模式 | 未实现 |
@@ -19,6 +19,16 @@
 **容器和工具**　支持读取 MP4/MOV、MKV/WebM、MPEG-TS、WAV、Ogg 等容器，可写入 MP4、WebM、MPEG-TS、WAV 等格式，也支持 HLS/DASH 分片读取、图像缩放和音频重采样。
 
 **其他边界**　H.264 SP/SI、硬件加速、完整滤镜图和 DRM 密钥协商均未覆盖。各格式的具体限制和验证样例见[移植记录](doc/PORTING_HISTORY.md)。
+
+### 图像编码
+
+```sh
+moon run --target wasm cmd/encode-image -- png rgba 320 240 frame.rgba frame.png
+moon run --target wasm cmd/encode-image -- apng rgba 320 240 frames.rgba animation.apng 12
+moon run --target wasm cmd/encode-image -- mjpeg rgb24 320 240 frames.rgb output.mjpeg 85
+```
+
+输入为紧密排列的原始像素。PNG 接收一帧，APNG 和 MJPEG 接收连续帧。APNG 的末尾参数是帧率，MJPEG 的末尾参数是 JPEG 质量（1–100）。PNG/APNG 支持灰度、灰度带 alpha、RGB 和 RGBA，16 位样本使用大端序。MJPEG 接收 `gray`、`rgb24`、`yuvj420p` 或 `yuvj444p`。
 
 ## 运行浏览器 Demo
 

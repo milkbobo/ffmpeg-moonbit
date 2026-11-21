@@ -1,0 +1,8 @@
+import {
+  "milkbobo/ffmpeg-moonbit/libavcodec" @codec,
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+  "moonbitlang/x/fs",
+}
+
+pkgtype(kind: "executable")
