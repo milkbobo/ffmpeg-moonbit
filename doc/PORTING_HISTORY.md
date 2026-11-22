@@ -17896,3 +17896,69 @@ payload）；本片补 dav1d 单参考模式链的 NEARMV 分支：栈深部候�
   - MLP 编码器坑：本地 ffmpeg.exe 构建未启用（docker 镜像有）；
     只接受 planar（s16p/s32p），强制 `-sample_fmt s16` 会拒绝，
     `-af aformat=sample_fmts=s16` 可得真 16 位流。
+
+## §502 DTS（DCA）核心解码器——定点全链位级（2026-11-22）
+
+「迁移常见音频格式」系列第二片。移植 `dca_core.c`(2453 行) 核心
+CORE 帧解码至 `dca_decode.mbt` + `dca_synth.mbt`（定点 DSP）+
+`dca_tables.mbt`（121KB 表，生成）。输出走
+`AV_CODEC_FLAG_BITEXACT` 定点路径（`filter_frame_fixed`）：
+Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
+绕开 float QMF 链，**全流 MD5 位级可复刻**。
+
+- **范围**：帧头/编码头/子帧头解析（含 14bit→16bit LE 码流转换
+  `dca_convert_bitstream`）、canonical VLC 62 本书（48 量化 + 5
+  bitalloc + 5 scale + 4 tmode）、残差编码（VLC/块码/线性符号）、
+  ADPCM 反预测（预测历史跨帧）、joint intensity、LFE（LFF=0 定点
+  FIR）、定点半 IMDCT（sum_a-d/dct_a/b/mod_a/b/c 级联 + clp_v）、
+  32 带 QMF 合成（hist1[1024] 环 + 双相 j 循环 + norm21）、
+  sum/difference、dca2wav 声道映射交织输出；裸流扫描
+  （syncword + 帧长字段步进）。
+- **验收**：`dca_realdata_test.mbt`（黑盒 4 流）：docker FFmpeg 9.0.2
+  原生 `dca` 编码器（`-strict -2`）流——44.1k 立体声 755k（44 帧）、
+  48k 立体声 755k、**48k 5.1+LFE 1509k**、**FATE 真实样本**
+  （dts/dcadec-suite/core_51_24_48_768_1.dtshd 剥壳成裸流，启用
+  ADPCM 预测 + 高频 VQ 路径）——`-bitexact -f s32le` 参照
+  MD5 **全部位级相等**。`dca_synth_wbtest.mbt`（白盒）：62 本书
+  完全树不变式 + 源序码赋值 round-trip。
+- **镜像律与坑（排障四连环，皆 C 参照对拍定位）**：
+  - **VLC 码赋值是源序累加，不是按长度排序的教科书 canonical**：
+    `ff_vlc_init_from_lengths` 按源序 `code += 1 << (32 - len)`，而
+    `ff_dca_vlc_src_tables` 源序码长交错（如 129 项码书首 5 项
+    len = 4,8,8,9,9）。首版按长度分组（counts/first_code 解码），
+    小表碰巧对、129 项书必错。修法：**显式位二叉树**（acc 即左对齐
+    32 位码，逐位插入；slot 值 -1 空 / ≤-2 叶 / ≥0 内部节点），
+    对任意前缀码正确。
+  - **帧长字段在位 46..59**：`rb32(pos+4) >> 4 & 0x3FFF`（首版
+    `>> 2` 得 8189，导致 8192 步长跳帧、44 帧只解 11 帧且不报错——
+    每 8192 倍数处恰是 sync，逐片照常解成功）。
+  - **`dct_b` cos 表少抄 5 项成 61/56**：从第 5 行起整表错位，病征
+    极具规律——每 32 样本块内错位固定在 mod 16 ∈ {5..10}（dct_b
+    行 5..7 错 → mod_a 出 5..10 错 → IMDCT 系数 5..10/21..26 错）。
+    帧 0 因首块输出近零未暴露。机器对拍 dcadata.c 才定位（人眼
+    逐值核对 4 遍都没看出）。
+  - **`ff_dca_sample_rates` 是 16 槽稀疏表**（dca_sample_rate_tab.h：
+    `0,8000,16000,32000,0,0,11025,22050,44100,0,0,12000,24000,48000,
+    96000,192000`），首版抄成别处的稠密 16 值表 → 44.1k 报成 176400。
+  - **fixture 参照要用定点路径的 MD5**：上一轮生成的参照 PCM 是
+    float 路径（低 8 位非零）；定点参照须 `-bitexact` 重取（全流
+    低 8 位恒 0 可自检）。
+  - **`dca_decode_i16` 必须 int16 符号扩展**：base64 解出的 16 位值
+    若按无符号 reinterpret，负系数（如 adpcm_vb 行 2891 的 -5048 →
+    60488=+2^15 漂移）全部翻正。dcaenc 流不触发（不用 ADPCM 预测/
+    高频 VQ），**FATE 真实流才暴露**——病征为 inverse_adpcm 预测值
+    发散、子带样本饱和到 2^23-1。i8 版当时写对了，i16 漏了；且
+    flat 表校验两侧同病故漏检——**校验脚本要用带符号的运行时值
+    对拍，不能两边用同一个有 bug 的解码器**。
+  - C 参照插桩法（docker `_build_dca` 增量树 + TRC fprintf）：帧头
+    逐段位位置、逐子带 abits/pos、滤波入口子带行、synth 的 32 入
+    32 出——逐级对拍把四个 bug 各自钉死。注意 `--disable-everything`
+    树要 `--enable-muxer=pcm_s32le --enable-encoder=pcm_s32le`
+    （configure 旗标名带 `pcm_` 前缀），且 ffmpeg 默认多线程下
+    首 2 帧的 TRC 与 `-threads 1` 不同（以默认线程=真参照为准）。
+  - MoonBit 侧：`while true` 值产出用「结果变量 + 无值 break」
+    （`loop{break v}` 语法已废弃）；wbtest 辅助函数用 assert 需
+    `-> Unit raise`。
+- **已知边界**：XCH/XXCH/X96/XBR/EXSS 扩展仅检测不解码（下片）；
+  LFF=1（128 倍 LFE）定点不支持（与 C 一致）；DMIX/XXCH 嵌入式
+  下混撤销不涉及（无扩展流）。
