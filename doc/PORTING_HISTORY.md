@@ -18179,3 +18179,19 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
 - `decode-audio` 导出的 WAV 数据区也与 FATE 基准一致。Wasm 的
   `libavformat` 回归 707 项通过，Shorten/WavPack 相关回归在 Wasm
   和 Wasm GC 各通过 9 项，全目标编译检查通过。
+
+## §507 Musepack SV7 解码与拆包
+
+- `libavcodec/musepack7.mbt` 移植 SV7 的子带分辨率、比例因子预测、
+  双量化码书、成组量化值、噪声带和中侧声道。复用有序 Huffman 树及
+  MPEG 音频定点合成滤波器。拒绝损坏的包时保留前一包的解码状态。
+- `libavformat/musepack.mbt` 按位索引 SV7 帧，并以 32 位字为单位按需拆包。
+  `MediaFile` 可识别原始 `.mpc` 文件，`decode-audio` 可转 WAV。
+- FFmpeg FATE 的 `inside-mp7.mpc` 全部 456 帧拆包校验和为
+  `0xdeb152dd`，与 FATE 一致。44.1 kHz 立体声每声道解出
+  525,312 个样本，相对 FATE 的 S16LE PCM 最大差值为 1 LSB。
+  `decode-audio` 导出的 WAV 数据区也在 1 LSB 以内。
+- Wasm 的 `libavformat` 回归 709 项通过，Musepack 专项在 Wasm GC
+  通过 2 项，全目标编译检查通过。DTS 的 48 kHz 立体声和 5.1 样本
+  复核仍与现有参考 PCM 逐字节一致。
+- 当前范围为 SV7 立体声解码。SV8、编码和容器级定位未迁移。
