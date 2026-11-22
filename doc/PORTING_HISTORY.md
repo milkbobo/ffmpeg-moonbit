@@ -18148,3 +18148,34 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
 - Vorbis 的 Ogg 往返和 WMA 编码对拍已有回归覆盖。DTS-HD XLL/LBR
   和其他扩展、MLP/TrueHD 编码、ASF 输出封装保留为独立迁移项。
 - 五个核心库和近期音频编解码回归共 904 项通过。全目标编译检查通过。
+
+## §505 WavPack 无损整数编码
+
+- `libavcodec/wavpack_encode.mbt` 新增 `ff_wavpack_encode`。输入是交错的
+  单声道或立体声整数 PCM，16/24 位样本右对齐，32 位保留全部位。输出为
+  完整 `.wv` 文件，含采样数、块索引、采样率和块 CRC。
+- 移植 FFmpeg 的自适应中位数编码、零游程、转义计数和截断二进制余数，
+  复用已有解码器的中位数更新。每块使用一阶自适应去相关。32 位数据低字节
+  全零时使用移位元数据省去扩展数据，否则保留低字节并写扩展 CRC。
+- 外部验收使用 FFmpeg 9.0.2 的 `-err_detect crccheck+explode`。16 位单声道、
+  自定义采样率的 24 位立体声、32 位立体声和低字节补零的 32 位单声道
+  共四组多块码流，解码 PCM 的 SHA-256 与输入分别一致。
+- Wasm 和 Wasm GC 各通过 6 项 WavPack 回归，全目标编译检查通过。
+- 编码范围为整数无损单声道和立体声。浮点、DSD、混合模式、多声道以及
+  FFmpeg 编码器的多阶去相关搜索属于后续范围。
+
+## §506 Shorten 无损音频解码
+
+- `libavcodec/shorten.mbt` 移植 `shorten.c` 的 Rice 残差、DIFF0–3、
+  QLPC、跨块预测历史、滑动均值和样本移位。支持带 WAV 或 AIFF
+  PCM 头的裸 `.shn`，输出 8 位无符号或 16 位有符号 PCM。
+- `ff_shorten_decode` 默认校验结束命令，`allow_truncated=true` 恢复
+  截断文件中声道组完整的块。统一 `decode_audio_file` 和 `decode-audio`
+  可读取裸流并转 WAV，解码前按块检查输出样本预算。
+- FFmpeg FATE 的 `luckynight-partial.shn`（44.1 kHz、双声道、16 位）
+  输出 793,088 个交错样本，S16LE PCM 的 MD5 为
+  `da93c50961443b88fce416ae61c8ca8a`，与 FATE 的参考结果一致。
+  测试覆盖固定预测和 QLPC、跨块均值、块缩短、U8、旧版 AIFF、截断恢复和输出预算。
+- `decode-audio` 导出的 WAV 数据区也与 FATE 基准一致。Wasm 的
+  `libavformat` 回归 707 项通过，Shorten/WavPack 相关回归在 Wasm
+  和 Wasm GC 各通过 9 项，全目标编译检查通过。

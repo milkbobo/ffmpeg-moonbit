@@ -1202,6 +1202,9 @@ pub fn decode_audio_file(
   data : Bytes,
   sample_budget? : Int64,
 ) -> DecodedAudio raise MediaError {
+  if data.length() >= 4 && data[:4] == b"ajkg"[:] {
+    return playback_decode_shorten(data, sample_budget)
+  }
   let mf = MediaFile::open(data)
   if mf.source is ApeAudio(demux) && sample_budget is Some(limit) {
     guard demux.total_samples * demux.channels.to_int64() <= limit else {
