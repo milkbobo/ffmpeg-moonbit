@@ -17850,3 +17850,49 @@ payload）；本片补 dav1d 单参考模式链的 NEARMV 分支：栈深部候�
   （残差全零 → all-skip）两包对比：前者更长、重建含色度修正、两者
   各自（独立解码器，**inter 帧刷新槽 0 后不可复用同一解码器链**）
   过解码器逐像素相等；AV1 编码套件 119/119。
+
+## §501 MLP / TrueHD 解码器——常见音频格式补全其一（2026-11-22）
+
+「迁移常见音频格式」系列第一片。盘点缺口（按常见度×规模）：MLP/TrueHD
+解码 → DTS 核心解码 → AC-3/WavPack 编码 → Musepack/Cook/Shorten/Speex。
+本片完整移植 `mlpdec.c`(1478 行)+`mlp.c`+`mlp_parse.c`+`mlpdsp.c` 至
+`libavcodec/mlp_decode.mbt`（单文件，~1500 行）。
+
+- **范围**：major sync 解析（28+扩展字节、CRC-2D checksum16 校验）、
+  AU 帧结构（≤4 子流目录 + parity）、restart header（ch_assign 真值
+  remap、声道布局掩码）、解码参数（blocksize/矩阵/outshift/量化步长/
+  FIR+IIR/残差码书）、三本残差 Huffman 码书、预测滤波、primitive
+  矩阵（LSB bypass + 0x31eb 噪声注入）、`ch_assign`/`output_shift`
+  打包级输出（24/20bit 左对齐 S32 或 S16）。
+- **基础设施复用**：`libavutil/crc.mbt` 的 `av_crc_init/av_crc`（BE 表
+  bswap32 存储 + LE 式更新循环，与 C 完全同构）直接服务 crc_63(8,0x63)/
+  crc_2D(16,0x2D)；`BitReader`（read/show/skip）覆盖全部位读取。
+- **镜像律与坑**：
+  - **checksum16(size) 语义**：C 调 `ff_mlp_checksum16(buf, header_size-2)`，
+    函数内部再 `-2`——即 CRC 只覆盖 `[0, size-2)`、再 XOR `RL16` 尾。
+    首版传 `header_size` 差 2 字节即报 checksum error。
+  - **码书长度 18/16/15**：C 声明 `[3][18][2]` 零填充，三本实际长度
+    不同；线性前缀匹配循环上界用 `book.length()`（写死 18 会越界）。
+  - **C 的 `Ok(())` 模式不存在**：MoonBit 用 `Ok(_)`。
+  - **`match if` 主体**：跨行括号包裹后大括号会被解析为新块——改为
+    嵌套 if + match。
+  - FIR/IIR 滑窗：C 的 `state_buffer` 前插指针等价为「最新在前」的
+    recent 数组（块尾即最新 8/4 个输出，与 memcpy 保存语义一致）；
+    `(accum + residual) & MSB_MASK` 与 rematrix 的 `((accum>>14) & mask)
+    + bypassed` 都在 Int64 域做再截断（与 C 的 x86 回绕一致）。
+  - 布局掩码最高位 bit19（LFE2），全部用 Int32 而非 UInt64。
+- **偏离（不影响 PCM）**：C 仅打日志的校验（restart checksum、
+  lossless-check 字节）不计算；downmix AVOption 与 matrix side data
+  是纯元数据，省略。per-substream parity/CRC-63 仍计算并消费尾随
+  2 字节（保持位消耗一致），失配忽略。
+- **验收**：
+  - `mlp_realdata_test.mbt`（黑盒）：docker FFmpeg 9.0.2 原生
+    `mlp`/`truehd` 编码器（`-strict -2`）四个真实流——TrueHD 立体声
+    48k/24bit（300 AU）、TrueHD 5.1 48k（240 AU，多子流+rematrix）、
+    MLP 16bit 44.1k（276 AU，S16 输出路径）、MLP 24bit 96k（180 AU）
+    ——解码 PCM 与 FFmpeg 参照 MD5 **全部相等**。
+  - `mlp_decode_wbtest.mbt`（白盒 4 测）：采样率表、TrueHD 声道映射
+    （extract/layout_index）、三本残差码书前缀解码、CRC-2D/63 参照值。
+  - MLP 编码器坑：本地 ffmpeg.exe 构建未启用（docker 镜像有）；
+    只接受 planar（s16p/s32p），强制 `-sample_fmt s16` 会拒绝，
+    `-af aformat=sample_fmts=s16` 可得真 16 位流。
