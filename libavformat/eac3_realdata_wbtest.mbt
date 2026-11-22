@@ -99,3 +99,13 @@ test "raw E-AC-3 demuxer: decoded mono matches FFmpeg PCM" {
   }
   assert_true(max_diff <= 1, msg="max diff \{max_diff}")
 }
+
+///|
+test "playback: raw E-AC-3 reaches the unified decoder" {
+  let data = eac3_decode(eac3_concat([eac3_mono48_b64]))
+  let audio = decode_audio_file(data)
+  assert_eq(audio.codec_id, "eac3")
+  assert_eq(audio.sample_rate, 48000)
+  assert_eq(audio.channels, 1)
+  assert_eq(audio.samples[0].length(), 6144)
+}

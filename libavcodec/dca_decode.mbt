@@ -1211,6 +1211,9 @@ pub fn DcaCoreDecoder::decode_stream(
       }
       pos = next
     }
+    if data.length() - pos < 16 {
+      return Err("dca: truncated core header")
+    }
     // Frame length from the header: bits 46..59 of the frame (14 bits + 1)
     let frame_size = (((dca_rb32(data, pos + 4) >> 4) & 0x3FFFU) + 1).reinterpret_as_int()
     if frame_size < 96 || pos + frame_size > data.length() {

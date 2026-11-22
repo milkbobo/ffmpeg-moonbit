@@ -36,6 +36,9 @@ fn MediaFile::stream_timebase(
     OggOpus(_) => Some((48000.0, 0.0))
     OggVorbis(demux) => Some((demux.sample_rate.to_double(), 0.0))
     OggFlac(demux) => Some((demux.sample_rate.to_double(), 0.0))
+    AsfAudio(_) => Some((1000.0, 0.0))
+    RawAc3(track, _) => Some((track.sample_rate.to_double(), 0.0))
+    ApeAudio(demux) => Some((demux.sample_rate.to_double(), 0.0))
     StillImage(_) => None
     Wav(demux, _) =>
       if demux.format.sample_rate > 0 {

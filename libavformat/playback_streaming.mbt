@@ -1674,9 +1674,7 @@ pub fn StreamingMedia::decode_audio(
   let info = self.streams[audio]
   let mut dec = AudioDecoder::open(info)
   let rows : Array[Array[Double]] = []
-  for _ch = 0; _ch < dec.channels(); _ch = _ch + 1 {
-    rows.push([])
-  }
+  let mut rate = dec.sample_rate()
   while true {
     match self.next_packet() {
       None => break
@@ -1694,19 +1692,20 @@ pub fn StreamingMedia::decode_audio(
           keyframe: sp.keyframe,
         })
         for f in frames {
-          for ch = 0; ch < dec.channels(); ch = ch + 1 {
-            for i = 0; i < f.nb_samples; i = i + 1 {
-              rows[ch].push(f.samples[ch][i])
-            }
-          }
+          rate = playback_append_audio(rows, rate, f, 0)
         }
       }
     }
   }
+  if rows.is_empty() {
+    for _ in 0..<dec.channels() {
+      rows.push([])
+    }
+  }
   {
     samples: rows,
-    sample_rate: dec.sample_rate(),
-    channels: dec.channels(),
+    sample_rate: rate,
+    channels: rows.length(),
     format_name: self.format_name,
     codec_id: info.codec_id,
     duration_seconds: self.duration,

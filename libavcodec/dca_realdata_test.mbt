@@ -104,6 +104,13 @@ fn dca_md5(data : Bytes) -> String {
 }
 
 ///|
+test "dca: reject a sync word without the full header" {
+  guard @libavcodec.ff_dca_decode_stream(b"\x7f\xfe\x80\x01") is Err(_) else {
+    fail("truncated DTS header was accepted")
+  }
+}
+
+///|
 fn dca_concat(parts : Array[Bytes]) -> Bytes {
   let out : Array[Byte] = []
   for part in parts {

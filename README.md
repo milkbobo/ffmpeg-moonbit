@@ -14,11 +14,15 @@
 | MJPEG、PNG/APNG | 已实现，MJPEG 支持部分格式 | 已实现 8 位 baseline MJPEG，以及 8/16 位 PNG 和全画幅 APNG |
 | AAC | 已实现 AAC-LC、HE-AAC v1/v2，未覆盖 USAC | 已实现 AAC-LC |
 | MP2、MP3、FLAC、ALAC、Opus | 已实现 | 已实现 |
-| APE（Monkey's Audio） | 已实现 v3.80–3.99 全版本 | 格式无公开编码器 |
-| WMA v1/v2 | 已实现 | 已实现 |
-| Vorbis、AC-3、E-AC-3、WavPack 等 | 已实现，E-AC-3 支持部分模式 | Vorbis 已实现（实验性，首包与 FFmpeg 原生编码器逐字节一致，解码质量持平），AC-3 等未实现 |
+| APE（Monkey's Audio） | 支持读取 v3.80–3.99 文件及解码 | 未实现 |
+| WMA v1/v2 | 支持从 ASF/WMA 文件解码 | 已实现编码器，输出 WMA 压缩包 |
+| DTS | 支持核心解码和 Matroska 播放，DTS-HD 扩展待实现 | 未实现 |
+| MLP、TrueHD | 支持裸码流解码和 Matroska 播放 | 未实现 |
+| Vorbis | 支持 Ogg 解码 | 支持实验性编码和 Ogg 封装，首包与 FFmpeg 原生编码器逐字节一致 |
+| AC-3、E-AC-3 | 支持裸码流和 Matroska 解码，E-AC-3 支持部分模式 | AC-3 定点编码已实现，48 kHz 双声道参考流与 FFmpeg `ac3_fixed` 位级一致 |
+| WavPack | 已实现 | 未实现 |
 
-**容器和工具**　支持读取 MP4/MOV、MKV/WebM、MPEG-TS、WAV、Ogg 等容器，可写入 MP4、WebM、MPEG-TS、WAV 等格式，也支持 HLS/DASH 分片读取、图像缩放和音频重采样。
+**容器和工具**　支持读取 MP4/MOV、MKV/WebM、MPEG-TS、WAV、Ogg、ASF/WMA 等容器，可写入 MP4、WebM、MPEG-TS、WAV 等格式，也支持 HLS/DASH 分片读取、图像缩放和音频重采样。
 
 **其他边界**　H.264 SP/SI、硬件加速、完整滤镜图和 DRM 密钥协商均未覆盖。各格式的具体限制和验证样例见[移植记录](doc/PORTING_HISTORY.md)。
 

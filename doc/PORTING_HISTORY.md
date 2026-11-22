@@ -17962,3 +17962,189 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
 - **已知边界**：XCH/XXCH/X96/XBR/EXSS 扩展仅检测不解码（下片）；
   LFF=1（128 倍 LFE）定点不支持（与 C 一致）；DMIX/XXCH 嵌入式
   下混撤销不涉及（无扩展流）。
+
+
+## §503 AC-3 定点编码器（进行中——第二轮交接快照 2026-11-22）
+
+全链已实现且 0 错误（5 个 .mbt 文件 ~2960 行 + wbtest）。第一轮四个
+卡点已解三个，当前只剩 fft 中段一处 4 倍差。
+
+- **已解决（本轮）**：
+  1. RESCALE 丢 ×2^31 因子（ac3_tx_rescale）——MDCT 全 0 的根因；
+     修后 impulse peak=16384 符合折叠增益。
+  2. extract_exponents 起点反了：C 是 ch = !cpl_on（cpl_on 时从 CPL
+     槽连续提取 channels+1 通道）。
+  3. 帧头 3 位按参照修正：dsur=0、copyright=0、original=1
+     （AC3ENC_OPT_NONE=-1 的 put_bits 低位语义与参照实测为准）。
+  4. CRC16 改用 av_crc_init(le=true,16,0x8005) 反射表 + av_crc 更新
+     （原手写 msb-first 不匹配）。
+  5. ref_bap 改 bank 结构（bap_bank0/1: Array[Array[FixedArray]]），
+     reset_block_bap 让 REUSE 块**别名引用** exp_ref_block 指向的
+     ref 块槽（C 指针语义）——第一帧 23040 字节完整输出。
+  6. MDCT/耦合链已位级验证：帧 0 位 0-157 与参照全同（含 cpl coords
+     [195,3,3]/[67,3,3] 一致——能量来自系数，间接证明 MDCT 一致）。
+- **C 真值已固化**（插入桩取自 dda2979c 参照流帧 0，见下会话对拍）：
+  - MDCT ch1 blk0 前 16：258959 -241058 -326814 420600 1242584
+    1237162 531883 -37414 -74650 80978 64725 -44751 -42636 30313
+    30744 -21947
+  - 指数 ch1 blk0 前 24：5 3 3 3 3 3 3 3 3 5 5 5 5 7 7 7 7 9 9 9 9
+    10 10 10
+  - fft 后 z[60..67]（re/im）：442/-430 -424/418 413/-424 -403/406
+    395/-405 -386/390 384/-395 -379/379
+  - exp[64..67]（re/im）：-1520827776/1516169088 -1539319040/1497392000
+    -1557578368/1478389504 -1575603200/1459164288
+- **第三轮新发现（已修）**：D45/D25 指数展开的 k 递减顺序写反——C 是
+  先写高位（exp[k]=exp[k-1]=...=组值，k 递减），最后一组写 exp[1..4]/
+  exp[1..2]，**绝不覆盖 exp[0]**；MB 原实现先减后写，最后组多写
+  exp[0]，导致 DC 指数错、帧 2+ 位分配发散。
+- **帧 2 现象更新**：exp 展开修正后帧 2 走 cbr 快速路径
+  （(snr_offset|fine_snr_offset[1])==1023 && bit_alloc(1023)<=bits_left
+  提前 return），但仍 trap——计/写失配仍存在于帧 2（疑 D25 路径的
+  encode_exponents/组数与写端仍差，待逐段对拍帧 2 指数区）。
+- **当前唯一卡点**：MB 的 z[60..63] = 674/-4716 -38931/149639
+  -9603/51736 2992/-30031（与 C 比大 ~4 倍且符号乱），z[64..67]
+  完全一致。z[60..63] 处于 fft64 段尾/fft128 sr_combine 覆写区——
+  **fft128_ns 递归的中段 stage 有 bug**（fft32/fft64/fft16/fft8
+  显式实现或 ff_tx_fft_sr_combine 的 cos/wim 表索引）。由它导致
+  dst 高频系数差 → 指数差 → 位分配差 → 帧 2/3 mantissa 超预算
+  trap（Ac3Pb::put_s 越界，帧 1 能完整输出 6135/6144 位）。
+- **第三轮补充（最后状态）**：D45/D25 展开顺序修正后帧 1/2 计端
+  搜索收敛（snr=277、mant_bits=4486/4551 预算内）但**写端实测
+  bit_pos=6141（最后 mantissa 5 位写越 6144 帧界）**——写端总位比
+  计端多 ~62 位。剩余嫌疑集中在：①计端 count_frame_bits/count_
+  mantissa_bits 与写端 output_audio_block 的逐段位差（需做
+  「计端逐段位 vs 写端逐段位」打印对拍，差值 62 已锁定）；②
+  count_frame_bits_fixed 与写端头部的逐位核对。这是纯位会计
+  问题，MDCT/耦合/指数链已全部对齐。
+- **下会话步骤**：- **下会话步骤**：①打印 C z[56..64]（已可从 TRCZ 移位）+ MB
+  z[56..64] 对拍，二分到出错的 fft stage；②核对 fft_sr_combine
+  的 cos/wim 游标（w=co+o1-7，每次 i+=8 时 c+=8/w-=8）与 tab32/64
+  的偏移；③修后全帧 md5 对齐；④删 ac3_encode_frame.mbt/frame2.mbt
+  里的 dbg 探针（pos/cbr）；⑤全仓回归。
+- **注意**：探针已全部清除；wbtest（ac3_enc_tx_wbtest.mbt）当前
+  断言帧 0 位级对齐（C 真值注释内嵌），跑通即可作为回归锚点。
+
+## §503 AC-3 定点编码器（第四轮交接快照 2026-11-22 晚）
+
+本轮连修四个根因级 bug + 定位第五个（修复代码已写一半），帧 0 已
+**全帧位级一致（含 CRC1/CRC2）**，帧 1 唯一差异已锁定为 C 的 bap 双缓
+冲 FFSWAP 语义。C 参照树（ac3enc.c/ac3enc_template.c）现有 TRC 插桩
+待清，MoonBit 侧有大量临时探针待清。
+
+- **本轮修掉的四个 bug（按发现顺序）**：
+  1. **fft_sr_combine 半迭代**（ac3_encode_tx.mbt `Ac3Fft::combine`）：
+     C 是 `for (i=0; i<len; i+=4)` 且每轮 `z+=8/cos+=8/wim-=8`——
+     len/4 轮、写满 z[0..2*len-1]；MB 原来是 `while i < len { i+=8 }`
+     只跑 len/8 轮、只写前一半。len=4（fft32）两侧恰好同为一轮，
+     所以 z[64..67]（fft32@64 输出）一直是对的；len=8/16（fft64/
+     fft128 的 combine）少跑一半 → 中高频 bin 全错（第三轮的
+     「z[60..63] 4 倍差」真身即此，不是表/游标问题）。修：`while
+     i < 2 * len`。修后 MDCT 系数与 C **全等**（blk0/blk2 bins
+     0..200 对拍 0 差）。
+  2. **apply_mdct 输入推进**（ac3_encode_frame.mbt）：C 是
+     `input_samples0 = input_samples1; input_samples1 += 256`（前半窗
+     源随块推进）；MB 原来只 `in0 = cur`，blk2+ 的前半窗一直读
+     cur[0..256]。修：加 `in0_off`（每块 `in0_off = off1` 再
+     `off1 += 256`）。修后帧 0 SAD 网格 [1578,338,337,340,352] 与
+     C 全同、exponent_bits 1039 == C、策略网格 [3/3/3, 1/1/1,
+     0×4] == C。
+  3. **sr_shift 编码器约定**（bit_alloc_masking）：C 编码器从不给
+     `s->bit_alloc.sr_shift` 赋值（calloc 0），听觉阈索引是
+     `tab[band >> 0][sr_code]`；MB 照解码器惯例传了 sr_code==0→2
+     → 索引错带 → mask 偏低 → 同 snr 下 bap 偏高 → 搜索停在
+     csnroffst 16 而 C 是 28。修：`let sr_shift = 0`（带注释说明
+     别照抄解码器）。
+  4. **CRC 净效果无 bswap**（output_frame_end）：实测（python 在
+     REF 流上穷举）`av_crc(AV_CRC_16_ANSI)` 寄存器 == 朴素 msb-first
+     poly-0x8005/init-0 值，C 源码里的 bswap16 与其表实现相抵——
+     净效果：crc1 = mul_poly(crc_inv, raw, 0x18005) 直存大端；
+     crc2 = raw 直存（0x0b77 特例翻位后 ^0x8005）。MB 原来多一次
+     bswap。修后帧 0 全帧（768B）与 REF 逐字节相等。
+- **第五个（已定位、修复写了一半）：cbr 搜索的 bap 双缓冲 FFSWAP**。
+  C 的 cbr_bit_allocation：下降循环后 FFSWAP(bap_buffer,bap1_buffer)，
+  每个成功上升候选后再 FFSWAP，循环结束再 FFSWAP 一次——活动 bank
+  最终持的是**最后一个成功 snr 的 bap**（失败的探针候选虽也写了
+  bap，但写进的是非活动 bank，被丢弃）。MB 原来单 bank、无 swap，
+  最终 bap=最后评估的（失败的）候选 → 帧 1 blk0 ch1 coef23：
+  C=bap1@519 vs MB=bap2@520（搜索轨迹两侧逐点全同：448/512/528/516/
+  520/517/518/519/520）。**已完成**：struct 加 `mut bap_cur : Bool` +
+  构造器 `bap_cur: true`、`bap_bank()` helper、bit_alloc 改用
+  `reset_block_bap(self.bap_bank())`、cbr 三处 swap 已插入。
+  **还差一步**：ac3_encode_frame.mbt L1218
+  `self.reset_block_bap(self.bap_bank0)` 要改成 `self.bap_bank()`
+  （cbr 末尾那次 reset）。改完直接跑 realdata 测试。
+- **下会话步骤**：①改 L1218 → 跑
+  `moon test --target wasm --no-render libavcodec/ac3_enc_realdata_test.mbt`
+  验 md5==dda2979c556a8be212d3cc5dffbb90f4（帧 0 已证全对，帧 1+
+  的差异全部归因 FFSWAP；若仍有残差，按 framediff2.py 逐帧找首差
+  字节再下钻）；②清 MB 探针：ac3_encode.mbt 的 frame_idx 字段、
+  ac3_encode_frame.mbt 的 MB SAD/MBBA/MBBA23/bap448 探针、
+  ac3_encode_frame2.mbt 的 MB mdct/ch/cpl/f1/bap/qmant/MBQ 探针 +
+  `println("dbg frame bits=...")` + `Ac3Pb::new(self.frame_size + 64)`
+  改回 `self.frame_size`；③清 C 插桩（ac3enc.c：ac3enc_trc_frame
+  全局 + bit_alloc 内 TRCA23/TRCBA + encode_frame 内 TRCBAP/TRCSNR/
+  TRCPARAM/TRCPSD/TRCMASK/TRCEXP/TRCSTR/TRCF1* 大块；ac3enc_template.c：
+  apply_channel_coupling 入口 TRCCPL/TRCCPL2/TRCB2/TRCB2CH2/TRCF1 块），
+  grep TRC 归零；④moon check 0 错误 + wbtest 回归 +
+  `bash scripts/_run_libavcodec_tests.sh` 全仓；⑤报验收。
+- **对拍方法论沉淀（本轮高效定位的套路）**：
+  - 帧级二分：先逐帧找首差字节（跳过 2-3=crc1），把「头/块/指数/
+    snr/mantissa」哪段出错先定住；
+  - 字段级解析器要防两个坑：无 LFE 时没有 lfe expstr 位（2-2-2
+    而非 2-2-2-1）；D15 组宽是 3（group_size = 3<<(strat-1)，不是
+    3<<strat）——本轮两个解析器都被这两个坑坑过；
+  - mantissa 发送顺序（双声道全耦合）：ch1(0..133) → CPL(133..217)
+    → ch2(0..133)，CPL 夹在中间（编码/解码同构循环 got_cpl/ch0）；
+  - mantissa 区起点用「GOT 自校准」法：拿自己流的 qmant 已知值反推
+    起始位（帧 0=424，帧 1=1046），再在同一对齐下解 REF 逐值比；
+  - C 真值探针模板：docker `_build_dca` 树插 TRC fprintf，帧门控用
+    文件级计数器（encode_frame 处 ++，bit_alloc 处判 ==0/==1）；
+    **注意 static 计数器在探针块内自增会同帧连发**（本轮 TRCF1 打
+    的其实是帧 0，条件应为 ==2）；
+  - docker 调用式（entrypoint 是 ffmpeg 必须覆盖）：
+    `MSYS_NO_PATHCONV=1 docker run --rm --entrypoint bash -v
+    "D:/project/FFmpeg-n9.0.2:/src" ffmpeg-moonbit-ffref:nine-x264
+    /src/moonbit/.scratch/_ac3enc_check/docker_probe2.sh`（脚本内
+    mv ac3.o 强制重编；Makefile 引用 /src 所以挂 /src；ffmpeg 选项
+    -i 在前 -c:a 在后）；/tmp 在 zcode bash 各调用间不共享，落盘
+    到 .scratch。
+- **本轮 C 真值固化**（.scratch/_ac3enc_check/c_*.txt）：帧 0
+  csnroffst=28/fine=14、frame_bits=331、exponent_bits=1039、
+  bap@448 全通道数组、band_psd/mask（含 cpl 耦合分支）；帧 1
+  c=32/f=7、fb=327、bits=824、策略 [1/1/1,0×5]、bap@519 coef23=1、
+  搜索轨迹 (snr,cnt) 序列；floor=-2048/fd=83/sd=19/sg=1240/db=2816。
+- **勘误**（第三轮快照里的错误结论）：「z[60..63] 处 fft_sr_combine
+  游标/表索引 bug」「62 位计/写差是纯位会计问题」均不成立——前者
+  是 combine 半迭代，后者是 sr_shift 错带 + FFSWAP 缺失的下游症状。
+
+### §503 完成验收
+
+- CBR 搜索完成后将所有块的 BAP 引用绑定到最后一次满足位预算的缓冲区。
+  MoonBit 的 `FixedArray` 相等比较检查元素值，C 源码比较缓冲区地址。
+  两个缓冲区的耦合槽内容相等时也必须重新绑定其他槽位，白盒测试覆盖该情形。
+- 48 kHz、192 kb/s 双声道样本的全部 30 帧（23,040 字节）与 FFmpeg
+  `ac3_fixed` 参考流的 MD5 一致（`dda2979c556a8be212d3cc5dffbb90f4`）。
+  44.1 kHz 5.1 测试覆盖可变帧长、LFE 和帧头。平面长度或声道数不符时返回错误。
+- 公开入口为 `ff_ac3_fixed_encode_stream`，接收 SMPTE/WAV 顺序的平面 S32 PCM，
+  每声道样本数须为 1536 的倍数。输入夹具只在测试中编译。
+  MoonBit 和 C 参考源码中的临时跟踪探针均已移除。
+- 分批回归共 2,463 项通过，其中 `libavcodec` 主包 1,255 项，其他核心库、
+  子包、命令行和示例共 1,208 项。`moon check --target all --warn-list +73` 通过。
+
+## §504 音频迁移复查与统一解码接线（2026-11-22）
+
+- Matroska 的 DTS 核心、MLP、TrueHD 和 AC-3 接入统一解码。MLP/TrueHD
+  按 AU 长度拆开一个容器包内的多帧。DTS 合成状态跨包保留。文件和分片
+  解码均从 PCM 帧确定声道数和采样率，并对流内格式变化返回错误。
+- ASF/WMA v1/v2 接入 `MediaFile`。解码器使用 ASF track 的码率、块对齐和
+  codec private，按采样数扣除双帧延迟，EOF 时取最后一帧。现有立体声
+  WMA v2 夹具走统一入口后与 FFmpeg S16 PCM 最大差值 ≤ 1 LSB。
+- APE 参考 `libavformat/ape.c` 移植 descriptor、旧版头、seek table、
+  3.80 bit table 和四字节对齐，按需构造解码包。完整 60.48 秒的 APE
+  样本通过 `decode-audio` 解出每声道 2,667,168 个样本。3.80 的首帧
+  9216 个双声道样本通过同一入口转 WAV，与 FFmpeg S16 PCM 逐字节一致。
+- 裸 AC-3/E-AC-3 使用现有 demux 按帧送入统一解码。帧头探测拷贝上限为
+  4096 字节，AC-3 编码跨帧复用各声道的固定长度输入缓冲区。
+- Vorbis 的 Ogg 往返和 WMA 编码对拍已有回归覆盖。DTS-HD XLL/LBR
+  和其他扩展、MLP/TrueHD 编码、ASF 输出封装保留为独立迁移项。
+- 五个核心库和近期音频编解码回归共 904 项通过。全目标编译检查通过。

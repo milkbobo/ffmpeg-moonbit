@@ -45,7 +45,7 @@ pub struct AsfTrack {
   bit_rate : Int32
   block_align : Int32
   bits_per_sample : Int32
-  /// WAVEFORMATEX codec private bytes (includes cbSize).
+  /// WAVEFORMATEX codec private bytes.
   extradata : Bytes
 }
 
@@ -128,7 +128,7 @@ fn asf_parse_stream_properties(
   let block_align = asf_u16(data, wav + 12)
   let bits_per_sample = asf_u16(data, wav + 14)
   let mut extra_start = wav + 16
-  if type_specific_size > 16 {
+  if type_specific_size >= 18 {
     let cb_size = asf_u16(data, wav + 16)
     extra_start = wav + 18
     if cb_size + 18 > type_specific_size {

@@ -224,12 +224,6 @@ let mlp_noise_table : Array[Int32] = [
 ]
 
 ///|
-/// `AV_RB16` / `AV_RL16` / `AV_RB32` on a `Bytes`. */
-fn mlp_rb16(b : Bytes, i : Int32) -> UInt32 {
-  (b[i].to_uint() << 8) | b[i + 1].to_uint()
-}
-
-///|
 fn mlp_rl16(b : Bytes, i : Int32) -> UInt32 {
   b[i].to_uint() | (b[i + 1].to_uint() << 8)
 }
@@ -1408,6 +1402,15 @@ fn MlpDecoder::output_data(
 }
 
 ///|
+/// Size in bytes of the access unit beginning at this header.
+pub fn mlp_access_unit_size(data : BytesView) -> Int32 {
+  if data.length() < 2 {
+    return 0
+  }
+  (((data[0].to_int() & 0xF) << 8) | data[1].to_int()) << 1
+}
+
+///|
 /// Decode one access unit. `Ok(None)` means the packet was consumed without
 /// output (e.g. before the first major sync). */
 pub fn MlpDecoder::decode_packet(
@@ -1417,7 +1420,7 @@ pub fn MlpDecoder::decode_packet(
   if data.length() < 4 {
     return Err("mlp: packet too small")
   }
-  let length = ((mlp_rb16(data, 0) & 0xFFFU) << 1).reinterpret_as_int()
+  let length = mlp_access_unit_size(data[:])
   if length < 4 || length > data.length() {
     return Err("mlp: invalid access unit length")
   }
@@ -1618,8 +1621,8 @@ pub fn MlpDecoder::decode_stream(
   let mut channels = 0
   let mut bits = 0
   let mut pos = 0
-  while pos + 2 <= data.length() {
-    let length = ((mlp_rb16(data, pos) & 0xFFFU) << 1).reinterpret_as_int()
+  while pos < data.length() {
+    let length = mlp_access_unit_size(data[pos:])
     if length < 4 || pos + length > data.length() {
       return Err("mlp: invalid access unit length at \{pos}")
     }

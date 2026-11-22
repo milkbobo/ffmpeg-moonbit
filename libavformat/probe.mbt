@@ -48,6 +48,7 @@ pub(all) enum FormatId {
   Ac3
   Aiff
   Amr
+  Ape
   Png
   Asf
   Au
@@ -75,6 +76,7 @@ pub fn FormatId::name(self : FormatId) -> String {
     Ac3 => "ac3"
     Aiff => "aiff"
     Amr => "amr"
+    Ape => "ape"
     Png => "png_pipe"
     Asf => "asf"
     Au => "au"
@@ -105,6 +107,7 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Ac3 => "ac3"
     Aiff => "aiff,aif,aifc,afc,afd"
     Amr => "amr"
+    Ape => "ape,apl,mac"
     Png => "png"
     Asf => "asf,wmv,wma"
     Au => "au,snd"
@@ -132,6 +135,7 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Ac3 => "audio/ac3"
     Aiff => "audio/aiff"
     Amr => "audio/amr"
+    Ape => ""
     Png => "image/png"
     Asf => "video/x-ms-asf"
     Au => "audio/basic"
@@ -375,7 +379,7 @@ fn probe_skip_id3(buf : Bytes) -> (Bytes, ProbeNoData) {
       break
     }
   }
-  (buf[off:].to_owned(), nodat)
+  (if off == 0 { buf } else { buf[off:].to_owned() }, nodat)
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +403,7 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: Ac3, probe: probe_ac3, },
     { id: Aiff, probe: probe_aiff, },
     { id: Amr, probe: probe_amr, },
+    { id: Ape, probe: probe_ape, },
     { id: Png, probe: probe_png, },
     { id: Asf, probe: probe_asf, },
     { id: Au, probe: probe_au, },

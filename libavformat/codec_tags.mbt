@@ -90,6 +90,8 @@ pub fn mov_codec_name(codec : String, codec_id : String) -> String {
     ".mp3" | "mp3 " | "0x6D730055" => "mp3"
     "ac-3" => "ac3"
     "ec-3" => "eac3"
+    "dtsc" | "dtsh" | "dtsl" | "dtse" | "DTS " => "dts"
+    "mlpa" => "truehd"
     "Opus" => "opus"
     "fLaC" => "flac"
     "alac" => "alac"

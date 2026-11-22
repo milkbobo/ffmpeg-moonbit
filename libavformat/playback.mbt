@@ -122,6 +122,9 @@ pub(all) enum Source {
   OggFlac(OggFlacDemux)
   StillImage(Bytes)
   Wav(WavDemux, Bytes)
+  AsfAudio(AsfDemux)
+  RawAc3(RawAudioTrack, Bytes)
+  ApeAudio(ApeDemux)
   /// The demuxer plus, per stream, the next interpolated AAC timestamp
   /// (`ts_nopts` until the first PES timestamp is seen).
   Ts(TsDemux, Array[Int64])
@@ -209,6 +212,7 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
             let raw = if t.codec_id != "" { t.codec_id } else { t.codec }
             match t.media_type {
               Mp4MediaType::Video => playback_mov_video_codec(raw)
+              Mp4MediaType::Audio => mov_codec_name(t.codec, t.codec_id)
               _ => raw
             }
           },
@@ -308,6 +312,71 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         source: Wav(demux, data),
         cursor: [0],
       }
+    }
+    Asf => {
+      let demux = match av_asf_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      let streams = demux.tracks.mapi((index, track) => StreamInfo::{
+        index,
+        media_type: Audio,
+        codec_id: track.codec,
+        sample_rate: track.sample_rate,
+        channels: track.channels,
+        width: 0,
+        height: 0,
+        extradata: Some(track.extradata),
+      })
+      {
+        format_name: format.name(),
+        streams,
+        source: AsfAudio(demux),
+        cursor: [0],
+      }
+    }
+    Ac3 | Eac3 => {
+      let track = match av_ac3_open(data) {
+        Ok(track) => track
+        Err(e) => raise DemuxError(e)
+      }
+      let streams = [
+        StreamInfo::{
+          index: 0,
+          media_type: Audio,
+          codec_id: track.codec,
+          sample_rate: track.sample_rate,
+          channels: track.channels,
+          width: 0,
+          height: 0,
+          extradata: None,
+        },
+      ]
+      {
+        format_name: track.codec,
+        streams,
+        source: RawAc3(track, data),
+        cursor: [0],
+      }
+    }
+    Ape => {
+      let demux = match av_ape_open(data) {
+        Ok(demux) => demux
+        Err(e) => raise DemuxError(e)
+      }
+      let streams = [
+        StreamInfo::{
+          index: 0,
+          media_type: Audio,
+          codec_id: "ape",
+          sample_rate: demux.sample_rate,
+          channels: demux.channels,
+          width: 0,
+          height: 0,
+          extradata: Some(demux.extradata),
+        },
+      ]
+      { format_name: "ape", streams, source: ApeAudio(demux), cursor: [0], }
     }
     Png => playback_open_png(data, format.name())
     MpegTs => playback_ts_build(data)
@@ -436,6 +505,37 @@ pub fn MediaFile::next_packet(
       } else {
         None
       }
+    AsfAudio(demux) => {
+      let index = self.cursor[0]
+      guard index < demux.packets.length() else { return None }
+      self.cursor[0] = index + 1
+      let p = demux.packets[index]
+      Some({
+        stream_index: p.stream_index,
+        data: p.data,
+        pts: p.pts,
+        keyframe: p.is_keyframe,
+      })
+    }
+    RawAc3(track, data) => {
+      let index = self.cursor[0]
+      guard index < track.frames.length() else { return None }
+      self.cursor[0] = index + 1
+      let p = track.frames[index]
+      let start = p.pos.to_int()
+      Some({
+        stream_index: 0,
+        data: data[start:start + p.size].to_owned(),
+        pts: p.pts,
+        keyframe: p.is_keyframe,
+      })
+    }
+    ApeAudio(demux) => {
+      let index = self.cursor[0]
+      guard demux.packet(index) is Some((data, pts)) else { return None }
+      self.cursor[0] = index + 1
+      Some({ stream_index: 0, data, pts, keyframe: true, })
+    }
     Ts(_, _) => abort("unreachable: TS is routed above")
   }
 }
@@ -448,6 +548,11 @@ pub(all) enum AudioDec {
   Vorbis(@libavcodec.VorbisDecoder, Ref[Int32])
   Flac(Bytes)
   Mp3(@libavcodec.Mp3Decoder)
+  DolbyAc3(@libavcodec.Ac3Decoder)
+  Dts(@libavcodec.DcaCoreDecoder)
+  Mlp(@libavcodec.MlpDecoder)
+  Wma(@libavcodec.WmaDecoder, Ref[Int32])
+  MonkeyAudio(@libavcodec.ApeDecoder)
   /// Raw PCM: (little_endian, bytes_per_sample).
   Pcm(Bool, Int32)
 }
@@ -519,6 +624,14 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       { dec: Opus(dec), channels: head.channels, sample_rate: 48000, }
     }
     "vorbis" | "flac" => playback_ogg_audio_decoder(info)
+    "ac3" | "eac3" | "dts" | "mlp" | "truehd" => {
+      let dec : AudioDec = match info.codec_id {
+        "ac3" | "eac3" => DolbyAc3(@libavcodec.ac3_decoder_new())
+        "dts" => Dts(@libavcodec.DcaCoreDecoder::new())
+        codec => Mlp(@libavcodec.MlpDecoder::new(codec == "truehd"))
+      }
+      { dec, channels: info.channels, sample_rate: info.sample_rate, }
+    }
     "pcm_s16le" =>
       {
         dec: Pcm(true, 2),
@@ -536,6 +649,86 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
 }
 
 ///|
+/// Open a track using any decoder parameters carried by its container.
+pub fn MediaFile::audio_decoder(
+  self : MediaFile,
+  index : Int32,
+) -> AudioDecoder raise MediaError {
+  guard self.streams.get(index) is Some(info) else {
+    raise UnsupportedCodec("invalid audio stream index")
+  }
+  match self.source {
+    ApeAudio(demux) => {
+      let dec = match
+        @libavcodec.ape_decoder_new(demux.extradata, demux.channels, demux.bits) {
+        Ok(dec) => dec
+        Err(e) => raise DecodeError(e)
+      }
+      {
+        dec: MonkeyAudio(dec),
+        channels: demux.channels,
+        sample_rate: demux.sample_rate,
+      }
+    }
+    AsfAudio(demux) => {
+      let track = demux.tracks[index]
+      let version = if track.codec == "wmav1" { 1 } else { 2 }
+      let offset = if version == 1 { 2 } else { 4 }
+      let flags2 = if track.extradata.length() >= offset + 2 {
+        track.extradata[offset].to_int() |
+        (track.extradata[offset + 1].to_int() << 8)
+      } else {
+        0
+      }
+      let flags2 = if version == 2 &&
+        track.extradata.length() >= 8 &&
+        flags2 == 0xD {
+        flags2 & -5
+      } else {
+        flags2
+      }
+      let dec = match
+        @libavcodec.wma_decoder_new(
+          version,
+          track.sample_rate,
+          track.channels,
+          track.bit_rate,
+          track.block_align,
+          flags2,
+        ) {
+        Ok(dec) => dec
+        Err(e) => raise DecodeError(e)
+      }
+      {
+        dec: Wma(dec, Ref(dec.frame_len * 2)),
+        channels: track.channels,
+        sample_rate: track.sample_rate,
+      }
+    }
+    _ => AudioDecoder::open(info)
+  }
+}
+
+///|
+fn playback_wma_frame(
+  samples : Array[Array[Double]],
+  delay : Ref[Int32],
+  rate : Int32,
+  pts : Int64?,
+) -> AudioFrame? {
+  guard samples.get(0) is Some(first) else { return None }
+  let skip = first.length().min(delay.val)
+  delay.val -= skip
+  guard first.length() > skip else { return None }
+  let samples = if skip == 0 {
+    samples
+  } else {
+    samples.map(ch => ch[skip:].to_owned())
+  }
+  Some({ samples, nb_samples: first.length() - skip, sample_rate: rate, pts, })
+}
+
+///|
 /// `aac_decode_frame_int` consumes an in-band ADTS header when a packet
 /// starts with the 12-bit syncword: 7 bytes, plus the 2-byte CRC when
 /// `protection_absent` is clear.
@@ -548,6 +741,21 @@ fn aac_strip_adts(data : Bytes) -> Bytes {
   } else {
     data
   }
+}
+
+///|
+fn playback_integer_audio_frame(
+  pcm : Array[Int32],
+  channels : Int32,
+  rate : Int32,
+  scale : Double,
+  pts : Int64,
+) -> AudioFrame {
+  let nb_samples = pcm.length() / channels
+  let samples = Array::makei(channels, ch => {
+    Array::makei(nb_samples, i => pcm[i * channels + ch].to_double() / scale)
+  })
+  { samples, nb_samples, sample_rate: rate, pts: Some(pts), }
 }
 
 ///|
@@ -626,17 +834,97 @@ pub fn AudioDecoder::decode(
         Ok(value) => value
         Err(e) => raise DecodeError(e)
       }
-      let nb_samples = out.samples.length() / out.channels
       let scale = if out.bits <= 16 { 32768.0 } else { 2147483648.0 }
-      let samples = Array::makei(out.channels, ch => {
-        Array::makei(nb_samples, i => {
-          out.samples[i * out.channels + ch].to_double() / scale
-        })
-      })
+      Some(
+        playback_integer_audio_frame(
+          out.samples,
+          out.channels,
+          out.sample_rate,
+          scale,
+          pkt.pts,
+        ),
+      )
+    }
+    DolbyAc3(dec) =>
+      match dec.decode_frame(pkt.data) {
+        Ok(out) =>
+          Some({
+            samples: out.samples,
+            nb_samples: out.samples[0].length(),
+            sample_rate: out.sample_rate,
+            pts: Some(pkt.pts),
+          })
+        Err(e) => raise DecodeError(e)
+      }
+    Dts(dec) =>
+      match dec.decode_packet(pkt.data) {
+        Ok(Some(out)) =>
+          Some(
+            playback_integer_audio_frame(
+              out.samples,
+              out.channels,
+              out.sample_rate,
+              2147483648.0,
+              pkt.pts,
+            ),
+          )
+        Ok(None) => None
+        Err(e) => raise DecodeError(e)
+      }
+    Mlp(dec) =>
+      match dec.decode_packet(pkt.data) {
+        Ok(Some(out)) => {
+          let scale = if out.bits <= 16 { 32768.0 } else { 2147483648.0 }
+          Some(
+            playback_integer_audio_frame(
+              out.samples,
+              out.channels,
+              out.sample_rate,
+              scale,
+              pkt.pts,
+            ),
+          )
+        }
+        Ok(None) => None
+        Err(e) => raise DecodeError(e)
+      }
+    Wma(dec, delay) =>
+      match dec.decode_packet(pkt.data) {
+        Ok(samples) =>
+          playback_wma_frame(samples, delay, self.sample_rate, Some(pkt.pts))
+        Err(e) => raise DecodeError(e)
+      }
+    MonkeyAudio(dec) => {
+      let samples = Array::makei(self.channels, _ => [])
+      let mut nb_samples = 0
+      for ;; {
+        let chunk = match dec.decode_frame(pkt.data) {
+          Ok(chunk) => chunk
+          Err(e) => raise DecodeError(e)
+        }
+        let frame = chunk.frame
+        let (center, scale) = match frame.bps {
+          8 => (128, 128.0)
+          16 => (0, 32768.0)
+          _ => (0, 2147483648.0)
+        }
+        for ch, row in samples {
+          for i in 0..<frame.nb_samples {
+            row.push(
+              (frame.samples[i * self.channels + ch] - center).to_double() /
+              scale,
+            )
+          }
+        }
+        nb_samples += frame.nb_samples
+        if chunk.packet_done {
+          break
+        }
+      }
       Some({
         samples,
         nb_samples,
-        sample_rate: out.sample_rate,
+        sample_rate: self.sample_rate,
         pts: Some(pkt.pts),
       })
     }
@@ -747,11 +1035,44 @@ pub fn AudioDecoder::decode_all(
       }
       frames
     }
+    Mlp(_) | Wma(_, _) => {
+      let frames = []
+      let mut pos = 0
+      while pos < pkt.data.length() {
+        let size = match self.dec {
+          Wma(dec, _) => dec.block_align
+          _ => @libavcodec.mlp_access_unit_size(pkt.data[pos:])
+        }
+        if size < 4 || size > pkt.data.length() - pos {
+          raise DecodeError("invalid audio access unit length at \{pos}")
+        }
+        let data = pkt.data[pos:pos + size].to_owned()
+        if self.decode({ ..pkt, data, }) is Some(frame) {
+          frames.push(frame)
+        }
+        pos += size
+      }
+      frames
+    }
     _ =>
       match self.decode(pkt) {
         Some(f) => [f]
         None => []
       }
+  }
+}
+
+///|
+/// Drain a buffered final audio frame at EOF. Call once after the last packet.
+pub fn AudioDecoder::flush(self : AudioDecoder) -> AudioFrame? raise MediaError {
+  match self.dec {
+    Wma(dec, delay) =>
+      match dec.decode_flush() {
+        Ok(samples) =>
+          playback_wma_frame(samples, delay, self.sample_rate, None)
+        Err(e) => raise DecodeError(e)
+      }
+    _ => None
   }
 }
 
@@ -763,7 +1084,11 @@ pub fn AudioDecoder::decode_all(
 /// carries no duration.
 pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
   match self.source {
-    StillImage(_) => None
+    StillImage(_) | AsfAudio(_) => None
+    RawAc3(track, _) =>
+      Some(track.total_samples.to_double() / track.sample_rate.to_double())
+    ApeAudio(demux) =>
+      Some(demux.total_samples.to_double() / demux.sample_rate.to_double())
     OggVorbis(demux) if demux.total_samples > 0L =>
       Some(demux.total_samples.to_double() / demux.sample_rate.to_double())
     OggFlac(demux) if demux.total_samples > 0L =>
@@ -846,6 +1171,30 @@ pub struct DecodedAudio {
 }
 
 ///|
+fn playback_append_audio(
+  rows : Array[Array[Double]],
+  rate : Int32,
+  frame : AudioFrame,
+  from : Int32,
+) -> Int32 raise MediaError {
+  if rows.is_empty() {
+    for channel in frame.samples {
+      rows.push(channel[from:].to_owned())
+    }
+    return frame.sample_rate
+  }
+  guard rows.length() == frame.samples.length() && rate == frame.sample_rate else {
+    raise DecodeError("decoded audio format changed within the stream")
+  }
+  for ch, row in rows {
+    for sample in frame.samples[ch][from:] {
+      row.push(sample)
+    }
+  }
+  rate
+}
+
+///|
 /// Decode the first audio stream of a container to PCM - the engine the JSON
 /// CLI's `decode-audio` command and the libswresample slice build on. Files
 /// without an audio stream raise `UnsupportedCodec` with the format name.
@@ -854,6 +1203,11 @@ pub fn decode_audio_file(
   sample_budget? : Int64,
 ) -> DecodedAudio raise MediaError {
   let mf = MediaFile::open(data)
+  if mf.source is ApeAudio(demux) && sample_budget is Some(limit) {
+    guard demux.total_samples * demux.channels.to_int64() <= limit else {
+      raise DecodeError("decoded audio sample budget exceeded")
+    }
+  }
   let mut audio = -1
   for i = 0; i < mf.streams().length(); i = i + 1 {
     if audio < 0 && mf.streams()[i].media_type == MediaType::Audio {
@@ -863,11 +1217,9 @@ pub fn decode_audio_file(
   if audio < 0 {
     raise UnsupportedCodec("no audio stream in \{mf.format_name()}")
   }
-  let dec = AudioDecoder::open(mf.streams()[audio])
+  let dec = mf.audio_decoder(audio)
   let rows : Array[Array[Double]] = []
-  for _ch = 0; _ch < dec.channels(); _ch = _ch + 1 {
-    rows.push([])
-  }
+  let mut rate = dec.sample_rate()
   // Encoder priming and end padding are not presentation audio; FFmpeg drops
   // them in decode.c's `discard_samples`. For MP4 the demuxer supplies
   // `skip_samples` and flags edit-list-cut packets AV_PKT_FLAG_DISCARD: a
@@ -904,7 +1256,7 @@ pub fn decode_audio_file(
     nth = nth + 1
     for f in frames {
       if sample_budget is Some(limit) {
-        decoded += f.nb_samples.to_int64() * dec.channels().to_int64()
+        decoded += f.nb_samples.to_int64() * f.samples.length().to_int64()
         guard decoded <= limit else {
           raise DecodeError("decoded audio sample budget exceeded")
         }
@@ -915,11 +1267,23 @@ pub fn decode_audio_file(
       }
       let from = if skip < f.nb_samples { skip } else { f.nb_samples }
       skip = skip - from
-      for ch = 0; ch < dec.channels(); ch = ch + 1 {
-        for i = from; i < f.nb_samples; i = i + 1 {
-          rows[ch].push(f.samples[ch][i])
+      rate = playback_append_audio(rows, rate, f, from)
+    }
+  }
+  if nth > 0 {
+    if dec.flush() is Some(f) {
+      if sample_budget is Some(limit) {
+        decoded += f.nb_samples.to_int64() * f.samples.length().to_int64()
+        guard decoded <= limit else {
+          raise DecodeError("decoded audio sample budget exceeded")
         }
       }
+      rate = playback_append_audio(rows, rate, f, 0)
+    }
+  }
+  if rows.is_empty() {
+    for _ in 0..<dec.channels() {
+      rows.push([])
     }
   }
   // Ogg Opus pre-skip from OpusHead (initial_padding) trims the head.
@@ -928,7 +1292,8 @@ pub fn decode_audio_file(
     _ => 0
   }
   let tail = match (mf.source, dec.dec) {
-    (OggVorbis(demux), Vorbis(_, first)) if demux.total_samples > 0L =>
+    (OggVorbis(demux), Vorbis(_, first)) if demux.total_samples > 0L &&
+      !rows.is_empty() =>
       (rows[0].length().to_int64() -
       (demux.total_samples - first.val.max(0).to_int64()).max(0L))
       .max(0L)
@@ -945,8 +1310,8 @@ pub fn decode_audio_file(
   }
   {
     samples: rows,
-    sample_rate: dec.sample_rate(),
-    channels: dec.channels(),
+    sample_rate: rate,
+    channels: rows.length(),
     format_name: mf.format_name(),
     codec_id: mf.streams()[audio].codec_id,
     duration_seconds: mf.duration_seconds(),

@@ -338,7 +338,9 @@ pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
       pos = pos + 1
       continue
     }
-    let hdr = match @libavcodec.ac3_parse_header(data[pos:].to_owned()) {
+    let hdr = match @libavcodec.ac3_parse_header(
+      data[pos:pos + (data.length() - pos).min(4096)].to_owned(),
+    ) {
       Ok(h) => h
       Err(_) => {
         pos = pos + 1
