@@ -18205,3 +18205,33 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
 - FATE 的 `inside-mp8.mpc` 共 8 个 AP 包，拆包 Adler-32 为
   `0x5cdeaf0c`。导出 WAV 每声道 525,312 个样本，8.4 秒之后的
   PCM 与 FATE 的参考数据逐样本一致。
+
+## §509 Cook（RealAudio G2）解码器
+
+- `libavcodec/cook.mbt` 移植 `libavcodec/cook.c` 与 `cookdata.h` 的全部
+  数据表（30 张表由脚本与参照逐项机械比对）。支持 MONO、STEREO、
+  JOINT_STEREO 子包布局和 MC_COOK 的单声道/联合立体声形态，覆盖
+  extradata 解析、`decode_bytes` 去扰、增益/包络、水位分类、SQVH 反量化
+  （含 LFG 噪声填充）、耦合去相关和 MLT 合成。输出为 [-1, 1] 的平面
+  Double 样本，API 是 `CookDecoder::new(extradata, channels,
+  block_align, sample_rate=)` 与 `decode_packet`（前两包丢弃，与 C 一致）。
+- 三个关键实现口径：`decode_bytes` 的 XOR 密钥旋转与指针对齐偏移正好
+  相抵，去扰即按子包起点循环 `37 c5 11 f2`；VLC 用 `build_vlc` 的源序
+  规范码（`code += 1 << (32-len)` 累加）建二叉树；FULL-IMDCT 拼装为
+  `[-rev(H1), H1, H2, rev(H2)]`（H 为 `ff_tx_mdct_naive_inv` 的 N 点
+  输出，尺度 1/32768），正弦窗是 `ff_sine_window_init` 的四分之一周期
+  坡 `sin((i+1/2)·π/(2N))`——初版误写成半周期，靠插桩 C 解码器的
+  二进制 dump 反推有效窗后修正，正是「输出恰为 2 倍」的根因。
+- 对拍：FATE 的 `ra_cook.rm`（联合立体声 37 子带）、`spygames-2MB.rmvb`
+  （联合立体声 34 子带，取音频起始的第 98–115 帧）、`rv30.rm` 的单声道
+  Cook 音轨（取第 36–59 帧）共三流，s16 PCM 与 docker FFmpeg 9.0.2
+  参照逐样本差值 ≤ 1 LSB。插桩 C 解码器（不改参照源码，编译插桩副本
+  覆盖 cook.o 后重链）做符号级 trace 对拍：增益/耦合/包络/分类各级
+  逐行一致（含位游标与 LFG 计数），MLT 系数仅差 f32 舍入。
+  `scripts/gen_cook_fixtures.py` 生成夹具；探针脚本在
+  `.scratch/cook_dl/`（表比对、trace 生成、dump 分析）。
+- 已知边界：STEREO 版本双声道双半包路径（`bits_per_subpdiv=1`）无真实
+  向量覆盖（组件均经联合立体声路径验证）；MC_COOK 的多子包/多声道布局、
+  RealMedia 容器 demux、Cook 编码属后续范围。
+- libavcodec 全包分批回归（黑盒 wasm、白盒 wasm-gc）通过，Cook 专项
+  5 项测试全绿，全目标编译检查通过。
