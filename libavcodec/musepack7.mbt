@@ -264,15 +264,29 @@ fn Mpc7Decoder::decode(
       }
     }
   }
-  let output = Array::makei(2, _ => Array::make(1152, 0))
+  let output = mpc_synthesize(self.synth, self.synth_offset, subbands)
+  if last && self.last_samples < 1152 {
+    output.map(ch => ch[:self.last_samples].to_owned())
+  } else {
+    output
+  }
+}
+
+///|
+fn mpc_synthesize(
+  synth : Array[Array[Int32]],
+  offsets : FixedArray[Int32],
+  subbands : Array[Array[Int32]],
+) -> Array[Array[Int32]] {
+  let output = Array::makei(synth.length(), _ => Array::make(1152, 0))
   let mut dither = 0
-  for ch in 0..<2 {
+  for ch in 0..<synth.length() {
     for row in 0..<36 {
-      let offset = self.synth_offset[ch]
+      let offset = offsets[ch]
       let pos = row * 32
-      dct32(self.synth[ch], offset, subbands[ch], pos)
+      dct32(synth[ch], offset, subbands[ch], pos)
       dither = apply_window(
-        self.synth[ch],
+        synth[ch],
         offset,
         synth_window,
         dither,
@@ -280,14 +294,10 @@ fn Mpc7Decoder::decode(
         pos,
         1,
       )
-      self.synth_offset[ch] = (offset - 32) & 511
+      offsets[ch] = (offset - 32) & 511
     }
   }
-  if last && self.last_samples < 1152 {
-    output.map(ch => ch[:self.last_samples].to_owned())
-  } else {
-    output
-  }
+  output
 }
 
 ///|

@@ -140,3 +140,26 @@ test "musepack: rejected packet leaves decoder state intact" {
     clean.decode_packet(packet).unwrap(),
   )
 }
+
+///|
+test "musepack: SV8 full audio packet and short final packet" {
+  // Four silent frames followed by two, with zero padding to a byte.
+  let data = b"MPCKSH\x0d\x01\x02\x03\x04\x08\xb6\x00\x00\x00\x11AP\x04\x70AP\x04\x40SE\x03"
+  let audio = decode_audio_file(data)
+  assert_eq(audio.codec_id, "musepack8")
+  assert_eq(audio.sample_rate, 44100)
+  assert_eq(audio.channels, 2)
+  assert_eq(audio.samples[0], Array::make(6 * 1152, 0.0))
+  assert_eq(audio.samples[1], audio.samples[0])
+  let mono = Bytes::makei(data.length(), i => {
+    if i == 16 {
+      b'\x01'
+    } else {
+      data[i]
+    }
+  })
+  let mono_audio = decode_audio_file(mono)
+  assert_eq(mono_audio.channels, 1)
+  assert_eq(mono_audio.samples, [audio.samples[0]])
+  assert_true(av_mpc8_open(data[:data.length() - 1].to_owned()) is Err(_))
+}

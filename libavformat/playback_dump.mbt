@@ -40,6 +40,14 @@ fn MediaFile::stream_timebase(
     RawAc3(track, _) => Some((track.sample_rate.to_double(), 0.0))
     ApeAudio(demux) => Some((demux.sample_rate.to_double(), 0.0))
     MusepackAudio(demux) => Some((demux.sample_rate.to_double() / 1152.0, 0.0))
+    Musepack8Audio(demux) =>
+      Some(
+        (
+          demux.sample_rate.to_double() /
+          (1152 * demux.frames_per_packet).to_double(),
+          0.0,
+        ),
+      )
     StillImage(_) => None
     Wav(demux, _) =>
       if demux.format.sample_rate > 0 {

@@ -60,6 +60,7 @@ pub(all) enum FormatId {
   Matroska
   Mjpeg
   Mpc7
+  Mpc8
   Mov
   Mp3
   MpegTs
@@ -95,6 +96,7 @@ pub fn FormatId::name(self : FormatId) -> String {
     Mp3 => "mp3"
     MpegTs => "mpegts"
     Mpc7 => "mpc"
+    Mpc8 => "mpc8"
     Ogg => "ogg"
     W64 => "w64"
     Wav => "wav"
@@ -124,6 +126,7 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Mp3 => "mp3,mp2,mp1,m1a,m2a,mpa"
     MpegTs => "ts,m2t,m2ts,mts,mpg,mpeg"
     Mpc7 => "mpc"
+    Mpc8 => "mpc"
     Ogg => "ogg,oga,ogv,ogx,opus,spx"
     W64 => "w64"
     Wav => "wav,rf64,bw64"
@@ -153,6 +156,7 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Mp3 => "audio/mpeg"
     MpegTs => "video/mp2t"
     Mpc7 => ""
+    Mpc8 => ""
     Ogg => "application/ogg"
     W64 => "audio/x-w64"
     Wav => "audio/x-wav"
@@ -422,6 +426,7 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: Mp3, probe: probe_mp3, },
     { id: MpegTs, probe: probe_mpegts, },
     { id: Mpc7, probe: probe_mpc7, },
+    { id: Mpc8, probe: probe_mpc8, },
     { id: Ogg, probe: probe_ogg, },
     { id: W64, probe: probe_w64, },
     { id: Wav, probe: probe_wav, },

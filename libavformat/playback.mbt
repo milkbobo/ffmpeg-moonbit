@@ -126,6 +126,7 @@ pub(all) enum Source {
   RawAc3(RawAudioTrack, Bytes)
   ApeAudio(ApeDemux)
   MusepackAudio(Mpc7Demux)
+  Musepack8Audio(Mpc8Demux)
   /// The demuxer plus, per stream, the next interpolated AAC timestamp
   /// (`ts_nopts` until the first PES timestamp is seen).
   Ts(TsDemux, Array[Int64])
@@ -403,6 +404,30 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         cursor: [0],
       }
     }
+    Mpc8 => {
+      let demux = match av_mpc8_open(data) {
+        Ok(demux) => demux
+        Err(e) => raise DemuxError(e)
+      }
+      let streams = [
+        StreamInfo::{
+          index: 0,
+          media_type: Audio,
+          codec_id: "musepack8",
+          sample_rate: demux.sample_rate,
+          channels: demux.channels,
+          width: 0,
+          height: 0,
+          extradata: Some(demux.extradata),
+        },
+      ]
+      {
+        format_name: "mpc8",
+        streams,
+        source: Musepack8Audio(demux),
+        cursor: [0],
+      }
+    }
     Png => playback_open_png(data, format.name())
     MpegTs => playback_ts_build(data)
     other => raise UnsupportedFormat(other.name())
@@ -567,6 +592,12 @@ pub fn MediaFile::next_packet(
       self.cursor[0] = index + 1
       Some({ stream_index: 0, data, pts: index.to_int64(), keyframe: true, })
     }
+    Musepack8Audio(demux) => {
+      let index = self.cursor[0]
+      guard demux.packet(index) is Some(data) else { return None }
+      self.cursor[0] = index + 1
+      Some({ stream_index: 0, data, pts: index.to_int64(), keyframe: true, })
+    }
     Ts(_, _) => abort("unreachable: TS is routed above")
   }
 }
@@ -575,6 +606,7 @@ pub fn MediaFile::next_packet(
 /// The audio decoder behind an `AudioDecoder`.
 pub(all) enum AudioDec {
   Musepack7(@libavcodec.Mpc7Decoder)
+  Musepack8(@libavcodec.Mpc8Decoder)
   Aac(@libavcodec.AacDecoder)
   Opus(@libavcodec.OpusDecoder)
   Vorbis(@libavcodec.VorbisDecoder, Ref[Int32])
@@ -620,6 +652,20 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
     raise UnsupportedCodec(info.codec_id)
   }
   match info.codec_id {
+    "musepack8" => {
+      guard info.extradata is Some(extra) else {
+        raise DecodeError("musepack: missing SV8 stream header")
+      }
+      let dec = match @libavcodec.Mpc8Decoder::new(extra) {
+        Ok(dec) => dec
+        Err(e) => raise DecodeError(e)
+      }
+      {
+        dec: Musepack8(dec),
+        channels: dec.channels,
+        sample_rate: info.sample_rate,
+      }
+    }
     "musepack7" => {
       guard info.extradata is Some(extra) else {
         raise DecodeError("musepack: missing SV7 stream header")
@@ -807,6 +853,19 @@ pub fn AudioDecoder::decode(
   pkt : MediaPacket,
 ) -> AudioFrame? raise MediaError {
   match self.dec {
+    Musepack8(dec) => {
+      let pcm = match dec.decode_packet(pkt.data) {
+        Ok(pcm) => pcm
+        Err(e) => raise DecodeError(e)
+      }
+      let samples = pcm.map(ch => ch.map(sample => sample.to_double() / 32768.0))
+      Some({
+        samples,
+        nb_samples: pcm[0].length(),
+        sample_rate: self.sample_rate,
+        pts: Some(pkt.pts),
+      })
+    }
     Musepack7(dec) => {
       let pcm = match dec.decode_packet(pkt.data) {
         Ok(pcm) => pcm
@@ -1148,6 +1207,8 @@ pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
       Some(
         demux.frame_count.to_double() * 1152.0 / demux.sample_rate.to_double(),
       )
+    Musepack8Audio(demux) =>
+      Some(demux.samples.to_double() / demux.sample_rate.to_double())
     OggVorbis(demux) if demux.total_samples > 0L =>
       Some(demux.total_samples.to_double() / demux.sample_rate.to_double())
     OggFlac(demux) if demux.total_samples > 0L =>
