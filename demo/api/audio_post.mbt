@@ -139,14 +139,7 @@ fn export_processed_audio(
   }
   let (samples, summary) = apply_audio_post(audio.samples(), mix, rate, options)
   let channels = samples.length()
-  let interleaved = @swr.swr_flt_planar_to_s16(samples, channels)
-  let bytes = if format == "flac" {
-    demo_result(@avc.flac_encode(interleaved, channels, rate, 16)).file()
-  } else {
-    let mux = demo_result(@avf.wav_muxer_new(rate, channels, 16))
-    mux.write_samples(interleaved[:])
-    mux.finish()
-  }
+  let bytes = demo_encode_audio(samples, rate, format)
   let duration = samples[0].length().to_double() / rate.to_double()
   env_ok(
     audio_fields(format, bytes, rate, channels, Some(duration)) +
@@ -157,7 +150,7 @@ fn export_processed_audio(
 
 ///|
 /// Decode the first audio stream of each input, apply optional PCM effects
-/// and export 16-bit WAV or FLAC. An empty secondary input disables mixing.
+/// and export the selected audio format. An empty secondary input disables mixing.
 #export_name("ff_process_audio")
 pub fn ff_process_audio(
   source : String,
@@ -182,7 +175,7 @@ pub fn ff_process_audio(
     mix_weight,
   }
   guard audio_post_valid(options) &&
-    (format == "wav" || format == "flac") &&
+    demo_audio_format(format) &&
     (rate == 0 || (rate >= 8000 && rate <= 192000)) else {
     return env_err_code(
       "AUDIO_POST_FAILED", "音频后期处理参数超出范围。",

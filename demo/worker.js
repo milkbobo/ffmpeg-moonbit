@@ -73,8 +73,9 @@ const actions = {
     const mime = result.mime === "image/jpg" ? "image/jpeg" : result.mime;
     return { blob: new Blob([decode(result.data)], { type: mime }) };
   },
-  thumbnail(wasm, _, encoded) {
-    return pixels(call(wasm.ff_thumbnail, encoded, 640));
+  thumbnail(wasm, { format }, encoded) {
+    const { width, height, image } = call(wasm.ff_export_thumbnail, encoded, 640, format);
+    return { width, height, blob: new Blob([decode(image)], { type: format === "jpg" ? "image/jpeg" : "image/png" }) };
   },
   analyzeAudio(wasm, _, encoded) {
     return call(wasm.ff_analyze_audio, encoded);
@@ -108,7 +109,7 @@ const actions = {
       wasm.ff_concat_clear?.();
     }
   },
-  contactSheet(wasm, { count }, encoded) {
+  contactSheet(wasm, { count, format }, encoded) {
     if (!Number.isSafeInteger(count) || count < 1 || count > 24) {
       throw new Error("缩略图数量须在 1 到 24 之间。");
     }
@@ -119,19 +120,35 @@ const actions = {
       for (let i = 0; i < count; i++) {
         const target = interval * i;
         if (target < (frames.at(-1)?.end ?? 0)) continue;
-        const frame = pixels(call(wasm.ff_player_frame, target, 280));
+        const frame = call(wasm.ff_player_frame, target, 280);
         if (frame.eof) break;
-        frames.push(frame);
+        frames.push(format === "apng" ? frame : pixels(frame));
         if (frame.end <= target) break;
       }
       if (!frames.length) throw new Error("该视频没有可生成缩略图的画面。");
+      if (format === "apng") {
+        const { width, height } = frames[0];
+        let size = 0;
+        const rgb = frames.map((frame) => {
+          if (frame.width !== width || frame.height !== height || frame.rgb24?.length !== width * height * 3) {
+            throw new Error("动图中的画面尺寸必须一致。");
+          }
+          size += frame.rgb24.length;
+          if (size > 24 * 1024 * 1024) throw new Error("动图像素数据超过 24 MiB。");
+          return frame.rgb24;
+        }).join("");
+        const { apng } = call(wasm.ff_export_apng, rgb, width, height);
+        return { blob: new Blob([decode(apng)], { type: "image/apng" }), count: frames.length };
+      }
       return { frames, interval, estimatedInterval: !(duration > 0) };
     } finally {
       wasm.ff_player_close?.();
     }
   },
   audio(wasm, { format, rate }, encoded) {
-    const result = call(format === "flac" ? wasm.ff_encode_flac : wasm.ff_decode_audio, encoded, rate);
+    const result = format === "wav" ? call(wasm.ff_decode_audio, encoded, rate)
+      : format === "flac" ? call(wasm.ff_encode_flac, encoded, rate)
+        : call(wasm.ff_export_audio, encoded, rate, format);
     return audioResult(result, format);
   },
   async processAudio(wasm, { format, rate, trim, fadeIn, fadeOut, normalize, target, ceiling, mixFile, mixWeight }, encoded) {
@@ -165,8 +182,9 @@ function mp4Result({ mp4, start, end }) {
 }
 
 function audioResult(result, format) {
+  const types = { wv: "audio/x-wavpack", ac3: "audio/ac3", ogg: "audio/ogg" };
   return {
-    blob: new Blob([decode(result[format])], { type: `audio/${format}` }),
+    blob: new Blob([decode(result[format])], { type: types[format] ?? `audio/${format}` }),
     rate: result.sample_rate,
     channels: result.channels,
     duration: result.duration_seconds,

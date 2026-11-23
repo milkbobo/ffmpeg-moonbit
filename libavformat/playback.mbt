@@ -1325,6 +1325,18 @@ pub fn decode_audio_file(
   if data.length() >= 4 && data[:4] == b"ajkg"[:] {
     return playback_decode_shorten(data, sample_budget)
   }
+  if data.length() >= 4 && data[:4] == b"wvpk"[:] {
+    return playback_decode_wavpack(data, sample_budget)
+  }
+  if data.length() >= 8 {
+    match data[4:8] {
+      [0xf8, 0x72, 0x6f, 0xba] =>
+        return playback_decode_mlp(data, true, sample_budget)
+      [0xf8, 0x72, 0x6f, 0xbb] =>
+        return playback_decode_mlp(data, false, sample_budget)
+      _ => ()
+    }
+  }
   let mf = MediaFile::open(data)
   if mf.source is ApeAudio(demux) && sample_budget is Some(limit) {
     guard demux.total_samples * demux.channels.to_int64() <= limit else {
@@ -1416,11 +1428,18 @@ pub fn decode_audio_file(
   }
   let tail = match (mf.source, dec.dec) {
     (OggVorbis(demux), Vorbis(_, first)) if demux.total_samples > 0L &&
-      !rows.is_empty() =>
-      (rows[0].length().to_int64() -
-      (demux.total_samples - first.val.max(0).to_int64()).max(0L))
+      !rows.is_empty() => {
+      // A priming packet with granule zero contributes no presentation
+      // samples. Preserve the existing offset for positive initial granules.
+      let offset = if demux.packets[0].granule == 0L {
+        0L
+      } else {
+        first.val.max(0).to_int64()
+      }
+      (rows[0].length().to_int64() - (demux.total_samples - offset).max(0L))
       .max(0L)
       .to_int()
+    }
     _ => tail
   }
   if rows.length() > 0 && (head > 0 || tail > 0) {

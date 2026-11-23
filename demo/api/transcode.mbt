@@ -2,6 +2,7 @@
 priv enum DemoVideoEncoder {
   Avc(@avc.VideoEncoder)
   Hevc(@avc.HevcStreamEncoder)
+  Av1(@avc.Av1Encoder, Int32, Int32)
 }
 
 ///|
@@ -42,6 +43,12 @@ fn demo_video_encoder(
             b_slices=false,
           ),
         ),
+      )
+    "av1" =>
+      Av1(
+        @avc.Av1Encoder::new(@avc.Av1SeqEncConfig::default(width~, height~)),
+        width,
+        height,
       )
     _ => fail("unsupported output codec: " + codec)
   }
@@ -99,9 +106,30 @@ fn demo_int_plane(bytes : Bytes) -> FixedArray[Int32] {
 }
 
 ///|
+fn demo_av1_plane(
+  bytes : Bytes,
+  width : Int32,
+  height : Int32,
+  stride : Int32,
+  rows : Int32,
+  fill : Int32,
+) -> FixedArray[Int32] {
+  let plane = FixedArray::make(stride * rows, fill)
+  let x = (stride - width) / 2
+  let y = (rows - height) / 2
+  for row in 0..<height {
+    for col in 0..<width {
+      plane[(y + row) * stride + x + col] = bytes[row * width + col].to_int()
+    }
+  }
+  plane
+}
+
+///|
 fn DemoVideoEncoder::push(
   self : DemoVideoEncoder,
   planes : (Bytes, Bytes, Bytes),
+  content_size? : (Int32, Int32),
 ) -> Array[Bytes] raise {
   let (y, u, v) = planes
   match self {
@@ -115,6 +143,23 @@ fn DemoVideoEncoder::push(
       )
       enc.drain()
     }
+    Av1(enc, width, height) => {
+      let (w, h) = content_size.unwrap_or((width, height))
+      let (packet, _) = demo_result(
+        enc.encode_frame(
+          {
+            y: demo_av1_plane(y, w, h, width, height, 16),
+            y_stride: width,
+            u: demo_av1_plane(u, w / 2, h / 2, width / 2, height / 2, 128),
+            uv_stride: width / 2,
+            v: demo_av1_plane(v, w / 2, h / 2, width / 2, height / 2, 128),
+          },
+          split_margin=0,
+          drl=true,
+        ),
+      )
+      [demo_result(@avc.av1_enc_mp4_sample(packet))]
+    }
   }
 }
 
@@ -123,6 +168,7 @@ fn DemoVideoEncoder::finish(self : DemoVideoEncoder) -> Array[Bytes] raise {
   match self {
     Avc(enc) => demo_result(enc.finish())
     Hevc(enc) => demo_result(enc.finish())
+    Av1(_, _, _) => []
   }
 }
 
@@ -311,6 +357,16 @@ fn demo_mux_mp4(
           }
           mux.finish()
         }
+        "av1" => {
+          let mux = demo_result(@avf.mp4_av1_muxer_new(width, height, config))
+          for i in 0..<packets.length() {
+            let (packet, keyframe) = packets[i]
+            demo_result(
+              mux.write_packet(packet, duration=durations[i], keyframe~),
+            )
+          }
+          mux.finish()
+        }
         _ => {
           let mux = demo_result(@avf.mp4_hevc_muxer_new(width, height, config))
           for i in 0..<packets.length() {
@@ -399,10 +455,38 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
   guard video is Some(video) else { fail("input has no video stream") }
   demo_check_video_size(video.width, video.height)
   let decoder = @avf.VideoDecoder::open(video)
-  // Both output encoders use even 4:2:0 dimensions.
-  let width = (video.width + 1) / 2 * 2
-  let height = (video.height + 1) / 2 * 2
+  let (content_w, content_h) = if codec == "av1" {
+    let scale = 512.0 / video.width.max(video.height).max(512).to_double()
+    let even = fn(value : Int32) {
+      (value.to_double() * scale / 2.0 + 0.5).to_int().max(1) * 2
+    }
+    (even(video.width), even(video.height))
+  } else {
+    ((video.width + 1) / 2 * 2, (video.height + 1) / 2 * 2)
+  }
+  // Each AV1 tile holds one 64x64 superblock. The tile grid requires
+  // power-of-two dimensions, so pad the scaled image without stretching it.
+  let (width, height) = if codec == "av1" {
+    let align = value => {
+      if value <= 64 {
+        64
+      } else if value <= 128 {
+        128
+      } else if value <= 256 {
+        256
+      } else {
+        512
+      }
+    }
+    (align(content_w), align(content_h))
+  } else {
+    (content_w, content_h)
+  }
+  let content_size = (content_w, content_h)
   let encoder = demo_video_encoder(codec, width, height)
+  let push_frame = fn(frame : @avf.VideoFrame) -> Array[Bytes] raise {
+    encoder.push(demo_video_planes(frame, content_w, content_h), content_size~)
+  }
   let units : Array[Bytes] = []
   let timeline = demo_mov_timeline(data, file, video.index)
   // The H.264 decoder emits an image for each access unit in decode order.
@@ -420,9 +504,13 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
     if packet.stream_index == video.index {
       let frames = decoder.decode(packet)
       decoded_pixels = demo_count_video(frames, decoded_pixels)
+      guard codec != "av1" ||
+        units.length() + pending.length() + frames.length() <= 120 else {
+        fail("AV1 演示最多处理 120 帧。")
+      }
       if h264_order.is_empty() {
         for frame in frames {
-          units.append(encoder.push(demo_video_planes(frame, width, height)))
+          units.append(push_frame(frame))
         }
       } else {
         guard frames.length() == 1 else {
@@ -433,7 +521,7 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
           let next = h264_order[display_index]
           guard pending.get(next) is Some(frame) else { break }
           pending.remove(next)
-          units.append(encoder.push(demo_video_planes(frame, width, height)))
+          units.append(push_frame(frame))
           display_index += 1
         }
       }
@@ -445,14 +533,25 @@ fn demo_transcode_mp4(data : Bytes, codec : String) -> Bytes raise {
   }
   let tail = decoder.finish_video(pixel_budget=demo_hevc_batch_pixels)
   ignore(demo_count_video(tail, decoded_pixels))
+  guard codec != "av1" || units.length() + tail.length() <= 120 else {
+    fail("AV1 演示最多处理 120 帧。")
+  }
   for frame in tail {
-    units.append(encoder.push(demo_video_planes(frame, width, height)))
+    units.append(push_frame(frame))
   }
   units.append(encoder.finish())
   guard units.length() > 0 else { fail("input has no decodable frames") }
-  let hevc = codec == "hevc"
-  let config = demo_decoder_config(demo_annexb_nals(units[0]), hevc)
-  let packets = units.map(unit => demo_mp4_packet(unit, hevc))
+  let (config, packets) = match encoder {
+    Av1(enc, _, _) =>
+      (enc.av1c(), Array::makei(units.length(), i => (units[i], i == 0)))
+    _ => {
+      let hevc = codec == "hevc"
+      (
+        demo_decoder_config(demo_annexb_nals(units[0]), hevc),
+        units.map(unit => demo_mp4_packet(unit, hevc)),
+      )
+    }
+  }
   let count = packets.length()
   let durations = match timeline {
     Some((_, durations)) if durations.length() == count => durations

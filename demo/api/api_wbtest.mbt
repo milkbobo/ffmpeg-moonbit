@@ -58,16 +58,17 @@ test "json_escape: 引号、反斜杠与控制符" {
 fn demo_test_video(
   duration~ : Int32 = 3000,
   luma~ : Byte = b'\x50',
+  width~ : Int32 = 64,
 ) -> Bytes raise {
-  let y = Bytes::from_array(Array::make(64 * 64, luma))
-  let uv = Bytes::from_array(Array::make(32 * 32, b'\x80'))
-  let source_encoder = demo_video_encoder("h264", 64, 64)
+  let y = Bytes::from_array(Array::make(width * 64, luma))
+  let uv = Bytes::from_array(Array::make(width / 2 * 32, b'\x80'))
+  let source_encoder = demo_video_encoder("h264", width, 64)
   let units = source_encoder.push((y, uv, uv))
   units.append(source_encoder.finish())
   let config = demo_decoder_config(demo_annexb_nals(units[0]), false)
   let keyframe = demo_mp4_packet(units[0], false)
   let packets = [keyframe, keyframe]
-  demo_mux_mp4("h264", config, 64, 64, packets, [duration, duration], None)
+  demo_mux_mp4("h264", config, width, 64, packets, [duration, duration], None)
 }
 
 ///|
@@ -147,9 +148,9 @@ test "MP4 clip editing aligns to IDR boundaries and copies packet bytes" {
 }
 
 ///|
-test "MP4 conversion encodes H.264 and HEVC video-only outputs" {
+test "MP4 conversion encodes H.264, HEVC and AV1 video-only outputs" {
   let source = demo_test_video()
-  for codec in ["h264", "hevc"] {
+  for codec in ["h264", "hevc", "av1"] {
     let output = @avf.MediaFile::open(demo_transcode_mp4(source, codec))
     assert_eq(output.streams().length(), 1)
     let stream = output.streams()[0]
@@ -160,6 +161,98 @@ test "MP4 conversion encodes H.264 and HEVC video-only outputs" {
     }
     assert_eq((frame.width(), frame.height()), (64, 64))
   }
+}
+
+///|
+test "AV1 conversion pads a non-power-of-two source for the tile grid" {
+  let bytes = demo_transcode_mp4(demo_test_video(width=96), "av1")
+  let output = @avf.MediaFile::open(bytes)
+  let stream = output.streams()[0]
+  assert_eq((stream.width, stream.height), (128, 64))
+  let decoder = @avf.VideoDecoder::open(stream)
+  guard first_video_frame(output, decoder, stream.index) is Some(frame) else {
+    fail("AV1 output has no decodable frame")
+  }
+  assert_eq((frame.width(), frame.height()), (128, 64))
+}
+
+///|
+test "image export creates PNG, JPEG and APNG files" {
+  let source = bytes_to_u0100(demo_test_video())
+  for (format, magic) in [("png", b"\x89PNG"), ("jpg", b"\xff\xd8")] {
+    guard @json.parse(ff_export_thumbnail(source, 32, format))
+      is {
+        "image": String(encoded),
+        "width": Number(32, ..),
+        "height": Number(32, ..),
+        ..
+      } else {
+      fail("missing encoded thumbnail")
+    }
+    let bytes = u0100_to_bytes(encoded)
+    assert_eq(bytes[:magic.length()].to_owned(), magic)
+  }
+  let frames = bytes_to_u0100(b"\xff\x00\x00\x00\x00\xff")
+  guard @json.parse(ff_export_apng(frames, 1, 1))
+    is { "apng": String(encoded), .. } else {
+    fail("missing encoded animation")
+  }
+  let result = u0100_to_bytes(encoded)
+  // acTL follows the 33-byte PNG signature and IHDR chunk.
+  assert_eq(result[37:45].to_owned(), b"acTL\x00\x00\x00\x02")
+}
+
+///|
+test "audio export writes WavPack, AC-3 and Vorbis files with partial final blocks" {
+  let rate = 48000
+  let samples = 1801
+  let pcm = Array::makei(samples, i => {
+    (i % 64 * 113 - 3000).to_double() / 32768.0
+  })
+  let wav = demo_encode_audio([pcm, pcm], rate, "wav")
+  let source = bytes_to_u0100(wav)
+  for (format, codec) in [("wv", "wavpack"), ("ac3", "ac3"), ("ogg", "vorbis")] {
+    let response = ff_export_audio(source, 0, format)
+    guard @json.parse(response) is Object(fields) &&
+      fields.get(format) is Some(String(encoded)) else {
+      fail(response)
+    }
+    let bytes = u0100_to_bytes(encoded)
+    let probe = ff_probe(encoded)
+    guard @json.parse(probe)
+      is {
+        "probe": {
+          "format": { "duration": Number(duration, ..), .. },
+          "streams": [{ "codec_name": String(actual), .. }],
+          ..
+        },
+        ..
+      } else {
+      fail(format + " " + probe)
+    }
+    assert_eq(actual, codec)
+    assert_true(duration > 0.0)
+    let audio = demo_decode_audio(bytes) catch {
+      error => fail(format + " " + error.message())
+    }
+    assert_eq(audio.sample_rate(), rate)
+    assert_eq(audio.channels(), 2)
+    match format {
+      "wv" => assert_eq(audio.samples()[0], pcm)
+      "ogg" => assert_eq(audio.samples()[0].length(), samples)
+      _ => assert_eq(audio.samples()[0].length(), 3072)
+    }
+  }
+  let wv = demo_encode_audio([pcm, pcm], rate, "wv")
+  let status = try {
+    ignore(
+      @avf.decode_audio_file(wv, sample_budget=2L * samples.to_int64() - 1L),
+    )
+    "unexpected success"
+  } catch {
+    error => error.message()
+  }
+  assert_true(status.contains("sample budget exceeded"))
 }
 
 ///|

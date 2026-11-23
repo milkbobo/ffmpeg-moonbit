@@ -23,7 +23,7 @@
     <section class="upload" id="drop" aria-label="导入媒体">
       <div>
         <h2 id="fileName">拖入媒体文件</h2>
-        <p id="fileInfo">试试 MP4、WebM、MKV、MP3 或 WAV</p>
+        <p id="fileInfo">试试 MP4、MKV、WAV、WavPack、Shorten 或 Musepack</p>
       </div>
       <div class="actions">
         <button id="sample" type="button">试用样片</button>
@@ -76,6 +76,7 @@
             <select id="videoFormat">
               <option value="h264">MP4 · H.264</option>
               <option value="hevc">MP4 · HEVC（H.265）</option>
+              <option value="av1">MP4 · AV1（实验性）</option>
               <option value="webm">WebM · 浏览器编码</option>
             </select>
           </label>
@@ -87,16 +88,23 @@
         </div>
         <form class="tool" id="audioExportForm">
           <h3 id="audioTitle">转音频 / 提取音轨</h3>
-          <p>导出首条音轨为 16 位音频，可调整采样率。</p>
+          <p id="audioFormatInfo">导出首条音轨为 16 位 PCM WAV。</p>
           <div class="audio-options">
             <label>格式
-              <select id="audioFormat"><option value="wav">WAV</option><option value="flac">FLAC</option></select>
+              <select id="audioFormat">
+                <option value="wav">WAV</option>
+                <option value="flac">FLAC</option>
+                <option value="wv">WavPack</option>
+                <option value="ac3">AC-3</option>
+                <option value="ogg">Ogg / Vorbis</option>
+              </select>
             </label>
             <label>采样率
               <select id="sampleRate">
                 <option value="0">保持原始</option>
                 <option value="48000">48 kHz</option>
                 <option value="44100">44.1 kHz</option>
+                <option value="32000">32 kHz</option>
                 <option value="16000">16 kHz</option>
               </select>
             </label>
@@ -127,15 +135,21 @@
         </form>
         <div class="tool">
           <h3>首帧与封面</h3>
-          <p>解码视频首帧为 PNG，或读取容器封面。</p>
+          <p>用 MoonBit 编码视频首帧，或读取容器封面。</p>
+          <label class="video-format">首帧格式
+            <select id="thumbnailFormat"><option value="png">PNG</option><option value="jpg">JPEG</option></select>
+          </label>
           <div class="actions">
             <button id="thumbnail" type="button" disabled>提取首帧</button>
             <button id="cover" type="button" disabled>提取封面</button>
           </div>
         </div>
         <div class="tool">
-          <h3>视频缩略图总览</h3>
-          <p>沿视频时间轴等间隔取帧，拼成一张带时间戳的 PNG。</p>
+          <h3>视频缩略图</h3>
+          <p>沿时间轴等间隔取帧，输出带时间戳的总览或循环动图。</p>
+          <label class="video-format">输出格式
+            <select id="contactFormat"><option value="png">PNG 总览</option><option value="apng">APNG 动图</option></select>
+          </label>
           <label class="video-format">最多取帧
             <select id="contactCount">
               <option value="6">6 帧</option>
@@ -143,7 +157,7 @@
               <option value="24">24 帧</option>
             </select>
           </label>
-          <button id="contactSheet" type="button" disabled>生成缩略图总览</button>
+          <button id="contactSheet" type="button" disabled>生成缩略图</button>
         </div>
         <div class="tool">
           <h3>音频分析</h3>

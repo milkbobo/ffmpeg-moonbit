@@ -98,19 +98,44 @@ fn env_err(e : @avf.MediaError) -> String {
 /// `probe` 字段嵌入信封。
 #export_name("ff_probe")
 pub fn ff_probe(data : String) -> String {
-  let mf = @avf.MediaFile::open(u0100_to_bytes(data)) catch {
-    e => return env_err(e)
+  let bytes = u0100_to_bytes(data)
+  if demo_whole_file_audio(bytes) {
+    let audio = demo_decode_audio(bytes) catch { e => return env_err(e) }
+    let format : Json = {
+      "format_name": Json(audio.format_name()),
+      "duration": Json(audio.duration_seconds().unwrap_or(0.0)),
+      "nb_streams": Json(1),
+    }
+    let stream : Json = {
+      "index": Json(0),
+      "codec_type": "audio",
+      "codec_name": Json(audio.codec_id()),
+      "sample_rate": Json(audio.sample_rate()),
+      "channels": Json(audio.channels()),
+      "has_extradata": false,
+    }
+    let probe : Json = { "format": format, "streams": [stream] }
+    return env_ok("\"probe\":" + probe.stringify())
   }
+  let mf = @avf.MediaFile::open(bytes) catch { e => return env_err(e) }
   env_ok("\"probe\":" + mf.probe_json())
+}
+
+///|
+fn demo_whole_file_audio(bytes : Bytes) -> Bool {
+  (bytes.length() >= 4 && (bytes[:4] == b"ajkg"[:] || bytes[:4] == b"wvpk"[:])) ||
+  (bytes.length() >= 8 && bytes[4:8] is [0xf8, 0x72, 0x6f, 0xba | 0xbb])
 }
 
 ///|
 /// 封面：MKV Attachments / MP4 ilst-covr；无封面时 `cover:null`。
 #export_name("ff_cover")
 pub fn ff_cover(data : String) -> String {
-  let mf = @avf.MediaFile::open(u0100_to_bytes(data)) catch {
-    e => return env_err(e)
+  let bytes = u0100_to_bytes(data)
+  if demo_whole_file_audio(bytes) {
+    return env_ok("\"cover\":null")
   }
+  let mf = @avf.MediaFile::open(bytes) catch { e => return env_err(e) }
   match mf.cover() {
     Some(c) => {
       let mime = json_escape(c.mime())
@@ -158,6 +183,54 @@ fn first_video_frame(
 /// PNG 和 RGB JPEG 以原始尺寸转换。
 #export_name("ff_thumbnail")
 pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
+  demo_thumbnail(data, max_w, "")
+}
+
+///|
+/// Encode the first video frame as a PNG or baseline JPEG file.
+#export_name("ff_export_thumbnail")
+pub fn ff_export_thumbnail(
+  data : String,
+  max_w : Int32,
+  format : String,
+) -> String {
+  guard format == "png" || format == "jpg" else {
+    return env_err_code("THUMBNAIL_UNSUPPORTED", "请选择 PNG 或 JPEG。")
+  }
+  demo_thumbnail(data, max_w, format)
+}
+
+///|
+/// Encode up to 24 packed RGB frames as a looping thumbnail animation.
+#export_name("ff_export_apng")
+pub fn ff_export_apng(data : String, width : Int32, height : Int32) -> String {
+  demo_check_video_size(width, height) catch {
+    error => return env_err_code("MEDIA_BUDGET_EXCEEDED", error.to_string())
+  }
+  let stride = width * height * 3
+  let count = data.length() / stride
+  guard count >= 1 &&
+    count <= 24 &&
+    data.length() == stride * count &&
+    data.length() <= 24 * 1024 * 1024 else {
+    return env_err_code(
+      "IMAGE_ENCODE_FAILED", "动图帧数、尺寸或像素数据超出范围。",
+    )
+  }
+  let pixels = u0100_to_bytes(data)
+  let frames : Array[@avc.ApngEncodeFrame] = Array::makei(count, i => {
+    pixels: pixels[i * stride:(i + 1) * stride].to_owned(),
+    delay_num: 1,
+    delay_den: 2,
+  })
+  match @avc.av_apng_encode(width, height, frames, format="rgb24") {
+    Ok(bytes) => env_ok("\"apng\":\"" + bytes_to_u0100(bytes) + "\"")
+    Err(error) => env_err_code("IMAGE_ENCODE_FAILED", error)
+  }
+}
+
+///|
+fn demo_thumbnail(data : String, max_w : Int32, format : String) -> String {
   let mf = @avf.MediaFile::open(u0100_to_bytes(data)) catch {
     e => return env_err(e)
   }
@@ -186,7 +259,7 @@ pub fn ff_thumbnail(data : String, max_w : Int32) -> String {
     Some(f) => f
     None => return env_err_code("NO_VIDEO_STREAM", "no decodable video frame")
   }
-  render_video_rgb(frame, max_w)
+  render_video_rgb(frame, max_w, image_format=format)
 }
 
 ///|
@@ -194,6 +267,7 @@ fn render_video_rgb(
   frame : @avf.VideoFrame,
   max_w : Int32,
   fields~ : String = "",
+  image_format~ : String = "",
 ) -> String {
   let w = frame.width()
   let h = frame.height()
@@ -201,17 +275,7 @@ fn render_video_rgb(
     error => return env_err_code("MEDIA_BUDGET_EXCEEDED", error.to_string())
   }
   if frame.image_rgb24() is Some(pixels) {
-    let rgb = bytes_to_u0100(pixels)
-    return env_ok(
-      fields +
-      "\"width\":" +
-      w.to_string() +
-      ",\"height\":" +
-      h.to_string() +
-      ",\"rgb24\":\"" +
-      rgb +
-      "\"",
-    )
+    return video_rgb_result(w, h, pixels, fields, image_format)
   }
   let bits = frame.bit_depth()
   let stride = if bits > 8 { 2 } else { 1 }
@@ -263,15 +327,37 @@ fn render_video_rgb(
   let rgb = rs.scale(py, pu, pv) catch {
     InvalidScaleConfig(m) => return env_err_code("THUMBNAIL_UNSUPPORTED", m)
   }
-  let rgb_s = bytes_to_u0100(rgb)
+  video_rgb_result(dw, dh, rgb, fields, image_format)
+}
+
+///|
+fn video_rgb_result(
+  width : Int32,
+  height : Int32,
+  rgb : Bytes,
+  fields : String,
+  format : String,
+) -> String {
+  let result = match format {
+    "png" => @avc.av_png_encode(width, height, rgb, format="rgb24")
+    "jpg" => @avc.av_mjpeg_encode(width, height, rgb)
+    _ => Ok(rgb)
+  }
+  let bytes = match result {
+    Ok(bytes) => bytes
+    Err(error) => return env_err_code("IMAGE_ENCODE_FAILED", error)
+  }
+  let field = if format.is_empty() { "rgb24" } else { "image" }
   env_ok(
     fields +
     "\"width\":" +
-    dw.to_string() +
+    width.to_string() +
     ",\"height\":" +
-    dh.to_string() +
-    ",\"rgb24\":\"" +
-    rgb_s +
+    height.to_string() +
+    ",\"" +
+    field +
+    "\":\"" +
+    bytes_to_u0100(bytes) +
     "\"",
   )
 }

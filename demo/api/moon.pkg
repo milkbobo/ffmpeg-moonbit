@@ -9,6 +9,10 @@ import {
   "moonbitlang/core/encoding/utf8",
 }
 
+import {
+  "moonbitlang/core/json",
+} for "wbtest"
+
 pkgtype(kind: "foreign_library")
 
 options(

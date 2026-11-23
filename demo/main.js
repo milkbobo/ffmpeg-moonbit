@@ -16,7 +16,14 @@ const decoderControls = {
 };
 const progress = $("convertProgress");
 const videoFormat = $("videoFormat");
-const videoLabels = { h264: "H.264", hevc: "HEVC", webm: "WebM" };
+const videoLabels = { h264: "H.264", hevc: "HEVC", av1: "AV1", webm: "WebM" };
+const audioFormats = {
+  wav: ["WAV", "导出首条音轨为 16 位 PCM WAV。", true],
+  flac: ["FLAC", "导出首条音轨为 16 位 FLAC。", true],
+  wv: ["WavPack", "导出单声道或立体声，使用 16 位无损编码。", false],
+  ac3: ["AC-3", "支持单声道和立体声，请选 32、44.1 或 48 kHz。", false],
+  ogg: ["Ogg / Vorbis", "实验性 Vorbis 编码，输入需要立体声。", true],
+};
 const recorderType = ["video/webm;codecs=vp8,opus", "video/webm"].find(
   (type) => globalThis.MediaRecorder?.isTypeSupported(type),
 );
@@ -64,7 +71,12 @@ function updateControls() {
   const hasFrame = file?.wasmPlayer
     ? !canvasPlayer.hidden && !file.wasmPlayer.seeking
     : videoReady && video.readyState >= 2 && !video.seeking;
-  playerMode.disabled = !file?.wasmPlayer && (engineState !== "ready" || !file?.hasVideo);
+  const audioOnly = file?.hasAudio && !file.hasVideo;
+  const wasmPlayback = !!(file?.wasmPlayer || file?.audioPreviewUrl);
+  playerMode.textContent = wasmPlayback ? "浏览器播放" : "Wasm 播放";
+  playerMode.setAttribute("aria-pressed", String(wasmPlayback));
+  playerMode.disabled = !file?.wasmPlayer && !file?.audioPreviewUrl
+    && (engineState !== "ready" || !(file?.hasVideo || audioOnly) || !!file?.processing || !!file?.conversion);
   const webm = videoFormat.value === "webm";
   const canRecord = recorderType && captureStream;
   const canConvert = webm ? videoReady && canRecord : engineState === "ready" && file?.hasVideo;
@@ -77,6 +89,8 @@ function updateControls() {
     $("convertInfo").textContent = canRecord
       ? "浏览器按原速编码，保留可播放的音轨。"
       : "当前浏览器缺少 WebM 转码支持。";
+  } else if (videoFormat.value === "av1") {
+    $("convertInfo").textContent = "实验性 AV1 编码，最多 120 帧，长边不超过 512 像素，画面按需补边。";
   } else {
     $("convertInfo").textContent = "使用 MoonBit 编码，保留首条单声道或立体声音轨。";
   }
@@ -86,8 +100,10 @@ function updateControls() {
   $("audioPostOptions").disabled = $("exportAudio").disabled;
   $("analyzeAudio").disabled = !wasmReady || !file.hasAudio;
   $("thumbnail").disabled = !wasmReady || !file.hasVideo;
+  $("thumbnailFormat").disabled = $("thumbnail").disabled;
   $("contactSheet").disabled = !wasmReady || !file.hasVideo;
-  $("contactCount").disabled = !wasmReady || !file.hasVideo;
+  $("contactCount").disabled = $("contactSheet").disabled;
+  $("contactFormat").disabled = $("contactSheet").disabled;
   $("diagnose").disabled = !wasmReady || !file.canDiagnose;
   $("trim").disabled = !wasmReady || !file.canEditClips;
   $("chooseClips").disabled = !wasmReady || !file.canEditClips;
@@ -107,6 +123,7 @@ function resetMedia() {
   }
   if (current) {
     URL.revokeObjectURL(current.url);
+    if (current.audioPreviewUrl) URL.revokeObjectURL(current.audioPreviewUrl);
     for (const url of current.results.values()) URL.revokeObjectURL(url);
   }
   $("emptyPlayer").hidden = false;
@@ -142,6 +159,20 @@ function closeWasmPlayer(file) {
 
 playerMode.onclick = () => {
   const file = current;
+  if (!file) return;
+  if (file.hasAudio && !file.hasVideo) {
+    if (file.audioPreviewUrl) {
+      audio.src = file.url;
+      URL.revokeObjectURL(file.audioPreviewUrl);
+      file.audioPreviewUrl = null;
+      updateControls();
+      return;
+    }
+    return runTool("audio", { format: "wav", rate: 0 }, "解码音频", (selection, { blob }) => {
+      selection.audioPreviewUrl = URL.createObjectURL(blob);
+      audio.src = selection.audioPreviewUrl;
+    }, "点击播放控件试听。");
+  }
   if (file.wasmPlayer) {
     const position = file.wasmPlayer.clock();
     closeWasmPlayer(file);
@@ -278,7 +309,7 @@ async function openFile(file, id) {
   $("fileName").textContent = file.name;
   $("fileInfo").textContent = `${sizeLabel(file.size)} · 本地文件`;
   $("audioTitle").textContent = "转音频 / 提取音轨";
-  const audioOnly = file.type.startsWith("audio/") || /\.(mp3|wav|flac|aac|m4a|oga|opus|aiff?)$/i.test(file.name);
+  const audioOnly = file.type.startsWith("audio/") || /\.(mp3|wav|flac|aac|m4a|oga|opus|aiff?|ape|wma|dts|ac3|eac3|ec3|mlp|thd|truehd|wv|shn|mpc)$/i.test(file.name);
   usePlayer(selection, audioOnly ? audio : video);
   $("probeMessage").textContent = engineState === "error" ? $("engineStatus").title : "正在探测媒体流…";
   updateControls();
@@ -418,8 +449,8 @@ function addOutput(file, key, title, blob, extension, details, previewTag) {
   const info = document.createElement("p");
   info.textContent = [filename, details, sizeLabel(blob.size)].filter(Boolean).join(" · ");
   text.append(label, info);
-  if (previewTag === "video") {
-    const preview = item.querySelector("video");
+  if (previewTag === "video" || previewTag === "audio") {
+    const preview = item.querySelector(previewTag);
     preview.addEventListener("error", () => {
       preview.hidden = true;
       const message = document.createElement("p");
@@ -557,8 +588,17 @@ async function renderContactSheet(file, { frames, interval, estimatedInterval })
 }
 
 $("analyzeAudio").onclick = () => runTool("analyzeAudio", {}, "分析音轨", renderAudioAnalysis, "");
-$("contactSheet").onclick = () => runTool("contactSheet",
-  { count: Number($("contactCount").value) }, "生成缩略图总览", renderContactSheet);
+$("contactSheet").onclick = () => {
+  const format = $("contactFormat").value;
+  const options = { count: Number($("contactCount").value), format };
+  if (format === "apng") {
+    return runTool("contactSheet", options, "生成缩略动图", (file, { blob, count }) => {
+      addOutput(file, "contact-apng", "APNG 缩略动图", blob, "-thumbnails.apng",
+        `${count} 帧 · 每帧 0.5 秒`, "img");
+    });
+  }
+  return runTool("contactSheet", options, "生成缩略图总览", renderContactSheet);
+};
 
 function jumpToIssue(file, time) {
   if (file !== current) return;
@@ -685,7 +725,7 @@ for (const player of [video, audio]) {
     if (current?.player === player && !current.wasmPlayer) updateSubtitle(current, player.currentTime);
   });
   player.addEventListener("loadedmetadata", () => {
-    if (current?.player !== player || current.wasmPlayer || player.currentSrc !== current.url) return;
+    if (current?.player !== player || current.wasmPlayer || player.currentSrc !== (current.audioPreviewUrl ?? current.url)) return;
     player.hidden = false;
     $("emptyPlayer").hidden = true;
     $("playerInfo").textContent = [
@@ -695,11 +735,12 @@ for (const player of [video, audio]) {
     updateControls();
   });
   player.addEventListener("error", () => {
-    if (current?.player !== player || current.wasmPlayer || player.src !== current.url || !player.error) return;
+    if (current?.player !== player || current.wasmPlayer || player.src !== (current.audioPreviewUrl ?? current.url) || !player.error) return;
     player.hidden = true;
     $("emptyPlayer").hidden = false;
     $("playerMessage").textContent = "浏览器无法播放此文件。";
-    $("playerInfo").textContent = "可查看媒体信息和可用工具";
+    $("playerInfo").textContent = player === audio && !current.audioPreviewUrl
+      ? "可试用 Wasm 播放，或转换为 WAV。" : "可查看媒体信息和可用工具";
     updateControls();
   });
 }
@@ -731,17 +772,14 @@ $("capture").onclick = async () => {
   }
 };
 
-$("thumbnail").onclick = () => runTool("thumbnail", {}, "提取首帧", async (file, frame) => {
-  const canvas = document.createElement("canvas");
-  canvas.width = frame.width;
-  canvas.height = frame.height;
-  canvas.getContext("2d").putImageData(new ImageData(frame.rgba, frame.width, frame.height), 0, 0);
-  const blob = await png(canvas);
-  if (current === file) {
-    addOutput(file, "thumbnail", "首帧 PNG", blob, "-first-frame.png",
+$("thumbnail").onclick = () => {
+  const format = $("thumbnailFormat").value;
+  return runTool("thumbnail", { format }, "提取首帧", (file, frame) => {
+    const label = format === "jpg" ? "JPEG" : "PNG";
+    addOutput(file, `thumbnail-${format}`, `首帧 ${label}`, frame.blob, `-first-frame.${format}`,
       `${frame.width} × ${frame.height}`, "img");
-  }
-});
+  });
+};
 
 $("cover").onclick = () => runTool("cover", {}, "提取封面", (file, { blob }) => {
   const extensions = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/bmp": "bmp" };
@@ -765,6 +803,14 @@ $("audioMixWeight").oninput = updateAudioPostControls;
 $("clearAudioMix").onclick = () => {
   $("audioMixFile").value = "";
   updateAudioPostControls();
+};
+
+$("audioFormat").onchange = () => {
+  const format = $("audioFormat").value;
+  $("audioFormatInfo").textContent = audioFormats[format][1];
+  const rate = $("sampleRate");
+  rate.querySelector('option[value="16000"]').disabled = format === "ac3";
+  if (format === "ac3" && rate.value === "16000") rate.value = "48000";
 };
 
 $("audioExportForm").onsubmit = (event) => {
@@ -793,8 +839,9 @@ $("audioExportForm").onsubmit = (event) => {
       details.push(`去除首尾静音 ${timeLabel(info.trim_start + info.trim_end)}`);
     }
     const suffix = processed ? "processed-" : "";
-    addOutput(file, `${suffix}${format}-${result.rate}`, `${format.toUpperCase()}${processed ? " · 后期处理" : ""}`,
-      result.blob, `-${suffix}${result.rate}Hz.${format}`, details.join(" · "), "audio");
+    const [label, , preview] = audioFormats[format];
+    addOutput(file, `${suffix}${format}-${result.rate}`, `${label}${processed ? " · 后期处理" : ""}`,
+      result.blob, `-${suffix}${result.rate}Hz.${format}`, details.join(" · "), preview ? "audio" : undefined);
   });
 };
 

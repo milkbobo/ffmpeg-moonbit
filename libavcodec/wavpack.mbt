@@ -958,7 +958,10 @@ fn wavpack_decode_block(
 
 ///|
 /// Decode a complete `.wv` file into interleaved PCM.
-pub fn ff_wavpack_decode(data : Bytes) -> Result[WavpackAudio, String] {
+pub fn ff_wavpack_decode(
+  data : Bytes,
+  sample_budget? : Int64,
+) -> Result[WavpackAudio, String] {
   let out : Array[Int32] = []
   let mut sample_rate = 0
   let mut channels = 0
@@ -977,11 +980,19 @@ pub fn ff_wavpack_decode(data : Bytes) -> Result[WavpackAudio, String] {
       break
     }
     let ck_size = wavpack_u32le(data, pos + 4).reinterpret_as_int()
-    let block_size = ck_size + 8
-    if ck_size < 24 || block_size <= 0 || pos + block_size > data.length() {
+    if ck_size < 24 || ck_size > data.length() - pos - 8 {
       return Err("wavpack: invalid block size")
     }
+    let block_size = ck_size + 8
     let block_samples = wavpack_u32le(data, pos + 20).reinterpret_as_int()
+    let flags = wavpack_u32le(data, pos + 24)
+    let block_channels = if (flags & 0x04U) == 0U { 2 } else { 1 }
+    if sample_budget is Some(limit) &&
+      out.length().to_int64() +
+      block_samples.to_int64() * block_channels.to_int64() >
+      limit {
+      return Err("decoded audio sample budget exceeded")
+    }
     let block_total = wavpack_u32le(data, pos + 12).reinterpret_as_int()
     if expected_total < 0 {
       expected_total = block_total.to_int64()
@@ -1000,6 +1011,9 @@ pub fn ff_wavpack_decode(data : Bytes) -> Result[WavpackAudio, String] {
       channels = if frame.stereo { 2 } else { 1 }
     } else if block_rate != sample_rate {
       return Err("wavpack: inconsistent sample rate")
+    } else if channels != block_channels ||
+      bits != ((frame.flags & 3U).reinterpret_as_int() + 1) * 8 {
+      return Err("wavpack: inconsistent channel count or bit depth")
     }
     for i = 0; i < frame.samples; i = i + 1 {
       out.push(left[i])
