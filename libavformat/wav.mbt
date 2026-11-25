@@ -677,6 +677,11 @@ fn wav_build_demux(
           is_keyframe: true,
         })
       } else {
+        // The C leaves pts unset for these packets (`wav_read_packet`):
+        // a WMA packet's length in samples is only known after decoding.
+        let wma_packet = fmt.codec == "wmapro" ||
+          fmt.codec == "wmav1" ||
+          fmt.codec == "wmav2"
         let mut packet_pos = data_ofs
         let mut left = data_size
         let mut pts = 0L
@@ -691,7 +696,9 @@ fn wav_build_demux(
           if left < size.to_int64() {
             size = left.to_int()
           }
-          let duration = if fmt.block_align > 0 {
+          let duration = if wma_packet {
+            0
+          } else if fmt.block_align > 0 {
             size / fmt.block_align
           } else if fmt.channels > 0 && exact_bits > 0 {
             size * 8 / (fmt.channels * exact_bits)
@@ -701,7 +708,7 @@ fn wav_build_demux(
           packets.push({
             pos: packet_pos,
             size,
-            pts,
+            pts: if wma_packet { ts_nopts } else { pts },
             duration,
             is_keyframe: true,
           })

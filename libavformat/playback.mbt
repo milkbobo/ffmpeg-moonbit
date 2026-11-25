@@ -758,6 +758,9 @@ pub(all) enum AudioDec {
   Dts(@libavcodec.DcaCoreDecoder)
   Mlp(@libavcodec.MlpDecoder)
   Wma(@libavcodec.WmaDecoder, Ref[Int32])
+  /// WMA Pro; the queue holds the frames of a packet that a single
+  /// `decode` call did not return yet.
+  WmaPro(@libavcodec.WmaProDecoder, Ref[Array[AudioFrame]])
   MonkeyAudio(@libavcodec.ApeDecoder)
   Cook(@libavcodec.CookDecoder)
   Sipr(@libavcodec.SiprDecoder)
@@ -923,6 +926,13 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       raise UnsupportedCodec(
         "\{info.codec_id} outside its RealMedia container (block_align missing)",
       )
+    // WMA Pro reads `block_align` and its extradata off the ASF stream
+    // properties or the WAV format chunk: open it through
+    // `MediaFile::audio_decoder`.
+    "wmapro" =>
+      raise UnsupportedCodec(
+        "wmapro outside its ASF / WAV container (block_align missing)",
+      )
     "pcm_s8"
     | "pcm_s16le"
     | "pcm_s16be"
@@ -976,6 +986,23 @@ pub fn MediaFile::audio_decoder(
     }
     AsfAudio(demux) => {
       let track = demux.tracks[index]
+      if track.codec == "wmapro" {
+        let dec = match
+          @libavcodec.wmapro_decoder_new(
+            track.extradata,
+            track.sample_rate,
+            track.channels,
+            track.block_align,
+          ) {
+          Ok(dec) => dec
+          Err(e) => raise DecodeError(e)
+        }
+        return {
+          dec: WmaPro(dec, Ref([])),
+          channels: dec.channels(),
+          sample_rate: track.sample_rate,
+        }
+      }
       let version = if track.codec == "wmav1" { 1 } else { 2 }
       let offset = if version == 1 { 2 } else { 4 }
       let flags2 = if track.extradata.length() >= offset + 2 {
@@ -1061,6 +1088,26 @@ pub fn MediaFile::audio_decoder(
         }
         Err(e) => raise DecodeError(e)
       }
+    // WMA Pro in a WAV: the format chunk carries the same WAVEFORMATEX
+    // extension as the ASF stream properties, and the packets are the
+    // `block_align` chunks the demuxer cut.
+    Wav(demux, _) if info.codec_id == "wmapro" => {
+      let dec = match
+        @libavcodec.wmapro_decoder_new(
+          demux.format.extradata,
+          demux.format.sample_rate,
+          demux.format.channels,
+          demux.format.block_align,
+        ) {
+        Ok(dec) => dec
+        Err(e) => raise DecodeError(e)
+      }
+      {
+        dec: WmaPro(dec, Ref([])),
+        channels: dec.channels(),
+        sample_rate: demux.format.sample_rate,
+      }
+    }
     Mov(movie, _) if info.codec_id == "adpcm_ms" ||
       info.codec_id == "adpcm_ima_wav" =>
       match
@@ -1096,6 +1143,41 @@ fn playback_wma_frame(
     samples.map(ch => ch[skip:].to_owned())
   }
   Some({ samples, nb_samples: first.length() - skip, sample_rate: rate, pts, })
+}
+
+///|
+/// One WMA Pro packet holds several frames: step the decoder until the
+/// packet is used up. A packet the decoder drops (broken, or shorter than
+/// `block_align` at the end of a file) yields no frame, as in the C.
+fn playback_wmapro_frames(
+  dec : @libavcodec.WmaProDecoder,
+  data : Bytes,
+  rate : Int32,
+  pts : Int64?,
+) -> Array[AudioFrame] raise MediaError {
+  let frames : Array[AudioFrame] = []
+  let mut pos = 0
+  while pos < data.length() {
+    let (used, frame) = match dec.decode_packet(data[pos:].to_owned()) {
+      Ok(v) => v
+      Err(e) => raise DecodeError(e)
+    }
+    match frame {
+      Some(rows) =>
+        frames.push({
+          samples: rows,
+          nb_samples: rows[0].length(),
+          sample_rate: rate,
+          pts,
+        })
+      None => ()
+    }
+    if used <= 0 {
+      break
+    }
+    pos += used
+  }
+  frames
 }
 
 ///|
@@ -1313,6 +1395,25 @@ pub fn AudioDecoder::decode(
           playback_wma_frame(samples, delay, self.sample_rate, Some(pkt.pts))
         Err(e) => raise DecodeError(e)
       }
+    // A packet holds several frames: decode it whole and return the first;
+    // the rest follow from the queue.
+    WmaPro(dec, pending) => {
+      if pending.val.length() == 0 {
+        pending.val = playback_wmapro_frames(
+          dec,
+          pkt.data,
+          self.sample_rate,
+          Some(pkt.pts),
+        )
+      }
+      if pending.val.length() == 0 {
+        None
+      } else {
+        let first = pending.val[0]
+        pending.val = pending.val[1:].to_owned()
+        Some(first)
+      }
+    }
     MonkeyAudio(dec) => {
       let samples = Array::makei(self.channels, _ => [])
       let mut nb_samples = 0
@@ -1550,6 +1651,8 @@ pub fn AudioDecoder::decode_all(
       }
       frames
     }
+    WmaPro(dec, _) =>
+      playback_wmapro_frames(dec, pkt.data, self.sample_rate, Some(pkt.pts))
     Mlp(_) | Wma(_, _) => {
       let frames = []
       let mut pos = 0
@@ -1627,6 +1730,9 @@ pub fn AudioDecoder::flush(self : AudioDecoder) -> AudioFrame? raise MediaError 
           playback_wma_frame(samples, delay, self.sample_rate, None)
         Err(e) => raise DecodeError(e)
       }
+    // WMA Pro has no end-of-stream frame to drain here: the decoder can
+    // emit the last half frame (`WmaProDecoder::flush`), but the C codec
+    // lacks AV_CODEC_CAP_DELAY, so fftools never asks for it.
     _ => None
   }
 }

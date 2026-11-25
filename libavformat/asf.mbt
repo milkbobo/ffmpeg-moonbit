@@ -3,7 +3,8 @@
 /// following FFmpeg 9.0.2 `libavformat/asfdec_f.c` / `asf.h`.
 ///
 /// Scope: File Properties, audio Stream Properties (WAVEFORMATEX; WMA v1/v2
-/// codec ids) and Data Object packets with standard error correction.
+/// and WMA Pro codec ids) and Data Object packets with standard error
+/// correction.
 /// Payload fragments are assembled per stream into media objects; WMA
 /// bit-reservoir multi-subpayload packets are supported.  Video, extended
 /// stream properties, DRM and payload-extension systems are skipped/ignored.
@@ -38,7 +39,7 @@ let asf_guid_audio_stream : Bytes = b"\x40\x9E\x69\xF8\x4D\x5B\xCF\x11\xA8\xFD\x
 pub struct AsfTrack {
   /// ASF stream number (low 7 bits of the flags field).
   stream_number : Int32
-  /// "wmav1" or "wmav2" (other codecs are not stored).
+  /// "wmav1", "wmav2" or "wmapro" (other codecs are not stored).
   codec : String
   sample_rate : Int32
   channels : Int32
@@ -120,6 +121,7 @@ fn asf_parse_stream_properties(
   let codec = match format_tag {
     0x160 => "wmav1"
     0x161 => "wmav2"
+    0x162 => "wmapro"
     _ => return None
   }
   let channels = asf_u16(data, wav + 2)
@@ -463,12 +465,17 @@ pub fn av_asf_open(data : Bytes) -> Result[AsfDemux, String] {
   while obj + 24 <= data.length() {
     let guid = asf_guid_at(data, obj)
     let size = asf_u64(data, obj + 16)
-    if size < 24 || obj.to_int64() + size > data.length().to_int64() {
+    if size < 24 {
       break
     }
     if guid == asf_guid_data_header {
       data_start = obj
+      // A cut file declares more than it has; the C reads up to EOF
+      // (`packets_end` below takes the smaller of the two).
       data_size = size
+      break
+    }
+    if obj.to_int64() + size > data.length().to_int64() {
       break
     }
     obj = obj + size.to_int()
