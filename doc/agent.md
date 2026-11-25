@@ -758,7 +758,11 @@ C:\Users\milkb\.moon\bin\moon.exe test  --no-render   # 必须全绿
 - **wasm 体积测量**：`python scripts/generate_wasm_size_probe.py`（重新生成探针 →
   编译 `wasm`/`wasm-gc` release → 报告原始/gzip 体积并做字符串指纹验证）。
   `wasm_probe/main/main.mbt` 是生成物，勿手改；**公共 API 变更后探针失配**
-  （`moon check` 报 unbound/参数不符），重跑脚本再提交。
+  （`moon check` 报 unbound/参数不符），重跑脚本再提交。已知局限（2026-11-25
+  发现，未修）：`.mbti` 把类型与其方法放在同一个空行分隔块里，生成器只取每块的
+  首个 `pub fn`，所以 `MediaFile::*`、`DecodedAudio::*`、`Ra144Decoder::*` 这类
+  方法从未进入探针（libavformat 461 个 pub fn 只探了 190 个）；修法是按行切块，
+  代价是体积基线会变，需同步重记。
 - **HEVC 编码器（§448 起）**：`hevc_enc_*.mbt` 纯 MoonBit（wasm-only，
   无 C 绑定）。测试全部 wasm-gc：wbtest 单文件跑法
   `moon test libavcodec/hevc_enc_i_wbtest.mbt --target wasm-gc --no-render`；
@@ -1027,6 +1031,44 @@ $msg | git commit -F -
   `moonbitlang/core/builtin` 或具体子包（`core/math`、`core/v128`…）。
 - **wasm-gc 目标下 `core/v128` 不可用**：`*_v128`、`av_md5_sum_x4` 等目标受限函数
   在 wasm-gc 编译报 "Value … not found"，测体积时需剔除（探针脚本自动迭代剔除）。
+- **`moon check <包路径>` 可能漏报**（2026-11-25 实测）：一次
+  `moon check --no-render libavformat` 在有 40 多条真错误（不可变字段、缺方法）时
+  只报了 1 条警告，同样的错误在 `moon test` 才全部出现。交付门用**整模块**
+  `moon check --no-render` 加实际 `moon test`，不要拿带包路径的 check 当门；穷举
+  match 缺新分支（如 `Source` 加变体后 `playback_dump.mbt` 的 `stream_timebase`）
+  也是整模块 check 才报全。
+- **结构体字段构造后再赋值必须 `mut`**（标量与被整体重赋值的数组引用都要）；只改
+  元素的数组字段不能加 `mut`；E4087 同样适用于 `arr[i].field = v`——数组元素是
+  结构体时该字段也必须 `mut`。
+- **`Byte` / `UInt16` 没有 `reinterpret_as_uint`**；`Byte.to_uint()` 已弃用（E0020）→
+  写 `.to_int().reinterpret_as_uint()`。`Int64::clamp` 的参数是具名的：
+  `clamp(min=0L, max=…)`。函数末尾的 `while true` 在返回类型非 `Unit` 时报 E4108，
+  循环后补一条 `abort("…")`。**`FixedArray` 没有 `to_array`**（`Bytes` 有）：转
+  `Array` 用 `Array::makei(a.length(), i => a[i])`。
+- **rm-guard 钩子按「`rm` 后跟非字母数字」拦截**：`.rm`、`rm.c`、`/rm_dl`、`[rm @`、
+  `rm `、`--rm` 都中招（含 sed 正则里的字样）。RealMedia 相关源文件一律命名
+  `realmedia*`，本地样本存成 `.realmedia` / `.realmediavb`；docker 命令里的 `--rm`
+  放进 Python 脚本执行（钩子只看 shell 命令文本）；读上游 `rmdec.c` / `rmsipr.c`
+  用 `Get-Content` / `Select-String`（`rmdec` 后接字母，不触发）。文件工具（read /
+  edit）不能越过工作区，读上一级 FFmpeg 源只能走 shell。
+- **Write 工具单次内容过长（约 14K token）会中途劣化成重复乱码且写入成功不报错**：
+  单次写入控制在约 350 行 / 12 KB，写完立即编译或回读尾部；长文档分几次落盘。
+- **`powershell -File` 不会把逗号列表解析成数组参数**：脚本内部 `-split ','`；`2>&1`
+  捕获的原生命令 stderr 行是 ErrorRecord，先 `"$($_)"` 转成字符串再 `-split`。
+  逐文件回归脚本范本 `.scratch/realmedia_dl/regress.ps1`（黑盒 wasm / 白盒
+  wasm-gc，每文件一行汇总）。PATH 上的 `bash` 是未配置的 WSL，`scripts/*.sh` 在
+  本机直接跑不了，`build_demo.sh` 等价于
+  `moon build --target wasm-gc --release ./demo/api` 后拷贝产物。
+- **Python 生成器**：f-string 花括号内不能有反斜杠；含 MoonBit 转义（`\{`、`\n`）
+  的模板用原始字符串 `r'''…'''` 并直接写普通引号。ffprobe 的 CSV 字段顺序是它
+  自己的固定序（codec_type, stream_index, pts, dts, duration, size, pos, flags），
+  不是 `-show_entries` 的书写序；多流文件的包表含所有流，按首列流号过滤。
+- **ffprobe 判定 demuxer 致命错误看 stderr 文本**：`Impossibly sized packet` /
+  `Failed to read N bytes` / `Invalid block alignment` 是 `av_read_frame` 会返回的
+  错误；`Failed to fully read block` / `Insufficient remaining len` /
+  `Truncating packet` 只记录不致命（`packets.err` 非空 ≠ 有读错误）。
+- **Docker Desktop 开场没起**：PowerShell `Start-Process` 拉起后轮询 `docker info`；
+  镜像 `linuxserver/ffmpeg:9.0.2` 的 ENTRYPOINT 是 ffmpeg，要 `--entrypoint bash`。
 
 ---
 

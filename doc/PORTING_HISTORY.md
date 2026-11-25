@@ -18235,3 +18235,125 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
   RealMedia 容器 demux、Cook 编码属后续范围。
 - libavcodec 全包分批回归（黑盒 wasm、白盒 wasm-gc）通过，Cook 专项
   5 项测试全绿，全目标编译检查通过。
+
+## §510 RealMedia 容器 demuxer（2026-11-25）
+
+- `libavformat/realmedia.mbt` / `realmedia_header.mbt` / `realmedia_packets.mbt`
+  移植 `rmdec.c`、`rm.c` 的 FourCC 表与 `rmsipr.c`：`.RMF` / `.RMP` 头、
+  旧式 `.ra\xFD` 裸音频头、`PROP` / `CONT` / `MDPR`（音频头 v3 / v4 / v5、
+  `VIDO` 视频头、`MLTI` SureStream、`logical-fileinfo`）、`INDX`、`DATA`；
+  音频去交织 `Int0` / `Int4` / `genr` / `sipr` / `vbrf` / `vbrs`，AC-3 包
+  字节对交换，视频切片拼装 `rm_assemble_video_frame`。入口
+  `av_realmedia_open(data) -> Result[RealMediaDemux, String]` 一次解析整个
+  文件：`tracks`（FFmpeg 编解码名、调整后的 `block_align`、extradata、
+  时长等）、`packets`（文件序，pts 毫秒）、`index`、`metadata`、`duration`、
+  `read_error`（读到文件尾为空，否则是 `rmdec.c` 会向上报的出错原因，
+  之前读到的包保留）。
+- 有意偏离：FourCC 不认识的流直接丢弃（C 保留为 data 流）；通用层对
+  交织音频的时间戳补齐（只有每组首包带时间戳，其余按每包时长顺着
+  `cur_dts` 推出，含 `update_initial_timestamps` 的整体平移）与「音频包
+  全关键帧」在 demuxer 内实现；RV30 / RV40 的包 pts 给容器记录值，不复现
+  `rv34_parser.c` 的 13 位图像时间戳改写。`probe.mbt` 注册
+  `FormatId::RealMedia`（名 `rm`，在 Ogg 之后 W64 之前，与 allformats.c 一致）。
+- 验证：`libavformat/realmedia_realdata_wbtest.mbt` 以 ffprobe 对**同一份
+  字节**（样本裁到前缀后重新探测）的流表 / extradata / 标签 / 逐包
+  （流号、大小、pts、关键帧、文件位置）/ 读错误判定为期望，10 个 FATE
+  样本（ra144、ra288、cook、sipr ×4、rv30、rv40、rv20）wasm 与 wasm-gc 双
+  后端全等。ffprobe 的 SIPR pts 因 parser 错开一帧，期望值由生成脚本
+  直接扫文件记录头得到。夹具由 `scripts/gen_realmedia_fixtures.py` 生成
+  （docker `linuxserver/ffmpeg:9.0.2`）。
+- 布局细节：`PROP` 的 duration 前有 5 个 dword，data offset 在块起点 +42
+  （version 2 为 +46）；v3 音频头 `lpcJ` 前有独立字节再接长度前缀串；
+  MDPR 的 fps 单位是 1/65536 帧每秒；cook extradata 为大端。
+
+## §511 SIPR 解码器（2026-11-25）
+
+- `libavcodec/sipr.mbt` / `sipr_frame.mbt` / `sipr16k.mbt` 移植 `sipr.c`、
+  `sipr16k.c`、`lsp.c`（16 维 LSP 辅助），`acelp_*` 的对应件复用 AMR-NB
+  移植（`ff_decode_pitch_lag`、`ff_acelp_interpolatef`、CELP 合成滤波等）。
+  5k0 / 6k5 / 8k5 / 16k 四种模式全支持：模式随 `block_align`
+  （37 / 19 / 29 / 20），其它值按码率猜（同 C）。API
+  `SiprDecoder::new(block_align, bit_rate~)`、
+  `decode_packet(pkt) -> Result[Array[Double], String]`（单声道，每包
+  480 / 288 / 144 / 160 个样本，不钳位，同 C 的 FLT 输出）。44 张 SIPR /
+  RA 表由 `scripts/gen_realaudio_tables.py` 从 C 源提取到
+  `realaudio_tables.mbt`（base64 + init 期解码，C 的 float 表按 binary32
+  精确加宽成 f64）。
+- 核实的事实：`PITCH_MAX` 是 SIPR 自己的 281（`sipr.h` 覆盖了
+  `acelp_pitch_delay.h` 的同名宏），`ff_decode_pitch_lag` 内部仍用 20 / 143；
+  `excitation` 长 452，16k 以下模式子帧从 154 起、16k 模式从 292 起；
+  `sinc_win` 声明 40 个只有 30 个初值（后 10 个为 0）；
+  `amr_celp_lp_synthesis_filterf` 无系数偏移参数，SIPR 另写带偏移版本。
+  16k 模式的固定码书增益以 FFmpeg 源为准，AMR-WB LSP 转 LPC 时 Q 多项式的
+  索引修正。
+- 验证：`libavformat/sipr_realdata_test.mbt`——四种模式各从第 0 包起解
+  前 20 包，与 docker FFmpeg 9.0.2 的 s16le 输出逐样本比较，误差 ≤ 1 LSB
+  （测试放在 libavformat，绕开 Windows 直接跑 libavcodec 测试的命令行
+  长度限制）。FATE 自带的 sipr_*.pcm 参照与 docker 的 s16 输出不同
+  （FATE 的 pcm 助手带重采样），以 docker 输出为参照。
+
+## §512 RealAudio 14.4 / 28.8 解码器（2026-11-25）
+
+- `libavcodec/ra144.mbt` 移植 `ra144dec.c` / `ra144.c`（定点，S16 输出）：
+  反射系数码书、`ff_eval_refl` / `ff_eval_coefs` / `add_wav` 的 32 位回绕
+  算术、`ff_t_sqrt` / `ff_rms` / `ff_irms`、`ff_celp_lp_synthesis_filter` 的
+  `stop_on_overflow`（返回 1 时整块清零）。`Ra144Decoder::decode_packet`
+  一包内可含多个 20 字节帧（容器给 240 字节 = 12 帧）。
+- `libavcodec/ra288.mbt` 移植 `ra288.c` + `g728_template.c`（浮点）：每块
+  `gain = amptable[3 位]`、`cb_coef = 6 / 7 位`，每 4 块一次后向滤波
+  （`do_hybrid_window` ATTEN 0.5625 + Levinson `compute_lpc_coefs`，失败时
+  系数保持 0），`vector_fmul` 带宽扩展。`Ra288Decoder::new(block_align)`
+  要求 38。
+- 验证：`libavformat/realaudio_realdata_test.mbt`——RA 14.4 前 10 个容器包
+  （120 帧、19,200 样本）与 FFmpeg s16le 逐样本相等；RA 28.8 前 10 包
+  逐样本误差 ≤ 1 LSB。整文件 FATE 向量见 §513（`ra3_in_rm_file` 整文件
+  经门面解码的 s16le MD5 = `2da17ae831ea415592c7e6828e3fb69a`，含末尾被
+  截成 137 字节的最后一包）。
+
+## §513 接入统一播放 API / CLI / demo 与端到端对拍（2026-11-25）
+
+- `libavformat/playback.mbt`：`Source::RealMediaAudio(RealMediaDemux)`；
+  `MediaFile::open` 的 `RealMedia` 分支把每条轨道转成 `StreamInfo`
+  （`track.codec` 已是 FFmpeg 名）；`next_packet` 按文件序取包，**读完
+  已有包后把 demuxer 保留的读错误报一次**（`DemuxError`，同
+  `av_read_frame`），之后是普通 EOF；`MediaFile::audio_decoder` 按源分发：
+  cook → `CookDecoder::new(extradata, channels, block_align,
+  sample_rate~)`（前两包预热在解码器内，门面得到 `None`）、sipr →
+  `SiprDecoder::new(block_align, bit_rate~)`、ra_144 / ra_288 → 新解码器；
+  ac3（dnet，字节对交换 demuxer 已做）与 aac（raac / racp 的 extradata
+  是 AudioSpecificConfig）走通用 `AudioDecoder::open`——**AAC 无真实样本，
+  未验证**。`AudioDec` 新增 `Cook` / `Sipr` / `RealAudio144` /
+  `RealAudio288`，`AudioDecoder::decode` 对应分支：RA 14.4 的整数输出按
+  32768.0 归一化，容器的 `av_nopts_value` 时间戳在公开帧上转为 `None`。
+  `AudioDecoder::open(StreamInfo)` 只接 `ra_144`（无参数）；cook / sipr /
+  ra_288 需要 `block_align` / 码率，须从容器打开（`UnsupportedCodec`
+  提示），同 `AsfAudio` 的先例。`duration_seconds`：PROP 时长（毫秒）
+  有效则用之，否则取各流时长最大值（`rmdec.c` 里流时长会把文件时长
+  置 NOPTS 的语义），不复现 `estimate_timings_from_pts` 的流时长重估。
+- **末尾读错误的处理（fftools 语义）**：`next_packet_tolerant` 供批量
+  遍历使用——RealMedia 的 EOF 读错误结束遍历并以 `Err(reason)` 返回而非
+  抛出。`decode_audio_file` 据此保留已解码的 PCM，把原因放进新增的
+  `DecodedAudio::read_error()`（`summary_json` 输出
+  `"read_error": null | "…"`）；`dump_packets_json` 在该错误处收尾
+  （ffprobe 打印已读包并以 0 退出）。RA 14.4 的末包若不足整帧，门面只解
+  完整的 20 字节帧、丢弃残余（C 逐 20 字节消费，残余报 `Frame too small`
+  后 fftools 继续），没有整帧的包不出帧。
+- 端到端对拍 `libavformat/realmedia_e2e_test.mbt`
+  （`scripts/gen_realmedia_e2e_fixtures.py`，docker `linuxserver/ffmpeg:9.0.2`
+  对**同一截断字节**解码为参照）：RA 14.4 / RA 28.8 / Cook / SIPR 5k0 /
+  6k5 / 8k5 / 16k 七个样本的流标签（格式名 `rm`、codec、采样率、声道）、
+  解出样本数（与 ffmpeg 相同：96×1920、576×160、78×1024×2、336×480、
+  96×288、288×144、864×160）、ffprobe 的 format duration、是否有读错误、
+  首 4 包 / 末 2 包的 PCM（RA 14.4 位级相等，其余 ≤ 1 LSB）全部一致；
+  另一项钉迭代器语义（sipr6k5：135 包后报错一次，再调为 EOF，dump 135 行）。
+  `realmedia_ra144_fate_test.mbt` 钉整文件 FATE MD5。CLI 实跑：`probe`
+  （`format_name: rm`、两流）、`dump-packets`、`decode-audio --output`
+  （RA 14.4 WAV 的 data 块与 docker s16 整文件字节一致，RA 28.8 ≤ 1 LSB，
+  摘要含 `read_error`）。demo：`main.js` 的音频分流正则加 `ra|rm`，页面
+  提示加 RealMedia；`ff_probe` / `ff_decode_audio` 走门面无需改动。
+- 坑：`FixedArray` 没有 `to_array`（用 `Array::makei(n, i => a[i])`）；
+  `moon check` 对穷举 match 缺分支报错（`stream_timebase` 要补
+  `RealMediaAudio`，pts 单位毫秒）；ffprobe 的 `packets.err` 非空不等于
+  demuxer 致命错误——`Failed to fully read block` 只记录不致命，
+  `Impossibly sized packet` / `Failed to read N bytes` /
+  `Invalid block alignment` 才是 `av_read_frame` 会返回的错误。

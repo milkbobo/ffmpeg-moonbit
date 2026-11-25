@@ -4,7 +4,7 @@
 
 ## 编解码支持范围
 
-截至 2026-11-23，主要格式的实现情况如下。
+截至 2026-11-25，主要格式的实现情况如下。
 
 | 格式 | 解码 | 编码 |
 | --- | --- | --- |
@@ -23,9 +23,11 @@
 | WavPack | 支持单声道和立体声无损整数解码 | 支持 16、24、32 位单声道和立体声无损编码，输出完整 `.wv` 文件 |
 | Shorten | 支持 `.shn` 无损整数解码，可用 `decode-audio` 转 WAV | 未实现 |
 | Musepack | 支持 SV7 立体声和 SV8 单声道、立体声 `.mpc` 解码，可用 `decode-audio` 转 WAV | 未实现 |
-| Cook（RealAudio G2） | 支持单声道、立体声和联合立体声裸码流解码，RM 容器待实现 | 未实现 |
+| Cook（RealAudio G2） | 支持从 RealMedia 容器解码单声道、立体声和联合立体声 | 未实现 |
+| RealAudio 14.4 / 28.8 | 支持从 RealMedia 容器解码；RA 14.4 整文件输出与 FATE 参照位级一致 | 未实现 |
+| SIPR（RealAudio SIPR / ACELP.NET） | 支持从 RealMedia 容器解码 5k0、6k5、8k5、16k 四种模式 | 未实现 |
 
-**容器和工具**　支持读取 MP4/MOV、MKV/WebM、MPEG-TS、WAV、Ogg、ASF/WMA 等容器，可写入 MP4、WebM、MPEG-TS、WAV 等格式，也支持 HLS/DASH 分片读取、图像缩放和音频重采样。
+**容器和工具**　支持读取 MP4/MOV、MKV/WebM、MPEG-TS、WAV、Ogg、ASF/WMA、RealMedia（RM/RA）等容器，可写入 MP4、WebM、MPEG-TS、WAV 等格式，也支持 HLS/DASH 分片读取、图像缩放和音频重采样。
 
 **其他边界**　H.264 SP/SI、硬件加速、完整滤镜图和 DRM 密钥协商均未覆盖。各格式的具体限制和验证样例见[移植记录](doc/PORTING_HISTORY.md)。
 
@@ -51,7 +53,7 @@ python -m http.server 8000 --directory demo
 用支持 WasmGC 和 JS String Builtins 的浏览器打开 [本地 Demo](http://localhost:8000/)。点击「试用样片」或「选择文件」查看媒体信息，然后按需操作。
 
 - **播放和截图**　视频可切换「Wasm 播放」后定位并截图，也可用 MoonBit 把首帧导出为 PNG 或 JPEG。音频文件可用「Wasm 播放」解码成 WAV 在页面试听。
-- **导入音频**　支持 APE、ASF/WMA、WavPack、Shorten、Musepack SV7/SV8，以及 MLP/TrueHD 裸流。Matroska 文件可读取 DTS 核心、AC-3、E-AC-3 和 MLP/TrueHD 音轨。
+- **导入音频**　支持 APE、ASF/WMA、WavPack、Shorten、Musepack SV7/SV8、RealMedia/RealAudio（RA 14.4、RA 28.8、Cook、SIPR 音轨，含带视频轨的 RM/RMVB），以及 MLP/TrueHD 裸流。Matroska 文件可读取 DTS 核心、AC-3、E-AC-3 和 MLP/TrueHD 音轨。
 - **导出音频**　选择 WAV、FLAC、WavPack、AC-3 或 Ogg/Vorbis，点击「生成音频」。WavPack 导出为 16 位单声道或立体声。AC-3 支持 32、44.1 和 48 kHz 的单声道或立体声，末帧补齐到 1,536 个样本。实验性 Ogg/Vorbis 输出需要立体声。
 - **音频后期处理**　展开音频导出下的「音频后期处理」，可加淡入淡出、去除首尾静音、按目标 LUFS 调整音量，或添加第二条音轨混音。响度归一化和混音支持单声道与立体声。
 - **分析音轨**　点击「分析音轨」，查看首条音轨的波形、采样峰值和静音区间。单声道和立体声可测整体响度（LUFS）。
