@@ -309,7 +309,7 @@ async function openFile(file, id) {
   $("fileName").textContent = file.name;
   $("fileInfo").textContent = `${sizeLabel(file.size)} · 本地文件`;
   $("audioTitle").textContent = "转音频 / 提取音轨";
-  const audioOnly = file.type.startsWith("audio/") || /\.(mp3|wav|flac|aac|m4a|oga|opus|aiff?|ape|wma|dts|ac3|eac3|ec3|mlp|thd|truehd|wv|shn|mpc|ra|rm|amr|awb)$/i.test(file.name);
+  const audioOnly = file.type.startsWith("audio/") || /\.(mp3|wav|flac|aac|m4a|oga|opus|aiff?|aifc|ape|wma|dts|ac3|eac3|ec3|mlp|thd|truehd|wv|shn|mpc|ra|rm|amr|awb)$/i.test(file.name);
   usePlayer(selection, audioOnly ? audio : video);
   $("probeMessage").textContent = engineState === "error" ? $("engineStatus").title : "正在探测媒体流…";
   updateControls();

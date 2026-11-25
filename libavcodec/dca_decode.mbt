@@ -289,64 +289,29 @@ fn DcaCoreDecoder::parse_frame_header(
   self : DcaCoreDecoder,
   gb : BitReader,
 ) -> Result[Unit, String] {
-  if gb.read(32) != 0x7FFE8001U {
-    return Err("dca: bad sync word")
+  let h = match dca_parse_core_fields(gb) {
+    Ok(h) => h
+    Err(e) => return Err(e)
   }
-  let _normal_frame = gb.read1()
-  let deficit = gb.read(5).reinterpret_as_int() + 1
-  if deficit != dca_pcmblock_samples {
-    return Err("dca: deficit samples not supported")
-  }
-  self.crc_present = gb.read1() != 0
-  self.npcmblocks = gb.read(7).reinterpret_as_int() + 1
-  if (self.npcmblocks & (dca_subband_samples - 1)) != 0 {
-    return Err("dca: unsupported pcm block count")
-  }
-  self.frame_size = gb.read(14).reinterpret_as_int() + 1
-  if self.frame_size < 96 {
-    return Err("dca: invalid core frame size")
-  }
-  self.audio_mode = gb.read(6).reinterpret_as_int()
-  if self.audio_mode >= 10 {
-    return Err("dca: unsupported audio channel arrangement")
-  }
-  let sr_code = gb.read(4).reinterpret_as_int()
-  if dca_sample_rates[sr_code] == 0 {
-    return Err("dca: invalid sample rate")
-  }
-  let br_code = gb.read(5).reinterpret_as_int()
-  if gb.read1() != 0 {
-    return Err("dca: reserved bit set")
-  }
-  self.sample_rate = dca_sample_rates[sr_code]
-  self.bit_rate = dca_bit_rates[br_code]
-  self.drc_present = gb.read1() != 0
-  self.ts_present = gb.read1() != 0
-  self.aux_present = gb.read1() != 0
-  let _hdcd = gb.read1()
-  self.ext_audio_type = gb.read(3).reinterpret_as_int()
-  self.ext_audio_present = gb.read1() != 0
-  self.sync_ssf = gb.read1() != 0
-  self.lfe_present = gb.read(2).reinterpret_as_int()
-  if self.lfe_present == 3 {
-    return Err("dca: invalid LFE flag")
-  }
-  self.predictor_history = gb.read1() != 0
-  if self.crc_present {
-    gb.skip(16)
-  }
-  self.filter_perfect = gb.read1() != 0
-  let _enc_rev = gb.read(4)
-  let _copy_hist = gb.read(2)
-  let pcmr_code = gb.read(3).reinterpret_as_int()
-  if dca_bits_per_sample[pcmr_code] == 0 {
-    return Err("dca: invalid PCM resolution")
-  }
-  self.source_pcm_res = dca_bits_per_sample[pcmr_code]
-  self.es_format = pcmr_code & 1
-  self.sumdiff_front = gb.read1() != 0
-  self.sumdiff_surround = gb.read1() != 0
-  let _dn = gb.read(4)
+  self.crc_present = h.crc_present
+  self.npcmblocks = h.npcmblocks
+  self.frame_size = h.frame_size
+  self.audio_mode = h.audio_mode
+  self.sample_rate = h.sample_rate
+  self.bit_rate = h.bit_rate
+  self.drc_present = h.drc_present
+  self.ts_present = h.ts_present
+  self.aux_present = h.aux_present
+  self.ext_audio_type = h.ext_audio_type
+  self.ext_audio_present = h.ext_audio_present
+  self.sync_ssf = h.sync_ssf
+  self.lfe_present = h.lfe_present
+  self.predictor_history = h.predictor_history
+  self.filter_perfect = h.filter_perfect
+  self.source_pcm_res = h.source_pcm_res
+  self.es_format = h.es_format
+  self.sumdiff_front = h.sumdiff_front
+  self.sumdiff_surround = h.sumdiff_surround
   Ok(())
 }
 
@@ -1084,8 +1049,8 @@ fn DcaCoreDecoder::filter_fixed(self : DcaCoreDecoder) -> Result[DcaAudio, Strin
 }
 
 ///|
-/// Decode one DCA core frame (a `0x7FFE8001`-delimited packet). Returns
-/// `None` for packets that carry no core frame. */
+/// Decode one DTS core frame in 16-bit or 14-bit BE/LE packing. Core
+/// extensions are not decoded.
 pub fn DcaCoreDecoder::decode_packet(
   self : DcaCoreDecoder,
   data : Bytes,
@@ -1093,94 +1058,24 @@ pub fn DcaCoreDecoder::decode_packet(
   if data.length() < 16 {
     return Err("dca: invalid packet size")
   }
-  if dca_rb32(data, 0) == 0x7FFE8001U {
-    match self.core_parse(data) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
+  let canonical = match dca_packing(data[:]) {
+    Some(Be16) => data // Preserve existing Matroska core packet semantics.
+    Some(packing) => {
+      if data.length() % 2 != 0 {
+        return Err("dca: truncated packed word")
+      }
+      packing.normalize(data[:])
     }
-  } else {
-    // Try the 14-bit / little-endian layouts (avpriv_dca_convert_bitstream).
-    let converted = match dca_convert_bitstream(data) {
-      Some(b) => b
-      None => return Err("dca: not a valid DCA frame")
-    }
-    match self.core_parse(converted) {
-      Ok(_) => ()
-      Err(e) => return Err(e)
-    }
+    None => return Err("dca: not a valid DCA frame")
+  }
+  match self.core_parse(canonical) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
   }
   match self.filter_fixed() {
     Ok(a) => Ok(Some(a))
     Err(e) => Err(e)
   }
-}
-
-///|
-fn dca_rb32(b : Bytes, i : Int32) -> UInt32 {
-  (b[i].to_uint() << 24) |
-  (b[i + 1].to_uint() << 16) |
-  (b[i + 2].to_uint() << 8) |
-  b[i + 3].to_uint()
-}
-
-///|
-fn dca_rb16(b : Bytes, i : Int32) -> UInt32 {
-  (b[i].to_uint() << 8) | b[i + 1].to_uint()
-}
-
-///|
-fn dca_rl16(b : Bytes, i : Int32) -> UInt32 {
-  b[i].to_uint() | (b[i + 1].to_uint() << 8)
-}
-
-///|
-fn dca_wb16(b : Array[Byte], i : Int32, v : UInt32) -> Unit {
-  b[i] = ((v >> 8) & 0xFF).to_byte()
-  b[i + 1] = (v & 0xFF).to_byte()
-}
-
-///|
-/// `avpriv_dca_convert_bitstream`: 14-bit and little-endian layouts to
-/// big-endian 16-bit. */
-fn dca_convert_bitstream(src : Bytes) -> Option[Bytes] {
-  let mrk = dca_rb32(src, 0)
-  if mrk == 0x7FFE8001U || mrk == 0x64582025U {
-    return Some(src)
-  }
-  if mrk == 0x0180FE7FU {
-    // little-endian core: byte-swap each 16-bit word
-    let out : Array[Byte] = Array::make(src.length(), b'\x00')
-    let n = (src.length() + 1) >> 1
-    for i = 0; i < n; i = i + 1 {
-      dca_wb16(out, i * 2, dca_rl16(src, i * 2))
-    }
-    return Some(Bytes::from_array(out))
-  }
-  if mrk == 0x7FF0800FU || mrk == 0xF00F7FF0U || mrk == 0x0F80F07FU || mrk == 0x7F0FF00FU {
-    // 14-bit: repack every 14 bits as 16
-    let out : Array[Byte] = []
-    let big_endian = mrk == 0x7FF0800FU || mrk == 0xF00F7FF0U
-    let mut acc : UInt32 = 0
-    let mut nbits = 0
-    for i = 0; i < (src.length() + 1) >> 1; i = i + 1 {
-      let w = if big_endian {
-        dca_rb16(src, i * 2)
-      } else {
-        dca_rl16(src, i * 2)
-      }
-      let v = w & 0x3FFFU
-      acc = (acc << 14) | v
-      nbits += 14
-      while nbits >= 16 {
-        nbits -= 16
-        let w = (acc >> nbits) & 0xFFFFU
-        out.push(((w >> 8) & 0xFF).to_byte())
-        out.push((w & 0xFF).to_byte())
-      }
-    }
-    return Some(Bytes::from_array(out))
-  }
-  None
 }
 
 ///|
@@ -1194,48 +1089,20 @@ pub fn DcaCoreDecoder::decode_stream(
   let mut sample_rate = 0
   let mut channels = 0
   let mut pos = 0
-  while pos + 4 <= data.length() {
-    if dca_rb32(data, pos) != 0x7FFE8001U {
-      // Scan forward to the next core sync word
-      let mut next = -1
-      let mut p = pos
-      while p + 4 <= data.length() {
-        if dca_rb32(data, p) == 0x7FFE8001U {
-          next = p
-          break
-        }
-        p += 1
-      }
-      if next < 0 {
-        break
-      }
-      pos = next
+  while data.length() - pos >= 4 {
+    let src = data[pos:]
+    if dca_packing(src) is None {
+      pos += 1
+      continue
     }
-    if data.length() - pos < 16 {
-      return Err("dca: truncated core header")
+    let header = match parse_dca_core_header(src) {
+      Ok(h) => h
+      Err(e) => return Err(e)
     }
-    // Frame length from the header: bits 46..59 of the frame (14 bits + 1)
-    let frame_size = (((dca_rb32(data, pos + 4) >> 4) & 0x3FFFU) + 1).reinterpret_as_int()
-    if frame_size < 96 || pos + frame_size > data.length() {
-      // Trust the remaining buffer as one last frame
-      let end = data.length()
-      if end - pos >= 16 {
-        match self.decode_packet(data[pos:end].to_owned()) {
-          Ok(Some(au)) => {
-            sample_rate = au.sample_rate
-            channels = au.channels
-            for v in au.samples {
-              out.push(v)
-            }
-          }
-          Ok(None) => ()
-          Err(e) => return Err(e)
-        }
-      }
-      pos = end
-      break
+    if header.frame_size > src.length() {
+      return Err("dca: truncated core frame")
     }
-    let frame = data[pos : pos + frame_size].to_owned()
+    let frame = src[:header.frame_size].to_owned()
     match self.decode_packet(frame) {
       Ok(Some(au)) => {
         sample_rate = au.sample_rate
@@ -1247,9 +1114,7 @@ pub fn DcaCoreDecoder::decode_stream(
       Ok(None) => ()
       Err(e) => return Err(e)
     }
-    // Core frames are 4-byte aligned in raw streams
-    let step = (frame_size + 3) & -4
-    pos += step
+    pos += header.frame_size
   }
   if sample_rate == 0 {
     return Err("dca: no decodable core frames")

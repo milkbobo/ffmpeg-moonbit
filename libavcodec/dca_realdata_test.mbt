@@ -136,3 +136,64 @@ test "dca: ffmpeg dcaenc stream decodes bit-exactly" {
     assert_eq(dca_md5(audio.pcm_bytes()), want_md5, msg=name)
   }
 }
+
+///|
+// Independent bit-by-bit rewording of an FFmpeg-generated core frame.
+fn dca_test_repack14(frame : BytesView) -> Bytes {
+  let out : Array[Byte] = []
+  for word in 0..<((frame.length() * 8 + 13) / 14) {
+    // At sync, the second word uses the upper marker bits (0xe800).
+    let mut value = 0
+    for bit in 0..<14 {
+      let source = word * 14 + bit
+      let x = if source / 8 < frame.length() {
+        (frame[source / 8].to_int() >> (7 - source % 8)) & 1
+      } else {
+        0
+      }
+      value = (value << 1) | x
+    }
+    if word == 1 {
+      value = value | 0xc000
+    }
+    out.push((value >> 8).to_byte())
+    out.push(value.to_byte())
+  }
+  Bytes::from_array(out)
+}
+
+///|
+test "dca: LE16 and both 14-bit packings preserve FFmpeg reference PCM" {
+  let (name, b64parts, rate, channels, count, want_md5) = dca_fixtures[0]
+  assert_eq(name, "dcaenc_stereo_44k")
+  let data = @libavutil.av_base64_decode(dca_concat(b64parts), 1 << 20).unwrap()
+  // This fixture is 2048 bytes per frame; its 14-bit form ends in a partial
+  // payload word, with 2342 source bytes rather than 2340 after rounding up.
+  let be14_frames = []
+  assert_eq(data.length(), count / 512 * 2048)
+  for pos in 0..<(data.length() / 2048) {
+    be14_frames.push(dca_test_repack14(data[pos * 2048 : (pos + 1) * 2048]))
+  }
+  let be14 = dca_concat(be14_frames)
+  let inputs = [
+    (Bytes::makei(data.length(), i => data[i ^ 1]), 2048),
+    (be14, 2342),
+    (Bytes::makei(be14.length(), i => be14[i ^ 1]), 2342),
+  ]
+  for input in inputs {
+    let (stream, frame_bytes) = input
+    let header = @libavcodec.parse_dca_core_header(stream).unwrap()
+    assert_eq(header.frame_size, frame_bytes)
+    assert_eq(header.samples, 512)
+    assert_eq(header.sample_rate, rate)
+    assert_eq(header.channels, channels)
+    let audio = @libavcodec.ff_dca_decode_stream(stream).unwrap()
+    assert_eq(audio.samples.length(), count * channels)
+    assert_eq(dca_md5(audio.pcm_bytes()), want_md5)
+    let decoder = @libavcodec.DcaCoreDecoder::new()
+    assert_true(
+      decoder.decode_packet(stream[:frame_bytes - 1].to_owned()) is
+      Err("dca: truncated packed word"),
+    )
+  }
+}

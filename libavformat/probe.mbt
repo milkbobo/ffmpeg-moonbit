@@ -54,6 +54,7 @@ pub(all) enum FormatId {
   Au
   Caf
   Dash
+  Dts
   Eac3
   Flac
   Hls
@@ -85,6 +86,7 @@ pub fn FormatId::name(self : FormatId) -> String {
     Au => "au"
     Caf => "caf"
     Dash => "dash"
+    Dts => "dts"
     Eac3 => "eac3"
     Flac => "flac"
     Hls => "hls"
@@ -119,6 +121,7 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Au => "au,snd"
     Caf => "caf"
     Dash => "mpd"
+    Dts => "dts"
     Eac3 => "eac3,ec3"
     Flac => "flac"
     Hls => "m3u8,m3u"
@@ -150,6 +153,7 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Au => "audio/basic"
     Caf => "audio/x-caf"
     Dash => "application/dash+xml"
+    Dts => ""
     Eac3 => "audio/eac3"
     Flac => "audio/flac"
     Hls => "application/vnd.apple.mpegurl"
@@ -421,6 +425,7 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: Au, probe: probe_au, },
     { id: Caf, probe: probe_caf, },
     { id: Dash, probe: probe_dash, },
+    { id: Dts, probe: probe_dts, },
     { id: Eac3, probe: probe_eac3, },
     { id: Flac, probe: probe_flac, },
     { id: Hls, probe: probe_hls, },

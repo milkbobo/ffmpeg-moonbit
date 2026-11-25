@@ -39,8 +39,8 @@ fn playback_audit_pcm(
 }
 
 ///|
-test "playback: Matroska DTS core preserves state across packets" {
-  let raw = playback_audit_fixture([
+fn playback_audit_dts_fixture() -> Bytes {
+  playback_audit_fixture([
     b"f/6AAfw8PvC14AE4AAPvf+AG2xef8nn8g4AAAgAAAAAAAAAAIxhB73Oa1jWNYxS0pMYQQhCEIQhjGEHvc5rmtY1jFrSk5hhC",
     b"EIQhCEAAAAAAAAAAMNCLBdvGzlo3ZNWDJcyXMVrJYwWslrFaxWsFy/DTjw3r5w7auGTZi0XtFzNe0WMlzRczXMl7JgxAAAAD",
     b"//AD//QA5/M/vwAAAAgAAAR/cQsXj1VFQAAAD/j/3/FgcPmxSEAAAC/7AHfxQRzvqceAAAB/5AJ/LCe+eT2AAAB/7AL/JBo8",
@@ -70,6 +70,11 @@ test "playback: Matroska DTS core preserves state across packets" {
     b"YDHkQdeZ5yKTxoWff6g/gF0BYGhQcAj2jfOoo07Rm98XeQ+xdGeB0NQWamLwccejJ9pBGH3urWCbGtdad/uXnQrKchSGCnkL",
     b"gfKKgo/vhYl/DvXoGggGxvt8SQ9oQsQGLbdv63nodEz2cK91dOyvAgWunHHsDFZm7V5i5/Y0v7LOmuAEeXATwqP92f/+AAAA",
   ])
+}
+
+///|
+test "playback: Matroska DTS core preserves state across packets" {
+  let raw = playback_audit_dts_fixture()
   let expected = @libavcodec.ff_dca_decode_stream(raw).unwrap()
   let output = decode_audio_file(
     playback_audit_mkv("A_DTS", [raw[:1008].to_owned(), raw[1008:].to_owned()]),
@@ -81,6 +86,42 @@ test "playback: Matroska DTS core preserves state across packets" {
     2147483648.0,
     expected.sample_rate,
   )
+}
+
+///|
+test "playback: raw DTS probes, packetizes and decodes the same core frames" {
+  let raw = playback_audit_dts_fixture()
+  let expected = @libavcodec.ff_dca_decode_stream(raw).unwrap()
+  let frame_samples = (expected.samples.length() / 4).to_int64()
+  // Exercise both byte orders through the raw probe and demuxer.
+  let le = Bytes::from_array([ for i in 0..<raw.length() => raw[i ^ 1] ])
+  for data in [raw, le] {
+    let media = MediaFile::open(data) catch { e => fail(e.message()) }
+    assert_eq(media.format_name(), "dts")
+    assert_eq(media.streams()[0].channels, 2)
+    assert_eq(media.streams()[0].sample_rate, 48000)
+    assert_eq(
+      media.duration_seconds(),
+      Some((frame_samples * 2L).to_double() / 48000.0),
+    )
+    guard media.next_packet() is Some(first) &&
+      media.next_packet() is Some(second) else {
+      fail("expected two DTS frames")
+    }
+    assert_eq(first.pts, 0L)
+    assert_eq(second.pts, frame_samples)
+    assert_eq(first.data, data[:1008].to_owned())
+    assert_eq(second.data, data[1008:].to_owned())
+    assert_true(media.next_packet() is None)
+    let output = decode_audio_file(data)
+    assert_eq(output.codec_id, "dts")
+    playback_audit_pcm(
+      output,
+      expected.samples,
+      2147483648.0,
+      expected.sample_rate,
+    )
+  }
 }
 
 ///|

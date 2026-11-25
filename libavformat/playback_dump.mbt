@@ -38,7 +38,10 @@ fn MediaFile::stream_timebase(
     OggFlac(demux) => Some((demux.sample_rate.to_double(), 0.0))
     AsfAudio(_) => Some((1000.0, 0.0))
     RealMediaAudio(_) => Some((1000.0, 0.0))
-    RawAc3(track, _) | Amr(track, _) => Some((track.sample_rate.to_double(), 0.0))
+    RawDts({ sample_rate, .. }, _)
+    | RawAc3({ sample_rate, .. }, _)
+    | Amr({ sample_rate, .. }, _) => Some((sample_rate.to_double(), 0.0))
+    AiffAudio(demux, _) => Some((demux.format.sample_rate.to_double(), 0.0))
     ApeAudio(demux) => Some((demux.sample_rate.to_double(), 0.0))
     MusepackAudio(demux) => Some((demux.sample_rate.to_double() / 1152.0, 0.0))
     Musepack8Audio(demux) =>

@@ -122,6 +122,8 @@ pub(all) enum Source {
   OggFlac(OggFlacDemux)
   StillImage(Bytes)
   Wav(WavDemux, Bytes)
+  AiffAudio(AiffDemux, Bytes)
+  RawDts(DtsTrack, Bytes)
   AsfAudio(AsfDemux)
   RawAc3(RawAudioTrack, Bytes)
   /// A raw AMR-NB / AMR-WB stream (`av_amr_open`), in one channel.
@@ -288,6 +290,52 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         format_name: format.name(),
         streams,
         source: OggOpus(demux),
+        cursor: [0],
+      }
+    }
+    Aiff => {
+      let demux = match av_aiff_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0,
+            media_type: Audio,
+            codec_id: demux.format.codec,
+            sample_rate: demux.format.sample_rate,
+            channels: demux.format.channels,
+            width: 0,
+            height: 0,
+            extradata: None,
+          },
+        ],
+        source: AiffAudio(demux, data),
+        cursor: [0],
+      }
+    }
+    Dts => {
+      let track = match av_dts_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0,
+            media_type: Audio,
+            codec_id: "dts",
+            sample_rate: track.sample_rate,
+            channels: track.channels,
+            width: 0,
+            height: 0,
+            extradata: None,
+          },
+        ],
+        source: RawDts(track, data),
         cursor: [0],
       }
     }
@@ -623,11 +671,26 @@ pub fn MediaFile::next_packet(
         keyframe: p.is_keyframe,
       })
     }
-    RawAc3(track, data) | Amr(track, data) => {
+    AiffAudio(demux, data) => {
       let index = self.cursor[0]
-      guard index < track.frames.length() else { return None }
+      guard index < demux.packets.length() else { return None }
       self.cursor[0] = index + 1
-      let p = track.frames[index]
+      let p = demux.packets[index]
+      let start = p.pos.to_int()
+      Some({
+        stream_index: 0,
+        data: data[start:start + p.size].to_owned(),
+        pts: p.pts,
+        keyframe: true,
+      })
+    }
+    RawDts({ frames, .. }, data)
+    | RawAc3({ frames, .. }, data)
+    | Amr({ frames, .. }, data) => {
+      let index = self.cursor[0]
+      guard index < frames.length() else { return None }
+      self.cursor[0] = index + 1
+      let p = frames[index]
       let start = p.pos.to_int()
       Some({
         stream_index: 0,
@@ -860,18 +923,31 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       raise UnsupportedCodec(
         "\{info.codec_id} outside its RealMedia container (block_align missing)",
       )
-    "pcm_s16le" =>
+    "pcm_s8"
+    | "pcm_s16le"
+    | "pcm_s16be"
+    | "pcm_s24le"
+    | "pcm_s24be"
+    | "pcm_s32le"
+    | "pcm_s32be" => {
+      let (little_endian, width) = match info.codec_id {
+        "pcm_s8" => (false, 1)
+        "pcm_s16le" => (true, 2)
+        "pcm_s16be" => (false, 2)
+        "pcm_s24le" => (true, 3)
+        "pcm_s24be" => (false, 3)
+        "pcm_s32le" => (true, 4)
+        _ => (false, 4)
+      }
+      guard info.channels > 0 && info.channels <= 0x7fffffff / width else {
+        raise DecodeError("pcm: invalid channel count")
+      }
       {
-        dec: Pcm(true, 2),
+        dec: Pcm(little_endian, width),
         channels: info.channels,
         sample_rate: info.sample_rate,
       }
-    "pcm_s16be" =>
-      {
-        dec: Pcm(false, 2),
-        channels: info.channels,
-        sample_rate: info.sample_rate,
-      }
+    }
     other => raise UnsupportedCodec(other)
   }
 }
@@ -1377,25 +1453,21 @@ pub fn AudioDecoder::decode(
         return None
       }
       let nb = pkt.data.length() / frame_bytes
+      let pad_bits = 32 - bytes_per_sample * 8
+      let scale = (1L << (31 - pad_bits)).to_double()
       let channels : Array[Array[Double]] = []
-      for ch = 0; ch < self.channels; ch = ch + 1 {
+      for ch in 0..<self.channels {
         let row : Array[Double] = Array::make(nb, 0.0)
-        for i = 0; i < nb; i = i + 1 {
+        for i in 0..<nb {
           let base = (i * self.channels + ch) * bytes_per_sample
-          let v = if bytes_per_sample == 2 {
-            let lo = pkt.data[base].to_int()
-            let hi = pkt.data[base + 1].to_int()
-            let raw = if little_endian {
-              lo | (hi << 8)
-            } else {
-              (lo << 8) | hi
-            }
-            let signed = if raw >= 32768 { raw - 65536 } else { raw }
-            signed.to_double() / 32768.0
-          } else {
-            0.0
+          let raw = for j in 0..<bytes_per_sample; raw = 0 {
+            let index = if little_endian { bytes_per_sample - 1 - j } else { j }
+            continue (raw << 8) | pkt.data[base + index].to_int()
+          } nobreak {
+            raw
           }
-          row[i] = v
+          let signed = raw << pad_bits >> pad_bits
+          row[i] = signed.to_double() / scale
         }
         channels.push(row)
       }
@@ -1568,8 +1640,14 @@ pub fn AudioDecoder::flush(self : AudioDecoder) -> AudioFrame? raise MediaError 
 pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
   match self.source {
     StillImage(_) | AsfAudio(_) => None
-    RawAc3(track, _) | Amr(track, _) =>
-      Some(track.total_samples.to_double() / track.sample_rate.to_double())
+    RawDts({ total_samples, sample_rate, .. }, _)
+    | RawAc3({ total_samples, sample_rate, .. }, _)
+    | Amr({ total_samples, sample_rate, .. }, _) =>
+      Some(total_samples.to_double() / sample_rate.to_double())
+    AiffAudio(demux, _) =>
+      Some(
+        demux.sample_count.to_double() / demux.format.sample_rate.to_double(),
+      )
     ApeAudio(demux) =>
       Some(demux.total_samples.to_double() / demux.sample_rate.to_double())
     MusepackAudio(demux) =>
