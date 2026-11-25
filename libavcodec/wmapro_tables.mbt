@@ -1,0 +1,151 @@
+///|
+/// Tables of the WMA Pro decoder (`libavcodec/wmaprodata.h`), extracted
+/// from FFmpeg 9.0.2 by `scripts/gen_wmapro_tables.py`, which parses the C
+/// initializers and checks every count against the declared dimensions.
+/// Original FFmpeg code is LGPL-2.1-or-later; this transcription keeps the
+/// same license.
+///
+/// The tables are the C integer types as base64 bytes, decoded once at
+/// startup. Every Huffman table is a symbol table and a code length table
+/// (`*_syms` / `*_lens`) in C row order; the decoder adds the symbol
+/// offsets of `decode_init_static`. The run/level tables hold whole
+/// numbers, stored as bytes. The decorrelation matrices are the binary32
+/// values of the C `float` literals widened exactly to doubles.
+
+///|
+/// Decode one base64'd byte blob.
+fn wmapro_unpack_u8(b64 : Bytes) -> FixedArray[Int32] {
+  let raw = match @libavutil.av_base64_decode(b64, 1 << 22) {
+    Ok(v) => v
+    Err(_) => abort("wmapro u8 table: invalid base64")
+  }
+  let out = FixedArray::make(raw.length(), 0)
+  for i in 0..<raw.length() {
+    out[i] = raw[i].to_int()
+  }
+  out
+}
+
+///|
+/// Decode one base64'd little-endian uint16 blob.
+fn wmapro_unpack_u16(b64 : Bytes) -> FixedArray[Int32] {
+  let raw = match @libavutil.av_base64_decode(b64, 1 << 22) {
+    Ok(v) => v
+    Err(_) => abort("wmapro u16 table: invalid base64")
+  }
+  let n = raw.length() / 2
+  let out = FixedArray::make(n, 0)
+  for i in 0..<n {
+    out[i] = raw[i * 2].to_int() | (raw[i * 2 + 1].to_int() << 8)
+  }
+  out
+}
+
+///|
+/// Decode one base64'd little-endian f64 blob into doubles.
+fn wmapro_unpack_f64(b64 : Bytes) -> FixedArray[Double] {
+  let raw = match @libavutil.av_base64_decode(b64, 1 << 22) {
+    Ok(v) => v
+    Err(_) => abort("wmapro f64 table: invalid base64")
+  }
+  let n = raw.length() / 8
+  let out = FixedArray::make(n, 0.0)
+  for i in 0..<n {
+    let mut v : UInt64 = 0
+    for k in 0..<8 {
+      v = v |
+        (raw[i * 8 + k].to_int().reinterpret_as_uint().to_uint64() << (k * 8))
+    }
+    out[i] = v.reinterpret_as_double()
+  }
+  out
+}
+
+///|
+/// `critical_freq[28]`: 28 values.
+let wmapro_critical_freq : FixedArray[Int32] = wmapro_unpack_u16(b"ZADIACwBkAH+AXYCAgOYAzgE9gTIBbgG0AcQCYwKTgx0DjARtBQAGRQeHCXgLow8w1Cfb5+hg/k=")
+
+///|
+/// `scale_table[121][2]`, column 0 (symbol): 121 values.
+let wmapro_scale_syms : FixedArray[Int32] = wmapro_unpack_u8(b"OkBCQT4/REU2ExQVFhcYGRobHB0eHyAhIhEkJSYnKCkqKywtLi8wMTIzNA8QDg0MCwoACQgHBgUEN0YDAgEjR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3gSNTg5Qz07PA==")
+
+///|
+/// `scale_table[121][2]`, column 1 (code length): 121 values.
+let wmapro_scale_lens : FixedArray[Int32] = wmapro_unpack_u8(b"BQYHBwUGCQoPExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTDQ0TExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMSEAsIBwMCAQ==")
+
+///|
+/// `scale_rl_table[120][2]`, column 0 (symbol): 120 values.
+let wmapro_scale_rl_syms : FixedArray[Int32] = wmapro_unpack_u8(b"Z1A8EjgVWjobRVQwVi8TIE4FHDUJHyYKWBlpdhdSYm5sXURIYVEqQAQBBw4ANz11GCxDRmNgXwJNNG9mZS5JbTNcHgtCDxB0QTk7cwwjESkUWxpLLWtTZFkrPiVoBicoIk8IP1deMTIWdyEkcWpwR1VKTHIdNg0D")
+
+///|
+/// `scale_rl_table[120][2]`, column 1 (code length): 120 values.
+let wmapro_scale_rl_lens : FixedArray[Int32] = wmapro_unpack_u8(b"BwsLCgoMDAsLDA8PDg0KCQYFBAUHCAgHCwwMCwwOEBAPDQoMDAwMCAQCBgcJCQkKDAwMEBIVFRUVFRUUEQ8PDw4OBwcHCAgJCQoKCQcJCQkLCwwPDw4ODw8LCQkIBQgJCQcGBgwODg0LCgkJCwwNDw8OCgcFBgYC")
+
+///|
+/// `scale_rl_run[120]`: 120 values.
+let wmapro_scale_rl_run : FixedArray[Int32] = wmapro_unpack_u8(b"AAAAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGAABAgMEBQYHCAkKAAEAAQAB")
+
+///|
+/// `scale_rl_level[120]`: 120 values.
+let wmapro_scale_rl_level : FixedArray[Int32] = wmapro_unpack_u8(b"AAABAgICAgICAgICAgICAgICAgICAgICAgICAgMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBwcICAkJ")
+
+///|
+/// `coef0_lens[272]`: 272 values.
+let wmapro_coef0_lens : FixedArray[Int32] = wmapro_unpack_u8(b"AgkODg0MDQ4PDwwKCgoNDg8PDAsNDg4NDw8ODAwICgoPDw4NDg4NDxQUExUVFBMRERISDw8NDA4PDw4PDwwLBgcICQ0NDQ4OCwoHCA4ODg4MDQ0MDAwLCQ0ODgwLCwsJCAcODw8ODgwNDxAREQ4MDAwPDw4ODg0NCQkLCwoHBg0PDw4ODg0ODw8NDg4ODgoJCgoLCwoICQ0ODgwLDg8PDQwODg4ODQ4OAwUICgoPDw4OEBAPDAsLCwcICAkMDQ0MDg8PDQoLCw0ODg0ODgsKDQ8PDgwLBAYGCAwMDA0NDA0NDg4NDQ0JBwkLDg4NDg4NCggHBQkMDQ4PDwwMCg4ODQwNDg4MDQ0MDAwJBwYDBAQ=")
+
+///|
+/// `coef0_syms[272]`: 272 values.
+let wmapro_coef0_syms : FixedArray[Int32] = wmapro_unpack_u16(b"AgAZAG8AXgBFADoAVwBdAIgAhwA7ACUAIgAkAFIAtgB4AIoAwwAtAKgA2ACyAFYAjADbALoAogDvABIAnAAjAH8A7ABtAFUAtAD9AFgAkwAMAQgBAAEKAQ4BBgEEAfgA9gD8AAIBiQC9AOYAQACzAJIA0ABlAHYA7gCjAC4ACQCZAAAAGgD3AKkATADKAIMAwgAmAA0AEwCEAGoAvwBhAEEAxgBNAD4AQgCkADAAGwBRALcAZgA8AC8AMQCfAOMAFAAOAHAABwGQANkAaAA/AE8A0QANAfoA/gDLAPEAxAA9ANwAlAB8ALkAZABQAE4AwQAcADIA6wApAAEACgCrAOIAlgBnAHIAcwCqAGkA0wCVAPkAbAC8AGsA/wDnAJsAKgAoADcAoAAnABUAHQDXAOoAuADkADMAdACOAJEArAClALUAggBxAHUAWQCAAMwAAwAHAJoAnQArAI0ACQGFAOEADwH0AN0ASgA2ADgANAAPAN4AFgAeAFMAxwCtAEkAewDSAI8ArwAsADUA7QCuAIsAhgBuANoAgQChANUAsQALAZcAfQBDAN8ABQALAMAAFwDWAPMApgDIALAARADgALsAAQEFAegAYAD7AB8AEAAgADkAzwB5AFsAfgB3AGMAngAYANQACAAhAEYAXADNAPAA8gBLAMUA6QADAb4AYgBHAMkAegDOAEgAWgBfAFQApwD1AOUAEQAMAAQAmAAGAA==")
+
+///|
+/// `coef1_table[244][2]`, column 0 (symbol): 244 values.
+let wmapro_coef1_syms : FixedArray[Int32] = wmapro_unpack_u8(b"AgNmBJSGqxILnw6c6z0mmTAxF8vQzIFeVz6ukx2/QEGSpI6EZ5qltW0eVlzviicyc+7k7N7Y4sTAeN0zGI8HCZiIoPFCqNtxwROtaZUPzc99vrZERkOJH9900tzGflgpGShJ8zXDt+E0R3lZqjdFU9FsIDZ6uLAqDKEGp2oUkW8rGq9rIiHFSoDo1ODKWjnjYV2MuRsQntM4dUimW19QZcJ/UhWQsZcKnQgFDQDVLscjooepLTtyLLy6S092u3CLslFuHKOFaBEW5azZySTa8vDq5s7I1oKDjVRM1zrn6bRNJb2zmy9gY3c/7U5VPGJkfHuWAQ==")
+
+///|
+/// `coef1_table[244][2]`, column 1 (code length): 244 values.
+let wmapro_coef1_lens : FixedArray[Int32] = wmapro_unpack_u8(b"AgMDBAYJCgoICAkODw8NDQ4OCw0TExIREA8PDwwMDw8ODQUEBQcJCwwMEBAPDg0ODxUVFRUUFBIREA4OCwgGBwoMDA8PDg4ODAoKCAkJDQ0RERAPDw8NDA4PExMSERANCw0PDw4MCw4ODxAQDg4PDw0LDA4QEA8NCAgFCQkKDA0NCwoKDAwMDxEUFBMSEA4OEBAPCwsJCw0ODw8NEBAPEBERDwoKCgYHBwYECAkNDQwMDAoJDQ4ODRAQDw8PCw0ODw8MCwgGBgkKDg4NDAwUFhYVExISEhERDw8PDQ4ODg8PDAsKCg0QEA8ODg8PDhAQEBALBw==")
+
+///|
+/// `coef0_run[272]`: 272 values.
+let wmapro_coef0_run : FixedArray[Int32] = wmapro_unpack_u16(b"AAAAAAAAAQACAAMABAAFAAYABwAIAAkACgALAAwADQAOAA8AEAARABIAEwAUABUAFgAXABgAGQAaABsAHAAdAB4AHwAgACEAIgAjACQAJQAmACcAKAApACoAKwAsAC0ALgAvADAAMQAyADMANAA1ADYANwA4ADkAOgA7ADwAPQA+AD8AQABBAEIAQwBEAEUARgBHAEgASQBKAEsATABNAE4ATwBQAFEAUgBTAFQAVQBWAFcAWABZAFoAWwBcAF0AXgBfAGAAYQBiAGMAZABlAGYAZwBoAGkAagBrAGwAbQBuAG8AcABxAHIAcwB0AHUAdgB3AHgAeQB6AHsAfAB9AH4AfwCAAIEAggCDAIQAhQCGAIcAiACJAIoAiwCMAI0AjgCPAJAAkQCSAJMAlACVAAAAAQACAAMABAAFAAYABwAIAAkACgALAAwADQAOAA8AEAARABIAEwAUABUAFgAXABgAGQAaABsAHAAdAB4AHwAgACEAIgAjACQAJQAmACcAAAABAAIAAwAEAAUABgAHAAgACQAKAAsADAANAA4ADwAQABEAEgATAAAAAQACAAMABAAFAAYABwAIAAkAAAABAAIAAwAEAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAA==")
+
+///|
+/// `coef0_level[272]`: 272 values.
+let wmapro_coef0_level : FixedArray[Int32] = wmapro_unpack_u8(b"AAABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQECAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAwMDAwMDAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBQUFBQUGBgcHCAgJCQoKCwsMDA0NDg4PDxAQERESEhMTFBQVFRYWFxcYGBkZGhobGxw=")
+
+///|
+/// `coef1_run[244]`: 244 values.
+let wmapro_coef1_run : FixedArray[Int32] = wmapro_unpack_u16(b"AAAAAAAAAQACAAMABAAFAAYABwAIAAkACgALAAwADQAOAA8AEAARABIAEwAUABUAFgAXABgAGQAaABsAHAAdAB4AHwAgACEAIgAjACQAJQAmACcAKAApACoAKwAsAC0ALgAvADAAMQAyADMANAA1ADYANwA4ADkAOgA7ADwAPQA+AD8AQABBAEIAQwBEAEUARgBHAEgASQBKAEsATABNAE4ATwBQAFEAUgBTAFQAVQBWAFcAWABZAFoAWwBcAF0AXgBfAGAAYQBiAGMAAAABAAIAAwAEAAUABgAHAAgACQAKAAsADAANAA4ADwAQABEAEgATABQAFQAWABcAGAAZABoAGwAcAB0AAAABAAIAAwAEAAUABgAHAAgACQAAAAEAAgADAAQABQAAAAEAAgAAAAEAAgAAAAEAAgAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAAAAAA=")
+
+///|
+/// `coef1_level[244]`: 244 values.
+let wmapro_coef1_level : FixedArray[Int32] = wmapro_unpack_u8(b"AAABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAwMDAwMDAwMDAwQEBAQEBAUFBQYGBgcHBwgICQkKCgsLDAwNDQ4ODw8QEBEREhITExQUFRUWFhcXGBgZGRoaGxscHB0dHh4fHyAgISEiIiMjJCQlJSYmJycoKCkpKiorKywsLS0uLi8vMDAxMTIzNA==")
+
+///|
+/// `vec4_lens[127]`: 127 values.
+let wmapro_vec4_lens : FixedArray[Int32] = wmapro_unpack_u8(b"AQYICgoKCggICgoJCAgJDAwLDAwLCQkICAkJCAgJCQwMDA4ODQsLCQgJCQsLCgkIBgYGBgYGCwsKCwsKCgsLCQcGBwcGBgYFBwsLCgkIBgkJCgoJCAgGBgYICAkMDAsKCAgICgoKCgkJCAoLCwkICAgJCQoLDAwJCQkICAcHBw==")
+
+///|
+/// `vec4_syms[127]`: 127 values.
+let wmapro_vec4_syms : FixedArray[Int32] = wmapro_unpack_u16(b"AAASERMBAyAyEAExISAiARESAwIUAAIiEiADESMQAUABFAEjQQERBDMAIRIiAgISEgIBAgMhIREiECEAEyAFAEIAQRABBVEABgAhAwQgISEBIQMSEwIxAgEDAjAiIBMAARACABEREgECERIQAzABQREwMQAhMAQBBBAEAhUAAjESIQERExESEgEBEgARAAEAIhExIAMDARMBIgIgAhARMRQBMgARAxQQESADEBEBERACAQMBARIjAAIEAQQRQDEBIgARAiEBAgMBMAQAMRAEERIwASABMgUBAkAREwMAAgIhECECMgEkAAUQQQABUBIDMRECExEiIwECIREhExA=")
+
+///|
+/// `vec2_table[137][2]`, column 0 (symbol): 137 values.
+let wmapro_vec2_syms : FixedArray[Int32] = wmapro_unpack_u8(b"E6XTLkuxDFZTJoWyHGhJIzRxCGVFAEd3W7NypgoskUIVGJIaQQXi4Q+0k3MoWYZUNio8H8G1TJQlQyEDEQJmV3Q4MhR4Oh3Ch2EHaQ3xEC2VSmIXVUbDoYFIMyR1PQuiAQQxRAkbgic1YxmWWmejxNKIeSmDK6R2WFEGNzse0Q6XalIWZIQ5EiI=")
+
+///|
+/// `vec2_table[137][2]`, column 1 (code length): 137 values.
+let wmapro_vec2_lens : FixedArray[Int32] = wmapro_unpack_u8(b"BQoLCwoLCwgHBwkKCgkJBQYJCQgHAwgJCgoICgoKCgYGCAkJBwcLDAwKCQgICQkHBwkKCwsKCgkGBgYGBgYICAgIBQUJCQoKCQgICQsMDAoJCQcHBwcKCgkIBQUICgoJBwYGBgkJCAcGBwgJCQgJCgoJCQgICQkICAcHBwkKCwsJCQYGBwgIBAQ=")
+
+///|
+/// `vec1_table[101][2]`, column 0 (symbol): 101 values.
+let wmapro_vec1_syms : FixedArray[Int32] = wmapro_unpack_u8(b"ByA7PFNSPiEtPVRVAQ0TGSIuLw4GQFdWP1haIxoAMEFCJA8UW1lDMTJFXF0bBSVERzM0Rl5gJhUQBBw1X2FJJx1IYmM2KBYeN0pMOEtNEQMXKTlOTx8KCWQCCwgSKjpQUSssGAw=")
+
+///|
+/// `vec1_table[101][2]`, column 1 (code length): 101 values.
+let wmapro_vec1_lens : FixedArray[Int32] = wmapro_unpack_u8(b"BQgKCgsLCggJCgsLBgUGBwgJCQUFCgsLCgsLCAcHCQoKCAUGCwsKCQkKCwsHBQgKCgkJCgsLCAYFBQcJCwsKCAcKCwsJCAYHCQoKCQoKBQUGCAkKCgcEBAUFBAQFCAkKCggIBgQ=")
+
+///|
+/// `default_decorrelation_matrices[91]`: 91 values.
+let wmapro_default_decorrelation_matrices : FixedArray[Double] = wmapro_unpack_f64(b"AAAAAAAA8D8AAACA/5/mPwAAAID/n+a/AAAAgP+f5j8AAACA/5/mPwAAAAAAgOI/AAAAgP+f5j8AAAAA/z/aPwAAAAAAgOI/AAAAgP+f5r8AAAAA/z/aPwAAAAAAgOI/AAAAAAAAAAAAAACA/x/qvwAAAAAAAOA/AAAAgADg5D8AAAAAAADgPwAAAAD/P9E/AAAAAAAA4D8AAAAA/z/RPwAAAAAAAOC/AAAAgADg5L8AAAAAAADgPwAAAAD/P9G/AAAAAAAA4L8AAACAAODkPwAAAAAAAOA/AAAAgADg5L8AAAAAAADgPwAAAAD/P9G/AAAA4P1/3D8AAAAA/z/jPwAAAIAAYOA/AAAAAAHA1z8AAADA+//IPwAAAOD9f9w/AAAAAAHA1z8AAADA+//IvwAAAAD/P+O/AAAAgABg4L8AAADg/X/cPwAAAAAAAAAAAAAAAP8/5L8AAAAAAAAAAAAAAAD/P+Q/AAAA4P1/3D8AAAAAAcDXvwAAAMD7/8i/AAAAAP8/4z8AAACAAGDgvwAAAOD9f9w/AAAAAP8/478AAACAAGDgPwAAAAABwNe/AAAAwPv/yD8AAAAA/z/aPwAAAIAA4OE/AAAAAAAA4D8AAAAA/z/aPwAAAOD9f9I/AAAAQAQAwz8AAAAA/z/aPwAAAAD/P9o/AAAAAAAAAAAAAAAA/z/avwAAAAAAgOK/AAAAAP8/2r8AAAAA/z/aPwAAAEAEAMM/AAAAAAAA4L8AAAAA/z/avwAAAOD9f9I/AAAAgADg4T8AAAAA/z/aPwAAAEAEAMO/AAAAAAAA4L8AAAAA/z/aPwAAAOD9f9I/AAAAgADg4b8AAAAA/z/aPwAAAAD/P9q/AAAAAAAAAAAAAAAA/z/aPwAAAAAAgOK/AAAAAP8/2j8AAAAA/z/aPwAAAIAA4OG/AAAAAAAA4D8AAAAA/z/avwAAAOD9f9I/AAAAQAQAw78=")
+
