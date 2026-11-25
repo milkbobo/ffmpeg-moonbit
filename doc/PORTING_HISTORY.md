@@ -18357,3 +18357,130 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
   demuxer 致命错误——`Failed to fully read block` 只记录不致命，
   `Impossibly sized packet` / `Failed to read N bytes` /
   `Invalid block alignment` 才是 `av_read_frame` 会返回的错误。
+
+## §514 AMR-WB 解码器（2026-11-25）
+
+- `libavcodec/amrwb.mbt` / `amrwb_frame.mbt` 移植 `amrwbdec.c`：ISF 解码
+  （36 位 / 46 位两级码书）、均值与预测、最小间距、稳定度因子、ISP 子帧
+  插值与 `ff_amrwb_lsp2lpc`、1/2 与 1/4 分辨率的基音延迟、过去激励的 hamming
+  窗 sinc 插值与 LTP 三抽头滤波、1–6 脉冲的轨道索引（TS 26.190 5.8.2）、
+  增益、基音锐化、voice factor、抗稀疏（强/中两套 64 阶 IR 滤波）、噪声与
+  基音增强、低码率模式的基音向量加重、合成、去加重、31 Hz 高通、5/4 升采样、
+  高频带生成（400 Hz 高通 → 增益 → LFG 白噪 → 6k60 模式 20 阶 / 其余 16 阶
+  加权合成 → 6–7 kHz 带通，23k85 再加 7 kHz 低通），输出除以 2^15。复用
+  `amr.mbt` 的 ACELP/CELP 辅助函数，另写阶数与帧长可参数化的 LSP→LPC、最小
+  间距、二阶传递函数。44 张表由 `scripts/gen_amrwb_tables.py` 提取到
+  `amrwb_tables.mbt`：9 张重排表按 `AMRWBFrame` 的 uint16 布局展开
+  `AMR_BIT` / `AMR_OF` 为字节偏移，码书按 int16、float 表按 binary32 精确加宽
+  成 f64 存放。
+- 有意偏离：单声道（多声道文件由解包器拒绝）；NO_DATA 帧或质量位为 0 的帧
+  输出静音（C 只记日志）；SID 舒适噪声模式返回错误（C 为 PATCHWELCOME）。
+- **精度口径**：管线用 double 求值，只在离散判决点按 binary32 舍入
+  （`amr_f32`：最近偶数舍入）——固定增益的结果、送入它的激励能量、激励在
+  `truncf` 前的逐步乘加。原因：C 把激励截断成整数，float 与 double 的差在
+  整数边界附近会让截断差 1，再经谐振合成放大；固定增益在 C 里是 float。不加
+  舍入时 AMR-NB 4.75k / 7.4k 对 FATE 整文件偏到 29 / 11 LSB，加上后 AMR-NB
+  八个模式 ≤ 2、AMR-WB 六个模式 ≤ 1。反过来把更多算子（点积累加、插值、
+  `ff_amr_set_fixed_gain` 内部）也按 float 逐步仿真反而更差：gcc 的实际
+  求值无法逐算子复刻，不要再试。
+- **C 参照程序**：Docker 当时起不来，改用本机 mingw-w64 gcc 直接编译上游
+  源码——`scripts/amr_c_ref/amrwb_ref.c` / `amrnb_ref.c` 把 `amrwbdec.c` /
+  `amrnbdec.c` 与它们依赖的 DSP 源文件（lsp.c、celp_*.c、acelp_*.c、lfg.c、
+  md5.c）原样 `#include` 进来，用上级目录已配置的 FFmpeg 头文件，只为 avcodec
+  胶水（帧缓冲、日志、静音）写桩，逐帧输出解码结果。整文件对比：MoonBit 对
+  C 六个模式 ≤ 1.4 LSB，6k60 最大 4.5（1 帧）、19k85 22、23k05 8、23k85 26
+  （都在个别帧的截断边界之后）；C 对 FATE 参照六个模式 ≤ 1，6k60 13、
+  19k85 22、23k05 38、23k85 22——FATE 对 AMR 用的是 stddev 容差，参照 PCM
+  并非这份 C 浮点解码器的位级输出。插桩法定位了三处真错（见 §515 的坑）。
+- 测试 `libavformat/amrwb_realdata_test.mbt`（6k60 / 8k85 / 12k65 / 14k25 /
+  15k85 + 裸 8k85 流）与 `amrwb_realdata_2_test.mbt`（18k25 / 19k85 / 23k05 /
+  23k85）：九个 FATE 样本（3GP）经门面整链解码，对 C 参照首尾各 16 帧比对
+  ≤ 2 LSB，对 FATE 参照每 32 个样本抽一个整文件比对，容差 = max(C 自身
+  偏差 + 1, 移植当前偏差)（逐模式写在夹具注释里）。`scripts/gen_amr_fixtures.py`
+  下载样本、调用 C 参照、跑 CLI 量出移植偏差后生成。
+
+## §515 AMR 接入播放 API、MP4 映射与裸流（2026-11-25）
+
+- AMR-NB 解码器与裸 `.amr` 切分 §171 就有，但 `MediaFile::open` 没有 `Amr`
+  分支，CLI 与 demo 到不了它。本片：`playback.mbt` 新增
+  `Source::Amr(RawAudioTrack, Bytes)`，`open` / `next_packet` / `duration_seconds`
+  与 `playback_dump.mbt` 的时基都走 `RawAc3` 同一分支（或模式）；
+  `AudioDec::AmrNb` / `AmrWb`，`AudioDecoder::open` 接 `amrnb` / `amrwb`
+  （单声道，采样率取流信息，缺省 8000 / 16000）。
+- `rawaudio.mbt`：`av_amr_open` 同时识别 `#!AMR` / `#!AMR-WB`，codec 名改为
+  FFmpeg 的 `amrnb` / `amrwb`（原 `amr_nb`），帧长按 `amrnb_frame_size` /
+  `amrwb_frame_size`，WB 每帧 320 样本、16 kHz；`#!AMR_MC1.0` / `#!AMR-WB_MC1.0`
+  多声道签名明确报错（解码器只接单声道）。`mov.mbt` 的音频样本条目对
+  `samr` / `sawb` 强制单声道与 8000 / 16000 Hz（`mov_parse_stsd_audio` 的
+  `AV_CODEC_ID_AMR_NB` / `AMR_WB` 分支；3GP 的 stsd 不存采样率，channelcount
+  字段是保留值 2）；`codec_tags.mbt` 把两个 fourcc 映射为 `amrnb` / `amrwb`。
+- `amr.mbt`：新增 `amr_f32`；`ff_amr_set_fixed_gain` 的结果按 float 舍入
+  （`exp2(M_LOG2_10 * x)` 与 C 一样用 double 算）；激励能量与激励截断前的
+  乘加逐步按 float 舍入。SIPR 复用同一函数，回归仍 ≤ 1 LSB。
+- 测试 `libavformat/amrnb_realdata_test.mbt`：八个 FATE 裸流经门面解码，
+  口径同 WB（C 参照首尾 16 帧 ≤ 2 LSB，4.75k 头窗因截断边界为 3；FATE 每 16 个
+  样本抽一个）；生成脚本用极简 MP4 写入器把 12.2k 帧装进 `samr` 样本条目的
+  3GP，验证 MP4 映射与裸流解码一致。`amr_realdata_wbtest.mbt` 改为断言
+  `amrnb`、WB 被接受（两帧 18 字节）、多声道被拒绝。
+- CLI：`decode-audio` 直接处理 `.amr` / `.awb` / 3GP；demo 的音频分流正则加
+  `amr|awb`，页面提示加 AMR。
+- 坑：`amrwb_decode_gains` 返回（基音增益，固定增益因子），调用处按相反顺序
+  解构 → 前段输出只有参照的 1/50，随后合成滤波发散（每帧 ×4）；
+  `update_sub_state` 里基音增益历史的 `memmove` 写成正向循环会把整段覆盖成
+  `pitch_gain[0]`，抗稀疏的计数随之出错（6k60 / 8k85 才有抗稀疏，所以只有
+  这两个模式坏）——重叠移位必须从后往前拷。C 参照程序：`amr.h` 的
+  `AMR_USE_16BIT_TABLES` 必须在第一次包含它之前定义（WB 用 16 位重排表，NB
+  用 8 位）；桩要匹配真实签名（`av_samples_set_silence` 的
+  `uint8_t * const *`、`av_crc_get_table(AVCRCId)`、`av_mallocz`）。同一包的
+  黑盒测试文件一起编译，辅助函数名必须按文件区分。FATE 的 `.pcm` 参照是
+  不带头的 s16le；FATE 的 AMR-WB 样本是 3GP 容器而不是裸流。
+
+## §516 ADPCM 解码补齐与接入播放 API（2026-11-25）
+
+- 仓库 §171 以前就有 `libavcodec/adpcm.mbt`：IMA WAV（4 位）、MS（≤ 2 声道）、
+  Yamaha 与 IMA QuickTime（`ima4`）块解码器，但没有接到 `MediaFile::open`。
+  本片在原文件上补齐：`adpcm_ima_oki`（`adpcm_oki_expand`，49 项
+  `oki_step_table`，预测器 `av_clip_intp2(…, 11)` 后 × 16）；IMA WAV 的
+  2/3/5 位码宽（`ff_adpcm_ima_block_sizes` {4,12,4,20} 与
+  `ff_adpcm_ima_block_samples` {16,32,8,32}，非 4 位用 LSB 先行的
+  `AdpcmLeBits` 按 C 的临时缓冲重排读）；MS 的 3–6 声道平面布局
+  （`decode_ms_planar`：逐通道 7 字节头 + 数据串接，C 的 `sample_fmt`
+  对 > 2 声道切到 `S16P`）；`adpcm_decoder_new` 新增
+  `bits_per_coded_sample~` 参数（仅 IMA WAV 校验 2..=5）。
+- 包长口径（照 C `get_nb_samples`）：MS / IMA WAV 一个 `block_align` 块一次，
+  `decode_block` 对非零 `block_align` 截断；OKI / Yamaha 整包、忽略
+  `block_align`；IMA QT 固定 34 字节 × 声道。`packet_consumed` 给门面回传
+  实际消费的字节数，`decode_all` 对剩余字节循环。
+- 门面 `playback.mbt`：`AudioDec::Adpcm(@libavcodec.AdpcmDecoder)` 与
+  `AudioDec::AdpcmImaQt`；`AudioDecoder::open` 接 `adpcm_ms` / `adpcm_ima_wav` /
+  `adpcm_ima_oki` / `adpcm_yamaha` / `adpcm_ima_qt`。MS / IMA WAV 需要
+  `block_align` 与 `bits_per_sample`，而 `StreamInfo` 没有，所以走 cook / sipr
+  的先例按来源分发：`Wav(demux, _)` 取 `demux.format.block_align` /
+  `bits_per_sample`，`Mov(movie, _)` 取 `track.bytes_per_frame` 与强制后的
+  `bits_per_sample`（4）。
+- MOV：`codec_tags.mbt` 新增 `mov_wav_fallback_codec`（C `mov_codec_id` 对
+  `ms\x00\x??` 的回退：WAV 标签 = byte3 | byte2 << 8），`mov_codec_name`
+  用它把 `ms\x00\x02` 认成 `adpcm_ms`、`ms\x00\x11` 认成 `adpcm_ima_wav`；
+  `mov.mbt` 的 `bps` 匹配给这两个加 `bits_per_sample = 4` 的分支（对齐
+  `av_get_bits_per_sample`，stsd 里写的 16 不用）。
+- 验证：C 参照 `scripts/adpcm_c_ref/`（mingw gcc 直接编译上级目录的
+  `adpcm.c` + `adpcm_data.c`，只桩 avcodec 胶水；`build.cmd`）。
+  `.scratch/adpcm_dl/difftest.py` 对 8 个种子 × 80 个随机包（OKI / Yamaha /
+  MS 1–6 声道 / IMA WAV 2–5 位，块长 0–1024）逐帧与 C 位级一致；整链
+  `chain.py` 对 FATE `oki/test.wav`（md5 641049800e735b62e975baacc9a011a4）、
+  qt-surge-suite 的 `surge-2-16-L-ms11.mov`（b4697f4f64c12afb37acfebd5f7a756c，
+  1146 包）、`surge-2-16-L-ms02.mov`（adpcm_ms）与两个 `ima4` MOV 的门面
+  解码 MD5 全部等于 C。提交的测试 `libavformat/adpcm_facade_realdata_test.mbt`
+  由 `scripts/gen_adpcm_fixtures.py` 生成：FATE OKI WAV 整文件、从两个
+  surge MOV 里抽 48 个块重新封成 WAV 和带 `ms\x00\x02` / `ms\x00\x11`
+  条目的 MOV（WAV 与 MOV 两条路径跑同一批真实块）、MS 单声道 / 6 声道、
+  IMA 3 位、Yamaha 的合成 WAV（合法块头 + 随机码字，期望值取 C 解码结果的
+  s16le MD5），9 个用例两个后端全过。`adpcm_crafted_test.mbt` 改为
+  MS 7 声道、OKI 3 声道、IMA 码宽 1 / 6 被拒。
+- 坑：MS > 2 声道不是“所有头在前”，而是每通道的头紧跟自己的数据（C 每个
+  channel 循环内顺序读 7 字节头 + `(nb_samples-2)/2` 字节）；生成器先按
+  “头在前”写，C 立刻报 `block_predictor[1] = 15`。WAV 的 `WAVEFORMAT` 是
+  `HHIIHH`（16 字节），写成 `HHIHHH` 会让 demuxer 把 `block_align` 读成
+  `bits`。MOV 样本条目的 v1 字段从条目起点 +36 起（`samples_per_packet`、
+  `bytes_per_packet`、`bytes_per_frame`、`bytes_per_sample`），不是 +24。
+  同一个包里黑盒测试文件会一起编译，生成器输出的辅助函数名带 `adpcm_` 前缀。

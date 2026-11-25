@@ -1069,6 +1069,39 @@ $msg | git commit -F -
   `Truncating packet` 只记录不致命（`packets.err` 非空 ≠ 有读错误）。
 - **Docker Desktop 开场没起**：PowerShell `Start-Process` 拉起后轮询 `docker info`；
   镜像 `linuxserver/ffmpeg:9.0.2` 的 ENTRYPOINT 是 ffmpeg，要 `--entrypoint bash`。
+  起不来时（2026-11-25 等了 10 分钟仍未就绪）音频解码器可以改用本机 C 参照：
+  `scripts/amr_c_ref/` 用 WinLibs mingw64 gcc（PATH 上的 `gcc`）直接编译上级
+  目录已配置的 FFmpeg 源码——解码器 `.c` 与依赖的 DSP 源文件原样 `#include`，
+  用真实头文件，只给 avcodec 胶水写桩，逐帧 dump 中间量（插桩副本用脚本
+  生成，不改上游）。对拍脚本与对比工具在 `.scratch/amr_dl/cref/`。
+- **浮点解码器的 float/double 边界**：C 把激励 `truncf` 成整数时，float 与
+  double 的差在整数附近会让截断差 1，经谐振合成放大到几十 LSB；修法是在
+  离散判决点（固定增益结果、激励截断前）按 binary32 舍入（`amr_f32`，本
+  工具链没有 `Float32` 类型，用位运算实现）。把更多算子按 float 逐步仿真
+  反而更差，不要做。FATE 对 AMR 用 stddev 容差，参照 PCM 不是 C 浮点解码器
+  的位级输出（WB 四个模式 C 自己就差 13–38 LSB），对 FATE 的容差应取
+  max(C 自身偏差 + 1, 移植偏差)。
+- **同一包的黑盒测试文件一起编译**：跨文件的辅助函数 / 常量名必须唯一
+  （按文件加前缀），否则 `moon test <单个文件>` 也报重复声明。
+- **`git stash pop` 在 autocrlf=true 下会把工作区文件重写成 CRLF**，之后 edit
+  工具按 LF 匹配会失败；用二进制脚本把涉及的文件换回 LF（`.scratch/` 里
+  的 `to_lf.py`），`git status` 的幻影 M 与此无关。
+- **`b"…"` 字面量是原始字节，不是 base64**：把二进制样本嵌进测试要用
+  `@libavutil.av_base64_decode(b"…", 上限)`，字面量本身仍是 base64 文本的
+  字节。单个顶层字面量太大时 wasm 报 `local count too large`，要把 base64
+  切成 ≤ 300 行的分片再用 `Bytes::from_array` 拼接（`adpcm_cat` / `zz_cat`）。
+- **MOV 的 `ms\x00\x02` / `ms\x00\x11` 是 WAV 标签的回退映射**：C 的
+  `mov_codec_id` 对 `ms\x00\x??` 走 `ff_wav_codec_id(tag >> 8 | (tag & 0xff) << 8)`
+  实际是 byte3 | byte2<<8（`codec_tags.mbt` 的 `mov_wav_fallback_codec`），所以
+  `ms\x00\x02` = `adpcm_ms`、`ms\x00\x11` = `adpcm_ima_wav`；同时
+  `av_get_bits_per_sample` 让这些样本条目的 `bits_per_sample` 固定为 4（不是
+  stsd 里写的 16），IMA WAV 解码器靠它选码宽。
+- **ADPCM 各家的包长口径不同**：MS / IMA WAV 以 `block_align` 为块（WAV 的
+  `nBlockAlign`、MOV v1 条目的 `bytes_per_frame`），一次解一个块；OKI /
+  Yamaha 整包解码，忽略 `block_align`；IMA QT 固定 34 字节/通道。> 2 声道的
+  MS 是平面布局：每个通道自己的 7 字节头紧跟它的数据，逐通道串接（不是
+  所有头在前）。2/3/5 位的 IMA WAV 用 `get_bits_le`（LSB 先行）按 4/12/4/20
+  字节组重排后读。
 
 ---
 
