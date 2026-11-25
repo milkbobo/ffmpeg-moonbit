@@ -65,6 +65,7 @@ pub(all) enum FormatId {
   Mp3
   MpegTs
   Ogg
+  RealMedia
   W64
   Wav
 }
@@ -98,6 +99,7 @@ pub fn FormatId::name(self : FormatId) -> String {
     Mpc7 => "mpc"
     Mpc8 => "mpc8"
     Ogg => "ogg"
+    RealMedia => "rm"
     W64 => "w64"
     Wav => "wav"
   }
@@ -128,6 +130,7 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Mpc7 => "mpc"
     Mpc8 => "mpc"
     Ogg => "ogg,oga,ogv,ogx,opus,spx"
+    RealMedia => ""
     W64 => "w64"
     Wav => "wav,rf64,bw64"
   }
@@ -158,6 +161,7 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Mpc7 => ""
     Mpc8 => ""
     Ogg => "application/ogg"
+    RealMedia => ""
     W64 => "audio/x-w64"
     Wav => "audio/x-wav"
   }
@@ -428,6 +432,7 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: Mpc7, probe: probe_mpc7, },
     { id: Mpc8, probe: probe_mpc8, },
     { id: Ogg, probe: probe_ogg, },
+    { id: RealMedia, probe: probe_realmedia, },
     { id: W64, probe: probe_w64, },
     { id: Wav, probe: probe_wav, },
   ]

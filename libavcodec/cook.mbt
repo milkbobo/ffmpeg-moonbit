@@ -546,6 +546,51 @@ pub struct CookDecoder {
 }
 
 ///|
+/// `pub fn CookDecoder::new` below keeps the full parse; this helper is the
+/// part of it other modules need: the number of samples one frame holds per
+/// channel, from the header of the first subpacket (`q->samples_per_channel`
+/// of `cook_decode_init`, valid for every subpacket since they must agree).
+pub fn cook_samples_per_channel(
+  extradata : Bytes,
+  channels : Int32,
+) -> Result[Int32, String] {
+  if extradata.length() < 8 || channels <= 0 {
+    return Err("cook: necessary extradata missing")
+  }
+  let version = (extradata[0].to_int() << 24) |
+    (extradata[1].to_int() << 16) |
+    (extradata[2].to_int() << 8) |
+    extradata[3].to_int()
+  let samples_per_frame = (extradata[4].to_int() << 8) | extradata[5].to_int()
+  let per_channel = if version == cook_mc {
+    // the channel mask follows the 16-byte header
+    let mask : UInt32 = if extradata.length() >= 20 {
+      (extradata[16].to_int().reinterpret_as_uint() << 24) |
+      (extradata[17].to_int().reinterpret_as_uint() << 16) |
+      (extradata[18].to_int().reinterpret_as_uint() << 8) |
+      extradata[19].to_int().reinterpret_as_uint()
+    } else {
+      0U
+    }
+    if cook_popcount64(mask) > 1 {
+      samples_per_frame >> 1
+    } else {
+      samples_per_frame
+    }
+  } else if version == cook_mono ||
+    version == cook_stereo ||
+    version == cook_joint_stereo {
+    samples_per_frame / channels
+  } else {
+    return Err("cook: unsupported cook version")
+  }
+  if per_channel != 256 && per_channel != 512 && per_channel != 1024 {
+    return Err("cook: unsupported samples_per_channel")
+  }
+  Ok(per_channel)
+}
+
+///|
 /// `cook_decode_init`: parse extradata subpackets and build tables.
 pub fn CookDecoder::new(
   extradata : Bytes,
