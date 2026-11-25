@@ -17,7 +17,9 @@
 | MP2、MP3、FLAC、ALAC、Opus | 已实现 | 已实现 |
 | APE（Monkey's Audio） | 支持读取 v3.80–3.99 文件及解码 | 未实现 |
 | WMA v1/v2 | 支持从 ASF/WMA 文件解码 | 已实现编码器，输出 WMA 压缩包 |
-| DTS | 支持核心解码和 Matroska 播放，DTS-HD 扩展待实现 | 未实现 |
+| WMA Pro | 支持从 ASF/WMA 文件和 WAV（标签 0x0162）解码；对 FATE 的立体声与 5.1 样本，输出与参考 PCM 的偏差不超过 1 LSB。XMA 与 WMA Lossless 未实现 | 未实现 |
+| DTS | 支持裸 `.dts` 及 Matroska 中的 DTS 核心解码；不支持 DTS-HD 扩展 | 未实现 |
+| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`）和 Apple IMA4 的解封装与播放 | 支持写入 PCM AIFF |
 | MLP、TrueHD | 支持裸码流解码和 Matroska 播放 | 未实现 |
 | Vorbis | 支持 Ogg 解码 | 支持实验性编码和 Ogg 封装，首包与 FFmpeg 原生编码器逐字节一致 |
 | AC-3、E-AC-3 | 支持裸码流和 Matroska 解码，E-AC-3 支持部分模式 | AC-3 定点编码已实现，48 kHz 双声道参考流与 FFmpeg `ac3_fixed` 位级一致 |
@@ -55,7 +57,7 @@ python -m http.server 8000 --directory demo
 用支持 WasmGC 和 JS String Builtins 的浏览器打开 [本地 Demo](http://localhost:8000/)。点击「试用样片」或「选择文件」查看媒体信息，然后按需操作。
 
 - **播放和截图**　视频可切换「Wasm 播放」后定位并截图，也可用 MoonBit 把首帧导出为 PNG 或 JPEG。音频文件可用「Wasm 播放」解码成 WAV 在页面试听。
-- **导入音频**　支持 APE、ASF/WMA、WavPack、Shorten、Musepack SV7/SV8、RealMedia/RealAudio（RA 14.4、RA 28.8、Cook、SIPR 音轨，含带视频轨的 RM/RMVB）、AMR-NB/AMR-WB（`.amr`、`.awb` 与 3GP 的 AMR 音轨）、ADPCM（WAV 里的 MS / IMA / OKI / Yamaha，MOV/MP4 里的 MS / IMA / `ima4`），以及 MLP/TrueHD 裸流。Matroska 文件可读取 DTS 核心、AC-3、E-AC-3 和 MLP/TrueHD 音轨。
+- **导入音频**　支持 APE、ASF/WMA（含 WMA Pro）、WAV 里的 WMA Pro（标签 0x0162）、WavPack、Shorten、Musepack SV7/SV8、RealMedia/RealAudio（RA 14.4、RA 28.8、Cook、SIPR 音轨，含带视频轨的 RM/RMVB）、AMR-NB/AMR-WB（`.amr`、`.awb` 与 3GP 的 AMR 音轨）、ADPCM（WAV 里的 MS / IMA / OKI / Yamaha，MOV/MP4 里的 MS / IMA / `ima4`），以及 AIFF/AIFF-C（PCM、Apple IMA4）、裸 `.dts` 核心流和 MLP/TrueHD 裸流。Matroska 文件可读取 DTS 核心、AC-3、E-AC-3 和 MLP/TrueHD 音轨。
 - **导出音频**　选择 WAV、FLAC、WavPack、AC-3 或 Ogg/Vorbis，点击「生成音频」。WavPack 导出为 16 位单声道或立体声。AC-3 支持 32、44.1 和 48 kHz 的单声道或立体声，末帧补齐到 1,536 个样本。实验性 Ogg/Vorbis 输出需要立体声。
 - **音频后期处理**　展开音频导出下的「音频后期处理」，可加淡入淡出、去除首尾静音、按目标 LUFS 调整音量，或添加第二条音轨混音。响度归一化和混音支持单声道与立体声。
 - **分析音轨**　点击「分析音轨」，查看首条音轨的波形、采样峰值和静音区间。单声道和立体声可测整体响度（LUFS）。

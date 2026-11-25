@@ -18484,3 +18484,19 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
   `bits`。MOV 样本条目的 v1 字段从条目起点 +36 起（`samples_per_packet`、
   `bytes_per_packet`、`bytes_per_frame`、`bytes_per_sample`），不是 +24。
   同一个包里黑盒测试文件会一起编译，生成器输出的辅助函数名带 `adpcm_` 前缀。
+
+## §517 裸 DTS 核心与 AIFF/AIFF-C 播放（2026-11-25）
+
+- DTS：复用 Matroska 已使用的核心解码器，抽出头解析并处理 16 位和 14 位大小端打包。裸流按帧索引源字节，PTS 按每声道样本数累加；报告截断、参数变化和 DTS-HD 扩展子流。不实现 DTS-HD 解码。
+- AIFF/AIFF-C：把原有有符号 PCM 解封装接到统一播放，新增 Apple `ima4` 分包（每声道 34 字节一块、一块 64 个样本），限制读取到 `SSND` 有效负载。`COMM` 对 `ima4` 记录的是块数，因此流时长需乘 64；实际分包只用 `SSND` 内完整块。
+- 两条路径均可由 `probe`、`dump-packets`、`decode-audio` 与浏览器的 Wasm 播放使用。测试覆盖 8/16/24/32 位 PCM、AIFF-C `sowt`、IMA4 双声道的分包和 PCM、裸 DTS 的字节序与时间轴，保留 Matroska DTS 回归。另用 FFmpeg 9.0.2 生成双声道 AIFC IMA4，Wasm CLI 与 FFmpeg 解码后的 s16le MD5 均为 `75b382cc32f516d57822864ac0a407fe`。
+
+## §518 WMA Pro 解码器（wmapro）与 ASF / WAV 接入（2026-11-25）
+
+- `libavcodec/wmapro*.mbt`：移植 `wmaprodec.c` 的 WMAPRO 路径——分块头、声道分组与解相关矩阵、向量/游程系数、比例因子 DPCM 与游程差分、64–8192 的子帧长度、位缓冲池与跨包帧、包序号丢包检测、首尾裁剪。XMA1/2 与 WMA Lossless 不在范围。表由 `scripts/gen_wmapro_tables.py` 从 `wmaprodata.h` 提取（22 张，写完回读自校验；7 张 Huffman 表的 Kraft 和均为 1）。
+- 位读取器与缓冲池按 C 的未缓存读取器建模：越界读 0，索引钳制在 `size_in_bits + 8`，`frame_data` 从不清零（越界读看到的是旧帧字节，同 C）。Huffman 码按 `ff_vlc_init_from_lengths` 的规则在表序上累加 `2^(32-len)` 分配；同一码长内码字**不连续**（`00` 与 `10` 之间夹着更长的码），所以读取是逐位前进、每个码长二分查找。
+- 浮点：C 用 `AV_TX_FLOAT_MDCT`（float FFT），本移植用 double，按 `ff_tx_mdct_naive_inv` 的定义式在余弦表上求和（O(N²)；`len` 是帧长，逆变换是 N 个输入 → N 个输出）。与 FFmpeg 9.0.2 的 s16 输出逐样本比较：FATE `Beethovens_9th-1_small.wma`（48 kHz 立体声、24 位有效）180,224 个值里 35 个差 1 LSB；`latin_192_mulitchannel_cut.wma`（5.1 含 LFE）1,253,376 个值里 19 个差 1 LSB；两者的长度都与 FATE 参考 PCM 完全相同。参考来自本机用同一 MinGW 工具链构建的 FFmpeg 9.0.2（Docker 不可用），它对 FATE 自带参考的偏差同样不超过 1 LSB。
+- 错误处理与 C 的差别只在「报告」：坏帧置 `packet_loss`、丢帧并在下一包重同步（同 C），原因保存在 `WmaProDecoder::last_error()`；C 以 `AVERROR_PATCHWELCOME` 拒绝的特性（14 位块、保留位、未知声道变换）在这里返回 `Err`。一个长度前缀为 100 位、其后全零的损坏帧：参考与移植都丢到只剩 64 帧，PCM 偏差 ≤1 LSB。零子帧的 tile 在 C 里会整数除零，这里按坏帧丢弃。`decode_packet` 的返回值要在 `save_bits` 之后取位置（同 C），提前取会让包尾的剩余比特返回 0 字节。
+- `ff_wmapro_decoder` 没有 `AV_CODEC_CAP_DELAY`，fftools 在流结束时不会向它要收尾帧，门面的 `flush` 对 WMA Pro 因此不产出；解码器 API 的 `flush()` 保留（最后一个半帧，后半为 0，只出一次）并有测试。
+- 接线：`asf.mbt` 识别标签 0x0162，并放宽截断文件——Data Object 声明的大小超过文件长度时读到文件尾为止（同 C；FATE 的两个样本都是截断文件，此前直接判失败）。`playback.mbt` 新增 `AudioDec::WmaPro`：一个包含多帧，`decode_all` 逐步消费，单帧 `decode` 把余下的帧放进队列。WAV 路径取 `cbSize` 字节为 extradata、按 `block_align` 切包；这类包的 pts 改为 NOPTS（同 `wav_read_packet`，此前按 `size / block_align` 给 duration 对 WMA 没有意义）。MP4/ISM 里的 WMA Pro 样本条目未接入（FATE `vc1-wmapro.ism` 留作后续）。
+- 测试 `libavformat/wmapro_realdata_test.mbt`（生成器 `scripts/gen_wmapro_fixtures.py`，9 项，wasm 与 wasm-gc 通过）：两个 FATE 文件全文件内嵌，对 FATE 参考 PCM 每隔 97 / 251 个值要求 ≤1 LSB、逐帧逐声道 |x| 之和相差 ≤2048、长度精确相等；手工封装的 WAV（FFmpeg 自己的 WAV 封装器会丢掉 WMA Pro 的私有字节，它自己的解码器读不回）；解码器事实、包步进、短包报错、收尾帧、非法头（extradata 不足、`block_align` 为 0、14 位块、128 子帧、声道数不符）、损坏帧后的重同步。

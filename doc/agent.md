@@ -1102,6 +1102,39 @@ $msg | git commit -F -
   MS 是平面布局：每个通道自己的 7 字节头紧跟它的数据，逐通道串接（不是
   所有头在前）。2/3/5 位的 IMA WAV 用 `get_bits_le`（LSB 先行）按 4/12/4/20
   字节组重排后读。
+- **Docker 不可用时在本机构建参考 FFmpeg**（2026-11-25，WMA Pro）：上级源码树是
+  树内配置过的（有 `config.h`），FFmpeg 拒绝树外构建；用 robocopy 把源码
+  （排除 `moonbit`、`*.o` 等）复制到 `.scratch/wmapro_ff/src`，在其中
+  `./configure` + `mingw32-make -j16`（Git Bash 在 `D:\Program Files\Git\bin\`）。
+  `--disable-everything` 会连 `file` 协议一起关掉，必须加
+  `--enable-protocol=file,pipe`；`ffbuild/bin2c.exe` 的规则缺失，从上级目录拷
+  `bin2c.exe` / `bin2c_host.o`；`configure` 不认识 `s16le` / `f32le` 这类 muxer
+  名（静默忽略），裸 PCM 用 `-f wav -c:a pcm_s16le` 再按 chunk 剥头；
+  `-f data` 提取包载荷要 `-map 0:a:0`。要看 C 的中间量就给这个副本里的 `.c`
+  加打印（改完增量 make 约 1 分钟），上游不动。
+- **PowerShell `>` / `2>` 重定向写出 UTF-16**：Python 读日志先看 BOM（`FF FE`）
+  再选编码；要 ffmpeg 原始字节用 `cmd /c "… 2> file"`。
+- **自己导出的 WAV 头不是固定 44 字节**：多声道会写 WAVE_FORMAT_EXTENSIBLE
+  （`fmt ` 40 字节，数据从 68 开始）。比对脚本按 RIFF chunk 走，不要硬编码
+  偏移——曾因此把逐样本一致误判成"整体偏移 2 个样本"。
+- **`AV_TX_FLOAT_MDCT` 的 `len` 是帧长**：逆变换是 N 个输入 → N 个输出（不是
+  N/2 个输入）；`ff_tx_mdct_naive_inv` 里的 `len = s->len >> 1` 只是输出的两半。
+- **`ff_vlc_init_from_lengths` 的码字按表序分配**：累加 `2^(32-len)`，同一码长的
+  码字可以不连续（`00` 与 `10` 之间夹着更长的码），读取要逐位前进 + 每码长
+  二分，不能写成区间判断。
+- **`GetBitContext` 的钳制**：未缓存读取器的 `get_bits` / `skip_bits` 把索引钳在
+  `size_in_bits + 8`，`skip_bits_long` 另钳在 0；`init_get_bits8` 收的是字节数，
+  把字节数当位数交给读取器，钳制点会差 8 倍（症状：包尾剩余比特没被保存、
+  跨包帧接不上）。返回「消耗字节数」的函数（`decode_packet`）要在 `save_bits`
+  **之后**取位置（C 即如此），提前取会把剩余比特算成 0 字节。
+- **fftools 的输出口径看 `capabilities`**：没有 `AV_CODEC_CAP_DELAY` 的解码器
+  （wmapro 即是）在流结束时不会被 fftools 用空包调用，解码器里的"收尾帧"分支
+  在实际输出里不出现；门面要不要 drain 以此为准。
+- **MoonBit 语法补充（2026-11-25 工具链）**：函数体内不能用 `/* */` / `/** */`
+  注释（只能是 `//`）；`>>=`、`*=` 在带索引或字段的左值上不可用（`+=` 对局部
+  变量可以）；`try` 不能用于 `Result`（用 `match`）；`priv struct` 不能作
+  `pub struct` 的字段类型；小写 `const` 不合法（用 `let`）；`a..<b` 只能出现在
+  `for … in` 里且两端要加括号；没有闭包字面量 `|x| {…}`（写顶层 `fn`）。
 
 ---
 
