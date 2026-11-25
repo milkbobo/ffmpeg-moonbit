@@ -127,6 +127,8 @@ pub(all) enum Source {
   ApeAudio(ApeDemux)
   MusepackAudio(Mpc7Demux)
   Musepack8Audio(Mpc8Demux)
+  /// The RealMedia demuxer's packets in file (interleave) order.
+  RealMediaAudio(RealMediaDemux)
   /// The demuxer plus, per stream, the next interpolated AAC timestamp
   /// (`ts_nopts` until the first PES timestamp is seen).
   Ts(TsDemux, Array[Int64])
@@ -428,6 +430,34 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         cursor: [0],
       }
     }
+    RealMedia => {
+      let demux = match av_realmedia_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      let streams = demux.tracks.mapi((index, track) => StreamInfo::{
+        index,
+        media_type: track.media_type,
+        // Already the FFmpeg codec name (cook, sipr, ra_144, ra_288, ac3,
+        // aac, rv40, ...).
+        codec_id: track.codec,
+        sample_rate: track.sample_rate,
+        channels: track.channels,
+        width: track.width,
+        height: track.height,
+        extradata: if track.extradata.length() > 0 {
+          Some(track.extradata)
+        } else {
+          None
+        },
+      })
+      {
+        format_name: format.name(),
+        streams,
+        source: RealMediaAudio(demux),
+        cursor: [0],
+      }
+    }
     Png => playback_open_png(data, format.name())
     MpegTs => playback_ts_build(data)
     other => raise UnsupportedFormat(other.name())
@@ -598,6 +628,29 @@ pub fn MediaFile::next_packet(
       self.cursor[0] = index + 1
       Some({ stream_index: 0, data, pts: index.to_int64(), keyframe: true, })
     }
+    RealMediaAudio(demux) => {
+      let index = self.cursor[0]
+      let count = demux.packets.length()
+      guard index < count else {
+        // The demuxer keeps the packets it read before a truncated or
+        // damaged chunk stopped it. Like `av_read_frame`, hand those out
+        // first and report the error once the walk is over (the cursor then
+        // moves past the error so the next call is a plain end of file).
+        if index == count && demux.read_error != "" {
+          self.cursor[0] = index + 1
+          raise DemuxError(demux.read_error)
+        }
+        return None
+      }
+      self.cursor[0] = index + 1
+      let p = demux.packets[index]
+      Some({
+        stream_index: p.stream_index,
+        data: p.data,
+        pts: p.pts,
+        keyframe: p.keyframe,
+      })
+    }
     Ts(_, _) => abort("unreachable: TS is routed above")
   }
 }
@@ -617,6 +670,10 @@ pub(all) enum AudioDec {
   Mlp(@libavcodec.MlpDecoder)
   Wma(@libavcodec.WmaDecoder, Ref[Int32])
   MonkeyAudio(@libavcodec.ApeDecoder)
+  Cook(@libavcodec.CookDecoder)
+  Sipr(@libavcodec.SiprDecoder)
+  RealAudio144(@libavcodec.Ra144Decoder)
+  RealAudio288(@libavcodec.Ra288Decoder)
   /// Raw PCM: (little_endian, bytes_per_sample).
   Pcm(Bool, Int32)
 }
@@ -720,6 +777,21 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       }
       { dec, channels: info.channels, sample_rate: info.sample_rate, }
     }
+    "ra_144" =>
+      // RealAudio 1.0 carries no codec parameters: 8 kHz mono, as the C
+      // decoder's init fixes it.
+      {
+        dec: RealAudio144(@libavcodec.Ra144Decoder::new()),
+        channels: 1,
+        sample_rate: if info.sample_rate > 0 { info.sample_rate } else { 8000 },
+      }
+    // These read `block_align` (and the bit rate) off the RealMedia track,
+    // which a `StreamInfo` does not carry: open them through
+    // `MediaFile::audio_decoder`.
+    "cook" | "sipr" | "ra_288" =>
+      raise UnsupportedCodec(
+        "\{info.codec_id} outside its RealMedia container (block_align missing)",
+      )
     "pcm_s16le" =>
       {
         dec: Pcm(true, 2),
@@ -793,6 +865,40 @@ pub fn MediaFile::audio_decoder(
         sample_rate: track.sample_rate,
       }
     }
+    RealMediaAudio(demux) => {
+      let track = demux.tracks[index]
+      let dec : AudioDec = match track.codec {
+        "cook" => {
+          let dec = match
+            @libavcodec.CookDecoder::new(
+              track.extradata,
+              track.channels,
+              track.block_align,
+              sample_rate=track.sample_rate,
+            ) {
+            Ok(dec) => dec
+            Err(e) => raise DecodeError(e)
+          }
+          Cook(dec)
+        }
+        "sipr" => Sipr(@libavcodec.SiprDecoder::new(track.block_align, bit_rate=track.bit_rate))
+        "ra_144" => RealAudio144(@libavcodec.Ra144Decoder::new())
+        "ra_288" =>
+          match @libavcodec.Ra288Decoder::new(track.block_align) {
+            Ok(dec) => RealAudio288(dec)
+            Err(e) => raise DecodeError(e)
+          }
+        // ac3 (dnet, already byte-swapped by the demuxer) and aac (raac /
+        // racp, extradata is an AudioSpecificConfig) take everything they
+        // need from the `StreamInfo`.
+        _ => return AudioDecoder::open(info)
+      }
+      let (channels, sample_rate) = match track.codec {
+        "ra_144" => (1, if track.sample_rate > 0 { track.sample_rate } else { 8000 })
+        _ => (track.channels, track.sample_rate)
+      }
+      { dec, channels, sample_rate }
+    }
     _ => AudioDecoder::open(info)
   }
 }
@@ -844,6 +950,14 @@ fn playback_integer_audio_frame(
     Array::makei(nb_samples, i => pcm[i * channels + ch].to_double() / scale)
   })
   { samples, nb_samples, sample_rate: rate, pts: Some(pts), }
+}
+
+///|
+/// The packet's timestamp as the frame's optional `pts`: the RealMedia
+/// demuxer hands `av_nopts_value` for packets whose timestamp it could not
+/// derive, which the public frame reports as `None`.
+fn playback_optional_pts(pts : Int64) -> Int64? {
+  if pts == av_nopts_value { None } else { Some(pts) }
 }
 
 ///|
@@ -1042,6 +1156,64 @@ pub fn AudioDecoder::decode(
         pts: Some(pkt.pts),
       })
     }
+    Cook(dec) =>
+      match dec.decode_packet(pkt.data) {
+        Ok(Some(frame)) =>
+          Some({
+            samples: frame.samples.map(row => Array::makei(row.length(), i => row[i])),
+            nb_samples: frame.samples[0].length(),
+            sample_rate: self.sample_rate,
+            pts: playback_optional_pts(pkt.pts),
+          })
+        // The decoder's two warm-up packets, or one shorter than
+        // `block_align`.
+        Ok(None) => None
+        Err(e) => raise DecodeError(e)
+      }
+    Sipr(dec) =>
+      match dec.decode_packet(pkt.data) {
+        Ok(pcm) =>
+          Some({
+            samples: [pcm],
+            nb_samples: pcm.length(),
+            sample_rate: self.sample_rate,
+            pts: playback_optional_pts(pkt.pts),
+          })
+        Err(e) => raise DecodeError(e)
+      }
+    RealAudio144(dec) => {
+      // The C decoder consumes a packet 20 bytes at a time and refuses only
+      // a trailing partial frame (`Frame too small`) - after the complete
+      // frames went out - and fftools logs that and carries on. The last
+      // packet of a truncated file arrives this way, flagged corrupt by the
+      // demuxer: decode its whole frames and drop the remainder; a packet
+      // without a whole frame yields none.
+      let whole = pkt.data.length() - pkt.data.length() % 20
+      if whole == 0 {
+        return None
+      }
+      let pcm = match dec.decode_packet(pkt.data[:whole].to_owned()) {
+        Ok(pcm) => pcm
+        Err(e) => raise DecodeError(e)
+      }
+      Some({
+        samples: [pcm.map(sample => sample.to_double() / 32768.0)],
+        nb_samples: pcm.length(),
+        sample_rate: self.sample_rate,
+        pts: playback_optional_pts(pkt.pts),
+      })
+    }
+    RealAudio288(dec) =>
+      match dec.decode_packet(pkt.data) {
+        Ok(pcm) =>
+          Some({
+            samples: [pcm],
+            nb_samples: pcm.length(),
+            sample_rate: self.sample_rate,
+            pts: playback_optional_pts(pkt.pts),
+          })
+        Err(e) => raise DecodeError(e)
+      }
     Pcm(little_endian, bytes_per_sample) => {
       let frame_bytes = self.channels * bytes_per_sample
       if pkt.data.length() < frame_bytes {
@@ -1209,6 +1381,27 @@ pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
       )
     Musepack8Audio(demux) =>
       Some(demux.samples.to_double() / demux.sample_rate.to_double())
+    RealMediaAudio(demux) =>
+      // `rm_read_header`: the PROP chunk's duration in ms while no stream
+      // declares one of its own (a stream duration resets the file's), else
+      // the longest stream - the format duration `update_stream_timings`
+      // derives. ffprobe may refine stream durations from the packets
+      // (`estimate_timings_from_pts`); that is not reproduced.
+      if demux.duration != av_nopts_value && demux.duration > 0L {
+        Some(demux.duration.to_double() / 1000.0)
+      } else {
+        let mut longest = 0L
+        for track in demux.tracks {
+          if track.duration > longest {
+            longest = track.duration
+          }
+        }
+        if longest > 0L {
+          Some(longest.to_double() / 1000.0)
+        } else {
+          None
+        }
+      }
     OggVorbis(demux) if demux.total_samples > 0L =>
       Some(demux.total_samples.to_double() / demux.sample_rate.to_double())
     OggFlac(demux) if demux.total_samples > 0L =>
@@ -1288,6 +1481,18 @@ pub struct DecodedAudio {
   format_name : String
   codec_id : String
   duration_seconds : Double?
+  /// Why the container's packet walk ended early (a truncated or damaged
+  /// RealMedia chunk, ...); empty when the file was read to its end. The
+  /// packets before the failure are complete and are all decoded, as
+  /// fftools keeps the output of a damaged input.
+  read_error : String
+}
+
+///|
+/// The demuxer error that ended the packet walk early, or `""` when the
+/// container was read to its end.
+pub fn DecodedAudio::read_error(self : DecodedAudio) -> String {
+  self.read_error
 }
 
 ///|
@@ -1312,6 +1517,27 @@ fn playback_append_audio(
     }
   }
   rate
+}
+
+///|
+/// `next_packet` for the bulk walks (the decode engine, the packet dumps).
+/// A demuxer's end-of-stream error - the packets it read before a damaged
+/// chunk are complete - ends the walk with `Err(reason)` instead of raising,
+/// the way fftools logs it and treats the input as ended. Only the RealMedia
+/// adapter reports such an error; every other source keeps raising.
+fn MediaFile::next_packet_tolerant(
+  self : MediaFile,
+) -> Result[MediaPacket?, String] raise MediaError {
+  match self.source {
+    RealMediaAudio(_) =>
+      try {
+        Ok(self.next_packet())
+      } catch {
+        DemuxError(e) => Err(e)
+        other => raise other
+      }
+    _ => Ok(self.next_packet())
+  }
 }
 
 ///|
@@ -1374,8 +1600,15 @@ pub fn decode_audio_file(
   }
   let mut nth = 0
   let mut decoded = 0L
+  let mut read_error = ""
   while true {
-    let pkt = mf.next_packet()
+    let pkt = match mf.next_packet_tolerant() {
+      Ok(pkt) => pkt
+      Err(e) => {
+        read_error = e
+        None
+      }
+    }
     if pkt is None {
       break
     }
@@ -1457,6 +1690,7 @@ pub fn decode_audio_file(
     format_name: mf.format_name(),
     codec_id: mf.streams()[audio].codec_id,
     duration_seconds: mf.duration_seconds(),
+    read_error,
   }
 }
 

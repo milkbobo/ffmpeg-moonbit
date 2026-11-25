@@ -28,5 +28,6 @@ fn playback_decode_shorten(
     format_name: "shn",
     codec_id: "shorten",
     duration_seconds: Some(count.to_double() / out.sample_rate.to_double()),
+    read_error: "",
   }
 }

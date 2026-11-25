@@ -37,6 +37,7 @@ fn MediaFile::stream_timebase(
     OggVorbis(demux) => Some((demux.sample_rate.to_double(), 0.0))
     OggFlac(demux) => Some((demux.sample_rate.to_double(), 0.0))
     AsfAudio(_) => Some((1000.0, 0.0))
+    RealMediaAudio(_) => Some((1000.0, 0.0))
     RawAc3(track, _) => Some((track.sample_rate.to_double(), 0.0))
     ApeAudio(demux) => Some((demux.sample_rate.to_double(), 0.0))
     MusepackAudio(demux) => Some((demux.sample_rate.to_double() / 1152.0, 0.0))
@@ -80,9 +81,11 @@ pub fn MediaFile::dump_packets_json(
     if limit >= 0 && emitted >= limit {
       break
     }
-    let p = match self.next_packet() {
-      Some(pkt) => pkt
-      None => break
+    let p = match self.next_packet_tolerant() {
+      Ok(Some(pkt)) => pkt
+      // ffprobe prints the packets a demuxer delivered before it failed
+      // and exits 0, so the walk ends at the error instead of raising it.
+      Ok(None) | Err(_) => break
     }
     if stream >= 0 && p.stream_index != stream {
       continue
@@ -124,5 +127,10 @@ pub fn DecodedAudio::summary_json(self : DecodedAudio) -> String {
   } else {
     "null"
   }
-  "{\n  \"codec_name\": \"\{self.codec_id}\",\n  \"sample_rate\": \{self.sample_rate},\n  \"channels\": \{self.channels},\n  \"format_name\": \"\{self.format_name}\",\n  \"samples_per_channel\": \{nb},\n  \"container_duration\": \{dur},\n  \"decoded_duration\": \{real_dur}\n}"
+  let read_error = if self.read_error == "" {
+    "null"
+  } else {
+    "\"" + probe_json_escape_for_test(self.read_error) + "\""
+  }
+  "{\n  \"codec_name\": \"\{self.codec_id}\",\n  \"sample_rate\": \{self.sample_rate},\n  \"channels\": \{self.channels},\n  \"format_name\": \"\{self.format_name}\",\n  \"samples_per_channel\": \{nb},\n  \"container_duration\": \{dur},\n  \"decoded_duration\": \{real_dur},\n  \"read_error\": \{read_error}\n}"
 }

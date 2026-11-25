@@ -21,5 +21,6 @@ fn playback_decode_wavpack(
     format_name: "wv",
     codec_id: "wavpack",
     duration_seconds: Some(count.to_double() / out.sample_rate.to_double()),
+    read_error: "",
   }
 }

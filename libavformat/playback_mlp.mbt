@@ -48,5 +48,6 @@ fn playback_decode_mlp(
     format_name: codec,
     codec_id: codec,
     duration_seconds: Some(first.length().to_double() / rate.to_double()),
+    read_error: "",
   }
 }

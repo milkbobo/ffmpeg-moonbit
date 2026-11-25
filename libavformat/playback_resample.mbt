@@ -51,5 +51,6 @@ pub fn DecodedAudio::resample_to(
     format_name: self.format_name,
     codec_id: self.codec_id,
     duration_seconds: self.duration_seconds,
+    read_error: self.read_error,
   }
 }

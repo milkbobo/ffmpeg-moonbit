@@ -1709,6 +1709,7 @@ pub fn StreamingMedia::decode_audio(
     format_name: self.format_name,
     codec_id: info.codec_id,
     duration_seconds: self.duration,
+    read_error: "",
   }
 }
 
