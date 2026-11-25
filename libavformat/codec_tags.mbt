@@ -72,10 +72,29 @@ pub fn ff_mkv_codec_id(codec_id : String) -> String {
 }
 
 ///|
+/// `mov_codec_id`: a tag the MOV table does not know that starts with `ms`
+/// or `TS` is a WAVEFORMAT tag in its low 16 bits (byte-swapped), e.g.
+/// `ms\x00\x02` is MS ADPCM and `ms\x00\x11` IMA ADPCM. The resolved
+/// codec name, or `""` when the tag is not such a fallback.
+pub fn mov_wav_fallback_codec(codec : String) -> String {
+  if codec.length() == 4 {
+    let c = codec.to_array()
+    if (c[0] == 'm' && c[1] == 's') || (c[0] == 'T' && c[1] == 'S') {
+      return ff_wav_codec_id(c[3].to_int() | (c[2].to_int() << 8), 0)
+    }
+  }
+  ""
+}
+
+///|
 /// MP4/MOV sample-entry fourcc → codec name. `codec_id` is the codec name
 /// resolved from `esds` (the C's `mov_read_esds` sets it for `mp4a`), used to
 /// distinguish MP3-in-MP4 from AAC.
 pub fn mov_codec_name(codec : String, codec_id : String) -> String {
+  let wav = mov_wav_fallback_codec(codec)
+  if wav != "" {
+    return wav
+  }
   match codec {
     "avc1" | "avc2" | "avc3" | "avc4" | "aivx" | "dvav" | "dva1" => "h264"
     "hev1" | "hvc1" | "dvhe" | "dvh1" => "hevc"
@@ -95,6 +114,8 @@ pub fn mov_codec_name(codec : String, codec_id : String) -> String {
     "Opus" => "opus"
     "fLaC" => "flac"
     "alac" => "alac"
+    "samr" => "amrnb"
+    "sawb" => "amrwb"
     "ima4" => "adpcm_ima_qt"
     "twos" => "pcm_s16be"
     "sowt" => "pcm_s16le"

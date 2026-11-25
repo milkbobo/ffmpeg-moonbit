@@ -1488,6 +1488,16 @@ fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
       st.cur.samples_per_frame = 6
       st.cur.bytes_per_frame = 1 * st.cur.channels
     }
+    // AMR: mono, and the sample rate is forced because the 3GP stsd does
+    // not store it (the `AV_CODEC_ID_AMR_NB` / `AMR_WB` cases).
+    "samr" => {
+      st.cur.sample_rate = 8000
+      st.cur.channels = 1
+    }
+    "sawb" => {
+      st.cur.sample_rate = 16000
+      st.cur.channels = 1
+    }
     "ima4" => {
       st.cur.samples_per_frame = 64
       st.cur.bytes_per_frame = 34 * st.cur.channels
@@ -1502,6 +1512,8 @@ fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
   // overrides the entry's declared depth, and yields sc->sample_size (bytes
   // per sample times channel count). For the 16-bit entries an 8/24/32-bit
   // depth promotes the codec (S8/S24/S32), keeping the declared size.
+  // ADPCM through the `ms\x??` WAV-tag fallback counts as well.
+  let wav_fallback = mov_wav_fallback_codec(st.cur.codec)
   let bps = match st.cur.codec {
     "sowt" | "twos" =>
       if st.cur.bits_per_sample == 8 ||
@@ -1516,6 +1528,19 @@ fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
     "in32" => 32
     "fl32" => 32
     "fl64" => 64
+    _ if wav_fallback == "adpcm_ms" ||
+      wav_fallback == "adpcm_ima_wav" ||
+      wav_fallback == "adpcm_ima_oki" ||
+      wav_fallback == "adpcm_yamaha" =>
+      4
+    // `av_get_bits_per_sample`: 4 for every ADPCM variant, so the
+    // sample entry's `samplesize` (often 16) does not reach the decoder
+    // as the IMA WAV code width.
+    "adpcm_ms" |
+    "adpcm_ima_wav" |
+    "adpcm_ima_oki" |
+    "adpcm_yamaha" |
+    "adpcm_ima_qt" => 4
     _ => 0
   }
   if bps != 0 && bps / 8 * st.cur.channels <= 4294967295 {

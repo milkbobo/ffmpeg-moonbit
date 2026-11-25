@@ -124,6 +124,8 @@ pub(all) enum Source {
   Wav(WavDemux, Bytes)
   AsfAudio(AsfDemux)
   RawAc3(RawAudioTrack, Bytes)
+  /// A raw AMR-NB / AMR-WB stream (`av_amr_open`), in one channel.
+  Amr(RawAudioTrack, Bytes)
   ApeAudio(ApeDemux)
   MusepackAudio(Mpc7Demux)
   Musepack8Audio(Mpc8Demux)
@@ -382,6 +384,30 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
       ]
       { format_name: "ape", streams, source: ApeAudio(demux), cursor: [0], }
     }
+    Amr => {
+      let track = match av_amr_open(data) {
+        Ok(track) => track
+        Err(e) => raise DemuxError(e)
+      }
+      let streams = [
+        StreamInfo::{
+          index: 0,
+          media_type: Audio,
+          codec_id: track.codec,
+          sample_rate: track.sample_rate,
+          channels: track.channels,
+          width: 0,
+          height: 0,
+          extradata: None,
+        },
+      ]
+      {
+        format_name: format.name(),
+        streams,
+        source: Amr(track, data),
+        cursor: [0],
+      }
+    }
     Mpc7 => {
       let demux = match av_mpc7_open(data) {
         Ok(demux) => demux
@@ -597,7 +623,7 @@ pub fn MediaFile::next_packet(
         keyframe: p.is_keyframe,
       })
     }
-    RawAc3(track, data) => {
+    RawAc3(track, data) | Amr(track, data) => {
       let index = self.cursor[0]
       guard index < track.frames.length() else { return None }
       self.cursor[0] = index + 1
@@ -674,6 +700,12 @@ pub(all) enum AudioDec {
   Sipr(@libavcodec.SiprDecoder)
   RealAudio144(@libavcodec.Ra144Decoder)
   RealAudio288(@libavcodec.Ra288Decoder)
+  AmrNb(@libavcodec.AmrNbDecoder)
+  AmrWb(@libavcodec.AmrWbDecoder)
+  /// ADPCM blocks (`adpcm_ima_wav`, `adpcm_ms`, `adpcm_yamaha`,
+  /// `adpcm_ima_oki`); `block_align` is the WAV / MOV block size.
+  Adpcm(@libavcodec.AdpcmDecoder)
+  AdpcmImaQt(@libavcodec.AdpcmImaQtDecoder)
   /// Raw PCM: (little_endian, bytes_per_sample).
   Pcm(Bool, Int32)
 }
@@ -785,6 +817,42 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
         channels: 1,
         sample_rate: if info.sample_rate > 0 { info.sample_rate } else { 8000 },
       }
+    // AMR carries no codec parameters either: NB is 8 kHz and WB 16 kHz
+    // mono, from the raw stream or the MP4/3GP sample entry.
+    "amrnb" =>
+      {
+        dec: AmrNb(@libavcodec.amrnb_decoder_new()),
+        channels: 1,
+        sample_rate: if info.sample_rate > 0 { info.sample_rate } else { 8000 },
+      }
+    "amrwb" =>
+      {
+        dec: AmrWb(@libavcodec.amrwb_decoder_new()),
+        channels: 1,
+        sample_rate: if info.sample_rate > 0 { info.sample_rate } else { 16000 },
+      }
+    // ADPCM: the codecs whose packets carry no block header but the
+    // predictor state (Yamaha, OKI) and the QuickTime variant need nothing
+    // from the container.
+    "adpcm_yamaha" | "adpcm_ima_oki" =>
+      match @libavcodec.adpcm_decoder_new(info.codec_id, info.channels) {
+        Ok(dec) => { dec: Adpcm(dec), channels: info.channels, sample_rate: info.sample_rate }
+        Err(e) => raise DecodeError(e)
+      }
+    "adpcm_ima_qt" =>
+      match @libavcodec.adpcm_ima_qt_decoder_new(info.channels) {
+        Ok(dec) => {
+          { dec: AdpcmImaQt(dec), channels: info.channels, sample_rate: info.sample_rate }
+        }
+        Err(e) => raise DecodeError(e)
+      }
+    // Block-header ADPCM reads `block_align` (and IMA WAV the code width)
+    // off the container's stream description: open them through
+    // `MediaFile::audio_decoder`.
+    "adpcm_ms" | "adpcm_ima_wav" =>
+      raise UnsupportedCodec(
+        "\{info.codec_id} outside its WAV / MOV container (block_align missing)",
+      )
     // These read `block_align` (and the bit rate) off the RealMedia track,
     // which a `StreamInfo` does not carry: open them through
     // `MediaFile::audio_decoder`.
@@ -899,6 +967,38 @@ pub fn MediaFile::audio_decoder(
       }
       { dec, channels, sample_rate }
     }
+    // Block-header ADPCM: `block_align` (WAVEFORMAT's, or the MOV sample
+    // entry's `bytes_per_frame`) and IMA WAV's code width come from the
+    // container, as `ff_pcm_read_packet` and `mov_read_header` hand them to
+    // the C decoder.
+    Wav(demux, _) if info.codec_id == "adpcm_ms" ||
+      info.codec_id == "adpcm_ima_wav" =>
+      match
+        @libavcodec.adpcm_decoder_new(
+          info.codec_id,
+          demux.format.channels,
+          block_align=demux.format.block_align,
+          bits_per_coded_sample=demux.format.bits_per_sample,
+        ) {
+        Ok(dec) => {
+          { dec: Adpcm(dec), channels: info.channels, sample_rate: info.sample_rate }
+        }
+        Err(e) => raise DecodeError(e)
+      }
+    Mov(movie, _) if info.codec_id == "adpcm_ms" ||
+      info.codec_id == "adpcm_ima_wav" =>
+      match
+        @libavcodec.adpcm_decoder_new(
+          info.codec_id,
+          info.channels,
+          block_align=movie.tracks[index].bytes_per_frame.reinterpret_as_int(),
+          bits_per_coded_sample=movie.tracks[index].bits_per_sample.reinterpret_as_int(),
+        ) {
+        Ok(dec) => {
+          { dec: Adpcm(dec), channels: info.channels, sample_rate: info.sample_rate }
+        }
+        Err(e) => raise DecodeError(e)
+      }
     _ => AudioDecoder::open(info)
   }
 }
@@ -958,6 +1058,21 @@ fn playback_integer_audio_frame(
 /// derive, which the public frame reports as `None`.
 fn playback_optional_pts(pts : Int64) -> Int64? {
   if pts == av_nopts_value { None } else { Some(pts) }
+}
+
+///|
+/// One ADPCM frame: the decoders' interleaved s16 values as one float row
+/// per channel.
+fn playback_adpcm_frame(
+  samples : Array[Int32],
+  channels : Int32,
+  rate : Int32,
+  pts : Int64,
+) -> AudioFrame {
+  let nb = if channels > 0 { samples.length() / channels } else { 0 }
+  let rows = Array::makei(channels, c =>
+    Array::makei(nb, i => samples[i * channels + c].to_double() / 32768.0))
+  { samples: rows, nb_samples: nb, sample_rate: rate, pts: Some(pts) }
 }
 
 ///|
@@ -1214,6 +1329,48 @@ pub fn AudioDecoder::decode(
           })
         Err(e) => raise DecodeError(e)
       }
+    AmrNb(dec) =>
+      match dec.decode_frame(pkt.data) {
+        Ok(pcm) =>
+          Some({
+            samples: [pcm],
+            nb_samples: pcm.length(),
+            sample_rate: self.sample_rate,
+            pts: playback_optional_pts(pkt.pts),
+          })
+        Err(e) => raise DecodeError(e)
+      }
+    AmrWb(dec) =>
+      match dec.decode_frame(pkt.data) {
+        Ok(pcm) =>
+          Some({
+            samples: [pcm],
+            nb_samples: pcm.length(),
+            sample_rate: self.sample_rate,
+            pts: playback_optional_pts(pkt.pts),
+          })
+        Err(e) => raise DecodeError(e)
+      }
+    Adpcm(dec) =>
+      match dec.decode_block(pkt.data) {
+        Ok(audio) =>
+          Some(
+            playback_adpcm_frame(audio.samples, audio.channels, self.sample_rate, pkt.pts),
+          )
+        Err(e) => raise DecodeError(e)
+      }
+    AdpcmImaQt(dec) => {
+      // one 34-byte block per channel per frame
+      let block = 34 * self.channels
+      if pkt.data.length() < block {
+        raise DecodeError("adpcm: truncated IMA QuickTime block")
+      }
+      match dec.decode_block(pkt.data[:block].to_owned()) {
+        Ok(samples) =>
+          Some(playback_adpcm_frame(samples, self.channels, self.sample_rate, pkt.pts))
+        Err(e) => raise DecodeError(e)
+      }
+    }
     Pcm(little_endian, bytes_per_sample) => {
       let frame_bytes = self.channels * bytes_per_sample
       if pkt.data.length() < frame_bytes {
@@ -1340,6 +1497,46 @@ pub fn AudioDecoder::decode_all(
       }
       frames
     }
+    // A packet holds as many blocks as its block size allows; a block that
+    // fails after the first one ends the packet silently (a truncated tail
+    // past the last complete block, which the C logs and drops as well).
+    Adpcm(dec) => {
+      let frames = []
+      let mut rest = pkt.data
+      let mut first = true
+      while rest.length() > 0 {
+        match dec.decode_block(rest) {
+          Ok(audio) => {
+            frames.push(
+              playback_adpcm_frame(audio.samples, audio.channels, self.sample_rate, pkt.pts),
+            )
+            rest = rest[dec.packet_consumed(rest.length()):].to_owned()
+          }
+          Err(e) => if first { raise DecodeError(e) } else { break }
+        }
+        first = false
+      }
+      frames
+    }
+    AdpcmImaQt(dec) => {
+      let frames = []
+      let block = 34 * self.channels
+      let mut rest = pkt.data
+      let mut first = true
+      while rest.length() >= block {
+        match dec.decode_block(rest[:block].to_owned()) {
+          Ok(samples) => {
+            frames.push(
+              playback_adpcm_frame(samples, self.channels, self.sample_rate, pkt.pts),
+            )
+            rest = rest[block:].to_owned()
+          }
+          Err(e) => if first { raise DecodeError(e) } else { break }
+        }
+        first = false
+      }
+      frames
+    }
     _ =>
       match self.decode(pkt) {
         Some(f) => [f]
@@ -1371,7 +1568,7 @@ pub fn AudioDecoder::flush(self : AudioDecoder) -> AudioFrame? raise MediaError 
 pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
   match self.source {
     StillImage(_) | AsfAudio(_) => None
-    RawAc3(track, _) =>
+    RawAc3(track, _) | Amr(track, _) =>
       Some(track.total_samples.to_double() / track.sample_rate.to_double())
     ApeAudio(demux) =>
       Some(demux.total_samples.to_double() / demux.sample_rate.to_double())

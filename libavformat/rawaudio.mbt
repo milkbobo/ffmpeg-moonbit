@@ -268,21 +268,70 @@ fn amr_header_len(data : Bytes) -> Int32 {
 }
 
 ///|
-/// Parse a raw AMR-NB stream: the optional `#!AMR\n` magic followed by RFC
-/// 4867 frames (a table-of-contents byte plus speech payload).  Each packet
-/// includes its TOC byte, as in the C demuxer; `frame_size` is 160 samples.
+/// The multichannel signatures `#!AMR_MC1.0\x0a` (12 bytes) and
+/// `#!AMR-WB_MC1.0\x0a` (15 bytes) of `amr.c`.
+fn amr_multichannel_header(data : Bytes) -> Bool {
+  let nb =
+    data.length() >= 12 &&
+    data[0] == b'#' &&
+    data[1] == b'!' &&
+    data[2] == b'A' &&
+    data[3] == b'M' &&
+    data[4] == b'R' &&
+    data[5] == b'_' &&
+    data[6] == b'M' &&
+    data[7] == b'C' &&
+    data[8] == b'1' &&
+    data[9] == b'.' &&
+    data[10] == b'0' &&
+    data[11] == b'\n'
+  let wb =
+    data.length() >= 15 &&
+    data[0] == b'#' &&
+    data[1] == b'!' &&
+    data[2] == b'A' &&
+    data[3] == b'M' &&
+    data[4] == b'R' &&
+    data[5] == b'-' &&
+    data[6] == b'W' &&
+    data[7] == b'B' &&
+    data[8] == b'_' &&
+    data[9] == b'M' &&
+    data[10] == b'C' &&
+    data[11] == b'1' &&
+    data[12] == b'.' &&
+    data[13] == b'0' &&
+    data[14] == b'\n'
+  nb || wb
+}
+
+///|
+/// Parse a raw AMR stream: the optional `#!AMR\n` (AMR-NB) or
+/// `#!AMR-WB\n` (AMR-WB) magic followed by RFC 4867 frames (a
+/// table-of-contents byte plus speech payload), cut the way the AMR parser
+/// of the C cuts them (`amrnb_packed_size` / `amrwb_packed_size` by frame
+/// type). Each packet includes its TOC byte. A frame type outside the
+/// codec's table ends the stream. `frame_size` is 160 samples at 8 kHz for
+/// NB and 320 at 16 kHz for WB. The multichannel signatures are rejected,
+/// as the decoders take one channel.
 pub fn av_amr_open(data : Bytes) -> Result[RawAudioTrack, String] {
   let magic_len = amr_header_len(data)
-  if magic_len >= 9 {
-    return Err("unsupported AMR-WB stream")
+  if magic_len == 0 && amr_multichannel_header(data) {
+    return Err("multichannel AMR is not supported")
   }
-  let start = if magic_len == 6 { magic_len } else { 0 }
+  let wideband = magic_len >= 9
+  let start = if magic_len >= 6 { magic_len } else { 0 }
+  let frame_size = if wideband { 320 } else { 160 }
   let frames : Array[RawAudioFrame] = []
   let mut pos = start
   let mut pts : Int64 = 0
   while pos < data.length() {
     let frame = data[pos:].to_owned()
-    let size = @libavcodec.amrnb_frame_size(frame)
+    let size = if wideband {
+      @libavcodec.amrwb_frame_size(frame)
+    } else {
+      @libavcodec.amrnb_frame_size(frame)
+    }
     if size <= 0 || pos + size > data.length() {
       break
     }
@@ -290,21 +339,21 @@ pub fn av_amr_open(data : Bytes) -> Result[RawAudioTrack, String] {
       pos: pos.to_int64(),
       size,
       pts,
-      duration: 160,
+      duration: frame_size,
       is_keyframe: true,
     })
-    pts = pts + 160L
+    pts = pts + frame_size.to_int64()
     pos = pos + size
   }
   if frames.length() == 0 {
     return Err("EINVAL")
   }
   Ok({
-    codec: "amr_nb",
+    codec: if wideband { "amrwb" } else { "amrnb" },
     profile: "",
-    sample_rate: 8000,
+    sample_rate: if wideband { 16000 } else { 8000 },
     channels: 1,
-    frame_size: 160,
+    frame_size,
     frames,
     total_samples: pts,
     bit_rate: 0,

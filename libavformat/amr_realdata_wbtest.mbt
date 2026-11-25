@@ -39,7 +39,7 @@ fn amr_decode(b64 : Bytes) -> Bytes {
 test "raw AMR-NB demuxer: header and frame splitting" {
   let data = amr_decode(amr_concat([amr_4750_b64]))
   let track = av_amr_open(data).unwrap()
-  assert_eq(track.codec, "amr_nb")
+  assert_eq(track.codec, "amrnb")
   assert_eq(track.sample_rate, 8000)
   assert_eq(track.channels, 1)
   assert_eq(track.frame_size, 160)
@@ -56,10 +56,19 @@ test "raw AMR-NB demuxer: header and frame splitting" {
   for frame in wide.frames {
     assert_eq(frame.size, 32)
   }
-  // AMR-WB is a different codec and is rejected.
-  match av_amr_open(b"#!AMR-WB\n\x04\x00") {
-    Ok(_) => fail("AMR-WB must be rejected")
-    Err(_) => ()
+  // AMR-WB is a stream of its own: 9-byte magic, two 18-byte mode-0 frames.
+  let wideband = av_amr_open(amr_decode(b"IyFBTVItV0IKBAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAA")).unwrap()
+  assert_eq(wideband.codec, "amrwb")
+  assert_eq(wideband.sample_rate, 16000)
+  assert_eq(wideband.frame_size, 320)
+  assert_eq(wideband.frames.length(), 2)
+  assert_eq(wideband.frames[0].size, 18)
+  assert_eq(wideband.frames[0].pts, 0L)
+  assert_eq(wideband.frames[1].pts, 320L)
+  // the multichannel signatures are rejected
+  match av_amr_open(b"#!AMR_MC1.0\n\x01\x00\x00\x00\x04\x00") {
+    Ok(_) => fail("multichannel AMR must be rejected")
+    Err(e) => assert_true(e.contains("multichannel"))
   }
 }
 
