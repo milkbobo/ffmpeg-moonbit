@@ -87,9 +87,8 @@ pub fn mov_wav_fallback_codec(codec : String) -> String {
 }
 
 ///|
-/// MP4/MOV sample-entry fourcc → codec name. `codec_id` is the codec name
-/// resolved from `esds` (the C's `mov_read_esds` sets it for `mp4a`), used to
-/// distinguish MP3-in-MP4 from AAC.
+/// MP4/MOV sample-entry fourcc → codec name. `codec_id` carries the codec
+/// resolved from `esds` for `mp4a` or the byte order from `enda` for float PCM.
 pub fn mov_codec_name(codec : String, codec_id : String) -> String {
   let wav = mov_wav_fallback_codec(codec)
   if wav != "" {
@@ -116,14 +115,19 @@ pub fn mov_codec_name(codec : String, codec_id : String) -> String {
     "alac" => "alac"
     "samr" => "amrnb"
     "sawb" => "amrwb"
+    "agsm" => "gsm"
     "ima4" => "adpcm_ima_qt"
+    "MAC3" => "mace3"
+    "MAC6" => "mace6"
+    "alaw" => "pcm_alaw"
+    "ulaw" => "pcm_mulaw"
     "twos" => "pcm_s16be"
     "sowt" => "pcm_s16le"
     "raw " => "pcm_u8"
     "in24" => "pcm_s24le"
     "in32" => "pcm_s32le"
-    "fl32" => "pcm_f32le"
-    "fl64" => "pcm_f64le"
+    "fl32" => if codec_id == "pcm_f32le" { "pcm_f32le" } else { "pcm_f32be" }
+    "fl64" => if codec_id == "pcm_f64le" { "pcm_f64le" } else { "pcm_f64be" }
     "tx3g" => "mov_text"
     "wvtt" => "webvtt"
     _ => codec

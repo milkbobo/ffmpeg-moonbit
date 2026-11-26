@@ -1,17 +1,17 @@
 ///|
 /// AIFF/AIFC demuxer, ported from FFmpeg 9.0.2 `libavformat/aiffdec.c` and
 /// `aiff.c`: `FORM`/`COMM`/`SSND`, 80-bit extended sample rates, and
-/// block-aligned PCM and Apple IMA4 packets.
+/// block-aligned PCM, Apple IMA4, and MACE packets.
 ///
 /// Scope: AIFF PCM (8/16/24/32-bit big-endian), AIFC `NONE`/`twos` (big-endian
-/// PCM), `sowt` (little-endian PCM), and `ima4` (`adpcm_ima_qt`).
+/// PCM), `sowt` (little-endian PCM), big-endian float PCM, G.711, Apple IMA4,
+/// MACE, GSM, G.722, SDX2, CBD2, and Westwood IMA (ADP4).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
 ///|
 pub struct AiffFormat {
-  /// FFmpeg codec name: `pcm_s8`, `pcm_s16be`, `pcm_s24be`, `pcm_s32be`
-  /// (or `*le` for `sowt`), or `adpcm_ima_qt` for Apple IMA4.
+  /// FFmpeg codec name, such as `pcm_s16be`, `pcm_mulaw` or `adpcm_ima_qt`.
   codec : String
   channels : Int32
   sample_rate : Int32
@@ -36,7 +36,8 @@ pub struct AiffDemux {
   data_offset : Int64
   /// Number of bytes covered by the packets.
   data_size : Int64
-  /// IMA4 uses the COMM block count times 64, even if the SSND size differs.
+  /// Block codecs use the COMM block count times the samples per block.
+  /// Westwood IMA derives the sample count from complete SSND blocks.
   /// PCM uses the COMM sample count bounded by the available complete frames.
   sample_count : Int64
   packets : Array[AiffPacket]
@@ -177,15 +178,37 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
       return Err("aiff: AIFC COMM chunk too short")
     }
     match aiff_tag_string(data, comm_off + 18) {
-      ("ima4" | "sowt" | "NONE" | "twos") as tag => tag
+      "ima4"
+      | "MAC3"
+      | "MAC6"
+      | "sowt"
+      | "NONE"
+      | "twos"
+      | "alaw"
+      | "ulaw"
+      | "fl32"
+      | "fl64"
+      | "GSM "
+      | "G722"
+      | "SDX2"
+      | "CBD2"
+      | "ADP4" as tag => tag
       tag => return Err("aiff: unsupported AIFC compression \{tag}")
     }
   } else {
     "NONE"
   }
   let ima4 = compression == "ima4"
-  if !ima4 && bits != 8 && bits != 16 && bits != 24 && bits != 32 {
-    return Err("aiff: unsupported sample size \{bits}")
+  let mace = compression == "MAC3" || compression == "MAC6"
+  if mace && channels > 2 {
+    return Err("aiff: invalid MACE channel count")
+  }
+  if (compression == "SDX2" || compression == "CBD2" || compression == "ADP4") &&
+    channels > 2 {
+    return Err("aiff: expected one or two channels for \{compression}")
+  }
+  if (compression == "GSM " || compression == "G722") && channels != 1 {
+    return Err("aiff: expected mono \{compression.trim()}")
   }
   let (ssnd_off, ssnd_size) = match aiff_chunk(chunks, "SSND") {
     Some(v) => v
@@ -200,37 +223,46 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
     return Err("aiff: invalid SSND offset")
   }
   let data_offset = ssnd_off + 8 + offset.to_int()
-  let block_align = if ima4 { 34 * channels } else { channels * (bits / 8) }
-  let block_duration = if ima4 { 64 } else { 1 }
+  let (codec, bytes_per_channel, block_duration) = match compression {
+    "ima4" => ("adpcm_ima_qt", 34, 64)
+    "MAC3" => ("mace3", 2, 6)
+    "MAC6" => ("mace6", 1, 6)
+    "GSM " => ("gsm", 33, 160)
+    "G722" => ("adpcm_g722", 1, 2)
+    "SDX2" => ("sdx2_dpcm", 1, 1)
+    "CBD2" => ("cbd2_dpcm", 1, 1)
+    "ADP4" => ("adpcm_ima_ws", 1, 2)
+    "alaw" | "ulaw" => (mov_codec_name(compression, ""), 1, 1)
+    "fl32" => ("pcm_f32be", 4, 1)
+    "fl64" => ("pcm_f64be", 8, 1)
+    _ => {
+      let suffix = if compression == "sowt" { "le" } else { "be" }
+      match bits {
+        8 => ("pcm_s8", 1, 1)
+        16 | 24 | 32 => ("pcm_s\{bits}\{suffix}", bits / 8, 1)
+        _ => return Err("aiff: unsupported sample size \{bits}")
+      }
+    }
+  }
+  let block_align = channels * bytes_per_channel
   let available_bytes = ssnd_payload_size - offset.to_int()
   let available_blocks = (available_bytes / block_align).to_int64()
-  let sample_count = if ima4 {
+  let sample_count = if compression == "ADP4" {
+    // The FFmpeg muxer can write a COMM count based on its encoder alignment,
+    // rather than the channel-byte groups used by the decoder.
+    available_blocks * block_duration.to_int64()
+  } else if block_duration > 1 {
     num_frames * block_duration.to_int64()
   } else {
     num_frames.min(available_blocks)
   }
   // Unlike FFmpeg's zero-duration tail packets, expose only complete blocks.
-  let packet_blocks = if ima4 { available_blocks } else { sample_count }
-  let data_size = packet_blocks * block_align.to_int64()
-  let codec = if ima4 {
-    "adpcm_ima_qt"
-  } else if bits == 8 {
-    "pcm_s8"
-  } else if compression == "sowt" {
-    if bits == 16 {
-      "pcm_s16le"
-    } else if bits == 24 {
-      "pcm_s24le"
-    } else {
-      "pcm_s32le"
-    }
-  } else if bits == 16 {
-    "pcm_s16be"
-  } else if bits == 24 {
-    "pcm_s24be"
+  let packet_blocks = if block_duration > 1 {
+    available_blocks
   } else {
-    "pcm_s32be"
+    sample_count
   }
+  let data_size = packet_blocks * block_align.to_int64()
   let packet_size = if ima4 {
     block_align
   } else {

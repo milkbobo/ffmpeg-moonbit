@@ -2,7 +2,7 @@
 /// Sun/NeXT AU (`\.snd`) demuxer, ported from FFmpeg 9.0.2 `libavformat/au.c`.
 ///
 /// Supports µ-law/A-law, signed PCM 8/16/24/32-bit big-endian, IEEE float
-/// 32/64-bit and G.726LE (2/3/4/5-bit codewords, tags 23/25/26/'7262').
+/// 32/64-bit, G.722 and G.726LE (2/3/4/5-bit codewords, tags 23/25/26/'7262').
 /// The header's annotation field is skipped.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
@@ -61,6 +61,8 @@ fn au_codec_for_tag(tag : UInt32) -> (String, Int32) {
     ("pcm_f64be", 64)
   } else if tag == 23U {
     ("adpcm_g726le", 4)
+  } else if tag == 24U {
+    ("adpcm_g722", 4)
   } else if tag == 25U {
     ("adpcm_g726le", 3)
   } else if tag == 26U {
@@ -99,11 +101,12 @@ pub fn av_au_open(data : Bytes) -> Result[AuDemux, String] {
   if codec == "" || bits == 0 {
     return Err("au: unsupported encoding \{tag}")
   }
-  let bytes_per_sample = bits / 8
   let block_align = if codec == "adpcm_g726le" {
     bits
+  } else if codec == "adpcm_g722" {
+    channels
   } else {
-    channels * bytes_per_sample
+    channels * (bits / 8)
   }
   if block_align <= 0 {
     return Err("au: invalid block alignment")
@@ -115,11 +118,7 @@ pub fn av_au_open(data : Bytes) -> Result[AuDemux, String] {
   } else {
     data_size.to_int64()
   }
-  let sample_count = if codec == "adpcm_g726le" {
-    size * 8L / (bits.to_int64() * channels.to_int64())
-  } else {
-    size / bytes_per_sample.to_int64() / channels.to_int64()
-  }
+  let sample_count = size * 8L / (bits.to_int64() * channels.to_int64())
   let max_size = 4096 / block_align * block_align
   let packet_size = if max_size > 0 { max_size } else { block_align }
   let packets : Array[AuPacket] = []
@@ -132,11 +131,7 @@ pub fn av_au_open(data : Bytes) -> Result[AuDemux, String] {
     } else {
       packet_size
     }
-    let duration = if codec == "adpcm_g726le" {
-      psize * 8 / bits / channels
-    } else {
-      psize / bytes_per_sample / channels
-    }
+    let duration = psize * 8 / bits / channels
     packets.push({ pos, size: psize, pts, duration, })
     pos = pos + psize.to_int64()
     pts = pts + duration.to_int64()

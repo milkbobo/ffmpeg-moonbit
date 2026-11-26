@@ -195,6 +195,92 @@ test "caf: ffmpeg ALAC/LPCM fixtures decode like the references" {
 }
 
 ///|
+test "CAF playback matches FFmpeg PCM references" {
+  for (name, b64, codec, channels, bits, rate, count, want_md5) in caf_fixtures {
+    let data = @libavutil.av_base64_decode(b64, 400000).unwrap()
+    let decoded = decode_audio_file(data)
+    assert_eq(decoded.format_name, "caf", msg=name)
+    assert_eq(decoded.codec_id, codec, msg=name)
+    assert_eq(decoded.channels, channels, msg=name)
+    assert_eq(decoded.sample_rate, rate, msg=name)
+    assert_eq(
+      decoded.duration_seconds,
+      Some(count.to_double() / rate.to_double()),
+      msg=name,
+    )
+    let width = if bits == 16 { 2 } else { 4 }
+    let scale = if width == 2 { 32768.0 } else { 2147483648.0 }
+    let pcm : Array[Byte] = []
+    for row in decoded.samples {
+      assert_eq(row.length(), count, msg=name)
+    }
+    for n in 0..<count {
+      for row in decoded.samples {
+        let v = (row[n] * scale).to_int()
+        for byte in 0..<width {
+          pcm.push((v >> (byte * 8)).to_byte())
+        }
+      }
+    }
+    assert_eq(caf_md5(Bytes::from_array(pcm)), want_md5, msg=name)
+  }
+}
+
+///|
+test "CAF ALAC playback honors variable frame counts and priming" {
+  let (_, b64, _, channels, _, rate, count, _) = caf_fixtures[0]
+  let original = @libavutil.av_base64_decode(b64, 400000).unwrap()
+  let demux = av_caf_open(original).unwrap()
+  let desc : Array[Byte] = []
+  caf_mux_double(desc, rate.to_double())
+  caf_mux_tag(desc, "alac")
+  for field in [0U, 0U, 0U, channels.reinterpret_as_uint(), 0U] {
+    caf_mux_u32be(desc, field)
+  }
+  let priming = 3
+  let remainder = 5
+  let valid = count - priming - remainder
+  let table : Array[Byte] = []
+  caf_mux_u64be(table, demux.packets.length().to_uint64())
+  caf_mux_u64be(table, valid.to_uint64())
+  caf_mux_u32be(table, priming.reinterpret_as_uint())
+  caf_mux_u32be(table, remainder.reinterpret_as_uint())
+  let payload : Array[Byte] = [0, 0, 0, 0]
+  for packet in demux.packets {
+    caf_mux_descr_len(table, packet.size)
+    caf_mux_descr_len(table, packet.duration)
+    let start = packet.pos.to_int()
+    for byte in original[start:start + packet.size] {
+      payload.push(byte)
+    }
+  }
+  let file = b"caff\x00\x01\x00\x00".to_array()
+  caf_mux_chunk(file, "desc", desc)
+  caf_mux_chunk(file, "kuki", demux.extradata[12:].to_owned().to_array())
+  caf_mux_chunk(file, "pakt", table)
+  caf_mux_chunk(file, "data", payload)
+  let bytes = Bytes::from_array(file)
+  let media = MediaFile::open(bytes)
+  assert_eq(media.next_packet().unwrap().pts, -priming.to_int64())
+  assert_eq(
+    media.next_packet().unwrap().pts,
+    (demux.packets[0].duration - priming).to_int64(),
+  )
+  let decoded = decode_audio_file(bytes)
+  let reference = decode_audio_file(original)
+  assert_eq(
+    decoded.duration_seconds,
+    Some(valid.to_double() / rate.to_double()),
+  )
+  for ch in 0..<channels {
+    assert_eq(
+      decoded.samples[ch],
+      reference.samples[ch][priming:count - remainder].to_owned(),
+    )
+  }
+}
+
+///|
 test "caf: rejects malformed files" {
   assert_true(av_caf_open(b"caff") is Err(_))
   assert_true(av_caf_open(b"RIFF\x00\x00\x00\x00WAVE") is Err(_))

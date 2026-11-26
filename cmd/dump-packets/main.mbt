@@ -11,7 +11,7 @@
 fn main raise {
   let args = @env.args()
   if args.length() < 2 {
-    println("usage: dump-packets <media-file> [--stream N] [--limit N]")
+    println("usage: dump-packets <media-file> [--stream N] [--limit N] [--g726-bits 2..5]")
     println(
       "  prints one JSON packet record per line, ffprobe -show_packets style",
     )
@@ -20,21 +20,25 @@ fn main raise {
   let mut path = ""
   let mut stream = -1
   let mut limit = -1
+  let mut g726_bits = 4
   let mut i = 1
   while i < args.length() {
     let a = args[i]
-    if (a == "--stream" || a == "--limit") && i + 1 < args.length() {
+    if a == "--stream" || a == "--limit" || a == "--g726-bits" {
+      if i + 1 >= args.length() {
+        fail("dump-packets: \{a} requires a value")
+      }
       let v = @string.parse_int(args[i + 1]) catch {
         _ => fail("dump-packets: \{a} expects a number, got \{args[i + 1]}")
       }
       if a == "--stream" {
         stream = v
+      } else if a == "--g726-bits" {
+        g726_bits = v
       } else {
         limit = v
       }
       i = i + 2
-    } else if a == "--stream" || a == "--limit" {
-      fail("dump-packets: \{a} requires a value")
     } else if path == "" {
       path = a
       i = i + 1
@@ -46,7 +50,7 @@ fn main raise {
     fail("dump-packets: no input file")
   }
   let data = @fs.read_file_to_bytes(path)
-  let mf = @avf.MediaFile::open(data) catch {
+  let mf = @avf.MediaFile::open(data, filename=path, g726_bits~) catch {
     e => fail("dump-packets: \{path}: \{e.message()}")
   }
   // One JSON record per line; the trailing newline the renderer appends

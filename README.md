@@ -16,10 +16,32 @@
 | AMR-NB / AMR-WB | 已实现：裸 `.amr`/`.awb` 流与 3GP/MP4 中的 `samr`/`sawb` 轨（单声道；多声道与 SID 舒适噪声帧不支持）。对 FATE 的 17 个样本，AMR-NB 与 FFmpeg 自带浮点解码器的偏差不超过 2 LSB，AMR-WB 不超过该解码器自身的偏差 | 未实现 |
 | MP2、MP3、FLAC、ALAC、Opus | 已实现 | 已实现 |
 | APE（Monkey's Audio） | 支持读取 v3.80–3.99 文件及解码 | 未实现 |
+| TTA（True Audio） | 支持未加密的原生 `.tta`，8/16/24 位无损解码 | 未实现 |
 | WMA v1/v2 | 支持从 ASF/WMA 文件解码 | 已实现编码器，输出 WMA 压缩包 |
 | WMA Pro | 支持从 ASF/WMA 文件和 WAV（标签 0x0162）解码；对 FATE 的立体声与 5.1 样本，输出与参考 PCM 的偏差不超过 1 LSB。XMA 与 WMA Lossless 未实现 | 未实现 |
 | DTS | 支持裸 `.dts` 及 Matroska 中的 DTS 核心解码；不支持 DTS-HD 扩展 | 未实现 |
-| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`）和 Apple IMA4 的解封装与播放 | 支持写入 PCM AIFF |
+| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`）、32/64 位浮点 PCM、G.711、Apple IMA4、MACE、GSM、G.722、SDX2、CBD2 和 ADP4 | 支持写入 PCM AIFF |
+| CAF | 支持 ALAC、AAC-LC、FLAC、单声道或立体声 Opus、MPEG 音频 Layer I/II/III、AC-3、AMR-NB，以及 PCM、G.711、MACE、Apple IMA4、GSM 和 WAV49 | 支持封装 ALAC 和整数 PCM |
+| MOV 音轨 | 支持 G.711 A-law/μ-law 及 `fl32`/`fl64` 大端和小端浮点 PCM | 见各编码器的封装支持 |
+| FLV 音轨 | 支持传统 FLV 的 AAC-LC、MP3、8/16 位 PCM、G.711 和 Flash ADPCM，以及单音轨 Enhanced FLV 的 AAC-LC、MP3、Opus、FLAC、AC-3 和 E-AC-3 | 未实现 |
+| Flash ADPCM | 支持 FLV 和 WAV（标签 `0x5346`）中的 2/3/4/5 位单声道及立体声音轨 | 未实现 |
+| Duck IMA ADPCM | 支持 WAV 中的立体声 DK3（`0x0062`）及单声道和立体声 DK4（`0x0061`） | 未实现 |
+| Sun AU / SND | 支持整数和浮点 PCM、A-law、µ-law 及单声道 G.726LE 解码 | 支持写入整数 PCM、A-law 和 µ-law |
+| Sony Wave64 | 复用 WAV 解码路径，支持整数和浮点 PCM | 支持写入 8/16/24/32 位整数 PCM 和 32 位浮点 PCM |
+| G.722 | 支持裸 `.g722`、`.722`，以及 Sun AU、WAV 和 AIFF-C 中的单声道 64 kb/s 码流 | 未实现 |
+| G.726 | 支持裸 `.g726`、`.g726le`，以及 WAV 中的 G.726 和 Sun AU 中的 G.726LE，覆盖单声道 2/3/4/5 位码字 | 未实现 |
+| CRI ADX | 支持未加密的类型 3 裸 `.adx`，1–6 声道 | 未实现 |
+| Amiga 8SVX / 16SV | 支持单声道和立体声平面 PCM，以及 8SVX 的 Fibonacci 和指数差分 | 未实现 |
+| Creative VOC | 支持 PCM、G.711 和 Sound Blaster Pro ADPCM，含续块和扩展声道参数 | 未实现 |
+| Westwood AUD | 支持 `.aud` 中的单声道或立体声 Westwood IMA，以及单声道 SND1 | 未实现 |
+| QOA（Quite OK Audio） | 支持带总样本数、采样率和声道数固定的原生 `.qoa` | 未实现 |
+| Blu-ray LPCM | 支持 HDMV MPEG-TS/M2TS 中的 16/24 位 LPCM，48/96/192 kHz，最多 8 声道 | 未实现 |
+| SMPTE 302M | 支持 MPEG-TS 的 `BSSD` PCM 音轨，48 kHz、16/20/24 位、2/4/6/8 声道 | 未实现 |
+| GSM 06.10 | 支持裸 `.gsm`、MOV、AIFF-C 和 CAF 的单声道音轨，以及 WAV 和 CAF 中的 WAV49（65 字节块） | 未实现 |
+| MACE 3:1 / 6:1 | 支持 MOV、AIFF-C 和 CAF 中的单声道及立体声 `MAC3`、`MAC6` 音轨 | 未实现 |
+| SBC / mSBC | 支持裸 `.sbc`、`.msbc`，含 4/8 子带、单声道、双声道和联合立体声 | 未实现 |
+| DSD | 支持 `.dsf` 与未压缩 `.dff`（DSDIFF），输出采样率为 DSD 位率的 1/8 | 未实现 |
+| DST | 支持 `.dff` 中采用共享分段的算术编码 DST，复用 DSD 滤波器输出 PCM | 未实现 |
 | MLP、TrueHD | 支持裸码流解码和 Matroska 播放 | 未实现 |
 | Vorbis | 支持 Ogg 解码 | 支持实验性编码和 Ogg 封装，首包与 FFmpeg 原生编码器逐字节一致 |
 | AC-3、E-AC-3 | 支持裸码流和 Matroska 解码，E-AC-3 支持部分模式 | AC-3 定点编码已实现，48 kHz 双声道参考流与 FFmpeg `ac3_fixed` 位级一致 |
@@ -34,6 +56,15 @@
 **容器和工具**　支持读取 MP4/MOV、MKV/WebM、MPEG-TS、WAV、Ogg、ASF/WMA、RealMedia（RM/RA）等容器，可写入 MP4、WebM、MPEG-TS、WAV 等格式，也支持 HLS/DASH 分片读取、图像缩放和音频重采样。
 
 **其他边界**　H.264 SP/SI、硬件加速、完整滤镜图和 DRM 密钥协商均未覆盖。各格式的具体限制和验证样例见[移植记录](doc/PORTING_HISTORY.md)。
+
+### 裸 G.722 和 G.726 解码
+
+命令行按文件名识别裸码流。G.722 固定为 16 kHz 单声道。G.726 和 G.726LE 固定为 8 kHz 单声道，默认每码字 4 位。用 `--g726-bits N` 可指定 2、3、4 或 5 位码字。
+
+```sh
+moon run --target wasm cmd/decode-audio -- call.g722 --output call.wav
+moon run --target wasm cmd/decode-audio -- call.g726le --g726-bits 3 --output call.wav
+```
 
 ### 图像编码
 

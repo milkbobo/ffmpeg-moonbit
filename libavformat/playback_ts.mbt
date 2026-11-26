@@ -145,6 +145,16 @@ fn playback_ts_build(data : Bytes) -> MediaFile raise MediaError {
         None => raise UnsupportedCodec("mpegts: audio stream without packets")
       }
     }
+    if t.codec == "pcm_bluray" || t.codec == "s302m" {
+      for p in demux.packets {
+        if p.stream_index == i &&
+          ts_pcm_packet_params(t.codec, p.payload) is Some((sample_rate, channels, _)) {
+          rate = sample_rate
+          ch = channels
+          break
+        }
+      }
+    }
     streams.push({
       index: i,
       media_type: mt,
@@ -161,6 +171,23 @@ fn playback_ts_build(data : Bytes) -> MediaFile raise MediaError {
     streams,
     source: Ts(demux, Array::make(demux.streams.length(), ts_nopts)),
     cursor: [0],
+  }
+}
+
+///|
+/// Parameters carried in a PCM PES rather than in its PMT descriptor.
+fn ts_pcm_packet_params(codec : String, payload : Bytes) -> (Int32, Int32, Int32)? {
+  match codec {
+    "pcm_bluray" => match @libavcodec.parse_bluray_lpcm_header(payload) {
+      Ok(h) if h.payload_bytes == payload.length() - 4 =>
+        Some((h.sample_rate, h.channels, h.samples))
+      _ => None
+    }
+    "s302m" => match @libavcodec.parse_s302m_header(payload) {
+      Ok(h) => Some((h.sample_rate, h.channels, h.samples))
+      Err(_) => None
+    }
+    _ => None
   }
 }
 
@@ -259,7 +286,7 @@ fn MediaFile::playback_ts_next(
       stream_index: p.stream_index,
       data: p.payload,
       pts,
-      keyframe: false,
+      keyframe: info.codec_id == "pcm_bluray" || info.codec_id == "s302m",
     })
   }
   let last = self.cursor[2]

@@ -2,21 +2,20 @@
 /// CAF (Core Audio Format) demuxer, ported from FFmpeg 9.0.2
 /// `libavformat/cafdec.c`: `desc`/`kuki`/`pakt`/`data` chunks.
 ///
-/// Scope: ALAC (old `frma`+`alac` cookie or the new 24-byte cookie) and
-/// constant-packet LPCM. The pakt chunk provides ALAC packet sizes (MPEG-4
-/// descriptor lengths) and the valid-frame count. AAC/Opus/FLAC cookies are
-/// not handled yet.
+/// Supports ALAC, AAC-LC, FLAC, Opus, MPEG audio, AC-3, AMR-NB, LPCM,
+/// G.711, MACE, GSM, and Apple IMA4. The pakt chunk conveys padding
+/// and variable packet sizes and durations (MPEG-4 descriptor lengths).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
 ///|
 pub struct CafFormat {
-  /// `alac` or a `pcm_*` name.
+  /// Audio codec name, such as `alac`, `mace3`, or `pcm_s16le`.
   codec : String
   channels : Int32
   sample_rate : Int32
   bits : Int32
-  /// Constant packet size (`desc` bytesPerPacket), 0 for variable ALAC.
+  /// Constant packet size (`desc` bytesPerPacket), 0 when variable.
   block_align : Int32
   frames_per_packet : Int32
 }
@@ -32,11 +31,13 @@ pub struct CafPacket {
 ///|
 pub struct CafDemux {
   format : CafFormat
-  /// ALAC magic cookie in the 36-byte atom form; empty for LPCM.
+  /// Decoder configuration extracted or constructed from the CAF chunks.
   extradata : Bytes
   data_offset : Int64
   data_size : Int64
   sample_count : Int64
+  /// Leading decoder samples outside the presentation.
+  priming : Int32
   packets : Array[CafPacket]
 }
 
@@ -75,29 +76,30 @@ fn caf_i64be(data : Bytes, off : Int32) -> Int64 {
 
 ///|
 /// `ff_mp4_read_descr_len` over a byte buffer: `(length, next position)`.
-fn caf_descr_len(data : Bytes, off : Int32) -> (Int32, Int32) {
+fn caf_descr_len(data : Bytes, off : Int32, end : Int32) -> (Int32, Int32)? {
   let mut len = 0
   let mut pos = off
   for _ in 0..<4 {
-    if pos >= data.length() {
-      break
-    }
+    guard pos < end else { return None }
     let c = data[pos].to_int()
     pos = pos + 1
     len = (len << 7) | (c & 0x7F)
     if (c & 0x80) == 0 {
-      break
+      return Some((len, pos))
     }
   }
-  (len, pos)
+  None
 }
 
 ///|
 /// Fabricate the 36-byte ALAC atom from either cookie style.
 fn caf_alac_cookie(kuki : Bytes) -> Result[Bytes, String] {
-  if kuki.length() >= 48 &&
+  if kuki.length() >= 12 &&
     caf_tag(kuki, 4) == "frma" &&
     caf_tag(kuki, 8) == "alac" {
+    if kuki.length() < 48 {
+      return Err("caf: truncated ALAC magic cookie")
+    }
     return Ok(kuki[12:48].to_owned())
   }
   if kuki.length() >= 24 {
@@ -139,11 +141,15 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
   let mut data_off = -1
   let mut data_size = 0L
   let mut pos = 8
-  while pos + 12 <= data.length() {
+  while pos <= data.length() - 12 {
     let id = caf_tag(data, pos)
     let size = caf_i64be(data, pos + 4)
     let payload = pos + 12
     let avail = data.length() - payload
+    if (size < 0L && (id != "data" || size != -1L)) ||
+      (size > avail.to_int64() && id != "data") {
+      return Err("caf: invalid chunk size")
+    }
     let actual = if size < 0 {
       avail.to_int64()
     } else if size > avail.to_int64() {
@@ -168,7 +174,7 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
     if size < 0 {
       break
     }
-    pos = payload + size.to_int()
+    pos = end
   }
   let (desc_off, desc_size) = match desc {
     Some(v) => v
@@ -198,131 +204,289 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
   } else {
     data_size
   }
-  if tag == "alac" {
-    if kuki.length() == 0 {
-      return Err("caf: missing ALAC magic cookie")
+  let direct_codec = match tag {
+    ".mp1" => "mp1"
+    ".mp2" => "mp2"
+    ".mp3" | "ms\u0000U" => "mp3"
+    "ac-3" => "ac3"
+    "samr" => "amrnb"
+    _ => ""
+  }
+  if tag == "alac" ||
+    tag == "aac " ||
+    tag == "aacl" ||
+    tag == "flac" ||
+    tag == "opus" ||
+    direct_codec != "" {
+    let (codec, cookie, rate, channel_count, bit_width) = match tag {
+      "alac" => {
+        if kuki.is_empty() {
+          return Err("caf: missing ALAC magic cookie")
+        }
+        let cookie = match caf_alac_cookie(kuki) {
+          Ok(v) => v
+          Err(e) => return Err(e)
+        }
+        (
+          "alac",
+          cookie,
+          caf_u32be(cookie, 32).reinterpret_as_int(),
+          cookie[21].to_int(),
+          cookie[17].to_int(),
+        )
+      }
+      "aac " | "aacl" => {
+        guard caf_aac_cookie(kuki) is Some(asc) else {
+          return Err("caf: invalid AAC magic cookie")
+        }
+        let parsed = match @libavcodec.aac_parse_audio_specific_config(asc) {
+          Ok(v) => v
+          Err(e) => return Err("caf: \{e}")
+        }
+        ("aac", asc, parsed.config.sample_rate, parsed.config.channels, bits)
+      }
+      "flac" => {
+        guard caf_flac_cookie(kuki) is Some(info) else {
+          return Err("caf: invalid FLAC magic cookie")
+        }
+        let packed = caf_u32be(info, 10)
+        (
+          "flac",
+          info,
+          (packed >> 12).reinterpret_as_int(),
+          ((packed >> 9) & 7).reinterpret_as_int() + 1,
+          ((packed >> 4) & 31).reinterpret_as_int() + 1,
+        )
+      }
+      "opus" => {
+        if channels > 2 || decl_rate <= 0 {
+          return Err("caf: invalid mono/stereo Opus stream parameters")
+        }
+        ("opus", b"", 48000, channels, bits)
+      }
+      "samr" => {
+        if channels != 1 || decl_rate != 8000 {
+          return Err("caf: expected mono AMR-NB at 8000 Hz")
+        }
+        ("amrnb", b"", 8000, 1, bits)
+      }
+      _ => (direct_codec, b"", decl_rate, channels, bits)
     }
-    let cookie = match caf_alac_cookie(kuki) {
-      Ok(v) => v
-      Err(e) => return Err(e)
+    let label = if codec == "alac" { "ALAC" } else { codec }
+    if rate <= 0 || channel_count <= 0 {
+      return Err("caf: invalid \{label} stream parameters")
     }
-    let alac_rate = caf_u32be(cookie, 32).reinterpret_as_int()
-    let alac_channels = cookie[21].to_int()
-    let alac_bits = cookie[17].to_int()
-    let max_samples = caf_u32be(cookie, 12).reinterpret_as_int()
-    let frames = if frames_per_packet > 0 {
-      frames_per_packet
+    let fixed = codec != "alac" && bytes_per_packet > 0 && frames_per_packet > 0
+    let (declared, valid_frames, priming, remainder, table_start, table_end) = match
+      pakt {
+      Some((off, size)) => {
+        if size < 24 {
+          return Err("caf: pakt chunk too short")
+        }
+        (
+          caf_i64be(data, off),
+          caf_i64be(data, off + 8),
+          caf_u32be(data, off + 16).reinterpret_as_int(),
+          caf_u32be(data, off + 20).reinterpret_as_int(),
+          off + 24,
+          off + size,
+        )
+      }
+      None if fixed => (0L, 0L, 0, 0, 0, 0)
+      None => return Err("caf: \{label} requires a pakt chunk")
+    }
+    let num_packets = if fixed && declared == 0L {
+      actual_data_size / bytes_per_packet.to_int64()
     } else {
-      max_samples
+      declared
     }
-    if frames <= 0 {
-      return Err("caf: invalid ALAC frame size")
-    }
-    let (pakt_off, pakt_size) = match pakt {
-      Some(v) => v
-      None => return Err("caf: ALAC requires a pakt chunk")
-    }
-    if pakt_size < 24 {
-      return Err("caf: pakt chunk too short")
-    }
-    let num_packets = caf_u64be(data, pakt_off).reinterpret_as_int64()
-    let valid_frames = caf_u64be(data, pakt_off + 8).reinterpret_as_int64()
-    if num_packets < 0 || num_packets > 16777216L || valid_frames < 0L {
+    if num_packets < 0L ||
+      num_packets > 16777216L ||
+      valid_frames < 0L ||
+      priming < 0 ||
+      (codec != "alac" && remainder < 0) {
       return Err("caf: invalid pakt fields")
     }
     let packets : Array[CafPacket] = []
-    let mut ppos = pakt_off + 24
+    let mut ppos = table_start
     let mut offset = data_off.to_int64()
-    let mut pts = 0L
+    let mut pts = -priming.to_int64()
     for i = 0; i < num_packets.to_int(); i = i + 1 {
       let size = if bytes_per_packet > 0 {
         bytes_per_packet
       } else {
-        let (len, next) = caf_descr_len(data, ppos)
+        guard caf_descr_len(data, ppos, table_end) is Some((len, next)) else {
+          return Err("caf: truncated \{label} packet table")
+        }
+        ppos = next
+        len
+      }
+      let frames = if frames_per_packet > 0 {
+        frames_per_packet
+      } else {
+        guard caf_descr_len(data, ppos, table_end) is Some((len, next)) else {
+          return Err("caf: truncated \{label} packet table")
+        }
         ppos = next
         len
       }
       let duration = if i + 1 == num_packets.to_int() {
-        let left = valid_frames - pts
-        if left > 0L {
-          left
+        if codec != "alac" {
+          frames - remainder
+        } else if valid_frames > pts && valid_frames < pts + frames.to_int64() {
+          (valid_frames - pts).to_int()
         } else {
-          frames.to_int64()
+          frames
         }
       } else {
-        frames.to_int64()
+        frames
       }
       if size <= 0 ||
+        duration <= 0 ||
         offset + size.to_int64() > data_off.to_int64() + actual_data_size {
-        return Err("caf: invalid ALAC packet size")
+        return Err("caf: invalid \{label} packet size")
       }
-      packets.push({ pos: offset, size, pts, duration: duration.to_int(), })
+      packets.push({ pos: offset, size, pts, duration, })
       offset = offset + size.to_int64()
-      pts = pts + duration
+      pts = pts + duration.to_int64()
+    }
+    let sample_count = if codec == "alac" { valid_frames } else { pts }
+    if sample_count < 0L {
+      return Err("caf: packet table has negative duration")
     }
     return Ok({
       format: {
-        codec: "alac",
-        channels: alac_channels,
-        sample_rate: alac_rate,
-        bits: alac_bits,
+        codec,
+        channels: channel_count,
+        sample_rate: rate,
+        bits: bit_width,
         block_align: bytes_per_packet,
-        frames_per_packet: frames,
+        frames_per_packet,
       },
-      extradata: cookie,
+      extradata: if codec == "opus" {
+        caf_opus_head(channel_count, decl_rate, priming)
+      } else {
+        cookie
+      },
       data_offset: data_off.to_int64(),
       data_size: actual_data_size,
-      sample_count: valid_frames,
+      sample_count,
+      priming,
       packets,
     })
   }
-  if tag == "lpcm" {
-    let is_float = (flags & 1) != 0
-    let little_endian = (flags & 2) != 0
-    let bit_width = if bits > 0 { bits } else { 16 }
-    let codec = if is_float {
-      if bit_width != 32 {
-        return Err("caf: unsupported float LPCM width")
-      } else if little_endian {
-        "pcm_f32le"
-      } else {
-        "pcm_f32be"
+  let compressed = match tag {
+    "MAC3" => Some(("mace3", 2 * channels, 6, 2))
+    "MAC6" => Some(("mace6", channels, 6, 2))
+    "ima4" => Some(("adpcm_ima_qt", 34 * channels, 64, 8))
+    "agsm" => Some(("gsm", 33, 160, 1))
+    "ms\u00001" => Some(("gsm_ms", 65, 320, 1))
+    _ => None
+  }
+  let g711 = tag == "alaw" || tag == "ulaw"
+  if tag == "lpcm" || compressed is Some(_) || g711 {
+    if decl_rate <= 0 {
+      let format = match tag {
+        "MAC3" | "MAC6" => "MACE"
+        "alaw" | "ulaw" => "G.711"
+        "lpcm" => "LPCM"
+        _ => tag
       }
-    } else if bit_width == 8 {
-      "pcm_s8"
-    } else if bit_width == 16 || bit_width == 24 || bit_width == 32 {
-      let suffix = if little_endian { "le" } else { "be" }
-      "pcm_s\{bit_width}\{suffix}"
+      return Err("caf: invalid \{format} sample rate")
+    }
+    let (codec, bit_width, frames_per, block_align) = if compressed
+      is Some((codec, size, frames, max_channels)) {
+      if channels > max_channels ||
+        bytes_per_packet != size ||
+        frames_per_packet != frames {
+        let format = if tag == "MAC3" || tag == "MAC6" { "MACE" } else { codec }
+        return Err("caf: invalid \{format} packet layout")
+      }
+      (codec, bits, frames, size)
+    } else if g711 {
+      if frames_per_packet <= 0 ||
+        bytes_per_packet.to_int64() !=
+        channels.to_int64() * frames_per_packet.to_int64() {
+        return Err("caf: invalid G.711 packet layout")
+      }
+      (mov_codec_name(tag, ""), 8, frames_per_packet, bytes_per_packet)
     } else {
-      return Err("caf: unsupported LPCM width")
+      let is_float = (flags & 1) != 0
+      let little_endian = (flags & 2) != 0
+      let bit_width = if bits > 0 { bits } else { 16 }
+      let codec = if is_float {
+        if bit_width != 32 && bit_width != 64 {
+          return Err("caf: unsupported float LPCM width")
+        }
+        let suffix = if little_endian { "le" } else { "be" }
+        "pcm_f\{bit_width}\{suffix}"
+      } else if bit_width == 8 {
+        "pcm_s8"
+      } else if bit_width == 16 || bit_width == 24 || bit_width == 32 {
+        let suffix = if little_endian { "le" } else { "be" }
+        "pcm_s\{bit_width}\{suffix}"
+      } else {
+        return Err("caf: unsupported LPCM width")
+      }
+      let frames_per = if frames_per_packet > 0 { frames_per_packet } else { 1 }
+      let packed_size = channels.to_int64() *
+        (bit_width / 8).to_int64() *
+        frames_per.to_int64()
+      if packed_size > 0x7fffffffL ||
+        (bytes_per_packet > 0 && bytes_per_packet.to_int64() != packed_size) {
+        return Err("caf: invalid LPCM packet size")
+      }
+      (codec, bit_width, frames_per, packed_size.to_int())
     }
-    let block_align = if bytes_per_packet > 0 {
-      bytes_per_packet
-    } else if is_float {
-      channels * 4
+    let available_blocks = actual_data_size / block_align.to_int64()
+    let (blocks, priming, remainder) = if compressed is Some(_) &&
+      pakt is Some((table, size)) {
+      if size < 24 {
+        return Err("caf: packet table too short")
+      }
+      let declared = caf_i64be(data, table)
+      let priming = caf_u32be(data, table + 16).reinterpret_as_int()
+      let remainder = caf_u32be(data, table + 20).reinterpret_as_int()
+      let blocks = if declared == 0L { available_blocks } else { declared }
+      if blocks < 0L ||
+        blocks > available_blocks ||
+        priming < 0 ||
+        remainder < 0 ||
+        remainder >= frames_per ||
+        priming.to_int64() + remainder.to_int64() >
+        blocks * frames_per.to_int64() {
+        return Err("caf: invalid fixed packet table")
+      }
+      (blocks, priming, remainder)
     } else {
-      channels * (bit_width / 8)
+      (available_blocks, 0, 0)
     }
-    if block_align <= 0 {
-      return Err("caf: invalid LPCM packet size")
+    let total_frames = blocks * frames_per.to_int64() -
+      priming.to_int64() -
+      remainder.to_int64()
+    let packet_data_size = if compressed is Some(_) || g711 {
+      blocks * block_align.to_int64()
+    } else {
+      actual_data_size
     }
-    let frames_per = if frames_per_packet > 0 { frames_per_packet } else { 1 }
-    let total_frames = actual_data_size /
-      block_align.to_int64() *
-      frames_per.to_int64()
     let max_size = 4096 / block_align * block_align
-    let packet_size = if max_size > 0 { max_size } else { block_align }
+    let packet_size = if compressed is Some(_) || max_size == 0 {
+      block_align
+    } else {
+      max_size
+    }
     let packets : Array[CafPacket] = []
     let mut offset = data_off.to_int64()
-    let mut left = actual_data_size
-    let mut pts = 0L
+    let mut left = packet_data_size
+    let mut pts = -priming.to_int64()
     while left > 0L {
       let size = if left < packet_size.to_int64() {
         left.to_int()
       } else {
         packet_size
       }
-      let duration = size / block_align * frames_per
+      let duration = size / block_align * frames_per -
+        (if left == size.to_int64() { remainder } else { 0 })
       packets.push({ pos: offset, size, pts, duration, })
       offset = offset + size.to_int64()
       pts = pts + duration.to_int64()
@@ -339,8 +503,9 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
       },
       extradata: b"",
       data_offset: data_off.to_int64(),
-      data_size: actual_data_size,
+      data_size: packet_data_size,
       sample_count: total_frames,
+      priming,
       packets,
     })
   }

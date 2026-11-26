@@ -185,8 +185,9 @@ pub struct AdpcmDecoder {
 }
 
 ///|
-/// `codec` is the WAV codec name: `adpcm_ima_wav`, `adpcm_ms`,
-/// `adpcm_yamaha` or `adpcm_ima_oki`. `block_align` caps each block's byte
+/// `codec` is the codec name: `adpcm_ima_wav`, `adpcm_ms`, `adpcm_yamaha`,
+/// `adpcm_ima_oki`, `adpcm_ima_ws`, `adpcm_ima_dk3` or `adpcm_ima_dk4`.
+/// `block_align` caps each block's byte
 /// count when nonzero; `bits_per_coded_sample` is the IMA WAV code width
 /// (`WAVEFORMAT`'s bits per sample, normally 4).
 pub fn adpcm_decoder_new(
@@ -198,14 +199,26 @@ pub fn adpcm_decoder_new(
   if codec != "adpcm_ima_wav" &&
     codec != "adpcm_ms" &&
     codec != "adpcm_yamaha" &&
-    codec != "adpcm_ima_oki" {
+    codec != "adpcm_ima_oki" &&
+    codec != "adpcm_ima_ws" &&
+    codec != "adpcm_ima_dk3" &&
+    codec != "adpcm_ima_dk4" {
     return Err("adpcm: unsupported codec \{codec}")
   }
   if channels < 1 || channels > 8 {
     return Err("adpcm: invalid channel count")
   }
-  if (codec == "adpcm_yamaha" || codec == "adpcm_ima_oki") && channels > 2 {
+  if (
+      codec == "adpcm_yamaha" ||
+      codec == "adpcm_ima_oki" ||
+      codec == "adpcm_ima_ws" ||
+      codec == "adpcm_ima_dk4"
+    ) &&
+    channels > 2 {
     return Err("adpcm: only 1-2 channels are supported")
+  }
+  if codec == "adpcm_ima_dk3" && channels != 2 {
+    return Err("adpcm: Duck IMA DK3 requires stereo")
   }
   if codec == "adpcm_ms" && channels > 6 {
     return Err("adpcm: only 1-6 channels are supported")
@@ -221,7 +234,7 @@ pub fn adpcm_decoder_new(
   for _ in 0..<channels {
     status.push(adpcm_channel_new())
   }
-  Ok({ codec, channels, block_align, bits_per_coded_sample, status })
+  Ok({ codec, channels, block_align, bits_per_coded_sample, status, })
 }
 
 ///|
@@ -247,6 +260,17 @@ fn adpcm_ima_expand(cs : AdpcmChannel, nibble : Int32) -> Int32 {
   cs.predictor = adpcm_clip_int16(predictor)
   cs.step_index = step_index
   cs.predictor
+}
+
+///|
+/// Multiply-and-shift IMA expansion used by Duck and Westwood ADPCM.
+fn adpcm_ima_expand_multiply(state : AdpcmChannel, code : Int32) -> Int32 {
+  let step = adpcm_step_table[state.step_index]
+  let diff = ((2 * (code & 7) + 1) * step) >> 3
+  let delta = if (code & 8) == 0 { diff } else { -diff }
+  state.predictor = adpcm_clip_int16(state.predictor + delta)
+  state.step_index = adpcm_clip(state.step_index + adpcm_index_table[code], 0, 88)
+  state.predictor
 }
 
 ///|
@@ -393,11 +417,13 @@ fn AdpcmDecoder::decode_ima_wav(
       for c = 0; c < ch; c = c + 1 {
         let cs = self.status[c]
         for j = 0; j < bsize; j = j + 1 {
-          temp[j] =
-            block[
-            4 * ch + bsize * n * ch + (j % 4) + (j / 4) * (ch * 4) + c * 4]
+          temp[j] = block[4 * ch +
+            bsize * n * ch +
+            j % 4 +
+            j / 4 * (ch * 4) +
+            c * 4]
         }
-        let gb : AdpcmLeBits = { data: Bytes::from_array(temp), bit_pos: 0 }
+        let gb : AdpcmLeBits = { data: Bytes::from_array(temp), bit_pos: 0, }
         for m = 0; m < bsamples; m = m + 1 {
           planes[c][1 + n * bsamples + m] = adpcm_ima_expand_wide(cs, gb, bps)
         }
@@ -424,7 +450,7 @@ fn AdpcmDecoder::decode_ima_wav(
       samples.push(planes[c][i])
     }
   }
-  Ok({ channels: ch, samples })
+  Ok({ channels: ch, samples, })
 }
 
 ///|
@@ -579,7 +605,7 @@ fn AdpcmDecoder::decode_ms_planar(
       samples.push(planes[c][i])
     }
   }
-  Ok({ channels: ch, samples })
+  Ok({ channels: ch, samples, })
 }
 
 ///|
@@ -610,22 +636,20 @@ fn AdpcmDecoder::decode_oki(
       samples[n * 2 + 1] = adpcm_oki_expand(cs1, byte & 0x0F)
     }
   }
-  Ok({ channels: ch, samples })
+  Ok({ channels: ch, samples, })
 }
 
 ///|
-/// Decode one block. MS and IMA WAV use at most the first `block_align`
+/// Decode one block. MS, IMA WAV and Duck IMA use up to `block_align`
 /// bytes of `block` (their packets are block-aligned); OKI and Yamaha decode
 /// the whole packet in one frame, ignoring `block_align`, as the C does.
 pub fn AdpcmDecoder::decode_block(
   self : AdpcmDecoder,
   block : Bytes,
 ) -> Result[AdpcmAudio, String] {
-  let block_coded = self.codec == "adpcm_ms" || self.codec == "adpcm_ima_wav"
-  let usable = if block_coded &&
-    self.block_align > 0 &&
-    block.length() > self.block_align {
-    block[:self.block_align].to_owned()
+  let size = self.packet_consumed(block.length())
+  let usable = if size < block.length() {
+    block[:size].to_owned()
   } else {
     block
   }
@@ -633,20 +657,27 @@ pub fn AdpcmDecoder::decode_block(
     "adpcm_ima_wav" => self.decode_ima_wav(usable)
     "adpcm_ms" => self.decode_ms(usable)
     "adpcm_ima_oki" => self.decode_oki(usable)
+    "adpcm_ima_ws" => self.decode_ima_ws(usable)
+    "adpcm_ima_dk3" | "adpcm_ima_dk4" => self.decode_duck(usable)
     _ => self.decode_yamaha(usable)
   }
 }
 
 ///|
 /// Bytes one `decode_block` call consumes from the front of a packet of
-/// `packet_size` bytes: MS and IMA WAV take one `block_align` block (the
+/// `packet_size` bytes: MS, IMA WAV and Duck IMA take one `block_align` block (the
 /// whole packet when shorter or when the block size is unknown); OKI and
 /// Yamaha decode the whole packet in one frame.
 pub fn AdpcmDecoder::packet_consumed(
   self : AdpcmDecoder,
-  packet_size : Int,
-) -> Int {
-  if (self.codec == "adpcm_ms" || self.codec == "adpcm_ima_wav") &&
+  packet_size : Int32,
+) -> Int32 {
+  if (
+      self.codec == "adpcm_ms" ||
+      self.codec == "adpcm_ima_wav" ||
+      self.codec == "adpcm_ima_dk3" ||
+      self.codec == "adpcm_ima_dk4"
+    ) &&
     self.block_align > 0 &&
     packet_size > self.block_align {
     self.block_align

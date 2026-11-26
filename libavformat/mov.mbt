@@ -954,6 +954,23 @@ fn parse_box(
     parse_sbgp(st, r)
   } else if kind == "esds" {
     parse_esds(st, r)
+  } else if kind == "wave" &&
+    st.in_trak &&
+    (st.cur.codec == "fl32" || st.cur.codec == "fl64") {
+    parse_default(st, r, size)
+  } else if kind == "enda" &&
+    size >= 2L &&
+    st.in_trak &&
+    (st.cur.codec == "fl32" || st.cur.codec == "fl64") {
+    // QuickTime floats default to big-endian. The low byte of enda selects
+    // little-endian when set to 1.
+    if (r.avio_rb16() & 0xFF) == 1 {
+      st.cur.codec_id = if st.cur.codec == "fl32" {
+        "pcm_f32le"
+      } else {
+        "pcm_f64le"
+      }
+    }
   } else if kind == "dOps" {
     parse_dops(st, r, size)
   } else if kind == "dfLa" {
@@ -1477,6 +1494,10 @@ fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
       st.cur.samples_per_frame = r.avio_rb32()
     }
   }
+  if st.cur.codec == "fl32" || st.cur.codec == "fl64" {
+    // Each sample description starts with the default byte order.
+    st.cur.codec_id = ""
+  }
   // Codec-specific packing defaults for the QuickTime codecs whose frame
   // packing is not in the sample entry (mov_parse_stsd_audio's switch).
   match st.cur.codec {
@@ -1523,7 +1544,7 @@ fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
       } else {
         16
       }
-    "raw " => 8
+    "raw " | "alaw" | "ulaw" => 8
     "in24" => 24
     "in32" => 32
     "fl32" => 32

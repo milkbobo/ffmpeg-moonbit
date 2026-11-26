@@ -45,6 +45,7 @@ pub let probe_buf_max : Int32 = 1048576
 /// `AVInputFormat::name` so a probe result can be compared with `ffprobe`.
 pub(all) enum FormatId {
   Aac
+  Adx
   Ac3
   Aiff
   Amr
@@ -54,9 +55,16 @@ pub(all) enum FormatId {
   Au
   Caf
   Dash
+  Dff
+  Dsf
   Dts
   Eac3
   Flac
+  Flv
+  G722
+  G726
+  G726Le
+  Gsm
   Hls
   Matroska
   Mjpeg
@@ -67,8 +75,14 @@ pub(all) enum FormatId {
   MpegTs
   Ogg
   RealMedia
+  Qoa
+  Sbc
+  Svx
+  Tta
+  Voc
   W64
   Wav
+  Wsaud
 }
 
 ///|
@@ -77,6 +91,7 @@ pub(all) enum FormatId {
 pub fn FormatId::name(self : FormatId) -> String {
   match self {
     Aac => "aac"
+    Adx => "adx"
     Ac3 => "ac3"
     Aiff => "aiff"
     Amr => "amr"
@@ -86,9 +101,16 @@ pub fn FormatId::name(self : FormatId) -> String {
     Au => "au"
     Caf => "caf"
     Dash => "dash"
+    Dff => "iff"
+    Dsf => "dsf"
     Dts => "dts"
     Eac3 => "eac3"
     Flac => "flac"
+    Flv => "flv"
+    G722 => "g722"
+    G726 => "g726"
+    G726Le => "g726le"
+    Gsm => "gsm"
     Hls => "hls"
     Matroska => "matroska,webm"
     // `mjpeg_probe` is shared by the `mjpeg` and `jpeg_pipe` demuxers; on a
@@ -102,8 +124,14 @@ pub fn FormatId::name(self : FormatId) -> String {
     Mpc8 => "mpc8"
     Ogg => "ogg"
     RealMedia => "rm"
+    Qoa => "qoa"
+    Sbc => "sbc"
+    Svx => "iff"
+    Tta => "tta"
+    Voc => "voc"
     W64 => "w64"
     Wav => "wav"
+    Wsaud => "wsaud"
   }
 }
 
@@ -112,6 +140,7 @@ pub fn FormatId::name(self : FormatId) -> String {
 pub fn FormatId::extensions(self : FormatId) -> String {
   match self {
     Aac => "aac,adts"
+    Adx => "adx"
     Ac3 => "ac3"
     Aiff => "aiff,aif,aifc,afc,afd"
     Amr => "amr"
@@ -121,9 +150,16 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Au => "au,snd"
     Caf => "caf"
     Dash => "mpd"
+    Dff => "dff"
+    Dsf => "dsf"
     Dts => "dts"
     Eac3 => "eac3,ec3"
     Flac => "flac"
+    Flv => "flv"
+    G722 => "g722,722"
+    G726 => "g726"
+    G726Le => "g726le"
+    Gsm => "gsm"
     Hls => "m3u8,m3u"
     Matroska => "mkv,mka,mks,webm"
     Mjpeg => "mjpg,mjpeg,mpo"
@@ -134,8 +170,14 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Mpc8 => "mpc"
     Ogg => "ogg,oga,ogv,ogx,opus,spx"
     RealMedia => ""
+    Qoa => "qoa"
+    Sbc => "sbc,msbc"
+    Svx => "8svx,16sv,svx,iff"
+    Tta => "tta"
+    Voc => "voc"
     W64 => "w64"
     Wav => "wav,rf64,bw64"
+    Wsaud => "aud"
   }
 }
 
@@ -144,6 +186,7 @@ pub fn FormatId::extensions(self : FormatId) -> String {
 pub fn FormatId::mime_type(self : FormatId) -> String {
   match self {
     Aac => "audio/aac"
+    Adx => ""
     Ac3 => "audio/ac3"
     Aiff => "audio/aiff"
     Amr => "audio/amr"
@@ -154,8 +197,12 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Caf => "audio/x-caf"
     Dash => "application/dash+xml"
     Dts => ""
+    Dff | Dsf => ""
     Eac3 => "audio/eac3"
     Flac => "audio/flac"
+    Flv => "video/x-flv"
+    G722 | G726 | G726Le => ""
+    Gsm => ""
     Hls => "application/vnd.apple.mpegurl"
     Matroska => "video/x-matroska"
     Mjpeg => "video/x-mjpeg"
@@ -166,8 +213,14 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Mpc8 => ""
     Ogg => "application/ogg"
     RealMedia => ""
+    Qoa => ""
+    Sbc => ""
+    Svx => ""
+    Tta => ""
+    Voc => "audio/x-voc"
     W64 => "audio/x-w64"
     Wav => "audio/x-wav"
+    Wsaud => ""
   }
 }
 
@@ -416,6 +469,7 @@ priv struct ProbeEntry {
 fn probe_registry() -> Array[ProbeEntry] {
   [
     { id: Aac, probe: probe_adts_aac, },
+    { id: Adx, probe: probe_adx, },
     { id: Ac3, probe: probe_ac3, },
     { id: Aiff, probe: probe_aiff, },
     { id: Amr, probe: probe_amr, },
@@ -425,9 +479,16 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: Au, probe: probe_au, },
     { id: Caf, probe: probe_caf, },
     { id: Dash, probe: probe_dash, },
+    { id: Dff, probe: probe_dff, },
+    { id: Dsf, probe: probe_dsf, },
     { id: Dts, probe: probe_dts, },
     { id: Eac3, probe: probe_eac3, },
     { id: Flac, probe: probe_flac, },
+    { id: Flv, probe: probe_flv, },
+    { id: G722, probe: pd => probe_telephony(pd, G722), },
+    { id: G726, probe: pd => probe_telephony(pd, G726), },
+    { id: G726Le, probe: pd => probe_telephony(pd, G726Le), },
+    { id: Gsm, probe: probe_gsm, },
     { id: Hls, probe: probe_hls, },
     { id: Matroska, probe: probe_matroska, },
     { id: Mjpeg, probe: probe_mjpeg, },
@@ -438,7 +499,13 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: Mpc8, probe: probe_mpc8, },
     { id: Ogg, probe: probe_ogg, },
     { id: RealMedia, probe: probe_realmedia, },
+    { id: Qoa, probe: probe_qoa, },
+    { id: Sbc, probe: probe_sbc, },
+    { id: Svx, probe: probe_svx, },
+    { id: Tta, probe: probe_tta, },
+    { id: Voc, probe: probe_voc, },
     { id: W64, probe: probe_w64, },
+    { id: Wsaud, probe: probe_wsaud, },
     { id: Wav, probe: probe_wav, },
   ]
 }

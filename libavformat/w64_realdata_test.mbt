@@ -156,6 +156,28 @@ test "w64: writer round-trips PCM and float" {
 }
 
 ///|
+test "Wave64 playback agrees with PCM from FFmpeg WAV fixtures" {
+  for
+    (wave64, riff, codec, channels) in [
+      (w64_16_b64, w64_16_wav_b64, "pcm_s16le", 1),
+      (w64_24_b64, w64_24_wav_b64, "pcm_s24le", 2),
+    ] {
+    let decoded = @libavformat.decode_audio_file(
+      @libavutil.av_base64_decode(wave64, 100000).unwrap(),
+    )
+    let reference = @libavformat.decode_audio_file(
+      @libavutil.av_base64_decode(riff, 100000).unwrap(),
+    )
+    assert_eq(decoded.format_name, "w64")
+    assert_eq(decoded.codec_id, codec)
+    assert_eq(decoded.channels, channels)
+    assert_eq(decoded.sample_rate, 8000)
+    assert_eq(decoded.duration_seconds, Some(0.05))
+    assert_eq(decoded.samples, reference.samples)
+  }
+}
+
+///|
 test "w64: summarylist tags round-trip" {
   let mux = @libavformat.w64_muxer_new(8000, 1, 16).unwrap()
   let samples : Array[Int32] = [1, -2, 3, -4]

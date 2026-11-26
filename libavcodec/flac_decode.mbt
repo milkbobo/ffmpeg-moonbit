@@ -619,6 +619,31 @@ fn flac_frame_header(
 }
 
 ///|
+/// Read the number of samples per channel from an encoded FLAC frame header.
+///
+/// ```mbt check
+/// test {
+///   assert_true(
+///     @libavcodec.flac_frame_samples(b"") is Err("flac: truncated frame header"),
+///   )
+/// }
+/// ```
+pub fn flac_frame_samples(data : Bytes) -> Result[Int32, String] {
+  if data.length() < 6 {
+    return Err("flac: truncated frame header")
+  }
+  let reader = BitReader::new(data)
+  let frame = match flac_frame_header(reader, 0) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  if reader.bits_left() < 0 {
+    return Err("flac: truncated frame header")
+  }
+  Ok(frame.blocksize)
+}
+
+///|
 /// Parse the STREAMINFO payload and return `(sample_rate, channels, bps,
 /// total_samples, max_blocksize)`.
 fn flac_streaminfo(

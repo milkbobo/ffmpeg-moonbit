@@ -168,7 +168,10 @@ playerMode.onclick = () => {
       updateControls();
       return;
     }
-    return runTool("audio", { format: "wav", rate: 0 }, "解码音频", (selection, { blob }) => {
+    const audioStream = file.probe?.streams.find((stream) => stream.codec_type === "audio");
+    const codec = audioStream?.codec_name;
+    const rate = codec === "dst" || codec?.startsWith("dsd_") ? 48000 : 0;
+    return runTool("audio", { format: "wav", rate }, "解码音频", (selection, { blob }) => {
       selection.audioPreviewUrl = URL.createObjectURL(blob);
       audio.src = selection.audioPreviewUrl;
     }, "点击播放控件试听。");
@@ -309,7 +312,7 @@ async function openFile(file, id) {
   $("fileName").textContent = file.name;
   $("fileInfo").textContent = `${sizeLabel(file.size)} · 本地文件`;
   $("audioTitle").textContent = "转音频 / 提取音轨";
-  const audioOnly = file.type.startsWith("audio/") || /\.(mp3|wav|flac|aac|m4a|oga|opus|aiff?|aifc|ape|wma|dts|ac3|eac3|ec3|mlp|thd|truehd|wv|shn|mpc|ra|rm|amr|awb)$/i.test(file.name);
+  const audioOnly = file.type.startsWith("audio/") || /\.(mp3|wav|w64|flac|aac|m4a|oga|opus|aiff?|aifc|au|snd|caf|ape|tta|wma|dts|ac3|eac3|ec3|mlp|thd|truehd|wv|shn|mpc|ra|rm|amr|awb|gsm|sbc|msbc|dsf|dff|adx|8svx|16sv|svx|voc|aud|qoa)$/i.test(file.name);
   usePlayer(selection, audioOnly ? audio : video);
   $("probeMessage").textContent = engineState === "error" ? $("engineStatus").title : "正在探测媒体流…";
   updateControls();

@@ -80,10 +80,10 @@ pub fn av_w64_open(data : Bytes) -> Result[WavDemux, String] {
   let mut data_size = 0L
   let mut sample_count = 0L
   let mut pos = 40
-  while pos + 24 <= data.length() {
+  while pos <= data.length() - 24 {
     let guid = data[pos:pos + 16].to_owned()
     let size = wav_u64(data, pos + 16)
-    if size <= 24L || pos.to_int64() + size > data.length().to_int64() {
+    if size <= 24L || size > (data.length() - pos).to_int64() {
       break
     }
     let body = pos + 24
@@ -94,7 +94,7 @@ pub fn av_w64_open(data : Bytes) -> Result[WavDemux, String] {
         Err(e) => return Err(e)
       }
     } else if guid == w64_guid_fact {
-      if body + 8 <= data.length() {
+      if payload >= 8 {
         sample_count = wav_u64(data, body)
       }
     } else if guid == w64_guid_data {
@@ -102,7 +102,7 @@ pub fn av_w64_open(data : Bytes) -> Result[WavDemux, String] {
       data_size = payload.to_int64()
     }
     let span = w64_align8(size)
-    if span <= 0L {
+    if span > (data.length() - pos).to_int64() {
       break
     }
     pos = pos + span.to_int()

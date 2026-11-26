@@ -52,12 +52,12 @@ let tta_filter_configs : FixedArray[Int32] = [10, 9, 10, 12]
 ///|
 /// Little-endian `GetBitContext`.
 priv struct TtaBits {
-  data : Bytes
+  data : BytesView
   mut pos : Int32
 }
 
 ///|
-fn TtaBits::new(data : Bytes) -> TtaBits {
+fn TtaBits::new(data : BytesView) -> TtaBits {
   { data, pos: 0, }
 }
 
@@ -85,11 +85,6 @@ fn TtaBits::read(self : TtaBits, n : Int32) -> UInt32 {
     v = v | (self.bit() << i)
   }
   v
-}
-
-///|
-fn TtaBits::align(self : TtaBits) -> Unit {
-  self.pos = (self.pos + 7) >> 3 << 3
 }
 
 ///|
@@ -188,13 +183,23 @@ fn tta_pred(x : Int32, k : Int32) -> Int32 {
 }
 
 ///|
-/// Decoded TTA audio. `samples` is interleaved and already in the form of
-/// FFmpeg's `U8`/`S16`/`S32` output (24-bit is left-justified).
+/// Interleaved signed samples. 24-bit output is left-justified in 32 bits.
+/// `pcm_bytes` adds the unsigned offset for 8-bit output.
 pub struct TtaAudio {
   sample_rate : Int32
   channels : Int32
   bits : Int32
   samples : Array[Int32]
+}
+
+///|
+/// The stream parameters from the native TTA1 header.
+pub struct TtaHeader {
+  sample_rate : Int32
+  channels : Int32
+  bits : Int32
+  frame_samples : Int32
+  total_samples : Int64
 }
 
 ///|
@@ -213,21 +218,17 @@ fn tta_u32le(data : Bytes, off : Int32) -> UInt32 {
 ///|
 /// Decode one frame into interleaved `out` starting at `base` (sample index).
 fn tta_decode_frame_into(
-  data : Bytes,
-  start : Int32,
-  size : Int32,
+  frame : BytesView,
   channels : Int32,
   bps : Int32,
   frame_length : Int32,
-  last_frame_length : Int32,
   out : Array[Int32],
   base : Int32,
-) -> Result[Int32, String] {
-  let frame = data[start:start + size].to_owned()
-  if frame.length() < 4 {
-    return Err("tta: frame too short")
+) -> Result[Unit, String] {
+  if frame.length() < 5 || frame.length() > 0x0fffffff {
+    return Err("tta: invalid frame size")
   }
-  let gb = TtaBits::new(frame)
+  let gb = TtaBits::new(frame[:frame.length() - 4])
   let bps_bytes = (bps + 7) / 8
   let filter_shift = tta_filter_configs[bps_bytes - 1]
   let filters : Array[TtaFilter] = []
@@ -237,12 +238,15 @@ fn tta_decode_frame_into(
     rices.push(tta_rice_new())
   }
   let predictors : Array[Int32] = Array::make(channels, 0)
-  let mut decoded_groups = 0
   for g = 0; g < frame_length; g = g + 1 {
     for c = 0; c < channels; c = c + 1 {
       let rice = rices[c]
       let filter = filters[c]
-      let unary = tta_unary(gb, gb.bits_left())
+      let left = gb.bits_left()
+      let unary = tta_unary(gb, left)
+      if unary == left {
+        return Err("tta: truncated rice code")
+      }
       let depth = if unary == 0 { 0 } else { 1 }
       let unary_val = if unary == 0 { 0 } else { unary - 1 }
       let k = if depth == 0 { rice.k0 } else { rice.k1 }
@@ -295,21 +299,22 @@ fn tta_decode_frame_into(
         r = r - 1
       }
     }
-    decoded_groups = g + 1
-    if decoded_groups == last_frame_length && gb.bits_left() / 8 == 4 {
-      break
-    }
   }
-  gb.align()
-  if gb.bits_left() < 32 {
-    return Err("tta: missing frame crc")
+  if gb.bits_left() >= 8 {
+    return Err("tta: excess data after frame samples")
   }
-  Ok(decoded_groups)
+  Ok(())
 }
 
 ///|
-/// Decode a complete native TTA file into interleaved PCM.
-pub fn ff_tta_decode(data : Bytes) -> Result[TtaAudio, String] {
+/// Read the first 22 bytes of an unencrypted native TTA stream.
+///
+/// ```mbt check
+/// test {
+///   assert_true(@libavcodec.tta_parse_header(b"TTA1") is Err(_))
+/// }
+/// ```
+pub fn tta_parse_header(data : Bytes) -> Result[TtaHeader, String] {
   if data.length() < 22 ||
     data[0] != b'T' ||
     data[1] != b'T' ||
@@ -327,23 +332,91 @@ pub fn ff_tta_decode(data : Bytes) -> Result[TtaAudio, String] {
   let channels = tta_u16le(data, 6)
   let bps = tta_u16le(data, 8)
   let sample_rate = tta_u32le(data, 10).reinterpret_as_int()
-  let data_length = tta_u32le(data, 14).reinterpret_as_int()
+  let total_samples = tta_u32le(data, 14).to_int64()
   if channels < 1 || channels > 16 {
     return Err("tta: invalid channel count")
   }
   if sample_rate <= 0 || sample_rate > 0x7FFFFF {
     return Err("tta: invalid sample rate")
   }
-  if data_length <= 0 {
+  if total_samples == 0L {
     return Err("tta: invalid sample count")
   }
-  if (bps != 8 && bps != 16 && bps != 24) || data_length > 100000000 {
+  if bps != 8 && bps != 16 && bps != 24 {
     return Err("tta: unsupported sample format")
   }
-  let frame_length = 256 * sample_rate / 245
-  if frame_length <= 0 {
-    return Err("tta: invalid frame length")
+  Ok({
+    sample_rate,
+    channels,
+    bits: bps,
+    frame_samples: 256 * sample_rate / 245,
+    total_samples,
+  })
+}
+
+///|
+fn tta_scale_samples(out : Array[Int32], bits : Int32) -> Unit {
+  if bits == 24 {
+    for i in 0..<out.length() {
+      out[i] = (out[i].reinterpret_as_uint() << 8).reinterpret_as_int()
+    }
   }
+}
+
+///|
+/// Decode one TTA packet, including its four trailing CRC bytes. `pts` is
+/// the native frame's starting sample index, which determines its length.
+pub fn TtaHeader::decode_frame(
+  self : TtaHeader,
+  frame : Bytes,
+  pts : Int64,
+) -> Result[TtaAudio, String] {
+  if pts < 0L ||
+    pts >= self.total_samples ||
+    pts % self.frame_samples.to_int64() != 0L {
+    return Err("tta: invalid frame timestamp")
+  }
+  let count = (self.total_samples - pts)
+    .min(self.frame_samples.to_int64())
+    .to_int()
+  // Every coded sample uses at least one bit, before the trailing CRC.
+  if count.to_int64() * self.channels.to_int64() >
+    (frame.length() - 4).to_int64() * 8L {
+    return Err("tta: frame too short")
+  }
+  let samples = Array::make(count * self.channels, 0)
+  match
+    tta_decode_frame_into(frame[:], self.channels, self.bits, count, samples, 0) {
+    Ok(_) => ()
+    Err(e) => return Err(e)
+  }
+  tta_scale_samples(samples, self.bits)
+  Ok({
+    sample_rate: self.sample_rate,
+    channels: self.channels,
+    bits: self.bits,
+    samples,
+  })
+}
+
+///|
+/// Decode a complete native TTA file into interleaved PCM.
+pub fn ff_tta_decode(data : Bytes) -> Result[TtaAudio, String] {
+  let header = match tta_parse_header(data) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let {
+    channels,
+    bits,
+    sample_rate,
+    frame_samples: frame_length,
+    total_samples,
+  } = header
+  if total_samples > 100000000L {
+    return Err("tta: unsupported sample format")
+  }
+  let data_length = total_samples.to_int()
   let last_frame_length = data_length % frame_length
   let total_frames = data_length / frame_length +
     (if last_frame_length != 0 { 1 } else { 0 })
@@ -352,40 +425,35 @@ pub fn ff_tta_decode(data : Bytes) -> Result[TtaAudio, String] {
     return Err("tta: truncated seek table")
   }
   let mut frame_pos = seek_end + 4
+  if total_samples * channels.to_int64() >
+    (data.length() - frame_pos).to_int64() * 8L {
+    return Err("tta: truncated frame data")
+  }
   let out : Array[Int32] = Array::make(data_length * channels, 0)
   let mut decoded = 0
   for f = 0; f < total_frames; f = f + 1 {
     let size = tta_u32le(data, 22 + 4 * f).reinterpret_as_int()
-    if size <= 0 || frame_pos + size > data.length() {
+    if size <= 0 || size > data.length() - frame_pos {
       return Err("tta: invalid frame size")
     }
-    let filled = match
+    let count = frame_length.min(data_length - decoded)
+    match
       tta_decode_frame_into(
-        data,
-        frame_pos,
-        size,
+        data[frame_pos:frame_pos + size],
         channels,
-        bps,
-        frame_length,
-        last_frame_length,
+        bits,
+        count,
         out,
         decoded * channels,
       ) {
-      Ok(v) => v
+      Ok(_) => ()
       Err(e) => return Err(e)
     }
-    decoded = decoded + filled
+    decoded = decoded + count
     frame_pos = frame_pos + size
   }
-  if decoded != data_length {
-    return Err("tta: decoded \{decoded} of \{data_length} samples")
-  }
-  if bps == 24 {
-    for i = 0; i < out.length(); i = i + 1 {
-      out[i] = (out[i].reinterpret_as_uint() << 8).reinterpret_as_int()
-    }
-  }
-  Ok({ sample_rate, channels, bits: bps, samples: out, })
+  tta_scale_samples(out, bits)
+  Ok({ sample_rate, channels, bits, samples: out, })
 }
 
 ///|

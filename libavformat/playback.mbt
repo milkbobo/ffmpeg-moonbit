@@ -123,7 +123,19 @@ pub(all) enum Source {
   StillImage(Bytes)
   Wav(WavDemux, Bytes)
   AiffAudio(AiffDemux, Bytes)
+  AuAudio(AuDemux, Bytes)
+  CafAudio(CafDemux, Bytes)
+  FlvAudio(FlvAudioDemux, Bytes)
   RawDts(DtsTrack, Bytes)
+  RawTta(TtaTrack, Bytes)
+  RawGsm(RawAudioTrack, Bytes)
+  RawTelephony(RawAudioTrack, Bytes, Int32)
+  WestwoodAud(RawAudioTrack, Bytes)
+  RawSbc(RawAudioTrack, Bytes)
+  DsdAudio(DsdTrack, Bytes)
+  RawAdx(AdxTrack, Bytes)
+  RetroAudio(RawAudioTrack, Bytes)
+  RawQoa(RawAudioTrack, Bytes)
   AsfAudio(AsfDemux)
   RawAc3(RawAudioTrack, Bytes)
   /// A raw AMR-NB / AMR-WB stream (`av_amr_open`), in one channel.
@@ -179,12 +191,15 @@ fn playback_mov_video_codec(fourcc : String) -> String {
 }
 
 ///|
-/// Open a byte buffer: probe the format, open the demuxer, build the stream
-/// table. Formats without an adapter yet come back as `UnsupportedFormat`
-/// with the probe's name, so callers can distinguish "not media" from
-/// "recognised but not wired".
-pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
-  let pd = ProbeData::new(data)
+/// Probe a byte buffer, open its demuxer and build the stream table.
+/// Supply `filename` for headerless inputs such as `call.g722` or
+/// `call.g726le`. Raw G.726 defaults to 4-bit codes (32 kb/s).
+pub fn MediaFile::open(
+  data : Bytes,
+  filename~ : String = "",
+  g726_bits~ : Int32 = 4,
+) -> MediaFile raise MediaError {
+  let pd = ProbeData::new(data, filename~)
   let (found, _) = av_probe_input_format(pd)
   let format = match found {
     Some(f) => f
@@ -316,6 +331,182 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         cursor: [0],
       }
     }
+    Au => {
+      let demux = match av_au_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0,
+            media_type: Audio,
+            codec_id: demux.format.codec,
+            sample_rate: demux.format.sample_rate,
+            channels: demux.format.channels,
+            width: 0,
+            height: 0,
+            extradata: None,
+          },
+        ],
+        source: AuAudio(demux, data),
+        cursor: [0],
+      }
+    }
+    Caf => {
+      let demux = match av_caf_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0,
+            media_type: Audio,
+            codec_id: demux.format.codec,
+            sample_rate: demux.format.sample_rate,
+            channels: demux.format.channels,
+            width: 0,
+            height: 0,
+            extradata: if demux.extradata.is_empty() {
+              None
+            } else {
+              Some(demux.extradata)
+            },
+          },
+        ],
+        source: CafAudio(demux, data),
+        cursor: [0],
+      }
+    }
+    Flv => {
+      let demux = match av_flv_audio_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0,
+            media_type: Audio,
+            codec_id: demux.codec,
+            sample_rate: demux.sample_rate,
+            channels: demux.channels,
+            width: 0,
+            height: 0,
+            extradata: demux.extradata,
+          },
+        ],
+        source: FlvAudio(demux, data),
+        cursor: [0],
+      }
+    }
+    Dsf | Dff => {
+      let opened = if format is Dsf { av_dsf_open(data) } else { av_dff_open(data) }
+      let track = match opened {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0,
+            media_type: Audio,
+            codec_id: track.codec,
+            sample_rate: track.sample_rate,
+            channels: track.channels,
+            width: 0,
+            height: 0,
+            extradata: None,
+          },
+        ],
+        source: DsdAudio(track, data),
+        cursor: [0],
+      }
+    }
+    Gsm | Sbc | Svx | Voc | Qoa | G722 | G726 | G726Le | Wsaud => {
+      let opened = match format {
+        Sbc => av_sbc_open(data)
+        Svx => av_svx_open(data)
+        Voc => av_voc_open(data)
+        Qoa => av_qoa_open(data)
+        Wsaud => av_wsaud_open(data)
+        G722 | G726 | G726Le => telephony_open(data, format, g726_bits)
+        _ => av_gsm_open(data)
+      }
+      let track = match opened {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0,
+            media_type: Audio,
+            codec_id: track.codec,
+            sample_rate: track.sample_rate,
+            channels: track.channels,
+            width: 0,
+            height: 0,
+            extradata: None,
+          },
+        ],
+        source: match format {
+          Sbc => RawSbc(track, data)
+          Gsm => RawGsm(track, data)
+          Qoa => RawQoa(track, data)
+          Wsaud => WestwoodAud(track, data)
+          G722 | G726 | G726Le => RawTelephony(track, data, g726_bits)
+          _ => RetroAudio(track, data)
+        },
+        cursor: [0],
+      }
+    }
+    Adx => {
+      let track = match av_adx_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0, media_type: Audio, codec_id: "adpcm_adx",
+            sample_rate: track.sample_rate, channels: track.channels,
+            width: 0, height: 0, extradata: Some(track.extradata),
+          },
+        ],
+        source: RawAdx(track, data), cursor: [0],
+      }
+    }
+    Tta => {
+      let track = match av_tta_open(data) {
+        Ok(v) => v
+        Err(e) => raise DemuxError(e)
+      }
+      {
+        format_name: format.name(),
+        streams: [
+          {
+            index: 0,
+            media_type: Audio,
+            codec_id: "tta",
+            sample_rate: track.header.sample_rate,
+            channels: track.header.channels,
+            width: 0,
+            height: 0,
+            extradata: Some(track.extradata),
+          },
+        ],
+        source: RawTta(track, data),
+        cursor: [0],
+      }
+    }
     Dts => {
       let track = match av_dts_open(data) {
         Ok(v) => v
@@ -339,8 +530,13 @@ pub fn MediaFile::open(data : Bytes) -> MediaFile raise MediaError {
         cursor: [0],
       }
     }
-    Wav => {
-      let demux = match av_wav_open(data) {
+    Wav | W64 => {
+      let opened = if format is W64 {
+        av_w64_open(data)
+      } else {
+        av_wav_open(data)
+      }
+      let demux = match opened {
         Ok(v) => v
         Err(e) => raise DemuxError(e)
       }
@@ -684,7 +880,66 @@ pub fn MediaFile::next_packet(
         keyframe: true,
       })
     }
+    AuAudio(demux, data) => {
+      let index = self.cursor[0]
+      guard demux.packets.get(index) is Some(p) else { return None }
+      self.cursor[0] = index + 1
+      let start = p.pos.to_int()
+      Some({
+        stream_index: 0,
+        data: data[start:start + p.size].to_owned(),
+        pts: p.pts,
+        keyframe: true,
+      })
+    }
+    CafAudio(demux, data) => {
+      let index = self.cursor[0]
+      guard demux.packets.get(index) is Some(p) else { return None }
+      self.cursor[0] = index + 1
+      let start = p.pos.to_int()
+      Some({
+        stream_index: 0,
+        data: data[start:start + p.size].to_owned(),
+        pts: p.pts,
+        keyframe: true,
+      })
+    }
+    FlvAudio(demux, data) => {
+      let index = self.cursor[0]
+      guard demux.packets.get(index) is Some(packet) else { return None }
+      self.cursor[0] = index + 1
+      Some({
+        stream_index: 0,
+        data: data[packet.pos:packet.pos + packet.size].to_owned(),
+        pts: packet.pts,
+        keyframe: true,
+      })
+    }
+    DsdAudio(track, data) => {
+      let index = self.cursor[0]
+      guard track.frames.get(index) is Some(frame) else { return None }
+      self.cursor[0] = index + 1
+      let start = frame.pos.to_int()
+      let stride = track.padded_plane_stride
+      let packet = if stride > frame.duration {
+        Bytes::makei(frame.size, i => {
+          let ch = i / frame.duration
+          data[start + ch * stride + i % frame.duration]
+        })
+      } else {
+        data[start:start + frame.size].to_owned()
+      }
+      Some({ stream_index: 0, data: packet, pts: frame.pts, keyframe: true, })
+    }
     RawDts({ frames, .. }, data)
+    | RawTta({ frames, .. }, data)
+    | RawAdx({ frames, .. }, data)
+    | RetroAudio({ frames, .. }, data)
+    | RawQoa({ frames, .. }, data)
+    | RawGsm({ frames, .. }, data)
+    | RawTelephony({ frames, .. }, data, _)
+    | WestwoodAud({ frames, .. }, data)
+    | RawSbc({ frames, .. }, data)
     | RawAc3({ frames, .. }, data)
     | Amr({ frames, .. }, data) => {
       let index = self.cursor[0]
@@ -692,9 +947,17 @@ pub fn MediaFile::next_packet(
       self.cursor[0] = index + 1
       let p = frames[index]
       let start = p.pos.to_int()
+      let payload = data[start:start + p.size].to_owned()
+      let packet = if self.source is WestwoodAud({ codec: "ws_snd1", .. }, _) {
+        // SND1 expects decoded size followed by coded size, without the marker.
+        data[start - 6:start - 4].to_owned() +
+        data[start - 8:start - 6].to_owned() + payload
+      } else {
+        payload
+      }
       Some({
         stream_index: 0,
-        data: data[start:start + p.size].to_owned(),
+        data: packet,
         pts: p.pts,
         keyframe: p.is_keyframe,
       })
@@ -772,8 +1035,37 @@ pub(all) enum AudioDec {
   /// `adpcm_ima_oki`); `block_align` is the WAV / MOV block size.
   Adpcm(@libavcodec.AdpcmDecoder)
   AdpcmImaQt(@libavcodec.AdpcmImaQtDecoder)
-  /// Raw PCM: (little_endian, bytes_per_sample).
+  AdpcmSwf
+  AiffDpcm(@libavcodec.AiffDpcmDecoder)
+  Snd1
+  Alac(@libavcodec.AlacDecoder)
+  G711(Bool)
+  G726(@libavcodec.G726Decoder)
+  Adx(@libavcodec.AdxDecoder)
+  Svx(String)
+  Sbpro(@libavcodec.SbproDecoder)
+  Qoa
+  BlurayLpcm
+  S302m
+  G722(@libavcodec.G722Decoder)
+  /// The flag selects WAV49's little-endian two-frame packing.
+  Gsm(@libavcodec.GsmDecoder, Bool)
+  Sbc(@libavcodec.SbcDecoder)
+  Mace(@libavcodec.MaceDecoder)
+  Dsd(@libavcodec.DsdDecoder)
+  Dst(@libavcodec.DstDecoder)
+  NativeTta(@libavcodec.TtaHeader)
+  /// Raw signed PCM: (little_endian, bytes_per_sample).
   Pcm(Bool, Int32)
+  PcmUnsigned8
+  PcmFloat(Bool, Int32)
+}
+
+///|
+priv enum PlaybackPcmEncoding {
+  SignedPcm
+  UnsignedPcm
+  FloatPcm
 }
 
 ///|
@@ -867,6 +1159,19 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       { dec: Opus(dec), channels: head.channels, sample_rate: 48000, }
     }
     "vorbis" | "flac" => playback_ogg_audio_decoder(info)
+    "alac" => {
+      guard info.extradata is Some(extra) else {
+        raise DecodeError("alac: missing magic cookie")
+      }
+      let dec = match @libavcodec.alac_decoder_new(extra) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      guard dec.sample_rate > 0 else {
+        raise DecodeError("alac: invalid sample rate")
+      }
+      { dec: Alac(dec), channels: dec.channels, sample_rate: dec.sample_rate, }
+    }
     "ac3" | "eac3" | "dts" | "mlp" | "truehd" => {
       let dec : AudioDec = match info.codec_id {
         "ac3" | "eac3" => DolbyAc3(@libavcodec.ac3_decoder_new())
@@ -897,14 +1202,32 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
         channels: 1,
         sample_rate: if info.sample_rate > 0 { info.sample_rate } else { 16000 },
       }
-    // ADPCM: the codecs whose packets carry no block header but the
-    // predictor state (Yamaha, OKI) and the QuickTime variant need nothing
-    // from the container.
-    "adpcm_yamaha" | "adpcm_ima_oki" =>
+    // Yamaha, OKI and Westwood IMA retain predictor state between packets.
+    // These codecs and QuickTime IMA open without extra container parameters.
+    "adpcm_yamaha" | "adpcm_ima_oki" | "adpcm_ima_ws" =>
       match @libavcodec.adpcm_decoder_new(info.codec_id, info.channels) {
         Ok(dec) => { dec: Adpcm(dec), channels: info.channels, sample_rate: info.sample_rate }
         Err(e) => raise DecodeError(e)
       }
+    "ws_snd1" => {
+      if info.channels != 1 {
+        raise DecodeError("ws_snd1: expected mono")
+      }
+      { dec: Snd1, channels: 1, sample_rate: info.sample_rate }
+    }
+    "sdx2_dpcm" | "cbd2_dpcm" => {
+      let dec = match @libavcodec.aiff_dpcm_decoder_new(info.codec_id, info.channels) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: AiffDpcm(dec), channels: info.channels, sample_rate: info.sample_rate }
+    }
+    "adpcm_swf" => {
+      guard info.channels == 1 || info.channels == 2 else {
+        raise DecodeError("adpcm_swf: expected one or two channels")
+      }
+      { dec: AdpcmSwf, channels: info.channels, sample_rate: info.sample_rate }
+    }
     "adpcm_ima_qt" =>
       match @libavcodec.adpcm_ima_qt_decoder_new(info.channels) {
         Ok(dec) => {
@@ -915,7 +1238,7 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
     // Block-header ADPCM reads `block_align` (and IMA WAV the code width)
     // off the container's stream description: open them through
     // `MediaFile::audio_decoder`.
-    "adpcm_ms" | "adpcm_ima_wav" =>
+    "adpcm_ms" | "adpcm_ima_wav" | "adpcm_ima_dk3" | "adpcm_ima_dk4" =>
       raise UnsupportedCodec(
         "\{info.codec_id} outside its WAV / MOV container (block_align missing)",
       )
@@ -933,27 +1256,124 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       raise UnsupportedCodec(
         "wmapro outside its ASF / WAV container (block_align missing)",
       )
-    "pcm_s8"
+    "dst" => {
+      let dec = match @libavcodec.dst_decoder_new(info.channels, info.sample_rate) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: Dst(dec), channels: info.channels, sample_rate: info.sample_rate, }
+    }
+    "dsd_lsbf" | "dsd_msbf" | "dsd_lsbf_planar" | "dsd_msbf_planar" => {
+      let little_endian_bits = info.codec_id.has_prefix("dsd_lsbf")
+      let planar = info.codec_id.has_suffix("_planar")
+      let dec = match
+        @libavcodec.dsd_decoder_new(info.channels, little_endian_bits~, planar~) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: Dsd(dec), channels: info.channels, sample_rate: info.sample_rate, }
+    }
+    "qoa" => { dec: Qoa, channels: info.channels, sample_rate: info.sample_rate, }
+    "pcm_bluray" =>
+      { dec: BlurayLpcm, channels: info.channels, sample_rate: info.sample_rate, }
+    "s302m" =>
+      { dec: S302m, channels: info.channels, sample_rate: info.sample_rate, }
+    "sbc" =>
+      { dec: Sbc(@libavcodec.sbc_decoder_new()), channels: info.channels, sample_rate: info.sample_rate }
+    "mace3" | "mace6" => {
+      let dec = match @libavcodec.mace_decoder_new(info.codec_id, info.channels) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: Mace(dec), channels: info.channels, sample_rate: info.sample_rate }
+    }
+    "gsm" | "gsm_ms" => {
+      guard info.channels == 1 else {
+        raise UnsupportedCodec("multichannel GSM")
+      }
+      {
+        dec: Gsm(@libavcodec.gsm_decoder_new(), info.codec_id == "gsm_ms"),
+        channels: 1,
+        sample_rate: if info.sample_rate > 0 { info.sample_rate } else { 8000 },
+      }
+    }
+    "pcm_s8_planar" | "pcm_s16be_planar" | "8svx_fib" | "8svx_exp" =>
+      { dec: Svx(info.codec_id), channels: info.channels, sample_rate: info.sample_rate, }
+    "adpcm_sbpro_2" | "adpcm_sbpro_3" | "adpcm_sbpro_4" => {
+      let width = match info.codec_id {
+        "adpcm_sbpro_2" => 2
+        "adpcm_sbpro_3" => 3
+        _ => 4
+      }
+      let dec = match @libavcodec.sbpro_decoder_new(info.channels, width) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: Sbpro(dec), channels: info.channels, sample_rate: info.sample_rate, }
+    }
+    "adpcm_adx" => {
+      guard info.extradata is Some(extra) else {
+        raise DecodeError("adx: missing codec header")
+      }
+      let dec = match @libavcodec.adx_decoder_new(extra) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: Adx(dec), channels: dec.header.channels, sample_rate: dec.header.sample_rate, }
+    }
+    "adpcm_g722" => {
+      guard info.channels == 1 else {
+        raise UnsupportedCodec("multichannel G.722")
+      }
+      {
+        dec: G722(@libavcodec.g722_decoder_new()),
+        channels: 1,
+        sample_rate: info.sample_rate,
+      }
+    }
+    "pcm_alaw" | "pcm_mulaw" => {
+      guard info.channels > 0 else {
+        raise DecodeError("pcm: invalid channel count")
+      }
+      {
+        dec: G711(info.codec_id == "pcm_alaw"),
+        channels: info.channels,
+        sample_rate: info.sample_rate,
+      }
+    }
+    "pcm_u8"
+    | "pcm_s8"
     | "pcm_s16le"
     | "pcm_s16be"
     | "pcm_s24le"
     | "pcm_s24be"
     | "pcm_s32le"
-    | "pcm_s32be" => {
-      let (little_endian, width) = match info.codec_id {
-        "pcm_s8" => (false, 1)
-        "pcm_s16le" => (true, 2)
-        "pcm_s16be" => (false, 2)
-        "pcm_s24le" => (true, 3)
-        "pcm_s24be" => (false, 3)
-        "pcm_s32le" => (true, 4)
-        _ => (false, 4)
+    | "pcm_s32be"
+    | "pcm_s64le"
+    | "pcm_s64be"
+    | "pcm_f32le"
+    | "pcm_f32be"
+    | "pcm_f64le"
+    | "pcm_f64be" => {
+      let (width, encoding) = match info.codec_id {
+        "pcm_u8" => (1, UnsignedPcm)
+        "pcm_s8" => (1, SignedPcm)
+        "pcm_s16le" | "pcm_s16be" => (2, SignedPcm)
+        "pcm_s24le" | "pcm_s24be" => (3, SignedPcm)
+        "pcm_s32le" | "pcm_s32be" => (4, SignedPcm)
+        "pcm_s64le" | "pcm_s64be" => (8, SignedPcm)
+        "pcm_f32le" | "pcm_f32be" => (4, FloatPcm)
+        _ => (8, FloatPcm)
       }
       guard info.channels > 0 && info.channels <= 0x7fffffff / width else {
         raise DecodeError("pcm: invalid channel count")
       }
       {
-        dec: Pcm(little_endian, width),
+        dec: match encoding {
+          SignedPcm => Pcm(info.codec_id.has_suffix("le"), width)
+          UnsignedPcm => PcmUnsigned8
+          FloatPcm => PcmFloat(info.codec_id.has_suffix("le"), width)
+        },
         channels: info.channels,
         sample_rate: info.sample_rate,
       }
@@ -972,6 +1392,12 @@ pub fn MediaFile::audio_decoder(
     raise UnsupportedCodec("invalid audio stream index")
   }
   match self.source {
+    RawTta(track, _) =>
+      {
+        dec: NativeTta(track.header),
+        channels: track.header.channels,
+        sample_rate: track.header.sample_rate,
+      }
     ApeAudio(demux) => {
       let dec = match
         @libavcodec.ape_decoder_new(demux.extradata, demux.channels, demux.bits) {
@@ -1074,8 +1500,45 @@ pub fn MediaFile::audio_decoder(
     // entry's `bytes_per_frame`) and IMA WAV's code width come from the
     // container, as `ff_pcm_read_packet` and `mov_read_header` hand them to
     // the C decoder.
+    RawTelephony(_, _, bits) if info.codec_id == "adpcm_g726" ||
+      info.codec_id == "adpcm_g726le" => {
+      let dec = match @libavcodec.g726_decoder_new(
+        bits, little_endian=info.codec_id == "adpcm_g726le",
+      ) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: G726(dec), channels: 1, sample_rate: info.sample_rate }
+    }
+    AuAudio(demux, _) if info.codec_id == "adpcm_g726le" => {
+      guard info.channels == 1 else {
+        raise UnsupportedCodec("multichannel G.726LE")
+      }
+      let dec = match
+        @libavcodec.g726_decoder_new(demux.format.bits, little_endian=true) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: G726(dec), channels: 1, sample_rate: info.sample_rate, }
+    }
+    Wav(demux, _) if info.codec_id == "adpcm_g726" => {
+      guard info.channels == 1 else {
+        raise UnsupportedCodec("multichannel G.726")
+      }
+      let dec = match @libavcodec.g726_decoder_new(demux.format.bits_per_sample) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      { dec: G726(dec), channels: 1, sample_rate: info.sample_rate, }
+    }
+    Wav(demux, _) if info.codec_id == "gsm_ms" && demux.format.block_align != 65 =>
+      raise UnsupportedCodec(
+        "GSM: unsupported WAV block alignment \{demux.format.block_align}",
+      )
     Wav(demux, _) if info.codec_id == "adpcm_ms" ||
-      info.codec_id == "adpcm_ima_wav" =>
+      info.codec_id == "adpcm_ima_wav" ||
+      info.codec_id == "adpcm_ima_dk3" ||
+      info.codec_id == "adpcm_ima_dk4" =>
       match
         @libavcodec.adpcm_decoder_new(
           info.codec_id,
@@ -1536,6 +1999,27 @@ pub fn AudioDecoder::decode(
           )
         Err(e) => raise DecodeError(e)
       }
+    Snd1 => {
+      let pcm = match @libavcodec.decode_ws_snd1(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some(playback_adpcm_frame(pcm, 1, self.sample_rate, pkt.pts))
+    }
+    AiffDpcm(dec) => {
+      let samples = match dec.decode_packet(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some(playback_adpcm_frame(samples, self.channels, self.sample_rate, pkt.pts))
+    }
+    AdpcmSwf => {
+      let samples = match @libavcodec.decode_swf_adpcm(pkt.data, self.channels) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some(playback_adpcm_frame(samples, self.channels, self.sample_rate, pkt.pts))
+    }
     AdpcmImaQt(dec) => {
       // one 34-byte block per channel per frame
       let block = 34 * self.channels
@@ -1548,27 +2032,212 @@ pub fn AudioDecoder::decode(
         Err(e) => raise DecodeError(e)
       }
     }
-    Pcm(little_endian, bytes_per_sample) => {
+    Alac(dec) => {
+      let pcm = match dec.decode_frame(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      let scale = if pcm.bits == 16 { 32768.0 } else { 2147483648.0 }
+      Some(
+        playback_integer_audio_frame(
+          pcm.samples,
+          pcm.channels,
+          self.sample_rate,
+          scale,
+          pkt.pts,
+        ),
+      )
+    }
+    G711(alaw) => {
+      let pcm = if alaw {
+        @libavcodec.pcm_alaw_decode(pkt.data)
+      } else {
+        @libavcodec.pcm_mulaw_decode(pkt.data)
+      }
+      Some(
+        playback_integer_audio_frame(
+          pcm,
+          self.channels,
+          self.sample_rate,
+          32768.0,
+          pkt.pts,
+        ),
+      )
+    }
+    NativeTta(header) => {
+      let pcm = match header.decode_frame(pkt.data, pkt.pts) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      let scale = match pcm.bits {
+        8 => 128.0
+        16 => 32768.0
+        _ => 2147483648.0
+      }
+      Some(
+        playback_integer_audio_frame(
+          pcm.samples,
+          pcm.channels,
+          pcm.sample_rate,
+          scale,
+          pkt.pts,
+        ),
+      )
+    }
+    Dsd(_) | Dst(_) => {
+      let decoded = match self.dec {
+        Dsd(dec) => dec.decode_packet(pkt.data)
+        Dst(dec) => dec.decode_packet(pkt.data)
+        _ => abort("unreachable DSD decoder")
+      }
+      let samples = match decoded {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some({
+        samples,
+        nb_samples: samples[0].length(),
+        sample_rate: self.sample_rate,
+        pts: Some(pkt.pts),
+      })
+    }
+    Sbc(dec) => {
+      let pcm = match dec.decode_frame(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some({
+        samples: pcm.map(row => row.map(v => v.to_double() / 32768.0)),
+        nb_samples: pcm[0].length(),
+        sample_rate: self.sample_rate,
+        pts: Some(pkt.pts),
+      })
+    }
+    Mace(dec) => {
+      let pcm = match dec.decode_packet(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some(playback_adpcm_frame(pcm, self.channels, self.sample_rate, pkt.pts))
+    }
+    Gsm(dec, wav49) => {
+      let pcm = match dec.decode_packet(pkt.data, wav49~) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some(playback_adpcm_frame(pcm, 1, self.sample_rate, pkt.pts))
+    }
+    G722(dec) =>
+      Some(playback_adpcm_frame(dec.decode(pkt.data), 1, self.sample_rate, pkt.pts))
+    S302m => {
+      let (header, pcm) = match @libavcodec.decode_s302m_pcm(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some(
+        playback_integer_audio_frame(
+          pcm, header.channels, header.sample_rate, 2147483648.0, pkt.pts,
+        ),
+      )
+    }
+    BlurayLpcm => {
+      let (header, pcm) = match @libavcodec.decode_bluray_lpcm(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      let scale = if header.bits == 16 { 32768.0 } else { 8388608.0 }
+      Some(
+        playback_integer_audio_frame(
+          pcm, header.channels, header.sample_rate, scale, pkt.pts,
+        ),
+      )
+    }
+    Qoa => {
+      let (header, pcm) = match @libavcodec.decode_qoa_frame(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some(playback_integer_audio_frame(pcm, header.channels, header.sample_rate, 32768.0, pkt.pts))
+    }
+    Svx(codec) => {
+      let pcm = match @libavcodec.decode_svx_body(codec, self.channels, pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some({
+        samples: pcm.map(row => row.map(v => v.to_double() / 32768.0)),
+        nb_samples: pcm[0].length(),
+        sample_rate: self.sample_rate,
+        pts: Some(pkt.pts),
+      })
+    }
+    Sbpro(dec) => {
+      let pcm = match dec.decode_packet(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some(playback_adpcm_frame(pcm, self.channels, self.sample_rate, pkt.pts))
+    }
+    Adx(dec) => {
+      let pcm = match dec.decode_packet(pkt.data) {
+        Ok(v) => v
+        Err(e) => raise DecodeError(e)
+      }
+      Some({
+        samples: pcm.map(row => row.map(v => v.to_double() / 32768.0)),
+        nb_samples: pcm[0].length(),
+        sample_rate: self.sample_rate,
+        pts: Some(pkt.pts),
+      })
+    }
+    G726(dec) =>
+      Some(
+        playback_integer_audio_frame(
+          dec.decode(pkt.data),
+          1,
+          self.sample_rate,
+          32768.0,
+          pkt.pts,
+        ),
+      )
+    Pcm(_, _) | PcmUnsigned8 | PcmFloat(_, _) => {
+      let (little_endian, bytes_per_sample, encoding) = match self.dec {
+        Pcm(le, width) => (le, width, SignedPcm)
+        PcmFloat(le, width) => (le, width, FloatPcm)
+        _ => (false, 1, UnsignedPcm)
+      }
       let frame_bytes = self.channels * bytes_per_sample
       if pkt.data.length() < frame_bytes {
         return None
       }
       let nb = pkt.data.length() / frame_bytes
-      let pad_bits = 32 - bytes_per_sample * 8
-      let scale = (1L << (31 - pad_bits)).to_double()
+      let pad_bits = 64 - bytes_per_sample * 8
+      let scale = if bytes_per_sample == 8 {
+        9223372036854775808.0
+      } else {
+        (1L << (63 - pad_bits)).to_double()
+      }
       let channels : Array[Array[Double]] = []
       for ch in 0..<self.channels {
         let row : Array[Double] = Array::make(nb, 0.0)
         for i in 0..<nb {
           let base = (i * self.channels + ch) * bytes_per_sample
-          let raw = for j in 0..<bytes_per_sample; raw = 0 {
+          let raw = for j in 0..<bytes_per_sample; raw = 0L {
             let index = if little_endian { bytes_per_sample - 1 - j } else { j }
-            continue (raw << 8) | pkt.data[base + index].to_int()
+            continue (raw << 8) | pkt.data[base + index].to_int().to_int64()
           } nobreak {
             raw
           }
-          let signed = raw << pad_bits >> pad_bits
-          row[i] = signed.to_double() / scale
+          row[i] = match encoding {
+            SignedPcm => (raw << pad_bits >> pad_bits).to_double() / scale
+            UnsignedPcm => (raw - 128L).to_double() / 128.0
+            FloatPcm =>
+              if bytes_per_sample == 4 {
+                Float::reinterpret_from_int(raw.to_int()).to_double()
+              } else {
+                raw.reinterpret_as_uint64().reinterpret_as_double()
+              }
+          }
         }
         channels.push(row)
       }
@@ -1746,7 +2415,16 @@ pub fn AudioDecoder::flush(self : AudioDecoder) -> AudioFrame? raise MediaError 
 pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
   match self.source {
     StillImage(_) | AsfAudio(_) => None
+    FlvAudio(demux, _) => Some(demux.duration)
     RawDts({ total_samples, sample_rate, .. }, _)
+    | RawGsm({ total_samples, sample_rate, .. }, _)
+    | RawTelephony({ total_samples, sample_rate, .. }, _, _)
+    | WestwoodAud({ total_samples, sample_rate, .. }, _)
+    | RawSbc({ total_samples, sample_rate, .. }, _)
+    | RawAdx({ total_samples, sample_rate, .. }, _)
+    | RetroAudio({ total_samples, sample_rate, .. }, _)
+    | RawQoa({ total_samples, sample_rate, .. }, _)
+    | DsdAudio({ total_samples, sample_rate, .. }, _)
     | RawAc3({ total_samples, sample_rate, .. }, _)
     | Amr({ total_samples, sample_rate, .. }, _) =>
       Some(total_samples.to_double() / sample_rate.to_double())
@@ -1754,6 +2432,14 @@ pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
       Some(
         demux.sample_count.to_double() / demux.format.sample_rate.to_double(),
       )
+    RawTta(track, _) =>
+      Some(
+        track.header.total_samples.to_double() /
+        track.header.sample_rate.to_double(),
+      )
+    AuAudio({ sample_count, format: { sample_rate, .. }, .. }, _)
+    | CafAudio({ sample_count, format: { sample_rate, .. }, .. }, _) =>
+      Some(sample_count.to_double() / sample_rate.to_double())
     ApeAudio(demux) =>
       Some(demux.total_samples.to_double() / demux.sample_rate.to_double())
     MusepackAudio(demux) =>
@@ -1814,8 +2500,19 @@ pub fn MediaFile::duration_seconds(self : MediaFile) -> Double? {
         if first == ts_nopts || t < first {
           first = t
         }
-        if last == ts_nopts || t > last {
-          last = t
+        let end = if ts_pcm_packet_params(self.streams[p.stream_index].codec_id, p.payload)
+          is Some((rate, _, count)) {
+          t +
+          @libavutil.av_rescale_q(
+            count.to_int64(),
+            @libavutil.av_make_q(1, rate),
+            @libavutil.av_make_q(1, 90000),
+          )
+        } else {
+          t
+        }
+        if last == ts_nopts || end > last {
+          last = end
         }
       }
       if first != ts_nopts && last > first {
@@ -1925,9 +2622,13 @@ fn MediaFile::next_packet_tolerant(
 /// Decode the first audio stream of a container to PCM - the engine the JSON
 /// CLI's `decode-audio` command and the libswresample slice build on. Files
 /// without an audio stream raise `UnsupportedCodec` with the format name.
+/// Raw G.722 and G.726 use the filename hint and the G.726 code width from
+/// `MediaFile::open`.
 pub fn decode_audio_file(
   data : Bytes,
   sample_budget? : Int64,
+  filename~ : String = "",
+  g726_bits~ : Int32 = 4,
 ) -> DecodedAudio raise MediaError {
   if data.length() >= 4 && data[:4] == b"ajkg"[:] {
     return playback_decode_shorten(data, sample_budget)
@@ -1944,7 +2645,32 @@ pub fn decode_audio_file(
       _ => ()
     }
   }
-  let mf = MediaFile::open(data)
+  let mf = MediaFile::open(data, filename~, g726_bits~)
+  if mf.source is RawQoa(track, _) && sample_budget is Some(limit) {
+    guard track.total_samples * track.channels.to_int64() <= limit else {
+      raise DecodeError("decoded audio sample budget exceeded")
+    }
+  }
+  if mf.source is (RetroAudio(track, _) | WestwoodAud(track, _)) && sample_budget is Some(limit) {
+    guard track.total_samples * track.channels.to_int64() <= limit else {
+      raise DecodeError("decoded audio sample budget exceeded")
+    }
+  }
+  if mf.source is RawTelephony(track, _, _) && sample_budget is Some(limit) {
+    guard track.total_samples <= limit else {
+      raise DecodeError("decoded audio sample budget exceeded")
+    }
+  }
+  if mf.source is DsdAudio(track, _) && sample_budget is Some(limit) {
+    guard track.total_samples * track.channels.to_int64() <= limit else {
+      raise DecodeError("decoded audio sample budget exceeded")
+    }
+  }
+  if mf.source is RawTta(track, _) && sample_budget is Some(limit) {
+    guard track.header.total_samples * track.header.channels.to_int64() <= limit else {
+      raise DecodeError("decoded audio sample budget exceeded")
+    }
+  }
   if mf.source is ApeAudio(demux) && sample_budget is Some(limit) {
     guard demux.total_samples * demux.channels.to_int64() <= limit else {
       raise DecodeError("decoded audio sample budget exceeded")
@@ -2035,12 +2761,18 @@ pub fn decode_audio_file(
       rows.push([])
     }
   }
-  // Ogg Opus pre-skip from OpusHead (initial_padding) trims the head.
+  // The container supplies leading samples outside the presentation.
   let head = match mf.source {
     OggOpus(demux) => demux.pre_skip
+    FlvAudio(demux, _) => demux.priming
+    CafAudio(demux, _) => demux.priming
     _ => 0
   }
   let tail = match (mf.source, dec.dec) {
+    (CafAudio(demux, _), _) if !rows.is_empty() =>
+      (rows[0].length().to_int64() - head.to_int64() - demux.sample_count)
+      .max(0L)
+      .to_int()
     (OggVorbis(demux), Vorbis(_, first)) if demux.total_samples > 0L &&
       !rows.is_empty() => {
       // A priming packet with granule zero contributes no presentation
@@ -2112,7 +2844,11 @@ fn mov_audio_tail_discard(movie : Mp4Movie, track : Mp4Track) -> Int32 {
     return 0
   }
   // `FFMAX(codecpar->frame_size, ts_to_samples(pkt->duration))`.
-  let frame_size = to_samples(track.samples[0].duration.to_int64())
+  // MACE and these PCM entries can group a variable number of samples per packet.
+  let frame_size = match track.codec {
+    "MAC3" | "MAC6" | "alaw" | "ulaw" | "fl32" | "fl64" => 0L
+    _ => to_samples(track.samples[0].duration.to_int64())
+  }
   let in_samples = to_samples(last_duration)
   let duration = if frame_size > in_samples { frame_size } else { in_samples }
   let end_sample = sample + duration
