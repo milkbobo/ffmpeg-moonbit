@@ -170,6 +170,57 @@ test "rawaudio: ID3v2 tag is skipped and shifts frame offsets" {
 }
 
 ///|
+test "raw MP3 playback trims encoder delay and padding from the Info tag" {
+  let mp3 = @libavutil.av_base64_decode(raw_mp3_b64, 8192).unwrap()
+  let data = synth_id3v2() +
+    mp3 +
+    Bytes::makei(128, i => if i < 3 { b"TAG"[i] } else { b'\x00' })
+  let media = MediaFile::open(data)
+  assert_eq(media.format_name(), "mp3")
+  assert_eq(media.duration_seconds(), Some(0.1))
+  assert_eq(media.streams()[0].codec_id, "mp3")
+  for i in 0..<5 {
+    let packet = media.next_packet().unwrap()
+    assert_eq(packet.pts, i.to_int64() * 1152L)
+  }
+  assert_true(media.next_packet() is None)
+  let audio = decode_audio_file(data)
+  assert_eq(audio.sample_rate, 44100)
+  assert_eq(audio.samples[0].length(), 4410)
+  let wav = audio.to_wav_s16()
+  let offset = av_wav_open(wav).unwrap().data_offset.to_int()
+  assert_eq(
+    caf_md5(wav[offset:].to_owned()),
+    "df7b62967f6981f1d374ca54134e5bd3",
+  )
+  assert_eq(decode_audio_file(mp3[417:].to_owned()).samples[0].length(), 5760)
+  assert_eq(decode_audio_file(mp3[:2088].to_owned()).samples[0].length(), 3503)
+}
+
+///|
+/// First frame of the FFmpeg 48 kHz, 128 kbit/s mono MP2 oracle.
+let raw_mp2_linear_b64 : Bytes = b"//2ExHVGRlRUWy2sgAAAs/////LTXbu2cyhzg0k1ivmwk1o1mzqzo2qzpupur0f39/fffe973vWx73u7rY7utju7u62O7u7szONr/APj" +
+  b"7sj3QfBq2PfF2dbHh1sdnd3Wx3hmZmWSNfW/kO8TRzlBOBBnYDPKRsAn4pzDIoTykGIFXJCa07N6Usovc96xQe94dbHZ1seHd3WOHdnd" +
+  b"WaNtIKaqnG39FxVSL+e3SjN3LMo/RC5Z7PXKqoqSSw9qti6PT3wDVcAVzQzZKsOViuIenPZXxUcXXOXQuQ1Jhxg156nfWM2szG1ZStOT" +
+  b"T2qE1EHKkqWRz7ljYmMUXuhkkh6xE0cinPDAiYeHMDLlyU3Ku5uZYnJ5SamsKGgOcauYj0bWZWxtQRV3EqomhSW+8sKi3A43xwlUB4rx" +
+  b"WBHTeTSiHt3L6LSCRFSSZ4CmSntEW9uSqSDMKOzKUfOE9XeNI7dlKoqSuzN4NZOrpocpmSaa5psyJ9FxRwe6peB1bqjdCWWQ"
+
+///|
+test "raw MP2 high-width linear quantisers match the fixed FFmpeg decoder" {
+  let data = @libavutil.av_base64_decode(raw_mp2_linear_b64, 512).unwrap()
+  let audio = decode_audio_file(data)
+  assert_eq(audio.codec_id, "mp2")
+  assert_eq(audio.sample_rate, 48000)
+  assert_eq(audio.samples[0].length(), 1152)
+  let wav = audio.to_wav_s16()
+  let offset = av_wav_open(wav).unwrap().data_offset.to_int()
+  assert_eq(
+    caf_md5(wav[offset:].to_owned()),
+    "8fc6b828ead0b1fb8d5c64beed54d4f0",
+  )
+}
+
+///|
 test "rawaudio: truncated inputs are rejected" {
   assert_true(av_adts_open(b"\xFF\xF1\x50\x40\x1B\x1F\xFC") is Err(_))
   assert_true(av_mp3_open(b"\x00\x00\x00\x00") is Err(_))

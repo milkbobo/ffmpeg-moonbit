@@ -14,8 +14,8 @@
 /// `max_size` derived from the bit rate at the 10 fps PCM target.
 ///
 /// Out of scope: W64 GUID chunk walking, SMV video appended to a WAV,
-/// BEXT/LIST/cue metadata, SPDIF probing, XMA2/HEAACWAVEINFO extradata,
-/// and parsing of non-PCM payloads (they are framed, not decoded).
+/// BEXT/LIST/cue metadata, XMA2/HEAACWAVEINFO extradata,
+/// and decoding of packet payloads (handled by the codec layer).
 
 ///|
 /// `WAVEFORMATEX` fields this slice needs. `extradata` is the `cbSize`
@@ -38,6 +38,8 @@ pub struct WavFormat {
 /// One demuxed WAV packet. Times are in PCM sample units (the stream's
 /// time base is 1/sample_rate). */
 pub struct WavPacket {
+  /// File offset of the first coded byte or word. `WavDemux::packet_data`
+  /// assembles payloads that span MAT data bands.
   pos : Int64
   size : Int32
   pts : Int64
@@ -53,9 +55,38 @@ pub struct WavDemux {
   data_size : Int64
   /// Duration in PCM samples.
   sample_count : Int64
-  /// `wav->max_size`, the packet size cap used by `wav_read_packet`.
+  /// Packet size cap, or the largest indexed compressed frame.
   max_size : Int32
   packets : Array[WavPacket]
+  priv spdif_big_endian : Bool?
+}
+
+///|
+/// Extract a packet from the input used to open this demuxer. For an IEC
+/// 61937 carrier this restores the compressed payload's byte order.
+pub fn WavDemux::packet_data(
+  self : WavDemux,
+  data : Bytes,
+  packet : WavPacket,
+) -> Result[Bytes, String] {
+  let start = packet.pos
+  if self.spdif_big_endian is Some(big_endian) {
+    if self.format.codec == "truehd" {
+      return spdif_mat_packet_data(
+        data[:],
+        self.data_offset.to_int(),
+        big_endian,
+        start,
+        packet.size,
+      )
+    }
+    return spdif_read_payload(data, start, packet.size, big_endian)
+  }
+  let size = packet.size.to_int64()
+  guard start >= 0L && size >= 0L && start <= data.length().to_int64() - size else {
+    return Err("wav packet extends past end of file")
+  }
+  Ok(data[start.to_int():(start + size).to_int()].to_owned())
 }
 
 ///|
@@ -174,6 +205,7 @@ pub fn ff_wav_codec_id(tag : Int32, bits : Int32) -> String {
     0x2000 => "ac3"
     0x2001 => "dts"
     0x5346 => "adpcm_swf"
+    0xF1AC => "flac"
     _ => ""
   }
 }
@@ -202,6 +234,7 @@ fn wav_codec_be(codec : String) -> String {
 /// `av_get_bits_per_sample` for the PCM/ADPCM codecs this demuxer names. */
 pub fn wav_bits_per_sample(codec : String) -> Int32 {
   match codec {
+    "dfpwm" => 1
     "pcm_u8" | "pcm_s8" | "pcm_alaw" | "pcm_mulaw" => 8
     "pcm_s16le" | "pcm_s16be" | "pcm_u16le" | "pcm_u16be" => 16
     "pcm_s24le" | "pcm_s24be" | "pcm_u24le" | "pcm_u24be" => 24
@@ -400,6 +433,48 @@ fn wav_parse_fmt(
       if base_matches {
         format_tag = wav_u32(subformat, 0, false).to_int()
         codec = ff_wav_codec_id(format_tag, bits)
+      } else {
+        codec = match subformat {
+          [
+            0x2C,
+            0x80,
+            0x6D,
+            0xE0,
+            0x46,
+            0xDB,
+            0xCF,
+            0x11,
+            0xB4,
+            0xD1,
+            0x00,
+            0x80,
+            0x5F,
+            0x6C,
+            0xBB,
+            0xEA,
+          ] => "ac3"
+          [
+            0xAF,
+            0x87,
+            0xFB,
+            0xA7,
+            0x02,
+            0x2D,
+            0xFB,
+            0x42,
+            0xA4,
+            0xD4,
+            0x05,
+            0xCD,
+            0x93,
+            0x84,
+            0x3B,
+            0xDD,
+          ] => "eac3"
+          [0x3A, 0xC1, 0xFA, 0x38, 0x81, 0x1D, 0x43, 0x61,
+           0xA4, 0x0D, 0xCE, 0x53, 0xCA, 0x60, 0x7C, 0xD1] => "dfpwm"
+          _ => codec
+        }
       }
       cb = cb - 22
       remaining = remaining - 22
@@ -545,7 +620,7 @@ pub fn av_wav_open(data : Bytes) -> Result[WavDemux, String] {
 }
 
 ///|
-/// Packetize PCM payload at `data_ofs..data_ofs+data_size` for the parsed
+/// Packetize the payload at `data_ofs..data_ofs+data_size` for the parsed
 /// `fmt` (shared by the RIFF/RF64 and Wave64 readers).
 fn wav_build_demux(
   data : Bytes,
@@ -553,12 +628,35 @@ fn wav_build_demux(
   data_ofs : Int64,
   data_size_in : Int64,
   sample_count_in : Int64,
+  wave64~ : Bool = false,
 ) -> Result[WavDemux, String] {
   let mut data_size = data_size_in
   let mut sample_count = sample_count_in
   let remaining = data.length().to_int64() - data_ofs
   if data_size <= 0L || data_size > remaining {
     data_size = remaining
+  }
+  if fmt.codec == "flac" {
+    return wav_flac_demux(data, fmt, data_ofs, data_size, wave64~)
+  }
+  if fmt.codec == "ac3" || fmt.codec == "eac3" || fmt.codec == "dts" {
+    let payload = data[data_ofs.to_int():(data_ofs + data_size).to_int()]
+    return wav_surround_demux(payload, fmt, data_ofs, wave64~)
+  }
+  if (fmt.codec == "pcm_s16le" || fmt.codec == "pcm_s16be") &&
+    fmt.channels == 2 &&
+    fmt.bits_per_sample == 16 &&
+    fmt.block_align == 4 {
+    let payload = data[data_ofs.to_int():(data_ofs + data_size).to_int()]
+    if wav_probe_spdif(payload, fmt, data_ofs, wave64~) is Some(demux) {
+      return Ok(demux)
+    }
+    if fmt.codec == "pcm_s16le" &&
+      fmt.sample_rate == 44100 &&
+      wav_probe_dts_cd(payload, wave64~) is Some(track) {
+      // The PCM carrier's speaker mask describes its two stored channels.
+      return Ok(wav_dts_demux(track, { ..fmt, channel_mask: 0U, }, data_ofs))
+    }
   }
   let exact_bits = wav_bits_per_sample(fmt.codec)
   let wav49 = fmt.codec == "gsm_ms" && fmt.block_align == 65
@@ -568,10 +666,14 @@ fn wav_build_demux(
     let codec = if swf { "Flash ADPCM" } else { "Duck IMA" }
     return Err("wav: missing \{codec} block alignment")
   }
-  let g726_bits = if fmt.codec == "adpcm_g726" && fmt.channels == 1 &&
-    fmt.bits_per_sample >= 2 && fmt.bits_per_sample <= 5 {
+  let g726_bits = if fmt.codec == "adpcm_g726" &&
+    fmt.channels == 1 &&
+    fmt.bits_per_sample >= 2 &&
+    fmt.bits_per_sample <= 5 {
     fmt.bits_per_sample
-  } else { 0 }
+  } else {
+    0
+  }
   let alignment = fmt.block_align.max(1)
   let alignment = if g726_bits % 2 != 0 && alignment % g726_bits != 0 {
     // Three- and five-bit codewords cannot cross the packet boundary.
@@ -651,6 +753,9 @@ fn wav_build_demux(
   }
   match framed {
     Some(track) => {
+      if fmt.codec == "aac" {
+        sample_count = track.total_samples
+      }
       // Timestamps: the mpegaudio parser derives CBR pts itself (the oracle
       // shows 1152-sample steps for MP3-in-WAV); the AAC parser leaves pts
       // untouched, so WAV AAC packets carry NOPTS in the C. The facade's
@@ -739,17 +844,28 @@ fn wav_build_demux(
             size / 65 * 320
           } else if swf {
             let offset = packet_pos.to_int()
-            match @libavcodec.swf_adpcm_samples(data[offset:offset + size], fmt.channels) {
+            match
+              @libavcodec.swf_adpcm_samples(
+                data[offset:offset + size],
+                fmt.channels,
+              ) {
               Ok(n) => n
               Err(e) => return Err(e)
             }
           } else if duck {
-            match @libavcodec.adpcm_duck_block_samples(fmt.codec, size, fmt.channels) {
+            match
+              @libavcodec.adpcm_duck_block_samples(
+                fmt.codec,
+                size,
+                fmt.channels,
+              ) {
               Ok(n) => n
               Err(e) => return Err(e)
             }
           } else if g726_bits > 0 {
             size * 8 / g726_bits
+          } else if fmt.codec == "dfpwm" && fmt.channels > 0 {
+            size * 8 / fmt.channels
           } else if fmt.codec == "adpcm_g722" && fmt.channels > 0 {
             size / fmt.channels * 2
           } else if fmt.block_align > 0 {
@@ -762,7 +878,11 @@ fn wav_build_demux(
           packets.push({
             pos: packet_pos,
             size,
-            pts: if wma_packet { ts_nopts } else { pts },
+            pts: if wma_packet {
+              ts_nopts
+            } else {
+              pts
+            },
             duration,
             is_keyframe: true,
           })
@@ -782,5 +902,40 @@ fn wav_build_demux(
     sample_count,
     max_size,
     packets,
+    spdif_big_endian: None,
   })
+}
+
+///|
+fn wav_indexed_demux(
+  format : WavFormat,
+  data_offset : Int64,
+  frames : Array[RawAudioFrame],
+  sample_count : Int64,
+  frame_offset~ : Int64 = 0L,
+  spdif_big_endian~ : Bool? = None,
+) -> WavDemux {
+  let mut max_size = 0
+  let mut end = data_offset
+  let packets = frames.map(frame => {
+    let pos = frame_offset + frame.pos
+    max_size = max_size.max(frame.size)
+    end = pos + frame.size.to_int64()
+    WavPacket::{
+      pos,
+      size: frame.size,
+      pts: frame.pts,
+      duration: frame.duration,
+      is_keyframe: frame.is_keyframe,
+    }
+  })
+  {
+    format,
+    data_offset,
+    data_size: end - data_offset,
+    sample_count,
+    max_size,
+    packets,
+    spdif_big_endian,
+  }
 }

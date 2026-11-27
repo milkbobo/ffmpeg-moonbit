@@ -54,8 +54,68 @@ fn probe_adts_aac(pd : ProbeData) -> Int32 {
     probe_score_extension
   } else if max_frames >= 3 {
     probe_score_extension / 2
+  } else if first_frames >= 1 && probe_complete_short_adts(buf) {
+    probe_score_extension / 2
   } else if first_frames >= 1 {
     1
+  } else {
+    0
+  }
+}
+
+///|
+/// Keep short, complete clips detectable without a filename hint.
+fn probe_complete_short_adts(buf : Bytes) -> Bool {
+  let mut pos = 0
+  while buf.length() - pos >= @libavcodec.av_aac_adts_header_size {
+    if (pb_be16(buf, pos) & 0xFFF6_U) != 0xFFF0_U {
+      return false
+    }
+    let header = match @libavcodec.ff_adts_header_parse_buf(
+      buf[pos:pos + @libavcodec.av_aac_adts_header_size].to_owned(),
+    ) {
+      Ok(v) => v
+      Err(_) => return false
+    }
+    let header_size = @libavcodec.av_aac_adts_header_size +
+      (if header.crc_absent == 0 { 2 } else { 0 })
+    if header.frame_length <= header_size || header.frame_length > buf.length() - pos {
+      return false
+    }
+    pos += header.frame_length
+  }
+  pos == buf.length()
+}
+
+///|
+/// LOAS AudioSyncStream. Check for three consecutive headers from the start
+/// as in FFmpeg's loasdec.c. Short complete clips also qualify when their
+/// StreamMuxConfig and all payload lengths parse successfully.
+fn probe_loas(pd : ProbeData) -> Int32 {
+  let data = pd.buf
+  let mut pos = 0
+  let mut frames = 0
+  while data.length() - pos >= 3 {
+    let header = pb_be24(data, pos)
+    if header >> 13 != 0x2B7U {
+      break
+    }
+    let size = (header & 0x1FFFU).reinterpret_as_int()
+    if size < 4 {
+      break
+    }
+    frames += 1
+    if frames == 3 {
+      return probe_score_extension + 1
+    }
+    if size > data.length() - pos - 3 {
+      break
+    }
+    pos += size + 3
+  }
+  if frames > 0 && pos == data.length() &&
+    @libavcodec.latm_parse_stream(data) is Ok({ frames: [_, ..], .. }) {
+    probe_score_extension / 2
   } else {
     0
   }
@@ -467,9 +527,9 @@ fn probe_mp3(pd : ProbeData) -> Int32 {
     max_framesizes = imax(max_framesizes, framesizes)
     if pos == start {
       first_frames = frames
-      if buf2 == end + 4 {
-        whole_used = true
-      }
+      // The scan leaves four bytes for its header lookahead. Use the
+      // declared frame lengths to tell whether the run covers the file.
+      whole_used = framesizes == buf.length() - start
     }
     pos = buf2 + 1
   }
@@ -486,7 +546,7 @@ fn probe_mp3(pd : ProbeData) -> Int32 {
     } else {
       probe_score_extension - 2
     }
-  } else if first_frames > 1 && whole_used {
+  } else if first_frames > 0 && whole_used {
     5
   } else if max_frames >= 1 && buf.length() < 10 * max_framesizes {
     1

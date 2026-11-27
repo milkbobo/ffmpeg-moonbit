@@ -162,22 +162,13 @@ fn flac_decode_residuals(
   pred_order : Int32,
   blocksize : Int32,
 ) -> Result[Unit, String] {
-  let method_type = gb.read(2).reinterpret_as_int()
-  let rice_order = gb.read(4).reinterpret_as_int()
-  if method_type > 1 {
-    return Err("flac: illegal residual coding method")
+  let (rice_bits, partitions, samples) = match flac_residual_header(gb, pred_order, blocksize) {
+    Ok(v) => v
+    Err(e) => return Err(e)
   }
-  let samples = blocksize >> rice_order
-  if samples << rice_order != blocksize {
-    return Err("flac: invalid rice order")
-  }
-  if pred_order > samples {
-    return Err("flac: predictor order exceeds partition size")
-  }
-  let rice_bits = 4 + method_type
   let rice_esc = (1 << rice_bits) - 1
   let mut wi = pred_order
-  for partition = 0; partition < 1 << rice_order; partition = partition + 1 {
+  for partition = 0; partition < partitions; partition = partition + 1 {
     let count = if partition == 0 { samples - pred_order } else { samples }
     let param = gb.read(rice_bits).reinterpret_as_int()
     if param == rice_esc {
@@ -197,6 +188,23 @@ fn flac_decode_residuals(
     }
   }
   Ok(())
+}
+
+///|
+fn flac_residual_header(gb : BitReader, pred_order : Int32, blocksize : Int32) -> Result[(Int32, Int32, Int32), String] {
+  let method_type = gb.read(2).reinterpret_as_int()
+  let rice_order = gb.read(4).reinterpret_as_int()
+  if method_type > 1 {
+    return Err("flac: illegal residual coding method")
+  }
+  let samples = blocksize >> rice_order
+  if samples << rice_order != blocksize {
+    return Err("flac: invalid rice order")
+  }
+  if pred_order > samples {
+    return Err("flac: predictor order exceeds partition size")
+  }
+  Ok((4 + method_type, 1 << rice_order, samples))
 }
 
 ///|
@@ -450,23 +458,9 @@ fn flac_decode_subframe(
   blocksize : Int32,
   wide : Array[Int64]?,
 ) -> Result[Unit, String] {
-  let mut bps = stream_bps
-  if channel == 0 && ch_mode == 2 {
-    bps = bps + 1
-  } else if channel != 0 && (ch_mode == 1 || ch_mode == 3) {
-    bps = bps + 1
-  }
-  if gb.read1() != 0 {
-    return Err("flac: invalid subframe padding")
-  }
-  let stype = gb.read(6).reinterpret_as_int()
-  let mut wasted = 0
-  if gb.read1() != 0 {
-    wasted = 1 + flac_unary(gb)
-    if wasted >= bps {
-      return Err("flac: invalid wasted bits")
-    }
-    bps = bps - wasted
+  let (stype, bps, wasted) = match flac_subframe_header(gb, channel, ch_mode, stream_bps) {
+    Ok(v) => v
+    Err(e) => return Err(e)
   }
   if bps > 32 {
     let out = match wide {
@@ -540,12 +534,36 @@ fn flac_decode_subframe(
 }
 
 ///|
+fn flac_subframe_header(
+  gb : BitReader,
+  channel : Int32,
+  ch_mode : Int32,
+  stream_bps : Int32,
+) -> Result[(Int32, Int32, Int32), String] {
+  let mut bps = stream_bps
+  if (channel == 0 && ch_mode == 2) ||
+    (channel != 0 && (ch_mode == 1 || ch_mode == 3)) {
+    bps += 1
+  }
+  if gb.read1() != 0 {
+    return Err("flac: invalid subframe padding")
+  }
+  let stype = gb.read(6).reinterpret_as_int()
+  let wasted = if gb.read1() != 0 { 1 + flac_unary(gb) } else { 0 }
+  if wasted >= bps {
+    return Err("flac: invalid wasted bits")
+  }
+  Ok((stype, bps - wasted, wasted))
+}
+
+///|
 /// One parsed FLAC frame header.
 priv struct FlacFrame {
   blocksize : Int32
   channels : Int32
   ch_mode : Int32
   bps : Int32
+  sample_rate : Int32
 }
 
 ///|
@@ -558,7 +576,7 @@ fn flac_frame_header(
   if (gb.read(15) & 0x7FFF) != 0x7FFC {
     return Err("flac: invalid frame sync")
   }
-  let _ = gb.read1() // blocking strategy
+  let variable_blocksize = gb.read1() != 0
   let bs_code = gb.read(4).reinterpret_as_int()
   let sr_code = gb.read(4).reinterpret_as_int()
   let ch_raw = gb.read(4).reinterpret_as_int()
@@ -584,7 +602,8 @@ fn flac_frame_header(
     Ok(v) => v
     Err(e) => return Err(e)
   }
-  if number < 0L || number > 0x7FFFFFFF {
+  let max_number = if variable_blocksize { 0xFFFFFFFFFL } else { 0x7FFFFFFFL }
+  if number < 0L || number > max_number {
     return Err("flac: frame number out of range")
   }
   let mut blocksize = 0
@@ -597,15 +616,15 @@ fn flac_frame_header(
   } else {
     blocksize = flac_blocksizes[bs_code]
   }
-  let mut _sample_rate = 0
+  let sample_rate =
   if sr_code < 12 {
-    _sample_rate = flac_sample_rates[sr_code]
+    flac_sample_rates[sr_code]
   } else if sr_code == 12 {
-    _sample_rate = gb.read(8).reinterpret_as_int() * 1000
+    gb.read(8).reinterpret_as_int() * 1000
   } else if sr_code == 13 {
-    _sample_rate = gb.read(16).reinterpret_as_int()
+    gb.read(16).reinterpret_as_int()
   } else if sr_code == 14 {
-    _sample_rate = gb.read(16).reinterpret_as_int() * 10
+    gb.read(16).reinterpret_as_int() * 10
   } else {
     return Err("flac: illegal sample rate code")
   }
@@ -615,7 +634,7 @@ fn flac_frame_header(
   } else if stream_bps != 0 && bps != stream_bps {
     return Err("flac: bit depth changes mid-stream")
   }
-  Ok({ blocksize, channels, ch_mode, bps, })
+  Ok({ blocksize, channels, ch_mode, bps, sample_rate, })
 }
 
 ///|
@@ -656,7 +675,7 @@ fn flac_streaminfo(
   let sample_rate = gb.read(20).reinterpret_as_int()
   let channels = gb.read(3).reinterpret_as_int() + 1
   let bps = gb.read(5).reinterpret_as_int() + 1
-  let total = (gb.read(32).reinterpret_as_int().to_int64() << 4) |
+  let total = (gb.read(32).to_int64() << 4) |
     gb.read(4).to_int64()
   gb.skip(128) // MD5
   Ok((sample_rate, channels, bps, total, max_blocksize))

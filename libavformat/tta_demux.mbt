@@ -1,7 +1,6 @@
 ///|
 /// Native TTA1 demuxing follows FFmpeg `libavformat/tta.c` (copyright 2006
-/// Alex Beregszaszi, LGPL-2.1-or-later). Header and seek table CRCs are
-/// skipped, as in FFmpeg's default demux path.
+/// Alex Beregszaszi, LGPL-2.1-or-later). CRC checking is optional.
 pub struct TtaTrack {
   header : @libavcodec.TtaHeader
   extradata : Bytes
@@ -17,7 +16,10 @@ pub struct TtaTrack {
 ///   assert_true(@libavformat.av_tta_open(b"TTA1") is Err(_))
 /// }
 /// ```
-pub fn av_tta_open(data : Bytes) -> Result[TtaTrack, String] {
+pub fn av_tta_open(
+  data : Bytes,
+  verify_crc~ : Bool = false,
+) -> Result[TtaTrack, String] {
   let mut start = 0
   while probe_id3v2_match_at(data, start) {
     let len = probe_id3v2_tag_len_at(data, start)
@@ -30,7 +32,7 @@ pub fn av_tta_open(data : Bytes) -> Result[TtaTrack, String] {
     return Err("tta: truncated header")
   }
   let extradata = data[start:start + 22].to_owned()
-  let header = match @libavcodec.tta_parse_header(extradata) {
+  let header = match @libavcodec.tta_parse_header(extradata, verify_crc~) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -44,6 +46,9 @@ pub fn av_tta_open(data : Bytes) -> Result[TtaTrack, String] {
   if table_end > data.length().to_int64() {
     return Err("tta: truncated seek table")
   }
+  if verify_crc && !@libavcodec.tta_crc_valid(data[table:table_end.to_int()]) {
+    return Err("tta: seek table CRC mismatch")
+  }
   let mut pos = table_end.to_int()
   let frames : Array[RawAudioFrame] = []
   for i in 0..<n.to_int() {
@@ -52,6 +57,9 @@ pub fn av_tta_open(data : Bytes) -> Result[TtaTrack, String] {
     let duration = (header.total_samples - pts).min(nominal).to_int()
     if size < 5L || size > (data.length() - pos).to_int64() {
       return Err("tta: invalid frame size")
+    }
+    if verify_crc && !@libavcodec.tta_crc_valid(data[pos:pos + size.to_int()]) {
+      return Err("tta: frame CRC mismatch at \{pts}")
     }
     frames.push({
       pos: pos.to_int64(),
@@ -63,6 +71,34 @@ pub fn av_tta_open(data : Bytes) -> Result[TtaTrack, String] {
     pos += size.to_int()
   }
   Ok({ header, extradata, frames, })
+}
+
+///|
+/// Write the track at its current sample rate as an unencrypted TTA1 file.
+pub fn DecodedAudio::to_tta(
+  self : DecodedAudio,
+  bits~ : Int32 = 24,
+) -> Bytes raise MediaError {
+  guard bits == 8 || bits == 16 || bits == 24 else {
+    raise UnsupportedCodec("tta: sample depth must be 8, 16 or 24 bits")
+  }
+  guard self.channels >= 1 && self.channels <= 16 else {
+    raise UnsupportedCodec("tta: invalid channel count")
+  }
+  let count = self.samples[0].length()
+  guard count <= 2147483647 / self.channels else {
+    raise DecodeError("tta: too many PCM samples")
+  }
+  let pcm = Array::makei(count * self.channels, i => {
+    playback_pcm_quantize(
+      self.samples[i % self.channels][i / self.channels],
+      bits,
+    )
+  })
+  match @libavcodec.encode_tta(pcm[:], self.sample_rate, self.channels, bits) {
+    Ok(data) => data
+    Err(error) => raise DecodeError(error)
+  }
 }
 
 ///|

@@ -19,7 +19,7 @@ fn dts_has_extension(src : BytesView) -> Bool {
 }
 
 ///|
-fn dts_find_start(data : Bytes) -> Result[(Int, @libavcodec.DcaCoreHeader), String] {
+fn dts_find_start(data : BytesView) -> Result[(Int, @libavcodec.DcaCoreHeader), String] {
   // Cap prefix resynchronization; this demuxer is for raw core streams, not
   // for finding DTS payloads embedded deep inside unrelated files.
   for pos in 0..<data.length().min(4096) {
@@ -35,7 +35,7 @@ fn dts_find_start(data : Bytes) -> Result[(Int, @libavcodec.DcaCoreHeader), Stri
 }
 
 ///|
-fn dts_next_boundary(data : Bytes, end : Int) -> Int {
+fn dts_next_boundary(data : BytesView, end : Int) -> Int {
   // Some streams align packets to a 32-bit boundary. Do not include padding in
   // the packet and never skip a nonzero byte (including a partial sync word).
   let limit = (data.length() - end).min(3)
@@ -58,6 +58,11 @@ fn dts_next_boundary(data : Bytes, end : Int) -> Int {
 /// }
 /// ```
 pub fn av_dts_open(data : Bytes) -> Result[DtsTrack, String] {
+  dts_open(data[:])
+}
+
+///|
+fn dts_open(data : BytesView, max_tail_padding~ : Int32 = 3) -> Result[DtsTrack, String] {
   let (start, first) = match dts_find_start(data) {
     Ok(v) => v
     Err(e) => return Err(e)
@@ -78,8 +83,8 @@ pub fn av_dts_open(data : Bytes) -> Result[DtsTrack, String] {
       is_keyframe: true,
     })
     let total_samples = pts + h.samples.to_int64()
-    let next = dts_next_boundary(data, pos + h.frame_size)
-    if next == data.length() {
+    let end = pos + h.frame_size
+    if data.length() - end <= max_tail_padding && data[end:].iter().all(byte => byte == 0) {
       return Ok({
         sample_rate: first.sample_rate,
         channels: first.channels,
@@ -88,6 +93,7 @@ pub fn av_dts_open(data : Bytes) -> Result[DtsTrack, String] {
         total_samples,
       })
     }
+    let next = dts_next_boundary(data, end)
     let src = data[next:]
     if dts_has_extension(src) {
       return Err("dts: extension substream is not supported")
@@ -103,14 +109,14 @@ pub fn av_dts_open(data : Bytes) -> Result[DtsTrack, String] {
 /// Probe only core streams. A complete leading frame suffices; if preceded
 /// by junk, require two consecutive complete frames with matching parameters.
 fn probe_dts(pd : ProbeData) -> Int {
-  let (pos, first) = match dts_find_start(pd.buf) {
+  let (pos, first) = match dts_find_start(pd.buf[:]) {
     Ok(v) => v
     Err(_) => return 0
   }
   if first.frame_size > pd.buf.length() - pos {
     return 0
   }
-  let next = dts_next_boundary(pd.buf, pos + first.frame_size)
+  let next = dts_next_boundary(pd.buf[:], pos + first.frame_size)
   let src = pd.buf[next:]
   if dts_has_extension(src) {
     return 0

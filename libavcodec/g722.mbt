@@ -1,6 +1,6 @@
 ///|
 /// G.722 ADPCM decoder, ported from FFmpeg 9.0.2 `libavcodec/g722dec.c`,
-/// `g722.c` and `g722dsp.c` (ITU-T G.722, 64 kbit/s two-bit high band).
+/// `g722.c` and `g722dsp.c` (ITU-T G.722, 48/56/64 kbit/s).
 ///
 /// `G722Decoder` keeps the sub-band predictor state and the QMF history
 /// across packets. Each input byte yields two 16 kHz output samples.
@@ -44,6 +44,14 @@ let g722_low_inv_quant6 : FixedArray[Int32] = [
   -300, -254, -211, -170, -130, -91, 3101, 2738, 2376, 2088, 1873, 1689, 1535, 1399,
   1279, 1170, 1072, 982, 899, 822, 750, 682, 618, 558, 501, 447, 396, 347, 300, 254,
   211, 170, 130, 91, 54, 17, -54, -17,
+]
+
+///|
+/// `low_inv_quant5`, the low-band reconstruction table for 56 kbit/s.
+let g722_low_inv_quant5 : FixedArray[Int32] = [
+  -35, -35, -2919, -2195, -1765, -1458, -1219, -1023, -858, -714, -587, -473, -370,
+  -276, -190, -110, 2919, 2195, 1765, 1458, 1219, 1023, 858, 714, 587, 473, 370,
+  276, 190, 110, 35, -35,
 ]
 
 ///|
@@ -225,15 +233,46 @@ pub struct G722Decoder {
   band1 : G722Band
   prev : FixedArray[Int32]
   mut prev_pos : Int32
+  priv unused_bits : Int32
+  priv low_inv_quant : FixedArray[Int32]
 }
 
 ///|
 pub fn g722_decoder_new() -> G722Decoder {
+  g722_init_decoder(0, g722_low_inv_quant6)
+}
+
+///|
+/// Set the number of significant bits in each byte. Any unused low bits are
+/// ignored. The sample rate and packet size are independent of the mode.
+pub fn G722Decoder::with_codeword_bits(
+  bits : Int32,
+) -> Result[G722Decoder, String] {
+  match bits {
+    8 => Ok(g722_decoder_new())
+    7 => Ok(g722_init_decoder(1, g722_low_inv_quant5))
+    6 => Ok(g722_init_decoder(2, g722_low_inv_quant4))
+    _ => Err("g722: codeword width must be 6, 7 or 8 bits")
+  }
+}
+
+///|
+fn g722_init_decoder(
+  unused_bits : Int32,
+  low_inv_quant : FixedArray[Int32],
+) -> G722Decoder {
   let band0 = g722_band_new()
   let band1 = g722_band_new()
   band0.scale_factor = 8
   band1.scale_factor = 2
-  { band0, band1, prev: FixedArray::make(1024, 0), prev_pos: 22, }
+  {
+    band0,
+    band1,
+    prev: FixedArray::make(1024, 0),
+    prev_pos: 22,
+    unused_bits,
+    low_inv_quant,
+  }
 }
 
 ///|
@@ -249,35 +288,53 @@ fn g722_apply_qmf(prev : FixedArray[Int32], start : Int32) -> (Int32, Int32) {
 }
 
 ///|
-/// Decode a packet of G.722 codewords (8 bits per codeword) into 16-bit PCM.
+fn g722_qmf_pair(
+  history : FixedArray[Int32],
+  pos : Int32,
+  first : Int32,
+  second : Int32,
+) -> (Int32, Int32, Int32) {
+  history[pos] = first
+  history[pos + 1] = second
+  let end = pos + 2
+  let (x0, x1) = g722_apply_qmf(history, end - 24)
+  let next_pos = if end == history.length() {
+    for i in 0..<22 {
+      history[i] = history[end - 22 + i]
+    }
+    22
+  } else {
+    end
+  }
+  (x0, x1, next_pos)
+}
+
+///|
+/// Decode byte-aligned G.722 codewords into 16-bit PCM.
 pub fn G722Decoder::decode(self : G722Decoder, data : Bytes) -> Array[Int32] {
   let out : Array[Int32] = []
   for byte in data {
     let v = byte.to_int()
     let ihigh = (v >> 6) & 0x03
-    let ilow = v & 0x3F
+    let ilow = (v & 0x3F) >> self.unused_bits
     let rlow = g722_clip_intp2(
-      ((self.band0.scale_factor * g722_low_inv_quant6[ilow]) >> 10) +
+      ((self.band0.scale_factor * self.low_inv_quant[ilow]) >> 10) +
       self.band0.s_predictor,
       14,
     )
-    g722_update_low_predictor(self.band0, ilow >> 2)
+    g722_update_low_predictor(self.band0, ilow >> (2 - self.unused_bits))
     let dhigh = (self.band1.scale_factor * g722_high_inv_quant[ihigh]) >> 10
     let rhigh = g722_clip_intp2(dhigh + self.band1.s_predictor, 14)
     g722_update_high_predictor(self.band1, dhigh, ihigh)
-    self.prev[self.prev_pos] = rlow + rhigh
-    self.prev_pos = self.prev_pos + 1
-    self.prev[self.prev_pos] = rlow - rhigh
-    self.prev_pos = self.prev_pos + 1
-    let (x0, x1) = g722_apply_qmf(self.prev, self.prev_pos - 24)
+    let (x0, x1, next_pos) = g722_qmf_pair(
+      self.prev,
+      self.prev_pos,
+      rlow + rhigh,
+      rlow - rhigh,
+    )
+    self.prev_pos = next_pos
     out.push(g722_clip_int16(x0 >> 11))
     out.push(g722_clip_int16(x1 >> 11))
-    if self.prev_pos >= 1024 {
-      for i = 0; i < 22; i = i + 1 {
-        self.prev[i] = self.prev[self.prev_pos - 22 + i]
-      }
-      self.prev_pos = 22
-    }
   }
   out
 }

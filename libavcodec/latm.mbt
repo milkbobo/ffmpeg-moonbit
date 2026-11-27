@@ -5,8 +5,8 @@
 /// AudioSpecificConfig, and each PayloadMux slot is repacked byte-aligned so
 /// the raw AAC decoder can consume it.
 ///
-/// Only AAC-LC (single program, single layer, frameLengthType 0/1 and
-/// audioMuxVersionA 0) is supported, matching the rest of this port.
+/// AAC-LC with a fixed ASC, one program/layer/subframe, same-time framing,
+/// frameLengthType 0/1 and audioMuxVersionA 0.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -16,6 +16,8 @@
 pub struct LatmStream {
   asc : Bytes
   frames : Array[Bytes]
+  /// Byte ranges [start, end) of the corresponding LOAS frames.
+  frame_ranges : Array[(Int32, Int32)]
 }
 
 ///|
@@ -51,6 +53,7 @@ fn latm_read_bytes(
 /// Parse a LOAS stream into its AudioSpecificConfig and raw AAC frames.
 pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
   let frames : Array[Bytes] = []
+  let frame_ranges : Array[(Int32, Int32)] = []
   let mut asc : Bytes = b""
   let mut have_config = false
   let mut frame_length_type = -1
@@ -66,10 +69,10 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
     let mux_len = ((data[pos + 1].to_int() & 0x1F) << 8) |
       data[pos + 2].to_int()
     let start = pos + 3
-    let end = start + mux_len
-    if end > data.length() {
+    if mux_len == 0 || mux_len > data.length() - start {
       return Err("latm: truncated LOAS frame")
     }
+    let end = start + mux_len
     let gb = BitReader::new(data[start:end].to_owned())
     if gb.read1() == 0 {
       // StreamMuxConfig
@@ -84,15 +87,19 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
       if version {
         let _ = latm_get_value(gb) // taraFullness
       }
-      let _ = gb.read1() // allStreamsSameTimeFraming
-      let _ = gb.read(6) // numSubFrames
+      if gb.read1() == 0 {
+        return Err("latm: asynchronous stream framing is not supported")
+      }
+      if gb.read(6) != 0 {
+        return Err("latm: multiple subframes are not supported")
+      }
       if gb.read(4) != 0 {
         return Err("latm: multiple programs are not supported")
       }
       if gb.read(3) != 0 {
         return Err("latm: multiple layers are not supported")
       }
-      if !version {
+      let config = if !version {
         // ASC length is implied by its syntax; decode a repacked copy of the
         // remaining bits, then rewind to advance by the consumed length.
         let start_bit = gb.count()
@@ -101,21 +108,19 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
           Err(e) => return Err(e)
         }
         let parsed = match
-          aac_parse_audio_specific_config(Bytes::from_array(rest)) {
+          aac_parse_asc(Bytes::from_array(rest), sync_extension=false) {
           Ok(v) => v
           Err(e) => return Err("latm: " + e)
         }
         let asc_bits = parsed.bits_consumed
-        let asc_bytes = (asc_bits + 7) / 8
         if asc_bits <= 0 || asc_bits > gb.count() - start_bit {
           return Err("latm: invalid ASC length")
         }
-        let stored : Array[Byte] = []
-        for i = 0; i < asc_bytes; i = i + 1 {
-          stored.push(rest[i])
+        gb.set_pos(start_bit)
+        match latm_read_bytes(gb, asc_bits) {
+          Ok(v) => Bytes::from_array(v)
+          Err(e) => return Err(e)
         }
-        asc = Bytes::from_array(stored)
-        gb.set_pos(start_bit + asc_bits)
       } else {
         let asc_len = latm_get_value(gb).reinterpret_as_int()
         if asc_len <= 0 || asc_len > gb.bits_left() {
@@ -125,13 +130,16 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
           Ok(v) => v
           Err(e) => return Err(e)
         }
-        let _ = match
-          aac_parse_audio_specific_config(Bytes::from_array(stored)) {
-          Ok(v) => v
+        let stored = Bytes::from_array(stored)
+        match aac_parse_audio_specific_config(stored) {
+          Ok(_) => stored
           Err(e) => return Err("latm: " + e)
         }
-        asc = Bytes::from_array(stored)
       }
+      if have_config && config != asc {
+        return Err("latm: changing AudioSpecificConfig is not supported")
+      }
+      asc = config
       have_config = true
       frame_length_type = gb.read(3).reinterpret_as_int()
       if frame_length_type == 0 {
@@ -192,11 +200,12 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
         Err(e) => return Err(e)
       }
       frames.push(Bytes::from_array(au))
+      frame_ranges.push((pos, end))
     }
     pos = end
   }
   if !have_config {
     return Err("latm: no StreamMuxConfig found")
   }
-  Ok({ asc, frames, })
+  Ok({ asc, frames, frame_ranges, })
 }

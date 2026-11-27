@@ -13,6 +13,7 @@
 priv struct AptxTables {
   intervals : FixedArray[Int32]
   invert_factors : FixedArray[Int32]
+  encode_factors : FixedArray[Int32]
   offsets : FixedArray[Int32]
   factor_max : Int32
   order : Int32
@@ -25,6 +26,7 @@ fn aptx_tables(hd : Bool, subband : Int32) -> AptxTables {
       {
         intervals: aptx_hd_quantize_intervals_LF,
         invert_factors: aptx_hd_invert_quantize_dither_factors_LF,
+        encode_factors: aptx_hd_encode_dither_lf,
         offsets: aptx_hd_quantize_factor_select_offset_LF,
         factor_max: 0x11FF,
         order: 24,
@@ -33,6 +35,7 @@ fn aptx_tables(hd : Bool, subband : Int32) -> AptxTables {
       {
         intervals: aptx_hd_quantize_intervals_MLF,
         invert_factors: aptx_hd_invert_quantize_dither_factors_MLF,
+        encode_factors: aptx_hd_encode_dither_mlf,
         offsets: aptx_hd_quantize_factor_select_offset_MLF,
         factor_max: 0x14FF,
         order: 12,
@@ -41,6 +44,7 @@ fn aptx_tables(hd : Bool, subband : Int32) -> AptxTables {
       {
         intervals: aptx_hd_quantize_intervals_MHF,
         invert_factors: aptx_hd_invert_quantize_dither_factors_MHF,
+        encode_factors: aptx_hd_encode_dither_mhf,
         offsets: aptx_hd_quantize_factor_select_offset_MHF,
         factor_max: 0x16FF,
         order: 6,
@@ -49,6 +53,7 @@ fn aptx_tables(hd : Bool, subband : Int32) -> AptxTables {
       {
         intervals: aptx_hd_quantize_intervals_HF,
         invert_factors: aptx_hd_invert_quantize_dither_factors_HF,
+        encode_factors: aptx_hd_encode_dither_hf,
         offsets: aptx_hd_quantize_factor_select_offset_HF,
         factor_max: 0x15FF,
         order: 12,
@@ -58,6 +63,7 @@ fn aptx_tables(hd : Bool, subband : Int32) -> AptxTables {
     {
       intervals: aptx_quantize_intervals_LF,
       invert_factors: aptx_invert_quantize_dither_factors_LF,
+      encode_factors: aptx_encode_dither_lf,
       offsets: aptx_quantize_factor_select_offset_LF,
       factor_max: 0x11FF,
       order: 24,
@@ -66,6 +72,7 @@ fn aptx_tables(hd : Bool, subband : Int32) -> AptxTables {
     {
       intervals: aptx_quantize_intervals_MLF,
       invert_factors: aptx_invert_quantize_dither_factors_MLF,
+      encode_factors: aptx_encode_dither_mlf,
       offsets: aptx_quantize_factor_select_offset_MLF,
       factor_max: 0x14FF,
       order: 12,
@@ -74,6 +81,7 @@ fn aptx_tables(hd : Bool, subband : Int32) -> AptxTables {
     {
       intervals: aptx_quantize_intervals_MHF,
       invert_factors: aptx_invert_quantize_dither_factors_MHF,
+      encode_factors: aptx_encode_dither_mhf,
       offsets: aptx_quantize_factor_select_offset_MHF,
       factor_max: 0x16FF,
       order: 6,
@@ -82,6 +90,7 @@ fn aptx_tables(hd : Bool, subband : Int32) -> AptxTables {
     {
       intervals: aptx_quantize_intervals_HF,
       invert_factors: aptx_invert_quantize_dither_factors_HF,
+      encode_factors: aptx_encode_dither_hf,
       offsets: aptx_quantize_factor_select_offset_HF,
       factor_max: 0x15FF,
       order: 12,
@@ -216,6 +225,8 @@ fn aptx_qmf_polyphase_synthesis(
 /// `Quantize`.
 priv struct AptxQuantize {
   mut quantized_sample : Int32
+  mut parity_change : Int32
+  mut error : Int32
 }
 
 ///|
@@ -284,7 +295,7 @@ fn aptx_channel_new() -> AptxChannel {
   let invert : Array[AptxInvertQuantize] = []
   let prediction : Array[AptxPrediction] = []
   for _ in 0..<4 {
-    quantize.push({ quantized_sample: 0, })
+    quantize.push({ quantized_sample: 0, parity_change: 0, error: 0, })
     invert.push({
       quantization_factor: 0,
       factor_select: 0,
@@ -332,6 +343,11 @@ fn aptx_quantized_parity(channel : AptxChannel) -> Int32 {
     parity = parity ^ channel.quantize[subband].quantized_sample
   }
   parity & 1
+}
+
+///|
+fn aptx_stereo_parity(channels : Array[AptxChannel]) -> Int32 {
+  aptx_quantized_parity(channels[0]) ^ aptx_quantized_parity(channels[1])
 }
 
 ///|
@@ -521,14 +537,15 @@ fn aptx_decode_channel(
 
 ///|
 /// Decoder state across blocks.
-priv struct AptxDecoder {
+pub struct AptxDecoder {
   hd : Bool
   mut sync_idx : Int32
-  channels : Array[AptxChannel]
+  priv channels : Array[AptxChannel]
 }
 
 ///|
-fn aptx_decoder_new(hd : Bool) -> AptxDecoder {
+/// Create a decoder whose filter, predictor and parity state span packets.
+pub fn AptxDecoder::new(hd~ : Bool = false) -> AptxDecoder {
   { hd, sync_idx: 0, channels: [aptx_channel_new(), aptx_channel_new()], }
 }
 
@@ -536,7 +553,7 @@ fn aptx_decoder_new(hd : Bool) -> AptxDecoder {
 /// Decode one block into 8 interleaved samples.
 fn AptxDecoder::decode_block(
   self : AptxDecoder,
-  block : Bytes,
+  block : BytesView,
 ) -> Result[Array[Int32], String] {
   let samples : Array[FixedArray[Int32]] = [
     FixedArray::make(4, 0),
@@ -570,8 +587,7 @@ fn AptxDecoder::decode_block(
     }
     aptx_invert_quantize_and_prediction(channel, self.hd)
   }
-  let parity = aptx_quantized_parity(self.channels[0]) ^
-    aptx_quantized_parity(self.channels[1])
+  let parity = aptx_stereo_parity(self.channels)
   let eighth = self.sync_idx == 7
   self.sync_idx = (self.sync_idx + 1) & 7
   if (parity ^ (if eighth { 1 } else { 0 })) != 0 {
@@ -589,28 +605,38 @@ fn AptxDecoder::decode_block(
 }
 
 ///|
-/// Decode a raw aptX (`hd = false`, 4-byte blocks) or aptX HD (`hd = true`,
-/// 6-byte blocks) stream.
-pub fn ff_aptx_decode(
-  data : Bytes,
-  hd~ : Bool = false,
+/// Decode a whole number of aptX or aptX HD blocks to interleaved s32 PCM.
+pub fn AptxDecoder::decode_packet(
+  self : AptxDecoder,
+  data : BytesView,
 ) -> Result[AptxAudio, String] {
-  let block_size = if hd { 6 } else { 4 }
-  let decoder = aptx_decoder_new(hd)
+  let block_size = if self.hd { 6 } else { 4 }
+  guard data.length() % block_size == 0 else {
+    return Err("aptx: incomplete block")
+  }
   let out : Array[Int32] = []
-  let mut pos = 0
-  while pos + block_size <= data.length() {
-    let block = data[pos:pos + block_size].to_owned()
-    let samples = match decoder.decode_block(block) {
+  for pos = 0; pos < data.length(); pos = pos + block_size {
+    let samples = match self.decode_block(data[pos:pos + block_size]) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
     for s in samples {
       out.push(s)
     }
-    pos = pos + block_size
   }
   Ok({ samples: out, })
+}
+
+///|
+/// Decode a raw aptX (`hd = false`, 4-byte blocks) or aptX HD (`hd = true`,
+/// 6-byte blocks) stream. An incomplete trailing block is ignored.
+pub fn ff_aptx_decode(
+  data : Bytes,
+  hd~ : Bool = false,
+) -> Result[AptxAudio, String] {
+  let block_size = if hd { 6 } else { 4 }
+  let end = data.length() / block_size * block_size
+  AptxDecoder::new(hd~).decode_packet(data[:end])
 }
 
 ///|

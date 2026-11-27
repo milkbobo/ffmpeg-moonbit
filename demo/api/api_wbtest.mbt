@@ -203,7 +203,7 @@ test "image export creates PNG, JPEG and APNG files" {
 }
 
 ///|
-test "audio export writes WavPack, AC-3 and Vorbis files with partial final blocks" {
+test "audio export writes WavPack, AC-3, S/PDIF and Vorbis files with partial final blocks" {
   let rate = 48000
   let samples = 1801
   let pcm = Array::makei(samples, i => {
@@ -211,7 +211,13 @@ test "audio export writes WavPack, AC-3 and Vorbis files with partial final bloc
   })
   let wav = demo_encode_audio([pcm, pcm], rate, "wav")
   let source = bytes_to_u0100(wav)
-  for (format, codec) in [("wv", "wavpack"), ("ac3", "ac3"), ("ogg", "vorbis")] {
+  for
+    (format, codec) in [
+      ("wv", "wavpack"),
+      ("ac3", "ac3"),
+      ("spdif", "ac3"),
+      ("ogg", "vorbis"),
+    ] {
     let response = ff_export_audio(source, 0, format)
     guard @json.parse(response) is Object(fields) &&
       fields.get(format) is Some(String(encoded)) else {

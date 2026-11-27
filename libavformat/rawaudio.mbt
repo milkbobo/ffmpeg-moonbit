@@ -171,6 +171,14 @@ fn adts_profile_name(object_type : Int32) -> String {
 /// Parse a raw ADTS AAC stream. Frames are split on `aac_frame_length`; each
 /// returned frame includes its 7-byte ADTS header (plus CRC when present).
 pub fn av_adts_open(data : Bytes) -> Result[RawAudioTrack, String] {
+  adts_open(data, for_playback=false)
+}
+
+///|
+fn adts_open(
+  data : Bytes,
+  for_playback~ : Bool,
+) -> Result[RawAudioTrack, String] {
   let start = id3_skip(data)
   let frames : Array[RawAudioFrame] = []
   let mut pos = start
@@ -179,7 +187,15 @@ pub fn av_adts_open(data : Bytes) -> Result[RawAudioTrack, String] {
   let mut channels = 0
   let mut frame_size = 0
   let mut profile = ""
-  while pos + @libavcodec.av_aac_adts_header_size <= data.length() {
+  while data.length() - pos >= @libavcodec.av_aac_adts_header_size {
+    if probe_id3v2_match_at(data, pos) {
+      let size = probe_id3v2_tag_len_at(data, pos)
+      if size > data.length() - pos {
+        break
+      }
+      pos += size
+      continue
+    }
     let hdr = data
       .clamped_view(start=pos, end=pos + @libavcodec.av_aac_adts_header_size)
       .to_owned()
@@ -191,6 +207,24 @@ pub fn av_adts_open(data : Bytes) -> Result[RawAudioTrack, String] {
         continue
       }
     }
+    let len = header.frame_length
+    if len > data.length() - pos {
+      break
+    }
+    if for_playback {
+      if header.object_type != 2 || header.chan_config == 0 ||
+        header.num_aac_frames != 1 {
+        return Err("adts: expected an AAC-LC core, a header channel configuration and one raw data block per frame")
+      }
+      if len <= @libavcodec.av_aac_adts_header_size +
+        (if header.crc_absent == 0 { 2 } else { 0 }) {
+        return Err("adts: missing AAC payload")
+      }
+      if frames.length() > 0 && (header.sample_rate != sample_rate ||
+        adts_channels(header.chan_config) != channels) {
+        return Err("adts: changing sample rate or channel configuration")
+      }
+    }
     if frames.length() == 0 {
       sample_rate = header.sample_rate
       channels = adts_channels(header.chan_config)
@@ -198,10 +232,6 @@ pub fn av_adts_open(data : Bytes) -> Result[RawAudioTrack, String] {
       profile = adts_profile_name(header.object_type)
     } else if header.sample_rate != sample_rate {
       // A format change mid-stream is not representable in one track.
-      break
-    }
-    let len = header.frame_length
-    if pos + len > data.length() {
       break
     }
     frames.push({
@@ -372,6 +402,11 @@ pub fn av_amr_open(data : Bytes) -> Result[RawAudioTrack, String] {
 /// frame yields `num_blocks * 256` samples (normally 1536).  Both plain AC-3
 /// (`bsid <= 10`) and E-AC-3 produce a track; `codec` distinguishes them.
 pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
+  ac3_open(data, fixed_format=false)
+}
+
+///|
+fn ac3_open(data : Bytes, fixed_format~ : Bool) -> Result[RawAudioTrack, String] {
   let start = id3_skip(data)
   let frames : Array[RawAudioFrame] = []
   let mut pos = start
@@ -397,18 +432,27 @@ pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
       }
     }
     let duration = hdr.num_blocks * 256
-    if hdr.frame_size <= 0 || pos + hdr.frame_size > data.length() {
+    if hdr.frame_size <= 0 || hdr.frame_size > data.length() - pos {
       break
+    }
+    let frame_codec = if hdr.bitstream_id > 10 { "eac3" } else { "ac3" }
+    if fixed_format && (hdr.frame_type == 1 || hdr.substreamid != 0) {
+      return Err("eac3: dependent or additional substreams are not supported")
     }
     if frames.length() == 0 {
       sample_rate = hdr.sample_rate
       channels = hdr.channels
       frame_size = duration
       bit_rate = hdr.bit_rate
-      codec = if hdr.bitstream_id > 10 { "eac3" } else { "ac3" }
+      codec = frame_codec
     } else if hdr.sample_rate != sample_rate || hdr.channels != channels {
       // A format change mid-stream is not representable in one track.
+      if fixed_format {
+        return Err("ac3: changing sample rate or channel count")
+      }
       break
+    } else if fixed_format && frame_codec != codec {
+      return Err("ac3: changing codec")
     }
     frames.push({
       pos: pos.to_int64(),
@@ -465,12 +509,17 @@ fn mpa_is_info_frame(
   pos : Int32,
   h : @libavcodec.MpaDecodeHeader,
 ) -> Bool {
-  if match_fourcc(data, pos + 4 + xing_offset(h), b"Xing") ||
-    match_fourcc(data, pos + 4 + xing_offset(h), b"Info") {
+  if h.layer != 3 {
+    return false
+  }
+  let offset = 4 + xing_offset(h)
+  if h.frame_size >= offset + 4 &&
+    (match_fourcc(data, pos + offset, b"Xing") ||
+    match_fourcc(data, pos + offset, b"Info")) {
     return true
   }
   // VBRI is always 32 bytes after the end of the MPEG header.
-  match_fourcc(data, pos + 4 + 32, b"VBRI")
+  h.frame_size >= 40 && match_fourcc(data, pos + 4 + 32, b"VBRI")
 }
 
 ///|
@@ -478,12 +527,17 @@ fn mpa_is_info_frame(
 /// reported via `info_frame_size` and excluded from `frames`, matching the C
 /// parser's packet stream. A trailing ID3v1 tag is ignored.
 pub fn av_mp3_open(data : Bytes) -> Result[RawAudioTrack, String] {
+  mpa_open(data, for_transport=false)
+}
+
+///|
+fn mpa_open(data : Bytes, for_transport~ : Bool) -> Result[RawAudioTrack, String] {
   if data.length() < 4 {
     return Err("EINVAL")
   }
   let start = id3_skip(data)
   let mut end = data.length()
-  if end >= 128 && match_fourcc(data, end - 128, b"TAG") {
+  if !for_transport && end >= 128 && data[end - 128:end - 125] == b"TAG"[:] {
     end = end - 128
   }
   // Find the first valid frame header.
@@ -517,7 +571,7 @@ pub fn av_mp3_open(data : Bytes) -> Result[RawAudioTrack, String] {
   }
   let mut info_frame_size = 0
   let mut pos = first
-  if mpa_is_info_frame(data, pos, first_header) {
+  if !for_transport && mpa_is_info_frame(data, pos, first_header) {
     info_frame_size = first_header.frame_size
     pos = pos + first_header.frame_size
   }
@@ -538,7 +592,13 @@ pub fn av_mp3_open(data : Bytes) -> Result[RawAudioTrack, String] {
     if h.sample_rate != first_header.sample_rate ||
       h.layer != first_header.layer ||
       h.lsf != first_header.lsf {
+      if for_transport {
+        return Err("mpeg audio: changing layer or sample rate")
+      }
       break
+    }
+    if for_transport && h.nb_channels != first_header.nb_channels {
+      return Err("mpeg audio: changing channel count")
     }
     frames.push({
       pos: pos.to_int64(),

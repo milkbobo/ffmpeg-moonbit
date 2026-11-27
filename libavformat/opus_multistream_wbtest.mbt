@@ -74,6 +74,65 @@ test "Opus: malformed mapping does not override container metadata" {
 }
 
 ///|
+test "Ogg Opus multistream preserves channel order and trims the closing page" {
+  let data = @libavutil.av_base64_decode(opus_51_webm_b64, 100000).unwrap()
+  let mkv = av_matroska_open(data).unwrap()
+  let header = mkv.tracks[0].codec_priv.unwrap().to_array()
+  // OpusHead's source rate is informational. The packet timebase and PCM
+  // both remain 48 kHz when it names a different rate.
+  header[12] = b'\x44'
+  header[13] = b'\xac'
+  let header = Bytes::from_array(header)
+  let head = @libavcodec.opus_parse_head(header).unwrap()
+  let encoded = mkv.packets.map(packet => packet.data)
+  let out : Array[Byte] = []
+  let serial = 37
+  ogg_mux_page(out, serial, 0, 2, 0L, header)
+  ogg_mux_page(out, serial, 1, 0, 0L, ogg_mux_opus_tags([]))
+  let prefix = Bytes::from_array(out)
+  ogg_mux_page_multi(out, serial, 2, 0, 1920L, [encoded[0], encoded[1]])
+  ogg_mux_page_multi(out, serial, 3, 4, 3300L, [encoded[2], encoded[3]])
+  let file = Bytes::from_array(out)
+  let demux = av_ogg_opus_open(file).unwrap()
+  assert_eq(demux.input_sample_rate, 44100)
+  assert_eq(demux.channel_mask, 0x3FU)
+  assert_eq(demux.end_trim, 540)
+  assert_eq(demux.packets.map(packet => packet.pts), [-312L, 648L, 1608L, 2568L])
+  assert_eq(demux.packets.map(packet => packet.duration), [960, 960, 960, 420])
+  assert_eq(MediaFile::open(file).streams()[0].sample_rate, 48000)
+
+  let audio = decode_audio_file(file)
+  assert_eq(audio.channels, 6)
+  assert_eq(audio.samples[0].length(), 2988)
+  let decoder = @libavcodec.OpusDecoder::new(head).unwrap()
+  let expected : Array[Array[Float]] = Array::makei(6, _ => [])
+  for packet in encoded {
+    let (rows, n) = decoder.decode_packet(Some(packet)).unwrap()
+    for ch in 0..<6 {
+      for i in 0..<n {
+        expected[ch].push(rows[ch][i])
+      }
+    }
+  }
+  for ch in 0..<6 {
+    for i in 0..<2988 {
+      assert_eq(
+        audio.samples[ch][i],
+        expected[ch][i + head.pre_skip].to_double(),
+      )
+    }
+  }
+  let wav = av_wav_open(audio.to_wav_s16()).unwrap()
+  assert_eq(wav.format.channel_mask, 0x3FU)
+  assert_eq(wav.data_size, (2988 * 6 * 2).to_int64())
+
+  let first_span = head.parse_packet(encoded[0]).unwrap()[1].offset
+  let bad = prefix.to_array()
+  ogg_mux_page(bad, serial, 2, 4, 960L, encoded[0][:first_span].to_owned())
+  assert_true(av_ogg_opus_open(Bytes::from_array(bad)) is Err(_))
+}
+
+///|
 test "Opus: real 5.1 MP4 dOps and multistream packets preserve WebM reference" {
   let bytes = @libavutil.av_base64_decode(opus_51_mp4_b64, 100000).unwrap()
   let movie = av_mov_open(bytes).unwrap()

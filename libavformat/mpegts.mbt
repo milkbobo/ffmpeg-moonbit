@@ -14,8 +14,8 @@
 /// parsers, as in the C.
 ///
 /// Out of scope: multi-packet PSI sections are supported, but section CRCs are
-/// not verified; encrypted HLS sample streams, Blu-ray TrueHD+AC3 substream
-/// splitting, teletext PCR timestamp fixups, DVB/ATSC metadata, and timestamp
+/// not verified; encrypted HLS sample streams, teletext PCR timestamp fixups,
+/// DVB/ATSC metadata, and timestamp
 /// wrap unwrapping (33-bit values are reported as-is).
 
 ///|
@@ -36,6 +36,8 @@ pub struct TsStream {
   registration : String
   /// ISO 639 language from descriptor 0x0A; "" when absent.
   language : String
+  /// DVB Opus channel configuration, when carried by extension 0x80.
+  opus_channel_config : Int32?
 }
 
 ///|
@@ -219,6 +221,7 @@ fn ts_parse_descriptors(
   language : Ref[String],
   desc_codec : Ref[String],
   desc_type : Ref[String],
+  opus_channel_config : Ref[Int32?],
 ) -> Unit {
   let mut p = start
   while p + 2 <= end {
@@ -249,6 +252,9 @@ fn ts_parse_descriptors(
       0x7B | 0x82 => {
         desc_codec.val = "dts"
         desc_type.val = "audio"
+      }
+      0x7F => if len >= 2 && data[body] == b'\x80' {
+        opus_channel_config.val = Some(data[body + 1].to_int())
       }
       _ => ()
     }
@@ -444,6 +450,7 @@ fn ts_parse_pmt(section : BytesView, demux : TsDemux, pmt_pid : Int32) -> Unit {
     dummy_lang,
     dummy_codec,
     dummy_type,
+    Ref(None),
   )
   let prg_index = match ts_find_program(demux, program_number) {
     Some(i) => i
@@ -475,8 +482,9 @@ fn ts_parse_pmt(section : BytesView, demux : TsDemux, pmt_pid : Int32) -> Unit {
     let language = Ref("")
     let desc_codec = Ref("")
     let desc_type = Ref("")
+    let opus_channel_config = Ref(None)
     ts_parse_descriptors(
-      section, dstart, dend, registration, language, desc_codec, desc_type,
+      section, dstart, dend, registration, language, desc_codec, desc_type, opus_channel_config,
     )
     let stream_index = match ts_find_stream(demux, pid) {
       Some(i) => i
@@ -494,6 +502,7 @@ fn ts_parse_pmt(section : BytesView, demux : TsDemux, pmt_pid : Int32) -> Unit {
           codec_type,
           registration: registration.val,
           language: language.val,
+          opus_channel_config: opus_channel_config.val,
         })
         let idx = demux.streams.length() - 1
         demux.programs[prg_index].stream_indices.push(idx)
@@ -552,6 +561,53 @@ fn ts_stream_id_is_header_only(id : Int32) -> Bool {
 }
 
 ///|
+/// Read PES extension 2's stream_id_extension (ISO/IEC 13818-1).
+fn ts_pes_extended_id(header : Array[Byte], size : Int32) -> Int32? {
+  guard size >= 9 && (header[7].to_int() & 1) != 0 else { return None }
+  let flags = header[7].to_int()
+  let mut p = 9 + (if (flags & 0xC0) == 0xC0 { 10 } else if (flags & 0x80) != 0 { 5 } else { 0 })
+  if (flags & 0x20) != 0 { p += 6 }
+  if (flags & 0x10) != 0 { p += 3 }
+  if (flags & 0x08) != 0 { p += 1 }
+  if (flags & 0x04) != 0 { p += 1 }
+  if (flags & 0x02) != 0 { p += 2 }
+  guard p < size else { return None }
+  let ext = header[p].to_int()
+  if (ext & 1) == 0 { return None }
+  p += 1
+  if (ext & 0x80) != 0 { p += 16 }
+  if (ext & 0x40) != 0 {
+    guard p < size else { return None }
+    p += 1 + header[p].to_int()
+  }
+  if (ext & 0x20) != 0 { p += 2 }
+  if (ext & 0x10) != 0 { p += 2 }
+  guard size - p >= 2 else { return None }
+  let length = header[p].to_int() & 0x7F
+  let id = header[p + 1].to_int()
+  if length > 0 && length <= size - p - 1 && (id & 0x80) == 0 {
+    Some(id)
+  } else {
+    None
+  }
+}
+
+///|
+fn ts_truehd_ac3_stream(demux : TsDemux, primary : TsStream) -> Int32 {
+  for i, stream in demux.streams {
+    if stream.pid == primary.pid && stream.codec == "ac3" {
+      return i
+    }
+  }
+  let index = demux.streams.length()
+  demux.streams.push({ ..primary, codec: "ac3", })
+  if ts_find_program(demux, primary.program_number) is Some(i) {
+    demux.programs[i].stream_indices.push(index)
+  }
+  index
+}
+
+///|
 fn ts_emit_pes(
   demux : TsDemux,
   state : TsPesState,
@@ -575,6 +631,13 @@ fn ts_emit_pes(
     return
   }
   let payload = Bytes::from_array(state.buffer[state.header_size:end])
+  let primary = demux.streams[stream_index]
+  let stream_index = if primary.codec == "truehd" &&
+    ts_pes_extended_id(state.buffer, state.header_size) is Some(0x76) {
+    ts_truehd_ac3_stream(demux, primary)
+  } else {
+    stream_index
+  }
   demux.packets.push({
     stream_index,
     pid,

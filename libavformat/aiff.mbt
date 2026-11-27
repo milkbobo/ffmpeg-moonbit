@@ -4,8 +4,8 @@
 /// block-aligned PCM, Apple IMA4, and MACE packets.
 ///
 /// Scope: AIFF PCM (8/16/24/32-bit big-endian), AIFC `NONE`/`twos` (big-endian
-/// PCM), `sowt` (little-endian PCM), big-endian float PCM, G.711, Apple IMA4,
-/// MACE, GSM, G.722, SDX2, CBD2, and Westwood IMA (ADP4).
+/// PCM), `sowt` (little-endian PCM), `raw `, `in24`, `in32`, big-endian
+/// float PCM, G.711, Apple IMA4, MACE, GSM, G.722, G.726LE, SDX2, CBD2 and ADP4.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -15,7 +15,7 @@ pub struct AiffFormat {
   codec : String
   channels : Int32
   sample_rate : Int32
-  /// Sample size in the COMM chunk (not the compressed IMA4 block size).
+  /// Sample size in COMM, or the coded width for G.726LE.
   bits : Int32
   block_align : Int32
 }
@@ -37,7 +37,7 @@ pub struct AiffDemux {
   /// Number of bytes covered by the packets.
   data_size : Int64
   /// Block codecs use the COMM block count times the samples per block.
-  /// Westwood IMA derives the sample count from complete SSND blocks.
+  /// Westwood IMA and G.726LE derive the sample count from SSND.
   /// PCM uses the COMM sample count bounded by the available complete frames.
   sample_count : Int64
   packets : Array[AiffPacket]
@@ -184,12 +184,16 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
       | "sowt"
       | "NONE"
       | "twos"
+      | "raw "
+      | "in24"
+      | "in32"
       | "alaw"
       | "ulaw"
       | "fl32"
       | "fl64"
       | "GSM "
       | "G722"
+      | "G726"
       | "SDX2"
       | "CBD2"
       | "ADP4" as tag => tag
@@ -199,6 +203,7 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
     "NONE"
   }
   let ima4 = compression == "ima4"
+  let g726 = compression == "G726"
   let mace = compression == "MAC3" || compression == "MAC6"
   if mace && channels > 2 {
     return Err("aiff: invalid MACE channel count")
@@ -207,7 +212,7 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
     channels > 2 {
     return Err("aiff: expected one or two channels for \{compression}")
   }
-  if (compression == "GSM " || compression == "G722") && channels != 1 {
+  if (compression == "GSM " || compression == "G722" || g726) && channels != 1 {
     return Err("aiff: expected mono \{compression.trim()}")
   }
   let (ssnd_off, ssnd_size) = match aiff_chunk(chunks, "SSND") {
@@ -229,6 +234,10 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
     "MAC6" => ("mace6", 1, 6)
     "GSM " => ("gsm", 33, 160)
     "G722" => ("adpcm_g722", 1, 2)
+    "G726" => ("adpcm_g726le", 5, 8)
+    "raw " => ("pcm_u8", 1, 1)
+    "in24" => ("pcm_s24be", 3, 1)
+    "in32" => ("pcm_s32be", 4, 1)
     "SDX2" => ("sdx2_dpcm", 1, 1)
     "CBD2" => ("cbd2_dpcm", 1, 1)
     "ADP4" => ("adpcm_ima_ws", 1, 2)
@@ -247,7 +256,11 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
   let block_align = channels * bytes_per_channel
   let available_bytes = ssnd_payload_size - offset.to_int()
   let available_blocks = (available_bytes / block_align).to_int64()
-  let sample_count = if compression == "ADP4" {
+  let sample_count = if g726 {
+    // The G726 tag fixes 5-bit little-endian codewords. COMM counts coded
+    // blocks, so derive the decoded length from complete codewords.
+    available_bytes.to_int64() * 8L / 5L
+  } else if compression == "ADP4" {
     // The FFmpeg muxer can write a COMM count based on its encoder alignment,
     // rather than the channel-byte groups used by the decoder.
     available_blocks * block_duration.to_int64()
@@ -262,7 +275,9 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
   } else {
     sample_count
   }
-  let data_size = packet_blocks * block_align.to_int64()
+  // Use five-byte groups between packets, retaining complete codewords
+  // in the final partial group as well.
+  let data_size = if g726 { available_bytes.to_int64() } else { packet_blocks * block_align.to_int64() }
   let packet_size = if ima4 {
     block_align
   } else {
@@ -278,14 +293,14 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
     } else {
       packet_size
     }
-    let duration = size / block_align * block_duration
+    let duration = if g726 { size * 8 / 5 } else { size / block_align * block_duration }
     packets.push({ pos, size, pts, duration, })
     pos = pos + size.to_int64()
     pts = pts + duration.to_int64()
     left = left - size.to_int64()
   }
   Ok({
-    format: { codec, channels, sample_rate, bits, block_align, },
+    format: { codec, channels, sample_rate, bits: if g726 { 5 } else { bits }, block_align, },
     data_offset: data_offset.to_int64(),
     data_size,
     sample_count,

@@ -1,11 +1,14 @@
 ///|
 /// MPEG-TS adapter for the unified playback API: builds on the ported
 /// `av_mpegts_open` demuxer (PES-level packets, 90 kHz timestamps). Video
-/// payloads are Annex B NAL streams; AAC payloads are continuous ADTS
-/// frame runs, which the adapter splits into per-frame packets like the
-/// C's AAC parser does (header kept, frame timestamps interpolated), and
-/// whose first header also yields the AudioSpecificConfig the AAC decoder
-/// needs as extradata.
+/// payloads are Annex B NAL streams. ADTS, LATM, Dolby and MPEG audio
+/// are indexed across PES boundaries.
+
+///|
+pub struct TsAudioPes {
+  packets : Array[MediaPacket]
+  mut end_pts : Int64
+}
 
 ///|
 /// Build the 2-byte AudioSpecificConfig from an ADTS header's raw fields:
@@ -48,51 +51,17 @@ fn ts_h264_is_idr(payload : Bytes) -> Bool {
 }
 
 ///|
-/// Split a PES payload that carries a continuous ADTS frame run into the
-/// individual frames (byte ranges of `payload`, ADTS header included, as in
-/// the packets the C's AAC parser emits), using the ported ADTS header
-/// parser for framing.
-fn ts_split_adts(payload : Bytes) -> Array[(Int32, Int32)] raise MediaError {
-  let frames : Array[(Int32, Int32)] = []
-  let mut pos = 0
-  let n = payload.length()
-  let hdr_size = @libavcodec.av_aac_adts_header_size
-  while pos + hdr_size <= n {
-    let hdr = payload.clamped_view(start=pos, end=pos + hdr_size).to_owned()
-    let header = match @libavcodec.ff_adts_header_parse_buf(hdr) {
-      Ok(h) => h
-      Err(_) => {
-        // Resync one byte, like the C parser loop.
-        pos = pos + 1
-        continue
-      }
-    }
-    let len = header.frame_length
-    if len <= hdr_size || pos + len > n {
-      break
-    }
-    frames.push((pos, len))
-    pos = pos + len
-  }
-  if frames.length() == 0 {
-    raise DemuxError("mpegts: no ADTS frames in the audio payload")
-  }
-  frames
-}
-
-///|
-/// Open the TS demuxer and build the stream table. The audio stream's
-/// sample rate, channel count and ASC extradata come from parsing the
-/// first ADTS frames found in its packets.
+/// Open the TS demuxer and build the stream table and audio frame index.
 fn playback_ts_build(data : Bytes) -> MediaFile raise MediaError {
   let demux = match av_mpegts_open(data) {
     Ok(v) => v
     Err(e) => raise DemuxError(e)
   }
   let streams : Array[StreamInfo] = []
+  let audio_frames : Map[Int32, TsAudioPes] = Map([])
   for i = 0; i < demux.streams.length(); i = i + 1 {
     let t = demux.streams[i]
-    let mt = if t.codec_type == "video" {
+    let mut mt = if t.codec_type == "video" {
       MediaType::Video
     } else if t.codec_type == "audio" {
       MediaType::Audio
@@ -102,6 +71,7 @@ fn playback_ts_build(data : Bytes) -> MediaFile raise MediaError {
     let mut rate = 0
     let mut ch = 0
     let mut extradata : Bytes? = None
+    let mut codec = t.codec
     if mt == MediaType::Video && t.codec == "h264" {
       // TS carries no avcC: hand the first PES (an IDR with the SPS/PPS
       // NALs in front) to ff_h264_decode_extradata as Annex B data - the
@@ -113,52 +83,57 @@ fn playback_ts_build(data : Bytes) -> MediaFile raise MediaError {
         }
       }
     }
-    if mt == MediaType::Audio && t.codec == "aac" {
-      // Parse the first ADTS frames of this stream for the format header.
-      let mut payload : Bytes? = None
-      for p in demux.packets {
-        if p.stream_index == i {
-          payload = Some(p.payload)
-          break
-        }
-      }
-      match payload {
-        Some(pl) => {
-          let track = match av_adts_open(pl) {
-            Ok(v) => v
-            Err(_) => raise UnsupportedCodec("mpegts: unreadable ADTS stream")
-          }
-          rate = track.sample_rate
-          ch = track.channels
-          // The raw indices come from re-parsing the first header.
-          let hdr = pl
-            .clamped_view(start=0, end=@libavcodec.av_aac_adts_header_size)
-            .to_owned()
-          match @libavcodec.ff_adts_header_parse_buf(hdr) {
-            Ok(h) =>
-              extradata = Some(
-                ts_adts_to_asc(h.object_type, h.sampling_index, h.chan_config),
-              )
-            Err(_) => raise UnsupportedCodec("mpegts: bad ADTS header")
-          }
-        }
-        None => raise UnsupportedCodec("mpegts: audio stream without packets")
-      }
-    }
     if t.codec == "pcm_bluray" || t.codec == "s302m" {
       for p in demux.packets {
         if p.stream_index == i &&
-          ts_pcm_packet_params(t.codec, p.payload) is Some((sample_rate, channels, _)) {
+          ts_pcm_packet_params(t.codec, p.payload)
+          is Some((sample_rate, channels, _)) {
           rate = sample_rate
           ch = channels
           break
         }
       }
     }
+    if t.codec == "aac" {
+      let (asc, sample_rate, channels) = playback_ts_index_adts(demux, i, audio_frames)
+      rate = sample_rate
+      ch = channels
+      extradata = Some(asc)
+    } else if t.codec == "aac_latm" {
+      let (config, asc) = playback_ts_index_latm(demux, i, audio_frames)
+      rate = config.sample_rate
+      ch = config.channels
+      extradata = Some(asc)
+    } else if t.codec == "opus" &&
+      t.opus_channel_config is Some(code) &&
+      ts_opus_head(code) is Some(head) {
+      playback_ts_index_opus(demux, i, head, audio_frames)
+      rate = 48000
+      ch = head[9].to_int()
+      extradata = Some(head)
+    } else if ts_uses_audio_index(t.codec) {
+      let track = playback_ts_index_raw_audio(demux, i, audio_frames, t.codec)
+      rate = track.sample_rate
+      ch = track.channels
+      codec = track.codec
+    } else if t.codec == "truehd" &&
+      playback_ts_index_truehd(demux, i, audio_frames)
+      is Some((sample_rate, channels)) {
+      rate = sample_rate
+      ch = channels
+    } else if (t.codec == "dts" || (t.codec == "" && t.stream_type == 0x82)) &&
+      playback_ts_index_dts(demux, i, audio_frames) is Some(track) {
+      // FFmpeg also writes type 0x82 in plain TS without HDMV registration.
+      // Require actual core frames before interpreting the private type.
+      mt = MediaType::Audio
+      codec = "dts"
+      rate = track.sample_rate
+      ch = track.channels
+    }
     streams.push({
       index: i,
       media_type: mt,
-      codec_id: t.codec,
+      codec_id: codec,
       sample_rate: rate,
       channels: ch,
       width: 0,
@@ -169,39 +144,41 @@ fn playback_ts_build(data : Bytes) -> MediaFile raise MediaError {
   {
     format_name: "mpegts",
     streams,
-    source: Ts(demux, Array::make(demux.streams.length(), ts_nopts)),
+    source: Ts(demux, audio_frames),
     cursor: [0],
   }
 }
 
 ///|
 /// Parameters carried in a PCM PES rather than in its PMT descriptor.
-fn ts_pcm_packet_params(codec : String, payload : Bytes) -> (Int32, Int32, Int32)? {
+fn ts_pcm_packet_params(
+  codec : String,
+  payload : Bytes,
+) -> (Int32, Int32, Int32)? {
   match codec {
-    "pcm_bluray" => match @libavcodec.parse_bluray_lpcm_header(payload) {
-      Ok(h) if h.payload_bytes == payload.length() - 4 =>
-        Some((h.sample_rate, h.channels, h.samples))
-      _ => None
-    }
-    "s302m" => match @libavcodec.parse_s302m_header(payload) {
-      Ok(h) => Some((h.sample_rate, h.channels, h.samples))
-      Err(_) => None
-    }
+    "pcm_bluray" =>
+      match @libavcodec.parse_bluray_lpcm_header(payload) {
+        Ok(h) if h.payload_bytes == payload.length() - 4 =>
+          Some((h.sample_rate, h.channels, h.samples))
+        _ => None
+      }
+    "s302m" =>
+      match @libavcodec.parse_s302m_header(payload) {
+        Ok(h) => Some((h.sample_rate, h.channels, h.samples))
+        Err(_) => None
+      }
     _ => None
   }
 }
 
 ///|
-/// TS packet walk: video payloads yield one packet per PES; AAC payloads
-/// are split into their ADTS frames. Only the first frame of a PES carries
-/// the PES timestamp; the C's `compute_pkt_fields` derives the rest with
-/// `av_add_stable`, which `next_pts` reproduces per stream.
+/// TS packet walk: emit indexed audio frames and PES-level video packets.
 fn MediaFile::playback_ts_next(
   self : MediaFile,
   demux : TsDemux,
-  next_pts : Array[Int64],
+  audio_frames : Map[Int32, TsAudioPes],
 ) -> MediaPacket? raise MediaError {
-  // cursor[1]: the next ADTS frame inside the current audio PES.
+  // cursor[1]: the next indexed audio frame completed by the current PES.
   // cursor[2]: the video PES currently held back. The C's h264 parser only
   // completes an access unit when the next one's start code is seen, so
   // PES i surfaces when PES i+1 arrives (and the last at end of stream).
@@ -222,47 +199,14 @@ fn MediaFile::playback_ts_next(
     let current = self.cursor[0]
     self.cursor[0] = self.cursor[0] + 1
     let info = self.streams[p.stream_index]
-    if info.media_type == MediaType::Audio && info.codec_id == "aac" {
-      // Split the ADTS run; re-scan from the payload start each time by
-      // tracking the per-PES offset in cursor[1].
-      let frames = ts_split_adts(p.payload)
-      let idx = if self.cursor.length() > 1 { self.cursor[1] } else { 0 }
-      if idx < frames.length() {
-        let (off, len) = frames[idx]
-        if self.cursor.length() > 1 {
-          self.cursor[1] = idx + 1
-        } else {
-          self.cursor.push(idx + 1)
-        }
-        // Do not consume the PES until all frames are out.
-        self.cursor[0] = self.cursor[0] - 1
-        let pes_pts = if p.pts != ts_nopts { p.pts } else { p.dts }
-        let pts = if idx == 0 && pes_pts != ts_nopts {
-          pes_pts
-        } else if next_pts[p.stream_index] != ts_nopts {
-          next_pts[p.stream_index]
-        } else {
-          0
-        }
-        next_pts[p.stream_index] = @libavutil.av_add_stable(
-          @libavutil.av_make_q(1, 90000),
-          pts,
-          @libavutil.av_make_q(1024, info.sample_rate),
-          1L,
-        )
-        return Some({
-          stream_index: p.stream_index,
-          data: p.payload[off:off + len].to_owned(),
-          pts,
-          // AAC is intra-only: the C flags every frame as a keyframe.
-          keyframe: true,
-        })
+    if ts_stream_uses_audio_index(info) {
+      let idx = self.cursor[1]
+      if audio_frames.get(current) is Some(pes) && idx < pes.packets.length() {
+        self.cursor[0] = current
+        self.cursor[1] = idx + 1
+        return Some(pes.packets[idx])
       }
-      // All frames of this PES emitted: drop the per-PES frame cursor and
-      // move to the next packet.
-      if self.cursor.length() > 1 {
-        self.cursor[1] = 0
-      }
+      self.cursor[1] = 0
       continue
     }
     if info.media_type == MediaType::Video {

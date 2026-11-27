@@ -99,7 +99,7 @@ let mpa_scale_factor_mult : Array[Array[Int32]] = {
   let t : Array[Array[Int32]] = []
   for i = 0; i < 15; i = i + 1 {
     let n = i + 2
-    let norm = (1 << n) * frac_one / ((1 << n) - 1)
+    let norm = ((1L << n) * frac_one.to_int64() / ((1L << n) - 1L)).to_int()
     t.push([
       mullx(norm, fixr(1.0 * 2.0), frac_bits),
       mullx(norm, fixr(0.7937005259 * 2.0), frac_bits),

@@ -177,21 +177,15 @@ test "adts muxer: real AAC frames decode against FFmpeg PCM" {
   assert_eq(track.sample_rate, 44100)
   assert_eq(track.channels, 1)
   assert_eq(track.frames.length(), 5)
-  let dec = @libavcodec.new_aac_decoder_from_asc(b"\x12\x08").unwrap()
-  let out : Array[Double] = []
-  for frame in track.frames {
-    let start = frame.pos.to_int() + @libavcodec.av_aac_adts_header_size
-    let end = frame.pos.to_int() + frame.size
-    let pcm = match dec.decode_frame(bytes[start:end].to_owned()) {
-      Ok(v) => v
-      Err(e) => fail("AAC decode failed: \{e}")
-    }
-    for element in pcm {
-      for v in element.samples {
-        out.push(v)
-      }
-    }
-  }
+  let tag = id3v2_write_tag([("title", "ADTS mono")]).unwrap()
+  let split = track.frames[1].pos.to_int()
+  let tagged = tag + bytes[:split].to_owned() + tag + bytes[split:].to_owned()
+  let audio = decode_audio_file(tagged)
+  assert_eq(audio.format_name, "aac")
+  assert_eq(audio.codec_id, "aac")
+  assert_eq(audio.sample_rate, 44100)
+  assert_eq(audio.channels, 1)
+  let out = audio.samples[0]
   assert_eq(out.length(), 5120)
   let reference = @libavutil.av_base64_decode(adts_ref_pcm_b64, 16384).unwrap()
   assert_eq(reference.length(), 10240)

@@ -4,6 +4,20 @@
 /// and flush tail) applied to a fully decoded stream.
 
 ///|
+/// Convert normalized PCM to signed samples with round-to-nearest-even.
+fn playback_pcm_quantize(sample : Double, bits : Int32) -> Int32 {
+  let scale = (1L << (bits - 1)).to_double()
+  let scaled = (sample * scale).clamp(min=-scale, max=scale - 1.0)
+  let lower = scaled.floor().to_int()
+  let remainder = scaled - lower.to_double()
+  if remainder > 0.5 || (remainder == 0.5 && (lower & 1) != 0) {
+    lower + 1
+  } else {
+    lower
+  }
+}
+
+///|
 /// Resample every channel of a decoded stream to `rate` (8000..=192000).
 /// The whole stream is fed in one pass (output values never depend on
 /// chunking); equal rates return the stream unchanged.  The returned
@@ -52,5 +66,6 @@ pub fn DecodedAudio::resample_to(
     codec_id: self.codec_id,
     duration_seconds: self.duration_seconds,
     read_error: self.read_error,
+    channel_mask: self.channel_mask,
   }
 }

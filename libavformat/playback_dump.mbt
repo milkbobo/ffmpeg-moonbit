@@ -38,7 +38,12 @@ fn MediaFile::stream_timebase(
     OggFlac(demux) => Some((demux.sample_rate.to_double(), 0.0))
     AsfAudio(_) | FlvAudio(_, _) => Some((1000.0, 0.0))
     RealMediaAudio(_) => Some((1000.0, 0.0))
+    RawAdts(_, _, _) => Some((self.streams[index].sample_rate.to_double(), 0.0))
+    LoasAac(_, sample_rate, _) => Some((sample_rate.to_double(), 0.0))
     RawDts({ sample_rate, .. }, _)
+    | RawSpdif({ sample_rate, .. }, _)
+    | RawMpegAudio({ sample_rate, .. }, _, _, _)
+    | NativeFlac({ sample_rate, .. }, _)
     | RawGsm({ sample_rate, .. }, _)
     | RawTelephony({ sample_rate, .. }, _, _)
     | WestwoodAud({ sample_rate, .. }, _)
@@ -119,8 +124,15 @@ pub fn MediaFile::dump_packets_json(
       None => "null"
     }
     let flag = if p.keyframe { "K" } else { "-" }
+    let size = if self.source is Ts(_, _) &&
+      self.streams[p.stream_index].codec_id == "opus" &&
+      ts_opus_control(p.data[:]) is Ok(control) {
+      control.payload_end - control.payload_start
+    } else {
+      p.data.length()
+    }
     out.write_string(
-      "{\"stream_index\": \{p.stream_index}, \"pts_ms\": \{pts_ms}, \"size\": \{p.data.length()}, \"flags\": \"\{flag}\"}\n",
+      "{\"stream_index\": \{p.stream_index}, \"pts_ms\": \{pts_ms}, \"size\": \{size}, \"flags\": \"\{flag}\"}\n",
     )
     emitted = emitted + 1
   }

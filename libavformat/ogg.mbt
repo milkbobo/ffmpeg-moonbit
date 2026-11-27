@@ -23,6 +23,10 @@ pub struct OggOpusDemux {
   channels : Int32
   pre_skip : Int32
   input_sample_rate : Int32
+  /// Native speaker mask for mapped surround output.
+  channel_mask : UInt32
+  /// Number of decoded samples to discard at the end, per channel.
+  end_trim : Int32
   extradata : Bytes
   /// OpusTags user comments (generic keys).
   tags : Array[(String, String)]
@@ -74,10 +78,9 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
   let mut serial = 0
   let mut have_stream = false
   let mut pre_skip = 0
-  let mut channels = 0
-  let mut input_sample_rate = 0
+  let mut head : @libavcodec.OpusHead? = None
+  let mut end_trim = 0
   let mut extradata : Bytes? = None
-  let mut got_head = false
   let mut got_tags = false
   let mut tags : Array[(String, String)] = []
   let mut pending : Array[Byte] = []
@@ -131,16 +134,14 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
       if lace < 255 {
         let packet = Bytes::from_array(pending)
         pending = []
-        if !got_head {
-          match opus_head_parse(packet) {
-            Some((ch, skip, rate)) => {
-              channels = ch
-              pre_skip = skip
-              input_sample_rate = rate
+        if head is None {
+          match @libavcodec.opus_parse_head(packet) {
+            Ok(parsed) => {
+              pre_skip = parsed.pre_skip
               extradata = Some(packet)
-              got_head = true
+              head = Some(parsed)
             }
-            None => return Err("ogg: first packet is not OpusHead")
+            Err(e) => return Err("ogg: " + e)
           }
         } else if !got_tags {
           if packet.length() < 8 || packet[0:8].to_owned() != b"OpusTags" {
@@ -152,8 +153,8 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
           }
           got_tags = true
         } else {
-          let parsed = match @libavcodec.opus_parse_packet(packet) {
-            Ok(v) => v
+          let parsed = match head.unwrap().parse_packet(packet) {
+            Ok(v) => v[0].packet
             Err(e) => return Err(e)
           }
           completed.push((packet, parsed.total_samples()))
@@ -190,18 +191,17 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
       } else {
         // EOS pages and pages without a granule follow FFmpeg's
         // lastpts/cur_dts chain instead: the first packet continues from
-        // the previous page's granule (0 at stream start) and the final
-        // packet is end-trimmed to what the closing granule says.
+        // the previous page's granule (0 at stream start). A closing
+        // granule can exclude samples from more than one packet.
         for i = 0; i < completed.length(); i = i + 1 {
           let (packet, nominal) = completed[i]
           let pts = cumulative - pre_skip.to_int64()
-          let mut duration = nominal
-          if i == completed.length() - 1 &&
-            end >= 0L &&
-            end > pts &&
-            pts + duration.to_int64() > end {
-            duration = (end - pts).to_int()
+          let duration = if granule >= 0L && (header_type & 4) != 0 {
+            (end - pts).max(0L).min(nominal.to_int64()).to_int()
+          } else {
+            nominal
           }
+          end_trim += nominal - duration
           packets.push({ data: packet, pts, duration, pos: page_pos, granule, })
           cumulative = cumulative + nominal.to_int64()
         }
@@ -215,16 +215,34 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
     }
     pos = page_end
   }
-  if !got_head {
-    return Err("ogg: no OpusHead packet")
-  }
+  guard head is Some(head) else { return Err("ogg: no OpusHead packet") }
   Ok({
     serial,
-    channels,
+    channels: head.channels,
     pre_skip,
-    input_sample_rate,
+    input_sample_rate: head.input_sample_rate.reinterpret_as_int(),
+    channel_mask: opus_wave_channel_mask(head),
+    end_trim,
     extradata: extradata.unwrap(),
     tags,
     packets,
   })
+}
+
+///|
+/// Family 1 is already reordered from Vorbis order to native WAV order.
+fn opus_wave_channel_mask(head : @libavcodec.OpusHead) -> UInt32 {
+  if head.mapping_family == 1 {
+    match head.channels {
+      3 => 0x007U
+      4 => 0x033U
+      5 => 0x037U
+      6 => 0x03FU
+      7 => 0x70FU
+      8 => 0x63FU
+      _ => 0U
+    }
+  } else {
+    0U
+  }
 }

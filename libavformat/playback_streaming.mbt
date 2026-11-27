@@ -1710,6 +1710,7 @@ pub fn StreamingMedia::decode_audio(
     codec_id: info.codec_id,
     duration_seconds: self.duration,
     read_error: "",
+    channel_mask: 0U,
   }
 }
 

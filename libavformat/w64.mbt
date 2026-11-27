@@ -114,7 +114,7 @@ pub fn av_w64_open(data : Bytes) -> Result[WavDemux, String] {
   if data_ofs < 0L {
     return Err("EINVAL: no Wave64 data chunk")
   }
-  wav_build_demux(data, fmt, data_ofs, data_size, sample_count)
+  wav_build_demux(data, fmt, data_ofs, data_size, sample_count, wave64=true)
 }
 
 ///|

@@ -4,7 +4,7 @@
 
 ## 编解码支持范围
 
-截至 2026-11-25，主要格式的实现情况如下。
+截至 2026-11-27，主要格式的实现情况如下。
 
 | 格式 | 解码 | 编码 |
 | --- | --- | --- |
@@ -12,15 +12,18 @@
 | AV1 | 已实现关键帧、帧间帧及 film grain 等工具 | 已实现关键帧、帧间帧、多参考帧、per-SB 64x64/32x32 分割与 NEARMV 栈复用，目标码率控制待实现 |
 | VP9 | 已实现 Profile 0–3 | 未实现 |
 | MJPEG、PNG/APNG | 已实现，MJPEG 支持部分格式 | 已实现 8 位 baseline MJPEG，以及 8/16 位 PNG 和全画幅 APNG |
-| AAC | 已实现 AAC-LC、HE-AAC v1/v2，未覆盖 USAC | 已实现 AAC-LC |
+| AAC | 裸 ADTS（`.aac`、`.adts`）、MPEG-TS、WAV、Wave64 和 IEC 61937 支持播放单原始数据块的 AAC-LC 和 HE-AAC v1/v2。裸 LOAS（`.loas`、`.latm`）、WAV 标签 `0x1602` 和 MPEG-TS 类型 `0x11` 支持 AAC-LC LATM | 已实现 AAC-LC 编码，可将连续 ADTS 帧重封装为 `.spdif` |
 | AMR-NB / AMR-WB | 已实现：裸 `.amr`/`.awb` 流与 3GP/MP4 中的 `samr`/`sawb` 轨（单声道；多声道与 SID 舒适噪声帧不支持）。对 FATE 的 17 个样本，AMR-NB 与 FFmpeg 自带浮点解码器的偏差不超过 2 LSB，AMR-WB 不超过该解码器自身的偏差 | 未实现 |
-| MP2、MP3、FLAC、ALAC、Opus | 已实现 | 已实现 |
+| MPEG 音频 Layer I/II/III | 支持裸 MP1、MP2、MP3、MPEG-TS 音轨（PMT 类型 `0x03`、`0x04`）和 IEC 61937 音频（裸 `.spdif`、WAV、Wave64）。裸 MP3 读取 Xing/Info 中的 LAME 延迟与填充信息，导出 PCM 时裁掉首尾填充 | 支持 MP2 和 MP3 编码，可将 MP1、MP2 和 MP3 连续帧重封装为 `.spdif` |
+| FLAC | 支持原生 `.flac`、WAV 和 Wave64（标签 `0xF1AC`）的逐帧解复用与 CRC 校验，也支持 Ogg、Matroska 等容器内的 FLAC 音轨解码 | 已实现 |
+| ALAC | 已实现 | 已实现 |
+| Opus | 支持 Ogg 和 MPEG-TS 中的单声道、立体声及标准多声道映射，保留 5.1、7.1 的 WAV 声道布局 | 已实现单声道和立体声 |
 | APE（Monkey's Audio） | 支持读取 v3.80–3.99 文件及解码 | 未实现 |
-| TTA（True Audio） | 支持未加密的原生 `.tta`，8/16/24 位无损解码 | 未实现 |
+| TTA（True Audio） | 支持未加密的原生 `.tta`，8/16/24 位无损解码，可校验文件头、寻址表和压缩帧的 CRC | 支持写入 8/16/24 位原生 `.tta` |
 | WMA v1/v2 | 支持从 ASF/WMA 文件解码 | 已实现编码器，输出 WMA 压缩包 |
 | WMA Pro | 支持从 ASF/WMA 文件和 WAV（标签 0x0162）解码；对 FATE 的立体声与 5.1 样本，输出与参考 PCM 的偏差不超过 1 LSB。XMA 与 WMA Lossless 未实现 | 未实现 |
-| DTS | 支持裸 `.dts` 及 Matroska 中的 DTS 核心解码；不支持 DTS-HD 扩展 | 未实现 |
-| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`）、32/64 位浮点 PCM、G.711、Apple IMA4、MACE、GSM、G.722、SDX2、CBD2 和 ADP4 | 支持写入 PCM AIFF |
+| DTS | 支持裸 `.dts`、`.spdif`、Matroska、MPEG-TS/M2TS、WAV 和 Wave64 中的 DTS 核心解码，含 DTS-CD 和 IEC 61937。类型 IV 可播放 DTS-HD 的内嵌核心，WAV 导出可保留环绕声布局 | 支持将 DTS 核心帧重封装为 `.spdif`，也可将带核心的 DTS-HD 裸流封装为 IEC 61937 类型 IV |
+| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`、`in24`、`in32`）、`raw ` 无符号 8 位 PCM、32/64 位浮点 PCM、G.711、Apple IMA4、MACE、GSM、G.722、单声道 5 位 G.726LE、SDX2、CBD2 和 ADP4 | 支持写入 PCM AIFF |
 | CAF | 支持 ALAC、AAC-LC、FLAC、单声道或立体声 Opus、MPEG 音频 Layer I/II/III、AC-3、AMR-NB，以及 PCM、G.711、MACE、Apple IMA4、GSM 和 WAV49 | 支持封装 ALAC 和整数 PCM |
 | MOV 音轨 | 支持 G.711 A-law/μ-law 及 `fl32`/`fl64` 大端和小端浮点 PCM | 见各编码器的封装支持 |
 | FLV 音轨 | 支持传统 FLV 的 AAC-LC、MP3、8/16 位 PCM、G.711 和 Flash ADPCM，以及单音轨 Enhanced FLV 的 AAC-LC、MP3、Opus、FLAC、AC-3 和 E-AC-3 | 未实现 |
@@ -28,13 +31,17 @@
 | Duck IMA ADPCM | 支持 WAV 中的立体声 DK3（`0x0062`）及单声道和立体声 DK4（`0x0061`） | 未实现 |
 | Sun AU / SND | 支持整数和浮点 PCM、A-law、µ-law 及单声道 G.726LE 解码 | 支持写入整数 PCM、A-law 和 µ-law |
 | Sony Wave64 | 复用 WAV 解码路径，支持整数和浮点 PCM | 支持写入 8/16/24/32 位整数 PCM 和 32 位浮点 PCM |
-| G.722 | 支持裸 `.g722`、`.722`，以及 Sun AU、WAV 和 AIFF-C 中的单声道 64 kb/s 码流 | 未实现 |
-| G.726 | 支持裸 `.g726`、`.g726le`，以及 WAV 中的 G.726 和 Sun AU 中的 G.726LE，覆盖单声道 2/3/4/5 位码字 | 未实现 |
+| G.722 | 支持 48/56/64 kb/s 字节对齐的裸 `.g722`、`.722`，以及 Sun AU、WAV 和 AIFF-C 中的单声道 64 kb/s 码流 | 支持写入 16 kHz 单声道 64 kb/s 裸流 |
+| G.726 | 支持裸 `.g726`、`.g726le`，以及 WAV 中的 G.726 和 Sun AU 中的 G.726LE，覆盖单声道 2/3/4/5 位码字 | 支持导出 8 kHz 单声道裸 `.g726` 和 `.g726le`，覆盖同样的四种码宽 |
+| aptX / aptX HD | 支持立体声裸 `.aptx` 和 `.aptxhd`，默认 48 kHz，可指定输入采样率 | 支持 8、16、24、32、44.1 和 48 kHz 立体声裸流 |
 | CRI ADX | 支持未加密的类型 3 裸 `.adx`，1–6 声道 | 未实现 |
 | Amiga 8SVX / 16SV | 支持单声道和立体声平面 PCM，以及 8SVX 的 Fibonacci 和指数差分 | 未实现 |
 | Creative VOC | 支持 PCM、G.711 和 Sound Blaster Pro ADPCM，含续块和扩展声道参数 | 未实现 |
 | Westwood AUD | 支持 `.aud` 中的单声道或立体声 Westwood IMA，以及单声道 SND1 | 未实现 |
+| RoQ DPCM | 支持纯音频和音视频混合 `.roq` 文件中的 22.05 kHz 单声道及立体声音轨 | 支持写入 22.05 kHz 单声道或立体声的纯音频 `.roq` |
+| ALP IMA ADPCM | 支持 `.tun` 和 `.pcm` 文件中的单声道及立体声 | 支持写入 22.05 kHz TUN 和最高 44.1 kHz 的 ALP PCM |
 | QOA（Quite OK Audio） | 支持带总样本数、采样率和声道数固定的原生 `.qoa` | 未实现 |
+| DFPWM1a | 支持 48 kHz 单声道裸 `.dfpwm`，以及采样率由头部指定的单声道 WAV 和 Wave64 | 支持导出 48 kHz 单声道裸 `.dfpwm` |
 | Blu-ray LPCM | 支持 HDMV MPEG-TS/M2TS 中的 16/24 位 LPCM，48/96/192 kHz，最多 8 声道 | 未实现 |
 | SMPTE 302M | 支持 MPEG-TS 的 `BSSD` PCM 音轨，48 kHz、16/20/24 位、2/4/6/8 声道 | 未实现 |
 | GSM 06.10 | 支持裸 `.gsm`、MOV、AIFF-C 和 CAF 的单声道音轨，以及 WAV 和 CAF 中的 WAV49（65 字节块） | 未实现 |
@@ -42,9 +49,9 @@
 | SBC / mSBC | 支持裸 `.sbc`、`.msbc`，含 4/8 子带、单声道、双声道和联合立体声 | 未实现 |
 | DSD | 支持 `.dsf` 与未压缩 `.dff`（DSDIFF），输出采样率为 DSD 位率的 1/8 | 未实现 |
 | DST | 支持 `.dff` 中采用共享分段的算术编码 DST，复用 DSD 滤波器输出 PCM | 未实现 |
-| MLP、TrueHD | 支持裸码流解码和 Matroska 播放 | 未实现 |
+| MLP、TrueHD | 支持裸码流和 Matroska。蓝光 M2TS 中的 TrueHD 与 AC-3 兼容子流可分别解码。读取裸 `.spdif`、WAV、Wave64 和 RIFX 中的 Dolby MAT TrueHD | 可将从主同步单元开始的 TrueHD 裸流封装为 Dolby MAT `.spdif` |
 | Vorbis | 支持 Ogg 解码 | 支持实验性编码和 Ogg 封装，首包与 FFmpeg 原生编码器逐字节一致 |
-| AC-3、E-AC-3 | 支持裸码流和 Matroska 解码，E-AC-3 支持部分模式 | AC-3 定点编码已实现，48 kHz 双声道参考流与 FFmpeg `ac3_fixed` 位级一致 |
+| AC-3、E-AC-3 | 支持裸码流、Matroska、MPEG-TS、WAV 和 Wave64 解码。IEC 61937（S/PDIF）支持裸 `.spdif` 及 WAV 和 Wave64 封装。E-AC-3 支持部分独立子流模式 | AC-3 定点编码已实现，48 kHz 双声道参考流与 FFmpeg `ac3_fixed` 位级一致。支持将 AC-3 和独立 E-AC-3 帧重封装为 `.spdif` |
 | WavPack | 支持单声道和立体声无损整数解码 | 支持 16、24、32 位单声道和立体声无损编码，输出完整 `.wv` 文件 |
 | Shorten | 支持 `.shn` 无损整数解码，可用 `decode-audio` 转 WAV | 未实现 |
 | Musepack | 支持 SV7 立体声和 SV8 单声道、立体声 `.mpc` 解码，可用 `decode-audio` 转 WAV | 未实现 |
@@ -55,16 +62,64 @@
 
 **容器和工具**　支持读取 MP4/MOV、MKV/WebM、MPEG-TS、WAV、Ogg、ASF/WMA、RealMedia（RM/RA）等容器，可写入 MP4、WebM、MPEG-TS、WAV 等格式，也支持 HLS/DASH 分片读取、图像缩放和音频重采样。
 
+IEC 61937 支持读写大端与小端裸 `.spdif`。也可读取 WAV、Wave64 的小端封装和 RIFX 的大端封装。
+
 **其他边界**　H.264 SP/SI、硬件加速、完整滤镜图和 DRM 密钥协商均未覆盖。各格式的具体限制和验证样例见[移植记录](doc/PORTING_HISTORY.md)。
 
-### 裸 G.722 和 G.726 解码
+### DFPWM1a 解码和编码
 
-命令行按文件名识别裸码流。G.722 固定为 16 kHz 单声道。G.726 和 G.726LE 固定为 8 kHz 单声道，默认每码字 4 位。用 `--g726-bits N` 可指定 2、3、4 或 5 位码字。
+```sh
+moon run --target wasm cmd/decode-audio -- clip.dfpwm --output clip.wav
+moon run --target wasm cmd/decode-audio -- mono.wav --format dfpwm --output clip.dfpwm
+```
+
+编码会将单声道输入重采样到 48 kHz，尾部用静音补齐到 8 个样本的倍数。
+
+### 裸 G.722、G.726 和 aptX
+
+命令行按文件名识别裸码流。G.722 固定为 16 kHz 单声道。`--g722-bits 6|7|8` 指定字节内有效码位，分别对应 48、56 和 64 kb/s，默认 8 位。G.726 和 G.726LE 固定为 8 kHz 单声道，默认每码字 4 位。用 `--g726-bits N` 可指定 2、3、4 或 5 位码字。
 
 ```sh
 moon run --target wasm cmd/decode-audio -- call.g722 --output call.wav
+moon run --target wasm cmd/decode-audio -- call56.g722 --g722-bits 7 --output call56.wav
+moon run --target wasm cmd/decode-audio -- mono.wav --format g722 --output call.g722
 moon run --target wasm cmd/decode-audio -- call.g726le --g726-bits 3 --output call.wav
+moon run --target wasm cmd/decode-audio -- mono.wav --format g726le --g726-bits 3 --output call.g726le
+moon run --target wasm cmd/decode-audio -- stereo.aptxhd --aptx-rate 44100 --output stereo.wav
+moon run --target wasm cmd/decode-audio -- stereo.wav --format aptxhd --rate 44100 --output stereo.aptxhd
 ```
+
+导出 G.722 时会把单声道输入重采样到 16 kHz，以 64 kb/s 编码。样本数为奇数时重复最后一个样本。导出 G.726 时会把单声道输入重采样到 8 kHz。`--format g726` 使用最高位优先，`--format g726le` 使用最低位优先。裸流靠文件名区分位序，解码时需要使用编码时的码宽。
+
+aptX 和 aptX HD 裸流不记录采样率。用 `--aptx-rate` 指定输入采样率，用 `--rate` 指定导出采样率，两者均默认 48 kHz。导出时以静音将最后一码块补齐到每声道 4 个样本。
+
+### RoQ DPCM 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- scene.roq --output scene.wav
+moon run --target wasm cmd/decode-audio -- audio.wav --format roq --output audio.roq
+```
+
+导出会将单声道或立体声输入重采样到 22.05 kHz，并在编码前把尾部 PCM 用静音补齐到每声道 735 个样本的倍数。
+
+### TTA 无损音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- audio.wav --format tta --tta-bits 24 --output audio.tta
+moon run --target wasm cmd/decode-audio -- audio.tta --tta-crc --output audio.wav
+```
+
+TTA 导出使用输入采样率，也可通过 `--rate` 重采样。位深默认 24 位，可用 `--tta-bits 8|16|24` 指定。读取时加 `--tta-crc` 可在导出前校验全部压缩帧及文件索引。
+
+### ALP IMA ADPCM 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- music.tun --output music.wav
+moon run --target wasm cmd/decode-audio -- music.wav --format alp --output music.tun
+moon run --target wasm cmd/decode-audio -- effect.wav --format alp --rate 32000 --output effect.pcm
+```
+
+TUN 导出重采样到 22.05 kHz。ALP PCM 在头部记录采样率，最高 44.1 kHz。若每声道样本数为奇数，末尾追加一个零差分码，回读时会重复最后一个重建样本。
 
 ### 图像编码
 
@@ -89,7 +144,7 @@ python -m http.server 8000 --directory demo
 
 - **播放和截图**　视频可切换「Wasm 播放」后定位并截图，也可用 MoonBit 把首帧导出为 PNG 或 JPEG。音频文件可用「Wasm 播放」解码成 WAV 在页面试听。
 - **导入音频**　支持 APE、ASF/WMA（含 WMA Pro）、WAV 里的 WMA Pro（标签 0x0162）、WavPack、Shorten、Musepack SV7/SV8、RealMedia/RealAudio（RA 14.4、RA 28.8、Cook、SIPR 音轨，含带视频轨的 RM/RMVB）、AMR-NB/AMR-WB（`.amr`、`.awb` 与 3GP 的 AMR 音轨）、ADPCM（WAV 里的 MS / IMA / OKI / Yamaha，MOV/MP4 里的 MS / IMA / `ima4`），以及 AIFF/AIFF-C（PCM、Apple IMA4）、裸 `.dts` 核心流和 MLP/TrueHD 裸流。Matroska 文件可读取 DTS 核心、AC-3、E-AC-3 和 MLP/TrueHD 音轨。
-- **导出音频**　选择 WAV、FLAC、WavPack、AC-3 或 Ogg/Vorbis，点击「生成音频」。WavPack 导出为 16 位单声道或立体声。AC-3 支持 32、44.1 和 48 kHz 的单声道或立体声，末帧补齐到 1,536 个样本。实验性 Ogg/Vorbis 输出需要立体声。
+- **导出音频**　选择 WAV、FLAC、WavPack、AC-3、S/PDIF（AC-3）或 Ogg/Vorbis，点击「生成音频」。WavPack 导出为 16 位单声道或立体声。AC-3 和 S/PDIF 支持 32、44.1 和 48 kHz 的单声道或立体声，末帧补齐到 1,536 个样本。实验性 Ogg/Vorbis 输出需要立体声。
 - **音频后期处理**　展开音频导出下的「音频后期处理」，可加淡入淡出、去除首尾静音、按目标 LUFS 调整音量，或添加第二条音轨混音。响度归一化和混音支持单声道与立体声。
 - **分析音轨**　点击「分析音轨」，查看首条音轨的波形、采样峰值和静音区间。单声道和立体声可测整体响度（LUFS）。
 - **视频缩略图**　选择最多取 6、12 或 24 帧，下载带时间戳的 PNG 总览，或生成每帧停留 0.5 秒的 APNG 循环动图。

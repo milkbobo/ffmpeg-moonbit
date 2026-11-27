@@ -22,6 +22,7 @@
 /// `size_in_bits` from the C (which callers shrink to the NAL's SODB).
 pub struct BitReader {
   bytes : Bytes
+  byte_offset : Int32
   mut pos : Int32
   size_bits : Int32
 }
@@ -29,13 +30,13 @@ pub struct BitReader {
 ///|
 /// `init_get_bits8`: whole bytes.
 pub fn BitReader::new(bytes : Bytes) -> BitReader {
-  { bytes, pos: 0, size_bits: bytes.length() * 8, }
+  { bytes, byte_offset: 0, pos: 0, size_bits: bytes.length() * 8, }
 }
 
 ///|
 /// `init_get_bits`: explicit bit size (e.g. a NAL's SODB).
 pub fn BitReader::with_size(bytes : Bytes, size_bits : Int32) -> BitReader {
-  { bytes, pos: 0, size_bits, }
+  { bytes, byte_offset: 0, pos: 0, size_bits, }
 }
 
 ///|
@@ -66,10 +67,11 @@ pub fn BitReader::size_bits(self : BitReader) -> Int32 {
 ///|
 /// Raw bit at an absolute position; zero past the end. */
 fn BitReader::bit_at(self : BitReader, bitpos : Int32) -> UInt32 {
-  if bitpos < 0 || bitpos >= self.bytes.length() * 8 {
+  let index = self.byte_offset + bitpos / 8
+  if bitpos < 0 || index >= self.bytes.length() {
     return 0
   }
-  (self.bytes[bitpos / 8].to_uint() >> (7 - bitpos % 8)) & 1
+  (self.bytes[index].to_uint() >> (7 - bitpos % 8)) & 1
 }
 
 ///|

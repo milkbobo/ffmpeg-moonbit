@@ -22,6 +22,7 @@ const audioFormats = {
   flac: ["FLAC", "导出首条音轨为 16 位 FLAC。", true],
   wv: ["WavPack", "导出单声道或立体声，使用 16 位无损编码。", false],
   ac3: ["AC-3", "支持单声道和立体声，请选 32、44.1 或 48 kHz。", false],
+  spdif: ["S/PDIF", "将单声道或立体声编码为 AC-3 并封装为 .spdif，请选 32、44.1 或 48 kHz。", false],
   ogg: ["Ogg / Vorbis", "实验性 Vorbis 编码，输入需要立体声。", true],
 };
 const recorderType = ["video/webm;codecs=vp8,opus", "video/webm"].find(
@@ -312,7 +313,7 @@ async function openFile(file, id) {
   $("fileName").textContent = file.name;
   $("fileInfo").textContent = `${sizeLabel(file.size)} · 本地文件`;
   $("audioTitle").textContent = "转音频 / 提取音轨";
-  const audioOnly = file.type.startsWith("audio/") || /\.(mp3|wav|w64|flac|aac|m4a|oga|opus|aiff?|aifc|au|snd|caf|ape|tta|wma|dts|ac3|eac3|ec3|mlp|thd|truehd|wv|shn|mpc|ra|rm|amr|awb|gsm|sbc|msbc|dsf|dff|adx|8svx|16sv|svx|voc|aud|qoa)$/i.test(file.name);
+  const audioOnly = file.type.startsWith("audio/") || /\.(mp[123]|m1a|m2a|mpa|wav|w64|flac|aac|adts|loas|latm|m4a|oga|opus|aiff?|aifc|au|snd|caf|ape|tta|wma|dts|ac3|eac3|ec3|spdif|mlp|thd|truehd|wv|shn|mpc|ra|rm|amr|awb|gsm|sbc|msbc|dsf|dff|adx|8svx|16sv|svx|voc|aud|qoa)$/i.test(file.name);
   usePlayer(selection, audioOnly ? audio : video);
   $("probeMessage").textContent = engineState === "error" ? $("engineStatus").title : "正在探测媒体流…";
   updateControls();
@@ -812,8 +813,9 @@ $("audioFormat").onchange = () => {
   const format = $("audioFormat").value;
   $("audioFormatInfo").textContent = audioFormats[format][1];
   const rate = $("sampleRate");
-  rate.querySelector('option[value="16000"]').disabled = format === "ac3";
-  if (format === "ac3" && rate.value === "16000") rate.value = "48000";
+  const usesAc3 = format === "ac3" || format === "spdif";
+  rate.querySelector('option[value="16000"]').disabled = usesAc3;
+  if (usesAc3 && rate.value === "16000") rate.value = "48000";
 };
 
 $("audioExportForm").onsubmit = (event) => {

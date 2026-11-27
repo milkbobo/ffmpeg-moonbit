@@ -182,7 +182,7 @@ function mp4Result({ mp4, start, end }) {
 }
 
 function audioResult(result, format) {
-  const types = { wv: "audio/x-wavpack", ac3: "audio/ac3", ogg: "audio/ogg" };
+  const types = { wv: "audio/x-wavpack", ac3: "audio/ac3", spdif: "application/octet-stream", ogg: "audio/ogg" };
   return {
     blob: new Blob([decode(result[format])], { type: types[format] ?? `audio/${format}` }),
     rate: result.sample_rate,

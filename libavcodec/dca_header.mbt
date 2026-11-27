@@ -4,12 +4,14 @@
 /// Benjamin Larsson and Konstantin Shishkov). Only core sync words are valid.
 pub struct DcaCoreHeader {
   /// Frame length in source bytes, including any packing bits.
-  frame_size : Int
+  frame_size : Int32
   /// Per-channel decoded PCM sample count.
-  samples : Int
-  sample_rate : Int
+  samples : Int32
+  sample_rate : Int32
   /// Core channels including LFE, excluding any extension channels.
-  channels : Int
+  channels : Int32
+  /// Speaker mask in the decoder's WAV channel order.
+  channel_mask : UInt32
 }
 
 ///|
@@ -39,7 +41,7 @@ fn DcaPacking::normalize(self : DcaPacking, src : BytesView) -> Bytes {
     Le16 => Bytes::makei(src.length(), i => src[i ^ 1])
     Be14 | Le14 => {
       let out : Array[Byte] = []
-      let mut acc : UInt = 0
+      let mut acc : UInt32 = 0
       let mut bits = 0
       for i in 0..<(src.length() / 2) {
         let a = src[2 * i].to_int().reinterpret_as_uint()
@@ -91,35 +93,45 @@ pub fn parse_dca_core_header(src : BytesView) -> Result[DcaCoreHeader, String] {
   let frame_size = match packing {
     Be16 => h.frame_size
     Le16 => (h.frame_size + 1) & -2
-    Be14 | Le14 => ((h.frame_size * 8 + 13) / 14) * 2
+    Be14 | Le14 => (h.frame_size * 8 + 13) / 14 * 2
+  }
+  let speakers = dca_audio_mode_ch_mask[h.audio_mode] |
+    (if h.lfe_present != 0 { 1 << dca_spk_lfe1 } else { 0 })
+  let mut channel_mask = 0U
+  for i in 0..<dca_dca2wav_norm.length() {
+    if (speakers & (1 << i)) != 0 {
+      channel_mask = channel_mask | (1U << dca_dca2wav_norm[i])
+    }
   }
   Ok({
     frame_size,
     samples: h.npcmblocks * dca_pcmblock_samples,
     sample_rate: h.sample_rate,
-    channels: dca_channels[h.audio_mode] + (if h.lfe_present != 0 { 1 } else { 0 }),
+    channels: dca_channels[h.audio_mode] +
+    (if h.lfe_present != 0 { 1 } else { 0 }),
+    channel_mask,
   })
 }
 
 ///|
 priv struct DcaCoreFields {
   crc_present : Bool
-  npcmblocks : Int
-  frame_size : Int
-  audio_mode : Int
-  sample_rate : Int
-  bit_rate : Int
+  npcmblocks : Int32
+  frame_size : Int32
+  audio_mode : Int32
+  sample_rate : Int32
+  bit_rate : Int32
   drc_present : Bool
   ts_present : Bool
   aux_present : Bool
-  ext_audio_type : Int
+  ext_audio_type : Int32
   ext_audio_present : Bool
   sync_ssf : Bool
-  lfe_present : Int
+  lfe_present : Int32
   predictor_history : Bool
   filter_perfect : Bool
-  source_pcm_res : Int
-  es_format : Int
+  source_pcm_res : Int32
+  es_format : Int32
   sumdiff_front : Bool
   sumdiff_surround : Bool
 }

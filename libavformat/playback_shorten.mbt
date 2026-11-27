@@ -29,5 +29,6 @@ fn playback_decode_shorten(
     codec_id: "shorten",
     duration_seconds: Some(count.to_double() / out.sample_rate.to_double()),
     read_error: "",
+    channel_mask: 0U,
   }
 }

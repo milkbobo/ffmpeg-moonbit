@@ -24,8 +24,16 @@ pub struct AacAudioSpecificConfig {
 pub fn aac_parse_audio_specific_config(
   data : Bytes,
 ) -> Result[AacAudioSpecificConfig, String] {
+  aac_parse_asc(data, sync_extension=true)
+}
+
+///|
+fn aac_parse_asc(
+  data : Bytes,
+  sync_extension~ : Bool,
+) -> Result[AacAudioSpecificConfig, String] {
   let config = new_mpeg4_audio_config()
-  let specific = match ff_mpeg4audio_get_config(config, data, true) {
+  let specific = match ff_mpeg4audio_get_config(config, data, sync_extension) {
     Ok(v) => v
     Err(e) => return Err(e)
   }

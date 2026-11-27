@@ -7,8 +7,8 @@
 /// U8 for 8-bit streams, S16 for 16-bit and left-justified S32 for 24-bit.
 ///
 /// Scope: format 1 (unencrypted) with 8/16/24-bit samples. The bitstream
-/// reader is little-endian, as in the C (`BITSTREAM_READER_LE`). Header,
-/// seek-table and frame CRCs are not verified (like the FLAC port).
+/// reader is little-endian, as in the C (`BITSTREAM_READER_LE`).
+/// Header, seek-table and frame CRC verification is optional.
 /// Encrypted streams (format 2) are rejected.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
@@ -133,12 +133,26 @@ fn tta_rice_new() -> TtaRice {
 }
 
 ///|
-/// `tta_filter_process_c`.
+fn tta_rice_adjust(k : Int32, sum : UInt32, value : UInt32) -> (Int32, UInt32) {
+  let sum = sum + value - (sum >> 4)
+  let k = if k > 0 && sum < tta_shift16(k) {
+    k - 1
+  } else if sum > tta_shift16(k + 1) {
+    k + 1
+  } else {
+    k
+  }
+  (k, sum)
+}
+
+///|
+/// Hybrid filter shared by TTA decoding and encoding.
 fn tta_filter_process(
   f : TtaFilter,
   input : Int32,
   shift : Int32,
   round : Int32,
+  encode~ : Bool = false,
 ) -> Int32 {
   if f.error < 0 {
     for i = 0; i < 8; i = i + 1 {
@@ -165,15 +179,21 @@ fn tta_filter_process(
   f.dx[5] = ((f.dl[5] >> 30) | 2) & -2
   f.dx[6] = ((f.dl[6] >> 30) | 2) & -2
   f.dx[7] = ((f.dl[7] >> 30) | 4) & -4
-  f.error = input
-  let out = input + (r >> shift)
+  let correction = r >> shift
+  let signal = if encode { input } else { input + correction }
+  let residual = if encode { input - correction } else { input }
+  f.error = residual
   f.dl[4] = -f.dl[5]
   f.dl[5] = -f.dl[6]
-  f.dl[6] = out - f.dl[7]
-  f.dl[7] = out
+  f.dl[6] = signal - f.dl[7]
+  f.dl[7] = signal
   f.dl[5] = f.dl[5] + f.dl[6]
   f.dl[4] = f.dl[4] + f.dl[5]
-  out
+  if encode {
+    residual
+  } else {
+    signal
+  }
 }
 
 ///|
@@ -208,11 +228,28 @@ fn tta_u16le(data : Bytes, off : Int32) -> Int32 {
 }
 
 ///|
-fn tta_u32le(data : Bytes, off : Int32) -> UInt32 {
+fn tta_u32le(data : BytesView, off : Int32) -> UInt32 {
   data[off].to_uint() |
   (data[off + 1].to_uint() << 8) |
   (data[off + 2].to_uint() << 16) |
   (data[off + 3].to_uint() << 24)
+}
+
+///|
+let tta_crc_table : FixedArray[UInt32] = @libavutil.av_crc_init(
+  true, 32, 0xEDB88320U,
+).unwrap()
+
+///|
+fn tta_crc32(data : Bytes) -> UInt32 {
+  @libavutil.av_crc(tta_crc_table, 0xFFFFFFFFU, data) ^ 0xFFFFFFFFU
+}
+
+///|
+/// Check a TTA section including its final four little-endian CRC bytes.
+pub fn tta_crc_valid(data : BytesView) -> Bool {
+  let end = data.length() - 4
+  end >= 0 && tta_crc32(data[:end].to_owned()) == tta_u32le(data, end)
 }
 
 ///|
@@ -262,20 +299,22 @@ fn tta_decode_frame_into(
         unary_val
       }
       if depth == 1 {
-        rice.sum1 = rice.sum1 + value.reinterpret_as_uint() - (rice.sum1 >> 4)
-        if rice.k1 > 0 && rice.sum1 < tta_shift16(rice.k1) {
-          rice.k1 = rice.k1 - 1
-        } else if rice.sum1 > tta_shift16(rice.k1 + 1) {
-          rice.k1 = rice.k1 + 1
-        }
+        let (k1, sum1) = tta_rice_adjust(
+          rice.k1,
+          rice.sum1,
+          value.reinterpret_as_uint(),
+        )
+        rice.k1 = k1
+        rice.sum1 = sum1
         value = value + tta_shift1(rice.k0).reinterpret_as_int()
       }
-      rice.sum0 = rice.sum0 + value.reinterpret_as_uint() - (rice.sum0 >> 4)
-      if rice.k0 > 0 && rice.sum0 < tta_shift16(rice.k0) {
-        rice.k0 = rice.k0 - 1
-      } else if rice.sum0 > tta_shift16(rice.k0 + 1) {
-        rice.k0 = rice.k0 + 1
-      }
+      let (k0, sum0) = tta_rice_adjust(
+        rice.k0,
+        rice.sum0,
+        value.reinterpret_as_uint(),
+      )
+      rice.k0 = k0
+      rice.sum0 = sum0
       value = 1 + ((value >> 1) ^ ((value & 1) - 1))
       value = tta_filter_process(filter, value, filter_shift, filter.round)
       value = value +
@@ -314,13 +353,19 @@ fn tta_decode_frame_into(
 ///   assert_true(@libavcodec.tta_parse_header(b"TTA1") is Err(_))
 /// }
 /// ```
-pub fn tta_parse_header(data : Bytes) -> Result[TtaHeader, String] {
+pub fn tta_parse_header(
+  data : Bytes,
+  verify_crc~ : Bool = false,
+) -> Result[TtaHeader, String] {
   if data.length() < 22 ||
     data[0] != b'T' ||
     data[1] != b'T' ||
     data[2] != b'A' ||
     data[3] != b'1' {
     return Err("tta: missing TTA1 header")
+  }
+  if verify_crc && !tta_crc_valid(data[:22]) {
+    return Err("tta: header CRC mismatch")
   }
   let format = tta_u16le(data, 4)
   if format == 2 {
@@ -331,8 +376,8 @@ pub fn tta_parse_header(data : Bytes) -> Result[TtaHeader, String] {
   }
   let channels = tta_u16le(data, 6)
   let bps = tta_u16le(data, 8)
-  let sample_rate = tta_u32le(data, 10).reinterpret_as_int()
-  let total_samples = tta_u32le(data, 14).to_int64()
+  let sample_rate = tta_u32le(data[:], 10).reinterpret_as_int()
+  let total_samples = tta_u32le(data[:], 14).to_int64()
   if channels < 1 || channels > 16 {
     return Err("tta: invalid channel count")
   }
@@ -401,8 +446,11 @@ pub fn TtaHeader::decode_frame(
 
 ///|
 /// Decode a complete native TTA file into interleaved PCM.
-pub fn ff_tta_decode(data : Bytes) -> Result[TtaAudio, String] {
-  let header = match tta_parse_header(data) {
+pub fn ff_tta_decode(
+  data : Bytes,
+  verify_crc~ : Bool = false,
+) -> Result[TtaAudio, String] {
+  let header = match tta_parse_header(data, verify_crc~) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -424,6 +472,9 @@ pub fn ff_tta_decode(data : Bytes) -> Result[TtaAudio, String] {
   if data.length() < seek_end + 4 {
     return Err("tta: truncated seek table")
   }
+  if verify_crc && !tta_crc_valid(data[22:seek_end + 4]) {
+    return Err("tta: seek table CRC mismatch")
+  }
   let mut frame_pos = seek_end + 4
   if total_samples * channels.to_int64() >
     (data.length() - frame_pos).to_int64() * 8L {
@@ -432,14 +483,18 @@ pub fn ff_tta_decode(data : Bytes) -> Result[TtaAudio, String] {
   let out : Array[Int32] = Array::make(data_length * channels, 0)
   let mut decoded = 0
   for f = 0; f < total_frames; f = f + 1 {
-    let size = tta_u32le(data, 22 + 4 * f).reinterpret_as_int()
+    let size = tta_u32le(data[:], 22 + 4 * f).reinterpret_as_int()
     if size <= 0 || size > data.length() - frame_pos {
       return Err("tta: invalid frame size")
+    }
+    let frame = data[frame_pos:frame_pos + size]
+    if verify_crc && !tta_crc_valid(frame) {
+      return Err("tta: frame CRC mismatch")
     }
     let count = frame_length.min(data_length - decoded)
     match
       tta_decode_frame_into(
-        data[frame_pos:frame_pos + size],
+        frame,
         channels,
         bits,
         count,

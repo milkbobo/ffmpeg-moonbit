@@ -48,8 +48,11 @@ pub(all) enum FormatId {
   Adx
   Ac3
   Aiff
+  Alp
   Amr
   Ape
+  Aptx
+  AptxHd
   Png
   Asf
   Au
@@ -64,8 +67,10 @@ pub(all) enum FormatId {
   G722
   G726
   G726Le
+  Dfpwm
   Gsm
   Hls
+  Loas
   Matroska
   Mjpeg
   Mpc7
@@ -75,8 +80,10 @@ pub(all) enum FormatId {
   MpegTs
   Ogg
   RealMedia
+  Roq
   Qoa
   Sbc
+  Spdif
   Svx
   Tta
   Voc
@@ -94,8 +101,11 @@ pub fn FormatId::name(self : FormatId) -> String {
     Adx => "adx"
     Ac3 => "ac3"
     Aiff => "aiff"
+    Alp => "alp"
     Amr => "amr"
     Ape => "ape"
+    Aptx => "aptx"
+    AptxHd => "aptx_hd"
     Png => "png_pipe"
     Asf => "asf"
     Au => "au"
@@ -110,8 +120,10 @@ pub fn FormatId::name(self : FormatId) -> String {
     G722 => "g722"
     G726 => "g726"
     G726Le => "g726le"
+    Dfpwm => "dfpwm"
     Gsm => "gsm"
     Hls => "hls"
+    Loas => "loas"
     Matroska => "matroska,webm"
     // `mjpeg_probe` is shared by the `mjpeg` and `jpeg_pipe` demuxers; on a
     // single JPEG file FFmpeg 9.0.2 wins with `jpeg_pipe` (verified with
@@ -124,8 +136,10 @@ pub fn FormatId::name(self : FormatId) -> String {
     Mpc8 => "mpc8"
     Ogg => "ogg"
     RealMedia => "rm"
+    Roq => "roq"
     Qoa => "qoa"
     Sbc => "sbc"
+    Spdif => "spdif"
     Svx => "iff"
     Tta => "tta"
     Voc => "voc"
@@ -143,8 +157,11 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Adx => "adx"
     Ac3 => "ac3"
     Aiff => "aiff,aif,aifc,afc,afd"
+    Alp => ""
     Amr => "amr"
     Ape => "ape,apl,mac"
+    Aptx => "aptx"
+    AptxHd => "aptxhd"
     Png => "png"
     Asf => "asf,wmv,wma"
     Au => "au,snd"
@@ -159,8 +176,10 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     G722 => "g722,722"
     G726 => "g726"
     G726Le => "g726le"
+    Dfpwm => "dfpwm"
     Gsm => "gsm"
     Hls => "m3u8,m3u"
+    Loas => "loas,latm"
     Matroska => "mkv,mka,mks,webm"
     Mjpeg => "mjpg,mjpeg,mpo"
     Mov => "mov,mp4,m4a,3gp,3g2,mj2,qt"
@@ -170,8 +189,10 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Mpc8 => "mpc"
     Ogg => "ogg,oga,ogv,ogx,opus,spx"
     RealMedia => ""
+    Roq => "roq"
     Qoa => "qoa"
     Sbc => "sbc,msbc"
+    Spdif => "spdif"
     Svx => "8svx,16sv,svx,iff"
     Tta => "tta"
     Voc => "voc"
@@ -189,6 +210,7 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Adx => ""
     Ac3 => "audio/ac3"
     Aiff => "audio/aiff"
+    Alp => ""
     Amr => "audio/amr"
     Ape => ""
     Png => "image/png"
@@ -201,9 +223,10 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Eac3 => "audio/eac3"
     Flac => "audio/flac"
     Flv => "video/x-flv"
-    G722 | G726 | G726Le => ""
+    G722 | G726 | G726Le | Dfpwm | Aptx | AptxHd => ""
     Gsm => ""
     Hls => "application/vnd.apple.mpegurl"
+    Loas => ""
     Matroska => "video/x-matroska"
     Mjpeg => "video/x-mjpeg"
     Mov => "video/mp4"
@@ -214,7 +237,9 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Ogg => "application/ogg"
     RealMedia => ""
     Qoa => ""
+    Roq => ""
     Sbc => ""
+    Spdif => ""
     Svx => ""
     Tta => ""
     Voc => "audio/x-voc"
@@ -488,8 +513,12 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: G722, probe: pd => probe_telephony(pd, G722), },
     { id: G726, probe: pd => probe_telephony(pd, G726), },
     { id: G726Le, probe: pd => probe_telephony(pd, G726Le), },
+    { id: Dfpwm, probe: pd => probe_telephony(pd, Dfpwm), },
+    { id: Aptx, probe: pd => probe_telephony(pd, Aptx), },
+    { id: AptxHd, probe: pd => probe_telephony(pd, AptxHd), },
     { id: Gsm, probe: probe_gsm, },
     { id: Hls, probe: probe_hls, },
+    { id: Loas, probe: probe_loas, },
     { id: Matroska, probe: probe_matroska, },
     { id: Mjpeg, probe: probe_mjpeg, },
     { id: Mov, probe: probe_mov, },
@@ -501,9 +530,12 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: RealMedia, probe: probe_realmedia, },
     { id: Qoa, probe: probe_qoa, },
     { id: Sbc, probe: probe_sbc, },
+    { id: Spdif, probe: probe_spdif, },
     { id: Svx, probe: probe_svx, },
     { id: Tta, probe: probe_tta, },
     { id: Voc, probe: probe_voc, },
+    { id: Alp, probe: probe_alp, },
+    { id: Roq, probe: probe_roq, },
     { id: W64, probe: probe_w64, },
     { id: Wsaud, probe: probe_wsaud, },
     { id: Wav, probe: probe_wav, },

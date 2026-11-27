@@ -25,7 +25,8 @@ fn ts_latm_decode(s : String) -> Bytes {
 
 ///|
 test "LATM audio in MPEG-TS decodes like ffmpeg" {
-  let demux = @libavformat.av_mpegts_open(ts_latm_decode(ts_latm_stream_b64)).unwrap()
+  let data = ts_latm_decode(ts_latm_stream_b64)
+  let demux = @libavformat.av_mpegts_open(data).unwrap()
   let mut audio_pid = -1
   for stream in demux.streams {
     if stream.codec == "aac_latm" {
@@ -47,27 +48,18 @@ test "LATM audio in MPEG-TS decodes like ffmpeg" {
   let latm = @libavcodec.latm_parse_stream(Bytes::from_array(es)).unwrap()
   assert_eq(latm.asc.length(), 2)
   assert_eq(latm.frames.length(), 3)
-  let decoder = @libavcodec.new_aac_decoder_from_asc(latm.asc).unwrap()
-  let pcm : Array[Byte] = []
+  let media = @libavformat.MediaFile::open(data)
+  let info = media.streams()[0]
+  assert_eq(info.codec_id, "aac_latm")
+  assert_eq(info.channels, 1)
+  assert_true(info.sample_rate > 0)
+  assert_eq(info.extradata, Some(latm.asc))
   for frame in latm.frames {
-    let elements = match decoder.decode_frame(frame) {
-      Ok(v) => v
-      Err(e) => fail("AAC LATM decode failed: " + e)
-    }
-    for element in elements {
-      for v in element.samples {
-        let q = if v >= 1.0 {
-          32767
-        } else if v <= -1.0 {
-          -32768
-        } else {
-          (v * 32768.0).round().to_int()
-        }
-        pcm.push((q & 0xFF).to_byte())
-        pcm.push(((q >> 8) & 0xFF).to_byte())
-      }
-    }
+    assert_eq(media.next_packet().unwrap().data, frame)
   }
+  assert_true(media.next_packet() is None)
+  let wav = @libavformat.decode_audio_file(data).to_wav_s16()
+  let pcm = wav[@libavformat.av_wav_open(wav).unwrap().data_offset.to_int():]
   let reference = ts_latm_decode(ts_latm_ref_b64)
   assert_eq(pcm.length(), reference.length())
   let mut max_diff = 0

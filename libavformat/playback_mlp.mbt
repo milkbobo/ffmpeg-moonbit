@@ -49,5 +49,6 @@ fn playback_decode_mlp(
     codec_id: codec,
     duration_seconds: Some(first.length().to_double() / rate.to_double()),
     read_error: "",
+    channel_mask: 0U,
   }
 }

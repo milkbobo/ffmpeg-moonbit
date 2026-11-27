@@ -1,6 +1,6 @@
 ///|
 fn demo_audio_format(format : String) -> Bool {
-  ["wav", "flac", "wv", "ac3", "ogg"].contains(format)
+  ["wav", "flac", "wv", "ac3", "spdif", "ogg"].contains(format)
 }
 
 ///|
@@ -50,7 +50,7 @@ fn demo_encode_audio(
       }
       demo_encode_vorbis(samples, rate)
     }
-    "ac3" => {
+    "ac3" | "spdif" => {
       guard channels == 1 || channels == 2 else {
         fail("AC-3 导出支持单声道和立体声。")
       }
@@ -67,7 +67,7 @@ fn demo_encode_audio(
           }
         })
       })
-      demo_result(
+      let ac3 = demo_result(
         @avc.ff_ac3_fixed_encode_stream(
           planes,
           rate,
@@ -79,6 +79,11 @@ fn demo_encode_audio(
           },
         ),
       )
+      if format == "spdif" {
+        demo_result(@avf.av_spdif_mux(ac3, codec="ac3"))
+      } else {
+        ac3
+      }
     }
     "wv" | "flac" | "wav" => {
       let pcm = @swr.swr_flt_planar_to_s16(samples, channels)
