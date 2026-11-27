@@ -629,14 +629,14 @@ pub fn av_probe_input_buffer(
   }
   let start = pb.avio_tell()
   let mut probe_size = probe_buf_min
-  let mut collected = Bytes::new(0)
+  let mut collected = Bytes::make(0, b'\x00')
   let mut result : (FormatId?, Int32) = (None, 0)
   let mut done = false
   while !done && probe_size <= max_probe_size {
     let want = probe_size - collected.length()
     let chunk = match pb.avio_read(want) {
       Ok(b) => b
-      Err(_) => Bytes::new(0)
+      Err(_) => Bytes::make(0, b'\x00')
     }
     if chunk.length() > 0 {
       let merged : Array[Byte] = []

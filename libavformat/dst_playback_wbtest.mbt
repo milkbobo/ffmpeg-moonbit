@@ -109,7 +109,9 @@ test "DSDIFF DST matches FFmpeg float PCM" {
 test "DST reports invalid packet sizes, unsupported segmentation and FRTE mismatch" {
   let dec = @libavcodec.dst_decoder_new(2, 352800).unwrap()
   assert_true(dec.decode_packet(b"\xff") is Err("dst: invalid frame size"))
-  assert_true(dec.decode_packet(b"\xff\xff") is Err("dst: truncated frame syntax"))
+  assert_true(
+    dec.decode_packet(b"\xff\xff") is Err("dst: truncated frame syntax"),
+  )
   assert_true(
     dec.decode_packet(b"\x80\x00") is Err("dst: unsupported segmentation"),
   )

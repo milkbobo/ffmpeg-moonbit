@@ -34,8 +34,7 @@ let ape_v399_pcm_bytes : Int32 = 294912
 let ape_v399_spots : Array[Int32] = [4, 50, 4, 7, -1496, -1611]
 
 ///|
-let ape_v399_packets_b64 : Bytes =
-  b"ACABAAAAAACVwk4f3pgNAH7Dpitp5pUhXHLJEPoLMosXLcjToMx+eIfcRsBtrL2V5zCHgzCx41BjeQpg6gxrarvxFSeYQA9pAu2k" +
+let ape_v399_packets_b64 : Bytes = b"ACABAAAAAACVwk4f3pgNAH7Dpitp5pUhXHLJEPoLMosXLcjToMx+eIfcRsBtrL2V5zCHgzCx41BjeQpg6gxrarvxFSeYQA9pAu2k" +
   b"vh6bC4F/Qhze+7NiIvKgQ/zSp5zXYMOHGBoBd3wS5pPw0Q650xPGCXbci0Ch3tUV0sst3qUXuPAsEphsXPvnYjFdGY2zdtMlCaTK" +
   b"Js3k070eDPG7Ow1oZrx6Q6/H5lbU08RguyMNaB4VDZw/vuiPlqi4U3y8HGLjLeIWCk41l3V9mWkyQxe2jh1autvqMRGwbhgFcOcc" +
   b"elOhqrpllOC+vzrX2g1nX5/tTW7O96k8Vdhq1bgY6TLaJXkx3h6ueXAJfZraBe7LUeNeN7iyS3qYdxii6eKrH+sV2VYoWzZTygL3" +
@@ -1900,7 +1899,11 @@ test "APE: v399 real packets match FFmpeg PCM" {
       let lo = bytes[i * 2].to_uint().reinterpret_as_int()
       let hi = bytes[i * 2 + 1].to_uint().reinterpret_as_int()
       let s = lo | (hi << 8)
-      if (s & 0x8000) != 0 { s - 65536 } else { s }
+      if (s & 0x8000) != 0 {
+        s - 65536
+      } else {
+        s
+      }
     }
     inspect(v, content=ape_v399_spots[i].to_string())
   }

@@ -46,13 +46,13 @@ fn md5v_wl32(dst : FixedArray[Byte], off : Int32, v : UInt32) -> Unit {
 #cfg(any(target="native", target="wasm"))
 fn md5v_f(i : Int32, b : V128, c : V128, d : V128) -> V128 {
   if i < 16 {
-    @v128.v128_xor(d, @v128.v128_and_(b, @v128.v128_xor(c, d)))
+    @simd.v128_xor(d, @simd.v128_and_(b, @simd.v128_xor(c, d)))
   } else if i < 32 {
-    @v128.v128_or_(@v128.v128_and_(d, b), @v128.v128_and_(@v128.v128_not(d), c))
+    @simd.v128_or_(@simd.v128_and_(d, b), @simd.v128_and_(@simd.v128_not(d), c))
   } else if i < 48 {
-    @v128.v128_xor(@v128.v128_xor(b, c), d)
+    @simd.v128_xor(@simd.v128_xor(b, c), d)
   } else {
-    @v128.v128_xor(c, @v128.v128_or_(b, @v128.v128_not(d)))
+    @simd.v128_xor(c, @simd.v128_or_(b, @simd.v128_not(d)))
   }
 }
 
@@ -60,7 +60,7 @@ fn md5v_f(i : Int32, b : V128, c : V128, d : V128) -> V128 {
 /// `rotl32(a, t)` applied to all four lanes (`a << t | a >> (32 - t)`). */
 #cfg(any(target="native", target="wasm"))
 fn md5v_rotl(a : V128, t : Int32) -> V128 {
-  @v128.v128_or_(@v128.i32x4_shl(a, t), @v128.i32x4_shr_u(a, 32 - t))
+  @simd.v128_or_(@simd.i32x4_shl(a, t), @simd.i32x4_shr_u(a, 32 - t))
 }
 
 ///|
@@ -94,16 +94,16 @@ pub fn av_md5_sum_x4(
   }
   // Running state, one lane per message; initialised to the MD5 IV
   // (`ABCD[3..0]` of `av_md5_init`).
-  let mut sa = @v128.i32x4_splat(0x67452301)
-  let mut sb = @v128.i32x4_splat(0xefcdab89)
-  let mut sc = @v128.i32x4_splat(0x98badcfe)
-  let mut sd = @v128.i32x4_splat(0x10325476)
-  let xw : FixedArray[V128] = FixedArray::make(16, @v128.i32x4_splat(0))
+  let mut sa = @simd.i32x4_splat(0x67452301)
+  let mut sb = @simd.i32x4_splat(0xefcdab89)
+  let mut sc = @simd.i32x4_splat(0x98badcfe)
+  let mut sd = @simd.i32x4_splat(0x10325476)
+  let xw : FixedArray[V128] = FixedArray::make(16, @simd.i32x4_splat(0))
   for nb = 0; nb < nblocks; nb = nb + 1 {
     // The 16 message words of this 512-bit block, one lane per message.
     for w = 0; w < 16; w = w + 1 {
       let off = nb * 64 + 4 * w
-      xw[w] = @v128.i32x4_const(
+      xw[w] = @simd.i32x4_const(
         md5v_rl32(scratch, off),
         md5v_rl32(scratch, plane + off),
         md5v_rl32(scratch, 2 * plane + off),
@@ -117,29 +117,29 @@ pub fn av_md5_sum_x4(
     for i = 0; i < 64; i = i + 1 {
       let t = md5_s[(i >> 4) * 4 + (i & 3)]
       let x = xw[md5_x_index(i)]
-      a = @v128.i32x4_add(
-        @v128.i32x4_add(
-          @v128.i32x4_add(a, @v128.i32x4_splat(md5_t[i])),
+      a = @simd.i32x4_add(
+        @simd.i32x4_add(
+          @simd.i32x4_add(a, @simd.i32x4_splat(md5_t[i])),
           md5v_f(i, b, c, d),
         ),
         x,
       )
-      a = @v128.i32x4_add(b, md5v_rotl(a, t))
+      a = @simd.i32x4_add(b, md5v_rotl(a, t))
       let tmp = d
       d = c
       c = b
       b = a
       a = tmp
     }
-    sa = @v128.i32x4_add(sa, a)
-    sb = @v128.i32x4_add(sb, b)
-    sc = @v128.i32x4_add(sc, c)
-    sd = @v128.i32x4_add(sd, d)
+    sa = @simd.i32x4_add(sa, a)
+    sb = @simd.i32x4_add(sb, b)
+    sc = @simd.i32x4_add(sc, c)
+    sd = @simd.i32x4_add(sd, d)
   }
   for l = 0; l < 4; l = l + 1 {
-    md5v_wl32(dst, 16 * l, @v128.i32x4_extract_lane(sa, l))
-    md5v_wl32(dst, 16 * l + 4, @v128.i32x4_extract_lane(sb, l))
-    md5v_wl32(dst, 16 * l + 8, @v128.i32x4_extract_lane(sc, l))
-    md5v_wl32(dst, 16 * l + 12, @v128.i32x4_extract_lane(sd, l))
+    md5v_wl32(dst, 16 * l, @simd.i32x4_extract_lane(sa, l))
+    md5v_wl32(dst, 16 * l + 4, @simd.i32x4_extract_lane(sb, l))
+    md5v_wl32(dst, 16 * l + 8, @simd.i32x4_extract_lane(sc, l))
+    md5v_wl32(dst, 16 * l + 12, @simd.i32x4_extract_lane(sd, l))
   }
 }

@@ -26,7 +26,7 @@ pub fn aiff_dpcm_decoder_new(
   if channels != 1 && channels != 2 {
     return Err("aiff dpcm: expected one or two channels")
   }
-  Ok({ cubic, predictors: FixedArray::make(channels, 0) })
+  Ok({ cubic, predictors: FixedArray::make(channels, 0), })
 }
 
 ///|
@@ -42,7 +42,7 @@ pub fn AiffDpcmDecoder::decode_packet(
   }
   let output = Array::make(data.length(), 0)
   for i in 0..<data.length() {
-    let code = (data[i].to_int() << 24) >> 24
+    let code = data[i].to_int() << 24 >> 24
     let square = code * code
     // FFmpeg's LGPL-2.1-or-later dpcm.c expands a signed square or cube.
     let delta = if self.cubic {
@@ -68,7 +68,9 @@ fn AdpcmDecoder::decode_ima_ws(
   data : Bytes,
 ) -> Result[AdpcmAudio, String] {
   let channels = self.channels
-  if data.is_empty() || data.length() % channels != 0 || data.length() > 0x3FFFFFFF {
+  if data.is_empty() ||
+    data.length() % channels != 0 ||
+    data.length() > 0x3FFFFFFF {
     return Err("adpcm: invalid Westwood IMA packet size")
   }
   let samples = Array::make(data.length() * 2, 0)
@@ -78,8 +80,11 @@ fn AdpcmDecoder::decode_ima_ws(
       let byte = data[offset + c].to_int()
       let state = self.status[c]
       samples[2 * offset + c] = adpcm_ima_expand_multiply(state, byte & 15)
-      samples[2 * offset + channels + c] = adpcm_ima_expand_multiply(state, byte >> 4)
+      samples[2 * offset + channels + c] = adpcm_ima_expand_multiply(
+        state,
+        byte >> 4,
+      )
     }
   }
-  Ok({ channels, samples })
+  Ok({ channels, samples, })
 }

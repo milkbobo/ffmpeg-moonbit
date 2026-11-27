@@ -70,10 +70,10 @@ pub fn mec_pack_plane_u8_fx(
 /// Horizontal sum of the four `i32x4` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn mec_red4(v : V128) -> Int32 {
-  let u = @v128.i32x4_extract_lane(v, 0) +
-  @v128.i32x4_extract_lane(v, 1) +
-  @v128.i32x4_extract_lane(v, 2) +
-  @v128.i32x4_extract_lane(v, 3)
+  let u = @simd.i32x4_extract_lane(v, 0) +
+    @simd.i32x4_extract_lane(v, 1) +
+    @simd.i32x4_extract_lane(v, 2) +
+    @simd.i32x4_extract_lane(v, 3)
   u.reinterpret_as_int()
 }
 
@@ -82,10 +82,7 @@ fn mec_red4(v : V128) -> Int32 {
 /// subtractions is zero, so their or is the absolute difference. */
 #cfg(any(target="native", target="wasm"))
 fn mec_absdiff(a : V128, b : V128) -> V128 {
-  @v128.v128_or_(
-    @v128.i8x16_sub_sat_u(a, b),
-    @v128.i8x16_sub_sat_u(b, a),
-  )
+  @simd.v128_or_(@simd.i8x16_sub_sat_u(a, b), @simd.i8x16_sub_sat_u(b, a))
 }
 
 ///|
@@ -96,14 +93,14 @@ pub fn mec_sad_packed_v128(
   b : FixedArray[Byte],
   n : Int32,
 ) -> Int32 {
-  let mut acc = @v128.i32x4_splat(0)
+  let mut acc = @simd.i32x4_splat(0)
   let mut p = 0
   while p + 16 <= n {
-    let d = mec_absdiff(@v128.v128_load(a, p), @v128.v128_load(b, p))
-    acc = @v128.i32x4_add(
+    let d = mec_absdiff(@simd.v128_load(a, p), @simd.v128_load(b, p))
+    acc = @simd.i32x4_add(
       acc,
-      @v128.i32x4_extadd_pairwise_i16x8_u(
-        @v128.i16x8_extadd_pairwise_i8x16_u(d),
+      @simd.i32x4_extadd_pairwise_i16x8_u(
+        @simd.i16x8_extadd_pairwise_i8x16_u(d),
       ),
     )
     p = p + 16
@@ -128,14 +125,14 @@ pub fn mec_sse_packed_v128(
   b : FixedArray[Byte],
   n : Int32,
 ) -> Int32 {
-  let mut acc = @v128.i32x4_splat(0)
+  let mut acc = @simd.i32x4_splat(0)
   let mut p = 0
   while p + 16 <= n {
-    let d = mec_absdiff(@v128.v128_load(a, p), @v128.v128_load(b, p))
-    let dlo = @v128.i16x8_extend_low_i8x16_u(d)
-    let dhi = @v128.i16x8_extend_high_i8x16_u(d)
-    acc = @v128.i32x4_add(acc, @v128.i32x4_dot_i16x8_s(dlo, dlo))
-    acc = @v128.i32x4_add(acc, @v128.i32x4_dot_i16x8_s(dhi, dhi))
+    let d = mec_absdiff(@simd.v128_load(a, p), @simd.v128_load(b, p))
+    let dlo = @simd.i16x8_extend_low_i8x16_u(d)
+    let dhi = @simd.i16x8_extend_high_i8x16_u(d)
+    acc = @simd.i32x4_add(acc, @simd.i32x4_dot_i16x8_s(dlo, dlo))
+    acc = @simd.i32x4_add(acc, @simd.i32x4_dot_i16x8_s(dhi, dhi))
     p = p + 16
   }
   let mut sum = mec_red4(acc)

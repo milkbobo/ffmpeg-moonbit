@@ -32,25 +32,31 @@ test "raw DTS: preserve source positions, frame sizes, and sample timestamps" {
 test "raw DTS: reject incomplete frames and extension substreams" {
   let frame = dts_test_frame()
   assert_true(
-    @libavformat.av_dts_open(frame[:1007].to_owned()) is
-    Err("dts: truncated core frame"),
+    @libavformat.av_dts_open(frame[:1007].to_owned())
+    is Err("dts: truncated core frame"),
   )
   assert_true(
-    @libavformat.av_dts_open(frame + frame[:20].to_owned()) is
-    Err("dts: truncated core frame"),
+    @libavformat.av_dts_open(frame + frame[:20].to_owned())
+    is Err("dts: truncated core frame"),
   )
   assert_true(
-    @libavformat.av_dts_open(frame + b"\x64\x58\x20\x25" + frame) is
-    Err("dts: extension substream is not supported"),
+    @libavformat.av_dts_open(frame + b"\x64\x58\x20\x25" + frame)
+    is Err("dts: extension substream is not supported"),
   )
   assert_true(
-    @libavformat.av_dts_open(b"\x64\x58\x20\x25" + frame) is
-    Err("dts: extension substream is not supported"),
+    @libavformat.av_dts_open(b"\x64\x58\x20\x25" + frame)
+    is Err("dts: extension substream is not supported"),
   )
-  let changed_rate = Bytes::makei(1008, i => if i == 8 { 0xa1 } else { frame[i] })
+  let changed_rate = Bytes::makei(1008, i => {
+    if i == 8 {
+      0xa1
+    } else {
+      frame[i]
+    }
+  })
   assert_true(
-    @libavformat.av_dts_open(frame + changed_rate) is
-    Err("dts: core stream parameters change between frames"),
+    @libavformat.av_dts_open(frame + changed_rate)
+    is Err("dts: core stream parameters change between frames"),
   )
 }
 
@@ -58,7 +64,9 @@ test "raw DTS: reject incomplete frames and extension substreams" {
 test "raw DTS: probe requires complete frames and stronger evidence after junk" {
   let frame = dts_test_frame()
   let is_dts = fn(data) {
-    let (id, _) = @libavformat.av_probe_input_format(@libavformat.ProbeData::new(data))
+    let (id, _) = @libavformat.av_probe_input_format(
+      @libavformat.ProbeData::new(data),
+    )
     id is Some(f) && f.name() == "dts"
   }
   assert_true(is_dts(frame))

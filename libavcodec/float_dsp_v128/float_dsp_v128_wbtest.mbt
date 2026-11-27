@@ -104,7 +104,11 @@ fn fr_vector_fmul_window(
 
 ///|
 /// Verbatim `butterflies_float`. */
-fn fr_butterflies_float(v1 : Array[Float], v2 : Array[Float], len : Int32) -> Unit {
+fn fr_butterflies_float(
+  v1 : Array[Float],
+  v2 : Array[Float],
+  len : Int32,
+) -> Unit {
   for i = 0; i < len; i = i + 1 {
     let t = v1[i] - v2[i]
     v1[i] = v1[i] + v2[i]
@@ -114,7 +118,11 @@ fn fr_butterflies_float(v1 : Array[Float], v2 : Array[Float], len : Int32) -> Un
 
 ///|
 /// Verbatim `scalarproduct_float`. */
-fn fr_scalarproduct_float(v1 : Array[Float], v2 : Array[Float], len : Int32) -> Float {
+fn fr_scalarproduct_float(
+  v1 : Array[Float],
+  v2 : Array[Float],
+  len : Int32,
+) -> Float {
   let mut p : Float = 0.0
   for i = 0; i < len; i = i + 1 {
     p = p + v1[i] * v2[i]
@@ -163,7 +171,11 @@ fn fr_vector_dmul_scalar(
 
 ///|
 /// Verbatim `scalarproduct_double`. */
-fn fr_scalarproduct_double(v1 : Array[Double], v2 : Array[Double], len : Int32) -> Double {
+fn fr_scalarproduct_double(
+  v1 : Array[Double],
+  v2 : Array[Double],
+  len : Int32,
+) -> Double {
   let mut p = 0.0
   for i = 0; i < len; i = i + 1 {
     p = p + v1[i] * v2[i]
@@ -330,7 +342,9 @@ test "float dsp v128: scalarproduct_float preserves summation order" {
     let seed = 0xABCDEF01U + n.reinterpret_as_uint()
     let x = fr_gen(seed, n)
     let y = fr_gen(seed + 5U, n)
-    assert_true(fr_scalarproduct_float(x, y, n) == scalarproduct_float_v128(x, y, n))
+    assert_true(
+      fr_scalarproduct_float(x, y, n) == scalarproduct_float_v128(x, y, n),
+    )
   }
 }
 
@@ -370,6 +384,7 @@ test "float dsp v128: scalarproduct_double order sensitivity" {
   let v1 : Array[Double] = [1.0e16, 1.0, -1.0e16, 1.0, 1.0e16, 1.0]
   let v2 : Array[Double] = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
   assert_true(
-    fr_scalarproduct_double(v1, v2, len) == scalarproduct_double_v128(v1, v2, len),
+    fr_scalarproduct_double(v1, v2, len) ==
+    scalarproduct_double_v128(v1, v2, len),
   )
 }

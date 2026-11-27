@@ -2,12 +2,12 @@
 /// RealAudio 1.0 (14.4 kb/s), ported from FFmpeg ra144dec.c and ra144.c
 /// (LGPL-2.1-or-later). Filter products use wrapping 32-bit arithmetic.
 struct Ra144Decoder {
-  mut lpc : FixedArray[Int]
-  mut previous_lpc : FixedArray[Int]
-  mut previous_rms : UInt
-  mut previous_energy : UInt
-  adaptive : FixedArray[Int]
-  synthesis : FixedArray[Int]
+  mut lpc : FixedArray[Int32]
+  mut previous_lpc : FixedArray[Int32]
+  mut previous_rms : UInt32
+  mut previous_energy : UInt32
+  adaptive : FixedArray[Int32]
+  synthesis : FixedArray[Int32]
 }
 
 ///|
@@ -23,28 +23,28 @@ pub fn Ra144Decoder::new() -> Ra144Decoder {
 }
 
 ///|
-let ra144_refl_tables : FixedArray[FixedArray[Int]] = [
-  ra144_lpc_refl_cb1, ra144_lpc_refl_cb2, ra144_lpc_refl_cb3,
-  ra144_lpc_refl_cb4, ra144_lpc_refl_cb5, ra144_lpc_refl_cb6,
-  ra144_lpc_refl_cb7, ra144_lpc_refl_cb8, ra144_lpc_refl_cb9,
-  ra144_lpc_refl_cb10,
+let ra144_refl_tables : FixedArray[FixedArray[Int32]] = [
+  ra144_lpc_refl_cb1, ra144_lpc_refl_cb2, ra144_lpc_refl_cb3, ra144_lpc_refl_cb4,
+  ra144_lpc_refl_cb5, ra144_lpc_refl_cb6, ra144_lpc_refl_cb7, ra144_lpc_refl_cb8,
+  ra144_lpc_refl_cb9, ra144_lpc_refl_cb10,
 ]
 
 ///|
-fn ra144_scaled_sqrt(value : UInt) -> UInt {
+fn ra144_scaled_sqrt(value : UInt32) -> UInt32 {
   for x = value, shift = 2; x > 0xfff; x = x >> 2, shift = shift + 1 {
+
   } nobreak {
     opus_rc_isqrt(x << 20) << shift
   }
 }
 
 ///|
-fn ra144_refl_rms(refl : FixedArray[Int]) -> UInt {
+fn ra144_refl_rms(refl : FixedArray[Int32]) -> UInt32 {
   let mut result = 0x10000U
   let mut shift = 10
   for coef in refl {
-    result = (((0x1000000 - coef * coef) >> 12).reinterpret_as_uint() *
-      result) >> 12
+    result = (((0x1000000 - coef * coef) >> 12).reinterpret_as_uint() * result) >>
+      12
     if result == 0 {
       return 0
     }
@@ -57,7 +57,7 @@ fn ra144_refl_rms(refl : FixedArray[Int]) -> UInt {
 }
 
 ///|
-fn ra144_eval_lpc(lpc : FixedArray[Int], refl : FixedArray[Int]) -> Unit {
+fn ra144_eval_lpc(lpc : FixedArray[Int32], refl : FixedArray[Int32]) -> Unit {
   let mut current = lpc
   let mut next = FixedArray::make(10, 0)
   for i = 0; i < 10; i = i + 1 {
@@ -75,7 +75,7 @@ fn ra144_eval_lpc(lpc : FixedArray[Int], refl : FixedArray[Int]) -> Unit {
 }
 
 ///|
-fn ra144_eval_refl(lpc : FixedArray[Int]) -> FixedArray[Int]? {
+fn ra144_eval_refl(lpc : FixedArray[Int32]) -> FixedArray[Int32]? {
   let refl = FixedArray::make(10, 0)
   let mut current = FixedArray::makei(10, i => lpc[i])
   let mut next = FixedArray::make(10, 0)
@@ -104,23 +104,28 @@ fn ra144_eval_refl(lpc : FixedArray[Int]) -> FixedArray[Int]? {
 ///|
 fn Ra144Decoder::interpolate(
   self : Ra144Decoder,
-  weight : Int,
+  weight : Int32,
   use_previous : Bool,
-  rms : UInt,
-  energy : UInt,
-) -> (FixedArray[Int], Int) {
+  rms : UInt32,
+  energy : UInt32,
+) -> (FixedArray[Int32], Int32) {
   let coefs = FixedArray::makei(10, i => {
-    let mixed = (weight * self.lpc[i] + (4 - weight) * self.previous_lpc[i]) >> 2
-    (mixed << 16) >> 16
+    let mixed = (weight * self.lpc[i] + (4 - weight) * self.previous_lpc[i]) >>
+      2
+    mixed << 16 >> 16
   })
   let block_rms = match ra144_eval_refl(coefs) {
     Some(refl) => ra144_refl_rms(refl)
     None => {
       let fallback = if use_previous { self.previous_lpc } else { self.lpc }
       for i = 0; i < 10; i = i + 1 {
-        coefs[i] = (fallback[i] << 16) >> 16
+        coefs[i] = fallback[i] << 16 >> 16
       }
-      if use_previous { self.previous_rms } else { rms }
+      if use_previous {
+        self.previous_rms
+      } else {
+        rms
+      }
     }
   }
   (coefs, ((block_rms * energy) >> 10).reinterpret_as_int())
@@ -130,9 +135,9 @@ fn Ra144Decoder::interpolate(
 fn Ra144Decoder::decode_subblock(
   self : Ra144Decoder,
   bits : BitReader,
-  lpc : FixedArray[Int],
-  rms : Int,
-  out : Array[Int],
+  lpc : FixedArray[Int32],
+  rms : Int32,
+  out : Array[Int32],
 ) -> Unit {
   let adaptive_index = bits.read(7).reinterpret_as_int()
   let gain = bits.read(8).reinterpret_as_int()
@@ -154,16 +159,25 @@ fn Ra144Decoder::decode_subblock(
     }
   }
   let shift = ra144_gain_exp_tab[gain]
-  let v0 = ((ra144_gain_val_tab[gain * 3] * adaptive_gain).reinterpret_as_uint() >> shift).reinterpret_as_int()
-  let v1 = ((ra144_gain_val_tab[gain * 3 + 1] * ((ra144_cb1_base[cb1] * rms) >> 8)).reinterpret_as_uint() >> shift).reinterpret_as_int()
-  let v2 = ((ra144_gain_val_tab[gain * 3 + 2] * ((ra144_cb2_base[cb2] * rms) >> 8)).reinterpret_as_uint() >> shift).reinterpret_as_int()
+  let v0 = ((ra144_gain_val_tab[gain * 3] * adaptive_gain).reinterpret_as_uint() >>
+  shift).reinterpret_as_int()
+  let v1 = ((ra144_gain_val_tab[gain * 3 + 1] *
+  ((ra144_cb1_base[cb1] * rms) >> 8)).reinterpret_as_uint() >>
+  shift).reinterpret_as_int()
+  let v2 = ((ra144_gain_val_tab[gain * 3 + 2] *
+  ((ra144_cb2_base[cb2] * rms) >> 8)).reinterpret_as_uint() >>
+  shift).reinterpret_as_int()
   for i = 0; i < 108; i = i + 1 {
     self.adaptive[i] = self.adaptive[i + 40]
   }
   for i = 0; i < 40; i = i + 1 {
-    let value = (old[i] * v0 + ra144_cb1_vects[cb1 * 40 + i] * v1 +
-      ra144_cb2_vects[cb2 * 40 + i] * v2) >> 12
-    self.adaptive[108 + i] = (value << 16) >> 16
+    let value = (
+        old[i] * v0 +
+        ra144_cb1_vects[cb1 * 40 + i] * v1 +
+        ra144_cb2_vects[cb2 * 40 + i] * v2
+      ) >>
+      12
+    self.adaptive[108 + i] = value << 16 >> 16
   }
   for i = 0; i < 10; i = i + 1 {
     self.synthesis[i] = self.synthesis[40 + i]
@@ -192,11 +206,11 @@ fn Ra144Decoder::decode_subblock(
 pub fn Ra144Decoder::decode_packet(
   self : Ra144Decoder,
   packet : Bytes,
-) -> Result[Array[Int], String] {
+) -> Result[Array[Int32], String] {
   if packet.length() == 0 || packet.length() % 20 != 0 {
     return Err("RealAudio 14.4 packet must contain complete 20-byte frames")
   }
-  let widths : FixedArray[Int] = [6, 5, 5, 4, 4, 3, 3, 3, 3, 2]
+  let widths : FixedArray[Int32] = [6, 5, 5, 4, 4, 3, 3, 3, 3, 2]
   let bits = BitReader::new(packet)
   let out = []
   for frame = 0; frame < packet.length() / 20; frame = frame + 1 {
@@ -208,13 +222,23 @@ pub fn Ra144Decoder::decode_packet(
     let energy = ra144_energy_tab[bits.read(5).reinterpret_as_int()].reinterpret_as_uint()
     let (lpc0, rms0) = self.interpolate(1, true, rms, self.previous_energy)
     let middle = ra144_scaled_sqrt(energy * self.previous_energy) >> 12
-    let (lpc1, rms1) = self.interpolate(2, energy <= self.previous_energy, rms, middle)
+    let (lpc1, rms1) = self.interpolate(
+      2,
+      energy <= self.previous_energy,
+      rms,
+      middle,
+    )
     let (lpc2, rms2) = self.interpolate(3, false, rms, energy)
-    let lpc3 = FixedArray::makei(10, i => (self.lpc[i] << 16) >> 16)
+    let lpc3 = FixedArray::makei(10, i => self.lpc[i] << 16 >> 16)
     self.decode_subblock(bits, lpc0, rms0, out)
     self.decode_subblock(bits, lpc1, rms1, out)
     self.decode_subblock(bits, lpc2, rms2, out)
-    self.decode_subblock(bits, lpc3, ((rms * energy) >> 10).reinterpret_as_int(), out)
+    self.decode_subblock(
+      bits,
+      lpc3,
+      ((rms * energy) >> 10).reinterpret_as_int(),
+      out,
+    )
     bits.skip(1)
     self.previous_energy = energy
     self.previous_rms = rms

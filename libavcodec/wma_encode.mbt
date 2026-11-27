@@ -23,26 +23,31 @@
 ///     search over `total_gain`, the final `encode_frame` output plus
 ///     `'N'` padding up to `block_align`.
 
-///| `BLOCK_MAX_SIZE`.
+///|
+/// `BLOCK_MAX_SIZE`.
 let wma_enc_block_max_size = 2048
 
-///| `MAX_CODED_SUPERFRAME_SIZE`.
+///|
+/// `MAX_CODED_SUPERFRAME_SIZE`.
 let wma_enc_max_coded_superframe_size = 16384
 
 ///| `M_LOG2_10` — unused here, `exp10` goes through `pow(10, x)` like the
 /// decoder's verified `wma_exp10_20`.
 
-///| `ff_exp10(x)` in the decoder-verified form: `pow(10, x)`.
+///|
+/// `ff_exp10(x)` in the decoder-verified form: `pow(10, x)`.
 fn wma_enc_exp10(x : Double) -> Double {
   @math.pow(10.0, x)
 }
 
-///| f32 rounding (C `float` truncation on assignment).
+///|
+/// f32 rounding (C `float` truncation on assignment).
 fn wma_enc_f32(x : Double) -> Double {
   Float::from_double(x).to_double()
 }
 
-///| `lrint` with the C default rounding mode (round half to even).
+///|
+/// `lrint` with the C default rounding mode (round half to even).
 fn wma_enc_lrint(x : Double) -> Int32 {
   let r = @math.floor(x)
   let diff = x - r
@@ -61,7 +66,8 @@ fn wma_enc_lrint(x : Double) -> Int32 {
   }
 }
 
-///| `ff_tx_mdct_naive_fwd` (scale 1): `X[i] = sum_{j<2N} x[j] *
+///|
+/// `ff_tx_mdct_naive_fwd` (scale 1): `X[i] = sum_{j<2N} x[j] *
 /// cos(pi/(4N)*(2j+1+N)*(2i+1))`, evaluated with a per-output rotation
 /// recurrence (`step` is exact arithmetic; the drift stays ~1e-13 relative
 /// over 2N steps).
@@ -87,7 +93,8 @@ fn wma_enc_mdct_fwd(x : Array[Double], len : Int32) -> Array[Double] {
   out
 }
 
-///| Encoder-side coefficient VLC table: the raw code/bit tables plus the
+///|
+/// Encoder-side coefficient VLC table: the raw code/bit tables plus the
 /// `int_table` (first code index per absolute level) derived exactly like
 /// C `init_coef_vlc`.
 struct WmaCoefEnc {
@@ -97,7 +104,8 @@ struct WmaCoefEnc {
   int_table : Array[Int32]
 }
 
-///| Build `WmaCoefEnc` for one of the six tables.
+///|
+/// Build `WmaCoefEnc` for one of the six tables.
 fn wma_coef_enc_table(idx : Int32) -> WmaCoefEnc {
   let codes : FixedArray[UInt32] = match idx {
     0 => wma_coef0_codes
@@ -135,10 +143,11 @@ fn wma_coef_enc_table(idx : Int32) -> WmaCoefEnc {
     i = i + l
     k = k + 1
   }
-  { codes, bits, levels, int_table }
+  { codes, bits, levels, int_table, }
 }
 
-///| `WMACodecContext` encoder side.  Shared `ff_wma_init` parameters live in
+///|
+/// `WMACodecContext` encoder side.  Shared `ff_wma_init` parameters live in
 /// the embedded decoder state.
 pub struct WmaEncoder {
   d : WmaDecoder
@@ -158,7 +167,8 @@ pub struct WmaEncoder {
   extradata : Bytes
 }
 
-///| `encode_init`: build the encoder for wmav1 (`version = 1`) or wmav2
+///|
+/// `encode_init`: build the encoder for wmav1 (`version = 1`) or wmav2
 /// (`version = 2`).  The C pins `flags1 = 0`, `flags2 = 1`.
 pub fn wma_encoder_new(
   version : Int32,
@@ -173,7 +183,9 @@ pub fn wma_encoder_new(
     return Err("wma_enc: sample rate is too high: \{sample_rate} > 48kHz")
   }
   if bit_rate < 24 * 1000 {
-    return Err("wma_enc: bitrate too low: got \{bit_rate}, need 24000 or higher")
+    return Err(
+      "wma_enc: bitrate too low: got \{bit_rate}, need 24000 or higher",
+    )
   }
   if version != 1 && version != 2 {
     return Err("wma_enc: only WMA v1/v2 are supported")
@@ -183,14 +195,16 @@ pub fn wma_encoder_new(
   // C's ff_wma_init never reads block_align, and the encoder computes its
   // own below.
   let flags2 = 1
-  let d = match wma_decoder_new(version, sample_rate, channels, bit_rate, 1, flags2) {
+  let d = match
+    wma_decoder_new(version, sample_rate, channels, bit_rate, 1, flags2) {
     Ok(d) => d
     Err(e) => return Err(e)
   }
   let frame_len = d.frame_len
   let frame_len_bits = d.frame_len_bits
-  let mut block_align = (bit_rate.to_int64() * frame_len.to_int64() /
-      (sample_rate.to_int64() * 8L)).to_int()
+  let mut block_align = (bit_rate.to_int64() *
+  frame_len.to_int64() /
+  (sample_rate.to_int64() * 8L)).to_int()
   if block_align > wma_enc_max_coded_superframe_size {
     block_align = wma_enc_max_coded_superframe_size
   }
@@ -249,7 +263,8 @@ pub fn wma_encoder_new(
   })
 }
 
-///| `apply_window_and_mdct`: overlap windowing + forward MDCT.  `audio` is
+///|
+/// `apply_window_and_mdct`: overlap windowing + forward MDCT.  `audio` is
 /// interleaved samples of one frame (`frame_len * channels` values, f32
 /// value range).
 fn WmaEncoder::apply_window_and_mdct(
@@ -302,7 +317,8 @@ fn WmaEncoder::apply_window_and_mdct(
   true
 }
 
-///| `init_exp`: fill the exponent array from the fixed exponent parameter
+///|
+/// `init_exp`: fill the exponent array from the fixed exponent parameter
 /// (always 20 in the encoder) per scale-factor band.
 fn WmaEncoder::init_exp(self : WmaEncoder, ch : Int32) -> Unit {
   let bands = self.d.exponent_bands[self.frame_len_bits - self.frame_len_bits]
@@ -329,7 +345,8 @@ fn WmaEncoder::init_exp(self : WmaEncoder, ch : Int32) -> Unit {
   self.max_exponent[ch] = max_scale
 }
 
-///| `encode_exp_vlc`.
+///|
+/// `encode_exp_vlc`.
 fn WmaEncoder::encode_exp_vlc(self : WmaEncoder, bw : BitWriter) -> Unit {
   let bands = self.d.exponent_bands[self.frame_len_bits - self.frame_len_bits]
   let block_len = 1 << self.frame_len_bits
@@ -357,8 +374,13 @@ fn WmaEncoder::encode_exp_vlc(self : WmaEncoder, bw : BitWriter) -> Unit {
   }
 }
 
-///| `encode_block`: returns 0 on success, -1 on quantizer overflow.
-fn WmaEncoder::encode_block(self : WmaEncoder, bw : BitWriter, total_gain : Int32) -> Int32 {
+///|
+/// `encode_block`: returns 0 on success, -1 on quantizer overflow.
+fn WmaEncoder::encode_block(
+  self : WmaEncoder,
+  bw : BitWriter,
+  total_gain : Int32,
+) -> Int32 {
   let channels = self.d.channels
   // fixed block len
   let next_block_len_bits = self.frame_len_bits
@@ -496,7 +518,8 @@ fn WmaEncoder::encode_block(self : WmaEncoder, bw : BitWriter, total_gain : Int3
   0
 }
 
-///| `encode_frame`: returns the frame size error in bytes
+///|
+/// `encode_frame`: returns the frame size error in bytes
 /// (bytes - block_align), or INT_MAX on overflow, plus the aligned bytes
 /// (the C leaves them in the shared packet buffer).
 fn WmaEncoder::encode_frame_bits(
@@ -513,7 +536,8 @@ fn WmaEncoder::encode_frame_bits(
   (bytes.length() - self.block_align, bytes)
 }
 
-///| `encode_superframe`: one frame of interleaved samples
+///|
+/// `encode_superframe`: one frame of interleaved samples
 /// (`frame_len * channels`, f32 value range) into one `block_align` packet.
 pub fn WmaEncoder::encode_frame(
   self : WmaEncoder,
@@ -521,7 +545,9 @@ pub fn WmaEncoder::encode_frame(
 ) -> Result[Bytes, String] {
   let channels = self.d.channels
   if samples.length() != self.frame_len * channels {
-    return Err("wma_enc: expected \{self.frame_len * channels} samples, got \{samples.length()}")
+    return Err(
+      "wma_enc: expected \{self.frame_len * channels} samples, got \{samples.length()}",
+    )
   }
   // required by non variable block len
   let block_len_bits = self.frame_len_bits
@@ -560,7 +586,9 @@ pub fn WmaEncoder::encode_frame(
     out = bytes
   }
   if error > 0 {
-    return Err("wma_enc: invalid input data or requested bitrate too low, cannot encode")
+    return Err(
+      "wma_enc: invalid input data or requested bitrate too low, cannot encode",
+    )
   }
   // pad up to block_align with 'N'.
   let pkt : Array[Byte] = []
@@ -573,17 +601,20 @@ pub fn WmaEncoder::encode_frame(
   Ok(Bytes::from_array(pkt))
 }
 
-///| The declared extradata (v1: 4 bytes, v2: 10 bytes) for container muxing.
+///|
+/// The declared extradata (v1: 4 bytes, v2: 10 bytes) for container muxing.
 pub fn WmaEncoder::extradata(self : WmaEncoder) -> Bytes {
   self.extradata
 }
 
-///| The coded packet size (`avctx->block_align`).
+///|
+/// The coded packet size (`avctx->block_align`).
 pub fn WmaEncoder::block_align(self : WmaEncoder) -> Int32 {
   self.block_align
 }
 
-///| The declared frame size / initial padding (`avctx->frame_size`).
+///|
+/// The declared frame size / initial padding (`avctx->frame_size`).
 pub fn WmaEncoder::frame_size(self : WmaEncoder) -> Int32 {
   self.frame_len
 }

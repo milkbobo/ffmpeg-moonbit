@@ -4,7 +4,8 @@
 /// (level 1000 `filter_fast_3320`).  Real-stream coverage lives in
 /// `ape_realdata_*_wbtest.mbt` (nine FATE samples, bit-exact MD5).
 
-///| Extradata builder (fileversion, compression, flags), little-endian.
+///|
+/// Extradata builder (fileversion, compression, flags), little-endian.
 fn ape_test_extradata(version : Int32, comp : Int32, flags : Int32) -> Bytes {
   Bytes::from_array([
     (version & 0xFF).to_byte(),
@@ -16,7 +17,8 @@ fn ape_test_extradata(version : Int32, comp : Int32, flags : Int32) -> Bytes {
   ])
 }
 
-///| Reverse every aligned 4-byte word, mirroring the decoder's `bswap_buf`
+///|
+/// Reverse every aligned 4-byte word, mirroring the decoder's `bswap_buf`
 /// input transformation, so tests can author the byte stream the decoder
 /// actually reads.
 fn ape_test_word_swap(data : Array[Byte]) -> Bytes {
@@ -32,7 +34,8 @@ fn ape_test_word_swap(data : Array[Byte]) -> Bytes {
   Bytes::from_array(out)
 }
 
-///| Push a big-endian u32.
+///|
+/// Push a big-endian u32.
 fn ape_test_be32(out : Array[Byte], v : UInt32) -> Unit {
   out.push((v >> 24).to_byte())
   out.push((v >> 16).to_byte())
@@ -40,14 +43,21 @@ fn ape_test_be32(out : Array[Byte], v : UInt32) -> Unit {
   out.push(v.to_byte())
 }
 
-///| Flatten a constructor result for inspection.
-fn ape_test_new(version : Int32, comp : Int32, ch : Int32, bps : Int32) -> String {
+///|
+/// Flatten a constructor result for inspection.
+fn ape_test_new(
+  version : Int32,
+  comp : Int32,
+  ch : Int32,
+  bps : Int32,
+) -> String {
   match ape_decoder_new(ape_test_extradata(version, comp, 0), ch, bps) {
     Err(e) => "err: " + e
     Ok(_) => "ok"
   }
 }
 
+///|
 test "APE: constructor validation" {
   inspect(
     ape_test_new(3990, 2000, 3, 16),
@@ -78,7 +88,8 @@ test "APE: constructor validation" {
   }
 }
 
-///| A v3.99 stereo silence frame: header words, CRC carrying the
+///|
+/// A v3.99 stereo silence frame: header words, CRC carrying the
 /// STEREO_SILENCE frame code, then an all-zero range coder payload.  Every
 /// unpack is skipped, so the output is nblocks zero samples per channel.
 test "APE: stereo silence frame decodes to zeros" {
@@ -108,7 +119,8 @@ test "APE: stereo silence frame decodes to zeros" {
   inspect(nonzero, content="0")
 }
 
-///| Pseudo-stereo mono frame (APE_FRAMECODE_PSEUDO_STEREO): one channel of
+///|
+/// Pseudo-stereo mono frame (APE_FRAMECODE_PSEUDO_STEREO): one channel of
 /// entropy data is decoded and copied to both outputs.  With an all-zero
 /// range coder payload the residuals are zero, so both channels are zero.
 test "APE: pseudo-stereo mono frame copies channel" {
@@ -138,7 +150,8 @@ test "APE: pseudo-stereo mono frame copies channel" {
   inspect(nonzero, content="0")
 }
 
-///| Offset guard and sample-count guard fire with the C's messages.
+///|
+/// Offset guard and sample-count guard fire with the C's messages.
 test "APE: invalid frame headers are rejected" {
   let dec = ape_decoder_new(ape_test_extradata(3990, 2000, 0), 2, 16).unwrap()
   let stream : Array[Byte] = []
@@ -169,7 +182,8 @@ test "APE: invalid frame headers are rejected" {
   }
 }
 
-///| Level 1000 (`filter_fast_3320`) with a v3.80 stream: the FATE suite has
+///|
+/// Level 1000 (`filter_fast_3320`) with a v3.80 stream: the FATE suite has
 /// no `-c1000` sample, so drive the untested branch with a hand-built
 /// all-zero residual frame over the bit-level (non-range-coder) entropy
 /// path.  Rice codes with a leading stop bit decode x = 0, keeping outputs

@@ -9,12 +9,10 @@
 /// (bit-exact decoder, +-1 LSB float-rounding residual).
 
 ///|
-let vorbis_interop_id_b64 : Bytes =
-  b"AXZvcmJpcwAAAAACRKwAAAAAAAAAAAAAAAAAALsB"
+let vorbis_interop_id_b64 : Bytes = b"AXZvcmJpcwAAAAACRKwAAAAAAAAAAAAAAAAAALsB"
 
 ///|
-let vorbis_interop_setup_b64 : Bytes =
-  b"BXZvcmJpcxxCQ1YCABAAAIR0mlmqASLMQIaB0JCVAAACAABghCIMMSA0ZCUAABAAACCGkoNoQmvON+c4aJaDplJsTgcnUm2e5KZi" +
+let vorbis_interop_setup_b64 : Bytes = b"BXZvcmJpcxxCQ1YCABAAAIR0mlmqASLMQIaB0JCVAAACAABghCIMMSA0ZCUAABAAACCGkoNoQmvON+c4aJaDplJsTgcnUm2e5KZi" +
   b"bs4555xzsjlnjHPOOacoZxaDZkJrzjknMWiWgmZCa84550lsHrSmSmvOOWecczoYZ4RxzjmnSWsepGZjbc45Z0FrmqPmUmzOOSdS" +
   b"bp7U5lJtzjnnnHPOOeecc845p3pxOgfnhHPOOSdqb67lJnRxzjnnk3G6NyeEc84555xzzjnnnHPOOScIDVkJAAABABCEYWMYdwqC" +
   b"9DkaiFGEmIZMetA9OkyCxiCnkHo0OhoppQ5CSWWclNIJQkNWAgCAAAAQQkghhRRSSCGFFFJIIYUYYoghhpxyyimooJJKKqooo8wy" +
@@ -60,8 +58,7 @@ let vorbis_interop_setup_b64 : Bytes =
   b"GhscAACAAAIAABAAAAAAAAgAAAAAEA=="
 
 ///|
-let vorbis_interop_audio_b64 : Bytes =
-  b"MDE2Mj7Z6yGJaNcFLVDSCQ6oYEVM8lxA0XWhtKSUdIyjESqC0fSjKMuiKMuiKMuiKI8VAIDTc4xfAICMBCyrqggAAAAAAFjTbJdy" +
+let vorbis_interop_audio_b64 : Bytes = b"MDE2Mj7Z6yGJaNcFLVDSCQ6oYEVM8lxA0XWhtKSUdIyjESqC0fSjKMuiKMuiKMuiKI8VAIDTc4xfAICMBCyrqggAAAAAAFjTbJdy" +
   b"snP5ca0Tmc1pKpEZUgAQWWZRKRSHurXR0mjaDYtpNSzmyMwflotZvFV+TYVxvcb2HtX7uj29eoprIz598pWTTp98edLFicvjFycu" +
   b"j1+cuBx5tux85NmyHy98f/HH0/fnH0/fn388fX/+X7/7vfqeq++Zu6+5O5q4o4k7mrijiTuauKOJO5q4l6d3L0/vXp7evTy9e3l6" +
   b"9/L07uXp3cvTu5endy9P716e3t057W6q3Z3qplPddNpuo4sZ4yZJ6ZOT0iwkqdGIOlP90A/90A/90A/90A/90A/90A/90A/90I/H" +
@@ -83,8 +80,7 @@ let vorbis_interop_audio_b64 : Bytes =
   b"wPXp9MD16fTA9en0wPXp9MD16fTA9en0wPXp9MD16fTA9Sk="
 
 ///|
-let vorbis_interop_ref_pcm_b64 : Bytes =
-  b"eAL+ClIPWBroGb4mqxtrKcUVkSNwDZ0aNgZsEuwBLA0wA7oNEwxBFpMasSQFKTQzSjJ1PG40UT7WLxs5bCbBLhwcTCMCFvobaRcy" +
+let vorbis_interop_ref_pcm_b64 : Bytes = b"eAL+ClIPWBroGb4mqxtrKcUVkSNwDZ0aNgZsEuwBLA0wA7oNEwxBFpMasSQFKTQzSjJ1PG40UT7WLxs5bCbBLhwcTCMCFvobaRcy" +
   b"HMgffCPbK5AurzdrOYQ/P0BtQBZA5DlyOK8uKSxsI+0fJxzbFyYbOxbGIF0bGCs5Jec1fi9oPE81rzu+M8wz6Co3J2Ed3xk4DzEQ" +
   b"6gRuDb8B8BEBBuwayA4AJJUXBSkrHDsnyBksHgUQOhBiAdwBfPKQ9+rn7PNR5Av3xOfJ/gfwQQcT+fsLVv7mCaf8ygDN8yvzWOYN" +
   b"5WLYm9ovzurW5sqd2jLPUuOs2J/s2+IY8jvp8/Dv6NDoiOHk2zfVcc5CyB/FYL/owp+99Mc9w9TR2c2E3HjZsePC4UTkkOPN3Vve" +
@@ -249,7 +245,8 @@ let vorbis_interop_ref_pcm_b64 : Bytes =
   b"/v8AAAAAAwAFAAIABgAAAAUAAAAFAPz/AAD9/wAAAAABAP////8CAAMAAwAGAAMACQACAAkA/f8GAP7/BgD7/wEA+f/8//z//P/9" +
   b"//v/AQD+/wEA//8AAP//AAABAP3////+/////f/+//z/+/8AAP3/AQD8/wIA/v8DAAAAAwABAAQABAD/////"
 
-///| Decode the FFmpeg-produced packets with the bit-exact decoder and
+///|
+/// Decode the FFmpeg-produced packets with the bit-exact decoder and
 /// compare against the reference PCM (max diff <= 1).
 test "Vorbis decoder: FFmpeg vorbis packets decode to reference PCM" {
   let id = @libavutil.av_base64_decode(vorbis_interop_id_b64, 1 << 20).unwrap()
@@ -264,7 +261,7 @@ test "Vorbis decoder: FFmpeg vorbis packets decode to reference PCM" {
   let packets : Array[Bytes] = []
   let mut start = 0
   while start + 4 <= audio.length() {
-    let hex = audio.clamped_view(start=start, end=start + 4).to_owned()
+    let hex = audio.clamped_view(start~, end=start + 4).to_owned()
     let mut n = 0
     for k in 0..<4 {
       let c = hex[k].to_int()
@@ -272,7 +269,7 @@ test "Vorbis decoder: FFmpeg vorbis packets decode to reference PCM" {
       n = n * 16 + v
     }
     start = start + 4
-    packets.push(audio.clamped_view(start=start, end=start + n).to_owned())
+    packets.push(audio.clamped_view(start~, end=start + n).to_owned())
     start = start + n
   }
   // decode_stream drops the first (pre-skip) block and applies the

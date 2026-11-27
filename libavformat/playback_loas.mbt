@@ -1,7 +1,10 @@
 ///|
 /// LOAS carries the decoder configuration in-band, including in WAV 0x1602.
 /// Expose byte-aligned AAC access units with timestamps in PCM samples.
-fn playback_open_loas(data : Bytes, format_name : String) -> MediaFile raise MediaError {
+fn playback_open_loas(
+  data : Bytes,
+  format_name : String,
+) -> MediaFile raise MediaError {
   let track = match @libavcodec.latm_parse_stream(data) {
     Ok(v) => v
     Err(e) => raise DemuxError(e)

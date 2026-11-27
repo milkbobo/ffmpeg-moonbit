@@ -42,9 +42,9 @@
 /// `av_clip_uintp2(v, bd)` lane-wise. */
 #cfg(any(target="native", target="wasm"))
 fn hmc_clip(v : V128, bd : Int32) -> V128 {
-  @v128.i32x4_min_s(
-    @v128.i32x4_max_s(v, @v128.i32x4_splat(0)),
-    @v128.i32x4_splat(((1 << bd) - 1).reinterpret_as_uint()),
+  @simd.i32x4_min_s(
+    @simd.i32x4_max_s(v, @simd.i32x4_splat(0)),
+    @simd.i32x4_splat(((1 << bd) - 1).reinterpret_as_uint()),
   )
 }
 
@@ -52,10 +52,10 @@ fn hmc_clip(v : V128, bd : Int32) -> V128 {
 /// Load four consecutive samples of a scratch buffer. */
 #cfg(any(target="native", target="wasm"))
 fn hmc_load4(buf : FixedArray[Int32], at : Int32) -> V128 {
-  let mut v = @v128.i32x4_splat(0)
+  let mut v = @simd.i32x4_splat(0)
   let mut i = 0
   while i < 4 {
-    v = @v128.i32x4_replace_lane(v, buf[at + i].reinterpret_as_uint(), i)
+    v = @simd.i32x4_replace_lane(v, buf[at + i].reinterpret_as_uint(), i)
     i = i + 1
   }
   v
@@ -67,7 +67,7 @@ fn hmc_load4(buf : FixedArray[Int32], at : Int32) -> V128 {
 fn hmc_store4(buf : FixedArray[Int32], at : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    buf[at + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    buf[at + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }
@@ -76,13 +76,13 @@ fn hmc_store4(buf : FixedArray[Int32], at : Int32, v : V128) -> Unit {
 /// Dot product of eight taps against eight coefficient splats. */
 #cfg(any(target="native", target="wasm"))
 fn hmc_dot(taps : Array[V128], f : FixedArray[Int32]) -> V128 {
-  let mut acc = @v128.i32x4_splat(0)
+  let mut acc = @simd.i32x4_splat(0)
   for k = 0; k < 8; k = k + 1 {
     let c = f[k]
     if c != 0 {
-      acc = @v128.i32x4_add(
+      acc = @simd.i32x4_add(
         acc,
-        @v128.i32x4_mul(taps[k], @v128.i32x4_splat(c.reinterpret_as_uint())),
+        @simd.i32x4_mul(taps[k], @simd.i32x4_splat(c.reinterpret_as_uint())),
       )
     }
   }
@@ -93,14 +93,14 @@ fn hmc_dot(taps : Array[V128], f : FixedArray[Int32]) -> V128 {
 /// Dot product of four taps (the epel/chroma filter). */
 #cfg(any(target="native", target="wasm"))
 fn hmc_dot4(taps : Array[V128], f : FixedArray[Int32]) -> V128 {
-  let mut acc = @v128.i32x4_splat(0)
+  let mut acc = @simd.i32x4_splat(0)
   let mut k = 0
   while k < 4 {
     let c = f[k]
     if c != 0 {
-      acc = @v128.i32x4_add(
+      acc = @simd.i32x4_add(
         acc,
-        @v128.i32x4_mul(taps[k], @v128.i32x4_splat(c.reinterpret_as_uint())),
+        @simd.i32x4_mul(taps[k], @simd.i32x4_splat(c.reinterpret_as_uint())),
       )
     }
     k = k + 1
@@ -127,7 +127,11 @@ fn hmc_htaps(buf : FixedArray[Int32], row : Int32, x : Int32) -> Array[V128] {
 ///|
 /// The eight vertical taps of a column at `y-3 .. y+4`. */
 #cfg(any(target="native", target="wasm"))
-fn hmc_vtaps(buf : FixedArray[Int32], col : Int32, stride : Int32) -> Array[V128] {
+fn hmc_vtaps(
+  buf : FixedArray[Int32],
+  col : Int32,
+  stride : Int32,
+) -> Array[V128] {
   [
     hmc_load4(buf, col - 3 * stride),
     hmc_load4(buf, col - 2 * stride),
@@ -445,17 +449,17 @@ pub fn hevc_qpel_uni_epilogue_v128(
   let norm = bd - 8
   let shift = 14 - bd
   let offset = 1 << (shift - 1)
-  let ov = @v128.i32x4_splat(offset.reinterpret_as_uint())
+  let ov = @simd.i32x4_splat(offset.reinterpret_as_uint())
   for y = 0; y < h; y = y + 1 {
     let rrow = raw_off + y * raw_stride
     let drow = dst_off + y * dst_stride
     let mut x = 0
     while x + 4 <= w {
-      let v = @v128.i32x4_add(
-        @v128.i32x4_shr_s(hmc_load4(raw, rrow + x), norm),
+      let v = @simd.i32x4_add(
+        @simd.i32x4_shr_s(hmc_load4(raw, rrow + x), norm),
         ov,
       )
-      hmc_store4_px(dst, drow + x, hmc_clip(@v128.i32x4_shr_s(v, shift), bd))
+      hmc_store4_px(dst, drow + x, hmc_clip(@simd.i32x4_shr_s(v, shift), bd))
       x = x + 4
     }
     while x < w {
@@ -478,7 +482,7 @@ pub fn hevc_qpel_uni_epilogue_v128(
 fn hmc_store4_px(dst : Array[Int32], at : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    dst[at + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    dst[at + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }

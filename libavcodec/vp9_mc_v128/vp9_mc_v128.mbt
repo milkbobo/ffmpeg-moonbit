@@ -41,9 +41,9 @@
 /// `av_clip_pixel` lane-wise for the VP9 `pixel_max`. */
 #cfg(any(target="native", target="wasm"))
 fn vmc_clip(v : V128, pixel_max : Int32) -> V128 {
-  @v128.i32x4_min_s(
-    @v128.i32x4_max_s(v, @v128.i32x4_splat(0)),
-    @v128.i32x4_splat(pixel_max.reinterpret_as_uint()),
+  @simd.i32x4_min_s(
+    @simd.i32x4_max_s(v, @simd.i32x4_splat(0)),
+    @simd.i32x4_splat(pixel_max.reinterpret_as_uint()),
   )
 }
 
@@ -51,10 +51,10 @@ fn vmc_clip(v : V128, pixel_max : Int32) -> V128 {
 /// Load four consecutive samples of a `FixedArray[Int32]` plane. */
 #cfg(any(target="native", target="wasm"))
 fn vmc_load4(p : FixedArray[Int32], at : Int32) -> V128 {
-  let mut v = @v128.i32x4_splat(0)
+  let mut v = @simd.i32x4_splat(0)
   let mut i = 0
   while i < 4 {
-    v = @v128.i32x4_replace_lane(v, p[at + i].reinterpret_as_uint(), i)
+    v = @simd.i32x4_replace_lane(v, p[at + i].reinterpret_as_uint(), i)
     i = i + 1
   }
   v
@@ -66,7 +66,7 @@ fn vmc_load4(p : FixedArray[Int32], at : Int32) -> V128 {
 fn vmc_store4(p : FixedArray[Int32], at : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    p[at + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    p[at + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }
@@ -76,8 +76,8 @@ fn vmc_store4(p : FixedArray[Int32], at : Int32, v : V128) -> Unit {
 #cfg(any(target="native", target="wasm"))
 fn vmc_merge(cur : V128, v : V128, avg : Bool) -> V128 {
   if avg {
-    @v128.i32x4_shr_s(
-      @v128.i32x4_add(@v128.i32x4_add(cur, v), @v128.i32x4_splat(1)),
+    @simd.i32x4_shr_s(
+      @simd.i32x4_add(@simd.i32x4_add(cur, v), @simd.i32x4_splat(1)),
       1,
     )
   } else {
@@ -90,17 +90,17 @@ fn vmc_merge(cur : V128, v : V128, avg : Bool) -> V128 {
 /// `taps` holds the eight coefficient vectors in tap order. */
 #cfg(any(target="native", target="wasm"))
 fn vmc_dot8(taps : Array[V128], coeffs : Array[Int32]) -> V128 {
-  let mut acc = @v128.i32x4_splat(0)
+  let mut acc = @simd.i32x4_splat(0)
   for i = 0; i < 8; i = i + 1 {
-    acc = @v128.i32x4_add(
+    acc = @simd.i32x4_add(
       acc,
-      @v128.i32x4_mul(taps[i], @v128.i32x4_splat(coeffs[i].reinterpret_as_uint())),
+      @simd.i32x4_mul(
+        taps[i],
+        @simd.i32x4_splat(coeffs[i].reinterpret_as_uint()),
+      ),
     )
   }
-  @v128.i32x4_shr_s(
-    @v128.i32x4_add(acc, @v128.i32x4_splat(64)),
-    7,
-  )
+  @simd.i32x4_shr_s(@simd.i32x4_add(acc, @simd.i32x4_splat(64)), 7)
 }
 
 ///|
@@ -153,13 +153,7 @@ pub fn vp9_8tap_1d_h_v128(
         sum = sum + coeffs[t] * src[p - 3 + t]
       }
       let fv = (sum + 64) >> 7
-      let v = if fv < 0 {
-        0
-      } else if fv > pixel_max {
-        pixel_max
-      } else {
-        fv
-      }
+      let v = if fv < 0 { 0 } else if fv > pixel_max { pixel_max } else { fv }
       let d = drow + x
       dst[d] = if avg { (dst[d] + v + 1) / 2 } else { v }
       x = x + 1
@@ -199,11 +193,7 @@ pub fn vp9_8tap_1d_v_v128(
       ]
       let v = vmc_clip(vmc_dot8(taps, coeffs), pixel_max)
       let d = dst_off + y * dst_stride + x
-      let merged = if avg {
-        vmc_merge(vmc_load4(dst, d), v, true)
-      } else {
-        v
-      }
+      let merged = if avg { vmc_merge(vmc_load4(dst, d), v, true) } else { v }
       vmc_store4(dst, d, merged)
     }
     x = x + 4
@@ -216,13 +206,7 @@ pub fn vp9_8tap_1d_v_v128(
         sum = sum + coeffs[t] * src[r + (t - 3) * src_stride]
       }
       let fv = (sum + 64) >> 7
-      let v = if fv < 0 {
-        0
-      } else if fv > pixel_max {
-        pixel_max
-      } else {
-        fv
-      }
+      let v = if fv < 0 { 0 } else if fv > pixel_max { pixel_max } else { fv }
       let d = dst_off + y * dst_stride + x
       dst[d] = if avg { (dst[d] + v + 1) / 2 } else { v }
     }
@@ -307,11 +291,7 @@ pub fn vp9_8tap_1d_hv_v128(
       ]
       let v = vmc_clip(vmc_dot8(taps, fy_coeffs), pixel_max)
       let d = dst_off + y * dst_stride + x
-      let merged = if avg {
-        vmc_merge(vmc_load4(dst, d), v, true)
-      } else {
-        v
-      }
+      let merged = if avg { vmc_merge(vmc_load4(dst, d), v, true) } else { v }
       vmc_store4(dst, d, merged)
     }
     x = x + 4
@@ -324,13 +304,7 @@ pub fn vp9_8tap_1d_hv_v128(
         sum = sum + fy_coeffs[t] * tmp[r + (t - 3) * tstride]
       }
       let fv = (sum + 64) >> 7
-      let v = if fv < 0 {
-        0
-      } else if fv > pixel_max {
-        pixel_max
-      } else {
-        fv
-      }
+      let v = if fv < 0 { 0 } else if fv > pixel_max { pixel_max } else { fv }
       let d = dst_off + y * dst_stride + x
       dst[d] = if avg { (dst[d] + v + 1) / 2 } else { v }
     }
@@ -359,11 +333,11 @@ pub fn vp9_bilinear_v128(
   pixel_max : Int32,
   avg~ : Bool = false,
 ) -> Unit {
-  let eight = @v128.i32x4_splat(8)
+  let eight = @simd.i32x4_splat(8)
 
   if fy == 0 {
     // horizontal only: d + ((fx * (d[x+1] - d[x]) + 8) >> 4)
-    let fv = @v128.i32x4_splat(fx.reinterpret_as_uint())
+    let fv = @simd.i32x4_splat(fx.reinterpret_as_uint())
     for y = 0; y < h; y = y + 1 {
       let srow = src_off + y * src_stride
       let drow = dst_off + y * dst_stride
@@ -371,18 +345,19 @@ pub fn vp9_bilinear_v128(
       while x + 4 <= w {
         let a = vmc_load4(src, srow + x)
         let b = vmc_load4(src, srow + x + 1)
-        let d = @v128.i32x4_add(
+        let d = @simd.i32x4_add(
           a,
-          @v128.i32x4_shr_s(
-            @v128.i32x4_add(
-              @v128.i32x4_mul(fv, @v128.i32x4_sub(b, a)),
-              eight,
-            ),
+          @simd.i32x4_shr_s(
+            @simd.i32x4_add(@simd.i32x4_mul(fv, @simd.i32x4_sub(b, a)), eight),
             4,
           ),
         )
         let v = vmc_clip(d, pixel_max)
-        let merged = if avg { vmc_merge(vmc_load4(dst, drow + x), v, true) } else { v }
+        let merged = if avg {
+          vmc_merge(vmc_load4(dst, drow + x), v, true)
+        } else {
+          v
+        }
         vmc_store4(dst, drow + x, merged)
         x = x + 4
       }
@@ -403,26 +378,27 @@ pub fn vp9_bilinear_v128(
     }
   } else if fx == 0 {
     // vertical only
-    let fv = @v128.i32x4_splat(fy.reinterpret_as_uint())
+    let fv = @simd.i32x4_splat(fy.reinterpret_as_uint())
     let mut x = 0
     while x + 4 <= w {
       for y = 0; y < h; y = y + 1 {
         let r = src_off + x + y * src_stride
         let a = vmc_load4(src, r)
         let b = vmc_load4(src, r + src_stride)
-        let d = @v128.i32x4_add(
+        let d = @simd.i32x4_add(
           a,
-          @v128.i32x4_shr_s(
-            @v128.i32x4_add(
-              @v128.i32x4_mul(fv, @v128.i32x4_sub(b, a)),
-              eight,
-            ),
+          @simd.i32x4_shr_s(
+            @simd.i32x4_add(@simd.i32x4_mul(fv, @simd.i32x4_sub(b, a)), eight),
             4,
           ),
         )
         let v = vmc_clip(d, pixel_max)
         let dpos = dst_off + y * dst_stride + x
-        let merged = if avg { vmc_merge(vmc_load4(dst, dpos), v, true) } else { v }
+        let merged = if avg {
+          vmc_merge(vmc_load4(dst, dpos), v, true)
+        } else {
+          v
+        }
         vmc_store4(dst, dpos, merged)
       }
       x = x + 4
@@ -447,7 +423,7 @@ pub fn vp9_bilinear_v128(
     // 2D: horizontal into a scratch of (h+1) rows, then vertical from it
     let tstride = 64
     let tmp : FixedArray[Int32] = FixedArray::make(tstride * (h + 1), 0)
-    let fxv = @v128.i32x4_splat(fx.reinterpret_as_uint())
+    let fxv = @simd.i32x4_splat(fx.reinterpret_as_uint())
     for y = 0; y < h + 1; y = y + 1 {
       let srow = src_off + y * src_stride
       let trow = y * tstride
@@ -455,13 +431,10 @@ pub fn vp9_bilinear_v128(
       while x + 4 <= w {
         let a = vmc_load4(src, srow + x)
         let b = vmc_load4(src, srow + x + 1)
-        let d = @v128.i32x4_add(
+        let d = @simd.i32x4_add(
           a,
-          @v128.i32x4_shr_s(
-            @v128.i32x4_add(
-              @v128.i32x4_mul(fxv, @v128.i32x4_sub(b, a)),
-              eight,
-            ),
+          @simd.i32x4_shr_s(
+            @simd.i32x4_add(@simd.i32x4_mul(fxv, @simd.i32x4_sub(b, a)), eight),
             4,
           ),
         )
@@ -481,20 +454,17 @@ pub fn vp9_bilinear_v128(
         x = x + 1
       }
     }
-    let fyv = @v128.i32x4_splat(fy.reinterpret_as_uint())
+    let fyv = @simd.i32x4_splat(fy.reinterpret_as_uint())
     let mut x = 0
     while x + 4 <= w {
       for y = 0; y < h; y = y + 1 {
         let r = y * tstride + x
         let a = vmc_load4(tmp, r)
         let b = vmc_load4(tmp, r + tstride)
-        let d = @v128.i32x4_add(
+        let d = @simd.i32x4_add(
           a,
-          @v128.i32x4_shr_s(
-            @v128.i32x4_add(
-              @v128.i32x4_mul(fyv, @v128.i32x4_sub(b, a)),
-              eight,
-            ),
+          @simd.i32x4_shr_s(
+            @simd.i32x4_add(@simd.i32x4_mul(fyv, @simd.i32x4_sub(b, a)), eight),
             4,
           ),
         )
@@ -547,14 +517,17 @@ pub fn vp9_fpel_copy_v128(
     let drow = dst_off + y * dst_stride
     let mut x = 0
     if avg {
-      let one = @v128.i32x4_splat(1)
+      let one = @simd.i32x4_splat(1)
       while x + 4 <= w {
         vmc_store4(
           dst,
           drow + x,
-          @v128.i32x4_shr_s(
-            @v128.i32x4_add(
-              @v128.i32x4_add(vmc_load4(dst, drow + x), vmc_load4(src, srow + x)),
+          @simd.i32x4_shr_s(
+            @simd.i32x4_add(
+              @simd.i32x4_add(
+                vmc_load4(dst, drow + x),
+                vmc_load4(src, srow + x),
+              ),
               one,
             ),
             1,

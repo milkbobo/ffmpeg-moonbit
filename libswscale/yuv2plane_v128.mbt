@@ -138,14 +138,14 @@ pub fn sws_yuv2planeX_8_v128(
   dst_w : Int32,
   dither8 : Array[Int32],
 ) -> Array[Byte] {
-  let mut dith = @v128.i16x8_splat(0)
+  let mut dith = @simd.i16x8_splat(0)
   for t = 0; t < 8; t = t + 1 {
-    dith = @v128.i16x8_replace_lane(dith, dither8[t].reinterpret_as_uint(), t)
+    dith = @simd.i16x8_replace_lane(dith, dither8[t].reinterpret_as_uint(), t)
   }
-  let dith_lo = @v128.i32x4_shl(@v128.i32x4_extend_low_i16x8_s(dith), 12)
-  let dith_hi = @v128.i32x4_shl(@v128.i32x4_extend_high_i16x8_s(dith), 12)
-  let zero = @v128.i32x4_splat(0)
-  let lim = @v128.i32x4_splat(255)
+  let dith_lo = @simd.i32x4_shl(@simd.i32x4_extend_low_i16x8_s(dith), 12)
+  let dith_hi = @simd.i32x4_shl(@simd.i32x4_extend_high_i16x8_s(dith), 12)
+  let zero = @simd.i32x4_splat(0)
+  let lim = @simd.i32x4_splat(255)
   let out : Array[Byte] = Array::make(dst_w, b'\x00')
   let scratch : FixedArray[Byte] = FixedArray::make(16, b'\x00')
   let mut i = 0
@@ -153,22 +153,22 @@ pub fn sws_yuv2planeX_8_v128(
     let mut alo = dith_lo
     let mut ahi = dith_hi
     for j in 0..<coffs.length() {
-      let cv = @v128.i16x8_splat(coffs[j].to_uint16())
-      let px = @v128.v128_load(rows[j], 2 * i)
-      alo = @v128.i32x4_add(alo, @v128.i32x4_extmul_low_i16x8_s(px, cv))
-      ahi = @v128.i32x4_add(ahi, @v128.i32x4_extmul_high_i16x8_s(px, cv))
+      let cv = @simd.i16x8_splat(coffs[j].to_uint16())
+      let px = @simd.v128_load(rows[j], 2 * i)
+      alo = @simd.i32x4_add(alo, @simd.i32x4_extmul_low_i16x8_s(px, cv))
+      ahi = @simd.i32x4_add(ahi, @simd.i32x4_extmul_high_i16x8_s(px, cv))
     }
-    let lo = @v128.i32x4_min_s(
-      @v128.i32x4_max_s(@v128.i32x4_shr_s(alo, 19), zero),
+    let lo = @simd.i32x4_min_s(
+      @simd.i32x4_max_s(@simd.i32x4_shr_s(alo, 19), zero),
       lim,
     )
-    let hi = @v128.i32x4_min_s(
-      @v128.i32x4_max_s(@v128.i32x4_shr_s(ahi, 19), zero),
+    let hi = @simd.i32x4_min_s(
+      @simd.i32x4_max_s(@simd.i32x4_shr_s(ahi, 19), zero),
       lim,
     )
-    let pk = @v128.i16x8_narrow_i32x4_u(lo, hi)
-    let u8 = @v128.i8x16_narrow_i16x8_u(pk, pk)
-    @v128.v128_store(scratch, 0, u8)
+    let pk = @simd.i16x8_narrow_i32x4_u(lo, hi)
+    let u8 = @simd.i8x16_narrow_i16x8_u(pk, pk)
+    @simd.v128_store(scratch, 0, u8)
     for t = 0; t < 8; t = t + 1 {
       out[i + t] = scratch[t]
     }
@@ -196,30 +196,30 @@ pub fn sws_yuv2planeX_16_v128(
   dst_bits : Int32,
 ) -> Array[Byte] {
   let shift = 11 + 16 - dst_bits
-  let zero = @v128.i32x4_splat(0)
-  let lim = @v128.i32x4_splat((1 << dst_bits) - 1)
+  let zero = @simd.i32x4_splat(0)
+  let lim = @simd.i32x4_splat((1 << dst_bits) - 1)
   let out : Array[Byte] = Array::make(2 * dst_w, b'\x00')
   let scratch : FixedArray[Byte] = FixedArray::make(16, b'\x00')
   let mut i = 0
   while i + 8 <= dst_w {
-    let mut alo = @v128.i32x4_splat(1 << (shift - 1))
+    let mut alo = @simd.i32x4_splat(1 << (shift - 1))
     let mut ahi = alo
     for j in 0..<coffs.length() {
-      let cv = @v128.i16x8_splat(coffs[j].to_uint16())
-      let px = @v128.v128_load(rows[j], 2 * i)
-      alo = @v128.i32x4_add(alo, @v128.i32x4_extmul_low_i16x8_s(px, cv))
-      ahi = @v128.i32x4_add(ahi, @v128.i32x4_extmul_high_i16x8_s(px, cv))
+      let cv = @simd.i16x8_splat(coffs[j].to_uint16())
+      let px = @simd.v128_load(rows[j], 2 * i)
+      alo = @simd.i32x4_add(alo, @simd.i32x4_extmul_low_i16x8_s(px, cv))
+      ahi = @simd.i32x4_add(ahi, @simd.i32x4_extmul_high_i16x8_s(px, cv))
     }
-    let lo = @v128.i32x4_min_s(
-      @v128.i32x4_max_s(@v128.i32x4_shr_s(alo, shift), zero),
+    let lo = @simd.i32x4_min_s(
+      @simd.i32x4_max_s(@simd.i32x4_shr_s(alo, shift), zero),
       lim,
     )
-    let hi = @v128.i32x4_min_s(
-      @v128.i32x4_max_s(@v128.i32x4_shr_s(ahi, shift), zero),
+    let hi = @simd.i32x4_min_s(
+      @simd.i32x4_max_s(@simd.i32x4_shr_s(ahi, shift), zero),
       lim,
     )
     // little-endian u16 stores: the i16 lanes are the bytes
-    @v128.v128_store(scratch, 0, @v128.i16x8_narrow_i32x4_u(lo, hi))
+    @simd.v128_store(scratch, 0, @simd.i16x8_narrow_i32x4_u(lo, hi))
     for t = 0; t < 16; t = t + 1 {
       out[2 * i + t] = scratch[t]
     }

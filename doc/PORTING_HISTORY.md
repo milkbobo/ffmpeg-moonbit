@@ -18831,3 +18831,20 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
 - 按文件签名读取 ALP TUN 与 PCM 两种头部。采用 4,096 字节分包，按 4 位码字和声道数累计时间戳，预测器与步长索引跨包保留。
 - `decode-audio --format alp` 支持单声道和立体声。输出扩展名为 `.pcm` 时写入显式采样率，其余采用 22.05 kHz TUN 头。奇数尾帧保留最后一个输入样本，并用零差分码完成最后一个字节。
 - Docker FFmpeg 9.0.2 对拍覆盖 22.05 kHz 的 12,000 样本单声道 TUN 和 44.1 kHz 的每声道 10,002 样本立体声 PCM。两份编码文件逐字节一致，回读的 s16 PCM 逐样本一致。另验证 FFmpeg 可读出奇数尾帧导出的 TUN，每声道 5,001 个输入样本编码后读出 5,002 个样本。
+
+## §577 迁移到 MoonBit 1.0 工具链（2026-11-27）
+
+- 工具链升到 `moon 0.1.20261126` / `moonc v1.0.0-rc1`。`moonbitlang/core/v128` 整包改为 `moonbitlang/core/simd` 的 deprecated 再导出，全库 29 个源文件共 1,175 处 `@v128.*` 改名为 `@simd.*`，23 个 `moon.pkg` 的导入路径同步替换。
+- `core/simd` 在 1.0 中仍标记为实验包，导入它的每个包都要在 `moon.pkg` 的 `options(...)` 中声明 `"allow-experimental-packages": [ "moonbitlang/core/simd" ]`；一个 `moon.pkg` 只允许存在一个 `options(...)` 块，重复声明会直接报错而不是合并。原有的 `warnings = "-alert_experimental"` 仍需保留，因为该告警针对符号使用而非包依赖。
+- 语法迁移：6 处 `} derive(...)` 改为声明前的 `#derive(...)`；12 处 `Bytes::new(n)` 改为 `Bytes::make(n, b'\x00')`；1 处 `@string.parse_int(..., base=16)` 改为 `radix=16`。
+- 用 `moon fmt` 按 1.0 的格式化规则重排，共改动 204 个文件（长字节字面量首行合并、单行 `if` 展开为块）。`moon.mod` 增加 `readme` 字段，README 补充工具链要求。
+- 包管理同步到最新：唯一的外部依赖 `moonbitlang/x` 由 `0.5.7` 升到 `0.5.9`。新增的是同步 `@fs.File` API 与文件元信息查询，没有影响本项目用到的接口，升级后 `moon check --deny-warn` 仍为零告警。
+- 验证：`moon check --deny-warn` 零告警，`moon build --target wasm` 全部包通过；libavutil 71、libswscale 58、libswresample 23、libavformat 953 个测试用例全绿，`libavcodec/*_v128` 四个子包 14 个用例全绿。
+- 环境限制：1.0 的 `generate-test-driver` 会把包内全部源文件路径作为命令行参数传给子进程，libavcodec 主包 488 个文件合计约 36K 字符，超过 Windows 32K 限制，即使只指定单个文件也会失败；junction 和 `subst` 都会被 canonicalize 回真实路径而无效，只能把源码复制到短根目录（如 `D:/mb`）再跑。在该副本上 libavcodec 首批 H.264 编码测试 37 个用例全部通过，全量批次未跑完。
+
+## §578 迁移后全量测试回归（2026-11-27）
+
+- libavutil 71、libswresample 23、libswscale 58、libavfilter 3、libavformat 953、libavformat/probe_vectors 12、`demo/api` 26、`cmd/*` 36（encode-h264 34 + encode-hevc 2）全部通过；`moon check --deny-warn` 零告警。
+- libavcodec 下 73 个向量子包全部通过。libavcodec 主包在 `D:/mb` 短根副本上用 `moon test -p libavcodec --target wasm-gc --no-render` 一次跑完 1,524 个用例，全部通过，无 panic、无断言失败。
+- 修正 §577 中关于批测方式的结论：`scripts/_run_libavcodec_tests.sh` 按「每批只传 5~15 个测试文件」的做法无效。原因是 `moon test` 对每个包会生成 whitebox / internal / blackbox 三个 `generate-test-driver` 调用，每个调用的参数列表都包含整包全部 `.mbt`，与本次指定了哪些测试文件无关，因此压缩批大小不会缩短命令行。真实根路径下 blackbox 那条命令实测 36,165 字符，超过 `CreateProcessW` 的 32,767 上限；在 `D:/mb` 下同一条命令降到 21,412 字符，整包可以一条命令跑完，不必分批。
+- 新增 `scripts/_run_pkg_tests.sh`：按包列表串行执行 `moon test`，遇到 V8 `local count too large` 时自动改用 `wasm-gc` 重试，最后汇总通过/失败的包名。用于除 libavcodec 主包之外的其余 78 个包。

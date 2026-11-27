@@ -11,10 +11,11 @@
 
 ///|
 /// Which playlist kind backs a `StreamingMedia`.
+#derive(Debug, Eq)
 pub(all) enum StreamingKind {
   Hls
   Dash
-} derive(Debug, Eq)
+}
 
 ///|
 pub extend StreamingKind with Eq::{not_equal, equal}

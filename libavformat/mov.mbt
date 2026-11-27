@@ -1552,16 +1552,15 @@ fn parse_stsd_audio(st : MovState, r : AvioContext) -> Unit {
     _ if wav_fallback == "adpcm_ms" ||
       wav_fallback == "adpcm_ima_wav" ||
       wav_fallback == "adpcm_ima_oki" ||
-      wav_fallback == "adpcm_yamaha" =>
-      4
+      wav_fallback == "adpcm_yamaha" => 4
     // `av_get_bits_per_sample`: 4 for every ADPCM variant, so the
     // sample entry's `samplesize` (often 16) does not reach the decoder
     // as the IMA WAV code width.
-    "adpcm_ms" |
-    "adpcm_ima_wav" |
-    "adpcm_ima_oki" |
-    "adpcm_yamaha" |
-    "adpcm_ima_qt" => 4
+    "adpcm_ms"
+    | "adpcm_ima_wav"
+    | "adpcm_ima_oki"
+    | "adpcm_yamaha"
+    | "adpcm_ima_qt" => 4
     _ => 0
   }
   if bps != 0 && bps / 8 * st.cur.channels <= 4294967295 {

@@ -35,15 +35,18 @@ fn yp_gen_coffs(seed : UInt32, n : Int32) -> Array[Int32] {
 ///|
 test "yuv2planeX v128: 8-bit equality across taps, lengths and dither" {
   let taps : Array[Int32] = [1, 2, 3, 4, 5, 8]
-  let widths : Array[Int32] = [
-    1, 2, 7, 8, 9, 15, 16, 17, 23, 40, 64, 65, 121,
-  ]
+  let widths : Array[Int32] = [1, 2, 7, 8, 9, 15, 16, 17, 23, 40, 64, 65, 121]
   for size in taps {
     for dst_w in widths {
       let rows : Array[Array[Int32]] = []
       let packed : Array[FixedArray[Byte]] = []
       for j = 0; j < size; j = j + 1 {
-        let r = yp_gen_row(0x9E3779B9U + size.reinterpret_as_uint() * 131U + j.reinterpret_as_uint(), dst_w)
+        let r = yp_gen_row(
+          0x9E3779B9U +
+          size.reinterpret_as_uint() * 131U +
+          j.reinterpret_as_uint(),
+          dst_w,
+        )
         rows.push(r)
         packed.push(sws_pack_row_i16(r, dst_w))
       }
@@ -76,14 +79,19 @@ test "yuv2planeX v128: 9..16-bit equality across taps, lengths and depths" {
         let packed : Array[FixedArray[Byte]] = []
         for j = 0; j < size; j = j + 1 {
           let r = yp_gen_row(
-            0xA5A5A5A5U + dst_bits.reinterpret_as_uint() * 61U + size.reinterpret_as_uint() * 7U + j.reinterpret_as_uint(),
+            0xA5A5A5A5U +
+            dst_bits.reinterpret_as_uint() * 61U +
+            size.reinterpret_as_uint() * 7U +
+            j.reinterpret_as_uint(),
             dst_w,
           )
           rows.push(r)
           packed.push(sws_pack_row_i16(r, dst_w))
         }
         let coffs = yp_gen_coffs(
-          0x12345678U + dst_bits.reinterpret_as_uint() + size.reinterpret_as_uint(),
+          0x12345678U +
+          dst_bits.reinterpret_as_uint() +
+          size.reinterpret_as_uint(),
           size,
         )
         let a = sws_yuv2planeX_row_16(rows, coffs, dst_w, dst_bits)

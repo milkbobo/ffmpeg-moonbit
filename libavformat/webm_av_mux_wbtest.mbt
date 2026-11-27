@@ -38,7 +38,7 @@ test "webm muxer: VP9 + Opus tracks interleave by timestamp" {
 ///|
 test "webm muxer: invalid packets are rejected" {
   let mux = webm_av_muxer_new(64, 48).unwrap()
-  match mux.write_video(Bytes::new(0), 0L, 33) {
+  match mux.write_video(Bytes::make(0, b'\x00'), 0L, 33) {
     Ok(_) => fail("empty video packet must fail")
     Err(_) => ()
   }

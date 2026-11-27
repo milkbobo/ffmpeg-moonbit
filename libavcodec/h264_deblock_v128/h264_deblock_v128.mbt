@@ -49,21 +49,21 @@
 /// `|d| < lim` lane-wise (`i32`). */
 #cfg(any(target="native", target="wasm"))
 fn dbl_abs_lt(d : V128, lim : V128) -> V128 {
-  @v128.i32x4_lt_s(@v128.i32x4_abs(d), lim)
+  @simd.i32x4_lt_s(@simd.i32x4_abs(d), lim)
 }
 
 ///|
 /// `av_clip(v, lo, hi)` lane-wise. */
 #cfg(any(target="native", target="wasm"))
 fn dbl_clamp(v : V128, lo : V128, hi : V128) -> V128 {
-  @v128.i32x4_min_s(@v128.i32x4_max_s(v, lo), hi)
+  @simd.i32x4_min_s(@simd.i32x4_max_s(v, lo), hi)
 }
 
 ///|
 /// `av_clip_pixel` lane-wise. */
 #cfg(any(target="native", target="wasm"))
 fn dbl_clip_pixel(v : V128, zero : V128, mx : V128) -> V128 {
-  @v128.i32x4_min_s(@v128.i32x4_max_s(v, zero), mx)
+  @simd.i32x4_min_s(@simd.i32x4_max_s(v, zero), mx)
 }
 
 ///|
@@ -79,10 +79,14 @@ fn dbl_gather(
   n : Int32,
 ) -> V128 {
   let o = base - k * xstep
-  let mut v = @v128.i32x4_splat(0)
+  let mut v = @simd.i32x4_splat(0)
   let mut j = 0
   while j < n {
-    v = @v128.i32x4_replace_lane(v, data[o + j * ystep].reinterpret_as_uint(), j)
+    v = @simd.i32x4_replace_lane(
+      v,
+      data[o + j * ystep].reinterpret_as_uint(),
+      j,
+    )
     j = j + 1
   }
   v
@@ -106,7 +110,7 @@ fn dbl_store_masked(
   let mut j = 0
   while j < n {
     if ((bits >> j) & 1) != 0 {
-      data[o + j * ystep] = @v128.i32x4_extract_lane(v, j).reinterpret_as_int()
+      data[o + j * ystep] = @simd.i32x4_extract_lane(v, j).reinterpret_as_int()
     }
     j = j + 1
   }
@@ -130,14 +134,14 @@ fn dbl_luma_seg(
   if tc0 < 0 {
     return
   }
-  let alpha_v = @v128.i32x4_splat(alpha.reinterpret_as_uint())
-  let beta_v = @v128.i32x4_splat(beta.reinterpret_as_uint())
-  let tc0_v = @v128.i32x4_splat(tc0.reinterpret_as_uint())
-  let neg_tc0 = @v128.i32x4_splat((0 - tc0).reinterpret_as_uint())
-  let one = @v128.i32x4_splat(1)
-  let zero = @v128.i32x4_splat(0)
-  let four = @v128.i32x4_splat(4)
-  let mx = @v128.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint())
+  let alpha_v = @simd.i32x4_splat(alpha.reinterpret_as_uint())
+  let beta_v = @simd.i32x4_splat(beta.reinterpret_as_uint())
+  let tc0_v = @simd.i32x4_splat(tc0.reinterpret_as_uint())
+  let neg_tc0 = @simd.i32x4_splat((0 - tc0).reinterpret_as_uint())
+  let one = @simd.i32x4_splat(1)
+  let zero = @simd.i32x4_splat(0)
+  let four = @simd.i32x4_splat(4)
+  let mx = @simd.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint())
   let mut c = 0
   while c < along {
     let n = if along - c > 4 { 4 } else { along - c }
@@ -148,32 +152,29 @@ fn dbl_luma_seg(
     let q0 = dbl_gather(data, b, xstep, ystep, 0, n)
     let q1 = dbl_gather(data, b, xstep, ystep, -1, n)
     let q2 = dbl_gather(data, b, xstep, ystep, -2, n)
-    let m_outer = @v128.v128_and_(
-      @v128.v128_and_(
-        dbl_abs_lt(@v128.i32x4_sub(p0, q0), alpha_v),
-        dbl_abs_lt(@v128.i32x4_sub(p1, p0), beta_v),
+    let m_outer = @simd.v128_and_(
+      @simd.v128_and_(
+        dbl_abs_lt(@simd.i32x4_sub(p0, q0), alpha_v),
+        dbl_abs_lt(@simd.i32x4_sub(p1, p0), beta_v),
       ),
-      dbl_abs_lt(@v128.i32x4_sub(q1, q0), beta_v),
+      dbl_abs_lt(@simd.i32x4_sub(q1, q0), beta_v),
     )
-    if @v128.v128_any_true(m_outer) {
-      let m_p2 = dbl_abs_lt(@v128.i32x4_sub(p2, p0), beta_v)
-      let m_q2 = dbl_abs_lt(@v128.i32x4_sub(q2, q0), beta_v)
+    if @simd.v128_any_true(m_outer) {
+      let m_p2 = dbl_abs_lt(@simd.i32x4_sub(p2, p0), beta_v)
+      let m_q2 = dbl_abs_lt(@simd.i32x4_sub(q2, q0), beta_v)
       // tc = tc0 + (|p2-p0| < beta) + (|q2-q0| < beta)
-      let tc = @v128.i32x4_add(
+      let tc = @simd.i32x4_add(
         tc0_v,
-        @v128.i32x4_add(
-          @v128.v128_and_(m_p2, one),
-          @v128.v128_and_(m_q2, one),
-        ),
+        @simd.i32x4_add(@simd.v128_and_(m_p2, one), @simd.v128_and_(m_q2, one)),
       )
-      let neg_tc = @v128.i32x4_sub(zero, tc)
+      let neg_tc = @simd.i32x4_sub(zero, tc)
       // (((q0-p0)*4) + (p1-q1) + 4) >> 3, clipped to [-tc, tc]
       let idelta = dbl_clamp(
-        @v128.i32x4_shr_s(
-          @v128.i32x4_add(
-            @v128.i32x4_add(
-              @v128.i32x4_shl(@v128.i32x4_sub(q0, p0), 2),
-              @v128.i32x4_sub(p1, q1),
+        @simd.i32x4_shr_s(
+          @simd.i32x4_add(
+            @simd.i32x4_add(
+              @simd.i32x4_shl(@simd.i32x4_sub(q0, p0), 2),
+              @simd.i32x4_sub(p1, q1),
             ),
             four,
           ),
@@ -190,8 +191,8 @@ fn dbl_luma_seg(
         ystep,
         1,
         n,
-        dbl_clip_pixel(@v128.i32x4_add(p0, idelta), zero, mx),
-        @v128.i32x4_bitmask(m_outer),
+        dbl_clip_pixel(@simd.i32x4_add(p0, idelta), zero, mx),
+        @simd.i32x4_bitmask(m_outer),
       )
       dbl_store_masked(
         data,
@@ -200,20 +201,20 @@ fn dbl_luma_seg(
         ystep,
         0,
         n,
-        dbl_clip_pixel(@v128.i32x4_sub(q0, idelta), zero, mx),
-        @v128.i32x4_bitmask(m_outer),
+        dbl_clip_pixel(@simd.i32x4_sub(q0, idelta), zero, mx),
+        @simd.i32x4_bitmask(m_outer),
       )
       if tc0 != 0 {
         // p1' = clip_pixel(p1 + clip((p2 + ((p0+q0+1)>>1))>>1 - p1, -tc0, tc0))
-        let half_pq = @v128.i32x4_shr_s(
-          @v128.i32x4_add(@v128.i32x4_add(p0, q0), one),
+        let half_pq = @simd.i32x4_shr_s(
+          @simd.i32x4_add(@simd.i32x4_add(p0, q0), one),
           1,
         )
-        let aim_p = @v128.i32x4_shr_s(@v128.i32x4_add(p2, half_pq), 1)
+        let aim_p = @simd.i32x4_shr_s(@simd.i32x4_add(p2, half_pq), 1)
         let new_p1 = dbl_clip_pixel(
-          @v128.i32x4_add(
+          @simd.i32x4_add(
             p1,
-            dbl_clamp(@v128.i32x4_sub(aim_p, p1), neg_tc0, tc0_v),
+            dbl_clamp(@simd.i32x4_sub(aim_p, p1), neg_tc0, tc0_v),
           ),
           zero,
           mx,
@@ -226,13 +227,13 @@ fn dbl_luma_seg(
           2,
           n,
           new_p1,
-          @v128.i32x4_bitmask(m_outer) & @v128.i32x4_bitmask(m_p2),
+          @simd.i32x4_bitmask(m_outer) & @simd.i32x4_bitmask(m_p2),
         )
-        let aim_q = @v128.i32x4_shr_s(@v128.i32x4_add(q2, half_pq), 1)
+        let aim_q = @simd.i32x4_shr_s(@simd.i32x4_add(q2, half_pq), 1)
         let new_q1 = dbl_clip_pixel(
-          @v128.i32x4_add(
+          @simd.i32x4_add(
             q1,
-            dbl_clamp(@v128.i32x4_sub(aim_q, q1), neg_tc0, tc0_v),
+            dbl_clamp(@simd.i32x4_sub(aim_q, q1), neg_tc0, tc0_v),
           ),
           zero,
           mx,
@@ -245,7 +246,7 @@ fn dbl_luma_seg(
           -1,
           n,
           new_q1,
-          @v128.i32x4_bitmask(m_outer) & @v128.i32x4_bitmask(m_q2),
+          @simd.i32x4_bitmask(m_outer) & @simd.i32x4_bitmask(m_q2),
         )
       }
     }
@@ -296,10 +297,10 @@ fn dbl_luma_intra_seg(
   bit_depth : Int32,
 ) -> Unit {
   ignore(bit_depth)
-  let alpha_v = @v128.i32x4_splat(alpha.reinterpret_as_uint())
-  let beta_v = @v128.i32x4_splat(beta.reinterpret_as_uint())
-  let two = @v128.i32x4_splat(2)
-  let four = @v128.i32x4_splat(4)
+  let alpha_v = @simd.i32x4_splat(alpha.reinterpret_as_uint())
+  let beta_v = @simd.i32x4_splat(beta.reinterpret_as_uint())
+  let two = @simd.i32x4_splat(2)
+  let four = @simd.i32x4_splat(4)
   let mut c = 0
   while c < along {
     let n = if along - c > 4 { 4 } else { along - c }
@@ -308,41 +309,41 @@ fn dbl_luma_intra_seg(
     let p0 = dbl_gather(data, b, xstep, ystep, 1, n)
     let q0 = dbl_gather(data, b, xstep, ystep, 0, n)
     let q1 = dbl_gather(data, b, xstep, ystep, -1, n)
-    let m_outer = @v128.v128_and_(
-      @v128.v128_and_(
-        dbl_abs_lt(@v128.i32x4_sub(p0, q0), alpha_v),
-        dbl_abs_lt(@v128.i32x4_sub(p1, p0), beta_v),
+    let m_outer = @simd.v128_and_(
+      @simd.v128_and_(
+        dbl_abs_lt(@simd.i32x4_sub(p0, q0), alpha_v),
+        dbl_abs_lt(@simd.i32x4_sub(p1, p0), beta_v),
       ),
-      dbl_abs_lt(@v128.i32x4_sub(q1, q0), beta_v),
+      dbl_abs_lt(@simd.i32x4_sub(q1, q0), beta_v),
     )
-    if @v128.v128_any_true(m_outer) {
+    if @simd.v128_any_true(m_outer) {
       let p2 = dbl_gather(data, b, xstep, ystep, 3, n)
       let q2 = dbl_gather(data, b, xstep, ystep, -2, n)
       // |p0-q0| < (alpha >> 2) + 2 selects the strong (3-tap) branch
       let m_strong = dbl_abs_lt(
-        @v128.i32x4_sub(p0, q0),
-        @v128.i32x4_splat(((alpha >> 2) + 2).reinterpret_as_uint()),
+        @simd.i32x4_sub(p0, q0),
+        @simd.i32x4_splat(((alpha >> 2) + 2).reinterpret_as_uint()),
       )
-      let m_p2 = dbl_abs_lt(@v128.i32x4_sub(p2, p0), beta_v)
-      let m_q2 = dbl_abs_lt(@v128.i32x4_sub(q2, q0), beta_v)
-      let m_p = @v128.v128_and_(m_strong, m_p2)
-      let m_q = @v128.v128_and_(m_strong, m_q2)
-      let outer_bits = @v128.i32x4_bitmask(m_outer)
+      let m_p2 = dbl_abs_lt(@simd.i32x4_sub(p2, p0), beta_v)
+      let m_q2 = dbl_abs_lt(@simd.i32x4_sub(q2, q0), beta_v)
+      let m_p = @simd.v128_and_(m_strong, m_p2)
+      let m_q = @simd.v128_and_(m_strong, m_q2)
+      let outer_bits = @simd.i32x4_bitmask(m_outer)
       // p0' = strong&&p2 ? (p2+2p1+2p0+2q0+q1+4)>>3 : (2p1+p0+q1+2)>>2
-      let p0_a = @v128.i32x4_shr_s(
-        @v128.i32x4_add(
-          @v128.i32x4_add(
-            @v128.i32x4_add(p2, @v128.i32x4_mul(p1, two)),
-            @v128.i32x4_add(@v128.i32x4_mul(p0, two), @v128.i32x4_mul(q0, two)),
+      let p0_a = @simd.i32x4_shr_s(
+        @simd.i32x4_add(
+          @simd.i32x4_add(
+            @simd.i32x4_add(p2, @simd.i32x4_mul(p1, two)),
+            @simd.i32x4_add(@simd.i32x4_mul(p0, two), @simd.i32x4_mul(q0, two)),
           ),
-          @v128.i32x4_add(q1, four),
+          @simd.i32x4_add(q1, four),
         ),
         3,
       )
-      let p0_b = @v128.i32x4_shr_s(
-        @v128.i32x4_add(
-          @v128.i32x4_add(@v128.i32x4_mul(p1, two), p0),
-          @v128.i32x4_add(q1, two),
+      let p0_b = @simd.i32x4_shr_s(
+        @simd.i32x4_add(
+          @simd.i32x4_add(@simd.i32x4_mul(p1, two), p0),
+          @simd.i32x4_add(q1, two),
         ),
         2,
       )
@@ -353,24 +354,24 @@ fn dbl_luma_intra_seg(
         ystep,
         1,
         n,
-        @v128.v128_bitselect(p0_a, p0_b, m_p),
+        @simd.v128_bitselect(p0_a, p0_b, m_p),
         outer_bits,
       )
       // q0' = strong&&q2 ? (p1+2p0+2q0+2q1+q2+4)>>3 : (2q1+q0+p1+2)>>2
-      let q0_a = @v128.i32x4_shr_s(
-        @v128.i32x4_add(
-          @v128.i32x4_add(
-            @v128.i32x4_add(q2, @v128.i32x4_mul(q1, two)),
-            @v128.i32x4_add(@v128.i32x4_mul(q0, two), @v128.i32x4_mul(p0, two)),
+      let q0_a = @simd.i32x4_shr_s(
+        @simd.i32x4_add(
+          @simd.i32x4_add(
+            @simd.i32x4_add(q2, @simd.i32x4_mul(q1, two)),
+            @simd.i32x4_add(@simd.i32x4_mul(q0, two), @simd.i32x4_mul(p0, two)),
           ),
-          @v128.i32x4_add(p1, four),
+          @simd.i32x4_add(p1, four),
         ),
         3,
       )
-      let q0_b = @v128.i32x4_shr_s(
-        @v128.i32x4_add(
-          @v128.i32x4_add(@v128.i32x4_mul(q1, two), q0),
-          @v128.i32x4_add(p1, two),
+      let q0_b = @simd.i32x4_shr_s(
+        @simd.i32x4_add(
+          @simd.i32x4_add(@simd.i32x4_mul(q1, two), q0),
+          @simd.i32x4_add(p1, two),
         ),
         2,
       )
@@ -381,53 +382,59 @@ fn dbl_luma_intra_seg(
         ystep,
         0,
         n,
-        @v128.v128_bitselect(q0_a, q0_b, m_q),
+        @simd.v128_bitselect(q0_a, q0_b, m_q),
         outer_bits,
       )
       // The strong-filter taps only run for lanes whose outer mask held.
-      let p_bits = @v128.i32x4_bitmask(@v128.v128_and_(m_outer, m_p))
+      let p_bits = @simd.i32x4_bitmask(@simd.v128_and_(m_outer, m_p))
       if p_bits != 0 {
         // p1' = (p2+p1+p0+q0+2)>>2, p2' = (2p3+3p2+p1+p0+q0+4)>>3
-        let p1_new = @v128.i32x4_shr_s(
-          @v128.i32x4_add(
-            @v128.i32x4_add(@v128.i32x4_add(p2, p1), @v128.i32x4_add(p0, q0)),
+        let p1_new = @simd.i32x4_shr_s(
+          @simd.i32x4_add(
+            @simd.i32x4_add(@simd.i32x4_add(p2, p1), @simd.i32x4_add(p0, q0)),
             two,
           ),
           2,
         )
         dbl_store_masked(data, b, xstep, ystep, 2, n, p1_new, p_bits)
         let p3 = dbl_gather(data, b, xstep, ystep, 4, n)
-        let p2_new = @v128.i32x4_shr_s(
-          @v128.i32x4_add(
-            @v128.i32x4_add(
-              @v128.i32x4_add(@v128.i32x4_mul(p3, two), @v128.i32x4_mul(p2, two)),
-              @v128.i32x4_add(p2, p1),
+        let p2_new = @simd.i32x4_shr_s(
+          @simd.i32x4_add(
+            @simd.i32x4_add(
+              @simd.i32x4_add(
+                @simd.i32x4_mul(p3, two),
+                @simd.i32x4_mul(p2, two),
+              ),
+              @simd.i32x4_add(p2, p1),
             ),
-            @v128.i32x4_add(@v128.i32x4_add(p0, q0), four),
+            @simd.i32x4_add(@simd.i32x4_add(p0, q0), four),
           ),
           3,
         )
         dbl_store_masked(data, b, xstep, ystep, 3, n, p2_new, p_bits)
       }
-      let q_bits = @v128.i32x4_bitmask(@v128.v128_and_(m_outer, m_q))
+      let q_bits = @simd.i32x4_bitmask(@simd.v128_and_(m_outer, m_q))
       if q_bits != 0 {
         // q1' = (p0+q0+q1+q2+2)>>2, q2' = (2q3+3q2+q1+q0+p0+4)>>3
-        let q1_new = @v128.i32x4_shr_s(
-          @v128.i32x4_add(
-            @v128.i32x4_add(@v128.i32x4_add(p0, q0), @v128.i32x4_add(q1, q2)),
+        let q1_new = @simd.i32x4_shr_s(
+          @simd.i32x4_add(
+            @simd.i32x4_add(@simd.i32x4_add(p0, q0), @simd.i32x4_add(q1, q2)),
             two,
           ),
           2,
         )
         dbl_store_masked(data, b, xstep, ystep, -1, n, q1_new, q_bits)
         let q3 = dbl_gather(data, b, xstep, ystep, -3, n)
-        let q2_new = @v128.i32x4_shr_s(
-          @v128.i32x4_add(
-            @v128.i32x4_add(
-              @v128.i32x4_add(@v128.i32x4_mul(q3, two), @v128.i32x4_mul(q2, two)),
-              @v128.i32x4_add(q2, q1),
+        let q2_new = @simd.i32x4_shr_s(
+          @simd.i32x4_add(
+            @simd.i32x4_add(
+              @simd.i32x4_add(
+                @simd.i32x4_mul(q3, two),
+                @simd.i32x4_mul(q2, two),
+              ),
+              @simd.i32x4_add(q2, q1),
             ),
-            @v128.i32x4_add(@v128.i32x4_add(q0, p0), four),
+            @simd.i32x4_add(@simd.i32x4_add(q0, p0), four),
           ),
           3,
         )
@@ -483,13 +490,13 @@ fn dbl_chroma_seg(
   if tc <= 0 {
     return
   }
-  let alpha_v = @v128.i32x4_splat(alpha.reinterpret_as_uint())
-  let beta_v = @v128.i32x4_splat(beta.reinterpret_as_uint())
-  let tc_v = @v128.i32x4_splat(tc.reinterpret_as_uint())
-  let neg_tc = @v128.i32x4_splat((0 - tc).reinterpret_as_uint())
-  let zero = @v128.i32x4_splat(0)
-  let four = @v128.i32x4_splat(4)
-  let mx = @v128.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint())
+  let alpha_v = @simd.i32x4_splat(alpha.reinterpret_as_uint())
+  let beta_v = @simd.i32x4_splat(beta.reinterpret_as_uint())
+  let tc_v = @simd.i32x4_splat(tc.reinterpret_as_uint())
+  let neg_tc = @simd.i32x4_splat((0 - tc).reinterpret_as_uint())
+  let zero = @simd.i32x4_splat(0)
+  let four = @simd.i32x4_splat(4)
+  let mx = @simd.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint())
   let mut c = 0
   while c < along {
     let n = if along - c > 4 { 4 } else { along - c }
@@ -498,20 +505,20 @@ fn dbl_chroma_seg(
     let p0 = dbl_gather(data, b, xstep, ystep, 1, n)
     let q0 = dbl_gather(data, b, xstep, ystep, 0, n)
     let q1 = dbl_gather(data, b, xstep, ystep, -1, n)
-    let m_outer = @v128.v128_and_(
-      @v128.v128_and_(
-        dbl_abs_lt(@v128.i32x4_sub(p0, q0), alpha_v),
-        dbl_abs_lt(@v128.i32x4_sub(p1, p0), beta_v),
+    let m_outer = @simd.v128_and_(
+      @simd.v128_and_(
+        dbl_abs_lt(@simd.i32x4_sub(p0, q0), alpha_v),
+        dbl_abs_lt(@simd.i32x4_sub(p1, p0), beta_v),
       ),
-      dbl_abs_lt(@v128.i32x4_sub(q1, q0), beta_v),
+      dbl_abs_lt(@simd.i32x4_sub(q1, q0), beta_v),
     )
-    if @v128.v128_any_true(m_outer) {
+    if @simd.v128_any_true(m_outer) {
       let delta = dbl_clamp(
-        @v128.i32x4_shr_s(
-          @v128.i32x4_add(
-            @v128.i32x4_add(
-              @v128.i32x4_shl(@v128.i32x4_sub(q0, p0), 2),
-              @v128.i32x4_sub(p1, q1),
+        @simd.i32x4_shr_s(
+          @simd.i32x4_add(
+            @simd.i32x4_add(
+              @simd.i32x4_shl(@simd.i32x4_sub(q0, p0), 2),
+              @simd.i32x4_sub(p1, q1),
             ),
             four,
           ),
@@ -520,7 +527,7 @@ fn dbl_chroma_seg(
         neg_tc,
         tc_v,
       )
-      let bits = @v128.i32x4_bitmask(m_outer)
+      let bits = @simd.i32x4_bitmask(m_outer)
       dbl_store_masked(
         data,
         b,
@@ -528,7 +535,7 @@ fn dbl_chroma_seg(
         ystep,
         1,
         n,
-        dbl_clip_pixel(@v128.i32x4_add(p0, delta), zero, mx),
+        dbl_clip_pixel(@simd.i32x4_add(p0, delta), zero, mx),
         bits,
       )
       dbl_store_masked(
@@ -538,7 +545,7 @@ fn dbl_chroma_seg(
         ystep,
         0,
         n,
-        dbl_clip_pixel(@v128.i32x4_sub(q0, delta), zero, mx),
+        dbl_clip_pixel(@simd.i32x4_sub(q0, delta), zero, mx),
         bits,
       )
     }
@@ -589,9 +596,9 @@ fn dbl_chroma_intra_seg(
   bit_depth : Int32,
 ) -> Unit {
   ignore(bit_depth)
-  let alpha_v = @v128.i32x4_splat(alpha.reinterpret_as_uint())
-  let beta_v = @v128.i32x4_splat(beta.reinterpret_as_uint())
-  let two = @v128.i32x4_splat(2)
+  let alpha_v = @simd.i32x4_splat(alpha.reinterpret_as_uint())
+  let beta_v = @simd.i32x4_splat(beta.reinterpret_as_uint())
+  let two = @simd.i32x4_splat(2)
   let mut c = 0
   while c < along {
     let n = if along - c > 4 { 4 } else { along - c }
@@ -600,26 +607,26 @@ fn dbl_chroma_intra_seg(
     let p0 = dbl_gather(data, b, xstep, ystep, 1, n)
     let q0 = dbl_gather(data, b, xstep, ystep, 0, n)
     let q1 = dbl_gather(data, b, xstep, ystep, -1, n)
-    let m_outer = @v128.v128_and_(
-      @v128.v128_and_(
-        dbl_abs_lt(@v128.i32x4_sub(p0, q0), alpha_v),
-        dbl_abs_lt(@v128.i32x4_sub(p1, p0), beta_v),
+    let m_outer = @simd.v128_and_(
+      @simd.v128_and_(
+        dbl_abs_lt(@simd.i32x4_sub(p0, q0), alpha_v),
+        dbl_abs_lt(@simd.i32x4_sub(p1, p0), beta_v),
       ),
-      dbl_abs_lt(@v128.i32x4_sub(q1, q0), beta_v),
+      dbl_abs_lt(@simd.i32x4_sub(q1, q0), beta_v),
     )
-    if @v128.v128_any_true(m_outer) {
-      let bits = @v128.i32x4_bitmask(m_outer)
-      let p0_new = @v128.i32x4_shr_s(
-        @v128.i32x4_add(
-          @v128.i32x4_add(@v128.i32x4_mul(p1, two), p0),
-          @v128.i32x4_add(q1, two),
+    if @simd.v128_any_true(m_outer) {
+      let bits = @simd.i32x4_bitmask(m_outer)
+      let p0_new = @simd.i32x4_shr_s(
+        @simd.i32x4_add(
+          @simd.i32x4_add(@simd.i32x4_mul(p1, two), p0),
+          @simd.i32x4_add(q1, two),
         ),
         2,
       )
-      let q0_new = @v128.i32x4_shr_s(
-        @v128.i32x4_add(
-          @v128.i32x4_add(@v128.i32x4_mul(q1, two), q0),
-          @v128.i32x4_add(p1, two),
+      let q0_new = @simd.i32x4_shr_s(
+        @simd.i32x4_add(
+          @simd.i32x4_add(@simd.i32x4_mul(q1, two), q0),
+          @simd.i32x4_add(p1, two),
         ),
         2,
       )

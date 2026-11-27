@@ -29,37 +29,37 @@
 #cfg(any(target="native", target="wasm"))
 fn b64_ascii(idx : V128) -> V128 {
   // idx + 'A'
-  let mut c = @v128.i8x16_add(idx, @v128.i8x16_splat(b'\x41'))
+  let mut c = @simd.i8x16_add(idx, @simd.i8x16_splat(b'\x41'))
   // +6 for idx > 25  (lowercase range)
-  c = @v128.i8x16_add(
+  c = @simd.i8x16_add(
     c,
-    @v128.v128_and_(
-      @v128.i8x16_gt_s(idx, @v128.i8x16_splat(b'\x19')),
-      @v128.i8x16_splat(b'\x06'),
+    @simd.v128_and_(
+      @simd.i8x16_gt_s(idx, @simd.i8x16_splat(b'\x19')),
+      @simd.i8x16_splat(b'\x06'),
     ),
   )
   // -75 for idx > 51 (digit range)
-  c = @v128.i8x16_sub(
+  c = @simd.i8x16_sub(
     c,
-    @v128.v128_and_(
-      @v128.i8x16_gt_s(idx, @v128.i8x16_splat(b'\x33')),
-      @v128.i8x16_splat(b'\x4b'),
+    @simd.v128_and_(
+      @simd.i8x16_gt_s(idx, @simd.i8x16_splat(b'\x33')),
+      @simd.i8x16_splat(b'\x4b'),
     ),
   )
   // -15 for idx > 61 ('+')
-  c = @v128.i8x16_sub(
+  c = @simd.i8x16_sub(
     c,
-    @v128.v128_and_(
-      @v128.i8x16_gt_s(idx, @v128.i8x16_splat(b'\x3d')),
-      @v128.i8x16_splat(b'\x0f'),
+    @simd.v128_and_(
+      @simd.i8x16_gt_s(idx, @simd.i8x16_splat(b'\x3d')),
+      @simd.i8x16_splat(b'\x0f'),
     ),
   )
   // +3 for idx > 62 ('/')
-  c = @v128.i8x16_add(
+  c = @simd.i8x16_add(
     c,
-    @v128.v128_and_(
-      @v128.i8x16_gt_s(idx, @v128.i8x16_splat(b'\x3e')),
-      @v128.i8x16_splat(b'\x03'),
+    @simd.v128_and_(
+      @simd.i8x16_gt_s(idx, @simd.i8x16_splat(b'\x3e')),
+      @simd.i8x16_splat(b'\x03'),
     ),
   )
   c
@@ -73,36 +73,36 @@ fn b64_ascii(idx : V128) -> V128 {
 pub fn av_base64_encode_v128(input : Bytes) -> String {
   let n = input.length()
   let out : FixedArray[Byte] = FixedArray::make(av_base64_size(n), b'=')
-  let gather = @v128.i8x16_const(
+  let gather = @simd.i8x16_const(
     0, 1, 2, 16, 3, 4, 5, 16, 6, 7, 8, 16, 9, 10, 11, 16,
   )
-  let m3f = @v128.i32x4_const(0x3F, 0x3F, 0x3F, 0x3F)
-  let m0f = @v128.i32x4_const(0x0F, 0x0F, 0x0F, 0x0F)
-  let m03 = @v128.i32x4_const(0x03, 0x03, 0x03, 0x03)
+  let m3f = @simd.i32x4_const(0x3F, 0x3F, 0x3F, 0x3F)
+  let m0f = @simd.i32x4_const(0x0F, 0x0F, 0x0F, 0x0F)
+  let m03 = @simd.i32x4_const(0x03, 0x03, 0x03, 0x03)
   let mut i = 0
   let mut o = 0
   while i + 16 <= n {
     match input[i:i + 16] {
       [v128le(v), ..] => {
-        let w = @v128.i8x16_swizzle(v, gather)
-        let c0 = @v128.v128_and_(@v128.i32x4_shr_u(w, 2), m3f)
-        let c1 = @v128.v128_or_(
-          @v128.i32x4_shl(@v128.v128_and_(w, m03), 4),
-          @v128.v128_and_(@v128.i32x4_shr_u(w, 12), m0f),
+        let w = @simd.i8x16_swizzle(v, gather)
+        let c0 = @simd.v128_and_(@simd.i32x4_shr_u(w, 2), m3f)
+        let c1 = @simd.v128_or_(
+          @simd.i32x4_shl(@simd.v128_and_(w, m03), 4),
+          @simd.v128_and_(@simd.i32x4_shr_u(w, 12), m0f),
         )
-        let c2 = @v128.v128_or_(
-          @v128.i32x4_shl(@v128.v128_and_(@v128.i32x4_shr_u(w, 8), m0f), 2),
-          @v128.v128_and_(@v128.i32x4_shr_u(w, 22), m03),
+        let c2 = @simd.v128_or_(
+          @simd.i32x4_shl(@simd.v128_and_(@simd.i32x4_shr_u(w, 8), m0f), 2),
+          @simd.v128_and_(@simd.i32x4_shr_u(w, 22), m03),
         )
-        let c3 = @v128.v128_and_(@v128.i32x4_shr_u(w, 16), m3f)
-        let packed = @v128.i8x16_narrow_i16x8_u(
-          @v128.i16x8_narrow_i32x4_u(c0, c1),
-          @v128.i16x8_narrow_i32x4_u(c2, c3),
+        let c3 = @simd.v128_and_(@simd.i32x4_shr_u(w, 16), m3f)
+        let packed = @simd.i8x16_narrow_i16x8_u(
+          @simd.i16x8_narrow_i32x4_u(c0, c1),
+          @simd.i16x8_narrow_i32x4_u(c2, c3),
         )
-        let ord = @v128.i8x16_shuffle(
+        let ord = @simd.i8x16_shuffle(
           packed, packed, 0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15,
         )
-        @v128.v128_store(out, o, b64_ascii(ord))
+        @simd.v128_store(out, o, b64_ascii(ord))
         i = i + 12
         o = o + 16
       }

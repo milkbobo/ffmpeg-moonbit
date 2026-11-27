@@ -1,5 +1,5 @@
 import {
-  "moonbitlang/core/v128",
+  "moonbitlang/core/simd",
 }
 
 warnings = "-alert_experimental"
@@ -12,7 +12,6 @@ warnings = "-alert_experimental"
 // long checkouts.
 
 options(
-  targets: {
-    "h264_weight_v128_wbtest.mbt": [ "native", "wasm" ],
-  },
+  "allow-experimental-packages": [ "moonbitlang/core/simd" ],
+  targets: { "h264_weight_v128_wbtest.mbt": [ "native", "wasm" ] },
 )

@@ -180,7 +180,13 @@ fn amrwb_decode_5p_track(
     m - 1,
     off + half_3p,
   )
-  amrwb_decode_2p_track(out, out_off + 3, amrwb_bit_str(code, 0, 2 * m + 1), m, off)
+  amrwb_decode_2p_track(
+    out,
+    out_off + 3,
+    amrwb_bit_str(code, 0, 2 * m + 1),
+    m,
+    off,
+  )
 }
 
 ///|
@@ -307,20 +313,44 @@ fn amrwb_decode_fixed_vector(
       }
     5 =>
       for i = 0; i < 4; i = i + 1 {
-        amrwb_decode_4p_track(sig_pos[i], 0, pulse_lo[i] + (pulse_hi[i] << 14), 4, 1)
+        amrwb_decode_4p_track(
+          sig_pos[i],
+          0,
+          pulse_lo[i] + (pulse_hi[i] << 14),
+          4,
+          1,
+        )
       }
     6 => {
       for i = 0; i < 2; i = i + 1 {
-        amrwb_decode_5p_track(sig_pos[i], 0, pulse_lo[i] + (pulse_hi[i] << 10), 4, 1)
+        amrwb_decode_5p_track(
+          sig_pos[i],
+          0,
+          pulse_lo[i] + (pulse_hi[i] << 10),
+          4,
+          1,
+        )
       }
       for i = 2; i < 4; i = i + 1 {
-        amrwb_decode_4p_track(sig_pos[i], 0, pulse_lo[i] + (pulse_hi[i] << 14), 4, 1)
+        amrwb_decode_4p_track(
+          sig_pos[i],
+          0,
+          pulse_lo[i] + (pulse_hi[i] << 14),
+          4,
+          1,
+        )
       }
     }
     // 23k05 and 23k85
     _ =>
       for i = 0; i < 4; i = i + 1 {
-        amrwb_decode_6p_track(sig_pos[i], 0, pulse_lo[i] + (pulse_hi[i] << 11), 4, 1)
+        amrwb_decode_6p_track(
+          sig_pos[i],
+          0,
+          pulse_lo[i] + (pulse_hi[i] << 11),
+          4,
+          1,
+        )
       }
   }
   for i = 0; i < amrwb_sfr_size; i = i + 1 {
@@ -344,7 +374,11 @@ fn amrwb_decode_fixed_vector(
 /// `decode_gains`: (pitch gain, fixed gain correction factor) from the
 /// vector-quantized index.
 fn amrwb_decode_gains(vq_gain : Int32, mode : Int32) -> (Double, Double) {
-  let gains = if mode <= amrwb_mode_8k85 { amrwb_qua_gain_6b } else { amrwb_qua_gain_7b }
+  let gains = if mode <= amrwb_mode_8k85 {
+    amrwb_qua_gain_6b
+  } else {
+    amrwb_qua_gain_7b
+  }
   (
     gains[vq_gain * 2].to_double() / 16384.0,
     gains[vq_gain * 2 + 1].to_double() / 2048.0,
@@ -374,8 +408,12 @@ fn amrwb_voice_factor(
   f_vector : Array[Double],
   f_gain : Double,
 ) -> Double {
-  let p_ener = amr_dot(p_vector, 0, p_vector, 0, amrwb_sfr_size) * p_gain * p_gain
-  let f_ener = amr_dot(f_vector, 0, f_vector, 0, amrwb_sfr_size) * f_gain * f_gain
+  let p_ener = amr_dot(p_vector, 0, p_vector, 0, amrwb_sfr_size) *
+    p_gain *
+    p_gain
+  let f_ener = amr_dot(f_vector, 0, f_vector, 0, amrwb_sfr_size) *
+    f_gain *
+    f_gain
   (p_ener - f_ener) / (p_ener + f_ener + 0.01)
 }
 
@@ -425,7 +463,11 @@ fn AmrWbDecoder::anti_sparseness(
   if ir_filter_nr >= 2 {
     return false
   }
-  let source = if ir_filter_nr == 0 { amrwb_ir_filter_str } else { amrwb_ir_filter_mid }
+  let source = if ir_filter_nr == 0 {
+    amrwb_ir_filter_str
+  } else {
+    amrwb_ir_filter_mid
+  }
   // c2(n) = sum(i,0,len-1){ c(i) * coef((n - i + len) % len) }
   let coef : Array[Double] = Array::makei(amrwb_sfr_size, i => source[i])
   for i = 0; i < amrwb_sfr_size; i = i + 1 {
@@ -433,7 +475,17 @@ fn AmrWbDecoder::anti_sparseness(
   }
   for i = 0; i < amrwb_sfr_size; i = i + 1 {
     if fixed_vector[i] != 0.0 {
-      amr_celp_circ_addf(buf, 0, buf, 0, coef, 0, i, fixed_vector[i], amrwb_sfr_size)
+      amr_celp_circ_addf(
+        buf,
+        0,
+        buf,
+        0,
+        coef,
+        0,
+        i,
+        fixed_vector[i],
+        amrwb_sfr_size,
+      )
     }
   }
   true
@@ -450,10 +502,10 @@ fn AmrWbDecoder::noise_enhancer(
   let sm_fac = 0.5 * (1.0 - voice_fac) * stab_fac
   let g0 = if fixed_gain < self.prev_tr_gain {
     // +1.5 dB
-    (self.prev_tr_gain).min(fixed_gain + fixed_gain * (6226.0 / 32768.0))
+    self.prev_tr_gain.min(fixed_gain + fixed_gain * (6226.0 / 32768.0))
   } else {
     // -1.5 dB
-    (self.prev_tr_gain).max(fixed_gain * (27536.0 / 32768.0))
+    self.prev_tr_gain.max(fixed_gain * (27536.0 / 32768.0))
   }
   self.prev_tr_gain = g0
   sm_fac * g0 + (1.0 - sm_fac) * fixed_gain
@@ -461,7 +513,10 @@ fn AmrWbDecoder::noise_enhancer(
 
 ///|
 /// `pitch_enhancer`: emphasize the higher frequencies of the fixed vector.
-fn amrwb_pitch_enhancer(fixed_vector : Array[Double], voice_fac : Double) -> Unit {
+fn amrwb_pitch_enhancer(
+  fixed_vector : Array[Double],
+  voice_fac : Double,
+) -> Unit {
   let cpe = 0.125 * (1.0 + voice_fac)
   let mut last = fixed_vector[0]
   fixed_vector[0] -= cpe * fixed_vector[1]
@@ -503,12 +558,7 @@ fn AmrWbDecoder::synthesis(
       excitation[i] += pitch_factor * self.pitch_vector[i]
     }
     amr_scale_to_sum_of_squares(
-      excitation,
-      0,
-      excitation,
-      0,
-      energy,
-      amrwb_sfr_size,
+      excitation, 0, excitation, 0, energy, amrwb_sfr_size,
     )
   }
   amr_celp_lp_synthesis_filterf(
@@ -559,7 +609,11 @@ fn amrwb_dot_fixed(
 ///|
 /// `upsample_5_4`: 12.8 kHz to 16 kHz by FIR interpolation, using the
 /// history in front of `samples_up[UPS_FIR_SIZE]`.
-fn AmrWbDecoder::upsample_5_4(self : AmrWbDecoder, out : Array[Double], out_off : Int32) -> Unit {
+fn AmrWbDecoder::upsample_5_4(
+  self : AmrWbDecoder,
+  out : Array[Double],
+  out_off : Int32,
+) -> Unit {
   // in = &samples_up[UPS_FIR_SIZE]; in0 = in - UPS_FIR_SIZE + 1
   let in0 = 1
   let mut int_part = 0
@@ -607,7 +661,10 @@ fn AmrWbDecoder::find_hb_gain(
     0.0
   }
   // bounded by [0.1, 1.0]
-  ((1.0 - tilt) * (1.25 - (if wsp { 0.25 } else { 0.0 }))).clamp(min=0.1, max=1.0)
+  ((1.0 - tilt) * (1.25 - (if wsp { 0.25 } else { 0.0 }))).clamp(
+    min=0.1,
+    max=1.0,
+  )
 }
 
 ///|
@@ -634,7 +691,11 @@ fn AmrWbDecoder::scaled_hb_excitation(
 
 ///|
 /// `auto_correlation` of the ISF difference vector.
-fn amrwb_auto_correlation(diff_isf : Array[Double], mean : Double, lag : Int32) -> Double {
+fn amrwb_auto_correlation(
+  diff_isf : Array[Double],
+  mean : Double,
+  lag : Int32,
+) -> Double {
   let mut sum = 0.0
   for i = 7; i < amrwb_lp_order - 2; i = i + 1 {
     let prod = (diff_isf[i] - mean) * (diff_isf[i - lag] - mean)
@@ -702,7 +763,12 @@ fn amrwb_extrapolate_isf(isf : Array[Double]) -> Unit {
 
 ///|
 /// `lpc_weighting`: y[i] = x[i] * gamma^i.
-fn amrwb_lpc_weighting(out : Array[Double], lpc : Array[Double], gamma : Double, size : Int32) -> Unit {
+fn amrwb_lpc_weighting(
+  out : Array[Double],
+  lpc : Array[Double],
+  gamma : Double,
+  size : Int32,
+) -> Unit {
   let mut fac = gamma
   for i = 0; i < size; i = i + 1 {
     out[i] = lpc[i] * fac
@@ -769,7 +835,10 @@ fn amrwb_hb_fir_filter(
   input : Array[Double],
   in_off : Int32,
 ) -> Unit {
-  let data : Array[Double] = Array::make(amrwb_sfr_size_16k + amrwb_hb_fir_size, 0.0)
+  let data : Array[Double] = Array::make(
+    amrwb_sfr_size_16k + amrwb_hb_fir_size,
+    0.0,
+  )
   for i = 0; i < amrwb_hb_fir_size; i = i + 1 {
     data[i] = mem[i]
   }
@@ -885,7 +954,10 @@ pub fn AmrWbDecoder::decode_frame(
   if self.fr_cur_mode == amrwb_mode_sid {
     return Err("amrwb: SID (comfort noise) mode is not supported")
   }
-  let words = amr_unpack_words(amrwb_order_table(self.fr_cur_mode), data[1:].to_owned())
+  let words = amr_unpack_words(
+    amrwb_order_table(self.fr_cur_mode),
+    data[1:].to_owned(),
+  )
   // AMRWBFrame words: vad, isp_id[7], then 12 words per subframe
   // (adap, ltp, vq_gain, hb_gain, pul_ih[4], pul_il[4]).
   let isp_id = FixedArray::makei(7, i => words[1 + i])
@@ -896,7 +968,11 @@ pub fn AmrWbDecoder::decode_frame(
     amrwb_decode_isf_indices_46b(isp_id, self.isf_cur)
   }
   amrwb_isf_add_mean_and_past(self.isf_cur, self.isf_q_past)
-  amrwb_set_min_dist_lsf(self.isf_cur, amrwb_min_isf_spacing, amrwb_lp_order - 1)
+  amrwb_set_min_dist_lsf(
+    self.isf_cur,
+    amrwb_min_isf_spacing,
+    amrwb_lp_order - 1,
+  )
   let stab_fac = amrwb_stability_factor(self.isf_cur, self.isf_past_final)
   self.isf_cur[amrwb_lp_order - 1] *= 2.0
   amrwb_lsf2lspd(self.isp[3], self.isf_cur, amrwb_lp_order)
@@ -927,15 +1003,25 @@ pub fn AmrWbDecoder::decode_frame(
     // adaptive codebook (pitch vector)
     self.decode_pitch_vector(adap, ltp, sub)
     // innovative codebook (fixed vector)
-    amrwb_decode_fixed_vector(self.fixed_vector, pul_ih, pul_il, self.fr_cur_mode)
+    amrwb_decode_fixed_vector(
+      self.fixed_vector,
+      pul_ih,
+      pul_il,
+      self.fr_cur_mode,
+    )
     self.pitch_sharpening()
-    let (pitch_gain, fixed_gain_factor) = amrwb_decode_gains(vq_gain, self.fr_cur_mode)
+    let (pitch_gain, fixed_gain_factor) = amrwb_decode_gains(
+      vq_gain,
+      self.fr_cur_mode,
+    )
     self.pitch_gain[0] = pitch_gain
     // the fixed gain's float result, from the float-rounded energy
     self.fixed_gain[0] = amr_set_fixed_gain(
       fixed_gain_factor,
-      amr_f32(amr_dot(self.fixed_vector, 0, self.fixed_vector, 0, amrwb_sfr_size) /
-        amrwb_sfr_size.to_double()),
+      amr_f32(
+        amr_dot(self.fixed_vector, 0, self.fixed_vector, 0, amrwb_sfr_size) /
+        amrwb_sfr_size.to_double(),
+      ),
       self.prediction_error,
       amrwb_energy_mean,
       amrwb_energy_pred_fac,
@@ -957,11 +1043,21 @@ pub fn AmrWbDecoder::decode_frame(
       self.excitation_buf[ex + i] = amr_trunc(amr_f32(a + b))
     }
     // post-processing of the excitation elements
-    let synth_fixed_gain = self.noise_enhancer(self.fixed_gain[0], voice_fac, stab_fac)
+    let synth_fixed_gain = self.noise_enhancer(
+      self.fixed_gain[0],
+      voice_fac,
+      stab_fac,
+    )
     let use_spare = self.anti_sparseness(self.fixed_vector, spare_vector)
-    let synth_fixed_vector = if use_spare { spare_vector } else { self.fixed_vector }
+    let synth_fixed_vector = if use_spare {
+      spare_vector
+    } else {
+      self.fixed_vector
+    }
     amrwb_pitch_enhancer(synth_fixed_vector, voice_fac)
-    self.synthesis(sub, synth_exc, synth_fixed_gain, synth_fixed_vector, amrwb_lp_order)
+    self.synthesis(
+      sub, synth_exc, synth_fixed_gain, synth_fixed_vector, amrwb_lp_order,
+    )
     // synthesis speech post-processing
     amrwb_de_emphasis(
       self.samples_up,

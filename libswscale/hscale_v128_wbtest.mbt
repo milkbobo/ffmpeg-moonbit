@@ -35,13 +35,12 @@ fn hs_gen_filter(
   for i = 0; i < dst_w; i = i + 1 {
     for j = 0; j < size; j = j + 1 {
       s = s * 1103515245U + 12345U
-      coeffs[i * size + j] = ((s >> 16) & 0x3FFFU).reinterpret_as_int() -
-      8192
+      coeffs[i * size + j] = ((s >> 16) & 0x3FFFU).reinterpret_as_int() - 8192
     }
     s = s * 1103515245U + 12345U
     pos[i] = ((s >> 16) % (src_w - size + 1).reinterpret_as_uint()).reinterpret_as_int()
   }
-  { coeffs, pos, size }
+  { coeffs, pos, size, }
 }
 
 ///|
@@ -54,7 +53,8 @@ test "hscale v128: equality with the scalar port across sizes and depths" {
       let src_w = size + 40
       let dst_w = 23
       let src = hs_gen_bytes(
-        0x9E3779B9U + size.reinterpret_as_uint() * 31U +
+        0x9E3779B9U +
+        size.reinterpret_as_uint() * 31U +
         src_bits.reinterpret_as_uint(),
         src_w * step,
       )
@@ -83,10 +83,16 @@ test "hscale v128: long rows and nonzero row offsets" {
       let src_w = 640
       let dst_w = 121
       // two rows worth of source; scale the second row (row_off = src_w)
-      let src = hs_gen_bytes(0xA5A5A5A5U + size.reinterpret_as_uint(), 2 *
-        src_w *
-        step)
-      let f = hs_gen_filter(0x12345678U + src_bits.reinterpret_as_uint(), src_w, dst_w, size)
+      let src = hs_gen_bytes(
+        0xA5A5A5A5U + size.reinterpret_as_uint(),
+        2 * src_w * step,
+      )
+      let f = hs_gen_filter(
+        0x12345678U + src_bits.reinterpret_as_uint(),
+        src_w,
+        dst_w,
+        size,
+      )
       for row = 0; row < 2; row = row + 1 {
         let off = row * src_w
         let a = sws_hscale8to15(src, off, f, dst_w, src_bits)
@@ -104,28 +110,28 @@ test "hscale v128: top clamp and int16 store wrap" {
   // size 8, all taps 0xff, coefficients +8192: the sum >> 7 exceeds the
   // 32767 top clamp (mirrors hScale8To15_c's FFMIN).
   let src = Bytes::from_array([
-    b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff',
+    b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff',
+    b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff', b'\xff',
   ])
-  let f_hi : SwsFilter = {
-    coeffs: Array::make(8, 8192),
-    pos: [0],
-    size: 8,
-  }
+  let f_hi : SwsFilter = { coeffs: Array::make(8, 8192), pos: [0], size: 8, }
   assert_eq(sws_hscale8to15_v128(src, 0, f_hi, 1, 8)[0], 32767)
-  assert_eq(sws_hscale8to15_v128(src, 0, f_hi, 1, 8)[0], sws_hscale8to15(src, 0, f_hi, 1, 8)[0])
+  assert_eq(
+    sws_hscale8to15_v128(src, 0, f_hi, 1, 8)[0],
+    sws_hscale8to15(src, 0, f_hi, 1, 8)[0],
+  )
   // Negative coefficients miss the clamp and exercise the int16 wrap on
   // store: 8 * 255 * -8192 = -16711680, >> 7 = -130560 -> 512 after the
   // wrap.
-  let f_lo : SwsFilter = {
-    coeffs: Array::make(8, -8192),
-    pos: [0],
-    size: 8,
-  }
+  let f_lo : SwsFilter = { coeffs: Array::make(8, -8192), pos: [0], size: 8, }
   assert_eq(sws_hscale8to15_v128(src, 0, f_lo, 1, 8)[0], 512)
-  assert_eq(sws_hscale8to15_v128(src, 0, f_lo, 1, 8)[0], sws_hscale8to15(src, 0, f_lo, 1, 8)[0])
+  assert_eq(
+    sws_hscale8to15_v128(src, 0, f_lo, 1, 8)[0],
+    sws_hscale8to15(src, 0, f_lo, 1, 8)[0],
+  )
   // Zero samples stay zero through both paths.
   let z = Bytes::from_array([
-    b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00',
+    b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00',
+    b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00', b'\x00',
   ])
   assert_eq(sws_hscale8to15_v128(z, 0, f_hi, 1, 8)[0], 0)
 }

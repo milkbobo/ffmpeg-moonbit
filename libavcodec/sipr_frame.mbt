@@ -59,7 +59,11 @@ fn sipr_lspd2lpc(
 ///|
 /// `ff_amrwb_lsp2lpc` for order 10: LP coefficients of the cosine-domain
 /// LSPs of an AMR wideband (here SIPR) frame.
-fn sipr_amrwb_lsp2lpc(lsp : Array[Double], lp : Array[Double], lp_off : Int32) -> Unit {
+fn sipr_amrwb_lsp2lpc(
+  lsp : Array[Double],
+  lp : Array[Double],
+  lp_off : Int32,
+) -> Unit {
   let half = 5
   let pa = Array::make(half + 1, 0.0)
   let qa = Array::make(half, 0.0)
@@ -144,11 +148,7 @@ fn sipr_apply_order_2(
 /// `dequant` of the below-16k modes: five two-entry vectors.
 fn sipr_dequant(idx : FixedArray[Int32], out : Array[Double]) -> Unit {
   let books : FixedArray[FixedArray[Double]] = [
-    sipr_lsf_cb1,
-    sipr_lsf_cb2,
-    sipr_lsf_cb3,
-    sipr_lsf_cb4,
-    sipr_lsf_cb5,
+    sipr_lsf_cb1, sipr_lsf_cb2, sipr_lsf_cb3, sipr_lsf_cb4, sipr_lsf_cb5,
   ]
   for i = 0; i < 5; i = i + 1 {
     out[2 * i] = books[i][2 * idx[i]]
@@ -238,19 +238,10 @@ fn sipr_eval_ir(
   }
   // tmp1[11 ..] is zero, as the C's memset leaves it
   amr_celp_lp_synthesis_filterf(
-    ir_buf,
-    sipr_lp_filter_order,
-    tmp1,
-    0,
-    tmp2,
-    sipr_subfr_size,
-    sipr_lp_filter_order,
+    ir_buf, sipr_lp_filter_order, tmp1, 0, tmp2, sipr_subfr_size, sipr_lp_filter_order,
   )
   sipr_pitch_sharpening(
-    pitch_lag,
-    pitch_sharp_factor,
-    ir_buf,
-    sipr_lp_filter_order,
+    pitch_lag, pitch_sharp_factor, ir_buf, sipr_lp_filter_order,
   )
 }
 
@@ -293,13 +284,7 @@ fn SiprDecoder::postfilter_5k0(
     buf[i] = self.postfilter_mem[i]
   }
   amr_celp_lp_synthesis_filterf(
-    buf,
-    pole_out,
-    samples,
-    0,
-    lpc_d,
-    sipr_subfr_size,
-    sipr_lp_filter_order,
+    buf, pole_out, samples, 0, lpc_d, sipr_subfr_size, sipr_lp_filter_order,
   )
   for i = 0; i < sipr_lp_filter_order; i = i + 1 {
     self.postfilter_mem[i] = buf[tail + i]
@@ -312,13 +297,7 @@ fn SiprDecoder::postfilter_5k0(
     self.postfilter_mem5k0[i] = buf[tail + i]
   }
   amr_celp_lp_zero_synthesis_filterf(
-    samples,
-    0,
-    buf,
-    pole_out,
-    lpc_n,
-    sipr_subfr_size,
-    sipr_lp_filter_order,
+    samples, 0, buf, pole_out, lpc_n, sipr_subfr_size, sipr_lp_filter_order,
   )
 }
 
@@ -428,7 +407,7 @@ fn SiprDecoder::decode_frame(
       ex - t0 + (if t0_frac <= 0 { 1 } else { 0 }),
       amr_b60_sinc,
       6,
-      2 * (((2 + t0_frac) % 3 + 1)),
+      2 * ((2 + t0_frac) % 3 + 1),
       sipr_lp_filter_order,
       sipr_subfr_size,
     )
@@ -444,8 +423,9 @@ fn SiprDecoder::decode_frame(
       sipr_lp_filter_order,
       sipr_subfr_size,
     )
-    let avg_energy = (0.01 +
-      amr_dot(fixed_vector, 0, fixed_vector, 0, sipr_subfr_size)) /
+    let avg_energy = (
+        0.01 + amr_dot(fixed_vector, 0, fixed_vector, 0, sipr_subfr_size)
+      ) /
       sipr_subfr_size.to_double()
     self.past_pitch_gain = sipr_gain_cb[params.gc_index[i] * 2]
     let pitch_gain = self.past_pitch_gain
@@ -506,9 +486,10 @@ fn SiprDecoder::decode_frame(
 
   // the last samples become the history of the next frame
   for i = 0; i < sipr_lp_filter_order; i = i + 1 {
-    self.synth_buf[synth - sipr_lp_filter_order + i] = self.synth_buf[
-      synth + frame_size - sipr_lp_filter_order + i
-    ]
+    self.synth_buf[synth - sipr_lp_filter_order + i] = self.synth_buf[synth +
+      frame_size -
+      sipr_lp_filter_order +
+      i]
   }
   if self.mode == 3 {
     for i = 0; i < subframe_count; i = i + 1 {
@@ -551,7 +532,6 @@ fn SiprDecoder::decode_frame(
     frame_size,
   )
 }
-
 
 ///|
 /// Synthesize using the LPC coefficients for the selected subframe.

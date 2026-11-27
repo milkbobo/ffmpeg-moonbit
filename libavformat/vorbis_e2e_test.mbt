@@ -16,7 +16,9 @@ test "Vorbis E2E: encode -> Ogg mux -> demux -> decode" {
   let nframes = 34
   let queue : Array[Array[Double]] = []
   for f = 0; f < nframes; f = f + 1 {
-    queue.push(@libavcodec.vorbis_e2e_tone(enc.frame_size, 2, f * enc.frame_size))
+    queue.push(
+      @libavcodec.vorbis_e2e_tone(enc.frame_size, 2, f * enc.frame_size),
+    )
   }
   let packets : Array[Bytes] = []
   let mut qi = 0
@@ -39,7 +41,9 @@ test "Vorbis E2E: encode -> Ogg mux -> demux -> decode" {
   }
   inspect(packets.length() >= 2, content="true")
   // Mux: each block decodes to 1024 samples per channel (blocksize 2048).
-  let (h0, h1, h2) = @libavcodec.vorbis_e2e_split_extradata(enc.extradata.unwrap())
+  let (h0, h1, h2) = @libavcodec.vorbis_e2e_split_extradata(
+    enc.extradata.unwrap(),
+  )
   let mux = match @libavformat.ogg_vorbis_muxer_new(h0, h1, h2) {
     Err(e) => fail("muxer: \{e}")
     Ok(m) => m
@@ -49,7 +53,10 @@ test "Vorbis E2E: encode -> Ogg mux -> demux -> decode" {
   }
   let ogg = mux.finish()
   let magic = ogg.clamped_view(start=0, end=4).to_owned()
-  let ok = magic[0] == b'O' && magic[1] == b'g' && magic[2] == b'g' && magic[3] == b'S'
+  let ok = magic[0] == b'O' &&
+    magic[1] == b'g' &&
+    magic[2] == b'g' &&
+    magic[3] == b'S'
   inspect(ok, content="true")
   // Demux and decode.
   let demux = match @libavformat.av_ogg_vorbis_open(ogg) {
@@ -63,7 +70,8 @@ test "Vorbis E2E: encode -> Ogg mux -> demux -> decode" {
   inspect(demux.packets.length(), content=packets.length().to_string())
   inspect(demux.packets[0].data == packets[0], content="true")
   inspect(demux.packets[1].data == packets[1], content="true")
-  let dec = match @libavcodec.vorbis_decoder_new(demux.id_header, demux.setup_header) {
+  let dec = match
+    @libavcodec.vorbis_decoder_new(demux.id_header, demux.setup_header) {
     Err(e) => fail("decoder: \{e}")
     Ok(d) => d
   }
@@ -104,10 +112,14 @@ test "Vorbis E2E: encode -> Ogg mux -> demux -> decode" {
     }
     let mut refd = ""
     for i = 0; i < 6; i = i + 1 {
-      let rv = (queue[i / enc.frame_size][i % enc.frame_size * 2] * 32768.0).round().to_int()
+      let rv = (queue[i / enc.frame_size][i % enc.frame_size * 2] * 32768.0)
+        .round()
+        .to_int()
       refd = refd + "\{rv} "
     }
-    fail("SNR = \{snr} dB; out: \{diag} in@0: \{refd}; outlen \{chs[0].length()}")
+    fail(
+      "SNR = \{snr} dB; out: \{diag} in@0: \{refd}; outlen \{chs[0].length()}",
+    )
   }
   inspect(snr > 20.0, content="true")
 }

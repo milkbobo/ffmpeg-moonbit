@@ -66,7 +66,11 @@ fn ar_quantize_bands(
 
 ///|
 /// Verbatim `ff_ac3_extract_exponents`. */
-fn ar_extract_exponents(exp_out : Array[Int32], exp_in : Array[Int32], n : Int32) -> Unit {
+fn ar_extract_exponents(
+  exp_out : Array[Int32],
+  exp_in : Array[Int32],
+  n : Int32,
+) -> Unit {
   for i = 0; i < n; i = i + 1 {
     let x = exp_in[i].abs()
     let mut clz = 0
@@ -83,13 +87,7 @@ fn ar_extract_exponents(exp_out : Array[Int32], exp_in : Array[Int32], n : Int32
       clz = 32
     }
     let e = 27 - clz
-    exp_out[i] = if e < 0 {
-      0
-    } else if e > 24 {
-      24
-    } else {
-      e
-    }
+    exp_out[i] = if e < 0 { 0 } else if e > 24 { 24 } else { e }
   }
 }
 
@@ -137,7 +135,10 @@ fn ar_gen_i32(seed : UInt32, n : Int32, limit : Int32) -> Array[Int32] {
 test "aacenc dsp v128: abs_pow34 is bit-identical in f32" {
   for size in [1, 2, 3, 4, 5, 8, 37, 128] {
     for k = 0; k < 3; k = k + 1 {
-      let input = ar_gen(0x9E3779B9U + size.reinterpret_as_uint() + k.reinterpret_as_uint(), size)
+      let input = ar_gen(
+        0x9E3779B9U + size.reinterpret_as_uint() + k.reinterpret_as_uint(),
+        size,
+      )
       let a = ar_abs_pow34(input, size)
       let b : Array[Double] = Array::make(size, 0.0)
       aac_abs_pow34_v128(input, size, b)
@@ -150,7 +151,9 @@ test "aacenc dsp v128: abs_pow34 is bit-identical in f32" {
 
 ///|
 test "aacenc dsp v128: abs_pow34 handles zeros and negatives" {
-  let input : Array[Double] = [0.0, -0.0, -1.0, 1.0, -1.0e30, 1.0e-30, -3.5, 2.25]
+  let input : Array[Double] = [
+    0.0, -0.0, -1.0, 1.0, -1.0e30, 1.0e-30, -3.5, 2.25,
+  ]
   let a = ar_abs_pow34(input, 8)
   let b : Array[Double] = Array::make(8, 0.0)
   aac_abs_pow34_v128(input, 8, b)
@@ -167,9 +170,16 @@ test "aacenc dsp v128: quantize_bands signed and unsigned" {
     for is_signed in [true, false] {
       for maxval in [8191, 255, 15] {
         for k = 0; k < 3; k = k + 1 {
-          let scaled = ar_gen(0xABCDEF01U + size.reinterpret_as_uint() + k.reinterpret_as_uint(), size + 4)
+          let scaled = ar_gen(
+            0xABCDEF01U + size.reinterpret_as_uint() + k.reinterpret_as_uint(),
+            size + 4,
+          )
           // inputs spanning both signs
-          let input = ar_gen_i32(0x13572468U + k.reinterpret_as_uint(), size + 4, 1000)
+          let input = ar_gen_i32(
+            0x13572468U + k.reinterpret_as_uint(),
+            size + 4,
+            1000,
+          )
           let input_f : Array[Double] = Array::make(size + 4, 0.0)
           for j = 0; j < size + 4; j = j + 1 {
             input_f[j] = input[j].to_double()
@@ -177,8 +187,12 @@ test "aacenc dsp v128: quantize_bands signed and unsigned" {
           let q34 = ar_f32(1.0 / 1.0) * 0.0 + 1.5
           let a : Array[Int32] = Array::make(size, 0)
           let b : Array[Int32] = Array::make(size, 0)
-          ar_quantize_bands(a, input_f, 1, scaled, 2, size, is_signed, maxval, q34)
-          aac_quantize_bands_v128(b, input_f, 1, scaled, 2, size, is_signed, maxval, q34)
+          ar_quantize_bands(
+            a, input_f, 1, scaled, 2, size, is_signed, maxval, q34,
+          )
+          aac_quantize_bands_v128(
+            b, input_f, 1, scaled, 2, size, is_signed, maxval, q34,
+          )
           for i = 0; i < size; i = i + 1 {
             assert_eq(b[i], a[i])
           }

@@ -2,6 +2,18 @@
 
 用 MoonBit 移植 FFmpeg 9.0.2 的常用媒体处理功能，面向 WebAssembly。可以读取媒体信息、解码音视频、转码和封装文件。
 
+需要 MoonBit 1.0 及以上工具链。SIMD 实现使用 `moonbitlang/core/simd`，各包在 `moon.pkg` 中通过 `"allow-experimental-packages"` 显式声明依赖。
+
+开发与验证所用的版本组合：
+
+| 组件 | 版本 | 记录位置 |
+| --- | --- | --- |
+| `moon` / `moonrun` | `0.1.20261126`（2026-11-26） | `doc/PORTING_HISTORY.md` §577 |
+| `moonc` | `v1.0.0-rc1+3c0520448` | 同上 |
+| `moonbitlang/x` | `0.5.9` | `moon.mod`（精确版本） |
+
+`moon` 没有依赖锁文件，版本由 `moon.mod` 里的精确版本号固定；工具链本身也没有版本 pin 字段，需要复现构建时请对照上表。
+
 ## 编解码支持范围
 
 截至 2026-11-27，主要格式的实现情况如下。

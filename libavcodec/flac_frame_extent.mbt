@@ -46,8 +46,13 @@ pub fn flac_frame_extent(
 }
 
 ///|
-fn flac_skip_subframe(gb : BitReader, frame : FlacFrame, channel : Int32) -> Result[Unit, String] {
-  let (stype, bps, _) = match flac_subframe_header(gb, channel, frame.ch_mode, frame.bps) {
+fn flac_skip_subframe(
+  gb : BitReader,
+  frame : FlacFrame,
+  channel : Int32,
+) -> Result[Unit, String] {
+  let (stype, bps, _) = match
+    flac_subframe_header(gb, channel, frame.ch_mode, frame.bps) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -73,7 +78,8 @@ fn flac_skip_subframe(gb : BitReader, frame : FlacFrame, channel : Int32) -> Res
     }
     gb.skip(order * precision)
   }
-  let (rice_bits, partitions, samples) = match flac_residual_header(gb, order, frame.blocksize) {
+  let (rice_bits, partitions, samples) = match
+    flac_residual_header(gb, order, frame.blocksize) {
     Ok(v) => v
     Err(e) => return Err(e)
   }

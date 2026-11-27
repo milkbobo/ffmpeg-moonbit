@@ -34,7 +34,7 @@ test "webm muxer: Opus track and SimpleBlocks round-trip" {
 ///|
 test "webm muxer: empty packets are rejected" {
   let mux = webm_opus_muxer_new(channels=1).unwrap()
-  match mux.write_packet(Bytes::new(0)) {
+  match mux.write_packet(Bytes::make(0, b'\x00')) {
     Ok(_) => fail("empty Opus packet must fail")
     Err(_) => ()
   }

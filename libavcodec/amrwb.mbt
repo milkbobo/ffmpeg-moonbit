@@ -163,7 +163,9 @@ pub struct AmrWbDecoder {
 ///|
 /// `amrwb_decode_init`.
 pub fn amrwb_decoder_new() -> AmrWbDecoder {
-  let isf_past_final = Array::makei(amrwb_lp_order, i => amrwb_isf_init[i].to_double() / 32768.0)
+  let isf_past_final = Array::makei(amrwb_lp_order, i => {
+    amrwb_isf_init[i].to_double() / 32768.0
+  })
   {
     fr_cur_mode: 0,
     fr_quality: false,
@@ -231,7 +233,11 @@ fn amrwb_lsp2polyf(
 /// `ff_amrwb_lsp2lpc`: LSP (cosine domain) to LP coefficients, any even
 /// order. `qa` is read one slot before `f[0]` (`qa[-1]` is 0 in the C), so
 /// the buffer carries a leading zero.
-fn amrwb_lsp2lpc(lsp : Array[Double], lp : Array[Double], lp_order : Int32) -> Unit {
+fn amrwb_lsp2lpc(
+  lsp : Array[Double],
+  lp : Array[Double],
+  lp_order : Int32,
+) -> Unit {
   let half = lp_order >> 1
   let pa : Array[Double] = Array::make(half + 1, 0.0)
   let qa : Array[Double] = Array::make(half + 1, 0.0)
@@ -256,7 +262,11 @@ fn amrwb_lsp2lpc(lsp : Array[Double], lp : Array[Double], lp_order : Int32) -> U
 
 ///|
 /// `ff_set_min_dist_lsf` for `size` coefficients.
-fn amrwb_set_min_dist_lsf(lsf : Array[Double], min_spacing : Double, size : Int32) -> Unit {
+fn amrwb_set_min_dist_lsf(
+  lsf : Array[Double],
+  min_spacing : Double,
+  size : Int32,
+) -> Unit {
   let mut prev = 0.0
   for i = 0; i < size; i = i + 1 {
     if lsf[i] < prev + min_spacing {
@@ -302,7 +312,10 @@ fn amrwb_apply_order_2(
 ///|
 /// `decode_isf_indices_36b`: quantized ISF vector from 36-bit indexes
 /// (6K60 mode only). `ind` holds the five indexes.
-fn amrwb_decode_isf_indices_36b(ind : FixedArray[Int32], isf_q : Array[Double]) -> Unit {
+fn amrwb_decode_isf_indices_36b(
+  ind : FixedArray[Int32],
+  isf_q : Array[Double],
+) -> Unit {
   for i = 0; i < 9; i = i + 1 {
     isf_q[i] = amrwb_dico1_isf[ind[0] * 9 + i].to_double() / 32768.0
   }
@@ -323,7 +336,10 @@ fn amrwb_decode_isf_indices_36b(ind : FixedArray[Int32], isf_q : Array[Double]) 
 ///|
 /// `decode_isf_indices_46b`: quantized ISF vector from 46-bit indexes (all
 /// modes but 6K60). `ind` holds the seven indexes.
-fn amrwb_decode_isf_indices_46b(ind : FixedArray[Int32], isf_q : Array[Double]) -> Unit {
+fn amrwb_decode_isf_indices_46b(
+  ind : FixedArray[Int32],
+  isf_q : Array[Double],
+) -> Unit {
   for i = 0; i < 9; i = i + 1 {
     isf_q[i] = amrwb_dico1_isf[ind[0] * 9 + i].to_double() / 32768.0
   }
@@ -350,7 +366,10 @@ fn amrwb_decode_isf_indices_46b(ind : FixedArray[Int32], isf_q : Array[Double]) 
 ///|
 /// `isf_add_mean_and_past`: add the mean and the past ISF with the
 /// prediction factor; updates the past ISF.
-fn amrwb_isf_add_mean_and_past(isf_q : Array[Double], isf_past : Array[Double]) -> Unit {
+fn amrwb_isf_add_mean_and_past(
+  isf_q : Array[Double],
+  isf_past : Array[Double],
+) -> Unit {
   for i = 0; i < amrwb_lp_order; i = i + 1 {
     let tmp = isf_q[i]
     isf_q[i] += amrwb_isf_mean[i].to_double() / 32768.0
@@ -362,7 +381,10 @@ fn amrwb_isf_add_mean_and_past(isf_q : Array[Double], isf_past : Array[Double]) 
 ///|
 /// `interpolate_isp`: subframes 1-3 from the past 4th subframe and the
 /// current 4th.
-fn amrwb_interpolate_isp(isp_q : Array[Array[Double]], isp4_past : Array[Double]) -> Unit {
+fn amrwb_interpolate_isp(
+  isp_q : Array[Array[Double]],
+  isp4_past : Array[Double],
+) -> Unit {
   for k = 0; k < 3; k = k + 1 {
     let c = amrwb_isfp_inter[k]
     for i = 0; i < amrwb_lp_order; i = i + 1 {
@@ -373,7 +395,10 @@ fn amrwb_interpolate_isp(isp_q : Array[Array[Double]], isp4_past : Array[Double]
 
 ///|
 /// `stability_factor`: 1.0 is maximum signal stability.
-fn amrwb_stability_factor(isf : Array[Double], isf_past : Array[Double]) -> Double {
+fn amrwb_stability_factor(
+  isf : Array[Double],
+  isf_past : Array[Double],
+) -> Double {
   let mut acc = 0.0
   for i = 0; i < amrwb_lp_order - 1; i = i + 1 {
     acc += (isf[i] - isf_past[i]) * (isf[i] - isf_past[i])

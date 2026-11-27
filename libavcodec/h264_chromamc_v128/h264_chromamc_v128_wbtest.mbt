@@ -90,14 +90,14 @@ test "chroma mc v128: equality across phases, geometry and clamping" {
         // mx/my encode dx/dy in their low bits (mx>>3 gives the base x)
         let mx = 8 + dx
         let my = (8 + dy) << vshift
-        let dims_list : Array[(Int32, Int32)] = [
-          (4, 4), (8, 4), (4, 8), (8, 8),
-        ]
+        let dims_list : Array[(Int32, Int32)] = [(4, 4), (8, 4), (4, 8), (8, 8)]
         for dims in dims_list {
           let (w, h) = dims
           // interior, right/bottom edge and off-frame left/top windows
           let windows : Array[(Int32, Int32)] = [
-            (10, 8), (pic_w - 2, pic_h - 2), (-3, -2),
+            (10, 8),
+            (pic_w - 2, pic_h - 2),
+            (-3, -2),
           ]
           for xy in windows {
             let (sx, sy) = xy
@@ -107,10 +107,38 @@ test "chroma mc v128: equality across phases, geometry and clamping" {
               d2[i] = d1[i]
             }
             hc_mc_chroma(
-              d1, 3 * dstride + 2, dstride, src, sx, sy, mx, my, sstride, w, h, pic_w, pic_h, 0, vshift,
+              d1,
+              3 * dstride + 2,
+              dstride,
+              src,
+              sx,
+              sy,
+              mx,
+              my,
+              sstride,
+              w,
+              h,
+              pic_w,
+              pic_h,
+              0,
+              vshift,
             )
             h264_mc_chroma_v128(
-              d2, 3 * dstride + 2, dstride, src, sx, sy, mx, my, sstride, w, h, pic_w, pic_h, sbase=0, vshift=vshift,
+              d2,
+              3 * dstride + 2,
+              dstride,
+              src,
+              sx,
+              sy,
+              mx,
+              my,
+              sstride,
+              w,
+              h,
+              pic_w,
+              pic_h,
+              sbase=0,
+              vshift~,
             )
             for r = 0; r < h; r = r + 1 {
               for c = 0; c < w; c = c + 1 {
@@ -132,7 +160,21 @@ test "chroma mc v128: zero phase is a pure copy" {
   let src = hc_gen_px(0xA5A5A5A5U, pic_w * pic_h, 255)
   let d : Array[Int32] = Array::make(8 * 8, -1)
   h264_mc_chroma_v128(
-    d, 0, 8, src, 4, 2, 0, 0, pic_w, 8, 8, pic_w, pic_h, sbase=0, vshift=1,
+    d,
+    0,
+    8,
+    src,
+    4,
+    2,
+    0,
+    0,
+    pic_w,
+    8,
+    8,
+    pic_w,
+    pic_h,
+    sbase=0,
+    vshift=1,
   )
   for r = 0; r < 8; r = r + 1 {
     for c = 0; c < 8; c = c + 1 {

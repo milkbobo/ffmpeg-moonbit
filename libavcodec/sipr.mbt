@@ -187,7 +187,7 @@ priv struct RealAudioBits {
 
 ///|
 fn RealAudioBits::new(data : Bytes) -> RealAudioBits {
-  { data, pos: 0 }
+  { data, pos: 0, }
 }
 
 ///|
@@ -327,7 +327,8 @@ pub fn SiprMode::packet_size(self : SiprMode) -> Int32 {
 ///|
 /// Samples one packet decodes to.
 pub fn SiprMode::samples_per_packet(self : SiprMode) -> Int32 {
-  sipr_frames_per_packet(sipr_mode_index(self)) * sipr_frame_samples(sipr_mode_index(self))
+  sipr_frames_per_packet(sipr_mode_index(self)) *
+  sipr_frame_samples(sipr_mode_index(self))
 }
 
 ///|
@@ -362,7 +363,10 @@ pub fn SiprDecoder::samples_per_packet(self : SiprDecoder) -> Int32 {
 ///|
 /// `sipr_decoder_init`. The mode follows `block_align` (20 / 19 / 29 / 37
 /// bytes); any other value picks the mode from the bit rate, as the C does.
-pub fn SiprDecoder::new(block_align : Int32, bit_rate~ : Int64 = 0L) -> SiprDecoder {
+pub fn SiprDecoder::new(
+  block_align : Int32,
+  bit_rate~ : Int64 = 0L,
+) -> SiprDecoder {
   let mode = match block_align {
     20 => 0
     19 => 1
@@ -475,14 +479,11 @@ pub fn SiprDecoder::decode_packet(
   pkt : Bytes,
 ) -> Result[Array[Double], String] {
   let p = sipr_modes[self.mode]
-  if pkt.length() < (p.bits_per_frame >> 3) {
+  if pkt.length() < p.bits_per_frame >> 3 {
     return Err("sipr: packet size (\{pkt.length()}) too small")
   }
   let frame_size = sipr_frame_samples(self.mode)
-  let samples = Array::make(
-    p.frames_per_packet * frame_size,
-    0.0,
-  )
+  let samples = Array::make(p.frames_per_packet * frame_size, 0.0)
   let gb = RealAudioBits::new(pkt)
   let mut out = 0
   for _i = 0; _i < p.frames_per_packet; _i = _i + 1 {

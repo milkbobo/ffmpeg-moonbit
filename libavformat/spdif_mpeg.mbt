@@ -1,5 +1,10 @@
 ///|
-fn spdif_mpeg_burst(coded : Bytes, kind : Int32, period : Int32, big_endian : Bool) -> SpdifBurst? {
+fn spdif_mpeg_burst(
+  coded : Bytes,
+  kind : Int32,
+  period : Int32,
+  big_endian : Bool,
+) -> SpdifBurst? {
   let word = rb32(coded, 0)
   guard @libavcodec.avpriv_mpegaudio_decode_header(word) is Ok(header) &&
     !header.free_format &&

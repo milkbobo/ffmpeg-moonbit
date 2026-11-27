@@ -41,10 +41,10 @@
 /// Accumulate four pixels of `src` starting at `off` into `i32x4`. */
 #cfg(any(target="native", target="wasm"))
 fn wgt_load4(plane : Array[Int32], off : Int32) -> V128 {
-  let mut v = @v128.i32x4_splat(0)
+  let mut v = @simd.i32x4_splat(0)
   let mut i = 0
   while i < 4 {
-    v = @v128.i32x4_replace_lane(v, plane[off + i].reinterpret_as_uint(), i)
+    v = @simd.i32x4_replace_lane(v, plane[off + i].reinterpret_as_uint(), i)
     i = i + 1
   }
   v
@@ -56,7 +56,7 @@ fn wgt_load4(plane : Array[Int32], off : Int32) -> V128 {
 fn wgt_store4(plane : Array[Int32], off : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    plane[off + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    plane[off + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }
@@ -65,9 +65,9 @@ fn wgt_store4(plane : Array[Int32], off : Int32, v : V128) -> Unit {
 /// `av_clip_pixel` lane-wise. */
 #cfg(any(target="native", target="wasm"))
 fn wgt_clip(v : V128, bit_depth : Int32) -> V128 {
-  @v128.i32x4_min_s(
-    @v128.i32x4_max_s(v, @v128.i32x4_splat(0)),
-    @v128.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint()),
+  @simd.i32x4_min_s(
+    @simd.i32x4_max_s(v, @simd.i32x4_splat(0)),
+    @simd.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint()),
   )
 }
 
@@ -95,15 +95,15 @@ pub fn h264_weight_rect_v128(
   if log2_denom != 0 {
     off2 = off2 + (1 << (log2_denom - 1))
   }
-  let wv = @v128.i32x4_splat(weight.reinterpret_as_uint())
-  let ov = @v128.i32x4_splat(off2.reinterpret_as_uint())
+  let wv = @simd.i32x4_splat(weight.reinterpret_as_uint())
+  let ov = @simd.i32x4_splat(off2.reinterpret_as_uint())
   for y = 0; y < h; y = y + 1 {
     let row = off + y * stride
     let mut x = 0
     while x + 4 <= w {
       let px = wgt_load4(plane, row + x)
-      let scaled = @v128.i32x4_shr_s(
-        @v128.i32x4_add(@v128.i32x4_mul(px, wv), ov),
+      let scaled = @simd.i32x4_shr_s(
+        @simd.i32x4_add(@simd.i32x4_mul(px, wv), ov),
         log2_denom,
       )
       wgt_store4(plane, row + x, wgt_clip(scaled, bit_depth))
@@ -150,9 +150,9 @@ pub fn h264_biweight_rect_v128(
   // template's `(unsigned)((offset + 1) | 1) << log2_denom`, which on two's
   // complement is the wrapping Int32 shift.
   let off2 = (((offset << (bit_depth - 8)) + 1) | 1) << log2_denom
-  let wdv = @v128.i32x4_splat(weightd.reinterpret_as_uint())
-  let wsv = @v128.i32x4_splat(weights.reinterpret_as_uint())
-  let ov = @v128.i32x4_splat(off2.reinterpret_as_uint())
+  let wdv = @simd.i32x4_splat(weightd.reinterpret_as_uint())
+  let wsv = @simd.i32x4_splat(weights.reinterpret_as_uint())
+  let ov = @simd.i32x4_splat(off2.reinterpret_as_uint())
   for y = 0; y < h; y = y + 1 {
     let drow = doff + y * dstride
     let srow = soff + y * stride
@@ -160,11 +160,15 @@ pub fn h264_biweight_rect_v128(
     while x + 4 <= w {
       let d = wgt_load4(dst, drow + x)
       let s = wgt_load4(src, srow + x)
-      let acc = @v128.i32x4_add(
-        @v128.i32x4_add(@v128.i32x4_mul(s, wsv), @v128.i32x4_mul(d, wdv)),
+      let acc = @simd.i32x4_add(
+        @simd.i32x4_add(@simd.i32x4_mul(s, wsv), @simd.i32x4_mul(d, wdv)),
         ov,
       )
-      wgt_store4(dst, drow + x, wgt_clip(@v128.i32x4_shr_s(acc, log2_denom + 1), bit_depth))
+      wgt_store4(
+        dst,
+        drow + x,
+        wgt_clip(@simd.i32x4_shr_s(acc, log2_denom + 1), bit_depth),
+      )
       x = x + 4
     }
     while x < w {
@@ -205,9 +209,9 @@ pub fn h264_implicit_biweight_v128(
   w0 : Int32,
   bit_depth~ : Int32 = 8,
 ) -> Unit {
-  let w0v = @v128.i32x4_splat(w0.reinterpret_as_uint())
-  let w1v = @v128.i32x4_splat((64 - w0).reinterpret_as_uint())
-  let rnd = @v128.i32x4_splat(32)
+  let w0v = @simd.i32x4_splat(w0.reinterpret_as_uint())
+  let w1v = @simd.i32x4_splat((64 - w0).reinterpret_as_uint())
+  let rnd = @simd.i32x4_splat(32)
   for y = 0; y < height; y = y + 1 {
     let drow = doff + y * dstride
     let arow = aoff + y * stride
@@ -216,11 +220,11 @@ pub fn h264_implicit_biweight_v128(
     while x + 4 <= width {
       let av = wgt_load4(a, arow + x)
       let bv = wgt_load4(b, brow + x)
-      let acc = @v128.i32x4_add(
-        @v128.i32x4_add(@v128.i32x4_mul(av, w0v), @v128.i32x4_mul(bv, w1v)),
+      let acc = @simd.i32x4_add(
+        @simd.i32x4_add(@simd.i32x4_mul(av, w0v), @simd.i32x4_mul(bv, w1v)),
         rnd,
       )
-      wgt_store4(dst, drow + x, wgt_clip(@v128.i32x4_shr_s(acc, 6), bit_depth))
+      wgt_store4(dst, drow + x, wgt_clip(@simd.i32x4_shr_s(acc, 6), bit_depth))
       x = x + 4
     }
     while x < width {

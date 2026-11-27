@@ -2,7 +2,7 @@
 /// First 20 packets of each FATE SIPR stream, with s16le output from
 /// FFmpeg 9.0.2. Decode from packet zero to preserve the predictor history.
 fn check_sipr_reference(
-  packet_size : Int,
+  packet_size : Int32,
   packets_b64 : Bytes,
   pcm_b64 : Bytes,
 ) -> Unit raise {
@@ -15,13 +15,18 @@ fn check_sipr_reference(
   let mut max_pos = 0
   for i = 0; i < 20; i = i + 1 {
     let offset = i * packet_size
-    let decoded = decoder.decode_packet(packets[offset:offset + packet_size].to_owned()).unwrap()
+    let decoded = decoder
+      .decode_packet(packets[offset:offset + packet_size].to_owned())
+      .unwrap()
     assert_eq(decoded.length(), samples)
     for j, sample in decoded {
       let pos = i * samples + j
       let k = pos * 2
-      let reference = ((pcm[k].to_int() | (pcm[k + 1].to_int() << 8)) << 16) >> 16
-      let actual = (sample * 32768.0).round().clamp(min=-32768.0, max=32767.0).to_int()
+      let reference = (pcm[k].to_int() | (pcm[k + 1].to_int() << 8)) << 16 >> 16
+      let actual = (sample * 32768.0)
+        .round()
+        .clamp(min=-32768.0, max=32767.0)
+        .to_int()
       let error = (actual - reference).abs()
       if error > max_error {
         max_error = error

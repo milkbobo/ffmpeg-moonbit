@@ -49,7 +49,7 @@ fn txv_gather(
   i2 : Int32,
   i3 : Int32,
 ) -> V128 {
-  @v128.f32x4_const(
+  @simd.f32x4_const(
     Float::from_double(a[i0]),
     Float::from_double(a[i1]),
     Float::from_double(a[i2]),
@@ -76,18 +76,18 @@ fn txv_butterflies(
   t5_in : V128,
   t6_in : V128,
 ) -> (V128, V128, V128, V128, V128, V128, V128, V128) {
-  let t3 = @v128.f32x4_sub(t5_in, t1)
-  let t5 = @v128.f32x4_add(t5_in, t1)
-  let a2r = @v128.f32x4_sub(r0, t5)
-  let a0r = @v128.f32x4_add(r0, t5)
-  let a3i = @v128.f32x4_sub(i1, t3)
-  let a1i = @v128.f32x4_add(i1, t3)
-  let t4 = @v128.f32x4_sub(t2, t6_in)
-  let t6 = @v128.f32x4_add(t2, t6_in)
-  let a3r = @v128.f32x4_sub(r1, t4)
-  let a1r = @v128.f32x4_add(r1, t4)
-  let a2i = @v128.f32x4_sub(i0, t6)
-  let a0i = @v128.f32x4_add(i0, t6)
+  let t3 = @simd.f32x4_sub(t5_in, t1)
+  let t5 = @simd.f32x4_add(t5_in, t1)
+  let a2r = @simd.f32x4_sub(r0, t5)
+  let a0r = @simd.f32x4_add(r0, t5)
+  let a3i = @simd.f32x4_sub(i1, t3)
+  let a1i = @simd.f32x4_add(i1, t3)
+  let t4 = @simd.f32x4_sub(t2, t6_in)
+  let t6 = @simd.f32x4_add(t2, t6_in)
+  let a3r = @simd.f32x4_sub(r1, t4)
+  let a1r = @simd.f32x4_add(r1, t4)
+  let a2i = @simd.f32x4_sub(i0, t6)
+  let a0i = @simd.f32x4_add(i0, t6)
   (a2r, a0r, a3i, a1i, a3r, a1r, a2i, a0i)
 }
 
@@ -109,25 +109,19 @@ fn txv_transform(
   wre : V128,
   wim : V128,
 ) -> (V128, V128, V128, V128, V128, V128, V128, V128) {
-  let neg_wim = @v128.f32x4_neg(wim)
+  let neg_wim = @simd.f32x4_neg(wim)
   // t1 = zr2*wre - zi2*(-wim);  t2 = zr2*(-wim) + zi2*wre
-  let t1 = @v128.f32x4_sub(
-    @v128.f32x4_mul(zr2, wre),
-    @v128.f32x4_mul(zi2, neg_wim),
+  let t1 = @simd.f32x4_sub(
+    @simd.f32x4_mul(zr2, wre),
+    @simd.f32x4_mul(zi2, neg_wim),
   )
-  let t2 = @v128.f32x4_add(
-    @v128.f32x4_mul(zr2, neg_wim),
-    @v128.f32x4_mul(zi2, wre),
+  let t2 = @simd.f32x4_add(
+    @simd.f32x4_mul(zr2, neg_wim),
+    @simd.f32x4_mul(zi2, wre),
   )
   // t5 = zr3*wre - zi3*wim;  t6 = zr3*wim + zi3*wre
-  let t5 = @v128.f32x4_sub(
-    @v128.f32x4_mul(zr3, wre),
-    @v128.f32x4_mul(zi3, wim),
-  )
-  let t6 = @v128.f32x4_add(
-    @v128.f32x4_mul(zr3, wim),
-    @v128.f32x4_mul(zi3, wre),
-  )
+  let t5 = @simd.f32x4_sub(@simd.f32x4_mul(zr3, wre), @simd.f32x4_mul(zi3, wim))
+  let t6 = @simd.f32x4_add(@simd.f32x4_mul(zr3, wim), @simd.f32x4_mul(zi3, wre))
   txv_butterflies(r0, i0, r1, i1, t1, t2, t5, t6)
 }
 
@@ -165,28 +159,50 @@ pub fn fft_sr_combine_v128(
     // those two groups as vectors and keep the rest identical.
     for group in 0..<2 {
       let base = if group == 0 { 0 } else { 1 }
-      let ks : Array[Int32] = [
-        base, base + 2, base + 4, base + 6,
-      ]
+      let ks : Array[Int32] = [base, base + 2, base + 4, base + 6]
       let r0 = txv_gather(zr, z + ks[0], z + ks[1], z + ks[2], z + ks[3])
       let i0 = txv_gather(zi, z + ks[0], z + ks[1], z + ks[2], z + ks[3])
       let r1 = txv_gather(
-        zr, z + o1 + ks[0], z + o1 + ks[1], z + o1 + ks[2], z + o1 + ks[3],
+        zr,
+        z + o1 + ks[0],
+        z + o1 + ks[1],
+        z + o1 + ks[2],
+        z + o1 + ks[3],
       )
       let i1 = txv_gather(
-        zi, z + o1 + ks[0], z + o1 + ks[1], z + o1 + ks[2], z + o1 + ks[3],
+        zi,
+        z + o1 + ks[0],
+        z + o1 + ks[1],
+        z + o1 + ks[2],
+        z + o1 + ks[3],
       )
       let zr2 = txv_gather(
-        zr, z + o2 + ks[0], z + o2 + ks[1], z + o2 + ks[2], z + o2 + ks[3],
+        zr,
+        z + o2 + ks[0],
+        z + o2 + ks[1],
+        z + o2 + ks[2],
+        z + o2 + ks[3],
       )
       let zi2 = txv_gather(
-        zi, z + o2 + ks[0], z + o2 + ks[1], z + o2 + ks[2], z + o2 + ks[3],
+        zi,
+        z + o2 + ks[0],
+        z + o2 + ks[1],
+        z + o2 + ks[2],
+        z + o2 + ks[3],
       )
       let zr3 = txv_gather(
-        zr, z + o3 + ks[0], z + o3 + ks[1], z + o3 + ks[2], z + o3 + ks[3],
+        zr,
+        z + o3 + ks[0],
+        z + o3 + ks[1],
+        z + o3 + ks[2],
+        z + o3 + ks[3],
       )
       let zi3 = txv_gather(
-        zi, z + o3 + ks[0], z + o3 + ks[1], z + o3 + ks[2], z + o3 + ks[3],
+        zi,
+        z + o3 + ks[0],
+        z + o3 + ks[1],
+        z + o3 + ks[2],
+        z + o3 + ks[3],
       )
       let wre = txv_gather(tab, c + ks[0], c + ks[1], c + ks[2], c + ks[3])
       let wim = txv_gather(
@@ -201,44 +217,54 @@ pub fn fft_sr_combine_v128(
       )
       store4(
         zr,
-        z + o2 + ks[0], z + o2 + ks[1], z + o2 + ks[2], z + o2 + ks[3],
+        z + o2 + ks[0],
+        z + o2 + ks[1],
+        z + o2 + ks[2],
+        z + o2 + ks[3],
         a2r,
       )
-      store4(
-        zr,
-        z + ks[0], z + ks[1], z + ks[2], z + ks[3],
-        a0r,
-      )
+      store4(zr, z + ks[0], z + ks[1], z + ks[2], z + ks[3], a0r)
       store4(
         zi,
-        z + o3 + ks[0], z + o3 + ks[1], z + o3 + ks[2], z + o3 + ks[3],
+        z + o3 + ks[0],
+        z + o3 + ks[1],
+        z + o3 + ks[2],
+        z + o3 + ks[3],
         a3i,
       )
       store4(
         zi,
-        z + o1 + ks[0], z + o1 + ks[1], z + o1 + ks[2], z + o1 + ks[3],
+        z + o1 + ks[0],
+        z + o1 + ks[1],
+        z + o1 + ks[2],
+        z + o1 + ks[3],
         a1i,
       )
       store4(
         zr,
-        z + o3 + ks[0], z + o3 + ks[1], z + o3 + ks[2], z + o3 + ks[3],
+        z + o3 + ks[0],
+        z + o3 + ks[1],
+        z + o3 + ks[2],
+        z + o3 + ks[3],
         a3r,
       )
       store4(
         zr,
-        z + o1 + ks[0], z + o1 + ks[1], z + o1 + ks[2], z + o1 + ks[3],
+        z + o1 + ks[0],
+        z + o1 + ks[1],
+        z + o1 + ks[2],
+        z + o1 + ks[3],
         a1r,
       )
       store4(
         zi,
-        z + o2 + ks[0], z + o2 + ks[1], z + o2 + ks[2], z + o2 + ks[3],
+        z + o2 + ks[0],
+        z + o2 + ks[1],
+        z + o2 + ks[2],
+        z + o2 + ks[3],
         a2i,
       )
-      store4(
-        zi,
-        z + ks[0], z + ks[1], z + ks[2], z + ks[3],
-        a0i,
-      )
+      store4(zi, z + ks[0], z + ks[1], z + ks[2], z + ks[3], a0i)
     }
   }
 }
@@ -254,10 +280,10 @@ fn store4(
   i3 : Int32,
   v : V128,
 ) -> Unit {
-  a[i0] = @v128.f32x4_extract_lane(v, 0).to_double()
-  a[i1] = @v128.f32x4_extract_lane(v, 1).to_double()
-  a[i2] = @v128.f32x4_extract_lane(v, 2).to_double()
-  a[i3] = @v128.f32x4_extract_lane(v, 3).to_double()
+  a[i0] = @simd.f32x4_extract_lane(v, 0).to_double()
+  a[i1] = @simd.f32x4_extract_lane(v, 1).to_double()
+  a[i2] = @simd.f32x4_extract_lane(v, 2).to_double()
+  a[i3] = @simd.f32x4_extract_lane(v, 3).to_double()
 }
 
 ///|

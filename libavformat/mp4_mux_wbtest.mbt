@@ -44,7 +44,7 @@ test "mp4 muxer: invalid AAC parameters are rejected" {
     Err(_) => ()
   }
   let mux = mp4_aac_muxer_new(44100, 1).unwrap()
-  match mux.write_packet(Bytes::new(0)) {
+  match mux.write_packet(Bytes::make(0, b'\x00')) {
     Ok(_) => fail("empty packet must fail")
     Err(_) => ()
   }

@@ -2,7 +2,8 @@
 /// Vorbis encoder, part 3: windowing/MDCT, audio movement and the frame
 /// driver.  See `vorbis_encode.mbt`.
 
-///| `apply_window_and_mdct` (long window only; the encoder always emits
+///|
+/// `apply_window_and_mdct` (long window only; the encoder always emits
 /// mode 1 = long blocks).
 fn vorbis_enc_apply_window_and_mdct(enc : VorbisEncoder) -> Unit {
   let channels = enc.channels
@@ -42,7 +43,8 @@ fn vorbis_enc_apply_window_and_mdct(enc : VorbisEncoder) -> Unit {
   }
 }
 
-///| `move_audio`: assemble the next 2*window_len samples from the saved
+///|
+/// `move_audio`: assemble the next 2*window_len samples from the saved
 /// overlap plus queued input frames (`sf_size` = frame_size = 64 samples).
 /// `queue` holds interleaved frames of `frame_size * channels` samples each.
 fn vorbis_enc_move_audio(
@@ -96,7 +98,8 @@ fn vorbis_enc_move_audio(
   }
 }
 
-///| `vorbis_encode_frame`: consume queued 64-sample frames; when at least
+///|
+/// `vorbis_encode_frame`: consume queued 64-sample frames; when at least
 /// one full MDCT block is buffered, emit one packet.  Returns the packet
 /// bytes (empty = need more input).
 ///
@@ -142,14 +145,7 @@ pub fn VorbisEncoder::encode(
     let posts : Array[Int32] = Array::make(vorbis_enc_max_floor_values, 0)
     let frame_size2 = 1 << (self.log2_blocksize[1] - 1)
     let ch_base = i * frame_size2
-    vorbis_enc_floor_fit(
-      self,
-      fc,
-      self.coeffs,
-      ch_base,
-      posts,
-      frame_size2,
-    )
+    vorbis_enc_floor_fit(self, fc, self.coeffs, ch_base, posts, frame_size2)
     if !vorbis_enc_floor_encode(
         self,
         fc,
@@ -171,7 +167,8 @@ pub fn VorbisEncoder::encode(
     let ang_off = mapping.angle[i] * half
     for j = 0; j < half; j = j + 1 {
       let a = self.coeffs[ang_off + j]
-      self.coeffs[ang_off + j] = self.coeffs[ang_off + j] - self.coeffs[mag_off + j]
+      self.coeffs[ang_off + j] = self.coeffs[ang_off + j] -
+        self.coeffs[mag_off + j]
       if self.coeffs[mag_off + j] > 0 {
         self.coeffs[ang_off + j] = -self.coeffs[ang_off + j]
       }
@@ -193,12 +190,14 @@ pub fn VorbisEncoder::encode(
   Ok(bw.finish())
 }
 
-///| The xiph-packed three-header extradata.
+///|
+/// The xiph-packed three-header extradata.
 pub fn VorbisEncoder::extradata(self : VorbisEncoder) -> Bytes? {
   self.extradata
 }
 
-///| Interleaved s16-ranged tone frame generator (64-sample frames); public
+///|
+/// Interleaved s16-ranged tone frame generator (64-sample frames); public
 /// for the libavformat E2E test.
 pub fn vorbis_e2e_tone(n : Int32, ch : Int32, t0 : Int32) -> Array[Double] {
   let out : Array[Double] = Array::make(n * ch, 0.0)
@@ -225,13 +224,17 @@ pub fn vorbis_e2e_tone(n : Int32, ch : Int32, t0 : Int32) -> Array[Double] {
   }
   out
 }
-///| Split the xiph-packed extradata into (id, comment, setup); public for
+
+///|
+/// Split the xiph-packed extradata into (id, comment, setup); public for
 /// the libavformat E2E test.
 pub fn vorbis_e2e_split_extradata(data : Bytes) -> (Bytes, Bytes, Bytes) {
   let h0len = data[1].to_int()
   let h1len = data[2].to_int()
   let h0 = data.clamped_view(start=3, end=3 + h0len).to_owned()
   let h1 = data.clamped_view(start=3 + h0len, end=3 + h0len + h1len).to_owned()
-  let h2 = data.clamped_view(start=3 + h0len + h1len, end=data.length()).to_owned()
+  let h2 = data
+    .clamped_view(start=3 + h0len + h1len, end=data.length())
+    .to_owned()
   (h0, h1, h2)
 }

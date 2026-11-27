@@ -242,7 +242,11 @@ test "hevc itx v128: add_residual clips both rails" {
     for bd in [8, 10, 12] {
       let max = (1 << bd) - 1
       for k = 0; k < 3; k = k + 1 {
-        let px = ir_gen(0x5A5A5A5AU + k.reinterpret_as_uint(), stride * size, max)
+        let px = ir_gen(
+          0x5A5A5A5AU + k.reinterpret_as_uint(),
+          stride * size,
+          max,
+        )
         // residual magnitudes big enough to hit both clamps
         let res = ir_gen(
           0x12345678U + size.reinterpret_as_uint(),

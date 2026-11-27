@@ -121,12 +121,22 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
       let x0 = sbx * 64
       let y0 = sby * 64
       let sad64 = av1_enc_kernel_sad_block(
-        src_y, src_y_stride, ref_y, ref_y_stride, w, h, x0, y0, 64, ry[sb], rx[sb],
+        src_y,
+        src_y_stride,
+        ref_y,
+        ref_y_stride,
+        w,
+        h,
+        x0,
+        y0,
+        64,
+        ry[sb],
+        rx[sb],
       )
       let q_sads : Array[Int64] = []
       for q in 0..<4 {
-        let qx0 = x0 + (q % 2) * 32
-        let qy0 = y0 + (q / 2) * 32
+        let qx0 = x0 + q % 2 * 32
+        let qy0 = y0 + q / 2 * 32
         let (iy, ix, _) = match
           av1_enc_me_fullpel_sad_block(
             src_y,
@@ -145,17 +155,7 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
         }
         let (ry8, rx8, sad) = match
           av1_enc_me_subpel_refine_block(
-            src_y,
-            src_y_stride,
-            ref_y,
-            ref_y_stride,
-            w,
-            h,
-            qx0,
-            qy0,
-            32,
-            iy,
-            ix,
+            src_y, src_y_stride, ref_y, ref_y_stride, w, h, qx0, qy0, 32, iy, ix,
           ) {
           Ok(v) => v
           Err(e) => return Err(e)
@@ -194,7 +194,10 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
   let sign_specs : FixedArray[Int32] = FixedArray::make(n_sb * 4 * 1024, 0)
   let chroma_toks : FixedArray[Int32] = FixedArray::make(n_sb * 2 * 1024, 0)
   let chroma_signs : FixedArray[Int32] = FixedArray::make(n_sb * 2 * 1024, 0)
-  let split_chroma_toks : FixedArray[Int32] = FixedArray::make(n_sb * 8 * 256, 0)
+  let split_chroma_toks : FixedArray[Int32] = FixedArray::make(
+    n_sb * 8 * 256,
+    0,
+  )
   let split_chroma_signs : FixedArray[Int32] = FixedArray::make(
     n_sb * 8 * 256,
     0,
@@ -218,10 +221,10 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
         // mv; chroma has no residual (all_skip), so its expected planes
         // are the raw predictions.
         for q in 0..<4 {
-          let qx4 = sbx * 16 + (q % 2) * 8
-          let qy4 = sby * 16 + (q / 2) * 8
-          let qx0 = x0 + (q % 2) * 32
-          let qy0 = y0 + (q / 2) * 32
+          let qx4 = sbx * 16 + q % 2 * 8
+          let qy4 = sby * 16 + q / 2 * 8
+          let qx0 = x0 + q % 2 * 32
+          let qy0 = y0 + q / 2 * 32
           let mvq : (Int32, Int32) = (qy8[sb * 4 + q], qx8[sb * 4 + q])
           let pred_y = av1_enc_mc_predict(
             ref_y,
@@ -307,8 +310,8 @@ pub fn av1_enc_write_me_res_part420_inter_frame_obu(
               0,
               8,
             )
-            let cqx0 = cx0 + (q % 2) * 16
-            let cqy0 = cy0 + (q / 2) * 16
+            let cqx0 = cx0 + q % 2 * 16
+            let cqy0 = cy0 + q / 2 * 16
             for y in 0..<16 {
               for x in 0..<16 {
                 leaf_r[y * 16 + x] = src_p[(cqy0 + y) * src_u_stride + cqx0 + x] -

@@ -50,7 +50,8 @@ fn wmapro_i64_values(b64 : Bytes) -> FixedArray[Int64] {
   FixedArray::makei(raw.length() / 8, i => {
     let mut v = 0L
     for k in 0..<8 {
-      v = v | (raw[i * 8 + k].to_int().reinterpret_as_uint().to_int64() << (k * 8))
+      v = v |
+        (raw[i * 8 + k].to_int().reinterpret_as_uint().to_int64() << (k * 8))
     }
     v
   })
@@ -136,7 +137,10 @@ fn wmapro_check(
         sum += pcm[i * channels + ch].to_int64().abs()
       }
       let d = sum - sums[f * channels + ch]
-      assert_true(d <= 2048 && d >= -2048, msg="\{label}: frame \{f} ch \{ch} sum")
+      assert_true(
+        d <= 2048 && d >= -2048,
+        msg="\{label}: frame \{f} ch \{ch} sum",
+      )
     }
   }
 }
@@ -1255,7 +1259,7 @@ let wmapro_beet_wma : Bytes = wmapro_cat([
   b"QiqbhwxDMTDniLCRbDDh9BRDMTBpQrANQs9TdJNbojJKfob9RRsseUcLSMpEN0sOEVrYTTh8lG68ei2cwsPpqGSkbzHDoZANHRLjGbj0REyfh5zbRlaGN0Lg" +
   b"x8pqjRsowOL7mgeLDMEblVQ93MuUCSeE9QIOQ34NHKcIYc0uhVOcPJkkSBYeSAipWQrybDT80CjLSNnkCNupJLX9jBWSUa9UREv4VjljB5vxhIC2hG49Muy1" +
   b"uiwiMGYgFMGOQLofcQ+B54mLGTmUhB6YybdUJD+Y4ibKTnD/yItSVJOpk2bkI+yhEMM1OpjmT8lX0lw8hyiGJGVKqoaM60xrR7grC5GGYbHhAMK2b5Y7hm5h" +
-  b"ON4ONcgyxpyHyw=="
+  b"ON4ONcgyxpyHyw==",
 ])
 
 ///|
@@ -1302,7 +1306,7 @@ let wmapro_beet_samples : Bytes = wmapro_cat([
   b"1QQEA3gK3/edCIb+wAwIFRAA9Aor9nv2fvM19TH/EPZ98+YDpQGtAk0G/Pp5BMv9jAsCEkL7eg3a9Kv14feC9t0NFvoqAEUAwwcaAH323fBc/kEAIgXYEk4F" +
   b"SAxs/qvzE/g2+y0JNwZL/2L+BA9u9ubwPu3k/n4B1ABHELEGBQ+b+wnzFvu1/FMGBQ66+6v/mwly+73zM+pBBLb5sgtoCv4HkAys8h/1Uvsd/44FBgwn+sUG" +
   b"TQUyAJH2fe1eAEb84hD8BMsJ6gfb9TDy//eS94UHDg63+DcJNAGZCYjvivOLA6P/1hEMBFwLugOU9P7wGfu9+XEHWwgV/SUE9f/XB2PvK/wE/BcBZAsCAuoI" +
-  b"bwEc+ZLv9gCN/DsLlAeb/xsFff1kBCXvXvs="
+  b"bwEc+ZLv9gCN/DsLlAeb/xsFff1kBCXvXvs=",
 ])
 
 ///|
@@ -1315,7 +1319,7 @@ let wmapro_beet_sums : Bytes = wmapro_cat([
   b"bL8OAAAAAACf2gkAAAAAAMFrDQAAAAAAGmcJAAAAAADtNwwAAAAAAEoOCQAAAAAAnF0HAAAAAACaawgAAAAAAKSpBwAAAAAAXZMQAAAAAAClqBUAAAAAAO+5" +
   b"HgAAAAAA3vcmAAAAAADoeS0AAAAAABVGPwAAAAAAhSg7AAAAAADvqkcAAAAAAH7uNgAAAAAA5JpdAAAAAAB0LCkAAAAAAKIoRAAAAAAAP0YwAAAAAAAkMCQA" +
   b"AAAAAIReMAAAAAAA05sYAAAAAACFsSkAAAAAAHjbIwAAAAAAlkwpAAAAAACe6TAAAAAAABTMKwAAAAAApXskAAAAAAB6mDwAAAAAAIr6OQAAAAAAhFZNAAAA" +
-  b"AADbIU0AAAAAAM1RSgAAAAAACbg9AAAAAADgyC0AAAAAAEnvPwAAAAAADfQ3AAAAAAAPaEUAAAAAADiOMwAAAAAAl8MzAAAAAAA="
+  b"AADbIU0AAAAAAM1RSgAAAAAACbg9AAAAAADgyC0AAAAAAEnvPwAAAAAADfQ3AAAAAAAPaEUAAAAAADiOMwAAAAAAl8MzAAAAAAA=",
 ])
 
 ///|
@@ -1654,7 +1658,7 @@ let wmapro_latin_wma : Bytes = wmapro_cat([
   b"Bx0u4EJbHILH4gMCnOKVi+ikoawsI2MJdPbBFKqiPbQRYJ2TY08/Sv9bXdlChgQSxtwy/XWaFkj/9caEfAZMSRAR1wkGRfMvTINhOy0VYnYcuiGIlREtV4Ls" +
   b"4AAc/dDD+6e6aIeiOZv993MYcDI5l/2W7OMOBkcwf993MYcDI5m/33cxhwMsOMjsdBHW7TxhwMjmD/vuzjDgZMzlKAOEnVu5ZylAHCTSVhRmqrOVeBs58h5O" +
   b"10aRPK5FRmNeOpaN5qGufPcXIMhx0R6qwcod5jBxVp2cKMHu68n4iAzSXmhD5T4wpy6/SF/JZqsWc/JEgiaTnTqOkRPYNegDQhA9MuXAIySMZRm+y0W7h82t" +
-  b"riBrASb8BL3/u67TZ8MMBOCx0ejC2BJwa2ymxdn8"
+  b"riBrASb8BL3/u67TZ8MMBOCx0ejC2BJwa2ymxdn8",
 ])
 
 ///|
@@ -1770,7 +1774,7 @@ let wmapro_latin_samples : Bytes = wmapro_cat([
   b"/v8AAAsA/v///93//v8AAOT//v8AACkA/v8AAAgA/f8AAMb//v8AAAMA/f8AADAA/v8AAAEA/f8AANP//v8AADIA/f///yAA/v8AAPf//f///+H//v8AABoA" +
   b"/f///wwA/v8AAAUA/f////X//v8AAAIA/f8AAAQA/v8AAAIA/f8AAPX//v8AAAwA/f8AAAoA/v8AAPv//f8AAAAA/v8AAAMA/f8AAPf//v8AAPH//f8AAA0A" +
   b"/v8AAAMA/f8AAD0E/v8AAPj//f///5b5/v8AAP3//f8AAKP4/v8AAAEA/////1kH/v8AAP///v8AADED/v8AAAIA//8AAJH7/v8AAAIA/f/+/1D9/v8AAP//" +
-  b"/P8AADwE/v8AAP//+/////IA/v8AAP///v///yv+/v8AAP3///8AALb+/v8AAAAA/f///3oB/f8AAP7///8AANIA/f8AAP7//v///zj//f8AAP7//f///w=="
+  b"/P8AADwE/v8AAP//+/////IA/v8AAP///v///yv+/v8AAP3///8AALb+/v8AAAAA/f///3oB/f8AAP7///8AANIA/f8AAP7//v///zj//f8AAP7//f///w==",
 ])
 
 ///|
@@ -1830,7 +1834,7 @@ let wmapro_latin_sums : Bytes = wmapro_cat([
   b"AAA0/AAAAAAAAJ8GAAAAAAAAABgAAAAAAABkXgoAAAAAAAAAAAAAAAAAnBYAAAAAAACjMg4AAAAAAFgHAAAAAAAAzhYAAAAAAADKIw0AAAAAAAAAAAAAAAAA" +
   b"ABAAAAAAAABDQwIAAAAAAOoCAAAAAAAAzBIAAAAAAADsZgEAAAAAAAAAAAAAAAAAABAAAAAAAADaHgEAAAAAAGoEAAAAAAAAABgAAAAAAAB6WQAAAAAAAAAA" +
   b"AAAAAAAAABAAAAAAAABxuAAAAAAAAEgEAAAAAAAAJxcAAAAAAACjGwAAAAAAAAAAAAAAAAAAABAAAAAAAAC8vR4AAAAAAIQDAAAAAAAAFhQAAAAAAACyEgAA" +
-  b"AAAAAAAAAAAAAAAA1hIAAAAAAAClRAwAAAAAAAsFAAAAAAAA"
+  b"AAAAAAAAAAAAAAAA1hIAAAAAAAClRAwAAAAAAAsFAAAAAAAA",
 ])
 
 ///|
@@ -2111,7 +2115,7 @@ let wmapro_latin_wav : Bytes = wmapro_cat([
   b"wMVhSHAJGpIxmBQxxJdJLlJdgGYSLkO+hgR+QAcsOcIJAAYDhSAkM3iWJfAL4cO+HAHAxwAweeIYLSY4AAwclvNostNBtnPXwgwa8219Osj1ONdf0NDdCq+Y" +
   b"qAv4gmg8D2iUFH/vfWWEhXgUjgABz7Sjn7rrDY5zI5m/33cxhwMjmb/fdnGHAyOYP++7mMOBkczf77uYw4GR1IhhDoAAeuzjDgZHMH/fdnGHAxpaqzm8lAHE" +
   b"3qhKoJKAOE0Vs5ylAHCSFWmZyr3WznMcxrleRrST5FTloh2nYhWxU3QOk2x4Qf6LjnN5f8guJF1JigCp1ipqbQrUcbQAoJmlkKxCVtdETtBAqbWKXlXKj6NG" +
-  b"rwF/wAA5+KGj12l2lZ2Eczf77uYw4GRzN/vuzjDgZHMH/fdzGHAyOZv993MYcDI52MRDnBb3ZxhwMjmD/vuzjDgZ4M5Vpg=="
+  b"rwF/wAA5+KGj12l2lZ2Eczf77uYw4GRzN/vuzjDgZHMH/fdzGHAyOZv993MYcDI52MRDnBb3ZxhwMjmD/vuzjDgZ4M5Vpg==",
 ])
 
 ///|
@@ -2190,7 +2194,7 @@ let wmapro_corrupt_samples : Bytes = wmapro_cat([
   b"/f8AAOn//v8AAAAA/f8AABQA/v8AABcA/f8AAOn//v8AAM///f///wgA/v8AAAoA/f////b//v8AAOz//f////3//v8AAPb//f///////v8AAPv//f8AAPb/" +
   b"/v8AAPz//f8AAAkA/v8AAPb//f8AAPf//v8AAAcA/f8AAAgA/v8AAP3//f8AAOf//v8AAAsA/f8AABMA/v8AAP7//f8AAGUG/v8AAAYA/f8AAD8D/v8AAAMA" +
   b"/P///4D1/v8AAAAA+/8AAOz+/v8AAAIA/P8BAJ8G/v8AAP3//P8AADL//v8AAPn///8AAOz6/v8AAP3//v///8kA/v8AAPz//P8AALoC/v8AAPz//v8AANT/" +
-  b"/v8AAAAA/v///zb+/v8AAPr//v8AAMn//f8AAP3//f8AAEsB/f8AAP3//f8AACQA/f8AAP3//v8AAA=="
+  b"/v8AAAAA/v///zb+/v8AAPr//v8AAMn//f8AAP3//f8AAEsB/f8AAP3//f8AACQA/f8AAP3//v8AAA==",
 ])
 
 ///|
@@ -2230,7 +2234,7 @@ let wmapro_corrupt_sums : Bytes = wmapro_cat([
   b"AABkXgoAAAAAAAAAAAAAAAAAnBYAAAAAAACjMg4AAAAAAFgHAAAAAAAAzhYAAAAAAADKIw0AAAAAAAAAAAAAAAAAABAAAAAAAABDQwIAAAAAAOoCAAAAAAAA" +
   b"zBIAAAAAAADsZgEAAAAAAAAAAAAAAAAAABAAAAAAAADaHgEAAAAAAGoEAAAAAAAAABgAAAAAAAB6WQAAAAAAAAAAAAAAAAAAABAAAAAAAABxuAAAAAAAAEgE" +
   b"AAAAAAAAJxcAAAAAAACjGwAAAAAAAAAAAAAAAAAAABAAAAAAAAC8vR4AAAAAAIQDAAAAAAAAFhQAAAAAAACyEgAAAAAAAAAAAAAAAAAA1hIAAAAAAACkRAwA" +
-  b"AAAAAAsFAAAAAAAA"
+  b"AAAAAAsFAAAAAAAA",
 ])
 
 ///|
@@ -2241,18 +2245,18 @@ test "wmapro: a corrupt frame is dropped and the stream goes on" {
   // drops the same frames (checked against the reference decode).
   let wav = wmapro_load(wmapro_latin_wav)
   let off = wmapro_latin_wav_data + 8192
-  let bad = Bytes::from_array(Array::makei(8192, i => if i == 0 {
-    0x10
-  } else if i == 4 {
-    0x64
-  } else {
-    0x00
-  }))
-  let data = wmapro_cat([
-    wav[:off].to_owned(),
-    bad,
-    wav[off + 8192:].to_owned(),
-  ])
+  let bad = Bytes::from_array(
+    Array::makei(8192, i => {
+      if i == 0 {
+        0x10
+      } else if i == 4 {
+        0x64
+      } else {
+        0x00
+      }
+    }),
+  )
+  let data = wmapro_cat([wav[:off].to_owned(), bad, wav[off + 8192:].to_owned()])
   wmapro_check(
     data,
     "wav",
@@ -2310,15 +2314,13 @@ test "wmapro: the latin stream in a WAV (format tag 0x0162)" {
 ///|
 /// The demuxed packets and the decoder's extradata of the latin
 /// file, for the packet level tests.
-fn wmapro_latin_packets()
-  -> (@libavcodec.WmaProDecoder, Array[Bytes]) raise {
+fn wmapro_latin_packets() -> (@libavcodec.WmaProDecoder, Array[Bytes]) raise {
   let mf = @libavformat.MediaFile::open(wmapro_load(wmapro_latin_wma))
   let extradata = match mf.streams()[0].extradata {
     Some(v) => v
     None => fail("latin: no extradata")
   }
-  let dec = match
-    @libavcodec.wmapro_decoder_new(extradata, 48000, 6, 8192) {
+  let dec = match @libavcodec.wmapro_decoder_new(extradata, 48000, 6, 8192) {
     Ok(dec) => dec
     Err(e) => fail("latin: open: \{e}")
   }
@@ -2428,19 +2430,36 @@ test "wmapro: invalid and unsupported stream headers" {
   }
   // extradata: valid bits at 0, channel mask at 2, decode flags at 14.
   // 14-bit blocks: frame_len_bits 13 + 1 (flags & 6 == 2).
-  match @libavcodec.wmapro_decoder_new(wmapro_with_flags(good, 0xE2), 100000, 6, 8192) {
+  match
+    @libavcodec.wmapro_decoder_new(
+      wmapro_with_flags(good, 0xE2),
+      100000,
+      6,
+      8192,
+    ) {
     Err(e) => assert_eq(e, "wmapro: 14-bit block sizes are not supported")
     Ok(_) => fail("14-bit blocks accepted")
   }
   // 128 subframes (flags & 0x38 == 0x38).
-  match @libavcodec.wmapro_decoder_new(wmapro_with_flags(good, 0xF8), 48000, 6, 8192) {
+  match
+    @libavcodec.wmapro_decoder_new(
+      wmapro_with_flags(good, 0xF8),
+      48000,
+      6,
+      8192,
+    ) {
     Err(e) => assert_eq(e, "wmapro: invalid number of subframes 128")
     Ok(_) => fail("128 subframes accepted")
   }
   // The 5.1 channel mask (0x3f) decides the decoder's channel count.
-  match @libavcodec.wmapro_decoder_new(wmapro_with_flags(good, 0xE0), 48000, 3, 8192) {
+  match
+    @libavcodec.wmapro_decoder_new(
+      wmapro_with_flags(good, 0xE0),
+      48000,
+      3,
+      8192,
+    ) {
     Err(e) => assert_eq(e, "wmapro: more than 8 channels are not supported")
     Ok(_) => fail("9 channels accepted")
   }
 }
-

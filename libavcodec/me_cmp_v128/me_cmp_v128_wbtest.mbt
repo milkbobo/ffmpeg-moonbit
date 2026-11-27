@@ -44,7 +44,14 @@ fn mec_ref(
 ///|
 test "me_cmp v128: sad/sse equality across window geometries" {
   let geoms : Array[(Int32, Int32)] = [
-    (4, 4), (8, 8), (16, 16), (8, 4), (16, 8), (4, 8), (32, 16), (64, 64),
+    (4, 4),
+    (8, 8),
+    (16, 16),
+    (8, 4),
+    (16, 8),
+    (4, 8),
+    (32, 16),
+    (64, 64),
   ]
   let stride : Int32 = 96
   let plane_n = 96 * 96
@@ -76,22 +83,13 @@ test "me_cmp v128: flat packed kernels and boundaries" {
   let n : Int32 = 4096
   let src = mec_gen_plane(0xA5A5A5A5U, n)
   let rec = mec_gen_plane(0x5A5A5A5AU, n)
-  let pa = mec_pack_plane_u8_fx(
-    FixedArray::from_array(src[:]),
-    n,
-  )
-  let pb = mec_pack_plane_u8_fx(
-    FixedArray::from_array(rec[:]),
-    n,
-  )
+  let pa = mec_pack_plane_u8_fx(FixedArray::from_array(src[:]), n)
+  let pb = mec_pack_plane_u8_fx(FixedArray::from_array(rec[:]), n)
   assert_eq(
     mec_sad_packed_v128(pa, pb, n),
     mec_ref(src, rec, 0, n, n, 1, false),
   )
-  assert_eq(
-    mec_sse_packed_v128(pa, pb, n),
-    mec_ref(src, rec, 0, n, n, 1, true),
-  )
+  assert_eq(mec_sse_packed_v128(pa, pb, n), mec_ref(src, rec, 0, n, n, 1, true))
   // extremes: identical planes, and all-0 vs all-255
   let z = mec_pack_plane_u8_fx(FixedArray::make(256, 0), 256)
   let m = mec_pack_plane_u8_fx(FixedArray::make(256, 255), 256)

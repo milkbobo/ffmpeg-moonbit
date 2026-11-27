@@ -4,7 +4,7 @@
 /// FFmpeg's `av_strnstr` is a byte (here: character) scan; the vectorised form
 /// is the usual "memchr the first needle character, then verify" strategy:
 /// scan the haystack 8 UTF-16 code units at a time with
-/// `@v128.v128_load_i16x8`, compare against a splat of the needle's first
+/// `@simd.v128_load_i16x8`, compare against a splat of the needle's first
 /// character (`i16x8_eq` + `i16x8_bitmask`), and only run the scalar
 /// full-needle check on the surviving candidate positions.
 ///
@@ -12,7 +12,7 @@
 /// `i in [0, min(hay_length - nl, h.length() - nl)]` the scalar loop visits,
 /// and the first hit is returned.
 ///
-/// UTF-16 caveat: `@v128.v128_load_i16x8` reads *code units*, while the port's
+/// UTF-16 caveat: `@simd.v128_load_i16x8` reads *code units*, while the port's
 /// semantics index `String::to_array()` *code points*. These coincide only for
 /// BMP-only text, so the SIMD path is taken only when both `haystack` and
 /// `needle` are BMP (`length()` == code-point count); otherwise the scalar
@@ -63,12 +63,12 @@ pub fn av_strnstr_v128(
     return None
   }
   let c0 : UInt16 = (n[0].to_int() & 0xFFFF).to_uint16()
-  let first = @v128.i16x8_const(c0, c0, c0, c0, c0, c0, c0, c0)
+  let first = @simd.i16x8_const(c0, c0, c0, c0, c0, c0, c0, c0)
   let hlen = h.length()
   let mut i = 0
   while i + 8 <= hlen {
-    let v = @v128.v128_load_i16x8(haystack, i)
-    let m = @v128.i16x8_bitmask(@v128.i16x8_eq(v, first))
+    let v = @simd.v128_load_i16x8(haystack, i)
+    let m = @simd.i16x8_bitmask(@simd.i16x8_eq(v, first))
     for k = 0; k < 8; k = k + 1 {
       if ((m >> k) & 1) == 1 {
         let pos = i + k

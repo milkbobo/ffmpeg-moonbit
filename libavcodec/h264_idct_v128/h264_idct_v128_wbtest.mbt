@@ -174,7 +174,7 @@ test "h264 idct v128: idct_add equality across depths and strides" {
       }
       let off = 3 * stride + 5
       hr_idct_add(d1, off, stride, b1, 0, bit_depth)
-      h264_idct_add_v128(d2, off, stride, b2, 0, bit_depth=bit_depth)
+      h264_idct_add_v128(d2, off, stride, b2, 0, bit_depth~)
       for i = 0; i < plane_n; i = i + 1 {
         assert_eq(d2[i], d1[i])
       }

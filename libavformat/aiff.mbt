@@ -277,7 +277,11 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
   }
   // Use five-byte groups between packets, retaining complete codewords
   // in the final partial group as well.
-  let data_size = if g726 { available_bytes.to_int64() } else { packet_blocks * block_align.to_int64() }
+  let data_size = if g726 {
+    available_bytes.to_int64()
+  } else {
+    packet_blocks * block_align.to_int64()
+  }
   let packet_size = if ima4 {
     block_align
   } else {
@@ -293,14 +297,28 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
     } else {
       packet_size
     }
-    let duration = if g726 { size * 8 / 5 } else { size / block_align * block_duration }
+    let duration = if g726 {
+      size * 8 / 5
+    } else {
+      size / block_align * block_duration
+    }
     packets.push({ pos, size, pts, duration, })
     pos = pos + size.to_int64()
     pts = pts + duration.to_int64()
     left = left - size.to_int64()
   }
   Ok({
-    format: { codec, channels, sample_rate, bits: if g726 { 5 } else { bits }, block_align, },
+    format: {
+      codec,
+      channels,
+      sample_rate,
+      bits: if g726 {
+        5
+      } else {
+        bits
+      },
+      block_align,
+    },
     data_offset: data_offset.to_int64(),
     data_size,
     sample_count,

@@ -29,7 +29,9 @@ fn spdif_write_burst(
     0x15 | 0x16 => size
     _ => aligned_size * 8
   }
-  guard length_code <= 0xffff else { return Err("spdif: payload exceeds length field") }
+  guard length_code <= 0xffff else {
+    return Err("spdif: payload exceeds length field")
+  }
   guard out.length() <= 0x7fffffff - period else {
     return Err("spdif: output too large")
   }
@@ -62,11 +64,13 @@ pub fn av_spdif_mux(
   data : Bytes,
   codec~ : String,
   big_endian~ : Bool = false,
-  dtshd_rate~ : Int = 0,
+  dtshd_rate~ : Int32 = 0,
 ) -> Result[Bytes, String] {
   if dtshd_rate != 0 {
     guard codec == "dts" && dtshd_rate > 0 && dtshd_rate <= 768000 else {
-      return Err("spdif: DTS type IV requires DTS and a carrier rate of 1 to 768000 Hz")
+      return Err(
+        "spdif: DTS type IV requires DTS and a carrier rate of 1 to 768000 Hz",
+      )
     }
     return spdif_mux_dtshd(data, dtshd_rate, big_endian)
   }
@@ -109,7 +113,12 @@ pub fn av_spdif_mux(
     let written = match codec {
       "ac3" => {
         let bitstream_mode = payload[5].to_int() & 7
-        spdif_write_burst(out, payload, 0x01 | (bitstream_mode << 8), big_endian~)
+        spdif_write_burst(
+          out,
+          payload,
+          0x01 | (bitstream_mode << 8),
+          big_endian~,
+        )
       }
       "dts" => {
         let kind = match frame.duration {
@@ -122,7 +131,13 @@ pub fn av_spdif_mux(
           [0xfe, 0x7f, 0x01, 0x80, ..] | [0xff, 0x1f, 0x00, 0xe8, ..] => true
           _ => false
         }
-        spdif_write_burst(out, payload, kind, big_endian~, payload_little_endian~)
+        spdif_write_burst(
+          out,
+          payload,
+          kind,
+          big_endian~,
+          payload_little_endian~,
+        )
       }
       "eac3" => {
         burst_samples += frame.duration
@@ -132,7 +147,12 @@ pub fn av_spdif_mux(
         if burst_samples < 1536 {
           continue
         }
-        let written = spdif_write_burst(out, data[burst_start:end], 0x15, big_endian~)
+        let written = spdif_write_burst(
+          out,
+          data[burst_start:end],
+          0x15,
+          big_endian~,
+        )
         burst_samples = 0
         burst_start = end
         written
@@ -150,7 +170,8 @@ pub fn av_spdif_mux(
         aac_config = Some(config)
         spdif_write_burst(out, payload, kind, big_endian~)
       }
-      _ => spdif_write_burst(out, payload, spdif_mpeg_kind(payload), big_endian~)
+      _ =>
+        spdif_write_burst(out, payload, spdif_mpeg_kind(payload), big_endian~)
     }
     if written is Err(e) {
       return Err(e)

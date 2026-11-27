@@ -21,7 +21,8 @@ fn playback_ts_index_truehd(
       continue
     }
     let decoder = @libavcodec.MlpDecoder::new(true)
-    guard decoder.decode_packet(es[first:first + size].to_owned()) is Ok(Some(info)) else {
+    guard decoder.decode_packet(es[first:first + size].to_owned())
+      is Ok(Some(info)) else {
       continue
     }
     let samples = info.samples.length() / info.channels
@@ -34,13 +35,22 @@ fn playback_ts_index_truehd(
       }
       let end = pos + size
       frames.push({
-        start: pos, end, data: es[pos:end].to_owned(), samples,
+        start: pos,
+        end,
+        data: es[pos:end].to_owned(),
+        samples,
         keyframe: ts_truehd_major_sync(es, pos),
       })
       pos = end
     }
     ts_index_audio_frames(
-      demux, stream_index, info.sample_rate, pes, frames, output, floor_duration=true,
+      demux,
+      stream_index,
+      info.sample_rate,
+      pes,
+      frames,
+      output,
+      floor_duration=true,
     )
     return Some((info.sample_rate, info.channels))
   }

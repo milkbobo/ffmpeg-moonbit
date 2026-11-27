@@ -586,7 +586,17 @@ pub fn av1_enc_me_subpel_refine_block(
   for c in cands {
     let cand8 : (Int32, Int32) = (base8.0 + c.0, base8.1 + c.1)
     let sad = av1_enc_kernel_sad_block(
-      src, src_stride, refimg, ref_stride, width, height, x0, y0, size, cand8.0, cand8.1,
+      src,
+      src_stride,
+      refimg,
+      ref_stride,
+      width,
+      height,
+      x0,
+      y0,
+      size,
+      cand8.0,
+      cand8.1,
     )
     if sad < best {
       best = sad
@@ -596,7 +606,17 @@ pub fn av1_enc_me_subpel_refine_block(
   for c in qcands {
     let cand8 : (Int32, Int32) = (best8.0 + c.0, best8.1 + c.1)
     let sad = av1_enc_kernel_sad_block(
-      src, src_stride, refimg, ref_stride, width, height, x0, y0, size, cand8.0, cand8.1,
+      src,
+      src_stride,
+      refimg,
+      ref_stride,
+      width,
+      height,
+      x0,
+      y0,
+      size,
+      cand8.0,
+      cand8.1,
     )
     if sad < best {
       best = sad
@@ -607,7 +627,17 @@ pub fn av1_enc_me_subpel_refine_block(
     for c in ecands {
       let cand8 : (Int32, Int32) = (best8.0 + c.0, best8.1 + c.1)
       let sad = av1_enc_kernel_sad_block(
-        src, src_stride, refimg, ref_stride, width, height, x0, y0, size, cand8.0, cand8.1,
+        src,
+        src_stride,
+        refimg,
+        ref_stride,
+        width,
+        height,
+        x0,
+        y0,
+        size,
+        cand8.0,
+        cand8.1,
       )
       if sad < best {
         best = sad

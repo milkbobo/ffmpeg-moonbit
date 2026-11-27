@@ -3,18 +3,18 @@
 /// libavcodec/mace.c by Laszlo Torok, adapted by Francois Revol.
 /// LGPL-2.1-or-later.
 priv struct MaceChannel {
-  mut index : Int
-  mut factor : Int
-  mut prev2 : Int
-  mut previous : Int
-  mut level : Int
+  mut index : Int32
+  mut factor : Int32
+  mut prev2 : Int32
+  mut previous : Int32
+  mut level : Int32
 }
 
 ///|
 /// Stateful decoder for one mono or stereo MACE stream.
 struct MaceDecoder {
   channels : FixedArray[MaceChannel]
-  bytes_per_channel : Int
+  bytes_per_channel : Int32
 }
 
 ///|
@@ -28,7 +28,7 @@ struct MaceDecoder {
 /// ```
 pub fn mace_decoder_new(
   codec : String,
-  channels : Int,
+  channels : Int32,
 ) -> Result[MaceDecoder, String] {
   let bytes_per_channel = match codec {
     "mace3" => 2
@@ -41,13 +41,21 @@ pub fn mace_decoder_new(
   Ok({
     bytes_per_channel,
     channels: FixedArray::makei(channels, _ => {
-      { index: 0, factor: 0, prev2: 0, previous: 0, level: 0 }
+      index: 0,
+      factor: 0,
+      prev2: 0,
+      previous: 0,
+      level: 0,
     }),
   })
 }
 
 ///|
-fn MaceChannel::read_delta(self : MaceChannel, code : Int, middle : Bool) -> Int {
+fn MaceChannel::read_delta(
+  self : MaceChannel,
+  code : Int32,
+  middle : Bool,
+) -> Int32 {
   let (adjust, values, stride) = if middle {
     (mace_index2, mace_delta2, 2)
   } else {
@@ -65,7 +73,7 @@ fn MaceChannel::read_delta(self : MaceChannel, code : Int, middle : Bool) -> Int
 
 ///|
 // QuickTime's predictor saturates negative overflow to -32767.
-fn mace_clip(value : Int) -> Int {
+fn mace_clip(value : Int32) -> Int32 {
   if value < -32768 {
     -32767
   } else {
@@ -75,19 +83,19 @@ fn mace_clip(value : Int) -> Int {
 
 ///|
 // Expand the signed top byte by replicating its bit pattern.
-fn mace_s16(value : Int) -> Int {
+fn mace_s16(value : Int32) -> Int32 {
   (value & -256) | ((value >> 8) & 255)
 }
 
 ///|
-fn MaceChannel::decode3(self : MaceChannel, delta : Int) -> Int {
+fn MaceChannel::decode3(self : MaceChannel, delta : Int32) -> Int32 {
   let current = mace_clip(delta + self.level)
   self.level = current - (current >> 3)
   mace_s16(current)
 }
 
 ///|
-fn MaceChannel::decode6(self : MaceChannel, delta : Int) -> (Int, Int) {
+fn MaceChannel::decode6(self : MaceChannel, delta : Int32) -> (Int32, Int32) {
   self.factor = if (self.previous ^ delta) >= 0 {
     (self.factor + 506).min(32767)
   } else {
@@ -111,7 +119,7 @@ fn MaceChannel::decode6(self : MaceChannel, delta : Int) -> (Int, Int) {
 pub fn MaceDecoder::decode_packet(
   self : MaceDecoder,
   packet : Bytes,
-) -> Result[Array[Int], String] {
+) -> Result[Array[Int32], String] {
   let channels = self.channels.length()
   let group_size = channels * self.bytes_per_channel
   let groups = packet.length() / group_size

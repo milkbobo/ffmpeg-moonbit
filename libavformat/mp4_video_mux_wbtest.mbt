@@ -46,7 +46,7 @@ test "mp4 muxer: invalid H.264 parameters are rejected" {
     Err(_) => ()
   }
   let mux = mp4_h264_muxer_new(64, 48, avcc).unwrap()
-  match mux.write_packet(Bytes::new(0)) {
+  match mux.write_packet(Bytes::make(0, b'\x00')) {
     Ok(_) => fail("empty packet must fail")
     Err(_) => ()
   }

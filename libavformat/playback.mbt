@@ -18,6 +18,7 @@
 
 ///|
 /// The failure classes of the playback pipeline.
+#derive(Debug)
 pub(all) suberror MediaError {
   /// The probe layer found no matching demuxer.
   FormatNotFound
@@ -29,7 +30,7 @@ pub(all) suberror MediaError {
   UnsupportedCodec(String)
   /// A packet failed to decode.
   DecodeError(String)
-} derive(Debug)
+}
 
 ///|
 pub extend MediaError with @moonbitlang/core/debug.Debug::{to_repr}
@@ -63,11 +64,12 @@ pub fn MediaError::code(self : MediaError) -> String {
 
 ///|
 /// The kind of an elementary stream.
+#derive(Eq)
 pub(all) enum MediaType {
   Audio
   Video
   Subtitle
-} derive(Eq)
+}
 
 ///|
 pub extend MediaType with Eq::{not_equal, equal}
@@ -75,6 +77,7 @@ pub extend MediaType with Eq::{not_equal, equal}
 ///|
 /// One elementary stream's parameters, the subset the facade's consumers
 /// need (the per-codec decoders read the rest from `extradata`).
+#derive(Eq)
 pub(all) struct StreamInfo {
   index : Int32
   media_type : MediaType
@@ -87,7 +90,7 @@ pub(all) struct StreamInfo {
   width : Int32
   height : Int32
   extradata : Bytes?
-} derive(Eq)
+}
 
 ///|
 pub extend StreamInfo with Eq::{not_equal, equal}
@@ -439,7 +442,20 @@ pub fn MediaFile::open(
         cursor: [0],
       }
     }
-    Gsm | Sbc | Svx | Voc | Qoa | G722 | G726 | G726Le | Wsaud | Dfpwm | Aptx | AptxHd | Roq | Alp => {
+    Gsm
+    | Sbc
+    | Svx
+    | Voc
+    | Qoa
+    | G722
+    | G726
+    | G726Le
+    | Wsaud
+    | Dfpwm
+    | Aptx
+    | AptxHd
+    | Roq
+    | Alp => {
       let telephony_bits = if format is G722 { g722_bits } else { g726_bits }
       let opened = match format {
         Sbc => av_sbc_open(data)
@@ -573,7 +589,10 @@ pub fn MediaFile::open(
             "spdif: ADTS playback requires one raw data block per frame",
           )
         }
-        playback_adts_stream_info(info, track.packet_data(data, track.frames[0]))
+        playback_adts_stream_info(
+          info,
+          track.packet_data(data, track.frames[0]),
+        )
       } else {
         info
       }
@@ -650,10 +669,15 @@ pub fn MediaFile::open(
           demux.packet_data(data, demux.packets[0]),
         )
       } else if info.codec_id == "aac" &&
-        demux.packets.get(0) is Some(first) && first.duration == 1024 {
+        demux.packets.get(0) is Some(first) &&
+        first.duration == 1024 {
         // ADTS samples in fmt/fact describe the core; probe the first frame
         // for SBR/PS without making the packet reader require a decoder.
-        playback_adts_stream_info(info, demux.packet_data(data, first), asc?=info.extradata) catch {
+        playback_adts_stream_info(
+          info,
+          demux.packet_data(data, first),
+          asc?=info.extradata,
+        ) catch {
           _ => info
         }
       } else {
@@ -1450,7 +1474,12 @@ pub fn AudioDecoder::open(info : StreamInfo) -> AudioDecoder raise MediaError {
       { dec: RoqDpcm, channels: info.channels, sample_rate: info.sample_rate, }
     "adpcm_ima_alp" =>
       match @libavcodec.AlpDecoder::new(info.channels) {
-        Ok(dec) => { dec: ImaAlp(dec), channels: info.channels, sample_rate: info.sample_rate, }
+        Ok(dec) =>
+          {
+            dec: ImaAlp(dec),
+            channels: info.channels,
+            sample_rate: info.sample_rate,
+          }
         Err(error) => raise DecodeError(error)
       }
     "pcm_bluray" =>
@@ -2438,7 +2467,13 @@ pub fn AudioDecoder::decode(
         Err(error) => raise DecodeError(error)
       }
       Some(
-        playback_integer_audio_frame(pcm, 2, self.sample_rate, 2147483648.0, pkt.pts),
+        playback_integer_audio_frame(
+          pcm,
+          2,
+          self.sample_rate,
+          2147483648.0,
+          pkt.pts,
+        ),
       )
     }
     Dfpwm(dec) => {
@@ -3035,7 +3070,14 @@ pub fn decode_audio_file(
       _ => ()
     }
   }
-  let mf = MediaFile::open(data, filename~, g726_bits~, g722_bits~, aptx_rate~, tta_verify_crc~)
+  let mf = MediaFile::open(
+    data,
+    filename~,
+    g726_bits~,
+    g722_bits~,
+    aptx_rate~,
+    tta_verify_crc~,
+  )
   if mf.source is RawQoa(track, _) && sample_budget is Some(limit) {
     guard track.total_samples * track.channels.to_int64() <= limit else {
       raise DecodeError("decoded audio sample budget exceeded")

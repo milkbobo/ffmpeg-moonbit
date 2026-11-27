@@ -133,6 +133,7 @@ fn amr_dot(
 }
 
 ///|
+
 ///|
 /// `ff_set_min_dist_lsf`.
 fn amr_set_min_dist_lsf(lsf : Array[Double], min_spacing : Double) -> Unit {
@@ -1157,7 +1158,11 @@ fn amr_set_fixed_gain(
     pred_table[3] * prediction_error[3]
   let denom = if fixed_mean_energy != 0.0 { fixed_mean_energy } else { 1.0 }
   let val = amr_f32(
-    fixed_gain_factor * @math.pow(2.0, 3.3219280948873623478703194294894 * (0.05 * (pred + energy_mean))) /
+    fixed_gain_factor *
+    @math.pow(
+      2.0,
+      3.3219280948873623478703194294894 * (0.05 * (pred + energy_mean)),
+    ) /
     denom.sqrt(),
   )
   prediction_error[0] = prediction_error[1]
@@ -1559,7 +1564,13 @@ pub fn AmrNbDecoder::decode_frame(
       return Err("amr: pitch lag 0 is not allowed")
     }
     amr_set_fixed_vector(self.fixed_vector, 0, fixed, 1.0, amr_subframe_size)
-    let mean_energy = amr_dot(self.fixed_vector, 0, self.fixed_vector, 0, amr_subframe_size) /
+    let mean_energy = amr_dot(
+        self.fixed_vector,
+        0,
+        self.fixed_vector,
+        0,
+        amr_subframe_size,
+      ) /
       amr_subframe_size.to_double()
     self.fixed_gain[4] = amr_set_fixed_gain(
       fixed_gain_factor.val,
@@ -1569,9 +1580,9 @@ pub fn AmrNbDecoder::decode_frame(
       amr_energy_pred_fac,
     )
     for i = 0; i < amr_subframe_size; i = i + 1 {
-      self.excitation_buf[amr_excitation_off + i] = amr_f32(self.excitation_buf[amr_excitation_off +
-        i] *
-        self.pitch_gain[4])
+      self.excitation_buf[amr_excitation_off + i] = amr_f32(
+        self.excitation_buf[amr_excitation_off + i] * self.pitch_gain[4],
+      )
     }
     amr_set_fixed_vector(
       self.excitation_buf,
@@ -1670,7 +1681,5 @@ fn amr_f32(x : Double) -> Double {
     m = m >> 1
     e2 += 1
   }
-  (sign |
-  ((e2 + 1023).to_uint64() << 52) |
-  ((m & 0x7FFFFFUL) << 29)).reinterpret_as_double()
+  (sign | ((e2 + 1023).to_uint64() << 52) | ((m & 0x7FFFFFUL) << 29)).reinterpret_as_double()
 }

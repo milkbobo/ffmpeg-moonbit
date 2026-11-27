@@ -102,8 +102,7 @@ fn lr_lpc32(
   for i = pred_order; i < blocksize; i = i + 1 {
     let mut sum : Int64 = 0L
     for j = 0; j < pred_order; j = j + 1 {
-      sum = sum +
-        coeffs[j].to_int64() * decoded[i - pred_order + j].to_int64()
+      sum = sum + coeffs[j].to_int64() * decoded[i - pred_order + j].to_int64()
     }
     decoded[i] = (decoded[i].to_int64() + (sum >> qlevel)).to_int()
   }
@@ -132,7 +131,11 @@ fn lr_lpc16(
 /// f32 product rounded to nearest-even. (The C applies no int24 clamp here;
 /// the caller guarantees the range, and the SIMD kernel keeps a clamp only
 /// as a belt-and-braces guard.)
-fn lr_float_to_fixed24(dst : Array[Int32], src : Array[Float], len : Int32) -> Unit {
+fn lr_float_to_fixed24(
+  dst : Array[Int32],
+  src : Array[Float],
+  len : Int32,
+) -> Unit {
   for i = 0; i < len; i = i + 1 {
     let scaled = Float::from_double(src[i].to_double() * 16777216.0)
     // round-half-to-even, the `lrintf` default mode
@@ -220,9 +223,7 @@ test "lossless dsp v128: FLAC decorrelation (indep/ls/rs/ms) bit-exact" {
         let c0 = lr_gen(0x33333333U, len + 8, 1000)
         let c1 = lr_copy(c0)
         lr_decorrelate_ls(b0, o0, c0, o1, in0, i0, in1, i1, len, shift)
-        flac_decorrelate_ls_v128(
-          b1, o0, c1, o1, in0, i0, in1, i1, len, shift,
-        )
+        flac_decorrelate_ls_v128(b1, o0, c1, o1, in0, i0, in1, i1, len, shift)
         assert_true(lr_same(b0, b1))
         assert_true(lr_same(c0, c1))
         // rs
@@ -231,9 +232,7 @@ test "lossless dsp v128: FLAC decorrelation (indep/ls/rs/ms) bit-exact" {
         let e0 = lr_gen(0x55555555U, len + 8, 1000)
         let e1 = lr_copy(e0)
         lr_decorrelate_rs(d0, o0, e0, o1, in0, i0, in1, i1, len, shift)
-        flac_decorrelate_rs_v128(
-          d1, o0, e1, o1, in0, i0, in1, i1, len, shift,
-        )
+        flac_decorrelate_rs_v128(d1, o0, e1, o1, in0, i0, in1, i1, len, shift)
         assert_true(lr_same(d0, d1))
         assert_true(lr_same(e0, e1))
         // ms
@@ -242,9 +241,7 @@ test "lossless dsp v128: FLAC decorrelation (indep/ls/rs/ms) bit-exact" {
         let g0 = lr_gen(0x77777777U, len + 8, 1000)
         let g1 = lr_copy(g0)
         lr_decorrelate_ms(f0, o0, g0, o1, in0, i0, in1, i1, len, shift)
-        flac_decorrelate_ms_v128(
-          f1, o0, g1, o1, in0, i0, in1, i1, len, shift,
-        )
+        flac_decorrelate_ms_v128(f1, o0, g1, o1, in0, i0, in1, i1, len, shift)
         assert_true(lr_same(f0, f1))
         assert_true(lr_same(g0, g1))
       }
@@ -277,7 +274,15 @@ test "lossless dsp v128: FLAC decorrelation wrapping extremes" {
 
 ///|
 test "lossless dsp v128: FLAC lpc32 and lpc16 reconstruction" {
-  for (pred_order, qlevel) in [(1, 9), (2, 12), (4, 15), (8, 12), (12, 15), (3, 5)] {
+  for
+    (pred_order, qlevel) in [
+      (1, 9),
+      (2, 12),
+      (4, 15),
+      (8, 12),
+      (12, 15),
+      (3, 5),
+    ] {
     for blocksize in [pred_order + 1, 16, 64, 257] {
       for k = 0; k < 2; k = k + 1 {
         let seed = 0xABCDEF01U +
@@ -306,8 +311,8 @@ test "lossless dsp v128: FLAC lpc32 and lpc16 reconstruction" {
 ///|
 test "lossless dsp v128: AC-3 float_to_fixed24 rounding and clamping" {
   let vals : Array[Float] = [
-    0.0, 1.0, -1.0, 0.5, -0.5, 0.25, 0.75, 1.5, 1.4999999, 1.0e-8, -1.0e-8,
-    100.0, -100.0, 1.0e30, -1.0e30, 0.0000001, 0.0000003, 127.99999, -128.0,
+    0.0, 1.0, -1.0, 0.5, -0.5, 0.25, 0.75, 1.5, 1.4999999, 1.0e-8, -1.0e-8, 100.0,
+    -100.0, 1.0e30, -1.0e30, 0.0000001, 0.0000003, 127.99999, -128.0,
   ]
   let n = vals.length()
   let a : Array[Int32] = Array::make(n, 0)

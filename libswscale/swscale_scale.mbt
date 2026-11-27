@@ -170,9 +170,10 @@ fn sws_rgb_full_chroma_coeffs(
 }
 
 ///|
+#derive(Debug)
 pub(all) suberror SwsScaleError {
   InvalidScaleConfig(String)
-} derive(Debug)
+}
 
 ///|
 pub extend SwsScaleError with @moonbitlang/core/debug.Debug::{to_repr}

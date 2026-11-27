@@ -2,7 +2,7 @@ import {
   "milkbobo/ffmpeg-moonbit/libavutil",
   "moonbitlang/core/debug",
   "moonbitlang/core/math",
-  "moonbitlang/core/v128",
+  "moonbitlang/core/simd",
 }
 
 import {
@@ -14,5 +14,6 @@ warnings = "-alert_experimental"
 // Keep SIMD tests on the same backends as their implementations.
 
 options(
+  "allow-experimental-packages": [ "moonbitlang/core/simd" ],
   targets: { "audio_convert_v128_wbtest.mbt": [ "native", "wasm", "wasm-gc" ] },
 )

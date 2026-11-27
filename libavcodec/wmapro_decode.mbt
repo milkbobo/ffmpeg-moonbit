@@ -60,7 +60,8 @@ fn WmaProDecoder::decode_subframe_length(
   // 1 bit indicates if the subframe is of maximum length
   if self.max_subframe_len_bit {
     if self.gb.read1() != 0U {
-      frame_len_shift = 1 + self.gb.read(self.subframe_len_bits - 1).reinterpret_as_int()
+      frame_len_shift = 1 +
+        self.gb.read(self.subframe_len_bits - 1).reinterpret_as_int()
     }
   } else {
     frame_len_shift = self.gb.read(self.subframe_len_bits).reinterpret_as_int()
@@ -77,7 +78,9 @@ fn WmaProDecoder::decode_subframe_length(
 
 ///|
 /// `decode_tilehdr`: how the frame is split into subframes, per channel.
-fn WmaProDecoder::decode_tilehdr(self : WmaProDecoder) -> Result[Unit, WmaproErr] {
+fn WmaProDecoder::decode_tilehdr(
+  self : WmaProDecoder,
+) -> Result[Unit, WmaproErr] {
   let num_samples = FixedArray::makei(wmapro_max_channels, _ => 0)
   let contains_subframe = FixedArray::makei(wmapro_max_channels, _ => 0)
   let mut channels_for_cur_subframe = self.nb_channels
@@ -102,8 +105,7 @@ fn WmaProDecoder::decode_tilehdr(self : WmaProDecoder) -> Result[Unit, WmaproErr
         if fixed_channel_layout ||
           channels_for_cur_subframe == 1 ||
           min_channel_len ==
-          self.samples_per_frame -
-          self.min_samples_per_subframe {
+          self.samples_per_frame - self.min_samples_per_subframe {
           contains_subframe[c] = 1
         } else {
           contains_subframe[c] = self.gb.read1().reinterpret_as_int()
@@ -137,7 +139,9 @@ fn WmaProDecoder::decode_tilehdr(self : WmaProDecoder) -> Result[Unit, WmaproErr
         num_samples[c] += subframe_len
         self.channel[c].num_subframes = n + 1
         if num_samples[c] > self.samples_per_frame {
-          return Err(Broken("wmapro: broken frame: channel len > samples_per_frame"))
+          return Err(
+            Broken("wmapro: broken frame: channel len > samples_per_frame"),
+          )
         }
       } else if num_samples[c] <= min_channel_len {
         if num_samples[c] < min_channel_len {
@@ -173,13 +177,19 @@ fn WmaProDecoder::decode_tilehdr(self : WmaProDecoder) -> Result[Unit, WmaproErr
 
 ///|
 /// `decode_decorrelation_matrix` for group `g`.
-fn WmaProDecoder::decode_decorrelation_matrix(self : WmaProDecoder, g : Int32) -> Unit {
+fn WmaProDecoder::decode_decorrelation_matrix(
+  self : WmaProDecoder,
+  g : Int32,
+) -> Unit {
   let n = self.chgroup[g].num_channels
   let mat = self.chgroup[g].decorrelation_matrix
   for i in 0..<(self.nb_channels * self.nb_channels) {
     mat[i] = 0.0
   }
-  let rotation_offset = FixedArray::makei(wmapro_max_channels * wmapro_max_channels, _ => 0)
+  let rotation_offset = FixedArray::makei(
+    wmapro_max_channels * wmapro_max_channels,
+    _ => 0,
+  )
   let mut offset = 0
   for i in 0..<((n * (n - 1)) >> 1) {
     rotation_offset[i] = self.gb.read(6).reinterpret_as_int()
@@ -220,7 +230,7 @@ fn WmaProDecoder::decode_channel_transform(
       return Err(Unsupported("wmapro: channel transform bit is not supported"))
     }
     while remaining_channels > 0 &&
-      self.num_chgroups < self.channels_for_cur_subframe {
+          self.num_chgroups < self.channels_for_cur_subframe {
       let g = self.num_chgroups
       self.chgroup[g].num_channels = 0
       self.chgroup[g].transform = false
@@ -277,7 +287,9 @@ fn WmaProDecoder::decode_channel_transform(
           if self.gb.read1() != 0U {
             self.decode_decorrelation_matrix(g)
           } else if nc > 6 {
-            return Err(Unsupported("wmapro: coupled channels > 6 are not supported"))
+            return Err(
+              Unsupported("wmapro: coupled channels > 6 are not supported"),
+            )
           } else {
             let base = wmapro_default_decorrelation_offset(nc)
             for k in 0..<(nc * nc) {
@@ -292,7 +304,9 @@ fn WmaProDecoder::decode_channel_transform(
         if self.gb.read1() == 0U {
           // transform can be enabled for individual bands
           for i in 0..<self.num_bands {
-            self.chgroup[g].transform_band[i] = self.gb.read1().reinterpret_as_int()
+            self.chgroup[g].transform_band[i] = self.gb
+              .read1()
+              .reinterpret_as_int()
           }
         } else {
           for i in 0..<self.num_bands {
@@ -343,8 +357,7 @@ fn WmaProDecoder::decode_coeffs(self : WmaProDecoder, c : Int32) -> Unit {
   // decode vector coefficients (consumes up to 167 bits per iteration for
   // 4 vector coded large values)
   while (self.transmit_num_vec_coeffs || !rl_mode) &&
-    cur_coeff + 3 <
-    self.channel[c].num_vec_coeffs {
+        cur_coeff + 3 < self.channel[c].num_vec_coeffs {
     let idx = self.gb.read_vlc(self.vec4_vlc)
     if idx < 0 {
       for i in 0..<2 {
@@ -389,7 +402,7 @@ fn WmaProDecoder::decode_coeffs(self : WmaProDecoder, c : Int32) -> Unit {
         // switch to run level mode when subframe_len / 128 zeros were
         // found in a row
         num_zeros += 1
-        if num_zeros > (self.subframe_len >> 8) {
+        if num_zeros > self.subframe_len >> 8 {
           rl_mode = true
         }
       }

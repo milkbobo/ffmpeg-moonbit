@@ -77,16 +77,24 @@ test "TrueHD MAT recovers access units split across markers and bursts" {
     let little = Bytes::makei(big.length(), i => big[i ^ 1])
     let without_final_padding = big[:big.length() - 8].to_owned()
     assert_eq(av_spdif_open(without_final_padding).unwrap().frames.length(), 2)
-    assert_true(av_spdif_open(big[:big.length() - 9].to_owned()) is
-      Err("spdif: invalid or truncated TrueHD MAT burst"))
+    assert_true(
+      av_spdif_open(big[:big.length() - 9].to_owned())
+      is Err("spdif: invalid or truncated TrueHD MAT burst"),
+    )
     for packed in [big, little] {
       let track = av_spdif_open(packed).unwrap()
       assert_eq(track.frames.length(), 2)
       assert_eq(track.frames[0].pos, start.to_int64())
       assert_eq(track.frames[1].pts, 40L)
       let frame = track.frames[0]
-      assert_eq(track.packet_data(packed, frame).unwrap(), raw[:frame.size].to_owned())
-      assert_eq(spdif_packet_data(packed, frame).unwrap(), raw[:frame.size].to_owned())
+      assert_eq(
+        track.packet_data(packed, frame).unwrap(),
+        raw[:frame.size].to_owned(),
+      )
+      assert_eq(
+        spdif_packet_data(packed, frame).unwrap(),
+        raw[:frame.size].to_owned(),
+      )
       assert_eq(decode_audio_file(packed).samples, expected.samples)
     }
     let wav = wav_muxer_new(705600, 2, 16).unwrap()

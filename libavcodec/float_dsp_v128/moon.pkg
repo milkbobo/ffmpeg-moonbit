@@ -1,5 +1,5 @@
 import {
-  "moonbitlang/core/v128",
+  "moonbitlang/core/simd",
 }
 
 warnings = "-alert_experimental"
@@ -11,7 +11,6 @@ warnings = "-alert_experimental"
 // Windows limit on long checkouts.
 
 options(
-  targets: {
-    "float_dsp_v128_wbtest.mbt": [ "native", "wasm" ],
-  },
+  "allow-experimental-packages": [ "moonbitlang/core/simd" ],
+  targets: { "float_dsp_v128_wbtest.mbt": [ "native", "wasm" ] },
 )

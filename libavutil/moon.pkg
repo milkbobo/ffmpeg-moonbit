@@ -1,6 +1,6 @@
 import {
   "moonbitlang/core/math",
-  "moonbitlang/core/v128",
+  "moonbitlang/core/simd",
 }
 
 warnings = "-alert_experimental"
@@ -8,6 +8,7 @@ warnings = "-alert_experimental"
 // Keep SIMD tests on the same backends as their implementations.
 
 options(
+  "allow-experimental-packages": [ "moonbitlang/core/simd" ],
   targets: {
     "adler32_v128_wbtest.mbt": [ "native", "wasm" ],
     "avstring_v128_wbtest.mbt": [ "native", "wasm" ],

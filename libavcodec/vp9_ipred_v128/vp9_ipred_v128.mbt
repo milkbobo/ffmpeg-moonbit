@@ -40,32 +40,60 @@
 /// Mode codes, mirroring `libavcodec/vp9_dsp.mbt`'s `VP9_*_PRED`. */
 #cfg(any(target="native", target="wasm"))
 let vip_dc : Int32 = 0
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_v : Int32 = 1
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_h : Int32 = 2
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_dl : Int32 = 3
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_dr : Int32 = 4
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_vr : Int32 = 5
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_hd : Int32 = 6
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_vl : Int32 = 7
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_hu : Int32 = 8
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_tm : Int32 = 9
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_left_dc : Int32 = 10
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_top_dc : Int32 = 11
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_dc_128 : Int32 = 12
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_dc_127 : Int32 = 13
+
+///|
 #cfg(any(target="native", target="wasm"))
 let vip_dc_255 : Int32 = 14
 
@@ -73,10 +101,10 @@ let vip_dc_255 : Int32 = 14
 /// Load four lane values from a small `FixedArray[Int32]` table. */
 #cfg(any(target="native", target="wasm"))
 fn vip_load4(v : FixedArray[Int32], at : Int32) -> V128 {
-  let mut r = @v128.i32x4_splat(0)
+  let mut r = @simd.i32x4_splat(0)
   let mut i = 0
   while i < 4 {
-    r = @v128.i32x4_replace_lane(r, v[at + i].reinterpret_as_uint(), i)
+    r = @simd.i32x4_replace_lane(r, v[at + i].reinterpret_as_uint(), i)
     i = i + 1
   }
   r
@@ -88,7 +116,7 @@ fn vip_load4(v : FixedArray[Int32], at : Int32) -> V128 {
 fn vip_store4(p : FixedArray[Int32], at : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    p[at + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    p[at + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }
@@ -112,7 +140,7 @@ fn vip_fill_rows(
       x = x + 4
     }
     while x < n {
-      p[base + x] = @v128.i32x4_extract_lane(rowv, 0).reinterpret_as_int()
+      p[base + x] = @simd.i32x4_extract_lane(rowv, 0).reinterpret_as_int()
       x = x + 1
     }
   }
@@ -196,7 +224,7 @@ pub fn vp9_intra_pred_v128(
   } else if mode == vip_h {
     // row y repeats left[n-1-y]
     for y = 0; y < n; y = y + 1 {
-      let rowv = @v128.i32x4_splat(left[n - 1 - y].reinterpret_as_uint())
+      let rowv = @simd.i32x4_splat(left[n - 1 - y].reinterpret_as_uint())
       let base = off + y * stride
       let mut x = 0
       while x + 4 <= n {
@@ -218,7 +246,7 @@ pub fn vp9_intra_pred_v128(
       off,
       stride,
       n,
-      @v128.i32x4_splat((sum >> shift).reinterpret_as_uint()),
+      @simd.i32x4_splat((sum >> shift).reinterpret_as_uint()),
     )
   } else if mode == vip_left_dc {
     let mut sum = n >> 1
@@ -230,7 +258,7 @@ pub fn vp9_intra_pred_v128(
       off,
       stride,
       n,
-      @v128.i32x4_splat((sum >> (shift - 1)).reinterpret_as_uint()),
+      @simd.i32x4_splat((sum >> (shift - 1)).reinterpret_as_uint()),
     )
   } else if mode == vip_top_dc {
     let mut sum = n >> 1
@@ -242,17 +270,23 @@ pub fn vp9_intra_pred_v128(
       off,
       stride,
       n,
-      @v128.i32x4_splat((sum >> (shift - 1)).reinterpret_as_uint()),
+      @simd.i32x4_splat((sum >> (shift - 1)).reinterpret_as_uint()),
     )
   } else if mode == vip_dc_128 {
-    vip_fill_rows(p, off, stride, n, @v128.i32x4_splat(pixel_mid.reinterpret_as_uint()))
+    vip_fill_rows(
+      p,
+      off,
+      stride,
+      n,
+      @simd.i32x4_splat(pixel_mid.reinterpret_as_uint()),
+    )
   } else if mode == vip_dc_127 {
     vip_fill_rows(
       p,
       off,
       stride,
       n,
-      @v128.i32x4_splat((pixel_mid - 1).reinterpret_as_uint()),
+      @simd.i32x4_splat((pixel_mid - 1).reinterpret_as_uint()),
     )
   } else if mode == vip_dc_255 {
     vip_fill_rows(
@@ -260,15 +294,15 @@ pub fn vp9_intra_pred_v128(
       off,
       stride,
       n,
-      @v128.i32x4_splat((pixel_mid + 1).reinterpret_as_uint()),
+      @simd.i32x4_splat((pixel_mid + 1).reinterpret_as_uint()),
     )
   } else if mode == vip_tm {
     // top[x] + left[y] - top[0], clipped per lane
     let tl = top[0]
-    let lo = @v128.i32x4_splat(0)
-    let hi = @v128.i32x4_splat(pixel_max.reinterpret_as_uint())
+    let lo = @simd.i32x4_splat(0)
+    let hi = @simd.i32x4_splat(pixel_max.reinterpret_as_uint())
     for y = 0; y < n; y = y + 1 {
-      let lmt = @v128.i32x4_splat((left[n - 1 - y] - tl).reinterpret_as_uint())
+      let lmt = @simd.i32x4_splat((left[n - 1 - y] - tl).reinterpret_as_uint())
       let base = off + y * stride
       let mut x = 0
       while x + 4 <= n {
@@ -276,7 +310,7 @@ pub fn vp9_intra_pred_v128(
         vip_store4(
           p,
           base + x,
-          @v128.i32x4_min_s(@v128.i32x4_max_s(@v128.i32x4_add(t, lmt), lo), hi),
+          @simd.i32x4_min_s(@simd.i32x4_max_s(@simd.i32x4_add(t, lmt), lo), hi),
         )
         x = x + 4
       }
@@ -329,7 +363,7 @@ pub fn vp9_intra_pred_v128(
       vo[n / 2 + i] = (top[i] + top[1 + i] * 2 + top[2 + i] + 2) >> 2
     }
     for j = 0; j < n / 2; j = j + 1 {
-      vip_row_window(p, off + (j * 2) * stride, ve, n / 2 - 1 - j, n, 0, n)
+      vip_row_window(p, off + j * 2 * stride, ve, n / 2 - 1 - j, n, 0, n)
       vip_row_window(p, off + (j * 2 + 1) * stride, vo, n / 2 - 1 - j, n, 0, n)
     }
   } else if mode == vip_vl {
@@ -342,16 +376,8 @@ pub fn vp9_intra_pred_v128(
     ve[n - 2] = (top[n - 1] + top[n] + 1) >> 1
     vo[n - 2] = (top[n - 1] + top[n] * 3 + 2) >> 2
     for j = 0; j < n / 2; j = j + 1 {
-      vip_row_window(p, off + (j * 2) * stride, ve, j, n, top[n], n - j - 1)
-      vip_row_window(
-        p,
-        off + (j * 2 + 1) * stride,
-        vo,
-        j,
-        n,
-        top[n],
-        n - j - 1,
-      )
+      vip_row_window(p, off + j * 2 * stride, ve, j, n, top[n], n - j - 1)
+      vip_row_window(p, off + (j * 2 + 1) * stride, vo, j, n, top[n], n - j - 1)
     }
   } else if mode == vip_hd {
     let v : FixedArray[Int32] = FixedArray::make(n * 3 - 2, 0)
@@ -395,7 +421,7 @@ pub fn vp9_intra_pred_v128(
       off,
       stride,
       n,
-      @v128.i32x4_splat((pixel_mid + 1).reinterpret_as_uint()),
+      @simd.i32x4_splat((pixel_mid + 1).reinterpret_as_uint()),
     )
   }
 }

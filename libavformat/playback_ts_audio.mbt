@@ -1,6 +1,7 @@
 ///|
 fn ts_uses_audio_index(codec : String) -> Bool {
-  codec == "aac" || codec == "aac_latm" ||
+  codec == "aac" ||
+  codec == "aac_latm" ||
   codec == "ac3" ||
   codec == "eac3" ||
   codec == "mp1" ||
@@ -23,7 +24,12 @@ fn playback_ts_index_adts(
   // ADTS frame lengths count AAC core samples. SBR doubles both samples
   // and sample rate, so the transport frame duration remains unchanged.
   ts_index_audio_frames(
-    demux, stream_index, track.sample_rate, pes, ts_slice_audio_frames(es, track.frames), output,
+    demux,
+    stream_index,
+    track.sample_rate,
+    pes,
+    ts_slice_audio_frames(es, track.frames),
+    output,
   )
   (asc, track.sample_rate * multiplier, channels)
 }
@@ -31,8 +37,14 @@ fn playback_ts_index_adts(
 ///|
 fn ts_stream_uses_audio_index(info : StreamInfo) -> Bool {
   ts_uses_audio_index(info.codec_id) ||
-  ((info.codec_id == "dts" || info.codec_id == "opus" || info.codec_id == "truehd") &&
-    info.sample_rate > 0)
+  (
+    (
+      info.codec_id == "dts" ||
+      info.codec_id == "opus" ||
+      info.codec_id == "truehd"
+    ) &&
+    info.sample_rate > 0
+  )
 }
 
 ///|
@@ -44,7 +56,12 @@ fn playback_ts_index_dts(
   let (es, pes) = ts_join_audio_pes(demux, stream_index)
   guard av_dts_open(es) is Ok(track) else { return None }
   ts_index_audio_frames(
-    demux, stream_index, track.sample_rate, pes, ts_slice_audio_frames(es, track.frames), output,
+    demux,
+    stream_index,
+    track.sample_rate,
+    pes,
+    ts_slice_audio_frames(es, track.frames),
+    output,
     floor_duration=true,
   )
   Some(track)
@@ -69,7 +86,13 @@ fn playback_ts_index_latm(
   }
   let frames = track.frames.mapi((i, data) => {
     let (start, end) = track.frame_ranges[i]
-    TsAudioFrame::{ start, end, data, samples: config.frame_length, keyframe: true, }
+    TsAudioFrame::{
+      start,
+      end,
+      data,
+      samples: config.frame_length,
+      keyframe: true,
+    }
   })
   ts_index_audio_frames(
     demux,
@@ -100,14 +123,22 @@ fn playback_ts_index_raw_audio(
     Err(e) => raise DemuxError("mpegts: " + e)
   }
   ts_index_audio_frames(
-    demux, stream_index, track.sample_rate, pes, ts_slice_audio_frames(es, track.frames), output,
+    demux,
+    stream_index,
+    track.sample_rate,
+    pes,
+    ts_slice_audio_frames(es, track.frames),
+    output,
     floor_duration=true,
   )
   track
 }
 
 ///|
-fn ts_slice_audio_frames(es : Bytes, frames : Array[RawAudioFrame]) -> Array[TsAudioFrame] {
+fn ts_slice_audio_frames(
+  es : Bytes,
+  frames : Array[RawAudioFrame],
+) -> Array[TsAudioFrame] {
   frames.map(frame => {
     let start = frame.pos.to_int()
     let end = start + frame.size
@@ -190,7 +221,12 @@ fn ts_index_audio_frames(
         batch
       }
     }
-    batch.packets.push({ stream_index, pts, data: frame.data, keyframe: frame.keyframe, })
+    batch.packets.push({
+      stream_index,
+      pts,
+      data: frame.data,
+      keyframe: frame.keyframe,
+    })
     // FFmpeg advances Dolby, MPEG audio and DTS by whole transport ticks
     // rounded down from each frame duration. LATM keeps the rational duration.
     pts = if floor_duration {

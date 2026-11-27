@@ -52,13 +52,14 @@ test "mlp: residual huffman codebooks" {
 
 ///|
 test "mlp: checksums and parity" {
-  let buf : Bytes = Bytes::from_array(
-    Array::makei(28, i => i.to_byte()),
-  )
+  let buf : Bytes = Bytes::from_array(Array::makei(28, i => i.to_byte()))
   let dec = MlpDecoder::new(true)
   // checksum16(buf, N) CRCs N-2 bytes and xors the RL16 tail; the reference
   // value comes from FFmpeg's crc_2D table over bytes 0..27.
-  inspect(mlp_checksum16(dec.crc_2d, buf, buf.length() - 2).to_string(), content="29803")
+  inspect(
+    mlp_checksum16(dec.crc_2d, buf, buf.length() - 2).to_string(),
+    content="29803",
+  )
   // checksum8(buf, N) CRCs N-1 bytes (init 0x3c) and xors the last byte.
   inspect(mlp_checksum8(dec.crc_63, buf, buf.length()), content="225")
   inspect(mlp_parity(buf), content="0")

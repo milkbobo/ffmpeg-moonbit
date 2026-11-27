@@ -31,11 +31,12 @@ let ape_v24_pcm_md5 : String = "2cd8a60478c77382dfed8b8bdf1f70e4"
 let ape_v24_pcm_bytes : Int32 = 110592
 
 ///|
-let ape_v24_spots : Array[Int32] = [869961472, 70281984, -979121408, -65483264, 1019239424, -1266336000]
+let ape_v24_spots : Array[Int32] = [
+  869961472, 70281984, -979121408, -65483264, 1019239424, -1266336000,
+]
 
 ///|
-let ape_v24_packets_b64 : Bytes =
-  b"ACABAAAAAADcsKs4AP//ACSqLwAAgP9/f74CDgAAwP+nTiIsAELVCPLF/RwAnM8H2gHSDABU959yng8D3z0I6twf/yopkLwQh1b5" +
+let ape_v24_packets_b64 : Bytes = b"ACABAAAAAADcsKs4AP//ACSqLwAAgP9/f74CDgAAwP+nTiIsAELVCPLF/RwAnM8H2gHSDABU959yng8D3z0I6twf/yopkLwQh1b5" +
   b"X+x0U/FYA0f3SY7vhzV7UcoywXhgLk+yXO41xkyAoIt6bP6frgdA2ZqtKZ80X11Qcs1SHIGOleO9pf0axQ3bEFTpo4RHZZwZ6RdB" +
   b"w33i/jUw/GO/k3pnE2xGo6rhovqw7wAgvBYYI5+UTB3WKtbVcmMqvit0Wh+xx6wSlerTBjLPmBkr+m2a/oC5+kwvJJhtiwz4FA2w" +
   b"WF/cPNGD76EPHOdJB2sSMJWwI3tyMlCL3vHYG5Qpz67XK9/34eFHWeB93/0tVhsrp1R6HfolCAIHu78Anuo3iR2qU+PWo4TOaCKR" +
@@ -1435,7 +1436,11 @@ test "APE: v24 real packets match FFmpeg PCM" {
       let lo = bytes[i * 2].to_uint().reinterpret_as_int()
       let hi = bytes[i * 2 + 1].to_uint().reinterpret_as_int()
       let s = lo | (hi << 8)
-      if (s & 0x8000) != 0 { s - 65536 } else { s }
+      if (s & 0x8000) != 0 {
+        s - 65536
+      } else {
+        s
+      }
     }
     inspect(v, content=ape_v24_spots[i].to_string())
   }

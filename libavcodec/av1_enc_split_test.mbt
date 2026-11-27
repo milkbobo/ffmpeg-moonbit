@@ -75,7 +75,7 @@ fn split_mixed_y(
   }
   for y in 0..<64 {
     for x in 0..<64 {
-      let q = (x / 32) + (y / 32) * 2
+      let q = x / 32 + y / 32 * 2
       let dx = if q % 2 == 1 { 8 } else { 0 }
       let dy = if q / 2 == 1 { 8 } else { 0 }
       out[y * w + x] = ref_y[clamp(y + dy, h) * w + clamp(x + dx, w)]
@@ -111,11 +111,26 @@ fn split_seq_refs(
 test "av1 split: decision rule" {
   // Strict quadrant win splits; ties and losses keep NONE; the margin
   // eats small wins.
-  inspect(@libavcodec.av1_enc_split_decide(1000L, [200L, 200L, 200L, 200L], 0), content="true")
-  inspect(@libavcodec.av1_enc_split_decide(1000L, [250L, 250L, 250L, 250L], 0), content="false")
-  inspect(@libavcodec.av1_enc_split_decide(1000L, [230L, 230L, 230L, 230L], 71), content="true")
-  inspect(@libavcodec.av1_enc_split_decide(1000L, [230L, 230L, 230L, 230L], 81), content="false")
-  inspect(@libavcodec.av1_enc_split_decide(0L, [0L, 0L, 0L, 0L], 0), content="false")
+  inspect(
+    @libavcodec.av1_enc_split_decide(1000L, [200L, 200L, 200L, 200L], 0),
+    content="true",
+  )
+  inspect(
+    @libavcodec.av1_enc_split_decide(1000L, [250L, 250L, 250L, 250L], 0),
+    content="false",
+  )
+  inspect(
+    @libavcodec.av1_enc_split_decide(1000L, [230L, 230L, 230L, 230L], 71),
+    content="true",
+  )
+  inspect(
+    @libavcodec.av1_enc_split_decide(1000L, [230L, 230L, 230L, 230L], 81),
+    content="false",
+  )
+  inspect(
+    @libavcodec.av1_enc_split_decide(0L, [0L, 0L, 0L, 0L], 0),
+    content="false",
+  )
 }
 
 ///|
@@ -206,6 +221,7 @@ test "av1 split: mixed partition frame decodes pixel-exact" {
 }
 
 ///|
+
 ///|
 /// Chroma sources for the mixed-motion frame: `moving=true` shifts each
 /// chroma quadrant (16x16) by its luma quadrant's shift halved, making
@@ -238,7 +254,7 @@ fn split_mixed_chroma(
   // q2 +4 px vertical, q3 diagonal — halving the luma quadrant shifts.
   for y in 0..<32 {
     for x in 0..<32 {
-      let q = (x / 16) + (y / 16) * 2
+      let q = x / 16 + y / 16 * 2
       let dx = if q % 2 == 1 { 4 } else { 0 }
       let dy = if q / 2 == 1 { 4 } else { 0 }
       out[y * cw + x] = ref_p[clamp(y + dy, ch) * cw + clamp(x + dx, cw)]
@@ -282,11 +298,7 @@ test "av1 split: chroma residuals are coded on split SBs" {
     refs,
     src_u : FixedArray[Int32],
     src_v : FixedArray[Int32],
-  ) -> (
-    Bytes,
-    FixedArray[Int32],
-    FixedArray[Int32],
-  ) raise {
+  ) -> (Bytes, FixedArray[Int32], FixedArray[Int32]) raise {
     match
       @libavcodec.av1_enc_write_me_res_part420_inter_frame_obu(
         seq,
@@ -439,18 +451,7 @@ test "av1 split: all-NONE output is byte-identical to the single-partition write
   refs_b.refresh_without_mvs(0, w, h, 255)
   let (obu_a, _, _, _, splits) = match
     @libavcodec.av1_enc_write_me_res_part420_inter_frame_obu(
-      seq,
-      refs_a,
-      src_y,
-      w,
-      ref_u,
-      cw,
-      ref_v,
-      ref_y,
-      w,
-      ref_u,
-      cw,
-      ref_v,
+      seq, refs_a, src_y, w, ref_u, cw, ref_v, ref_y, w, ref_u, cw, ref_v,
     ) {
     Ok(v) => v
     Err(e) => fail("part encode: \{e}")
@@ -458,18 +459,7 @@ test "av1 split: all-NONE output is byte-identical to the single-partition write
   inspect(splits[0], content="false")
   let obu_b = match
     @libavcodec.av1_enc_write_me_res420_inter_frame_obu(
-      seq,
-      refs_b,
-      src_y,
-      w,
-      ref_u,
-      cw,
-      ref_v,
-      ref_y,
-      w,
-      ref_u,
-      cw,
-      ref_v,
+      seq, refs_b, src_y, w, ref_u, cw, ref_v, ref_y, w, ref_u, cw, ref_v,
     ) {
     Ok(v) => v.0
     Err(e) => fail("plain encode: \{e}")

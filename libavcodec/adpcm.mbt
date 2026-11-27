@@ -269,7 +269,11 @@ fn adpcm_ima_expand_multiply(state : AdpcmChannel, code : Int32) -> Int32 {
   let diff = ((2 * (code & 7) + 1) * step) >> 3
   let delta = if (code & 8) == 0 { diff } else { -diff }
   state.predictor = adpcm_clip_int16(state.predictor + delta)
-  state.step_index = adpcm_clip(state.step_index + adpcm_index_table[code], 0, 88)
+  state.step_index = adpcm_clip(
+    state.step_index + adpcm_index_table[code],
+    0,
+    88,
+  )
   state.predictor
 }
 

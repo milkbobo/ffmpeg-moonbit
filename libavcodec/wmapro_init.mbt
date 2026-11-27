@@ -114,13 +114,14 @@ pub fn wmapro_decoder_new(
   if nb_channels <= 0 {
     return Err("wmapro: invalid number of channels \{nb_channels}")
   } else if nb_channels > wmapro_max_channels || nb_channels > channels {
-    return Err("wmapro: more than \{wmapro_max_channels} channels are not supported")
+    return Err(
+      "wmapro: more than \{wmapro_max_channels} channels are not supported",
+    )
   }
 
-  let channel : Array[WmaproChannel] = Array::makei(
-    wmapro_max_channels,
-    _ => WmaproChannel::new(),
-  )
+  let channel : Array[WmaproChannel] = Array::makei(wmapro_max_channels, _ => {
+    WmaproChannel::new()
+  })
 
   // extract lfe channel position
   let mut lfe_channel = -1
@@ -147,7 +148,9 @@ pub fn wmapro_decoder_new(
     sfb_offsets[i][0] = 0
     let mut x = 0
     while x < wmapro_max_bands - 1 && sfb_offsets[i][band - 1] < subframe_len {
-      let offset = ((subframe_len * 2 * wmapro_critical_freq[x]) / sample_rate + 2) &
+      let offset = (
+          subframe_len * 2 * wmapro_critical_freq[x] / sample_rate + 2
+        ) &
         -4
       if offset > sfb_offsets[i][band - 1] {
         sfb_offsets[i][band] = offset
@@ -170,14 +173,18 @@ pub fn wmapro_decoder_new(
   // maps the band of one layout onto the other.
   let sf_offsets : Array[Array[FixedArray[Int32]]] = Array::makei(
     wmapro_block_sizes,
-    _ => Array::makei(wmapro_block_sizes, _ => FixedArray::makei(wmapro_max_bands, _ => 0)),
+    _ => {
+      Array::makei(wmapro_block_sizes, _ => {
+        FixedArray::makei(wmapro_max_bands, _ => 0)
+      })
+    },
   )
   for i in 0..<num_possible_block_sizes {
     for b in 0..<num_sfb[i] {
-      let offset = ((sfb_offsets[i][b] + sfb_offsets[i][b + 1] - 1) << i) >> 1
+      let offset = (sfb_offsets[i][b] + sfb_offsets[i][b + 1] - 1) << i >> 1
       for x in 0..<num_possible_block_sizes {
         let mut v = 0
-        while (sfb_offsets[x][v + 1] << x) < offset {
+        while sfb_offsets[x][v + 1] << x < offset {
           v += 1
           if v + 1 >= wmapro_max_bands {
             return Err("wmapro: scale factor band table overflow")
@@ -207,9 +214,9 @@ pub fn wmapro_decoder_new(
   let subwoofer_cutoffs = FixedArray::makei(wmapro_block_sizes, _ => 0)
   for i in 0..<num_possible_block_sizes {
     let block_size = samples_per_frame >> i
-    let cutoff = (440L * block_size.to_int64() +
-      3L * (sample_rate >> 1).to_int64() -
-      1L) /
+    let cutoff = (
+        440L * block_size.to_int64() + 3L * (sample_rate >> 1).to_int64() - 1L
+      ) /
       sample_rate.to_int64()
     let cut = cutoff.to_int()
     subwoofer_cutoffs[i] = if cut < 4 {
@@ -231,10 +238,9 @@ pub fn wmapro_decoder_new(
     pb_pos: 0,
     tx_scale,
     tmp: Array::make(wmapro_block_max_size, 0.0),
-    frame_buf: Array::makei(
-      wmapro_max_channels,
-      _ => Array::make(samples_per_frame, 0.0),
-    ),
+    frame_buf: Array::makei(wmapro_max_channels, _ => {
+      Array::make(samples_per_frame, 0.0)
+    }),
     windows: wmapro_sine_windows(),
     imdct_cos,
     imdct_mask: 8 * samples_per_frame - 1,
@@ -273,10 +279,9 @@ pub fn wmapro_decoder_new(
     subframe_len: 0,
     nb_channels,
     channels_for_cur_subframe: 0,
-    channel_indexes_for_cur_subframe: FixedArray::makei(
-      wmapro_max_channels,
-      _ => 0,
-    ),
+    channel_indexes_for_cur_subframe: FixedArray::makei(wmapro_max_channels, _ => {
+      0
+    }),
     num_bands: 0,
     transmit_num_vec_coeffs: false,
     table_idx: 0,

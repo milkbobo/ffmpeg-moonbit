@@ -1,6 +1,6 @@
 import {
   "moonbitlang/core/math",
-  "moonbitlang/core/v128",
+  "moonbitlang/core/simd",
   "milkbobo/ffmpeg-moonbit/libavutil",
   "milkbobo/ffmpeg-moonbit/libavcodec/av1_mc_core",
   "milkbobo/ffmpeg-moonbit/libavcodec/aac_mdct_tx",
@@ -11,6 +11,7 @@ warnings = "-alert_experimental"
 // SIMD implementations are gated to native and WebAssembly backends.
 
 options(
+  "allow-experimental-packages": [ "moonbitlang/core/simd" ],
   targets: {
     "idct_v128_wbtest.mbt": [ "native", "wasm" ],
     // Debug tool: per-MB syntax shadow parse over the encoder's own

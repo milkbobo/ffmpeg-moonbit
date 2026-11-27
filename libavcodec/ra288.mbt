@@ -11,7 +11,7 @@ struct Ra288Decoder {
 }
 
 ///|
-pub fn Ra288Decoder::new(block_align : Int) -> Result[Ra288Decoder, String] {
+pub fn Ra288Decoder::new(block_align : Int32) -> Result[Ra288Decoder, String] {
   if block_align != 38 {
     return Err("RealAudio 28.8 requires a block alignment of 38 bytes")
   }
@@ -32,9 +32,9 @@ fn ra288_backward_filter(
   window : FixedArray[Double],
   lpc : Array[Double],
   bandwidth : FixedArray[Double],
-  input_length : Int,
-  nonrecursive_length : Int,
-  move_size : Int,
+  input_length : Int32,
+  nonrecursive_length : Int32,
+  move_size : Int32,
 ) -> Unit {
   let order = lpc.length()
   let work = Array::makei(order + input_length + nonrecursive_length, i => {
@@ -77,7 +77,7 @@ fn ra288_levinson(correlation : Array[Double], lpc : Array[Double]) -> Bool {
     }
     error *= 1.0 - reflection * reflection
     lpc[i] = reflection
-    for j = 0; j < ((i + 1) >> 1); j = j + 1 {
+    for j = 0; j < (i + 1) >> 1; j = j + 1 {
       let front = lpc[j]
       let back = lpc[i - 1 - j]
       lpc[j] = front + reflection * back
@@ -112,8 +112,9 @@ pub fn Ra288Decoder::decode_packet(
     for i = 0; i < 10; i = i + 1 {
       predicted -= self.gain_history[37 - i] * self.gain_lpc[i]
     }
-    let scale = @math.exp(predicted.clamp(min=0.0, max=60.0) *
-      0.1151292546497) * gain / 8388608.0
+    let scale = @math.exp(predicted.clamp(min=0.0, max=60.0) * 0.1151292546497) *
+      gain /
+      8388608.0
     for i = 0; i < 5; i = i + 1 {
       excitation[i] = ra288_codetable[code * 5 + i].to_double() * scale
     }
@@ -124,19 +125,37 @@ pub fn Ra288Decoder::decode_packet(
     self.gain_history[37] = 10.0 * @math.log10(power) +
       (10.0 * @math.log10(16777216.0 / 5.0) - 32.0)
     amr_celp_lp_synthesis_filterf(
-      self.speech_history, 106, excitation, 0, self.speech_lpc, 5, 36,
+      self.speech_history,
+      106,
+      excitation,
+      0,
+      self.speech_lpc,
+      5,
+      36,
     )
     for i = 0; i < 5; i = i + 1 {
       out[block * 5 + i] = self.speech_history[106 + i]
     }
     if (block & 7) == 3 {
       ra288_backward_filter(
-        self.speech_history, self.speech_recursive, ra288_syn_window,
-        self.speech_lpc, ra288_syn_bw_tab, 40, 35, 70,
+        self.speech_history,
+        self.speech_recursive,
+        ra288_syn_window,
+        self.speech_lpc,
+        ra288_syn_bw_tab,
+        40,
+        35,
+        70,
       )
       ra288_backward_filter(
-        self.gain_history, self.gain_recursive, ra288_gain_window,
-        self.gain_lpc, ra288_gain_bw_tab, 8, 20, 28,
+        self.gain_history,
+        self.gain_recursive,
+        ra288_gain_window,
+        self.gain_lpc,
+        ra288_gain_bw_tab,
+        8,
+        20,
+        28,
       )
     }
   }

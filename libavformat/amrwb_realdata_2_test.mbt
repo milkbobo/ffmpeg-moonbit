@@ -34,34 +34,43 @@ fn amrwb2_load(b64 : Bytes) -> Bytes {
 
 ///|
 /// The decode quantised the way swresample writes s16 (round half to even).
-fn amrwb2_s16(samples : Array[Double]) -> Array[Int] {
+fn amrwb2_s16(samples : Array[Double]) -> Array[Int32] {
   samples.map(v => {
     let q = (v * 32768.0).round().to_int()
-    if q > 32767 { 32767 } else if q < -32768 { -32768 } else { q }
+    if q > 32767 {
+      32767
+    } else if q < -32768 {
+      -32768
+    } else {
+      q
+    }
   })
 }
 
 ///|
 /// Little-endian s16 reference bytes as values.
-fn amrwb2_ref(b64 : Bytes) -> Array[Int] {
+fn amrwb2_ref(b64 : Bytes) -> Array[Int32] {
   let raw = amrwb2_load(b64)
   let n = raw.length() / 2
-  Array::makei(n, i => (raw[2 * i].to_int() | (raw[2 * i + 1].to_int() << 8)) <<
-    16 >>
-    16)
+  Array::makei(n, i => {
+    (raw[2 * i].to_int() | (raw[2 * i + 1].to_int() << 8)) << 16 >> 16
+  })
 }
 
 ///|
 /// `actual[from ..]` against `expected`, sample by sample, within
 /// `tolerance` LSB; returns the worst difference.
 fn amrwb2_compare(
-  actual : Array[Int],
+  actual : Array[Int32],
   from : Int32,
-  expected : Array[Int],
-  tolerance : Int,
+  expected : Array[Int32],
+  tolerance : Int32,
   label : String,
-) -> Int raise {
-  assert_true(from + expected.length() <= actual.length(), msg="\{label}: short decode")
+) -> Int32 raise {
+  assert_true(
+    from + expected.length() <= actual.length(),
+    msg="\{label}: short decode",
+  )
   let mut worst = 0
   let mut where_ = -1
   for i = 0; i < expected.length(); i = i + 1 {
@@ -88,13 +97,13 @@ fn amrwb2_check(
   rate : Int32,
   channels : Int32,
   sample_count : Int32,
-  cref_head : Array[Int],
-  head_tol : Int,
-  cref_tail : Array[Int],
-  tail_tol : Int,
-  fate : Array[Int],
+  cref_head : Array[Int32],
+  head_tol : Int32,
+  cref_tail : Array[Int32],
+  tail_tol : Int32,
+  fate : Array[Int32],
   fate_step : Int32,
-  fate_tol : Int,
+  fate_tol : Int32,
   label : String,
 ) -> Unit raise {
   let audio = @libavformat.decode_audio_file(data)
@@ -129,12 +138,17 @@ fn amrwb2_check(
       where_ = i * fate_step
     }
   }
-  assert_eq(fate.length(), sample_count / fate_step, msg="\{label}: FATE length")
+  assert_eq(
+    fate.length(),
+    sample_count / fate_step,
+    msg="\{label}: FATE length",
+  )
   assert_true(
     worst <= fate_tol,
     msg="\{label}: sample \{where_} differs from FATE by \{worst} LSB (tolerance \{fate_tol})",
   )
 }
+
 ///|
 /// `18k25`: 26665 bytes, 512 frames
 let amrwb2_18k25_file : Bytes = amrwb2_cat([
@@ -3020,4 +3034,3 @@ test "amrwb2 23k85: decodes to the references" {
     "23k85",
   )
 }
-

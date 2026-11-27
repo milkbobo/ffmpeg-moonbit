@@ -122,47 +122,271 @@ fn lr_loop_filter_core(
         lr_abs(q3 - q0) <= f_flat
     }
     if wd >= 16 && flat8out && flat8in {
-      p[o + strideb * -7] = (p7 + p7 + p7 + p7 + p7 + p7 + p7 + p6 * 2 + p5 +
-        p4 + p3 + p2 + p1 + p0 + q0 + 8) >>
+      p[o + strideb * -7] = (
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p6 * 2 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          8
+        ) >>
         4
-      p[o + strideb * -6] = (p7 + p7 + p7 + p7 + p7 + p7 + p6 + p5 * 2 + p4 +
-        p3 + p2 + p1 + p0 + q0 + q1 + 8) >>
+      p[o + strideb * -6] = (
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p6 +
+          p5 * 2 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          8
+        ) >>
         4
-      p[o + strideb * -5] = (p7 + p7 + p7 + p7 + p7 + p6 + p5 + p4 * 2 + p3 +
-        p2 + p1 + p0 + q0 + q1 + q2 + 8) >>
+      p[o + strideb * -5] = (
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p6 +
+          p5 +
+          p4 * 2 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          8
+        ) >>
         4
-      p[o + strideb * -4] = (p7 + p7 + p7 + p7 + p6 + p5 + p4 + p3 * 2 + p2 +
-        p1 + p0 + q0 + q1 + q2 + q3 + 8) >>
+      p[o + strideb * -4] = (
+          p7 +
+          p7 +
+          p7 +
+          p7 +
+          p6 +
+          p5 +
+          p4 +
+          p3 * 2 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          8
+        ) >>
         4
-      p[o + strideb * -3] = (p7 + p7 + p7 + p6 + p5 + p4 + p3 + p2 * 2 + p1 +
-        p0 + q0 + q1 + q2 + q3 + q4 + 8) >>
+      p[o + strideb * -3] = (
+          p7 +
+          p7 +
+          p7 +
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 * 2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          8
+        ) >>
         4
-      p[o + strideb * -2] = (p7 + p7 + p6 + p5 + p4 + p3 + p2 + p1 * 2 + p0 +
-        q0 + q1 + q2 + q3 + q4 + q5 + 8) >>
+      p[o + strideb * -2] = (
+          p7 +
+          p7 +
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 * 2 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          8
+        ) >>
         4
-      p[o + strideb * -1] = (p7 + p6 + p5 + p4 + p3 + p2 + p1 + p0 * 2 + q0 +
-        q1 + q2 + q3 + q4 + q5 + q6 + 8) >>
+      p[o + strideb * -1] = (
+          p7 +
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 * 2 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          8
+        ) >>
         4
-      p[o + strideb * 0] = (p6 + p5 + p4 + p3 + p2 + p1 + p0 + q0 * 2 + q1 +
-        q2 + q3 + q4 + q5 + q6 + q7 + 8) >>
+      p[o + strideb * 0] = (
+          p6 +
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 * 2 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 1] = (p5 + p4 + p3 + p2 + p1 + p0 + q0 + q1 * 2 + q2 +
-        q3 + q4 + q5 + q6 + q7 + q7 + 8) >>
+      p[o + strideb * 1] = (
+          p5 +
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 * 2 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 2] = (p4 + p3 + p2 + p1 + p0 + q0 + q1 + q2 * 2 + q3 +
-        q4 + q5 + q6 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 2] = (
+          p4 +
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 * 2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 3] = (p3 + p2 + p1 + p0 + q0 + q1 + q2 + q3 * 2 + q4 +
-        q5 + q6 + q7 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 3] = (
+          p3 +
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 * 2 +
+          q4 +
+          q5 +
+          q6 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 4] = (p2 + p1 + p0 + q0 + q1 + q2 + q3 + q4 * 2 + q5 +
-        q6 + q7 + q7 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 4] = (
+          p2 +
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 * 2 +
+          q5 +
+          q6 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 5] = (p1 + p0 + q0 + q1 + q2 + q3 + q4 + q5 * 2 + q6 +
-        q7 + q7 + q7 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 5] = (
+          p1 +
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 * 2 +
+          q6 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
-      p[o + strideb * 6] = (p0 + q0 + q1 + q2 + q3 + q4 + q5 + q6 * 2 + q7 +
-        q7 + q7 + q7 + q7 + q7 + q7 + 8) >>
+      p[o + strideb * 6] = (
+          p0 +
+          q0 +
+          q1 +
+          q2 +
+          q3 +
+          q4 +
+          q5 +
+          q6 * 2 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          q7 +
+          8
+        ) >>
         4
     } else if wd >= 8 && flat8in {
       p[o + strideb * -3] = (p3 + p3 + p3 + 2 * p2 + p1 + p0 + q0 + 4) >> 3
@@ -335,7 +559,11 @@ test "vp9 lpf v128: v and h, all widths and bit depths" {
     for wd in [4, 8, 16] {
       for (e, i_lim, h_lim) in params {
         for variant in [0, 1, 2, 3] {
-          let step = if variant % 2 == 0 { pixel_max / 8 } else { pixel_max / 3 }
+          let step = if variant % 2 == 0 {
+            pixel_max / 8
+          } else {
+            pixel_max / 3
+          }
           let src = if variant < 2 {
             lr_gen_step(
               0x9E3779B9U + wd.reinterpret_as_uint(),
@@ -382,7 +610,9 @@ test "vp9 lpf v128: mix2 splits the packed filter parameters" {
     for (wd1, wd2) in [(0, 1), (1, 0), (1, 1), (0, 2), (2, 0), (2, 2), (0, 0)] {
       for (e, i_lim, h_lim) in [(63, 9, 4), (31, 4, 2), (20, 3, 1)] {
         let src = lr_gen_step(
-          0xABCDEF01U + wd1.reinterpret_as_uint() * 7U + wd2.reinterpret_as_uint(),
+          0xABCDEF01U +
+          wd1.reinterpret_as_uint() * 7U +
+          wd2.reinterpret_as_uint(),
           stride,
           rows,
           edge,

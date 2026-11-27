@@ -162,7 +162,8 @@ fn flac_decode_residuals(
   pred_order : Int32,
   blocksize : Int32,
 ) -> Result[Unit, String] {
-  let (rice_bits, partitions, samples) = match flac_residual_header(gb, pred_order, blocksize) {
+  let (rice_bits, partitions, samples) = match
+    flac_residual_header(gb, pred_order, blocksize) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -191,7 +192,11 @@ fn flac_decode_residuals(
 }
 
 ///|
-fn flac_residual_header(gb : BitReader, pred_order : Int32, blocksize : Int32) -> Result[(Int32, Int32, Int32), String] {
+fn flac_residual_header(
+  gb : BitReader,
+  pred_order : Int32,
+  blocksize : Int32,
+) -> Result[(Int32, Int32, Int32), String] {
   let method_type = gb.read(2).reinterpret_as_int()
   let rice_order = gb.read(4).reinterpret_as_int()
   if method_type > 1 {
@@ -458,7 +463,8 @@ fn flac_decode_subframe(
   blocksize : Int32,
   wide : Array[Int64]?,
 ) -> Result[Unit, String] {
-  let (stype, bps, wasted) = match flac_subframe_header(gb, channel, ch_mode, stream_bps) {
+  let (stype, bps, wasted) = match
+    flac_subframe_header(gb, channel, ch_mode, stream_bps) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -616,8 +622,7 @@ fn flac_frame_header(
   } else {
     blocksize = flac_blocksizes[bs_code]
   }
-  let sample_rate =
-  if sr_code < 12 {
+  let sample_rate = if sr_code < 12 {
     flac_sample_rates[sr_code]
   } else if sr_code == 12 {
     gb.read(8).reinterpret_as_int() * 1000
@@ -675,8 +680,7 @@ fn flac_streaminfo(
   let sample_rate = gb.read(20).reinterpret_as_int()
   let channels = gb.read(3).reinterpret_as_int() + 1
   let bps = gb.read(5).reinterpret_as_int() + 1
-  let total = (gb.read(32).to_int64() << 4) |
-    gb.read(4).to_int64()
+  let total = (gb.read(32).to_int64() << 4) | gb.read(4).to_int64()
   gb.skip(128) // MD5
   Ok((sample_rate, channels, bps, total, max_blocksize))
 }

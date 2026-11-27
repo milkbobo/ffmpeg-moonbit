@@ -1,8 +1,10 @@
 name = "milkbobo/ffmpeg-moonbit"
 
-version = "0.4.0"
+version = "1.0.0"
 
 license = "LGPL-2.1-or-later"
+
+readme = "README.md"
 
 preferred_target = "wasm"
 
@@ -24,5 +26,5 @@ keywords = [
 repository = "https://github.com/milkbobo/ffmpeg-moonbit"
 
 import {
-  "moonbitlang/x@0.5.7",
+  "moonbitlang/x@0.5.9",
 }

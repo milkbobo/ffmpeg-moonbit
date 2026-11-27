@@ -64,11 +64,11 @@ pub fn h264_mc_chroma_v128(
   let wbb = dx * ay // B (row0, col+1)
   let wcb = ax * dy // C (row1, col+0)
   let wdb = dx * dy // D (row1, col+1)
-  let sw_ab = @v128.i32x4_splat(wab.reinterpret_as_uint())
-  let sw_bb = @v128.i32x4_splat(wbb.reinterpret_as_uint())
-  let sw_cb = @v128.i32x4_splat(wcb.reinterpret_as_uint())
-  let sw_db = @v128.i32x4_splat(wdb.reinterpret_as_uint())
-  let rnd = @v128.i32x4_splat(32)
+  let sw_ab = @simd.i32x4_splat(wab.reinterpret_as_uint())
+  let sw_bb = @simd.i32x4_splat(wbb.reinterpret_as_uint())
+  let sw_cb = @simd.i32x4_splat(wcb.reinterpret_as_uint())
+  let sw_db = @simd.i32x4_splat(wdb.reinterpret_as_uint())
+  let rnd = @simd.i32x4_splat(32)
   // staged rows: w+1 taps, padded so 16-byte loads stay in bounds
   let ra : FixedArray[Byte] = FixedArray::make(w + 1 + 16, b'\x00')
   let rb : FixedArray[Byte] = FixedArray::make(w + 1 + 16, b'\x00')
@@ -86,34 +86,28 @@ pub fn h264_mc_chroma_v128(
     let mut col = 0
     while col + 4 <= w {
       // widen the two load offsets of each staged row
-      let a = @v128.i32x4_extend_low_i16x8_u(
-        @v128.i16x8_extend_low_i8x16_u(@v128.v128_load(ra, col)),
+      let a = @simd.i32x4_extend_low_i16x8_u(
+        @simd.i16x8_extend_low_i8x16_u(@simd.v128_load(ra, col)),
       )
-      let b = @v128.i32x4_extend_low_i16x8_u(
-        @v128.i16x8_extend_low_i8x16_u(@v128.v128_load(ra, col + 1)),
+      let b = @simd.i32x4_extend_low_i16x8_u(
+        @simd.i16x8_extend_low_i8x16_u(@simd.v128_load(ra, col + 1)),
       )
-      let c = @v128.i32x4_extend_low_i16x8_u(
-        @v128.i16x8_extend_low_i8x16_u(@v128.v128_load(rb, col)),
+      let c = @simd.i32x4_extend_low_i16x8_u(
+        @simd.i16x8_extend_low_i8x16_u(@simd.v128_load(rb, col)),
       )
-      let d = @v128.i32x4_extend_low_i16x8_u(
-        @v128.i16x8_extend_low_i8x16_u(@v128.v128_load(rb, col + 1)),
+      let d = @simd.i32x4_extend_low_i16x8_u(
+        @simd.i16x8_extend_low_i8x16_u(@simd.v128_load(rb, col + 1)),
       )
-      let acc = @v128.i32x4_add(
-        @v128.i32x4_add(
-          @v128.i32x4_mul(a, sw_ab),
-          @v128.i32x4_mul(b, sw_bb),
-        ),
-        @v128.i32x4_add(
-          @v128.i32x4_mul(c, sw_cb),
-          @v128.i32x4_mul(d, sw_db),
-        ),
+      let acc = @simd.i32x4_add(
+        @simd.i32x4_add(@simd.i32x4_mul(a, sw_ab), @simd.i32x4_mul(b, sw_bb)),
+        @simd.i32x4_add(@simd.i32x4_mul(c, sw_cb), @simd.i32x4_mul(d, sw_db)),
       )
-      let o = @v128.i32x4_shr_s(@v128.i32x4_add(acc, rnd), 6)
+      let o = @simd.i32x4_shr_s(@simd.i32x4_add(acc, rnd), 6)
       let p = dstoff + row * dstride + col
-      dst[p] = @v128.i32x4_extract_lane(o, 0).reinterpret_as_int()
-      dst[p + 1] = @v128.i32x4_extract_lane(o, 1).reinterpret_as_int()
-      dst[p + 2] = @v128.i32x4_extract_lane(o, 2).reinterpret_as_int()
-      dst[p + 3] = @v128.i32x4_extract_lane(o, 3).reinterpret_as_int()
+      dst[p] = @simd.i32x4_extract_lane(o, 0).reinterpret_as_int()
+      dst[p + 1] = @simd.i32x4_extract_lane(o, 1).reinterpret_as_int()
+      dst[p + 2] = @simd.i32x4_extract_lane(o, 2).reinterpret_as_int()
+      dst[p + 3] = @simd.i32x4_extract_lane(o, 3).reinterpret_as_int()
       col = col + 4
     }
     // scalar tail (w % 4)
@@ -123,9 +117,9 @@ pub fn h264_mc_chroma_v128(
       let c = rb[col].to_int()
       let d = rb[col + 1].to_int()
       dst[dstoff + row * dstride + col] = (
-        a * wab + b * wbb + c * wcb + d * wdb + 32
-      ) >>
-      6
+          a * wab + b * wbb + c * wcb + d * wdb + 32
+        ) >>
+        6
       col = col + 1
     }
   }

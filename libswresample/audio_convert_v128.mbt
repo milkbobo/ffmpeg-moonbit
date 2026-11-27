@@ -35,12 +35,12 @@
 /// `av_clip_int16` lane-wise. */
 #cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn acv_clip_int16(v : V128) -> V128 {
-  @v128.i32x4_min_s(
-    @v128.i32x4_max_s(
+  @simd.i32x4_min_s(
+    @simd.i32x4_max_s(
       v,
-      @v128.i32x4_splat((-32768).reinterpret_as_uint() & 0xFFFFFFFFU),
+      @simd.i32x4_splat((-32768).reinterpret_as_uint() & 0xFFFFFFFFU),
     ),
-    @v128.i32x4_splat(32767),
+    @simd.i32x4_splat(32767),
   )
 }
 
@@ -53,11 +53,11 @@ fn acv_clip_int16(v : V128) -> V128 {
 /// Returns the two results in `i32x4` lanes 0 and 1 (lanes 2/3 are zero).
 #cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn acv_flt2_to_s16(a : Array[Double], at : Int32) -> V128 {
-  let scale = @v128.f64x2_splat(32768.0)
-  let r = @v128.f64x2_nearest(
-    @v128.f64x2_mul(@v128.f64x2_const(a[at], a[at + 1]), scale),
+  let scale = @simd.f64x2_splat(32768.0)
+  let r = @simd.f64x2_nearest(
+    @simd.f64x2_mul(@simd.f64x2_const(a[at], a[at + 1]), scale),
   )
-  let as_i32 = @v128.i32x4_trunc_sat_f64x2_s_zero(r)
+  let as_i32 = @simd.i32x4_trunc_sat_f64x2_s_zero(r)
   acv_clip_int16(as_i32)
 }
 
@@ -107,6 +107,6 @@ pub fn swr_flt_planar_to_s16_packed_v128(
 /// Extract the s16 held in the low half of `i32x4` lane `k`, sign-extended. */
 #cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn acv_low_i16(v : V128, k : Int32) -> Int32 {
-  let x = @v128.i32x4_extract_lane(v, k).reinterpret_as_int()
+  let x = @simd.i32x4_extract_lane(v, k).reinterpret_as_int()
   x << 16 >> 16
 }

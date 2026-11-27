@@ -45,7 +45,7 @@
 /// scalar port's `aac_two_f32` performs).
 #cfg(any(target="native", target="wasm"))
 fn aev_load4(a : Array[Double], at : Int32) -> V128 {
-  @v128.f32x4_const(
+  @simd.f32x4_const(
     Float::from_double(a[at]),
     Float::from_double(a[at + 1]),
     Float::from_double(a[at + 2]),
@@ -58,10 +58,10 @@ fn aev_load4(a : Array[Double], at : Int32) -> V128 {
 /// without loss).
 #cfg(any(target="native", target="wasm"))
 fn aev_store4(a : Array[Double], at : Int32, v : V128) -> Unit {
-  a[at] = @v128.f32x4_extract_lane(v, 0).to_double()
-  a[at + 1] = @v128.f32x4_extract_lane(v, 1).to_double()
-  a[at + 2] = @v128.f32x4_extract_lane(v, 2).to_double()
-  a[at + 3] = @v128.f32x4_extract_lane(v, 3).to_double()
+  a[at] = @simd.f32x4_extract_lane(v, 0).to_double()
+  a[at + 1] = @simd.f32x4_extract_lane(v, 1).to_double()
+  a[at + 2] = @simd.f32x4_extract_lane(v, 2).to_double()
+  a[at + 3] = @simd.f32x4_extract_lane(v, 3).to_double()
 }
 
 ///|
@@ -69,7 +69,7 @@ fn aev_store4(a : Array[Double], at : Int32, v : V128) -> Unit {
 #cfg(any(target="native", target="wasm"))
 fn aev_sqrtf(x : Double) -> Double {
   let f = Float::from_double(x)
-  @v128.f32x4_extract_lane(@v128.f32x4_sqrt(@v128.f32x4_splat(f)), 0).to_double()
+  @simd.f32x4_extract_lane(@simd.f32x4_sqrt(@simd.f32x4_splat(f)), 0).to_double()
 }
 
 ///|
@@ -83,9 +83,9 @@ pub fn aac_abs_pow34_v128(
 ) -> Unit {
   let mut i = 0
   while i + 4 <= size {
-    let x = @v128.f32x4_abs(aev_load4(input, i))
-    let inner = @v128.f32x4_sqrt(x)
-    aev_store4(out, i, @v128.f32x4_sqrt(@v128.f32x4_mul(x, inner)))
+    let x = @simd.f32x4_abs(aev_load4(input, i))
+    let inner = @simd.f32x4_sqrt(x)
+    aev_store4(out, i, @simd.f32x4_sqrt(@simd.f32x4_mul(x, inner)))
     i = i + 4
   }
   while i < size {
@@ -117,22 +117,22 @@ pub fn aac_quantize_bands_v128(
   maxval : Int32,
   q34 : Double,
 ) -> Unit {
-  let qv = @v128.f32x4_splat(Float::from_double(q34))
-  let rv = @v128.f32x4_splat(Float::from_double(aev_c_quant))
-  let mav = @v128.f32x4_splat(Float::from_double(maxval.to_double()))
-  let zero = @v128.f32x4_splat(0.0)
+  let qv = @simd.f32x4_splat(Float::from_double(q34))
+  let rv = @simd.f32x4_splat(Float::from_double(aev_c_quant))
+  let mav = @simd.f32x4_splat(Float::from_double(maxval.to_double()))
+  let zero = @simd.f32x4_splat(0.0)
   let mut i = 0
   while i + 4 <= size {
     let s = aev_load4(scaled, scaled_off + i)
-    let capped = @v128.f32x4_min(
-      @v128.f32x4_add(@v128.f32x4_mul(s, qv), rv),
+    let capped = @simd.f32x4_min(
+      @simd.f32x4_add(@simd.f32x4_mul(s, qv), rv),
       mav,
     )
-    let trunc = @v128.i32x4_trunc_sat_f32x4_s(capped)
+    let trunc = @simd.i32x4_trunc_sat_f32x4_s(capped)
     let outv = if is_signed {
-      let neg = @v128.i32x4_neg(trunc)
-      let mask = @v128.f32x4_lt(aev_load4(input, in_off + i), zero)
-      @v128.v128_bitselect(neg, trunc, mask)
+      let neg = @simd.i32x4_neg(trunc)
+      let mask = @simd.f32x4_lt(aev_load4(input, in_off + i), zero)
+      @simd.v128_bitselect(neg, trunc, mask)
     } else {
       trunc
     }
@@ -169,7 +169,7 @@ fn q34_f32(q34 : Double) -> Double {
 fn aev_store_i32x4(a : Array[Int32], at : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    a[at + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    a[at + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }
@@ -178,7 +178,7 @@ fn aev_store_i32x4(a : Array[Int32], at : Int32, v : V128) -> Unit {
 /// Load four `i32x4` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn aev_load_i32x4(a : Array[Int32], at : Int32) -> V128 {
-  @v128.i32x4_const(
+  @simd.i32x4_const(
     a[at].reinterpret_as_uint(),
     a[at + 1].reinterpret_as_uint(),
     a[at + 2].reinterpret_as_uint(),
@@ -190,7 +190,7 @@ fn aev_load_i32x4(a : Array[Int32], at : Int32) -> V128 {
 /// Load eight `int16`-valued samples from an `Array[Int32]` as `i16x8`. */
 #cfg(any(target="native", target="wasm"))
 fn aev_load_i16x8(a : Array[Int32], at : Int32) -> V128 {
-  @v128.i16x8_const(
+  @simd.i16x8_const(
     a[at].reinterpret_as_uint().to_uint16(),
     a[at + 1].reinterpret_as_uint().to_uint16(),
     a[at + 2].reinterpret_as_uint().to_uint16(),
@@ -218,16 +218,16 @@ pub fn aac_scalarproduct_int16_v128(
   while i + 8 <= n {
     let a = aev_load_i16x8(s1, o1 + i)
     let b = aev_load_i16x8(s2, o2 + i)
-    let d = @v128.i32x4_dot_i16x8_s(a, b)
+    let d = @simd.i32x4_dot_i16x8_s(a, b)
     total = total +
-      @v128.i32x4_extract_lane(d, 0).reinterpret_as_int().to_int64() +
-      @v128.i32x4_extract_lane(d, 1).reinterpret_as_int().to_int64() +
-      @v128.i32x4_extract_lane(d, 2).reinterpret_as_int().to_int64() +
-      @v128.i32x4_extract_lane(d, 3).reinterpret_as_int().to_int64()
+      @simd.i32x4_extract_lane(d, 0).reinterpret_as_int().to_int64() +
+      @simd.i32x4_extract_lane(d, 1).reinterpret_as_int().to_int64() +
+      @simd.i32x4_extract_lane(d, 2).reinterpret_as_int().to_int64() +
+      @simd.i32x4_extract_lane(d, 3).reinterpret_as_int().to_int64()
     i = i + 8
   }
   while i < n {
-    total = total + (s1[o1 + i].to_int64() * s2[o2 + i].to_int64())
+    total = total + s1[o1 + i].to_int64() * s2[o2 + i].to_int64()
     i = i + 1
   }
   total
@@ -248,10 +248,10 @@ pub fn ac3_extract_exponents_v128(
 ) -> Unit {
   let mut i = 0
   while i + 4 <= n {
-    let v = @v128.i32x4_abs(aev_load_i32x4(exp_in, i))
+    let v = @simd.i32x4_abs(aev_load_i32x4(exp_in, i))
     let mut k = 0
     while k < 4 {
-      let x = @v128.i32x4_extract_lane(v, k).reinterpret_as_int()
+      let x = @simd.i32x4_extract_lane(v, k).reinterpret_as_int()
       exp_out[i + k] = aev_exponent(x)
       k = k + 1
     }

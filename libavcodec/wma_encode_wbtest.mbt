@@ -3,7 +3,8 @@
 /// packet shape, round-trip through the bit-exact decoder, and the
 /// total_gain search behavior.
 
-///| Generate one frame of interleaved s16-ranged samples from a tone mix,
+///|
+/// Generate one frame of interleaved s16-ranged samples from a tone mix,
 /// scaled to the f32-normalized range the encoder input uses.
 fn wma_enc_test_tone_frame(n : Int32, ch : Int32, t0 : Int32) -> Array[Double] {
   let out : Array[Double] = Array::make(n * ch, 0.0)
@@ -14,8 +15,7 @@ fn wma_enc_test_tone_frame(n : Int32, ch : Int32, t0 : Int32) -> Array[Double] {
       let phase = if c == 1 { 0.31 } else { 0.0 }
       let v = 12000.0 *
         @math.sin(2.0 * 3.14159265358979323846 * 440.0 * t / 44100.0 + phase) +
-        5000.0 *
-        @math.sin(2.0 * 3.14159265358979323846 * 4400.0 * t / 44100.0)
+        5000.0 * @math.sin(2.0 * 3.14159265358979323846 * 4400.0 * t / 44100.0)
       // quantize to s16 then normalize to the encoder's f32 input range
       let q = wma_enc_lrint(v)
       out[i * ch + c] = q.to_double() / 32768.0
@@ -24,21 +24,28 @@ fn wma_enc_test_tone_frame(n : Int32, ch : Int32, t0 : Int32) -> Array[Double] {
   out
 }
 
+///|
 test "WMA encoder: constructor validation" {
   match wma_encoder_new(2, 44100, 2, 128000) {
     Err(e) => fail("44100 stereo 128k rejected: \{e}")
     Ok(_) => inspect("ok", content="ok")
   }
   match wma_encoder_new(2, 44100, 3, 128000) {
-    Err(e) => inspect(e, content="wma_enc: too many channels: got 3, need 2 or fewer")
+    Err(e) =>
+      inspect(e, content="wma_enc: too many channels: got 3, need 2 or fewer")
     Ok(_) => fail("expected too-many-channels rejection")
   }
   match wma_encoder_new(2, 96000, 2, 128000) {
-    Err(e) => inspect(e, content="wma_enc: sample rate is too high: 96000 > 48kHz")
+    Err(e) =>
+      inspect(e, content="wma_enc: sample rate is too high: 96000 > 48kHz")
     Ok(_) => fail("expected sample-rate rejection")
   }
   match wma_encoder_new(2, 44100, 2, 8000) {
-    Err(e) => inspect(e, content="wma_enc: bitrate too low: got 8000, need 24000 or higher")
+    Err(e) =>
+      inspect(
+        e,
+        content="wma_enc: bitrate too low: got 8000, need 24000 or higher",
+      )
     Ok(_) => fail("expected bitrate rejection")
   }
   match wma_encoder_new(3, 44100, 2, 128000) {
@@ -47,6 +54,7 @@ test "WMA encoder: constructor validation" {
   }
 }
 
+///|
 test "WMA encoder: round-trip through the decoder" {
   let enc = wma_encoder_new(2, 44100, 2, 128000).unwrap()
   inspect(enc.frame_size(), content="2048")
@@ -60,26 +68,30 @@ test "WMA encoder: round-trip through the decoder" {
   let nframes = 3
   let all_ok = true
   for f = 0; f < nframes; f = f + 1 {
-    let frame = wma_enc_test_tone_frame(enc.frame_size(), 2, f * enc.frame_size())
+    let frame = wma_enc_test_tone_frame(
+      enc.frame_size(),
+      2,
+      f * enc.frame_size(),
+    )
     let pkt = match enc.encode_frame(frame) {
       Ok(p) => p
       Err(e) => fail("encode error frame \{f}: \{e}")
     }
     inspect(pkt.length(), content=enc.block_align().to_string())
     match dec.decode_packet(pkt) {
-      Ok(chs) => {
+      Ok(chs) =>
         // decoded: frame_len samples per channel for this packet
         if chs.length() != 2 || chs[0].length() != enc.frame_size() {
           fail("decoded shape mismatch frame \{f}")
         }
-      }
       Err(e) => fail("decode error frame \{f}: \{e}")
     }
   }
   inspect(all_ok, content="true")
 }
 
-///| Round-trip SNR: encode 8 frames, decode, align for the one-frame delay,
+///|
+/// Round-trip SNR: encode 8 frames, decode, align for the one-frame delay,
 /// and require the same quality floor the C encoder achieves on this
 /// signal.  Computed on the s16 grid like the other audio quality gates.
 test "WMA encoder: round-trip SNR quality gate" {
@@ -88,8 +100,14 @@ test "WMA encoder: round-trip SNR quality gate" {
   let n = enc.frame_size()
   let nframes = 8
   let total = n * nframes
-  let orig : Array[Array[Double]] = [Array::make(total, 0.0), Array::make(total, 0.0)]
-  let decoded : Array[Array[Double]] = [Array::make(total, 0.0), Array::make(total, 0.0)]
+  let orig : Array[Array[Double]] = [
+    Array::make(total, 0.0),
+    Array::make(total, 0.0),
+  ]
+  let decoded : Array[Array[Double]] = [
+    Array::make(total, 0.0),
+    Array::make(total, 0.0),
+  ]
   let mut pos = 0
   for f = 0; f < nframes; f = f + 1 {
     let frame = wma_enc_test_tone_frame(n, 2, f * n)
@@ -127,7 +145,8 @@ test "WMA encoder: round-trip SNR quality gate" {
   inspect(snr > 30.0, content="true")
 }
 
-///| Bisect the abort: build the encoder and run only the window/MDCT step.
+///|
+/// Bisect the abort: build the encoder and run only the window/MDCT step.
 test "WMA encoder: window+MDCT step only" {
   inspect(1, content="1")
   let enc = wma_encoder_new(2, 44100, 2, 128000).unwrap()
@@ -148,7 +167,9 @@ test "WMA encoder: window+MDCT step only" {
     out[i] = fo[i]
   }
   for i = 0; i < n; i = i + 1 {
-    fo[i] = wma_enc_f32(frame[i * 2] * wma_enc_f32(2.0 * 32768.0 / window_len.to_double()))
+    fo[i] = wma_enc_f32(
+      frame[i * 2] * wma_enc_f32(2.0 * 32768.0 / window_len.to_double()),
+    )
   }
   for i = 0; i < n; i = i + 1 {
     out[window_len + i] = wma_enc_f32(fo[n - 1 - i] * win[i])
@@ -164,7 +185,8 @@ test "WMA encoder: window+MDCT step only" {
   inspect(enc.coefs[0][0] != 0.0, content="true")
 }
 
-///| Then only one encode_block call.
+///|
+/// Then only one encode_block call.
 test "WMA encoder: single encode_block" {
   let enc = wma_encoder_new(2, 44100, 2, 128000).unwrap()
   let n = enc.frame_size()
@@ -184,19 +206,21 @@ test "WMA encoder: single encode_block" {
   inspect(err >= 0, content="true")
 }
 
-
-///| Smallest slice: the naive MDCT alone on a 8-sample input.
+///|
+/// Smallest slice: the naive MDCT alone on a 8-sample input.
 test "WMA encoder: mdct alone" {
   let x : Array[Double] = [0.1, 0.2, 0.3, 0.4, -0.1, -0.2, -0.3, 0.0]
   let y = wma_enc_mdct_fwd(x, 4)
   inspect(y.length(), content="4")
 }
 
-///| Then the tone generator.
+///|
+/// Then the tone generator.
 test "WMA encoder: tone generator" {
   let t = wma_enc_test_tone_frame(16, 2, 0)
   inspect(t.length(), content="32")
 }
+
 ///|
 /// WMA v1 interop: the same tone sequence encoded with version=1 matches
 /// the docker linuxserver/ffmpeg:9.0.2 wmav1 encoder byte for byte.
@@ -206,8 +230,7 @@ test "WMA encoder: tone generator" {
 ///   (tone frames: wma_enc_test_tone_frame at 64..? see wma_encode.mbt tests)
 
 ///|
-let wma_enc_v1_packets_b64 : Bytes =
-  b"7RQAAACgAAAPz/P8vy/P8/y/LAf54C/LzeA/NYCrH83XB5rPesfBJns4iul8+TwhWmc+XBNsEw6fL+I/gJJAAwXY8BbwAPgP8AB8" +
+let wma_enc_v1_packets_b64 : Bytes = b"7RQAAACgAAAPz/P8vy/P8/y/LAf54C/LzeA/NYCrH83XB5rPesfBJns4iul8+TwhWmc+XBNsEw6fL+I/gJJAAwXY8BbwAPgP8AB8" +
   b"B6wAPgKfAB8BJAAHnrM+B/i90jMGzPldL4JPNVw/n5rKMB2/KOL9rduWre/4n3HStULdL6h+l8ilNCKU0Ck0BJQElASUBJQElExM" +
   b"TExMTExMTExMTExPniYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiQCQCQgpCCkIKQgpCCkIKQgpCDSKDSKDSihL9D5L9C0lbo4" +
   b"qeOi3P/2+/Jb83bs9spz5a4PCVYJnwFGAA+AqgAHwEmAAuIasDvNuIv6rg48BrWUP/2+t1PHQtUraHyX6HyaUUJpRQaQgpCCkIKQ" +
@@ -283,7 +306,11 @@ test "WMA encoder: v1 packets match FFmpeg wmav1 byte-for-byte" {
     pos = pos + 743
     if pkt != want {
       let mut d = 0
-      let lim = if pkt.length() < want.length() { pkt.length() } else { want.length() }
+      let lim = if pkt.length() < want.length() {
+        pkt.length()
+      } else {
+        want.length()
+      }
       while d < lim && pkt[d] == want[d] {
         d = d + 1
       }

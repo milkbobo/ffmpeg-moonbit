@@ -45,7 +45,11 @@ fn hr_clip(v : Int32, bd : Int32) -> Int32 {
 
 ///|
 /// Verbatim `hevc_qpel_h`. */
-fn hr_qpel_h(row : FixedArray[Int32], i : Int32, f : FixedArray[Int32]) -> Int32 {
+fn hr_qpel_h(
+  row : FixedArray[Int32],
+  i : Int32,
+  f : FixedArray[Int32],
+) -> Int32 {
   f[0] * row[i - 3] +
   f[1] * row[i - 2] +
   f[2] * row[i - 1] +
@@ -76,7 +80,11 @@ fn hr_qpel_v(
 
 ///|
 /// Verbatim `hevc_epel_h`. */
-fn hr_epel_h(row : FixedArray[Int32], i : Int32, f : FixedArray[Int32]) -> Int32 {
+fn hr_epel_h(
+  row : FixedArray[Int32],
+  i : Int32,
+  f : FixedArray[Int32],
+) -> Int32 {
   f[0] * row[i - 1] + f[1] * row[i] + f[2] * row[i + 1] + f[3] * row[i + 2]
 }
 
@@ -132,8 +140,9 @@ fn hr_luma_mc_uni(
     let f = hr_qpel_filters[my]
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hr_qpel_v(buf, base + j * buf_stride + i, buf_stride, f) >>
-          norm) +
+        let v = (
+            hr_qpel_v(buf, base + j * buf_stride + i, buf_stride, f) >> norm
+          ) +
           offset
         dst[(y0 + j) * dst_stride + x0 + i] = hr_clip(v >> shift, bd)
       }
@@ -152,7 +161,8 @@ fn hr_luma_mc_uni(
     let tbase = 3 * max_pb
     for j in 0..<bh {
       for i in 0..<bw {
-        let v = (hr_qpel_v(tmp, tbase + j * max_pb + i, max_pb, fv) >> 6) + offset
+        let v = (hr_qpel_v(tmp, tbase + j * max_pb + i, max_pb, fv) >> 6) +
+          offset
         dst[(y0 + j) * dst_stride + x0 + i] = hr_clip(v >> shift, bd)
       }
     }
@@ -206,7 +216,11 @@ test "hevc mc v128: qpel h/v/hv raw sums over phases, sizes, depths" {
         let e2 : FixedArray[Int32] = FixedArray::make(dst_n, 0)
         for y = 0; y < h; y = y + 1 {
           for x = 0; x < w; x = x + 1 {
-            e1[dstoff + y * dstride + x] = hr_qpel_h(src, soff + y * sstride + x, fh)
+            e1[dstoff + y * dstride + x] = hr_qpel_h(
+              src,
+              soff + y * sstride + x,
+              fh,
+            )
           }
         }
         hevc_qpel_h_raw_v128(e2, dstoff, dstride, src, soff, sstride, w, h, fh)
@@ -217,7 +231,10 @@ test "hevc mc v128: qpel h/v/hv raw sums over phases, sizes, depths" {
         for y = 0; y < h; y = y + 1 {
           for x = 0; x < w; x = x + 1 {
             f1[dstoff + y * dstride + x] = hr_qpel_v(
-              src, soff + y * sstride + x, sstride, fh,
+              src,
+              soff + y * sstride + x,
+              sstride,
+              fh,
             )
           }
         }
@@ -242,7 +259,10 @@ test "hevc mc v128: qpel h/v/hv raw sums over phases, sizes, depths" {
           for j = 0; j < h; j = j + 1 {
             for i = 0; i < w; i = i + 1 {
               g1[dstoff + j * dstride + i] = hr_qpel_v(
-                tmp, tbase + j * max_pb + i, max_pb, fv,
+                tmp,
+                tbase + j * max_pb + i,
+                max_pb,
+                fv,
               )
             }
           }
@@ -277,7 +297,11 @@ test "hevc mc v128: epel h/v/hv raw sums over eighth-pel phases" {
         let e2 : FixedArray[Int32] = FixedArray::make(dst_n, 0)
         for y = 0; y < h; y = y + 1 {
           for x = 0; x < w; x = x + 1 {
-            e1[dstoff + y * dstride + x] = hr_epel_h(src, soff + y * sstride + x, fh)
+            e1[dstoff + y * dstride + x] = hr_epel_h(
+              src,
+              soff + y * sstride + x,
+              fh,
+            )
           }
         }
         hevc_epel_h_raw_v128(e2, dstoff, dstride, src, soff, sstride, w, h, fh)
@@ -287,7 +311,10 @@ test "hevc mc v128: epel h/v/hv raw sums over eighth-pel phases" {
         for y = 0; y < h; y = y + 1 {
           for x = 0; x < w; x = x + 1 {
             f1[dstoff + y * dstride + x] = hr_epel_v(
-              src, soff + y * sstride + x, sstride, fh,
+              src,
+              soff + y * sstride + x,
+              sstride,
+              fh,
             )
           }
         }
@@ -307,11 +334,16 @@ test "hevc mc v128: epel h/v/hv raw sums over eighth-pel phases" {
         for j = 0; j < h; j = j + 1 {
           for i = 0; i < w; i = i + 1 {
             g1[dstoff + j * dstride + i] = hr_epel_v(
-              tmp, tstride + j * tstride + i, tstride, fh,
+              tmp,
+              tstride + j * tstride + i,
+              tstride,
+              fh,
             )
           }
         }
-        hevc_epel_hv_raw_v128(g2, dstoff, dstride, src, soff, sstride, w, h, fh, fh)
+        hevc_epel_hv_raw_v128(
+          g2, dstoff, dstride, src, soff, sstride, w, h, fh, fh,
+        )
         assert_true(hr_same(g1, g2))
       }
     }
@@ -397,11 +429,15 @@ test "hevc mc v128: extreme samples and impulse rows" {
             for y = 0; y < h; y = y + 1 {
               for x = 0; x < w; x = x + 1 {
                 e1[dstoff + y * dstride + x] = hr_qpel_h(
-                  src, soff + y * sstride + x, f,
+                  src,
+                  soff + y * sstride + x,
+                  f,
                 )
               }
             }
-            hevc_qpel_h_raw_v128(e2, dstoff, dstride, src, soff, sstride, w, h, f)
+            hevc_qpel_h_raw_v128(
+              e2, dstoff, dstride, src, soff, sstride, w, h, f,
+            )
             assert_true(hr_same(e1, e2))
           }
         }

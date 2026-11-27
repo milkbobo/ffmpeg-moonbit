@@ -31,16 +31,22 @@ fn pr_clip8(x : Int32, bit_depth : Int32) -> Int32 {
 
 ///|
 let pr_dc : Int32 = 0
+
 ///|
 let pr_hor : Int32 = 1
+
 ///|
 let pr_vert : Int32 = 2
+
 ///|
 let pr_plane : Int32 = 3
+
 ///|
 let pr_left_dc : Int32 = 4
+
 ///|
 let pr_top_dc : Int32 = 5
+
 ///|
 let pr_128_dc : Int32 = 6
 
@@ -74,7 +80,9 @@ fn pr_pred16x16(
         dst[off + j * stride + i] = v
       }
     }
-  } else if mode == pr_dc || mode == pr_left_dc || mode == pr_top_dc ||
+  } else if mode == pr_dc ||
+    mode == pr_left_dc ||
+    mode == pr_top_dc ||
     mode == pr_128_dc {
     let mut dc = 1 << (bit_depth - 1)
     if mode == pr_dc {
@@ -307,7 +315,13 @@ test "h264 pred v128: 16x16 and 8x8 all modes, depths, availability" {
   for bit_depth in [8, 10, 12] {
     let max = (1 << bit_depth) - 1
     for mode in modes {
-      for (top, left) in [(true, true), (true, false), (false, true), (false, false)] {
+      for
+        (top, left) in [
+          (true, true),
+          (true, false),
+          (false, true),
+          (false, false),
+        ] {
         for k = 0; k < 3; k = k + 1 {
           let src = pr_gen(
             0x9E3779B9U +
@@ -343,7 +357,15 @@ test "h264 pred v128: 16x16 and 8x8 all modes, depths, availability" {
           let e2 = pr_copy(src)
           let o2 = 8 * stride + 8
           let s1 = pr_pred8x8(e1, o2, stride, mode, top, left, bit_depth)
-          let s2 = h264_pred8x8_v128(e2, o2, stride, mode, top, left, bit_depth~)
+          let s2 = h264_pred8x8_v128(
+            e2,
+            o2,
+            stride,
+            mode,
+            top,
+            left,
+            bit_depth~,
+          )
           assert_eq(pr_ok(s2), pr_ok(s1))
           if pr_ok(s1) {
             let mut i = 0
@@ -364,8 +386,24 @@ test "h264 pred v128: unsupported modes report the same error" {
   let plane_n = stride * 16
   let src = pr_gen(0x12345678U, plane_n, 255)
   let d = pr_copy(src)
-  assert_true(!pr_ok(h264_pred16x16_v128(d, 8 * stride + 8, stride, 99, true, true, bit_depth=8)))
-  assert_true(!pr_ok(h264_pred8x8_v128(d, 8 * stride + 8, stride, 99, true, true, bit_depth=8)))
+  assert_true(
+    !pr_ok(
+      h264_pred16x16_v128(
+        d,
+        8 * stride + 8,
+        stride,
+        99,
+        true,
+        true,
+        bit_depth=8,
+      ),
+    ),
+  )
+  assert_true(
+    !pr_ok(
+      h264_pred8x8_v128(d, 8 * stride + 8, stride, 99, true, true, bit_depth=8),
+    ),
+  )
   // and the plane is untouched by the rejected call
   let mut i = 0
   while i < plane_n {
@@ -389,7 +427,15 @@ test "h264 pred v128: DC sums saturate at high bit depth and extremes" {
         let d2 = pr_copy(src)
         let off = 8 * stride + 8
         let r1 = pr_pred16x16(d1, off, stride, mode, true, true, bit_depth)
-        let r2 = h264_pred16x16_v128(d2, off, stride, mode, true, true, bit_depth~)
+        let r2 = h264_pred16x16_v128(
+          d2,
+          off,
+          stride,
+          mode,
+          true,
+          true,
+          bit_depth~,
+        )
         assert_eq(pr_ok(r2), pr_ok(r1))
         let mut i = 0
         while i < plane_n {
@@ -422,7 +468,7 @@ test "h264 pred v128: plane mode with steep and flat gradients" {
       } else if shape == "ramp_down" {
         for r = 0; r < 32; r = r + 1 {
           for c = 0; c < 32; c = c + 1 {
-            src[r * stride + c] = max - ((r * 3 + c * 5) % (max + 1))
+            src[r * stride + c] = max - (r * 3 + c * 5) % (max + 1)
           }
         }
       } else if shape == "checker" {
@@ -480,9 +526,11 @@ test "h264 pred v128: writes stay inside the predicted block" {
   let plane_n = stride * 32
   let src = pr_gen(0xFEEDFACEU, plane_n, 255)
   let off = 8 * stride + 8
-  for mode in [pr_vert, pr_hor, pr_dc, pr_top_dc, pr_left_dc, pr_128_dc, pr_plane] {
+  for
+    mode in [pr_vert, pr_hor, pr_dc, pr_top_dc, pr_left_dc, pr_128_dc, pr_plane] {
     let d2 = pr_copy(src)
-    h264_pred16x16_v128(d2, off, stride, mode, true, true, bit_depth=8) |> ignore
+    h264_pred16x16_v128(d2, off, stride, mode, true, true, bit_depth=8)
+    |> ignore
     let mut r = 0
     while r < 32 {
       let mut c = 0

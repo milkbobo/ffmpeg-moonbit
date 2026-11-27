@@ -35,8 +35,8 @@
 /// The G.722 QMF coefficient table (`g722_qmf_coeffs`, 24 `int16` taps).
 #cfg(any(target="native", target="wasm"))
 let g722v_qmf_coeffs : FixedArray[Int32] = [
-  3, -11, -11, 53, 12, -156, 32, 362, -210, -805, 951, 3876, 3876, 951, -805,
-  -210, 362, 32, -156, 12, 53, -11, -11, 3,
+  3, -11, -11, 53, 12, -156, 32, 362, -210, -805, 951, 3876, 3876, 951, -805, -210,
+  362, 32, -156, 12, 53, -11, -11, 3,
 ]
 
 ///|
@@ -52,7 +52,7 @@ fn g722v_pack8(
   a6 : Int32,
   a7 : Int32,
 ) -> V128 {
-  @v128.i16x8_const(
+  @simd.i16x8_const(
     a0.reinterpret_as_uint().to_uint16(),
     a1.reinterpret_as_uint().to_uint16(),
     a2.reinterpret_as_uint().to_uint16(),
@@ -95,11 +95,11 @@ fn g722v_dot8(
     c[cbase + 6 * stride],
     c[cbase + 7 * stride],
   )
-  let d = @v128.i32x4_dot_i16x8_s(a, b)
-  @v128.i32x4_extract_lane(d, 0).reinterpret_as_int() +
-  @v128.i32x4_extract_lane(d, 1).reinterpret_as_int() +
-  @v128.i32x4_extract_lane(d, 2).reinterpret_as_int() +
-  @v128.i32x4_extract_lane(d, 3).reinterpret_as_int()
+  let d = @simd.i32x4_dot_i16x8_s(a, b)
+  @simd.i32x4_extract_lane(d, 0).reinterpret_as_int() +
+  @simd.i32x4_extract_lane(d, 1).reinterpret_as_int() +
+  @simd.i32x4_extract_lane(d, 2).reinterpret_as_int() +
+  @simd.i32x4_extract_lane(d, 3).reinterpret_as_int()
 }
 
 ///|
@@ -133,9 +133,9 @@ fn g722v_dot4(
     0,
     0,
   )
-  let d = @v128.i32x4_dot_i16x8_s(a, b)
-  @v128.i32x4_extract_lane(d, 0).reinterpret_as_int() +
-  @v128.i32x4_extract_lane(d, 1).reinterpret_as_int()
+  let d = @simd.i32x4_dot_i16x8_s(a, b)
+  @simd.i32x4_extract_lane(d, 0).reinterpret_as_int() +
+  @simd.i32x4_extract_lane(d, 1).reinterpret_as_int()
 }
 
 ///|

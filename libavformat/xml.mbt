@@ -138,7 +138,7 @@ fn xml_decode_entities(s : String) -> String {
         } else if ent == "apos" {
           sb.write_char('\'')
         } else if ent.has_prefix("#x") || ent.has_prefix("#X") {
-          let code = @string.parse_int(ent[2:], base=16) catch { _ => 0 }
+          let code = @string.parse_int(ent[2:], radix=16) catch { _ => 0 }
           sb.write_char(code.unsafe_to_char())
         } else if ent.has_prefix("#") {
           let code = @string.parse_int(ent[1:]) catch { _ => 0 }

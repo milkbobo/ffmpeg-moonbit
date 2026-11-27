@@ -48,9 +48,10 @@ pub fn SwrFilterType::from_code(
 }
 
 ///|
+#derive(Debug)
 pub(all) suberror SwrResampleError {
   InvalidResampleConfig(String)
-} derive(Debug)
+}
 
 ///|
 pub extend SwrResampleError with @moonbitlang/core/debug.Debug::{to_repr}

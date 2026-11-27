@@ -153,7 +153,9 @@ fn RealMediaState::sync(
 
 ///|
 /// `ff_rm_retrieve_cache`: the next packet of the audio group being drained.
-fn RealMediaState::retrieve_cache(self : RealMediaState) -> Result[Unit, String] {
+fn RealMediaState::retrieve_cache(
+  self : RealMediaState,
+) -> Result[Unit, String] {
   let io = self.io
   let si = self.audio_stream_num
   let st = self.streams[si]
@@ -260,7 +262,11 @@ fn RealMediaState::assemble_video(
     }
     // 9-byte slice table header: no slices, one entry
     let frame = Array::makei(take.to_int() + 9, i => {
-      if i < 9 { b'\x00' } else { bytes[i - 9] }
+      if i < 9 {
+        b'\x00'
+      } else {
+        bytes[i - 9]
+      }
     })
     realmedia_wl32(frame, 1, 1)
     realmedia_wl32(frame, 5, 0)
@@ -316,7 +322,10 @@ fn RealMediaState::assemble_video(
     // payload moved up over the unused table entries.
     buf[0] = (vst.cur_slice - 1).to_byte()
     let payload = vst.videobufpos - 1 - 8 * vst.slices
-    let out : Array[Byte] = Array::make(1 + 8 * vst.cur_slice + payload, b'\x00')
+    let out : Array[Byte] = Array::make(
+      1 + 8 * vst.cur_slice + payload,
+      b'\x00',
+    )
     for i = 0; i < 1 + 8 * vst.cur_slice; i = i + 1 {
       out[i] = buf[i]
     }
@@ -491,9 +500,10 @@ fn RealMediaState::read_packets(self : RealMediaState) -> String {
         Ok(v) => v
         Err(e) => return e
       }
-      if (flags & 2) != 0 && (seq.val & 0x7F) == 1 &&
+      if (flags & 2) != 0 &&
+        (seq.val & 0x7F) == 1 &&
         timestamp != av_nopts_value {
-        self.index.push({ stream_index: si, timestamp, pos })
+        self.index.push({ stream_index: si, timestamp, pos, })
       }
       if res != 0 {
         continue

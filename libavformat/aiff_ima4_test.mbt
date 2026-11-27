@@ -59,13 +59,17 @@ test "aiff PCM: declared count cannot consume the SSND pad or a later chunk" {
 ///|
 test "aiff IMA4: reject SSND offsets larger than the chunk payload" {
   let file = aiff_ima4_stereo_with_tail()
-  let invalid = Bytes::from_array([
-    for i in 0..<file.length() => match i {
-      64 => 0x7f
-      65 | 66 | 67 => 0xff
-      _ => file[i]
-    }
-  ])
+  let invalid = Bytes::from_array(
+    [
+      for i in 0..<file.length() => {
+        match i {
+          64 => 0x7f
+          65 | 66 | 67 => 0xff
+          _ => file[i]
+        }
+      }
+    ],
+  )
   match @libavformat.av_aiff_open(invalid) {
     Err(message) => assert_eq(message, "aiff: invalid SSND offset")
     Ok(_) => fail("expected an invalid SSND offset")

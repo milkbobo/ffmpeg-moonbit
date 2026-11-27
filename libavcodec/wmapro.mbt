@@ -68,7 +68,7 @@ struct WmaproBits {
 
 ///|
 fn WmaproBits::new(bytes : Array[Byte], size_bits : Int32) -> WmaproBits {
-  { bytes, size_bits, index: 0 }
+  { bytes, size_bits, index: 0, }
 }
 
 ///|
@@ -204,7 +204,7 @@ fn wmapro_vlc_new(
   }
   let start = FixedArray::makei(max_len + 2, _ => 0)
   let mut acc = 0
-  for len in 1..=max_len {
+  for len in 1..<=max_len {
     start[len] = acc
     acc += count[len]
   }
@@ -222,7 +222,7 @@ fn wmapro_vlc_new(
       code = code + (1UL << (32 - len))
     }
   }
-  { max_len, count, start, codes, syms: out_syms }
+  { max_len, count, start, codes, syms: out_syms, }
 }
 
 ///|
@@ -232,7 +232,7 @@ fn wmapro_vlc_new(
 /// string is a code; the escape symbols arrive as `-1`, as in the C.
 fn WmaproBits::read_vlc(self : WmaproBits, vlc : WmaproVlc) -> Int32 {
   let mut code = 0
-  for len in 1..=vlc.max_len {
+  for len in 1..<=vlc.max_len {
     code = (code << 1) | self.read1().reinterpret_as_int()
     let cnt = vlc.count[len]
     if cnt > 0 {
@@ -305,7 +305,9 @@ fn WmaproChannel::new() -> WmaproChannel {
     reuse_sf: false,
     scale_factor_step: 0,
     max_scale_factor: 0,
-    saved_scale_factors: FixedArray::makei(2, _ => FixedArray::makei(wmapro_max_bands, _ => 0)),
+    saved_scale_factors: FixedArray::makei(2, _ => {
+      FixedArray::makei(wmapro_max_bands, _ => 0)
+    }),
     scale_factor_idx: 0,
     scale_factors: FixedArray::makei(wmapro_max_bands, _ => 0),
     table_idx: 0,

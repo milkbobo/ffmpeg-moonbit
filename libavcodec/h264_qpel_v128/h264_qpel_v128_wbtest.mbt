@@ -361,17 +361,7 @@ test "h264 qpel v128: l2_shift5 merge matches the scalar reference" {
       let e1 = qr_gen(0x1234567U, n, max)
       let e2 = qr_copy(e1)
       qr_l2_shift5(
-        e1,
-        dstoff,
-        dstride,
-        src16,
-        off16,
-        s16stride,
-        src8,
-        off8,
-        s8stride,
-        w,
-        h,
+        e1, dstoff, dstride, src16, off16, s16stride, src8, off8, s8stride, w, h,
         bit_depth,
       )
       h264_qpel_l2_shift5_v128(
@@ -412,11 +402,41 @@ test "h264 qpel v128: writes stay inside the destination block" {
     for which in [0, 1, 2] {
       let d = qr_copy(base)
       if which == 0 {
-        h264_qpel_h_lowpass_v128(d, dstoff, dstride, src, soff, sstride, w, h, bit_depth=8)
+        h264_qpel_h_lowpass_v128(
+          d,
+          dstoff,
+          dstride,
+          src,
+          soff,
+          sstride,
+          w,
+          h,
+          bit_depth=8,
+        )
       } else if which == 1 {
-        h264_qpel_v_lowpass_v128(d, dstoff, dstride, src, soff, sstride, w, h, bit_depth=8)
+        h264_qpel_v_lowpass_v128(
+          d,
+          dstoff,
+          dstride,
+          src,
+          soff,
+          sstride,
+          w,
+          h,
+          bit_depth=8,
+        )
       } else {
-        h264_qpel_hv_lowpass_v128(d, dstoff, dstride, src, soff, sstride, w, h, bit_depth=8)
+        h264_qpel_hv_lowpass_v128(
+          d,
+          dstoff,
+          dstride,
+          src,
+          soff,
+          sstride,
+          w,
+          h,
+          bit_depth=8,
+        )
       }
       for r = 0; r < 24; r = r + 1 {
         for c = 0; c < 24; c = c + 1 {

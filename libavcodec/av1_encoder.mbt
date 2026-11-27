@@ -450,9 +450,11 @@ pub fn Av1Encoder::encode_frame(
   }
   let use_skip = effective_skip > 0
   if split_margin > 0 &&
-    (loop_filter_level0 != 0 ||
+    (
+      loop_filter_level0 != 0 ||
       loop_filter_level1 != 0 ||
-      loop_filter_sharpness != 0) {
+      loop_filter_sharpness != 0
+    ) {
     return Err(
       "av1 enc: split_margin requires zero loop-filter levels (the deblock mirror is not partition-aware yet)",
     )

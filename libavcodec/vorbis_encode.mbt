@@ -18,30 +18,39 @@
 ///   * PTS/DTS bookkeeping (`AudioFrameQueue`) is reduced to a running
 ///     sample counter; `skip_samples` side data is surfaced as a field.
 
-///| `MAX_FLOOR_CLASS_DIM`.
+///|
+/// `MAX_FLOOR_CLASS_DIM`.
 let vorbis_enc_max_floor_class_dim = 4
 
-///| `NUM_FLOOR_PARTITIONS`.
+///|
+/// `NUM_FLOOR_PARTITIONS`.
 let vorbis_enc_num_floor_partitions = 8
 
-///| `MAX_FLOOR_VALUES`.
+///|
+/// `MAX_FLOOR_VALUES`.
 let vorbis_enc_max_floor_values : Int32 = vorbis_enc_max_floor_class_dim *
-  vorbis_enc_num_floor_partitions + 2
+  vorbis_enc_num_floor_partitions +
+  2
 
-///| `RESIDUE_SIZE`.
+///|
+/// `RESIDUE_SIZE`.
 let vorbis_enc_residue_size = 1600
 
-///| `RESIDUE_PART_SIZE`.
+///|
+/// `RESIDUE_PART_SIZE`.
 let vorbis_enc_residue_part_size = 32
 
-///| `NUM_RESIDUE_PARTITIONS`.
+///|
+/// `NUM_RESIDUE_PARTITIONS`.
 let vorbis_enc_num_residue_partitions : Int32 = vorbis_enc_residue_size /
   vorbis_enc_residue_part_size
 
-///| `MAX_CHANNELS`.
+///|
+/// `MAX_CHANNELS`.
 let vorbis_enc_max_channels : Int32 = 2
 
-///| LSB-first bit writer (the C's `BITSTREAM_WRITER_LE` put_bits).
+///|
+/// LSB-first bit writer (the C's `BITSTREAM_WRITER_LE` put_bits).
 pub struct VorbisBitWriter {
   buf : Array[Byte]
   mut acc : UInt32
@@ -53,8 +62,13 @@ pub fn VorbisBitWriter::new() -> VorbisBitWriter {
   { buf: [], acc: 0, nbits: 0, }
 }
 
-///| `put_bits` with the LE bit order: value bits go out LSB first.
-pub fn VorbisBitWriter::put(self : VorbisBitWriter, v : UInt32, n : Int32) -> Unit {
+///|
+/// `put_bits` with the LE bit order: value bits go out LSB first.
+pub fn VorbisBitWriter::put(
+  self : VorbisBitWriter,
+  v : UInt32,
+  n : Int32,
+) -> Unit {
   let mut k = 0
   while k < n {
     self.acc = self.acc | (((v >> k) & 1) << self.nbits)
@@ -68,17 +82,20 @@ pub fn VorbisBitWriter::put(self : VorbisBitWriter, v : UInt32, n : Int32) -> Un
   }
 }
 
-///| `put_bits32`: 32 bits, LSB first.
+///|
+/// `put_bits32`: 32 bits, LSB first.
 pub fn VorbisBitWriter::put32(self : VorbisBitWriter, v : UInt32) -> Unit {
   self.put(v, 32)
 }
 
-///| `put_bits_count` in bits.
+///|
+/// `put_bits_count` in bits.
 pub fn VorbisBitWriter::bits(self : VorbisBitWriter) -> Int32 {
   self.buf.length() * 8 + self.nbits
 }
 
-///| `flush_put_bits` and return the bytes.
+///|
+/// `flush_put_bits` and return the bytes.
 pub fn VorbisBitWriter::finish(self : VorbisBitWriter) -> Bytes {
   if self.nbits > 0 {
     self.buf.push(self.acc.to_byte())
@@ -88,7 +105,8 @@ pub fn VorbisBitWriter::finish(self : VorbisBitWriter) -> Bytes {
   Bytes::from_array(self.buf[:])
 }
 
-///| `ilog`.
+///|
+/// `ilog`.
 fn vorbis_enc_ilog(v : Int32) -> Int32 {
   let mut n = 0
   let mut x = v
@@ -99,7 +117,8 @@ fn vorbis_enc_ilog(v : Int32) -> Int32 {
   n
 }
 
-///| `av_xiphlacing`: lacing values for a code length (255 continuation).
+///|
+/// `av_xiphlacing`: lacing values for a code length (255 continuation).
 fn vorbis_enc_xiphlacing(out : Array[Byte], v : Int32) -> Int32 {
   let mut n = 0
   let mut x = v
@@ -112,7 +131,8 @@ fn vorbis_enc_xiphlacing(out : Array[Byte], v : Int32) -> Int32 {
   n + 1
 }
 
-///| `put_float`: the Vorbis float32 wire format.
+///|
+/// `put_float`: the Vorbis float32 wire format.
 fn vorbis_enc_put_float(bw : VorbisBitWriter, f : Double) -> Unit {
   // frexp on the absolute value (frexp(-x) = [-frexp(x).mant, same exp]),
   // then ldexp(mant, 20); all table values are exact in binary32.
@@ -134,11 +154,14 @@ fn vorbis_enc_put_float(bw : VorbisBitWriter, f : Double) -> Unit {
   if f < 0 && mant != 0.0 {
     res = res | 0x80000000
   }
-  res = res | (m.reinterpret_as_uint() & 0xFFFFF) | (exp2 << 21).reinterpret_as_uint()
+  res = res |
+    (m.reinterpret_as_uint() & 0xFFFFF) |
+    (exp2 << 21).reinterpret_as_uint()
   bw.put32(res)
 }
 
-///| `vorbis_enc_codebook`.
+///|
+/// `vorbis_enc_codebook`.
 struct VorbisEncCodebook {
   nentries : Int32
   lens : Array[Int32]
@@ -153,8 +176,13 @@ struct VorbisEncCodebook {
   mut pow2 : Array[Double]?
 }
 
-///| `cb_lookup_vals`.
-fn vorbis_enc_cb_lookup_vals(lookup : Int32, dimensions : Int32, entries : Int32) -> Int32 {
+///|
+/// `cb_lookup_vals`.
+fn vorbis_enc_cb_lookup_vals(
+  lookup : Int32,
+  dimensions : Int32,
+  entries : Int32,
+) -> Int32 {
   if lookup == 1 {
     vorbis_nth_root(entries, dimensions)
   } else if lookup == 2 {
@@ -164,7 +192,8 @@ fn vorbis_enc_cb_lookup_vals(lookup : Int32, dimensions : Int32, entries : Int32
   }
 }
 
-///| `ready_codebook`.
+///|
+/// `ready_codebook`.
 fn vorbis_enc_ready_codebook(cb : VorbisEncCodebook) -> Result[Unit, String] {
   let codes : Array[Int64] = []
   for i = 0; i < cb.nentries; i = i + 1 {
@@ -182,7 +211,10 @@ fn vorbis_enc_ready_codebook(cb : VorbisEncCodebook) -> Result[Unit, String] {
     cb.pow2 = None
   } else {
     let vals = vorbis_enc_cb_lookup_vals(cb.lookup, cb.ndimensions, cb.nentries)
-    let dimensions : Array[Double] = Array::make(cb.nentries * cb.ndimensions, 0.0)
+    let dimensions : Array[Double] = Array::make(
+      cb.nentries * cb.ndimensions,
+      0.0,
+    )
     let pow2 : Array[Double] = Array::make(cb.nentries, 0.0)
     let quant = cb.quantlist.unwrap()
     for i = 0; i < cb.nentries; i = i + 1 {
@@ -190,7 +222,7 @@ fn vorbis_enc_ready_codebook(cb : VorbisEncCodebook) -> Result[Unit, String] {
       let mut div = 1
       for j = 0; j < cb.ndimensions; j = j + 1 {
         let off = if cb.lookup == 1 {
-          (i / div) % vals
+          i / div % vals
         } else {
           i * cb.ndimensions + j
         }
@@ -210,7 +242,8 @@ fn vorbis_enc_ready_codebook(cb : VorbisEncCodebook) -> Result[Unit, String] {
   Ok(())
 }
 
-///| `vorbis_enc_floor_class`.
+///|
+/// `vorbis_enc_floor_class`.
 priv struct VorbisEncFloorClass {
   dim : Int32
   subclass : Int32
@@ -218,7 +251,8 @@ priv struct VorbisEncFloorClass {
   books : Array[Int32]
 }
 
-///| `vorbis_enc_floor`.
+///|
+/// `vorbis_enc_floor`.
 struct VorbisEncFloor {
   partitions : Int32
   partition_to_class : Array[Int32]
@@ -230,7 +264,8 @@ struct VorbisEncFloor {
   list : Array[VorbisFloor1Entry]
 }
 
-///| `vorbis_enc_residue`.
+///|
+/// `vorbis_enc_residue`.
 struct VorbisEncResidue {
   begin : Int32
   end : Int32
@@ -241,7 +276,8 @@ struct VorbisEncResidue {
   mut maxes : Array[FixedArray[Double]]?
 }
 
-///| `vorbis_enc_mapping`.
+///|
+/// `vorbis_enc_mapping`.
 struct VorbisEncMapping {
   submaps : Int32
   mux : Array[Int32]
@@ -252,13 +288,15 @@ struct VorbisEncMapping {
   angle : Array[Int32]
 }
 
-///| `vorbis_enc_mode`.
+///|
+/// `vorbis_enc_mode`.
 struct VorbisEncMode {
   blockflag : Int32
   mapping : Int32
 }
 
-///| `vorbis_enc_context` (encoder side).
+///|
+/// `vorbis_enc_context` (encoder side).
 pub struct VorbisEncoder {
   channels : Int32
   sample_rate : Int32
@@ -282,13 +320,16 @@ pub struct VorbisEncoder {
   initial_padding : Int32
 }
 
-///| `create_vorbis_context` + `vorbis_encode_init` (quality 8 => 64).
+///|
+/// `create_vorbis_context` + `vorbis_encode_init` (quality 8 => 64).
 pub fn vorbis_encoder_new(
   sample_rate : Int32,
   channels : Int32,
 ) -> Result[VorbisEncoder, String] {
   if channels != 2 {
-    return Err("vorbis_enc: current FFmpeg Vorbis encoder only supports 2 channels")
+    return Err(
+      "vorbis_enc: current FFmpeg Vorbis encoder only supports 2 channels",
+    )
   }
   let log2_blocksize = [11, 11]
   let ncodebooks = vorbis_enc_cvectors.length()
@@ -370,13 +411,13 @@ pub fn vorbis_encoder_new(
   let list : Array[VorbisFloor1Entry] = []
   let rangebits = log2_blocksize[1] - 1
   for i = 0; i < values; i = i + 1 {
-    list.push({ x: 0, sort: 0, low: 0, high: 0 })
+    list.push({ x: 0, sort: 0, low: 0, high: 0, })
   }
   list[0].x = 0
   list[1].x = 1 << rangebits
   let xs : Array[Int32] = [
-    93, 23, 372, 6, 46, 186, 750, 14, 33, 65, 130, 260, 556, 3, 10, 18, 28, 39,
-    55, 79, 111, 158, 220, 312, 464, 650, 850,
+    93, 23, 372, 6, 46, 186, 750, 14, 33, 65, 130, 260, 556, 3, 10, 18, 28, 39, 55,
+    79, 111, 158, 220, 312, 464, 650, 850,
   ]
   for i = 2; i < values; i = i + 1 {
     list[i].x = xs[i - 2]
@@ -440,8 +481,8 @@ pub fn vorbis_encoder_new(
   }
   // modes: short block, long block
   let modes : Array[VorbisEncMode] = [
-    { blockflag: 0, mapping: 0 },
-    { blockflag: 1, mapping: 0 },
+    { blockflag: 0, mapping: 0, },
+    { blockflag: 1, mapping: 0, },
   ]
   // buffers (interleaved per channel blocks of frame_size)
   let frame_size = 1 << log2_blocksize[1]
@@ -492,7 +533,8 @@ pub fn vorbis_encoder_new(
   Ok(enc)
 }
 
-///| `ready_residue`.
+///|
+/// `ready_residue`.
 fn vorbis_enc_ready_residue(
   rc : VorbisEncResidue,
   codebooks : Array[VorbisEncCodebook],

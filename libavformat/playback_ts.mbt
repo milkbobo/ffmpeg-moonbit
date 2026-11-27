@@ -95,7 +95,9 @@ fn playback_ts_build(data : Bytes) -> MediaFile raise MediaError {
       }
     }
     if t.codec == "aac" {
-      let (asc, sample_rate, channels) = playback_ts_index_adts(demux, i, audio_frames)
+      let (asc, sample_rate, channels) = playback_ts_index_adts(
+        demux, i, audio_frames,
+      )
       rate = sample_rate
       ch = channels
       extradata = Some(asc)

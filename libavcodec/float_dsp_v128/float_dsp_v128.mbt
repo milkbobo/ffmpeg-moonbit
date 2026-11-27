@@ -41,17 +41,17 @@
 /// Load four `f32` lanes from an `Array[Float]`. */
 #cfg(any(target="native", target="wasm"))
 fn fdv_load4(a : Array[Float], at : Int32) -> V128 {
-  @v128.f32x4_const(a[at], a[at + 1], a[at + 2], a[at + 3])
+  @simd.f32x4_const(a[at], a[at + 1], a[at + 2], a[at + 3])
 }
 
 ///|
 /// Store four `f32` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn fdv_store4(a : Array[Float], at : Int32, v : V128) -> Unit {
-  a[at] = @v128.f32x4_extract_lane(v, 0)
-  a[at + 1] = @v128.f32x4_extract_lane(v, 1)
-  a[at + 2] = @v128.f32x4_extract_lane(v, 2)
-  a[at + 3] = @v128.f32x4_extract_lane(v, 3)
+  a[at] = @simd.f32x4_extract_lane(v, 0)
+  a[at + 1] = @simd.f32x4_extract_lane(v, 1)
+  a[at + 2] = @simd.f32x4_extract_lane(v, 2)
+  a[at + 3] = @simd.f32x4_extract_lane(v, 3)
 }
 
 ///|
@@ -65,11 +65,7 @@ pub fn vector_fmul_v128(
 ) -> Unit {
   let mut i = 0
   while i + 4 <= len {
-    fdv_store4(
-      dst,
-      i,
-      @v128.f32x4_mul(fdv_load4(src0, i), fdv_load4(src1, i)),
-    )
+    fdv_store4(dst, i, @simd.f32x4_mul(fdv_load4(src0, i), fdv_load4(src1, i)))
     i = i + 4
   }
   while i < len {
@@ -87,13 +83,13 @@ pub fn vector_fmac_scalar_v128(
   mul : Float,
   len : Int32,
 ) -> Unit {
-  let m = @v128.f32x4_splat(mul)
+  let m = @simd.f32x4_splat(mul)
   let mut i = 0
   while i + 4 <= len {
     fdv_store4(
       dst,
       i,
-      @v128.f32x4_add(fdv_load4(dst, i), @v128.f32x4_mul(fdv_load4(src, i), m)),
+      @simd.f32x4_add(fdv_load4(dst, i), @simd.f32x4_mul(fdv_load4(src, i), m)),
     )
     i = i + 4
   }
@@ -112,10 +108,10 @@ pub fn vector_fmul_scalar_v128(
   mul : Float,
   len : Int32,
 ) -> Unit {
-  let m = @v128.f32x4_splat(mul)
+  let m = @simd.f32x4_splat(mul)
   let mut i = 0
   while i + 4 <= len {
-    fdv_store4(dst, i, @v128.f32x4_mul(fdv_load4(src, i), m))
+    fdv_store4(dst, i, @simd.f32x4_mul(fdv_load4(src, i), m))
     i = i + 4
   }
   while i < len {
@@ -139,8 +135,8 @@ pub fn vector_fmul_add_v128(
     fdv_store4(
       dst,
       i,
-      @v128.f32x4_add(
-        @v128.f32x4_mul(fdv_load4(src0, i), fdv_load4(src1, i)),
+      @simd.f32x4_add(
+        @simd.f32x4_mul(fdv_load4(src0, i), fdv_load4(src1, i)),
         fdv_load4(src2, i),
       ),
     )
@@ -164,13 +160,13 @@ pub fn vector_fmul_reverse_v128(
   let mut i = 0
   while i + 4 <= len {
     // gather the four reversed samples into one vector
-    let r = @v128.f32x4_const(
+    let r = @simd.f32x4_const(
       src1[len - 1 - i],
       src1[len - 2 - i],
       src1[len - 3 - i],
       src1[len - 4 - i],
     )
-    fdv_store4(dst, i, @v128.f32x4_mul(fdv_load4(src0, i), r))
+    fdv_store4(dst, i, @simd.f32x4_mul(fdv_load4(src0, i), r))
     i = i + 4
   }
   while i < len {
@@ -201,8 +197,8 @@ pub fn vector_fmul_window_v128(
   // C: dst += len; win += len; src0 += len; loop i = -len .. -1
   let mut i = 0
   while i + 4 <= len {
-    let mut lo = @v128.f32x4_splat(0.0)
-    let mut hi = @v128.f32x4_splat(0.0)
+    let mut lo = @simd.f32x4_splat(0.0)
+    let mut hi = @simd.f32x4_splat(0.0)
     let mut k = 0
     while k < 4 {
       // C's i_c = -len + (i + k); j_c = len - 1 - (i + k)
@@ -212,7 +208,7 @@ pub fn vector_fmul_window_v128(
       let s1 = src1[s1_off + jc]
       let wi = win[w_off + len + ic]
       let wj = win[w_off + jc]
-      lo = @v128.f32x4_replace_lane(
+      lo = @simd.f32x4_replace_lane(
         lo,
         Float::from_double(
           (Float::from_double(s0.to_double() * wj.to_double()) -
@@ -220,7 +216,7 @@ pub fn vector_fmul_window_v128(
         ),
         k,
       )
-      hi = @v128.f32x4_replace_lane(
+      hi = @simd.f32x4_replace_lane(
         hi,
         Float::from_double(
           (Float::from_double(s0.to_double() * wi.to_double()) +
@@ -235,8 +231,8 @@ pub fn vector_fmul_window_v128(
     while k2 < 4 {
       let ic = 0 - len + i + k2
       let jc = len - 1 - (i + k2)
-      dst[dst_off + len + ic] = @v128.f32x4_extract_lane(lo, k2)
-      dst[dst_off + jc] = @v128.f32x4_extract_lane(hi, k2)
+      dst[dst_off + len + ic] = @simd.f32x4_extract_lane(lo, k2)
+      dst[dst_off + jc] = @simd.f32x4_extract_lane(hi, k2)
       k2 = k2 + 1
     }
     i = i + 4
@@ -266,8 +262,8 @@ pub fn butterflies_float_v128(
   while i + 4 <= len {
     let a = fdv_load4(v1, i)
     let b = fdv_load4(v2, i)
-    fdv_store4(v1, i, @v128.f32x4_add(a, b))
-    fdv_store4(v2, i, @v128.f32x4_sub(a, b))
+    fdv_store4(v1, i, @simd.f32x4_add(a, b))
+    fdv_store4(v2, i, @simd.f32x4_sub(a, b))
     i = i + 4
   }
   while i < len {
@@ -293,11 +289,11 @@ pub fn scalarproduct_float_v128(
   let mut p : Float = 0.0
   let mut i = 0
   while i + 4 <= len {
-    let pr = @v128.f32x4_mul(fdv_load4(v1, i), fdv_load4(v2, i))
-    p = p + @v128.f32x4_extract_lane(pr, 0)
-    p = p + @v128.f32x4_extract_lane(pr, 1)
-    p = p + @v128.f32x4_extract_lane(pr, 2)
-    p = p + @v128.f32x4_extract_lane(pr, 3)
+    let pr = @simd.f32x4_mul(fdv_load4(v1, i), fdv_load4(v2, i))
+    p = p + @simd.f32x4_extract_lane(pr, 0)
+    p = p + @simd.f32x4_extract_lane(pr, 1)
+    p = p + @simd.f32x4_extract_lane(pr, 2)
+    p = p + @simd.f32x4_extract_lane(pr, 3)
     i = i + 4
   }
   while i < len {
@@ -311,15 +307,15 @@ pub fn scalarproduct_float_v128(
 /// `vector_dmul`: `dst[i] = src0[i] * src1[i]` on doubles.
 #cfg(any(target="native", target="wasm"))
 fn fdv_load2_f64(a : Array[Double], at : Int32) -> V128 {
-  @v128.f64x2_const(a[at], a[at + 1])
+  @simd.f64x2_const(a[at], a[at + 1])
 }
 
 ///|
 /// Store two `f64x2` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn fdv_store2_f64(a : Array[Double], at : Int32, v : V128) -> Unit {
-  a[at] = @v128.f64x2_extract_lane(v, 0)
-  a[at + 1] = @v128.f64x2_extract_lane(v, 1)
+  a[at] = @simd.f64x2_extract_lane(v, 0)
+  a[at + 1] = @simd.f64x2_extract_lane(v, 1)
 }
 
 ///|
@@ -336,7 +332,7 @@ pub fn vector_dmul_v128(
     fdv_store2_f64(
       dst,
       i,
-      @v128.f64x2_mul(fdv_load2_f64(src0, i), fdv_load2_f64(src1, i)),
+      @simd.f64x2_mul(fdv_load2_f64(src0, i), fdv_load2_f64(src1, i)),
     )
     i = i + 2
   }
@@ -355,15 +351,15 @@ pub fn vector_dmac_scalar_v128(
   mul : Double,
   len : Int32,
 ) -> Unit {
-  let m = @v128.f64x2_splat(mul)
+  let m = @simd.f64x2_splat(mul)
   let mut i = 0
   while i + 2 <= len {
     fdv_store2_f64(
       dst,
       i,
-      @v128.f64x2_add(
+      @simd.f64x2_add(
         fdv_load2_f64(dst, i),
-        @v128.f64x2_mul(fdv_load2_f64(src, i), m),
+        @simd.f64x2_mul(fdv_load2_f64(src, i), m),
       ),
     )
     i = i + 2
@@ -383,10 +379,10 @@ pub fn vector_dmul_scalar_v128(
   mul : Double,
   len : Int32,
 ) -> Unit {
-  let m = @v128.f64x2_splat(mul)
+  let m = @simd.f64x2_splat(mul)
   let mut i = 0
   while i + 2 <= len {
-    fdv_store2_f64(dst, i, @v128.f64x2_mul(fdv_load2_f64(src, i), m))
+    fdv_store2_f64(dst, i, @simd.f64x2_mul(fdv_load2_f64(src, i), m))
     i = i + 2
   }
   while i < len {
@@ -406,9 +402,9 @@ pub fn scalarproduct_double_v128(
   let mut p : Double = 0.0
   let mut i = 0
   while i + 2 <= len {
-    let pr = @v128.f64x2_mul(fdv_load2_f64(v1, i), fdv_load2_f64(v2, i))
-    p = p + @v128.f64x2_extract_lane(pr, 0)
-    p = p + @v128.f64x2_extract_lane(pr, 1)
+    let pr = @simd.f64x2_mul(fdv_load2_f64(v1, i), fdv_load2_f64(v2, i))
+    p = p + @simd.f64x2_extract_lane(pr, 0)
+    p = p + @simd.f64x2_extract_lane(pr, 1)
     i = i + 2
   }
   while i < len {

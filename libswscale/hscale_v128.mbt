@@ -7,7 +7,7 @@
 /// `ff_hscale{9,10,16}to15_*` 16-bit variants): every output pixel is the
 /// 14-bit-filter dot product of `filterSize` source samples, and the x86
 /// kernels carry that dot with `pmaddwd`. Here the `pmaddwd` structure is
-/// kept as `@v128.i32x4_dot_i16x8_s` over 8-tap blocks:
+/// kept as `@simd.i32x4_dot_i16x8_s` over 8-tap blocks:
 ///
 ///   - 8-bit rows: 16 sample bytes are loaded per block, zero-extended to
 ///     two `i16x8` halves and dotted with the matching coefficient lanes;
@@ -39,10 +39,10 @@
 /// Horizontal sum of the four `i32x4` lanes (wrapping, order-free). */
 #cfg(any(target="native", target="wasm", target="wasm-gc"))
 fn hscale_red4(v : V128) -> Int32 {
-  let u = @v128.i32x4_extract_lane(v, 0) +
-    @v128.i32x4_extract_lane(v, 1) +
-    @v128.i32x4_extract_lane(v, 2) +
-    @v128.i32x4_extract_lane(v, 3)
+  let u = @simd.i32x4_extract_lane(v, 0) +
+    @simd.i32x4_extract_lane(v, 1) +
+    @simd.i32x4_extract_lane(v, 2) +
+    @simd.i32x4_extract_lane(v, 3)
   u.reinterpret_as_int()
 }
 
@@ -76,24 +76,24 @@ fn sws_hscale_packed(
   for i in 0..<dst_w {
     let base = (row_off + f.pos[i]) * step
     let bank = f.size * i // coefficient index of this output's first tap
-    let mut acc = @v128.i32x4_splat(0)
+    let mut acc = @simd.i32x4_splat(0)
     let mut k = 0
     if step == 1 {
       // 8-bit: one 16-byte load = 16 samples; each half is one 8-tap dot.
       while k + 8 <= f.size && base + k + 16 <= src.length() {
         match src[base + k:base + k + 16] {
           [v128le(v), ..] => {
-            let dlo = @v128.i32x4_dot_i16x8_s(
-              @v128.i16x8_extend_low_i8x16_u(v),
-              @v128.v128_load(cbuf, 2 * (bank + k)),
+            let dlo = @simd.i32x4_dot_i16x8_s(
+              @simd.i16x8_extend_low_i8x16_u(v),
+              @simd.v128_load(cbuf, 2 * (bank + k)),
             )
-            acc = @v128.i32x4_add(acc, dlo)
+            acc = @simd.i32x4_add(acc, dlo)
             if k + 16 <= f.size {
-              let dhi = @v128.i32x4_dot_i16x8_s(
-                @v128.i16x8_extend_high_i8x16_u(v),
-                @v128.v128_load(cbuf, 2 * (bank + k) + 16),
+              let dhi = @simd.i32x4_dot_i16x8_s(
+                @simd.i16x8_extend_high_i8x16_u(v),
+                @simd.v128_load(cbuf, 2 * (bank + k) + 16),
               )
-              acc = @v128.i32x4_add(acc, dhi)
+              acc = @simd.i32x4_add(acc, dhi)
               k = k + 16
             } else {
               k = k + 8
@@ -108,18 +108,18 @@ fn sws_hscale_packed(
       while k + 4 <= f.size && base + 2 * k + 16 <= src.length() {
         match src[base + 2 * k:base + 2 * k + 16] {
           [v128le(v), ..] => {
-            let c16 = @v128.v128_load(cbuf, 2 * (bank + k))
-            let dlo = @v128.i32x4_mul(
-              @v128.i32x4_extend_low_i16x8_u(v),
-              @v128.i32x4_extend_low_i16x8_s(c16),
+            let c16 = @simd.v128_load(cbuf, 2 * (bank + k))
+            let dlo = @simd.i32x4_mul(
+              @simd.i32x4_extend_low_i16x8_u(v),
+              @simd.i32x4_extend_low_i16x8_s(c16),
             )
-            acc = @v128.i32x4_add(acc, dlo)
+            acc = @simd.i32x4_add(acc, dlo)
             if k + 8 <= f.size {
-              let dhi = @v128.i32x4_mul(
-                @v128.i32x4_extend_high_i16x8_u(v),
-                @v128.i32x4_extend_high_i16x8_s(c16),
+              let dhi = @simd.i32x4_mul(
+                @simd.i32x4_extend_high_i16x8_u(v),
+                @simd.i32x4_extend_high_i16x8_s(c16),
               )
-              acc = @v128.i32x4_add(acc, dhi)
+              acc = @simd.i32x4_add(acc, dhi)
               k = k + 8
             } else {
               k = k + 4

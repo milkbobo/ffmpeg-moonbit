@@ -32,18 +32,18 @@
 /// `i32x4` from four scalars. */
 #cfg(any(target="native", target="wasm"))
 fn h264v_lane4(a : Int32, b : Int32, c : Int32, d : Int32) -> V128 {
-  let v = @v128.i32x4_splat(0)
-  let v = @v128.i32x4_replace_lane(v, a.reinterpret_as_uint(), 0)
-  let v = @v128.i32x4_replace_lane(v, b.reinterpret_as_uint(), 1)
-  let v = @v128.i32x4_replace_lane(v, c.reinterpret_as_uint(), 2)
-  @v128.i32x4_replace_lane(v, d.reinterpret_as_uint(), 3)
+  let v = @simd.i32x4_splat(0)
+  let v = @simd.i32x4_replace_lane(v, a.reinterpret_as_uint(), 0)
+  let v = @simd.i32x4_replace_lane(v, b.reinterpret_as_uint(), 1)
+  let v = @simd.i32x4_replace_lane(v, c.reinterpret_as_uint(), 2)
+  @simd.i32x4_replace_lane(v, d.reinterpret_as_uint(), 3)
 }
 
 ///|
 /// Signed lane extract. */
 #cfg(any(target="native", target="wasm"))
 fn h264v_ext(v : V128, lane : Int32) -> Int32 {
-  @v128.i32x4_extract_lane(v, lane).reinterpret_as_int()
+  @simd.i32x4_extract_lane(v, lane).reinterpret_as_int()
 }
 
 ///|
@@ -76,46 +76,69 @@ pub fn h264_idct_add_v128(
     block[bo + 2],
     block[bo + 3],
   )
-  let r1 = h264v_lane4(block[bo + 4], block[bo + 5], block[bo + 6], block[bo + 7])
+  let r1 = h264v_lane4(
+    block[bo + 4],
+    block[bo + 5],
+    block[bo + 6],
+    block[bo + 7],
+  )
   let r2 = h264v_lane4(
-    block[bo + 8], block[bo + 9], block[bo + 10], block[bo + 11],
+    block[bo + 8],
+    block[bo + 9],
+    block[bo + 10],
+    block[bo + 11],
   )
   let r3 = h264v_lane4(
-    block[bo + 12], block[bo + 13], block[bo + 14], block[bo + 15],
+    block[bo + 12],
+    block[bo + 13],
+    block[bo + 14],
+    block[bo + 15],
   )
-  let z0 = @v128.i32x4_add(r0, r2)
-  let z1 = @v128.i32x4_sub(r0, r2)
-  let z2 = @v128.i32x4_sub(@v128.i32x4_shr_s(r1, 1), r3)
-  let z3 = @v128.i32x4_add(r1, @v128.i32x4_shr_s(r3, 1))
+  let z0 = @simd.i32x4_add(r0, r2)
+  let z1 = @simd.i32x4_sub(r0, r2)
+  let z2 = @simd.i32x4_sub(@simd.i32x4_shr_s(r1, 1), r3)
+  let z3 = @simd.i32x4_add(r1, @simd.i32x4_shr_s(r3, 1))
   // the int16 stores of the column pass
-  let s0 = h264v_store_lane(@v128.i32x4_add(z0, z3), bit_depth)
-  let s1 = h264v_store_lane(@v128.i32x4_add(z1, z2), bit_depth)
-  let s2 = h264v_store_lane(@v128.i32x4_sub(z1, z2), bit_depth)
-  let s3 = h264v_store_lane(@v128.i32x4_sub(z0, z3), bit_depth)
+  let s0 = h264v_store_lane(@simd.i32x4_add(z0, z3), bit_depth)
+  let s1 = h264v_store_lane(@simd.i32x4_add(z1, z2), bit_depth)
+  let s2 = h264v_store_lane(@simd.i32x4_sub(z1, z2), bit_depth)
+  let s3 = h264v_store_lane(@simd.i32x4_sub(z0, z3), bit_depth)
   // pass 2: lane-transpose the column-pass vectors (E_j lane i = new
   // block[row i][col j]) so the scalar row butterflies run lane-wise
   // over the four rows; outputs go down dst column i, +stride steps,
   // exactly like the scalar loop nesting
   let e0 = h264v_lane4(
-    h264v_ext(s0, 0), h264v_ext(s1, 0), h264v_ext(s2, 0), h264v_ext(s3, 0),
+    h264v_ext(s0, 0),
+    h264v_ext(s1, 0),
+    h264v_ext(s2, 0),
+    h264v_ext(s3, 0),
   )
   let e1 = h264v_lane4(
-    h264v_ext(s0, 1), h264v_ext(s1, 1), h264v_ext(s2, 1), h264v_ext(s3, 1),
+    h264v_ext(s0, 1),
+    h264v_ext(s1, 1),
+    h264v_ext(s2, 1),
+    h264v_ext(s3, 1),
   )
   let e2 = h264v_lane4(
-    h264v_ext(s0, 2), h264v_ext(s1, 2), h264v_ext(s2, 2), h264v_ext(s3, 2),
+    h264v_ext(s0, 2),
+    h264v_ext(s1, 2),
+    h264v_ext(s2, 2),
+    h264v_ext(s3, 2),
   )
   let e3 = h264v_lane4(
-    h264v_ext(s0, 3), h264v_ext(s1, 3), h264v_ext(s2, 3), h264v_ext(s3, 3),
+    h264v_ext(s0, 3),
+    h264v_ext(s1, 3),
+    h264v_ext(s2, 3),
+    h264v_ext(s3, 3),
   )
-  let q0 = @v128.i32x4_add(e0, e2)
-  let q1 = @v128.i32x4_sub(e0, e2)
-  let q2 = @v128.i32x4_sub(@v128.i32x4_shr_s(e1, 1), e3)
-  let q3 = @v128.i32x4_add(e1, @v128.i32x4_shr_s(e3, 1))
-  let o0 = @v128.i32x4_shr_s(@v128.i32x4_add(q0, q3), 6)
-  let o1 = @v128.i32x4_shr_s(@v128.i32x4_add(q1, q2), 6)
-  let o2 = @v128.i32x4_shr_s(@v128.i32x4_sub(q1, q2), 6)
-  let o3 = @v128.i32x4_shr_s(@v128.i32x4_sub(q0, q3), 6)
+  let q0 = @simd.i32x4_add(e0, e2)
+  let q1 = @simd.i32x4_sub(e0, e2)
+  let q2 = @simd.i32x4_sub(@simd.i32x4_shr_s(e1, 1), e3)
+  let q3 = @simd.i32x4_add(e1, @simd.i32x4_shr_s(e3, 1))
+  let o0 = @simd.i32x4_shr_s(@simd.i32x4_add(q0, q3), 6)
+  let o1 = @simd.i32x4_shr_s(@simd.i32x4_add(q1, q2), 6)
+  let o2 = @simd.i32x4_shr_s(@simd.i32x4_sub(q1, q2), 6)
+  let o3 = @simd.i32x4_shr_s(@simd.i32x4_sub(q0, q3), 6)
   let mx = (1 << bit_depth) - 1
   for r = 0; r < 4; r = r + 1 {
     let o = if r == 0 {
@@ -143,7 +166,7 @@ pub fn h264_idct_add_v128(
 #cfg(any(target="native", target="wasm"))
 fn h264v_store_lane(v : V128, bit_depth : Int32) -> V128 {
   if bit_depth == 8 {
-    @v128.i32x4_shr_s(@v128.i32x4_shl(v, 16), 16)
+    @simd.i32x4_shr_s(@simd.i32x4_shl(v, 16), 16)
   } else {
     v
   }
@@ -175,14 +198,14 @@ pub fn h264_idct_dc_add_v128(
 ) -> Unit {
   let dc = (block[bo] + 32) >> 6
   block[bo] = 0
-  let dcv = @v128.i32x4_splat(dc.reinterpret_as_uint())
-  let lim = @v128.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint())
-  let zero = @v128.i32x4_splat(0)
+  let dcv = @simd.i32x4_splat(dc.reinterpret_as_uint())
+  let lim = @simd.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint())
+  let zero = @simd.i32x4_splat(0)
   for row = 0; row < 4; row = row + 1 {
     let p = dst_off + row * stride
     let cur = h264v_lane4(dst[p], dst[p + 1], dst[p + 2], dst[p + 3])
-    let v = @v128.i32x4_min_s(
-      @v128.i32x4_max_s(@v128.i32x4_add(cur, dcv), zero),
+    let v = @simd.i32x4_min_s(
+      @simd.i32x4_max_s(@simd.i32x4_add(cur, dcv), zero),
       lim,
     )
     dst[p] = h264v_ext(v, 0)
@@ -205,15 +228,15 @@ pub fn h264_idct8_dc_add_v128(
 ) -> Unit {
   let dc = (block[bo] + 32) >> 6
   block[bo] = 0
-  let dcv = @v128.i32x4_splat(dc.reinterpret_as_uint())
-  let lim = @v128.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint())
-  let zero = @v128.i32x4_splat(0)
+  let dcv = @simd.i32x4_splat(dc.reinterpret_as_uint())
+  let lim = @simd.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint())
+  let zero = @simd.i32x4_splat(0)
   for row = 0; row < 8; row = row + 1 {
     for half = 0; half < 2; half = half + 1 {
       let p = dst_off + row * stride + 4 * half
       let cur = h264v_lane4(dst[p], dst[p + 1], dst[p + 2], dst[p + 3])
-      let v = @v128.i32x4_min_s(
-        @v128.i32x4_max_s(@v128.i32x4_add(cur, dcv), zero),
+      let v = @simd.i32x4_min_s(
+        @simd.i32x4_max_s(@simd.i32x4_add(cur, dcv), zero),
         lim,
       )
       dst[p] = h264v_ext(v, 0)

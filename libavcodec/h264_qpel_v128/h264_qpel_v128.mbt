@@ -52,9 +52,9 @@
 /// `av_clip_pixel` lane-wise. */
 #cfg(any(target="native", target="wasm"))
 fn qp_clip_lanes(v : V128, bit_depth : Int32) -> V128 {
-  @v128.i32x4_min_s(
-    @v128.i32x4_max_s(v, @v128.i32x4_splat(0)),
-    @v128.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint()),
+  @simd.i32x4_min_s(
+    @simd.i32x4_max_s(v, @simd.i32x4_splat(0)),
+    @simd.i32x4_splat(((1 << bit_depth) - 1).reinterpret_as_uint()),
   )
 }
 
@@ -62,10 +62,10 @@ fn qp_clip_lanes(v : V128, bit_depth : Int32) -> V128 {
 /// Load four consecutive plane samples into `i32x4` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn qp_load4(src : Array[Int32], at : Int32) -> V128 {
-  let mut v = @v128.i32x4_splat(0)
+  let mut v = @simd.i32x4_splat(0)
   let mut i = 0
   while i < 4 {
-    v = @v128.i32x4_replace_lane(v, src[at + i].reinterpret_as_uint(), i)
+    v = @simd.i32x4_replace_lane(v, src[at + i].reinterpret_as_uint(), i)
     i = i + 1
   }
   v
@@ -77,7 +77,7 @@ fn qp_load4(src : Array[Int32], at : Int32) -> V128 {
 fn qp_store4(dst : Array[Int32], at : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    dst[at + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    dst[at + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }
@@ -92,15 +92,22 @@ fn qp_store4(dst : Array[Int32], at : Int32, v : V128) -> Unit {
 /// `(a+b)*20 = ((a+b)<<2)*5` — expressed without the shift trick, since
 /// `i32x4_mul` is a real multiply in Wasm SIMD.
 #cfg(any(target="native", target="wasm"))
-fn qp_filt6(sB : V128, sA : V128, s0 : V128, s1 : V128, s2 : V128, s3 : V128) -> V128 {
-  let twenty = @v128.i32x4_splat(20)
-  let five = @v128.i32x4_splat(5)
-  @v128.i32x4_add(
-    @v128.i32x4_sub(
-      @v128.i32x4_mul(@v128.i32x4_add(s0, s1), twenty),
-      @v128.i32x4_mul(@v128.i32x4_add(sA, s2), five),
+fn qp_filt6(
+  sB : V128,
+  sA : V128,
+  s0 : V128,
+  s1 : V128,
+  s2 : V128,
+  s3 : V128,
+) -> V128 {
+  let twenty = @simd.i32x4_splat(20)
+  let five = @simd.i32x4_splat(5)
+  @simd.i32x4_add(
+    @simd.i32x4_sub(
+      @simd.i32x4_mul(@simd.i32x4_add(s0, s1), twenty),
+      @simd.i32x4_mul(@simd.i32x4_add(sA, s2), five),
     ),
-    @v128.i32x4_add(sB, s3),
+    @simd.i32x4_add(sB, s3),
   )
 }
 
@@ -122,7 +129,7 @@ pub fn h264_qpel_h_lowpass_v128(
   h : Int32,
   bit_depth~ : Int32 = 8,
 ) -> Unit {
-  let sixteen = @v128.i32x4_splat(16)
+  let sixteen = @simd.i32x4_splat(16)
   for y = 0; y < h; y = y + 1 {
     let srow = soff + y * sstride
     let drow = dstoff + y * dstride
@@ -139,7 +146,10 @@ pub fn h264_qpel_h_lowpass_v128(
       qp_store4(
         dst,
         drow + x,
-        qp_clip_lanes(@v128.i32x4_shr_s(@v128.i32x4_add(sum, sixteen), 5), bit_depth),
+        qp_clip_lanes(
+          @simd.i32x4_shr_s(@simd.i32x4_add(sum, sixteen), 5),
+          bit_depth,
+        ),
       )
       x = x + 4
     }
@@ -178,7 +188,7 @@ pub fn h264_qpel_v_lowpass_v128(
   h : Int32,
   bit_depth~ : Int32 = 8,
 ) -> Unit {
-  let sixteen = @v128.i32x4_splat(16)
+  let sixteen = @simd.i32x4_splat(16)
   let mut x = 0
   while x + 4 <= w {
     let col = soff + x
@@ -194,7 +204,10 @@ pub fn h264_qpel_v_lowpass_v128(
       qp_store4(
         dst,
         dstoff + y * dstride + x,
-        qp_clip_lanes(@v128.i32x4_shr_s(@v128.i32x4_add(sum, sixteen), 5), bit_depth),
+        qp_clip_lanes(
+          @simd.i32x4_shr_s(@simd.i32x4_add(sum, sixteen), 5),
+          bit_depth,
+        ),
       )
     }
     x = x + 4
@@ -278,7 +291,7 @@ pub fn h264_qpel_hv_lowpass_v128(
   // The C positions `tmp` at row 2 of the scratch (`tmp -= tmpStride*(h+5-2)`)
   // before the column loop, so destination row y reads scratch rows
   // (y+2)-2 .. (y+2)+3 — i.e. the base index carries a +2 row shift.
-  let r512 = @v128.i32x4_splat(512)
+  let r512 = @simd.i32x4_splat(512)
   let mut x = 0
   while x + 4 <= w {
     for y = 0; y < h; y = y + 1 {
@@ -293,7 +306,10 @@ pub fn h264_qpel_hv_lowpass_v128(
       qp_store4(
         dst,
         dstoff + y * dstride + x,
-        qp_clip_lanes(@v128.i32x4_shr_s(@v128.i32x4_add(sum, r512), 10), bit_depth),
+        qp_clip_lanes(
+          @simd.i32x4_shr_s(@simd.i32x4_add(sum, r512), 10),
+          bit_depth,
+        ),
       )
     }
     x = x + 4
@@ -341,7 +357,7 @@ pub fn h264_qpel_l2_shift5_v128(
   h : Int32,
   bit_depth~ : Int32 = 8,
 ) -> Unit {
-  let one = @v128.i32x4_splat(1)
+  let one = @simd.i32x4_splat(1)
   for y = 0; y < h; y = y + 1 {
     let r16 = soff16 + y * s16stride
     let r8 = soff8 + y * s8stride
@@ -349,15 +365,16 @@ pub fn h264_qpel_l2_shift5_v128(
     let mut x = 0
     while x + 4 <= w {
       let a = qp_clip_lanes(
-        @v128.i32x4_shr_s(qp_load4(src16, r16 + x), 5),
+        @simd.i32x4_shr_s(qp_load4(src16, r16 + x), 5),
         bit_depth,
       )
       let b = qp_load4(src8, r8 + x)
       // (a + b + 1) >> 1 on non-negative values == the asm's pavgb
-      qp_store4(dst, drow + x, @v128.i32x4_shr_s(
-        @v128.i32x4_add(@v128.i32x4_add(a, b), one),
-        1,
-      ))
+      qp_store4(
+        dst,
+        drow + x,
+        @simd.i32x4_shr_s(@simd.i32x4_add(@simd.i32x4_add(a, b), one), 1),
+      )
       x = x + 4
     }
     while x < w {

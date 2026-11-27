@@ -85,24 +85,24 @@ pub fn yuv_rows_to_rgb24_v128(
   let scratch : FixedArray[Byte] = FixedArray::make(16, b'\x00')
   let out : Array[Byte] = []
   // lane duplication: [u0,u0,u1,u1]
-  let cidx = @v128.i8x16_const(
+  let cidx = @simd.i8x16_const(
     b'\x00', b'\x00', b'\x01', b'\x01', b'\x00', b'\x00', b'\x01', b'\x01', b'\x00',
     b'\x00', b'\x01', b'\x01', b'\x00', b'\x00', b'\x01', b'\x01',
   )
-  let cy = @v128.i32x4_splat(76304)
-  let yc = @v128.i32x4_splat((-65247168).reinterpret_as_uint())
-  let crv = @v128.i32x4_splat(89828)
-  let crc = @v128.i32x4_splat((-2541216).reinterpret_as_uint())
-  let cgu = @v128.i32x4_splat((-22050).reinterpret_as_uint())
-  let cguc = @v128.i32x4_splat(69092460)
-  let cgv = @v128.i32x4_splat((-45756).reinterpret_as_uint())
-  let cgvc = @v128.i32x4_splat(29325312)
-  let cbu = @v128.i32x4_splat(113536)
-  let cbc = @v128.i32x4_splat((-17694720).reinterpret_as_uint())
-  let p512 = @v128.i32x4_splat(512)
-  let zero = @v128.i32x4_splat(0)
-  let lim = @v128.i32x4_splat(255)
-  let mff = @v128.i32x4_splat(0xFF)
+  let cy = @simd.i32x4_splat(76304)
+  let yc = @simd.i32x4_splat((-65247168).reinterpret_as_uint())
+  let crv = @simd.i32x4_splat(89828)
+  let crc = @simd.i32x4_splat((-2541216).reinterpret_as_uint())
+  let cgu = @simd.i32x4_splat((-22050).reinterpret_as_uint())
+  let cguc = @simd.i32x4_splat(69092460)
+  let cgv = @simd.i32x4_splat((-45756).reinterpret_as_uint())
+  let cgvc = @simd.i32x4_splat(29325312)
+  let cbu = @simd.i32x4_splat(113536)
+  let cbc = @simd.i32x4_splat((-17694720).reinterpret_as_uint())
+  let p512 = @simd.i32x4_splat(512)
+  let zero = @simd.i32x4_splat(0)
+  let lim = @simd.i32x4_splat(255)
+  let mff = @simd.i32x4_splat(0xFF)
   for row = 0; row < h; row = row + 1 {
     let crow = if paired { row / 2 } else { row }
     let yrow = row * w
@@ -118,99 +118,99 @@ pub fn yuv_rows_to_rgb24_v128(
     let mut col = 0
     while col + 4 <= w {
       let ch_off = col >> hshift
-      let chroma_u = @v128.v128_load(cs, ch_off)
-      let chroma_v = @v128.v128_load(c2, ch_off)
+      let chroma_u = @simd.v128_load(cs, ch_off)
+      let chroma_v = @simd.v128_load(c2, ch_off)
       let chroma_u = if hshift == 0 {
         chroma_u
       } else {
-        @v128.i8x16_swizzle(chroma_u, cidx)
+        @simd.i8x16_swizzle(chroma_u, cidx)
       }
       let chroma_v = if hshift == 0 {
         chroma_v
       } else {
-        @v128.i8x16_swizzle(chroma_v, cidx)
+        @simd.i8x16_swizzle(chroma_v, cidx)
       }
-      let yv16 = @v128.i16x8_extend_low_i8x16_u(@v128.v128_load(ys, col))
-      let y32 = @v128.i32x4_extend_low_i16x8_u(yv16)
-      let uv32 = @v128.i32x4_add(
-        @v128.i32x4_extend_low_i16x8_u(@v128.i16x8_extend_low_i8x16_u(chroma_u)),
+      let yv16 = @simd.i16x8_extend_low_i8x16_u(@simd.v128_load(ys, col))
+      let y32 = @simd.i32x4_extend_low_i16x8_u(yv16)
+      let uv32 = @simd.i32x4_add(
+        @simd.i32x4_extend_low_i16x8_u(@simd.i16x8_extend_low_i8x16_u(chroma_u)),
         p512,
       )
-      let vv32 = @v128.i32x4_add(
-        @v128.i32x4_extend_low_i16x8_u(@v128.i16x8_extend_low_i8x16_u(chroma_v)),
+      let vv32 = @simd.i32x4_add(
+        @simd.i32x4_extend_low_i16x8_u(@simd.i16x8_extend_low_i8x16_u(chroma_v)),
         p512,
       )
       // r = clip8(yramp(y + base_r(V)))
-      let idx_r = @v128.i32x4_add(
+      let idx_r = @simd.i32x4_add(
         y32,
-        @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(vv32, crv), crc), 16),
+        @simd.i32x4_shr_s(@simd.i32x4_add(@simd.i32x4_mul(vv32, crv), crc), 16),
       )
-      let r = @v128.i32x4_min_s(
-        @v128.i32x4_max_s(
-          @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(idx_r, cy), yc), 16),
+      let r = @simd.i32x4_min_s(
+        @simd.i32x4_max_s(
+          @simd.i32x4_shr_s(@simd.i32x4_add(@simd.i32x4_mul(idx_r, cy), yc), 16),
           zero,
         ),
         lim,
       )
       // g = (clip8(yramp(y + base_gu(U))) + off_gv(V)) & 0xff
-      let idx_g = @v128.i32x4_add(
+      let idx_g = @simd.i32x4_add(
         y32,
-        @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(uv32, cgu), cguc), 16),
+        @simd.i32x4_shr_s(@simd.i32x4_add(@simd.i32x4_mul(uv32, cgu), cguc), 16),
       )
-      let g = @v128.v128_and_(
-        @v128.i32x4_add(
-          @v128.i32x4_min_s(
-            @v128.i32x4_max_s(
-              @v128.i32x4_shr_s(
-                @v128.i32x4_add(@v128.i32x4_mul(idx_g, cy), yc),
+      let g = @simd.v128_and_(
+        @simd.i32x4_add(
+          @simd.i32x4_min_s(
+            @simd.i32x4_max_s(
+              @simd.i32x4_shr_s(
+                @simd.i32x4_add(@simd.i32x4_mul(idx_g, cy), yc),
                 16,
               ),
               zero,
             ),
             lim,
           ),
-          @v128.i32x4_shr_s(
-            @v128.i32x4_add(@v128.i32x4_mul(vv32, cgv), cgvc),
+          @simd.i32x4_shr_s(
+            @simd.i32x4_add(@simd.i32x4_mul(vv32, cgv), cgvc),
             16,
           ),
         ),
         mff,
       )
       // b = clip8(yramp(y + base_b(U)))
-      let idx_b = @v128.i32x4_add(
+      let idx_b = @simd.i32x4_add(
         y32,
-        @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(uv32, cbu), cbc), 16),
+        @simd.i32x4_shr_s(@simd.i32x4_add(@simd.i32x4_mul(uv32, cbu), cbc), 16),
       )
-      let b = @v128.i32x4_min_s(
-        @v128.i32x4_max_s(
-          @v128.i32x4_shr_s(@v128.i32x4_add(@v128.i32x4_mul(idx_b, cy), yc), 16),
+      let b = @simd.i32x4_min_s(
+        @simd.i32x4_max_s(
+          @simd.i32x4_shr_s(@simd.i32x4_add(@simd.i32x4_mul(idx_b, cy), yc), 16),
           zero,
         ),
         lim,
       )
       // narrow the three 4-lane channels to u8 and interleave RGB24
-      let r8 = @v128.i8x16_narrow_i16x8_u(
-        @v128.i16x8_narrow_i32x4_u(r, r),
-        @v128.i16x8_narrow_i32x4_u(r, r),
+      let r8 = @simd.i8x16_narrow_i16x8_u(
+        @simd.i16x8_narrow_i32x4_u(r, r),
+        @simd.i16x8_narrow_i32x4_u(r, r),
       )
-      let g8 = @v128.i8x16_narrow_i16x8_u(
-        @v128.i16x8_narrow_i32x4_u(g, g),
-        @v128.i16x8_narrow_i32x4_u(g, g),
+      let g8 = @simd.i8x16_narrow_i16x8_u(
+        @simd.i16x8_narrow_i32x4_u(g, g),
+        @simd.i16x8_narrow_i32x4_u(g, g),
       )
-      let b8 = @v128.i8x16_narrow_i16x8_u(
-        @v128.i16x8_narrow_i32x4_u(b, b),
-        @v128.i16x8_narrow_i32x4_u(b, b),
+      let b8 = @simd.i8x16_narrow_i16x8_u(
+        @simd.i16x8_narrow_i32x4_u(b, b),
+        @simd.i16x8_narrow_i32x4_u(b, b),
       )
       // two-shuffle 3-way interleave: [c0,c1,P, c0,c1,P, ...] then slot
       // the third channel's bytes 0..3 into the P positions
       let (ca, cb, cc) = if bgr { (b8, g8, r8) } else { (r8, g8, b8) }
-      let t = @v128.i8x16_shuffle(
+      let t = @simd.i8x16_shuffle(
         ca, cb, 0, 16, 0, 1, 17, 0, 2, 18, 0, 3, 19, 0, 0, 0, 0, 0,
       )
-      let rgb = @v128.i8x16_shuffle(
+      let rgb = @simd.i8x16_shuffle(
         t, cc, 0, 1, 16, 3, 4, 17, 6, 7, 18, 9, 10, 19, 12, 13, 20, 15,
       )
-      @v128.v128_store(scratch, 0, rgb)
+      @simd.v128_store(scratch, 0, rgb)
       for t2 = 0; t2 < 12; t2 = t2 + 1 {
         out.push(scratch[t2])
       }

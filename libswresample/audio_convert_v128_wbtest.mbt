@@ -44,7 +44,11 @@ fn ar_flt_to_s16(x : Double) -> Int32 {
 
 ///|
 /// Verbatim `Swr::flt_planar_to_s16_packed` (the interleave, as s16 values). */
-fn ar_pack(planar : Array[Array[Double]], channels : Int32, nb : Int32) -> Array[Int32] {
+fn ar_pack(
+  planar : Array[Array[Double]],
+  channels : Int32,
+  nb : Int32,
+) -> Array[Int32] {
   let out : Array[Int32] = Array::make(nb * channels, 0)
   for i = 0; i < nb; i = i + 1 {
     for ch = 0; ch < channels; ch = ch + 1 {
@@ -114,7 +118,9 @@ test "audio convert v128: rounding is half-to-even, not truncation" {
 
 ///|
 test "audio convert v128: clipping at both s16 rails" {
-  let vals : Array[Double] = [2.0, -2.0, 1.0, -1.0, 1.0001, -1.0001, 100.0, -100.0]
+  let vals : Array[Double] = [
+    2.0, -2.0, 1.0, -1.0, 1.0001, -1.0001, 100.0, -100.0,
+  ]
   let n = vals.length()
   let planar : Array[Array[Double]] = [vals, vals]
   let got : Array[Int32] = Array::make(2 * n, 0)

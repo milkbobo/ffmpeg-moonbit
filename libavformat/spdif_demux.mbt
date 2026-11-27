@@ -73,7 +73,11 @@ fn spdif_burst_period(data_type : Int32) -> Int32? {
     0x0d => Some(8192)
     0x11 => {
       let subtype = (data_type >> 8) & 0x1f
-      if subtype <= 5 { Some(2048 << subtype) } else { None }
+      if subtype <= 5 {
+        Some(2048 << subtype)
+      } else {
+        None
+      }
     }
     0x13 => Some(8192)
     0x15 => Some(24576)
@@ -83,7 +87,7 @@ fn spdif_burst_period(data_type : Int32) -> Int32? {
 }
 
 ///|
-fn spdif_preamble_endian(payload : BytesView, pos : Int) -> Bool? {
+fn spdif_preamble_endian(payload : BytesView, pos : Int32) -> Bool? {
   match payload[pos:] {
     [0x72, 0xf8, 0x1f, 0x4e, _, _, _, _, ..] => Some(false)
     [0xf8, 0x72, 0x4e, 0x1f, _, _, _, _, ..] => Some(true)
@@ -93,7 +97,9 @@ fn spdif_preamble_endian(payload : BytesView, pos : Int) -> Bool? {
 
 ///|
 fn spdif_read_burst(payload : BytesView, pos : Int32) -> SpdifBurst? {
-  guard spdif_preamble_endian(payload, pos) is Some(big_endian) else { return None }
+  guard spdif_preamble_endian(payload, pos) is Some(big_endian) else {
+    return None
+  }
   let data_type = wav_u16(payload, pos + 4, big_endian)
   let kind = data_type & 0xff
   guard spdif_burst_period(data_type) is Some(period) else { return None }
@@ -143,8 +149,8 @@ fn SpdifBurst::same_format(self : SpdifBurst, other : SpdifBurst) -> Bool {
 
 ///|
 priv enum SpdifStart {
-  Regular(Int, SpdifBurst)
-  Mat(Int, Bool)
+  Regular(Int32, SpdifBurst)
+  Mat(Int32, Bool)
 }
 
 ///|
@@ -166,10 +172,19 @@ fn spdif_find_start(data : BytesView) -> SpdifStart? {
 fn probe_spdif(pd : ProbeData) -> Int32 {
   let data = pd.buf[:]
   let (pos, repeated) = match spdif_find_start(data) {
-    Some(Regular(pos, first)) => (pos, first.period < data.length() - pos &&
-      spdif_read_burst(data, pos + first.period) is Some(second) && first.same_format(second))
-    Some(Mat(pos, big_endian)) => (pos, spdif_mat_burst_size < data.length() - pos &&
-      spdif_mat_endian(data, pos + spdif_mat_burst_size) == Some(big_endian))
+    Some(Regular(pos, first)) =>
+      (
+        pos,
+        first.period < data.length() - pos &&
+        spdif_read_burst(data, pos + first.period) is Some(second) &&
+        first.same_format(second),
+      )
+    Some(Mat(pos, big_endian)) =>
+      (
+        pos,
+        spdif_mat_burst_size < data.length() - pos &&
+        spdif_mat_endian(data, pos + spdif_mat_burst_size) == Some(big_endian),
+      )
     None => return 0
   }
   if repeated {
@@ -198,7 +213,7 @@ pub struct SpdifTrack {
   /// Byte order of the burst header and carrier words.
   big_endian : Bool
   priv data_end : Int32
-  priv mat_start : Int?
+  priv mat_start : Int32?
 }
 
 ///|
@@ -207,8 +222,10 @@ pub struct SpdifTrack {
 pub fn av_spdif_open(data : Bytes) -> Result[SpdifTrack, String] {
   let view = data[:]
   match spdif_find_start(view) {
-    Some(Regular(start, first)) => spdif_index(view, start, first, wave_padding=None)
-    Some(Mat(start, big_endian)) => spdif_index_mat(view, start, big_endian, wave_padding=None)
+    Some(Regular(start, first)) =>
+      spdif_index(view, start, first, wave_padding=None)
+    Some(Mat(start, big_endian)) =>
+      spdif_index_mat(view, start, big_endian, wave_padding=None)
     None => Err("spdif: no valid IEC 61937 burst")
   }
 }
@@ -221,8 +238,10 @@ pub fn spdif_packet_data(
   frame : RawAudioFrame,
 ) -> Result[Bytes, String] {
   match spdif_find_start(data[:]) {
-    Some(Mat(start, big_endian)) => spdif_mat_packet_data(data[:], start, big_endian, frame.pos, frame.size)
-    Some(Regular(_, burst)) => spdif_read_payload(data, frame.pos, frame.size, burst.big_endian)
+    Some(Mat(start, big_endian)) =>
+      spdif_mat_packet_data(data[:], start, big_endian, frame.pos, frame.size)
+    Some(Regular(_, burst)) =>
+      spdif_read_payload(data, frame.pos, frame.size, burst.big_endian)
     None => spdif_read_payload(data, frame.pos, frame.size, false)
   }
 }
@@ -235,7 +254,13 @@ pub fn SpdifTrack::packet_data(
   frame : RawAudioFrame,
 ) -> Result[Bytes, String] {
   if self.mat_start is Some(start) {
-    return spdif_mat_packet_data(data[:], start, self.big_endian, frame.pos, frame.size)
+    return spdif_mat_packet_data(
+      data[:],
+      start,
+      self.big_endian,
+      frame.pos,
+      frame.size,
+    )
   }
   spdif_read_payload(data, frame.pos, frame.size, self.big_endian)
 }
@@ -334,14 +359,13 @@ fn wav_probe_spdif(
   let indexed = if spdif_mat_endian(payload, 0) == Some(big_endian) {
     spdif_index_mat(payload, 0, big_endian, wave_padding=Some(tail_padding))
   } else {
-    guard spdif_read_burst(payload, 0) is Some(first) && first.big_endian == big_endian else {
+    guard spdif_read_burst(payload, 0) is Some(first) &&
+      first.big_endian == big_endian else {
       return None
     }
     spdif_index(payload, 0, first, wave_padding=Some(tail_padding))
   }
-  guard indexed is Ok(track) else {
-    return None
-  }
+  guard indexed is Ok(track) else { return None }
   let format = {
     ..fmt,
     codec: track.codec,

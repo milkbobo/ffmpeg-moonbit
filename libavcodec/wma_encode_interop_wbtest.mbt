@@ -14,8 +14,7 @@
 /// +-1 LSB f32/f64 quantization-boundary residual.
 
 ///|
-let wma_enc_interop_packets_b64 : Bytes =
-  b"9P/QAAAD/QAAADKcoyjKcpyjKMpynKMo/PKfyyjAf54C/LzeA6xsBVw+bz2rGwS572x2CR0/uItYHOn50+dZi89cnEKHgLIAB8B5" +
+let wma_enc_interop_packets_b64 : Bytes = b"9P/QAAAD/QAAADKcoyjKcpyjKMpynKMo/PKfyyjAf54C/LzeA6xsBVw+bz2rGwS572x2CR0/uItYHOn50+dZi89cnEKHgLIAB8B5" +
   b"QAPgOoAB8BR4ALiFL+RX8m5W2tMOIlsfXC6WwFWPlOAv1+dv/XFb1u3PuN+tULdK1Q/pfIfpoRSmhFJoCSgJKAkoCSgJKAYmJiYm" +
   b"JiYmJiYmJiYzxsTExMTExMTExMTExMTExMTExMTExMTExMTEwSASASEFIQUhBSEFIQUhBSEGkUGkUGlD5L9D5K2hap46OKm3vsoW" +
   b"8B8VcH7tj/NfiM6f/AT8AD4ClwAcF18GzBMYDwS/rzXH+a1+n9vo4qVuhaS/Q+S/RQmlFCaRQUhBSEFIQUhBSEFIBIBIBIBIBIBI" +
@@ -77,8 +76,7 @@ let wma_enc_interop_packets_b64 : Bytes =
   b"Tk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5O"
 
 ///|
-let wma_enc_interop_ref_pcm_b64 : Bytes =
-  b"dCNUFeoXjwlACbr6BPxh7TH0gOWw8wDlnfn96p8CHfQtCtn7Tww3/hwHTvl7+wXuyOy435Hf9NLY17vLkNf/y9zd49Jn5xHdqu8B" +
+let wma_enc_interop_ref_pcm_b64 : Bytes = b"dCNUFeoXjwlACbr6BPxh7TH0gOWw8wDlnfn96p8CHfQtCtn7Tww3/hwHTvl7+wXuyOy435Hf9NLY17vLkNf/y9zd49Jn5xHdqu8B" +
   b"5qPyselh7i/mv+NV3BPWec/qySfETMNlvjTELsDOy63IytaR1J/gUd9D5eHkuuJD49LZR9vazTnQXMOjxmW+kML4wAPGS8ox0BTX" +
   b"zt3G4k7qUumg8a3oufGa4VvrXtfJ4X/Oi9kQy7DWHc9G2+bZi+Ym6Dz1U/XMAlX9IgsT/igMRPiRBiLvmv0z58b1jOQr80Tp4vep" +
   b"9DYDfQPrETgRdx+5Gbwn3hqWKE4VriI7DDUZKASvEDEBNw15BfQQWhA+G6Me5CjNK2E1szORPCc0RTzDLRk1riM2KmsaHSAdFvQa" +
@@ -626,8 +624,8 @@ let wma_enc_interop_ref_pcm_b64 : Bytes =
   b"AEcAGgBtAEQAmgB1ALwAnADIAKsAuQChAJcAggBvAF4ATgBAADwAMgA8ADQARwBBAFQAUABaAFgAVQBUAEUARgAwADIAHQAeAA8A" +
   b"EAAHAAgAAgADAA=="
 
-
-///| The encoder must reproduce the stock FFmpeg wmav2 packets bit for bit.
+///|
+/// The encoder must reproduce the stock FFmpeg wmav2 packets bit for bit.
 test "WMA encoder: packets match FFmpeg wmav2 byte-for-byte" {
   let enc = wma_encoder_new(2, 44100, 2, 128000).unwrap()
   let n = enc.frame_size()
@@ -641,7 +639,11 @@ test "WMA encoder: packets match FFmpeg wmav2 byte-for-byte" {
     pos = pos + 743
     if pkt != want {
       let mut d = 0
-      let lim = if pkt.length() < want.length() { pkt.length() } else { want.length() }
+      let lim = if pkt.length() < want.length() {
+        pkt.length()
+      } else {
+        want.length()
+      }
       while d < lim && pkt[d] == want[d] {
         d = d + 1
       }
@@ -650,16 +652,21 @@ test "WMA encoder: packets match FFmpeg wmav2 byte-for-byte" {
   }
 }
 
-///| Decoding our (== FFmpeg's) stream through the bit-exact decoder yields
+///|
+/// Decoding our (== FFmpeg's) stream through the bit-exact decoder yields
 /// the docker FFmpeg reference PCM within +-1 LSB.
 test "WMA encoder: self decode matches FFmpeg reference PCM" {
   let dec = wma_decoder_new(2, 44100, 2, 128000, 743, 1).unwrap()
   let blob = @libavutil.av_base64_decode(wma_enc_interop_packets_b64, 1 << 24).unwrap()
-  let ref_pcm = @libavutil.av_base64_decode(wma_enc_interop_ref_pcm_b64, 1 << 24).unwrap()
+  let ref_pcm = @libavutil.av_base64_decode(
+    wma_enc_interop_ref_pcm_b64,
+    1 << 24,
+  ).unwrap()
   let frames : Array[Array[Array[Double]]] = []
   let mut pos = 0
   for _f = 0; _f < 6; _f = _f + 1 {
-    match dec.decode_packet(blob.clamped_view(start=pos, end=pos + 743).to_owned()) {
+    match
+      dec.decode_packet(blob.clamped_view(start=pos, end=pos + 743).to_owned()) {
       Ok(fr) => frames.push(fr)
       Err(e) => fail("decode: \{e}")
     }

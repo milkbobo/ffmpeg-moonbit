@@ -32,7 +32,8 @@ fn WmaProDecoder::decode_scale_factors(
     if self.channel[c].cur_subframe == 0 || self.gb.read1() != 0U {
       if !self.channel[c].reuse_sf {
         // decode DPCM coded scale factors
-        self.channel[c].scale_factor_step = self.gb.read(2).reinterpret_as_int() + 1
+        self.channel[c].scale_factor_step = self.gb.read(2).reinterpret_as_int() +
+          1
         let mut val = 45 / self.channel[c].scale_factor_step
         for b in 0..<self.num_bands {
           val += self.gb.read_vlc(self.sf_vlc)
@@ -102,7 +103,11 @@ fn WmaProDecoder::inverse_channel_transform(self : WmaProDecoder) -> Unit {
     for b in 0..<self.num_bands {
       let start = self.sfb_offsets[self.table_idx][b]
       let band_end = self.sfb_offsets[self.table_idx][b + 1]
-      let end = if band_end < self.subframe_len { band_end } else { self.subframe_len }
+      let end = if band_end < self.subframe_len {
+        band_end
+      } else {
+        self.subframe_len
+      }
       if self.chgroup[i].transform_band[b] == 1 {
         // multiply values with the decorrelation_matrix
         for y in start..<end {
@@ -197,8 +202,7 @@ fn WmaProDecoder::decode_subframe(
     if offset == self.channel[i].decoded_samples &&
       subframe_len == self.channel[i].subframe_len[cur_subframe] {
       total_samples -= self.channel[i].subframe_len[cur_subframe]
-      self.channel[i].decoded_samples +=
-        self.channel[i].subframe_len[cur_subframe]
+      self.channel[i].decoded_samples += self.channel[i].subframe_len[cur_subframe]
       self.channel_indexes_for_cur_subframe[self.channels_for_cur_subframe] = i
       self.channels_for_cur_subframe += 1
     }
@@ -229,11 +233,7 @@ fn WmaProDecoder::decode_subframe(
     let mut num_fill_bits = self.gb.read(2).reinterpret_as_int()
     if num_fill_bits == 0 {
       let len = self.gb.read(4).reinterpret_as_int()
-      num_fill_bits = (if len == 0 {
-        0U
-      } else {
-        self.gb.read(len)
-      }).reinterpret_as_int() +
+      num_fill_bits = (if len == 0 { 0U } else { self.gb.read(len) }).reinterpret_as_int() +
         1
     }
     if self.gb.count() + num_fill_bits > self.num_saved_bits {
@@ -268,7 +268,9 @@ fn WmaProDecoder::decode_subframe(
         let c = self.channel_indexes_for_cur_subframe[i]
         let num_vec_coeffs = self.gb.read(num_bits).reinterpret_as_int() << 2
         if num_vec_coeffs > subframe_len {
-          return Err(Broken("wmapro: num_vec_coeffs \{num_vec_coeffs} is too large"))
+          return Err(
+            Broken("wmapro: num_vec_coeffs \{num_vec_coeffs} is too large"),
+          )
         }
         self.channel[c].num_vec_coeffs = num_vec_coeffs
       }
@@ -312,8 +314,9 @@ fn WmaProDecoder::decode_subframe(
         self.channel[c].quant_step = quant_step
         if self.gb.read1() != 0U {
           if modifier_len != 0 {
-            self.channel[c].quant_step +=
-              self.gb.read(modifier_len).reinterpret_as_int() +
+            self.channel[c].quant_step += self.gb
+              .read(modifier_len)
+              .reinterpret_as_int() +
               1
           } else {
             self.channel[c].quant_step += 1
@@ -447,10 +450,14 @@ fn WmaProDecoder::decode_frame(
   }
   if self.gb.read1() != 0U {
     if self.gb.read1() != 0U {
-      self.trim_start = self.gb.read(wma_log2(self.samples_per_frame * 2)).reinterpret_as_int()
+      self.trim_start = self.gb
+        .read(wma_log2(self.samples_per_frame * 2))
+        .reinterpret_as_int()
     }
     if self.gb.read1() != 0U {
-      self.trim_end = self.gb.read(wma_log2(self.samples_per_frame * 2)).reinterpret_as_int()
+      self.trim_end = self.gb
+        .read(wma_log2(self.samples_per_frame * 2))
+        .reinterpret_as_int()
     }
   } else {
     self.trim_start = 0

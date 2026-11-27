@@ -47,7 +47,11 @@ fn wmapro_copy_bits(
 /// `save_bits`: move `len` bits of the packet reader into the bit reservoir.
 /// `append` adds them to the frame in progress; otherwise the reservoir is
 /// reset and the bits start a new frame.
-fn WmaProDecoder::save_bits(self : WmaProDecoder, len0 : Int32, append : Bool) -> Unit {
+fn WmaProDecoder::save_bits(
+  self : WmaProDecoder,
+  len0 : Int32,
+  append : Bool,
+) -> Unit {
   let mut len = len0
 
   // when the frame data does not need to be concatenated, the input buffer
@@ -73,7 +77,7 @@ fn WmaProDecoder::save_bits(self : WmaProDecoder, len0 : Int32, append : Bool) -
       self.frame_data,
       self.pb_pos,
       src,
-      (self.pgb.index >> 3) << 3,
+      self.pgb.index >> 3 << 3,
       self.num_saved_bits,
     )
     self.pb_pos += self.num_saved_bits
@@ -96,7 +100,7 @@ fn WmaProDecoder::save_bits(self : WmaProDecoder, len0 : Int32, append : Bool) -
       self.frame_data,
       self.pb_pos,
       src,
-      (self.pgb.index >> 3) << 3,
+      self.pgb.index >> 3 << 3,
       len,
     )
     self.pb_pos += len
@@ -184,8 +188,9 @@ fn WmaProDecoder::decode_packet_inner(
     self.pgb.skip(2)
 
     // number of bits that need to be added to the previous frame
-    let mut num_bits_prev_frame =
-      self.pgb.read(self.log2_frame_size).reinterpret_as_int()
+    let mut num_bits_prev_frame = self.pgb
+      .read(self.log2_frame_size)
+      .reinterpret_as_int()
 
     // check for packet loss
     if !self.packet_loss &&

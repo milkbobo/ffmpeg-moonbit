@@ -9,7 +9,7 @@
 ///   s2' = s2 + 16*s1 + Σ (16-i) * b[i]      (i = 0..15)
 ///
 /// so the byte sum and the weighted sum are produced with two `pmaddwd`-style
-/// dots (`@v128.i32x4_dot_i16x8_s`, the Wasm SIMD128 equivalent) per block.
+/// dots (`@simd.i32x4_dot_i16x8_s`, the Wasm SIMD128 equivalent) per block.
 ///
 /// This module is gated to `native`/`wasm`; other targets keep the scalar
 /// `av_adler32_update` (see `adler32.mbt`). The two implementations are
@@ -19,10 +19,10 @@
 /// Horizontal sum of the four `i32x4` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn adler_red4(v : V128) -> UInt32 {
-  @v128.i32x4_extract_lane(v, 0) +
-  @v128.i32x4_extract_lane(v, 1) +
-  @v128.i32x4_extract_lane(v, 2) +
-  @v128.i32x4_extract_lane(v, 3)
+  @simd.i32x4_extract_lane(v, 0) +
+  @simd.i32x4_extract_lane(v, 1) +
+  @simd.i32x4_extract_lane(v, 2) +
+  @simd.i32x4_extract_lane(v, 3)
 }
 
 ///|
@@ -34,9 +34,9 @@ pub fn av_adler32_update_v128(
   buf : Bytes,
   len : Int32,
 ) -> UInt32 {
-  let ones = @v128.i16x8_const(1, 1, 1, 1, 1, 1, 1, 1)
-  let w_lo = @v128.i16x8_const(16, 15, 14, 13, 12, 11, 10, 9)
-  let w_hi = @v128.i16x8_const(8, 7, 6, 5, 4, 3, 2, 1)
+  let ones = @simd.i16x8_const(1, 1, 1, 1, 1, 1, 1, 1)
+  let w_lo = @simd.i16x8_const(16, 15, 14, 13, 12, 11, 10, 9)
+  let w_hi = @simd.i16x8_const(8, 7, 6, 5, 4, 3, 2, 1)
   let mut s1 : UInt64 = (adler & 0xFFFF).to_uint64()
   let mut s2 : UInt64 = (adler >> 16).to_uint64()
   let mut p = 0
@@ -44,18 +44,18 @@ pub fn av_adler32_update_v128(
   while p + 16 <= len {
     match buf[p:p + 16] {
       [v128le(v), ..] => {
-        let lo = @v128.i16x8_extend_low_i8x16_u(v)
-        let hi = @v128.i16x8_extend_high_i8x16_u(v)
+        let lo = @simd.i16x8_extend_low_i8x16_u(v)
+        let hi = @simd.i16x8_extend_high_i8x16_u(v)
         let bsum = adler_red4(
-          @v128.i32x4_add(
-            @v128.i32x4_dot_i16x8_s(lo, ones),
-            @v128.i32x4_dot_i16x8_s(hi, ones),
+          @simd.i32x4_add(
+            @simd.i32x4_dot_i16x8_s(lo, ones),
+            @simd.i32x4_dot_i16x8_s(hi, ones),
           ),
         )
         let wsum = adler_red4(
-          @v128.i32x4_add(
-            @v128.i32x4_dot_i16x8_s(lo, w_lo),
-            @v128.i32x4_dot_i16x8_s(hi, w_hi),
+          @simd.i32x4_add(
+            @simd.i32x4_dot_i16x8_s(lo, w_lo),
+            @simd.i32x4_dot_i16x8_s(hi, w_hi),
           ),
         )
         s2 = s2 + 16UL * s1 + wsum.to_uint64()

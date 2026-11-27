@@ -66,7 +66,11 @@ fn sipr_dec_delay3_2nd(
   pitch_lag_prev : Int32,
 ) -> Int32 {
   if index < 62 {
-    let pitch_delay_min = amr_clip_int(pitch_lag_prev - 10, pit_min, pit_max - 19)
+    let pitch_delay_min = amr_clip_int(
+      pitch_lag_prev - 10,
+      pit_min,
+      pit_max - 19,
+    )
     3 * pitch_delay_min + index - 2
   } else {
     3 * pitch_lag_prev
@@ -94,7 +98,11 @@ fn sipr_decode_10_pulses_35bits(
   for i = 0; i < half_pulse_count; i = i + 1 {
     let pos1 = gray_decode[fixed_index[2 * i + 1] & mask] + i
     let pos2 = gray_decode[fixed_index[2 * i] & mask] + i
-    let sign = if (fixed_index[2 * i + 1] & (1 << bits)) != 0 { -1.0 } else { 1.0 }
+    let sign = if (fixed_index[2 * i + 1] & (1 << bits)) != 0 {
+      -1.0
+    } else {
+      1.0
+    }
     f.x[2 * i + 1] = pos1
     f.x[2 * i] = pos2
     f.y[2 * i + 1] = sign
@@ -141,7 +149,8 @@ fn sipr_acelp_decode_gain_codef(
   for i = 0; i < ma_pred_order; i = i + 1 {
     mr_energy += quant_energy[i] * ma_prediction_coeff[i]
   }
-  gain_scale * @math.exp(sipr_ln10 / 20.0 * mr_energy) /
+  gain_scale *
+  @math.exp(sipr_ln10 / 20.0 * mr_energy) /
   (0.01 + amr_dot(fc_v, 0, fc_v, 0, subframe_size)).sqrt()
 }
 
@@ -194,30 +203,58 @@ fn SiprDecoder::decode_frame_16k(
     let pitch_delay_int = sipr_divide_by_3(pitch_delay_3x + 2)
     let pitch_delay_frac = pitch_delay_3x + 2 - 3 * pitch_delay_int
     amr_acelp_interpolatef(
-      self.excitation, ex, self.excitation, ex - pitch_delay_int + 1,
-      sipr_sinc_win, 3, pitch_delay_frac + 1, sipr_lp_filter_order,
+      self.excitation,
+      ex,
+      self.excitation,
+      ex - pitch_delay_int + 1,
+      sipr_sinc_win,
+      3,
+      pitch_delay_frac + 1,
+      sipr_lp_filter_order,
       sipr_l_subfr_16k,
     )
     let fixed_vector = Array::make(sipr_l_subfr_16k, 0.0)
     sipr_decode_10_pulses_35bits(
-      params.fc_indexes[i], f, sipr_fc_4pulses_8bits_tracks_13, 5, 4,
+      params.fc_indexes[i],
+      f,
+      sipr_fc_4pulses_8bits_tracks_13,
+      5,
+      4,
     )
     sipr_set_fixed_vector(fixed_vector, f, 1.0, sipr_l_subfr_16k)
     let gain_corr_factor = sipr_gain_cb_16k[params.gc_index[i]]
     let gain_code = gain_corr_factor *
       sipr_acelp_decode_gain_codef(
-        sipr_l_subfr_16k.to_double().sqrt(), fixed_vector, sipr_energy_mean(19.0),
-        self.energy_history, sipr_pred_16k, sipr_l_subfr_16k, 2,
+        sipr_l_subfr_16k.to_double().sqrt(),
+        fixed_vector,
+        sipr_energy_mean(19.0),
+        self.energy_history,
+        sipr_pred_16k,
+        sipr_l_subfr_16k,
+        2,
       )
     self.energy_history[1] = self.energy_history[0]
     self.energy_history[0] = 20.0 * @math.log10(gain_corr_factor)
     amr_weighted_vector_sum(
-      self.excitation, ex, self.excitation, ex, fixed_vector, 0,
-      pitch_fac, gain_code, sipr_l_subfr_16k,
+      self.excitation,
+      ex,
+      self.excitation,
+      ex,
+      fixed_vector,
+      0,
+      pitch_fac,
+      gain_code,
+      sipr_l_subfr_16k,
     )
     sipr_lp_synthesis_filterf(
-      self.synth_buf, synth + i_subfr, self.excitation, ex, az, i * 16,
-      sipr_l_subfr_16k, 16,
+      self.synth_buf,
+      synth + i_subfr,
+      self.excitation,
+      ex,
+      az,
+      i * 16,
+      sipr_l_subfr_16k,
+      16,
     )
   }
   for i = 0; i < 16; i = i + 1 {
@@ -251,16 +288,38 @@ fn SiprDecoder::postfilter_16k(
   for i = 0; i < 16; i = i + 1 {
     buf[i] = self.mem_preemph[i]
   }
-  amr_celp_lp_synthesis_filterf(buf, tmpbuf, self.synth_buf, synth, filt1, 30, 16)
+  amr_celp_lp_synthesis_filterf(
+    buf,
+    tmpbuf,
+    self.synth_buf,
+    synth,
+    filt1,
+    30,
+    16,
+  )
   for i = 0; i < 16; i = i + 1 {
     self.synth_buf[synth - 16 + i] = self.mem_preemph[i]
   }
-  amr_celp_lp_synthesis_filterf(self.synth_buf, synth, self.synth_buf, synth, filt0, 30, 16)
+  amr_celp_lp_synthesis_filterf(
+    self.synth_buf,
+    synth,
+    self.synth_buf,
+    synth,
+    filt0,
+    30,
+    16,
+  )
   for i = 0; i < 16; i = i + 1 {
     out[out_off + 14 + i] = self.synth_buf[synth + 14 + i]
   }
   amr_celp_lp_synthesis_filterf(
-    out, out_off + 30, self.synth_buf, synth + 30, filt0, 130, 16,
+    out,
+    out_off + 30,
+    self.synth_buf,
+    synth + 30,
+    filt0,
+    130,
+    16,
   )
   for i = 0; i < 16; i = i + 1 {
     self.mem_preemph[i] = out[out_off + 144 + i]

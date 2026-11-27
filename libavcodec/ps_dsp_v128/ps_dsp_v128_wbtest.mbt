@@ -39,7 +39,8 @@ fn pr_mul_pair_single(
 ) -> Unit {
   for i in 0..<n {
     dst[(dst_off + i) * 2] = delay[(src_off + i) * 2] * gain[gain_off + i]
-    dst[(dst_off + i) * 2 + 1] = delay[(src_off + i) * 2 + 1] * gain[gain_off + i]
+    dst[(dst_off + i) * 2 + 1] = delay[(src_off + i) * 2 + 1] *
+      gain[gain_off + i]
   }
 }
 
@@ -201,7 +202,10 @@ fn pr_same(a : Array[Double], b : Array[Double]) -> Bool {
 test "ps dsp v128: add_squares and mul_pair_single bit-exact" {
   for n in [1, 2, 3, 8, 32] {
     for k = 0; k < 3; k = k + 1 {
-      let buf = pr_gen(0x9E3779B9U + n.reinterpret_as_uint() + k.reinterpret_as_uint(), (n + 8) * 2)
+      let buf = pr_gen(
+        0x9E3779B9U + n.reinterpret_as_uint() + k.reinterpret_as_uint(),
+        (n + 8) * 2,
+      )
       let d1 = pr_gen(0x5A5A5A5AU + k.reinterpret_as_uint(), n + 8)
       let d2 = pr_copy(d1)
       pr_add_squares(d1, 3, buf, 2, n)

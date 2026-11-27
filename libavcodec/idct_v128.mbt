@@ -55,7 +55,7 @@ pub fn idct_bytes_to_block(buf : FixedArray[Byte]) -> Array[Int32] {
 /// Apply one `i8x16_shuffle` from a 16-entry index vector. */
 #cfg(any(target="native", target="wasm"))
 fn idct_sh(a : V128, b : V128, idx : Array[Int32]) -> V128 {
-  @v128.i8x16_shuffle(
+  @simd.i8x16_shuffle(
     a,
     b,
     idx[0],
@@ -122,14 +122,14 @@ fn idct_transpose(rows : Array[V128]) -> Array[V128] {
 /// into the `int16_t` block, so out-of-range intermediates wrap).
 #cfg(any(target="native", target="wasm"))
 fn idct_i16(x : V128) -> V128 {
-  @v128.i32x4_shr_s(@v128.i32x4_shl(x, 16), 16)
+  @simd.i32x4_shr_s(@simd.i32x4_shl(x, 16), 16)
 }
 
 ///|
 /// Multiply an `i32x4` vector by the constant `c` (32-bit wrapping). */
 #cfg(any(target="native", target="wasm"))
 fn idct_mul(c : Int32, v : V128) -> V128 {
-  @v128.i32x4_mul(@v128.i32x4_splat(c.reinterpret_as_uint()), v)
+  @simd.i32x4_mul(@simd.i32x4_splat(c.reinterpret_as_uint()), v)
 }
 
 ///|
@@ -141,8 +141,8 @@ fn idct_1d(v : Array[V128], cfg : SimpleIdct, is_col : Bool) -> Array[V128] {
   let g0 : Array[V128] = []
   let g1 : Array[V128] = []
   for k = 0; k < 8; k = k + 1 {
-    g0.push(@v128.i32x4_extend_low_i16x8_s(v[k]))
-    g1.push(@v128.i32x4_extend_high_i16x8_s(v[k]))
+    g0.push(@simd.i32x4_extend_low_i16x8_s(v[k]))
+    g1.push(@simd.i32x4_extend_high_i16x8_s(v[k]))
   }
   let res : Array[V128] = []
   for grp = 0; grp < 2; grp = grp + 1 {
@@ -152,82 +152,82 @@ fn idct_1d(v : Array[V128], cfg : SimpleIdct, is_col : Bool) -> Array[V128] {
     let mut a0 = if is_col {
       idct_mul(
         cfg.w4,
-        @v128.i32x4_add(
+        @simd.i32x4_add(
           x[0],
-          @v128.i32x4_splat(((1 << (shift - 1)) / cfg.w4).reinterpret_as_uint()),
+          @simd.i32x4_splat(((1 << (shift - 1)) / cfg.w4).reinterpret_as_uint()),
         ),
       )
     } else {
-      @v128.i32x4_add(
+      @simd.i32x4_add(
         idct_mul(cfg.w4, x[0]),
-        @v128.i32x4_splat((1 << (shift - 1)).reinterpret_as_uint()),
+        @simd.i32x4_splat((1 << (shift - 1)).reinterpret_as_uint()),
       )
     }
     let mut a1 = a0
     let mut a2 = a0
     let mut a3 = a0
-    a0 = @v128.i32x4_add(a0, idct_mul(cfg.w2, x[2]))
-    a1 = @v128.i32x4_add(a1, idct_mul(cfg.w6, x[2]))
-    a2 = @v128.i32x4_add(a2, idct_mul(0 - cfg.w6, x[2]))
-    a3 = @v128.i32x4_add(a3, idct_mul(0 - cfg.w2, x[2]))
-    let mut b0 = @v128.i32x4_add(idct_mul(cfg.w1, x[1]), idct_mul(cfg.w3, x[3]))
-    let mut b1 = @v128.i32x4_add(
+    a0 = @simd.i32x4_add(a0, idct_mul(cfg.w2, x[2]))
+    a1 = @simd.i32x4_add(a1, idct_mul(cfg.w6, x[2]))
+    a2 = @simd.i32x4_add(a2, idct_mul(0 - cfg.w6, x[2]))
+    a3 = @simd.i32x4_add(a3, idct_mul(0 - cfg.w2, x[2]))
+    let mut b0 = @simd.i32x4_add(idct_mul(cfg.w1, x[1]), idct_mul(cfg.w3, x[3]))
+    let mut b1 = @simd.i32x4_add(
       idct_mul(cfg.w3, x[1]),
       idct_mul(0 - cfg.w7, x[3]),
     )
-    let mut b2 = @v128.i32x4_add(
+    let mut b2 = @simd.i32x4_add(
       idct_mul(cfg.w5, x[1]),
       idct_mul(0 - cfg.w1, x[3]),
     )
-    let mut b3 = @v128.i32x4_add(
+    let mut b3 = @simd.i32x4_add(
       idct_mul(cfg.w7, x[1]),
       idct_mul(0 - cfg.w5, x[3]),
     )
-    a0 = @v128.i32x4_add(
+    a0 = @simd.i32x4_add(
       a0,
-      @v128.i32x4_add(idct_mul(cfg.w4, x[4]), idct_mul(cfg.w6, x[6])),
+      @simd.i32x4_add(idct_mul(cfg.w4, x[4]), idct_mul(cfg.w6, x[6])),
     )
-    a1 = @v128.i32x4_add(
+    a1 = @simd.i32x4_add(
       a1,
-      @v128.i32x4_sub(idct_mul(0 - cfg.w4, x[4]), idct_mul(cfg.w2, x[6])),
+      @simd.i32x4_sub(idct_mul(0 - cfg.w4, x[4]), idct_mul(cfg.w2, x[6])),
     )
-    a2 = @v128.i32x4_add(
+    a2 = @simd.i32x4_add(
       a2,
-      @v128.i32x4_add(idct_mul(0 - cfg.w4, x[4]), idct_mul(cfg.w2, x[6])),
+      @simd.i32x4_add(idct_mul(0 - cfg.w4, x[4]), idct_mul(cfg.w2, x[6])),
     )
-    a3 = @v128.i32x4_add(
+    a3 = @simd.i32x4_add(
       a3,
-      @v128.i32x4_sub(idct_mul(cfg.w4, x[4]), idct_mul(cfg.w6, x[6])),
+      @simd.i32x4_sub(idct_mul(cfg.w4, x[4]), idct_mul(cfg.w6, x[6])),
     )
-    b0 = @v128.i32x4_add(
+    b0 = @simd.i32x4_add(
       b0,
-      @v128.i32x4_add(idct_mul(cfg.w5, x[5]), idct_mul(cfg.w7, x[7])),
+      @simd.i32x4_add(idct_mul(cfg.w5, x[5]), idct_mul(cfg.w7, x[7])),
     )
-    b1 = @v128.i32x4_add(
+    b1 = @simd.i32x4_add(
       b1,
-      @v128.i32x4_sub(idct_mul(0 - cfg.w1, x[5]), idct_mul(cfg.w5, x[7])),
+      @simd.i32x4_sub(idct_mul(0 - cfg.w1, x[5]), idct_mul(cfg.w5, x[7])),
     )
-    b2 = @v128.i32x4_add(
+    b2 = @simd.i32x4_add(
       b2,
-      @v128.i32x4_add(idct_mul(cfg.w7, x[5]), idct_mul(cfg.w3, x[7])),
+      @simd.i32x4_add(idct_mul(cfg.w7, x[5]), idct_mul(cfg.w3, x[7])),
     )
-    b3 = @v128.i32x4_add(
+    b3 = @simd.i32x4_add(
       b3,
-      @v128.i32x4_add(idct_mul(cfg.w3, x[5]), idct_mul(0 - cfg.w1, x[7])),
+      @simd.i32x4_add(idct_mul(cfg.w3, x[5]), idct_mul(0 - cfg.w1, x[7])),
     )
-    res.push(idct_i16(@v128.i32x4_shr_s(@v128.i32x4_add(a0, b0), shift)))
-    res.push(idct_i16(@v128.i32x4_shr_s(@v128.i32x4_add(a1, b1), shift)))
-    res.push(idct_i16(@v128.i32x4_shr_s(@v128.i32x4_add(a2, b2), shift)))
-    res.push(idct_i16(@v128.i32x4_shr_s(@v128.i32x4_add(a3, b3), shift)))
-    res.push(idct_i16(@v128.i32x4_shr_s(@v128.i32x4_sub(a3, b3), shift)))
-    res.push(idct_i16(@v128.i32x4_shr_s(@v128.i32x4_sub(a2, b2), shift)))
-    res.push(idct_i16(@v128.i32x4_shr_s(@v128.i32x4_sub(a1, b1), shift)))
-    res.push(idct_i16(@v128.i32x4_shr_s(@v128.i32x4_sub(a0, b0), shift)))
+    res.push(idct_i16(@simd.i32x4_shr_s(@simd.i32x4_add(a0, b0), shift)))
+    res.push(idct_i16(@simd.i32x4_shr_s(@simd.i32x4_add(a1, b1), shift)))
+    res.push(idct_i16(@simd.i32x4_shr_s(@simd.i32x4_add(a2, b2), shift)))
+    res.push(idct_i16(@simd.i32x4_shr_s(@simd.i32x4_add(a3, b3), shift)))
+    res.push(idct_i16(@simd.i32x4_shr_s(@simd.i32x4_sub(a3, b3), shift)))
+    res.push(idct_i16(@simd.i32x4_shr_s(@simd.i32x4_sub(a2, b2), shift)))
+    res.push(idct_i16(@simd.i32x4_shr_s(@simd.i32x4_sub(a1, b1), shift)))
+    res.push(idct_i16(@simd.i32x4_shr_s(@simd.i32x4_sub(a0, b0), shift)))
   }
   // combine the two 4-lane groups into one 8-lane vector per output element
   let out : Array[V128] = []
   for k = 0; k < 8; k = k + 1 {
-    out.push(@v128.i16x8_narrow_i32x4_s(res[k], res[8 + k]))
+    out.push(@simd.i16x8_narrow_i32x4_s(res[k], res[8 + k]))
   }
   out
 }
@@ -238,7 +238,7 @@ fn idct_1d(v : Array[V128], cfg : SimpleIdct, is_col : Bool) -> Array[V128] {
 fn idct_rows_v128(buf : FixedArray[Byte], cfg : SimpleIdct) -> Array[V128] {
   let rows : Array[V128] = []
   for r = 0; r < 8; r = r + 1 {
-    rows.push(@v128.v128_load(buf, r * 16))
+    rows.push(@simd.v128_load(buf, r * 16))
   }
   // row pass: transpose so lanes are rows, butterfly, transpose back
   let after_row = idct_transpose(idct_1d(idct_transpose(rows), cfg, false))
@@ -252,7 +252,7 @@ fn idct_rows_v128(buf : FixedArray[Byte], cfg : SimpleIdct) -> Array[V128] {
 pub fn ff_simple_idct_v128(buf : FixedArray[Byte]) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_8bit)
   for r = 0; r < 8; r = r + 1 {
-    @v128.v128_store(buf, r * 16, out[r])
+    @simd.v128_store(buf, r * 16, out[r])
   }
 }
 
@@ -261,7 +261,7 @@ pub fn ff_simple_idct_v128(buf : FixedArray[Byte]) -> Unit {
 #cfg(any(target="native", target="wasm"))
 fn idct_store8(dest : FixedArray[Byte], off : Int32, v : V128) -> Unit {
   let scratch : FixedArray[Byte] = FixedArray::make(16, b'\x00')
-  @v128.v128_store(scratch, 0, v)
+  @simd.v128_store(scratch, 0, v)
   for j = 0; j < 8; j = j + 1 {
     dest[off + j] = scratch[j]
   }
@@ -277,7 +277,7 @@ pub fn ff_simple_idct_put_v128(
 ) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_8bit)
   for r = 0; r < 8; r = r + 1 {
-    idct_store8(dest, r * stride, @v128.i8x16_narrow_i16x8_u(out[r], out[r]))
+    idct_store8(dest, r * stride, @simd.i8x16_narrow_i16x8_u(out[r], out[r]))
   }
 }
 
@@ -296,10 +296,10 @@ pub fn ff_simple_idct_add_v128(
     for j = 0; j < 8; j = j + 1 {
       scratch[j] = dest[r * stride + j]
     }
-    let d = @v128.i16x8_extend_low_i8x16_u(@v128.v128_load(scratch, 0))
-    let sum = @v128.i8x16_narrow_i16x8_u(
-      @v128.i16x8_add(d, out[r]),
-      @v128.i16x8_add(d, out[r]),
+    let d = @simd.i16x8_extend_low_i8x16_u(@simd.v128_load(scratch, 0))
+    let sum = @simd.i8x16_narrow_i16x8_u(
+      @simd.i16x8_add(d, out[r]),
+      @simd.i16x8_add(d, out[r]),
     )
     idct_store8(dest, r * stride, sum)
   }
@@ -319,9 +319,9 @@ fn idct_store16_clamped(
   v : V128,
   max_val : Int32,
 ) -> Unit {
-  let hi = @v128.i16x8_splat(max_val.to_uint16())
-  let zero = @v128.i16x8_splat(0)
-  @v128.v128_store(dest, off, @v128.i16x8_max_s(@v128.i16x8_min_s(v, hi), zero))
+  let hi = @simd.i16x8_splat(max_val.to_uint16())
+  let zero = @simd.i16x8_splat(0)
+  @simd.v128_store(dest, off, @simd.i16x8_max_s(@simd.i16x8_min_s(v, hi), zero))
 }
 
 ///|
@@ -330,7 +330,7 @@ fn idct_store16_clamped(
 pub fn ff_simple_idct_v128_10bit(buf : FixedArray[Byte]) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_10bit)
   for r = 0; r < 8; r = r + 1 {
-    @v128.v128_store(buf, r * 16, out[r])
+    @simd.v128_store(buf, r * 16, out[r])
   }
 }
 
@@ -340,7 +340,7 @@ pub fn ff_simple_idct_v128_10bit(buf : FixedArray[Byte]) -> Unit {
 pub fn ff_simple_idct_v128_12bit(buf : FixedArray[Byte]) -> Unit {
   let out = idct_rows_v128(buf, idct_int16_12bit)
   for r = 0; r < 8; r = r + 1 {
-    @v128.v128_store(buf, r * 16, out[r])
+    @simd.v128_store(buf, r * 16, out[r])
   }
 }
 
@@ -384,8 +384,8 @@ pub fn ff_simple_idct_add_v128_10bit(
   let out = idct_rows_v128(buf, idct_int16_10bit)
   for r = 0; r < 8; r = r + 1 {
     let off = r * stride_bytes
-    let cur = @v128.v128_load(dest, off)
-    idct_store16_clamped(dest, off, @v128.i16x8_add(cur, out[r]), 1023)
+    let cur = @simd.v128_load(dest, off)
+    idct_store16_clamped(dest, off, @simd.i16x8_add(cur, out[r]), 1023)
   }
 }
 
@@ -400,7 +400,7 @@ pub fn ff_simple_idct_add_v128_12bit(
   let out = idct_rows_v128(buf, idct_int16_12bit)
   for r = 0; r < 8; r = r + 1 {
     let off = r * stride_bytes
-    let cur = @v128.v128_load(dest, off)
-    idct_store16_clamped(dest, off, @v128.i16x8_add(cur, out[r]), 4095)
+    let cur = @simd.v128_load(dest, off)
+    idct_store16_clamped(dest, off, @simd.i16x8_add(cur, out[r]), 4095)
   }
 }

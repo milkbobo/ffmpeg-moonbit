@@ -4,10 +4,10 @@
 /// plus parser, this indexes complete core packets directly by header size.
 /// Extension substreams are not supported.
 pub struct DtsTrack {
-  sample_rate : Int
-  channels : Int
+  sample_rate : Int32
+  channels : Int32
   /// Samples per channel in the first frame. Each packet has its own duration.
-  frame_size : Int
+  frame_size : Int32
   /// Source byte offsets and sizes; timestamps are in PCM samples from zero.
   frames : Array[RawAudioFrame]
   total_samples : Int64
@@ -19,7 +19,9 @@ fn dts_has_extension(src : BytesView) -> Bool {
 }
 
 ///|
-fn dts_find_start(data : BytesView) -> Result[(Int, @libavcodec.DcaCoreHeader), String] {
+fn dts_find_start(
+  data : BytesView,
+) -> Result[(Int32, @libavcodec.DcaCoreHeader), String] {
   // Cap prefix resynchronization; this demuxer is for raw core streams, not
   // for finding DTS payloads embedded deep inside unrelated files.
   for pos in 0..<data.length().min(4096) {
@@ -35,7 +37,7 @@ fn dts_find_start(data : BytesView) -> Result[(Int, @libavcodec.DcaCoreHeader), 
 }
 
 ///|
-fn dts_next_boundary(data : BytesView, end : Int) -> Int {
+fn dts_next_boundary(data : BytesView, end : Int32) -> Int32 {
   // Some streams align packets to a 32-bit boundary. Do not include padding in
   // the packet and never skip a nonzero byte (including a partial sync word).
   let limit = (data.length() - end).min(3)
@@ -62,13 +64,16 @@ pub fn av_dts_open(data : Bytes) -> Result[DtsTrack, String] {
 }
 
 ///|
-fn dts_open(data : BytesView, max_tail_padding~ : Int32 = 3) -> Result[DtsTrack, String] {
+fn dts_open(
+  data : BytesView,
+  max_tail_padding~ : Int32 = 3,
+) -> Result[DtsTrack, String] {
   let (start, first) = match dts_find_start(data) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
   let frames : Array[RawAudioFrame] = []
-  for pos = start, h = first, pts = 0L; ; {
+  for pos = start, h = first, pts = 0L {
     if h.frame_size > data.length() - pos {
       return Err("dts: truncated core frame")
     }
@@ -84,7 +89,8 @@ fn dts_open(data : BytesView, max_tail_padding~ : Int32 = 3) -> Result[DtsTrack,
     })
     let total_samples = pts + h.samples.to_int64()
     let end = pos + h.frame_size
-    if data.length() - end <= max_tail_padding && data[end:].iter().all(byte => byte == 0) {
+    if data.length() - end <= max_tail_padding &&
+      data[end:].iter().all(byte => byte == 0) {
       return Ok({
         sample_rate: first.sample_rate,
         channels: first.channels,
@@ -108,7 +114,7 @@ fn dts_open(data : BytesView, max_tail_padding~ : Int32 = 3) -> Result[DtsTrack,
 ///|
 /// Probe only core streams. A complete leading frame suffices; if preceded
 /// by junk, require two consecutive complete frames with matching parameters.
-fn probe_dts(pd : ProbeData) -> Int {
+fn probe_dts(pd : ProbeData) -> Int32 {
   let (pos, first) = match dts_find_start(pd.buf[:]) {
     Ok(v) => v
     Err(_) => return 0

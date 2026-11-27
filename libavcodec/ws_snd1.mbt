@@ -25,7 +25,9 @@ pub fn decode_ws_snd1(packet : Bytes) -> Result[Array[Int32], String] {
     return Err("ws_snd1: invalid packet sizes")
   }
   if coded_size == output_size {
-    return Ok(Array::makei(output_size, i => (packet[4 + i].to_int() - 128) << 8))
+    return Ok(
+      Array::makei(output_size, i => (packet[4 + i].to_int() - 128) << 8),
+    )
   }
   let output : Array[Int32] = []
   let mut sample = 128
@@ -46,7 +48,8 @@ pub fn decode_ws_snd1(packet : Bytes) -> Result[Array[Int32], String] {
       2 => (count, count)
       _ => (0, count)
     }
-    if consumed > packet.length() - pos || produced > output_size - output.length() {
+    if consumed > packet.length() - pos ||
+      produced > output_size - output.length() {
       return Err("ws_snd1: invalid command length")
     }
     match kind {
@@ -64,7 +67,7 @@ pub fn decode_ws_snd1(packet : Bytes) -> Result[Array[Int32], String] {
         }
       }
       2 if large_delta => {
-        let delta = (control << 27) >> 27
+        let delta = control << 27 >> 27
         sample = adpcm_clip(sample + delta, 0, 255)
         output.push((sample - 128) << 8)
       }

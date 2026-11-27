@@ -57,7 +57,9 @@ test "raw AMR-NB demuxer: header and frame splitting" {
     assert_eq(frame.size, 32)
   }
   // AMR-WB is a stream of its own: 9-byte magic, two 18-byte mode-0 frames.
-  let wideband = av_amr_open(amr_decode(b"IyFBTVItV0IKBAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAA")).unwrap()
+  let wideband = av_amr_open(
+    amr_decode(b"IyFBTVItV0IKBAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAA"),
+  ).unwrap()
   assert_eq(wideband.codec, "amrwb")
   assert_eq(wideband.sample_rate, 16000)
   assert_eq(wideband.frame_size, 320)

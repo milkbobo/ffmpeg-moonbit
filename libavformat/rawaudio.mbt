@@ -212,16 +212,23 @@ fn adts_open(
       break
     }
     if for_playback {
-      if header.object_type != 2 || header.chan_config == 0 ||
+      if header.object_type != 2 ||
+        header.chan_config == 0 ||
         header.num_aac_frames != 1 {
-        return Err("adts: expected an AAC-LC core, a header channel configuration and one raw data block per frame")
+        return Err(
+          "adts: expected an AAC-LC core, a header channel configuration and one raw data block per frame",
+        )
       }
-      if len <= @libavcodec.av_aac_adts_header_size +
+      if len <=
+        @libavcodec.av_aac_adts_header_size +
         (if header.crc_absent == 0 { 2 } else { 0 }) {
         return Err("adts: missing AAC payload")
       }
-      if frames.length() > 0 && (header.sample_rate != sample_rate ||
-        adts_channels(header.chan_config) != channels) {
+      if frames.length() > 0 &&
+        (
+          header.sample_rate != sample_rate ||
+          adts_channels(header.chan_config) != channels
+        ) {
         return Err("adts: changing sample rate or channel configuration")
       }
     }
@@ -301,8 +308,7 @@ fn amr_header_len(data : Bytes) -> Int32 {
 /// The multichannel signatures `#!AMR_MC1.0\x0a` (12 bytes) and
 /// `#!AMR-WB_MC1.0\x0a` (15 bytes) of `amr.c`.
 fn amr_multichannel_header(data : Bytes) -> Bool {
-  let nb =
-    data.length() >= 12 &&
+  let nb = data.length() >= 12 &&
     data[0] == b'#' &&
     data[1] == b'!' &&
     data[2] == b'A' &&
@@ -315,8 +321,7 @@ fn amr_multichannel_header(data : Bytes) -> Bool {
     data[9] == b'.' &&
     data[10] == b'0' &&
     data[11] == b'\n'
-  let wb =
-    data.length() >= 15 &&
+  let wb = data.length() >= 15 &&
     data[0] == b'#' &&
     data[1] == b'!' &&
     data[2] == b'A' &&
@@ -379,9 +384,17 @@ pub fn av_amr_open(data : Bytes) -> Result[RawAudioTrack, String] {
     return Err("EINVAL")
   }
   Ok({
-    codec: if wideband { "amrwb" } else { "amrnb" },
+    codec: if wideband {
+      "amrwb"
+    } else {
+      "amrnb"
+    },
     profile: "",
-    sample_rate: if wideband { 16000 } else { 8000 },
+    sample_rate: if wideband {
+      16000
+    } else {
+      8000
+    },
     channels: 1,
     frame_size,
     frames,
@@ -406,7 +419,10 @@ pub fn av_ac3_open(data : Bytes) -> Result[RawAudioTrack, String] {
 }
 
 ///|
-fn ac3_open(data : Bytes, fixed_format~ : Bool) -> Result[RawAudioTrack, String] {
+fn ac3_open(
+  data : Bytes,
+  fixed_format~ : Bool,
+) -> Result[RawAudioTrack, String] {
   let start = id3_skip(data)
   let frames : Array[RawAudioFrame] = []
   let mut pos = start
@@ -422,9 +438,10 @@ fn ac3_open(data : Bytes, fixed_format~ : Bool) -> Result[RawAudioTrack, String]
       pos = pos + 1
       continue
     }
-    let hdr = match @libavcodec.ac3_parse_header(
-      data[pos:pos + (data.length() - pos).min(4096)].to_owned(),
-    ) {
+    let hdr = match
+      @libavcodec.ac3_parse_header(
+        data[pos:pos + (data.length() - pos).min(4096)].to_owned(),
+      ) {
       Ok(h) => h
       Err(_) => {
         pos = pos + 1
@@ -514,8 +531,10 @@ fn mpa_is_info_frame(
   }
   let offset = 4 + xing_offset(h)
   if h.frame_size >= offset + 4 &&
-    (match_fourcc(data, pos + offset, b"Xing") ||
-    match_fourcc(data, pos + offset, b"Info")) {
+    (
+      match_fourcc(data, pos + offset, b"Xing") ||
+      match_fourcc(data, pos + offset, b"Info")
+    ) {
     return true
   }
   // VBRI is always 32 bytes after the end of the MPEG header.
@@ -531,7 +550,10 @@ pub fn av_mp3_open(data : Bytes) -> Result[RawAudioTrack, String] {
 }
 
 ///|
-fn mpa_open(data : Bytes, for_transport~ : Bool) -> Result[RawAudioTrack, String] {
+fn mpa_open(
+  data : Bytes,
+  for_transport~ : Bool,
+) -> Result[RawAudioTrack, String] {
   if data.length() < 4 {
     return Err("EINVAL")
   }

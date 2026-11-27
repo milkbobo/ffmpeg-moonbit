@@ -10,8 +10,12 @@ priv struct FlvAudioConfig {
 }
 
 ///|
-fn flv_audio_config(codec : String, data : Bytes) -> Result[FlvAudioConfig, String] {
-  let (sample_rate, channels, frame_samples, priming, self_delimiting) = match codec {
+fn flv_audio_config(
+  codec : String,
+  data : Bytes,
+) -> Result[FlvAudioConfig, String] {
+  let (sample_rate, channels, frame_samples, priming, self_delimiting) = match
+    codec {
     "aac" => {
       let config = match @libavcodec.aac_parse_audio_specific_config(data) {
         Ok(v) => v.config
@@ -39,7 +43,15 @@ fn flv_audio_config(codec : String, data : Bytes) -> Result[FlvAudioConfig, Stri
     }
     _ => return Err("unsupported audio sequence header")
   }
-  Ok({ codec, extradata: data, sample_rate, channels, frame_samples, priming, self_delimiting })
+  Ok({
+    codec,
+    extradata: data,
+    sample_rate,
+    channels,
+    frame_samples,
+    priming,
+    self_delimiting,
+  })
 }
 
 ///|
@@ -48,10 +60,15 @@ fn FlvAudioConfig::samples(
   data : BytesView,
 ) -> Result[Int32, String] {
   match self.codec {
-    "opus" => match @libavcodec.opus_parse_packet_with(data.to_owned(), self.self_delimiting) {
-      Ok(packet) => Ok(packet.total_samples())
-      Err(e) => Err(e)
-    }
+    "opus" =>
+      match
+        @libavcodec.opus_parse_packet_with(
+          data.to_owned(),
+          self.self_delimiting,
+        ) {
+        Ok(packet) => Ok(packet.total_samples())
+        Err(e) => Err(e)
+      }
     "flac" => @libavcodec.flac_frame_samples(data.to_owned())
     _ => Ok(self.frame_samples)
   }
@@ -59,7 +76,11 @@ fn FlvAudioConfig::samples(
 
 ///|
 /// Parse the single-track Enhanced FLV audio prefix.
-fn flv_enhanced_audio_tag(data : Bytes, body : Int32, end : Int32) -> Result[(String, Int32, Int32), String] {
+fn flv_enhanced_audio_tag(
+  data : Bytes,
+  body : Int32,
+  end : Int32,
+) -> Result[(String, Int32, Int32), String] {
   if end - body < 5 {
     return Err("flv: truncated enhanced audio tag")
   }

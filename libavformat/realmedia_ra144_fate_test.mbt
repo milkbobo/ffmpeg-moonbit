@@ -1317,5 +1317,8 @@ test "RealMedia E2E: the whole RA 14.4 FATE file has the ra-144 MD5" {
     pcm.push(value.to_byte())
     pcm.push((value >> 8).to_byte())
   }
-  assert_eq(rm_e2e_md5(Bytes::from_array(pcm)), "2da17ae831ea415592c7e6828e3fb69a")
+  assert_eq(
+    rm_e2e_md5(Bytes::from_array(pcm)),
+    "2da17ae831ea415592c7e6828e3fb69a",
+  )
 }

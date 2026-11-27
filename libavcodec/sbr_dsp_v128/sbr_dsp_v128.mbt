@@ -43,17 +43,17 @@
 /// Load two consecutive doubles into `f64x2`. */
 #cfg(any(target="native", target="wasm"))
 fn sbrv_load2(a : Array[Double], at : Int32) -> V128 {
-  let mut v = @v128.f64x2_splat(0.0)
-  v = @v128.f64x2_replace_lane(v, a[at], 0)
-  @v128.f64x2_replace_lane(v, a[at + 1], 1)
+  let mut v = @simd.f64x2_splat(0.0)
+  v = @simd.f64x2_replace_lane(v, a[at], 0)
+  @simd.f64x2_replace_lane(v, a[at + 1], 1)
 }
 
 ///|
 /// Store two `f64x2` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn sbrv_store2(a : Array[Double], at : Int32, v : V128) -> Unit {
-  a[at] = @v128.f64x2_extract_lane(v, 0)
-  a[at + 1] = @v128.f64x2_extract_lane(v, 1)
+  a[at] = @simd.f64x2_extract_lane(v, 0)
+  a[at + 1] = @simd.f64x2_extract_lane(v, 1)
 }
 
 ///|
@@ -68,10 +68,10 @@ pub fn sbr_sum64x5_v128(z : Array[Double]) -> Unit {
   let mut k = 0
   while k + 2 <= 64 {
     let mut acc = sbrv_load2(z, k)
-    acc = @v128.f64x2_add(acc, sbrv_load2(z, k + 64))
-    acc = @v128.f64x2_add(acc, sbrv_load2(z, k + 128))
-    acc = @v128.f64x2_add(acc, sbrv_load2(z, k + 192))
-    acc = @v128.f64x2_add(acc, sbrv_load2(z, k + 256))
+    acc = @simd.f64x2_add(acc, sbrv_load2(z, k + 64))
+    acc = @simd.f64x2_add(acc, sbrv_load2(z, k + 128))
+    acc = @simd.f64x2_add(acc, sbrv_load2(z, k + 192))
+    acc = @simd.f64x2_add(acc, sbrv_load2(z, k + 256))
     sbrv_store2(z, k, acc)
     k = k + 2
   }
@@ -127,18 +127,14 @@ pub fn sbr_neg_odd_64_v128(x : Array[Double], off : Int32) -> Unit {
   let mut i = 1
   while i < 64 {
     // gather (x[i], x[i+2]) into one vector, negate, scatter back
-    let pair = @v128.f64x2_replace_lane(
-      @v128.f64x2_replace_lane(
-        @v128.f64x2_splat(0.0),
-        x[off + i],
-        0,
-      ),
+    let pair = @simd.f64x2_replace_lane(
+      @simd.f64x2_replace_lane(@simd.f64x2_splat(0.0), x[off + i], 0),
       x[off + i + 2],
       1,
     )
-    let neg = @v128.f64x2_neg(pair)
-    x[off + i] = @v128.f64x2_extract_lane(neg, 0)
-    x[off + i + 2] = @v128.f64x2_extract_lane(neg, 1)
+    let neg = @simd.f64x2_neg(pair)
+    x[off + i] = @simd.f64x2_extract_lane(neg, 0)
+    x[off + i + 2] = @simd.f64x2_extract_lane(neg, 1)
     i = i + 4
   }
 }
@@ -200,16 +196,16 @@ pub fn sbr_qmf_deint_bfly_v128(
 /// the final `sum0 + sum1` — is bit-identical.
 #cfg(any(target="native", target="wasm"))
 pub fn sbr_sum_square_v128(x : Array[Double], off : Int32, n : Int32) -> Double {
-  let mut acc = @v128.f64x2_splat(0.0)
+  let mut acc = @simd.f64x2_splat(0.0)
   let mut i = 0
   while i < n {
     let r0 = sbrv_load2(x, off + 2 * i)
     let r1 = sbrv_load2(x, off + 2 * (i + 1))
-    acc = @v128.f64x2_add(acc, @v128.f64x2_mul(r0, r0))
-    acc = @v128.f64x2_add(acc, @v128.f64x2_mul(r1, r1))
+    acc = @simd.f64x2_add(acc, @simd.f64x2_mul(r0, r0))
+    acc = @simd.f64x2_add(acc, @simd.f64x2_mul(r1, r1))
     i = i + 2
   }
-  @v128.f64x2_extract_lane(acc, 0) + @v128.f64x2_extract_lane(acc, 1)
+  @simd.f64x2_extract_lane(acc, 0) + @simd.f64x2_extract_lane(acc, 1)
 }
 
 ///|
@@ -231,16 +227,16 @@ pub fn sbr_hf_g_filt_v128(
     let g1 = g_filt[g_off + m + 1]
     let a = sbrv_load2(x_high, ((row_off + m) * 40 + ixh) * 2)
     let b = sbrv_load2(x_high, ((row_off + m + 1) * 40 + ixh) * 2)
-    let ga = @v128.f64x2_splat(g0)
-    let gb = @v128.f64x2_splat(g1)
-    sbrv_store2(y, y_off + 2 * m, @v128.f64x2_mul(a, ga))
-    sbrv_store2(y, y_off + 2 * (m + 1), @v128.f64x2_mul(b, gb))
+    let ga = @simd.f64x2_splat(g0)
+    let gb = @simd.f64x2_splat(g1)
+    sbrv_store2(y, y_off + 2 * m, @simd.f64x2_mul(a, ga))
+    sbrv_store2(y, y_off + 2 * (m + 1), @simd.f64x2_mul(b, gb))
     m = m + 2
   }
   while m < m_max {
     let g = g_filt[g_off + m]
     let a = sbrv_load2(x_high, ((row_off + m) * 40 + ixh) * 2)
-    sbrv_store2(y, y_off + 2 * m, @v128.f64x2_mul(a, @v128.f64x2_splat(g)))
+    sbrv_store2(y, y_off + 2 * m, @simd.f64x2_mul(a, @simd.f64x2_splat(g)))
     m = m + 1
   }
 }

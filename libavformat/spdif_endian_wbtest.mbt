@@ -31,7 +31,10 @@ test "big-endian IEC 61937 preserves odd AAC payloads in raw captures and RIFX" 
   let opposite = wav_muxer_new(22050, 2, 16, big_endian=true).unwrap()
   opposite.data.append(little.to_array())
   assert_eq(av_wav_open(opposite.finish()).unwrap().format.codec, "pcm_s16be")
-  assert_true(av_spdif_open(big[:4096].to_owned() + little[4096:].to_owned()) is Err("spdif: changing stream format"))
+  assert_true(
+    av_spdif_open(big[:4096].to_owned() + little[4096:].to_owned())
+    is Err("spdif: changing stream format"),
+  )
 }
 
 ///|

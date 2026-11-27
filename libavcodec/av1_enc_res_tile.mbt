@@ -14,6 +14,7 @@
 /// txb res_ctx = min(cul,63) | (dc positive ? 1<<7 : 0) published to
 /// the a/l banks over the txb's columns (all_skip leaves 0x40), and
 /// the tx banks fill with the leaf's lw after each leaf bool.
+
 ///|
 /// §498: one split SB — PARTITION_SPLIT at bl=1 followed by four 32x32
 /// PARTITION_NONE blocks, each with its own reference tree, motion chain
@@ -72,8 +73,8 @@ fn av1_enc_inter_split_sb(
     av1_partition_split,
   )
   for q in 0..<4 {
-    let qx4 = bx + (q % 2) * 8
-    let qy4 = by + (q / 2) * 8
+    let qx4 = bx + q % 2 * 8
+    let qy4 = by + q / 2 * 8
     // PARTITION_NONE at bl=2 (both edge splits are available for every
     // 32x32 quadrant under 64-multiple geometry).
     let xb8q = (qx4 & 31) >> 1
@@ -119,9 +120,27 @@ fn av1_enc_inter_split_sb(
         ref_bit(3, 2, ref_idx)
       }
     }
-    let stack = rstate.find(0, bw, 0, bh, ref_idx + 1, -1, bs32, q != 3, qy4, qx4)
+    let stack = rstate.find(
+      0,
+      bw,
+      0,
+      bh,
+      ref_idx + 1,
+      -1,
+      bs32,
+      q != 3,
+      qy4,
+      qx4,
+    )
     let target_q : (Int32, Int32) = (mvs_y8[sb * 4 + q], mvs_x8[sb * 4 + q])
-    let (mode, mv) = av1_enc_write_uniform_motion(enc, cdf, stack, target_q, err, drl~)
+    let (mode, mv) = av1_enc_write_uniform_motion(
+      enc,
+      cdf,
+      stack,
+      target_q,
+      err,
+      drl~,
+    )
     // ---- residual tail: no-split TX_32X32 luma txb + all-skip chroma.
     // var-tx root bool at depth 0 from TX_32X32: cat = 2*(4-3)-0 = 2.
     let a_bit = if a_tx[qx4 & 31] < 3 { 1 } else { 0 }
@@ -186,15 +205,7 @@ fn av1_enc_inter_split_sb(
         let a_base = pl * 32 + ((qx4 & 31) >> 1)
         let l_base = pl * 32 + ((qy4 & 31) >> 1)
         let sctx_c = av1_get_skip_ctx(
-          uvtx32,
-          bs32,
-          a_ccoef,
-          a_base,
-          l_ccoef,
-          l_base,
-          true,
-          ss,
-          ss,
+          uvtx32, bs32, a_ccoef, a_base, l_ccoef, l_base, true, ss, ss,
         )
         let ctw = av1_imin(av1_txfm_w(uvtx32), (bw - qx4 + 1) >> 1)
         let cth = av1_imin(av1_txfm_h(uvtx32), (bh - qy4 + 1) >> 1)
@@ -220,10 +231,18 @@ fn av1_enc_inter_split_sb(
           }
         }
         let res_ctx_c = if !any_c {
-          enc.encode_bool_adapt(cdf.coef_skip, (t_dim_ctx_c * 13 + sctx_c) * 2, 1U)
+          enc.encode_bool_adapt(
+            cdf.coef_skip,
+            (t_dim_ctx_c * 13 + sctx_c) * 2,
+            1U,
+          )
           0x40
         } else {
-          enc.encode_bool_adapt(cdf.coef_skip, (t_dim_ctx_c * 13 + sctx_c) * 2, 0U)
+          enc.encode_bool_adapt(
+            cdf.coef_skip,
+            (t_dim_ctx_c * 13 + sctx_c) * 2,
+            0U,
+          )
           av1_enc_txb_tokens(
             enc,
             cdf,
@@ -362,9 +381,7 @@ pub fn av1_enc_write_me_res_tile(
     }
   }
   if any_split &&
-    (smy.length() != n_sb * 4 ||
-      smx.length() != n_sb * 4 ||
-      splits is None) {
+    (smy.length() != n_sb * 4 || smx.length() != n_sb * 4 || splits is None) {
     return Err(
       "av1 enc: split SBs need 4 quadrant mv entries per SB (got \{smy.length()}/\{smx.length()})",
     )
@@ -429,6 +446,12 @@ pub fn av1_enc_write_me_res_tile(
         let a_ccoef_b = a_ccoef[bank]
         if is_split {
           av1_enc_inter_split_sb(
+            enc, cdf, rstate, nstate, a_skip, l_skip, a_part, l_part, a_tx_b, l_tx,
+            a_lcoef_b, l_lcoef, a_ccoef_b, l_ccoef, bw, bh, bx, by, ref_idx, mono,
+            layout, ss, smy, smx, tok_specs, sign_specs, sb, err, drl, sct, scs,
+          )
+        } else {
+          av1_enc_inter_skip_block(
             enc,
             cdf,
             rstate,
@@ -437,295 +460,269 @@ pub fn av1_enc_write_me_res_tile(
             l_skip,
             a_part,
             l_part,
-            a_tx_b,
-            l_tx,
-            a_lcoef_b,
-            l_lcoef,
-            a_ccoef_b,
-            l_ccoef,
+            bs,
             bw,
             bh,
             bx,
             by,
-            ref_idx,
-            mono,
-            layout,
-            ss,
-            smy,
-            smx,
-            tok_specs,
-            sign_specs,
-            sb,
-            err,
-            drl,
-            sct,
-            scs,
-          )
-        } else {
-          av1_enc_inter_skip_block(
-          enc,
-          cdf,
-          rstate,
-          nstate,
-          a_skip,
-          l_skip,
-          a_part,
-          l_part,
-          bs,
-          bw,
-          bh,
-          bx,
-          by,
-          skip=is_skip,
-          ref_idx~,
-          motion=(enc2, cdf2, stack) => {
-            if is_skip && !skip_uniform {
-              // GLOBALMV: newmv_mode=1 (not new), globalmv_mode=0
-              // (identity GM → zero MV). Mirrors §446b's skip writer.
-              enc2.encode_bool_adapt(cdf2.newmv_mode, (stack.ctx & 7) * 2, 1)
-              enc2.encode_bool_adapt(
-                cdf2.globalmv_mode,
-                ((stack.ctx >> 3) & 1) * 2,
-                0,
-              )
-              (2, (0, 0))
-            } else {
-              // §460 NEARMV skip (and the usual skip=0 path): the uniform
-              // chain codes NEWMV or NEARESTMV so the coded MV equals
-              // `target` (= the frame's ME result). Skip still suppresses
-              // the residual tail, so only the MV bits are spent.
-              av1_enc_write_uniform_motion(enc2, cdf2, stack, target, err, drl~)
-            }
-          },
-          tail=(enc2, cdf2) => {
-            if is_skip {
-              // Skip=1 reads no tx/token symbols, but the decoder still
-              // fills the context banks: vartx fill for a whole block at
-              // its lw/lh (switchable path, `av1_read_vartx_tree`) and
-              // zero coef contexts (0x40, `av1_recon_b_inter` skip path).
-              // Mirroring them keeps the next block's contexts in sync.
-              let bw_lw = av1_block_dimensions[bs * 4 + 2].to_int()
-              let bh_lh = av1_block_dimensions[bs * 4 + 3].to_int()
-              for i in 0..<(1 << bw_lw) {
-                a_tx_b[(bx & 31) + i] = bw_lw
-              }
-              for i in 0..<(1 << bh_lh) {
-                l_tx[(by & 31) + i] = bh_lh
-              }
-              let bw4 = av1_block_dimensions[bs * 4].to_int()
-              let bh4 = av1_block_dimensions[bs * 4 + 1].to_int()
-              for i in 0..<bw4 {
-                a_lcoef_b[(bx & 31) + i] = 0x40
-              }
-              for i in 0..<bh4 {
-                l_lcoef[(by & 31) + i] = 0x40
-              }
-              if !mono {
-                let cbw4 = (bw4 + ss) >> ss
-                let cbh4 = (bh4 + ss) >> ss
-                for pl in 0..<2 {
-                  let a_base = pl * 32 + ((bx & 31) >> ss)
-                  let l_base = pl * 32 + ((by & 31) >> ss)
-                  for i in 0..<cbw4 {
-                    a_ccoef_b[a_base + i] = 0x40
-                  }
-                  for i in 0..<cbh4 {
-                    l_ccoef[l_base + i] = 0x40
-                  }
-                }
-              }
-            } else {
-              // ---- var-tx tree: root split bool, then four leaf bools.
-              // Root: cat = 2*(4 - txfm_max(TX_64X64)) - 0 = 0, ctx from
-              // the tx banks (comparison against TX_64X64's lw = 4).
-              let a_bit0 = if a_tx_b[bx & 31] < 4 { 1 } else { 0 }
-              let l_bit0 = if l_tx[by & 31] < 4 { 1 } else { 0 }
-              enc2.encode_bool_adapt(
-                cdf2.txpart,
-                (0 * 3 + a_bit0 + l_bit0) * 2,
-                1,
-              )
-              // Leaves in tree order TL, TR, BL, BR; cat = 1, ctx from
-              // the banks against the leaf lw (fresh 4s and earlier
-              // leaf fills both read as 0 bits — 4 < 3 and 3 < 3 are
-              // false), each filling its 8 slots with lw.
-              let leaf0 = (0, 0)
-              let leaf1 = (8, 0)
-              let leaf2 = (0, 8)
-              let leaf3 = (8, 8)
-              for leaf in [leaf0, leaf1, leaf2, leaf3] {
-                let ax = (bx + leaf.0) & 31
-                let ly = (by + leaf.1) & 31
-                let a_bit = if a_tx_b[ax] < lw_leaf { 1 } else { 0 }
-                let l_bit = if l_tx[ly] < lw_leaf { 1 } else { 0 }
+            skip=is_skip,
+            ref_idx~,
+            motion=(enc2, cdf2, stack) => {
+              if is_skip && !skip_uniform {
+                // GLOBALMV: newmv_mode=1 (not new), globalmv_mode=0
+                // (identity GM → zero MV). Mirrors §446b's skip writer.
+                enc2.encode_bool_adapt(cdf2.newmv_mode, (stack.ctx & 7) * 2, 1)
                 enc2.encode_bool_adapt(
-                  cdf2.txpart,
-                  (1 * 3 + a_bit + l_bit) * 2,
+                  cdf2.globalmv_mode,
+                  ((stack.ctx >> 3) & 1) * 2,
                   0,
                 )
-                for i in 0..<(1 << lw_leaf) {
-                  a_tx_b[ax + i] = lw_leaf
-                  l_tx[ly + i] = lw_leaf
-                }
-              }
-              // ---- four luma TX_32X32 txb chains.
-              for li in 0..<4 {
-                let leaf = match li {
-                  0 => leaf0
-                  1 => leaf1
-                  2 => leaf2
-                  _ => leaf3
-                }
-                let ax = (bx + leaf.0) & 31
-                let ly = (by + leaf.1) & 31
-                // Per-leaf context copies (the token writer reads them
-                // at offset 0; the decoder reads the banks directly —
-                // identical values).
-                let a_leaf = FixedArray::make(8, 0)
-                let l_leaf = FixedArray::make(8, 0)
-                for i in 0..<8 {
-                  a_leaf[i] = a_lcoef_b[ax + i]
-                  l_leaf[i] = l_lcoef[ly + i]
-                }
-                let sctx = av1_get_skip_ctx(
-                  tx_leaf, bs, a_leaf, 0, l_leaf, 0, false, ss, ss,
+                (2, (0, 0))
+              } else {
+                // §460 NEARMV skip (and the usual skip=0 path): the uniform
+                // chain codes NEWMV or NEARESTMV so the coded MV equals
+                // `target` (= the frame's ME result). Skip still suppresses
+                // the residual tail, so only the MV bits are spent.
+                av1_enc_write_uniform_motion(
+                  enc2,
+                  cdf2,
+                  stack,
+                  target,
+                  err,
+                  drl~,
                 )
-                let base = (sb * 4 + li) * 1024
-                let toks : FixedArray[Int32] = FixedArray::make(1024, 0)
-                let signs : FixedArray[Int32] = FixedArray::make(1024, 0)
-                for i in 0..<1024 {
-                  toks[i] = tok_specs[base + i]
-                  signs[i] = sign_specs[base + i]
-                }
-                let mut cul = 0
-                let mut any = false
-                for i2 in 0..<1024 {
-                  cul += toks[i2]
-                  if toks[i2] != 0 {
-                    any = true
-                  }
-                }
-                let res_ctx = if !any {
-                  enc2.encode_bool_adapt(
-                    cdf2.coef_skip,
-                    (t_dim_ctx_leaf * 13 + sctx) * 2,
-                    1,
-                  )
-                  0x40
-                } else {
-                  enc2.encode_bool_adapt(
-                    cdf2.coef_skip,
-                    (t_dim_ctx_leaf * 13 + sctx) * 2,
-                    0,
-                  )
-                  // Inter TX_32X32 luma reads one txtp_inter3 bool
-                  // (DCT_DCT selector; the txfm_max == 3 branch).
-                  enc2.encode_bool_adapt(
-                    cdf2.txtp_inter3,
-                    t_dim_min_leaf * 2,
-                    1,
-                  )
-                  av1_enc_txb_tokens(
-                    enc2,
-                    cdf2,
-                    tx_leaf,
-                    0,
-                    bs,
-                    toks,
-                    signs,
-                    a_leaf,
-                    l_leaf,
-                    coef_skip_written=true,
-                  )
-                  av1_imin(cul, 63) | av1_enc_res_sign_field(toks[0], signs[0])
-                }
-                for i2 in 0..<8 {
-                  a_lcoef_b[ax + i2] = res_ctx
-                  l_lcoef[ly + i2] = res_ctx
-                }
               }
-              // ---- chroma U/V at uvtx: all_skip (§447b) or full token
-              // chains (§449b — the chroma txtp derives from the luma's
-              // with no bits; the txb covers the whole 64x64 block's
-              // 4:2:0 chroma at TX_32X32).
-              if !mono {
-                let t_dim_ctx_c = av1_txfm_ctx(uvtx)
-                for pl in 0..<2 {
-                  let a_base = pl * 32 + ((bx & 31) >> ss)
-                  let l_base = pl * 32 + ((by & 31) >> ss)
-                  let sctx_c = av1_get_skip_ctx(
-                    uvtx, bs, a_ccoef_b, a_base, l_ccoef, l_base, true, ss, ss,
-                  )
-                  let ctw = av1_imin(av1_txfm_w(uvtx), (bw - bx + ss) >> ss)
-                  let cth = av1_imin(av1_txfm_h(uvtx), (bh - by + ss) >> ss)
-                  // Per-plane context copies (8 chroma columns — the
-                  // chroma sctx reads (1 << lw) = 8 slots for TX_32X32)
-                  // and the token spec, hoisted so the sctx and the
-                  // all_skip decision share one source of truth.
-                  let a_leaf = FixedArray::make(8, 0)
-                  let l_leaf = FixedArray::make(8, 0)
-                  for i2 in 0..<8 {
-                    a_leaf[i2] = a_ccoef_b[a_base + i2]
-                    l_leaf[i2] = l_ccoef[l_base + i2]
-                  }
-                  let base_c = (sb * 2 + pl) * 1024
-                  let toks_c : FixedArray[Int32] = FixedArray::make(1024, 0)
-                  let signs_c : FixedArray[Int32] = FixedArray::make(1024, 0)
-                  let mut cul_c = 0
-                  let mut any_c = false
-                  if chroma_full {
-                    for i2 in 0..<1024 {
-                      toks_c[i2] = ct[base_c + i2]
-                      signs_c[i2] = cs[base_c + i2]
-                      cul_c += toks_c[i2]
-                      if toks_c[i2] != 0 {
-                        any_c = true
-                      }
+            },
+            tail=(enc2, cdf2) => {
+              if is_skip {
+                // Skip=1 reads no tx/token symbols, but the decoder still
+                // fills the context banks: vartx fill for a whole block at
+                // its lw/lh (switchable path, `av1_read_vartx_tree`) and
+                // zero coef contexts (0x40, `av1_recon_b_inter` skip path).
+                // Mirroring them keeps the next block's contexts in sync.
+                let bw_lw = av1_block_dimensions[bs * 4 + 2].to_int()
+                let bh_lh = av1_block_dimensions[bs * 4 + 3].to_int()
+                for i in 0..<(1 << bw_lw) {
+                  a_tx_b[(bx & 31) + i] = bw_lw
+                }
+                for i in 0..<(1 << bh_lh) {
+                  l_tx[(by & 31) + i] = bh_lh
+                }
+                let bw4 = av1_block_dimensions[bs * 4].to_int()
+                let bh4 = av1_block_dimensions[bs * 4 + 1].to_int()
+                for i in 0..<bw4 {
+                  a_lcoef_b[(bx & 31) + i] = 0x40
+                }
+                for i in 0..<bh4 {
+                  l_lcoef[(by & 31) + i] = 0x40
+                }
+                if !mono {
+                  let cbw4 = (bw4 + ss) >> ss
+                  let cbh4 = (bh4 + ss) >> ss
+                  for pl in 0..<2 {
+                    let a_base = pl * 32 + ((bx & 31) >> ss)
+                    let l_base = pl * 32 + ((by & 31) >> ss)
+                    for i in 0..<cbw4 {
+                      a_ccoef_b[a_base + i] = 0x40
+                    }
+                    for i in 0..<cbh4 {
+                      l_ccoef[l_base + i] = 0x40
                     }
                   }
-                  let res_ctx_c = if !any_c {
+                }
+              } else {
+                // ---- var-tx tree: root split bool, then four leaf bools.
+                // Root: cat = 2*(4 - txfm_max(TX_64X64)) - 0 = 0, ctx from
+                // the tx banks (comparison against TX_64X64's lw = 4).
+                let a_bit0 = if a_tx_b[bx & 31] < 4 { 1 } else { 0 }
+                let l_bit0 = if l_tx[by & 31] < 4 { 1 } else { 0 }
+                enc2.encode_bool_adapt(
+                  cdf2.txpart,
+                  (0 * 3 + a_bit0 + l_bit0) * 2,
+                  1,
+                )
+                // Leaves in tree order TL, TR, BL, BR; cat = 1, ctx from
+                // the banks against the leaf lw (fresh 4s and earlier
+                // leaf fills both read as 0 bits — 4 < 3 and 3 < 3 are
+                // false), each filling its 8 slots with lw.
+                let leaf0 = (0, 0)
+                let leaf1 = (8, 0)
+                let leaf2 = (0, 8)
+                let leaf3 = (8, 8)
+                for leaf in [leaf0, leaf1, leaf2, leaf3] {
+                  let ax = (bx + leaf.0) & 31
+                  let ly = (by + leaf.1) & 31
+                  let a_bit = if a_tx_b[ax] < lw_leaf { 1 } else { 0 }
+                  let l_bit = if l_tx[ly] < lw_leaf { 1 } else { 0 }
+                  enc2.encode_bool_adapt(
+                    cdf2.txpart,
+                    (1 * 3 + a_bit + l_bit) * 2,
+                    0,
+                  )
+                  for i in 0..<(1 << lw_leaf) {
+                    a_tx_b[ax + i] = lw_leaf
+                    l_tx[ly + i] = lw_leaf
+                  }
+                }
+                // ---- four luma TX_32X32 txb chains.
+                for li in 0..<4 {
+                  let leaf = match li {
+                    0 => leaf0
+                    1 => leaf1
+                    2 => leaf2
+                    _ => leaf3
+                  }
+                  let ax = (bx + leaf.0) & 31
+                  let ly = (by + leaf.1) & 31
+                  // Per-leaf context copies (the token writer reads them
+                  // at offset 0; the decoder reads the banks directly —
+                  // identical values).
+                  let a_leaf = FixedArray::make(8, 0)
+                  let l_leaf = FixedArray::make(8, 0)
+                  for i in 0..<8 {
+                    a_leaf[i] = a_lcoef_b[ax + i]
+                    l_leaf[i] = l_lcoef[ly + i]
+                  }
+                  let sctx = av1_get_skip_ctx(
+                    tx_leaf, bs, a_leaf, 0, l_leaf, 0, false, ss, ss,
+                  )
+                  let base = (sb * 4 + li) * 1024
+                  let toks : FixedArray[Int32] = FixedArray::make(1024, 0)
+                  let signs : FixedArray[Int32] = FixedArray::make(1024, 0)
+                  for i in 0..<1024 {
+                    toks[i] = tok_specs[base + i]
+                    signs[i] = sign_specs[base + i]
+                  }
+                  let mut cul = 0
+                  let mut any = false
+                  for i2 in 0..<1024 {
+                    cul += toks[i2]
+                    if toks[i2] != 0 {
+                      any = true
+                    }
+                  }
+                  let res_ctx = if !any {
                     enc2.encode_bool_adapt(
                       cdf2.coef_skip,
-                      (t_dim_ctx_c * 13 + sctx_c) * 2,
+                      (t_dim_ctx_leaf * 13 + sctx) * 2,
                       1,
                     )
                     0x40
                   } else {
                     enc2.encode_bool_adapt(
                       cdf2.coef_skip,
-                      (t_dim_ctx_c * 13 + sctx_c) * 2,
+                      (t_dim_ctx_leaf * 13 + sctx) * 2,
                       0,
                     )
-                    // The chroma txtp derives from the luma's (both
-                    // DCT_DCT) with no bits; the token chain follows.
-                    // The chroma ctx flag is 0/1 (both U and V read as
-                    // chroma) — NOT the plane index.
+                    // Inter TX_32X32 luma reads one txtp_inter3 bool
+                    // (DCT_DCT selector; the txfm_max == 3 branch).
+                    enc2.encode_bool_adapt(
+                      cdf2.txtp_inter3,
+                      t_dim_min_leaf * 2,
+                      1,
+                    )
                     av1_enc_txb_tokens(
                       enc2,
                       cdf2,
-                      uvtx,
-                      1,
+                      tx_leaf,
+                      0,
                       bs,
-                      toks_c,
-                      signs_c,
+                      toks,
+                      signs,
                       a_leaf,
                       l_leaf,
                       coef_skip_written=true,
                     )
-                    av1_imin(cul_c, 63) |
-                    av1_enc_res_sign_field(toks_c[0], signs_c[0])
+                    av1_imin(cul, 63) |
+                    av1_enc_res_sign_field(toks[0], signs[0])
                   }
-                  for i2 in 0..<ctw {
-                    a_ccoef_b[a_base + i2] = res_ctx_c
-                  }
-                  for i2 in 0..<cth {
-                    l_ccoef[l_base + i2] = res_ctx_c
+                  for i2 in 0..<8 {
+                    a_lcoef_b[ax + i2] = res_ctx
+                    l_lcoef[ly + i2] = res_ctx
                   }
                 }
-              } // end residual (skip=false) branch
-            }
-          },
-        )
+                // ---- chroma U/V at uvtx: all_skip (§447b) or full token
+                // chains (§449b — the chroma txtp derives from the luma's
+                // with no bits; the txb covers the whole 64x64 block's
+                // 4:2:0 chroma at TX_32X32).
+                if !mono {
+                  let t_dim_ctx_c = av1_txfm_ctx(uvtx)
+                  for pl in 0..<2 {
+                    let a_base = pl * 32 + ((bx & 31) >> ss)
+                    let l_base = pl * 32 + ((by & 31) >> ss)
+                    let sctx_c = av1_get_skip_ctx(
+                      uvtx, bs, a_ccoef_b, a_base, l_ccoef, l_base, true, ss, ss,
+                    )
+                    let ctw = av1_imin(av1_txfm_w(uvtx), (bw - bx + ss) >> ss)
+                    let cth = av1_imin(av1_txfm_h(uvtx), (bh - by + ss) >> ss)
+                    // Per-plane context copies (8 chroma columns — the
+                    // chroma sctx reads (1 << lw) = 8 slots for TX_32X32)
+                    // and the token spec, hoisted so the sctx and the
+                    // all_skip decision share one source of truth.
+                    let a_leaf = FixedArray::make(8, 0)
+                    let l_leaf = FixedArray::make(8, 0)
+                    for i2 in 0..<8 {
+                      a_leaf[i2] = a_ccoef_b[a_base + i2]
+                      l_leaf[i2] = l_ccoef[l_base + i2]
+                    }
+                    let base_c = (sb * 2 + pl) * 1024
+                    let toks_c : FixedArray[Int32] = FixedArray::make(1024, 0)
+                    let signs_c : FixedArray[Int32] = FixedArray::make(1024, 0)
+                    let mut cul_c = 0
+                    let mut any_c = false
+                    if chroma_full {
+                      for i2 in 0..<1024 {
+                        toks_c[i2] = ct[base_c + i2]
+                        signs_c[i2] = cs[base_c + i2]
+                        cul_c += toks_c[i2]
+                        if toks_c[i2] != 0 {
+                          any_c = true
+                        }
+                      }
+                    }
+                    let res_ctx_c = if !any_c {
+                      enc2.encode_bool_adapt(
+                        cdf2.coef_skip,
+                        (t_dim_ctx_c * 13 + sctx_c) * 2,
+                        1,
+                      )
+                      0x40
+                    } else {
+                      enc2.encode_bool_adapt(
+                        cdf2.coef_skip,
+                        (t_dim_ctx_c * 13 + sctx_c) * 2,
+                        0,
+                      )
+                      // The chroma txtp derives from the luma's (both
+                      // DCT_DCT) with no bits; the token chain follows.
+                      // The chroma ctx flag is 0/1 (both U and V read as
+                      // chroma) — NOT the plane index.
+                      av1_enc_txb_tokens(
+                        enc2,
+                        cdf2,
+                        uvtx,
+                        1,
+                        bs,
+                        toks_c,
+                        signs_c,
+                        a_leaf,
+                        l_leaf,
+                        coef_skip_written=true,
+                      )
+                      av1_imin(cul_c, 63) |
+                      av1_enc_res_sign_field(toks_c[0], signs_c[0])
+                    }
+                    for i2 in 0..<ctw {
+                      a_ccoef_b[a_base + i2] = res_ctx_c
+                    }
+                    for i2 in 0..<cth {
+                      l_ccoef[l_base + i2] = res_ctx_c
+                    }
+                  }
+                } // end residual (skip=false) branch
+              }
+            },
+          )
         }
       },
       on_row=_by => {

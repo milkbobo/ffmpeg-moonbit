@@ -35,7 +35,7 @@ test "adts muxer: unsupported rate and oversized payload fail" {
     Err(_) => ()
   }
   let mux = adts_muxer_new(44100, 1).unwrap()
-  let big = Bytes::new(8185)
+  let big = Bytes::make(8185, b'\x00')
   match mux.write_frame(big) {
     Ok(_) => fail("ADTS frame length overflow must fail")
     Err(_) => ()

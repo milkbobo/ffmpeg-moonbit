@@ -59,7 +59,7 @@ test "mp4 muxer: invalid A/V parameters are rejected" {
     Err(_) => ()
   }
   let mux = mp4_av_muxer_new(64, 48, avcc, 48000, 2).unwrap()
-  match mux.write_video(Bytes::new(0), duration=3000) {
+  match mux.write_video(Bytes::make(0, b'\x00'), duration=3000) {
     Ok(_) => fail("empty video packet must fail")
     Err(_) => ()
   }

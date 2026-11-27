@@ -7,9 +7,9 @@ fn wav_surround_demux(
 ) -> Result[WavDemux, String] {
   if fmt.codec == "dts" {
     let max_tail_padding = if wave64 { 7 } else { 3 }
-    return dts_open(payload, max_tail_padding~).map(track =>
-      wav_dts_demux(track, fmt, data_offset),
-    )
+    return dts_open(payload, max_tail_padding~).map(track => {
+      wav_dts_demux(track, fmt, data_offset)
+    })
   }
   let track = match ac3_open(payload.to_owned(), fixed_format=true) {
     Ok(track) => track
@@ -33,7 +33,11 @@ fn wav_surround_demux(
 }
 
 ///|
-fn wav_dts_demux(track : DtsTrack, fmt : WavFormat, data_offset : Int64) -> WavDemux {
+fn wav_dts_demux(
+  track : DtsTrack,
+  fmt : WavFormat,
+  data_offset : Int64,
+) -> WavDemux {
   let format : WavFormat = {
     ..fmt,
     codec: "dts",

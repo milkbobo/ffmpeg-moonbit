@@ -40,17 +40,17 @@
 /// Load two consecutive doubles into `f64x2`. */
 #cfg(any(target="native", target="wasm"))
 fn psv_load2(a : Array[Double], at : Int32) -> V128 {
-  let mut v = @v128.f64x2_splat(0.0)
-  v = @v128.f64x2_replace_lane(v, a[at], 0)
-  @v128.f64x2_replace_lane(v, a[at + 1], 1)
+  let mut v = @simd.f64x2_splat(0.0)
+  v = @simd.f64x2_replace_lane(v, a[at], 0)
+  @simd.f64x2_replace_lane(v, a[at + 1], 1)
 }
 
 ///|
 /// Store two `f64x2` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn psv_store2(a : Array[Double], at : Int32, v : V128) -> Unit {
-  a[at] = @v128.f64x2_extract_lane(v, 0)
-  a[at + 1] = @v128.f64x2_extract_lane(v, 1)
+  a[at] = @simd.f64x2_extract_lane(v, 0)
+  a[at + 1] = @simd.f64x2_extract_lane(v, 1)
 }
 
 ///|
@@ -70,10 +70,9 @@ pub fn ps_add_squares_v128(
   let mut i = 0
   while i < n {
     let c = psv_load2(buf, (off + i) * 2)
-    let sq = @v128.f64x2_mul(c, c)
+    let sq = @simd.f64x2_mul(c, c)
     // lane sum: re² + im² in that order
-    let p = @v128.f64x2_extract_lane(sq, 0) +
-      @v128.f64x2_extract_lane(sq, 1)
+    let p = @simd.f64x2_extract_lane(sq, 0) + @simd.f64x2_extract_lane(sq, 1)
     dst[dst_off + i] = dst[dst_off + i] + p
     i = i + 1
   }
@@ -94,8 +93,8 @@ pub fn ps_mul_pair_single_v128(
   let mut i = 0
   while i < n {
     let d = psv_load2(delay, (src_off + i) * 2)
-    let g = @v128.f64x2_splat(gain[gain_off + i])
-    psv_store2(dst, (dst_off + i) * 2, @v128.f64x2_mul(d, g))
+    let g = @simd.f64x2_splat(gain[gain_off + i])
+    psv_store2(dst, (dst_off + i) * 2, @simd.f64x2_mul(d, g))
     i = i + 1
   }
 }
@@ -164,19 +163,19 @@ pub fn ps_stereo_interpolate_v128(
   for n = 0; n < len; n = n + 1 {
     let lc = psv_load2(l, (l_off + n) * 2)
     let rc = psv_load2(r, (r_off + n) * 2)
-    hh = @v128.f64x2_add(hh, st)
-    hh2 = @v128.f64x2_add(hh2, st2)
-    let h0 = @v128.f64x2_extract_lane(hh, 0)
-    let h1 = @v128.f64x2_extract_lane(hh, 1)
-    let h2 = @v128.f64x2_extract_lane(hh2, 0)
-    let h3 = @v128.f64x2_extract_lane(hh2, 1)
-    let newl = @v128.f64x2_add(
-      @v128.f64x2_mul(@v128.f64x2_splat(h0), lc),
-      @v128.f64x2_mul(@v128.f64x2_splat(h2), rc),
+    hh = @simd.f64x2_add(hh, st)
+    hh2 = @simd.f64x2_add(hh2, st2)
+    let h0 = @simd.f64x2_extract_lane(hh, 0)
+    let h1 = @simd.f64x2_extract_lane(hh, 1)
+    let h2 = @simd.f64x2_extract_lane(hh2, 0)
+    let h3 = @simd.f64x2_extract_lane(hh2, 1)
+    let newl = @simd.f64x2_add(
+      @simd.f64x2_mul(@simd.f64x2_splat(h0), lc),
+      @simd.f64x2_mul(@simd.f64x2_splat(h2), rc),
     )
-    let newr = @v128.f64x2_add(
-      @v128.f64x2_mul(@v128.f64x2_splat(h1), lc),
-      @v128.f64x2_mul(@v128.f64x2_splat(h3), rc),
+    let newr = @simd.f64x2_add(
+      @simd.f64x2_mul(@simd.f64x2_splat(h1), lc),
+      @simd.f64x2_mul(@simd.f64x2_splat(h3), rc),
     )
     psv_store2(l, (l_off + n) * 2, newl)
     psv_store2(r, (r_off + n) * 2, newr)
@@ -208,22 +207,22 @@ pub fn ps_stereo_interpolate_ipdopd_v128(
   for n = 0; n < len; n = n + 1 {
     let lc = psv_load2(l, (l_off + n) * 2)
     let rc = psv_load2(r, (r_off + n) * 2)
-    a0 = @v128.f64x2_add(a0, s0)
-    a1 = @v128.f64x2_add(a1, s1)
-    a2 = @v128.f64x2_add(a2, s2)
-    a3 = @v128.f64x2_add(a3, s3)
-    let h00 = @v128.f64x2_extract_lane(a0, 0)
-    let h01 = @v128.f64x2_extract_lane(a0, 1)
-    let h02 = @v128.f64x2_extract_lane(a2, 0)
-    let h03 = @v128.f64x2_extract_lane(a2, 1)
-    let h10 = @v128.f64x2_extract_lane(a1, 0)
-    let h11 = @v128.f64x2_extract_lane(a1, 1)
-    let h12 = @v128.f64x2_extract_lane(a3, 0)
-    let h13 = @v128.f64x2_extract_lane(a3, 1)
-    let lre = @v128.f64x2_extract_lane(lc, 0)
-    let lim = @v128.f64x2_extract_lane(lc, 1)
-    let rre = @v128.f64x2_extract_lane(rc, 0)
-    let rim = @v128.f64x2_extract_lane(rc, 1)
+    a0 = @simd.f64x2_add(a0, s0)
+    a1 = @simd.f64x2_add(a1, s1)
+    a2 = @simd.f64x2_add(a2, s2)
+    a3 = @simd.f64x2_add(a3, s3)
+    let h00 = @simd.f64x2_extract_lane(a0, 0)
+    let h01 = @simd.f64x2_extract_lane(a0, 1)
+    let h02 = @simd.f64x2_extract_lane(a2, 0)
+    let h03 = @simd.f64x2_extract_lane(a2, 1)
+    let h10 = @simd.f64x2_extract_lane(a1, 0)
+    let h11 = @simd.f64x2_extract_lane(a1, 1)
+    let h12 = @simd.f64x2_extract_lane(a3, 0)
+    let h13 = @simd.f64x2_extract_lane(a3, 1)
+    let lre = @simd.f64x2_extract_lane(lc, 0)
+    let lim = @simd.f64x2_extract_lane(lc, 1)
+    let rre = @simd.f64x2_extract_lane(rc, 0)
+    let rim = @simd.f64x2_extract_lane(rc, 1)
     // left: (h00*l + h02*r) - i*(h10*l + h12*r)
     let l_re = h00 * lre + h02 * rre - h10 * lim - h12 * rim
     let l_im = h00 * lim + h02 * rim + h10 * lre + h12 * rre

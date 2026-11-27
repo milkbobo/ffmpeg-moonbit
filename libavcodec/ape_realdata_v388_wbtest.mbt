@@ -34,8 +34,7 @@ let ape_v388_pcm_bytes : Int32 = 147456
 let ape_v388_spots : Array[Int32] = [4, 50, 4, 7, -942, -1069]
 
 ///|
-let ape_v388_packets_b64 : Bytes =
-  b"ACQAAAAAAADh0eoOKWSxhhzU0yfxwibVxhQD1FUJ8SGxfQ33yvXgT4Mtcrx7AzU9eVNZFaWfzevcWxlf9mBF2lK7xQpPy+bONc/M" +
+let ape_v388_packets_b64 : Bytes = b"ACQAAAAAAADh0eoOKWSxhhzU0yfxwibVxhQD1FUJ8SGxfQ33yvXgT4Mtcrx7AzU9eVNZFaWfzevcWxlf9mBF2lK7xQpPy+bONc/M" +
   b"w7Xmd728ODymCYLJGZAcf7NQgeJutUlaojvu7xfAhMKpGoo3r0pXKK3hXTCEf7dN74l2Q/NQQljuK/+jWoOlvYpZL1rdd0x+vHqc" +
   b"jxN3hsXAGvZeTRSCiABNN4Llm0uKyIwXUNi8mfazrFse9crX6ycBMrbix6CIuxaCSUnlzPnWOtbpxqaAuDuFfNDUFk+XPNaVvldR" +
   b"jfde1g0EmgjZhkWP1lEf+YkkAsXHThoSmgwTIDrLkPVXUom8Dw7bcXXLRkOWje8SuXvlocDoyhztU4HbPwkfQ3LZzlkVMZS9O7OL" +
@@ -997,7 +996,11 @@ test "APE: v388 real packets match FFmpeg PCM" {
       let lo = bytes[i * 2].to_uint().reinterpret_as_int()
       let hi = bytes[i * 2 + 1].to_uint().reinterpret_as_int()
       let s = lo | (hi << 8)
-      if (s & 0x8000) != 0 { s - 65536 } else { s }
+      if (s & 0x8000) != 0 {
+        s - 65536
+      } else {
+        s
+      }
     }
     inspect(v, content=ape_v388_spots[i].to_string())
   }

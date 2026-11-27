@@ -151,33 +151,30 @@ let mlp_parse_quants : Array[Int32] = [
 /// AV_CH bit numbering of libavutil/channel_layout.h (FL=1, FR=2, FC=4,
 /// LFE=8, BL=0x10, BR=0x20, BC=0x100). */
 let mlp_parse_layouts : Array[Int32] = [
-  0x4, 0x3, 0x103, 0x33, 0xB, 0x10B, 0x3B, 0x7, 0x107, 0x37, 0xF, 0x10F,
-  0x3F, 0x107, 0x37, 0xF, 0x10F, 0x3F, 0x3B, 0x37, 0x3F, 0, 0, 0, 0, 0, 0, 0,
-  0, 0, 0, 0,
+  0x4, 0x3, 0x103, 0x33, 0xB, 0x10B, 0x3B, 0x7, 0x107, 0x37, 0xF, 0x10F, 0x3F, 0x107,
+  0x37, 0xF, 0x10F, 0x3F, 0x3B, 0x37, 0x3F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ]
 
 ///|
 /// `thd_chancount`: channel pairs/groups of the TrueHD 13-bit channel map. */
-let mlp_thd_chancount : Array[Int32] = [
-  2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 1, 1,
-]
+let mlp_thd_chancount : Array[Int32] = [2, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 1, 1]
 
 ///|
 /// `thd_layout`: layout mask per channel-map group. */
 let mlp_thd_layout : Array[Int32] = [
   0x3, // LR
-  0x4, // C
-  0x8, // LFE
-  0x600, // LRs
-  0x5000, // LRvh
-  0xC0, // LRc
-  0x30, // LRrs
-  0x100, // Cs
-  0x800, // Ts
-  0x60000, // LRsd
-  0x18000, // LRw
-  0x2000, // Cvh
-  0x80000, // LFE2
+   0x4, // C
+   0x8, // LFE
+   0x600, // LRs
+   0x5000, // LRvh
+   0xC0, // LRc
+   0x30, // LRrs
+   0x100, // Cs
+   0x800, // Ts
+   0x60000, // LRsd
+   0x18000, // LRw
+   0x2000, // Cvh
+   0x80000, // LFE2
 ]
 
 ///|
@@ -207,20 +204,19 @@ let mlp_layout_5p1_back : Int32 = 0x3F
 ///|
 /// `noise_table`: TrueHD 0x31eb noise generation table (int8 values). */
 let mlp_noise_table : Array[Int32] = [
-  30, 51, 22, 54, 3, 7, -4, 38, 14, 55, 46, 81, 22, 58, -3, 2, 52, 31, -7,
-  51, 15, 44, 74, 30, 85, -17, 10, 33, 18, 80, 28, 62, 10, 32, 23, 69, 72,
-  26, 35, 17, 73, 60, 8, 56, 2, 6, -2, -5, 51, 4, 11, 50, 66, 76, 21, 44, 33,
-  47, 1, 26, 64, 48, 57, 40, 38, 16, -10, -28, 92, 22, -18, 29, -10, 5, -13,
-  49, 19, 24, 70, 34, 61, 48, 30, 14, -6, 25, 58, 33, 42, 60, 67, 17, 54, 17,
-  22, 30, 67, 44, -9, 50, -11, 43, 40, 32, 59, 82, 13, 49, -14, 55, 60, 36,
-  48, 49, 31, 47, 15, 12, 4, 65, 1, 23, 29, 39, 45, -2, 84, 69, 0, 72, 37,
-  57, 27, 41, -15, -16, 35, 31, 14, 61, 24, 0, 27, 24, 16, 41, 55, 34, 53, 9,
-  56, 12, 25, 29, 53, 5, 20, -20, -8, 20, 13, 28, -3, 78, 38, 16, 11, 62, 46,
-  29, 21, 24, 46, 65, 43, -23, 89, 18, 74, 21, 38, -12, 19, 12, -19, 8, 15,
-  33, 4, 57, 9, -8, 36, 35, 26, 28, 7, 83, 63, 79, 75, 11, 3, 87, 37, 47, 34,
-  40, 39, 19, 20, 42, 27, 34, 39, 77, 13, 42, 59, 64, 45, -1, 32, 37, 45, -5,
-  53, -6, 7, 36, 50, 23, 6, 32, 9, -21, 18, 71, 27, 52, -25, 31, 35, 42, -1,
-  68, 63, 52, 26, 43, 66, 37, 41, 25, 40, 70,
+  30, 51, 22, 54, 3, 7, -4, 38, 14, 55, 46, 81, 22, 58, -3, 2, 52, 31, -7, 51, 15,
+  44, 74, 30, 85, -17, 10, 33, 18, 80, 28, 62, 10, 32, 23, 69, 72, 26, 35, 17, 73,
+  60, 8, 56, 2, 6, -2, -5, 51, 4, 11, 50, 66, 76, 21, 44, 33, 47, 1, 26, 64, 48,
+  57, 40, 38, 16, -10, -28, 92, 22, -18, 29, -10, 5, -13, 49, 19, 24, 70, 34, 61,
+  48, 30, 14, -6, 25, 58, 33, 42, 60, 67, 17, 54, 17, 22, 30, 67, 44, -9, 50, -11,
+  43, 40, 32, 59, 82, 13, 49, -14, 55, 60, 36, 48, 49, 31, 47, 15, 12, 4, 65, 1,
+  23, 29, 39, 45, -2, 84, 69, 0, 72, 37, 57, 27, 41, -15, -16, 35, 31, 14, 61, 24,
+  0, 27, 24, 16, 41, 55, 34, 53, 9, 56, 12, 25, 29, 53, 5, 20, -20, -8, 20, 13, 28,
+  -3, 78, 38, 16, 11, 62, 46, 29, 21, 24, 46, 65, 43, -23, 89, 18, 74, 21, 38, -12,
+  19, 12, -19, 8, 15, 33, 4, 57, 9, -8, 36, 35, 26, 28, 7, 83, 63, 79, 75, 11, 3,
+  87, 37, 47, 34, 40, 39, 19, 20, 42, 27, 34, 39, 77, 13, 42, 59, 64, 45, -1, 32,
+  37, 45, -5, 53, -6, 7, 36, 50, 23, 6, 32, 9, -21, 18, 71, 27, 52, -25, 31, 35,
+  42, -1, 68, 63, 52, 26, 43, 66, 37, 41, 25, 40, 70,
 ]
 
 ///|
@@ -364,7 +360,7 @@ fn mlp_huff_decode(gb : BitReader, book : Array[(UInt32, Int32)]) -> Int32 {
   // The codebooks hold 18 / 16 / 15 codes; upstream zero-pads to 18.
   for i = 0; i < book.length(); i = i + 1 {
     let (code, len) = book[i]
-    if (peek >> (9 - len)) == code {
+    if peek >> (9 - len) == code {
       gb.skip(len)
       return i
     }
@@ -383,7 +379,7 @@ pub struct MlpFilterParams {
 
 ///|
 fn mlp_filter_new() -> MlpFilterParams {
-  { order: 0, shift: 0, state: FixedArray::make(mlp_max_fir_order, 0) }
+  { order: 0, shift: 0, state: FixedArray::make(mlp_max_fir_order, 0), }
 }
 
 ///|
@@ -566,14 +562,8 @@ pub fn MlpDecoder::new(truehd : Bool) -> MlpDecoder {
     matrix_changed: 0,
     filter_changed: FixedArray::make(mlp_max_channels * 2, 0),
     noise_buffer: FixedArray::make(mlp_max_blocksize_pow2, 0),
-    bypassed_lsbs: FixedArray::make(
-      mlp_max_blocksize * mlp_max_channels,
-      0,
-    ),
-    sample_buffer: FixedArray::make(
-      mlp_max_blocksize * mlp_max_channels,
-      0,
-    ),
+    bypassed_lsbs: FixedArray::make(mlp_max_blocksize * mlp_max_channels, 0),
+    sample_buffer: FixedArray::make(mlp_max_blocksize * mlp_max_channels, 0),
   }
 }
 
@@ -648,10 +638,8 @@ fn MlpDecoder::read_major_sync(
   if header_size < 0 || size_bits < header_size * 8 {
     return Err("mlp: packet too short, unable to read major sync")
   }
-  if mlp_checksum16(self.crc_2d, payload, header_size - 2) != mlp_rl16(
-      payload,
-      header_size - 2,
-    ) {
+  if mlp_checksum16(self.crc_2d, payload, header_size - 2) !=
+    mlp_rl16(payload, header_size - 2) {
     return Err("mlp: major sync info header checksum error")
   }
   if gb.read(24) != 0xF8726FU {
@@ -664,17 +652,8 @@ fn MlpDecoder::read_major_sync(
   if self.truehd && stream_type != 0xBA {
     return Err("mlp: unexpected stream type \{stream_type} in !MLP")
   }
-  let parsed : (
-    Int32,
-    Int32,
-    Int32,
-    Int32,
-    Int32,
-    Int32,
-    Int32,
-    Int32,
-    Int32,
-  ) = if stream_type == 0xBB {
+  let parsed : (Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32) = if stream_type ==
+    0xBB {
     let g1 = mlp_parse_quants[gb.read(4).reinterpret_as_int()]
     let g2 = mlp_parse_quants[gb.read(4).reinterpret_as_int()]
     let rb = gb.read(4).reinterpret_as_int()
@@ -788,7 +767,7 @@ fn MlpDecoder::read_restart_header(
 ) -> Result[Unit, String] {
   let s = self.substream[substr]
   let sync_word = gb.read(13).reinterpret_as_int()
-  if sync_word != (0x31EA >> 1) {
+  if sync_word != 0x31EA >> 1 {
     return Err("mlp: restart header sync incorrect")
   }
   let noise_type = gb.read1().reinterpret_as_int()
@@ -922,10 +901,8 @@ fn MlpDecoder::read_filter_params(
       return Err("mlp: coeff_bits + coeff_shift too high")
     }
     for i = 0; i < order; i = i + 1 {
-      cp.coeff[filter * mlp_max_fir_order + i] = mlp_sbits(
-        gb,
-        coeff_bits,
-      ) * (1 << coeff_shift)
+      cp.coeff[filter * mlp_max_fir_order + i] = mlp_sbits(gb, coeff_bits) *
+        (1 << coeff_shift)
     }
     if gb.read1() != 0 {
       if filter == 0 {
@@ -952,11 +929,7 @@ fn MlpDecoder::read_matrix_params(
   gb : BitReader,
 ) -> Result[Unit, String] {
   let s = self.substream[self.cur_substr]
-  let max_primitive_matrices = if self.truehd {
-    mlp_max_matrices
-  } else {
-    6
-  }
+  let max_primitive_matrices = if self.truehd { mlp_max_matrices } else { 6 }
   let changed = self.matrix_changed
   self.matrix_changed = changed + 1
   if changed > 1 {
@@ -997,7 +970,8 @@ fn MlpDecoder::read_matrix_params(
       if gb.read1() != 0 {
         coeff_val = mlp_sbits(gb, frac_bits + 2)
       }
-      s.matrix_coeff[mat * mlp_max_channels + ch] = coeff_val * (1 << (14 - frac_bits))
+      s.matrix_coeff[mat * mlp_max_channels + ch] = coeff_val *
+        (1 << (14 - frac_bits))
     }
     if s.noise_type != 0 {
       s.matrix_noise_shift[mat] = gb.read(4).reinterpret_as_int()
@@ -1068,11 +1042,8 @@ fn MlpDecoder::calculate_sign_huff(
   let s = self.substream[substr]
   let cp = s.channel_params[ch]
   let lsb_bits = cp.huff_lsbs - s.quant_step_size[ch]
-  let sign_shift = lsb_bits + (if cp.codebook > 0 {
-    2 - cp.codebook
-  } else {
-    -1
-  })
+  let sign_shift = lsb_bits +
+    (if cp.codebook > 0 { 2 - cp.codebook } else { -1 })
   let mut sign_huff_offset = cp.huff_offset
   if cp.codebook > 0 {
     sign_huff_offset -= 7 << lsb_bits
@@ -1221,17 +1192,11 @@ fn MlpDecoder::filter_channel(
   let iir_order = cp.iir.order
   let filter_shift = cp.fir.shift
   let mask = -(1 << s.quant_step_size[channel])
-  let fir_recent : FixedArray[Int32] = FixedArray::make(
-    mlp_max_fir_order,
-    0,
-  )
+  let fir_recent : FixedArray[Int32] = FixedArray::make(mlp_max_fir_order, 0)
   for i = 0; i < mlp_max_fir_order; i = i + 1 {
     fir_recent[i] = cp.fir.state[i]
   }
-  let iir_recent : FixedArray[Int32] = FixedArray::make(
-    mlp_max_iir_order,
-    0,
-  )
+  let iir_recent : FixedArray[Int32] = FixedArray::make(mlp_max_iir_order, 0)
   for i = 0; i < mlp_max_iir_order; i = i + 1 {
     iir_recent[i] = cp.iir.state[i]
   }
@@ -1243,7 +1208,8 @@ fn MlpDecoder::filter_channel(
       accum += fir_recent[k].to_int64() * cp.coeff[k].to_int64()
     }
     for k = 0; k < iir_order; k = k + 1 {
-      accum += iir_recent[k].to_int64() * cp.coeff[mlp_max_fir_order + k].to_int64()
+      accum += iir_recent[k].to_int64() *
+        cp.coeff[mlp_max_fir_order + k].to_int64()
     }
     accum = accum >> filter_shift
     let result = ((accum + residual.to_int64()) & mask.to_int64()).to_int()
@@ -1367,14 +1333,17 @@ fn MlpDecoder::output_data(
       let base = i * mlp_max_channels
       let mut accum : Int64 = 0
       for src = 0; src <= maxchan; src = src + 1 {
-        accum += self.sample_buffer[base + src].to_int64() * s.matrix_coeff[coeff_base + src].to_int64()
+        accum += self.sample_buffer[base + src].to_int64() *
+          s.matrix_coeff[coeff_base + src].to_int64()
       }
       if s.matrix_noise_shift[mat] != 0 {
         index = index & (self.access_unit_size_pow2 - 1)
-        accum += self.noise_buffer[index].to_int64() * (1 << (s.matrix_noise_shift[mat] + 7)).to_int64()
+        accum += self.noise_buffer[index].to_int64() *
+          (1 << (s.matrix_noise_shift[mat] + 7)).to_int64()
         index += index2
       }
-      self.sample_buffer[base + dest_ch] = (((accum >> 14) & mask.to_int64()) + self.bypassed_lsbs[base + mat].to_int64()).to_int()
+      self.sample_buffer[base + dest_ch] = (((accum >> 14) & mask.to_int64()) +
+      self.bypassed_lsbs[base + mat].to_int64()).to_int()
     }
   }
   let samples : Array[Int32] = []
@@ -1382,9 +1351,11 @@ fn MlpDecoder::output_data(
   for i = 0; i < s.blockpos; i = i + 1 {
     for out_ch = 0; out_ch <= s.max_matrix_channel; out_ch = out_ch + 1 {
       let mat_ch = s.ch_assign[out_ch]
-      let sample64 = self.sample_buffer[i * mlp_max_channels + mat_ch].to_int64() * (1 << s.output_shift[mat_ch]).to_int64()
+      let sample64 = self.sample_buffer[i * mlp_max_channels + mat_ch].to_int64() *
+        (1 << s.output_shift[mat_ch]).to_int64()
       let sample = sample64.to_int()
-      lossless_check_data = lossless_check_data ^ ((sample64 & 0xFFFFFF) << mat_ch).to_int()
+      lossless_check_data = lossless_check_data ^
+        ((sample64 & 0xFFFFFF) << mat_ch).to_int()
       if is32 {
         samples.push((sample64 * 256).to_int())
       } else {
@@ -1416,7 +1387,7 @@ pub fn mlp_access_unit_size(data : BytesView) -> Int32 {
 pub fn MlpDecoder::decode_packet(
   self : MlpDecoder,
   data : Bytes,
-) -> Result[Option[MlpAudio], String] {
+) -> Result[MlpAudio?, String] {
   if data.length() < 4 {
     return Err("mlp: packet too small")
   }
@@ -1445,12 +1416,10 @@ pub fn MlpDecoder::decode_packet(
   // Substream directory.
   let mut substr_header_size = 0
   let substream_parity_present : FixedArray[Bool] = FixedArray::make(
-    mlp_max_substreams,
-    false,
+    mlp_max_substreams, false,
   )
   let substream_data_len : FixedArray[Int32] = FixedArray::make(
-    mlp_max_substreams,
-    0,
+    mlp_max_substreams, 0,
   )
   let mut substream_start = 0
   for substr = 0; substr < self.num_substreams; substr = substr + 1 {
@@ -1490,7 +1459,8 @@ pub fn MlpDecoder::decode_packet(
     substream_data_len[substr] = end - substream_start
     substream_start = end
   }
-  let parity = mlp_parity(data[0:4].to_owned()) ^ mlp_parity(data[header_size : header_size + substr_header_size].to_owned())
+  let parity = mlp_parity(data[0:4].to_owned()) ^
+    mlp_parity(data[header_size:header_size + substr_header_size].to_owned())
   if (((parity >> 4) ^ parity) & 0xF) != 0xF {
     self.params_valid = false
     return Err("mlp: parity check failed")
@@ -1500,7 +1470,7 @@ pub fn MlpDecoder::decode_packet(
   for substr = 0; substr <= self.max_decoded_substream; substr = substr + 1 {
     let s = self.substream[substr]
     let sub_len = substream_data_len[substr]
-    let sub = data[off : off + sub_len].to_owned()
+    let sub = data[off:off + sub_len].to_owned()
     let sgb = BitReader::with_size(sub, sub_len * 8)
     self.matrix_changed = 0
     for i = 0; i < mlp_max_channels * 2; i = i + 1 {
@@ -1535,17 +1505,25 @@ pub fn MlpDecoder::decode_packet(
         if !skipped {
           if !s.restart_seen {
             skipped = true
-          } else if ((self.channels == 6 && ((self.substream_info >> 2) & 0x3) != 0x3) ||
-              (self.channels == 8 &&
-              ((self.substream_info >> 4) & 0x7) != 0x7 &&
-              ((self.substream_info >> 4) & 0x7) != 0x6 &&
-              ((self.substream_info >> 4) & 0x7) != 0x3)) &&
+          } else if (
+              (self.channels == 6 && ((self.substream_info >> 2) & 0x3) != 0x3) ||
+              (
+                self.channels == 8 &&
+                ((self.substream_info >> 4) & 0x7) != 0x7 &&
+                ((self.substream_info >> 4) & 0x7) != 0x6 &&
+                ((self.substream_info >> 4) & 0x7) != 0x3
+              )
+            ) &&
             substr > 0 &&
             substr < self.max_decoded_substream &&
             s.min_channel <= self.substream[substr - 1].max_channel {
             skipped = true
           } else if substr != self.max_decoded_substream &&
-            (s.coded_channels & self.substream[self.max_decoded_substream].coded_channels) != 0 {
+            (
+              s.coded_channels &
+              self.substream[self.max_decoded_substream].coded_channels
+            ) !=
+            0 {
             skipped = true
           } else {
             match self.read_block_data(sgb, substr) {
@@ -1564,7 +1542,7 @@ pub fn MlpDecoder::decode_packet(
       !skipped
     }
     if completed {
-      sgb.skip((-sgb.count()) & 15)
+      sgb.skip(-sgb.count() & 15)
       if sub_len * 8 - sgb.count() >= 32 {
         if sgb.read(16) != 0xD234U {
           return Err("mlp: missing end of stream marker")
@@ -1626,7 +1604,7 @@ pub fn MlpDecoder::decode_stream(
     if length < 4 || pos + length > data.length() {
       return Err("mlp: invalid access unit length at \{pos}")
     }
-    match self.decode_packet(data[pos : pos + length].to_owned()) {
+    match self.decode_packet(data[pos:pos + length].to_owned()) {
       Ok(Some(au)) => {
         sample_rate = au.sample_rate
         channels = au.channels
@@ -1643,7 +1621,7 @@ pub fn MlpDecoder::decode_stream(
   if sample_rate == 0 {
     return Err("mlp: no output frames")
   }
-  Ok({ sample_rate, channels, bits, samples: out })
+  Ok({ sample_rate, channels, bits, samples: out, })
 }
 
 ///|

@@ -2,7 +2,8 @@
 /// Vorbis encoder, part 2: header assembly, floor fitting/encoding,
 /// residue coding and the frame driver.  See `vorbis_encode.mbt`.
 
-///| `put_codebook_header`.
+///|
+/// `put_codebook_header`.
 fn vorbis_enc_put_codebook_header(
   bw : VorbisBitWriter,
   cb : VorbisEncCodebook,
@@ -81,8 +82,12 @@ fn vorbis_enc_put_codebook_header(
   }
 }
 
-///| `put_floor_header`.
-fn vorbis_enc_put_floor_header(bw : VorbisBitWriter, fc : VorbisEncFloor) -> Unit {
+///|
+/// `put_floor_header`.
+fn vorbis_enc_put_floor_header(
+  bw : VorbisBitWriter,
+  fc : VorbisEncFloor,
+) -> Unit {
   bw.put(1, 16) // type, only floor1 is supported
   bw.put(fc.partitions.reinterpret_as_uint(), 5)
   for i = 0; i < fc.partitions; i = i + 1 {
@@ -107,8 +112,12 @@ fn vorbis_enc_put_floor_header(bw : VorbisBitWriter, fc : VorbisEncFloor) -> Uni
   }
 }
 
-///| `put_residue_header`.
-fn vorbis_enc_put_residue_header(bw : VorbisBitWriter, rc : VorbisEncResidue) -> Unit {
+///|
+/// `put_residue_header`.
+fn vorbis_enc_put_residue_header(
+  bw : VorbisBitWriter,
+  rc : VorbisEncResidue,
+) -> Unit {
   bw.put(2, 16) // type 2
   bw.put(rc.begin.reinterpret_as_uint(), 24)
   bw.put(rc.end.reinterpret_as_uint(), 24)
@@ -137,7 +146,8 @@ fn vorbis_enc_put_residue_header(bw : VorbisBitWriter, rc : VorbisEncResidue) ->
   }
 }
 
-///| `put_main_header`: identification + comment + setup, xiphlacing-packed.
+///|
+/// `put_main_header`: identification + comment + setup, xiphlacing-packed.
 fn vorbis_enc_put_main_header(enc : VorbisEncoder) -> Result[Bytes, String] {
   let bw = VorbisBitWriter::new()
   // identification header
@@ -202,8 +212,14 @@ fn vorbis_enc_put_main_header(enc : VorbisEncoder) -> Result[Bytes, String] {
     if mc.coupling_steps != 0 {
       bw.put((mc.coupling_steps - 1).reinterpret_as_uint(), 8)
       for j = 0; j < mc.coupling_steps; j = j + 1 {
-        bw.put(mc.magnitude[j].reinterpret_as_uint(), vorbis_enc_ilog(enc.channels - 1))
-        bw.put(mc.angle[j].reinterpret_as_uint(), vorbis_enc_ilog(enc.channels - 1))
+        bw.put(
+          mc.magnitude[j].reinterpret_as_uint(),
+          vorbis_enc_ilog(enc.channels - 1),
+        )
+        bw.put(
+          mc.angle[j].reinterpret_as_uint(),
+          vorbis_enc_ilog(enc.channels - 1),
+        )
       }
     }
     bw.put(0, 2) // reserved
@@ -244,7 +260,8 @@ fn vorbis_enc_put_main_header(enc : VorbisEncoder) -> Result[Bytes, String] {
   Ok(Bytes::from_array(out))
 }
 
-///| `get_floor_average`.
+///|
+/// `get_floor_average`.
 fn vorbis_enc_get_floor_average(
   fc : VorbisEncFloor,
   coeffs : Array[Double],
@@ -262,7 +279,8 @@ fn vorbis_enc_get_floor_average(
   average / (end - begin).to_double()
 }
 
-///| `floor_fit`.
+///|
+/// `floor_fit`.
 fn vorbis_enc_floor_fit(
   enc : VorbisEncoder,
   fc : VorbisEncFloor,
@@ -283,7 +301,8 @@ fn vorbis_enc_floor_fit(
   for i = 0; i < fc.values; i = i + 1 {
     let position = fc.list[fc.list[i].sort].x
     let average = averages[i]
-    let avg = (tot * average).sqrt() * @math.pow(1.25, position.to_double() * 0.005) // MAGIC!
+    let avg = (tot * average).sqrt() *
+      @math.pow(1.25, position.to_double() * 0.005) // MAGIC!
     let mut j = 0
     while j < range - 1 {
       if vorbis_floor1_inverse_db_table[j * fc.multiplier] > avg {
@@ -295,12 +314,20 @@ fn vorbis_enc_floor_fit(
   }
 }
 
-///| `render_point`.
-fn vorbis_enc_render_point(x0 : Int32, y0 : Int32, x1 : Int32, y1 : Int32, x : Int32) -> Int32 {
+///|
+/// `render_point`.
+fn vorbis_enc_render_point(
+  x0 : Int32,
+  y0 : Int32,
+  x1 : Int32,
+  y1 : Int32,
+  x : Int32,
+) -> Int32 {
   y0 + (x - x0) * (y1 - y0) / (x1 - x0)
 }
 
-///| `put_codeword`.
+///|
+/// `put_codeword`.
 fn vorbis_enc_put_codeword(
   bw : VorbisBitWriter,
   cb : VorbisEncCodebook,
@@ -310,7 +337,8 @@ fn vorbis_enc_put_codeword(
   true
 }
 
-///| `floor_encode`.
+///|
+/// `floor_encode`.
 fn vorbis_enc_floor_encode(
   enc : VorbisEncoder,
   fc : VorbisEncFloor,
@@ -353,12 +381,10 @@ fn vorbis_enc_floor_encode(
         } else {
           coded[i] = (posts[i] - predicted) * 2
         }
+      } else if predicted - posts[i] > room {
+        coded[i] = predicted - posts[i] + highroom - 1
       } else {
-        if predicted - posts[i] > room {
-          coded[i] = predicted - posts[i] + highroom - 1
-        } else {
-          coded[i] = (predicted - posts[i]) * 2 - 1
-        }
+        coded[i] = (predicted - posts[i]) * 2 - 1
       }
     }
   }
@@ -418,7 +444,8 @@ fn vorbis_enc_floor_encode(
   true
 }
 
-///| `put_vector`: nearest VQ vector; returns the chosen vector.
+///|
+/// `put_vector`: nearest VQ vector; returns the chosen vector.
 fn vorbis_enc_put_vector(
   book : VorbisEncCodebook,
   bw : VorbisBitWriter,
@@ -449,7 +476,8 @@ fn vorbis_enc_put_vector(
   Some(entry)
 }
 
-///| `residue_encode` (type 2 only, both channels interleaved).
+///|
+/// `residue_encode` (type 2 only, both channels interleaved).
 fn vorbis_enc_residue_encode(
   enc : VorbisEncoder,
   rc : VorbisEncResidue,
@@ -462,7 +490,11 @@ fn vorbis_enc_residue_encode(
   let partitions = (rc.end - rc.begin) / psize
   // C: `channels = (rc->type == 2) ? 1 : real_ch`.  The encoder creates a
   // single type-2 residue (begin 0 / end 1600), identified here by config.
-  let channels = if rc.begin == 0 && rc.end == 1600 && real_ch == 2 { 1 } else { real_ch }
+  let channels = if rc.begin == 0 && rc.end == 1600 && real_ch == 2 {
+    1
+  } else {
+    real_ch
+  }
   let classes : Array[Array[Int32]] = []
   for _c in 0..<vorbis_enc_max_channels {
     classes.push(Array::make(vorbis_enc_num_residue_partitions, 0))
@@ -526,7 +558,7 @@ fn vorbis_enc_residue_encode(
           // gather ndimensions interleaved coefficients, quantize to the
           // nearest VQ vector, subtract it back.
           let s2 = rc.begin + p * psize
-          let mut a1 = (s2 % real_ch) * samples
+          let mut a1 = s2 % real_ch * samples
           let mut b1 = s2 / real_ch
           let send = real_ch * samples
           let mut k = 0

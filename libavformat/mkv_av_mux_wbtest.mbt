@@ -39,7 +39,7 @@ test "mkv muxer: H.264 + AAC tracks interleave by timestamp" {
 test "mkv muxer: invalid A/V packets are rejected" {
   let avcc = @libavutil.av_base64_decode(mkv_av_avcc_b64, 1024).unwrap()
   let mux = mkv_av_muxer_new(64, 48, avcc, 48000).unwrap()
-  match mux.write_audio(Bytes::new(0), 0L, 21) {
+  match mux.write_audio(Bytes::make(0, b'\x00'), 0L, 21) {
     Ok(_) => fail("empty audio packet must fail")
     Err(_) => ()
   }

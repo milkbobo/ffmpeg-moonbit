@@ -70,7 +70,7 @@ fn adpcm_check(
   codec : String,
   rate : Int32,
   channels : Int32,
-  pcm_bytes : Int,
+  pcm_bytes : Int32,
   want_md5 : String,
   label : String,
 ) -> Unit raise {
@@ -84,6 +84,7 @@ fn adpcm_check(
   assert_eq(pcm.length(), pcm_bytes, msg="\{label}: decoded length")
   assert_eq(adpcm_md5(pcm), want_md5, msg="\{label}: s16le MD5")
 }
+
 ///|
 /// FATE `oki/test.wav`: Dialogic OKI IMA, 11.025 kHz mono. 27620 bytes.
 let adpcm_oki_wav : Bytes = adpcm_cat([
@@ -1624,4 +1625,3 @@ test "adpcm facade yamaha_wav: decodes to the reference s16le" {
     "yamaha_wav",
   )
 }
-

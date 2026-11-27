@@ -23,61 +23,81 @@
 ///     then raises a decode error, matching the chunked C decoder's
 ///     observable output on the FATE `NoLegacy-cut` sample.
 
-///| `MAX_CHANNELS`.
+///|
+/// `MAX_CHANNELS`.
 let ape_max_channels = 2
 
-///| `APE_FRAMECODE_STEREO_SILENCE`.
+///|
+/// `APE_FRAMECODE_STEREO_SILENCE`.
 let ape_framecode_stereo_silence : UInt32 = 3
 
-///| `APE_FRAMECODE_PSEUDO_STEREO`.
+///|
+/// `APE_FRAMECODE_PSEUDO_STEREO`.
 let ape_framecode_pseudo_stereo : UInt32 = 4
 
-///| `HISTORY_SIZE`.
+///|
+/// `HISTORY_SIZE`.
 let ape_history_size = 512
 
-///| `PREDICTOR_ORDER`.
+///|
+/// `PREDICTOR_ORDER`.
 let ape_predictor_order = 8
 
-///| `PREDICTOR_SIZE` (total size of all predictor histories).
+///|
+/// `PREDICTOR_SIZE` (total size of all predictor histories).
 let ape_predictor_size = 50
 
-///| `YDELAYA`.
+///|
+/// `YDELAYA`.
 let ape_ydelaya : Int32 = 18 + ape_predictor_order * 4
 
-///| `YDELAYB`.
+///|
+/// `YDELAYB`.
 let ape_ydelayb : Int32 = 18 + ape_predictor_order * 3
 
-///| `XDELAYA`.
+///|
+/// `XDELAYA`.
 let ape_xdelaya : Int32 = 18 + ape_predictor_order * 2
 
-///| `XDELAYB`.
+///|
+/// `XDELAYB`.
 let ape_xdelayb : Int32 = 18 + ape_predictor_order
 
-///| `YADAPTCOEFFSA`.
+///|
+/// `YADAPTCOEFFSA`.
 let ape_yadaptcoeffsa : Int32 = 18
 
-///| `XADAPTCOEFFSA`.
+///|
+/// `XADAPTCOEFFSA`.
 let ape_xadaptcoeffsa : Int32 = 14
 
-///| `YADAPTCOEFFSB`.
+///|
+/// `YADAPTCOEFFSB`.
 let ape_yadaptcoeffsb : Int32 = 10
 
-///| `XADAPTCOEFFSB`.
+///|
+/// `XADAPTCOEFFSB`.
 let ape_xadaptcoeffsb : Int32 = 5
 
-///| `COMPRESSION_LEVEL_*`.
+///|
+/// `COMPRESSION_LEVEL_*`.
 let ape_compression_level_fast = 1000
 
+///|
 let ape_compression_level_high = 3000
 
+///|
 let ape_compression_level_extra_high = 4000
 
+///|
 let ape_compression_level_insane = 5000
 
-///| `APE_FILTER_LEVELS`.
+///|
+/// `APE_FILTER_LEVELS`.
 let ape_filter_levels = 3
 
-///| `ape_filter_orders[5][APE_FILTER_LEVELS]`.
+///|
+/// `ape_filter_orders[5][APE_FILTER_LEVELS]`.
 let ape_filter_orders : FixedArray[FixedArray[Int32]] = [
   [0, 0, 0],
   [16, 0, 0],
@@ -86,7 +106,8 @@ let ape_filter_orders : FixedArray[FixedArray[Int32]] = [
   [16, 256, 1280],
 ]
 
-///| `ape_filter_fracbits[5][APE_FILTER_LEVELS]`.
+///|
+/// `ape_filter_fracbits[5][APE_FILTER_LEVELS]`.
 let ape_filter_fracbits : FixedArray[FixedArray[Int32]] = [
   [0, 0, 0],
   [11, 0, 0],
@@ -95,49 +116,60 @@ let ape_filter_fracbits : FixedArray[FixedArray[Int32]] = [
   [11, 13, 15],
 ]
 
-///| Range coder constants (`CODE_BITS` family).
+///|
+/// Range coder constants (`CODE_BITS` family).
 let ape_extra_bits : Int32 = (32 - 2) % 8 + 1
 
-///| `BOTTOM_VALUE` = `TOP_VALUE >> 8`.
+///|
+/// `BOTTOM_VALUE` = `TOP_VALUE >> 8`.
 let ape_bottom_value : UInt32 = 1U << 23
 
-///| `counts_3970`: fixed symbol probabilities for Monkey Audio 3.97.
+///|
+/// `counts_3970`: fixed symbol probabilities for Monkey Audio 3.97.
 let ape_counts_3970 : FixedArray[Int32] = [
-  0, 14824, 28224, 39348, 47855, 53994, 58171, 60926, 62682, 63786, 64463,
-  64878, 65126, 65276, 65365, 65419, 65450, 65469, 65480, 65487, 65491, 65493,
+  0, 14824, 28224, 39348, 47855, 53994, 58171, 60926, 62682, 63786, 64463, 64878,
+  65126, 65276, 65365, 65419, 65450, 65469, 65480, 65487, 65491, 65493,
 ]
 
-///| `counts_diff_3970`.
+///|
+/// `counts_diff_3970`.
 let ape_counts_diff_3970 : FixedArray[Int32] = [
-  14824, 13400, 11124, 8507, 6139, 4177, 2755, 1756, 1104, 677, 415, 248, 150,
-  89, 54, 31, 19, 11, 7, 4, 2,
+  14824, 13400, 11124, 8507, 6139, 4177, 2755, 1756, 1104, 677, 415, 248, 150, 89,
+  54, 31, 19, 11, 7, 4, 2,
 ]
 
-///| `counts_3980`: fixed symbol probabilities for Monkey Audio 3.98.
+///|
+/// `counts_3980`: fixed symbol probabilities for Monkey Audio 3.98.
 let ape_counts_3980 : FixedArray[Int32] = [
-  0, 19578, 36160, 48417, 56323, 60899, 63265, 64435, 64971, 65232, 65351,
-  65416, 65447, 65466, 65476, 65482, 65485, 65488, 65490, 65491, 65492, 65493,
+  0, 19578, 36160, 48417, 56323, 60899, 63265, 64435, 64971, 65232, 65351, 65416,
+  65447, 65466, 65476, 65482, 65485, 65488, 65490, 65491, 65492, 65493,
 ]
 
-///| `counts_diff_3980`.
+///|
+/// `counts_diff_3980`.
 let ape_counts_diff_3980 : FixedArray[Int32] = [
-  19578, 16582, 12257, 7906, 4576, 2366, 1170, 536, 261, 119, 65, 31, 19, 10,
-  6, 3, 3, 2, 1, 1, 1,
+  19578, 16582, 12257, 7906, 4576, 2366, 1170, 536, 261, 119, 65, 31, 19, 10, 6,
+  3, 3, 2, 1, 1, 1,
 ]
 
-///| `initial_coeffs_fast_3320`.
+///|
+/// `initial_coeffs_fast_3320`.
 let ape_initial_coeffs_fast_3320 : FixedArray[Int32] = [375]
 
-///| `initial_coeffs_a_3800`.
+///|
+/// `initial_coeffs_a_3800`.
 let ape_initial_coeffs_a_3800 : FixedArray[Int32] = [64, 115, 64]
 
-///| `initial_coeffs_b_3800`.
+///|
+/// `initial_coeffs_b_3800`.
 let ape_initial_coeffs_b_3800 : FixedArray[Int32] = [740, 0]
 
-///| `initial_coeffs_3930` (same values in the 64-bit variant).
+///|
+/// `initial_coeffs_3930` (same values in the 64-bit variant).
 let ape_initial_coeffs_3930 : FixedArray[Int32] = [360, 317, -109, 98]
 
-///| Unsigned-view helpers: C mixes `int32_t`/`uint32_t` heavily and the wrap
+///|
+/// Unsigned-view helpers: C mixes `int32_t`/`uint32_t` heavily and the wrap
 /// semantics differ per expression, so every cast is spelled out at the use
 /// site; these shorthands only re-interpret the bit pattern.
 fn ape_u(v : Int32) -> UInt32 {
@@ -159,12 +191,14 @@ fn ape_i64(v : UInt64) -> Int64 {
   v.reinterpret_as_int64()
 }
 
-///| `APESIGN`: -1 for positive, 1 for negative, 0 for zero.
+///|
+/// `APESIGN`: -1 for positive, 1 for negative, 0 for zero.
 fn ape_sign(x : Int32) -> Int32 {
   (x < 0).to_int() - (x > 0).to_int()
 }
 
-///| `av_log2` for `UInt32` (floor; 0 maps to 0 like FFmpeg's table lookup).
+///|
+/// `av_log2` for `UInt32` (floor; 0 maps to 0 like FFmpeg's table lookup).
 fn ape_av_log2(v : UInt32) -> Int32 {
   let mut n = 0
   let mut x = v
@@ -175,7 +209,8 @@ fn ape_av_log2(v : UInt32) -> Int32 {
   n
 }
 
-///| `av_clip_int16`.
+///|
+/// `av_clip_int16`.
 fn ape_clip_int16(v : Int32) -> Int32 {
   if v > 32767 {
     32767
@@ -186,13 +221,15 @@ fn ape_clip_int16(v : Int32) -> Int32 {
   }
 }
 
-///| `APERice`.
+///|
+/// `APERice`.
 struct ApeRice {
   mut k : UInt32
   mut ksum : UInt32
 }
 
-///| `APERangecoder`.
+///|
+/// `APERangecoder`.
 struct ApeRc {
   mut low : UInt32
   mut range : UInt32
@@ -200,7 +237,8 @@ struct ApeRc {
   mut buffer : UInt32
 }
 
-///| `APEPredictor` (32-bit path, fileversion < 3950).  `buf` is the index of
+///|
+/// `APEPredictor` (32-bit path, fileversion < 3950).  `buf` is the index of
 /// the C's sliding `p->buf` pointer into `historybuffer`.
 struct ApePredictor32 {
   historybuffer : FixedArray[Int32]
@@ -213,7 +251,8 @@ struct ApePredictor32 {
   mut sample_pos : UInt32
 }
 
-///| `APEPredictor64` (fileversion >= 3950).
+///|
+/// `APEPredictor64` (fileversion >= 3950).
 struct ApePredictor64 {
   historybuffer : FixedArray[Int64]
   mut buf : Int32
@@ -224,7 +263,8 @@ struct ApePredictor64 {
   coeffsB : FixedArray[UInt64]
 }
 
-///| One `APEFilter`: the C's single `int16_t` allocation holds the
+///|
+/// One `APEFilter`: the C's single `int16_t` allocation holds the
 /// coefficients (`buf[0..order)`), the sliding adapt region starting at
 /// `order` and the delay region starting at `3*order`; `delay`/`adapt` are
 /// absolute indices into `buf`.
@@ -236,7 +276,8 @@ struct ApeFilter {
   mut avg : UInt32
 }
 
-///| Per-call decode scratch (the C's `decoded`/`interim` buffer halves).
+///|
+/// Per-call decode scratch (the C's `decoded`/`interim` buffer halves).
 priv struct ApeChannels {
   d0 : Array[Int32]
   d1 : Array[Int32]
@@ -244,7 +285,8 @@ priv struct ApeChannels {
   i1 : Array[Int32]
 }
 
-///| One decoded APE chunk. `samples` is interleaved and already shifted the
+///|
+/// One decoded APE chunk. `samples` is interleaved and already shifted the
 /// way FFmpeg outputs it: 8-bit as unsigned 0..255, 16-bit as s16, 24-bit
 /// left-justified in s32 (value << 8).
 pub struct ApeFrame {
@@ -254,14 +296,16 @@ pub struct ApeFrame {
   samples : Array[Int32]
 }
 
-///| `decode_frame` result: the chunk plus whether the packet is fully
+///|
+/// `decode_frame` result: the chunk plus whether the packet is fully
 /// consumed (the C's `return !s->samples ? avpkt->size : 0`).
 pub struct ApeChunk {
   frame : ApeFrame
   packet_done : Bool
 }
 
-///| `APEContext`.
+///|
+/// `APEContext`.
 pub struct ApeDecoder {
   channels : Int32
   bps : Int32
@@ -288,13 +332,14 @@ pub struct ApeDecoder {
   mut interim_mode : Int32
 }
 
-///| `ape_decode_init`: `extradata` is the six-byte (fileversion,
+///|
+/// `ape_decode_init`: `extradata` is the six-byte (fileversion,
 /// compression level, flags) tuple containers attach to the stream.
 pub fn ape_decoder_new(
   extradata : Bytes,
   channels : Int32,
   bits_per_coded_sample : Int32,
-  max_samples? : Int32 = 4608,
+  max_samples~ : Int32 = 4608,
 ) -> Result[ApeDecoder, String] {
   if extradata.length() != 6 {
     return Err("ape: incorrect extradata")
@@ -318,15 +363,9 @@ pub fn ape_decoder_new(
   }
   let fset = compression_level / 1000 - 1
   let filters : FixedArray[ApeFilter] = FixedArray::make(
-      ape_filter_levels * 2,
-      {
-        buf: FixedArray::make(1, 0),
-        order: 0,
-        delay: 0,
-        adapt: 0,
-        avg: 0,
-      },
-    )
+    ape_filter_levels * 2,
+    { buf: FixedArray::make(1, 0), order: 0, delay: 0, adapt: 0, avg: 0, },
+  )
   for i = 0; i < ape_filter_levels; i = i + 1 {
     let order = ape_filter_orders[fset][i]
     if order == 0 {
@@ -373,9 +412,9 @@ pub fn ape_decoder_new(
       coeffsB: FixedArray::make(10, 0UL),
     },
     filters,
-    rc: { low: 0, range: 0, help: 0, buffer: 0 },
-    rice_x: { k: 0, ksum: 0 },
-    rice_y: { k: 0, ksum: 0 },
+    rc: { low: 0, range: 0, help: 0, buffer: 0, },
+    rice_x: { k: 0, ksum: 0, },
+    rice_y: { k: 0, ksum: 0, },
     gb: BitReader::new(b""),
     data: b"",
     ptr: 0,
@@ -386,17 +425,20 @@ pub fn ape_decoder_new(
   })
 }
 
-///| `ape_flush`.
+///|
+/// `ape_flush`.
 pub fn ApeDecoder::flush(self : ApeDecoder) -> Unit {
   self.samples = 0
 }
 
-///| Little-endian `u16` read over the extradata.
+///|
+/// Little-endian `u16` read over the extradata.
 fn ape_le16(data : Bytes, off : Int32) -> Int32 {
   data[off].to_int() | (data[off + 1].to_int() << 8)
 }
 
-///| Big-endian `u32` read advancing `ptr` (`bytestream_get_be32`).
+///|
+/// Big-endian `u32` read advancing `ptr` (`bytestream_get_be32`).
 fn ApeDecoder::be32(self : ApeDecoder) -> UInt32 {
   let v = (self.data[self.ptr].to_uint() << 24) |
     (self.data[self.ptr + 1].to_uint() << 16) |
@@ -410,7 +452,8 @@ fn ApeDecoder::be32(self : ApeDecoder) -> UInt32 {
 // Range decoder (`range_*` functions)
 // ---------------------------------------------------------------------------
 
-///| `range_start_decoding`.
+///|
+/// `range_start_decoding`.
 fn ApeDecoder::range_start_decoding(self : ApeDecoder) -> Unit {
   self.rc.buffer = if self.ptr < self.data.length() {
     self.data[self.ptr].to_uint()
@@ -422,7 +465,8 @@ fn ApeDecoder::range_start_decoding(self : ApeDecoder) -> Unit {
   self.rc.range = 1U << ape_extra_bits
 }
 
-///| `range_dec_normalize`.
+///|
+/// `range_dec_normalize`.
 fn ApeDecoder::range_dec_normalize(self : ApeDecoder) -> Unit {
   while self.rc.range <= ape_bottom_value {
     self.rc.buffer = self.rc.buffer << 8
@@ -437,21 +481,24 @@ fn ApeDecoder::range_dec_normalize(self : ApeDecoder) -> Unit {
   }
 }
 
-///| `range_decode_culfreq`.
+///|
+/// `range_decode_culfreq`.
 fn ApeDecoder::range_decode_culfreq(self : ApeDecoder, tot_f : Int32) -> Int32 {
   self.range_dec_normalize()
   self.rc.help = self.rc.range / ape_u(tot_f)
   ape_i(self.rc.low / self.rc.help)
 }
 
-///| `range_decode_culshift`.
+///|
+/// `range_decode_culshift`.
 fn ApeDecoder::range_decode_culshift(self : ApeDecoder, shift : Int32) -> Int32 {
   self.range_dec_normalize()
   self.rc.help = self.rc.range >> shift
   ape_i(self.rc.low / self.rc.help)
 }
 
-///| `range_decode_update`.
+///|
+/// `range_decode_update`.
 fn ApeDecoder::range_decode_update(
   self : ApeDecoder,
   sy_f : Int32,
@@ -461,14 +508,16 @@ fn ApeDecoder::range_decode_update(
   self.rc.range = self.rc.help * ape_u(sy_f)
 }
 
-///| `range_decode_bits` (n <= 16 in practice, C says <= 16).
+///|
+/// `range_decode_bits` (n <= 16 in practice, C says <= 16).
 fn ApeDecoder::range_decode_bits(self : ApeDecoder, n : Int32) -> Int32 {
   let sym = self.range_decode_culshift(n)
   self.range_decode_update(1, sym)
   sym
 }
 
-///| `range_get_symbol`.
+///|
+/// `range_get_symbol`.
 fn ApeDecoder::range_get_symbol(
   self : ApeDecoder,
   counts : FixedArray[Int32],
@@ -496,10 +545,11 @@ fn ApeDecoder::range_get_symbol(
 // Rice decoding (`update_rice`, `ape_decode_value_*`)
 // ---------------------------------------------------------------------------
 
-///| `update_rice`.
+///|
+/// `update_rice`.
 fn ape_update_rice(rice : ApeRice, x : UInt32) -> Unit {
   let lim = if rice.k != 0 { 1U << ape_i(rice.k + 4U) } else { 0 }
-  rice.ksum = rice.ksum + ((x + 1U) / 2U) - ((rice.ksum + 16U) >> 5)
+  rice.ksum = rice.ksum + (x + 1U) / 2U - ((rice.ksum + 16U) >> 5)
   if rice.ksum < lim {
     rice.k = rice.k - 1
   } else if rice.ksum >= 1U << ape_i(rice.k + 5U) && rice.k < 24U {
@@ -507,12 +557,14 @@ fn ape_update_rice(rice : ApeRice, x : UInt32) -> Unit {
   }
 }
 
-///| `get_k`.
+///|
+/// `get_k`.
 fn ape_get_k(ksum : UInt32) -> UInt32 {
   ape_av_log2(ksum).reinterpret_as_uint() + (ksum != 0).to_uint()
 }
 
-///| `get_unary(gb, stop, len)`.
+///|
+/// `get_unary(gb, stop, len)`.
 fn ape_get_unary(gb : BitReader, stop : Int32, len : Int32) -> UInt32 {
   let mut i = 0
   while i < len && gb.read1().reinterpret_as_int() != stop {
@@ -521,7 +573,8 @@ fn ape_get_unary(gb : BitReader, stop : Int32, len : Int32) -> UInt32 {
   i.reinterpret_as_uint()
 }
 
-///| `get_rice_ook`.
+///|
+/// `get_rice_ook`.
 fn ape_get_rice_ook(gb : BitReader, k : Int32) -> UInt32 {
   let mut x = ape_get_unary(gb, 1, gb.bits_left())
   if k != 0 {
@@ -530,7 +583,8 @@ fn ape_get_rice_ook(gb : BitReader, k : Int32) -> UInt32 {
   x
 }
 
-///| `ape_decode_value_3860` (rice family with unary overflow).
+///|
+/// `ape_decode_value_3860` (rice family with unary overflow).
 fn ApeDecoder::decode_value_3860(
   self : ApeDecoder,
   gb : BitReader,
@@ -561,12 +615,12 @@ fn ApeDecoder::decode_value_3860(
   ape_i(((x >> 1) ^ ((x & 1) - 1)) + 1)
 }
 
-///| `ape_decode_value_3900` (range-coded rice family, 3.97 tables).
+///|
+/// `ape_decode_value_3900` (range-coded rice family, 3.97 tables).
 fn ApeDecoder::decode_value_3900(self : ApeDecoder, rice : ApeRice) -> Int32 {
-  let mut overflow = self.range_get_symbol(
-      ape_counts_3970,
-      ape_counts_diff_3970,
-    ).reinterpret_as_uint()
+  let mut overflow = self
+    .range_get_symbol(ape_counts_3970, ape_counts_diff_3970)
+    .reinterpret_as_uint()
   let is_escape = overflow == 63
   let tmpk : Int32 = if is_escape {
     self.range_decode_bits(5)
@@ -598,13 +652,13 @@ fn ApeDecoder::decode_value_3900(self : ApeDecoder, rice : ApeRice) -> Int32 {
   ape_i(((x >> 1) ^ ((x & 1) - 1)) + 1)
 }
 
-///| `ape_decode_value_3990` (range-coded rice family, 3.98 tables + pivot).
+///|
+/// `ape_decode_value_3990` (range-coded rice family, 3.98 tables + pivot).
 fn ApeDecoder::decode_value_3990(self : ApeDecoder, rice : ApeRice) -> Int32 {
-  let pivot = if (rice.ksum >> 5) > 1 { rice.ksum >> 5 } else { 1 }
-  let mut overflow = self.range_get_symbol(
-      ape_counts_3980,
-      ape_counts_diff_3980,
-    ).reinterpret_as_uint()
+  let pivot = if rice.ksum >> 5 > 1 { rice.ksum >> 5 } else { 1 }
+  let mut overflow = self
+    .range_get_symbol(ape_counts_3980, ape_counts_diff_3980)
+    .reinterpret_as_uint()
   if overflow == 63 {
     overflow = ape_u(self.range_decode_bits(16)) << 16
     overflow = overflow | ape_u(self.range_decode_bits(16))
@@ -616,7 +670,7 @@ fn ApeDecoder::decode_value_3990(self : ApeDecoder, rice : ApeRice) -> Int32 {
   } else {
     let mut base_hi = ape_i(pivot)
     let mut bbits = 0
-    while (base_hi & (-65536)) != 0 {
+    while (base_hi & -65536) != 0 {
       base_hi = base_hi >> 1
       bbits = bbits + 1
     }
@@ -636,7 +690,8 @@ fn ApeDecoder::decode_value_3990(self : ApeDecoder, rice : ApeRice) -> Int32 {
 // Entropy decoding (`decode_array_0000`, `entropy_decode_*`)
 // ---------------------------------------------------------------------------
 
-///| `FFMIN`.
+///|
+/// `FFMIN`.
 fn ape_min32(a : Int32, b : Int32) -> Int32 {
   if a < b {
     a
@@ -645,7 +700,8 @@ fn ape_min32(a : Int32, b : Int32) -> Int32 {
   }
 }
 
-///| `decode_array_0000`.
+///|
+/// `decode_array_0000`.
 fn ApeDecoder::decode_array_0000(
   self : ApeDecoder,
   out : Array[Int32],
@@ -708,7 +764,8 @@ fn ApeDecoder::decode_array_0000(
   }
 }
 
-///| `entropy_decode_mono_0000` / `entropy_decode_stereo_0000`.
+///|
+/// `entropy_decode_mono_0000` / `entropy_decode_stereo_0000`.
 fn ApeDecoder::entropy_decode_0000(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -721,7 +778,8 @@ fn ApeDecoder::entropy_decode_0000(
   }
 }
 
-///| `entropy_decode_mono_3860` / `entropy_decode_stereo_3860`.
+///|
+/// `entropy_decode_mono_3860` / `entropy_decode_stereo_3860`.
 fn ApeDecoder::entropy_decode_3860(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -738,7 +796,8 @@ fn ApeDecoder::entropy_decode_3860(
   }
 }
 
-///| `entropy_decode_mono_3900` / `entropy_decode_stereo_3900` (sequential,
+///|
+/// `entropy_decode_mono_3900` / `entropy_decode_stereo_3900` (sequential,
 /// with the C's backpedal-and-restart between channels) and
 /// `entropy_decode_stereo_3930` (interleaved: one Y/X symbol pair per
 /// sample, so the range coder consumes both channels' symbols alternately).
@@ -769,7 +828,8 @@ fn ApeDecoder::entropy_decode_3900(
   }
 }
 
-///| `entropy_decode_mono_3990` / `entropy_decode_stereo_3990` (interleaved).
+///|
+/// `entropy_decode_mono_3990` / `entropy_decode_stereo_3990` (interleaved).
 fn ApeDecoder::entropy_decode_3990(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -784,7 +844,8 @@ fn ApeDecoder::entropy_decode_3990(
   }
 }
 
-///| `init_entropy_decoder`.
+///|
+/// `init_entropy_decoder`.
 fn ApeDecoder::init_entropy_decoder(self : ApeDecoder) -> Result[Unit, String] {
   // Read the CRC
   if self.fileversion >= 3900 {
@@ -821,7 +882,8 @@ fn ApeDecoder::init_entropy_decoder(self : ApeDecoder) -> Result[Unit, String] {
 // Predictor initialisation and the 32-bit predictors (fileversion < 3950)
 // ---------------------------------------------------------------------------
 
-///| `init_predictor_decoder`.
+///|
+/// `init_predictor_decoder`.
 fn ApeDecoder::init_predictor_decoder(self : ApeDecoder) -> Unit {
   let p = self.predictor
   let p64 = self.predictor64
@@ -848,7 +910,9 @@ fn ApeDecoder::init_predictor_decoder(self : ApeDecoder) -> Unit {
     for ch = 0; ch < 2; ch = ch + 1 {
       for i = 0; i < 4; i = i + 1 {
         p.coeffsA[ch * 4 + i] = ape_u(ape_initial_coeffs_3930[i])
-        p64.coeffsA[ch * 4 + i] = ape_initial_coeffs_3930[i].to_int64().reinterpret_as_uint64()
+        p64.coeffsA[ch * 4 + i] = ape_initial_coeffs_3930[i]
+          .to_int64()
+          .reinterpret_as_uint64()
       }
     }
   }
@@ -874,7 +938,8 @@ fn ApeDecoder::init_predictor_decoder(self : ApeDecoder) -> Unit {
   p.sample_pos = 0
 }
 
-///| `filter_fast_3320`.
+///|
+/// `filter_fast_3320`.
 fn ape_filter_fast_3320(
   p : ApePredictor32,
   decoded : Int32,
@@ -888,10 +953,9 @@ fn ape_filter_fast_3320(
     return decoded
   }
   let predictionA = ape_i(
-      ape_u(p.historybuffer[p.buf + delay_a]) * 2 - ape_u(
-        p.historybuffer[p.buf + delay_a - 1],
-      ),
-    )
+    ape_u(p.historybuffer[p.buf + delay_a]) * 2 -
+    ape_u(p.historybuffer[p.buf + delay_a - 1]),
+  )
   let prod = ape_i(ape_u(predictionA) * p.coeffsA[filter * 4])
   p.lastA[filter] = ape_i(ape_u(decoded) + ape_u(prod >> 9))
   if (decoded ^ predictionA) > 0 {
@@ -903,7 +967,8 @@ fn ape_filter_fast_3320(
   p.filterA[filter]
 }
 
-///| `filter_3800`.
+///|
+/// `filter_3800`.
 fn ape_filter_3800(
   p : ApePredictor32,
   decoded : Int32,
@@ -924,57 +989,62 @@ fn ape_filter_3800(
   }
   let d2 = p.historybuffer[p.buf + delay_a]
   let d1 = ape_i(
-      (ape_u(p.historybuffer[p.buf + delay_a]) - ape_u(
-          p.historybuffer[p.buf + delay_a - 1],
-        )) * 2,
-    )
+    (
+      ape_u(p.historybuffer[p.buf + delay_a]) -
+      ape_u(p.historybuffer[p.buf + delay_a - 1])
+    ) *
+    2,
+  )
   let d0 = ape_i(
-      ape_u(p.historybuffer[p.buf + delay_a]) +
-      ((ape_u(p.historybuffer[p.buf + delay_a - 2]) - ape_u(
-          p.historybuffer[p.buf + delay_a - 1],
-        )) * 8),
-    )
+    ape_u(p.historybuffer[p.buf + delay_a]) +
+    (
+      ape_u(p.historybuffer[p.buf + delay_a - 2]) -
+      ape_u(p.historybuffer[p.buf + delay_a - 1])
+    ) *
+    8,
+  )
   let d3 = ape_i(
-      ape_u(p.historybuffer[p.buf + delay_b]) * 2 - ape_u(
-        p.historybuffer[p.buf + delay_b - 1],
-      ),
-    )
+    ape_u(p.historybuffer[p.buf + delay_b]) * 2 -
+    ape_u(p.historybuffer[p.buf + delay_b - 1]),
+  )
   let d4 = p.historybuffer[p.buf + delay_b]
   let predictionA = ape_i(
-      ape_u(d0) * p.coeffsA[filter * 4] +
-      ape_u(d1) * p.coeffsA[filter * 4 + 1] +
-      ape_u(d2) * p.coeffsA[filter * 4 + 2],
-    )
+    ape_u(d0) * p.coeffsA[filter * 4] +
+    ape_u(d1) * p.coeffsA[filter * 4 + 1] +
+    ape_u(d2) * p.coeffsA[filter * 4 + 2],
+  )
   let sign = ape_sign(decoded)
   p.coeffsA[filter * 4] = ape_u(
-      ape_i(p.coeffsA[filter * 4]) + (((d0 >> 30) & 2) - 1) * sign,
-    )
+    ape_i(p.coeffsA[filter * 4]) + (((d0 >> 30) & 2) - 1) * sign,
+  )
   p.coeffsA[filter * 4 + 1] = ape_u(
-      ape_i(p.coeffsA[filter * 4 + 1]) + (((d1 >> 28) & 8) - 4) * sign,
-    )
+    ape_i(p.coeffsA[filter * 4 + 1]) + (((d1 >> 28) & 8) - 4) * sign,
+  )
   p.coeffsA[filter * 4 + 2] = ape_u(
-      ape_i(p.coeffsA[filter * 4 + 2]) + (((d2 >> 28) & 8) - 4) * sign,
-    )
+    ape_i(p.coeffsA[filter * 4 + 2]) + (((d2 >> 28) & 8) - 4) * sign,
+  )
   let predictionB = ape_i(
-      ape_u(d3) * p.coeffsB[filter * 5] - ape_u(d4) * p.coeffsB[filter * 5 + 1],
-    )
+    ape_u(d3) * p.coeffsB[filter * 5] - ape_u(d4) * p.coeffsB[filter * 5 + 1],
+  )
   p.lastA[filter] = decoded + (predictionA >> 11)
   let sign_b = ape_sign(p.lastA[filter])
   p.coeffsB[filter * 5] = ape_u(
-      ape_i(p.coeffsB[filter * 5]) + (((d3 >> 29) & 4) - 2) * sign_b,
-    )
+    ape_i(p.coeffsB[filter * 5]) + (((d3 >> 29) & 4) - 2) * sign_b,
+  )
   p.coeffsB[filter * 5 + 1] = ape_u(
-      ape_i(p.coeffsB[filter * 5 + 1]) - (((d4 >> 30) & 2) - 1) * sign_b,
-    )
-  p.filterB[filter] = ape_i(ape_u(p.lastA[filter]) + ape_u(predictionB >> shift))
+    ape_i(p.coeffsB[filter * 5 + 1]) - (((d4 >> 30) & 2) - 1) * sign_b,
+  )
+  p.filterB[filter] = ape_i(
+    ape_u(p.lastA[filter]) + ape_u(predictionB >> shift),
+  )
   p.filterA[filter] = ape_i(
-      ape_u(p.filterB[filter]) +
-      ape_u(ape_i(ape_u(p.filterA[filter]) * 31) >> 5),
-    )
+    ape_u(p.filterB[filter]) + ape_u(ape_i(ape_u(p.filterA[filter]) * 31) >> 5),
+  )
   p.filterA[filter]
 }
 
-///| `long_filter_high_3800`.
+///|
+/// `long_filter_high_3800`.
 fn ape_long_filter_high_3800(
   buffer : Array[Int32],
   order : Int32,
@@ -995,17 +1065,23 @@ fn ape_long_filter_high_3800(
     let sign = ape_sign(buffer[i])
     if sign == 1 {
       for j = 0; j < order; j = j + 1 {
-        dotprod = ape_i(ape_u(dotprod) + ape_u(delay[delayp + j]) * ape_u(coeffs[j]))
+        dotprod = ape_i(
+          ape_u(dotprod) + ape_u(delay[delayp + j]) * ape_u(coeffs[j]),
+        )
         coeffs[j] = coeffs[j] + ((delay[delayp + j] >> 31) | 1)
       }
     } else if sign == -1 {
       for j = 0; j < order; j = j + 1 {
-        dotprod = ape_i(ape_u(dotprod) + ape_u(delay[delayp + j]) * ape_u(coeffs[j]))
+        dotprod = ape_i(
+          ape_u(dotprod) + ape_u(delay[delayp + j]) * ape_u(coeffs[j]),
+        )
         coeffs[j] = coeffs[j] - ((delay[delayp + j] >> 31) | 1)
       }
     } else {
       for j = 0; j < order; j = j + 1 {
-        dotprod = ape_i(ape_u(dotprod) + ape_u(delay[delayp + j]) * ape_u(coeffs[j]))
+        dotprod = ape_i(
+          ape_u(dotprod) + ape_u(delay[delayp + j]) * ape_u(coeffs[j]),
+        )
       }
     }
     buffer[i] = ape_i(ape_u(buffer[i]) - ape_u(dotprod >> shift))
@@ -1020,7 +1096,8 @@ fn ape_long_filter_high_3800(
   }
 }
 
-///| `long_filter_ehigh_3830`, operating on `buffer[from..from+length)`.
+///|
+/// `long_filter_ehigh_3830`, operating on `buffer[from..from+length)`.
 fn ape_long_filter_ehigh_3830(
   buffer : Array[Int32],
   from : Int32,
@@ -1047,7 +1124,8 @@ fn ape_long_filter_ehigh_3830(
   }
 }
 
-///| Shared body of `predictor_decode_mono_3800` / `predictor_decode_stereo_3800`:
+///|
+/// Shared body of `predictor_decode_mono_3800` / `predictor_decode_stereo_3800`:
 /// long-filter preprocessing per compression level.
 fn ApeDecoder::predictor_3800_prefilters(
   self : ApeDecoder,
@@ -1084,7 +1162,8 @@ fn ApeDecoder::predictor_3800_prefilters(
   (start, shift)
 }
 
-///| `predictor_decode_stereo_3800`.
+///|
+/// `predictor_decode_stereo_3800`.
 fn ApeDecoder::predictor_decode_stereo_3800(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1119,7 +1198,8 @@ fn ApeDecoder::predictor_decode_stereo_3800(
   }
 }
 
-///| `predictor_decode_mono_3800`.
+///|
+/// `predictor_decode_mono_3800`.
 fn ApeDecoder::predictor_decode_mono_3800(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1132,7 +1212,13 @@ fn ApeDecoder::predictor_decode_mono_3800(
       ch.d0[i] = ape_filter_fast_3320(p, ch.d0[i], 0, ape_ydelaya)
     } else {
       ch.d0[i] = ape_filter_3800(
-        p, ch.d0[i], 0, ape_ydelaya, ape_ydelayb, start, shift,
+        p,
+        ch.d0[i],
+        0,
+        ape_ydelaya,
+        ape_ydelayb,
+        start,
+        shift,
       )
     }
     // Combined
@@ -1148,7 +1234,8 @@ fn ApeDecoder::predictor_decode_mono_3800(
   }
 }
 
-///| `predictor_update_3930`.
+///|
+/// `predictor_update_3930`.
 fn ape_predictor_update_3930(
   p : ApePredictor32,
   decoded : Int32,
@@ -1158,40 +1245,38 @@ fn ape_predictor_update_3930(
   p.historybuffer[p.buf + delay_a] = p.lastA[filter]
   let d0 = ape_u(p.historybuffer[p.buf + delay_a])
   let d1 = ape_u(p.historybuffer[p.buf + delay_a]) -
-      ape_u(p.historybuffer[p.buf + delay_a - 1])
+    ape_u(p.historybuffer[p.buf + delay_a - 1])
   let d2 = ape_u(p.historybuffer[p.buf + delay_a - 1]) -
-      ape_u(p.historybuffer[p.buf + delay_a - 2])
+    ape_u(p.historybuffer[p.buf + delay_a - 2])
   let d3 = ape_u(p.historybuffer[p.buf + delay_a - 2]) -
-      ape_u(p.historybuffer[p.buf + delay_a - 3])
+    ape_u(p.historybuffer[p.buf + delay_a - 3])
   let predictionA = ape_i(
-      d0 * p.coeffsA[filter * 4] +
-      d1 * p.coeffsA[filter * 4 + 1] +
-      d2 * p.coeffsA[filter * 4 + 2] +
-      d3 * p.coeffsA[filter * 4 + 3],
-    )
+    d0 * p.coeffsA[filter * 4] +
+    d1 * p.coeffsA[filter * 4 + 1] +
+    d2 * p.coeffsA[filter * 4 + 2] +
+    d3 * p.coeffsA[filter * 4 + 3],
+  )
   p.lastA[filter] = decoded + (predictionA >> 9)
   p.filterA[filter] = p.lastA[filter] +
     (ape_i(ape_u(p.filterA[filter]) * 31) >> 5)
   let sign = ape_sign(decoded)
   p.coeffsA[filter * 4] = ape_u(
-      ape_i(p.coeffsA[filter * 4]) + ((ape_i(d0) < 0).to_int() * 2 - 1) * sign,
-    )
+    ape_i(p.coeffsA[filter * 4]) + ((ape_i(d0) < 0).to_int() * 2 - 1) * sign,
+  )
   p.coeffsA[filter * 4 + 1] = ape_u(
-      ape_i(p.coeffsA[filter * 4 + 1]) +
-      ((ape_i(d1) < 0).to_int() * 2 - 1) * sign,
-    )
+    ape_i(p.coeffsA[filter * 4 + 1]) + ((ape_i(d1) < 0).to_int() * 2 - 1) * sign,
+  )
   p.coeffsA[filter * 4 + 2] = ape_u(
-      ape_i(p.coeffsA[filter * 4 + 2]) +
-      ((ape_i(d2) < 0).to_int() * 2 - 1) * sign,
-    )
+    ape_i(p.coeffsA[filter * 4 + 2]) + ((ape_i(d2) < 0).to_int() * 2 - 1) * sign,
+  )
   p.coeffsA[filter * 4 + 3] = ape_u(
-      ape_i(p.coeffsA[filter * 4 + 3]) +
-      ((ape_i(d3) < 0).to_int() * 2 - 1) * sign,
-    )
+    ape_i(p.coeffsA[filter * 4 + 3]) + ((ape_i(d3) < 0).to_int() * 2 - 1) * sign,
+  )
   p.filterA[filter]
 }
 
-///| `predictor_decode_stereo_3930`.
+///|
+/// `predictor_decode_stereo_3930`.
 fn ApeDecoder::predictor_decode_stereo_3930(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1217,7 +1302,8 @@ fn ApeDecoder::predictor_decode_stereo_3930(
   }
 }
 
-///| `predictor_decode_mono_3930`.
+///|
+/// `predictor_decode_mono_3930`.
 fn ApeDecoder::predictor_decode_mono_3930(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1241,12 +1327,14 @@ fn ApeDecoder::predictor_decode_mono_3930(
 // 64-bit predictor (fileversion >= 3950)
 // ---------------------------------------------------------------------------
 
-///| `APESIGN` in 64-bit.
+///|
+/// `APESIGN` in 64-bit.
 fn ape_sign64(x : Int64) -> Int64 {
   (x < 0L).to_int64() - (x > 0L).to_int64()
 }
 
-///| `predictor_update_filter`.
+///|
+/// `predictor_update_filter`.
 fn ape_predictor_update_filter(
   p : ApePredictor64,
   decoded : Int32,
@@ -1262,18 +1350,18 @@ fn ape_predictor_update_filter(
     p.historybuffer[p.buf + delay_a],
   )
   p.historybuffer[p.buf + delay_a - 1] = ape_i64(
-      ape_u64(p.historybuffer[p.buf + delay_a]) -
-      ape_u64(p.historybuffer[p.buf + delay_a - 1]),
-    )
+    ape_u64(p.historybuffer[p.buf + delay_a]) -
+    ape_u64(p.historybuffer[p.buf + delay_a - 1]),
+  )
   p.historybuffer[p.buf + adapt_a - 1] = ape_sign64(
     p.historybuffer[p.buf + delay_a - 1],
   )
   let mut predictionA = ape_i64(
-      ape_u64(p.historybuffer[p.buf + delay_a]) * p.coeffsA[filter * 4] +
-      ape_u64(p.historybuffer[p.buf + delay_a - 1]) * p.coeffsA[filter * 4 + 1] +
-      ape_u64(p.historybuffer[p.buf + delay_a - 2]) * p.coeffsA[filter * 4 + 2] +
-      ape_u64(p.historybuffer[p.buf + delay_a - 3]) * p.coeffsA[filter * 4 + 3],
-    )
+    ape_u64(p.historybuffer[p.buf + delay_a]) * p.coeffsA[filter * 4] +
+    ape_u64(p.historybuffer[p.buf + delay_a - 1]) * p.coeffsA[filter * 4 + 1] +
+    ape_u64(p.historybuffer[p.buf + delay_a - 2]) * p.coeffsA[filter * 4 + 2] +
+    ape_u64(p.historybuffer[p.buf + delay_a - 3]) * p.coeffsA[filter * 4 + 3],
+  )
   // Apply a scaled first-order filter compression
   p.historybuffer[p.buf + delay_b] = p.filterA[filter ^ 1] -
     (ape_i64(ape_u64(p.filterB[filter]) * 31UL) >> 5)
@@ -1281,20 +1369,20 @@ fn ape_predictor_update_filter(
     p.historybuffer[p.buf + delay_b],
   )
   p.historybuffer[p.buf + delay_b - 1] = ape_i64(
-      ape_u64(p.historybuffer[p.buf + delay_b]) -
-      ape_u64(p.historybuffer[p.buf + delay_b - 1]),
-    )
+    ape_u64(p.historybuffer[p.buf + delay_b]) -
+    ape_u64(p.historybuffer[p.buf + delay_b - 1]),
+  )
   p.historybuffer[p.buf + adapt_b - 1] = ape_sign64(
     p.historybuffer[p.buf + delay_b - 1],
   )
   p.filterB[filter] = p.filterA[filter ^ 1]
   let mut predictionB = ape_i64(
-      ape_u64(p.historybuffer[p.buf + delay_b]) * p.coeffsB[filter * 5] +
-      ape_u64(p.historybuffer[p.buf + delay_b - 1]) * p.coeffsB[filter * 5 + 1] +
-      ape_u64(p.historybuffer[p.buf + delay_b - 2]) * p.coeffsB[filter * 5 + 2] +
-      ape_u64(p.historybuffer[p.buf + delay_b - 3]) * p.coeffsB[filter * 5 + 3] +
-      ape_u64(p.historybuffer[p.buf + delay_b - 4]) * p.coeffsB[filter * 5 + 4],
-    )
+    ape_u64(p.historybuffer[p.buf + delay_b]) * p.coeffsB[filter * 5] +
+    ape_u64(p.historybuffer[p.buf + delay_b - 1]) * p.coeffsB[filter * 5 + 1] +
+    ape_u64(p.historybuffer[p.buf + delay_b - 2]) * p.coeffsB[filter * 5 + 2] +
+    ape_u64(p.historybuffer[p.buf + delay_b - 3]) * p.coeffsB[filter * 5 + 3] +
+    ape_u64(p.historybuffer[p.buf + delay_b - 4]) * p.coeffsB[filter * 5 + 4],
+  )
   if interim_mode < 1 {
     predictionA = predictionA.to_int().to_int64()
     predictionB = predictionB.to_int().to_int64()
@@ -1308,36 +1396,28 @@ fn ape_predictor_update_filter(
     (ape_i64(ape_u64(p.filterA[filter]) * 31UL) >> 5)
   let sign = ape_sign(decoded)
   p.coeffsA[filter * 4] = p.coeffsA[filter * 4] +
-    ape_u64(p.historybuffer[p.buf + adapt_a]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_a]) * ape_u64(sign.to_int64())
   p.coeffsA[filter * 4 + 1] = p.coeffsA[filter * 4 + 1] +
-    ape_u64(p.historybuffer[p.buf + adapt_a - 1]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_a - 1]) * ape_u64(sign.to_int64())
   p.coeffsA[filter * 4 + 2] = p.coeffsA[filter * 4 + 2] +
-    ape_u64(p.historybuffer[p.buf + adapt_a - 2]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_a - 2]) * ape_u64(sign.to_int64())
   p.coeffsA[filter * 4 + 3] = p.coeffsA[filter * 4 + 3] +
-    ape_u64(p.historybuffer[p.buf + adapt_a - 3]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_a - 3]) * ape_u64(sign.to_int64())
   p.coeffsB[filter * 5] = p.coeffsB[filter * 5] +
-    ape_u64(p.historybuffer[p.buf + adapt_b]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_b]) * ape_u64(sign.to_int64())
   p.coeffsB[filter * 5 + 1] = p.coeffsB[filter * 5 + 1] +
-    ape_u64(p.historybuffer[p.buf + adapt_b - 1]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_b - 1]) * ape_u64(sign.to_int64())
   p.coeffsB[filter * 5 + 2] = p.coeffsB[filter * 5 + 2] +
-    ape_u64(p.historybuffer[p.buf + adapt_b - 2]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_b - 2]) * ape_u64(sign.to_int64())
   p.coeffsB[filter * 5 + 3] = p.coeffsB[filter * 5 + 3] +
-    ape_u64(p.historybuffer[p.buf + adapt_b - 3]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_b - 3]) * ape_u64(sign.to_int64())
   p.coeffsB[filter * 5 + 4] = p.coeffsB[filter * 5 + 4] +
-    ape_u64(p.historybuffer[p.buf + adapt_b - 4]) *
-    ape_u64(sign.to_int64())
+    ape_u64(p.historybuffer[p.buf + adapt_b - 4]) * ape_u64(sign.to_int64())
   p.filterA[filter].to_int()
 }
 
-///| Deep copy for the C's struct assignment `p_interim = *p_default`.
+///|
+/// Deep copy for the C's struct assignment `p_interim = *p_default`.
 fn ape_predictor64_clone(p : ApePredictor64) -> ApePredictor64 {
   let q : ApePredictor64 = {
     historybuffer: FixedArray::make(p.historybuffer.length(), 0L),
@@ -1365,7 +1445,8 @@ fn ape_predictor64_clone(p : ApePredictor64) -> ApePredictor64 {
   q
 }
 
-///| `predictor_decode_stereo_3950`.
+///|
+/// `predictor_decode_stereo_3950`.
 fn ApeDecoder::predictor_decode_stereo_3950(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1391,12 +1472,24 @@ fn ApeDecoder::predictor_decode_stereo_3950(
     for i = 0; i < count; i = i + 1 {
       // Predictor Y
       let a0 = ape_predictor_update_filter(
-        p, d0[i], 0, ape_ydelaya, ape_ydelayb, ape_yadaptcoeffsa,
-        ape_yadaptcoeffsb, interim_mode,
+        p,
+        d0[i],
+        0,
+        ape_ydelaya,
+        ape_ydelayb,
+        ape_yadaptcoeffsa,
+        ape_yadaptcoeffsb,
+        interim_mode,
       )
       let a1 = ape_predictor_update_filter(
-        p, d1[i], 1, ape_xdelaya, ape_xdelayb, ape_xadaptcoeffsa,
-        ape_xadaptcoeffsb, interim_mode,
+        p,
+        d1[i],
+        1,
+        ape_xdelaya,
+        ape_xdelayb,
+        ape_xadaptcoeffsa,
+        ape_xadaptcoeffsb,
+        interim_mode,
       )
       d0[i] = a0
       d1[i] = a1
@@ -1446,7 +1539,8 @@ fn ApeDecoder::predictor_decode_stereo_3950(
   }
 }
 
-///| `predictor_decode_mono_3950`.
+///|
+/// `predictor_decode_mono_3950`.
 fn ApeDecoder::predictor_decode_mono_3950(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1459,15 +1553,15 @@ fn ApeDecoder::predictor_decode_mono_3950(
     let a = ch.d0[i]
     p.historybuffer[p.buf + ape_ydelaya] = currentA
     p.historybuffer[p.buf + ape_ydelaya - 1] = ape_i64(
-        ape_u64(p.historybuffer[p.buf + ape_ydelaya]) -
-        ape_u64(p.historybuffer[p.buf + ape_ydelaya - 1]),
-      )
+      ape_u64(p.historybuffer[p.buf + ape_ydelaya]) -
+      ape_u64(p.historybuffer[p.buf + ape_ydelaya - 1]),
+    )
     let predictionA = ape_i64(
-        ape_u64(p.historybuffer[p.buf + ape_ydelaya]) * p.coeffsA[0] +
-        ape_u64(p.historybuffer[p.buf + ape_ydelaya - 1]) * p.coeffsA[1] +
-        ape_u64(p.historybuffer[p.buf + ape_ydelaya - 2]) * p.coeffsA[2] +
-        ape_u64(p.historybuffer[p.buf + ape_ydelaya - 3]) * p.coeffsA[3],
-      )
+      ape_u64(p.historybuffer[p.buf + ape_ydelaya]) * p.coeffsA[0] +
+      ape_u64(p.historybuffer[p.buf + ape_ydelaya - 1]) * p.coeffsA[1] +
+      ape_u64(p.historybuffer[p.buf + ape_ydelaya - 2]) * p.coeffsA[2] +
+      ape_u64(p.historybuffer[p.buf + ape_ydelaya - 3]) * p.coeffsA[3],
+    )
     currentA = a.to_int64() + ape_u64(predictionA >> 10).reinterpret_as_int64()
     p.historybuffer[p.buf + ape_yadaptcoeffsa] = ape_sign64(
       p.historybuffer[p.buf + ape_ydelaya],
@@ -1506,7 +1600,8 @@ fn ApeDecoder::predictor_decode_mono_3950(
 // Filters (`do_init_filter` / `init_filter` / `do_apply_filter`)
 // ---------------------------------------------------------------------------
 
-///| `do_init_filter`.
+///|
+/// `do_init_filter`.
 fn ape_do_init_filter(f : ApeFilter) -> Unit {
   f.delay = f.order * 3
   f.adapt = f.order * 2
@@ -1519,20 +1614,22 @@ fn ape_do_init_filter(f : ApeFilter) -> Unit {
   f.avg = 0
 }
 
-///| `scalarproduct_and_madd_int16` (the C reference version).
+///|
+/// `scalarproduct_and_madd_int16` (the C reference version).
 fn ape_scalarproduct_and_madd_int16(f : ApeFilter, mul : Int32) -> Int32 {
   let mut res : UInt32 = 0
   for i = 0; i < f.order; i = i + 1 {
     let v1 = f.buf[i].to_int()
     let v2 = f.buf[f.delay - f.order + i].to_int()
     let v3 = f.buf[f.adapt - f.order + i].to_int()
-    res = res + (ape_u(v1) * ape_u(v2))
+    res = res + ape_u(v1) * ape_u(v2)
     f.buf[i] = Int16::from_int(v1 + v3 * mul)
   }
   ape_i(res)
 }
 
-///| `do_apply_filter`.
+///|
+/// `do_apply_filter`.
 fn ApeDecoder::do_apply_filter(
   self : ApeDecoder,
   f : ApeFilter,
@@ -1543,11 +1640,11 @@ fn ApeDecoder::do_apply_filter(
   let order = f.order
   for i = 0; i < count; i = i + 1 {
     // round fixedpoint scalar product
-    let mut res = (
-        (ape_scalarproduct_and_madd_int16(f, ape_sign(data[i])).to_int64() +
-        (1L << (fracbits - 1))) >>
-        fracbits
-      ).to_int()
+    let mut res = ((
+      ape_scalarproduct_and_madd_int16(f, ape_sign(data[i])).to_int64() +
+      (1L << (fracbits - 1))
+    ) >>
+    fracbits).to_int()
     res = ape_i(ape_u(res) + ape_u(data[i]))
     data[i] = res
     // Update the output history
@@ -1567,12 +1664,15 @@ fn ApeDecoder::do_apply_filter(
       let absres = if res < 0 { 0U - ape_u(res) } else { ape_u(res) }
       if absres != 0 {
         let m = ape_u(
-            ape_sign(res) *
-            ape_i(
-              8 << ((absres > f.avg * 3U).to_int() +
-                (absres > (f.avg + f.avg / 3U)).to_int()),
+          ape_sign(res) *
+          ape_i(
+            8 <<
+            (
+              (absres > f.avg * 3U).to_int() +
+              (absres > f.avg + f.avg / 3U).to_int()
             ),
-          )
+          ),
+        )
         f.buf[f.adapt] = Int16::from_int(ape_i(m))
       } else {
         f.buf[f.adapt] = 0
@@ -1594,7 +1694,8 @@ fn ApeDecoder::do_apply_filter(
   }
 }
 
-///| `ape_apply_filters`.
+///|
+/// `ape_apply_filters`.
 fn ApeDecoder::apply_filters(
   self : ApeDecoder,
   d0 : Array[Int32],
@@ -1614,7 +1715,8 @@ fn ApeDecoder::apply_filters(
   }
 }
 
-///| `init_frame_decoder`.
+///|
+/// `init_frame_decoder`.
 fn ApeDecoder::init_frame_decoder(self : ApeDecoder) -> Result[Unit, String] {
   match self.init_entropy_decoder() {
     Ok(_) => ()
@@ -1636,8 +1738,13 @@ fn ApeDecoder::init_frame_decoder(self : ApeDecoder) -> Result[Unit, String] {
 // Unpack + frame entry point
 // ---------------------------------------------------------------------------
 
-///| `ape_unpack_mono`.
-fn ApeDecoder::unpack_mono(self : ApeDecoder, ch : ApeChannels, count : Int32) -> Unit {
+///|
+/// `ape_unpack_mono`.
+fn ApeDecoder::unpack_mono(
+  self : ApeDecoder,
+  ch : ApeChannels,
+  count : Int32,
+) -> Unit {
   if (self.frameflags & ape_framecode_stereo_silence) != 0 {
     // We are pure silence, so we're done.
     return
@@ -1656,14 +1763,15 @@ fn ApeDecoder::unpack_mono(self : ApeDecoder, ch : ApeChannels, count : Int32) -
   }
 }
 
-///| `ape_unpack_stereo`.
+///|
+/// `ape_unpack_stereo`.
 fn ApeDecoder::unpack_stereo(
   self : ApeDecoder,
   ch : ApeChannels,
   count : Int32,
 ) -> Unit {
   if (self.frameflags & ape_framecode_stereo_silence) ==
-      ape_framecode_stereo_silence {
+    ape_framecode_stereo_silence {
     // We are pure silence, so we're done.
     return
   }
@@ -1682,7 +1790,8 @@ fn ApeDecoder::unpack_stereo(
   }
 }
 
-///| The entropy/predictor dispatch from `ape_decode_init`.
+///|
+/// The entropy/predictor dispatch from `ape_decode_init`.
 fn ApeDecoder::entropy_decode(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1700,7 +1809,8 @@ fn ApeDecoder::entropy_decode(
   }
 }
 
-///| Predictor dispatch (mono).
+///|
+/// Predictor dispatch (mono).
 fn ApeDecoder::predictor_decode_mono(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1715,7 +1825,8 @@ fn ApeDecoder::predictor_decode_mono(
   }
 }
 
-///| Predictor dispatch (stereo).
+///|
+/// Predictor dispatch (stereo).
 fn ApeDecoder::predictor_decode_stereo(
   self : ApeDecoder,
   ch : ApeChannels,
@@ -1730,7 +1841,8 @@ fn ApeDecoder::predictor_decode_stereo(
   }
 }
 
-///| `ape_decode_frame`: one `blocks_per_loop` chunk per call.  Feed the same
+///|
+/// `ape_decode_frame`: one `blocks_per_loop` chunk per call.  Feed the same
 /// packet repeatedly until `packet_done` turns true (the C's decode-API
 /// loop).  On a mid-packet decode error the packet is dropped (`samples`
 /// resets), exactly like the C's error path.
@@ -1796,10 +1908,10 @@ pub fn ApeDecoder::decode_frame(
     return Err("ape: no frame data")
   }
   let mut blockstodecode = if self.blocks_per_loop < self.samples {
-      self.blocks_per_loop
-    } else {
-      self.samples
-    }
+    self.blocks_per_loop
+  } else {
+    self.samples
+  }
   // for old files coefficients were not interleaved,
   // so we need to decode all of them at once
   if self.fileversion < 3930 {
@@ -1835,7 +1947,12 @@ pub fn ApeDecoder::decode_frame(
   }
   self.samples = self.samples - blockstodecode
   Ok({
-    frame: { bps: self.bps, channels: self.channels, nb_samples: blockstodecode, samples },
+    frame: {
+      bps: self.bps,
+      channels: self.channels,
+      nb_samples: blockstodecode,
+      samples,
+    },
     packet_done: self.samples == 0,
   })
 }

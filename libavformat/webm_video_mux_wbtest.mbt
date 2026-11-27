@@ -34,7 +34,7 @@ test "webm muxer: invalid VP9 parameters are rejected" {
     Err(_) => ()
   }
   let mux = webm_vp9_muxer_new(64, 48).unwrap()
-  match mux.write_packet(Bytes::new(0)) {
+  match mux.write_packet(Bytes::make(0, b'\x00')) {
     Ok(_) => fail("empty packet must fail")
     Err(_) => ()
   }

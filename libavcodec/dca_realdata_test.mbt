@@ -6,6 +6,7 @@
 /// stripped to a raw elementary stream). The fixed-point decode
 /// of the same build (`-bitexact -f s32le`) is the reference,
 /// matched by MD5 over the interleaved PCM.
+
 ///|
 let dca_fixtures : Array[(String, Array[Bytes], Int32, Int32, Int32, String)] = [
   // dcaenc_stereo_44k
@@ -172,7 +173,7 @@ test "dca: LE16 and both 14-bit packings preserve FFmpeg reference PCM" {
   let be14_frames = []
   assert_eq(data.length(), count / 512 * 2048)
   for pos in 0..<(data.length() / 2048) {
-    be14_frames.push(dca_test_repack14(data[pos * 2048 : (pos + 1) * 2048]))
+    be14_frames.push(dca_test_repack14(data[pos * 2048:(pos + 1) * 2048]))
   }
   let be14 = dca_concat(be14_frames)
   let inputs = [
@@ -192,8 +193,8 @@ test "dca: LE16 and both 14-bit packings preserve FFmpeg reference PCM" {
     assert_eq(dca_md5(audio.pcm_bytes()), want_md5)
     let decoder = @libavcodec.DcaCoreDecoder::new()
     assert_true(
-      decoder.decode_packet(stream[:frame_bytes - 1].to_owned()) is
-      Err("dca: truncated packed word"),
+      decoder.decode_packet(stream[:frame_bytes - 1].to_owned())
+      is Err("dca: truncated packed word"),
     )
   }
 }

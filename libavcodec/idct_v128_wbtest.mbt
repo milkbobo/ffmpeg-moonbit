@@ -71,12 +71,12 @@ test "idct simd: 8x8 transpose is an involution" {
   let buf = idct_block_to_bytes(block)
   let rows : Array[V128] = []
   for r = 0; r < 8; r = r + 1 {
-    rows.push(@v128.v128_load(buf, r * 16))
+    rows.push(@simd.v128_load(buf, r * 16))
   }
   let twice = idct_transpose(idct_transpose(rows))
   let out : FixedArray[Byte] = FixedArray::make(128, b'\x00')
   for r = 0; r < 8; r = r + 1 {
-    @v128.v128_store(out, r * 16, twice[r])
+    @simd.v128_store(out, r * 16, twice[r])
   }
   assert_eq(idct_bytes_to_block(out), block)
 }

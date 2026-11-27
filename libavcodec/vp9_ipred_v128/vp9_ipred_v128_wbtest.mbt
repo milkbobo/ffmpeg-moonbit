@@ -14,32 +14,46 @@
 
 ///|
 let ir_dc : Int32 = 0
+
 ///|
 let ir_v : Int32 = 1
+
 ///|
 let ir_h : Int32 = 2
+
 ///|
 let ir_dl : Int32 = 3
+
 ///|
 let ir_dr : Int32 = 4
+
 ///|
 let ir_vr : Int32 = 5
+
 ///|
 let ir_hd : Int32 = 6
+
 ///|
 let ir_vl : Int32 = 7
+
 ///|
 let ir_hu : Int32 = 8
+
 ///|
 let ir_tm : Int32 = 9
+
 ///|
 let ir_left_dc : Int32 = 10
+
 ///|
 let ir_top_dc : Int32 = 11
+
 ///|
 let ir_dc_128 : Int32 = 12
+
 ///|
 let ir_dc_127 : Int32 = 13
+
 ///|
 let ir_dc_255 : Int32 = 14
 
@@ -337,7 +351,9 @@ test "vp9 ipred v128: extreme edge values clip symmetrically" {
         let base = ir_gen(0xABCDEF01U, plane_n, pixel_max)
         let e1 = ir_copy(base)
         let e2 = ir_copy(base)
-        ir_intra_pred(n, ir_tm, e1, off, stride, left, top, pixel_mid, pixel_max)
+        ir_intra_pred(
+          n, ir_tm, e1, off, stride, left, top, pixel_mid, pixel_max,
+        )
         vp9_intra_pred_v128(
           n, ir_tm, e2, off, stride, left, top, pixel_mid, pixel_max,
         )

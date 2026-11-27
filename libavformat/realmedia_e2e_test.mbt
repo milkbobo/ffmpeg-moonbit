@@ -35,7 +35,7 @@ fn rm_e2e_compare(
   rows : Array[Array[Double]],
   reference_b64 : Bytes,
   from : Int32,
-  tolerance : Int,
+  tolerance : Int32,
   label : String,
 ) -> Unit raise {
   let channels = rows.length()
@@ -47,8 +47,9 @@ fn rm_e2e_compare(
   for i = 0; i < count; i = i + 1 {
     for ch = 0; ch < channels; ch = ch + 1 {
       let k = (i * channels + ch) * 2
-      let expected =
-        ((reference[k].to_int() | (reference[k + 1].to_int() << 8)) << 16) >> 16
+      let expected = (reference[k].to_int() | (reference[k + 1].to_int() << 8)) <<
+        16 >>
+        16
       let actual = (rows[ch][from + i] * 32768.0)
         .round()
         .clamp(min=-32768.0, max=32767.0)
@@ -78,7 +79,7 @@ fn rm_e2e_check(
   sample_count : Int32,
   duration : Double,
   read_error : Bool,
-  tolerance : Int,
+  tolerance : Int32,
   head : Bytes,
   tail : Bytes,
   tail_from : Int32,
@@ -99,6 +100,7 @@ fn rm_e2e_check(
   rm_e2e_compare(audio.samples(), head, 0, tolerance, label)
   rm_e2e_compare(audio.samples(), tail, tail_from, tolerance, label)
 }
+
 ///|
 let rm_e2e_ra144_b64 : Bytes = rm_e2e_concat([
   b"LlJNRgAAABIAAAAAAAAAAAAFUFJPUAAAADIAAAAAH0AAAB9AAAAA8AAAAPAAAEGCAD1qWAAAAAAAAAAAAAABbQABAABDT05UAAAAXQAAAB5BbGwgVGhpbmdz" +
@@ -647,18 +649,8 @@ let rm_e2e_ra144_tail : Bytes = rm_e2e_concat([
 /// ffprobe duration 4024.92 s, demuxer error at the end: false.
 test "RealMedia E2E: ra144 (ra_144) matches the reference decode" {
   rm_e2e_check(
-    rm_e2e_ra144_b64,
-    "ra_144",
-    8000,
-    1,
-    184320,
-    4024.92,
-    false,
-    0,
-    rm_e2e_ra144_head,
-    rm_e2e_ra144_tail,
-    180480,
-    "ra144",
+    rm_e2e_ra144_b64, "ra_144", 8000, 1, 184320, 4024.92, false, 0, rm_e2e_ra144_head,
+    rm_e2e_ra144_tail, 180480, "ra144",
   )
 }
 
@@ -976,18 +968,8 @@ let rm_e2e_ra288_tail : Bytes = rm_e2e_concat([
 /// ffprobe duration 5343.84 s, demuxer error at the end: false.
 test "RealMedia E2E: ra288 (ra_288) matches the reference decode" {
   rm_e2e_check(
-    rm_e2e_ra288_b64,
-    "ra_288",
-    8000,
-    1,
-    92160,
-    5343.84,
-    false,
-    1,
-    rm_e2e_ra288_head,
-    rm_e2e_ra288_tail,
-    91840,
-    "ra288",
+    rm_e2e_ra288_b64, "ra_288", 8000, 1, 92160, 5343.84, false, 1, rm_e2e_ra288_head,
+    rm_e2e_ra288_tail, 91840, "ra288",
   )
 }
 
@@ -1557,18 +1539,8 @@ let rm_e2e_cook_tail : Bytes = rm_e2e_concat([
 /// ffprobe duration 16.716 s, demuxer error at the end: false.
 test "RealMedia E2E: cook (cook) matches the reference decode" {
   rm_e2e_check(
-    rm_e2e_cook_b64,
-    "cook",
-    44100,
-    2,
-    79872,
-    16.716,
-    false,
-    1,
-    rm_e2e_cook_head,
-    rm_e2e_cook_tail,
-    77824,
-    "cook",
+    rm_e2e_cook_b64, "cook", 44100, 2, 79872, 16.716, false, 1, rm_e2e_cook_head,
+    rm_e2e_cook_tail, 77824, "cook",
   )
 }
 
@@ -2195,18 +2167,8 @@ let rm_e2e_sipr5k0_tail : Bytes = rm_e2e_concat([
 /// ffprobe duration 20.114 s, demuxer error at the end: false.
 test "RealMedia E2E: sipr5k0 (sipr) matches the reference decode" {
   rm_e2e_check(
-    rm_e2e_sipr5k0_b64,
-    "sipr",
-    8000,
-    1,
-    161280,
-    20.114,
-    false,
-    1,
-    rm_e2e_sipr5k0_head,
-    rm_e2e_sipr5k0_tail,
-    160320,
-    "sipr5k0",
+    rm_e2e_sipr5k0_b64, "sipr", 8000, 1, 161280, 20.114, false, 1, rm_e2e_sipr5k0_head,
+    rm_e2e_sipr5k0_tail, 160320, "sipr5k0",
   )
 }
 
@@ -2540,18 +2502,8 @@ let rm_e2e_sipr6k5_tail : Bytes = rm_e2e_concat([
 /// ffprobe duration 485.569 s, demuxer error at the end: true.
 test "RealMedia E2E: sipr6k5 (sipr) matches the reference decode" {
   rm_e2e_check(
-    rm_e2e_sipr6k5_b64,
-    "sipr",
-    8000,
-    1,
-    27648,
-    485.569,
-    true,
-    1,
-    rm_e2e_sipr6k5_head,
-    rm_e2e_sipr6k5_tail,
-    27072,
-    "sipr6k5",
+    rm_e2e_sipr6k5_b64, "sipr", 8000, 1, 27648, 485.569, true, 1, rm_e2e_sipr6k5_head,
+    rm_e2e_sipr6k5_tail, 27072, "sipr6k5",
   )
 }
 
@@ -2866,18 +2818,8 @@ let rm_e2e_sipr8k5_tail : Bytes = rm_e2e_concat([
 /// ffprobe duration 143.103 s, demuxer error at the end: false.
 test "RealMedia E2E: sipr8k5 (sipr) matches the reference decode" {
   rm_e2e_check(
-    rm_e2e_sipr8k5_b64,
-    "sipr",
-    8000,
-    1,
-    41472,
-    143.103,
-    false,
-    1,
-    rm_e2e_sipr8k5_head,
-    rm_e2e_sipr8k5_tail,
-    41184,
-    "sipr8k5",
+    rm_e2e_sipr8k5_b64, "sipr", 8000, 1, 41472, 143.103, false, 1, rm_e2e_sipr8k5_head,
+    rm_e2e_sipr8k5_tail, 41184, "sipr8k5",
   )
 }
 
@@ -3195,18 +3137,8 @@ let rm_e2e_sipr16k_tail : Bytes = rm_e2e_concat([
 /// ffprobe duration 184.32 s, demuxer error at the end: false.
 test "RealMedia E2E: sipr16k (sipr) matches the reference decode" {
   rm_e2e_check(
-    rm_e2e_sipr16k_b64,
-    "sipr",
-    16000,
-    1,
-    138240,
-    184.32,
-    false,
-    1,
-    rm_e2e_sipr16k_head,
-    rm_e2e_sipr16k_tail,
-    137920,
-    "sipr16k",
+    rm_e2e_sipr16k_b64, "sipr", 16000, 1, 138240, 184.32, false, 1, rm_e2e_sipr16k_head,
+    rm_e2e_sipr16k_tail, 137920, "sipr16k",
   )
 }
 

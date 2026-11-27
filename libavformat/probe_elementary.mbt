@@ -71,15 +71,17 @@ fn probe_complete_short_adts(buf : Bytes) -> Bool {
     if (pb_be16(buf, pos) & 0xFFF6_U) != 0xFFF0_U {
       return false
     }
-    let header = match @libavcodec.ff_adts_header_parse_buf(
-      buf[pos:pos + @libavcodec.av_aac_adts_header_size].to_owned(),
-    ) {
+    let header = match
+      @libavcodec.ff_adts_header_parse_buf(
+        buf[pos:pos + @libavcodec.av_aac_adts_header_size].to_owned(),
+      ) {
       Ok(v) => v
       Err(_) => return false
     }
     let header_size = @libavcodec.av_aac_adts_header_size +
       (if header.crc_absent == 0 { 2 } else { 0 })
-    if header.frame_length <= header_size || header.frame_length > buf.length() - pos {
+    if header.frame_length <= header_size ||
+      header.frame_length > buf.length() - pos {
       return false
     }
     pos += header.frame_length
@@ -113,7 +115,8 @@ fn probe_loas(pd : ProbeData) -> Int32 {
     }
     pos += size + 3
   }
-  if frames > 0 && pos == data.length() &&
+  if frames > 0 &&
+    pos == data.length() &&
     @libavcodec.latm_parse_stream(data) is Ok({ frames: [_, ..], .. }) {
     probe_score_extension / 2
   } else {

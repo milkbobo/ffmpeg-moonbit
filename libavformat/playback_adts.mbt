@@ -25,20 +25,35 @@ fn playback_open_adts(data : Bytes) -> MediaFile raise MediaError {
 }
 
 ///|
-fn playback_adts_config(data : Bytes, first : RawAudioFrame) -> (Bytes, Int32, Int32) raise MediaError {
+fn playback_adts_config(
+  data : Bytes,
+  first : RawAudioFrame,
+) -> (Bytes, Int32, Int32) raise MediaError {
   let pos = first.pos.to_int()
-  playback_adts_packet_config(data[pos:pos + first.size].to_owned(), first.duration)
+  playback_adts_packet_config(
+    data[pos:pos + first.size].to_owned(),
+    first.duration,
+  )
 }
 
 ///|
-fn playback_adts_packet_config(packet : Bytes, duration : Int, asc? : Bytes) -> (Bytes, Int, Int) raise MediaError {
+fn playback_adts_packet_config(
+  packet : Bytes,
+  duration : Int32,
+  asc? : Bytes,
+) -> (Bytes, Int32, Int32) raise MediaError {
   let header = match @libavcodec.ff_adts_header_parse_buf(packet) {
     Ok(v) => v
     Err(e) => raise DemuxError(e)
   }
   let asc = match asc {
     Some(asc) => asc
-    None => ts_adts_to_asc(header.object_type, header.sampling_index, header.chan_config)
+    None =>
+      ts_adts_to_asc(
+        header.object_type,
+        header.sampling_index,
+        header.chan_config,
+      )
   }
   // The ADTS header describes the AAC core. Decode the first access unit to
   // detect implicit SBR/PS and determine the presentation sample rate/layout.
@@ -59,13 +74,26 @@ fn playback_adts_packet_config(packet : Bytes, duration : Int, asc? : Bytes) -> 
 }
 
 ///|
-fn playback_adts_stream_info(info : StreamInfo, coded : Result[Bytes, String], asc? : Bytes) -> StreamInfo raise MediaError {
+fn playback_adts_stream_info(
+  info : StreamInfo,
+  coded : Result[Bytes, String],
+  asc? : Bytes,
+) -> StreamInfo raise MediaError {
   let packet = match coded {
     Ok(packet) => packet
     Err(e) => raise DemuxError(e)
   }
-  let (asc, multiplier, channels) = playback_adts_packet_config(packet, 1024, asc?)
+  let (asc, multiplier, channels) = playback_adts_packet_config(
+    packet,
+    1024,
+    asc?,
+  )
   // Packet timestamps, when present, keep the AAC core time base. Stream
   // metadata describes the decoded output, which can have twice the core rate.
-  { ..info, sample_rate: info.sample_rate * multiplier, channels, extradata: Some(asc) }
+  {
+    ..info,
+    sample_rate: info.sample_rate * multiplier,
+    channels,
+    extradata: Some(asc),
+  }
 }

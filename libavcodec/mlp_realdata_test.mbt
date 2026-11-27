@@ -3,8 +3,11 @@
 /// reference build, native mlp / truehd encoders from deterministic lavfi
 /// sources). The references are FFmpeg decodes to s16le / s32le, matched
 /// by MD5 of the interleaved PCM.
+
 ///|
-let mlp_fixtures : Array[(String, Array[Bytes], Bool, Int32, Int32, Int32, Int32, String)] = [
+let mlp_fixtures : Array[
+  (String, Array[Bytes], Bool, Int32, Int32, Int32, Int32, String),
+] = [
   // thd_stereo_48k_s24 — 300 access units
   (
     "thd_stereo_48k_s24",

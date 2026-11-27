@@ -43,7 +43,7 @@
 /// Load four `i32x4` lanes. */
 #cfg(any(target="native", target="wasm"))
 fn ldv_load4(a : Array[Int32], at : Int32) -> V128 {
-  @v128.i32x4_const(
+  @simd.i32x4_const(
     a[at].reinterpret_as_uint(),
     a[at + 1].reinterpret_as_uint(),
     a[at + 2].reinterpret_as_uint(),
@@ -57,7 +57,7 @@ fn ldv_load4(a : Array[Int32], at : Int32) -> V128 {
 fn ldv_store4(a : Array[Int32], at : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    a[at + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    a[at + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }
@@ -78,7 +78,7 @@ pub fn flac_decorrelate_indep_v128(
     ldv_store4(
       out,
       out_off + i,
-      @v128.i32x4_shl(ldv_load4(in0, in_off + i), shift),
+      @simd.i32x4_shl(ldv_load4(in0, in_off + i), shift),
     )
     i = i + 4
   }
@@ -107,8 +107,8 @@ pub fn flac_decorrelate_ls_v128(
   while i + 4 <= len {
     let a = ldv_load4(in0, i0 + i)
     let b = ldv_load4(in1, i1 + i)
-    ldv_store4(out0, o0 + i, @v128.i32x4_shl(a, shift))
-    ldv_store4(out1, o1 + i, @v128.i32x4_shl(@v128.i32x4_sub(a, b), shift))
+    ldv_store4(out0, o0 + i, @simd.i32x4_shl(a, shift))
+    ldv_store4(out1, o1 + i, @simd.i32x4_shl(@simd.i32x4_sub(a, b), shift))
     i = i + 4
   }
   while i < len {
@@ -139,8 +139,8 @@ pub fn flac_decorrelate_rs_v128(
   while i + 4 <= len {
     let a = ldv_load4(in0, i0 + i)
     let b = ldv_load4(in1, i1 + i)
-    ldv_store4(out0, o0 + i, @v128.i32x4_shl(@v128.i32x4_add(a, b), shift))
-    ldv_store4(out1, o1 + i, @v128.i32x4_shl(b, shift))
+    ldv_store4(out0, o0 + i, @simd.i32x4_shl(@simd.i32x4_add(a, b), shift))
+    ldv_store4(out1, o1 + i, @simd.i32x4_shl(b, shift))
     i = i + 4
   }
   while i < len {
@@ -174,9 +174,9 @@ pub fn flac_decorrelate_ms_v128(
     let a0 = ldv_load4(in0, i0 + i)
     let b = ldv_load4(in1, i1 + i)
     // a -= b >> 1  (arithmetic shift on the signed b, then wrapping sub)
-    let a = @v128.i32x4_sub(a0, @v128.i32x4_shr_s(b, 1))
-    ldv_store4(out0, o0 + i, @v128.i32x4_shl(@v128.i32x4_add(a, b), shift))
-    ldv_store4(out1, o1 + i, @v128.i32x4_shl(a, shift))
+    let a = @simd.i32x4_sub(a0, @simd.i32x4_shr_s(b, 1))
+    ldv_store4(out0, o0 + i, @simd.i32x4_shl(@simd.i32x4_add(a, b), shift))
+    ldv_store4(out1, o1 + i, @simd.i32x4_shl(a, shift))
     i = i + 4
   }
   while i < len {
@@ -207,23 +207,20 @@ pub fn flac_lpc32_v128(
 ) -> Unit {
   let mut i = pred_order
   while i < blocksize {
-    let mut acc = @v128.i64x2_splat(0UL)
+    let mut acc = @simd.i64x2_splat(0UL)
     let mut j = 0
     while j + 2 <= pred_order {
-      let d = @v128.i64x2_const(
-        (coeffs[j].to_int64() * decoded[i - pred_order + j].to_int64())
-          .reinterpret_as_uint64(),
-        (coeffs[j + 1].to_int64() * decoded[i - pred_order + j + 1].to_int64())
-          .reinterpret_as_uint64(),
+      let d = @simd.i64x2_const(
+        (coeffs[j].to_int64() * decoded[i - pred_order + j].to_int64()).reinterpret_as_uint64(),
+        (coeffs[j + 1].to_int64() * decoded[i - pred_order + j + 1].to_int64()).reinterpret_as_uint64(),
       )
-      acc = @v128.i64x2_add(acc, d)
+      acc = @simd.i64x2_add(acc, d)
       j = j + 2
     }
-    let mut sum : Int64 = @v128.i64x2_extract_lane(acc, 0).reinterpret_as_int64() +
-      @v128.i64x2_extract_lane(acc, 1).reinterpret_as_int64()
+    let mut sum : Int64 = @simd.i64x2_extract_lane(acc, 0).reinterpret_as_int64() +
+      @simd.i64x2_extract_lane(acc, 1).reinterpret_as_int64()
     while j < pred_order {
-      sum = sum +
-        coeffs[j].to_int64() * decoded[i - pred_order + j].to_int64()
+      sum = sum + coeffs[j].to_int64() * decoded[i - pred_order + j].to_int64()
       j = j + 1
     }
     decoded[i] = (decoded[i].to_int64() + (sum >> qlevel)).to_int()
@@ -266,19 +263,15 @@ pub fn ac3_float_to_fixed24_v128(
   src : Array[Float],
   len : Int32,
 ) -> Unit {
-  let scale = @v128.f32x4_splat(16777216.0)
-  let lo = @v128.i32x4_splat((0 - 8388608).reinterpret_as_uint())
-  let hi = @v128.i32x4_splat(8388607)
+  let scale = @simd.f32x4_splat(16777216.0)
+  let lo = @simd.i32x4_splat((0 - 8388608).reinterpret_as_uint())
+  let hi = @simd.i32x4_splat(8388607)
   let mut i = 0
   while i + 4 <= len {
-    let f = @v128.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
-    let r = @v128.f32x4_nearest(@v128.f32x4_mul(f, scale))
-    let c = @v128.i32x4_trunc_sat_f32x4_s(r)
-    ldv_store4(
-      dst,
-      i,
-      @v128.i32x4_min_s(@v128.i32x4_max_s(c, lo), hi),
-    )
+    let f = @simd.f32x4_const(src[i], src[i + 1], src[i + 2], src[i + 3])
+    let r = @simd.f32x4_nearest(@simd.f32x4_mul(f, scale))
+    let c = @simd.i32x4_trunc_sat_f32x4_s(r)
+    ldv_store4(dst, i, @simd.i32x4_min_s(@simd.i32x4_max_s(c, lo), hi))
     i = i + 4
   }
   while i < len {

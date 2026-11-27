@@ -25,7 +25,11 @@ fn drl_tex_plane(w : Int32, h : Int32, salt : Int32) -> FixedArray[Int32] {
 /// 1/8-pel), every other SB moves by (dx=8, dy=-8) (mv (64, -64)). Each
 /// SB is an exact MC match (clamped construction mirrors the kernel's
 /// clamped reads), so ME recovers the exact mvs.
-fn drl_mixed_y(ref_y : FixedArray[Int32], w : Int32, h : Int32) -> FixedArray[Int32] {
+fn drl_mixed_y(
+  ref_y : FixedArray[Int32],
+  w : Int32,
+  h : Int32,
+) -> FixedArray[Int32] {
   let out : FixedArray[Int32] = FixedArray::make(w * h, 0)
   let clamp = fn(v : Int32, n : Int32) -> Int32 {
     if v < 0 {
@@ -175,11 +179,9 @@ test "av1 drl: both streams decode pixel-exact" {
     uv_stride: cw,
     v: drl_tex_plane(cw, ch, 5),
   }
-  let run = fn(drl : Bool) -> (
-    @libavcodec.Av1Decoder,
-    @libavcodec.Av1EncPlanes,
-    Bytes,
-  ) raise {
+  let run = fn(
+    drl : Bool,
+  ) -> (@libavcodec.Av1Decoder, @libavcodec.Av1EncPlanes, Bytes) raise {
     let enc = @libavcodec.Av1Encoder::new(
       @libavcodec.Av1SeqEncConfig::default(width=w, height=h),
     )

@@ -105,7 +105,10 @@ fn dca_vlc_build(
     syms.push(src[(off + i) * 2] + offset)
     acc = acc + (1 << (32 - len))
   }
-  { nodes: FixedArray::from_array(children), syms: FixedArray::from_array(syms) }
+  {
+    nodes: FixedArray::from_array(children),
+    syms: FixedArray::from_array(syms),
+  }
 }
 
 ///|
@@ -133,7 +136,10 @@ let dca_vlc_quant_index : FixedArray[DcaVlcBook] = {
   let group_size = dca_quant_index_group_size
   let sizes = dca_bitalloc_sizes
   let offsets = dca_bitalloc_offsets
-  let books : FixedArray[DcaVlcBook] = FixedArray::make(48, dca_vlc_book_empty())
+  let books : FixedArray[DcaVlcBook] = FixedArray::make(
+    48,
+    dca_vlc_book_empty(),
+  )
   let mut src_off = 0
   let mut book = 0
   for i = 0; i < 10; i = i + 1 {
@@ -195,7 +201,7 @@ fn dca_vlc_segment_offset(seg : Int32) -> Int32 {
 
 ///|
 fn dca_vlc_book_empty() -> DcaVlcBook {
-  { nodes: FixedArray::make(2, -1), syms: FixedArray::make(1, 0) }
+  { nodes: FixedArray::make(2, -1), syms: FixedArray::make(1, 0), }
 }
 
 ///|
@@ -233,17 +239,15 @@ fn dca_core_dequantize(
 ) -> Unit {
   let mut step_scale : Int64 = step_size.to_int64() * scale.to_int64()
   let mut shift = 0
-  if step_scale > (1 << 23) {
+  if step_scale > 1 << 23 {
     shift = dca_log2((step_scale >> 23).to_int()) + 1
     step_scale = step_scale >> shift
   }
   if residual {
     for n = 0; n < len; n = n + 1 {
       output[out_off + n] = dca_clip23(
-        output[out_off + n] + dca_norm(
-          input[n].to_int64() * step_scale,
-          22 - shift,
-        ),
+        output[out_off + n] +
+        dca_norm(input[n].to_int64() * step_scale, 22 - shift),
       )
     }
   } else {
@@ -328,8 +332,10 @@ fn dca_lfe_fir_fixed(
       let mut a : Int64 = 0
       let mut b : Int64 = 0
       for k = 0; k < 8; k = k + 1 {
-        a += coeff[j * 8 + k].to_int64() * lfe_samples[lfe_off + i - k].to_int64()
-        b += coeff[255 - j * 8 - k].to_int64() * lfe_samples[lfe_off + i - k].to_int64()
+        a += coeff[j * 8 + k].to_int64() *
+          lfe_samples[lfe_off + i - k].to_int64()
+        b += coeff[255 - j * 8 - k].to_int64() *
+          lfe_samples[lfe_off + i - k].to_int64()
       }
       pcm[pcm_off + i * 64 + j] = dca_clip23(dca_norm23(a))
       pcm[pcm_off + i * 64 + 32 + j] = dca_clip23(dca_norm23(b))
@@ -355,14 +361,26 @@ fn dca_butterflies_fixed(
 // Fixed-point half IMDCT (dcadct.c)
 
 ///|
-fn dca_dct_sum_a(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32, len : Int32) -> Unit {
+fn dca_dct_sum_a(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+  len : Int32,
+) -> Unit {
   for i = 0; i < len; i = i + 1 {
     output[out_off + i] = input[in_off + 2 * i] + input[in_off + 2 * i + 1]
   }
 }
 
 ///|
-fn dca_dct_sum_b(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32, len : Int32) -> Unit {
+fn dca_dct_sum_b(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+  len : Int32,
+) -> Unit {
   output[out_off] = input[in_off]
   for i = 1; i < len; i = i + 1 {
     output[out_off + i] = input[in_off + 2 * i] + input[in_off + 2 * i - 1]
@@ -370,14 +388,26 @@ fn dca_dct_sum_b(input : FixedArray[Int32], in_off : Int32, output : FixedArray[
 }
 
 ///|
-fn dca_dct_sum_c(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32, len : Int32) -> Unit {
+fn dca_dct_sum_c(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+  len : Int32,
+) -> Unit {
   for i = 0; i < len; i = i + 1 {
     output[out_off + i] = input[in_off + 2 * i]
   }
 }
 
 ///|
-fn dca_dct_sum_d(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32, len : Int32) -> Unit {
+fn dca_dct_sum_d(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+  len : Int32,
+) -> Unit {
   output[out_off] = input[in_off + 1]
   for i = 1; i < len; i = i + 1 {
     output[out_off + i] = input[in_off + 2 * i - 1] + input[in_off + 2 * i + 1]
@@ -386,17 +416,23 @@ fn dca_dct_sum_d(input : FixedArray[Int32], in_off : Int32, output : FixedArray[
 
 ///|
 let dca_dct_a_cos : FixedArray[Int32] = [
-  8348215, 8027397, 7398092, 6484482, 5321677, 3954362, 2435084, 822227, 8027397, 5321677, 822227,
-  -3954362, -7398092, -8348215, -6484482, -2435084, 7398092, 822227, -6484482, -8027397, -2435084,
-  5321677, 8348215, 3954362, 6484482, -3954362, -8027397, 822227, 8348215, 2435084, -7398092,
-  -5321677, 5321677, -7398092, -2435084, 8348215, -822227, -8027397, 3954362, 6484482, 3954362,
-  -8348215, 5321677, 2435084, -8027397, 6484482, 822227, -7398092, 2435084, -6484482, 8348215,
-  -7398092, 3954362, 822227, -5321677, 8027397, 822227, -2435084, 3954362, -5321677, 6484482,
-  -7398092, 8027397, -8348215,
+  8348215, 8027397, 7398092, 6484482, 5321677, 3954362, 2435084, 822227, 8027397,
+  5321677, 822227, -3954362, -7398092, -8348215, -6484482, -2435084, 7398092, 822227,
+  -6484482, -8027397, -2435084, 5321677, 8348215, 3954362, 6484482, -3954362, -8027397,
+  822227, 8348215, 2435084, -7398092, -5321677, 5321677, -7398092, -2435084, 8348215,
+  -822227, -8027397, 3954362, 6484482, 3954362, -8348215, 5321677, 2435084, -8027397,
+  6484482, 822227, -7398092, 2435084, -6484482, 8348215, -7398092, 3954362, 822227,
+  -5321677, 8027397, 822227, -2435084, 3954362, -5321677, 6484482, -7398092, 8027397,
+  -8348215,
 ]
 
 ///|
-fn dca_dct_a(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32) -> Unit {
+fn dca_dct_a(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+) -> Unit {
   for i = 0; i < 8; i = i + 1 {
     let mut res : Int64 = 0
     for j = 0; j < 8; j = j + 1 {
@@ -408,20 +444,27 @@ fn dca_dct_a(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int3
 
 ///|
 let dca_dct_b_cos : FixedArray[Int32] = [
-  8227423, 7750063, 6974873, 5931642, 4660461, 3210181, 1636536, 6974873, 3210181, -1636536,
-  -5931642, -8227423, -7750063, -4660461, 4660461, -3210181, -8227423, -5931642, 1636536, 7750063,
-  6974873, 1636536, -7750063, -4660461, 5931642, 6974873, -3210181, -8227423, -1636536, -7750063,
-  4660461, 5931642, -6974873, -3210181, 8227423, -4660461, -3210181, 8227423, -5931642, -1636536,
-  7750063, -6974873, -6974873, 3210181, 1636536, -5931642, 8227423, -7750063, 4660461, -8227423,
-  7750063, -6974873, 5931642, -4660461, 3210181, -1636536,
+  8227423, 7750063, 6974873, 5931642, 4660461, 3210181, 1636536, 6974873, 3210181,
+  -1636536, -5931642, -8227423, -7750063, -4660461, 4660461, -3210181, -8227423,
+  -5931642, 1636536, 7750063, 6974873, 1636536, -7750063, -4660461, 5931642, 6974873,
+  -3210181, -8227423, -1636536, -7750063, 4660461, 5931642, -6974873, -3210181, 8227423,
+  -4660461, -3210181, 8227423, -5931642, -1636536, 7750063, -6974873, -6974873, 3210181,
+  1636536, -5931642, 8227423, -7750063, 4660461, -8227423, 7750063, -6974873, 5931642,
+  -4660461, 3210181, -1636536,
 ]
 
 ///|
-fn dca_dct_b(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32) -> Unit {
+fn dca_dct_b(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+) -> Unit {
   for i = 0; i < 8; i = i + 1 {
     let mut res : Int64 = input[in_off].to_int64() * (1 << 23)
     for j = 0; j < 7; j = j + 1 {
-      res += dca_dct_b_cos[i * 7 + j].to_int64() * input[in_off + 1 + j].to_int64()
+      res += dca_dct_b_cos[i * 7 + j].to_int64() *
+        input[in_off + 1 + j].to_int64()
     }
     output[out_off + i] = dca_norm23(res)
   }
@@ -429,12 +472,17 @@ fn dca_dct_b(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int3
 
 ///|
 let dca_mod_a_cos : FixedArray[Int32] = [
-  4199362, 4240198, 4323885, 4454708, 4639772, 4890013, 5221943, 5660703, -6245623, -7040975,
-  -8158494, -9809974, -12450076, -17261920, -28585092, -85479984,
+  4199362, 4240198, 4323885, 4454708, 4639772, 4890013, 5221943, 5660703, -6245623,
+  -7040975, -8158494, -9809974, -12450076, -17261920, -28585092, -85479984,
 ]
 
 ///|
-fn dca_mod_a(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32) -> Unit {
+fn dca_mod_a(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+) -> Unit {
   for i = 0; i < 8; i = i + 1 {
     output[out_off + i] = dca_mul23(
       dca_mod_a_cos[i],
@@ -457,7 +505,12 @@ let dca_mod_b_cos : FixedArray[Int32] = [
 ]
 
 ///|
-fn dca_mod_b(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32) -> Unit {
+fn dca_mod_b(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+) -> Unit {
   for i = 0; i < 8; i = i + 1 {
     input[in_off + 8 + i] = dca_mul23(dca_mod_b_cos[i], input[in_off + 8 + i])
   }
@@ -473,14 +526,19 @@ fn dca_mod_b(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int3
 
 ///|
 let dca_mod_c_cos : FixedArray[Int32] = [
-  1048892, 1051425, 1056522, 1064244, 1074689, 1087987, 1104313, 1123884, 1146975, 1173922,
-  1205139, 1241133, 1282529, 1330095, 1384791, 1447815, -1520688, -1605358, -1704360, -1821051,
-  -1959964, -2127368, -2332183, -2587535, -2913561, -3342802, -3931480, -4785806, -6133390,
-  -8566050, -14253820, -42727120,
+  1048892, 1051425, 1056522, 1064244, 1074689, 1087987, 1104313, 1123884, 1146975,
+  1173922, 1205139, 1241133, 1282529, 1330095, 1384791, 1447815, -1520688, -1605358,
+  -1704360, -1821051, -1959964, -2127368, -2332183, -2587535, -2913561, -3342802,
+  -3931480, -4785806, -6133390, -8566050, -14253820, -42727120,
 ]
 
 ///|
-fn dca_mod_c(input : FixedArray[Int32], in_off : Int32, output : FixedArray[Int32], out_off : Int32) -> Unit {
+fn dca_mod_c(
+  input : FixedArray[Int32],
+  in_off : Int32,
+  output : FixedArray[Int32],
+  out_off : Int32,
+) -> Unit {
   for i = 0; i < 16; i = i + 1 {
     output[out_off + i] = dca_mul23(
       dca_mod_c_cos[i],
@@ -583,16 +641,22 @@ fn dca_synth_filter_fixed_32(
     let mut j = 0
     while j < 512 - offset {
       a += window[i + j].to_int64() * hist1[synth_base + i + j].to_int64()
-      b += window[i + j + 16].to_int64() * hist1[synth_base + 15 - i + j].to_int64()
-      c += window[i + j + 32].to_int64() * hist1[synth_base + 16 + i + j].to_int64()
-      d += window[i + j + 48].to_int64() * hist1[synth_base + 31 - i + j].to_int64()
+      b += window[i + j + 16].to_int64() *
+        hist1[synth_base + 15 - i + j].to_int64()
+      c += window[i + j + 32].to_int64() *
+        hist1[synth_base + 16 + i + j].to_int64()
+      d += window[i + j + 48].to_int64() *
+        hist1[synth_base + 31 - i + j].to_int64()
       j += 64
     }
     while j < 512 {
       a += window[i + j].to_int64() * hist1[synth_base + i + j - 512].to_int64()
-      b += window[i + j + 16].to_int64() * hist1[synth_base + 15 - i + j - 512].to_int64()
-      c += window[i + j + 32].to_int64() * hist1[synth_base + 16 + i + j - 512].to_int64()
-      d += window[i + j + 48].to_int64() * hist1[synth_base + 31 - i + j - 512].to_int64()
+      b += window[i + j + 16].to_int64() *
+        hist1[synth_base + 15 - i + j - 512].to_int64()
+      c += window[i + j + 32].to_int64() *
+        hist1[synth_base + 16 + i + j - 512].to_int64()
+      d += window[i + j + 48].to_int64() *
+        hist1[synth_base + 31 - i + j - 512].to_int64()
       j += 64
     }
     out[out_off + i] = dca_clip23(dca_norm21(a))

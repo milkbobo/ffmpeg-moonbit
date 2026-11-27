@@ -68,8 +68,10 @@ fn flac_open_frames(
   let max_blocksize = pb_be16(streaminfo, 2).reinterpret_as_int()
   let sample_rate = (pb_be24(streaminfo, 10) >> 4).reinterpret_as_int()
   let channels = ((streaminfo[12].to_int() >> 1) & 7) + 1
-  let bits = (((streaminfo[12].to_int() & 1) << 4) |
-    (streaminfo[13].to_int() >> 4)) + 1
+  let bits = (
+      ((streaminfo[12].to_int() & 1) << 4) | (streaminfo[13].to_int() >> 4)
+    ) +
+    1
   if sample_rate <= 0 || sample_rate > 655350 || bits < 4 || max_blocksize < 16 {
     return Err("flac: invalid stream parameters")
   }
@@ -84,9 +86,8 @@ fn flac_open_frames(
     if end - pos <= max_padding && data[pos:end].iter().all(byte => byte == 0) {
       break
     }
-    let (size, duration) = match @libavcodec.flac_frame_extent(
-      data, pos, sample_rate, channels, bits,
-    ) {
+    let (size, duration) = match
+      @libavcodec.flac_frame_extent(data, pos, sample_rate, channels, bits) {
       Ok(v) => v
       Err(e) => return Err(e)
     }
@@ -99,7 +100,13 @@ fn flac_open_frames(
     if @libavutil.av_crc(crc_table, 0U, data[pos:pos + size].to_owned()) != 0U {
       return Err("flac: frame CRC mismatch")
     }
-    frames.push({ pos: pos.to_int64(), size, pts: total_samples, duration, is_keyframe: true, })
+    frames.push({
+      pos: pos.to_int64(),
+      size,
+      pts: total_samples,
+      duration,
+      is_keyframe: true,
+    })
     total_samples += duration.to_int64()
     pos += size
   }

@@ -105,7 +105,10 @@ fn RealMediaState::read_metadata(self : RealMediaState, wide : Bool) -> Unit {
 /// that already holds a string: the bytes read replace the prefix, the NUL
 /// that ends the string is stored too and the rest keeps its previous value
 /// (as with the C's `char buf[256]`).
-fn RealMediaIo::str8_into(self : RealMediaIo, scratch : FixedArray[Int32]) -> Unit {
+fn RealMediaIo::str8_into(
+  self : RealMediaIo,
+  scratch : FixedArray[Int32],
+) -> Unit {
   let len = self.r8()
   for i = 0; i < len; i = i + 1 {
     let b = self.r8()
@@ -282,7 +285,7 @@ fn RealMediaState::read_audio_stream_info(
     let h = sub_packet_h.to_int64()
     let cfs = st.coded_framesize.to_int64()
     let w = st.audio_framesize.to_int64()
-    let parity = (if (sub_packet_h & 1) != 0 { 1L } else { 0L })
+    let parity = if (sub_packet_h & 1) != 0 { 1L } else { 0L }
     if st.coded_framesize > st.audio_framesize ||
       sub_packet_h <= 1 ||
       cfs * h > (2L + parity) * w {
@@ -377,7 +380,11 @@ fn RealMediaState::read_mdpr_codecdata(
         let st = self.streams[si]
         st.extradata = extra
         st.kind = RealMediaKindAudio
-        st.codec_tag = if extra.length() >= 4 { realmedia_le32(extra, 0) } else { 0 }
+        st.codec_tag = if extra.length() >= 4 {
+          realmedia_le32(extra, 0)
+        } else {
+          0
+        }
         st.codec = realmedia_codec_name(st.codec_tag)
       }
       Err(e) => error = e
@@ -454,7 +461,10 @@ fn RealMediaState::read_mdpr_codecdata(
 /// codec data of `number_of_mdpr` streams. The first is the stream the
 /// `MDPR` belongs to; the others are added with their stream number shifted
 /// by `index << 16`. The caller seeks back to the end of the chunk.
-fn RealMediaState::read_multi(self : RealMediaState, si : Int32) -> Result[Unit, String] {
+fn RealMediaState::read_multi(
+  self : RealMediaState,
+  si : Int32,
+) -> Result[Unit, String] {
   let io = self.io
   let number_of_streams = io.rb16()
   for _i = 0; _i < number_of_streams; _i = _i + 1 {
@@ -570,7 +580,7 @@ fn RealMediaState::read_index(self : RealMediaState) -> Unit {
         let pts = io.rb32()
         let pos = if ver == 0 { io.rb32() } else { io.rb64() }
         io.skip(4L) // packet no.
-        self.index.push({ stream_index: si, timestamp: pts, pos })
+        self.index.push({ stream_index: si, timestamp: pts, pos, })
       }
     }
     if next_off != 0L && io.pos.to_int64() < next_off {

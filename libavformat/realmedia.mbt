@@ -181,7 +181,11 @@ let realmedia_sipr_swaps : FixedArray[(Int32, Int32)] = [
 ///|
 /// `ff_rm_reorder_sipr_data` (`rmsipr.c`): swap 4-bit nibble blocks of the
 /// `sub_packet_h` sub-packets that make up one group.
-fn realmedia_reorder_sipr(buf : Array[Byte], h : Int32, framesize : Int32) -> Unit {
+fn realmedia_reorder_sipr(
+  buf : Array[Byte],
+  h : Int32,
+  framesize : Int32,
+) -> Unit {
   // nibbles per sub-packet
   let bs = h * framesize * 2 / 96
   for n = 0; n < realmedia_sipr_swaps.length(); n = n + 1 {
@@ -399,7 +403,7 @@ priv struct RealMediaIo {
 
 ///|
 fn RealMediaIo::new(data : Bytes) -> RealMediaIo {
-  { data, pos: 0, eof: false }
+  { data, pos: 0, eof: false, }
 }
 
 ///|
@@ -542,7 +546,10 @@ fn RealMediaIo::read_full(
 
 ///|
 /// `ffio_read_size`: exactly `n` bytes, or an error naming the shortfall.
-fn RealMediaIo::read_exact(self : RealMediaIo, n : Int64) -> Result[Bytes, String] {
+fn RealMediaIo::read_exact(
+  self : RealMediaIo,
+  n : Int64,
+) -> Result[Bytes, String] {
   if n < 0L {
     return Err("realmedia: negative read size")
   }
@@ -557,7 +564,10 @@ fn RealMediaIo::read_exact(self : RealMediaIo, n : Int64) -> Result[Bytes, Strin
 
 ///|
 /// `rm_read_extradata` (`ff_get_extradata`).
-fn RealMediaIo::extradata(self : RealMediaIo, size : Int64) -> Result[Bytes, String] {
+fn RealMediaIo::extradata(
+  self : RealMediaIo,
+  size : Int64,
+) -> Result[Bytes, String] {
   if size < 0L || size >= 16777216L {
     return Err("realmedia: extradata size too large")
   }
@@ -577,15 +587,13 @@ fn RealMediaIo::extradata(self : RealMediaIo, size : Int64) -> Result[Bytes, Str
 /// read as zero, as the C's probe padding does.
 fn probe_realmedia(pd : ProbeData) -> Int32 {
   let b = pd.buf
-  let rmf =
-    pb_u8(b, 0) == 0x2EU &&
+  let rmf = pb_u8(b, 0) == 0x2EU &&
     pb_u8(b, 1) == 0x52U &&
     pb_u8(b, 2) == 0x4DU &&
     (pb_u8(b, 3) == 0x46U || pb_u8(b, 3) == 0x50U) &&
     pb_u8(b, 4) == 0U &&
     pb_u8(b, 5) == 0U
-  let ra =
-    pb_u8(b, 0) == 0x2EU &&
+  let ra = pb_u8(b, 0) == 0x2EU &&
     pb_u8(b, 1) == 0x72U &&
     pb_u8(b, 2) == 0x61U &&
     pb_u8(b, 3) == 0xFDU

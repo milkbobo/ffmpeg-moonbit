@@ -253,9 +253,10 @@ fn ts_parse_descriptors(
         desc_codec.val = "dts"
         desc_type.val = "audio"
       }
-      0x7F => if len >= 2 && data[body] == b'\x80' {
-        opus_channel_config.val = Some(data[body + 1].to_int())
-      }
+      0x7F =>
+        if len >= 2 && data[body] == b'\x80' {
+          opus_channel_config.val = Some(data[body + 1].to_int())
+        }
       _ => ()
     }
     p = body + len
@@ -565,23 +566,48 @@ fn ts_stream_id_is_header_only(id : Int32) -> Bool {
 fn ts_pes_extended_id(header : Array[Byte], size : Int32) -> Int32? {
   guard size >= 9 && (header[7].to_int() & 1) != 0 else { return None }
   let flags = header[7].to_int()
-  let mut p = 9 + (if (flags & 0xC0) == 0xC0 { 10 } else if (flags & 0x80) != 0 { 5 } else { 0 })
-  if (flags & 0x20) != 0 { p += 6 }
-  if (flags & 0x10) != 0 { p += 3 }
-  if (flags & 0x08) != 0 { p += 1 }
-  if (flags & 0x04) != 0 { p += 1 }
-  if (flags & 0x02) != 0 { p += 2 }
+  let mut p = 9 +
+    (if (flags & 0xC0) == 0xC0 {
+      10
+    } else if (flags & 0x80) != 0 {
+      5
+    } else {
+      0
+    })
+  if (flags & 0x20) != 0 {
+    p += 6
+  }
+  if (flags & 0x10) != 0 {
+    p += 3
+  }
+  if (flags & 0x08) != 0 {
+    p += 1
+  }
+  if (flags & 0x04) != 0 {
+    p += 1
+  }
+  if (flags & 0x02) != 0 {
+    p += 2
+  }
   guard p < size else { return None }
   let ext = header[p].to_int()
-  if (ext & 1) == 0 { return None }
+  if (ext & 1) == 0 {
+    return None
+  }
   p += 1
-  if (ext & 0x80) != 0 { p += 16 }
+  if (ext & 0x80) != 0 {
+    p += 16
+  }
   if (ext & 0x40) != 0 {
     guard p < size else { return None }
     p += 1 + header[p].to_int()
   }
-  if (ext & 0x20) != 0 { p += 2 }
-  if (ext & 0x10) != 0 { p += 2 }
+  if (ext & 0x20) != 0 {
+    p += 2
+  }
+  if (ext & 0x10) != 0 {
+    p += 2
+  }
   guard size - p >= 2 else { return None }
   let length = header[p].to_int() & 0x7F
   let id = header[p + 1].to_int()

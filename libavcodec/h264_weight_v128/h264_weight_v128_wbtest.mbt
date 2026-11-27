@@ -148,7 +148,9 @@ test "h264 weight v128: all widths x denominals x weights x offsets" {
             let d1 = wr_copy(src)
             let d2 = wr_copy(src)
             let off = 3 * stride + 4
-            wr_weight_rect(d1, off, stride, w, h, denom, weight, offset, bit_depth)
+            wr_weight_rect(
+              d1, off, stride, w, h, denom, weight, offset, bit_depth,
+            )
             h264_weight_rect_v128(
               d2,
               off,
@@ -179,13 +181,8 @@ test "h264 biweight v128: two-source weighting, alias and distinct buffers" {
   for bit_depth in [8, 10, 12] {
     let max = (1 << bit_depth) - 1
     for denom in [0, 1, 3, 7] {
-      for (weightd, weights) in [
-        (1, 1),
-        (32, 32),
-        (127, 1),
-        (-128, 127),
-        (0, 64),
-      ] {
+      for
+        (weightd, weights) in [(1, 1), (32, 32), (127, 1), (-128, 127), (0, 64)] {
         for offset in [0, 1, -1, 8191, -8192] {
           for w in [2, 4, 8, 16, 3, 5] {
             let h = 4
@@ -204,18 +201,7 @@ test "h264 biweight v128: two-source weighting, alias and distinct buffers" {
             let s1 = wr_copy(ssrc)
             let off = 3 * stride + 4
             wr_biweight_rect(
-              d1,
-              off,
-              s1,
-              off,
-              stride,
-              stride,
-              w,
-              h,
-              denom,
-              weightd,
-              weights,
-              offset,
+              d1, off, s1, off, stride, stride, w, h, denom, weightd, weights, offset,
               bit_depth,
             )
             h264_biweight_rect_v128(
@@ -259,21 +245,7 @@ test "h264 weight v128: distinct dst/src strides and offsets" {
     let s1 = wr_copy(ssrc)
     let doff = 2 * 32 + 3
     let soff = 4 * 32 + 5
-    wr_biweight_rect(
-      d1,
-      doff,
-      s1,
-      soff,
-      32,
-      32,
-      4,
-      4,
-      3,
-      32,
-      64,
-      7,
-      bit_depth,
-    )
+    wr_biweight_rect(d1, doff, s1, soff, 32, 32, 4, 4, 3, 32, 64, 7, bit_depth)
     h264_biweight_rect_v128(
       d2,
       doff,
@@ -306,11 +278,17 @@ test "h264 implicit biweight v128: all POC weights and depths" {
     for w0 in [0, 1, 16, 32, 37, 63, 64] {
       for (width, height) in [(4, 4), (16, 16), (8, 4), (2, 2), (6, 3)] {
         let a = wr_gen(0xC0FFEE01U + w0.reinterpret_as_uint(), plane_n, max)
-        let b = wr_gen(0x0BADF00DU + w0.reinterpret_as_uint() * 3U, plane_n, max)
+        let b = wr_gen(
+          0x0BADF00DU + w0.reinterpret_as_uint() * 3U,
+          plane_n,
+          max,
+        )
         let d1 = wr_copy(a)
         let d2 = wr_copy(a)
         let off = 3 * stride + 4
-        wr_implicit(d1, off, a, off, b, off, stride, stride, width, height, w0, bit_depth)
+        wr_implicit(
+          d1, off, a, off, b, off, stride, stride, width, height, w0, bit_depth,
+        )
         h264_implicit_biweight_v128(
           d2,
           off,
@@ -356,7 +334,7 @@ test "h264 weight v128: negative offset wraps like the C unsigned shift" {
       }
       // and it really does differ from a naive arithmetic shift of the
       // negative product, which would clip to 0
-      let naive = (200 * 1 + (0 - 1) * (1 << (denom))) >> denom
+      let naive = (200 * 1 + (0 - 1) * (1 << denom)) >> denom
       if naive < 0 {
         assert_true(d2[0] >= 0)
       }
@@ -374,12 +352,13 @@ test "h264 weight v128: saturated extremes stay in range" {
     let max = (1 << bit_depth) - 1
     let hi : Array[Int32] = Array::make(plane_n, max)
     let lo : Array[Int32] = Array::make(plane_n, 0)
-    for (src, weight, offset) in [
-      (hi, 127, 16383),
-      (hi, -128, -16384),
-      (lo, 127, 16383),
-      (lo, -128, -16384),
-    ] {
+    for
+      (src, weight, offset) in [
+        (hi, 127, 16383),
+        (hi, -128, -16384),
+        (lo, 127, 16383),
+        (lo, -128, -16384),
+      ] {
       for denom in [0, 7] {
         let d1 = wr_copy(src)
         let d2 = wr_copy(src)

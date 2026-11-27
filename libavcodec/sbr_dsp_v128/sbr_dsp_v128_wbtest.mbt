@@ -36,7 +36,11 @@ fn sr_qmf_pre_shuffle(z : Array[Double]) -> Unit {
 
 ///|
 /// Verbatim `aac_sbr_qmf_post_shuffle`. */
-fn sr_qmf_post_shuffle(w : Array[Double], w_off : Int32, z : Array[Double]) -> Unit {
+fn sr_qmf_post_shuffle(
+  w : Array[Double],
+  w_off : Int32,
+  z : Array[Double],
+) -> Unit {
   let mut k = 0
   while k < 32 {
     w[w_off + 2 * k] = -z[63 - k]
@@ -117,7 +121,8 @@ fn sr_hf_g_filt(
   ixh : Int32,
 ) -> Unit {
   for m in 0..<m_max {
-    y[y_off + 2 * m] = x_high[((row_off + m) * 40 + ixh) * 2] * g_filt[g_off + m]
+    y[y_off + 2 * m] = x_high[((row_off + m) * 40 + ixh) * 2] *
+      g_filt[g_off + m]
     y[y_off + 2 * m + 1] = x_high[((row_off + m) * 40 + ixh) * 2 + 1] *
       g_filt[g_off + m]
   }
@@ -238,7 +243,10 @@ test "sbr dsp v128: hf_g_filt pairs and tail" {
   // X_high is 40 x 40 complex (interleaved), g_filt has m_max entries.
   for m_max in [1, 2, 3, 5, 8, 13] {
     for ixh in [0, 1, 7, 39] {
-      let x_high = sr_gen(0xDEADBEEFU + m_max.reinterpret_as_uint(), 40 * 40 * 2)
+      let x_high = sr_gen(
+        0xDEADBEEFU + m_max.reinterpret_as_uint(),
+        40 * 40 * 2,
+      )
       let g_filt = sr_gen(0x99999999U + ixh.reinterpret_as_uint(), 20)
       let y1 = sr_gen(0x77777777U, 40)
       let y2 = sr_copy(y1)

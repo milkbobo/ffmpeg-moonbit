@@ -6,7 +6,10 @@
 ///
 /// ```mbt check
 /// test {
-///   assert_eq(@libavcodec.adpcm_duck_block_samples("adpcm_ima_dk4", 4, 1).unwrap(), 1)
+///   assert_eq(
+///     @libavcodec.adpcm_duck_block_samples("adpcm_ima_dk4", 4, 1).unwrap(),
+///     1,
+///   )
 /// }
 /// ```
 pub fn adpcm_duck_block_samples(
@@ -18,7 +21,8 @@ pub fn adpcm_duck_block_samples(
     "adpcm_ima_dk3" if channels == 2 && size >= 18 =>
       (size.to_int64() - 16L) * 2L / 3L * 2L
     "adpcm_ima_dk4" if (channels == 1 || channels == 2) && size >= 4 * channels =>
-      1L + (size.to_int64() - 4L * channels.to_int64()) * 2L / channels.to_int64()
+      1L +
+      (size.to_int64() - 4L * channels.to_int64()) * 2L / channels.to_int64()
     _ => return Err("adpcm: invalid Duck IMA block or channel count")
   }
   if count * channels.to_int64() > 0x7FFFFFFFL {
@@ -33,7 +37,8 @@ fn AdpcmDecoder::decode_duck(
   block : Bytes,
 ) -> Result[AdpcmAudio, String] {
   let channels = self.channels
-  let count = match adpcm_duck_block_samples(self.codec, block.length(), channels) {
+  let count = match
+    adpcm_duck_block_samples(self.codec, block.length(), channels) {
     Ok(v) => v
     Err(e) => return Err(e)
   }
@@ -78,5 +83,5 @@ fn AdpcmDecoder::decode_duck(
       pcm.push(adpcm_ima_expand_multiply(self.status[channels - 1], byte & 15))
     }
   }
-  Ok({ channels, samples: pcm })
+  Ok({ channels, samples: pcm, })
 }

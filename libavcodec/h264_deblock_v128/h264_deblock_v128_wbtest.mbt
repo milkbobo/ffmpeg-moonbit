@@ -277,7 +277,7 @@ fn dr_gen_plane(seed : UInt32, n : Int32, max : Int32) -> Array[Int32] {
       // hard step: forces |p0-q0| >= alpha on the next samples
       base = if base > max / 2 { 0 } else { max }
     } else {
-      base = base + (r % 5) - 2
+      base = base + r % 5 - 2
       if base < 0 {
         base = 0
       } else if base > max {

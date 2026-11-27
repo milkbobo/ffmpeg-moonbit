@@ -44,7 +44,9 @@ let dca_code_books : Int32 = 10
 let dca_speaker_count : Int32 = 32
 
 // Speaker indices (DCA_SPEAKER_*).
-///| removed
+
+///|
+/// removed
 let _unused_dca_spk_c : Int32 = 0
 
 ///|
@@ -62,42 +64,43 @@ let dca_spk_rs : Int32 = 4
 ///|
 let dca_spk_lfe1 : Int32 = 5
 
-///| removed
+///|
+/// removed
 let _unused_dca_spk_cs : Int32 = 6
 
-///| removed
+///|
+/// removed
 let _unused_dca_spk_lss : Int32 = 9
 
-///| removed
+///|
+/// removed
 let _unused_dca_spk_rss : Int32 = 10
 
 ///|
 /// `audio_mode_ch_mask` in dca_core.c. */
 let dca_audio_mode_ch_mask : FixedArray[Int32] = [
   0x1, // mono: C
-  0x6, // stereo
-  0x6,
-  0x6,
-  0x6,
-  0x7, // 3_0
-  0x46, // 2_1 (L R Cs)
-  0x47, // 3_1
-  0x1E, // 2_2
-  0x1F, // 5POINT0
+   0x6, // stereo
+   0x6, 0x6, 0x6, 0x7, // 3_0
+   0x46, // 2_1 (L R Cs)
+   0x47, // 3_1
+   0x1E, // 2_2
+   0x1F, // 5POINT0
 ]
 
 ///|
 /// `prm_ch_to_spkr_map` in dca_core.c, flattened [amode][5]. */
 let dca_prm_ch_to_spkr : FixedArray[Int32] = [
-  0, -1, -1, -1, -1, 1, 2, -1, -1, -1, 1, 2, -1, -1, -1, 1, 2, -1, -1, -1, 1, 2, -1, -1, -1,
-  0, 1, 2, -1, -1, 1, 2, 6, -1, -1, 0, 1, 2, 6, -1, 1, 2, 3, 4, -1, 0, 1, 2, 3, 4,
+  0, -1, -1, -1, -1, 1, 2, -1, -1, -1, 1, 2, -1, -1, -1, 1, 2, -1, -1, -1, 1, 2,
+  -1, -1, -1, 0, 1, 2, -1, -1, 1, 2, 6, -1, -1, 0, 1, 2, 6, -1, 1, 2, 3, 4, -1, 0,
+  1, 2, 3, 4,
 ]
 
 ///|
 /// `dca2wav_norm` in dcadec.c: DCA speaker → WAV channel bit. */
 let dca_dca2wav_norm : FixedArray[Int32] = [
-  2, 0, 1, 9, 10, 3, 8, 4, 5, 9, 10, 6, 7, 12, 13, 14, 3, 6, 7, 11, 12, 14, 16, 15, 17, 8,
-  4, 5,
+  2, 0, 1, 9, 10, 3, 8, 4, 5, 9, 10, 6, 7, 12, 13, 14, 3, 6, 7, 11, 12, 14, 16, 15,
+  17, 8, 4, 5,
 ]
 
 ///|
@@ -132,7 +135,11 @@ struct DcaDspData {
 
 ///|
 fn dca_dsp_data_new() -> DcaDspData {
-  { hist1: FixedArray::make(1024, 0), offset: 0, hist2: FixedArray::make(64, 0) }
+  {
+    hist1: FixedArray::make(1024, 0),
+    offset: 0,
+    hist2: FixedArray::make(64, 0),
+  }
 }
 
 ///|
@@ -246,16 +253,16 @@ pub fn DcaCoreDecoder::new() -> DcaCoreDecoder {
     prediction_mode: FixedArray::make(dca_max_channels * dca_subbands, 0),
     prediction_vq_index: FixedArray::make(dca_max_channels * dca_subbands, 0),
     bit_allocation: FixedArray::make(dca_max_channels * dca_subbands, 0),
-    transition_mode: FixedArray::make(dca_subframes * dca_max_channels * dca_subbands, 0),
+    transition_mode: FixedArray::make(
+      dca_subframes * dca_max_channels * dca_subbands,
+      0,
+    ),
     scale_factors: FixedArray::make(dca_max_channels * dca_subbands * 2, 0),
     joint_scale_sel: FixedArray::make(dca_max_channels, 0),
     joint_scale_factors: FixedArray::make(dca_max_channels * dca_subbands, 0),
     prim_dmix_embedded: false,
     subband_samples: subbands,
-    lfe_samples: FixedArray::make(
-      dca_lfe_history + 64,
-      0,
-    ),
+    lfe_samples: FixedArray::make(dca_lfe_history + 64, 0),
     dsp,
     output_samples: outputs,
     ch_remap: FixedArray::make(dca_speaker_count, 0),
@@ -274,11 +281,7 @@ fn dca_get_array(
 ) -> Unit {
   for i = 0; i < size; i = i + 1 {
     let v = gb.read(n).reinterpret_as_int()
-    array[i] = if (v & (1 << (n - 1))) != 0 {
-      v - (1 << n)
-    } else {
-      v
-    }
+    array[i] = if (v & (1 << (n - 1))) != 0 { v - (1 << n) } else { v }
   }
 }
 
@@ -378,18 +381,19 @@ fn DcaCoreDecoder::parse_coding_header(
   // Quantization index codebook select
   for n = 0; n < dca_code_books; n = n + 1 {
     for ch = 0; ch < self.nchannels; ch = ch + 1 {
-      self.quant_index_sel[ch * dca_code_books + n] = gb.read(
-        dca_quant_index_sel_nbits[n],
-      ).reinterpret_as_int()
+      self.quant_index_sel[ch * dca_code_books + n] = gb
+        .read(dca_quant_index_sel_nbits[n])
+        .reinterpret_as_int()
     }
   }
   // Scale factor adjustment index
   for n = 0; n < dca_code_books; n = n + 1 {
     for ch = 0; ch < self.nchannels; ch = ch + 1 {
-      if self.quant_index_sel[ch * dca_code_books + n] < dca_quant_index_group_size[n] {
-        self.scale_factor_adj[ch * dca_code_books + n] = dca_scale_factor_adj[gb.read(
-          2,
-        ).reinterpret_as_int()]
+      if self.quant_index_sel[ch * dca_code_books + n] <
+        dca_quant_index_group_size[n] {
+        self.scale_factor_adj[ch * dca_code_books + n] = dca_scale_factor_adj[gb
+          .read(2)
+          .reinterpret_as_int()]
       }
     }
   }
@@ -429,10 +433,11 @@ fn dca_parse_scale(
 /// `parse_joint_scale`. */
 fn dca_parse_joint_scale(gb : BitReader, sel : Int32) -> Result[Int32, String] {
   let scale_index = (if sel < 5 {
-    dca_vlc_scale_factor[sel].decode(gb)
-  } else {
-    gb.read(sel + 1).reinterpret_as_int()
-  }) + 64
+      dca_vlc_scale_factor[sel].decode(gb)
+    } else {
+      gb.read(sel + 1).reinterpret_as_int()
+    }) +
+    64
   if scale_index < 0 || scale_index >= 129 {
     return Err("dca: invalid joint scale factor index")
   }
@@ -455,16 +460,18 @@ fn DcaCoreDecoder::parse_subframe_header(
   // Prediction mode
   for ch = 0; ch < self.nchannels; ch = ch + 1 {
     for band = 0; band < self.nsubbands[ch]; band = band + 1 {
-      self.prediction_mode[ch * dca_subbands + band] = gb.read1().reinterpret_as_int()
+      self.prediction_mode[ch * dca_subbands + band] = gb
+        .read1()
+        .reinterpret_as_int()
     }
   }
   // Prediction coefficients VQ address
   for ch = 0; ch < self.nchannels; ch = ch + 1 {
     for band = 0; band < self.nsubbands[ch]; band = band + 1 {
       if self.prediction_mode[ch * dca_subbands + band] != 0 {
-        self.prediction_vq_index[ch * dca_subbands + band] = gb.read(
-          12,
-        ).reinterpret_as_int()
+        self.prediction_vq_index[ch * dca_subbands + band] = gb
+          .read(12)
+          .reinterpret_as_int()
       }
     }
   }
@@ -492,9 +499,8 @@ fn DcaCoreDecoder::parse_subframe_header(
       let sel = self.transition_mode_sel[ch]
       for band = 0; band < self.subband_vq_start[ch]; band = band + 1 {
         if self.bit_allocation[ch * dca_subbands + band] != 0 {
-          self.transition_mode[(sf * dca_max_channels + ch) * dca_subbands + band] = dca_vlc_transition_mode[sel].decode(
-            gb,
-          )
+          self.transition_mode[(sf * dca_max_channels + ch) * dca_subbands +
+          band] = dca_vlc_transition_mode[sel].decode(gb)
         }
       }
     }
@@ -512,7 +518,9 @@ fn DcaCoreDecoder::parse_subframe_header(
         }
         scale_index = idx
         self.scale_factors[(ch * dca_subbands + band) * 2] = sc
-        if self.transition_mode[(sf * dca_max_channels + ch) * dca_subbands + band] != 0 {
+        if self.transition_mode[(sf * dca_max_channels + ch) * dca_subbands +
+          band] !=
+          0 {
           let (sc2, idx2) = match dca_parse_scale(gb, scale_index, sel) {
             Ok(v) => v
             Err(e) => return Err(e)
@@ -525,7 +533,9 @@ fn DcaCoreDecoder::parse_subframe_header(
       }
     }
     // High frequency VQ subbands
-    for band = self.subband_vq_start[ch]; band < self.nsubbands[ch]; band = band + 1 {
+    for band = self.subband_vq_start[ch]
+        band < self.nsubbands[ch]
+        band = band + 1 {
       let (sc, idx) = match dca_parse_scale(gb, scale_index, sel) {
         Ok(v) => v
         Err(e) => return Err(e)
@@ -549,7 +559,9 @@ fn DcaCoreDecoder::parse_subframe_header(
     let src_ch = self.joint_intensity_index[ch] - 1
     if src_ch >= 0 {
       let sel = self.joint_scale_sel[ch]
-      for band = self.nsubbands[ch]; band < self.nsubbands[src_ch]; band = band + 1 {
+      for band = self.nsubbands[ch]
+          band < self.nsubbands[src_ch]
+          band = band + 1 {
         let sc = match dca_parse_joint_scale(gb, sel) {
           Ok(v) => v
           Err(e) => return Err(e)
@@ -660,10 +672,15 @@ fn DcaCoreDecoder::extract_audio(
 
 ///|
 /// `ff_dcaadpcm_predict`. */
-fn dca_adpcm_predict(pred_vq : Int32, hist : FixedArray[Int32], hist_off : Int32) -> Int32 {
+fn dca_adpcm_predict(
+  pred_vq : Int32,
+  hist : FixedArray[Int32],
+  hist_off : Int32,
+) -> Int32 {
   let mut pred : Int64 = 0
   for i = 0; i < dca_adpcm_coeffs; i = i + 1 {
-    pred += hist[hist_off - 1 - i].to_int64() * dca_adpcm_vb[pred_vq * 4 + i].to_int64()
+    pred += hist[hist_off - 1 - i].to_int64() *
+      dca_adpcm_vb[pred_vq * 4 + i].to_int64()
   }
   dca_clip23(dca_norm13(pred))
 }
@@ -715,7 +732,9 @@ fn DcaCoreDecoder::parse_subframe_audio(
   }
   // VQ encoded subbands
   for ch = 0; ch < self.nchannels; ch = ch + 1 {
-    for band = self.subband_vq_start[ch]; band < self.nsubbands[ch]; band = band + 1 {
+    for band = self.subband_vq_start[ch]
+        band < self.nsubbands[ch]
+        band = band + 1 {
       vq_index[band] = gb.read(10).reinterpret_as_int()
     }
     if self.subband_vq_start[ch] < self.nsubbands[ch] {
@@ -766,7 +785,9 @@ fn DcaCoreDecoder::parse_subframe_audio(
         } else {
           dca_lossy_quant[abits]
         }
-        let trans_ssf = self.transition_mode[(sf * dca_max_channels + ch) * dca_subbands + band]
+        let trans_ssf = self.transition_mode[(sf * dca_max_channels + ch) *
+          dca_subbands +
+          band]
         let mut scale = if trans_ssf == 0 || ssf < trans_ssf {
           self.scale_factors[(ch * dca_subbands + band) * 2]
         } else {
@@ -774,14 +795,25 @@ fn DcaCoreDecoder::parse_subframe_audio(
         }
         if huff {
           let adj = self.scale_factor_adj[ch * dca_code_books + (abits - 1)]
-          scale = dca_clip23(((adj.to_int64() * scale.to_int64()) >> 22).to_int())
+          scale = dca_clip23(
+            ((adj.to_int64() * scale.to_int64()) >> 22).to_int(),
+          )
         }
         let row = self.subband_samples[ch][band]
-        dca_core_dequantize(row, dca_adpcm_coeffs + ofs, audio, step_size, scale, false, dca_subband_samples)
+        dca_core_dequantize(
+          row,
+          dca_adpcm_coeffs + ofs,
+          audio,
+          step_size,
+          scale,
+          false,
+          dca_subband_samples,
+        )
       }
     }
     // DSYNC
-    if (ssf == self.nsubsubframes[sf] - 1 || self.sync_ssf) && gb.read(16) != 0xFFFFU {
+    if (ssf == self.nsubsubframes[sf] - 1 || self.sync_ssf) &&
+      gb.read(16) != 0xFFFFU {
       return Err("dca: DSYNC check failed")
     }
     ofs += dca_subband_samples
@@ -836,8 +868,8 @@ fn DcaCoreDecoder::parse_frame_data(
     Ok(_) => ()
     Err(e) => return Err(e)
   }
-  let sub_pos = { val: 0 }
-  let lfe_pos = { val: dca_lfe_history }
+  let sub_pos = { val: 0, }
+  let lfe_pos = { val: dca_lfe_history, }
   for sf = 0; sf < self.nsubframes; sf = sf + 1 {
     match self.parse_subframe_header(gb, sf) {
       Ok(_) => ()
@@ -930,14 +962,17 @@ fn DcaCoreDecoder::core_parse(
 ///|
 /// `ff_dca_set_channel_layout` (default WAV order): build `ch_remap` and
 /// return the channel count. */
-fn DcaCoreDecoder::set_channel_layout(self : DcaCoreDecoder, dca_mask : Int32) -> Int32 {
+fn DcaCoreDecoder::set_channel_layout(
+  self : DcaCoreDecoder,
+  dca_mask : Int32,
+) -> Int32 {
   let mut nchannels = 0
   let wav_mask : FixedArray[Int32] = FixedArray::make(18, 0)
   let wav_map : FixedArray[Int32] = FixedArray::make(18, 0)
   for dca_ch = 0; dca_ch < 28; dca_ch = dca_ch + 1 {
     if (dca_mask & (1 << dca_ch)) != 0 {
       let wav_ch = dca_dca2wav_norm[dca_ch]
-      if (wav_mask[wav_ch] == 0) {
+      if wav_mask[wav_ch] == 0 {
         wav_map[wav_ch] = dca_ch
         wav_mask[wav_ch] = 1
       }
@@ -954,7 +989,10 @@ fn DcaCoreDecoder::set_channel_layout(self : DcaCoreDecoder, dca_mask : Int32) -
 
 ///|
 /// `map_prm_ch_to_spkr` for the plain core (no XCH/XXCH). */
-fn DcaCoreDecoder::map_prm_ch_to_spkr(self : DcaCoreDecoder, ch : Int32) -> Int32 {
+fn DcaCoreDecoder::map_prm_ch_to_spkr(
+  self : DcaCoreDecoder,
+  ch : Int32,
+) -> Int32 {
   if ch < dca_channels[self.audio_mode] {
     return dca_prm_ch_to_spkr[self.audio_mode * 5 + ch]
   }
@@ -965,7 +1003,9 @@ fn DcaCoreDecoder::map_prm_ch_to_spkr(self : DcaCoreDecoder, ch : Int32) -> Int3
 /// `ff_dca_core_filter_fixed` + the fixed output stage of
 /// `filter_frame_fixed`: QMF per channel, LFE, sum/difference decoding and
 /// the clip23<<8 interleaved output. */
-fn DcaCoreDecoder::filter_fixed(self : DcaCoreDecoder) -> Result[DcaAudio, String] {
+fn DcaCoreDecoder::filter_fixed(
+  self : DcaCoreDecoder,
+) -> Result[DcaAudio, String] {
   let nsamples = self.npcmblocks * dca_pcmblock_samples
   self.npcmsamples = nsamples
   // Speaker-mapped planar buffers
@@ -1011,7 +1051,13 @@ fn DcaCoreDecoder::filter_fixed(self : DcaCoreDecoder) -> Result[DcaAudio, Strin
     }
     let samples = self.output_samples[dca_spk_lfe1]
     let nlfesamples = self.npcmblocks >> 1
-    dca_lfe_fir_fixed(samples, 0, self.lfe_samples, dca_lfe_history, self.npcmblocks)
+    dca_lfe_fir_fixed(
+      samples,
+      0,
+      self.lfe_samples,
+      dca_lfe_history,
+      self.npcmblocks,
+    )
     // Update LFE history
     for n = 0; n < dca_lfe_history; n = n + 1 {
       self.lfe_samples[n] = self.lfe_samples[nlfesamples + n]
@@ -1041,11 +1087,7 @@ fn DcaCoreDecoder::filter_fixed(self : DcaCoreDecoder) -> Result[DcaAudio, Strin
       out.push(dca_clip23(self.output_samples[self.ch_remap[i]][n]) * (1 << 8))
     }
   }
-  Ok({
-    sample_rate: self.sample_rate,
-    channels: nch,
-    samples: out,
-  })
+  Ok({ sample_rate: self.sample_rate, channels: nch, samples: out, })
 }
 
 ///|
@@ -1054,7 +1096,7 @@ fn DcaCoreDecoder::filter_fixed(self : DcaCoreDecoder) -> Result[DcaAudio, Strin
 pub fn DcaCoreDecoder::decode_packet(
   self : DcaCoreDecoder,
   data : Bytes,
-) -> Result[Option[DcaAudio], String] {
+) -> Result[DcaAudio?, String] {
   if data.length() < 16 {
     return Err("dca: invalid packet size")
   }
@@ -1119,7 +1161,7 @@ pub fn DcaCoreDecoder::decode_stream(
   if sample_rate == 0 {
     return Err("dca: no decodable core frames")
   }
-  Ok({ sample_rate, channels, samples: out })
+  Ok({ sample_rate, channels, samples: out, })
 }
 
 ///|

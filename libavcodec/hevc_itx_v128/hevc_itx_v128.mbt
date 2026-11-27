@@ -47,9 +47,12 @@
 /// `hevc_clip_int16` lane-wise. */
 #cfg(any(target="native", target="wasm"))
 fn hitx_clip_int16(v : V128) -> V128 {
-  @v128.i32x4_min_s(
-    @v128.i32x4_max_s(v, @v128.i32x4_splat((-32768).reinterpret_as_uint() & 0xFFFFFFFFU)),
-    @v128.i32x4_splat(32767),
+  @simd.i32x4_min_s(
+    @simd.i32x4_max_s(
+      v,
+      @simd.i32x4_splat((-32768).reinterpret_as_uint() & 0xFFFFFFFFU),
+    ),
+    @simd.i32x4_splat(32767),
   )
 }
 
@@ -58,8 +61,8 @@ fn hitx_clip_int16(v : V128) -> V128 {
 #cfg(any(target="native", target="wasm"))
 fn hitx_scale(v : V128, add : Int32, shift : Int32) -> V128 {
   hitx_clip_int16(
-    @v128.i32x4_shr_s(
-      @v128.i32x4_add(v, @v128.i32x4_splat(add.reinterpret_as_uint())),
+    @simd.i32x4_shr_s(
+      @simd.i32x4_add(v, @simd.i32x4_splat(add.reinterpret_as_uint())),
       shift,
     ),
   )
@@ -69,10 +72,10 @@ fn hitx_scale(v : V128, add : Int32, shift : Int32) -> V128 {
 /// Load four consecutive residuals. */
 #cfg(any(target="native", target="wasm"))
 fn hitx_load4(a : Array[Int32], at : Int32) -> V128 {
-  let mut v = @v128.i32x4_splat(0)
+  let mut v = @simd.i32x4_splat(0)
   let mut i = 0
   while i < 4 {
-    v = @v128.i32x4_replace_lane(v, a[at + i].reinterpret_as_uint(), i)
+    v = @simd.i32x4_replace_lane(v, a[at + i].reinterpret_as_uint(), i)
     i = i + 1
   }
   v
@@ -84,7 +87,7 @@ fn hitx_load4(a : Array[Int32], at : Int32) -> V128 {
 fn hitx_store4(a : Array[Int32], at : Int32, v : V128) -> Unit {
   let mut i = 0
   while i < 4 {
-    a[at + i] = @v128.i32x4_extract_lane(v, i).reinterpret_as_int()
+    a[at + i] = @simd.i32x4_extract_lane(v, i).reinterpret_as_int()
     i = i + 1
   }
 }
@@ -101,24 +104,18 @@ fn hitx_tr4_lanes(
   s2 : V128,
   s3 : V128,
 ) -> (V128, V128, V128, V128) {
-  let c64 = @v128.i32x4_splat(64)
-  let c83 = @v128.i32x4_splat(83)
-  let c36 = @v128.i32x4_splat(36)
-  let e0 = @v128.i32x4_mul(@v128.i32x4_add(s0, s2), c64)
-  let e1 = @v128.i32x4_mul(@v128.i32x4_sub(s0, s2), c64)
-  let o0 = @v128.i32x4_add(
-    @v128.i32x4_mul(s1, c83),
-    @v128.i32x4_mul(s3, c36),
-  )
-  let o1 = @v128.i32x4_sub(
-    @v128.i32x4_mul(s1, c36),
-    @v128.i32x4_mul(s3, c83),
-  )
+  let c64 = @simd.i32x4_splat(64)
+  let c83 = @simd.i32x4_splat(83)
+  let c36 = @simd.i32x4_splat(36)
+  let e0 = @simd.i32x4_mul(@simd.i32x4_add(s0, s2), c64)
+  let e1 = @simd.i32x4_mul(@simd.i32x4_sub(s0, s2), c64)
+  let o0 = @simd.i32x4_add(@simd.i32x4_mul(s1, c83), @simd.i32x4_mul(s3, c36))
+  let o1 = @simd.i32x4_sub(@simd.i32x4_mul(s1, c36), @simd.i32x4_mul(s3, c83))
   (
-    @v128.i32x4_add(e0, o0),
-    @v128.i32x4_add(e1, o1),
-    @v128.i32x4_sub(e1, o1),
-    @v128.i32x4_sub(e0, o0),
+    @simd.i32x4_add(e0, o0),
+    @simd.i32x4_add(e1, o1),
+    @simd.i32x4_sub(e1, o1),
+    @simd.i32x4_sub(e0, o0),
   )
 }
 
@@ -161,18 +158,7 @@ pub fn hevc_idct_v128(
     // that many coefficients)
     while i < h {
       hevc_tr_scalar(
-        h,
-        coeffs,
-        i,
-        h,
-        coeffs,
-        i,
-        h,
-        limit2,
-        64,
-        7,
-        true,
-        log2_size,
+        h, coeffs, i, h, coeffs, i, h, limit2, 64, 7, true, log2_size,
       )
       i = i + 1
     }
@@ -243,7 +229,7 @@ pub fn hevc_idct_dc_v128(
   let shift : Int32 = 14 - bd
   let add : Int32 = 1 << (shift - 1)
   let coeff = (((coeffs[0] + 1) >> 1) + add) >> shift
-  let rowv = @v128.i32x4_splat(coeff.reinterpret_as_uint())
+  let rowv = @simd.i32x4_splat(coeff.reinterpret_as_uint())
   let n = h * h
   let mut i = 0
   while i + 4 <= n {
@@ -267,18 +253,21 @@ pub fn hevc_add_residual_v128(
   size : Int32,
   bd : Int32,
 ) -> Unit {
-  let max = @v128.i32x4_splat(((1 << bd) - 1).reinterpret_as_uint())
-  let zero = @v128.i32x4_splat(0)
+  let max = @simd.i32x4_splat(((1 << bd) - 1).reinterpret_as_uint())
+  let zero = @simd.i32x4_splat(0)
   for y = 0; y < size; y = y + 1 {
     let drow = y * stride
     let rrow = y * size
     let mut x = 0
     while x + 4 <= size {
-      let v = @v128.i32x4_add(hitx_load4(dst, drow + x), hitx_load4(res, rrow + x))
+      let v = @simd.i32x4_add(
+        hitx_load4(dst, drow + x),
+        hitx_load4(res, rrow + x),
+      )
       hitx_store4(
         dst,
         drow + x,
-        @v128.i32x4_min_s(@v128.i32x4_max_s(v, zero), max),
+        @simd.i32x4_min_s(@simd.i32x4_max_s(v, zero), max),
       )
       x = x + 4
     }

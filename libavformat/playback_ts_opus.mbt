@@ -14,10 +14,9 @@ fn ts_opus_head(code : Int32) -> Bytes? {
   if family != 0 {
     let coupled = [1, 0, 1, 1, 2, 2, 2, 3, 3][code]
     let mapping = [
-      b"\x00", b"\x00\x01", b"\x00\x02\x01", b"\x00\x01\x02\x03",
-      b"\x00\x04\x01\x02\x03", b"\x00\x04\x01\x02\x03\x05",
-      b"\x00\x04\x01\x02\x03\x05\x06", b"\x00\x06\x01\x02\x03\x04\x05\x07",
-    ][channels - 1]
+        b"\x00", b"\x00\x01", b"\x00\x02\x01", b"\x00\x01\x02\x03", b"\x00\x04\x01\x02\x03",
+        b"\x00\x04\x01\x02\x03\x05", b"\x00\x04\x01\x02\x03\x05\x06", b"\x00\x06\x01\x02\x03\x04\x05\x07",
+      ][channels - 1]
     head.push((channels - coupled).to_byte())
     head.push(coupled.to_byte())
     head.append(mapping.to_array())
@@ -57,17 +56,23 @@ fn ts_opus_control(data : BytesView) -> Result[TsOpusControl, String] {
   let mut trim_start = 0
   let mut trim_end = 0
   if (flags & 0x10) != 0 {
-    if data.length() - pos < 2 { return Err("mpegts: truncated Opus start trim") }
+    if data.length() - pos < 2 {
+      return Err("mpegts: truncated Opus start trim")
+    }
     trim_start = ts_rb16(data, pos)
     pos += 2
   }
   if (flags & 0x08) != 0 {
-    if data.length() - pos < 2 { return Err("mpegts: truncated Opus end trim") }
+    if data.length() - pos < 2 {
+      return Err("mpegts: truncated Opus end trim")
+    }
     trim_end = ts_rb16(data, pos)
     pos += 2
   }
   if (flags & 0x04) != 0 {
-    if pos >= data.length() { return Err("mpegts: truncated Opus control extension") }
+    if pos >= data.length() {
+      return Err("mpegts: truncated Opus control extension")
+    }
     let length = data[pos].to_int()
     pos += 1
     if length > data.length() - pos {
@@ -78,7 +83,7 @@ fn ts_opus_control(data : BytesView) -> Result[TsOpusControl, String] {
   if size == 0 || size > data.length() - pos {
     return Err("mpegts: truncated or empty Opus payload")
   }
-  Ok({ payload_start: pos, payload_end: pos + size, trim_start, trim_end })
+  Ok({ payload_start: pos, payload_end: pos + size, trim_start, trim_end, })
 }
 
 ///|
@@ -111,7 +116,13 @@ fn playback_ts_index_opus(
     }
     // Keep the control header with this packet so the decoder can apply
     // the trim to the exact frame, including trims at splice boundaries.
-    frames.push({ start: pos, end, data: es[pos:end].to_owned(), samples, keyframe: true, })
+    frames.push({
+      start: pos,
+      end,
+      data: es[pos:end].to_owned(),
+      samples,
+      keyframe: true,
+    })
     pos = end
   }
   ts_index_audio_frames(demux, stream_index, 48000, pes, frames, output)

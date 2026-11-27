@@ -169,8 +169,8 @@ test "playback: ASF WMA matches FFmpeg including decoder delay and EOF" {
   assert_eq(output.format_name, "asf")
   assert_eq(output.sample_rate, 44100)
   assert_eq(output.channels, 2)
-  let pcm = output.samples.map(channel => channel.map(v => {
-    (v * 32768.0).round().to_int().max(-32768).min(32767)
-  }))
+  let pcm = output.samples.map(channel => {
+    channel.map(v => (v * 32768.0).round().to_int().max(-32768).min(32767))
+  })
   asf_check_pcm(pcm, asf_decode_file(asf_stereo44_ref_b64), "playback ASF")
 }

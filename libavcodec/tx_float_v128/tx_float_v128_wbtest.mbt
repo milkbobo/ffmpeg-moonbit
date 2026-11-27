@@ -114,14 +114,86 @@ fn tr_combine(
     let w = o1 - 7 - t * 8
     // the port runs eight TRANSFORMs per t, in slot order
     // 0, 2, 4, 6, 1, 3, 5, 7 — all eight must be present
-    tr_transform(zr, zi, z + 0, z + o1 + 0, z + o2 + 0, z + o3 + 0, tab[c + 0], tab[w + 7])
-    tr_transform(zr, zi, z + 2, z + o1 + 2, z + o2 + 2, z + o3 + 2, tab[c + 2], tab[w + 5])
-    tr_transform(zr, zi, z + 4, z + o1 + 4, z + o2 + 4, z + o3 + 4, tab[c + 4], tab[w + 3])
-    tr_transform(zr, zi, z + 6, z + o1 + 6, z + o2 + 6, z + o3 + 6, tab[c + 6], tab[w + 1])
-    tr_transform(zr, zi, z + 1, z + o1 + 1, z + o2 + 1, z + o3 + 1, tab[c + 1], tab[w + 6])
-    tr_transform(zr, zi, z + 3, z + o1 + 3, z + o2 + 3, z + o3 + 3, tab[c + 3], tab[w + 4])
-    tr_transform(zr, zi, z + 5, z + o1 + 5, z + o2 + 5, z + o3 + 5, tab[c + 5], tab[w + 2])
-    tr_transform(zr, zi, z + 7, z + o1 + 7, z + o2 + 7, z + o3 + 7, tab[c + 7], tab[w + 0])
+    tr_transform(
+      zr,
+      zi,
+      z + 0,
+      z + o1 + 0,
+      z + o2 + 0,
+      z + o3 + 0,
+      tab[c + 0],
+      tab[w + 7],
+    )
+    tr_transform(
+      zr,
+      zi,
+      z + 2,
+      z + o1 + 2,
+      z + o2 + 2,
+      z + o3 + 2,
+      tab[c + 2],
+      tab[w + 5],
+    )
+    tr_transform(
+      zr,
+      zi,
+      z + 4,
+      z + o1 + 4,
+      z + o2 + 4,
+      z + o3 + 4,
+      tab[c + 4],
+      tab[w + 3],
+    )
+    tr_transform(
+      zr,
+      zi,
+      z + 6,
+      z + o1 + 6,
+      z + o2 + 6,
+      z + o3 + 6,
+      tab[c + 6],
+      tab[w + 1],
+    )
+    tr_transform(
+      zr,
+      zi,
+      z + 1,
+      z + o1 + 1,
+      z + o2 + 1,
+      z + o3 + 1,
+      tab[c + 1],
+      tab[w + 6],
+    )
+    tr_transform(
+      zr,
+      zi,
+      z + 3,
+      z + o1 + 3,
+      z + o2 + 3,
+      z + o3 + 3,
+      tab[c + 3],
+      tab[w + 4],
+    )
+    tr_transform(
+      zr,
+      zi,
+      z + 5,
+      z + o1 + 5,
+      z + o2 + 5,
+      z + o3 + 5,
+      tab[c + 5],
+      tab[w + 2],
+    )
+    tr_transform(
+      zr,
+      zi,
+      z + 7,
+      z + o1 + 7,
+      z + o2 + 7,
+      z + o3 + 7,
+      tab[c + 7],
+      tab[w + 0],
+    )
   }
 }
 
@@ -190,7 +262,9 @@ test "tx float v128: split-radix combine bit-exact over all lengths" {
   for len in [4, 8, 16, 32, 64] {
     for off in [0, 8] {
       let n = 8 * len + off
-      let seed = 0x9E3779B9U + len.reinterpret_as_uint() * 31U + off.reinterpret_as_uint()
+      let seed = 0x9E3779B9U +
+        len.reinterpret_as_uint() * 31U +
+        off.reinterpret_as_uint()
       let zr = tr_gen(seed, n)
       let zi = tr_gen(seed + 17U, n)
       // the cosine table must cover the slots the walk touches:
