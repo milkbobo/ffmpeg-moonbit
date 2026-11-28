@@ -8,21 +8,43 @@ fn wav_mux_telephony(
   align : Int32,
   bits : Int32,
   frames : Int32,
+  extra~ : Bytes = b"",
+  wave64~ : Bool = false,
+) -> Bytes {
+  let fmt : Array[Byte] = []
+  wav_mux_u16(fmt, tag)
+  wav_mux_u16(fmt, 1)
+  wav_mux_u32(fmt, rate.reinterpret_as_uint())
+  wav_mux_u32(fmt, byte_rate.reinterpret_as_uint())
+  wav_mux_u16(fmt, align)
+  wav_mux_u16(fmt, bits)
+  wav_mux_u16(fmt, extra.length())
+  for byte in extra {
+    fmt.push(byte)
+  }
+  if wave64 {
+    // Keep physical alignment separate from the compressed payload size.
+    return w64_mux_fact_data(payload, fmt, frames, include_data_padding=false)
+  }
+  wav_mux_fact_data(payload, fmt, frames)
+}
+
+///|
+/// Write a RIFF/WAV file with a format payload and a fact sample count.
+fn wav_mux_fact_data(
+  payload : Bytes,
+  fmt : Array[Byte],
+  frames : Int32,
 ) -> Bytes {
   let pad = payload.length() & 1
-  let out : Array[Byte] = Array(capacity=58 + payload.length() + pad)
+  let size = 32 + fmt.length() + payload.length() + pad
+  let out : Array[Byte] = Array(capacity=8 + size)
   wav_mux_tag(out, "RIFF")
-  wav_mux_u32(out, (50 + payload.length() + pad).reinterpret_as_uint())
+  wav_mux_u32(out, size.reinterpret_as_uint())
   wav_mux_tag(out, "WAVE")
   wav_mux_tag(out, "fmt ")
-  wav_mux_u32(out, 18U)
-  wav_mux_u16(out, tag)
-  wav_mux_u16(out, 1)
-  wav_mux_u32(out, rate.reinterpret_as_uint())
-  wav_mux_u32(out, byte_rate.reinterpret_as_uint())
-  wav_mux_u16(out, align)
-  wav_mux_u16(out, bits)
-  wav_mux_u16(out, 0)
+  wav_mux_u32(out, fmt.length().reinterpret_as_uint())
+  out.append(fmt)
   wav_mux_tag(out, "fact")
   wav_mux_u32(out, 4U)
   wav_mux_u32(out, frames.reinterpret_as_uint())
@@ -35,6 +57,27 @@ fn wav_mux_telephony(
     out.push(0)
   }
   Bytes::from_array(out)
+}
+
+///|
+/// Encode 8 kHz mono WAV49 in RIFF/WAV or Wave64.
+pub fn DecodedAudio::to_wav_gsm_ms(
+  self : DecodedAudio,
+  wave64~ : Bool = false,
+) -> Bytes raise MediaError {
+  let audio = self.resample_to(8000)
+  let payload = audio.encode_gsm(true)
+  wav_mux_telephony(
+    payload,
+    0x0031,
+    8000,
+    1625,
+    65,
+    0,
+    audio.samples[0].length(),
+    extra=b"\x40\x01",
+    wave64~,
+  )
 }
 
 ///|

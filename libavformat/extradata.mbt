@@ -196,7 +196,20 @@ fn parse_dfla(
   for _ in 0..<34 {
     bytes.push(r.avio_r8().to_byte())
   }
-  st.cur.extradata = Some(Bytes::from_array(bytes[:]))
+  let streaminfo = Bytes::from_array(bytes[:])
+  st.cur.extradata = Some(streaminfo)
+  if st.cur.codec == "fLaC" {
+    // The sample entry's 16.16 field cannot hold high FLAC sampling rates.
+    let packed = pb_be32(streaminfo, 10)
+    let rate = packed >> 12
+    let bits = ((packed >> 4) & 31U) + 1U
+    guard rate > 0U && rate <= 655350U && bits >= 4U else {
+      raise InvalidData("invalid FLAC STREAMINFO parameters")
+    }
+    st.cur.sample_rate = rate
+    st.cur.channels = ((packed >> 9) & 7U) + 1U
+    st.cur.bits_per_sample = bits
+  }
   let _ = r.avio_skip(size - 42L)
 }
 
@@ -291,7 +304,14 @@ fn parse_alac(
   for i = 0; i < size.to_int(); i = i + 1 {
     out.push(r.avio_r8().to_byte())
   }
-  st.cur.extradata = Some(Bytes::from_array(out))
+  let cookie = Bytes::from_array(out)
+  st.cur.extradata = Some(cookie)
+  if @libavcodec.alac_decoder_new(cookie) is Ok(config) &&
+    config.sample_rate > 0 {
+    st.cur.sample_rate = config.sample_rate.reinterpret_as_uint()
+    st.cur.channels = config.channels.reinterpret_as_uint()
+    st.cur.bits_per_sample = config.sample_size.reinterpret_as_uint()
+  }
 }
 
 ///|

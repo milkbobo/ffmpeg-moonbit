@@ -59,6 +59,7 @@ fn ogg_vorbis_mux_comment(comments : Array[(String, String)]) -> Bytes {
   for b in vorbis_comment_body("moonbit", comments) {
     out.push(b)
   }
+  out.push(1) // Vorbis comment framing bit.
   Bytes::from_array(out)
 }
 
@@ -84,16 +85,93 @@ pub fn OggVorbisMuxer::finish(self : OggVorbisMuxer) -> Bytes {
   ogg_mux_page(out, self.serial, seq, 2, 0L, self.id_header)
   seq = seq + 1
   let comment = ogg_vorbis_mux_comment(self.tags)
-  ogg_mux_page(out, self.serial, seq, 0, 0L, comment)
-  seq = seq + 1
-  ogg_mux_page(out, self.serial, seq, 0, 0L, self.setup_header)
-  seq = seq + 1
+  seq = ogg_mux_packet_pages(out, self.serial, seq, 0L, comment, false)
+  seq = ogg_mux_packet_pages(
+    out,
+    self.serial,
+    seq,
+    0L,
+    self.setup_header,
+    false,
+  )
   let mut granule = 0L
   for i in 0..<self.packets.length() {
     granule = granule + self.durations[i].to_int64()
-    let header_type = if i == self.packets.length() - 1 { 4 } else { 0 }
-    ogg_mux_page(out, self.serial, seq, header_type, granule, self.packets[i])
-    seq = seq + 1
+    seq = ogg_mux_packet_pages(
+      out,
+      self.serial,
+      seq,
+      granule,
+      self.packets[i],
+      i + 1 == self.packets.length(),
+    )
   }
   Bytes::from_array(out)
+}
+
+///|
+/// Encode normalized stereo PCM as Ogg Vorbis at the given sample rate.
+pub fn av_ogg_encode_vorbis(
+  samples : Array[Array[Double]],
+  rate : Int32,
+) -> Result[Bytes, String] {
+  guard samples.length() == 2 && rate > 0 else {
+    return Err("vorbis: expected stereo PCM with a positive sample rate")
+  }
+  let count = samples[0].length()
+  guard count > 0 && samples[1].length() == count else {
+    return Err("vorbis: expected two equal, nonempty PCM channels")
+  }
+  let encoder = match @libavcodec.vorbis_encoder_new(rate, 2) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  guard encoder.extradata() is Some(headers) else {
+    return Err("vorbis: missing encoder headers")
+  }
+  let (id, comment, setup) = @libavcodec.vorbis_e2e_split_extradata(headers)
+  let mux = match ogg_vorbis_muxer_new(id, comment, setup) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let block_size = encoder.initial_padding
+  let count64 = count.to_int64()
+  let block = block_size.to_int64()
+  let input_blocks = (count - 1) / block_size + 1
+  // The first packet primes the overlap. One extra block drains the tail.
+  for i in 0..<=input_blocks {
+    let start = i.to_int64() * block
+    let queue = Array::makei(block_size / encoder.frame_size, frame => {
+      Array::makei(encoder.frame_size * 2, j => {
+        let pos = start + (frame * encoder.frame_size + j / 2).to_int64()
+        if pos < count64 {
+          samples[j % 2][pos.to_int()]
+        } else {
+          0.0
+        }
+      })
+    })
+    let packet = match encoder.encode(queue, 0, queue.length(), false) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    let duration = if i == 0 {
+      0
+    } else {
+      (start.min(count64) - (start - block)).to_int()
+    }
+    mux.write_packet(packet, duration)
+  }
+  Ok(mux.finish())
+}
+
+///|
+/// Encode the decoded stereo track as Ogg Vorbis.
+pub fn DecodedAudio::to_ogg_vorbis(
+  self : DecodedAudio,
+) -> Bytes raise MediaError {
+  match av_ogg_encode_vorbis(self.samples, self.sample_rate) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
 }

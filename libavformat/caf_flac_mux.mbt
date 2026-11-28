@@ -1,13 +1,4 @@
 ///|
-/// FFmpeg's default FLAC speaker masks in channel-count order.
-fn caf_flac_channel_mask(channels : Int32) -> UInt32 {
-  let masks : FixedArray[UInt32] = [
-    4U, 3U, 7U, 0x33U, 0x607U, 0x60fU, 0x70fU, 0x63fU,
-  ]
-  masks[channels - 1]
-}
-
-///|
 /// Wrap native FLAC frames in CAF, retaining STREAMINFO and the coded frames.
 /// Supply a speaker bitmap when the source uses a non-default channel layout.
 pub fn av_caf_mux_flac(
@@ -74,26 +65,33 @@ pub fn DecodedAudio::to_caf_flac(
   self : DecodedAudio,
   bits~ : Int32 = 24,
 ) -> Bytes raise MediaError {
+  let encoded = self.encode_flac_pcm(bits)
+  match av_caf_mux_flac(encoded.file(), channel_mask=self.channel_mask) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+}
+
+///|
+fn DecodedAudio::encode_flac_pcm(
+  self : DecodedAudio,
+  bits : Int32,
+) -> @libavcodec.FlacEncoded raise MediaError {
   guard bits == 16 || bits == 24 || bits == 32 else {
-    raise UnsupportedCodec("CAF FLAC sample depth must be 16, 24 or 32 bits")
+    raise UnsupportedCodec("FLAC sample depth must be 16, 24 or 32 bits")
   }
   let channels = self.channels
   guard channels >= 1 && channels <= 8 else {
-    raise UnsupportedCodec("CAF FLAC export requires 1–8 channels")
+    raise UnsupportedCodec("FLAC export requires 1–8 channels")
   }
   let frames = self.samples[0].length()
   guard frames > 0 && frames <= 0x7fffffff / channels else {
-    raise DecodeError("caf: invalid FLAC PCM length")
+    raise DecodeError("flac: invalid PCM length")
   }
   let pcm = Array::makei(frames * channels, i => {
     playback_pcm_quantize(self.samples[i % channels][i / channels], bits)
   })
-  let encoded = match
-    @libavcodec.flac_encode(pcm, channels, self.sample_rate, bits) {
-    Ok(value) => value
-    Err(error) => raise DecodeError(error)
-  }
-  match av_caf_mux_flac(encoded.file(), channel_mask=self.channel_mask) {
+  match @libavcodec.flac_encode(pcm, channels, self.sample_rate, bits) {
     Ok(value) => value
     Err(error) => raise DecodeError(error)
   }

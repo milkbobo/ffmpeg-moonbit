@@ -56,3 +56,58 @@ test "mp4 muxer: FLAC track round-trip and decode" {
   }
   assert_eq(ogg_flac_md5(audio.pcm_bytes()), ogg_flac_pcm_md5)
 }
+
+///|
+test "MP4 FLAC round-trips high sample rates and the short final frame" {
+  let count = 4101
+  let channels = 6
+  let mask = 0x60fU
+  let wav = wav_muxer_new(96000, channels, 32, channel_mask=mask).unwrap()
+  wav.write_samples(
+    Array::makei(count * channels, i => (i.to_uint64() * 2654435761UL).to_int())[:],
+  )
+  let audio = decode_audio_file(wav.finish())
+  let file = audio.to_mp4_flac(bits=32)
+  let movie = av_mov_open(file).unwrap()
+  let track = movie.tracks[0]
+  assert_eq(track.sample_rate, 96000U)
+  assert_eq(track.bits_per_sample, 32U)
+  assert_eq(track.channels, 6U)
+  assert_eq(track.samples.map(frame => (frame.pts, frame.duration)), [
+    (0L, 4096U),
+    (4096L, 5U),
+  ])
+  let media = MediaFile::open(file)
+  assert_eq(media.streams()[0].sample_rate, 96000)
+  let decoded = decode_audio_file(file)
+  assert_eq(decoded.sample_rate(), 96000)
+  assert_eq(decoded.channel_mask, mask)
+  assert_eq(decoded.samples()[0].length(), count)
+  assert_eq(decoded.samples(), audio.samples())
+}
+
+///|
+test "MP4 FLAC remux retains native frames and STREAMINFO" {
+  let flac = @libavcodec.flac_encode(
+    Array::makei(117, i => i * 257 - 15000),
+    1,
+    44100,
+    16,
+    block_size=32,
+  ).unwrap()
+  let native = flac.file()
+  let file = av_mp4_mux_flac(native).unwrap()
+  let track = av_mov_open(file).unwrap().tracks[0]
+  assert_eq(track.extradata, Some(flac.streaminfo))
+  assert_eq(track.samples.length(), flac.frames.length())
+  for i, frame in track.samples {
+    let start = frame.offset.to_int()
+    assert_eq(
+      file[start:start + frame.size.reinterpret_as_int()],
+      flac.frames[i],
+    )
+  }
+  assert_true(
+    av_mp4_mux_flac(native[:native.length() - 1].to_owned()) is Err(_),
+  )
+}

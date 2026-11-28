@@ -194,6 +194,12 @@ fn aifc_mux_compressed(
 }
 
 ///|
+/// Encode mono 8 kHz GSM in AIFF-C, padding the final 160-sample block.
+pub fn DecodedAudio::to_aifc_gsm(self : DecodedAudio) -> Bytes raise MediaError {
+  aifc_mux_compressed(self.to_gsm(), 8000, 1, "GSM ", 16, 33)
+}
+
+///|
 /// Encode 16 kHz mono G.722 in AIFF-C.
 pub fn DecodedAudio::to_aifc_g722(
   self : DecodedAudio,

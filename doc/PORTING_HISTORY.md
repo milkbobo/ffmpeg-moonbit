@@ -19053,3 +19053,93 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
 
 - 移植 libgsm 的定点 RPE-LTP 编码核心。`decode-audio --format caf_gsm|caf_gsm_ms` 接受单声道 PCM，重采样到 8 kHz 并按 CAF 包表记录末包填充。读取时检测残缺块和原生 GSM 同步标志。
 - 两种打包的编码负载均与 FFmpeg 9.1 调用 libgsm 的结果逐字节一致。FFmpeg 9.0.2 和 MoonBit 回读均保留 5,203 个有效样本，s16 PCM 逐字节一致。
+
+## §619 裸 GSM、WAV 和 Wave64 的 WAV49 编解码（2026-11-28）
+
+- `decode-audio --format gsm|wav_gsm_ms|w64_gsm_ms` 复用定点 GSM 编码器。三种输出的编码负载与 FFmpeg 9.1 调用 libgsm 的结果逐字节一致。
+- WAV 和 Wave64 读取时根据 `fact` 裁剪末块，校验块完整性。Wave64 写入的块长度排除对齐字节，也能读取把零填充计入块长度的文件。5,203 样本输入经两种容器分别回读均保留 5,203 个有效样本，与 FFmpeg 9.0.2 解码的有效区间逐字节一致。
+
+## §620 AIFF-C GSM 编解码（2026-11-28）
+
+- `decode-audio --format aifc_gsm` 把单声道 PCM 重采样到 8 kHz，用 `GSM ` 标签封装 33 字节原生帧，在 `COMM` 中记录编码块数。
+- 解复用按 `SSND` 内的完整块计算时长，检查块大小和同步标志。5,203 样本输入的编码负载与 libgsm 逐字节一致，MoonBit 和 FFmpeg 9.0.2 回读均得到 5,280 个样本，s16 PCM 完全一致。
+
+## §621 QuickTime MOV GSM 编解码（2026-11-28）
+
+- `decode-audio --format mov_gsm` 写入单声道 8 kHz GSM，QuickTime SoundDescription 记录每包 160 个样本和 33 字节，编辑列表记录有效时长。`av_mov_mux_gsm` 支持裸帧重封装。
+- 解码 MOV GSM 时按标称块大小去除末块填充，覆盖样本表已缩短末包时长的单包文件。MoonBit 和 FFmpeg 9.0.2 回读均恢复 5,203 个有效样本，s16 PCM 逐字节一致。
+
+## §622 Ogg Opus 编码与末页裁剪（2026-11-28）
+
+- `decode-audio --format ogg_opus` 与 CAF 复用单声道和立体声的 Opus 编码流程。编码在 48 kHz 进行，`OpusHead` 保留输入采样率，末页记录准确的有效结束位置。
+- `OggOpusMuxer::finish_trimmed` 支持指定有效样本数。解复用拒绝时间戳倒退的结束页和末页未完成的包。8 kHz 单声道、32 kHz 立体声源经 MoonBit 和 FFmpeg 9.0.2 回读分别恢复每声道 31,218 和 7,805 个样本，s16 PCM 最大偏差 1 LSB。
+
+## §623 Ogg FLAC 编码与跨页帧（2026-11-28）
+
+- `decode-audio --format ogg_flac` 支持 16、24 或 32 位和标准 FLAC 的 1–8 声道布局。封装器按帧样本数推进 granule，大帧使用续页。
+- 解复用按帧起点给出样本时间戳，并检查续页标志和残缺帧。16 位单声道、24 位 5.1、32 位立体声和包含 131,088 字节跨页帧的 32 位八声道样本经 FFmpeg 9.0.2 回读，PCM 均与输入逐字节一致。
+
+## §624 Ogg Vorbis 命令行导出与回读（2026-11-28）
+
+- `decode-audio --format ogg_vorbis` 和网页演示共用立体声 Vorbis 编码流程。首包用于建立重叠窗口，末页记录有效样本数，评论包带 Vorbis 帧标志。
+- 解复用校验续页和结束位置。5,203 样本及单样本输出经 MoonBit 与 FFmpeg 9.0.2 回读，样本数一致，s16 PCM 最大偏差 1 LSB。
+
+## §625 WAV 和 Wave64 FLAC 编码与重封装（2026-11-28）
+
+- `decode-audio --format wav_flac|w64_flac` 支持 1–8 声道的 16、24 或 32 位 FLAC。`av_wav_mux_flac` 保留原生 STREAMINFO 与编码帧，写入有效样本数和声道位图。读取时优先使用有效的容器声道位图，未声明时采用标准多声道布局。
+- 两种容器分别用 16 位单声道、24 位 5.1 侧环绕和 32 位立体声对拍，FFmpeg 9.0.2 回读的 PCM 均与输入逐字节一致。
+
+## §626 MP4 FLAC 编码与重封装（2026-11-28）
+
+- `decode-audio --format mp4_flac` 支持标准 FLAC 布局的 1–8 声道和 16、24、32 位输出。`av_mp4_mux_flac` 保留 STREAMINFO、原始编码帧及每帧的实际时长。
+- MP4 解码从 STREAMINFO 恢复完整采样率、声道数和位深，并保留较短的末帧。16 位单声道、96 kHz 的 24 位 5.1 及 32 位立体声经 FFmpeg 9.0.2 回读，PCM 均与输入逐字节一致。
+
+## §627 Matroska FLAC 编码与重封装（2026-11-28）
+
+- `decode-audio --format mkv_flac` 支持标准 FLAC 布局的 1–8 声道和 16、24、32 位输出。`av_mkv_mux_flac` 保留 STREAMINFO 及编码帧，音频封装器在相对时间戳溢出前开始新 Cluster。
+- 解码统一处理带 `fLaC` 头的 CodecPrivate，并从 STREAMINFO 读取位深和采样参数。34 秒的 16 位单声道、24 位 5.1 和 32 位立体声经 FFmpeg 9.0.2 回读，PCM 均与输入逐字节一致。
+
+## §628 MP4 ALAC 编码与回读（2026-11-28）
+
+- `decode-audio --format mp4_alac` 支持单声道或立体声。编码器支持 32 位 PCM，通过 ALAC 的低位字段保留每个样本的低 16 位。
+- MP4 解码从 ALAC cookie 恢复完整采样率和位深，保留短末帧。16 位单声道、96 kHz 的 24 位立体声及 32 位立体声经 FFmpeg 9.0.2 回读，PCM 均与输入逐字节一致。
+
+## §629 CAF 和 Matroska ALAC 编码与回读（2026-11-28）
+
+- `decode-audio --format caf_alac|mkv_alac` 与 MP4 共用单声道和立体声的 16、24、32 位编码流程。CAF 使用 cookie 中的标称帧长，Matroska 按有效样本数写入容器时长。
+- Matroska 从 ALAC cookie 恢复采样率、声道数和位深。两种容器的 16 位单声道、96 kHz 的 24 位立体声和 32 位立体声经 FFmpeg 9.0.2 回读，PCM 均与输入逐字节一致。
+
+## §630 MP4 AAC-LC 编码与回读（2026-11-28）
+
+- `decode-audio --format mp4_aac` 和 `DecodedAudio::to_mp4_aac` 支持单声道与立体声。MP4 使用采样率作为时间刻度，通过编辑列表裁掉 1,024 个启动样本，并按有效样本数记录末包时长。
+- 测试覆盖单样本、整帧和短末帧。使用 FFmpeg 9.0.2 双向对拍 8、32 和 48 kHz 的单声道与立体声样本，两端回读的样本数一致，16 位 PCM 最大差异为 1 LSB。
+
+## §631 Matroska AAC-LC 编码与解码裁剪（2026-11-28）
+
+- `decode-audio --format mkv_aac` 和 `DecodedAudio::to_mkv_aac` 支持单声道与立体声。轨道的 `CodecDelay` 记录启动延迟，有填充的末包通过 `BlockGroup` 写入 `DiscardPadding`。
+- AAC 回读在解码后应用启动延迟和有符号的块填充。测试覆盖单样本、整帧、短末帧和负填充。FFmpeg 9.0.2 直接解码以及重封装后用 MoonBit 解码，3 个样本的长度均与输入一致，16 位 PCM 最大差异为 1 LSB。
+
+## §632 WebM 和 Matroska Opus 编码与回读（2026-11-28）
+
+- `decode-audio --format webm_opus|mkv_opus` 支持单声道和立体声，自动重采样到 48 kHz。长音频在块的有符号时间戳溢出前分段。有效样本数由 `CodecDelay` 和 `DiscardPadding` 确定，极短输入增加一个静音预卷包，避免 FFmpeg 9.0.2 回读时用启动延迟覆盖同一包的末端裁剪信息。
+- FFmpeg 回读 MoonBit 导出的单样本和重采样立体声文件，WebM、Matroska 和 Ogg 的 16 位 PCM 逐字节一致。对于 FFmpeg 自己写出的单样本 WebM，MoonBit 读取到块填充后恢复为 1 个样本，FFmpeg 9.0.2 自身回读输出 648 个样本。
+
+## §633 FLV AAC-LC 和 Enhanced FLV FLAC 编解码（2026-11-28）
+
+- `decode-audio --format flv_aac` 支持单声道与立体声，序列头携带 AudioSpecificConfig，编码延迟和短末帧填充保留在回读 PCM 中。FFmpeg 9.0.2 与 MoonBit 的 16 位 PCM 最大差异为 1 LSB。
+- `decode-audio --format flv_flac` 支持 FLAC 标准布局及 16、24、32 位 PCM。`av_flv_mux_flac` 保留 STREAMINFO 和编码帧，解码按标准 FLAC 布局恢复 WAV 声道掩码。FFmpeg 回读三种位深均与输入逐字节一致，MoonBit 回读 FFmpeg 生成的 24 位 5.1 和 32 位立体声文件也逐字节一致。
+
+## §634 MPEG-TS Opus 编码与回读（2026-11-28）
+
+- `decode-audio --format ts_opus` 和 `DecodedAudio::to_ts_opus` 支持单声道与立体声，自动重采样到 48 kHz。PMT 写入 DVB Opus 声道描述符，访问单元记录启动延迟和末包填充，单包可以同时携带两种裁剪值。
+- 通过 MoonBit 回读，MPEG-TS 与 Ogg 的 PCM 逐样本一致。MoonBit 也能应用 FFmpeg 生成的 DVB Opus 裁剪值。FFmpeg 9.0.2 回读会保留延迟和填充，手动按标记裁剪后，16 位 PCM 与 Ogg 对照逐字节一致。
+
+## §635 裸 ADTS 与 MPEG-TS AAC-LC 编码及回读（2026-11-28）
+
+- `decode-audio --format adts|ts_aac|ts_latm` 支持单声道和立体声，保留输入采样率。MPEG-TS 写入 ADTS 或 LOAS/LATM 访问单元，逐帧按 90 kHz 时钟写入时间戳。极短 TS 使用空包补足容器探测长度。
+- FFmpeg 9.0.2 回读 8 kHz 单声道和 32 kHz 立体声时，三种输出的 16 位 PCM 逐字节一致。MoonBit 回读 FFmpeg 编码的同类 LATM 文件，最大差异为 1 LSB。仅含两个 AAC 访问单元的 TS LATM 已通过 MoonBit 回读，FFmpeg 9.0.2 会将此类音轨报告为未知编码。
+
+## §636 裸 AC-3 与 MPEG-TS AC-3 编码及回读（2026-11-28）
+
+- `decode-audio --format ac3|ts_ac3` 与 CAF 共用定点 AC-3 编码。`av_ts_mux_ac3` 使用 ATSC AC-3 流类型和注册描述符，保留每个同步帧，包括 44.1 kHz 下的变长帧。解码从 AC-3 头恢复多声道 WAV 布局。
+- FFmpeg 9.0.2 回读 44.1 kHz 立体声和 48 kHz 侧环绕 5.1，裸流与 TS 的 16 位 PCM 逐字节一致。MoonBit 回读 FFmpeg 生成的对应 TS，样本数一致，最大差异为 1 LSB。

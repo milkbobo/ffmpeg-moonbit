@@ -108,20 +108,23 @@ fn mp4_mp3_entry(
 }
 
 ///|
-/// The single-track audio MP4 layout shared with the Opus writer: `ftyp`,
-/// one `mdat` holding every sample, then `moov` with one `trak`.
+/// The single-track audio layout: `ftyp`, one `mdat` holding every sample,
+/// then `moov` with one `trak`. QuickTime can specify a shorter presentation.
 fn mp4_audio_document(
   timescale : Int32,
   packets : Array[Bytes],
   durations : Array[Int32],
   entry : Array[Byte],
   language : Int32,
+  quicktime_duration? : Int32,
 ) -> Bytes {
   let sample_count = packets.length()
   let mut total_duration = 0
   for d in durations {
     total_duration = total_duration + d
   }
+  let presentation = quicktime_duration.unwrap_or(total_duration)
+  let quicktime = quicktime_duration is Some(_)
   let data : Array[Byte] = []
   for packet in packets {
     for b in packet {
@@ -129,10 +132,16 @@ fn mp4_audio_document(
     }
   }
   let ftyp_body : Array[Byte] = []
-  mp4_tag(ftyp_body, "isom")
-  mp4_u32(ftyp_body, 0x200U)
-  for brand in ["isom", "iso2", "mp41"] {
-    mp4_tag(ftyp_body, brand)
+  if quicktime {
+    mp4_tag(ftyp_body, "qt  ")
+    mp4_u32(ftyp_body, 0x200U)
+    mp4_tag(ftyp_body, "qt  ")
+  } else {
+    mp4_tag(ftyp_body, "isom")
+    mp4_u32(ftyp_body, 0x200U)
+    for brand in ["isom", "iso2", "mp41"] {
+      mp4_tag(ftyp_body, brand)
+    }
   }
   let ftyp = mp4_box("ftyp", ftyp_body)
   let mdat = mp4_box("mdat", data)
@@ -142,7 +151,7 @@ fn mp4_audio_document(
   mp4_u32(mvhd_body, 0U)
   mp4_u32(mvhd_body, 0U)
   mp4_u32(mvhd_body, timescale.reinterpret_as_uint())
-  mp4_u32(mvhd_body, total_duration.reinterpret_as_uint())
+  mp4_u32(mvhd_body, presentation.reinterpret_as_uint())
   mp4_u32(mvhd_body, 0x00010000U)
   mp4_u16(mvhd_body, 0x0100)
   mp4_u16(mvhd_body, 0)
@@ -161,7 +170,7 @@ fn mp4_audio_document(
   mp4_u32(tkhd_body, 0U)
   mp4_u32(tkhd_body, 1U)
   mp4_u32(tkhd_body, 0U)
-  mp4_u32(tkhd_body, total_duration.reinterpret_as_uint())
+  mp4_u32(tkhd_body, presentation.reinterpret_as_uint())
   for _ in 0..<2 {
     mp4_u32(tkhd_body, 0U)
   }
@@ -184,13 +193,22 @@ fn mp4_audio_document(
   let mdhd = mp4_full_box("mdhd", 0, 0, mdhd_body)
 
   let hdlr_body : Array[Byte] = []
-  mp4_u32(hdlr_body, 0U)
+  if quicktime {
+    mp4_tag(hdlr_body, "mhlr")
+  } else {
+    mp4_u32(hdlr_body, 0U)
+  }
   mp4_tag(hdlr_body, "soun")
   for _ in 0..<3 {
     mp4_u32(hdlr_body, 0U)
   }
+  if quicktime {
+    hdlr_body.push(12) // Pascal string in QuickTime
+  }
   mp4_tag(hdlr_body, "SoundHandler")
-  hdlr_body.push(b'\x00')
+  if !quicktime {
+    hdlr_body.push(b'\x00')
+  }
   let hdlr = mp4_full_box("hdlr", 0, 0, hdlr_body)
 
   let smhd_body : Array[Byte] = []
@@ -255,7 +273,12 @@ fn mp4_audio_document(
   let stbl = mp4_box("stbl", mp4_cat([stsd, stts, stsc, stsz, stco]))
   let minf = mp4_box("minf", mp4_cat([smhd, dinf, stbl]))
   let mdia = mp4_box("mdia", mp4_cat([mdhd, hdlr, minf]))
-  let trak = mp4_box("trak", mp4_cat([tkhd, mdia]))
+  let edts = if presentation < total_duration {
+    mp4_edit_list_at(0, presentation)
+  } else {
+    []
+  }
+  let trak = mp4_box("trak", mp4_cat([tkhd, edts, mdia]))
   let moov = mp4_box("moov", mp4_cat([mvhd, trak]))
   Bytes::from_array(mp4_cat([ftyp, mdat, moov]))
 }
@@ -353,7 +376,7 @@ fn Mp4FlacMuxer::entry(self : Mp4FlacMuxer) -> Array[Byte] {
   mp4_u16(body, self.bits)
   mp4_u16(body, 0)
   mp4_u16(body, 0)
-  mp4_u32(body, (self.sample_rate << 16).reinterpret_as_uint())
+  mp4_u32(body, mp4_lossless_entry_rate(self.sample_rate))
   let dfla : Array[Byte] = []
   dfla.push(if self.headers.length() == 0 { b'\x80' } else { b'\x00' })
   dfla.push(b'\x00')
@@ -372,6 +395,17 @@ fn Mp4FlacMuxer::entry(self : Mp4FlacMuxer) -> Array[Byte] {
 }
 
 ///|
+/// Lossless sample descriptions carry the full rate in codec configuration
+/// when it exceeds the integer portion of the legacy 16.16 field.
+fn mp4_lossless_entry_rate(rate : Int32) -> UInt32 {
+  let mut entry_rate = rate
+  while entry_rate > 65535 {
+    entry_rate = entry_rate >> 1
+  }
+  (entry_rate << 16).reinterpret_as_uint()
+}
+
+///|
 pub fn Mp4FlacMuxer::finish(self : Mp4FlacMuxer) -> Bytes {
   mp4_audio_document(
     self.timescale,
@@ -380,6 +414,52 @@ pub fn Mp4FlacMuxer::finish(self : Mp4FlacMuxer) -> Bytes {
     self.entry(),
     self.language,
   )
+}
+
+///|
+/// Wrap native FLAC in MP4, preserving STREAMINFO and the coded audio.
+pub fn av_mp4_mux_flac(data : Bytes) -> Result[Bytes, String] {
+  let track = match av_flac_open(data) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  guard !track.frames.is_empty() &&
+    track.total_samples <= 0xffffffffL &&
+    data.length().to_int64() + track.frames.length().to_int64() * 12L <=
+    0x7fffffffL - 1024L else {
+    return Err("mp4: empty or oversized FLAC stream")
+  }
+  let mux = match mp4_flac_muxer_new(track.streaminfo) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  for frame in track.frames {
+    let start = frame.pos.to_int()
+    let packet = data[start:start + frame.size].to_owned()
+    if mux.write_packet(packet, duration=frame.duration) is Err(error) {
+      return Err(error)
+    }
+  }
+  Ok(mux.finish())
+}
+
+///|
+/// Encode 16-, 24- or 32-bit FLAC in MP4.
+pub fn DecodedAudio::to_mp4_flac(
+  self : DecodedAudio,
+  bits~ : Int32 = 24,
+) -> Bytes raise MediaError {
+  let encoded = self.encode_flac_pcm(bits)
+  guard self.channel_mask == 0U ||
+    self.channel_mask == flac_default_channel_mask(encoded.channels) else {
+    raise UnsupportedCodec(
+      "MP4 FLAC export requires a standard FLAC channel layout",
+    )
+  }
+  match av_mp4_mux_flac(encoded.file()) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
 }
 
 ///|
@@ -477,7 +557,7 @@ fn Mp4AlacMuxer::entry(self : Mp4AlacMuxer) -> Array[Byte] {
   mp4_u16(body, self.bits)
   mp4_u16(body, 0)
   mp4_u16(body, 0)
-  mp4_u32(body, (self.sample_rate << 16).reinterpret_as_uint())
+  mp4_u32(body, mp4_lossless_entry_rate(self.sample_rate))
   for b in self.cookie {
     body.push(b)
   }
@@ -493,4 +573,68 @@ pub fn Mp4AlacMuxer::finish(self : Mp4AlacMuxer) -> Bytes {
     self.entry(),
     self.language,
   )
+}
+
+///|
+/// Encode mono or stereo PCM as 16-, 24- or 32-bit ALAC in MP4.
+pub fn DecodedAudio::to_mp4_alac(
+  self : DecodedAudio,
+  bits~ : Int32 = 24,
+) -> Bytes raise MediaError {
+  let output = self.encode_alac_pcm(bits)
+  let mux = match mp4_alac_muxer_new(output.cookie) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  for i, packet in output.frames {
+    if mux.write_packet(packet, duration=alac_encoded_duration(output, i))
+      is Err(error) {
+      raise DecodeError(error)
+    }
+  }
+  mux.finish()
+}
+
+///|
+fn alac_encoded_duration(
+  output : @libavcodec.AlacEncoded,
+  index : Int32,
+) -> Int32 {
+  (output.total_samples.to_int() - index * output.frame_size).min(
+    output.frame_size,
+  )
+}
+
+///|
+fn DecodedAudio::encode_alac_pcm(
+  self : DecodedAudio,
+  bits : Int32,
+) -> @libavcodec.AlacEncoded raise MediaError {
+  let channels = self.channels
+  guard channels == 1 || channels == 2 else {
+    raise UnsupportedCodec("ALAC export requires mono or stereo")
+  }
+  guard bits == 16 || bits == 24 || bits == 32 else {
+    raise UnsupportedCodec("ALAC sample depth must be 16, 24 or 32 bits")
+  }
+  let count = self.samples[0].length()
+  guard count > 0 && count <= 0x7fffffff / channels else {
+    raise DecodeError("alac: invalid PCM length")
+  }
+  let pcm = Array::makei(count * channels, i => {
+    playback_pcm_quantize(self.samples[i % channels][i / channels], bits)
+  })
+  let output = match
+    @libavcodec.alac_encode(pcm, channels, self.sample_rate, bits) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  let mut bytes = 0L
+  for packet in output.frames {
+    bytes += packet.length().to_int64() + 32L
+    guard bytes <= 0x7fffffffL - 1024L else {
+      raise DecodeError("alac: output is too large")
+    }
+  }
+  output
 }

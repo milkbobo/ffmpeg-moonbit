@@ -295,6 +295,25 @@ pub fn codec_parameters_from_extradata(
       }
       None => ()
     }
+  } else if codec == "alac" {
+    if @libavcodec.alac_decoder_new(extra) is Ok(alac) && alac.sample_rate > 0 {
+      p.sample_rate = alac.sample_rate
+      p.channels = alac.channels
+      p.bit_depth = alac.sample_size
+      p.extradata_parsed = true
+    }
+  } else if codec == "flac" {
+    if flac_streaminfo_payload(extra) is Some(streaminfo) {
+      let packed = pb_be32(streaminfo, 10)
+      let rate = (packed >> 12).reinterpret_as_int()
+      let bits = ((packed >> 4) & 31U).reinterpret_as_int() + 1
+      if rate > 0 && rate <= 655350 && bits >= 4 {
+        p.sample_rate = rate
+        p.channels = ((packed >> 9) & 7U).reinterpret_as_int() + 1
+        p.bit_depth = bits
+        p.extradata_parsed = true
+      }
+    }
   } else if codec == "opus" {
     match opus_head_parse(extra) {
       Some((channels, pre_skip, _rate)) => {

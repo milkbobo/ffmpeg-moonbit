@@ -4,36 +4,6 @@ fn demo_audio_format(format : String) -> Bool {
 }
 
 ///|
-fn demo_encode_vorbis(
-  samples : Array[Array[Double]],
-  rate : Int32,
-) -> Bytes raise {
-  let enc = demo_result(@avc.vorbis_encoder_new(rate, samples.length()))
-  guard enc.extradata() is Some(headers) else { fail("missing Vorbis headers") }
-  let (id, comment, setup) = @avc.vorbis_e2e_split_extradata(headers)
-  let mux = demo_result(@avf.ogg_vorbis_muxer_new(id, comment, setup))
-  let block_size = 1024
-  let total = samples[0].length()
-  // The first packet primes the overlap. One extra block drains the tail.
-  for start = 0; start < total + block_size; start = start + block_size {
-    let queue = Array::makei(block_size / enc.frame_size, frame => {
-      Array::makei(enc.frame_size * 2, i => {
-        let pos = start + frame * enc.frame_size + i / 2
-        if pos < total {
-          samples[i % 2][pos]
-        } else {
-          0.0
-        }
-      })
-    })
-    let packet = demo_result(enc.encode(queue, 0, queue.length(), false))
-    let duration = start.min(total) - (start - block_size).max(0).min(total)
-    mux.write_packet(packet, duration)
-  }
-  mux.finish()
-}
-
-///|
 fn demo_encode_audio(
   samples : Array[Array[Double]],
   rate : Int32,
@@ -48,7 +18,7 @@ fn demo_encode_audio(
       guard channels == 2 else {
         fail("Ogg/Vorbis 导出需要立体声音轨。")
       }
-      demo_encode_vorbis(samples, rate)
+      demo_result(@avf.av_ogg_encode_vorbis(samples, rate))
     }
     "ac3" | "spdif" => {
       guard channels == 1 || channels == 2 else {

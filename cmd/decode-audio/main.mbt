@@ -42,6 +42,8 @@ fn main raise {
     println("  --format argo_asf writes mono/stereo Argonaut ASF")
     println("  --format wsaud writes mono/stereo Westwood AUD")
     println("  --format aifc_ima4 writes mono/stereo Apple IMA4 in AIFF-C")
+    println("  --format aifc_gsm writes mono GSM in AIFF-C")
+    println("  --format mov_gsm writes mono GSM in QuickTime MOV")
     println("  --format aifc_adp4 writes mono/stereo Westwood IMA in AIFF-C")
     println("  --format aifc_alaw or aifc_mulaw writes G.711 in AIFF-C")
     println("  --format smjpeg_pcm writes an audio-only Loki SMJPEG file")
@@ -59,6 +61,11 @@ fn main raise {
     )
     println("  --format ts_s302m writes 48 kHz SMPTE 302M in MPEG-TS")
     println("  --format ts_bluray_lpcm writes Blu-ray LPCM in HDMV MPEG-TS")
+    println("  --format ts_opus writes mono or stereo Opus in MPEG-TS")
+    println(
+      "  --format ts_aac|ts_latm writes AAC-LC in MPEG-TS with ADTS or LATM",
+    )
+    println("  --format adts writes a raw AAC-LC ADTS stream")
     println(
       "  --bluray-bits 16|24 sets Blu-ray LPCM output depth (default: 24)",
     )
@@ -81,21 +88,43 @@ fn main raise {
     )
     println("  --format caf_alaw or caf_mulaw writes G.711 in CAF")
     println("  --format caf_ac3 writes AC-3 in CAF")
+    println("  --format ac3|ts_ac3 writes raw AC-3 or AC-3 in MPEG-TS")
     println("  --format caf_aac writes mono or stereo AAC-LC in CAF")
+    println("  --format mp4_aac writes mono or stereo AAC-LC in MP4")
+    println("  --format mkv_aac writes mono or stereo AAC-LC in Matroska")
     println("  --format caf_gsm or caf_gsm_ms writes mono GSM or WAV49 in CAF")
+    println("  --format gsm, wav_gsm_ms or w64_gsm_ms writes mono GSM or WAV49")
     println(
       "  --format caf_mp2 or caf_mp3 writes mono or stereo MPEG audio in CAF",
     )
     println("  --format caf_opus writes mono or stereo Opus in CAF")
+    println("  --format ogg_opus writes mono or stereo Ogg Opus")
+    println(
+      "  --format webm_opus|mkv_opus writes mono or stereo Opus in WebM or Matroska",
+    )
+    println("  --format ogg_vorbis writes stereo Ogg Vorbis")
     println(
       "  --format caf_flac writes FLAC in CAF with --caf-flac-bits 16, 24 or 32 (default: 24)",
     )
+    println(
+      "  --format ogg_flac writes Ogg FLAC with --flac-bits 16, 24 or 32 (default: 24)",
+    )
+    println(
+      "  --format wav_flac or w64_flac writes FLAC in WAV or Wave64 with --flac-bits",
+    )
+    println("  --format mp4_flac writes FLAC in MP4 with --flac-bits")
+    println(
+      "  --format mp4_alac, caf_alac or mkv_alac writes mono or stereo ALAC with --alac-bits 16, 24 or 32 (default: 24)",
+    )
+    println("  --format mkv_flac writes FLAC in Matroska with --flac-bits")
     println(
       "  --format w64_f64, w64_alaw or w64_mulaw writes float64 or G.711 Wave64",
     )
     println("  --format adx writes mono/stereo unencrypted CRI ADX")
     println("  --format qoa writes Quite OK Audio")
     println("  --format flv_adpcm writes mono/stereo Flash ADPCM in FLV")
+    println("  --format flv_aac writes mono or stereo AAC-LC in FLV")
+    println("  --format flv_flac writes FLAC in Enhanced FLV with --flac-bits")
     println(
       "  --format tta exports TTA with --tta-bits 8, 16 or 24 (default: 24)",
     )
@@ -120,7 +149,8 @@ fn main raise {
   let mut g726_bits = 4
   let mut aptx_rate = 48000
   let mut tta_bits = 24
-  let mut caf_flac_bits = 24
+  let mut flac_bits = 24
+  let mut alac_bits = 24
   let mut ircam_codec = "pcm_s16le"
   let mut sphere_codec = "pcm_s16le"
   let mut s302m_bits = 24
@@ -178,12 +208,20 @@ fn main raise {
         _ => fail("decode-audio: --bluray-bits expects a number")
       }
       i = i + 2
-    } else if a == "--caf-flac-bits" {
+    } else if a == "--caf-flac-bits" || a == "--flac-bits" {
       if i + 1 >= args.length() {
-        fail("decode-audio: --caf-flac-bits requires a value")
+        fail("decode-audio: \{a} requires a value")
       }
-      caf_flac_bits = @string.parse_int(args[i + 1]) catch {
-        _ => fail("decode-audio: --caf-flac-bits expects a number")
+      flac_bits = @string.parse_int(args[i + 1]) catch {
+        _ => fail("decode-audio: \{a} expects a number")
+      }
+      i = i + 2
+    } else if a == "--alac-bits" {
+      if i + 1 >= args.length() {
+        fail("decode-audio: --alac-bits requires a value")
+      }
+      alac_bits = @string.parse_int(args[i + 1]) catch {
+        _ => fail("decode-audio: --alac-bits expects a number")
       }
       i = i + 2
     } else if a == "--tta-bits" {
@@ -238,6 +276,8 @@ fn main raise {
     | "kvag"
     | "wsaud"
     | "aifc_ima4"
+    | "aifc_gsm"
+    | "mov_gsm"
     | "aifc_adp4"
     | "aifc_alaw"
     | "aifc_mulaw"
@@ -250,6 +290,7 @@ fn main raise {
     | "rso"
     | "sphere"
     | "loas"
+    | "adts"
     | "8svx"
     | "16sv"
     | "avr"
@@ -261,6 +302,9 @@ fn main raise {
     | "maud_alaw"
     | "maud_mulaw"
     | "ts_bluray_lpcm"
+    | "ts_opus"
+    | "ts_aac"
+    | "ts_latm"
     | "voc_u8"
     | "voc_alaw"
     | "voc_mulaw"
@@ -268,13 +312,32 @@ fn main raise {
     | "caf_ima4"
     | "caf_ima_wav"
     | "caf_ac3"
+    | "ac3"
+    | "ts_ac3"
     | "caf_aac"
+    | "mp4_aac"
+    | "mkv_aac"
     | "caf_mp2"
     | "caf_mp3"
     | "caf_gsm"
     | "caf_gsm_ms"
+    | "gsm"
+    | "wav_gsm_ms"
+    | "w64_gsm_ms"
     | "caf_flac"
+    | "ogg_flac"
+    | "mp4_flac"
+    | "mp4_alac"
+    | "caf_alac"
+    | "mkv_alac"
+    | "mkv_flac"
+    | "wav_flac"
+    | "w64_flac"
     | "caf_opus"
+    | "ogg_opus"
+    | "webm_opus"
+    | "mkv_opus"
+    | "ogg_vorbis"
     | "caf_ms"
     | "caf_f32le"
     | "caf_f32be"
@@ -293,6 +356,8 @@ fn main raise {
     | "w64_mulaw"
     | "qoa"
     | "flv_adpcm"
+    | "flv_aac"
+    | "flv_flac"
     | "apm"
     | "argo_asf" => {
       guard output != "" else {
@@ -370,6 +435,8 @@ fn main raise {
         "argo_asf" => audio.to_argo_asf()
         "wsaud" => audio.to_wsaud()
         "aifc_ima4" => audio.to_aifc_ima4()
+        "aifc_gsm" => audio.to_aifc_gsm()
+        "mov_gsm" => audio.to_mov_gsm()
         "aifc_adp4" => audio.to_aifc_adp4()
         "aifc_alaw" | "aifc_mulaw" =>
           audio.to_aifc_g711(mulaw=format == "aifc_mulaw")
@@ -382,6 +449,7 @@ fn main raise {
         "wve" => audio.to_wve()
         "sphere" => audio.to_sphere(codec=sphere_codec)
         "loas" => audio.to_loas()
+        "adts" => audio.to_adts()
         "8svx" => audio.to_svx()
         "16sv" => audio.to_svx(bits=16)
         "avr" => audio.to_avr()
@@ -394,6 +462,9 @@ fn main raise {
         "maud_mulaw" => audio.to_maud(codec="pcm_mulaw")
         "ts_s302m" => audio.to_ts_s302m(bits=s302m_bits)
         "ts_bluray_lpcm" => audio.to_ts_bluray_lpcm(bits=bluray_bits)
+        "ts_opus" => audio.to_ts_opus()
+        "ts_aac" => audio.to_ts_aac()
+        "ts_latm" => audio.to_ts_aac(latm=true)
         "voc" => audio.to_voc()
         "voc_u8" => audio.to_voc(codec="pcm_u8")
         "voc_alaw" => audio.to_voc(codec="pcm_alaw")
@@ -402,13 +473,32 @@ fn main raise {
         "caf_ima4" => audio.to_caf_ima4()
         "caf_ima_wav" => audio.to_caf_wav_adpcm("adpcm_ima_wav")
         "caf_ac3" => audio.to_caf_ac3()
+        "ac3" => audio.to_ac3()
+        "ts_ac3" => audio.to_ts_ac3()
         "caf_aac" => audio.to_caf_aac()
+        "mp4_aac" => audio.to_mp4_aac()
+        "mkv_aac" => audio.to_mkv_aac()
         "caf_mp2" => audio.to_caf_mp2()
         "caf_mp3" => audio.to_caf_mp3()
         "caf_gsm" | "caf_gsm_ms" =>
           audio.to_caf_gsm(wav49=format == "caf_gsm_ms")
-        "caf_flac" => audio.to_caf_flac(bits=caf_flac_bits)
+        "gsm" => audio.to_gsm()
+        "wav_gsm_ms" | "w64_gsm_ms" =>
+          audio.to_wav_gsm_ms(wave64=format == "w64_gsm_ms")
+        "caf_flac" => audio.to_caf_flac(bits=flac_bits)
+        "ogg_flac" => audio.to_ogg_flac(bits=flac_bits)
+        "mp4_flac" => audio.to_mp4_flac(bits=flac_bits)
+        "mp4_alac" => audio.to_mp4_alac(bits=alac_bits)
+        "caf_alac" => audio.to_caf_alac(bits=alac_bits)
+        "mkv_alac" => audio.to_mkv_alac(bits=alac_bits)
+        "mkv_flac" => audio.to_mkv_flac(bits=flac_bits)
+        "wav_flac" | "w64_flac" =>
+          audio.to_wav_flac(bits=flac_bits, wave64=format == "w64_flac")
         "caf_opus" => audio.to_caf_opus()
+        "ogg_opus" => audio.to_ogg_opus()
+        "webm_opus" => audio.to_webm_opus()
+        "mkv_opus" => audio.to_webm_opus(doctype="matroska")
+        "ogg_vorbis" => audio.to_ogg_vorbis()
         "caf_ms" => audio.to_caf_wav_adpcm("adpcm_ms")
         "caf_f32le"
         | "caf_f32be"
@@ -419,6 +509,8 @@ fn main raise {
         "adx" => audio.to_adx()
         "qoa" => audio.to_qoa()
         "flv_adpcm" => audio.to_flv_adpcm()
+        "flv_aac" => audio.to_flv_aac()
+        "flv_flac" => audio.to_flv_flac(bits=flac_bits)
         "adpcm_ima_wav" | "adpcm_ms" | "adpcm_yamaha" =>
           audio.to_wav_adpcm(format)
         "g726" | "g726le" =>

@@ -290,6 +290,34 @@ pub fn Mp4AacMuxer::write_packet(
 }
 
 ///|
+/// Encode mono or stereo PCM as AAC-LC MP4 at the source sample rate.
+/// The edit list skips encoder priming and the last packet duration
+/// excludes padding.
+pub fn DecodedAudio::to_mp4_aac(self : DecodedAudio) -> Bytes raise MediaError {
+  guard self.channels == 1 || self.channels == 2 else {
+    raise UnsupportedCodec("MP4 AAC-LC export requires mono or stereo")
+  }
+  let frame_size = 1024
+  let mux = match
+    mp4_aac_muxer_new(self.sample_rate, self.channels, priming=frame_size) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  let samples = self.samples[0].length()
+  let mut pts = -frame_size
+  self.encode_aac_lc(payload => {
+    let duration = if pts < 0 {
+      frame_size
+    } else {
+      (samples - pts).min(frame_size)
+    }
+    pts += duration
+    mux.write_packet(payload.to_owned(), duration~)
+  })
+  mux.finish()
+}
+
+///|
 pub fn Mp4AacMuxer::finish(self : Mp4AacMuxer) -> Bytes {
   let sample_count = self.packets.length()
   let mut total_duration = 0

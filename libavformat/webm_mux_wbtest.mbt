@@ -87,3 +87,59 @@ test "webm muxer: Opus track language" {
   let mkv = av_matroska_open(mux.finish()).unwrap()
   assert_eq(mkv.tracks[0].language, "deu")
 }
+
+///|
+test "WebM and Matroska Opus preserve the presentation length" {
+  for
+    (channels, rate, count) in [
+      (1, 48000, 1),
+      (1, 48000, 840),
+      (2, 32000, 5203),
+    ] {
+    let wav = wav_muxer_new(rate, channels, 16).unwrap()
+    wav.write_samples(
+      Array::makei(count * channels, i => (i % 73 - 36) * 400)[:],
+    )
+    let source = decode_audio_file(wav.finish())
+    let reference = decode_audio_file(source.to_ogg_opus())
+    for doctype in ["webm", "matroska"] {
+      let encoded = source.to_webm_opus(doctype~)
+      let mkv = av_matroska_open(encoded).unwrap()
+      assert_eq(mkv.is_webm, doctype == "webm")
+      let head = @libavcodec.opus_parse_head(mkv.tracks[0].codec_priv.unwrap()).unwrap()
+      let priming = if count == 1 { 1080 } else { 120 }
+      assert_eq(head.pre_skip, priming)
+      assert_eq(mkv.packets[0].pts, if count == 1 { -23L } else { -3L })
+      assert_eq(mkv.packets[0].discard_padding, 0L)
+      let last = mkv.packets[mkv.packets.length() - 1]
+      assert_eq(last.discard_padding > 0L, count != 840)
+      if count == 1 {
+        assert_eq(mkv.packets.length(), 2)
+      }
+      let audio = decode_audio_file(encoded)
+      assert_eq(audio.sample_rate(), 48000)
+      assert_eq(audio.channels(), channels)
+      assert_eq(
+        audio.samples()[0].length(),
+        source.resample_to(48000).samples()[0].length(),
+      )
+      if count > 1 {
+        assert_true(audio.samples() == reference.samples())
+      }
+    }
+  }
+}
+
+///|
+test "WebM Opus packet timestamps cross the signed cluster offset limit" {
+  let packet = @libavutil.av_base64_decode(webm_opus_packet_b64, 10000).unwrap()
+  let mux = webm_opus_muxer_new(channels=1, pre_skip=312).unwrap()
+  for _ in 0..<1641 {
+    mux.write_packet(packet).unwrap()
+  }
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.packets.length(), 1641)
+  for i, packet in mkv.packets {
+    assert_eq(packet.pts, i.to_int64() * 20L)
+  }
+}

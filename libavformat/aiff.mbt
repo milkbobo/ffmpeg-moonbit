@@ -204,6 +204,7 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
   }
   let ima4 = compression == "ima4"
   let g726 = compression == "G726"
+  let gsm = compression == "GSM "
   let mace = compression == "MAC3" || compression == "MAC6"
   if mace && channels > 2 {
     return Err("aiff: invalid MACE channel count")
@@ -212,7 +213,7 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
     channels > 2 {
     return Err("aiff: expected one or two channels for \{compression}")
   }
-  if (compression == "GSM " || compression == "G722" || g726) && channels != 1 {
+  if (gsm || compression == "G722" || g726) && channels != 1 {
     return Err("aiff: expected mono \{compression.trim()}")
   }
   let (ssnd_off, ssnd_size) = match aiff_chunk(chunks, "SSND") {
@@ -256,6 +257,16 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
   let block_align = channels * bytes_per_channel
   let available_bytes = ssnd_payload_size - offset.to_int()
   let available_blocks = (available_bytes / block_align).to_int64()
+  if gsm {
+    guard available_bytes % block_align == 0 else {
+      return Err("aiff: incomplete GSM block")
+    }
+    for block in 0..<available_blocks.to_int() {
+      if (data[data_offset + block * block_align].to_int() & 0xf0) != 0xd0 {
+        return Err("aiff: missing GSM frame magic")
+      }
+    }
+  }
   let sample_count = if g726 {
     // The G726 tag fixes 5-bit little-endian codewords. COMM counts coded
     // blocks, so derive the decoded length from complete codewords.
@@ -263,6 +274,9 @@ pub fn av_aiff_open(data : Bytes) -> Result[AiffDemux, String] {
   } else if compression == "ADP4" {
     // The FFmpeg muxer can write a COMM count based on its encoder alignment,
     // rather than the channel-byte groups used by the decoder.
+    available_blocks * block_duration.to_int64()
+  } else if gsm {
+    // Complete GSM blocks in SSND determine the playable sample count.
     available_blocks * block_duration.to_int64()
   } else if block_duration > 1 {
     num_frames * block_duration.to_int64()

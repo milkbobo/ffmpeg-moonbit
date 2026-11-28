@@ -32,6 +32,8 @@ pub struct TsMuxer {
   audio_language : String
   /// Four-character registration descriptor for a private audio stream.
   audio_registration : Bytes
+  /// DVB extension descriptor's Opus channel configuration, when present.
+  audio_opus_config : Int32?
   /// Four-character registration descriptor in the PMT program info.
   program_registration : Bytes
   mut wrote_tables : Bool
@@ -95,6 +97,7 @@ pub fn ts_muxer_new(
     nit,
     audio_language,
     audio_registration,
+    audio_opus_config: None,
     program_registration,
     wrote_tables: false,
     adts_rate: 0,
@@ -313,6 +316,9 @@ fn TsMuxer::pmt(self : TsMuxer) -> Unit {
       for byte in self.audio_registration {
         descriptors.push(byte)
       }
+    }
+    if self.audio_opus_config is Some(config) {
+      descriptors.append([b'\x7f', 2, b'\x80', config.to_byte()])
     }
     descriptors
   } else {
@@ -538,6 +544,7 @@ pub fn TsMuxer::write_audio(
   let stream_id = if (
       self.audio_stream_type == 0x06 && self.audio_registration.length() == 4
     ) ||
+    (self.audio_stream_type == 0x81 && self.audio_registration == b"AC-3") ||
     (self.audio_stream_type == 0x80 && self.program_registration == b"HDMV") {
     0xbd
   } else {
@@ -551,5 +558,20 @@ pub fn TsMuxer::write_audio(
 /// packet write or here when the muxer never received payload.
 pub fn TsMuxer::finish(self : TsMuxer) -> Bytes {
   self.ensure_tables()
+  Bytes::from_array(self.out)
+}
+
+///|
+fn TsMuxer::finish_with_probe_padding(self : TsMuxer) -> Bytes {
+  self.ensure_tables()
+  // FFmpeg counts the probe window in 204-byte units even for 188-byte
+  // streams. Very short streams need ten units to get a full probe score.
+  let probe_size = 10 * ts_fec_packet_size
+  if self.out.length() < probe_size {
+    let payload = Array::make(184, b'\xff')
+    while self.out.length() < probe_size {
+      self.emit(0x1fff, false, payload[:], -1L)
+    }
+  }
   Bytes::from_array(self.out)
 }

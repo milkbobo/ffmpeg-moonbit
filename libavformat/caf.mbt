@@ -406,7 +406,7 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
           frames == 1536 else {
           return Err("caf: AC-3 frame does not match its packet description")
         }
-        let mask = caf_ac3_channel_mask(header)
+        let mask = ac3_channel_mask(header)
         guard ac3_mask == 0U || ac3_mask == mask else {
           return Err("caf: changing AC-3 channel layout")
         }
@@ -480,7 +480,7 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
       channel_mask: if channel_mask.popcnt() == channel_count {
         channel_mask
       } else if codec == "flac" {
-        caf_flac_channel_mask(channel_count)
+        flac_default_channel_mask(channel_count)
       } else {
         ac3_mask
       },

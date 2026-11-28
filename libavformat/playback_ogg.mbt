@@ -80,7 +80,10 @@ fn playback_ogg_audio_decoder(
     raise UnsupportedCodec(info.codec_id + " without extradata")
   }
   let dec : AudioDec = if info.codec_id == "flac" {
-    AudioDec::Flac(extra)
+    guard flac_streaminfo_payload(extra) is Some(streaminfo) else {
+      raise DecodeError("flac: invalid STREAMINFO")
+    }
+    AudioDec::Flac(streaminfo)
   } else {
     guard extra.length() >= 3 && extra[0] == b'\x02' else {
       raise DecodeError("vorbis: invalid Xiph header lacing")

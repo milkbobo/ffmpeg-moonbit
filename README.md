@@ -24,21 +24,21 @@
 | AV1 | 已实现关键帧、帧间帧及 film grain 等工具 | 已实现关键帧、帧间帧、多参考帧、per-SB 64x64/32x32 分割与 NEARMV 栈复用，目标码率控制待实现 |
 | VP9 | 已实现 Profile 0–3 | 未实现 |
 | MJPEG、PNG/APNG | 已实现，MJPEG 支持部分格式 | 已实现 8 位 baseline MJPEG，以及 8/16 位 PNG 和全画幅 APNG |
-| AAC | 裸 ADTS（`.aac`、`.adts`）、MPEG-TS、WAV、Wave64 和 IEC 61937 支持播放单原始数据块的 AAC-LC 和 HE-AAC v1/v2。裸 LOAS（`.loas`、`.latm`）、WAV 标签 `0x1602` 和 MPEG-TS 类型 `0x11` 支持 AAC-LC LATM | 已实现 AAC-LC 编码，可将连续 ADTS 帧重封装为 `.spdif` |
+| AAC | 裸 ADTS（`.aac`、`.adts`）、MPEG-TS、WAV、Wave64 和 IEC 61937 支持播放单原始数据块的 AAC-LC 和 HE-AAC v1/v2。MP4、CAF 和 Matroska 支持 AAC-LC。裸 LOAS（`.loas`、`.latm`）、WAV 标签 `0x1602` 和 MPEG-TS 类型 `0x11` 支持 AAC-LC LATM | 支持 AAC-LC 编码和 MP4、CAF、Matroska、FLV、ADTS、LOAS 及 MPEG-TS 导出，可将连续 ADTS 帧重封装为 `.spdif` |
 | AMR-NB / AMR-WB | 已实现：裸 `.amr`/`.awb` 流与 3GP/MP4 中的 `samr`/`sawb` 轨（单声道；多声道与 SID 舒适噪声帧不支持）。对 FATE 的 17 个样本，AMR-NB 与 FFmpeg 自带浮点解码器的偏差不超过 2 LSB，AMR-WB 不超过该解码器自身的偏差 | 未实现 |
 | MPEG 音频 Layer I/II/III | 支持裸 MP1、MP2、MP3、MPEG-TS 音轨（PMT 类型 `0x03`、`0x04`）和 IEC 61937 音频（裸 `.spdif`、WAV、Wave64）。裸 MP3 读取 Xing/Info 中的 LAME 延迟与填充信息，导出 PCM 时裁掉首尾填充 | 支持 MP2 和 MP3 编码，可将 MP1、MP2 和 MP3 连续帧重封装为 `.spdif` |
-| FLAC | 支持原生 `.flac`、WAV 和 Wave64（标签 `0xF1AC`）的逐帧解复用与 CRC 校验，也支持 Ogg、Matroska 等容器内的 FLAC 音轨解码 | 已实现 |
-| ALAC | 已实现 | 已实现 |
-| Opus | 支持 Ogg 和 MPEG-TS 中的单声道、立体声及标准多声道映射，保留 5.1、7.1 的 WAV 声道布局 | 已实现单声道和立体声 |
+| FLAC | 支持原生 `.flac`、WAV 和 Wave64（标签 `0xF1AC`）的逐帧解复用与 CRC 校验，也支持 Ogg、MP4 和 Matroska 等容器内的 FLAC 音轨解码 | 支持编码为原生 FLAC，也可通过命令行导出 16/24/32 位 CAF、Ogg、WAV、Wave64、MP4 和 Matroska FLAC |
+| ALAC | 支持 MP4、CAF 和 Matroska 解码 | 支持 16/24/32 位单声道或立体声 MP4、CAF 和 Matroska 导出 |
+| Opus | 支持 Ogg 和 MPEG-TS 中的单声道、立体声及标准多声道映射，保留 5.1、7.1 的 WAV 声道布局。支持 WebM 和 Matroska 回读 | 支持单声道和立体声编码，导出 Ogg、CAF、WebM、Matroska 或 MPEG-TS |
 | APE（Monkey's Audio） | 支持读取 v3.80–3.99 文件及解码 | 未实现 |
 | TTA（True Audio） | 支持未加密的原生 `.tta`，8/16/24 位无损解码，可校验文件头、寻址表和压缩帧的 CRC | 支持写入 8/16/24 位原生 `.tta` |
 | WMA v1/v2 | 支持从 ASF/WMA 文件解码 | 已实现编码器，输出 WMA 压缩包 |
 | WMA Pro | 支持从 ASF/WMA 文件和 WAV（标签 0x0162）解码；对 FATE 的立体声与 5.1 样本，输出与参考 PCM 的偏差不超过 1 LSB。XMA 与 WMA Lossless 未实现 | 未实现 |
 | DTS | 支持裸 `.dts`、`.spdif`、Matroska、MPEG-TS/M2TS、WAV 和 Wave64 中的 DTS 核心解码，含 DTS-CD 和 IEC 61937。类型 IV 可播放 DTS-HD 的内嵌核心，WAV 导出可保留环绕声布局 | 支持将 DTS 核心帧重封装为 `.spdif`，也可将带核心的 DTS-HD 裸流封装为 IEC 61937 类型 IV |
-| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`、`in24`、`in32`）、`raw ` 无符号 8 位 PCM、32/64 位浮点 PCM、G.711、Apple IMA4、MACE、GSM、G.722、单声道 5 位 G.726LE、SDX2、CBD2 和 ADP4 | 支持写入 PCM AIFF，以及 G.711、Apple IMA4、ADP4、单声道 G.722 和 5 位 G.726LE AIFF-C |
+| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`、`in24`、`in32`）、`raw ` 无符号 8 位 PCM、32/64 位浮点 PCM、G.711、Apple IMA4、MACE、GSM、G.722、单声道 5 位 G.726LE、SDX2、CBD2 和 ADP4 | 支持写入 PCM AIFF，以及 G.711、Apple IMA4、ADP4、单声道 GSM、G.722 和 5 位 G.726LE AIFF-C |
 | CAF | 支持 ALAC、AAC-LC、FLAC、单声道或立体声 Opus、MPEG 音频 Layer I/II/III、AC-3、AMR-NB，以及 PCM、G.711、MACE、Apple IMA4、WAV IMA／Microsoft ADPCM、GSM 和 WAV49 | 支持写入 ALAC、AC-3、16/24/32 位 FLAC、单声道或立体声 AAC-LC、Opus、MP2 和 MP3、整数和浮点 PCM、G.711、GSM、WAV49，以及单声道或立体声的三种 ADPCM。可重封装 MPEG 音频 Layer I/II/III |
 | MOV 音轨 | 支持 G.711 A-law/μ-law 及 `fl32`/`fl64` 大端和小端浮点 PCM | 见各编码器的封装支持 |
-| FLV 音轨 | 支持传统 FLV 的 AAC-LC、MP3、8/16 位 PCM、G.711 和 Flash ADPCM，以及单音轨 Enhanced FLV 的 AAC-LC、MP3、Opus、FLAC、AC-3 和 E-AC-3 | 支持纯音频 Flash ADPCM FLV |
+| FLV 音轨 | 支持传统 FLV 的 AAC-LC、MP3、8/16 位 PCM、G.711 和 Flash ADPCM，以及单音轨 Enhanced FLV 的 AAC-LC、MP3、Opus、FLAC、AC-3 和 E-AC-3 | 支持纯音频 Flash ADPCM、AAC-LC 和 Enhanced FLV FLAC |
 | Flash ADPCM | 支持 FLV 和 WAV（标签 `0x5346`）中的 2/3/4/5 位单声道及立体声音轨 | 支持写入单声道和立体声 4 位 Flash ADPCM FLV |
 | WAV ADPCM | 支持 IMA WAV、Microsoft、Yamaha、Dialogic OKI 及单声道和立体声 Creative ADPCM（标签 `0x0200`） | 支持单声道和立体声 IMA WAV、Microsoft 和 Yamaha ADPCM |
 | Duck IMA ADPCM | 支持 WAV 中的立体声 DK3（`0x0062`）及单声道和立体声 DK4（`0x0061`） | 未实现 |
@@ -81,14 +81,14 @@
 | DFPWM1a | 支持 48 kHz 单声道裸 `.dfpwm`，以及采样率由头部指定的单声道 WAV 和 Wave64 | 支持导出单声道裸 `.dfpwm`、WAV 和 Wave64 |
 | Blu-ray LPCM | 支持 HDMV MPEG-TS/M2TS 中的 16/24 位 LPCM，48/96/192 kHz，最多 8 声道 | 支持写入同规格的纯音频 HDMV MPEG-TS |
 | SMPTE 302M | 支持 MPEG-TS 的 `BSSD` PCM 音轨，48 kHz、16/20/24 位、2/4/6/8 声道 | 支持写入同规格的纯音频 MPEG-TS |
-| GSM 06.10 | 支持裸 `.gsm`、MOV、AIFF-C 和 CAF 的单声道音轨，以及 WAV 和 CAF 中的 WAV49（65 字节块） | 支持写入 CAF 原生 GSM 和 WAV49 |
+| GSM 06.10 | 支持裸 `.gsm`、MOV、AIFF-C 和 CAF 的单声道音轨，以及 WAV、Wave64 和 CAF 中的 WAV49（65 字节块） | 支持写入裸 `.gsm`、MOV、AIFF-C 和 CAF 的原生 GSM，以及 WAV、Wave64 和 CAF 中的 WAV49 |
 | MACE 3:1 / 6:1 | 支持 MOV、AIFF-C 和 CAF 中的单声道及立体声 `MAC3`、`MAC6` 音轨 | 未实现 |
 | SBC / mSBC | 支持裸 `.sbc`、`.msbc`，含 4/8 子带、单声道、双声道和联合立体声 | 未实现 |
 | DSD | 支持 `.dsf` 与未压缩 `.dff`（DSDIFF），输出采样率为 DSD 位率的 1/8 | 未实现 |
 | DST | 支持 `.dff` 中采用共享分段的算术编码 DST，复用 DSD 滤波器输出 PCM | 未实现 |
 | MLP、TrueHD | 支持裸码流和 Matroska。蓝光 M2TS 中的 TrueHD 与 AC-3 兼容子流可分别解码。读取裸 `.spdif`、WAV、Wave64 和 RIFX 中的 Dolby MAT TrueHD | 可将从主同步单元开始的 TrueHD 裸流封装为 Dolby MAT `.spdif` |
-| Vorbis | 支持 Ogg 解码 | 支持实验性编码和 Ogg 封装，首包与 FFmpeg 原生编码器逐字节一致 |
-| AC-3、E-AC-3 | 支持裸码流、Matroska、MPEG-TS、WAV 和 Wave64 解码。IEC 61937（S/PDIF）支持裸 `.spdif` 及 WAV 和 Wave64 封装。E-AC-3 支持部分独立子流模式 | AC-3 定点编码已实现，48 kHz 双声道参考流与 FFmpeg `ac3_fixed` 位级一致。支持将 AC-3 和独立 E-AC-3 帧重封装为 `.spdif` |
+| Vorbis | 支持 Ogg 解码 | 支持实验性立体声 Ogg 导出，首包与 FFmpeg 原生编码器逐字节一致 |
+| AC-3、E-AC-3 | 支持裸码流、Matroska、MPEG-TS、WAV 和 Wave64 解码。IEC 61937（S/PDIF）支持裸 `.spdif` 及 WAV 和 Wave64 封装。E-AC-3 支持部分独立子流模式 | AC-3 定点编码支持裸码流、CAF 和 MPEG-TS。48 kHz 双声道参考流与 FFmpeg `ac3_fixed` 位级一致。支持将 AC-3 和独立 E-AC-3 帧重封装为 `.spdif` |
 | WavPack | 支持单声道和立体声无损整数解码 | 支持 16、24、32 位单声道和立体声无损编码，输出完整 `.wv` 文件 |
 | Shorten | 支持 `.shn` 无损整数解码，可用 `decode-audio` 转 WAV | 未实现 |
 | Musepack | 支持 SV7 立体声和 SV8 单声道、立体声 `.mpc` 解码，可用 `decode-audio` 转 WAV | 未实现 |
@@ -232,6 +232,15 @@ moon run --target wasm cmd/decode-audio -- input.wav --format flv_adpcm --rate 4
 ```
 
 FLV 导出支持 5,512、11,025、22,050 和 44,100 Hz。每个音频标签包含每声道 4,096 个样本，末块以静音补齐。
+
+### FLV AAC-LC 和 Enhanced FLV FLAC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format flv_aac --output track.flv
+moon run --target wasm cmd/decode-audio -- input.wav --format flv_flac --flac-bits 32 --output lossless.flv
+```
+
+AAC-LC 支持单声道和立体声，序列头记录实际采样率和声道数，回读包含编码延迟与末帧填充。FLAC 支持标准布局的 1–8 声道和 16、24、32 位 PCM，回读保留实际样本数。已有原生 FLAC 可用 `av_flv_mux_flac` 重封装，保留 STREAMINFO 和原始编码帧。
 
 ### Pro Pinball 音效库和电话音频 WAV
 
@@ -378,14 +387,19 @@ moon run --target wasm cmd/decode-audio -- input.wav --format sphere --sphere-co
 
 默认写入 16 位小端 PCM。`--sphere-codec` 还接受 `pcm_s8`、`pcm_s16be`、`pcm_s24le`、`pcm_s24be`、`pcm_s32le`、`pcm_s32be`、`pcm_alaw` 和 `pcm_mulaw`。
 
-### AAC-LC LOAS／LATM
+### AAC-LC ADTS、LOAS 和 MPEG-TS
 
 ```sh
 moon run --target wasm cmd/decode-audio -- input.loas --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format adts --output track.aac
 moon run --target wasm cmd/decode-audio -- input.wav --format loas --output track.loas
+moon run --target wasm cmd/decode-audio -- input.wav --format ts_aac --output adts.ts
+moon run --target wasm cmd/decode-audio -- input.wav --format ts_latm --output latm.ts
 ```
 
-导出沿用单声道或立体声输入的 AAC 标准采样率，每隔 20 帧重复写入配置。回读包含 AAC 编码延迟和末帧填充。已有 AAC-LC ADTS 码流也可通过 `av_loas_from_adts` 重封装为 LOAS。
+四种导出都沿用单声道或立体声输入的 AAC 标准采样率。MPEG-TS 的 `ts_aac` 使用 ADTS，`ts_latm` 使用 LOAS/LATM。两种 LOAS/LATM 输出均每隔 20 帧重复写入配置。回读包含 AAC 编码延迟和末帧填充。已有 AAC-LC ADTS 码流可通过 `av_loas_from_adts` 重封装为 LOAS。
+
+FFmpeg 9.0.2 会将只有两个 AAC 访问单元的 TS LATM 音轨报告为未知编码。MoonBit 可以回读这类音轨，TS ADTS 也已通过单样本互操作验证。
 
 ### SMPTE 302M
 
@@ -404,6 +418,14 @@ moon run --target wasm cmd/decode-audio -- input.wav --format ts_bluray_lpcm --b
 ```
 
 导出为 188 字节包的 HDMV MPEG-TS，支持 48、96 或 192 kHz。`--bluray-bits` 可选 16 或 24，默认 24。输入带扬声器掩码时按 Blu-ray 支持的布局封装，末包保留实际样本数。多声道 LPCM 转 WAV 时保留扬声器布局。
+
+### MPEG-TS Opus
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format ts_opus --output track.ts
+```
+
+支持单声道和立体声，自动重采样到 48 kHz。DVB Opus 访问单元记录启动延迟和末包填充，MoonBit 回读按样本裁剪。FFmpeg 9.0.2 回读会保留这些样本。
 
 ### Amiga MAUD
 
@@ -470,14 +492,16 @@ moon run --target wasm cmd/decode-audio -- track.w64 --output track.wav
 
 `w64_ima_wav`、`w64_ms` 和 `w64_yamaha` 支持单声道和立体声，每块 1,024 字节。完整解码时按 `fact` 的样本计数去除末块填充。
 
-### CAF AC-3
+### 裸 AC-3、CAF 和 MPEG-TS AC-3
 
 ```sh
 moon run --target wasm cmd/decode-audio -- input.wav --format caf_ac3 --output track.caf
+moon run --target wasm cmd/decode-audio -- input.wav --format ac3 --output track.ac3
+moon run --target wasm cmd/decode-audio -- input.wav --format ts_ac3 --output track.ts
 moon run --target wasm cmd/decode-audio -- track.caf --output track.wav
 ```
 
-支持 32、44.1 或 48 kHz 和 AC-3 的 1–6 声道布局。CAF 包表记录每包长度、编码延迟和末帧填充，回读保留原始样本数。已有裸 AC-3 可用 `av_caf_mux_ac3` 重封装。
+支持 32、44.1 或 48 kHz 和 AC-3 的 1–6 声道布局。CAF 包表记录每包长度、编码延迟和末帧填充，回读保留原始样本数。裸码流和 MPEG-TS 回读包含 256 个编码延迟样本和末帧填充，转 WAV 时保留多声道布局。已有裸 AC-3 可用 `av_caf_mux_ac3` 或 `av_ts_mux_ac3` 重封装。
 
 ### CAF FLAC
 
@@ -487,6 +511,49 @@ moon run --target wasm cmd/decode-audio -- input.wav --format caf_flac --caf-fla
 
 支持 1–8 声道，位深可选 16、24 或 32 位，默认 24 位。用 `av_caf_mux_flac` 可将原生 FLAC 的 STREAMINFO 和编码帧直接封装到 CAF。读取 CAF 时检查帧 CRC，并核对包表中的帧长和样本数。
 
+### Ogg FLAC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format ogg_flac --flac-bits 32 --output lossless.oga
+```
+
+支持标准 FLAC 布局的 1–8 声道，位深可选 16、24 或 32 位，默认 24 位。大帧跨页存储，回读按帧起点给出样本时间戳。
+
+### WAV 和 Wave64 FLAC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format wav_flac --flac-bits 32 --output lossless.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format w64_flac --flac-bits 32 --output lossless.w64
+```
+
+支持 1–8 声道，位深可选 16、24 或 32 位，默认 24 位。已有原生 FLAC 可用 `av_wav_mux_flac` 直接重封装。显式声道布局保存在 WAVEFORMATEXTENSIBLE 中，样本数写入 `fact` 块。
+
+### MP4 FLAC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format mp4_flac --flac-bits 32 --output lossless.mp4
+```
+
+支持标准 FLAC 布局的 1–8 声道，位深可选 16、24 或 32 位，默认 24 位。已有原生 FLAC 可用 `av_mp4_mux_flac` 直接重封装，保留 STREAMINFO 和原始编码帧。
+
+### Matroska FLAC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format mkv_flac --flac-bits 32 --output lossless.mka
+```
+
+支持标准 FLAC 布局的 1–8 声道，位深可选 16、24 或 32 位，默认 24 位。已有原生 FLAC 可用 `av_mkv_mux_flac` 直接重封装。长音轨分为多个 Cluster，容器时长按有效样本数计算。
+
+### MP4、CAF 和 Matroska ALAC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format mp4_alac --alac-bits 32 --output lossless.m4a
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_alac --alac-bits 32 --output lossless.caf
+moon run --target wasm cmd/decode-audio -- input.wav --format mkv_alac --alac-bits 32 --output lossless.mka
+```
+
+支持单声道和立体声，沿用输入采样率。位深可选 16、24 或 32 位，默认 24 位。末帧保留实际样本数，CAF 的标称帧长取自 ALAC cookie。
+
 ### CAF Opus
 
 ```sh
@@ -495,13 +562,40 @@ moon run --target wasm cmd/decode-audio -- input.wav --format caf_opus --output 
 
 单声道和立体声输入自动重采样到 48 kHz。CAF 包表记录启动延迟和末包填充，回读时据此裁剪 PCM。已有 Opus 包可以用 `av_caf_mux_opus` 重封装。
 
-### CAF AAC-LC
+### Ogg Opus
 
 ```sh
-moon run --target wasm cmd/decode-audio -- input.wav --format caf_aac --output track.caf
+moon run --target wasm cmd/decode-audio -- input.wav --format ogg_opus --output track.opus
 ```
 
-支持单声道和立体声，沿用 AAC-LC 编码器支持的输入采样率。包表记录 1,024 个启动样本和末包填充。已有的原始 AAC-LC 访问单元可以连同 AudioSpecificConfig 传给 `av_caf_mux_aac` 重封装。
+单声道和立体声输入自动重采样到 48 kHz，原采样率保存在 `OpusHead` 中。末页记录有效结束位置，解码时据此裁掉末包填充。直接写入 Opus 包时，可用 `OggOpusMuxer::finish_trimmed` 指定有效样本数。
+
+### WebM 和 Matroska Opus
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format webm_opus --output track.webm
+moon run --target wasm cmd/decode-audio -- input.wav --format mkv_opus --output track.mka
+```
+
+支持单声道和立体声，自动重采样到 48 kHz。解码按 `CodecDelay` 和 `DiscardPadding` 裁掉启动延迟和末包填充。长音频会分成多个 Cluster，以保持时间戳连续。
+
+### Ogg Vorbis
+
+```sh
+moon run --target wasm cmd/decode-audio -- stereo.wav --format ogg_vorbis --output track.ogg
+```
+
+支持立体声并保留输入采样率。末页记录有效样本数，回读时裁掉末块填充。命令行和网页演示共用同一个导出实现。
+
+### MP4、CAF 和 Matroska AAC-LC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format mp4_aac --output track.m4a
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_aac --output track.caf
+moon run --target wasm cmd/decode-audio -- input.wav --format mkv_aac --output track.mka
+```
+
+支持单声道和立体声，沿用 AAC-LC 编码器支持的输入采样率。MP4 使用编辑列表跳过 1,024 个启动样本，末包时长只计有效样本。CAF 将启动样本和末包填充写入包表。Matroska 使用 `CodecDelay` 和 `DiscardPadding`，解码按样本裁掉启动延迟和末帧填充。已有的原始 AAC-LC 访问单元可以连同 AudioSpecificConfig 传给 `av_caf_mux_aac` 重封装。
 
 ### CAF MPEG 音频
 
@@ -512,14 +606,19 @@ moon run --target wasm cmd/decode-audio -- input.wav --format caf_mp3 --output t
 
 MP2 和 MP3 导出支持单声道和立体声。MP2 支持 16、22.05、24、32、44.1 和 48 kHz，MP3 还支持 8、11.025 和 12 kHz。包表分别记录 481 和 1,057 个启动样本，以及各自的末包填充。已有 MP1、MP2 或 MP3 帧可用 `av_caf_mux_mpeg_audio` 重封装。MP3 的 Xing/Info 标签含无缝播放信息时，默认沿用其中的裁剪范围。
 
-### CAF GSM 和 WAV49
+### GSM 和 WAV49
 
 ```sh
 moon run --target wasm cmd/decode-audio -- mono.wav --format caf_gsm --output track.caf
 moon run --target wasm cmd/decode-audio -- mono.wav --format caf_gsm_ms --output track-wav49.caf
+moon run --target wasm cmd/decode-audio -- mono.wav --format gsm --output track.gsm
+moon run --target wasm cmd/decode-audio -- mono.wav --format aifc_gsm --output track.aifc
+moon run --target wasm cmd/decode-audio -- mono.wav --format mov_gsm --output track.mov
+moon run --target wasm cmd/decode-audio -- mono.wav --format wav_gsm_ms --output track.wav
+moon run --target wasm cmd/decode-audio -- mono.wav --format w64_gsm_ms --output track.w64
 ```
 
-单声道输入自动重采样到 8 kHz。原生 GSM 每包 160 个样本，WAV49 每包 320 个样本。CAF 包表记录末包填充，回读时恢复有效样本数。
+单声道输入自动重采样到 8 kHz。原生 GSM 每包 160 个样本，WAV49 每包 320 个样本。MOV 编辑列表、CAF 包表及 WAV／Wave64 的 `fact` 块记录有效样本数，回读时据此裁剪末包。裸 GSM 和 AIFF-C 解码输出整包样本。已有裸 GSM 可用 `av_mov_mux_gsm` 重封装。
 
 ### 图像编码
 

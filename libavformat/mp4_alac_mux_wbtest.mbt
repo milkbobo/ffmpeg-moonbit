@@ -77,3 +77,30 @@ test "mp4 muxer: ALAC track round-trip and decode" {
     assert_eq(remuxed[i], original_pcm[i])
   }
 }
+
+///|
+test "MP4 ALAC preserves 32-bit stereo at 96 kHz with a short final packet" {
+  let count = 4101
+  let wav = wav_muxer_new(96000, 2, 32).unwrap()
+  let mut state = 0x92345678U
+  let pcm = Array::makei(count * 2, _ => {
+    state = state ^ (state << 13)
+    state = state ^ (state >> 17)
+    state = state ^ (state << 5)
+    state.reinterpret_as_int()
+  })
+  wav.write_samples(pcm[:])
+  let input = decode_audio_file(wav.finish())
+  let output = input.to_mp4_alac(bits=32)
+  let track = av_mov_open(output).unwrap().tracks[0]
+  assert_eq(track.sample_rate, 96000U)
+  assert_eq(track.bits_per_sample, 32U)
+  assert_eq(track.samples.map(sample => (sample.pts, sample.duration)), [
+    (0L, 4096U),
+    (4096L, 5U),
+  ])
+  let audio = decode_audio_file(output)
+  assert_eq(audio.sample_rate(), 96000)
+  assert_eq(audio.samples()[0].length(), count)
+  assert_true(audio.samples() == input.samples())
+}

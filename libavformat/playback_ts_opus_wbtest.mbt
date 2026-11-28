@@ -75,3 +75,42 @@ test "MPEG-TS Opus reconstructs 5.1 mapping and trims each access unit" {
   assert_eq(audio.samples[0].length(), total)
   assert_eq(av_wav_open(audio.to_wav_s16()).unwrap().format.channel_mask, 0x3FU)
 }
+
+///|
+test "MPEG-TS Opus export preserves presentation PCM and DVB trim flags" {
+  for (rate, channels, count) in [(48000, 1, 1), (32000, 2, 5203)] {
+    let wav = wav_muxer_new(rate, channels, 16).unwrap()
+    wav.write_samples(
+      Array::makei(count * channels, i => (i % 73 - 36) * 400)[:],
+    )
+    let source = decode_audio_file(wav.finish())
+    let encoded = source.to_ts_opus()
+    let media = MediaFile::open(encoded)
+    let stream = media.streams()[0]
+    assert_eq(stream.codec_id, "opus")
+    assert_eq(stream.channels, channels)
+    assert_eq(stream.sample_rate, 48000)
+    let mut index = 0
+    let mut valid = 0
+    let expected = source.resample_to(48000).samples()[0].length()
+    while media.next_packet() is Some(packet) {
+      assert_eq(packet.pts, index.to_int64() * 1800L)
+      let control = ts_opus_control(packet.data[:]).unwrap()
+      assert_eq(control.trim_start, if index == 0 { 120 } else { 0 })
+      valid += 960 - control.trim_start - control.trim_end
+      if valid < expected {
+        assert_eq(control.trim_end, 0)
+      }
+      index += 1
+    }
+    assert_eq(valid, expected)
+    if count == 1 {
+      assert_eq(index, 1)
+    }
+    let decoded = decode_audio_file(encoded)
+    assert_eq(decoded.samples()[0].length(), expected)
+    assert_true(
+      decoded.samples() == decode_audio_file(source.to_ogg_opus()).samples(),
+    )
+  }
+}

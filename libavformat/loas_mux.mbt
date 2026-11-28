@@ -39,6 +39,23 @@ pub fn LoasAacMuxer::write_packet(
   self : LoasAacMuxer,
   payload : BytesView,
 ) -> Result[Unit, String] {
+  self.write_framed(payload, packet => {
+    guard self.output.length() <= 0x7fffffff - packet.length() else {
+      return Err("latm: LOAS frame or stream exceeds its size limit")
+    }
+    for byte in packet {
+      self.output.push(byte)
+    }
+    Ok(())
+  })
+}
+
+///|
+fn LoasAacMuxer::write_framed(
+  self : LoasAacMuxer,
+  payload : BytesView,
+  emit : (Bytes) -> Result[Unit, String],
+) -> Result[Unit, String] {
   let size = payload.length()
   guard size > 0 && size <= 0x1fff else {
     return Err("latm: invalid AAC packet size")
@@ -74,14 +91,16 @@ pub fn LoasAacMuxer::write_packet(
   }
   let frame = bits.finish()
   let len = frame.length()
-  guard len <= 0x1fff && self.output.length() <= 0x7fffffff - len - 3 else {
+  guard len <= 0x1fff else {
     return Err("latm: LOAS frame or stream exceeds its size limit")
   }
-  self.output.push(0x56)
-  self.output.push((0xe0 | (len >> 8)).to_byte())
-  self.output.push(len.to_byte())
-  for byte in frame {
-    self.output.push(byte)
+  let header = Bytes::from_array([
+    0x56,
+    (0xe0 | (len >> 8)).to_byte(),
+    len.to_byte(),
+  ])
+  if emit(header + frame) is Err(error) {
+    return Err(error)
   }
   self.until_config = if config {
     self.config_interval - 1
@@ -176,6 +195,17 @@ fn DecodedAudio::encode_aac_lc(
   self : DecodedAudio,
   write : (BytesView) -> Result[Unit, String],
 ) -> Unit raise MediaError {
+  // The encoder produces a single raw block and a CRC-free ADTS header.
+  self.encode_aac_adts(packet => {
+    write(packet[@libavcodec.av_aac_adts_header_size:])
+  })
+}
+
+///|
+fn DecodedAudio::encode_aac_adts(
+  self : DecodedAudio,
+  write : (Bytes) -> Result[Unit, String],
+) -> Unit raise MediaError {
   let frames = self.samples[0].length()
   guard frames > 0 else { raise DecodeError("aac: no PCM samples") }
   let encoder = match
@@ -189,10 +219,6 @@ fn DecodedAudio::encode_aac_lc(
     Ok(value) => value
     Err(error) => raise DecodeError(error)
   }
-  let emit = fn(packet : Bytes) {
-    // The encoder produces a single raw block and a CRC-free ADTS header.
-    write(packet[@libavcodec.av_aac_adts_header_size:])
-  }
   for start = 0; start < frames; {
     let count = (frames - start).min(1024)
     let block = self.samples.map(plane => {
@@ -200,7 +226,7 @@ fn DecodedAudio::encode_aac_lc(
     })
     match encoder.encode_frame(block) {
       Ok(Some(packet)) =>
-        if emit(packet) is Err(error) {
+        if write(packet) is Err(error) {
           raise DecodeError(error)
         }
       Ok(None) => ()
@@ -211,7 +237,7 @@ fn DecodedAudio::encode_aac_lc(
   match encoder.flush() {
     Ok(packets) =>
       for packet in packets {
-        if emit(packet) is Err(error) {
+        if write(packet) is Err(error) {
           raise DecodeError(error)
         }
       }

@@ -24,7 +24,11 @@ pub fn ogg_opus_muxer_new(
   serial~ : Int32 = 0x12345678,
   tags~ : Array[(String, String)] = [],
 ) -> Result[OggOpusMuxer, String] {
-  if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 {
+  if channels < 1 ||
+    channels > 2 ||
+    pre_skip < 0 ||
+    pre_skip > 65535 ||
+    input_sample_rate <= 0 {
     return Err("EINVAL: invalid Ogg/Opus stream parameters")
   }
   Ok({
@@ -95,6 +99,23 @@ fn ogg_mux_page_multi(
     }
     lacing.push(rem)
   }
+  let page = ogg_mux_page_header(serial, seq, header_type, granule, lacing)
+  for packet in packets {
+    for b in packet {
+      page.push(b)
+    }
+  }
+  ogg_mux_finish_page(out, page)
+}
+
+///|
+fn ogg_mux_page_header(
+  serial : Int32,
+  seq : Int32,
+  header_type : Int32,
+  granule : Int64,
+  lacing : Array[Int32],
+) -> Array[Byte] {
   let page : Array[Byte] = []
   page.push(b'O')
   page.push(b'g')
@@ -110,17 +131,59 @@ fn ogg_mux_page_multi(
   for lace in lacing {
     page.push(lace.to_byte())
   }
-  for packet in packets {
-    for b in packet {
-      page.push(b)
-    }
-  }
+  page
+}
+
+///|
+fn ogg_mux_finish_page(out : Array[Byte], page : Array[Byte]) -> Unit {
   let crc = ogg_mux_crc(page)
   page[22] = (crc & 0xFFU).to_byte()
   page[23] = ((crc >> 8) & 0xFFU).to_byte()
   page[24] = ((crc >> 16) & 0xFFU).to_byte()
   page[25] = ((crc >> 24) & 0xFFU).to_byte()
   out.append(page)
+}
+
+///|
+/// Write a packet on as many pages as its lacing requires. The granule and
+/// final flags belong only to the page that completes the packet.
+fn ogg_mux_packet_pages(
+  out : Array[Byte],
+  serial : Int32,
+  first_seq : Int32,
+  granule : Int64,
+  packet : Bytes,
+  eos : Bool,
+) -> Int32 {
+  let page_capacity = 255 * 255
+  let mut start = 0
+  let mut seq = first_seq
+  while packet.length() - start >= page_capacity {
+    let flags = if start == 0 { 0 } else { 1 }
+    let page = ogg_mux_page_header(
+      serial,
+      seq,
+      flags,
+      -1L,
+      Array::make(255, 255),
+    )
+    for byte in packet[start:start + page_capacity] {
+      page.push(byte)
+    }
+    ogg_mux_finish_page(out, page)
+    start += page_capacity
+    seq += 1
+  }
+  let remaining = packet.length() - start
+  let laces = Array::make(remaining / 255, 255)
+  laces.push(remaining % 255)
+  let flags = (if start > 0 { 1 } else { 0 }) | (if eos { 4 } else { 0 })
+  let page = ogg_mux_page_header(serial, seq, flags, granule, laces)
+  for byte in packet[start:] {
+    page.push(byte)
+  }
+  ogg_mux_finish_page(out, page)
+  seq + 1
 }
 
 ///|
@@ -185,6 +248,37 @@ pub fn OggOpusMuxer::write_packet(
 /// Serialize the stream. Header pages are emitted first, then one page per
 /// packet; the final data page carries the EOS flag.
 pub fn OggOpusMuxer::finish(self : OggOpusMuxer) -> Bytes {
+  self.serialize(self.packets.length(), None)
+}
+
+///|
+/// Finish using the exact presentation length, in samples per channel at
+/// 48 kHz. Omit packets after the end and use the EOS granule to trim padding.
+pub fn OggOpusMuxer::finish_trimmed(
+  self : OggOpusMuxer,
+  valid_samples : Int64,
+) -> Result[Bytes, String] {
+  let skip = self.pre_skip.to_int64()
+  guard valid_samples > 0L && valid_samples <= 0x7fffffffffffffffL - skip else {
+    return Err("ogg: invalid Opus presentation length")
+  }
+  let end = valid_samples + skip
+  let mut granule = 0L
+  for i, duration in self.durations {
+    granule += duration.to_int64()
+    if granule >= end {
+      return Ok(self.serialize(i + 1, Some(end)))
+    }
+  }
+  Err("ogg: insufficient Opus samples for presentation")
+}
+
+///|
+fn OggOpusMuxer::serialize(
+  self : OggOpusMuxer,
+  count : Int32,
+  end : Int64?,
+) -> Bytes {
   let out : Array[Byte] = []
   let mut seq = 0
   let head = self.opus_head()
@@ -194,11 +288,50 @@ pub fn OggOpusMuxer::finish(self : OggOpusMuxer) -> Bytes {
   ogg_mux_page(out, self.serial, seq, 0, 0L, tags)
   seq = seq + 1
   let mut granule = 0L
-  for i in 0..<self.packets.length() {
+  for i in 0..<count {
     granule = granule + self.durations[i].to_int64()
-    let header_type = if i == self.packets.length() - 1 { 4 } else { 0 }
-    ogg_mux_page(out, self.serial, seq, header_type, granule, self.packets[i])
+    let last = i + 1 == count
+    ogg_mux_page(
+      out,
+      self.serial,
+      seq,
+      if last {
+        4
+      } else {
+        0
+      },
+      if last {
+        end.unwrap_or(granule)
+      } else {
+        granule
+      },
+      self.packets[i],
+    )
     seq = seq + 1
   }
   Bytes::from_array(out)
+}
+
+///|
+/// Encode mono or stereo PCM as Ogg Opus at 48 kHz.
+pub fn DecodedAudio::to_ogg_opus(self : DecodedAudio) -> Bytes raise MediaError {
+  let (packets, priming, count) = self.encode_opus()
+  let mux = match
+    ogg_opus_muxer_new(
+      channels=self.channels,
+      pre_skip=priming,
+      input_sample_rate=self.sample_rate,
+    ) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  for packet in packets {
+    if mux.write_packet(packet) is Err(error) {
+      raise DecodeError(error)
+    }
+  }
+  match mux.finish_trimmed(count.to_int64()) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
 }

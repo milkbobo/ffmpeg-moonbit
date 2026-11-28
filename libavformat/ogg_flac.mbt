@@ -3,8 +3,8 @@
 ///
 /// The demuxer validates the mapping header, separates metadata blocks from
 /// audio packets and assembles a native `fLaC` stream that the FLAC decoder
-/// consumes directly. The writer emits the mapping headers and puts every
-/// audio frame on one page whose granule is the STREAMINFO sample count.
+/// consumes directly. The writer advances the granule by each frame's
+/// block size, with continuation pages for large frames.
 ///
 /// Scope: a single FLAC logical stream; chained/multiplexed streams are
 /// rejected.
@@ -15,6 +15,7 @@
 pub struct OggFlacFrame {
   data : Bytes
   granule : Int64
+  pts : Int64
   pos : Int64
 }
 
@@ -64,6 +65,7 @@ pub fn av_ogg_flac_open(data : Bytes) -> Result[OggFlacDemux, String] {
   let mut channels = 0
   let mut bits = 0
   let mut total_samples = 0L
+  let mut pts = 0L
   let mut first_stream : Bytes = b""
   let mut pending : Array[Byte] = []
   let headers : Array[Bytes] = []
@@ -101,8 +103,8 @@ pub fn av_ogg_flac_open(data : Bytes) -> Result[OggFlacDemux, String] {
       pos = page_end
       continue
     }
-    if (header_type & 1) != 0 && pending.length() == 0 {
-      return Err("ogg: continuation page without a partial packet")
+    if ((header_type & 1) != 0) != !pending.is_empty() {
+      return Err("ogg: invalid FLAC continuation flag")
     }
     let page_pos = pos.to_int64()
     let mut p = pos + 27 + nseg
@@ -143,8 +145,13 @@ pub fn av_ogg_flac_open(data : Bytes) -> Result[OggFlacDemux, String] {
         } else if headers_seen < num_headers {
           headers.push(packet)
           headers_seen = headers_seen + 1
-        } else {
-          frames.push({ data: packet, granule, pos: page_pos, })
+        } else if !packet.is_empty() {
+          let duration = match @libavcodec.flac_frame_samples(packet) {
+            Ok(value) => value
+            Err(error) => return Err(error)
+          }
+          frames.push({ data: packet, granule, pts, pos: page_pos, })
+          pts += duration.to_int64()
         }
       }
     }
@@ -156,10 +163,12 @@ pub fn av_ogg_flac_open(data : Bytes) -> Result[OggFlacDemux, String] {
   if headers_seen != num_headers {
     return Err("ogg: missing Ogg FLAC header packets")
   }
-  // STREAMINFO may carry 0 ("unknown") for streamed encodes; the last page
-  // granule is the authoritative sample count then.
-  if total_samples == 0L && frames.length() > 0 {
-    total_samples = frames[frames.length() - 1].granule
+  if !pending.is_empty() {
+    return Err("ogg: incomplete FLAC packet")
+  }
+  // STREAMINFO may carry 0 ("unknown") for streamed encodes.
+  if total_samples == 0L {
+    total_samples = pts
   }
   let tags : Array[(String, String)] = []
   for block in headers {
@@ -214,6 +223,7 @@ pub struct OggFlacMuxer {
   headers : Array[Bytes]
   total_samples : Int64
   frames : Array[Bytes]
+  priv durations : Array[Int32]
 }
 
 ///|
@@ -243,7 +253,7 @@ pub fn ogg_flac_muxer_new(
   if ogg_flac_laces(headers) > 255 {
     return Err("EINVAL: Ogg/FLAC metadata page needs too many segments")
   }
-  Ok({ serial, streaminfo, headers, total_samples, frames: [], })
+  Ok({ serial, streaminfo, headers, total_samples, frames: [], durations: [], })
 }
 
 ///|
@@ -251,14 +261,12 @@ pub fn OggFlacMuxer::write_packet(
   self : OggFlacMuxer,
   packet : Bytes,
 ) -> Result[Unit, String] {
-  if packet.length() < 6 || packet.length() > 65024 {
-    return Err("EINVAL: FLAC frame size out of Ogg range")
+  let duration = match @libavcodec.flac_frame_samples(packet) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
   self.frames.push(packet)
-  if ogg_flac_laces(self.frames) > 255 {
-    let _ = self.frames.pop()
-    return Err("EINVAL: Ogg/FLAC audio page needs too many segments")
-  }
+  self.durations.push(duration)
   Ok(())
 }
 
@@ -297,15 +305,56 @@ pub fn OggFlacMuxer::finish(self : OggFlacMuxer) -> Bytes {
     ogg_mux_page_multi(out, self.serial, seq, eos, 0L, self.headers)
     seq = seq + 1
   }
-  if self.frames.length() > 0 {
-    ogg_mux_page_multi(
+  let mut granule = 0L
+  for i, frame in self.frames {
+    granule += self.durations[i].to_int64()
+    seq = ogg_mux_packet_pages(
       out,
       self.serial,
       seq,
-      4,
-      self.total_samples,
-      self.frames,
+      granule,
+      frame,
+      i + 1 == self.frames.length(),
     )
   }
   Bytes::from_array(out)
+}
+
+///|
+/// Encode 16-, 24- or 32-bit FLAC in Ogg.
+pub fn DecodedAudio::to_ogg_flac(
+  self : DecodedAudio,
+  bits~ : Int32 = 24,
+) -> Bytes raise MediaError {
+  let encoded = self.encode_flac_pcm(bits)
+  guard self.channel_mask == 0U ||
+    self.channel_mask == flac_default_channel_mask(encoded.channels) else {
+    raise UnsupportedCodec(
+      "Ogg FLAC export requires a standard FLAC channel layout",
+    )
+  }
+  let body = vorbis_comment_body("moonbit", [])
+  let size = body.length()
+  let comment : Array[Byte] = [
+    0x84,
+    (size >> 16).to_byte(),
+    (size >> 8).to_byte(),
+    size.to_byte(),
+  ]
+  comment.append(body)
+  let mux = match
+    ogg_flac_muxer_new(
+      encoded.streaminfo,
+      [Bytes::from_array(comment)],
+      encoded.total_samples,
+    ) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  for packet in encoded.frames {
+    if mux.write_packet(packet) is Err(error) {
+      raise DecodeError(error)
+    }
+  }
+  mux.finish()
 }

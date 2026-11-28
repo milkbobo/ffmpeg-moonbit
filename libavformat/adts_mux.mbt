@@ -56,3 +56,32 @@ pub fn AdtsMuxer::write_frame(
 pub fn AdtsMuxer::finish(self : AdtsMuxer) -> Bytes {
   Bytes::from_array(self.data)
 }
+
+///|
+/// Encode mono or stereo PCM as AAC-LC with ADTS headers.
+///
+/// ```mbt check
+/// test {
+///   let wav = @libavformat.wav_muxer_new(48000, 1, 16).unwrap()
+///   wav.write_samples([0][:])
+///   let source = @libavformat.decode_audio_file(wav.finish())
+///   let audio = @libavformat.decode_audio_file(source.to_adts())
+///   assert_eq(audio.codec_id(), "aac")
+/// }
+/// ```
+pub fn DecodedAudio::to_adts(self : DecodedAudio) -> Bytes raise MediaError {
+  guard self.channels == 1 || self.channels == 2 else {
+    raise UnsupportedCodec("ADTS AAC-LC export requires mono or stereo")
+  }
+  let out : Array[Byte] = []
+  self.encode_aac_adts(packet => {
+    guard out.length() <= 0x7fffffff - packet.length() else {
+      return Err("adts: AAC stream exceeds its size limit")
+    }
+    for byte in packet {
+      out.push(byte)
+    }
+    Ok(())
+  })
+  Bytes::from_array(out)
+}

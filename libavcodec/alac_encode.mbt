@@ -319,7 +319,7 @@ fn alac_enc_linear_predictor(
 
 ///|
 /// Encode interleaved PCM into ALAC frames.  Supports mono (SCE) and stereo
-/// (CPE with the four decorrelation modes), 16- and 24-bit samples.
+/// (CPE with the four decorrelation modes), 16-, 24- and 32-bit samples.
 pub fn alac_encode(
   samples : Array[Int32],
   channels : Int32,
@@ -330,8 +330,8 @@ pub fn alac_encode(
   if channels != 1 && channels != 2 {
     return Err("EINVAL: ALAC encoder supports mono or stereo")
   }
-  if bits != 16 && bits != 24 {
-    return Err("EINVAL: ALAC encoder supports 16/24-bit samples")
+  if bits != 16 && bits != 24 && bits != 32 {
+    return Err("EINVAL: ALAC encoder supports 16/24/32-bit samples")
   }
   if sample_rate <= 0 {
     return Err("EINVAL: invalid ALAC sample rate")

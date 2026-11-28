@@ -1087,7 +1087,7 @@ pub fn MediaFile::next_packet(
       Some({
         stream_index: 0,
         data: frame.data,
-        pts: frame.granule,
+        pts: frame.pts,
         keyframe: true,
       })
     }
@@ -3445,10 +3445,11 @@ fn playback_append_audio(
   rate : Int32,
   frame : AudioFrame,
   from : Int32,
+  end? : Int32,
 ) -> Int32 raise MediaError {
   if rows.is_empty() {
     for channel in frame.samples {
-      rows.push(channel[from:].to_owned())
+      rows.push(channel[from:end.unwrap_or(channel.length())].to_owned())
     }
     return frame.sample_rate
   }
@@ -3456,11 +3457,20 @@ fn playback_append_audio(
     raise DecodeError("decoded audio format changed within the stream")
   }
   for ch, row in rows {
-    for sample in frame.samples[ch][from:] {
+    let channel = frame.samples[ch]
+    for sample in channel[from:end.unwrap_or(channel.length())] {
       row.push(sample)
     }
   }
   rate
+}
+
+///|
+fn mkv_audio_padding_samples(ns : Int64, rate : Int32) -> Int32 {
+  @libavutil.av_rescale(ns, rate.to_int64(), 1000000000L)
+  .max(-0x7fffffffL)
+  .min(0x7fffffffL)
+  .to_int()
 }
 
 ///|
@@ -3576,9 +3586,21 @@ pub fn decode_audio_file(
     }
     _ => (None, 0)
   }
-  let mut skip = match mov_track {
-    Some(t) => t.skip_samples
-    None => 0
+  let mkv_audio = match (mf.source, dec.dec) {
+    (Mkv(mkv), Aac(_) | Opus(_)) => Some(mkv)
+    _ => None
+  }
+  // Matroska stores priming in the track and signed trim in each block.
+  let mut skip = match (mov_track, mkv_audio) {
+    (Some(t), _) => t.skip_samples
+    (_, Some(mkv)) =>
+      mkv_audio_padding_samples(
+        mkv.tracks[audio].codec_delay
+        .min(0x7fffffffffffffffUL)
+        .reinterpret_as_int64(),
+        rate,
+      )
+    _ => 0
   }
   let mut nth = 0
   let mut decoded = 0L
@@ -3588,6 +3610,11 @@ pub fn decode_audio_file(
     RetroAudio(track, _) if mf.format_name == "ast" && track.channels == 4 =>
       0x107U
     OggOpus(demux) => demux.channel_mask
+    OggFlac(demux) if demux.channels > 2 =>
+      flac_default_channel_mask(demux.channels)
+    Mov(_, _) | Mkv(_) | FlvAudio(_, _) if dec.dec is Flac(_) &&
+      dec.channels > 2 &&
+      dec.channels <= 8 => flac_default_channel_mask(dec.channels)
     CafAudio(demux, _) if demux.format.channels > 2 => demux.channel_mask
     Wav(demux, _) => demux.format.channel_mask
     Ts(_, _) if dec.dec is S302m =>
@@ -3630,7 +3657,32 @@ pub fn decode_audio_file(
       header.channels > 2 {
       channel_mask = header.channel_mask()
     }
+    if nth == 0 &&
+      channel_mask == 0U &&
+      mf.streams()[audio].codec_id == "ac3" &&
+      @libavcodec.ac3_parse_header(p.data) is Ok(header) &&
+      header.channels > 2 {
+      channel_mask = ac3_channel_mask(header)
+    }
     let frames = dec.decode_all(p)
+    let padding = match mkv_audio {
+      Some(mkv) =>
+        mkv_audio_padding_samples(
+          mkv.packets[mf.cursor[0] - 1].discard_padding,
+          dec.sample_rate(),
+        )
+      None => 0
+    }
+    let mut packet_skip = (-padding).max(0)
+    let mut keep = if padding > 0 {
+      let mut size = 0L
+      for frame in frames {
+        size += frame.nb_samples.to_int64()
+      }
+      (size - padding.to_int64()).max(0L)
+    } else {
+      0L
+    }
     let discarded = match mov_track {
       Some(t) => nth < t.samples.length() && t.samples[nth].discard
       None => false
@@ -3647,9 +3699,17 @@ pub fn decode_audio_file(
         skip = if skip > f.nb_samples { skip - f.nb_samples } else { 0 }
         continue
       }
-      let from = if skip < f.nb_samples { skip } else { f.nb_samples }
-      skip = skip - from
-      rate = playback_append_audio(rows, rate, f, from)
+      let from = skip.max(packet_skip).min(f.nb_samples)
+      skip = (skip - f.nb_samples).max(0)
+      packet_skip = (packet_skip - f.nb_samples).max(0)
+      let end = if padding > 0 {
+        let limit = keep.min(f.nb_samples.to_int64()).to_int().max(from)
+        keep = (keep - f.nb_samples.to_int64()).max(0L)
+        Some(limit)
+      } else {
+        None
+      }
+      rate = playback_append_audio(rows, rate, f, from, end?)
     }
   }
   if nth > 0 {
@@ -3679,6 +3739,8 @@ pub fn decode_audio_file(
   let tail = match (mf.source, dec.dec) {
     (OggOpus(demux), _) => demux.end_trim
     (RawMpegAudio(_, _, _, tail), _) => tail
+    (Wav(demux, _), Gsm(_, true)) if !rows.is_empty() =>
+      (rows[0].length().to_int64() - demux.sample_count).max(0L).to_int()
     (Wav(demux, _), Adpcm(_)) if mf.format_name == "w64" && !rows.is_empty() =>
       w64_adpcm_tail(demux, rows[0].length())
     (CafAudio(demux, _), _) if !rows.is_empty() =>
@@ -3757,9 +3819,10 @@ fn mov_audio_tail_discard(movie : Mp4Movie, track : Mp4Track) -> Int32 {
     return 0
   }
   // `FFMAX(codecpar->frame_size, ts_to_samples(pkt->duration))`.
-  // MACE and these PCM entries can group a variable number of samples per packet.
+  // Lossless codecs and these PCM entries can vary the sample count per packet.
   let frame_size = match track.codec {
-    "MAC3" | "MAC6" | "alaw" | "ulaw" | "fl32" | "fl64" => 0L
+    "alac" | "fLaC" | "MAC3" | "MAC6" | "alaw" | "ulaw" | "fl32" | "fl64" => 0L
+    "agsm" => track.samples_per_frame.to_int64()
     _ => to_samples(track.samples[0].duration.to_int64())
   }
   let in_samples = to_samples(last_duration)

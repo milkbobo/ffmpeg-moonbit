@@ -161,6 +161,16 @@ pub fn av_ogg_opus_open(data : Bytes) -> Result[OggOpusDemux, String] {
         }
       }
     }
+    if (header_type & 4) != 0 {
+      if !pending.is_empty() {
+        return Err("ogg: incomplete Opus packet on EOS page")
+      }
+      if completed.length() > 0 &&
+        granule >= 0L &&
+        (granule < cumulative || granule < pre_skip.to_int64()) {
+        return Err("ogg: invalid final Opus granule")
+      }
+    }
     if completed.length() > 0 {
       let end = if granule >= 0L { granule - pre_skip.to_int64() } else { -1L }
       if granule >= 0L && (header_type & 4) == 0 {

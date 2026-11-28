@@ -1,6 +1,6 @@
 ///|
-/// One ALAC-in-Matroska track: `A_ALAC` with the 36-byte magic cookie as
-/// CodecPrivate (FFmpeg's matroska muxer stores ALAC extradata verbatim).
+/// One ALAC-in-Matroska track: `A_ALAC` with the 24-byte ALACSpecificConfig
+/// extracted from the magic cookie and stored in CodecPrivate.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -53,7 +53,7 @@ pub fn MkvAlacMuxer::write_packet(
   pts_ms : Int64,
   duration_ms : Int32,
 ) -> Result[Unit, String] {
-  if packet.length() == 0 || duration_ms <= 0 || pts_ms < 0L {
+  if packet.length() == 0 || duration_ms < 0 || pts_ms < 0L {
     return Err("EINVAL: invalid MKV/ALAC packet")
   }
   self.events.push({ pts_ms, data: packet, duration_ms, })
@@ -62,6 +62,11 @@ pub fn MkvAlacMuxer::write_packet(
 
 ///|
 pub fn MkvAlacMuxer::finish(self : MkvAlacMuxer) -> Bytes {
+  self.serialize(None)
+}
+
+///|
+fn MkvAlacMuxer::serialize(self : MkvAlacMuxer, duration_ms : Double?) -> Bytes {
   let audio : Array[Byte] = []
   webm_float_elem(audio, 0xB5, 1, self.sample_rate.to_double())
   webm_uint_elem(
@@ -78,5 +83,35 @@ pub fn MkvAlacMuxer::finish(self : MkvAlacMuxer) -> Bytes {
     audio,
     self.events,
     language=self.language,
+    duration_ms?,
+  )
+}
+
+///|
+/// Encode mono or stereo PCM as ALAC in Matroska.
+pub fn DecodedAudio::to_mkv_alac(
+  self : DecodedAudio,
+  bits~ : Int32 = 24,
+) -> Bytes raise MediaError {
+  let output = self.encode_alac_pcm(bits)
+  let mux = match mkv_alac_muxer_new(output.cookie) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  let rate = output.sample_rate.to_int64()
+  for i, packet in output.frames {
+    let start = i.to_int64() * output.frame_size.to_int64()
+    let pts = @libavutil.av_rescale(start, 1000L, rate)
+    let end = @libavutil.av_rescale(
+      start + alac_encoded_duration(output, i).to_int64(),
+      1000L,
+      rate,
+    )
+    if mux.write_packet(packet, pts, (end - pts).to_int()) is Err(error) {
+      raise DecodeError(error)
+    }
+  }
+  mux.serialize(
+    Some(output.total_samples.to_double() * 1000.0 / rate.to_double()),
   )
 }

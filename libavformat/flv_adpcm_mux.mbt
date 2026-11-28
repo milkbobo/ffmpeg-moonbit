@@ -22,32 +22,15 @@ pub fn DecodedAudio::to_flv_adpcm(
     Ok(data) => data
     Err(error) => raise DecodeError(error)
   }
-  let out = b"FLV\x01\x04\x00\x00\x00\x09\x00\x00\x00\x00".to_array()
+  let out = flv_audio_header.to_array()
   let flags = (0x12 | (rate_code << 2) | (self.channels - 1)).to_byte()
+  let prefix = Bytes::make(1, flags)
   let rate = self.sample_rate.to_int64()
   for i, packet in packets {
-    let size = packet.length() + 1
     let timestamp = (i.to_int64() * 4096000L + rate / 2L) / rate
-    guard timestamp <= 0x7fffffffL else {
-      raise DecodeError("Flash ADPCM exceeds FLV timestamp range")
+    if flv_write_audio_tag(out, timestamp, prefix, packet[:]) is Err(error) {
+      raise DecodeError(error)
     }
-    let ms = timestamp.to_int()
-    out.push(8)
-    out.push((size >> 16).to_byte())
-    out.push((size >> 8).to_byte())
-    out.push(size.to_byte())
-    out.push((ms >> 16).to_byte())
-    out.push((ms >> 8).to_byte())
-    out.push(ms.to_byte())
-    out.push((ms >> 24).to_byte())
-    for _ in 0..<3 {
-      out.push(0)
-    }
-    out.push(flags)
-    for byte in packet {
-      out.push(byte)
-    }
-    aiff_mux_u32be(out, (size + 11).reinterpret_as_uint())
   }
   Bytes::from_array(out)
 }

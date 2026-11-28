@@ -131,8 +131,8 @@ pub fn av_ogg_vorbis_open(data : Bytes) -> Result[OggVorbisDemux, String] {
       pos = page_end
       continue
     }
-    if (header_type & 1) != 0 && pending.length() == 0 {
-      return Err("ogg: continuation page without a partial packet")
+    if ((header_type & 1) != 0) != !pending.is_empty() {
+      return Err("ogg: invalid Vorbis continuation flag")
     }
     let page_pos = pos.to_int64()
     let mut p = pos + 27 + nseg
@@ -165,10 +165,16 @@ pub fn av_ogg_vorbis_open(data : Bytes) -> Result[OggVorbisDemux, String] {
         }
       }
     }
+    if (header_type & 4) != 0 && granule >= 0L && granule < total_samples {
+      return Err("ogg: invalid final Vorbis granule")
+    }
     if granule >= 0L {
       total_samples = granule
     }
     pos = page_end
+  }
+  if !pending.is_empty() {
+    return Err("ogg: incomplete Vorbis packet")
   }
   let id = match id_header {
     Some(h) => h

@@ -41,6 +41,12 @@ pub fn av_gsm_open(data : Bytes) -> Result[RawAudioTrack, String] {
 }
 
 ///|
+/// Encode raw 8 kHz mono GSM, padding the final 160-sample frame with silence.
+pub fn DecodedAudio::to_gsm(self : DecodedAudio) -> Bytes raise MediaError {
+  self.resample_to(8000).encode_gsm(false)
+}
+
+///|
 fn probe_gsm(pd : ProbeData) -> Int32 {
   let count = pd.buf.length() / 33
   let mut valid = 0

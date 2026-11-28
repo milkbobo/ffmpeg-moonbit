@@ -1,9 +1,5 @@
 ///|
-/// Minimal WebM/Opus writer: EBML header, Segment Info, one A_OPUS track and
-/// a single Cluster of SimpleBlocks.  Sizes use the fixed 8-byte EBML VINT so
-/// the document can be assembled in one pass.  The EBML DocType defaults to
-/// "webm" and can be switched to "matroska" for standalone .mkv output (same
-/// CodecID and OpusHead private data).
+/// Audio-only WebM and Matroska writer for one A_OPUS track.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -26,7 +22,11 @@ pub fn webm_opus_muxer_new(
   doctype~ : String = "webm",
   language~ : String = "und",
 ) -> Result[WebmOpusMuxer, String] {
-  if channels < 1 || channels > 2 || pre_skip < 0 || input_sample_rate <= 0 {
+  if channels < 1 ||
+    channels > 2 ||
+    pre_skip < 0 ||
+    pre_skip > 65535 ||
+    input_sample_rate <= 0 {
     return Err("EINVAL: invalid WebM/Opus stream parameters")
   }
   if doctype != "webm" && doctype != "matroska" {
@@ -172,35 +172,15 @@ fn WebmOpusMuxer::opus_head(self : WebmOpusMuxer) -> Bytes {
 }
 
 ///|
-fn WebmOpusMuxer::cluster(self : WebmOpusMuxer) -> Array[Byte] {
-  let cluster : Array[Byte] = []
-  webm_uint_elem(cluster, 0xE7, 1, 0UL) // Timecode 0
-  // FFmpeg `matroskaenc.c` shifts block timestamps by `ts_offset` (the
-  // pre-skip rescaled to the 1 ms track timebase, rounded half away from
-  // zero) so that the demuxer's `- codec_delay` restores the original
-  // timestamps.  With no pre-skip the offset is 0.
-  let ts_offset = (self.pre_skip.to_int64() * 1000L + 24000L) / 48000L
-  let mut samples = 0
-  for i in 0..<self.packets.length() {
-    let packet = self.packets[i]
-    let ms = samples * 1000 / 48000 + ts_offset.to_int()
-    let block : Array[Byte] = [
-      b'\x81',
-      ((ms >> 8) & 0xFF).to_byte(),
-      (ms & 0xFF).to_byte(),
-      b'\x80',
-    ]
-    for b in packet {
-      block.push(b)
-    }
-    webm_elem(cluster, 0xA3, 1, block)
-    samples = samples + self.durations[i]
-  }
-  cluster
+pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
+  self.serialize()
 }
 
 ///|
-pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
+fn WebmOpusMuxer::serialize(
+  self : WebmOpusMuxer,
+  valid_frames? : Int64,
+) -> Bytes {
   let header_body : Array[Byte] = []
   webm_uint_elem(header_body, 0x4286, 2, 1UL) // EBMLVersion
   webm_uint_elem(header_body, 0x42F7, 2, 1UL) // EBMLReadVersion
@@ -216,11 +196,34 @@ pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
   webm_uint_elem(info, 0x2AD7B1, 3, 1000000UL) // TimecodeScale
   webm_string_elem(info, 0x4D80, 2, "moonbit")
   webm_string_elem(info, 0x5741, 2, "moonbit")
-  let mut total = 0
-  for d in self.durations {
-    total = total + d
+  let priming = self.pre_skip.to_int64()
+  // The packet muxer accepts a timeline starting at presentation time zero.
+  // PCM export starts at -pre_skip, so its first block is stored at zero.
+  let offset_ms = if valid_frames is Some(_) {
+    0L
+  } else {
+    @libavutil.av_rescale(priming, 1000L, 48000L)
   }
-  let duration_ms = total.to_double() * 1000.0 / 48000.0
+  let events : Array[MkvAudioEvent] = []
+  let mut total = 0L
+  for i, packet in self.packets {
+    let start_ms = total / 48L
+    total += self.durations[i].to_int64()
+    events.push({
+      pts_ms: start_ms + offset_ms,
+      data: packet,
+      duration_ms: (total / 48L - start_ms).to_int(),
+    })
+    if valid_frames is Some(frames) && total >= frames + priming {
+      break
+    }
+  }
+  let duration_ms = valid_frames.unwrap_or(total).to_double() / 48.0
+  let discard_padding = match valid_frames {
+    Some(frames) =>
+      @libavutil.av_rescale(total - priming - frames, 1000000000L, 48000L)
+    None => 0L
+  }
   webm_float_elem(info, 0x4489, 2, duration_ms)
 
   let audio : Array[Byte] = []
@@ -247,7 +250,7 @@ pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
     // CodecDelay in ns, as FFmpeg `matroskaenc.c` derives it from the Opus
     // pre-skip at the fixed 48 kHz rate; the demuxer turns it back into
     // initial_padding/skip_samples.
-    let delay_ns = self.pre_skip.to_int64() * 1000000000L / 48000L
+    let delay_ns = @libavutil.av_rescale(priming, 1000000000L, 48000L)
     webm_uint_elem(track, 0x56AA, 2, delay_ns.reinterpret_as_uint64())
   }
   webm_uint_elem(track, 0x56BB, 2, 80000000UL) // SeekPreRoll (80 ms)
@@ -257,19 +260,18 @@ pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
   let tracks : Array[Byte] = []
   webm_elem(tracks, 0xAE, 1, track)
   webm_elem(tracks, 0xEC, 1, [])
-  let cluster = self.cluster()
   let info_elem : Array[Byte] = []
   webm_elem(info_elem, 0x1549A966, 4, info)
   let tracks_elem : Array[Byte] = []
   webm_elem(tracks_elem, 0x1654AE6B, 4, tracks)
-  let cluster_elem : Array[Byte] = []
-  webm_elem(cluster_elem, 0x1F43B675, 4, cluster)
+  let clusters : Array[Byte] = []
+  mkv_audio_clusters(clusters, events, discard_padding)
   let empty_times : Array[Int64] = []
   let (seekhead, cues) = mkv_seekhead_cues(
-    info_elem, tracks_elem, cluster_elem, empty_times,
+    info_elem, tracks_elem, clusters, empty_times,
   )
   let segment_body : Array[Byte] = []
-  for part in [seekhead, info_elem, tracks_elem, cluster_elem, cues] {
+  for part in [seekhead, info_elem, tracks_elem, clusters, cues] {
     for b in part {
       segment_body.push(b)
     }
@@ -284,4 +286,30 @@ pub fn WebmOpusMuxer::finish(self : WebmOpusMuxer) -> Bytes {
     out.push(b)
   }
   Bytes::from_array(out)
+}
+
+///|
+/// Encode mono or stereo PCM as 48 kHz Opus in WebM or Matroska.
+/// Set `doctype="matroska"` for an audio-only Matroska file.
+pub fn DecodedAudio::to_webm_opus(
+  self : DecodedAudio,
+  doctype~ : String = "webm",
+) -> Bytes raise MediaError {
+  let (packets, priming, count) = self.encode_opus(separate_trims=true)
+  let mux = match
+    webm_opus_muxer_new(
+      channels=self.channels,
+      pre_skip=priming,
+      input_sample_rate=self.sample_rate,
+      doctype~,
+    ) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  for packet in packets {
+    if mux.write_packet(packet) is Err(error) {
+      raise DecodeError(error)
+    }
+  }
+  mux.serialize(valid_frames=count.to_int64())
 }

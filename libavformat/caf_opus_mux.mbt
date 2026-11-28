@@ -76,13 +76,31 @@ pub fn av_caf_mux_opus(
 ///|
 /// Encode mono or stereo PCM as 48 kHz CAF Opus, resampling when needed.
 pub fn DecodedAudio::to_caf_opus(self : DecodedAudio) -> Bytes raise MediaError {
+  let (packets, priming, count) = self.encode_opus()
+  match
+    av_caf_mux_opus(
+      packets,
+      self.channels,
+      priming~,
+      valid_frames=count.to_int64(),
+    ) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+}
+
+///|
+fn DecodedAudio::encode_opus(
+  self : DecodedAudio,
+  separate_trims~ : Bool = false,
+) -> (Array[Bytes], Int32, Int32) raise MediaError {
   let channels = self.channels
   guard channels == 1 || channels == 2 else {
-    raise UnsupportedCodec("CAF Opus export requires mono or stereo")
+    raise UnsupportedCodec("Opus export requires mono or stereo")
   }
   let audio = self.resample_to(48000)
   let count = audio.samples[0].length()
-  guard count > 0 else { raise DecodeError("caf: no Opus input samples") }
+  guard count > 0 else { raise DecodeError("opus: no input samples") }
   let encoder = match
     @libavcodec.opus_encoder_new(@libavcodec.opus_encode_config(channels, 0)) {
     Ok(value) => value
@@ -90,14 +108,20 @@ pub fn DecodedAudio::to_caf_opus(self : DecodedAudio) -> Bytes raise MediaError 
   }
   let block = encoder.frame_size
   let priming = encoder.initial_padding
+  // Matroska readers may overwrite final padding metadata when injecting
+  // priming on the first packet. Put the two trims on different packets
+  // when the whole presentation would otherwise fit in one.
+  let lead = if separate_trims && count < block - priming { block } else { 0 }
   let packets : Array[Bytes] = []
   // Feed silence past the final input until the encoder delay has cleared.
   let end = count.to_int64() + priming.to_int64()
-  for offset = 0L; offset < end; offset = offset + block.to_int64() {
+  for offset = -lead.to_int64()
+      offset < end
+      offset = offset + block.to_int64() {
     let remaining = (count.to_int64() - offset).max(0L).to_int()
     let planes = audio.samples.map(plane => {
       Array::makei(block, i => {
-        if i < remaining {
+        if offset >= 0L && i < remaining {
           Float::from_double(plane[offset.to_int() + i])
         } else {
           0.0F
@@ -114,9 +138,5 @@ pub fn DecodedAudio::to_caf_opus(self : DecodedAudio) -> Bytes raise MediaError 
     Ok(tail) => packets.append(tail)
     Err(error) => raise DecodeError(error)
   }
-  match
-    av_caf_mux_opus(packets, channels, priming~, valid_frames=count.to_int64()) {
-    Ok(value) => value
-    Err(error) => raise DecodeError(error)
-  }
+  (packets, lead + priming, count)
 }

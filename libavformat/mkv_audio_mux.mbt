@@ -1,8 +1,6 @@
 ///|
-/// Minimal audio-only Matroska writers: one `A_AAC` or one `A_FLAC` track and
-/// a single Cluster of SimpleBlocks. Both share the EBML helpers used by the
-/// H.264/HEVC writers; timestamps are non-negative milliseconds within one
-/// cluster (remux callers shift codec-delay offsets to zero).
+/// Minimal audio-only Matroska writers. Timestamps are milliseconds; long
+/// tracks start a new cluster before the signed block timestamp overflows.
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -29,22 +27,49 @@ fn mkv_audio_sorted(events : Array[MkvAudioEvent]) -> Array[MkvAudioEvent] {
 }
 
 ///|
-fn mkv_audio_cluster(events : Array[MkvAudioEvent]) -> Array[Byte] {
-  let cluster : Array[Byte] = []
+fn mkv_audio_clusters(
+  out : Array[Byte],
+  events : Array[MkvAudioEvent],
+  discard_padding : Int64,
+) -> Unit {
+  let mut cluster : Array[Byte] = []
+  let mut base = 0L
   webm_uint_elem(cluster, 0xE7, 1, 0UL)
-  for e in mkv_audio_sorted(events) {
+  let sorted = mkv_audio_sorted(events)
+  for i, e in sorted {
+    if e.pts_ms - base > 32767L {
+      if i > 0 {
+        webm_elem(out, 0x1F43B675, 4, cluster)
+      }
+      base = e.pts_ms
+      cluster = []
+      webm_uint_elem(cluster, 0xE7, 1, base.reinterpret_as_uint64())
+    }
+    let offset = e.pts_ms - base
+    let padded = i == sorted.length() - 1 && discard_padding != 0L
     let block : Array[Byte] = [
       b'\x81',
-      ((e.pts_ms >> 8) & 0xFF).to_int().to_byte(),
-      (e.pts_ms & 0xFF).to_int().to_byte(),
-      b'\x80',
+      ((offset >> 8) & 0xFF).to_int().to_byte(),
+      (offset & 0xFF).to_int().to_byte(),
+      if padded {
+        b'\x00'
+      } else {
+        b'\x80'
+      },
     ]
     for b in e.data {
       block.push(b)
     }
-    webm_elem(cluster, 0xA3, 1, block)
+    if padded {
+      let group : Array[Byte] = []
+      webm_elem(group, 0xA1, 1, block)
+      mkv_sint_elem(group, 0x75A2, 2, discard_padding)
+      webm_elem(cluster, 0xA0, 1, group)
+    } else {
+      webm_elem(cluster, 0xA3, 1, block)
+    }
   }
-  cluster
+  webm_elem(out, 0x1F43B675, 4, cluster)
 }
 
 ///|
@@ -54,7 +79,9 @@ fn mkv_audio_document(
   audio_body : Array[Byte],
   events : Array[MkvAudioEvent],
   codec_delay~ : UInt64 = 0UL,
+  discard_padding~ : Int64 = 0L,
   language~ : String = "und",
+  duration_ms? : Double,
 ) -> Bytes {
   let header_body : Array[Byte] = []
   webm_uint_elem(header_body, 0x4286, 2, 1UL)
@@ -78,7 +105,7 @@ fn mkv_audio_document(
       duration = end
     }
   }
-  webm_float_elem(info, 0x4489, 2, duration.to_double())
+  webm_float_elem(info, 0x4489, 2, duration_ms.unwrap_or(duration.to_double()))
 
   let track : Array[Byte] = []
   webm_uint_elem(track, 0xD7, 1, 1UL)
@@ -106,7 +133,7 @@ fn mkv_audio_document(
   let segment_body : Array[Byte] = []
   webm_elem(segment_body, 0x1549A966, 4, info)
   webm_elem(segment_body, 0x1654AE6B, 4, tracks)
-  webm_elem(segment_body, 0x1F43B675, 4, mkv_audio_cluster(events))
+  mkv_audio_clusters(segment_body, events, discard_padding)
   let segment : Array[Byte] = []
   webm_elem(segment, 0x18538067, 4, segment_body)
   let out : Array[Byte] = []
@@ -181,6 +208,15 @@ pub fn MkvAacMuxer::write_packet(
 
 ///|
 pub fn MkvAacMuxer::finish(self : MkvAacMuxer) -> Bytes {
+  self.serialize(None, 0L)
+}
+
+///|
+fn MkvAacMuxer::serialize(
+  self : MkvAacMuxer,
+  duration_ms : Double?,
+  discard_padding : Int64,
+) -> Bytes {
   let audio : Array[Byte] = []
   webm_float_elem(audio, 0xB5, 1, self.sample_rate.to_double())
   webm_uint_elem(
@@ -195,8 +231,45 @@ pub fn MkvAacMuxer::finish(self : MkvAacMuxer) -> Bytes {
     audio,
     self.events,
     codec_delay=self.codec_delay,
+    discard_padding~,
     language=self.language,
+    duration_ms?,
   )
+}
+
+///|
+/// Encode mono or stereo PCM as AAC-LC in Matroska at the source sample rate.
+/// CodecDelay and DiscardPadding preserve the PCM presentation length.
+pub fn DecodedAudio::to_mkv_aac(self : DecodedAudio) -> Bytes raise MediaError {
+  guard self.channels == 1 || self.channels == 2 else {
+    raise UnsupportedCodec("Matroska AAC-LC export requires mono or stereo")
+  }
+  let frame_size = 1024L
+  let rate = self.sample_rate.to_int64()
+  let delay_ns = @libavutil.av_rescale(frame_size, 1000000000L, rate)
+  let mux = match
+    mkv_aac_muxer_new(
+      self.sample_rate,
+      channels=self.channels,
+      codec_delay_ns=delay_ns.reinterpret_as_uint64(),
+    ) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  let count = self.samples[0].length().to_int64()
+  let mut offset = 0L
+  self.encode_aac_lc(payload => {
+    let pts = @libavutil.av_rescale(offset, 1000L, rate)
+    offset += frame_size
+    let end = @libavutil.av_rescale(offset, 1000L, rate)
+    mux.write_packet(payload.to_owned(), pts, (end - pts).to_int())
+  })
+  let padding_ns = @libavutil.av_rescale(
+    offset - frame_size - count,
+    1000000000L,
+    rate,
+  )
+  mux.serialize(Some(count.to_double() * 1000.0 / rate.to_double()), padding_ns)
 }
 
 ///|
@@ -254,7 +327,7 @@ pub fn MkvFlacMuxer::write_packet(
   pts_ms : Int64,
   duration_ms : Int32,
 ) -> Result[Unit, String] {
-  if packet.length() < 6 || duration_ms <= 0 || pts_ms < 0L {
+  if packet.length() < 6 || duration_ms < 0 || pts_ms < 0L {
     return Err("EINVAL: invalid MKV/FLAC frame")
   }
   self.events.push({ pts_ms, data: packet, duration_ms, })
@@ -284,6 +357,11 @@ fn MkvFlacMuxer::codec_private(self : MkvFlacMuxer) -> Bytes {
 
 ///|
 pub fn MkvFlacMuxer::finish(self : MkvFlacMuxer) -> Bytes {
+  self.serialize(None)
+}
+
+///|
+fn MkvFlacMuxer::serialize(self : MkvFlacMuxer, duration_ms : Double?) -> Bytes {
   let audio : Array[Byte] = []
   webm_float_elem(audio, 0xB5, 1, self.sample_rate.to_double())
   webm_uint_elem(
@@ -299,7 +377,61 @@ pub fn MkvFlacMuxer::finish(self : MkvFlacMuxer) -> Bytes {
     audio,
     self.events,
     language=self.language,
+    duration_ms?,
   )
+}
+
+///|
+/// Wrap native FLAC frames in Matroska, preserving STREAMINFO and coded data.
+pub fn av_mkv_mux_flac(data : Bytes) -> Result[Bytes, String] {
+  let track = match av_flac_open(data) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  guard !track.frames.is_empty() &&
+    data.length().to_int64() + track.frames.length().to_int64() * 32L <=
+    0x7fffffffL - 1024L else {
+    return Err("mkv: empty or oversized FLAC stream")
+  }
+  let mux = match mkv_flac_muxer_new(track.streaminfo) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let rate = track.sample_rate.to_int64()
+  for frame in track.frames {
+    let start = frame.pos.to_int()
+    let packet = data[start:start + frame.size].to_owned()
+    let pts = @libavutil.av_rescale(frame.pts, 1000L, rate)
+    let end = @libavutil.av_rescale(
+      frame.pts + frame.duration.to_int64(),
+      1000L,
+      rate,
+    )
+    if mux.write_packet(packet, pts, (end - pts).to_int()) is Err(error) {
+      return Err(error)
+    }
+  }
+  let duration_ms = track.total_samples.to_double() * 1000.0 / rate.to_double()
+  Ok(mux.serialize(Some(duration_ms)))
+}
+
+///|
+/// Encode 16-, 24- or 32-bit FLAC in Matroska.
+pub fn DecodedAudio::to_mkv_flac(
+  self : DecodedAudio,
+  bits~ : Int32 = 24,
+) -> Bytes raise MediaError {
+  let encoded = self.encode_flac_pcm(bits)
+  guard self.channel_mask == 0U ||
+    self.channel_mask == flac_default_channel_mask(encoded.channels) else {
+    raise UnsupportedCodec(
+      "Matroska FLAC export requires a standard FLAC channel layout",
+    )
+  }
+  match av_mkv_mux_flac(encoded.file()) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
 }
 
 ///|

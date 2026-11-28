@@ -54,6 +54,65 @@ test "mkv muxer: AAC-only track round-trip" {
 }
 
 ///|
+test "Matroska AAC-LC trims priming and partial final blocks" {
+  for
+    (channels, rate, count) in [
+      (1, 48000, 1),
+      (1, 44100, 1024),
+      (2, 32000, 5203),
+    ] {
+    let wav = wav_muxer_new(rate, channels, 16).unwrap()
+    wav.write_samples(
+      Array::makei(count * channels, i => (i % 73 - 36) * 400)[:],
+    )
+    let source = decode_audio_file(wav.finish())
+    let encoded = source.to_mkv_aac()
+    let mkv = av_matroska_open(encoded).unwrap()
+    let rate64 = rate.to_int64()
+    let rem = (1024 - count % 1024) % 1024
+    assert_eq(
+      mkv.tracks[0].codec_delay,
+      @libavutil.av_rescale(1024L, 1000000000L, rate64).reinterpret_as_uint64(),
+    )
+    assert_eq(mkv.packets[1].pts, 0L)
+    assert_eq(
+      mkv.packets[mkv.packets.length() - 1].discard_padding,
+      @libavutil.av_rescale(rem.to_int64(), 1000000000L, rate64),
+    )
+    let audio = decode_audio_file(encoded)
+    assert_eq(audio.codec_id(), "aac")
+    assert_eq(audio.channels(), channels)
+    assert_eq(audio.sample_rate(), rate)
+    for plane in audio.samples() {
+      assert_eq(plane.length(), count)
+    }
+    assert_true(
+      audio.samples() == decode_audio_file(source.to_caf_aac()).samples(),
+    )
+  }
+}
+
+///|
+test "Matroska AAC-LC negative discard padding trims the block head" {
+  let wav = wav_muxer_new(48000, 1, 16).unwrap()
+  wav.write_samples(Array::makei(2048, i => (i % 73 - 36) * 400)[:])
+  let audio = decode_audio_file(wav.finish())
+  let encoded = audio.to_mkv_aac()
+  let mkv = av_matroska_open(encoded).unwrap()
+  let delay = mkv.tracks[0].codec_delay
+  let mux = mkv_aac_muxer_new(48000, channels=1, codec_delay_ns=delay).unwrap()
+  for i, packet in mkv.packets {
+    mux.write_packet(packet.data, (i * 21).to_int64(), 21).unwrap()
+  }
+  let trim = @libavutil.av_rescale(17L, 1000000000L, 48000L)
+  let original = decode_audio_file(encoded).samples()[0]
+  let actual = decode_audio_file(mux.serialize(None, -trim)).samples()[0]
+  assert_eq(actual.length(), 2048 - 17)
+  assert_true(actual[:1024].to_owned() == original[:1024].to_owned())
+  assert_true(actual[1024:].to_owned() == original[1041:].to_owned())
+}
+
+///|
 test "mkv muxer: FLAC-only track round-trip and decode" {
   let ogg = @libavutil.av_base64_decode(ogg_flac_b64, 1000000).unwrap()
   let src = av_ogg_flac_open(ogg).unwrap()
@@ -91,4 +150,46 @@ test "mkv muxer: FLAC-only track round-trip and decode" {
     Err(e) => fail("FLAC decode failed: \{e}")
   }
   assert_eq(ogg_flac_md5(audio.pcm_bytes()), ogg_flac_pcm_md5)
+}
+
+///|
+test "Matroska FLAC preserves full PCM depth and a sub-millisecond final frame" {
+  let count = 4101
+  let wav = wav_muxer_new(96000, 6, 32, channel_mask=0x60fU).unwrap()
+  wav.write_samples(
+    Array::makei(count * 6, i => (i.to_uint64() * 2654435761UL).to_int())[:],
+  )
+  let audio = decode_audio_file(wav.finish())
+  let file = audio.to_mkv_flac(bits=32)
+  let mkv = av_matroska_open(file).unwrap()
+  let params = mkv_track_codec_parameters(mkv.tracks[0])
+  assert_true(params.extradata_parsed)
+  assert_eq(params.bit_depth, 32)
+  assert_eq(params.sample_rate, 96000)
+  assert_eq(mkv.packets.map(p => p.pts), [0L, 43L])
+  let decoded = decode_audio_file(file)
+  assert_eq(decoded.channel_mask, 0x60fU)
+  assert_eq(decoded.samples()[0].length(), count)
+  assert_eq(decoded.samples(), audio.samples())
+  assert_true(
+    (decoded.duration_seconds().unwrap() - count.to_double() / 96000.0).abs() <
+    0.0000000001,
+  )
+}
+
+///|
+test "Matroska audio muxing keeps timestamps across the signed cluster offset boundary" {
+  let encoded = @libavcodec.flac_encode(Array::make(32, 0), 1, 48000, 16).unwrap()
+  let mux = mkv_flac_muxer_new(encoded.streaminfo).unwrap()
+  let times = [0L, 32767L, 32768L, 70000L]
+  for time in times {
+    mux.write_packet(encoded.frames[0], time, 1).unwrap()
+  }
+  let mkv = av_matroska_open(mux.finish()).unwrap()
+  assert_eq(mkv.packets.map(p => p.pts), times)
+  assert_true(mkv.packets.iter().all(p => p.data == encoded.frames[0]))
+  let raw = encoded.file()
+  let remuxed = av_matroska_open(av_mkv_mux_flac(raw).unwrap()).unwrap()
+  assert_eq(remuxed.packets[0].data, encoded.frames[0])
+  assert_true(av_mkv_mux_flac(raw[:raw.length() - 1].to_owned()) is Err(_))
 }

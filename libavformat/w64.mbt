@@ -65,11 +65,13 @@ fn w64_mux_fact_data(
   payload : Bytes,
   fmt : Array[Byte],
   frames : Int32,
+  include_data_padding~ : Bool = true,
 ) -> Bytes {
   let fmt_size = w64_align8(24L + fmt.length().to_int64())
-  let data_size = w64_align8(24L + payload.length().to_int64())
+  let data_size = 24L + payload.length().to_int64()
+  let data_span = w64_align8(data_size)
   let out = w64_guid_riff.to_array()
-  w64_le64(out, 40L + fmt_size + 32L + data_size)
+  w64_le64(out, 40L + fmt_size + 32L + data_span)
   out.append(w64_guid_wave.to_array())
   out.append(w64_guid_fmt.to_array())
   w64_le64(out, fmt_size)
@@ -81,7 +83,7 @@ fn w64_mux_fact_data(
   w64_le64(out, 32L)
   w64_le64(out, frames.to_int64())
   out.append(w64_guid_data.to_array())
-  w64_le64(out, data_size)
+  w64_le64(out, if include_data_padding { data_span } else { data_size })
   for byte in payload {
     out.push(byte)
   }

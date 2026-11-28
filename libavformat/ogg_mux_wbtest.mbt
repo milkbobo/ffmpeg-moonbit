@@ -41,3 +41,54 @@ test "ogg muxer: empty packets are rejected" {
     Err(_) => ()
   }
 }
+
+///|
+test "Ogg Opus export records the original rate and exact 48 kHz length" {
+  for
+    (channels, rate, count) in [
+      (1, 48000, 1),
+      (2, 48000, 960),
+      (2, 32000, 5203),
+    ] {
+    let wav = wav_muxer_new(rate, channels, 16).unwrap()
+    wav.write_samples(
+      Array::makei(count * channels, i => (i % 73 - 36) * 400)[:],
+    )
+    let audio = decode_audio_file(wav.finish())
+    let file = audio.to_ogg_opus()
+    let track = av_ogg_opus_open(file).unwrap()
+    let expected = audio.resample_to(48000).samples()[0].length()
+    let last = track.packets[track.packets.length() - 1]
+    assert_eq(track.input_sample_rate, rate)
+    assert_eq(track.pre_skip, 120)
+    assert_eq(last.granule, expected.to_int64() + 120L)
+    assert_eq(last.pts + last.duration.to_int64(), expected.to_int64())
+    let decoded = decode_audio_file(file)
+    assert_eq(decoded.sample_rate(), 48000)
+    assert_eq(decoded.channels(), channels)
+    assert_eq(decoded.samples()[0].length(), expected)
+    assert_eq(
+      decoded.samples(),
+      decode_audio_file(audio.to_caf_opus()).samples(),
+    )
+  }
+}
+
+///|
+test "Ogg Opus trim removes surplus packets and rejects backward EOS timing" {
+  let mux = ogg_opus_muxer_new(channels=1, pre_skip=120).unwrap()
+  for _ in 0..<3 {
+    mux.write_packet(b"\xf8").unwrap()
+  }
+  let file = mux.finish_trimmed(1000L).unwrap()
+  let track = av_ogg_opus_open(file).unwrap()
+  assert_eq(track.packets.length(), 2)
+  assert_eq(track.packets[1].granule, 1120L)
+  assert_eq(track.packets[1].duration, 160)
+  assert_eq(track.end_trim, 800)
+  assert_true(mux.finish_trimmed(2761L) is Err(_))
+  assert_true(mux.finish_trimmed(0L) is Err(_))
+  assert_true(ogg_opus_muxer_new(pre_skip=65536) is Err(_))
+  let bad = mux.serialize(2, Some(959L))
+  assert_true(av_ogg_opus_open(bad) is Err("ogg: invalid final Opus granule"))
+}

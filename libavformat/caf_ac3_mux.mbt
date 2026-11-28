@@ -1,6 +1,6 @@
 ///|
 /// AC-3 acmod to native speaker mask, in the decoder's sample order.
-fn caf_ac3_channel_mask(header : @libavcodec.Ac3Header) -> UInt32 {
+fn ac3_channel_mask(header : @libavcodec.Ac3Header) -> UInt32 {
   let base = match header.channel_mode {
     1 => 4U
     3 => 7U
@@ -70,7 +70,7 @@ pub fn av_caf_mux_ac3(
   caf_mux_u32be(desc, 1536U)
   caf_mux_u32be(desc, track.channels.reinterpret_as_uint())
   caf_mux_u32be(desc, 0U)
-  let mask = caf_ac3_channel_mask(header)
+  let mask = ac3_channel_mask(header)
   let layout = match mask {
     4U => 0x00640001U
     3U => 0x00650002U
@@ -108,9 +108,28 @@ pub fn av_caf_mux_ac3(
 ///|
 /// Encode PCM as AC-3 in CAF, with the encoder delay and padding in the packet table.
 pub fn DecodedAudio::to_caf_ac3(self : DecodedAudio) -> Bytes raise MediaError {
+  let raw = self.to_ac3()
+  match
+    av_caf_mux_ac3(
+      raw,
+      priming=ac3_pcm_priming,
+      valid_frames=self.samples[0].length().to_int64(),
+    ) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+}
+
+///|
+let ac3_pcm_priming : Int32 = 256
+
+///|
+/// Encode planar PCM as raw AC-3 syncframes at the source sample rate.
+/// The output includes 256 samples of encoder delay and final frame padding.
+pub fn DecodedAudio::to_ac3(self : DecodedAudio) -> Bytes raise MediaError {
   let defaults : FixedArray[UInt32] = [4U, 3U, 7U, 0x107U, 0x607U, 0x60fU]
   guard self.channels >= 1 && self.channels <= defaults.length() else {
-    raise UnsupportedCodec("CAF AC-3 export requires 1–6 channels")
+    raise UnsupportedCodec("AC-3 export requires 1–6 channels")
   }
   let channels = self.channels
   let mask = if self.channel_mask.popcnt() == channels {
@@ -119,11 +138,10 @@ pub fn DecodedAudio::to_caf_ac3(self : DecodedAudio) -> Bytes raise MediaError {
     defaults[channels - 1]
   }
   let frames = self.samples[0].length()
-  let priming = 256
-  guard frames > 0 && frames <= 0x7fffffff - priming - 1535 else {
-    raise DecodeError("caf: invalid AC-3 PCM length")
+  guard frames > 0 && frames <= 0x7fffffff - ac3_pcm_priming - 1535 else {
+    raise DecodeError("ac3: invalid PCM length")
   }
-  let padded = (frames + priming + 1535) / 1536 * 1536
+  let padded = (frames + ac3_pcm_priming + 1535) / 1536 * 1536
   let pcm = self.samples.map(plane => {
     FixedArray::makei(padded, i => {
       if i < frames {
@@ -133,17 +151,13 @@ pub fn DecodedAudio::to_caf_ac3(self : DecodedAudio) -> Bytes raise MediaError {
       }
     })
   })
-  let raw = match
+  match
     @libavcodec.ff_ac3_fixed_encode_stream(
       pcm,
       self.sample_rate,
       0,
       mask.reinterpret_as_int(),
     ) {
-    Ok(value) => value
-    Err(error) => raise DecodeError(error)
-  }
-  match av_caf_mux_ac3(raw, priming~, valid_frames=frames.to_int64()) {
     Ok(value) => value
     Err(error) => raise DecodeError(error)
   }

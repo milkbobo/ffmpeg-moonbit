@@ -10,6 +10,27 @@ pub struct FlacDemux {
 }
 
 ///|
+/// FFmpeg's default FLAC speaker masks in channel-count order.
+fn flac_default_channel_mask(channels : Int32) -> UInt32 {
+  let masks : FixedArray[UInt32] = [
+    4U, 3U, 7U, 0x33U, 0x607U, 0x60fU, 0x70fU, 0x63fU,
+  ]
+  masks[channels - 1]
+}
+
+///|
+/// Normalize a bare STREAMINFO or the start of a native FLAC metadata stream.
+fn flac_streaminfo_payload(extra : Bytes) -> Bytes? {
+  let offset = if pb_match(extra, 0, "fLaC") { 8 } else { 0 }
+  guard extra.length() >= offset + 34 else { return None }
+  if offset != 0 &&
+    ((extra[4].to_int() & 0x7f) != 0 || pb_be24(extra, 5) != 34U) {
+    return None
+  }
+  Some(extra[offset:offset + 34].to_owned())
+}
+
+///|
 /// Open a native `fLaC` stream, retaining the STREAMINFO payload and one
 /// byte range per CRC-checked frame. Timestamps use PCM sample units.
 pub fn av_flac_open(data : Bytes) -> Result[FlacDemux, String] {

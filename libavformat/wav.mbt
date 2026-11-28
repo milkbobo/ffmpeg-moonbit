@@ -668,6 +668,22 @@ fn wav_build_demux(
   }
   let exact_bits = wav_bits_per_sample(fmt.codec)
   let wav49 = fmt.codec == "gsm_ms" && fmt.block_align == 65
+  let data_size = if wav49 {
+    let padding = data_size % 65L
+    if padding == 0L {
+      data_size
+    } else if wave64 && padding < 8L && data_size % 8L == 0L {
+      let end = (data_ofs + data_size).to_int()
+      guard data[end - padding.to_int():end].iter().all(byte => byte == 0) else {
+        return Err("wav: incomplete WAV49 block")
+      }
+      data_size - padding
+    } else {
+      return Err("wav: incomplete WAV49 block")
+    }
+  } else {
+    data_size
+  }
   let swf = fmt.codec == "adpcm_swf"
   let xan = fmt.codec == "xan_dpcm"
   let duck = fmt.codec == "adpcm_ima_dk3" || fmt.codec == "adpcm_ima_dk4"
@@ -703,8 +719,13 @@ fn wav_build_demux(
       8L /
       (fmt.channels.to_int64() * exact_bits.to_int64())
   }
-  if sample_count == 0L && wav49 {
-    sample_count = data_size / 65L * 320L
+  if wav49 {
+    let coded = data_size / 65L * 320L
+    if sample_count <= 0L ||
+      sample_count > coded ||
+      coded - sample_count >= 320L {
+      sample_count = coded
+    }
   }
   if sample_count == 0L && g726_bits > 0 {
     sample_count = data_size * 8L / g726_bits.to_int64()
@@ -855,7 +876,7 @@ fn wav_build_demux(
           let duration = if wma_packet {
             0
           } else if wav49 {
-            size / 65 * 320
+            (sample_count - pts).min(320L).to_int()
           } else if xan {
             match @libavcodec.xan_dpcm_packet_frames(size, fmt.channels) {
               Ok(count) => count

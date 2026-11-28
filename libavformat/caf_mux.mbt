@@ -86,21 +86,28 @@ pub fn caf_alac_muxer_new(cookie : Bytes) -> Result[CafAlacMuxer, String] {
     cookie[7] != b'c' {
     return Err("EINVAL: invalid ALAC magic cookie")
   }
-  let sample_rate = caf_u32be(cookie, 32).reinterpret_as_int()
-  let channels = cookie[21].to_int()
-  if sample_rate <= 0 || channels < 1 || channels > 8 {
+  guard @libavcodec.alac_decoder_new(cookie) is Ok(config) &&
+    config.sample_rate > 0 else {
     return Err("EINVAL: invalid ALAC CAF parameters")
   }
-  Ok({ cookie, sample_rate, channels, packets: [], durations: [], })
+  Ok({
+    cookie,
+    sample_rate: config.sample_rate,
+    channels: config.channels,
+    packets: [],
+    durations: [],
+  })
 }
 
 ///|
 pub fn CafAlacMuxer::write_packet(
   self : CafAlacMuxer,
   packet : Bytes,
-  duration~ : Int32 = 4096,
+  duration? : Int32,
 ) -> Result[Unit, String] {
-  if packet.length() == 0 || duration <= 0 {
+  let block_size = caf_u32be(self.cookie, 12).reinterpret_as_int()
+  let duration = duration.unwrap_or(block_size)
+  if packet.length() == 0 || duration <= 0 || duration > block_size {
     return Err("EINVAL: invalid ALAC packet")
   }
   self.packets.push(packet)
@@ -110,12 +117,13 @@ pub fn CafAlacMuxer::write_packet(
 
 ///|
 pub fn CafAlacMuxer::finish(self : CafAlacMuxer) -> Bytes {
+  let block_size = caf_u32be(self.cookie, 12)
   let desc : Array[Byte] = []
   caf_mux_double(desc, self.sample_rate.to_double())
   caf_mux_tag(desc, "alac")
   caf_mux_u32be(desc, 0U) // format flags
   caf_mux_u32be(desc, 0U) // bytes per packet (variable)
-  caf_mux_u32be(desc, 4096U) // frames per packet
+  caf_mux_u32be(desc, block_size) // frames per packet
   caf_mux_u32be(desc, self.channels.reinterpret_as_uint())
   caf_mux_u32be(desc, 0U) // bits per channel (from the cookie)
   let kuki : Array[Byte] = []
@@ -142,7 +150,7 @@ pub fn CafAlacMuxer::finish(self : CafAlacMuxer) -> Bytes {
   }
   caf_mux_u64be(pakt, valid.reinterpret_as_uint64())
   caf_mux_u32be(pakt, 0U) // priming frames
-  let padded = 4096L * self.packets.length().to_int64()
+  let padded = block_size.to_int64() * self.packets.length().to_int64()
   let remainder = if padded > valid { padded - valid } else { 0L }
   caf_mux_u32be(pakt, remainder.to_int().reinterpret_as_uint())
   for packet in self.packets {
@@ -157,6 +165,26 @@ pub fn CafAlacMuxer::finish(self : CafAlacMuxer) -> Bytes {
   caf_mux_chunk(out, "data", data)
   caf_mux_chunk(out, "pakt", pakt)
   Bytes::from_array(out)
+}
+
+///|
+/// Encode mono or stereo PCM as ALAC in CAF.
+pub fn DecodedAudio::to_caf_alac(
+  self : DecodedAudio,
+  bits~ : Int32 = 24,
+) -> Bytes raise MediaError {
+  let output = self.encode_alac_pcm(bits)
+  let mux = match caf_alac_muxer_new(output.cookie) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  for i, packet in output.frames {
+    if mux.write_packet(packet, duration=alac_encoded_duration(output, i))
+      is Err(error) {
+      raise DecodeError(error)
+    }
+  }
+  mux.finish()
 }
 
 ///|

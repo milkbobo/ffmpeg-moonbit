@@ -56,3 +56,103 @@ test "GSM packets preserve WAV49 block boundaries and sample timestamps" {
     av_gsm_open(raw[:1088].to_owned()) is Err("gsm: incomplete block"),
   )
 }
+
+///|
+test "GSM AIFF-C exports complete blocks with independent IFF padding" {
+  let input = wav_muxer_new(8000, 1, 16).unwrap()
+  input.write_samples(Array::makei(641, i => i * 7919 % 65536 - 32768)[:])
+  let audio = decode_audio_file(input.finish())
+  let file = audio.to_aifc_gsm()
+  let layout = av_aiff_open(file).unwrap()
+  let start = layout.data_offset.to_int()
+  assert_eq(layout.format.codec, "gsm")
+  assert_eq(layout.format.block_align, 33)
+  assert_eq(layout.sample_count, 800L)
+  assert_eq(layout.data_size, 165L)
+  assert_eq(file.length(), start + 165 + 1)
+  assert_eq(file[start + 165], b'\x00')
+  let chunks = aiff_chunks(file, 12, file.length())
+  let (comm, _) = aiff_chunk(chunks, "COMM").unwrap()
+  assert_eq(aiff_u32be(file, comm + 2), 5U)
+  let native = audio.to_gsm()
+  assert_eq(file[start:start + 165], native)
+  assert_eq(
+    decode_audio_file(file).samples(),
+    decode_audio_file(native, filename="track.gsm").samples(),
+  )
+
+  let unknown_count = file.to_array()
+  unknown_count[comm + 5] = 0
+  assert_eq(
+    av_aiff_open(Bytes::from_array(unknown_count)).unwrap().sample_count,
+    800L,
+  )
+  let invalid_frame = file.to_array()
+  invalid_frame[start + 33] = 0
+  assert_true(
+    av_aiff_open(Bytes::from_array(invalid_frame))
+    is Err("aiff: missing GSM frame magic"),
+  )
+  let partial_block = file.to_array()
+  let (ssnd, _) = aiff_chunk(chunks, "SSND").unwrap()
+  partial_block[ssnd - 1] = partial_block[ssnd - 1] - 1
+  assert_true(
+    av_aiff_open(Bytes::from_array(partial_block))
+    is Err("aiff: incomplete GSM block"),
+  )
+}
+
+///|
+test "GSM WAV49 export and readback trim partial blocks and Wave64 alignment" {
+  let input = wav_muxer_new(8000, 1, 16).unwrap()
+  input.write_samples(Array::makei(641, i => i * 7919 % 65536 - 32768)[:])
+  let audio = decode_audio_file(input.finish())
+  let native = audio.to_gsm()
+  assert_eq(native.length(), 5 * 33)
+  let raw_pcm = decode_audio_file(native, filename="track.gsm").samples()[0]
+  assert_eq(raw_pcm.length(), 800)
+  for wave64 in [false, true] {
+    let file = audio.to_wav_gsm_ms(wave64~)
+    let demux = if wave64 {
+      av_w64_open(file).unwrap()
+    } else {
+      av_wav_open(file).unwrap()
+    }
+    assert_eq(demux.format.codec, "gsm_ms")
+    assert_eq(demux.data_size, 195L)
+    assert_eq(demux.sample_count, 641L)
+    assert_eq(demux.packets.map(p => (p.pts, p.size, p.duration)), [
+      (0L, 65, 320),
+      (320L, 65, 320),
+      (640L, 65, 1),
+    ])
+    let decoded = decode_audio_file(file)
+    assert_eq(decoded.duration_seconds(), Some(641.0 / 8000.0))
+    assert_eq(decoded.samples()[0], raw_pcm[:641].to_owned())
+    let start = demux.data_offset.to_int()
+    assert_eq(
+      caf_md5(file[start:start + 195].to_owned()),
+      "155770eaaaebf39654bd20ac7c7ba1de",
+    )
+    if wave64 {
+      assert_eq(wav_u64(file, start - 8), 219L)
+      let padded = file.to_array()
+      padded[start - 8] = 224
+      assert_eq(av_w64_open(Bytes::from_array(padded)).unwrap().data_size, 195L)
+      padded[file.length() - 1] = 1
+      assert_true(
+        av_w64_open(Bytes::from_array(padded))
+        is Err("wav: incomplete WAV49 block"),
+      )
+    }
+  }
+  let file = audio.to_wav_gsm_ms().to_array()
+  // Invalid fact counts that would remove a whole packet are ignored.
+  for i in 48..<52 {
+    file[i] = if i == 48 { 1 } else { 0 }
+  }
+  let file = Bytes::from_array(file)
+  assert_eq(decode_audio_file(file).samples()[0].length(), 960)
+  let truncated = file[:file.length() - 2].to_owned()
+  assert_true(av_wav_open(truncated) is Err("wav: incomplete WAV49 block"))
+}
