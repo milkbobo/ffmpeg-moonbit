@@ -30,6 +30,10 @@ pub struct TsMuxer {
   nit : Bool
   /// ISO 639 language for the audio ES; empty omits the descriptor.
   audio_language : String
+  /// Four-character registration descriptor for a private audio stream.
+  audio_registration : Bytes
+  /// Four-character registration descriptor in the PMT program info.
+  program_registration : Bytes
   mut wrote_tables : Bool
   /// Non-zero enables automatic ADTS framing of AAC access units.
   mut adts_rate : Int32
@@ -64,6 +68,8 @@ pub fn ts_muxer_new(
   nit~ : Bool = false,
   /// ISO 639 language written as a PMT language descriptor for the audio ES.
   audio_language~ : String = "",
+  audio_registration~ : Bytes = b"",
+  program_registration~ : Bytes = b"",
 ) -> TsMuxer {
   {
     pmt_pid: 0x1000,
@@ -88,6 +94,8 @@ pub fn ts_muxer_new(
     original_network_id,
     nit,
     audio_language,
+    audio_registration,
+    program_registration,
     wrote_tables: false,
     adts_rate: 0,
     adts_channels: 0,
@@ -299,13 +307,25 @@ fn TsMuxer::pmt(self : TsMuxer) -> Unit {
     []
   }
   let audio_desc : Array[Byte] = if self.has_audio {
-    ts_mux_language_descriptor(self.audio_language)
+    let descriptors = ts_mux_language_descriptor(self.audio_language)
+    if self.audio_registration.length() == 4 {
+      descriptors.append([0x05, 4])
+      for byte in self.audio_registration {
+        descriptors.push(byte)
+      }
+    }
+    descriptors
   } else {
     []
   }
   let es_len = (if self.has_video { 5 + video_desc.length() } else { 0 }) +
     (if self.has_audio { 5 + audio_desc.length() } else { 0 })
-  ts_mux_u16(section, 0xB000 | (9 + es_len + 4))
+  let program_desc_len = if self.program_registration.length() == 4 {
+    6
+  } else {
+    0
+  }
+  ts_mux_u16(section, 0xB000 | (9 + program_desc_len + es_len + 4))
   ts_mux_u16(section, 1) // program_number
   section.push(b'\xC1')
   section.push(b'\x00')
@@ -313,7 +333,13 @@ fn TsMuxer::pmt(self : TsMuxer) -> Unit {
   // PCR rides on the first configured elementary stream.
   let pcr_pid = if self.has_video { self.video_pid } else { self.audio_pid }
   ts_mux_u16(section, 0xE000 | pcr_pid)
-  ts_mux_u16(section, 0xF000) // program_info_length = 0
+  ts_mux_u16(section, 0xF000 | program_desc_len)
+  if program_desc_len > 0 {
+    section.append([0x05, 4])
+    for byte in self.program_registration {
+      section.push(byte)
+    }
+  }
   if self.has_video {
     section.push(self.video_stream_type.to_byte())
     ts_mux_u16(section, 0xE000 | self.video_pid)
@@ -509,7 +535,15 @@ pub fn TsMuxer::write_audio(
   // Audio-only streams carry the PCR on the audio PID (video provides it
   // otherwise, matching mpegtsenc's single PCR PID).
   let pcr = if self.has_video { -1L } else { pts }
-  self.pes(self.audio_pid, 0xC0, pts, framed, true, pcr, None)
+  let stream_id = if (
+      self.audio_stream_type == 0x06 && self.audio_registration.length() == 4
+    ) ||
+    (self.audio_stream_type == 0x80 && self.program_registration == b"HDMV") {
+    0xbd
+  } else {
+    0xc0
+  }
+  self.pes(self.audio_pid, stream_id, pts, framed, true, pcr, None)
 }
 
 ///|

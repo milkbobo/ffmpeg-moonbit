@@ -116,3 +116,156 @@ pub fn AiffMuxer::finish(self : AiffMuxer) -> Bytes {
   out[7] = ((total - 8) & 0xFF).to_byte()
   Bytes::from_array(out)
 }
+
+///|
+fn DecodedAudio::encode_ima4(
+  self : DecodedAudio,
+  container : String,
+) -> Bytes raise MediaError {
+  guard self.channels == 1 || self.channels == 2 else {
+    raise UnsupportedCodec("\{container} IMA4 export requires mono or stereo")
+  }
+  guard self.sample_rate > 0 else {
+    raise DecodeError("\{container}: invalid sample rate")
+  }
+  let samples = @swr.swr_flt_planar_to_s16(self.samples, self.channels) catch {
+    error => raise DecodeError(error.to_string())
+  }
+  match @libavcodec.encode_adpcm_ima_qt(samples[:], self.channels) {
+    Ok(data) => data
+    Err(error) => raise DecodeError(error)
+  }
+}
+
+///|
+/// Write mono or stereo Apple IMA4 in an AIFF-C container at the track rate.
+/// The final block is padded with silence to 64 samples per channel.
+pub fn DecodedAudio::to_aifc_ima4(
+  self : DecodedAudio,
+) -> Bytes raise MediaError {
+  let payload = self.encode_ima4("AIFF-C")
+  aifc_mux_compressed(
+    payload,
+    self.sample_rate,
+    self.channels,
+    "ima4",
+    4,
+    34 * self.channels,
+  )
+}
+
+///|
+fn aifc_mux_compressed(
+  payload : Bytes,
+  rate : Int32,
+  channels : Int32,
+  codec_tag : String,
+  bits : Int32,
+  block_align : Int32,
+) -> Bytes {
+  let size = payload.length().reinterpret_as_uint()
+  let pad = payload.length() & 1
+  let out : Array[Byte] = Array(capacity=72 + payload.length() + pad)
+  aiff_mux_tag(out, "FORM")
+  aiff_mux_u32be(out, size + 64U + pad.reinterpret_as_uint())
+  aiff_mux_tag(out, "AIFC")
+  aiff_mux_tag(out, "FVER")
+  aiff_mux_u32be(out, 4U)
+  aiff_mux_u32be(out, 0xa2805140U)
+  aiff_mux_tag(out, "COMM")
+  aiff_mux_u32be(out, 24U)
+  aiff_mux_u16be(out, channels)
+  aiff_mux_u32be(out, size / block_align.reinterpret_as_uint())
+  aiff_mux_u16be(out, bits)
+  out.append(aiff_mux_ext80(rate))
+  aiff_mux_tag(out, codec_tag)
+  aiff_mux_u16be(out, 0)
+  aiff_mux_tag(out, "SSND")
+  aiff_mux_u32be(out, size + 8U)
+  aiff_mux_u32be(out, 0U)
+  aiff_mux_u32be(out, 0U)
+  for byte in payload {
+    out.push(byte)
+  }
+  if pad != 0 {
+    out.push(0)
+  }
+  Bytes::from_array(out)
+}
+
+///|
+/// Encode 16 kHz mono G.722 in AIFF-C.
+pub fn DecodedAudio::to_aifc_g722(
+  self : DecodedAudio,
+) -> Bytes raise MediaError {
+  let payload = self.to_g722()
+  guard !payload.is_empty() else {
+    raise DecodeError("AIFF-C G.722: no audio samples")
+  }
+  aifc_mux_compressed(payload, 16000, 1, "G722", 4, 1)
+}
+
+///|
+/// Encode 8 kHz mono, 5-bit little-endian G.726 in AIFF-C.
+pub fn DecodedAudio::to_aifc_g726le(
+  self : DecodedAudio,
+) -> Bytes raise MediaError {
+  let payload = self.to_g726(5, little_endian=true)
+  guard !payload.is_empty() else {
+    raise DecodeError("AIFF-C G.726LE: no audio samples")
+  }
+  aifc_mux_compressed(payload, 8000, 1, "G726", 5, 5)
+}
+
+///|
+/// Encode mono or stereo Westwood IMA using the AIFF-C ADP4 tag.
+pub fn DecodedAudio::to_aifc_adp4(
+  self : DecodedAudio,
+) -> Bytes raise MediaError {
+  guard self.channels == 1 || self.channels == 2 else {
+    raise UnsupportedCodec("AIFF-C ADP4 export requires mono or stereo")
+  }
+  guard self.sample_rate > 0 else {
+    raise DecodeError("AIFF-C ADP4: invalid sample rate")
+  }
+  let payload = self.encode_westwood_ima()
+  // FFmpeg's COMM count uses the encoder packet alignment for this tag.
+  aifc_mux_compressed(payload, self.sample_rate, self.channels, "ADP4", 4, 1024)
+}
+
+///|
+/// Encode mono or stereo G.711 A-law or mu-law in AIFF-C.
+pub fn DecodedAudio::to_aifc_g711(
+  self : DecodedAudio,
+  mulaw~ : Bool = false,
+) -> Bytes raise MediaError {
+  guard self.channels == 1 || self.channels == 2 else {
+    raise UnsupportedCodec("AIFF-C G.711 export requires mono or stereo")
+  }
+  guard self.sample_rate > 0 else {
+    raise DecodeError("AIFF-C G.711: invalid sample rate")
+  }
+  let samples = @swr.swr_flt_planar_to_s16(self.samples, self.channels) catch {
+    error => raise DecodeError(error.to_string())
+  }
+  guard !samples.is_empty() else {
+    raise DecodeError("AIFF-C G.711: no audio samples")
+  }
+  let payload = if mulaw {
+    @libavcodec.pcm_mulaw_encode(samples[:])
+  } else {
+    @libavcodec.pcm_alaw_encode(samples[:])
+  }
+  aifc_mux_compressed(
+    payload,
+    self.sample_rate,
+    self.channels,
+    if mulaw {
+      "ulaw"
+    } else {
+      "alaw"
+    },
+    8,
+    self.channels,
+  )
+}

@@ -86,7 +86,7 @@ pub fn decode_s302m_pcm(
     // bitfields. Four auxiliary bits follow each sample in the pair.
     let mut pair = 0UL
     for i in 0..<stride {
-      let byte = dsd_reverse_byte[data[pos + i].to_int()].to_uint64()
+      let byte = reverse_byte_bits[data[pos + i].to_int()].to_uint64()
       pair = pair | (byte << (8 * i))
     }
     pcm.push((pair & mask).to_int() << shift)

@@ -51,6 +51,38 @@ let qoa_dequant : FixedArray[Int32] = [
 ]
 
 ///|
+fn qoa_predict(
+  history : FixedArray[Int32],
+  weights : FixedArray[Int32],
+  base : Int32,
+) -> Int32 {
+  let mut prediction = 0
+  for tap in base..<(base + 4) {
+    // QOA accumulates using wrapped 32-bit arithmetic.
+    prediction += history[tap] * weights[tap]
+  }
+  prediction >> 13
+}
+
+///|
+fn qoa_update(
+  history : FixedArray[Int32],
+  weights : FixedArray[Int32],
+  base : Int32,
+  sample : Int32,
+  residual : Int32,
+) -> Unit {
+  let delta = residual >> 4
+  for tap in base..<(base + 4) {
+    weights[tap] += if history[tap] < 0 { -delta } else { delta }
+  }
+  for tap in base..<(base + 3) {
+    history[tap] = history[tap + 1]
+  }
+  history[base + 3] = sample
+}
+
+///|
 /// Decode a self-contained QOA frame to interleaved signed 16-bit PCM.
 ///
 /// ```mbt check
@@ -90,25 +122,14 @@ pub fn decode_qoa_frame(
       let scale = (slice >> 60).to_int() * 4
       let base = ch * 4
       for i in start..<end {
-        let mut prediction = 0
-        for tap in base..<(base + 4) {
-          // The reference accumulates as wrapped 32-bit arithmetic.
-          prediction += history[tap] * weights[tap]
-        }
+        let prediction = qoa_predict(history, weights, base)
         let code = ((slice >> 57) & 7UL).to_int()
         let magnitude = qoa_dequant[scale + (code >> 1)]
         let residual = if (code & 1) == 0 { magnitude } else { -magnitude }
-        let sample = clip_int16((prediction >> 13) + residual)
+        let sample = clip_int16(prediction + residual)
         pcm[i * h.channels + ch] = sample
         slice = slice << 3
-        let delta = residual >> 4
-        for tap in base..<(base + 4) {
-          weights[tap] += if history[tap] < 0 { -delta } else { delta }
-        }
-        for tap in base..<(base + 3) {
-          history[tap] = history[tap + 1]
-        }
-        history[base + 3] = sample
+        qoa_update(history, weights, base, sample, residual)
       }
     }
   }

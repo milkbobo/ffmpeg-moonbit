@@ -1,6 +1,6 @@
 ///|
 /// Minimal CAF writers following FFmpeg 9.0.2 `libavformat/cafenc.c`:
-/// ALAC (VBR packet table) and big-endian LPCM (constant packets).
+/// ALAC (VBR packet table), LPCM and Apple IMA4 (constant packets).
 ///
 /// Original FFmpeg code is LGPL-2.1-or-later; this port keeps the same license.
 
@@ -220,5 +220,106 @@ pub fn CafLpcmMuxer::finish(self : CafLpcmMuxer) -> Bytes {
   caf_mux_u16be(out, 0)
   caf_mux_chunk(out, "desc", desc)
   caf_mux_chunk(out, "data", data)
+  Bytes::from_array(out)
+}
+
+///|
+/// Write CAF with mono or stereo Apple IMA4. Each packet holds 64 samples
+/// per channel. A packet table records any final padding.
+pub fn DecodedAudio::to_caf_ima4(self : DecodedAudio) -> Bytes raise MediaError {
+  let payload = self.encode_ima4("CAF")
+  caf_mux_fixed_compressed(self, "ima4", payload, self.channels * 34, 64, 4)
+}
+
+///|
+/// Write standalone WAV IMA or Microsoft ADPCM blocks in a CAF file.
+pub fn DecodedAudio::to_caf_wav_adpcm(
+  self : DecodedAudio,
+  codec : String,
+) -> Bytes raise MediaError {
+  let tag = match codec {
+    "adpcm_ima_wav" => "ms\u0000\u0011"
+    "adpcm_ms" => "ms\u0000\u0002"
+    _ => raise UnsupportedCodec("CAF ADPCM export: " + codec)
+  }
+  guard self.channels == 1 || self.channels == 2 else {
+    raise UnsupportedCodec("CAF WAV ADPCM export requires mono or stereo")
+  }
+  let samples = @swr.swr_flt_planar_to_s16(self.samples, self.channels) catch {
+    error => raise DecodeError(error.to_string())
+  }
+  let align = 1024
+  let encoded = match
+    @libavcodec.encode_adpcm_wav(
+      samples[:],
+      codec,
+      self.channels,
+      block_size=align,
+    ) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  caf_mux_fixed_compressed(
+    self,
+    tag,
+    encoded.payload,
+    align,
+    encoded.samples_per_block,
+    4,
+  )
+}
+
+///|
+fn caf_mux_fixed_compressed(
+  audio : DecodedAudio,
+  tag : String,
+  payload : Bytes,
+  block_align : Int32,
+  frames_per_packet : Int32,
+  bits : Int32,
+) -> Bytes {
+  let valid_frames = audio.samples[0].length().to_int64()
+  let remainder = (payload.length() / block_align).to_int64() *
+    frames_per_packet.to_int64() -
+    valid_frames
+  let desc : Array[Byte] = []
+  caf_mux_double(desc, audio.sample_rate.to_double())
+  caf_mux_tag(desc, tag)
+  caf_mux_u32be(desc, 0U)
+  caf_mux_u32be(desc, block_align.reinterpret_as_uint())
+  caf_mux_u32be(desc, frames_per_packet.reinterpret_as_uint())
+  caf_mux_u32be(desc, audio.channels.reinterpret_as_uint())
+  caf_mux_u32be(desc, bits.reinterpret_as_uint())
+  let layout : Array[Byte] = []
+  caf_mux_u32be(
+    layout,
+    if audio.channels == 1 {
+      0x00640001U
+    } else {
+      0x00650002U
+    },
+  )
+  caf_mux_u32be(layout, 0U)
+  caf_mux_u32be(layout, 0U)
+  let out : Array[Byte] = Array(capacity=92 + payload.length())
+  caf_mux_tag(out, "caff")
+  caf_mux_u16be(out, 1)
+  caf_mux_u16be(out, 0)
+  caf_mux_chunk(out, "desc", desc)
+  caf_mux_chunk(out, "chan", layout)
+  caf_mux_tag(out, "data")
+  caf_mux_u64be(out, payload.length().reinterpret_as_uint().to_uint64() + 4UL)
+  caf_mux_u32be(out, 0U)
+  for byte in payload {
+    out.push(byte)
+  }
+  if remainder > 0L {
+    let pakt : Array[Byte] = []
+    caf_mux_u64be(pakt, 0UL) // Fixed-size packets are inferred from the data size.
+    caf_mux_u64be(pakt, valid_frames.reinterpret_as_uint64())
+    caf_mux_u32be(pakt, 0U)
+    caf_mux_u32be(pakt, remainder.to_int().reinterpret_as_uint())
+    caf_mux_chunk(out, "pakt", pakt)
+  }
   Bytes::from_array(out)
 }

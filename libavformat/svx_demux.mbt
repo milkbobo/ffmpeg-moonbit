@@ -34,9 +34,9 @@ pub fn av_svx_open(data : Bytes) -> Result[RawAudioTrack, String] {
       return Err("svx: truncated chunk")
     }
     match wav_fourcc(data[:], pos) {
-      "VHDR" if length >= 16L => {
+      "VHDR" if length >= 16L || (length >= 14L && data[8:12] == b"16SV") => {
         rate = pb_be16(data, start + 12).reinterpret_as_int()
-        compression = data[start + 15].to_int()
+        compression = if length >= 16L { data[start + 15].to_int() } else { 0 }
       }
       "CHAN" if length >= 4L =>
         channels = if pb_be32(data, start) >= 6U { 2 } else { 1 }
@@ -50,6 +50,9 @@ pub fn av_svx_open(data : Bytes) -> Result[RawAudioTrack, String] {
   }
   if rate == 0 || body < 0 || body_size == 0 {
     return Err("svx: missing voice parameters or BODY")
+  }
+  guard body_size % channels == 0 else {
+    return Err("svx: unequal channel planes")
   }
   let plane = body_size / channels
   let (codec, duration) = if data[8:12] == b"16SV" {

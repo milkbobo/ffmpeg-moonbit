@@ -18,7 +18,7 @@ let dsd_taps : FixedArray[Double] = [
 ]
 
 ///|
-let dsd_reverse_byte : FixedArray[Int32] = FixedArray::makei(256, byte => {
+let reverse_byte_bits : FixedArray[Int32] = FixedArray::makei(256, byte => {
   let mut value = 0
   for i in 0..<8 {
     value = (value << 1) | ((byte >> i) & 1)
@@ -91,12 +91,12 @@ pub fn DsdDecoder::decode_packet(
       let pos = (self.position + i) & 15
       let byte = packet[start + i * stride].to_int()
       history[pos] = if self.little_endian_bits {
-        dsd_reverse_byte[byte]
+        reverse_byte_bits[byte]
       } else {
         byte
       }
       let midpoint = (pos - 6) & 15
-      history[midpoint] = dsd_reverse_byte[history[midpoint]]
+      history[midpoint] = reverse_byte_bits[history[midpoint]]
       let mut sum = 0.0
       for tap in 0..<6 {
         let a = history[(pos - tap) & 15]

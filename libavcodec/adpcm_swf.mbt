@@ -104,3 +104,48 @@ pub fn decode_swf_adpcm(
   }
   Ok(pcm)
 }
+
+///|
+/// Encode interleaved s16 PCM into 4-bit Flash ADPCM packets of 4096
+/// samples per channel. The last packet is padded with silence.
+/// FFmpeg 9.0.2 adpcmenc.c, LGPL-2.1-or-later.
+pub fn encode_swf_adpcm(
+  samples : ArrayView[Int32],
+  channels : Int32,
+) -> Result[Array[Bytes], String] {
+  guard channels == 1 || channels == 2 else {
+    return Err("adpcm_swf: expected one or two channels")
+  }
+  guard !samples.is_empty() && samples.length() % channels == 0 else {
+    return Err("adpcm_swf: expected complete PCM frames")
+  }
+  let frames = samples.length() / channels
+  let blocks = (frames - 1) / 4096 + 1
+  let states = Array::makei(channels, _ => adpcm_channel_new())
+  let packets = Array::makei(blocks, block => {
+    let start = block * 4096
+    let writer = BitWriter::new()
+    writer.put(2U, 2)
+    for ch in 0..<channels {
+      let state = states[ch]
+      state.predictor = adpcm_clip_int16(samples[start * channels + ch])
+      state.step_index = state.step_index.min(63)
+      writer.put(state.predictor.reinterpret_as_uint(), 16)
+      writer.put(state.step_index.reinterpret_as_uint(), 6)
+    }
+    for i in 1..<4096 {
+      let frame = start + i
+      for ch in 0..<channels {
+        let sample = if frame < frames {
+          adpcm_clip_int16(samples[frame * channels + ch])
+        } else {
+          0
+        }
+        let code = adpcm_ima_quantize_multiply(states[ch], sample)
+        writer.put(code.reinterpret_as_uint(), 4)
+      }
+    }
+    writer.finish()
+  })
+  Ok(packets)
+}

@@ -258,7 +258,7 @@ fn dst_unpack(
   let lo = FixedArray::make(channels, 0xaaaaaaaaaaaaaaaaUL)
   let hi = FixedArray::make(channels, 0xaaaaaaaaaaaaaaaaUL)
   let payload = FixedArray::make(count * channels, b'\x00')
-  ignore(arith.read(bits, (dsd_reverse_byte[coeff[0][0] & 127] >> 1) + 1))
+  ignore(arith.read(bits, (reverse_byte_bits[coeff[0][0] & 127] >> 1) + 1))
   for i in 0..<(count * 8) {
     for ch in 0..<channels {
       let f = filter_map[ch]

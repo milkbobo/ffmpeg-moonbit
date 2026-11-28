@@ -71,3 +71,46 @@ fn probe_adx(pd : ProbeData) -> Int32 {
     0
   }
 }
+
+///|
+/// Encode mono or stereo as unencrypted CRI ADX v3. The last audio block
+/// is padded with silence, followed by the standard terminal block.
+pub fn DecodedAudio::to_adx(self : DecodedAudio) -> Bytes raise MediaError {
+  guard self.channels == 1 || self.channels == 2 else {
+    raise UnsupportedCodec("ADX export requires mono or stereo")
+  }
+  let samples = @swr.swr_flt_planar_to_s16(self.samples, self.channels) catch {
+    error => raise DecodeError(error.to_string())
+  }
+  let payload = match
+    @libavcodec.encode_adx_blocks(samples[:], self.sample_rate, self.channels) {
+    Ok(data) => data
+    Err(error) => raise DecodeError(error)
+  }
+  let counted_blocks = (payload.length() + 18) / (self.channels * 18)
+  let out : Array[Byte] = Array(capacity=54 + payload.length())
+  aiff_mux_u16be(out, 0x8000)
+  aiff_mux_u16be(out, 32)
+  out.push(3)
+  out.push(18)
+  out.push(4)
+  out.push(self.channels.to_byte())
+  aiff_mux_u32be(out, self.sample_rate.reinterpret_as_uint())
+  // FFmpeg's raw muxer derives this field from the file size, including EOF.
+  aiff_mux_u32be(out, counted_blocks.reinterpret_as_uint() * 32U)
+  aiff_mux_u16be(out, 500)
+  out.push(3)
+  for _ in 0..<11 {
+    out.push(0)
+  }
+  aiff_mux_tag(out, "(c)CRI")
+  for byte in payload {
+    out.push(byte)
+  }
+  aiff_mux_u16be(out, 0x8001)
+  aiff_mux_u16be(out, 14)
+  for _ in 0..<14 {
+    out.push(0)
+  }
+  Bytes::from_array(out)
+}

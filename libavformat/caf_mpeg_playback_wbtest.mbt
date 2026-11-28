@@ -31,6 +31,16 @@ fn check_caf_legacy_fixture(
   let wav = av_wav_open(wave).unwrap()
   assert_eq(wav.data_size, (samples * channels * 2).to_int64())
   assert_eq(caf_md5(wave[wav.data_offset.to_int():].to_owned()), expected_md5)
+  if codec == "mp1" || codec == "mp2" || codec == "mp3" {
+    let start = demux.data_offset.to_int()
+    let raw = file[start:start + demux.data_size.to_int()].to_owned()
+    let remuxed = av_caf_mux_mpeg_audio(
+      raw,
+      priming~,
+      valid_frames=samples.to_int64(),
+    ).unwrap()
+    assert_eq(decode_audio_file(remuxed).samples(), audio.samples())
+  }
 }
 
 ///|

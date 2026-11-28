@@ -202,9 +202,11 @@ pub fn ff_wav_codec_id(tag : Int32, bits : Int32) -> String {
     0x0161 => "wmav2"
     0x0162 => "wmapro"
     0x0163 => "wmalossless"
+    0x0200 => "adpcm_ct"
     0x2000 => "ac3"
     0x2001 => "dts"
     0x5346 => "adpcm_swf"
+    0x594A => "xan_dpcm"
     0xF1AC => "flac"
     _ => ""
   }
@@ -235,7 +237,12 @@ fn wav_codec_be(codec : String) -> String {
 pub fn wav_bits_per_sample(codec : String) -> Int32 {
   match codec {
     "dfpwm" => 1
-    "pcm_u8" | "pcm_s8" | "pcm_alaw" | "pcm_mulaw" => 8
+    "pcm_u8"
+    | "pcm_s8"
+    | "pcm_alaw"
+    | "pcm_mulaw"
+    | "derf_dpcm"
+    | "wady_dpcm" => 8
     "pcm_s16le" | "pcm_s16be" | "pcm_u16le" | "pcm_u16be" => 16
     "pcm_s24le" | "pcm_s24be" | "pcm_u24le" | "pcm_u24be" => 24
     "pcm_s32le"
@@ -250,6 +257,7 @@ pub fn wav_bits_per_sample(codec : String) -> Int32 {
     "adpcm_ms"
     | "adpcm_ima_wav"
     | "adpcm_ima_oki"
+    | "adpcm_ct"
     | "adpcm_yamaha"
     | "adpcm_g722" => 4
     _ => 0
@@ -433,6 +441,8 @@ fn wav_parse_fmt(
       if base_matches {
         format_tag = wav_u32(subformat, 0, false).to_int()
         codec = ff_wav_codec_id(format_tag, bits)
+      } else if subformat == wav_dfpwm_guid {
+        codec = "dfpwm"
       } else {
         codec = match subformat {
           [
@@ -471,24 +481,6 @@ fn wav_parse_fmt(
             0x3B,
             0xDD,
           ] => "eac3"
-          [
-            0x3A,
-            0xC1,
-            0xFA,
-            0x38,
-            0x81,
-            0x1D,
-            0x43,
-            0x61,
-            0xA4,
-            0x0D,
-            0xCE,
-            0x53,
-            0xCA,
-            0x60,
-            0x7C,
-            0xD1,
-          ] => "dfpwm"
           _ => codec
         }
       }
@@ -677,7 +669,12 @@ fn wav_build_demux(
   let exact_bits = wav_bits_per_sample(fmt.codec)
   let wav49 = fmt.codec == "gsm_ms" && fmt.block_align == 65
   let swf = fmt.codec == "adpcm_swf"
+  let xan = fmt.codec == "xan_dpcm"
   let duck = fmt.codec == "adpcm_ima_dk3" || fmt.codec == "adpcm_ima_dk4"
+  let block_adpcm = fmt.codec == "adpcm_ima_wav" || fmt.codec == "adpcm_ms"
+  let continuous_adpcm = fmt.codec == "adpcm_ct" ||
+    fmt.codec == "adpcm_yamaha" ||
+    fmt.codec == "adpcm_g722"
   if (swf || duck) && fmt.block_align <= 0 {
     let codec = if swf { "Flash ADPCM" } else { "Duck IMA" }
     return Err("wav: missing \{codec} block alignment")
@@ -697,7 +694,8 @@ fn wav_build_demux(
   } else {
     alignment
   }
-  if (sample_count == 0L || exact_bits > 0) &&
+  if !block_adpcm &&
+    (sample_count == 0L || !continuous_adpcm) &&
     fmt.channels > 0 &&
     data_size > 0L &&
     exact_bits > 0 {
@@ -858,6 +856,11 @@ fn wav_build_demux(
             0
           } else if wav49 {
             size / 65 * 320
+          } else if xan {
+            match @libavcodec.xan_dpcm_packet_frames(size, fmt.channels) {
+              Ok(count) => count
+              Err(error) => return Err(error)
+            }
           } else if swf {
             let offset = packet_pos.to_int()
             match
@@ -882,8 +885,23 @@ fn wav_build_demux(
             size * 8 / g726_bits
           } else if fmt.codec == "dfpwm" && fmt.channels > 0 {
             size * 8 / fmt.channels
-          } else if fmt.codec == "adpcm_g722" && fmt.channels > 0 {
-            size / fmt.channels * 2
+          } else if block_adpcm {
+            let block = if fmt.block_align > 0 { fmt.block_align } else { size }
+            let samples = @libavcodec.adpcm_wav_block_samples(
+              fmt.codec,
+              block,
+              fmt.channels,
+              fmt.bits_per_sample,
+            )
+            size / block * samples +
+            @libavcodec.adpcm_wav_block_samples(
+              fmt.codec,
+              size % block,
+              fmt.channels,
+              fmt.bits_per_sample,
+            )
+          } else if continuous_adpcm && fmt.channels > 0 {
+            size * 2 / fmt.channels
           } else if fmt.block_align > 0 {
             size / fmt.block_align
           } else if fmt.channels > 0 && exact_bits > 0 {
@@ -906,7 +924,7 @@ fn wav_build_demux(
           pts = pts + duration.to_int64()
           left = left - size.to_int64()
         }
-        if (swf || duck) && sample_count == 0L {
+        if (swf || duck || block_adpcm || xan) && sample_count == 0L {
           sample_count = pts
         }
       }

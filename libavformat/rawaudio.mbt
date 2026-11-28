@@ -54,6 +54,46 @@ pub struct RawAudioTrack {
   info_frame_size : Int32
 }
 
+///|
+/// Index a contiguous, frame-aligned interleaved PCM payload.
+fn raw_pcm_track(
+  end : Int32,
+  start : Int32,
+  codec : String,
+  rate : Int32,
+  channels : Int32,
+  sample_bytes : Int32,
+) -> RawAudioTrack {
+  let align = channels * sample_bytes
+  let size = wav_pcm_default_packet_size(align, codec, rate, channels, 0)
+  let frames : Array[RawAudioFrame] = []
+  for pos = start; pos < end; {
+    let bytes = (end - pos).min(size)
+    frames.push({
+      pos: pos.to_int64(),
+      size: bytes,
+      pts: ((pos - start) / align).to_int64(),
+      duration: bytes / align,
+      is_keyframe: true,
+    })
+    continue pos + bytes
+  }
+  {
+    codec,
+    profile: "",
+    sample_rate: rate,
+    channels,
+    frame_size: size / align,
+    frames,
+    total_samples: ((end - start) / align).to_int64(),
+    bit_rate: (rate.to_int64() * align.to_int64() * 8L)
+    .min(0x7fffffffL)
+    .to_int(),
+    id3v2_size: 0,
+    info_frame_size: 0,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ID3v2 helpers (id3v2.c)
 // ---------------------------------------------------------------------------

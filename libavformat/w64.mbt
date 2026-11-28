@@ -60,6 +60,66 @@ fn w64_le64(out : Array[Byte], v : Int64) -> Unit {
 }
 
 ///|
+/// Write Wave64 fmt, fact and data chunks, with eight-byte alignment.
+fn w64_mux_fact_data(
+  payload : Bytes,
+  fmt : Array[Byte],
+  frames : Int32,
+) -> Bytes {
+  let fmt_size = w64_align8(24L + fmt.length().to_int64())
+  let data_size = w64_align8(24L + payload.length().to_int64())
+  let out = w64_guid_riff.to_array()
+  w64_le64(out, 40L + fmt_size + 32L + data_size)
+  out.append(w64_guid_wave.to_array())
+  out.append(w64_guid_fmt.to_array())
+  w64_le64(out, fmt_size)
+  out.append(fmt)
+  while out.length() % 8 != 0 {
+    out.push(0)
+  }
+  out.append(w64_guid_fact.to_array())
+  w64_le64(out, 32L)
+  w64_le64(out, frames.to_int64())
+  out.append(w64_guid_data.to_array())
+  w64_le64(out, data_size)
+  for byte in payload {
+    out.push(byte)
+  }
+  while out.length() % 8 != 0 {
+    out.push(0)
+  }
+  Bytes::from_array(out)
+}
+
+///|
+/// Honor an ADPCM fact count only when it can describe partial last-block padding.
+fn w64_adpcm_tail(demux : WavDemux, frames : Int32) -> Int32 {
+  guard demux.sample_count > 0L && demux.sample_count < frames.to_int64() else {
+    return 0
+  }
+  let fmt = demux.format
+  let block = fmt.block_align
+  let per_block = if fmt.codec == "adpcm_yamaha" &&
+    fmt.channels > 0 &&
+    block <= 0x3fffffff {
+    block * 2 / fmt.channels
+  } else {
+    @libavcodec.adpcm_wav_block_samples(
+      fmt.codec,
+      block,
+      fmt.channels,
+      fmt.bits_per_sample,
+    )
+  }
+  let extra = frames.to_int64() - demux.sample_count
+  if extra < per_block.to_int64() {
+    extra.to_int()
+  } else {
+    0
+  }
+}
+
+///|
 /// Parse a Wave64 file into the shared WAV demux structure.
 pub fn av_w64_open(data : Bytes) -> Result[WavDemux, String] {
   if data.length() < 40 {
@@ -114,6 +174,28 @@ pub fn av_w64_open(data : Bytes) -> Result[WavDemux, String] {
   if data_ofs < 0L {
     return Err("EINVAL: no Wave64 data chunk")
   }
+  // FFmpeg includes alignment padding in the data chunk's size. The fact
+  // count distinguishes those bytes from valid float or G.711 samples.
+  if sample_count > 0L &&
+    fmt.block_align > 0 &&
+    (
+      fmt.codec == "pcm_f32le" ||
+      fmt.codec == "pcm_f64le" ||
+      fmt.codec == "pcm_alaw" ||
+      fmt.codec == "pcm_mulaw"
+    ) {
+    let align = fmt.block_align.to_int64()
+    if sample_count <= data_size / align {
+      let sample_bytes = sample_count * align
+      if data_size - sample_bytes < 8L {
+        let from = (data_ofs + sample_bytes).to_int()
+        let to = (data_ofs + data_size).to_int()
+        if data[from:to].iter().all(byte => byte == 0) {
+          data_size = sample_bytes
+        }
+      }
+    }
+  }
   wav_build_demux(data, fmt, data_ofs, data_size, sample_count, wave64=true)
 }
 
@@ -125,6 +207,7 @@ pub struct W64Muxer {
   channels : Int32
   bits : Int32
   float_samples : Bool
+  companding : String
   data : Array[Byte]
   tags : Array[(String, String)]
 }
@@ -135,17 +218,31 @@ pub fn w64_muxer_new(
   channels : Int32,
   bits : Int32,
   float~ : Bool = false,
+  companding~ : String = "",
 ) -> Result[W64Muxer, String] {
   if sample_rate <= 0 || channels < 1 || channels > 2 {
     return Err("EINVAL: invalid Wave64 sample rate or channel count")
   }
-  if bits != 8 && bits != 16 && bits != 24 && bits != 32 {
-    return Err("EINVAL: Wave64 muxer supports 8/16/24/32-bit PCM")
+  if float {
+    guard (bits == 32 || bits == 64) && companding == "" else {
+      return Err("EINVAL: IEEE float Wave64 requires 32 or 64 bits")
+    }
+  } else if companding != "" {
+    guard bits == 8 && (companding == "alaw" || companding == "mulaw") else {
+      return Err("EINVAL: Wave64 companding requires 8-bit A-law or mu-law")
+    }
+  } else if bits != 8 && bits != 16 && bits != 24 && bits != 32 {
+    return Err("EINVAL: Wave64 integer PCM requires 8/16/24/32 bits")
   }
-  if float && bits != 32 {
-    return Err("EINVAL: IEEE float Wave64 requires 32-bit samples")
-  }
-  Ok({ sample_rate, channels, bits, float_samples: float, data: [], tags: [], })
+  Ok({
+    sample_rate,
+    channels,
+    bits,
+    float_samples: float,
+    companding,
+    data: [],
+    tags: [],
+  })
 }
 
 ///|
@@ -168,6 +265,17 @@ pub fn W64Muxer::write_samples(
   self : W64Muxer,
   samples : ArrayView[Int32],
 ) -> Unit {
+  if self.companding != "" {
+    let payload = if self.companding == "alaw" {
+      @libavcodec.pcm_alaw_encode(samples)
+    } else {
+      @libavcodec.pcm_mulaw_encode(samples)
+    }
+    for byte in payload {
+      self.data.push(byte)
+    }
+    return
+  }
   let bytes = self.bits / 8
   for sample in samples {
     let v = if self.bits == 8 {
@@ -182,13 +290,24 @@ pub fn W64Muxer::write_samples(
 }
 
 ///|
+/// Append interleaved IEEE float64 samples to a 64-bit float Wave64 muxer.
+pub fn W64Muxer::write_float64_samples(
+  self : W64Muxer,
+  samples : ArrayView[Double],
+) -> Unit {
+  for sample in samples {
+    w64_le64(self.data, sample.reinterpret_as_uint64().reinterpret_as_int64())
+  }
+}
+
+///|
 pub fn W64Muxer::finish(self : W64Muxer) -> Bytes {
   let block_align = self.channels * (self.bits / 8)
   let byte_rate = self.sample_rate * block_align
-  let format_tag = if self.float_samples { 3 } else { 1 }
-  let fmt_body : Array[Byte] = []
-  for b in b"fmt " {
-    fmt_body.push(b)
+  let format_tag = match self.companding {
+    "alaw" => 6
+    "mulaw" => 7
+    _ => if self.float_samples { 3 } else { 1 }
   }
   let fmt_payload : Array[Byte] = []
   fmt_payload.push((format_tag & 0xFF).to_byte())
@@ -205,16 +324,16 @@ pub fn W64Muxer::finish(self : W64Muxer) -> Bytes {
   fmt_payload.push(((block_align >> 8) & 0xFF).to_byte())
   fmt_payload.push((self.bits & 0xFF).to_byte())
   fmt_payload.push(((self.bits >> 8) & 0xFF).to_byte())
-  if self.float_samples {
-    // WAVEFORMATEX with cbSize = 0, like ff_put_wav_header for IEEE float.
+  if format_tag != 1 {
+    // WAVEFORMATEX with cbSize = 0 for float and G.711.
     fmt_payload.push(b'\x00')
     fmt_payload.push(b'\x00')
   }
   let fmt_size = w64_align8(24L + fmt_payload.length().to_int64())
-  let fact_size = if self.float_samples { 32L } else { 0L }
+  let fact_size = if format_tag != 1 { 32L } else { 0L }
   let data_size = w64_align8(24L + self.data.length().to_int64())
   let summary = w64_summary_payload(self.tags)
-  let summary_size = if summary.length() > 0 {
+  let summary_size = if summary.length() > 4 {
     w64_align8(24L + summary.length().to_int64())
   } else {
     0L
@@ -240,7 +359,7 @@ pub fn W64Muxer::finish(self : W64Muxer) -> Bytes {
     out.push(b'\x00')
   }
   // fact chunk (non-PCM only): sample frame count.
-  if self.float_samples {
+  if format_tag != 1 {
     for b in w64_guid_fact {
       out.push(b)
     }
@@ -271,4 +390,40 @@ pub fn W64Muxer::finish(self : W64Muxer) -> Bytes {
     }
   }
   Bytes::from_array(out)
+}
+
+///|
+/// Export mono or stereo as float64 PCM or G.711 in Wave64.
+pub fn DecodedAudio::to_w64_samples(
+  self : DecodedAudio,
+  codec : String,
+) -> Bytes raise MediaError {
+  let (bits, float, companding) = match codec {
+    "pcm_f64le" => (64, true, "")
+    "pcm_alaw" => (8, false, "alaw")
+    "pcm_mulaw" => (8, false, "mulaw")
+    _ => raise UnsupportedCodec("Wave64 export: " + codec)
+  }
+  let mux = match
+    w64_muxer_new(self.sample_rate, self.channels, bits, float~, companding~) {
+    Ok(value) => value
+    Err(error) => raise DecodeError(error)
+  }
+  let frames = self.samples[0].length()
+  let words = frames.to_int64() * self.channels.to_int64()
+  guard frames > 0 && words * (bits / 8).to_int64() <= 0x7fffffffL - 160L else {
+    raise DecodeError("Wave64: invalid audio payload size")
+  }
+  if float {
+    let samples = Array::makei(words.to_int(), i => {
+      self.samples[i % self.channels][i / self.channels]
+    })
+    mux.write_float64_samples(samples[:])
+  } else {
+    let samples = @swr.swr_flt_planar_to_s16(self.samples, self.channels) catch {
+      error => raise DecodeError(error.to_string())
+    }
+    mux.write_samples(samples[:])
+  }
+  mux.finish()
 }

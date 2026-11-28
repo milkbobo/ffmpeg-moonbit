@@ -73,3 +73,18 @@ fn probe_qoa(pd : ProbeData) -> Int32 {
     0
   }
 }
+
+///|
+/// Encode a QOA file at the decoded track's sample rate and channel count.
+pub fn DecodedAudio::to_qoa(self : DecodedAudio) -> Bytes raise MediaError {
+  guard self.channels >= 1 && self.channels <= 8 else {
+    raise UnsupportedCodec("QOA export supports up to eight channels")
+  }
+  let pcm = @swr.swr_flt_planar_to_s16(self.samples, self.channels) catch {
+    error => raise DecodeError(error.to_string())
+  }
+  match @libavcodec.encode_qoa(pcm[:], self.sample_rate, self.channels) {
+    Ok(data) => data
+    Err(error) => raise DecodeError(error)
+  }
+}

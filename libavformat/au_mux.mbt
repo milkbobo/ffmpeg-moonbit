@@ -93,3 +93,47 @@ pub fn AuMuxer::finish(self : AuMuxer) -> Bytes {
   out.append(self.data)
   Bytes::from_array(out)
 }
+
+///|
+fn au_mux_telephony(
+  payload : Bytes,
+  rate : Int32,
+  tag : UInt32,
+) -> Bytes raise MediaError {
+  guard !payload.is_empty() else { raise DecodeError("AU: no audio samples") }
+  let out : Array[Byte] = [b'.', b's', b'n', b'd']
+  au_mux_u32be(out, 32U)
+  au_mux_u32be(out, payload.length().reinterpret_as_uint())
+  au_mux_u32be(out, tag)
+  au_mux_u32be(out, rate.reinterpret_as_uint())
+  au_mux_u32be(out, 1U)
+  for _ in 0..<8 {
+    out.push(0)
+  }
+  for byte in payload {
+    out.push(byte)
+  }
+  Bytes::from_array(out)
+}
+
+///|
+/// Encode mono G.722 as Sun AU at 16 kHz.
+pub fn DecodedAudio::to_au_g722(self : DecodedAudio) -> Bytes raise MediaError {
+  au_mux_telephony(self.to_g722(), 16000, 24U)
+}
+
+///|
+/// Encode mono G.726LE as Sun AU at 8 kHz. Each code width has its own tag.
+pub fn DecodedAudio::to_au_g726le(
+  self : DecodedAudio,
+  bits : Int32,
+) -> Bytes raise MediaError {
+  let tag = match bits {
+    2 => 0x37323632U
+    3 => 25U
+    4 => 23U
+    5 => 26U
+    _ => raise DecodeError("AU G.726LE: codeword width must be 2..=5")
+  }
+  au_mux_telephony(self.to_g726(bits, little_endian=true), 8000, tag)
+}

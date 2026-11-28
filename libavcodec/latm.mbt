@@ -58,6 +58,7 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
   let mut have_config = false
   let mut frame_length_type = -1
   let mut frame_length = 0
+  let mut other_data_bits = 0L
   let mut pos = 0
   while pos < data.length() {
     if data.length() - pos < 3 {
@@ -143,6 +144,9 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
       have_config = true
       frame_length_type = gb.read(3).reinterpret_as_int()
       if frame_length_type == 0 {
+        guard gb.bits_left() >= 8 else {
+          return Err("latm: truncated buffer fullness")
+        }
         let _ = gb.read(8) // latmBufferFullness
       } else if frame_length_type == 1 {
         if gb.bits_left() < 9 {
@@ -152,9 +156,20 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
       } else {
         return Err("latm: unsupported frameLengthType")
       }
+      guard gb.bits_left() >= 2 else {
+        return Err("latm: truncated config flags")
+      }
+      other_data_bits = 0L
       if gb.read1() != 0 {
         if version {
-          let _ = latm_get_value(gb) // otherDataBits
+          guard gb.bits_left() >= 2 else {
+            return Err("latm: truncated otherData")
+          }
+          let length = (gb.read(2).reinterpret_as_int() + 1) * 8
+          guard gb.bits_left() >= length else {
+            return Err("latm: truncated otherData")
+          }
+          other_data_bits = gb.read(length).to_int64()
         } else {
           let mut esc = true
           while esc {
@@ -162,9 +177,15 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
               return Err("latm: truncated otherData")
             }
             esc = gb.read1() != 0
-            let _ = gb.read(8)
+            other_data_bits = (other_data_bits << 8) | gb.read(8).to_int64()
+            guard other_data_bits <= 0x1fffL * 8L else {
+              return Err("latm: invalid otherData length")
+            }
           }
         }
+      }
+      guard gb.bits_left() >= 1 else {
+        return Err("latm: truncated config CRC flag")
       }
       if gb.read1() != 0 {
         if gb.bits_left() < 8 {
@@ -193,6 +214,9 @@ pub fn latm_parse_stream(data : Bytes) -> Result[LatmStream, String] {
     }
     if slot_len * 8 > gb.bits_left() {
       return Err("latm: incomplete frame")
+    }
+    if other_data_bits > (gb.bits_left() - slot_len * 8).to_int64() {
+      return Err("latm: truncated otherData payload")
     }
     if slot_len > 0 {
       let au = match latm_read_bytes(gb, slot_len * 8) {

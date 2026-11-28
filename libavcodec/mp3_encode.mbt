@@ -4,9 +4,10 @@
 /// FFmpeg 9.0.2 ships no native Layer III encoder: `libavcodec/libshine.c`
 /// wraps the external shine library, which is a fixed-point ISO-11172
 /// derivative. This port follows shine 3.1.1 (`src/lib/*.c`) exactly, so the
-/// produced bitstream is byte-identical to the C reference for the same PCM
-/// input; shine is LGPL-2.1-or-later, Copyright (c) 2002-2009 Gabriel
-/// Bouvigne and the shine contributors.
+/// bitstream matches the C reference when the granules can hold the frame
+/// budget. Remaining capacity is written as ancillary bits. Shine is
+/// LGPL-2.1-or-later, Copyright (c) 2002-2009 Gabriel Bouvigne and the shine
+/// contributors.
 ///
 /// Numeric path: all multiplications are the shine `mul` family —
 /// `mul(a,b) = (a*b)>>32`, `mulr(a,b) = (a*b + 0x80000000)>>32`,
@@ -400,7 +401,16 @@ pub fn Mp3Encoder::encode_frame(
     self.granules_per_frame
   self.mdct_sub()
   self.iteration_loop()
+  let start = self.bits_count()
   self.format_bitstream()
+  // The 12-bit part2_3_length fields can be too small for the frame budget.
+  // Write any remaining bits as ancillary data so the next header stays aligned.
+  let unused = self.bits_per_frame - (self.bits_count() - start)
+  for remaining = unused; remaining > 0; {
+    let bits = remaining.min(32)
+    self.putbits(0, bits)
+    continue remaining - bits
+  }
   let written = self.bs_position
   self.bs_position = 0
   let out : Array[Byte] = Array::make(written, b'\x00')
@@ -408,6 +418,17 @@ pub fn Mp3Encoder::encode_frame(
     out[i] = self.bs_data[i]
   }
   Ok(Bytes::from_array(out))
+}
+
+///|
+/// Drain the bytes held by the bit writer after the last frame.
+/// Feed any PCM needed to clear the analysis delay before calling this.
+pub fn Mp3Encoder::flush(self : Mp3Encoder) -> Bytes {
+  let count = (32 - self.bs_cache_bits + 7) / 8
+  let cache = self.bs_cache
+  self.bs_cache = 0U
+  self.bs_cache_bits = 32
+  Bytes::makei(count, i => (cache >> (24 - 8 * i)).to_byte())
 }
 
 ///|
@@ -474,8 +495,7 @@ fn Mp3Encoder::resv_frame_end(self : Mp3Encoder) -> Unit {
           stuffing_bits -= bits_this_gr
         }
       }
-      // any remainder would go to ancillary data (`resvDrain`), which shine
-      // never writes; nothing to do here.
+      // encode_frame writes any remaining capacity as ancillary data.
     }
   }
 }

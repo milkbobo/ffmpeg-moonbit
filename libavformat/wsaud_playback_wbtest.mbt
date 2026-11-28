@@ -82,3 +82,43 @@ test "Westwood AUD preserves SND1 packet headers and ignores incomplete stereo p
   let audio = decode_audio_file(Bytes::from_array(odd))
   assert_eq(audio.samples, decode_audio_file(stereo).samples)
 }
+
+///|
+test "Westwood AUD export matches FFmpeg for mono and stereo across chunks" {
+  for
+    (channels, encoded_md5, decoded_md5) in [
+      (
+        1, "eaa9264595ac446fa846ed3af9372dc1", "384d60d384599b8da19d0f5f5f42c691",
+      ),
+      (
+        2, "9de6ab3bf4a27fe3470ebc23b6668ccf", "45eaf7d55d38935385cadf65e8695d45",
+      ),
+    ] {
+    let source = wav_muxer_new(22050, channels, 16).unwrap()
+    let samples = Array::makei(8346 * channels, i => i * 12289 % 65536 - 32768)
+    source.write_samples(samples[:])
+    let aud = decode_audio_file(source.finish()).to_wsaud()
+    assert_eq(telephony_md5(aud), encoded_md5)
+    let demux = av_wsaud_open(aud).unwrap()
+    assert_eq(demux.frames[0].size, 1024)
+    assert_eq(demux.frames[1].pts, 2048L / channels.to_int64())
+    assert_eq(demux.total_samples, 8346L)
+    let pcm = decode_audio_file(aud).to_wav_s16()
+    let wav = av_wav_open(pcm).unwrap()
+    assert_eq(
+      telephony_md5(pcm[wav.data_offset.to_int():].to_owned()),
+      decoded_md5,
+    )
+  }
+}
+
+///|
+test "Westwood AUD retains the last unpaired frame" {
+  let wav = wav_muxer_new(22050, 2, 16).unwrap()
+  wav.write_samples([32767, -32768][:])
+  let aud = decode_audio_file(wav.finish()).to_wsaud()
+  assert_eq(aud[20:].to_owned(), b"\x07\x0f")
+  let audio = decode_audio_file(aud)
+  assert_eq(audio.samples()[0].length(), 2)
+  assert_eq(audio.samples()[1].length(), 2)
+}

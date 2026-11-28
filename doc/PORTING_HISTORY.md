@@ -18848,3 +18848,208 @@ Int32/Int64 全程定点，S32 输出 `clip23(x) << 8`（低 8 位恒 0），
 - libavcodec 下 73 个向量子包全部通过。libavcodec 主包在 `D:/mb` 短根副本上用 `moon test -p libavcodec --target wasm-gc --no-render` 一次跑完 1,524 个用例，全部通过，无 panic、无断言失败。
 - 修正 §577 中关于批测方式的结论：`scripts/_run_libavcodec_tests.sh` 按「每批只传 5~15 个测试文件」的做法无效。原因是 `moon test` 对每个包会生成 whitebox / internal / blackbox 三个 `generate-test-driver` 调用，每个调用的参数列表都包含整包全部 `.mbt`，与本次指定了哪些测试文件无关，因此压缩批大小不会缩短命令行。真实根路径下 blackbox 那条命令实测 36,165 字符，超过 `CreateProcessW` 的 32,767 上限；在 `D:/mb` 下同一条命令降到 21,412 字符，整包可以一条命令跑完，不必分批。
 - 新增 `scripts/_run_pkg_tests.sh`：按包列表串行执行 `moon test`，遇到 V8 `local count too large` 时自动改用 `wasm-gc` 重试，最后汇总通过/失败的包名。用于除 libavcodec 主包之外的其余 78 个包。
+
+## §579 WAV Creative、IMA、Microsoft 和 Yamaha ADPCM（2026-11-27）
+
+- 新增 Creative ADPCM（WAV 标签 `0x0200`）单声道和立体声解码，跨包保留预测值和步长。WAV 以每声道样本数累计 Creative、Yamaha、IMA 和 Microsoft ADPCM 的时间戳。
+- `decode-audio --format adpcm_ima_wav|adpcm_ms|adpcm_yamaha` 写出单声道或立体声 WAV。默认每块 1,024 字节，末块用静音补齐，`fact` 保留补齐前的每声道样本数。
+- FFmpeg 9.0.2 对拍覆盖 22.05 kHz 单声道和立体声。三种编码各两份文件的 WAV 与回读 s16 PCM 均逐字节一致。Yamaha 参考输出显式使用按采样率、声道数和码宽计算的码率。两份 Creative ADPCM 输入的 s16 PCM 均逐样本一致。
+
+## §580 KVAG SSI IMA ADPCM 和 Rayman 2 APM（2026-11-27）
+
+- 按文件签名识别 KVAG 和 APM。两者都按 4,096 字节分包并跨包保留预测状态。APM 支持从头部加载左右声道的预测值和步长索引，检测到保存样本标记时返回错误。
+- 新增 `decode-audio --format kvag|apm`，支持单声道及立体声，默认沿用输入采样率。KVAG 单声道和 APM 尾部缺少配对样本时补零码，保留最后一个输入样本。
+- FFmpeg 9.0.2 对拍覆盖每声道 10,006 个样本的单声道和立体声。四份封装文件及解码后的 s16 PCM 均逐字节一致。回归还校验采用非零初始预测状态的立体声 APM。
+
+## §581 Argonaut Games ASF（2026-11-27）
+
+- 按 `ASF\0` 签名识别 Argonaut ASF。读取单音频块中的单声道及立体声 ADPCM，每包最多 32 个编码块，跨包保留两级预测历史。v1.1 固定按 22.05 kHz 播放，头部声明的数据截断时返回错误。
+- `decode-audio --format argo_asf` 写入 v2.1。编码器搜索两种预测方式和 16 个移位量，末尾以静音补齐到每声道 32 个样本。
+- FFmpeg 9.0.2 对拍覆盖每声道 10,006 个样本的单声道和立体声。参考输出使用 `-name audio`，两份 ASF 文件和回读的 s16 PCM 均逐字节一致。另验证 FFmpeg 生成的 v1.1 文件以 22.05 kHz 解码。
+
+## §582 CRYO APC 解码与 Westwood AUD 编码（2026-11-27）
+
+- 按 `CRYO_APC` 签名识别 APC。单声道及立体声均读取头部初始预测值，使用 4,096 字节分包并维持跨包预测状态。两份采用非零初始值和短尾包的样本，与 FFmpeg 9.0.2 解出的 s16 PCM 完全一致。
+- `decode-audio --format wsaud` 导出 8–48 kHz 的单声道或立体声 Westwood IMA AUD。编码状态跨 1,024 字节块保留，末尾未配对时保留实际输入样本并补零码。每声道 8,346 个样本的两份参考 AUD 与回读 s16 PCM 均逐字节一致。FFmpeg 在读完自身生成文件的最后一个数据块后报告解复用错误，完整 PCM 已输出。
+
+## §583 Capcom FWSE 解码与 Apple IMA4 AIFF-C 编码（2026-11-27）
+
+- 按文件签名识别 FWSE v2、v3，读取音频偏移、采样率和声道数。采用 4,096 字节分包，MT Framework IMA 的预测状态跨包延续。FFmpeg 9.0.2 对拍覆盖 v2 单声道及 v3 立体声，解码 s16 PCM 完全一致。
+- `decode-audio --format aifc_ima4` 导出单声道和立体声 Apple IMA4。每块每声道 64 个样本，末块以静音补齐，COMM 记录编码块数。每声道 8,346 个输入样本的两份 AIFF-C 文件及回读 s16 PCM 与 FFmpeg 9.0.2 完全一致。
+
+## §584 Sierra SOL 解码与 CAF IMA4 编码（2026-11-27）
+
+- 支持 Sierra SOL 的三种文件头，读取旧版和新版 8 位 DPCM、16 位 DPCM、无符号 8 位 PCM 和有符号 16 位小端 PCM。DPCM 按 4,096 字节分包并保留各声道的预测状态。五种格式的合成样本与 FFmpeg 9.0.2 的 s16 PCM 完全一致。
+- `decode-audio --format caf_ima4` 将单声道或立体声轨道编码为 Apple IMA4，写入 CAF 的固定长度音频描述和声道布局。复用 AIFF-C 的 IMA4 编码器，并用 `pakt` 记录末尾填充量。每声道 8,346 个输入样本的两份 CAF 与 FFmpeg 9.0.2 参考文件逐字节一致，回读 s16 PCM 也完全一致，样本数恢复为 8,346。
+
+## §585 DERF 与 WADY 解码、CRI ADX 编码（2026-11-27）
+
+- 按签名识别 Xilam DERF 和 Marble WADY。DERF 固定 22.05 kHz，WADY 读取头部的采样率与缩放系数。两种 DPCM 都维持各声道的预测历史，WADY 只在输出时裁剪到 s16，保留未裁剪的预测值。单声道和立体声各一份样本的回读 PCM 与 FFmpeg 9.0.2 逐样本一致。
+- `decode-audio --format adx` 写出未加密的类型 3 单声道或立体声 CRI ADX。编码器使用 500 Hz 截止频率，末尾补足每声道 32 个样本并写入终止块。与 FFmpeg 9.0.2 对拍，每声道 8,346 个输入样本的两份文件及其回读 PCM 均逐字节一致。
+
+## §586 Gremlin GDV 音轨解码与 Flash ADPCM FLV 编码（2026-11-27）
+
+- Gremlin GDV 播放入口跳过调色板和视频包，读取交错的 Gremlin DPCM、无符号 8 位 PCM 或 16 位小端 PCM 音轨。DPCM 按上游规则轮换两个预测器，样本按 16 位回绕。四份合成样本与 FFmpeg 9.0.2 的 s16 PCM 逐字节一致。
+- `decode-audio --format flv_adpcm` 写出采用 4 位 Flash ADPCM 的纯音频 FLV，支持单声道、立体声和四档 FLV 采样率。每个音频标签为 4,096 个样本，末块以静音补齐。每声道 8,346 个输入样本的两份 FLV 与关闭元数据标签的 FFmpeg 9.0.2 输出逐字节一致，回读 PCM 也完全一致。
+
+## §587 Pro Pinball 音效库解码和 G.722／G.726 WAV 编码（2026-11-27）
+
+- 读取 Pro Pinball 音效库的独立单声道轨，按轨轮询交付数据包。带音乐标记且等长的双轨组合成立体声。移植 Cunning IMA 的预测与步长表并跨包保留状态。合成音效库的两路单声道和音乐库的立体声 PCM 与 FFmpeg 9.0.2 一致。
+- `decode-audio --format wav_g722|wav_g726` 复用既有编码器，将单声道 G.722 或 G.726 写入 WAV。G.722 固定 16 kHz，G.726 固定 8 kHz，支持每码字 2、3、4 或 5 位。保留补齐前的 `fact` 样本数，奇数字节载荷按 RIFF 规则对齐。五份 WAV 和回读 PCM 均与 FFmpeg 9.0.2 逐字节一致。FFmpeg 读取 3 位和 5 位 G.726 尾包时可能报告对齐提示。
+
+## §588 Xan DPCM WAV 解码和 G.722／G.726LE AU 编码（2026-11-27）
+
+- 识别 WAV 标签 `0x594A` 的单声道、立体声 Xan DPCM。每包从头部恢复预测值并重置移位量，包时长排除预测值占用的字节。两份合成样本的回读 PCM 与 FFmpeg 9.0.2 逐样本一致。
+- `decode-audio --format au_g722|au_g726le` 复用既有编码器写入单声道 Sun AU。G.726LE 以四种编码标签分别表示 2、3、4、5 位码字。五份 AU 与 FFmpeg 9.0.2 参考文件逐字节一致，回读 PCM 也完全一致。2、3、5 位参考文件仅替换 FFmpeg 默认写出的 4 位标签，压缩载荷原样保留。
+
+## §589 GameCube RSD 解码和 QOA 编码（2026-11-27）
+
+- 读取 GameCube RSD 的 RADP、XADP 和 16 位大小端 PCM，支持单声道和立体声。RADP 从各声道块头重置预测值和步长索引。五份合成样本回读的 s16 PCM 与 FFmpeg 9.0.2 完全一致。
+- `decode-audio --format qoa` 导出固定采样率和声道数的 1–8 声道 QOA。复用解码路径的 LMS 计算，对每个切片搜索缩放因子。单声道和立体声样本与参考编码器逐字节一致，FFmpeg 9.0.2 回读的 PCM 逐样本一致，每声道均保留原始的 8,346 个样本。 [QOA 参考编码器](https://github.com/phoboslab/qoa/blob/master/qoa.h)
+
+## §590 RSD VAG 解码和 DFPWM WAV／Wave64 编码（2026-11-27）
+
+- 新增 RSD VAG 的单声道与立体声 PlayStation ADPCM。每声道每块 16 字节、28 个样本，跨块保留未裁剪的预测值。两份合成样本覆盖静音标志和五组预测系数，解码 PCM 与 FFmpeg 9.0.2 完全一致。
+- `decode-audio --format wav_dfpwm|w64_dfpwm` 导出单声道 DFPWM1a。写入 WAVEFORMATEXTENSIBLE 的 DFPWM GUID，`fact` 记录填充前的样本数，头部字节率按每样本 1 位计算。8,340 个输入样本的 32 kHz WAV 和 48 kHz Wave64 与指定对应码率的 FFmpeg 9.0.2 逐字节一致。两份文件回读分别为 8,344 和 8,384 个样本，PCM 完全一致。
+
+## §591 RSD Nintendo DSP 解码和 AIFF-C G.722／G.726LE 编码（2026-11-27）
+
+- 读取 RSD WADP 单声道和立体声以及 GADP 单声道。系数按各自端序读取，立体声 WADP 按双字节交错布局解码，预测值跨包保留。三份合成样本中每个完整块的 PCM 与 FFmpeg 9.0.2 逐样本一致。FFmpeg 对立体声 WADP 在 EOF 后多输出了一块，MoonBit 按文件内的完整块数结束。
+- `decode-audio --format aifc_g722|aifc_g726le` 导出单声道 AIFF-C，分别使用 16 kHz G.722 和 8 kHz、5 位 G.726LE。用 FFmpeg 9.0.2 编码到 AU 后流复制到 AIFF-C 作为参考，G.726LE 中间 AU 使用 5 位标签。每种格式输入 5,207 个样本，输出文件及回读的 5,208 个 s16 样本均逐字节一致。
+
+## §592 Funcom ISS 解码和 AIFF-C ADP4 编码（2026-11-27）
+
+- 读取 Funcom ISS 文本头和固定大小的音频包。每包初始化预测器和步长索引，单声道先读低半字节，立体声先读高半字节。两份合成样本和一份真实 FATE 样本的 PCM 与 FFmpeg 9.0.2 完全一致。FFmpeg 对这些 ISS 文件在输出完整 PCM 后报告 EOF 解复用错误，MoonBit 在最后一个音频包后正常结束。 [FFmpeg FATE 样本](https://fate-suite.ffmpeg.org/funcom-iss/0004010100.iss)
+- `decode-audio --format aifc_adp4` 复用 Westwood IMA 编码器和 AIFF-C 封装。每声道 8,346 个输入样本的单声道、立体声文件与 FFmpeg 9.0.2 逐字节一致，回读 PCM 完全一致。单声道文件覆盖奇数字节的 SSND 载荷对齐。
+
+## §593 Loki SMJPEG 音轨和 AIFF-C G.711（2026-11-27）
+
+- SMJPEG 读取单声道和立体声 APCM 或 16 位小端 PCM 音轨，跳过视频数据并保留毫秒时间戳。APCM 每包初始化预测器和步长索引，两份带视频标签的合成样本回读 PCM 与 FFmpeg 9.0.2 一致。
+- `decode-audio --format smjpeg_pcm` 写入纯音频 16 位小端 PCM，每包最多 1,024 个样本。两份单、立体声文件和对应的 PCM 与 FFmpeg 9.0.2 输出一致。
+- `decode-audio --format aifc_alaw|aifc_mulaw` 复用 G.711 编码器写入 AIFF-C。两份立体声输出及其回读 PCM 与 FFmpeg 9.0.2 逐字节一致。
+
+## §594 Sega FILM／CPK 音轨解码和 SoX 32 位 PCM 编解码（2026-11-27）
+
+- 从 FILM／CPK 的 STAB 表提取音轨，跳过视频记录。支持早期版本的单声道 8 位 PCM，以及单声道和立体声平面 PCM 与未加密类型 3 ADX；ADX 头或码块跨记录时会先重组再解码。FFmpeg 9.0.2 生成的 8 位 PCM、16 位 PCM 和 ADX 三份立体声 CPK 的 s16 回读结果均逐字节一致。
+- SoX 原生格式读取有符号 32 位大小端 PCM。`decode-audio --format sox|sox_be` 写出两种端序，并在头部记录交错样本总数。每声道 5,203 个样本的两份立体声输出与 FFmpeg 9.0.2 逐字节一致，回读再导出也一致。
+
+## §595 Yamaha SMAF／MMF 编解码（2026-11-27）
+
+- 识别 SMAF 的 MMMD 文件头，读取单条 ATR 波形轨中的单声道或立体声 Yamaha ADPCM。以 4,096 字节分包，跨包保留预测状态，按声道数计算时间戳和样本数。
+- `decode-audio --format mmf` 复用 Yamaha ADPCM 编码器，写出 SMAF 波形和播放时序。保留五档支持的输入采样率，末块以静音补齐。FFmpeg 9.0.2 对拍覆盖 11.025 kHz 单声道、44.1 kHz 立体声和 22.05 kHz 的两种声道配置。四份文件和回读的 s16 PCM 均逐字节一致，每声道输入 10,006 个样本，回读 10,240 个样本。
+
+## §596 IRCAM／CARL PCM 与 G.711 编解码（2026-11-27）
+
+- 识别七种 IRCAM 文件签名及各自的字节序，读取定长头部后的整数、浮点 PCM 和 G.711 音频。按完整采样帧分包，拒绝截断的末帧。
+- `decode-audio --format ircam --ircam-codec NAME` 写出小端 IRCAM，默认 16 位 PCM。32 kHz 立体声、每声道 5,203 个样本的八种封装输出和回读 PCM 均与 FFmpeg 9.0.2 逐字节一致。五种大端样本的回读 PCM 也一致。回归还核对了 32 位整数和 64 位浮点样本的完整精度。
+
+## §597 Creative VOC PCM／G.711 导出与 Creative Technology ADPCM 解码（2026-11-27）
+
+- 读取标签 `0x0200` 的单声道和立体声 Creative Technology ADPCM，预测状态跨数据包和续块保留。两份合成样本的 s16 PCM 与 FFmpeg 9.0.2 逐字节一致。
+- `decode-audio --format voc|voc_u8|voc_alaw|voc_mulaw` 写出 PCM 或 G.711。每块最多 1,024 个样本，续块保留原始样本数。8 位 PCM 在旧式时钟能准确表示采样率时采用旧式块，其余使用显式采样率。8 kHz 单声道及 32 kHz 立体声各四份输出与指定相同块长的 FFmpeg 9.0.2 文件及回读 PCM 逐字节一致。
+
+## §598 D-Cinema DAUD 编解码（2026-11-27）
+
+- 按 `.302` 或 `.daud` 扩展名读取 DAUD。将 24 位传输字的有效位按字节反转还原为 s16 PCM，读取时忽略同步位，转 WAV 时写入 5.1 侧环绕声道掩码。
+- `decode-audio --format daud` 写出 96 kHz 六声道文件，每包最多 2,000 个采样帧，末包保留实际长度。每声道 5,203 个输入样本的封装文件与 FFmpeg 9.0.2 逐字节一致，回读 PCM 完全一致。
+
+## §599 Nintendo AST 平面 PCM 与 AFC ADPCM（2026-11-27）
+
+- 读取 AST 的 16 位大端平面 PCM 和 1–6 声道 AFC ADPCM。AFC 每个 9 字节码块输出 16 个样本，各声道的预测历史跨 BLCK 块保存。立体声和四声道两份合成 AFC 文件的回读 PCM 与 FFmpeg 9.0.2 逐字节一致。
+- `decode-audio --format ast` 写出无循环的 16 位大端平面 PCM，每块每声道最多 1,024 个样本。三份 32 kHz 文件覆盖单声道、立体声和四声道，每声道 5,203 个样本。封装文件和回读 PCM 均与指定相同块长的 FFmpeg 9.0.2 输出逐字节一致。
+
+## §600 LEGO Mindstorms RSO 与 Psion 3 WVE 编解码（2026-11-27）
+
+- RSO 读取并导出单声道 8 位无符号 PCM。5,203 和 70,019 个样本的两份文件及回读 PCM 均与 FFmpeg 9.0.2 逐字节一致。长文件的长度字段饱和到 65,535，回读保留完整载荷。
+- WVE 读取并导出 8 kHz 单声道 G.711 A-law。5,203 个样本的导出与按 Psion 文件头封装的 FFmpeg A-law 载荷逐字节一致，回读 PCM 也与 FFmpeg 9.0.2 一致。
+
+## §601 NIST SPHERE PCM 和 G.711 编解码（2026-11-27）
+
+- 按 `NIST_1A` 签名读取变长文本头，支持 8/16/24/32 位有符号 PCM 和 G.711 A-law、μ-law，支持历史文件用 `sample_byte_format` 标记 μ-law 的方式。
+- `decode-audio --format sphere --sphere-codec NAME` 写出指定编码和端序，默认使用 16 位小端 PCM。32 kHz 立体声、每声道 5,203 个样本的九种输出载荷与 FFmpeg 9.0.2 的裸音频逐字节一致，双方回读 SPHERE 的 s16 PCM 也一致。回归还验证了 32 位 PCM 完整精度和 512 字节头部。
+
+## §602 AAC-LC LOAS／LATM 编码与重封装（2026-11-27）
+
+- `decode-audio --format loas` 将单声道或立体声 PCM 编码为 AAC-LC，默认每 20 帧发送一次 StreamMuxConfig。`av_loas_from_adts` 去掉 AAC-LC ADTS 头后重封装，覆盖跨 255 字节的载荷长度字段。
+- LATM 读取时验证 `otherData` 长度，并在重用 StreamMuxConfig 时沿用该值。回归覆盖同一配置下有效和被截断的附加数据。
+- FFmpeg 9.0.2 可回读 44.1 kHz 单声道和 48 kHz 立体声导出。每声道输入 21,491 个样本，双方各回读 22,528 个样本，s16 PCM 最大差值为 1 LSB。
+
+## §603 SMPTE 302M 编码与 MPEG-TS 封装（2026-11-27）
+
+- 编码 48 kHz、16/20/24 位 PCM，支持 2/4/6/8 声道。AES3 每 192 个采样帧的块起始标志跨 PES 连续，尾包保留实际样本数。MPEG-TS 写入 PMT 的 BSSD 注册描述符和私有流 PES。
+- `decode-audio --format ts_s302m --s302m-bits N` 导出纯音频流。每声道 4,201 个样本的 16 位立体声、20 位四声道、24 位六声道和八声道样本中，所有 20 个 SMPTE 302M 载荷包均与 FFmpeg 9.0.2 逐字节一致。回读保留完整采样精度，转 WAV 时写入多声道布局。
+
+## §604 Blu-ray LPCM 编码与 HDMV MPEG-TS 封装（2026-11-27）
+
+- `decode-audio --format ts_bluray_lpcm --bluray-bits 16|24` 写出 48/96/192 kHz 的 HDMV MPEG-TS，按布局填充奇数声道的空槽并重排 5.1、7.0、7.1 的声道。解码回读保留完整精度，转 WAV 时写入多声道扬声器掩码。
+- 对拍覆盖 16 位单声道和四声道，以及 24 位 5.1、7.0 和 7.1。前四组 MPEG-TS 的 LPCM 包与 FFmpeg 9.0.2 逐字节一致。FFmpeg 9.0.2 的 24 位 7.1 编码直接写入左对齐输入字的低 24 位。MoonBit 保留有效的高 24 位，五组导出由 FFmpeg 回读后均与输入 PCM 逐字节一致。
+
+## §605 Amiga MAUD PCM 与 G.711 读写（2026-11-28）
+
+- 按 IFF FORM 签名识别 MAUD，读取 MHDR 的时钟频率与分频系数及 MDAT 载荷，支持 8 位无符号 PCM、16 位大端 PCM、G.711 A-law 和 μ-law。带奇数字节 ANNO 块和 48 kHz ÷ 6 时钟的单声道样本与 FFmpeg 9.0.2 解码一致。
+- `decode-audio --format maud|maud_u8|maud_alaw|maud_mulaw` 导出单声道或立体声并对齐奇数长度的 MDAT。八份文件的载荷和双方回读 PCM 均与 FFmpeg 9.0.2 参考结果逐字节一致。 [SoX 的 MAUD 实现](https://raw.githubusercontent.com/chirlu/sox/master/src/maud.c)
+
+## §606 Amiga 平面 PCM 导出与 CSL NSP 解码（2026-11-28）
+
+- `decode-audio --format 8svx|16sv` 写入单声道或立体声有符号平面 PCM，以单八度、一次播放的 VHDR 保存采样信息，并对齐奇数长度的 BODY。读取 16SV 时接受省略压缩字段的旧式 VHDR，拒绝长度不等的声道平面。四份导出文件回读的 s16 PCM 与 FFmpeg 9.0.2 逐字节一致。 [Amiga 8SVX 规范](https://wiki.amigaos.net/wiki/8SVX_IFF_8-Bit_Sampled_Voice)
+- NSP 支持 `HEDR`、`HDR8` 以及单声道和立体声 16 位小端 PCM，按块长跳过 NOTE 和对齐字节。两份带奇数长度 NOTE 的样本与 FFmpeg 9.0.2 解码逐字节一致。
+
+## §607 Audio Visual Research AVR 编解码（2026-11-28）
+
+- 按 `2BIT` 签名读取 AVR，支持单声道和立体声的 8/16 位有符号及无符号 PCM。采样率取头部低 24 位，复用播放层新增的无符号 16 位 PCM 解码路径。
+- `decode-audio --format avr|avr_s8|avr_u8|avr_u16` 按原采样率导出，头部记录每声道样本数。四种编码在 8 kHz 单声道和 32 kHz 立体声的八份载荷及回读 PCM 都与 FFmpeg 9.0.2 逐字节一致。 [SoX 的 AVR 实现](https://raw.githubusercontent.com/chirlu/sox/master/src/avr.c)
+
+## §608 CAF 浮点 PCM、G.711 导出与扬声器布局（2026-11-28）
+
+- `decode-audio --format caf_f32le|caf_f32be|caf_f64le|caf_f64be|caf_alaw|caf_mulaw` 写出固定长度的 CAF 采样帧。32 kHz 立体声、每声道 5,203 个样本的六种输出及 s16 回读 PCM 均与 FFmpeg 9.0.2 逐字节一致。
+- 读取 CAF `chan` 的兼容位图与声道顺序匹配的常用布局标签，转 WAV 时保留多声道扬声器掩码。5.1 侧环绕样本以浮点 PCM 导出并由 FFmpeg 回读，完整 PCM 一致。回归还核对了超过 32 位浮点精度的样本。
+
+## §609 CAF WAV IMA 与 Microsoft ADPCM 编解码（2026-11-28）
+
+- 读取 CAF 的 `ms\x00\x11` 和 `ms\x00\x02`，按声明的块大小解码 4 位 WAV IMA 和 Microsoft ADPCM，并使用包表裁掉末块填充。
+- `decode-audio --format caf_ima_wav|caf_ms` 写入单声道或立体声，每块 1,024 字节。四份整块文件与 FFmpeg 9.0.2 封装逐字节一致。四份带尾块填充的文件在双方回读后均恢复每声道 5,203 个样本，s16 PCM 逐字节一致。
+
+## §610 Wave64 浮点 PCM 与 G.711（2026-11-28）
+
+- `decode-audio --format w64_f64|w64_alaw|w64_mulaw` 导出 64 位小端浮点 PCM 或 G.711。单声道及立体声的六份输出与 FFmpeg 9.0.2 文件逐字节一致，无标签时省略空的 summarylist 块。
+- Wave64 读回浮点和 G.711 时，用 `fact` 的每声道样本数识别不足 8 字节的零填充。G.711 对拍中 FFmpeg 9.0.2 将对齐字节读成额外样本，MoonBit 回读准确保留每声道 5,203 个样本，有效 PCM 逐字节一致。
+
+## §611 Wave64 WAV IMA、Microsoft 和 Yamaha ADPCM（2026-11-28）
+
+- `decode-audio --format w64_ima_wav|w64_ms|w64_yamaha` 写出单声道和立体声 Wave64，复用 WAV 编码器生成 1,024 字节块。六组整块文件与 FFmpeg 9.0.2 逐字节一致。
+- 完整解码时用 Wave64 `fact` 去除末块填充，限定裁剪量小于一个编码块。六份非整块样本回读均恢复每声道 5,203 个有效样本，PCM 与 FFmpeg 解码的有效区间逐字节一致。
+
+## §612 CAF AC-3 编码与重封装（2026-11-28）
+
+- `decode-audio --format caf_ac3` 复用定点 AC-3 编码器，在包表保存包长、256 个启动样本及尾端填充。`av_caf_mux_ac3` 可直接封装连续的 AC-3 同步帧。
+- CAF 读取时核对 AC-3 包表和帧头，缺少声道描述时从帧头确定扬声器布局。FFmpeg 9.0.2 回读覆盖 32 kHz 单声道、44.1 kHz 立体声和 48 kHz 5.1，样本数与原始输入一致。两种解码器的 s16 PCM 最大相差 1 LSB。
+
+## §613 CAF FLAC 编码与重封装（2026-11-28）
+
+- `decode-audio --format caf_flac` 支持 1–8 声道的 16、24 和 32 位 FLAC。修复共用的 FLAC 编码器在三声道及以上漏写子帧的问题。`av_caf_mux_flac` 将原生 FLAC 的 STREAMINFO 和编码帧封装为 CAF。
+- CAF 读取复用原生 FLAC 的帧索引和 CRC 检查，核对包表声明的字节数和每声道样本数。16 位单声道、24 位 5.1 侧环绕、32 位立体声的 CAF 经 FFmpeg 9.0.2 回读，s32le PCM 均与输入逐字节一致。
+
+## §614 CAF Opus 编码与重封装（2026-11-28）
+
+- `decode-audio --format caf_opus` 将单声道或立体声输入重采样为 48 kHz 并编码。包表记录各包的长度和时长、120 个启动样本及末包填充。`av_caf_mux_opus` 可直接封装已有的 Opus 包。
+- CAF 读取时按 Opus TOC 校验包时长和数据区边界。8 kHz 单声道和 32 kHz 立体声导出后，MoonBit 与 FFmpeg 9.0.2 回读的每声道样本数分别为 31,218 和 7,805，s16 PCM 最大偏差 1 LSB。
+
+## §615 CAF AAC-LC 编码与重封装（2026-11-28）
+
+- `decode-audio --format caf_aac` 复用 LOAS 的 AAC-LC 编码流程，在原采样率编码单声道或立体声，记录 1,024 个启动样本和末包填充。`av_caf_mux_aac` 可直接封装带 AudioSpecificConfig 的原始访问单元。
+- CAF 读取按 AudioSpecificConfig 校验 960 或 1,024 样本的帧时长和包表覆盖范围。8 kHz 单声道和 32 kHz 立体声经 MoonBit 与 FFmpeg 9.0.2 回读均保留每声道 5,203 个样本，s16 PCM 最大偏差 1 LSB。
+
+## §616 CAF MPEG 音频编码与重封装（2026-11-28）
+
+- `decode-audio --format caf_mp2` 复用 Layer II 编码器，记录 481 个启动样本和末包填充。24 kHz 单声道与 32 kHz 立体声经 MoonBit 和 FFmpeg 9.0.2 回读，分别恢复每声道 15,609 和 5,203 个样本，s16 PCM 逐字节一致。
+- `av_caf_mux_mpeg_audio` 将 MP1、MP2 和 MP3 原始编码帧封装为 CAF，保留 MP3 Xing/Info 的无缝播放范围。读取 CAF 时用 MPEG 帧头核对包长、采样率、声道数和样本数。
+
+## §617 CAF MP3 编码与末帧处理（2026-11-28）
+
+- `decode-audio --format caf_mp3` 复用 Shine，支持单声道和立体声以及 MPEG-1、MPEG-2 和 MPEG-2.5。CAF 包表记录 1,057 个启动样本和末尾填充，回读时裁剪到输入长度。
+- MP3 编码器补齐粒度位数达到上限时的帧尾填充，并可输出缓存的末帧字节。44.1 kHz 立体声、24 kHz 单声道和 8 kHz 单声道的 CAF 经 MoonBit 与 FFmpeg 9.0.2 定点解码，样本数一致，s16 PCM 逐字节一致。
+
+## §618 CAF GSM 06.10 和 WAV49 编解码（2026-11-28）
+
+- 移植 libgsm 的定点 RPE-LTP 编码核心。`decode-audio --format caf_gsm|caf_gsm_ms` 接受单声道 PCM，重采样到 8 kHz 并按 CAF 包表记录末包填充。读取时检测残缺块和原生 GSM 同步标志。
+- 两种打包的编码负载均与 FFmpeg 9.1 调用 libgsm 的结果逐字节一致。FFmpeg 9.0.2 和 MoonBit 回读均保留 5,203 个有效样本，s16 PCM 逐字节一致。

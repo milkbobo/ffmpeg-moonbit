@@ -35,28 +35,53 @@
 | WMA v1/v2 | 支持从 ASF/WMA 文件解码 | 已实现编码器，输出 WMA 压缩包 |
 | WMA Pro | 支持从 ASF/WMA 文件和 WAV（标签 0x0162）解码；对 FATE 的立体声与 5.1 样本，输出与参考 PCM 的偏差不超过 1 LSB。XMA 与 WMA Lossless 未实现 | 未实现 |
 | DTS | 支持裸 `.dts`、`.spdif`、Matroska、MPEG-TS/M2TS、WAV 和 Wave64 中的 DTS 核心解码，含 DTS-CD 和 IEC 61937。类型 IV 可播放 DTS-HD 的内嵌核心，WAV 导出可保留环绕声布局 | 支持将 DTS 核心帧重封装为 `.spdif`，也可将带核心的 DTS-HD 裸流封装为 IEC 61937 类型 IV |
-| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`、`in24`、`in32`）、`raw ` 无符号 8 位 PCM、32/64 位浮点 PCM、G.711、Apple IMA4、MACE、GSM、G.722、单声道 5 位 G.726LE、SDX2、CBD2 和 ADP4 | 支持写入 PCM AIFF |
-| CAF | 支持 ALAC、AAC-LC、FLAC、单声道或立体声 Opus、MPEG 音频 Layer I/II/III、AC-3、AMR-NB，以及 PCM、G.711、MACE、Apple IMA4、GSM 和 WAV49 | 支持封装 ALAC 和整数 PCM |
+| AIFF / AIFF-C | 支持 8/16/24/32 位有符号 PCM（含 `sowt`、`in24`、`in32`）、`raw ` 无符号 8 位 PCM、32/64 位浮点 PCM、G.711、Apple IMA4、MACE、GSM、G.722、单声道 5 位 G.726LE、SDX2、CBD2 和 ADP4 | 支持写入 PCM AIFF，以及 G.711、Apple IMA4、ADP4、单声道 G.722 和 5 位 G.726LE AIFF-C |
+| CAF | 支持 ALAC、AAC-LC、FLAC、单声道或立体声 Opus、MPEG 音频 Layer I/II/III、AC-3、AMR-NB，以及 PCM、G.711、MACE、Apple IMA4、WAV IMA／Microsoft ADPCM、GSM 和 WAV49 | 支持写入 ALAC、AC-3、16/24/32 位 FLAC、单声道或立体声 AAC-LC、Opus、MP2 和 MP3、整数和浮点 PCM、G.711、GSM、WAV49，以及单声道或立体声的三种 ADPCM。可重封装 MPEG 音频 Layer I/II/III |
 | MOV 音轨 | 支持 G.711 A-law/μ-law 及 `fl32`/`fl64` 大端和小端浮点 PCM | 见各编码器的封装支持 |
-| FLV 音轨 | 支持传统 FLV 的 AAC-LC、MP3、8/16 位 PCM、G.711 和 Flash ADPCM，以及单音轨 Enhanced FLV 的 AAC-LC、MP3、Opus、FLAC、AC-3 和 E-AC-3 | 未实现 |
-| Flash ADPCM | 支持 FLV 和 WAV（标签 `0x5346`）中的 2/3/4/5 位单声道及立体声音轨 | 未实现 |
+| FLV 音轨 | 支持传统 FLV 的 AAC-LC、MP3、8/16 位 PCM、G.711 和 Flash ADPCM，以及单音轨 Enhanced FLV 的 AAC-LC、MP3、Opus、FLAC、AC-3 和 E-AC-3 | 支持纯音频 Flash ADPCM FLV |
+| Flash ADPCM | 支持 FLV 和 WAV（标签 `0x5346`）中的 2/3/4/5 位单声道及立体声音轨 | 支持写入单声道和立体声 4 位 Flash ADPCM FLV |
+| WAV ADPCM | 支持 IMA WAV、Microsoft、Yamaha、Dialogic OKI 及单声道和立体声 Creative ADPCM（标签 `0x0200`） | 支持单声道和立体声 IMA WAV、Microsoft 和 Yamaha ADPCM |
 | Duck IMA ADPCM | 支持 WAV 中的立体声 DK3（`0x0062`）及单声道和立体声 DK4（`0x0061`） | 未实现 |
-| Sun AU / SND | 支持整数和浮点 PCM、A-law、µ-law 及单声道 G.726LE 解码 | 支持写入整数 PCM、A-law 和 µ-law |
-| Sony Wave64 | 复用 WAV 解码路径，支持整数和浮点 PCM | 支持写入 8/16/24/32 位整数 PCM 和 32 位浮点 PCM |
-| G.722 | 支持 48/56/64 kb/s 字节对齐的裸 `.g722`、`.722`，以及 Sun AU、WAV 和 AIFF-C 中的单声道 64 kb/s 码流 | 支持写入 16 kHz 单声道 64 kb/s 裸流 |
-| G.726 | 支持裸 `.g726`、`.g726le`，以及 WAV 中的 G.726 和 Sun AU 中的 G.726LE，覆盖单声道 2/3/4/5 位码字 | 支持导出 8 kHz 单声道裸 `.g726` 和 `.g726le`，覆盖同样的四种码宽 |
+| Xan DPCM | 支持 WAV（标签 `0x594A`）中的单声道和立体声音轨 | 未实现 |
+| Sun AU / SND | 支持整数和浮点 PCM、A-law、µ-law 及单声道 G.722 和 G.726LE | 支持写入整数 PCM、A-law、µ-law 和单声道 G.722、G.726LE |
+| Sony Wave64 | 复用 WAV 解码路径，支持整数和浮点 PCM、G.711、WAV IMA、Microsoft 和 Yamaha ADPCM 等 | 支持写入 8/16/24/32 位整数 PCM、32/64 位浮点 PCM、G.711 及上述三种 ADPCM |
+| G.722 | 支持 48/56/64 kb/s 字节对齐的裸 `.g722`、`.722`，以及 Sun AU、WAV 和 AIFF-C 中的单声道 64 kb/s 码流 | 支持写入 16 kHz 单声道 64 kb/s 裸流和 WAV |
+| G.726 | 支持裸 `.g726`、`.g726le`，以及 WAV 中的 G.726 和 Sun AU 中的 G.726LE，覆盖单声道 2/3/4/5 位码字 | 支持导出 8 kHz 单声道裸 `.g726`、`.g726le` 和 G.726 WAV，覆盖同样的四种码宽 |
 | aptX / aptX HD | 支持立体声裸 `.aptx` 和 `.aptxhd`，默认 48 kHz，可指定输入采样率 | 支持 8、16、24、32、44.1 和 48 kHz 立体声裸流 |
-| CRI ADX | 支持未加密的类型 3 裸 `.adx`，1–6 声道 | 未实现 |
-| Amiga 8SVX / 16SV | 支持单声道和立体声平面 PCM，以及 8SVX 的 Fibonacci 和指数差分 | 未实现 |
-| Creative VOC | 支持 PCM、G.711 和 Sound Blaster Pro ADPCM，含续块和扩展声道参数 | 未实现 |
-| Westwood AUD | 支持 `.aud` 中的单声道或立体声 Westwood IMA，以及单声道 SND1 | 未实现 |
+| CRI ADX | 支持未加密的类型 3 裸 `.adx`，1–6 声道 | 支持写入未加密的类型 3 单声道或立体声 ADX |
+| Amiga 8SVX / 16SV | 支持单声道和立体声平面 PCM，以及 8SVX 的 Fibonacci 和指数差分 | 支持写入单声道和立体声平面 PCM |
+| Amiga MAUD | 支持 8 位无符号 PCM、16 位大端 PCM 和 G.711 | 支持按上述编码导出单声道和立体声 |
+| Computerized Speech Lab NSP | 支持单声道及立体声 16 位小端 PCM | 未实现 |
+| Audio Visual Research AVR | 支持单声道及立体声 8/16 位有符号和无符号 PCM | 支持写入相同的四种 PCM 编码 |
+| Creative VOC | 支持 PCM、G.711、Sound Blaster Pro 和 Creative Technology ADPCM，含续块和扩展声道参数 | 支持写入 8 位无符号 PCM、16 位小端 PCM 和 G.711 |
+| Westwood AUD | 支持 `.aud` 中的单声道或立体声 Westwood IMA，以及单声道 SND1 | 支持 8–48 kHz 单声道或立体声 Westwood IMA |
+| CRYO APC | 支持单声道及立体声 APC IMA ADPCM，读取头部的初始预测值 | 未实现 |
+| Capcom FWSE | 支持 v2 和 v3 的单声道及立体声 MT Framework IMA ADPCM | 未实现 |
+| Sierra SOL | 支持旧版和新版 8 位 DPCM、16 位 DPCM，以及无符号 8 位和有符号 16 位小端 PCM | 未实现 |
+| DERF / WADY | 支持 Xilam DERF（`.adp`）和 Marble WADY（`.way`）的单声道及立体声 DPCM | 未实现 |
+| Gremlin GDV | 支持提取单声道或立体声音轨，覆盖 Gremlin DPCM、无符号 8 位 PCM 和有符号 16 位小端 PCM | 未实现 |
+| Pro Pinball 音效库 | 支持 Cunning IMA 的独立单声道音轨和成对立体声音乐轨 | 未实现 |
+| Funcom ISS | 支持单声道和立体声 IMA ADPCM | 未实现 |
+| Loki SMJPEG | 支持单声道和立体声 APCM、16 位小端 PCM 音轨 | 支持写入纯音频 16 位小端 PCM |
+| Sega FILM / CPK | 支持有符号 8 位 PCM、16 位大端平面 PCM 及未加密的类型 3 ADX 音轨 | 未实现 |
+| SoX 原生格式 | 支持有符号 32 位大小端 PCM | 支持写入两种端序的 32 位 PCM |
+| Yamaha SMAF | 支持 `.mmf` 单声道和立体声 Yamaha ADPCM 波形轨 | 支持写入单声道和立体声 `.mmf` |
+| IRCAM / CARL | 支持大小端 8/16/24/32 位有符号 PCM、32/64 位浮点 PCM 和 G.711 | 支持写入小端 IRCAM，覆盖同样的采样编码 |
+| D-Cinema DAUD | 支持 `.302` 和 `.daud` 的 96 kHz 5.1 PCM | 支持输出 96 kHz 六声道 DAUD，尾包无填充 |
+| Nintendo AST | 支持 16 位大端平面 PCM 和 1–6 声道 AFC ADPCM | 支持写入无循环的 16 位大端平面 PCM |
+| LEGO Mindstorms RSO | 支持单声道 8 位无符号 PCM | 支持写入单声道 8 位无符号 PCM |
+| Psion 3 WVE | 支持 8 kHz 单声道 G.711 A-law | 支持写入 8 kHz 单声道 G.711 A-law |
+| NIST SPHERE | 支持 `.sph`／`.nist` 的大小端 8/16/24/32 位有符号 PCM 和 G.711 | 支持写入相同的 PCM 与 G.711 编码 |
 | RoQ DPCM | 支持纯音频和音视频混合 `.roq` 文件中的 22.05 kHz 单声道及立体声音轨 | 支持写入 22.05 kHz 单声道或立体声的纯音频 `.roq` |
 | ALP IMA ADPCM | 支持 `.tun` 和 `.pcm` 文件中的单声道及立体声 | 支持写入 22.05 kHz TUN 和最高 44.1 kHz 的 ALP PCM |
-| QOA（Quite OK Audio） | 支持带总样本数、采样率和声道数固定的原生 `.qoa` | 未实现 |
-| DFPWM1a | 支持 48 kHz 单声道裸 `.dfpwm`，以及采样率由头部指定的单声道 WAV 和 Wave64 | 支持导出 48 kHz 单声道裸 `.dfpwm` |
-| Blu-ray LPCM | 支持 HDMV MPEG-TS/M2TS 中的 16/24 位 LPCM，48/96/192 kHz，最多 8 声道 | 未实现 |
-| SMPTE 302M | 支持 MPEG-TS 的 `BSSD` PCM 音轨，48 kHz、16/20/24 位、2/4/6/8 声道 | 未实现 |
-| GSM 06.10 | 支持裸 `.gsm`、MOV、AIFF-C 和 CAF 的单声道音轨，以及 WAV 和 CAF 中的 WAV49（65 字节块） | 未实现 |
+| KVAG / APM | 支持 `.vag` 中的 SSI IMA ADPCM 和 Rayman 2 `.apm` 中的 IMA ADPCM，含单声道及立体声 | 支持写入 KVAG 和 APM，默认沿用输入采样率 |
+| Argonaut ASF | 支持单音频块的单声道及立体声 ADPCM，按文件签名识别，并按 22.05 kHz 播放 v1.1 | 支持写入 v2.1 |
+| QOA（Quite OK Audio） | 支持带总样本数、采样率和声道数固定的原生 `.qoa` | 支持写入 1–8 声道 QOA，保留原始样本数 |
+| GameCube RSD | 支持单声道、立体声 RADP、XADP、VAG、WADP 与 16 位大小端 PCM，也支持单声道 GADP | 未实现 |
+| DFPWM1a | 支持 48 kHz 单声道裸 `.dfpwm`，以及采样率由头部指定的单声道 WAV 和 Wave64 | 支持导出单声道裸 `.dfpwm`、WAV 和 Wave64 |
+| Blu-ray LPCM | 支持 HDMV MPEG-TS/M2TS 中的 16/24 位 LPCM，48/96/192 kHz，最多 8 声道 | 支持写入同规格的纯音频 HDMV MPEG-TS |
+| SMPTE 302M | 支持 MPEG-TS 的 `BSSD` PCM 音轨，48 kHz、16/20/24 位、2/4/6/8 声道 | 支持写入同规格的纯音频 MPEG-TS |
+| GSM 06.10 | 支持裸 `.gsm`、MOV、AIFF-C 和 CAF 的单声道音轨，以及 WAV 和 CAF 中的 WAV49（65 字节块） | 支持写入 CAF 原生 GSM 和 WAV49 |
 | MACE 3:1 / 6:1 | 支持 MOV、AIFF-C 和 CAF 中的单声道及立体声 `MAC3`、`MAC6` 音轨 | 未实现 |
 | SBC / mSBC | 支持裸 `.sbc`、`.msbc`，含 4/8 子带、单声道、双声道和联合立体声 | 未实现 |
 | DSD | 支持 `.dsf` 与未压缩 `.dff`（DSDIFF），输出采样率为 DSD 位率的 1/8 | 未实现 |
@@ -132,6 +157,369 @@ moon run --target wasm cmd/decode-audio -- effect.wav --format alp --rate 32000 
 ```
 
 TUN 导出重采样到 22.05 kHz。ALP PCM 在头部记录采样率，最高 44.1 kHz。若每声道样本数为奇数，末尾追加一个零差分码，回读时会重复最后一个重建样本。
+
+### WAV ADPCM 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format adpcm_ima_wav --output ima.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format adpcm_ms --output ms.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format adpcm_yamaha --output yamaha.wav
+```
+
+导出支持单声道和立体声，默认沿用输入采样率。可用 `--rate` 重采样。末块以静音补齐，`fact` 记录补齐前每声道的样本数。
+
+### KVAG 和 APM 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format kvag --output voice.vag
+moon run --target wasm cmd/decode-audio -- input.wav --format apm --output music.apm
+moon run --target wasm cmd/decode-audio -- music.apm --output music.wav
+```
+
+两种格式都支持用 `--rate` 调整导出采样率。KVAG 单声道和 APM 的末尾样本若没有配对，会保留在最后一个字节的高半字节，并将低半字节补零。
+
+### Argonaut ASF 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format argo_asf --output track.asf
+moon run --target wasm cmd/decode-audio -- track.asf --output track.wav
+```
+
+导出沿用输入采样率，也可用 `--rate` 重采样。末尾以静音补齐到每声道 32 个样本。
+
+### Westwood AUD 和 CRYO APC 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format wsaud --output track.aud
+moon run --target wasm cmd/decode-audio -- track.apc --output track.wav
+```
+
+AUD 导出使用每块最多 1,024 字节的 Westwood IMA，默认沿用输入采样率。可用 `--rate` 重采样到 8–48 kHz。末尾未配对的样本保留在低半字节，高半字节补零。
+
+### Capcom FWSE 和 Apple IMA4 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.fwse --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format aifc_ima4 --output track.aifc
+```
+
+AIFF-C IMA4 导出默认沿用输入采样率，可用 `--rate` 重采样。末尾以静音补齐到每声道 64 个样本。
+
+### Sierra SOL 和 CAF IMA4 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.sol --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_ima4 --output track.caf
+```
+
+CAF IMA4 支持单声道和立体声，默认沿用输入采样率，也可用 `--rate` 重采样。末块以静音补齐到每声道 64 个样本，CAF 封包表记录填充量，回读时恢复原始长度。
+
+### DERF、WADY 和 CRI ADX 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.adp --output track.wav
+moon run --target wasm cmd/decode-audio -- track.way --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format adx --output track.adx
+```
+
+ADX 导出支持单声道和立体声，默认沿用输入采样率，也可用 `--rate` 重采样。末尾以静音补齐到每声道 32 个样本。
+
+### Gremlin GDV 和 Flash ADPCM 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.gdv --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format flv_adpcm --rate 44100 --output track.flv
+```
+
+FLV 导出支持 5,512、11,025、22,050 和 44,100 Hz。每个音频标签包含每声道 4,096 个样本，末块以静音补齐。
+
+### Pro Pinball 音效库和电话音频 WAV
+
+```sh
+moon run --target wasm cmd/decode-audio -- soundbank.22c --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format wav_g722 --output voice.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format wav_g726 --g726-bits 3 --output voice.wav
+```
+
+Pro Pinball 音效库会公开各条单声道音轨，带音乐标记的等长双轨会组合成立体声。电话音频 WAV 导出支持单声道，G.722 使用 16 kHz，G.726 使用 8 kHz，码宽可选 2、3、4 或 5 位。
+
+### Xan DPCM 和电话音频 Sun AU
+
+```sh
+moon run --target wasm cmd/decode-audio -- xan.wav --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format au_g722 --output voice.au
+moon run --target wasm cmd/decode-audio -- input.wav --format au_g726le --g726-bits 3 --output voice.au
+```
+
+AU 导出支持单声道。G.722 固定为 16 kHz，G.726LE 固定为 8 kHz，可选择 2、3、4 或 5 位码字。
+
+### GameCube RSD 和 QOA 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.rsd --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format qoa --output track.qoa
+```
+
+QOA 导出默认沿用音轨的采样率和声道数。每帧最多 5,120 个样本，尾帧记录实际样本数。
+
+### RSD VAG 和 DFPWM 容器导出
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.rsd --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format wav_dfpwm --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format w64_dfpwm --output track.w64
+```
+
+DFPWM WAV 和 Wave64 导出保留输入采样率，也可通过 `--rate` 重采样。WAV 会解码最后一个压缩字节的填充位。Wave64 回读还会解码数据块中的对齐字节。
+
+### RSD Nintendo DSP 和 AIFF-C 电话音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.rsd --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format aifc_g722 --output voice.aifc
+moon run --target wasm cmd/decode-audio -- input.wav --format aifc_g726le --output voice.aifc
+```
+
+RSD 支持单声道及立体声 WADP 和单声道 GADP。两种 AIFF-C 导出均为单声道，G.722 固定为 16 kHz，G.726LE 固定为 8 kHz、每码字 5 位。
+
+### Funcom ISS 和 AIFF-C ADP4
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.iss --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format aifc_adp4 --output track.aifc
+```
+
+ADP4 导出使用单声道或立体声 Westwood IMA，默认沿用输入采样率。末尾样本未配对时保留该样本，并补齐剩余半字节。
+
+### Loki SMJPEG 和 AIFF-C G.711
+
+```sh
+moon run --target wasm cmd/decode-audio -- track.mjpg --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format smjpeg_pcm --output track.mjpg
+moon run --target wasm cmd/decode-audio -- input.wav --format aifc_alaw --output track.aifc
+moon run --target wasm cmd/decode-audio -- input.wav --format aifc_mulaw --output track.aifc
+```
+
+三种导出均支持单声道和立体声，默认沿用输入采样率。
+
+### Sega FILM／CPK 和 SoX 原生音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- movie.cpk --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format sox --output track.sox
+moon run --target wasm cmd/decode-audio -- input.wav --format sox_be --output track.sox
+```
+
+FILM／CPK 播放入口提取音轨。SoX 导出保留输入采样率和声道数，`sox` 写小端，`sox_be` 写大端。
+
+### Yamaha SMAF（MMF）
+
+```sh
+moon run --target wasm cmd/decode-audio -- ringtone.mmf --output ringtone.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format mmf --output ringtone.mmf
+```
+
+MMF 支持 4,000、8,000、11,025、22,050 和 44,100 Hz。导出以静音补齐最后一个 1,024 字节 ADPCM 块，写入单条波形轨，播放时值受两字节 SMAF 字段限制。
+
+### IRCAM（SF）
+
+```sh
+moon run --target wasm cmd/decode-audio -- recording.sf --output recording.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format ircam --ircam-codec pcm_f64le --output recording.sf
+```
+
+`--format ircam` 默认写入 `pcm_s16le`。可用 `--ircam-codec` 选择 `pcm_s8`、`pcm_s16le`、`pcm_s24le`、`pcm_s32le`、`pcm_f32le`、`pcm_f64le`、`pcm_alaw` 或 `pcm_mulaw`。
+
+### Creative VOC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.voc --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format voc --output track.voc
+moon run --target wasm cmd/decode-audio -- input.wav --format voc_u8 --output track.voc
+```
+
+`voc` 写入 16 位小端 PCM，`voc_u8` 写入 8 位无符号 PCM，`voc_alaw` 和 `voc_mulaw` 写入 G.711。导出保留输入采样率和声道数。
+
+### D-Cinema DAUD
+
+```sh
+moon run --target wasm cmd/decode-audio -- soundtrack.302 --output soundtrack.wav
+moon run --target wasm cmd/decode-audio -- surround.wav --format daud --output soundtrack.302
+```
+
+DAUD 按 `.302` 或 `.daud` 扩展名识别。导出使用 96 kHz 和六声道，声道顺序为前左、前右、中置、低频、侧左、侧右。文件以 24 位字封装 16 位 PCM，导出 WAV 时保留 5.1 侧环绕布局。
+
+### Nintendo AST
+
+```sh
+moon run --target wasm cmd/decode-audio -- music.ast --output music.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format ast --output music.ast
+```
+
+AST 导出使用 16 位大端平面 PCM，沿用输入采样率和声道数，末块保留实际样本数。四声道 AST 转 WAV 时写入 4.0 声道布局。
+
+### LEGO Mindstorms RSO 和 Psion 3 WVE
+
+```sh
+moon run --target wasm cmd/decode-audio -- sound.rso --output sound.wav
+moon run --target wasm cmd/decode-audio -- mono.wav --format rso --output sound.rso
+moon run --target wasm cmd/decode-audio -- sound.wve --output sound.wav
+moon run --target wasm cmd/decode-audio -- mono.wav --format wve --output sound.wve
+```
+
+RSO 按扩展名识别，导出保留输入采样率。WVE 按文件头识别，命令行导出将单声道输入重采样到 8 kHz。
+
+### NIST SPHERE
+
+```sh
+moon run --target wasm cmd/decode-audio -- recording.sph --output recording.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format sphere --sphere-codec pcm_s24be --output recording.sph
+```
+
+默认写入 16 位小端 PCM。`--sphere-codec` 还接受 `pcm_s8`、`pcm_s16be`、`pcm_s24le`、`pcm_s24be`、`pcm_s32le`、`pcm_s32be`、`pcm_alaw` 和 `pcm_mulaw`。
+
+### AAC-LC LOAS／LATM
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.loas --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format loas --output track.loas
+```
+
+导出沿用单声道或立体声输入的 AAC 标准采样率，每隔 20 帧重复写入配置。回读包含 AAC 编码延迟和末帧填充。已有 AAC-LC ADTS 码流也可通过 `av_loas_from_adts` 重封装为 LOAS。
+
+### SMPTE 302M
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.ts --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format ts_s302m --s302m-bits 24 --output track.ts
+```
+
+导出采样率为 48 kHz，位深可选 16、20 或 24 位，默认 24 位。输入声道顺序应与 SMPTE 302M 的立体声、四方声、后置 5.1 或带立体声下混的后置 5.1 匹配。转 WAV 时保留相应布局。
+
+### Blu-ray LPCM
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.m2ts --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format ts_bluray_lpcm --bluray-bits 24 --output track.ts
+```
+
+导出为 188 字节包的 HDMV MPEG-TS，支持 48、96 或 192 kHz。`--bluray-bits` 可选 16 或 24，默认 24。输入带扬声器掩码时按 Blu-ray 支持的布局封装，末包保留实际样本数。多声道 LPCM 转 WAV 时保留扬声器布局。
+
+### Amiga MAUD
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.maud --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format maud --output track.maud
+```
+
+`maud` 写入 16 位大端 PCM。`maud_u8`、`maud_alaw` 和 `maud_mulaw` 分别写入 8 位无符号 PCM、G.711 A-law 和 μ-law。导出保留单声道或立体声及输入采样率。
+
+### Amiga 8SVX／16SV 和 CSL NSP
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format 8svx --output track.8svx
+moon run --target wasm cmd/decode-audio -- input.wav --format 16sv --output track.16sv
+moon run --target wasm cmd/decode-audio -- input.nsp --output track.wav
+```
+
+8SVX 和 16SV 分别导出有符号 8 位和 16 位大端平面 PCM，保留输入采样率及声道数。NSP 读取 `HEDR` 或 `HDR8` 的采样率，并从 `SD_A`、`SDA_` 或 `SDAB` 提取 PCM。
+
+### Audio Visual Research AVR
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.avr --output track.wav
+moon run --target wasm cmd/decode-audio -- input.wav --format avr --output track.avr
+```
+
+`avr` 写入 16 位有符号大端 PCM。`avr_s8`、`avr_u8` 和 `avr_u16` 分别写入 8 位有符号、8 位无符号和 16 位无符号大端 PCM。导出保留单声道或立体声及输入采样率。
+
+### CAF 浮点 PCM 和 G.711
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_f64be --output track.caf
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_alaw --output track.caf
+```
+
+浮点导出支持 `caf_f32le`、`caf_f32be`、`caf_f64le` 和 `caf_f64be`。G.711 可选 `caf_alaw` 和 `caf_mulaw`。多声道输入的兼容扬声器掩码可随 CAF 导出和回读保留。
+
+### CAF WAV IMA 和 Microsoft ADPCM
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_ima_wav --output track.caf
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_ms --output track.caf
+moon run --target wasm cmd/decode-audio -- track.caf --output track.wav
+```
+
+两种 ADPCM 导出均支持单声道和立体声，每块 1,024 字节。CAF 的包表记录末块填充量，回读保留编码前的样本数。
+
+### Wave64 浮点 PCM 和 G.711
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format w64_f64 --output track.w64
+moon run --target wasm cmd/decode-audio -- input.wav --format w64_alaw --output track.w64
+```
+
+`w64_f64` 写入 64 位浮点 PCM，`w64_alaw` 和 `w64_mulaw` 写入 G.711。三种导出均支持单声道或立体声。回读浮点和 G.711 文件时，用 `fact` 样本计数识别末尾的对齐填充。
+
+### Wave64 ADPCM
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format w64_ima_wav --output track.w64
+moon run --target wasm cmd/decode-audio -- track.w64 --output track.wav
+```
+
+`w64_ima_wav`、`w64_ms` 和 `w64_yamaha` 支持单声道和立体声，每块 1,024 字节。完整解码时按 `fact` 的样本计数去除末块填充。
+
+### CAF AC-3
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_ac3 --output track.caf
+moon run --target wasm cmd/decode-audio -- track.caf --output track.wav
+```
+
+支持 32、44.1 或 48 kHz 和 AC-3 的 1–6 声道布局。CAF 包表记录每包长度、编码延迟和末帧填充，回读保留原始样本数。已有裸 AC-3 可用 `av_caf_mux_ac3` 重封装。
+
+### CAF FLAC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_flac --caf-flac-bits 32 --output lossless.caf
+```
+
+支持 1–8 声道，位深可选 16、24 或 32 位，默认 24 位。用 `av_caf_mux_flac` 可将原生 FLAC 的 STREAMINFO 和编码帧直接封装到 CAF。读取 CAF 时检查帧 CRC，并核对包表中的帧长和样本数。
+
+### CAF Opus
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_opus --output track.caf
+```
+
+单声道和立体声输入自动重采样到 48 kHz。CAF 包表记录启动延迟和末包填充，回读时据此裁剪 PCM。已有 Opus 包可以用 `av_caf_mux_opus` 重封装。
+
+### CAF AAC-LC
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_aac --output track.caf
+```
+
+支持单声道和立体声，沿用 AAC-LC 编码器支持的输入采样率。包表记录 1,024 个启动样本和末包填充。已有的原始 AAC-LC 访问单元可以连同 AudioSpecificConfig 传给 `av_caf_mux_aac` 重封装。
+
+### CAF MPEG 音频
+
+```sh
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_mp2 --output track.caf
+moon run --target wasm cmd/decode-audio -- input.wav --format caf_mp3 --output track.caf
+```
+
+MP2 和 MP3 导出支持单声道和立体声。MP2 支持 16、22.05、24、32、44.1 和 48 kHz，MP3 还支持 8、11.025 和 12 kHz。包表分别记录 481 和 1,057 个启动样本，以及各自的末包填充。已有 MP1、MP2 或 MP3 帧可用 `av_caf_mux_mpeg_audio` 重封装。MP3 的 Xing/Info 标签含无缝播放信息时，默认沿用其中的裁剪范围。
+
+### CAF GSM 和 WAV49
+
+```sh
+moon run --target wasm cmd/decode-audio -- mono.wav --format caf_gsm --output track.caf
+moon run --target wasm cmd/decode-audio -- mono.wav --format caf_gsm_ms --output track-wav49.caf
+```
+
+单声道输入自动重采样到 8 kHz。原生 GSM 每包 160 个样本，WAV49 每包 320 个样本。CAF 包表记录末包填充，回读时恢复有效样本数。
 
 ### 图像编码
 

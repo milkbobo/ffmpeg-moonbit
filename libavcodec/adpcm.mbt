@@ -1,10 +1,10 @@
 ///|
 /// ADPCM block decoders ported from FFmpeg 9.0.2 `libavcodec/adpcm.c` and
-/// `adpcm_data.c`: IMA WAV, Microsoft ADPCM, Yamaha ADPCM, Dialogic OKI IMA
-/// and IMA QuickTime.
+/// `adpcm_data.c`: IMA WAV, Microsoft ADPCM, Yamaha ADPCM, Dialogic OKI IMA,
+/// Creative Technology and IMA QuickTime.
 ///
 /// `AdpcmDecoder` keeps the per-channel predictor/step state across blocks
-/// (Yamaha and OKI carry it between blocks; IMA/MS re-initialize it from
+/// (Yamaha, OKI and Creative carry it between blocks; IMA/MS re-initialize it from
 /// each block header). Output is interleaved S16, matching FFmpeg's decoded
 /// PCM bit for bit (32-bit integer arithmetic throughout).
 ///
@@ -72,6 +72,29 @@ let adpcm_ima_block_sizes : FixedArray[Int32] = [4, 12, 4, 20]
 
 ///|
 let adpcm_ima_block_samples : FixedArray[Int32] = [16, 32, 8, 32]
+
+///|
+/// Number of samples per channel in an IMA WAV or Microsoft ADPCM block.
+/// A truncated header or invalid format yields zero.
+pub fn adpcm_wav_block_samples(
+  codec : String,
+  bytes : Int32,
+  channels : Int32,
+  bits : Int32,
+) -> Int32 {
+  guard channels >= 1 && channels <= 8 else { return 0 }
+  match codec {
+    "adpcm_ima_wav" if bits >= 2 && bits <= 5 && bytes >= 4 * channels =>
+      1 +
+      (bytes - 4 * channels) /
+      (adpcm_ima_block_sizes[bits - 2] * channels) *
+      adpcm_ima_block_samples[bits - 2]
+    "adpcm_ms" if channels <= 6 && bytes >= 7 * channels =>
+      ((bytes - 7 * channels).to_int64() * 2L / channels.to_int64()).to_int() +
+      2
+    _ => 0
+  }
+}
 
 ///|
 /// `adpcm_index_table2` / `adpcm_index_table3` / `adpcm_index_table5`: the
@@ -186,20 +209,27 @@ pub struct AdpcmDecoder {
 
 ///|
 /// `codec` is the codec name: `adpcm_ima_wav`, `adpcm_ms`, `adpcm_yamaha`,
-/// `adpcm_ima_oki`, `adpcm_ima_ws`, `adpcm_ima_dk3` or `adpcm_ima_dk4`.
+/// `adpcm_ct`, `adpcm_ima_oki`, `adpcm_ima_ws`, `adpcm_ima_dk3` or `adpcm_ima_dk4`.
 /// `block_align` caps each block's byte
 /// count when nonzero; `bits_per_coded_sample` is the IMA WAV code width
 /// (`WAVEFORMAT`'s bits per sample, normally 4).
+/// The optional `extradata` supplies initial predictor state for APM or APC.
 pub fn adpcm_decoder_new(
   codec : String,
   channels : Int32,
   block_align~ : Int32 = 0,
   bits_per_coded_sample~ : Int32 = 4,
+  extradata~ : Bytes? = None,
 ) -> Result[AdpcmDecoder, String] {
   if codec != "adpcm_ima_wav" &&
     codec != "adpcm_ms" &&
     codec != "adpcm_yamaha" &&
     codec != "adpcm_ima_oki" &&
+    codec != "adpcm_ct" &&
+    codec != "adpcm_ima_ssi" &&
+    codec != "adpcm_ima_apm" &&
+    codec != "adpcm_ima_apc" &&
+    codec != "adpcm_ima_mtf" &&
     codec != "adpcm_ima_ws" &&
     codec != "adpcm_ima_dk3" &&
     codec != "adpcm_ima_dk4" {
@@ -211,6 +241,11 @@ pub fn adpcm_decoder_new(
   if (
       codec == "adpcm_yamaha" ||
       codec == "adpcm_ima_oki" ||
+      codec == "adpcm_ct" ||
+      codec == "adpcm_ima_ssi" ||
+      codec == "adpcm_ima_apm" ||
+      codec == "adpcm_ima_apc" ||
+      codec == "adpcm_ima_mtf" ||
       codec == "adpcm_ima_ws" ||
       codec == "adpcm_ima_dk4"
     ) &&
@@ -232,7 +267,35 @@ pub fn adpcm_decoder_new(
   }
   let status : Array[AdpcmChannel] = []
   for _ in 0..<channels {
-    status.push(adpcm_channel_new())
+    let state = adpcm_channel_new()
+    if codec == "adpcm_ct" {
+      state.step = 511
+    }
+    status.push(state)
+  }
+  if codec == "adpcm_ima_apm" && extradata is Some(data) && data.length() >= 28 {
+    for c in 0..<channels {
+      let offset = if c == 0 { 16 } else { 4 }
+      status[c].predictor = adpcm_clip(
+        adpcm_predictor_le32(data, offset),
+        -262144,
+        262143,
+      )
+      status[c].step_index = adpcm_clip(
+        adpcm_predictor_le32(data, offset + 4),
+        0,
+        88,
+      )
+    }
+  }
+  if codec == "adpcm_ima_apc" && extradata is Some(data) && data.length() >= 8 {
+    for c in 0..<channels {
+      status[c].predictor = adpcm_clip(
+        adpcm_predictor_le32(data, c * 4),
+        -262144,
+        262143,
+      )
+    }
   }
   Ok({ codec, channels, block_align, bits_per_coded_sample, status, })
 }
@@ -335,6 +398,21 @@ fn adpcm_oki_expand(cs : AdpcmChannel, nibble : Int32) -> Int32 {
 }
 
 ///|
+/// Creative ADPCM applies leakage to the predictor before adding the delta.
+fn adpcm_ct_expand(cs : AdpcmChannel, nibble : Int32) -> Int32 {
+  let magnitude = nibble & 7
+  let diff = ((2 * magnitude + 1) * cs.step) >> 3
+  let delta = if (nibble & 8) == 0 { diff } else { -diff }
+  cs.predictor = adpcm_clip_int16(((cs.predictor * 254) >> 8) + delta)
+  cs.step = adpcm_clip(
+    (adpcm_adaptation_table[magnitude] * cs.step) >> 8,
+    511,
+    32767,
+  )
+  cs.predictor
+}
+
+///|
 /// A little-endian bit reader (`get_bits_le`: the first bit is the least
 /// significant bit of the first byte).
 priv struct AdpcmLeBits {
@@ -396,7 +474,7 @@ fn AdpcmDecoder::decode_ima_wav(
   let bps = self.bits_per_coded_sample
   let bsize = adpcm_ima_block_sizes[bps - 2]
   let bsamples = adpcm_ima_block_samples[bps - 2]
-  let nb_samples = 1 + (block.length() - 4 * ch) / (bsize * ch) * bsamples
+  let nb_samples = adpcm_wav_block_samples(self.codec, block.length(), ch, bps)
   let planes : Array[Array[Int32]] = []
   for _ in 0..<ch {
     planes.push(Array::make(nb_samples, 0))
@@ -466,7 +544,7 @@ fn AdpcmDecoder::decode_ms(
   if block.length() < 7 * ch {
     return Err("adpcm: truncated MS block header")
   }
-  let nb_samples = (block.length() - 6 * ch) * 2 / ch
+  let nb_samples = adpcm_wav_block_samples(self.codec, block.length(), ch, 4)
   if nb_samples < 2 {
     return Err("adpcm: MS block too short")
   }
@@ -613,31 +691,35 @@ fn AdpcmDecoder::decode_ms_planar(
 }
 
 ///|
-/// `ADPCM_IMA_OKI`: one byte per sample pair, the high nibble first (and
+/// OKI, Creative, SSI and APC ADPCM store sample pairs high nibble first (and
 /// for stereo the low nibble is the second channel's).
-fn AdpcmDecoder::decode_oki(
+fn AdpcmDecoder::decode_high_nibble_first(
   self : AdpcmDecoder,
   block : Bytes,
+  expand : (AdpcmChannel, Int32) -> Int32,
 ) -> Result[AdpcmAudio, String] {
+  guard block.length() <= 0x3fffffff else {
+    return Err("adpcm: packet too large")
+  }
   let ch = self.channels
   let nb_samples = block.length() * 2 / ch
   if nb_samples < 1 {
-    return Err("adpcm: OKI block too short")
+    return Err("adpcm: \{self.codec} block too short")
   }
   let samples : Array[Int32] = Array::make(nb_samples * ch, 0)
   let cs0 = self.status[0]
   if ch == 1 {
     for n = 0; n < nb_samples / 2; n = n + 1 {
       let byte = block[n].to_int()
-      samples[n * 2] = adpcm_oki_expand(cs0, byte >> 4)
-      samples[n * 2 + 1] = adpcm_oki_expand(cs0, byte & 0x0F)
+      samples[n * 2] = expand(cs0, byte >> 4)
+      samples[n * 2 + 1] = expand(cs0, byte & 0x0F)
     }
   } else {
     let cs1 = self.status[1]
     for n = 0; n < nb_samples; n = n + 1 {
       let byte = block[n].to_int()
-      samples[n * 2] = adpcm_oki_expand(cs0, byte >> 4)
-      samples[n * 2 + 1] = adpcm_oki_expand(cs1, byte & 0x0F)
+      samples[n * 2] = expand(cs0, byte >> 4)
+      samples[n * 2 + 1] = expand(cs1, byte & 0x0F)
     }
   }
   Ok({ channels: ch, samples, })
@@ -645,8 +727,8 @@ fn AdpcmDecoder::decode_oki(
 
 ///|
 /// Decode one block. MS, IMA WAV and Duck IMA use up to `block_align`
-/// bytes of `block` (their packets are block-aligned); OKI and Yamaha decode
-/// the whole packet in one frame, ignoring `block_align`, as the C does.
+/// bytes of `block` (their packets are block-aligned). Continuous ADPCM
+/// decodes the whole packet, ignoring `block_align`.
 pub fn AdpcmDecoder::decode_block(
   self : AdpcmDecoder,
   block : Bytes,
@@ -660,7 +742,14 @@ pub fn AdpcmDecoder::decode_block(
   match self.codec {
     "adpcm_ima_wav" => self.decode_ima_wav(usable)
     "adpcm_ms" => self.decode_ms(usable)
-    "adpcm_ima_oki" => self.decode_oki(usable)
+    "adpcm_ima_oki" => self.decode_high_nibble_first(usable, adpcm_oki_expand)
+    "adpcm_ct" => self.decode_high_nibble_first(usable, adpcm_ct_expand)
+    "adpcm_ima_ssi" => self.decode_high_nibble_first(usable, adpcm_ima_expand)
+    "adpcm_ima_apc" =>
+      self.decode_high_nibble_first(usable, adpcm_ima_expand_multiply)
+    "adpcm_ima_apm" => self.decode_ima_channel_pairs(usable, adpcm_ima_expand)
+    "adpcm_ima_mtf" =>
+      self.decode_ima_channel_pairs(usable, adpcm_ima_mtf_expand)
     "adpcm_ima_ws" => self.decode_ima_ws(usable)
     "adpcm_ima_dk3" | "adpcm_ima_dk4" => self.decode_duck(usable)
     _ => self.decode_yamaha(usable)

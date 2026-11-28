@@ -31,6 +31,8 @@ pub struct CafPacket {
 ///|
 pub struct CafDemux {
   format : CafFormat
+  /// Speaker mask when the chan chunk describes channels in WAVE order.
+  channel_mask : UInt32
   /// Decoder configuration extracted or constructed from the CAF chunks.
   extradata : Bytes
   data_offset : Int64
@@ -72,6 +74,30 @@ fn caf_u64be(data : Bytes, off : Int32) -> UInt64 {
 ///|
 fn caf_i64be(data : Bytes, off : Int32) -> Int64 {
   caf_u64be(data, off).reinterpret_as_int64()
+}
+
+///|
+fn caf_read_channel_mask(data : Bytes, off : Int32) -> UInt32 {
+  match caf_u32be(data, off) {
+    0x10000U => {
+      let bitmap = caf_u32be(data, off + 4)
+      if bitmap <= 0x3ffffU {
+        bitmap
+      } else {
+        0U
+      }
+    }
+    0x00640001U => 0x4U
+    0x00650002U | 0x00660002U => 0x3U
+    0x006c0004U => 0x33U
+    0x00710003U => 0x7U
+    0x00730004U => 0x107U
+    0x00750005U => 0x607U
+    0x00790006U => 0x60fU
+    0x00830003U => 0x103U
+    0x00840004U => 0x603U
+    _ => 0U
+  }
 }
 
 ///|
@@ -140,6 +166,7 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
   let mut pakt : (Int32, Int32)? = None
   let mut data_off = -1
   let mut data_size = 0L
+  let mut channel_mask = 0U
   let mut pos = 8
   while pos <= data.length() - 12 {
     let id = caf_tag(data, pos)
@@ -164,6 +191,8 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
       kuki = data[payload:end].to_owned()
     } else if id == "pakt" {
       pakt = Some((payload, actual.to_int()))
+    } else if id == "chan" && actual >= 12L {
+      channel_mask = caf_read_channel_mask(data, payload)
     } else if id == "data" {
       if actual < 4L {
         return Err("caf: truncated data chunk")
@@ -218,6 +247,7 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
     tag == "flac" ||
     tag == "opus" ||
     direct_codec != "" {
+    let mut aac_frame_length = 0
     let (codec, cookie, rate, channel_count, bit_width) = match tag {
       "alac" => {
         if kuki.is_empty() {
@@ -243,6 +273,7 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
           Ok(v) => v
           Err(e) => return Err("caf: \{e}")
         }
+        aac_frame_length = parsed.config.frame_length
         ("aac", asc, parsed.config.sample_rate, parsed.config.channels, bits)
       }
       "flac" => {
@@ -307,10 +338,28 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
       (codec != "alac" && remainder < 0) {
       return Err("caf: invalid pakt fields")
     }
+    if codec == "opus" && priming > 65535 {
+      return Err("caf: invalid Opus priming")
+    }
     let packets : Array[CafPacket] = []
     let mut ppos = table_start
     let mut offset = data_off.to_int64()
     let mut pts = -priming.to_int64()
+    let mut ac3_mask = 0U
+    let mpeg_audio = codec == "mp1" || codec == "mp2" || codec == "mp3"
+    let flac_frames = if codec == "flac" {
+      let end = (offset + actual_data_size).to_int()
+      let track = match flac_open_frames(data, data_off, end, cookie) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      guard track.frames.length().to_int64() == num_packets else {
+        return Err("caf: FLAC packet table does not cover the data chunk")
+      }
+      track.frames
+    } else {
+      []
+    }
     for i = 0; i < num_packets.to_int(); i = i + 1 {
       let size = if bytes_per_packet > 0 {
         bytes_per_packet
@@ -346,9 +395,74 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
         offset + size.to_int64() > data_off.to_int64() + actual_data_size {
         return Err("caf: invalid \{label} packet size")
       }
+      if codec == "ac3" {
+        let start = offset.to_int()
+        let prefix = data[start:start + size.min(128)].to_owned()
+        guard @libavcodec.ac3_parse_header(prefix) is Ok(header) &&
+          header.bitstream_id <= 10 &&
+          header.frame_size == size &&
+          header.sample_rate == rate &&
+          header.channels == channel_count &&
+          frames == 1536 else {
+          return Err("caf: AC-3 frame does not match its packet description")
+        }
+        let mask = caf_ac3_channel_mask(header)
+        guard ac3_mask == 0U || ac3_mask == mask else {
+          return Err("caf: changing AC-3 channel layout")
+        }
+        ac3_mask = mask
+      }
+      if codec == "flac" {
+        let frame = flac_frames[i]
+        guard frame.pos == offset &&
+          frame.size == size &&
+          frame.duration == frames else {
+          return Err("caf: FLAC frame does not match its packet description")
+        }
+      }
+      if codec == "opus" {
+        let start = offset.to_int()
+        let packet = data[start:start + size].to_owned()
+        guard @libavcodec.opus_parse_packet(packet) is Ok(parsed) &&
+          parsed.total_samples() == frames else {
+          return Err("caf: Opus packet duration does not match its description")
+        }
+      }
+      if aac_frame_length > 0 && frames % aac_frame_length != 0 {
+        return Err(
+          "caf: AAC packet duration does not match AudioSpecificConfig",
+        )
+      }
+      if mpeg_audio {
+        guard caf_mpeg_header(data, offset.to_int(), size) is Some(info) &&
+          info.codec == codec &&
+          info.sample_rate == rate &&
+          info.channels == channel_count &&
+          info.samples_per_frame == frames else {
+          return Err(
+            "caf: MPEG audio frame does not match its packet description",
+          )
+        }
+      }
       packets.push({ pos: offset, size, pts, duration, })
       offset = offset + size.to_int64()
       pts = pts + duration.to_int64()
+    }
+    if codec == "ac3" &&
+      (packets.is_empty() || offset != data_off.to_int64() + actual_data_size) {
+      return Err("caf: AC-3 packet table does not cover the data chunk")
+    }
+    if codec == "opus" &&
+      (packets.is_empty() || offset != data_off.to_int64() + actual_data_size) {
+      return Err("caf: Opus packet table does not cover the data chunk")
+    }
+    if codec == "aac" &&
+      (packets.is_empty() || offset != data_off.to_int64() + actual_data_size) {
+      return Err("caf: AAC packet table does not cover the data chunk")
+    }
+    if mpeg_audio &&
+      (packets.is_empty() || offset != data_off.to_int64() + actual_data_size) {
+      return Err("caf: MPEG audio packet table does not cover the data chunk")
     }
     let sample_count = if codec == "alac" { valid_frames } else { pts }
     if sample_count < 0L {
@@ -363,6 +477,13 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
         block_align: bytes_per_packet,
         frames_per_packet,
       },
+      channel_mask: if channel_mask.popcnt() == channel_count {
+        channel_mask
+      } else if codec == "flac" {
+        caf_flac_channel_mask(channel_count)
+      } else {
+        ac3_mask
+      },
       extradata: if codec == "opus" {
         caf_opus_head(channel_count, decl_rate, priming)
       } else {
@@ -375,12 +496,48 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
       packets,
     })
   }
+  let wav_adpcm = tag == "ms\u0000\u0011" || tag == "ms\u0000\u0002"
   let compressed = match tag {
     "MAC3" => Some(("mace3", 2 * channels, 6, 2))
     "MAC6" => Some(("mace6", channels, 6, 2))
     "ima4" => Some(("adpcm_ima_qt", 34 * channels, 64, 8))
     "agsm" => Some(("gsm", 33, 160, 1))
     "ms\u00001" => Some(("gsm_ms", 65, 320, 1))
+    "ms\u0000\u0011" => {
+      let headers = 4 * channels
+      guard (bits == 0 || bits == 4) &&
+        channels <= 8 &&
+        bytes_per_packet >= headers &&
+        bytes_per_packet % headers == 0 &&
+        bytes_per_packet <= 0x3fffffff else {
+        return Err("caf: invalid WAV IMA ADPCM block")
+      }
+      Some(
+        (
+          "adpcm_ima_wav",
+          bytes_per_packet,
+          (bytes_per_packet / channels - 4) * 2 + 1,
+          8,
+        ),
+      )
+    }
+    "ms\u0000\u0002" => {
+      let headers = 7 * channels
+      guard (bits == 0 || bits == 4) &&
+        channels <= 6 &&
+        bytes_per_packet >= headers &&
+        bytes_per_packet <= 0x3fffffff else {
+        return Err("caf: invalid Microsoft ADPCM block")
+      }
+      Some(
+        (
+          "adpcm_ms",
+          bytes_per_packet,
+          (bytes_per_packet - headers) * 2 / channels + 2,
+          6,
+        ),
+      )
+    }
     _ => None
   }
   let g711 = tag == "alaw" || tag == "ulaw"
@@ -402,7 +559,7 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
         let format = if tag == "MAC3" || tag == "MAC6" { "MACE" } else { codec }
         return Err("caf: invalid \{format} packet layout")
       }
-      (codec, bits, frames, size)
+      (codec, if wav_adpcm { 4 } else { bits }, frames, size)
     } else if g711 {
       if frames_per_packet <= 0 ||
         bytes_per_packet.to_int64() !=
@@ -439,6 +596,13 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
       (codec, bit_width, frames_per, packed_size.to_int())
     }
     let available_blocks = actual_data_size / block_align.to_int64()
+    let gsm = tag == "agsm" || tag == "ms\u00001"
+    if wav_adpcm && actual_data_size % block_align.to_int64() != 0L {
+      return Err("caf: incomplete WAV ADPCM block")
+    }
+    if gsm && actual_data_size % block_align.to_int64() != 0L {
+      return Err("caf: incomplete GSM block")
+    }
     let (blocks, priming, remainder) = if compressed is Some(_) &&
       pakt is Some((table, size)) {
       if size < 24 {
@@ -487,6 +651,9 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
       }
       let duration = size / block_align * frames_per -
         (if left == size.to_int64() { remainder } else { 0 })
+      if tag == "agsm" && (data[offset.to_int()].to_int() & 0xf0) != 0xd0 {
+        return Err("caf: missing GSM frame magic")
+      }
       packets.push({ pos: offset, size, pts, duration, })
       offset = offset + size.to_int64()
       pts = pts + duration.to_int64()
@@ -500,6 +667,11 @@ pub fn av_caf_open(data : Bytes) -> Result[CafDemux, String] {
         bits: bit_width,
         block_align,
         frames_per_packet: frames_per,
+      },
+      channel_mask: if channel_mask.popcnt() == channels {
+        channel_mask
+      } else {
+        0U
       },
       extradata: b"",
       data_offset: data_off.to_int64(),

@@ -917,6 +917,11 @@ pub fn flac_encode(
     flac_write_subframe(w, sel0, n, out_bits0, best_plan0)
     if channels == 2 {
       flac_write_subframe(w, sel1, n, out_bits1, best_plan1)
+    } else {
+      for ch in 1..<channels {
+        let plan = flac_plan_subframe(chans[ch], n, bits)
+        flac_write_subframe(w, chans[ch], n, bits, plan)
+      }
     }
     w.align()
     let frame_crc = {

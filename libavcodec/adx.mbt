@@ -67,17 +67,7 @@ pub fn adx_decoder_new(extradata : Bytes) -> Result[AdxDecoder, String] {
     Ok(v) => v
     Err(e) => return Err(e)
   }
-  let root2 = 2.0.sqrt()
-  let b = root2 - 1.0
-  let angle = 2.0 *
-    @math.PI *
-    header.cutoff.to_double() /
-    header.sample_rate.to_double()
-  let a = root2 - @math.cos(angle)
-  let c = (a - ((a + b) * (a - b)).sqrt()) / b
-  // The coefficient calculation is double until the lrintf argument.
-  let coeff1 = aac_lrintf(Float::from_double(c * 2.0 * 4096.0).to_double())
-  let coeff2 = aac_lrintf(Float::from_double(-(c * c) * 4096.0).to_double())
+  let (coeff1, coeff2) = adx_coefficients(header.cutoff, header.sample_rate)
   Ok({
     header,
     coeff1,
@@ -85,6 +75,19 @@ pub fn adx_decoder_new(extradata : Bytes) -> Result[AdxDecoder, String] {
     last: FixedArray::make(header.channels, 0),
     penultimate: FixedArray::make(header.channels, 0),
   })
+}
+
+///|
+fn adx_coefficients(cutoff : Int32, sample_rate : Int32) -> (Int32, Int32) {
+  let root2 = 2.0.sqrt()
+  let b = root2 - 1.0
+  let angle = 2.0 * @math.PI * cutoff.to_double() / sample_rate.to_double()
+  let a = root2 - @math.cos(angle)
+  let c = (a - ((a + b) * (a - b)).sqrt()) / b
+  // The coefficient calculation is double until the lrintf argument.
+  let coeff1 = aac_lrintf(Float::from_double(c * 2.0 * 4096.0).to_double())
+  let coeff2 = aac_lrintf(Float::from_double(-(c * c) * 4096.0).to_double())
+  (coeff1, coeff2)
 }
 
 ///|

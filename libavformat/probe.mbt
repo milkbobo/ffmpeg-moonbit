@@ -50,26 +50,35 @@ pub(all) enum FormatId {
   Aiff
   Alp
   Amr
+  Apc
+  Apm
   Ape
   Aptx
   AptxHd
+  ArgoAsf
   Png
   Asf
   Au
   Caf
   Dash
+  Derf
   Dff
   Dsf
   Dts
   Eac3
   Flac
+  Film
   Flv
+  Fwse
   G722
   G726
   G726Le
   Dfpwm
   Gsm
+  Gdv
   Hls
+  Iss
+  Kvag
   Loas
   Matroska
   Mjpeg
@@ -81,14 +90,30 @@ pub(all) enum FormatId {
   Ogg
   RealMedia
   Roq
+  Rsd
   Qoa
+  PpBnk
   Sbc
+  Smjpeg
+  Mmf
+  Ircam
+  Daud
+  Ast
+  Rso
+  Wve
+  NistSphere
+  Sol
+  Sox
   Spdif
   Svx
+  Maud
+  Nsp
+  Avr
   Tta
   Voc
   W64
   Wav
+  Wady
   Wsaud
 }
 
@@ -103,26 +128,35 @@ pub fn FormatId::name(self : FormatId) -> String {
     Aiff => "aiff"
     Alp => "alp"
     Amr => "amr"
+    Apc => "apc"
+    Apm => "apm"
     Ape => "ape"
     Aptx => "aptx"
     AptxHd => "aptx_hd"
+    ArgoAsf => "argo_asf"
     Png => "png_pipe"
     Asf => "asf"
     Au => "au"
     Caf => "caf"
     Dash => "dash"
+    Derf => "derf"
     Dff => "iff"
     Dsf => "dsf"
     Dts => "dts"
     Eac3 => "eac3"
     Flac => "flac"
+    Film => "film_cpk"
     Flv => "flv"
+    Fwse => "fwse"
     G722 => "g722"
     G726 => "g726"
     G726Le => "g726le"
     Dfpwm => "dfpwm"
     Gsm => "gsm"
+    Gdv => "gdv"
     Hls => "hls"
+    Iss => "iss"
+    Kvag => "kvag"
     Loas => "loas"
     Matroska => "matroska,webm"
     // `mjpeg_probe` is shared by the `mjpeg` and `jpeg_pipe` demuxers; on a
@@ -137,14 +171,30 @@ pub fn FormatId::name(self : FormatId) -> String {
     Ogg => "ogg"
     RealMedia => "rm"
     Roq => "roq"
+    Rsd => "rsd"
     Qoa => "qoa"
+    PpBnk => "pp_bnk"
     Sbc => "sbc"
+    Smjpeg => "smjpeg"
+    Mmf => "mmf"
+    Ircam => "ircam"
+    Daud => "daud"
+    Ast => "ast"
+    Rso => "rso"
+    Wve => "wve"
+    NistSphere => "nistsphere"
+    Sol => "sol"
+    Sox => "sox"
     Spdif => "spdif"
     Svx => "iff"
+    Maud => "iff"
+    Nsp => "nsp"
+    Avr => "avr"
     Tta => "tta"
     Voc => "voc"
     W64 => "w64"
     Wav => "wav"
+    Wady => "wady"
     Wsaud => "wsaud"
   }
 }
@@ -159,6 +209,7 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Aiff => "aiff,aif,aifc,afc,afd"
     Alp => ""
     Amr => "amr"
+    Apc | Apm | ArgoAsf | Gdv | Iss | Kvag | PpBnk | Sol => ""
     Ape => "ape,apl,mac"
     Aptx => "aptx"
     AptxHd => "aptxhd"
@@ -167,12 +218,16 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Au => "au,snd"
     Caf => "caf"
     Dash => "mpd"
+    Derf => "adp"
     Dff => "dff"
     Dsf => "dsf"
     Dts => "dts"
     Eac3 => "eac3,ec3"
     Flac => "flac"
+    Film => ""
+    Sox => ""
     Flv => "flv"
+    Fwse => "fwse"
     G722 => "g722,722"
     G726 => "g726"
     G726Le => "g726le"
@@ -190,14 +245,27 @@ pub fn FormatId::extensions(self : FormatId) -> String {
     Ogg => "ogg,oga,ogv,ogx,opus,spx"
     RealMedia => ""
     Roq => "roq"
+    Rsd => "rsd"
     Qoa => "qoa"
     Sbc => "sbc,msbc"
+    Smjpeg => "mjpg"
+    Mmf => "mmf"
+    Ircam => "sf,ircam"
+    Daud => "302,daud"
+    Ast => "ast"
+    Rso => "rso"
+    Wve => ""
+    NistSphere => "nist,sph"
     Spdif => "spdif"
     Svx => "8svx,16sv,svx,iff"
+    Maud => "maud"
+    Nsp => "nsp"
+    Avr => "avr"
     Tta => "tta"
     Voc => "voc"
     W64 => "w64"
     Wav => "wav,rf64,bw64"
+    Wady => "way"
     Wsaud => "aud"
   }
 }
@@ -212,17 +280,21 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     Aiff => "audio/aiff"
     Alp => ""
     Amr => "audio/amr"
+    Apc | Apm | ArgoAsf | Gdv | Iss | Kvag | PpBnk | Sol => ""
     Ape => ""
     Png => "image/png"
     Asf => "video/x-ms-asf"
     Au => "audio/basic"
     Caf => "audio/x-caf"
     Dash => "application/dash+xml"
+    Derf | Wady => ""
     Dts => ""
     Dff | Dsf => ""
     Eac3 => "audio/eac3"
     Flac => "audio/flac"
+    Film | Sox => ""
     Flv => "video/x-flv"
+    Fwse => ""
     G722 | G726 | G726Le | Dfpwm | Aptx | AptxHd => ""
     Gsm => ""
     Hls => "application/vnd.apple.mpegurl"
@@ -238,9 +310,20 @@ pub fn FormatId::mime_type(self : FormatId) -> String {
     RealMedia => ""
     Qoa => ""
     Roq => ""
+    Rsd => ""
     Sbc => ""
+    Smjpeg => ""
+    Mmf => "application/vnd.smaf"
+    Ircam => ""
+    Daud => ""
+    Ast => ""
+    Rso | Wve => ""
+    NistSphere => ""
     Spdif => ""
     Svx => ""
+    Maud => ""
+    Nsp => ""
+    Avr => ""
     Tta => ""
     Voc => "audio/x-voc"
     W64 => "audio/x-w64"
@@ -532,9 +615,34 @@ fn probe_registry() -> Array[ProbeEntry] {
     { id: Sbc, probe: probe_sbc, },
     { id: Spdif, probe: probe_spdif, },
     { id: Svx, probe: probe_svx, },
+    { id: Maud, probe: probe_maud, },
+    { id: Nsp, probe: probe_nsp, },
+    { id: Avr, probe: probe_avr, },
     { id: Tta, probe: probe_tta, },
     { id: Voc, probe: probe_voc, },
     { id: Alp, probe: probe_alp, },
+    { id: Apm, probe: probe_apm, },
+    { id: Apc, probe: probe_apc, },
+    { id: Fwse, probe: probe_fwse, },
+    { id: Sol, probe: probe_sol, },
+    { id: Derf, probe: probe_derf, },
+    { id: Wady, probe: probe_wady, },
+    { id: Gdv, probe: probe_gdv, },
+    { id: Rsd, probe: probe_rsd, },
+    { id: Iss, probe: probe_iss, },
+    { id: Smjpeg, probe: probe_smjpeg, },
+    { id: Mmf, probe: probe_mmf, },
+    { id: Ircam, probe: probe_ircam, },
+    { id: Daud, probe: _ => 0, },
+    { id: Ast, probe: probe_ast, },
+    { id: Rso, probe: _ => 0, },
+    { id: Wve, probe: probe_wve, },
+    { id: NistSphere, probe: probe_sphere, },
+    { id: Film, probe: probe_film, },
+    { id: Sox, probe: probe_sox, },
+    { id: PpBnk, probe: probe_pp_bnk, },
+    { id: Kvag, probe: probe_kvag, },
+    { id: ArgoAsf, probe: probe_argo_asf, },
     { id: Roq, probe: probe_roq, },
     { id: W64, probe: probe_w64, },
     { id: Wsaud, probe: probe_wsaud, },

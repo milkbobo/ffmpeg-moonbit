@@ -54,7 +54,7 @@ fn gsm_mult(a : Int32, b : Int32) -> Int32 {
 ///|
 /// Reconstruct one row of ff_gsm_dequant_tab from the APCM exponent and
 /// mantissa. The two roundings also reproduce asymmetric high-amplitude rows.
-fn gsm_apcm_row(maximum : Int32) -> FixedArray[Int32] {
+fn gsm_apcm_scale(maximum : Int32) -> (Int32, Int32) {
   let mut exp = if maximum > 15 { (maximum >> 3) - 1 } else { 0 }
   let mut mantissa = maximum - (exp << 3)
   if mantissa == 0 {
@@ -67,7 +67,12 @@ fn gsm_apcm_row(maximum : Int32) -> FixedArray[Int32] {
     }
     mantissa -= 8
   }
-  let shift = 6 - exp
+  (6 - exp, mantissa)
+}
+
+///|
+fn gsm_apcm_row(maximum : Int32) -> FixedArray[Int32] {
+  let (shift, mantissa) = gsm_apcm_scale(maximum)
   let rounding = if shift > 0 { 1 << (shift - 1) } else { 0 }
   FixedArray::makei(8, code => {
     let pulse = (code * 2 - 7) << 12
@@ -98,26 +103,41 @@ fn gsm_reflection_coefficient(lar : Int32) -> Int32 {
 }
 
 ///|
+fn gsm_lar_decode(index : Int32, code : Int32) -> Int32 {
+  let (_, factor, offset) = gsm_lar_parameters[index]
+  gsm_mult((code << 10) - offset, factor) * 2
+}
+
+///|
+let gsm_lar_boundaries : FixedArray[Int32] = [0, 13, 27, 40, 160]
+
+///|
+fn gsm_lar_interpolate(
+  previous : Int32,
+  current : Int32,
+  segment : Int32,
+) -> Int32 {
+  match segment {
+    0 => (previous >> 2) + (previous >> 1) + (current >> 2)
+    1 => (previous >> 1) + (current >> 1)
+    2 => (previous >> 2) + (current >> 1) + (current >> 2)
+    _ => current
+  }
+}
+
+///|
 fn GsmDecoder::synthesize(
   self : GsmDecoder,
   lar : FixedArray[Int32],
   samples : Array[Int32],
 ) -> Unit {
-  let boundaries = [0, 13, 27, 40, 160]
   for segment in 0..<4 {
     let coefficients = FixedArray::makei(8, i => {
-      let current = lar[i]
-      let previous = self.previous_lar[i]
       gsm_reflection_coefficient(
-        match segment {
-          0 => (previous >> 2) + (previous >> 1) + (current >> 2)
-          1 => (previous >> 1) + (current >> 1)
-          2 => (previous >> 2) + (current >> 1) + (current >> 2)
-          _ => current
-        },
+        gsm_lar_interpolate(self.previous_lar[i], lar[i], segment),
       )
     })
-    for i in boundaries[segment]..<boundaries[segment + 1] {
+    for i in gsm_lar_boundaries[segment]..<gsm_lar_boundaries[segment + 1] {
       let mut value = self.reference[120 + i]
       for j = 7; j >= 0; j = j - 1 {
         value -= gsm_mult(coefficients[j], self.lattice[j])
@@ -144,8 +164,8 @@ fn GsmDecoder::decode_block(
   samples : Array[Int32],
 ) -> Unit {
   let lar = FixedArray::makei(8, i => {
-    let (width, factor, offset) = gsm_lar_parameters[i]
-    gsm_mult((read(width) << 10) - offset, factor) * 2
+    let (width, _, _) = gsm_lar_parameters[i]
+    gsm_lar_decode(i, read(width))
   })
   for subframe in 0..<4 {
     let lag = read(7).max(40).min(120)

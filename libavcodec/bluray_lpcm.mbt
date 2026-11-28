@@ -16,6 +16,17 @@ let bluray_lpcm_channels : FixedArray[Int32] = [
 ]
 
 ///|
+let bluray_lpcm_masks : FixedArray[UInt32] = [
+  0U, 0x4U, 0U, 0x3U, 0x7U, 0x103U, 0x107U, 0x603U, 0x607U, 0x60fU, 0x637U, 0x63fU,
+]
+
+///|
+/// Return the WAVE-compatible speaker mask for an LPCM packet layout.
+pub fn BlurayLpcmHeader::channel_mask(self : BlurayLpcmHeader) -> UInt32 {
+  bluray_lpcm_masks[self.layout]
+}
+
+///|
 /// Read a Blu-ray LPCM PES audio header. Supported PCM depths are 16 and 24.
 ///
 /// ```mbt check
@@ -75,6 +86,16 @@ let bluray_lpcm_order_70 : FixedArray[Int32] = [0, 1, 2, 4, 5, 3, 6]
 let bluray_lpcm_order_71 : FixedArray[Int32] = [0, 1, 2, 7, 4, 5, 3, 6]
 
 ///|
+fn bluray_lpcm_slot(layout : Int32, channel : Int32) -> Int32 {
+  match layout {
+    9 => bluray_lpcm_order_51[channel]
+    10 => bluray_lpcm_order_70[channel]
+    11 => bluray_lpcm_order_71[channel]
+    _ => channel
+  }
+}
+
+///|
 /// Decode one LPCM PES payload to interleaved signed PCM in FFmpeg channel
 /// order. 24-bit values are sign-extended without a left shift.
 ///
@@ -98,12 +119,7 @@ pub fn decode_bluray_lpcm(
   let pcm = Array(capacity=header.samples * header.channels)
   for i in 0..<header.samples {
     for ch in 0..<header.channels {
-      let slot = match header.layout {
-        9 => bluray_lpcm_order_51[ch]
-        10 => bluray_lpcm_order_70[ch]
-        11 => bluray_lpcm_order_71[ch]
-        _ => ch
-      }
+      let slot = bluray_lpcm_slot(header.layout, ch)
       let pos = 4 + (i * slots + slot) * width
       let high = data[pos].to_int() << 24 >> 24
       let word = (high << 8) | data[pos + 1].to_int()

@@ -18,13 +18,14 @@ fn voc_codec(tag : Int32) -> String {
     4 => "pcm_s16le"
     6 => "pcm_alaw"
     7 => "pcm_mulaw"
+    0x0200 => "adpcm_ct"
     _ => ""
   }
 }
 
 ///|
-/// Open single-format Creative Voice PCM, G.711, or Sound Blaster Pro
-/// ADPCM. Control and text blocks are skipped, matching FFmpeg playback.
+/// Open single-format Creative Voice PCM, G.711, or Creative ADPCM.
+/// Control and text blocks are skipped, matching FFmpeg playback.
 ///
 /// ```mbt check
 /// test {
@@ -102,8 +103,12 @@ pub fn av_voc_open(data : Bytes) -> Result[RawAudioTrack, String] {
       return Err("voc: unsupported stream parameters")
     }
     let sbpro = block_tag >= 1 && block_tag <= 3
+    let ct_adpcm = block_tag == 0x0200
     if sbpro && (block_channels > 2 || (block_tag == 2 && block_channels != 1)) {
       return Err("voc: unsupported Sound Blaster Pro channel count")
+    }
+    if ct_adpcm && block_channels > 2 {
+      return Err("voc: unsupported Creative Technology ADPCM channel count")
     }
     if rate != 0 &&
       (rate != block_rate || channels != block_channels || tag != block_tag) {
@@ -112,7 +117,7 @@ pub fn av_voc_open(data : Bytes) -> Result[RawAudioTrack, String] {
     rate = block_rate
     channels = block_channels
     tag = block_tag
-    let align = if sbpro {
+    let align = if sbpro || ct_adpcm {
       1
     } else {
       channels * (if tag == 4 { 2 } else { 1 })
@@ -129,6 +134,8 @@ pub fn av_voc_open(data : Bytes) -> Result[RawAudioTrack, String] {
           return Err("voc: missing ADPCM seed sample")
         }
         (if seed > 0 { 1 } else { 0 }) + (count - seed) * (tag + 1) / channels
+      } else if ct_adpcm {
+        count * 2 / channels
       } else {
         count / align
       }
@@ -137,7 +144,7 @@ pub fn av_voc_open(data : Bytes) -> Result[RawAudioTrack, String] {
         size: count,
         pts,
         duration,
-        is_keyframe: true,
+        is_keyframe: !ct_adpcm || frames.is_empty(),
       })
       pts += duration.to_int64()
       continue offset + count

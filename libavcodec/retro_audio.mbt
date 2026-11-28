@@ -37,19 +37,11 @@ pub fn decode_svx_body(
           })
         }),
       )
-    "pcm_s16be_planar" => {
-      if plane % 2 != 0 || data.length() % channels != 0 {
-        return Err("svx: incomplete 16-bit plane")
+    "pcm_s16be_planar" =>
+      match decode_pcm_s16be_planar(channels, data) {
+        Ok(pcm) => Ok(pcm)
+        Err(_) => Err("svx: incomplete 16-bit plane")
       }
-      Ok(
-        Array::makei(channels, ch => {
-          Array::makei(plane / 2, i => {
-            let pos = ch * plane + i * 2
-            (data[pos].to_int() << 24 >> 16) | data[pos + 1].to_int()
-          })
-        }),
-      )
-    }
     "8svx_fib" | "8svx_exp" => {
       if plane < 3 || plane - 2 > 0x3fffffff {
         return Err("svx: incomplete delta plane")
@@ -77,6 +69,26 @@ pub fn decode_svx_body(
     }
     _ => Err("svx: unsupported codec")
   }
+}
+
+///|
+/// Decode signed 16-bit big-endian PCM stored in contiguous channel planes.
+pub fn decode_pcm_s16be_planar(
+  channels : Int32,
+  data : Bytes,
+) -> Result[Array[Array[Int32]], String] {
+  guard channels > 0 && channels <= 256 && data.length() % (2 * channels) == 0 else {
+    return Err("pcm: invalid signed 16-bit planes")
+  }
+  let plane = data.length() / channels
+  Ok(
+    Array::makei(channels, ch => {
+      Array::makei(plane / 2, i => {
+        let pos = ch * plane + i * 2
+        (data[pos].to_int() << 24 >> 16) | data[pos + 1].to_int()
+      })
+    }),
+  )
 }
 
 ///|
